@@ -1,8 +1,8 @@
 {
   "nav": {
     "inbox": "收件箱",
-    "my_issues": "我的 issue",
-    "issues": "Issues",
+    "my_issues": "我的需求",
+    "issues": "需求",
     "projects": "项目",
     "autopilots": "自动化",
     "agents": "智能体",
@@ -31,7 +31,7 @@
     "invitation_join": "加入",
     "invitation_decline": "拒绝",
     "log_out": "退出登录",
-    "new_issue": "新建 issue",
+    "new_issue": "新建需求",
     "new_issue_shortcut": "C",
     "pinned_label": "固定",
     "workspace_group": "工作区",
