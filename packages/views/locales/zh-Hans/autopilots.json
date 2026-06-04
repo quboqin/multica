@@ -30,7 +30,7 @@
     "archived": "已归档"
   },
   "execution_mode": {
-    "create_issue": "创建需求",
+    "create_issue": "创建任务",
     "run_only": "仅运行"
   },
   "relative_date": {
@@ -100,7 +100,7 @@
     }
   },
   "run_status": {
-    "issue_created": "已创建需求",
+    "issue_created": "已创建任务",
     "running": "运行中",
     "skipped": "已跳过",
     "completed": "已完成",
@@ -113,7 +113,7 @@
     "api": "API"
   },
   "run": {
-    "issue_linked": "已关联需求",
+    "issue_linked": "已关联任务",
     "view_log": "查看执行日志",
     "skipped_group": {
       "label": "已跳过",
@@ -275,12 +275,12 @@
     "next_run_label": "下次运行：",
     "output_modes": {
       "create_issue": {
-        "label": "创建需求",
-        "description": "每次运行都创建一个可追踪的需求"
+        "label": "创建任务",
+        "description": "每次运行都创建一个可追踪的任务"
       },
       "run_only": {
         "label": "仅运行",
-        "description": "静默运行，不创建需求"
+        "description": "静默运行，不创建任务"
       }
     },
     "frequency_long": {
