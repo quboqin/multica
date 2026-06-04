@@ -21,9 +21,9 @@
       "ordered_list": "有序列表"
     },
     "sub_issue": {
-      "tooltip": "用选中内容创建子需求",
+      "tooltip": "用选中内容创建子任务",
       "created": "已创建 {{identifier}}",
-      "create_failed": "创建子需求失败"
+      "create_failed": "创建子任务失败"
     }
   },
   "image": {
@@ -53,7 +53,7 @@
   },
   "mention": {
     "group_users": "用户",
-    "group_issues": "需求",
+    "group_issues": "任务",
     "all_members": "所有成员",
     "searching": "搜索中...",
     "no_results": "无结果"
