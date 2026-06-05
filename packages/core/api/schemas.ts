@@ -689,6 +689,12 @@ export const UserSchema = z.object({
   language: z.string().nullable().default(null),
   profile_description: z.string().default(""),
   timezone: z.string().nullable().default(null),
+  integration_tokens: z.object({
+    git_token: z.string().optional(),
+    feishu_mcp_token: z.string().optional(),
+    jingwei_token: z.string().optional(),
+    paones_token: z.string().optional(),
+  }).default({}),
   created_at: z.string().default(""),
   updated_at: z.string().default(""),
 }).loose();
@@ -704,6 +710,7 @@ export const EMPTY_USER: User = {
   language: null,
   profile_description: "",
   timezone: null,
+  integration_tokens: {},
   created_at: "",
   updated_at: "",
 };
