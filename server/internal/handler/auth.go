@@ -449,8 +449,7 @@ type UpdateMeRequest struct {
 	IntegrationTokens  *struct {
 		GitToken       string `json:"git_token"`
 		FeishuMCPToken string `json:"feishu_mcp_token"`
-		JingweiToken   string `json:"jingwei_token"`
-		PaonesToken    string `json:"paones_token"`
+		PaihubToken    string `json:"paihub_token"`
 	} `json:"integration_tokens"`
 	// IANA tz to pin; "" clears back to NULL; nil leaves untouched.
 	Timezone *string `json:"timezone"`
@@ -713,8 +712,7 @@ func (h *Handler) UpdateMe(w http.ResponseWriter, r *http.Request) {
 		tokens, err := json.Marshal(map[string]string{
 			"git_token":        strings.TrimSpace(req.IntegrationTokens.GitToken),
 			"feishu_mcp_token": strings.TrimSpace(req.IntegrationTokens.FeishuMCPToken),
-			"jingwei_token":    strings.TrimSpace(req.IntegrationTokens.JingweiToken),
-			"paones_token":     strings.TrimSpace(req.IntegrationTokens.PaonesToken),
+			"paihub_token":     strings.TrimSpace(req.IntegrationTokens.PaihubToken),
 		})
 		if err != nil {
 			writeError(w, http.StatusBadRequest, "invalid integration_tokens")

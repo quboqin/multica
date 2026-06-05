@@ -33,11 +33,8 @@ export function AccountTab() {
   const [feishuMcpToken, setFeishuMcpToken] = useState(
     user?.integration_tokens?.feishu_mcp_token ?? "",
   );
-  const [jingweiToken, setJingweiToken] = useState(
-    user?.integration_tokens?.jingwei_token ?? "",
-  );
-  const [paonesToken, setPaonesToken] = useState(
-    user?.integration_tokens?.paones_token ?? "",
+  const [paihubToken, setPaihubToken] = useState(
+    user?.integration_tokens?.paihub_token ?? "",
   );
   const [profileSaving, setProfileSaving] = useState(false);
   const { upload, uploading } = useFileUpload(api);
@@ -48,8 +45,7 @@ export function AccountTab() {
     setProfileDescription(user?.profile_description ?? "");
     setGitToken(user?.integration_tokens?.git_token ?? "");
     setFeishuMcpToken(user?.integration_tokens?.feishu_mcp_token ?? "");
-    setJingweiToken(user?.integration_tokens?.jingwei_token ?? "");
-    setPaonesToken(user?.integration_tokens?.paones_token ?? "");
+    setPaihubToken(user?.integration_tokens?.paihub_token ?? "");
   }, [user]);
 
   const descriptionTooLong = profileDescription.length > MAX_PROFILE_DESCRIPTION_LEN;
@@ -87,8 +83,7 @@ export function AccountTab() {
         integration_tokens: {
           git_token: gitToken,
           feishu_mcp_token: feishuMcpToken,
-          jingwei_token: jingweiToken,
-          paones_token: paonesToken,
+          paihub_token: paihubToken,
         },
       });
       setUser(updated);
@@ -199,15 +194,9 @@ export function AccountTab() {
                 placeholder="请输入 token"
               />
               <TokenInput
-                label="精卫 token"
-                value={jingweiToken}
-                onChange={setJingweiToken}
-                placeholder="请输入 token"
-              />
-              <TokenInput
-                label="Paones 发布 token"
-                value={paonesToken}
-                onChange={setPaonesToken}
+                label="PAIHUB token"
+                value={paihubToken}
+                onChange={setPaihubToken}
                 placeholder="请输入 token"
               />
             </div>
