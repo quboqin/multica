@@ -1,4 +1,5 @@
 import type { Issue, IssueMetadata, IssueStatus, IssuePriority, IssueAssigneeType } from "./issue";
+import type { IntegrationTokens } from "./workspace";
 import type { MemberRole } from "./workspace";
 import type { Project } from "./project";
 
@@ -171,6 +172,7 @@ export interface UpdateMeRequest {
   profile_description?: string;
   /** IANA tz to pin; "" clears back to browser-tz; undefined leaves untouched. */
   timezone?: string;
+  integration_tokens?: IntegrationTokens;
 }
 
 export interface CreateMemberRequest {

@@ -63,6 +63,7 @@ type UserResponse struct {
 	OnboardingQuestionnaire json.RawMessage `json:"onboarding_questionnaire"`
 	StarterContentState     *string         `json:"starter_content_state"`
 	ProfileDescription      string          `json:"profile_description"`
+	IntegrationTokens       json.RawMessage `json:"integration_tokens"`
 	CreatedAt               string          `json:"created_at"`
 	UpdatedAt               string          `json:"updated_at"`
 }
@@ -81,6 +82,10 @@ func userToResponse(u db.User) UserResponse {
 	if len(q) == 0 {
 		q = []byte("{}")
 	}
+	integrationTokens := u.IntegrationTokens
+	if len(integrationTokens) == 0 {
+		integrationTokens = []byte("{}")
+	}
 	return UserResponse{
 		ID:                      uuidToString(u.ID),
 		Name:                    u.Name,
@@ -92,6 +97,7 @@ func userToResponse(u db.User) UserResponse {
 		OnboardingQuestionnaire: json.RawMessage(q),
 		StarterContentState:     textToPtr(u.StarterContentState),
 		ProfileDescription:      u.ProfileDescription,
+		IntegrationTokens:       json.RawMessage(integrationTokens),
 		CreatedAt:               timestampToString(u.CreatedAt),
 		UpdatedAt:               timestampToString(u.UpdatedAt),
 	}
@@ -440,6 +446,12 @@ type UpdateMeRequest struct {
 	AvatarURL          *string `json:"avatar_url"`
 	Language           *string `json:"language"`
 	ProfileDescription *string `json:"profile_description"`
+	IntegrationTokens  *struct {
+		GitToken       string `json:"git_token"`
+		FeishuMCPToken string `json:"feishu_mcp_token"`
+		JingweiToken   string `json:"jingwei_token"`
+		PaonesToken    string `json:"paones_token"`
+	} `json:"integration_tokens"`
 	// IANA tz to pin; "" clears back to NULL; nil leaves untouched.
 	Timezone *string `json:"timezone"`
 }
@@ -696,6 +708,19 @@ func (h *Handler) UpdateMe(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		params.ProfileDescription = pgtype.Text{String: desc, Valid: true}
+	}
+	if req.IntegrationTokens != nil {
+		tokens, err := json.Marshal(map[string]string{
+			"git_token":        strings.TrimSpace(req.IntegrationTokens.GitToken),
+			"feishu_mcp_token": strings.TrimSpace(req.IntegrationTokens.FeishuMCPToken),
+			"jingwei_token":    strings.TrimSpace(req.IntegrationTokens.JingweiToken),
+			"paones_token":     strings.TrimSpace(req.IntegrationTokens.PaonesToken),
+		})
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "invalid integration_tokens")
+			return
+		}
+		params.IntegrationTokens = tokens
 	}
 
 	if req.Timezone != nil {

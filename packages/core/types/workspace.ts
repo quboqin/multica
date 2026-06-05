@@ -59,8 +59,16 @@ export interface User {
   profile_description: string;
   /** Pinned IANA tz; null means "use browser-detected tz at render time". */
   timezone: string | null;
+  integration_tokens: IntegrationTokens;
   created_at: string;
   updated_at: string;
+}
+
+export interface IntegrationTokens {
+  git_token?: string;
+  feishu_mcp_token?: string;
+  jingwei_token?: string;
+  paones_token?: string;
 }
 
 export interface MemberWithUser {
