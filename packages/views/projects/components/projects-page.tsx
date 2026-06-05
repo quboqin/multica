@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useMemo, useState, type MouseEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
 import {
   ArrowDown,
   ArrowUp,
@@ -17,6 +17,28 @@ import {
   Trash2,
   X,
 } from "lucide-react";
+import {
+  closestCenter,
+  DndContext,
+  DragOverlay,
+  PointerSensor,
+  pointerWithin,
+  useDroppable,
+  useSensor,
+  useSensors,
+  type CollisionDetection,
+  type DragEndEvent,
+  type DragOverEvent,
+  type DragStartEvent,
+} from "@dnd-kit/core";
+import {
+  defaultAnimateLayoutChanges,
+  SortableContext,
+  useSortable,
+  verticalListSortingStrategy,
+  type AnimateLayoutChanges,
+} from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
 import { useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
 import {
@@ -33,6 +55,7 @@ import {
   useCreatePin,
   useDeletePin,
 } from "@multica/core/pins";
+import { PROJECT_STATUS_CONFIG, PROJECT_STATUS_ORDER } from "@multica/core/projects/config";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { useWorkspacePaths } from "@multica/core/paths";
 import { useAuthStore } from "@multica/core/auth";
@@ -46,6 +69,7 @@ import { Skeleton } from "@multica/ui/components/ui/skeleton";
 import { Button } from "@multica/ui/components/ui/button";
 import { Checkbox } from "@multica/ui/components/ui/checkbox";
 import { Input } from "@multica/ui/components/ui/input";
+import { cn } from "@multica/ui/lib/utils";
 import {
   Dialog,
   DialogContent,
@@ -98,7 +122,7 @@ import { PageHeader } from "../../layout/page-header";
 import { ProjectIcon } from "./project-icon";
 import { useT } from "../../i18n";
 import { matchesPinyin } from "../../editor/extensions/pinyin-match";
-import { useFormatRelativeDate } from "./labels";
+import { useFormatRelativeDate, useProjectStatusLabels } from "./labels";
 import { ProjectStatusBadge, ProjectPriorityBadge } from "./project-badge";
 import { ProjectLeadPicker } from "./project-lead-picker";
 
@@ -117,6 +141,80 @@ const STATUS_ORDER: Record<ProjectStatus, number> = {
   completed: 3,
   cancelled: 4,
 };
+
+const PROJECT_STATUS_COLUMN_BG: Record<ProjectStatus, string> = {
+  planned: "bg-muted/35",
+  in_progress: "bg-warning/5",
+  paused: "bg-muted/25",
+  completed: "bg-info/5",
+  cancelled: "bg-destructive/5",
+};
+
+const animateLayoutChanges: AnimateLayoutChanges = (args) => {
+  const { isSorting, wasDragging } = args;
+  if (isSorting || wasDragging) return false;
+  return defaultAnimateLayoutChanges(args);
+};
+
+type ProjectColumns = Record<ProjectStatus, string[]>;
+
+function projectStatusColumnId(status: ProjectStatus): string {
+  return `project-status:${status}`;
+}
+
+function projectStatusFromColumnId(id: string): ProjectStatus | null {
+  const status = id.startsWith("project-status:")
+    ? id.slice("project-status:".length)
+    : id;
+  return PROJECT_STATUS_ORDER.includes(status as ProjectStatus)
+    ? (status as ProjectStatus)
+    : null;
+}
+
+function buildProjectColumns(projects: Project[]): ProjectColumns {
+  const columns: ProjectColumns = {
+    planned: [],
+    in_progress: [],
+    paused: [],
+    completed: [],
+    cancelled: [],
+  };
+
+  for (const project of projects) {
+    columns[project.status].push(project.id);
+  }
+
+  return columns;
+}
+
+function findProjectColumn(
+  columns: ProjectColumns,
+  id: string,
+): ProjectStatus | null {
+  const status = projectStatusFromColumnId(id);
+  if (status) return status;
+
+  for (const columnStatus of PROJECT_STATUS_ORDER) {
+    if (columns[columnStatus].includes(id)) return columnStatus;
+  }
+
+  return null;
+}
+
+function makeProjectKanbanCollision(columnIds: Set<string>): CollisionDetection {
+  return (args) => {
+    const pointer = pointerWithin(args);
+    if (pointer.length > 0) {
+      const items = pointer.filter(
+        (collision) => !columnIds.has(collision.id as string),
+      );
+      if (items.length > 0) return items;
+      return pointer;
+    }
+
+    return closestCenter(args);
+  };
+}
 
 const progressOf = (p: Project) =>
   p.issue_count > 0 ? p.done_count / p.issue_count : -1;
@@ -764,6 +862,276 @@ function ProjectBatchToolbar({
   );
 }
 
+function ProjectStatusBuckets({
+  projects,
+  pinnedProjectIds,
+  canDelete,
+}: {
+  projects: Project[];
+  pinnedProjectIds: Set<string>;
+  canDelete: boolean;
+}) {
+  const { t } = useT("projects");
+  const statusLabels = useProjectStatusLabels();
+  const updateProject = useUpdateProject();
+  const [activeProject, setActiveProject] = useState<Project | null>(null);
+  const [columns, setColumns] = useState<ProjectColumns>(() =>
+    buildProjectColumns(projects),
+  );
+  const columnsRef = useRef(columns);
+  columnsRef.current = columns;
+  const isDraggingRef = useRef(false);
+  const recentlyMovedRef = useRef(false);
+  const sensors = useSensors(
+    useSensor(PointerSensor, {
+      activationConstraint: { distance: 6 },
+    }),
+  );
+  const projectMap = useMemo(
+    () => new Map(projects.map((project) => [project.id, project])),
+    [projects],
+  );
+  const projectMapRef = useRef(projectMap);
+  if (!isDraggingRef.current) {
+    projectMapRef.current = projectMap;
+  }
+  const columnIds = useMemo(
+    () => new Set(PROJECT_STATUS_ORDER.map(projectStatusColumnId)),
+    [],
+  );
+  const collisionDetection = useMemo(
+    () => makeProjectKanbanCollision(columnIds),
+    [columnIds],
+  );
+
+  useEffect(() => {
+    if (!isDraggingRef.current) {
+      setColumns(buildProjectColumns(projects));
+    }
+  }, [projects]);
+
+  useEffect(() => {
+    const id = requestAnimationFrame(() => {
+      recentlyMovedRef.current = false;
+    });
+    return () => cancelAnimationFrame(id);
+  }, [columns]);
+
+  const handleDragStart = useCallback((event: DragStartEvent) => {
+    isDraggingRef.current = true;
+    setActiveProject(projectMapRef.current.get(String(event.active.id)) ?? null);
+  }, []);
+
+  const handleDragOver = useCallback((event: DragOverEvent) => {
+    const { active, over } = event;
+    if (!over || recentlyMovedRef.current) return;
+
+    const activeId = String(active.id);
+    const overId = String(over.id);
+
+    setColumns((prev) => {
+      const activeCol = findProjectColumn(prev, activeId);
+      const overCol = findProjectColumn(prev, overId);
+      if (!activeCol || !overCol || activeCol === overCol) return prev;
+
+      recentlyMovedRef.current = true;
+      const oldIds = prev[activeCol].filter((id) => id !== activeId);
+      const newIds = prev[overCol].filter((id) => id !== activeId);
+      const overIndex = newIds.indexOf(overId);
+      const insertIndex = overIndex >= 0 ? overIndex : newIds.length;
+      newIds.splice(insertIndex, 0, activeId);
+      return { ...prev, [activeCol]: oldIds, [overCol]: newIds };
+    });
+  }, []);
+
+  const handleDragEnd = useCallback(
+    (event: DragEndEvent) => {
+      if (!event.over) {
+        isDraggingRef.current = false;
+        setActiveProject(null);
+        setColumns(buildProjectColumns(projects));
+        return;
+      }
+
+      const activeId = String(event.active.id);
+      const overId = String(event.over.id);
+      const project = activeProject ?? projectMapRef.current.get(activeId);
+      const activeStatus = findProjectColumn(columnsRef.current, activeId);
+      const overStatus = findProjectColumn(columnsRef.current, overId);
+      const nextStatus = overStatus ?? activeStatus;
+      isDraggingRef.current = false;
+      setActiveProject(null);
+
+      if (!project || !nextStatus) {
+        setColumns(buildProjectColumns(projects));
+        return;
+      }
+
+      if (nextStatus === project.status) {
+        setColumns(buildProjectColumns(projects));
+        return;
+      }
+
+      updateProject.mutate({ id: project.id, status: nextStatus });
+    },
+    [activeProject, projects, updateProject],
+  );
+
+  return (
+    <DndContext
+      sensors={sensors}
+      collisionDetection={collisionDetection}
+      onDragStart={handleDragStart}
+      onDragOver={handleDragOver}
+      onDragEnd={handleDragEnd}
+      onDragCancel={() => {
+        isDraggingRef.current = false;
+        setActiveProject(null);
+        setColumns(buildProjectColumns(projects));
+      }}
+    >
+      <div className="flex h-full min-h-0 gap-3 overflow-x-auto px-5 py-4 pb-5">
+        {PROJECT_STATUS_ORDER.map((status) => (
+          <ProjectStatusColumn
+            key={status}
+            status={status}
+            projectIds={columns[status]}
+            projectMap={projectMapRef.current}
+            pinnedProjectIds={pinnedProjectIds}
+            canDelete={canDelete}
+            statusLabel={statusLabels[status]}
+            emptyLabel={t(($) => $.page.empty)}
+          />
+        ))}
+      </div>
+      <DragOverlay dropAnimation={null}>
+        {activeProject && (
+          <div className="w-[280px]">
+            <ProjectCard
+              project={activeProject}
+              pinned={pinnedProjectIds.has(activeProject.id)}
+              canDelete={canDelete}
+            />
+          </div>
+        )}
+      </DragOverlay>
+    </DndContext>
+  );
+}
+
+function ProjectStatusColumn({
+  status,
+  projectIds,
+  projectMap,
+  pinnedProjectIds,
+  canDelete,
+  statusLabel,
+  emptyLabel,
+}: {
+  status: ProjectStatus;
+  projectIds: string[];
+  projectMap: Map<string, Project>;
+  pinnedProjectIds: Set<string>;
+  canDelete: boolean;
+  statusLabel: string;
+  emptyLabel: string;
+}) {
+  const statusCfg = PROJECT_STATUS_CONFIG[status];
+  const { setNodeRef, isOver } = useDroppable({
+    id: projectStatusColumnId(status),
+    data: { status },
+  });
+  const projects = useMemo(
+    () =>
+      projectIds.flatMap((id) => {
+        const project = projectMap.get(id);
+        return project ? [project] : [];
+      }),
+    [projectIds, projectMap],
+  );
+
+  return (
+    <section
+      className={cn(
+        "flex h-full min-h-[320px] w-[280px] shrink-0 flex-col rounded-xl p-2 transition-colors",
+        PROJECT_STATUS_COLUMN_BG[status],
+      )}
+    >
+      <div className="mb-2 flex items-center justify-between px-1.5">
+        <div className="flex min-w-0 items-center gap-2">
+          <span className={cn("size-2 rounded-full", statusCfg.dotColor)} />
+          <span className="truncate text-xs font-semibold">{statusLabel}</span>
+          <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
+            {projects.length}
+          </span>
+        </div>
+      </div>
+
+      <SortableContext items={projectIds} strategy={verticalListSortingStrategy}>
+        <div
+          ref={setNodeRef}
+          className={cn(
+            "min-h-[200px] flex-1 space-y-2 overflow-y-auto rounded-lg p-1 transition-colors",
+            isOver && "bg-accent/60",
+          )}
+        >
+          {projects.map((project) => (
+            <SortableProjectCard
+              key={project.id}
+              project={project}
+              pinned={pinnedProjectIds.has(project.id)}
+              canDelete={canDelete}
+            />
+          ))}
+          {projects.length === 0 && (
+            <p className="py-8 text-center text-xs text-muted-foreground">
+              {emptyLabel}
+            </p>
+          )}
+        </div>
+      </SortableContext>
+    </section>
+  );
+}
+
+function SortableProjectCard({
+  project,
+  pinned,
+  canDelete,
+}: {
+  project: Project;
+  pinned: boolean;
+  canDelete: boolean;
+}) {
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({
+    id: project.id,
+    data: { status: project.status },
+    animateLayoutChanges,
+  });
+
+  return (
+    <div
+      ref={setNodeRef}
+      style={{
+        transform: CSS.Transform.toString(transform),
+        transition,
+      }}
+      {...attributes}
+      {...listeners}
+      className={cn("touch-none", isDragging && "pointer-events-none opacity-30")}
+    >
+      <ProjectCard project={project} pinned={pinned} canDelete={canDelete} />
+    </div>
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Page
 // ---------------------------------------------------------------------------
@@ -1223,21 +1591,11 @@ export function ProjectsPage() {
               </ListGrid>
             </div>
           ) : (
-            <div className="min-h-0 flex-1 overflow-y-auto px-5 pt-4">
-              <div
-                className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4"
-                style={{ paddingBottom: LIST_GRID_BOTTOM_CLEARANCE }}
-              >
-                {visible.map((project) => (
-                  <ProjectCard
-                    key={project.id}
-                    project={project}
-                    pinned={pinnedProjectIds.has(project.id)}
-                    canDelete={isWorkspaceAdmin}
-                  />
-                ))}
-              </div>
-            </div>
+            <ProjectStatusBuckets
+              projects={visible}
+              pinnedProjectIds={pinnedProjectIds}
+              canDelete={isWorkspaceAdmin}
+            />
           )}
 
           <ProjectBatchToolbar
