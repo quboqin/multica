@@ -83,7 +83,12 @@ type Task struct {
 	// when description is empty so the agent doesn't see a useless heading.
 	RequestingUserName               string            `json:"requesting_user_name,omitempty"`
 	RequestingUserProfileDescription string            `json:"requesting_user_profile_description,omitempty"`
-	IntegrationTokens                IntegrationTokens `json:"integration_tokens,omitempty"`
+	// RequestingUserEmail is the requesting user's account email, used as the
+	// git commit author/committer email so commits on a shared runtime are
+	// attributed to that user rather than the runtime owner. Empty when there
+	// is no requesting user (cloud / system runtimes).
+	RequestingUserEmail string            `json:"requesting_user_email,omitempty"`
+	IntegrationTokens   IntegrationTokens `json:"integration_tokens,omitempty"`
 	// AuthToken is the task-scoped credential the server mints at claim time.
 	// The daemon injects it into the spawned agent as MULTICA_TOKEN so the
 	// agent never sees the daemon's own (often workspace-owner) credential.

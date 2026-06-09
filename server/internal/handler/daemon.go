@@ -1148,6 +1148,7 @@ func (h *Handler) ClaimTaskByRuntime(w http.ResponseWriter, r *http.Request) {
 	if task.RequestingUserID.Valid {
 		if user, err := h.Queries.GetUser(r.Context(), task.RequestingUserID); err == nil {
 			resp.RequestingUserName = user.Name
+			resp.RequestingUserEmail = user.Email
 			resp.RequestingUserProfileDescription = user.ProfileDescription
 			tokens := taskIntegrationTokensFromUser(user)
 			resp.IntegrationTokens = &tokens
