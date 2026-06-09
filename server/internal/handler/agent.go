@@ -157,11 +157,12 @@ type ProjectResourceData struct {
 }
 
 type AgentTaskResponse struct {
-	ID          string `json:"id"`
-	AgentID     string `json:"agent_id"`
-	RuntimeID   string `json:"runtime_id"`
-	IssueID     string `json:"issue_id"`
-	WorkspaceID string `json:"workspace_id"`
+	ID               string `json:"id"`
+	AgentID          string `json:"agent_id"`
+	RuntimeID        string `json:"runtime_id"`
+	IssueID          string `json:"issue_id"`
+	WorkspaceID      string `json:"workspace_id"`
+	RequestingUserID string `json:"requesting_user_id,omitempty"`
 	// WorkspaceContext is the workspace-level system prompt set in workspace
 	// settings (`workspace.context` DB column). Injected into the agent brief
 	// as `## Workspace Context` so every agent running in this workspace —
@@ -226,9 +227,10 @@ type AgentTaskResponse struct {
 	// empty otherwise. The daemon emits both into the brief under
 	// `## Requesting User`; the heading is skipped entirely when description
 	// is empty.
-	RequestingUserName               string `json:"requesting_user_name,omitempty"`
-	RequestingUserProfileDescription string `json:"requesting_user_profile_description,omitempty"`
-	Kind                             string `json:"kind"` // discriminator: "comment" | "autopilot" | "chat" | "quick_create" | "direct" — used by the activity row to label tasks that have no linked issue
+	RequestingUserName               string                 `json:"requesting_user_name,omitempty"`
+	RequestingUserProfileDescription string                 `json:"requesting_user_profile_description,omitempty"`
+	IntegrationTokens                *TaskIntegrationTokens `json:"integration_tokens,omitempty"`
+	Kind                             string                 `json:"kind"` // discriminator: "comment" | "autopilot" | "chat" | "quick_create" | "direct" — used by the activity row to label tasks that have no linked issue
 	// AuthToken is the task-scoped `mat_` token the daemon must inject as
 	// MULTICA_TOKEN in the agent process environment. The server binds it to
 	// this (agent_id, task_id) pair at claim time and treats any request
@@ -238,6 +240,26 @@ type AgentTaskResponse struct {
 	// (cloud / system runtimes that pre-date per-task tokens); in that case
 	// the daemon falls back to its own credential. See MUL-2600.
 	AuthToken string `json:"auth_token,omitempty"`
+}
+
+type TaskIntegrationTokens struct {
+	GitToken       string            `json:"git_token,omitempty"`
+	FeishuMCPToken string            `json:"feishu_mcp_token,omitempty"`
+	PaonesToken    string            `json:"paones_token,omitempty"`
+	JingweiToken   string            `json:"jingwei_token,omitempty"`
+	Extra          map[string]string `json:"-"`
+}
+
+func (t TaskIntegrationTokens) MarshalJSON() ([]byte, error) {
+	out := make(map[string]string, len(t.Extra)+4)
+	for key, value := range t.Extra {
+		out[key] = value
+	}
+	out["git_token"] = t.GitToken
+	out["feishu_mcp_token"] = t.FeishuMCPToken
+	out["paones_token"] = t.PaonesToken
+	out["jingwei_token"] = t.JingweiToken
+	return json.Marshal(out)
 }
 
 // ChatAttachmentMeta is the structured attachment metadata embedded in
@@ -291,6 +313,7 @@ func taskToResponse(t db.AgentTaskQueue, workspaceID string) AgentTaskResponse {
 		RuntimeID:        uuidToString(t.RuntimeID),
 		IssueID:          uuidToString(t.IssueID),
 		WorkspaceID:      workspaceID,
+		RequestingUserID: uuidToString(t.RequestingUserID),
 		Status:           t.Status,
 		Priority:         t.Priority,
 		DispatchedAt:     timestampToPtr(t.DispatchedAt),

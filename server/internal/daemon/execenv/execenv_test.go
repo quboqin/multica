@@ -2358,13 +2358,29 @@ func TestReuseRestoresCodexHome(t *testing.T) {
 		t.Fatal("expected CodexHome to be set after Prepare")
 	}
 
-	// Reuse should restore CodexHome.
-	reused := Reuse(ReuseParams{WorkDir: env.WorkDir, Provider: "codex", Task: TaskContextForEnv{IssueID: "reuse-test"}}, testLogger())
+	reuseTaskID := "f6a7b8c9-d0e1-2345-fabc-678901234567"
+	// Reuse keeps the prior workdir but creates CODEX_HOME under the current
+	// run root so user-scoped MCP credentials never share a config.toml.
+	reused := Reuse(ReuseParams{
+		WorkspacesRoot: workspacesRoot,
+		WorkspaceID:    "ws-codex-reuse",
+		TaskID:         reuseTaskID,
+		WorkDir:        env.WorkDir,
+		Provider:       "codex",
+		Task:           TaskContextForEnv{IssueID: "reuse-test"},
+	}, testLogger())
 	if reused == nil {
 		t.Fatal("Reuse returned nil")
 	}
 	if reused.CodexHome == "" {
 		t.Fatal("expected CodexHome to be restored after Reuse")
+	}
+	if reused.WorkDir != env.WorkDir {
+		t.Fatalf("Reuse WorkDir = %q, want prior %q", reused.WorkDir, env.WorkDir)
+	}
+	wantCodexHome := filepath.Join(workspacesRoot, "ws-codex-reuse", shortID(reuseTaskID), "codex-home")
+	if reused.CodexHome != wantCodexHome {
+		t.Fatalf("Reuse CodexHome = %q, want current run home %q", reused.CodexHome, wantCodexHome)
 	}
 
 	// Verify config.toml has a managed block (exact mode depends on host
@@ -2409,7 +2425,14 @@ func TestReuseRestoresCodexPluginCache(t *testing.T) {
 		t.Fatalf("remove codex plugins dir: %v", err)
 	}
 
-	reused := Reuse(ReuseParams{WorkDir: env.WorkDir, Provider: "codex", Task: TaskContextForEnv{IssueID: "reuse-plugin-test"}}, testLogger())
+	reused := Reuse(ReuseParams{
+		WorkspacesRoot: workspacesRoot,
+		WorkspaceID:    "ws-codex-plugin-reuse",
+		TaskID:         "f5f6a7b8-c9d0-1234-efab-567890123456",
+		WorkDir:        env.WorkDir,
+		Provider:       "codex",
+		Task:           TaskContextForEnv{IssueID: "reuse-plugin-test"},
+	}, testLogger())
 	if reused == nil {
 		t.Fatal("Reuse returned nil")
 	}
@@ -2447,16 +2470,22 @@ func TestReuseWritesMissingCodexWorkspaceSkills(t *testing.T) {
 		t.Fatalf("remove codex skills dir: %v", err)
 	}
 
-	reused := Reuse(ReuseParams{WorkDir: env.WorkDir, Provider: "codex", Task: TaskContextForEnv{
-		IssueID: "reuse-skill-test",
-		AgentSkills: []SkillContextForEnv{
-			{
-				Name:    "Writing",
-				Content: "Write clearly.",
-				Files:   []SkillFileContextForEnv{{Path: "examples/example.md", Content: "Example"}},
+	reused := Reuse(ReuseParams{
+		WorkspacesRoot: workspacesRoot,
+		WorkspaceID:    "ws-codex-skill-reuse",
+		TaskID:         "f6f6a7b8-c9d0-1234-efab-567890123456",
+		WorkDir:        env.WorkDir,
+		Provider:       "codex",
+		Task: TaskContextForEnv{
+			IssueID: "reuse-skill-test",
+			AgentSkills: []SkillContextForEnv{
+				{
+					Name:    "Writing",
+					Content: "Write clearly.",
+					Files:   []SkillFileContextForEnv{{Path: "examples/example.md", Content: "Example"}},
+				},
 			},
-		},
-	}}, testLogger())
+		}}, testLogger())
 	if reused == nil {
 		t.Fatal("Reuse returned nil")
 	}
@@ -2506,16 +2535,22 @@ func TestReuseUpdatesCodexWorkspaceSkills(t *testing.T) {
 	}
 	defer env.Cleanup(true)
 
-	reused := Reuse(ReuseParams{WorkDir: env.WorkDir, Provider: "codex", Task: TaskContextForEnv{
-		IssueID: "reuse-skill-update-test",
-		AgentSkills: []SkillContextForEnv{
-			{
-				Name:    "Writing",
-				Content: "Updated writing guidance.",
-				Files:   []SkillFileContextForEnv{{Path: "examples/example.md", Content: "Updated example"}},
+	reused := Reuse(ReuseParams{
+		WorkspacesRoot: workspacesRoot,
+		WorkspaceID:    "ws-codex-skill-update",
+		TaskID:         "f7f6a7b8-c9d0-1234-efab-567890123456",
+		WorkDir:        env.WorkDir,
+		Provider:       "codex",
+		Task: TaskContextForEnv{
+			IssueID: "reuse-skill-update-test",
+			AgentSkills: []SkillContextForEnv{
+				{
+					Name:    "Writing",
+					Content: "Updated writing guidance.",
+					Files:   []SkillFileContextForEnv{{Path: "examples/example.md", Content: "Updated example"}},
+				},
 			},
-		},
-	}}, testLogger())
+		}}, testLogger())
 	if reused == nil {
 		t.Fatal("Reuse returned nil")
 	}
@@ -2773,9 +2808,15 @@ func TestReuseSeedsUserSkillUpdates(t *testing.T) {
 		t.Fatalf("update user SKILL.md: %v", err)
 	}
 
-	reused := Reuse(ReuseParams{WorkDir: env.WorkDir, Provider: "codex", Task: TaskContextForEnv{
-		IssueID: "user-skill-reuse-test",
-	}}, testLogger())
+	reused := Reuse(ReuseParams{
+		WorkspacesRoot: workspacesRoot,
+		WorkspaceID:    "ws-user-skill-reuse",
+		TaskID:         "f8f6a7b8-c9d0-1234-efab-567890123456",
+		WorkDir:        env.WorkDir,
+		Provider:       "codex",
+		Task: TaskContextForEnv{
+			IssueID: "user-skill-reuse-test",
+		}}, testLogger())
 	if reused == nil {
 		t.Fatal("Reuse returned nil")
 	}
@@ -2810,8 +2851,9 @@ func TestReuseClearsUserSkillResidueOnWorkspaceConflict(t *testing.T) {
 		t.Fatalf("seed user support file: %v", err)
 	}
 
+	workspacesRoot := t.TempDir()
 	env, err := Prepare(PrepareParams{
-		WorkspacesRoot: t.TempDir(),
+		WorkspacesRoot: workspacesRoot,
 		WorkspaceID:    "ws-reuse-conflict",
 		TaskID:         "c1d2e3f4-a5b6-7890-abcd-123456789012",
 		AgentName:      "Codex Agent",
@@ -2828,12 +2870,18 @@ func TestReuseClearsUserSkillResidueOnWorkspaceConflict(t *testing.T) {
 		t.Fatalf("user support file should be seeded in round 1: %v", err)
 	}
 
-	reused := Reuse(ReuseParams{WorkDir: env.WorkDir, Provider: "codex", Task: TaskContextForEnv{
-		IssueID: "reuse-conflict-test",
-		AgentSkills: []SkillContextForEnv{
-			{Name: "Writing", Content: "workspace writing"},
-		},
-	}}, testLogger())
+	reused := Reuse(ReuseParams{
+		WorkspacesRoot: workspacesRoot,
+		WorkspaceID:    "ws-reuse-conflict",
+		TaskID:         "f9f6a7b8-c9d0-1234-efab-567890123456",
+		WorkDir:        env.WorkDir,
+		Provider:       "codex",
+		Task: TaskContextForEnv{
+			IssueID: "reuse-conflict-test",
+			AgentSkills: []SkillContextForEnv{
+				{Name: "Writing", Content: "workspace writing"},
+			},
+		}}, testLogger())
 	if reused == nil {
 		t.Fatal("Reuse returned nil")
 	}
@@ -2868,8 +2916,9 @@ func TestReuseClearsRemovedUserSkill(t *testing.T) {
 		t.Fatalf("seed user SKILL.md: %v", err)
 	}
 
+	workspacesRoot := t.TempDir()
 	env, err := Prepare(PrepareParams{
-		WorkspacesRoot: t.TempDir(),
+		WorkspacesRoot: workspacesRoot,
 		WorkspaceID:    "ws-reuse-remove",
 		TaskID:         "d2e3f4a5-b6c7-8901-abcd-234567890123",
 		AgentName:      "Codex Agent",
@@ -2890,9 +2939,15 @@ func TestReuseClearsRemovedUserSkill(t *testing.T) {
 		t.Fatalf("remove user skill: %v", err)
 	}
 
-	reused := Reuse(ReuseParams{WorkDir: env.WorkDir, Provider: "codex", Task: TaskContextForEnv{
-		IssueID: "reuse-remove-test",
-	}}, testLogger())
+	reused := Reuse(ReuseParams{
+		WorkspacesRoot: workspacesRoot,
+		WorkspaceID:    "ws-reuse-remove",
+		TaskID:         "faf6a7b8-c9d0-1234-efab-567890123456",
+		WorkDir:        env.WorkDir,
+		Provider:       "codex",
+		Task: TaskContextForEnv{
+			IssueID: "reuse-remove-test",
+		}}, testLogger())
 	if reused == nil {
 		t.Fatal("Reuse returned nil")
 	}

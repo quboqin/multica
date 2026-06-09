@@ -2540,8 +2540,10 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 		AutopilotTriggerPayload:          strings.TrimSpace(string(task.AutopilotTriggerPayload)),
 		QuickCreatePrompt:                task.QuickCreatePrompt,
 		IsSquadLeader:                    strings.Contains(instructions, "## Squad Operating Protocol"),
+		RequestingUserID:                 task.RequestingUserID,
 		RequestingUserName:               task.RequestingUserName,
 		RequestingUserProfileDescription: task.RequestingUserProfileDescription,
+		IntegrationCredentials:           integrationCredentialStatus(task.IntegrationTokens),
 		WorkspaceContext:                 task.WorkspaceContext,
 	}
 
@@ -2577,16 +2579,19 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	// Prepare against a stable user path is cheap (no clone, no copy).
 	var agentMcpConfig json.RawMessage
 	if task.Agent != nil {
-		agentMcpConfig = task.Agent.McpConfig
+		agentMcpConfig = materializeIntegrationMcpConfig(task.Agent.McpConfig, task.IntegrationTokens)
 	}
 	if task.PriorWorkDir != "" && localAssignment == nil {
 		env = execenv.Reuse(execenv.ReuseParams{
-			WorkDir:      task.PriorWorkDir,
-			Provider:     provider,
-			CodexVersion: codexVersion,
-			OpenclawBin:  openclawBin,
-			McpConfig:    agentMcpConfig,
-			Task:         taskCtx,
+			WorkspacesRoot: d.cfg.WorkspacesRoot,
+			WorkspaceID:    task.WorkspaceID,
+			TaskID:         task.ID,
+			WorkDir:        task.PriorWorkDir,
+			Provider:       provider,
+			CodexVersion:   codexVersion,
+			OpenclawBin:    openclawBin,
+			McpConfig:      agentMcpConfig,
+			Task:           taskCtx,
 		}, d.logger)
 	}
 	if env == nil {
@@ -2740,6 +2745,7 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 			agentEnv[k] = v
 		}
 	}
+	applyUserIntegrationEnv(agentEnv, task)
 	backend, err := agent.New(provider, agent.Config{
 		ExecutablePath: entry.Path,
 		Env:            agentEnv,
@@ -2767,7 +2773,7 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	var mcpConfig json.RawMessage
 	if task.Agent != nil {
 		customArgs = task.Agent.CustomArgs
-		mcpConfig = task.Agent.McpConfig
+		mcpConfig = agentMcpConfig
 	}
 	// Two-tier model resolution: an explicit agent.model wins,
 	// then the daemon-wide MULTICA_<PROVIDER>_MODEL env var. If

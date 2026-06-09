@@ -1,6 +1,9 @@
 package daemon
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"strings"
+)
 
 // AgentEntry describes a single available agent CLI.
 type AgentEntry struct {
@@ -34,11 +37,12 @@ type ProjectResourceData struct {
 // Task represents a claimed task from the server.
 // Agent data (name, skills) is populated by the claim endpoint.
 type Task struct {
-	ID          string `json:"id"`
-	AgentID     string `json:"agent_id"`
-	RuntimeID   string `json:"runtime_id"`
-	IssueID     string `json:"issue_id"`
-	WorkspaceID string `json:"workspace_id"`
+	ID               string `json:"id"`
+	AgentID          string `json:"agent_id"`
+	RuntimeID        string `json:"runtime_id"`
+	IssueID          string `json:"issue_id"`
+	WorkspaceID      string `json:"workspace_id"`
+	RequestingUserID string `json:"requesting_user_id,omitempty"`
 	// WorkspaceContext mirrors workspace.context (the per-workspace system
 	// prompt set in Settings → General). Server populates this on every claim
 	// regardless of task kind so the daemon can inject `## Workspace Context`
@@ -77,14 +81,51 @@ type Task struct {
 	// no owner (cloud / system runtimes) or the user hasn't set a description.
 	// Injected into the brief under `## Requesting User`; omitted entirely
 	// when description is empty so the agent doesn't see a useless heading.
-	RequestingUserName               string `json:"requesting_user_name,omitempty"`
-	RequestingUserProfileDescription string `json:"requesting_user_profile_description,omitempty"`
+	RequestingUserName               string            `json:"requesting_user_name,omitempty"`
+	RequestingUserProfileDescription string            `json:"requesting_user_profile_description,omitempty"`
+	IntegrationTokens                IntegrationTokens `json:"integration_tokens,omitempty"`
 	// AuthToken is the task-scoped credential the server mints at claim time.
 	// The daemon injects it into the spawned agent as MULTICA_TOKEN so the
 	// agent never sees the daemon's own (often workspace-owner) credential.
 	// Empty when the server-side runtime has no owning user — the daemon
 	// then falls back to its own token. See MUL-2600.
 	AuthToken string `json:"auth_token,omitempty"`
+}
+
+type IntegrationTokens struct {
+	GitToken       string            `json:"git_token,omitempty"`
+	FeishuMCPToken string            `json:"feishu_mcp_token,omitempty"`
+	PaonesToken    string            `json:"paones_token,omitempty"`
+	JingweiToken   string            `json:"jingwei_token,omitempty"`
+	Extra          map[string]string `json:"-"`
+}
+
+func (t *IntegrationTokens) UnmarshalJSON(data []byte) error {
+	var raw map[string]string
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	t.Extra = make(map[string]string)
+	for key, value := range raw {
+		trimmed := strings.TrimSpace(value)
+		switch key {
+		case "git_token":
+			t.GitToken = trimmed
+		case "feishu_mcp_token":
+			t.FeishuMCPToken = trimmed
+		case "paones_token":
+			t.PaonesToken = trimmed
+		case "jingwei_token":
+			t.JingweiToken = trimmed
+		case "paihub_token":
+			if t.PaonesToken == "" {
+				t.PaonesToken = trimmed
+			}
+		default:
+			t.Extra[key] = trimmed
+		}
+	}
+	return nil
 }
 
 // ChatAttachmentMeta is the structured attachment metadata the daemon
