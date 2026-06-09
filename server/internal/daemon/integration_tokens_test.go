@@ -81,16 +81,27 @@ func TestApplyUserGitAuthEnvRewritesRemotesAndSetsIdentity(t *testing.T) {
 	}
 }
 
-func TestApplyUserGitAuthEnvNoOpWithoutTokenOrRepo(t *testing.T) {
+func TestApplyUserGitAuthEnvBlocksRemoteGitWithoutToken(t *testing.T) {
 	t.Setenv("GIT_CONFIG_COUNT", "")
-	// No git token.
 	env := map[string]string{}
-	applyUserGitAuthEnv(env, Task{Repos: []RepoData{{URL: "git@host:g/r.git"}}})
-	if _, ok := env["GIT_CONFIG_COUNT"]; ok {
-		t.Fatalf("expected no git config without a token: %#v", env)
+	applyUserGitAuthEnv(env, Task{Repos: []RepoData{{URL: "git@git.ppdaicorp.com:g/r.git"}}})
+	count, _ := strconv.Atoi(env["GIT_CONFIG_COUNT"])
+	if count == 0 {
+		t.Fatalf("expected git config to block remote access without a token: %#v", env)
 	}
-	// Token but no repo to derive a host from.
-	env = map[string]string{}
+	pairs := map[string]string{}
+	for i := 0; i < count; i++ {
+		pairs[env["GIT_CONFIG_KEY_"+strconv.Itoa(i)]] = env["GIT_CONFIG_VALUE_"+strconv.Itoa(i)]
+	}
+	wantKey := "url.https://multica-git-token-required.invalid/.insteadOf"
+	if pairs[wantKey] == "" {
+		t.Fatalf("expected missing-token sentinel rewrite, got pairs=%#v", pairs)
+	}
+}
+
+func TestApplyUserGitAuthEnvNoOpWithoutRepo(t *testing.T) {
+	t.Setenv("GIT_CONFIG_COUNT", "")
+	env := map[string]string{}
 	applyUserGitAuthEnv(env, Task{IntegrationTokens: IntegrationTokens{GitToken: "x"}})
 	if _, ok := env["GIT_CONFIG_COUNT"]; ok {
 		t.Fatalf("expected no git config without a repo host: %#v", env)
@@ -103,8 +114,11 @@ func TestGitHostFromURL(t *testing.T) {
 		want string
 	}{
 		{"git@git.ppdaicorp.com:oversea/xcadapt.git", "git.ppdaicorp.com"},
-		{"ssh://git@git.ppdaicorp.com:22/oversea/r.git", "git.ppdaicorp.com"},
+		{"ssh://git@git.ppdaicorp.com:22/oversea/r.git", "git.ppdaicorp.com:22"},
 		{"https://git.ppdaicorp.com/oversea/r.git", "git.ppdaicorp.com"},
+		{`C:\Users\me\repo`, ""},
+		{"C:/Users/me/repo", ""},
+		{"/Users/me/repo", ""},
 		{"", ""},
 	}
 	for _, c := range cases {

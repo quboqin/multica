@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"encoding/json"
+	"net/url"
 	"os"
 	"regexp"
 	"strconv"
@@ -36,33 +37,37 @@ func applyUserIntegrationEnv(env map[string]string, task Task) {
 // the lifetime of the agent process. The url rewrites are host-scoped to the
 // task's git hosts so the token is never offered to an unrelated remote.
 //
-// No-op when the user has no git token or no git host can be derived from the
-// task's repos (e.g. chat tasks with no repo) — in that case git falls back to
-// whatever the daemon machine provides, exactly as before.
+// When the task has remote repo hosts but the user has no git_token, remote
+// URL rewrites point those hosts at an invalid Multica-owned sentinel host.
+// That lets local git operations such as status/commit keep working while
+// fetch/push fail instead of falling through to the daemon machine's SSH key
+// or credential helper.
 func applyUserGitAuthEnv(env map[string]string, task Task) {
-	token := strings.TrimSpace(task.IntegrationTokens.GitToken)
-	if token == "" {
-		return
-	}
 	hosts := gitHostsFromRepos(task.Repos)
 	if len(hosts) == 0 {
 		return
 	}
+	token := strings.TrimSpace(task.IntegrationTokens.GitToken)
 
 	type kv struct{ key, value string }
 	var entries []kv
 	for _, host := range hosts {
-		// GitLab/GitHub PATs authenticate over HTTPS as `oauth2:<token>`.
-		https := "https://oauth2:" + token + "@" + host + "/"
+		var target string
+		if token == "" {
+			target = "https://multica-git-token-required.invalid/"
+		} else {
+			// GitLab/GitHub PATs authenticate over HTTPS as `oauth2:<token>`.
+			target = "https://oauth2:" + token + "@" + host + "/"
+		}
 		// insteadOf is multi-valued; each index below is read by git as a
 		// separate rewrite rule for the same target URL. Cover the scp-style
 		// SSH form (git@host:group/repo.git), the ssh:// form, and plain
 		// HTTPS so any remote shape the workspace stored resolves to the
-		// token-bearing URL.
+		// token-bearing URL, or to the missing-token sentinel URL.
 		entries = append(entries,
-			kv{"url." + https + ".insteadOf", "git@" + host + ":"},
-			kv{"url." + https + ".insteadOf", "ssh://git@" + host + "/"},
-			kv{"url." + https + ".insteadOf", "https://" + host + "/"},
+			kv{"url." + target + ".insteadOf", "git@" + host + ":"},
+			kv{"url." + target + ".insteadOf", "ssh://git@" + host + "/"},
+			kv{"url." + target + ".insteadOf", "https://" + host + "/"},
 		)
 	}
 	// Commit identity, so commits made on the shared runtime are attributed to
@@ -114,31 +119,28 @@ func gitHostFromURL(raw string) string {
 	if s == "" {
 		return ""
 	}
-	if !strings.Contains(s, "://") {
-		// scp-like: [user@]host:path
-		if at := strings.Index(s, "@"); at >= 0 {
-			s = s[at+1:]
-		}
-		if colon := strings.Index(s, ":"); colon >= 0 {
-			return s[:colon]
-		}
-		if slash := strings.Index(s, "/"); slash >= 0 {
-			return s[:slash]
-		}
-		return s
+	if parsed, err := url.Parse(s); err == nil && parsed.Scheme != "" && parsed.Host != "" {
+		return parsed.Host
 	}
-	// scheme://[user@]host[:port]/path
-	rest := s[strings.Index(s, "://")+3:]
-	if at := strings.Index(rest, "@"); at >= 0 {
-		rest = rest[at+1:]
+
+	// Windows local path: C:\repo or C:/repo. This is not an scp-style Git
+	// URL and must not force a user git_token.
+	if len(s) >= 3 && s[1] == ':' && ((s[0] >= 'A' && s[0] <= 'Z') || (s[0] >= 'a' && s[0] <= 'z')) && (s[2] == '\\' || s[2] == '/') {
+		return ""
 	}
-	if slash := strings.Index(rest, "/"); slash >= 0 {
-		rest = rest[:slash]
+
+	// scp-like: [user@]host:path. A slash-only value is a local path, not a
+	// remote URL.
+	if !strings.Contains(s, ":") {
+		return ""
 	}
-	if colon := strings.Index(rest, ":"); colon >= 0 {
-		rest = rest[:colon]
+	if at := strings.Index(s, "@"); at >= 0 {
+		s = s[at+1:]
 	}
-	return rest
+	if colon := strings.Index(s, ":"); colon >= 0 {
+		return s[:colon]
+	}
+	return ""
 }
 
 func integrationCredentialStatus(tokens IntegrationTokens) execenv.IntegrationCredentialStatus {
