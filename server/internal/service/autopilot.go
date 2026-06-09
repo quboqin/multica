@@ -238,11 +238,11 @@ func (s *AutopilotService) dispatchCreateIssue(ctx context.Context, ap db.Autopi
 		if leader.Visibility == "private" && !s.canCreatorAccessPrivateLeader(ctx, ap, leader) {
 			return fmt.Errorf("autopilot creator cannot access private squad leader")
 		}
-		if _, err := s.TaskSvc.EnqueueTaskForSquadLeader(ctx, issue, leader.ID, pgtype.UUID{}); err != nil {
+		if _, err := s.TaskSvc.EnqueueTaskForSquadLeaderByUser(ctx, issue, leader.ID, pgtype.UUID{}, autopilotRequestingUserID(ap)); err != nil {
 			return fmt.Errorf("enqueue squad leader task: %w", err)
 		}
 	} else {
-		if _, err := s.TaskSvc.EnqueueTaskForIssue(ctx, issue); err != nil {
+		if _, err := s.TaskSvc.EnqueueTaskForIssueByUser(ctx, issue, autopilotRequestingUserID(ap)); err != nil {
 			return fmt.Errorf("enqueue task for issue: %w", err)
 		}
 	}
@@ -272,6 +272,13 @@ type errDispatchSkipped struct {
 }
 
 func (e *errDispatchSkipped) Error() string { return e.reason }
+
+func autopilotRequestingUserID(ap db.Autopilot) pgtype.UUID {
+	if ap.CreatedByType == "member" && ap.CreatedByID.Valid {
+		return ap.CreatedByID
+	}
+	return pgtype.UUID{}
+}
 
 // dispatchRunOnly enqueues a direct agent task without creating an issue.
 //
@@ -306,10 +313,11 @@ func (s *AutopilotService) dispatchRunOnly(ctx context.Context, ap db.Autopilot,
 	}
 
 	task, err := s.Queries.CreateAutopilotTask(ctx, db.CreateAutopilotTaskParams{
-		AgentID:        agent.ID,
-		RuntimeID:      agent.RuntimeID,
-		Priority:       0,
-		AutopilotRunID: run.ID,
+		AgentID:          agent.ID,
+		RuntimeID:        agent.RuntimeID,
+		Priority:         0,
+		AutopilotRunID:   run.ID,
+		RequestingUserID: autopilotRequestingUserID(ap),
 		// Snapshot the autopilot title so task rows self-describe later
 		// without joining back to autopilot. Truncated for the same
 		// transmission-cost reason as comment-driven summaries.

@@ -108,8 +108,8 @@ SELECT * FROM chat_message
 WHERE id = $1;
 
 -- name: CreateChatTask :one
-INSERT INTO agent_task_queue (agent_id, runtime_id, issue_id, status, priority, chat_session_id, initiator_user_id)
-VALUES ($1, $2, NULL, 'queued', $3, $4, $5)
+INSERT INTO agent_task_queue (agent_id, runtime_id, issue_id, status, priority, chat_session_id, initiator_user_id, requesting_user_id)
+VALUES ($1, $2, NULL, 'queued', $3, $4, $5, $6)
 RETURNING *;
 
 -- name: GetLastChatTaskSession :one
@@ -120,7 +120,7 @@ RETURNING *;
 -- fallback when chat_session.session_id is NULL. Resume-unsafe failures are
 -- excluded because replaying those sessions deterministically reproduces the
 -- same terminal state.
-SELECT session_id, work_dir, runtime_id FROM agent_task_queue
+SELECT session_id, work_dir, runtime_id, requesting_user_id FROM agent_task_queue
 WHERE chat_session_id = $1
   AND (
     status = 'completed'

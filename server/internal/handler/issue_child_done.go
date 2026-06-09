@@ -48,7 +48,7 @@ import (
 // Errors are logged at warn level and swallowed: this is a best-effort
 // notification on the side of a successful status update; failing it must
 // not roll back the user's status change.
-func (h *Handler) notifyParentOfChildDone(ctx context.Context, prev, issue db.Issue, actorType, actorID string) {
+func (h *Handler) notifyParentOfChildDone(ctx context.Context, prev, issue db.Issue, actorType, actorID string, requestingUserID pgtype.UUID) {
 	if !issue.ParentIssueID.Valid {
 		return
 	}
@@ -122,7 +122,7 @@ func (h *Handler) notifyParentOfChildDone(ctx context.Context, prev, issue db.Is
 	// author_type='system'); this keeps smuggled mentions from the child
 	// title inert and gives the platform a single place to apply the loop
 	// and idempotency guards.
-	h.dispatchParentAssigneeTrigger(ctx, parent, issue, comment, actorType, actorID)
+	h.dispatchParentAssigneeTrigger(ctx, parent, issue, comment, actorType, actorID, requestingUserID)
 }
 
 // sanitizeChildTitleForSystemComment removes mention-style markdown from a
@@ -243,16 +243,16 @@ func sanitizeMentionLabel(name string) string {
 //     for the same parent (e.g. two children finishing back-to-back).
 //   - Readiness: archived agents / missing runtimes are silently skipped
 //     so a closed-out agent does not surface as a phantom assignee.
-func (h *Handler) dispatchParentAssigneeTrigger(ctx context.Context, parent, child db.Issue, systemComment db.Comment, actorType, actorID string) {
+func (h *Handler) dispatchParentAssigneeTrigger(ctx context.Context, parent, child db.Issue, systemComment db.Comment, actorType, actorID string, requestingUserID pgtype.UUID) {
 	if !parent.AssigneeType.Valid || !parent.AssigneeID.Valid {
 		return
 	}
 
 	switch parent.AssigneeType.String {
 	case "agent":
-		h.triggerChildDoneAgent(ctx, parent, systemComment.ID)
+		h.triggerChildDoneAgent(ctx, parent, systemComment.ID, requestingUserID)
 	case "squad":
-		h.triggerChildDoneSquad(ctx, parent, child, systemComment.ID, actorType, actorID)
+		h.triggerChildDoneSquad(ctx, parent, child, systemComment.ID, actorType, actorID, requestingUserID)
 	}
 }
 
@@ -269,7 +269,7 @@ func (h *Handler) dispatchParentAssigneeTrigger(ctx context.Context, parent, chi
 // stranded those parents (MUL-2808). Runaway re-triggering is prevented by
 // the HasPendingTaskForIssueAndAgent dedup below, exactly as the @mention
 // self-trigger path relies on it (see computeMentionedAgentCommentTriggers).
-func (h *Handler) triggerChildDoneAgent(ctx context.Context, parent db.Issue, triggerCommentID pgtype.UUID) {
+func (h *Handler) triggerChildDoneAgent(ctx context.Context, parent db.Issue, triggerCommentID pgtype.UUID, requestingUserID pgtype.UUID) {
 	agent, err := h.Queries.GetAgentInWorkspace(ctx, db.GetAgentInWorkspaceParams{
 		ID:          parent.AssigneeID,
 		WorkspaceID: parent.WorkspaceID,
@@ -286,7 +286,7 @@ func (h *Handler) triggerChildDoneAgent(ctx context.Context, parent db.Issue, tr
 		return
 	}
 
-	if _, err := h.TaskService.EnqueueTaskForMention(ctx, parent, parent.AssigneeID, triggerCommentID); err != nil {
+	if _, err := h.TaskService.EnqueueTaskForMentionByUser(ctx, parent, parent.AssigneeID, triggerCommentID, requestingUserID); err != nil {
 		slog.Warn("child done: enqueue parent agent task failed",
 			"error", err,
 			"parent_id", uuidToString(parent.ID),
@@ -301,7 +301,7 @@ func (h *Handler) triggerChildDoneAgent(ctx context.Context, parent db.Issue, tr
 //   - same effective leader on both sides — child agent == leader, or
 //     child squad's leader == this squad's leader (the cross-squad shared
 //     leader loop).
-func (h *Handler) triggerChildDoneSquad(ctx context.Context, parent, child db.Issue, triggerCommentID pgtype.UUID, actorType, actorID string) {
+func (h *Handler) triggerChildDoneSquad(ctx context.Context, parent, child db.Issue, triggerCommentID pgtype.UUID, actorType, actorID string, requestingUserID pgtype.UUID) {
 	squad, err := h.Queries.GetSquadInWorkspace(ctx, db.GetSquadInWorkspaceParams{
 		ID:          parent.AssigneeID,
 		WorkspaceID: parent.WorkspaceID,
@@ -341,7 +341,7 @@ func (h *Handler) triggerChildDoneSquad(ctx context.Context, parent, child db.Is
 		return
 	}
 
-	if _, err := h.TaskService.EnqueueTaskForSquadLeader(ctx, parent, squad.LeaderID, triggerCommentID); err != nil {
+	if _, err := h.TaskService.EnqueueTaskForSquadLeaderByUser(ctx, parent, squad.LeaderID, triggerCommentID, requestingUserID); err != nil {
 		slog.Warn("child done: enqueue parent squad leader task failed",
 			"error", err,
 			"parent_id", uuidToString(parent.ID),

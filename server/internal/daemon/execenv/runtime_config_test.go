@@ -439,6 +439,39 @@ func TestWorkspaceContextRenderedAcrossTaskKinds(t *testing.T) {
 	}
 }
 
+func TestIntegrationCredentialStatusRendered(t *testing.T) {
+	t.Parallel()
+	out := buildMetaSkillContent("codex", TaskContextForEnv{
+		RequestingUserID: "user-123",
+		IntegrationCredentials: IntegrationCredentialStatus{
+			GitToken:       true,
+			FeishuMCPToken: false,
+			PaonesToken:    false,
+			JingweiToken:   false,
+			Extra: map[string]bool{
+				"notion_token": true,
+			},
+		},
+	})
+	for _, want := range []string{
+		"## User Integration Credentials",
+		"This task is running on behalf of user `user-123`.",
+		"Never use host/global/default credentials",
+		"| `git_token` | configured |",
+		"| `feishu_mcp_token` | missing |",
+		"| `paones_token` | missing |",
+		"| `jingwei_token` | missing |",
+		"| `notion_token` | configured |",
+		"`MULTICA_INTEGRATION_NOTION_TOKEN`",
+		"`FEISHU_MCP_TOKEN`",
+		"ask the user to configure their token",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("brief missing %q\n--- brief ---\n%s", want, out)
+		}
+	}
+}
+
 func TestWorkspaceContextHeadingSkippedWhenEmpty(t *testing.T) {
 	t.Parallel()
 	cases := []struct {

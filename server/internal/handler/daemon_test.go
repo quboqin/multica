@@ -3214,6 +3214,86 @@ func TestClaimTask_ChatLegacyNullRuntimeFallsBackToTaskRow(t *testing.T) {
 	}
 }
 
+func TestClaimTask_UsesRequestingUserIntegrationTokens(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	agentID, runtimeID, daemonID := createRuntimeGuardAgent(t, ctx)
+
+	var requestingUserID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO "user" (name, email, integration_tokens)
+		VALUES ('Requesting Token User', 'requesting-token-user-' || gen_random_uuid()::text || '@multica.ai',
+		        '{"git_token":"user-git","feishu_mcp_token":"user-feishu","paones_token":"user-paones","jingwei_token":"user-jingwei","notion_token":"user-notion"}'::jsonb)
+		RETURNING id
+	`).Scan(&requestingUserID); err != nil {
+		t.Fatalf("setup: create requesting user: %v", err)
+	}
+	t.Cleanup(func() { testPool.Exec(ctx, `DELETE FROM "user" WHERE id = $1`, requestingUserID) })
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO member (workspace_id, user_id, role)
+		VALUES ($1, $2, 'member')
+	`, testWorkspaceID, requestingUserID); err != nil {
+		t.Fatalf("setup: add requesting user member: %v", err)
+	}
+
+	var issueID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO issue (workspace_id, title, status, priority, creator_id, creator_type, number, position)
+		VALUES ($1, 'requesting user token fixture', 'in_progress', 'none', $2, 'member', 81207, 0)
+		RETURNING id
+	`, testWorkspaceID, requestingUserID).Scan(&issueID); err != nil {
+		t.Fatalf("setup: create issue: %v", err)
+	}
+	t.Cleanup(func() { testPool.Exec(ctx, `DELETE FROM issue WHERE id = $1`, issueID) })
+
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO agent_task_queue (
+			agent_id, runtime_id, issue_id,
+			status, priority, requesting_user_id
+		)
+		VALUES ($1, $2, $3, 'queued', 0, $4)
+	`, agentID, runtimeID, issueID, requestingUserID); err != nil {
+		t.Fatalf("setup: create requesting-user task: %v", err)
+	}
+
+	w := httptest.NewRecorder()
+	req := newDaemonTokenRequest("POST", "/api/daemon/runtimes/"+runtimeID+"/claim", nil, testWorkspaceID, daemonID)
+	req = withURLParam(req, "runtimeId", runtimeID)
+	testHandler.ClaimTaskByRuntime(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("ClaimTaskByRuntime: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var resp struct {
+		Task *struct {
+			RequestingUserID  string            `json:"requesting_user_id"`
+			IntegrationTokens map[string]string `json:"integration_tokens"`
+		} `json:"task"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp.Task == nil {
+		t.Fatal("expected claimed task")
+	}
+	if resp.Task.RequestingUserID != requestingUserID {
+		t.Fatalf("requesting_user_id = %q, want %q", resp.Task.RequestingUserID, requestingUserID)
+	}
+	if resp.Task.IntegrationTokens == nil {
+		t.Fatalf("expected integration_tokens for requesting user")
+	}
+	if resp.Task.IntegrationTokens["git_token"] != "user-git" ||
+		resp.Task.IntegrationTokens["feishu_mcp_token"] != "user-feishu" ||
+		resp.Task.IntegrationTokens["paones_token"] != "user-paones" ||
+		resp.Task.IntegrationTokens["jingwei_token"] != "user-jingwei" ||
+		resp.Task.IntegrationTokens["notion_token"] != "user-notion" {
+		t.Fatalf("integration_tokens = %#v", resp.Task.IntegrationTokens)
+	}
+}
+
 // TestGetChatSessionGCCheck verifies the chat session gc-check endpoint
 // matches the same anti-enumeration shape as GetIssueGCCheck: cross-workspace
 // daemon tokens get 404, same-workspace tokens get the live status.

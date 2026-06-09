@@ -441,8 +441,9 @@ export const UserSchema: z.ZodType<User> = z.object({
   integration_tokens: z.object({
     git_token: z.string().optional(),
     feishu_mcp_token: z.string().optional(),
-    paihub_token: z.string().optional(),
-  }).default({}),
+    paones_token: z.string().optional(),
+    jingwei_token: z.string().optional(),
+  }).catchall(z.string()).default({}),
   created_at: z.string().default(""),
   updated_at: z.string().default(""),
 }).loose();

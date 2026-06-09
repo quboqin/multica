@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/netip"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -332,6 +333,27 @@ func isCheckViolation(err error) bool {
 
 func requestUserID(r *http.Request) string {
 	return r.Header.Get("X-User-ID")
+}
+
+func requestingUserIDFromActor(actorType, actorID string) pgtype.UUID {
+	if actorType != "member" || actorID == "" {
+		return pgtype.UUID{}
+	}
+	id, err := util.ParseUUID(actorID)
+	if err != nil {
+		return pgtype.UUID{}
+	}
+	return id
+}
+
+func requestingUserIDFromRequest(r *http.Request, actorType, actorID string) pgtype.UUID {
+	if userID := strings.TrimSpace(requestUserID(r)); userID != "" {
+		id, err := util.ParseUUID(userID)
+		if err == nil {
+			return id
+		}
+	}
+	return requestingUserIDFromActor(actorType, actorID)
 }
 
 // resolveActor determines whether the request is from an agent or a human member.

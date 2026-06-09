@@ -1159,7 +1159,20 @@ func (h *Handler) ClaimTaskByRuntime(w http.ResponseWriter, r *http.Request) {
 	// the heading entirely on the daemon side; cloud / system runtimes with
 	// no owner stay anonymous. Failure here must not block claim — the agent
 	// can still run without the user-context section.
-	if runtime.OwnerID.Valid {
+	if task.RequestingUserID.Valid {
+		if user, err := h.Queries.GetUser(r.Context(), task.RequestingUserID); err == nil {
+			resp.RequestingUserName = user.Name
+			resp.RequestingUserProfileDescription = user.ProfileDescription
+			tokens := taskIntegrationTokensFromUser(user)
+			resp.IntegrationTokens = &tokens
+		} else {
+			slog.Debug("failed to load requesting user for brief injection",
+				"task_id", uuidToString(task.ID),
+				"requesting_user_id", uuidToString(task.RequestingUserID),
+				"error", err,
+			)
+		}
+	} else if runtime.OwnerID.Valid {
 		if owner, err := h.Queries.GetUser(r.Context(), runtime.OwnerID); err == nil {
 			resp.RequestingUserName = owner.Name
 			resp.RequestingUserProfileDescription = owner.ProfileDescription
@@ -1364,7 +1377,7 @@ func (h *Handler) ClaimTaskByRuntime(w http.ResponseWriter, r *http.Request) {
 				// comment" guard in prompt.go defends against inheriting the prior
 				// turn's "Done." marker, and GetLastTaskSession already excludes
 				// poisoned sessions.
-				if prior.RuntimeID == task.RuntimeID {
+				if prior.RuntimeID == task.RuntimeID && sameNullableUUID(prior.RequestingUserID, task.RequestingUserID) {
 					resp.PriorSessionID = prior.SessionID.String
 				}
 				if prior.WorkDir.Valid {
@@ -1380,6 +1393,13 @@ func (h *Handler) ClaimTaskByRuntime(w http.ResponseWriter, r *http.Request) {
 			resp.WorkspaceID = uuidToString(cs.WorkspaceID)
 			resp.ChatSessionID = uuidToString(cs.ID)
 			resp.ThreadName = cs.Title
+			chatRequestingUserID := task.RequestingUserID
+			if !chatRequestingUserID.Valid {
+				chatRequestingUserID = cs.CreatorID
+			}
+			if resp.RequestingUserID == "" && cs.CreatorID.Valid {
+				resp.RequestingUserID = uuidToString(cs.CreatorID)
+			}
 			if ws, err := h.Queries.GetWorkspace(r.Context(), cs.WorkspaceID); err == nil && ws.Repos != nil {
 				var repos []RepoData
 				if json.Unmarshal(ws.Repos, &repos) == nil && len(repos) > 0 {
@@ -1395,14 +1415,18 @@ func (h *Handler) ClaimTaskByRuntime(w http.ResponseWriter, r *http.Request) {
 				// otherwise a single failed turn would silently drop the entire
 				// conversation memory on the next message. The fallback also
 				// requires runtime to match.
-				if cs.SessionID.Valid && cs.RuntimeID.Valid && cs.RuntimeID == task.RuntimeID {
+				if cs.SessionID.Valid && cs.RuntimeID.Valid && cs.RuntimeID == task.RuntimeID && sameNullableUUID(cs.CreatorID, chatRequestingUserID) {
 					resp.PriorSessionID = cs.SessionID.String
 				}
 				if cs.WorkDir.Valid {
 					resp.PriorWorkDir = cs.WorkDir.String
 				}
 				if prior, err := h.Queries.GetLastChatTaskSession(r.Context(), cs.ID); err == nil && prior.SessionID.Valid {
-					if resp.PriorSessionID == "" && prior.RuntimeID == task.RuntimeID {
+					priorRequestingUserID := prior.RequestingUserID
+					if !priorRequestingUserID.Valid {
+						priorRequestingUserID = cs.CreatorID
+					}
+					if resp.PriorSessionID == "" && prior.RuntimeID == task.RuntimeID && sameNullableUUID(priorRequestingUserID, chatRequestingUserID) {
 						resp.PriorSessionID = prior.SessionID.String
 					}
 					if prior.WorkDir.Valid && resp.PriorWorkDir == "" {
@@ -1667,18 +1691,22 @@ func (h *Handler) ClaimTaskByRuntime(w http.ResponseWriter, r *http.Request) {
 	// fall back to a member/owner credential. MUL-3292.
 	// Token expires after the queue/runtime upper bound (24h) so it survives
 	// long-running tasks but cannot outlive a forgotten one.
-	if !runtime.OwnerID.Valid {
+	tokenUserID := runtime.OwnerID
+	if task.RequestingUserID.Valid {
+		tokenUserID = task.RequestingUserID
+	}
+	if !tokenUserID.Valid {
 		outcome = "error_token"
-		slog.Error("task claim: runtime owner missing; cancelling task to avoid unscoped agent credentials",
+		slog.Error("task claim: token user missing; cancelling task to avoid unscoped agent credentials",
 			"task_id", uuidToString(task.ID),
 			"runtime_id", runtimeID,
 			"workspace_id", runtimeWorkspaceID,
 		)
 		if _, cerr := h.TaskService.CancelTask(r.Context(), task.ID); cerr != nil {
-			slog.Error("task claim: cancel after missing runtime owner failed",
+			slog.Error("task claim: cancel after missing token user failed",
 				"task_id", uuidToString(task.ID), "error", cerr)
 		}
-		writeError(w, http.StatusInternalServerError, "runtime owner required to mint task token")
+		writeError(w, http.StatusInternalServerError, "requesting user or runtime owner required to mint task token")
 		return
 	}
 	tokenStr, terr := auth.GenerateAgentTaskToken()
@@ -1694,7 +1722,7 @@ func (h *Handler) ClaimTaskByRuntime(w http.ResponseWriter, r *http.Request) {
 		TaskID:      task.ID,
 		AgentID:     task.AgentID,
 		WorkspaceID: parseUUID(resp.WorkspaceID),
-		UserID:      runtime.OwnerID,
+		UserID:      tokenUserID,
 		ExpiresAt:   pgtype.Timestamptz{Time: time.Now().Add(24 * time.Hour), Valid: true},
 	}); terr != nil {
 		outcome = "error_token"
@@ -1726,6 +1754,73 @@ func trailingUserMessages(msgs []db.ChatMessage) []db.ChatMessage {
 		}
 	}
 	return msgs[start:]
+}
+
+func sameNullableUUID(a, b pgtype.UUID) bool {
+	if !a.Valid || !b.Valid {
+		return !a.Valid && !b.Valid
+	}
+	return uuidToString(a) == uuidToString(b)
+}
+
+func taskIntegrationTokensFromUser(user db.User) TaskIntegrationTokens {
+	rawTokens := integrationTokenMapFromUser(user)
+	var tokens TaskIntegrationTokens
+	tokens.Extra = make(map[string]string)
+	for key, value := range rawTokens {
+		switch key {
+		case "git_token":
+			tokens.GitToken = value
+		case "feishu_mcp_token":
+			tokens.FeishuMCPToken = value
+		case "paones_token":
+			tokens.PaonesToken = value
+		case "jingwei_token":
+			tokens.JingweiToken = value
+		case "paihub_token":
+			if tokens.PaonesToken == "" {
+				tokens.PaonesToken = value
+			}
+		default:
+			tokens.Extra[key] = value
+		}
+	}
+	return tokens
+}
+
+func integrationTokenMapFromRaw(raw []byte) map[string]string {
+	tokens, _ := integrationTokenMapFromRawWithStatus(raw)
+	return tokens
+}
+
+func integrationTokenMapFromRawWithStatus(raw []byte) (map[string]string, error) {
+	tokens := make(map[string]string)
+	if len(raw) == 0 {
+		return tokens, nil
+	}
+	var decoded map[string]string
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		return tokens, err
+	}
+	for key, value := range decoded {
+		trimmedKey := strings.TrimSpace(key)
+		if trimmedKey == "" {
+			continue
+		}
+		tokens[trimmedKey] = strings.TrimSpace(value)
+	}
+	return tokens, nil
+}
+
+func integrationTokenMapFromUser(user db.User) map[string]string {
+	tokens, err := integrationTokenMapFromRawWithStatus(user.IntegrationTokens)
+	if err != nil {
+		slog.Debug("failed to unmarshal user integration tokens",
+			"user_id", uuidToString(user.ID),
+			"error", err,
+		)
+	}
+	return tokens
 }
 
 // ListPendingTasksByRuntime returns queued/dispatched tasks for a runtime.

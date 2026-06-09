@@ -67,7 +67,9 @@ export interface User {
 export interface IntegrationTokens {
   git_token?: string;
   feishu_mcp_token?: string;
-  paihub_token?: string;
+  paones_token?: string;
+  jingwei_token?: string;
+  [key: string]: string | undefined;
 }
 
 export interface MemberWithUser {
