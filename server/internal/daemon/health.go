@@ -148,11 +148,13 @@ func (d *Daemon) serveHealth(ctx context.Context, ln net.Listener, startedAt tim
 			return
 		}
 
-		// Resolve the requesting user's git credential for this task so the
-		// bare-cache clone/fetch runs as that user (shared-runtime per-user
-		// isolation). When the task user has no git_token, checkout fails
-		// explicitly instead of falling back to daemon credentials.
-		gitCred := d.taskGitCredential(req.TaskID)
+		// Resolve the requesting user's git context for this task so the
+		// bare-cache clone/fetch runs as that user and the worktree commits as
+		// that user (shared-runtime per-user isolation). When the task user has
+		// no git_token, checkout fails explicitly instead of falling back to
+		// daemon credentials.
+		gitCtx := d.taskGitContext(req.TaskID)
+		gitCred := gitCtx.Cred
 
 		if err := d.ensureRepoReady(r.Context(), req.WorkspaceID, req.URL, gitCred); err != nil {
 			statusCode := http.StatusInternalServerError
@@ -174,6 +176,8 @@ func (d *Daemon) serveHealth(ctx context.Context, ln net.Listener, startedAt tim
 			AgentName:           req.AgentName,
 			TaskID:              req.TaskID,
 			CoAuthoredByEnabled: d.workspaceCoAuthoredByEnabled(req.WorkspaceID),
+			CommitUserName:      gitCtx.Name,
+			CommitUserEmail:     gitCtx.Email,
 			Cred:                gitCred,
 		})
 		if err != nil {

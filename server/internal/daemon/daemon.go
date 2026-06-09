@@ -152,12 +152,13 @@ type Daemon struct {
 	// deleted bare clone and an unrelated `not empty` cleanup failure.
 	bgSyncs sync.WaitGroup
 
-	// taskGitCreds maps an in-flight task ID to the requesting user's git
-	// credential so the agent-initiated `/repo/checkout` path can fetch the
-	// bare cache with that user's token (shared-runtime per-user isolation).
+	// taskGitContexts maps an in-flight task ID to the requesting user's git
+	// token and identity so the agent-initiated `/repo/checkout` path can fetch
+	// the bare cache with that user's token and configure commits as that user
+	// (shared-runtime per-user isolation).
 	// Populated in runTask before the agent spawns, cleared on completion.
-	taskGitCredsMu sync.Mutex
-	taskGitCreds   map[string]repocache.GitCredential
+	taskGitContextsMu sync.Mutex
+	taskGitContexts   map[string]taskGitContext
 
 	runner             taskRunner    // executes agent tasks; set to d.runTask by New(), overridable in tests
 	cancelPollInterval time.Duration // how often handleTask polls for server-side cancellation; overridable in tests
@@ -189,7 +190,7 @@ func New(cfg Config, logger *slog.Logger) *Daemon {
 		runtimeGoneInflight:       make(map[string]struct{}),
 		reregisterNextAttempt:     make(map[string]time.Time),
 		reregisterLastCompletedAt: make(map[string]time.Time),
-		taskGitCreds:              make(map[string]repocache.GitCredential),
+		taskGitContexts:           make(map[string]taskGitContext),
 		cancelPollInterval:        5 * time.Second,
 	}
 	d.runner = taskRunnerFunc(d.runTask)
@@ -878,31 +879,45 @@ func gitCredentialForTask(task Task) repocache.GitCredential {
 	}
 }
 
-func (d *Daemon) setTaskGitCredential(taskID string, cred repocache.GitCredential) {
-	if strings.TrimSpace(taskID) == "" || !cred.HasRemoteHosts() {
-		return
-	}
-	d.taskGitCredsMu.Lock()
-	d.taskGitCreds[taskID] = cred
-	d.taskGitCredsMu.Unlock()
+type taskGitContext struct {
+	Cred  repocache.GitCredential
+	Name  string
+	Email string
 }
 
-func (d *Daemon) clearTaskGitCredential(taskID string) {
+func taskGitContextForTask(task Task) taskGitContext {
+	return taskGitContext{
+		Cred:  gitCredentialForTask(task),
+		Name:  strings.TrimSpace(task.RequestingUserName),
+		Email: strings.TrimSpace(task.RequestingUserEmail),
+	}
+}
+
+func (d *Daemon) setTaskGitContext(taskID string, gitCtx taskGitContext) {
+	if strings.TrimSpace(taskID) == "" || (!gitCtx.Cred.HasRemoteHosts() && gitCtx.Name == "" && gitCtx.Email == "") {
+		return
+	}
+	d.taskGitContextsMu.Lock()
+	d.taskGitContexts[taskID] = gitCtx
+	d.taskGitContextsMu.Unlock()
+}
+
+func (d *Daemon) clearTaskGitContext(taskID string) {
 	if strings.TrimSpace(taskID) == "" {
 		return
 	}
-	d.taskGitCredsMu.Lock()
-	delete(d.taskGitCreds, taskID)
-	d.taskGitCredsMu.Unlock()
+	d.taskGitContextsMu.Lock()
+	delete(d.taskGitContexts, taskID)
+	d.taskGitContextsMu.Unlock()
 }
 
-func (d *Daemon) taskGitCredential(taskID string) repocache.GitCredential {
+func (d *Daemon) taskGitContext(taskID string) taskGitContext {
 	if strings.TrimSpace(taskID) == "" {
-		return repocache.GitCredential{}
+		return taskGitContext{}
 	}
-	d.taskGitCredsMu.Lock()
-	defer d.taskGitCredsMu.Unlock()
-	return d.taskGitCreds[taskID]
+	d.taskGitContextsMu.Lock()
+	defer d.taskGitContextsMu.Unlock()
+	return d.taskGitContexts[taskID]
 }
 
 // registerTaskRepos merges task-scoped repos (e.g. project github_repo
@@ -2579,9 +2594,10 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	// (shared-runtime per-user isolation). Inactive when the user has no git
 	// token, so checkout/fetch never falls back to the daemon's own
 	// credentials on a shared runtime.
-	gitCred := gitCredentialForTask(task)
-	d.setTaskGitCredential(task.ID, gitCred)
-	defer d.clearTaskGitCredential(task.ID)
+	gitCtx := taskGitContextForTask(task)
+	gitCred := gitCtx.Cred
+	d.setTaskGitContext(task.ID, gitCtx)
+	defer d.clearTaskGitContext(task.ID)
 	d.registerTaskRepos(task.WorkspaceID, task.Repos, gitCred)
 
 	entry, ok := d.cfg.Agents[provider]

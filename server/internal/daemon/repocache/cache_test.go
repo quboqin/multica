@@ -172,6 +172,35 @@ func TestCreateWorktreeRequiresGitTokenWhenCredentialRequiresIt(t *testing.T) {
 	}
 }
 
+func TestCreateWorktreeConfiguresCommitIdentity(t *testing.T) {
+	t.Parallel()
+	sourceRepo := createTestRepo(t)
+	cache := New(t.TempDir(), testLogger())
+	if err := cache.Sync("ws-1", []RepoInfo{{URL: sourceRepo}}); err != nil {
+		t.Fatalf("sync failed: %v", err)
+	}
+
+	workDir := t.TempDir()
+	result, err := cache.CreateWorktree(WorktreeParams{
+		WorkspaceID:     "ws-1",
+		RepoURL:         sourceRepo,
+		WorkDir:         workDir,
+		AgentName:       "agent",
+		TaskID:          "identity-task",
+		CommitUserName:  "Alice",
+		CommitUserEmail: "alice@example.com",
+	})
+	if err != nil {
+		t.Fatalf("CreateWorktree failed: %v", err)
+	}
+	if got := gitConfigGet(t, result.Path, "user.name"); got != "Alice" {
+		t.Fatalf("user.name = %q, want Alice", got)
+	}
+	if got := gitConfigGet(t, result.Path, "user.email"); got != "alice@example.com" {
+		t.Fatalf("user.email = %q, want alice@example.com", got)
+	}
+}
+
 func TestBareDirName(t *testing.T) {
 	t.Parallel()
 	tests := []struct {

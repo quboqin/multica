@@ -67,7 +67,7 @@ func TestApplyUserGitAuthEnvRewritesRemotesAndSetsIdentity(t *testing.T) {
 		t.Fatalf("expected GIT_CONFIG_COUNT to be set, got %q", env["GIT_CONFIG_COUNT"])
 	}
 	// Reassemble key=value pairs the way git reads them and assert the rewrite
-	// + identity are present with the token embedded for the right host.
+	// + git config identity are present with the token embedded for the right host.
 	pairs := map[string]string{}
 	for i := 0; i < count; i++ {
 		pairs[env["GIT_CONFIG_KEY_"+strconv.Itoa(i)]] = env["GIT_CONFIG_VALUE_"+strconv.Itoa(i)]
@@ -78,6 +78,38 @@ func TestApplyUserGitAuthEnvRewritesRemotesAndSetsIdentity(t *testing.T) {
 	}
 	if pairs["user.name"] != "Alice" || pairs["user.email"] != "alice@example.com" {
 		t.Fatalf("commit identity not set: %#v", pairs)
+	}
+}
+
+func TestApplyUserIntegrationEnvOverridesInheritedGitAuthor(t *testing.T) {
+	env := map[string]string{
+		"GIT_AUTHOR_NAME":     "Multica Agent",
+		"GIT_AUTHOR_EMAIL":    "github@multica.ai",
+		"GIT_COMMITTER_NAME":  "Multica Agent",
+		"GIT_COMMITTER_EMAIL": "github@multica.ai",
+	}
+	applyUserIntegrationEnv(env, Task{
+		RequestingUserName:  "Alice",
+		RequestingUserEmail: "alice@example.com",
+	})
+	if env["GIT_AUTHOR_NAME"] != "Alice" ||
+		env["GIT_AUTHOR_EMAIL"] != "alice@example.com" ||
+		env["GIT_COMMITTER_NAME"] != "Alice" ||
+		env["GIT_COMMITTER_EMAIL"] != "alice@example.com" {
+		t.Fatalf("requesting user must override inherited git author env: %#v", env)
+	}
+}
+
+func TestSetTaskGitContextStoresIdentityWithoutRemoteHost(t *testing.T) {
+	d := &Daemon{taskGitContexts: make(map[string]taskGitContext)}
+	d.setTaskGitContext("task-1", taskGitContext{
+		Name:  "Alice",
+		Email: "alice@example.com",
+	})
+
+	got := d.taskGitContext("task-1")
+	if got.Name != "Alice" || got.Email != "alice@example.com" {
+		t.Fatalf("task git identity not stored without remote host: %#v", got)
 	}
 }
 
