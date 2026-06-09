@@ -88,16 +88,17 @@ func (q *Queries) CreateChatSession(ctx context.Context, arg CreateChatSessionPa
 }
 
 const createChatTask = `-- name: CreateChatTask :one
-INSERT INTO agent_task_queue (agent_id, runtime_id, issue_id, status, priority, chat_session_id)
-VALUES ($1, $2, NULL, 'queued', $3, $4)
-RETURNING id, agent_id, issue_id, status, priority, dispatched_at, started_at, completed_at, result, error, created_at, context, runtime_id, session_id, work_dir, trigger_comment_id, chat_session_id, autopilot_run_id, attempt, max_attempts, parent_task_id, failure_reason, trigger_summary, force_fresh_session, is_leader_task, wait_reason
+INSERT INTO agent_task_queue (agent_id, runtime_id, issue_id, status, priority, chat_session_id, requesting_user_id)
+VALUES ($1, $2, NULL, 'queued', $3, $4, $5)
+RETURNING id, agent_id, issue_id, status, priority, dispatched_at, started_at, completed_at, result, error, created_at, context, runtime_id, session_id, work_dir, trigger_comment_id, chat_session_id, autopilot_run_id, attempt, max_attempts, parent_task_id, failure_reason, trigger_summary, force_fresh_session, is_leader_task, wait_reason, requesting_user_id
 `
 
 type CreateChatTaskParams struct {
-	AgentID       pgtype.UUID `json:"agent_id"`
-	RuntimeID     pgtype.UUID `json:"runtime_id"`
-	Priority      int32       `json:"priority"`
-	ChatSessionID pgtype.UUID `json:"chat_session_id"`
+	AgentID          pgtype.UUID `json:"agent_id"`
+	RuntimeID        pgtype.UUID `json:"runtime_id"`
+	Priority         int32       `json:"priority"`
+	ChatSessionID    pgtype.UUID `json:"chat_session_id"`
+	RequestingUserID pgtype.UUID `json:"requesting_user_id"`
 }
 
 func (q *Queries) CreateChatTask(ctx context.Context, arg CreateChatTaskParams) (AgentTaskQueue, error) {
@@ -106,6 +107,7 @@ func (q *Queries) CreateChatTask(ctx context.Context, arg CreateChatTaskParams) 
 		arg.RuntimeID,
 		arg.Priority,
 		arg.ChatSessionID,
+		arg.RequestingUserID,
 	)
 	var i AgentTaskQueue
 	err := row.Scan(
@@ -135,6 +137,7 @@ func (q *Queries) CreateChatTask(ctx context.Context, arg CreateChatTaskParams) 
 		&i.ForceFreshSession,
 		&i.IsLeaderTask,
 		&i.WaitReason,
+		&i.RequestingUserID,
 	)
 	return i, err
 }
@@ -238,7 +241,7 @@ func (q *Queries) GetChatSessionInWorkspace(ctx context.Context, arg GetChatSess
 }
 
 const getLastChatTaskSession = `-- name: GetLastChatTaskSession :one
-SELECT session_id, work_dir, runtime_id FROM agent_task_queue
+SELECT session_id, work_dir, runtime_id, requesting_user_id FROM agent_task_queue
 WHERE chat_session_id = $1
   AND (
     status = 'completed'
@@ -254,9 +257,10 @@ LIMIT 1
 `
 
 type GetLastChatTaskSessionRow struct {
-	SessionID pgtype.Text `json:"session_id"`
-	WorkDir   pgtype.Text `json:"work_dir"`
-	RuntimeID pgtype.UUID `json:"runtime_id"`
+	SessionID        pgtype.Text `json:"session_id"`
+	WorkDir          pgtype.Text `json:"work_dir"`
+	RuntimeID        pgtype.UUID `json:"runtime_id"`
+	RequestingUserID pgtype.UUID `json:"requesting_user_id"`
 }
 
 // Returns the most recent task in this chat session that managed to record a
@@ -269,7 +273,12 @@ type GetLastChatTaskSessionRow struct {
 func (q *Queries) GetLastChatTaskSession(ctx context.Context, chatSessionID pgtype.UUID) (GetLastChatTaskSessionRow, error) {
 	row := q.db.QueryRow(ctx, getLastChatTaskSession, chatSessionID)
 	var i GetLastChatTaskSessionRow
-	err := row.Scan(&i.SessionID, &i.WorkDir, &i.RuntimeID)
+	err := row.Scan(
+		&i.SessionID,
+		&i.WorkDir,
+		&i.RuntimeID,
+		&i.RequestingUserID,
+	)
 	return i, err
 }
 

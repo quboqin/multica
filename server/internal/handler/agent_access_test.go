@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/middleware"
 	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
@@ -487,7 +488,7 @@ func TestMentionAgent_RejectsCrossWorkspaceAgentUUID(t *testing.T) {
 		t.Fatalf("count tasks before: %v", err)
 	}
 
-	testHandler.enqueueMentionedAgentTasks(ctx, issue, comment, nil, "member", testUserID)
+	testHandler.enqueueMentionedAgentTasks(ctx, issue, comment, nil, "member", testUserID, pgtype.UUID{})
 
 	var afterCount int
 	if err := testPool.QueryRow(ctx,
@@ -546,11 +547,11 @@ func TestShouldEnqueueOnComment_PrivateAgentGate(t *testing.T) {
 	}
 
 	cases := []struct {
-		name       string
-		actorType  string
-		actorID    string
-		want       bool
-		reason     string
+		name      string
+		actorType string
+		actorID   string
+		want      bool
+		reason    string
 	}{
 		{
 			name:      "plain member — denied",

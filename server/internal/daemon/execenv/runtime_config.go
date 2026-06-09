@@ -7,7 +7,9 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
 	"runtime"
+	"sort"
 	"strings"
 )
 
@@ -422,6 +424,8 @@ func buildMetaSkillContent(provider string, ctx TaskContextForEnv) string {
 		b.WriteString("\n\n")
 	}
 
+	writeIntegrationCredentialsBrief(&b, ctx)
+
 	b.WriteString("## Available Commands\n\n")
 	b.WriteString("**Use `--output json` for structured data.** Human table output now prints routable issue keys (for example `MUL-123`) and short UUID prefixes for workspace resources; use `--full-id` on list commands when you need canonical UUIDs.\n\n")
 	b.WriteString("The default brief includes the commands needed for the core agent loop and common issue create/update tasks. For everything else, run `multica --help`, `multica <command> --help`, or `multica <command> <subcommand> --help`; prefer `--output json` when the command supports it.\n\n")
@@ -712,4 +716,54 @@ func buildMetaSkillContent(provider string, ctx TaskContextForEnv) string {
 	}
 
 	return b.String()
+}
+
+func writeIntegrationCredentialsBrief(b *strings.Builder, ctx TaskContextForEnv) {
+	b.WriteString("## User Integration Credentials\n\n")
+	if strings.TrimSpace(ctx.RequestingUserID) != "" {
+		fmt.Fprintf(b, "This task is running on behalf of user `%s`.\n\n", ctx.RequestingUserID)
+	} else {
+		b.WriteString("This task has no requesting user attached.\n\n")
+	}
+	b.WriteString("Use only the current user's integration credentials from the environment variables below. Never use host/global/default credentials, agent shared credentials, or another user's credentials for Git, Feishu, PAones, Jingwei, or MCP integration actions. If a required credential is missing or the env var is empty, stop that integration action and ask the user to configure their token in Account settings.\n\n")
+	b.WriteString("| Integration | Status | Environment variables |\n")
+	b.WriteString("| --- | --- | --- |\n")
+	writeIntegrationCredentialRow(b, "git_token", ctx.IntegrationCredentials.GitToken, "`GIT_TOKEN`, `GITHUB_TOKEN`, `GH_TOKEN`, `MULTICA_INTEGRATION_GIT_TOKEN`")
+	writeIntegrationCredentialRow(b, "feishu_mcp_token", ctx.IntegrationCredentials.FeishuMCPToken, "`FEISHU_MCP_TOKEN`, `MULTICA_INTEGRATION_FEISHU_MCP_TOKEN`")
+	writeIntegrationCredentialRow(b, "paones_token", ctx.IntegrationCredentials.PaonesToken, "`PAONES_TOKEN`, `MULTICA_INTEGRATION_PAONES_TOKEN`")
+	writeIntegrationCredentialRow(b, "jingwei_token", ctx.IntegrationCredentials.JingweiToken, "`JINGWEI_TOKEN`, `MULTICA_INTEGRATION_JINGWEI_TOKEN`")
+	for _, key := range sortedIntegrationCredentialKeys(ctx.IntegrationCredentials.Extra) {
+		envKey := integrationCredentialEnvKey(key)
+		writeIntegrationCredentialRow(b, key, ctx.IntegrationCredentials.Extra[key], fmt.Sprintf("`%s`, `MULTICA_INTEGRATION_%s`", envKey, envKey))
+	}
+	b.WriteString("\n")
+}
+
+func writeIntegrationCredentialRow(b *strings.Builder, label string, configured bool, envVars string) {
+	status := "missing"
+	if configured {
+		status = "configured"
+	}
+	fmt.Fprintf(b, "| `%s` | %s | %s |\n", label, status, envVars)
+}
+
+func sortedIntegrationCredentialKeys(tokens map[string]bool) []string {
+	keys := make([]string, 0, len(tokens))
+	for key := range tokens {
+		envKey := integrationCredentialEnvKey(key)
+		if envKey == "" {
+			continue
+		}
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+var nonIntegrationCredentialEnvKeyChars = regexp.MustCompile(`[^A-Z0-9]+`)
+
+func integrationCredentialEnvKey(key string) string {
+	envKey := strings.ToUpper(strings.TrimSpace(key))
+	envKey = nonIntegrationCredentialEnvKeyChars.ReplaceAllString(envKey, "_")
+	return strings.Trim(envKey, "_")
 }

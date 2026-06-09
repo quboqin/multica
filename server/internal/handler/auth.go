@@ -442,15 +442,11 @@ func (h *Handler) GetMe(w http.ResponseWriter, r *http.Request) {
 }
 
 type UpdateMeRequest struct {
-	Name               *string `json:"name"`
-	AvatarURL          *string `json:"avatar_url"`
-	Language           *string `json:"language"`
-	ProfileDescription *string `json:"profile_description"`
-	IntegrationTokens  *struct {
-		GitToken       string `json:"git_token"`
-		FeishuMCPToken string `json:"feishu_mcp_token"`
-		PaihubToken    string `json:"paihub_token"`
-	} `json:"integration_tokens"`
+	Name               *string            `json:"name"`
+	AvatarURL          *string            `json:"avatar_url"`
+	Language           *string            `json:"language"`
+	ProfileDescription *string            `json:"profile_description"`
+	IntegrationTokens  *map[string]string `json:"integration_tokens"`
 	// IANA tz to pin; "" clears back to NULL; nil leaves untouched.
 	Timezone *string `json:"timezone"`
 }
@@ -709,11 +705,16 @@ func (h *Handler) UpdateMe(w http.ResponseWriter, r *http.Request) {
 		params.ProfileDescription = pgtype.Text{String: desc, Valid: true}
 	}
 	if req.IntegrationTokens != nil {
-		tokens, err := json.Marshal(map[string]string{
-			"git_token":        strings.TrimSpace(req.IntegrationTokens.GitToken),
-			"feishu_mcp_token": strings.TrimSpace(req.IntegrationTokens.FeishuMCPToken),
-			"paihub_token":     strings.TrimSpace(req.IntegrationTokens.PaihubToken),
-		})
+		nextTokens := integrationTokenMapFromRaw(currentUser.IntegrationTokens)
+		for key, value := range *req.IntegrationTokens {
+			trimmedKey := strings.TrimSpace(key)
+			if trimmedKey == "" {
+				continue
+			}
+			nextTokens[trimmedKey] = strings.TrimSpace(value)
+		}
+		delete(nextTokens, "paihub_token")
+		tokens, err := json.Marshal(nextTokens)
 		if err != nil {
 			writeError(w, http.StatusBadRequest, "invalid integration_tokens")
 			return

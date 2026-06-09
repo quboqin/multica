@@ -165,6 +165,17 @@ func newRequest(method, path string, body any) *http.Request {
 	return req
 }
 
+func TestRequestingUserIDFromRequestPrefersStampedUserID(t *testing.T) {
+	req := httptest.NewRequest("POST", "/api/issues", nil)
+	req.Header.Set("X-User-ID", testUserID)
+
+	got := requestingUserIDFromRequest(req, "agent", "11111111-1111-1111-1111-111111111111")
+
+	if uuidToString(got) != testUserID {
+		t.Fatalf("requesting user id = %q, want stamped X-User-ID %q", uuidToString(got), testUserID)
+	}
+}
+
 func withURLParam(req *http.Request, key, value string) *http.Request {
 	rctx := chi.NewRouteContext()
 	rctx.URLParams.Add(key, value)

@@ -92,6 +92,16 @@ type TaskContextForEnv struct {
 	// context and the agent stays anonymous-user mode.
 	RequestingUserName               string
 	RequestingUserProfileDescription string
+	RequestingUserID                 string
+	IntegrationCredentials           IntegrationCredentialStatus
+}
+
+type IntegrationCredentialStatus struct {
+	GitToken       bool
+	FeishuMCPToken bool
+	PaonesToken    bool
+	JingweiToken   bool
+	Extra          map[string]bool
 }
 
 // SkillContextForEnv represents a skill to be written into the execution environment.
@@ -250,13 +260,20 @@ func Prepare(params PrepareParams, logger *slog.Logger) (*Environment, error) {
 // the per-provider knobs (CodexVersion, OpenclawBin) so callers can pass
 // the same resolved binary path on both first-run and reuse paths.
 type ReuseParams struct {
-	WorkDir      string
-	Provider     string
-	CodexVersion string // only used when Provider == "codex"
-	OpenclawBin  string // only used when Provider == "openclaw"; empty = PATH lookup
+	// WorkspacesRoot/WorkspaceID/TaskID identify the current run root.
+	// WorkDir may point to a prior run when issue context is reused, but
+	// provider-private state such as CODEX_HOME must be written under the
+	// current run root.
+	WorkspacesRoot string
+	WorkspaceID    string
+	TaskID         string
+	WorkDir        string
+	Provider       string
+	CodexVersion   string // only used when Provider == "codex"
+	OpenclawBin    string // only used when Provider == "openclaw"; empty = PATH lookup
 	// McpConfig is the agent's saved `mcp_config` JSON. Reused on reuse so a
 	// freshly-saved managed set re-materialises into the wrapper before the
-	// task starts — without this a stale wrapper from a prior run would keep
+	// task starts; without this a stale wrapper from a prior run would keep
 	// the old MCP set in play.
 	McpConfig json.RawMessage
 	// LocalDirectory is true when the reused WorkDir is a user-supplied
@@ -275,18 +292,25 @@ func Reuse(params ReuseParams, logger *slog.Logger) *Environment {
 		return nil
 	}
 
-	rootDir := filepath.Dir(params.WorkDir)
+	rootDir := PredictRootDir(params.WorkspacesRoot, params.WorkspaceID, params.TaskID)
+	if rootDir == "" {
+		rootDir = filepath.Dir(params.WorkDir)
+	}
 	if params.LocalDirectory {
 		// For local_directory tasks the user's WorkDir is unrelated to
 		// envRoot (envRoot still lives under workspacesRoot/{wsID}/...),
 		// so reading it from filepath.Dir(WorkDir) would point at the
-		// parent of the user's directory. Callers that need a real
-		// RootDir on the reuse path should arrange to pass it in
-		// explicitly; for v1 the daemon only ever reuses local_directory
-		// workdirs after a fresh Prepare in the same task lifetime, so
-		// the empty RootDir on reuse is fine for the current callers
-		// (GC writes meta from Prepare's result, not Reuse's).
-		rootDir = ""
+		// parent of the user's directory. Keep RootDir tied to the current
+		// run when enough identity fields are available.
+		rootDir = PredictRootDir(params.WorkspacesRoot, params.WorkspaceID, params.TaskID)
+	}
+	if rootDir != "" {
+		for _, dir := range []string{rootDir, filepath.Join(rootDir, "output"), filepath.Join(rootDir, "logs")} {
+			if err := os.MkdirAll(dir, 0o755); err != nil {
+				logger.Warn("execenv: create reuse root failed", "root", rootDir, "dir", dir, "error", err)
+				return nil
+			}
+		}
 	}
 	env := &Environment{
 		RootDir:        rootDir,
@@ -303,7 +327,7 @@ func Reuse(params ReuseParams, logger *slog.Logger) *Environment {
 	// daemon.runTask), but writing the manifest unconditionally keeps
 	// Prepare/Reuse symmetric so a future caller can rely on the
 	// manifest being current after either path. RootDir is empty on the
-	// legacy local_directory Reuse fallback — skip the persist in that
+	// legacy local_directory Reuse fallback; skip the persist in that
 	// case to avoid creating a stray manifest at the filesystem root.
 	manifest := &sidecarManifest{}
 	if err := writeContextFiles(params.WorkDir, params.Provider, params.Task, manifest); err != nil {
@@ -315,9 +339,9 @@ func Reuse(params ReuseParams, logger *slog.Logger) *Environment {
 		}
 	}
 
-	// Restore CodexHome for Codex provider — the per-task codex-home directory
-	// lives alongside the workdir. Re-run prepareCodexHomeWithOpts to ensure
-	// config (especially sandbox/network access) is up to date.
+	// Restore CodexHome for Codex provider under the current run root. Reused
+	// workdirs can belong to an earlier run/user, so config.toml must be
+	// refreshed in the current run's CODEX_HOME before the runtime starts.
 	if params.Provider == "codex" {
 		codexHome := filepath.Join(env.RootDir, "codex-home")
 		if err := prepareCodexHomeWithOpts(codexHome, CodexHomeOptions{CodexVersion: params.CodexVersion}, logger); err != nil {
@@ -330,7 +354,7 @@ func Reuse(params ReuseParams, logger *slog.Logger) *Environment {
 		}
 	}
 
-	// Refresh the per-task OpenClaw config on reuse — the user may have
+	// Refresh the per-task OpenClaw config on reuse; the user may have
 	// added/removed agents or rotated providers since the prior task ran,
 	// and the workspace override always re-targets the current workDir.
 	// Fail closed: a user config that can no longer be parsed should block
