@@ -477,6 +477,8 @@ type WorktreeParams struct {
 	AgentName           string // for branch naming
 	TaskID              string // for branch naming uniqueness
 	CoAuthoredByEnabled bool   // install prepare-commit-msg hook for Co-authored-by trailer
+	CommitUserName      string // optional requesting user name for git commit identity
+	CommitUserEmail     string // optional requesting user email for git commit identity
 	// Cred is the requesting user's git credential used for the bare-cache
 	// fetch performed here. Zero value falls back to the daemon's ambient
 	// credentials (e.g. its SSH key), preserving prior behavior.
@@ -563,6 +565,9 @@ func (c *Cache) CreateWorktree(params WorktreeParams) (*WorktreeResult, error) {
 		for _, pattern := range agentGitExcludePatterns {
 			_ = excludeFromGit(worktreePath, pattern)
 		}
+		if err := configureWorktreeCommitIdentity(worktreePath, params.CommitUserName, params.CommitUserEmail); err != nil {
+			c.logger.Warn("repo checkout: configure commit identity failed (non-fatal)", "error", err)
+		}
 
 		// Install or remove the Co-authored-by hook based on the workspace
 		// setting. The hook lives in the bare repo's shared hooks dir, so we
@@ -602,6 +607,9 @@ func (c *Cache) CreateWorktree(params WorktreeParams) (*WorktreeResult, error) {
 	// Exclude agent context files from git tracking.
 	for _, pattern := range agentGitExcludePatterns {
 		_ = excludeFromGit(worktreePath, pattern)
+	}
+	if err := configureWorktreeCommitIdentity(worktreePath, params.CommitUserName, params.CommitUserEmail); err != nil {
+		c.logger.Warn("repo checkout: configure commit identity failed (non-fatal)", "error", err)
 	}
 
 	// Install or remove the Co-authored-by hook based on the workspace
@@ -687,6 +695,29 @@ func runWorktreeAdd(gitRoot, worktreePath, branchName, baseRef string) error {
 
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("git worktree add: %s: %w", strings.TrimSpace(string(out)), err)
+	}
+	return nil
+}
+
+func configureWorktreeCommitIdentity(worktreePath, name, email string) error {
+	name = strings.TrimSpace(name)
+	email = strings.TrimSpace(email)
+	if name == "" || email == "" {
+		return nil
+	}
+	if err := gitConfigSet(worktreePath, "user.name", name); err != nil {
+		return err
+	}
+	if err := gitConfigSet(worktreePath, "user.email", email); err != nil {
+		return err
+	}
+	return nil
+}
+
+func gitConfigSet(repoPath, key, value string) error {
+	cmd := exec.Command("git", "-C", repoPath, "config", key, value)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("git config %s: %s: %w", key, strings.TrimSpace(string(out)), err)
 	}
 	return nil
 }

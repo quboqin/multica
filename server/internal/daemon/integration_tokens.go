@@ -21,7 +21,20 @@ func applyUserIntegrationEnv(env map[string]string, task Task) {
 	if strings.TrimSpace(task.RequestingUserName) != "" {
 		env["MULTICA_REQUESTING_USER_NAME"] = strings.TrimSpace(task.RequestingUserName)
 	}
+	applyUserGitIdentityEnv(env, task)
 	applyUserGitAuthEnv(env, task)
+}
+
+func applyUserGitIdentityEnv(env map[string]string, task Task) {
+	name := strings.TrimSpace(task.RequestingUserName)
+	email := strings.TrimSpace(task.RequestingUserEmail)
+	if name == "" || email == "" {
+		return
+	}
+	env["GIT_AUTHOR_NAME"] = name
+	env["GIT_AUTHOR_EMAIL"] = email
+	env["GIT_COMMITTER_NAME"] = name
+	env["GIT_COMMITTER_EMAIL"] = email
 }
 
 // applyUserGitAuthEnv wires the requesting user's git token into the agent's
@@ -70,10 +83,8 @@ func applyUserGitAuthEnv(env map[string]string, task Task) {
 			kv{"url." + target + ".insteadOf", "https://" + host + "/"},
 		)
 	}
-	// Commit identity, so commits made on the shared runtime are attributed to
-	// the requesting user rather than the runtime owner's global gitconfig.
-	// git refuses to commit without both name and email, so only set them when
-	// present; a partial identity here would not help.
+	// Also set Git config identity for tools that ignore GIT_AUTHOR_* /
+	// GIT_COMMITTER_* but still honor env-scoped Git config.
 	if name := strings.TrimSpace(task.RequestingUserName); name != "" {
 		entries = append(entries, kv{"user.name", name})
 	}

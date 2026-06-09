@@ -1176,6 +1176,7 @@ func (h *Handler) ClaimTaskByRuntime(w http.ResponseWriter, r *http.Request) {
 	} else if runtime.OwnerID.Valid {
 		if owner, err := h.Queries.GetUser(r.Context(), runtime.OwnerID); err == nil {
 			resp.RequestingUserName = owner.Name
+			resp.RequestingUserEmail = owner.Email
 			resp.RequestingUserProfileDescription = owner.ProfileDescription
 		} else {
 			slog.Debug("failed to load runtime owner for brief injection",
