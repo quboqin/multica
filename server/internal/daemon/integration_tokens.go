@@ -2,7 +2,9 @@ package daemon
 
 import (
 	"encoding/json"
+	"os"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/multica-ai/multica/server/internal/daemon/execenv"
@@ -18,6 +20,125 @@ func applyUserIntegrationEnv(env map[string]string, task Task) {
 	if strings.TrimSpace(task.RequestingUserName) != "" {
 		env["MULTICA_REQUESTING_USER_NAME"] = strings.TrimSpace(task.RequestingUserName)
 	}
+	applyUserGitAuthEnv(env, task)
+}
+
+// applyUserGitAuthEnv wires the requesting user's git token into the agent's
+// git environment so HTTPS clone/fetch/push authenticate as that user, and
+// (when available) attributes commits to them. This is what makes per-user
+// isolation actually reach git on a shared runtime: the bare cache is cloned
+// with the daemon's own credentials (read), but every git operation the agent
+// runs in its worktree is rewritten to a token-bearing HTTPS URL for the
+// requesting user (write).
+//
+// We use git's GIT_CONFIG_* env-scoped config (the same mechanism repocache
+// uses for safe.directory) so the token never touches disk and lives only for
+// the lifetime of the agent process. The url rewrites are host-scoped to the
+// task's git hosts so the token is never offered to an unrelated remote.
+//
+// No-op when the user has no git token or no git host can be derived from the
+// task's repos (e.g. chat tasks with no repo) — in that case git falls back to
+// whatever the daemon machine provides, exactly as before.
+func applyUserGitAuthEnv(env map[string]string, task Task) {
+	token := strings.TrimSpace(task.IntegrationTokens.GitToken)
+	if token == "" {
+		return
+	}
+	hosts := gitHostsFromRepos(task.Repos)
+	if len(hosts) == 0 {
+		return
+	}
+
+	type kv struct{ key, value string }
+	var entries []kv
+	for _, host := range hosts {
+		// GitLab/GitHub PATs authenticate over HTTPS as `oauth2:<token>`.
+		https := "https://oauth2:" + token + "@" + host + "/"
+		// insteadOf is multi-valued; each index below is read by git as a
+		// separate rewrite rule for the same target URL. Cover the scp-style
+		// SSH form (git@host:group/repo.git), the ssh:// form, and plain
+		// HTTPS so any remote shape the workspace stored resolves to the
+		// token-bearing URL.
+		entries = append(entries,
+			kv{"url." + https + ".insteadOf", "git@" + host + ":"},
+			kv{"url." + https + ".insteadOf", "ssh://git@" + host + "/"},
+			kv{"url." + https + ".insteadOf", "https://" + host + "/"},
+		)
+	}
+	// Commit identity, so commits made on the shared runtime are attributed to
+	// the requesting user rather than the runtime owner's global gitconfig.
+	// git refuses to commit without both name and email, so only set them when
+	// present; a partial identity here would not help.
+	if name := strings.TrimSpace(task.RequestingUserName); name != "" {
+		entries = append(entries, kv{"user.name", name})
+	}
+	if email := strings.TrimSpace(task.RequestingUserEmail); email != "" {
+		entries = append(entries, kv{"user.email", email})
+	}
+
+	// Append after any GIT_CONFIG_* the daemon already inherited so we don't
+	// clobber inherited env-scoped git config. In normal operation the daemon
+	// has no GIT_CONFIG_COUNT (repocache sets it only on its own git
+	// subprocess), so base is 0.
+	base, _ := strconv.Atoi(strings.TrimSpace(os.Getenv("GIT_CONFIG_COUNT")))
+	for i, e := range entries {
+		idx := strconv.Itoa(base + i)
+		env["GIT_CONFIG_KEY_"+idx] = e.key
+		env["GIT_CONFIG_VALUE_"+idx] = e.value
+	}
+	env["GIT_CONFIG_COUNT"] = strconv.Itoa(base + len(entries))
+}
+
+// gitHostsFromRepos returns the unique git hosts across a task's repos,
+// preserving first-seen order.
+func gitHostsFromRepos(repos []RepoData) []string {
+	seen := make(map[string]bool, len(repos))
+	hosts := make([]string, 0, len(repos))
+	for _, r := range repos {
+		host := gitHostFromURL(r.URL)
+		if host == "" || seen[host] {
+			continue
+		}
+		seen[host] = true
+		hosts = append(hosts, host)
+	}
+	return hosts
+}
+
+// gitHostFromURL extracts the hostname from a git remote URL, handling both
+// the scp-like SSH form (git@host:group/repo.git) and scheme URLs
+// (https://host/..., ssh://git@host:22/...). Returns "" when no host is
+// derivable.
+func gitHostFromURL(raw string) string {
+	s := strings.TrimSpace(raw)
+	if s == "" {
+		return ""
+	}
+	if !strings.Contains(s, "://") {
+		// scp-like: [user@]host:path
+		if at := strings.Index(s, "@"); at >= 0 {
+			s = s[at+1:]
+		}
+		if colon := strings.Index(s, ":"); colon >= 0 {
+			return s[:colon]
+		}
+		if slash := strings.Index(s, "/"); slash >= 0 {
+			return s[:slash]
+		}
+		return s
+	}
+	// scheme://[user@]host[:port]/path
+	rest := s[strings.Index(s, "://")+3:]
+	if at := strings.Index(rest, "@"); at >= 0 {
+		rest = rest[at+1:]
+	}
+	if slash := strings.Index(rest, "/"); slash >= 0 {
+		rest = rest[:slash]
+	}
+	if colon := strings.Index(rest, ":"); colon >= 0 {
+		rest = rest[:colon]
+	}
+	return rest
 }
 
 func integrationCredentialStatus(tokens IntegrationTokens) execenv.IntegrationCredentialStatus {

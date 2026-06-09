@@ -168,7 +168,13 @@ func (d *Daemon) serveHealth(ctx context.Context, ln net.Listener, startedAt tim
 			return
 		}
 
-		if err := d.ensureRepoReady(r.Context(), req.WorkspaceID, req.URL); err != nil {
+		// Resolve the requesting user's git credential for this task so the
+		// bare-cache clone/fetch runs as that user (shared-runtime per-user
+		// isolation). Empty for tasks with no git token — the cache then
+		// falls back to the daemon's ambient credentials.
+		gitCred := d.taskGitCredential(req.TaskID)
+
+		if err := d.ensureRepoReady(r.Context(), req.WorkspaceID, req.URL, gitCred); err != nil {
 			statusCode := http.StatusInternalServerError
 			if errors.Is(err, ErrRepoNotConfigured) {
 				statusCode = http.StatusBadRequest
@@ -186,6 +192,7 @@ func (d *Daemon) serveHealth(ctx context.Context, ln net.Listener, startedAt tim
 			AgentName:           req.AgentName,
 			TaskID:              req.TaskID,
 			CoAuthoredByEnabled: d.workspaceCoAuthoredByEnabled(req.WorkspaceID),
+			Cred:                gitCred,
 		})
 		if err != nil {
 			d.logger.Error("repo checkout failed", "url", req.URL, "error", err)

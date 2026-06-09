@@ -298,6 +298,7 @@ type AgentTaskResponse struct {
 	// is empty.
 	RequestingUserName               string                 `json:"requesting_user_name,omitempty"`
 	RequestingUserProfileDescription string                 `json:"requesting_user_profile_description,omitempty"`
+	RequestingUserEmail              string                 `json:"requesting_user_email,omitempty"` // git commit author email for shared-runtime per-user attribution
 	IntegrationTokens                *TaskIntegrationTokens `json:"integration_tokens,omitempty"`
 	// Initiator* identify the actor who triggered THIS task — the real
 	// requester behind the current comment/mention or chat message — as

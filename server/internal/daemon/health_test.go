@@ -252,7 +252,7 @@ func (c *blockingLookupRepoCache) Lookup(_, _ string) string {
 	return c.path
 }
 
-func (c *blockingLookupRepoCache) Sync(string, []repocache.RepoInfo) error {
+func (c *blockingLookupRepoCache) Sync(string, []repocache.RepoInfo, ...repocache.GitCredential) error {
 	return nil
 }
 

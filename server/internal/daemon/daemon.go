@@ -91,7 +91,7 @@ type workspaceState struct {
 
 type repoCacheBackend interface {
 	Lookup(workspaceID, url string) string
-	Sync(workspaceID string, repos []repocache.RepoInfo) error
+	Sync(workspaceID string, repos []repocache.RepoInfo, creds ...repocache.GitCredential) error
 	WithRepoLock(barePath string, fn func() error) error
 	CreateWorktree(params repocache.WorktreeParams) (*repocache.WorktreeResult, error)
 }
@@ -165,6 +165,13 @@ type Daemon struct {
 	// deleted bare clone and an unrelated `not empty` cleanup failure.
 	bgSyncs sync.WaitGroup
 
+	// taskGitCreds maps an in-flight task ID to the requesting user's git
+	// credential so the agent-initiated `/repo/checkout` path can fetch the
+	// bare cache with that user's token (shared-runtime per-user isolation).
+	// Populated in runTask before the agent spawns, cleared on completion.
+	taskGitCredsMu sync.Mutex
+	taskGitCreds   map[string]repocache.GitCredential
+
 	runner             taskRunner    // executes agent tasks; set to d.runTask by New(), overridable in tests
 	cancelPollInterval time.Duration // how often handleTask polls for server-side cancellation; overridable in tests
 	// runUpdateFn executes the brew-or-download upgrade. Set to d.runUpdate by
@@ -195,6 +202,7 @@ func New(cfg Config, logger *slog.Logger) *Daemon {
 		runtimeGoneInflight:       make(map[string]struct{}),
 		reregisterNextAttempt:     make(map[string]time.Time),
 		reregisterLastCompletedAt: make(map[string]time.Time),
+		taskGitCreds:              make(map[string]repocache.GitCredential),
 		cancelPollInterval:        5 * time.Second,
 	}
 	d.runner = taskRunnerFunc(d.runTask)
@@ -887,6 +895,44 @@ func (d *Daemon) workspaceCoAuthoredByEnabled(workspaceID string) bool {
 	return *s.CoAuthoredByEnabled
 }
 
+// gitCredentialForTask builds the repocache credential for a task from the
+// requesting user's git token and the task's repo hosts. Inactive (zero value)
+// when the user has no git token or the task carries no repos — in that case
+// the cache falls back to the daemon's ambient credentials.
+func gitCredentialForTask(task Task) repocache.GitCredential {
+	return repocache.GitCredential{
+		Token: strings.TrimSpace(task.IntegrationTokens.GitToken),
+		Hosts: gitHostsFromRepos(task.Repos),
+	}
+}
+
+func (d *Daemon) setTaskGitCredential(taskID string, cred repocache.GitCredential) {
+	if strings.TrimSpace(taskID) == "" || !cred.Active() {
+		return
+	}
+	d.taskGitCredsMu.Lock()
+	d.taskGitCreds[taskID] = cred
+	d.taskGitCredsMu.Unlock()
+}
+
+func (d *Daemon) clearTaskGitCredential(taskID string) {
+	if strings.TrimSpace(taskID) == "" {
+		return
+	}
+	d.taskGitCredsMu.Lock()
+	delete(d.taskGitCreds, taskID)
+	d.taskGitCredsMu.Unlock()
+}
+
+func (d *Daemon) taskGitCredential(taskID string) repocache.GitCredential {
+	if strings.TrimSpace(taskID) == "" {
+		return repocache.GitCredential{}
+	}
+	d.taskGitCredsMu.Lock()
+	defer d.taskGitCredsMu.Unlock()
+	return d.taskGitCreds[taskID]
+}
+
 // registerTaskRepos merges task-scoped repos (e.g. project github_repo
 // resources lifted into resp.Repos by the claim handler) into the workspace's
 // allowlist and kicks off a cache sync for any URLs that aren't yet cached.
@@ -895,9 +941,17 @@ func (d *Daemon) workspaceCoAuthoredByEnabled(workspaceID string) bool {
 // idempotent. Called from runTask before the agent spawns so
 // `multica repo checkout` accepts project-only URLs without an extra round
 // trip back to GetWorkspaceRepos (which doesn't carry project resources).
-func (d *Daemon) registerTaskRepos(workspaceID string, repos []RepoData) {
+//
+// cred carries the requesting user's git token so the pre-warm clone/fetch
+// runs as that user (shared-runtime per-user isolation); a zero value falls
+// back to the daemon's ambient credentials.
+func (d *Daemon) registerTaskRepos(workspaceID string, repos []RepoData, creds ...repocache.GitCredential) {
 	if len(repos) == 0 {
 		return
+	}
+	var cred repocache.GitCredential
+	if len(creds) > 0 {
+		cred = creds[0]
 	}
 
 	type repoCandidate struct {
@@ -948,7 +1002,7 @@ func (d *Daemon) registerTaskRepos(workspaceID string, repos []RepoData) {
 		d.bgSyncs.Add(1)
 		go func() {
 			defer d.bgSyncs.Done()
-			d.syncWorkspaceRepos(workspaceID, toSync)
+			d.syncWorkspaceRepos(workspaceID, toSync, cred)
 		}()
 	}
 }
@@ -962,11 +1016,11 @@ func (d *Daemon) waitBackgroundSyncs() {
 	d.bgSyncs.Wait()
 }
 
-func (d *Daemon) syncWorkspaceRepos(workspaceID string, repos []RepoData) {
+func (d *Daemon) syncWorkspaceRepos(workspaceID string, repos []RepoData, cred repocache.GitCredential) {
 	if d.repoCache == nil {
 		return
 	}
-	if err := d.repoCache.Sync(workspaceID, repoDataToInfo(repos)); err != nil {
+	if err := d.repoCache.Sync(workspaceID, repoDataToInfo(repos), cred); err != nil {
 		d.setWorkspaceRepoSyncError(workspaceID, err.Error())
 		d.logger.Warn("repo cache sync failed", "workspace_id", workspaceID, "error", err)
 		return
@@ -999,9 +1053,13 @@ func (d *Daemon) refreshWorkspaceRepos(ctx context.Context, workspaceID string) 
 	return resp, nil
 }
 
-func (d *Daemon) ensureRepoReady(ctx context.Context, workspaceID, repoURL string) error {
+func (d *Daemon) ensureRepoReady(ctx context.Context, workspaceID, repoURL string, creds ...repocache.GitCredential) error {
 	if d.repoCache == nil {
 		return fmt.Errorf("repo cache not initialized")
+	}
+	var cred repocache.GitCredential
+	if len(creds) > 0 {
+		cred = creds[0]
 	}
 
 	repoURL = strings.TrimSpace(repoURL)
@@ -1049,7 +1107,7 @@ func (d *Daemon) ensureRepoReady(ctx context.Context, workspaceID, repoURL strin
 		return nil
 	}
 
-	d.syncWorkspaceRepos(workspaceID, resp.Repos)
+	d.syncWorkspaceRepos(workspaceID, resp.Repos, cred)
 
 	if d.repoCache.Lookup(workspaceID, repoURL) != "" {
 		return nil
@@ -1237,7 +1295,9 @@ func (d *Daemon) syncWorkspacesFromAPI(ctx context.Context) error {
 		d.mu.Unlock()
 
 		if d.repoCache != nil && len(resp.Repos) > 0 {
-			go d.syncWorkspaceRepos(id, resp.Repos)
+			// Workspace-registration pre-warm has no task context, so no
+			// per-user token is available — fall back to daemon credentials.
+			go d.syncWorkspaceRepos(id, resp.Repos, repocache.GitCredential{})
 		}
 
 		// Tell the server about any tasks the previous daemon process was
@@ -2638,7 +2698,15 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	// in the per-workspace allowlist and the local cache, otherwise
 	// `multica repo checkout` would reject project-only URLs that aren't also
 	// bound at the workspace level.
-	d.registerTaskRepos(task.WorkspaceID, task.Repos)
+	// Derive the requesting user's git credential once and register it for the
+	// lifetime of this task, so both the pre-warm sync below and any
+	// agent-initiated `/repo/checkout` fetch the bare cache as that user
+	// (shared-runtime per-user isolation). Inactive when the user has no git
+	// token — the cache then falls back to the daemon's own credentials.
+	gitCred := gitCredentialForTask(task)
+	d.setTaskGitCredential(task.ID, gitCred)
+	defer d.clearTaskGitCredential(task.ID)
+	d.registerTaskRepos(task.WorkspaceID, task.Repos, gitCred)
 
 	entry, ok := d.cfg.Agents[provider]
 	if !ok {

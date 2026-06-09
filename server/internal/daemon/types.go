@@ -84,9 +84,14 @@ type Task struct {
 	// no owner (cloud / system runtimes) or the user hasn't set a description.
 	// Injected into the brief under `## Requesting User`; omitted entirely
 	// when description is empty so the agent doesn't see a useless heading.
-	RequestingUserName               string            `json:"requesting_user_name,omitempty"`
-	RequestingUserProfileDescription string            `json:"requesting_user_profile_description,omitempty"`
-	IntegrationTokens                IntegrationTokens `json:"integration_tokens,omitempty"`
+	RequestingUserName               string `json:"requesting_user_name,omitempty"`
+	RequestingUserProfileDescription string `json:"requesting_user_profile_description,omitempty"`
+	// RequestingUserEmail is the requesting user's account email, used as the
+	// git commit author/committer email so commits on a shared runtime are
+	// attributed to that user rather than the runtime owner. Empty when there
+	// is no requesting user (cloud / system runtimes).
+	RequestingUserEmail string            `json:"requesting_user_email,omitempty"`
+	IntegrationTokens   IntegrationTokens `json:"integration_tokens,omitempty"`
 	// Initiator* identify the actor who triggered THIS task (the real
 	// requester behind the current comment/mention or chat message) as
 	// distinct from the runtime owner whose credentials the agent runs with.

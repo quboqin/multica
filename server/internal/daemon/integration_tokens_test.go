@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"encoding/json"
+	"strconv"
 	"testing"
 )
 
@@ -46,6 +47,70 @@ func TestApplyUserIntegrationEnvShadowsFallbackCredentials(t *testing.T) {
 	}
 	if env["MULTICA_INTEGRATION_GITHUB_TOKEN"] != "user-github-extra" {
 		t.Fatalf("extra github token marker env not injected: %#v", env)
+	}
+}
+
+func TestApplyUserGitAuthEnvRewritesRemotesAndSetsIdentity(t *testing.T) {
+	t.Setenv("GIT_CONFIG_COUNT", "")
+	env := map[string]string{}
+	task := Task{
+		RequestingUserName:  "Alice",
+		RequestingUserEmail: "alice@example.com",
+		Repos:               []RepoData{{URL: "git@git.ppdaicorp.com:oversea/xcadapt.git"}},
+		IntegrationTokens:   IntegrationTokens{GitToken: "glpat-abc"},
+	}
+
+	applyUserGitAuthEnv(env, task)
+
+	count, _ := strconv.Atoi(env["GIT_CONFIG_COUNT"])
+	if count == 0 {
+		t.Fatalf("expected GIT_CONFIG_COUNT to be set, got %q", env["GIT_CONFIG_COUNT"])
+	}
+	// Reassemble key=value pairs the way git reads them and assert the rewrite
+	// + identity are present with the token embedded for the right host.
+	pairs := map[string]string{}
+	for i := 0; i < count; i++ {
+		pairs[env["GIT_CONFIG_KEY_"+strconv.Itoa(i)]] = env["GIT_CONFIG_VALUE_"+strconv.Itoa(i)]
+	}
+	wantInsteadOfKey := "url.https://oauth2:glpat-abc@git.ppdaicorp.com/.insteadOf"
+	if pairs[wantInsteadOfKey] == "" {
+		t.Fatalf("expected insteadOf rewrite for host, got pairs=%#v", pairs)
+	}
+	if pairs["user.name"] != "Alice" || pairs["user.email"] != "alice@example.com" {
+		t.Fatalf("commit identity not set: %#v", pairs)
+	}
+}
+
+func TestApplyUserGitAuthEnvNoOpWithoutTokenOrRepo(t *testing.T) {
+	t.Setenv("GIT_CONFIG_COUNT", "")
+	// No git token.
+	env := map[string]string{}
+	applyUserGitAuthEnv(env, Task{Repos: []RepoData{{URL: "git@host:g/r.git"}}})
+	if _, ok := env["GIT_CONFIG_COUNT"]; ok {
+		t.Fatalf("expected no git config without a token: %#v", env)
+	}
+	// Token but no repo to derive a host from.
+	env = map[string]string{}
+	applyUserGitAuthEnv(env, Task{IntegrationTokens: IntegrationTokens{GitToken: "x"}})
+	if _, ok := env["GIT_CONFIG_COUNT"]; ok {
+		t.Fatalf("expected no git config without a repo host: %#v", env)
+	}
+}
+
+func TestGitHostFromURL(t *testing.T) {
+	cases := []struct {
+		in   string
+		want string
+	}{
+		{"git@git.ppdaicorp.com:oversea/xcadapt.git", "git.ppdaicorp.com"},
+		{"ssh://git@git.ppdaicorp.com:22/oversea/r.git", "git.ppdaicorp.com"},
+		{"https://git.ppdaicorp.com/oversea/r.git", "git.ppdaicorp.com"},
+		{"", ""},
+	}
+	for _, c := range cases {
+		if got := gitHostFromURL(c.in); got != c.want {
+			t.Fatalf("gitHostFromURL(%q) = %q, want %q", c.in, got, c.want)
+		}
 	}
 }
 
