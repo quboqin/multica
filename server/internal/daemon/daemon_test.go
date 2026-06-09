@@ -976,6 +976,26 @@ func newRepoReadyTestDaemon(t *testing.T, handler http.HandlerFunc) *Daemon {
 	return d
 }
 
+type staticRepoCache struct {
+	paths map[string]string
+}
+
+func (c *staticRepoCache) Lookup(workspaceID, url string) string {
+	return c.paths[workspaceID+"\x00"+url]
+}
+
+func (c *staticRepoCache) Sync(string, []repocache.RepoInfo, ...repocache.GitCredential) error {
+	return nil
+}
+
+func (c *staticRepoCache) WithRepoLock(_ string, fn func() error) error {
+	return fn()
+}
+
+func (c *staticRepoCache) CreateWorktree(repocache.WorktreeParams) (*repocache.WorktreeResult, error) {
+	return nil, nil
+}
+
 func TestGateResumeToReusedWorkdir(t *testing.T) {
 	t.Parallel()
 
@@ -1618,6 +1638,76 @@ func TestEnsureRepoReadyRefreshesOnMiss(t *testing.T) {
 	}
 	if d.repoCache.Lookup("ws-1", sourceRepo) == "" {
 		t.Fatal("expected repo to be cached after refresh")
+	}
+}
+
+func TestEnsureRepoReadyRequiresUserGitTokenForTaskRepo(t *testing.T) {
+	t.Parallel()
+
+	const repoURL = "git@git.ppdaicorp.com:team/api.git"
+	var refreshCalls atomic.Int32
+	d := newRepoReadyTestDaemon(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/api/daemon/workspaces/ws-1/repos" {
+			http.NotFound(w, r)
+			return
+		}
+		refreshCalls.Add(1)
+		json.NewEncoder(w).Encode(WorkspaceReposResponse{
+			WorkspaceID:  "ws-1",
+			Repos:        []RepoData{{URL: repoURL}},
+			ReposVersion: "v2",
+		})
+	})
+	d.workspaces["ws-1"] = newWorkspaceState("ws-1", nil, "", nil, nil)
+
+	cred := repocache.GitCredential{
+		Hosts:        []string{"git.ppdaicorp.com"},
+		RequireToken: true,
+	}
+	err := d.ensureRepoReady(context.Background(), "ws-1", repoURL, cred)
+	if !errors.Is(err, ErrGitTokenRequired) {
+		t.Fatalf("expected ErrGitTokenRequired, got %v", err)
+	}
+	if got := refreshCalls.Load(); got != 1 {
+		t.Fatalf("expected allowlist refresh before token check, got %d", got)
+	}
+	if got := d.repoCache.Lookup("ws-1", repoURL); got != "" {
+		t.Fatalf("missing user git_token must not clone using daemon credentials, got cache path %q", got)
+	}
+}
+
+func TestEnsureRepoReadyRequiresUserGitTokenEvenWhenCached(t *testing.T) {
+	t.Parallel()
+
+	const sourceRepo = "git@git.ppdaicorp.com:team/api.git"
+	var refreshCalls atomic.Int32
+	d := newRepoReadyTestDaemon(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/api/daemon/workspaces/ws-1/repos" {
+			http.NotFound(w, r)
+			return
+		}
+		refreshCalls.Add(1)
+		json.NewEncoder(w).Encode(WorkspaceReposResponse{
+			WorkspaceID:  "ws-1",
+			Repos:        []RepoData{{URL: sourceRepo}},
+			ReposVersion: "v2",
+		})
+	})
+	d.repoCache = &staticRepoCache{paths: map[string]string{
+		"ws-1\x00" + sourceRepo: "cached-bare-path",
+	}}
+	d.workspaces["ws-1"] = newWorkspaceState("ws-1", nil, "v1", []RepoData{{URL: sourceRepo}}, nil)
+
+	cred := repocache.GitCredential{
+		Hosts:        []string{"git.ppdaicorp.com"},
+		RequireToken: true,
+	}
+	err := d.ensureRepoReady(context.Background(), "ws-1", sourceRepo, cred)
+	if !errors.Is(err, ErrGitTokenRequired) {
+		t.Fatalf("expected ErrGitTokenRequired on cached repo, got %v", err)
+	}
+	if got := refreshCalls.Load(); got != 1 {
+		t.Fatalf("expected settings refresh even on cached repo, got %d", got)
 	}
 }
 

@@ -3,6 +3,7 @@
 package repocache
 
 import (
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/url"
@@ -16,17 +17,21 @@ import (
 	"time"
 )
 
+var ErrGitTokenRequired = errors.New("current user git_token is required for repository access; configure git_token before running git operations")
+
 // GitCredential carries a user's git token plus the hosts it should
-// authenticate. When inactive (empty token or no hosts) git operations fall
-// back to the daemon's ambient credentials, preserving prior behavior.
+// authenticate. When inactive (empty token or no hosts) and RequireToken=false,
+// git operations fall back to the daemon's ambient credentials, preserving
+// daemon startup pre-warm behavior.
 //
 // On a shared runtime this is how per-user isolation reaches the network: the
 // bare-cache clone/fetch for a task runs with the requesting user's token, so
 // "who created the task" determines which credentials read the code — not the
 // daemon machine's own SSH key.
 type GitCredential struct {
-	Token string
-	Hosts []string
+	Token        string
+	Hosts        []string
+	RequireToken bool
 }
 
 // Active reports whether the credential has both a token and at least one host.
@@ -40,6 +45,23 @@ func (g GitCredential) Active() bool {
 		}
 	}
 	return false
+}
+
+// HasRemoteHosts reports whether this credential describes remote Git hosts.
+func (g GitCredential) HasRemoteHosts() bool {
+	for _, h := range g.Hosts {
+		if strings.TrimSpace(h) != "" {
+			return true
+		}
+	}
+	return false
+}
+
+// MissingRequiredToken reports whether this task-scoped credential needs a
+// user git_token but does not have one. Daemon startup pre-warm passes a zero
+// credential with RequireToken=false, preserving the old daemon-auth path.
+func (g GitCredential) MissingRequiredToken() bool {
+	return g.RequireToken && g.HasRemoteHosts() && strings.TrimSpace(g.Token) == ""
 }
 
 // firstCred is the variadic-credential helper: callers that pass no credential
@@ -167,6 +189,9 @@ func (c *Cache) lockForRepo(barePath string) *sync.Mutex {
 // re-synced while checkouts are running) do not block each other.
 func (c *Cache) Sync(workspaceID string, repos []RepoInfo, creds ...GitCredential) error {
 	cred := firstCred(creds)
+	if cred.MissingRequiredToken() {
+		return ErrGitTokenRequired
+	}
 	wsDir := filepath.Join(c.root, workspaceID)
 	if err := os.MkdirAll(wsDir, 0o755); err != nil {
 		return fmt.Errorf("create workspace cache dir: %w", err)
@@ -228,6 +253,9 @@ func (c *Cache) WithRepoLock(barePath string, fn func() error) error {
 // Fetch runs `git fetch origin` on a cached bare clone to get latest refs.
 func (c *Cache) Fetch(barePath string, creds ...GitCredential) error {
 	cred := firstCred(creds)
+	if cred.MissingRequiredToken() {
+		return ErrGitTokenRequired
+	}
 	return c.WithRepoLock(barePath, func() error {
 		return gitFetch(barePath, cred)
 	})
@@ -466,6 +494,9 @@ type WorktreeResult struct {
 // at the target path (reused environment), it updates the existing worktree to
 // the latest remote default branch instead of failing.
 func (c *Cache) CreateWorktree(params WorktreeParams) (*WorktreeResult, error) {
+	if params.Cred.MissingRequiredToken() {
+		return nil, ErrGitTokenRequired
+	}
 	barePath := c.Lookup(params.WorkspaceID, params.RepoURL)
 	if barePath == "" {
 		return nil, fmt.Errorf("repo not found in cache: %s (workspace: %s)", params.RepoURL, params.WorkspaceID)

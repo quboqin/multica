@@ -28,6 +28,12 @@ import (
 // server refresh.
 var ErrRepoNotConfigured = errors.New("repo is not configured for this workspace")
 
+// ErrGitTokenRequired is returned when a task-scoped repository operation would
+// need remote Git credentials but the requesting user has not configured a
+// git_token. Returning this explicitly prevents a shared daemon from falling
+// back to the machine owner's SSH key or credential helper.
+var ErrGitTokenRequired = repocache.ErrGitTokenRequired
+
 const (
 	taskSlotWaitTimeout     = 2 * time.Second
 	taskSlotCapacityBackoff = 5 * time.Second
@@ -897,17 +903,19 @@ func (d *Daemon) workspaceCoAuthoredByEnabled(workspaceID string) bool {
 
 // gitCredentialForTask builds the repocache credential for a task from the
 // requesting user's git token and the task's repo hosts. Inactive (zero value)
-// when the user has no git token or the task carries no repos — in that case
-// the cache falls back to the daemon's ambient credentials.
+// when the task carries no remote repos. When remote hosts are present but the
+// token is empty, callers must fail with ErrGitTokenRequired instead of falling
+// back to daemon credentials.
 func gitCredentialForTask(task Task) repocache.GitCredential {
 	return repocache.GitCredential{
-		Token: strings.TrimSpace(task.IntegrationTokens.GitToken),
-		Hosts: gitHostsFromRepos(task.Repos),
+		Token:        strings.TrimSpace(task.IntegrationTokens.GitToken),
+		Hosts:        gitHostsFromRepos(task.Repos),
+		RequireToken: true,
 	}
 }
 
 func (d *Daemon) setTaskGitCredential(taskID string, cred repocache.GitCredential) {
-	if strings.TrimSpace(taskID) == "" || !cred.Active() {
+	if strings.TrimSpace(taskID) == "" || !cred.HasRemoteHosts() {
 		return
 	}
 	d.taskGitCredsMu.Lock()
@@ -943,8 +951,9 @@ func (d *Daemon) taskGitCredential(taskID string) repocache.GitCredential {
 // trip back to GetWorkspaceRepos (which doesn't carry project resources).
 //
 // cred carries the requesting user's git token so the pre-warm clone/fetch
-// runs as that user (shared-runtime per-user isolation); a zero value falls
-// back to the daemon's ambient credentials.
+// runs as that user (shared-runtime per-user isolation). When cred identifies
+// remote hosts but has no token, pre-warm is skipped; checkout will return
+// ErrGitTokenRequired if the agent asks for the repo.
 func (d *Daemon) registerTaskRepos(workspaceID string, repos []RepoData, creds ...repocache.GitCredential) {
 	if len(repos) == 0 {
 		return
@@ -994,7 +1003,7 @@ func (d *Daemon) registerTaskRepos(workspaceID string, repos []RepoData, creds .
 		toSync = append(toSync, RepoData{URL: candidate.url})
 	}
 
-	if d.repoCache != nil && len(toSync) > 0 {
+	if d.repoCache != nil && len(toSync) > 0 && !cred.MissingRequiredToken() {
 		// Sync in the background — same shape used at workspace registration.
 		// `ensureRepoReady` reports a meaningful error if the cache isn't ready
 		// yet, so the agent's first checkout will surface a sync failure
@@ -1090,7 +1099,11 @@ func (d *Daemon) ensureRepoReady(ctx context.Context, workspaceID, repoURL strin
 	ws.repoRefreshMu.Lock()
 	defer ws.repoRefreshMu.Unlock()
 
+	missingRequiredGitToken := len(creds) > 0 && cred.MissingRequiredToken()
 	if !cacheHitOnEntry && d.workspaceRepoAllowed(workspaceID, repoURL) && d.repoCache.Lookup(workspaceID, repoURL) != "" {
+		if missingRequiredGitToken {
+			return ErrGitTokenRequired
+		}
 		return nil
 	}
 
@@ -1101,6 +1114,10 @@ func (d *Daemon) ensureRepoReady(ctx context.Context, workspaceID, repoURL strin
 
 	if !d.workspaceRepoAllowed(workspaceID, repoURL) {
 		return ErrRepoNotConfigured
+	}
+
+	if missingRequiredGitToken {
+		return ErrGitTokenRequired
 	}
 
 	if d.repoCache.Lookup(workspaceID, repoURL) != "" {
@@ -2702,7 +2719,8 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	// lifetime of this task, so both the pre-warm sync below and any
 	// agent-initiated `/repo/checkout` fetch the bare cache as that user
 	// (shared-runtime per-user isolation). Inactive when the user has no git
-	// token — the cache then falls back to the daemon's own credentials.
+	// token, so checkout/fetch never falls back to the daemon's own
+	// credentials on a shared runtime.
 	gitCred := gitCredentialForTask(task)
 	d.setTaskGitCredential(task.ID, gitCred)
 	defer d.clearTaskGitCredential(task.ID)

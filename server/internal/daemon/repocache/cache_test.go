@@ -143,6 +143,35 @@ func TestGitEnvInactiveCredentialIsNoOp(t *testing.T) {
 	}
 }
 
+func TestSyncRequiresGitTokenWhenCredentialRequiresIt(t *testing.T) {
+	cache := New(t.TempDir(), testLogger())
+	err := cache.Sync("ws-1", []RepoInfo{{URL: "git@git.ppdaicorp.com:team/api.git"}}, GitCredential{
+		Hosts:        []string{"git.ppdaicorp.com"},
+		RequireToken: true,
+	})
+	if err != ErrGitTokenRequired {
+		t.Fatalf("expected ErrGitTokenRequired, got %v", err)
+	}
+}
+
+func TestCreateWorktreeRequiresGitTokenWhenCredentialRequiresIt(t *testing.T) {
+	cache := New(t.TempDir(), testLogger())
+	_, err := cache.CreateWorktree(WorktreeParams{
+		WorkspaceID: "ws-1",
+		RepoURL:     "git@git.ppdaicorp.com:team/api.git",
+		WorkDir:     t.TempDir(),
+		AgentName:   "agent",
+		TaskID:      "task-1",
+		Cred: GitCredential{
+			Hosts:        []string{"git.ppdaicorp.com"},
+			RequireToken: true,
+		},
+	})
+	if err != ErrGitTokenRequired {
+		t.Fatalf("expected ErrGitTokenRequired, got %v", err)
+	}
+}
+
 func TestBareDirName(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
