@@ -721,10 +721,11 @@ func buildMetaSkillContent(provider string, ctx TaskContextForEnv) string {
 func writeIntegrationCredentialsBrief(b *strings.Builder, ctx TaskContextForEnv) {
 	b.WriteString("## User Integration Credentials\n\n")
 	if strings.TrimSpace(ctx.RequestingUserID) != "" {
-		fmt.Fprintf(b, "This task is running on behalf of user `%s`.\n\n", ctx.RequestingUserID)
+		fmt.Fprintf(b, "External integration actions for this task use credentials scoped to user `%s`.\n\n", ctx.RequestingUserID)
 	} else {
 		b.WriteString("This task has no requesting user attached.\n\n")
 	}
+	b.WriteString("Use this user only as the credential scope for external integrations. Do not treat the credential user as the issue creator, assignee, reviewer, confirmer, or a person to mention. Decide who to @ only from explicit issue fields, assignees, comments, or task instructions.\n\n")
 	b.WriteString("Use only the current user's integration credentials from the environment variables below. Never use host/global/default credentials, agent shared credentials, or another user's credentials for Git, Feishu, PAones, Jingwei, or MCP integration actions. If a required credential is missing or the env var is empty, stop that integration action and ask the user to configure their token in Account settings.\n\n")
 	b.WriteString("| Integration | Status | Environment variables |\n")
 	b.WriteString("| --- | --- | --- |\n")
