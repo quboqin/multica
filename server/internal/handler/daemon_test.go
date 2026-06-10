@@ -2683,8 +2683,8 @@ func TestClaimTask_IssuePriorSessionRuntimeGuard(t *testing.T) {
 	if task.PriorSessionID != "" {
 		t.Fatalf("runtime mismatch: expected empty PriorSessionID, got %q", task.PriorSessionID)
 	}
-	if task.PriorWorkDir != "/tmp/old-runtime-workdir" {
-		t.Fatalf("runtime mismatch: expected PriorWorkDir='/tmp/old-runtime-workdir', got %q", task.PriorWorkDir)
+	if task.PriorWorkDir != "" {
+		t.Fatalf("runtime mismatch: expected empty PriorWorkDir, got %q", task.PriorWorkDir)
 	}
 	if task.ThreadName != "runtime-session-skip fixture" {
 		t.Fatalf("issue task thread_name = %q, want issue title", task.ThreadName)
@@ -2875,8 +2875,8 @@ func TestClaimTask_ChatPriorSessionRuntimeGuard(t *testing.T) {
 	if task.PriorSessionID != "" {
 		t.Fatalf("chat runtime mismatch: expected empty PriorSessionID, got %q", task.PriorSessionID)
 	}
-	if task.PriorWorkDir != "/tmp/old-chat-workdir" {
-		t.Fatalf("chat runtime mismatch: expected PriorWorkDir='/tmp/old-chat-workdir', got %q", task.PriorWorkDir)
+	if task.PriorWorkDir != "" {
+		t.Fatalf("chat runtime mismatch: expected empty PriorWorkDir, got %q", task.PriorWorkDir)
 	}
 	if _, err := testPool.Exec(ctx, `
 		UPDATE agent_task_queue

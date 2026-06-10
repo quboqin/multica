@@ -1066,7 +1066,7 @@ func (h *Handler) CreateComment(w http.ResponseWriter, r *http.Request) {
 	// must keep the resolved root in sync.
 	h.TaskService.AutoUnresolveThreadOnReply(r.Context(), rootComment, uuidToString(issue.WorkspaceID), authorType, authorID)
 
-	h.triggerTasksForComment(r.Context(), issue, comment, parentComment, authorType, authorID, suppressAgentIDs, requestingUserIDFromRequest(r, authorType, authorID))
+	h.triggerTasksForComment(r.Context(), issue, comment, parentComment, authorType, authorID, suppressAgentIDs, h.requestingUserIDFromRequest(r, authorType, authorID))
 
 	writeJSON(w, http.StatusCreated, resp)
 }
@@ -1591,7 +1591,7 @@ func (h *Handler) UpdateComment(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 
-			h.triggerTasksForComment(r.Context(), issue, comment, parentComment, actorType, actorID, suppressAgentIDs, requestingUserIDFromRequest(r, actorType, actorID))
+			h.triggerTasksForComment(r.Context(), issue, comment, parentComment, actorType, actorID, suppressAgentIDs, h.requestingUserIDFromRequest(r, actorType, actorID))
 		}
 	}
 

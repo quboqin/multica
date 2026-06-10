@@ -2224,7 +2224,7 @@ func (h *Handler) CreateIssue(w http.ResponseWriter, r *http.Request) {
 		ActorID:          actualCreatorID,
 		AnalyticsAgentID: analyticsAgentID,
 		Platform:         func() string { p, _, _ := middleware.ClientMetadataFromContext(r.Context()); return p }(),
-		RequestingUserID: requestingUserIDFromRequest(r, creatorType, actualCreatorID),
+		RequestingUserID: h.requestingUserIDFromRequest(r, creatorType, actualCreatorID),
 		BroadcastPayload: func(issue db.Issue, atts []db.Attachment) map[string]any {
 			payload := issueToResponse(issue, prefix)
 			payload.Attachments = buildAttachmentResponses(atts)
@@ -2502,7 +2502,7 @@ func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
 	// Reconcile task queue when assignee changes.
 	if assigneeChanged {
 		h.TaskService.CancelTasksForIssue(r.Context(), issue.ID)
-		requestingUserID := requestingUserIDFromRequest(r, actorType, actorID)
+		requestingUserID := h.requestingUserIDFromRequest(r, actorType, actorID)
 
 		if h.shouldEnqueueAgentTask(r.Context(), issue) {
 			h.TaskService.EnqueueTaskForIssueByUser(r.Context(), issue, requestingUserID)
@@ -2528,7 +2528,7 @@ func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
 	if statusChanged && !assigneeChanged &&
 		prevIssue.Status == "backlog" && issue.Status != "done" && issue.Status != "cancelled" &&
 		!h.isAgentRunningOnIssue(r, actorType, issue) {
-		requestingUserID := requestingUserIDFromRequest(r, actorType, actorID)
+		requestingUserID := h.requestingUserIDFromRequest(r, actorType, actorID)
 		if h.isAgentAssigneeReady(r.Context(), issue) {
 			h.TaskService.EnqueueTaskForIssueByUser(r.Context(), issue, requestingUserID)
 		}
@@ -2550,7 +2550,7 @@ func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
 	// loops in PR #2918). The helper guards on transition + parent state and
 	// fails best-effort.
 	if statusChanged {
-		h.notifyParentOfChildDone(r.Context(), prevIssue, issue, actorType, actorID, requestingUserIDFromRequest(r, actorType, actorID))
+		h.notifyParentOfChildDone(r.Context(), prevIssue, issue, actorType, actorID, h.requestingUserIDFromRequest(r, actorType, actorID))
 	}
 
 	writeJSON(w, http.StatusOK, resp)
@@ -2995,7 +2995,7 @@ func (h *Handler) BatchUpdateIssues(w http.ResponseWriter, r *http.Request) {
 
 		if assigneeChanged {
 			h.TaskService.CancelTasksForIssue(r.Context(), issue.ID)
-			requestingUserID := requestingUserIDFromRequest(r, actorType, actorID)
+			requestingUserID := h.requestingUserIDFromRequest(r, actorType, actorID)
 			if h.shouldEnqueueAgentTask(r.Context(), issue) {
 				h.TaskService.EnqueueTaskForIssueByUser(r.Context(), issue, requestingUserID)
 			}
@@ -3011,7 +3011,7 @@ func (h *Handler) BatchUpdateIssues(w http.ResponseWriter, r *http.Request) {
 		if statusChanged && !assigneeChanged &&
 			prevIssue.Status == "backlog" && issue.Status != "done" && issue.Status != "cancelled" &&
 			!h.isAgentRunningOnIssue(r, actorType, issue) {
-			requestingUserID := requestingUserIDFromRequest(r, actorType, actorID)
+			requestingUserID := h.requestingUserIDFromRequest(r, actorType, actorID)
 			if h.isAgentAssigneeReady(r.Context(), issue) {
 				h.TaskService.EnqueueTaskForIssueByUser(r.Context(), issue, requestingUserID)
 			}
@@ -3028,7 +3028,7 @@ func (h *Handler) BatchUpdateIssues(w http.ResponseWriter, r *http.Request) {
 		// Platform-driven parent notification, mirrored from UpdateIssue
 		// (MUL-2538). Best-effort; failure does not abort the batch.
 		if statusChanged {
-			h.notifyParentOfChildDone(r.Context(), prevIssue, issue, actorType, actorID, requestingUserIDFromRequest(r, actorType, actorID))
+			h.notifyParentOfChildDone(r.Context(), prevIssue, issue, actorType, actorID, h.requestingUserIDFromRequest(r, actorType, actorID))
 		}
 
 		updated++
