@@ -229,6 +229,7 @@ type AgentTaskResponse struct {
 	// is empty.
 	RequestingUserName               string                 `json:"requesting_user_name,omitempty"`
 	RequestingUserProfileDescription string                 `json:"requesting_user_profile_description,omitempty"`
+	RequestingUserEmail              string                 `json:"requesting_user_email,omitempty"` // git commit author email for shared-runtime per-user attribution
 	IntegrationTokens                *TaskIntegrationTokens `json:"integration_tokens,omitempty"`
 	Kind                             string                 `json:"kind"` // discriminator: "comment" | "autopilot" | "chat" | "quick_create" | "direct" — used by the activity row to label tasks that have no linked issue
 	// AuthToken is the task-scoped `mat_` token the daemon must inject as

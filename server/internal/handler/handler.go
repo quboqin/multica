@@ -299,7 +299,22 @@ func requestingUserIDFromActor(actorType, actorID string) pgtype.UUID {
 	return id
 }
 
-func requestingUserIDFromRequest(r *http.Request, actorType, actorID string) pgtype.UUID {
+func (h *Handler) requestingUserIDFromRequest(r *http.Request, actorType, actorID string) pgtype.UUID {
+	if r.Header.Get("X-Actor-Source") == "task_token" {
+		taskID := strings.TrimSpace(r.Header.Get("X-Task-ID"))
+		if taskID == "" {
+			return pgtype.UUID{}
+		}
+		taskUUID, err := util.ParseUUID(taskID)
+		if err != nil {
+			return pgtype.UUID{}
+		}
+		task, err := h.Queries.GetAgentTask(r.Context(), taskUUID)
+		if err != nil {
+			return pgtype.UUID{}
+		}
+		return task.RequestingUserID
+	}
 	if userID := strings.TrimSpace(requestUserID(r)); userID != "" {
 		id, err := util.ParseUUID(userID)
 		if err == nil {

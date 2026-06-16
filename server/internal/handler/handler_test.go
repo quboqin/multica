@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/multica-ai/multica/server/internal/analytics"
@@ -166,13 +167,94 @@ func newRequest(method, path string, body any) *http.Request {
 }
 
 func TestRequestingUserIDFromRequestPrefersStampedUserID(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+
 	req := httptest.NewRequest("POST", "/api/issues", nil)
 	req.Header.Set("X-User-ID", testUserID)
 
-	got := requestingUserIDFromRequest(req, "agent", "11111111-1111-1111-1111-111111111111")
+	got := testHandler.requestingUserIDFromRequest(req, "agent", "11111111-1111-1111-1111-111111111111")
 
 	if uuidToString(got) != testUserID {
 		t.Fatalf("requesting user id = %q, want stamped X-User-ID %q", uuidToString(got), testUserID)
+	}
+}
+
+func TestRequestingUserIDFromRequestTaskTokenUsesSourceTaskRequester(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+
+	requestingUserEmail := "task-token-requester-" + uuid.NewString() + "@multica.ai"
+	var requestingUserID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO "user" (name, email)
+		VALUES ('Task Token Requester', $1)
+		RETURNING id
+	`, requestingUserEmail).Scan(&requestingUserID); err != nil {
+		t.Fatalf("setup: create requesting user: %v", err)
+	}
+	t.Cleanup(func() { testPool.Exec(ctx, `DELETE FROM "user" WHERE id = $1`, requestingUserID) })
+
+	var agentID string
+	if err := testPool.QueryRow(ctx, `SELECT id FROM agent WHERE workspace_id = $1 LIMIT 1`, testWorkspaceID).Scan(&agentID); err != nil {
+		t.Fatalf("setup: get agent: %v", err)
+	}
+
+	var sourceTaskID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO agent_task_queue (agent_id, runtime_id, status, priority, requesting_user_id)
+		VALUES ($1, $2, 'running', 0, $3)
+		RETURNING id
+	`, agentID, parseUUID(testRuntimeID), requestingUserID).Scan(&sourceTaskID); err != nil {
+		t.Fatalf("setup: create source task: %v", err)
+	}
+	t.Cleanup(func() { testPool.Exec(ctx, `DELETE FROM agent_task_queue WHERE id = $1`, sourceTaskID) })
+
+	req := httptest.NewRequest("POST", "/api/issues", nil)
+	req.Header.Set("X-Actor-Source", "task_token")
+	req.Header.Set("X-User-ID", testUserID)
+	req.Header.Set("X-Task-ID", sourceTaskID)
+
+	got := testHandler.requestingUserIDFromRequest(req, "agent", agentID)
+	if uuidToString(got) != requestingUserID {
+		t.Fatalf("task token requesting user id = %q, want source task requester %q", uuidToString(got), requestingUserID)
+	}
+}
+
+func TestRequestingUserIDFromRequestTaskTokenDoesNotUseTokenOwnerWhenSourceTaskHasNoRequester(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+
+	var agentID string
+	if err := testPool.QueryRow(ctx, `SELECT id FROM agent WHERE workspace_id = $1 LIMIT 1`, testWorkspaceID).Scan(&agentID); err != nil {
+		t.Fatalf("setup: get agent: %v", err)
+	}
+
+	var sourceTaskID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO agent_task_queue (agent_id, runtime_id, status, priority)
+		VALUES ($1, $2, 'running', 0)
+		RETURNING id
+	`, agentID, parseUUID(testRuntimeID)).Scan(&sourceTaskID); err != nil {
+		t.Fatalf("setup: create source task: %v", err)
+	}
+	t.Cleanup(func() { testPool.Exec(ctx, `DELETE FROM agent_task_queue WHERE id = $1`, sourceTaskID) })
+
+	req := httptest.NewRequest("POST", "/api/issues", nil)
+	req.Header.Set("X-Actor-Source", "task_token")
+	req.Header.Set("X-User-ID", testUserID)
+	req.Header.Set("X-Task-ID", sourceTaskID)
+
+	got := testHandler.requestingUserIDFromRequest(req, "agent", agentID)
+	if got.Valid {
+		t.Fatalf("task token without source requester should not use token owner, got %q", uuidToString(got))
 	}
 }
 

@@ -1148,6 +1148,7 @@ func (h *Handler) ClaimTaskByRuntime(w http.ResponseWriter, r *http.Request) {
 	if task.RequestingUserID.Valid {
 		if user, err := h.Queries.GetUser(r.Context(), task.RequestingUserID); err == nil {
 			resp.RequestingUserName = user.Name
+			resp.RequestingUserEmail = user.Email
 			resp.RequestingUserProfileDescription = user.ProfileDescription
 			tokens := taskIntegrationTokensFromUser(user)
 			resp.IntegrationTokens = &tokens
@@ -1155,17 +1156,6 @@ func (h *Handler) ClaimTaskByRuntime(w http.ResponseWriter, r *http.Request) {
 			slog.Debug("failed to load requesting user for brief injection",
 				"task_id", uuidToString(task.ID),
 				"requesting_user_id", uuidToString(task.RequestingUserID),
-				"error", err,
-			)
-		}
-	} else if runtime.OwnerID.Valid {
-		if owner, err := h.Queries.GetUser(r.Context(), runtime.OwnerID); err == nil {
-			resp.RequestingUserName = owner.Name
-			resp.RequestingUserProfileDescription = owner.ProfileDescription
-		} else {
-			slog.Debug("failed to load runtime owner for brief injection",
-				"runtime_id", runtimeID,
-				"owner_id", uuidToString(runtime.OwnerID),
 				"error", err,
 			)
 		}
@@ -1330,9 +1320,9 @@ func (h *Handler) ClaimTaskByRuntime(w http.ResponseWriter, r *http.Request) {
 				// poisoned sessions.
 				if prior.RuntimeID == task.RuntimeID && sameNullableUUID(prior.RequestingUserID, task.RequestingUserID) {
 					resp.PriorSessionID = prior.SessionID.String
-				}
-				if prior.WorkDir.Valid {
-					resp.PriorWorkDir = prior.WorkDir.String
+					if prior.WorkDir.Valid {
+						resp.PriorWorkDir = prior.WorkDir.String
+					}
 				}
 			}
 		}
@@ -1367,19 +1357,20 @@ func (h *Handler) ClaimTaskByRuntime(w http.ResponseWriter, r *http.Request) {
 				// requires runtime to match.
 				if cs.SessionID.Valid && cs.RuntimeID.Valid && cs.RuntimeID == task.RuntimeID && sameNullableUUID(cs.CreatorID, chatRequestingUserID) {
 					resp.PriorSessionID = cs.SessionID.String
-				}
-				if cs.WorkDir.Valid {
-					resp.PriorWorkDir = cs.WorkDir.String
+					if cs.WorkDir.Valid {
+						resp.PriorWorkDir = cs.WorkDir.String
+					}
 				}
 				if prior, err := h.Queries.GetLastChatTaskSession(r.Context(), cs.ID); err == nil && prior.SessionID.Valid {
 					priorRequestingUserID := prior.RequestingUserID
 					if !priorRequestingUserID.Valid {
 						priorRequestingUserID = cs.CreatorID
 					}
-					if resp.PriorSessionID == "" && prior.RuntimeID == task.RuntimeID && sameNullableUUID(priorRequestingUserID, chatRequestingUserID) {
+					priorMatches := prior.RuntimeID == task.RuntimeID && sameNullableUUID(priorRequestingUserID, chatRequestingUserID)
+					if resp.PriorSessionID == "" && priorMatches {
 						resp.PriorSessionID = prior.SessionID.String
 					}
-					if prior.WorkDir.Valid && resp.PriorWorkDir == "" {
+					if priorMatches && prior.WorkDir.Valid && resp.PriorWorkDir == "" {
 						resp.PriorWorkDir = prior.WorkDir.String
 					}
 				}

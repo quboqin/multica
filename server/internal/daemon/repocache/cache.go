@@ -3,6 +3,7 @@
 package repocache
 
 import (
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/url"
@@ -14,8 +15,63 @@ import (
 	"strings"
 	"sync"
 	"time"
-
 )
+
+var ErrGitTokenRequired = errors.New("current user git_token is required for repository access; configure git_token before running git operations")
+
+// GitCredential carries a user's git token plus the hosts it should
+// authenticate. When inactive (empty token or no hosts) and RequireToken=false,
+// git operations fall back to the daemon's ambient credentials, preserving
+// daemon startup pre-warm behavior.
+//
+// On a shared runtime this is how per-user isolation reaches the network: the
+// bare-cache clone/fetch for a task runs with the requesting user's token, so
+// "who created the task" determines which credentials read the code — not the
+// daemon machine's own SSH key.
+type GitCredential struct {
+	Token        string
+	Hosts        []string
+	RequireToken bool
+}
+
+// Active reports whether the credential has both a token and at least one host.
+func (g GitCredential) Active() bool {
+	if strings.TrimSpace(g.Token) == "" {
+		return false
+	}
+	for _, h := range g.Hosts {
+		if strings.TrimSpace(h) != "" {
+			return true
+		}
+	}
+	return false
+}
+
+// HasRemoteHosts reports whether this credential describes remote Git hosts.
+func (g GitCredential) HasRemoteHosts() bool {
+	for _, h := range g.Hosts {
+		if strings.TrimSpace(h) != "" {
+			return true
+		}
+	}
+	return false
+}
+
+// MissingRequiredToken reports whether this task-scoped credential needs a
+// user git_token but does not have one. Daemon startup pre-warm passes a zero
+// credential with RequireToken=false, preserving the old daemon-auth path.
+func (g GitCredential) MissingRequiredToken() bool {
+	return g.RequireToken && g.HasRemoteHosts() && strings.TrimSpace(g.Token) == ""
+}
+
+// firstCred is the variadic-credential helper: callers that pass no credential
+// get a zero (inactive) value, which preserves the daemon-credential fallback.
+func firstCred(creds []GitCredential) GitCredential {
+	if len(creds) > 0 {
+		return creds[0]
+	}
+	return GitCredential{}
+}
 
 // gitEnv returns an environment for git subprocesses that contact remotes.
 // It passes the full daemon environment so credential helpers (e.g. gh) can
@@ -27,7 +83,13 @@ import (
 // caches and worktrees, so the ownership check adds no security value
 // and breaks CI environments where the runner UID differs from the
 // directory owner.
-func gitEnv() []string {
+//
+// When cred is Active we additionally append host-scoped
+// url.<https-with-token>.insteadOf rewrites so SSH/HTTPS remotes for the
+// task's git hosts resolve to a token-bearing HTTPS URL. The token lives only
+// in this subprocess environment for the duration of the git call and never
+// touches disk.
+func gitEnv(cred GitCredential) []string {
 	base := os.Environ()
 
 	// Find the existing GIT_CONFIG_COUNT so we append at the next index
@@ -42,13 +104,38 @@ func gitEnv() []string {
 		}
 	}
 
-	idx := strconv.Itoa(existing)
-	return append(base,
-		"GIT_TERMINAL_PROMPT=0",
-		"GIT_CONFIG_COUNT="+strconv.Itoa(existing+1),
-		"GIT_CONFIG_KEY_"+idx+"=safe.directory",
-		"GIT_CONFIG_VALUE_"+idx+"=*",
-	)
+	type kv struct{ key, value string }
+	entries := []kv{{"safe.directory", "*"}}
+	if cred.Active() {
+		token := strings.TrimSpace(cred.Token)
+		for _, host := range cred.Hosts {
+			host = strings.TrimSpace(host)
+			if host == "" {
+				continue
+			}
+			// GitLab/GitHub PATs authenticate over HTTPS as oauth2:<token>.
+			// insteadOf is multi-valued, so each rewrite below is read by git
+			// as a separate rule for the same target URL: cover scp-style SSH
+			// (git@host:...), ssh:// and plain HTTPS.
+			https := "https://oauth2:" + token + "@" + host + "/"
+			entries = append(entries,
+				kv{"url." + https + ".insteadOf", "git@" + host + ":"},
+				kv{"url." + https + ".insteadOf", "ssh://git@" + host + "/"},
+				kv{"url." + https + ".insteadOf", "https://" + host + "/"},
+			)
+		}
+	}
+
+	out := append(base, "GIT_TERMINAL_PROMPT=0")
+	for i, e := range entries {
+		idx := strconv.Itoa(existing + i)
+		out = append(out,
+			"GIT_CONFIG_KEY_"+idx+"="+e.key,
+			"GIT_CONFIG_VALUE_"+idx+"="+e.value,
+		)
+	}
+	out = append(out, "GIT_CONFIG_COUNT="+strconv.Itoa(existing+len(entries)))
+	return out
 }
 
 var agentGitExcludePatterns = []string{".agent_context", "CLAUDE.md", "AGENTS.md", ".claude", ".opencode"}
@@ -100,7 +187,11 @@ func (c *Cache) lockForRepo(barePath string) *sync.Mutex {
 // via lockForRepo. Different repos run sequentially within a single Sync call
 // but concurrent Sync calls (different workspaces, or the same workspace
 // re-synced while checkouts are running) do not block each other.
-func (c *Cache) Sync(workspaceID string, repos []RepoInfo) error {
+func (c *Cache) Sync(workspaceID string, repos []RepoInfo, creds ...GitCredential) error {
+	cred := firstCred(creds)
+	if cred.MissingRequiredToken() {
+		return ErrGitTokenRequired
+	}
 	wsDir := filepath.Join(c.root, workspaceID)
 	if err := os.MkdirAll(wsDir, 0o755); err != nil {
 		return fmt.Errorf("create workspace cache dir: %w", err)
@@ -118,7 +209,7 @@ func (c *Cache) Sync(workspaceID string, repos []RepoInfo) error {
 		if isBareRepo(barePath) {
 			// Already cached — fetch latest.
 			c.logger.Info("repo cache: fetching", "url", repo.URL, "path", barePath)
-			if err := gitFetch(barePath); err != nil {
+			if err := gitFetch(barePath, cred); err != nil {
 				c.logger.Warn("repo cache: fetch failed", "url", repo.URL, "error", err)
 				if firstErr == nil {
 					firstErr = err
@@ -127,7 +218,7 @@ func (c *Cache) Sync(workspaceID string, repos []RepoInfo) error {
 		} else {
 			// Not cached — bare clone.
 			c.logger.Info("repo cache: cloning", "url", repo.URL, "path", barePath)
-			if err := gitCloneBare(repo.URL, barePath); err != nil {
+			if err := gitCloneBare(repo.URL, barePath, cred); err != nil {
 				c.logger.Error("repo cache: clone failed", "url", repo.URL, "error", err)
 				if firstErr == nil {
 					firstErr = err
@@ -150,8 +241,12 @@ func (c *Cache) Lookup(workspaceID, url string) string {
 }
 
 // Fetch runs `git fetch origin` on a cached bare clone to get latest refs.
-func (c *Cache) Fetch(barePath string) error {
-	return gitFetch(barePath)
+func (c *Cache) Fetch(barePath string, creds ...GitCredential) error {
+	cred := firstCred(creds)
+	if cred.MissingRequiredToken() {
+		return ErrGitTokenRequired
+	}
+	return gitFetch(barePath, cred)
 }
 
 // bareDirName returns a filesystem-safe, collision-free directory name for
@@ -241,9 +336,9 @@ func isBareRepo(path string) bool {
 // refs and abort the entire fetch.
 const modernFetchRefspec = "+refs/heads/*:refs/remotes/origin/*"
 
-func gitCloneBare(url, dest string) error {
+func gitCloneBare(url, dest string, cred GitCredential) error {
 	cmd := exec.Command("git", "clone", "--bare", url, dest)
-	cmd.Env = gitEnv()
+	cmd.Env = gitEnv(cred)
 
 	if out, err := cmd.CombinedOutput(); err != nil {
 		// Clean up partial clone.
@@ -254,7 +349,7 @@ func gitCloneBare(url, dest string) error {
 	// a mirror-style fetch refspec. Convert the bare repo to the standard
 	// remote-tracking layout immediately so subsequent fetches write to
 	// refs/remotes/origin/* and can't conflict with worktree-locked heads.
-	if err := ensureRemoteTrackingLayout(dest); err != nil {
+	if err := ensureRemoteTrackingLayout(dest, cred); err != nil {
 		os.RemoveAll(dest)
 		return fmt.Errorf("configure fetch refspec: %w", err)
 	}
@@ -270,11 +365,11 @@ func gitCloneBare(url, dest string) error {
 // touches that symref on its own, so without this call an existing cache
 // would keep basing new worktrees on the original default branch forever
 // after the remote flipped.
-func gitFetch(barePath string) error {
-	if err := ensureRemoteTrackingLayout(barePath); err != nil {
+func gitFetch(barePath string, cred GitCredential) error {
+	if err := ensureRemoteTrackingLayout(barePath, cred); err != nil {
 		return fmt.Errorf("ensure refspec: %w", err)
 	}
-	if err := runGitFetch(barePath); err != nil {
+	if err := runGitFetch(barePath, cred); err != nil {
 		return err
 	}
 	// Refresh refs/remotes/origin/HEAD after every successful fetch.
@@ -284,7 +379,7 @@ func gitFetch(barePath string) error {
 	// path (the only path that can't be recovered any other way) relies
 	// on this call.
 	cmd := exec.Command("git", "-C", barePath, "remote", "set-head", "origin", "--auto")
-	cmd.Env = gitEnv()
+	cmd.Env = gitEnv(cred)
 
 	_ = cmd.Run()
 	return nil
@@ -292,9 +387,9 @@ func gitFetch(barePath string) error {
 
 // runGitFetch is the raw `git fetch origin` wrapper. Callers should go through
 // gitFetch, which migrates legacy caches first.
-func runGitFetch(barePath string) error {
+func runGitFetch(barePath string, cred GitCredential) error {
 	cmd := exec.Command("git", "-C", barePath, "fetch", "origin")
-	cmd.Env = gitEnv()
+	cmd.Env = gitEnv(cred)
 
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("git fetch: %s: %w", strings.TrimSpace(string(out)), err)
@@ -309,7 +404,7 @@ func runGitFetch(barePath string) error {
 // the refspec, performs a backfill fetch to populate refs/remotes/origin/*,
 // and runs `git remote set-head origin --auto` so getRemoteDefaultBranch can
 // resolve the remote's default branch.
-func ensureRemoteTrackingLayout(barePath string) error {
+func ensureRemoteTrackingLayout(barePath string, cred GitCredential) error {
 	cur, err := readFetchRefspec(barePath)
 	if err != nil {
 		return err
@@ -323,13 +418,13 @@ func ensureRemoteTrackingLayout(barePath string) error {
 	// Backfill refs/remotes/origin/* by fetching with the new refspec. This
 	// writes to the origin/* namespace, so even worktree-locked refs/heads/*
 	// branches can't collide.
-	if err := runGitFetch(barePath); err != nil {
+	if err := runGitFetch(barePath, cred); err != nil {
 		return fmt.Errorf("backfill fetch after refspec migration: %w", err)
 	}
 	// Set refs/remotes/origin/HEAD so getRemoteDefaultBranch can read it.
 	// Non-fatal: if this fails we fall back to origin/main, origin/master.
 	cmd := exec.Command("git", "-C", barePath, "remote", "set-head", "origin", "--auto")
-	cmd.Env = gitEnv()
+	cmd.Env = gitEnv(cred)
 
 	_ = cmd.Run()
 	return nil
@@ -370,6 +465,12 @@ type WorktreeParams struct {
 	AgentName           string // for branch naming
 	TaskID              string // for branch naming uniqueness
 	CoAuthoredByEnabled bool   // install prepare-commit-msg hook for Co-authored-by trailer
+	CommitUserName      string // optional requesting user name for git commit identity
+	CommitUserEmail     string // optional requesting user email for git commit identity
+	// Cred is the requesting user's git credential used for the bare-cache
+	// fetch performed here. Zero value falls back to the daemon's ambient
+	// credentials (e.g. its SSH key), preserving prior behavior.
+	Cred GitCredential
 }
 
 // WorktreeResult describes a successfully created worktree.
@@ -383,6 +484,9 @@ type WorktreeResult struct {
 // at the target path (reused environment), it updates the existing worktree to
 // the latest remote default branch instead of failing.
 func (c *Cache) CreateWorktree(params WorktreeParams) (*WorktreeResult, error) {
+	if params.Cred.MissingRequiredToken() {
+		return nil, ErrGitTokenRequired
+	}
 	barePath := c.Lookup(params.WorkspaceID, params.RepoURL)
 	if barePath == "" {
 		return nil, fmt.Errorf("repo not found in cache: %s (workspace: %s)", params.RepoURL, params.WorkspaceID)
@@ -399,7 +503,7 @@ func (c *Cache) CreateWorktree(params WorktreeParams) (*WorktreeResult, error) {
 	// to the modern remote-tracking layout on first run, so subsequent fetches
 	// never collide with the refs/heads/agent/* branches that worktree creation
 	// locks in this same bare repo.
-	if err := gitFetch(barePath); err != nil {
+	if err := gitFetch(barePath, params.Cred); err != nil {
 		// Non-fatal: preserve cached state and continue, but make the warning
 		// loud enough that it's findable in the daemon log. The agent will
 		// receive an older snapshot than the remote head.
@@ -449,6 +553,9 @@ func (c *Cache) CreateWorktree(params WorktreeParams) (*WorktreeResult, error) {
 		for _, pattern := range agentGitExcludePatterns {
 			_ = excludeFromGit(worktreePath, pattern)
 		}
+		if err := configureWorktreeCommitIdentity(worktreePath, params.CommitUserName, params.CommitUserEmail); err != nil {
+			c.logger.Warn("repo checkout: configure commit identity failed (non-fatal)", "error", err)
+		}
 
 		// Install or remove the Co-authored-by hook based on the workspace
 		// setting. The hook lives in the bare repo's shared hooks dir, so we
@@ -488,6 +595,9 @@ func (c *Cache) CreateWorktree(params WorktreeParams) (*WorktreeResult, error) {
 	// Exclude agent context files from git tracking.
 	for _, pattern := range agentGitExcludePatterns {
 		_ = excludeFromGit(worktreePath, pattern)
+	}
+	if err := configureWorktreeCommitIdentity(worktreePath, params.CommitUserName, params.CommitUserEmail); err != nil {
+		c.logger.Warn("repo checkout: configure commit identity failed (non-fatal)", "error", err)
 	}
 
 	// Install or remove the Co-authored-by hook based on the workspace
@@ -573,6 +683,29 @@ func runWorktreeAdd(gitRoot, worktreePath, branchName, baseRef string) error {
 
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("git worktree add: %s: %w", strings.TrimSpace(string(out)), err)
+	}
+	return nil
+}
+
+func configureWorktreeCommitIdentity(worktreePath, name, email string) error {
+	name = strings.TrimSpace(name)
+	email = strings.TrimSpace(email)
+	if name == "" || email == "" {
+		return nil
+	}
+	if err := gitConfigSet(worktreePath, "user.name", name); err != nil {
+		return err
+	}
+	if err := gitConfigSet(worktreePath, "user.email", email); err != nil {
+		return err
+	}
+	return nil
+}
+
+func gitConfigSet(repoPath, key, value string) error {
+	cmd := exec.Command("git", "-C", repoPath, "config", key, value)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("git config %s: %s: %w", key, strings.TrimSpace(string(out)), err)
 	}
 	return nil
 }
@@ -683,7 +816,7 @@ func getRemoteDefaultBranch(barePath string) string {
 	// 2) Common default branch names under the origin namespace.
 	for _, candidate := range []string{"refs/remotes/origin/main", "refs/remotes/origin/master"} {
 		cmd := exec.Command("git", "-C", barePath, "rev-parse", "--verify", candidate)
-	
+
 		if err := cmd.Run(); err == nil {
 			return candidate
 		}
@@ -698,7 +831,7 @@ func getRemoteDefaultBranch(barePath string) string {
 	if bareRef != "" {
 		originRef := "refs/remotes/origin/" + strings.TrimPrefix(bareRef, "refs/heads/")
 		cmd := exec.Command("git", "-C", barePath, "rev-parse", "--verify", originRef)
-	
+
 		if err := cmd.Run(); err == nil {
 			return originRef
 		}

@@ -15,7 +15,7 @@ func testLogger() *slog.Logger {
 
 func TestGitEnv(t *testing.T) {
 	t.Parallel()
-	env := gitEnv()
+	env := gitEnv(GitCredential{})
 
 	// Must contain GIT_TERMINAL_PROMPT=0.
 	found := false
@@ -71,7 +71,7 @@ func TestGitEnvPreservesExistingConfig(t *testing.T) {
 	t.Setenv("GIT_CONFIG_KEY_1", "http.extraHeader")
 	t.Setenv("GIT_CONFIG_VALUE_1", "Authorization: Bearer tok")
 
-	env := gitEnv()
+	env := gitEnv(GitCredential{})
 
 	envHas := func(want string) bool {
 		for _, e := range env {
@@ -102,6 +102,102 @@ func TestGitEnvPreservesExistingConfig(t *testing.T) {
 	}
 	if !envHas("GIT_CONFIG_KEY_1=http.extraHeader") {
 		t.Error("existing GIT_CONFIG_KEY_1 was lost")
+	}
+}
+
+func TestGitEnvWithCredentialAppendsInsteadOfRewrites(t *testing.T) {
+	t.Setenv("GIT_CONFIG_COUNT", "")
+	env := gitEnv(GitCredential{Token: "glpat-xyz", Hosts: []string{"git.ppdaicorp.com"}})
+
+	var hasCount4, hasRewriteKey, hasSSHValue bool
+	for _, e := range env {
+		switch {
+		case e == "GIT_CONFIG_COUNT=4":
+			hasCount4 = true
+		case strings.HasSuffix(e, "=url.https://oauth2:glpat-xyz@git.ppdaicorp.com/.insteadOf"):
+			hasRewriteKey = true
+		case e == "GIT_CONFIG_VALUE_1=git@git.ppdaicorp.com:" ||
+			e == "GIT_CONFIG_VALUE_2=git@git.ppdaicorp.com:" ||
+			e == "GIT_CONFIG_VALUE_3=git@git.ppdaicorp.com:":
+			hasSSHValue = true
+		}
+	}
+	if !hasCount4 {
+		t.Fatalf("expected GIT_CONFIG_COUNT=4 (safe.directory + 3 rewrites), env=%v", env)
+	}
+	if !hasRewriteKey {
+		t.Fatalf("expected token-bearing insteadOf key, env=%v", env)
+	}
+	if !hasSSHValue {
+		t.Fatalf("expected scp-style SSH rewrite value, env=%v", env)
+	}
+}
+
+func TestGitEnvInactiveCredentialIsNoOp(t *testing.T) {
+	t.Setenv("GIT_CONFIG_COUNT", "")
+	env := gitEnv(GitCredential{Token: "x"}) // no hosts -> inactive
+	for _, e := range env {
+		if strings.Contains(e, "insteadOf") {
+			t.Fatalf("inactive credential must not add insteadOf rewrite: %q", e)
+		}
+	}
+}
+
+func TestSyncRequiresGitTokenWhenCredentialRequiresIt(t *testing.T) {
+	cache := New(t.TempDir(), testLogger())
+	err := cache.Sync("ws-1", []RepoInfo{{URL: "git@git.ppdaicorp.com:team/api.git"}}, GitCredential{
+		Hosts:        []string{"git.ppdaicorp.com"},
+		RequireToken: true,
+	})
+	if err != ErrGitTokenRequired {
+		t.Fatalf("expected ErrGitTokenRequired, got %v", err)
+	}
+}
+
+func TestCreateWorktreeRequiresGitTokenWhenCredentialRequiresIt(t *testing.T) {
+	cache := New(t.TempDir(), testLogger())
+	_, err := cache.CreateWorktree(WorktreeParams{
+		WorkspaceID: "ws-1",
+		RepoURL:     "git@git.ppdaicorp.com:team/api.git",
+		WorkDir:     t.TempDir(),
+		AgentName:   "agent",
+		TaskID:      "task-1",
+		Cred: GitCredential{
+			Hosts:        []string{"git.ppdaicorp.com"},
+			RequireToken: true,
+		},
+	})
+	if err != ErrGitTokenRequired {
+		t.Fatalf("expected ErrGitTokenRequired, got %v", err)
+	}
+}
+
+func TestCreateWorktreeConfiguresCommitIdentity(t *testing.T) {
+	t.Parallel()
+	sourceRepo := createTestRepo(t)
+	cache := New(t.TempDir(), testLogger())
+	if err := cache.Sync("ws-1", []RepoInfo{{URL: sourceRepo}}); err != nil {
+		t.Fatalf("sync failed: %v", err)
+	}
+
+	workDir := t.TempDir()
+	result, err := cache.CreateWorktree(WorktreeParams{
+		WorkspaceID:     "ws-1",
+		RepoURL:         sourceRepo,
+		WorkDir:         workDir,
+		AgentName:       "agent",
+		TaskID:          "identity-task",
+		CommitUserName:  "Alice",
+		CommitUserEmail: "alice@example.com",
+	})
+	if err != nil {
+		t.Fatalf("CreateWorktree failed: %v", err)
+	}
+	if got := gitConfigGet(t, result.Path, "user.name"); got != "Alice" {
+		t.Fatalf("user.name = %q, want Alice", got)
+	}
+	if got := gitConfigGet(t, result.Path, "user.email"); got != "alice@example.com" {
+		t.Fatalf("user.email = %q, want alice@example.com", got)
 	}
 }
 
@@ -865,7 +961,7 @@ func TestEnsureRemoteTrackingLayoutMigratesLegacyCache(t *testing.T) {
 
 	// ensureRemoteTrackingLayout should migrate: rewrite refspec, backfill
 	// refs/remotes/origin/*, and set origin HEAD.
-	if err := ensureRemoteTrackingLayout(barePath); err != nil {
+	if err := ensureRemoteTrackingLayout(barePath, GitCredential{}); err != nil {
 		t.Fatalf("ensureRemoteTrackingLayout failed: %v", err)
 	}
 
@@ -1048,7 +1144,7 @@ func TestGitFetchRefreshesOriginHeadAfterDefaultChange(t *testing.T) {
 
 	// Fetch via the cache's code path. Without the set-head call, origin/HEAD
 	// would still point at the old default here.
-	if err := gitFetch(barePath); err != nil {
+	if err := gitFetch(barePath, GitCredential{}); err != nil {
 		t.Fatalf("gitFetch failed: %v", err)
 	}
 

@@ -388,7 +388,8 @@ func TestIntegrationCredentialStatusRendered(t *testing.T) {
 	})
 	for _, want := range []string{
 		"## User Integration Credentials",
-		"This task is running on behalf of user `user-123`.",
+		"External integration actions for this task use credentials scoped to user `user-123`.",
+		"Do not treat the credential user as the issue creator, assignee, reviewer, confirmer, or a person to mention.",
 		"Never use host/global/default credentials",
 		"| `git_token` | configured |",
 		"| `feishu_mcp_token` | missing |",

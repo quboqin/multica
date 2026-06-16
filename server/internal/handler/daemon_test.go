@@ -2630,8 +2630,8 @@ func TestClaimTask_IssuePriorSessionRuntimeGuard(t *testing.T) {
 	if task.PriorSessionID != "" {
 		t.Fatalf("runtime mismatch: expected empty PriorSessionID, got %q", task.PriorSessionID)
 	}
-	if task.PriorWorkDir != "/tmp/old-runtime-workdir" {
-		t.Fatalf("runtime mismatch: expected PriorWorkDir='/tmp/old-runtime-workdir', got %q", task.PriorWorkDir)
+	if task.PriorWorkDir != "" {
+		t.Fatalf("runtime mismatch: expected empty PriorWorkDir, got %q", task.PriorWorkDir)
 	}
 	if _, err := testPool.Exec(ctx, `
 		UPDATE agent_task_queue
@@ -2819,8 +2819,8 @@ func TestClaimTask_ChatPriorSessionRuntimeGuard(t *testing.T) {
 	if task.PriorSessionID != "" {
 		t.Fatalf("chat runtime mismatch: expected empty PriorSessionID, got %q", task.PriorSessionID)
 	}
-	if task.PriorWorkDir != "/tmp/old-chat-workdir" {
-		t.Fatalf("chat runtime mismatch: expected PriorWorkDir='/tmp/old-chat-workdir', got %q", task.PriorWorkDir)
+	if task.PriorWorkDir != "" {
+		t.Fatalf("chat runtime mismatch: expected empty PriorWorkDir, got %q", task.PriorWorkDir)
 	}
 	if _, err := testPool.Exec(ctx, `
 		UPDATE agent_task_queue
@@ -2975,14 +2975,15 @@ func TestClaimTask_UsesRequestingUserIntegrationTokens(t *testing.T) {
 
 	ctx := context.Background()
 	agentID, runtimeID, daemonID := createRuntimeGuardAgent(t, ctx)
+	requestingUserEmail := "requesting-token-user-" + uuid.NewString() + "@multica.ai"
 
 	var requestingUserID string
 	if err := testPool.QueryRow(ctx, `
 		INSERT INTO "user" (name, email, integration_tokens)
-		VALUES ('Requesting Token User', 'requesting-token-user-' || gen_random_uuid()::text || '@multica.ai',
+		VALUES ('Requesting Token User', $1,
 		        '{"git_token":"user-git","feishu_mcp_token":"user-feishu","paones_token":"user-paones","jingwei_token":"user-jingwei","notion_token":"user-notion"}'::jsonb)
 		RETURNING id
-	`).Scan(&requestingUserID); err != nil {
+	`, requestingUserEmail).Scan(&requestingUserID); err != nil {
 		t.Fatalf("setup: create requesting user: %v", err)
 	}
 	t.Cleanup(func() { testPool.Exec(ctx, `DELETE FROM "user" WHERE id = $1`, requestingUserID) })
@@ -3023,8 +3024,9 @@ func TestClaimTask_UsesRequestingUserIntegrationTokens(t *testing.T) {
 
 	var resp struct {
 		Task *struct {
-			RequestingUserID  string            `json:"requesting_user_id"`
-			IntegrationTokens map[string]string `json:"integration_tokens"`
+			RequestingUserID    string            `json:"requesting_user_id"`
+			RequestingUserEmail string            `json:"requesting_user_email"`
+			IntegrationTokens   map[string]string `json:"integration_tokens"`
 		} `json:"task"`
 	}
 	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
@@ -3035,6 +3037,9 @@ func TestClaimTask_UsesRequestingUserIntegrationTokens(t *testing.T) {
 	}
 	if resp.Task.RequestingUserID != requestingUserID {
 		t.Fatalf("requesting_user_id = %q, want %q", resp.Task.RequestingUserID, requestingUserID)
+	}
+	if resp.Task.RequestingUserEmail != requestingUserEmail {
+		t.Fatalf("requesting_user_email = %q, want %q", resp.Task.RequestingUserEmail, requestingUserEmail)
 	}
 	if resp.Task.IntegrationTokens == nil {
 		t.Fatalf("expected integration_tokens for requesting user")
