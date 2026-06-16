@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/multica-ai/multica/server/internal/analytics"
@@ -122,11 +121,11 @@ func setupHandlerTestFixture(ctx context.Context, pool *pgxpool.Pool) (string, s
 	var runtimeID string
 	if err := pool.QueryRow(ctx, `
 		INSERT INTO agent_runtime (
-			workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, metadata, last_seen_at
+			workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, metadata, owner_id, last_seen_at
 		)
-		VALUES ($1, NULL, $2, 'cloud', $3, 'online', $4, '{}'::jsonb, now())
+		VALUES ($1, NULL, $2, 'cloud', $3, 'online', $4, '{}'::jsonb, $5, now())
 		RETURNING id
-	`, workspaceID, "Handler Test Runtime", "handler_test_runtime", "Handler test runtime").Scan(&runtimeID); err != nil {
+	`, workspaceID, "Handler Test Runtime", "handler_test_runtime", "Handler test runtime", userID).Scan(&runtimeID); err != nil {
 		return "", "", err
 	}
 	testRuntimeID = runtimeID
@@ -164,98 +163,6 @@ func newRequest(method, path string, body any) *http.Request {
 	req.Header.Set("X-User-ID", testUserID)
 	req.Header.Set("X-Workspace-ID", testWorkspaceID)
 	return req
-}
-
-func TestRequestingUserIDFromRequestPrefersStampedUserID(t *testing.T) {
-	if testHandler == nil {
-		t.Skip("database not available")
-	}
-
-	req := httptest.NewRequest("POST", "/api/issues", nil)
-	req.Header.Set("X-User-ID", testUserID)
-
-	got := testHandler.requestingUserIDFromRequest(req, "agent", "11111111-1111-1111-1111-111111111111")
-
-	if uuidToString(got) != testUserID {
-		t.Fatalf("requesting user id = %q, want stamped X-User-ID %q", uuidToString(got), testUserID)
-	}
-}
-
-func TestRequestingUserIDFromRequestTaskTokenUsesSourceTaskRequester(t *testing.T) {
-	if testHandler == nil {
-		t.Skip("database not available")
-	}
-
-	ctx := context.Background()
-
-	requestingUserEmail := "task-token-requester-" + uuid.NewString() + "@multica.ai"
-	var requestingUserID string
-	if err := testPool.QueryRow(ctx, `
-		INSERT INTO "user" (name, email)
-		VALUES ('Task Token Requester', $1)
-		RETURNING id
-	`, requestingUserEmail).Scan(&requestingUserID); err != nil {
-		t.Fatalf("setup: create requesting user: %v", err)
-	}
-	t.Cleanup(func() { testPool.Exec(ctx, `DELETE FROM "user" WHERE id = $1`, requestingUserID) })
-
-	var agentID string
-	if err := testPool.QueryRow(ctx, `SELECT id FROM agent WHERE workspace_id = $1 LIMIT 1`, testWorkspaceID).Scan(&agentID); err != nil {
-		t.Fatalf("setup: get agent: %v", err)
-	}
-
-	var sourceTaskID string
-	if err := testPool.QueryRow(ctx, `
-		INSERT INTO agent_task_queue (agent_id, runtime_id, status, priority, requesting_user_id)
-		VALUES ($1, $2, 'running', 0, $3)
-		RETURNING id
-	`, agentID, parseUUID(testRuntimeID), requestingUserID).Scan(&sourceTaskID); err != nil {
-		t.Fatalf("setup: create source task: %v", err)
-	}
-	t.Cleanup(func() { testPool.Exec(ctx, `DELETE FROM agent_task_queue WHERE id = $1`, sourceTaskID) })
-
-	req := httptest.NewRequest("POST", "/api/issues", nil)
-	req.Header.Set("X-Actor-Source", "task_token")
-	req.Header.Set("X-User-ID", testUserID)
-	req.Header.Set("X-Task-ID", sourceTaskID)
-
-	got := testHandler.requestingUserIDFromRequest(req, "agent", agentID)
-	if uuidToString(got) != requestingUserID {
-		t.Fatalf("task token requesting user id = %q, want source task requester %q", uuidToString(got), requestingUserID)
-	}
-}
-
-func TestRequestingUserIDFromRequestTaskTokenDoesNotUseTokenOwnerWhenSourceTaskHasNoRequester(t *testing.T) {
-	if testHandler == nil {
-		t.Skip("database not available")
-	}
-
-	ctx := context.Background()
-
-	var agentID string
-	if err := testPool.QueryRow(ctx, `SELECT id FROM agent WHERE workspace_id = $1 LIMIT 1`, testWorkspaceID).Scan(&agentID); err != nil {
-		t.Fatalf("setup: get agent: %v", err)
-	}
-
-	var sourceTaskID string
-	if err := testPool.QueryRow(ctx, `
-		INSERT INTO agent_task_queue (agent_id, runtime_id, status, priority)
-		VALUES ($1, $2, 'running', 0)
-		RETURNING id
-	`, agentID, parseUUID(testRuntimeID)).Scan(&sourceTaskID); err != nil {
-		t.Fatalf("setup: create source task: %v", err)
-	}
-	t.Cleanup(func() { testPool.Exec(ctx, `DELETE FROM agent_task_queue WHERE id = $1`, sourceTaskID) })
-
-	req := httptest.NewRequest("POST", "/api/issues", nil)
-	req.Header.Set("X-Actor-Source", "task_token")
-	req.Header.Set("X-User-ID", testUserID)
-	req.Header.Set("X-Task-ID", sourceTaskID)
-
-	got := testHandler.requestingUserIDFromRequest(req, "agent", agentID)
-	if got.Valid {
-		t.Fatalf("task token without source requester should not use token owner, got %q", uuidToString(got))
-	}
 }
 
 func withURLParam(req *http.Request, key, value string) *http.Request {
@@ -614,6 +521,115 @@ func TestCreateIssueExplicitBacklogPreserved(t *testing.T) {
 	cleanupReq := newRequest("DELETE", "/api/issues/"+created.ID, nil)
 	cleanupReq = withURLParam(cleanupReq, "id", created.ID)
 	testHandler.DeleteIssue(httptest.NewRecorder(), cleanupReq)
+}
+
+// TestCreateIssueRejectsCrossWorkspaceParent guards the workspace
+// boundary check that lives in service.IssueService.Create. A request
+// that pins parent_issue_id to an issue in a foreign workspace must be
+// rejected before the row is created — this is the structural reason
+// IssueService owns the parent lookup (not the HTTP handler). The test
+// inserts a foreign workspace + issue directly via SQL, then drives the
+// request through the regular handler entry point.
+func TestCreateIssueRejectsCrossWorkspaceParent(t *testing.T) {
+	ctx := context.Background()
+
+	var otherWorkspaceID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO workspace (name, slug, description, issue_prefix)
+		VALUES ($1, $2, $3, $4)
+		RETURNING id
+	`, "Cross-workspace parent test", "xwp-parent-test", "Foreign workspace", "XWP").Scan(&otherWorkspaceID); err != nil {
+		t.Fatalf("insert foreign workspace: %v", err)
+	}
+	t.Cleanup(func() {
+		testPool.Exec(ctx, `DELETE FROM workspace WHERE id = $1`, otherWorkspaceID)
+	})
+
+	var foreignParentID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO issue (workspace_id, title, status, priority, creator_type, creator_id, number)
+		VALUES ($1, $2, 'todo', 'none', 'member', $3, 1)
+		RETURNING id
+	`, otherWorkspaceID, "Foreign parent", testUserID).Scan(&foreignParentID); err != nil {
+		t.Fatalf("insert foreign parent: %v", err)
+	}
+
+	w := httptest.NewRecorder()
+	req := newRequest("POST", "/api/issues?workspace_id="+testWorkspaceID, map[string]any{
+		"title":           "Should be rejected",
+		"parent_issue_id": foreignParentID,
+	})
+	testHandler.CreateIssue(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("CreateIssue with foreign parent: expected 400, got %d: %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "parent issue not found in this workspace") {
+		t.Fatalf("CreateIssue with foreign parent: expected boundary error message, got %s", w.Body.String())
+	}
+
+	var count int
+	if err := testPool.QueryRow(ctx,
+		`SELECT COUNT(*) FROM issue WHERE workspace_id = $1 AND title = $2`,
+		testWorkspaceID, "Should be rejected",
+	).Scan(&count); err != nil {
+		t.Fatalf("count query: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("rejected create still wrote a row (count=%d) — service-layer boundary check failed", count)
+	}
+}
+
+// TestCreateIssueRejectsCrossWorkspaceProject mirrors the parent test for
+// the project workspace boundary. Same reasoning: future create entries
+// (Lark /issue, MCP, API keys) must inherit this guard from the service
+// without re-implementing it.
+func TestCreateIssueRejectsCrossWorkspaceProject(t *testing.T) {
+	ctx := context.Background()
+
+	var otherWorkspaceID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO workspace (name, slug, description, issue_prefix)
+		VALUES ($1, $2, $3, $4)
+		RETURNING id
+	`, "Cross-workspace project test", "xwp-project-test", "Foreign workspace", "XWP").Scan(&otherWorkspaceID); err != nil {
+		t.Fatalf("insert foreign workspace: %v", err)
+	}
+	t.Cleanup(func() {
+		testPool.Exec(ctx, `DELETE FROM workspace WHERE id = $1`, otherWorkspaceID)
+	})
+
+	var foreignProjectID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO project (workspace_id, title, status, priority)
+		VALUES ($1, $2, 'planned', 'none')
+		RETURNING id
+	`, otherWorkspaceID, "Foreign project").Scan(&foreignProjectID); err != nil {
+		t.Fatalf("insert foreign project: %v", err)
+	}
+
+	w := httptest.NewRecorder()
+	req := newRequest("POST", "/api/issues?workspace_id="+testWorkspaceID, map[string]any{
+		"title":      "Should be rejected",
+		"project_id": foreignProjectID,
+	})
+	testHandler.CreateIssue(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("CreateIssue with foreign project: expected 400, got %d: %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "project not found in this workspace") {
+		t.Fatalf("CreateIssue with foreign project: expected boundary error message, got %s", w.Body.String())
+	}
+
+	var count int
+	if err := testPool.QueryRow(ctx,
+		`SELECT COUNT(*) FROM issue WHERE workspace_id = $1 AND title = $2`,
+		testWorkspaceID, "Should be rejected",
+	).Scan(&count); err != nil {
+		t.Fatalf("count query: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("rejected create still wrote a row (count=%d) — service-layer boundary check failed", count)
+	}
 }
 
 func TestCreateSubIssueInheritsParentProject(t *testing.T) {

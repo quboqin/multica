@@ -88,17 +88,17 @@ func (q *Queries) CreateChatSession(ctx context.Context, arg CreateChatSessionPa
 }
 
 const createChatTask = `-- name: CreateChatTask :one
-INSERT INTO agent_task_queue (agent_id, runtime_id, issue_id, status, priority, chat_session_id, requesting_user_id)
+INSERT INTO agent_task_queue (agent_id, runtime_id, issue_id, status, priority, chat_session_id, initiator_user_id)
 VALUES ($1, $2, NULL, 'queued', $3, $4, $5)
-RETURNING id, agent_id, issue_id, status, priority, dispatched_at, started_at, completed_at, result, error, created_at, context, runtime_id, session_id, work_dir, trigger_comment_id, chat_session_id, autopilot_run_id, attempt, max_attempts, parent_task_id, failure_reason, trigger_summary, force_fresh_session, is_leader_task, wait_reason, requesting_user_id
+RETURNING id, agent_id, issue_id, status, priority, dispatched_at, started_at, completed_at, result, error, created_at, context, runtime_id, session_id, work_dir, trigger_comment_id, chat_session_id, autopilot_run_id, attempt, max_attempts, parent_task_id, failure_reason, trigger_summary, force_fresh_session, is_leader_task, wait_reason, initiator_user_id
 `
 
 type CreateChatTaskParams struct {
-	AgentID          pgtype.UUID `json:"agent_id"`
-	RuntimeID        pgtype.UUID `json:"runtime_id"`
-	Priority         int32       `json:"priority"`
-	ChatSessionID    pgtype.UUID `json:"chat_session_id"`
-	RequestingUserID pgtype.UUID `json:"requesting_user_id"`
+	AgentID         pgtype.UUID `json:"agent_id"`
+	RuntimeID       pgtype.UUID `json:"runtime_id"`
+	Priority        int32       `json:"priority"`
+	ChatSessionID   pgtype.UUID `json:"chat_session_id"`
+	InitiatorUserID pgtype.UUID `json:"initiator_user_id"`
 }
 
 func (q *Queries) CreateChatTask(ctx context.Context, arg CreateChatTaskParams) (AgentTaskQueue, error) {
@@ -107,7 +107,7 @@ func (q *Queries) CreateChatTask(ctx context.Context, arg CreateChatTaskParams) 
 		arg.RuntimeID,
 		arg.Priority,
 		arg.ChatSessionID,
-		arg.RequestingUserID,
+		arg.InitiatorUserID,
 	)
 	var i AgentTaskQueue
 	err := row.Scan(
@@ -137,7 +137,7 @@ func (q *Queries) CreateChatTask(ctx context.Context, arg CreateChatTaskParams) 
 		&i.ForceFreshSession,
 		&i.IsLeaderTask,
 		&i.WaitReason,
-		&i.RequestingUserID,
+		&i.InitiatorUserID,
 	)
 	return i, err
 }
@@ -162,6 +162,28 @@ type DeleteChatSessionParams struct {
 func (q *Queries) DeleteChatSession(ctx context.Context, arg DeleteChatSessionParams) error {
 	_, err := q.db.Exec(ctx, deleteChatSession, arg.ID, arg.WorkspaceID)
 	return err
+}
+
+const deleteUserChatMessageByTask = `-- name: DeleteUserChatMessageByTask :one
+DELETE FROM chat_message
+WHERE task_id = $1 AND role = 'user'
+RETURNING id, chat_session_id, role, content, task_id, created_at, failure_reason, elapsed_ms
+`
+
+func (q *Queries) DeleteUserChatMessageByTask(ctx context.Context, taskID pgtype.UUID) (ChatMessage, error) {
+	row := q.db.QueryRow(ctx, deleteUserChatMessageByTask, taskID)
+	var i ChatMessage
+	err := row.Scan(
+		&i.ID,
+		&i.ChatSessionID,
+		&i.Role,
+		&i.Content,
+		&i.TaskID,
+		&i.CreatedAt,
+		&i.FailureReason,
+		&i.ElapsedMs,
+	)
+	return i, err
 }
 
 const getChatMessage = `-- name: GetChatMessage :one
@@ -241,7 +263,7 @@ func (q *Queries) GetChatSessionInWorkspace(ctx context.Context, arg GetChatSess
 }
 
 const getLastChatTaskSession = `-- name: GetLastChatTaskSession :one
-SELECT session_id, work_dir, runtime_id, requesting_user_id FROM agent_task_queue
+SELECT session_id, work_dir, runtime_id FROM agent_task_queue
 WHERE chat_session_id = $1
   AND (
     status = 'completed'
@@ -257,10 +279,9 @@ LIMIT 1
 `
 
 type GetLastChatTaskSessionRow struct {
-	SessionID        pgtype.Text `json:"session_id"`
-	WorkDir          pgtype.Text `json:"work_dir"`
-	RuntimeID        pgtype.UUID `json:"runtime_id"`
-	RequestingUserID pgtype.UUID `json:"requesting_user_id"`
+	SessionID pgtype.Text `json:"session_id"`
+	WorkDir   pgtype.Text `json:"work_dir"`
+	RuntimeID pgtype.UUID `json:"runtime_id"`
 }
 
 // Returns the most recent task in this chat session that managed to record a
@@ -273,11 +294,34 @@ type GetLastChatTaskSessionRow struct {
 func (q *Queries) GetLastChatTaskSession(ctx context.Context, chatSessionID pgtype.UUID) (GetLastChatTaskSessionRow, error) {
 	row := q.db.QueryRow(ctx, getLastChatTaskSession, chatSessionID)
 	var i GetLastChatTaskSessionRow
+	err := row.Scan(&i.SessionID, &i.WorkDir, &i.RuntimeID)
+	return i, err
+}
+
+const getMostRecentUserChatMessage = `-- name: GetMostRecentUserChatMessage :one
+SELECT id, chat_session_id, role, content, task_id, created_at, failure_reason, elapsed_ms FROM chat_message
+WHERE chat_session_id = $1 AND role = 'user'
+ORDER BY created_at DESC
+LIMIT 1
+`
+
+// Returns the most recent role='user' message in a session. Used by the
+// Lark `/issue` command parser: when the user types `/issue` with no
+// title, the spec falls back to "use the previous user message as the
+// title". Bot replies (role='assistant') are excluded — only human
+// input qualifies as a fallback title source.
+func (q *Queries) GetMostRecentUserChatMessage(ctx context.Context, chatSessionID pgtype.UUID) (ChatMessage, error) {
+	row := q.db.QueryRow(ctx, getMostRecentUserChatMessage, chatSessionID)
+	var i ChatMessage
 	err := row.Scan(
-		&i.SessionID,
-		&i.WorkDir,
-		&i.RuntimeID,
-		&i.RequestingUserID,
+		&i.ID,
+		&i.ChatSessionID,
+		&i.Role,
+		&i.Content,
+		&i.TaskID,
+		&i.CreatedAt,
+		&i.FailureReason,
+		&i.ElapsedMs,
 	)
 	return i, err
 }
@@ -305,6 +349,22 @@ func (q *Queries) GetPendingChatTask(ctx context.Context, chatSessionID pgtype.U
 	var i GetPendingChatTaskRow
 	err := row.Scan(&i.ID, &i.Status, &i.CreatedAt)
 	return i, err
+}
+
+const linkChatMessageToTask = `-- name: LinkChatMessageToTask :exec
+UPDATE chat_message
+SET task_id = $2
+WHERE id = $1 AND role = 'user'
+`
+
+type LinkChatMessageToTaskParams struct {
+	ID     pgtype.UUID `json:"id"`
+	TaskID pgtype.UUID `json:"task_id"`
+}
+
+func (q *Queries) LinkChatMessageToTask(ctx context.Context, arg LinkChatMessageToTaskParams) error {
+	_, err := q.db.Exec(ctx, linkChatMessageToTask, arg.ID, arg.TaskID)
+	return err
 }
 
 const listAllChatSessionsByCreator = `-- name: ListAllChatSessionsByCreator :many

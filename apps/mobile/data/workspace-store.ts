@@ -1,6 +1,6 @@
 /**
  * Mobile workspace store — Zustand. Holds the active workspace (id + slug)
- * and persists the slug so cold starts restore the last
+ * and persists the slug to SecureStore so cold starts restore the last
  * selection without re-prompting.
  *
  * The route is the source of truth for which workspace is active
@@ -15,11 +15,7 @@
  *   - Cleared on logout
  */
 import { create } from "zustand";
-import {
-  deletePersistentItem,
-  getPersistentItem,
-  setPersistentItem,
-} from "@/lib/persistent-storage";
+import * as SecureStore from "expo-secure-store";
 
 const SLUG_KEY = "multica_current_workspace_slug";
 
@@ -41,18 +37,18 @@ export const useWorkspaceStore = create<WorkspaceState>((set) => ({
 
   setCurrentWorkspace: async (id, slug) => {
     set({ currentWorkspaceId: id, currentWorkspaceSlug: slug });
-    await setPersistentItem(SLUG_KEY, slug);
+    await SecureStore.setItemAsync(SLUG_KEY, slug);
   },
 
   restoreSlug: async () => {
-    const slug = await getPersistentItem(SLUG_KEY);
+    const slug = await SecureStore.getItemAsync(SLUG_KEY);
     if (slug) set({ currentWorkspaceSlug: slug });
     return slug;
   },
 
   clear: async () => {
     set({ currentWorkspaceId: null, currentWorkspaceSlug: null });
-    await deletePersistentItem(SLUG_KEY);
+    await SecureStore.deleteItemAsync(SLUG_KEY);
   },
 }));
 

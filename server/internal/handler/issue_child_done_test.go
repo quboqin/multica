@@ -279,22 +279,6 @@ func countPendingTasksForAgent(t *testing.T, issueID, agentID string) int {
 	return n
 }
 
-func latestTaskRequestingUserID(t *testing.T, issueID, agentID string) string {
-	t.Helper()
-	var userID string
-	if err := testPool.QueryRow(context.Background(),
-		`SELECT COALESCE(requesting_user_id::text, '')
-		   FROM agent_task_queue
-		   WHERE issue_id = $1 AND agent_id = $2
-		   ORDER BY created_at DESC
-		   LIMIT 1`,
-		issueID, agentID,
-	).Scan(&userID); err != nil {
-		t.Fatalf("read latest task requesting_user_id: %v", err)
-	}
-	return userID
-}
-
 func countInboxItems(t *testing.T, recipientUserID, issueID string) int {
 	t.Helper()
 	var n int
@@ -339,9 +323,6 @@ func TestChildDoneMentionsParentAssignee_Agent(t *testing.T) {
 	}
 	if got := countPendingTasksForAgent(t, fx.parent.ID, agentID); got != 1 {
 		t.Errorf("expected 1 pending task for parent agent, got %d", got)
-	}
-	if got := latestTaskRequestingUserID(t, fx.parent.ID, agentID); got != testUserID {
-		t.Errorf("parent agent task requesting_user_id = %q, want %q", got, testUserID)
 	}
 }
 
@@ -404,9 +385,6 @@ func TestChildDoneMentionsParentAssignee_Squad(t *testing.T) {
 	}
 	if got := countPendingTasksForAgent(t, fx.parent.ID, sq.LeaderID); got != 1 {
 		t.Errorf("expected 1 pending leader task for parent squad, got %d", got)
-	}
-	if got := latestTaskRequestingUserID(t, fx.parent.ID, sq.LeaderID); got != testUserID {
-		t.Errorf("parent squad leader task requesting_user_id = %q, want %q", got, testUserID)
 	}
 }
 

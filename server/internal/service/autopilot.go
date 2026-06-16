@@ -238,11 +238,11 @@ func (s *AutopilotService) dispatchCreateIssue(ctx context.Context, ap db.Autopi
 		if leader.Visibility == "private" && !s.canCreatorAccessPrivateLeader(ctx, ap, leader) {
 			return fmt.Errorf("autopilot creator cannot access private squad leader")
 		}
-		if _, err := s.TaskSvc.EnqueueTaskForSquadLeaderByUser(ctx, issue, leader.ID, pgtype.UUID{}, autopilotRequestingUserID(ap)); err != nil {
+		if _, err := s.TaskSvc.EnqueueTaskForSquadLeader(ctx, issue, leader.ID, pgtype.UUID{}); err != nil {
 			return fmt.Errorf("enqueue squad leader task: %w", err)
 		}
 	} else {
-		if _, err := s.TaskSvc.EnqueueTaskForIssueByUser(ctx, issue, autopilotRequestingUserID(ap)); err != nil {
+		if _, err := s.TaskSvc.EnqueueTaskForIssue(ctx, issue); err != nil {
 			return fmt.Errorf("enqueue task for issue: %w", err)
 		}
 	}
@@ -272,13 +272,6 @@ type errDispatchSkipped struct {
 }
 
 func (e *errDispatchSkipped) Error() string { return e.reason }
-
-func autopilotRequestingUserID(ap db.Autopilot) pgtype.UUID {
-	if ap.CreatedByType == "member" && ap.CreatedByID.Valid {
-		return ap.CreatedByID
-	}
-	return pgtype.UUID{}
-}
 
 // dispatchRunOnly enqueues a direct agent task without creating an issue.
 //
@@ -313,11 +306,10 @@ func (s *AutopilotService) dispatchRunOnly(ctx context.Context, ap db.Autopilot,
 	}
 
 	task, err := s.Queries.CreateAutopilotTask(ctx, db.CreateAutopilotTaskParams{
-		AgentID:          agent.ID,
-		RuntimeID:        agent.RuntimeID,
-		Priority:         0,
-		AutopilotRunID:   run.ID,
-		RequestingUserID: autopilotRequestingUserID(ap),
+		AgentID:        agent.ID,
+		RuntimeID:      agent.RuntimeID,
+		Priority:       0,
+		AutopilotRunID: run.ID,
 		// Snapshot the autopilot title so task rows self-describe later
 		// without joining back to autopilot. Truncated for the same
 		// transmission-cost reason as comment-driven summaries.
@@ -444,6 +436,79 @@ func (s *AutopilotService) SyncRunFromTask(ctx context.Context, task db.AgentTas
 		s.captureAutopilotRunFailed(autopilot, updatedRun, updatedRun.Source, reason)
 		s.publishRunDone(wsID, updatedRun, "failed")
 	}
+}
+
+// SyncRunFromLinkedIssueTask fails a create_issue autopilot run when its
+// linked issue task fails terminally before the issue itself reaches a
+// terminal status. create_issue tasks are linked through issue_id rather than
+// autopilot_run_id, so SyncRunFromTask cannot see them directly. Without this
+// the run would hang in `issue_created` forever — and because the failure-rate
+// auto-pause monitor excludes issue_created/running runs, a consistently
+// failing autopilot would never trip the auto-pause either.
+//
+// "Terminal" means no task is still active for the issue. FailTask enqueues an
+// auto-retry for infra-shaped failures (timeout, runtime offline/recovery,
+// codex no-progress) BEFORE it broadcasts the failure event, so an active task
+// here means another attempt is already in flight — we wait for it instead of
+// failing the run prematurely. Once retries are exhausted (or the failure was
+// never retryable in the first place), the run fails carrying the task's reason.
+func (s *AutopilotService) SyncRunFromLinkedIssueTask(ctx context.Context, task db.AgentTaskQueue) {
+	if task.AutopilotRunID.Valid || !task.IssueID.Valid || task.Status != "failed" {
+		return
+	}
+	// Only create_issue runs link through issue_id (and their linked issue is
+	// always origin_type=autopilot by construction), so a hit here both
+	// identifies an in-flight create_issue run and bails the common case of
+	// ordinary issue/chat task failures after a single query.
+	run, err := s.Queries.GetAutopilotRunByIssue(ctx, task.IssueID)
+	if err != nil {
+		return // no active run linked to this issue
+	}
+	// A still-active task — typically the auto-retry FailTask just enqueued —
+	// means the dispatch isn't terminal yet; wait for the final attempt.
+	hasActive, err := s.Queries.HasActiveTaskForIssue(ctx, task.IssueID)
+	if err != nil {
+		slog.Warn("failed to check active tasks for autopilot issue failure",
+			"issue_id", util.UUIDToString(task.IssueID),
+			"task_id", util.UUIDToString(task.ID),
+			"error", err,
+		)
+		return
+	}
+	if hasActive {
+		return
+	}
+	autopilot, err := s.Queries.GetAutopilot(ctx, run.AutopilotID)
+	if err != nil {
+		return
+	}
+
+	reason := taskFailureReasonForAutopilotRun(task)
+	updatedRun, err := s.Queries.UpdateAutopilotRunFailed(ctx, db.UpdateAutopilotRunFailedParams{
+		ID:            run.ID,
+		FailureReason: pgtype.Text{String: reason, Valid: reason != ""},
+	})
+	if err != nil {
+		slog.Warn("failed to fail autopilot run from linked issue task",
+			"run_id", util.UUIDToString(run.ID),
+			"issue_id", util.UUIDToString(task.IssueID),
+			"task_id", util.UUIDToString(task.ID),
+			"error", err,
+		)
+		return
+	}
+	s.captureAutopilotRunFailed(autopilot, updatedRun, updatedRun.Source, reason)
+	s.publishRunDone(util.UUIDToString(autopilot.WorkspaceID), updatedRun, "failed")
+}
+
+func taskFailureReasonForAutopilotRun(task db.AgentTaskQueue) string {
+	if task.Error.Valid && strings.TrimSpace(task.Error.String) != "" {
+		return task.Error.String
+	}
+	if task.FailureReason.Valid && strings.TrimSpace(task.FailureReason.String) != "" {
+		return task.FailureReason.String
+	}
+	return "task failed"
 }
 
 // handleDispatchSkip recognises an errDispatchSkipped returned from a

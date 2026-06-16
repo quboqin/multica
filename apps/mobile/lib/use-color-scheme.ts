@@ -1,5 +1,5 @@
 /**
- * Wraps NativeWind's useColorScheme with persistent storage.
+ * Wraps NativeWind's useColorScheme with persistence in expo-secure-store.
  *
  * RNR's template uses NativeWind's hook directly (no persistence) — we extend
  * it so the user's Settings → Appearance choice survives app restarts.
@@ -18,10 +18,7 @@
  */
 import { useColorScheme as useNativewindColorScheme } from "nativewind";
 import { useEffect, useState } from "react";
-import {
-  getPersistentItem,
-  setPersistentItem,
-} from "@/lib/persistent-storage";
+import * as SecureStore from "expo-secure-store";
 
 const STORAGE_KEY = "theme-preference";
 
@@ -34,7 +31,7 @@ export function useColorScheme() {
 
   useEffect(() => {
     let cancelled = false;
-    getPersistentItem(STORAGE_KEY)
+    SecureStore.getItemAsync(STORAGE_KEY)
       .then((saved) => {
         if (cancelled) return;
         if (saved === "light" || saved === "dark" || saved === "system") {
@@ -53,7 +50,7 @@ export function useColorScheme() {
   const setPreference = (p: ThemePreference) => {
     setPreferenceState(p);
     applyScheme(p);
-    void setPersistentItem(STORAGE_KEY, p);
+    void SecureStore.setItemAsync(STORAGE_KEY, p);
   };
 
   return {

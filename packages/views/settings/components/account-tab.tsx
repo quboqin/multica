@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { Camera, Eye, EyeOff, Loader2, Save } from "lucide-react";
+import { Camera, Loader2, Save } from "lucide-react";
 import { Input } from "@multica/ui/components/ui/input";
 import { Label } from "@multica/ui/components/ui/label";
 import { Button } from "@multica/ui/components/ui/button";
@@ -29,16 +29,6 @@ export function AccountTab() {
   const [profileDescription, setProfileDescription] = useState(
     user?.profile_description ?? "",
   );
-  const [gitToken, setGitToken] = useState(user?.integration_tokens?.git_token ?? "");
-  const [feishuMcpToken, setFeishuMcpToken] = useState(
-    user?.integration_tokens?.feishu_mcp_token ?? "",
-  );
-  const [paonesToken, setPaonesToken] = useState(
-    user?.integration_tokens?.paones_token ?? "",
-  );
-  const [jingweiToken, setJingweiToken] = useState(
-    user?.integration_tokens?.jingwei_token ?? "",
-  );
   const [profileSaving, setProfileSaving] = useState(false);
   const { upload, uploading } = useFileUpload(api);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -46,10 +36,6 @@ export function AccountTab() {
   useEffect(() => {
     setProfileName(user?.name ?? "");
     setProfileDescription(user?.profile_description ?? "");
-    setGitToken(user?.integration_tokens?.git_token ?? "");
-    setFeishuMcpToken(user?.integration_tokens?.feishu_mcp_token ?? "");
-    setPaonesToken(user?.integration_tokens?.paones_token ?? "");
-    setJingweiToken(user?.integration_tokens?.jingwei_token ?? "");
   }, [user]);
 
   const descriptionTooLong = profileDescription.length > MAX_PROFILE_DESCRIPTION_LEN;
@@ -84,12 +70,6 @@ export function AccountTab() {
       const updated = await api.updateMe({
         name: profileName,
         profile_description: profileDescription,
-        integration_tokens: {
-          git_token: gitToken,
-          feishu_mcp_token: feishuMcpToken,
-          paones_token: paonesToken,
-          jingwei_token: jingweiToken,
-        },
       });
       setUser(updated);
       toast.success(t(($) => $.account.toast_profile_updated));
@@ -185,32 +165,6 @@ export function AccountTab() {
                 </p>
               ) : null}
             </div>
-            <div className="grid gap-4 border-t pt-4 sm:grid-cols-2">
-              <TokenInput
-                label="Git 权限 token"
-                value={gitToken}
-                onChange={setGitToken}
-                placeholder="请输入 token"
-              />
-              <TokenInput
-                label="飞书 MCP 的 token"
-                value={feishuMcpToken}
-                onChange={setFeishuMcpToken}
-                placeholder="请输入 token"
-              />
-              <TokenInput
-                label="PAones 发布 token"
-                value={paonesToken}
-                onChange={setPaonesToken}
-                placeholder="请输入 token"
-              />
-              <TokenInput
-                label="精卫 token"
-                value={jingweiToken}
-                onChange={setJingweiToken}
-                placeholder="请输入 token"
-              />
-            </div>
             <div className="flex items-center justify-end gap-2 pt-1">
               <Button
                 size="sm"
@@ -224,46 +178,6 @@ export function AccountTab() {
           </CardContent>
         </Card>
       </section>
-    </div>
-  );
-}
-
-function TokenInput({
-  label,
-  value,
-  onChange,
-  placeholder,
-}: {
-  label: string;
-  value: string;
-  onChange: (value: string) => void;
-  placeholder: string;
-}) {
-  const [visible, setVisible] = useState(false);
-
-  return (
-    <div>
-      <Label className="text-xs text-muted-foreground">{label}</Label>
-      <div className="relative mt-1">
-        <Input
-          type={visible ? "text" : "password"}
-          value={value}
-          onChange={(e) => onChange(e.target.value)}
-          placeholder={placeholder}
-          autoComplete="off"
-          className="pr-10"
-        />
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon"
-          className="absolute right-1 top-1/2 h-7 w-7 -translate-y-1/2 text-muted-foreground"
-          onClick={() => setVisible((next) => !next)}
-          aria-label={visible ? "隐藏 token" : "显示 token"}
-        >
-          {visible ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-        </Button>
-      </div>
     </div>
   );
 }

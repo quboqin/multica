@@ -63,7 +63,6 @@ type UserResponse struct {
 	OnboardingQuestionnaire json.RawMessage `json:"onboarding_questionnaire"`
 	StarterContentState     *string         `json:"starter_content_state"`
 	ProfileDescription      string          `json:"profile_description"`
-	IntegrationTokens       json.RawMessage `json:"integration_tokens"`
 	CreatedAt               string          `json:"created_at"`
 	UpdatedAt               string          `json:"updated_at"`
 }
@@ -82,10 +81,6 @@ func userToResponse(u db.User) UserResponse {
 	if len(q) == 0 {
 		q = []byte("{}")
 	}
-	integrationTokens := u.IntegrationTokens
-	if len(integrationTokens) == 0 {
-		integrationTokens = []byte("{}")
-	}
 	return UserResponse{
 		ID:                      uuidToString(u.ID),
 		Name:                    u.Name,
@@ -97,7 +92,6 @@ func userToResponse(u db.User) UserResponse {
 		OnboardingQuestionnaire: json.RawMessage(q),
 		StarterContentState:     textToPtr(u.StarterContentState),
 		ProfileDescription:      u.ProfileDescription,
-		IntegrationTokens:       json.RawMessage(integrationTokens),
 		CreatedAt:               timestampToString(u.CreatedAt),
 		UpdatedAt:               timestampToString(u.UpdatedAt),
 	}
@@ -442,11 +436,10 @@ func (h *Handler) GetMe(w http.ResponseWriter, r *http.Request) {
 }
 
 type UpdateMeRequest struct {
-	Name               *string            `json:"name"`
-	AvatarURL          *string            `json:"avatar_url"`
-	Language           *string            `json:"language"`
-	ProfileDescription *string            `json:"profile_description"`
-	IntegrationTokens  *map[string]string `json:"integration_tokens"`
+	Name               *string `json:"name"`
+	AvatarURL          *string `json:"avatar_url"`
+	Language           *string `json:"language"`
+	ProfileDescription *string `json:"profile_description"`
 	// IANA tz to pin; "" clears back to NULL; nil leaves untouched.
 	Timezone *string `json:"timezone"`
 }
@@ -703,23 +696,6 @@ func (h *Handler) UpdateMe(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		params.ProfileDescription = pgtype.Text{String: desc, Valid: true}
-	}
-	if req.IntegrationTokens != nil {
-		nextTokens := integrationTokenMapFromRaw(currentUser.IntegrationTokens)
-		for key, value := range *req.IntegrationTokens {
-			trimmedKey := strings.TrimSpace(key)
-			if trimmedKey == "" {
-				continue
-			}
-			nextTokens[trimmedKey] = strings.TrimSpace(value)
-		}
-		delete(nextTokens, "paihub_token")
-		tokens, err := json.Marshal(nextTokens)
-		if err != nil {
-			writeError(w, http.StatusBadRequest, "invalid integration_tokens")
-			return
-		}
-		params.IntegrationTokens = tokens
 	}
 
 	if req.Timezone != nil {

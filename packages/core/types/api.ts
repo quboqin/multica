@@ -1,5 +1,4 @@
 import type { Issue, IssueMetadata, IssueStatus, IssuePriority, IssueAssigneeType } from "./issue";
-import type { IntegrationTokens } from "./workspace";
 import type { MemberRole } from "./workspace";
 import type { Project } from "./project";
 
@@ -65,6 +64,9 @@ export interface ListIssuesParams {
    * majority on the client.
    */
   scheduled?: boolean;
+  date_field?: "created_at" | "updated_at";
+  date_start?: string;
+  date_end?: string;
   sort_by?: "position" | "priority" | "title" | "created_at" | "start_date" | "due_date";
   sort_direction?: "asc" | "desc";
 }
@@ -98,6 +100,9 @@ export interface ListGroupedIssuesParams {
   label_ids?: string[];
   group_assignee_type?: IssueAssigneeType | "none";
   group_assignee_id?: string;
+  date_field?: "created_at" | "updated_at";
+  date_start?: string;
+  date_end?: string;
   sort_by?: "position" | "priority" | "title" | "created_at" | "start_date" | "due_date";
   sort_direction?: "asc" | "desc";
 }
@@ -166,7 +171,6 @@ export interface UpdateMeRequest {
   profile_description?: string;
   /** IANA tz to pin; "" clears back to browser-tz; undefined leaves untouched. */
   timezone?: string;
-  integration_tokens?: IntegrationTokens;
 }
 
 export interface CreateMemberRequest {

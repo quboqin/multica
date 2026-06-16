@@ -9,7 +9,6 @@ import (
 	"log/slog"
 	"net/http"
 	"net/netip"
-	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -21,6 +20,7 @@ import (
 	"github.com/multica-ai/multica/server/internal/cloudruntime"
 	"github.com/multica-ai/multica/server/internal/daemonws"
 	"github.com/multica-ai/multica/server/internal/events"
+	"github.com/multica-ai/multica/server/internal/integrations/lark"
 	obsmetrics "github.com/multica-ai/multica/server/internal/metrics"
 	"github.com/multica-ai/multica/server/internal/middleware"
 	"github.com/multica-ai/multica/server/internal/realtime"
@@ -82,6 +82,8 @@ type Config struct {
 	// return 503 instead of attempting to dial a hard-coded private service.
 	CloudRuntimeFleetURL     string
 	CloudRuntimeFleetTimeout time.Duration
+	AttachmentDownloadMode   string
+	AttachmentDownloadURLTTL time.Duration
 }
 
 type cloudRuntimeProxy interface {
@@ -97,6 +99,7 @@ type Handler struct {
 	DaemonHub             *daemonws.Hub
 	Bus                   *events.Bus
 	TaskService           *service.TaskService
+	IssueService          *service.IssueService
 	AutopilotService      *service.AutopilotService
 	EmailService          *service.EmailService
 	UpdateStore           UpdateStore
@@ -119,7 +122,40 @@ type Handler struct {
 	WebhookRateLimiter   WebhookRateLimiter
 	WebhookIPRateLimiter WebhookRateLimiter
 	CloudRuntime         cloudRuntimeProxy
-	cfg                  Config
+	// Lark integration. All three are nil when the Lark master key
+	// (MULTICA_LARK_SECRET_KEY) is unset; the corresponding HTTP
+	// handlers return 503 in that case so a misconfigured self-host
+	// deployment surfaces a clear error instead of silently using a
+	// zero key. Wired in cmd/server/router.go after handler.New.
+	LarkInstallations *lark.InstallationService
+	LarkBindingTokens *lark.BindingTokenService
+	// LarkRegistration owns the device-flow install lifecycle: begin
+	// a registration session against accounts.feishu.cn, poll, and
+	// on success write lark_installation + the installer's
+	// lark_user_binding in one DB transaction. Nil when the at-rest
+	// key is unset or the RegistrationService failed to construct at
+	// boot.
+	LarkRegistration *lark.RegistrationService
+	// LarkAPIClient is the live transport that backs SendInteractiveCard,
+	// PatchInteractiveCard, SendBindingPromptCard, GetBotInfo. The
+	// router wires the real Lark HTTP client whenever
+	// MULTICA_LARK_SECRET_KEY is set; tests that need a no-op
+	// behaviour can swap in `lark.NewStubAPIClient(...)` directly. The
+	// UI consults IsConfigured() to decide whether to surface install
+	// entry points.
+	LarkAPIClient lark.APIClient
+	// LarkHub owns the per-installation supervisor goroutines that
+	// hold the §4.4 WS lease and run the EventConnector. Nil only
+	// when the master at-rest key (MULTICA_LARK_SECRET_KEY) is unset.
+	// The router constructs the Hub but does NOT call Run on it; the
+	// process owner (main.go) starts it under a long-running context
+	// and joins via WaitWithTimeout (bounded wait, fenced by
+	// ShutdownTimeout) during graceful shutdown so the lease renewer
+	// can yield cleanly when the DB is healthy without blocking
+	// process exit indefinitely if the pool is frozen — at worst the
+	// next replica waits the full TTL.
+	LarkHub *lark.Hub
+	cfg     Config
 }
 
 func New(queries *db.Queries, txStarter txStarter, hub *realtime.Hub, bus *events.Bus, emailService *service.EmailService, store storage.Storage, cfSigner *auth.CloudFrontSigner, analyticsClient analytics.Client, cfg Config, daemonHubs ...*daemonws.Hub) *Handler {
@@ -130,6 +166,15 @@ func New(queries *db.Queries, txStarter txStarter, hub *realtime.Hub, bus *event
 
 	if analyticsClient == nil {
 		analyticsClient = analytics.NoopClient{}
+	}
+	if mode, ok := normalizeAttachmentDownloadMode(cfg.AttachmentDownloadMode); ok {
+		cfg.AttachmentDownloadMode = string(mode)
+	} else {
+		slog.Warn("invalid ATTACHMENT_DOWNLOAD_MODE, using auto", "value", cfg.AttachmentDownloadMode)
+		cfg.AttachmentDownloadMode = string(attachmentDownloadModeAuto)
+	}
+	if cfg.AttachmentDownloadURLTTL <= 0 {
+		cfg.AttachmentDownloadURLTTL = defaultAttachmentDownloadURLTTL
 	}
 
 	var daemonHub *daemonws.Hub
@@ -147,6 +192,7 @@ func New(queries *db.Queries, txStarter txStarter, hub *realtime.Hub, bus *event
 		DaemonHub:             daemonHub,
 		Bus:                   bus,
 		TaskService:           taskSvc,
+		IssueService:          service.NewIssueService(queries, txStarter, bus, analyticsClient, taskSvc),
 		AutopilotService:      service.NewAutopilotService(queries, txStarter, bus, taskSvc),
 		EmailService:          emailService,
 		UpdateStore:           NewInMemoryUpdateStore(),
@@ -286,42 +332,6 @@ func isCheckViolation(err error) bool {
 
 func requestUserID(r *http.Request) string {
 	return r.Header.Get("X-User-ID")
-}
-
-func requestingUserIDFromActor(actorType, actorID string) pgtype.UUID {
-	if actorType != "member" || actorID == "" {
-		return pgtype.UUID{}
-	}
-	id, err := util.ParseUUID(actorID)
-	if err != nil {
-		return pgtype.UUID{}
-	}
-	return id
-}
-
-func (h *Handler) requestingUserIDFromRequest(r *http.Request, actorType, actorID string) pgtype.UUID {
-	if r.Header.Get("X-Actor-Source") == "task_token" {
-		taskID := strings.TrimSpace(r.Header.Get("X-Task-ID"))
-		if taskID == "" {
-			return pgtype.UUID{}
-		}
-		taskUUID, err := util.ParseUUID(taskID)
-		if err != nil {
-			return pgtype.UUID{}
-		}
-		task, err := h.Queries.GetAgentTask(r.Context(), taskUUID)
-		if err != nil {
-			return pgtype.UUID{}
-		}
-		return task.RequestingUserID
-	}
-	if userID := strings.TrimSpace(requestUserID(r)); userID != "" {
-		id, err := util.ParseUUID(userID)
-		if err == nil {
-			return id
-		}
-	}
-	return requestingUserIDFromActor(actorType, actorID)
 }
 
 // resolveActor determines whether the request is from an agent or a human member.

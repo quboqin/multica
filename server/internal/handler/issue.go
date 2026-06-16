@@ -8,19 +8,19 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 	"unicode"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgtype"
-	"github.com/multica-ai/multica/server/internal/analytics"
 	"github.com/multica-ai/multica/server/internal/issueguard"
-	"github.com/multica-ai/multica/server/internal/issueposition"
 	"github.com/multica-ai/multica/server/internal/logger"
-	obsmetrics "github.com/multica-ai/multica/server/internal/metrics"
 	"github.com/multica-ai/multica/server/internal/middleware"
+	"github.com/multica-ai/multica/server/internal/service"
 	"github.com/multica-ai/multica/server/internal/util"
 	"github.com/multica-ai/multica/server/pkg/agent"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
@@ -768,6 +768,10 @@ func (h *Handler) ListIssues(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	dateFilter, ok := parseIssueDateFilter(w, r.URL.Query())
+	if !ok {
+		return
+	}
 
 	// open_only=true returns all non-done/cancelled issues (no limit).
 	if r.URL.Query().Get("open_only") == "true" {
@@ -901,6 +905,7 @@ func (h *Handler) ListIssues(w http.ResponseWriter, r *http.Request) {
 	if metadataFilter != nil {
 		where = append(where, fmt.Sprintf("i.metadata @> %s::jsonb", addArg(string(metadataFilter))))
 	}
+	where = appendIssueDateFilter(where, addArg, dateFilter)
 	if involvesUserFilter.Valid {
 		ref := addArg(involvesUserFilter)
 		where = append(where, fmt.Sprintf(`(
@@ -1038,6 +1043,68 @@ LIMIT %s OFFSET %s`, whereSql, orderBy, limitRef, offsetRef)
 type issueActorFilter struct {
 	actorType string
 	actorID   pgtype.UUID
+}
+
+type issueDateFilter struct {
+	column string
+	start  time.Time
+	end    time.Time
+}
+
+func parseIssueDateFilter(w http.ResponseWriter, values url.Values) (*issueDateFilter, bool) {
+	field := strings.TrimSpace(values.Get("date_field"))
+	startRaw := strings.TrimSpace(values.Get("date_start"))
+	endRaw := strings.TrimSpace(values.Get("date_end"))
+	if field == "" && startRaw == "" && endRaw == "" {
+		return nil, true
+	}
+	if field == "" || startRaw == "" || endRaw == "" {
+		writeError(w, http.StatusBadRequest, "date_field, date_start, and date_end are required together")
+		return nil, false
+	}
+
+	column := ""
+	switch field {
+	case "created_at":
+		column = "created_at"
+	case "updated_at":
+		column = "updated_at"
+	default:
+		writeError(w, http.StatusBadRequest, "invalid date_field")
+		return nil, false
+	}
+
+	start, err := time.Parse(time.RFC3339Nano, startRaw)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid date_start")
+		return nil, false
+	}
+	end, err := time.Parse(time.RFC3339Nano, endRaw)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid date_end")
+		return nil, false
+	}
+	if !start.Before(end) {
+		writeError(w, http.StatusBadRequest, "date_start must be before date_end")
+		return nil, false
+	}
+
+	return &issueDateFilter{column: column, start: start, end: end}, true
+}
+
+func appendIssueDateFilter(where []string, addArg func(any) string, filter *issueDateFilter) []string {
+	if filter == nil {
+		return where
+	}
+	startRef := addArg(filter.start)
+	endRef := addArg(filter.end)
+	return append(where, fmt.Sprintf(
+		"i.%s >= %s AND i.%s < %s",
+		filter.column,
+		startRef,
+		filter.column,
+		endRef,
+	))
 }
 
 func splitCommaParam(raw string) []string {
@@ -1312,6 +1379,12 @@ func (h *Handler) ListGroupedIssues(w http.ResponseWriter, r *http.Request) {
 			addArg(labelIDs),
 		))
 	}
+
+	dateFilter, ok := parseIssueDateFilter(w, r.URL.Query())
+	if !ok {
+		return
+	}
+	where = appendIssueDateFilter(where, addArg, dateFilter)
 
 	if groupAssigneeType := r.URL.Query().Get("group_assignee_type"); groupAssigneeType != "" {
 		if groupAssigneeType == "none" {
@@ -1673,11 +1746,12 @@ func (h *Handler) ChildIssueProgress(w http.ResponseWriter, r *http.Request) {
 // keeping the sub-issue intent of the entry point regardless of whether
 // the user submits via manual or agent mode.
 type QuickCreateIssueRequest struct {
-	AgentID       string `json:"agent_id,omitempty"`
-	SquadID       string `json:"squad_id,omitempty"`
-	Prompt        string `json:"prompt"`
-	ProjectID     string `json:"project_id,omitempty"`
-	ParentIssueID string `json:"parent_issue_id,omitempty"`
+	AgentID       string   `json:"agent_id,omitempty"`
+	SquadID       string   `json:"squad_id,omitempty"`
+	Prompt        string   `json:"prompt"`
+	ProjectID     string   `json:"project_id,omitempty"`
+	ParentIssueID string   `json:"parent_issue_id,omitempty"`
+	AttachmentIDs []string `json:"attachment_ids,omitempty"`
 }
 
 // QuickCreateIssueResponse echoes the queued task id so the frontend can
@@ -1793,14 +1867,20 @@ func (h *Handler) QuickCreateIssue(w http.ResponseWriter, r *http.Request) {
 
 	// Daemon CLI version gate. The agent-side prompt + create-flow rely on
 	// behaviors introduced in MinQuickCreateCLIVersion (URL attachment
-	// handling, no-retry on partial failure). Older daemons either
-	// double-create issues on partial CLI failures or mishandle pasted
-	// screenshot URLs; fail closed before enqueuing rather than surface
-	// the breakage as an inbox failure twenty seconds later. Dev-built
+	// handling, quick-create attachment binding, no-retry on partial failure).
+	// Older daemons either double-create issues on partial CLI failures, drop
+	// attachment bindings, or mishandle pasted screenshot URLs; fail closed
+	// before enqueuing rather than surface the breakage as an inbox failure
+	// twenty seconds later. Dev-built
 	// daemons (git-describe shape) are exempted inside CheckMinCLIVersion
 	// so `make daemon` works without weakening staging or production.
 	if status, payload := h.checkQuickCreateDaemonVersion(r.Context(), agent.RuntimeID); status != 0 {
 		writeJSON(w, status, payload)
+		return
+	}
+
+	attachmentIDs, ok := parseUUIDSliceOrBadRequest(w, req.AttachmentIDs, "attachment_ids")
+	if !ok {
 		return
 	}
 
@@ -1845,7 +1925,7 @@ func (h *Handler) QuickCreateIssue(w http.ResponseWriter, r *http.Request) {
 		parentIssueUUID = pid
 	}
 
-	task, err := h.TaskService.EnqueueQuickCreateTask(r.Context(), wsUUID, requesterUUID, agentUUID, squadUUID, prompt, projectUUID, parentIssueUUID)
+	task, err := h.TaskService.EnqueueQuickCreateTask(r.Context(), wsUUID, requesterUUID, agentUUID, squadUUID, prompt, projectUUID, parentIssueUUID, attachmentIDs)
 	if err != nil {
 		slog.Warn("quick-create enqueue failed", append(logger.RequestAttrs(r), "error", err)...)
 		writeError(w, http.StatusInternalServerError, "failed to enqueue quick-create task")
@@ -1889,7 +1969,7 @@ func (h *Handler) isRuntimeOnline(ctx context.Context, runtimeID pgtype.UUID) bo
 //	422 {
 //	  "code": "daemon_version_unsupported",
 //	  "current_version": "0.2.18" | "",
-//	  "min_version":     "0.2.20",
+//	  "min_version":     "0.2.21",
 //	  "runtime_id":      "<uuid>"
 //	}
 func (h *Handler) checkQuickCreateDaemonVersion(ctx context.Context, runtimeID pgtype.UUID) (int, map[string]any) {
@@ -2036,19 +2116,11 @@ func (h *Handler) CreateIssue(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		parentIssueID = id
-		// Validate parent exists in the same workspace.
-		parent, err := h.Queries.GetIssueInWorkspace(r.Context(), db.GetIssueInWorkspaceParams{
-			ID:          parentIssueID,
-			WorkspaceID: wsUUID,
-		})
-		if err != nil || !parent.ID.Valid {
-			writeError(w, http.StatusBadRequest, "parent issue not found in this workspace")
-			return
-		}
-		if req.ProjectID == nil {
-			projectID = parent.ProjectID
-		}
 	}
+	// Cross-workspace parent / project existence is enforced inside
+	// IssueService.Create (atomically with the create), so every entry
+	// point — HTTP, Lark, future MCP — gets the same boundary check
+	// without duplicating the lookup here.
 
 	attachmentIDs, ok := parseUUIDSliceOrBadRequest(w, req.AttachmentIDs, "attachment_ids")
 	if !ok {
@@ -2073,40 +2145,6 @@ func (h *Handler) CreateIssue(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		dueDate = d
-	}
-
-	// Use a transaction to atomically guard against active duplicates,
-	// increment the workspace issue counter, and create the issue.
-	tx, err := h.TxStarter.Begin(r.Context())
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to create issue")
-		return
-	}
-	defer tx.Rollback(r.Context())
-
-	qtx := h.Queries.WithTx(tx)
-	duplicate, foundDuplicate, err := issueguard.LockAndFindActiveDuplicate(r.Context(), qtx, wsUUID, projectID, parentIssueID, req.Title, req.AllowDuplicate)
-	if err != nil {
-		slog.Warn("duplicate issue guard failed", append(logger.RequestAttrs(r), "error", err, "workspace_id", workspaceID)...)
-		writeError(w, http.StatusInternalServerError, "failed to create issue")
-		return
-	}
-	if foundDuplicate {
-		prefix := h.getIssuePrefix(r.Context(), duplicate.WorkspaceID)
-		existing := issueToResponse(duplicate, prefix)
-		writeJSON(w, http.StatusConflict, map[string]any{
-			"code":  "active_duplicate_issue",
-			"error": duplicateIssueMessage(existing),
-			"issue": existing,
-		})
-		return
-	}
-
-	issueNumber, err := qtx.IncrementIssueCounter(r.Context(), wsUUID)
-	if err != nil {
-		slog.Warn("increment issue counter failed", append(logger.RequestAttrs(r), "error", err, "workspace_id", workspaceID)...)
-		writeError(w, http.StatusInternalServerError, "failed to create issue")
-		return
 	}
 
 	// Determine creator identity: agent (via X-Agent-ID header) or member.
@@ -2138,52 +2176,78 @@ func (h *Handler) CreateIssue(w http.ResponseWriter, r *http.Request) {
 		originID = oid
 	}
 
-	newPosition, err := issueposition.NextTopPosition(r.Context(), tx, wsUUID, status)
-	if err != nil {
-		slog.Warn("get next issue position failed", append(logger.RequestAttrs(r), "error", err, "workspace_id", workspaceID, "status", status)...)
-		writeError(w, http.StatusInternalServerError, "failed to create issue")
-		return
+	// Prefix is workspace-level; pre-compute once so both the broadcast
+	// payload builder and the HTTP response share the same value.
+	prefix := h.getIssuePrefix(r.Context(), wsUUID)
+
+	// Analytics agent ID: assignee agent when the issue is being assigned
+	// to an agent, otherwise the creator agent for agent-authored issues.
+	// Resolved here (not in the service) because creator identity is HTTP-side.
+	analyticsAgentID := ""
+	if assigneeType.Valid && assigneeType.String == "agent" {
+		analyticsAgentID = uuidToString(assigneeID)
+	}
+	if creatorType == "agent" && analyticsAgentID == "" {
+		analyticsAgentID = actualCreatorID
 	}
 
-	var issue db.Issue
-	if originType.Valid {
-		issue, err = qtx.CreateIssueWithOrigin(r.Context(), db.CreateIssueWithOriginParams{
-			WorkspaceID:   wsUUID,
-			Title:         req.Title,
-			Description:   ptrToText(req.Description),
-			Status:        status,
-			Priority:      priority,
-			AssigneeType:  assigneeType,
-			AssigneeID:    assigneeID,
-			CreatorType:   creatorType,
-			CreatorID:     parseUUID(actualCreatorID),
-			ParentIssueID: parentIssueID,
-			Position:      newPosition,
-			StartDate:     startDate,
-			DueDate:       dueDate,
-			Number:        issueNumber,
-			ProjectID:     projectID,
-			OriginType:    originType,
-			OriginID:      originID,
+	buildAttachmentResponses := func(atts []db.Attachment) []AttachmentResponse {
+		if len(atts) == 0 {
+			return nil
+		}
+		out := make([]AttachmentResponse, len(atts))
+		for i, a := range atts {
+			out[i] = h.attachmentToResponse(a)
+		}
+		return out
+	}
+
+	res, err := h.IssueService.Create(r.Context(), service.IssueCreateParams{
+		WorkspaceID:    wsUUID,
+		Title:          req.Title,
+		Description:    ptrToText(req.Description),
+		Status:         status,
+		Priority:       priority,
+		AssigneeType:   assigneeType,
+		AssigneeID:     assigneeID,
+		CreatorType:    creatorType,
+		CreatorID:      parseUUID(actualCreatorID),
+		ParentIssueID:  parentIssueID,
+		ProjectID:      projectID,
+		StartDate:      startDate,
+		DueDate:        dueDate,
+		OriginType:     originType,
+		OriginID:       originID,
+		AttachmentIDs:  attachmentIDs,
+		AllowDuplicate: req.AllowDuplicate,
+	}, service.IssueCreateOpts{
+		ActorID:          actualCreatorID,
+		AnalyticsAgentID: analyticsAgentID,
+		Platform:         func() string { p, _, _ := middleware.ClientMetadataFromContext(r.Context()); return p }(),
+		BroadcastPayload: func(issue db.Issue, atts []db.Attachment) map[string]any {
+			payload := issueToResponse(issue, prefix)
+			payload.Attachments = buildAttachmentResponses(atts)
+			return map[string]any{"issue": payload}
+		},
+	})
+
+	if errors.Is(err, service.ErrActiveDuplicate) {
+		dup := *res.DuplicateIssue
+		existing := issueToResponse(dup, h.getIssuePrefix(r.Context(), dup.WorkspaceID))
+		writeJSON(w, http.StatusConflict, map[string]any{
+			"code":  "active_duplicate_issue",
+			"error": duplicateIssueMessage(existing),
+			"issue": existing,
 		})
-	} else {
-		issue, err = qtx.CreateIssue(r.Context(), db.CreateIssueParams{
-			WorkspaceID:   wsUUID,
-			Title:         req.Title,
-			Description:   ptrToText(req.Description),
-			Status:        status,
-			Priority:      priority,
-			AssigneeType:  assigneeType,
-			AssigneeID:    assigneeID,
-			CreatorType:   creatorType,
-			CreatorID:     parseUUID(actualCreatorID),
-			ParentIssueID: parentIssueID,
-			Position:      newPosition,
-			StartDate:     startDate,
-			DueDate:       dueDate,
-			Number:        issueNumber,
-			ProjectID:     projectID,
-		})
+		return
+	}
+	if errors.Is(err, service.ErrParentIssueNotFound) {
+		writeError(w, http.StatusBadRequest, "parent issue not found in this workspace")
+		return
+	}
+	if errors.Is(err, service.ErrProjectNotFound) {
+		writeError(w, http.StatusBadRequest, "project not found in this workspace")
+		return
 	}
 	if err != nil {
 		slog.Warn("create issue failed", append(logger.RequestAttrs(r), "error", err, "workspace_id", workspaceID)...)
@@ -2191,89 +2255,11 @@ func (h *Handler) CreateIssue(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := tx.Commit(r.Context()); err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to create issue")
-		return
-	}
-
-	// Link any pre-uploaded attachments to this issue.
-	if len(attachmentIDs) > 0 {
-		h.linkAttachmentsByIssueIDs(r.Context(), issue.ID, issue.WorkspaceID, attachmentIDs)
-	}
-
-	prefix := h.getIssuePrefix(r.Context(), issue.WorkspaceID)
-	resp := issueToResponse(issue, prefix)
-
-	// Fetch linked attachments so they appear in the response.
-	if len(attachmentIDs) > 0 {
-		attachments, err := h.Queries.ListAttachmentsByIssue(r.Context(), db.ListAttachmentsByIssueParams{
-			IssueID:     issue.ID,
-			WorkspaceID: issue.WorkspaceID,
-		})
-		if err == nil && len(attachments) > 0 {
-			resp.Attachments = make([]AttachmentResponse, len(attachments))
-			for i, a := range attachments {
-				resp.Attachments[i] = h.attachmentToResponse(a)
-			}
-		}
-	}
-
+	issue := res.Issue
 	slog.Info("issue created", append(logger.RequestAttrs(r), "issue_id", uuidToString(issue.ID), "title", issue.Title, "status", issue.Status, "workspace_id", workspaceID)...)
-	h.publish(protocol.EventIssueCreated, workspaceID, creatorType, actualCreatorID, map[string]any{"issue": resp})
-	analyticsActorID := actualCreatorID
-	analyticsAgentID := ""
-	if issue.AssigneeType.Valid && issue.AssigneeType.String == "agent" {
-		analyticsAgentID = uuidToString(issue.AssigneeID)
-	}
-	if creatorType == "agent" {
-		analyticsActorID = "agent:" + actualCreatorID
-		if analyticsAgentID == "" {
-			analyticsAgentID = actualCreatorID
-		}
-	}
-	analyticsSource := analytics.SourceManual
-	analyticsTaskID := ""
-	analyticsAutopilotRunID := ""
-	if originType.Valid {
-		switch originType.String {
-		case "quick_create":
-			analyticsSource = analytics.SourceManual
-			analyticsTaskID = uuidToString(originID)
-		case "autopilot":
-			analyticsSource = analytics.SourceAutopilot
-			analyticsAutopilotRunID = uuidToString(originID)
-		default:
-			slog.Warn("analytics: unknown issue origin type",
-				"origin_type", originType.String,
-				"issue_id", uuidToString(issue.ID),
-			)
-		}
-	}
-	platform, _, _ := middleware.ClientMetadataFromContext(r.Context())
-	obsmetrics.RecordEvent(h.Analytics, h.Metrics, analytics.IssueCreated(
-		analyticsActorID,
-		workspaceID,
-		uuidToString(issue.ID),
-		analyticsAgentID,
-		analyticsTaskID,
-		analyticsAutopilotRunID,
-		analyticsSource,
-		platform,
-	))
 
-	// Enqueue agent task when an agent-assigned issue is created.
-	if issue.AssigneeType.Valid && issue.AssigneeID.Valid {
-		requestingUserID := h.requestingUserIDFromRequest(r, creatorType, actualCreatorID)
-		if h.shouldEnqueueAgentTask(r.Context(), issue) {
-			h.TaskService.EnqueueTaskForIssueByUser(r.Context(), issue, requestingUserID)
-		}
-		// Squad assigned at creation: trigger the squad leader (skipping
-		// backlog, same parking-lot semantics as agent assignment).
-		if h.shouldEnqueueSquadLeaderOnAssign(r.Context(), issue) {
-			h.enqueueSquadLeaderTask(r.Context(), issue, pgtype.UUID{}, creatorType, actualCreatorID, requestingUserID)
-		}
-	}
-
+	resp := issueToResponse(issue, prefix)
+	resp.Attachments = buildAttachmentResponses(res.Attachments)
 	writeJSON(w, http.StatusCreated, resp)
 }
 
@@ -2515,16 +2501,15 @@ func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
 	// Reconcile task queue when assignee changes.
 	if assigneeChanged {
 		h.TaskService.CancelTasksForIssue(r.Context(), issue.ID)
-		requestingUserID := h.requestingUserIDFromRequest(r, actorType, actorID)
 
 		if h.shouldEnqueueAgentTask(r.Context(), issue) {
-			h.TaskService.EnqueueTaskForIssueByUser(r.Context(), issue, requestingUserID)
+			h.TaskService.EnqueueTaskForIssue(r.Context(), issue)
 		}
 
 		// Squad assign: trigger the squad leader, respecting the backlog
 		// parking-lot rule used by agent assignment.
 		if h.shouldEnqueueSquadLeaderOnAssign(r.Context(), issue) {
-			h.enqueueSquadLeaderTask(r.Context(), issue, pgtype.UUID{}, actorType, actorID, requestingUserID)
+			h.enqueueSquadLeaderTask(r.Context(), issue, pgtype.UUID{}, actorType, actorID)
 		}
 	}
 
@@ -2541,12 +2526,11 @@ func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
 	if statusChanged && !assigneeChanged &&
 		prevIssue.Status == "backlog" && issue.Status != "done" && issue.Status != "cancelled" &&
 		!h.isAgentRunningOnIssue(r, actorType, issue) {
-		requestingUserID := h.requestingUserIDFromRequest(r, actorType, actorID)
 		if h.isAgentAssigneeReady(r.Context(), issue) {
-			h.TaskService.EnqueueTaskForIssueByUser(r.Context(), issue, requestingUserID)
+			h.TaskService.EnqueueTaskForIssue(r.Context(), issue)
 		}
 		if h.isSquadLeaderReady(r.Context(), issue) {
-			h.enqueueSquadLeaderTask(r.Context(), issue, pgtype.UUID{}, actorType, actorID, requestingUserID)
+			h.enqueueSquadLeaderTask(r.Context(), issue, pgtype.UUID{}, actorType, actorID)
 		}
 	}
 
@@ -2563,7 +2547,7 @@ func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
 	// loops in PR #2918). The helper guards on transition + parent state and
 	// fails best-effort.
 	if statusChanged {
-		h.notifyParentOfChildDone(r.Context(), prevIssue, issue, actorType, actorID, h.requestingUserIDFromRequest(r, actorType, actorID))
+		h.notifyParentOfChildDone(r.Context(), prevIssue, issue, actorType, actorID)
 	}
 
 	writeJSON(w, http.StatusOK, resp)
@@ -2659,12 +2643,12 @@ func (h *Handler) shouldEnqueueAgentTask(ctx context.Context, issue db.Issue) bo
 // conversational and can happen at any stage, including after completion
 // (e.g. follow-up questions on a done issue).
 //
-// Mirrors the private-agent gate that enqueueMentionedAgentTasks applies on the
+// Mirrors the private-agent gate that computeMentionedAgentCommentTriggers applies on the
 // @mention path: once an owner/admin assigns a private agent to an issue, the
 // agent's UUID is "welded" onto the issue and remains visible to every member
 // who can view it. Without this check any of those members could dispatch a new
 // task to the private agent simply by commenting (#3300).
-func (h *Handler) shouldEnqueueOnComment(ctx context.Context, issue db.Issue, actorType, actorID string) bool {
+func (h *Handler) shouldEnqueueOnComment(ctx context.Context, issue db.Issue, actorType, actorID string, opts commentTriggerComputeOptions) bool {
 	if !issue.AssigneeType.Valid || issue.AssigneeType.String != "agent" || !issue.AssigneeID.Valid {
 		return false
 	}
@@ -2678,10 +2662,7 @@ func (h *Handler) shouldEnqueueOnComment(ctx context.Context, issue db.Issue, ac
 	// Coalescing queue: allow enqueue when a task is running (so the agent
 	// picks up new comments on the next cycle) but skip if this agent already
 	// has a pending task (natural dedup for rapid-fire comments).
-	hasPending, err := h.Queries.HasPendingTaskForIssueAndAgent(ctx, db.HasPendingTaskForIssueAndAgentParams{
-		IssueID: issue.ID,
-		AgentID: issue.AssigneeID,
-	})
+	hasPending, err := h.hasPendingTaskForIssueAndAgent(ctx, issue.ID, issue.AssigneeID, opts)
 	if err != nil || hasPending {
 		return false
 	}
@@ -3011,12 +2992,11 @@ func (h *Handler) BatchUpdateIssues(w http.ResponseWriter, r *http.Request) {
 
 		if assigneeChanged {
 			h.TaskService.CancelTasksForIssue(r.Context(), issue.ID)
-			requestingUserID := h.requestingUserIDFromRequest(r, actorType, actorID)
 			if h.shouldEnqueueAgentTask(r.Context(), issue) {
-				h.TaskService.EnqueueTaskForIssueByUser(r.Context(), issue, requestingUserID)
+				h.TaskService.EnqueueTaskForIssue(r.Context(), issue)
 			}
 			if h.shouldEnqueueSquadLeaderOnAssign(r.Context(), issue) {
-				h.enqueueSquadLeaderTask(r.Context(), issue, pgtype.UUID{}, actorType, actorID, requestingUserID)
+				h.enqueueSquadLeaderTask(r.Context(), issue, pgtype.UUID{}, actorType, actorID)
 			}
 		}
 
@@ -3027,12 +3007,11 @@ func (h *Handler) BatchUpdateIssues(w http.ResponseWriter, r *http.Request) {
 		if statusChanged && !assigneeChanged &&
 			prevIssue.Status == "backlog" && issue.Status != "done" && issue.Status != "cancelled" &&
 			!h.isAgentRunningOnIssue(r, actorType, issue) {
-			requestingUserID := h.requestingUserIDFromRequest(r, actorType, actorID)
 			if h.isAgentAssigneeReady(r.Context(), issue) {
-				h.TaskService.EnqueueTaskForIssueByUser(r.Context(), issue, requestingUserID)
+				h.TaskService.EnqueueTaskForIssue(r.Context(), issue)
 			}
 			if h.isSquadLeaderReady(r.Context(), issue) {
-				h.enqueueSquadLeaderTask(r.Context(), issue, pgtype.UUID{}, actorType, actorID, requestingUserID)
+				h.enqueueSquadLeaderTask(r.Context(), issue, pgtype.UUID{}, actorType, actorID)
 			}
 		}
 
@@ -3044,7 +3023,7 @@ func (h *Handler) BatchUpdateIssues(w http.ResponseWriter, r *http.Request) {
 		// Platform-driven parent notification, mirrored from UpdateIssue
 		// (MUL-2538). Best-effort; failure does not abort the batch.
 		if statusChanged {
-			h.notifyParentOfChildDone(r.Context(), prevIssue, issue, actorType, actorID, h.requestingUserIDFromRequest(r, actorType, actorID))
+			h.notifyParentOfChildDone(r.Context(), prevIssue, issue, actorType, actorID)
 		}
 
 		updated++

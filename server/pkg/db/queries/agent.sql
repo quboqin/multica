@@ -136,14 +136,13 @@ ORDER BY created_at DESC;
 -- name: CreateAgentTask :one
 INSERT INTO agent_task_queue (
     agent_id, runtime_id, issue_id, status, priority, trigger_comment_id,
-    trigger_summary, force_fresh_session, is_leader_task, requesting_user_id
+    trigger_summary, force_fresh_session, is_leader_task
 )
 VALUES (
     $1, $2, $3, 'queued', $4, sqlc.narg(trigger_comment_id),
     sqlc.narg(trigger_summary),
     COALESCE(sqlc.narg('force_fresh_session')::boolean, FALSE),
-    COALESCE(sqlc.narg('is_leader_task')::boolean, FALSE),
-    sqlc.narg('requesting_user_id')
+    COALESCE(sqlc.narg('is_leader_task')::boolean, FALSE)
 )
 RETURNING *;
 
@@ -151,8 +150,8 @@ RETURNING *;
 -- Quick-create tasks have no issue / chat / autopilot link; the entire job
 -- description (prompt, requester, workspace) lives in context JSONB. The
 -- daemon detects this variant via context.type == "quick_create".
-INSERT INTO agent_task_queue (agent_id, runtime_id, issue_id, status, priority, context, requesting_user_id)
-VALUES ($1, $2, NULL, 'queued', $3, $4, $5)
+INSERT INTO agent_task_queue (agent_id, runtime_id, issue_id, status, priority, context)
+VALUES ($1, $2, NULL, 'queued', $3, $4)
 RETURNING *;
 
 -- name: LinkTaskToIssue :exec
@@ -180,8 +179,7 @@ INSERT INTO agent_task_queue (
     agent_id, runtime_id, issue_id, chat_session_id, autopilot_run_id,
     status, priority, trigger_comment_id, trigger_summary, context,
     session_id, work_dir,
-    attempt, max_attempts, parent_task_id, force_fresh_session, is_leader_task,
-    requesting_user_id
+    attempt, max_attempts, parent_task_id, force_fresh_session, is_leader_task
 )
 SELECT
     p.agent_id, p.runtime_id, p.issue_id, p.chat_session_id, p.autopilot_run_id,
@@ -190,8 +188,7 @@ SELECT
     CASE WHEN p.failure_reason IS NOT DISTINCT FROM 'codex_semantic_inactivity' THEN NULL ELSE p.work_dir END,
     p.attempt + 1, p.max_attempts, p.id,
     p.failure_reason IS NOT DISTINCT FROM 'codex_semantic_inactivity',
-    p.is_leader_task,
-    p.requesting_user_id
+    p.is_leader_task
 FROM agent_task_queue p
 WHERE p.id = $1
 RETURNING *;
@@ -390,7 +387,7 @@ RETURNING *;
 -- error text. Migration 079 backfills the failure_reason column itself,
 -- so observability stays accurate; this clause guarantees session resume
 -- never picks up a bad session even when failure_reason hasn't caught up.
-SELECT session_id, work_dir, runtime_id, requesting_user_id FROM agent_task_queue
+SELECT session_id, work_dir, runtime_id FROM agent_task_queue
 WHERE agent_id = $1 AND issue_id = $2
   AND (
     status = 'completed'
@@ -549,6 +546,16 @@ WHERE issue_id = $1 AND status IN ('queued', 'dispatched');
 -- for the given issue. Used by @mention trigger dedup.
 SELECT count(*) > 0 AS has_pending FROM agent_task_queue
 WHERE issue_id = $1 AND agent_id = $2 AND status IN ('queued', 'dispatched');
+
+-- name: HasPendingTaskForIssueAndAgentExcludingTriggerComment :one
+-- Same as HasPendingTaskForIssueAndAgent, but ignores tasks triggered by the
+-- current comment being edited. Edit preview needs this because save cancels
+-- that comment's old queued/dispatched tasks before re-computing triggers.
+SELECT count(*) > 0 AS has_pending FROM agent_task_queue
+WHERE issue_id = @issue_id
+  AND agent_id = @agent_id
+  AND status IN ('queued', 'dispatched')
+  AND trigger_comment_id IS DISTINCT FROM @exclude_trigger_comment_id::uuid;
 
 -- name: GetLatestTaskIsLeaderForIssueAndAgent :one
 -- Returns the is_leader_task flag of the agent's most recent task on this

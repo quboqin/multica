@@ -8,17 +8,6 @@ import { Textarea } from "@multica/ui/components/ui/textarea";
 import { toast } from "sonner";
 import { useT } from "../../../i18n";
 
-const USER_CREDENTIAL_PLACEHOLDERS = [
-  "MULTICA_INTEGRATION_FEISHU_MCP_TOKEN",
-  "MULTICA_INTEGRATION_GIT_TOKEN",
-  "MULTICA_INTEGRATION_PAONES_TOKEN",
-  "MULTICA_INTEGRATION_JINGWEI_TOKEN",
-] as const;
-
-function formatPlaceholder(name: string): string {
-  return "$" + "{" + name + "}";
-}
-
 // `null` and the empty string are the two ways the user can mean "no
 // config" — the server stores either as a NULL column and the daemon
 // falls back to the runtime CLI default at launch. We normalise to
@@ -143,20 +132,9 @@ export function McpConfigTab({
   return (
     <div className="flex h-full flex-col space-y-3">
       <div className="flex items-start justify-between gap-3">
-        <div className="space-y-2 text-xs text-muted-foreground">
-          <p>{t(($) => $.tab_body.mcp_config.intro)}</p>
-          <p>{t(($) => $.tab_body.mcp_config.credential_hint)}</p>
-          <div className="flex flex-wrap gap-1.5">
-            {USER_CREDENTIAL_PLACEHOLDERS.map((name) => (
-              <code
-                key={name}
-                className="rounded bg-muted px-1.5 py-0.5 font-mono text-[10px] text-foreground"
-              >
-                {formatPlaceholder(name)}
-              </code>
-            ))}
-          </div>
-        </div>
+        <p className="text-xs text-muted-foreground">
+          {t(($) => $.tab_body.mcp_config.intro)}
+        </p>
         {trimmed !== "" && (
           <Button
             type="button"

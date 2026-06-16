@@ -18,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/multica-ai/multica/server/internal/daemon/execenv"
 	"github.com/multica-ai/multica/server/internal/daemon/repocache"
 	"github.com/multica-ai/multica/server/pkg/agent"
 )
@@ -77,6 +78,85 @@ func TestTriggerRestart_BrewLinuxCellarDeleted(t *testing.T) {
 	}
 	if got := d.RestartBinary(); got == deletedCellarPath {
 		t.Fatalf("restart binary used deleted Cellar path %q", got)
+	}
+}
+
+func TestIsBlockedEnvKey(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		key  string
+		want bool
+	}{
+		{key: "MULTICA_TOKEN", want: true},
+		{key: "multica_runtime_id", want: true},
+		{key: "HOME", want: true},
+		{key: "PATH", want: true},
+		{key: "CODEX_HOME", want: true},
+		{key: "CURSOR_DATA_DIR", want: true},
+		{key: "cursor_data_dir", want: true},
+		{key: "OPENCLAW_CONFIG_PATH", want: true},
+		{key: "OPENCLAW_INCLUDE_ROOTS", want: true},
+		{key: "ANTHROPIC_API_KEY", want: false},
+		{key: "CURSOR_AGENT", want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.key, func(t *testing.T) {
+			t.Parallel()
+			if got := isBlockedEnvKey(tt.key); got != tt.want {
+				t.Fatalf("isBlockedEnvKey(%q) = %v, want %v", tt.key, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestTaskScopedAuthToken(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		token   string
+		want    string
+		wantErr string
+	}{
+		{
+			name:    "missing token fails closed",
+			wantErr: "server did not provide task-scoped auth token",
+		},
+		{
+			name:    "member token fails closed",
+			token:   "mul_member_token",
+			wantErr: "server provided non-task-scoped auth token",
+		},
+		{
+			name:  "task token accepted",
+			token: " mat_task_token ",
+			want:  "mat_task_token",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, err := taskScopedAuthToken(Task{AuthToken: tt.token})
+			if tt.wantErr != "" {
+				if err == nil {
+					t.Fatalf("taskScopedAuthToken() error = nil, want %q", tt.wantErr)
+				}
+				if err.Error() != tt.wantErr {
+					t.Fatalf("taskScopedAuthToken() error = %q, want %q", err.Error(), tt.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("taskScopedAuthToken(): %v", err)
+			}
+			if got != tt.want {
+				t.Fatalf("taskScopedAuthToken() = %q, want %q", got, tt.want)
+			}
+		})
 	}
 }
 
@@ -703,8 +783,12 @@ func TestShouldInterruptAgent(t *testing.T) {
 		want   bool
 	}{
 		{name: "status cancelled", status: "cancelled", err: nil, want: true},
+		{name: "status failed (offline sweeper)", status: "failed", err: nil, want: true},
+		{name: "status completed (finished elsewhere)", status: "completed", err: nil, want: true},
 		{name: "task deleted (404)", status: "", err: notFound, want: true},
 		{name: "running normally", status: "running", err: nil, want: false},
+		{name: "waiting_local_directory keeps running", status: "waiting_local_directory", err: nil, want: false},
+		{name: "dispatched keeps running", status: "dispatched", err: nil, want: false},
 		{name: "transient 5xx is not a cancel signal", status: "", err: transient, want: false},
 		{name: "no information yet", status: "", err: nil, want: false},
 	}
@@ -892,20 +976,69 @@ func newRepoReadyTestDaemon(t *testing.T, handler http.HandlerFunc) *Daemon {
 	return d
 }
 
-type staticRepoCache struct {
-	paths map[string]string
-}
+func TestGateResumeToReusedWorkdir(t *testing.T) {
+	t.Parallel()
 
-func (c *staticRepoCache) Lookup(workspaceID, url string) string {
-	return c.paths[workspaceID+"\x00"+url]
-}
+	tests := []struct {
+		name        string
+		sessionID   string
+		priorDir    string
+		envDir      string
+		wantSession string
+		wantReused  bool
+	}{
+		{
+			name:        "same workdir keeps session",
+			sessionID:   "sess-1",
+			priorDir:    "/ws/task-a/workdir",
+			envDir:      "/ws/task-a/workdir",
+			wantSession: "sess-1",
+			wantReused:  true,
+		},
+		{
+			name:        "fresh workdir drops session",
+			sessionID:   "sess-1",
+			priorDir:    "/ws/task-a/workdir",
+			envDir:      "/ws/task-b/workdir",
+			wantSession: "",
+			wantReused:  false,
+		},
+		{
+			name:        "session without recorded workdir drops session",
+			sessionID:   "sess-1",
+			priorDir:    "",
+			envDir:      "/ws/task-b/workdir",
+			wantSession: "",
+			wantReused:  false,
+		},
+		{
+			name:        "no prior session is a no-op",
+			sessionID:   "",
+			priorDir:    "/ws/task-a/workdir",
+			envDir:      "/ws/task-b/workdir",
+			wantSession: "",
+			wantReused:  false,
+		},
+	}
 
-func (c *staticRepoCache) Sync(string, []repocache.RepoInfo, ...repocache.GitCredential) error {
-	return nil
-}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			task := Task{PriorSessionID: tt.sessionID, PriorWorkDir: tt.priorDir}
+			taskCtx := execenv.TaskContextForEnv{PriorSessionResumed: tt.sessionID != ""}
 
-func (c *staticRepoCache) CreateWorktree(repocache.WorktreeParams) (*repocache.WorktreeResult, error) {
-	return nil, nil
+			reused := gateResumeToReusedWorkdir(&task, &taskCtx, tt.envDir, slog.Default())
+
+			if reused != tt.wantReused {
+				t.Fatalf("reused = %v, want %v", reused, tt.wantReused)
+			}
+			if task.PriorSessionID != tt.wantSession {
+				t.Fatalf("PriorSessionID = %q, want %q", task.PriorSessionID, tt.wantSession)
+			}
+			if taskCtx.PriorSessionResumed != (tt.wantSession != "") {
+				t.Fatalf("PriorSessionResumed = %v, want %v", taskCtx.PriorSessionResumed, tt.wantSession != "")
+			}
+		})
+	}
 }
 
 func TestExecuteAndDrain_ResumeFailureFallback(t *testing.T) {
@@ -1112,8 +1245,9 @@ func TestExecuteAndDrain_ContextCancelled_ReportsCancelled(t *testing.T) {
 
 // idleWatchdogBackend simulates the MUL-2225 hang: emit one message to mark
 // activity, then go silent forever. With a short AgentIdleWatchdog, the
-// watchdog should fire and short-circuit executeAndDrain instead of waiting
-// for the full drainTimeout (which is ~21 minutes by default).
+// watchdog should fire and short-circuit executeAndDrain. With no wall-clock
+// cap (opts.Timeout = 0) the drain loop imposes no deadline of its own, so the
+// idle watchdog is the only thing that ends this otherwise-forever-silent run.
 type idleWatchdogBackend struct {
 	emitOne bool // when true, emit one message before going silent; when false, never emit anything
 }
@@ -1301,6 +1435,45 @@ func TestExecuteAndDrain_IdleWatchdog_DoesNotFireDuringInFlightToolCall(t *testi
 	}
 }
 
+// stuckInFlightToolBackend models a hung tool: it emits a tool_use and then
+// goes silent forever — the matching tool_result never arrives, so inFlightTools
+// stays at 1 (e.g. a child process that never returns). With no wall-clock cap
+// (the MUL-3064 default), AgentToolWatchdog is the only thing that ends it.
+type stuckInFlightToolBackend struct{}
+
+func (stuckInFlightToolBackend) Execute(_ context.Context, _ string, _ agent.ExecOptions) (*agent.Session, error) {
+	msgCh := make(chan agent.Message, 2)
+	resCh := make(chan agent.Result)
+	msgCh <- agent.Message{Type: agent.MessageToolUse, Tool: "Bash", CallID: "c1"}
+	// Deliberately leave msgCh open, never emit tool_result, never write resCh.
+	return &agent.Session{Messages: msgCh, Result: resCh}, nil
+}
+
+func TestExecuteAndDrain_IdleWatchdog_FiresOnStuckInFlightTool(t *testing.T) {
+	t.Parallel()
+
+	d := newTestDaemon(t)
+	// The normal idle window would be skipped while a tool is in flight; the
+	// AgentToolWatchdog budget is what must fire here.
+	d.cfg.AgentIdleWatchdog = 50 * time.Millisecond
+	d.cfg.AgentToolWatchdog = 50 * time.Millisecond
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+
+	start := time.Now()
+	result, _, err := d.executeAndDrain(ctx, stuckInFlightToolBackend{}, "p", agent.ExecOptions{}, slog.Default(), "t-stuck-tool")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Status != "idle_watchdog" {
+		t.Fatalf("expected status=idle_watchdog for a hung in-flight tool, got %q (err=%q)", result.Status, result.Error)
+	}
+	if elapsed := time.Since(start); elapsed > 2*time.Second {
+		t.Fatalf("tool watchdog took too long to fire: %s (window=%s)", elapsed, d.cfg.AgentToolWatchdog)
+	}
+}
+
 // tailIdleAfterToolBackend exercises the boundary case: a tool call completes,
 // and THEN the backend goes silent without ever finishing. After the
 // tool_result lands, in-flight count returns to zero and lastActivityAt is
@@ -1445,76 +1618,6 @@ func TestEnsureRepoReadyRefreshesOnMiss(t *testing.T) {
 	}
 	if d.repoCache.Lookup("ws-1", sourceRepo) == "" {
 		t.Fatal("expected repo to be cached after refresh")
-	}
-}
-
-func TestEnsureRepoReadyRequiresUserGitTokenForTaskRepo(t *testing.T) {
-	t.Parallel()
-
-	const repoURL = "git@git.ppdaicorp.com:team/api.git"
-	var refreshCalls atomic.Int32
-	d := newRepoReadyTestDaemon(t, func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet || r.URL.Path != "/api/daemon/workspaces/ws-1/repos" {
-			http.NotFound(w, r)
-			return
-		}
-		refreshCalls.Add(1)
-		json.NewEncoder(w).Encode(WorkspaceReposResponse{
-			WorkspaceID:  "ws-1",
-			Repos:        []RepoData{{URL: repoURL}},
-			ReposVersion: "v2",
-		})
-	})
-	d.workspaces["ws-1"] = newWorkspaceState("ws-1", nil, "", nil, nil)
-
-	cred := repocache.GitCredential{
-		Hosts:        []string{"git.ppdaicorp.com"},
-		RequireToken: true,
-	}
-	err := d.ensureRepoReady(context.Background(), "ws-1", repoURL, cred)
-	if !errors.Is(err, ErrGitTokenRequired) {
-		t.Fatalf("expected ErrGitTokenRequired, got %v", err)
-	}
-	if got := refreshCalls.Load(); got != 1 {
-		t.Fatalf("expected allowlist refresh before token check, got %d", got)
-	}
-	if got := d.repoCache.Lookup("ws-1", repoURL); got != "" {
-		t.Fatalf("missing user git_token must not clone using daemon credentials, got cache path %q", got)
-	}
-}
-
-func TestEnsureRepoReadyRequiresUserGitTokenEvenWhenCached(t *testing.T) {
-	t.Parallel()
-
-	const sourceRepo = "git@git.ppdaicorp.com:team/api.git"
-	var refreshCalls atomic.Int32
-	d := newRepoReadyTestDaemon(t, func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet || r.URL.Path != "/api/daemon/workspaces/ws-1/repos" {
-			http.NotFound(w, r)
-			return
-		}
-		refreshCalls.Add(1)
-		json.NewEncoder(w).Encode(WorkspaceReposResponse{
-			WorkspaceID:  "ws-1",
-			Repos:        []RepoData{{URL: sourceRepo}},
-			ReposVersion: "v2",
-		})
-	})
-	d.repoCache = &staticRepoCache{paths: map[string]string{
-		"ws-1\x00" + sourceRepo: "cached-bare-path",
-	}}
-	d.workspaces["ws-1"] = newWorkspaceState("ws-1", nil, "v1", []RepoData{{URL: sourceRepo}}, nil)
-
-	cred := repocache.GitCredential{
-		Hosts:        []string{"git.ppdaicorp.com"},
-		RequireToken: true,
-	}
-	err := d.ensureRepoReady(context.Background(), "ws-1", sourceRepo, cred)
-	if !errors.Is(err, ErrGitTokenRequired) {
-		t.Fatalf("expected ErrGitTokenRequired on cached repo, got %v", err)
-	}
-	if got := refreshCalls.Load(); got != 1 {
-		t.Fatalf("expected settings refresh even on cached repo, got %d", got)
 	}
 }
 
