@@ -1143,7 +1143,10 @@ export function ProjectsPage() {
   const rowLink = useRowLink();
   const currentUser = useAuthStore((s) => s.user);
   const { getActorName } = useActorName();
-
+  const initialMilestoneId =
+    typeof window !== "undefined"
+      ? new URLSearchParams(window.location.search).get("milestone_id")
+      : null;
   const viewMode = useProjectViewStore((s) => s.viewMode);
   const setViewMode = useProjectViewStore((s) => s.setViewMode);
   const sortField = useProjectViewStore((s) => s.sortField);
@@ -1159,13 +1162,22 @@ export function ProjectsPage() {
   const isCompact = viewMode === "compact";
   const isColVisible = (key: ProjectColumnKey) => !hiddenColumns.includes(key);
 
-  const { data: projects = [], isLoading } = useQuery(projectListOptions(wsId));
+  const { data: projects = [], isLoading } = useQuery(
+    projectListOptions(
+      wsId,
+      initialMilestoneId ? { milestone_id: initialMilestoneId } : undefined,
+    ),
+  );
   const { data: members = [] } = useQuery(memberListOptions(wsId));
   const { data: pins = [] } = useQuery({
     ...pinListOptions(wsId, currentUser?.id ?? ""),
     enabled: !!wsId && !!currentUser?.id,
   });
-  const openCreateProject = () => useModalStore.getState().open("create-project");
+  const openCreateProject = () =>
+    useModalStore.getState().open(
+      "create-project",
+      initialMilestoneId ? { milestone_id: initialMilestoneId } : null,
+    );
 
   const isWorkspaceAdmin = useMemo(() => {
     if (!currentUser) return false;

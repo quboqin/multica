@@ -26,7 +26,8 @@
     "progress": "進捗",
     "lead": "リード",
     "created": "作成日",
-    "issues": "Issue 数"
+    "issues": "Issue 数",
+    "labels": "Labels"
   },
   "status": {
     "planned": "計画中",

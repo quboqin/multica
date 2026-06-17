@@ -1,0 +1,228 @@
+{
+  "page": {
+    "title": "Plans",
+    "create_project": "Create project",
+    "create_plan": "Create plan",
+    "open_charts": "Charts",
+    "all_plans": "All plans",
+    "active_plans": "Incomplete plans",
+    "all_statuses": "All statuses",
+    "clear_filter": "Clear"
+  },
+  "empty": {
+    "title": "No operating plans yet.",
+    "description": "Create a milestone to group projects into a plan.",
+    "filtered_title": "No plans match the current filters."
+  },
+    "dialog": {
+      "title": "Create plan",
+      "edit_title": "Edit plan",
+      "description": "Create an operating plan milestone. Projects can be linked to it separately.",
+    "fields": {
+      "title": "Title",
+      "description": "Description",
+      "start_date": "Start date",
+      "end_date": "End date",
+      "status": "Status"
+    },
+    "placeholders": {
+      "title": "Malaysia H1 operating plan",
+      "description": "Scope, business goals, and operating notes"
+    },
+      "cancel": "Cancel",
+      "submit": "Create plan",
+      "save": "Save",
+      "creating": "Creating...",
+      "saving": "Saving...",
+      "toast_created": "Plan created",
+      "toast_updated": "Plan updated",
+      "toast_failed": "Failed to create plan",
+      "toast_update_failed": "Failed to update plan"
+  },
+  "status": {
+    "planned": "Planned",
+    "in_progress": "In progress",
+    "paused": "Paused",
+    "completed": "Completed",
+    "cancelled": "Cancelled"
+  },
+  "row": {
+    "no_start": "No start",
+    "no_end": "No end",
+    "complete": "{{progress}}% complete",
+      "projects_count": "{{done}} / {{total}} projects",
+      "paused_count": "{{count}} paused",
+      "edit": "Edit",
+      "open": "Open"
+    },
+  "stats": {
+    "plans": {
+      "label": "Plans",
+      "detail": "Milestone-backed operating cycles"
+    },
+    "projects": {
+      "label": "Projects",
+      "detail": "{{count}} completed or closed"
+    },
+    "execution": {
+      "label": "Execution",
+      "detail": "{{done}}/{{total}} issues done"
+    },
+    "kpi": {
+      "label": "KPI status",
+      "value": "Separate",
+      "detail": "Result feedback, not task progress"
+    }
+  },
+  "progress": {
+    "title": "Plan progress",
+    "subtitle": "Projects and issues only"
+  },
+  "charts": {
+    "title": "Charts",
+    "subtitle": "Calculated from milestone projects",
+    "back": "Back to plans",
+    "tasks_done": "Tasks done",
+    "empty": "No project data is available for the selected plan.",
+    "project_progress": {
+      "title": "Project progress (%)",
+      "subtitle": "Top projects by completion"
+    },
+    "status_distribution": {
+      "title": "Project status distribution",
+      "subtitle": "Current project lifecycle state"
+    },
+    "milestone_status": {
+      "title": "Projects by milestone status",
+      "subtitle": "Total projects with status split",
+      "project_count": "{{count}} projects",
+      "progress": "Progress"
+    },
+    "milestone_progress": {
+      "title": "Milestone average progress (%)",
+      "subtitle": "Average project completion per milestone"
+    },
+    "health_distribution": {
+      "title": "Project health distribution",
+      "subtitle": "Derived from progress and paused state"
+    },
+    "issue_completion": {
+      "title": "Issue completion rate (%)",
+      "subtitle": "Done issues divided by total issues"
+    },
+    "health": {
+      "on_track": "On track",
+      "at_risk": "At risk",
+      "pending": "Pending",
+      "blocked": "Blocked"
+    },
+    "overview": {
+      "title": "Operating cockpit",
+      "subtitle": "Progress, project state, and milestone momentum in one view",
+      "timeline": "Milestone timeline"
+    },
+    "key_projects": {
+      "title": "Key delivery projects",
+      "subtitle": "Projects marked high or urgent priority",
+      "issue_count": "{{done}}/{{total}} issues done"
+    },
+    "label_progress": {
+      "title": "Domain progress",
+      "subtitle": "Project and task progress grouped by project labels",
+      "project_count": "{{count}} projects",
+      "issue_count": "{{done}}/{{total}} issues done",
+      "progress": "Progress",
+      "unlabeled": "Unlabeled"
+    }
+  },
+  "kpi": {
+    "title": "KPI workspace",
+    "subtitle": "Independent from project completion",
+    "target": "Target",
+    "current": "Current",
+    "pending": "Pending",
+    "status": {
+      "on_track": "On track",
+      "at_risk": "At risk",
+      "missed": "Missed",
+      "pending": "Pending"
+    },
+    "metrics": {
+      "applications": {
+        "name": "Application volume",
+        "target": "100%",
+        "current": "Pending",
+        "owner": "Growth"
+      },
+      "approval_rate": {
+        "name": "Approval rate",
+        "target": "Plan target",
+        "current": "Pending",
+        "owner": "Risk"
+      },
+      "cpa": {
+        "name": "CPA",
+        "target": "Within budget",
+        "current": "Pending",
+        "owner": "Growth"
+      },
+      "availability": {
+        "name": "System availability",
+        "target": "99.5%",
+        "current": "Pending",
+        "owner": "Engineering"
+      }
+    },
+    "back": "Back",
+    "metrics_title": "KPI metrics",
+    "workspace_description": "KPI is workspace-level result feedback for maintaining targets, current values, completion, and status independently. It does not roll up from progress or drive plan, project, or task status.",
+    "independent_badge": "Independent feedback",
+    "create_action": "Create KPI",
+    "edit_action": "Edit",
+    "delete_action": "Delete",
+    "empty": "No KPI metrics yet.",
+    "no_owner": "No owner",
+    "no_squad": "No squad",
+    "toast_created": "KPI created",
+    "toast_updated": "KPI updated",
+    "toast_deleted": "KPI deleted",
+    "toast_failed": "KPI operation failed",
+    "fields": {
+      "name": "Name",
+      "owner": "Owner",
+      "squad": "Squad",
+      "status": "Status",
+      "note": "Note"
+    },
+    "placeholders": {
+      "name": "Application volume",
+      "owner": "Growth",
+      "target": "100%",
+      "current": "Pending",
+      "note": "Result source, refresh cadence, or exception notes",
+      "completion_rate": "80"
+    },
+    "dialog": {
+      "create_title": "Create KPI",
+      "edit_title": "Edit KPI",
+      "description": "KPI is maintained independently from project and task progress.",
+      "cancel": "Cancel",
+      "save": "Save",
+      "saving": "Saving..."
+    },
+    "unlinked": "No linked plan, project, or task",
+    "board": {
+      "total": "Total",
+      "healthy": "On track",
+      "watch": "Watch",
+      "status_title": "KPI status board",
+      "status_subtitle": "Independent result tracking by current business judgment",
+      "owner_title": "Owner coverage",
+      "owner_subtitle": "How KPI ownership is distributed",
+      "squad_title": "Squad distribution",
+      "squad_subtitle": "Grouped by each owner's squad",
+      "completion": "Completion"
+    },
+    "completion_rate": "Completion rate"
+  }
+}

@@ -762,6 +762,31 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Post("/resources", h.CreateProjectResource)
 					r.Put("/resources/{resourceId}", h.UpdateProjectResource)
 					r.Delete("/resources/{resourceId}", h.DeleteProjectResource)
+					r.Get("/labels", h.ListLabelsForProject)
+					r.Post("/labels", h.AttachLabelToProject)
+					r.Delete("/labels/{labelId}", h.DetachLabelFromProject)
+				})
+			})
+
+			// Milestones back operating-plan style project groupings. Projects
+			// may optionally attach to one via project.milestone_id.
+			r.Route("/api/milestones", func(r chi.Router) {
+				r.Get("/", h.ListMilestones)
+				r.Post("/", h.CreateMilestone)
+				r.Route("/{id}", func(r chi.Router) {
+					r.Get("/", h.GetMilestone)
+					r.Put("/", h.UpdateMilestone)
+					r.Delete("/", h.DeleteMilestone)
+				})
+			})
+
+			r.Route("/api/kpi-metrics", func(r chi.Router) {
+				r.Get("/", h.ListKpiMetrics)
+				r.Post("/", h.CreateKpiMetric)
+				r.Route("/{id}", func(r chi.Router) {
+					r.Get("/", h.GetKpiMetric)
+					r.Put("/", h.UpdateKpiMetric)
+					r.Delete("/", h.DeleteKpiMetric)
 				})
 			})
 

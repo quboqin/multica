@@ -26,7 +26,8 @@
     "progress": "진행률",
     "lead": "리드",
     "created": "생성일",
-    "issues": "이슈 수"
+    "issues": "이슈 수",
+    "labels": "Labels"
   },
   "status": {
     "planned": "계획됨",

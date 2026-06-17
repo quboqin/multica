@@ -77,3 +77,46 @@ JOIN issue_to_label il ON il.label_id = l.id
 WHERE il.issue_id = ANY(sqlc.arg('issue_ids')::uuid[])
   AND l.workspace_id = sqlc.arg('workspace_id')::uuid
 ORDER BY il.issue_id, LOWER(l.name) ASC;
+
+-- name: AttachLabelToProject :exec
+-- Workspace-guarded INSERT: both the project and the label must belong to the
+-- same workspace before the association is created.
+INSERT INTO project_to_label (project_id, label_id)
+SELECT sqlc.arg('project_id')::uuid, sqlc.arg('label_id')::uuid
+WHERE EXISTS (
+    SELECT 1 FROM project p
+    WHERE p.id = sqlc.arg('project_id')::uuid
+      AND p.workspace_id = sqlc.arg('workspace_id')::uuid
+)
+AND EXISTS (
+    SELECT 1 FROM issue_label l
+    WHERE l.id = sqlc.arg('label_id')::uuid
+      AND l.workspace_id = sqlc.arg('workspace_id')::uuid
+)
+ON CONFLICT DO NOTHING;
+
+-- name: DetachLabelFromProject :exec
+DELETE FROM project_to_label
+WHERE project_id = sqlc.arg('project_id')::uuid
+  AND label_id = sqlc.arg('label_id')::uuid
+  AND EXISTS (
+      SELECT 1 FROM project p
+      WHERE p.id = sqlc.arg('project_id')::uuid
+        AND p.workspace_id = sqlc.arg('workspace_id')::uuid
+  );
+
+-- name: ListLabelsByProject :many
+SELECT l.*
+FROM issue_label l
+JOIN project_to_label pl ON pl.label_id = l.id
+WHERE pl.project_id = sqlc.arg('project_id')::uuid
+  AND l.workspace_id = sqlc.arg('workspace_id')::uuid
+ORDER BY LOWER(l.name) ASC;
+
+-- name: ListLabelsForProjects :many
+SELECT pl.project_id, l.*
+FROM issue_label l
+JOIN project_to_label pl ON pl.label_id = l.id
+WHERE pl.project_id = ANY(sqlc.arg('project_ids')::uuid[])
+  AND l.workspace_id = sqlc.arg('workspace_id')::uuid
+ORDER BY pl.project_id, LOWER(l.name) ASC;

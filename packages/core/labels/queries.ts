@@ -8,6 +8,8 @@ export const labelKeys = {
     [...labelKeys.all(wsId), "detail", id] as const,
   byIssue: (wsId: string, issueId: string) =>
     [...labelKeys.all(wsId), "issue", issueId] as const,
+  byProject: (wsId: string, projectId: string) =>
+    [...labelKeys.all(wsId), "project", projectId] as const,
 };
 
 export function labelListOptions(wsId: string) {
@@ -24,5 +26,14 @@ export function issueLabelsOptions(wsId: string, issueId: string) {
     queryFn: () => api.listLabelsForIssue(issueId),
     select: (data) => data.labels,
     enabled: Boolean(issueId),
+  });
+}
+
+export function projectLabelsOptions(wsId: string, projectId: string) {
+  return queryOptions({
+    queryKey: labelKeys.byProject(wsId, projectId),
+    queryFn: () => api.listLabelsForProject(projectId),
+    select: (data) => data.labels,
+    enabled: Boolean(projectId),
   });
 }

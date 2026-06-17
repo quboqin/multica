@@ -18,7 +18,8 @@
     "agents": "Agents",
     "runtimes": "Runtimes",
     "skills": "Skills",
-    "settings": "Settings"
+    "settings": "Settings",
+    "kpi": "KPI"
   },
   "commands": {
     "current_theme_aria": "Current theme",

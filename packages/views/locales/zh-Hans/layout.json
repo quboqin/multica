@@ -3,6 +3,7 @@
     "inbox": "收件箱",
     "my_issues": "我的任务",
     "issues": "任务",
+    "plans": "计划",
     "projects": "项目",
     "autopilots": "自动化",
     "agents": "智能体",
@@ -10,7 +11,8 @@
     "usage": "用量",
     "runtimes": "运行时",
     "skills": "Skills",
-    "settings": "设置"
+    "settings": "设置",
+    "kpi": "KPI"
   },
   "help": {
     "trigger": "帮助",

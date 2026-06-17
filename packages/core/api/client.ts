@@ -68,6 +68,14 @@ import type {
   SendChatMessageResponse,
   CancelTaskResponse,
   Project,
+    Milestone,
+    CreateMilestoneRequest,
+    UpdateMilestoneRequest,
+    ListMilestonesResponse,
+    KpiMetric,
+    CreateKpiMetricRequest,
+    UpdateKpiMetricRequest,
+    ListKpiMetricsResponse,
   CreateProjectRequest,
   UpdateProjectRequest,
   ListProjectsResponse,
@@ -78,8 +86,9 @@ import type {
   Label,
   CreateLabelRequest,
   UpdateLabelRequest,
-  ListLabelsResponse,
-  IssueLabelsResponse,
+    ListLabelsResponse,
+    IssueLabelsResponse,
+    ProjectLabelsResponse,
   PinnedItem,
   CreatePinRequest,
   PinnedItemType,
@@ -1812,9 +1821,10 @@ export class ApiClient {
   }
 
   // Projects
-  async listProjects(params?: { status?: string }): Promise<ListProjectsResponse> {
+  async listProjects(params?: { status?: string; milestone_id?: string }): Promise<ListProjectsResponse> {
     const search = new URLSearchParams();
     if (params?.status) search.set("status", params.status);
+    if (params?.milestone_id) search.set("milestone_id", params.milestone_id);
     return this.fetch(`/api/projects?${search}`);
   }
 
@@ -1838,6 +1848,61 @@ export class ApiClient {
 
   async deleteProject(id: string): Promise<void> {
     await this.fetch(`/api/projects/${id}`, { method: "DELETE" });
+  }
+
+  // Milestones
+  async listMilestones(params?: { status?: string }): Promise<ListMilestonesResponse> {
+    const search = new URLSearchParams();
+    if (params?.status) search.set("status", params.status);
+    return this.fetch(`/api/milestones?${search}`);
+  }
+
+  async getMilestone(id: string): Promise<Milestone> {
+    return this.fetch(`/api/milestones/${id}`);
+  }
+
+  async createMilestone(data: CreateMilestoneRequest): Promise<Milestone> {
+    return this.fetch("/api/milestones", {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+  }
+
+  async updateMilestone(id: string, data: UpdateMilestoneRequest): Promise<Milestone> {
+    return this.fetch(`/api/milestones/${id}`, {
+      method: "PUT",
+      body: JSON.stringify(data),
+    });
+  }
+
+  async deleteMilestone(id: string): Promise<void> {
+    await this.fetch(`/api/milestones/${id}`, { method: "DELETE" });
+  }
+
+  async listKpiMetrics(workspaceId?: string): Promise<ListKpiMetricsResponse> {
+    return this.fetch(`/api/kpi-metrics${workspaceId ? `?workspace_id=${encodeURIComponent(workspaceId)}` : ""}`);
+  }
+
+  async getKpiMetric(id: string, workspaceId?: string): Promise<KpiMetric> {
+    return this.fetch(`/api/kpi-metrics/${id}${workspaceId ? `?workspace_id=${encodeURIComponent(workspaceId)}` : ""}`);
+  }
+
+  async createKpiMetric(data: CreateKpiMetricRequest, workspaceId?: string): Promise<KpiMetric> {
+    return this.fetch(`/api/kpi-metrics${workspaceId ? `?workspace_id=${encodeURIComponent(workspaceId)}` : ""}`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+  }
+
+  async updateKpiMetric(id: string, data: UpdateKpiMetricRequest, workspaceId?: string): Promise<KpiMetric> {
+    return this.fetch(`/api/kpi-metrics/${id}${workspaceId ? `?workspace_id=${encodeURIComponent(workspaceId)}` : ""}`, {
+      method: "PUT",
+      body: JSON.stringify(data),
+    });
+  }
+
+  async deleteKpiMetric(id: string, workspaceId?: string): Promise<void> {
+    await this.fetch(`/api/kpi-metrics/${id}${workspaceId ? `?workspace_id=${encodeURIComponent(workspaceId)}` : ""}`, { method: "DELETE" });
   }
 
   // Project resources
@@ -1917,6 +1982,23 @@ export class ApiClient {
 
   async detachLabel(issueId: string, labelId: string): Promise<IssueLabelsResponse> {
     return this.fetch(`/api/issues/${issueId}/labels/${labelId}`, {
+      method: "DELETE",
+    });
+  }
+
+  async listLabelsForProject(projectId: string): Promise<ProjectLabelsResponse> {
+    return this.fetch(`/api/projects/${projectId}/labels`);
+  }
+
+  async attachProjectLabel(projectId: string, labelId: string): Promise<ProjectLabelsResponse> {
+    return this.fetch(`/api/projects/${projectId}/labels`, {
+      method: "POST",
+      body: JSON.stringify({ label_id: labelId }),
+    });
+  }
+
+  async detachProjectLabel(projectId: string, labelId: string): Promise<ProjectLabelsResponse> {
+    return this.fetch(`/api/projects/${projectId}/labels/${labelId}`, {
       method: "DELETE",
     });
   }

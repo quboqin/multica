@@ -26,7 +26,8 @@
     "progress": "进度",
     "lead": "负责人",
     "created": "创建时间",
-    "issues": "Issue 数"
+    "issues": "Issue 数",
+    "labels": "标签"
   },
   "status": {
     "planned": "计划中",
