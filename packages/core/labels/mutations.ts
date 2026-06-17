@@ -3,6 +3,7 @@ import { api } from "../api";
 import { labelKeys } from "./queries";
 import { useWorkspaceId } from "../hooks";
 import { issueKeys } from "../issues/queries";
+import { projectKeys } from "../projects/queries";
 import { onIssueLabelsChanged } from "../issues/ws-updaters";
 import type {
   Label,
@@ -10,7 +11,34 @@ import type {
   UpdateLabelRequest,
   ListLabelsResponse,
   IssueLabelsResponse,
+  Project,
+  ProjectLabelsResponse,
+  ListProjectsResponse,
 } from "../types";
+
+function patchProjectLabelsInCache(
+  qc: ReturnType<typeof useQueryClient>,
+  wsId: string,
+  projectId: string,
+  labels: Label[],
+) {
+  qc.setQueryData<ProjectLabelsResponse>(labelKeys.byProject(wsId, projectId), (old) =>
+    old ? { ...old, labels } : { labels },
+  );
+  qc.setQueryData<Project>(projectKeys.detail(wsId, projectId), (old) =>
+    old ? { ...old, labels } : old,
+  );
+  qc.setQueriesData<ListProjectsResponse>({ queryKey: projectKeys.list(wsId) }, (old) =>
+    old
+      ? {
+          ...old,
+          projects: old.projects.map((project) =>
+            project.id === projectId ? { ...project, labels } : project,
+          ),
+        }
+      : old,
+  );
+}
 
 export function useCreateLabel() {
   const qc = useQueryClient();
@@ -166,6 +194,66 @@ export function useDetachLabel(issueId: string) {
     },
     onSettled: () => {
       qc.invalidateQueries({ queryKey: labelKeys.byIssue(wsId, issueId) });
+    },
+  });
+}
+
+export function useAttachProjectLabel(projectId: string) {
+  const qc = useQueryClient();
+  const wsId = useWorkspaceId();
+  return useMutation({
+    mutationFn: (labelId: string) => api.attachProjectLabel(projectId, labelId),
+    onMutate: async (labelId) => {
+      await qc.cancelQueries({ queryKey: labelKeys.byProject(wsId, projectId) });
+      const prev = qc.getQueryData<ProjectLabelsResponse>(labelKeys.byProject(wsId, projectId));
+      if (!prev || prev.labels.some((l) => l.id === labelId)) return { prev };
+      const list = qc.getQueryData<ListLabelsResponse>(labelKeys.list(wsId));
+      const label = list?.labels.find((l) => l.id === labelId);
+      if (!label) return { prev };
+      const next = { ...prev, labels: [...prev.labels, label] };
+      patchProjectLabelsInCache(qc, wsId, projectId, next.labels);
+      return { prev };
+    },
+    onError: (_err, _id, ctx) => {
+      if (ctx?.prev) patchProjectLabelsInCache(qc, wsId, projectId, ctx.prev.labels);
+    },
+    onSuccess: (data: ProjectLabelsResponse) => {
+      if (data && Array.isArray(data.labels)) {
+        patchProjectLabelsInCache(qc, wsId, projectId, data.labels);
+      }
+    },
+    onSettled: () => {
+      qc.invalidateQueries({ queryKey: labelKeys.byProject(wsId, projectId) });
+      qc.invalidateQueries({ queryKey: projectKeys.all(wsId) });
+    },
+  });
+}
+
+export function useDetachProjectLabel(projectId: string) {
+  const qc = useQueryClient();
+  const wsId = useWorkspaceId();
+  return useMutation({
+    mutationFn: (labelId: string) => api.detachProjectLabel(projectId, labelId),
+    onMutate: async (labelId) => {
+      await qc.cancelQueries({ queryKey: labelKeys.byProject(wsId, projectId) });
+      const prev = qc.getQueryData<ProjectLabelsResponse>(labelKeys.byProject(wsId, projectId));
+      const next = prev
+        ? { ...prev, labels: prev.labels.filter((l) => l.id !== labelId) }
+        : undefined;
+      if (next) patchProjectLabelsInCache(qc, wsId, projectId, next.labels);
+      return { prev };
+    },
+    onError: (_err, _id, ctx) => {
+      if (ctx?.prev) patchProjectLabelsInCache(qc, wsId, projectId, ctx.prev.labels);
+    },
+    onSuccess: (data: ProjectLabelsResponse) => {
+      if (data && Array.isArray(data.labels)) {
+        patchProjectLabelsInCache(qc, wsId, projectId, data.labels);
+      }
+    },
+    onSettled: () => {
+      qc.invalidateQueries({ queryKey: labelKeys.byProject(wsId, projectId) });
+      qc.invalidateQueries({ queryKey: projectKeys.all(wsId) });
     },
   });
 }

@@ -525,11 +525,19 @@ function SortableProjectCard({ project }: { project: Project }) {
 export function ProjectsPage() {
   const { t } = useT("projects");
   const wsId = useWorkspaceId();
+  const initialMilestoneId =
+    typeof window !== "undefined"
+      ? new URLSearchParams(window.location.search).get("milestone_id")
+      : null;
   const viewMode = useProjectViewStore((s) => s.viewMode);
   const setViewMode = useProjectViewStore((s) => s.setViewMode);
   const isCompact = viewMode === "compact";
-  const { data: projects = [], isLoading } = useQuery(projectListOptions(wsId));
-  const openCreateProject = () => useModalStore.getState().open("create-project");
+  const { data: projects = [], isLoading } = useQuery(projectListOptions(wsId, initialMilestoneId ? { milestone_id: initialMilestoneId } : undefined));
+  const openCreateProject = () =>
+    useModalStore.getState().open(
+      "create-project",
+      initialMilestoneId ? { milestone_id: initialMilestoneId } : null,
+    );
 
   const [search, setSearch] = useState("");
   const filteredProjects = useMemo(() => {

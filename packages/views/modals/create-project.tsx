@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useRef } from "react";
-import { ChevronRight, FolderOpen, Maximize2, Minimize2, Search, X as XIcon, UserMinus } from "lucide-react";
+import { CalendarRange, ChevronRight, FolderOpen, Maximize2, Minimize2, Search, X as XIcon, UserMinus } from "lucide-react";
 
 /**
  * GitHub mark — lucide-react v1 dropped brand icons, so we inline the
@@ -22,6 +22,7 @@ function GithubIcon({ className }: { className?: string }) {
   );
 }
 import { useQuery } from "@tanstack/react-query";
+import { milestoneListOptions } from "@multica/core/milestones";
 import { useCreateProject } from "@multica/core/projects/mutations";
 import { useProjectDraftStore } from "@multica/core/projects";
 import {
@@ -63,6 +64,10 @@ import {
   validateLocalDirectory,
 } from "../platform/local-directory";
 import { useLocalDaemonStatus } from "../platform/use-local-daemon-status";
+
+interface CreateProjectModalData {
+  milestone_id?: unknown;
+}
 
 function PillButton({
   children,
@@ -110,7 +115,13 @@ function RepoUrlText({
   );
 }
 
-export function CreateProjectModal({ onClose }: { onClose: () => void }) {
+export function CreateProjectModal({
+  onClose,
+  data,
+}: {
+  onClose: () => void;
+  data?: Record<string, unknown> | null;
+}) {
   const { t } = useT("modals");
   const router = useNavigation();
   const workspace = useCurrentWorkspace();
@@ -119,6 +130,7 @@ export function CreateProjectModal({ onClose }: { onClose: () => void }) {
   const wsId = useWorkspaceId();
   const { data: members = [] } = useQuery(memberListOptions(wsId));
   const { data: agents = [] } = useQuery(agentListOptions(wsId));
+  const { data: milestones = [] } = useQuery(milestoneListOptions(wsId));
   const { getActorName } = useActorName();
   const projectStatusLabels = useProjectStatusLabels();
   const projectPriorityLabels = useProjectPriorityLabels();
@@ -133,6 +145,11 @@ export function CreateProjectModal({ onClose }: { onClose: () => void }) {
   const [priority, setPriority] = useState<ProjectPriority>(draft.priority);
   const [leadType, setLeadType] = useState<"member" | "agent" | undefined>(draft.leadType);
   const [leadId, setLeadId] = useState<string | undefined>(draft.leadId);
+  const initialMilestoneId =
+    typeof (data as CreateProjectModalData | null)?.milestone_id === "string"
+      ? ((data as CreateProjectModalData).milestone_id as string)
+      : null;
+  const [milestoneId, setMilestoneId] = useState<string | null>(initialMilestoneId);
   const [icon, setIcon] = useState<string | undefined>(draft.icon);
   const [iconPickerOpen, setIconPickerOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -224,6 +241,7 @@ export function CreateProjectModal({ onClose }: { onClose: () => void }) {
 
   const leadLabel =
     leadType && leadId ? getActorName(leadType, leadId) : t(($) => $.create_project.lead);
+  const selectedMilestone = milestones.find((milestone) => milestone.id === milestoneId);
 
   const createProject = useCreateProject();
 
@@ -266,6 +284,7 @@ export function CreateProjectModal({ onClose }: { onClose: () => void }) {
         priority,
         lead_type: leadType,
         lead_id: leadId,
+        milestone_id: milestoneId,
         // Server attaches these in the same transaction as the project.
         resources,
       });
@@ -437,6 +456,43 @@ export function CreateProjectModal({ onClose }: { onClose: () => void }) {
                 <DropdownMenuItem key={pr} onClick={() => updatePriority(pr)}>
                   <PriorityIcon priority={pr} />
                   <span>{projectPriorityLabels[pr]}</span>
+                </DropdownMenuItem>
+              ))}
+            </DropdownMenuContent>
+          </DropdownMenu>
+
+          <DropdownMenu>
+            <DropdownMenuTrigger
+              render={
+                <PillButton>
+                  <CalendarRange className="size-3 text-muted-foreground" />
+                  <span className={cn(!selectedMilestone && "text-muted-foreground")}>
+                    {selectedMilestone?.title ?? "No plan"}
+                  </span>
+                </PillButton>
+              }
+            />
+            <DropdownMenuContent align="start" className="w-56">
+              <DropdownMenuItem onClick={() => setMilestoneId(null)}>
+                <CalendarRange className="size-3.5 text-muted-foreground" />
+                <span className="text-muted-foreground">No plan</span>
+              </DropdownMenuItem>
+              {milestones.length > 0 && (
+                <div className="my-1 h-px bg-border" />
+              )}
+              {milestones.map((milestone) => (
+                <DropdownMenuItem key={milestone.id} onClick={() => setMilestoneId(milestone.id)}>
+                  <span
+                    className={cn(
+                      "size-2 rounded-full",
+                      milestone.status === "completed" || milestone.status === "cancelled"
+                        ? "bg-muted-foreground"
+                        : milestone.status === "paused"
+                          ? "bg-warning"
+                          : "bg-primary",
+                    )}
+                  />
+                  <span className="truncate">{milestone.title}</span>
                 </DropdownMenuItem>
               ))}
             </DropdownMenuContent>

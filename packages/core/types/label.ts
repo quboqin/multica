@@ -33,3 +33,7 @@ export interface ListLabelsResponse {
 export interface IssueLabelsResponse {
   labels: Label[];
 }
+
+export interface ProjectLabelsResponse {
+  labels: Label[];
+}

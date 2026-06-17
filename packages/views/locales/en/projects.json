@@ -15,7 +15,8 @@
     "status": "Status",
     "progress": "Progress",
     "lead": "Lead",
-    "created": "Created"
+    "created": "Created",
+    "labels": "Labels"
   },
   "status": {
     "planned": "Planned",

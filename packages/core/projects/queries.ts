@@ -8,10 +8,10 @@ export const projectKeys = {
     [...projectKeys.all(wsId), "detail", id] as const,
 };
 
-export function projectListOptions(wsId: string) {
+export function projectListOptions(wsId: string, params?: { milestone_id?: string }) {
   return queryOptions({
-    queryKey: projectKeys.list(wsId),
-    queryFn: () => api.listProjects(),
+    queryKey: params?.milestone_id ? [...projectKeys.list(wsId), { milestone_id: params.milestone_id }] : projectKeys.list(wsId),
+    queryFn: () => api.listProjects(params),
     select: (data) => data.projects,
   });
 }

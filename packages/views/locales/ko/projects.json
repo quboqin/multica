@@ -15,7 +15,8 @@
     "status": "상태",
     "progress": "진행률",
     "lead": "리드",
-    "created": "생성일"
+    "created": "생성일",
+    "labels": "Labels"
   },
   "status": {
     "planned": "계획됨",

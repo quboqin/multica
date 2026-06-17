@@ -56,7 +56,7 @@ export type { Workspace, WorkspaceRepo, Member, MemberRole, User, MemberWithUser
 export type { InboxItem, InboxSeverity, InboxItemType } from "./inbox";
 export type { NotificationGroupKey, NotificationGroupValue, NotificationPreferences, NotificationPreferenceResponse } from "./notification-preference";
 export type { Comment, CommentType, CommentAuthorType, Reaction } from "./comment";
-export type { Label, CreateLabelRequest, UpdateLabelRequest, ListLabelsResponse, IssueLabelsResponse } from "./label";
+export type { Label, CreateLabelRequest, UpdateLabelRequest, ListLabelsResponse, IssueLabelsResponse, ProjectLabelsResponse } from "./label";
 export type {
   TimelineEntry,
   AssigneeFrequencyEntry,
@@ -67,6 +67,20 @@ export type * from "./api";
 export type { Attachment } from "./attachment";
 export type { ChatSession, ChatMessage, ChatMessagesPage, ChatPendingTask, PendingChatTaskItem, PendingChatTasksResponse, SendChatMessageResponse } from "./chat";
 export type { StorageAdapter } from "./storage";
+export type {
+  Milestone,
+  MilestoneStatus,
+  CreateMilestoneRequest,
+  UpdateMilestoneRequest,
+  ListMilestonesResponse,
+} from "./milestone";
+export type {
+  KpiMetric,
+  KpiMetricStatus,
+  CreateKpiMetricRequest,
+  UpdateKpiMetricRequest,
+  ListKpiMetricsResponse,
+} from "./kpi";
 export type {
   Project,
   ProjectStatus,

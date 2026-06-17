@@ -3,6 +3,7 @@
     "inbox": "인박스",
     "my_issues": "내 이슈",
     "issues": "이슈",
+    "plans": "Plans",
     "projects": "프로젝트",
     "autopilots": "오토파일럿",
     "agents": "에이전트",
@@ -10,7 +11,8 @@
     "usage": "사용량",
     "runtimes": "런타임",
     "skills": "스킬",
-    "settings": "설정"
+    "settings": "설정",
+    "kpi": "KPI"
   },
   "help": {
     "trigger": "도움말",

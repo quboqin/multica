@@ -15,7 +15,8 @@
     "status": "ステータス",
     "progress": "進捗",
     "lead": "リード",
-    "created": "作成日"
+    "created": "作成日",
+    "labels": "Labels"
   },
   "status": {
     "planned": "計画中",
