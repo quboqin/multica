@@ -466,6 +466,20 @@ type LarkInstallation struct {
 	Region             string             `json:"region"`
 }
 
+type LarkLoginIdentity struct {
+	ID            pgtype.UUID        `json:"id"`
+	Region        string             `json:"region"`
+	UnionID       string             `json:"union_id"`
+	OpenID        pgtype.Text        `json:"open_id"`
+	MulticaUserID pgtype.UUID        `json:"multica_user_id"`
+	Name          pgtype.Text        `json:"name"`
+	Email         pgtype.Text        `json:"email"`
+	AvatarUrl     pgtype.Text        `json:"avatar_url"`
+	LastLoginAt   pgtype.Timestamptz `json:"last_login_at"`
+	CreatedAt     pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt     pgtype.Timestamptz `json:"updated_at"`
+}
+
 type LarkOutboundCardMessage struct {
 	ID                pgtype.UUID        `json:"id"`
 	ChatSessionID     pgtype.UUID        `json:"chat_session_id"`

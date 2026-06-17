@@ -85,6 +85,13 @@ type Config struct {
 	CloudRuntimeFleetTimeout time.Duration
 	AttachmentDownloadMode   string
 	AttachmentDownloadURLTTL time.Duration
+	// LarkLoginJoinBotWorkspace controls whether first-time Lark homepage
+	// logins join the workspace that owns the Bot installation referenced by
+	// the signed state token. When false, Lark logins join
+	// LarkLoginDefaultWorkspace if configured.
+	LarkLoginJoinBotWorkspace bool
+	LarkLoginDefaultWorkspace string
+	LarkLoginStateSecret      string
 }
 
 type cloudRuntimeProxy interface {

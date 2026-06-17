@@ -195,6 +195,12 @@ import {
   EMPTY_BILLING_CHECKOUT_SESSION_STATUS,
   EMPTY_CREATE_BILLING_PORTAL_SESSION_RESPONSE,
   EMPTY_CANCEL_TASK_RESPONSE,
+  EMPTY_LARK_LOGIN_RESPONSE,
+  EMPTY_LARK_LOGIN_STATE_RESPONSE,
+  EMPTY_LOGIN_RESPONSE,
+  LarkLoginResponseSchema,
+  LarkLoginStateResponseSchema,
+  LoginResponseSchema,
 } from "./schemas";
 
 /** Identifies the calling client to the server.
@@ -220,6 +226,17 @@ export interface ApiClientOptions {
 export interface LoginResponse {
   token: string;
   user: User;
+}
+
+export interface LarkLoginStateResponse {
+  state: string;
+  authorize_url?: string;
+}
+
+export interface LarkLoginResponse extends LoginResponse {
+  workspace_id?: string;
+  workspace_slug?: string;
+  next?: string;
 }
 
 export class ApiError extends Error {
@@ -395,16 +412,42 @@ export class ApiClient {
   }
 
   async verifyCode(email: string, code: string): Promise<LoginResponse> {
-    return this.fetch("/auth/verify-code", {
+    const raw = await this.fetch<unknown>("/auth/verify-code", {
       method: "POST",
       body: JSON.stringify({ email, code }),
+    });
+    return parseWithFallback(raw, LoginResponseSchema, EMPTY_LOGIN_RESPONSE as LoginResponse, {
+      endpoint: "POST /auth/verify-code",
     });
   }
 
   async googleLogin(code: string, redirectUri: string): Promise<LoginResponse> {
-    return this.fetch("/auth/google", {
+    const raw = await this.fetch<unknown>("/auth/google", {
       method: "POST",
       body: JSON.stringify({ code, redirect_uri: redirectUri }),
+    });
+    return parseWithFallback(raw, LoginResponseSchema, EMPTY_LOGIN_RESPONSE as LoginResponse, {
+      endpoint: "POST /auth/google",
+    });
+  }
+
+  async createLarkLoginState(installationId: string, next?: string, redirectUri?: string): Promise<LarkLoginStateResponse> {
+    const raw = await this.fetch<unknown>("/auth/lark/state", {
+      method: "POST",
+      body: JSON.stringify({ installation_id: installationId, next, redirect_uri: redirectUri }),
+    });
+    return parseWithFallback(raw, LarkLoginStateResponseSchema, EMPTY_LARK_LOGIN_STATE_RESPONSE as LarkLoginStateResponse, {
+      endpoint: "POST /auth/lark/state",
+    });
+  }
+
+  async larkLogin(code: string, state: string): Promise<LarkLoginResponse> {
+    const raw = await this.fetch<unknown>("/auth/lark", {
+      method: "POST",
+      body: JSON.stringify({ code, state }),
+    });
+    return parseWithFallback(raw, LarkLoginResponseSchema, EMPTY_LARK_LOGIN_RESPONSE as LarkLoginResponse, {
+      endpoint: "POST /auth/lark",
     });
   }
 

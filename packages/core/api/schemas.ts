@@ -846,6 +846,57 @@ export const EMPTY_USER: User = {
   updated_at: "",
 };
 
+const EmptyUserSchemaValue = {
+  id: "",
+  name: "",
+  email: "",
+  avatar_url: null,
+  onboarded_at: null,
+  onboarding_questionnaire: {},
+  starter_content_state: null,
+  language: null,
+  profile_description: "",
+  timezone: null,
+  integration_tokens: {},
+  created_at: "",
+  updated_at: "",
+};
+
+const LoginUserSchema = z.preprocess(
+  (value) => value ?? EmptyUserSchemaValue,
+  UserSchema.catch(EmptyUserSchemaValue),
+);
+
+export const LoginResponseSchema = z.object({
+  token: z.string().default(""),
+  user: LoginUserSchema,
+}).loose();
+
+export const EMPTY_LOGIN_RESPONSE = {
+  token: "",
+  user: EMPTY_USER,
+};
+
+export const LarkLoginStateResponseSchema = z.object({
+  state: z.string().default(""),
+  authorize_url: z.string().optional(),
+}).loose();
+
+export const EMPTY_LARK_LOGIN_STATE_RESPONSE = {
+  state: "",
+};
+
+export const LarkLoginResponseSchema = LoginResponseSchema.extend({
+  workspace_id: z.string().optional(),
+  workspace_slug: z.string().optional(),
+  next: z.string().optional(),
+}).loose();
+
+export const EMPTY_LARK_LOGIN_RESPONSE = {
+  token: "",
+  user: EMPTY_USER,
+};
+
 // ---------------------------------------------------------------------------
 // Billing schemas (cloud-billing proxy surface)
 //

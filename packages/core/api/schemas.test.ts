@@ -6,6 +6,7 @@ import {
   DashboardUsageDailyListSchema,
   DuplicateIssueErrorBodySchema,
   EMPTY_USER,
+  LoginResponseSchema,
   ListIssuesResponseSchema,
   RuntimeHourlyActivityListSchema,
   RuntimeUsageByAgentListSchema,
@@ -72,6 +73,14 @@ describe("IssueSchema (via ListIssuesResponseSchema)", () => {
       total: 1,
     };
     expect(ListIssuesResponseSchema.safeParse(payload).success).toBe(false);
+  });
+});
+
+describe("LoginResponseSchema", () => {
+  it("keeps auth responses renderable when user is malformed", () => {
+    const parsed = LoginResponseSchema.parse({ token: "tok", user: null });
+    expect(parsed.token).toBe("tok");
+    expect(parsed.user).toEqual(EMPTY_USER);
   });
 });
 

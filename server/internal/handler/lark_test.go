@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
 	"log/slog"
 	"net/http"
@@ -8,7 +9,11 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/integrations/lark"
+	"github.com/multica-ai/multica/server/internal/util"
+	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
 // Lark-handler unit tests focus on the no-config short-circuits —
@@ -158,5 +163,120 @@ func TestListLarkInstallations_NotConfigured_HardCodedInstallSupportedFalse(t *t
 	}
 	if resp.InstallSupported {
 		t.Fatalf("install_supported must be false in the early-return branch even with a non-nil APIClient")
+	}
+}
+
+func TestFindOrCreateUserForLarkLoginPrefersExistingBinding(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	ctx := context.Background()
+	cleanupLarkLoginBindingPreferenceTest(t, ctx)
+
+	boundEmail := "lark-bound-" + uuid.NewString() + "@multica.ai"
+	emailMatchEmail := "lark-email-match-" + uuid.NewString() + "@multica.ai"
+	var boundUserID, emailMatchUserID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO "user" (name, email)
+		VALUES ('Bound User', $1)
+		RETURNING id
+	`, boundEmail).Scan(&boundUserID); err != nil {
+		t.Fatalf("create bound user: %v", err)
+	}
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO "user" (name, email)
+		VALUES ('Email Match User', $1)
+		RETURNING id
+	`, emailMatchEmail).Scan(&emailMatchUserID); err != nil {
+		t.Fatalf("create email-match user: %v", err)
+	}
+	t.Cleanup(func() {
+		cleanupLarkLoginBindingPreferenceTest(t, context.Background())
+	})
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO member (workspace_id, user_id, role)
+		VALUES ($1, $2, 'member'), ($1, $3, 'member')
+		ON CONFLICT (workspace_id, user_id) DO NOTHING
+	`, testWorkspaceID, boundUserID, emailMatchUserID); err != nil {
+		t.Fatalf("create memberships: %v", err)
+	}
+
+	var agentID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO agent (
+			workspace_id, name, description, runtime_mode, runtime_config,
+			runtime_id, visibility, max_concurrent_tasks, owner_id
+		)
+		VALUES ($1, $2, '', 'cloud', '{}'::jsonb, $3, 'workspace', 1, $4)
+		RETURNING id
+	`, testWorkspaceID, "Lark Login Binding Preference", testRuntimeID, boundUserID).Scan(&agentID); err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+
+	appID := "cli_lark_login_" + strings.ReplaceAll(uuid.NewString(), "-", "")
+	inst, err := testHandler.Queries.CreateLarkInstallation(ctx, db.CreateLarkInstallationParams{
+		WorkspaceID:        util.MustParseUUID(testWorkspaceID),
+		AgentID:            util.MustParseUUID(agentID),
+		AppID:              appID,
+		AppSecretEncrypted: []byte("ciphertext"),
+		TenantKey:          pgtype.Text{String: "tenant", Valid: true},
+		BotOpenID:          "ou_bot_" + uuid.NewString(),
+		InstallerUserID:    util.MustParseUUID(boundUserID),
+	})
+	if err != nil {
+		t.Fatalf("create installation: %v", err)
+	}
+
+	_, err = testHandler.Queries.CreateLarkUserBinding(ctx, db.CreateLarkUserBindingParams{
+		WorkspaceID:    util.MustParseUUID(testWorkspaceID),
+		MulticaUserID:  util.MustParseUUID(boundUserID),
+		InstallationID: inst.ID,
+		LarkOpenID:     "ou_existing",
+		UnionID:        pgtype.Text{String: "on_existing", Valid: true},
+	})
+	if err != nil {
+		t.Fatalf("create binding: %v", err)
+	}
+
+	user, isNew, err := testHandler.findOrCreateUserForLarkLogin(ctx, inst, "feishu", lark.LoginUserInfo{
+		OpenID:  "ou_existing",
+		UnionID: "on_existing",
+		Email:   emailMatchEmail,
+	})
+	if err != nil {
+		t.Fatalf("findOrCreateUserForLarkLogin: %v", err)
+	}
+	if isNew {
+		t.Fatalf("existing binding login should not create a new user")
+	}
+	if uuidToString(user.ID) != boundUserID {
+		t.Fatalf("user id = %s, want existing binding user %s (email match user was %s)", uuidToString(user.ID), boundUserID, emailMatchUserID)
+	}
+}
+
+func cleanupLarkLoginBindingPreferenceTest(t *testing.T, ctx context.Context) {
+	t.Helper()
+	statements := []string{
+		`DELETE FROM lark_user_binding WHERE multica_user_id IN (SELECT id FROM "user" WHERE email LIKE 'lark-bound-%@multica.ai' OR email LIKE 'lark-email-match-%@multica.ai')`,
+		`DELETE FROM lark_login_identity WHERE multica_user_id IN (SELECT id FROM "user" WHERE email LIKE 'lark-bound-%@multica.ai' OR email LIKE 'lark-email-match-%@multica.ai')`,
+		`DELETE FROM lark_installation
+		 WHERE installer_user_id IN (SELECT id FROM "user" WHERE email LIKE 'lark-bound-%@multica.ai' OR email LIKE 'lark-email-match-%@multica.ai')
+		    OR agent_id IN (
+				SELECT a.id
+				FROM agent a
+				JOIN "user" u ON u.id = a.owner_id
+				WHERE (u.email LIKE 'lark-bound-%@multica.ai' OR u.email LIKE 'lark-email-match-%@multica.ai')
+				  AND a.name = 'Lark Login Binding Preference'
+			)`,
+		`DELETE FROM agent
+		 WHERE owner_id IN (SELECT id FROM "user" WHERE email LIKE 'lark-bound-%@multica.ai' OR email LIKE 'lark-email-match-%@multica.ai')
+		   AND name = 'Lark Login Binding Preference'`,
+		`DELETE FROM member WHERE user_id IN (SELECT id FROM "user" WHERE email LIKE 'lark-bound-%@multica.ai' OR email LIKE 'lark-email-match-%@multica.ai')`,
+		`DELETE FROM "user" WHERE email LIKE 'lark-bound-%@multica.ai' OR email LIKE 'lark-email-match-%@multica.ai'`,
+	}
+	for _, stmt := range statements {
+		if _, err := testPool.Exec(ctx, stmt); err != nil {
+			t.Errorf("cleanup lark login binding preference test: %v", err)
+		}
 	}
 }
