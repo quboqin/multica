@@ -190,3 +190,30 @@ func (q *Queries) UpdateMemberRole(ctx context.Context, arg UpdateMemberRolePara
 	)
 	return i, err
 }
+
+const upsertMember = `-- name: UpsertMember :one
+INSERT INTO member (workspace_id, user_id, role)
+VALUES ($1, $2, $3)
+ON CONFLICT (workspace_id, user_id) DO UPDATE SET
+    role = member.role
+RETURNING id, workspace_id, user_id, role, created_at
+`
+
+type UpsertMemberParams struct {
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+	UserID      pgtype.UUID `json:"user_id"`
+	Role        string      `json:"role"`
+}
+
+func (q *Queries) UpsertMember(ctx context.Context, arg UpsertMemberParams) (Member, error) {
+	row := q.db.QueryRow(ctx, upsertMember, arg.WorkspaceID, arg.UserID, arg.Role)
+	var i Member
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.UserID,
+		&i.Role,
+		&i.CreatedAt,
+	)
+	return i, err
+}
