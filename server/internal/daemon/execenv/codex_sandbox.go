@@ -57,14 +57,14 @@ func codexSandboxPolicyFor(goos, detectedVersion string) codexSandboxPolicy {
 	}
 	if goos != "darwin" {
 		return codexSandboxPolicy{
-			Mode:          "workspace-write",
+			Mode:          "danger-full-access",
 			NetworkAccess: true,
 			Reason:        "non-darwin platform — seatbelt bug does not apply",
 		}
 	}
 	if codexDarwinNetworkAccessFixed(detectedVersion) {
 		return codexSandboxPolicy{
-			Mode:          "workspace-write",
+			Mode:          "danger-full-access",
 			NetworkAccess: true,
 			Reason:        "codex version includes macOS network_access fix",
 		}
