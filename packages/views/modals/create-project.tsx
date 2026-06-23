@@ -58,6 +58,7 @@ import {
   useProjectStatusLabels,
   useProjectPriorityLabels,
 } from "../projects/components/labels";
+import { DEFAULT_PROJECT_ICON } from "../projects/components/project-icon";
 import {
   isDesktopShell,
   pickDirectory,
@@ -382,7 +383,7 @@ export function CreateProjectModal({
                   className="text-2xl cursor-pointer rounded-lg p-1 -ml-1 hover:bg-accent/60 transition-colors"
                   title={t(($) => $.create_project.icon_tooltip)}
                 >
-                  {icon || "📁"}
+                  {icon || DEFAULT_PROJECT_ICON}
                 </button>
               }
             />
@@ -467,7 +468,7 @@ export function CreateProjectModal({
                 <PillButton>
                   <CalendarRange className="size-3 text-muted-foreground" />
                   <span className={cn(!selectedMilestone && "text-muted-foreground")}>
-                    {selectedMilestone?.title ?? "No plan"}
+                    {selectedMilestone?.title ?? t(($) => $.create_project.no_plan)}
                   </span>
                 </PillButton>
               }
@@ -475,7 +476,7 @@ export function CreateProjectModal({
             <DropdownMenuContent align="start" className="w-56">
               <DropdownMenuItem onClick={() => setMilestoneId(null)}>
                 <CalendarRange className="size-3.5 text-muted-foreground" />
-                <span className="text-muted-foreground">No plan</span>
+                <span className="text-muted-foreground">{t(($) => $.create_project.no_plan)}</span>
               </DropdownMenuItem>
               {milestones.length > 0 && (
                 <div className="my-1 h-px bg-border" />

@@ -1,12 +1,12 @@
 {
   "title": "搜索",
-  "description": "搜索页面、任务、项目和成员",
+  "description": "搜索页面、任务、需求和成员",
   "placeholder": "输入命令或关键词搜索...",
   "groups": {
     "pages": "页面",
     "commands": "命令",
     "members": "成员",
-    "projects": "项目",
+    "projects": "需求",
     "issues": "任务",
     "recent": "最近"
   },
@@ -14,7 +14,7 @@
     "inbox": "收件箱",
     "my_issues": "我的任务",
     "issues": "任务",
-    "projects": "项目",
+    "projects": "需求",
     "agents": "智能体",
     "runtimes": "运行时",
     "skills": "Skills",
@@ -24,7 +24,7 @@
   "commands": {
     "current_theme_aria": "当前主题",
     "new_issue": "新建任务",
-    "new_project": "新建项目",
+    "new_project": "新建需求",
     "copy_issue_link": "复制任务链接",
     "copy_identifier": "复制标识符 ({{identifier}})",
     "switch_to_light": "切换到浅色主题",
@@ -37,7 +37,7 @@
   },
   "empty": {
     "no_results": "未找到结果。",
-    "type_to_search": "输入关键词搜索任务和项目"
+    "type_to_search": "输入关键词搜索任务和需求"
   },
   "trigger": {
     "label": "搜索..."

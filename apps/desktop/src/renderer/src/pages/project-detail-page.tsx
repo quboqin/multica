@@ -1,6 +1,6 @@
 import { useParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
-import { ProjectDetail } from "@multica/views/projects/components";
+import { DEFAULT_PROJECT_ICON, ProjectDetail } from "@multica/views/projects/components";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { projectDetailOptions } from "@multica/core/projects/queries";
 import { useDocumentTitle } from "@/hooks/use-document-title";
@@ -10,7 +10,7 @@ export function ProjectDetailPage() {
   const wsId = useWorkspaceId();
   const { data: project } = useQuery(projectDetailOptions(wsId, id!));
 
-  useDocumentTitle(project ? `${project.icon || "📁"} ${project.title}` : "Project");
+  useDocumentTitle(project ? `${project.icon || DEFAULT_PROJECT_ICON} ${project.title}` : "Project");
 
   if (!id) return null;
   return <ProjectDetail projectId={id} />;

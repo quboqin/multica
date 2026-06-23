@@ -143,10 +143,10 @@ const personalNav: { key: NavKey; labelKey: NavLabelKey; icon: typeof Inbox }[] 
 ];
 
 const workspaceNav: { key: NavKey; labelKey: NavLabelKey; icon: typeof Inbox }[] = [
+  { key: "projects", labelKey: "projects", icon: FolderKanban },
   { key: "issues", labelKey: "issues", icon: ListTodo },
   { key: "plans", labelKey: "plans", icon: Flag },
   { key: "kpi", labelKey: "kpi", icon: Gauge },
-  { key: "projects", labelKey: "projects", icon: FolderKanban },
   { key: "autopilots", labelKey: "autopilots", icon: Zap },
   { key: "agents", labelKey: "agents", icon: Bot },
   { key: "squads", labelKey: "squads", icon: Users },
