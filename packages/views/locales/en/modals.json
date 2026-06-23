@@ -110,6 +110,7 @@
     "repos_url_placeholder": "https://github.com/owner/repo or git@github.com:owner/repo.git",
     "repos_add": "Add",
     "repos_selected": "Selected",
+    "no_plan": "No plan",
     "source_pill_local": "Local directory",
     "source_tab_repos": "GitHub repos",
     "source_tab_local": "Local directory",

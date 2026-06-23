@@ -1,7 +1,7 @@
 {
   "page": {
     "title": "计划",
-    "create_project": "创建项目",
+    "create_project": "创建需求",
     "create_plan": "创建计划",
     "open_charts": "图表看板",
     "all_plans": "全部计划",
@@ -11,13 +11,13 @@
   },
   "empty": {
     "title": "还没有经营计划。",
-    "description": "创建一个里程碑，把项目归入同一个计划。",
+    "description": "创建一个里程碑，把需求归入同一个计划。",
     "filtered_title": "当前筛选条件下没有计划。"
   },
     "dialog": {
       "title": "创建计划",
       "edit_title": "编辑计划",
-      "description": "创建一个经营计划里程碑。项目可以单独关联到该计划。",
+      "description": "创建一个经营计划里程碑。需求可以单独关联到该计划。",
     "fields": {
       "title": "标题",
       "description": "描述",
@@ -50,7 +50,7 @@
     "no_start": "未设置开始",
     "no_end": "未设置结束",
     "complete": "完成 {{progress}}%",
-      "projects_count": "{{done}} / {{total}} 个项目",
+      "projects_count": "{{done}} / {{total}} 个需求",
       "paused_count": "{{count}} 个暂停",
       "edit": "编辑",
       "open": "打开"
@@ -61,7 +61,7 @@
       "detail": "基于里程碑的经营周期"
     },
     "projects": {
-      "label": "项目",
+      "label": "需求",
       "detail": "{{count}} 个已完成或关闭"
     },
     "execution": {
@@ -76,34 +76,34 @@
   },
   "progress": {
     "title": "计划进度",
-    "subtitle": "仅统计项目和任务"
+    "subtitle": "仅统计需求和任务"
   },
   "charts": {
     "title": "图表看板",
-    "subtitle": "根据里程碑下的项目实时计算",
+    "subtitle": "根据里程碑下的需求实时计算",
     "back": "返回计划",
     "tasks_done": "任务完成",
-    "empty": "当前选择的计划还没有项目数据。",
+    "empty": "当前选择的计划还没有需求数据。",
     "project_progress": {
-      "title": "项目进度（%）",
-      "subtitle": "按完成度展示前 10 个项目"
+      "title": "需求进度（%）",
+      "subtitle": "按完成度展示前 10 个需求"
     },
     "status_distribution": {
-      "title": "项目状态分布",
-      "subtitle": "当前项目生命周期状态"
+      "title": "需求状态分布",
+      "subtitle": "当前需求生命周期状态"
     },
     "milestone_status": {
-      "title": "各里程碑项目状态",
-      "subtitle": "突出项目总数，同时保留状态分布",
-      "project_count": "{{count}} 个项目",
+      "title": "各里程碑需求状态",
+      "subtitle": "突出需求总数，同时保留状态分布",
+      "project_count": "{{count}} 个需求",
       "progress": "进度"
     },
     "milestone_progress": {
       "title": "里程碑平均进度（%）",
-      "subtitle": "按里程碑统计项目平均完成度"
+      "subtitle": "按里程碑统计需求平均完成度"
     },
     "health_distribution": {
-      "title": "项目健康度分布",
+      "title": "需求健康度分布",
       "subtitle": "根据进度和暂停状态推导"
     },
     "issue_completion": {
@@ -118,18 +118,18 @@
     },
     "overview": {
       "title": "经营驾驶舱",
-      "subtitle": "集中展示进度、项目状态和里程碑推进节奏",
+      "subtitle": "集中展示进度、需求状态和里程碑推进节奏",
       "timeline": "里程碑时间线"
     },
     "key_projects": {
-      "title": "关键交付项目",
-      "subtitle": "优先级为高或紧急的项目",
+      "title": "关键交付需求",
+      "subtitle": "优先级为高或紧急的需求",
       "issue_count": "{{done}}/{{total}} 个任务完成"
     },
     "label_progress": {
       "title": "领域进度",
-      "subtitle": "按项目标签汇总：项目数为挂该标签的项目数，进度按这些项目下任务完成数计算",
-      "project_count": "{{count}} 个项目",
+      "subtitle": "按需求标签汇总：需求数为挂该标签的需求数，进度按这些需求下任务完成数计算",
+      "project_count": "{{count}} 个需求",
       "issue_count": "已完成 {{done}}/{{total}} 个任务",
       "progress": "任务完成率",
       "unlabeled": "未标记"
@@ -137,7 +137,7 @@
   },
   "kpi": {
     "title": "KPI 工作区",
-    "subtitle": "独立于项目完成进度",
+    "subtitle": "独立于需求完成进度",
     "target": "目标",
     "current": "当前",
     "pending": "待更新",
@@ -175,7 +175,7 @@
     },
     "back": "返回",
     "metrics_title": "KPI 指标",
-    "workspace_description": "KPI 是工作区级的结果反馈，用于独立维护目标、当前值、完成率和状态；它不从进度自动聚合，也不参与计划、项目或任务的状态联动。",
+    "workspace_description": "KPI 是工作区级的结果反馈，用于独立维护目标、当前值、完成率和状态；它不从进度自动聚合，也不参与计划、需求或任务的状态联动。",
     "independent_badge": "独立反馈",
     "create_action": "创建 KPI",
     "edit_action": "编辑",
@@ -205,12 +205,12 @@
     "dialog": {
       "create_title": "创建 KPI",
       "edit_title": "编辑 KPI",
-      "description": "KPI 独立维护，不从项目和任务进度自动聚合。",
+      "description": "KPI 独立维护，不从需求和任务进度自动聚合。",
       "cancel": "取消",
       "save": "保存",
       "saving": "保存中..."
     },
-    "unlinked": "未关联计划、项目或任务",
+    "unlinked": "未关联计划、需求或任务",
     "board": {
       "total": "总指标",
       "healthy": "正常",

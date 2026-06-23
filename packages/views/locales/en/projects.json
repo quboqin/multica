@@ -27,7 +27,8 @@
     "lead": "Lead",
     "created": "Created",
     "issues": "Issues",
-    "labels": "Labels"
+    "labels": "Labels",
+    "plan": "Plan"
   },
   "status": {
     "planned": "Planned",
@@ -76,7 +77,8 @@
     "no_issues_yet": "No issues yet",
     "toast_link_copied": "Link copied",
     "toast_project_deleted": "Project deleted",
-    "toast_move_issue_failed": "Failed to move issue"
+    "toast_move_issue_failed": "Failed to move issue",
+    "no_plan": "No plan"
   },
   "resources": {
     "section_header": "Resources",

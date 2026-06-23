@@ -68,18 +68,18 @@ When the runtime is connected, you can create Multica Helper for a guided first 
 
 const zh = `欢迎来到 Multica。
 
-智能体需要先连上运行时才能执行工作。运行时还没准备好时,你也可以先把 Multica 当作轻量项目管理工具体验起来。
+智能体需要先连上运行时才能执行工作。运行时还没准备好时,你也可以先把 Multica 当作轻量需求管理工具体验起来。
 
-## 先体验项目管理功能
+## 先体验需求管理功能
 
 运行时安装前,你可以先做这些事:
 
-1. 为当前工作创建一个项目。
+1. 为当前工作创建一个需求。
 2. 新建几个 issue,并在 backlog、todo、in_progress、done 之间流转。
 3. 给 issue 加优先级、标签、评论和订阅。
 4. 用收件箱追踪分配给你的事项和 @mention。
 
-这样你先熟悉项目管理层。连上运行时后,智能体会直接在这些 issue 上开始工作。
+这样你先熟悉需求管理层。连上运行时后,智能体会直接在这些 issue 上开始工作。
 
 ## 安装第一个 Agent 运行时
 
