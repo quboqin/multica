@@ -1,10 +1,13 @@
 package main
 
 import (
+	"context"
 	"strings"
 	"testing"
 
 	"github.com/spf13/cobra"
+
+	"github.com/multica-ai/multica/server/internal/cli"
 )
 
 // validateProjectStatus must accept the five DB-backed statuses and reject
@@ -192,4 +195,38 @@ func TestBuildResourceRefFromFlagsLocalDirectoryMerges(t *testing.T) {
 			t.Errorf("expected embedded label to be cleared, got %v", ref["label"])
 		}
 	})
+}
+
+func newProjectPlanTestCmd() *cobra.Command {
+	c := &cobra.Command{Use: "project"}
+	c.Flags().String("plan", "", "")
+	c.Flags().String("milestone-id", "", "")
+	return c
+}
+
+func TestResolveProjectMilestoneFlagRejectsMixedModes(t *testing.T) {
+	cmd := newProjectPlanTestCmd()
+	_ = cmd.Flags().Set("plan", "plan-1")
+	_ = cmd.Flags().Set("milestone-id", "11111111-1111-1111-1111-111111111111")
+
+	_, _, err := resolveProjectMilestoneFlag(context.Background(), &cli.APIClient{}, cmd)
+	if err == nil {
+		t.Fatal("expected mutually exclusive flag error")
+	}
+	if !strings.Contains(err.Error(), "mutually exclusive") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestResolveProjectMilestoneFlagRejectsNonUUIDMilestoneID(t *testing.T) {
+	cmd := newProjectPlanTestCmd()
+	_ = cmd.Flags().Set("milestone-id", "not-a-uuid")
+
+	_, _, err := resolveProjectMilestoneFlag(context.Background(), &cli.APIClient{}, cmd)
+	if err == nil {
+		t.Fatal("expected invalid uuid error")
+	}
+	if !strings.Contains(err.Error(), "canonical UUID") {
+		t.Errorf("unexpected error: %v", err)
+	}
 }
