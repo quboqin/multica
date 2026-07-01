@@ -758,6 +758,9 @@ func buildMetaSkillContent(provider string, ctx TaskContextForEnv) string {
 
 	b.WriteString("## Output\n\n")
 	switch {
+	case ctx.ChatSessionID != "":
+		b.WriteString("This is a chat task. Your final assistant response is delivered to the chat automatically.\n")
+		b.WriteString("Do NOT call `multica issue comment add` for ordinary chat replies. Only operate on issue comments when the user explicitly asks you to work on a specific issue.\n")
 	case ctx.AutopilotRunID != "":
 		b.WriteString("This is a run-only autopilot task, so there may be no issue comment to post. Your final assistant output is captured automatically as the autopilot run result. Keep it concise and state the outcome.\n")
 	case ctx.QuickCreatePrompt != "":

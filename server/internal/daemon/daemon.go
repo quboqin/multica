@@ -3032,11 +3032,20 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 		}
 	}
 	applyUserIntegrationEnv(agentEnv, task)
-	backend, err := agent.New(provider, agent.Config{
+	agentConfig := agent.Config{
 		ExecutablePath: entry.Path,
 		Env:            agentEnv,
 		Logger:         d.logger,
-	})
+	}
+	if provider == "codex" {
+		agentConfig.OnCodexInitializedHome = func(codexHome string) {
+			cacheDir := execenv.CodexStateWarmCacheDir(d.cfg.WorkspacesRoot, task.WorkspaceID)
+			if err := execenv.RefreshCodexStateWarmCache(codexHome, cacheDir, d.logger); err != nil {
+				taskLog.Debug("refresh codex state warm cache failed", "error", err)
+			}
+		}
+	}
+	backend, err := agent.New(provider, agentConfig)
 	if err != nil {
 		return TaskResult{}, fmt.Errorf("create agent backend: %w", err)
 	}

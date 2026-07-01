@@ -439,6 +439,48 @@ func TestWorkspaceContextRenderedAcrossTaskKinds(t *testing.T) {
 	}
 }
 
+func TestChatOutputDeliveredToChatNotIssueComment(t *testing.T) {
+	t.Parallel()
+
+	out := buildMetaSkillContent("codex", TaskContextForEnv{
+		ChatSessionID: "chat-1",
+	})
+
+	for _, want := range []string{
+		"This is a chat task.",
+		"delivered to the chat automatically",
+		"Do NOT call `multica issue comment add` for ordinary chat replies",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("chat brief missing output rule %q\n---\n%s", want, out)
+		}
+	}
+	for _, banned := range []string{
+		"Final results MUST be delivered via `multica issue comment add`",
+		"The user does NOT see your terminal output, assistant chat text, or run logs",
+		"A task that finishes without a result comment is invisible to the user",
+	} {
+		if strings.Contains(out, banned) {
+			t.Errorf("chat brief must not inherit issue-comment output rule %q\n---\n%s", banned, out)
+		}
+	}
+}
+
+func TestIssueOutputStillRequiresIssueComment(t *testing.T) {
+	t.Parallel()
+
+	out := buildMetaSkillContent("codex", TaskContextForEnv{
+		IssueID: "11111111-2222-3333-4444-555555555555",
+	})
+
+	if !strings.Contains(out, "Final results MUST be delivered via `multica issue comment add`") {
+		t.Errorf("issue brief must still require an issue comment\n---\n%s", out)
+	}
+	if strings.Contains(out, "delivered to the chat automatically") {
+		t.Errorf("issue brief must not inherit chat output rule\n---\n%s", out)
+	}
+}
+
 func TestIntegrationCredentialStatusRendered(t *testing.T) {
 	t.Parallel()
 	out := buildMetaSkillContent("codex", TaskContextForEnv{

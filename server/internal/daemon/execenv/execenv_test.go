@@ -1911,6 +1911,95 @@ func TestPrepareCodexHomeSeedsFromShared(t *testing.T) {
 	}
 }
 
+func TestPrepareCodexHomeSeedsWorkspaceStateWarmCache(t *testing.T) {
+	// Cannot use t.Parallel() with t.Setenv.
+
+	sharedHome := t.TempDir()
+	t.Setenv("CODEX_HOME", sharedHome)
+
+	workspacesRoot := t.TempDir()
+	const workspaceID = "ws-codex-cache"
+	cacheDir := CodexStateWarmCacheDir(workspacesRoot, workspaceID)
+	if want := filepath.Join(workspacesRoot, workspaceID, CodexStateWarmCacheDirName); cacheDir != want {
+		t.Fatalf("CodexStateWarmCacheDir = %q, want %q", cacheDir, want)
+	}
+	if err := os.MkdirAll(cacheDir, 0o755); err != nil {
+		t.Fatalf("create unmarked cache dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(cacheDir, "state_5.sqlite"), []byte("unmarked state"), 0o644); err != nil {
+		t.Fatalf("write unmarked cache state: %v", err)
+	}
+
+	env1, err := Prepare(PrepareParams{
+		WorkspacesRoot: workspacesRoot,
+		WorkspaceID:    workspaceID,
+		TaskID:         "11111111-1111-1111-1111-111111111111",
+		Provider:       "codex",
+		Task:           TaskContextForEnv{IssueID: "issue-cache-1"},
+	}, discardLogger())
+	if err != nil {
+		t.Fatalf("Prepare #1 failed: %v", err)
+	}
+	defer env1.Cleanup(true)
+	if _, err := os.Stat(filepath.Join(env1.CodexHome, "state_5.sqlite")); !os.IsNotExist(err) {
+		t.Fatalf("unmarked warm cache should not seed first codex-home; stat err=%v", err)
+	}
+
+	cachedStateFiles := map[string]string{
+		"state_5.sqlite":     "state db",
+		"state_5.sqlite-wal": "state wal",
+		"state_5.sqlite-shm": "state shm",
+	}
+	for name, content := range cachedStateFiles {
+		if err := os.WriteFile(filepath.Join(env1.CodexHome, name), []byte(content), 0o644); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
+	}
+	for name, content := range map[string]string{
+		"logs_2.sqlite":     "logs db",
+		"memories_1.sqlite": "memories db",
+		"state_notes.txt":   "not a codex state db",
+	} {
+		if err := os.WriteFile(filepath.Join(env1.CodexHome, name), []byte(content), 0o644); err != nil {
+			t.Fatalf("write uncached %s: %v", name, err)
+		}
+	}
+
+	if err := RefreshCodexStateWarmCache(env1.CodexHome, cacheDir, discardLogger()); err != nil {
+		t.Fatalf("RefreshCodexStateWarmCache: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(cacheDir, codexStateWarmCacheMarkerFile)); err != nil {
+		t.Fatalf("expected warm cache marker: %v", err)
+	}
+
+	env2, err := Prepare(PrepareParams{
+		WorkspacesRoot: workspacesRoot,
+		WorkspaceID:    workspaceID,
+		TaskID:         "22222222-2222-2222-2222-222222222222",
+		Provider:       "codex",
+		Task:           TaskContextForEnv{IssueID: "issue-cache-2"},
+	}, discardLogger())
+	if err != nil {
+		t.Fatalf("Prepare #2 failed: %v", err)
+	}
+	defer env2.Cleanup(true)
+
+	for name, want := range cachedStateFiles {
+		data, err := os.ReadFile(filepath.Join(env2.CodexHome, name))
+		if err != nil {
+			t.Fatalf("expected cached state file %s in second codex-home: %v", name, err)
+		}
+		if string(data) != want {
+			t.Errorf("cached state file %s = %q, want %q", name, data, want)
+		}
+	}
+	for _, name := range []string{"logs_2.sqlite", "memories_1.sqlite", "state_notes.txt"} {
+		if _, err := os.Stat(filepath.Join(env2.CodexHome, name)); !os.IsNotExist(err) {
+			t.Errorf("non-state file %s should not be seeded into second codex-home; stat err=%v", name, err)
+		}
+	}
+}
+
 // Regression test for #1753 — Codex Desktop writes plugin-backed
 // `[[skills.config]]` entries without a `path` field, and the CLI's TOML
 // parser rejects them with `missing field path`. prepareCodexHome must drop
@@ -2502,6 +2591,7 @@ func TestCodexSandboxPolicyFor(t *testing.T) {
 	}{
 		{"linux any version", "linux", "0.100.0", "workspace-write", true},
 		{"linux unknown version", "linux", "", "workspace-write", true},
+		{"windows keeps legacy full access", "windows", "0.121.0", "danger-full-access", false},
 		{"darwin old version", "darwin", "0.121.0", "danger-full-access", false},
 		{"darwin unknown version", "darwin", "", "danger-full-access", false},
 	}

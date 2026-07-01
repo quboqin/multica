@@ -38,13 +38,15 @@ const (
 	defaultCodexSemanticInactivityTimeout  = 10 * time.Minute
 	defaultCodexFirstTurnNoProgressTimeout = 30 * time.Second
 	codexVersionDiagnosticTimeout          = 2 * time.Second
-	// codexGracefulShutdownTimeout bounds how long the lifecycle goroutine
-	// waits for codex to exit on its own after stdin is closed, before forcing
-	// a context-cancel kill. A clean exit lets codex run its shutdown path and
-	// flush buffered telemetry — OTEL batch exporters only force-flush on
-	// graceful shutdown, so killing it immediately (the prior behavior) drops
-	// the task's spans/metrics/logs.
-	codexGracefulShutdownTimeout = 10 * time.Second
+	// Successful Codex runs have already emitted the final turn output. Keep
+	// their shutdown grace short so user-visible chat completion is not held
+	// behind app-server telemetry/session cleanup. Failed runs keep the longer
+	// window because stderr and cleanup diagnostics are more valuable there.
+	codexSuccessfulGracefulShutdownTimeout = 500 * time.Millisecond
+	codexFailedGracefulShutdownTimeout     = 10 * time.Second
+	codexFinalAnswerCompletionGrace        = 2 * time.Second
+	codexSuccessfulWaitDelay               = 500 * time.Millisecond
+	codexFailedWaitDelay                   = 10 * time.Second
 )
 
 // CodexSemanticInactivityMarker prefixes timeout errors emitted when Codex
@@ -547,7 +549,7 @@ func (b *codexBackend) Execute(ctx context.Context, prompt string, opts ExecOpti
 	// Bound the wait after the context is cancelled so a stuck child (or an
 	// open pipe held by a grandchild) can't hang cmd.Wait() forever. Matches
 	// the other long-lived backends (claude, copilot, cursor, …).
-	cmd.WaitDelay = 10 * time.Second
+	cmd.WaitDelay = codexFailedWaitDelay
 	b.cfg.Logger.Info("agent command", "exec", execPath, "args", codexArgs)
 	if opts.Cwd != "" {
 		cmd.Dir = opts.Cwd
@@ -567,10 +569,12 @@ func (b *codexBackend) Execute(ctx context.Context, prompt string, opts ExecOpti
 	stderrBuf := newStderrTail(newLogWriter(b.cfg.Logger, "[codex:stderr] "), codexStderrTailBytes)
 	cmd.Stderr = stderrBuf
 
+	processStartAt := time.Now()
 	if err := cmd.Start(); err != nil {
 		cancel()
 		return nil, fmt.Errorf("start codex: %w", err)
 	}
+	processStartedAt := time.Now()
 
 	b.cfg.Logger.Info("codex started app-server", "pid", cmd.Process.Pid, "cwd", opts.Cwd)
 
@@ -581,9 +585,15 @@ func (b *codexBackend) Execute(ctx context.Context, prompt string, opts ExecOpti
 	var outputMu sync.Mutex
 	var output strings.Builder
 
+	var timingMu sync.Mutex
+	var firstMessageAt time.Time
+	var firstTextAt time.Time
+	var lastTextAt time.Time
+
 	// turnDone is set before starting the reader goroutine so there is no
 	// race between the lifecycle goroutine writing and the reader reading.
 	turnDone := make(chan bool, 1) // true = aborted
+	finalAnswer := make(chan struct{}, 1)
 
 	c := &codexClient{
 		cfg:                  b.cfg,
@@ -592,6 +602,18 @@ func (b *codexBackend) Execute(ctx context.Context, prompt string, opts ExecOpti
 		notificationProtocol: "unknown",
 		onMessage: func(msg Message) {
 			logCodexAgentMessage(b.cfg.Logger, msg)
+			now := time.Now()
+			timingMu.Lock()
+			if firstMessageAt.IsZero() {
+				firstMessageAt = now
+			}
+			if msg.Type == MessageText && msg.Content != "" {
+				if firstTextAt.IsZero() {
+					firstTextAt = now
+				}
+				lastTextAt = now
+			}
+			timingMu.Unlock()
 			if msg.Type == MessageText {
 				outputMu.Lock()
 				output.WriteString(msg.Content)
@@ -607,6 +629,12 @@ func (b *codexBackend) Execute(ctx context.Context, prompt string, opts ExecOpti
 		onTurnDone: func(aborted bool) {
 			select {
 			case turnDone <- aborted:
+			default:
+			}
+		},
+		onFinalAnswer: func() {
+			select {
+			case finalAnswer <- struct{}{}:
 			default:
 			}
 		},
@@ -657,8 +685,14 @@ func (b *codexBackend) Execute(ctx context.Context, prompt string, opts ExecOpti
 		startTime := time.Now()
 		finalStatus := "completed"
 		var finalError string
+		var initializeStartAt, initializeDoneAt time.Time
+		var threadStartAt, threadDoneAt time.Time
+		var turnStartAt, turnStartSentAt, turnDoneAt time.Time
+		var shutdownStartAt, readerDoneAt, shutdownDoneAt time.Time
+		var forcedShutdown bool
 
 		// 1. Initialize handshake
+		initializeStartAt = time.Now()
 		_, err := c.request(runCtx, "initialize", map[string]any{
 			"clientInfo": map[string]any{
 				"name":    "multica-agent-sdk",
@@ -669,6 +703,7 @@ func (b *codexBackend) Execute(ctx context.Context, prompt string, opts ExecOpti
 				"experimentalApi": true,
 			},
 		})
+		initializeDoneAt = time.Now()
 		if err != nil {
 			drainAndWait() // flush os/exec stderr goroutine before sampling Tail
 			finalStatus = "failed"
@@ -676,12 +711,19 @@ func (b *codexBackend) Execute(ctx context.Context, prompt string, opts ExecOpti
 			resCh <- Result{Status: finalStatus, Error: finalError, DurationMs: time.Since(startTime).Milliseconds()}
 			return
 		}
+		if b.cfg.OnCodexInitializedHome != nil {
+			if codexHome := strings.TrimSpace(b.cfg.Env["CODEX_HOME"]); codexHome != "" {
+				b.cfg.OnCodexInitializedHome(codexHome)
+			}
+		}
 		c.notify("initialized")
 
 		// 2. Start a new thread, or resume the prior one for this issue. When
 		// resume fails (thread GCed on the server, schema drift, etc.) we fall
 		// back to a fresh thread so the task still makes progress.
+		threadStartAt = time.Now()
 		threadID, resumed, err := c.startOrResumeThread(runCtx, opts, b.cfg.Logger)
+		threadDoneAt = time.Now()
 		if err != nil {
 			drainAndWait() // flush os/exec stderr goroutine before sampling Tail
 			finalStatus = "failed"
@@ -709,7 +751,9 @@ func (b *codexBackend) Execute(ctx context.Context, prompt string, opts ExecOpti
 		// MUL-2339 — Trump's constraint that the three injection points
 		// must not drift independently).
 		applyCodexReasoningEffort(turnParams, opts.ThinkingLevel)
+		turnStartAt = time.Now()
 		_, err = c.request(runCtx, "turn/start", turnParams)
+		turnStartSentAt = time.Now()
 		if err != nil {
 			drainAndWait() // flush os/exec stderr goroutine before sampling Tail
 			finalStatus = "failed"
@@ -738,6 +782,7 @@ func (b *codexBackend) Execute(ctx context.Context, prompt string, opts ExecOpti
 		defer stopFirstTurnNoProgressTimer()
 
 		waitingForTurn := true
+		finalAnswerObserved := false
 		var timeoutDiagnostic codexTimeoutDiagnostic
 		for waitingForTurn {
 			select {
@@ -753,10 +798,24 @@ func (b *codexBackend) Execute(ctx context.Context, prompt string, opts ExecOpti
 						finalError = errMsg
 					}
 				}
+			case <-finalAnswer:
+				if finalAnswerObserved {
+					continue
+				}
+				finalAnswerObserved = true
+				resetTimer(semanticTimer, codexFinalAnswerCompletionGrace)
+				b.cfg.Logger.Debug("codex final_answer observed; waiting briefly for turn completion",
+					"pid", cmd.Process.Pid,
+					"thread_id", threadID,
+					"turn_id", c.turnID,
+					"grace", codexFinalAnswerCompletionGrace.String(),
+				)
 			case activity := <-semanticActivityCh:
 				lastSemanticActivity = time.Now()
 				lastSemanticActivityDescription = activity
-				resetTimer(semanticTimer, semanticInactivityTimeout)
+				if !finalAnswerObserved {
+					resetTimer(semanticTimer, semanticInactivityTimeout)
+				}
 				if activity == "status:running" && !firstTurnStarted {
 					firstTurnStarted = true
 					firstTurnNoProgressTimer = time.NewTimer(firstTurnNoProgressTimeout)
@@ -785,23 +844,33 @@ func (b *codexBackend) Execute(ctx context.Context, prompt string, opts ExecOpti
 				)
 			case <-semanticTimer.C:
 				waitingForTurn = false
-				finalStatus = "timeout"
-				timeoutDiagnostic = codexTimeoutDiagnostic{
-					Kind:         codexTimeoutSemanticInactivity,
-					Timeout:      semanticInactivityTimeout,
-					LastActivity: lastSemanticActivityDescription,
-					ThreadID:     threadID,
-					TurnID:       c.turnID,
-					Model:        opts.Model,
+				if finalAnswerObserved {
+					b.cfg.Logger.Warn("codex final_answer completion grace elapsed; completing without turn completion",
+						"pid", cmd.Process.Pid,
+						"thread_id", threadID,
+						"turn_id", c.turnID,
+						"grace", codexFinalAnswerCompletionGrace.String(),
+						"last_activity", lastSemanticActivityDescription,
+					)
+				} else {
+					finalStatus = "timeout"
+					timeoutDiagnostic = codexTimeoutDiagnostic{
+						Kind:         codexTimeoutSemanticInactivity,
+						Timeout:      semanticInactivityTimeout,
+						LastActivity: lastSemanticActivityDescription,
+						ThreadID:     threadID,
+						TurnID:       c.turnID,
+						Model:        opts.Model,
+					}
+					b.cfg.Logger.Warn(CodexSemanticInactivityMarker,
+						"pid", cmd.Process.Pid,
+						"thread_id", threadID,
+						"turn_id", c.turnID,
+						"timeout", semanticInactivityTimeout.String(),
+						"last_activity", lastSemanticActivityDescription,
+						"idle_for", time.Since(lastSemanticActivity).Round(time.Millisecond).String(),
+					)
 				}
-				b.cfg.Logger.Warn(CodexSemanticInactivityMarker,
-					"pid", cmd.Process.Pid,
-					"thread_id", threadID,
-					"turn_id", c.turnID,
-					"timeout", semanticInactivityTimeout.String(),
-					"last_activity", lastSemanticActivityDescription,
-					"idle_for", time.Since(lastSemanticActivity).Round(time.Millisecond).String(),
-				)
 			case <-runCtx.Done():
 				waitingForTurn = false
 				if runCtx.Err() == context.DeadlineExceeded {
@@ -814,28 +883,41 @@ func (b *codexBackend) Execute(ctx context.Context, prompt string, opts ExecOpti
 			}
 		}
 
+		turnDoneAt = time.Now()
 		duration := time.Since(startTime)
 		b.cfg.Logger.Info("codex finished", "pid", cmd.Process.Pid, "status", finalStatus, "duration", duration.Round(time.Millisecond).String())
 
+		shutdownGrace := codexFailedGracefulShutdownTimeout
+		if finalStatus == "completed" {
+			shutdownGrace = codexSuccessfulGracefulShutdownTimeout
+			cmd.WaitDelay = codexSuccessfulWaitDelay
+		}
+
 		// Close stdin to signal the app-server to exit. Prefer letting codex
 		// shut down on its own: a clean exit runs codex's shutdown path, which
-		// force-flushes its OTEL batch exporters — killing it immediately (via
-		// cancel → SIGKILL) drops the task's buffered telemetry. Give it a
-		// bounded grace period; only force-cancel if it doesn't exit, so the
-		// reader goroutine can never block forever on scanner.Scan().
+		// force-flushes its OTEL batch exporters. Successful runs use a shorter
+		// grace because the final output has already been captured; failure and
+		// timeout paths keep the longer wait for stderr/diagnostic fidelity.
+		shutdownStartAt = time.Now()
 		stdin.Close()
 		select {
 		case <-readerDone:
+			readerDoneAt = time.Now()
 			// codex closed stdout on its own — clean shutdown, telemetry flushed.
-		case <-time.After(codexGracefulShutdownTimeout):
+		case <-time.After(shutdownGrace):
+			forcedShutdown = true
 			b.cfg.Logger.Warn("codex did not exit after stdin close; forcing shutdown",
 				"pid", cmd.Process.Pid,
-				"grace", codexGracefulShutdownTimeout.String(),
+				"status", finalStatus,
+				"grace", shutdownGrace.String(),
+				"wait_delay", cmd.WaitDelay.String(),
 			)
 			cancel()
 			<-readerDone
+			readerDoneAt = time.Now()
 		}
 		drainAndWait()
+		shutdownDoneAt = time.Now()
 
 		if timeoutDiagnostic.Kind != codexTimeoutNone {
 			timeoutDiagnostic.CodexVersion = detectCodexVersionForDiagnostics(context.Background(), execPath, cmd.Env, b.cfg.Logger)
@@ -871,6 +953,31 @@ func (b *codexBackend) Execute(ctx context.Context, prompt string, opts ExecOpti
 			}
 			usageMap = map[string]TokenUsage{model: u}
 		}
+
+		timingMu.Lock()
+		firstMsgAt := firstMessageAt
+		firstTxtAt := firstTextAt
+		lastTxtAt := lastTextAt
+		timingMu.Unlock()
+		b.cfg.Logger.Info("codex timing summary",
+			"pid", cmd.Process.Pid,
+			"status", finalStatus,
+			"resumed", resumed,
+			"process_start_ms", codexElapsedMs(processStartAt, processStartedAt),
+			"process_to_initialize_done_ms", codexElapsedMs(processStartedAt, initializeDoneAt),
+			"initialize_ms", codexElapsedMs(initializeStartAt, initializeDoneAt),
+			"thread_start_ms", codexElapsedMs(threadStartAt, threadDoneAt),
+			"process_to_thread_done_ms", codexElapsedMs(processStartedAt, threadDoneAt),
+			"turn_start_rpc_ms", codexElapsedMs(turnStartAt, turnStartSentAt),
+			"turn_start_to_first_message_ms", codexElapsedMs(turnStartSentAt, firstMsgAt),
+			"turn_start_to_first_text_ms", codexElapsedMs(turnStartSentAt, firstTxtAt),
+			"turn_start_to_last_text_ms", codexElapsedMs(turnStartSentAt, lastTxtAt),
+			"turn_start_to_done_ms", codexElapsedMs(turnStartSentAt, turnDoneAt),
+			"shutdown_reader_ms", codexElapsedMs(shutdownStartAt, readerDoneAt),
+			"shutdown_total_ms", codexElapsedMs(shutdownStartAt, shutdownDoneAt),
+			"forced_shutdown", forcedShutdown,
+			"total_ms", codexElapsedMs(startTime, shutdownDoneAt),
+		)
 
 		resCh <- Result{
 			Status:     finalStatus,
@@ -1021,6 +1128,13 @@ func stopTimer(timer *time.Timer) {
 	}
 }
 
+func codexElapsedMs(start, end time.Time) int64 {
+	if start.IsZero() || end.IsZero() {
+		return -1
+	}
+	return end.Sub(start).Milliseconds()
+}
+
 func codexFirstTurnNoProgressTimeout(semanticInactivityTimeout time.Duration) time.Duration {
 	if semanticInactivityTimeout <= 0 || semanticInactivityTimeout > defaultCodexFirstTurnNoProgressTimeout {
 		return defaultCodexFirstTurnNoProgressTimeout
@@ -1161,6 +1275,7 @@ type codexClient struct {
 	onMessage          func(Message)
 	onSemanticActivity func(description string)
 	onTurnDone         func(aborted bool)
+	onFinalAnswer      func()
 
 	notificationProtocol string // "unknown", "legacy", "raw"
 	turnStarted          bool
@@ -1636,8 +1751,8 @@ func (c *codexClient) handleItemNotification(method string, params map[string]an
 		}
 		phase, _ := item["phase"].(string)
 		if phase == "final_answer" && c.turnStarted {
-			if c.onTurnDone != nil {
-				c.onTurnDone(false)
+			if c.onFinalAnswer != nil {
+				c.onFinalAnswer()
 			}
 		}
 	}

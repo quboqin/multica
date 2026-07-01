@@ -45,26 +45,36 @@ type codexSandboxPolicy struct {
 // codexSandboxPolicyFor picks the right policy for the given platform and
 // detected Codex CLI version.
 //
-// - Non-darwin: always workspace-write with network access (Landlock is not
-//   affected by the macOS Seatbelt bug).
-// - darwin with a version at or above CodexDarwinNetworkAccessFixedVersion:
-//   workspace-write with network access (upstream bug fixed).
-// - darwin otherwise (including when the version is unknown): fall back to
-//   danger-full-access so the Multica CLI can reach the API.
+//   - Linux: always workspace-write with network access (Landlock is not
+//     affected by the macOS Seatbelt bug).
+//   - Windows: keep danger-full-access. Codex's sandbox guarantees are not
+//     currently used there by Multica, and older daemon builds already wrote
+//     danger-full-access on non-darwin platforms.
+//   - darwin with a version at or above CodexDarwinNetworkAccessFixedVersion:
+//     workspace-write with network access (upstream bug fixed).
+//   - darwin otherwise (including when the version is unknown): fall back to
+//     danger-full-access so the Multica CLI can reach the API.
 func codexSandboxPolicyFor(goos, detectedVersion string) codexSandboxPolicy {
 	if goos == "" {
 		goos = runtime.GOOS
 	}
-	if goos != "darwin" {
+	if goos == "linux" {
 		return codexSandboxPolicy{
-			Mode:          "danger-full-access",
+			Mode:          "workspace-write",
 			NetworkAccess: true,
 			Reason:        "non-darwin platform — seatbelt bug does not apply",
 		}
 	}
-	if codexDarwinNetworkAccessFixed(detectedVersion) {
+	if goos != "darwin" {
 		return codexSandboxPolicy{
 			Mode:          "danger-full-access",
+			NetworkAccess: false,
+			Reason:        "non-darwin platform without supported Codex sandbox",
+		}
+	}
+	if codexDarwinNetworkAccessFixed(detectedVersion) {
+		return codexSandboxPolicy{
+			Mode:          "workspace-write",
 			NetworkAccess: true,
 			Reason:        "codex version includes macOS network_access fix",
 		}
@@ -236,7 +246,7 @@ func ensureCodexSandboxConfig(configPath string, policy codexSandboxPolicy, dete
 		if version == "" {
 			version = "unknown"
 		}
-		logger.Warn("codex sandbox: falling back to danger-full-access on macOS",
+		logger.Warn("codex sandbox: using danger-full-access",
 			"reason", policy.Reason,
 			"codex_version", version,
 			"hint", codexUpgradeHint(),
