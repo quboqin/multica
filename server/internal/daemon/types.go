@@ -130,8 +130,12 @@ func (t *IntegrationTokens) UnmarshalJSON(data []byte) error {
 	}
 	t.Extra = make(map[string]string)
 	for key, value := range raw {
+		trimmedKey := strings.TrimSpace(key)
+		if trimmedKey == "" {
+			continue
+		}
 		trimmed := strings.TrimSpace(value)
-		switch key {
+		switch trimmedKey {
 		case "git_token":
 			t.GitToken = trimmed
 		case "feishu_mcp_token":
@@ -145,7 +149,7 @@ func (t *IntegrationTokens) UnmarshalJSON(data []byte) error {
 				t.PaonesToken = trimmed
 			}
 		default:
-			t.Extra[key] = trimmed
+			t.Extra[trimmedKey] = trimmed
 		}
 	}
 	return nil

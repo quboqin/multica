@@ -267,3 +267,26 @@ func TestMaterializeIntegrationMcpConfigDisablesServerWithMissingPlaceholderCred
 		t.Fatalf("missing credential should disable server, got %#v", server["enabled"])
 	}
 }
+
+func TestMaterializeIntegrationMcpConfigDisablesServerWithUnknownDynamicPlaceholder(t *testing.T) {
+	raw := json.RawMessage(`{
+		"mcpServers": {
+			"notion": {
+				"url": "${MULTICA_INTEGRATION_NOTION_TOKEN}"
+			}
+		}
+	}`)
+
+	out := materializeIntegrationMcpConfig(raw, IntegrationTokens{})
+	var decoded map[string]any
+	if err := json.Unmarshal(out, &decoded); err != nil {
+		t.Fatalf("decode output: %v", err)
+	}
+	server := decoded["mcpServers"].(map[string]any)["notion"].(map[string]any)
+	if server["url"] != "" {
+		t.Fatalf("unknown missing credential should blank placeholder, got %#v", server["url"])
+	}
+	if server["enabled"] != false {
+		t.Fatalf("unknown missing credential should disable server, got %#v", server["enabled"])
+	}
+}

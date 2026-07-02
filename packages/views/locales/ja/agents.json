@@ -304,8 +304,9 @@
     },
     "mcp_config": {
       "intro": "ランタイム CLI に転送される MCP server configuration です（Claude は --mcp-config、Codex は $CODEX_HOME/config.toml、Hermes/Kimi/Kiro は ACP mcpServers、OpenClaw はタスクごとの config wrapper 経由）。そのまま保存され、secret が含まれる場合があるため、エージェントのオーナーとワークスペースの admin のみが読み取れます。空のままにすると CLI 自身のデフォルトが使用されます。OpenClaw の HTTP/SSE エントリには、Claude の \"type\" の代わりに OpenClaw 独自のフィールド名（例: \"transport\": \"streamable-http\"）を使用してください。",
-      "credential_hint": "ユーザーごとの認証情報は、個人 token や Feishu MCP URL をここに直接保存しないでください。下の Multica placeholder を使うと、Multica が実行時に現在のタスクユーザーの値へ置き換えます。",
-      "placeholder": "{\n  \"mcpServers\": {\n    \"fetch\": {\n      \"command\": \"uvx\",\n      \"args\": [\"mcp-server-fetch\"]\n    }\n  }\n}",
+        "credential_hint": "ユーザーごとの認証情報は、個人 token や Feishu MCP URL をここに直接保存しないでください。下の Multica placeholder を使うと、Multica が実行時に現在のタスクユーザーの値へ置き換えます。",
+        "no_profile_credentials": "プロフィールに保存された連携資格情報はまだありません。アカウント設定で追加すると、ここに placeholder が表示されます。",
+        "placeholder": "{\n  \"mcpServers\": {\n    \"fetch\": {\n      \"command\": \"uvx\",\n      \"args\": [\"mcp-server-fetch\"]\n    }\n  }\n}",
       "editor_aria": "MCP config JSON editor",
       "clear_action": "クリア",
       "invalid_json": "無効な JSON: {{error}}",

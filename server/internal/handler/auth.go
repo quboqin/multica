@@ -711,7 +711,15 @@ func (h *Handler) UpdateMe(w http.ResponseWriter, r *http.Request) {
 			if trimmedKey == "" {
 				continue
 			}
-			nextTokens[trimmedKey] = strings.TrimSpace(value)
+			trimmedValue := strings.TrimSpace(value)
+			if trimmedValue == "" {
+				delete(nextTokens, trimmedKey)
+				continue
+			}
+			nextTokens[trimmedKey] = trimmedValue
+		}
+		if legacyPaones := strings.TrimSpace(nextTokens["paihub_token"]); legacyPaones != "" && strings.TrimSpace(nextTokens["paones_token"]) == "" {
+			nextTokens["paones_token"] = legacyPaones
 		}
 		delete(nextTokens, "paihub_token")
 		tokens, err := json.Marshal(nextTokens)
