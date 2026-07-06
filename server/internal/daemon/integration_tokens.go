@@ -205,6 +205,7 @@ func integrationEnvOverrides(tokens IntegrationTokens) map[string]string {
 }
 
 var nonEnvKeyChars = regexp.MustCompile(`[^A-Z0-9]+`)
+var multicaIntegrationPlaceholder = regexp.MustCompile(`\$\{(MULTICA_INTEGRATION_[A-Z0-9_]+)\}`)
 
 func integrationTokenEnvKey(key string) string {
 	trimmed := strings.TrimSpace(key)
@@ -301,6 +302,15 @@ func replaceIntegrationPlaceholders(value any, overrides map[string]string) (any
 	case string:
 		out := v
 		missingCredential := false
+		out = multicaIntegrationPlaceholder.ReplaceAllStringFunc(out, func(match string) string {
+			name := strings.TrimSuffix(strings.TrimPrefix(match, "${"), "}")
+			replacement, ok := overrides[name]
+			if !ok || strings.TrimSpace(replacement) == "" {
+				missingCredential = true
+				return ""
+			}
+			return replacement
+		})
 		for key, replacement := range overrides {
 			placeholder := "${" + key + "}"
 			if strings.Contains(out, placeholder) && strings.TrimSpace(replacement) == "" {

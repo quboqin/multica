@@ -127,9 +127,10 @@ type Result struct {
 
 // Config configures a Backend instance.
 type Config struct {
-	ExecutablePath string            // path to CLI binary (claude, codebuddy, codex, copilot, opencode, openclaw, hermes, gemini, pi, cursor, kimi, kiro-cli, agy)
-	Env            map[string]string // extra environment variables
-	Logger         *slog.Logger
+	ExecutablePath         string            // path to CLI binary (claude, codebuddy, codex, copilot, opencode, openclaw, hermes, gemini, pi, cursor, kimi, kiro-cli, agy)
+	Env                    map[string]string // extra environment variables
+	Logger                 *slog.Logger
+	OnCodexInitializedHome func(codexHome string)
 }
 
 // New creates a Backend for the given agent type.

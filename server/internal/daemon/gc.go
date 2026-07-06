@@ -108,7 +108,7 @@ func (d *Daemon) gcWorkspace(ctx context.Context, wsDir string, stats *gcStats) 
 		if ctx.Err() != nil {
 			return
 		}
-		if !entry.IsDir() {
+		if !entry.IsDir() || entry.Name() == execenv.CodexStateWarmCacheDirName {
 			continue
 		}
 		taskDir := filepath.Join(wsDir, entry.Name())

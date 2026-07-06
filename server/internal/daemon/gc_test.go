@@ -304,6 +304,27 @@ func TestGcWorkspace_CleansEmptyWorkspaceDir(t *testing.T) {
 	}
 }
 
+func TestGcWorkspacePreservesCodexStateWarmCache(t *testing.T) {
+	t.Parallel()
+
+	d := newGCTestDaemon(t, http.NewServeMux())
+	d.cfg.GCOrphanTTL = 0
+	wsDir := filepath.Join(d.cfg.WorkspacesRoot, "ws-cache")
+	cacheDir := filepath.Join(wsDir, execenv.CodexStateWarmCacheDirName)
+	if err := os.MkdirAll(cacheDir, 0o755); err != nil {
+		t.Fatalf("create cache dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(cacheDir, "state_5.sqlite"), []byte("cache"), 0o644); err != nil {
+		t.Fatalf("write cache file: %v", err)
+	}
+
+	d.gcWorkspace(context.Background(), wsDir, &gcStats{byPattern: map[string]int{}})
+
+	if _, err := os.Stat(filepath.Join(cacheDir, "state_5.sqlite")); err != nil {
+		t.Fatalf("codex state warm cache should survive GC: %v", err)
+	}
+}
+
 func TestShouldCleanTaskDir_OpenIssueArtifactCleanup(t *testing.T) {
 	t.Parallel()
 	issueID := "88888888-8888-8888-8888-888888888888"
@@ -853,8 +874,8 @@ func (c *blockingRepoCache) Lookup(workspaceID, url string) string {
 	return c.inner.Lookup(workspaceID, url)
 }
 
-func (c *blockingRepoCache) Sync(workspaceID string, repos []repocache.RepoInfo) error {
-	return c.inner.Sync(workspaceID, repos)
+func (c *blockingRepoCache) Sync(workspaceID string, repos []repocache.RepoInfo, creds ...repocache.GitCredential) error {
+	return c.inner.Sync(workspaceID, repos, creds...)
 }
 
 func (c *blockingRepoCache) WithRepoLock(barePath string, fn func() error) error {

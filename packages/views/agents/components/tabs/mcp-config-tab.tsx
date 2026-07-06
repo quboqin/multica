@@ -2,22 +2,18 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Eraser, Loader2, Lock, Save } from "lucide-react";
-import type { Agent } from "@multica/core/types";
+import type { Agent, IntegrationTokens } from "@multica/core/types";
+import { useAuthStore } from "@multica/core/auth";
+import {
+  DEFAULT_INTEGRATION_TOKEN_KEYS,
+  integrationTokenPlaceholder,
+} from "@multica/core/integration-tokens";
 import { Button } from "@multica/ui/components/ui/button";
 import { Textarea } from "@multica/ui/components/ui/textarea";
 import { toast } from "sonner";
 import { useT } from "../../../i18n";
 
-const USER_CREDENTIAL_PLACEHOLDERS = [
-  "MULTICA_INTEGRATION_FEISHU_MCP_TOKEN",
-  "MULTICA_INTEGRATION_GIT_TOKEN",
-  "MULTICA_INTEGRATION_PAONES_TOKEN",
-  "MULTICA_INTEGRATION_JINGWEI_TOKEN",
-] as const;
-
-function formatPlaceholder(name: string): string {
-  return "$" + "{" + name + "}";
-}
+const EMPTY_INTEGRATION_TOKENS: IntegrationTokens = {};
 
 // `null` and the empty string are the two ways the user can mean "no
 // config" — the server stores either as a NULL column and the daemon
@@ -39,11 +35,26 @@ export function McpConfigTab({
   onDirtyChange?: (dirty: boolean) => void;
 }) {
   const { t } = useT("agents");
+  const integrationTokens = useAuthStore(
+    (s) => s.user?.integration_tokens ?? EMPTY_INTEGRATION_TOKENS,
+  );
 
   const redacted = agent.mcp_config_redacted === true;
   const original = useMemo(() => configToText(agent.mcp_config), [agent.mcp_config]);
   const [text, setText] = useState(original);
   const [saving, setSaving] = useState(false);
+  const profileCredentialPlaceholders = useMemo(() => {
+    const keys = new Set(DEFAULT_INTEGRATION_TOKEN_KEYS);
+    for (const [key, value] of Object.entries(integrationTokens)) {
+      if (key.trim() !== "" && (value ?? "").trim() !== "") {
+        keys.add(key);
+      }
+    }
+    return Array.from(keys)
+      .map((key) => ({ key, placeholder: integrationTokenPlaceholder(key) }))
+      .filter((item) => item.placeholder !== "")
+      .sort((a, b) => a.key.localeCompare(b.key));
+  }, [integrationTokens]);
 
   // Sync local draft when the agent prop changes (e.g. after a successful
   // save invalidates the cache and a fresh agent arrives). We only sync
@@ -146,16 +157,20 @@ export function McpConfigTab({
         <div className="space-y-2 text-xs text-muted-foreground">
           <p>{t(($) => $.tab_body.mcp_config.intro)}</p>
           <p>{t(($) => $.tab_body.mcp_config.credential_hint)}</p>
-          <div className="flex flex-wrap gap-1.5">
-            {USER_CREDENTIAL_PLACEHOLDERS.map((name) => (
-              <code
-                key={name}
-                className="rounded bg-muted px-1.5 py-0.5 font-mono text-[10px] text-foreground"
-              >
-                {formatPlaceholder(name)}
-              </code>
-            ))}
-          </div>
+          {profileCredentialPlaceholders.length > 0 ? (
+            <div className="flex flex-wrap gap-1.5">
+              {profileCredentialPlaceholders.map(({ key, placeholder }) => (
+                <code
+                  key={key}
+                  className="rounded bg-muted px-1.5 py-0.5 font-mono text-[10px] text-foreground"
+                >
+                  {placeholder}
+                </code>
+              ))}
+            </div>
+          ) : (
+            <p>{t(($) => $.tab_body.mcp_config.no_profile_credentials)}</p>
+          )}
         </div>
         {trimmed !== "" && (
           <Button

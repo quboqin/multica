@@ -9,6 +9,14 @@ import enCommon from "../../../locales/en/common.json";
 import enAgents from "../../../locales/en/agents.json";
 
 const TEST_RESOURCES = { en: { common: enCommon, agents: enAgents } };
+const authUserRef = vi.hoisted(() => ({
+  current: {
+    integration_tokens: {
+      feishu_mcp_token: "https://mcp.feishu.cn/mcp/user-a",
+      notion_token: "secret-notion",
+    } as Record<string, string>,
+  },
+}));
 
 vi.mock("sonner", () => ({
   toast: {
@@ -16,6 +24,16 @@ vi.mock("sonner", () => ({
     success: vi.fn(),
   },
 }));
+
+vi.mock("@multica/core/auth", () => {
+  const state = () => ({ user: authUserRef.current });
+  const useAuthStore = Object.assign(
+    (sel?: (s: ReturnType<typeof state>) => unknown) =>
+      sel ? sel(state()) : state(),
+    { getState: state },
+  );
+  return { useAuthStore };
+});
 
 import { McpConfigTab } from "./mcp-config-tab";
 
@@ -58,6 +76,12 @@ function renderTab(
 describe("McpConfigTab", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    authUserRef.current = {
+      integration_tokens: {
+        feishu_mcp_token: "https://mcp.feishu.cn/mcp/user-a",
+        notion_token: "secret-notion",
+      },
+    };
   });
 
   it("renders a read-only redacted state when the server omitted the value", () => {
@@ -79,6 +103,44 @@ describe("McpConfigTab", () => {
     expect(editor.value).toBe("");
 
     expect(screen.getByRole("button", { name: /save/i })).toBeDisabled();
+  });
+
+  it("lists credential placeholders from the current user's profile", () => {
+    renderTab({ mcp_config: null });
+
+    expect(
+      screen.getByText("${MULTICA_INTEGRATION_GIT_TOKEN}"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText("${MULTICA_INTEGRATION_FEISHU_MCP_TOKEN}"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText("${MULTICA_INTEGRATION_NOTION_TOKEN}"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText("${MULTICA_INTEGRATION_PAONES_TOKEN}"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText("${MULTICA_INTEGRATION_JINGWEI_TOKEN}"),
+    ).toBeInTheDocument();
+  });
+
+  it("still lists built-in credential placeholders when the profile has no integration tokens", () => {
+    authUserRef.current = { integration_tokens: {} };
+    renderTab({ mcp_config: null });
+
+    expect(
+      screen.getByText("${MULTICA_INTEGRATION_GIT_TOKEN}"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText("${MULTICA_INTEGRATION_FEISHU_MCP_TOKEN}"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText("${MULTICA_INTEGRATION_PAONES_TOKEN}"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText("${MULTICA_INTEGRATION_JINGWEI_TOKEN}"),
+    ).toBeInTheDocument();
   });
 
   it("pretty-prints the existing config and saves a parsed object", async () => {

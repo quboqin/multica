@@ -626,7 +626,7 @@ func TestCodexRawItemCommandExecution(t *testing.T) {
 	}
 }
 
-func TestCodexRawItemAgentMessageFinalAnswer(t *testing.T) {
+func TestCodexRawItemAgentMessageFinalAnswerDoesNotCompleteTurn(t *testing.T) {
 	t.Parallel()
 
 	c, _, _ := newTestCodexClient(t)
@@ -634,14 +634,18 @@ func TestCodexRawItemAgentMessageFinalAnswer(t *testing.T) {
 	c.turnStarted = true
 
 	var gotText string
-	var turnDone bool
+	var finalAnswer bool
+	var turnDoneCount int
 	c.onMessage = func(msg Message) {
 		if msg.Type == MessageText {
 			gotText = msg.Content
 		}
 	}
+	c.onFinalAnswer = func() {
+		finalAnswer = true
+	}
 	c.onTurnDone = func(aborted bool) {
-		turnDone = true
+		turnDoneCount++
 	}
 
 	c.handleLine(`{"jsonrpc":"2.0","method":"item/completed","params":{"item":{"type":"agentMessage","id":"msg-1","text":"Done!","phase":"final_answer"}}}`)
@@ -649,8 +653,11 @@ func TestCodexRawItemAgentMessageFinalAnswer(t *testing.T) {
 	if gotText != "Done!" {
 		t.Fatalf("expected text 'Done!', got %q", gotText)
 	}
-	if !turnDone {
-		t.Fatal("expected onTurnDone for final_answer")
+	if !finalAnswer {
+		t.Fatal("expected onFinalAnswer for final_answer")
+	}
+	if turnDoneCount != 0 {
+		t.Fatalf("final_answer must not complete turn, got %d onTurnDone calls", turnDoneCount)
 	}
 }
 
@@ -1259,6 +1266,65 @@ func TestCodexExecuteSurfacesStderrWhenChildExitsEarly(t *testing.T) {
 	}
 }
 
+func TestCodexInitializedHomeCallbackBeforeThreadStart(t *testing.T) {
+	t.Parallel()
+	if runtime.GOOS == "windows" {
+		t.Skip("shell-script fixture is POSIX-only")
+	}
+
+	codexHome := t.TempDir()
+	markerPath := filepath.Join(codexHome, "initialized.marker")
+	fakePath := writeFakeCodexAppServer(t, ""+
+		`read line`+"\n"+
+		`echo '{"jsonrpc":"2.0","id":1,"result":{}}'`+"\n"+
+		`read line`+"\n"+
+		`if [ ! -f "$CODEX_HOME/initialized.marker" ]; then echo '{"jsonrpc":"2.0","method":"error","params":{"message":"callback marker missing before thread/start"}}'; exit 0; fi`+"\n"+
+		`read line`+"\n"+
+		`echo '{"jsonrpc":"2.0","id":2,"result":{"thread":{"id":"thr-callback"}}}'`+"\n"+
+		`read line`+"\n"+
+		`echo '{"jsonrpc":"2.0","id":3,"result":{}}'`+"\n"+
+		`echo '{"jsonrpc":"2.0","method":"turn/completed","params":{"threadId":"thr-callback","turn":{"id":"turn-callback"},"usage":{"inputTokens":1,"outputTokens":1}}}'`+"\n")
+
+	backend, err := New("codex", Config{
+		ExecutablePath: fakePath,
+		Env:            map[string]string{"CODEX_HOME": codexHome},
+		Logger:         slog.Default(),
+		OnCodexInitializedHome: func(home string) {
+			if home != codexHome {
+				t.Errorf("callback codexHome = %q, want %q", home, codexHome)
+			}
+			if err := os.WriteFile(markerPath, []byte("ok"), 0o644); err != nil {
+				t.Errorf("write callback marker: %v", err)
+			}
+		},
+	})
+	if err != nil {
+		t.Fatalf("new codex backend: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	session, err := backend.Execute(ctx, "prompt", ExecOptions{Timeout: 5 * time.Second})
+	if err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	go func() {
+		for range session.Messages {
+		}
+	}()
+	select {
+	case result, ok := <-session.Result:
+		if !ok {
+			t.Fatal("result channel closed without a value")
+		}
+		if result.Status != "completed" {
+			t.Fatalf("expected completed, got status=%q error=%q", result.Status, result.Error)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("timeout waiting for result")
+	}
+}
+
 func TestCodexExecuteTimesOutWhenTurnStopsAfterToolResult(t *testing.T) {
 	t.Parallel()
 	if runtime.GOOS == "windows" {
@@ -1423,7 +1489,7 @@ func TestCodexExecuteSemanticInactivityAllowsContinuousMessages(t *testing.T) {
 
 	result := executeFakeCodex(t, fakePath, ExecOptions{
 		Timeout:                   5 * time.Second,
-		SemanticInactivityTimeout: 90 * time.Millisecond,
+		SemanticInactivityTimeout: 250 * time.Millisecond,
 	})
 	if result.Status != "completed" {
 		t.Fatalf("expected completed, got status=%q error=%q", result.Status, result.Error)
@@ -1494,6 +1560,78 @@ func TestCodexExecuteSemanticInactivityDoesNotAffectNormalTurnCompletion(t *test
 	}
 	if result.Output != "Done" {
 		t.Fatalf("expected output Done, got %q", result.Output)
+	}
+}
+
+func TestCodexExecuteSuccessfulShutdownUsesShortGrace(t *testing.T) {
+	t.Parallel()
+	if runtime.GOOS == "windows" {
+		t.Skip("shell-script fixture is POSIX-only")
+	}
+
+	fakePath := writeFakeCodexAppServer(t, ""+
+		`read line`+"\n"+
+		`echo '{"jsonrpc":"2.0","id":1,"result":{}}'`+"\n"+
+		`read line`+"\n"+
+		`read line`+"\n"+
+		`echo '{"jsonrpc":"2.0","id":2,"result":{"thread":{"id":"thr-shutdown"}}}'`+"\n"+
+		`read line`+"\n"+
+		`echo '{"jsonrpc":"2.0","id":3,"result":{}}'`+"\n"+
+		`echo '{"jsonrpc":"2.0","method":"turn/started","params":{"threadId":"thr-shutdown","turn":{"id":"turn-shutdown"}}}'`+"\n"+
+		`echo '{"jsonrpc":"2.0","method":"item/completed","params":{"threadId":"thr-shutdown","item":{"type":"agentMessage","id":"msg-1","text":"Done"}}}'`+"\n"+
+		`echo '{"jsonrpc":"2.0","method":"turn/completed","params":{"threadId":"thr-shutdown","turn":{"id":"turn-shutdown","status":"completed"}}}'`+"\n"+
+		`sleep 5`+"\n")
+
+	start := time.Now()
+	result := executeFakeCodex(t, fakePath, ExecOptions{
+		Timeout:                   5 * time.Second,
+		SemanticInactivityTimeout: 100 * time.Millisecond,
+	})
+	elapsed := time.Since(start)
+	if result.Status != "completed" {
+		t.Fatalf("expected completed, got status=%q error=%q", result.Status, result.Error)
+	}
+	if result.Output != "Done" {
+		t.Fatalf("expected output Done, got %q", result.Output)
+	}
+	maxExpected := codexSuccessfulGracefulShutdownTimeout + codexSuccessfulWaitDelay + 1500*time.Millisecond
+	if elapsed > maxExpected {
+		t.Fatalf("successful shutdown took %s, want <= %s", elapsed, maxExpected)
+	}
+}
+
+func TestCodexExecuteFinalAnswerGraceCompletesWithoutTurnCompleted(t *testing.T) {
+	t.Parallel()
+	if runtime.GOOS == "windows" {
+		t.Skip("shell-script fixture is POSIX-only")
+	}
+
+	fakePath := writeFakeCodexAppServer(t, ""+
+		`read line`+"\n"+
+		`echo '{"jsonrpc":"2.0","id":1,"result":{}}'`+"\n"+
+		`read line`+"\n"+
+		`read line`+"\n"+
+		`echo '{"jsonrpc":"2.0","id":2,"result":{"thread":{"id":"thr-final"}}}'`+"\n"+
+		`read line`+"\n"+
+		`echo '{"jsonrpc":"2.0","id":3,"result":{}}'`+"\n"+
+		`echo '{"jsonrpc":"2.0","method":"turn/started","params":{"threadId":"thr-final","turn":{"id":"turn-final"}}}'`+"\n"+
+		`echo '{"jsonrpc":"2.0","method":"item/completed","params":{"threadId":"thr-final","item":{"type":"agentMessage","id":"msg-1","text":"Done","phase":"final_answer"}}}'`+"\n"+
+		`sleep 2`+"\n")
+
+	start := time.Now()
+	result := executeFakeCodex(t, fakePath, ExecOptions{
+		Timeout:                   5 * time.Second,
+		SemanticInactivityTimeout: 50 * time.Millisecond,
+	})
+	elapsed := time.Since(start)
+	if result.Status != "completed" {
+		t.Fatalf("expected completed via final_answer grace, got status=%q error=%q", result.Status, result.Error)
+	}
+	if result.Output != "Done" {
+		t.Fatalf("expected output Done, got %q", result.Output)
+	}
+	if elapsed < codexFinalAnswerCompletionGrace {
+		t.Fatalf("expected to wait for final_answer completion grace, elapsed=%s", elapsed)
 	}
 }
 
