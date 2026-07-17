@@ -10,11 +10,12 @@
  *   - AttachmentPreviewModal's full-screen HTML kind
  *
  * Sandbox semantics:
- *   sandbox="allow-scripts" (NOT "allow-same-origin")
+ *   sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox"
+ *   (NOT "allow-same-origin")
  *   → iframe runs in an opaque origin: scripts execute (chart JS works),
- *     but cookie / localStorage / parent access / top-nav / popups / forms
- *     remain blocked. This is the standard "preview untrusted HTML" model
- *     (HTML spec §iframe sandbox, MDN, Claude artifacts, v0.dev preview).
+ *     but cookie / localStorage / parent access / top-nav / forms remain
+ *     blocked. Popups are allowed so generated reports can open external
+ *     material links in a new tab.
  *
  * The server-side `text/plain` + `nosniff` defense at
  * /api/attachments/{id}/content remains untouched — we only feed iframe.srcDoc
@@ -46,7 +47,7 @@ export function CodeBlockIframe({
       // `allow-scripts` with `allow-same-origin` — that pairing defeats the
       // sandbox per the HTML spec (notes on the sandbox attribute).
       srcDoc={html}
-      sandbox="allow-scripts"
+      sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox"
       title={title}
       className={cn(
         "w-full rounded-md border border-border bg-background",

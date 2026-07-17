@@ -63,6 +63,8 @@ type AttachLabelToProjectParams struct {
 	WorkspaceID pgtype.UUID `json:"workspace_id"`
 }
 
+// Workspace-guarded INSERT: both the project and the label must belong to the
+// same workspace before the association is created.
 func (q *Queries) AttachLabelToProject(ctx context.Context, arg AttachLabelToProjectParams) error {
 	_, err := q.db.Exec(ctx, attachLabelToProject, arg.ProjectID, arg.LabelID, arg.WorkspaceID)
 	return err

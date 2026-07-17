@@ -380,11 +380,11 @@ describe("ReadonlyContent Mermaid rendering", () => {
 
 describe("ReadonlyContent HTML block rendering", () => {
   // `language=html` fenced blocks should default to a preview iframe with
-  // sandbox="allow-scripts" (chart JS executes in an opaque origin) and
+  // the HTML preview sandbox (chart JS executes in an opaque origin) and
   // must NOT be wrapped by react-markdown's default <pre>, which would
   // clamp the iframe with monospace / overflow styles. The two-layer
   // code+pre unwrap mirror's Mermaid's pattern.
-  it("renders an iframe with sandbox='allow-scripts' for ```html and skips the outer <pre>", () => {
+  it("renders an iframe with the HTML preview sandbox for ```html and skips the outer <pre>", () => {
     const { container } = render(
       <ReadonlyContent
         content={["```html", '<h1 id="x">hi</h1>', "```"].join("\n")}
@@ -392,7 +392,10 @@ describe("ReadonlyContent HTML block rendering", () => {
     );
     const frame = container.querySelector<HTMLIFrameElement>("iframe");
     expect(frame).not.toBeNull();
-    expect(frame?.getAttribute("sandbox")).toBe("allow-scripts");
+    expect(frame?.getAttribute("sandbox")).toBe(
+      "allow-scripts allow-popups allow-popups-to-escape-sandbox",
+    );
+    expect(frame?.getAttribute("sandbox")).not.toContain("allow-same-origin");
     expect(frame?.getAttribute("srcdoc")).toContain('<h1 id="x">hi</h1>');
     expect(container.querySelector("pre")).toBeNull();
   });
@@ -464,7 +467,10 @@ describe("ReadonlyContent file-card → AttachmentBlock HTML routing", () => {
       expect(f).not.toBeNull();
       return f!;
     });
-    expect(frame.getAttribute("sandbox")).toBe("allow-scripts");
+    expect(frame.getAttribute("sandbox")).toBe(
+      "allow-scripts allow-popups allow-popups-to-escape-sandbox",
+    );
+    expect(frame.getAttribute("sandbox")).not.toContain("allow-same-origin");
     expect(frame.getAttribute("srcdoc")).toContain("<p>chart</p>");
     // AttachmentCard chrome surfaces the filename as visible text in a
     // <p class="truncate"> row. HtmlAttachmentPreview replaces it entirely.

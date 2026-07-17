@@ -128,6 +128,46 @@ export type {
   RedeemLarkBindingTokenResponse,
 } from "./lark";
 export type {
+  CredentialConnector,
+  CredentialProfile,
+  CredentialProfileStatus,
+  CredentialLoginSession,
+  ListCredentialConnectorsResponse,
+  ListCredentialProfilesResponse,
+  StartCredentialLoginSessionRequest,
+  StartCredentialLoginSessionResponse,
+  RunCredentialCrawlRequest,
+  CredentialCrawlResult,
+} from "./credential";
+export type {
+  CreativeEditAsset,
+  CreativeEditFeedback,
+  CreativeEditFeedbackDecision,
+  CreativeEditFeedbackReason,
+  CreativeEditJob,
+  CreativeEditProcessSnapshot,
+  CreativeEditVariant,
+  CreativeImportSummary,
+  CreativeMaterialAssetType,
+  CreativeMaterialCandidate,
+  CreativeMaterialCrawlRun,
+  CreativeMaterialInput,
+  CreativeMaterialStatus,
+  CreativeMaterialSummary,
+  CreativeMaterialsResponse,
+  CreateCreativeEditFeedbackRequest,
+  CreateCreativeEditJobRequest,
+  ImportCreativeMaterialsRequest,
+  UpdateCreativeMaterialCandidateRequest,
+} from "./creative";
+export type {
+  ListWorkspaceMCPConnectionsResponse,
+  SaveWorkspaceMCPConnectionRequest,
+  VerifyWorkspaceMCPConnectionResponse,
+  WorkspaceMCPConnection,
+  WorkspaceMCPConnectionStatus,
+} from "./workspace-mcp";
+export type {
   Autopilot,
   AutopilotStatus,
   AutopilotExecutionMode,

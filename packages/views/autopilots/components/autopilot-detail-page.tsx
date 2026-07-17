@@ -108,6 +108,7 @@ function RunRow({ run, agentId, agentName }: { run: AutopilotRun; agentId: strin
   const status = (RUN_VISUAL[run.status as RunStatus] ? (run.status as RunStatus) : "issue_created");
   const visual = RUN_VISUAL[status];
   const StatusIcon = visual.icon;
+  const outputPreview = summarizeRunOutput(readRunOutput(run));
 
   // For runs with a task_id (run_only mode), build a minimal AgentTask so
   // TranscriptButton can lazy-load the execution transcript.
@@ -141,11 +142,13 @@ function RunRow({ run, agentId, agentName }: { run: AutopilotRun; agentId: strin
       <span className="w-20 shrink-0 text-xs text-muted-foreground">
         {t(($) => $.run_source[run.source as "schedule" | "manual" | "webhook" | "api"]) ?? run.source}
       </span>
-      <span className="flex-1 min-w-0 text-xs text-muted-foreground truncate">
+      <span className="flex-1 min-w-0 text-xs text-muted-foreground">
         {run.issue_id ? (
           t(($) => $.run.issue_linked)
+        ) : outputPreview ? (
+          <span className="line-clamp-2 whitespace-normal text-foreground/80">{outputPreview}</span>
         ) : run.failure_reason ? (
-          <span className="text-destructive">{run.failure_reason}</span>
+          <span className="block truncate text-destructive">{run.failure_reason}</span>
         ) : null}
       </span>
       <span className="w-32 shrink-0 text-right text-xs text-muted-foreground tabular-nums">
@@ -178,6 +181,44 @@ function RunRow({ run, agentId, agentName }: { run: AutopilotRun; agentId: strin
   }
 
   return <div className={rowClass}>{content}</div>;
+}
+
+function readRunOutput(run: AutopilotRun): string | null {
+  const result = run.result;
+  if (!result || typeof result !== "object") {
+    return null;
+  }
+  const output = (result as { output?: unknown }).output;
+  return typeof output === "string" && output.trim() ? output : null;
+}
+
+function summarizeRunOutput(output: string | null): string | null {
+  if (!output) {
+    return null;
+  }
+  const lines = output
+    .replace(/\r\n/g, "\n")
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+  if (lines.length === 0) {
+    return null;
+  }
+
+  const resultLineIndex = lines.findIndex((line) => {
+    const lower = line.toLowerCase();
+    return line.includes("抓取成功") ||
+      line.includes("抓取完成") ||
+      lower.includes("crawl succeeded") ||
+      lower.includes("crawl completed");
+  });
+  const text = lines
+    .slice(resultLineIndex >= 0 ? resultLineIndex : 0)
+    .join(" ")
+    .replace(/[#>*_`|]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  return text ? text.slice(0, 600) : null;
 }
 
 function RunHistoryList({

@@ -28,6 +28,18 @@ function hasLegacyToken(): boolean {
   }
 }
 
+function isSameOriginApi(apiBaseUrl?: string): boolean {
+  if (!apiBaseUrl) return true;
+  if (typeof window === "undefined") {
+    return !/^[a-z][a-z\d+.-]*:\/\//i.test(apiBaseUrl);
+  }
+  try {
+    return new URL(apiBaseUrl, window.location.origin).origin === window.location.origin;
+  } catch {
+    return true;
+  }
+}
+
 // Derive WebSocket URL from the page origin so self-hosted / LAN deployments
 // work without explicit NEXT_PUBLIC_WS_URL.  The Next.js rewrite rule
 // (/ws → backend) handles proxying.
@@ -53,7 +65,8 @@ export function WebProviders({
   locale: SupportedLocale;
   resources: Record<string, LocaleResources>;
 }) {
-  const cookieAuth = !hasLegacyToken();
+  const apiBaseUrl = process.env.NEXT_PUBLIC_API_URL;
+  const cookieAuth = !hasLegacyToken() && isSameOriginApi(apiBaseUrl);
   // Stable identity reference so downstream effects keyed on it don't see a
   // new object on every parent render.
   const identity = useMemo(
@@ -63,7 +76,7 @@ export function WebProviders({
   const localeAdapter = useMemo(() => createBrowserCookieLocaleAdapter(), []);
   return (
     <CoreProvider
-      apiBaseUrl={process.env.NEXT_PUBLIC_API_URL}
+      apiBaseUrl={apiBaseUrl}
       wsUrl={deriveWsUrl()}
       cookieAuth={cookieAuth}
       onLogin={setLoggedInCookie}

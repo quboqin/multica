@@ -79,7 +79,10 @@ describe("AttachmentList — standalone HTML attachment routes through Attachmen
       expect(f).toBeTruthy();
       return f!;
     });
-    expect(frame.getAttribute("sandbox")).toBe("allow-scripts");
+    expect(frame.getAttribute("sandbox")).toBe(
+      "allow-scripts allow-popups allow-popups-to-escape-sandbox",
+    );
+    expect(frame.getAttribute("sandbox")).not.toContain("allow-same-origin");
     expect(frame.getAttribute("srcdoc")).toContain("<p>chart</p>");
     // AttachmentCard chrome would render the filename as visible <p> text;
     // HtmlAttachmentPreview replaces the row entirely.

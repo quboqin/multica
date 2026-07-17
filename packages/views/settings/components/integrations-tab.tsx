@@ -1,6 +1,8 @@
 "use client";
 
+import { CredentialBrokerTab } from "./credential-broker-tab";
 import { LarkTab } from "./lark-tab";
+import { WorkspaceMCPTab } from "./workspace-mcp-tab";
 import { useT } from "../../i18n";
 
 // Integrations is the umbrella tab for third-party platform connections.
@@ -13,6 +15,14 @@ export function IntegrationsTab() {
   const { t } = useT("settings");
   return (
     <div className="space-y-10">
+      <section className="space-y-4">
+        <h2 className="text-sm font-semibold">{t(($) => $.workspace_mcp.section_title)}</h2>
+        <WorkspaceMCPTab />
+      </section>
+      <section className="space-y-4">
+        <h2 className="text-sm font-semibold">{t(($) => $.credential.section_title)}</h2>
+        <CredentialBrokerTab />
+      </section>
       <section className="space-y-4">
         <h2 className="text-sm font-semibold">{t(($) => $.lark.section_title)}</h2>
         <LarkTab />

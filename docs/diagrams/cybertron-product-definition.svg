@@ -1,0 +1,139 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 760" width="1280" height="760" role="img" aria-labelledby="title desc">
+  <title id="title">Cybertron 产品定义</title>
+  <desc id="desc">Cybertron 是 AI-native 团队看板：团队在 Project 和 Issue 中协作，AI Agent 像成员一样被指派，Runtime 执行任务，并把结果回写到看板。</desc>
+  <style>
+    text {
+      font-family: "Helvetica Neue", Helvetica, Arial, "PingFang SC", "Microsoft YaHei", "Microsoft JhengHei", "SimHei", sans-serif;
+      fill: #111827;
+    }
+    .title { font-size: 30px; font-weight: 700; }
+    .subtitle { font-size: 15px; fill: #4b5563; }
+    .main-title { font-size: 24px; font-weight: 700; }
+    .main-subtitle { font-size: 14px; fill: #4b5563; }
+    .box-title { font-size: 18px; font-weight: 700; }
+    .label { font-size: 13px; font-weight: 700; }
+    .small { font-size: 12px; fill: #6b7280; }
+    .tiny { font-size: 11px; fill: #6b7280; }
+    .pill { font-size: 12px; fill: #374151; }
+    .node { stroke-width: 1.5; }
+    .soft { filter: url(#softShadow); }
+  </style>
+  <defs>
+    <filter id="softShadow" x="-14%" y="-14%" width="128%" height="138%">
+      <feDropShadow dx="0" dy="8" stdDeviation="9" flood-color="#111827" flood-opacity="0.09"/>
+    </filter>
+    <marker id="arrowBlue" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto">
+      <polygon points="0 0,10 4,0 8" fill="#2563eb"/>
+    </marker>
+    <marker id="arrowGreen" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto">
+      <polygon points="0 0,10 4,0 8" fill="#16a34a"/>
+    </marker>
+    <marker id="arrowPurple" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto">
+      <polygon points="0 0,10 4,0 8" fill="#9333ea"/>
+    </marker>
+    <marker id="arrowOrange" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto">
+      <polygon points="0 0,10 4,0 8" fill="#ea580c"/>
+    </marker>
+  </defs>
+
+  <rect width="1280" height="760" fill="#ffffff"/>
+
+  <text x="64" y="58" class="title">Cybertron 是什么</text>
+  <text x="64" y="88" class="subtitle">一个 AI-native 团队看板：让 Agent 像团队成员一样被指派到 Issue，并把执行结果回写到看板。</text>
+
+  <!-- Core definition -->
+  <g transform="translate(210 126)">
+    <rect x="0" y="0" width="860" height="84" rx="18" fill="#f9fafb" stroke="#e5e7eb" class="node soft"/>
+    <text x="430" y="34" text-anchor="middle" class="main-title">Team Kanban + AI Agents + Runtime Execution</text>
+    <text x="430" y="60" text-anchor="middle" class="main-subtitle">不是一个聊天窗口，而是一套把 AI 放进团队协作流程的系统。</text>
+  </g>
+
+  <!-- Four product blocks -->
+  <g transform="translate(76 270)">
+    <rect x="0" y="0" width="250" height="230" rx="18" fill="#eff6ff" stroke="#93c5fd" class="node soft"/>
+    <text x="26" y="40" class="box-title">团队看板</text>
+    <text x="26" y="66" class="small">团队工作的长期主线</text>
+    <g transform="translate(26 100)">
+      <rect x="0" y="0" width="88" height="36" rx="8" fill="#ffffff" stroke="#bfdbfe"/>
+      <text x="44" y="23" text-anchor="middle" class="pill">Project</text>
+      <rect x="108" y="0" width="88" height="36" rx="8" fill="#ffffff" stroke="#bfdbfe"/>
+      <text x="152" y="23" text-anchor="middle" class="pill">Issue</text>
+      <rect x="0" y="54" width="88" height="36" rx="8" fill="#ffffff" stroke="#bfdbfe"/>
+      <text x="44" y="77" text-anchor="middle" class="pill">Comment</text>
+      <rect x="108" y="54" width="88" height="36" rx="8" fill="#ffffff" stroke="#bfdbfe"/>
+      <text x="152" y="77" text-anchor="middle" class="pill">Status</text>
+    </g>
+    <text x="26" y="200" class="tiny">人类在这里协作、确认和追踪进度</text>
+  </g>
+
+  <g transform="translate(384 270)">
+    <rect x="0" y="0" width="250" height="230" rx="18" fill="#fff7ed" stroke="#fed7aa" class="node soft"/>
+    <text x="26" y="40" class="box-title">AI Agents</text>
+    <text x="26" y="66" class="small">像成员一样被指派</text>
+    <g transform="translate(26 100)">
+      <rect x="0" y="0" width="88" height="36" rx="8" fill="#ffffff" stroke="#fed7aa"/>
+      <text x="44" y="23" text-anchor="middle" class="pill">Req</text>
+      <rect x="108" y="0" width="88" height="36" rx="8" fill="#ffffff" stroke="#fed7aa"/>
+      <text x="152" y="23" text-anchor="middle" class="pill">Design</text>
+      <rect x="0" y="54" width="88" height="36" rx="8" fill="#ffffff" stroke="#fed7aa"/>
+      <text x="44" y="77" text-anchor="middle" class="pill">Coding</text>
+      <rect x="108" y="54" width="88" height="36" rx="8" fill="#ffffff" stroke="#fed7aa"/>
+      <text x="152" y="77" text-anchor="middle" class="pill">Test / Fix</text>
+    </g>
+    <text x="26" y="200" class="tiny">不同角色 agent 承接不同阶段工作</text>
+  </g>
+
+  <g transform="translate(692 270)">
+    <rect x="0" y="0" width="250" height="230" rx="18" fill="#f0fdf4" stroke="#86efac" class="node soft"/>
+    <text x="26" y="40" class="box-title">Runtime Execution</text>
+    <text x="26" y="66" class="small">短周期执行 Agent Task</text>
+    <g transform="translate(26 100)">
+      <rect x="0" y="0" width="88" height="36" rx="8" fill="#ffffff" stroke="#86efac"/>
+      <text x="44" y="23" text-anchor="middle" class="pill">daemon</text>
+      <rect x="108" y="0" width="88" height="36" rx="8" fill="#ffffff" stroke="#86efac"/>
+      <text x="152" y="23" text-anchor="middle" class="pill">work_dir</text>
+      <rect x="0" y="54" width="88" height="36" rx="8" fill="#ffffff" stroke="#86efac"/>
+      <text x="44" y="77" text-anchor="middle" class="pill">Codex</text>
+      <rect x="108" y="54" width="88" height="36" rx="8" fill="#ffffff" stroke="#86efac"/>
+      <text x="152" y="77" text-anchor="middle" class="pill">Tools</text>
+    </g>
+    <text x="26" y="200" class="tiny">执行完释放，必要上下文可恢复</text>
+  </g>
+
+  <g transform="translate(1000 270)">
+    <rect x="0" y="0" width="250" height="230" rx="18" fill="#faf5ff" stroke="#d8b4fe" class="node soft"/>
+    <text x="26" y="40" class="box-title">可审查结果</text>
+    <text x="26" y="66" class="small">产物回到团队协作流</text>
+    <g transform="translate(26 100)">
+      <rect x="0" y="0" width="88" height="36" rx="8" fill="#ffffff" stroke="#d8b4fe"/>
+      <text x="44" y="23" text-anchor="middle" class="pill">Report</text>
+      <rect x="108" y="0" width="88" height="36" rx="8" fill="#ffffff" stroke="#d8b4fe"/>
+      <text x="152" y="23" text-anchor="middle" class="pill">Code</text>
+      <rect x="0" y="54" width="88" height="36" rx="8" fill="#ffffff" stroke="#d8b4fe"/>
+      <text x="44" y="77" text-anchor="middle" class="pill">Test</text>
+      <rect x="108" y="54" width="88" height="36" rx="8" fill="#ffffff" stroke="#d8b4fe"/>
+      <text x="152" y="77" text-anchor="middle" class="pill">Release</text>
+    </g>
+    <text x="26" y="200" class="tiny">评论、产物、状态、Review 决策可追踪</text>
+  </g>
+
+  <!-- Flow arrows -->
+  <path d="M326 385 H384" stroke="#2563eb" stroke-width="2.6" fill="none" marker-end="url(#arrowBlue)"/>
+  <text x="355" y="362" text-anchor="middle" class="tiny">指派 / @agent</text>
+
+  <path d="M634 385 H692" stroke="#ea580c" stroke-width="2.6" fill="none" marker-end="url(#arrowOrange)"/>
+  <text x="663" y="362" text-anchor="middle" class="tiny">创建 Agent Task</text>
+
+  <path d="M942 385 H1000" stroke="#16a34a" stroke-width="2.6" fill="none" marker-end="url(#arrowGreen)"/>
+  <text x="971" y="362" text-anchor="middle" class="tiny">执行产出</text>
+
+  <path d="M1125 500 V564 H202 V500" stroke="#9333ea" stroke-width="2.3" stroke-dasharray="7 5" fill="none" marker-end="url(#arrowPurple)"/>
+  <text x="664" y="590" text-anchor="middle" class="small">结果回写到看板：Comment / Artifact / Status / Review</text>
+
+  <!-- Bottom statement -->
+  <g transform="translate(154 640)">
+    <rect x="0" y="0" width="972" height="46" rx="12" fill="#f9fafb" stroke="#e5e7eb"/>
+    <text x="36" y="29" class="small">一句话：</text>
+    <text x="100" y="29" class="small">Cybertron 让团队用看板管理需求，让 Agent 执行任务，让结果回到可审查的协作记录里。</text>
+  </g>
+</svg>

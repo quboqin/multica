@@ -1,0 +1,86 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1680 900" width="1680" height="900" role="img" aria-labelledby="title desc">
+  <title id="title">Cybertron 协作复利飞轮</title>
+  <desc id="desc">展示 Cybertron 如何把工作流、协作记录、知识库和 Skill 更新形成闭环，让团队越用越懂业务。</desc>
+  <style>
+    text { font-family: "Helvetica Neue", Helvetica, Arial, "PingFang SC", "Microsoft YaHei", "Microsoft JhengHei", "SimHei", sans-serif; fill: #111827; }
+    .title { font-size: 34px; font-weight: 760; }
+    .subtitle { font-size: 16px; fill: #4b5563; }
+    .card-title { font-size: 22px; font-weight: 760; }
+    .card-subtitle { font-size: 14px; fill: #374151; }
+    .small { font-size: 13px; fill: #374151; }
+    .tiny { font-size: 12px; fill: #4b5563; }
+    .pill { font-size: 12px; font-weight: 740; fill: #374151; }
+    .chip { font-size: 13px; font-weight: 650; fill: #111827; }
+    .node { stroke-width: 1.6; }
+    .soft { filter: url(#softShadow); }
+  </style>
+  <defs>
+    <filter id="softShadow" x="-8%" y="-8%" width="116%" height="122%"><feDropShadow dx="0" dy="8" stdDeviation="9" flood-color="#111827" flood-opacity="0.08"/></filter>
+    <marker id="arrowBlue" markerWidth="11" markerHeight="8" refX="10" refY="4" orient="auto"><polygon points="0 0,11 4,0 8" fill="#2563eb"/></marker>
+    <marker id="arrowGreen" markerWidth="11" markerHeight="8" refX="10" refY="4" orient="auto"><polygon points="0 0,11 4,0 8" fill="#16a34a"/></marker>
+    <marker id="arrowPurple" markerWidth="11" markerHeight="8" refX="10" refY="4" orient="auto"><polygon points="0 0,11 4,0 8" fill="#9333ea"/></marker>
+  </defs>
+  <rect width="1680" height="900" fill="#ffffff"/>
+<text x="64" y="58" class="title">Cybertron 协作复利飞轮</text>
+<text x="64" y="92" class="subtitle">每一次协作都会沉淀成知识和 Skill，让下一次 Agent 执行更快、更准、更贴近业务。</text>
+<line x1="338" y1="256" x2="410" y2="256" stroke="#2563eb" stroke-width="2.6" marker-end="url(#arrowBlue)"/>
+<line x1="656" y1="256" x2="728" y2="256" stroke="#2563eb" stroke-width="2.6" marker-end="url(#arrowBlue)"/>
+<line x1="974" y1="256" x2="1046" y2="256" stroke="#16a34a" stroke-width="2.6" marker-end="url(#arrowGreen)"/>
+<line x1="1292" y1="256" x2="1364" y2="256" stroke="#16a34a" stroke-width="2.6" marker-end="url(#arrowGreen)"/>
+<line x1="812" y1="527" x2="868" y2="527" stroke="#9333ea" stroke-width="2.1" stroke-opacity="0.72" marker-end="url(#arrowPurple)"/>
+<rect x="811" y="492" width="58" height="24" rx="12" fill="#ffffff" stroke="#ede9fe" class="node"/>
+<text x="840" y="509" class="tiny" text-anchor="middle">转化为</text>
+
+<rect x="92" y="166" width="246" height="178" rx="22" fill="#eff6ff" stroke="#93c5fd" class="node soft"/>
+<rect x="114" y="194" width="54" height="28" rx="9" fill="#ffffff" stroke="#93c5fd" class="node"/>
+<text x="141" y="213" class="pill" text-anchor="middle">01</text>
+<text x="120" y="258" class="card-title">工作流</text>
+<text x="120" y="296" class="card-subtitle">需求、任务、审批进入 Cybertron</text>
+<rect x="410" y="166" width="246" height="178" rx="22" fill="#faf5ff" stroke="#d8b4fe" class="node soft"/>
+<rect x="432" y="194" width="54" height="28" rx="9" fill="#ffffff" stroke="#d8b4fe" class="node"/>
+<text x="459" y="213" class="pill" text-anchor="middle">02</text>
+<text x="438" y="258" class="card-title">Agent 执行</text>
+<text x="438" y="296" class="card-subtitle">按流程处理任务并产出结果</text>
+<rect x="728" y="166" width="246" height="178" rx="22" fill="#fff7ed" stroke="#fed7aa" class="node soft"/>
+<rect x="750" y="194" width="54" height="28" rx="9" fill="#ffffff" stroke="#fed7aa" class="node"/>
+<text x="777" y="213" class="pill" text-anchor="middle">03</text>
+<text x="756" y="258" class="card-title">协作记录</text>
+<text x="756" y="296" class="card-subtitle">评论、状态、产物全部留痕</text>
+<rect x="1046" y="166" width="246" height="178" rx="22" fill="#f0fdf4" stroke="#86efac" class="node soft"/>
+<rect x="1068" y="194" width="54" height="28" rx="9" fill="#ffffff" stroke="#86efac" class="node"/>
+<text x="1095" y="213" class="pill" text-anchor="middle">04</text>
+<text x="1074" y="258" class="card-title">团队知识库</text>
+<text x="1074" y="296" class="card-subtitle">沉淀业务规则、经验和上下文</text>
+<rect x="1364" y="166" width="246" height="178" rx="22" fill="#f0fdfa" stroke="#99f6e4" class="node soft"/>
+<rect x="1386" y="194" width="54" height="28" rx="9" fill="#ffffff" stroke="#99f6e4" class="node"/>
+<text x="1413" y="213" class="pill" text-anchor="middle">05</text>
+<text x="1392" y="258" class="card-title">Skill 更新</text>
+<text x="1392" y="296" class="card-subtitle">把经验变成可复用能力包</text>
+<rect x="142" y="438" width="650" height="178" rx="24" fill="#ffffff" stroke="#e5e7eb" class="node soft"/>
+<text x="174" y="482" class="card-title">沉淀什么</text>
+<rect x="174" y="512" width="230" height="36" rx="10" fill="#f9fafb" stroke="#d1d5db" class="node"/>
+<text x="289" y="536" class="chip" text-anchor="middle">业务规则</text>
+<rect x="458" y="512" width="230" height="36" rx="10" fill="#f9fafb" stroke="#d1d5db" class="node"/>
+<text x="573" y="536" class="chip" text-anchor="middle">历史决策</text>
+<rect x="174" y="566" width="230" height="36" rx="10" fill="#f9fafb" stroke="#d1d5db" class="node"/>
+<text x="289" y="590" class="chip" text-anchor="middle">最佳实践</text>
+<rect x="458" y="566" width="230" height="36" rx="10" fill="#f9fafb" stroke="#d1d5db" class="node"/>
+<text x="573" y="590" class="chip" text-anchor="middle">常见问题</text>
+<rect x="888" y="438" width="650" height="178" rx="24" fill="#ffffff" stroke="#e5e7eb" class="node soft"/>
+<text x="920" y="482" class="card-title">复利来自哪里</text>
+<rect x="920" y="512" width="230" height="36" rx="10" fill="#f9fafb" stroke="#d1d5db" class="node"/>
+<text x="942" y="536" class="chip">流程复用</text>
+<text x="1022" y="536" class="tiny">同类工作有固定路径</text>
+<rect x="1204" y="512" width="230" height="36" rx="10" fill="#f9fafb" stroke="#d1d5db" class="node"/>
+<text x="1226" y="536" class="chip">知识复用</text>
+<text x="1306" y="536" class="tiny">历史结论不丢失</text>
+<rect x="920" y="566" width="230" height="36" rx="10" fill="#f9fafb" stroke="#d1d5db" class="node"/>
+<text x="942" y="590" class="chip">Skill 复用</text>
+<text x="1022" y="590" class="tiny">好方法变成能力包</text>
+<rect x="1204" y="566" width="230" height="36" rx="10" fill="#f9fafb" stroke="#d1d5db" class="node"/>
+<text x="1226" y="590" class="chip">Agent 复用</text>
+<text x="1306" y="590" class="tiny">下次直接带经验</text>
+<rect x="92" y="736" width="1492" height="58" rx="16" fill="#f9fafb" stroke="#e5e7eb" class="node"/>
+<text x="124" y="772" class="card-title">一句话</text>
+<text x="248" y="772" class="subtitle">Cybertron 不只是执行任务，而是在每一次协作后把经验沉淀下来，下一次工作自动复用。</text>
+</svg>

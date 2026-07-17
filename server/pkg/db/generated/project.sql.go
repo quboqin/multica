@@ -196,7 +196,12 @@ type ListProjectsParams struct {
 }
 
 func (q *Queries) ListProjects(ctx context.Context, arg ListProjectsParams) ([]Project, error) {
-	rows, err := q.db.Query(ctx, listProjects, arg.WorkspaceID, arg.Status, arg.Priority, arg.MilestoneID)
+	rows, err := q.db.Query(ctx, listProjects,
+		arg.WorkspaceID,
+		arg.Status,
+		arg.Priority,
+		arg.MilestoneID,
+	)
 	if err != nil {
 		return nil, err
 	}

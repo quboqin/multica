@@ -127,6 +127,22 @@ import type {
   CreateBillingCheckoutSessionResponse,
   BillingCheckoutSessionStatus,
   CreateBillingPortalSessionResponse,
+  CreateCreativeEditFeedbackRequest,
+  CreateCreativeEditJobRequest,
+  CreativeImportSummary,
+  CreativeMaterialsResponse,
+  CredentialCrawlResult,
+  ImportCreativeMaterialsRequest,
+  ListCredentialConnectorsResponse,
+  ListCredentialProfilesResponse,
+  ListWorkspaceMCPConnectionsResponse,
+  RunCredentialCrawlRequest,
+  StartCredentialLoginSessionRequest,
+  StartCredentialLoginSessionResponse,
+  UpdateCreativeMaterialCandidateRequest,
+  SaveWorkspaceMCPConnectionRequest,
+  VerifyWorkspaceMCPConnectionResponse,
+  WorkspaceMCPConnection,
 } from "../types";
 import type { OnboardingCompletionPath } from "../onboarding/types";
 import type {
@@ -204,12 +220,31 @@ import {
   EMPTY_BILLING_CHECKOUT_SESSION_STATUS,
   EMPTY_CREATE_BILLING_PORTAL_SESSION_RESPONSE,
   EMPTY_CANCEL_TASK_RESPONSE,
+  EMPTY_CREATIVE_IMPORT_SUMMARY,
+  EMPTY_CREATIVE_MATERIALS_RESPONSE,
+  EMPTY_CREDENTIAL_CRAWL_RESULT,
+  EMPTY_LIST_CREDENTIAL_CONNECTORS_RESPONSE,
+  EMPTY_LIST_CREDENTIAL_PROFILES_RESPONSE,
+  EMPTY_LIST_WORKSPACE_MCP_CONNECTIONS_RESPONSE,
+  EMPTY_WORKSPACE_MCP_CONNECTION,
+  EMPTY_START_CREDENTIAL_LOGIN_SESSION_RESPONSE,
+  EMPTY_VERIFY_WORKSPACE_MCP_CONNECTION_RESPONSE,
   EMPTY_LARK_LOGIN_RESPONSE,
   EMPTY_LARK_LOGIN_STATE_RESPONSE,
   EMPTY_LOGIN_RESPONSE,
+  CreativeImportSummarySchema,
+  CreativeMaterialsResponseSchema,
+  CredentialCrawlResultSchema,
+  CredentialProfileSchema,
+  ListCredentialConnectorsResponseSchema,
+  ListCredentialProfilesResponseSchema,
+  ListWorkspaceMCPConnectionsResponseSchema,
   LarkLoginResponseSchema,
   LarkLoginStateResponseSchema,
   LoginResponseSchema,
+  StartCredentialLoginSessionResponseSchema,
+  VerifyWorkspaceMCPConnectionResponseSchema,
+  WorkspaceMCPConnectionSchema,
 } from "./schemas";
 
 /** Identifies the calling client to the server.
@@ -2223,6 +2258,240 @@ export class ApiClient {
       { ...EMPTY_WEBHOOK_DELIVERY, autopilot_id: autopilotId },
       { endpoint: "POST /api/autopilots/:id/deliveries/:deliveryId/replay" },
     );
+  }
+
+  // Credential broker
+  async listCredentialConnectors(): Promise<ListCredentialConnectorsResponse> {
+    const raw = await this.fetch<unknown>("/api/credential-connectors");
+    return parseWithFallback(
+      raw,
+      ListCredentialConnectorsResponseSchema,
+      EMPTY_LIST_CREDENTIAL_CONNECTORS_RESPONSE,
+      { endpoint: "GET /api/credential-connectors" },
+    );
+  }
+
+  async listCredentialProfiles(): Promise<ListCredentialProfilesResponse> {
+    const raw = await this.fetch<unknown>("/api/credential-profiles");
+    return parseWithFallback(
+      raw,
+      ListCredentialProfilesResponseSchema,
+      EMPTY_LIST_CREDENTIAL_PROFILES_RESPONSE,
+      { endpoint: "GET /api/credential-profiles" },
+    );
+  }
+
+  async startCredentialLoginSession(
+    data: StartCredentialLoginSessionRequest,
+  ): Promise<StartCredentialLoginSessionResponse> {
+    const raw = await this.fetch<unknown>("/api/credential-login-sessions", {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+    return parseWithFallback(
+      raw,
+      StartCredentialLoginSessionResponseSchema,
+      EMPTY_START_CREDENTIAL_LOGIN_SESSION_RESPONSE,
+      { endpoint: "POST /api/credential-login-sessions" },
+    );
+  }
+
+  async deleteCredentialProfile(profileId: string): Promise<void> {
+    const raw = await this.fetch<unknown>(`/api/credential-profiles/${profileId}`, {
+      method: "DELETE",
+    });
+    parseWithFallback(raw, CredentialProfileSchema, null, {
+      endpoint: "DELETE /api/credential-profiles/:id",
+    });
+  }
+
+  async runCredentialCrawl(data: RunCredentialCrawlRequest): Promise<CredentialCrawlResult> {
+    const raw = await this.fetch<unknown>("/api/credential-crawl", {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+    return parseWithFallback(
+      raw,
+      CredentialCrawlResultSchema,
+      EMPTY_CREDENTIAL_CRAWL_RESULT,
+      { endpoint: "POST /api/credential-crawl" },
+    );
+  }
+
+  // Workspace-level MCP connections are consumed by persistent backend jobs.
+  async listWorkspaceMCPConnections(): Promise<ListWorkspaceMCPConnectionsResponse> {
+    const raw = await this.fetch<unknown>("/api/workspace-mcp-connections");
+    return parseWithFallback(
+      raw,
+      ListWorkspaceMCPConnectionsResponseSchema,
+      EMPTY_LIST_WORKSPACE_MCP_CONNECTIONS_RESPONSE,
+      { endpoint: "GET /api/workspace-mcp-connections" },
+    );
+  }
+
+  async createWorkspaceMCPConnection(
+    data: SaveWorkspaceMCPConnectionRequest,
+  ): Promise<WorkspaceMCPConnection> {
+    const raw = await this.fetch<unknown>("/api/workspace-mcp-connections", {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+    return parseWithFallback(raw, WorkspaceMCPConnectionSchema, EMPTY_WORKSPACE_MCP_CONNECTION, {
+      endpoint: "POST /api/workspace-mcp-connections",
+    });
+  }
+
+  async updateWorkspaceMCPConnection(
+    connectionId: string,
+    data: SaveWorkspaceMCPConnectionRequest,
+  ): Promise<WorkspaceMCPConnection> {
+    const raw = await this.fetch<unknown>(`/api/workspace-mcp-connections/${connectionId}`, {
+      method: "PUT",
+      body: JSON.stringify(data),
+    });
+    return parseWithFallback(raw, WorkspaceMCPConnectionSchema, EMPTY_WORKSPACE_MCP_CONNECTION, {
+      endpoint: "PUT /api/workspace-mcp-connections/:id",
+    });
+  }
+
+  async disableWorkspaceMCPConnection(connectionId: string): Promise<void> {
+    await this.fetch(`/api/workspace-mcp-connections/${connectionId}`, {
+      method: "DELETE",
+    });
+  }
+
+  async verifyWorkspaceMCPConnection(
+    connectionId: string,
+  ): Promise<VerifyWorkspaceMCPConnectionResponse> {
+    const raw = await this.fetch<unknown>(
+      `/api/workspace-mcp-connections/${connectionId}/verify`,
+      { method: "POST" },
+    );
+    return parseWithFallback(
+      raw,
+      VerifyWorkspaceMCPConnectionResponseSchema,
+      EMPTY_VERIFY_WORKSPACE_MCP_CONNECTION_RESPONSE,
+      { endpoint: "POST /api/workspace-mcp-connections/:id/verify" },
+    );
+  }
+
+  // Creative material workflow
+  async getCreativeMaterials(issueId: string): Promise<CreativeMaterialsResponse> {
+    const raw = await this.fetch<unknown>(`/api/issues/${issueId}/creative-materials`);
+    return parseWithFallback(
+      raw,
+      CreativeMaterialsResponseSchema,
+      EMPTY_CREATIVE_MATERIALS_RESPONSE,
+      { endpoint: "GET /api/issues/:id/creative-materials" },
+    );
+  }
+
+  async importCreativeMaterials(
+    issueId: string,
+    data: ImportCreativeMaterialsRequest,
+  ): Promise<CreativeImportSummary> {
+    const raw = await this.fetch<unknown>(`/api/issues/${issueId}/creative-materials/import`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+    return parseWithFallback(
+      raw,
+      CreativeImportSummarySchema,
+      EMPTY_CREATIVE_IMPORT_SUMMARY,
+      { endpoint: "POST /api/issues/:id/creative-materials/import" },
+    );
+  }
+
+  async updateCreativeMaterialCandidate(
+    issueId: string,
+    candidateId: string,
+    data: UpdateCreativeMaterialCandidateRequest,
+  ): Promise<CreativeMaterialsResponse> {
+    const raw = await this.fetch<unknown>(
+      `/api/issues/${issueId}/creative-materials/${candidateId}`,
+      {
+        method: "PATCH",
+        body: JSON.stringify(data),
+      },
+    );
+    return parseWithFallback(
+      raw,
+      CreativeMaterialsResponseSchema,
+      EMPTY_CREATIVE_MATERIALS_RESPONSE,
+      { endpoint: "PATCH /api/issues/:id/creative-materials/:candidateId" },
+    );
+  }
+
+  async createCreativeEditJob(
+    issueId: string,
+    data: CreateCreativeEditJobRequest,
+  ): Promise<CreativeMaterialsResponse> {
+    const raw = await this.fetch<unknown>(`/api/issues/${issueId}/creative-edit-jobs`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+    return parseWithFallback(
+      raw,
+      CreativeMaterialsResponseSchema,
+      EMPTY_CREATIVE_MATERIALS_RESPONSE,
+      { endpoint: "POST /api/issues/:id/creative-edit-jobs" },
+    );
+  }
+
+  async syncCreativeEditJob(
+    issueId: string,
+    jobId: string,
+  ): Promise<CreativeMaterialsResponse> {
+    const raw = await this.fetch<unknown>(`/api/issues/${issueId}/creative-edit-jobs/${jobId}/sync`, {
+      method: "POST",
+    });
+    return parseWithFallback(
+      raw,
+      CreativeMaterialsResponseSchema,
+      EMPTY_CREATIVE_MATERIALS_RESPONSE,
+      { endpoint: "POST /api/issues/:id/creative-edit-jobs/:jobId/sync" },
+    );
+  }
+
+  async createCreativeEditFeedback(
+    issueId: string,
+    jobId: string,
+    variantId: string,
+    data: CreateCreativeEditFeedbackRequest,
+  ): Promise<CreativeMaterialsResponse> {
+    const raw = await this.fetch<unknown>(
+      `/api/issues/${issueId}/creative-edit-jobs/${jobId}/variants/${variantId}/feedback`,
+      {
+        method: "POST",
+        body: JSON.stringify(data),
+      },
+    );
+    return parseWithFallback(
+      raw,
+      CreativeMaterialsResponseSchema,
+      EMPTY_CREATIVE_MATERIALS_RESPONSE,
+      { endpoint: "POST /api/issues/:id/creative-edit-jobs/:jobId/variants/:variantId/feedback" },
+    );
+  }
+
+  async downloadCreativeEditJob(
+    issueId: string,
+    jobId: string,
+    options?: { assetIds?: string[]; includeOriginal?: boolean },
+  ): Promise<{ blob: Blob; filename: string }> {
+    const params = new URLSearchParams();
+    for (const assetId of options?.assetIds ?? []) params.append("asset_id", assetId);
+    if (options?.includeOriginal === false) params.set("include_original", "false");
+    const suffix = params.size > 0 ? `?${params.toString()}` : "";
+    const response = await this.fetchRaw(
+      `/api/issues/${issueId}/creative-edit-jobs/${jobId}/download${suffix}`,
+    );
+    const disposition = response.headers.get("Content-Disposition") ?? "";
+    const filenameMatch = disposition.match(/filename="?([^";]+)"?/i);
+    return {
+      blob: await response.blob(),
+      filename: filenameMatch?.[1] ?? `creative-job-${jobId.slice(0, 8)}.zip`,
+    };
   }
 
   // GitHub integration

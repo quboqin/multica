@@ -1,4 +1,4 @@
-.PHONY: help makehelp dev server daemon cli multica build test migrate-up migrate-down sqlc seed clean setup start stop check worktree-env setup-main start-main stop-main check-main setup-worktree start-worktree stop-worktree check-worktree db-up db-down db-reset selfhost selfhost-build selfhost-stop
+.PHONY: help makehelp dev server daemon cli multica warm-web build test migrate-up migrate-down sqlc seed clean setup start stop check worktree-env setup-main start-main stop-main check-main setup-worktree start-worktree stop-worktree check-worktree db-up db-down db-reset selfhost selfhost-build selfhost-stop
 
 MAIN_ENV_FILE ?= .env
 WORKTREE_ENV_FILE ?= .env.worktree
@@ -70,6 +70,32 @@ selfhost: ## Create .env if needed, then pull and start the official self-hosted
 		fi; \
 		echo "==> Generated random JWT_SECRET and POSTGRES_PASSWORD"; \
 	fi
+	@if ! grep -Eq '^BROKER_STATE_KEY=.+$$' .env; then \
+		BROKER_KEY=$$(openssl rand -base64 32 | tr -d '\r\n'); \
+		if grep -Eq '^#?BROKER_STATE_KEY=' .env; then \
+			if [ "$$(uname)" = "Darwin" ]; then \
+				sed -i '' -E "s#^#?BROKER_STATE_KEY=.*#BROKER_STATE_KEY=$$BROKER_KEY#" .env; \
+			else \
+				sed -i -E "s#^#?BROKER_STATE_KEY=.*#BROKER_STATE_KEY=$$BROKER_KEY#" .env; \
+			fi; \
+		else \
+			printf '\nBROKER_STATE_KEY=%s\n' "$$BROKER_KEY" >> .env; \
+		fi; \
+		echo "==> Generated BROKER_STATE_KEY for encrypted credential state"; \
+	fi
+	@if ! grep -Eq '^MULTICA_WORKSPACE_MCP_KEY=.+$$' .env; then \
+		MCP_KEY=$$(openssl rand -base64 32 | tr -d '\r\n'); \
+		if grep -Eq '^#?MULTICA_WORKSPACE_MCP_KEY=' .env; then \
+			if [ "$$(uname)" = "Darwin" ]; then \
+				sed -i '' -E "s#^#?MULTICA_WORKSPACE_MCP_KEY=.*#MULTICA_WORKSPACE_MCP_KEY=$$MCP_KEY#" .env; \
+			else \
+				sed -i -E "s#^#?MULTICA_WORKSPACE_MCP_KEY=.*#MULTICA_WORKSPACE_MCP_KEY=$$MCP_KEY#" .env; \
+			fi; \
+		else \
+			printf '\nMULTICA_WORKSPACE_MCP_KEY=%s\n' "$$MCP_KEY" >> .env; \
+		fi; \
+		echo "==> Generated MULTICA_WORKSPACE_MCP_KEY for encrypted MCP headers"; \
+	fi
 	@echo "==> Pulling official Multica images..."
 	@if ! docker compose -f docker-compose.selfhost.yml pull; then \
 		echo ""; \
@@ -124,6 +150,32 @@ selfhost-build: ## Build backend/web from the current checkout and start the sel
 			sed -i -E "s#^(DATABASE_URL=postgres://[^:]+:)[^@]*(@.*)#\1$$PGPASS\2#" .env; \
 		fi; \
 		echo "==> Generated random JWT_SECRET and POSTGRES_PASSWORD"; \
+	fi
+	@if ! grep -Eq '^BROKER_STATE_KEY=.+$$' .env; then \
+		BROKER_KEY=$$(openssl rand -base64 32 | tr -d '\r\n'); \
+		if grep -Eq '^#?BROKER_STATE_KEY=' .env; then \
+			if [ "$$(uname)" = "Darwin" ]; then \
+				sed -i '' -E "s#^#?BROKER_STATE_KEY=.*#BROKER_STATE_KEY=$$BROKER_KEY#" .env; \
+			else \
+				sed -i -E "s#^#?BROKER_STATE_KEY=.*#BROKER_STATE_KEY=$$BROKER_KEY#" .env; \
+			fi; \
+		else \
+			printf '\nBROKER_STATE_KEY=%s\n' "$$BROKER_KEY" >> .env; \
+		fi; \
+		echo "==> Generated BROKER_STATE_KEY for encrypted credential state"; \
+	fi
+	@if ! grep -Eq '^MULTICA_WORKSPACE_MCP_KEY=.+$$' .env; then \
+		MCP_KEY=$$(openssl rand -base64 32 | tr -d '\r\n'); \
+		if grep -Eq '^#?MULTICA_WORKSPACE_MCP_KEY=' .env; then \
+			if [ "$$(uname)" = "Darwin" ]; then \
+				sed -i '' -E "s#^#?MULTICA_WORKSPACE_MCP_KEY=.*#MULTICA_WORKSPACE_MCP_KEY=$$MCP_KEY#" .env; \
+			else \
+				sed -i -E "s#^#?MULTICA_WORKSPACE_MCP_KEY=.*#MULTICA_WORKSPACE_MCP_KEY=$$MCP_KEY#" .env; \
+			fi; \
+		else \
+			printf '\nMULTICA_WORKSPACE_MCP_KEY=%s\n' "$$MCP_KEY" >> .env; \
+		fi; \
+		echo "==> Generated MULTICA_WORKSPACE_MCP_KEY for encrypted MCP headers"; \
 	fi
 	@echo "==> Building Multica from the current checkout..."
 	docker compose -f docker-compose.selfhost.yml -f docker-compose.selfhost.build.yml up -d --build
@@ -273,6 +325,9 @@ server: ## Run only the Go server for the current checkout
 	$(REQUIRE_ENV)
 	@bash scripts/ensure-postgres.sh "$(ENV_FILE)"
 	cd server && go run ./cmd/server
+
+warm-web: ## Precompile all Next.js development routes to avoid first-open compiling delays
+	node scripts/warm-web-routes.mjs
 
 daemon: ## Restart the local agent daemon using the CLI's stored auth/session
 	@$(MAKE) multica MULTICA_ARGS="daemon restart --profile local"

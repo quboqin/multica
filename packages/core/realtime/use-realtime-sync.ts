@@ -43,6 +43,7 @@ import {
 } from "../platform/system-notification";
 import type { Workspace } from "../types/workspace";
 import { chatKeys } from "../chat/queries";
+import { creativeKeys } from "../creative/queries";
 import { useChatStore } from "../chat";
 import { resolvePostAuthDestination, useHasOnboarded } from "../paths";
 import type {
@@ -55,6 +56,7 @@ import type {
   IssueDeletedPayload,
   IssueLabelsChangedPayload,
   IssueMetadataChangedPayload,
+  CreativeMaterialsUpdatedPayload,
   InboxNewPayload,
   InboxItem,
   NotificationPreferenceResponse,
@@ -536,7 +538,7 @@ export function useRealtimeSync(
     // Event types handled by specific handlers below -- skip generic refresh
     const specificEvents = new Set([
       "workspace:updated",
-      "issue:updated", "issue:created", "issue:deleted", "issue_labels:changed", "issue_metadata:changed", "inbox:new",
+      "issue:updated", "issue:created", "issue:deleted", "issue_labels:changed", "issue_metadata:changed", "creative_materials:updated", "inbox:new",
       "comment:created", "comment:updated", "comment:deleted",
       "comment:resolved", "comment:unresolved",
       "activity:created",
@@ -581,6 +583,13 @@ export function useRealtimeSync(
           onInboxIssueStatusChanged(qc, wsId, issue.id, issue.status);
         }
       }
+    });
+
+    const unsubCreativeMaterialsUpdated = ws.on("creative_materials:updated", (p) => {
+      const payload = p as CreativeMaterialsUpdatedPayload;
+      const wsId = getCurrentWsId();
+      if (!wsId || !payload.issue_id) return;
+      qc.invalidateQueries({ queryKey: creativeKeys.issue(wsId, payload.issue_id) });
     });
 
     const unsubIssueCreated = ws.on("issue:created", (p) => {
@@ -1066,6 +1075,7 @@ export function useRealtimeSync(
     return () => {
       unsubAny();
       unsubIssueUpdated();
+      unsubCreativeMaterialsUpdated();
       unsubIssueCreated();
       unsubIssueDeleted();
       unsubIssueLabelsChanged();

@@ -18,7 +18,9 @@ import (
 
 	"github.com/multica-ai/multica/server/internal/analytics"
 	"github.com/multica-ai/multica/server/internal/auth"
+	"github.com/multica-ai/multica/server/internal/broker"
 	"github.com/multica-ai/multica/server/internal/cloudruntime"
+	"github.com/multica-ai/multica/server/internal/creative"
 	"github.com/multica-ai/multica/server/internal/daemonws"
 	"github.com/multica-ai/multica/server/internal/events"
 	"github.com/multica-ai/multica/server/internal/handler"
@@ -158,6 +160,40 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 		LarkLoginStateSecret:      strings.TrimSpace(os.Getenv("MULTICA_LARK_LOGIN_STATE_SECRET")),
 	}
 	h := handler.New(queries, pool, hub, bus, emailSvc, store, cfSigner, analyticsClient, signupConfig, daemonHub)
+	mockCreativeProvider := creative.NewMockProvider(envDuration("MULTICA_CREATIVE_MOCK_DELAY", 4*time.Second))
+	h.CreativeEditProvider = mockCreativeProvider
+	var workspaceMCPBox *secretbox.Box
+	if workspaceMCPKey, err := secretbox.LoadKey("MULTICA_WORKSPACE_MCP_KEY"); err == nil {
+		workspaceMCPBox, err = secretbox.New(workspaceMCPKey)
+		if err != nil {
+			slog.Error("workspace MCP secret encryption initialization failed", "error", err)
+		}
+	} else {
+		slog.Warn("workspace MCP secret encryption disabled; connections with secret headers cannot be saved", "error", err)
+	}
+	h.WorkspaceMCPSecretBox = workspaceMCPBox
+	h.CreativeProviderResolver = creative.NewDatabaseProviderResolver(
+		pool,
+		workspaceMCPBox,
+		mockCreativeProvider,
+		envDuration("MULTICA_WORKSPACE_MCP_TIMEOUT", 45*time.Second),
+		splitAndTrim(os.Getenv("MULTICA_WORKSPACE_MCP_ALLOWED_HOSTS")),
+	)
+	h.CreativeAssetDownloader = creative.NewDownloader(
+		envDuration("MULTICA_CREATIVE_ARCHIVE_TIMEOUT", 30*time.Second),
+		envPositiveInt64("MULTICA_CREATIVE_ARCHIVE_MAX_BYTES", 100<<20),
+		splitAndTrim(os.Getenv("MULTICA_CREATIVE_ARCHIVE_ALLOWED_HOSTS")),
+	)
+	connectorRegistry, err := broker.RegistryWithJSON(os.Getenv("MULTICA_CREDENTIAL_CONNECTORS_JSON"))
+	if err != nil {
+		slog.Error("credential connector registry is invalid; declarative connectors disabled", "error", err)
+		connectorRegistry = broker.DefaultRegistry()
+	}
+	h.CredentialBroker = broker.NewServiceWithRegistry(queries, broker.NewHTTPWorkerClientWithTimeouts(
+		os.Getenv("MULTICA_BROKER_WORKER_URL"),
+		envDuration("MULTICA_BROKER_WORKER_TIMEOUT", 120*time.Second),
+		envDuration("MULTICA_BROKER_CRAWL_TIMEOUT", 5*time.Minute),
+	), connectorRegistry)
 	h.Metrics = opts.BusinessMetrics
 	h.TaskService.Metrics = opts.BusinessMetrics
 	h.IssueService.Metrics = opts.BusinessMetrics
@@ -493,6 +529,11 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 	// HandleCloudBillingStripeWebhook for the rationale).
 	r.Post("/api/webhooks/stripe", h.HandleCloudBillingStripeWebhook)
 
+	// Credential worker callback. The one-time token is minted by
+	// POST /api/credential-login-sessions; this endpoint accepts ciphertext
+	// only, never cookies or plaintext credentials.
+	r.Post("/api/credential-login-sessions/complete", h.CompleteCredentialLoginSession)
+
 	// Daemon API routes (require daemon token or valid user token)
 	r.Route("/api/daemon", func(r chi.Router) {
 		r.Use(middleware.DaemonAuth(queries, patCache, daemonTokenCache, cloudPATVerifier))
@@ -694,6 +735,29 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 			// Assignee frequency
 			r.Get("/api/assignee-frequency", h.GetAssigneeFrequency)
 
+			// Credential broker. Profile management is human-only; crawl stays
+			// agent-callable and resolves ownership through requesting_user_id.
+			r.Get("/api/credential-connectors", h.ListCredentialConnectors)
+			r.With(handler.RequireHumanActor).Post("/api/credential-login-sessions", h.CreateCredentialLoginSession)
+			r.Route("/api/credential-profiles", func(r chi.Router) {
+				r.Use(handler.RequireHumanActor)
+				r.Get("/", h.ListCredentialProfiles)
+				r.Get("/{id}", h.GetCredentialProfile)
+				r.Delete("/{id}", h.DeleteCredentialProfile)
+			})
+			r.Post("/api/credential-crawl", h.RunCredentialCrawl)
+
+			// Workspace MCP connections are shared backend integrations. Their
+			// secret headers never leave the server after creation.
+			r.Route("/api/workspace-mcp-connections", func(r chi.Router) {
+				r.Use(handler.RequireHumanActor)
+				r.Get("/", h.ListWorkspaceMCPConnections)
+				r.Post("/", h.CreateWorkspaceMCPConnection)
+				r.Put("/{id}", h.UpdateWorkspaceMCPConnection)
+				r.Delete("/{id}", h.DisableWorkspaceMCPConnection)
+				r.Post("/{id}/verify", h.VerifyWorkspaceMCPConnection)
+			})
+
 			// Issues
 			r.Route("/api/issues", func(r chi.Router) {
 				r.Get("/search", h.SearchIssues)
@@ -725,6 +789,13 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Delete("/reactions", h.RemoveIssueReaction)
 					r.Get("/attachments", h.ListAttachments)
 					r.Get("/children", h.ListChildIssues)
+					r.Get("/creative-materials", h.GetCreativeMaterials)
+					r.Post("/creative-materials/import", h.ImportCreativeMaterials)
+					r.Patch("/creative-materials/{candidateId}", h.UpdateCreativeMaterialCandidate)
+					r.Post("/creative-edit-jobs", h.CreateCreativeEditJob)
+					r.Post("/creative-edit-jobs/{jobId}/sync", h.SyncCreativeEditJob)
+					r.With(handler.RequireHumanActor).Post("/creative-edit-jobs/{jobId}/variants/{variantId}/feedback", h.CreateCreativeEditFeedback)
+					r.Get("/creative-edit-jobs/{jobId}/download", h.DownloadCreativeEditJob)
 					r.Get("/labels", h.ListLabelsForIssue)
 					r.Post("/labels", h.AttachLabel)
 					r.Delete("/labels/{labelId}", h.DetachLabel)

@@ -1,11 +1,15 @@
 import { describe, expect, it } from "vitest";
 import {
   AppConfigSchema,
+  CredentialCrawlResultSchema,
+  CreativeMaterialsResponseSchema,
   DashboardAgentRunTimeListSchema,
   DashboardUsageByAgentListSchema,
   DashboardUsageDailyListSchema,
   DuplicateIssueErrorBodySchema,
   EMPTY_USER,
+  ListCredentialProfilesResponseSchema,
+  ListWorkspaceMCPConnectionsResponseSchema,
   LoginResponseSchema,
   ListIssuesResponseSchema,
   RuntimeHourlyActivityListSchema,
@@ -73,6 +77,120 @@ describe("IssueSchema (via ListIssuesResponseSchema)", () => {
       total: 1,
     };
     expect(ListIssuesResponseSchema.safeParse(payload).success).toBe(false);
+  });
+});
+
+describe("credential broker schemas", () => {
+  it("keeps profile lists renderable when optional fields are absent", () => {
+    const parsed = ListCredentialProfilesResponseSchema.parse({
+      profiles: [
+        {
+          id: "profile-1",
+          connector_id: "appgrowing",
+          label: "Manual Acceptance",
+          status: "active",
+          created_at: "2026-07-06T10:00:00Z",
+          updated_at: "2026-07-06T10:01:00Z",
+        },
+      ],
+    });
+
+    expect(parsed.profiles[0]?.last_used_at).toBeUndefined();
+    expect(parsed.profiles[0]?.status).toBe("active");
+  });
+
+  it("defaults crawl probe counters and preserves raw auth diagnostics", () => {
+    const parsed = CredentialCrawlResultSchema.parse({
+      status: "completed",
+      message: "ok",
+      raw: { auth_probe: { auth_check: { authenticated: true } } },
+    });
+
+    expect(parsed.downloaded).toBe(0);
+    expect(parsed.raw).toEqual({
+      auth_probe: { auth_check: { authenticated: true } },
+    });
+  });
+});
+
+describe("creative material schemas", () => {
+  it("defaults recovery and archive fields from an older backend", () => {
+    const parsed = CreativeMaterialsResponseSchema.parse({
+      enabled: true,
+      candidates: [{ id: "candidate-1" }],
+      edit_jobs: [{ id: "job-1" }],
+    });
+
+    expect(parsed.candidates[0]?.archived_url).toBe("");
+    expect(parsed.candidates[0]?.archive_status).toBe("pending");
+    expect(parsed.edit_jobs[0]?.poll_attempts).toBe(0);
+    expect(parsed.edit_jobs[0]?.mcp_connection_id).toBe("");
+    expect(parsed.edit_jobs[0]?.process_data).toEqual({});
+    expect(parsed.edit_jobs[0]?.variants).toEqual([]);
+  });
+
+  it("defaults feedback history and contains malformed telemetry fields", () => {
+    const parsed = CreativeMaterialsResponseSchema.parse({
+      enabled: true,
+      edit_jobs: [{
+        id: "job-1",
+        variants: [{
+          id: "variant-1",
+          feedback: [{
+            id: "feedback-1",
+            decision: "accepted",
+            reason_codes: null,
+            process_snapshot: null,
+          }],
+        }, {
+          id: "variant-from-older-server",
+        }],
+      }],
+    });
+
+    expect(parsed.edit_jobs[0]?.variants[0]?.feedback[0]?.reason_codes).toEqual([]);
+    expect(parsed.edit_jobs[0]?.variants[0]?.feedback[0]?.process_snapshot).toEqual({});
+    expect(parsed.edit_jobs[0]?.variants[1]?.feedback).toEqual([]);
+  });
+
+  it("preserves valid process data and contains malformed process data", () => {
+    const parsed = CreativeMaterialsResponseSchema.parse({
+      enabled: true,
+      edit_jobs: [
+        {
+          id: "valid",
+          process_data: {
+            schema_version: "1",
+            usage: { cost: "not_available" },
+          },
+        },
+        { id: "malformed", process_data: "unexpected" },
+      ],
+    });
+
+    expect(parsed.edit_jobs[0]?.process_data).toEqual({
+      schema_version: "1",
+      usage: { cost: "not_available" },
+    });
+    expect(parsed.edit_jobs[1]?.process_data).toEqual({});
+  });
+});
+
+describe("workspace MCP schemas", () => {
+  it("never requires secret values in a list response", () => {
+    const parsed = ListWorkspaceMCPConnectionsResponseSchema.parse({
+      connections: [{
+        id: "connection-1",
+        name: "Creative service",
+        server_url: "https://creative.example.com/mcp",
+        has_secret_headers: true,
+        secret_header_names: ["Authorization"],
+      }],
+    });
+
+    expect(parsed.connections[0]?.secret_header_names).toEqual(["Authorization"]);
+    expect(parsed.connections[0]?.status).toBe("disabled");
+    expect(parsed.connections[0]).not.toHaveProperty("secret_headers");
   });
 });
 

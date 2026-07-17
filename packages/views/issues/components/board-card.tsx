@@ -104,8 +104,8 @@ export const BoardCardContent = memo(function BoardCardContent({
   const showChildProgress = storeProperties.childProgress && childProgress;
   const showLabels = storeProperties.labels && labels.length > 0;
 
-  const showAssigneeName = showAssigneeSection && hasAssignee && !showStartDate && !showDueDate;
-  const showUpdatedHint = showAssigneeName && !showChildProgress;
+  const showAssigneeName = showAssigneeSection && hasAssignee;
+  const showUpdatedHint = showAssigneeName && !showStartDate && !showDueDate && !showChildProgress;
   const { getActorName } = useActorName();
   const assigneeName =
     showAssigneeName && issue.assignee_type && issue.assignee_id

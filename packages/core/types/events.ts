@@ -12,6 +12,7 @@ export type WSEventType =
   | "issue:created"
   | "issue:updated"
   | "issue:deleted"
+  | "creative_materials:updated"
   | "comment:created"
   | "comment:updated"
   | "comment:deleted"
@@ -97,6 +98,10 @@ export interface IssueUpdatedPayload {
 }
 
 export interface IssueDeletedPayload {
+  issue_id: string;
+}
+
+export interface CreativeMaterialsUpdatedPayload {
   issue_id: string;
 }
 
@@ -394,6 +399,7 @@ export interface WSEventPayloadMap {
   "issue:created": IssueCreatedPayload;
   "issue:updated": IssueUpdatedPayload;
   "issue:deleted": IssueDeletedPayload;
+  "creative_materials:updated": CreativeMaterialsUpdatedPayload;
   "issue_labels:changed": IssueLabelsChangedPayload;
   "issue_reaction:added": IssueReactionAddedPayload;
   "issue_reaction:removed": IssueReactionRemovedPayload;

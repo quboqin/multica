@@ -98,7 +98,7 @@ describe("HtmlAttachmentPreview — visual shell (does not use file-card chrome)
     expect(screen.queryByText("report.html")).toBeNull();
   });
 
-  it("renders iframe with sandbox='allow-scripts' and srcdoc when text loads", async () => {
+  it("renders iframe with the HTML preview sandbox and srcdoc when text loads", async () => {
     getAttachmentTextContentMock.mockResolvedValueOnce({
       text: "<p>chart goes here</p>",
       originalContentType: "text/html",
@@ -116,7 +116,10 @@ describe("HtmlAttachmentPreview — visual shell (does not use file-card chrome)
       expect(frame).toBeTruthy();
       // Critical: sandbox must not include allow-same-origin, otherwise the
       // sandbox is defeated per the HTML spec.
-      expect(frame?.getAttribute("sandbox")).toBe("allow-scripts");
+      expect(frame?.getAttribute("sandbox")).toBe(
+        "allow-scripts allow-popups allow-popups-to-escape-sandbox",
+      );
+      expect(frame?.getAttribute("sandbox")).not.toContain("allow-same-origin");
       // srcdoc carries the original HTML plus the fragment-nav shim
       // appended at the end (see utils/iframe-fragment-nav.ts).
       const srcdoc = frame?.getAttribute("srcdoc") ?? "";

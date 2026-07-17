@@ -52,7 +52,7 @@ cd multica
 make selfhost
 ```
 
-`make selfhost` automatically creates `.env` from the example, generates a random `JWT_SECRET`, and starts all services via Docker Compose.
+`make selfhost` automatically creates `.env` from the example, generates random `JWT_SECRET`, PostgreSQL password, and `BROKER_STATE_KEY` values, then starts PostgreSQL, the API, crawler worker, and web app via Docker Compose. Keep `.env` across upgrades: changing `BROKER_STATE_KEY` makes previously bound browser state unreadable.
 
 By default it pulls the latest stable release images from GHCR. To build the backend/web from your current checkout instead, run `make selfhost-build`.
 If the selected GHCR tag has not been published yet, `make selfhost` now tells you to fall back to `make selfhost-build`.
@@ -441,10 +441,11 @@ cd multica
 cp .env.example .env
 ```
 
-Edit `.env` — at minimum, change `JWT_SECRET`:
+Edit `.env` — at minimum, change `JWT_SECRET` and create a stable credential-state key:
 
 ```bash
 JWT_SECRET=$(openssl rand -hex 32)
+BROKER_STATE_KEY=$(openssl rand -base64 32)
 ```
 
 Then start everything:
