@@ -15,10 +15,13 @@ fi
 backend_image="${REPOSITORY_PREFIX}/multica-backend:${TAG}"
 web_image="${REPOSITORY_PREFIX}/multica-web:${TAG}"
 worker_image="${REPOSITORY_PREFIX}/multica-crawler-worker:${TAG}"
+playwright_base_image="${PLAYWRIGHT_BASE_IMAGE:-m.daocloud.io/mcr.microsoft.com/playwright:v1.58.2-noble}"
 
 docker build --pull -t "$backend_image" -f Dockerfile .
 docker build --pull -t "$web_image" -f Dockerfile.web .
-docker build --pull -t "$worker_image" -f services/crawler-worker/Dockerfile .
+docker build --pull \
+  --build-arg "PLAYWRIGHT_BASE_IMAGE=$playwright_base_image" \
+  -t "$worker_image" -f services/crawler-worker/Dockerfile .
 
 docker push "$backend_image"
 docker push "$web_image"

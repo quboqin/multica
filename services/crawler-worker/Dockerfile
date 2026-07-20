@@ -1,4 +1,5 @@
-FROM mcr.microsoft.com/playwright:v1.58.2-noble
+ARG PLAYWRIGHT_BASE_IMAGE=m.daocloud.io/mcr.microsoft.com/playwright:v1.58.2-noble
+FROM ${PLAYWRIGHT_BASE_IMAGE}
 
 WORKDIR /app
 
