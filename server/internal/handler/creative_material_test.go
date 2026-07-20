@@ -86,6 +86,43 @@ func TestCreativeArchiveSourcePrefersVideoResource(t *testing.T) {
 	}
 }
 
+func TestAbsoluteCreativeSourceURL(t *testing.T) {
+	h := &Handler{cfg: Config{PublicURL: "https://fat-cybertron.adakamicorp.id/"}}
+	tests := []struct {
+		name string
+		raw  string
+		want string
+	}{
+		{
+			name: "relative upload",
+			raw:  "/uploads/creative-materials/workspace/candidate/source.jpeg",
+			want: "https://fat-cybertron.adakamicorp.id/uploads/creative-materials/workspace/candidate/source.jpeg",
+		},
+		{
+			name: "absolute https",
+			raw:  "https://cdn.example.com/source.jpeg",
+			want: "https://cdn.example.com/source.jpeg",
+		},
+		{
+			name: "local path fallback",
+			raw:  "/data/inputs/source.jpeg",
+			want: "/data/inputs/source.jpeg",
+		},
+		{
+			name: "blank",
+			raw:  " ",
+			want: "",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := h.absoluteCreativeSourceURL(tc.raw); got != tc.want {
+				t.Fatalf("absoluteCreativeSourceURL(%q) = %q, want %q", tc.raw, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestSafeCreativeZipPart(t *testing.T) {
 	if got := safeCreativeZipPart("Kredit Pintar / ID"); got != "Kredit-Pintar-ID" {
 		t.Fatalf("safeCreativeZipPart = %q", got)

@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"sort"
 	"strconv"
 	"strings"
@@ -1238,9 +1239,31 @@ ORDER BY jc.candidate_id::text
 		); err != nil {
 			return nil, err
 		}
+		candidate.ArchivedURL = h.absoluteCreativeSourceURL(candidate.ArchivedURL)
+		candidate.PreviewURL = h.absoluteCreativeSourceURL(candidate.PreviewURL)
+		candidate.PosterURL = h.absoluteCreativeSourceURL(candidate.PosterURL)
+		candidate.ResourceURL = h.absoluteCreativeSourceURL(candidate.ResourceURL)
 		candidates = append(candidates, candidate)
 	}
 	return candidates, rows.Err()
+}
+
+func (h *Handler) absoluteCreativeSourceURL(raw string) string {
+	value := strings.TrimSpace(raw)
+	if value == "" {
+		return ""
+	}
+	parsed, err := url.Parse(value)
+	if err == nil && parsed.Scheme != "" {
+		return value
+	}
+	if strings.HasPrefix(value, "/uploads/") {
+		publicURL := strings.TrimRight(strings.TrimSpace(h.cfg.PublicURL), "/")
+		if publicURL != "" {
+			return publicURL + value
+		}
+	}
+	return value
 }
 
 func insertCreativeEditResults(
