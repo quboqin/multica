@@ -26,6 +26,7 @@ if (
 
 const remoteApiUrl = resolveRemoteApiUrl(runtimeUrlEnv);
 const docsUrl = process.env.DOCS_URL || "http://localhost:4000";
+const remoteCrawlerWorkerUrl = (process.env.REMOTE_CRAWLER_WORKER_URL || "").replace(/\/$/, "");
 
 // Parse hostnames from CORS_ALLOWED_ORIGINS so that Next.js dev server
 // allows cross-origin HMR / webpack requests (e.g. from Tailscale IPs).
@@ -83,6 +84,14 @@ const nextConfig: NextConfig = {
           source: "/docs/:path*",
           destination: `${docsUrl}/docs/:path*`,
         },
+        ...(remoteCrawlerWorkerUrl
+          ? [
+              {
+                source: "/sessions/:path*",
+                destination: `${remoteCrawlerWorkerUrl}/sessions/:path*`,
+              },
+            ]
+          : []),
       ],
       afterFiles: [
         {

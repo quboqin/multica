@@ -36,11 +36,14 @@ COPY packages/ packages/
 # Re-link after source overlay (fixes any symlinks overwritten by COPY)
 RUN pnpm install --frozen-lockfile --offline
 
-# Set build-time env: tells Next.js rewrites to proxy API calls to the backend service
+# Set build-time env: tells Next.js rewrites where to proxy backend APIs and
+# the credential broker's remote browser sessions.
 ARG REMOTE_API_URL=http://backend:8080
+ARG REMOTE_CRAWLER_WORKER_URL=http://crawler-worker:19516
 ARG NEXT_PUBLIC_WS_URL
 ARG NEXT_PUBLIC_APP_VERSION=dev
 ENV REMOTE_API_URL=$REMOTE_API_URL
+ENV REMOTE_CRAWLER_WORKER_URL=$REMOTE_CRAWLER_WORKER_URL
 ENV NEXT_PUBLIC_WS_URL=$NEXT_PUBLIC_WS_URL
 ENV NEXT_PUBLIC_APP_VERSION=$NEXT_PUBLIC_APP_VERSION
 ENV STANDALONE=true
