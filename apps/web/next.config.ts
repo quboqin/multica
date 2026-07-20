@@ -8,15 +8,20 @@ import { createMDX } from "fumadocs-mdx/next";
 // `next dev --port <frontend>` mutates process.env.PORT to the frontend port;
 // keep the root .env PORT available for backend rewrite derivation below.
 const rootEnv = config({ path: resolve(__dirname, "../../.env") }).parsed ?? {};
+// A worktree-specific environment may override shared defaults.
+const worktreeEnv = config({
+  path: resolve(__dirname, "../../.env.worktree"),
+  override: true,
+}).parsed ?? {};
 
 const runtimeUrlEnv = { ...process.env };
 if (
   !runtimeUrlEnv.BACKEND_PORT?.trim() &&
   !runtimeUrlEnv.API_PORT?.trim() &&
   !runtimeUrlEnv.SERVER_PORT?.trim() &&
-  rootEnv.PORT?.trim()
+  (worktreeEnv.PORT?.trim() || rootEnv.PORT?.trim())
 ) {
-  runtimeUrlEnv.PORT = rootEnv.PORT;
+  runtimeUrlEnv.PORT = worktreeEnv.PORT || rootEnv.PORT;
 }
 
 const remoteApiUrl = resolveRemoteApiUrl(runtimeUrlEnv);

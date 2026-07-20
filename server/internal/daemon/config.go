@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/url"
 	"os"
 	"os/exec"
@@ -77,6 +78,7 @@ type Config struct {
 	LegacyDaemonIDs                []string // historical daemon_ids this machine may have registered under; reported at register time so the server can merge old runtime rows
 	DeviceName                     string
 	RuntimeName                    string
+	DeviceRuntimeURL               string
 	CLIVersion                     string                // multica CLI version (e.g. "0.1.13")
 	LaunchedBy                     string                // "desktop" when spawned by the Electron app, empty for standalone
 	Profile                        string                // profile name (empty = default)
@@ -119,6 +121,7 @@ type Overrides struct {
 	DaemonID                       string
 	DeviceName                     string
 	RuntimeName                    string
+	DeviceRuntimeURL               string
 	Profile                        string // profile name (empty = default)
 	HealthPort                     int    // health check port (0 = use default)
 	// DisableAutoUpdate, when true, forces the auto-update poller off. There
@@ -404,6 +407,26 @@ func LoadConfig(overrides Overrides) (Config, error) {
 		runtimeName = overrides.RuntimeName
 	}
 
+	deviceRuntimeURL := strings.TrimSpace(os.Getenv("MULTICA_DEVICE_RUNTIME_URL"))
+	if overrides.DeviceRuntimeURL != "" {
+		deviceRuntimeURL = strings.TrimSpace(overrides.DeviceRuntimeURL)
+	}
+	if deviceRuntimeURL != "" {
+		parsed, err := url.Parse(deviceRuntimeURL)
+		if err != nil || parsed.Scheme != "http" || parsed.Hostname() == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
+			return Config{}, fmt.Errorf("MULTICA_DEVICE_RUNTIME_URL must be a loopback HTTP URL")
+		}
+		host := parsed.Hostname()
+		ip := net.ParseIP(host)
+		if !strings.EqualFold(host, "localhost") && (ip == nil || !ip.IsLoopback()) {
+			return Config{}, fmt.Errorf("MULTICA_DEVICE_RUNTIME_URL must use localhost or a loopback IP")
+		}
+		if parsed.Path != "" && parsed.Path != "/" {
+			return Config{}, fmt.Errorf("MULTICA_DEVICE_RUNTIME_URL must not include a path")
+		}
+		deviceRuntimeURL = strings.TrimRight(parsed.String(), "/")
+	}
+
 	// Workspaces root: override > env > default (~/multica_workspaces or ~/multica_workspaces_<profile>)
 	workspacesRoot, err := ResolveWorkspacesRoot(profile, overrides.WorkspacesRoot)
 	if err != nil {
@@ -477,6 +500,7 @@ func LoadConfig(overrides Overrides) (Config, error) {
 		LegacyDaemonIDs:                legacyDaemonIDs,
 		DeviceName:                     deviceName,
 		RuntimeName:                    runtimeName,
+		DeviceRuntimeURL:               deviceRuntimeURL,
 		Profile:                        profile,
 		Agents:                         agents,
 		WorkspacesRoot:                 workspacesRoot,

@@ -12,6 +12,7 @@ import {
   ListWorkspaceMCPConnectionsResponseSchema,
   LoginResponseSchema,
   ListIssuesResponseSchema,
+  PreviewSessionListResponseSchema,
   RuntimeHourlyActivityListSchema,
   RuntimeUsageByAgentListSchema,
   RuntimeUsageByHourListSchema,
@@ -191,6 +192,92 @@ describe("workspace MCP schemas", () => {
     expect(parsed.connections[0]?.secret_header_names).toEqual(["Authorization"]);
     expect(parsed.connections[0]?.status).toBe("disabled");
     expect(parsed.connections[0]).not.toHaveProperty("secret_headers");
+  });
+});
+
+describe("PreviewSessionListResponseSchema", () => {
+  const session = {
+    id: "preview-1",
+    workspace_id: "ws-1",
+    issue_id: "issue-1",
+    task_id: null,
+    platform: "web",
+    provider: "external_web",
+    title: "Checkout preview",
+    preview_url: "https://preview.example.test/checkout",
+    status: "running",
+    creator_type: "member",
+    creator_id: "user-1",
+    error_message: null,
+    expires_at: "2026-07-14T12:00:00Z",
+    last_active_at: "2026-07-13T12:00:00Z",
+    lease_expires_at: "2026-07-13T12:05:00Z",
+    started_at: "2026-07-13T12:00:00Z",
+    stopped_at: null,
+    created_at: "2026-07-13T11:59:00Z",
+    updated_at: "2026-07-13T12:00:00Z",
+  };
+
+  it("converts the wire response to camelCase domain data", () => {
+    const parsed = PreviewSessionListResponseSchema.parse({
+      preview_sessions: [session],
+      total: 1,
+    });
+
+    expect(parsed).toEqual({
+      previewSessions: [
+        expect.objectContaining({
+          id: "preview-1",
+          workspaceId: "ws-1",
+          issueId: "issue-1",
+          taskId: null,
+          previewUrl: "https://preview.example.test/checkout",
+          errorMessage: null,
+          expiresAt: "2026-07-14T12:00:00Z",
+          lastActiveAt: "2026-07-13T12:00:00Z",
+          leaseExpiresAt: "2026-07-13T12:05:00Z",
+          createdAt: "2026-07-13T11:59:00Z",
+        }),
+      ],
+      total: 1,
+    });
+  });
+
+  it("defaults optional display fields and preserves unknown enum values", () => {
+    const parsed = PreviewSessionListResponseSchema.parse({
+      preview_sessions: [
+        {
+          id: "preview-2",
+          workspace_id: "ws-1",
+          issue_id: "issue-1",
+          platform: "vision_os",
+          status: "paused_by_provider",
+        },
+      ],
+    });
+
+    expect(parsed.previewSessions[0]).toMatchObject({
+      taskId: null,
+      platform: "vision_os",
+      provider: "unknown",
+      title: "",
+      previewUrl: "",
+      status: "paused_by_provider",
+      errorMessage: null,
+    });
+    expect(parsed.total).toBe(0);
+  });
+
+  it("lets parseWithFallback reject a malformed list body", () => {
+    const fallback = { previewSessions: [], total: 0 };
+    const parsed = parseWithFallback(
+      { preview_sessions: null, total: "one" },
+      PreviewSessionListResponseSchema,
+      fallback,
+      { endpoint: "GET /api/issues/:id/preview-sessions" },
+    );
+
+    expect(parsed).toBe(fallback);
   });
 });
 

@@ -229,6 +229,8 @@ func TestWorkingOnIssuesSkillCoversIssueLoopContracts(t *testing.T) {
 		"Closes MUL-2759",
 		"--status backlog",
 		"pr_url",
+		"multica preview create --issue <issue-id>",
+		"provider=external_web",
 		"references/working-on-issues-source-map.md",
 	}
 	for _, want := range mustContain {

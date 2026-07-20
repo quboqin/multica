@@ -122,13 +122,36 @@ func formatProjectResource(r ProjectResourceForEnv) string {
 	switch r.ResourceType {
 	case "github_repo":
 		var payload struct {
-			URL               string `json:"url"`
-			DefaultBranchHint string `json:"default_branch_hint,omitempty"`
+			URL               string   `json:"url"`
+			DefaultBranchHint string   `json:"default_branch_hint,omitempty"`
+			Role              string   `json:"role,omitempty"`
+			Capabilities      []string `json:"capabilities,omitempty"`
+			Preview           *struct {
+				Policy   string `json:"policy,omitempty"`
+				Platform string `json:"platform,omitempty"`
+				Profile  string `json:"profile,omitempty"`
+			} `json:"preview,omitempty"`
 		}
 		_ = json.Unmarshal(r.ResourceRef, &payload)
 		out := fmt.Sprintf("**GitHub repo**: %s", payload.URL)
 		if payload.DefaultBranchHint != "" {
 			out += fmt.Sprintf(" (default branch: `%s`)", payload.DefaultBranchHint)
+		}
+		if payload.Role != "" {
+			out += fmt.Sprintf(" (role: `%s`)", payload.Role)
+		}
+		if len(payload.Capabilities) > 0 {
+			out += fmt.Sprintf(" (capabilities: `%s`)", strings.Join(payload.Capabilities, "`, `"))
+		}
+		if payload.Preview != nil {
+			preview := payload.Preview.Policy
+			if payload.Preview.Platform != "" {
+				preview += "/" + payload.Preview.Platform
+			}
+			if payload.Preview.Profile != "" {
+				preview += "/" + payload.Preview.Profile
+			}
+			out += fmt.Sprintf(" (preview: `%s`)", preview)
 		}
 		if label != "" {
 			out += " — " + label
@@ -542,6 +565,12 @@ func buildMetaSkillContent(provider string, ctx TaskContextForEnv) string {
 	// Inject project-scoped context (resources attached to the issue's project).
 	// The full structured payload is also available at .multica/project/resources.json
 	// so skills can consume it programmatically.
+	b.WriteString("## Development Context\n\n")
+	b.WriteString("The current task workdir is the source of truth for repository and preview-target discovery; Multica repository registration is not required. ")
+	b.WriteString("The runtime scans existing Git roots at task start and refreshes `.multica/preview/targets.json` after `multica repo checkout`. ")
+	b.WriteString("If you clone, copy, or switch repositories by another mechanism, run `multica preview detect --write` from the task workdir before choosing a preview workflow. ")
+	b.WriteString("The report may contain multiple Web/H5, Android, iOS, or desktop targets from one repository. Backend-only repositories have `backend_only: true` and do not create a visual preview by default.\n\n")
+
 	if ctx.ProjectID != "" || len(ctx.ProjectResources) > 0 {
 		b.WriteString("## Project Context\n\n")
 		if ctx.ProjectTitle != "" {
@@ -552,8 +581,12 @@ func buildMetaSkillContent(provider string, ctx TaskContextForEnv) string {
 			for _, r := range ctx.ProjectResources {
 				fmt.Fprintf(&b, "- %s\n", formatProjectResource(r))
 			}
-			b.WriteString("\nResources are pointers — open them only when relevant to the task. ")
-			b.WriteString("For `github_repo` resources, use `multica repo checkout <url>` to fetch the code. Add `--ref <branch-or-sha>` when a task or handoff names an exact revision.\n\n")
+			b.WriteString("\nProject resources are optional hints and policy overrides; they are not the source of truth for which repositories exist in the development context. A project can contain many repositories, and resources are not a request to check out all of them. ")
+			b.WriteString("Choose the smallest working set for this issue: explicit repository references in the issue or comment take priority, then match repository `role` and `capabilities` to the requested behavior. ")
+			b.WriteString("For hybrid applications, start with the H5/web repository for business-UI work and add an Android or iOS shell only when the task needs a native build, bridge, permission, or platform-specific behavior. ")
+			b.WriteString("If multiple repositories remain equally plausible, ask the user before making code changes; do not check out every project repository to resolve ambiguity. ")
+			b.WriteString("Repository selection and preview publication are separate decisions. After a successful runnable checkpoint, publish every selected previewable frontend target into this Issue's shared Preview area. With preview policy `auto` (the default), detect Web/H5, Android, iOS, or desktop targets from the repository structure; backend-only repositories do not publish a visual preview. `always` and `never` are explicit project overrides. ")
+			b.WriteString("For selected `github_repo` resources, use `multica repo checkout <url>` to fetch the code. Add `--ref <branch-or-sha>` when a task or handoff names an exact revision.\n\n")
 		} else {
 			b.WriteString("This project has no resources attached yet.\n\n")
 		}

@@ -80,7 +80,9 @@ export type WSEventType =
   | "github_installation:deleted"
   | "pull_request:linked"
   | "pull_request:updated"
-  | "pull_request:unlinked";
+  | "pull_request:unlinked"
+  | "preview_session:created"
+  | "preview_session:updated";
 
 export interface WSMessage<T = unknown> {
   type: WSEventType;
@@ -469,6 +471,8 @@ export interface WSEventPayloadMap {
   "pull_request:linked": unknown;
   "pull_request:updated": unknown;
   "pull_request:unlinked": unknown;
+  "preview_session:created": unknown;
+  "preview_session:updated": unknown;
 }
 
 /**

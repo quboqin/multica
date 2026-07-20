@@ -84,6 +84,10 @@ const (
 	EventProjectResourceUpdated = "project_resource:updated"
 	EventProjectResourceDeleted = "project_resource:deleted"
 
+	// Preview session events
+	EventPreviewSessionCreated = "preview_session:created"
+	EventPreviewSessionUpdated = "preview_session:updated"
+
 	// Label events
 	EventLabelCreated       = "label:created"
 	EventLabelUpdated       = "label:updated"

@@ -57,7 +57,8 @@ export interface ListProjectsResponse {
 // validateAndNormalizeResourceRef on the server and a renderer in the UI.
 //
 // Known types (UI must default-case unknown server-side additions):
-//   - github_repo: cloud-side git checkout, ref = { url, default_branch_hint? }
+//   - github_repo: cloud-side git checkout, ref =
+//     { url, default_branch_hint?, role?, capabilities? }
 //   - local_directory: in-place agent execution on a specific daemon,
 //     ref = { local_path, daemon_id, label? }
 export type ProjectResourceType = "github_repo" | "local_directory";
@@ -65,6 +66,20 @@ export type ProjectResourceType = "github_repo" | "local_directory";
 export interface GithubRepoResourceRef {
   url: string;
   default_branch_hint?: string;
+  /** Stable semantic responsibility, for example h5, android_shell, or backend. */
+  role?: string;
+  /** Searchable capability slugs used to select the smallest issue working set. */
+  capabilities?: string[];
+  /** Controls whether successful runnable checkpoints publish to the Issue preview area. */
+  preview?: GithubRepoPreviewRef;
+}
+
+export interface GithubRepoPreviewRef {
+  /** auto detects frontend targets; always and never are explicit overrides. */
+  policy?: "auto" | "always" | "never";
+  platform?: "web" | "android" | "ios" | "desktop";
+  /** Stable project-defined preview profile, for example customer_app. */
+  profile?: string;
 }
 
 export interface LocalDirectoryResourceRef {

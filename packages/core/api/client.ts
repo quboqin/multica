@@ -143,6 +143,9 @@ import type {
   SaveWorkspaceMCPConnectionRequest,
   VerifyWorkspaceMCPConnectionResponse,
   WorkspaceMCPConnection,
+  CreatePreviewSessionRequest,
+  PreviewSession,
+  PreviewSessionListResponse,
 } from "../types";
 import type { OnboardingCompletionPath } from "../onboarding/types";
 import type {
@@ -245,6 +248,10 @@ import {
   StartCredentialLoginSessionResponseSchema,
   VerifyWorkspaceMCPConnectionResponseSchema,
   WorkspaceMCPConnectionSchema,
+  EMPTY_PREVIEW_SESSION,
+  EMPTY_PREVIEW_SESSION_LIST_RESPONSE,
+  PreviewSessionListResponseSchema,
+  PreviewSessionSchema,
 } from "./schemas";
 
 /** Identifies the calling client to the server.
@@ -645,6 +652,88 @@ export class ApiClient {
 
   async getIssue(id: string): Promise<Issue> {
     return this.fetch(`/api/issues/${id}`);
+  }
+
+  async listPreviewSessions(issueId: string): Promise<PreviewSessionListResponse> {
+    const raw = await this.fetch<unknown>(
+      `/api/issues/${issueId}/preview-sessions`,
+    );
+    return parseWithFallback(
+      raw,
+      PreviewSessionListResponseSchema,
+      EMPTY_PREVIEW_SESSION_LIST_RESPONSE,
+      { endpoint: "GET /api/issues/:id/preview-sessions" },
+    );
+  }
+
+  async createPreviewSession(
+    issueId: string,
+    data: CreatePreviewSessionRequest,
+  ): Promise<PreviewSession> {
+    const raw = await this.fetch<unknown>(
+      `/api/issues/${issueId}/preview-sessions`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          ...(data.title !== undefined ? { title: data.title } : {}),
+          preview_url: data.previewUrl,
+          platform: data.platform ?? "web",
+          provider: data.provider ?? "external_web",
+          ...(data.expiresAt !== undefined
+            ? { expires_at: data.expiresAt }
+            : {}),
+        }),
+      },
+    );
+    return parseWithFallback(raw, PreviewSessionSchema, EMPTY_PREVIEW_SESSION, {
+      endpoint: "POST /api/issues/:id/preview-sessions",
+    });
+  }
+
+  async getPreviewSession(sessionId: string): Promise<PreviewSession> {
+    const raw = await this.fetch<unknown>(
+      `/api/preview-sessions/${sessionId}`,
+    );
+    return parseWithFallback(raw, PreviewSessionSchema, EMPTY_PREVIEW_SESSION, {
+      endpoint: "GET /api/preview-sessions/:id",
+    });
+  }
+
+  async touchPreviewSession(sessionId: string): Promise<PreviewSession> {
+    const raw = await this.fetch<unknown>(
+      `/api/preview-sessions/${sessionId}/touch`,
+      { method: "POST" },
+    );
+    return parseWithFallback(raw, PreviewSessionSchema, EMPTY_PREVIEW_SESSION, {
+      endpoint: "POST /api/preview-sessions/:id/touch",
+    });
+  }
+
+  async switchPreviewSessionDevice(
+    sessionId: string,
+    serial: string,
+    confirmed = false,
+  ): Promise<PreviewSession> {
+    const raw = await this.fetch<unknown>(
+      `/api/preview-sessions/${sessionId}/device`,
+      {
+        method: "POST",
+        body: JSON.stringify({ serial, confirmed }),
+      },
+    );
+    return parseWithFallback(raw, PreviewSessionSchema, EMPTY_PREVIEW_SESSION, {
+      endpoint: "POST /api/preview-sessions/:id/device",
+    });
+  }
+
+  async stopPreviewSession(sessionId: string): Promise<PreviewSession> {
+    const raw = await this.fetch<unknown>(
+      `/api/preview-sessions/${sessionId}/stop`,
+      { method: "POST" },
+    );
+    return parseWithFallback(raw, PreviewSessionSchema, EMPTY_PREVIEW_SESSION, {
+      endpoint: "POST /api/preview-sessions/:id/stop",
+    });
   }
 
   async createIssue(data: CreateIssueRequest): Promise<Issue> {

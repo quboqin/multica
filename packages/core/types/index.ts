@@ -67,6 +67,13 @@ export type { IssueSubscriber } from "./subscriber";
 export type * from "./events";
 export type * from "./api";
 export type { Attachment } from "./attachment";
+export type {
+  PreviewSession,
+  PreviewSessionListResponse,
+  PreviewSessionPlatform,
+  PreviewSessionStatus,
+  CreatePreviewSessionRequest,
+} from "./preview-session";
 export { attachmentDownloadPath, attachmentIdFromDownloadURL, contentReferencesAttachment } from "./attachment-url";
 export type {
   ChatSession,

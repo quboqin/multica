@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/multica-ai/multica/server/internal/previewdetect"
 	skillpkg "github.com/multica-ai/multica/server/internal/skill"
 	"gopkg.in/yaml.v3"
 )
@@ -77,6 +78,29 @@ func writeContextFiles(workDir, provider string, ctx TaskContextForEnv, manifest
 		return fmt.Errorf("write project resources: %w", err)
 	}
 
+	if err := writeDetectedPreviewTargets(workDir, manifest); err != nil {
+		return fmt.Errorf("write detected preview targets: %w", err)
+	}
+
+	return nil
+}
+
+func writeDetectedPreviewTargets(workDir string, manifest *sidecarManifest) error {
+	report, err := previewdetect.Detect(workDir)
+	if err != nil {
+		return err
+	}
+	data, err := json.MarshalIndent(report, "", "  ")
+	if err != nil {
+		return err
+	}
+	dir := filepath.Join(workDir, ".multica", "preview")
+	if err := recordMkdirAll(dir, 0o755, manifest); err != nil {
+		return err
+	}
+	if err := recordWriteFile(filepath.Join(dir, "targets.json"), data, 0o644, manifest); err != nil && !errors.Is(err, errPathPreExists) {
+		return err
+	}
 	return nil
 }
 

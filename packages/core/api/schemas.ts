@@ -24,6 +24,8 @@ import type {
   ListIssuesResponse,
   ListWebhookDeliveriesResponse,
   StartCredentialLoginSessionResponse,
+  PreviewSession,
+  PreviewSessionListResponse,
   Squad,
   TimelineEntry,
   User,
@@ -613,6 +615,93 @@ export const SubscribersListSchema = z.array(SubscriberSchema);
 export const ChildIssuesResponseSchema = z.object({
   issues: z.array(IssueSchema).default([]),
 }).loose();
+
+// Preview session responses are new, but desktop clients can outlive the
+// server version they were built against. Keep enum-like values as strings,
+// default display-only fields, and convert the wire's snake_case shape at the
+// API boundary so the rest of TypeScript only sees camelCase.
+const PreviewSessionWireSchema = z.object({
+  id: z.string(),
+  workspace_id: z.string(),
+  issue_id: z.string(),
+  task_id: z.string().nullable().optional().default(null),
+  platform: z.string().default("unknown"),
+  provider: z.string().default("unknown"),
+  title: z.string().default(""),
+  preview_url: z.string().default(""),
+  status: z.string().default("unknown"),
+  creator_type: z.string().default(""),
+  creator_id: z.string().default(""),
+  error_message: z.string().nullable().optional().default(null),
+  expires_at: z.string().nullable().optional().default(null),
+  last_active_at: z.string().nullable().optional().default(null),
+  lease_expires_at: z.string().nullable().optional().default(null),
+  started_at: z.string().nullable().optional().default(null),
+  stopped_at: z.string().nullable().optional().default(null),
+  created_at: z.string().default(""),
+  updated_at: z.string().default(""),
+}).loose();
+
+export const PreviewSessionSchema = PreviewSessionWireSchema.transform(
+  (session): PreviewSession => ({
+    id: session.id,
+    workspaceId: session.workspace_id,
+    issueId: session.issue_id,
+    taskId: session.task_id,
+    platform: session.platform,
+    provider: session.provider,
+    title: session.title,
+    previewUrl: session.preview_url,
+    status: session.status,
+    creatorType: session.creator_type,
+    creatorId: session.creator_id,
+    errorMessage: session.error_message,
+    expiresAt: session.expires_at,
+    lastActiveAt: session.last_active_at,
+    leaseExpiresAt: session.lease_expires_at,
+    startedAt: session.started_at,
+    stoppedAt: session.stopped_at,
+    createdAt: session.created_at,
+    updatedAt: session.updated_at,
+  }),
+);
+
+export const PreviewSessionListResponseSchema = z.object({
+  preview_sessions: z.array(PreviewSessionSchema).default([]),
+  total: z.number().default(0),
+}).loose().transform(
+  (response): PreviewSessionListResponse => ({
+    previewSessions: response.preview_sessions,
+    total: response.total,
+  }),
+);
+
+export const EMPTY_PREVIEW_SESSION: PreviewSession = {
+  id: "",
+  workspaceId: "",
+  issueId: "",
+  taskId: null,
+  platform: "unknown",
+  provider: "unknown",
+  title: "",
+  previewUrl: "",
+  status: "unknown",
+  creatorType: "",
+  creatorId: "",
+  errorMessage: null,
+  expiresAt: null,
+  lastActiveAt: null,
+  leaseExpiresAt: null,
+  startedAt: null,
+  stoppedAt: null,
+  createdAt: "",
+  updatedAt: "",
+};
+
+export const EMPTY_PREVIEW_SESSION_LIST_RESPONSE: PreviewSessionListResponse = {
+  previewSessions: [],
+  total: 0,
+};
 
 export const CloudRuntimeNodeSchema = z.object({
   id: z.string(),

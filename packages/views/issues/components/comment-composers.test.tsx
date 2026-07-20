@@ -3,11 +3,13 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { fireEvent, screen, waitFor } from "@testing-library/react";
 import type { UploadResult } from "@multica/core/hooks/use-file-upload";
+import { useCommentDraftStore } from "@multica/core/issues/stores";
 import { renderWithI18n } from "../../test/i18n";
 import { CommentInput } from "./comment-input";
 import { ReplyInput } from "./reply-input";
 
 const uploadWithToast = vi.hoisted(() => vi.fn());
+const editorFocus = vi.hoisted(() => vi.fn());
 
 vi.mock("@multica/core/api", () => ({
   api: {},
@@ -52,7 +54,7 @@ vi.mock("../../editor", () => ({
       clearContent: () => {
         valueRef.current = "";
       },
-      focus: () => {},
+      focus: editorFocus,
       blur: () => {},
       uploadFile: async (file: File) => {
         const result = await onUploadFile?.(file);
@@ -121,7 +123,9 @@ function getSubmitButton(container: HTMLElement): HTMLButtonElement {
 
 beforeEach(() => {
   uploadWithToast.mockReset();
+  editorFocus.mockReset();
   localStorage.clear();
+  useCommentDraftStore.getState().clearDraft("new:issue-1");
 });
 
 describe("comment composers", () => {
@@ -169,6 +173,41 @@ describe("comment composers", () => {
 
     await waitFor(() => {
       expect(onSubmit).toHaveBeenCalledWith("hello from composer", undefined, undefined);
+    });
+  });
+
+  it("prefills preview context, preserves the draft, and focuses the composer", async () => {
+    const scrollIntoView = vi.fn();
+    Object.defineProperty(HTMLElement.prototype, "scrollIntoView", {
+      configurable: true,
+      value: scrollIntoView,
+    });
+    useCommentDraftStore
+      .getState()
+      .setDraft("new:issue-1", "The first screen needs work");
+
+    renderWithProviders(
+      <CommentInput
+        issueId="issue-1"
+        onSubmit={vi.fn().mockResolvedValue(undefined)}
+        previewFeedbackRequest={{
+          nonce: 1,
+          issueId: "issue-1",
+          sessionId: "preview-1",
+          title: "AdaKami Android",
+        }}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId("editor")).toHaveValue(
+        "The first screen needs work\n\nRegarding preview “AdaKami Android”: ",
+      );
+    });
+    expect(editorFocus).toHaveBeenCalledTimes(1);
+    expect(scrollIntoView).toHaveBeenCalledWith({
+      behavior: "smooth",
+      block: "center",
     });
   });
 

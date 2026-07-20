@@ -57,6 +57,8 @@ func init() {
 	credsCmd.GroupID = groupCore
 	crawlCmd.GroupID = groupCore
 	creativeCmd.GroupID = groupCore
+	previewCmd.GroupID = groupCore
+	deviceCmd.GroupID = groupRuntime
 
 	// Runtime commands
 	daemonCmd.GroupID = groupRuntime
@@ -86,6 +88,8 @@ func init() {
 	rootCmd.AddCommand(credsCmd)
 	rootCmd.AddCommand(crawlCmd)
 	rootCmd.AddCommand(creativeCmd)
+	rootCmd.AddCommand(previewCmd)
+	rootCmd.AddCommand(deviceCmd)
 	rootCmd.AddCommand(daemonCmd)
 	rootCmd.AddCommand(runtimeCmd)
 	rootCmd.AddCommand(authCmd)

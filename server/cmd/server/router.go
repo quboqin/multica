@@ -773,6 +773,8 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Get("/", h.GetIssue)
 					r.Put("/", h.UpdateIssue)
 					r.Delete("/", h.DeleteIssue)
+					r.Get("/preview-sessions", h.ListPreviewSessions)
+					r.Post("/preview-sessions", h.CreatePreviewSession)
 					r.Post("/comments/trigger-preview", h.PreviewCommentTriggers)
 					r.Post("/comments", h.CreateComment)
 					r.Get("/comments", h.ListComments)
@@ -805,6 +807,12 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Get("/pull-requests", h.ListPullRequestsForIssue)
 				})
 			})
+
+			// Preview sessions
+			r.Get("/api/preview-sessions/{sessionId}", h.GetPreviewSession)
+			r.Post("/api/preview-sessions/{sessionId}/touch", h.TouchPreviewSession)
+			r.Post("/api/preview-sessions/{sessionId}/device", h.SwitchPreviewSessionDevice)
+			r.Post("/api/preview-sessions/{sessionId}/stop", h.StopPreviewSession)
 
 			// Task messages (user-facing, not daemon auth)
 			r.Get("/api/tasks/{taskId}/messages", h.ListTaskMessagesByUser)

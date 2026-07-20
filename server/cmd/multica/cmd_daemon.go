@@ -77,6 +77,7 @@ func init() {
 	f.String("daemon-id", "", "Unique daemon identifier (env: MULTICA_DAEMON_ID)")
 	f.String("device-name", "", "Human-readable device name (env: MULTICA_DAEMON_DEVICE_NAME)")
 	f.String("runtime-name", "", "Runtime display name (env: MULTICA_AGENT_RUNTIME_NAME)")
+	f.String("device-runtime-url", "", "Loopback Device Runtime URL advertised with the mac-mobile-preview label (env: MULTICA_DEVICE_RUNTIME_URL)")
 	f.Duration("poll-interval", 0, "Task poll interval (env: MULTICA_DAEMON_POLL_INTERVAL)")
 	f.Duration("heartbeat-interval", 0, "Heartbeat interval (env: MULTICA_DAEMON_HEARTBEAT_INTERVAL)")
 	f.Duration("agent-timeout", 0, "Absolute per-task wall-clock cap; 0 = no cap, rely on the watchdogs (env: MULTICA_AGENT_TIMEOUT)")
@@ -96,6 +97,7 @@ func init() {
 	rf.String("daemon-id", "", "Unique daemon identifier (env: MULTICA_DAEMON_ID)")
 	rf.String("device-name", "", "Human-readable device name (env: MULTICA_DAEMON_DEVICE_NAME)")
 	rf.String("runtime-name", "", "Runtime display name (env: MULTICA_AGENT_RUNTIME_NAME)")
+	rf.String("device-runtime-url", "", "Loopback Device Runtime URL advertised with the mac-mobile-preview label (env: MULTICA_DEVICE_RUNTIME_URL)")
 	rf.Duration("poll-interval", 0, "Task poll interval (env: MULTICA_DAEMON_POLL_INTERVAL)")
 	rf.Duration("heartbeat-interval", 0, "Heartbeat interval (env: MULTICA_DAEMON_HEARTBEAT_INTERVAL)")
 	rf.Duration("agent-timeout", 0, "Absolute per-task wall-clock cap; 0 = no cap, rely on the watchdogs (env: MULTICA_AGENT_TIMEOUT)")
@@ -291,6 +293,9 @@ func buildDaemonStartArgs(cmd *cobra.Command) []string {
 	if v := flagString(cmd, "runtime-name"); v != "" {
 		args = append(args, "--runtime-name", v)
 	}
+	if v := flagString(cmd, "device-runtime-url"); v != "" {
+		args = append(args, "--device-runtime-url", v)
+	}
 	if d, _ := cmd.Flags().GetDuration("poll-interval"); d > 0 {
 		args = append(args, "--poll-interval", d.String())
 	}
@@ -339,12 +344,13 @@ func runDaemonForeground(cmd *cobra.Command) error {
 		}
 	}
 	overrides := daemon.Overrides{
-		ServerURL:   serverURL,
-		DaemonID:    flagString(cmd, "daemon-id"),
-		DeviceName:  flagString(cmd, "device-name"),
-		RuntimeName: flagString(cmd, "runtime-name"),
-		Profile:     profile,
-		HealthPort:  healthPortForProfile(profile),
+		ServerURL:        serverURL,
+		DaemonID:         flagString(cmd, "daemon-id"),
+		DeviceName:       flagString(cmd, "device-name"),
+		RuntimeName:      flagString(cmd, "runtime-name"),
+		DeviceRuntimeURL: flagString(cmd, "device-runtime-url"),
+		Profile:          profile,
+		HealthPort:       healthPortForProfile(profile),
 	}
 	if d, _ := cmd.Flags().GetDuration("poll-interval"); d > 0 {
 		overrides.PollInterval = d
