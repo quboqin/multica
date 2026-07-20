@@ -27,6 +27,7 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-multica}
     volumes:
       - pgdata:/var/lib/postgresql/data
+    mem_limit: ${MULTICA_POSTGRES_MEMORY_LIMIT:-512m}
     restart: unless-stopped
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-multica} -d ${POSTGRES_DB:-multica}"]
@@ -48,6 +49,7 @@ services:
     environment:
       DATABASE_URL: postgres://${POSTGRES_USER:-multica}:${POSTGRES_PASSWORD:-multica}@postgres:5432/${POSTGRES_DB:-multica}?sslmode=disable
       PORT: "8080"
+      GOMEMLIMIT: ${MULTICA_BACKEND_GO_MEMORY_LIMIT:-384MiB}
       METRICS_ADDR: ${METRICS_ADDR:-}
       JWT_SECRET: ${JWT_SECRET:-change-me-in-production}
       FRONTEND_ORIGIN: ${FRONTEND_ORIGIN:-http://localhost:${FRONTEND_PORT:-3000}}
@@ -105,6 +107,7 @@ services:
       MULTICA_WORKSPACE_MCP_KEY: ${MULTICA_WORKSPACE_MCP_KEY:?MULTICA_WORKSPACE_MCP_KEY must be a base64-encoded 32-byte key}
       MULTICA_WORKSPACE_MCP_TIMEOUT: ${MULTICA_WORKSPACE_MCP_TIMEOUT:-45s}
       MULTICA_WORKSPACE_MCP_ALLOWED_HOSTS: ${MULTICA_WORKSPACE_MCP_ALLOWED_HOSTS:-}
+    mem_limit: ${MULTICA_BACKEND_MEMORY_LIMIT:-640m}
     restart: unless-stopped
 
   crawler-worker:
@@ -126,6 +129,10 @@ services:
       BROKER_STATE_KEY: ${BROKER_STATE_KEY:?BROKER_STATE_KEY must be a base64-encoded 32-byte key}
       MULTICA_CREDENTIAL_CONNECTORS_JSON: ${MULTICA_CREDENTIAL_CONNECTORS_JSON:-}
       APP_ENV: ${APP_ENV:-production}
+      NODE_OPTIONS: --max-old-space-size=${MULTICA_CRAWLER_WORKER_NODE_HEAP_MB:-384}
+      CRAWLER_WORKER_MAX_OPEN_BROWSERS: ${CRAWLER_WORKER_MAX_OPEN_BROWSERS:-1}
+      CRAWLER_WORKER_CRAWL_BROWSER_TIMEOUT_MS: ${CRAWLER_WORKER_CRAWL_BROWSER_TIMEOUT_MS:-900000}
+    mem_limit: ${MULTICA_CRAWLER_WORKER_MEMORY_LIMIT:-2200m}
     restart: unless-stopped
 
   frontend:
@@ -136,6 +143,8 @@ services:
       - "127.0.0.1:${FRONTEND_PORT:-3000}:3000"
     environment:
       HOSTNAME: "0.0.0.0"
+      NODE_OPTIONS: --max-old-space-size=${MULTICA_FRONTEND_NODE_HEAP_MB:-320}
+    mem_limit: ${MULTICA_FRONTEND_MEMORY_LIMIT:-384m}
     restart: unless-stopped
 
 volumes:

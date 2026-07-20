@@ -4,6 +4,7 @@ import { Buffer } from "node:buffer";
 import { pathToFileURL } from "node:url";
 import { chromium } from "playwright";
 import pg from "pg";
+import { createBrowserCapacity } from "./browser-capacity.mjs";
 import {
   normalizeAppGrowingMaterialSearchParams,
   normalizeMaterialRules,
@@ -169,6 +170,22 @@ let pool;
 function positiveIntegerEnv(name, fallback) {
   const value = Number(process.env[name]);
   return Number.isInteger(value) && value > 0 ? value : fallback;
+}
+
+const browserCapacity = createBrowserCapacity(
+  positiveIntegerEnv("CRAWLER_WORKER_MAX_OPEN_BROWSERS", 1),
+);
+const crawlerBrowserTimeoutMS = positiveIntegerEnv(
+  "CRAWLER_WORKER_CRAWL_BROWSER_TIMEOUT_MS",
+  15 * 60 * 1000,
+);
+
+function acquireBrowserSlot() {
+  const release = browserCapacity.tryAcquire();
+  if (!release) {
+    throw userError("crawler worker is busy; wait for the active browser task to finish", 429);
+  }
+  return release;
 }
 
 const forbiddenKeyFragments = [
@@ -509,11 +526,42 @@ async function scrollPageToRatio(page, ratio) {
 
 async function closeSessionBrowser(session) {
   const browser = session.browser;
+  const releaseBrowserSlot = session.releaseBrowserSlot;
   session.browser = null;
   session.context = null;
   session.page = null;
+  session.releaseBrowserSlot = null;
   if (browser) {
     await browser.close().catch(() => {});
+  }
+  releaseBrowserSlot?.();
+}
+
+async function expireSession(token) {
+  const session = activeSessions.get(token);
+  if (!session || session.status === "completed" || Date.now() < session.expiresAt) {
+    return;
+  }
+  session.status = "expired";
+  session.error = "login session expired";
+  await closeSessionBrowser(session);
+}
+
+function scheduleSessionExpiry(token, expiresAt) {
+  const expireWhenDue = () => {
+    const remaining = expiresAt - Date.now();
+    if (remaining > 0) {
+      setTimeout(expireWhenDue, remaining);
+      return;
+    }
+    void expireSession(token);
+  };
+  setTimeout(expireWhenDue, Math.max(0, expiresAt - Date.now()));
+}
+
+function assertSessionNotExpired(session) {
+  if (session.status === "expired" || Date.now() >= session.expiresAt) {
+    throw userError("login session expired; start a new binding session", 410);
   }
 }
 
@@ -521,6 +569,7 @@ async function openControlledBrowser(session, token) {
   if (session.status === "completed") {
     return publicSession(session);
   }
+  assertSessionNotExpired(session);
   if (session.browser) {
     return publicSession(session);
   }
@@ -528,31 +577,48 @@ async function openControlledBrowser(session, token) {
   const headless = sessionBrowserHeadless(connector);
   session.status = "opening";
   session.error = "";
-  const browser = await chromium.launch({
-    headless,
-    args: ["--disable-blink-features=AutomationControlled"],
-  });
-  const context = await browser.newContext({
-    viewport: session.viewport || sessionViewport,
-  });
-  await context.addInitScript(() => {
-    Object.defineProperty(navigator, "webdriver", {
-      get: () => undefined,
+  const releaseBrowserSlot = acquireBrowserSlot();
+  let browser;
+  try {
+    browser = await chromium.launch({
+      headless,
+      args: ["--disable-blink-features=AutomationControlled"],
     });
-  });
-  const page = await context.newPage();
-  attachAuthWatcher(page, connector, (authCheck) => {
-    session.authCheck = authCheck;
-    if (authCheck.authenticated) {
-      scheduleAutoComplete(session, token, "auth_watcher");
+    const context = await browser.newContext({
+      viewport: session.viewport || sessionViewport,
+    });
+    await context.addInitScript(() => {
+      Object.defineProperty(navigator, "webdriver", {
+        get: () => undefined,
+      });
+    });
+    const page = await context.newPage();
+    attachAuthWatcher(page, connector, (authCheck) => {
+      session.authCheck = authCheck;
+      if (authCheck.authenticated) {
+        scheduleAutoComplete(session, token, "auth_watcher");
+      }
+    });
+    session.browser = browser;
+    session.context = context;
+    session.page = page;
+    session.releaseBrowserSlot = releaseBrowserSlot;
+    await page.goto(session.loginURL, { waitUntil: "domcontentloaded", timeout: 60_000 });
+    session.status = "browser_open";
+    return sessionDetails(session);
+  } catch (error) {
+    if (session.browser === browser) {
+      session.browser = null;
+      session.context = null;
+      session.page = null;
+      session.releaseBrowserSlot = null;
     }
-  });
-  session.browser = browser;
-  session.context = context;
-  session.page = page;
-  await page.goto(session.loginURL, { waitUntil: "domcontentloaded", timeout: 60_000 });
-  session.status = "browser_open";
-  return sessionDetails(session);
+    await browser?.close().catch(() => {});
+    releaseBrowserSlot();
+    session.status = "error";
+    session.error = error instanceof Error ? error.message : String(error);
+    throw error;
+  }
 }
 
 function sessionBrowserHeadless(connector) {
@@ -762,6 +828,7 @@ async function completeSession(session, token) {
       verification: session.verification || null,
     };
   }
+  assertSessionNotExpired(session);
   if (!session.context) {
     throw userError("open the controlled browser and finish login before completing");
   }
@@ -2716,11 +2783,17 @@ async function runCrawl(body) {
   }
   const credentialState = summarizeCredentialState(storageState, connector, sessionStorageState);
   let authCheck = { authenticated: false, method: "not_checked" };
-  const browser = await chromium.launch({
-    headless: crawlerHeadless(connector),
-    args: ["--disable-blink-features=AutomationControlled"],
-  });
+  const releaseBrowserSlot = acquireBrowserSlot();
+  let browser;
+  let crawlerBrowserTimeout;
   try {
+    browser = await chromium.launch({
+      headless: crawlerHeadless(connector),
+      args: ["--disable-blink-features=AutomationControlled"],
+    });
+    crawlerBrowserTimeout = setTimeout(() => {
+      void browser.close().catch(() => {});
+    }, crawlerBrowserTimeoutMS);
     const context = await browser.newContext({ storageState });
     await restoreSessionStorage(context, sessionStorageState);
     const page = await context.newPage();
@@ -2793,7 +2866,9 @@ async function runCrawl(body) {
       },
     };
   } finally {
-    await browser.close().catch(() => {});
+    clearTimeout(crawlerBrowserTimeout);
+    await browser?.close().catch(() => {});
+    releaseBrowserSlot();
   }
 }
 
@@ -2925,6 +3000,8 @@ const server = http.createServer(async (req, res) => {
         service: "crawler-worker",
         playwright: true,
         remote_ui: remoteBrowserUI,
+        active_browsers: browserCapacity.active(),
+        max_open_browsers: browserCapacity.limit(),
       });
       return;
     }
@@ -2936,19 +3013,22 @@ const server = http.createServer(async (req, res) => {
         return;
       }
       const connector = connectorForID(body.connector_id);
+      const expiresAt = Date.now() + loginSessionTTLMS;
       activeSessions.set(body.session_token, {
         profileID: body.profile_id,
         connectorID: body.connector_id,
         loginURL: connector.loginURL || body.login_url,
         status: "pending",
         createdAt: Date.now(),
-        expiresAt: Date.now() + loginSessionTTLMS,
+        expiresAt,
         browser: null,
+        releaseBrowserSlot: null,
         context: null,
         page: null,
         viewport: sessionViewport,
         error: "",
       });
+      scheduleSessionExpiry(body.session_token, expiresAt);
       writeJSON(res, 200, {
         browser_url: `${publicURL}/sessions/${encodeURIComponent(body.session_token)}`,
         expires_in_seconds: Math.floor(loginSessionTTLMS / 1000),
