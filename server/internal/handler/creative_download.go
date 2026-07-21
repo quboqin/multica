@@ -120,6 +120,62 @@ func (h *Handler) DownloadCreativeEditJob(w http.ResponseWriter, r *http.Request
 	_, _ = archive.WriteTo(w)
 }
 
+func (h *Handler) PreviewCreativeEditAsset(w http.ResponseWriter, r *http.Request) {
+	issue, ok := h.loadIssueForUser(w, r, chi.URLParam(r, "id"))
+	if !ok {
+		return
+	}
+	assetID, ok := parseUUIDOrBadRequest(w, chi.URLParam(r, "assetId"), "asset_id")
+	if !ok {
+		return
+	}
+	asset, err := h.loadCreativePreviewAsset(r.Context(), issue.ID, issue.WorkspaceID, assetID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			writeError(w, http.StatusNotFound, "creative edit asset not found")
+			return
+		}
+		slog.Error("load creative preview asset failed", "asset_id", uuidToString(assetID), "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to load creative edit asset")
+		return
+	}
+	data, err := h.readCreativePackageAsset(r.Context(), asset)
+	if err != nil {
+		slog.Error("read creative preview asset failed", "asset_id", uuidToString(assetID), "error", err)
+		writeError(w, http.StatusBadGateway, "failed to read creative edit asset")
+		return
+	}
+	contentType := strings.TrimSpace(asset.ContentType)
+	if contentType == "" || contentType == "application/octet-stream" {
+		contentType = http.DetectContentType(data)
+	}
+	w.Header().Set("Content-Type", contentType)
+	w.Header().Set("Cache-Control", "private, max-age=300")
+	w.Header().Set("Content-Length", fmt.Sprintf("%d", len(data)))
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(data)
+}
+
+func (h *Handler) loadCreativePreviewAsset(
+	ctx context.Context,
+	issueID, workspaceID, assetID pgtype.UUID,
+) (creativePackageAsset, error) {
+	var asset creativePackageAsset
+	err := h.DB.QueryRow(ctx, `
+SELECT a.id::text, c.id::text, c.competitor, v.variant_index, v.qc_status,
+       a.width, a.height, a.label, a.asset_url, a.content_type, COALESCE(a.storage_key, '')
+FROM creative_edit_asset a
+JOIN creative_edit_variant v ON v.id = a.variant_id
+JOIN creative_material_candidate c ON c.id = v.candidate_id
+JOIN creative_edit_job j ON j.id = v.job_id
+WHERE a.id = $1 AND j.issue_id = $2 AND j.workspace_id = $3
+`, assetID, issueID, workspaceID).Scan(
+		&asset.ID, &asset.CandidateID, &asset.Competitor, &asset.Variant, &asset.QCStatus,
+		&asset.Width, &asset.Height, &asset.Label, &asset.AssetURL, &asset.ContentType, &asset.StorageKey,
+	)
+	return asset, err
+}
+
 var errCreativeJobNotReady = errors.New("creative edit job has no deliverable results")
 
 func (h *Handler) creativePackageDownloadFilename(

@@ -8,6 +8,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -359,6 +361,95 @@ INSERT INTO creative_edit_asset (
 	rules, _ := manifest["rules"].(map[string]any)
 	if rules["market"] != "idn-adakami" || rules["variant_count"] != float64(3) {
 		t.Fatalf("manifest rules = %#v", rules)
+	}
+}
+
+func TestPreviewCreativeEditAssetStreamsScopedAsset(t *testing.T) {
+	ctx := context.Background()
+	issueID := createTestIssue(t, "Creative preview "+uuid.NewString(), "done", "medium")
+	var candidateID string
+	if err := testPool.QueryRow(ctx, `
+INSERT INTO creative_material_candidate (
+  workspace_id, dedupe_key, competitor, title, asset_type
+) VALUES ($1::uuid, $2, 'Easy Cash', 'Reference', 'image')
+RETURNING id::text
+`, testWorkspaceID, uuid.NewString()).Scan(&candidateID); err != nil {
+		t.Fatalf("insert candidate: %v", err)
+	}
+	var jobID string
+	if err := testPool.QueryRow(ctx, `
+INSERT INTO creative_edit_job (
+  workspace_id, issue_id, status, prompt, rules, created_by_type, created_by_id,
+  external_provider, external_job_id, external_status, stage, progress,
+  poll_attempts, completed_at, process_data
+) VALUES (
+  $1::uuid, $2::uuid, 'completed', 'preview', '{}'::jsonb, 'member', $3::uuid,
+  'workspace_mcp', 'lean-preview-test', 'completed', 'completed', 100, 1, now(), '{}'::jsonb
+)
+RETURNING id::text
+`, testWorkspaceID, issueID, testUserID).Scan(&jobID); err != nil {
+		t.Fatalf("insert creative job: %v", err)
+	}
+	if _, err := testPool.Exec(ctx, `
+INSERT INTO creative_edit_job_candidate (job_id, candidate_id)
+VALUES ($1::uuid, $2::uuid)
+`, jobID, candidateID); err != nil {
+		t.Fatalf("insert job candidate: %v", err)
+	}
+	var variantID string
+	if err := testPool.QueryRow(ctx, `
+INSERT INTO creative_edit_variant (job_id, candidate_id, variant_index, title, qc_status)
+VALUES ($1::uuid, $2::uuid, 1, 'Variant 1', 'passed')
+RETURNING id::text
+`, jobID, candidateID).Scan(&variantID); err != nil {
+		t.Fatalf("insert variant: %v", err)
+	}
+	storageKey := "creative-results/preview.png"
+	var assetID string
+	if err := testPool.QueryRow(ctx, `
+INSERT INTO creative_edit_asset (
+  variant_id, width, height, label, asset_url, content_type, storage_key
+) VALUES (
+  $1::uuid, 1080, 1080, '1080x1080', 'https://cdn.example.com/creative-results/preview.png',
+  'image/png', $2
+)
+RETURNING id::text
+`, variantID, storageKey).Scan(&assetID); err != nil {
+		t.Fatalf("insert asset: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM issue WHERE id = $1::uuid`, issueID)
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM creative_material_candidate WHERE id = $1::uuid`, candidateID)
+	})
+
+	storage := &mockStorage{}
+	storage.put(storageKey, []byte("preview-png"))
+	originalStorage := testHandler.Storage
+	testHandler.Storage = storage
+	t.Cleanup(func() { testHandler.Storage = originalStorage })
+
+	recorder := httptest.NewRecorder()
+	req := withURLParams(
+		newRequest(http.MethodGet, "/api/issues/"+issueID+"/creative-edit-assets/"+assetID+"/preview", nil),
+		"id", issueID,
+		"assetId", assetID,
+	)
+	testHandler.PreviewCreativeEditAsset(recorder, req)
+
+	resp := recorder.Result()
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", resp.StatusCode, recorder.Body.String())
+	}
+	if got := resp.Header.Get("Content-Type"); got != "image/png" {
+		t.Fatalf("content type = %q", got)
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read response: %v", err)
+	}
+	if string(body) != "preview-png" {
+		t.Fatalf("body = %q", body)
 	}
 }
 

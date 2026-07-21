@@ -188,6 +188,11 @@ function creativeAssetDownloadName(assetURL: string) {
   }
 }
 
+function creativeEditAssetPreviewURL(issueID: string, assetID: string) {
+  if (!assetID) return "";
+  return `/api/issues/${encodeURIComponent(issueID)}/creative-edit-assets/${encodeURIComponent(assetID)}/preview`;
+}
+
 export function CreativeMaterialPool({ issue }: { issue: Issue }) {
   const wsId = useWorkspaceId();
   const qc = useQueryClient();
@@ -1095,14 +1100,14 @@ function CreativeResultPreviewDialog({
                     className="relative block w-full cursor-zoom-in bg-muted text-left outline-none ring-inset focus-visible:ring-2 focus-visible:ring-primary"
                     style={{ aspectRatio: `${asset.width} / ${asset.height}` }}
                     onClick={() => asset.asset_url && onPreview({
-                      url: asset.asset_url,
+                      url: creativeEditAssetPreviewURL(job.issue_id, asset.id),
                       title: `变体 ${detailVariant.variant_index} - ${asset.label || `${asset.width}x${asset.height}`}`,
                       subtitle: candidate?.competitor,
                       assetType: asset.content_type.startsWith("video/") ? "video" : "image",
                       openUrl: asset.asset_url,
                     })}
                   >
-                    <MediaPreview url={asset.asset_url} alt={asset.label || `${asset.width}x${asset.height}`} compact />
+                    <MediaPreview url={creativeEditAssetPreviewURL(job.issue_id, asset.id)} alt={asset.label || `${asset.width}x${asset.height}`} compact />
                     <span className="absolute left-2 top-2" onClick={(event) => event.stopPropagation()}>
                       <Checkbox
                         checked={selectedAssetIDs.has(asset.id)}
@@ -1179,7 +1184,7 @@ function CreativeResultPreviewDialog({
                   onClick={() => setDetailVariantID(variant.id)}
                 >
                   {asset.asset_url ? (
-                    <MediaPreview url={asset.asset_url} alt={asset.label || `${asset.width}x${asset.height}`} compact />
+                    <MediaPreview url={creativeEditAssetPreviewURL(job.issue_id, asset.id)} alt={asset.label || `${asset.width}x${asset.height}`} compact />
                   ) : (
                     <span className="flex h-full items-center justify-center text-muted-foreground"><ImageIcon className="h-8 w-8" /></span>
                   )}
@@ -1481,7 +1486,7 @@ function EditResultBoard({
                     type="button"
                     className="group mt-3 block w-full overflow-hidden rounded-md border bg-muted text-left outline-none transition-colors hover:border-primary/50 focus-visible:ring-2 focus-visible:ring-primary"
                     onClick={() => previewAsset?.asset_url && onPreview({
-                      url: previewAsset.asset_url,
+                      url: creativeEditAssetPreviewURL(issue.id, previewAsset.id),
                       title: `变体 ${variant.variant_index} - ${previewAsset.label || `${previewAsset.width}x${previewAsset.height}`}`,
                       subtitle: activeCandidate?.competitor,
                       assetType: previewAsset.content_type.startsWith("video/") ? "video" : "image",
@@ -1489,7 +1494,7 @@ function EditResultBoard({
                     })}
                   >
                     <div className="relative aspect-square bg-muted">
-                      {previewAsset?.asset_url ? <MediaPreview url={previewAsset.asset_url} alt={`变体 ${variant.variant_index}`} compact /> : (
+                      {previewAsset?.asset_url ? <MediaPreview url={creativeEditAssetPreviewURL(issue.id, previewAsset.id)} alt={`变体 ${variant.variant_index}`} compact /> : (
                         <div className="flex h-full items-center justify-center text-muted-foreground"><ImageIcon className="h-7 w-7" /></div>
                       )}
                       <span className="absolute bottom-2 right-2 inline-flex items-center rounded-md bg-background/90 p-1.5 opacity-0 shadow-sm ring-1 ring-border transition group-hover:opacity-100">

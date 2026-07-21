@@ -797,6 +797,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Post("/creative-edit-jobs", h.CreateCreativeEditJob)
 					r.Post("/creative-edit-jobs/{jobId}/sync", h.SyncCreativeEditJob)
 					r.With(handler.RequireHumanActor).Post("/creative-edit-jobs/{jobId}/variants/{variantId}/feedback", h.CreateCreativeEditFeedback)
+					r.Get("/creative-edit-assets/{assetId}/preview", h.PreviewCreativeEditAsset)
 					r.Get("/creative-edit-jobs/{jobId}/download", h.DownloadCreativeEditJob)
 					r.Get("/labels", h.ListLabelsForIssue)
 					r.Post("/labels", h.AttachLabel)
