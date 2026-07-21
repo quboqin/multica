@@ -10,6 +10,7 @@ import {
   RefreshCw,
   ShieldCheck,
   Trash2,
+  X,
 } from "lucide-react";
 import { api } from "@multica/core/api";
 import { useAuthStore } from "@multica/core/auth";
@@ -132,6 +133,13 @@ export function CredentialBrokerTab() {
   const latestActiveProfile = activeProfiles[0] ?? null;
   const verifyingProfileID = verifyProfile.variables ?? "";
   const authCheck = readAuthCheck(verification);
+
+  const handleSessionDialogOpenChange = (open: boolean) => {
+    setSessionDialogOpen(open);
+    if (!open) {
+      closeRemoteBrowser(activeSession);
+    }
+  };
 
   useEffect(() => {
     if (selectedConnector && selectedConnector.id !== selectedConnectorID) {
@@ -385,28 +393,77 @@ export function CredentialBrokerTab() {
         </Card>
       )}
 
-      <Dialog open={sessionDialogOpen} onOpenChange={setSessionDialogOpen}>
+      <Dialog open={sessionDialogOpen} onOpenChange={handleSessionDialogOpenChange}>
         <DialogContent
+          showCloseButton={false}
           className="!h-[calc(100vh-24px)] !w-[calc(100vw-24px)] !max-w-none overflow-hidden !rounded-lg !p-0"
         >
-          <DialogHeader className="sr-only">
-            <DialogTitle>{t(($) => $.credential.remote_browser_title)}</DialogTitle>
-            <DialogDescription>
-              {t(($) => $.credential.remote_browser_description)}
-            </DialogDescription>
-          </DialogHeader>
-          {activeSession && (
-            <iframe
-              title={t(($) => $.credential.remote_browser_title)}
-              src={activeSession.browser_url}
-              allow="clipboard-read; clipboard-write"
-              className="h-full w-full border-0"
-            />
-          )}
+          <div className="flex h-full min-h-0 flex-col">
+            <DialogHeader className="flex-row items-center justify-between gap-3 border-b bg-background px-3 py-2">
+              <div className="min-w-0 space-y-1">
+                <DialogTitle className="truncate text-sm">
+                  {t(($) => $.credential.remote_browser_title)}
+                </DialogTitle>
+                <DialogDescription className="sr-only">
+                  {t(($) => $.credential.remote_browser_description)}
+                </DialogDescription>
+              </div>
+              <div className="flex shrink-0 items-center gap-2">
+                {activeSession && (
+                  <Button
+                    variant="outline"
+                    size="icon-sm"
+                    onClick={() => window.open(activeSession.browser_url, "_blank", "noopener")}
+                  >
+                    <ExternalLink className="h-4 w-4" />
+                    <span className="sr-only">{t(($) => $.credential.open_new_tab)}</span>
+                  </Button>
+                )}
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  onClick={() => handleSessionDialogOpenChange(false)}
+                >
+                  <X className="h-4 w-4" />
+                  <span className="sr-only">Close</span>
+                </Button>
+              </div>
+            </DialogHeader>
+            <div className="min-h-0 flex-1 bg-black">
+              {activeSession && (
+                <iframe
+                  title={t(($) => $.credential.remote_browser_title)}
+                  src={activeSession.browser_url}
+                  allow="clipboard-read; clipboard-write"
+                  className="h-full w-full border-0"
+                />
+              )}
+            </div>
+          </div>
         </DialogContent>
       </Dialog>
     </div>
   );
+}
+
+function closeRemoteBrowser(session: CredentialLoginSession | null) {
+  if (!session?.browser_url || typeof window === "undefined") {
+    return;
+  }
+  let closeURL: URL;
+  try {
+    closeURL = new URL(session.browser_url, window.location.href);
+  } catch {
+    return;
+  }
+  closeURL.pathname = `${closeURL.pathname.replace(/\/$/, "")}/close`;
+  closeURL.search = "";
+  fetch(closeURL.toString(), {
+    method: "POST",
+    body: "{}",
+    headers: { "content-type": "application/json" },
+    keepalive: true,
+  }).catch(() => {});
 }
 
 function ProfileRow({

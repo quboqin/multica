@@ -537,6 +537,17 @@ async function closeSessionBrowser(session) {
   releaseBrowserSlot?.();
 }
 
+async function closeRemoteBrowser(session) {
+  await closeSessionBrowser(session);
+  if (session.status !== "completed" && session.status !== "expired") {
+    session.status = "pending";
+    session.error = "";
+    session.autoCompleting = false;
+    session.autoCompleteReason = "";
+  }
+  return publicSession(session);
+}
+
 async function expireSession(token) {
   const session = activeSessions.get(token);
   if (!session || session.status === "completed" || Date.now() < session.expiresAt) {
@@ -1177,6 +1188,7 @@ function summarizeCredentialState(storageState, connector, sessionStorageState =
 function sessionHTML(token, session) {
   const statusURL = `/sessions/${encodeURIComponent(token)}/status`;
   const openURL = `/sessions/${encodeURIComponent(token)}/open`;
+  const closeURL = `/sessions/${encodeURIComponent(token)}/close`;
   const completeURL = `/sessions/${encodeURIComponent(token)}/complete`;
   const screenshotURL = `/sessions/${encodeURIComponent(token)}/screenshot`;
   const streamURL = `/sessions/${encodeURIComponent(token)}/stream`;
@@ -1246,6 +1258,7 @@ const scrollThumb = document.querySelector("#scrollThumb");
 const urls = {
   status: ${JSON.stringify(statusURL)},
   open: ${JSON.stringify(openURL)},
+  close: ${JSON.stringify(closeURL)},
   complete: ${JSON.stringify(completeURL)},
   screenshot: ${JSON.stringify(screenshotURL)},
   stream: ${JSON.stringify(streamURL)},
@@ -1275,6 +1288,19 @@ let pendingResize = null;
 let lastResize = { width: 0, height: 0 };
 let inputChain = Promise.resolve();
 let completionPosted = false;
+
+function closeRemoteBrowser() {
+  if (completed) {
+    return;
+  }
+  if (navigator.sendBeacon) {
+    navigator.sendBeacon(urls.close, new Blob(["{}"], {type: "application/json"}));
+    return;
+  }
+  fetch(urls.close, {method: "POST", keepalive: true}).catch(() => {});
+}
+
+window.addEventListener("pagehide", closeRemoteBrowser);
 
 async function parseResponse(resp) {
   const text = await resp.text();
@@ -3057,6 +3083,10 @@ const server = http.createServer(async (req, res) => {
       }
       if (req.method === "POST" && sessionPath.action === "open") {
         writeJSON(res, 200, await openControlledBrowser(session, sessionPath.token));
+        return;
+      }
+      if (req.method === "POST" && sessionPath.action === "close") {
+        writeJSON(res, 200, await closeRemoteBrowser(session));
         return;
       }
       if (req.method === "POST" && sessionPath.action === "complete") {
