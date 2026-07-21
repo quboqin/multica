@@ -31,6 +31,7 @@ import { Button } from "@multica/ui/components/ui/button";
 import { Card, CardContent } from "@multica/ui/components/ui/card";
 import {
   Dialog,
+  DialogClose,
   DialogContent,
   DialogDescription,
   DialogHeader,
@@ -419,14 +420,18 @@ export function CredentialBrokerTab() {
                     <span className="sr-only">{t(($) => $.credential.open_new_tab)}</span>
                   </Button>
                 )}
-                <Button
-                  variant="ghost"
-                  size="icon-sm"
-                  onClick={() => handleSessionDialogOpenChange(false)}
+                <DialogClose
+                  render={
+                    <Button
+                      variant="ghost"
+                      size="icon-sm"
+                      onClick={() => closeRemoteBrowser(activeSession)}
+                    />
+                  }
                 >
                   <X className="h-4 w-4" />
                   <span className="sr-only">Close</span>
-                </Button>
+                </DialogClose>
               </div>
             </DialogHeader>
             <div className="min-h-0 flex-1 bg-black">
