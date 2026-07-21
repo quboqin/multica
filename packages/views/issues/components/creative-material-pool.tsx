@@ -1486,7 +1486,7 @@ function EditResultBoard({
                     type="button"
                     className="group mt-3 block w-full overflow-hidden rounded-md border bg-muted text-left outline-none transition-colors hover:border-primary/50 focus-visible:ring-2 focus-visible:ring-primary"
                     onClick={() => previewAsset?.asset_url && onPreview({
-                      url: creativeEditAssetPreviewURL(issue.id, previewAsset.id),
+                      url: creativeEditAssetPreviewURL(job.issue_id, previewAsset.id),
                       title: `变体 ${variant.variant_index} - ${previewAsset.label || `${previewAsset.width}x${previewAsset.height}`}`,
                       subtitle: activeCandidate?.competitor,
                       assetType: previewAsset.content_type.startsWith("video/") ? "video" : "image",
@@ -1494,7 +1494,7 @@ function EditResultBoard({
                     })}
                   >
                     <div className="relative aspect-square bg-muted">
-                      {previewAsset?.asset_url ? <MediaPreview url={creativeEditAssetPreviewURL(issue.id, previewAsset.id)} alt={`变体 ${variant.variant_index}`} compact /> : (
+                      {previewAsset?.asset_url ? <MediaPreview url={creativeEditAssetPreviewURL(job.issue_id, previewAsset.id)} alt={`变体 ${variant.variant_index}`} compact /> : (
                         <div className="flex h-full items-center justify-center text-muted-foreground"><ImageIcon className="h-7 w-7" /></div>
                       )}
                       <span className="absolute bottom-2 right-2 inline-flex items-center rounded-md bg-background/90 p-1.5 opacity-0 shadow-sm ring-1 ring-border transition group-hover:opacity-100">
