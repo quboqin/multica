@@ -140,6 +140,64 @@ describe("CreativeMaterialPool edit prompt", () => {
     )).toBeNull();
   });
 
+  it("adds workspace context to creative edit asset preview image requests", async () => {
+    apiMocks.getCreativeMaterials.mockResolvedValue({
+      ...response,
+      edit_jobs: [{
+        id: "job-completed",
+        workspace_id: "workspace-1",
+        issue_id: "issue-1",
+        status: "completed",
+        prompt: "",
+        rules: {},
+        process_data: {},
+        external_provider: "workspace_mcp",
+        mcp_connection_id: "connection-1",
+        external_job_id: "external-completed",
+        external_status: "completed",
+        stage: "completed",
+        progress: 100,
+        last_poll_at: "2026-07-16T00:10:00Z",
+        next_poll_at: "",
+        completed_at: "2026-07-16T00:10:00Z",
+        error_message: "",
+        poll_attempts: 2,
+        created_at: "2026-07-16T00:00:00Z",
+        updated_at: "2026-07-16T00:10:00Z",
+        candidate_ids: ["candidate-1"],
+        variants: [{
+          id: "variant-1",
+          job_id: "job-completed",
+          candidate_id: "candidate-1",
+          variant_index: 1,
+          title: "Variant 1",
+          description: "",
+          qc_status: "passed",
+          created_at: "2026-07-16T00:10:00Z",
+          feedback: [],
+          assets: [{
+            id: "asset-1",
+            variant_id: "variant-1",
+            width: 1080,
+            height: 1080,
+            label: "1080x1080",
+            asset_url: "https://fat-cybertron.adakamicorp.id/files/creative.png",
+            content_type: "image/png",
+            created_at: "2026-07-16T00:10:00Z",
+          }],
+        }],
+      }],
+    } satisfies CreativeMaterialsResponse);
+
+    renderPool();
+
+    const image = await screen.findByAltText("变体 1");
+    expect(image).toHaveAttribute(
+      "src",
+      "/api/issues/issue-1/creative-edit-assets/asset-1/preview?workspace_id=workspace-1",
+    );
+  });
+
   it("shows QC-rejected attempts when a failed job has no final variants", async () => {
     apiMocks.getCreativeMaterials.mockResolvedValue({
       ...response,
