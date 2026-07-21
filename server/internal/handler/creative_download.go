@@ -88,6 +88,9 @@ func (h *Handler) DownloadCreativeEditJob(w http.ResponseWriter, r *http.Request
 		return
 	}
 	selectedAssetIDs := r.URL.Query()["asset_id"]
+	if selectedAssetIDs == nil {
+		selectedAssetIDs = []string{}
+	}
 	for _, assetID := range selectedAssetIDs {
 		if _, ok := parseUUIDOrBadRequest(w, assetID, "asset_id"); !ok {
 			return
@@ -104,6 +107,8 @@ func (h *Handler) DownloadCreativeEditJob(w http.ResponseWriter, r *http.Request
 			writeError(w, http.StatusNotFound, "creative edit job not found")
 		case errors.Is(err, errCreativeJobNotReady):
 			writeError(w, http.StatusConflict, "creative edit job has no deliverable results")
+		case errors.Is(err, errCreativeJobNoAssets):
+			writeError(w, http.StatusConflict, "creative edit job has no deliverable assets")
 		default:
 			writeError(w, http.StatusInternalServerError, "failed to build creative asset package")
 		}
@@ -179,6 +184,7 @@ WHERE a.id = $1 AND j.issue_id = $2 AND j.workspace_id = $3
 }
 
 var errCreativeJobNotReady = errors.New("creative edit job has no deliverable results")
+var errCreativeJobNoAssets = errors.New("creative edit job has no deliverable assets")
 
 func (h *Handler) creativePackageDownloadFilename(
 	ctx context.Context, issueID, workspaceID, jobID pgtype.UUID,
@@ -243,7 +249,7 @@ JOIN creative_edit_variant v ON v.id = a.variant_id
 JOIN creative_material_candidate c ON c.id = v.candidate_id
 JOIN creative_edit_job j ON j.id = v.job_id
 WHERE j.id = $1 AND j.issue_id = $2 AND j.workspace_id = $3
-  AND (cardinality($4::text[]) = 0 OR a.id::text = ANY($4::text[]))
+  AND (COALESCE(cardinality($4::text[]), 0) = 0 OR a.id::text = ANY($4::text[]))
 ORDER BY c.competitor, c.id, v.variant_index, a.width, a.height
 `, jobID, issueID, workspaceID, selectedAssetIDs)
 	if err != nil {
@@ -269,7 +275,7 @@ ORDER BY c.competitor, c.id, v.variant_index, a.width, a.height
 		return nil, err
 	}
 	if len(assets) == 0 {
-		return nil, errors.New("creative edit job has no assets")
+		return nil, errCreativeJobNoAssets
 	}
 	selectedCandidates := map[string]bool{}
 	selectedVariants := map[string]bool{}

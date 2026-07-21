@@ -2,9 +2,9 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { strToU8, unzipSync, zipSync } from "fflate";
 import {
   ArrowLeft,
+  ChevronRight,
   Check,
   Download,
   ExternalLink,
@@ -151,41 +151,16 @@ function creativePreviewEmptyMessage(errorMessage: string) {
   return "本次未产生可查看的生成图；详细原因可在看板的 QC 每轮记录查看。";
 }
 
-async function downloadSelectedCreativeAssets(
-  issueID: string,
-  jobID: string,
-  assets: { id: string; asset_url: string }[],
-  includeOriginal: boolean,
-) {
-  const source = await api.downloadCreativeEditJob(issueID, jobID);
-  const entries = unzipSync(new Uint8Array(await source.blob.arrayBuffer()));
-  const selectedFilenames = new Set(assets.map((asset) => creativeAssetDownloadName(asset.asset_url)).filter(Boolean));
-  const selectedEntries: Record<string, Uint8Array> = {};
-  for (const [entryName, data] of Object.entries(entries)) {
-    if (entryName === "manifest.json") continue;
-    const fileName = entryName.split("/").at(-1) ?? "";
-    if ((includeOriginal && entryName.includes("/original/")) || selectedFilenames.has(fileName)) {
-      selectedEntries[entryName] = data;
-    }
-  }
-  selectedEntries["manifest.json"] = strToU8(JSON.stringify({
-    job_id: jobID,
-    selection: { include_original: includeOriginal, asset_ids: assets.map((asset) => asset.id) },
-    asset_count: assets.length,
-  }, null, 2));
-  const filename = source.filename.replace(/\.zip$/i, "_SELECTED.zip");
-  const archive = zipSync(selectedEntries, { level: 6 });
-  const copy = new Uint8Array(archive.byteLength);
-  copy.set(archive);
-  return { blob: new Blob([copy.buffer as ArrayBuffer], { type: "application/zip" }), filename };
-}
-
-function creativeAssetDownloadName(assetURL: string) {
-  try {
-    return decodeURIComponent(new URL(assetURL).pathname.split("/").at(-1) ?? "");
-  } catch {
-    return "";
-  }
+function saveCreativeDownload(blob: Blob, filename: string) {
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = filename;
+  anchor.style.display = "none";
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
 }
 
 function creativeEditAssetPreviewURL(issueID: string, assetID: string, workspaceID: string) {
@@ -210,6 +185,8 @@ export function CreativeMaterialPool({ issue }: { issue: Issue }) {
   const [candidateOrder, setCandidateOrder] = useState<Record<string, number>>({});
   const [poolPreviewOpen, setPoolPreviewOpen] = useState(false);
   const [resultPreviewOpen, setResultPreviewOpen] = useState(false);
+  const [candidatePoolExpanded, setCandidatePoolExpanded] = useState(false);
+  const [resultBoardExpanded, setResultBoardExpanded] = useState(false);
 
   const workflowEnabled = issue.metadata?.workflow === "creative_material";
   const query = useQuery(creativeMaterialsOptions(wsId, issue.id));
@@ -259,40 +236,24 @@ export function CreativeMaterialPool({ issue }: { issue: Issue }) {
   });
 
   const downloadEditJob = useMutation({
-    mutationFn: (input: { jobId: string; assetIDs?: string[]; includeOriginal?: boolean }) =>
-      api.downloadCreativeEditJob(issue.id, input.jobId, {
-        assetIds: input.assetIDs,
-        includeOriginal: input.includeOriginal,
-      }),
-    onSuccess: ({ blob, filename }) => {
-      const url = URL.createObjectURL(blob);
-      const anchor = document.createElement("a");
-      anchor.href = url;
-      anchor.download = filename;
-      anchor.style.display = "none";
-      document.body.appendChild(anchor);
-      anchor.click();
-      anchor.remove();
-      window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
+    mutationFn: (input: { jobId: string; assetIDs?: string[]; includeOriginal?: boolean }) => {
+      const hasOptions = input.assetIDs !== undefined || input.includeOriginal !== undefined;
+      return api.downloadCreativeEditJob(issue.id, input.jobId, hasOptions
+        ? { assetIds: input.assetIDs, includeOriginal: input.includeOriginal }
+        : undefined);
     },
+    onSuccess: ({ blob, filename }) => saveCreativeDownload(blob, filename),
     onError: () => toast.error("素材包下载失败"),
   });
 
   const downloadSelectedEditJob = useMutation({
-    mutationFn: (input: { jobId: string; assets: { id: string; asset_url: string }[]; includeOriginal: boolean }) =>
-      downloadSelectedCreativeAssets(issue.id, input.jobId, input.assets, input.includeOriginal),
-    onSuccess: ({ blob, filename }) => {
-      const url = URL.createObjectURL(blob);
-      const anchor = document.createElement("a");
-      anchor.href = url;
-      anchor.download = filename;
-      anchor.style.display = "none";
-      document.body.appendChild(anchor);
-      anchor.click();
-      anchor.remove();
-      window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
-    },
-    onError: () => toast.error("选中素材打包失败"),
+    mutationFn: (input: { jobId: string; assetIDs: string[]; includeOriginal: boolean }) =>
+      api.downloadCreativeEditJob(issue.id, input.jobId, {
+        assetIds: input.assetIDs,
+        includeOriginal: input.includeOriginal,
+      }),
+    onSuccess: ({ blob, filename }) => saveCreativeDownload(blob, filename),
+    onError: () => toast.error("选中素材下载失败"),
   });
 
   const submitVariantFeedback = useMutation({
@@ -325,6 +286,8 @@ export function CreativeMaterialPool({ issue }: { issue: Issue }) {
 
   useEffect(() => {
     setCandidateOrder({});
+    setCandidatePoolExpanded(false);
+    setResultBoardExpanded(false);
   }, [issue.id]);
 
   useEffect(() => {
@@ -384,131 +347,158 @@ export function CreativeMaterialPool({ issue }: { issue: Issue }) {
   }, [activeCandidateId, activeJob]);
 
   useEffect(() => {
-    if (!activeJob || viewedJobIDs.has(activeJob.id)) return;
+    if (!activeJob || viewedJobIDs.has(activeJob.id) || (!resultBoardExpanded && !resultPreviewOpen)) return;
     setViewedJobIDs((current) => {
       if (current.has(activeJob.id)) return current;
       const next = new Set(current).add(activeJob.id);
       writeCreativeEditViewedJobs(editViewedJobsKey, next);
       return next;
     });
-  }, [activeJob, editViewedJobsKey, viewedJobIDs]);
+  }, [activeJob, editViewedJobsKey, resultBoardExpanded, resultPreviewOpen, viewedJobIDs]);
 
   if (!visible && !query.isLoading) return null;
   if (!visible && query.isLoading) return null;
 
   return (
-    <section className="rounded-lg border bg-background">
-      <div className="border-b px-4 py-3">
-        <div className="min-w-0">
-          <div className="flex flex-wrap items-center gap-2">
-            <h2 className="text-sm font-semibold">素材候选池</h2>
-            <Badge variant="outline">{data?.summary.total ?? 0} 条素材</Badge>
-            <Badge variant="outline">已选 {selectedCandidates.length}</Badge>
-            {(data?.edit_jobs.length ?? 0) > 0 && (
-              <Badge variant="outline">出图记录 {data?.edit_jobs.length}</Badge>
-            )}
-          </div>
-        </div>
-      </div>
-      <div className="flex flex-wrap items-center justify-between gap-2 border-b bg-muted/20 px-4 py-3">
-        <div className="min-w-60 flex-1">
-          <Textarea
-            value={editPrompt}
-            onChange={(event) => {
-              const value = event.target.value;
-              setEditPrompt(value);
-              writeCreativeEditPromptDraft(editPromptDraftKey, value);
-            }}
-            placeholder="给修图智能体的补充要求，可不填"
-            className="h-9 min-h-9 resize-none text-xs"
-          />
-        </div>
-        <div className="flex shrink-0 items-center gap-2">
-          <Button
-            size="sm"
-            variant="outline"
-            disabled={candidates.length === 0}
-            onClick={() => setPoolPreviewOpen(true)}
+    <section className="space-y-3">
+      <div className="rounded-lg border bg-background">
+        <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3">
+          <button
+            type="button"
+            className="group flex min-w-0 flex-1 items-center gap-2 text-left outline-none focus-visible:ring-2 focus-visible:ring-primary"
+            aria-expanded={candidatePoolExpanded}
+            aria-label={candidatePoolExpanded ? "收起素材候选池" : "展开素材候选池"}
+            onClick={() => setCandidatePoolExpanded((open) => !open)}
           >
-            <Maximize2 className="h-4 w-4" />
-            预览候选池
-          </Button>
-          <Button
-            size="sm"
-            disabled={selectedCandidates.length === 0 || requestCreativeAgent.isPending}
-            onClick={() => requestCreativeAgent.mutate(selectedCandidates.map((candidate) => candidate.id))}
-          >
-            <Sparkles className="h-4 w-4" />
-            {requestCreativeAgent.isPending ? "正在交办" : "交给修图智能体"}
-          </Button>
-        </div>
-      </div>
-
-      <div className="space-y-4 p-4">
-        <CandidateFilters
-          candidates={candidates}
-          filter={filter}
-          onChange={setFilter}
-        />
-
-        <div className="flex items-center justify-between gap-3 text-xs text-muted-foreground">
-          <span>当前显示 {filteredCandidates.length} / {candidates.length} 条</span>
-          {hasActiveFilter && (
-            <button
-              type="button"
-              className="inline-flex items-center gap-1 hover:text-foreground"
-              onClick={() => setFilter(DEFAULT_FILTER)}
+            <ChevronRight className={cn("h-4 w-4 shrink-0 text-muted-foreground transition-transform", candidatePoolExpanded && "rotate-90")} />
+            <span className="min-w-0">
+              <span className="flex flex-wrap items-center gap-2">
+                <span className="text-sm font-semibold">素材候选池</span>
+                <Badge variant="outline">{data?.summary.total ?? 0} 条素材</Badge>
+                <Badge variant="outline">已选 {selectedCandidates.length}</Badge>
+                {(data?.edit_jobs.length ?? 0) > 0 && (
+                  <Badge variant="outline">出图记录 {data?.edit_jobs.length}</Badge>
+                )}
+              </span>
+            </span>
+          </button>
+          <div className="flex shrink-0 items-center gap-2">
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={candidates.length === 0}
+              onClick={() => setPoolPreviewOpen(true)}
             >
-              <RotateCcw className="h-3.5 w-3.5" />
-              显示全部
-            </button>
-          )}
+              <Maximize2 className="h-4 w-4" />
+              预览候选池
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => setCandidatePoolExpanded((open) => !open)}
+            >
+              {candidatePoolExpanded ? "收起" : "展开"}
+            </Button>
+          </div>
         </div>
 
-        {filteredCandidates.length === 0 ? (
-          <div className="rounded-md border border-dashed px-4 py-8 text-center text-sm text-muted-foreground">
-            当前筛选下没有候选素材。
-          </div>
-        ) : (
-          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-            {filteredCandidates.map((candidate) => (
-              <CandidateCard
-                key={candidate.id}
-                candidate={candidate}
-                busy={updateCandidate.isPending}
-                onStatus={(status) => updateCandidate.mutate({ candidateId: candidate.id, status })}
-                onPreview={setPreviewItem}
-              />
-            ))}
-          </div>
-        )}
+        {candidatePoolExpanded && (
+          <div className="border-t">
+            <div className="flex flex-wrap items-center justify-between gap-2 border-b bg-muted/20 px-4 py-3">
+              <div className="min-w-60 flex-1">
+                <Textarea
+                  value={editPrompt}
+                  onChange={(event) => {
+                    const value = event.target.value;
+                    setEditPrompt(value);
+                    writeCreativeEditPromptDraft(editPromptDraftKey, value);
+                  }}
+                  placeholder="给修图智能体的补充要求，可不填"
+                  className="h-9 min-h-9 resize-none text-xs"
+                />
+              </div>
+              <div className="flex shrink-0 items-center gap-2">
+                <Button
+                  size="sm"
+                  disabled={selectedCandidates.length === 0 || requestCreativeAgent.isPending}
+                  onClick={() => requestCreativeAgent.mutate(selectedCandidates.map((candidate) => candidate.id))}
+                >
+                  <Sparkles className="h-4 w-4" />
+                  {requestCreativeAgent.isPending ? "正在交办" : "交给修图智能体"}
+                </Button>
+              </div>
+            </div>
 
-        {activeJob && (
-          <EditResultBoard
-            jobs={data?.edit_jobs ?? []}
-            job={activeJob}
-            activeCandidateId={activeCandidateId}
-            activeJobCandidates={activeJobCandidates}
-            candidateByID={candidateByID}
-            viewedJobIDs={viewedJobIDs}
-            onJobChange={setActiveJobId}
-            onCandidateChange={setActiveCandidateId}
-            onSyncJob={(jobId) => syncEditJob.mutate(jobId)}
-            onDownloadJob={(jobId) => downloadEditJob.mutate({ jobId })}
-            syncingJobId={syncEditJob.isPending ? syncEditJob.variables : undefined}
-            downloadingJobId={downloadEditJob.isPending ? downloadEditJob.variables?.jobId : undefined}
-            submittingFeedbackVariantId={submitVariantFeedback.isPending
-              ? submitVariantFeedback.variables?.variantId
-              : undefined}
-            workspaceId={wsId}
-            onSubmitFeedback={async (jobId, variantId, feedback) => {
-              await submitVariantFeedback.mutateAsync({ jobId, variantId, feedback });
-            }}
-            onOpenLargePreview={() => setResultPreviewOpen(true)}
-            onPreview={setPreviewItem}
-          />
+            <div className="space-y-4 p-4">
+              <CandidateFilters
+                candidates={candidates}
+                filter={filter}
+                onChange={setFilter}
+              />
+
+              <div className="flex items-center justify-between gap-3 text-xs text-muted-foreground">
+                <span>当前显示 {filteredCandidates.length} / {candidates.length} 条</span>
+                {hasActiveFilter && (
+                  <button
+                    type="button"
+                    className="inline-flex items-center gap-1 hover:text-foreground"
+                    onClick={() => setFilter(DEFAULT_FILTER)}
+                  >
+                    <RotateCcw className="h-3.5 w-3.5" />
+                    显示全部
+                  </button>
+                )}
+              </div>
+
+              {filteredCandidates.length === 0 ? (
+                <div className="rounded-md border border-dashed px-4 py-8 text-center text-sm text-muted-foreground">
+                  当前筛选下没有候选素材。
+                </div>
+              ) : (
+                <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+                  {filteredCandidates.map((candidate) => (
+                    <CandidateCard
+                      key={candidate.id}
+                      candidate={candidate}
+                      busy={updateCandidate.isPending}
+                      onStatus={(status) => updateCandidate.mutate({ candidateId: candidate.id, status })}
+                      onPreview={setPreviewItem}
+                    />
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
         )}
       </div>
+
+      {activeJob && (
+        <EditResultBoard
+          jobs={data?.edit_jobs ?? []}
+          job={activeJob}
+          activeCandidateId={activeCandidateId}
+          activeJobCandidates={activeJobCandidates}
+          candidateByID={candidateByID}
+          viewedJobIDs={viewedJobIDs}
+          expanded={resultBoardExpanded}
+          onExpandedChange={setResultBoardExpanded}
+          onJobChange={setActiveJobId}
+          onCandidateChange={setActiveCandidateId}
+          onSyncJob={(jobId) => syncEditJob.mutate(jobId)}
+          onDownloadJob={(jobId) => downloadEditJob.mutate({ jobId })}
+          syncingJobId={syncEditJob.isPending ? syncEditJob.variables : undefined}
+          downloadingJobId={downloadEditJob.isPending ? downloadEditJob.variables?.jobId : undefined}
+          submittingFeedbackVariantId={submitVariantFeedback.isPending
+            ? submitVariantFeedback.variables?.variantId
+            : undefined}
+          workspaceId={wsId}
+          onSubmitFeedback={async (jobId, variantId, feedback) => {
+            await submitVariantFeedback.mutateAsync({ jobId, variantId, feedback });
+          }}
+          onOpenLargePreview={() => setResultPreviewOpen(true)}
+          onPreview={setPreviewItem}
+        />
+      )}
       <CandidatePoolPreviewDialog
         open={poolPreviewOpen}
         onOpenChange={setPoolPreviewOpen}
@@ -531,11 +521,7 @@ export function CreativeMaterialPool({ issue }: { issue: Issue }) {
           onPreview={setPreviewItem}
           downloading={downloadSelectedEditJob.isPending}
           onDownloadSelected={(assetIDs, includeOriginal) => {
-            const assets = activeJob.variants
-              .flatMap((variant) => variant.assets)
-              .filter((asset) => assetIDs.includes(asset.id))
-              .map((asset) => ({ id: asset.id, asset_url: asset.asset_url }));
-            downloadSelectedEditJob.mutate({ jobId: activeJob.id, assets, includeOriginal });
+            downloadSelectedEditJob.mutate({ jobId: activeJob.id, assetIDs, includeOriginal });
           }}
         />
       )}
@@ -1264,6 +1250,8 @@ function EditResultBoard({
   activeJobCandidates,
   candidateByID,
   viewedJobIDs,
+  expanded,
+  onExpandedChange,
   workspaceId,
   onJobChange,
   onCandidateChange,
@@ -1282,6 +1270,8 @@ function EditResultBoard({
   activeJobCandidates: string[];
   candidateByID: Map<string, CreativeMaterialCandidate>;
   viewedJobIDs: Set<string>;
+  expanded: boolean;
+  onExpandedChange: (expanded: boolean) => void;
   workspaceId: string;
   onJobChange: (id: string) => void;
   onCandidateChange: (id: string) => void;
@@ -1308,21 +1298,29 @@ function EditResultBoard({
   const expectedVariantCount = creativeEditExpectedVariantCount(job);
   const completedVariantCount = variants.length;
   const isPartialResult = completedVariantCount > 0 && completedVariantCount < expectedVariantCount;
-  const canDownload = job.variants.length > 0
-    && new Set(["completed", "partial", "failed"]).has(job.status);
+  const canDownload = canDownloadCreativeEditJob(job);
   const history = creativeEditJobHistory(jobs);
 
   return (
     <div className="rounded-lg border bg-muted/20">
-      <div className="flex flex-wrap items-center justify-between gap-3 border-b px-3 py-3">
-        <div>
-          <h3 className="text-sm font-semibold">修图结果看板</h3>
-          <p className="mt-1 text-xs text-muted-foreground">
-            {hasResults
-              ? "下方用于对照原图并反馈变体；三种尺寸可在“预览成图”中查看。"
-              : "任务已提交，结果会自动更新。"}
-          </p>
-        </div>
+      <div className={cn("flex flex-wrap items-center justify-between gap-3 px-3 py-3", expanded && "border-b")}>
+        <button
+          type="button"
+          className="group flex min-w-0 flex-1 items-start gap-2 text-left outline-none focus-visible:ring-2 focus-visible:ring-primary"
+          aria-expanded={expanded}
+          aria-label={expanded ? "收起修图结果看板" : "展开修图结果看板"}
+          onClick={() => onExpandedChange(!expanded)}
+        >
+          <ChevronRight className={cn("mt-0.5 h-4 w-4 shrink-0 text-muted-foreground transition-transform", expanded && "rotate-90")} />
+          <span className="min-w-0">
+            <span className="block text-sm font-semibold">修图结果看板</span>
+            <span className="mt-1 block text-xs text-muted-foreground">
+              {hasResults
+                ? "下方用于对照原图并反馈变体；三种尺寸可在“预览成图”中查看。"
+                : "任务已提交，结果会自动更新。"}
+            </span>
+          </span>
+        </button>
         <div className="flex flex-wrap items-center gap-2">
           {hasResults ? (
             <Badge variant={isPartialResult ? "secondary" : "outline"}>
@@ -1351,8 +1349,17 @@ function EditResultBoard({
             <Maximize2 className="h-4 w-4" />
             预览成图
           </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => onExpandedChange(!expanded)}
+          >
+            {expanded ? "收起" : "展开"}
+          </Button>
         </div>
       </div>
+      {expanded && (
+        <>
       <div className="border-b bg-background/60 px-3 py-2">
         <div className="flex items-center gap-2 overflow-x-auto pb-1" role="tablist" aria-label="出图记录">
           {history.map(({ job: item, sequence }) => {
@@ -1532,6 +1539,8 @@ function EditResultBoard({
           />
         </div>
       </div>
+        </>
+      )}
     </div>
   );
 }
@@ -1734,6 +1743,15 @@ function creativeEditExpectedVariantCount(job: CreativeEditJob) {
   const value = rules?.variant_count;
   if (typeof value === "number" && Number.isInteger(value) && value >= 1 && value <= 6) return value;
   return 3;
+}
+
+function creativeEditDeliverableAssetCount(job: CreativeEditJob) {
+  return job.variants.reduce((count, variant) => count + variant.assets.length, 0);
+}
+
+function canDownloadCreativeEditJob(job: CreativeEditJob) {
+  return (job.status === "completed" || job.status === "partial")
+    && creativeEditDeliverableAssetCount(job) > 0;
 }
 
 function parseCreativeEditRules(rules: unknown): Record<string, unknown> | null {

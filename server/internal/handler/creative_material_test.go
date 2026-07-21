@@ -313,6 +313,20 @@ INSERT INTO creative_edit_asset (
 	testHandler.Storage = storage
 	t.Cleanup(func() { testHandler.Storage = originalStorage })
 
+	recorder := httptest.NewRecorder()
+	req := withURLParams(
+		newRequest(http.MethodGet, "/api/issues/"+issueID+"/creative-edit-jobs/"+jobID+"/download", nil),
+		"id", issueID,
+		"jobId", jobID,
+	)
+	testHandler.DownloadCreativeEditJob(recorder, req)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("download status = %d, body = %s", recorder.Code, recorder.Body.String())
+	}
+	if got := recorder.Header().Get("Content-Type"); got != "application/zip" {
+		t.Fatalf("download content type = %q", got)
+	}
+
 	archive, err := testHandler.buildCreativeEditJobArchive(
 		ctx, parseUUID(issueID), parseUUID(testWorkspaceID), parseUUID(jobID), nil, true,
 	)
