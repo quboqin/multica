@@ -25,18 +25,19 @@ import (
 const maxCreativePackageBytes = 300 << 20
 
 type creativePackageAsset struct {
-	ID          string `json:"id"`
-	CandidateID string `json:"candidate_id"`
-	Competitor  string `json:"competitor"`
-	Variant     int    `json:"variant"`
-	QCStatus    string `json:"qc_status"`
-	Width       int    `json:"width"`
-	Height      int    `json:"height"`
-	Label       string `json:"label"`
-	AssetURL    string `json:"asset_url"`
-	ContentType string `json:"content_type"`
-	StorageKey  string `json:"-"`
-	Filename    string `json:"filename"`
+	ID             string `json:"id"`
+	CandidateID    string `json:"candidate_id"`
+	Competitor     string `json:"competitor"`
+	Variant        int    `json:"variant"`
+	QCStatus       string `json:"qc_status"`
+	Width          int    `json:"width"`
+	Height         int    `json:"height"`
+	Label          string `json:"label"`
+	AssetURL       string `json:"asset_url"`
+	SourceAssetURL string `json:"-"`
+	ContentType    string `json:"content_type"`
+	StorageKey     string `json:"-"`
+	Filename       string `json:"filename"`
 }
 
 type creativePackageSource struct {
@@ -163,15 +164,16 @@ func (h *Handler) loadCreativePreviewAsset(
 	var asset creativePackageAsset
 	err := h.DB.QueryRow(ctx, `
 SELECT a.id::text, c.id::text, c.competitor, v.variant_index, v.qc_status,
-       a.width, a.height, a.label, a.asset_url, a.content_type, COALESCE(a.storage_key, '')
+       a.width, a.height, a.label, a.asset_url, COALESCE(a.source_asset_url, ''),
+       a.content_type, COALESCE(a.storage_key, '')
 FROM creative_edit_asset a
 JOIN creative_edit_variant v ON v.id = a.variant_id
 JOIN creative_material_candidate c ON c.id = v.candidate_id
 JOIN creative_edit_job j ON j.id = v.job_id
 WHERE a.id = $1 AND j.issue_id = $2 AND j.workspace_id = $3
-`, assetID, issueID, workspaceID).Scan(
+	`, assetID, issueID, workspaceID).Scan(
 		&asset.ID, &asset.CandidateID, &asset.Competitor, &asset.Variant, &asset.QCStatus,
-		&asset.Width, &asset.Height, &asset.Label, &asset.AssetURL, &asset.ContentType, &asset.StorageKey,
+		&asset.Width, &asset.Height, &asset.Label, &asset.AssetURL, &asset.SourceAssetURL, &asset.ContentType, &asset.StorageKey,
 	)
 	return asset, err
 }
@@ -234,7 +236,8 @@ WHERE id = $1 AND issue_id = $2 AND workspace_id = $3
 	}
 	rows, err := h.DB.Query(ctx, `
 SELECT a.id::text, c.id::text, c.competitor, v.variant_index, v.qc_status,
-       a.width, a.height, a.label, a.asset_url, a.content_type, a.storage_key
+       a.width, a.height, a.label, a.asset_url, COALESCE(a.source_asset_url, ''),
+       a.content_type, a.storage_key
 FROM creative_edit_asset a
 JOIN creative_edit_variant v ON v.id = a.variant_id
 JOIN creative_material_candidate c ON c.id = v.candidate_id
@@ -252,7 +255,7 @@ ORDER BY c.competitor, c.id, v.variant_index, a.width, a.height
 		var asset creativePackageAsset
 		if err := rows.Scan(
 			&asset.ID, &asset.CandidateID, &asset.Competitor, &asset.Variant, &asset.QCStatus,
-			&asset.Width, &asset.Height, &asset.Label, &asset.AssetURL, &asset.ContentType, &asset.StorageKey,
+			&asset.Width, &asset.Height, &asset.Label, &asset.AssetURL, &asset.SourceAssetURL, &asset.ContentType, &asset.StorageKey,
 		); err != nil {
 			return nil, err
 		}
@@ -469,8 +472,9 @@ ORDER BY v.candidate_id, v.variant_index
 }
 
 func creativeDeliveryFilename(asset creativePackageAsset) string {
-	extension := creativePackageExtension(asset.AssetURL, asset.ContentType)
-	if parsed, err := url.Parse(asset.AssetURL); err == nil {
+	assetURL := firstNonEmpty(asset.SourceAssetURL, asset.AssetURL)
+	extension := creativePackageExtension(assetURL, asset.ContentType)
+	if parsed, err := url.Parse(assetURL); err == nil {
 		if decoded, decodeErr := url.PathUnescape(path.Base(parsed.Path)); decodeErr == nil &&
 			creativeDeliveryFilenamePattern.MatchString(decoded) {
 			return decoded
@@ -529,7 +533,7 @@ func creativePackageAssetFilename(asset creativePackageAsset, naming creativePac
 	return fmt.Sprintf(
 		"%s_P_%s_%s_%s_%s_AI%02d_%s%s",
 		naming.month, naming.brand, naming.country, naming.date, naming.picType,
-		variant, sizeCode, creativePackageExtension(asset.AssetURL, asset.ContentType),
+		variant, sizeCode, creativePackageExtension(firstNonEmpty(asset.SourceAssetURL, asset.AssetURL), asset.ContentType),
 	)
 }
 
@@ -561,9 +565,10 @@ func creativeSourceContentType(assetType, rawURL string) string {
 }
 
 func (h *Handler) readCreativePackageAsset(ctx context.Context, asset creativePackageAsset) ([]byte, error) {
+	downloadURL := firstNonEmpty(asset.SourceAssetURL, asset.AssetURL)
 	storageKey := strings.TrimSpace(asset.StorageKey)
-	if storageKey == "" && strings.Contains(asset.AssetURL, "/uploads/") && h.Storage != nil {
-		storageKey = h.Storage.KeyFromURL(asset.AssetURL)
+	if storageKey == "" && strings.Contains(downloadURL, "/uploads/") && h.Storage != nil {
+		storageKey = h.Storage.KeyFromURL(downloadURL)
 	}
 	if storageKey != "" && h.Storage != nil {
 		reader, err := h.Storage.GetReader(ctx, storageKey)
@@ -575,7 +580,7 @@ func (h *Handler) readCreativePackageAsset(ctx context.Context, asset creativePa
 	if h.CreativeAssetDownloader == nil {
 		return nil, errors.New("creative asset downloader not configured")
 	}
-	download, err := h.CreativeAssetDownloader.Fetch(ctx, asset.AssetURL)
+	download, err := h.CreativeAssetDownloader.Fetch(ctx, downloadURL)
 	if err != nil {
 		return nil, err
 	}

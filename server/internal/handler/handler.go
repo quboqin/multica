@@ -73,6 +73,10 @@ type Config struct {
 	// the server into minting webhook URLs pointing at an attacker-controlled
 	// host.
 	PublicURL string
+	// CreativeAssetPublicBaseURL, when set, is used to rewrite creative MCP
+	// result file URLs before persisting them. The raw provider URL remains in
+	// creative_edit_asset.source_asset_url for backend download/package reads.
+	CreativeAssetPublicBaseURL string
 	// TrustedProxies are CIDRs whose source IP we trust to set
 	// X-Forwarded-For / X-Real-IP. Empty means "trust nothing": the rate
 	// limiter uses r.RemoteAddr exclusively. Populated via the

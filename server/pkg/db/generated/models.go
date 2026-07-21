@@ -240,15 +240,16 @@ type ContactSalesInquiry struct {
 }
 
 type CreativeEditAsset struct {
-	ID          pgtype.UUID        `json:"id"`
-	VariantID   pgtype.UUID        `json:"variant_id"`
-	Width       int32              `json:"width"`
-	Height      int32              `json:"height"`
-	Label       string             `json:"label"`
-	AssetUrl    string             `json:"asset_url"`
-	ContentType string             `json:"content_type"`
-	CreatedAt   pgtype.Timestamptz `json:"created_at"`
-	StorageKey  string             `json:"storage_key"`
+	ID             pgtype.UUID        `json:"id"`
+	VariantID      pgtype.UUID        `json:"variant_id"`
+	Width          int32              `json:"width"`
+	Height         int32              `json:"height"`
+	Label          string             `json:"label"`
+	AssetUrl       string             `json:"asset_url"`
+	SourceAssetUrl string             `json:"source_asset_url"`
+	ContentType    string             `json:"content_type"`
+	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+	StorageKey     string             `json:"storage_key"`
 }
 
 type CreativeEditJob struct {

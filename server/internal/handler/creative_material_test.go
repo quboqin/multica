@@ -125,6 +125,43 @@ func TestAbsoluteCreativeSourceURL(t *testing.T) {
 	}
 }
 
+func TestPublicCreativeAssetURL(t *testing.T) {
+	h := &Handler{cfg: Config{CreativeAssetPublicBaseURL: "https://fat-cybertron.adakamicorp.id/"}}
+	tests := []struct {
+		name string
+		raw  string
+		want string
+	}{
+		{
+			name: "absolute lean file",
+			raw:  "http://10.114.29.62:8010/files/lean-job/result.png?download=1",
+			want: "https://fat-cybertron.adakamicorp.id/files/lean-job/result.png?download=1",
+		},
+		{
+			name: "relative file",
+			raw:  "/files/lean-job/result.png",
+			want: "https://fat-cybertron.adakamicorp.id/files/lean-job/result.png",
+		},
+		{
+			name: "non file URL remains untouched",
+			raw:  "https://cdn.example.com/assets/result.png",
+			want: "https://cdn.example.com/assets/result.png",
+		},
+		{
+			name: "blank",
+			raw:  " ",
+			want: "",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := h.publicCreativeAssetURL(tc.raw); got != tc.want {
+				t.Fatalf("publicCreativeAssetURL(%q) = %q, want %q", tc.raw, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestSafeCreativeZipPart(t *testing.T) {
 	if got := safeCreativeZipPart("Kredit Pintar / ID"); got != "Kredit-Pintar-ID" {
 		t.Fatalf("safeCreativeZipPart = %q", got)
@@ -450,6 +487,104 @@ RETURNING id::text
 	}
 	if string(body) != "preview-png" {
 		t.Fatalf("body = %q", body)
+	}
+}
+
+func TestInsertCreativeEditResultsPersistsPublicAndSourceAssetURLs(t *testing.T) {
+	ctx := context.Background()
+	issueID := createTestIssue(t, "Creative asset public URL "+uuid.NewString(), "done", "medium")
+	var candidateID string
+	if err := testPool.QueryRow(ctx, `
+INSERT INTO creative_material_candidate (
+  workspace_id, dedupe_key, competitor, title, asset_type
+) VALUES ($1::uuid, $2, 'Easy Cash', 'Reference', 'image')
+RETURNING id::text
+`, testWorkspaceID, uuid.NewString()).Scan(&candidateID); err != nil {
+		t.Fatalf("insert candidate: %v", err)
+	}
+	var jobID string
+	if err := testPool.QueryRow(ctx, `
+INSERT INTO creative_edit_job (
+  workspace_id, issue_id, status, prompt, rules, created_by_type, created_by_id,
+  external_provider, external_job_id, external_status, stage, progress,
+  poll_attempts, process_data
+) VALUES (
+  $1::uuid, $2::uuid, 'running', 'public urls', '{}'::jsonb, 'member', $3::uuid,
+  'workspace_mcp', 'lean-public-url-test', 'running', 'poll', 50, 0, '{}'::jsonb
+)
+RETURNING id::text
+`, testWorkspaceID, issueID, testUserID).Scan(&jobID); err != nil {
+		t.Fatalf("insert creative job: %v", err)
+	}
+	if _, err := testPool.Exec(ctx, `
+INSERT INTO creative_edit_job_candidate (job_id, candidate_id)
+VALUES ($1::uuid, $2::uuid)
+`, jobID, candidateID); err != nil {
+		t.Fatalf("insert job candidate: %v", err)
+	}
+	if _, err := testPool.Exec(ctx, `
+INSERT INTO creative_material_issue_candidate (issue_id, candidate_id, workspace_id, status)
+VALUES ($1::uuid, $2::uuid, $3::uuid, 'sent_to_edit')
+`, issueID, candidateID, testWorkspaceID); err != nil {
+		t.Fatalf("insert issue candidate: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM issue WHERE id = $1::uuid`, issueID)
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM creative_material_candidate WHERE id = $1::uuid`, candidateID)
+	})
+
+	originalCfg := testHandler.cfg
+	testHandler.cfg.CreativeAssetPublicBaseURL = "https://fat-cybertron.adakamicorp.id"
+	t.Cleanup(func() { testHandler.cfg = originalCfg })
+
+	tx, err := testPool.Begin(ctx)
+	if err != nil {
+		t.Fatalf("begin tx: %v", err)
+	}
+	defer tx.Rollback(ctx)
+	sourceURL := "http://10.114.29.62:8010/files/lean-job/07_P_AK_ID_20260720_NUM_AI01_11.png"
+	if err := testHandler.insertCreativeEditResults(
+		ctx,
+		tx,
+		jobID,
+		parseUUID(issueID),
+		parseUUID(testWorkspaceID),
+		[]creative.Candidate{{ID: candidateID}},
+		[]creative.Variant{{
+			CandidateID: candidateID,
+			Index:       1,
+			Title:       "Variant 1",
+			QCStatus:    "passed",
+			Assets: []creative.Asset{{
+				Width:       1080,
+				Height:      1080,
+				Label:       "1080x1080",
+				URL:         sourceURL,
+				ContentType: "image/png",
+			}},
+		}},
+	); err != nil {
+		t.Fatalf("insert results: %v", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatalf("commit tx: %v", err)
+	}
+
+	var assetURL string
+	var sourceAssetURL string
+	if err := testPool.QueryRow(ctx, `
+SELECT a.asset_url, a.source_asset_url
+FROM creative_edit_asset a
+JOIN creative_edit_variant v ON v.id = a.variant_id
+WHERE v.job_id = $1::uuid
+`, jobID).Scan(&assetURL, &sourceAssetURL); err != nil {
+		t.Fatalf("load asset URLs: %v", err)
+	}
+	if assetURL != "https://fat-cybertron.adakamicorp.id/files/lean-job/07_P_AK_ID_20260720_NUM_AI01_11.png" {
+		t.Fatalf("asset_url = %q", assetURL)
+	}
+	if sourceAssetURL != sourceURL {
+		t.Fatalf("source_asset_url = %q", sourceAssetURL)
 	}
 }
 

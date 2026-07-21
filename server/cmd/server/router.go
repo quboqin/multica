@@ -145,19 +145,20 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 	cfSigner := auth.NewCloudFrontSignerFromEnv()
 
 	signupConfig := handler.Config{
-		AllowSignup:               os.Getenv("ALLOW_SIGNUP") != "false",
-		AllowedEmails:             splitAndTrim(os.Getenv("ALLOWED_EMAILS")),
-		AllowedEmailDomains:       splitAndTrim(os.Getenv("ALLOWED_EMAIL_DOMAINS")),
-		DisableWorkspaceCreation:  os.Getenv("DISABLE_WORKSPACE_CREATION") == "true",
-		PublicURL:                 strings.TrimRight(strings.TrimSpace(os.Getenv("MULTICA_PUBLIC_URL")), "/"),
-		TrustedProxies:            parseTrustedProxies(os.Getenv("MULTICA_TRUSTED_PROXIES")),
-		CloudRuntimeFleetURL:      cloudRuntimeFleetURLFromEnv(),
-		CloudRuntimeFleetTimeout:  envDuration("MULTICA_CLOUD_FLEET_TIMEOUT", 35*time.Second),
-		AttachmentDownloadMode:    os.Getenv("ATTACHMENT_DOWNLOAD_MODE"),
-		AttachmentDownloadURLTTL:  envDuration("ATTACHMENT_DOWNLOAD_URL_TTL", 30*time.Minute),
-		LarkLoginJoinBotWorkspace: strings.TrimSpace(os.Getenv("MULTICA_LARK_LOGIN_JOIN_BOT_WORKSPACE")) != "false",
-		LarkLoginDefaultWorkspace: strings.TrimSpace(os.Getenv("MULTICA_LARK_LOGIN_DEFAULT_WORKSPACE")),
-		LarkLoginStateSecret:      strings.TrimSpace(os.Getenv("MULTICA_LARK_LOGIN_STATE_SECRET")),
+		AllowSignup:                os.Getenv("ALLOW_SIGNUP") != "false",
+		AllowedEmails:              splitAndTrim(os.Getenv("ALLOWED_EMAILS")),
+		AllowedEmailDomains:        splitAndTrim(os.Getenv("ALLOWED_EMAIL_DOMAINS")),
+		DisableWorkspaceCreation:   os.Getenv("DISABLE_WORKSPACE_CREATION") == "true",
+		PublicURL:                  strings.TrimRight(strings.TrimSpace(os.Getenv("MULTICA_PUBLIC_URL")), "/"),
+		CreativeAssetPublicBaseURL: strings.TrimRight(strings.TrimSpace(os.Getenv("MULTICA_CREATIVE_ASSET_PUBLIC_BASE_URL")), "/"),
+		TrustedProxies:             parseTrustedProxies(os.Getenv("MULTICA_TRUSTED_PROXIES")),
+		CloudRuntimeFleetURL:       cloudRuntimeFleetURLFromEnv(),
+		CloudRuntimeFleetTimeout:   envDuration("MULTICA_CLOUD_FLEET_TIMEOUT", 35*time.Second),
+		AttachmentDownloadMode:     os.Getenv("ATTACHMENT_DOWNLOAD_MODE"),
+		AttachmentDownloadURLTTL:   envDuration("ATTACHMENT_DOWNLOAD_URL_TTL", 30*time.Minute),
+		LarkLoginJoinBotWorkspace:  strings.TrimSpace(os.Getenv("MULTICA_LARK_LOGIN_JOIN_BOT_WORKSPACE")) != "false",
+		LarkLoginDefaultWorkspace:  strings.TrimSpace(os.Getenv("MULTICA_LARK_LOGIN_DEFAULT_WORKSPACE")),
+		LarkLoginStateSecret:       strings.TrimSpace(os.Getenv("MULTICA_LARK_LOGIN_STATE_SECRET")),
 	}
 	h := handler.New(queries, pool, hub, bus, emailSvc, store, cfSigner, analyticsClient, signupConfig, daemonHub)
 	mockCreativeProvider := creative.NewMockProvider(envDuration("MULTICA_CREATIVE_MOCK_DELAY", 4*time.Second))

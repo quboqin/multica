@@ -1105,7 +1105,7 @@ WHERE issue_id = $1 AND workspace_id = $2
 			return err
 		}
 	case "completed":
-		if err := insertCreativeEditResults(ctx, tx, localJobID, issueID, workspaceID, candidates, result.Variants); err != nil {
+		if err := h.insertCreativeEditResults(ctx, tx, localJobID, issueID, workspaceID, candidates, result.Variants); err != nil {
 			return err
 		}
 		completionStatus := creativeResultCompletionStatus(rules, candidates, result.Variants)
@@ -1266,7 +1266,7 @@ func (h *Handler) absoluteCreativeSourceURL(raw string) string {
 	return value
 }
 
-func insertCreativeEditResults(
+func (h *Handler) insertCreativeEditResults(
 	ctx context.Context,
 	tx pgx.Tx,
 	jobID string,
@@ -1306,16 +1306,18 @@ RETURNING id::text
 				return fmt.Errorf("creative provider returned invalid asset size %dx%d", asset.Width, asset.Height)
 			}
 			contentType := firstNonEmpty(asset.ContentType, "image/png")
+			publicAssetURL := h.publicCreativeAssetURL(asset.URL)
 			if _, err := tx.Exec(ctx, `
 INSERT INTO creative_edit_asset (
-  variant_id, width, height, label, asset_url, content_type, storage_key
-) VALUES ($1::uuid, $2, $3, $4, $5, $6, $7)
+  variant_id, width, height, label, asset_url, source_asset_url, content_type, storage_key
+) VALUES ($1::uuid, $2, $3, $4, $5, $6, $7, $8)
 ON CONFLICT (variant_id, width, height) DO UPDATE SET
   label = EXCLUDED.label,
   asset_url = EXCLUDED.asset_url,
+  source_asset_url = EXCLUDED.source_asset_url,
   content_type = EXCLUDED.content_type,
   storage_key = EXCLUDED.storage_key
-`, variantID, asset.Width, asset.Height, asset.Label, asset.URL, contentType, asset.StorageKey); err != nil {
+`, variantID, asset.Width, asset.Height, asset.Label, publicAssetURL, asset.URL, contentType, asset.StorageKey); err != nil {
 				return err
 			}
 		}
@@ -1326,6 +1328,31 @@ SET status = 'edited', updated_at = now()
 WHERE issue_id = $1 AND workspace_id = $2 AND candidate_id = ANY($3::uuid[])
 `, issueID, workspaceID, candidateIDs)
 	return err
+}
+
+func (h *Handler) publicCreativeAssetURL(rawURL string) string {
+	value := strings.TrimSpace(rawURL)
+	if value == "" {
+		return ""
+	}
+	publicBase := strings.TrimRight(strings.TrimSpace(h.cfg.CreativeAssetPublicBaseURL), "/")
+	if publicBase == "" {
+		return value
+	}
+	if strings.HasPrefix(value, "/files/") {
+		return publicBase + value
+	}
+	parsed, err := url.Parse(value)
+	if err != nil || parsed == nil || !parsed.IsAbs() {
+		return value
+	}
+	if parsed.Scheme != "http" && parsed.Scheme != "https" {
+		return value
+	}
+	if !strings.HasPrefix(parsed.EscapedPath(), "/files/") {
+		return value
+	}
+	return publicBase + parsed.RequestURI()
 }
 
 // creativeResultCompletionStatus only marks a job complete when every selected
