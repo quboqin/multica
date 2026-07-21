@@ -79,7 +79,7 @@ describe("CreativeQcAttemptHistory", () => {
       "1200x628",
     ]);
     expect(rounds[1]?.attempts[1]).toMatchObject({
-      imageUrl: "http://127.0.0.1:8010/files/lean-1/attempt_2_1_1200x628_raw.avif",
+      imageUrl: "/files/lean-1/attempt_2_1_1200x628_raw.avif",
       providerReturnedSize: "1024x1024",
       requestedModelSize: "1200x640",
       exactOutput: "1200x628",
@@ -115,7 +115,7 @@ describe("CreativeQcAttemptHistory", () => {
       name: "预览第 1 轮概念 1 主图 尝试图",
     }));
     expect(onPreview).toHaveBeenCalledWith(expect.objectContaining({
-      url: "http://127.0.0.1:8010/files/lean-1/attempt_1_1.png",
+      url: "/files/lean-1/attempt_1_1.png",
     }));
   });
 });

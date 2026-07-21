@@ -152,7 +152,7 @@ export function CreativeQcAttemptHistory({
                 通过 {passed} / {round.attempts.length}
               </div>
             </div>
-            <div className="grid gap-3 p-3 md:grid-cols-2 xl:grid-cols-3">
+            <div className="grid gap-3 p-3 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4">
               {round.attempts.map((attempt) => (
                 <article key={attempt.key} className="overflow-hidden rounded-md border">
                   <div className="relative aspect-[4/3] bg-muted">
@@ -267,9 +267,23 @@ function safeAttemptImageUrl(value: unknown) {
       || url.hash) return "";
     const segments = url.pathname.split("/").filter(Boolean);
     if (segments.length < 3 || segments.at(-3) !== "files") return "";
-    const fileName = decodeURIComponent(segments.at(-1) ?? "");
+    const jobSegment = safeCreativeFilePathSegment(segments.at(-2));
+    if (!jobSegment) return "";
+    const fileName = safeCreativeFilePathSegment(segments.at(-1));
+    if (!fileName) return "";
     if (!/^[a-z0-9][a-z0-9._-]*\.(?:png|jpe?g|webp|gif|avif|bmp|tiff?)$/i.test(fileName)) return "";
-    return raw;
+    return `/files/${jobSegment}/${fileName}`;
+  } catch {
+    return "";
+  }
+}
+
+function safeCreativeFilePathSegment(value: string | undefined) {
+  if (!value) return "";
+  try {
+    const decoded = decodeURIComponent(value);
+    if (!decoded || decoded.length > 255 || !/^[a-z0-9][a-z0-9._-]*$/i.test(decoded)) return "";
+    return encodeURIComponent(decoded);
   } catch {
     return "";
   }

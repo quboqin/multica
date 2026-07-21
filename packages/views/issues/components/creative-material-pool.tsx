@@ -1531,6 +1531,8 @@ function EditResultBoard({
               </div>
             </>
           )}
+        </div>
+        <div className="lg:col-span-2" data-testid="creative-qc-history-full-width">
           <CreativeQcAttemptHistory
             processData={job.process_data}
             candidateId={activeCandidateId}

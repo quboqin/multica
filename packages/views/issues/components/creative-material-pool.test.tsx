@@ -365,9 +365,10 @@ describe("CreativeMaterialPool edit prompt", () => {
     expect(await screen.findByText("任务失败")).toBeInTheDocument();
     expect(screen.getByText("QC 每轮记录")).toBeInTheDocument();
     expect(screen.getByText("金额文案与授权文案不一致。")).toBeInTheDocument();
+    expect(screen.getByTestId("creative-qc-history-full-width")).toHaveClass("lg:col-span-2");
     expect(screen.getByAltText("第 1 轮概念 1 1080x1080 尝试图")).toHaveAttribute(
       "src",
-      "http://127.0.0.1:8010/files/lean-failed/attempt_1_1_1080x1080.png",
+      "/files/lean-failed/attempt_1_1_1080x1080.png",
     );
   });
 });
