@@ -433,6 +433,10 @@ RETURNING id::text
 	summary := creativeImportSummary{RunID: runID, TotalCount: len(in.Materials)}
 	for _, material := range in.Materials {
 		material = normalizeCreativeMaterialInput(material)
+		if !creativeMaterialHasUsableAsset(material) {
+			summary.SkippedCount++
+			continue
+		}
 		dedupeKey := creativeMaterialDedupeKey(material)
 		if dedupeKey == "" {
 			summary.SkippedCount++
@@ -1591,6 +1595,10 @@ func normalizeCreativeAssetType(assetType string) string {
 	}
 }
 
+func creativeMaterialHasUsableAsset(in creativeMaterialInput) bool {
+	return firstNonEmpty(in.PreviewURL, in.ResourceURL, in.PosterURL) != ""
+}
+
 func creativeMaterialDedupeKey(in creativeMaterialInput) string {
 	if strings.TrimSpace(in.DedupeKey) != "" {
 		return strings.TrimSpace(in.DedupeKey)
@@ -1680,11 +1688,15 @@ func creativeMaterialsFromCrawlRaw(raw json.RawMessage) []creativeMaterialInput 
 		return nil
 	}
 	keys := []string{"selected_materials", "materials", "material_samples", "selected"}
+	hasExplicitMaterialArrays := creativeMaterialRootHasAnyKey(root, keys)
 	for _, key := range keys {
 		items := creativeMaterialArrayAtKey(root, key)
 		if len(items) > 0 {
 			return items
 		}
+	}
+	if hasExplicitMaterialArrays {
+		return nil
 	}
 	out := []creativeMaterialInput{}
 	creativeCollectMaterialInputs(root, &out, map[string]struct{}{})
@@ -1692,6 +1704,19 @@ func creativeMaterialsFromCrawlRaw(raw json.RawMessage) []creativeMaterialInput 
 		return out[:500]
 	}
 	return out
+}
+
+func creativeMaterialRootHasAnyKey(value any, keys []string) bool {
+	obj, ok := value.(map[string]any)
+	if !ok {
+		return false
+	}
+	for _, key := range keys {
+		if _, ok := obj[key]; ok {
+			return true
+		}
+	}
+	return false
 }
 
 func creativeMaterialArrayAtKey(value any, key string) []creativeMaterialInput {
@@ -1768,6 +1793,9 @@ func creativeMaterialInputFromMap(obj map[string]any) (creativeMaterialInput, bo
 	}
 	input = normalizeCreativeMaterialInput(input)
 	if input.ExternalID == "" && input.PreviewURL == "" && input.ResourceURL == "" && input.PosterURL == "" && input.Title == "" {
+		return creativeMaterialInput{}, false
+	}
+	if !creativeMaterialHasUsableAsset(input) {
 		return creativeMaterialInput{}, false
 	}
 	return input, true

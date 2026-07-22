@@ -67,6 +67,134 @@ const builtInConnectors = {
   },
 };
 
+
+const APPGROWING_SEARCH_APP_QUERY = `
+query searchApp(
+  $purpose: Int
+  $keyword: String!
+  $accurateSearch: Int
+  $hadAdvert: Int
+  $page: Int
+) {
+  searchAppBrand(
+    purpose: $purpose
+    keyword: $keyword
+    accurateSearch: $accurateSearch
+    hadAdvert: $hadAdvert
+    page: $page
+  ) {
+    page
+    limit
+    total
+    pageTotal
+    data {
+      appBrand {
+        id
+        name
+        icon
+        types
+        developer {
+          id
+          name
+        }
+        bundle_id
+        app_id
+      }
+      highlight
+      hadAdvert
+    }
+  }
+}
+`;
+
+const APPGROWING_APP_MATERIAL_LIST_QUERY = `
+query appMaterialList(
+  $purpose: Int!
+  $startDate: LocalDate
+  $endDate: LocalDate
+  $isNew: Int
+  $field: String
+  $order: MaterialListSort!
+  $page: Int
+  $accurateSearch: Int
+  $appBrand: String
+) {
+  materialList(
+    purpose: $purpose
+    startDate: $startDate
+    endDate: $endDate
+    isNew: $isNew
+    field: $field
+    order: $order
+    page: $page
+    accurateSearch: $accurateSearch
+    appBrand: $appBrand
+  ) {
+    page
+    total
+    limit
+    data {
+      material {
+        id
+        type
+        startDate
+        endDate
+        duration
+        cnt_ad_id
+        impression_inc_2y
+        area {
+          cc
+          name
+          icon
+        }
+        creative {
+          id
+          type
+          slogan
+          description
+          txtUrl
+          resource {
+            width
+            height
+            format
+            path
+            poster
+            duration
+            id
+          }
+        }
+        platform {
+          id
+          name
+        }
+        campaign {
+          ... on App {
+            id
+            name
+          }
+          ... on AppBrand {
+            id
+            name
+          }
+          ... on Website {
+            id
+            name
+          }
+          ... on Playlet {
+            id
+            name
+          }
+          ... on Novel {
+            id
+            name
+          }
+        }
+      }
+    }
+  }
+}
+`;
+
 const connectors = loadConnectorRegistry();
 
 function loadConnectorRegistry() {
@@ -925,9 +1053,7 @@ async function verifyConnectorAuth(context, connector) {
   try {
     response = await context.request.post(check.url, {
       data: check.payload,
-      headers: {
-        "content-type": "application/json",
-      },
+      headers: connectorGraphQLHeaders(connector, check.payload?.operationName || ""),
       timeout: 30_000,
     });
   } catch (err) {
@@ -1014,6 +1140,22 @@ async function verifyConnectorPageAuth(page, connector) {
     payload: check.payload,
   });
   return authCheckFromBody(result.body, connector, result.status, "page_fetch_graphql_userinfo");
+}
+
+function connectorGraphQLHeaders(connector, operationName = "") {
+  const headers = {
+    "content-type": "application/json",
+  };
+  if (operationName) {
+    headers["x-operation-name"] = operationName;
+  }
+  if (connector.id === "appgrowing") {
+    headers["accept-language"] = "en-US,en;q=0.9";
+    headers.origin = "https://appgrowing-global.youcloud.com";
+    headers.referer = "https://appgrowing-global.youcloud.com/";
+    headers["user-agent"] = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121 Safari/537.36";
+  }
+  return headers;
 }
 
 function authCheckFromBody(body, connector, httpStatus, method) {
@@ -1880,7 +2022,7 @@ function escapeHTML(value) {
     .replaceAll('"', "&quot;");
 }
 
-async function runAppGrowingMaterialSearch(page, connector, params = {}) {
+async function runAppGrowingMaterialSearch(page, context, connector, params = {}) {
   params = normalizeAppGrowingMaterialSearchParams(params);
   const competitors = normalizeCompetitors(params.competitors);
   if (competitors.length === 0) {
@@ -1897,33 +2039,74 @@ async function runAppGrowingMaterialSearch(page, connector, params = {}) {
 
   const captured = [];
   const materials = [];
-  for (const competitor of competitors) {
-    const priority = priorityCompetitors.has(normalizeCompetitorKey(competitor));
-    const pages = priority ? priorityPageLimit : pageLimit;
-    for (let pageNumber = 1; pageNumber <= pages; pageNumber += 1) {
-      const capture = await captureAppGrowingMaterialPage(page, connector, {
-        competitor,
-        pageNumber,
-        params,
-        captureTimeoutMS,
-      });
-      captured.push({
-        competitor,
-        priority,
-        page: pageNumber,
-        url: capture.url,
-        graphQL_operations: capture.operations,
-        graphQL_responses: capture.responses,
-        page_snapshot: capture.snapshot,
-        needs_reauth: capture.needsReauth,
-        materials_found: capture.materials.length,
-      });
-      for (const material of capture.materials) {
-        materials.push({
-          ...material,
+  if (params.graphql_material_search !== false) {
+    const brandCache = new Map();
+    for (const competitor of competitors) {
+      const priority = priorityCompetitors.has(normalizeCompetitorKey(competitor));
+      const pages = priority ? priorityPageLimit : pageLimit;
+      for (let pageNumber = 1; pageNumber <= pages; pageNumber += 1) {
+        const capture = await captureAppGrowingMaterialPageViaGraphQL(context, connector, {
+          competitor,
+          pageNumber,
+          params,
+          brandCache,
+        });
+        captured.push({
           competitor,
           priority,
+          page: pageNumber,
+          source: "graphql_api",
+          url: capture.url,
+          app_brand_id: capture.appBrandID,
+          app_brand_name: capture.appBrandName,
+          graphQL_operations: capture.operations,
+          graphQL_responses: capture.responses,
+          total: capture.total,
+          limit: capture.limit,
+          error: capture.error,
+          materials_found: capture.materials.length,
         });
+        for (const material of capture.materials) {
+          materials.push({
+            ...material,
+            competitor,
+            priority,
+          });
+        }
+      }
+    }
+  }
+
+  if (materials.length === 0 && params.browser_capture_fallback !== false) {
+    for (const competitor of competitors) {
+      const priority = priorityCompetitors.has(normalizeCompetitorKey(competitor));
+      const pages = priority ? priorityPageLimit : pageLimit;
+      for (let pageNumber = 1; pageNumber <= pages; pageNumber += 1) {
+        const capture = await captureAppGrowingMaterialPage(page, connector, {
+          competitor,
+          pageNumber,
+          params,
+          captureTimeoutMS,
+        });
+        captured.push({
+          competitor,
+          priority,
+          page: pageNumber,
+          source: "browser_network",
+          url: capture.url,
+          graphQL_operations: capture.operations,
+          graphQL_responses: capture.responses,
+          page_snapshot: capture.snapshot,
+          needs_reauth: capture.needsReauth,
+          materials_found: capture.materials.length,
+        });
+        for (const material of capture.materials) {
+          materials.push({
+            ...material,
+            competitor,
+            priority,
+          });
+        }
       }
     }
   }
@@ -1968,6 +2151,308 @@ async function runAppGrowingMaterialSearch(page, connector, params = {}) {
       selected_materials: selection.selected,
     },
   };
+}
+
+async function captureAppGrowingMaterialPageViaGraphQL(context, connector, options) {
+  const responses = [];
+  const operations = new Set();
+  const brand = await resolveAppGrowingBrand(context, connector, options, responses, operations);
+  if (!brand.id) {
+    return {
+      url: connector.graphQLURL,
+      operations: Array.from(operations).sort(),
+      responses,
+      appBrandID: "",
+      appBrandName: brand.name || "",
+      total: null,
+      limit: null,
+      error: brand.error || "app_brand_not_found",
+      materials: [],
+    };
+  }
+
+  let lastError = "";
+  for (const order of appGrowingGraphQLMaterialOrders(options.params)) {
+    const variables = appGrowingAppMaterialListVariables(options.params, brand.id, options.pageNumber, new Date(), order);
+    const result = await appGrowingGraphQLRequest(context, connector, "appMaterialList", APPGROWING_APP_MATERIAL_LIST_QUERY, variables)
+      .catch((error) => ({ error: error instanceof Error ? error.message : String(error), status: null, body: null }));
+    operations.add("appMaterialList");
+    responses.push(appGrowingGraphQLResponseSummary("appMaterialList", result));
+    if (result.error) {
+      lastError = result.error;
+      continue;
+    }
+    const error = appGrowingGraphQLErrorMessage(result.body);
+    if (error) {
+      lastError = error;
+      continue;
+    }
+    const materials = extractAppGrowingMaterials(result.body);
+    return {
+      url: connector.graphQLURL,
+      operations: Array.from(operations).sort(),
+      responses,
+      appBrandID: brand.id,
+      appBrandName: brand.name || "",
+      total: parseNumericValue(valueAtPath(result.body, ["data", "materialList", "total"])),
+      limit: parseNumericValue(valueAtPath(result.body, ["data", "materialList", "limit"])),
+      error: "",
+      materials,
+    };
+  }
+
+  return {
+    url: connector.graphQLURL,
+    operations: Array.from(operations).sort(),
+    responses,
+    appBrandID: brand.id,
+    appBrandName: brand.name || "",
+    total: null,
+    limit: null,
+    error: lastError || "app_material_list_failed",
+    materials: [],
+  };
+}
+
+async function resolveAppGrowingBrand(context, connector, options, responses, operations) {
+  const competitor = options.competitor;
+  const key = normalizeCompetitorKey(competitor);
+  if (options.brandCache?.has(key)) {
+    return options.brandCache.get(key);
+  }
+  const explicitID = appGrowingBrandIDFromParams(connector, competitor, options.params);
+  if (explicitID) {
+    const brand = { id: explicitID, name: competitor, source: "params" };
+    options.brandCache?.set(key, brand);
+    return brand;
+  }
+
+  const variables = appGrowingSearchAppVariables(competitor, options.params);
+  const result = await appGrowingGraphQLRequest(context, connector, "searchApp", APPGROWING_SEARCH_APP_QUERY, variables)
+    .catch((error) => ({ error: error instanceof Error ? error.message : String(error), status: null, body: null }));
+  operations.add("searchApp");
+  responses.push(appGrowingGraphQLResponseSummary("searchApp", result));
+  if (result.error) {
+    const brand = { id: "", name: competitor, source: "searchApp", error: result.error };
+    options.brandCache?.set(key, brand);
+    return brand;
+  }
+  const error = appGrowingGraphQLErrorMessage(result.body);
+  if (error) {
+    const brand = { id: "", name: competitor, source: "searchApp", error };
+    options.brandCache?.set(key, brand);
+    return brand;
+  }
+  const rows = valueAtPath(result.body, ["data", "searchAppBrand", "data"]);
+  const brand = appGrowingBrandFromSearchRows(rows, competitor) || { id: "", name: competitor, source: "searchApp" };
+  options.brandCache?.set(key, brand);
+  return brand;
+}
+
+function appGrowingGraphQLRequest(context, connector, operationName, query, variables) {
+  if (!context?.request || !connector.graphQLURL) {
+    throw new Error("AppGrowing GraphQL request context is unavailable");
+  }
+  return context.request.post(connector.graphQLURL, {
+    data: {
+      operationName,
+      query,
+      variables,
+    },
+    headers: connectorGraphQLHeaders(connector, operationName),
+    timeout: 30_000,
+  }).then(async (response) => {
+    let body = null;
+    try {
+      body = await response.json();
+    } catch {
+      body = null;
+    }
+    return {
+      status: response.status(),
+      body,
+    };
+  });
+}
+
+function appGrowingGraphQLResponseSummary(operationName, result) {
+  return {
+    status: result.status ?? null,
+    operations: [operationName],
+    error: result.error || appGrowingGraphQLErrorMessage(result.body) || undefined,
+  };
+}
+
+function appGrowingGraphQLErrorMessage(body) {
+  const errors = Array.isArray(body?.errors) ? body.errors : [];
+  if (errors.length === 0) {
+    return "";
+  }
+  return errors
+    .slice(0, 3)
+    .map((error) => {
+      const extensions = error?.extensions;
+      const code = extensions && typeof extensions === "object" ? extensions.c || extensions.code : "";
+      const message = extensions && typeof extensions === "object" ? extensions.m || error?.message : error?.message;
+      return [code, message].filter(Boolean).join(": ") || String(error);
+    })
+    .join(" | ");
+}
+
+function appGrowingBrandFromSearchRows(rows, competitor) {
+  if (!Array.isArray(rows)) {
+    return null;
+  }
+  const normalized = normalizeCompetitorKey(competitor);
+  const candidates = rows
+    .map((row) => row?.appBrand)
+    .filter((brand) => brand && typeof brand === "object" && typeof brand.id === "string" && brand.id.trim() !== "");
+  const exact = candidates.find((brand) => normalizeCompetitorKey(brand.name) === normalized);
+  const chosen = exact || candidates[0];
+  if (!chosen) {
+    return null;
+  }
+  return {
+    id: chosen.id.trim(),
+    name: typeof chosen.name === "string" ? chosen.name.trim() : competitor,
+    source: "searchApp",
+  };
+}
+
+function appGrowingBrandIDFromParams(connector, competitor, params) {
+  for (const map of [params.app_brand_ids, params.appBrandIds, params.app_brands]) {
+    const value = lookupCompetitorParam(map, competitor);
+    if (value) {
+      return value;
+    }
+  }
+  const competitorURL = appGrowingCompetitorURL(connector, competitor, params);
+  const match = competitorURL?.pathname.match(/\/appBrand\/([^/]+)\/leaflet$/);
+  return match ? decodeURIComponent(match[1]) : "";
+}
+
+function appGrowingSearchAppVariables(competitor, params) {
+  const variables = {
+    purpose: positiveIntegerParam(params.purpose, 2, 1, 20),
+    keyword: competitor,
+    accurateSearch: positiveIntegerParam(params.accurateSearch ?? params.accurate_search, 1, 0, 1),
+    page: 1,
+  };
+  const hadAdvert = optionalIntegerParam(params.hadAdvert ?? params.had_advert, 0, 1);
+  variables.hadAdvert = Number.isInteger(hadAdvert) ? hadAdvert : 1;
+  return variables;
+}
+
+function appGrowingAppMaterialListVariables(params, appBrandID, pageNumber, now = new Date(), order = "") {
+  const window = appGrowingGraphQLDateWindow(params, now);
+  const variables = {
+    purpose: positiveIntegerParam(params.purpose, 2, 1, 20),
+    startDate: window.startDate,
+    endDate: window.endDate,
+    field: String(params.field || "all"),
+    order: order || appGrowingGraphQLMaterialOrders(params)[0],
+    page: pageNumber,
+    accurateSearch: positiveIntegerParam(params.accurateSearch ?? params.accurate_search, 1, 0, 1),
+    appBrand: appBrandID,
+  };
+  const isNew = optionalIntegerParam(params.isNew ?? params.is_new, 0, 1);
+  if (Number.isInteger(isNew)) {
+    variables.isNew = isNew;
+  }
+  return variables;
+}
+
+function appGrowingGraphQLMaterialOrders(params = {}) {
+  const explicit = String(params.graphql_order || params.material_order || params.app_material_order || "").trim();
+  const mapped = mapAppGrowingMaterialOrder(explicit);
+  return uniqueNonEmptyValues([
+    mapped,
+    "impression_inc_2y_desc",
+    "max_dt_desc",
+    "cnt_ad_id_desc",
+  ]);
+}
+
+function mapAppGrowingMaterialOrder(value) {
+  const normalized = String(value || "").trim();
+  if (!normalized || normalized === "_score_desc") {
+    return "";
+  }
+  const map = {
+    cnt_dt_desc: "impression_inc_2y_desc",
+    impression_desc: "impression_inc_2y_desc",
+    material_cnt_desc: "impression_inc_2y_desc",
+    max_dt_desc: "max_dt_desc",
+    cnt_ad_id_desc: "cnt_ad_id_desc",
+  };
+  return map[normalized] || normalized;
+}
+
+function appGrowingGraphQLDateWindow(params = {}, now = new Date()) {
+  const explicitStart = stringParam(params.startDate ?? params.start_date);
+  const explicitEnd = stringParam(params.endDate ?? params.end_date);
+  if (explicitStart || explicitEnd) {
+    return {
+      startDate: explicitStart || null,
+      endDate: explicitEnd || null,
+    };
+  }
+  const range = stringParam(params.daterange ?? params.date_range);
+  const match = range.match(/^(-?\d+)\s*,\s*(-?\d+)$/);
+  if (!match) {
+    return {
+      startDate: null,
+      endDate: null,
+    };
+  }
+  const startOffset = Number.parseInt(match[1], 10);
+  const endOffset = Number.parseInt(match[2], 10);
+  const anchor = utcDateOnly(now);
+  return {
+    startDate: formatLocalDate(addDaysUTC(anchor, startOffset)),
+    endDate: formatLocalDate(addDaysUTC(anchor, endOffset)),
+  };
+}
+
+function stringParam(value) {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function optionalIntegerParam(value, min, max) {
+  const number = Number(value);
+  if (!Number.isInteger(number)) {
+    return null;
+  }
+  return Math.max(min, Math.min(max, number));
+}
+
+function utcDateOnly(value) {
+  const date = value instanceof Date && !Number.isNaN(value.getTime()) ? value : new Date();
+  return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
+}
+
+function addDaysUTC(date, days) {
+  const next = new Date(date.getTime());
+  next.setUTCDate(next.getUTCDate() + days);
+  return next;
+}
+
+function formatLocalDate(date) {
+  return date.toISOString().slice(0, 10);
+}
+
+function uniqueNonEmptyValues(values) {
+  const seen = new Set();
+  const out = [];
+  for (const value of values) {
+    const text = String(value || "").trim();
+    if (!text || seen.has(text)) {
+      continue;
+    }
+    seen.add(text);
+    out.push(text);
+  }
+  return out;
 }
 
 async function captureAppGrowingMaterialPage(page, connector, options) {
@@ -2853,7 +3338,7 @@ async function runCrawl(body) {
       if (connector.id !== "appgrowing") {
         throw userError(`connector ${connector.id} has no material_search executor`, 400);
       }
-      const materialResult = await runAppGrowingMaterialSearch(page, connector, {
+      const materialResult = await runAppGrowingMaterialSearch(page, context, connector, {
         ...(body.params || {}),
         profile_id: body.profile_id,
       });
@@ -3119,7 +3604,10 @@ const server = http.createServer(async (req, res) => {
 });
 
 export {
+  appGrowingAppMaterialListVariables,
+  appGrowingGraphQLDateWindow,
   appGrowingMaterialURL,
+  appGrowingSearchAppVariables,
   connectorForID,
   connectorTargetURL,
   extractAppGrowingMaterials,

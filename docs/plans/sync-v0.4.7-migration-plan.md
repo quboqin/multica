@@ -39,6 +39,10 @@ application with small commits.
   remove new FK/cascade usage and split every new concurrent index into its own
   single-statement migration file. `244/245` bridge the current branch's older
   `originator_user_id` history to master code's `requesting_user_id` column.
+- Completed: latest remote `origin/master` update through
+  `64548612c Merge branch 'codex-merge-appgrowing-master' into 'master'`.
+  Migrated AppGrowing material GraphQL crawl improvements, empty material import
+  filtering, and credential rebind dialog auto-close behavior.
 
 ## Remaining Master Commit Audit
 
@@ -84,6 +88,8 @@ should keep their original commit IDs for traceability when migrated manually.
   existing sync-branch Cybertron branding / localhost backend-port adaptation,
   this plan document, and a TypeScript test helper update needed by the current
   `@tiptap/suggestion` `AbortSignal` signature.
+- No remote `origin/master` commit is intentionally omitted after the latest
+  `64548612c` sync pass.
 
 Current local verification:
 
@@ -117,9 +123,14 @@ Current local verification:
   migrations through `245_agent_task_requesting_user_index`.
 - `go test ./internal/handler -run 'Test(Credential|Creative|PreviewSession|WorkspaceMcp)' -count=1`
   passes.
+- `go test ./internal/handler -run 'TestCreativeMaterialsFromCrawlRaw|TestCreativeImport' -count=1`
+  passes after the `64548612c` AppGrowing import sync.
 - `go test ./internal/broker ./internal/creative ./internal/handler -run '^$'`
   passes.
-- `corepack pnpm --filter @multica/crawler-worker test` passes.
+- `corepack pnpm --filter @multica/crawler-worker test` passes, including the
+  new AppGrowing GraphQL crawl cases from the `64548612c` sync.
+- `corepack pnpm exec vitest run settings/components/credential-broker-tab.test.ts`
+  passes from `packages/views`.
 - `corepack pnpm exec vitest run editor/extensions/mention-suggestion.test.tsx
   editor/extensions/slash-command-suggestion.test.tsx` passes from
   `packages/views`.
