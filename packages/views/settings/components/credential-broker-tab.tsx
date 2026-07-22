@@ -181,12 +181,12 @@ export function CredentialBrokerTab() {
   }, [activeSession, qc, t, wsId]);
 
   useEffect(() => {
-    if (!activeSession || pendingProfile?.status !== "active") {
+    if (!shouldAutoCloseCredentialSession(activeSession, pendingProfile)) {
       return;
     }
     setSessionDialogOpen(false);
     setActiveSession(null);
-  }, [activeSession, pendingProfile?.status]);
+  }, [activeSession, pendingProfile]);
 
   return (
     <div className="space-y-6">
@@ -469,6 +469,21 @@ function closeRemoteBrowser(session: CredentialLoginSession | null) {
     headers: { "content-type": "application/json" },
     keepalive: true,
   }).catch(() => {});
+}
+
+export function shouldAutoCloseCredentialSession(
+  session: CredentialLoginSession | null,
+  profile: Pick<CredentialProfile, "id" | "status" | "updated_at"> | null | undefined,
+) {
+  if (!session || !profile || profile.id !== session.profile_id || profile.status !== "active") {
+    return false;
+  }
+  const sessionCreatedAt = Date.parse(session.created_at);
+  const profileUpdatedAt = Date.parse(profile.updated_at);
+  if (!Number.isFinite(sessionCreatedAt) || !Number.isFinite(profileUpdatedAt)) {
+    return false;
+  }
+  return profileUpdatedAt > sessionCreatedAt;
 }
 
 function ProfileRow({
