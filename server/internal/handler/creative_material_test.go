@@ -229,6 +229,64 @@ func TestCreativeSourceContentTypeSupportsImageAndVideoOriginals(t *testing.T) {
 	}
 }
 
+func TestCreativeMaterialsFromCrawlRawSkipsAppGrowingPageSnapshotsWhenExplicitResultsAreEmpty(t *testing.T) {
+	raw := json.RawMessage(`{
+		"connector_id": "appgrowing",
+		"capability": "material_search",
+		"selected_materials": [],
+		"material_samples": [],
+		"captured": [
+			{
+				"competitor": "Easycash",
+				"url": "https://appgrowing-global.youcloud.com/leaflet?keyword=Easycash",
+				"materials_found": 0,
+				"page_snapshot": {
+					"url": "https://appgrowing-global.youcloud.com/leaflet?keyword=Easycash",
+					"title": "AppGrowing Global - YouCloud",
+					"text": "Dashboard OVERVIEW Overview FAVORITES App Creatives"
+				}
+			}
+		]
+	}`)
+
+	if got := creativeMaterialsFromCrawlRaw(raw); len(got) != 0 {
+		t.Fatalf("materials length = %d, want 0; first = %#v", len(got), got[0])
+	}
+}
+
+func TestCreativeMaterialsFromCrawlRawUsesExplicitSelectedMaterials(t *testing.T) {
+	raw := json.RawMessage(`{
+		"connector_id": "appgrowing",
+		"capability": "material_search",
+		"selected_materials": [
+			{
+				"material_id": "easycash-1",
+				"title": "Easycash reference",
+				"asset_type": "image",
+				"preview_url": "https://cdn.example.com/easycash.jpg",
+				"resource_url": "https://cdn.example.com/easycash.jpg"
+			}
+		],
+		"captured": [
+			{
+				"url": "https://appgrowing-global.youcloud.com/leaflet?keyword=Easycash",
+				"page_snapshot": {
+					"url": "https://appgrowing-global.youcloud.com/leaflet?keyword=Easycash",
+					"title": "AppGrowing Global - YouCloud"
+				}
+			}
+		]
+	}`)
+
+	got := creativeMaterialsFromCrawlRaw(raw)
+	if len(got) != 1 {
+		t.Fatalf("materials length = %d, want 1: %#v", len(got), got)
+	}
+	if got[0].ResourceURL != "https://cdn.example.com/easycash.jpg" {
+		t.Fatalf("resource_url = %q", got[0].ResourceURL)
+	}
+}
+
 func TestCreativeDownloadPackageContainsOriginalThreeByThreeAndAuditManifest(t *testing.T) {
 	ctx := context.Background()
 	var issueID, candidateID, jobID string

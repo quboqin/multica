@@ -1680,11 +1680,15 @@ func creativeMaterialsFromCrawlRaw(raw json.RawMessage) []creativeMaterialInput 
 		return nil
 	}
 	keys := []string{"selected_materials", "materials", "material_samples", "selected"}
+	hasExplicitMaterialArrays := creativeMaterialRootHasAnyKey(root, keys)
 	for _, key := range keys {
 		items := creativeMaterialArrayAtKey(root, key)
 		if len(items) > 0 {
 			return items
 		}
+	}
+	if hasExplicitMaterialArrays {
+		return nil
 	}
 	out := []creativeMaterialInput{}
 	creativeCollectMaterialInputs(root, &out, map[string]struct{}{})
@@ -1692,6 +1696,19 @@ func creativeMaterialsFromCrawlRaw(raw json.RawMessage) []creativeMaterialInput 
 		return out[:500]
 	}
 	return out
+}
+
+func creativeMaterialRootHasAnyKey(value any, keys []string) bool {
+	obj, ok := value.(map[string]any)
+	if !ok {
+		return false
+	}
+	for _, key := range keys {
+		if _, ok := obj[key]; ok {
+			return true
+		}
+	}
+	return false
 }
 
 func creativeMaterialArrayAtKey(value any, key string) []creativeMaterialInput {
