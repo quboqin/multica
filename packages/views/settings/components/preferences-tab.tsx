@@ -9,8 +9,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@multica/ui/components/ui/select";
-import { Switch } from "@multica/ui/components/ui/switch";
 import { useTheme } from "@multica/ui/components/common/theme-provider";
+import { cn } from "@multica/ui/lib/utils";
 import {
   DEFAULT_LOCALE,
   SUPPORTED_LOCALES,
@@ -18,19 +18,84 @@ import {
 } from "@multica/core/i18n";
 import { useLocaleAdapter } from "@multica/core/i18n/react";
 import { useAuthStore } from "@multica/core/auth";
-import {
-  useCommentComposerStore,
-  useIssueLinkStore,
-} from "@multica/core/issues/stores";
 import { api } from "@multica/core/api";
 import { browserTimezone, timezoneOptions } from "../../common/timezone-select";
 import { useT } from "../../i18n";
-import {
-  SettingsCard,
-  SettingsRow,
-  SettingsSection,
-  SettingsTab,
-} from "./settings-layout";
+
+const LIGHT_COLORS = {
+  titleBar: "#e8e8e8",
+  content: "#ffffff",
+  sidebar: "#f4f4f5",
+  bar: "#e4e4e7",
+  barMuted: "#d4d4d8",
+};
+
+const DARK_COLORS = {
+  titleBar: "#333338",
+  content: "#27272a",
+  sidebar: "#1e1e21",
+  bar: "#3f3f46",
+  barMuted: "#52525b",
+};
+
+function WindowMockup({
+  variant,
+  className,
+}: {
+  variant: "light" | "dark";
+  className?: string;
+}) {
+  const colors = variant === "light" ? LIGHT_COLORS : DARK_COLORS;
+
+  return (
+    <div className={cn("flex h-full w-full flex-col", className)}>
+      {/* Title bar */}
+      <div
+        className="flex items-center gap-[3px] px-2 py-1.5"
+        style={{ backgroundColor: colors.titleBar }}
+      >
+        <span className="size-[6px] rounded-full bg-[#ff5f57]" />
+        <span className="size-[6px] rounded-full bg-[#febc2e]" />
+        <span className="size-[6px] rounded-full bg-[#28c840]" />
+      </div>
+      {/* Content area */}
+      <div
+        className="flex flex-1"
+        style={{ backgroundColor: colors.content }}
+      >
+        {/* Sidebar */}
+        <div
+          className="w-[30%] space-y-1 p-2"
+          style={{ backgroundColor: colors.sidebar }}
+        >
+          <div
+            className="h-1 w-3/4 rounded-full"
+            style={{ backgroundColor: colors.bar }}
+          />
+          <div
+            className="h-1 w-1/2 rounded-full"
+            style={{ backgroundColor: colors.bar }}
+          />
+        </div>
+        {/* Main */}
+        <div className="flex-1 space-y-1.5 p-2">
+          <div
+            className="h-1.5 w-4/5 rounded-full"
+            style={{ backgroundColor: colors.bar }}
+          />
+          <div
+            className="h-1 w-full rounded-full"
+            style={{ backgroundColor: colors.barMuted }}
+          />
+          <div
+            className="h-1 w-3/5 rounded-full"
+            style={{ backgroundColor: colors.barMuted }}
+          />
+        </div>
+      </div>
+    </div>
+  );
+}
 
 export function PreferencesTab() {
   const { theme, setTheme } = useTheme();
@@ -88,137 +153,96 @@ export function PreferencesTab() {
       setTimeout(() => window.location.reload(), 2500);
       return;
     }
-    toast.success(t(($) => $.auto_save.toast_saved), {
-      id: "settings-auto-save",
-    });
-    // Keep the confirmation visible before the locale reload replaces the UI.
-    setTimeout(() => window.location.reload(), 900);
+    window.location.reload();
   };
 
   return (
-    <SettingsTab title={t(($) => $.page.tabs.preferences)}>
-      <SettingsSection title={t(($) => $.preferences.general_title)}>
-        <SettingsCard>
-          <SettingsRow
-            label={t(($) => $.preferences.theme.title)}
-            size="select"
-          >
-            <Select
-              items={themeOptions}
-              value={theme}
-              onValueChange={(next) => {
-                if (!next || next === theme) return;
-                setTheme(next as (typeof themeOptions)[number]["value"]);
-                toast.success(t(($) => $.auto_save.toast_saved), {
-                  id: "settings-auto-save",
-                });
-              }}
-            >
-              <SelectTrigger
-                size="sm"
-                className="w-full"
-                aria-label={t(($) => $.preferences.theme.title)}
+    <div className="space-y-8">
+      <section className="space-y-4">
+        <h2 className="text-sm font-semibold">
+          {t(($) => $.preferences.theme.title)}
+        </h2>
+        <div className="flex gap-6" role="radiogroup">
+          {themeOptions.map((opt) => {
+            const active = theme === opt.value;
+            return (
+              <button
+                type="button"
+                key={opt.value}
+                role="radio"
+                aria-checked={active}
+                onClick={() => setTheme(opt.value)}
+                className="group flex flex-col items-center gap-2"
               >
-                <SelectValue>
-                  {themeOptions.find((option) => option.value === theme)?.label}
-                </SelectValue>
-              </SelectTrigger>
-              <SelectContent align="end">
-                {themeOptions.map((option) => (
-                  <SelectItem key={option.value} value={option.value}>
-                    {option.label}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </SettingsRow>
+                <div
+                  className={cn(
+                    "aspect-[4/3] w-36 overflow-hidden rounded-lg ring-1 transition-all",
+                    active
+                      ? "ring-2 ring-brand"
+                      : "ring-border hover:ring-2 hover:ring-border"
+                  )}
+                >
+                  {opt.value === "system" ? (
+                    <div className="relative h-full w-full">
+                      <WindowMockup
+                        variant="light"
+                        className="absolute inset-0"
+                      />
+                      <WindowMockup
+                        variant="dark"
+                        className="absolute inset-0 [clip-path:inset(0_0_0_50%)]"
+                      />
+                    </div>
+                  ) : (
+                    <WindowMockup variant={opt.value} />
+                  )}
+                </div>
+                <span
+                  className={cn(
+                    "text-sm transition-colors",
+                    active
+                      ? "font-medium text-foreground"
+                      : "text-muted-foreground"
+                  )}
+                >
+                  {opt.label}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      </section>
 
-          <SettingsRow
-            label={t(($) => $.preferences.language.title)}
-            size="select"
-          >
-            <Select
-              items={languageOptions}
-              value={currentLocale}
-              onValueChange={(next) => {
-                if (next) void handleLanguageChange(next as SupportedLocale);
-              }}
-            >
-              <SelectTrigger
-                size="sm"
-                className="w-full"
-                aria-label={t(($) => $.preferences.language.title)}
+      <section className="space-y-4">
+        <h2 className="text-sm font-semibold">
+          {t(($) => $.preferences.language.title)}
+        </h2>
+        <div className="flex gap-3" role="radiogroup">
+          {languageOptions.map((opt) => {
+            const active = currentLocale === opt.value;
+            return (
+              <button
+                type="button"
+                key={opt.value}
+                role="radio"
+                aria-checked={active}
+                onClick={() => handleLanguageChange(opt.value)}
+                className={cn(
+                  "rounded-md border px-4 py-2 text-sm transition-colors",
+                  active
+                    ? "border-brand bg-brand/10 font-medium text-foreground"
+                    : "border-border text-muted-foreground hover:border-foreground/30"
+                )}
               >
-                <SelectValue>
-                  {languageOptions.find((option) => option.value === currentLocale)?.label}
-                </SelectValue>
-              </SelectTrigger>
-              <SelectContent align="end">
-                {languageOptions.map((option) => (
-                  <SelectItem key={option.value} value={option.value}>
-                    {option.label}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </SettingsRow>
+                {opt.label}
+              </button>
+            );
+          })}
+        </div>
+      </section>
 
-          <TimezoneRow />
-
-          <StickyCommentBarRow />
-
-          <IssueLinkNewTabRow />
-        </SettingsCard>
-      </SettingsSection>
-    </SettingsTab>
-  );
-}
-
-function StickyCommentBarRow() {
-  const { t } = useT("settings");
-  const sticky = useCommentComposerStore((s) => s.sticky);
-  const toggleSticky = useCommentComposerStore((s) => s.toggleSticky);
-
-  return (
-    <SettingsRow
-      label={t(($) => $.preferences.sticky_comment_bar.title)}
-      description={t(($) => $.preferences.sticky_comment_bar.hint)}
-    >
-      <Switch
-        checked={sticky}
-        onCheckedChange={() => {
-          toggleSticky();
-          toast.success(t(($) => $.auto_save.toast_saved), {
-            id: "settings-auto-save",
-          });
-        }}
-        aria-label={t(($) => $.preferences.sticky_comment_bar.title)}
-      />
-    </SettingsRow>
-  );
-}
-
-function IssueLinkNewTabRow() {
-  const { t } = useT("settings");
-  const openInNewTab = useIssueLinkStore((s) => s.openInNewTab);
-  const setOpenInNewTab = useIssueLinkStore((s) => s.setOpenInNewTab);
-
-  return (
-    <SettingsRow
-      label={t(($) => $.preferences.issue_link_new_tab.title)}
-      description={t(($) => $.preferences.issue_link_new_tab.hint)}
-    >
-      <Switch
-        checked={openInNewTab}
-        onCheckedChange={(checked) => {
-          setOpenInNewTab(checked === true);
-          toast.success(t(($) => $.auto_save.toast_saved), {
-            id: "settings-auto-save",
-          });
-        }}
-        aria-label={t(($) => $.preferences.issue_link_new_tab.title)}
-      />
-    </SettingsRow>
+      <TimezoneSection />
+    </div>
   );
 }
 
@@ -226,7 +250,7 @@ function IssueLinkNewTabRow() {
 // state through this sentinel and translate at the wire boundary.
 const BROWSER_TZ_VALUE = "__browser__";
 
-function TimezoneRow() {
+function TimezoneSection() {
   const { t } = useT("settings");
   const user = useAuthStore((s) => s.user);
   const setUser = useAuthStore((s) => s.setUser);
@@ -248,9 +272,6 @@ function TimezoneRow() {
     try {
       const updated = await api.updateMe({ timezone: payload });
       setUser(updated);
-      toast.success(t(($) => $.auto_save.toast_saved), {
-        id: "settings-auto-save",
-      });
     } catch (err) {
       toast.error(
         err instanceof Error && err.message
@@ -268,42 +289,33 @@ function TimezoneRow() {
   };
 
   return (
-    <SettingsRow
-      label={t(($) => $.preferences.timezone.title)}
-      description={t(($) => $.preferences.timezone.hint)}
-      size="select-wide"
-    >
+    <section className="space-y-2">
+      <h2 className="text-sm font-semibold">
+        {t(($) => $.preferences.timezone.title)}
+      </h2>
       <Select
-        items={[
-          { value: BROWSER_TZ_VALUE, label: formatTZLabel(BROWSER_TZ_VALUE) },
-          ...options.map((timezone) => ({
-            value: timezone,
-            label: formatTZLabel(timezone),
-          })),
-        ]}
         value={value}
         onValueChange={(next) => {
-          if (next) void handleChange(next);
+          if (next) handleChange(next);
         }}
       >
-        <SelectTrigger
-          size="sm"
-          className="w-full font-mono text-xs"
-          aria-label={t(($) => $.preferences.timezone.title)}
-        >
+        <SelectTrigger size="sm" className="w-72 rounded-md font-mono text-xs">
           <SelectValue>{formatTZLabel(value)}</SelectValue>
         </SelectTrigger>
-        <SelectContent align="end" className="max-h-72">
+        <SelectContent align="start" className="max-h-72">
           <SelectItem value={BROWSER_TZ_VALUE} className="font-mono text-xs">
             {formatTZLabel(BROWSER_TZ_VALUE)}
           </SelectItem>
-          {options.map((timezone) => (
-            <SelectItem key={timezone} value={timezone} className="font-mono text-xs">
-              {formatTZLabel(timezone)}
+          {options.map((tz) => (
+            <SelectItem key={tz} value={tz} className="font-mono text-xs">
+              {formatTZLabel(tz)}
             </SelectItem>
           ))}
         </SelectContent>
       </Select>
-    </SettingsRow>
+      <p className="text-[11px] leading-snug text-muted-foreground">
+        {t(($) => $.preferences.timezone.hint)}
+      </p>
+    </section>
   );
 }

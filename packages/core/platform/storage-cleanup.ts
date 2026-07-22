@@ -9,7 +9,6 @@ import type { StorageAdapter } from "../types/storage";
  */
 const WORKSPACE_SCOPED_KEYS = [
   "multica_issue_draft",
-  "multica_issue_surface_views",
   "multica_issues_view",
   "multica_issues_scope",
   "multica_my_issues_view",

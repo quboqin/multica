@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Ban, CheckCircle2, ChevronRight, Loader2, RotateCcw, Square, XCircle } from "lucide-react";
 import { toast } from "sonner";
-import { api, dispatchReasonCode } from "@multica/core/api";
+import { api } from "@multica/core/api";
 import { issueKeys } from "@multica/core/issues/queries";
 import type { AgentTask, TaskFailureReason } from "@multica/core/types";
 import { useTimeAgo } from "../../i18n";
@@ -224,12 +224,6 @@ function useTriggerText(task: AgentTask): string {
   }
   if (task.autopilot_run_id) return t(($) => $.execution_log.trigger_autopilot);
   if (task.trigger_comment_id) return t(($) => $.execution_log.trigger_comment);
-  // Assignment-triggered run that carried a handoff note: show the note inline
-  // (truncated by TriggerText) the way comment triggers show their text, so the
-  // row reads as the handoff instead of the generic "initial run".
-  if (task.handoff_note) {
-    return retryPrefix + t(($) => $.execution_log.trigger_handoff_prefix) + stripMentionMarkdown(task.handoff_note);
-  }
   return t(($) => $.execution_log.trigger_initial);
 }
 
@@ -305,7 +299,6 @@ export function ActiveTaskRow({
   return (
     <RowShell task={task}>
       <TriggerText text={trigger} />
-      <TaskCommentCoverage task={task} />
       <RowStatus title={label}>
         {task.status === "running" ? (
           <>
@@ -387,16 +380,7 @@ function PastRow({ task, issueId }: { task: AgentTask; issueId: string }) {
     try {
       await api.rerunIssue(issueId, task.id);
     } catch (e) {
-      // A rerun is now re-gated on the operator's invoke permission (MUL-4525):
-      // a structured 403 means the agent can't be triggered, not a transient
-      // failure — localize it instead of echoing the server's generic message.
-      toast.error(
-        dispatchReasonCode(e) === "invocation_not_allowed"
-          ? t(($) => $.execution_log.retry_blocked)
-          : e instanceof Error
-            ? e.message
-            : t(($) => $.execution_log.retry_failed),
-      );
+      toast.error(e instanceof Error ? e.message : t(($) => $.execution_log.retry_failed));
     } finally {
       // Reset on both success and failure: the past row stays mounted
       // (its task.id is unchanged), so leaving `retrying` true on success
@@ -408,7 +392,6 @@ function PastRow({ task, issueId }: { task: AgentTask; issueId: string }) {
   return (
     <RowShell task={task}>
       <TriggerText text={trigger} />
-      <TaskCommentCoverage task={task} />
       <RowStatus title={failureLabel ?? label}>
         <TaskStatusIcon status={task.status} />
         <span className="sr-only">{failureLabel ?? label}</span>
@@ -458,7 +441,7 @@ function RowShell({
         <ActorAvatar
           actorType="agent"
           actorId={task.agent_id}
-          size="sm"
+          size={20}
           enableHoverCard
         />
       ) : (
@@ -473,49 +456,6 @@ function TriggerText({ text }: { text: string }) {
   return <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">{text}</span>;
 }
 
-function supportsCommentCoverage(status: AgentTask["status"]): boolean {
-  switch (status) {
-    case "queued":
-    case "dispatched":
-    case "waiting_local_directory":
-    case "running":
-    case "completed":
-    case "failed":
-    case "cancelled":
-      return true;
-    default:
-      return false;
-  }
-}
-
-export function TaskCommentCoverage({ task }: { task: AgentTask }) {
-  const { t } = useT("issues");
-  if (!supportsCommentCoverage(task.status)) return null;
-
-  // Queued rows show the planned coverage: coalesced_comment_ids deliberately
-  // excludes the newest trigger. Once claimed, prefer the server's actual
-  // delivery receipt. Only legacy rows where that field is absent fall back to
-  // the plan; an explicit [] means the claim delivered no comments.
-  const plannedCommentIds = [
-    task.trigger_comment_id,
-    ...(task.coalesced_comment_ids ?? []),
-  ];
-  const coverageIds =
-    task.status !== "queued" && task.delivered_comment_ids !== undefined
-      ? task.delivered_comment_ids
-      : plannedCommentIds;
-  const commentIds = new Set(
-    coverageIds.filter((id): id is string => Boolean(id)),
-  );
-  if (commentIds.size <= 1) return null;
-
-  return (
-    <span className="shrink-0 whitespace-nowrap text-[11px] text-muted-foreground">
-      {t(($) => $.execution_log.included_comments, { count: commentIds.size })}
-    </span>
-  );
-}
-
 function RowStatus({
   children,
   title,
@@ -526,7 +466,7 @@ function RowStatus({
   return (
     <div
       title={title}
-      className="flex h-7 shrink-0 items-center justify-end gap-1 overflow-hidden whitespace-nowrap text-xs [@media(hover:hover)]:group-hover/execution-log-row:hidden"
+      className="flex h-7 shrink-0 items-center justify-end gap-1 overflow-hidden whitespace-nowrap text-xs group-hover/execution-log-row:hidden"
     >
       {children}
     </div>
@@ -546,11 +486,12 @@ function TaskStatusIcon({ status }: { status: AgentTask["status"] }) {
   }
 }
 
-// Action slot — visible by default for touch devices. On hover-capable
-// surfaces, it replaces the status column in place on row hover.
+// Action slot — hidden by default, replaces the status column in place on
+// hover. No absolute/gradient needed: the status is removed (not covered),
+// so nothing shows through underneath.
 function RowActions({ children }: { children: React.ReactNode }) {
   return (
-    <div className="flex h-7 items-center gap-0.5 [@media(hover:hover)]:hidden [@media(hover:hover)]:group-hover/execution-log-row:flex">
+    <div className="hidden h-7 items-center gap-0.5 group-hover/execution-log-row:flex">
       {children}
     </div>
   );

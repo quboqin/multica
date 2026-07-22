@@ -14,10 +14,10 @@
     "description": "创建一个里程碑，把需求归入同一个计划。",
     "filtered_title": "当前筛选条件下没有计划。"
   },
-  "dialog": {
-    "title": "创建计划",
-    "edit_title": "编辑计划",
-    "description": "创建一个经营计划里程碑。需求可以单独关联到该计划。",
+    "dialog": {
+      "title": "创建计划",
+      "edit_title": "编辑计划",
+      "description": "创建一个经营计划里程碑。需求可以单独关联到该计划。",
     "fields": {
       "title": "标题",
       "description": "描述",
@@ -29,15 +29,15 @@
       "title": "马来西亚 H1 经营计划",
       "description": "范围、业务目标和执行说明"
     },
-    "cancel": "取消",
-    "submit": "创建计划",
-    "save": "保存",
-    "creating": "创建中...",
-    "saving": "保存中...",
-    "toast_created": "计划已创建",
-    "toast_updated": "计划已更新",
-    "toast_failed": "创建计划失败",
-    "toast_update_failed": "更新计划失败"
+      "cancel": "取消",
+      "submit": "创建计划",
+      "save": "保存",
+      "creating": "创建中...",
+      "saving": "保存中...",
+      "toast_created": "计划已创建",
+      "toast_updated": "计划已更新",
+      "toast_failed": "创建计划失败",
+      "toast_update_failed": "更新计划失败"
   },
   "status": {
     "planned": "计划中",
@@ -50,11 +50,11 @@
     "no_start": "未设置开始",
     "no_end": "未设置结束",
     "complete": "完成 {{progress}}%",
-    "projects_count": "{{done}} / {{total}} 个需求",
-    "paused_count": "{{count}} 个暂停",
-    "edit": "编辑",
-    "open": "打开"
-  },
+      "projects_count": "{{done}} / {{total}} 个需求",
+      "paused_count": "{{count}} 个暂停",
+      "edit": "编辑",
+      "open": "打开"
+    },
   "stats": {
     "plans": {
       "label": "计划",

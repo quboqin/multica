@@ -32,10 +32,7 @@ func TestProjectResourceLifecycle(t *testing.T) {
 	w = httptest.NewRecorder()
 	req = newRequest("POST", "/api/projects/"+project.ID+"/resources", map[string]any{
 		"resource_type": "github_repo",
-		"resource_ref": map[string]any{
-			"url": "https://github.com/multica-ai/multica",
-			"ref": "release/v2",
-		},
+		"resource_ref":  map[string]any{"url": "https://github.com/multica-ai/multica"},
 	})
 	req = withURLParam(req, "id", project.ID)
 	testHandler.CreateProjectResource(w, req)
@@ -51,16 +48,12 @@ func TestProjectResourceLifecycle(t *testing.T) {
 	}
 	var ref struct {
 		URL string `json:"url"`
-		Ref string `json:"ref"`
 	}
 	if err := json.Unmarshal(created.ResourceRef, &ref); err != nil {
 		t.Fatalf("decode resource_ref: %v", err)
 	}
 	if ref.URL != "https://github.com/multica-ai/multica" {
 		t.Errorf("created.ResourceRef.url = %q", ref.URL)
-	}
-	if ref.Ref != "release/v2" {
-		t.Errorf("created.ResourceRef.ref = %q, want release/v2", ref.Ref)
 	}
 
 	// Listing must include the new resource.
@@ -89,10 +82,7 @@ func TestProjectResourceLifecycle(t *testing.T) {
 	w = httptest.NewRecorder()
 	req = newRequest("POST", "/api/projects/"+project.ID+"/resources", map[string]any{
 		"resource_type": "github_repo",
-		"resource_ref": map[string]any{
-			"url": "https://github.com/multica-ai/multica",
-			"ref": "release/v2",
-		},
+		"resource_ref":  map[string]any{"url": "https://github.com/multica-ai/multica"},
 	})
 	req = withURLParam(req, "id", project.ID)
 	testHandler.CreateProjectResource(w, req)
@@ -239,6 +229,50 @@ func TestIsValidGitRepoURL(t *testing.T) {
 		if isValidGitRepoURL(s) {
 			t.Errorf("isValidGitRepoURL(%q) = true, want false", s)
 		}
+	}
+}
+
+func TestValidateGithubRepoRefNormalizesSemanticMetadata(t *testing.T) {
+	normalized, err := validateGithubRepoRef(json.RawMessage(`{
+		"url":" https://github.com/multica-ai/mobile.git ",
+		"role":" Android_Shell ",
+		"capabilities":[" Camera ","webview-bridge","camera",""],
+		"preview":{"platform":" Android ","profile":" Customer_App "}
+	}`))
+	if err != nil {
+		t.Fatalf("validateGithubRepoRef: %v", err)
+	}
+	var got githubRepoRef
+	if err := json.Unmarshal(normalized, &got); err != nil {
+		t.Fatalf("decode normalized ref: %v", err)
+	}
+	if got.Role != "android_shell" {
+		t.Errorf("role = %q, want android_shell", got.Role)
+	}
+	if len(got.Capabilities) != 2 || got.Capabilities[0] != "camera" || got.Capabilities[1] != "webview-bridge" {
+		t.Errorf("capabilities = %#v, want [camera webview-bridge]", got.Capabilities)
+	}
+	if got.Preview == nil || got.Preview.Policy != "auto" || got.Preview.Platform != "android" || got.Preview.Profile != "customer_app" {
+		t.Errorf("preview = %#v, want auto/android/customer_app", got.Preview)
+	}
+}
+
+func TestValidateGithubRepoRefRejectsInvalidSemanticMetadata(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		ref  string
+	}{
+		{name: "role contains spaces", ref: `{"url":"https://github.com/o/r","role":"android shell"}`},
+		{name: "capability contains slash", ref: `{"url":"https://github.com/o/r","capabilities":["native/camera"]}`},
+		{name: "invalid preview policy", ref: `{"url":"https://github.com/o/r","preview":{"policy":"sometimes"}}`},
+		{name: "always lacks platform", ref: `{"url":"https://github.com/o/r","preview":{"policy":"always"}}`},
+		{name: "invalid preview platform", ref: `{"url":"https://github.com/o/r","preview":{"platform":"backend"}}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := validateGithubRepoRef(json.RawMessage(tc.ref)); err == nil {
+				t.Fatal("validateGithubRepoRef returned nil error")
+			}
+		})
 	}
 }
 

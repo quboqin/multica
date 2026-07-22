@@ -2,7 +2,6 @@
 
 import { useEffect, useRef, useState } from "react";
 import { ActorAvatar as ActorAvatarBase } from "@multica/ui/components/common/actor-avatar";
-import { AVATAR_SIZE_PX, type AvatarSize } from "@multica/ui/lib/avatar-size";
 import {
   HoverCard,
   HoverCardTrigger,
@@ -35,7 +34,7 @@ export type AgentHoverCardVariant = "profile" | "live";
 interface ActorAvatarProps {
   actorType: string;
   actorId: string;
-  size?: AvatarSize;
+  size?: number;
   className?: string;
   /**
    * Wrap the avatar in a hover-card preview on dwell. Use for "who is this?"
@@ -196,18 +195,18 @@ function ActorAvatarProfileLink({
 // smaller avatars use a 6 px dot so the indicator doesn't overwhelm them.
 // Exported for surfaces that render the base avatar directly (e.g. comment
 // trigger chips) but still want the standard presence dot.
-export function AgentStatusDot({ agentId, size }: { agentId: string; size?: AvatarSize }) {
+export function AgentStatusDot({ agentId, size }: { agentId: string; size?: number }) {
   const ws = useCurrentWorkspace();
   const detail = useAgentPresenceDetail(ws?.id, agentId);
   if (detail === "loading") return null;
 
   const { dotClass, label } = availabilityConfig[detail.availability];
-  const px = size ? AVATAR_SIZE_PX[size] : 24;
-  const dotSize = px >= 24 ? "h-1.5 w-1.5" : "h-1 w-1";
+  const dotSize = (size ?? 24) >= 24 ? "h-1.5 w-1.5" : "h-1 w-1";
 
   return (
     <span
       aria-label={`Status: ${label}`}
+      title={label}
       className={`absolute bottom-0 right-0 rounded-full ring-1 ring-background ${dotClass} ${dotSize}`}
     />
   );
@@ -272,18 +271,6 @@ function SquadAvatarHoverCard({
 // Common chrome shared between agent and member hover cards. Keeps focus
 // behaviour and width consistent so the two surfaces feel structurally
 // parallel — content varies, frame doesn't.
-//
-// Do NOT defer-mount the HoverCard on pointerenter to save per-avatar mount
-// cost (MUL-4827). Base UI drives hover through native mouseenter/mouseleave
-// listeners on the trigger element, and installs its close path *inside* the
-// mouseleave handler — so a trigger that never received a real mouseenter can
-// neither cancel a pending open nor ever hover-close. Warming on pointerenter
-// swaps the node mid-gesture and loses exactly those events, which made
-// brushed-past avatars pop open ~600ms later and stick. This is the same
-// invariant DeferredPopup documents: deferral is only sound for events that
-// END a gesture (click/Enter), and hover starts one. Mounting the root eagerly
-// costs ~0.15ms of JS per avatar and adds zero DOM while closed (the popup
-// subtree, and its queries, stay unmounted until open).
 function ActorAvatarHoverCardShell({
   content,
   children,
@@ -301,17 +288,16 @@ function ActorAvatarHoverCardShell({
     setStandalone(!ancestor);
   }, []);
 
-  const tabIndex = standalone ? 0 : -1;
-  const className = standalone
-    ? "inline-flex cursor-pointer rounded-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-    : "inline-flex cursor-pointer";
-
   return (
     <HoverCard>
       <HoverCardTrigger
         render={<span ref={triggerRef} />}
-        tabIndex={tabIndex}
-        className={className}
+        tabIndex={standalone ? 0 : -1}
+        className={
+          standalone
+            ? "inline-flex cursor-pointer rounded-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            : "inline-flex cursor-pointer"
+        }
       >
         {children}
       </HoverCardTrigger>

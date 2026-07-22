@@ -9,7 +9,7 @@ import {
   parseFrontmatter,
   type SkillFrontmatter,
 } from "@multica/core/skills/frontmatter";
-import { RichContent } from "../../rich-content";
+import { Markdown } from "../../common/markdown";
 import { useT } from "../../i18n";
 
 function isMarkdown(path: string) {
@@ -102,11 +102,9 @@ export function FileViewer({
         {isMd && !editing ? (
           <div className="p-4 sm:p-6">
             {frontmatter && <FrontmatterCard data={frontmatter} />}
-            <RichContent
-              content={body || t(($) => $.file_viewer.no_content)}
-              density="document"
-              phase="settled"
-            />
+            <Markdown mode="full">
+              {body || t(($) => $.file_viewer.no_content)}
+            </Markdown>
           </div>
         ) : (
           <Textarea

@@ -718,6 +718,9 @@ func (h *Handler) UpdateMe(w http.ResponseWriter, r *http.Request) {
 			}
 			nextTokens[trimmedKey] = trimmedValue
 		}
+		if legacyPaones := strings.TrimSpace(nextTokens["paihub_token"]); legacyPaones != "" && strings.TrimSpace(nextTokens["paones_token"]) == "" {
+			nextTokens["paones_token"] = legacyPaones
+		}
 		delete(nextTokens, "paihub_token")
 		tokens, err := json.Marshal(nextTokens)
 		if err != nil {
@@ -748,24 +751,4 @@ func (h *Handler) UpdateMe(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, userToResponse(updatedUser))
-}
-
-func integrationTokenMapFromRaw(raw []byte) map[string]string {
-	out := map[string]string{}
-	if len(raw) == 0 {
-		return out
-	}
-	var decoded map[string]string
-	if err := json.Unmarshal(raw, &decoded); err != nil {
-		return out
-	}
-	for key, value := range decoded {
-		trimmedKey := strings.TrimSpace(key)
-		trimmedValue := strings.TrimSpace(value)
-		if trimmedKey == "" || trimmedValue == "" {
-			continue
-		}
-		out[trimmedKey] = trimmedValue
-	}
-	return out
 }

@@ -26,9 +26,10 @@ import { ManualCreatePanel, manualDialogContentClass } from "./create-issue";
  * `onSwitchMode`; the shell stores it as the next panel's `data` so seeding
  * works exactly like a fresh open.
  *
- * Manual-mode `isExpanded` is lifted up because it drives `DialogContent`'s
- * className — the className lives here in the shell since the Popup is here,
- * but the toggle for that state lives in the manual panel body.
+ * Manual-mode `isExpanded` / `backlogHintIssueId` are lifted up because they
+ * drive `DialogContent`'s className — the className lives here in the shell
+ * since the Popup is here, but the toggles for those states live in the
+ * manual panel body.
  */
 export function CreateIssueDialog({
   onClose,
@@ -43,6 +44,7 @@ export function CreateIssueDialog({
   const [mode, setMode] = useState<CreateMode>(initialMode);
   const [panelData, setPanelData] = useState(data ?? null);
   const [isExpanded, setIsExpanded] = useState(false);
+  const [backlogHintIssueId, setBacklogHintIssueId] = useState<string | null>(null);
 
   const switchTo = (next: CreateMode) => (carry?: Record<string, unknown> | null) => {
     setLastMode(next);
@@ -67,7 +69,7 @@ export function CreateIssueDialog({
             ? "!max-w-4xl !w-full !h-5/6"
             : "!max-w-xl !w-full !max-h-[80vh]",
         )
-      : manualDialogContentClass(isExpanded);
+      : manualDialogContentClass(isExpanded, backlogHintIssueId);
 
   return (
     <Dialog open onOpenChange={(v) => { if (!v) onClose(); }}>
@@ -91,6 +93,8 @@ export function CreateIssueDialog({
             data={panelData}
             isExpanded={isExpanded}
             setIsExpanded={setIsExpanded}
+            backlogHintIssueId={backlogHintIssueId}
+            setBacklogHintIssueId={setBacklogHintIssueId}
           />
         )}
       </DialogContent>

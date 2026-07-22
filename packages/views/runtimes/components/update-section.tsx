@@ -5,7 +5,6 @@ import {
   XCircle,
   ArrowUpCircle,
   Check,
-  Lock,
 } from "lucide-react";
 import { Button } from "@multica/ui/components/ui/button";
 import { api } from "@multica/core/api";
@@ -65,8 +64,7 @@ const statusConfig: Record<
 };
 
 interface UpdateSectionProps {
-  /** Null for a read-only viewer who cannot use a runtime as the command channel. */
-  runtimeId: string | null;
+  runtimeId: string;
   currentVersion: string | null;
   isOnline: boolean;
   /**
@@ -130,7 +128,7 @@ export function UpdateSection({
   }, [currentVersion, markCompleted, targetVersion, updating]);
 
   const handleUpdate = async () => {
-    if (!latestVersion || !runtimeId) return;
+    if (!latestVersion) return;
     cleanup();
     setUpdating(true);
     setTargetVersion(latestVersion);
@@ -214,17 +212,7 @@ export function UpdateSection({
               </>
             )}
 
-            {hasUpdate && !runtimeId && (
-              <span
-                className="inline-flex items-center gap-1 text-xs text-muted-foreground"
-                title={t(($) => $.update.read_only_title)}
-              >
-                <Lock className="h-3 w-3" />
-                {t(($) => $.update.read_only)}
-              </span>
-            )}
-
-            {hasUpdate && runtimeId && isOnline && !status && (
+            {hasUpdate && isOnline && !status && (
               <Button
                 variant="outline"
                 size="xs"

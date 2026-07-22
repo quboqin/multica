@@ -1,0 +1,28 @@
+{
+  "name": "AdaKami login input",
+  "source_width": 576,
+  "source_height": 1280,
+  "steps": [
+    {
+      "action": "wait",
+      "duration_ms": 6000
+    },
+    {
+      "action": "tap",
+      "x": 260,
+      "y": 380
+    },
+    {
+      "action": "text",
+      "text": "123456789"
+    },
+    {
+      "action": "wait",
+      "duration_ms": 500
+    },
+    {
+      "action": "key",
+      "key": "4"
+    }
+  ]
+}

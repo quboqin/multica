@@ -1,16 +1,17 @@
 "use client";
 
 import { useRef, useState, useCallback, useEffect } from "react";
-import { ContentEditor, type ContentEditorRef, useFileDropZone, FileDropOverlay, useLazyEditor, useUploadGate, useEditorUpload } from "../../editor";
+import { ArrowUp, Loader2 } from "lucide-react";
+import { ContentEditor, type ContentEditorRef, useFileDropZone, FileDropOverlay } from "../../editor";
 import { FileUploadButton } from "@multica/ui/components/common/file-upload-button";
-import { SubmitButton } from "@multica/ui/components/common/submit-button";
+import { Button } from "@multica/ui/components/ui/button";
 import { ActorAvatar } from "../../common/actor-avatar";
+import { useFileUpload } from "@multica/core/hooks/use-file-upload";
+import { api } from "@multica/core/api";
 import type { Attachment } from "@multica/core/types";
 import { contentReferencesAttachment } from "@multica/core/types";
-import { formatShortcut, useShortcut } from "@multica/core/shortcuts";
 import { useCommentDraftStore, type CommentDraftKey } from "@multica/core/issues/stores";
 import { cn } from "@multica/ui/lib/utils";
-import type { AvatarSize } from "@multica/ui/lib/avatar-size";
 import { useT } from "../../i18n";
 import { CommentTriggerChips } from "./comment-trigger-chips";
 import { useCommentTriggerPreview } from "../hooks/use-comment-trigger-preview";
@@ -25,9 +26,7 @@ interface ReplyInputProps {
   placeholder?: string;
   avatarType: string;
   avatarId: string;
-  /** Resolves true on success, false on failure — the reply box keeps its text
-   *  (locked + spinning) until then, clearing only on success. */
-  onSubmit: (content: string, attachmentIds?: string[], suppressAgentIds?: string[]) => Promise<boolean>;
+  onSubmit: (content: string, attachmentIds?: string[], suppressAgentIds?: string[]) => Promise<void>;
   size?: "sm" | "default";
   /** When set, hydrates/persists the in-progress reply via the draft store.
    *  Required for replies inside virtualized timeline threads, where the
@@ -50,17 +49,13 @@ function ReplyInput({
   draftKey,
 }: ReplyInputProps) {
   const { t } = useT("issues");
-  const { t: tEditor } = useT("editor");
-  const sendShortcut = useShortcut("send");
   const placeholderText = placeholder ?? t(($) => $.reply.placeholder);
   const editorRef = useRef<ContentEditorRef>(null);
-  // See CommentInput — replying mid-upload posts without the file.
-  const uploadGate = useUploadGate(editorRef);
   // If a draft key is provided, hydrate from store on mount (defaultValue is
   // the only injection point on ContentEditorRef) and flush on every onUpdate.
-  const [initialDraft] = useState(() =>
-    draftKey ? useCommentDraftStore.getState().getDraft(draftKey) : undefined,
-  );
+  const initialDraft = draftKey
+    ? useCommentDraftStore.getState().getDraft(draftKey)
+    : undefined;
   const [content, setContent] = useState(initialDraft ?? "");
   const setDraft = useCommentDraftStore((s) => s.setDraft);
   const clearDraft = useCommentDraftStore((s) => s.clearDraft);
@@ -71,19 +66,9 @@ function ReplyInput({
   // Attachments uploaded in this composer session — see CommentInput for the
   // rationale (drives both submit-time attachment_ids and editor previews).
   const [pendingAttachments, setPendingAttachments] = useState<Attachment[]>([]);
-  const { uploadWithToast } = useEditorUpload();
-
-  // Readonly-first: static shell until intent; an unsent draft mounts the
-  // real editor immediately (see CommentInput). This is also what keeps the
-  // reply box working across Virtuoso scroll-out — a typed draft rehydrates
-  // into a live editor when the card remounts, an untouched box folds back
-  // to the shell.
-  const lazy = useLazyEditor({
-    initialActive: !!initialDraft?.trim(),
-    editorRef,
-  });
+  const { uploadWithToast } = useFileUpload(api);
   const { isDragOver, dropZoneProps } = useFileDropZone({
-    onDrop: lazy.uploadOrQueue,
+    onDrop: (files) => files.forEach((f) => editorRef.current?.uploadFile(f)),
   });
 
   // Flush on tab close / mobile background — same rationale as CommentInput.
@@ -134,8 +119,6 @@ function ReplyInput({
   const handleSubmit = async () => {
     const content = editorRef.current?.getMarkdown()?.replace(/(\n\s*)+$/, "").trim();
     if (!content || submitting) return;
-    // Submit-time re-read — the shortcut path never sees the disabled button.
-    if (uploadGate.isBlocked()) return;
     // Track every attachment whose stable download URL OR legacy
     // storage URL is referenced in the markdown body. Both shapes
     // can appear in the same comment during the MUL-3130 rollout.
@@ -145,29 +128,25 @@ function ReplyInput({
     const suppressAgentIds = triggerPreview.agents
       .filter((agent) => suppressedAgentIds.has(agent.id))
       .map((agent) => agent.id);
-    // Pessimistic submit (see CommentInput): keep the text, lock + spin, clear
-    // only once the server accepts it.
     setSubmitting(true);
     try {
-      const ok = await onSubmit(
+      await onSubmit(
         content,
         activeIds.length > 0 ? activeIds : undefined,
         suppressAgentIds.length > 0 ? suppressAgentIds : undefined,
       );
-      if (ok) {
-        editorRef.current?.clearContent();
-        setContent("");
-        setIsEmpty(true);
-        setSuppressedAgentIds(new Set());
-        setPendingAttachments([]);
-        if (draftKey) clearDraft(draftKey);
-      }
+      editorRef.current?.clearContent();
+      setContent("");
+      setIsEmpty(true);
+      setSuppressedAgentIds(new Set());
+      setPendingAttachments([]);
+      if (draftKey) clearDraft(draftKey);
     } finally {
       setSubmitting(false);
     }
   };
 
-  const avatarSize: AvatarSize = size === "sm" ? "sm" : "md";
+  const avatarSize = size === "sm" ? 22 : 28;
 
   return (
     <div className="group/editor flex items-start gap-2.5">
@@ -184,20 +163,10 @@ function ReplyInput({
           !isEmpty && "pb-9",
         )}
       >
-        {/* Lock the editor while the reply is in flight — see CommentInput. */}
-        {lazy.active && (
-        <div
-          className={cn(
-            "flex-1 min-h-0 overflow-y-auto",
-            submitting && "pointer-events-none opacity-60",
-            !lazy.ready && "hidden",
-          )}
-          aria-busy={submitting || undefined}
-        >
+        <div className="flex-1 min-h-0 overflow-y-auto">
           <ContentEditor
             ref={editorRef}
             defaultValue={initialDraft}
-            onReady={lazy.onReady}
             placeholder={placeholderText}
             onUpdate={(md) => {
               setContent(md);
@@ -209,7 +178,6 @@ function ReplyInput({
             }}
             onSubmit={handleSubmit}
             onUploadFile={handleUpload}
-            onUploadingChange={uploadGate.onUploadingChange}
             debounceMs={100}
             currentIssueId={issueId}
             attachments={pendingAttachments}
@@ -217,34 +185,9 @@ function ReplyInput({
             slashCommandMode="command"
           />
         </div>
-        )}
-        {/* Static shell — clones the empty single-line reply box (see
-            CommentInput for the pattern). */}
-        {!lazy.ready && (
-          <div
-            data-testid="reply-composer-shell"
-            role="button"
-            tabIndex={0}
-            aria-label={placeholderText}
-            className="flex-1 min-h-0 cursor-text rich-text-editor text-sm"
-            onClick={() => lazy.activate()}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" || e.key === " ") {
-                e.preventDefault();
-                lazy.activate();
-              }
-            }}
-          >
-            {/* <p> under rich-text-editor: same type metrics as the real
-                editor's empty paragraph — no height jump on swap. */}
-            <p className="text-muted-foreground">{placeholderText}</p>
-          </div>
-        )}
         <div className="absolute bottom-0 left-0 right-24 min-w-0">
           <CommentTriggerChips
             agents={triggerPreview.agents}
-            blocked={triggerPreview.blocked}
-            draftContent={content}
             suppressedAgentIds={suppressedAgentIds}
             onToggle={toggleSuppressedAgent}
           />
@@ -253,22 +196,21 @@ function ReplyInput({
           <FileUploadButton
             size="sm"
             multiple
-            onSelect={(file) => lazy.uploadOrQueue([file])}
+            onSelect={(file) => editorRef.current?.uploadFile(file)}
           />
-          <SubmitButton
+          <Button
+            type="button"
+            variant={isEmpty ? "ghost" : "default"}
+            size="icon-xs"
+            disabled={isEmpty || submitting}
             onClick={handleSubmit}
-            disabled={isEmpty}
-            loading={submitting}
-            busy={uploadGate.uploading}
-            tooltip={uploadGate.uploading
-              ? tEditor(($) => $.upload.in_progress)
-              : sendShortcut
-                ? `${t(($) => $.comment.send_tooltip)} · ${formatShortcut(sendShortcut)}`
-                : t(($) => $.comment.send_tooltip)}
-            ariaLabel={uploadGate.uploading
-              ? tEditor(($) => $.upload.in_progress)
-              : t(($) => $.comment.send_tooltip)}
-          />
+          >
+            {submitting ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <ArrowUp className="h-3.5 w-3.5" />
+            )}
+          </Button>
         </div>
         {isDragOver && <FileDropOverlay />}
       </div>

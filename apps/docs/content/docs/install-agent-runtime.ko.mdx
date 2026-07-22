@@ -1,11 +1,11 @@
 ---
 title: 에이전트 런타임 설치하기
-description: Multica는 사용자 기기에 설치된 AI 코딩 도구를 구동합니다. 이 페이지에서는 데몬이 도구를 감지할 수 있도록 지원되는 16종의 도구를 각각 설치하는 방법을 설명합니다.
+description: Multica는 사용자 기기에 설치된 AI 코딩 도구를 구동합니다. 이 페이지에서는 데몬이 도구를 감지할 수 있도록 지원되는 12종의 도구를 각각 설치하는 방법을 설명합니다.
 ---
 
 import { Callout } from "fumadocs-ui/components/callout";
 
-Multica에서 **런타임**이란 사용자 기기의 데몬과, 데몬이 `PATH`에서 찾아낸 AI 코딩 도구 하나가 짝을 이룬 것입니다. 온보딩의 "런타임 연결" 단계에서 **지원되는 도구를 감지하지 못했습니다**라고 표시된다면, 데몬이 `PATH`를 스캔했지만 구동 방법을 아는 16종의 도구 중 어느 것도 찾지 못했다는 뜻입니다. 아래 도구 중 하나(또는 여러 개)를 설치한 다음 해당 단계로 돌아와 다시 스캔하세요. 몇 초 안에 런타임이 나타납니다.
+Multica에서 **런타임**이란 사용자 기기의 데몬과, 데몬이 `PATH`에서 찾아낸 AI 코딩 도구 하나가 짝을 이룬 것입니다. 온보딩의 "런타임 연결" 단계에서 **지원되는 도구를 감지하지 못했습니다**라고 표시된다면, 데몬이 `PATH`를 스캔했지만 구동 방법을 아는 12종의 도구 중 어느 것도 찾지 못했다는 뜻입니다. 아래 도구 중 하나(또는 여러 개)를 설치한 다음 해당 단계로 돌아와 다시 스캔하세요. 몇 초 안에 런타임이 나타납니다.
 
 이 페이지는 다음 문서의 설치 측면 동반 문서입니다.
 
@@ -31,9 +31,9 @@ multica daemon restart
 
 또는 데스크톱 앱에서는 앱을 다시 실행하기만 하면 됩니다. 데몬은 시작될 때마다 `PATH`를 다시 스캔합니다.
 
-## 지원되는 16종의 도구
+## 지원되는 12종의 도구
 
-대략 많이 쓰이는 순서대로 나열했습니다. 이미 자격 증명을 갖고 있는 것을 골라 사용하세요. 16종을 모두 설치할 필요는 없습니다.
+대략 많이 쓰이는 순서대로 나열했습니다. 이미 자격 증명을 갖고 있는 것을 골라 사용하세요. 12종을 모두 설치할 필요는 없습니다.
 
 ### Claude Code (Anthropic)
 
@@ -48,7 +48,7 @@ multica daemon restart
 
 ### Codex (OpenAI)
 
-더 세분화된 승인 게이트를 갖춘 JSON-RPC 2.0 전송 방식입니다. MCP 구성은 작업별 `$CODEX_HOME/config.toml`에 기록됩니다. **세션 재개가 동작합니다** — Multica는 Codex app-server의 `thread/resume`으로 재개하며, 오래되었거나 없는 thread는 새 thread로 폴백합니다.
+더 세분화된 승인 게이트를 갖춘 JSON-RPC 2.0 전송 방식입니다. MCP 구성은 작업별 `$CODEX_HOME/config.toml`에 기록됩니다. **세션 재개 코드는 존재하지만 현재 도달할 수 없습니다** — 재개가 필요하다면 Claude Code 또는 ACP 계열 중 하나를 선택하세요.
 
 | | |
 |---|---|
@@ -58,7 +58,7 @@ multica daemon restart
 
 ### Cursor (Anysphere)
 
-Cursor 에디터에 대응하는 CLI입니다. **세션 재개가 동작합니다** — 현재 Cursor Agent는 stream-json 이벤트에서 `session_id`를 반환하고, Multica는 다음 실행 때 이를 `--resume <id>`로 전달합니다.
+Cursor 에디터에 대응하는 CLI입니다. **세션 재개가 작동하지 않습니다** — Cursor의 CLI가 세션 id를 반환하지 않으므로 재개 시 전달하는 값은 항상 유효하지 않습니다.
 
 | | |
 |---|---|
@@ -77,6 +77,16 @@ Cursor 에디터에 대응하는 CLI입니다. **세션 재개가 동작합니�
 | 인증 | CLI를 통한 브라우저 기반 GitHub 로그인. |
 | 비고 | 로그인한 계정에 활성화된 GitHub Copilot 구독이 필요합니다. |
 
+### Gemini (Google)
+
+Gemini 2.5 및 3 시리즈를 지원합니다. 세션 재개와 MCP는 없습니다 — 단발성 작업에 적합합니다.
+
+| | |
+|---|---|
+| 데몬이 찾는 이름 | `gemini` |
+| 설치 | [github.com/google-gemini/gemini-cli](https://github.com/google-gemini/gemini-cli)의 공식 가이드를 따르세요. 일반적인 방법은 npm 패키지 `@google/gemini-cli`입니다. |
+| 인증 | `gemini`를 실행하면 Google 계정 로그인을 요청하거나, `GEMINI_API_KEY`를 설정하세요. |
+
 ### OpenCode (SST)
 
 오픈 소스 CLI 에이전트입니다. 자체 설정 파일에서 사용 가능한 모델을 동적으로 발견합니다 — 자신만의 모델 카탈로그를 직접 가져오려는 사용자에게 잘 맞습니다. `OPENCODE_CONFIG_CONTENT`를 통해 에이전트의 `mcp_config` 필드도 소비합니다.
@@ -86,17 +96,6 @@ Cursor 에디터에 대응하는 CLI입니다. **세션 재개가 동작합니�
 | 데몬이 찾는 이름 | `opencode` |
 | 설치 | [opencode.ai](https://opencode.ai/)의 공식 가이드 또는 GitHub 저장소 [github.com/sst/opencode](https://github.com/sst/opencode)를 따르세요. 일반적인 방법은 설치 스크립트 또는 npm 패키지입니다. |
 | 인증 | OpenCode의 문서에 따라 모델 제공자(Anthropic, OpenAI 등)를 구성하세요. |
-
-### DevEco Code (Huawei)
-
-**DevEco Code**는 Huawei의 HarmonyOS 개발용 독립 코딩 에이전트로, OpenCode 엔진을 기반으로 구축되었습니다. 자체 모델 카탈로그와 Huawei 계정 인증을 갖추고 있습니다. Multica는 `deveco run --format json`으로 구동하며, 모델은 `deveco models`에서 동적으로 탐색됩니다(내장 `deveco/GLM-5.1`). MCP 서버는 DevEco 네이티브 설정(`DEVECO_CONFIG_CONTENT`)으로 진행합니다. Multica 측 `mcp_config` 연동은 개발 중입니다.
-
-| | |
-|---|---|
-| 데몬이 찾는 이름 | `deveco` |
-| 설치 | `npm install -g @deveco/deveco-code`. 공식 README [gitcode.com/openharmony-sig/deveco-code](https://gitcode.com/openharmony-sig/deveco-code/blob/develop/README.en.md) 또는 npm 페이지 [npmjs.com/package/@deveco/deveco-code](https://www.npmjs.com/package/@deveco/deveco-code)를 참고하세요. |
-| 지원 플랫폼 | Windows x64 및 macOS(arm64/x64)만 지원하며, Linux 빌드는 제공되지 않습니다. |
-| 인증 | DevEco CLI를 통한 Huawei 계정 로그인. |
 
 ### Kiro CLI (Amazon)
 
@@ -148,36 +147,6 @@ ACP 프로토콜 에이전트입니다(Kimi와 전송 방식을 공유). 세션 
 | 설치 | Inflection의 CLI 문서 [pi.ai](https://pi.ai/)를 참고하세요. |
 | 인증 | 공급사 문서에 따릅니다. |
 
-### CodeBuddy (Tencent)
-
-Claude Code 호환 CLI 에이전트입니다. Multica는 Claude Code와 동일한 stream-json 프로토콜로 구동합니다: 세션 재개는 `--resume`로 동작하고, MCP 구성은 `--mcp-config`로 전달됩니다. CodeBuddy는 Claude의 디렉터리를 재사용하지 않고 자체 설정 디렉터리를 사용하므로, 스킬은 `.codebuddy/skills/`에 배치되고 런타임 브리핑은 `CODEBUDDY.md`에 기록됩니다. 모델은 동적으로 탐색됩니다.
-
-| | |
-|---|---|
-| 데몬이 찾는 이름 | `codebuddy` |
-| 설치 | 공식 CLI 문서 [codebuddy.ai/cli](https://www.codebuddy.ai/cli)를 참고하세요. |
-| 인증 | 공급사 문서에 따릅니다. |
-
-### Qoder (Alibaba)
-
-stdio 위에서 ACP 프로토콜을 사용하는 에이전트형 코딩 CLI입니다(Hermes, Kimi, Kiro CLI와 전송 계층을 공유합니다). 세션 재개는 ACP `session/resume`를 통해 동작하고, MCP 구성은 ACP `mcpServers`로 전달되며, 모델 선택은 동적으로 탐색되고, 스킬은 `.qoder/skills/`로 복사됩니다.
-
-| | |
-|---|---|
-| 데몬이 찾는 이름 | `qodercli` |
-| 설치 | 공식 CLI 문서 [qoder.com/cli](https://qoder.com/cli)를 참고하세요. |
-| 인증 | 공급사 문서에 따릅니다. |
-
-### Trae CLI (ByteDance)
-
-ByteDance의 공식 TRAE CLI(`traecli`, Trae IDE와 함께 쓰는 제품이며 **오픈소스 `bytedance/trae-agent`가 아닙니다**)입니다. ACP 네이티브라서 Multica는 `traecli acp serve --yolo`로 stdio 위에서 구동하며 Hermes, Kimi, Kiro CLI, Qoder와 전송 계층을 공유합니다. 세션 재개는 ACP `session/load`로 동작하고, MCP 구성은 ACP `mcpServers`로 전달되며, 모델 선택은 동적으로 탐색되고, 스킬은 `.traecli/skills/`로 복사됩니다.
-
-| | |
-|---|---|
-| 데몬이 찾는 이름 | `traecli` |
-| 설치 | 공식 CLI 문서 [docs.trae.cn/cli](https://docs.trae.cn/cli)를 참고하세요. |
-| 인증 | `traecli`를 한 번 대화형으로 실행해 브라우저 기반 기업 로그인을 완료하세요. Trae IDE 로그인과 CLI 로그인은 별개입니다. |
-
 ### Antigravity (Google)
 
 Google의 Antigravity CLI(`agy`)입니다. Google의 Antigravity 서비스와 짝을 이루며 Gemini 기반 모델을 실행합니다. 세션 재개는 `--conversation <id>`를 통해 작동하며, 데몬이 CLI 로그 파일에서 이를 캡처합니다. 모델 선택은 Antigravity CLI 자체 내부에서 관리됩니다 — Multica는 이 제공자에 대해 에이전트별 모델 선택기를 비활성화합니다. 스킬은 `.agents/skills/`에 기록됩니다(CLI가 Gemini CLI의 워크스페이스 스킬 레이아웃을 상속함 — [Antigravity 문서](https://antigravity.google/docs/gcli-migration) 참고).
@@ -188,17 +157,6 @@ Google의 Antigravity CLI(`agy`)입니다. Google의 Antigravity 서비스와 �
 | 설치 | [antigravity.google/docs/cli-overview](https://antigravity.google/docs/cli-overview)의 공식 가이드를 따르세요. CLI는 미리 빌드되어 제공됩니다 — `agy install`을 한 번 실행하여 PATH와 셸 별칭을 설정하세요. |
 | 인증 | `agy`를 대화형으로 한 번 실행하여 Google 계정 로그인을 완료하거나, Antigravity 데스크톱 앱을 통해 로그인하세요 — CLI는 GUI가 기록한 keyring 항목을 재사용합니다. |
 | 비고 | CLI는 구조화된 이벤트 스트림이 아니라 stdout에 일반 어시스턴트 텍스트를 출력합니다. 중간의 "I will run X" 줄과 최종 응답 모두 텍스트로 Multica에 전달됩니다. |
-
-### Grok (xAI)
-
-xAI의 Grok Build CLI(`grok`)입니다. Multica는 `grok --no-auto-update agent --always-approve stdio`로 ACP에 연결하고, `initialize` 후 CLI가 광고한 인증 방식을 선택해 `authenticate`를 완료한 다음 세션을 만듭니다. 세션 재개는 ACP `session/load`, 모델 탐색은 `session/new`, MCP는 ACP `mcpServers`로 동작합니다. 스킬은 `.grok/skills/`에 복사되며, 사용자 스킬은 `$GROK_HOME/skills/`(기본값 `~/.grok/skills/`) 또는 공용 `~/.agents/skills/`에서 탐색됩니다.
-
-| | |
-|---|---|
-| 데몬이 찾는 이름 | `grok` |
-| 설치 | Grok Build CLI를 설치하고 `grok`이 `PATH`에 있도록 설정하세요(일반적으로 `~/.grok/bin`). |
-| 인증 | `grok login`을 실행하거나 `XAI_API_KEY`를 설정하세요. ACP가 지원되는 인증 방식을 광고하지 않으면 Multica는 세션을 만들기 전에 명시적으로 실패합니다. |
-| 비고 | 바이너리는 `MULTICA_GROK_PATH`, 기본 모델은 `MULTICA_GROK_MODEL`로 재정의할 수 있습니다. 최소 CLI 버전은 `0.2.89`입니다. |
 
 ## 설치한 후에
 

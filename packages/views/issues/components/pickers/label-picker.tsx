@@ -4,9 +4,8 @@ import { useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Tag, Plus, Settings2 } from "lucide-react";
 import { toast } from "sonner";
-import type { Label } from "@multica/core/types";
+import { Dialog, DialogContent, DialogTitle } from "@multica/ui/components/ui/dialog";
 import { useWorkspaceId } from "@multica/core/hooks";
-import { useWorkspacePaths } from "@multica/core/paths";
 import {
   labelListOptions,
   issueLabelsOptions,
@@ -15,7 +14,7 @@ import {
   useCreateLabel,
 } from "@multica/core/labels";
 import { LabelChip } from "../../../labels/label-chip";
-import { useNavigation } from "../../../navigation";
+import { LabelsPanel } from "../labels-panel";
 import {
   PropertyPicker,
   PickerItem,
@@ -24,17 +23,7 @@ import {
 import { useT } from "../../../i18n";
 
 interface LabelPickerProps {
-  /**
-   * The issue whose labels are edited. Omit for **draft mode** (e.g. the
-   * create-issue dialog, where the issue doesn't exist yet): pass
-   * `selectedIds` + `onSelectedIdsChange` instead and attach the labels to the
-   * issue once it's created.
-   */
-  issueId?: string;
-  /** Draft-mode selection. Ignored when `issueId` is set. */
-  selectedIds?: string[];
-  /** Draft-mode change handler. Ignored when `issueId` is set. */
-  onSelectedIdsChange?: (ids: string[]) => void;
+  issueId: string;
   /** Optional controlled open state (for tests / cmd+k integration). */
   open?: boolean;
   onOpenChange?: (open: boolean) => void;
@@ -42,11 +31,6 @@ interface LabelPickerProps {
   /** Open the picker on first mount. Used by progressive-disclosure
    *  sidebars so a newly-added field immediately enters edit state. */
   defaultOpen?: boolean;
-  /** Custom trigger element (e.g. a `PillButton` for the create toolbar).
-   *  When set, the attached-label chips render inside it without their own
-   *  × affordance — a remove <button> can't nest inside a trigger <button>,
-   *  so removal happens by toggling the label off in the open picker. */
-  triggerRender?: React.ReactElement;
 }
 
 /**
@@ -68,42 +52,32 @@ function pickInlineColor(name: string): string {
 }
 
 /**
- * Multi-select label picker. Shows currently-selected labels as inline chips
- * on the trigger and lets the user toggle any label in the workspace.
- *
- * Two modes:
- * - **Attached mode** (`issueId` set): attach/detach hit the server
- *   optimistically — the UI updates before the server confirms.
- * - **Draft mode** (`issueId` omitted): selection is held by the caller via
- *   `selectedIds` / `onSelectedIdsChange`; nothing is persisted until the
- *   caller attaches the labels itself. Used by the create-issue dialog.
+ * Multi-select label picker for an issue. Shows currently-attached labels
+ * as inline chips above the trigger and lets the user toggle any label in
+ * the workspace. Attach/detach are optimistic — the UI updates before the
+ * server confirms.
  *
  * When the search term has no matches, offers inline creation: typing a
  * new name and pressing Enter (or clicking the "Create X" row) creates the
- * label with a hash-derived color and selects it in one motion. The created
- * label is a real workspace label in both modes; only the attach step differs.
+ * label with a hash-derived color and attaches it in one motion.
  *
- * A "Manage labels" item at the bottom opens the workspace Labels settings
- * page, which is the single management surface for issue, agent, and skill
- * label catalogs.
+ * A "Manage labels" item at the bottom opens a dialog with the full
+ * workspace label management panel (rename, recolor, delete) — keeping
+ * users in context without forcing them to navigate away.
  */
 export function LabelPicker({
   issueId,
-  selectedIds = [],
-  onSelectedIdsChange,
   open: controlledOpen,
   onOpenChange,
   align = "start",
   defaultOpen = false,
-  triggerRender,
 }: LabelPickerProps) {
   const { t } = useT("issues");
   const [internalOpen, setInternalOpen] = useState(defaultOpen);
   const open = controlledOpen ?? internalOpen;
   const setOpen = onOpenChange ?? setInternalOpen;
   const [filter, setFilter] = useState("");
-  const navigation = useNavigation();
-  const paths = useWorkspacePaths();
+  const [manageOpen, setManageOpen] = useState(false);
 
   // Synchronous lock to prevent double-submit on rapid Enter / click. React
   // state (create.isPending, filter) isn't visible until the next render, so
@@ -112,35 +86,17 @@ export function LabelPicker({
   // for an error the user didn't cause. A ref closes the window cleanly.
   const creatingRef = useRef(false);
 
-  // Draft mode when no issue exists yet: hold selection in the caller instead
-  // of hitting the attach/detach endpoints.
-  const isDraft = issueId === undefined;
-
   const wsId = useWorkspaceId();
   const { data: allLabels = [] } = useQuery(labelListOptions(wsId));
-  // `issueLabelsOptions` disables itself for an empty id, so the draft path
-  // never fires the by-issue read.
-  const { data: attachedLabels = [] } = useQuery(issueLabelsOptions(wsId, issueId ?? ""));
+  const { data: attachedLabels = [] } = useQuery(issueLabelsOptions(wsId, issueId));
 
-  // Hooks must run unconditionally; in draft mode the empty id is never used
-  // because toggle/create route through onSelectedIdsChange instead.
-  const attach = useAttachLabel(issueId ?? "");
-  const detach = useDetachLabel(issueId ?? "");
+  const attach = useAttachLabel(issueId);
+  const detach = useDetachLabel(issueId);
   const create = useCreateLabel();
 
-  // The selected set drives both the trigger chips and the list checkmarks.
-  // Draft mode resolves ids against the workspace list (dropping any id whose
-  // label was deleted meanwhile) and preserves the user's selection order.
-  const selectedLabels = useMemo<Label[]>(() => {
-    if (!isDraft) return attachedLabels;
-    return selectedIds
-      .map((id) => allLabels.find((l) => l.id === id))
-      .filter((l): l is Label => Boolean(l));
-  }, [isDraft, attachedLabels, selectedIds, allLabels]);
-
-  const selectedIdSet = useMemo(
-    () => new Set(selectedLabels.map((l) => l.id)),
-    [selectedLabels],
+  const attachedIds = useMemo(
+    () => new Set(attachedLabels.map((l) => l.id)),
+    [attachedLabels],
   );
 
   const query = filter.trim();
@@ -149,22 +105,8 @@ export function LabelPicker({
   const exactMatch = allLabels.some((l) => l.name.toLowerCase() === queryLower);
   const canCreate = query.length > 0 && !exactMatch && !create.isPending;
 
-  const removeLabel = (labelId: string) => {
-    if (isDraft) {
-      onSelectedIdsChange?.(selectedIds.filter((id) => id !== labelId));
-    } else {
-      detach.mutate(labelId);
-    }
-  };
-
   const toggle = (labelId: string) => {
-    if (isDraft) {
-      onSelectedIdsChange?.(
-        selectedIdSet.has(labelId)
-          ? selectedIds.filter((id) => id !== labelId)
-          : [...selectedIds, labelId],
-      );
-    } else if (selectedIdSet.has(labelId)) {
+    if (attachedIds.has(labelId)) {
       detach.mutate(labelId);
     } else {
       attach.mutate(labelId);
@@ -179,11 +121,7 @@ export function LabelPicker({
       { name, color: pickInlineColor(name) },
       {
         onSuccess: (label) => {
-          if (isDraft) {
-            onSelectedIdsChange?.([...selectedIds, label.id]);
-          } else {
-            attach.mutate(label.id);
-          }
+          attach.mutate(label.id);
           setFilter("");
         },
         onError: (err: unknown) => {
@@ -198,19 +136,10 @@ export function LabelPicker({
 
   const openManage = () => {
     setOpen(false);
-    navigation.push(`${paths.settings()}?tab=labels`);
+    setManageOpen(true);
   };
 
-  const hasLabels = selectedLabels.length > 0;
-
-  // In a custom trigger (PillButton) the trigger is itself a button, so the
-  // chips can't carry their own remove button. Otherwise fall back to the
-  // chip-wrap div used by the issue-detail sidebar.
-  const resolvedTriggerRender =
-    triggerRender ??
-    (hasLabels ? (
-      <div className="flex flex-wrap items-center gap-1 cursor-pointer rounded px-1 -mx-1 hover:bg-accent/30 transition-colors" />
-    ) : undefined);
+  const hasLabels = attachedLabels.length > 0;
 
   return (
     <div className="flex flex-col gap-1.5">
@@ -225,15 +154,19 @@ export function LabelPicker({
         searchable
         searchPlaceholder={t(($) => $.pickers.label.search_placeholder)}
         onSearchChange={setFilter}
-        triggerRender={resolvedTriggerRender}
+        triggerRender={
+          hasLabels ? (
+            <div className="flex flex-wrap items-center gap-1 cursor-pointer rounded px-1 -mx-1 hover:bg-accent/30 transition-colors" />
+          ) : undefined
+        }
         trigger={
           hasLabels ? (
             <>
-              {selectedLabels.map((l) => (
+              {attachedLabels.map((l) => (
                 <LabelChip
                   key={l.id}
                   label={l}
-                  onRemove={triggerRender ? undefined : () => removeLabel(l.id)}
+                  onRemove={() => detach.mutate(l.id)}
                 />
               ))}
             </>
@@ -258,7 +191,7 @@ export function LabelPicker({
         }
       >
         {filtered.map((label) => {
-          const selected = selectedIdSet.has(label.id);
+          const selected = attachedIds.has(label.id);
           return (
             <PickerItem
               key={label.id}
@@ -289,6 +222,13 @@ export function LabelPicker({
           </PickerItem>
         )}
       </PropertyPicker>
+
+      <Dialog open={manageOpen} onOpenChange={setManageOpen}>
+        <DialogContent className="max-w-2xl">
+          <DialogTitle className="text-lg font-semibold">{t(($) => $.pickers.label.manage_dialog_title)}</DialogTitle>
+          <LabelsPanel />
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

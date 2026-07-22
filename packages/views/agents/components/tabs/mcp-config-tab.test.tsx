@@ -1,29 +1,21 @@
 // @vitest-environment jsdom
 
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import type { Agent, AgentRuntime } from "@multica/core/types";
-import { ApiError } from "@multica/core/api";
+import type { Agent } from "@multica/core/types";
 import { I18nProvider } from "@multica/core/i18n/react";
 import enCommon from "../../../locales/en/common.json";
 import enAgents from "../../../locales/en/agents.json";
-import { McpConfigTab } from "./mcp-config-tab";
 
 const TEST_RESOURCES = { en: { common: enCommon, agents: enAgents } };
-
-const mockRuntimeCapabilities = vi.hoisted(() => vi.fn());
-
-// The tab reads discovery through runtimeCapabilitiesOptions; existing tests
-// render with runtime={null} so the query stays disabled and never fires.
-vi.mock("@multica/core/runtimes", () => ({
-  runtimeCapabilitiesOptions: (runtimeId: string | null) => ({
-    queryKey: ["runtime-capabilities", runtimeId],
-    queryFn: () => mockRuntimeCapabilities(runtimeId),
-    enabled: Boolean(runtimeId),
-    retry: false,
-  }),
+const authUserRef = vi.hoisted(() => ({
+  current: {
+    integration_tokens: {
+      feishu_mcp_token: "https://mcp.feishu.cn/mcp/user-a",
+      notion_token: "secret-notion",
+    } as Record<string, string>,
+  },
 }));
 
 vi.mock("sonner", () => ({
@@ -32,6 +24,18 @@ vi.mock("sonner", () => ({
     success: vi.fn(),
   },
 }));
+
+vi.mock("@multica/core/auth", () => {
+  const state = () => ({ user: authUserRef.current });
+  const useAuthStore = Object.assign(
+    (sel?: (s: ReturnType<typeof state>) => unknown) =>
+      sel ? sel(state()) : state(),
+    { getState: state },
+  );
+  return { useAuthStore };
+});
+
+import { McpConfigTab } from "./mcp-config-tab";
 
 const baseAgent: Agent = {
   id: "agent-1",
@@ -45,8 +49,6 @@ const baseAgent: Agent = {
   runtime_config: {},
   custom_args: [],
   visibility: "workspace",
-  permission_mode: "public_to",
-  invocation_targets: [{ target_type: "workspace", target_id: null }],
   status: "idle",
   max_concurrent_tasks: 1,
   model: "",
@@ -58,236 +60,225 @@ const baseAgent: Agent = {
   archived_by: null,
 };
 
-function TestShell({ children }: { children: React.ReactNode }) {
-  const queryClient = new QueryClient({
-    defaultOptions: { queries: { retry: false } },
-  });
-  return (
-    <I18nProvider locale="en" resources={TEST_RESOURCES}>
-      <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
-    </I18nProvider>
-  );
-}
-
 function renderTab(
   overrides: Partial<Agent> = {},
   onSave = vi.fn().mockResolvedValue(undefined),
-  runtime: AgentRuntime | null = null,
 ) {
+  const agent = { ...baseAgent, ...overrides };
   const result = render(
-    <TestShell>
-      <McpConfigTab
-        agent={{ ...baseAgent, ...overrides }}
-        runtime={runtime}
-        onSave={onSave}
-      />
-    </TestShell>,
+    <I18nProvider locale="en" resources={TEST_RESOURCES}>
+      <McpConfigTab agent={agent} onSave={onSave} />
+    </I18nProvider>,
   );
   return { ...result, onSave };
 }
 
-const onlineRuntime: AgentRuntime = {
-  id: "runtime-1",
-  workspace_id: "ws-1",
-  daemon_id: "daemon-1",
-  name: "Claude (Mac)",
-  runtime_mode: "local",
-  provider: "claude",
-  launch_header: "",
-  status: "online",
-  device_info: "Mac",
-  metadata: {},
-  owner_id: "user-1",
-  visibility: "private",
-  last_seen_at: null,
-  created_at: "2026-07-11T00:00:00Z",
-  updated_at: "2026-07-11T00:00:00Z",
-};
-
 describe("McpConfigTab", () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => {
+    vi.clearAllMocks();
+    authUserRef.current = {
+      integration_tokens: {
+        feishu_mcp_token: "https://mcp.feishu.cn/mcp/user-a",
+        notion_token: "secret-notion",
+      },
+    };
+  });
 
-  it("renders redacted managed MCP without exposing add or edit controls", () => {
+  it("renders a read-only redacted state when the server omitted the value", () => {
+    // mcp_config_redacted means the server knows there IS a config but
+    // hid it from this caller. The tab must NOT expose the editor or
+    // any input — even an empty textarea would let a non-privileged
+    // member silently overwrite an admin-owned config on save.
     renderTab({ mcp_config: null, mcp_config_redacted: true });
 
     expect(screen.getByText(/hidden from your view/i)).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /add mcp/i })).not.toBeInTheDocument();
     expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /save/i })).not.toBeInTheDocument();
   });
 
-  it("projects historical aggregate config into individually managed rows", () => {
-    renderTab({
-      mcp_config: {
-        version: 1,
-        mcpServers: {
-          fetch: { command: "uvx", args: ["mcp-server-fetch"] },
-          docs: { type: "http", url: "https://example.test/mcp" },
-        },
-      },
-    });
+  it("shows the editor empty when no config is set, and Save stays disabled", () => {
+    renderTab({ mcp_config: null });
 
-    expect(screen.getByText("fetch")).toBeInTheDocument();
-    expect(screen.getByText("docs")).toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: /managed by multica/i })).toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: /inherited from runtime/i })).toBeInTheDocument();
-    expect(screen.queryByLabelText(/MCP config JSON editor/i)).not.toBeInTheDocument();
+    const editor = screen.getByLabelText(/MCP config JSON editor/i) as HTMLTextAreaElement;
+    expect(editor.value).toBe("");
+
+    expect(screen.getByRole("button", { name: /save/i })).toBeDisabled();
   });
 
-  it("adds one stdio server through the form and preserves historical top-level data", async () => {
+  it("lists credential placeholders from the current user's profile", () => {
+    renderTab({ mcp_config: null });
+
+    expect(
+      screen.getByText("${MULTICA_INTEGRATION_GIT_TOKEN}"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText("${MULTICA_INTEGRATION_FEISHU_MCP_TOKEN}"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText("${MULTICA_INTEGRATION_NOTION_TOKEN}"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText("${MULTICA_INTEGRATION_PAONES_TOKEN}"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText("${MULTICA_INTEGRATION_JINGWEI_TOKEN}"),
+    ).toBeInTheDocument();
+  });
+
+  it("still lists built-in credential placeholders when the profile has no integration tokens", () => {
+    authUserRef.current = { integration_tokens: {} };
+    renderTab({ mcp_config: null });
+
+    expect(
+      screen.getByText("${MULTICA_INTEGRATION_GIT_TOKEN}"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText("${MULTICA_INTEGRATION_FEISHU_MCP_TOKEN}"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText("${MULTICA_INTEGRATION_PAONES_TOKEN}"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText("${MULTICA_INTEGRATION_JINGWEI_TOKEN}"),
+    ).toBeInTheDocument();
+  });
+
+  it("pretty-prints the existing config and saves a parsed object", async () => {
     const user = userEvent.setup();
-    const { onSave } = renderTab({ mcp_config: { version: 1 } });
+    const stored = { mcpServers: { fetch: { command: "uvx" } } };
+    const { onSave } = renderTab({ mcp_config: stored });
 
-    await user.click(screen.getByRole("button", { name: /add mcp/i }));
-    await user.type(screen.getByLabelText("Name"), "fetch");
-    await user.type(screen.getByLabelText("Command"), "uvx");
-    await user.click(screen.getByRole("button", { name: /add server/i }));
+    const editor = screen.getByLabelText(/MCP config JSON editor/i) as HTMLTextAreaElement;
+    expect(editor.value).toBe(JSON.stringify(stored, null, 2));
 
+    // userEvent.type interprets `{` / `[` as keyboard modifiers, so a
+    // raw JSON paste goes through fireEvent.change instead — the same
+    // path the browser uses when the user pastes.
+    const replacement = JSON.stringify({
+      mcpServers: { fetch: { command: "npx" } },
+    });
+    fireEvent.change(editor, { target: { value: replacement } });
+
+    const save = screen.getByRole("button", { name: /save/i });
+    expect(save).toBeEnabled();
+    await user.click(save);
+
+    expect(onSave).toHaveBeenCalledTimes(1);
+    // We pass the parsed object, not the raw string, so the backend
+    // gets a real JSON shape and not an escaped string.
     expect(onSave).toHaveBeenCalledWith({
-      mcp_config: {
-        version: 1,
-        mcpServers: { fetch: { command: "uvx" } },
-      },
+      mcp_config: { mcpServers: { fetch: { command: "npx" } } },
     });
   });
 
-  it("adds one HTTP server through JSON mode", async () => {
+  it("clearing the editor saves null to wipe the column", async () => {
     const user = userEvent.setup();
-    const { onSave } = renderTab();
+    const { onSave } = renderTab({ mcp_config: { mcpServers: {} } });
 
-    await user.click(screen.getByRole("button", { name: /add mcp/i }));
-    await user.type(screen.getByLabelText("Name"), "weather");
-    await user.click(screen.getByRole("tab", { name: "JSON" }));
-    fireEvent.change(screen.getByLabelText(/MCP server JSON configuration/i), {
-      target: {
-        value: JSON.stringify({
-          type: "http",
-          url: "https://example.invalid/mcp",
-        }),
-      },
-    });
-    await user.click(screen.getByRole("button", { name: /add server/i }));
+    const editor = screen.getByLabelText(/MCP config JSON editor/i) as HTMLTextAreaElement;
+    await user.clear(editor);
 
-    expect(onSave).toHaveBeenCalledWith({
-      mcp_config: {
-        mcpServers: {
-          weather: {
-            type: "http",
-            url: "https://example.invalid/mcp",
-          },
-        },
-      },
-    });
-  });
+    const save = screen.getByRole("button", { name: /save/i });
+    await user.click(save);
 
-  it("edits one historical server without replacing its siblings", async () => {
-    const user = userEvent.setup();
-    const existing = {
-      version: 1,
-      mcpServers: {
-        fetch: {
-          command: "uvx",
-          timeout: 30,
-          tools: { include: ["fetch_url"] },
-        },
-        docs: { url: "https://example.test/mcp" },
-      },
-    };
-    const { onSave } = renderTab({ mcp_config: existing });
-
-    await user.click(
-      screen.getByRole("button", { name: /edit mcp server fetch/i }),
-    );
-    const command = screen.getByLabelText("Command");
-    await user.clear(command);
-    await user.type(command, "npx");
-    await user.click(screen.getByRole("button", { name: /save changes/i }));
-
-    expect(onSave).toHaveBeenCalledWith({
-      mcp_config: {
-        version: 1,
-        mcpServers: {
-          fetch: {
-            timeout: 30,
-            tools: { include: ["fetch_url"] },
-            command: "npx",
-          },
-          docs: { url: "https://example.test/mcp" },
-        },
-      },
-    });
-  });
-
-  it("deletes the last managed server only after confirmation", async () => {
-    const user = userEvent.setup();
-    const { onSave } = renderTab({
-      mcp_config: { mcpServers: { fetch: { command: "uvx" } } },
-    });
-
-    await user.click(
-      screen.getByRole("button", { name: /delete mcp server fetch/i }),
-    );
-    expect(screen.getByText(/runtime servers are not affected/i)).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: /delete server/i }));
-
+    // null is what the backend reads as "clear this column" — sending
+    // an empty string or {} would either fail validation or store an
+    // empty object, both of which surprise the user.
     expect(onSave).toHaveBeenCalledWith({ mcp_config: null });
   });
 
-  it("blocks invalid single-server JSON", async () => {
-    const user = userEvent.setup();
-    const { onSave } = renderTab();
+  it("disables Save and surfaces an inline error on invalid JSON", () => {
+    const { onSave } = renderTab({ mcp_config: null });
 
-    await user.click(screen.getByRole("button", { name: /add mcp/i }));
-    await user.type(screen.getByLabelText("Name"), "broken");
-    await user.click(screen.getByRole("tab", { name: "JSON" }));
-    fireEvent.change(screen.getByLabelText(/MCP server JSON configuration/i), {
-      target: { value: "{not json" },
-    });
+    const editor = screen.getByLabelText(/MCP config JSON editor/i);
+    fireEvent.change(editor, { target: { value: "{ not json" } });
 
-    expect(screen.getByText(/invalid json/i)).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /add server/i })).toBeDisabled();
+    expect(screen.getByText(/Invalid JSON/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /save/i })).toBeDisabled();
     expect(onSave).not.toHaveBeenCalled();
   });
 
-  it("lists inherited MCP servers discovered from the assigned runtime", async () => {
-    mockRuntimeCapabilities.mockResolvedValue({
-      skills: [],
-      supported: true,
-      mcpServers: [
-        { name: "linear", transport: "http", source: "User config", enabled: true },
-      ],
-      mcpSupported: true,
-    });
+  it("rejects top-level arrays and primitives", () => {
+    renderTab({ mcp_config: null });
 
-    renderTab({}, undefined, onlineRuntime);
-
-    expect(await screen.findByText("linear")).toBeInTheDocument();
-  });
-
-  it("shows a permission notice when capability discovery is forbidden", async () => {
-    mockRuntimeCapabilities.mockRejectedValue(
-      new ApiError("insufficient permissions", 403, "Forbidden"),
-    );
-
-    renderTab({}, undefined, onlineRuntime);
+    const editor = screen.getByLabelText(/MCP config JSON editor/i);
+    fireEvent.change(editor, { target: { value: "[1,2,3]" } });
 
     expect(
-      await screen.findByText(
-        "You don't have permission to view this runtime's MCP servers.",
-      ),
+      screen.getByText(/MCP config must be a JSON object/i),
     ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /save/i })).toBeDisabled();
   });
 
-  it("shows a retry notice when capability discovery fails", async () => {
-    mockRuntimeCapabilities.mockRejectedValue(
-      new Error("daemon did not respond within 3 minutes"),
+  it("syncs the editor to a refreshed agent prop when the user hasn't edited", () => {
+    // Reproduces the stale-editor bug: a background refetch / WS event swaps
+    // in a newer `agent.mcp_config`, and the editor must follow it (so the
+    // next Save writes the new value, not the old one). Comparing the draft
+    // against the *previous* original — not the new one — is what makes this
+    // work. Without the ref, the effect would self-defeat: on re-render the
+    // draft already equals the new original, the equality check is true,
+    // but the conditional only re-assigns `original` to itself, so a draft
+    // that started life equal to the OLD original is never touched.
+    const initial = { mcpServers: { fetch: { command: "uvx" } } };
+    const updated = { mcpServers: { fetch: { command: "npx" } } };
+    const agent = { ...baseAgent, mcp_config: initial };
+
+    const { rerender } = render(
+      <I18nProvider locale="en" resources={TEST_RESOURCES}>
+        <McpConfigTab agent={agent} onSave={vi.fn()} />
+      </I18nProvider>,
     );
 
-    renderTab({}, undefined, onlineRuntime);
+    const editor = screen.getByLabelText(
+      /MCP config JSON editor/i,
+    ) as HTMLTextAreaElement;
+    expect(editor.value).toBe(JSON.stringify(initial, null, 2));
 
-    expect(
-      await screen.findByText(
-        "Couldn't discover runtime MCP servers. Try again.",
-      ),
-    ).toBeInTheDocument();
+    rerender(
+      <I18nProvider locale="en" resources={TEST_RESOURCES}>
+        <McpConfigTab
+          agent={{ ...agent, mcp_config: updated }}
+          onSave={vi.fn()}
+        />
+      </I18nProvider>,
+    );
+
+    // Editor follows the new prop and the dirty hint is NOT shown — if it
+    // were, the next Save would write the *old* JSON back over the new one.
+    expect(editor.value).toBe(JSON.stringify(updated, null, 2));
+    expect(screen.queryByText(/unsaved changes/i)).not.toBeInTheDocument();
   });
+
+  it("preserves an in-flight edit when the agent prop is refreshed underneath", () => {
+    // The mirror of the test above: if the user IS editing, a background
+    // refresh must not clobber their draft.
+    const initial = { mcpServers: { fetch: { command: "uvx" } } };
+    const updated = { mcpServers: { fetch: { command: "npx" } } };
+    const agent = { ...baseAgent, mcp_config: initial };
+
+    const { rerender } = render(
+      <I18nProvider locale="en" resources={TEST_RESOURCES}>
+        <McpConfigTab agent={agent} onSave={vi.fn()} />
+      </I18nProvider>,
+    );
+
+    const editor = screen.getByLabelText(
+      /MCP config JSON editor/i,
+    ) as HTMLTextAreaElement;
+    const draft = JSON.stringify({ mcpServers: { fetch: { command: "wip" } } });
+    fireEvent.change(editor, { target: { value: draft } });
+    expect(editor.value).toBe(draft);
+
+    rerender(
+      <I18nProvider locale="en" resources={TEST_RESOURCES}>
+        <McpConfigTab
+          agent={{ ...agent, mcp_config: updated }}
+          onSave={vi.fn()}
+        />
+      </I18nProvider>,
+    );
+
+    expect(editor.value).toBe(draft);
+  });
+
 });

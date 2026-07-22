@@ -34,6 +34,8 @@ const mockUser = {
   starter_content_state: null,
   language: null,
   profile_description: "",
+  timezone: null,
+  integration_tokens: {},
   created_at: "",
   updated_at: "",
 };

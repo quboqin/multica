@@ -4,6 +4,8 @@ import (
 	"context"
 	"log/slog"
 	"time"
+
+	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
 // BackfillBotUnionIDs walks every active lark_installation row whose
@@ -36,7 +38,7 @@ import (
 // already overwrites both identifiers via UpsertLarkInstallation.
 func BackfillBotUnionIDs(
 	ctx context.Context,
-	queries *ChannelStore,
+	queries *db.Queries,
 	api APIClient,
 	creds CredentialsDecrypter,
 	log *slog.Logger,
@@ -98,7 +100,7 @@ func BackfillBotUnionIDs(
 			missed++
 			continue
 		}
-		if err := queries.SetLarkInstallationBotUnionID(ctx, SetInstallationBotUnionIDParams{
+		if err := queries.SetLarkInstallationBotUnionID(ctx, db.SetLarkInstallationBotUnionIDParams{
 			ID:         row.ID,
 			BotUnionID: textOrNull(info.UnionID),
 		}); err != nil {
@@ -127,5 +129,5 @@ func BackfillBotUnionIDs(
 // with a stub that returns canned plaintext without spinning up the
 // secretbox machinery.
 type CredentialsDecrypter interface {
-	DecryptAppSecret(inst Installation) (string, error)
+	DecryptAppSecret(inst db.LarkInstallation) (string, error)
 }

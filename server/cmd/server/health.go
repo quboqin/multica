@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
-	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -15,12 +14,7 @@ import (
 	"github.com/multica-ai/multica/server/internal/migrations"
 )
 
-// readinessQuery counts how many of the binary's required migration versions
-// are recorded as applied. We compare the count to the number of required
-// versions rather than checking a single "latest" row, so a missing
-// out-of-order migration (numbered below an already-applied later one) is
-// detected instead of being masked by the later version's presence.
-const readinessQuery = `SELECT COUNT(*) FROM schema_migrations WHERE version = ANY($1)`
+const readinessQuery = `SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE version = $1)`
 
 const readinessCacheTTL = 3 * time.Second
 
@@ -30,12 +24,12 @@ type readinessDB interface {
 }
 
 type serverHealth struct {
-	db                 readinessDB
-	requiredMigrations []string
-	initErr            error
-	cacheTTL           time.Duration
-	refreshMu          sync.Mutex
-	cache              atomic.Pointer[cachedReadiness]
+	db              readinessDB
+	latestMigration string
+	initErr         error
+	cacheTTL        time.Duration
+	refreshMu       sync.Mutex
+	cache           atomic.Pointer[cachedReadiness]
 }
 
 type cachedReadiness struct {
@@ -59,12 +53,12 @@ type readinessChecks struct {
 }
 
 func newServerHealth(pool *pgxpool.Pool) *serverHealth {
-	requiredMigrations, err := migrations.AllVersions()
+	latestMigration, err := migrations.LatestVersion()
 	return &serverHealth{
-		db:                 pool,
-		requiredMigrations: requiredMigrations,
-		initErr:            err,
-		cacheTTL:           readinessCacheTTL,
+		db:              pool,
+		latestMigration: latestMigration,
+		initErr:         err,
+		cacheTTL:        readinessCacheTTL,
 	}
 }
 
@@ -138,23 +132,20 @@ func (h *serverHealth) computeReadiness(parent context.Context) (readinessRespon
 		return resp, http.StatusServiceUnavailable
 	}
 
-	if h.initErr != nil || len(h.requiredMigrations) == 0 {
+	if h.initErr != nil || h.latestMigration == "" {
 		resp.Status = "not_ready"
 		resp.Checks.Migrations = "error"
 		return resp, http.StatusServiceUnavailable
 	}
 
-	var appliedCount int
-	if err := h.db.QueryRow(ctx, readinessQuery, h.requiredMigrations).Scan(&appliedCount); err != nil {
+	var applied bool
+	if err := h.db.QueryRow(ctx, readinessQuery, h.latestMigration).Scan(&applied); err != nil {
 		resp.Status = "not_ready"
 		resp.Checks.Migrations = "error"
 		return resp, http.StatusServiceUnavailable
 	}
 
-	// version is the schema_migrations PK, so each required version matches at
-	// most one row; a count below the required total means at least one
-	// migration this binary needs has not been applied.
-	if appliedCount < len(h.requiredMigrations) {
+	if !applied {
 		resp.Status = "not_ready"
 		resp.Checks.Migrations = "out_of_date"
 		return resp, http.StatusServiceUnavailable
@@ -164,17 +155,7 @@ func (h *serverHealth) computeReadiness(parent context.Context) (readinessRespon
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
-	// Buffer the payload so we can emit an accurate Content-Length; encoding
-	// straight into the ResponseWriter after WriteHeader would force chunked
-	// transfer encoding and drop the header.
-	body, err := json.Marshal(v)
-	if err != nil {
-		body = []byte(`{"error":"failed to encode response"}`)
-		status = http.StatusInternalServerError
-	}
-	body = append(body, '\n')
 	w.Header().Set("Content-Type", "application/json")
-	w.Header().Set("Content-Length", strconv.Itoa(len(body)))
 	w.WriteHeader(status)
-	_, _ = w.Write(body)
+	_ = json.NewEncoder(w).Encode(v)
 }

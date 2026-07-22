@@ -1,5 +1,1 @@
-export {
-  RuntimesPage,
-  RuntimeDetailPage,
-  RuntimeSettingsPage,
-} from "./components";
+export { RuntimesPage, RuntimeDetailPage } from "./components";

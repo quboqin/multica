@@ -19,7 +19,7 @@ import { isImeComposing } from "@multica/core/utils";
 import { workspaceKeys } from "@multica/core/workspace/queries";
 import type { Agent, MemberWithUser } from "@multica/core/types";
 import { useT } from "../../i18n";
-import { createSuggestionPopupRender, isPickerAcceptKey } from "./suggestion-popup";
+import { createSuggestionPopupRender } from "./suggestion-popup";
 
 const MAX_ITEMS = 20;
 
@@ -95,9 +95,7 @@ export const SlashCommandList = forwardRef<
         setSelectedIndex((i) => (i + 1) % items.length);
         return true;
       }
-      // Enter is the canonical accept; plain Tab is an additive alias (see
-      // isPickerAcceptKey). Shift/modifier+Tab fall through to focus nav.
-      if (isPickerAcceptKey(event)) {
+      if (event.key === "Enter") {
         if (items.length === 0) return false;
         selectItem(selectedIndex);
         return true;
@@ -127,11 +125,7 @@ export const SlashCommandList = forwardRef<
       : item.description;
 
   return (
-    // Height budget clamps to min(design max, viewport-aware
-    // `--suggestion-available-height` from suggestion-popup.tsx's size
-    // middleware), falling back to the design max when rendered standalone.
-    // Single height authority — mirrors MentionList.
-    <div className="rounded-md border bg-popover py-1 shadow-md w-72 max-h-[min(300px,var(--suggestion-available-height,300px))] overflow-y-auto">
+    <div className="rounded-md border bg-popover py-1 shadow-md w-72 max-h-[300px] overflow-y-auto">
       {items.map((item, index) => {
         const description = describe(item);
         return (

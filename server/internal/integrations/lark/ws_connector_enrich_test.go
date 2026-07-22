@@ -7,6 +7,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
 // recordingEnricher captures what the connector hands it and rewrites
@@ -32,7 +34,7 @@ func (e *recordingEnricher) Enrich(ctx context.Context, msg InboundMessage, cred
 func TestWSConnectorEnrichesBeforeEmit(t *testing.T) {
 	t.Parallel()
 	conn := newFakeWSConn()
-	decoder := FrameDecoderFunc(func(payload []byte, _ Installation) (InboundMessage, bool, error) {
+	decoder := FrameDecoderFunc(func(payload []byte, _ db.LarkInstallation) (InboundMessage, bool, error) {
 		return InboundMessage{
 			EventID:   string(payload),
 			AppID:     "test_app",
@@ -49,7 +51,7 @@ func TestWSConnectorEnrichesBeforeEmit(t *testing.T) {
 		}),
 		FrameDecoder: decoder,
 		Enricher:     enr,
-		CredentialsProvider: CredentialsProviderFunc(func(context.Context, Installation) (InstallationCredentials, error) {
+		CredentialsProvider: CredentialsProviderFunc(func(context.Context, db.LarkInstallation) (InstallationCredentials, error) {
 			return InstallationCredentials{AppID: "test_app", AppSecret: "secret"}, nil
 		}),
 		PingInterval:  time.Hour,
@@ -74,7 +76,7 @@ func TestWSConnectorEnrichesBeforeEmit(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	done := make(chan error, 1)
-	go func() { done <- c.Run(ctx, Installation{AppID: "test_app"}, emit) }()
+	go func() { done <- c.Run(ctx, db.LarkInstallation{AppID: "test_app"}, emit) }()
 
 	pushDataFrame(conn, []byte("evt-1"), "m1")
 

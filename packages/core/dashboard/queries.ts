@@ -1,4 +1,4 @@
-import { keepPreviousData, queryOptions } from "@tanstack/react-query";
+import { queryOptions } from "@tanstack/react-query";
 import { api } from "../api";
 
 export const dashboardKeys = {
@@ -32,20 +32,6 @@ export const dashboardKeys = {
 // 5-min rollup cadence on the server, 60s background refetch on the client.
 const STALE_TIME = 60 * 1000;
 
-// Range changes should keep the previous result mounted so KPI cards and
-// charts transition in place instead of falling back to a full-page skeleton.
-// Scope changes are deliberately excluded: carrying data across workspaces,
-// projects, report kinds, or timezones would briefly display the wrong data.
-function isSameDashboardScope(
-  previousKey: readonly unknown[] | undefined,
-  nextKey: readonly unknown[],
-): boolean {
-  if (!previousKey || previousKey.length !== nextKey.length) return false;
-  return previousKey.every(
-    (part, index) => index === 3 || Object.is(part, nextKey[index]),
-  );
-}
-
 // `tz` participates in every dashboard key so a Preferences change
 // repoints the cache. All four series — token rollups and the
 // atq.completed_at-based run-time series — slice their day boundary in
@@ -56,9 +42,8 @@ export function dashboardUsageDailyOptions(
   projectId: string | null,
   tz: string,
 ) {
-  const queryKey = dashboardKeys.daily(wsId, days, projectId, tz);
   return queryOptions({
-    queryKey,
+    queryKey: dashboardKeys.daily(wsId, days, projectId, tz),
     queryFn: () =>
       api.getDashboardUsageDaily({
         days,
@@ -67,10 +52,6 @@ export function dashboardUsageDailyOptions(
       }),
     enabled: !!wsId,
     staleTime: STALE_TIME,
-    placeholderData: (previousData, previousQuery) =>
-      isSameDashboardScope(previousQuery?.queryKey, queryKey)
-        ? keepPreviousData(previousData)
-        : undefined,
   });
 }
 
@@ -80,9 +61,8 @@ export function dashboardUsageByAgentOptions(
   projectId: string | null,
   tz: string,
 ) {
-  const queryKey = dashboardKeys.byAgent(wsId, days, projectId, tz);
   return queryOptions({
-    queryKey,
+    queryKey: dashboardKeys.byAgent(wsId, days, projectId, tz),
     queryFn: () =>
       api.getDashboardUsageByAgent({
         days,
@@ -91,10 +71,6 @@ export function dashboardUsageByAgentOptions(
       }),
     enabled: !!wsId,
     staleTime: STALE_TIME,
-    placeholderData: (previousData, previousQuery) =>
-      isSameDashboardScope(previousQuery?.queryKey, queryKey)
-        ? keepPreviousData(previousData)
-        : undefined,
   });
 }
 
@@ -104,9 +80,8 @@ export function dashboardAgentRunTimeOptions(
   projectId: string | null,
   tz: string,
 ) {
-  const queryKey = dashboardKeys.agentRuntime(wsId, days, projectId, tz);
   return queryOptions({
-    queryKey,
+    queryKey: dashboardKeys.agentRuntime(wsId, days, projectId, tz),
     queryFn: () =>
       api.getDashboardAgentRunTime({
         days,
@@ -115,10 +90,6 @@ export function dashboardAgentRunTimeOptions(
       }),
     enabled: !!wsId,
     staleTime: STALE_TIME,
-    placeholderData: (previousData, previousQuery) =>
-      isSameDashboardScope(previousQuery?.queryKey, queryKey)
-        ? keepPreviousData(previousData)
-        : undefined,
   });
 }
 
@@ -128,9 +99,8 @@ export function dashboardRunTimeDailyOptions(
   projectId: string | null,
   tz: string,
 ) {
-  const queryKey = dashboardKeys.runTimeDaily(wsId, days, projectId, tz);
   return queryOptions({
-    queryKey,
+    queryKey: dashboardKeys.runTimeDaily(wsId, days, projectId, tz),
     queryFn: () =>
       api.getDashboardRunTimeDaily({
         days,
@@ -139,9 +109,5 @@ export function dashboardRunTimeDailyOptions(
       }),
     enabled: !!wsId,
     staleTime: STALE_TIME,
-    placeholderData: (previousData, previousQuery) =>
-      isSameDashboardScope(previousQuery?.queryKey, queryKey)
-        ? keepPreviousData(previousData)
-        : undefined,
   });
 }

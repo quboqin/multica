@@ -381,7 +381,7 @@ function ScheduledRow({
             <ActorAvatar
               actorType={issue.assignee_type}
               actorId={issue.assignee_id}
-              size="sm"
+              size={18}
               enableHoverCard
             />
           )}
@@ -451,18 +451,21 @@ export function GanttView({ issues }: { issues: Issue[] }) {
   const today = useMemo(() => startOfDayUTC(new Date()), []);
   const dayPx = DAY_PX_BY_ZOOM[zoom];
 
-  // `issues` is already the canvas set: the surface applies the shared
-  // filters, drops undated rows, and honours `ganttShowCompleted` before
-  // handing it over (see `ganttCanvasRows` in use-issue-surface-data.ts).
-  // Those rules used to live here, which meant the header chip could count
-  // rows this canvas would never draw (MUL-4884). Keep this view a renderer:
-  // it orders rows, it does not decide which ones exist.
+  // The data source only delivers scheduled issues (server-side
+  // `scheduled=true`), but a row can still arrive here without a date — for
+  // example, a WS-driven optimistic patch that just cleared start_date /
+  // due_date and is waiting for the cache to refetch. Filter defensively so
+  // the timeline never renders a blank lane in that brief window.
   const scheduled = useMemo(() => {
+    const dated = issues.filter((i) => i.start_date || i.due_date);
+    const filtered = showCompleted
+      ? dated
+      : dated.filter((i) => i.status !== "done" && i.status !== "cancelled");
     // "position" makes no sense on a gantt — default to start_date asc when
     // the user hasn't picked a more specific sort.
     const sortField = sortBy === "position" ? "start_date" : sortBy;
-    return sortIssues(issues, sortField, sortDirection);
-  }, [issues, sortBy, sortDirection]);
+    return sortIssues(filtered, sortField, sortDirection);
+  }, [issues, showCompleted, sortBy, sortDirection]);
 
   const range = useMemo(
     () => computeRange(scheduled, today, zoom),

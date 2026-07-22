@@ -70,15 +70,9 @@ export function useMarkChatSessionRead() {
       const key = chatKeys.sessions(wsId);
       await qc.cancelQueries({ queryKey: key });
       const prev = qc.getQueryData<ChatSession[]>(key);
-      // Zero unread_count together with has_unread — the tab badge sums
-      // unread_count (see lib/unread-counts.ts), so clearing only the flag
-      // would leave a stale badge until the settle refetch. Mirrors web's
-      // useMarkChatSessionRead in packages/core/chat/mutations.ts.
       qc.setQueryData<ChatSession[]>(key, (old) =>
         old?.map((s) =>
-          s.id === sessionId
-            ? { ...s, has_unread: false, unread_count: 0 }
-            : s,
+          s.id === sessionId ? { ...s, has_unread: false } : s,
         ),
       );
       return { prev, key };

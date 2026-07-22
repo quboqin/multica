@@ -2,8 +2,9 @@
 
 import { useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Plus, Tag } from "lucide-react";
+import { Plus, Settings2, Tag } from "lucide-react";
 import { toast } from "sonner";
+import { Dialog, DialogContent, DialogTitle } from "@multica/ui/components/ui/dialog";
 import { useWorkspaceId } from "@multica/core/hooks";
 import {
   labelListOptions,
@@ -13,6 +14,7 @@ import {
   useDetachProjectLabel,
 } from "@multica/core/labels";
 import { LabelChip } from "../../labels/label-chip";
+import { LabelsPanel } from "../../issues/components/labels-panel";
 import {
   PickerEmpty,
   PickerItem,
@@ -38,9 +40,10 @@ export function ProjectLabelPicker({ projectId }: { projectId: string }) {
   const wsId = useWorkspaceId();
   const [open, setOpen] = useState(false);
   const [filter, setFilter] = useState("");
+  const [manageOpen, setManageOpen] = useState(false);
   const creatingRef = useRef(false);
 
-  const { data: allLabels = [] } = useQuery(labelListOptions(wsId, "project"));
+  const { data: allLabels = [] } = useQuery(labelListOptions(wsId));
   const { data: attachedLabels = [] } = useQuery(projectLabelsOptions(wsId, projectId));
   const attach = useAttachProjectLabel(projectId);
   const detach = useDetachProjectLabel(projectId);
@@ -66,7 +69,7 @@ export function ProjectLabelPicker({ projectId }: { projectId: string }) {
     creatingRef.current = true;
     const name = query;
     create.mutate(
-      { resource_type: "project", name, color: pickInlineColor(name) },
+      { name, color: pickInlineColor(name) },
       {
         onSuccess: (label) => {
           attach.mutate(label.id);
@@ -120,6 +123,19 @@ export function ProjectLabelPicker({ projectId }: { projectId: string }) {
             </>
           )
         }
+        footer={
+          <button
+            type="button"
+            onClick={() => {
+              setOpen(false);
+              setManageOpen(true);
+            }}
+            className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm text-muted-foreground hover:bg-accent transition-colors"
+          >
+            <Settings2 className="h-3.5 w-3.5" />
+            <span>{t(($) => $.pickers.label.manage_action)}</span>
+          </button>
+        }
       >
         {filtered.map((label) => (
           <PickerItem
@@ -150,6 +166,13 @@ export function ProjectLabelPicker({ projectId }: { projectId: string }) {
           </PickerItem>
         )}
       </PropertyPicker>
+
+      <Dialog open={manageOpen} onOpenChange={setManageOpen}>
+        <DialogContent className="max-w-2xl">
+          <DialogTitle className="text-lg font-semibold">{t(($) => $.pickers.label.manage_dialog_title)}</DialogTitle>
+          <LabelsPanel />
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

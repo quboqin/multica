@@ -4,25 +4,13 @@ export type {
   AgentStatus,
   AgentRuntimeMode,
   AgentVisibility,
-  AgentPermissionMode,
-  AgentInvocationTarget,
-  AgentInvocationTargetInput,
   AgentTask,
-  TaskAttribution,
-  AttributionUser,
-  TaskEvidence,
   AgentActivityBucket,
   AgentRunCount,
   TaskFailureReason,
   AgentRuntime,
   RuntimeDevice,
-  RuntimeProfile,
-  RuntimeProtocolFamily,
-  RuntimeProfileVisibility,
-  CreateRuntimeProfileRequest,
-  UpdateRuntimeProfileRequest,
   CreateAgentRequest,
-  AgentBuilderSession,
   AgentTemplate,
   AgentTemplateSummary,
   AgentTemplateSkillRef,
@@ -59,7 +47,6 @@ export type {
   RuntimeLocalSkillImportAction,
   RuntimeLocalSkillImportConflict,
   RuntimeLocalSkillSummary,
-	RuntimeLocalMcpServerSummary,
   RuntimeLocalSkillListRequest,
   CreateRuntimeLocalSkillImportRequest,
   RuntimeLocalSkillImportRequest,
@@ -67,14 +54,11 @@ export type {
   RuntimeLocalSkillImportResult,
   IssueUsageSummary,
 } from "./agent";
-export { RUNTIME_PROFILE_PROTOCOL_FAMILIES } from "./agent";
-export type { Workspace, WorkspaceRepo, IntegrationTokens, Member, MemberRole, User, MemberWithUser, Invitation } from "./workspace";
-export type { InboxItem, InboxSeverity, InboxItemType, InboxWorkspaceUnread } from "./inbox";
+export type { Workspace, WorkspaceRepo, Member, MemberRole, User, IntegrationTokens, MemberWithUser, Invitation } from "./workspace";
+export type { InboxItem, InboxSeverity, InboxItemType } from "./inbox";
 export type { NotificationGroupKey, NotificationGroupValue, NotificationPreferences, NotificationPreferenceResponse } from "./notification-preference";
-export type { Comment, CommentType, CommentAuthorType, CommentTriggerPreview, CommentTriggerPreviewAgent, CommentTriggerSource, CommentTriggerOutcome, CommentTriggerStatus, Reaction } from "./comment";
-export type { Label, LabelResourceType, CreateLabelRequest, UpdateLabelRequest, ListLabelsResponse, IssueLabelsResponse, ResourceLabelsResponse } from "./label";
-export type { IssueProperty, IssuePropertyType, IssuePropertyOption, IssuePropertyConfig, IssuePropertyValue, IssuePropertyValues, CreatePropertyRequest, UpdatePropertyRequest, ListPropertiesResponse, IssuePropertiesResponse } from "./property";
-export { ISSUE_PROPERTY_TYPES, isKnownPropertyType } from "./property";
+export type { Comment, CommentType, CommentAuthorType, CommentTriggerPreview, CommentTriggerPreviewAgent, CommentTriggerSource, Reaction } from "./comment";
+export type { Label, CreateLabelRequest, UpdateLabelRequest, ListLabelsResponse, IssueLabelsResponse, ProjectLabelsResponse } from "./label";
 export type {
   TimelineEntry,
   AssigneeFrequencyEntry,
@@ -83,24 +67,40 @@ export type { IssueSubscriber } from "./subscriber";
 export type * from "./events";
 export type * from "./api";
 export type { Attachment } from "./attachment";
+export type {
+  PreviewSession,
+  PreviewSessionListResponse,
+  PreviewSessionPlatform,
+  PreviewSessionStatus,
+  CreatePreviewSessionRequest,
+} from "./preview-session";
 export { attachmentDownloadPath, attachmentIdFromDownloadURL, contentReferencesAttachment } from "./attachment-url";
 export type {
   ChatSession,
-  ChatLastMessage,
-  ChatPinnedAgent,
   ChatMessage,
   ChatMessagesPage,
   ChatPendingTask,
   PendingChatTaskItem,
   PendingChatTasksResponse,
-  HasPendingChatTasksResponse,
   SendChatMessageResponse,
   CancelledChatMessage,
   CancelTaskResponse,
-  ChatDraftRestore,
-  ChatDraftRestoresResponse,
 } from "./chat";
 export type { StorageAdapter } from "./storage";
+export type {
+  Milestone,
+  MilestoneStatus,
+  CreateMilestoneRequest,
+  UpdateMilestoneRequest,
+  ListMilestonesResponse,
+} from "./milestone";
+export type {
+  KpiMetric,
+  KpiMetricStatus,
+  CreateKpiMetricRequest,
+  UpdateKpiMetricRequest,
+  ListKpiMetricsResponse,
+} from "./kpi";
 export type {
   Project,
   ProjectStatus,
@@ -117,21 +117,6 @@ export type {
   UpdateProjectResourceRequest,
   ListProjectResourcesResponse,
 } from "./project";
-export type {
-  Milestone,
-  MilestoneStatus,
-  CreateMilestoneRequest,
-  UpdateMilestoneRequest,
-  ListMilestonesResponse,
-} from "./milestone";
-export type {
-  KpiMetric,
-  KpiMetricStatus,
-  KpiMetricLinkType,
-  CreateKpiMetricRequest,
-  UpdateKpiMetricRequest,
-  ListKpiMetricsResponse,
-} from "./kpi";
 export type { PinnedItem, PinnedItemType, CreatePinRequest, ReorderPinsRequest } from "./pin";
 export type {
   GitHubInstallation,
@@ -150,25 +135,50 @@ export type {
   RedeemLarkBindingTokenResponse,
 } from "./lark";
 export type {
-  ComposioToolkit,
-  ComposioConnection,
-  ComposioConnectInitResponse,
-} from "./composio";
+  CredentialConnector,
+  CredentialProfile,
+  CredentialProfileStatus,
+  CredentialLoginSession,
+  ListCredentialConnectorsResponse,
+  ListCredentialProfilesResponse,
+  StartCredentialLoginSessionRequest,
+  StartCredentialLoginSessionResponse,
+  RunCredentialCrawlRequest,
+  CredentialCrawlResult,
+} from "./credential";
 export type {
-  SlackInstallation,
-  ListSlackInstallationsResponse,
-  RegisterSlackBYORequest,
-  RedeemSlackBindingTokenResponse,
-} from "./slack";
+  CreativeEditAsset,
+  CreativeEditFeedback,
+  CreativeEditFeedbackDecision,
+  CreativeEditFeedbackReason,
+  CreativeEditJob,
+  CreativeEditProcessSnapshot,
+  CreativeEditVariant,
+  CreativeImportSummary,
+  CreativeMaterialAssetType,
+  CreativeMaterialCandidate,
+  CreativeMaterialCrawlRun,
+  CreativeMaterialInput,
+  CreativeMaterialStatus,
+  CreativeMaterialSummary,
+  CreativeMaterialsResponse,
+  CreateCreativeEditFeedbackRequest,
+  CreateCreativeEditJobRequest,
+  ImportCreativeMaterialsRequest,
+  UpdateCreativeMaterialCandidateRequest,
+} from "./creative";
+export type {
+  ListWorkspaceMCPConnectionsResponse,
+  SaveWorkspaceMCPConnectionRequest,
+  VerifyWorkspaceMCPConnectionResponse,
+  WorkspaceMCPConnection,
+  WorkspaceMCPConnectionStatus,
+} from "./workspace-mcp";
 export type {
   Autopilot,
   AutopilotStatus,
   AutopilotExecutionMode,
   AutopilotAssigneeType,
-  AutopilotSubscriber,
-  AutopilotSubscriberInput,
-  AutopilotCollaborator,
-  AutopilotCollaboratorsResponse,
   AutopilotTrigger,
   AutopilotTriggerKind,
   AutopilotRun,
@@ -180,7 +190,6 @@ export type {
   CreateAutopilotTriggerRequest,
   UpdateAutopilotTriggerRequest,
   ListAutopilotsResponse,
-  CronPreviewResponse,
   GetAutopilotResponse,
   ListAutopilotRunsResponse,
   WebhookDelivery,

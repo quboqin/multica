@@ -1,0 +1,53 @@
+{
+  "name": "AdaKami profile text fields",
+  "steps": [
+    {
+      "action": "wait_for",
+      "selector": {
+        "role": "textbox",
+        "name": "Emel"
+      },
+      "timeout_ms": 10000
+    },
+    {
+      "action": "fill",
+      "selector": {
+        "role": "textbox",
+        "name": "Emel"
+      },
+      "value": "qa.user@example.test"
+    },
+    {
+      "action": "fill",
+      "selector": {
+        "role": "textbox",
+        "name": "Pendapatan bulanan"
+      },
+      "value": "8000"
+    },
+    {
+      "action": "fill",
+      "selector": {
+        "role": "textbox",
+        "name": "Nama Kenalan"
+      },
+      "value": "Test Contact"
+    },
+    {
+      "action": "fill",
+      "selector": {
+        "role": "textbox",
+        "name": "Nombor telefon kenalan"
+      },
+      "value": "123456789"
+    },
+    {
+      "action": "assert",
+      "selector": {
+        "role": "textbox",
+        "name": "Pendapatan bulanan"
+      },
+      "value": "8000"
+    }
+  ]
+}

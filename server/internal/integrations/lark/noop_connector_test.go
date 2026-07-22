@@ -6,6 +6,8 @@ import (
 	"log/slog"
 	"testing"
 	"time"
+
+	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
 func TestNoopConnectorRunBlocksUntilContextCancel(t *testing.T) {
@@ -16,7 +18,7 @@ func TestNoopConnectorRunBlocksUntilContextCancel(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		done <- c.Run(ctx, Installation{}, func(context.Context, InboundMessage) (DispatchResult, error) {
+		done <- c.Run(ctx, db.LarkInstallation{}, func(context.Context, InboundMessage) (DispatchResult, error) {
 			t.Errorf("noop connector must not emit events")
 			return DispatchResult{}, nil
 		})
@@ -46,11 +48,11 @@ func TestNoopConnectorFactoryReturnsSameConnector(t *testing.T) {
 
 	factory := NoopConnectorFactory(slog.New(slog.NewTextHandler(io.Discard, nil)))
 
-	c1, err := factory(Installation{})
+	c1, err := factory(db.LarkInstallation{})
 	if err != nil {
 		t.Fatalf("factory call 1: %v", err)
 	}
-	c2, err := factory(Installation{})
+	c2, err := factory(db.LarkInstallation{})
 	if err != nil {
 		t.Fatalf("factory call 2: %v", err)
 	}

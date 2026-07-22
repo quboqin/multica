@@ -12,7 +12,9 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@mult
 import { Loader2 } from "lucide-react";
 import { setLoggedInCookie } from "@/features/auth/auth-cookie";
 
-type State = { kind: "loading"; message: string } | { kind: "error"; message: string };
+type State =
+  | { kind: "loading"; message: string }
+  | { kind: "error"; message: string };
 
 function safeNext(raw: string | null): string {
   if (!raw || !raw.startsWith("/") || raw.startsWith("//")) return "";
@@ -50,7 +52,8 @@ function LarkStartContent() {
             setState({ kind: "error", message: "缺少飞书安装信息。" });
             return;
           }
-          const resp = await api.createLarkLoginState(installationId, next, buildRedirectUri());
+          const redirectUri = buildRedirectUri();
+          const resp = await api.createLarkLoginState(installationId, next, redirectUri);
           if (!resp.authorize_url) {
             setState({ kind: "error", message: "无法生成飞书授权链接。" });
             return;

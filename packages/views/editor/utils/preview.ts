@@ -43,9 +43,6 @@ const EXT_LANGUAGE_MAP: Record<string, string> = {
   toml: "ini",
   ini: "ini",
   conf: "ini",
-  dockerfile: "dockerfile",
-  makefile: "makefile",
-  gitignore: "plaintext",
   // Shell
   sh: "bash",
   bash: "bash",
@@ -82,8 +79,6 @@ const EXT_LANGUAGE_MAP: Record<string, string> = {
 const BASENAME_LANGUAGE_MAP: Record<string, string> = {
   dockerfile: "dockerfile",
   makefile: "makefile",
-  ".env": "plaintext",
-  ".gitignore": "plaintext",
 };
 
 // IMPORTANT — KEEP IN SYNC with isTextPreviewable() in
@@ -97,7 +92,6 @@ const TEXT_EXTENSIONS = new Set<string>([
   "md", "markdown", "txt", "log", "csv", "tsv",
   "html", "htm", "json", "xml",
   "yml", "yaml", "toml", "ini", "conf",
-  "dockerfile", "makefile", "gitignore",
   "sh", "bash", "zsh",
   "py", "rb", "go", "rs",
   "ts", "tsx", "js", "jsx", "mjs", "cjs",
@@ -119,12 +113,7 @@ const TEXT_CONTENT_TYPES = new Set<string>([
   "application/x-httpd-php",
 ]);
 
-const TEXT_BASENAMES = new Set<string>([
-  "dockerfile",
-  "makefile",
-  ".env",
-  ".gitignore",
-]);
+const TEXT_BASENAMES = new Set<string>(["dockerfile", "makefile"]);
 
 // Extension fallbacks for media kinds — used when contentType is empty
 // (URL-only preview source, no server-side metadata available).

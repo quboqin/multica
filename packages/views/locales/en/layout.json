@@ -1,11 +1,9 @@
 {
   "nav": {
     "inbox": "Inbox",
-    "chat": "Chat",
     "my_issues": "My Issues",
     "issues": "Issues",
     "plans": "Plans",
-    "kpi": "KPI",
     "projects": "Projects",
     "autopilots": "Autopilot",
     "agents": "Agents",
@@ -13,15 +11,14 @@
     "usage": "Usage",
     "runtimes": "Runtimes",
     "skills": "Skills",
-    "settings": "Settings"
+    "settings": "Settings",
+    "kpi": "KPI"
   },
   "help": {
     "trigger": "Help",
     "docs": "Docs",
     "changelog": "Change log",
-    "discord": "Discord",
-    "feedback": "Feedback",
-    "server_version": "Server version {{version}}"
+    "feedback": "Feedback"
   },
   "workspace_loader": {
     "loading_workspace": "Loading workspace…",
@@ -41,11 +38,6 @@
     "pinned_label": "Pinned",
     "workspace_group": "Workspace",
     "configure_group": "Configure",
-    "unread_overflow": "99+",
-    "discord_card": {
-      "title": "Join our Discord",
-      "description": "Chat with the team and other builders.",
-      "dismiss": "Dismiss"
-    }
+    "unread_overflow": "99+"
   }
 }

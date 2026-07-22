@@ -6,11 +6,12 @@ import type { AgentTask } from "@multica/core/types";
 import { renderWithI18n } from "../../test/i18n";
 
 const mockState = vi.hoisted(() => ({
-  tasks: [] as unknown[],
+  snapshot: [] as unknown[],
   taskMessagesOptions: vi.fn(),
-  // Captures the props the chip passes to PopoverTrigger so a test can assert
-  // the card is wired to open on hover, not only on click.
-  triggerProps: undefined as Record<string, unknown> | undefined,
+}));
+
+vi.mock("@multica/core/hooks", () => ({
+  useWorkspaceId: () => "ws-1",
 }));
 
 vi.mock("@multica/core/workspace/hooks", () => ({
@@ -42,14 +43,10 @@ vi.mock("@multica/ui/components/ui/popover", async () => {
     PopoverTrigger: ({
       render,
       children,
-      ...props
     }: {
       render: React.ReactElement;
       children: React.ReactNode;
-    } & Record<string, unknown>) => {
-      mockState.triggerProps = props;
-      return React.cloneElement(render, undefined, children);
-    },
+    }) => React.cloneElement(render, undefined, children),
     PopoverContent: ({ children }: { children: React.ReactNode }) => (
       <div data-testid="agent-popover-content">{children}</div>
     ),
@@ -71,9 +68,8 @@ vi.mock("@tanstack/react-query", async () => {
   return {
     ...actual,
     useQuery: (opts: { queryKey?: readonly unknown[] }) => {
-      // Per-issue task list: issueKeys.tasks(issueId) === ["issues","tasks",id]
-      if (opts.queryKey?.[0] === "issues" && opts.queryKey?.[1] === "tasks") {
-        return { data: mockState.tasks };
+      if (opts.queryKey?.[2] === "agent-task-snapshot") {
+        return { data: mockState.snapshot };
       }
       return { data: undefined };
     },
@@ -103,13 +99,12 @@ function makeTask(overrides: Partial<AgentTask>): AgentTask {
 beforeEach(() => {
   cleanup();
   vi.clearAllMocks();
-  mockState.tasks = [];
-  mockState.triggerProps = undefined;
+  mockState.snapshot = [];
 });
 
 describe("IssueAgentHeaderChip", () => {
   it("shows the active agent name without event count or elapsed time", () => {
-    mockState.tasks = [makeTask({})];
+    mockState.snapshot = [makeTask({})];
 
     renderWithI18n(<IssueAgentHeaderChip issueId="issue-1" />);
 
@@ -123,7 +118,7 @@ describe("IssueAgentHeaderChip", () => {
   });
 
   it("keeps the header popover card with active task rows", () => {
-    mockState.tasks = [makeTask({ id: "task-running" })];
+    mockState.snapshot = [makeTask({ id: "task-running" })];
 
     renderWithI18n(<IssueAgentHeaderChip issueId="issue-1" />);
 
@@ -134,22 +129,8 @@ describe("IssueAgentHeaderChip", () => {
     expect(mockState.taskMessagesOptions).not.toHaveBeenCalled();
   });
 
-  it("opens the activity card on hover, not only on click", () => {
-    mockState.tasks = [makeTask({})];
-
-    renderWithI18n(<IssueAgentHeaderChip issueId="issue-1" />);
-
-    // Base UI gates hover-to-open on `openOnHover` on the trigger. Without it
-    // the chip would be click-only, which is the behavior MUL-3507 replaces.
-    // The trigger stays a real <button>, so click/keyboard access is retained.
-    expect(mockState.triggerProps?.openOnHover).toBe(true);
-    expect(
-      screen.getByRole("button", { name: "Walt is working" }),
-    ).toBeInTheDocument();
-  });
-
   it("uses the concise multi-agent working label", () => {
-    mockState.tasks = [
+    mockState.snapshot = [
       makeTask({ id: "task-1", agent_id: "agent-1" }),
       makeTask({ id: "task-2", agent_id: "agent-2" }),
     ];
@@ -165,7 +146,7 @@ describe("IssueAgentHeaderChip", () => {
   });
 
   it("uses the requested Chinese single-agent copy", () => {
-    mockState.tasks = [makeTask({})];
+    mockState.snapshot = [makeTask({})];
 
     renderWithI18n(<IssueAgentHeaderChip issueId="issue-1" />, {
       locale: "zh-Hans",
@@ -174,20 +155,14 @@ describe("IssueAgentHeaderChip", () => {
     expect(screen.getByText("Walt 在工作")).toBeInTheDocument();
   });
 
-  it("does not render when the issue has only terminal tasks", () => {
-    // The list is issue-scoped by the endpoint, so the chip's only job is to
-    // ignore terminal statuses (those are the execution log's story).
-    mockState.tasks = [
+  it("does not render for inactive or unrelated tasks", () => {
+    mockState.snapshot = [
       makeTask({
         id: "task-done",
         status: "completed",
         completed_at: "2026-06-08T08:05:00Z",
       }),
-      makeTask({
-        id: "task-cancelled",
-        status: "cancelled",
-        completed_at: "2026-06-08T08:06:00Z",
-      }),
+      makeTask({ id: "task-other", issue_id: "issue-2" }),
     ];
 
     renderWithI18n(<IssueAgentHeaderChip issueId="issue-1" />);

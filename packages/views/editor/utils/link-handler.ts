@@ -21,10 +21,10 @@ import { isGlobalPath } from "@multica/core/paths";
 const WORKSPACE_ROUTE_SEGMENTS = new Set([
   "usage",
   "issues",
+  "kpi",
   "projects",
   "autopilots",
   "agents",
-  "chat",
   "inbox",
   "my-issues",
   "runtimes",

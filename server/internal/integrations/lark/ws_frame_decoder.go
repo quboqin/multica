@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+
+	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
 // LarkJSONFrameDecoder decodes the JSON event payload Lark nests
@@ -34,7 +36,7 @@ type LarkJSONFrameDecoder struct{}
 func NewLarkJSONFrameDecoder() *LarkJSONFrameDecoder { return &LarkJSONFrameDecoder{} }
 
 // Decode implements FrameDecoder.
-func (d *LarkJSONFrameDecoder) Decode(payload []byte, inst Installation) (InboundMessage, bool, error) {
+func (d *LarkJSONFrameDecoder) Decode(payload []byte, inst db.LarkInstallation) (InboundMessage, bool, error) {
 	if len(payload) == 0 {
 		return InboundMessage{}, false, nil
 	}
@@ -80,10 +82,6 @@ func (d *LarkJSONFrameDecoder) Decode(payload []byte, inst Installation) (Inboun
 		// completeness / future thread handling.
 		ParentID: evt.Message.ParentID,
 		RootID:   evt.Message.RootID,
-		// thread_id is present only when the message lives inside a Lark
-		// topic (话题). The outbound patcher uses it to decide whether to
-		// reply back into that thread; empty means a normal chat message.
-		ThreadID: evt.Message.ThreadID,
 	}
 
 	botUnionID := ""
@@ -157,10 +155,6 @@ type larkMessageReceiveEvent struct {
 		// RootID is the root of the reply tree.
 		ParentID string `json:"parent_id"`
 		RootID   string `json:"root_id"`
-		// ThreadID is present only for messages inside a Lark topic
-		// (话题). Lark omits it for plain chat messages, so its presence
-		// is the signal that an @-mention happened inside a thread.
-		ThreadID string `json:"thread_id"`
 	} `json:"message"`
 }
 

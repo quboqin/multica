@@ -1,42 +1,47 @@
 "use client";
 
 import { useRef, useState, useCallback, useEffect } from "react";
-import { cn } from "@multica/ui/lib/utils";
-import { ContentEditor, type ContentEditorRef, useFileDropZone, FileDropOverlay, useLazyEditor, useUploadGate, useEditorUpload } from "../../editor";
+import { ContentEditor, type ContentEditorRef, useFileDropZone, FileDropOverlay } from "../../editor";
 import { FileUploadButton } from "@multica/ui/components/common/file-upload-button";
 import { SubmitButton } from "@multica/ui/components/common/submit-button";
+import { useFileUpload } from "@multica/core/hooks/use-file-upload";
+import { api } from "@multica/core/api";
 import type { Attachment } from "@multica/core/types";
 import { contentReferencesAttachment } from "@multica/core/types";
-import { formatShortcut, useShortcut } from "@multica/core/shortcuts";
-import { useCommentComposerStore, useCommentDraftStore } from "@multica/core/issues/stores";
+import { enterKey, formatShortcut, modKey } from "@multica/core/platform";
+import { useCommentDraftStore } from "@multica/core/issues/stores";
 import { useT } from "../../i18n";
 import { CommentTriggerChips } from "./comment-trigger-chips";
 import { useCommentTriggerPreview } from "../hooks/use-comment-trigger-preview";
 
 interface CommentInputProps {
   issueId: string;
-  /** Resolves true on success, false on failure. The composer keeps the text
-   *  (editor locked + button spinning) until this settles, then clears only on
-   *  success — a failed send must not silently discard the user's draft. */
-  onSubmit: (content: string, attachmentIds?: string[], suppressAgentIds?: string[]) => Promise<boolean>;
+  onSubmit: (content: string, attachmentIds?: string[], suppressAgentIds?: string[]) => Promise<void>;
+  previewFeedbackRequest?: {
+    nonce: number;
+    issueId: string;
+    sessionId: string;
+    title: string;
+  } | null;
 }
 
-function CommentInput({ issueId, onSubmit }: CommentInputProps) {
+function CommentInput({
+  issueId,
+  onSubmit,
+  previewFeedbackRequest = null,
+}: CommentInputProps) {
   const { t } = useT("issues");
-  const { t: tEditor } = useT("editor");
-  const sendShortcut = useShortcut("send");
   const editorRef = useRef<ContentEditorRef>(null);
-  // Sending mid-upload would strip the pending image's blob URL out of the
-  // markdown and bind no attachment id — the comment posts without the file.
-  const uploadGate = useUploadGate(editorRef);
+  const composerRef = useRef<HTMLDivElement>(null);
+  const handledFeedbackNonceRef = useRef<number | null>(null);
   // Read the persisted draft once on mount. ContentEditor only honors
   // `defaultValue` at mount time, so this snapshot drives both the editor's
   // initial content and the submit-button enable state — without this the
   // button would be disabled even though the editor visibly contains text.
   const draftKey = `new:${issueId}` as const;
-  const [initialDraft] = useState(() =>
-    useCommentDraftStore.getState().getDraft(draftKey),
-  );
+  const initialDraft = useCommentDraftStore.getState().getDraft(draftKey);
+  const [editorSeed, setEditorSeed] = useState(initialDraft ?? "");
+  const [editorRevision, setEditorRevision] = useState(0);
   const [content, setContent] = useState(initialDraft ?? "");
   const [isEmpty, setIsEmpty] = useState(() => !initialDraft?.trim());
   const [submitting, setSubmitting] = useState(false);
@@ -47,22 +52,10 @@ function CommentInput({ issueId, onSubmit }: CommentInputProps) {
   //  - the editor's AttachmentDownloadProvider, so file-card Eye buttons can
   //    resolve text/code/markdown previews that require the attachment id.
   const [pendingAttachments, setPendingAttachments] = useState<Attachment[]>([]);
-  const { uploadWithToast } = useEditorUpload();
-
-  // Readonly-first: the composer renders as a same-looking static shell until
-  // the user shows intent (click / keyboard / file drop). An unsent draft is
-  // standing intent — mount the real editor immediately so the draft is
-  // visible and editable, exactly like the pre-lazy behavior.
-  const lazy = useLazyEditor({
-    initialActive: !!initialDraft?.trim(),
-    editorRef,
-  });
+  const { uploadWithToast } = useFileUpload(api);
   const { isDragOver, dropZoneProps } = useFileDropZone({
-    onDrop: lazy.uploadOrQueue,
+    onDrop: (files) => files.forEach((f) => editorRef.current?.uploadFile(f)),
   });
-  // Sticky preference (Settings → Preferences): issue-detail pins this
-  // composer to the bottom of the scroll viewport when enabled.
-  const sticky = useCommentComposerStore((s) => s.sticky);
 
   // Draft persistence. Hydrate from store on mount via `defaultValue` above
   // (ContentEditorRef has no setContent, so this is the only injection point).
@@ -70,6 +63,44 @@ function CommentInput({ issueId, onSubmit }: CommentInputProps) {
   // so tab close / mobile background doesn't lose work. Cleared on submit.
   const setDraft = useCommentDraftStore((s) => s.setDraft);
   const clearDraft = useCommentDraftStore((s) => s.clearDraft);
+
+  useEffect(() => {
+    if (
+      !previewFeedbackRequest ||
+      previewFeedbackRequest.issueId !== issueId ||
+      handledFeedbackNonceRef.current === previewFeedbackRequest.nonce
+    ) {
+      return;
+    }
+    handledFeedbackNonceRef.current = previewFeedbackRequest.nonce;
+
+    const title =
+      previewFeedbackRequest.title ||
+      t(($) => $.preview_sessions.untitled);
+    const feedbackPrefix = t(($) => $.preview_sessions.feedback_prefix, {
+      title,
+    });
+    const existingContent = editorRef.current?.getMarkdown().trimEnd() ?? "";
+    const nextContent = existingContent
+      ? `${existingContent}\n\n${feedbackPrefix}`
+      : feedbackPrefix;
+
+    setEditorSeed(nextContent);
+    setEditorRevision((value) => value + 1);
+    setContent(nextContent);
+    setIsEmpty(false);
+    setDraft(draftKey, nextContent);
+
+    const focusTimer = window.setTimeout(() => {
+      composerRef.current?.scrollIntoView?.({
+        behavior: "smooth",
+        block: "center",
+      });
+      editorRef.current?.focus();
+    }, 0);
+    return () => window.clearTimeout(focusTimer);
+  }, [draftKey, issueId, previewFeedbackRequest, setDraft, t]);
+
   useEffect(() => {
     const flush = () => {
       const md = editorRef.current?.getMarkdown();
@@ -116,10 +147,6 @@ function CommentInput({ issueId, onSubmit }: CommentInputProps) {
   const handleSubmit = async () => {
     const content = editorRef.current?.getMarkdown()?.replace(/(\n\s*)+$/, "").trim();
     if (!content || submitting) return;
-    // Re-read the queue here rather than trusting the button's disabled prop:
-    // Cmd+Enter never touches the button, and a click can land in the same
-    // tick an upload starts.
-    if (uploadGate.isBlocked()) return;
     // Track every attachment whose stable download URL OR legacy
     // storage URL is referenced in the markdown body. Both shapes
     // can appear in the same comment during the MUL-3130 rollout —
@@ -130,26 +157,20 @@ function CommentInput({ issueId, onSubmit }: CommentInputProps) {
     const suppressAgentIds = triggerPreview.agents
       .filter((agent) => suppressedAgentIds.has(agent.id))
       .map((agent) => agent.id);
-    // Pessimistic submit: keep the text in place (the editor is locked and the
-    // button spins via `submitting`) until the server actually accepts it, then
-    // clear. Clearing only on success means a slow send no longer looks like
-    // "comment posted but the box is still full", and a failed send keeps the
-    // draft instead of silently dropping it.
     setSubmitting(true);
     try {
-      const ok = await onSubmit(
+      await onSubmit(
         content,
         activeIds.length > 0 ? activeIds : undefined,
         suppressAgentIds.length > 0 ? suppressAgentIds : undefined,
       );
-      if (ok) {
-        editorRef.current?.clearContent();
-        setContent("");
-        setIsEmpty(true);
-        setSuppressedAgentIds(new Set());
-        setPendingAttachments([]);
-        clearDraft(draftKey);
-      }
+      editorRef.current?.clearContent();
+      setEditorSeed("");
+      setContent("");
+      setIsEmpty(true);
+      setSuppressedAgentIds(new Set());
+      setPendingAttachments([]);
+      clearDraft(draftKey);
     } finally {
       setSubmitting(false);
     }
@@ -157,32 +178,19 @@ function CommentInput({ issueId, onSubmit }: CommentInputProps) {
 
   return (
     <div
+      ref={composerRef}
+      data-preview-comment-composer="true"
       {...dropZoneProps}
       className="relative flex flex-col rounded-lg bg-card pb-8 ring-1 ring-border"
     >
-      {/* Lock the editor while the send is in flight. ContentEditor can't
-          toggle Tiptap's `editable` post-mount (see its docstring), so the
-          documented way to make it non-interactive is a pointer-events-none +
-          dimmed wrapper. */}
-      {lazy.active && (
-      <div
-        className={cn(
-          "flex-1 min-h-0 overflow-y-auto px-3 py-2",
-          // Pinned to the viewport bottom the composer grows upward; cap it
-          // so a long draft can't swallow the whole timeline (the editor
-          // area scrolls internally instead).
-          sticky && "max-h-[40vh]",
-          submitting && "pointer-events-none opacity-60",
-          !lazy.ready && "hidden",
-        )}
-        aria-busy={submitting || undefined}
-      >
+      <div className="flex-1 min-h-0 overflow-y-auto px-3 py-2">
         <ContentEditor
+          key={editorRevision}
           ref={editorRef}
-          defaultValue={initialDraft}
-          onReady={lazy.onReady}
+          defaultValue={editorSeed}
           placeholder={t(($) => $.comment.leave_comment_placeholder)}
           onUpdate={(md) => {
+            setEditorSeed(md);
             setContent(md);
             setIsEmpty(!md.trim());
             // Debounced upstream (debounceMs=100). Persist on every tick so a
@@ -192,7 +200,6 @@ function CommentInput({ issueId, onSubmit }: CommentInputProps) {
           }}
           onSubmit={handleSubmit}
           onUploadFile={handleUpload}
-          onUploadingChange={uploadGate.onUploadingChange}
           debounceMs={100}
           currentIssueId={issueId}
           attachments={pendingAttachments}
@@ -200,38 +207,9 @@ function CommentInput({ issueId, onSubmit }: CommentInputProps) {
           slashCommandMode="command"
         />
       </div>
-      )}
-      {/* Static shell — visually clones the empty single-line composer.
-          Real editor mounts (hidden) on first intent; shell stays visible
-          until it's ready so the card never blanks or shifts. */}
-      {!lazy.ready && (
-        <div
-          data-testid="comment-composer-shell"
-          role="button"
-          tabIndex={0}
-          aria-label={t(($) => $.comment.leave_comment_placeholder)}
-          className="flex-1 min-h-0 cursor-text px-3 py-2"
-          onClick={() => lazy.activate()}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" || e.key === " ") {
-              e.preventDefault();
-              lazy.activate();
-            }
-          }}
-        >
-          {/* rich-text-editor + <p>: the shell line inherits the editor's
-              exact type metrics (line-height 1.625 from prose.css), so the
-              shell→editor swap doesn't shift layout. */}
-          <div className="rich-text-editor text-sm">
-            <p className="text-muted-foreground">{t(($) => $.comment.leave_comment_placeholder)}</p>
-          </div>
-        </div>
-      )}
       <div className="absolute bottom-1 left-2 right-28 min-w-0">
         <CommentTriggerChips
           agents={triggerPreview.agents}
-          blocked={triggerPreview.blocked}
-          draftContent={content}
           suppressedAgentIds={suppressedAgentIds}
           onToggle={toggleSuppressedAgent}
         />
@@ -240,21 +218,13 @@ function CommentInput({ issueId, onSubmit }: CommentInputProps) {
         <FileUploadButton
           size="sm"
           multiple
-          onSelect={(file) => lazy.uploadOrQueue([file])}
+          onSelect={(file) => editorRef.current?.uploadFile(file)}
         />
         <SubmitButton
           onClick={handleSubmit}
           disabled={isEmpty}
           loading={submitting}
-          busy={uploadGate.uploading}
-          tooltip={uploadGate.uploading
-            ? tEditor(($) => $.upload.in_progress)
-            : sendShortcut
-              ? `${t(($) => $.comment.send_tooltip)} · ${formatShortcut(sendShortcut)}`
-              : t(($) => $.comment.send_tooltip)}
-          ariaLabel={uploadGate.uploading
-            ? tEditor(($) => $.upload.in_progress)
-            : t(($) => $.comment.send_tooltip)}
+          tooltip={`${t(($) => $.comment.send_tooltip)} · ${formatShortcut(modKey, enterKey)}`}
         />
       </div>
       {isDragOver && <FileDropOverlay />}

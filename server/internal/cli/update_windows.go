@@ -6,8 +6,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-
-	"github.com/multica-ai/multica/server/internal/selfexec"
 )
 
 // oldBinarySuffix is appended to the previous executable while a new one is
@@ -51,7 +49,7 @@ func replaceBinary(tmpPath, exePath string) error {
 // updates. Windows can't delete a running .exe, so a prior update may have
 // left one behind; once the user restarts, this call reclaims the space.
 func CleanupStaleUpdateArtifacts() {
-	exePath, err := selfexec.Resolve()
+	exePath, err := os.Executable()
 	if err != nil {
 		return
 	}

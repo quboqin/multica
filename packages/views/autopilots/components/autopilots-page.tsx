@@ -46,19 +46,14 @@ import {
 import { Skeleton } from "@multica/ui/components/ui/skeleton";
 import { useRowLink } from "../../navigation";
 import { ActorAvatar } from "../../common/actor-avatar";
-import { formatInTimeZone } from "../../common/format-in-time-zone";
-import {
-  CollectionPageHeader,
-  CollectionPageHeaderAction,
-  CollectionPageState,
-} from "../../layout/collection-page";
+import { PageHeader } from "../../layout/page-header";
 import { AutopilotDialog } from "./autopilot-dialog";
 import { AutopilotListToolbar, actorFilterValue } from "./autopilot-list-toolbar";
 import {
   AutopilotBatchToolbar,
   AutopilotRowActions,
 } from "./autopilot-list-actions";
-import type { ScheduleConfig } from "./schedule-editor/model";
+import type { TriggerFrequency } from "./trigger-config";
 import { useT, useTimeAgo } from "../../i18n";
 
 // Column template — single source of truth for header, rows, and skeletons.
@@ -136,11 +131,9 @@ interface AutopilotTemplate {
   id: TemplateId;
   prompt: string;
   icon: typeof Zap;
-  schedule: Pick<ScheduleConfig, "time" | "days">;
+  frequency: TriggerFrequency;
+  time: string;
 }
-
-const WEEKDAYS: ScheduleConfig["days"] = { kind: "weekly", daysOfWeek: [1, 2, 3, 4, 5] };
-const MONDAY: ScheduleConfig["days"] = { kind: "weekly", daysOfWeek: [1] };
 
 const TEMPLATES: AutopilotTemplate[] = [
   {
@@ -151,7 +144,8 @@ const TEMPLATES: AutopilotTemplate[] = [
 4. Compile everything into a single digest post
 5. Post the digest as a comment on this issue and @mention all workspace members`,
     icon: Newspaper,
-    schedule: { time: { kind: "at", time: "09:00" }, days: { kind: "every" } },
+    frequency: "daily",
+    time: "09:00",
   },
   {
     id: "pr_review",
@@ -161,7 +155,8 @@ const TEMPLATES: AutopilotTemplate[] = [
 4. Post a comment on this issue listing all stale PRs with links
 5. @mention the team to remind them to review`,
     icon: GitPullRequest,
-    schedule: { time: { kind: "at", time: "10:00" }, days: WEEKDAYS },
+    frequency: "weekdays",
+    time: "10:00",
   },
   {
     id: "bug_triage",
@@ -171,7 +166,8 @@ const TEMPLATES: AutopilotTemplate[] = [
 4. Set the priority field on the issue accordingly
 5. Add a comment explaining your assessment and suggested next steps`,
     icon: Bug,
-    schedule: { time: { kind: "at", time: "09:00" }, days: WEEKDAYS },
+    frequency: "weekdays",
+    time: "09:00",
   },
   {
     id: "weekly_progress",
@@ -182,7 +178,8 @@ const TEMPLATES: AutopilotTemplate[] = [
 5. Write a structured weekly report with sections: Completed, In Progress, Blocked, Metrics
 6. Post the report as a comment on this issue`,
     icon: BarChart3,
-    schedule: { time: { kind: "at", time: "17:00" }, days: MONDAY },
+    frequency: "weekly",
+    time: "17:00",
   },
   {
     id: "dependency_audit",
@@ -192,7 +189,8 @@ const TEMPLATES: AutopilotTemplate[] = [
 4. For each finding, note the severity, affected package, and recommended fix
 5. Post a summary report as a comment with actionable items`,
     icon: Shield,
-    schedule: { time: { kind: "at", time: "08:00" }, days: MONDAY },
+    frequency: "weekly",
+    time: "08:00",
   },
   {
     id: "documentation_check",
@@ -202,7 +200,8 @@ const TEMPLATES: AutopilotTemplate[] = [
 4. Create a list of documentation gaps with file paths and suggested content
 5. Post the findings as a comment on this issue`,
     icon: FileSearch,
-    schedule: { time: { kind: "at", time: "14:00" }, days: MONDAY },
+    frequency: "weekly",
+    time: "14:00",
   },
 ];
 
@@ -268,7 +267,7 @@ function AssigneeCell({ autopilot }: { autopilot: Autopilot }) {
       <ActorAvatar
         actorType={autopilot.assignee_type}
         actorId={autopilot.assignee_id}
-        size="sm"
+        size={18}
         enableHoverCard={autopilot.assignee_type === "agent"}
         showStatusDot={autopilot.assignee_type === "agent"}
       />
@@ -369,13 +368,17 @@ function LastRunCell({ autopilot }: { autopilot: Autopilot }) {
 }
 
 function NextRunCell({ autopilot }: { autopilot: Autopilot }) {
-  const { i18n } = useT("autopilots");
   const next = autopilot.next_run_at;
   return (
     <ListGridCell className="hidden @2xl:flex">
       {next ? (
         <span className="whitespace-nowrap text-xs tabular-nums text-muted-foreground">
-          {formatInTimeZone(next, undefined, i18n.language)}
+          {new Date(next).toLocaleString(undefined, {
+            month: "short",
+            day: "numeric",
+            hour: "2-digit",
+            minute: "2-digit",
+          })}
         </span>
       ) : (
         <span className="text-xs text-muted-foreground/40">—</span>
@@ -405,7 +408,7 @@ function CreatorCell({ autopilot }: { autopilot: Autopilot }) {
       <ActorAvatar
         actorType={autopilot.created_by_type}
         actorId={autopilot.created_by_id}
-        size="sm"
+        size={18}
       />
       <span className="min-w-0 truncate text-xs text-muted-foreground">
         {getActorName(autopilot.created_by_type, autopilot.created_by_id)}
@@ -760,38 +763,47 @@ export function AutopilotsPage() {
     // not viewport-centered).
     <div className="relative flex flex-1 min-h-0 flex-col">
       {/* Header */}
-      <CollectionPageHeader
-        icon={Zap}
-        title={t(($) => $.page.title)}
-        count={totalCount}
-        actions={
-          <CollectionPageHeaderAction
-            icon={Plus}
-            label={t(($) => $.page.new_autopilot)}
-            onClick={() => openCreate()}
-          />
-        }
-      />
+      <PageHeader className="justify-between px-5">
+        <div className="flex items-center gap-2">
+          <Zap className="h-4 w-4 text-muted-foreground" />
+          <h1 className="text-sm font-medium">{t(($) => $.page.title)}</h1>
+          {totalCount > 0 && (
+            <span className="font-mono text-xs tabular-nums text-muted-foreground/70">
+              {totalCount}
+            </span>
+          )}
+        </div>
+        {/* Quiet chrome button (outline, icon-only below md) — primary is
+            reserved for the empty state's CTAs. */}
+        <Button
+          size="sm"
+          variant="outline"
+          className="h-8 w-8 gap-1 px-0 md:w-auto md:px-2.5"
+          aria-label={t(($) => $.page.new_autopilot)}
+          onClick={() => openCreate()}
+        >
+          <Plus className="h-3.5 w-3.5" />
+          <span className="hidden md:inline">
+            {t(($) => $.page.new_autopilot)}
+          </span>
+        </Button>
+      </PageHeader>
 
       {listError ? (
-        <CollectionPageState
-          role="alert"
-          tone="destructive"
-          icon={AlertCircle}
-          title={
-            listError instanceof Error ? listError.message : String(listError)
-          }
-          actions={
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              onClick={() => refetchList()}
-            >
-              {t(($) => $.page.retry)}
-            </Button>
-          }
-        />
+        <div className="flex flex-1 flex-col items-center justify-center gap-3 px-6 py-16 text-center">
+          <AlertCircle className="h-8 w-8 text-destructive" />
+          <p className="text-sm text-muted-foreground">
+            {listError instanceof Error ? listError.message : String(listError)}
+          </p>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={() => refetchList()}
+          >
+            {t(($) => $.page.retry)}
+          </Button>
+        </div>
       ) : isLoading ? (
         <div className="flex-1 overflow-y-auto @container">
           <LoadingSkeleton />
@@ -971,7 +983,14 @@ export function AutopilotsPage() {
                 }
               : undefined
           }
-          initialSchedule={selectedTemplate ? selectedTemplate.schedule : undefined}
+          initialTriggerConfig={
+            selectedTemplate
+              ? {
+                  frequency: selectedTemplate.frequency,
+                  time: selectedTemplate.time,
+                }
+              : undefined
+          }
         />
       )}
     </div>

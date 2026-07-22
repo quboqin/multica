@@ -7,13 +7,7 @@ import { StatusIcon } from "./status-icon";
 
 /**
  * Compact, presentation-only representation of an issue —
- * `<StatusIcon> <identifier> <title>`, bordered, capped at the container width
- * (`max-w-full`) with the title truncating to an ellipsis. As an atomic inline
- * box it wraps to the next line as a unit when it doesn't fit at the current
- * position; the ellipsis only kicks in once a whole line can't hold it. The cap
- * lives here (single source of truth) — wrappers must NOT add their own flex
- * container around it, or a percentage cap gets dropped during the wrapper's
- * intrinsic sizing and the clickable box diverges from the truncated chip.
+ * `<StatusIcon> <identifier> <title>`, bordered, truncating to max-w-72.
  *
  * This is the single source of truth for the "issue-mention card" look.
  * It is intentionally **not** a link or button: callers wrap it in whatever
@@ -34,7 +28,7 @@ export interface IssueChipProps {
 }
 
 const BASE_CLASS =
-  "issue-mention inline-flex min-w-0 max-w-full items-center gap-1.5 rounded-md border mx-0.5 px-2 py-0.5 text-xs";
+  "issue-mention inline-flex items-center gap-1.5 rounded-md border mx-0.5 px-2 py-0.5 text-xs max-w-72";
 
 export function IssueChip({ issueId, fallbackLabel, className }: IssueChipProps) {
   const wsId = useWorkspaceId();
@@ -53,7 +47,7 @@ export function IssueChip({ issueId, fallbackLabel, className }: IssueChipProps)
   if (!issue) {
     return (
       <span className={cls}>
-        <span className="min-w-0 truncate font-medium text-muted-foreground">
+        <span className="font-medium text-muted-foreground">
           {fallbackLabel ?? issueId.slice(0, 8)}
         </span>
       </span>
@@ -66,7 +60,7 @@ export function IssueChip({ issueId, fallbackLabel, className }: IssueChipProps)
       <span className="font-medium text-muted-foreground shrink-0">
         {issue.identifier}
       </span>
-      <span className="min-w-0 truncate text-foreground">{issue.title}</span>
+      <span className="text-foreground truncate">{issue.title}</span>
     </span>
   );
 }

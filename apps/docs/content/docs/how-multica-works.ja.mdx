@@ -13,7 +13,7 @@ Multica は**分散型**プラットフォームです。あなたが目にす�
 
 - **Multica サーバー** — あなたが目にするワークスペース、イシュー一覧、コメントスレッドは、すべてここのデータベースに保存されます。また、あなたと同僚の間でリアルタイム更新をプッシュする WebSocket ハブでもあります。エージェントのタスクは**実行しません**。
 - **デーモン** — Multica CLI の一部であり、あなた自身のマシンで実行されます。起動時にローカルにインストールされた AI コーディングツールを検出し、サーバーに登録したうえで、3 秒ごとにタスクをポーリングし、15 秒ごとにハートビートを送信し始めます。
-- **AI コーディングツール** — 次の 16 種類のうちの 1 つ（または複数を並列で）: [Antigravity](/providers#antigravity)、[Claude Code](/providers#claude-code)、[CodeBuddy](/providers#codebuddy)、[Codex](/providers#codex)、[Cursor](/providers#cursor)、[Copilot](/providers#copilot)、[Hermes](/providers#hermes)、[Kimi](/providers#kimi)、[Kiro CLI](/providers#kiro-cli)、[OpenCode](/providers#opencode)、[OpenClaw](/providers#openclaw)、[Pi](/providers#pi)、[Qoder](/providers#qoder)、[Trae CLI](/providers#trae)、[DevEco Code](/providers#deveco-code)、[Grok](/providers#grok)。デーモンがタスクを取得した後は、これらのツールを使って実際の作業を行います。
+- **AI コーディングツール** — 次の 12 種類のうちの 1 つ（または複数を並列で）: [Antigravity](/providers#antigravity)、[Claude Code](/providers#claude-code)、[Codex](/providers#codex)、[Cursor](/providers#cursor)、[Copilot](/providers#copilot)、[Gemini](/providers#gemini)、[Hermes](/providers#hermes)、[Kimi](/providers#kimi)、[Kiro CLI](/providers#kiro-cli)、[OpenCode](/providers#opencode)、[OpenClaw](/providers#openclaw)、[Pi](/providers#pi)。デーモンがタスクを取得した後は、これらのツールを使って実際の作業を行います。
 
 ツールチェーンがローカルに留まるため、**あなたの API キー、コードディレクトリ、認可されたツール**は、あなたのマシン上でのみ使用されます。Multica サーバーはそのいずれも目にすることはありません。これはセルフホストでも Cloud でも同じように適用されます。
 

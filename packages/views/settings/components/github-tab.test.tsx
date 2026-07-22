@@ -12,7 +12,6 @@ const mockGetConnectURL = vi.hoisted(() => vi.fn());
 const mockInvalidate = vi.hoisted(() => vi.fn());
 const mockNavPush = vi.hoisted(() => vi.fn());
 const mockSetQueryData = vi.hoisted(() => vi.fn());
-const mockToastSuccess = vi.hoisted(() => vi.fn());
 
 const workspaceRef = vi.hoisted(() => ({
   current: {
@@ -108,7 +107,7 @@ vi.mock("../../navigation", () => ({
 }));
 
 vi.mock("sonner", () => ({
-  toast: { success: mockToastSuccess, error: vi.fn() },
+  toast: { success: vi.fn(), error: vi.fn() },
 }));
 
 import { GitHubTab } from "./github-tab";
@@ -187,9 +186,6 @@ describe("GitHubTab", () => {
     await waitFor(() => {
       expect(mockUpdateWorkspace).toHaveBeenCalledWith("workspace-1", {
         settings: { co_authored_by_enabled: true, github_enabled: false },
-      });
-      expect(mockToastSuccess).toHaveBeenCalledWith("Changes saved", {
-        id: "settings-auto-save",
       });
     });
   });

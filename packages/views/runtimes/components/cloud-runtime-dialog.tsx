@@ -254,11 +254,7 @@ function LabeledInput({
         <Label htmlFor={id} className="text-xs text-muted-foreground">
           {label}
         </Label>
-        <Select
-          items={options.map((option) => ({ value: option, label: option }))}
-          value={value}
-          onValueChange={(next) => onChange(next ?? value)}
-        >
+        <Select value={value} onValueChange={(next) => onChange(next ?? value)}>
           <SelectTrigger id={id} className="h-9 w-full rounded-md text-sm">
             <SelectValue>
               {() => <span className="truncate">{value}</span>}

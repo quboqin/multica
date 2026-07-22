@@ -1,11 +1,9 @@
 {
   "nav": {
     "inbox": "인박스",
-    "chat": "채팅",
     "my_issues": "내 이슈",
     "issues": "이슈",
     "plans": "Plans",
-    "kpi": "KPI",
     "projects": "프로젝트",
     "autopilots": "오토파일럿",
     "agents": "에이전트",
@@ -13,15 +11,14 @@
     "usage": "사용량",
     "runtimes": "런타임",
     "skills": "스킬",
-    "settings": "설정"
+    "settings": "설정",
+    "kpi": "KPI"
   },
   "help": {
     "trigger": "도움말",
     "docs": "문서",
     "changelog": "변경 로그",
-    "discord": "Discord",
-    "feedback": "피드백",
-    "server_version": "서버 버전 {{version}}"
+    "feedback": "피드백"
   },
   "workspace_loader": {
     "loading_workspace": "워크스페이스 로딩 중...",
@@ -41,11 +38,6 @@
     "pinned_label": "고정됨",
     "workspace_group": "워크스페이스",
     "configure_group": "설정",
-    "unread_overflow": "99+",
-    "discord_card": {
-      "title": "Discord 참여하기",
-      "description": "팀과 다른 사용자들과 교류해 보세요.",
-      "dismiss": "닫기"
-    }
+    "unread_overflow": "99+"
   }
 }

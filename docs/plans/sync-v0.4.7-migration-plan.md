@@ -28,6 +28,17 @@ application with small commits.
 - Completed: Codex latency/sandbox audit. The current branch already has newer
   sandbox handling, so only missing warm-cache, final-answer latency, and Next
   file tracing root behavior were migrated.
+- Completed: latest local `master` update through
+  `67eb27882 Merge branch 'feat/credential-broker' into 'master'`. The pass
+  synchronized the full `v0.4.7..master` code diff, including credential broker,
+  creative material workflow, preview sessions, crawler worker, device preview
+  runtime, self-host release tooling, docs, frontend API/schema/types, and
+  generated sqlc code.
+- Completed: database scripts for the latest `master` feature set were migrated
+  as `213-245` instead of copying master `121-130` directly. The rewritten files
+  remove new FK/cascade usage and split every new concurrent index into its own
+  single-statement migration file. `244/245` bridge the current branch's older
+  `originator_user_id` history to master code's `requesting_user_id` column.
 
 ## Remaining Master Commit Audit
 
@@ -68,6 +79,11 @@ should keep their original commit IDs for traceability when migrated manually.
 - Completed: `9943e8795` (`private branding`). Migrated Cybertron landing
   metadata/copy and restored the favicon from local `master`.
 - No local `master` commit is intentionally omitted after this pass.
+- No local `master` commit is intentionally omitted after the latest
+  `67eb27882` sync pass. Non-migration code now matches `master` except for the
+  existing sync-branch Cybertron branding / localhost backend-port adaptation,
+  this plan document, and a TypeScript test helper update needed by the current
+  `@tiptap/suggestion` `AbortSignal` signature.
 
 Current local verification:
 
@@ -97,6 +113,16 @@ Current local verification:
   on port 5432 with `multica/multica`.
 - `go run ./cmd/migrate up` passes against the local test database and applied
   migrations through `212_kpi_metric_workspace_link_index`.
+- `go run ./cmd/migrate up` passes against the local test database and applied
+  migrations through `245_agent_task_requesting_user_index`.
+- `go test ./internal/handler -run 'Test(Credential|Creative|PreviewSession|WorkspaceMcp)' -count=1`
+  passes.
+- `go test ./internal/broker ./internal/creative ./internal/handler -run '^$'`
+  passes.
+- `corepack pnpm --filter @multica/crawler-worker test` passes.
+- `corepack pnpm exec vitest run editor/extensions/mention-suggestion.test.tsx
+  editor/extensions/slash-command-suggestion.test.tsx` passes from
+  `packages/views`.
 - `go test ./cmd/migrate` passes.
 - `go test ./internal/migrations` passes.
 - All locale JSON files parse.

@@ -282,10 +282,6 @@ func (b *piBackend) Execute(ctx context.Context, prompt string, opts ExecOptions
 			case "agent_start":
 				trySend(msgCh, Message{Type: MessageStatus, Status: "running"})
 
-			case "turn_start":
-				output.Reset()
-				textBuffer.Reset()
-
 			case "message_update":
 				if evt.AssistantMessageEvent == nil {
 					continue

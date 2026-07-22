@@ -12,9 +12,6 @@ interface ProjectDraft {
   leadType?: "member" | "agent";
   leadId?: string;
   icon?: string;
-  // Calendar days ("YYYY-MM-DD"); empty/undefined means unset.
-  startDate?: string;
-  dueDate?: string;
 }
 
 const EMPTY_DRAFT: ProjectDraft = {
@@ -25,8 +22,6 @@ const EMPTY_DRAFT: ProjectDraft = {
   leadType: undefined,
   leadId: undefined,
   icon: undefined,
-  startDate: undefined,
-  dueDate: undefined,
 };
 
 interface ProjectDraftStore {

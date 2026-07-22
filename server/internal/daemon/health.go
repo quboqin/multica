@@ -9,10 +9,10 @@ import (
 	"net/http"
 	"os"
 	"runtime"
-	"strings"
 	"time"
 
 	"github.com/multica-ai/multica/server/internal/daemon/repocache"
+	"github.com/multica-ai/multica/server/internal/previewdetect"
 )
 
 // HealthResponse is returned by the daemon's local health endpoint.
@@ -54,13 +54,12 @@ func (d *Daemon) listenHealth() (net.Listener, error) {
 
 // repoCheckoutRequest is the body of a POST /repo/checkout request.
 type repoCheckoutRequest struct {
-	URL          string `json:"url"`
-	WorkspaceID  string `json:"workspace_id"`
-	WorkDir      string `json:"workdir"`
-	Ref          string `json:"ref,omitempty"`
-	AgentName    string `json:"agent_name"`
-	TaskID       string `json:"task_id"`
-	CheckoutMode string `json:"checkout_mode,omitempty"`
+	URL         string `json:"url"`
+	WorkspaceID string `json:"workspace_id"`
+	WorkDir     string `json:"workdir"`
+	Ref         string `json:"ref,omitempty"`
+	AgentName   string `json:"agent_name"`
+	TaskID      string `json:"task_id"`
 }
 
 // healthHandler returns the /health HTTP handler. Extracted from serveHealth
@@ -140,23 +139,8 @@ func (d *Daemon) serveHealth(ctx context.Context, ln net.Listener, startedAt tim
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", d.healthHandler(startedAt))
 	mux.HandleFunc("/shutdown", d.shutdownHandler())
-	mux.HandleFunc("/repo/checkout", d.repoCheckoutHandler())
 
-	srv := &http.Server{Handler: mux}
-
-	go func() {
-		<-ctx.Done()
-		srv.Close()
-	}()
-
-	d.logger.Info("health server listening", "addr", ln.Addr().String())
-	if err := srv.Serve(ln); err != nil && err != http.ErrServerClosed {
-		d.logger.Warn("health server error", "error", err)
-	}
-}
-
-func (d *Daemon) repoCheckoutHandler() http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/repo/checkout", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
@@ -167,7 +151,6 @@ func (d *Daemon) repoCheckoutHandler() http.HandlerFunc {
 			http.Error(w, "invalid request body: "+err.Error(), http.StatusBadRequest)
 			return
 		}
-		req.URL = strings.TrimSpace(req.URL)
 		if req.URL == "" {
 			http.Error(w, "url is required", http.StatusBadRequest)
 			return
@@ -180,40 +163,43 @@ func (d *Daemon) repoCheckoutHandler() http.HandlerFunc {
 			http.Error(w, "workdir is required", http.StatusBadRequest)
 			return
 		}
-		if req.CheckoutMode != "" && req.CheckoutMode != repoCheckoutModeIsolated {
-			http.Error(w, "invalid checkout_mode", http.StatusBadRequest)
-			return
-		}
 
 		if d.repoCache == nil {
 			http.Error(w, "repo cache not initialized", http.StatusInternalServerError)
 			return
 		}
 
-		if err := d.ensureRepoReady(r.Context(), req.WorkspaceID, req.URL); err != nil {
+		// Resolve the requesting user's git context for this task so the
+		// bare-cache clone/fetch runs as that user and the worktree commits as
+		// that user (shared-runtime per-user isolation). When the task user has
+		// no git_token, checkout fails explicitly instead of falling back to
+		// daemon credentials.
+		gitCtx := d.taskGitContext(req.TaskID)
+		gitCred := gitCtx.Cred
+
+		if err := d.ensureRepoReady(r.Context(), req.WorkspaceID, req.URL, gitCred); err != nil {
 			statusCode := http.StatusInternalServerError
 			if errors.Is(err, ErrRepoNotConfigured) {
 				statusCode = http.StatusBadRequest
+			} else if errors.Is(err, ErrGitTokenRequired) {
+				statusCode = http.StatusForbidden
 			}
 			d.logger.Error("repo checkout readiness failed", "workspace_id", req.WorkspaceID, "url", req.URL, "error", err)
 			http.Error(w, err.Error(), statusCode)
 			return
 		}
 
-		checkoutRef := strings.TrimSpace(req.Ref)
-		if checkoutRef == "" {
-			checkoutRef = d.taskRepoDefaultRef(req.WorkspaceID, req.TaskID, req.URL)
-		}
-
 		result, err := d.repoCache.CreateWorktree(repocache.WorktreeParams{
 			WorkspaceID:         req.WorkspaceID,
 			RepoURL:             req.URL,
 			WorkDir:             req.WorkDir,
-			Ref:                 checkoutRef,
+			Ref:                 req.Ref,
 			AgentName:           req.AgentName,
 			TaskID:              req.TaskID,
 			CoAuthoredByEnabled: d.workspaceCoAuthoredByEnabled(req.WorkspaceID),
-			IsolatedGitMetadata: req.CheckoutMode == repoCheckoutModeIsolated,
+			CommitUserName:      gitCtx.Name,
+			CommitUserEmail:     gitCtx.Email,
+			Cred:                gitCred,
 		})
 		if err != nil {
 			d.logger.Error("repo checkout failed", "url", req.URL, "error", err)
@@ -221,7 +207,30 @@ func (d *Daemon) repoCheckoutHandler() http.HandlerFunc {
 			return
 		}
 
+		// Refresh task-local preview discovery from the actual checkout. This
+		// makes repository registration optional: the runtime derives targets
+		// from the code that is now present in the development context.
+		if report, detectErr := previewdetect.Detect(req.WorkDir); detectErr != nil {
+			d.logger.Warn("preview target detection after checkout failed", "workdir", req.WorkDir, "error", detectErr)
+		} else if reportPath, writeErr := previewdetect.WriteReport(req.WorkDir, report); writeErr != nil {
+			d.logger.Warn("preview target report write after checkout failed", "workdir", req.WorkDir, "error", writeErr)
+		} else {
+			d.logger.Info("preview targets refreshed after checkout", "workdir", req.WorkDir, "report", reportPath, "repositories", len(report.Repositories))
+		}
+
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(result)
+	})
+
+	srv := &http.Server{Handler: mux}
+
+	go func() {
+		<-ctx.Done()
+		srv.Close()
+	}()
+
+	d.logger.Info("health server listening", "addr", ln.Addr().String())
+	if err := srv.Serve(ln); err != nil && err != http.ErrServerClosed {
+		d.logger.Warn("health server error", "error", err)
 	}
 }

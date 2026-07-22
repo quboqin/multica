@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useRef } from "react";
-import { CalendarClock, CalendarDays, CalendarRange, ChevronRight, FolderOpen, Maximize2, Minimize2, MoreHorizontal, Search, X as XIcon, UserMinus } from "lucide-react";
+import { CalendarRange, ChevronRight, FolderOpen, Maximize2, Minimize2, Search, X as XIcon, UserMinus } from "lucide-react";
 
 /**
  * GitHub mark — lucide-react v1 dropped brand icons, so we inline the
@@ -22,8 +22,8 @@ function GithubIcon({ className }: { className?: string }) {
   );
 }
 import { useQuery } from "@tanstack/react-query";
-import { useCreateProject } from "@multica/core/projects/mutations";
 import { milestoneListOptions } from "@multica/core/milestones";
+import { useCreateProject } from "@multica/core/projects/mutations";
 import { useProjectDraftStore } from "@multica/core/projects";
 import {
   PROJECT_STATUS_CONFIG,
@@ -59,9 +59,6 @@ import {
   useProjectPriorityLabels,
 } from "../projects/components/labels";
 import { DEFAULT_PROJECT_ICON } from "../projects/components/project-icon";
-import { ProjectStartDatePicker } from "../projects/components/project-start-date-picker";
-import { ProjectDueDatePicker } from "../projects/components/project-due-date-picker";
-import { PillButton } from "../common/pill-button";
 import {
   isDesktopShell,
   pickDirectory,
@@ -71,6 +68,26 @@ import { useLocalDaemonStatus } from "../platform/use-local-daemon-status";
 
 interface CreateProjectModalData {
   milestone_id?: unknown;
+}
+
+function PillButton({
+  children,
+  className,
+  ...props
+}: React.ButtonHTMLAttributes<HTMLButtonElement>) {
+  return (
+    <button
+      type="button"
+      className={cn(
+        "inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs",
+        "hover:bg-accent/60 transition-colors cursor-pointer",
+        className,
+      )}
+      {...props}
+    >
+      {children}
+    </button>
+  );
 }
 
 function RepoUrlText({
@@ -84,7 +101,10 @@ function RepoUrlText({
     <Tooltip>
       <TooltipTrigger
         render={
-          <span className={cn("truncate flex-1 text-left", className)}>
+          <span
+            title={url}
+            className={cn("truncate flex-1 text-left", className)}
+          >
             {url}
           </span>
         }
@@ -132,12 +152,6 @@ export function CreateProjectModal({
       : null;
   const [milestoneId, setMilestoneId] = useState<string | null>(initialMilestoneId);
   const [icon, setIcon] = useState<string | undefined>(draft.icon);
-  const [startDate, setStartDate] = useState<string>(draft.startDate ?? "");
-  const [dueDate, setDueDate] = useState<string>(draft.dueDate ?? "");
-  // Dates are collapsed into the ⋯ overflow by default (progressive
-  // disclosure, mirroring create-issue); these flip a pill inline + open.
-  const [startDatePickerOpen, setStartDatePickerOpen] = useState(false);
-  const [dueDatePickerOpen, setDueDatePickerOpen] = useState(false);
   const [iconPickerOpen, setIconPickerOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [isExpanded, setIsExpanded] = useState(false);
@@ -216,8 +230,6 @@ export function CreateProjectModal({
     setDraft({ leadType: type, leadId: id });
   };
   const updateIcon = (v: string | undefined) => { setIcon(v); setDraft({ icon: v }); };
-  const updateStartDate = (v: string) => { setStartDate(v); setDraft({ startDate: v || undefined }); };
-  const updateDueDate = (v: string) => { setDueDate(v); setDraft({ dueDate: v || undefined }); };
 
   const [leadOpen, setLeadOpen] = useState(false);
   const [leadFilter, setLeadFilter] = useState("");
@@ -274,8 +286,6 @@ export function CreateProjectModal({
         lead_type: leadType,
         lead_id: leadId,
         milestone_id: milestoneId,
-        start_date: startDate || undefined,
-        due_date: dueDate || undefined,
         // Server attaches these in the same transaction as the project.
         resources,
       });
@@ -404,18 +414,16 @@ export function CreateProjectModal({
             onUpdate={(md) => setDraft({ description: md })}
             debounceMs={500}
           />
-          <p className="mt-1 text-xs text-muted-foreground">
-            {t(($) => $.create_project.description_hint)}
-          </p>
         </div>
 
-        {/* Property toolbar — mirrors the create-issue footer: a wrapping pill
-            row whose low-frequency fields (start/due date) collapse into a ⋯
-            overflow, with the primary action in a separate bar below.
+        {/* Footer: properties (left, wrap) + Create button (right). Single row
+            so the modal stays compact — Linear-style.
             Repos lives here alongside the property pills for now. Once we
             support more resource types (Linear / Notion / Figma / Slack), pull
-            them out into a dedicated Resources strip above this footer. */}
-        <div className="flex items-center gap-1.5 px-4 py-2 shrink-0 flex-wrap">
+            them out into a dedicated Resources strip above this footer — a
+            single Repos pill on its own row looked too sparse. */}
+        <div className="flex items-center justify-between gap-2 px-4 py-3 border-t shrink-0">
+          <div className="flex items-center gap-1.5 flex-wrap min-w-0">
           <DropdownMenu>
             <DropdownMenuTrigger
               render={
@@ -454,6 +462,43 @@ export function CreateProjectModal({
             </DropdownMenuContent>
           </DropdownMenu>
 
+          <DropdownMenu>
+            <DropdownMenuTrigger
+              render={
+                <PillButton>
+                  <CalendarRange className="size-3 text-muted-foreground" />
+                  <span className={cn(!selectedMilestone && "text-muted-foreground")}>
+                    {selectedMilestone?.title ?? t(($) => $.create_project.no_plan)}
+                  </span>
+                </PillButton>
+              }
+            />
+            <DropdownMenuContent align="start" className="w-56">
+              <DropdownMenuItem onClick={() => setMilestoneId(null)}>
+                <CalendarRange className="size-3.5 text-muted-foreground" />
+                <span className="text-muted-foreground">{t(($) => $.create_project.no_plan)}</span>
+              </DropdownMenuItem>
+              {milestones.length > 0 && (
+                <div className="my-1 h-px bg-border" />
+              )}
+              {milestones.map((milestone) => (
+                <DropdownMenuItem key={milestone.id} onClick={() => setMilestoneId(milestone.id)}>
+                  <span
+                    className={cn(
+                      "size-2 rounded-full",
+                      milestone.status === "completed" || milestone.status === "cancelled"
+                        ? "bg-muted-foreground"
+                        : milestone.status === "paused"
+                          ? "bg-warning"
+                          : "bg-primary",
+                    )}
+                  />
+                  <span className="truncate">{milestone.title}</span>
+                </DropdownMenuItem>
+              ))}
+            </DropdownMenuContent>
+          </DropdownMenu>
+
           <Popover
             open={leadOpen}
             onOpenChange={(v) => {
@@ -466,7 +511,7 @@ export function CreateProjectModal({
                 <PillButton>
                   {leadType && leadId ? (
                     <>
-                      <ActorAvatar actorType={leadType} actorId={leadId} size="sm" showStatusDot />
+                      <ActorAvatar actorType={leadType} actorId={leadId} size={16} showStatusDot />
                       <span>{leadLabel}</span>
                     </>
                   ) : (
@@ -512,7 +557,7 @@ export function CreateProjectModal({
                         }}
                         className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-accent transition-colors"
                       >
-                        <ActorAvatar actorType="member" actorId={m.user_id} size="sm" />
+                        <ActorAvatar actorType="member" actorId={m.user_id} size={16} />
                         <span>{m.name}</span>
                       </button>
                     ))}
@@ -533,7 +578,7 @@ export function CreateProjectModal({
                         }}
                         className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-accent transition-colors"
                       >
-                        <ActorAvatar actorType="agent" actorId={a.id} size="sm" showStatusDot />
+                        <ActorAvatar actorType="agent" actorId={a.id} size={16} showStatusDot />
                         <span>{a.name}</span>
                       </button>
                     ))}
@@ -549,63 +594,6 @@ export function CreateProjectModal({
               </div>
             </PopoverContent>
           </Popover>
-
-          {/* Start date — collapsed into ⋯ unless it has a value or was just
-              opened from the overflow (the calendar anchors on the inline pill). */}
-          <DropdownMenu>
-            <DropdownMenuTrigger
-              render={
-                <PillButton>
-                  <CalendarRange className="size-3" />
-                  <span className={cn(!selectedMilestone && "text-muted-foreground")}>
-                    {selectedMilestone?.title ?? t(($) => $.create_project.no_plan)}
-                  </span>
-                </PillButton>
-              }
-            />
-            <DropdownMenuContent align="start" className="w-56">
-              <DropdownMenuItem onClick={() => setMilestoneId(null)}>
-                <CalendarRange className="size-3.5 text-muted-foreground" />
-                <span className="text-muted-foreground">{t(($) => $.create_project.no_plan)}</span>
-              </DropdownMenuItem>
-              {milestones.length > 0 && <div className="my-1 h-px bg-border" />}
-              {milestones.map((milestone) => (
-                <DropdownMenuItem key={milestone.id} onClick={() => setMilestoneId(milestone.id)}>
-                  <span
-                    className={cn(
-                      "size-2 rounded-full",
-                      milestone.status === "completed" || milestone.status === "cancelled"
-                        ? "bg-muted-foreground"
-                        : milestone.status === "paused"
-                          ? "bg-warning"
-                          : "bg-primary",
-                    )}
-                  />
-                  <span className="truncate">{milestone.title}</span>
-                </DropdownMenuItem>
-              ))}
-            </DropdownMenuContent>
-          </DropdownMenu>
-
-          {(startDate || startDatePickerOpen) && (
-            <ProjectStartDatePicker
-              startDate={startDate || null}
-              onUpdate={(u) => updateStartDate(u.start_date ?? "")}
-              triggerRender={<PillButton />}
-              open={startDatePickerOpen}
-              onOpenChange={setStartDatePickerOpen}
-            />
-          )}
-
-          {(dueDate || dueDatePickerOpen) && (
-            <ProjectDueDatePicker
-              dueDate={dueDate || null}
-              onUpdate={(u) => updateDueDate(u.due_date ?? "")}
-              triggerRender={<PillButton />}
-              open={dueDatePickerOpen}
-              onOpenChange={setDueDatePickerOpen}
-            />
-          )}
 
           <Popover
             open={repoPopoverOpen}
@@ -855,40 +843,8 @@ export function CreateProjectModal({
               )}
             </PopoverContent>
           </Popover>
+          </div>
 
-          {/* Overflow — always the last child so it stays at the end of the
-              wrap flow. Only rendered while a date is still collapsible; when
-              both are set there is nothing left to add. */}
-          {(!startDate || !dueDate) && (
-            <DropdownMenu>
-              <DropdownMenuTrigger
-                render={
-                  <PillButton aria-label={t(($) => $.create_project.more_options_aria)}>
-                    <MoreHorizontal className="size-3.5" />
-                  </PillButton>
-                }
-              />
-              <DropdownMenuContent align="start" className="w-auto">
-                {!dueDate && (
-                  <DropdownMenuItem onClick={() => setDueDatePickerOpen(true)}>
-                    <CalendarDays className="h-3.5 w-3.5" />
-                    {t(($) => $.create_project.set_due_date)}
-                  </DropdownMenuItem>
-                )}
-                {!startDate && (
-                  <DropdownMenuItem onClick={() => setStartDatePickerOpen(true)}>
-                    <CalendarClock className="h-3.5 w-3.5" />
-                    {t(($) => $.create_project.set_start_date)}
-                  </DropdownMenuItem>
-                )}
-              </DropdownMenuContent>
-            </DropdownMenu>
-          )}
-        </div>
-
-        {/* Footer action bar — primary action in its own strip, matching
-            create-issue. */}
-        <div className="flex items-center justify-end border-t px-4 py-3 shrink-0">
           <Button
             size="sm"
             onClick={handleSubmit}

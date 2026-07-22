@@ -79,7 +79,7 @@ func (h *Handler) CreateLarkLoginState(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusServiceUnavailable, "lark integration not configured")
 		return
 	}
-	inst, err := lark.NewChannelStore(h.Queries).GetLarkInstallation(r.Context(), instID)
+	inst, err := h.Queries.GetLarkInstallation(r.Context(), instID)
 	if err != nil {
 		writeError(w, http.StatusNotFound, "lark installation not found")
 		return
@@ -88,13 +88,12 @@ func (h *Handler) CreateLarkLoginState(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusConflict, "lark installation is not active")
 		return
 	}
-	now := time.Now()
 	state, err := h.signLarkLoginState(larkLoginState{
 		InstallationID: uuidToString(inst.ID),
 		Next:           sanitizeLarkLoginNext(req.Next),
 		Nonce:          randomHex(16),
-		IssuedAt:       now.Unix(),
-		ExpiresAt:      now.Add(larkLoginStateTTL).Unix(),
+		IssuedAt:       time.Now().Unix(),
+		ExpiresAt:      time.Now().Add(larkLoginStateTTL).Unix(),
 	})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to create state")
@@ -132,8 +131,7 @@ func (h *Handler) LarkLogin(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid state")
 		return
 	}
-	store := lark.NewChannelStore(h.Queries)
-	inst, err := store.GetLarkInstallation(r.Context(), instID)
+	inst, err := h.Queries.GetLarkInstallation(r.Context(), instID)
 	if err != nil {
 		writeError(w, http.StatusNotFound, "lark installation not found")
 		return
@@ -148,14 +146,15 @@ func (h *Handler) LarkLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	region := lark.RegionOrDefault(inst.Region)
-	info, err := lark.NewLoginClient(lark.LoginClientConfig{}, region).ExchangeCode(r.Context(), inst.AppID, appSecret, code)
+	loginClient := lark.NewLoginClient(lark.LoginClientConfig{}, region)
+	info, err := loginClient.ExchangeCode(r.Context(), inst.AppID, appSecret, code)
 	if err != nil {
 		slog.Warn("lark login failed", append(logger.RequestAttrs(r), "error", err, "installation_id", state.InstallationID)...)
 		writeError(w, http.StatusBadGateway, "failed to verify lark login")
 		return
 	}
 
-	user, isNew, err := h.findOrCreateUserForLarkLogin(r.Context(), store, inst, string(region), info)
+	user, isNew, err := h.findOrCreateUserForLarkLogin(r.Context(), inst, string(region), info)
 	if err != nil {
 		var signupErr SignupError
 		if errors.As(err, &signupErr) {
@@ -178,14 +177,14 @@ func (h *Handler) LarkLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	} else if ok {
 		workspace = ws
-		if onboardedUser, err := h.Queries.MarkUserOnboarded(r.Context(), user.ID); err == nil {
-			user = onboardedUser
-		} else {
+		if onboardedUser, err := h.Queries.MarkUserOnboarded(r.Context(), user.ID); err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to mark user onboarded")
 			return
+		} else {
+			user = onboardedUser
 		}
 	}
-	if err := h.bindLarkLoginUser(r.Context(), store, user.ID, inst, string(region), info); err != nil {
+	if err := h.bindLarkLoginUser(r.Context(), user.ID, inst, string(region), info); err != nil {
 		if errors.Is(err, errLarkLoginBindingConflict) {
 			writeError(w, http.StatusConflict, "lark user is already bound to another Multica user")
 			return
@@ -220,26 +219,24 @@ func (h *Handler) LarkLogin(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, resp)
 }
 
-func (h *Handler) findOrCreateUserForLarkLogin(ctx context.Context, store *lark.ChannelStore, inst lark.Installation, region string, info lark.LoginUserInfo) (db.User, bool, error) {
-	if binding, ok, err := h.findLarkLoginBinding(ctx, store, inst.ID, info); err != nil {
+func (h *Handler) findOrCreateUserForLarkLogin(ctx context.Context, inst db.LarkInstallation, region string, info lark.LoginUserInfo) (db.User, bool, error) {
+	if binding, ok, err := h.findLarkLoginBinding(ctx, inst.ID, info); err != nil {
 		return db.User{}, false, err
 	} else if ok {
 		user, err := h.Queries.GetUser(ctx, binding.MulticaUserID)
 		return user, false, err
 	}
 
-	if info.UnionID != "" {
-		identity, err := h.Queries.GetLarkLoginIdentityByUnionID(ctx, db.GetLarkLoginIdentityByUnionIDParams{
-			Region:  region,
-			UnionID: info.UnionID,
-		})
-		if err == nil {
-			user, err := h.Queries.GetUser(ctx, identity.MulticaUserID)
-			return user, false, err
-		}
-		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
-			return db.User{}, false, err
-		}
+	identity, err := h.Queries.GetLarkLoginIdentityByUnionID(ctx, db.GetLarkLoginIdentityByUnionIDParams{
+		Region:  region,
+		UnionID: info.UnionID,
+	})
+	if err == nil {
+		user, err := h.Queries.GetUser(ctx, identity.MulticaUserID)
+		return user, false, err
+	}
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return db.User{}, false, err
 	}
 
 	if info.Email != "" {
@@ -248,32 +245,32 @@ func (h *Handler) findOrCreateUserForLarkLogin(ctx context.Context, store *lark.
 	return db.User{}, false, SignupError{Message: "Lark account email is required for first-time signup"}
 }
 
-func (h *Handler) findLarkLoginBinding(ctx context.Context, store *lark.ChannelStore, installationID pgtype.UUID, info lark.LoginUserInfo) (lark.UserBinding, bool, error) {
+func (h *Handler) findLarkLoginBinding(ctx context.Context, installationID pgtype.UUID, info lark.LoginUserInfo) (db.LarkUserBinding, bool, error) {
 	if info.OpenID != "" {
-		binding, err := store.GetLarkUserBindingByOpenID(ctx, lark.GetUserBindingByOpenIDParams{
+		binding, err := h.Queries.GetLarkUserBindingByOpenID(ctx, db.GetLarkUserBindingByOpenIDParams{
 			InstallationID: installationID,
-			ChannelUserID:  info.OpenID,
+			LarkOpenID:     info.OpenID,
 		})
 		if err == nil {
 			return binding, true, nil
 		}
 		if !errors.Is(err, pgx.ErrNoRows) {
-			return lark.UserBinding{}, false, err
+			return db.LarkUserBinding{}, false, err
 		}
 	}
 	if info.UnionID != "" {
-		binding, err := store.GetLarkUserBindingByUnionID(ctx, lark.GetUserBindingByUnionIDParams{
+		binding, err := h.Queries.GetLarkUserBindingByInstallationAndUnionID(ctx, db.GetLarkUserBindingByInstallationAndUnionIDParams{
 			InstallationID: installationID,
-			UnionID:        info.UnionID,
+			UnionID:        pgtype.Text{String: info.UnionID, Valid: true},
 		})
 		if err == nil {
 			return binding, true, nil
 		}
 		if !errors.Is(err, pgx.ErrNoRows) {
-			return lark.UserBinding{}, false, err
+			return db.LarkUserBinding{}, false, err
 		}
 	}
-	return lark.UserBinding{}, false, nil
+	return db.LarkUserBinding{}, false, nil
 }
 
 func (h *Handler) updateUserFromLarkProfile(ctx context.Context, user db.User, info lark.LoginUserInfo) db.User {
@@ -302,7 +299,7 @@ func (h *Handler) updateUserFromLarkProfile(ctx context.Context, user db.User, i
 	return updated
 }
 
-func (h *Handler) ensureLarkLoginMembership(ctx context.Context, user db.User, inst lark.Installation) (db.Workspace, bool, error) {
+func (h *Handler) ensureLarkLoginMembership(ctx context.Context, user db.User, inst db.LarkInstallation) (db.Workspace, bool, error) {
 	var ws db.Workspace
 	var err error
 	if h.cfg.LarkLoginJoinBotWorkspace {
@@ -315,25 +312,12 @@ func (h *Handler) ensureLarkLoginMembership(ctx context.Context, user db.User, i
 	if err != nil {
 		return db.Workspace{}, false, err
 	}
-	member, err := h.Queries.GetMemberByUserAndWorkspace(ctx, db.GetMemberByUserAndWorkspaceParams{
-		UserID:      user.ID,
-		WorkspaceID: ws.ID,
-	})
-	if err == nil {
-		return ws, true, nil
-	}
-	if !isNotFound(err) {
-		return db.Workspace{}, false, err
-	}
-	member, err = h.Queries.CreateMember(ctx, db.CreateMemberParams{
+	member, err := h.Queries.UpsertMember(ctx, db.UpsertMemberParams{
 		WorkspaceID: ws.ID,
 		UserID:      user.ID,
 		Role:        "member",
 	})
 	if err != nil {
-		if isUniqueViolation(err) {
-			return ws, true, nil
-		}
 		return db.Workspace{}, false, err
 	}
 	h.publish(protocol.EventMemberAdded, uuidToString(ws.ID), "member", uuidToString(user.ID), map[string]any{
@@ -343,12 +327,12 @@ func (h *Handler) ensureLarkLoginMembership(ctx context.Context, user db.User, i
 	return ws, true, nil
 }
 
-func (h *Handler) bindLarkLoginUser(ctx context.Context, store *lark.ChannelStore, userID pgtype.UUID, inst lark.Installation, region string, info lark.LoginUserInfo) error {
-	_, err := store.CreateLarkUserBinding(ctx, lark.CreateUserBindingParams{
+func (h *Handler) bindLarkLoginUser(ctx context.Context, userID pgtype.UUID, inst db.LarkInstallation, region string, info lark.LoginUserInfo) error {
+	_, err := h.Queries.CreateLarkUserBinding(ctx, db.CreateLarkUserBindingParams{
 		WorkspaceID:    inst.WorkspaceID,
 		MulticaUserID:  userID,
 		InstallationID: inst.ID,
-		ChannelUserID:  info.OpenID,
+		LarkOpenID:     info.OpenID,
 		UnionID:        pgtype.Text{String: info.UnionID, Valid: info.UnionID != ""},
 	})
 	if err != nil {
@@ -358,9 +342,6 @@ func (h *Handler) bindLarkLoginUser(ctx context.Context, store *lark.ChannelStor
 		return err
 	}
 
-	if info.UnionID == "" {
-		return nil
-	}
 	if _, err := h.Queries.UpsertLarkLoginIdentity(ctx, db.UpsertLarkLoginIdentityParams{
 		Region:        region,
 		UnionID:       info.UnionID,

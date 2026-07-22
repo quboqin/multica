@@ -432,9 +432,6 @@ func TestRollupTaskUsageHourlyIdempotentAndWatermark(t *testing.T) {
 	if testHandler == nil {
 		t.Skip("database not available")
 	}
-	// Serialise against any other package's test that touches the shared
-	// rollup singleton / advisory lock 4246 (MUL-3980).
-	lockRollupSingleton(t)
 	ctx := context.Background()
 
 	var runtimeID, agentID string
@@ -1056,10 +1053,6 @@ func TestPruneTaskUsageHourlyDirty(t *testing.T) {
 	if testHandler == nil {
 		t.Skip("database not available")
 	}
-	// This test calls rollup_task_usage_hourly(), which advances the shared
-	// watermark as a side effect; serialise so it does not perturb another
-	// package's rollup test (MUL-3980).
-	lockRollupSingleton(t)
 	ctx := context.Background()
 
 	// task_usage_hourly_dirty carries no FKs (it is a queue), so synthetic
@@ -1139,11 +1132,6 @@ func TestRollupTaskUsageHourlyCapsWindowAtOneDay(t *testing.T) {
 	if testHandler == nil {
 		t.Skip("database not available")
 	}
-	// Serialise against any other package's rollup test (MUL-3980). Acquire
-	// the guard BEFORE registering the watermark-restore cleanup below so
-	// that cleanup (LIFO) runs while the guard is still held, and the guard
-	// is released last.
-	lockRollupSingleton(t)
 	ctx := context.Background()
 
 	// Other tests drive rollup_task_usage_hourly_window directly and never

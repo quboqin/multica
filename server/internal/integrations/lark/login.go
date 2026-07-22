@@ -15,7 +15,7 @@ import (
 
 const defaultLoginRequestTimeout = 10 * time.Second
 
-// LoginClientConfig configures the Feishu/Lark web-login OAuth client.
+// LoginClientConfig configures the Feishu/Lark web login OAuth client.
 type LoginClientConfig struct {
 	BaseURL    string
 	HTTPClient *http.Client
@@ -157,11 +157,11 @@ func (c *LoginClient) userInfo(ctx context.Context, userAccessToken string) (Log
 		return LoginUserInfo{}, fmt.Errorf("lark login: user info failed: code=%d msg=%q", resp.Code, resp.Msg)
 	}
 	info := normalizeLoginUserInfo(LoginUserInfo{
-		OpenID:    resp.Data.OpenID,
-		UnionID:   resp.Data.UnionID,
-		Name:      resp.Data.Name,
-		Email:     resp.Data.Email,
-		AvatarURL: resp.Data.AvatarURL,
+		OpenID:    strings.TrimSpace(resp.Data.OpenID),
+		UnionID:   strings.TrimSpace(resp.Data.UnionID),
+		Name:      strings.TrimSpace(resp.Data.Name),
+		Email:     strings.ToLower(strings.TrimSpace(resp.Data.Email)),
+		AvatarURL: strings.TrimSpace(resp.Data.AvatarURL),
 	})
 	if info.Name == "" {
 		info.Name = strings.TrimSpace(resp.Data.EnName)

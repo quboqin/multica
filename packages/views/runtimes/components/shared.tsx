@@ -179,7 +179,7 @@ export function KpiCard({
   accent,
 }: {
   label: string;
-  value: React.ReactNode;
+  value: string;
   hint?: React.ReactNode;
   accent?: "brand" | "success" | "default";
 }) {

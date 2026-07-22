@@ -15,6 +15,7 @@
     "unpin": "取消钉选",
     "delete": "删除",
     "no_matches": "没有匹配的需求",
+    "selected_one": "已选 {{count}} 项",
     "selected_other": "已选 {{count}} 项",
     "clear_selection": "清除选择"
   },
@@ -24,10 +25,10 @@
     "status": "状态",
     "progress": "进度",
     "lead": "负责人",
-    "plan": "计划",
-    "labels": "Labels",
     "created": "创建时间",
-    "issues": "任务数"
+    "issues": "Issue 数",
+    "labels": "标签",
+    "plan": "所属计划"
   },
   "status": {
     "planned": "计划中",
@@ -69,19 +70,15 @@
     "section_properties": "属性",
     "section_progress": "进度",
     "section_description": "描述",
-    "prop_start_date": "开始日期",
-    "prop_due_date": "截止日期",
-    "no_plan": "No plan",
-    "clear_date": "清除日期",
     "description_placeholder": "添加描述...",
-    "description_hint": "会作为需求上下文提供给智能体，应用于该需求下的每个任务。",
     "empty_issues_title": "还没有关联的任务",
     "empty_issues_hint": "新建一个任务，或把已有的任务关联到这个需求。",
     "empty_issues_new_button": "新建任务",
     "no_issues_yet": "目前还没有任务",
     "toast_link_copied": "已复制链接",
     "toast_project_deleted": "已删除需求",
-    "toast_move_issue_failed": "移动任务失败"
+    "toast_move_issue_failed": "移动任务失败",
+    "no_plan": "无计划"
   },
   "resources": {
     "section_header": "资源",
@@ -137,6 +134,7 @@
   "toolbar": {
     "result_count_title": "当前结果 / 全部需求",
     "filter_label": "筛选",
+    "filter_active_count_one": "{{count}} 项筛选",
     "filter_active_count_other": "{{count}} 项筛选",
     "clear_filters": "清除筛选",
     "section_status": "状态",

@@ -1,12 +1,6 @@
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
-import type {
-  IssueStatus,
-  IssuePriority,
-  IssueAssigneeType,
-  IssuePropertyValues,
-  Attachment,
-} from "../../types";
+import type { IssueStatus, IssuePriority, IssueAssigneeType, Attachment } from "../../types";
 import { createWorkspaceAwareStorage, registerForWorkspaceRehydration } from "../../platform/workspace-storage";
 import { defaultStorage } from "../../platform/storage";
 
@@ -19,11 +13,6 @@ interface IssueDraft {
   assigneeId?: string;
   startDate: string | null;
   dueDate: string | null;
-  /** Label IDs chosen in the create dialog. Attached to the issue right
-   *  after it is created (the create endpoint takes no labels), so they are
-   *  kept as a plain id list rather than full Label objects. */
-  labelIds: string[];
-  propertyValues: IssuePropertyValues;
   attachments: Attachment[];
 }
 
@@ -36,8 +25,6 @@ const EMPTY_DRAFT: IssueDraft = {
   assigneeId: undefined,
   startDate: null,
   dueDate: null,
-  labelIds: [],
-  propertyValues: {},
   attachments: [],
 };
 
@@ -74,11 +61,7 @@ export const useIssueDraftStore = create<IssueDraftStore>()(
         set({ lastAssigneeType: type, lastAssigneeId: id }),
       hasDraft: () => {
         const { draft } = get();
-        return !!(
-          draft.title ||
-          draft.description ||
-          Object.keys(draft.propertyValues).length > 0
-        );
+        return !!(draft.title || draft.description);
       },
     }),
     {

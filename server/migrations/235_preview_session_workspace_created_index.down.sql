@@ -1,0 +1,1 @@
+DROP INDEX CONCURRENTLY IF EXISTS preview_session_workspace_created_idx;

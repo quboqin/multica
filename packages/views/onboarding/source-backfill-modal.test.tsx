@@ -7,9 +7,10 @@ import enOnboarding from "../locales/en/onboarding.json";
 
 const TEST_RESOURCES = { en: { common: enCommon, onboarding: enOnboarding } };
 
-const { mockUser, mockSaveQuestionnaire } = vi.hoisted(() => ({
+const { mockUser, mockSaveQuestionnaire, mockCaptureEvent } = vi.hoisted(() => ({
   mockUser: { value: null as null | Record<string, unknown> },
   mockSaveQuestionnaire: vi.fn(),
+  mockCaptureEvent: vi.fn(),
 }));
 
 vi.mock("@multica/core/auth", async () => {
@@ -32,6 +33,11 @@ vi.mock("@multica/core/onboarding", async () => {
     );
   return { ...actual, saveQuestionnaire: mockSaveQuestionnaire };
 });
+
+vi.mock("@multica/core/analytics", () => ({
+  captureEvent: mockCaptureEvent,
+  setPersonProperties: vi.fn(),
+}));
 
 import { SourceBackfillModal } from "./source-backfill-modal";
 
@@ -75,6 +81,7 @@ function mockPrefersReducedMotion(matches: boolean) {
 beforeEach(() => {
   mockSaveQuestionnaire.mockReset();
   mockSaveQuestionnaire.mockResolvedValue(undefined);
+  mockCaptureEvent.mockReset();
   setUser(null);
   wipeDismissCounters();
   mockPrefersReducedMotion(true);
@@ -112,7 +119,7 @@ describe("SourceBackfillModal", () => {
     ).not.toBeInTheDocument();
   });
 
-  it("opens for an onboarded user with empty source", async () => {
+  it("opens for an onboarded user with empty source and fires the shown event", async () => {
     setUser({
       id: "u1",
       onboarded_at: "2026-01-01T00:00:00Z",
@@ -124,6 +131,7 @@ describe("SourceBackfillModal", () => {
         screen.getByText(/How did you hear about Multica/i),
       ).toBeInTheDocument();
     });
+    expect(mockCaptureEvent).toHaveBeenCalledWith("source_backfill_shown");
   });
 
   it("Submit PATCHes the merged questionnaire preserving role / use_case", async () => {
@@ -153,6 +161,10 @@ describe("SourceBackfillModal", () => {
     expect(sent.role).toBe("engineer");
     expect(sent.use_case).toEqual(["ship_code", "plan_research"]);
     expect(sent.version).toBe(2);
+    expect(mockCaptureEvent).toHaveBeenCalledWith(
+      "source_backfill_submitted",
+      expect.objectContaining({ source: ["friends_colleagues"] }),
+    );
   });
 
   it("Skip PATCHes source_skipped=true preserving role / use_case", async () => {
@@ -179,6 +191,7 @@ describe("SourceBackfillModal", () => {
     expect(sent.source_skipped).toBe(true);
     expect(sent.role).toBe("founder");
     expect(sent.use_case).toEqual(["manage_team"]);
+    expect(mockCaptureEvent).toHaveBeenCalledWith("source_backfill_skipped");
   });
 
   it("treats a legacy single-string source as already answered", () => {

@@ -8,7 +8,6 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
-	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -19,6 +18,7 @@ func TestClaudeHandleAssistantText(t *testing.T) {
 
 	b := &claudeBackend{cfg: Config{Logger: slog.Default()}}
 	ch := make(chan Message, 10)
+	var output strings.Builder
 
 	msg := claudeSDKMessage{
 		Type: "assistant",
@@ -30,13 +30,10 @@ func TestClaudeHandleAssistantText(t *testing.T) {
 		}),
 	}
 
-	output, tools := b.handleAssistant(msg, ch, make(map[string]TokenUsage))
+	b.handleAssistant(msg, ch, &output, make(map[string]TokenUsage))
 
-	if output != "Hello world" {
-		t.Fatalf("expected output 'Hello world', got %q", output)
-	}
-	if tools != 0 {
-		t.Fatalf("expected no tool uses, got %d", tools)
+	if output.String() != "Hello world" {
+		t.Fatalf("expected output 'Hello world', got %q", output.String())
 	}
 	select {
 	case m := <-ch:
@@ -53,6 +50,7 @@ func TestClaudeHandleAssistantToolUse(t *testing.T) {
 
 	b := &claudeBackend{cfg: Config{Logger: slog.Default()}}
 	ch := make(chan Message, 10)
+	var output strings.Builder
 
 	msg := claudeSDKMessage{
 		Type: "assistant",
@@ -69,13 +67,10 @@ func TestClaudeHandleAssistantToolUse(t *testing.T) {
 		}),
 	}
 
-	output, tools := b.handleAssistant(msg, ch, make(map[string]TokenUsage))
+	b.handleAssistant(msg, ch, &output, make(map[string]TokenUsage))
 
-	if output != "" {
-		t.Fatalf("tool_use should not add to output, got %q", output)
-	}
-	if tools != 1 {
-		t.Fatalf("expected one tool use, got %d", tools)
+	if output.String() != "" {
+		t.Fatalf("tool_use should not add to output, got %q", output.String())
 	}
 	select {
 	case m := <-ch:
@@ -110,9 +105,7 @@ func TestClaudeHandleUserToolResult(t *testing.T) {
 		}),
 	}
 
-	if b.handleUser(msg, ch) {
-		t.Fatal("did not expect async launch in ordinary tool result")
-	}
+	b.handleUser(msg, ch)
 
 	select {
 	case m := <-ch:
@@ -159,112 +152,6 @@ func TestClaudeHandleControlRequestAutoApproves(t *testing.T) {
 	if innerResp["behavior"] != "allow" {
 		t.Fatalf("expected behavior allow, got %v", innerResp["behavior"])
 	}
-	updatedInput := innerResp["updatedInput"].(map[string]any)
-	if _, ok := updatedInput["run_in_background"]; ok {
-		t.Fatal("did not expect run_in_background to be injected into ordinary tool input")
-	}
-}
-
-func TestClaudeHandleControlRequestForcesBackgroundToolsForeground(t *testing.T) {
-	t.Parallel()
-
-	for _, toolName := range []string{"Bash", "Agent"} {
-		t.Run(toolName, func(t *testing.T) {
-			t.Parallel()
-
-			b := &claudeBackend{cfg: Config{Logger: slog.Default()}}
-
-			var written bytes.Buffer
-
-			msg := claudeSDKMessage{
-				Type:      "control_request",
-				RequestID: "req-42",
-				Request: mustMarshal(t, claudeControlRequestPayload{
-					Subtype:  "tool_use",
-					ToolName: toolName,
-					Input: mustMarshal(t, map[string]any{
-						"command":           "sleep 60",
-						"run_in_background": true,
-					}),
-				}),
-			}
-
-			b.handleControlRequest(msg, &written)
-
-			var resp map[string]any
-			if err := json.Unmarshal(bytes.TrimSpace(written.Bytes()), &resp); err != nil {
-				t.Fatalf("unmarshal response: %v", err)
-			}
-
-			respInner := resp["response"].(map[string]any)
-			innerResp := respInner["response"].(map[string]any)
-			if innerResp["behavior"] != "allow" {
-				t.Fatalf("expected behavior allow, got %v", innerResp["behavior"])
-			}
-			updatedInput := innerResp["updatedInput"].(map[string]any)
-			if updatedInput["run_in_background"] != false {
-				t.Fatalf("expected run_in_background=false, got %v", updatedInput["run_in_background"])
-			}
-			if updatedInput["command"] != "sleep 60" {
-				t.Fatalf("expected original command to be preserved, got %v", updatedInput["command"])
-			}
-		})
-	}
-}
-
-func TestClaudeHandleUserDetectsAsyncLaunchedToolResult(t *testing.T) {
-	t.Parallel()
-
-	b := &claudeBackend{cfg: Config{Logger: slog.Default()}}
-	ch := make(chan Message, 10)
-
-	msg := claudeSDKMessage{
-		Type: "user",
-		Message: mustMarshal(t, claudeMessageContent{
-			Role: "user",
-			Content: []claudeContentBlock{
-				{
-					Type:      "tool_result",
-					ToolUseID: "call-1",
-					Content: mustMarshal(t, map[string]any{
-						"status":  "async_launched",
-						"message": "background task launched",
-					}),
-				},
-			},
-		}),
-	}
-
-	if !b.handleUser(msg, ch) {
-		t.Fatal("expected async launch to be detected")
-	}
-}
-
-func TestClaudeHandleUserIgnoresAsyncLaunchedTextOutput(t *testing.T) {
-	t.Parallel()
-
-	b := &claudeBackend{cfg: Config{Logger: slog.Default()}}
-	ch := make(chan Message, 10)
-
-	msg := claudeSDKMessage{
-		Type: "user",
-		Message: mustMarshal(t, claudeMessageContent{
-			Role: "user",
-			Content: []claudeContentBlock{
-				{
-					Type:      "tool_result",
-					ToolUseID: "call-1",
-					Content: mustMarshal(t, map[string]any{
-						"stdout": `fixture contained {"status":"async_launched"} as plain text`,
-					}),
-				},
-			},
-		}),
-	}
-
-	if b.handleUser(msg, ch) {
-		t.Fatal("did not expect async launch to be detected in ordinary text output")
-	}
 }
 
 func TestClaudeHandleAssistantInvalidJSON(t *testing.T) {
@@ -272,6 +159,7 @@ func TestClaudeHandleAssistantInvalidJSON(t *testing.T) {
 
 	b := &claudeBackend{cfg: Config{Logger: slog.Default()}}
 	ch := make(chan Message, 10)
+	var output strings.Builder
 
 	msg := claudeSDKMessage{
 		Type:    "assistant",
@@ -279,13 +167,10 @@ func TestClaudeHandleAssistantInvalidJSON(t *testing.T) {
 	}
 
 	// Should not panic
-	output, tools := b.handleAssistant(msg, ch, make(map[string]TokenUsage))
+	b.handleAssistant(msg, ch, &output, make(map[string]TokenUsage))
 
-	if output != "" {
-		t.Fatalf("expected empty output for invalid JSON, got %q", output)
-	}
-	if tools != 0 {
-		t.Fatalf("expected no tool uses for invalid JSON, got %d", tools)
+	if output.String() != "" {
+		t.Fatalf("expected empty output for invalid JSON, got %q", output.String())
 	}
 	select {
 	case m := <-ch:
@@ -314,7 +199,7 @@ func TestTrySendDropsWhenFull(t *testing.T) {
 	}
 }
 
-func TestBuildClaudeArgsInheritsMCPByDefault(t *testing.T) {
+func TestBuildClaudeArgsIncludesStrictMCPConfig(t *testing.T) {
 	t.Parallel()
 
 	args := buildClaudeArgs(ExecOptions{}, slog.Default())
@@ -323,6 +208,7 @@ func TestBuildClaudeArgsInheritsMCPByDefault(t *testing.T) {
 		"--output-format", "stream-json",
 		"--input-format", "stream-json",
 		"--verbose",
+		"--strict-mcp-config",
 		"--permission-mode", "bypassPermissions",
 		"--disallowedTools", "AskUserQuestion",
 	}
@@ -334,57 +220,6 @@ func TestBuildClaudeArgsInheritsMCPByDefault(t *testing.T) {
 		if args[i] != want {
 			t.Fatalf("expected args[%d] = %q, got %q", i, want, args[i])
 		}
-	}
-}
-
-func TestBuildClaudeArgsUsesStrictMCPForManagedConfig(t *testing.T) {
-	t.Parallel()
-
-	args := buildClaudeArgs(ExecOptions{McpConfig: json.RawMessage(`{}`)}, slog.Default())
-	if !slices.Contains(args, "--strict-mcp-config") {
-		t.Fatalf("managed MCP config must enable strict mode, got %v", args)
-	}
-}
-
-func TestArgsRequestBypassPermissions(t *testing.T) {
-	t.Parallel()
-
-	cases := []struct {
-		name string
-		args []string
-		want bool
-	}{
-		{
-			name: "permission mode bypass",
-			args: []string{"--permission-mode", "bypassPermissions"},
-			want: true,
-		},
-		{
-			name: "dangerous skip permissions",
-			args: []string{"--dangerously-skip-permissions"},
-			want: true,
-		},
-		{
-			name: "neither",
-			args: []string{"--model", "sonnet"},
-			want: false,
-		},
-		{
-			name: "permission mode default",
-			args: []string{"--permission-mode", "default"},
-			want: false,
-		},
-	}
-
-	for _, tc := range cases {
-		tc := tc
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-
-			if got := argsRequestBypassPermissions(tc.args); got != tc.want {
-				t.Fatalf("argsRequestBypassPermissions(%v) = %v, want %v", tc.args, got, tc.want)
-			}
-		})
 	}
 }
 
@@ -589,13 +424,7 @@ func TestMergeEnvFiltersClaudeCodeVars(t *testing.T) {
 		"CLAUDE_CODE_GIT_BASH_PATH=C:\\Program Files\\Git\\bin\\bash.exe",
 		"CLAUDE_CODE_USE_BEDROCK=1",
 		"CLAUDE_CODE_TMPDIR=/custom/tmp",
-		"MULTICA_LLM_API_KEY=daemon-secret",
-		"MULTICA_SERVER_URL=https://daemon.example",
-	}, map[string]string{
-		"FOO":                "bar",
-		"MULTICA_SERVER_URL": "https://task.example",
-		"MULTICA_TOKEN":      "mat_task",
-	})
+	}, map[string]string{"FOO": "bar"})
 
 	// Internal runtime/session markers must be stripped so the child does not
 	// inherit the parent's identity or transport.
@@ -605,8 +434,6 @@ func TestMergeEnvFiltersClaudeCodeVars(t *testing.T) {
 		"CLAUDE_CODE_EXECPATH=/opt/claude",
 		"CLAUDE_CODE_SESSION_ID=abc123",
 		"CLAUDE_CODE_SSE_PORT=9999",
-		"MULTICA_LLM_API_KEY=daemon-secret",
-		"MULTICA_SERVER_URL=https://daemon.example",
 	}
 	for _, entry := range env {
 		for _, banned := range filteredOut {
@@ -643,9 +470,6 @@ func TestMergeEnvFiltersClaudeCodeVars(t *testing.T) {
 	if !found["FOO=bar"] {
 		t.Fatalf("expected extra env var to be appended, got %v", env)
 	}
-	if !found["MULTICA_SERVER_URL=https://task.example"] || !found["MULTICA_TOKEN=mat_task"] {
-		t.Fatalf("expected explicit task MULTICA_* values to be appended, got %v", env)
-	}
 }
 
 func TestBuildEnvAppendsExtras(t *testing.T) {
@@ -670,82 +494,6 @@ func TestBuildEnvNilExtras(t *testing.T) {
 	if len(env) == 0 {
 		t.Fatal("expected at least system env vars")
 	}
-}
-
-func TestEnvHasSandbox(t *testing.T) {
-	t.Parallel()
-
-	cases := []struct {
-		name string
-		env  []string
-		want bool
-	}{
-		{name: "one", env: []string{"IS_SANDBOX=1"}, want: true},
-		{name: "true", env: []string{"IS_SANDBOX=true"}, want: true},
-		{name: "yes", env: []string{"IS_SANDBOX=yes"}, want: true},
-		{name: "on", env: []string{"IS_SANDBOX=on"}, want: true},
-		{name: "zero", env: []string{"IS_SANDBOX=0"}, want: false},
-		{name: "false", env: []string{"IS_SANDBOX=false"}, want: false},
-		{name: "empty", env: []string{"IS_SANDBOX="}, want: false},
-		{name: "absent", env: []string{"PATH=/usr/bin"}, want: false},
-	}
-
-	for _, tc := range cases {
-		tc := tc
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-
-			if got := envHasSandbox(tc.env); got != tc.want {
-				t.Fatalf("envHasSandbox(%v) = %v, want %v", tc.env, got, tc.want)
-			}
-		})
-	}
-}
-
-func TestClaudeRootSudoPreflight(t *testing.T) {
-	t.Parallel()
-
-	t.Run("sandbox bypass allowed", func(t *testing.T) {
-		t.Parallel()
-
-		err := claudeRootSudoPreflight(
-			[]string{"--permission-mode", "bypassPermissions"},
-			[]string{"IS_SANDBOX=1"},
-		)
-		if err != nil {
-			t.Fatalf("expected sandboxed bypass to pass preflight, got %v", err)
-		}
-	})
-
-	t.Run("non bypass allowed", func(t *testing.T) {
-		t.Parallel()
-
-		err := claudeRootSudoPreflight(
-			[]string{"--permission-mode", "default"},
-			nil,
-		)
-		if err != nil {
-			t.Fatalf("expected non-bypass args to pass preflight, got %v", err)
-		}
-	})
-
-	t.Run("root bypass without sandbox errors", func(t *testing.T) {
-		t.Parallel()
-		if os.Geteuid() != 0 {
-			t.Skip("root-only preflight assertion")
-		}
-
-		err := claudeRootSudoPreflight(
-			[]string{"--permission-mode", "bypassPermissions"},
-			nil,
-		)
-		if err == nil {
-			t.Fatal("expected root bypass without sandbox to fail preflight")
-		}
-		if !strings.Contains(err.Error(), "IS_SANDBOX") || !strings.Contains(err.Error(), "non-root") {
-			t.Fatalf("expected actionable root guidance, got %q", err.Error())
-		}
-	})
 }
 
 func TestBuildClaudeArgsBlocksMcpConfig(t *testing.T) {
@@ -794,18 +542,11 @@ func TestWriteMcpConfigToTemp(t *testing.T) {
 	if !bytes.Equal(data, []byte(raw)) {
 		t.Fatalf("expected %s, got %s", raw, data)
 	}
-	if runtime.GOOS != "windows" {
-		info, err := os.Stat(path)
-		if err != nil {
-			t.Fatalf("stat temp file %s: %v", path, err)
-		}
-		if info.Mode().Perm()&0o077 != 0 {
-			t.Fatalf("temp MCP file permissions = %o, want no group/other access", info.Mode().Perm())
-		}
-	}
 
-	// Cleanup should remove the temp directory and every related sidecar file.
-	cleanupMcpConfigTemp(path)
+	// Cleanup should remove the file.
+	if err := os.Remove(path); err != nil {
+		t.Fatalf("remove temp file: %v", err)
+	}
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
 		t.Fatalf("expected temp file to be removed, but it still exists")
 	}
@@ -819,7 +560,6 @@ func TestResolveSessionID(t *testing.T) {
 		requested string
 		emitted   string
 		failed    bool
-		stderr    string
 		want      string
 	}{
 		{
@@ -827,7 +567,6 @@ func TestResolveSessionID(t *testing.T) {
 			requested: "",
 			emitted:   "fresh-abc",
 			failed:    false,
-			stderr:    "",
 			want:      "fresh-abc",
 		},
 		{
@@ -835,7 +574,6 @@ func TestResolveSessionID(t *testing.T) {
 			requested: "sess-old",
 			emitted:   "sess-old",
 			failed:    false,
-			stderr:    "",
 			want:      "sess-old",
 		},
 		{
@@ -843,7 +581,6 @@ func TestResolveSessionID(t *testing.T) {
 			requested: "sess-old",
 			emitted:   "sess-old",
 			failed:    true,
-			stderr:    "",
 			want:      "sess-old",
 		},
 		{
@@ -851,15 +588,6 @@ func TestResolveSessionID(t *testing.T) {
 			requested: "sess-dead",
 			emitted:   "fresh-new",
 			failed:    true,
-			stderr:    "",
-			want:      "",
-		},
-		{
-			name:      "resume not found stderr clears matching id so daemon fallback fires",
-			requested: "sess-dead",
-			emitted:   "sess-dead",
-			failed:    true,
-			stderr:    "No conversation found with session ID: sess-dead",
 			want:      "",
 		},
 		{
@@ -867,7 +595,6 @@ func TestResolveSessionID(t *testing.T) {
 			requested: "sess-dead",
 			emitted:   "fresh-new",
 			failed:    false,
-			stderr:    "No conversation found with session ID: sess-dead",
 			want:      "fresh-new",
 		},
 		{
@@ -875,7 +602,6 @@ func TestResolveSessionID(t *testing.T) {
 			requested: "sess-old",
 			emitted:   "",
 			failed:    true,
-			stderr:    "",
 			want:      "",
 		},
 	}
@@ -884,10 +610,10 @@ func TestResolveSessionID(t *testing.T) {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			got := resolveSessionID(tc.requested, tc.emitted, tc.failed, tc.stderr)
+			got := resolveSessionID(tc.requested, tc.emitted, tc.failed)
 			if got != tc.want {
-				t.Fatalf("resolveSessionID(%q, %q, %v, %q) = %q, want %q",
-					tc.requested, tc.emitted, tc.failed, tc.stderr, got, tc.want)
+				t.Fatalf("resolveSessionID(%q, %q, %v) = %q, want %q",
+					tc.requested, tc.emitted, tc.failed, got, tc.want)
 			}
 		})
 	}
@@ -912,11 +638,7 @@ func TestClaudeExecuteSurfacesStderrWhenChildExitsEarly(t *testing.T) {
 		"exit 3\n"
 	writeTestExecutable(t, fakePath, []byte(script))
 
-	backend, err := New("claude", Config{
-		ExecutablePath: fakePath,
-		Env:            map[string]string{"IS_SANDBOX": "1"},
-		Logger:         slog.Default(),
-	})
+	backend, err := New("claude", Config{ExecutablePath: fakePath, Logger: slog.Default()})
 	if err != nil {
 		t.Fatalf("new claude backend: %v", err)
 	}
@@ -968,11 +690,7 @@ func TestClaudeExecuteRecordsResultModelUsage(t *testing.T) {
 		"printf '%s\\n' '{\"type\":\"result\",\"subtype\":\"success\",\"is_error\":false,\"session_id\":\"sess-result-usage\",\"result\":\"done\",\"modelUsage\":{\"zhipu/coding-plan\":{\"inputTokens\":123,\"outputTokens\":45,\"cacheReadInputTokens\":7,\"cacheCreationInputTokens\":11,\"costUSD\":0.01}}}'\n"
 	writeTestExecutable(t, fakePath, []byte(script))
 
-	backend, err := New("claude", Config{
-		ExecutablePath: fakePath,
-		Env:            map[string]string{"IS_SANDBOX": "1"},
-		Logger:         slog.Default(),
-	})
+	backend, err := New("claude", Config{ExecutablePath: fakePath, Logger: slog.Default()})
 	if err != nil {
 		t.Fatalf("new claude backend: %v", err)
 	}

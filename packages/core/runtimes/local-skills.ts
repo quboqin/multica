@@ -48,8 +48,6 @@ export async function resolveRuntimeLocalSkills(
   return {
     skills: current.skills ?? [],
     supported: current.supported,
-	mcpServers: current.mcp_servers ?? [],
-	mcpSupported: current.mcp_supported === true,
   };
 }
 
@@ -103,8 +101,3 @@ export function runtimeLocalSkillsOptions(runtimeId: string | null | undefined) 
     retry: false,
   });
 }
-
-// The daemon returns both local skills and a redacted MCP inventory from the
-// same round trip. Keep the original export for import flows and use this
-// capability-oriented alias on Agent detail surfaces.
-export const runtimeCapabilitiesOptions = runtimeLocalSkillsOptions;

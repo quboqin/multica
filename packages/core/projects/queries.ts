@@ -3,21 +3,14 @@ import { api } from "../api";
 
 export const projectKeys = {
   all: (wsId: string) => ["projects", wsId] as const,
-  list: (wsId: string, params?: ProjectListParams) =>
-    [...projectKeys.all(wsId), "list", params ?? {}] as const,
+  list: (wsId: string) => [...projectKeys.all(wsId), "list"] as const,
   detail: (wsId: string, id: string) =>
     [...projectKeys.all(wsId), "detail", id] as const,
 };
 
-export interface ProjectListParams {
-  status?: string;
-  priority?: string;
-  milestone_id?: string | null;
-}
-
-export function projectListOptions(wsId: string, params?: ProjectListParams) {
+export function projectListOptions(wsId: string, params?: { milestone_id?: string }) {
   return queryOptions({
-    queryKey: projectKeys.list(wsId, params),
+    queryKey: params?.milestone_id ? [...projectKeys.list(wsId), { milestone_id: params.milestone_id }] : projectKeys.list(wsId),
     queryFn: () => api.listProjects(params),
     select: (data) => data.projects,
   });

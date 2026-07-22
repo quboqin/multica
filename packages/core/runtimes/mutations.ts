@@ -42,9 +42,8 @@ export function useArchiveAgentsAndDeleteRuntime(wsId: string) {
   });
 }
 
-// useUpdateRuntime patches editable fields on a runtime (visibility, custom
-// name). Invalidates the runtime list so the picker disabled-state and
-// display names recompute.
+// useUpdateRuntime patches editable fields on a runtime (visibility).
+// Invalidates the runtime list so the picker disabled-state recomputes.
 export function useUpdateRuntime(wsId: string) {
   const qc = useQueryClient();
   return useMutation({
@@ -53,12 +52,7 @@ export function useUpdateRuntime(wsId: string) {
       patch,
     }: {
       runtimeId: string;
-      patch: {
-        visibility?: "private" | "public";
-        // Empty string clears the custom name; omit to leave unchanged.
-        custom_name?: string;
-        apply_to_machine?: boolean;
-      };
+      patch: { visibility?: "private" | "public" };
     }) => api.updateRuntime(runtimeId, patch),
     onSettled: () => {
       qc.invalidateQueries({ queryKey: runtimeKeys.all(wsId) });

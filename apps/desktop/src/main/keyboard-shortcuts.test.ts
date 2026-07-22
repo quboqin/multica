@@ -14,14 +14,13 @@ function makeWc(initialLevel = 0) {
 
 function key(
   k: string,
-  mods: Partial<Pick<ShortcutInput, "control" | "meta" | "alt" | "shift">> = {},
+  mods: Partial<Pick<ShortcutInput, "control" | "meta" | "shift">> = {},
 ): ShortcutInput {
   return {
     type: "keyDown",
     key: k,
     control: false,
     meta: false,
-    alt: false,
     shift: false,
     ...mods,
   };
@@ -62,7 +61,7 @@ describe("handleAppShortcut — zoom in", () => {
 
   it("zooms in on Cmd++ (Shift+=)", () => {
     const wc = makeWc(0);
-    expect(handleAppShortcut(key("+", { meta: true, shift: true }), wc, "darwin")).toBe(true);
+    expect(handleAppShortcut(key("+", { meta: true }), wc, "darwin")).toBe(true);
     expect(wc.currentLevel()).toBe(0.5);
   });
 
@@ -94,7 +93,7 @@ describe("handleAppShortcut — zoom out (regression: MUL-2354)", () => {
 
   it("zooms out on Cmd+_ (Shift+-)", () => {
     const wc = makeWc(1);
-    expect(handleAppShortcut(key("_", { meta: true, shift: true }), wc, "darwin")).toBe(true);
+    expect(handleAppShortcut(key("_", { meta: true }), wc, "darwin")).toBe(true);
     expect(wc.currentLevel()).toBe(0.5);
   });
 
@@ -151,16 +150,6 @@ describe("handleAppShortcut — unrelated keys pass through", () => {
     expect(handleAppShortcut(key("a", { meta: true }), wc, "darwin")).toBe(false);
     expect(handleAppShortcut(key("k", { meta: true }), wc, "darwin")).toBe(false);
   });
-
-  it("rejects extra secondary modifiers for owned shortcuts", () => {
-    const wc = makeWc();
-    expect(
-      handleAppShortcut(key("w", { meta: true, control: true }), wc, "darwin"),
-    ).toBe(false);
-    expect(
-      handleAppShortcut(key("-", { control: true, alt: true }), wc, "win32"),
-    ).toBe(false);
-  });
 });
 
 describe("handleAppShortcut — close tab (Cmd/Ctrl+W)", () => {
@@ -193,16 +182,5 @@ describe("handleAppShortcut — close tab (Cmd/Ctrl+W)", () => {
   it("does not trigger on Ctrl+Shift+W (reserved for close-window)", () => {
     const wc = makeWc();
     expect(handleAppShortcut(key("W", { control: true, shift: true }), wc, "linux")).toBe(false);
-  });
-
-  it("swallows auto-repeat without closing additional tabs", () => {
-    const wc = makeWc();
-    expect(
-      handleAppShortcut(
-        { ...key("w", { meta: true }), isAutoRepeat: true },
-        wc,
-        "darwin",
-      ),
-    ).toBe(true);
   });
 });

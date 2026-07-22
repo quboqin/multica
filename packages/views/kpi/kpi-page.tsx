@@ -155,7 +155,7 @@ function KpiMetricDialog({
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
               <label className="block space-y-1.5">
                 <span className="text-xs font-medium text-muted-foreground">{t(($) => $.kpi.fields.owner)}</span>
-                <Select items={[]} value={owner || NO_OWNER} onValueChange={(value) => setOwner(!value || value === NO_OWNER ? "" : value)}>
+                <Select value={owner || NO_OWNER} onValueChange={(value) => setOwner(!value || value === NO_OWNER ? "" : value)}>
                   <SelectTrigger className="w-full">
                     <SelectValue>
                       {() => <span className="truncate">{owner || t(($) => $.kpi.no_owner)}</span>}

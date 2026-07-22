@@ -8,9 +8,9 @@
  * card with a hover toolbar; this is the same content edge-to-edge so the
  * user can resize / interact with the document at full size.
  *
- * Same security posture as the inline preview: iframe sandbox is
- * "allow-scripts" only — no allow-same-origin, no allow-top-navigation. The
- * iframe runs in an opaque origin and cannot reach cookies, localStorage,
+ * Same security posture as the inline preview: iframe sandbox allows scripts
+ * and user-initiated popups, but never allow-same-origin or top navigation.
+ * The iframe runs in an opaque origin and cannot reach cookies, localStorage,
  * parent, or top-level navigation.
  *
  * The route is workspace-scoped (`/{slug}/attachments/{id}/preview`) for
@@ -63,7 +63,7 @@ export function AttachmentPreviewPage({
       ) : (
         <iframe
           srcDoc={withFragmentNavShim(text)}
-          sandbox="allow-scripts"
+          sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox"
           title={filename ?? "HTML attachment"}
           className="flex-1 w-full border-0 bg-background"
         />

@@ -1,238 +1,90 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { Editor, Extension, type AnyExtension, type Content } from "@tiptap/core";
-import { Plugin } from "@tiptap/pm/state";
-import StarterKit from "@tiptap/starter-kit";
-import { Markdown } from "@tiptap/markdown";
-import {
-  createShortcutChord,
-  configureShortcutPlatform,
-  useShortcutStore,
-} from "@multica/core/shortcuts";
-import { PatchedListItem } from "./list-item";
-import {
-  createSubmitShortcutExtension,
-  shouldHandleSubmitShortcut,
-  shouldReplayNativeEnter,
-} from "./submit-shortcut";
+import { describe, it, expect, vi } from "vitest";
+import { getExtensionField } from "@tiptap/core";
+import type { Editor } from "@tiptap/core";
+import { createSubmitExtension } from "./submit-shortcut";
 
-function event(
-  key: string,
-  modifiers: Partial<Pick<KeyboardEvent, "metaKey" | "ctrlKey" | "altKey" | "shiftKey" | "repeat">> = {},
-): KeyboardEvent {
-  return new KeyboardEvent("keydown", {
-    key,
-    bubbles: true,
-    cancelable: true,
-    ...modifiers,
+function getShortcuts(
+  ext: ReturnType<typeof createSubmitExtension>,
+  editor: Partial<Editor>,
+): Record<string, () => boolean> {
+  const fn = getExtensionField<
+    () => Record<string, () => boolean>
+  >(ext, "addKeyboardShortcuts", {
+    name: "submitShortcut",
+    options: {},
+    storage: {},
+    editor: editor as Editor,
+    type: null,
   });
+  return fn?.() ?? {};
 }
 
-function press(editor: Editor, keyboardEvent: KeyboardEvent): boolean {
-  let handled = false;
-  editor.view.someProp("handleKeyDown", (handler) => {
-    if (!handler(editor.view, keyboardEvent)) return false;
-    handled = true;
-    return true;
-  });
-  return handled;
-}
+describe("createSubmitExtension", () => {
+  const baseEditor = {
+    view: { composing: false } as unknown as Editor["view"],
+    isActive: () => false,
+  } as Partial<Editor>;
 
-function makeEditor(
-  content: Content,
-  onSubmit: () => void,
-  extraExtensions: AnyExtension[] = [],
-) {
-  return new Editor({
-    element: document.createElement("div"),
-    content,
-    extensions: [
-      StarterKit.configure({ listItem: false }),
-      PatchedListItem,
-      Markdown,
-      createSubmitShortcutExtension(() => {
-        onSubmit();
-        return true;
-      }),
-      ...extraExtensions,
-    ],
-  });
-}
-
-const editors: Editor[] = [];
-
-beforeEach(() => {
-  configureShortcutPlatform("windows");
-});
-
-afterEach(() => {
-  editors.splice(0).forEach((editor) => editor.destroy());
-  useShortcutStore.getState().resetAll();
-  configureShortcutPlatform(null);
-});
-
-describe("submit shortcut matching", () => {
-  it("handles the configured shortcut exactly", () => {
-    const shortcut = createShortcutChord("Enter", { primary: true });
-    expect(
-      shouldHandleSubmitShortcut(event("Enter", { ctrlKey: true }), {
-        configuredShortcut: shortcut,
-        composing: false,
-      }),
-    ).toBe(true);
-    expect(
-      shouldHandleSubmitShortcut(
-        event("Enter", { ctrlKey: true, shiftKey: true }),
-        { configuredShortcut: shortcut, composing: false },
-      ),
-    ).toBe(false);
-  });
-
-  it("does not submit while an IME composition is active", () => {
-    expect(
-      shouldHandleSubmitShortcut(event("Enter"), {
-        configuredShortcut: createShortcutChord("Enter"),
-        composing: true,
-      }),
-    ).toBe(false);
-  });
-
-  it("does not submit on Safari's IME commit event or a repeated keydown", () => {
-    const safariImeCommit = event("Enter", { metaKey: true });
-    Object.defineProperty(safariImeCommit, "keyCode", { value: 229 });
-    expect(
-      shouldHandleSubmitShortcut(safariImeCommit, {
-        configuredShortcut: createShortcutChord("Enter", { primary: true }),
-        composing: false,
-      }),
-    ).toBe(false);
-
-    expect(
-      shouldHandleSubmitShortcut(
-        event("Enter", { ctrlKey: true, repeat: true }),
-        {
-          configuredShortcut: createShortcutChord("Enter", { primary: true }),
-          composing: false,
-        },
-      ),
-    ).toBe(false);
-  });
-
-  it("only remaps Shift+Enter when plain Enter is Send", () => {
-    expect(
-      shouldReplayNativeEnter(
-        event("Enter", { shiftKey: true }),
-        createShortcutChord("Enter"),
-        false,
-      ),
-    ).toBe(true);
-    expect(
-      shouldReplayNativeEnter(
-        event("Enter", { shiftKey: true }),
-        createShortcutChord("Enter", { primary: true }),
-        false,
-      ),
-    ).toBe(false);
-  });
-});
-
-describe("Send = Enter editor behavior", () => {
-  it("lets an open high-priority suggestion picker consume Enter first", () => {
-    useShortcutStore.getState().setShortcut("send", createShortcutChord("Enter"));
-    let submitCount = 0;
-    let acceptCount = 0;
-    const picker = Extension.create({
-      name: "testSuggestionPicker",
-      priority: 101,
-      addProseMirrorPlugins() {
-        return [new Plugin({
-          props: {
-            handleKeyDown: (_view, keyboardEvent) => {
-              if (keyboardEvent.key !== "Enter") return false;
-              acceptCount += 1;
-              return true;
-            },
-          },
-        })];
-      },
-    });
-    const editor = makeEditor(
-      "@al",
-      () => { submitCount += 1; },
-      [picker],
+  it("Mod-Enter always submits", () => {
+    const onSubmit = vi.fn(() => true);
+    const shortcuts = getShortcuts(
+      createSubmitExtension(onSubmit, { submitOnEnter: false }),
+      baseEditor,
     );
-    editors.push(editor);
-    editor.commands.focus("end");
 
-    expect(press(editor, event("Enter"))).toBe(true);
-    expect(acceptCount).toBe(1);
-    expect(submitCount).toBe(0);
+    expect(shortcuts["Mod-Enter"]).toBeDefined();
+    shortcuts["Mod-Enter"]!();
+    expect(onSubmit).toHaveBeenCalledTimes(1);
   });
 
-  it("submits on Enter and turns Shift+Enter into the old paragraph Enter", () => {
-    useShortcutStore.getState().setShortcut("send", createShortcutChord("Enter"));
-    let submitCount = 0;
-    const editor = makeEditor("hello", () => { submitCount += 1; });
-    editors.push(editor);
-    editor.commands.focus("end");
+  it("bare Enter is not bound when submitOnEnter is false", () => {
+    const onSubmit = vi.fn(() => true);
+    const shortcuts = getShortcuts(
+      createSubmitExtension(onSubmit, { submitOnEnter: false }),
+      baseEditor,
+    );
 
-    expect(press(editor, event("Enter"))).toBe(true);
-    expect(submitCount).toBe(1);
-    expect(editor.state.doc.childCount).toBe(1);
-
-    expect(press(editor, event("Enter", { shiftKey: true }))).toBe(true);
-    expect(submitCount).toBe(1);
-    expect(editor.state.doc.childCount).toBe(2);
-    let hasHardBreak = false;
-    editor.state.doc.descendants((node) => {
-      if (node.type.name === "hardBreak") hasHardBreak = true;
-    });
-    expect(hasHardBreak).toBe(false);
+    expect(shortcuts.Enter).toBeUndefined();
+    expect(onSubmit).not.toHaveBeenCalled();
   });
 
-  it("continues list items with Shift+Enter", () => {
-    useShortcutStore.getState().setShortcut("send", createShortcutChord("Enter"));
-    let submitCount = 0;
-    const editor = makeEditor(
+  it("bare Enter submits when submitOnEnter is true", () => {
+    const onSubmit = vi.fn(() => true);
+    const shortcuts = getShortcuts(
+      createSubmitExtension(onSubmit, { submitOnEnter: true }),
+      baseEditor,
+    );
+
+    expect(shortcuts.Enter).toBeDefined();
+    expect(shortcuts.Enter!()).toBe(true);
+    expect(onSubmit).toHaveBeenCalledTimes(1);
+  });
+
+  it("Enter is suppressed during IME composition", () => {
+    const onSubmit = vi.fn(() => true);
+    const shortcuts = getShortcuts(
+      createSubmitExtension(onSubmit, { submitOnEnter: true }),
       {
-        type: "doc",
-        content: [{
-          type: "bulletList",
-          content: [{
-            type: "listItem",
-            content: [{ type: "paragraph", content: [{ type: "text", text: "one" }] }],
-          }],
-        }],
+        view: { composing: true } as unknown as Editor["view"],
+        isActive: () => false,
       },
-      () => { submitCount += 1; },
     );
-    editors.push(editor);
-    editor.commands.focus("end");
 
-    expect(press(editor, event("Enter", { shiftKey: true }))).toBe(true);
-    expect(submitCount).toBe(0);
-    expect(editor.state.doc.firstChild?.childCount).toBe(2);
+    expect(shortcuts.Enter!()).toBe(false);
+    expect(onSubmit).not.toHaveBeenCalled();
   });
 
-  it("inserts the original code-block newline with Shift+Enter", () => {
-    useShortcutStore.getState().setShortcut("send", createShortcutChord("Enter"));
-    let submitCount = 0;
-    const editor = makeEditor(
+  it("Enter is suppressed inside a code block", () => {
+    const onSubmit = vi.fn(() => true);
+    const shortcuts = getShortcuts(
+      createSubmitExtension(onSubmit, { submitOnEnter: true }),
       {
-        type: "doc",
-        content: [{
-          type: "codeBlock",
-          attrs: { language: null },
-          content: [{ type: "text", text: "line" }],
-        }],
+        view: { composing: false } as unknown as Editor["view"],
+        isActive: (name: string) => name === "codeBlock",
       },
-      () => { submitCount += 1; },
     );
-    editors.push(editor);
-    editor.commands.focus("end");
 
-    expect(press(editor, event("Enter"))).toBe(true);
-    expect(submitCount).toBe(1);
-    expect(press(editor, event("Enter", { shiftKey: true }))).toBe(true);
-    expect(editor.state.doc.firstChild?.textContent).toBe("line\n");
+    expect(shortcuts.Enter!()).toBe(false);
+    expect(onSubmit).not.toHaveBeenCalled();
   });
 });

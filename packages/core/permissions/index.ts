@@ -12,7 +12,13 @@ export type {
   PermissionContext,
 } from "./types";
 
-export { canAssignAgentToIssue, canEditAgent } from "./rules";
+export {
+  canAssignAgentToIssue,
+  canEditAgent,
+  canStopPreviewSession,
+} from "./rules";
+
+export { useCurrentMember } from "./use-current-member";
 
 export {
   useAgentPermissions,

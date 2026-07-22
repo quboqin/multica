@@ -11,34 +11,28 @@ import (
 	"strings"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/logger"
-	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
 type ProjectResponse struct {
-	ID          string  `json:"id"`
-	WorkspaceID string  `json:"workspace_id"`
-	Title       string  `json:"title"`
-	Description *string `json:"description"`
-	Icon        *string `json:"icon"`
-	Status      string  `json:"status"`
-	Priority    string  `json:"priority"`
-	LeadType    *string `json:"lead_type"`
-	LeadID      *string `json:"lead_id"`
-	MilestoneID *string `json:"milestone_id"`
-	// StartDate / DueDate are calendar days ("YYYY-MM-DD"), no time-of-day or
-	// timezone — same contract as issue.start_date / issue.due_date.
-	StartDate  *string          `json:"start_date"`
-	DueDate    *string          `json:"due_date"`
-	CreatedAt  string           `json:"created_at"`
-	UpdatedAt  string           `json:"updated_at"`
-	IssueCount int64            `json:"issue_count"`
-	DoneCount  int64            `json:"done_count"`
-	Labels     *[]LabelResponse `json:"labels,omitempty"`
+	ID          string           `json:"id"`
+	WorkspaceID string           `json:"workspace_id"`
+	Title       string           `json:"title"`
+	Description *string          `json:"description"`
+	Icon        *string          `json:"icon"`
+	Status      string           `json:"status"`
+	Priority    string           `json:"priority"`
+	LeadType    *string          `json:"lead_type"`
+	LeadID      *string          `json:"lead_id"`
+	MilestoneID *string          `json:"milestone_id"`
+	CreatedAt   string           `json:"created_at"`
+	UpdatedAt   string           `json:"updated_at"`
+	IssueCount  int64            `json:"issue_count"`
+	DoneCount   int64            `json:"done_count"`
+	Labels      *[]LabelResponse `json:"labels,omitempty"`
 	// ResourceCount is a breadcrumb pointing at the sub-collection at
 	// /api/projects/{id}/resources. Resources themselves stay out of this
 	// payload to keep parent metadata and child collections separate; clients
@@ -58,8 +52,6 @@ func projectToResponse(p db.Project) ProjectResponse {
 		LeadType:    textToPtr(p.LeadType),
 		LeadID:      uuidToPtr(p.LeadID),
 		MilestoneID: uuidToPtr(p.MilestoneID),
-		StartDate:   dateToPtr(p.StartDate),
-		DueDate:     dateToPtr(p.DueDate),
 		CreatedAt:   timestampToString(p.CreatedAt),
 		UpdatedAt:   timestampToString(p.UpdatedAt),
 	}
@@ -96,14 +88,12 @@ func (h *Handler) labelsByProject(ctx context.Context, wsUUID pgtype.UUID, proje
 	out := make(map[string][]LabelResponse)
 	for _, row := range rows {
 		label := LabelResponse{
-			ID:           uuidToString(row.ID),
-			WorkspaceID:  uuidToString(row.WorkspaceID),
-			ResourceType: row.ResourceType,
-			Name:         row.Name,
-			Description:  row.Description,
-			Color:        row.Color,
-			CreatedAt:    timestampToString(row.CreatedAt),
-			UpdatedAt:    timestampToString(row.UpdatedAt),
+			ID:          uuidToString(row.ID),
+			WorkspaceID: uuidToString(row.WorkspaceID),
+			Name:        row.Name,
+			Color:       row.Color,
+			CreatedAt:   timestampToString(row.CreatedAt),
+			UpdatedAt:   timestampToString(row.UpdatedAt),
 		}
 		key := uuidToString(row.ProjectID)
 		out[key] = append(out[key], label)
@@ -119,8 +109,6 @@ type CreateProjectRequest struct {
 	Priority    string                                `json:"priority"`
 	LeadType    *string                               `json:"lead_type"`
 	LeadID      *string                               `json:"lead_id"`
-	StartDate   *string                               `json:"start_date"`
-	DueDate     *string                               `json:"due_date"`
 	MilestoneID *string                               `json:"milestone_id"`
 	Resources   []CreateProjectResourceRequestPayload `json:"resources,omitempty"`
 }
@@ -143,8 +131,6 @@ type UpdateProjectRequest struct {
 	Priority    *string `json:"priority"`
 	LeadType    *string `json:"lead_type"`
 	LeadID      *string `json:"lead_id"`
-	StartDate   *string `json:"start_date"`
-	DueDate     *string `json:"due_date"`
 	MilestoneID *string `json:"milestone_id"`
 }
 
@@ -243,8 +229,7 @@ func (h *Handler) GetProject(w http.ResponseWriter, r *http.Request) {
 	resp := projectToResponse(project)
 	resp.IssueCount, resp.DoneCount = h.loadProjectIssueStats(r.Context(), project.ID)
 	resp.ResourceCount = h.loadProjectResourceCount(r.Context(), project.ID)
-	labelsMap := h.labelsByProject(r.Context(), wsUUID, []pgtype.UUID{project.ID})
-	labels := labelsMap[resp.ID]
+	labels := h.labelsByProject(r.Context(), project.WorkspaceID, []pgtype.UUID{project.ID})[resp.ID]
 	if labels == nil {
 		labels = []LabelResponse{}
 	}
@@ -328,31 +313,6 @@ func (h *Handler) CreateProject(w http.ResponseWriter, r *http.Request) {
 		}
 		leadID = id
 	}
-	wsUUID, ok := parseUUIDOrBadRequest(w, workspaceID, "workspace_id")
-	if !ok {
-		return
-	}
-
-	// start_date / due_date are optional calendar days; an absent or empty
-	// value leaves the column NULL. Mirrors CreateIssue's date handling.
-	var startDate pgtype.Date
-	if req.StartDate != nil && *req.StartDate != "" {
-		d, err := util.ParseCalendarDate(*req.StartDate)
-		if err != nil {
-			writeError(w, http.StatusBadRequest, "invalid start_date format, expected YYYY-MM-DD")
-			return
-		}
-		startDate = d
-	}
-	var dueDate pgtype.Date
-	if req.DueDate != nil && *req.DueDate != "" {
-		d, err := util.ParseCalendarDate(*req.DueDate)
-		if err != nil {
-			writeError(w, http.StatusBadRequest, "invalid due_date format, expected YYYY-MM-DD")
-			return
-		}
-		dueDate = d
-	}
 	var milestoneID pgtype.UUID
 	if req.MilestoneID != nil && *req.MilestoneID != "" {
 		id, ok := parseUUIDOrBadRequest(w, *req.MilestoneID, "milestone_id")
@@ -360,6 +320,10 @@ func (h *Handler) CreateProject(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		milestoneID = id
+	}
+	wsUUID, ok := parseUUIDOrBadRequest(w, workspaceID, "workspace_id")
+	if !ok {
+		return
 	}
 
 	// Pre-validate every resource payload before opening a transaction so an
@@ -407,8 +371,6 @@ func (h *Handler) CreateProject(w http.ResponseWriter, r *http.Request) {
 		LeadType:    leadType,
 		LeadID:      leadID,
 		Priority:    priority,
-		StartDate:   startDate,
-		DueDate:     dueDate,
 		MilestoneID: milestoneID,
 	}
 
@@ -541,8 +503,6 @@ func (h *Handler) UpdateProject(w http.ResponseWriter, r *http.Request) {
 		Icon:        prevProject.Icon,
 		LeadType:    prevProject.LeadType,
 		LeadID:      prevProject.LeadID,
-		StartDate:   prevProject.StartDate,
-		DueDate:     prevProject.DueDate,
 		MilestoneID: prevProject.MilestoneID,
 	}
 	if req.Title != nil {
@@ -592,32 +552,6 @@ func (h *Handler) UpdateProject(w http.ResponseWriter, r *http.Request) {
 			params.LeadID = pgtype.UUID{Valid: false}
 		}
 	}
-	// Dates follow the issue contract: a present key with an empty/null value
-	// clears the date; an absent key leaves the prior value untouched.
-	if _, ok := rawFields["start_date"]; ok {
-		if req.StartDate != nil && *req.StartDate != "" {
-			d, err := util.ParseCalendarDate(*req.StartDate)
-			if err != nil {
-				writeError(w, http.StatusBadRequest, "invalid start_date format, expected YYYY-MM-DD")
-				return
-			}
-			params.StartDate = d
-		} else {
-			params.StartDate = pgtype.Date{Valid: false} // explicit null = clear date
-		}
-	}
-	if _, ok := rawFields["due_date"]; ok {
-		if req.DueDate != nil && *req.DueDate != "" {
-			d, err := util.ParseCalendarDate(*req.DueDate)
-			if err != nil {
-				writeError(w, http.StatusBadRequest, "invalid due_date format, expected YYYY-MM-DD")
-				return
-			}
-			params.DueDate = d
-		} else {
-			params.DueDate = pgtype.Date{Valid: false} // explicit null = clear date
-		}
-	}
 	if _, ok := rawFields["milestone_id"]; ok {
 		if req.MilestoneID != nil && *req.MilestoneID != "" {
 			milestoneUUID, ok := parseUUIDOrBadRequest(w, *req.MilestoneID, "milestone_id")
@@ -637,8 +571,7 @@ func (h *Handler) UpdateProject(w http.ResponseWriter, r *http.Request) {
 	resp := projectToResponse(project)
 	resp.IssueCount, resp.DoneCount = h.loadProjectIssueStats(r.Context(), project.ID)
 	resp.ResourceCount = h.loadProjectResourceCount(r.Context(), project.ID)
-	labelsMap := h.labelsByProject(r.Context(), wsUUID, []pgtype.UUID{project.ID})
-	labels := labelsMap[resp.ID]
+	labels := h.labelsByProject(r.Context(), project.WorkspaceID, []pgtype.UUID{project.ID})[resp.ID]
 	if labels == nil {
 		labels = []LabelResponse{}
 	}
@@ -665,11 +598,10 @@ func (h *Handler) DeleteProject(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "project not found")
 		return
 	}
-	requester, ok := h.requireWorkspaceRole(w, r, uuidToString(project.WorkspaceID), "project not found", "owner", "admin")
+	userID, ok := requireUserID(w, r)
 	if !ok {
 		return
 	}
-	userID := uuidToString(requester.UserID)
 	if err := h.Queries.DeleteProject(r.Context(), db.DeleteProjectParams{
 		ID:          project.ID,
 		WorkspaceID: project.WorkspaceID,
@@ -799,8 +731,7 @@ func buildProjectSearchQuery(phrase string, terms []string, includeClosed bool) 
 
 	query := fmt.Sprintf(`SELECT p.id, p.workspace_id, p.title, p.description, p.icon,
 		p.status, p.priority, p.lead_type, p.lead_id,
-		p.start_date, p.due_date, p.milestone_id,
-		p.created_at, p.updated_at,
+		p.created_at, p.updated_at, p.milestone_id,
 		COUNT(*) OVER() AS total_count,
 		%s AS match_source
 	FROM project p
@@ -857,6 +788,14 @@ func (h *Handler) SearchProjects(w http.ResponseWriter, r *http.Request) {
 	args[len(args)-2] = limit
 	args[len(args)-1] = offset
 
+	rows, err := h.DB.Query(ctx, sqlQuery, args...)
+	if err != nil {
+		slog.Warn("search projects failed", "error", err, "workspace_id", workspaceID, "query", q)
+		writeError(w, http.StatusInternalServerError, "failed to search projects")
+		return
+	}
+	defer rows.Close()
+
 	type projectSearchRow struct {
 		project     db.Project
 		totalCount  int64
@@ -864,45 +803,32 @@ func (h *Handler) SearchProjects(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var results []projectSearchRow
-	err := runSearchQuery(ctx, h.TxStarter, sqlQuery, args, func(rows pgx.Rows) error {
-		for rows.Next() {
-			var row projectSearchRow
-			if err := rows.Scan(
-				&row.project.ID,
-				&row.project.WorkspaceID,
-				&row.project.Title,
-				&row.project.Description,
-				&row.project.Icon,
-				&row.project.Status,
-				&row.project.Priority,
-				&row.project.LeadType,
-				&row.project.LeadID,
-				&row.project.StartDate,
-				&row.project.DueDate,
-				&row.project.MilestoneID,
-				&row.project.CreatedAt,
-				&row.project.UpdatedAt,
-				&row.totalCount,
-				&row.matchSource,
-			); err != nil {
-				return fmt.Errorf("scan: %w", err)
-			}
-			results = append(results, row)
-		}
-		return rows.Err()
-	})
-	if err != nil {
-		// Statement-timeout surfaces as SQLSTATE 57014 — same
-		// fail-fast contract as SearchIssues (see runSearchQuery).
-		if isSearchStatementTimeout(err) {
-			slog.Warn("search projects timed out",
-				"workspace_id", workspaceID,
-				"query", q,
-				"timeout", searchStatementTimeout)
-			writeError(w, http.StatusServiceUnavailable, "search timed out; please refine your query or try again")
+	for rows.Next() {
+		var row projectSearchRow
+		if err := rows.Scan(
+			&row.project.ID,
+			&row.project.WorkspaceID,
+			&row.project.Title,
+			&row.project.Description,
+			&row.project.Icon,
+			&row.project.Status,
+			&row.project.Priority,
+			&row.project.LeadType,
+			&row.project.LeadID,
+			&row.project.CreatedAt,
+			&row.project.UpdatedAt,
+			&row.project.MilestoneID,
+			&row.totalCount,
+			&row.matchSource,
+		); err != nil {
+			slog.Warn("search projects scan failed", "error", err)
+			writeError(w, http.StatusInternalServerError, "failed to search projects")
 			return
 		}
-		slog.Warn("search projects failed", "error", err, "workspace_id", workspaceID, "query", q)
+		results = append(results, row)
+	}
+	if err := rows.Err(); err != nil {
+		slog.Warn("search projects rows error", "error", err)
 		writeError(w, http.StatusInternalServerError, "failed to search projects")
 		return
 	}

@@ -82,27 +82,9 @@ function pickMarkdownLink(att: Attachment): string {
 
 export function useFileUpload(
   api: ApiClient,
-  // Receives the failing `file` alongside the error so hosts can name it in
-  // the failure toast. `uploadWithToast` swallows the rejection after this
-  // fires, so a host that passes nothing reports nothing — the upload
-  // placeholder still disappears, which on its own reads as "my file
-  // silently vanished" (MUL-4808).
-  onError?: (error: Error, file: File) => void,
+  onError?: (error: Error) => void,
 ) {
-  // In-flight counter, NOT a single boolean. Callers fire multiple uploads
-  // concurrently (drag-drop of N files, paste with multiple images) and the
-  // boolean shape would flip false as soon as the FIRST upload's finally ran
-  // — even though N-1 are still mid-request. Surfaces consuming `uploading`
-  // (the quick-create submit gate, the editor's "Uploading…" button label)
-  // would then unblock submit while uploads are still in flight, causing
-  // `stripBlobUrls` to erase the still-pending images from the markdown and
-  // their attachment ids never to be bound (MUL-3339).
-  //
-  // The exposed `uploading: boolean` keeps the existing call-site contract
-  // (`{ uploading } = useFileUpload(api)` everywhere); only the internal
-  // tracking shape changes.
-  const [inFlight, setInFlight] = useState(0);
-  const uploading = inFlight > 0;
+  const [uploading, setUploading] = useState(false);
 
   const upload = useCallback(
     async (file: File, ctx?: UploadContext): Promise<UploadResult | null> => {
@@ -110,7 +92,7 @@ export function useFileUpload(
         throw new Error("File exceeds 100 MB limit");
       }
 
-      setInFlight((n) => n + 1);
+      setUploading(true);
       try {
         const att: Attachment = await api.uploadFile(file, {
           issueId: ctx?.issueId,
@@ -119,7 +101,7 @@ export function useFileUpload(
         });
         return { ...att, link: att.url, markdownLink: pickMarkdownLink(att) };
       } finally {
-        setInFlight((n) => n - 1);
+        setUploading(false);
       }
     },
     [api],
@@ -130,7 +112,7 @@ export function useFileUpload(
       try {
         return await upload(file, ctx);
       } catch (err) {
-        onError?.(err instanceof Error ? err : new Error("Upload failed"), file);
+        onError?.(err instanceof Error ? err : new Error("Upload failed"));
         return null;
       }
     },

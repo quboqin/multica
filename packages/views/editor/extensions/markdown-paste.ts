@@ -27,11 +27,7 @@
  */
 import { Extension } from "@tiptap/core";
 import { Plugin, PluginKey } from "@tiptap/pm/state";
-import {
-  Fragment,
-  Slice,
-  type Node as ProseMirrorNode,
-} from "@tiptap/pm/model";
+import { Slice } from "@tiptap/pm/model";
 
 const LARGE_PASTE_TEXT_THRESHOLD = 50_000;
 const SEMANTIC_RICH_HTML_SELECTOR = [
@@ -351,62 +347,6 @@ function classifyPaste({
   return "markdown";
 }
 
-function canJoinOrderedLists(
-  left: ProseMirrorNode,
-  right: ProseMirrorNode,
-): boolean {
-  const leftType = left.attrs.type ?? "1";
-  const rightType = right.attrs.type ?? "1";
-  if (
-    left.type.name !== "orderedList" ||
-    right.type !== left.type ||
-    leftType !== rightType
-  ) {
-    return false;
-  }
-
-  const parsedLeftStart = Number(left.attrs.start);
-  const parsedRightStart = Number(right.attrs.start);
-  const leftStart = Number.isFinite(parsedLeftStart) ? parsedLeftStart : 1;
-  const rightStart = Number.isFinite(parsedRightStart) ? parsedRightStart : 1;
-  const expectedContinuation = leftStart + left.childCount;
-
-  // Some rich-text sources put every visual item in its own <ol> without a
-  // start value, so the parsed slice becomes adjacent one-item lists that all
-  // restart at 1. An explicit continuation value is the same structure with a
-  // better HTML hint. Both forms should become one list in our document model.
-  return rightStart === 1 || rightStart === expectedContinuation;
-}
-
-function repairOrderedListsInFragment(fragment: Fragment): Fragment {
-  const repaired: ProseMirrorNode[] = [];
-
-  fragment.forEach((node) => {
-    const content = node.isLeaf
-      ? node.content
-      : repairOrderedListsInFragment(node.content);
-    const repairedNode = content.eq(node.content) ? node : node.copy(content);
-    const previous = repaired.at(-1);
-
-    if (previous && canJoinOrderedLists(previous, repairedNode)) {
-      repaired[repaired.length - 1] = previous.copy(
-        previous.content.append(repairedNode.content),
-      );
-      return;
-    }
-
-    repaired.push(repairedNode);
-  });
-
-  return Fragment.fromArray(repaired);
-}
-
-function repairFragmentedOrderedLists(slice: Slice): Slice {
-  const content = repairOrderedListsInFragment(slice.content);
-  if (content.eq(slice.content)) return slice;
-  return new Slice(content, slice.openStart, slice.openEnd);
-}
-
 export function createMarkdownPasteExtension() {
   return Extension.create({
     name: "markdownPaste",
@@ -416,7 +356,7 @@ export function createMarkdownPasteExtension() {
         new Plugin({
           key: new PluginKey("markdownPaste"),
           props: {
-            handlePaste(view, event, slice) {
+            handlePaste(view, event) {
               if (!editor.markdown) return false;
               const clipboard = event.clipboardData;
               if (!clipboard) return false;
@@ -431,24 +371,7 @@ export function createMarkdownPasteExtension() {
                 isInsideCodeBlock: $from.parent.type.name === "codeBlock",
               });
 
-              if (mode === "native") {
-                // ProseMirror-owned clipboard HTML already represents our exact
-                // document structure. Only repair external rich HTML, where
-                // adjacent <ol> fragments commonly stand for one visual list.
-                if (html && !html.includes("data-pm-slice")) {
-                  const repaired = repairFragmentedOrderedLists(slice);
-                  if (repaired !== slice) {
-                    const tr = view.state.tr
-                      .replaceSelection(repaired)
-                      .scrollIntoView()
-                      .setMeta("paste", true)
-                      .setMeta("uiEvent", "paste");
-                    view.dispatch(tr);
-                    return true;
-                  }
-                }
-                return false;
-              }
+              if (mode === "native") return false;
 
               if (mode === "literal") {
                 view.dispatch(view.state.tr.insertText(text));
@@ -474,8 +397,8 @@ export function createMarkdownPasteExtension() {
                 return true;
               }
 
-              const parsedSlice = Slice.maxOpen(node.content);
-              const tr = view.state.tr.replaceSelection(parsedSlice);
+              const slice = Slice.maxOpen(node.content);
+              const tr = view.state.tr.replaceSelection(slice);
               view.dispatch(tr);
               return true;
             },

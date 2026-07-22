@@ -138,11 +138,6 @@ USAGE
 
 COMMANDS
 {{formatCommandList .Commands}}
-{{- if .HasLocalFlags}}
-
-FLAGS
-{{.LocalFlags.FlagUsages}}
-{{- end}}
 INHERITED FLAGS
   --help   Show help for command
 {{- if .Example}}

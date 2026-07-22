@@ -9,7 +9,6 @@ import (
 	"io"
 	"net/url"
 	"os"
-	"path/filepath"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -59,7 +58,7 @@ var skillDeleteCmd = &cobra.Command{
 
 var skillImportCmd = &cobra.Command{
 	Use:   "import",
-	Short: "Import a skill from a URL (clawhub.ai, skills.sh, github.com) or a local .skill/.zip archive",
+	Short: "Import a skill from a URL (clawhub.ai, skills.sh, or github.com)",
 	RunE:  runSkillImport,
 }
 
@@ -140,8 +139,7 @@ func init() {
 	skillDeleteCmd.Flags().Bool("yes", false, "Skip confirmation prompt")
 
 	// skill import
-	skillImportCmd.Flags().String("url", "", "URL to import from (clawhub.ai, skills.sh, or github.com). Mutually exclusive with --file.")
-	skillImportCmd.Flags().String("file", "", "Path to a local skill archive (.skill or .zip) to import. Mutually exclusive with --url.")
+	skillImportCmd.Flags().String("url", "", "URL to import from (required)")
 	skillImportCmd.Flags().String("on-conflict", "fail", "Conflict strategy when a skill with the same name exists: fail, overwrite, rename, or skip")
 	skillImportCmd.Flags().String("output", "json", "Output format: table or json")
 
@@ -418,40 +416,23 @@ func runSkillImport(cmd *cobra.Command, _ []string) error {
 	}
 
 	importURL, _ := cmd.Flags().GetString("url")
-	importFile, _ := cmd.Flags().GetString("file")
-	switch {
-	case importURL == "" && importFile == "":
-		return fmt.Errorf("either --url or --file is required")
-	case importURL != "" && importFile != "":
-		return fmt.Errorf("--url and --file are mutually exclusive")
+	if importURL == "" {
+		return fmt.Errorf("--url is required")
 	}
 	onConflict, _ := cmd.Flags().GetString("on-conflict")
 	if !validSkillImportConflictStrategy(onConflict) {
 		return fmt.Errorf("--on-conflict must be one of: fail, overwrite, rename, skip")
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), cli.AtLeastAPITimeout(60*time.Second))
-	defer cancel()
-
-	var result map[string]any
-	if importFile != "" {
-		fileData, readErr := os.ReadFile(importFile)
-		if readErr != nil {
-			return fmt.Errorf("read skill archive: %w", readErr)
-		}
-		if err := client.ImportSkillFile(ctx, fileData, filepath.Base(importFile), onConflict, &result); err != nil {
-			if handledErr := handleSkillImportError(cmd, err); handledErr != nil {
-				return handledErr
-			}
-			return fmt.Errorf("import skill: %w", err)
-		}
-		return printSkillImportResult(cmd, result)
-	}
-
 	body := map[string]any{
 		"url":         importURL,
 		"on_conflict": onConflict,
 	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), cli.AtLeastAPITimeout(60*time.Second))
+	defer cancel()
+
+	var result map[string]any
 	if err := client.PostJSON(ctx, "/api/skills/import", body, &result); err != nil {
 		if handledErr := handleSkillImportError(cmd, err); handledErr != nil {
 			return handledErr

@@ -79,7 +79,10 @@ describe("AttachmentList — standalone HTML attachment routes through Attachmen
       expect(f).toBeTruthy();
       return f!;
     });
-    expect(frame.getAttribute("sandbox")).toBe("allow-scripts");
+    expect(frame.getAttribute("sandbox")).toBe(
+      "allow-scripts allow-popups allow-popups-to-escape-sandbox",
+    );
+    expect(frame.getAttribute("sandbox")).not.toContain("allow-same-origin");
     expect(frame.getAttribute("srcdoc")).toContain("<p>chart</p>");
     // AttachmentCard chrome would render the filename as visible <p> text;
     // HtmlAttachmentPreview replaces the row entirely.
@@ -94,28 +97,6 @@ describe("AttachmentList — inline attachment filtering", () => {
     const attachment = {
       id,
       url: "/uploads/report.pdf",
-      filename: "report.pdf",
-      content_type: "application/pdf",
-      size_bytes: 1024,
-    } as any;
-
-    const { container } = renderWithQuery(
-      <AttachmentList
-        attachments={[attachment]}
-        content={`!file[report.pdf](${href})`}
-      />,
-    );
-
-    expect(screen.queryByText("report.pdf")).toBeNull();
-    expect(container.firstChild).toBeNull();
-  });
-
-  it("does not render a bottom attachment row when the body already has the response download_url", () => {
-    const href = "https://cdn.example.test/report.pdf?Signature=stale";
-    const attachment = {
-      id: "11111111-2222-3333-4444-555555555555",
-      url: "/uploads/report.pdf",
-      download_url: "https://cdn.example.test/report.pdf?Signature=fresh",
       filename: "report.pdf",
       content_type: "application/pdf",
       size_bytes: 1024,

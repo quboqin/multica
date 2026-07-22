@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -13,7 +12,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
-	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -83,62 +81,6 @@ func TestTriggerRestart_BrewLinuxCellarDeleted(t *testing.T) {
 	}
 }
 
-func TestTriggerRestart_UsesResolvedFallback(t *testing.T) {
-	originalResolveSelfExecutable := resolveSelfExecutable
-	originalIsBrewInstall := isBrewInstall
-	t.Cleanup(func() {
-		resolveSelfExecutable = originalResolveSelfExecutable
-		isBrewInstall = originalIsBrewInstall
-	})
-
-	want := filepath.Join(t.TempDir(), "multica")
-	if err := os.WriteFile(want, []byte("test executable"), 0o755); err != nil {
-		t.Fatalf("write executable fixture: %v", err)
-	}
-	wantResolved, err := filepath.EvalSymlinks(want)
-	if err != nil {
-		t.Fatalf("resolve executable fixture: %v", err)
-	}
-	resolveSelfExecutable = func() (string, error) { return want, nil }
-	isBrewInstall = func() bool { return false }
-
-	canceled := false
-	d := &Daemon{
-		logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
-		cancelFunc: func() { canceled = true },
-	}
-	d.triggerRestart()
-
-	if got := d.RestartBinary(); got != wantResolved {
-		t.Fatalf("restart binary = %q, want resolved fallback executable %q", got, wantResolved)
-	}
-	if !canceled {
-		t.Fatal("triggerRestart did not initiate graceful shutdown")
-	}
-}
-
-func TestTriggerRestart_ResolveFailureLeavesDaemonRunning(t *testing.T) {
-	originalResolveSelfExecutable := resolveSelfExecutable
-	t.Cleanup(func() { resolveSelfExecutable = originalResolveSelfExecutable })
-	resolveSelfExecutable = func() (string, error) {
-		return "", errors.New("cannot resolve executable")
-	}
-
-	canceled := false
-	d := &Daemon{
-		logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
-		cancelFunc: func() { canceled = true },
-	}
-	d.triggerRestart()
-
-	if got := d.RestartBinary(); got != "" {
-		t.Fatalf("restart binary = %q, want empty", got)
-	}
-	if canceled {
-		t.Fatal("triggerRestart initiated shutdown without a restart binary")
-	}
-}
-
 func TestIsBlockedEnvKey(t *testing.T) {
 	t.Parallel()
 
@@ -150,22 +92,13 @@ func TestIsBlockedEnvKey(t *testing.T) {
 		{key: "multica_runtime_id", want: true},
 		{key: "HOME", want: true},
 		{key: "PATH", want: true},
-		{key: "TMPDIR", want: true},
-		{key: "tmp", want: true},
-		{key: "TEMP", want: true},
 		{key: "CODEX_HOME", want: true},
 		{key: "CURSOR_DATA_DIR", want: true},
 		{key: "cursor_data_dir", want: true},
-		{key: "CURSOR_MCP_AUTH_SOURCE", want: true},
 		{key: "OPENCLAW_CONFIG_PATH", want: true},
 		{key: "OPENCLAW_INCLUDE_ROOTS", want: true},
 		{key: "ANTHROPIC_API_KEY", want: false},
 		{key: "CURSOR_AGENT", want: false},
-		// HERMES_HOME is intentionally NOT blocked: a skill-less Hermes task
-		// must be able to honor a user-set profile/home, and when skills are
-		// bound the per-task overlay overrides it after custom_env is layered.
-		{key: "HERMES_HOME", want: false},
-		{key: "hermes_home", want: false},
 	}
 
 	for _, tt := range tests {
@@ -175,170 +108,6 @@ func TestIsBlockedEnvKey(t *testing.T) {
 				t.Fatalf("isBlockedEnvKey(%q) = %v, want %v", tt.key, got, tt.want)
 			}
 		})
-	}
-}
-
-// TestLayerCustomEnvAndHermesHome exercises the daemon-assembled child env for
-// HERMES_HOME: no overlay passes the user's value through, an overlay overrides
-// it, and blocklisted keys are still dropped.
-func TestLayerCustomEnvAndHermesHome(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name        string
-		customEnv   map[string]string
-		overlayHome string
-		wantHermes  string // "" means the key must be absent
-		wantAbsent  []string
-	}{
-		{
-			name:        "no skills: user HERMES_HOME passes through",
-			customEnv:   map[string]string{"HERMES_HOME": "/home/u/.hermes-research"},
-			overlayHome: "",
-			wantHermes:  "/home/u/.hermes-research",
-		},
-		{
-			name:        "skills bound: overlay overrides user HERMES_HOME",
-			customEnv:   map[string]string{"HERMES_HOME": "/home/u/.hermes-research"},
-			overlayHome: "/tmp/task/hermes-home",
-			wantHermes:  "/tmp/task/hermes-home",
-		},
-		{
-			name:        "no custom home, no overlay: key absent",
-			customEnv:   map[string]string{"ANTHROPIC_API_KEY": "sk"},
-			overlayHome: "",
-			wantHermes:  "",
-		},
-		{
-			name:        "blocklisted key dropped, overlay still applied",
-			customEnv:   map[string]string{"CODEX_HOME": "/evil", "MULTICA_TOKEN": "x"},
-			overlayHome: "/tmp/task/hermes-home",
-			wantHermes:  "/tmp/task/hermes-home",
-			wantAbsent:  []string{"CODEX_HOME", "MULTICA_TOKEN"},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			agentEnv := map[string]string{}
-			layerCustomEnvAndHermesHome(agentEnv, tt.customEnv, tt.overlayHome, nil)
-
-			if got, ok := agentEnv["HERMES_HOME"]; tt.wantHermes == "" {
-				if ok {
-					t.Errorf("HERMES_HOME should be absent, got %q", got)
-				}
-			} else if got != tt.wantHermes {
-				t.Errorf("HERMES_HOME = %q, want %q", got, tt.wantHermes)
-			}
-			for _, k := range tt.wantAbsent {
-				if _, ok := agentEnv[k]; ok {
-					t.Errorf("blocklisted key %q should not be applied", k)
-				}
-			}
-		})
-	}
-}
-
-func TestRepoCheckoutModeFor(t *testing.T) {
-	t.Parallel()
-	tests := []struct {
-		name, provider, goos, want string
-	}{
-		{name: "Linux Codex isolates Git metadata", provider: "codex", goos: "linux", want: repoCheckoutModeIsolated},
-		{name: "macOS Codex keeps worktree", provider: "codex", goos: "darwin"},
-		{name: "Windows Codex keeps worktree", provider: "codex", goos: "windows"},
-		{name: "Linux Claude keeps worktree", provider: "claude", goos: "linux"},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			if got := repoCheckoutModeFor(tt.provider, tt.goos); got != tt.want {
-				t.Fatalf("repoCheckoutModeFor(%q, %q) = %q, want %q", tt.provider, tt.goos, got, tt.want)
-			}
-		})
-	}
-}
-
-func TestConfigureCodexTaskShellEnvironment(t *testing.T) {
-	t.Parallel()
-
-	t.Run("non-Codex runtime is unchanged", func(t *testing.T) {
-		t.Parallel()
-		codexHome := t.TempDir()
-		if err := configureCodexTaskShellEnvironment("claude", codexHome, nil, nil, nil, slog.Default()); err != nil {
-			t.Fatalf("configureCodexTaskShellEnvironment: %v", err)
-		}
-		if _, err := os.Stat(filepath.Join(codexHome, "config.toml")); !os.IsNotExist(err) {
-			t.Fatalf("non-Codex runtime unexpectedly wrote config.toml: %v", err)
-		}
-	})
-
-	t.Run("Codex policy uses platform and explicit task environment", func(t *testing.T) {
-		t.Parallel()
-		codexHome := t.TempDir()
-		inherited := []string{
-			"SystemRoot=C:\\Windows",
-			"USERPROFILE=C:\\Users\\test",
-			"OPENAI_API_KEY=host-secret",
-			"MULTICA_LLM_API_KEY=daemon-secret",
-		}
-		agentEnv := map[string]string{
-			"CUSTOM_ACCESS_TOKEN": "agent-secret",
-			"CUSTOM_FLAG":         "enabled",
-			"UNAUTHORIZED_TOKEN":  "daemon-secret",
-			"MULTICA_SERVER_URL":  "https://task.example",
-			"MULTICA_TOKEN":       "mat_task",
-		}
-		agentCustomEnv := map[string]string{
-			"CUSTOM_ACCESS_TOKEN": "agent-secret",
-			"CUSTOM_FLAG":         "enabled",
-		}
-		if err := configureCodexTaskShellEnvironment("codex", codexHome, inherited, agentEnv, agentCustomEnv, slog.Default()); err != nil {
-			t.Fatalf("configureCodexTaskShellEnvironment: %v", err)
-		}
-		data, err := os.ReadFile(filepath.Join(codexHome, "config.toml"))
-		if err != nil {
-			t.Fatalf("read config.toml: %v", err)
-		}
-		config := string(data)
-		for _, want := range []string{"SystemRoot", "USERPROFILE", "CUSTOM_ACCESS_TOKEN", "CUSTOM_FLAG", "MULTICA_SERVER_URL", "MULTICA_TOKEN"} {
-			if !strings.Contains(config, want) {
-				t.Errorf("config.toml missing %q:\n%s", want, config)
-			}
-		}
-		for _, unwanted := range []string{"OPENAI_API_KEY", "MULTICA_LLM_API_KEY", "UNAUTHORIZED_TOKEN", "MULTICA_*", "agent-secret", "daemon-secret", "mat_task"} {
-			if strings.Contains(config, unwanted) {
-				t.Errorf("config.toml unexpectedly contains %q:\n%s", unwanted, config)
-			}
-		}
-	})
-
-	t.Run("Codex without task home fails closed", func(t *testing.T) {
-		t.Parallel()
-		err := configureCodexTaskShellEnvironment("codex", "", nil, map[string]string{"MULTICA_TOKEN": "mat_task"}, nil, slog.Default())
-		if err == nil || !strings.Contains(err.Error(), "CODEX_HOME is missing") {
-			t.Fatalf("error = %v, want missing CODEX_HOME", err)
-		}
-	})
-}
-
-func TestCodexShellAuthorizedCustomEnvNamesUsesDaemonBlocklist(t *testing.T) {
-	t.Parallel()
-
-	got := codexShellAuthorizedCustomEnvNames(map[string]string{
-		"CUSTOM_ACCESS_TOKEN": "agent-secret",
-		"custom_secret":       "agent-secret",
-		"MULTICA_TOKEN":       "must-not-authorize",
-		"PATH":                "/must/not/override",
-		"HOME":                "/must/not/override",
-		"CODEX_HOME":          "/must/not/override",
-		"":                    "must-not-authorize",
-	})
-	slices.Sort(got)
-	want := []string{"CUSTOM_ACCESS_TOKEN", "custom_secret"}
-	if !slices.Equal(got, want) {
-		t.Fatalf("codexShellAuthorizedCustomEnvNames() = %#v, want %#v", got, want)
 	}
 }
 
@@ -398,25 +167,16 @@ func TestTriggerRestart_BrewPrefixUnavailable_FallsBackToKnownPrefix(t *testing.
 	originalIsBrewInstall := isBrewInstall
 	originalGetBrewPrefix := getBrewPrefix
 	originalMatchKnownBrewPrefix := matchKnownBrewPrefix
-	originalResolveSelfExecutable := resolveSelfExecutable
 	t.Cleanup(func() {
 		isBrewInstall = originalIsBrewInstall
 		getBrewPrefix = originalGetBrewPrefix
 		matchKnownBrewPrefix = originalMatchKnownBrewPrefix
-		resolveSelfExecutable = originalResolveSelfExecutable
 	})
 
 	const knownPrefix = "/home/linuxbrew/.linuxbrew"
-	cellarPath := filepath.Join(knownPrefix, "Cellar", "multica", "0.2.9", "bin", "multica")
 	isBrewInstall = func() bool { return true }
 	getBrewPrefix = func() string { return "" }
-	resolveSelfExecutable = func() (string, error) { return cellarPath, nil }
-	matchKnownBrewPrefix = func(path string) string {
-		if path != cellarPath {
-			t.Fatalf("MatchKnownBrewPrefix path = %q, want resolver result %q", path, cellarPath)
-		}
-		return knownPrefix
-	}
+	matchKnownBrewPrefix = func(string) string { return knownPrefix }
 
 	d := &Daemon{
 		logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
@@ -509,13 +269,8 @@ func TestProviderNeedsInlineSystemPrompt(t *testing.T) {
 		// directly. Inlining the full runtime brief duplicates that context and
 		// can trip upstream provider safety filters on otherwise harmless tasks.
 		{provider: "hermes", want: false},
-		// Kiro CLI loads a root AGENTS.md in ACP sessions. Inlining the same
-		// runtime brief duplicates it at the start of every user turn.
-		{provider: "kiro", want: false},
+		{provider: "kiro", want: true},
 		{provider: "kimi", want: true},
-		{provider: "traecli", want: true},
-		// Qwen Code loads the per-task QWEN.md file natively.
-		{provider: "qwen", want: false},
 		{provider: "codex", want: false},
 		{provider: "claude", want: false},
 	}
@@ -1221,54 +976,24 @@ func newRepoReadyTestDaemon(t *testing.T, handler http.HandlerFunc) *Daemon {
 	return d
 }
 
-func TestGateCodexResumeToRolloutPresence(t *testing.T) {
-	t.Parallel()
+type staticRepoCache struct {
+	paths map[string]string
+}
 
-	// Seed a codex-home whose sessions dir holds exactly one rollout.
-	codexHome := filepath.Join(t.TempDir(), "codex-home")
-	present := filepath.Join(codexHome, "sessions", "2026", "07", "13",
-		"rollout-2026-07-13T00-00-00-present-session.jsonl")
-	if err := os.MkdirAll(filepath.Dir(present), 0o755); err != nil {
-		t.Fatalf("mkdir sessions: %v", err)
-	}
-	if err := os.WriteFile(present, []byte("{}"), 0o644); err != nil {
-		t.Fatalf("write rollout: %v", err)
-	}
+func (c *staticRepoCache) Lookup(workspaceID, url string) string {
+	return c.paths[workspaceID+"\x00"+url]
+}
 
-	tests := []struct {
-		name        string
-		provider    string
-		sessionID   string
-		codexHome   string
-		wantSession string
-	}{
-		{name: "rollout present keeps resume", provider: "codex", sessionID: "present-session", codexHome: codexHome, wantSession: "present-session"},
-		{name: "rollout absent drops resume", provider: "codex", sessionID: "gone-session", codexHome: codexHome, wantSession: ""},
-		{name: "non-codex provider is a no-op", provider: "claude", sessionID: "present-session", codexHome: codexHome, wantSession: "present-session"},
-		{name: "empty codex home is a no-op", provider: "codex", sessionID: "present-session", codexHome: "", wantSession: "present-session"},
-	}
+func (c *staticRepoCache) Sync(string, []repocache.RepoInfo, ...repocache.GitCredential) error {
+	return nil
+}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			task := Task{PriorSessionID: tt.sessionID}
-			taskCtx := execenv.TaskContextForEnv{PriorSessionResumed: tt.sessionID != ""}
+func (c *staticRepoCache) WithRepoLock(_ string, fn func() error) error {
+	return fn()
+}
 
-			gateCodexResumeToRolloutPresence(&task, &taskCtx, tt.provider, tt.codexHome, slog.Default())
-
-			if task.PriorSessionID != tt.wantSession {
-				t.Fatalf("PriorSessionID = %q, want %q", task.PriorSessionID, tt.wantSession)
-			}
-			if taskCtx.PriorSessionResumed != (tt.wantSession != "") {
-				t.Fatalf("PriorSessionResumed = %v, want %v", taskCtx.PriorSessionResumed, tt.wantSession != "")
-			}
-			// A dropped resume (had a session, now cleared) must be surfaced to
-			// the user via the brief; a kept/no-op resume must not.
-			wantUnavailable := tt.sessionID != "" && tt.wantSession == ""
-			if taskCtx.PriorSessionResumeUnavailable != wantUnavailable {
-				t.Fatalf("PriorSessionResumeUnavailable = %v, want %v", taskCtx.PriorSessionResumeUnavailable, wantUnavailable)
-			}
-		})
-	}
+func (c *staticRepoCache) CreateWorktree(repocache.WorktreeParams) (*repocache.WorktreeResult, error) {
+	return nil, nil
 }
 
 func TestGateResumeToReusedWorkdir(t *testing.T) {
@@ -1332,106 +1057,8 @@ func TestGateResumeToReusedWorkdir(t *testing.T) {
 			if taskCtx.PriorSessionResumed != (tt.wantSession != "") {
 				t.Fatalf("PriorSessionResumed = %v, want %v", taskCtx.PriorSessionResumed, tt.wantSession != "")
 			}
-			// A dropped resume (had a session, now cleared) must be surfaced to
-			// the user via the brief; a kept/no-op resume must not.
-			wantUnavailable := tt.sessionID != "" && tt.wantSession == ""
-			if taskCtx.PriorSessionResumeUnavailable != wantUnavailable {
-				t.Fatalf("PriorSessionResumeUnavailable = %v, want %v", taskCtx.PriorSessionResumeUnavailable, wantUnavailable)
-			}
 		})
 	}
-}
-
-// newCodexStoreGuardDaemon builds a Daemon with only the per-issue Codex session
-// store guard initialised — enough to exercise the reserve-vs-mark protocol.
-func newCodexStoreGuardDaemon() *Daemon {
-	d := &Daemon{
-		activeCodexStores:   map[string]int{},
-		deletingCodexStores: map[string]bool{},
-	}
-	d.activeCodexStoresCond = sync.NewCond(&d.activeCodexStoresMu)
-	return d
-}
-
-// A task that marks a store active before the GC reserves it must block the
-// deletion — this is exactly Elon's mark-then-delete interleaving, which the old
-// point-in-time active check allowed.
-func TestCodexStoreGuard_MarkBeforeReserveBlocksDeletion(t *testing.T) {
-	t.Parallel()
-	d := newCodexStoreGuardDaemon()
-	const store = "/stores/agent/issue"
-
-	d.markActiveCodexStore(store)
-	if _, ok := d.reserveCodexStoreForDeletion(store); ok {
-		t.Fatal("reserve must refuse a store a live task already holds")
-	}
-	d.unmarkActiveCodexStore(store)
-
-	commit, ok := d.reserveCodexStoreForDeletion(store)
-	if !ok {
-		t.Fatal("reserve should succeed once the store is inactive")
-	}
-	commit()
-}
-
-// The reverse interleaving: once the GC has reserved a store, a task's
-// markActive must block until the removal commits (so it never mounts a store
-// mid-removal), then proceed.
-func TestCodexStoreGuard_ReserveBlocksMarkUntilCommit(t *testing.T) {
-	t.Parallel()
-	d := newCodexStoreGuardDaemon()
-	const store = "/stores/agent/issue"
-
-	commit, ok := d.reserveCodexStoreForDeletion(store)
-	if !ok {
-		t.Fatal("reserve should succeed on an inactive store")
-	}
-
-	marked := make(chan struct{})
-	go func() {
-		d.markActiveCodexStore(store)
-		close(marked)
-	}()
-
-	select {
-	case <-marked:
-		t.Fatal("markActiveCodexStore must block while the store is reserved for deletion")
-	case <-time.After(100 * time.Millisecond):
-	}
-
-	commit()
-
-	select {
-	case <-marked:
-	case <-time.After(2 * time.Second):
-		t.Fatal("markActiveCodexStore must proceed after the reservation is committed")
-	}
-	// The store is now active, so a fresh reserve must be refused.
-	if _, ok := d.reserveCodexStoreForDeletion(store); ok {
-		t.Fatal("store must be active after the blocked mark proceeds")
-	}
-}
-
-// Two GC passes cannot both reserve the same store; the second is refused until
-// the first commits.
-func TestCodexStoreGuard_SecondReserveRefusedWhileDeleting(t *testing.T) {
-	t.Parallel()
-	d := newCodexStoreGuardDaemon()
-	const store = "/stores/agent/issue"
-
-	commit, ok := d.reserveCodexStoreForDeletion(store)
-	if !ok {
-		t.Fatal("first reserve should succeed")
-	}
-	if _, ok := d.reserveCodexStoreForDeletion(store); ok {
-		t.Fatal("a second reserve must be refused while a removal is in flight")
-	}
-	commit()
-	commit2, ok := d.reserveCodexStoreForDeletion(store)
-	if !ok {
-		t.Fatal("reserve should succeed again after the prior removal committed")
-	}
-	commit2()
 }
 
 func TestExecuteAndDrain_ResumeFailureFallback(t *testing.T) {
@@ -1454,8 +1081,7 @@ func TestExecuteAndDrain_ResumeFailureFallback(t *testing.T) {
 
 	// First attempt: resume fails (no SessionID in result).
 	opts := agent.ExecOptions{ResumeSessionID: "stale-id"}
-	var msgSeq atomic.Int32
-	result, _, err := d.executeAndDrain(ctx, fb, "prompt", opts, taskLog, "task-1", &msgSeq)
+	result, _, err := d.executeAndDrain(ctx, fb, "prompt", opts, taskLog, "task-1")
 	if err != nil {
 		t.Fatalf("first call error: %v", err)
 	}
@@ -1467,7 +1093,7 @@ func TestExecuteAndDrain_ResumeFailureFallback(t *testing.T) {
 	if result.Status == "failed" && result.SessionID == "" {
 		firstUsage := result.Usage
 		opts.ResumeSessionID = ""
-		retryResult, _, retryErr := d.executeAndDrain(ctx, fb, "prompt", opts, taskLog, "task-1", &msgSeq)
+		retryResult, _, retryErr := d.executeAndDrain(ctx, fb, "prompt", opts, taskLog, "task-1")
 		if retryErr != nil {
 			t.Fatalf("retry error: %v", retryErr)
 		}
@@ -1491,178 +1117,6 @@ func TestExecuteAndDrain_ResumeFailureFallback(t *testing.T) {
 	}
 }
 
-// transcriptBackend emits a tool_use and a text message before returning its
-// result — the first call fails like a broken resume, the second completes.
-type transcriptBackend struct {
-	calls atomic.Int32
-}
-
-func (b *transcriptBackend) Execute(_ context.Context, _ string, _ agent.ExecOptions) (*agent.Session, error) {
-	n := b.calls.Add(1)
-	msgCh := make(chan agent.Message, 2)
-	msgCh <- agent.Message{Type: agent.MessageToolUse, Tool: "bash"}
-	msgCh <- agent.Message{Type: agent.MessageText, Content: fmt.Sprintf("attempt %d", n)}
-	close(msgCh)
-	resCh := make(chan agent.Result, 1)
-	if n == 1 {
-		resCh <- agent.Result{Status: "failed", Error: "session not found"}
-	} else {
-		resCh <- agent.Result{Status: "completed", Output: "done", SessionID: "sess-2"}
-	}
-	return &agent.Session{Messages: msgCh, Result: resCh}, nil
-}
-
-// transcriptRecorder collects the task messages a daemon reports to its
-// message endpoint.
-type transcriptRecorder struct {
-	mu       sync.Mutex
-	messages []TaskMessageData
-}
-
-func (r *transcriptRecorder) snapshot() []TaskMessageData {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return slices.Clone(r.messages)
-}
-
-// newTranscriptRecorder returns a daemon whose message endpoint appends every
-// reported batch to the returned recorder.
-func newTranscriptRecorder(t *testing.T) (*Daemon, *transcriptRecorder) {
-	t.Helper()
-	rec := &transcriptRecorder{}
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasSuffix(r.URL.Path, "/messages") {
-			var body struct {
-				Messages []TaskMessageData `json:"messages"`
-			}
-			if err := json.NewDecoder(r.Body).Decode(&body); err == nil {
-				rec.mu.Lock()
-				rec.messages = append(rec.messages, body.Messages...)
-				rec.mu.Unlock()
-			}
-		}
-		w.WriteHeader(http.StatusOK)
-	}))
-	t.Cleanup(srv.Close)
-	return &Daemon{client: NewClient(srv.URL), logger: slog.Default()}, rec
-}
-
-// TestExecuteAndDrain_FlushesTranscriptBeforeReturningResult pins the
-// completion contract: once the agent result is handed back, the task's
-// messages have been reported. Without the wait the drain goroutine is still
-// in flight, so a consumer reading the transcript sees it truncated.
-func TestExecuteAndDrain_FlushesTranscriptBeforeReturningResult(t *testing.T) {
-	t.Parallel()
-
-	d, rec := newTranscriptRecorder(t)
-
-	result, _, err := d.executeAndDrain(context.Background(), &transcriptBackend{}, "p", agent.ExecOptions{}, slog.Default(), "task-flush", new(atomic.Int32))
-	if err != nil {
-		t.Fatalf("executeAndDrain: %v", err)
-	}
-	if result.Status != "failed" {
-		t.Fatalf("expected the backend's result, got %+v", result)
-	}
-
-	if got := rec.snapshot(); len(got) != 2 {
-		t.Fatalf("expected the transcript flushed before the result hand-off, got %d messages: %+v", len(got), got)
-	}
-}
-
-// TestExecuteAndDrain_SeqContinuesAcrossRetry pins the transcript's ordering
-// key: the server sorts a task's messages by seq alone, so a same-task resume
-// retry must keep numbering upwards instead of restarting at 1 and
-// interleaving its rows with the failed attempt's.
-func TestExecuteAndDrain_SeqContinuesAcrossRetry(t *testing.T) {
-	t.Parallel()
-
-	d, rec := newTranscriptRecorder(t)
-	fb := &transcriptBackend{}
-	var msgSeq atomic.Int32
-
-	result, _, err := d.executeAndDrain(context.Background(), fb, "p", agent.ExecOptions{ResumeSessionID: "stale"}, slog.Default(), "task-seq", &msgSeq)
-	if err != nil {
-		t.Fatalf("first call: %v", err)
-	}
-	if result.Status != "failed" {
-		t.Fatalf("expected failed first result, got %+v", result)
-	}
-
-	result, _, err = d.executeAndDrain(context.Background(), fb, "p", agent.ExecOptions{}, slog.Default(), "task-seq", &msgSeq)
-	if err != nil {
-		t.Fatalf("retry: %v", err)
-	}
-	if result.Status != "completed" {
-		t.Fatalf("expected completed retry result, got %+v", result)
-	}
-
-	got := rec.snapshot()
-	if len(got) != 4 {
-		t.Fatalf("expected 4 messages total, got %d: %+v", len(got), got)
-	}
-	for i, m := range got {
-		if m.Seq != i+1 {
-			t.Fatalf("expected strictly ascending seq across the retry, got %+v", got)
-		}
-	}
-}
-
-// sessionBackend hands out a pre-built session, leaving the test in control
-// of message and result delivery.
-type sessionBackend struct {
-	session *agent.Session
-}
-
-func (b sessionBackend) Execute(_ context.Context, _ string, _ agent.ExecOptions) (*agent.Session, error) {
-	return b.session, nil
-}
-
-// TestExecuteAndDrain_ContextCancelled_FlushesPendingTranscript pins the same
-// flush-before-return contract for the drainCtx.Done() terminal: when a
-// cancellation (or timeout/watchdog) ends the run with a message still
-// pending, executeAndDrain must not return until that tail is reported —
-// otherwise runTask fails-and-broadcasts while the last batch is in flight.
-func TestExecuteAndDrain_ContextCancelled_FlushesPendingTranscript(t *testing.T) {
-	t.Parallel()
-
-	d, rec := newTranscriptRecorder(t)
-
-	// Unbuffered: the send below returns only once the drain loop has
-	// consumed the message. The result channel never delivers, so only the
-	// context cancellation can end the drain.
-	msgCh := make(chan agent.Message)
-	b := sessionBackend{session: &agent.Session{Messages: msgCh, Result: make(chan agent.Result)}}
-
-	ctx, cancel := context.WithCancel(context.Background())
-	t.Cleanup(cancel)
-
-	type ret struct {
-		result agent.Result
-		err    error
-	}
-	retCh := make(chan ret, 1)
-	go func() {
-		result, _, err := d.executeAndDrain(ctx, b, "p", agent.ExecOptions{}, slog.Default(), "task-cancel-flush", new(atomic.Int32))
-		retCh <- ret{result, err}
-	}()
-
-	msgCh <- agent.Message{Type: agent.MessageText, Content: "pending tail"}
-	cancel()
-
-	r := <-retCh
-	if r.err != nil {
-		t.Fatalf("executeAndDrain: %v", r.err)
-	}
-	if r.result.Status != "cancelled" {
-		t.Fatalf("expected status=cancelled, got %q (err=%q)", r.result.Status, r.result.Error)
-	}
-
-	got := rec.snapshot()
-	if len(got) != 1 || got[0].Type != "text" || got[0].Content != "pending tail" {
-		t.Fatalf("expected the pending tail flushed before the cancelled return, got %+v", got)
-	}
-}
-
 func TestExecuteAndDrain_NoRetryWhenSessionEstablished(t *testing.T) {
 	t.Parallel()
 
@@ -1675,7 +1129,7 @@ func TestExecuteAndDrain_NoRetryWhenSessionEstablished(t *testing.T) {
 	}
 
 	opts := agent.ExecOptions{ResumeSessionID: "some-id"}
-	result, _, err := d.executeAndDrain(context.Background(), fb, "p", opts, slog.Default(), "t", new(atomic.Int32))
+	result, _, err := d.executeAndDrain(context.Background(), fb, "p", opts, slog.Default(), "t")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1745,7 +1199,7 @@ func TestExecuteAndDrain_CodexInactivityReportsToolResultTranscript(t *testing.T
 	result, tools, err := d.executeAndDrain(context.Background(), backend, "prompt", agent.ExecOptions{
 		Timeout:                   5 * time.Second,
 		SemanticInactivityTimeout: 100 * time.Millisecond,
-	}, slog.Default(), "task-stale", new(atomic.Int32))
+	}, slog.Default(), "task-stale")
 	if err != nil {
 		t.Fatalf("executeAndDrain: %v", err)
 	}
@@ -1800,7 +1254,7 @@ func TestExecuteAndDrain_ContextCancelled_ReportsCancelled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	result, _, err := d.executeAndDrain(ctx, blockingBackend{}, "p", agent.ExecOptions{}, slog.Default(), "t", new(atomic.Int32))
+	result, _, err := d.executeAndDrain(ctx, blockingBackend{}, "p", agent.ExecOptions{}, slog.Default(), "t")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -1839,7 +1293,7 @@ func TestExecuteAndDrain_IdleWatchdog_FiresOnInactivity(t *testing.T) {
 	t.Cleanup(cancel)
 
 	start := time.Now()
-	result, _, err := d.executeAndDrain(ctx, idleWatchdogBackend{emitOne: true}, "p", agent.ExecOptions{}, slog.Default(), "t-idle", new(atomic.Int32))
+	result, _, err := d.executeAndDrain(ctx, idleWatchdogBackend{emitOne: true}, "p", agent.ExecOptions{}, slog.Default(), "t-idle")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -1869,100 +1323,12 @@ func TestExecuteAndDrain_IdleWatchdog_FiresWhenNoMessageEverArrives(t *testing.T
 	// emitOne=false models a backend that hangs before sending any message.
 	// lastActivityAt is initialised at executeAndDrain entry, so the same
 	// window applies even with zero traffic.
-	result, _, err := d.executeAndDrain(ctx, idleWatchdogBackend{emitOne: false}, "p", agent.ExecOptions{}, slog.Default(), "t-idle-zero", new(atomic.Int32))
+	result, _, err := d.executeAndDrain(ctx, idleWatchdogBackend{emitOne: false}, "p", agent.ExecOptions{}, slog.Default(), "t-idle-zero")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if result.Status != "idle_watchdog" {
 		t.Fatalf("expected status=idle_watchdog when backend never emits, got %q (err=%q)", result.Status, result.Error)
-	}
-}
-
-func TestExecuteAndDrain_IdleWatchdog_UsesPerRunOverride(t *testing.T) {
-	t.Parallel()
-
-	d := newTestDaemon(t)
-	d.cfg.AgentIdleWatchdog = 500 * time.Millisecond
-
-	ctx, cancel := context.WithCancel(context.Background())
-	t.Cleanup(cancel)
-
-	start := time.Now()
-	result, _, err := d.executeAndDrain(
-		ctx,
-		idleWatchdogBackend{emitOne: true},
-		"p",
-		agent.ExecOptions{IdleWatchdogTimeout: 50 * time.Millisecond},
-		slog.Default(),
-		"t-idle-override",
-		new(atomic.Int32),
-	)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if result.Status != "idle_watchdog" {
-		t.Fatalf("expected status=idle_watchdog, got %q (err=%q)", result.Status, result.Error)
-	}
-	if !strings.Contains(result.Error, "50ms") {
-		t.Fatalf("expected error to report the per-run threshold, got %q", result.Error)
-	}
-	if elapsed := time.Since(start); elapsed > 250*time.Millisecond {
-		t.Fatalf("per-run watchdog override did not fire promptly: %s", elapsed)
-	}
-}
-
-func TestExecuteAndDrain_IdleWatchdog_GlobalDisableWinsOverPerRunOverride(t *testing.T) {
-	t.Parallel()
-
-	d := newTestDaemon(t)
-	d.cfg.AgentIdleWatchdog = 0
-
-	ctx, cancel := context.WithCancel(context.Background())
-	time.AfterFunc(100*time.Millisecond, cancel)
-
-	result, _, err := d.executeAndDrain(
-		ctx,
-		idleWatchdogBackend{emitOne: true},
-		"p",
-		agent.ExecOptions{IdleWatchdogTimeout: 20 * time.Millisecond},
-		slog.Default(),
-		"t-idle-global-off",
-		new(atomic.Int32),
-	)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if result.Status != "cancelled" {
-		t.Fatalf("global watchdog disable must win; got status=%q (err=%q)", result.Status, result.Error)
-	}
-}
-
-func TestExecuteAndDrain_IdleWatchdog_PerRunOverrideCannotExtendGlobalWindow(t *testing.T) {
-	t.Parallel()
-
-	d := newTestDaemon(t)
-	d.cfg.AgentIdleWatchdog = 50 * time.Millisecond
-
-	ctx, cancel := context.WithCancel(context.Background())
-	t.Cleanup(cancel)
-
-	result, _, err := d.executeAndDrain(
-		ctx,
-		idleWatchdogBackend{emitOne: true},
-		"p",
-		agent.ExecOptions{IdleWatchdogTimeout: 500 * time.Millisecond},
-		slog.Default(),
-		"t-idle-global-bound",
-		new(atomic.Int32),
-	)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if result.Status != "idle_watchdog" {
-		t.Fatalf("expected status=idle_watchdog, got %q (err=%q)", result.Status, result.Error)
-	}
-	if !strings.Contains(result.Error, "50ms") {
-		t.Fatalf("provider override must not extend the global threshold, got %q", result.Error)
 	}
 }
 
@@ -1978,7 +1344,7 @@ func TestExecuteAndDrain_IdleWatchdog_DisabledWhenZero(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	time.AfterFunc(80*time.Millisecond, cancel)
 
-	result, _, err := d.executeAndDrain(ctx, idleWatchdogBackend{emitOne: true}, "p", agent.ExecOptions{}, slog.Default(), "t-idle-off", new(atomic.Int32))
+	result, _, err := d.executeAndDrain(ctx, idleWatchdogBackend{emitOne: true}, "p", agent.ExecOptions{}, slog.Default(), "t-idle-off")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -2004,7 +1370,7 @@ func TestExecuteAndDrain_IdleWatchdog_HappyPathDoesNotFire(t *testing.T) {
 		},
 	}
 
-	result, _, err := d.executeAndDrain(context.Background(), fb, "p", agent.ExecOptions{}, slog.Default(), "t-idle-happy", new(atomic.Int32))
+	result, _, err := d.executeAndDrain(context.Background(), fb, "p", agent.ExecOptions{}, slog.Default(), "t-idle-happy")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -2077,7 +1443,6 @@ func TestExecuteAndDrain_IdleWatchdog_DoesNotFireDuringInFlightToolCall(t *testi
 		agent.ExecOptions{},
 		slog.Default(),
 		"t-long-tool",
-		new(atomic.Int32),
 	)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -2087,30 +1452,6 @@ func TestExecuteAndDrain_IdleWatchdog_DoesNotFireDuringInFlightToolCall(t *testi
 	}
 	if result.Status != "completed" {
 		t.Fatalf("expected status=completed, got %q (err=%q)", result.Status, result.Error)
-	}
-}
-
-func TestExecuteAndDrain_IdleWatchdog_PerRunOverrideStillUsesToolWindow(t *testing.T) {
-	t.Parallel()
-
-	d := newTestDaemon(t)
-	d.cfg.AgentIdleWatchdog = 500 * time.Millisecond
-	d.cfg.AgentToolWatchdog = 500 * time.Millisecond
-
-	result, _, err := d.executeAndDrain(
-		context.Background(),
-		longToolCallBackend{toolSilence: 200 * time.Millisecond},
-		"p",
-		agent.ExecOptions{IdleWatchdogTimeout: 50 * time.Millisecond},
-		slog.Default(),
-		"t-long-tool-override",
-		new(atomic.Int32),
-	)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if result.Status != "completed" {
-		t.Fatalf("per-run idle override must not replace the tool window; got status=%q (err=%q)", result.Status, result.Error)
 	}
 }
 
@@ -2141,7 +1482,7 @@ func TestExecuteAndDrain_IdleWatchdog_FiresOnStuckInFlightTool(t *testing.T) {
 	t.Cleanup(cancel)
 
 	start := time.Now()
-	result, _, err := d.executeAndDrain(ctx, stuckInFlightToolBackend{}, "p", agent.ExecOptions{}, slog.Default(), "t-stuck-tool", new(atomic.Int32))
+	result, _, err := d.executeAndDrain(ctx, stuckInFlightToolBackend{}, "p", agent.ExecOptions{}, slog.Default(), "t-stuck-tool")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -2177,7 +1518,7 @@ func TestExecuteAndDrain_IdleWatchdog_FiresAfterToolResultIfBackendStaysSilent(t
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 
-	result, _, err := d.executeAndDrain(ctx, tailIdleAfterToolBackend{}, "p", agent.ExecOptions{}, slog.Default(), "t-tail-idle", new(atomic.Int32))
+	result, _, err := d.executeAndDrain(ctx, tailIdleAfterToolBackend{}, "p", agent.ExecOptions{}, slog.Default(), "t-tail-idle")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -2300,6 +1641,76 @@ func TestEnsureRepoReadyRefreshesOnMiss(t *testing.T) {
 	}
 }
 
+func TestEnsureRepoReadyRequiresUserGitTokenForTaskRepo(t *testing.T) {
+	t.Parallel()
+
+	const repoURL = "git@git.ppdaicorp.com:team/api.git"
+	var refreshCalls atomic.Int32
+	d := newRepoReadyTestDaemon(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/api/daemon/workspaces/ws-1/repos" {
+			http.NotFound(w, r)
+			return
+		}
+		refreshCalls.Add(1)
+		json.NewEncoder(w).Encode(WorkspaceReposResponse{
+			WorkspaceID:  "ws-1",
+			Repos:        []RepoData{{URL: repoURL}},
+			ReposVersion: "v2",
+		})
+	})
+	d.workspaces["ws-1"] = newWorkspaceState("ws-1", nil, "", nil, nil)
+
+	cred := repocache.GitCredential{
+		Hosts:        []string{"git.ppdaicorp.com"},
+		RequireToken: true,
+	}
+	err := d.ensureRepoReady(context.Background(), "ws-1", repoURL, cred)
+	if !errors.Is(err, ErrGitTokenRequired) {
+		t.Fatalf("expected ErrGitTokenRequired, got %v", err)
+	}
+	if got := refreshCalls.Load(); got != 1 {
+		t.Fatalf("expected allowlist refresh before token check, got %d", got)
+	}
+	if got := d.repoCache.Lookup("ws-1", repoURL); got != "" {
+		t.Fatalf("missing user git_token must not clone using daemon credentials, got cache path %q", got)
+	}
+}
+
+func TestEnsureRepoReadyRequiresUserGitTokenEvenWhenCached(t *testing.T) {
+	t.Parallel()
+
+	const sourceRepo = "git@git.ppdaicorp.com:team/api.git"
+	var refreshCalls atomic.Int32
+	d := newRepoReadyTestDaemon(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/api/daemon/workspaces/ws-1/repos" {
+			http.NotFound(w, r)
+			return
+		}
+		refreshCalls.Add(1)
+		json.NewEncoder(w).Encode(WorkspaceReposResponse{
+			WorkspaceID:  "ws-1",
+			Repos:        []RepoData{{URL: sourceRepo}},
+			ReposVersion: "v2",
+		})
+	})
+	d.repoCache = &staticRepoCache{paths: map[string]string{
+		"ws-1\x00" + sourceRepo: "cached-bare-path",
+	}}
+	d.workspaces["ws-1"] = newWorkspaceState("ws-1", nil, "v1", []RepoData{{URL: sourceRepo}}, nil)
+
+	cred := repocache.GitCredential{
+		Hosts:        []string{"git.ppdaicorp.com"},
+		RequireToken: true,
+	}
+	err := d.ensureRepoReady(context.Background(), "ws-1", sourceRepo, cred)
+	if !errors.Is(err, ErrGitTokenRequired) {
+		t.Fatalf("expected ErrGitTokenRequired on cached repo, got %v", err)
+	}
+	if got := refreshCalls.Load(); got != 1 {
+		t.Fatalf("expected settings refresh even on cached repo, got %d", got)
+	}
+}
+
 // A project github_repo URL that the workspace itself does not bind must still
 // be allowed for `multica repo checkout` after registerTaskRepos runs. Without
 // this, the new project-repos-override-workspace-repos behavior would surface
@@ -2323,7 +1734,7 @@ func TestRegisterTaskReposAllowsProjectOnlyURL(t *testing.T) {
 	// the only repo URL the agent should be able to check out.
 	d.workspaces["ws-1"] = newWorkspaceState("ws-1", nil, "", nil, nil)
 
-	d.registerTaskRepos("ws-1", "task-project-only", []RepoData{{URL: sourceRepo}})
+	d.registerTaskRepos("ws-1", []RepoData{{URL: sourceRepo}})
 
 	// The async clone goroutine in registerTaskRepos may not have finished;
 	// poll briefly until the cache is populated so the test isn't racy.
@@ -2370,7 +1781,7 @@ func TestRegisterTaskReposSurvivesWorkspaceRefresh(t *testing.T) {
 		})
 	})
 	d.workspaces["ws-1"] = newWorkspaceState("ws-1", nil, "", nil, nil)
-	d.registerTaskRepos("ws-1", "task-refresh", []RepoData{{URL: sourceRepo}})
+	d.registerTaskRepos("ws-1", []RepoData{{URL: sourceRepo}})
 
 	// Wait for the registration to populate the cache.
 	deadline := time.Now().Add(5 * time.Second)
@@ -2384,39 +1795,6 @@ func TestRegisterTaskReposSurvivesWorkspaceRefresh(t *testing.T) {
 
 	if !d.workspaceRepoAllowed("ws-1", sourceRepo) {
 		t.Fatal("project repo URL was wiped by workspace refresh")
-	}
-}
-
-func TestTaskRepoDefaultRefScopedByTask(t *testing.T) {
-	t.Parallel()
-
-	const repoURL = "https://github.com/example/shared"
-	d := &Daemon{
-		workspaces: map[string]*workspaceState{
-			"ws-1": newWorkspaceState("ws-1", nil, "", nil, nil),
-		},
-	}
-
-	d.registerTaskRepos("ws-1", "task-a", []RepoData{
-		{URL: repoURL, Ref: "release/a"},
-		{URL: repoURL, Ref: "late-duplicate"},
-	})
-	d.registerTaskRepos("ws-1", "task-b", []RepoData{{URL: repoURL, Ref: "release/b"}})
-
-	if got := d.taskRepoDefaultRef("ws-1", "task-a", repoURL); got != "release/a" {
-		t.Fatalf("task-a default ref = %q, want release/a", got)
-	}
-	if got := d.taskRepoDefaultRef("ws-1", "task-b", repoURL); got != "release/b" {
-		t.Fatalf("task-b default ref = %q, want release/b", got)
-	}
-
-	d.clearTaskRepoRefs("ws-1", "task-a")
-
-	if got := d.taskRepoDefaultRef("ws-1", "task-a", repoURL); got != "" {
-		t.Fatalf("task-a default ref after cleanup = %q, want empty", got)
-	}
-	if got := d.taskRepoDefaultRef("ws-1", "task-b", repoURL); got != "release/b" {
-		t.Fatalf("task-b default ref after task-a cleanup = %q, want release/b", got)
 	}
 }
 
@@ -2535,7 +1913,7 @@ func TestDefaultArgsForProvider(t *testing.T) {
 	if got := defaultArgsForProvider(cfg, "codex"); strings.Join(got, " ") != "--sandbox workspace-write" {
 		t.Fatalf("unexpected codex args: %#v", got)
 	}
-	if got := defaultArgsForProvider(cfg, "unsupported"); got != nil {
+	if got := defaultArgsForProvider(cfg, "gemini"); got != nil {
 		t.Fatalf("expected nil for unsupported provider, got %#v", got)
 	}
 }
@@ -2549,17 +1927,6 @@ type reportTaskResultRecorder struct {
 	path    string
 	method  string
 	payload map[string]any
-}
-
-func TestTerminalTaskReportTimeoutCoversRetrySchedule(t *testing.T) {
-	client := NewClient("http://example.invalid")
-	worstCase := time.Duration(len(defaultTerminalRetrySchedule)+1) * client.client.Timeout
-	for _, delay := range defaultTerminalRetrySchedule {
-		worstCase += delay
-	}
-	if terminalTaskReportTimeout < worstCase {
-		t.Fatalf("terminal report timeout = %s, want at least retry worst case %s", terminalTaskReportTimeout, worstCase)
-	}
 }
 
 func (r *reportTaskResultRecorder) handler(t *testing.T) http.HandlerFunc {
@@ -2617,63 +1984,6 @@ func TestReportTaskResult_CompletedHitsCompleteEndpoint(t *testing.T) {
 	}
 	if rec.payload["session_id"] != "ses-1" {
 		t.Errorf("session_id: got %v", rec.payload["session_id"])
-	}
-}
-
-func TestReportTaskResult_CancelledParentStillReportsTerminalState(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name       string
-		result     TaskResult
-		wantSuffix string
-	}{
-		{
-			name: "complete",
-			result: TaskResult{
-				Status:     "completed",
-				Comment:    "all good",
-				BranchName: "agent/foo",
-				SessionID:  "ses-complete",
-				WorkDir:    "/tmp/complete",
-			},
-			wantSuffix: "/complete",
-		},
-		{
-			name: "fail",
-			result: TaskResult{
-				Status:        "blocked",
-				Comment:       "provider unavailable",
-				SessionID:     "ses-fail",
-				WorkDir:       "/tmp/fail",
-				FailureReason: "agent_error.provider_unavailable",
-			},
-			wantSuffix: "/fail",
-		},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			var calls atomic.Int32
-			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-				if !strings.HasSuffix(req.URL.Path, tc.wantSuffix) {
-					t.Errorf("terminal callback path = %q, want suffix %q", req.URL.Path, tc.wantSuffix)
-				}
-				calls.Add(1)
-				w.WriteHeader(http.StatusOK)
-			}))
-			t.Cleanup(srv.Close)
-
-			ctx, cancel := context.WithCancel(context.Background())
-			cancel()
-
-			d := &Daemon{client: NewClient(srv.URL), logger: slog.Default()}
-			d.reportTaskResult(ctx, "task-cancelled-parent", tc.result, slog.Default())
-
-			if got := calls.Load(); got != 1 {
-				t.Fatalf("terminal callback calls = %d, want 1", got)
-			}
-		})
 	}
 }
 
@@ -2884,76 +2194,6 @@ func TestReportTaskResult_PermanentCompleteFallsBackToFail(t *testing.T) {
 	}
 }
 
-func TestReportTaskResult_CancelledParentStillRunsPermanentFailureFallback(t *testing.T) {
-	defer noSleepRetry(t)()
-
-	var completeCalls, failCalls atomic.Int32
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-		switch {
-		case strings.HasSuffix(req.URL.Path, "/complete"):
-			completeCalls.Add(1)
-			w.WriteHeader(http.StatusBadRequest)
-		case strings.HasSuffix(req.URL.Path, "/fail"):
-			failCalls.Add(1)
-			w.WriteHeader(http.StatusOK)
-		default:
-			w.WriteHeader(http.StatusOK)
-		}
-	}))
-	t.Cleanup(srv.Close)
-
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-
-	d := &Daemon{client: NewClient(srv.URL), logger: slog.Default()}
-	d.reportTaskResult(ctx, "task-cancelled-fallback", TaskResult{
-		Status:  "completed",
-		Comment: "ok",
-	}, slog.Default())
-
-	if got := completeCalls.Load(); got != 1 {
-		t.Fatalf("complete calls = %d, want 1", got)
-	}
-	if got := failCalls.Load(); got != 1 {
-		t.Fatalf("fallback fail calls = %d, want 1", got)
-	}
-}
-
-func TestHandleTask_BareErrorReportsFailureWithCancelledParent(t *testing.T) {
-	t.Parallel()
-
-	var failCalls atomic.Int32
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-		if !strings.HasSuffix(req.URL.Path, "/fail") {
-			t.Errorf("unexpected daemon call: %s %s", req.Method, req.URL.Path)
-		}
-		failCalls.Add(1)
-		w.WriteHeader(http.StatusOK)
-	}))
-	t.Cleanup(srv.Close)
-
-	d := &Daemon{
-		client:             NewClient(srv.URL),
-		logger:             slog.New(slog.NewTextHandler(io.Discard, nil)),
-		runtimeIndex:       map[string]Runtime{"rt-1": {ID: "rt-1", Provider: "codex"}},
-		cancelPollInterval: time.Hour,
-	}
-	d.runner = taskRunnerFunc(func(runCtx context.Context, _ Task, _ string, _ int, _ *slog.Logger) (TaskResult, error) {
-		if !errors.Is(runCtx.Err(), context.Canceled) {
-			t.Errorf("runner context error = %v, want context.Canceled", runCtx.Err())
-		}
-		return TaskResult{}, errors.New("runner exited during shutdown")
-	})
-
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	d.handleTask(ctx, Task{ID: "task-bare-error", RuntimeID: "rt-1"}, 0)
-
-	if got := failCalls.Load(); got != 1 {
-		t.Fatalf("fail callback calls = %d, want 1", got)
-	}
-}
-
 // TestHandleTask_ReportsUsageBeforeCancel verifies that ReportTaskUsage is called
 // even when the server marks the task as cancelled during the post-run status
 // check. Regression test for the ordering bug where the cancel check ran before
@@ -3150,705 +2390,5 @@ func TestHandleTask_ReportsUsageWhenCancelledByPoll(t *testing.T) {
 	// given that the runner blocks on runCtx.Done().
 	if usageIdx < pollStatusIdx {
 		t.Fatalf("usage reported before poll-status (order: %v) — poll-status must come first", order)
-	}
-}
-
-// TestWatchTaskCancellation_ReconcileBroadcastTriggersImmediateCheck pins the
-// fix for #4665. The 5s ticker in watchTaskCancellation is too coarse to catch
-// a server-side cancellation that landed during a WS disconnect: without the
-// reconcile broadcast, a reconnect followed by an immediate status flip is
-// invisible until the next tick fires. The test sets the ticker to a long
-// interval (so a tick would fail the test) and asserts the watcher reacts to
-// reconcile.broadcast() sub-second.
-func TestWatchTaskCancellation_ReconcileBroadcastTriggersImmediateCheck(t *testing.T) {
-	t.Parallel()
-
-	var status atomic.Value
-	status.Store("running")
-	var calls atomic.Int32
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !strings.HasSuffix(r.URL.Path, "/status") {
-			http.NotFound(w, r)
-			return
-		}
-		calls.Add(1)
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"status":"` + status.Load().(string) + `"}`))
-	}))
-	t.Cleanup(srv.Close)
-
-	d := &Daemon{
-		client:    NewClient(srv.URL),
-		logger:    slog.Default(),
-		reconcile: newReconcileBroadcaster(),
-	}
-	d.reconcile.minBroadcastInterval = 0 // tight timing under test
-	ctx, cancel := context.WithCancel(context.Background())
-	t.Cleanup(cancel)
-
-	// 30s ticker: if the watcher only reacts to its own ticker the test will
-	// time out at 2s, which is exactly the failure we want to catch.
-	cancelled := d.watchTaskCancellation(ctx, "task-reconcile", 30*time.Second, slog.Default())
-
-	// Simulate the gap: status flips during the WS disconnect.
-	status.Store("cancelled")
-
-	// And then the WS reconnects — broadcast must be heard.
-	if !d.reconcile.broadcast() {
-		t.Fatal("broadcast() returned false; expected first broadcast to fire")
-	}
-
-	select {
-	case <-cancelled:
-		// Expected: reconcile woke the watcher, it called GetTaskStatus,
-		// saw cancelled, and closed the channel.
-	case <-time.After(2 * time.Second):
-		t.Fatalf("watchTaskCancellation did not react to reconcile broadcast within 2s (calls=%d)", calls.Load())
-	}
-
-	if calls.Load() == 0 {
-		t.Fatal("GetTaskStatus was never called — reconcile path did not fire")
-	}
-}
-
-// TestWatchTaskCancellation_ReconcileWithRunningTaskStaysAlive ensures the
-// reconcile path does not falsely interrupt a still-running task. The watcher
-// must call GetTaskStatus on broadcast, see status=running, and continue.
-func TestWatchTaskCancellation_ReconcileWithRunningTaskStaysAlive(t *testing.T) {
-	t.Parallel()
-
-	var calls atomic.Int32
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		calls.Add(1)
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"status":"running"}`))
-	}))
-	t.Cleanup(srv.Close)
-
-	d := &Daemon{
-		client:    NewClient(srv.URL),
-		logger:    slog.Default(),
-		reconcile: newReconcileBroadcaster(),
-	}
-	d.reconcile.minBroadcastInterval = 0
-	ctx, cancel := context.WithCancel(context.Background())
-	t.Cleanup(cancel)
-
-	cancelled := d.watchTaskCancellation(ctx, "task-still-running", 30*time.Second, slog.Default())
-
-	// Three broadcasts back-to-back: watcher should call GetTaskStatus at
-	// least once and NOT close the cancelled channel.
-	for i := 0; i < 3; i++ {
-		d.reconcile.broadcast()
-		time.Sleep(20 * time.Millisecond)
-	}
-
-	select {
-	case <-cancelled:
-		t.Fatal("watchTaskCancellation closed cancelled channel for a running task")
-	case <-time.After(200 * time.Millisecond):
-		// Expected: still running.
-	}
-
-	if calls.Load() == 0 {
-		t.Fatal("reconcile broadcasts did not result in any GetTaskStatus call")
-	}
-}
-
-// TestWorkspaceSyncLoop_ReconcileBroadcastTriggersImmediateSync pins that the
-// long-period workspace consistency timer is short-circuited by reconnect
-// broadcasts. Without this, changes made during a WS disconnect stay invisible
-// until the next fallback sync.
-func TestWorkspaceSyncLoop_ReconcileBroadcastTriggersImmediateSync(t *testing.T) {
-	t.Parallel()
-
-	var calls atomic.Int32
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/daemon/workspaces" {
-			http.NotFound(w, r)
-			return
-		}
-		calls.Add(1)
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`[]`))
-	}))
-	t.Cleanup(srv.Close)
-
-	d := &Daemon{
-		client:     NewClient(srv.URL),
-		logger:     slog.Default(),
-		workspaces: make(map[string]*workspaceState),
-		reconcile:  newReconcileBroadcaster(),
-	}
-	d.reconcile.minBroadcastInterval = 0
-
-	ctx, cancel := context.WithCancel(context.Background())
-	t.Cleanup(cancel)
-
-	loopDone := make(chan struct{})
-	go func() {
-		defer close(loopDone)
-		d.workspaceSyncLoop(ctx)
-	}()
-
-	// Two broadcasts spaced apart. workspaceSyncLoop should re-acquire its
-	// subscription after the first wake and react to the second too.
-	d.reconcile.broadcast()
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) && calls.Load() < 1 {
-		time.Sleep(20 * time.Millisecond)
-	}
-	if calls.Load() < 1 {
-		cancel()
-		<-loopDone
-		t.Fatal("workspaceSyncLoop did not react to first reconcile broadcast within 2s")
-	}
-
-	d.reconcile.broadcast()
-	deadline = time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) && calls.Load() < 2 {
-		time.Sleep(20 * time.Millisecond)
-	}
-	if calls.Load() < 2 {
-		cancel()
-		<-loopDone
-		t.Fatalf("workspaceSyncLoop did not react to second reconcile broadcast within 2s (calls=%d)", calls.Load())
-	}
-
-	cancel()
-	select {
-	case <-loopDone:
-	case <-time.After(time.Second):
-		t.Fatal("workspaceSyncLoop did not return after ctx cancel")
-	}
-}
-
-func TestWorkspaceSyncLoop_WorkspaceChangeTriggersImmediateSync(t *testing.T) {
-	t.Parallel()
-
-	var calls atomic.Int32
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/daemon/workspaces" {
-			http.NotFound(w, r)
-			return
-		}
-		calls.Add(1)
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`[]`))
-	}))
-	t.Cleanup(srv.Close)
-
-	d := &Daemon{
-		client:           NewClient(srv.URL),
-		logger:           slog.Default(),
-		workspaces:       make(map[string]*workspaceState),
-		workspaceChanges: newWorkspaceChangeSignal(),
-	}
-
-	ctx, cancel := context.WithCancel(context.Background())
-	t.Cleanup(cancel)
-	loopDone := make(chan struct{})
-	go func() {
-		defer close(loopDone)
-		d.workspaceSyncLoop(ctx)
-	}()
-
-	d.workspaceChanges.broadcast()
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) && calls.Load() < 1 {
-		time.Sleep(10 * time.Millisecond)
-	}
-	if calls.Load() < 1 {
-		cancel()
-		<-loopDone
-		t.Fatal("workspace change did not trigger an immediate sync")
-	}
-
-	cancel()
-	<-loopDone
-}
-
-// TestWorkspaceSyncLoop_DoesNotDropChangeAfterSuccessfulSync covers the
-// request-changes race from MUL-4480: a real membership hint arriving within
-// one second of a completed sync must trigger another sync, not be treated as
-// a duplicate of the earlier read and deferred to the 30-minute fallback.
-func TestWorkspaceSyncLoop_DoesNotDropChangeAfterSuccessfulSync(t *testing.T) {
-	t.Parallel()
-
-	var calls atomic.Int32
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/daemon/workspaces" {
-			http.NotFound(w, r)
-			return
-		}
-		calls.Add(1)
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`[]`))
-	}))
-	t.Cleanup(srv.Close)
-
-	d := &Daemon{
-		client:           NewClient(srv.URL),
-		logger:           slog.Default(),
-		workspaces:       make(map[string]*workspaceState),
-		workspaceChanges: newWorkspaceChangeSignal(),
-	}
-
-	ctx, cancel := context.WithCancel(context.Background())
-	t.Cleanup(cancel)
-	loopDone := make(chan struct{})
-	go func() {
-		defer close(loopDone)
-		d.workspaceSyncLoop(ctx)
-	}()
-
-	waitForCalls := func(want int32) {
-		t.Helper()
-		deadline := time.Now().Add(2 * time.Second)
-		for time.Now().Before(deadline) && calls.Load() < want {
-			time.Sleep(10 * time.Millisecond)
-		}
-		if got := calls.Load(); got < want {
-			t.Fatalf("workspace sync calls = %d, want at least %d", got, want)
-		}
-	}
-
-	d.workspaceChanges.broadcast()
-	waitForCalls(1)
-	deadline := time.Now().Add(time.Second)
-	for !d.reloading.TryLock() {
-		if time.Now().After(deadline) {
-			t.Fatal("first workspace sync did not finish")
-		}
-		time.Sleep(time.Millisecond)
-	}
-	d.reloading.Unlock()
-	// The second edge lands immediately after a successful API read. It
-	// represents a later commit and therefore cannot be coalesced backward.
-	d.workspaceChanges.broadcast()
-	waitForCalls(2)
-
-	cancel()
-	<-loopDone
-}
-
-func TestWorkspaceSyncBackoff(t *testing.T) {
-	tests := []struct {
-		failures int
-		want     time.Duration
-	}{
-		{failures: 0, want: 30 * time.Second},
-		{failures: 1, want: time.Minute},
-		{failures: 2, want: 2 * time.Minute},
-		{failures: 10, want: DefaultWorkspaceLegacySyncInterval},
-	}
-	for _, tt := range tests {
-		if got := workspaceSyncBackoff(30*time.Second, tt.failures); got != tt.want {
-			t.Fatalf("workspaceSyncBackoff(30s, %d) = %s, want %s", tt.failures, got, tt.want)
-		}
-	}
-}
-
-// TestWorkspaceSyncLoop_ReplaysBroadcastFromBeforeStart pins the daemon-
-// startup race fix: broadcast() that fired while no one was subscribed
-// MUST still wake the loop on its first subscription. Without the
-// reconcile broadcaster's replay slot, this race manifests in production
-// when the WS connects (and broadcasts) before workspaceSyncLoop has
-// finished its first notify() call.
-func TestWorkspaceSyncLoop_ReplaysBroadcastFromBeforeStart(t *testing.T) {
-	t.Parallel()
-
-	var calls atomic.Int32
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/daemon/workspaces" {
-			http.NotFound(w, r)
-			return
-		}
-		calls.Add(1)
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`[]`))
-	}))
-	t.Cleanup(srv.Close)
-
-	d := &Daemon{
-		client:     NewClient(srv.URL),
-		logger:     slog.Default(),
-		workspaces: make(map[string]*workspaceState),
-		reconcile:  newReconcileBroadcaster(),
-	}
-	d.reconcile.minBroadcastInterval = 0
-
-	// Broadcast BEFORE the loop subscribes — the level-triggered replay slot
-	// must hold the event for the loop's first notify().
-	if !d.reconcile.broadcast() {
-		t.Fatal("seed broadcast suppressed")
-	}
-
-	ctx, cancel := context.WithCancel(context.Background())
-	t.Cleanup(cancel)
-
-	loopDone := make(chan struct{})
-	go func() {
-		defer close(loopDone)
-		d.workspaceSyncLoop(ctx)
-	}()
-
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) && calls.Load() < 1 {
-		time.Sleep(10 * time.Millisecond)
-	}
-	if calls.Load() < 1 {
-		cancel()
-		<-loopDone
-		t.Fatal("workspaceSyncLoop did not replay broadcast issued before its start")
-	}
-
-	cancel()
-	<-loopDone
-}
-
-// TestWatchTaskCancellation_BroadcastWakesAllConcurrentWatchers ensures the
-// fix scales: a single WS reconnect that fires broadcast() must drive every
-// in-flight task's watcher to re-check the server. Without fan-out, a busy
-// daemon with N tasks would still hit a wall of sequential 5s gaps.
-func TestWatchTaskCancellation_BroadcastWakesAllConcurrentWatchers(t *testing.T) {
-	t.Parallel()
-
-	var status atomic.Value
-	status.Store("running")
-	var totalCalls atomic.Int32
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !strings.HasSuffix(r.URL.Path, "/status") {
-			http.NotFound(w, r)
-			return
-		}
-		totalCalls.Add(1)
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"status":"` + status.Load().(string) + `"}`))
-	}))
-	t.Cleanup(srv.Close)
-
-	d := &Daemon{
-		client:    NewClient(srv.URL),
-		logger:    slog.Default(),
-		reconcile: newReconcileBroadcaster(),
-	}
-	d.reconcile.minBroadcastInterval = 0
-
-	ctx, cancel := context.WithCancel(context.Background())
-	t.Cleanup(cancel)
-
-	const watchers = 8
-	chans := make([]<-chan struct{}, watchers)
-	for i := 0; i < watchers; i++ {
-		// 30s ticker: only the broadcast path can satisfy the assertion.
-		chans[i] = d.watchTaskCancellation(ctx, fmt.Sprintf("task-%d", i), 30*time.Second, slog.Default())
-	}
-
-	// Server state flips during the WS gap; broadcast lands the news to
-	// every watcher at once.
-	status.Store("cancelled")
-	if !d.reconcile.broadcast() {
-		t.Fatal("broadcast suppressed")
-	}
-
-	deadline := time.After(3 * time.Second)
-	for i, ch := range chans {
-		select {
-		case <-ch:
-		case <-deadline:
-			t.Fatalf("watcher %d did not react to broadcast (totalCalls=%d, woke=%d)", i, totalCalls.Load(), i)
-		}
-	}
-}
-
-// TestWatchTaskCancellation_ReconcileDoesNotPanicAfterCtxCancel ensures
-// teardown order is safe: even if a broadcast arrives after ctx is cancelled,
-// the watcher must exit cleanly without panic or double-close of cancelled.
-func TestWatchTaskCancellation_ReconcileDoesNotPanicAfterCtxCancel(t *testing.T) {
-	t.Parallel()
-
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"status":"running"}`))
-	}))
-	t.Cleanup(srv.Close)
-
-	d := &Daemon{
-		client:    NewClient(srv.URL),
-		logger:    slog.Default(),
-		reconcile: newReconcileBroadcaster(),
-	}
-	d.reconcile.minBroadcastInterval = 0
-
-	ctx, cancel := context.WithCancel(context.Background())
-	cancelled := d.watchTaskCancellation(ctx, "task-ctx-cancelled", 30*time.Second, slog.Default())
-
-	cancel()
-	// Give the watcher a beat to observe ctx.Done() and exit.
-	time.Sleep(50 * time.Millisecond)
-
-	// Broadcast after cancel — must not panic and must not unblock the
-	// cancelled channel (the task was not interrupted server-side).
-	for i := 0; i < 5; i++ {
-		d.reconcile.broadcast()
-	}
-
-	select {
-	case <-cancelled:
-		t.Fatal("cancelled channel was closed after ctx cancel; server still reported running")
-	case <-time.After(150 * time.Millisecond):
-		// Expected: nothing happened.
-	}
-}
-
-// TestWatchTaskCancellation_ReconcileRunningKeepsTickerAlive proves that a
-// reconcile broadcast that sees status=running does not disturb the ticker;
-// a subsequent ticker fire still detects a later cancellation.
-func TestWatchTaskCancellation_ReconcileRunningKeepsTickerAlive(t *testing.T) {
-	t.Parallel()
-
-	var status atomic.Value
-	status.Store("running")
-	var calls atomic.Int32
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !strings.HasSuffix(r.URL.Path, "/status") {
-			http.NotFound(w, r)
-			return
-		}
-		calls.Add(1)
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"status":"` + status.Load().(string) + `"}`))
-	}))
-	t.Cleanup(srv.Close)
-
-	d := &Daemon{
-		client:    NewClient(srv.URL),
-		logger:    slog.Default(),
-		reconcile: newReconcileBroadcaster(),
-	}
-	d.reconcile.minBroadcastInterval = 0
-	ctx, cancel := context.WithCancel(context.Background())
-	t.Cleanup(cancel)
-
-	// Short ticker so the test stays fast.
-	cancelled := d.watchTaskCancellation(ctx, "task-runs-then-cancelled", 50*time.Millisecond, slog.Default())
-
-	// First broadcast: server still reports running — watcher must NOT
-	// close cancelled.
-	if !d.reconcile.broadcast() {
-		t.Fatal("first broadcast suppressed")
-	}
-	select {
-	case <-cancelled:
-		t.Fatal("watcher closed cancelled on a running task")
-	case <-time.After(100 * time.Millisecond):
-	}
-
-	// Now flip status — ticker should pick it up within ~50ms.
-	status.Store("cancelled")
-	select {
-	case <-cancelled:
-	case <-time.After(2 * time.Second):
-		t.Fatalf("ticker did not detect cancellation after broadcast-running path (calls=%d)", calls.Load())
-	}
-}
-
-// TestSanitizeAgentEnv asserts the effective env handed to the Hermes overlay
-// for ${VAR} expansion drops daemon-blocklisted keys (so a blocked HOME in
-// custom_env can't repoint external_dirs away from what the child sees) while
-// keeping ordinary vars.
-func TestSanitizeAgentEnv(t *testing.T) {
-	t.Parallel()
-	in := map[string]string{
-		"HOME":        "/evil",
-		"PATH":        "/evil/bin",
-		"MULTICA_X":   "1",
-		"TEAM_SKILLS": "/srv/team",
-		"HERMES_HOME": "/some/home",
-	}
-	got := sanitizeAgentEnv(in)
-	for _, blocked := range []string{"HOME", "PATH", "MULTICA_X"} {
-		if _, ok := got[blocked]; ok {
-			t.Errorf("blocklisted key %q must be dropped from the effective env", blocked)
-		}
-	}
-	if got["TEAM_SKILLS"] != "/srv/team" {
-		t.Errorf("ordinary var dropped: %v", got)
-	}
-	// HERMES_HOME is not blocklisted (it drives source-home resolution), so it
-	// survives here even though the child's value is the overlay.
-	if got["HERMES_HOME"] != "/some/home" {
-		t.Errorf("HERMES_HOME should survive sanitization, got %v", got)
-	}
-	if sanitizeAgentEnv(nil) != nil {
-		t.Error("nil in should yield nil out")
-	}
-}
-
-// TestHermesLaunchArgsAndEnvByScenario covers the profile chain end to end at
-// the decision level: the final launch args + the final HERMES_HOME the child
-// sees, for a skill-less vs. an overlay-active task that both set a profile.
-func TestHermesLaunchArgsAndEnvByScenario(t *testing.T) {
-	t.Parallel()
-	customArgs := []string{"-p", "research", "--yolo"}
-	customEnv := map[string]string{"HERMES_HOME": "/home/u/.hermes"}
-
-	// No overlay (skill-less): profile flag passes through, and the user's
-	// HERMES_HOME passes through — behavior unchanged.
-	noOverlayArgs := hermesLaunchArgs(customArgs, false)
-	if len(noOverlayArgs) != 3 || noOverlayArgs[0] != "-p" || noOverlayArgs[1] != "research" {
-		t.Errorf("skill-less task must keep its profile flags, got %v", noOverlayArgs)
-	}
-	noOverlayEnv := map[string]string{}
-	layerCustomEnvAndHermesHome(noOverlayEnv, customEnv, "", nil)
-	if noOverlayEnv["HERMES_HOME"] != "/home/u/.hermes" {
-		t.Errorf("skill-less task must keep the user HERMES_HOME, got %q", noOverlayEnv["HERMES_HOME"])
-	}
-
-	// Overlay active: profile flag is stripped, and HERMES_HOME is the overlay.
-	overlayArgs := hermesLaunchArgs(customArgs, true)
-	if len(overlayArgs) != 1 || overlayArgs[0] != "--yolo" {
-		t.Errorf("overlay task must strip profile flags, got %v", overlayArgs)
-	}
-	overlayEnv := map[string]string{}
-	layerCustomEnvAndHermesHome(overlayEnv, customEnv, "/task/hermes-home", nil)
-	if overlayEnv["HERMES_HOME"] != "/task/hermes-home" {
-		t.Errorf("overlay task must redirect HERMES_HOME to the overlay, got %q", overlayEnv["HERMES_HOME"])
-	}
-}
-
-// TestHandleTask_AcksCancelAfterPollCancelled verifies the daemon posts
-// cancel-ack when the poll goroutine interrupts the run — by then
-// runner.run has returned, so the transcript flush is complete and the
-// server may settle its deferred chat finalization (#5219).
-func TestHandleTask_AcksCancelAfterPollCancelled(t *testing.T) {
-	t.Parallel()
-
-	var callOrder []string
-	var mu sync.Mutex
-	recordCall := func(name string) {
-		mu.Lock()
-		callOrder = append(callOrder, name)
-		mu.Unlock()
-	}
-
-	var statusCallCount atomic.Int64
-
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case strings.HasSuffix(r.URL.Path, "/cancel-ack"):
-			recordCall("cancel-ack")
-			w.WriteHeader(http.StatusOK)
-		case strings.HasSuffix(r.URL.Path, "/status"):
-			if statusCallCount.Add(1) == 1 {
-				recordCall("poll-status")
-				w.Header().Set("Content-Type", "application/json")
-				w.WriteHeader(http.StatusOK)
-				_, _ = w.Write([]byte(`{"status":"cancelled"}`))
-			} else {
-				w.Header().Set("Content-Type", "application/json")
-				w.WriteHeader(http.StatusOK)
-				_, _ = w.Write([]byte(`{"status":"running"}`))
-			}
-		default:
-			w.WriteHeader(http.StatusOK)
-		}
-	}))
-	t.Cleanup(srv.Close)
-
-	d := &Daemon{
-		client:             NewClient(srv.URL),
-		logger:             slog.New(slog.NewTextHandler(io.Discard, nil)),
-		workspaces:         make(map[string]*workspaceState),
-		runtimeIndex:       map[string]Runtime{"rt-1": {ID: "rt-1", Provider: "claude"}},
-		cancelPollInterval: 10 * time.Millisecond,
-	}
-
-	d.runner = taskRunnerFunc(func(runCtx context.Context, _ Task, _ string, _ int, _ *slog.Logger) (TaskResult, error) {
-		<-runCtx.Done()
-		return TaskResult{Status: "aborted"}, nil
-	})
-
-	task := Task{
-		ID:        "task-ack-poll",
-		RuntimeID: "rt-1",
-		IssueID:   "issue-ack-poll",
-		Agent:     &AgentData{Name: "test-agent"},
-	}
-
-	d.handleTask(context.Background(), task, 0)
-
-	mu.Lock()
-	order := make([]string, len(callOrder))
-	copy(order, callOrder)
-	mu.Unlock()
-
-	pollStatusIdx, ackIdx := -1, -1
-	for i, name := range order {
-		switch name {
-		case "poll-status":
-			pollStatusIdx = i
-		case "cancel-ack":
-			ackIdx = i
-		}
-	}
-	if pollStatusIdx == -1 {
-		t.Fatalf("poll goroutine never fired (order: %v)", order)
-	}
-	if ackIdx == -1 {
-		t.Fatalf("cancel-ack was never posted on the poll-cancelled path (order: %v)", order)
-	}
-	if ackIdx < pollStatusIdx {
-		t.Fatalf("cancel-ack before the poll observed the cancellation (order: %v)", order)
-	}
-}
-
-// TestHandleTask_AcksCancelOnPostRunStatusCheck verifies cancel-ack is also
-// posted when the cancellation is only discovered by the pre-completion
-// status check (the run finished before the poll noticed).
-func TestHandleTask_AcksCancelOnPostRunStatusCheck(t *testing.T) {
-	t.Parallel()
-
-	var ackCalls atomic.Int64
-
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case strings.HasSuffix(r.URL.Path, "/cancel-ack"):
-			ackCalls.Add(1)
-			w.WriteHeader(http.StatusOK)
-		case strings.HasSuffix(r.URL.Path, "/status"):
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write([]byte(`{"status":"cancelled"}`))
-		default:
-			w.WriteHeader(http.StatusOK)
-		}
-	}))
-	t.Cleanup(srv.Close)
-
-	d := &Daemon{
-		client:             NewClient(srv.URL),
-		logger:             slog.New(slog.NewTextHandler(io.Discard, nil)),
-		workspaces:         make(map[string]*workspaceState),
-		runtimeIndex:       map[string]Runtime{"rt-1": {ID: "rt-1", Provider: "claude"}},
-		cancelPollInterval: time.Hour, // disable the poll path; exercise the post-run check
-	}
-
-	d.runner = taskRunnerFunc(func(_ context.Context, _ Task, _ string, _ int, _ *slog.Logger) (TaskResult, error) {
-		return TaskResult{Status: "completed"}, nil
-	})
-
-	task := Task{
-		ID:        "task-ack-postrun",
-		RuntimeID: "rt-1",
-		IssueID:   "issue-ack-postrun",
-		Agent:     &AgentData{Name: "test-agent"},
-	}
-
-	d.handleTask(context.Background(), task, 0)
-
-	if got := ackCalls.Load(); got != 1 {
-		t.Fatalf("cancel-ack calls = %d, want 1", got)
 	}
 }

@@ -58,7 +58,7 @@ multica autopilot trigger <autopilot-id>
 https://<your-multica-host>/api/webhooks/autopilots/awt_…
 ```
 
-その URL に任意の JSON を POST してください。Multica はまず配信を永続化し、冪等な実行を同期的に受け付け、`status = accepted | skipped` と `run_id` を含む `200 OK` を返します。その後データベース-backed worker が accepted の実行を再開してエージェントをディスパッチします。受付とディスパッチの間にサーバーが再起動しても、キュー済みの配信は失われません。
+その URL に任意の JSON を POST してください — Multica は `source = webhook` で実行を記録し、本文を実行の `trigger_payload` として保存し、schedule トリガーとまったく同じ方法でエージェントをディスパッチします。
 
 ```bash
 curl -X POST "$MULTICA_WEBHOOK_URL" \
@@ -89,11 +89,6 @@ curl -X POST "$MULTICA_WEBHOOK_URL" \
 `event` フィールドを指定しない場合、Multica は一般的なヘッダーと本文フィールドからこれを推論します（`X-GitHub-Event` + 本文 `action`、`X-Gitlab-Event`、`X-Event-Type`、本文の `event`/`type`/`action`）。どれも一致しない場合、イベントは `webhook.received` になります。
 
 GitHub のようなソースを構成するときは、content type を `application/json` に設定してください — フォームエンコードされた webhook payload は受け付けられません。
-
-GitHub の配信は `X-GitHub-Delivery` で重複排除されます。汎用の送信元は
-`Idempotency-Key` を指定できます。同じキーで再試行すると、元のキュー済み配信と
-run が再利用されます。どちらのヘッダーもない場合は安定したイベント ID がないため、
-重複排除はベストエフォートになります。
 
 ### イベントフィルター
 
@@ -173,7 +168,7 @@ curl -X POST "$MULTICA_WEBHOOK_URL" \
   -H 'X-GitHub-Event: workflow_run' \
   -H 'Content-Type: application/json' \
   -d '{"action":"completed"}'
-# → 200 {"status":"accepted", "delivery_id":"…", "run_id":"…", ...}
+# → 200 {"status":"accepted", ...}
 
 # Filtered — same event, action not in allowlist
 curl -X POST "$MULTICA_WEBHOOK_URL" \
@@ -194,14 +189,10 @@ curl -X POST "$MULTICA_WEBHOOK_URL" \
 
 ### ステータスコードの意味
 
-有効でアクティブな配信は、配信と冪等な実行の両方が永続化された後に `200 OK` で確認されます。
+Multica は正常な no-op の結果に対して `status` フィールド付きで `200 OK` を返すため、プロバイダーの webhook 再試行メカニズムが URL を叩き続けることはありません。
 
-- `{"status":"accepted","delivery_id":"…","run_id":"…","autopilot_id":"…","trigger_id":"…"}` — 受付が成功し、worker が復旧可能なディスパッチを所有します。
-- `{"status":"skipped","delivery_id":"…","run_id":"…","reason":"…"}` — たとえば担当エージェントのランタイムがオフラインの場合に、永続化された skipped の実行が作成されました。
-
-no-op と重複も `200 OK` を返します。
-
-- `{"status":"duplicate","delivery_id":"…","run_id":"…"}` — 同じ冪等キーの配信は既に受け付け済みです。元のリクエストが実行の受付前に終了した場合のみ `run_id` はなく、worker が復旧します。
+- `{"status":"accepted","run_id":"…","autopilot_id":"…","trigger_id":"…"}` — 実行がディスパッチされました。
+- `{"status":"skipped","run_id":"…","reason":"agent runtime is offline at dispatch time"}` — 割り当て先のランタイムがオフラインで、`skipped` の実行として記録されます。
 - `{"status":"ignored","reason":"trigger_disabled"}` — トリガーが無効になっています。
 - `{"status":"ignored","reason":"autopilot_paused"}` — オートパイロットが一時停止しています。
 - `{"status":"ignored","reason":"autopilot_archived"}` — オートパイロットがアーカイブされています。
@@ -209,10 +200,9 @@ no-op と重複も `200 OK` を返します。
 2xx 以外の応答は実際の失敗を扱います。
 
 - `400` — 無効な JSON、スカラー本文、空の本文。
-- `401` — 設定済みの webhook 署名がないか無効です。
 - `404` — 不明なトークン（`{"error":"webhook not found"}`）。
 - `413` — payload が 256 KiB を超えました。
-- `429` — IP の絶対上限、または不明なトークン / 無効な署名の試行上限を超えました。応答には `Retry-After` が含まれます。有効な配信は worker のトリガー別予算によって拒否されず、予算が戻るまでキューに残ります。
+- `429` — トークンごとのレート制限超過（デフォルトは 60 req/min）。
 
 ### セルフホスト: 公開 URL を構成する
 

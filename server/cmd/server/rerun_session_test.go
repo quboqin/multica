@@ -235,7 +235,7 @@ func TestCreateRetryTaskFreshensCodexSemanticInactivity(t *testing.T) {
 	}
 
 	queries := db.New(testPool)
-	child, err := queries.CreateRetryTask(ctx, db.CreateRetryTaskParams{ID: pgtype.UUID{Bytes: parseUUIDBytes(parentID), Valid: true}})
+	child, err := queries.CreateRetryTask(ctx, pgtype.UUID{Bytes: parseUUIDBytes(parentID), Valid: true})
 	if err != nil {
 		t.Fatalf("CreateRetryTask failed: %v", err)
 	}
@@ -278,7 +278,7 @@ func TestCreateRetryTaskKeepsOrdinaryTimeoutSession(t *testing.T) {
 	}
 
 	queries := db.New(testPool)
-	child, err := queries.CreateRetryTask(ctx, db.CreateRetryTaskParams{ID: pgtype.UUID{Bytes: parseUUIDBytes(parentID), Valid: true}})
+	child, err := queries.CreateRetryTask(ctx, pgtype.UUID{Bytes: parseUUIDBytes(parentID), Valid: true})
 	if err != nil {
 		t.Fatalf("CreateRetryTask failed: %v", err)
 	}
@@ -407,7 +407,7 @@ func TestRerunIssueSetsForceFreshSession(t *testing.T) {
 	bus := events.New()
 	taskService := service.NewTaskService(queries, nil, hub, bus)
 
-	task, err := taskService.RerunIssue(ctx, pgtype.UUID{Bytes: parseUUIDBytes(issueID), Valid: true}, pgtype.UUID{}, pgtype.UUID{}, pgtype.UUID{}, nil)
+	task, err := taskService.RerunIssue(ctx, pgtype.UUID{Bytes: parseUUIDBytes(issueID), Valid: true}, pgtype.UUID{}, pgtype.UUID{}, pgtype.UUID{})
 	if err != nil {
 		t.Fatalf("RerunIssue failed: %v", err)
 	}
@@ -483,7 +483,6 @@ func TestRerunIssueTargetsSourceTaskAgent(t *testing.T) {
 		pgtype.UUID{Bytes: parseUUIDBytes(sourceTaskID), Valid: true},
 		pgtype.UUID{},
 		pgtype.UUID{},
-		nil,
 	)
 	if err != nil {
 		t.Fatalf("RerunIssue failed: %v", err)
@@ -556,7 +555,6 @@ func TestRerunIssueRejectsCrossIssueTask(t *testing.T) {
 		pgtype.UUID{Bytes: parseUUIDBytes(crossTaskID), Valid: true},
 		pgtype.UUID{},
 		pgtype.UUID{},
-		nil,
 	)
 	if err == nil {
 		t.Fatal("expected RerunIssue to reject a source task from a different issue")
@@ -621,7 +619,6 @@ func TestRerunIssueInheritsTriggerCommentFromSourceTask(t *testing.T) {
 		pgtype.UUID{Bytes: parseUUIDBytes(sourceTaskID), Valid: true},
 		pgtype.UUID{},
 		pgtype.UUID{},
-		nil,
 	)
 	if err != nil {
 		t.Fatalf("RerunIssue failed: %v", err)

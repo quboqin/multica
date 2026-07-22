@@ -1,7 +1,7 @@
 import { useEffect } from "react";
-import { Outlet, useParams } from "react-router-dom";
+import { Outlet, useNavigate, useParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
-import { WorkspaceSlugProvider } from "@multica/core/paths";
+import { WorkspaceSlugProvider, paths } from "@multica/core/paths";
 import {
   workspaceBySlugOptions,
   workspaceListOptions,
@@ -34,6 +34,7 @@ import { useWindowOverlayStore } from "@/stores/window-overlay-store";
  */
 export function WorkspaceRouteLayout() {
   const { workspaceSlug } = useParams<{ workspaceSlug: string }>();
+  const navigate = useNavigate();
   const user = useAuthStore((s) => s.user);
   const isAuthLoading = useAuthStore((s) => s.isLoading);
   // While a WindowOverlay is open (onboarding, accept-invite, new-workspace),
@@ -46,11 +47,10 @@ export function WorkspaceRouteLayout() {
   // signal is still set.
   const overlayActive = useWindowOverlayStore((s) => s.overlay !== null);
 
-  // Workspace routes require auth. App.tsx renders <DesktopLoginPage>
-  // instead of the shell whenever `user` is null, so this tree never mounts
-  // unauthenticated — the old in-router bounce to /login was dead defensive
-  // code and violated MUL-4741 invariant 1 (only the Coordinator navigates).
-  // The `!user` early return below keeps the defense without navigating.
+  // Workspace routes require auth. If user is unauthenticated, bounce to /login.
+  useEffect(() => {
+    if (!isAuthLoading && !user) navigate(paths.login(), { replace: true });
+  }, [isAuthLoading, user, navigate]);
 
   const { data: workspace, isFetched: listFetched } = useQuery({
     ...workspaceBySlugOptions(workspaceSlug ?? ""),
@@ -89,7 +89,6 @@ export function WorkspaceRouteLayout() {
   }, [user, listFetched, workspace, hasBeenSeen, wsList]);
 
   if (isAuthLoading) return null;
-  if (!user) return null;
   if (!workspaceSlug) return null;
   if (!listFetched) return null;
   if (!workspace) return null; // auto-heal effect above handles the cleanup

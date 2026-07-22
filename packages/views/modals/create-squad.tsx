@@ -34,7 +34,7 @@ import { toast } from "sonner";
 
 import { useNavigation } from "../navigation";
 import { ActorAvatar } from "../common/actor-avatar";
-import { AvatarUploadControl } from "../common/avatar-upload-control";
+import { AvatarPicker } from "../agents/components/avatar-picker";
 import { CharCounter } from "../agents/components/char-counter";
 import {
   PickerEmpty,
@@ -157,14 +157,7 @@ export function CreateSquadModal({ onClose }: { onClose: () => void }) {
             {/* Identity row mirrors CreateAgentDialog so the two creates read
                 as siblings — avatar (left) + name/description stack (right). */}
             <div className="flex items-start gap-4">
-              <AvatarUploadControl
-                variant="squad"
-                value={avatarUrl}
-                name={name}
-                size={64}
-                onUploaded={setAvatarUrl}
-                onClear={() => setAvatarUrl(null)}
-              />
+              <AvatarPicker value={avatarUrl} onChange={setAvatarUrl} size={64} />
               <div className="flex-1 min-w-0 space-y-3">
                 <div>
                   <Label className="text-xs text-muted-foreground">
@@ -306,7 +299,7 @@ function LeaderPicker({
         >
           <PopoverTrigger className="flex w-full min-w-0 items-center gap-3 rounded-lg border border-border bg-background px-3 py-2.5 text-left text-sm transition-colors hover:bg-muted">
             {selected ? (
-              <ActorAvatar actorType="agent" actorId={selected.id} size="sm" showStatusDot />
+              <ActorAvatar actorType="agent" actorId={selected.id} size={20} showStatusDot />
             ) : (
               <UserPlus className="h-4 w-4 shrink-0 text-muted-foreground" />
             )}
@@ -350,7 +343,7 @@ function LeaderPicker({
                         setFilter("");
                       }}
                     >
-                      <ActorAvatar actorType="agent" actorId={a.id} size="sm" showStatusDot />
+                      <ActorAvatar actorType="agent" actorId={a.id} size={18} showStatusDot />
                       <span className="truncate">{a.name}</span>
                     </PickerItem>
                   ))}
@@ -368,7 +361,7 @@ function LeaderPicker({
                         setFilter("");
                       }}
                     >
-                      <ActorAvatar actorType="agent" actorId={a.id} size="sm" showStatusDot />
+                      <ActorAvatar actorType="agent" actorId={a.id} size={18} showStatusDot />
                       <span className="truncate">{a.name}</span>
                     </PickerItem>
                   ))}
@@ -542,7 +535,7 @@ function AdditionalMembersPicker({
                       toggle({ type: "agent", id: a.id, name: a.name })
                     }
                   >
-                    <ActorAvatar actorType="agent" actorId={a.id} size="sm" showStatusDot />
+                    <ActorAvatar actorType="agent" actorId={a.id} size={18} showStatusDot />
                     <span className="truncate">{a.name}</span>
                   </PickerItem>
                 ))}
@@ -558,7 +551,7 @@ function AdditionalMembersPicker({
                       toggle({ type: "agent", id: a.id, name: a.name })
                     }
                   >
-                    <ActorAvatar actorType="agent" actorId={a.id} size="sm" showStatusDot />
+                    <ActorAvatar actorType="agent" actorId={a.id} size={18} showStatusDot />
                     <span className="truncate">{a.name}</span>
                   </PickerItem>
                 ))}
@@ -574,7 +567,7 @@ function AdditionalMembersPicker({
                       toggle({ type: "member", id: m.user_id, name: m.name })
                     }
                   >
-                    <ActorAvatar actorType="member" actorId={m.user_id} size="sm" />
+                    <ActorAvatar actorType="member" actorId={m.user_id} size={18} />
                     <span className="truncate">{m.name}</span>
                   </PickerItem>
                 ))}
@@ -598,7 +591,7 @@ function MemberChip({
   const { t } = useT("modals");
   return (
     <span className="inline-flex items-center gap-1 rounded-full border bg-background px-1.5 py-0.5 text-xs">
-      <ActorAvatar actorType={m.type} actorId={m.id} size="xs" />
+      <ActorAvatar actorType={m.type} actorId={m.id} size={14} />
       <span className="max-w-[120px] truncate">{m.name}</span>
       <button
         type="button"

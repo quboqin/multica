@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo } from "react";
+import { Suspense, useMemo } from "react";
 import { CoreProvider } from "@multica/core/platform";
 import { createBrowserCookieLocaleAdapter } from "@multica/core/i18n/browser";
 import type { LocaleResources, SupportedLocale } from "@multica/core/i18n";
@@ -11,6 +11,7 @@ import {
   setLoggedInCookie,
   clearLoggedInCookie,
 } from "@/features/auth/auth-cookie";
+import { PageviewTracker } from "./pageview-tracker";
 
 // Legacy token in localStorage → keep this session in token mode so users who
 // logged in before the cookie-auth migration stay authed. They migrate to
@@ -24,6 +25,18 @@ function hasLegacyToken(): boolean {
     return Boolean(window.localStorage.getItem("multica_token"));
   } catch {
     return false;
+  }
+}
+
+function isSameOriginApi(apiBaseUrl?: string): boolean {
+  if (!apiBaseUrl) return true;
+  if (typeof window === "undefined") {
+    return !/^[a-z][a-z\d+.-]*:\/\//i.test(apiBaseUrl);
+  }
+  try {
+    return new URL(apiBaseUrl, window.location.origin).origin === window.location.origin;
+  } catch {
+    return true;
   }
 }
 
@@ -52,7 +65,8 @@ export function WebProviders({
   locale: SupportedLocale;
   resources: Record<string, LocaleResources>;
 }) {
-  const cookieAuth = !hasLegacyToken();
+  const apiBaseUrl = process.env.NEXT_PUBLIC_API_URL;
+  const cookieAuth = !hasLegacyToken() && isSameOriginApi(apiBaseUrl);
   // Stable identity reference so downstream effects keyed on it don't see a
   // new object on every parent render.
   const identity = useMemo(
@@ -62,7 +76,7 @@ export function WebProviders({
   const localeAdapter = useMemo(() => createBrowserCookieLocaleAdapter(), []);
   return (
     <CoreProvider
-      apiBaseUrl={process.env.NEXT_PUBLIC_API_URL}
+      apiBaseUrl={apiBaseUrl}
       wsUrl={deriveWsUrl()}
       cookieAuth={cookieAuth}
       onLogin={setLoggedInCookie}
@@ -81,6 +95,11 @@ export function WebProviders({
       resources={resources}
       localeAdapter={localeAdapter}
     >
+      {/* Suspense boundary is required by Next.js for useSearchParams in
+          a client component mounted this high in the tree. */}
+      <Suspense fallback={null}>
+        <PageviewTracker />
+      </Suspense>
       <WebNavigationProvider>{children}</WebNavigationProvider>
     </CoreProvider>
   );

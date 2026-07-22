@@ -18,7 +18,8 @@
     "agents": "智能体",
     "runtimes": "运行时",
     "skills": "Skills",
-    "settings": "设置"
+    "settings": "设置",
+    "kpi": "KPI"
   },
   "commands": {
     "current_theme_aria": "当前主题",
@@ -26,8 +27,6 @@
     "new_project": "新建需求",
     "copy_issue_link": "复制任务链接",
     "copy_identifier": "复制标识符 ({{identifier}})",
-    "fold_all_comments": "收起全部评论",
-    "unfold_all_comments": "展开全部评论",
     "switch_to_light": "切换到浅色主题",
     "switch_to_dark": "切换到深色主题",
     "use_system_theme": "跟随系统主题"

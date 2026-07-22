@@ -137,6 +137,7 @@ vi.mock("@multica/core/api", () => ({
 // Mock issue config
 vi.mock("@multica/core/issues/config", () => ({
   ALL_STATUSES: ["backlog", "todo", "in_progress", "in_review", "done", "blocked", "cancelled"],
+  BOARD_STATUSES: ["backlog", "todo", "in_progress", "in_review", "done", "blocked"],
   STATUS_ORDER: ["backlog", "todo", "in_progress", "in_review", "done", "blocked", "cancelled"],
   STATUS_CONFIG: {
     backlog: { label: "Backlog", iconColor: "text-muted-foreground", hoverBg: "hover:bg-accent" },
@@ -169,19 +170,9 @@ const mockViewState = {
   projectFilters: [] as string[],
   includeNoProject: false,
   labelFilters: [] as string[],
-  propertyFilters: {} as Record<string, string[]>,
-  cardPropertyIds: [] as string[],
   sortBy: "position" as const,
   sortDirection: "asc" as const,
   cardProperties: { priority: true, description: true, assignee: true, dueDate: true, project: true, childProgress: true, labels: true },
-  tableColumns: [
-    { key: "title", width: 360 },
-    { key: "status", width: 150 },
-    { key: "priority", width: 130 },
-    { key: "assignee", width: 180 },
-    { key: "due_date", width: 140 },
-    { key: "labels", width: 220 },
-  ],
   listCollapsedStatuses: [] as string[],
   setViewMode: vi.fn(),
   setGrouping: vi.fn(),
@@ -193,8 +184,6 @@ const mockViewState = {
   toggleProjectFilter: vi.fn(),
   toggleNoProject: vi.fn(),
   toggleLabelFilter: vi.fn(),
-  togglePropertyFilter: vi.fn(),
-  toggleCardPropertyId: vi.fn(),
   hideStatus: vi.fn(),
   showStatus: vi.fn(),
   clearFilters: vi.fn(),
@@ -206,9 +195,6 @@ const mockViewState = {
 
 vi.mock("@multica/core/issues/stores/view-store", () => ({
   useClearFiltersOnWorkspaceChange: () => {},
-  PROPERTY_VIEW_PREFIX: "property:",
-  propertyIdFromViewKey: (key: string) =>
-    key.startsWith("property:") ? key.slice("property:".length) : null,
   viewStorePersistOptions: () => ({ name: "test", storage: undefined, partialize: (s: any) => s }),
   mergeViewStatePersisted: (_p: unknown, c: any) => c,
   viewStoreSlice: vi.fn(),
@@ -301,23 +287,16 @@ vi.mock("sonner", () => ({
 }));
 
 // Mock dnd-kit
-vi.mock("@dnd-kit/core", () => {
-  // Real dnd-kit useDroppable returns a referentially stable setNodeRef
-  // (memoized internally). BoardColumn merges it with a state-setting
-  // callback ref for Virtuoso's customScrollParent, so a fresh function each
-  // render would loop the ref detach/reattach. Model the stable identity.
-  const stableSetNodeRef = () => {};
-  return {
-    DndContext: ({ children }: any) => children,
-    DragOverlay: () => null,
-    PointerSensor: class {},
-    useSensor: () => ({}),
-    useSensors: () => [],
-    useDroppable: () => ({ setNodeRef: stableSetNodeRef, isOver: false }),
-    pointerWithin: vi.fn(),
-    closestCenter: vi.fn(),
-  };
-});
+vi.mock("@dnd-kit/core", () => ({
+  DndContext: ({ children }: any) => children,
+  DragOverlay: () => null,
+  PointerSensor: class {},
+  useSensor: () => ({}),
+  useSensors: () => [],
+  useDroppable: () => ({ setNodeRef: vi.fn(), isOver: false }),
+  pointerWithin: vi.fn(),
+  closestCenter: vi.fn(),
+}));
 
 vi.mock("@dnd-kit/sortable", () => ({
   SortableContext: ({ children }: any) => children,
@@ -351,21 +330,6 @@ vi.mock("@base-ui/react/accordion", () => ({
   ),
 }));
 
-// Mock react-virtuoso: jsdom has no layout, so the real Virtuoso computes a
-// 0-height viewport and renders nothing (and throws on its resize plumbing).
-// Render every item inline so the virtualized board columns expose their
-// cards to the DOM, matching the non-virtualized behavior these tests assert.
-vi.mock("react-virtuoso", () => ({
-  Virtuoso: ({ data, itemContent, components }: any) => (
-    <div data-testid="virtuoso-mock">
-      {(data ?? []).map((item: any, i: number) => (
-        <div key={i}>{itemContent(i, item)}</div>
-      ))}
-      {components?.Footer ? <components.Footer /> : null}
-    </div>
-  ),
-}));
-
 // ---------------------------------------------------------------------------
 // Test data
 // ---------------------------------------------------------------------------
@@ -374,9 +338,7 @@ const issueDefaults = {
   parent_issue_id: null,
   project_id: null,
   position: 0,
-  stage: null,
   metadata: {},
-  properties: {},
 };
 
 const mockIssues: Issue[] = [
@@ -591,7 +553,7 @@ describe("IssuesPage (shared)", () => {
         group_by: "assignee",
         limit: 50,
         offset: 0,
-        statuses: ["backlog", "todo", "in_progress", "in_review", "done", "blocked", "cancelled"],
+        statuses: ["backlog", "todo", "in_progress", "in_review", "done", "blocked"],
       }),
     );
     expect(mockListIssues).not.toHaveBeenCalled();
@@ -630,26 +592,15 @@ describe("IssuesPage (shared)", () => {
     expect(screen.getByText("Agents")).toBeInTheDocument();
   });
 
-  // The Members/Agents tabs filter server-side via assignee_types (the same
-  // param the grouped endpoint takes), so the mock mirrors the server's
-  // WHERE clause instead of a client-side post-filter.
-  function mockListIssuesHonoringAssigneeTypes() {
-    mockListIssues.mockImplementation((params: any) => {
-      const matches = mockIssues.filter(
-        (i) =>
-          i.status === params?.status &&
-          (!params?.assignee_types ||
-            (i.assignee_type !== null &&
-              params.assignee_types.includes(i.assignee_type))),
-      );
-      return Promise.resolve({ issues: matches, total: matches.length });
-    });
-  }
-
   it("agents scope includes squad-assigned issues", async () => {
     mockScope = "agents";
     mockViewState.viewMode = "list";
-    mockListIssuesHonoringAssigneeTypes();
+    mockListIssues.mockImplementation((params: any) =>
+      Promise.resolve({
+        issues: mockIssues.filter((i) => i.status === params?.status),
+        total: mockIssues.filter((i) => i.status === params?.status).length,
+      }),
+    );
     renderWithQuery(<IssuesPage />);
 
     // Squad task and agent task should be visible
@@ -657,22 +608,21 @@ describe("IssuesPage (shared)", () => {
     expect(screen.getByText("Squad task")).toBeInTheDocument();
     // Member task should NOT be visible
     expect(screen.queryByText("Implement auth")).not.toBeInTheDocument();
-    expect(mockListIssues).toHaveBeenCalledWith(
-      expect.objectContaining({ assignee_types: ["agent", "squad"] }),
-    );
   });
 
   it("members scope excludes squad-assigned issues", async () => {
     mockScope = "members";
     mockViewState.viewMode = "list";
-    mockListIssuesHonoringAssigneeTypes();
+    mockListIssues.mockImplementation((params: any) =>
+      Promise.resolve({
+        issues: mockIssues.filter((i) => i.status === params?.status),
+        total: mockIssues.filter((i) => i.status === params?.status).length,
+      }),
+    );
     renderWithQuery(<IssuesPage />);
 
     await screen.findByText("Implement auth");
     expect(screen.queryByText("Squad task")).not.toBeInTheDocument();
     expect(screen.queryByText("Design landing page")).not.toBeInTheDocument();
-    expect(mockListIssues).toHaveBeenCalledWith(
-      expect.objectContaining({ assignee_types: ["member"] }),
-    );
   });
 });

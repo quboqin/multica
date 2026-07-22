@@ -55,9 +55,9 @@ function EmptyMedia({
   )
 }
 
-function EmptyTitle({ className, ...props }: React.ComponentProps<"h2">) {
+function EmptyTitle({ className, ...props }: React.ComponentProps<"div">) {
   return (
-    <h2
+    <div
       data-slot="empty-title"
       className={cn(
         "font-heading text-sm font-medium tracking-tight",
@@ -70,7 +70,7 @@ function EmptyTitle({ className, ...props }: React.ComponentProps<"h2">) {
 
 function EmptyDescription({ className, ...props }: React.ComponentProps<"p">) {
   return (
-    <p
+    <div
       data-slot="empty-description"
       className={cn(
         "text-sm/relaxed text-muted-foreground [&>a]:underline [&>a]:underline-offset-4 [&>a:hover]:text-primary",

@@ -1,0 +1,82 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1680 760" width="1680" height="760" role="img" aria-labelledby="title desc">
+  <title id="title">Cybertron Product Concept</title>
+  <desc id="desc">A simple business-facing concept diagram showing Cybertron as four parts: Web, Service, Daemon, and LLM Runtime.</desc>
+  <style>
+    text { font-family: "Helvetica Neue", Helvetica, Arial, "PingFang SC", "Microsoft YaHei", "Microsoft JhengHei", "SimHei", sans-serif; fill: #111827; }
+    .title { font-size: 34px; font-weight: 760; }
+    .subtitle { font-size: 16px; fill: #4b5563; }
+    .card-title { font-size: 21px; font-weight: 760; }
+    .card-subtitle { font-size: 14px; fill: #4b5563; }
+    .small { font-size: 13px; fill: #6b7280; }
+    .tiny { font-size: 12px; fill: #6b7280; }
+    .pill { font-size: 12px; font-weight: 740; fill: #374151; }
+    .node { stroke-width: 1.6; }
+    .soft { filter: url(#softShadow); }
+  </style>
+  <defs>
+    <filter id="softShadow" x="-8%" y="-8%" width="116%" height="122%"><feDropShadow dx="0" dy="8" stdDeviation="9" flood-color="#111827" flood-opacity="0.08"/></filter>
+    <marker id="arrowBlue" markerWidth="11" markerHeight="8" refX="10" refY="4" orient="auto"><polygon points="0 0,11 4,0 8" fill="#2563eb"/></marker>
+    <marker id="arrowGreen" markerWidth="11" markerHeight="8" refX="10" refY="4" orient="auto"><polygon points="0 0,11 4,0 8" fill="#16a34a"/></marker>
+    <marker id="arrowPurple" markerWidth="11" markerHeight="8" refX="10" refY="4" orient="auto"><polygon points="0 0,11 4,0 8" fill="#9333ea"/></marker>
+  </defs>
+  <rect width="1680" height="760" fill="#ffffff"/>
+<text x="64" y="58" class="title">Cybertron: AI Work Operating System</text>
+<text x="64" y="92" class="subtitle">Teams use Cybertron to assign work to AI agents, while the AI execution runs through a controlled runtime bridge.</text>
+<rect x="64" y="210" width="220" height="300" rx="24" fill="#f9fafb" stroke="#e5e7eb" class="node soft"/>
+<text x="96" y="254" class="card-title">Business Team</text>
+<text x="96" y="284" class="card-subtitle">Creates and reviews work</text>
+<rect x="96" y="330" width="156" height="34" rx="10" fill="#ffffff" stroke="#d1d5db" class="node"/>
+<text x="174" y="353" class="small" text-anchor="middle">Request</text>
+<rect x="96" y="384" width="156" height="34" rx="10" fill="#ffffff" stroke="#d1d5db" class="node"/>
+<text x="174" y="407" class="small" text-anchor="middle">Issue</text>
+<rect x="96" y="438" width="156" height="34" rx="10" fill="#ffffff" stroke="#d1d5db" class="node"/>
+<text x="174" y="461" class="small" text-anchor="middle">Comment</text>
+<rect x="360" y="210" width="230" height="300" rx="24" fill="#eff6ff" stroke="#93c5fd" class="node soft"/>
+<rect x="384" y="238" width="54" height="28" rx="9" fill="#ffffff" stroke="#93c5fd" class="node"/>
+<text x="411" y="257" class="pill" text-anchor="middle">01</text>
+<text x="384" y="304" class="card-title">Cybertron Web</text>
+<text x="384" y="334" class="card-subtitle">Frontend service</text>
+<text x="384" y="392" class="small">Create, assign, and review work.</text>
+<rect x="650" y="210" width="230" height="300" rx="24" fill="#fff7ed" stroke="#fed7aa" class="node soft"/>
+<rect x="674" y="238" width="54" height="28" rx="9" fill="#ffffff" stroke="#fed7aa" class="node"/>
+<text x="701" y="257" class="pill" text-anchor="middle">02</text>
+<text x="674" y="304" class="card-title">Cybertron Service</text>
+<text x="674" y="334" class="card-subtitle">Backend service</text>
+<text x="674" y="382" class="small">Stores workspace data, tasks,</text>
+<text x="674" y="404" class="small">permissions, and status.</text>
+<rect x="940" y="210" width="230" height="300" rx="24" fill="#f0fdf4" stroke="#86efac" class="node soft"/>
+<rect x="964" y="238" width="54" height="28" rx="9" fill="#ffffff" stroke="#86efac" class="node"/>
+<text x="991" y="257" class="pill" text-anchor="middle">03</text>
+<text x="964" y="304" class="card-title">Cybertron Daemon</text>
+<text x="964" y="334" class="card-subtitle">Bridge process</text>
+<text x="964" y="382" class="small">Connects Service with local</text>
+<text x="964" y="404" class="small">or cloud runtime.</text>
+<rect x="1230" y="210" width="230" height="300" rx="24" fill="#faf5ff" stroke="#d8b4fe" class="node soft"/>
+<rect x="1254" y="238" width="54" height="28" rx="9" fill="#ffffff" stroke="#d8b4fe" class="node"/>
+<text x="1281" y="257" class="pill" text-anchor="middle">04</text>
+<text x="1254" y="304" class="card-title">LLM Runtime</text>
+<text x="1254" y="334" class="card-subtitle">Execution program</text>
+<text x="1254" y="392" class="small">Runs Codex / Claude / other AI tools.</text>
+<rect x="1510" y="210" width="120" height="300" rx="24" fill="#f9fafb" stroke="#e5e7eb" class="node soft"/>
+<text x="1570" y="254" class="card-title" text-anchor="middle">Result</text>
+<rect x="1530" y="330" width="80" height="34" rx="10" fill="#ffffff" stroke="#d1d5db" class="node"/>
+<text x="1570" y="353" class="tiny" text-anchor="middle">Answer</text>
+<rect x="1530" y="384" width="80" height="34" rx="10" fill="#ffffff" stroke="#d1d5db" class="node"/>
+<text x="1570" y="407" class="tiny" text-anchor="middle">Status</text>
+<rect x="1530" y="438" width="80" height="34" rx="10" fill="#ffffff" stroke="#d1d5db" class="node"/>
+<text x="1570" y="461" class="tiny" text-anchor="middle">Artifact</text>
+<line x1="284" y1="360" x2="360" y2="360" stroke="#2563eb" stroke-width="2.4" marker-end="url(#arrowBlue)"/>
+<line x1="590" y1="360" x2="650" y2="360" stroke="#2563eb" stroke-width="2.4" marker-end="url(#arrowBlue)"/>
+<line x1="880" y1="360" x2="940" y2="360" stroke="#16a34a" stroke-width="2.4" marker-end="url(#arrowGreen)"/>
+<line x1="1170" y1="360" x2="1230" y2="360" stroke="#16a34a" stroke-width="2.4" marker-end="url(#arrowGreen)"/>
+<line x1="1460" y1="360" x2="1510" y2="360" stroke="#9333ea" stroke-width="2.4" marker-end="url(#arrowPurple)"/>
+<text x="620" y="340" class="tiny" text-anchor="middle">API</text>
+<text x="910" y="340" class="tiny" text-anchor="middle">task</text>
+<text x="1200" y="340" class="tiny" text-anchor="middle">run</text>
+<text x="1485" y="340" class="tiny" text-anchor="middle">return</text>
+<path d="M1570 510 V610 H475 V510" stroke="#9333ea" stroke-width="2.1" stroke-dasharray="7 5" fill="none" marker-end="url(#arrowPurple)"/>
+<text x="1030" y="592" class="tiny" text-anchor="middle">results are visible back in Cybertron Web</text>
+<rect x="64" y="642" width="1566" height="68" rx="18" fill="#ffffff" stroke="#e5e7eb" class="node soft"/>
+<text x="96" y="684" class="card-title">Core idea</text>
+<text x="250" y="684" class="subtitle">Work stays in Cybertron. AI runs through the Daemon and LLM Runtime, then results return to the same workspace.</text>
+</svg>

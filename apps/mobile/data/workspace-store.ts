@@ -1,6 +1,6 @@
 /**
  * Mobile workspace store — Zustand. Holds the active workspace (id + slug)
- * and persists the slug to SecureStore so cold starts restore the last
+ * and persists the slug so cold starts restore the last
  * selection without re-prompting.
  *
  * The route is the source of truth for which workspace is active

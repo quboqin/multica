@@ -1,0 +1,1 @@
+DROP INDEX CONCURRENTLY IF EXISTS creative_edit_job_mcp_connection_idx;

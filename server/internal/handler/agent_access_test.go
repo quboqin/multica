@@ -12,19 +12,18 @@ import (
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
-// TestMemberAllowedToViewAgent_Pure exercises the pure predicate that drives
-// the private-agent VIEW gate. For a private agent it must allow:
+// TestMemberAllowedForPrivateAgent_Pure exercises the pure predicate that
+// drives the private-agent gate. The gate must allow:
 //   - workspace owner / admin (regardless of agent ownership)
 //   - the agent owner (regardless of role)
 //
 // And deny everyone else. This test runs without a database.
-func TestMemberAllowedToViewAgent_Pure(t *testing.T) {
+func TestMemberAllowedForPrivateAgent_Pure(t *testing.T) {
 	ownerUserID := "11111111-1111-1111-1111-111111111111"
 	otherUserID := "22222222-2222-2222-2222-222222222222"
 
 	agent := db.Agent{
-		OwnerID:        util.MustParseUUID(ownerUserID),
-		PermissionMode: "private",
+		OwnerID: util.MustParseUUID(ownerUserID),
 	}
 
 	cases := []struct {
@@ -42,77 +41,12 @@ func TestMemberAllowedToViewAgent_Pure(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := memberAllowedToViewAgent(agent, nil, tc.userID, tc.role)
+			got := memberAllowedForPrivateAgent(agent, tc.userID, tc.role)
 			if got != tc.want {
-				t.Fatalf("memberAllowedToViewAgent(userID=%s, role=%s) = %v; want %v",
+				t.Fatalf("memberAllowedForPrivateAgent(userID=%s, role=%s) = %v; want %v",
 					tc.userID, tc.role, got, tc.want)
 			}
 		})
-	}
-}
-
-func TestInvokeOriginatorFromTaskTokenUsesSourceTaskOriginator(t *testing.T) {
-	if testHandler == nil {
-		t.Skip("database not available")
-	}
-
-	ctx := context.Background()
-	agentID := createHandlerTestAgent(t, "task-token-originator-agent", nil)
-
-	var originatorID string
-	if err := testPool.QueryRow(ctx, `
-		INSERT INTO "user" (name, email)
-		VALUES ('Task Token Originator', $1)
-		RETURNING id
-	`, "task-token-originator-"+agentID+"@multica.test").Scan(&originatorID); err != nil {
-		t.Fatalf("create originator user: %v", err)
-	}
-	t.Cleanup(func() {
-		testPool.Exec(context.Background(), `DELETE FROM "user" WHERE id = $1`, originatorID)
-	})
-
-	var taskID string
-	if err := testPool.QueryRow(ctx, `
-		INSERT INTO agent_task_queue (
-			agent_id, runtime_id, status, priority, started_at,
-			originator_user_id, accountable_user_id
-		)
-		VALUES ($1, $2, 'running', 0, now(), $3, $3)
-		RETURNING id
-	`, agentID, handlerTestRuntimeID(t), originatorID).Scan(&taskID); err != nil {
-		t.Fatalf("create source task: %v", err)
-	}
-	t.Cleanup(func() {
-		testPool.Exec(context.Background(), `DELETE FROM agent_task_queue WHERE id = $1`, taskID)
-	})
-
-	req := httptest.NewRequest("POST", "/api/issues/comment", nil)
-	req.Header.Set("X-Actor-Source", "task_token")
-	req.Header.Set("X-User-ID", testUserID)
-	req.Header.Set("X-Task-ID", taskID)
-
-	got := testHandler.invokeOriginatorFromRequest(req, "agent", agentID)
-	if got != originatorID {
-		t.Fatalf("originator = %q, want source task originator %q", got, originatorID)
-	}
-}
-
-func TestInvokeOriginatorFromTaskTokenDoesNotUseTokenOwner(t *testing.T) {
-	if testHandler == nil {
-		t.Skip("database not available")
-	}
-
-	agentID := createHandlerTestAgent(t, "task-token-no-originator-agent", nil)
-	taskID := createHandlerTestTaskForAgent(t, agentID)
-
-	req := httptest.NewRequest("POST", "/api/issues/comment", nil)
-	req.Header.Set("X-Actor-Source", "task_token")
-	req.Header.Set("X-User-ID", testUserID)
-	req.Header.Set("X-Task-ID", taskID)
-
-	got := testHandler.invokeOriginatorFromRequest(req, "agent", agentID)
-	if got != "" {
-		t.Fatalf("originator = %q, want empty; task token owner must not be used as originator", got)
 	}
 }
 
@@ -312,13 +246,11 @@ func TestCreateIssue_AssignToPrivateAgentForbidsPlainMember(t *testing.T) {
 		}
 	}
 
-	// Workspace owner (testUserID) who is NOT the agent owner: DENIED under
-	// the invocation-permission model (MUL-3963) — admin/owner status no
-	// longer grants the ability to invoke someone else's private agent.
+	// Workspace owner (testUserID): allowed.
 	w := httptest.NewRecorder()
 	testHandler.CreateIssue(w, newRequest("POST", "/api/issues?workspace_id="+testWorkspaceID, body(testUserID)))
-	if w.Code != http.StatusForbidden {
-		t.Fatalf("CreateIssue as workspace owner (not agent owner): expected 403, got %d: %s", w.Code, w.Body.String())
+	if w.Code != http.StatusCreated {
+		t.Fatalf("CreateIssue as workspace owner: expected 201, got %d: %s", w.Code, w.Body.String())
 	}
 
 	// Agent owner (plain member who happens to own the agent): allowed.
@@ -635,24 +567,24 @@ func TestShouldEnqueueOnComment_PrivateAgentGate(t *testing.T) {
 			reason:    "agent owner is always in the allowed_principals set",
 		},
 		{
-			name:      "workspace owner — denied (not agent owner)",
+			name:      "workspace owner — allowed",
 			actorType: "member",
 			actorID:   testUserID,
-			want:      false,
-			reason:    "MUL-3963: workspace owners/admins no longer bypass a private agent's invocation gate",
+			want:      true,
+			reason:    "workspace owners/admins are in the allowed_principals set",
 		},
 		{
-			name:      "agent-to-agent — denied without allowed originator",
+			name:      "agent-to-agent — allowed",
 			actorType: "agent",
 			actorID:   agentID,
-			want:      false,
-			reason:    "MUL-3963: A2A is judged by the top-of-chain originator; a private agent denies an agent actor with no owner/allow-listed originator",
+			want:      true,
+			reason:    "A2A traffic bypasses the visibility gate by design",
 		},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := testHandler.shouldEnqueueAssigneeFallback(ctx, issue, tc.actorType, tc.actorID, commentTriggerComputeOptions{})
+			got := testHandler.shouldEnqueueOnComment(ctx, issue, tc.actorType, tc.actorID, commentTriggerComputeOptions{})
 			if got != tc.want {
 				t.Fatalf("%s\n  actor=%s/%s got=%v want=%v",
 					tc.reason, tc.actorType, tc.actorID, got, tc.want)

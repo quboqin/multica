@@ -25,10 +25,10 @@
     "status": "Status",
     "progress": "Progress",
     "lead": "Lead",
-    "plan": "Plan",
-    "labels": "Labels",
     "created": "Created",
-    "issues": "Issues"
+    "issues": "Issues",
+    "labels": "Labels",
+    "plan": "Plan"
   },
   "status": {
     "planned": "Planned",
@@ -70,19 +70,15 @@
     "section_properties": "Properties",
     "section_progress": "Progress",
     "section_description": "Description",
-    "prop_start_date": "Start date",
-    "prop_due_date": "Due date",
-    "no_plan": "No plan",
-    "clear_date": "Clear date",
     "description_placeholder": "Add description...",
-    "description_hint": "Shared with agents as context for every task in this project.",
     "empty_issues_title": "No issues linked",
     "empty_issues_hint": "Create a new issue or assign existing ones to this project.",
     "empty_issues_new_button": "New Issue",
     "no_issues_yet": "No issues yet",
     "toast_link_copied": "Link copied",
     "toast_project_deleted": "Project deleted",
-    "toast_move_issue_failed": "Failed to move issue"
+    "toast_move_issue_failed": "Failed to move issue",
+    "no_plan": "No plan"
   },
   "resources": {
     "section_header": "Resources",

@@ -150,70 +150,6 @@ func TestBuildSquadLeaderBriefing_FullSquad(t *testing.T) {
 	}
 }
 
-// assignSkillToAgent creates a workspace skill and attaches it to the agent.
-func assignSkillToAgent(t *testing.T, agentID, skillName string) {
-	t.Helper()
-	ctx := context.Background()
-	var skillID string
-	if err := testPool.QueryRow(ctx, `
-		INSERT INTO skill (workspace_id, name, description, content, created_by)
-		VALUES ($1, $2, '', '', $3)
-		RETURNING id
-	`, testWorkspaceID, skillName, testUserID).Scan(&skillID); err != nil {
-		t.Fatalf("create skill %s: %v", skillName, err)
-	}
-	t.Cleanup(func() {
-		if _, err := testPool.Exec(ctx, `DELETE FROM agent_skill WHERE agent_id = $1 AND skill_id = $2`, agentID, skillID); err != nil {
-			t.Errorf("cleanup agent skill %s/%s: %v", agentID, skillName, err)
-		}
-		if _, err := testPool.Exec(ctx, `DELETE FROM skill WHERE id = $1`, skillID); err != nil {
-			t.Errorf("cleanup skill %s: %v", skillName, err)
-		}
-	})
-	if _, err := testPool.Exec(ctx,
-		`INSERT INTO agent_skill (agent_id, skill_id) VALUES ($1, $2)`,
-		agentID, skillID,
-	); err != nil {
-		t.Fatalf("assign skill %s to agent: %v", skillName, err)
-	}
-}
-
-// TestBuildSquadLeaderBriefing_MemberSkillsInRoster locks in the delegation
-// fix: an agent member's assigned skills appear in the leader roster so the
-// leader can route by capability. Agents with no skills get an explicit
-// marker; human members never carry a skills segment.
-func TestBuildSquadLeaderBriefing_MemberSkillsInRoster(t *testing.T) {
-	ctx := context.Background()
-	leaderID, _ := seededLeaderAgent(t)
-	squad := seedSquadForBriefing(t, leaderID, "Skilled Squad", "")
-
-	skilled := createHandlerTestAgent(t, "Skilled Bot", []byte("[]"))
-	addAgentMember(t, squad.ID, skilled, "backend")
-	// ListAgentSkillNamesByAgentIDs orders by name ASC → "polars" before "stat…".
-	assignSkillToAgent(t, skilled, "polars")
-	assignSkillToAgent(t, skilled, "statistical-analysis")
-
-	plain := createHandlerTestAgent(t, "Plain Bot", []byte("[]"))
-	addAgentMember(t, squad.ID, plain, "")
-
-	memberRowID, userID, userName := seededHumanMember(t)
-	_ = memberRowID
-	addHumanMember(t, squad.ID, userID, "reviewer")
-
-	out := buildSquadLeaderBriefing(ctx, testHandler.Queries, squad)
-
-	if !strings.Contains(out, "skills: polars, statistical-analysis") {
-		t.Errorf("expected skilled member skills in roster, got:\n%s", out)
-	}
-	if !strings.Contains(out, "Plain Bot — agent — no skills assigned") {
-		t.Errorf("expected no-skills marker for skill-less agent, got:\n%s", out)
-	}
-	if strings.Contains(out, userName+" — member (human), role: \"reviewer\" — skills:") ||
-		strings.Contains(out, userName+" — member (human), role: \"reviewer\" — no skills") {
-		t.Errorf("human member must not render a skills segment, got:\n%s", out)
-	}
-}
-
 func TestBuildSquadLeaderBriefing_OnlyLeader(t *testing.T) {
 	ctx := context.Background()
 	leaderID, _ := seededLeaderAgent(t)
@@ -330,12 +266,10 @@ RETURNING id
 	t.Cleanup(func() { testPool.Exec(ctx, `DELETE FROM issue WHERE id = $1`, issueID) })
 
 	if err := testPool.QueryRow(ctx, `
-INSERT INTO agent_task_queue (agent_id, runtime_id, issue_id, status, priority, is_leader_task, squad_id)
-VALUES ($1, $2, $3, 'queued', 0,
-        ($1::uuid = (SELECT leader_id FROM squad WHERE id = $4::uuid)),
-        $4::uuid)
+INSERT INTO agent_task_queue (agent_id, runtime_id, issue_id, status, priority)
+VALUES ($1, $2, $3, 'queued', 0)
 RETURNING id
-`, agentID, runtimeID, issueID, squadID).Scan(&taskID); err != nil {
+`, agentID, runtimeID, issueID).Scan(&taskID); err != nil {
 		t.Fatalf("queue task: %v", err)
 	}
 	t.Cleanup(func() { testPool.Exec(ctx, `DELETE FROM agent_task_queue WHERE id = $1`, taskID) })

@@ -1,0 +1,1 @@
+DROP INDEX CONCURRENTLY IF EXISTS creative_material_crawl_run_issue_idx;

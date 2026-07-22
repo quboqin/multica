@@ -408,8 +408,6 @@ function ResourceRow({
   const { t } = useT("projects");
   if (isGithubRef(resource)) {
     const ref = resource.resource_ref;
-    const display = resource.label || (ref.ref ? `${ref.url} @ ${ref.ref}` : ref.url);
-    const tooltip = ref.ref ? `${ref.url}\nref: ${ref.ref}` : ref.url;
     return (
       <div className="flex items-center gap-2 text-xs group">
         <FolderGit className="size-3.5 text-muted-foreground shrink-0" />
@@ -422,11 +420,11 @@ function ResourceRow({
                 rel="noopener noreferrer"
                 className="truncate flex-1 hover:underline"
               >
-                {display}
+                {resource.label || ref.url}
               </a>
             }
           />
-          <TooltipContent side="top" className="whitespace-pre-line">{tooltip}</TooltipContent>
+          <TooltipContent side="top">{ref.url}</TooltipContent>
         </Tooltip>
         <button
           type="button"

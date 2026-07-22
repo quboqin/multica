@@ -7,7 +7,6 @@ import {
   registerForWorkspaceRehydration,
 } from "../../platform/workspace-storage";
 import { defaultStorage } from "../../platform/storage";
-import type { AccessScope } from "../effective-access";
 
 // View preferences for the agents list page: scope, sort, column visibility,
 // and filters. Persisted per workspace, per user/device. Row selection is
@@ -52,8 +51,6 @@ export interface AgentListFilters {
   owners: string[];
   /** Runtime-native model identifiers (e.g. claude / codex / gpt-…). */
   models: string[];
-  /** Effective access-scope values (MUL-3963): workspace | specific-people | owner-only. */
-  access: AccessScope[];
 }
 
 export const EMPTY_AGENT_FILTERS: AgentListFilters = {
@@ -61,7 +58,6 @@ export const EMPTY_AGENT_FILTERS: AgentListFilters = {
   runtimes: [],
   owners: [],
   models: [],
-  access: [],
 };
 
 // User-hideable columns. Name and the structural columns (checkbox, kebab)
@@ -69,7 +65,6 @@ export const EMPTY_AGENT_FILTERS: AgentListFilters = {
 export type AgentColumnKey =
   | "status"
   | "owner"
-  | "access"
   | "runtime"
   | "lastActive"
   | "runs"

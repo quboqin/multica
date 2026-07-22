@@ -38,7 +38,6 @@ CI やヘッドレス環境では、ブラウザフローをスキップでき�
 | コマンド | 用途 |
 |---|---|
 | `multica workspace list` | アクセスできるすべてのワークスペースを一覧 |
-| `multica workspace create --name "..." --slug "..." [--issue-prefix "..."] [--description "..."] [--context "..."]` | ワークスペースを作成（作成者が owner になります）。`--name` と `--slug` は必須で、slug は作成後に変更できません。現在のワークスペースは切り替わりません。 |
 | `multica workspace get <slug>` | 1 つのワークスペースの詳細を表示 |
 | `multica workspace member list` | 現在のワークスペースのメンバーを一覧 |
 | `multica workspace update <id> --name "..." [--description "..."] [--context "..."] [--issue-prefix "..."]` | ワークスペースのメタデータを更新（admin/owner）。長いフィールドは `--description-stdin` / `--context-stdin` を使用できます。 |
@@ -55,23 +54,14 @@ CI やヘッドレス環境では、ブラウザフローをスキップでき�
 | `multica issue get <id>` | 単一のイシューを表示（イシューキーまたは UUID を受け取る） |
 | `multica issue create --title "..."` | 新しいイシューを作成 |
 | `multica issue update <id> ...` | イシューを更新（ステータス、優先度、担当者など） |
-| `multica issue assign <id> --to <name>` | メンバー、エージェント、またはスクワッドに割り当て（エージェントへの割り当ては実行をトリガー） |
-| `multica issue status <id> <status>` | ステータス変更のショートカット |
+| `multica issue assign <id> --agent <slug>` | エージェントに割り当て（即座にタスクをトリガー） |
+| `multica issue status <id> --set <status>` | ステータス変更のショートカット |
 | `multica issue search <query>` | キーワード検索 |
-| `multica issue children <id>` | サブイシューを stage ごとに一覧 |
-| `multica issue pull-requests <id>` | 紐付いた pull request と状態を一覧 |
 | `multica issue runs <id>` | イシュー上のエージェント実行を表示 |
-| `multica issue run-messages <task-id>` | 1 回の実行メッセージを表示 |
-| `multica issue usage <id>` | イシュー単位の集計 token 使用量を表示 |
 | `multica issue rerun <id>` | イシューの現在のエージェント担当者向けに新しいタスクを再キューイング |
-| `multica issue cancel-task <task-id>` | キュー中または実行中のタスクをキャンセル |
 | `multica issue comment <id> ...` | ネスト: コメントの表示 / 投稿 |
-| `multica issue comment resolve/unresolve <comment-id>` | コメントスレッドを解決済み / 未解決にする |
 | `multica issue subscriber <id> ...` | ネスト: 購読 / 購読解除 |
-| `multica issue metadata <id> ...` | ネスト: イシューメタデータの読み書き |
-| `multica issue label <id> ...` | ネスト: イシューのラベルを管理 |
 | `multica project list/get/create/update/delete/status` | プロジェクトの CRUD |
-| `multica label list/create/update/delete` | ワークスペースラベルの CRUD |
 
 ## エージェントとスキル
 
@@ -84,8 +74,6 @@ CI やヘッドレス環境では、ブラウザフローをスキップでき�
 | `multica agent archive <slug>` | アーカイブ |
 | `multica agent restore <slug>` | アーカイブ済みのエージェントを復元 |
 | `multica agent tasks <slug>` | エージェントのタスク履歴を表示 |
-| `multica agent avatar <slug>` | エージェントのアバターをアップロード |
-| `multica agent env <slug> ...` | エージェントの custom environment variables を読み取り / 置換 |
 | `multica agent skills ...` | ネスト: スキルのアタッチ / デタッチ |
 | `multica skill list/get/create/update/delete` | スキルの CRUD |
 | `multica skill import ...` | GitHub、ClawHub、またはローカルマシンからスキルをインポート |
@@ -129,10 +117,6 @@ multica skill import --url https://skills.sh/acme/repo/review-helper --on-confli
 | `multica autopilot delete <id>` | 削除 |
 | `multica autopilot runs <id>` | 実行履歴を表示 |
 | `multica autopilot trigger <id>` | 手動で実行をトリガー |
-| `multica autopilot trigger-add/update/delete <id>` | schedule または webhook trigger を管理 |
-| `multica autopilot trigger-rotate-url <id> <trigger-id>` | webhook trigger URL をローテート |
-
-`multica autopilot create/update` は、`create_issue` モードの autopilot が作成するイシューの既定購読者を設定する `--subscriber` も受け取ります。`update` では `--clear-subscribers` で削除できます。
 
 ## デーモンとランタイム
 
@@ -146,9 +130,7 @@ multica skill import --url https://skills.sh/acme/repo/review-helper --on-confli
 | `multica runtime list` | 現在のワークスペースのランタイムを一覧 |
 | `multica runtime usage` | リソース使用量を表示 |
 | `multica runtime activity` | 最近のアクティビティログ |
-| `multica runtime update <id> ...` | ランタイム上で CLI 更新を開始 |
-| `multica runtime delete <id> [--cascade]` | ランタイムを削除し、必要なら紐付くエージェントもアーカイブ |
-| `multica runtime profile ...` | カスタム runtime profile とローカルパス上書きを管理 |
+| `multica runtime update <id> ...` | ランタイムの構成を更新 |
 
 ## その他
 

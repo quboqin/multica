@@ -1,5 +1,7 @@
 "use client";
 
+import { useMemo } from "react";
+import { useStore } from "zustand";
 import { ChevronDown } from "lucide-react";
 import { Button } from "@multica/ui/components/ui/button";
 import {
@@ -11,34 +13,12 @@ import {
 } from "@multica/ui/components/ui/dropdown-menu";
 import { Tooltip, TooltipTrigger, TooltipContent } from "@multica/ui/components/ui/tooltip";
 import type { Issue } from "@multica/core/types";
-import type { MyIssuesScope } from "@multica/core/issues/stores/my-issues-view-store";
-import { useViewStore } from "@multica/core/issues/stores/view-store-context";
+import { myIssuesViewStore, type MyIssuesScope } from "@multica/core/issues/stores/my-issues-view-store";
 import { useT } from "../../i18n";
 import { WorkspaceAgentWorkingChip } from "../../issues/components/workspace-agent-working-chip";
-import {
-  IssueDisplayControls,
-  ViewRefreshIndicator,
-} from "../../issues/components/issues-header";
+import { IssueDisplayControls } from "../../issues/components/issues-header";
 
-export function MyIssuesHeader({
-  allIssues,
-  workingIssues,
-  scope,
-  onScopeChange,
-  isRefreshing = false,
-  facetCountsExact = true,
-}: {
-  allIssues: Issue[];
-  /** The rows the agents-working filter would leave on screen — undefined
-   *  when the set is unknown (chip renders indeterminate). Scopes the chip:
-   *  it counts the agents working on these rows. */
-  workingIssues: Issue[] | undefined;
-  scope: MyIssuesScope;
-  onScopeChange: (scope: MyIssuesScope) => void;
-  isRefreshing?: boolean;
-  /** See IssueDisplayControls.facetCountsExact. */
-  facetCountsExact?: boolean;
-}) {
+export function MyIssuesHeader({ allIssues }: { allIssues: Issue[] }) {
   const { t } = useT("my-issues");
   const { t: tIssues } = useT("issues");
   const SCOPES: { value: MyIssuesScope; label: string; description: string }[] = [
@@ -47,9 +27,12 @@ export function MyIssuesHeader({
     { value: "created", label: t(($) => $.header.scope.created_label), description: t(($) => $.header.scope.created_description) },
     { value: "agents", label: t(($) => $.header.scope.agents_label), description: t(($) => $.header.scope.agents_description) },
   ];
-  const agentRunningFilter = useViewStore((s) => s.agentRunningFilter);
-  const toggleAgentRunningFilter = useViewStore(
-    (s) => s.toggleAgentRunningFilter,
+  const scope = useStore(myIssuesViewStore, (s) => s.scope);
+  const agentRunningFilter = useStore(myIssuesViewStore, (s) => s.agentRunningFilter);
+  const act = myIssuesViewStore.getState();
+  const scopedIssueIds = useMemo(
+    () => new Set(allIssues.map((i) => i.id)),
+    [allIssues],
   );
   const scopeLabel = SCOPES.find((s) => s.value === scope)?.label ?? SCOPES[0]?.label;
 
@@ -69,7 +52,7 @@ export function MyIssuesHeader({
                         ? "bg-accent text-accent-foreground hover:bg-accent/80"
                         : "text-muted-foreground"
                     }
-                    onClick={() => onScopeChange(s.value)}
+                    onClick={() => act.setScope(s.value)}
                   >
                     {s.label}
                   </Button>
@@ -96,7 +79,7 @@ export function MyIssuesHeader({
           <DropdownMenuContent align="start" className="w-auto">
             <DropdownMenuRadioGroup
               value={scope}
-              onValueChange={(value) => onScopeChange(value as MyIssuesScope)}
+              onValueChange={(value) => act.setScope(value as MyIssuesScope)}
             >
               {SCOPES.map((s) => (
                 <DropdownMenuRadioItem key={s.value} value={s.value}>
@@ -115,14 +98,10 @@ export function MyIssuesHeader({
           )}
           <WorkspaceAgentWorkingChip
             value={agentRunningFilter}
-            onToggle={toggleAgentRunningFilter}
-            workingIssues={workingIssues}
+            onToggle={act.toggleAgentRunningFilter}
+            scopedIssueIds={scopedIssueIds}
           />
-          <IssueDisplayControls
-            scopedIssues={allIssues}
-            facetCountsExact={facetCountsExact}
-          />
-          <ViewRefreshIndicator active={isRefreshing} />
+          <IssueDisplayControls scopedIssues={allIssues} />
         </div>
       </div>
     </div>

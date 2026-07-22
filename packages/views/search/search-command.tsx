@@ -13,10 +13,9 @@ import {
   SearchIcon,
   Inbox,
   CircleUser,
-  ListChevronsDownUp,
-  ListChevronsUpDown,
   ListTodo,
   FolderKanban,
+  Gauge,
   Bot,
   Monitor,
   Moon,
@@ -26,7 +25,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { Command as CommandPrimitive } from "cmdk";
-import { useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQueries, useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
 import type {
   MemberWithUser,
@@ -37,25 +36,20 @@ import { api } from "@multica/core/api";
 import {
   openCreateIssueWithPreference,
   selectRecentIssues,
-  useCommentCollapseStore,
   useRecentIssuesStore,
-  useResolvedExpandStore,
 } from "@multica/core/issues/stores";
-import { issueDetailOptions, issueTimelineOptions } from "@multica/core/issues/queries";
+import { issueDetailOptions } from "@multica/core/issues/queries";
 import { useWorkspaceId } from "@multica/core";
 import { useWorkspacePaths } from "@multica/core/paths";
 import type { WorkspacePaths } from "@multica/core/paths";
 import { useModalStore } from "@multica/core/modals";
-import { createShortcutChord } from "@multica/core/shortcuts";
 import { memberListOptions } from "@multica/core/workspace/queries";
 import { resolvePublicFileUrl } from "@multica/core/workspace/avatar-url";
 import { StatusIcon } from "../issues/components";
-import { resolvedThreadRootIds, rootCommentIds } from "../issues/components/thread-utils";
 import { ProjectIcon } from "../projects/components/project-icon";
 import { PROJECT_STATUS_CONFIG } from "@multica/core/projects/config";
 import type { ProjectStatus } from "@multica/core/types";
 import { ActorAvatar } from "../common/actor-avatar";
-import { ShortcutKeycaps } from "../common/shortcut-keycaps";
 import { ActorAvatar as ActorAvatarBase } from "@multica/ui/components/common/actor-avatar";
 import {
   Dialog,
@@ -79,6 +73,7 @@ type NavKey =
   | "inbox"
   | "myIssues"
   | "issues"
+  | "kpi"
   | "projects"
   | "agents"
   | "runtimes"
@@ -124,7 +119,7 @@ function IssueAssigneeAvatar({
     <ActorAvatar
       actorType={assigneeType}
       actorId={assigneeId}
-      size="sm"
+      size={20}
       profileLink={false}
       className="shrink-0"
     />
@@ -151,7 +146,8 @@ export function SearchCommand() {
     { key: "inbox", label: t(($) => $.pages.inbox), icon: Inbox, keywords: ["inbox", "notifications", "收件箱"] },
     { key: "myIssues", label: t(($) => $.pages.my_issues), icon: CircleUser, keywords: ["my", "issues", "assigned", "我的"] },
     { key: "issues", label: t(($) => $.pages.issues), icon: ListTodo, keywords: ["issues", "tasks", "bugs"] },
-    { key: "projects", label: t(($) => $.pages.projects), icon: FolderKanban, keywords: ["projects", "kanban", "项目"] },
+    { key: "kpi", label: t(($) => $.pages.kpi), icon: Gauge, keywords: ["kpi", "metrics"] },
+    { key: "projects", label: t(($) => $.pages.projects), icon: FolderKanban, keywords: ["projects", "kanban", "需求", "项目"] },
     { key: "agents", label: t(($) => $.pages.agents), icon: Bot, keywords: ["agents", "bots", "ai"] },
     { key: "runtimes", label: t(($) => $.pages.runtimes), icon: Monitor, keywords: ["runtimes", "environments"] },
     { key: "skills", label: t(($) => $.pages.skills), icon: BookOpenText, keywords: ["skills", "library"] },
@@ -206,7 +202,6 @@ export function SearchCommand() {
     ...issueDetailOptions(wsId, currentIssueId ?? ""),
     enabled: !!currentIssueId,
   });
-  const queryClient = useQueryClient();
 
   const commands = useMemo<CommandItem[]>(() => {
     const activeThemeCheck = (value: ThemeValue) =>
@@ -240,7 +235,7 @@ export function SearchCommand() {
       },
     ];
 
-    if (currentIssueId && currentIssue) {
+    if (currentIssue) {
       const identifier = currentIssue.identifier;
       items.push(
         {
@@ -264,46 +259,6 @@ export function SearchCommand() {
             void copyText(identifier).then((ok) => {
               if (ok) toast.success(t(($) => $.toast.copied_identifier, { identifier }));
             });
-            setOpen(false);
-          },
-        },
-        {
-          key: "fold-all-comments",
-          label: t(($) => $.commands.fold_all_comments),
-          icon: ListChevronsDownUp,
-          keywords: ["fold", "collapse", "comments", "收起", "折叠", "评论"],
-          onSelect: () => {
-            // The timeline is already cached whenever the issue page has
-            // rendered; ensureQueryData only fetches on a cold cache. If it
-            // still can't load, no comments are on screen — dropping the
-            // action matches the visible state.
-            void queryClient
-              .ensureQueryData(issueTimelineOptions(currentIssueId))
-              .then((entries) => {
-                useCommentCollapseStore
-                  .getState()
-                  .collapseAll(currentIssueId, rootCommentIds(entries));
-                useResolvedExpandStore.getState().collapseAll(currentIssueId);
-              })
-              .catch(() => {});
-            setOpen(false);
-          },
-        },
-        {
-          key: "unfold-all-comments",
-          label: t(($) => $.commands.unfold_all_comments),
-          icon: ListChevronsUpDown,
-          keywords: ["unfold", "expand", "comments", "展开", "评论"],
-          onSelect: () => {
-            void queryClient
-              .ensureQueryData(issueTimelineOptions(currentIssueId))
-              .then((entries) => {
-                useCommentCollapseStore.getState().expandAll(currentIssueId);
-                useResolvedExpandStore
-                  .getState()
-                  .expandAll(currentIssueId, resolvedThreadRootIds(entries));
-              })
-              .catch(() => {});
             setOpen(false);
           },
         },
@@ -347,7 +302,7 @@ export function SearchCommand() {
     );
 
     return items;
-  }, [currentIssue, currentIssueId, getShareableUrl, pathname, queryClient, setOpen, setTheme, theme, t]);
+  }, [currentIssue, getShareableUrl, pathname, setOpen, setTheme, theme, t]);
 
   const filteredCommands = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -380,6 +335,18 @@ export function SearchCommand() {
     results.issues.length > 0 ||
     results.projects.length > 0 ||
     filteredMembers.length > 0;
+
+  // Global Cmd+K / Ctrl+K shortcut
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "k" && (e.metaKey || e.ctrlKey)) {
+        e.preventDefault();
+        useSearchStore.getState().toggle();
+      }
+    };
+    document.addEventListener("keydown", handleKeyDown);
+    return () => document.removeEventListener("keydown", handleKeyDown);
+  }, []);
 
   // Close on single ESC — capture phase fires before base-ui Dialog's handlers
   useEffect(() => {
@@ -519,10 +486,9 @@ export function SearchCommand() {
               onValueChange={handleValueChange}
               className="flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
             />
-            <ShortcutKeycaps
-              shortcut={createShortcutChord("Escape")}
-              className="hidden shrink-0 sm:inline-flex"
-            />
+            <kbd className="hidden shrink-0 rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground sm:inline">
+              ESC
+            </kbd>
           </div>
 
           {/* Results list */}
@@ -588,7 +554,7 @@ export function SearchCommand() {
                       name={member.name}
                       initials={memberInitials(member.name)}
                       avatarUrl={resolvePublicFileUrl(member.avatar_url)}
-                      size="md"
+                      size={22}
                     />
                     <div className="min-w-0 flex-1">
                       <div className="truncate">

@@ -31,13 +31,11 @@ import (
 // finding about the "request disappears under Redis hiccups" path.
 
 const (
-	runtimePendingRedisHashTag = "{runtime_pending}"
-
 	// Namespaced so we don't collide with the realtime relay's ws:* keys.
-	localSkillListKeyPrefix       = "mul:" + runtimePendingRedisHashTag + ":local_skill:list:"
-	localSkillListPendingPrefix   = "mul:" + runtimePendingRedisHashTag + ":local_skill:list:pending:"
-	localSkillImportKeyPrefix     = "mul:" + runtimePendingRedisHashTag + ":local_skill:import:"
-	localSkillImportPendingPrefix = "mul:" + runtimePendingRedisHashTag + ":local_skill:import:pending:"
+	localSkillListKeyPrefix       = "mul:local_skill:list:"
+	localSkillListPendingPrefix   = "mul:local_skill:list:pending:"
+	localSkillImportKeyPrefix     = "mul:local_skill:import:"
+	localSkillImportPendingPrefix = "mul:local_skill:import:pending:"
 	localSkillRedisPopMaxRetries  = 5
 )
 
@@ -223,7 +221,7 @@ func (s *RedisLocalSkillListStore) PopPending(ctx context.Context, runtimeID str
 	return nil, nil
 }
 
-func (s *RedisLocalSkillListStore) Complete(ctx context.Context, id string, skills []RuntimeLocalSkillSummary, supported bool, mcpServers []RuntimeLocalMcpServerSummary, mcpSupported bool) error {
+func (s *RedisLocalSkillListStore) Complete(ctx context.Context, id string, skills []RuntimeLocalSkillSummary, supported bool) error {
 	req, err := s.loadListRequest(ctx, id)
 	if err != nil {
 		return err
@@ -234,8 +232,6 @@ func (s *RedisLocalSkillListStore) Complete(ctx context.Context, id string, skil
 	req.Status = RuntimeLocalSkillCompleted
 	req.Skills = skills
 	req.Supported = supported
-	req.McpServers = mcpServers
-	req.McpSupported = mcpSupported
 	req.UpdatedAt = time.Now()
 	return s.persistListRequest(ctx, req)
 }
@@ -487,7 +483,7 @@ func (s *RedisLocalSkillImportStore) PopPendingBatch(ctx context.Context, runtim
 	return result, nil
 }
 
-func (s *RedisLocalSkillImportStore) Complete(ctx context.Context, id string, skill SkillWithFilesResponse) error {
+func (s *RedisLocalSkillImportStore) Complete(ctx context.Context, id string, skill SkillResponse) error {
 	req, err := s.loadImportRequest(ctx, id)
 	if err != nil {
 		return err

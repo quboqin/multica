@@ -36,6 +36,14 @@ function makeApi(getMe: () => Promise<User>): ApiClient {
   } as unknown as ApiClient;
 }
 
+function makeLoginApi(): ApiClient {
+  return {
+    setToken: vi.fn(),
+    verifyCode: vi.fn().mockResolvedValue({ token: "login-token", user: fakeUser }),
+    googleLogin: vi.fn().mockResolvedValue({ token: "google-token", user: fakeUser }),
+  } as unknown as ApiClient;
+}
+
 describe("authStore.initialize — token mode", () => {
   it("keeps the stored token when getMe fails with a non-401 ApiError (e.g. 500)", async () => {
     const storage = makeStorage({ multica_token: "t" });
@@ -89,5 +97,29 @@ describe("authStore.initialize — token mode", () => {
 
     expect(store.getState().user).toEqual(fakeUser);
     expect(storage.snapshot().multica_token).toBe("t");
+  });
+});
+
+describe("authStore login token handling", () => {
+  it("sets the in-memory API token after email login even in cookie mode", async () => {
+    const storage = makeStorage();
+    const api = makeLoginApi();
+    const store = createAuthStore({ api, storage, cookieAuth: true });
+
+    await store.getState().verifyCode("alice@example.com", "123456");
+
+    expect(api.setToken).toHaveBeenCalledWith("login-token");
+    expect(storage.snapshot().multica_token).toBeUndefined();
+  });
+
+  it("persists the token after email login in token mode", async () => {
+    const storage = makeStorage();
+    const api = makeLoginApi();
+    const store = createAuthStore({ api, storage, cookieAuth: false });
+
+    await store.getState().verifyCode("alice@example.com", "123456");
+
+    expect(api.setToken).toHaveBeenCalledWith("login-token");
+    expect(storage.snapshot().multica_token).toBe("login-token");
   });
 });

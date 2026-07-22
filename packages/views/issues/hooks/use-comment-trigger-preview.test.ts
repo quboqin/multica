@@ -251,7 +251,7 @@ describe("useCommentTriggerPreview", () => {
 
     await advancePreviewDebounce();
 
-    expect(result.current).toEqual({ agents: [], blocked: [] });
+    expect(result.current).toEqual({ agents: [] });
     expect(previewCommentTriggers).not.toHaveBeenCalled();
   });
 });

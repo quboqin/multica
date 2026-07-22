@@ -52,11 +52,13 @@ cd multica
 make selfhost
 ```
 
-`make selfhost` automatically creates `.env` from the example, generates a random `JWT_SECRET`, and starts all services via Docker Compose.
+`make selfhost` automatically creates `.env` from the example, generates random `JWT_SECRET`, PostgreSQL password, and `BROKER_STATE_KEY` values, validates the deployment configuration, then starts PostgreSQL, the API, crawler worker, and web app via Docker Compose. The backend image entrypoint runs `migrate up` before it begins serving traffic, so schema changes such as Preview Sessions are applied during deployment. Keep `.env` across upgrades: changing `BROKER_STATE_KEY` makes previously bound browser state unreadable.
 
 By default it pulls the latest stable release images from GHCR. To build the backend/web from your current checkout instead, run `make selfhost-build`.
 If the selected GHCR tag has not been published yet, `make selfhost` now tells you to fall back to `make selfhost-build`.
 `make selfhost-build` uses local `multica-backend:dev` / `multica-web:dev` tags, so it does not overwrite the pulled `:latest` images.
+
+For an existing installation, use `make selfhost-deploy`. It runs preflight checks, pulls and starts the configured images, waits for the backend entrypoint's automatic migrations, then checks backend migration health, the login page, and the frontend API proxy. Run `make selfhost-preflight` or `make selfhost-verify` independently when needed.
 
 Once ready:
 
@@ -96,14 +98,11 @@ You also need at least one AI agent CLI installed:
 - [OpenClaw](https://github.com/openclaw/openclaw) (`openclaw` on PATH)
 - [OpenCode](https://github.com/anomalyco/opencode) (`opencode` on PATH)
 - [Hermes](https://github.com/NousResearch/hermes) (`hermes` on PATH)
+- Gemini (`gemini` on PATH)
 - [Pi](https://pi.dev/) (`pi` on PATH)
 - [Cursor Agent](https://cursor.com/) (`cursor-agent` on PATH)
 - Kimi (`kimi` on PATH)
 - Kiro CLI (`kiro-cli` on PATH)
-- Qoder CLI (`qodercli` on PATH)
-- Trae CLI (`traecli` on PATH)
-- [Grok Build CLI](https://docs.x.ai/) (`grok` on PATH)
-- Qwen Code (`qwen` on PATH)
 
 ### b) One-command setup
 
@@ -444,10 +443,11 @@ cd multica
 cp .env.example .env
 ```
 
-Edit `.env` — at minimum, change `JWT_SECRET`:
+Edit `.env` — at minimum, change `JWT_SECRET` and create a stable credential-state key:
 
 ```bash
 JWT_SECRET=$(openssl rand -hex 32)
+BROKER_STATE_KEY=$(openssl rand -base64 32)
 ```
 
 Then start everything:

@@ -4,6 +4,7 @@ import { useState } from "react";
 import { ArrowRight, Download, Loader2 } from "lucide-react";
 import { Button, buttonVariants } from "@multica/ui/components/ui/button";
 import { MulticaIcon } from "@multica/ui/components/common/multica-icon";
+import { captureDownloadIntent } from "@multica/core/analytics";
 import { cn } from "@multica/ui/lib/utils";
 import { DragStrip } from "@multica/views/platform";
 import { STATUS_CONFIG } from "@multica/core/issues/config";
@@ -116,6 +117,7 @@ export function StepWelcome({
                     href="/download"
                     target="_blank"
                     rel="noopener noreferrer"
+                    onClick={() => captureDownloadIntent("welcome")}
                     className={buttonVariants({ size: "lg" })}
                   >
                     <Download className="h-4 w-4" />
@@ -279,7 +281,6 @@ type ProviderName =
   | "hermes"
   | "kimi"
   | "kiro"
-  | "qoder"
   | "pi"
   | "copilot"
   | "cursor";

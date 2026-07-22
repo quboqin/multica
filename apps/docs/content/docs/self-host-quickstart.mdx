@@ -30,8 +30,8 @@ make selfhost
 
 `make selfhost` will:
 
-1. Generate a `.env` from `.env.example` if missing, with a **random JWT_SECRET and Postgres password**
-2. Pull the official Docker images (PostgreSQL, Multica backend, Multica frontend)
+1. Generate a `.env` from `.env.example` if missing, with a **random JWT_SECRET, Postgres password, and credential-state encryption key**
+2. Pull the official Docker images (PostgreSQL, Multica backend, crawler worker, Multica frontend)
 3. Bring up every service using `docker-compose.selfhost.yml`
 4. Wait until the backend's `/health` endpoint is ready
 
@@ -39,6 +39,8 @@ For ongoing production probes after startup, use `/readyz` when you want the
 check to fail on database or migration problems.
 
 The backend container **runs database migrations automatically** on startup (`docker/entrypoint.sh` runs `./migrate up` before the server starts) — you'll see the migration output in the backend logs. Version upgrades are handled the same way.
+
+The crawler worker owns remote login browsers and encrypted browser state. Keep the generated `BROKER_STATE_KEY` unchanged across restarts and upgrades. For access from another machine, set `CRAWLER_WORKER_PUBLIC_URL` to the worker's HTTPS URL and proxy that URL to port `19516`. Configure S3-compatible storage for durable creative-material archives; local uploads are suitable for a single-node installation.
 
 <Callout type="info">
 **Image not published yet?** If `make selfhost` fails to pull images, you may be on an unreleased version tag. Switch to a stable release, or build from source: `make selfhost-build`.

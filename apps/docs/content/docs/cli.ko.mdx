@@ -38,7 +38,6 @@ CI나 headless 환경에서는 브라우저 플로우를 건너뛰세요. 웹 �
 | 명령어 | 용도 |
 |---|---|
 | `multica workspace list` | 접근할 수 있는 모든 워크스페이스 나열 |
-| `multica workspace create --name "..." --slug "..." [--issue-prefix "..."] [--description "..."] [--context "..."]` | 워크스페이스 생성(생성자가 owner가 됩니다). `--name`과 `--slug`는 필수이며 slug는 생성 후 변경할 수 없습니다. 현재 워크스페이스는 전환되지 않습니다. |
 | `multica workspace get <slug>` | 워크스페이스 하나의 상세 정보 표시 |
 | `multica workspace member list` | 현재 워크스페이스의 멤버 나열 |
 | `multica workspace update <id> --name "..." [--description "..."] [--context "..."] [--issue-prefix "..."]` | 워크스페이스 메타데이터 업데이트(admin/owner). 긴 필드는 `--description-stdin` / `--context-stdin`을 사용할 수 있습니다. |
@@ -55,23 +54,14 @@ CI나 headless 환경에서는 브라우저 플로우를 건너뛰세요. 웹 �
 | `multica issue get <id>` | 단일 이슈 표시(이슈 키 또는 UUID를 받음) |
 | `multica issue create --title "..."` | 새 이슈 생성 |
 | `multica issue update <id> ...` | 이슈 업데이트(상태, 우선순위, 담당자 등) |
-| `multica issue assign <id> --to <name>` | 멤버, 에이전트, 또는 스쿼드에 할당(에이전트에 할당하면 실행이 트리거됨) |
-| `multica issue status <id> <status>` | 상태 변경 단축 명령 |
+| `multica issue assign <id> --agent <slug>` | 에이전트에게 할당(즉시 작업을 트리거) |
+| `multica issue status <id> --set <status>` | 상태 변경 단축 명령 |
 | `multica issue search <query>` | 키워드 검색 |
-| `multica issue children <id>` | 하위 이슈를 stage별로 나열 |
-| `multica issue pull-requests <id>` | 연결된 pull request와 상태 나열 |
 | `multica issue runs <id>` | 이슈의 에이전트 실행 표시 |
-| `multica issue run-messages <task-id>` | 한 실행의 메시지 표시 |
-| `multica issue usage <id>` | 이슈의 집계 token 사용량 표시 |
 | `multica issue rerun <id>` | 이슈의 현재 에이전트 담당자에게 새 작업을 다시 큐에 넣기 |
-| `multica issue cancel-task <task-id>` | 대기 중이거나 실행 중인 작업 취소 |
 | `multica issue comment <id> ...` | 중첩: 댓글 보기 / 작성 |
-| `multica issue comment resolve/unresolve <comment-id>` | 댓글 스레드를 해결 / 미해결로 표시 |
 | `multica issue subscriber <id> ...` | 중첩: 구독 / 구독 취소 |
-| `multica issue metadata <id> ...` | 중첩: 이슈 metadata 읽기 / 쓰기 |
-| `multica issue label <id> ...` | 중첩: 이슈의 label 관리 |
 | `multica project list/get/create/update/delete/status` | 프로젝트 CRUD |
-| `multica label list/create/update/delete` | 워크스페이스 label CRUD |
 
 ## 에이전트와 스킬
 
@@ -84,8 +74,6 @@ CI나 headless 환경에서는 브라우저 플로우를 건너뛰세요. 웹 �
 | `multica agent archive <slug>` | 보관 |
 | `multica agent restore <slug>` | 보관된 에이전트 복원 |
 | `multica agent tasks <slug>` | 에이전트의 작업 기록 표시 |
-| `multica agent avatar <slug>` | 에이전트 아바타 업로드 |
-| `multica agent env <slug> ...` | 에이전트 custom environment variables 읽기 / 교체 |
 | `multica agent skills ...` | 중첩: 스킬 연결 / 분리 |
 | `multica skill list/get/create/update/delete` | 스킬 CRUD |
 | `multica skill import ...` | GitHub, ClawHub, 또는 로컬 기기에서 스킬 가져오기 |
@@ -129,10 +117,6 @@ multica skill import --url https://skills.sh/acme/repo/review-helper --on-confli
 | `multica autopilot delete <id>` | 삭제 |
 | `multica autopilot runs <id>` | 실행 기록 표시 |
 | `multica autopilot trigger <id>` | 수동으로 실행 트리거 |
-| `multica autopilot trigger-add/update/delete <id>` | schedule 또는 webhook trigger 관리 |
-| `multica autopilot trigger-rotate-url <id> <trigger-id>` | webhook trigger URL 회전 |
-
-`multica autopilot create/update`는 `create_issue` 모드 autopilot이 만드는 이슈의 기본 구독자를 설정하는 `--subscriber`도 받습니다. `update`에서는 `--clear-subscribers`로 제거할 수 있습니다.
 
 ## 데몬과 런타임
 
@@ -146,9 +130,7 @@ multica skill import --url https://skills.sh/acme/repo/review-helper --on-confli
 | `multica runtime list` | 현재 워크스페이스의 런타임 나열 |
 | `multica runtime usage` | 리소스 사용량 표시 |
 | `multica runtime activity` | 최근 활동 로그 |
-| `multica runtime update <id> ...` | 런타임에서 CLI 업데이트 시작 |
-| `multica runtime delete <id> [--cascade]` | 런타임 삭제, 필요하면 연결된 에이전트도 보관 |
-| `multica runtime profile ...` | 사용자 지정 runtime profile과 로컬 경로 override 관리 |
+| `multica runtime update <id> ...` | 런타임의 구성 업데이트 |
 
 ## 기타
 

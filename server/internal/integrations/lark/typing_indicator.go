@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgtype"
+	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
 // typingEmoji is the Lark emoji_type used for the "processing" indicator.
@@ -27,8 +28,8 @@ type TypingIndicatorState struct {
 
 // TypingIndicatorQueries is the narrow DB surface the manager needs.
 type TypingIndicatorQueries interface {
-	GetLarkChatSessionBindingBySession(ctx context.Context, chatSessionID pgtype.UUID) (ChatSessionBinding, error)
-	GetLarkInstallation(ctx context.Context, id pgtype.UUID) (Installation, error)
+	GetLarkChatSessionBindingBySession(ctx context.Context, chatSessionID pgtype.UUID) (db.LarkChatSessionBinding, error)
+	GetLarkInstallation(ctx context.Context, id pgtype.UUID) (db.LarkInstallation, error)
 }
 
 // TypingIndicatorManager owns the "processing" reaction lifecycle for
@@ -73,7 +74,7 @@ func NewTypingIndicatorManager(client APIClient, credentials CredentialsResolver
 // Messages older than typingIndicatorMaxAge are silently skipped so that
 // WebSocket replays and stale reconnects do not surface misleading "processing"
 // badges on long-finished conversations.
-func (m *TypingIndicatorManager) Add(ctx context.Context, inst Installation, chatSessionID pgtype.UUID, messageID string, createTime string) {
+func (m *TypingIndicatorManager) Add(ctx context.Context, inst db.LarkInstallation, chatSessionID pgtype.UUID, messageID string, createTime string) {
 	if messageID == "" {
 		return
 	}
@@ -202,7 +203,7 @@ func isMessageTooOld(createTime string) bool {
 	return time.Since(time.UnixMilli(ms)) > typingIndicatorMaxAge
 }
 
-func (m *TypingIndicatorManager) resolveCredentials(inst Installation) (InstallationCredentials, error) {
+func (m *TypingIndicatorManager) resolveCredentials(inst db.LarkInstallation) (InstallationCredentials, error) {
 	secret, err := m.credentials.DecryptAppSecret(inst)
 	if err != nil {
 		return InstallationCredentials{}, err

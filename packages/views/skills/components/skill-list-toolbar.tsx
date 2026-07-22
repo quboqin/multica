@@ -188,7 +188,6 @@ export function SkillListToolbar({
           <Input
             value={search}
             onChange={(e) => onSearchChange(e.target.value)}
-            aria-label={t(($) => $.page.search_placeholder)}
             placeholder={t(($) => $.page.search_placeholder)}
             className="h-8 w-64 pl-8 text-sm"
           />
@@ -337,7 +336,7 @@ export function SkillListToolbar({
                       initials={agent.name.slice(0, 2).toUpperCase()}
                       avatarUrl={resolvePublicFileUrl(agent.avatar_url)}
                       isAgent
-                      size="sm"
+                      size={16}
                     />
                     <span className="min-w-0 truncate">{agent.name}</span>
                     {countBadge(count)}
@@ -373,7 +372,7 @@ export function SkillListToolbar({
                       name={member.name}
                       initials={member.name.slice(0, 2).toUpperCase()}
                       avatarUrl={resolvePublicFileUrl(member.avatar_url)}
-                      size="sm"
+                      size={16}
                     />
                     <span className="min-w-0 truncate">{member.name}</span>
                     {countBadge(count)}

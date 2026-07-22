@@ -1,0 +1,1 @@
+DROP INDEX CONCURRENTLY IF EXISTS creative_material_candidate_workspace_seen_idx;

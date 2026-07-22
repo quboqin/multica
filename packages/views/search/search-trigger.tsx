@@ -2,16 +2,12 @@
 
 import { Search } from "lucide-react";
 import { SidebarMenuButton } from "@multica/ui/components/ui/sidebar";
-import {
-  useShortcut,
-} from "@multica/core/shortcuts";
+import { isMac, formatShortcut, modKey } from "@multica/core/platform";
 import { useSearchStore } from "./search-store";
 import { useT } from "../i18n";
-import { ShortcutKeycaps } from "../common/shortcut-keycaps";
 
 export function SearchTrigger() {
   const { t } = useT("search");
-  const shortcut = useShortcut("openSearch");
   return (
     <SidebarMenuButton
       className="text-muted-foreground"
@@ -19,9 +15,15 @@ export function SearchTrigger() {
     >
       <Search />
       <span>{t(($) => $.trigger.label)}</span>
-      {shortcut ? (
-        <ShortcutKeycaps shortcut={shortcut} decorative className="pointer-events-none ml-auto" />
-      ) : null}
+      <kbd className="pointer-events-none ml-auto inline-flex h-5 select-none items-center gap-0.5 rounded border bg-muted px-1.5 font-mono text-[10px] font-medium text-muted-foreground">
+        {isMac ? (
+          <>
+            <span className="text-xs">{modKey}</span>K
+          </>
+        ) : (
+          formatShortcut(modKey, "K")
+        )}
+      </kbd>
     </SidebarMenuButton>
   );
 }

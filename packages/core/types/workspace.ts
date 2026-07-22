@@ -5,14 +5,6 @@ export interface WorkspaceRepo {
   description?: string;
 }
 
-export interface IntegrationTokens {
-  git_token?: string;
-  feishu_mcp_token?: string;
-  paones_token?: string;
-  jingwei_token?: string;
-  [key: string]: string | undefined;
-}
-
 export interface Workspace {
   id: string;
   name: string;
@@ -70,6 +62,14 @@ export interface User {
   integration_tokens: IntegrationTokens;
   created_at: string;
   updated_at: string;
+}
+
+export interface IntegrationTokens {
+  git_token?: string;
+  feishu_mcp_token?: string;
+  paones_token?: string;
+  jingwei_token?: string;
+  [key: string]: string | undefined;
 }
 
 export interface MemberWithUser {

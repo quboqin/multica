@@ -36,7 +36,10 @@ describe("HtmlBlockPreview — preview / source toggle", () => {
     const frames = document.querySelectorAll("iframe");
     expect(frames.length).toBeGreaterThanOrEqual(1);
     const frame = frames[0]!;
-    expect(frame.getAttribute("sandbox")).toBe("allow-scripts");
+    expect(frame.getAttribute("sandbox")).toBe(
+      "allow-scripts allow-popups allow-popups-to-escape-sandbox",
+    );
+    expect(frame.getAttribute("sandbox")).not.toContain("allow-same-origin");
     const srcdoc = frame.getAttribute("srcdoc") ?? "";
     expect(srcdoc.startsWith("<p>hi</p>")).toBe(true);
     expect(srcdoc).toContain("scrollIntoView");
@@ -83,7 +86,10 @@ describe("HtmlBlockPreview — Maximize → Dialog", () => {
       const srcdoc = f.getAttribute("srcdoc") ?? "";
       expect(srcdoc.startsWith("<p>hi</p>")).toBe(true);
       expect(srcdoc).toContain("scrollIntoView");
-      expect(f.getAttribute("sandbox")).toBe("allow-scripts");
+      expect(f.getAttribute("sandbox")).toBe(
+        "allow-scripts allow-popups allow-popups-to-escape-sandbox",
+      );
+      expect(f.getAttribute("sandbox")).not.toContain("allow-same-origin");
     }
   });
 });

@@ -7,10 +7,10 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@multica/ui/components/ui/popover";
+import { useWorkspaceId } from "@multica/core/hooks";
 import { useActorName } from "@multica/core/workspace/hooks";
 import { cn } from "@multica/ui/lib/utils";
-import { api } from "@multica/core/api";
-import { issueKeys } from "@multica/core/issues/queries";
+import { agentTaskSnapshotOptions } from "@multica/core/agents";
 import type { AgentTask } from "@multica/core/types";
 import { AgentAvatarStack } from "../../agents/components/agent-avatar-stack";
 import { ActiveTaskRow } from "./execution-log-section";
@@ -21,12 +21,10 @@ import { useT } from "../../i18n";
 // signal stays in one fixed place and never competes with future sticky
 // banners in the content column. Replaces the in-body sticky live card.
 //
-// Reads the same per-issue task list as the right-panel Execution log
-// (shared `issueKeys.tasks(issueId)` cache), so the header chip and the log
-// always agree on what is active. Both surfaces derive from one query, which
-// removes the race where the old workspace-wide agent-task-snapshot refetched
-// slower than this per-issue list and left the chip lagging behind the log's
-// "agent is working".
+// Derives state from the workspace-wide agent task snapshot filtered by
+// issue id — the same single source of truth that powers the board-card /
+// list-row IssueAgentActivityIndicator, so the chip is always consistent
+// with those surfaces and costs zero extra network.
 //
 // Collapsed display stays intentionally shallow:
 //   - one running agent  → avatar + "{name} is working"
@@ -34,10 +32,9 @@ import { useT } from "../../i18n";
 //   - queued only        → "{name} is queued" / "N agents queued",
 //                          half-opacity avatars / muted text (no beam)
 //
-// Hovering the chip opens a compact Popover card with the same active rows as
-// the right panel (click / keyboard still toggle it for touch and a11y). Those
-// rows show necessary status/time and task entry actions, but do not render
-// event counts or prefetch task messages for a count.
+// Click opens a compact Popover card with the same active rows as the right
+// panel. Those rows show necessary status/time and task entry actions, but do
+// not render event counts or prefetch task messages for a count.
 
 interface IssueAgentHeaderChipProps {
   issueId: string;
@@ -46,20 +43,14 @@ interface IssueAgentHeaderChipProps {
 export const IssueAgentHeaderChip = memo(function IssueAgentHeaderChip({
   issueId,
 }: IssueAgentHeaderChipProps) {
-  // Same query options as ExecutionLogSection so both observe one cache entry.
-  const { data: tasks = [] } = useQuery({
-    queryKey: issueKeys.tasks(issueId),
-    queryFn: () => api.listTasksByIssue(issueId),
-    staleTime: 30_000,
-    refetchOnWindowFocus: true,
-  });
+  const wsId = useWorkspaceId();
+  const { data: snapshot = [] } = useQuery(agentTaskSnapshotOptions(wsId));
 
   const { running, queued } = useMemo(() => {
     const running: AgentTask[] = [];
     const queued: AgentTask[] = [];
-    // The list is already issue-scoped by the endpoint, so only the status
-    // split matters here.
-    for (const task of tasks) {
+    for (const task of snapshot) {
+      if (task.issue_id !== issueId) continue;
       if (task.status === "running") running.push(task);
       else if (
         task.status === "queued" ||
@@ -72,7 +63,7 @@ export const IssueAgentHeaderChip = memo(function IssueAgentHeaderChip({
       // Terminal statuses are the execution log's story, not the live chip's.
     }
     return { running, queued };
-  }, [tasks]);
+  }, [snapshot, issueId]);
 
   // No active work → render nothing.
   if (running.length === 0 && queued.length === 0) return null;
@@ -115,18 +106,7 @@ function ActiveChip({ issueId, running, queued }: ActiveChipProps) {
   return (
     <div className="flex items-center gap-1">
       <Popover>
-        {/* Hover opens the card so the live activity reads as a glanceable
-            status surface, not a click target. In Base UI the hover config
-            lives on the Trigger (a popover can have multiple triggers), not
-            the Root. The trigger stays a real button, so click and keyboard
-            (Enter/Space) still toggle it for touch and a11y. A short open
-            delay avoids flicker when the pointer merely passes over the chip;
-            the close delay keeps it open while the pointer travels across the
-            hover bridge into the interactive rows. */}
         <PopoverTrigger
-          openOnHover
-          delay={150}
-          closeDelay={200}
           render={
             <button
               type="button"
@@ -145,7 +125,7 @@ function ActiveChip({ issueId, running, queued }: ActiveChipProps) {
         >
           <AgentAvatarStack
             agentIds={agentIds}
-            size="sm"
+            size={18}
             max={3}
             opacity={anyRunning ? "full" : "half"}
           />

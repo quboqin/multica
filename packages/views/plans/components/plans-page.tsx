@@ -367,7 +367,6 @@ export function PlansPage() {
           <div className="space-y-5">
             <div className="flex flex-wrap items-center gap-2">
               <Select
-                items={[]}
                 value={statusFilter}
                 onValueChange={(value) => {
                   setStatusFilter(value as PlanStatusFilter);
@@ -388,7 +387,6 @@ export function PlansPage() {
                 </SelectContent>
               </Select>
               <Select
-                items={[]}
                 value={selectedMilestoneVisible ? selectedMilestoneId! : ALL_PLANS}
                 onValueChange={(value) => setSelectedMilestoneId(value === ALL_PLANS ? null : value)}
               >

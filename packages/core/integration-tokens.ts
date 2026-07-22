@@ -14,5 +14,8 @@ export function integrationTokenEnvKey(key: string): string {
 export function integrationTokenPlaceholder(key: string): string {
   const envKey = integrationTokenEnvKey(key);
   if (!envKey) return "";
-  return "${" + (envKey.startsWith("MULTICA_INTEGRATION_") ? envKey : "MULTICA_INTEGRATION_" + envKey) + "}";
+  const name = envKey.startsWith("MULTICA_INTEGRATION_")
+    ? envKey
+    : "MULTICA_INTEGRATION_" + envKey;
+  return "${" + name + "}";
 }

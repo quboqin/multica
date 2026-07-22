@@ -101,6 +101,12 @@ services:
       HOSTNAME: "0.0.0.0"
     restart: unless-stopped
 
+  crawler-worker:
+    build:
+      context: .
+      dockerfile: services/crawler-worker/Dockerfile
+    image: multica-crawler-worker:local
+
 volumes:
   pgdata:
   backend_uploads:

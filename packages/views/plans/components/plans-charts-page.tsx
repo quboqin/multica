@@ -159,7 +159,7 @@ function LabelProgressChart({
                 <span className="truncate text-sm font-semibold">{row.name}</span>
               </div>
               <div className="mt-1 text-xs text-muted-foreground">
-                {projectCountLabel(row.projectCount)} ? {issueCountLabel(row.done, row.total)}
+                {projectCountLabel(row.projectCount)} · {issueCountLabel(row.done, row.total)}
               </div>
             </div>
             <div className="shrink-0 text-right">
@@ -343,7 +343,6 @@ export function PlansChartsPage() {
           <div className="space-y-5">
             <div className="flex flex-wrap items-center gap-2">
               <Select
-                items={[]}
                 value={statusFilter}
                 onValueChange={(value) => {
                   setStatusFilter(value as PlanStatusFilter);
@@ -364,7 +363,6 @@ export function PlansChartsPage() {
                 </SelectContent>
               </Select>
               <Select
-                items={[]}
                 value={selectedMilestoneVisible ? selectedMilestoneId! : ALL_PLANS}
                 onValueChange={(value) => setSelectedMilestoneId(value === ALL_PLANS ? null : value)}
               >

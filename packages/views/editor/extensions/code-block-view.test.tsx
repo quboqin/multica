@@ -58,14 +58,17 @@ describe("CodeBlockView — html language toggle", () => {
     vi.useRealTimers();
   });
 
-  it("defaults to preview view: renders an iframe with sandbox='allow-scripts' and keeps the <pre> mounted (hidden)", () => {
+  it("defaults to preview view: renders an iframe with the HTML preview sandbox and keeps the <pre> mounted (hidden)", () => {
     render(<CodeBlockView {...makeProps("html", "<p>hello</p>")} />);
     act(() => {
       vi.advanceTimersByTime(250);
     });
     const frame = document.querySelector("iframe");
     expect(frame).toBeTruthy();
-    expect(frame?.getAttribute("sandbox")).toBe("allow-scripts");
+    expect(frame?.getAttribute("sandbox")).toBe(
+      "allow-scripts allow-popups allow-popups-to-escape-sandbox",
+    );
+    expect(frame?.getAttribute("sandbox")).not.toContain("allow-same-origin");
     // NodeViewContent (and its enclosing <pre>) MUST remain mounted —
     // unmounting would break Tiptap's bindings and prevent editing.
     const nvc = screen.getByTestId("nvc");
