@@ -2,7 +2,10 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  appGrowingAppMaterialListVariables,
+  appGrowingGraphQLDateWindow,
   appGrowingMaterialURL,
+  appGrowingSearchAppVariables,
   extractAppGrowingMaterials,
 } from "./index.mjs";
 
@@ -128,4 +131,91 @@ test("applies material-search filters on competitor URLs", () => {
   assert.equal(parsed.searchParams.get("page"), "2");
   assert.equal(parsed.searchParams.get("area"), "ID");
   assert.equal(parsed.searchParams.get("platform"), "2");
+});
+
+
+test("builds AppGrowing GraphQL material-list variables from relative date ranges", () => {
+  const now = new Date("2026-07-22T12:34:56Z");
+
+  assert.deepEqual(appGrowingGraphQLDateWindow({ date_range: "-29,0" }, now), {
+    startDate: "2026-06-23",
+    endDate: "2026-07-22",
+  });
+
+  const variables = appGrowingAppMaterialListVariables(
+    { purpose: 2, date_range: "-29,0", order: "_score_desc" },
+    "brand-123",
+    2,
+    now,
+  );
+
+  assert.deepEqual(variables, {
+    purpose: 2,
+    startDate: "2026-06-23",
+    endDate: "2026-07-22",
+    field: "all",
+    order: "impression_inc_2y_desc",
+    page: 2,
+    accurateSearch: 1,
+    appBrand: "brand-123",
+  });
+});
+
+test("builds AppGrowing searchApp variables for competitor brand lookup", () => {
+  assert.deepEqual(appGrowingSearchAppVariables("Kredit Pintar", { purpose: 2 }), {
+    purpose: 2,
+    keyword: "Kredit Pintar",
+    accurateSearch: 1,
+    page: 1,
+    hadAdvert: 1,
+  });
+});
+
+test("extracts AppGrowing materials from detailed appMaterialList GraphQL results", () => {
+  const materials = extractAppGrowingMaterials({
+    data: {
+      materialList: {
+        total: 1,
+        limit: 20,
+        data: [
+          {
+            material: {
+              id: "material-detail-1",
+              duration: 35,
+              impression_inc_2y: "12M",
+              creative: {
+                slogan: "Pinjaman cepat cair",
+                resource: {
+                  width: 720,
+                  height: 1280,
+                  format: "mp4",
+                  path: "https://cdn.example.com/detail.mp4",
+                  poster: "//cdn.example.com/detail-poster.jpg",
+                },
+              },
+              campaign: {
+                id: "brand-1",
+                name: "Kredit Pintar",
+              },
+              platform: [
+                { id: 2, name: "iOS" },
+              ],
+              area: [
+                { cc: "ID", name: "印度尼西亚" },
+              ],
+            },
+          },
+        ],
+      },
+    },
+  });
+
+  assert.equal(materials.length, 1);
+  assert.equal(materials[0].material_id, "material-detail-1");
+  assert.equal(materials[0].title, "Pinjaman cepat cair");
+  assert.equal(materials[0].duration_days, 35);
+  assert.equal(materials[0].impression_estimate, 12_000_000);
+  assert.equal(materials[0].asset_type, "video");
+  assert.equal(materials[0].resource_url, "https://cdn.example.com/detail.mp4");
+  assert.equal(materials[0].poster_url, "https://cdn.example.com/detail-poster.jpg");
 });

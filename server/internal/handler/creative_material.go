@@ -433,6 +433,10 @@ RETURNING id::text
 	summary := creativeImportSummary{RunID: runID, TotalCount: len(in.Materials)}
 	for _, material := range in.Materials {
 		material = normalizeCreativeMaterialInput(material)
+		if !creativeMaterialHasUsableAsset(material) {
+			summary.SkippedCount++
+			continue
+		}
 		dedupeKey := creativeMaterialDedupeKey(material)
 		if dedupeKey == "" {
 			summary.SkippedCount++
@@ -1591,6 +1595,10 @@ func normalizeCreativeAssetType(assetType string) string {
 	}
 }
 
+func creativeMaterialHasUsableAsset(in creativeMaterialInput) bool {
+	return firstNonEmpty(in.PreviewURL, in.ResourceURL, in.PosterURL) != ""
+}
+
 func creativeMaterialDedupeKey(in creativeMaterialInput) string {
 	if strings.TrimSpace(in.DedupeKey) != "" {
 		return strings.TrimSpace(in.DedupeKey)
@@ -1785,6 +1793,9 @@ func creativeMaterialInputFromMap(obj map[string]any) (creativeMaterialInput, bo
 	}
 	input = normalizeCreativeMaterialInput(input)
 	if input.ExternalID == "" && input.PreviewURL == "" && input.ResourceURL == "" && input.PosterURL == "" && input.Title == "" {
+		return creativeMaterialInput{}, false
+	}
+	if !creativeMaterialHasUsableAsset(input) {
 		return creativeMaterialInput{}, false
 	}
 	return input, true

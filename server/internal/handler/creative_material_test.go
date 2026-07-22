@@ -254,6 +254,25 @@ func TestCreativeMaterialsFromCrawlRawSkipsAppGrowingPageSnapshotsWhenExplicitRe
 	}
 }
 
+func TestCreativeMaterialsFromCrawlRawSkipsExplicitMaterialsWithoutUsableAsset(t *testing.T) {
+	raw := json.RawMessage(`{
+		"connector_id": "appgrowing",
+		"capability": "material_search",
+		"selected_materials": [
+			{
+				"material_id": "empty-material-1",
+				"competitor": "Easycash",
+				"title": "Empty AppGrowing card",
+				"asset_type": "image"
+			}
+		]
+	}`)
+
+	if got := creativeMaterialsFromCrawlRaw(raw); len(got) != 0 {
+		t.Fatalf("materials length = %d, want 0; first = %#v", len(got), got[0])
+	}
+}
+
 func TestCreativeMaterialsFromCrawlRawUsesExplicitSelectedMaterials(t *testing.T) {
 	raw := json.RawMessage(`{
 		"connector_id": "appgrowing",
