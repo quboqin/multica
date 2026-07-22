@@ -200,21 +200,24 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 	origins := allowedOrigins()
 
 	signupConfig := handler.Config{
-		AllowSignup:              os.Getenv("ALLOW_SIGNUP") != "false",
-		AllowedEmails:            splitAndTrim(os.Getenv("ALLOWED_EMAILS")),
-		AllowedEmailDomains:      splitAndTrim(os.Getenv("ALLOWED_EMAIL_DOMAINS")),
-		DisableWorkspaceCreation: os.Getenv("DISABLE_WORKSPACE_CREATION") == "true",
-		PublicURL:                strings.TrimRight(strings.TrimSpace(os.Getenv("MULTICA_PUBLIC_URL")), "/"),
-		TrustedProxies:           parseTrustedProxies(os.Getenv("MULTICA_TRUSTED_PROXIES")),
-		CloudRuntimeFleetURL:     cloudRuntimeFleetURLFromEnv(),
-		CloudRuntimeFleetTimeout: envDuration("MULTICA_CLOUD_FLEET_TIMEOUT", 35*time.Second),
-		AttachmentDownloadMode:   os.Getenv("ATTACHMENT_DOWNLOAD_MODE"),
-		AttachmentDownloadURLTTL: envDuration("ATTACHMENT_DOWNLOAD_URL_TTL", 30*time.Minute),
-		AttachmentFrameAncestors: origins,
-		LLMAPIKey:                strings.TrimSpace(os.Getenv("MULTICA_LLM_API_KEY")),
-		LLMBaseURL:               strings.TrimSpace(os.Getenv("MULTICA_LLM_BASE_URL")),
-		LLMDefaultModel:          strings.TrimSpace(os.Getenv("MULTICA_LLM_DEFAULT_MODEL")),
-		ServerVersion:            normalizeServerVersion(version),
+		AllowSignup:               os.Getenv("ALLOW_SIGNUP") != "false",
+		AllowedEmails:             splitAndTrim(os.Getenv("ALLOWED_EMAILS")),
+		AllowedEmailDomains:       splitAndTrim(os.Getenv("ALLOWED_EMAIL_DOMAINS")),
+		DisableWorkspaceCreation:  os.Getenv("DISABLE_WORKSPACE_CREATION") == "true",
+		PublicURL:                 strings.TrimRight(strings.TrimSpace(os.Getenv("MULTICA_PUBLIC_URL")), "/"),
+		TrustedProxies:            parseTrustedProxies(os.Getenv("MULTICA_TRUSTED_PROXIES")),
+		CloudRuntimeFleetURL:      cloudRuntimeFleetURLFromEnv(),
+		CloudRuntimeFleetTimeout:  envDuration("MULTICA_CLOUD_FLEET_TIMEOUT", 35*time.Second),
+		AttachmentDownloadMode:    os.Getenv("ATTACHMENT_DOWNLOAD_MODE"),
+		AttachmentDownloadURLTTL:  envDuration("ATTACHMENT_DOWNLOAD_URL_TTL", 30*time.Minute),
+		AttachmentFrameAncestors:  origins,
+		LLMAPIKey:                 strings.TrimSpace(os.Getenv("MULTICA_LLM_API_KEY")),
+		LLMBaseURL:                strings.TrimSpace(os.Getenv("MULTICA_LLM_BASE_URL")),
+		LLMDefaultModel:           strings.TrimSpace(os.Getenv("MULTICA_LLM_DEFAULT_MODEL")),
+		ServerVersion:             normalizeServerVersion(version),
+		LarkLoginJoinBotWorkspace: strings.TrimSpace(os.Getenv("MULTICA_LARK_LOGIN_JOIN_BOT_WORKSPACE")) != "false",
+		LarkLoginDefaultWorkspace: strings.TrimSpace(os.Getenv("MULTICA_LARK_LOGIN_DEFAULT_WORKSPACE")),
+		LarkLoginStateSecret:      strings.TrimSpace(os.Getenv("MULTICA_LARK_LOGIN_STATE_SECRET")),
 	}
 	h := handler.New(queries, pool, hub, bus, emailSvc, store, cfSigner, analyticsClient, signupConfig, daemonHub)
 	h.Metrics = opts.BusinessMetrics
@@ -726,6 +729,8 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 	r.With(authRL).Post("/auth/send-code", h.SendCode)
 	r.With(authVerifyRL).Post("/auth/verify-code", h.VerifyCode)
 	r.With(authRL).Post("/auth/google", h.GoogleLogin)
+	r.With(authRL).Post("/auth/lark/state", h.CreateLarkLoginState)
+	r.With(authVerifyRL).Post("/auth/lark", h.LarkLogin)
 	r.Post("/auth/logout", h.Logout)
 
 	// Public API
@@ -1081,6 +1086,28 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 			// Task messages (user-facing, not daemon auth)
 			r.Get("/api/tasks/{taskId}/messages", h.ListTaskMessagesByUser)
 
+			// Milestones back operating-plan style project groupings. Projects
+			// may optionally attach to one via project.milestone_id.
+			r.Route("/api/milestones", func(r chi.Router) {
+				r.Get("/", h.ListMilestones)
+				r.Post("/", h.CreateMilestone)
+				r.Route("/{id}", func(r chi.Router) {
+					r.Get("/", h.GetMilestone)
+					r.Put("/", h.UpdateMilestone)
+					r.Delete("/", h.DeleteMilestone)
+				})
+			})
+
+			r.Route("/api/kpi-metrics", func(r chi.Router) {
+				r.Get("/", h.ListKpiMetrics)
+				r.Post("/", h.CreateKpiMetric)
+				r.Route("/{id}", func(r chi.Router) {
+					r.Get("/", h.GetKpiMetric)
+					r.Put("/", h.UpdateKpiMetric)
+					r.Delete("/", h.DeleteKpiMetric)
+				})
+			})
+
 			// Custom issue properties (definitions; values live under /api/issues/{id}/properties)
 			r.Route("/api/properties", func(r chi.Router) {
 				r.Get("/", h.ListProperties)
@@ -1115,6 +1142,9 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Post("/resources", h.CreateProjectResource)
 					r.Put("/resources/{resourceId}", h.UpdateProjectResource)
 					r.Delete("/resources/{resourceId}", h.DeleteProjectResource)
+					r.Get("/labels", h.ListLabelsForProject)
+					r.Post("/labels", h.AttachLabelToProject)
+					r.Delete("/labels/{labelId}", h.DetachLabelFromProject)
 				})
 			})
 

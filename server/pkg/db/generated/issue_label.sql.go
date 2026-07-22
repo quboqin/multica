@@ -70,6 +70,34 @@ func (q *Queries) AttachLabelToIssue(ctx context.Context, arg AttachLabelToIssue
 	return err
 }
 
+const attachLabelToProject = `-- name: AttachLabelToProject :exec
+INSERT INTO project_to_label (project_id, label_id)
+SELECT $1::uuid, $2::uuid
+WHERE EXISTS (
+    SELECT 1 FROM project p
+    WHERE p.id = $1::uuid
+      AND p.workspace_id = $3::uuid
+)
+AND EXISTS (
+    SELECT 1 FROM issue_label l
+    WHERE l.id = $2::uuid
+      AND l.workspace_id = $3::uuid
+      AND l.resource_type = 'project'
+)
+ON CONFLICT DO NOTHING
+`
+
+type AttachLabelToProjectParams struct {
+	ProjectID   pgtype.UUID `json:"project_id"`
+	LabelID     pgtype.UUID `json:"label_id"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+}
+
+func (q *Queries) AttachLabelToProject(ctx context.Context, arg AttachLabelToProjectParams) error {
+	_, err := q.db.Exec(ctx, attachLabelToProject, arg.ProjectID, arg.LabelID, arg.WorkspaceID)
+	return err
+}
+
 const attachLabelToSkill = `-- name: AttachLabelToSkill :exec
 INSERT INTO skill_to_label (skill_id, label_id)
 SELECT $1::uuid, $2::uuid
@@ -268,6 +296,28 @@ func (q *Queries) DetachLabelFromIssue(ctx context.Context, arg DetachLabelFromI
 	return err
 }
 
+const detachLabelFromProject = `-- name: DetachLabelFromProject :exec
+DELETE FROM project_to_label
+WHERE project_id = $1::uuid
+  AND label_id = $2::uuid
+  AND EXISTS (
+      SELECT 1 FROM project p
+      WHERE p.id = $1::uuid
+        AND p.workspace_id = $3::uuid
+  )
+`
+
+type DetachLabelFromProjectParams struct {
+	ProjectID   pgtype.UUID `json:"project_id"`
+	LabelID     pgtype.UUID `json:"label_id"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+}
+
+func (q *Queries) DetachLabelFromProject(ctx context.Context, arg DetachLabelFromProjectParams) error {
+	_, err := q.db.Exec(ctx, detachLabelFromProject, arg.ProjectID, arg.LabelID, arg.WorkspaceID)
+	return err
+}
+
 const detachLabelFromSkill = `-- name: DetachLabelFromSkill :exec
 DELETE FROM skill_to_label
 WHERE skill_id = $1::uuid
@@ -322,6 +372,7 @@ SELECT l.id, l.workspace_id, l.name, l.color, l.created_at, l.updated_at, l.reso
         WHEN 'issue' THEN (SELECT COUNT(*) FROM issue_to_label x WHERE x.label_id = l.id)
         WHEN 'agent' THEN (SELECT COUNT(*) FROM agent_to_label x WHERE x.label_id = l.id)
         WHEN 'skill' THEN (SELECT COUNT(*) FROM skill_to_label x WHERE x.label_id = l.id)
+        WHEN 'project' THEN (SELECT COUNT(*) FROM project_to_label x WHERE x.label_id = l.id)
         ELSE 0
     END::bigint AS usage_count
 FROM issue_label l
@@ -440,6 +491,50 @@ type ListLabelsByIssueParams struct {
 // that passes the wrong workspace gets an empty list rather than leaking labels.
 func (q *Queries) ListLabelsByIssue(ctx context.Context, arg ListLabelsByIssueParams) ([]IssueLabel, error) {
 	rows, err := q.db.Query(ctx, listLabelsByIssue, arg.IssueID, arg.WorkspaceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []IssueLabel{}
+	for rows.Next() {
+		var i IssueLabel
+		if err := rows.Scan(
+			&i.ID,
+			&i.WorkspaceID,
+			&i.Name,
+			&i.Color,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.ResourceType,
+			&i.Description,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listLabelsByProject = `-- name: ListLabelsByProject :many
+SELECT l.id, l.workspace_id, l.name, l.color, l.created_at, l.updated_at, l.resource_type, l.description
+FROM issue_label l
+JOIN project_to_label ptl ON ptl.label_id = l.id
+WHERE ptl.project_id = $1::uuid
+  AND l.workspace_id = $2::uuid
+  AND l.resource_type = 'project'
+ORDER BY LOWER(l.name) ASC
+`
+
+type ListLabelsByProjectParams struct {
+	ProjectID   pgtype.UUID `json:"project_id"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+}
+
+func (q *Queries) ListLabelsByProject(ctx context.Context, arg ListLabelsByProjectParams) ([]IssueLabel, error) {
+	rows, err := q.db.Query(ctx, listLabelsByProject, arg.ProjectID, arg.WorkspaceID)
 	if err != nil {
 		return nil, err
 	}
@@ -609,6 +704,63 @@ func (q *Queries) ListLabelsForIssues(ctx context.Context, arg ListLabelsForIssu
 		var i ListLabelsForIssuesRow
 		if err := rows.Scan(
 			&i.IssueID,
+			&i.ID,
+			&i.WorkspaceID,
+			&i.Name,
+			&i.Color,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.ResourceType,
+			&i.Description,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listLabelsForProjects = `-- name: ListLabelsForProjects :many
+SELECT ptl.project_id, l.id, l.workspace_id, l.name, l.color, l.created_at, l.updated_at, l.resource_type, l.description
+FROM issue_label l
+JOIN project_to_label ptl ON ptl.label_id = l.id
+WHERE ptl.project_id = ANY($1::uuid[])
+  AND l.workspace_id = $2::uuid
+  AND l.resource_type = 'project'
+ORDER BY ptl.project_id, LOWER(l.name) ASC
+`
+
+type ListLabelsForProjectsParams struct {
+	ProjectIds  []pgtype.UUID `json:"project_ids"`
+	WorkspaceID pgtype.UUID   `json:"workspace_id"`
+}
+
+type ListLabelsForProjectsRow struct {
+	ProjectID    pgtype.UUID        `json:"project_id"`
+	ID           pgtype.UUID        `json:"id"`
+	WorkspaceID  pgtype.UUID        `json:"workspace_id"`
+	Name         string             `json:"name"`
+	Color        string             `json:"color"`
+	CreatedAt    pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt    pgtype.Timestamptz `json:"updated_at"`
+	ResourceType string             `json:"resource_type"`
+	Description  string             `json:"description"`
+}
+
+func (q *Queries) ListLabelsForProjects(ctx context.Context, arg ListLabelsForProjectsParams) ([]ListLabelsForProjectsRow, error) {
+	rows, err := q.db.Query(ctx, listLabelsForProjects, arg.ProjectIds, arg.WorkspaceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListLabelsForProjectsRow{}
+	for rows.Next() {
+		var i ListLabelsForProjectsRow
+		if err := rows.Scan(
+			&i.ProjectID,
 			&i.ID,
 			&i.WorkspaceID,
 			&i.Name,

@@ -59,6 +59,11 @@ type GetUserBindingByOpenIDParams struct {
 	ChannelUserID  string
 }
 
+type GetUserBindingByUnionIDParams struct {
+	InstallationID pgtype.UUID
+	UnionID        string
+}
+
 // CreateUserBindingParams binds a workspace member to a channel-native user id.
 type CreateUserBindingParams struct {
 	WorkspaceID    pgtype.UUID

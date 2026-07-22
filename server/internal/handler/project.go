@@ -29,14 +29,16 @@ type ProjectResponse struct {
 	Priority    string  `json:"priority"`
 	LeadType    *string `json:"lead_type"`
 	LeadID      *string `json:"lead_id"`
+	MilestoneID *string `json:"milestone_id"`
 	// StartDate / DueDate are calendar days ("YYYY-MM-DD"), no time-of-day or
 	// timezone — same contract as issue.start_date / issue.due_date.
-	StartDate  *string `json:"start_date"`
-	DueDate    *string `json:"due_date"`
-	CreatedAt  string  `json:"created_at"`
-	UpdatedAt  string  `json:"updated_at"`
-	IssueCount int64   `json:"issue_count"`
-	DoneCount  int64   `json:"done_count"`
+	StartDate  *string          `json:"start_date"`
+	DueDate    *string          `json:"due_date"`
+	CreatedAt  string           `json:"created_at"`
+	UpdatedAt  string           `json:"updated_at"`
+	IssueCount int64            `json:"issue_count"`
+	DoneCount  int64            `json:"done_count"`
+	Labels     *[]LabelResponse `json:"labels,omitempty"`
 	// ResourceCount is a breadcrumb pointing at the sub-collection at
 	// /api/projects/{id}/resources. Resources themselves stay out of this
 	// payload to keep parent metadata and child collections separate; clients
@@ -55,6 +57,7 @@ func projectToResponse(p db.Project) ProjectResponse {
 		Priority:    p.Priority,
 		LeadType:    textToPtr(p.LeadType),
 		LeadID:      uuidToPtr(p.LeadID),
+		MilestoneID: uuidToPtr(p.MilestoneID),
 		StartDate:   dateToPtr(p.StartDate),
 		DueDate:     dateToPtr(p.DueDate),
 		CreatedAt:   timestampToString(p.CreatedAt),
@@ -78,6 +81,36 @@ func (h *Handler) loadProjectResourceCount(ctx context.Context, projectID pgtype
 	return rows[0].ResourceCount
 }
 
+func (h *Handler) labelsByProject(ctx context.Context, wsUUID pgtype.UUID, projectIDs []pgtype.UUID) map[string][]LabelResponse {
+	if len(projectIDs) == 0 {
+		return map[string][]LabelResponse{}
+	}
+	rows, err := h.Queries.ListLabelsForProjects(ctx, db.ListLabelsForProjectsParams{
+		ProjectIds:  projectIDs,
+		WorkspaceID: wsUUID,
+	})
+	if err != nil {
+		slog.Warn("ListLabelsForProjects failed", "error", err)
+		return map[string][]LabelResponse{}
+	}
+	out := make(map[string][]LabelResponse)
+	for _, row := range rows {
+		label := LabelResponse{
+			ID:           uuidToString(row.ID),
+			WorkspaceID:  uuidToString(row.WorkspaceID),
+			ResourceType: row.ResourceType,
+			Name:         row.Name,
+			Description:  row.Description,
+			Color:        row.Color,
+			CreatedAt:    timestampToString(row.CreatedAt),
+			UpdatedAt:    timestampToString(row.UpdatedAt),
+		}
+		key := uuidToString(row.ProjectID)
+		out[key] = append(out[key], label)
+	}
+	return out
+}
+
 type CreateProjectRequest struct {
 	Title       string                                `json:"title"`
 	Description *string                               `json:"description"`
@@ -88,6 +121,7 @@ type CreateProjectRequest struct {
 	LeadID      *string                               `json:"lead_id"`
 	StartDate   *string                               `json:"start_date"`
 	DueDate     *string                               `json:"due_date"`
+	MilestoneID *string                               `json:"milestone_id"`
 	Resources   []CreateProjectResourceRequestPayload `json:"resources,omitempty"`
 }
 
@@ -111,6 +145,7 @@ type UpdateProjectRequest struct {
 	LeadID      *string `json:"lead_id"`
 	StartDate   *string `json:"start_date"`
 	DueDate     *string `json:"due_date"`
+	MilestoneID *string `json:"milestone_id"`
 }
 
 func (h *Handler) ListProjects(w http.ResponseWriter, r *http.Request) {
@@ -127,10 +162,19 @@ func (h *Handler) ListProjects(w http.ResponseWriter, r *http.Request) {
 	if p := r.URL.Query().Get("priority"); p != "" {
 		priorityFilter = pgtype.Text{String: p, Valid: true}
 	}
+	var milestoneFilter pgtype.UUID
+	if m := r.URL.Query().Get("milestone_id"); m != "" {
+		var ok bool
+		milestoneFilter, ok = parseUUIDOrBadRequest(w, m, "milestone_id")
+		if !ok {
+			return
+		}
+	}
 	projects, err := h.Queries.ListProjects(r.Context(), db.ListProjectsParams{
 		WorkspaceID: wsUUID,
 		Status:      statusFilter,
 		Priority:    priorityFilter,
+		MilestoneID: milestoneFilter,
 	})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list projects")
@@ -140,11 +184,13 @@ func (h *Handler) ListProjects(w http.ResponseWriter, r *http.Request) {
 	// Batch-fetch issue stats and resource counts for all projects
 	statsMap := make(map[string]db.GetProjectIssueStatsRow)
 	resourceCountMap := make(map[string]int64)
+	labelsMap := map[string][]LabelResponse{}
 	if len(projects) > 0 {
 		projectIDs := make([]pgtype.UUID, len(projects))
 		for i, p := range projects {
 			projectIDs[i] = p.ID
 		}
+		labelsMap = h.labelsByProject(r.Context(), wsUUID, projectIDs)
 		stats, err := h.Queries.GetProjectIssueStats(r.Context(), projectIDs)
 		if err == nil {
 			for _, s := range stats {
@@ -166,6 +212,11 @@ func (h *Handler) ListProjects(w http.ResponseWriter, r *http.Request) {
 			resp[i].IssueCount = s.TotalCount
 			resp[i].DoneCount = s.DoneCount
 		}
+		labels := labelsMap[resp[i].ID]
+		if labels == nil {
+			labels = []LabelResponse{}
+		}
+		resp[i].Labels = &labels
 		resp[i].ResourceCount = resourceCountMap[resp[i].ID]
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"projects": resp, "total": len(resp)})
@@ -192,6 +243,12 @@ func (h *Handler) GetProject(w http.ResponseWriter, r *http.Request) {
 	resp := projectToResponse(project)
 	resp.IssueCount, resp.DoneCount = h.loadProjectIssueStats(r.Context(), project.ID)
 	resp.ResourceCount = h.loadProjectResourceCount(r.Context(), project.ID)
+	labelsMap := h.labelsByProject(r.Context(), wsUUID, []pgtype.UUID{project.ID})
+	labels := labelsMap[resp.ID]
+	if labels == nil {
+		labels = []LabelResponse{}
+	}
+	resp.Labels = &labels
 	writeJSON(w, http.StatusOK, resp)
 }
 
@@ -296,6 +353,14 @@ func (h *Handler) CreateProject(w http.ResponseWriter, r *http.Request) {
 		}
 		dueDate = d
 	}
+	var milestoneID pgtype.UUID
+	if req.MilestoneID != nil && *req.MilestoneID != "" {
+		id, ok := parseUUIDOrBadRequest(w, *req.MilestoneID, "milestone_id")
+		if !ok {
+			return
+		}
+		milestoneID = id
+	}
 
 	// Pre-validate every resource payload before opening a transaction so an
 	// invalid ref produces a clean 400 with no DB work. For local_directory we
@@ -344,6 +409,7 @@ func (h *Handler) CreateProject(w http.ResponseWriter, r *http.Request) {
 		Priority:    priority,
 		StartDate:   startDate,
 		DueDate:     dueDate,
+		MilestoneID: milestoneID,
 	}
 
 	// Without resources, keep the simple non-tx path.
@@ -477,6 +543,7 @@ func (h *Handler) UpdateProject(w http.ResponseWriter, r *http.Request) {
 		LeadID:      prevProject.LeadID,
 		StartDate:   prevProject.StartDate,
 		DueDate:     prevProject.DueDate,
+		MilestoneID: prevProject.MilestoneID,
 	}
 	if req.Title != nil {
 		params.Title = pgtype.Text{String: *req.Title, Valid: true}
@@ -551,6 +618,17 @@ func (h *Handler) UpdateProject(w http.ResponseWriter, r *http.Request) {
 			params.DueDate = pgtype.Date{Valid: false} // explicit null = clear date
 		}
 	}
+	if _, ok := rawFields["milestone_id"]; ok {
+		if req.MilestoneID != nil && *req.MilestoneID != "" {
+			milestoneUUID, ok := parseUUIDOrBadRequest(w, *req.MilestoneID, "milestone_id")
+			if !ok {
+				return
+			}
+			params.MilestoneID = milestoneUUID
+		} else {
+			params.MilestoneID = pgtype.UUID{Valid: false}
+		}
+	}
 	project, err := h.Queries.UpdateProject(r.Context(), params)
 	if err != nil {
 		h.writeProjectWriteError(w, r, err, "update")
@@ -559,6 +637,12 @@ func (h *Handler) UpdateProject(w http.ResponseWriter, r *http.Request) {
 	resp := projectToResponse(project)
 	resp.IssueCount, resp.DoneCount = h.loadProjectIssueStats(r.Context(), project.ID)
 	resp.ResourceCount = h.loadProjectResourceCount(r.Context(), project.ID)
+	labelsMap := h.labelsByProject(r.Context(), wsUUID, []pgtype.UUID{project.ID})
+	labels := labelsMap[resp.ID]
+	if labels == nil {
+		labels = []LabelResponse{}
+	}
+	resp.Labels = &labels
 	h.publish(protocol.EventProjectUpdated, workspaceID, "member", userID, map[string]any{"project": resp})
 	writeJSON(w, http.StatusOK, resp)
 }
@@ -715,7 +799,7 @@ func buildProjectSearchQuery(phrase string, terms []string, includeClosed bool) 
 
 	query := fmt.Sprintf(`SELECT p.id, p.workspace_id, p.title, p.description, p.icon,
 		p.status, p.priority, p.lead_type, p.lead_id,
-		p.start_date, p.due_date,
+		p.start_date, p.due_date, p.milestone_id,
 		p.created_at, p.updated_at,
 		COUNT(*) OVER() AS total_count,
 		%s AS match_source
@@ -795,6 +879,7 @@ func (h *Handler) SearchProjects(w http.ResponseWriter, r *http.Request) {
 				&row.project.LeadID,
 				&row.project.StartDate,
 				&row.project.DueDate,
+				&row.project.MilestoneID,
 				&row.project.CreatedAt,
 				&row.project.UpdatedAt,
 				&row.totalCount,

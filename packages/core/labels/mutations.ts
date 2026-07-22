@@ -3,6 +3,7 @@ import { api } from "../api";
 import { labelKeys } from "./queries";
 import { useWorkspaceId } from "../hooks";
 import { issueKeys } from "../issues/queries";
+import { projectKeys } from "../projects/queries";
 import {
   invalidateIssueLabelDerivatives,
   onIssueLabelsChanged,
@@ -153,6 +154,36 @@ export function useDetachResourceLabel(
 
 function workspaceKeysForLabels(resourceType: "agent" | "skill", wsId: string) {
   return ["workspaces", wsId, resourceType === "agent" ? "agents" : "skills"] as const;
+}
+
+export function useAttachProjectLabel(projectId: string) {
+  const qc = useQueryClient();
+  const wsId = useWorkspaceId();
+  return useMutation({
+    mutationFn: (labelId: string) => api.attachProjectLabel(projectId, labelId),
+    onSuccess: (data: ResourceLabelsResponse) => {
+      qc.setQueryData(labelKeys.byProject(wsId, projectId), data);
+    },
+    onSettled: () => {
+      qc.invalidateQueries({ queryKey: labelKeys.all(wsId) });
+      qc.invalidateQueries({ queryKey: projectKeys.all(wsId) });
+    },
+  });
+}
+
+export function useDetachProjectLabel(projectId: string) {
+  const qc = useQueryClient();
+  const wsId = useWorkspaceId();
+  return useMutation({
+    mutationFn: (labelId: string) => api.detachProjectLabel(projectId, labelId),
+    onSuccess: (data: ResourceLabelsResponse) => {
+      qc.setQueryData(labelKeys.byProject(wsId, projectId), data);
+    },
+    onSettled: () => {
+      qc.invalidateQueries({ queryKey: labelKeys.all(wsId) });
+      qc.invalidateQueries({ queryKey: projectKeys.all(wsId) });
+    },
+  });
 }
 
 export function useAttachLabel(issueId: string) {

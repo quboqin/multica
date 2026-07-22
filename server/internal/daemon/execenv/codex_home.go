@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/pelletier/go-toml/v2"
@@ -30,9 +31,13 @@ var codexCopiedFiles = []string{
 }
 
 const (
-	codexModelsCacheFile        = "models_cache.json"
-	codexModelsCacheBindingFile = ".models_cache_config.sha256"
+	codexModelsCacheFile          = "models_cache.json"
+	codexModelsCacheBindingFile   = ".models_cache_config.sha256"
+	CodexStateWarmCacheDirName    = ".codex-state-cache"
+	codexStateWarmCacheMarkerFile = ".multica_codex_state_cache"
 )
+
+var codexStateWarmCacheLocks sync.Map
 
 // Files whose contents select the model provider/catalog used by Codex. The
 // task-local models cache is only reusable while this source configuration
@@ -89,6 +94,9 @@ type CodexHomeOptions struct {
 	// override that never lands in config.toml. See resolveWindowsSandboxState
 	// and MUL-4957.
 	CodexCustomArgs []string
+	// StateWarmCacheDir, when set, points at a workspace-scoped cache of
+	// Codex state SQLite files used to avoid per-task migration cold starts.
+	StateWarmCacheDir string
 }
 
 // prepareCodexHome is a thin wrapper around prepareCodexHomeWithOpts kept for
@@ -241,6 +249,12 @@ func prepareCodexHomeWithOpts(codexHome string, opts CodexHomeOptions, logger *s
 			}
 		}
 	}
+
+	if opts.StateWarmCacheDir != "" {
+		if err := seedCodexStateWarmCache(codexHome, opts.StateWarmCacheDir, logger); err != nil {
+			logger.Warn("execenv: codex-home state warm cache seed failed", "error", err)
+		}
+	}
 	// Drop `[[skills.config]]` entries inherited from the user's
 	// ~/.codex/config.toml. Codex Desktop writes plugin-backed skills with a
 	// `name` and no `path`, which the CLI's stricter TOML parser rejects with
@@ -314,6 +328,114 @@ func prepareCodexHomeWithOpts(codexHome string, opts CodexHomeOptions, logger *s
 	}
 
 	return nil
+}
+
+func CodexStateWarmCacheDir(workspacesRoot, workspaceID string) string {
+	if workspacesRoot == "" || workspaceID == "" {
+		return ""
+	}
+	return filepath.Join(workspacesRoot, workspaceID, CodexStateWarmCacheDirName)
+}
+
+func seedCodexStateWarmCache(codexHome, cacheDir string, logger *slog.Logger) error {
+	return withCodexStateWarmCacheLock(cacheDir, func() error {
+		return seedCodexStateWarmCacheLocked(codexHome, cacheDir, logger)
+	})
+}
+
+func seedCodexStateWarmCacheLocked(codexHome, cacheDir string, logger *slog.Logger) error {
+	if _, err := os.Stat(filepath.Join(cacheDir, codexStateWarmCacheMarkerFile)); err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("stat cache marker: %w", err)
+	}
+	entries, err := os.ReadDir(cacheDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("read cache dir: %w", err)
+	}
+	copied := 0
+	for _, entry := range entries {
+		name := entry.Name()
+		if entry.IsDir() || !isCodexStateFile(name) {
+			continue
+		}
+		src := filepath.Join(cacheDir, name)
+		dst := filepath.Join(codexHome, name)
+		if _, err := os.Lstat(dst); err == nil {
+			continue
+		}
+		if err := copyFile(src, dst); err != nil {
+			return fmt.Errorf("copy cached %s: %w", name, err)
+		}
+		copied++
+	}
+	if copied > 0 && logger != nil {
+		logger.Info("execenv: codex-home seeded state warm cache", "files", copied, "cache_dir", cacheDir)
+	}
+	return nil
+}
+
+func RefreshCodexStateWarmCache(codexHome, cacheDir string, logger *slog.Logger) error {
+	if cacheDir == "" {
+		return nil
+	}
+	return withCodexStateWarmCacheLock(cacheDir, func() error {
+		return refreshCodexStateWarmCacheLocked(codexHome, cacheDir, logger)
+	})
+}
+
+func refreshCodexStateWarmCacheLocked(codexHome, cacheDir string, logger *slog.Logger) error {
+	if err := os.MkdirAll(cacheDir, 0o755); err != nil {
+		return fmt.Errorf("create cache dir: %w", err)
+	}
+	if err := os.WriteFile(filepath.Join(cacheDir, codexStateWarmCacheMarkerFile), []byte("managed by multica\n"), 0o644); err != nil {
+		return fmt.Errorf("write cache marker: %w", err)
+	}
+	entries, err := os.ReadDir(codexHome)
+	if err != nil {
+		return fmt.Errorf("read codex home: %w", err)
+	}
+	copied := 0
+	for _, entry := range entries {
+		name := entry.Name()
+		if entry.IsDir() || !isCodexStateFile(name) {
+			continue
+		}
+		src := filepath.Join(codexHome, name)
+		dst := filepath.Join(cacheDir, name)
+		if err := replaceFileAtomically(src, dst); err != nil {
+			return fmt.Errorf("refresh cached %s: %w", name, err)
+		}
+		copied++
+	}
+	if copied > 0 && logger != nil {
+		logger.Info("execenv: codex state warm cache refreshed", "files", copied, "cache_dir", cacheDir)
+	}
+	return nil
+}
+
+func withCodexStateWarmCacheLock(cacheDir string, fn func() error) error {
+	if cacheDir == "" {
+		return fn()
+	}
+	value, _ := codexStateWarmCacheLocks.LoadOrStore(filepath.Clean(cacheDir), &sync.Mutex{})
+	mu := value.(*sync.Mutex)
+	mu.Lock()
+	defer mu.Unlock()
+	return fn()
+}
+
+func isCodexStateFile(name string) bool {
+	if !strings.HasPrefix(name, "state_") {
+		return false
+	}
+	return strings.HasSuffix(name, ".sqlite") ||
+		strings.HasSuffix(name, ".sqlite-wal") ||
+		strings.HasSuffix(name, ".sqlite-shm")
 }
 
 // resolveSharedCodexHome returns the path to the user's shared Codex home.
@@ -1233,5 +1355,61 @@ func copyFile(src, dst string) error {
 	if _, err := io.Copy(out, in); err != nil {
 		return fmt.Errorf("copy %s → %s: %w", src, dst, err)
 	}
+	return nil
+}
+
+func replaceFileAtomically(src, dst string) error {
+	if _, err := os.Stat(src); err != nil {
+		if os.IsNotExist(err) {
+			if removeErr := os.Remove(dst); removeErr != nil && !os.IsNotExist(removeErr) {
+				return fmt.Errorf("remove stale dst %s: %w", dst, removeErr)
+			}
+			return nil
+		}
+		return fmt.Errorf("stat src %s: %w", src, err)
+	}
+	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+		return fmt.Errorf("create dst dir %s: %w", filepath.Dir(dst), err)
+	}
+
+	tmp, err := os.CreateTemp(filepath.Dir(dst), filepath.Base(dst)+".tmp-*")
+	if err != nil {
+		return fmt.Errorf("create temp for %s: %w", dst, err)
+	}
+	tmpPath := tmp.Name()
+	cleanupTmp := true
+	defer func() {
+		if cleanupTmp {
+			_ = os.Remove(tmpPath)
+		}
+	}()
+
+	in, err := os.Open(src)
+	if err != nil {
+		_ = tmp.Close()
+		return fmt.Errorf("open %s: %w", src, err)
+	}
+	if _, err := io.Copy(tmp, in); err != nil {
+		_ = in.Close()
+		_ = tmp.Close()
+		return fmt.Errorf("copy %s -> %s: %w", src, tmpPath, err)
+	}
+	if err := in.Close(); err != nil {
+		_ = tmp.Close()
+		return fmt.Errorf("close %s: %w", src, err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("close temp %s: %w", tmpPath, err)
+	}
+
+	if err := os.Rename(tmpPath, dst); err != nil {
+		if removeErr := os.Remove(dst); removeErr != nil && !os.IsNotExist(removeErr) {
+			return fmt.Errorf("remove old dst %s before replace: %w", dst, removeErr)
+		}
+		if retryErr := os.Rename(tmpPath, dst); retryErr != nil {
+			return fmt.Errorf("replace %s: %w", dst, retryErr)
+		}
+	}
+	cleanupTmp = false
 	return nil
 }

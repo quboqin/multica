@@ -151,14 +151,15 @@ type Result struct {
 
 // Config configures a Backend instance.
 type Config struct {
-	ExecutablePath string            // path to CLI binary (claude, codebuddy, codex, copilot, opencode, openclaw, hermes, pi, cursor, kimi, kiro-cli, agy, qodercli, traecli, grok, qwen)
-	CLIVersion     string            // detected version paired with ExecutablePath; observation only, never used to choose behavior
-	Env            map[string]string // extra environment variables
-	Logger         *slog.Logger
-	TaskID         string
-	RuntimeID      string
-	DaemonVersion  string
-	CodexVersion   string
+	ExecutablePath         string            // path to CLI binary (claude, codebuddy, codex, copilot, opencode, openclaw, hermes, pi, cursor, kimi, kiro-cli, agy, qodercli, traecli, grok, qwen)
+	CLIVersion             string            // detected version paired with ExecutablePath; observation only, never used to choose behavior
+	Env                    map[string]string // extra environment variables
+	Logger                 *slog.Logger
+	TaskID                 string
+	RuntimeID              string
+	DaemonVersion          string
+	CodexVersion           string
+	OnCodexInitializedHome func(codexHome string)
 }
 
 // New creates a Backend for the given agent type.

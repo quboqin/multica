@@ -12,6 +12,8 @@ export const labelKeys = {
     [...labelKeys.all(wsId), "issue", issueId] as const,
   byResource: (wsId: string, resourceType: "agent" | "skill", resourceId: string) =>
     [...labelKeys.all(wsId), resourceType, resourceId] as const,
+  byProject: (wsId: string, projectId: string) =>
+    [...labelKeys.all(wsId), "project", projectId] as const,
 };
 
 export function labelListOptions(wsId: string, resourceType: LabelResourceType = "issue") {
@@ -41,5 +43,14 @@ export function issueLabelsOptions(wsId: string, issueId: string) {
     queryFn: () => api.listLabelsForIssue(issueId),
     select: (data) => data.labels,
     enabled: Boolean(issueId),
+  });
+}
+
+export function projectLabelsOptions(wsId: string, projectId: string) {
+  return queryOptions({
+    queryKey: labelKeys.byProject(wsId, projectId),
+    queryFn: () => api.listLabelsForProject(projectId),
+    select: (data) => data.labels,
+    enabled: Boolean(projectId),
   });
 }

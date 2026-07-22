@@ -3,6 +3,8 @@ import { cn } from "@multica/ui/lib/utils";
 
 export type ProjectIconSize = "sm" | "md" | "lg";
 
+export const DEFAULT_PROJECT_ICON = "🟢";
+
 export interface ProjectIconProps {
   project?: Pick<Project, "icon"> | null;
   size?: ProjectIconSize;
@@ -25,7 +27,7 @@ export function ProjectIcon({ project, size = "sm", className }: ProjectIconProp
         className,
       )}
     >
-      {project?.icon || "📁"}
+      {project?.icon || DEFAULT_PROJECT_ICON}
     </span>
   );
 }

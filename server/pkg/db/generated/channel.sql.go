@@ -820,6 +820,35 @@ func (q *Queries) GetChannelUserBindingByUserID(ctx context.Context, arg GetChan
 	return i, err
 }
 
+const getChannelUserBindingByInstallationAndConfigUnionID = `-- name: GetChannelUserBindingByInstallationAndConfigUnionID :one
+SELECT id, workspace_id, multica_user_id, installation_id, channel_type, channel_user_id, config, bound_at FROM channel_user_binding
+WHERE installation_id = $1
+  AND channel_type = $2
+  AND config ->> 'union_id' = $3::text
+`
+
+type GetChannelUserBindingByInstallationAndConfigUnionIDParams struct {
+	InstallationID pgtype.UUID `json:"installation_id"`
+	ChannelType    string      `json:"channel_type"`
+	UnionID        string      `json:"union_id"`
+}
+
+func (q *Queries) GetChannelUserBindingByInstallationAndConfigUnionID(ctx context.Context, arg GetChannelUserBindingByInstallationAndConfigUnionIDParams) (ChannelUserBinding, error) {
+	row := q.db.QueryRow(ctx, getChannelUserBindingByInstallationAndConfigUnionID, arg.InstallationID, arg.ChannelType, arg.UnionID)
+	var i ChannelUserBinding
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.MulticaUserID,
+		&i.InstallationID,
+		&i.ChannelType,
+		&i.ChannelUserID,
+		&i.Config,
+		&i.BoundAt,
+	)
+	return i, err
+}
+
 const listActiveChannelInstallations = `-- name: ListActiveChannelInstallations :many
 SELECT ci.id, ci.workspace_id, ci.agent_id, ci.channel_type, ci.config, ci.status, ci.ws_lease_token, ci.ws_lease_expires_at, ci.installer_user_id, ci.installed_at, ci.created_at, ci.updated_at FROM channel_installation ci
 JOIN workspace w ON w.id = ci.workspace_id

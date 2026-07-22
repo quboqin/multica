@@ -112,6 +112,11 @@ type Config struct {
 	// Surfaced through /api/config so self-hosted operators can confirm which
 	// server build is deployed. Empty in dev builds.
 	ServerVersion string
+	// LarkLoginJoinBotWorkspace controls whether a first-time Lark/Feishu web
+	// login joins the workspace that owns the scanned bot installation.
+	LarkLoginJoinBotWorkspace bool
+	LarkLoginDefaultWorkspace string
+	LarkLoginStateSecret      string
 }
 
 type cloudRuntimeProxy interface {

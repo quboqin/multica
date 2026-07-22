@@ -23,11 +23,15 @@ import type {
   InboxWorkspaceUnread,
   Label,
   IssueProperty,
+  KpiMetric,
   ListPropertiesResponse,
   IssuePropertiesResponse,
   ListIssuesResponse,
   ListLabelsResponse,
+  ListKpiMetricsResponse,
+  ListMilestonesResponse,
   ListWebhookDeliveriesResponse,
+  Milestone,
   NotificationPreferenceResponse,
   ResourceLabelsResponse,
   SearchIssuesResponse,
@@ -131,6 +135,90 @@ export const ListPropertiesResponseSchema = z.object({
 
 export const EMPTY_LIST_PROPERTIES_RESPONSE: ListPropertiesResponse = {
   properties: [],
+  total: 0,
+};
+
+export const MilestoneSchema = z.object({
+  id: z.string(),
+  workspace_id: z.string(),
+  title: z.string(),
+  description: z.string().optional().default(""),
+  start_date: z.string().nullable().optional().default(null),
+  end_date: z.string().nullable().optional().default(null),
+  status: z.string().optional().default("planned"),
+  position: z.number().optional().default(0),
+  created_by: z.string().optional().default(""),
+  created_at: z.string(),
+  updated_at: z.string(),
+}).loose();
+
+export const EMPTY_MILESTONE: Milestone = {
+  id: "",
+  workspace_id: "",
+  title: "",
+  description: "",
+  start_date: null,
+  end_date: null,
+  status: "planned",
+  position: 0,
+  created_by: "",
+  created_at: "",
+  updated_at: "",
+};
+
+export const ListMilestonesResponseSchema = z.object({
+  milestones: z.array(MilestoneSchema).default([]),
+  total: z.number().default(0),
+}).loose();
+
+export const EMPTY_LIST_MILESTONES_RESPONSE: ListMilestonesResponse = {
+  milestones: [],
+  total: 0,
+};
+
+export const KpiMetricSchema = z.object({
+  id: z.string(),
+  workspace_id: z.string(),
+  name: z.string(),
+  owner: z.string().optional().default(""),
+  target: z.string().optional().default(""),
+  current: z.string().optional().default(""),
+  status: z.string().optional().default("pending"),
+  note: z.string().optional().default(""),
+  link_type: z.string().optional().default("none"),
+  link_id: z.string().optional().default(""),
+  completion_rate: z.number().optional().default(0),
+  position: z.number().optional().default(0),
+  created_by: z.string().optional().default(""),
+  created_at: z.string(),
+  updated_at: z.string(),
+}).loose();
+
+export const EMPTY_KPI_METRIC: KpiMetric = {
+  id: "",
+  workspace_id: "",
+  name: "",
+  owner: "",
+  target: "",
+  current: "",
+  status: "pending",
+  note: "",
+  link_type: "none",
+  link_id: "",
+  completion_rate: 0,
+  position: 0,
+  created_by: "",
+  created_at: "",
+  updated_at: "",
+};
+
+export const ListKpiMetricsResponseSchema = z.object({
+  metrics: z.array(KpiMetricSchema).default([]),
+  total: z.number().default(0),
+}).loose();
+
+export const EMPTY_LIST_KPI_METRICS_RESPONSE: ListKpiMetricsResponse = {
+  metrics: [],
   total: 0,
 };
 
@@ -522,6 +610,7 @@ const ProjectSchema = z.object({
   priority: z.string(),
   lead_type: z.string().nullable(),
   lead_id: z.string().nullable(),
+  milestone_id: z.string().nullable().default(null),
   // .default(null) so a project from an older backend (frontend deploys before
   // backend) that omits these keys parses to null instead of failing the whole
   // object — which would degrade a search/list batch to the empty fallback.
@@ -531,6 +620,7 @@ const ProjectSchema = z.object({
   updated_at: z.string(),
   issue_count: z.number().default(0),
   done_count: z.number().default(0),
+  labels: z.array(LabelSchema).optional().catch(undefined),
   resource_count: z.number().default(0),
 }).loose();
 
@@ -1289,6 +1379,15 @@ export const UserSchema = z.object({
   language: z.string().nullable().default(null),
   profile_description: z.string().default(""),
   timezone: z.string().nullable().default(null),
+  integration_tokens: z
+    .object({
+      git_token: z.string().optional(),
+      feishu_mcp_token: z.string().optional(),
+      paones_token: z.string().optional(),
+      jingwei_token: z.string().optional(),
+    })
+    .catchall(z.string())
+    .default({}),
   created_at: z.string().default(""),
   updated_at: z.string().default(""),
 }).loose();
@@ -1304,6 +1403,7 @@ export const EMPTY_USER: User = {
   language: null,
   profile_description: "",
   timezone: null,
+  integration_tokens: {},
   created_at: "",
   updated_at: "",
 };

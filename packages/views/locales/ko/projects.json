@@ -24,6 +24,8 @@
     "status": "상태",
     "progress": "진행률",
     "lead": "리드",
+    "plan": "Plan",
+    "labels": "Labels",
     "created": "생성일",
     "issues": "이슈 수"
   },
@@ -69,6 +71,7 @@
     "section_description": "설명",
     "prop_start_date": "시작일",
     "prop_due_date": "마감일",
+    "no_plan": "No plan",
     "clear_date": "날짜 지우기",
     "description_placeholder": "설명 추가...",
     "description_hint": "이 프로젝트의 모든 작업에서 컨텍스트로 에이전트에게 공유됩니다.",

@@ -342,6 +342,35 @@ func resolveProjectID(ctx context.Context, client *cli.APIClient, input string) 
 	return resolveIDByPrefix(ctx, client, "project", input, fetchProjectCandidates)
 }
 
+func resolvePlanID(ctx context.Context, client *cli.APIClient, input string) (resolvedID, error) {
+	return resolveIDByPrefix(ctx, client, "plan", input, fetchPlanCandidates)
+}
+
+func fetchPlanCandidates(ctx context.Context, client *cli.APIClient) ([]idCandidate, error) {
+	if client.WorkspaceID == "" {
+		return nil, fmt.Errorf("workspace_id is required to resolve plan id prefixes")
+	}
+	params := url.Values{"workspace_id": {client.WorkspaceID}}
+	var result map[string]any
+	if err := client.GetJSON(ctx, "/api/milestones?"+params.Encode(), &result); err != nil {
+		return nil, err
+	}
+	itemsRaw, _ := result["milestones"].([]any)
+	candidates := make([]idCandidate, 0, len(itemsRaw))
+	for _, raw := range itemsRaw {
+		item, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		candidates = append(candidates, idCandidate{
+			ID:      strVal(item, "id"),
+			Display: strVal(item, "title"),
+			Detail:  strVal(item, "status"),
+		})
+	}
+	return candidates, nil
+}
+
 func fetchProjectCandidates(ctx context.Context, client *cli.APIClient) ([]idCandidate, error) {
 	if client.WorkspaceID == "" {
 		return nil, fmt.Errorf("workspace_id is required to resolve project id prefixes")
@@ -397,6 +426,35 @@ func resolveProjectResourceID(ctx context.Context, client *cli.APIClient, projec
 
 func resolveLabelID(ctx context.Context, client *cli.APIClient, input string) (resolvedID, error) {
 	return resolveIDByPrefix(ctx, client, "label", input, fetchLabelCandidates)
+}
+
+func resolveKpiID(ctx context.Context, client *cli.APIClient, input string) (resolvedID, error) {
+	return resolveIDByPrefix(ctx, client, "kpi", input, fetchKpiCandidates)
+}
+
+func fetchKpiCandidates(ctx context.Context, client *cli.APIClient) ([]idCandidate, error) {
+	if client.WorkspaceID == "" {
+		return nil, fmt.Errorf("workspace_id is required to resolve kpi id prefixes")
+	}
+	params := url.Values{"workspace_id": {client.WorkspaceID}}
+	var result map[string]any
+	if err := client.GetJSON(ctx, "/api/kpi-metrics?"+params.Encode(), &result); err != nil {
+		return nil, err
+	}
+	itemsRaw, _ := result["metrics"].([]any)
+	candidates := make([]idCandidate, 0, len(itemsRaw))
+	for _, raw := range itemsRaw {
+		item, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		candidates = append(candidates, idCandidate{
+			ID:      strVal(item, "id"),
+			Display: strVal(item, "name"),
+			Detail:  strVal(item, "status"),
+		})
+	}
+	return candidates, nil
 }
 
 func fetchLabelCandidates(ctx context.Context, client *cli.APIClient) ([]idCandidate, error) {

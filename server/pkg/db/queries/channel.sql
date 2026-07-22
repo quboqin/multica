@@ -367,6 +367,12 @@ RETURNING *;
 SELECT * FROM channel_user_binding
 WHERE installation_id = $1 AND channel_user_id = $2;
 
+-- name: GetChannelUserBindingByInstallationAndConfigUnionID :one
+SELECT * FROM channel_user_binding
+WHERE installation_id = sqlc.arg('installation_id')
+  AND channel_type = sqlc.arg('channel_type')
+  AND config ->> 'union_id' = sqlc.arg('union_id')::text;
+
 -- name: FindReusableChannelUserBinding :one
 -- Cross-installation account-link reuse (MUL-3911). When a platform user
 -- messages an installation they have NOT linked, but the SAME user id is already

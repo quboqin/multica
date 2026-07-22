@@ -340,6 +340,20 @@ type ChannelUserBinding struct {
 	BoundAt        pgtype.Timestamptz `json:"bound_at"`
 }
 
+type LarkLoginIdentity struct {
+	ID            pgtype.UUID        `json:"id"`
+	Region        string             `json:"region"`
+	UnionID       string             `json:"union_id"`
+	OpenID        pgtype.Text        `json:"open_id"`
+	MulticaUserID pgtype.UUID        `json:"multica_user_id"`
+	Name          pgtype.Text        `json:"name"`
+	Email         pgtype.Text        `json:"email"`
+	AvatarUrl     pgtype.Text        `json:"avatar_url"`
+	LastLoginAt   pgtype.Timestamptz `json:"last_login_at"`
+	CreatedAt     pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt     pgtype.Timestamptz `json:"updated_at"`
+}
+
 type ChatDraftRestore struct {
 	ID            pgtype.UUID        `json:"id"`
 	ChatSessionID pgtype.UUID        `json:"chat_session_id"`
@@ -763,6 +777,20 @@ type PinnedItem struct {
 	CreatedAt   pgtype.Timestamptz `json:"created_at"`
 }
 
+type Milestone struct {
+	ID          pgtype.UUID        `json:"id"`
+	WorkspaceID pgtype.UUID        `json:"workspace_id"`
+	Title       string             `json:"title"`
+	Description string             `json:"description"`
+	StartDate   pgtype.Date        `json:"start_date"`
+	EndDate     pgtype.Date        `json:"end_date"`
+	Status      string             `json:"status"`
+	Position    int32              `json:"position"`
+	CreatedBy   pgtype.UUID        `json:"created_by"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
+}
+
 type Project struct {
 	ID          pgtype.UUID        `json:"id"`
 	WorkspaceID pgtype.UUID        `json:"workspace_id"`
@@ -777,6 +805,7 @@ type Project struct {
 	Priority    string             `json:"priority"`
 	StartDate   pgtype.Date        `json:"start_date"`
 	DueDate     pgtype.Date        `json:"due_date"`
+	MilestoneID pgtype.UUID        `json:"milestone_id"`
 }
 
 type ProjectResource struct {
@@ -970,7 +999,8 @@ type User struct {
 	Language                pgtype.Text        `json:"language"`
 	ProfileDescription      string             `json:"profile_description"`
 	// User-preferred IANA timezone for report rendering (Viewing tz). NULL means "use the browser-detected tz at render time". Affects dashboards, charts, and any "today" label shown to this user. Does not affect data materialisation — all rollups remain in UTC.
-	Timezone pgtype.Text `json:"timezone"`
+	Timezone          pgtype.Text `json:"timezone"`
+	IntegrationTokens []byte      `json:"integration_tokens"`
 }
 
 type UserComposioConnection struct {

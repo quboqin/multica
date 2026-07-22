@@ -47,7 +47,7 @@ import { ColorPicker, COLOR_PICKER_PRESETS } from "../../common/color-picker";
 import { useT } from "../../i18n";
 import { SettingsTab } from "./settings-layout";
 
-const RESOURCE_TYPES: LabelResourceType[] = ["issue", "agent", "skill"];
+const RESOURCE_TYPES: LabelResourceType[] = ["issue", "agent", "skill", "project"];
 const ISSUE_RESOURCE_TYPES: LabelResourceType[] = ["issue"];
 
 interface LabelDraft {

@@ -98,6 +98,7 @@
   "create_project": {
     "title": "New Project",
     "title_breadcrumb": "New project",
+    "no_plan": "No plan",
     "icon_tooltip": "Choose icon",
     "title_placeholder": "Project title",
     "description_placeholder": "Add description...",

@@ -349,8 +349,10 @@ type AgentTaskResponse struct {
 	// empty otherwise. The daemon emits both into the brief under
 	// `## Requesting User`; the heading is skipped entirely when description
 	// is empty.
-	RequestingUserName               string `json:"requesting_user_name,omitempty"`
-	RequestingUserProfileDescription string `json:"requesting_user_profile_description,omitempty"`
+	RequestingUserName               string                 `json:"requesting_user_name,omitempty"`
+	RequestingUserProfileDescription string                 `json:"requesting_user_profile_description,omitempty"`
+	RequestingUserEmail              string                 `json:"requesting_user_email,omitempty"`
+	IntegrationTokens                *TaskIntegrationTokens `json:"integration_tokens,omitempty"`
 	// Initiator* identify the actor who triggered THIS task — the real
 	// requester behind the current comment/mention or chat message — as
 	// distinct from the runtime owner whose credentials the agent runs with.
@@ -384,6 +386,26 @@ type AgentTaskResponse struct {
 	// owning user; the daemon must not fall back to its own credential. See
 	// MUL-3292.
 	AuthToken string `json:"auth_token,omitempty"`
+}
+
+type TaskIntegrationTokens struct {
+	GitToken       string            `json:"git_token,omitempty"`
+	FeishuMCPToken string            `json:"feishu_mcp_token,omitempty"`
+	PaonesToken    string            `json:"paones_token,omitempty"`
+	JingweiToken   string            `json:"jingwei_token,omitempty"`
+	Extra          map[string]string `json:"-"`
+}
+
+func (t TaskIntegrationTokens) MarshalJSON() ([]byte, error) {
+	out := make(map[string]string, len(t.Extra)+4)
+	for key, value := range t.Extra {
+		out[key] = value
+	}
+	out["git_token"] = t.GitToken
+	out["feishu_mcp_token"] = t.FeishuMCPToken
+	out["paones_token"] = t.PaonesToken
+	out["jingwei_token"] = t.JingweiToken
+	return json.Marshal(out)
 }
 
 // TaskAttribution is the wire shape of a run's accountable-human provenance

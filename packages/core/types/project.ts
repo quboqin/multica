@@ -1,3 +1,5 @@
+import type { Label } from "./label";
+
 export type ProjectStatus = "planned" | "in_progress" | "paused" | "completed" | "cancelled";
 
 export type ProjectPriority = "urgent" | "high" | "medium" | "low" | "none";
@@ -12,6 +14,7 @@ export interface Project {
   priority: ProjectPriority;
   lead_type: "member" | "agent" | null;
   lead_id: string | null;
+  milestone_id: string | null;
   // Calendar days ("YYYY-MM-DD"), no time-of-day or timezone — same contract as
   // issue.start_date / issue.due_date.
   start_date: string | null;
@@ -20,6 +23,7 @@ export interface Project {
   updated_at: string;
   issue_count: number;
   done_count: number;
+  labels?: Label[];
   resource_count: number;
 }
 
@@ -31,6 +35,7 @@ export interface CreateProjectRequest {
   priority?: ProjectPriority;
   lead_type?: "member" | "agent";
   lead_id?: string;
+  milestone_id?: string | null;
   start_date?: string;
   due_date?: string;
   // Resources to attach in the same transaction as the project. Server returns
@@ -46,6 +51,7 @@ export interface UpdateProjectRequest {
   priority?: ProjectPriority;
   lead_type?: "member" | "agent" | null;
   lead_id?: string | null;
+  milestone_id?: string | null;
   // Omit the key to leave the date untouched; send null (or "") to clear it.
   start_date?: string | null;
   due_date?: string | null;

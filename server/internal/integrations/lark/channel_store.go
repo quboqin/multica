@@ -250,6 +250,18 @@ func (s *ChannelStore) GetLarkUserBindingByOpenID(ctx context.Context, arg GetUs
 	return userBindingFromRow(row)
 }
 
+func (s *ChannelStore) GetLarkUserBindingByUnionID(ctx context.Context, arg GetUserBindingByUnionIDParams) (UserBinding, error) {
+	row, err := s.Queries.GetChannelUserBindingByInstallationAndConfigUnionID(ctx, db.GetChannelUserBindingByInstallationAndConfigUnionIDParams{
+		InstallationID: arg.InstallationID,
+		ChannelType:    channelTypeFeishu,
+		UnionID:        arg.UnionID,
+	})
+	if err != nil {
+		return UserBinding{}, err
+	}
+	return userBindingFromRow(row)
+}
+
 func (s *ChannelStore) CreateLarkUserBinding(ctx context.Context, arg CreateUserBindingParams) (UserBinding, error) {
 	cfg, err := encodeBindingConfig(UserBinding{UnionID: arg.UnionID})
 	if err != nil {

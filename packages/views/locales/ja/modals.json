@@ -97,6 +97,7 @@
   "create_project": {
     "title": "新規プロジェクト",
     "title_breadcrumb": "新規プロジェクト",
+    "no_plan": "No plan",
     "icon_tooltip": "アイコンを選択",
     "title_placeholder": "プロジェクトのタイトル",
     "description_placeholder": "説明を追加...",

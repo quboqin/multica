@@ -25,6 +25,8 @@
     "status": "Status",
     "progress": "Progress",
     "lead": "Lead",
+    "plan": "Plan",
+    "labels": "Labels",
     "created": "Created",
     "issues": "Issues"
   },
@@ -70,6 +72,7 @@
     "section_description": "Description",
     "prop_start_date": "Start date",
     "prop_due_date": "Due date",
+    "no_plan": "No plan",
     "clear_date": "Clear date",
     "description_placeholder": "Add description...",
     "description_hint": "Shared with agents as context for every task in this project.",

@@ -29,6 +29,8 @@
     "./runtimes": "./runtimes/index.ts",
     "./billing": "./billing/index.ts",
     "./dashboard": "./dashboard/index.ts",
+    "./plans": "./plans/index.ts",
+    "./kpi": "./kpi/index.ts",
     "./squads": "./squads/index.ts",
     "./squads/components": "./squads/components/index.ts",
     "./workspace/workspace-avatar": "./workspace/workspace-avatar.tsx",

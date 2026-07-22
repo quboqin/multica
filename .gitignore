@@ -55,6 +55,8 @@ apps/web/test-results/
 .context
 .agent_context/
 .multica/
+.cursor/
+.tmp/
 
 # local settings
 .claude/

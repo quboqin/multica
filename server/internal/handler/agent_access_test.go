@@ -51,6 +51,71 @@ func TestMemberAllowedToViewAgent_Pure(t *testing.T) {
 	}
 }
 
+func TestInvokeOriginatorFromTaskTokenUsesSourceTaskOriginator(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+
+	ctx := context.Background()
+	agentID := createHandlerTestAgent(t, "task-token-originator-agent", nil)
+
+	var originatorID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO "user" (name, email)
+		VALUES ('Task Token Originator', $1)
+		RETURNING id
+	`, "task-token-originator-"+agentID+"@multica.test").Scan(&originatorID); err != nil {
+		t.Fatalf("create originator user: %v", err)
+	}
+	t.Cleanup(func() {
+		testPool.Exec(context.Background(), `DELETE FROM "user" WHERE id = $1`, originatorID)
+	})
+
+	var taskID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO agent_task_queue (
+			agent_id, runtime_id, status, priority, started_at,
+			originator_user_id, accountable_user_id
+		)
+		VALUES ($1, $2, 'running', 0, now(), $3, $3)
+		RETURNING id
+	`, agentID, handlerTestRuntimeID(t), originatorID).Scan(&taskID); err != nil {
+		t.Fatalf("create source task: %v", err)
+	}
+	t.Cleanup(func() {
+		testPool.Exec(context.Background(), `DELETE FROM agent_task_queue WHERE id = $1`, taskID)
+	})
+
+	req := httptest.NewRequest("POST", "/api/issues/comment", nil)
+	req.Header.Set("X-Actor-Source", "task_token")
+	req.Header.Set("X-User-ID", testUserID)
+	req.Header.Set("X-Task-ID", taskID)
+
+	got := testHandler.invokeOriginatorFromRequest(req, "agent", agentID)
+	if got != originatorID {
+		t.Fatalf("originator = %q, want source task originator %q", got, originatorID)
+	}
+}
+
+func TestInvokeOriginatorFromTaskTokenDoesNotUseTokenOwner(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+
+	agentID := createHandlerTestAgent(t, "task-token-no-originator-agent", nil)
+	taskID := createHandlerTestTaskForAgent(t, agentID)
+
+	req := httptest.NewRequest("POST", "/api/issues/comment", nil)
+	req.Header.Set("X-Actor-Source", "task_token")
+	req.Header.Set("X-User-ID", testUserID)
+	req.Header.Set("X-Task-ID", taskID)
+
+	got := testHandler.invokeOriginatorFromRequest(req, "agent", agentID)
+	if got != "" {
+		t.Fatalf("originator = %q, want empty; task token owner must not be used as originator", got)
+	}
+}
+
 // privateAgentTestFixture sets up a private agent owned by a freshly created
 // user, plus a second non-admin member in the workspace. Returns the agent
 // id, the owner's user id, and the unrelated member's user id. The caller's
@@ -587,7 +652,7 @@ func TestShouldEnqueueOnComment_PrivateAgentGate(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-				got := testHandler.shouldEnqueueAssigneeFallback(ctx, issue, tc.actorType, tc.actorID, commentTriggerComputeOptions{})
+			got := testHandler.shouldEnqueueAssigneeFallback(ctx, issue, tc.actorType, tc.actorID, commentTriggerComputeOptions{})
 			if got != tc.want {
 				t.Fatalf("%s\n  actor=%s/%s got=%v want=%v",
 					tc.reason, tc.actorType, tc.actorID, got, tc.want)

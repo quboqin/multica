@@ -1,0 +1,228 @@
+{
+  "page": {
+    "title": "计划",
+    "create_project": "创建需求",
+    "create_plan": "创建计划",
+    "open_charts": "图表看板",
+    "all_plans": "全部计划",
+    "active_plans": "未完成计划",
+    "all_statuses": "全部状态",
+    "clear_filter": "清除"
+  },
+  "empty": {
+    "title": "还没有经营计划。",
+    "description": "创建一个里程碑，把需求归入同一个计划。",
+    "filtered_title": "当前筛选条件下没有计划。"
+  },
+  "dialog": {
+    "title": "创建计划",
+    "edit_title": "编辑计划",
+    "description": "创建一个经营计划里程碑。需求可以单独关联到该计划。",
+    "fields": {
+      "title": "标题",
+      "description": "描述",
+      "start_date": "开始日期",
+      "end_date": "结束日期",
+      "status": "状态"
+    },
+    "placeholders": {
+      "title": "马来西亚 H1 经营计划",
+      "description": "范围、业务目标和执行说明"
+    },
+    "cancel": "取消",
+    "submit": "创建计划",
+    "save": "保存",
+    "creating": "创建中...",
+    "saving": "保存中...",
+    "toast_created": "计划已创建",
+    "toast_updated": "计划已更新",
+    "toast_failed": "创建计划失败",
+    "toast_update_failed": "更新计划失败"
+  },
+  "status": {
+    "planned": "计划中",
+    "in_progress": "进行中",
+    "paused": "已暂停",
+    "completed": "已完成",
+    "cancelled": "已取消"
+  },
+  "row": {
+    "no_start": "未设置开始",
+    "no_end": "未设置结束",
+    "complete": "完成 {{progress}}%",
+    "projects_count": "{{done}} / {{total}} 个需求",
+    "paused_count": "{{count}} 个暂停",
+    "edit": "编辑",
+    "open": "打开"
+  },
+  "stats": {
+    "plans": {
+      "label": "计划",
+      "detail": "基于里程碑的经营周期"
+    },
+    "projects": {
+      "label": "需求",
+      "detail": "{{count}} 个已完成或关闭"
+    },
+    "execution": {
+      "label": "执行进度",
+      "detail": "{{done}}/{{total}} 个任务完成"
+    },
+    "kpi": {
+      "label": "KPI 状态",
+      "value": "独立",
+      "detail": "结果反馈，不计入任务进度"
+    }
+  },
+  "progress": {
+    "title": "计划进度",
+    "subtitle": "仅统计需求和任务"
+  },
+  "charts": {
+    "title": "图表看板",
+    "subtitle": "根据里程碑下的需求实时计算",
+    "back": "返回计划",
+    "tasks_done": "任务完成",
+    "empty": "当前选择的计划还没有需求数据。",
+    "project_progress": {
+      "title": "需求进度（%）",
+      "subtitle": "按完成度展示前 10 个需求"
+    },
+    "status_distribution": {
+      "title": "需求状态分布",
+      "subtitle": "当前需求生命周期状态"
+    },
+    "milestone_status": {
+      "title": "各里程碑需求状态",
+      "subtitle": "突出需求总数，同时保留状态分布",
+      "project_count": "{{count}} 个需求",
+      "progress": "进度"
+    },
+    "milestone_progress": {
+      "title": "里程碑平均进度（%）",
+      "subtitle": "按里程碑统计需求平均完成度"
+    },
+    "health_distribution": {
+      "title": "需求健康度分布",
+      "subtitle": "根据进度和暂停状态推导"
+    },
+    "issue_completion": {
+      "title": "任务完成率（%）",
+      "subtitle": "已完成任务数 / 总任务数"
+    },
+    "health": {
+      "on_track": "正常",
+      "at_risk": "有风险",
+      "pending": "未启动",
+      "blocked": "阻塞"
+    },
+    "overview": {
+      "title": "经营驾驶舱",
+      "subtitle": "集中展示进度、需求状态和里程碑推进节奏",
+      "timeline": "里程碑时间线"
+    },
+    "key_projects": {
+      "title": "关键交付需求",
+      "subtitle": "优先级为高或紧急的需求",
+      "issue_count": "{{done}}/{{total}} 个任务完成"
+    },
+    "label_progress": {
+      "title": "领域进度",
+      "subtitle": "按需求标签汇总：需求数为挂该标签的需求数，进度按这些需求下任务完成数计算",
+      "project_count": "{{count}} 个需求",
+      "issue_count": "已完成 {{done}}/{{total}} 个任务",
+      "progress": "任务完成率",
+      "unlabeled": "未标记"
+    }
+  },
+  "kpi": {
+    "title": "KPI 工作区",
+    "subtitle": "独立于需求完成进度",
+    "target": "目标",
+    "current": "当前",
+    "pending": "待更新",
+    "status": {
+      "on_track": "正常",
+      "at_risk": "有风险",
+      "missed": "未达成",
+      "pending": "待更新"
+    },
+    "metrics": {
+      "applications": {
+        "name": "申请量",
+        "target": "100%",
+        "current": "待更新",
+        "owner": "增长"
+      },
+      "approval_rate": {
+        "name": "通过率",
+        "target": "计划目标",
+        "current": "待更新",
+        "owner": "风险"
+      },
+      "cpa": {
+        "name": "CPA",
+        "target": "预算内",
+        "current": "待更新",
+        "owner": "增长"
+      },
+      "availability": {
+        "name": "系统可用性",
+        "target": "99.5%",
+        "current": "待更新",
+        "owner": "技术"
+      }
+    },
+    "back": "返回",
+    "metrics_title": "KPI 指标",
+    "workspace_description": "KPI 是工作区级的结果反馈，用于独立维护目标、当前值、完成率和状态；它不从进度自动聚合，也不参与计划、需求或任务的状态联动。",
+    "independent_badge": "独立反馈",
+    "create_action": "创建 KPI",
+    "edit_action": "编辑",
+    "delete_action": "删除",
+    "empty": "还没有 KPI 指标。",
+    "no_owner": "无负责人",
+    "no_squad": "未分配小队",
+    "toast_created": "KPI 已创建",
+    "toast_updated": "KPI 已更新",
+    "toast_deleted": "KPI 已删除",
+    "toast_failed": "KPI 操作失败",
+    "fields": {
+      "name": "名称",
+      "owner": "负责人",
+      "squad": "小队",
+      "status": "状态",
+      "note": "备注"
+    },
+    "placeholders": {
+      "name": "申请量",
+      "owner": "增长",
+      "target": "100%",
+      "current": "待更新",
+      "note": "结果来源、刷新频率或异常说明",
+      "completion_rate": "80"
+    },
+    "dialog": {
+      "create_title": "创建 KPI",
+      "edit_title": "编辑 KPI",
+      "description": "KPI 独立维护，不从需求和任务进度自动聚合。",
+      "cancel": "取消",
+      "save": "保存",
+      "saving": "保存中..."
+    },
+    "unlinked": "未关联计划、需求或任务",
+    "board": {
+      "total": "总指标",
+      "healthy": "正常",
+      "watch": "需关注",
+      "status_title": "KPI 状态看板",
+      "status_subtitle": "按当前经营判断独立维护结果状态",
+      "owner_title": "负责人分布",
+      "owner_subtitle": "查看 KPI 责任归属是否集中",
+      "squad_title": "小队分布",
+      "squad_subtitle": "根据负责人所属小队统计 KPI 归属",
+      "completion": "完成率"
+    },
+    "completion_rate": "完成率"
+  }
+}

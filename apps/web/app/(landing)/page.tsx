@@ -4,14 +4,14 @@ import { RedirectIfAuthenticated } from "@/features/landing/components/redirect-
 
 export const metadata: Metadata = {
   title: {
-    absolute: "Multica — Project Management for Human + Agent Teams",
+    absolute: "Cybertron - Project Management for Human + Agent Teams",
   },
   description:
-    "Open-source platform that turns coding agents into real teammates. Assign tasks, track progress, compound skills.",
+    "Cybertron is an open-source platform that turns coding agents into real teammates. Assign tasks, track progress, compound skills.",
   openGraph: {
-    title: "Multica — Project Management for Human + Agent Teams",
+    title: "Cybertron - Project Management for Human + Agent Teams",
     description:
-      "Manage your human + agent workforce in one place.",
+      "Manage your human + agent workforce in one place with Cybertron.",
     url: "/",
   },
   alternates: {

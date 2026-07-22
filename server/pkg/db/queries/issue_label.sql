@@ -4,6 +4,7 @@ SELECT l.*,
         WHEN 'issue' THEN (SELECT COUNT(*) FROM issue_to_label x WHERE x.label_id = l.id)
         WHEN 'agent' THEN (SELECT COUNT(*) FROM agent_to_label x WHERE x.label_id = l.id)
         WHEN 'skill' THEN (SELECT COUNT(*) FROM skill_to_label x WHERE x.label_id = l.id)
+        WHEN 'project' THEN (SELECT COUNT(*) FROM project_to_label x WHERE x.label_id = l.id)
         ELSE 0
     END::bigint AS usage_count
 FROM issue_label l
@@ -183,6 +184,50 @@ WHERE stl.skill_id = ANY(sqlc.arg('skill_ids')::uuid[])
   AND l.workspace_id = sqlc.arg('workspace_id')::uuid
   AND l.resource_type = 'skill'
 ORDER BY stl.skill_id, LOWER(l.name) ASC;
+
+-- name: ListLabelsByProject :many
+SELECT l.*
+FROM issue_label l
+JOIN project_to_label ptl ON ptl.label_id = l.id
+WHERE ptl.project_id = sqlc.arg('project_id')::uuid
+  AND l.workspace_id = sqlc.arg('workspace_id')::uuid
+  AND l.resource_type = 'project'
+ORDER BY LOWER(l.name) ASC;
+
+-- name: ListLabelsForProjects :many
+SELECT ptl.project_id, l.*
+FROM issue_label l
+JOIN project_to_label ptl ON ptl.label_id = l.id
+WHERE ptl.project_id = ANY(sqlc.arg('project_ids')::uuid[])
+  AND l.workspace_id = sqlc.arg('workspace_id')::uuid
+  AND l.resource_type = 'project'
+ORDER BY ptl.project_id, LOWER(l.name) ASC;
+
+-- name: AttachLabelToProject :exec
+INSERT INTO project_to_label (project_id, label_id)
+SELECT sqlc.arg('project_id')::uuid, sqlc.arg('label_id')::uuid
+WHERE EXISTS (
+    SELECT 1 FROM project p
+    WHERE p.id = sqlc.arg('project_id')::uuid
+      AND p.workspace_id = sqlc.arg('workspace_id')::uuid
+)
+AND EXISTS (
+    SELECT 1 FROM issue_label l
+    WHERE l.id = sqlc.arg('label_id')::uuid
+      AND l.workspace_id = sqlc.arg('workspace_id')::uuid
+      AND l.resource_type = 'project'
+)
+ON CONFLICT DO NOTHING;
+
+-- name: DetachLabelFromProject :exec
+DELETE FROM project_to_label
+WHERE project_id = sqlc.arg('project_id')::uuid
+  AND label_id = sqlc.arg('label_id')::uuid
+  AND EXISTS (
+      SELECT 1 FROM project p
+      WHERE p.id = sqlc.arg('project_id')::uuid
+        AND p.workspace_id = sqlc.arg('workspace_id')::uuid
+  );
 
 -- name: AttachLabelToSkill :exec
 INSERT INTO skill_to_label (skill_id, label_id)

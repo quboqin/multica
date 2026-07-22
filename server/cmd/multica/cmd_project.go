@@ -135,6 +135,8 @@ func init() {
 	projectCreateCmd.Flags().String("status", "", "Project status")
 	projectCreateCmd.Flags().String("icon", "", "Project icon (emoji)")
 	projectCreateCmd.Flags().String("lead", "", "Lead name (member or agent)")
+	projectCreateCmd.Flags().String("plan", "", "Attach the project to a plan by plan ID or prefix")
+	projectCreateCmd.Flags().String("milestone-id", "", "Attach the project to a plan by raw milestone UUID")
 	projectCreateCmd.Flags().String("start-date", "", "Start date (calendar day, YYYY-MM-DD)")
 	projectCreateCmd.Flags().String("due-date", "", "Due date (calendar day, YYYY-MM-DD)")
 	projectCreateCmd.Flags().StringArray("repo", nil, "Attach a github_repo resource by URL (may be repeated)")
@@ -180,6 +182,8 @@ func init() {
 	projectUpdateCmd.Flags().String("status", "", "New status")
 	projectUpdateCmd.Flags().String("icon", "", "New icon (emoji)")
 	projectUpdateCmd.Flags().String("lead", "", "New lead name (member or agent)")
+	projectUpdateCmd.Flags().String("plan", "", "Attach the project to a plan by plan ID or prefix")
+	projectUpdateCmd.Flags().String("milestone-id", "", "Attach the project to a plan by raw milestone UUID")
 	projectUpdateCmd.Flags().String("start-date", "", "New start date (calendar day, YYYY-MM-DD; pass empty string to clear)")
 	projectUpdateCmd.Flags().String("due-date", "", "New due date (calendar day, YYYY-MM-DD; pass empty string to clear)")
 	projectUpdateCmd.Flags().String("output", "json", "Output format: table or json")
@@ -336,6 +340,11 @@ func runProjectCreate(cmd *cobra.Command, _ []string) error {
 		body["lead_type"] = aType
 		body["lead_id"] = aID
 	}
+	if milestoneID, hasMilestone, err := resolveProjectMilestoneFlag(ctx, client, cmd); err != nil {
+		return err
+	} else if hasMilestone {
+		body["milestone_id"] = milestoneID
+	}
 	if v, _ := cmd.Flags().GetString("start-date"); v != "" {
 		body["start_date"] = v
 	}
@@ -427,6 +436,11 @@ func runProjectUpdate(cmd *cobra.Command, args []string) error {
 		body["lead_type"] = aType
 		body["lead_id"] = aID
 	}
+	if milestoneID, hasMilestone, err := resolveProjectMilestoneFlag(ctx, client, cmd); err != nil {
+		return err
+	} else if hasMilestone {
+		body["milestone_id"] = milestoneID
+	}
 	// Changed() (not "") so an explicit --start-date "" reaches the server as a
 	// clear, mirroring the issue update CLI.
 	if cmd.Flags().Changed("start-date") {
@@ -439,7 +453,7 @@ func runProjectUpdate(cmd *cobra.Command, args []string) error {
 	}
 
 	if len(body) == 0 {
-		return fmt.Errorf("no fields to update; use flags like --title, --status, --description, --icon, --lead, --start-date, --due-date")
+		return fmt.Errorf("no fields to update; use flags like --title, --status, --description, --icon, --lead, --plan, --milestone-id, --start-date, --due-date")
 	}
 
 	var result map[string]any
@@ -965,4 +979,36 @@ func formatLead(project map[string]any, actors actorDisplayLookup) string {
 		return ""
 	}
 	return actors.actor(lType, lID)
+}
+
+func resolveProjectMilestoneFlag(ctx context.Context, client *cli.APIClient, cmd *cobra.Command) (string, bool, error) {
+	planSet := cmd.Flags().Changed("plan")
+	milestoneSet := cmd.Flags().Changed("milestone-id")
+	if planSet && milestoneSet {
+		return "", false, fmt.Errorf("--plan and --milestone-id are mutually exclusive")
+	}
+	if milestoneSet {
+		v, _ := cmd.Flags().GetString("milestone-id")
+		v = strings.TrimSpace(v)
+		if v == "" {
+			return "", true, fmt.Errorf("--milestone-id cannot be empty")
+		}
+		if !uuidRegexp.MatchString(v) {
+			return "", true, fmt.Errorf("--milestone-id must be a canonical UUID; use --plan for plan IDs or short prefixes")
+		}
+		planRef, err := resolvePlanID(ctx, client, v)
+		if err != nil {
+			return "", true, fmt.Errorf("resolve plan: %w", err)
+		}
+		return planRef.ID, true, nil
+	}
+	if planSet {
+		v, _ := cmd.Flags().GetString("plan")
+		planRef, err := resolvePlanID(ctx, client, v)
+		if err != nil {
+			return "", true, fmt.Errorf("resolve plan: %w", err)
+		}
+		return planRef.ID, true, nil
+	}
+	return "", false, nil
 }

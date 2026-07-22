@@ -86,6 +86,14 @@ import type {
   CreateProjectResourceRequest,
   UpdateProjectResourceRequest,
   ListProjectResourcesResponse,
+  Milestone,
+  CreateMilestoneRequest,
+  UpdateMilestoneRequest,
+  ListMilestonesResponse,
+  KpiMetric,
+  CreateKpiMetricRequest,
+  UpdateKpiMetricRequest,
+  ListKpiMetricsResponse,
   Label,
   IssueProperty,
   IssuePropertyValue,
@@ -255,6 +263,14 @@ import {
   EMPTY_ISSUE_PROPERTY,
   EMPTY_LIST_PROPERTIES_RESPONSE,
   EMPTY_ISSUE_PROPERTIES_RESPONSE,
+  KpiMetricSchema,
+  ListKpiMetricsResponseSchema,
+  EMPTY_KPI_METRIC,
+  EMPTY_LIST_KPI_METRICS_RESPONSE,
+  MilestoneSchema,
+  ListMilestonesResponseSchema,
+  EMPTY_MILESTONE,
+  EMPTY_LIST_MILESTONES_RESPONSE,
   ResourceLabelsResponseSchema,
   EMPTY_LABEL,
   EMPTY_LIST_LABELS_RESPONSE,
@@ -284,6 +300,17 @@ export interface ApiClientOptions {
 export interface LoginResponse {
   token: string;
   user: User;
+}
+
+export interface LarkLoginStateResponse {
+  state: string;
+  authorize_url?: string;
+}
+
+export interface LarkLoginResponse extends LoginResponse {
+  workspace_id?: string;
+  workspace_slug?: string;
+  next?: string;
 }
 
 export class ApiError extends Error {
@@ -490,6 +517,20 @@ export class ApiClient {
     return this.fetch("/auth/google", {
       method: "POST",
       body: JSON.stringify({ code, redirect_uri: redirectUri }),
+    });
+  }
+
+  async createLarkLoginState(installationId: string, next?: string, redirectUri?: string): Promise<LarkLoginStateResponse> {
+    return this.fetch("/auth/lark/state", {
+      method: "POST",
+      body: JSON.stringify({ installation_id: installationId, next, redirect_uri: redirectUri }),
+    });
+  }
+
+  async larkLogin(code: string, state: string): Promise<LarkLoginResponse> {
+    return this.fetch("/auth/lark", {
+      method: "POST",
+      body: JSON.stringify({ code, state }),
     });
   }
 
@@ -2154,9 +2195,11 @@ export class ApiClient {
   }
 
   // Projects
-  async listProjects(params?: { status?: string }): Promise<ListProjectsResponse> {
+  async listProjects(params?: { status?: string; priority?: string; milestone_id?: string | null }): Promise<ListProjectsResponse> {
     const search = new URLSearchParams();
     if (params?.status) search.set("status", params.status);
+    if (params?.priority) search.set("priority", params.priority);
+    if (params?.milestone_id) search.set("milestone_id", params.milestone_id);
     return this.fetch(`/api/projects?${search}`);
   }
 
@@ -2180,6 +2223,96 @@ export class ApiClient {
 
   async deleteProject(id: string): Promise<void> {
     await this.fetch(`/api/projects/${id}`, { method: "DELETE" });
+  }
+
+  // Milestones
+  async listMilestones(params?: { status?: string }): Promise<ListMilestonesResponse> {
+    const search = new URLSearchParams();
+    if (params?.status) search.set("status", params.status);
+    const raw = await this.fetch<unknown>(`/api/milestones?${search}`);
+    return parseWithFallback(raw, ListMilestonesResponseSchema, EMPTY_LIST_MILESTONES_RESPONSE, {
+      endpoint: "GET /api/milestones",
+    });
+  }
+
+  async getMilestone(id: string): Promise<Milestone> {
+    const raw = await this.fetch<unknown>(`/api/milestones/${id}`);
+    return parseWithFallback(raw, MilestoneSchema, EMPTY_MILESTONE, {
+      endpoint: "GET /api/milestones/{id}",
+    });
+  }
+
+  async createMilestone(data: CreateMilestoneRequest): Promise<Milestone> {
+    const raw = await this.fetch<unknown>("/api/milestones", {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+    return parseWithFallback(raw, MilestoneSchema, EMPTY_MILESTONE, {
+      endpoint: "POST /api/milestones",
+    });
+  }
+
+  async updateMilestone(id: string, data: UpdateMilestoneRequest): Promise<Milestone> {
+    const raw = await this.fetch<unknown>(`/api/milestones/${id}`, {
+      method: "PUT",
+      body: JSON.stringify(data),
+    });
+    return parseWithFallback(raw, MilestoneSchema, EMPTY_MILESTONE, {
+      endpoint: "PUT /api/milestones/{id}",
+    });
+  }
+
+  async deleteMilestone(id: string): Promise<void> {
+    await this.fetch(`/api/milestones/${id}`, { method: "DELETE" });
+  }
+
+  // KPI metrics
+  async listKpiMetrics(workspaceId?: string): Promise<ListKpiMetricsResponse> {
+    const search = new URLSearchParams();
+    if (workspaceId) search.set("workspace_id", workspaceId);
+    const raw = await this.fetch<unknown>(`/api/kpi-metrics?${search}`);
+    return parseWithFallback(raw, ListKpiMetricsResponseSchema, EMPTY_LIST_KPI_METRICS_RESPONSE, {
+      endpoint: "GET /api/kpi-metrics",
+    });
+  }
+
+  async getKpiMetric(id: string, workspaceId?: string): Promise<KpiMetric> {
+    const search = new URLSearchParams();
+    if (workspaceId) search.set("workspace_id", workspaceId);
+    const raw = await this.fetch<unknown>(`/api/kpi-metrics/${id}?${search}`);
+    return parseWithFallback(raw, KpiMetricSchema, EMPTY_KPI_METRIC, {
+      endpoint: "GET /api/kpi-metrics/{id}",
+    });
+  }
+
+  async createKpiMetric(data: CreateKpiMetricRequest, workspaceId?: string): Promise<KpiMetric> {
+    const search = new URLSearchParams();
+    if (workspaceId) search.set("workspace_id", workspaceId);
+    const raw = await this.fetch<unknown>(`/api/kpi-metrics?${search}`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+    return parseWithFallback(raw, KpiMetricSchema, EMPTY_KPI_METRIC, {
+      endpoint: "POST /api/kpi-metrics",
+    });
+  }
+
+  async updateKpiMetric(id: string, data: UpdateKpiMetricRequest, workspaceId?: string): Promise<KpiMetric> {
+    const search = new URLSearchParams();
+    if (workspaceId) search.set("workspace_id", workspaceId);
+    const raw = await this.fetch<unknown>(`/api/kpi-metrics/${id}?${search}`, {
+      method: "PUT",
+      body: JSON.stringify(data),
+    });
+    return parseWithFallback(raw, KpiMetricSchema, EMPTY_KPI_METRIC, {
+      endpoint: "PUT /api/kpi-metrics/{id}",
+    });
+  }
+
+  async deleteKpiMetric(id: string, workspaceId?: string): Promise<void> {
+    const search = new URLSearchParams();
+    if (workspaceId) search.set("workspace_id", workspaceId);
+    await this.fetch(`/api/kpi-metrics/${id}?${search}`, { method: "DELETE" });
   }
 
   // Project resources
@@ -2342,6 +2475,32 @@ export class ApiClient {
     });
     return parseWithFallback(raw, ResourceLabelsResponseSchema, EMPTY_RESOURCE_LABELS_RESPONSE, {
       endpoint: "DELETE /api/issues/{id}/labels/{labelId}",
+    });
+  }
+
+  async listLabelsForProject(projectId: string): Promise<ResourceLabelsResponse> {
+    const raw = await this.fetch<unknown>(`/api/projects/${projectId}/labels`);
+    return parseWithFallback(raw, ResourceLabelsResponseSchema, EMPTY_RESOURCE_LABELS_RESPONSE, {
+      endpoint: "GET /api/projects/{id}/labels",
+    });
+  }
+
+  async attachProjectLabel(projectId: string, labelId: string): Promise<ResourceLabelsResponse> {
+    const raw = await this.fetch<unknown>(`/api/projects/${projectId}/labels`, {
+      method: "POST",
+      body: JSON.stringify({ label_id: labelId }),
+    });
+    return parseWithFallback(raw, ResourceLabelsResponseSchema, EMPTY_RESOURCE_LABELS_RESPONSE, {
+      endpoint: "POST /api/projects/{id}/labels",
+    });
+  }
+
+  async detachProjectLabel(projectId: string, labelId: string): Promise<ResourceLabelsResponse> {
+    const raw = await this.fetch<unknown>(`/api/projects/${projectId}/labels/${labelId}`, {
+      method: "DELETE",
+    });
+    return parseWithFallback(raw, ResourceLabelsResponseSchema, EMPTY_RESOURCE_LABELS_RESPONSE, {
+      endpoint: "DELETE /api/projects/{id}/labels/{labelId}",
     });
   }
 

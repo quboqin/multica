@@ -15,6 +15,7 @@ const BASE_USER: User = {
   starter_content_state: "imported",
   language: null,
   profile_description: "",
+  integration_tokens: {},
   timezone: null,
   created_at: "2025-01-01T00:00:00Z",
   updated_at: "2025-01-01T00:00:00Z",

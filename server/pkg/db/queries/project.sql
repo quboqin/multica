@@ -3,6 +3,7 @@ SELECT * FROM project
 WHERE workspace_id = $1
   AND (sqlc.narg('status')::text IS NULL OR status = sqlc.narg('status'))
   AND (sqlc.narg('priority')::text IS NULL OR priority = sqlc.narg('priority'))
+  AND (sqlc.narg('milestone_id')::uuid IS NULL OR milestone_id = sqlc.narg('milestone_id'))
 ORDER BY created_at DESC;
 
 -- name: GetProject :one
@@ -16,9 +17,9 @@ WHERE id = $1 AND workspace_id = $2;
 -- name: CreateProject :one
 INSERT INTO project (
     workspace_id, title, description, icon, status,
-    lead_type, lead_id, priority, start_date, due_date
+    lead_type, lead_id, priority, start_date, due_date, milestone_id
 ) VALUES (
-    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10
+    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, sqlc.narg('milestone_id')
 ) RETURNING *;
 
 -- name: UpdateProject :one
@@ -32,6 +33,7 @@ UPDATE project SET
     lead_id = sqlc.narg('lead_id'),
     start_date = sqlc.narg('start_date'),
     due_date = sqlc.narg('due_date'),
+    milestone_id = sqlc.narg('milestone_id'),
     updated_at = now()
 WHERE id = $1
 RETURNING *;

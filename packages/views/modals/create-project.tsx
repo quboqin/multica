@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useRef } from "react";
-import { CalendarClock, CalendarDays, ChevronRight, FolderOpen, Maximize2, Minimize2, MoreHorizontal, Search, X as XIcon, UserMinus } from "lucide-react";
+import { CalendarClock, CalendarDays, CalendarRange, ChevronRight, FolderOpen, Maximize2, Minimize2, MoreHorizontal, Search, X as XIcon, UserMinus } from "lucide-react";
 
 /**
  * GitHub mark — lucide-react v1 dropped brand icons, so we inline the
@@ -23,6 +23,7 @@ function GithubIcon({ className }: { className?: string }) {
 }
 import { useQuery } from "@tanstack/react-query";
 import { useCreateProject } from "@multica/core/projects/mutations";
+import { milestoneListOptions } from "@multica/core/milestones";
 import { useProjectDraftStore } from "@multica/core/projects";
 import {
   PROJECT_STATUS_CONFIG,
@@ -57,6 +58,7 @@ import {
   useProjectStatusLabels,
   useProjectPriorityLabels,
 } from "../projects/components/labels";
+import { DEFAULT_PROJECT_ICON } from "../projects/components/project-icon";
 import { ProjectStartDatePicker } from "../projects/components/project-start-date-picker";
 import { ProjectDueDatePicker } from "../projects/components/project-due-date-picker";
 import { PillButton } from "../common/pill-button";
@@ -66,6 +68,10 @@ import {
   validateLocalDirectory,
 } from "../platform/local-directory";
 import { useLocalDaemonStatus } from "../platform/use-local-daemon-status";
+
+interface CreateProjectModalData {
+  milestone_id?: unknown;
+}
 
 function RepoUrlText({
   url,
@@ -90,7 +96,13 @@ function RepoUrlText({
   );
 }
 
-export function CreateProjectModal({ onClose }: { onClose: () => void }) {
+export function CreateProjectModal({
+  onClose,
+  data,
+}: {
+  onClose: () => void;
+  data?: Record<string, unknown> | null;
+}) {
   const { t } = useT("modals");
   const router = useNavigation();
   const workspace = useCurrentWorkspace();
@@ -99,6 +111,7 @@ export function CreateProjectModal({ onClose }: { onClose: () => void }) {
   const wsId = useWorkspaceId();
   const { data: members = [] } = useQuery(memberListOptions(wsId));
   const { data: agents = [] } = useQuery(agentListOptions(wsId));
+  const { data: milestones = [] } = useQuery(milestoneListOptions(wsId));
   const { getActorName } = useActorName();
   const projectStatusLabels = useProjectStatusLabels();
   const projectPriorityLabels = useProjectPriorityLabels();
@@ -113,6 +126,11 @@ export function CreateProjectModal({ onClose }: { onClose: () => void }) {
   const [priority, setPriority] = useState<ProjectPriority>(draft.priority);
   const [leadType, setLeadType] = useState<"member" | "agent" | undefined>(draft.leadType);
   const [leadId, setLeadId] = useState<string | undefined>(draft.leadId);
+  const initialMilestoneId =
+    typeof (data as CreateProjectModalData | null)?.milestone_id === "string"
+      ? ((data as CreateProjectModalData).milestone_id as string)
+      : null;
+  const [milestoneId, setMilestoneId] = useState<string | null>(initialMilestoneId);
   const [icon, setIcon] = useState<string | undefined>(draft.icon);
   const [startDate, setStartDate] = useState<string>(draft.startDate ?? "");
   const [dueDate, setDueDate] = useState<string>(draft.dueDate ?? "");
@@ -212,6 +230,7 @@ export function CreateProjectModal({ onClose }: { onClose: () => void }) {
 
   const leadLabel =
     leadType && leadId ? getActorName(leadType, leadId) : t(($) => $.create_project.lead);
+  const selectedMilestone = milestones.find((milestone) => milestone.id === milestoneId);
 
   const createProject = useCreateProject();
 
@@ -254,6 +273,7 @@ export function CreateProjectModal({ onClose }: { onClose: () => void }) {
         priority,
         lead_type: leadType,
         lead_id: leadId,
+        milestone_id: milestoneId,
         start_date: startDate || undefined,
         due_date: dueDate || undefined,
         // Server attaches these in the same transaction as the project.
@@ -353,7 +373,7 @@ export function CreateProjectModal({ onClose }: { onClose: () => void }) {
                   className="text-2xl cursor-pointer rounded-lg p-1 -ml-1 hover:bg-accent/60 transition-colors"
                   title={t(($) => $.create_project.icon_tooltip)}
                 >
-                  {icon || "📁"}
+                  {icon || DEFAULT_PROJECT_ICON}
                 </button>
               }
             />
@@ -532,6 +552,41 @@ export function CreateProjectModal({ onClose }: { onClose: () => void }) {
 
           {/* Start date — collapsed into ⋯ unless it has a value or was just
               opened from the overflow (the calendar anchors on the inline pill). */}
+          <DropdownMenu>
+            <DropdownMenuTrigger
+              render={
+                <PillButton>
+                  <CalendarRange className="size-3" />
+                  <span className={cn(!selectedMilestone && "text-muted-foreground")}>
+                    {selectedMilestone?.title ?? t(($) => $.create_project.no_plan)}
+                  </span>
+                </PillButton>
+              }
+            />
+            <DropdownMenuContent align="start" className="w-56">
+              <DropdownMenuItem onClick={() => setMilestoneId(null)}>
+                <CalendarRange className="size-3.5 text-muted-foreground" />
+                <span className="text-muted-foreground">{t(($) => $.create_project.no_plan)}</span>
+              </DropdownMenuItem>
+              {milestones.length > 0 && <div className="my-1 h-px bg-border" />}
+              {milestones.map((milestone) => (
+                <DropdownMenuItem key={milestone.id} onClick={() => setMilestoneId(milestone.id)}>
+                  <span
+                    className={cn(
+                      "size-2 rounded-full",
+                      milestone.status === "completed" || milestone.status === "cancelled"
+                        ? "bg-muted-foreground"
+                        : milestone.status === "paused"
+                          ? "bg-warning"
+                          : "bg-primary",
+                    )}
+                  />
+                  <span className="truncate">{milestone.title}</span>
+                </DropdownMenuItem>
+              ))}
+            </DropdownMenuContent>
+          </DropdownMenu>
+
           {(startDate || startDatePickerOpen) && (
             <ProjectStartDatePicker
               startDate={startDate || null}

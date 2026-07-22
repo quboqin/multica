@@ -68,7 +68,7 @@ export type {
   IssueUsageSummary,
 } from "./agent";
 export { RUNTIME_PROFILE_PROTOCOL_FAMILIES } from "./agent";
-export type { Workspace, WorkspaceRepo, Member, MemberRole, User, MemberWithUser, Invitation } from "./workspace";
+export type { Workspace, WorkspaceRepo, IntegrationTokens, Member, MemberRole, User, MemberWithUser, Invitation } from "./workspace";
 export type { InboxItem, InboxSeverity, InboxItemType, InboxWorkspaceUnread } from "./inbox";
 export type { NotificationGroupKey, NotificationGroupValue, NotificationPreferences, NotificationPreferenceResponse } from "./notification-preference";
 export type { Comment, CommentType, CommentAuthorType, CommentTriggerPreview, CommentTriggerPreviewAgent, CommentTriggerSource, CommentTriggerOutcome, CommentTriggerStatus, Reaction } from "./comment";
@@ -117,6 +117,21 @@ export type {
   UpdateProjectResourceRequest,
   ListProjectResourcesResponse,
 } from "./project";
+export type {
+  Milestone,
+  MilestoneStatus,
+  CreateMilestoneRequest,
+  UpdateMilestoneRequest,
+  ListMilestonesResponse,
+} from "./milestone";
+export type {
+  KpiMetric,
+  KpiMetricStatus,
+  KpiMetricLinkType,
+  CreateKpiMetricRequest,
+  UpdateKpiMetricRequest,
+  ListKpiMetricsResponse,
+} from "./kpi";
 export type { PinnedItem, PinnedItemType, CreatePinRequest, ReorderPinsRequest } from "./pin";
 export type {
   GitHubInstallation,

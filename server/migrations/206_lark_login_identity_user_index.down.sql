@@ -1,0 +1,1 @@
+DROP INDEX CONCURRENTLY IF EXISTS idx_lark_login_identity_user;

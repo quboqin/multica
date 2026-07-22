@@ -24,6 +24,8 @@
     "status": "ステータス",
     "progress": "進捗",
     "lead": "リード",
+    "plan": "Plan",
+    "labels": "Labels",
     "created": "作成日",
     "issues": "Issue 数"
   },
@@ -69,6 +71,7 @@
     "section_description": "説明",
     "prop_start_date": "開始日",
     "prop_due_date": "期限",
+    "no_plan": "No plan",
     "clear_date": "日付をクリア",
     "description_placeholder": "説明を追加...",
     "description_hint": "このプロジェクトのすべてのタスクで、コンテキストとしてエージェントに共有されます。",

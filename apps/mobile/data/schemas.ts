@@ -163,6 +163,7 @@ export const ProjectSchema = z.object({
   priority: z.string(),
   lead_type: z.string().nullable(),
   lead_id: z.string().nullable(),
+  milestone_id: z.string().nullable().default(null),
   // .default(null) so a project from an older backend that omits these keys
   // parses to null instead of degrading the batch to the empty fallback.
   start_date: z.string().nullable().default(null),
@@ -200,6 +201,7 @@ export const EMPTY_PROJECT: Project = {
   priority: "none",
   lead_type: null,
   lead_id: null,
+  milestone_id: null,
   start_date: null,
   due_date: null,
   created_at: "",
@@ -450,6 +452,7 @@ export const UserSchema: z.ZodType<User> = z.object({
   language: z.string().nullable().default(null),
   profile_description: z.string().default(""),
   timezone: z.string().nullable().default(null),
+  integration_tokens: z.record(z.string(), z.string()).default({}),
   created_at: z.string().default(""),
   updated_at: z.string().default(""),
 }).loose();
@@ -468,6 +471,7 @@ export const EMPTY_USER: User = {
   language: null,
   profile_description: "",
   timezone: null,
+  integration_tokens: {},
   created_at: "",
   updated_at: "",
 };

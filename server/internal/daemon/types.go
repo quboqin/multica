@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"encoding/json"
+	"strings"
 
 	"github.com/multica-ai/multica/server/internal/runtimeapps"
 )
@@ -115,8 +116,10 @@ type Task struct {
 	// no owner (cloud / system runtimes) or the user hasn't set a description.
 	// Injected into the brief under `## Requesting User`; omitted entirely
 	// when description is empty so the agent doesn't see a useless heading.
-	RequestingUserName               string `json:"requesting_user_name,omitempty"`
-	RequestingUserProfileDescription string `json:"requesting_user_profile_description,omitempty"`
+	RequestingUserName               string            `json:"requesting_user_name,omitempty"`
+	RequestingUserProfileDescription string            `json:"requesting_user_profile_description,omitempty"`
+	RequestingUserEmail              string            `json:"requesting_user_email,omitempty"`
+	IntegrationTokens                IntegrationTokens `json:"integration_tokens,omitempty"`
 	// Initiator* identify the actor who triggered THIS task (the real
 	// requester behind the current comment/mention or chat message) as
 	// distinct from the runtime owner whose credentials the agent runs with.
@@ -138,6 +141,42 @@ type Task struct {
 	// Empty or non-task-scoped values are fatal for writable agent tasks; the
 	// daemon must not fall back to its own token. See MUL-3292.
 	AuthToken string `json:"auth_token,omitempty"`
+}
+
+type IntegrationTokens struct {
+	GitToken       string            `json:"git_token,omitempty"`
+	FeishuMCPToken string            `json:"feishu_mcp_token,omitempty"`
+	PaonesToken    string            `json:"paones_token,omitempty"`
+	JingweiToken   string            `json:"jingwei_token,omitempty"`
+	Extra          map[string]string `json:"-"`
+}
+
+func (t *IntegrationTokens) UnmarshalJSON(data []byte) error {
+	var raw map[string]string
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	t.Extra = make(map[string]string)
+	for key, value := range raw {
+		value = strings.TrimSpace(value)
+		switch key {
+		case "git_token":
+			t.GitToken = value
+		case "feishu_mcp_token":
+			t.FeishuMCPToken = value
+		case "paones_token":
+			t.PaonesToken = value
+		case "jingwei_token":
+			t.JingweiToken = value
+		case "paihub_token":
+			if t.PaonesToken == "" {
+				t.PaonesToken = value
+			}
+		default:
+			t.Extra[key] = value
+		}
+	}
+	return nil
 }
 
 // ChatAttachmentMeta is the structured attachment metadata the daemon

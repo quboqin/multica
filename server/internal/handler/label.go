@@ -91,10 +91,10 @@ func parseLabelResourceType(raw string) (string, error) {
 		return defaultLabelResourceType, nil
 	}
 	switch value {
-	case "issue", "agent", "skill":
+	case "issue", "agent", "skill", "project":
 		return value, nil
 	default:
-		return "", errors.New("resource_type must be issue, agent, or skill")
+		return "", errors.New("resource_type must be issue, agent, skill, or project")
 	}
 }
 
@@ -550,6 +550,99 @@ func (h *Handler) DetachLabel(w http.ResponseWriter, r *http.Request) {
 		"labels":   resp,
 	})
 	writeJSON(w, http.StatusOK, map[string]any{"labels": resp})
+}
+
+// ---------------------------------------------------------------------------
+// Handlers — project↔label attach/detach
+// ---------------------------------------------------------------------------
+
+func (h *Handler) loadProjectForLabelRequest(w http.ResponseWriter, r *http.Request) (db.Project, bool) {
+	projectID, ok := parseUUIDOrBadRequest(w, chi.URLParam(r, "id"), "project id")
+	if !ok {
+		return db.Project{}, false
+	}
+	wsUUID, ok := parseUUIDOrBadRequest(w, h.resolveWorkspaceID(r), "workspace id")
+	if !ok {
+		return db.Project{}, false
+	}
+	project, err := h.Queries.GetProjectInWorkspace(r.Context(), db.GetProjectInWorkspaceParams{
+		ID:          projectID,
+		WorkspaceID: wsUUID,
+	})
+	if err != nil {
+		writeError(w, http.StatusNotFound, "project not found")
+		return db.Project{}, false
+	}
+	return project, true
+}
+
+func (h *Handler) ListLabelsForProject(w http.ResponseWriter, r *http.Request) {
+	project, ok := h.loadProjectForLabelRequest(w, r)
+	if !ok {
+		return
+	}
+	labels, err := h.Queries.ListLabelsByProject(r.Context(), db.ListLabelsByProjectParams{
+		ProjectID:   project.ID,
+		WorkspaceID: project.WorkspaceID,
+	})
+	if err != nil {
+		slog.Warn("ListLabelsForProject failed", append(logger.RequestAttrs(r), "error", err)...)
+		writeError(w, http.StatusInternalServerError, "failed to list labels")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"labels": labelsToResponse(labels)})
+}
+
+func (h *Handler) AttachLabelToProject(w http.ResponseWriter, r *http.Request) {
+	project, ok := h.loadProjectForLabelRequest(w, r)
+	if !ok {
+		return
+	}
+	var req AttachLabelRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.LabelID == "" {
+		writeError(w, http.StatusBadRequest, "label_id is required")
+		return
+	}
+	labelID, ok := parseUUIDOrBadRequest(w, req.LabelID, "label_id")
+	if !ok {
+		return
+	}
+	label, err := h.Queries.GetLabel(r.Context(), db.GetLabelParams{ID: labelID, WorkspaceID: project.WorkspaceID})
+	if err != nil || label.ResourceType != "project" {
+		writeError(w, http.StatusNotFound, "project label not found")
+		return
+	}
+	if err := h.Queries.AttachLabelToProject(r.Context(), db.AttachLabelToProjectParams{
+		ProjectID:   project.ID,
+		LabelID:     labelID,
+		WorkspaceID: project.WorkspaceID,
+	}); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to attach project label")
+		return
+	}
+	h.publish(protocol.EventLabelUpdated, uuidToString(project.WorkspaceID), "member", requestUserID(r), map[string]any{"label": labelToResponse(label)})
+	h.ListLabelsForProject(w, r)
+}
+
+func (h *Handler) DetachLabelFromProject(w http.ResponseWriter, r *http.Request) {
+	project, ok := h.loadProjectForLabelRequest(w, r)
+	if !ok {
+		return
+	}
+	labelID, ok := parseUUIDOrBadRequest(w, chi.URLParam(r, "labelId"), "label id")
+	if !ok {
+		return
+	}
+	if err := h.Queries.DetachLabelFromProject(r.Context(), db.DetachLabelFromProjectParams{
+		ProjectID:   project.ID,
+		LabelID:     labelID,
+		WorkspaceID: project.WorkspaceID,
+	}); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to detach project label")
+		return
+	}
+	h.publish(protocol.EventLabelUpdated, uuidToString(project.WorkspaceID), "member", requestUserID(r), map[string]any{"label_id": uuidToString(labelID), "resource_type": "project"})
+	h.ListLabelsForProject(w, r)
 }
 
 // ---------------------------------------------------------------------------

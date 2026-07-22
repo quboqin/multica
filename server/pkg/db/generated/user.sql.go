@@ -46,7 +46,7 @@ func (q *Queries) CreateUser(ctx context.Context, arg CreateUserParams) (User, e
 }
 
 const getUser = `-- name: GetUser :one
-SELECT id, name, email, avatar_url, created_at, updated_at, onboarded_at, onboarding_questionnaire, cloud_waitlist_email, cloud_waitlist_reason, starter_content_state, language, profile_description, timezone FROM "user"
+SELECT id, name, email, avatar_url, created_at, updated_at, onboarded_at, onboarding_questionnaire, cloud_waitlist_email, cloud_waitlist_reason, starter_content_state, language, profile_description, timezone, integration_tokens FROM "user"
 WHERE id = $1
 `
 
@@ -68,12 +68,13 @@ func (q *Queries) GetUser(ctx context.Context, id pgtype.UUID) (User, error) {
 		&i.Language,
 		&i.ProfileDescription,
 		&i.Timezone,
+		&i.IntegrationTokens,
 	)
 	return i, err
 }
 
 const getUserByEmail = `-- name: GetUserByEmail :one
-SELECT id, name, email, avatar_url, created_at, updated_at, onboarded_at, onboarding_questionnaire, cloud_waitlist_email, cloud_waitlist_reason, starter_content_state, language, profile_description, timezone FROM "user"
+SELECT id, name, email, avatar_url, created_at, updated_at, onboarded_at, onboarding_questionnaire, cloud_waitlist_email, cloud_waitlist_reason, starter_content_state, language, profile_description, timezone, integration_tokens FROM "user"
 WHERE email = $1
 `
 
@@ -95,6 +96,7 @@ func (q *Queries) GetUserByEmail(ctx context.Context, email string) (User, error
 		&i.Language,
 		&i.ProfileDescription,
 		&i.Timezone,
+		&i.IntegrationTokens,
 	)
 	return i, err
 }
@@ -294,14 +296,15 @@ UPDATE "user" SET
     avatar_url = COALESCE($3, avatar_url),
     language = COALESCE($4, language),
     profile_description = COALESCE($5, profile_description),
+    integration_tokens = COALESCE($6, integration_tokens),
     timezone = CASE
-        WHEN $6::text IS NULL THEN timezone
-        WHEN $6::text = ''    THEN NULL
-        ELSE $6::text
+        WHEN $7::text IS NULL THEN timezone
+        WHEN $7::text = ''    THEN NULL
+        ELSE $7::text
     END,
     updated_at = now()
 WHERE id = $1
-RETURNING id, name, email, avatar_url, created_at, updated_at, onboarded_at, onboarding_questionnaire, cloud_waitlist_email, cloud_waitlist_reason, starter_content_state, language, profile_description, timezone
+RETURNING id, name, email, avatar_url, created_at, updated_at, onboarded_at, onboarding_questionnaire, cloud_waitlist_email, cloud_waitlist_reason, starter_content_state, language, profile_description, timezone, integration_tokens
 `
 
 type UpdateUserParams struct {
@@ -310,6 +313,7 @@ type UpdateUserParams struct {
 	AvatarUrl          pgtype.Text `json:"avatar_url"`
 	Language           pgtype.Text `json:"language"`
 	ProfileDescription pgtype.Text `json:"profile_description"`
+	IntegrationTokens  []byte      `json:"integration_tokens"`
 	Timezone           pgtype.Text `json:"timezone"`
 }
 
@@ -332,6 +336,7 @@ func (q *Queries) UpdateUser(ctx context.Context, arg UpdateUserParams) (User, e
 		arg.AvatarUrl,
 		arg.Language,
 		arg.ProfileDescription,
+		arg.IntegrationTokens,
 		arg.Timezone,
 	)
 	var i User
@@ -350,6 +355,7 @@ func (q *Queries) UpdateUser(ctx context.Context, arg UpdateUserParams) (User, e
 		&i.Language,
 		&i.ProfileDescription,
 		&i.Timezone,
+		&i.IntegrationTokens,
 	)
 	return i, err
 }

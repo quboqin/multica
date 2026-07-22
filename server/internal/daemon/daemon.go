@@ -4159,6 +4159,7 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 		} else {
 			effectiveMcpConfig = merged
 		}
+		effectiveMcpConfig = materializeIntegrationMcpConfig(effectiveMcpConfig, task.IntegrationTokens)
 		if provider == "cursor" {
 			cursorMcpAuthSource = strings.TrimSpace(task.Agent.CustomEnv[execenv.CursorMcpAuthSourceEnv])
 		}
@@ -4233,6 +4234,7 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 		var err error
 		env, err = d.reuseExecutionEnvironment(prepareCtx, execenv.ReuseParams{
 			WorkspacesRoot:        d.cfg.WorkspacesRoot,
+			WorkspaceID:           task.WorkspaceID,
 			Profile:               d.cfg.Profile,
 			WorkDir:               task.PriorWorkDir,
 			Provider:              provider,
@@ -4390,6 +4392,7 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 		"TMP":                  taskTempDir,
 		"TEMP":                 taskTempDir,
 	}
+	applyUserIntegrationEnv(agentEnv, task)
 	if checkoutMode := repoCheckoutModeFor(provider, runtime.GOOS); checkoutMode != "" {
 		agentEnv[repoCheckoutModeEnv] = checkoutMode
 	}
@@ -4477,7 +4480,7 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	if err := configureCodexTaskShellEnvironment(provider, env.CodexHome, os.Environ(), agentEnv, agentCustomEnv, d.logger); err != nil {
 		return TaskResult{}, err
 	}
-	backend, err := agent.New(provider, agent.Config{
+	agentConfig := agent.Config{
 		ExecutablePath: entry.Path,
 		CLIVersion:     resolvedVersion,
 		Env:            agentEnv,
@@ -4486,7 +4489,16 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 		RuntimeID:      task.RuntimeID,
 		DaemonVersion:  d.cfg.CLIVersion,
 		CodexVersion:   codexVersion,
-	})
+	}
+	if provider == "codex" {
+		agentConfig.OnCodexInitializedHome = func(codexHome string) {
+			cacheDir := execenv.CodexStateWarmCacheDir(d.cfg.WorkspacesRoot, task.WorkspaceID)
+			if err := execenv.RefreshCodexStateWarmCache(codexHome, cacheDir, d.logger); err != nil {
+				taskLog.Debug("refresh codex state warm cache failed", "error", err)
+			}
+		}
+	}
+	backend, err := agent.New(provider, agentConfig)
 	if err != nil {
 		return TaskResult{}, fmt.Errorf("create agent backend: %w", err)
 	}

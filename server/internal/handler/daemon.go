@@ -1671,7 +1671,10 @@ func (h *Handler) buildClaimedTaskResponse(r *http.Request, task *db.AgentTaskQu
 	if runtime.OwnerID.Valid {
 		if owner, err := h.Queries.GetUser(r.Context(), runtime.OwnerID); err == nil {
 			resp.RequestingUserName = owner.Name
+			resp.RequestingUserEmail = owner.Email
 			resp.RequestingUserProfileDescription = owner.ProfileDescription
+			tokens := taskIntegrationTokensFromUser(owner)
+			resp.IntegrationTokens = &tokens
 		} else {
 			slog.Debug("failed to load runtime owner for brief injection",
 				"runtime_id", runtimeID,
@@ -2653,6 +2656,61 @@ func trailingUserMessages(msgs []db.ChatMessage) []db.ChatMessage {
 		}
 	}
 	return msgs[start:]
+}
+
+func taskIntegrationTokensFromUser(user db.User) TaskIntegrationTokens {
+	rawTokens := integrationTokenMapFromUser(user)
+	var tokens TaskIntegrationTokens
+	tokens.Extra = make(map[string]string)
+	for key, value := range rawTokens {
+		switch key {
+		case "git_token":
+			tokens.GitToken = value
+		case "feishu_mcp_token":
+			tokens.FeishuMCPToken = value
+		case "paones_token":
+			tokens.PaonesToken = value
+		case "jingwei_token":
+			tokens.JingweiToken = value
+		case "paihub_token":
+			if tokens.PaonesToken == "" {
+				tokens.PaonesToken = value
+			}
+		default:
+			tokens.Extra[key] = value
+		}
+	}
+	return tokens
+}
+
+func integrationTokenMapFromUser(user db.User) map[string]string {
+	tokens, err := integrationTokenMapFromRawWithStatus(user.IntegrationTokens)
+	if err != nil {
+		slog.Debug("failed to unmarshal user integration tokens",
+			"user_id", uuidToString(user.ID),
+			"error", err,
+		)
+	}
+	return tokens
+}
+
+func integrationTokenMapFromRawWithStatus(raw []byte) (map[string]string, error) {
+	tokens := make(map[string]string)
+	if len(raw) == 0 {
+		return tokens, nil
+	}
+	var decoded map[string]string
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		return tokens, err
+	}
+	for key, value := range decoded {
+		trimmedKey := strings.TrimSpace(key)
+		if trimmedKey == "" {
+			continue
+		}
+		tokens[trimmedKey] = strings.TrimSpace(value)
+	}
+	return tokens, nil
 }
 
 // ListPendingTasksByRuntime returns queued/dispatched tasks for a runtime.

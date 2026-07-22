@@ -2,7 +2,7 @@
 
 import { useMemo, useState, useCallback, useRef, useEffect } from "react";
 import { useDefaultLayout, usePanelRef } from "react-resizable-panels";
-import { Check, ChevronRight, Link2, MoreHorizontal, PanelRight, Pin, PinOff, Trash2, UserMinus } from "lucide-react";
+import { CalendarRange, Check, ChevronRight, Link2, MoreHorizontal, PanelRight, Pin, PinOff, Trash2, UserMinus } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { cn } from "@multica/ui/lib/utils";
 import { copyText } from "@multica/ui/lib/clipboard";
@@ -11,6 +11,7 @@ import type { ProjectStatus, ProjectPriority } from "@multica/core/types";
 import { useAuthStore } from "@multica/core/auth";
 import { projectDetailOptions } from "@multica/core/projects/queries";
 import { useUpdateProject, useDeleteProject } from "@multica/core/projects/mutations";
+import { milestoneListOptions } from "@multica/core/milestones";
 import { pinListOptions } from "@multica/core/pins";
 import { useCreatePin, useDeletePin } from "@multica/core/pins";
 import { memberListOptions, agentListOptions } from "@multica/core/workspace/queries";
@@ -25,6 +26,8 @@ import { useNavigation } from "../../navigation";
 import { TitleEditor, ContentEditor, type ContentEditorRef } from "../../editor";
 import { PriorityIcon } from "../../issues/components/priority-icon";
 import { ProjectResourcesSection } from "./project-resources-section";
+import { ProjectLabelPicker } from "./project-label-picker";
+import { DEFAULT_PROJECT_ICON } from "./project-icon";
 import { ProjectStartDatePicker } from "./project-start-date-picker";
 import { ProjectDueDatePicker } from "./project-due-date-picker";
 import { IssueSurface } from "../../issues/surface/issue-surface";
@@ -97,6 +100,12 @@ function PropRow({
 // ProjectDetail
 // ---------------------------------------------------------------------------
 
+function milestoneStatusDotClass(status: string): string {
+  if (status === "completed" || status === "cancelled") return "bg-muted-foreground";
+  if (status === "paused") return "bg-warning";
+  return "bg-primary";
+}
+
 export function ProjectDetail({ projectId }: { projectId: string }) {
   const { t } = useT("projects");
   const statusLabels = useProjectStatusLabels();
@@ -106,6 +115,7 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
   const router = useNavigation();
   const userId = useAuthStore((s) => s.user?.id);
   const { data: project, isLoading } = useQuery(projectDetailOptions(wsId, projectId));
+  const { data: milestones = [] } = useQuery(milestoneListOptions(wsId));
   const recordRecentContext = useRecentContextStore((s) => s.recordVisit);
   useEffect(() => {
     if (project) {
@@ -199,6 +209,10 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
   const leadQuery = leadFilter.toLowerCase();
   const filteredMembers = members.filter((m) => m.name.toLowerCase().includes(leadQuery) || matchesPinyin(m.name, leadQuery));
   const filteredAgents = agents.filter((a) => !a.archived_at && (a.name.toLowerCase().includes(leadQuery) || matchesPinyin(a.name, leadQuery)));
+  const selectedMilestone = useMemo(
+    () => milestones.find((milestone) => milestone.id === project?.milestone_id) ?? null,
+    [milestones, project?.milestone_id],
+  );
 
   const handleUpdateField = useCallback(
     (data: Parameters<typeof updateProject.mutate>[0] extends { id: string } & infer R ? R : never) => {
@@ -248,7 +262,7 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
                 className="text-2xl cursor-pointer rounded-lg p-1 -ml-1 hover:bg-accent/60 transition-colors"
                 title={t(($) => $.detail.icon_tooltip)}
               >
-                {project.icon || "📁"}
+                {project.icon || DEFAULT_PROJECT_ICON}
               </button>
             }
           />
@@ -399,6 +413,42 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
                 </div>
               </PopoverContent>
             </Popover>
+          </PropRow>
+          <PropRow label={t(($) => $.table.plan)}>
+            <DropdownMenu>
+              <DropdownMenuTrigger
+                render={
+                  <button type="button" className="inline-flex min-w-0 items-center gap-1.5 text-xs transition-colors hover:text-foreground">
+                    {selectedMilestone ? (
+                      <>
+                        <span className={cn("size-2 rounded-full", milestoneStatusDotClass(selectedMilestone.status))} />
+                        <span className="truncate">{selectedMilestone.title}</span>
+                      </>
+                    ) : (
+                      <span className="text-muted-foreground">{t(($) => $.detail.no_plan)}</span>
+                    )}
+                  </button>
+                }
+              />
+              <DropdownMenuContent align="start" className="w-56">
+                <DropdownMenuItem onClick={() => handleUpdateField({ milestone_id: null })}>
+                  <CalendarRange className="size-3.5 text-muted-foreground" />
+                  <span className="text-muted-foreground">{t(($) => $.detail.no_plan)}</span>
+                  {!project.milestone_id && <Check className="ml-auto h-3.5 w-3.5" />}
+                </DropdownMenuItem>
+                {milestones.length > 0 && <DropdownMenuSeparator />}
+                {milestones.map((milestone) => (
+                  <DropdownMenuItem key={milestone.id} onClick={() => handleUpdateField({ milestone_id: milestone.id })}>
+                    <span className={cn("size-2 rounded-full", milestoneStatusDotClass(milestone.status))} />
+                    <span className="truncate">{milestone.title}</span>
+                    {milestone.id === project.milestone_id && <Check className="ml-auto h-3.5 w-3.5" />}
+                  </DropdownMenuItem>
+                ))}
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </PropRow>
+          <PropRow label={t(($) => $.table.labels)}>
+            <ProjectLabelPicker projectId={project.id} />
           </PropRow>
           <PropRow label={t(($) => $.detail.prop_start_date)}>
             <ProjectStartDatePicker startDate={project.start_date} onUpdate={handleUpdateField} />
