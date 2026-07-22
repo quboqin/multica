@@ -1,4 +1,4 @@
-.PHONY: help makehelp dev server daemon cli multica build test migrate-up migrate-down sqlc seed clean setup start stop check worktree-env setup-main start-main stop-main check-main setup-worktree start-worktree stop-worktree check-worktree db-up db-down db-reset selfhost selfhost-build selfhost-stop
+.PHONY: help makehelp dev server daemon cli multica warm-web build test migrate-up migrate-down sqlc seed clean setup start stop check worktree-env setup-main start-main stop-main check-main setup-worktree start-worktree stop-worktree check-worktree db-up db-down db-reset selfhost selfhost-build selfhost-stop selfhost-preflight selfhost-deploy selfhost-verify preview-device-check
 
 MAIN_ENV_FILE ?= .env
 WORKTREE_ENV_FILE ?= .env.worktree
@@ -70,43 +70,33 @@ selfhost: ## Create .env if needed, then pull and start the official self-hosted
 		fi; \
 		echo "==> Generated random JWT_SECRET and POSTGRES_PASSWORD"; \
 	fi
-	@echo "==> Pulling official Multica images..."
-	@if ! docker compose -f docker-compose.selfhost.yml pull; then \
-		echo ""; \
-		echo "Official images for tag '$${MULTICA_IMAGE_TAG:-latest}' are not published yet."; \
-		echo "If this is before the first GHCR release, build from the current checkout:"; \
-		echo "  make selfhost-build"; \
-		exit 1; \
-	fi
-	@echo "==> Starting Multica via Docker Compose..."
-	docker compose -f docker-compose.selfhost.yml up -d
-	@echo "==> Waiting for backend to be ready..."
-	@for i in $$(seq 1 30); do \
-		if curl -sf http://localhost:$${PORT:-8080}/health > /dev/null 2>&1; then \
-			break; \
+	@if ! grep -Eq '^BROKER_STATE_KEY=.+$$' .env; then \
+		BROKER_KEY=$$(openssl rand -base64 32 | tr -d '\r\n'); \
+		if grep -Eq '^#?BROKER_STATE_KEY=' .env; then \
+			if [ "$$(uname)" = "Darwin" ]; then \
+				sed -i '' -E "s#^#?BROKER_STATE_KEY=.*#BROKER_STATE_KEY=$$BROKER_KEY#" .env; \
+			else \
+				sed -i -E "s#^#?BROKER_STATE_KEY=.*#BROKER_STATE_KEY=$$BROKER_KEY#" .env; \
+			fi; \
+		else \
+			printf '\nBROKER_STATE_KEY=%s\n' "$$BROKER_KEY" >> .env; \
 		fi; \
-		sleep 2; \
-	done
-	@if curl -sf http://localhost:$${PORT:-8080}/health > /dev/null 2>&1; then \
-		echo ""; \
-		echo "✓ Multica is running!"; \
-		echo "  Frontend: http://localhost:$${FRONTEND_PORT:-3000}"; \
-		echo "  Backend:  http://localhost:$${PORT:-8080}"; \
-		echo ""; \
-		echo "Images: $${MULTICA_BACKEND_IMAGE:-ghcr.io/multica-ai/multica-backend}:$${MULTICA_IMAGE_TAG:-latest}"; \
-		echo "        $${MULTICA_WEB_IMAGE:-ghcr.io/multica-ai/multica-web}:$${MULTICA_IMAGE_TAG:-latest}"; \
-		echo ""; \
-		echo "Log in: configure RESEND_API_KEY in .env for email codes,"; \
-		echo "        or read the generated code from backend logs when Resend is unset."; \
-		echo ""; \
-		echo "Next — install the CLI and connect your machine:"; \
-		echo "  brew install multica-ai/tap/multica"; \
-		echo "  multica setup self-host"; \
-	else \
-		echo ""; \
-		echo "Services are still starting. Check logs:"; \
-		echo "  docker compose -f docker-compose.selfhost.yml logs"; \
+		echo "==> Generated BROKER_STATE_KEY for encrypted credential state"; \
 	fi
+	@if ! grep -Eq '^MULTICA_WORKSPACE_MCP_KEY=.+$$' .env; then \
+		MCP_KEY=$$(openssl rand -base64 32 | tr -d '\r\n'); \
+		if grep -Eq '^#?MULTICA_WORKSPACE_MCP_KEY=' .env; then \
+			if [ "$$(uname)" = "Darwin" ]; then \
+				sed -i '' -E "s#^#?MULTICA_WORKSPACE_MCP_KEY=.*#MULTICA_WORKSPACE_MCP_KEY=$$MCP_KEY#" .env; \
+			else \
+				sed -i -E "s#^#?MULTICA_WORKSPACE_MCP_KEY=.*#MULTICA_WORKSPACE_MCP_KEY=$$MCP_KEY#" .env; \
+			fi; \
+		else \
+			printf '\nMULTICA_WORKSPACE_MCP_KEY=%s\n' "$$MCP_KEY" >> .env; \
+		fi; \
+		echo "==> Generated MULTICA_WORKSPACE_MCP_KEY for encrypted MCP headers"; \
+	fi
+	@bash scripts/selfhost-deploy.sh --env-file .env
 
 selfhost-build: ## Build backend/web from the current checkout and start the self-hosted stack
 	@if [ ! -f .env ]; then \
@@ -125,35 +115,45 @@ selfhost-build: ## Build backend/web from the current checkout and start the sel
 		fi; \
 		echo "==> Generated random JWT_SECRET and POSTGRES_PASSWORD"; \
 	fi
-	@echo "==> Building Multica from the current checkout..."
-	docker compose -f docker-compose.selfhost.yml -f docker-compose.selfhost.build.yml up -d --build
-	@echo "==> Waiting for backend to be ready..."
-	@for i in $$(seq 1 30); do \
-		if curl -sf http://localhost:$${PORT:-8080}/health > /dev/null 2>&1; then \
-			break; \
+	@if ! grep -Eq '^BROKER_STATE_KEY=.+$$' .env; then \
+		BROKER_KEY=$$(openssl rand -base64 32 | tr -d '\r\n'); \
+		if grep -Eq '^#?BROKER_STATE_KEY=' .env; then \
+			if [ "$$(uname)" = "Darwin" ]; then \
+				sed -i '' -E "s#^#?BROKER_STATE_KEY=.*#BROKER_STATE_KEY=$$BROKER_KEY#" .env; \
+			else \
+				sed -i -E "s#^#?BROKER_STATE_KEY=.*#BROKER_STATE_KEY=$$BROKER_KEY#" .env; \
+			fi; \
+		else \
+			printf '\nBROKER_STATE_KEY=%s\n' "$$BROKER_KEY" >> .env; \
 		fi; \
-		sleep 2; \
-	done
-	@if curl -sf http://localhost:$${PORT:-8080}/health > /dev/null 2>&1; then \
-		echo ""; \
-		echo "✓ Multica is running!"; \
-		echo "  Frontend: http://localhost:$${FRONTEND_PORT:-3000}"; \
-		echo "  Backend:  http://localhost:$${PORT:-8080}"; \
-		echo ""; \
-		echo "Log in: configure RESEND_API_KEY in .env for email codes,"; \
-		echo "        or read the generated code from backend logs when Resend is unset."; \
-		echo ""; \
-		echo "Built images locally via docker-compose.selfhost.build.yml."; \
-		echo "Local tags: multica-backend:dev and multica-web:dev."; \
-		echo ""; \
-		echo "Next — install the CLI and connect your machine:"; \
-		echo "  brew install multica-ai/tap/multica"; \
-		echo "  multica setup self-host"; \
-	else \
-		echo ""; \
-		echo "Services are still starting. Check logs:"; \
-		echo "  docker compose -f docker-compose.selfhost.yml logs"; \
+		echo "==> Generated BROKER_STATE_KEY for encrypted credential state"; \
 	fi
+	@if ! grep -Eq '^MULTICA_WORKSPACE_MCP_KEY=.+$$' .env; then \
+		MCP_KEY=$$(openssl rand -base64 32 | tr -d '\r\n'); \
+		if grep -Eq '^#?MULTICA_WORKSPACE_MCP_KEY=' .env; then \
+			if [ "$$(uname)" = "Darwin" ]; then \
+				sed -i '' -E "s#^#?MULTICA_WORKSPACE_MCP_KEY=.*#MULTICA_WORKSPACE_MCP_KEY=$$MCP_KEY#" .env; \
+			else \
+				sed -i -E "s#^#?MULTICA_WORKSPACE_MCP_KEY=.*#MULTICA_WORKSPACE_MCP_KEY=$$MCP_KEY#" .env; \
+			fi; \
+		else \
+			printf '\nMULTICA_WORKSPACE_MCP_KEY=%s\n' "$$MCP_KEY" >> .env; \
+		fi; \
+		echo "==> Generated MULTICA_WORKSPACE_MCP_KEY for encrypted MCP headers"; \
+	fi
+	@bash scripts/selfhost-deploy.sh --env-file .env --build
+
+selfhost-preflight: ## Validate self-host production configuration before deployment
+	@bash scripts/selfhost-preflight.sh .env
+
+selfhost-deploy: ## Pull, deploy, wait for automatic migrations, and verify the self-host stack
+	@bash scripts/selfhost-deploy.sh --env-file .env
+
+selfhost-verify: ## Verify the running self-host frontend, API, and migration health
+	@bash scripts/selfhost-verify.sh .env
+
+preview-device-check: ## Check the local Android Preview Device Runtime and its ADB devices
+	@bash scripts/preview-device-check.sh
 
 selfhost-stop: ## Stop the self-hosted Docker Compose stack
 	@echo "==> Stopping Multica services..."
@@ -273,6 +273,9 @@ server: ## Run only the Go server for the current checkout
 	$(REQUIRE_ENV)
 	@bash scripts/ensure-postgres.sh "$(ENV_FILE)"
 	cd server && go run ./cmd/server
+
+warm-web: ## Precompile all Next.js development routes to avoid first-open compiling delays
+	node scripts/warm-web-routes.mjs
 
 daemon: ## Restart the local agent daemon using the CLI's stored auth/session
 	@$(MAKE) multica MULTICA_ARGS="daemon restart --profile local"

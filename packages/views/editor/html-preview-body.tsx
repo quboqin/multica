@@ -9,7 +9,7 @@
  * across html-block-preview.tsx, html-attachment-preview.tsx, and
  * attachment-preview-modal.tsx. This component owns:
  *
- *   - srcDoc + sandbox="allow-scripts" via CodeBlockIframe
+ *   - srcDoc + sandbox via CodeBlockIframe
  *   - withFragmentNavShim() so anchor links inside the iframe scroll instead
  *     of silently failing in the sandbox's opaque origin
  *   - loading / typed-error placeholders for attachment sources

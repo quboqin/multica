@@ -6,6 +6,156 @@ afterEach(() => {
 });
 
 describe("ApiClient", () => {
+  describe("preview session endpoints", () => {
+    const session = {
+      id: "preview-1",
+      workspace_id: "ws-1",
+      issue_id: "issue-1",
+      task_id: null,
+      platform: "web",
+      provider: "external_web",
+      title: "Checkout preview",
+      preview_url: "https://preview.example.test/checkout",
+      status: "running",
+      creator_type: "member",
+      creator_id: "user-1",
+      error_message: null,
+      expires_at: null,
+      last_active_at: "2026-07-13T12:00:00Z",
+      lease_expires_at: "2026-07-13T12:05:00Z",
+      started_at: "2026-07-13T12:00:00Z",
+      stopped_at: null,
+      created_at: "2026-07-13T11:59:00Z",
+      updated_at: "2026-07-13T12:00:00Z",
+    };
+
+    it("uses the list/create/get/touch/device/stop contracts and returns camelCase data", async () => {
+      const fetchMock = vi
+        .fn()
+        .mockResolvedValueOnce(
+          new Response(JSON.stringify({ preview_sessions: [session], total: 1 }), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }),
+        )
+        .mockResolvedValueOnce(
+          new Response(JSON.stringify(session), {
+            status: 201,
+            headers: { "Content-Type": "application/json" },
+          }),
+        )
+        .mockResolvedValueOnce(
+          new Response(JSON.stringify(session), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }),
+        )
+        .mockResolvedValueOnce(
+          new Response(JSON.stringify(session), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }),
+        )
+        .mockResolvedValueOnce(
+          new Response(
+            JSON.stringify({
+              ...session,
+              preview_url: "http://127.0.0.1:18081?serial=USB-123",
+            }),
+            { status: 200, headers: { "Content-Type": "application/json" } },
+          ),
+        )
+        .mockResolvedValueOnce(
+          new Response(
+            JSON.stringify({
+              ...session,
+              status: "stopped",
+              stopped_at: "2026-07-13T12:10:00Z",
+            }),
+            { status: 200, headers: { "Content-Type": "application/json" } },
+          ),
+        );
+      vi.stubGlobal("fetch", fetchMock);
+
+      const client = new ApiClient("https://api.example.test");
+      const list = await client.listPreviewSessions("issue-1");
+      const created = await client.createPreviewSession("issue-1", {
+        previewUrl: "https://preview.example.test/checkout",
+      });
+      const detail = await client.getPreviewSession("preview-1");
+      const touched = await client.touchPreviewSession("preview-1");
+      const switched = await client.switchPreviewSessionDevice("preview-1", "USB-123", true);
+      const stopped = await client.stopPreviewSession("preview-1");
+
+      expect(list.previewSessions[0]?.previewUrl).toBe(
+        "https://preview.example.test/checkout",
+      );
+      expect(created.workspaceId).toBe("ws-1");
+      expect(detail.createdAt).toBe("2026-07-13T11:59:00Z");
+      expect(touched.leaseExpiresAt).toBe("2026-07-13T12:05:00Z");
+      expect(switched.previewUrl).toContain("serial=USB-123");
+      expect(stopped).toMatchObject({
+        status: "stopped",
+        stoppedAt: "2026-07-13T12:10:00Z",
+      });
+      expect(fetchMock.mock.calls.map(([url, init]) => ({
+        url,
+        method: init?.method ?? "GET",
+        body: init?.body,
+      }))).toMatchObject([
+        {
+          url: "https://api.example.test/api/issues/issue-1/preview-sessions",
+          method: "GET",
+        },
+        {
+          url: "https://api.example.test/api/issues/issue-1/preview-sessions",
+          method: "POST",
+          body: JSON.stringify({
+            preview_url: "https://preview.example.test/checkout",
+            platform: "web",
+            provider: "external_web",
+          }),
+        },
+        {
+          url: "https://api.example.test/api/preview-sessions/preview-1",
+          method: "GET",
+        },
+        {
+          url: "https://api.example.test/api/preview-sessions/preview-1/touch",
+          method: "POST",
+        },
+        {
+          url: "https://api.example.test/api/preview-sessions/preview-1/device",
+          method: "POST",
+          body: JSON.stringify({ serial: "USB-123", confirmed: true }),
+        },
+        {
+          url: "https://api.example.test/api/preview-sessions/preview-1/stop",
+          method: "POST",
+        },
+      ]);
+    });
+
+    it("falls back to an empty list when the response is malformed", async () => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn().mockResolvedValue(
+          new Response(
+            JSON.stringify({ preview_sessions: null, total: "one" }),
+            { status: 200, headers: { "Content-Type": "application/json" } },
+          ),
+        ),
+      );
+
+      const client = new ApiClient("https://api.example.test");
+
+      await expect(client.listPreviewSessions("issue-1")).resolves.toEqual({
+        previewSessions: [],
+        total: 0,
+      });
+    });
+  });
+
   it("preserves HTTP status on failed requests", async () => {
     vi.stubGlobal(
       "fetch",

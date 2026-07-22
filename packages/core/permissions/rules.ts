@@ -3,6 +3,7 @@ import type {
   Comment,
   Member,
   MemberRole,
+  PreviewSession,
   RuntimeDevice,
   Skill,
 } from "../types";
@@ -127,6 +128,28 @@ export function canDeleteComment(
   return deny(
     "not_resource_owner",
     "Only the author and workspace admins can delete this comment.",
+  );
+}
+
+// ---- Preview sessions ------------------------------------------------------
+
+export function canStopPreviewSession(
+  session: PreviewSession,
+  ctx: PermissionContext,
+): Decision {
+  if (ctx.userId === null) {
+    return deny("not_authenticated", "Sign in to stop this preview.");
+  }
+  if (isAdminLike(ctx.role)) return ALLOW;
+  if (
+    session.creatorType === "member" &&
+    session.creatorId === ctx.userId
+  ) {
+    return ALLOW;
+  }
+  return deny(
+    "not_resource_owner",
+    "Only the preview creator and workspace admins can stop this preview.",
   );
 }
 

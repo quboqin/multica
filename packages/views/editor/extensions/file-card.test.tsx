@@ -119,7 +119,10 @@ describe("FileCardView — HTML attachment routes through AttachmentBlock to ifr
       expect(f).toBeTruthy();
       return f!;
     });
-    expect(frame.getAttribute("sandbox")).toBe("allow-scripts");
+    expect(frame.getAttribute("sandbox")).toBe(
+      "allow-scripts allow-popups allow-popups-to-escape-sandbox",
+    );
+    expect(frame.getAttribute("sandbox")).not.toContain("allow-same-origin");
     expect(frame.getAttribute("srcdoc")).toContain("<p>chart</p>");
     // The AttachmentCard chrome surfaces the filename as text inside its row.
     // HtmlAttachmentPreview replaces the chrome entirely, so the filename

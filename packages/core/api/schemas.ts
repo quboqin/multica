@@ -14,13 +14,24 @@ import type {
   CreateAgentFromTemplateResponse,
   CreateBillingCheckoutSessionResponse,
   CreateBillingPortalSessionResponse,
+  CreativeImportSummary,
+  CreativeMaterialsResponse,
+  CredentialCrawlResult,
   GroupedIssuesResponse,
+  ListCredentialConnectorsResponse,
+  ListCredentialProfilesResponse,
+  ListWorkspaceMCPConnectionsResponse,
   ListIssuesResponse,
   ListWebhookDeliveriesResponse,
+  StartCredentialLoginSessionResponse,
+  PreviewSession,
+  PreviewSessionListResponse,
   Squad,
   TimelineEntry,
   User,
   WebhookDelivery,
+  VerifyWorkspaceMCPConnectionResponse,
+  WorkspaceMCPConnection,
 } from "../types";
 import type { CloudRuntimeNode } from "../runtimes/cloud-runtime";
 
@@ -258,6 +269,323 @@ export const EMPTY_LIST_ISSUES_RESPONSE: ListIssuesResponse = {
   total: 0,
 };
 
+export const CredentialConnectorSchema = z.object({
+  id: z.string().default(""),
+  display_name: z.string().default(""),
+  login_url: z.string().default(""),
+  capabilities: z.array(z.string()).default([]),
+}).loose();
+
+export const CredentialProfileSchema = z.object({
+  id: z.string().default(""),
+  connector_id: z.string().default(""),
+  label: z.string().default(""),
+  status: z.string().default("pending"),
+  last_used_at: z.string().nullable().optional(),
+  expires_hint: z.string().nullable().optional(),
+  created_at: z.string().default(""),
+  updated_at: z.string().default(""),
+}).loose();
+
+export const CredentialLoginSessionSchema = z.object({
+  id: z.string().default(""),
+  profile_id: z.string().default(""),
+  connector_id: z.string().default(""),
+  browser_url: z.string().default(""),
+  status: z.string().default("pending"),
+  expires_at: z.string().default(""),
+  created_at: z.string().default(""),
+}).loose();
+
+export const ListCredentialConnectorsResponseSchema = z.object({
+  connectors: z.array(CredentialConnectorSchema).default([]),
+}).loose();
+
+export const ListCredentialProfilesResponseSchema = z.object({
+  profiles: z.array(CredentialProfileSchema).default([]),
+}).loose();
+
+export const StartCredentialLoginSessionResponseSchema = z.object({
+  profile: CredentialProfileSchema,
+  session: CredentialLoginSessionSchema,
+}).loose();
+
+export const CredentialCrawlResultSchema = z.object({
+  status: z.string().default(""),
+  downloaded: z.number().default(0),
+  output_prefix: z.string().default(""),
+  message: z.string().default(""),
+  raw: z.unknown().optional(),
+}).loose();
+
+export const EMPTY_LIST_CREDENTIAL_CONNECTORS_RESPONSE: ListCredentialConnectorsResponse = {
+  connectors: [],
+};
+
+export const EMPTY_LIST_CREDENTIAL_PROFILES_RESPONSE: ListCredentialProfilesResponse = {
+  profiles: [],
+};
+
+export const WorkspaceMCPConnectionSchema = z.object({
+  id: z.string().default(""),
+  workspace_id: z.string().default(""),
+  name: z.string().default(""),
+  capability: z.string().default("creative_edit"),
+  transport: z.string().default("streamable_http"),
+  server_url: z.string().default(""),
+  tool_create: z.string().default("create_creative_job"),
+  tool_get: z.string().default("get_creative_job"),
+  status: z.string().default("disabled"),
+  is_default: z.boolean().default(false),
+  has_secret_headers: z.boolean().default(false),
+  secret_header_names: z.array(z.string()).default([]),
+  last_verified_at: z.string().default(""),
+  last_error: z.string().default(""),
+  created_at: z.string().default(""),
+  updated_at: z.string().default(""),
+}).loose();
+
+export const ListWorkspaceMCPConnectionsResponseSchema = z.object({
+  connections: z.array(WorkspaceMCPConnectionSchema).default([]),
+}).loose();
+
+export const VerifyWorkspaceMCPConnectionResponseSchema = z.object({
+  ok: z.boolean().default(false),
+  provider: z.string().default(""),
+  tools: z.array(z.string()).default([]),
+}).loose();
+
+export const EMPTY_WORKSPACE_MCP_CONNECTION: WorkspaceMCPConnection = {
+  id: "",
+  workspace_id: "",
+  name: "",
+  capability: "creative_edit",
+  transport: "streamable_http",
+  server_url: "",
+  tool_create: "create_creative_job",
+  tool_get: "get_creative_job",
+  status: "disabled",
+  is_default: false,
+  has_secret_headers: false,
+  secret_header_names: [],
+  last_verified_at: "",
+  last_error: "",
+  created_at: "",
+  updated_at: "",
+};
+
+export const EMPTY_LIST_WORKSPACE_MCP_CONNECTIONS_RESPONSE: ListWorkspaceMCPConnectionsResponse = {
+  connections: [],
+};
+
+export const EMPTY_VERIFY_WORKSPACE_MCP_CONNECTION_RESPONSE: VerifyWorkspaceMCPConnectionResponse = {
+  ok: false,
+  provider: "",
+  tools: [],
+};
+
+export const EMPTY_START_CREDENTIAL_LOGIN_SESSION_RESPONSE: StartCredentialLoginSessionResponse = {
+  profile: {
+    id: "",
+    connector_id: "",
+    label: "",
+    status: "pending",
+    created_at: "",
+    updated_at: "",
+  },
+  session: {
+    id: "",
+    profile_id: "",
+    connector_id: "",
+    browser_url: "",
+    status: "pending",
+    expires_at: "",
+    created_at: "",
+  },
+};
+
+export const EMPTY_CREDENTIAL_CRAWL_RESULT: CredentialCrawlResult = {
+  status: "",
+  downloaded: 0,
+  output_prefix: "",
+  message: "",
+};
+
+const NullableNumberSchema = z.number().nullable().optional().transform((v) => v ?? null);
+const NullableStringSchema = z.string().nullable().optional().transform((v) => v ?? null);
+
+export const CreativeMaterialCandidateSchema = z.object({
+  id: z.string().default(""),
+  workspace_id: z.string().default(""),
+  connector_id: z.string().default(""),
+  external_id: z.string().default(""),
+  dedupe_key: z.string().default(""),
+  competitor: z.string().default(""),
+  title: z.string().default(""),
+  asset_type: z.string().default("unknown"),
+  preview_url: z.string().default(""),
+  resource_url: z.string().default(""),
+  poster_url: z.string().default(""),
+  original_url: z.string().default(""),
+  archived_url: z.string().default(""),
+  archive_status: z.string().default("pending"),
+  archive_error: z.string().default(""),
+  duration_days: NullableNumberSchema,
+  impression_estimate: NullableNumberSchema,
+  media_names: z.array(z.string()).default([]),
+  area_names: z.array(z.string()).default([]),
+  language_names: z.array(z.string()).default([]),
+  platform_names: z.array(z.string()).default([]),
+  status: z.string().default("new"),
+  tags: z.array(z.string()).default([]),
+  note: z.string().default(""),
+  selected_at: NullableStringSchema,
+  first_seen_at: z.string().default(""),
+  last_seen_at: z.string().default(""),
+  created_at: z.string().default(""),
+  updated_at: z.string().default(""),
+  raw: z.unknown().optional(),
+}).loose();
+
+export const CreativeMaterialSummarySchema = z.object({
+  total: z.number().default(0),
+  new: z.number().default(0),
+  selected: z.number().default(0),
+  rejected: z.number().default(0),
+  sent_to_edit: z.number().default(0),
+  edited: z.number().default(0),
+  approved: z.number().default(0),
+  archived: z.number().default(0),
+}).loose();
+
+export const CreativeMaterialCrawlRunSchema = z.object({
+  id: z.string().default(""),
+  workspace_id: z.string().default(""),
+  issue_id: z.string().default(""),
+  connector_id: z.string().default(""),
+  query_summary: z.string().default(""),
+  status: z.string().default(""),
+  imported_count: z.number().default(0),
+  existing_count: z.number().default(0),
+  total_count: z.number().default(0),
+  created_at: z.string().default(""),
+}).loose();
+
+export const CreativeEditAssetSchema = z.object({
+  id: z.string().default(""),
+  variant_id: z.string().default(""),
+  width: z.number().default(0),
+  height: z.number().default(0),
+  label: z.string().default(""),
+  asset_url: z.string().default(""),
+  content_type: z.string().default(""),
+  created_at: z.string().default(""),
+}).loose();
+
+export const CreativeEditFeedbackSchema = z.object({
+  id: z.string().default(""),
+  workspace_id: z.string().default(""),
+  issue_id: z.string().default(""),
+  job_id: z.string().default(""),
+  candidate_id: z.string().default(""),
+  variant_id: z.string().default(""),
+  decision: z.string().default(""),
+  reason_codes: z.array(z.string()).catch([]).default([]),
+  suggestion: z.string().default(""),
+  process_snapshot: z.record(z.string(), z.unknown()).catch({}).default({}),
+  created_by: z.string().default(""),
+  created_by_name: z.string().default(""),
+  created_at: z.string().default(""),
+}).loose();
+
+export const CreativeEditVariantSchema = z.object({
+  id: z.string().default(""),
+  job_id: z.string().default(""),
+  candidate_id: z.string().default(""),
+  variant_index: z.number().default(0),
+  title: z.string().default(""),
+  description: z.string().default(""),
+  qc_status: z.string().default(""),
+  created_at: z.string().default(""),
+  assets: z.array(CreativeEditAssetSchema).default([]),
+  feedback: z.array(CreativeEditFeedbackSchema).default([]),
+}).loose();
+
+export const CreativeEditJobSchema = z.object({
+  id: z.string().default(""),
+  workspace_id: z.string().default(""),
+  issue_id: z.string().default(""),
+  status: z.string().default(""),
+  prompt: z.string().default(""),
+  rules: z.unknown().optional(),
+  process_data: z.record(z.string(), z.unknown()).catch({}).default({}),
+  external_provider: z.string().default(""),
+  mcp_connection_id: z.string().default(""),
+  external_job_id: z.string().default(""),
+  external_status: z.string().default(""),
+  stage: z.string().default(""),
+  progress: z.number().default(0),
+  last_poll_at: z.string().default(""),
+  next_poll_at: z.string().default(""),
+  completed_at: z.string().default(""),
+  error_message: z.string().default(""),
+  poll_attempts: z.number().default(0),
+  created_at: z.string().default(""),
+  updated_at: z.string().default(""),
+  candidate_ids: z.array(z.string()).default([]),
+  variants: z.array(CreativeEditVariantSchema).default([]),
+}).loose();
+
+export const CreativeMaterialsResponseSchema = z.object({
+  enabled: z.boolean().default(false),
+  summary: CreativeMaterialSummarySchema.default({
+    total: 0,
+    new: 0,
+    selected: 0,
+    rejected: 0,
+    sent_to_edit: 0,
+    edited: 0,
+    approved: 0,
+    archived: 0,
+  }),
+  candidates: z.array(CreativeMaterialCandidateSchema).default([]),
+  crawl_runs: z.array(CreativeMaterialCrawlRunSchema).default([]),
+  edit_jobs: z.array(CreativeEditJobSchema).default([]),
+}).loose();
+
+export const EMPTY_CREATIVE_MATERIALS_RESPONSE: CreativeMaterialsResponse = {
+  enabled: false,
+  summary: {
+    total: 0,
+    new: 0,
+    selected: 0,
+    rejected: 0,
+    sent_to_edit: 0,
+    edited: 0,
+    approved: 0,
+    archived: 0,
+  },
+  candidates: [],
+  crawl_runs: [],
+  edit_jobs: [],
+};
+
+export const CreativeImportSummarySchema = z.object({
+  run_id: z.string().default(""),
+  imported_count: z.number().default(0),
+  existing_count: z.number().default(0),
+  total_count: z.number().default(0),
+  skipped_count: z.number().default(0),
+}).loose();
+
+export const EMPTY_CREATIVE_IMPORT_SUMMARY: CreativeImportSummary = {
+  run_id: "",
+  imported_count: 0,
+  existing_count: 0,
+  total_count: 0,
+  skipped_count: 0,
+};
+
 const IssueAssigneeGroupSchema = z.object({
   id: z.string(),
   assignee_type: z.string().nullable(),
@@ -287,6 +615,93 @@ export const SubscribersListSchema = z.array(SubscriberSchema);
 export const ChildIssuesResponseSchema = z.object({
   issues: z.array(IssueSchema).default([]),
 }).loose();
+
+// Preview session responses are new, but desktop clients can outlive the
+// server version they were built against. Keep enum-like values as strings,
+// default display-only fields, and convert the wire's snake_case shape at the
+// API boundary so the rest of TypeScript only sees camelCase.
+const PreviewSessionWireSchema = z.object({
+  id: z.string(),
+  workspace_id: z.string(),
+  issue_id: z.string(),
+  task_id: z.string().nullable().optional().default(null),
+  platform: z.string().default("unknown"),
+  provider: z.string().default("unknown"),
+  title: z.string().default(""),
+  preview_url: z.string().default(""),
+  status: z.string().default("unknown"),
+  creator_type: z.string().default(""),
+  creator_id: z.string().default(""),
+  error_message: z.string().nullable().optional().default(null),
+  expires_at: z.string().nullable().optional().default(null),
+  last_active_at: z.string().nullable().optional().default(null),
+  lease_expires_at: z.string().nullable().optional().default(null),
+  started_at: z.string().nullable().optional().default(null),
+  stopped_at: z.string().nullable().optional().default(null),
+  created_at: z.string().default(""),
+  updated_at: z.string().default(""),
+}).loose();
+
+export const PreviewSessionSchema = PreviewSessionWireSchema.transform(
+  (session): PreviewSession => ({
+    id: session.id,
+    workspaceId: session.workspace_id,
+    issueId: session.issue_id,
+    taskId: session.task_id,
+    platform: session.platform,
+    provider: session.provider,
+    title: session.title,
+    previewUrl: session.preview_url,
+    status: session.status,
+    creatorType: session.creator_type,
+    creatorId: session.creator_id,
+    errorMessage: session.error_message,
+    expiresAt: session.expires_at,
+    lastActiveAt: session.last_active_at,
+    leaseExpiresAt: session.lease_expires_at,
+    startedAt: session.started_at,
+    stoppedAt: session.stopped_at,
+    createdAt: session.created_at,
+    updatedAt: session.updated_at,
+  }),
+);
+
+export const PreviewSessionListResponseSchema = z.object({
+  preview_sessions: z.array(PreviewSessionSchema).default([]),
+  total: z.number().default(0),
+}).loose().transform(
+  (response): PreviewSessionListResponse => ({
+    previewSessions: response.preview_sessions,
+    total: response.total,
+  }),
+);
+
+export const EMPTY_PREVIEW_SESSION: PreviewSession = {
+  id: "",
+  workspaceId: "",
+  issueId: "",
+  taskId: null,
+  platform: "unknown",
+  provider: "unknown",
+  title: "",
+  previewUrl: "",
+  status: "unknown",
+  creatorType: "",
+  creatorId: "",
+  errorMessage: null,
+  expiresAt: null,
+  lastActiveAt: null,
+  leaseExpiresAt: null,
+  startedAt: null,
+  stoppedAt: null,
+  createdAt: "",
+  updatedAt: "",
+};
+
+export const EMPTY_PREVIEW_SESSION_LIST_RESPONSE: PreviewSessionListResponse = {
+  previewSessions: [],
+  total: 0,
+};
 
 export const CloudRuntimeNodeSchema = z.object({
   id: z.string(),

@@ -67,6 +67,13 @@ export type { IssueSubscriber } from "./subscriber";
 export type * from "./events";
 export type * from "./api";
 export type { Attachment } from "./attachment";
+export type {
+  PreviewSession,
+  PreviewSessionListResponse,
+  PreviewSessionPlatform,
+  PreviewSessionStatus,
+  CreatePreviewSessionRequest,
+} from "./preview-session";
 export { attachmentDownloadPath, attachmentIdFromDownloadURL, contentReferencesAttachment } from "./attachment-url";
 export type {
   ChatSession,
@@ -127,6 +134,46 @@ export type {
   LarkInstallStatusResponse,
   RedeemLarkBindingTokenResponse,
 } from "./lark";
+export type {
+  CredentialConnector,
+  CredentialProfile,
+  CredentialProfileStatus,
+  CredentialLoginSession,
+  ListCredentialConnectorsResponse,
+  ListCredentialProfilesResponse,
+  StartCredentialLoginSessionRequest,
+  StartCredentialLoginSessionResponse,
+  RunCredentialCrawlRequest,
+  CredentialCrawlResult,
+} from "./credential";
+export type {
+  CreativeEditAsset,
+  CreativeEditFeedback,
+  CreativeEditFeedbackDecision,
+  CreativeEditFeedbackReason,
+  CreativeEditJob,
+  CreativeEditProcessSnapshot,
+  CreativeEditVariant,
+  CreativeImportSummary,
+  CreativeMaterialAssetType,
+  CreativeMaterialCandidate,
+  CreativeMaterialCrawlRun,
+  CreativeMaterialInput,
+  CreativeMaterialStatus,
+  CreativeMaterialSummary,
+  CreativeMaterialsResponse,
+  CreateCreativeEditFeedbackRequest,
+  CreateCreativeEditJobRequest,
+  ImportCreativeMaterialsRequest,
+  UpdateCreativeMaterialCandidateRequest,
+} from "./creative";
+export type {
+  ListWorkspaceMCPConnectionsResponse,
+  SaveWorkspaceMCPConnectionRequest,
+  VerifyWorkspaceMCPConnectionResponse,
+  WorkspaceMCPConnection,
+  WorkspaceMCPConnectionStatus,
+} from "./workspace-mcp";
 export type {
   Autopilot,
   AutopilotStatus,

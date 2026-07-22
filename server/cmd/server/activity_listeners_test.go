@@ -344,3 +344,64 @@ func TestActivityTaskFailed(t *testing.T) {
 		t.Fatalf("expected action 'task_failed', got %q", activities[0].Action)
 	}
 }
+
+func TestActivityPreviewSessionLifecycle(t *testing.T) {
+	queries := db.New(testPool)
+	bus := events.New()
+	registerActivityListeners(bus, queries)
+
+	issueID := createTestIssue(t, testWorkspaceID, testUserID)
+	t.Cleanup(func() {
+		cleanupActivities(t, issueID)
+		cleanupTestIssue(t, issueID)
+	})
+
+	session := handler.PreviewSessionResponse{
+		ID:          "00000000-0000-0000-0000-000000000123",
+		WorkspaceID: testWorkspaceID,
+		IssueID:     issueID,
+		Platform:    "web",
+		Provider:    "external_web",
+		Title:       "Checkout preview",
+		Status:      "running",
+	}
+	bus.Publish(events.Event{
+		Type:        protocol.EventPreviewSessionCreated,
+		WorkspaceID: testWorkspaceID,
+		ActorType:   "member",
+		ActorID:     testUserID,
+		Payload: map[string]any{
+			"preview_session": session,
+		},
+	})
+
+	session.Status = "stopped"
+	bus.Publish(events.Event{
+		Type:        protocol.EventPreviewSessionUpdated,
+		WorkspaceID: testWorkspaceID,
+		ActorType:   "member",
+		ActorID:     testUserID,
+		Payload: map[string]any{
+			"preview_session": session,
+		},
+	})
+
+	activities := listActivitiesForIssue(t, queries, issueID)
+	if len(activities) != 2 {
+		t.Fatalf("expected 2 preview activities, got %d", len(activities))
+	}
+	actions := map[string]bool{}
+	for _, activity := range activities {
+		actions[activity.Action] = true
+		var details map[string]string
+		if err := json.Unmarshal(activity.Details, &details); err != nil {
+			t.Fatalf("decode preview activity details: %v", err)
+		}
+		if details["title"] != session.Title || details["preview_session_id"] != session.ID {
+			t.Fatalf("unexpected preview activity details: %#v", details)
+		}
+	}
+	if !actions["preview_session_created"] || !actions["preview_session_stopped"] {
+		t.Fatalf("preview activity actions = %#v", actions)
+	}
+}

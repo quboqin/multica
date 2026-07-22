@@ -59,6 +59,8 @@ import { collectThreadReplies, deriveThreadResolution } from "./thread-utils";
 import { IssueAgentHeaderChip } from "./issue-agent-header-chip";
 import { ExecutionLogSection } from "./execution-log-section";
 import { PullRequestList } from "./pull-request-list";
+import { CreativeMaterialPool } from "./creative-material-pool";
+import { PreviewSessionsSection } from "./preview-sessions-section";
 import { useGitHubSettings } from "@multica/core/github";
 import { useQuery } from "@tanstack/react-query";
 import { useAuthStore } from "@multica/core/auth";
@@ -237,6 +239,14 @@ function formatActivity(
       });
     case "description_updated":
       return t(($) => $.activity.description_updated);
+    case "preview_session_created":
+      return t(($) => $.activity.preview_session_created, {
+        title: details.title ?? "?",
+      });
+    case "preview_session_stopped":
+      return t(($) => $.activity.preview_session_stopped, {
+        title: details.title ?? "?",
+      });
     case "task_completed":
       return t(($) => $.activity.task_completed, { count: entry.coalesced_count ?? 1 });
     case "task_failed":
@@ -698,6 +708,12 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
   const [pullRequestsOpen, setPullRequestsOpen] = useState(true);
   const [metadataOpen, setMetadataOpen] = useState(false);
   const [tokenUsageOpen, setTokenUsageOpen] = useState(true);
+  const [previewFeedbackRequest, setPreviewFeedbackRequest] = useState<{
+    nonce: number;
+    issueId: string;
+    sessionId: string;
+    title: string;
+  } | null>(null);
   const githubSettings = useGitHubSettings();
 
   // Per-issue, per-session set of optional properties currently visible in
@@ -1535,6 +1551,18 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
         </div>
       )}
 
+      <PreviewSessionsSection
+        issueId={id}
+        onFeedback={(session) =>
+          setPreviewFeedbackRequest((current) => ({
+            nonce: (current?.nonce ?? 0) + 1,
+            issueId: id,
+            sessionId: session.id,
+            title: session.title,
+          }))
+        }
+      />
+
       {/* Details */}
       <div>
         <button
@@ -1998,6 +2026,8 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
             );
           })()}
 
+          <CreativeMaterialPool issue={issue} />
+
           <div className="my-8 border-t" />
 
           {/* Activity / Comments */}
@@ -2126,7 +2156,12 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
                   keeps the previous issue's in-memory content and the
                   next keystroke would flush it into the new issue's
                   draft key. */}
-              <CommentInput key={id} issueId={id} onSubmit={submitComment} />
+              <CommentInput
+                key={id}
+                issueId={id}
+                onSubmit={submitComment}
+                previewFeedbackRequest={previewFeedbackRequest}
+              />
             </div>
           </div>
         </div>

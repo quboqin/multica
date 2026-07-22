@@ -2,10 +2,11 @@
  * @vitest-environment jsdom
  */
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { renderHook } from "@testing-library/react";
+import { act, renderHook } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import type { WSClient } from "../api/ws-client";
+import type { WSMessage } from "../types";
 import { useRealtimeSync, type RealtimeSyncStores } from "./use-realtime-sync";
 
 vi.mock("../platform/workspace-storage", () => ({
@@ -24,6 +25,26 @@ function createMockWs(): WSClient {
     onAny: vi.fn(() => () => {}),
     onReconnect: vi.fn(() => () => {}),
   } as unknown as WSClient;
+}
+
+function createObservableMockWs() {
+  let anyHandler: ((message: WSMessage) => void) | null = null;
+  const ws = {
+    on: vi.fn(() => () => {}),
+    onAny: vi.fn((handler: (message: WSMessage) => void) => {
+      anyHandler = handler;
+      return () => {};
+    }),
+    onReconnect: vi.fn(() => () => {}),
+  } as unknown as WSClient;
+
+  return {
+    ws,
+    emit(message: WSMessage) {
+      if (!anyHandler) throw new Error("onAny handler was not registered");
+      anyHandler(message);
+    },
+  };
 }
 
 function createStores(): RealtimeSyncStores {
@@ -102,9 +123,9 @@ describe("useRealtimeSync — ws instance change", () => {
     rerender({ ws: ws2 });
 
     // Should have called invalidateQueries for all workspace-scoped keys
-    // (15 workspace-scoped + 6 per-issue prefixes + 1 workspaceKeys.list()
-    // = 22 calls)
-    expect(invalidateSpy).toHaveBeenCalledTimes(22);
+    // (16 workspace-scoped + 6 per-issue prefixes + 1 workspaceKeys.list()
+    // = 23 calls)
+    expect(invalidateSpy).toHaveBeenCalledTimes(23);
   });
 
   it("does not re-invalidate when rerendered with the same ws instance", () => {
@@ -137,7 +158,30 @@ describe("useRealtimeSync — ws instance change", () => {
     const calls = invalidateSpy.mock.calls.map((call: [{ queryKey?: unknown }, ...unknown[]]) => call[0].queryKey);
     expect(calls).toContainEqual(["chat", "ws-1"]);
     expect(calls).toContainEqual(["labels", "ws-1"]);
+    expect(calls).toContainEqual(["preview-sessions", "ws-1"]);
     expect(calls).toContainEqual(["workspaces", "ws-1", "invitations"]);
+  });
+
+  it("invalidates preview sessions for preview_session lifecycle events", () => {
+    vi.useFakeTimers();
+    try {
+      const { ws, emit } = createObservableMockWs();
+      renderHook(() => useRealtimeSync(ws, stores), {
+        wrapper: createWrapper(qc),
+      });
+      invalidateSpy.mockClear();
+
+      act(() => {
+        emit({ type: "preview_session:updated", payload: { id: "preview-1" } });
+        vi.advanceTimersByTime(100);
+      });
+
+      expect(invalidateSpy).toHaveBeenCalledWith({
+        queryKey: ["preview-sessions", "ws-1"],
+      });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("invalidates per-issue caches (no wsId in key) on ws instance change", () => {

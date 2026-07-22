@@ -425,6 +425,17 @@ func Reuse(params ReuseParams, logger *slog.Logger) *Environment {
 			if err := hydrateCodexSkills(codexHome, params.Task.AgentSkills, logger); err != nil {
 				logger.Warn("execenv: refresh codex skills failed", "error", err)
 			}
+			// Resumed threads can retain absolute paths to the prior task's
+			// CODEX_HOME. Refresh that managed skill directory as well so a
+			// workspace Skill edit takes effect without forcing a fresh session.
+			priorCodexHome := filepath.Join(filepath.Dir(params.WorkDir), "codex-home")
+			if priorCodexHome != codexHome {
+				if _, err := os.Stat(priorCodexHome); err == nil {
+					if err := hydrateCodexSkills(priorCodexHome, params.Task.AgentSkills, logger); err != nil {
+						logger.Warn("execenv: refresh prior codex skills failed", "error", err)
+					}
+				}
+			}
 		}
 	}
 

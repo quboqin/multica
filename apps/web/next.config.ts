@@ -4,11 +4,30 @@ import { resolve } from "path";
 import { resolveRemoteApiUrl } from "./config/runtime-urls";
 import { createMDX } from "fumadocs-mdx/next";
 
-// Load root .env so REMOTE_API_URL is available to next.config.ts
-config({ path: resolve(__dirname, "../../.env") });
+// Load root .env so REMOTE_API_URL is available to next.config.ts.
+// `next dev --port <frontend>` mutates process.env.PORT to the frontend port;
+// keep the root .env PORT available for backend rewrite derivation below.
+const rootEnv = config({ path: resolve(__dirname, "../../.env") }).parsed ?? {};
+// A worktree-specific environment may override shared defaults.
+const worktreeEnv = config({
+  path: resolve(__dirname, "../../.env.worktree"),
+  override: true,
+}).parsed ?? {};
 
-const remoteApiUrl = resolveRemoteApiUrl(process.env);
+const runtimeUrlEnv = { ...process.env };
+if (
+  !runtimeUrlEnv.BACKEND_PORT?.trim() &&
+  !runtimeUrlEnv.API_PORT?.trim() &&
+  !runtimeUrlEnv.SERVER_PORT?.trim() &&
+  (worktreeEnv.PORT?.trim() || rootEnv.PORT?.trim())
+) {
+  runtimeUrlEnv.PORT = worktreeEnv.PORT || rootEnv.PORT;
+}
+
+const remoteApiUrl = resolveRemoteApiUrl(runtimeUrlEnv);
 const docsUrl = process.env.DOCS_URL || "http://localhost:4000";
+const remoteCrawlerWorkerUrl = (process.env.REMOTE_CRAWLER_WORKER_URL || "").replace(/\/$/, "");
+const remoteCreativeFilesUrl = (process.env.REMOTE_CREATIVE_FILES_URL || "").replace(/\/$/, "");
 
 // Parse hostnames from CORS_ALLOWED_ORIGINS so that Next.js dev server
 // allows cross-origin HMR / webpack requests (e.g. from Tailscale IPs).
@@ -24,12 +43,30 @@ const allowedDevOrigins = process.env.CORS_ALLOWED_ORIGINS
       .filter(Boolean)
   : undefined;
 
+const webWarmupEnabled = process.env.MULTICA_WEB_WARMUP?.toLowerCase() !== "false";
+const warmPageMaxInactiveAge = positiveInteger(
+  process.env.MULTICA_WEB_WARMUP_MAX_INACTIVE_MS,
+  60 * 60 * 1000,
+);
+const warmPageBufferLength = positiveInteger(
+  process.env.MULTICA_WEB_WARMUP_BUFFER_LENGTH,
+  48,
+);
+
 const nextConfig: NextConfig = {
   ...(process.env.STANDALONE === "true" ? { output: "standalone" as const } : {}),
   outputFileTracingRoot: resolve(__dirname, "../.."),
   transpilePackages: ["@multica/core", "@multica/ui", "@multica/views"],
   ...(allowedDevOrigins && allowedDevOrigins.length > 0
     ? { allowedDevOrigins }
+    : {}),
+  ...(webWarmupEnabled
+    ? {
+        onDemandEntries: {
+          maxInactiveAge: warmPageMaxInactiveAge,
+          pagesBufferLength: warmPageBufferLength,
+        },
+      }
     : {}),
   images: {
     formats: ["image/avif", "image/webp"],
@@ -48,6 +85,22 @@ const nextConfig: NextConfig = {
           source: "/docs/:path*",
           destination: `${docsUrl}/docs/:path*`,
         },
+        ...(remoteCrawlerWorkerUrl
+          ? [
+              {
+                source: "/sessions/:path*",
+                destination: `${remoteCrawlerWorkerUrl}/sessions/:path*`,
+              },
+            ]
+          : []),
+        ...(remoteCreativeFilesUrl
+          ? [
+              {
+                source: "/files/:path*",
+                destination: `${remoteCreativeFilesUrl}/files/:path*`,
+              },
+            ]
+          : []),
       ],
       afterFiles: [
         {
@@ -71,6 +124,11 @@ const nextConfig: NextConfig = {
     };
   },
 };
+
+function positiveInteger(value: string | undefined, fallback: number): number {
+  const parsed = Number.parseInt(value ?? "", 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
 
 // fumadocs-mdx@12 is incompatible with Next 16's Turbopack: its loader fails to
 // dynamic-import `.source/source.config.mjs` under the Turbopack Node evaluator

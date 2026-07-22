@@ -156,7 +156,7 @@ func TestPrepareWithProjectResources(t *testing.T) {
 			{
 				ID:           "33333333-4444-5555-6666-777777777777",
 				ResourceType: "github_repo",
-				ResourceRef:  json.RawMessage(`{"url":"https://github.com/multica-ai/multica","default_branch_hint":"main"}`),
+				ResourceRef:  json.RawMessage(`{"url":"https://github.com/multica-ai/multica","default_branch_hint":"main","role":"h5","capabilities":["login","loan-application"],"preview":{"policy":"auto","platform":"web","profile":"customer_app"}}`),
 			},
 		},
 	}
@@ -216,11 +216,57 @@ func TestPrepareWithProjectResources(t *testing.T) {
 		"GitHub repo",
 		"https://github.com/multica-ai/multica",
 		"default branch: `main`",
+		"role: `h5`",
+		"capabilities: `login`, `loan-application`",
+		"preview: `auto/web/customer_app`",
 		".multica/project/resources.json",
+		"smallest working set",
+		"do not check out every project repository",
+		"Repository selection and preview publication are separate decisions",
+		"backend-only repositories do not publish a visual preview",
 	} {
 		if !strings.Contains(s, want) {
 			t.Errorf("CLAUDE.md missing %q", want)
 		}
+	}
+}
+
+func TestWriteDetectedPreviewTargetsUsesDevelopmentContext(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, ".git"), []byte("gitdir: elsewhere"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "package.json"), []byte(`{
+		"scripts":{"dev":"nuxt dev"},
+		"dependencies":{"nuxt":"4","vue":"3"}
+	}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeDetectedPreviewTargets(dir, nil); err != nil {
+		t.Fatalf("writeDetectedPreviewTargets: %v", err)
+	}
+	raw, err := os.ReadFile(filepath.Join(dir, ".multica", "preview", "targets.json"))
+	if err != nil {
+		t.Fatalf("read targets.json: %v", err)
+	}
+	var report struct {
+		Repositories []struct {
+			Targets []struct {
+				Platform  string `json:"platform"`
+				Framework string `json:"framework"`
+			} `json:"targets"`
+		} `json:"repositories"`
+	}
+	if err := json.Unmarshal(raw, &report); err != nil {
+		t.Fatalf("decode targets.json: %v", err)
+	}
+	if len(report.Repositories) != 1 || len(report.Repositories[0].Targets) != 1 {
+		t.Fatalf("unexpected report: %#v", report)
+	}
+	target := report.Repositories[0].Targets[0]
+	if target.Platform != "web" || target.Framework != "nuxt" {
+		t.Fatalf("target = %#v, want Nuxt web", target)
 	}
 }
 
@@ -2809,6 +2855,13 @@ func TestReuseWritesMissingCodexWorkspaceSkills(t *testing.T) {
 	}
 	if string(example) != "Example" {
 		t.Errorf("support file content = %q", example)
+	}
+	priorData, err := os.ReadFile(filepath.Join(env.CodexHome, "skills", "writing", "SKILL.md"))
+	if err != nil {
+		t.Fatalf("missing refreshed skill in prior codex home: %v", err)
+	}
+	if !strings.Contains(string(priorData), "Write clearly.") {
+		t.Errorf("prior codex skill content = %q", priorData)
 	}
 }
 

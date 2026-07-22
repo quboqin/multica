@@ -18,7 +18,9 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/analytics"
 	"github.com/multica-ai/multica/server/internal/auth"
+	"github.com/multica-ai/multica/server/internal/broker"
 	"github.com/multica-ai/multica/server/internal/cloudruntime"
+	"github.com/multica-ai/multica/server/internal/creative"
 	"github.com/multica-ai/multica/server/internal/daemonws"
 	"github.com/multica-ai/multica/server/internal/events"
 	"github.com/multica-ai/multica/server/internal/integrations/lark"
@@ -28,6 +30,7 @@ import (
 	"github.com/multica-ai/multica/server/internal/service"
 	"github.com/multica-ai/multica/server/internal/storage"
 	"github.com/multica-ai/multica/server/internal/util"
+	"github.com/multica-ai/multica/server/internal/util/secretbox"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
@@ -70,6 +73,10 @@ type Config struct {
 	// the server into minting webhook URLs pointing at an attacker-controlled
 	// host.
 	PublicURL string
+	// CreativeAssetPublicBaseURL, when set, is used to rewrite creative MCP
+	// result file URLs before persisting them. The raw provider URL remains in
+	// creative_edit_asset.source_asset_url for backend download/package reads.
+	CreativeAssetPublicBaseURL string
 	// TrustedProxies are CIDRs whose source IP we trust to set
 	// X-Forwarded-For / X-Real-IP. Empty means "trust nothing": the rate
 	// limiter uses r.RemoteAddr exclusively. Populated via the
@@ -123,13 +130,18 @@ type Handler struct {
 	// May be nil in tests / self-hosted with the metrics listener disabled;
 	// every Record* method is nil-safe and obsmetrics.RecordEvent treats a
 	// nil Metrics as "PostHog only".
-	Metrics              *obsmetrics.BusinessMetrics
-	PATCache             *auth.PATCache
-	DaemonTokenCache     *auth.DaemonTokenCache
-	MembershipCache      *auth.MembershipCache
-	WebhookRateLimiter   WebhookRateLimiter
-	WebhookIPRateLimiter WebhookRateLimiter
-	CloudRuntime         cloudRuntimeProxy
+	Metrics                  *obsmetrics.BusinessMetrics
+	PATCache                 *auth.PATCache
+	DaemonTokenCache         *auth.DaemonTokenCache
+	MembershipCache          *auth.MembershipCache
+	WebhookRateLimiter       WebhookRateLimiter
+	WebhookIPRateLimiter     WebhookRateLimiter
+	CloudRuntime             cloudRuntimeProxy
+	CredentialBroker         *broker.Service
+	CreativeEditProvider     creative.Provider
+	CreativeProviderResolver creative.ProviderResolver
+	CreativeAssetDownloader  *creative.Downloader
+	WorkspaceMCPSecretBox    *secretbox.Box
 	// Lark integration. All three are nil when the Lark master key
 	// (MULTICA_LARK_SECRET_KEY) is unset; the corresponding HTTP
 	// handlers return 503 in that case so a misconfigured self-host
@@ -192,6 +204,7 @@ func New(queries *db.Queries, txStarter txStarter, hub *realtime.Hub, bus *event
 
 	taskSvc := service.NewTaskService(queries, txStarter, hub, bus, daemonHub)
 	taskSvc.Analytics = analyticsClient
+	mockCreativeProvider := creative.NewMockProvider(4 * time.Second)
 	return &Handler{
 		Queries:               queries,
 		DB:                    executor,
@@ -218,7 +231,11 @@ func New(queries *db.Queries, txStarter txStarter, hub *realtime.Hub, bus *event
 			BaseURL: cfg.CloudRuntimeFleetURL,
 			Timeout: cfg.CloudRuntimeFleetTimeout,
 		}),
-		cfg: cfg,
+		CredentialBroker:         broker.NewService(queries, broker.NewDisabledWorkerClient()),
+		CreativeEditProvider:     mockCreativeProvider,
+		CreativeProviderResolver: creative.NewDatabaseProviderResolver(executor, nil, mockCreativeProvider, 45*time.Second, nil),
+		CreativeAssetDownloader:  creative.NewDownloader(30*time.Second, 100<<20, nil),
+		cfg:                      cfg,
 	}
 }
 

@@ -17,17 +17,31 @@ import { useCommentTriggerPreview } from "../hooks/use-comment-trigger-preview";
 interface CommentInputProps {
   issueId: string;
   onSubmit: (content: string, attachmentIds?: string[], suppressAgentIds?: string[]) => Promise<void>;
+  previewFeedbackRequest?: {
+    nonce: number;
+    issueId: string;
+    sessionId: string;
+    title: string;
+  } | null;
 }
 
-function CommentInput({ issueId, onSubmit }: CommentInputProps) {
+function CommentInput({
+  issueId,
+  onSubmit,
+  previewFeedbackRequest = null,
+}: CommentInputProps) {
   const { t } = useT("issues");
   const editorRef = useRef<ContentEditorRef>(null);
+  const composerRef = useRef<HTMLDivElement>(null);
+  const handledFeedbackNonceRef = useRef<number | null>(null);
   // Read the persisted draft once on mount. ContentEditor only honors
   // `defaultValue` at mount time, so this snapshot drives both the editor's
   // initial content and the submit-button enable state — without this the
   // button would be disabled even though the editor visibly contains text.
   const draftKey = `new:${issueId}` as const;
   const initialDraft = useCommentDraftStore.getState().getDraft(draftKey);
+  const [editorSeed, setEditorSeed] = useState(initialDraft ?? "");
+  const [editorRevision, setEditorRevision] = useState(0);
   const [content, setContent] = useState(initialDraft ?? "");
   const [isEmpty, setIsEmpty] = useState(() => !initialDraft?.trim());
   const [submitting, setSubmitting] = useState(false);
@@ -49,6 +63,44 @@ function CommentInput({ issueId, onSubmit }: CommentInputProps) {
   // so tab close / mobile background doesn't lose work. Cleared on submit.
   const setDraft = useCommentDraftStore((s) => s.setDraft);
   const clearDraft = useCommentDraftStore((s) => s.clearDraft);
+
+  useEffect(() => {
+    if (
+      !previewFeedbackRequest ||
+      previewFeedbackRequest.issueId !== issueId ||
+      handledFeedbackNonceRef.current === previewFeedbackRequest.nonce
+    ) {
+      return;
+    }
+    handledFeedbackNonceRef.current = previewFeedbackRequest.nonce;
+
+    const title =
+      previewFeedbackRequest.title ||
+      t(($) => $.preview_sessions.untitled);
+    const feedbackPrefix = t(($) => $.preview_sessions.feedback_prefix, {
+      title,
+    });
+    const existingContent = editorRef.current?.getMarkdown().trimEnd() ?? "";
+    const nextContent = existingContent
+      ? `${existingContent}\n\n${feedbackPrefix}`
+      : feedbackPrefix;
+
+    setEditorSeed(nextContent);
+    setEditorRevision((value) => value + 1);
+    setContent(nextContent);
+    setIsEmpty(false);
+    setDraft(draftKey, nextContent);
+
+    const focusTimer = window.setTimeout(() => {
+      composerRef.current?.scrollIntoView?.({
+        behavior: "smooth",
+        block: "center",
+      });
+      editorRef.current?.focus();
+    }, 0);
+    return () => window.clearTimeout(focusTimer);
+  }, [draftKey, issueId, previewFeedbackRequest, setDraft, t]);
+
   useEffect(() => {
     const flush = () => {
       const md = editorRef.current?.getMarkdown();
@@ -113,6 +165,7 @@ function CommentInput({ issueId, onSubmit }: CommentInputProps) {
         suppressAgentIds.length > 0 ? suppressAgentIds : undefined,
       );
       editorRef.current?.clearContent();
+      setEditorSeed("");
       setContent("");
       setIsEmpty(true);
       setSuppressedAgentIds(new Set());
@@ -125,15 +178,19 @@ function CommentInput({ issueId, onSubmit }: CommentInputProps) {
 
   return (
     <div
+      ref={composerRef}
+      data-preview-comment-composer="true"
       {...dropZoneProps}
       className="relative flex flex-col rounded-lg bg-card pb-8 ring-1 ring-border"
     >
       <div className="flex-1 min-h-0 overflow-y-auto px-3 py-2">
         <ContentEditor
+          key={editorRevision}
           ref={editorRef}
-          defaultValue={initialDraft}
+          defaultValue={editorSeed}
           placeholder={t(($) => $.comment.leave_comment_placeholder)}
           onUpdate={(md) => {
+            setEditorSeed(md);
             setContent(md);
             setIsEmpty(!md.trim());
             // Debounced upstream (debounceMs=100). Persist on every tick so a

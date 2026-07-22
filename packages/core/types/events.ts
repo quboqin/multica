@@ -12,6 +12,7 @@ export type WSEventType =
   | "issue:created"
   | "issue:updated"
   | "issue:deleted"
+  | "creative_materials:updated"
   | "comment:created"
   | "comment:updated"
   | "comment:deleted"
@@ -79,7 +80,9 @@ export type WSEventType =
   | "github_installation:deleted"
   | "pull_request:linked"
   | "pull_request:updated"
-  | "pull_request:unlinked";
+  | "pull_request:unlinked"
+  | "preview_session:created"
+  | "preview_session:updated";
 
 export interface WSMessage<T = unknown> {
   type: WSEventType;
@@ -97,6 +100,10 @@ export interface IssueUpdatedPayload {
 }
 
 export interface IssueDeletedPayload {
+  issue_id: string;
+}
+
+export interface CreativeMaterialsUpdatedPayload {
   issue_id: string;
 }
 
@@ -394,6 +401,7 @@ export interface WSEventPayloadMap {
   "issue:created": IssueCreatedPayload;
   "issue:updated": IssueUpdatedPayload;
   "issue:deleted": IssueDeletedPayload;
+  "creative_materials:updated": CreativeMaterialsUpdatedPayload;
   "issue_labels:changed": IssueLabelsChangedPayload;
   "issue_reaction:added": IssueReactionAddedPayload;
   "issue_reaction:removed": IssueReactionRemovedPayload;
@@ -463,6 +471,8 @@ export interface WSEventPayloadMap {
   "pull_request:linked": unknown;
   "pull_request:updated": unknown;
   "pull_request:unlinked": unknown;
+  "preview_session:created": unknown;
+  "preview_session:updated": unknown;
 }
 
 /**

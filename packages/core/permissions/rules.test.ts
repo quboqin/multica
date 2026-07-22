@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import type { Agent, Comment, Member, RuntimeDevice, Skill } from "../types";
+import type {
+  Agent,
+  Comment,
+  Member,
+  PreviewSession,
+  RuntimeDevice,
+  Skill,
+} from "../types";
 import {
   canAssignAgentToIssue,
   canChangeMemberRole,
@@ -11,6 +18,7 @@ import {
   canEditComment,
   canEditSkill,
   canManageMembers,
+  canStopPreviewSession,
   canUpdateWorkspaceSettings,
 } from "./rules";
 
@@ -74,6 +82,33 @@ function makeComment(overrides: Partial<Comment> = {}): Comment {
     resolved_at: null,
     resolved_by_type: null,
     resolved_by_id: null,
+    ...overrides,
+  };
+}
+
+function makePreviewSession(
+  overrides: Partial<PreviewSession> = {},
+): PreviewSession {
+  return {
+    id: "preview-1",
+    workspaceId: "ws_1",
+    issueId: "issue-1",
+    taskId: null,
+    platform: "web",
+    provider: "external_web",
+    title: "Preview",
+    previewUrl: "https://preview.example.test",
+    status: "running",
+    creatorType: "member",
+    creatorId: ALICE,
+    errorMessage: null,
+    expiresAt: null,
+    lastActiveAt: null,
+    leaseExpiresAt: null,
+    startedAt: "2026-04-01T00:00:00Z",
+    stoppedAt: null,
+    createdAt: "2026-04-01T00:00:00Z",
+    updatedAt: "2026-04-01T00:00:00Z",
     ...overrides,
   };
 }
@@ -327,5 +362,32 @@ describe("canChangeMemberRole", () => {
   });
   it("owner can change owner role when 2+ owners exist", () => {
     expect(canChangeMemberRole(targetOwner, 2, ctxOwner).allowed).toBe(true);
+  });
+});
+
+describe("canStopPreviewSession", () => {
+  it("allows the member creator and workspace admins", () => {
+    const session = makePreviewSession();
+    expect(
+      canStopPreviewSession(session, { userId: ALICE, role: "member" }).allowed,
+    ).toBe(true);
+    expect(
+      canStopPreviewSession(session, { userId: BOB, role: "admin" }).allowed,
+    ).toBe(true);
+  });
+
+  it("rejects unrelated members and human attempts to own agent previews", () => {
+    expect(
+      canStopPreviewSession(makePreviewSession(), {
+        userId: BOB,
+        role: "member",
+      }).allowed,
+    ).toBe(false);
+    expect(
+      canStopPreviewSession(
+        makePreviewSession({ creatorType: "agent", creatorId: ALICE }),
+        { userId: ALICE, role: "member" },
+      ).allowed,
+    ).toBe(false);
   });
 });

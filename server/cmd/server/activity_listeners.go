@@ -249,6 +249,55 @@ func registerActivityListeners(bus *events.Bus, queries *db.Queries) {
 	bus.Subscribe(protocol.EventTaskFailed, func(e events.Event) {
 		handleTaskActivity(ctx, bus, queries, e, "task_failed")
 	})
+
+	bus.Subscribe(protocol.EventPreviewSessionCreated, func(e events.Event) {
+		handlePreviewSessionActivity(ctx, bus, queries, e, "preview_session_created")
+	})
+
+	bus.Subscribe(protocol.EventPreviewSessionUpdated, func(e events.Event) {
+		payload, ok := e.Payload.(map[string]any)
+		if !ok {
+			return
+		}
+		session, ok := payload["preview_session"].(handler.PreviewSessionResponse)
+		if !ok || session.Status != "stopped" {
+			return
+		}
+		handlePreviewSessionActivity(ctx, bus, queries, e, "preview_session_stopped")
+	})
+}
+
+func handlePreviewSessionActivity(ctx context.Context, bus *events.Bus, queries *db.Queries, e events.Event, action string) {
+	payload, ok := e.Payload.(map[string]any)
+	if !ok {
+		return
+	}
+	session, ok := payload["preview_session"].(handler.PreviewSessionResponse)
+	if !ok || session.IssueID == "" || session.WorkspaceID == "" {
+		return
+	}
+
+	details, _ := json.Marshal(map[string]string{
+		"preview_session_id": session.ID,
+		"title":              session.Title,
+		"platform":           session.Platform,
+		"provider":           session.Provider,
+	})
+	activity, err := queries.CreateActivity(ctx, db.CreateActivityParams{
+		WorkspaceID: parseUUID(session.WorkspaceID),
+		IssueID:     parseUUID(session.IssueID),
+		ActorType:   util.StrToText(e.ActorType),
+		ActorID:     optionalUUID(e.ActorID),
+		Action:      action,
+		Details:     details,
+	})
+	if err != nil {
+		slog.Error("activity: failed to record preview session activity",
+			"preview_session_id", session.ID, "action", action, "error", err)
+		return
+	}
+
+	publishActivityEvent(bus, e, activity)
 }
 
 // handleTaskActivity records an activity for task:completed or task:failed events.

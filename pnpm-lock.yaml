@@ -60,6 +60,12 @@ catalogs:
     mermaid:
       specifier: ^11.14.0
       version: 11.14.0
+    pg:
+      specifier: ^8.20.0
+      version: 8.20.0
+    playwright:
+      specifier: ^1.58.2
+      version: 1.58.2
     posthog-js:
       specifier: ^1.176.1
       version: 1.369.3
@@ -419,7 +425,7 @@ importers:
         version: 55.0.15(expo@55.0.24)(react-native@0.83.6(@babel/core@7.29.0)(@types/react@19.2.14)(react@19.2.0))(react@19.2.0)
       expo-router:
         specifier: ~55.0.14
-        version: 55.0.14(fb4q2ydjsib3h2ixce2lptexem)
+        version: 55.0.14(28857138dad78e037ca803b5df54c4f8)
       expo-secure-store:
         specifier: ~55.0.13
         version: 55.0.14(expo@55.0.24)
@@ -1041,6 +1047,9 @@ importers:
       cmdk:
         specifier: ^1.1.1
         version: 1.1.1(@types/react-dom@19.2.3(@types/react@19.2.14))(@types/react@19.2.14)(react-dom@19.2.3(react@19.2.3))(react@19.2.3)
+      fflate:
+        specifier: 0.4.8
+        version: 0.4.8
       hast-util-to-html:
         specifier: ^9.0.5
         version: 9.0.5
@@ -1150,6 +1159,15 @@ importers:
       vitest:
         specifier: 'catalog:'
         version: 4.1.0(@opentelemetry/api@1.9.1)(@types/node@25.5.0)(jsdom@29.0.1(@noble/hashes@1.8.0))(msw@2.12.14(@types/node@25.5.0)(typescript@5.9.3))(vite@8.0.1(@emnapi/core@1.10.0)(@emnapi/runtime@1.10.0)(@types/node@25.5.0)(jiti@2.6.1)(terser@5.47.1)(yaml@2.9.0))
+
+  services/crawler-worker:
+    dependencies:
+      pg:
+        specifier: 'catalog:'
+        version: 8.20.0
+      playwright:
+        specifier: 'catalog:'
+        version: 1.58.2
 
 packages:
 
@@ -11865,7 +11883,7 @@ snapshots:
       ws: 8.20.1
       zod: 3.25.76
     optionalDependencies:
-      expo-router: 55.0.14(fb4q2ydjsib3h2ixce2lptexem)
+      expo-router: 55.0.14(28857138dad78e037ca803b5df54c4f8)
       react-native: 0.83.6(@babel/core@7.29.0)(@types/react@19.2.14)(react@19.2.0)
     transitivePeerDependencies:
       - '@expo/dom-webview'
@@ -12120,7 +12138,7 @@ snapshots:
       react: 19.2.0
     optionalDependencies:
       '@expo/metro-runtime': 55.0.11(@expo/dom-webview@55.0.6)(expo@55.0.24)(react-dom@19.2.0(react@19.2.0))(react-native@0.83.6(@babel/core@7.29.0)(@types/react@19.2.14)(react@19.2.0))(react@19.2.0)
-      expo-router: 55.0.14(fb4q2ydjsib3h2ixce2lptexem)
+      expo-router: 55.0.14(28857138dad78e037ca803b5df54c4f8)
       react-dom: 19.2.0(react@19.2.0)
     transitivePeerDependencies:
       - supports-color
@@ -17097,7 +17115,7 @@ snapshots:
     optionalDependencies:
       react-native-worklets: 0.7.4(@babel/core@7.29.0)(react-native@0.83.6(@babel/core@7.29.0)(@types/react@19.2.14)(react@19.2.0))(react@19.2.0)
 
-  expo-router@55.0.14(fb4q2ydjsib3h2ixce2lptexem):
+  expo-router@55.0.14(28857138dad78e037ca803b5df54c4f8):
     dependencies:
       '@expo/log-box': 55.0.12(@expo/dom-webview@55.0.6)(expo@55.0.24)(react-native@0.83.6(@babel/core@7.29.0)(@types/react@19.2.14)(react@19.2.0))(react@19.2.0)
       '@expo/metro-runtime': 55.0.11(@expo/dom-webview@55.0.6)(expo@55.0.24)(react-dom@19.2.0(react@19.2.0))(react-native@0.83.6(@babel/core@7.29.0)(@types/react@19.2.14)(react@19.2.0))(react@19.2.0)

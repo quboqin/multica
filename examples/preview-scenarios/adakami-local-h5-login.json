@@ -1,0 +1,40 @@
+{
+  "name": "AdaKami local H5 OTP form",
+  "step_delay_ms": 400,
+  "steps": [
+    {
+      "action": "wait_for",
+      "selector": {
+		"test_id": "login-phone"
+      },
+      "timeout_ms": 10000
+    },
+    {
+      "action": "fill",
+      "selector": {
+		"test_id": "login-phone"
+      },
+      "value": "123456789"
+    },
+    {
+      "action": "fill",
+      "selector": {
+		"test_id": "login-otp"
+      },
+      "value": "123456"
+    },
+    {
+      "action": "assert",
+      "selector": {
+		"test_id": "login-otp"
+      },
+      "value": "123456"
+    },
+    {
+      "action": "assert",
+      "selector": {
+		"test_id": "login-submit"
+      }
+    }
+  ]
+}

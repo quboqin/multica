@@ -16,11 +16,11 @@
  *   - markdown : fetch text via api.getAttachmentTextContent, render via
  *                the existing ReadonlyContent (full mention/mermaid/katex
  *                pipeline included).
- *   - html     : fetch text, hand to <iframe srcdoc={text}
- *                sandbox="allow-scripts">. The iframe runs in an opaque
- *                origin: scripts execute (chart libraries / vanilla SVG
- *                JS work), but cookie / localStorage / parent access /
- *                top-navigation / popups / forms stay blocked because
+ *   - html     : fetch text, hand to a sandboxed <iframe srcdoc={text}>.
+ *                The iframe runs in an opaque origin: scripts execute
+ *                (chart libraries / vanilla SVG JS work), external links
+ *                can open in a new tab, but cookie / localStorage / parent
+ *                access / top-navigation / forms stay blocked because
  *                `allow-same-origin` is intentionally NOT included.
  *   - text     : fetch text, highlight with lowlight if the extension
  *                maps to a known hljs language; otherwise plain <pre>.

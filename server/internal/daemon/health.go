@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/multica-ai/multica/server/internal/daemon/repocache"
+	"github.com/multica-ai/multica/server/internal/previewdetect"
 )
 
 // HealthResponse is returned by the daemon's local health endpoint.
@@ -204,6 +205,17 @@ func (d *Daemon) serveHealth(ctx context.Context, ln net.Listener, startedAt tim
 			d.logger.Error("repo checkout failed", "url", req.URL, "error", err)
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
+		}
+
+		// Refresh task-local preview discovery from the actual checkout. This
+		// makes repository registration optional: the runtime derives targets
+		// from the code that is now present in the development context.
+		if report, detectErr := previewdetect.Detect(req.WorkDir); detectErr != nil {
+			d.logger.Warn("preview target detection after checkout failed", "workdir", req.WorkDir, "error", detectErr)
+		} else if reportPath, writeErr := previewdetect.WriteReport(req.WorkDir, report); writeErr != nil {
+			d.logger.Warn("preview target report write after checkout failed", "workdir", req.WorkDir, "error", writeErr)
+		} else {
+			d.logger.Info("preview targets refreshed after checkout", "workdir", req.WorkDir, "report", reportPath, "repositories", len(report.Repositories))
 		}
 
 		w.Header().Set("Content-Type", "application/json")

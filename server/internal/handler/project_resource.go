@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
@@ -82,9 +83,20 @@ func validateAndNormalizeResourceRef(resourceType string, ref json.RawMessage) (
 }
 
 type githubRepoRef struct {
-	URL               string `json:"url"`
-	DefaultBranchHint string `json:"default_branch_hint,omitempty"`
+	URL               string                `json:"url"`
+	DefaultBranchHint string                `json:"default_branch_hint,omitempty"`
+	Role              string                `json:"role,omitempty"`
+	Capabilities      []string              `json:"capabilities,omitempty"`
+	Preview           *githubRepoPreviewRef `json:"preview,omitempty"`
 }
+
+type githubRepoPreviewRef struct {
+	Policy   string `json:"policy,omitempty"`
+	Platform string `json:"platform,omitempty"`
+	Profile  string `json:"profile,omitempty"`
+}
+
+var projectResourceSemanticSlug = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,63}$`)
 
 func validateGithubRepoRef(ref json.RawMessage) (json.RawMessage, error) {
 	var payload githubRepoRef
@@ -99,6 +111,56 @@ func validateGithubRepoRef(ref json.RawMessage) (json.RawMessage, error) {
 		return nil, errors.New("github_repo: url must be a valid http(s) or ssh git URL")
 	}
 	payload.DefaultBranchHint = strings.TrimSpace(payload.DefaultBranchHint)
+	payload.Role = strings.ToLower(strings.TrimSpace(payload.Role))
+	if payload.Role != "" && !projectResourceSemanticSlug.MatchString(payload.Role) {
+		return nil, errors.New("github_repo: role must be a lowercase semantic slug of at most 64 characters")
+	}
+	if len(payload.Capabilities) > 32 {
+		return nil, errors.New("github_repo: capabilities cannot contain more than 32 values")
+	}
+	capabilities := make([]string, 0, len(payload.Capabilities))
+	seenCapabilities := make(map[string]struct{}, len(payload.Capabilities))
+	for _, capability := range payload.Capabilities {
+		capability = strings.ToLower(strings.TrimSpace(capability))
+		if capability == "" {
+			continue
+		}
+		if !projectResourceSemanticSlug.MatchString(capability) {
+			return nil, errors.New("github_repo: each capability must be a lowercase semantic slug of at most 64 characters")
+		}
+		if _, seen := seenCapabilities[capability]; seen {
+			continue
+		}
+		seenCapabilities[capability] = struct{}{}
+		capabilities = append(capabilities, capability)
+	}
+	payload.Capabilities = capabilities
+	if payload.Preview != nil {
+		payload.Preview.Policy = strings.ToLower(strings.TrimSpace(payload.Preview.Policy))
+		if payload.Preview.Policy == "" {
+			payload.Preview.Policy = "auto"
+		}
+		switch payload.Preview.Policy {
+		case "auto", "always", "never":
+		default:
+			return nil, errors.New("github_repo: preview.policy must be auto, always, or never")
+		}
+		payload.Preview.Platform = strings.ToLower(strings.TrimSpace(payload.Preview.Platform))
+		if payload.Preview.Platform != "" {
+			switch payload.Preview.Platform {
+			case "web", "android", "ios", "desktop":
+			default:
+				return nil, errors.New("github_repo: preview.platform must be web, android, ios, or desktop")
+			}
+		}
+		if payload.Preview.Policy == "always" && payload.Preview.Platform == "" {
+			return nil, errors.New("github_repo: preview.platform is required when preview.policy is always")
+		}
+		payload.Preview.Profile = strings.ToLower(strings.TrimSpace(payload.Preview.Profile))
+		if payload.Preview.Profile != "" && !projectResourceSemanticSlug.MatchString(payload.Preview.Profile) {
+			return nil, errors.New("github_repo: preview.profile must be a lowercase semantic slug of at most 64 characters")
+		}
+	}
 	out, err := json.Marshal(payload)
 	if err != nil {
 		return nil, err

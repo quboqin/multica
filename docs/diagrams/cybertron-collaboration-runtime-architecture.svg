@@ -1,0 +1,198 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1440 900" width="1440" height="900" role="img" aria-labelledby="title desc">
+  <title id="title">Cybertron 协作运行架构</title>
+  <desc id="desc">展示 Cybertron 从用户协作、服务端编排、Agent Task Queue、daemon runtime、AI 工具和外部系统，到结果回写和实时更新的系统运行架构。</desc>
+  <style>
+    text {
+      font-family: "Helvetica Neue", Helvetica, Arial, "PingFang SC", "Microsoft YaHei", "Microsoft JhengHei", "SimHei", sans-serif;
+      fill: #111827;
+    }
+    .title { font-size: 30px; font-weight: 700; }
+    .subtitle { font-size: 15px; fill: #4b5563; }
+    .layer-title { font-size: 17px; font-weight: 700; }
+    .box-title { font-size: 15px; font-weight: 700; }
+    .label { font-size: 13px; font-weight: 700; }
+    .small { font-size: 12px; fill: #6b7280; }
+    .tiny { font-size: 11px; fill: #6b7280; }
+    .code { font-size: 11px; fill: #374151; font-family: Consolas, "SFMono-Regular", Menlo, monospace; }
+    .node { stroke-width: 1.5; }
+    .soft { filter: url(#softShadow); }
+  </style>
+  <defs>
+    <filter id="softShadow" x="-12%" y="-12%" width="124%" height="134%">
+      <feDropShadow dx="0" dy="7" stdDeviation="8" flood-color="#111827" flood-opacity="0.08"/>
+    </filter>
+    <marker id="arrowBlue" markerWidth="9" markerHeight="7" refX="8" refY="3.5" orient="auto">
+      <polygon points="0 0,9 3.5,0 7" fill="#2563eb"/>
+    </marker>
+    <marker id="arrowGreen" markerWidth="9" markerHeight="7" refX="8" refY="3.5" orient="auto">
+      <polygon points="0 0,9 3.5,0 7" fill="#16a34a"/>
+    </marker>
+    <marker id="arrowPurple" markerWidth="9" markerHeight="7" refX="8" refY="3.5" orient="auto">
+      <polygon points="0 0,9 3.5,0 7" fill="#9333ea"/>
+    </marker>
+    <marker id="arrowOrange" markerWidth="9" markerHeight="7" refX="8" refY="3.5" orient="auto">
+      <polygon points="0 0,9 3.5,0 7" fill="#ea580c"/>
+    </marker>
+    <marker id="arrowGray" markerWidth="9" markerHeight="7" refX="8" refY="3.5" orient="auto">
+      <polygon points="0 0,9 3.5,0 7" fill="#6b7280"/>
+    </marker>
+  </defs>
+
+  <rect width="1440" height="900" fill="#ffffff"/>
+
+  <text x="64" y="58" class="title">Cybertron 协作运行架构</text>
+  <text x="64" y="88" class="subtitle">长期协作对象沉淀状态和产物，短周期 Runtime 执行 Agent Task，并把结果回写到看板和评论流。</text>
+
+  <!-- Top layer: users and clients -->
+  <g transform="translate(64 126)">
+    <rect x="0" y="0" width="1312" height="108" rx="16" fill="#f9fafb" stroke="#e5e7eb" class="node soft"/>
+    <text x="24" y="32" class="layer-title">用户协作层</text>
+    <text x="24" y="56" class="small">人类通过前端看板处理需求、评论、Review、Approve、拆分和发布确认；agent 操作也回到同一条协作流。</text>
+
+    <g transform="translate(520 24)">
+      <rect x="0" y="0" width="126" height="54" rx="10" fill="#ffffff" stroke="#d1d5db"/>
+      <text x="63" y="24" text-anchor="middle" class="label">PM / 产品</text>
+      <text x="63" y="42" text-anchor="middle" class="tiny">需求与验收</text>
+      <rect x="146" y="0" width="126" height="54" rx="10" fill="#ffffff" stroke="#d1d5db"/>
+      <text x="209" y="24" text-anchor="middle" class="label">Squad Lead</text>
+      <text x="209" y="42" text-anchor="middle" class="tiny">编排和确认</text>
+      <rect x="292" y="0" width="126" height="54" rx="10" fill="#ffffff" stroke="#d1d5db"/>
+      <text x="355" y="24" text-anchor="middle" class="label">Dev / QA</text>
+      <text x="355" y="42" text-anchor="middle" class="tiny">评审与测试</text>
+      <rect x="438" y="0" width="126" height="54" rx="10" fill="#ffffff" stroke="#d1d5db"/>
+      <text x="501" y="24" text-anchor="middle" class="label">Release</text>
+      <text x="501" y="42" text-anchor="middle" class="tiny">上线确认</text>
+    </g>
+  </g>
+
+  <!-- Main platform layer -->
+  <g transform="translate(64 278)">
+    <rect x="0" y="0" width="1312" height="256" rx="18" fill="#eff6ff" stroke="#bfdbfe" class="node soft"/>
+    <text x="24" y="34" class="layer-title">Cybertron Server：协作对象、状态编排和任务队列</text>
+
+    <!-- API / realtime -->
+    <g transform="translate(34 70)">
+      <rect x="0" y="0" width="230" height="142" rx="12" fill="#ffffff" stroke="#bfdbfe" class="node"/>
+      <text x="20" y="30" class="box-title">Frontend API / WS</text>
+      <text x="20" y="56" class="small">Project / Issue API</text>
+      <text x="20" y="78" class="small">Comment / Status API</text>
+      <text x="20" y="100" class="small">WebSocket updates</text>
+      <text x="20" y="122" class="small">Inbox / Notification</text>
+    </g>
+
+    <!-- Collaboration model -->
+    <g transform="translate(306 70)">
+      <rect x="0" y="0" width="308" height="142" rx="12" fill="#ffffff" stroke="#bfdbfe" class="node"/>
+      <text x="20" y="30" class="box-title">Collaboration Model</text>
+      <text x="20" y="56" class="small">Workspace / Project / Issue</text>
+      <text x="20" y="78" class="small">Comment / Status / Review Gate</text>
+      <text x="20" y="100" class="small">Artifact / Resource / Sub Issue</text>
+      <text x="20" y="122" class="small">长期协作事实和状态源</text>
+    </g>
+
+    <!-- Agent orchestration -->
+    <g transform="translate(656 70)">
+      <rect x="0" y="0" width="278" height="142" rx="12" fill="#ffffff" stroke="#bfdbfe" class="node"/>
+      <text x="20" y="30" class="box-title">Agent Orchestration</text>
+      <text x="20" y="56" class="small">@agent / assign / rerun</text>
+      <text x="20" y="78" class="small">create Agent Task</text>
+      <text x="20" y="100" class="small">status: queued / running / failed</text>
+      <text x="20" y="122" class="small">review 后推进下一阶段</text>
+    </g>
+
+    <!-- Queue -->
+    <g transform="translate(976 70)">
+      <rect x="0" y="0" width="274" height="142" rx="12" fill="#fff7ed" stroke="#fed7aa" class="node"/>
+      <text x="20" y="30" class="box-title">Agent Task Queue</text>
+      <text x="20" y="56" class="small">queued / dispatched / running</text>
+      <text x="20" y="78" class="small">completed / failed / cancelled</text>
+      <text x="20" y="100" class="small">claim by runtime</text>
+      <text x="20" y="122" class="small">保存 session_id / work_dir</text>
+    </g>
+
+    <path d="M264 141 H306" stroke="#2563eb" stroke-width="2" fill="none" marker-end="url(#arrowBlue)"/>
+    <path d="M614 141 H656" stroke="#2563eb" stroke-width="2" fill="none" marker-end="url(#arrowBlue)"/>
+    <path d="M934 141 H976" stroke="#ea580c" stroke-width="2" fill="none" marker-end="url(#arrowOrange)"/>
+    <text x="287" y="128" text-anchor="middle" class="tiny">写入协作事实</text>
+    <text x="636" y="128" text-anchor="middle" class="tiny">@agent</text>
+    <text x="955" y="128" text-anchor="middle" class="tiny">入队</text>
+  </g>
+
+  <!-- Runtime layer -->
+  <g transform="translate(126 594)">
+    <rect x="0" y="0" width="540" height="192" rx="18" fill="#f0fdf4" stroke="#bbf7d0" class="node soft"/>
+    <text x="24" y="34" class="layer-title">Runtime / Daemon：短周期执行</text>
+    <text x="24" y="60" class="small">daemon claim task，准备上下文和工作目录，然后按 agent 配置启动 AI 工具。</text>
+
+    <g transform="translate(28 90)">
+      <rect x="0" y="0" width="142" height="58" rx="10" fill="#ffffff" stroke="#bbf7d0"/>
+      <text x="71" y="24" text-anchor="middle" class="label">claim task</text>
+      <text x="71" y="42" text-anchor="middle" class="tiny">runtime access</text>
+
+      <rect x="172" y="0" width="142" height="58" rx="10" fill="#ffffff" stroke="#bbf7d0"/>
+      <text x="243" y="24" text-anchor="middle" class="label">prepare</text>
+      <text x="243" y="42" text-anchor="middle" class="tiny">context / work_dir</text>
+
+      <rect x="344" y="0" width="142" height="58" rx="10" fill="#ffffff" stroke="#bbf7d0"/>
+      <text x="415" y="24" text-anchor="middle" class="label">start tool</text>
+      <text x="415" y="42" text-anchor="middle" class="tiny">short process</text>
+
+      <path d="M142 29 H172" stroke="#16a34a" stroke-width="2" fill="none" marker-end="url(#arrowGreen)"/>
+      <path d="M314 29 H344" stroke="#16a34a" stroke-width="2" fill="none" marker-end="url(#arrowGreen)"/>
+    </g>
+  </g>
+
+  <!-- AI tools layer -->
+  <g transform="translate(736 594)">
+    <rect x="0" y="0" width="578" height="192" rx="18" fill="#faf5ff" stroke="#e9d5ff" class="node soft"/>
+    <text x="24" y="34" class="layer-title">AI 工具与外部执行环境</text>
+    <text x="24" y="60" class="small">AI 工具通过 MCP、CLI、Repo、测试和发布系统完成真实工作，并产生可审查产物。</text>
+
+    <g transform="translate(28 90)">
+      <rect x="0" y="0" width="166" height="58" rx="10" fill="#ffffff" stroke="#e9d5ff"/>
+      <text x="83" y="23" text-anchor="middle" class="label">Codex / Claude</text>
+      <text x="83" y="42" text-anchor="middle" class="code">app-server stdio</text>
+
+      <rect x="198" y="0" width="150" height="58" rx="10" fill="#ffffff" stroke="#e9d5ff"/>
+      <text x="273" y="23" text-anchor="middle" class="label">Repo / Worktree</text>
+      <text x="273" y="42" text-anchor="middle" class="tiny">code / patch / PR</text>
+
+      <rect x="380" y="0" width="142" height="58" rx="10" fill="#ffffff" stroke="#e9d5ff"/>
+      <text x="451" y="23" text-anchor="middle" class="label">MCP / Tools</text>
+      <text x="451" y="42" text-anchor="middle" class="tiny">test / deploy / docs</text>
+
+      <path d="M166 29 H198" stroke="#9333ea" stroke-width="2" fill="none" marker-end="url(#arrowPurple)"/>
+      <path d="M348 29 H380" stroke="#9333ea" stroke-width="2" fill="none" marker-end="url(#arrowPurple)"/>
+    </g>
+  </g>
+
+  <!-- Down arrows from server to runtime -->
+  <path d="M1177 534 V558 H396 V594" stroke="#ea580c" stroke-width="2.4" fill="none" marker-end="url(#arrowOrange)"/>
+  <text x="812" y="555" text-anchor="middle" class="tiny">runtime claim queued task</text>
+  <path d="M666 690 H736" stroke="#16a34a" stroke-width="2.4" fill="none" marker-end="url(#arrowGreen)"/>
+  <text x="701" y="670" text-anchor="middle" class="tiny">启动 AI 工具</text>
+
+  <!-- Result writeback loop -->
+  <path d="M1314 690 H1356 V574 H524 V490" stroke="#9333ea" stroke-width="2.4" stroke-dasharray="7 5" fill="none" marker-end="url(#arrowPurple)"/>
+  <text x="940" y="596" text-anchor="middle" class="small">结果回写：Comment / Artifact / Status / transcript / session_id / work_dir</text>
+
+  <!-- Realtime update arrow -->
+  <path d="M198 278 V246" stroke="#6b7280" stroke-width="2" stroke-dasharray="5 4" fill="none" marker-end="url(#arrowGray)"/>
+  <text x="222" y="262" class="tiny">WS 实时更新看板</text>
+
+  <!-- Human actions arrow -->
+  <path d="M720 234 V278" stroke="#2563eb" stroke-width="2.4" fill="none" marker-end="url(#arrowBlue)"/>
+  <text x="740" y="260" class="tiny">create / comment / approve / @agent</text>
+
+  <!-- Legend -->
+  <g transform="translate(64 830)">
+    <line x1="0" y1="8" x2="34" y2="8" stroke="#2563eb" stroke-width="2" marker-end="url(#arrowBlue)"/>
+    <text x="44" y="12" class="tiny">用户操作 / API</text>
+    <line x1="154" y1="8" x2="188" y2="8" stroke="#ea580c" stroke-width="2" marker-end="url(#arrowOrange)"/>
+    <text x="198" y="12" class="tiny">任务入队 / claim</text>
+    <line x1="328" y1="8" x2="362" y2="8" stroke="#16a34a" stroke-width="2" marker-end="url(#arrowGreen)"/>
+    <text x="372" y="12" class="tiny">短周期执行</text>
+    <line x1="494" y1="8" x2="528" y2="8" stroke="#9333ea" stroke-width="2" stroke-dasharray="7 5" marker-end="url(#arrowPurple)"/>
+    <text x="538" y="12" class="tiny">结果回写</text>
+  </g>
+</svg>

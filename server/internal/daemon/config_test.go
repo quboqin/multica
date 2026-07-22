@@ -261,6 +261,21 @@ func TestLoadConfig_AutoUpdateDefault_SelfHostOff(t *testing.T) {
 	}
 }
 
+func TestLoadConfigDeviceRuntimeURL(t *testing.T) {
+	stageFakeAgent(t)
+	cfg, err := LoadConfig(Overrides{
+		ServerURL:        "http://localhost:8080",
+		WorkspacesRoot:   t.TempDir(),
+		DeviceRuntimeURL: "http://127.0.0.1:18081/",
+	})
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	if cfg.DeviceRuntimeURL != "http://127.0.0.1:18081" {
+		t.Fatalf("DeviceRuntimeURL = %q", cfg.DeviceRuntimeURL)
+	}
+}
+
 // TestLoadConfig_AutoUpdateDefault_CloudOn confirms the symmetric case: a
 // daemon pointed at Multica's hosted cloud keeps the historical opt-in
 // auto-update default. We pass the WSS form of the URL to also exercise that

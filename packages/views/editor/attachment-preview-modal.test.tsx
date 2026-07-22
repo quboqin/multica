@@ -246,7 +246,7 @@ describe("AttachmentPreviewModal — dispatch", () => {
     expect(screen.getByTestId("readonly-content").textContent).toContain("# heading");
   });
 
-  it("renders an iframe with srcdoc + sandbox='allow-scripts' for HTML", async () => {
+  it("renders an iframe with srcdoc and the HTML preview sandbox for HTML", async () => {
     getAttachmentTextContentMock.mockResolvedValueOnce({
       text: "<p>hi</p>",
       originalContentType: "text/html",
@@ -260,7 +260,10 @@ describe("AttachmentPreviewModal — dispatch", () => {
       // `allow-scripts` is required so vanilla-JS chart libraries render
       // (MUL-2330). The combination with `allow-same-origin` would defeat
       // the sandbox, so this assertion must stay exact.
-      expect(frame?.getAttribute("sandbox")).toBe("allow-scripts");
+      expect(frame?.getAttribute("sandbox")).toBe(
+        "allow-scripts allow-popups allow-popups-to-escape-sandbox",
+      );
+      expect(frame?.getAttribute("sandbox")).not.toContain("allow-same-origin");
       // srcdoc carries the original HTML plus the fragment-nav shim
       // appended at the end (see utils/iframe-fragment-nav.ts).
       const srcdoc = frame?.getAttribute("srcdoc") ?? "";

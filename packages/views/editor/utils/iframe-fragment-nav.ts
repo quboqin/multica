@@ -2,9 +2,10 @@
  * Fragment-navigation shim for sandboxed HTML attachment iframes.
  *
  * HTML attachment previews mount the user-supplied document inside a
- * `<iframe sandbox="allow-scripts" srcdoc={...}>` — deliberately WITHOUT
- * `allow-same-origin`, because the source is untrusted user upload and
- * same-origin would let it reach cookies / localStorage / parent.document.
+ * `<iframe sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox"
+ * srcdoc={...}>` — deliberately WITHOUT `allow-same-origin`, because the
+ * source is untrusted user upload and same-origin would let it reach cookies /
+ * localStorage / parent.document.
  *
  * That security posture has a side effect: in Chromium, a sandboxed srcdoc
  * iframe sits in an opaque origin, and the browser treats clicks on

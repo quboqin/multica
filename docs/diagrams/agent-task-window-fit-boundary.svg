@@ -1,0 +1,134 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 760" width="1280" height="760" role="img" aria-labelledby="title desc">
+  <title id="title">长窗口与短周期 Agent Task 的适用边界</title>
+  <desc id="desc">说明长窗口适合个人探索和连续对话，短周期 Agent Task 适合团队协作、可调度执行和可审计交付。</desc>
+  <style>
+    text {
+      font-family: "Helvetica Neue", Helvetica, Arial, "PingFang SC", "Microsoft YaHei", "Microsoft JhengHei", "SimHei", sans-serif;
+      fill: #111827;
+    }
+    .title { font-size: 30px; font-weight: 700; }
+    .subtitle { font-size: 15px; fill: #4b5563; }
+    .panel-title { font-size: 21px; font-weight: 700; }
+    .section-title { font-size: 16px; font-weight: 700; }
+    .label { font-size: 14px; font-weight: 700; }
+    .small { font-size: 12px; fill: #6b7280; }
+    .tiny { font-size: 11px; fill: #6b7280; }
+    .node { stroke-width: 1.5; }
+    .soft { filter: url(#softShadow); }
+  </style>
+  <defs>
+    <filter id="softShadow" x="-15%" y="-15%" width="130%" height="140%">
+      <feDropShadow dx="0" dy="8" stdDeviation="9" flood-color="#111827" flood-opacity="0.09"/>
+    </filter>
+    <marker id="arrowGray" markerWidth="9" markerHeight="7" refX="8" refY="3.5" orient="auto">
+      <polygon points="0 0,9 3.5,0 7" fill="#6b7280"/>
+    </marker>
+    <marker id="arrowBlue" markerWidth="9" markerHeight="7" refX="8" refY="3.5" orient="auto">
+      <polygon points="0 0,9 3.5,0 7" fill="#2563eb"/>
+    </marker>
+    <marker id="arrowGreen" markerWidth="9" markerHeight="7" refX="8" refY="3.5" orient="auto">
+      <polygon points="0 0,9 3.5,0 7" fill="#16a34a"/>
+    </marker>
+  </defs>
+
+  <rect width="1280" height="760" fill="#ffffff"/>
+
+  <text x="64" y="58" class="title">长窗口适合探索，短周期适合交付</text>
+  <text x="64" y="88" class="subtitle">Cybertron 不否定长窗口，而是把长窗口放在任务形成前；进入协作交付后，用 Agent Task 接管执行、状态和审计。</text>
+
+  <!-- Left: long window -->
+  <g transform="translate(64 132)">
+    <rect x="0" y="0" width="342" height="478" rx="18" fill="#fff7ed" stroke="#fed7aa" class="node soft"/>
+    <text x="28" y="42" class="panel-title">长窗口</text>
+    <text x="28" y="69" class="small">个人探索 / 连续对话 / 低协作治理成本</text>
+
+    <g transform="translate(28 108)">
+      <rect x="0" y="0" width="286" height="58" rx="10" fill="#ffffff" stroke="#fed7aa"/>
+      <text x="20" y="24" class="label">高频来回澄清</text>
+      <text x="20" y="43" class="tiny">需求还模糊，先把问题聊清楚</text>
+    </g>
+    <g transform="translate(28 184)">
+      <rect x="0" y="0" width="286" height="58" rx="10" fill="#ffffff" stroke="#fed7aa"/>
+      <text x="20" y="24" class="label">个人心流</text>
+      <text x="20" y="43" class="tiny">一个人边问边改，摩擦最低</text>
+    </g>
+    <g transform="translate(28 260)">
+      <rect x="0" y="0" width="286" height="58" rx="10" fill="#ffffff" stroke="#fed7aa"/>
+      <text x="20" y="24" class="label">强连续上下文</text>
+      <text x="20" y="43" class="tiny">debug、追调用链、反复调整方案</text>
+    </g>
+    <g transform="translate(28 336)">
+      <rect x="0" y="0" width="286" height="58" rx="10" fill="#ffffff" stroke="#fed7aa"/>
+      <text x="20" y="24" class="label">探索性产出</text>
+      <text x="20" y="43" class="tiny">解释代码、看报错、方案草稿</text>
+    </g>
+  </g>
+
+  <!-- Middle: decision boundary -->
+  <g transform="translate(452 132)">
+    <rect x="0" y="0" width="376" height="478" rx="18" fill="#f9fafb" stroke="#e5e7eb" class="node soft"/>
+    <text x="188" y="42" text-anchor="middle" class="panel-title">从探索到交付的边界</text>
+    <text x="188" y="69" text-anchor="middle" class="small">出现这些信号，就应该从长窗口沉淀到 Cybertron 对象</text>
+
+    <g transform="translate(48 114)">
+      <path d="M140 0 L280 76 L140 152 L0 76 Z" fill="#eff6ff" stroke="#bfdbfe" stroke-width="1.5"/>
+      <text x="140" y="52" text-anchor="middle" class="section-title">是否形成</text>
+      <text x="140" y="76" text-anchor="middle" class="section-title">明确工作包？</text>
+      <text x="140" y="101" text-anchor="middle" class="tiny">目标 / 负责人 / 产物 / 状态</text>
+    </g>
+
+    <g transform="translate(38 306)">
+      <rect x="0" y="0" width="300" height="108" rx="12" fill="#ffffff" stroke="#d1d5db"/>
+      <text x="22" y="32" class="label">沉淀触发点</text>
+      <text x="22" y="58" class="small">需要 review、排期、拆任务、跨 agent 协作</text>
+      <text x="22" y="82" class="small">需要失败重试、状态跟踪、发布确认</text>
+    </g>
+  </g>
+
+  <!-- Right: short task -->
+  <g transform="translate(874 132)">
+    <rect x="0" y="0" width="342" height="478" rx="18" fill="#f0fdf4" stroke="#bbf7d0" class="node soft"/>
+    <text x="28" y="42" class="panel-title">短周期 Agent Task</text>
+    <text x="28" y="69" class="small">团队协作 / 可调度执行 / 可审计交付</text>
+
+    <g transform="translate(28 108)">
+      <rect x="0" y="0" width="286" height="58" rx="10" fill="#ffffff" stroke="#bbf7d0"/>
+      <text x="20" y="24" class="label">Project / Issue 承载事实</text>
+      <text x="20" y="43" class="tiny">目标、范围、状态、评论、资源</text>
+    </g>
+    <g transform="translate(28 184)">
+      <rect x="0" y="0" width="286" height="58" rx="10" fill="#ffffff" stroke="#bbf7d0"/>
+      <text x="20" y="24" class="label">Agent Task 执行工作</text>
+      <text x="20" y="43" class="tiny">一次启动、一次产物、一次记录</text>
+    </g>
+    <g transform="translate(28 260)">
+      <rect x="0" y="0" width="286" height="58" rx="10" fill="#ffffff" stroke="#bbf7d0"/>
+      <text x="20" y="24" class="label">人类 Review 门禁</text>
+      <text x="20" y="43" class="tiny">in_review 到 done，决策可追溯</text>
+    </g>
+    <g transform="translate(28 336)">
+      <rect x="0" y="0" width="286" height="58" rx="10" fill="#ffffff" stroke="#bbf7d0"/>
+      <text x="20" y="24" class="label">跨模型 / 跨 agent 交接</text>
+      <text x="20" y="43" class="tiny">通过产物、状态和子 Issue 交付</text>
+    </g>
+  </g>
+
+  <!-- Arrows -->
+  <path d="M406 368 H452" stroke="#6b7280" stroke-width="2.2" fill="none" marker-end="url(#arrowGray)"/>
+  <text x="429" y="345" text-anchor="middle" class="tiny">形成工作包</text>
+  <path d="M828 368 H874" stroke="#16a34a" stroke-width="2.2" fill="none" marker-end="url(#arrowGreen)"/>
+  <text x="851" y="345" text-anchor="middle" class="tiny">进入交付</text>
+
+  <!-- Bottom journey -->
+  <g transform="translate(104 660)">
+    <rect x="0" y="0" width="1072" height="44" rx="12" fill="#f3f4f6" stroke="#e5e7eb"/>
+    <text x="32" y="28" class="small">推荐路径：</text>
+    <text x="112" y="28" class="small">先用长窗口探索问题</text>
+    <path d="M258 22 H318" stroke="#2563eb" stroke-width="1.8" fill="none" marker-end="url(#arrowBlue)"/>
+    <text x="340" y="28" class="small">沉淀 Project / 父 Issue / 子 Issue</text>
+    <path d="M560 22 H620" stroke="#2563eb" stroke-width="1.8" fill="none" marker-end="url(#arrowBlue)"/>
+    <text x="642" y="28" class="small">用 Agent Task 执行并进入 Review</text>
+    <path d="M862 22 H922" stroke="#2563eb" stroke-width="1.8" fill="none" marker-end="url(#arrowBlue)"/>
+    <text x="944" y="28" class="small">完成交付和审计</text>
+  </g>
+</svg>
