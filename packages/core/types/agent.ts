@@ -1,3 +1,5 @@
+import type { Label } from "./label";
+
 export type AgentStatus = "idle" | "working" | "blocked" | "error" | "offline";
 
 export type AgentRuntimeMode = "local" | "cloud";
@@ -208,6 +210,7 @@ export interface Agent {
   thinking_level?: string;
   owner_id: string | null;
   skills: AgentSkillSummary[];
+  labels?: Label[];
   created_at: string;
   updated_at: string;
   archived_at: string | null;

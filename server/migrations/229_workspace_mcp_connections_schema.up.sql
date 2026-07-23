@@ -1,4 +1,4 @@
-CREATE TABLE workspace_mcp_connection (
+CREATE TABLE IF NOT EXISTS workspace_mcp_connection (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     workspace_id UUID NOT NULL,
     name TEXT NOT NULL,

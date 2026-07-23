@@ -43,11 +43,11 @@ export function ProjectLabelPicker({ projectId }: { projectId: string }) {
   const [manageOpen, setManageOpen] = useState(false);
   const creatingRef = useRef(false);
 
-  const { data: allLabels = [] } = useQuery(labelListOptions(wsId));
+  const { data: allLabels = [] } = useQuery(labelListOptions(wsId, "project"));
   const { data: attachedLabels = [] } = useQuery(projectLabelsOptions(wsId, projectId));
   const attach = useAttachProjectLabel(projectId);
   const detach = useDetachProjectLabel(projectId);
-  const create = useCreateLabel();
+  const create = useCreateLabel("project");
 
   const attachedIds = useMemo(
     () => new Set(attachedLabels.map((label) => label.id)),
@@ -170,7 +170,7 @@ export function ProjectLabelPicker({ projectId }: { projectId: string }) {
       <Dialog open={manageOpen} onOpenChange={setManageOpen}>
         <DialogContent className="max-w-2xl">
           <DialogTitle className="text-lg font-semibold">{t(($) => $.pickers.label.manage_dialog_title)}</DialogTitle>
-          <LabelsPanel />
+          <LabelsPanel resourceType="project" />
         </DialogContent>
       </Dialog>
     </div>

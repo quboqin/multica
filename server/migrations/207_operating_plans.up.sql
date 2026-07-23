@@ -1,4 +1,4 @@
-CREATE TABLE milestone (
+CREATE TABLE IF NOT EXISTS milestone (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     workspace_id UUID NOT NULL,
     title TEXT NOT NULL,
@@ -14,21 +14,21 @@ CREATE TABLE milestone (
 );
 
 ALTER TABLE project
-    ADD COLUMN milestone_id UUID;
+    ADD COLUMN IF NOT EXISTS milestone_id UUID;
 
 ALTER TABLE issue_label
     DROP CONSTRAINT IF EXISTS issue_label_resource_type_check,
     ADD CONSTRAINT issue_label_resource_type_check
         CHECK (resource_type IN ('issue', 'agent', 'skill', 'project'));
 
-CREATE TABLE project_to_label (
+CREATE TABLE IF NOT EXISTS project_to_label (
     project_id uuid NOT NULL,
     label_id uuid NOT NULL,
     created_at timestamptz NOT NULL DEFAULT now(),
     PRIMARY KEY (project_id, label_id)
 );
 
-CREATE TABLE kpi_metric (
+CREATE TABLE IF NOT EXISTS kpi_metric (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     workspace_id uuid NOT NULL,
     name text NOT NULL,

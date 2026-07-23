@@ -19,7 +19,7 @@ import {
 import { toast } from "sonner";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { labelListOptions, useCreateLabel, useUpdateLabel, useDeleteLabel } from "@multica/core/labels";
-import type { Label } from "@multica/core/types";
+import type { Label, LabelResourceType } from "@multica/core/types";
 import { isImeComposing } from "@multica/core/utils";
 import { LabelChip } from "../../labels/label-chip";
 import { useT } from "../../i18n";
@@ -31,14 +31,14 @@ const DEFAULT_COLOR_DEFAULT = "#3b82f6";
  * Workspace-wide labels management surface. Opened from the Manage labels…
  * footer in the label picker.
  */
-export function LabelsPanel() {
+export function LabelsPanel({ resourceType = "issue" }: { resourceType?: LabelResourceType }) {
   const { t } = useT("issues");
   const wsId = useWorkspaceId();
-  const { data: labels = [], isLoading } = useQuery(labelListOptions(wsId));
+  const { data: labels = [], isLoading } = useQuery(labelListOptions(wsId, resourceType));
 
-  const create = useCreateLabel();
-  const update = useUpdateLabel();
-  const del = useDeleteLabel();
+  const create = useCreateLabel(resourceType);
+  const update = useUpdateLabel(resourceType);
+  const del = useDeleteLabel(resourceType);
 
   const [newName, setNewName] = useState("");
   const [newColor, setNewColor] = useState(DEFAULT_COLOR_DEFAULT);

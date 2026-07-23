@@ -147,6 +147,7 @@
     "section_properties": "속성",
     "section_details": "세부 정보",
     "section_skills": "스킬",
+    "section_tags": "태그",
     "section_integrations": "연동",
     "prop_runtime": "런타임",
     "prop_model": "모델",
@@ -247,6 +248,7 @@
     "cancel": "취소",
     "create_failed_toast": "에이전트를 만들지 못했습니다",
     "skill_attach_failed_toast": "에이전트는 만들었지만 스킬을 연결하지 못했습니다: {{error}}",
+    "tag_attach_failed_toast": "에이전트는 만들었지만 태그를 연결하지 못했습니다: {{error}}",
     "squad_join_failed_toast": "에이전트 \"{{name}}\"은(는) 만들었지만 스쿼드에 참가하지 못했습니다: {{error}}. 멤버에서 직접 추가할 수 있습니다.",
     "instructions": {
       "label": "지침",
@@ -266,6 +268,15 @@
       "list_empty_default": "사용 가능한 스킬이 없습니다.",
       "list_no_match": "일치하는 스킬이 없습니다.",
       "search_placeholder": "스킬 검색..."
+    },
+    "tags_section": {
+      "label": "태그",
+      "search_placeholder": "태그 검색 또는 만들기",
+      "loading": "태그 불러오는 중...",
+      "empty": "아직 태그가 없습니다",
+      "selected": "선택됨",
+      "create_action": "만들기",
+      "create_failed_toast": "태그를 만들지 못했습니다"
     },
     "avatar": {
       "change_aria": "아바타 변경",

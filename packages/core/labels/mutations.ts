@@ -7,6 +7,7 @@ import { projectKeys } from "../projects/queries";
 import { onIssueLabelsChanged } from "../issues/ws-updaters";
 import type {
   Label,
+  LabelResourceType,
   CreateLabelRequest,
   UpdateLabelRequest,
   ListLabelsResponse,
@@ -40,20 +41,21 @@ function patchProjectLabelsInCache(
   );
 }
 
-export function useCreateLabel() {
+export function useCreateLabel(resourceType: LabelResourceType = "issue") {
   const qc = useQueryClient();
   const wsId = useWorkspaceId();
   return useMutation({
-    mutationFn: (data: CreateLabelRequest) => api.createLabel(data),
+    mutationFn: (data: CreateLabelRequest) =>
+      api.createLabel({ ...data, resource_type: resourceType }),
     onSuccess: (label) => {
-      qc.setQueryData<ListLabelsResponse>(labelKeys.list(wsId), (old) =>
+      qc.setQueryData<ListLabelsResponse>(labelKeys.list(wsId, resourceType), (old) =>
         old && !old.labels.some((l) => l.id === label.id)
           ? { ...old, labels: [...old.labels, label], total: old.total + 1 }
           : old,
       );
     },
     onSettled: () => {
-      qc.invalidateQueries({ queryKey: labelKeys.list(wsId) });
+      qc.invalidateQueries({ queryKey: labelKeys.list(wsId, resourceType) });
     },
   });
 }
@@ -63,16 +65,16 @@ export function useCreateLabel() {
  * change locally, snapshot for rollback, invalidate on settle. Without this
  * the UI freezes for the round-trip on every edit.
  */
-export function useUpdateLabel() {
+export function useUpdateLabel(resourceType: LabelResourceType = "issue") {
   const qc = useQueryClient();
   const wsId = useWorkspaceId();
   return useMutation({
     mutationFn: ({ id, ...data }: { id: string } & UpdateLabelRequest) =>
       api.updateLabel(id, data),
     onMutate: async ({ id, ...data }) => {
-      await qc.cancelQueries({ queryKey: labelKeys.list(wsId) });
-      const prevList = qc.getQueryData<ListLabelsResponse>(labelKeys.list(wsId));
-      qc.setQueryData<ListLabelsResponse>(labelKeys.list(wsId), (old) =>
+      await qc.cancelQueries({ queryKey: labelKeys.list(wsId, resourceType) });
+      const prevList = qc.getQueryData<ListLabelsResponse>(labelKeys.list(wsId, resourceType));
+      qc.setQueryData<ListLabelsResponse>(labelKeys.list(wsId, resourceType), (old) =>
         old
           ? {
               ...old,
@@ -83,7 +85,7 @@ export function useUpdateLabel() {
       return { prevList, id };
     },
     onError: (_err, _vars, ctx) => {
-      if (ctx?.prevList) qc.setQueryData(labelKeys.list(wsId), ctx.prevList);
+      if (ctx?.prevList) qc.setQueryData(labelKeys.list(wsId, resourceType), ctx.prevList);
     },
     onSettled: () => {
       // Invalidate the entire labels scope so any byIssue cache holding a
@@ -93,19 +95,22 @@ export function useUpdateLabel() {
       // Issues now embed labels (denormalized snapshot), so a rename/recolor
       // also has to refresh the issues caches that hold those snapshots.
       qc.invalidateQueries({ queryKey: issueKeys.all(wsId) });
+      if (resourceType === "project") {
+        qc.invalidateQueries({ queryKey: projectKeys.all(wsId) });
+      }
     },
   });
 }
 
-export function useDeleteLabel() {
+export function useDeleteLabel(resourceType: LabelResourceType = "issue") {
   const qc = useQueryClient();
   const wsId = useWorkspaceId();
   return useMutation({
     mutationFn: (id: string) => api.deleteLabel(id),
     onMutate: async (id) => {
-      await qc.cancelQueries({ queryKey: labelKeys.list(wsId) });
-      const prev = qc.getQueryData<ListLabelsResponse>(labelKeys.list(wsId));
-      qc.setQueryData<ListLabelsResponse>(labelKeys.list(wsId), (old) =>
+      await qc.cancelQueries({ queryKey: labelKeys.list(wsId, resourceType) });
+      const prev = qc.getQueryData<ListLabelsResponse>(labelKeys.list(wsId, resourceType));
+      qc.setQueryData<ListLabelsResponse>(labelKeys.list(wsId, resourceType), (old) =>
         old
           ? { ...old, labels: old.labels.filter((l) => l.id !== id), total: old.total - 1 }
           : old,
@@ -113,13 +118,16 @@ export function useDeleteLabel() {
       return { prev };
     },
     onError: (_err, _id, ctx) => {
-      if (ctx?.prev) qc.setQueryData(labelKeys.list(wsId), ctx.prev);
+      if (ctx?.prev) qc.setQueryData(labelKeys.list(wsId, resourceType), ctx.prev);
     },
     onSettled: () => {
       qc.invalidateQueries({ queryKey: labelKeys.all(wsId) });
       // A deleted label still lives in cached issue.labels arrays until we
       // refetch — invalidate so list/board chips drop the orphan.
       qc.invalidateQueries({ queryKey: issueKeys.all(wsId) });
+      if (resourceType === "project") {
+        qc.invalidateQueries({ queryKey: projectKeys.all(wsId) });
+      }
     },
   });
 }
@@ -207,7 +215,7 @@ export function useAttachProjectLabel(projectId: string) {
       await qc.cancelQueries({ queryKey: labelKeys.byProject(wsId, projectId) });
       const prev = qc.getQueryData<ProjectLabelsResponse>(labelKeys.byProject(wsId, projectId));
       if (!prev || prev.labels.some((l) => l.id === labelId)) return { prev };
-      const list = qc.getQueryData<ListLabelsResponse>(labelKeys.list(wsId));
+      const list = qc.getQueryData<ListLabelsResponse>(labelKeys.list(wsId, "project"));
       const label = list?.labels.find((l) => l.id === labelId);
       if (!label) return { prev };
       const next = { ...prev, labels: [...prev.labels, label] };

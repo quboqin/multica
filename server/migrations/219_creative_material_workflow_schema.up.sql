@@ -1,4 +1,4 @@
-CREATE TABLE creative_material_candidate (
+CREATE TABLE IF NOT EXISTS creative_material_candidate (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     workspace_id UUID NOT NULL,
     connector_id TEXT NOT NULL DEFAULT 'appgrowing',
@@ -32,7 +32,7 @@ CREATE TABLE creative_material_candidate (
     archived_at TIMESTAMPTZ
 );
 
-CREATE TABLE creative_material_issue_candidate (
+CREATE TABLE IF NOT EXISTS creative_material_issue_candidate (
     issue_id UUID NOT NULL,
     candidate_id UUID NOT NULL,
     workspace_id UUID NOT NULL,
@@ -48,7 +48,7 @@ CREATE TABLE creative_material_issue_candidate (
     PRIMARY KEY (issue_id, candidate_id)
 );
 
-CREATE TABLE creative_material_crawl_run (
+CREATE TABLE IF NOT EXISTS creative_material_crawl_run (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     workspace_id UUID NOT NULL,
     issue_id UUID,
@@ -66,7 +66,7 @@ CREATE TABLE creative_material_crawl_run (
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
-CREATE TABLE creative_edit_job (
+CREATE TABLE IF NOT EXISTS creative_edit_job (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     workspace_id UUID NOT NULL,
     issue_id UUID NOT NULL,
@@ -93,13 +93,13 @@ CREATE TABLE creative_edit_job (
     process_data JSONB NOT NULL DEFAULT '{}'::jsonb
 );
 
-CREATE TABLE creative_edit_job_candidate (
+CREATE TABLE IF NOT EXISTS creative_edit_job_candidate (
     job_id UUID NOT NULL,
     candidate_id UUID NOT NULL,
     PRIMARY KEY (job_id, candidate_id)
 );
 
-CREATE TABLE creative_edit_variant (
+CREATE TABLE IF NOT EXISTS creative_edit_variant (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     job_id UUID NOT NULL,
     candidate_id UUID NOT NULL,
@@ -111,7 +111,7 @@ CREATE TABLE creative_edit_variant (
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
-CREATE TABLE creative_edit_asset (
+CREATE TABLE IF NOT EXISTS creative_edit_asset (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     variant_id UUID NOT NULL,
     width INT NOT NULL,

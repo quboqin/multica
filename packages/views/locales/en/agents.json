@@ -147,6 +147,7 @@
     "section_properties": "Properties",
     "section_details": "Details",
     "section_skills": "Skills",
+    "section_tags": "Tags",
     "section_integrations": "Integrations",
     "prop_runtime": "Runtime",
     "prop_model": "Model",
@@ -247,6 +248,7 @@
     "cancel": "Cancel",
     "create_failed_toast": "Failed to create agent",
     "skill_attach_failed_toast": "Agent created, but failed to attach skills: {{error}}",
+    "tag_attach_failed_toast": "Agent created, but failed to attach tags: {{error}}",
     "squad_join_failed_toast": "Agent \"{{name}}\" was created but couldn't join the squad: {{error}}. You can add it manually from Members.",
     "instructions": {
       "label": "Instructions",
@@ -266,6 +268,15 @@
       "list_empty_default": "No skills available.",
       "list_no_match": "No skills match.",
       "search_placeholder": "Search skills…"
+    },
+    "tags_section": {
+      "label": "Tags",
+      "search_placeholder": "Search or create tags",
+      "loading": "Loading tags...",
+      "empty": "No tags yet",
+      "selected": "Selected",
+      "create_action": "Create",
+      "create_failed_toast": "Failed to create tag"
     },
     "avatar": {
       "change_aria": "Change avatar",

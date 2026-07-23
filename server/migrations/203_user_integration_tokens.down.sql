@@ -1,2 +1,2 @@
 ALTER TABLE "user"
-    DROP COLUMN integration_tokens;
+    DROP COLUMN IF EXISTS integration_tokens;

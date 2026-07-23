@@ -47,6 +47,7 @@ import { SkillAttach } from "./inspector/skill-attach";
 import { ThinkingPropRow } from "./inspector/thinking-prop-row";
 import { VisibilityPicker } from "./inspector/visibility-picker";
 import { LarkAgentBindButton } from "../../settings/components/lark-tab";
+import { LabelChip } from "../../labels/label-chip";
 
 interface InspectorProps {
   agent: Agent;
@@ -190,6 +191,24 @@ export function AgentDetailInspector({
           </span>
         </PropRow>
       </Section>
+
+      {(agent.labels?.length ?? 0) > 0 && (
+        <div className="flex flex-col border-b px-5 py-4">
+          <div className="mb-2 flex items-center gap-2">
+            <span className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+              {t(($) => $.inspector.section_tags)}
+            </span>
+            <span className="font-mono text-[10px] tabular-nums text-muted-foreground/70">
+              {agent.labels?.length ?? 0}
+            </span>
+          </div>
+          <div className="flex flex-wrap gap-1">
+            {agent.labels?.map((label) => (
+              <LabelChip key={label.id} label={label} />
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Skills */}
       <div className="flex flex-col border-b px-5 py-4">

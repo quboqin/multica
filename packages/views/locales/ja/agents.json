@@ -134,6 +134,7 @@
     "section_properties": "プロパティ",
     "section_details": "詳細",
     "section_skills": "スキル",
+    "section_tags": "タグ",
     "section_integrations": "連携",
     "prop_runtime": "ランタイム",
     "prop_model": "モデル",
@@ -234,6 +235,7 @@
     "cancel": "キャンセル",
     "create_failed_toast": "エージェントを作成できませんでした",
     "skill_attach_failed_toast": "エージェントは作成されましたが、スキルを追加できませんでした: {{error}}",
+    "tag_attach_failed_toast": "エージェントは作成されましたが、タグを追加できませんでした: {{error}}",
     "squad_join_failed_toast": "エージェント \"{{name}}\" は作成されましたが、スクワッドに参加できませんでした: {{error}}。メンバーから手動で追加できます。",
     "instructions": {
       "label": "指示",
@@ -252,6 +254,15 @@
       "list_empty_default": "利用可能なスキルがありません。",
       "list_no_match": "一致するスキルがありません。",
       "search_placeholder": "スキルを検索..."
+    },
+    "tags_section": {
+      "label": "タグ",
+      "search_placeholder": "タグを検索または作成",
+      "loading": "タグを読み込み中...",
+      "empty": "タグはまだありません",
+      "selected": "選択中",
+      "create_action": "作成",
+      "create_failed_toast": "タグを作成できませんでした"
     },
     "avatar": {
       "change_aria": "アバターを変更",

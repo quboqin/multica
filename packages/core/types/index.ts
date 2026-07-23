@@ -58,7 +58,7 @@ export type { Workspace, WorkspaceRepo, Member, MemberRole, User, IntegrationTok
 export type { InboxItem, InboxSeverity, InboxItemType } from "./inbox";
 export type { NotificationGroupKey, NotificationGroupValue, NotificationPreferences, NotificationPreferenceResponse } from "./notification-preference";
 export type { Comment, CommentType, CommentAuthorType, CommentTriggerPreview, CommentTriggerPreviewAgent, CommentTriggerSource, Reaction } from "./comment";
-export type { Label, CreateLabelRequest, UpdateLabelRequest, ListLabelsResponse, IssueLabelsResponse, ProjectLabelsResponse } from "./label";
+export type { Label, LabelResourceType, CreateLabelRequest, UpdateLabelRequest, ListLabelsResponse, IssueLabelsResponse, ProjectLabelsResponse, AgentLabelsResponse } from "./label";
 export type {
   TimelineEntry,
   AssigneeFrequencyEntry,

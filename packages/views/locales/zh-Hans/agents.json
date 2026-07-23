@@ -142,6 +142,7 @@
     "section_properties": "属性",
     "section_details": "详情",
     "section_skills": "Skills",
+    "section_tags": "标签",
     "section_integrations": "外部集成",
     "prop_runtime": "运行时",
     "prop_model": "模型",
@@ -242,6 +243,7 @@
     "cancel": "取消",
     "create_failed_toast": "创建智能体失败",
     "skill_attach_failed_toast": "智能体已创建，但 skill 关联失败：{{error}}",
+    "tag_attach_failed_toast": "智能体已创建，但标签关联失败：{{error}}",
     "squad_join_failed_toast": "智能体「{{name}}」已创建，但加入小队失败：{{error}}。你可以在 Members 标签里手动添加。",
     "instructions": {
       "label": "指令",
@@ -260,6 +262,15 @@
       "list_empty_default": "暂无 skill。",
       "list_no_match": "没有匹配的 skill。",
       "search_placeholder": "搜索 skill…"
+    },
+    "tags_section": {
+      "label": "标签",
+      "search_placeholder": "搜索或创建标签",
+      "loading": "正在加载标签...",
+      "empty": "暂无标签",
+      "selected": "已选",
+      "create_action": "创建",
+      "create_failed_toast": "创建标签失败"
     },
     "avatar": {
       "change_aria": "更换头像",

@@ -1,4 +1,4 @@
-CREATE TABLE lark_login_identity (
+CREATE TABLE IF NOT EXISTS lark_login_identity (
     id               UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     region           TEXT NOT NULL
         CHECK (region IN ('feishu', 'lark')),

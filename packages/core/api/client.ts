@@ -68,14 +68,14 @@ import type {
   SendChatMessageResponse,
   CancelTaskResponse,
   Project,
-    Milestone,
-    CreateMilestoneRequest,
-    UpdateMilestoneRequest,
-    ListMilestonesResponse,
-    KpiMetric,
-    CreateKpiMetricRequest,
-    UpdateKpiMetricRequest,
-    ListKpiMetricsResponse,
+  Milestone,
+  CreateMilestoneRequest,
+  UpdateMilestoneRequest,
+  ListMilestonesResponse,
+  KpiMetric,
+  CreateKpiMetricRequest,
+  UpdateKpiMetricRequest,
+  ListKpiMetricsResponse,
   CreateProjectRequest,
   UpdateProjectRequest,
   ListProjectsResponse,
@@ -84,11 +84,13 @@ import type {
   UpdateProjectResourceRequest,
   ListProjectResourcesResponse,
   Label,
+  LabelResourceType,
   CreateLabelRequest,
   UpdateLabelRequest,
-    ListLabelsResponse,
-    IssueLabelsResponse,
-    ProjectLabelsResponse,
+  ListLabelsResponse,
+  IssueLabelsResponse,
+  ProjectLabelsResponse,
+  AgentLabelsResponse,
   PinnedItem,
   CreatePinRequest,
   PinnedItemType,
@@ -2067,8 +2069,11 @@ export class ApiClient {
   }
 
   // Labels
-  async listLabels(): Promise<ListLabelsResponse> {
-    return this.fetch(`/api/labels`);
+  async listLabels(params?: { resource_type?: LabelResourceType }): Promise<ListLabelsResponse> {
+    const search = new URLSearchParams();
+    if (params?.resource_type) search.set("resource_type", params.resource_type);
+    const qs = search.toString();
+    return this.fetch(`/api/labels${qs ? `?${qs}` : ""}`);
   }
 
   async getLabel(id: string): Promise<Label> {
@@ -2123,6 +2128,23 @@ export class ApiClient {
 
   async detachProjectLabel(projectId: string, labelId: string): Promise<ProjectLabelsResponse> {
     return this.fetch(`/api/projects/${projectId}/labels/${labelId}`, {
+      method: "DELETE",
+    });
+  }
+
+  async listLabelsForAgent(agentId: string): Promise<AgentLabelsResponse> {
+    return this.fetch(`/api/agents/${agentId}/labels`);
+  }
+
+  async attachAgentLabel(agentId: string, labelId: string): Promise<AgentLabelsResponse> {
+    return this.fetch(`/api/agents/${agentId}/labels`, {
+      method: "POST",
+      body: JSON.stringify({ label_id: labelId }),
+    });
+  }
+
+  async detachAgentLabel(agentId: string, labelId: string): Promise<AgentLabelsResponse> {
+    return this.fetch(`/api/agents/${agentId}/labels/${labelId}`, {
       method: "DELETE",
     });
   }

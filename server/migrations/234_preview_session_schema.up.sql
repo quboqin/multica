@@ -1,4 +1,4 @@
-CREATE TABLE preview_session (
+CREATE TABLE IF NOT EXISTS preview_session (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     workspace_id UUID NOT NULL,
     issue_id UUID NOT NULL,

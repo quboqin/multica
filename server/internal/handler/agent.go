@@ -63,6 +63,7 @@ type AgentResponse struct {
 	ThinkingLevel string              `json:"thinking_level"`
 	OwnerID       *string             `json:"owner_id"`
 	Skills        []AgentSkillSummary `json:"skills"`
+	Labels        []LabelResponse     `json:"labels"`
 	CreatedAt     string              `json:"created_at"`
 	UpdatedAt     string              `json:"updated_at"`
 	ArchivedAt    *string             `json:"archived_at"`
@@ -138,6 +139,7 @@ func agentToResponse(a db.Agent) AgentResponse {
 		ThinkingLevel:      a.ThinkingLevel.String,
 		OwnerID:            uuidToPtr(a.OwnerID),
 		Skills:             []AgentSkillSummary{},
+		Labels:             []LabelResponse{},
 		CreatedAt:          timestampToString(a.CreatedAt),
 		UpdatedAt:          timestampToString(a.UpdatedAt),
 		ArchivedAt:         timestampToPtr(a.ArchivedAt),
@@ -589,6 +591,26 @@ func (h *Handler) ListAgents(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
+	agentIDs := make([]pgtype.UUID, 0, len(agents))
+	for _, a := range agents {
+		agentIDs = append(agentIDs, a.ID)
+	}
+	labelMap := map[string][]LabelResponse{}
+	if len(agentIDs) > 0 {
+		labelRows, err := h.Queries.ListLabelsForAgents(r.Context(), db.ListLabelsForAgentsParams{
+			AgentIds:    agentIDs,
+			WorkspaceID: parseUUID(workspaceID),
+		})
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to load agent labels")
+			return
+		}
+		for _, row := range labelRows {
+			agentID := uuidToString(row.AgentID)
+			labelMap[agentID] = append(labelMap[agentID], labelToResponse(row.IssueLabel))
+		}
+	}
+
 	// mcp_config still uses the workspace-level always-redact setting and
 	// the per-row owner/admin gate — secrets in MCP server configs follow
 	// the same exposure rules as custom_env used to. custom_env itself is
@@ -616,6 +638,9 @@ func (h *Handler) ListAgents(w http.ResponseWriter, r *http.Request) {
 		resp := agentToResponse(a)
 		if skills, ok := skillMap[resp.ID]; ok {
 			resp.Skills = skills
+		}
+		if labels, ok := labelMap[resp.ID]; ok {
+			resp.Labels = labels
 		}
 		// Agent actors NEVER see mcp_config secrets, even when their host's
 		// PAT would normally satisfy the owner/admin role gate. Otherwise an
@@ -656,6 +681,15 @@ func (h *Handler) GetAgent(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to load agent skills")
 		return
 	}
+	labels, err := h.Queries.ListLabelsByAgent(r.Context(), db.ListLabelsByAgentParams{
+		AgentID:     agent.ID,
+		WorkspaceID: agent.WorkspaceID,
+	})
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to load agent labels")
+		return
+	}
+	resp.Labels = labelsToResponse(labels)
 
 	// mcp_config redaction (custom_env was removed from this response shape
 	// in MUL-2600; secrets are now fetched via GET /api/agents/{id}/env).
