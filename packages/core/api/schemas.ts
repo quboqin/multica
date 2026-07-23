@@ -852,6 +852,30 @@ export const RuntimeUsageByHourListSchema = z.array(RuntimeUsageByHourSchema);
 // a message from cache or restores text into the input.
 // ---------------------------------------------------------------------------
 
+const AttributionUserSchema = z.object({
+  id: z.string(),
+  name: z.string().optional(),
+  email: z.string().optional(),
+  avatar_url: z.string().optional(),
+}).loose();
+
+const TaskEvidenceSchema = z.object({
+  kind: z.string(),
+  ref_id: z.string(),
+}).loose();
+
+const TaskAttributionSchema = z.object({
+  source: z.string().default("unattributed"),
+  precise: z.boolean().default(false),
+  initiator: AttributionUserSchema.optional(),
+  originator: AttributionUserSchema.optional(),
+  evidence: TaskEvidenceSchema.optional(),
+  rule_version_id: z.string().optional(),
+  delegated_from_task_id: z.string().optional(),
+  retry_of_task_id: z.string().optional(),
+  rerun_of_task_id: z.string().optional(),
+}).loose();
+
 const AgentTaskResponseSchema = z.object({
   id: z.string(),
   agent_id: z.string().default(""),
@@ -875,6 +899,7 @@ const AgentTaskResponseSchema = z.object({
   kind: z.string().optional(),
   work_dir: z.string().optional(),
   relative_work_dir: z.string().optional(),
+  attribution: TaskAttributionSchema.optional(),
 }).loose();
 
 const CancelledChatMessageSchema = z.object({

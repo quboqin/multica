@@ -149,5 +149,6 @@ func (h *Handler) RerunIssue(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusAccepted, taskToResponse(*task, uuidToString(issue.WorkspaceID)))
+	resp := h.hydratedTaskResponse(r.Context(), *task, uuidToString(issue.WorkspaceID))
+	writeJSON(w, http.StatusAccepted, resp)
 }

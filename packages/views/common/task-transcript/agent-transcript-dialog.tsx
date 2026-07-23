@@ -34,6 +34,7 @@ import {
   DropdownMenuItem,
 } from "@multica/ui/components/ui/dropdown-menu";
 import { ActorAvatar } from "../actor-avatar";
+import { AttributionBadge } from "../../issues/components/attribution-badge";
 import { api } from "@multica/core/api";
 import { useTranscriptViewStore, type TranscriptSortDirection } from "@multica/core/agents/stores";
 import type { AgentTask, Agent, AgentRuntime } from "@multica/core/types/agent";
@@ -480,6 +481,7 @@ export function AgentTranscriptDialog({
             {toolCount > 0 && (
               <MetadataChip>{t(($) => $.transcript.tool_calls, { count: toolCount })}</MetadataChip>
             )}
+            <AttributionBadge attribution={task.attribution} />
             <MetadataChip>
               {selectedTools.size > 0
                 ? t(($) => $.transcript.events_filtered, { shown: filteredItems.length, total: items.length })

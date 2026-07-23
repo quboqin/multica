@@ -6,6 +6,12 @@ WHERE id = $1;
 SELECT * FROM "user"
 WHERE email = $1;
 
+-- name: GetUsersByIDs :many
+-- Batch lookup from the global user table so attribution display keeps working
+-- for users who left a workspace.
+SELECT id, name, email, avatar_url FROM "user"
+WHERE id = ANY(@ids::uuid[]);
+
 -- name: CreateUser :one
 INSERT INTO "user" (name, email, avatar_url)
 VALUES ($1, $2, $3)

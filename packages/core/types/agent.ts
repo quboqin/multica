@@ -64,6 +64,30 @@ export interface AgentRunCount {
   run_count: number;
 }
 
+export interface AttributionUser {
+  id: string;
+  name?: string;
+  email?: string;
+  avatar_url?: string;
+}
+
+export interface TaskEvidence {
+  kind: string;
+  ref_id: string;
+}
+
+export interface TaskAttribution {
+  source: string;
+  precise: boolean;
+  initiator?: AttributionUser;
+  originator?: AttributionUser;
+  evidence?: TaskEvidence;
+  rule_version_id?: string;
+  delegated_from_task_id?: string;
+  retry_of_task_id?: string;
+  rerun_of_task_id?: string;
+}
+
 export interface AgentTask {
   id: string;
   agent_id: string;
@@ -140,6 +164,8 @@ export interface AgentTask {
    * shares and screenshots also stay safe).
    */
   relative_work_dir?: string;
+  /** Accountable-human provenance for this run. Omitted by older backends. */
+  attribution?: TaskAttribution;
 }
 
 export interface Agent {

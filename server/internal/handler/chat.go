@@ -911,7 +911,7 @@ func (h *Handler) CancelTaskByUser(w http.ResponseWriter, r *http.Request) {
 	}
 
 	resp := CancelTaskByUserResponse{
-		AgentTaskResponse: taskToResponse(cancelled.Task, workspaceID),
+		AgentTaskResponse: h.hydratedTaskResponse(r.Context(), cancelled.Task, workspaceID),
 	}
 	if cancelled.CancelledChatMessage != nil {
 		resp.CancelledChatMessage = &CancelledChatMessageResponse{

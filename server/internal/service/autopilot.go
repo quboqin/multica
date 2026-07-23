@@ -13,6 +13,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/analytics"
+	"github.com/multica-ai/multica/server/internal/attribution"
 	"github.com/multica-ai/multica/server/internal/events"
 	"github.com/multica-ai/multica/server/internal/issueposition"
 	obsmetrics "github.com/multica-ai/multica/server/internal/metrics"
@@ -39,6 +40,35 @@ type AutopilotService struct {
 // when computing next run times.
 const DefaultAutopilotTriggerTimezone = "UTC"
 
+type autopilotRuleConfigSummary struct {
+	AssigneeType  string `json:"assignee_type"`
+	AssigneeID    string `json:"assignee_id"`
+	Status        string `json:"status"`
+	ExecutionMode string `json:"execution_mode"`
+}
+
+func RecordAutopilotRuleVersion(ctx context.Context, q *db.Queries, ap db.Autopilot, publishedByType string, publishedByID pgtype.UUID) error {
+	summary, err := json.Marshal(autopilotRuleConfigSummary{
+		AssigneeType:  ap.AssigneeType,
+		AssigneeID:    util.UUIDToString(ap.AssigneeID),
+		Status:        ap.Status,
+		ExecutionMode: ap.ExecutionMode,
+	})
+	if err != nil {
+		return fmt.Errorf("marshal rule version config summary: %w", err)
+	}
+	if _, err := q.CreateAutopilotRuleVersion(ctx, db.CreateAutopilotRuleVersionParams{
+		AutopilotID:     ap.ID,
+		WorkspaceID:     ap.WorkspaceID,
+		PublishedByType: publishedByType,
+		PublishedByID:   publishedByID,
+		ConfigSummary:   summary,
+	}); err != nil {
+		return fmt.Errorf("create autopilot rule version: %w", err)
+	}
+	return nil
+}
+
 func NewAutopilotService(q *db.Queries, tx TxStarter, bus *events.Bus, taskSvc *TaskService) *AutopilotService {
 	return &AutopilotService{Queries: q, TxStarter: tx, Bus: bus, TaskSvc: taskSvc}
 }
@@ -62,7 +92,12 @@ func (s *AutopilotService) DispatchAutopilot(
 	triggerID pgtype.UUID,
 	source string,
 	payload []byte,
+	actorUserID ...pgtype.UUID,
 ) (*db.AutopilotRun, error) {
+	var actor pgtype.UUID
+	if len(actorUserID) > 0 {
+		actor = actorUserID[0]
+	}
 	if reason, skip := s.shouldSkipDispatch(ctx, autopilot); skip {
 		return s.recordSkippedRun(ctx, autopilot, triggerID, source, payload, reason)
 	}
@@ -89,7 +124,7 @@ func (s *AutopilotService) DispatchAutopilot(
 	switch autopilot.ExecutionMode {
 	case "create_issue":
 		triggerTimezone := s.resolveAutopilotTriggerTimezone(ctx, triggerID)
-		if err := s.dispatchCreateIssue(ctx, autopilot, &run, triggerTimezone); err != nil {
+		if err := s.dispatchCreateIssue(ctx, autopilot, &run, triggerTimezone, actor); err != nil {
 			if skipped := s.handleDispatchSkip(ctx, autopilot, &run, err); skipped != nil {
 				return skipped, nil
 			}
@@ -98,7 +133,7 @@ func (s *AutopilotService) DispatchAutopilot(
 			return &run, fmt.Errorf("dispatch create_issue: %w", err)
 		}
 	case "run_only":
-		if err := s.dispatchRunOnly(ctx, autopilot, &run); err != nil {
+		if err := s.dispatchRunOnly(ctx, autopilot, &run, actor); err != nil {
 			if skipped := s.handleDispatchSkip(ctx, autopilot, &run, err); skipped != nil {
 				return skipped, nil
 			}
@@ -142,7 +177,7 @@ func (s *AutopilotService) DispatchAutopilot(
 // Creator on the issue is always the agent that will actually do the work
 // (the resolved leader for a squad autopilot, otherwise the assignee agent
 // itself), so activity / mentions render with the right author identity.
-func (s *AutopilotService) dispatchCreateIssue(ctx context.Context, ap db.Autopilot, run *db.AutopilotRun, triggerTimezone string) error {
+func (s *AutopilotService) dispatchCreateIssue(ctx context.Context, ap db.Autopilot, run *db.AutopilotRun, triggerTimezone string, actorUserID pgtype.UUID) error {
 	leader, _, err := s.resolveAutopilotLeader(ctx, ap)
 	if err != nil {
 		return fmt.Errorf("resolve leader: %w", err)
@@ -227,6 +262,13 @@ func (s *AutopilotService) dispatchCreateIssue(ctx context.Context, ap db.Autopi
 	})
 	s.captureIssueCreatedFromAutopilot(ap, run, issue, leader.ID)
 
+	attr := s.autopilotAttribution(ctx, ap, *run, attribution.EvidenceIssueAssignment, issue.ID, actorUserID)
+	attr, err = s.TaskSvc.applyAttributionFallback(ctx, attr, leader)
+	if err != nil {
+		return &errDispatchSkipped{reason: formatAdmissionReason(ap, "workspace fail-closed: no accountable human for autopilot run")}
+	}
+	requestingUserID := autopilotRequestingUserID(ap)
+
 	// Enqueue agent task via the existing flow. Squad-assigned autopilots
 	// route to the resolved leader as the executing agent (Path A from
 	// MUL-2429); agent-assigned autopilots go through the standard issue
@@ -238,11 +280,11 @@ func (s *AutopilotService) dispatchCreateIssue(ctx context.Context, ap db.Autopi
 		if leader.Visibility == "private" && !s.canCreatorAccessPrivateLeader(ctx, ap, leader) {
 			return fmt.Errorf("autopilot creator cannot access private squad leader")
 		}
-		if _, err := s.TaskSvc.EnqueueTaskForSquadLeaderByUser(ctx, issue, leader.ID, pgtype.UUID{}, autopilotRequestingUserID(ap)); err != nil {
+		if _, err := s.TaskSvc.enqueueMentionTask(ctx, issue, leader.ID, pgtype.UUID{}, true, false, requestingUserID, pgtype.UUID{}, attr); err != nil {
 			return fmt.Errorf("enqueue squad leader task: %w", err)
 		}
 	} else {
-		if _, err := s.TaskSvc.EnqueueTaskForIssueByUser(ctx, issue, autopilotRequestingUserID(ap)); err != nil {
+		if _, err := s.TaskSvc.enqueueIssueTask(ctx, issue, pgtype.UUID{}, false, requestingUserID, pgtype.UUID{}, attr); err != nil {
 			return fmt.Errorf("enqueue task for issue: %w", err)
 		}
 	}
@@ -280,6 +322,41 @@ func autopilotRequestingUserID(ap db.Autopilot) pgtype.UUID {
 	return pgtype.UUID{}
 }
 
+func ruleOwnerAttribution(ctx context.Context, q *db.Queries, workspaceID, autopilotID pgtype.UUID, evidenceKind attribution.EvidenceKind, evidenceRefID pgtype.UUID) attribution.Result {
+	if q == nil || !autopilotID.Valid {
+		return attribution.RuleOwner(pgtype.UUID{}, pgtype.UUID{}, evidenceKind, evidenceRefID)
+	}
+	ver, err := q.GetActiveAutopilotRuleVersion(ctx, db.GetActiveAutopilotRuleVersionParams{
+		WorkspaceID: workspaceID,
+		AutopilotID: autopilotID,
+	})
+	if err != nil {
+		return attribution.RuleOwner(pgtype.UUID{}, pgtype.UUID{}, evidenceKind, evidenceRefID)
+	}
+	var publisher pgtype.UUID
+	if ver.PublishedByType == "member" {
+		publisher = ver.PublishedByID
+	}
+	return attribution.RuleOwner(publisher, ver.ID, evidenceKind, evidenceRefID)
+}
+
+func triggerOwnerAttribution(ctx context.Context, q *db.Queries, triggerID, workspaceID, autopilotID pgtype.UUID, evidenceKind attribution.EvidenceKind, evidenceRefID pgtype.UUID) attribution.Result {
+	if q != nil && triggerID.Valid {
+		if trig, err := q.GetAutopilotTrigger(ctx, triggerID); err == nil &&
+			trig.PublishedByType.Valid && trig.PublishedByType.String == "member" && trig.PublishedByID.Valid {
+			return attribution.TriggerOwner(trig.PublishedByID, evidenceKind, evidenceRefID)
+		}
+	}
+	return ruleOwnerAttribution(ctx, q, workspaceID, autopilotID, evidenceKind, evidenceRefID)
+}
+
+func (s *AutopilotService) autopilotAttribution(ctx context.Context, ap db.Autopilot, run db.AutopilotRun, evidenceKind attribution.EvidenceKind, evidenceRefID pgtype.UUID, actorUserID pgtype.UUID) attribution.Result {
+	if actorUserID.Valid {
+		return attribution.DirectHumanRun(actorUserID, evidenceKind, evidenceRefID)
+	}
+	return triggerOwnerAttribution(ctx, s.Queries, run.TriggerID, ap.WorkspaceID, ap.ID, evidenceKind, evidenceRefID)
+}
+
 // dispatchRunOnly enqueues a direct agent task without creating an issue.
 //
 // For squad autopilots, the executing agent is the squad leader resolved at
@@ -288,7 +365,7 @@ func autopilotRequestingUserID(ap db.Autopilot) pgtype.UUID {
 // applies also run here as belt-and-braces: if the leader changed between
 // admission and dispatch, or the runtime went offline in the gap, we still
 // fail closed instead of enqueueing a doomed task.
-func (s *AutopilotService) dispatchRunOnly(ctx context.Context, ap db.Autopilot, run *db.AutopilotRun) error {
+func (s *AutopilotService) dispatchRunOnly(ctx context.Context, ap db.Autopilot, run *db.AutopilotRun, actorUserID pgtype.UUID) error {
 	agent, _, err := s.resolveAutopilotLeader(ctx, ap)
 	if err != nil {
 		// Same admission-vs-failure classification as shouldSkipDispatch:
@@ -312,6 +389,12 @@ func (s *AutopilotService) dispatchRunOnly(ctx context.Context, ap db.Autopilot,
 		return &errDispatchSkipped{reason: formatAdmissionReason(ap, "creator cannot access private squad leader")}
 	}
 
+	attr := s.autopilotAttribution(ctx, ap, *run, attribution.EvidenceAutopilotRun, run.ID, actorUserID)
+	attr, err = s.TaskSvc.applyAttributionFallback(ctx, attr, agent)
+	if err != nil {
+		return &errDispatchSkipped{reason: formatAdmissionReason(ap, "workspace fail-closed: no accountable human for autopilot run")}
+	}
+
 	task, err := s.Queries.CreateAutopilotTask(ctx, db.CreateAutopilotTaskParams{
 		AgentID:          agent.ID,
 		RuntimeID:        agent.RuntimeID,
@@ -325,6 +408,12 @@ func (s *AutopilotService) dispatchRunOnly(ctx context.Context, ap db.Autopilot,
 			String: truncateForSummary(ap.Title, triggerSummaryMaxLen),
 			Valid:  ap.Title != "",
 		},
+		OriginatorUserID:     attr.UserID,
+		AccountableUserID:    attr.AccountableUserID,
+		RuleVersionID:        attr.RuleVersionID,
+		OriginatorSource:     attributionText(attr.Source),
+		TriggerEvidenceKind:  evidenceText(attr.EvidenceKind),
+		TriggerEvidenceRefID: attr.EvidenceRefID,
 	})
 	if err != nil {
 		return fmt.Errorf("create autopilot task: %w", err)

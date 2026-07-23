@@ -9,6 +9,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/multica-ai/multica/server/internal/attributionbackfill"
 	"github.com/multica-ai/multica/server/internal/logger"
 	"github.com/multica-ai/multica/server/internal/migrations"
 	"github.com/multica-ai/multica/server/internal/taskusagebackfill"
@@ -38,7 +39,8 @@ type preMigrationHook func(ctx context.Context, pool *pgxpool.Pool) error
 // monthly-slice backfill that
 // `cmd/backfill_task_usage_hourly` exposes to operators.
 var preMigrationHooks = map[string]preMigrationHook{
-	"103_drop_legacy_daily_rollups": runTaskUsageHourlyHook,
+	"103_drop_legacy_daily_rollups":                         runTaskUsageHourlyHook,
+	"198_agent_task_attribution_strict_constraint_validate": runAttributionStrictHook,
 }
 
 func runTaskUsageHourlyHook(ctx context.Context, pool *pgxpool.Pool) error {
@@ -57,6 +59,18 @@ func runTaskUsageHourlyHook(ctx context.Context, pool *pgxpool.Pool) error {
 		"rows_touched", res.RowsTouched,
 		"from", res.From.Format("2006-01-02T15:04:05Z07:00"),
 		"to", res.To.Format("2006-01-02T15:04:05Z07:00"))
+	return nil
+}
+
+func runAttributionStrictHook(ctx context.Context, pool *pgxpool.Pool) error {
+	res, err := attributionbackfill.Hook(ctx, pool, attributionbackfill.HookOptions{})
+	if err != nil {
+		return fmt.Errorf("attribution strict-constraint pre-198 hook: %w", err)
+	}
+	slog.Info("attribution backfill hook: complete",
+		"rows_backfilled", res.RowsBackfilled,
+		"batches", res.Batches,
+		"mismatch_normalized", res.MismatchNormalized)
 	return nil
 }
 
