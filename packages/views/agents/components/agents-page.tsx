@@ -79,6 +79,7 @@ import { availabilityConfig } from "../presence";
 import { CreateAgentDialog } from "./create-agent-dialog";
 import { AgentRowActions } from "./agent-row-actions";
 import { AgentListToolbar } from "./agent-list-toolbar";
+import { LabelChip } from "../../labels/label-chip";
 import { useT } from "../../i18n";
 
 // Column template — single source of truth for header, rows, and skeletons.
@@ -92,7 +93,7 @@ import { useT } from "../../i18n";
 // the documented exception to the single-line management-list rule.
 const GRID_COLS =
   "grid-cols-[0.75rem_1rem_minmax(120px,1fr)_var(--agc-status)_1.75rem_0.75rem] " +
-  "@2xl:grid-cols-[0.75rem_1rem_minmax(200px,1fr)_var(--agc-status)_var(--agc-owner)_var(--agc-runtime)_var(--agc-lastactive)_var(--agc-runs)_var(--agc-model)_var(--agc-created)_1.75rem_0.75rem]";
+  "@2xl:grid-cols-[0.75rem_1rem_minmax(200px,1fr)_var(--agc-status)_var(--agc-owner)_var(--agc-runtime)_var(--agc-tags)_var(--agc-lastactive)_var(--agc-runs)_var(--agc-model)_var(--agc-created)_1.75rem_0.75rem]";
 
 // Two-line rows; the virtualizer's fixed-size contract.
 const ROW_HEIGHT = 64;
@@ -105,6 +106,7 @@ const COLUMN_WIDTHS: Record<AgentColumnKey, number> = {
   status: 144,
   owner: 144,
   runtime: 144,
+  tags: 176,
   lastActive: 120,
   runs: 88,
   model: 120,
@@ -112,9 +114,9 @@ const COLUMN_WIDTHS: Record<AgentColumnKey, number> = {
 };
 
 // Fixed tracks (edges 12+12, checkbox 16, name min 200, kebab 28) plus the
-// 11 gap-x-3 gaps between the wide template's 12 tracks (zero-width tracks
+// 12 gap-x-3 gaps between the wide template's 13 tracks (zero-width tracks
 // still carry gaps).
-const FIXED_TRACKS_WIDTH = 268 + 11 * 12;
+const FIXED_TRACKS_WIDTH = 268 + 12 * 12;
 
 function columnTrackVars(
   isVisible: (key: AgentColumnKey) => boolean,
@@ -131,6 +133,7 @@ function columnTrackVars(
     "--agc-status": width("status"),
     "--agc-owner": width("owner"),
     "--agc-runtime": width("runtime"),
+    "--agc-tags": width("tags"),
     "--agc-lastactive": width("lastActive"),
     "--agc-runs": width("runs"),
     "--agc-model": width("model"),
@@ -321,6 +324,7 @@ function NameCell({ row }: { row: AgentListRow }) {
   const { agent, isOwnedByMe } = row;
   const isArchived = !!agent.archived_at;
   const isPrivate = agent.visibility === "private";
+  const labels = agent.labels ?? [];
   return (
     <ListGridCell className="gap-3">
       <ActorAvatar
@@ -352,6 +356,19 @@ function NameCell({ row }: { row: AgentListRow }) {
           {isOwnedByMe && (
             <span className="shrink-0 rounded bg-muted px-1 text-[10px] font-medium text-muted-foreground">
               {t(($) => $.row.you)}
+            </span>
+          )}
+          {labels.length > 0 && (
+            <span className="flex min-w-0 shrink items-center gap-1 @2xl:hidden">
+              <LabelChip
+                label={labels[0]!}
+                className="max-w-[4.5rem] shrink"
+              />
+              {labels.length > 1 && (
+                <span className="shrink-0 rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
+                  +{labels.length - 1}
+                </span>
+              )}
             </span>
           )}
         </div>
@@ -434,6 +451,32 @@ function RuntimeCell({ row }: { row: AgentListRow }) {
         <span className="min-w-0 truncate text-xs text-muted-foreground">
           {runtime.name}
         </span>
+      ) : (
+        <span className="text-xs text-muted-foreground/40">—</span>
+      )}
+    </ListGridCell>
+  );
+}
+
+function TagsCell({ row }: { row: AgentListRow }) {
+  const labels = row.agent.labels ?? [];
+  return (
+    <ListGridCell className="hidden min-w-0 @2xl:flex">
+      {labels.length > 0 ? (
+        <div className="flex min-w-0 items-center gap-1 overflow-hidden">
+          {labels.slice(0, 2).map((label) => (
+            <LabelChip
+              key={label.id}
+              label={label}
+              className="max-w-[5.5rem] shrink"
+            />
+          ))}
+          {labels.length > 2 && (
+            <span className="shrink-0 rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
+              +{labels.length - 2}
+            </span>
+          )}
+        </div>
       ) : (
         <span className="text-xs text-muted-foreground/40">—</span>
       )}
@@ -529,6 +572,13 @@ function AgentListHeader({
       ) : (
         <ListGridHeaderCell className="hidden px-0 @2xl:flex" />
       )}
+      {isColVisible("tags") ? (
+        <ListGridHeaderCell className="hidden @2xl:flex">
+          {t(($) => $.columns.tags)}
+        </ListGridHeaderCell>
+      ) : (
+        <ListGridHeaderCell className="hidden px-0 @2xl:flex" />
+      )}
       {isColVisible("lastActive") ? (
         <ListGridHeaderCell
           className="hidden @2xl:flex"
@@ -603,6 +653,9 @@ function LoadingSkeleton() {
         <ListGridHeaderCell className="hidden @2xl:flex">
           <Skeleton className="h-3 w-10" />
         </ListGridHeaderCell>
+        <ListGridHeaderCell className="hidden @2xl:flex">
+          <Skeleton className="h-3 w-10" />
+        </ListGridHeaderCell>
         <ListGridHeaderCell className="hidden px-0 @2xl:flex" />
         <ListGridHeaderCell className="hidden px-0 @2xl:flex" />
         <span aria-hidden="true" />
@@ -626,6 +679,9 @@ function LoadingSkeleton() {
           </ListGridCell>
           <ListGridCell className="hidden @2xl:flex">
             <Skeleton className="h-3 w-16" />
+          </ListGridCell>
+          <ListGridCell className="hidden @2xl:flex">
+            <Skeleton className="h-5 w-20 rounded-full" />
           </ListGridCell>
           <ListGridCell className="hidden @2xl:flex">
             <Skeleton className="h-3 w-12" />
@@ -953,6 +1009,14 @@ export function AgentsPage(_props: AgentsPageProps = {}) {
       ) {
         return false;
       }
+      if (
+        filters.labels.length > 0 &&
+        !(row.agent.labels ?? []).some((label) =>
+          filters.labels.includes(label.id),
+        )
+      ) {
+        return false;
+      }
       return true;
     });
 
@@ -1146,6 +1210,11 @@ export function AgentsPage(_props: AgentsPageProps = {}) {
                       )}
                       {isColVisible("runtime") ? (
                         <RuntimeCell row={row} />
+                      ) : (
+                        <ListGridCell className="hidden px-0 @2xl:flex" />
+                      )}
+                      {isColVisible("tags") ? (
+                        <TagsCell row={row} />
                       ) : (
                         <ListGridCell className="hidden px-0 @2xl:flex" />
                       )}

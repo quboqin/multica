@@ -53,6 +53,7 @@
     "runtime_filtered": "\"{{machine}}\" 上にエージェントがありません。"
   },
   "columns": {
+    "tags": "タグ",
     "agent": "エージェント",
     "status": "ステータス",
     "workload": "作業量",
@@ -481,6 +482,7 @@
     "none": "30 日間アクティビティなし"
   },
   "toolbar": {
+    "section_tags": "タグ",
     "result_count_title": "該当エージェント / スコープ内全体",
     "filter_label": "フィルター",
     "filter_active_count_one": "{{count}} 件のフィルター",

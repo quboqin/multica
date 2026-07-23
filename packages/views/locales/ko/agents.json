@@ -62,6 +62,7 @@
     "empty": "아직 기기가 없습니다"
   },
   "columns": {
+    "tags": "태그",
     "agent": "에이전트",
     "status": "상태",
     "workload": "작업량",
@@ -493,6 +494,7 @@
     "none": "30일간 활동 없음"
   },
   "toolbar": {
+    "section_tags": "태그",
     "result_count_title": "일치하는 에이전트 / 범위 내 전체",
     "filter_label": "필터",
     "filter_active_count_one": "필터 {{count}}개",

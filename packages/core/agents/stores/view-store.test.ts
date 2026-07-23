@@ -101,10 +101,10 @@ describe("useAgentsViewStore", () => {
     expect(localStorage.getItem("multica_agents_view:acme")).not.toBeNull();
   });
 
-  it("backfills new filter dimensions when rehydrating a pre-owners payload", async () => {
-    // A payload persisted before the `owners` filter existed must not drop
+  it("backfills new filter dimensions when rehydrating an old payload", async () => {
+    // A payload persisted before newer filter dimensions existed must not drop
     // the key to undefined (the agents list filter predicate reads
-    // `filters.owners.length` and would crash).
+    // `filters.<dimension>.length` and would crash).
     localStorage.setItem(
       "multica_agents_view:acme",
       JSON.stringify({
@@ -119,6 +119,7 @@ describe("useAgentsViewStore", () => {
 
     const filters = useAgentsViewStore.getState().filters;
     expect(filters.owners).toEqual([]);
+    expect(filters.labels).toEqual([]);
     expect(filters.availability).toEqual(["online"]);
   });
 });

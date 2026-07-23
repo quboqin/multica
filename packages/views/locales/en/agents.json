@@ -70,6 +70,7 @@
     "runs": "Runs",
     "last_active": "Last active",
     "model": "Model",
+    "tags": "Tags",
     "created": "Created",
     "owner": "Owner"
   },
@@ -506,7 +507,8 @@
     "direction_desc": "Descending",
     "section_columns": "Columns",
     "section_owner": "Owner",
-    "section_model": "Model"
+    "section_model": "Model",
+    "section_tags": "Tags"
   },
   "actions": {
     "selected_one": "{{count}} selected",
