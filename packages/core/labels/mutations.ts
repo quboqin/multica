@@ -4,8 +4,11 @@ import { labelKeys } from "./queries";
 import { useWorkspaceId } from "../hooks";
 import { issueKeys } from "../issues/queries";
 import { projectKeys } from "../projects/queries";
+import { workspaceKeys } from "../workspace/queries";
 import { onIssueLabelsChanged } from "../issues/ws-updaters";
 import type {
+  Agent,
+  AgentLabelsResponse,
   Label,
   LabelResourceType,
   CreateLabelRequest,
@@ -58,6 +61,24 @@ export function useCreateLabel(resourceType: LabelResourceType = "issue") {
       qc.invalidateQueries({ queryKey: labelKeys.list(wsId, resourceType) });
     },
   });
+}
+
+function patchAgentLabelsInCache(
+  qc: ReturnType<typeof useQueryClient>,
+  wsId: string,
+  agentId: string,
+  labels: Label[],
+) {
+  qc.setQueryData<AgentLabelsResponse>(labelKeys.byAgent(wsId, agentId), (old) =>
+    old ? { ...old, labels } : { labels },
+  );
+  qc.setQueryData<Agent[]>(workspaceKeys.agents(wsId), (old) =>
+    old
+      ? old.map((agent) =>
+          agent.id === agentId ? { ...agent, labels } : agent,
+        )
+      : old,
+  );
 }
 
 /**
@@ -262,6 +283,73 @@ export function useDetachProjectLabel(projectId: string) {
     onSettled: () => {
       qc.invalidateQueries({ queryKey: labelKeys.byProject(wsId, projectId) });
       qc.invalidateQueries({ queryKey: projectKeys.all(wsId) });
+    },
+  });
+}
+
+export function useAttachAgentLabel(agentId: string) {
+  const qc = useQueryClient();
+  const wsId = useWorkspaceId();
+  return useMutation({
+    mutationFn: (labelId: string) => api.attachAgentLabel(agentId, labelId),
+    onMutate: async (labelId) => {
+      await qc.cancelQueries({ queryKey: labelKeys.byAgent(wsId, agentId) });
+      const prev = qc.getQueryData<AgentLabelsResponse>(
+        labelKeys.byAgent(wsId, agentId),
+      );
+      if (!prev || prev.labels.some((label) => label.id === labelId)) {
+        return { prev };
+      }
+      const list = qc.getQueryData<ListLabelsResponse>(
+        labelKeys.list(wsId, "agent"),
+      );
+      const label = list?.labels.find((item) => item.id === labelId);
+      if (!label) return { prev };
+      patchAgentLabelsInCache(qc, wsId, agentId, [...prev.labels, label]);
+      return { prev };
+    },
+    onError: (_err, _id, ctx) => {
+      if (ctx?.prev) patchAgentLabelsInCache(qc, wsId, agentId, ctx.prev.labels);
+    },
+    onSuccess: (data: AgentLabelsResponse) => {
+      if (data && Array.isArray(data.labels)) {
+        patchAgentLabelsInCache(qc, wsId, agentId, data.labels);
+      }
+    },
+    onSettled: () => {
+      qc.invalidateQueries({ queryKey: labelKeys.byAgent(wsId, agentId) });
+      qc.invalidateQueries({ queryKey: workspaceKeys.agents(wsId) });
+    },
+  });
+}
+
+export function useDetachAgentLabel(agentId: string) {
+  const qc = useQueryClient();
+  const wsId = useWorkspaceId();
+  return useMutation({
+    mutationFn: (labelId: string) => api.detachAgentLabel(agentId, labelId),
+    onMutate: async (labelId) => {
+      await qc.cancelQueries({ queryKey: labelKeys.byAgent(wsId, agentId) });
+      const prev = qc.getQueryData<AgentLabelsResponse>(
+        labelKeys.byAgent(wsId, agentId),
+      );
+      const next = prev
+        ? { ...prev, labels: prev.labels.filter((label) => label.id !== labelId) }
+        : undefined;
+      if (next) patchAgentLabelsInCache(qc, wsId, agentId, next.labels);
+      return { prev };
+    },
+    onError: (_err, _id, ctx) => {
+      if (ctx?.prev) patchAgentLabelsInCache(qc, wsId, agentId, ctx.prev.labels);
+    },
+    onSuccess: (data: AgentLabelsResponse) => {
+      if (data && Array.isArray(data.labels)) {
+        patchAgentLabelsInCache(qc, wsId, agentId, data.labels);
+      }
+    },
+    onSettled: () => {
+      qc.invalidateQueries({ queryKey: labelKeys.byAgent(wsId, agentId) });
+      qc.invalidateQueries({ queryKey: workspaceKeys.agents(wsId) });
     },
   });
 }

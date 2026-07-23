@@ -7,4 +7,6 @@ export {
   useDetachLabel,
   useAttachProjectLabel,
   useDetachProjectLabel,
+  useAttachAgentLabel,
+  useDetachAgentLabel,
 } from "./mutations";

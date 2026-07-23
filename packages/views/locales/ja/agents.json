@@ -136,6 +136,7 @@
     "section_details": "詳細",
     "section_skills": "スキル",
     "section_tags": "タグ",
+    "edit_tags_aria": "タグを編集",
     "section_integrations": "連携",
     "prop_runtime": "ランタイム",
     "prop_model": "モデル",
@@ -154,6 +155,7 @@
     "rename_required": "名前は必須です",
     "edit_description_title": "説明を編集",
     "description_placeholder": "このエージェントは何をしますか？",
+    "save_tags_failed_toast": "タグの保存に失敗しました",
     "save": "保存",
     "cancel": "キャンセル"
   },

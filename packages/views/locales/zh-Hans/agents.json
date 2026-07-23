@@ -144,6 +144,7 @@
     "section_details": "详情",
     "section_skills": "Skills",
     "section_tags": "标签",
+    "edit_tags_aria": "编辑标签",
     "section_integrations": "外部集成",
     "prop_runtime": "运行时",
     "prop_model": "模型",
@@ -162,6 +163,7 @@
     "rename_required": "名称必填",
     "edit_description_title": "编辑描述",
     "description_placeholder": "这个智能体做什么？",
+    "save_tags_failed_toast": "保存标签失败",
     "save": "保存",
     "cancel": "取消"
   },

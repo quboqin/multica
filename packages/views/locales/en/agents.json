@@ -149,6 +149,7 @@
     "section_details": "Details",
     "section_skills": "Skills",
     "section_tags": "Tags",
+    "edit_tags_aria": "Edit tags",
     "section_integrations": "Integrations",
     "prop_runtime": "Runtime",
     "prop_model": "Model",
@@ -167,6 +168,7 @@
     "rename_required": "Name is required",
     "edit_description_title": "Edit description",
     "description_placeholder": "What does this agent do?",
+    "save_tags_failed_toast": "Failed to save tags",
     "save": "Save",
     "cancel": "Cancel"
   },

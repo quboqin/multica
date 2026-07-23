@@ -149,6 +149,7 @@
     "section_details": "세부 정보",
     "section_skills": "스킬",
     "section_tags": "태그",
+    "edit_tags_aria": "태그 편집",
     "section_integrations": "연동",
     "prop_runtime": "런타임",
     "prop_model": "모델",
@@ -167,6 +168,7 @@
     "rename_required": "이름은 필수입니다",
     "edit_description_title": "설명 수정",
     "description_placeholder": "이 에이전트는 무엇을 하나요?",
+    "save_tags_failed_toast": "태그 저장에 실패했습니다",
     "save": "저장",
     "cancel": "취소"
   },
