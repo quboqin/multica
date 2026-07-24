@@ -6,7 +6,10 @@ import {
   appGrowingGraphQLDateWindow,
   appGrowingMaterialURL,
   appGrowingSearchAppVariables,
+  captureAppGrowingMaterialPage,
   extractAppGrowingMaterials,
+  isBrowserPageCrashError,
+  shouldBlockAppGrowingCrawlResource,
 } from "./index.mjs";
 
 test("extracts AppGrowing material resources from nested GraphQL list rows", () => {
@@ -131,6 +134,79 @@ test("applies material-search filters on competitor URLs", () => {
   assert.equal(parsed.searchParams.get("page"), "2");
   assert.equal(parsed.searchParams.get("area"), "ID");
   assert.equal(parsed.searchParams.get("platform"), "2");
+});
+
+
+test("classifies AppGrowing browser page crashes", () => {
+  assert.equal(isBrowserPageCrashError(new Error("page.goto: Page crashed")), true);
+  assert.equal(isBrowserPageCrashError(new Error("Target page, context or browser has been closed")), true);
+  assert.equal(isBrowserPageCrashError(new Error("net::ERR_ABORTED")), false);
+});
+
+test("blocks heavyweight AppGrowing fallback resources", () => {
+  const request = (resourceType, url) => ({
+    resourceType: () => resourceType,
+    url: () => url,
+  });
+
+  assert.equal(shouldBlockAppGrowingCrawlResource(request("image", "https://cdn.example.com/ad.jpg")), true);
+  assert.equal(shouldBlockAppGrowingCrawlResource(request("media", "https://cdn.example.com/ad.mp4")), true);
+  assert.equal(shouldBlockAppGrowingCrawlResource(request("script", "https://www.googletagmanager.com/gtm.js")), true);
+  assert.equal(shouldBlockAppGrowingCrawlResource(request("xhr", "https://api-appgrowing-global.youcloud.com/graphql")), false);
+});
+
+test("captures AppGrowing browser page crashes as page-level errors", async () => {
+  const handlers = new Map();
+  let routeRegistered = false;
+  let routeRemoved = false;
+  const page = {
+    route: async () => {
+      routeRegistered = true;
+    },
+    unroute: async () => {
+      routeRemoved = true;
+    },
+    on: (event, handler) => {
+      handlers.set(event, handler);
+    },
+    off: (event, handler) => {
+      if (handlers.get(event) === handler) {
+        handlers.delete(event);
+      }
+    },
+    goto: async () => {
+      throw new Error("page.goto: Page crashed");
+    },
+    waitForLoadState: async () => null,
+    mouse: { wheel: async () => null },
+    keyboard: { press: async () => null },
+    locator: () => ({ innerText: async () => "" }),
+    title: async () => "",
+    url: () => "about:blank",
+  };
+
+  const capture = await captureAppGrowingMaterialPage(
+    page,
+    {
+      graphQLURL: "https://api-appgrowing-global.youcloud.com/graphql",
+      probeURL: "https://appgrowing-global.youcloud.com/leaflet",
+      anonymousTextPatterns: [],
+    },
+    {
+      competitor: "Easycash",
+      pageNumber: 2,
+      params: { date_range: "-29,0" },
+      captureTimeoutMS: 3000,
+    },
+  );
+
+  assert.equal(routeRegistered, true);
+  assert.equal(routeRemoved, true);
+  assert.equal(handlers.has("response"), false);
+  assert.equal(capture.pageCrashed, true);
+  assert.match(capture.error, /Page crashed/);
+  assert.equal(capture.materials.length, 0);
+  assert.equal(capture.url.includes("page=2"), true);
 });
 
 

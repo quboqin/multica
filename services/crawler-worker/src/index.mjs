@@ -2078,11 +2078,16 @@ async function runAppGrowingMaterialSearch(page, context, connector, params = {}
   }
 
   if (materials.length === 0 && params.browser_capture_fallback !== false) {
+    let browserCapturePage = page;
+    let browserFallbackStopped = false;
     for (const competitor of competitors) {
+      if (browserFallbackStopped) {
+        break;
+      }
       const priority = priorityCompetitors.has(normalizeCompetitorKey(competitor));
       const pages = priority ? priorityPageLimit : pageLimit;
       for (let pageNumber = 1; pageNumber <= pages; pageNumber += 1) {
-        const capture = await captureAppGrowingMaterialPage(page, connector, {
+        const capture = await captureAppGrowingMaterialPage(browserCapturePage, connector, {
           competitor,
           pageNumber,
           params,
@@ -2098,6 +2103,8 @@ async function runAppGrowingMaterialSearch(page, context, connector, params = {}
           graphQL_responses: capture.responses,
           page_snapshot: capture.snapshot,
           needs_reauth: capture.needsReauth,
+          error: capture.error,
+          page_crashed: capture.pageCrashed,
           materials_found: capture.materials.length,
         });
         for (const material of capture.materials) {
@@ -2106,6 +2113,15 @@ async function runAppGrowingMaterialSearch(page, context, connector, params = {}
             competitor,
             priority,
           });
+        }
+        if (capture.pageCrashed) {
+          const replacementPage = await recreateAppGrowingCapturePage(context, browserCapturePage)
+            .catch(() => null);
+          if (!replacementPage) {
+            browserFallbackStopped = true;
+            break;
+          }
+          browserCapturePage = replacementPage;
         }
       }
     }
@@ -2460,6 +2476,8 @@ async function captureAppGrowingMaterialPage(page, connector, options) {
   const captured = [];
   const operations = new Set();
   const responses = [];
+  let captureError = "";
+  let pageCrashed = false;
 
   const onResponse = async (response) => {
     if (!response.url().startsWith(connector.graphQLURL)) {
@@ -2492,6 +2510,10 @@ async function captureAppGrowingMaterialPage(page, connector, options) {
     }
   };
 
+  const routeHandler = appGrowingCrawlRouteHandler();
+  if (routeHandler) {
+    await page.route("**/*", routeHandler).catch(() => {});
+  }
   page.on("response", onResponse);
   try {
     await page.goto(url, { waitUntil: "domcontentloaded", timeout: 60_000 });
@@ -2500,19 +2522,73 @@ async function captureAppGrowingMaterialPage(page, connector, options) {
       sleep(options.captureTimeoutMS),
     ]);
     await stimulateAppGrowingMaterialList(page, options.captureTimeoutMS);
+  } catch (error) {
+    captureError = errorMessage(error);
+    pageCrashed = isBrowserPageCrashError(error);
   } finally {
     page.off("response", onResponse);
+    if (routeHandler) {
+      await page.unroute("**/*", routeHandler).catch(() => {});
+    }
   }
 
-  const snapshot = await appGrowingPageSnapshot(page);
+  const snapshot = await appGrowingPageSnapshot(page).catch((error) => ({
+    url: safePageURL(page),
+    title: "",
+    text: "",
+    error: errorMessage(error),
+  }));
   return {
     url,
     operations: Array.from(operations).sort(),
     responses,
     snapshot,
     needsReauth: pageSnapshotHasAnonymousText(snapshot, connector),
+    error: captureError,
+    pageCrashed,
     materials: captured,
   };
+}
+
+function appGrowingCrawlRouteHandler() {
+  return async (route) => {
+    const request = route.request();
+    if (shouldBlockAppGrowingCrawlResource(request)) {
+      await route.abort().catch(() => {});
+      return;
+    }
+    await route.continue().catch(() => {});
+  };
+}
+
+function shouldBlockAppGrowingCrawlResource(request) {
+  const resourceType = request.resourceType?.() || "";
+  if (["font", "image", "media"].includes(resourceType)) {
+    return true;
+  }
+  const url = request.url?.() || "";
+  return /(?:google-analytics|googletagmanager|doubleclick|hotjar|sentry|clarity|facebook|tiktok|analytics|collect|beacon)/i.test(url);
+}
+
+function isBrowserPageCrashError(error) {
+  return /page crashed|target page, context or browser has been closed|browser has been closed/i.test(errorMessage(error));
+}
+
+function errorMessage(error) {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function safePageURL(page) {
+  try {
+    return page.url();
+  } catch {
+    return "";
+  }
+}
+
+async function recreateAppGrowingCapturePage(context, page) {
+  await page?.close?.().catch(() => {});
+  return context.newPage();
 }
 
 async function appGrowingPageSnapshot(page) {
@@ -3608,11 +3684,14 @@ export {
   appGrowingGraphQLDateWindow,
   appGrowingMaterialURL,
   appGrowingSearchAppVariables,
+  captureAppGrowingMaterialPage,
   connectorForID,
   connectorTargetURL,
   extractAppGrowingMaterials,
+  isBrowserPageCrashError,
   normalizeDeclarativeConnector,
   normalizeAppGrowingMaterial,
+  shouldBlockAppGrowingCrawlResource,
 };
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
