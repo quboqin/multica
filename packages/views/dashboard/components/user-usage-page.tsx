@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { BarChart3, CircleUser, FolderKanban, Users } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import {
@@ -28,10 +28,10 @@ import { useAuthStore } from "@multica/core/auth";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { api } from "@multica/core/api";
 import { dashboardKeys } from "@multica/core/dashboard";
-import { memberListOptions } from "@multica/core/workspace/queries";
+import { agentListOptions, memberListOptions } from "@multica/core/workspace/queries";
 import { projectListOptions } from "@multica/core/projects/queries";
 import { useCustomPricingStore } from "@multica/core/runtimes/custom-pricing-store";
-import type { MemberWithUser } from "@multica/core/types";
+import type { Agent, MemberWithUser } from "@multica/core/types";
 import { PageHeader } from "../../layout/page-header";
 import { ActorAvatar } from "../../common/actor-avatar";
 import { ProjectIcon } from "../../projects/components/project-icon";
@@ -42,6 +42,9 @@ import { useViewingTimezone } from "../../common/use-viewing-timezone";
 import {
   aggregateDailyCost,
   aggregateDailyTokens,
+  aggregateAgentTokens,
+  mergeAgentDashboardRows,
+  type AgentDashboardRow,
   aggregateUserTokens,
   type UserUsageRow,
 } from "../utils";
@@ -58,6 +61,7 @@ type TrendMetric = "tokens" | "cost";
 type TrendAreaPoint = { date: string; label: string; value: number };
 
 const ALL_PROJECTS = "__all__";
+const PAGE_SIZE = 10;
 
 function fmtMoney(n: number): string {
   if (n >= 100) return `$${n.toFixed(0)}`;
@@ -100,7 +104,10 @@ export function UserUsagePage({ scope }: { scope: UserUsageScope }) {
   const currentUserId = useAuthStore((s) => s.user?.id ?? "");
   const [days, setDays] = useState<TimeRange>(1);
   const [projectValue, setProjectValue] = useState<string>(ALL_PROJECTS);
-  const [sortBy, setSortBy] = useState<SortKey>("tokens");
+  const [userSortBy, setUserSortBy] = useState<SortKey>("tokens");
+  const [agentSortBy, setAgentSortBy] = useState<SortKey>("tokens");
+  const [userPage, setUserPage] = useState(1);
+  const [agentPage, setAgentPage] = useState(1);
 
   useCustomPricingStore((s) => s.pricings);
 
@@ -110,6 +117,7 @@ export function UserUsagePage({ scope }: { scope: UserUsageScope }) {
 
   const { data: projects = [] } = useQuery(projectListOptions(wsId));
   const { data: members = [] } = useQuery(memberListOptions(wsId));
+  const { data: agents = [] } = useQuery(agentListOptions(wsId));
 
   const projectId = useMemo(() => {
     if (projectValue === ALL_PROJECTS) return null;
@@ -140,9 +148,41 @@ export function UserUsagePage({ scope }: { scope: UserUsageScope }) {
     staleTime: 60 * 1000,
   });
 
+  const agentUsageQuery = useQuery({
+    queryKey: [...dashboardKeys.all(wsId), "agent-usage-ranking", days, projectId, viewTZ] as const,
+    queryFn: () =>
+      api.getDashboardUsageByAgent({
+        days,
+        project_id: projectId ?? undefined,
+        tz: viewTZ,
+      }),
+    enabled: !!wsId && scope === "users",
+    staleTime: 60 * 1000,
+  });
+
+  const agentRuntimeQuery = useQuery({
+    queryKey: [...dashboardKeys.all(wsId), "agent-runtime-ranking", days, projectId, viewTZ] as const,
+    queryFn: () =>
+      api.getDashboardAgentRunTime({
+        days,
+        project_id: projectId ?? undefined,
+        tz: viewTZ,
+      }),
+    enabled: !!wsId && scope === "users",
+    staleTime: 60 * 1000,
+  });
+
   const rows = useMemo(
     () => aggregateUserTokens(usageQuery.data ?? []),
     [usageQuery.data],
+  );
+  const agentRows = useMemo(
+    () =>
+      mergeAgentDashboardRows(
+        aggregateAgentTokens(agentUsageQuery.data ?? []),
+        agentRuntimeQuery.data ?? [],
+      ),
+    [agentUsageQuery.data, agentRuntimeQuery.data],
   );
   const trendDailyCost = useMemo(
     () => aggregateDailyCost(trendQuery.data ?? []),
@@ -153,13 +193,26 @@ export function UserUsagePage({ scope }: { scope: UserUsageScope }) {
     [trendQuery.data],
   );
   const visibleRows = useMemo(() => {
-    const metric = sortBy === "cost"
+    const metric = userSortBy === "cost"
       ? (r: UserUsageRow) => r.cost
-      : sortBy === "tokens"
+      : userSortBy === "tokens"
         ? (r: UserUsageRow) => r.tokens
         : (r: UserUsageRow) => r.taskCount;
     return rows.toSorted((a, b) => metric(b) - metric(a));
-  }, [rows, sortBy]);
+  }, [rows, userSortBy]);
+  const visibleAgentRows = useMemo(() => {
+    const metric = agentSortBy === "cost"
+      ? (r: AgentDashboardRow) => r.cost
+      : agentSortBy === "tokens"
+        ? (r: AgentDashboardRow) => r.tokens
+        : (r: AgentDashboardRow) => r.taskCount;
+    return agentRows.toSorted((a, b) => metric(b) - metric(a));
+  }, [agentRows, agentSortBy]);
+
+  useEffect(() => {
+    setUserPage(1);
+    setAgentPage(1);
+  }, [days, projectId, userSortBy, agentSortBy, scope]);
 
   const totals = useMemo(
     () =>
@@ -187,8 +240,14 @@ export function UserUsagePage({ scope }: { scope: UserUsageScope }) {
   ) : (
     <Users className="h-4 w-4 shrink-0 text-muted-foreground" />
   );
-  const isLoading = usageQuery.isLoading || trendQuery.isLoading;
-  const isEmpty = rows.length === 0 && (trendQuery.data ?? []).length === 0;
+  const isLoading =
+    usageQuery.isLoading ||
+    trendQuery.isLoading ||
+    (scope === "users" && (agentUsageQuery.isLoading || agentRuntimeQuery.isLoading));
+  const isEmpty =
+    rows.length === 0 &&
+    (trendQuery.data ?? []).length === 0 &&
+    (scope !== "users" || agentRows.length === 0);
   const rangeLabel =
     days === 1
       ? t(($) => $.user_usage.range_today)
@@ -255,33 +314,38 @@ export function UserUsagePage({ scope }: { scope: UserUsageScope }) {
               />
 
               {scope === "users" && (
-                <div className="rounded-lg border bg-card">
-                  <div className="flex flex-wrap items-center justify-between gap-3 border-b px-4 pt-4 pb-3">
-                    <h4 className="text-sm font-semibold">
-                      {t(($) => $.user_usage.table_title_users)}
-                    </h4>
-                    <div className="flex items-center gap-3">
-                      <Segmented
-                        value={sortBy}
-                        onChange={setSortBy}
-                        options={[
-                          { label: t(($) => $.leaderboard.header_cost), value: "cost" as const },
-                          { label: t(($) => $.leaderboard.header_tokens), value: "tokens" as const },
-                          { label: t(($) => $.leaderboard.header_tasks), value: "tasks" as const },
-                        ]}
-                      />
-                      <span className="text-xs text-muted-foreground">
-                        {t(($) => $.user_usage.caption, { count: visibleRows.length })}
-                      </span>
-                    </div>
-                  </div>
-                  <UserUsageTable
-                    rows={visibleRows}
-                    members={members}
-                    currentUserId={currentUserId}
-                    sortBy={sortBy}
-                  />
-                </div>
+                <>
+                  <RankingCard
+                    title={t(($) => $.user_usage.table_title_agents)}
+                    caption={t(($) => $.leaderboard.caption, { count: visibleAgentRows.length })}
+                    sortBy={agentSortBy}
+                    onSortChange={setAgentSortBy}
+                  >
+                    <AgentUsageTable
+                      rows={visibleAgentRows}
+                      agents={agents}
+                      sortBy={agentSortBy}
+                      page={agentPage}
+                      onPageChange={setAgentPage}
+                    />
+                  </RankingCard>
+
+                  <RankingCard
+                    title={t(($) => $.user_usage.table_title_users)}
+                    caption={t(($) => $.user_usage.caption, { count: visibleRows.length })}
+                    sortBy={userSortBy}
+                    onSortChange={setUserSortBy}
+                  >
+                    <UserUsageTable
+                      rows={visibleRows}
+                      members={members}
+                      currentUserId={currentUserId}
+                      sortBy={userSortBy}
+                      page={userPage}
+                      onPageChange={setUserPage}
+                    />
+                  </RankingCard>
+                </>
               )}
             </>
           )}
@@ -506,16 +570,134 @@ function formatDateLabel(d: string): string {
   return `${date.getMonth() + 1}/${date.getDate()}`;
 }
 
+function RankingCard({
+  title,
+  caption,
+  sortBy,
+  onSortChange,
+  children,
+}: {
+  title: string;
+  caption: string;
+  sortBy: SortKey;
+  onSortChange: (v: SortKey) => void;
+  children: ReactNode;
+}) {
+  const { t } = useT("usage");
+  return (
+    <div className="rounded-lg border bg-card">
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b px-4 pt-4 pb-3">
+        <h4 className="text-sm font-semibold">{title}</h4>
+        <div className="flex items-center gap-3">
+          <Segmented
+            value={sortBy}
+            onChange={onSortChange}
+            options={[
+              { label: t(($) => $.leaderboard.header_cost), value: "cost" as const },
+              { label: t(($) => $.leaderboard.header_tokens), value: "tokens" as const },
+              { label: t(($) => $.leaderboard.header_tasks), value: "tasks" as const },
+            ]}
+          />
+          <span className="text-xs text-muted-foreground">{caption}</span>
+        </div>
+      </div>
+      {children}
+    </div>
+  );
+}
+
+function AgentUsageTable({
+  rows,
+  agents,
+  sortBy,
+  page,
+  onPageChange,
+}: {
+  rows: AgentDashboardRow[];
+  agents: Agent[];
+  sortBy: SortKey;
+  page: number;
+  onPageChange: (page: number) => void;
+}) {
+  const { t } = useT("usage");
+  const agentById = useMemo(
+    () => new Map(agents.map((a) => [a.id, a] as const)),
+    [agents],
+  );
+  const colClass = (key: SortKey) =>
+    `text-right ${sortBy === key ? "text-foreground" : "text-muted-foreground"}`;
+  const { pageRows, totalPages, safePage } = usePagedRows(rows, page);
+
+  return (
+    <>
+      <div className="grid grid-cols-[minmax(0,1.7fr)_5rem_5rem_4rem] items-center gap-3 border-b px-4 py-2 text-xs font-medium text-muted-foreground">
+        <span>{t(($) => $.leaderboard.header_agent)}</span>
+        <span className={colClass("tokens")}>{t(($) => $.leaderboard.header_tokens)}</span>
+        <span className={colClass("cost")}>{t(($) => $.leaderboard.header_cost)}</span>
+        <span className={colClass("tasks")}>{t(($) => $.leaderboard.header_tasks)}</span>
+      </div>
+      <div className="divide-y">
+        {pageRows.map((row) => {
+          const agent = agentById.get(row.agentId);
+          const displayName = agent?.name || row.agentId;
+          return (
+            <div
+              key={row.agentId}
+              className="grid grid-cols-[minmax(0,1.7fr)_5rem_5rem_4rem] items-center gap-3 px-4 py-2"
+            >
+              <div className="flex min-w-0 items-center gap-2">
+                <ActorAvatar
+                  actorType="agent"
+                  actorId={row.agentId}
+                  size={22}
+                  enableHoverCard
+                />
+                <div className="min-w-0">
+                  <div className="truncate text-sm font-medium">{displayName}</div>
+                  {agent?.description && (
+                    <div className="truncate text-xs text-muted-foreground">
+                      {agent.description}
+                    </div>
+                  )}
+                </div>
+              </div>
+              <div className={`text-right text-xs tabular-nums ${sortBy === "tokens" ? "font-medium text-foreground" : "text-muted-foreground"}`}>
+                {formatTokens(row.tokens)}
+              </div>
+              <div className={`text-right tabular-nums ${sortBy === "cost" ? "text-sm font-medium" : "text-xs text-muted-foreground"}`}>
+                {fmtMoney(row.cost)}
+              </div>
+              <div className={`text-right text-xs tabular-nums ${sortBy === "tasks" ? "font-medium text-foreground" : "text-muted-foreground"}`}>
+                {row.taskCount}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+      <PaginationControls
+        page={safePage}
+        totalPages={totalPages}
+        totalRows={rows.length}
+        onPageChange={onPageChange}
+      />
+    </>
+  );
+}
+
 function UserUsageTable({
   rows,
   members,
   currentUserId,
   sortBy,
+  page,
+  onPageChange,
 }: {
   rows: UserUsageRow[];
   members: MemberWithUser[];
   currentUserId: string;
   sortBy: SortKey;
+  page: number;
+  onPageChange: (page: number) => void;
 }) {
   const { t } = useT("usage");
   const memberByUserId = useMemo(
@@ -524,6 +706,7 @@ function UserUsageTable({
   );
   const colClass = (key: SortKey) =>
     `text-right ${sortBy === key ? "text-foreground" : "text-muted-foreground"}`;
+  const { pageRows, totalPages, safePage } = usePagedRows(rows, page);
 
   return (
     <>
@@ -536,7 +719,7 @@ function UserUsageTable({
         <span className={colClass("tasks")}>{t(($) => $.leaderboard.header_tasks)}</span>
       </div>
       <div className="divide-y">
-        {rows.map((row) => {
+        {pageRows.map((row) => {
           const member = memberByUserId.get(row.userId);
           const displayName = member?.name || member?.email || row.userId;
           return (
@@ -586,7 +769,66 @@ function UserUsageTable({
           );
         })}
       </div>
+      <PaginationControls
+        page={safePage}
+        totalPages={totalPages}
+        totalRows={rows.length}
+        onPageChange={onPageChange}
+      />
     </>
+  );
+}
+
+function usePagedRows<T>(rows: T[], page: number) {
+  return useMemo(() => {
+    const totalPages = Math.max(1, Math.ceil(rows.length / PAGE_SIZE));
+    const safePage = Math.min(Math.max(1, page), totalPages);
+    const start = (safePage - 1) * PAGE_SIZE;
+    return {
+      pageRows: rows.slice(start, start + PAGE_SIZE),
+      totalPages,
+      safePage,
+    };
+  }, [rows, page]);
+}
+
+function PaginationControls({
+  page,
+  totalPages,
+  totalRows,
+  onPageChange,
+}: {
+  page: number;
+  totalPages: number;
+  totalRows: number;
+  onPageChange: (page: number) => void;
+}) {
+  const { t } = useT("usage");
+  if (totalRows <= PAGE_SIZE) return null;
+  return (
+    <div className="flex items-center justify-between border-t px-4 py-3">
+      <span className="text-xs text-muted-foreground">
+        {t(($) => $.user_usage.pagination_status, { page, total: totalPages })}
+      </span>
+      <div className="flex items-center gap-2">
+        <button
+          type="button"
+          className="rounded-md border px-2.5 py-1 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground disabled:pointer-events-none disabled:opacity-50"
+          disabled={page <= 1}
+          onClick={() => onPageChange(page - 1)}
+        >
+          {t(($) => $.user_usage.pagination_prev)}
+        </button>
+        <button
+          type="button"
+          className="rounded-md border px-2.5 py-1 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground disabled:pointer-events-none disabled:opacity-50"
+          disabled={page >= totalPages}
+          onClick={() => onPageChange(page + 1)}
+        >
+          {t(($) => $.user_usage.pagination_next)}
+        </button>
+      </div>
+    </div>
   );
 }
 

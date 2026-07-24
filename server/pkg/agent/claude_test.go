@@ -723,6 +723,35 @@ func TestClaudeExecuteRecordsResultModelUsage(t *testing.T) {
 	}
 }
 
+func TestIsClaudeEmptyZeroTurnResult(t *testing.T) {
+	t.Parallel()
+
+	msg := claudeSDKMessage{
+		Type:     "result",
+		IsError:  false,
+		NumTurns: 0,
+		Usage:    &claudeUsage{},
+	}
+	if !isClaudeEmptyZeroTurnResult(msg, "", nil, false) {
+		t.Fatal("expected zero-turn empty result to be classified as invalid")
+	}
+
+	if isClaudeEmptyZeroTurnResult(msg, "", nil, true) {
+		t.Fatal("assistant events should prevent zero-turn empty classification")
+	}
+	if isClaudeEmptyZeroTurnResult(msg, "done", nil, false) {
+		t.Fatal("text output should prevent zero-turn empty classification")
+	}
+	if isClaudeEmptyZeroTurnResult(claudeSDKMessage{
+		Type:     "result",
+		IsError:  false,
+		NumTurns: 0,
+		Usage:    &claudeUsage{InputTokens: 1},
+	}, "", nil, false) {
+		t.Fatal("token usage should prevent zero-turn empty classification")
+	}
+}
+
 func mustMarshal(t *testing.T, v any) json.RawMessage {
 	t.Helper()
 	data, err := json.Marshal(v)

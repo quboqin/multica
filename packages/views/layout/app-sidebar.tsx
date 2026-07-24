@@ -400,6 +400,7 @@ export function AppSidebar({ topSlot, searchSlot, headerClassName, headerStyle }
   // DOM under dnd-kit while its drop animation is still interpolating.
   const [localPinned, setLocalPinned] = useState<PinnedItem[]>(pinnedItems);
   const [localPinnedWsId, setLocalPinnedWsId] = useState<string | null>(wsId ?? null);
+  const [usageMenuOpen, setUsageMenuOpen] = useState(false);
   const isDraggingRef = useRef(false);
   useEffect(() => {
     if (!isDraggingRef.current) {
@@ -408,6 +409,7 @@ export function AppSidebar({ topSlot, searchSlot, headerClassName, headerStyle }
   }, [pinnedItems]);
   useEffect(() => {
     setLocalPinnedWsId(wsId ?? null);
+    setUsageMenuOpen(false);
   }, [wsId]);
   const visiblePinned = localPinnedWsId === (wsId ?? null) ? localPinned : EMPTY_PINS;
 
@@ -706,6 +708,49 @@ export function AppSidebar({ topSlot, searchSlot, headerClassName, headerStyle }
                 {workspaceNav.map((item) => {
                   const href = p[item.key]();
                   const isActive = isNavActive(pathname, href);
+                  if (item.key === "usage") {
+                    return (
+                      <SidebarMenuItem key={item.key}>
+                        <SidebarMenuButton
+                          isActive={isActive}
+                          aria-expanded={usageMenuOpen}
+                          onClick={() => {
+                            setUsageMenuOpen((open) => !open);
+                            push(href);
+                          }}
+                          className="text-muted-foreground hover:not-data-active:bg-sidebar-accent/70 data-active:bg-sidebar-accent data-active:text-sidebar-accent-foreground"
+                        >
+                          <item.icon />
+                          <span>{t(($) => $.nav[item.labelKey])}</span>
+                          <ChevronRight
+                            className={cn(
+                              "ml-auto size-3 transition-transform",
+                              usageMenuOpen && "rotate-90",
+                            )}
+                          />
+                        </SidebarMenuButton>
+                        {usageMenuOpen && (
+                          <SidebarMenuSub>
+                            {usageSubNav.map((subItem) => {
+                              const subHref = p[subItem.key]();
+                              return (
+                                <SidebarMenuSubItem key={subItem.key}>
+                                  <SidebarMenuSubButton
+                                    size="sm"
+                                    isActive={pathname === subHref}
+                                    render={<AppLink href={subHref} />}
+                                    className="text-muted-foreground hover:not-data-active:bg-sidebar-accent/70 data-active:bg-sidebar-accent data-active:text-sidebar-accent-foreground"
+                                  >
+                                    <span>{t(($) => $.nav[subItem.labelKey])}</span>
+                                  </SidebarMenuSubButton>
+                                </SidebarMenuSubItem>
+                              );
+                            })}
+                          </SidebarMenuSub>
+                        )}
+                      </SidebarMenuItem>
+                    );
+                  }
                   return (
                     <SidebarMenuItem key={item.key}>
                       <SidebarMenuButton
@@ -716,25 +761,6 @@ export function AppSidebar({ topSlot, searchSlot, headerClassName, headerStyle }
                         <item.icon />
                         <span>{t(($) => $.nav[item.labelKey])}</span>
                       </SidebarMenuButton>
-                      {item.key === "usage" && (
-                        <SidebarMenuSub>
-                          {usageSubNav.map((subItem) => {
-                            const subHref = p[subItem.key]();
-                            return (
-                              <SidebarMenuSubItem key={subItem.key}>
-                                <SidebarMenuSubButton
-                                  size="sm"
-                                  isActive={pathname === subHref}
-                                  render={<AppLink href={subHref} />}
-                                  className="text-muted-foreground hover:not-data-active:bg-sidebar-accent/70 data-active:bg-sidebar-accent data-active:text-sidebar-accent-foreground"
-                                >
-                                  <span>{t(($) => $.nav[subItem.labelKey])}</span>
-                                </SidebarMenuSubButton>
-                              </SidebarMenuSubItem>
-                            );
-                          })}
-                        </SidebarMenuSub>
-                      )}
                     </SidebarMenuItem>
                   );
                 })}
