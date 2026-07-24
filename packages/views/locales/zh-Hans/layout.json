@@ -9,6 +9,8 @@
     "agents": "智能体",
     "squads": "小队",
     "usage": "用量",
+    "my_usage": "我的用量",
+    "user_usage": "用量统计",
     "runtimes": "运行时",
     "skills": "Skills",
     "settings": "设置",

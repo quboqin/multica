@@ -541,6 +541,24 @@ export interface DashboardUsageByAgent {
   task_count: number;
 }
 
+// Per-(accountable user, model) token totals for the workspace dashboard.
+// The server filters out unattributed tasks, so every row has a user_id.
+export interface DashboardUsageByUser {
+  user_id: string;
+  model: string;
+  input_tokens: number;
+  output_tokens: number;
+  cache_read_tokens: number;
+  cache_write_tokens: number;
+  task_count: number;
+}
+
+// Per-(accountable user, date, model) token totals for user-attributed daily
+// trend charts. Same token shape as DashboardUsageDaily plus user_id.
+export interface DashboardUsageByUserDaily extends DashboardUsageDaily {
+  user_id: string;
+}
+
 // Per-agent total terminal-task run-time + counts. Powers the workspace
 // dashboard's "time by agent" list. failed_count is a subset of
 // task_count (failed tasks still contribute to total_seconds because

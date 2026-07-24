@@ -52,6 +52,29 @@
     "title": "暂无消耗数据",
     "body": "当智能体在这里开始执行任务后，它们的 token 消耗和运行时长将出现在此处。"
   },
+  "user_usage": {
+    "range_today": "今天",
+    "range_days": "{{days}}天",
+    "title_me": "我的用量",
+    "title_users": "用户用量统计",
+    "subtitle_me": "按任务最终负责用户归因到你的 Token 消耗。",
+    "subtitle_users": "按每个任务的最终负责用户统计 Token 消耗。",
+    "kpi_cost": "费用 · {{range}}",
+    "kpi_tokens": "Token · {{range}}",
+    "kpi_tasks": "归因任务 · {{range}}",
+    "table_title_me": "我的归因用量",
+    "table_title_users": "用户统计排名",
+    "trend_title": "最近 7 天趋势",
+    "trend_subtitle_me": "按天展示归因到你的用量。",
+    "trend_subtitle_users": "按天展示所有负责人的归因用量。",
+    "caption": "{{count}} 个用户",
+    "header_user": "用户",
+    "header_input": "输入",
+    "header_output": "输出",
+    "current_user": "（你）",
+    "empty_title": "暂无归因用量",
+    "empty_body": "所选时间范围内暂无归因到用户的任务用量。"
+  },
   "duration": {
     "less_than_minute": "<1分钟"
   }

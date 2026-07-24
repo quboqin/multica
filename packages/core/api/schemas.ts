@@ -774,6 +774,24 @@ const DashboardUsageByAgentSchema = z.object({
 
 export const DashboardUsageByAgentListSchema = z.array(DashboardUsageByAgentSchema);
 
+const DashboardUsageByUserSchema = z.object({
+  user_id: z.string().default(""),
+  model: z.string().default(""),
+  input_tokens: z.number().default(0),
+  output_tokens: z.number().default(0),
+  cache_read_tokens: z.number().default(0),
+  cache_write_tokens: z.number().default(0),
+  task_count: z.number().default(0),
+}).loose();
+
+export const DashboardUsageByUserListSchema = z.array(DashboardUsageByUserSchema);
+
+const DashboardUsageByUserDailySchema = DashboardUsageByUserSchema.extend({
+  date: z.string().default(""),
+}).loose();
+
+export const DashboardUsageByUserDailyListSchema = z.array(DashboardUsageByUserDailySchema);
+
 const DashboardAgentRunTimeSchema = z.object({
   agent_id: z.string().default(""),
   total_seconds: z.number().default(0),

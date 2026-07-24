@@ -1,6 +1,7 @@
 import type {
   DashboardUsageDaily,
   DashboardUsageByAgent,
+  DashboardUsageByUser,
   DashboardAgentRunTime,
   DashboardRunTimeDaily,
 } from "@multica/core/types";
@@ -171,6 +172,49 @@ export function aggregateAgentTokens(rows: DashboardUsageByAgent[]): AgentCostRo
     map.set(r.agent_id, entry);
   }
   return Array.from(map.values()).toSorted((a, b) => b.cost - a.cost);
+}
+
+export interface UserUsageRow {
+  userId: string;
+  tokens: number;
+  cost: number;
+  taskCount: number;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+}
+
+// Fold per-(accountable user, model) rows into one row per user. Cost remains
+// client-side so it follows the same pricing overrides as the workspace and
+// runtime usage pages.
+export function aggregateUserTokens(rows: DashboardUsageByUser[]): UserUsageRow[] {
+  const map = new Map<string, UserUsageRow>();
+  for (const r of rows) {
+    const entry = map.get(r.user_id) ?? {
+      userId: r.user_id,
+      tokens: 0,
+      cost: 0,
+      taskCount: 0,
+      inputTokens: 0,
+      outputTokens: 0,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
+    };
+    entry.inputTokens += r.input_tokens;
+    entry.outputTokens += r.output_tokens;
+    entry.cacheReadTokens += r.cache_read_tokens;
+    entry.cacheWriteTokens += r.cache_write_tokens;
+    entry.tokens +=
+      r.input_tokens + r.output_tokens + r.cache_read_tokens + r.cache_write_tokens;
+    entry.cost += estimateCost(r);
+    entry.taskCount += r.task_count;
+    map.set(r.user_id, entry);
+  }
+  return Array.from(map.values()).toSorted((a, b) => {
+    if (b.cost !== a.cost) return b.cost - a.cost;
+    return b.tokens - a.tokens;
+  });
 }
 
 export interface AgentDashboardRow {

@@ -52,6 +52,29 @@
     "title": "No usage yet",
     "body": "Once agents start running tasks here, their token spend and run time will appear in this view."
   },
+  "user_usage": {
+    "range_today": "Today",
+    "range_days": "{{days}}D",
+    "title_me": "My Usage",
+    "title_users": "User Usage",
+    "subtitle_me": "Token spend attributed to you through task accountability.",
+    "subtitle_users": "Token spend grouped by the accountable user on each task.",
+    "kpi_cost": "Cost · {{range}}",
+    "kpi_tokens": "Tokens · {{range}}",
+    "kpi_tasks": "Attributed tasks · {{range}}",
+    "table_title_me": "My attributed usage",
+    "table_title_users": "User usage ranking",
+    "trend_title": "Last 7 days",
+    "trend_subtitle_me": "Daily usage attributed to you.",
+    "trend_subtitle_users": "Daily usage across accountable users.",
+    "caption": "{{count}} users",
+    "header_user": "User",
+    "header_input": "Input",
+    "header_output": "Output",
+    "current_user": "(you)",
+    "empty_title": "No attributed usage",
+    "empty_body": "No task usage in this window has been attributed to a user yet."
+  },
   "duration": {
     "less_than_minute": "<1m"
   }

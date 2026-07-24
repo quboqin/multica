@@ -1003,6 +1003,10 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 			r.Route("/api/dashboard", func(r chi.Router) {
 				r.Get("/usage/daily", h.GetDashboardUsageDaily)
 				r.Get("/usage/by-agent", h.GetDashboardUsageByAgent)
+				r.Get("/usage/by-user", h.GetDashboardUsageByUser)
+				r.Get("/usage/by-user/daily", h.GetDashboardUsageByUserDaily)
+				r.Get("/usage/me", h.GetDashboardUsageMe)
+				r.Get("/usage/me/daily", h.GetDashboardUsageMeDaily)
 				r.Get("/agent-runtime", h.GetDashboardAgentRunTime)
 				r.Get("/runtime/daily", h.GetDashboardRunTimeDaily)
 			})

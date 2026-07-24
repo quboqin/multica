@@ -938,7 +938,7 @@ func (b *codexBackend) Execute(ctx context.Context, prompt string, opts ExecOpti
 		// Fallback: if no usage from JSON-RPC, scan Codex session JSONL logs.
 		// Codex writes token_count events to ~/.codex/sessions/YYYY/MM/DD/*.jsonl.
 		if u.InputTokens == 0 && u.OutputTokens == 0 {
-			if scanned := scanCodexSessionUsage(startTime); scanned != nil {
+			if scanned := scanCodexSessionUsage(startTime, threadID); scanned != nil {
 				u = scanned.usage
 				if scanned.model != "" && opts.Model == "" {
 					opts.Model = scanned.model
@@ -1837,41 +1837,58 @@ type codexSessionUsage struct {
 // scanCodexSessionUsage scans Codex session JSONL files written after startTime
 // to extract token usage. Codex writes token_count events to
 // ~/.codex/sessions/YYYY/MM/DD/*.jsonl.
-func scanCodexSessionUsage(startTime time.Time) *codexSessionUsage {
+func scanCodexSessionUsage(startTime time.Time, threadID string) *codexSessionUsage {
 	root := codexSessionRoot()
 	if root == "" {
 		return nil
 	}
 
-	// Look in today's session directory.
-	dateDir := filepath.Join(root,
-		fmt.Sprintf("%04d", startTime.Year()),
-		fmt.Sprintf("%02d", int(startTime.Month())),
-		fmt.Sprintf("%02d", startTime.Day()),
-	)
-
-	files, err := filepath.Glob(filepath.Join(dateDir, "*.jsonl"))
-	if err != nil || len(files) == 0 {
+	files := codexSessionFilesModifiedSince(root, startTime, threadID)
+	if len(files) == 0 {
 		return nil
 	}
 
-	// Only scan files modified after startTime (this task's session).
 	var result codexSessionUsage
 	for _, f := range files {
-		info, err := os.Stat(f)
-		if err != nil || info.ModTime().Before(startTime) {
-			continue
-		}
-		if u := parseCodexSessionFile(f); u != nil {
-			// Take the last matching file's data (usually there's only one per task).
+		if u := parseCodexSessionFileSince(f, startTime); u != nil {
 			result = *u
 		}
 	}
 
-	if result.usage.InputTokens == 0 && result.usage.OutputTokens == 0 {
+	if !codexUsageHasTokens(result.usage) {
 		return nil
 	}
 	return &result
+}
+
+func codexSessionFilesModifiedSince(root string, startTime time.Time, threadID string) []string {
+	type candidate struct {
+		path    string
+		modTime time.Time
+	}
+	var candidates []candidate
+	_ = filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+		if err != nil || d.IsDir() || filepath.Ext(path) != ".jsonl" {
+			return nil
+		}
+		if threadID != "" && !strings.Contains(d.Name(), threadID) {
+			return nil
+		}
+		info, err := d.Info()
+		if err != nil || info.ModTime().Before(startTime) {
+			return nil
+		}
+		candidates = append(candidates, candidate{path: path, modTime: info.ModTime()})
+		return nil
+	})
+	sort.Slice(candidates, func(i, j int) bool {
+		return candidates[i].modTime.Before(candidates[j].modTime)
+	})
+	files := make([]string, len(candidates))
+	for i, c := range candidates {
+		files[i] = c.path
+	}
+	return files
 }
 
 // codexSessionRoot returns the Codex sessions directory.
@@ -1897,8 +1914,9 @@ func codexSessionRoot() string {
 
 // codexSessionTokenCount represents a token_count event in Codex JSONL.
 type codexSessionTokenCount struct {
-	Type    string `json:"type"`
-	Payload *struct {
+	Timestamp time.Time `json:"timestamp"`
+	Type      string    `json:"type"`
+	Payload   *struct {
 		Type string `json:"type"`
 		Info *struct {
 			TotalTokenUsage *struct {
@@ -1923,6 +1941,10 @@ type codexSessionTokenCount struct {
 
 // parseCodexSessionFile extracts the final token_count from a Codex session file.
 func parseCodexSessionFile(path string) *codexSessionUsage {
+	return parseCodexSessionFileSince(path, time.Time{})
+}
+
+func parseCodexSessionFileSince(path string, since time.Time) *codexSessionUsage {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil
@@ -1954,21 +1976,35 @@ func parseCodexSessionFile(path string) *codexSessionUsage {
 			continue
 		}
 
+		if !since.IsZero() && !evt.Timestamp.IsZero() && evt.Timestamp.Before(since) {
+			continue
+		}
+
 		// Extract token usage from token_count events.
 		if evt.Payload.Type == "token_count" && evt.Payload.Info != nil {
-			usage := evt.Payload.Info.TotalTokenUsage
+			usage := evt.Payload.Info.LastTokenUsage
+			if since.IsZero() {
+				usage = evt.Payload.Info.TotalTokenUsage
+			}
 			if usage == nil {
-				usage = evt.Payload.Info.LastTokenUsage
+				usage = evt.Payload.Info.TotalTokenUsage
 			}
 			if usage != nil {
 				cachedTokens := usage.CachedInputTokens
 				if cachedTokens == 0 {
 					cachedTokens = usage.CacheReadInputTokens
 				}
-				result.usage = TokenUsage{
+				u := TokenUsage{
 					InputTokens:     codexUncachedInputTokens(usage.InputTokens, cachedTokens),
 					OutputTokens:    usage.OutputTokens + usage.ReasoningOutputTokens,
 					CacheReadTokens: cachedTokens,
+				}
+				if since.IsZero() {
+					result.usage = u
+				} else {
+					result.usage.InputTokens += u.InputTokens
+					result.usage.OutputTokens += u.OutputTokens
+					result.usage.CacheReadTokens += u.CacheReadTokens
 				}
 				if evt.Payload.Info.Model != "" {
 					result.model = evt.Payload.Info.Model
@@ -1982,6 +2018,10 @@ func parseCodexSessionFile(path string) *codexSessionUsage {
 		return nil
 	}
 	return &result
+}
+
+func codexUsageHasTokens(u TokenUsage) bool {
+	return u.InputTokens > 0 || u.OutputTokens > 0 || u.CacheReadTokens > 0 || u.CacheWriteTokens > 0
 }
 
 // bytesContainsStr checks if b contains the string s (without allocating).

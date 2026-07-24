@@ -55,6 +55,9 @@ import {
   SidebarMenu,
   SidebarMenuButton,
   SidebarMenuItem,
+  SidebarMenuSub,
+  SidebarMenuSubButton,
+  SidebarMenuSubItem,
   SidebarRail,
 } from "@multica/ui/components/ui/sidebar";
 import {
@@ -117,6 +120,8 @@ type NavKey =
   | "agents"
   | "squads"
   | "usage"
+  | "usageMe"
+  | "usageUsers"
   | "runtimes"
   | "skills"
   | "settings";
@@ -133,6 +138,8 @@ type NavLabelKey =
   | "agents"
   | "squads"
   | "usage"
+  | "my_usage"
+  | "user_usage"
   | "runtimes"
   | "skills"
   | "settings";
@@ -151,6 +158,11 @@ const workspaceNav: { key: NavKey; labelKey: NavLabelKey; icon: typeof Inbox }[]
   { key: "agents", labelKey: "agents", icon: Bot },
   { key: "squads", labelKey: "squads", icon: Users },
   { key: "usage", labelKey: "usage", icon: BarChart3 },
+];
+
+const usageSubNav: { key: NavKey; labelKey: NavLabelKey }[] = [
+  { key: "usageMe", labelKey: "my_usage" },
+  { key: "usageUsers", labelKey: "user_usage" },
 ];
 
 const configureNav: { key: NavKey; labelKey: NavLabelKey; icon: typeof Inbox }[] = [
@@ -704,6 +716,25 @@ export function AppSidebar({ topSlot, searchSlot, headerClassName, headerStyle }
                         <item.icon />
                         <span>{t(($) => $.nav[item.labelKey])}</span>
                       </SidebarMenuButton>
+                      {item.key === "usage" && (
+                        <SidebarMenuSub>
+                          {usageSubNav.map((subItem) => {
+                            const subHref = p[subItem.key]();
+                            return (
+                              <SidebarMenuSubItem key={subItem.key}>
+                                <SidebarMenuSubButton
+                                  size="sm"
+                                  isActive={pathname === subHref}
+                                  render={<AppLink href={subHref} />}
+                                  className="text-muted-foreground hover:not-data-active:bg-sidebar-accent/70 data-active:bg-sidebar-accent data-active:text-sidebar-accent-foreground"
+                                >
+                                  <span>{t(($) => $.nav[subItem.labelKey])}</span>
+                                </SidebarMenuSubButton>
+                              </SidebarMenuSubItem>
+                            );
+                          })}
+                        </SidebarMenuSub>
+                      )}
                     </SidebarMenuItem>
                   );
                 })}

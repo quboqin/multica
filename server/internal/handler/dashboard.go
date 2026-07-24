@@ -3,6 +3,8 @@ package handler
 import (
 	"context"
 	"net/http"
+	"strconv"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/util"
@@ -51,6 +53,20 @@ func parseProjectIDParam(w http.ResponseWriter, r *http.Request) (pgtype.UUID, b
 	return u, true
 }
 
+func parseExactDaysParamInTZ(r *http.Request, defaultDays int, tzName string) pgtype.Timestamptz {
+	days := defaultDays
+	if d := r.URL.Query().Get("days"); d != "" {
+		if parsed, err := strconv.Atoi(d); err == nil && parsed > 0 && parsed <= 365 {
+			days = parsed
+		}
+	}
+	loc, err := time.LoadLocation(tzName)
+	if err != nil || loc == nil {
+		loc = time.UTC
+	}
+	return pgtype.Timestamptz{Time: sinceFromDays(time.Now(), days-1, loc), Valid: true}
+}
+
 // DashboardUsageDailyResponse is one (date, model) bucket. Cost-side math
 // happens on the client from a per-model pricing table; model stays on the
 // wire for that reason.
@@ -77,7 +93,7 @@ func (h *Handler) GetDashboardUsageDaily(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	tz := h.resolveViewingTZ(r)
-	since := parseSinceParamInTZ(r, 30, tz)
+	since := parseExactDaysParamInTZ(r, 30, tz)
 
 	resp, err := h.listDashboardUsageDaily(r.Context(), parseUUID(workspaceID), tz, since, projectID)
 	if err != nil {
@@ -129,6 +145,30 @@ type DashboardUsageByAgentResponse struct {
 	TaskCount        int32  `json:"task_count"`
 }
 
+// DashboardUsageByUserResponse is one (accountable user, model) row.
+type DashboardUsageByUserResponse struct {
+	UserID           string `json:"user_id"`
+	Model            string `json:"model"`
+	InputTokens      int64  `json:"input_tokens"`
+	OutputTokens     int64  `json:"output_tokens"`
+	CacheReadTokens  int64  `json:"cache_read_tokens"`
+	CacheWriteTokens int64  `json:"cache_write_tokens"`
+	TaskCount        int32  `json:"task_count"`
+}
+
+// DashboardUsageByUserDailyResponse is one (accountable user, date, model)
+// row for user-attributed trend charts.
+type DashboardUsageByUserDailyResponse struct {
+	UserID           string `json:"user_id"`
+	Date             string `json:"date"`
+	Model            string `json:"model"`
+	InputTokens      int64  `json:"input_tokens"`
+	OutputTokens     int64  `json:"output_tokens"`
+	CacheReadTokens  int64  `json:"cache_read_tokens"`
+	CacheWriteTokens int64  `json:"cache_write_tokens"`
+	TaskCount        int32  `json:"task_count"`
+}
+
 // GetDashboardUsageByAgent returns per-(agent, model) token aggregates
 // for the workspace, optionally scoped to a project. Backed by
 // task_usage_hourly with the viewer's tz applied to the `?days=` cutoff.
@@ -172,6 +212,160 @@ func (h *Handler) listDashboardUsageByAgent(
 	for i, row := range rows {
 		resp[i] = DashboardUsageByAgentResponse{
 			AgentID:          uuidToString(row.AgentID),
+			Model:            row.Model,
+			InputTokens:      row.InputTokens,
+			OutputTokens:     row.OutputTokens,
+			CacheReadTokens:  row.CacheReadTokens,
+			CacheWriteTokens: row.CacheWriteTokens,
+			TaskCount:        row.TaskCount,
+		}
+	}
+	return resp, nil
+}
+
+// GetDashboardUsageByUser returns per-(accountable user, model) token
+// aggregates for the workspace, optionally scoped to a project.
+func (h *Handler) GetDashboardUsageByUser(w http.ResponseWriter, r *http.Request) {
+	workspaceID := h.resolveWorkspaceID(r)
+	if _, ok := h.workspaceMember(w, r, workspaceID); !ok {
+		return
+	}
+	projectID, ok := parseProjectIDParam(w, r)
+	if !ok {
+		return
+	}
+	tz := h.resolveViewingTZ(r)
+	since := parseExactDaysParamInTZ(r, 30, tz)
+
+	resp, err := h.listDashboardUsageByUser(r.Context(), parseUUID(workspaceID), since, projectID, pgtype.UUID{})
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to list usage by user")
+		return
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+// GetDashboardUsageByUserDaily returns daily token usage grouped by
+// accountable user, optionally scoped to a project.
+func (h *Handler) GetDashboardUsageByUserDaily(w http.ResponseWriter, r *http.Request) {
+	workspaceID := h.resolveWorkspaceID(r)
+	if _, ok := h.workspaceMember(w, r, workspaceID); !ok {
+		return
+	}
+	projectID, ok := parseProjectIDParam(w, r)
+	if !ok {
+		return
+	}
+	tz := h.resolveViewingTZ(r)
+	since := parseExactDaysParamInTZ(r, 7, tz)
+
+	resp, err := h.listDashboardUsageByUserDaily(r.Context(), parseUUID(workspaceID), tz, since, projectID, pgtype.UUID{})
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to list daily usage by user")
+		return
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+// GetDashboardUsageMe returns token usage attributed to the current user.
+func (h *Handler) GetDashboardUsageMe(w http.ResponseWriter, r *http.Request) {
+	workspaceID := h.resolveWorkspaceID(r)
+	member, ok := h.workspaceMember(w, r, workspaceID)
+	if !ok {
+		return
+	}
+	projectID, ok := parseProjectIDParam(w, r)
+	if !ok {
+		return
+	}
+	tz := h.resolveViewingTZ(r)
+	since := parseExactDaysParamInTZ(r, 30, tz)
+
+	resp, err := h.listDashboardUsageByUser(r.Context(), parseUUID(workspaceID), since, projectID, member.UserID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to list my usage")
+		return
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+// GetDashboardUsageMeDaily returns daily token usage attributed to the
+// current user, optionally scoped to a project.
+func (h *Handler) GetDashboardUsageMeDaily(w http.ResponseWriter, r *http.Request) {
+	workspaceID := h.resolveWorkspaceID(r)
+	member, ok := h.workspaceMember(w, r, workspaceID)
+	if !ok {
+		return
+	}
+	projectID, ok := parseProjectIDParam(w, r)
+	if !ok {
+		return
+	}
+	tz := h.resolveViewingTZ(r)
+	since := parseExactDaysParamInTZ(r, 7, tz)
+
+	resp, err := h.listDashboardUsageByUserDaily(r.Context(), parseUUID(workspaceID), tz, since, projectID, member.UserID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to list my daily usage")
+		return
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+func (h *Handler) listDashboardUsageByUser(
+	ctx context.Context,
+	workspaceID pgtype.UUID,
+	since pgtype.Timestamptz,
+	projectID pgtype.UUID,
+	userID pgtype.UUID,
+) ([]DashboardUsageByUserResponse, error) {
+	rows, err := h.Queries.ListDashboardUsageByUser(ctx, db.ListDashboardUsageByUserParams{
+		WorkspaceID: workspaceID,
+		Since:       since,
+		ProjectID:   projectID,
+		UserID:      userID,
+	})
+	if err != nil {
+		return nil, err
+	}
+	resp := make([]DashboardUsageByUserResponse, len(rows))
+	for i, row := range rows {
+		resp[i] = DashboardUsageByUserResponse{
+			UserID:           uuidToString(row.UserID),
+			Model:            row.Model,
+			InputTokens:      row.InputTokens,
+			OutputTokens:     row.OutputTokens,
+			CacheReadTokens:  row.CacheReadTokens,
+			CacheWriteTokens: row.CacheWriteTokens,
+			TaskCount:        row.TaskCount,
+		}
+	}
+	return resp, nil
+}
+
+func (h *Handler) listDashboardUsageByUserDaily(
+	ctx context.Context,
+	workspaceID pgtype.UUID,
+	tz string,
+	since pgtype.Timestamptz,
+	projectID pgtype.UUID,
+	userID pgtype.UUID,
+) ([]DashboardUsageByUserDailyResponse, error) {
+	rows, err := h.Queries.ListDashboardUsageByUserDaily(ctx, db.ListDashboardUsageByUserDailyParams{
+		WorkspaceID: workspaceID,
+		Tz:          tz,
+		Since:       since,
+		ProjectID:   projectID,
+		UserID:      userID,
+	})
+	if err != nil {
+		return nil, err
+	}
+	resp := make([]DashboardUsageByUserDailyResponse, len(rows))
+	for i, row := range rows {
+		resp[i] = DashboardUsageByUserDailyResponse{
+			UserID:           uuidToString(row.UserID),
+			Date:             row.Date.Time.Format("2006-01-02"),
 			Model:            row.Model,
 			InputTokens:      row.InputTokens,
 			OutputTokens:     row.OutputTokens,

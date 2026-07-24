@@ -15,6 +15,30 @@ export const dashboardKeys = {
     projectId: string | null,
     tz: string,
   ) => [...dashboardKeys.all(wsId), "by-agent", days, projectId, tz] as const,
+  byUser: (
+    wsId: string,
+    days: number,
+    projectId: string | null,
+    tz: string,
+  ) => [...dashboardKeys.all(wsId), "by-user", days, projectId, tz] as const,
+  byUserDaily: (
+    wsId: string,
+    days: number,
+    projectId: string | null,
+    tz: string,
+  ) => [...dashboardKeys.all(wsId), "by-user-daily", days, projectId, tz] as const,
+  me: (
+    wsId: string,
+    days: number,
+    projectId: string | null,
+    tz: string,
+  ) => [...dashboardKeys.all(wsId), "me", days, projectId, tz] as const,
+  meDaily: (
+    wsId: string,
+    days: number,
+    projectId: string | null,
+    tz: string,
+  ) => [...dashboardKeys.all(wsId), "me-daily", days, projectId, tz] as const,
   agentRuntime: (
     wsId: string,
     days: number,
@@ -65,6 +89,82 @@ export function dashboardUsageByAgentOptions(
     queryKey: dashboardKeys.byAgent(wsId, days, projectId, tz),
     queryFn: () =>
       api.getDashboardUsageByAgent({
+        days,
+        project_id: projectId ?? undefined,
+        tz,
+      }),
+    enabled: !!wsId,
+    staleTime: STALE_TIME,
+  });
+}
+
+export function dashboardUsageByUserOptions(
+  wsId: string,
+  days: number,
+  projectId: string | null,
+  tz: string,
+) {
+  return queryOptions({
+    queryKey: dashboardKeys.byUser(wsId, days, projectId, tz),
+    queryFn: () =>
+      api.getDashboardUsageByUser({
+        days,
+        project_id: projectId ?? undefined,
+        tz,
+      }),
+    enabled: !!wsId,
+    staleTime: STALE_TIME,
+  });
+}
+
+export function dashboardUsageByUserDailyOptions(
+  wsId: string,
+  days: number,
+  projectId: string | null,
+  tz: string,
+) {
+  return queryOptions({
+    queryKey: dashboardKeys.byUserDaily(wsId, days, projectId, tz),
+    queryFn: () =>
+      api.getDashboardUsageByUserDaily({
+        days,
+        project_id: projectId ?? undefined,
+        tz,
+      }),
+    enabled: !!wsId,
+    staleTime: STALE_TIME,
+  });
+}
+
+export function dashboardUsageMeOptions(
+  wsId: string,
+  days: number,
+  projectId: string | null,
+  tz: string,
+) {
+  return queryOptions({
+    queryKey: dashboardKeys.me(wsId, days, projectId, tz),
+    queryFn: () =>
+      api.getDashboardUsageMe({
+        days,
+        project_id: projectId ?? undefined,
+        tz,
+      }),
+    enabled: !!wsId,
+    staleTime: STALE_TIME,
+  });
+}
+
+export function dashboardUsageMeDailyOptions(
+  wsId: string,
+  days: number,
+  projectId: string | null,
+  tz: string,
+) {
+  return queryOptions({
+    queryKey: dashboardKeys.meDaily(wsId, days, projectId, tz),
+    queryFn: () =>
+      api.getDashboardUsageMeDaily({
         days,
         project_id: projectId ?? undefined,
         tz,

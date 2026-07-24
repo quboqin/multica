@@ -601,6 +601,87 @@ func TestParseCodexSessionFileSubtractsCachedInput(t *testing.T) {
 	}
 }
 
+func TestParseCodexSessionFileSinceSumsLastUsageAfterStart(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "session.jsonl")
+	content := strings.Join([]string{
+		`{"timestamp":"2026-07-23T09:06:04Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":1000,"cached_input_tokens":300,"output_tokens":40,"reasoning_output_tokens":10},"last_token_usage":{"input_tokens":1000,"cached_input_tokens":300,"output_tokens":40,"reasoning_output_tokens":10}}}}`,
+		`{"timestamp":"2026-07-24T01:44:47Z","type":"turn_context","payload":{"model":"gpt-5.5"}}`,
+		`{"timestamp":"2026-07-24T01:45:00Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":1500,"cached_input_tokens":400,"output_tokens":50,"reasoning_output_tokens":10},"last_token_usage":{"input_tokens":100,"cached_input_tokens":20,"output_tokens":5,"reasoning_output_tokens":2}}}}`,
+		`{"timestamp":"2026-07-24T01:46:00Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":1700,"cached_input_tokens":450,"output_tokens":60,"reasoning_output_tokens":11},"last_token_usage":{"input_tokens":200,"cached_input_tokens":50,"output_tokens":10,"reasoning_output_tokens":1}}}}`,
+		"",
+	}, "\n")
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+
+	since := time.Date(2026, 7, 24, 1, 44, 47, 0, time.UTC)
+	got := parseCodexSessionFileSince(path, since)
+	if got == nil {
+		t.Fatal("expected usage")
+	}
+	if got.model != "gpt-5.5" {
+		t.Fatalf("model = %q, want gpt-5.5", got.model)
+	}
+	if got.usage.InputTokens != 230 {
+		t.Fatalf("input tokens = %d, want 230", got.usage.InputTokens)
+	}
+	if got.usage.CacheReadTokens != 70 {
+		t.Fatalf("cache read tokens = %d, want 70", got.usage.CacheReadTokens)
+	}
+	if got.usage.OutputTokens != 18 {
+		t.Fatalf("output tokens = %d, want 18", got.usage.OutputTokens)
+	}
+}
+
+func TestScanCodexSessionUsageFindsResumedSessionAcrossDateDirs(t *testing.T) {
+	sharedHome := t.TempDir()
+	t.Setenv("CODEX_HOME", sharedHome)
+	start := time.Date(2026, 7, 24, 1, 44, 47, 0, time.UTC)
+
+	oldDateDir := filepath.Join(sharedHome, "sessions", "2026", "07", "23")
+	if err := os.MkdirAll(oldDateDir, 0o755); err != nil {
+		t.Fatalf("mkdir old date dir: %v", err)
+	}
+	resumedPath := filepath.Join(oldDateDir, "rollout-2026-07-23T17-05-55-thread-123.jsonl")
+	resumedContent := strings.Join([]string{
+		`{"timestamp":"2026-07-23T09:06:04Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":1000,"cached_input_tokens":300,"output_tokens":40,"reasoning_output_tokens":10},"last_token_usage":{"input_tokens":1000,"cached_input_tokens":300,"output_tokens":40,"reasoning_output_tokens":10}}}}`,
+		`{"timestamp":"2026-07-24T01:44:48Z","type":"turn_context","payload":{"model":"gpt-5.5"}}`,
+		`{"timestamp":"2026-07-24T01:45:00Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":100,"cached_input_tokens":20,"output_tokens":5,"reasoning_output_tokens":2}}}}`,
+		"",
+	}, "\n")
+	if err := os.WriteFile(resumedPath, []byte(resumedContent), 0o600); err != nil {
+		t.Fatalf("write resumed session: %v", err)
+	}
+	if err := os.Chtimes(resumedPath, start.Add(time.Minute), start.Add(time.Minute)); err != nil {
+		t.Fatalf("chtimes resumed session: %v", err)
+	}
+
+	todayDir := filepath.Join(sharedHome, "sessions", "2026", "07", "24")
+	if err := os.MkdirAll(todayDir, 0o755); err != nil {
+		t.Fatalf("mkdir today dir: %v", err)
+	}
+	unrelatedPath := filepath.Join(todayDir, "rollout-2026-07-24T01-45-00-other-thread.jsonl")
+	if err := os.WriteFile(unrelatedPath, []byte(`{"timestamp":"2026-07-24T01:45:01Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":999,"output_tokens":999}}}}`+"\n"), 0o600); err != nil {
+		t.Fatalf("write unrelated session: %v", err)
+	}
+	if err := os.Chtimes(unrelatedPath, start.Add(2*time.Minute), start.Add(2*time.Minute)); err != nil {
+		t.Fatalf("chtimes unrelated session: %v", err)
+	}
+
+	got := scanCodexSessionUsage(start, "thread-123")
+	if got == nil {
+		t.Fatal("expected usage")
+	}
+	if got.model != "gpt-5.5" {
+		t.Fatalf("model = %q, want gpt-5.5", got.model)
+	}
+	if got.usage.InputTokens != 80 || got.usage.CacheReadTokens != 20 || got.usage.OutputTokens != 7 {
+		t.Fatalf("usage = %+v, want input=80 cache=20 output=7", got.usage)
+	}
+}
+
 func TestCodexRawItemCommandExecution(t *testing.T) {
 	t.Parallel()
 

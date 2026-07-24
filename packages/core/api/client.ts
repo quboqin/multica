@@ -49,6 +49,8 @@ import type {
   RuntimeUsageByHour,
   DashboardUsageDaily,
   DashboardUsageByAgent,
+  DashboardUsageByUser,
+  DashboardUsageByUserDaily,
   DashboardAgentRunTime,
   DashboardRunTimeDaily,
   RuntimeUpdate,
@@ -173,6 +175,8 @@ import {
   DashboardAgentRunTimeListSchema,
   DashboardRunTimeDailyListSchema,
   DashboardUsageByAgentListSchema,
+  DashboardUsageByUserListSchema,
+  DashboardUsageByUserDailyListSchema,
   DashboardUsageDailyListSchema,
   EMPTY_AGENT_TEMPLATE_DETAIL,
   EMPTY_AGENT_TEMPLATE_SUMMARY_LIST,
@@ -1385,6 +1389,70 @@ export class ApiClient {
       DashboardUsageByAgentListSchema,
       [],
       { endpoint: "GET /api/dashboard/usage/by-agent" },
+    );
+  }
+
+  async getDashboardUsageByUser(
+    params: { days?: number; project_id?: string | null; tz?: string },
+  ): Promise<DashboardUsageByUser[]> {
+    const search = new URLSearchParams();
+    if (params.days) search.set("days", String(params.days));
+    if (params.project_id) search.set("project_id", params.project_id);
+    if (params.tz) search.set("tz", params.tz);
+    const raw = await this.fetch<unknown>(`/api/dashboard/usage/by-user?${search}`);
+    return parseWithFallback<DashboardUsageByUser[]>(
+      raw,
+      DashboardUsageByUserListSchema,
+      [],
+      { endpoint: "GET /api/dashboard/usage/by-user" },
+    );
+  }
+
+  async getDashboardUsageMe(
+    params: { days?: number; project_id?: string | null; tz?: string },
+  ): Promise<DashboardUsageByUser[]> {
+    const search = new URLSearchParams();
+    if (params.days) search.set("days", String(params.days));
+    if (params.project_id) search.set("project_id", params.project_id);
+    if (params.tz) search.set("tz", params.tz);
+    const raw = await this.fetch<unknown>(`/api/dashboard/usage/me?${search}`);
+    return parseWithFallback<DashboardUsageByUser[]>(
+      raw,
+      DashboardUsageByUserListSchema,
+      [],
+      { endpoint: "GET /api/dashboard/usage/me" },
+    );
+  }
+
+  async getDashboardUsageByUserDaily(
+    params: { days?: number; project_id?: string | null; tz?: string },
+  ): Promise<DashboardUsageByUserDaily[]> {
+    const search = new URLSearchParams();
+    if (params.days) search.set("days", String(params.days));
+    if (params.project_id) search.set("project_id", params.project_id);
+    if (params.tz) search.set("tz", params.tz);
+    const raw = await this.fetch<unknown>(`/api/dashboard/usage/by-user/daily?${search}`);
+    return parseWithFallback<DashboardUsageByUserDaily[]>(
+      raw,
+      DashboardUsageByUserDailyListSchema,
+      [],
+      { endpoint: "GET /api/dashboard/usage/by-user/daily" },
+    );
+  }
+
+  async getDashboardUsageMeDaily(
+    params: { days?: number; project_id?: string | null; tz?: string },
+  ): Promise<DashboardUsageByUserDaily[]> {
+    const search = new URLSearchParams();
+    if (params.days) search.set("days", String(params.days));
+    if (params.project_id) search.set("project_id", params.project_id);
+    if (params.tz) search.set("tz", params.tz);
+    const raw = await this.fetch<unknown>(`/api/dashboard/usage/me/daily?${search}`);
+    return parseWithFallback<DashboardUsageByUserDaily[]>(
+      raw,
+      DashboardUsageByUserDailyListSchema,
+      [],
+      { endpoint: "GET /api/dashboard/usage/me/daily" },
     );
   }
 
