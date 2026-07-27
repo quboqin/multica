@@ -84,6 +84,7 @@
     "no_plan": "无计划"
   },
   "preview": {
+    "open": "查看详情",
     "description": "查看需求属性和描述",
     "no_description": "暂无描述",
     "resources": "资源"

@@ -285,6 +285,18 @@ describe("ProjectsPage compact row navigation", () => {
     expect(push).not.toHaveBeenCalled();
   });
 
+  it("opens the project preview from the explicit preview button", async () => {
+    const user = userEvent.setup();
+    const push = vi.fn();
+    renderProjects(makeAdapter({ push }));
+    const row = projectRow();
+
+    await user.click(within(row).getByRole("button", { name: "Preview details" }));
+
+    expect(screen.getByText("No description")).toBeInTheDocument();
+    expect(push).not.toHaveBeenCalled();
+  });
+
   it("does not open the preview or navigate when inline controls are clicked", async () => {
     const user = userEvent.setup();
     const push = vi.fn();

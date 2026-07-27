@@ -84,6 +84,7 @@
     "no_plan": "플랜 없음"
   },
   "preview": {
+    "open": "세부 정보 보기",
     "description": "View project properties and description",
     "no_description": "No description",
     "resources": "Resources"

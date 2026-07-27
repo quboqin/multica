@@ -84,6 +84,7 @@
     "no_plan": "No plan"
   },
   "preview": {
+    "open": "Preview details",
     "description": "View project properties and description",
     "no_description": "No description",
     "resources": "Resources"

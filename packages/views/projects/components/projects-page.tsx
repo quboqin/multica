@@ -7,6 +7,7 @@ import {
   ChevronDown,
   Filter,
   FolderKanban,
+  Info,
   LayoutGrid,
   MoreHorizontal,
   Pin,
@@ -265,18 +266,18 @@ const COLUMN_WIDTHS: Record<ProjectColumnKey, number> = {
 };
 
 // Fixed tracks: edges 12+12, checkbox 16, name min 240, status 116,
-// kebab 28 = 424, plus the 12 gap-x-3 gaps between the wide template's
+// actions 64 = 460, plus the 12 gap-x-3 gaps between the wide template's
 // 13 tracks.
-const FIXED_TRACKS_WIDTH = 424 + 12 * 12;
+const FIXED_TRACKS_WIDTH = 460 + 12 * 12;
 
 // Render/track order: checkbox, name, status (core, fixed 116px),
-// progress, lead, plan, due, updated, issues, created, kebab. MUST be a literal string —
+// progress, lead, plan, due, updated, issues, created, actions. MUST be a literal string —
 // Tailwind can't see interpolated `grid-cols-[...]` arbitrary values, so an
 // interpolated width silently drops the whole template and the grid
 // collapses to one column.
 const GRID_COLS =
-  "grid-cols-[0.75rem_1rem_minmax(120px,1fr)_116px_1.75rem_0.75rem] " +
-  "@2xl:grid-cols-[0.75rem_1rem_minmax(240px,1fr)_116px_var(--pjc-progress)_var(--pjc-lead)_var(--pjc-plan)_var(--pjc-due)_var(--pjc-updated)_var(--pjc-issues)_var(--pjc-created)_1.75rem_0.75rem]";
+  "grid-cols-[0.75rem_1rem_minmax(120px,1fr)_116px_4rem_0.75rem] " +
+  "@2xl:grid-cols-[0.75rem_1rem_minmax(240px,1fr)_116px_var(--pjc-progress)_var(--pjc-lead)_var(--pjc-plan)_var(--pjc-due)_var(--pjc-updated)_var(--pjc-issues)_var(--pjc-created)_4rem_0.75rem]";
 
 const ROW_PREVIEW_IGNORE_SELECTOR =
   "a, button, input, textarea, select, [role='button'], [role='checkbox'], [role='menuitem'], [data-row-preview-ignore]";
@@ -491,6 +492,7 @@ function ProjectTableRow({
   rowHref: string;
   onOpenPreview: (project: Project) => void;
 }) {
+  const { t } = useT("projects");
   const formatRelativeDate = useFormatRelativeDate();
   const updateProject = useUpdateProject();
   const handleUpdate = useCallback(
@@ -616,7 +618,26 @@ function ProjectTableRow({
       )}
 
       <ListGridCell className="justify-end px-0">
-        <span onClick={stopRowNavigation} onAuxClick={stopRowNavigation} className="flex items-center">
+        <span onClick={stopRowNavigation} onAuxClick={stopRowNavigation} className="flex items-center justify-end gap-0.5">
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <button
+                  type="button"
+                  aria-label={t(($) => $.preview.open)}
+                  className="flex size-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
+                  onClick={(e) => {
+                    stopRowNavigation(e);
+                    onOpenPreview(project);
+                  }}
+                  onAuxClick={stopRowNavigation}
+                >
+                  <Info className="size-4" />
+                </button>
+              }
+            />
+            <TooltipContent side="bottom">{t(($) => $.preview.open)}</TooltipContent>
+          </Tooltip>
           <ProjectRowActions project={project} pinned={pinned} canDelete={canDelete} />
         </span>
       </ListGridCell>

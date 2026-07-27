@@ -84,6 +84,7 @@
     "no_plan": "プランなし"
   },
   "preview": {
+    "open": "詳細を表示",
     "description": "View project properties and description",
     "no_description": "No description",
     "resources": "Resources"
