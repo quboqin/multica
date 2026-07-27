@@ -53,6 +53,7 @@ import { SwimLaneView } from "../../issues/components/swimlane-view";
 import { BatchActionToolbar } from "../../issues/components/batch-action-toolbar";
 import { Skeleton } from "@multica/ui/components/ui/skeleton";
 import { Button } from "@multica/ui/components/ui/button";
+import { Input } from "@multica/ui/components/ui/input";
 import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from "@multica/ui/components/ui/resizable";
 import { Sheet, SheetContent } from "@multica/ui/components/ui/sheet";
 import { useIsMobile } from "@multica/ui/hooks/use-mobile";
@@ -428,17 +429,16 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
   const { data: project, isLoading } = useQuery(projectDetailOptions(wsId, projectId));
   const recordRecentContext = useRecentContextStore((s) => s.recordVisit);
   useEffect(() => {
-    if (project) {
-      recordRecentContext(wsId, {
-        type: "project",
-        id: project.id,
-        label: project.title,
-        subtitle: project.description ?? undefined,
-        icon: project.icon,
-        projectStatus: project.status,
-      });
-    }
-  }, [project?.id, project?.title, project?.description, project?.icon, project?.status, recordRecentContext, wsId]);
+    if (!project) return;
+    recordRecentContext(wsId, {
+      type: "project",
+      id: project.id,
+      label: project.title,
+      subtitle: project.description ?? undefined,
+      icon: project.icon,
+      projectStatus: project.status,
+    });
+  }, [project, recordRecentContext, wsId]);
   const projectScope = `project:${projectId}`;
   const projectFilter = useMemo<MyIssuesFilter>(
     () => ({ project_id: projectId }),
@@ -730,6 +730,28 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
                 ))}
               </DropdownMenuContent>
             </DropdownMenu>
+          </PropRow>
+          <PropRow label={t(($) => $.table.start_date)}>
+            <Input
+              aria-label={t(($) => $.table.start_date)}
+              type="date"
+              value={project.start_date ?? ""}
+              onChange={(event) =>
+                handleUpdateField({ start_date: event.target.value || null })
+              }
+              className="h-7 w-[9.25rem] max-w-full text-xs tabular-nums"
+            />
+          </PropRow>
+          <PropRow label={t(($) => $.table.due_date)}>
+            <Input
+              aria-label={t(($) => $.table.due_date)}
+              type="date"
+              value={project.due_date ?? ""}
+              onChange={(event) =>
+                handleUpdateField({ due_date: event.target.value || null })
+              }
+              className="h-7 w-[9.25rem] max-w-full text-xs tabular-nums"
+            />
           </PropRow>
           <PropRow label={t(($) => $.table.labels)}>
             <ProjectLabelPicker projectId={project.id} />

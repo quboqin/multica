@@ -518,7 +518,7 @@ export function CreateProjectModal({
               type="date"
               value={startDate}
               onChange={(event) => updateStartDate(event.target.value)}
-              className="h-4 w-[7.5rem] bg-transparent text-xs outline-none"
+              className="h-4 w-[9.25rem] max-w-full bg-transparent text-xs tabular-nums outline-none"
             />
           </label>
 
@@ -529,7 +529,7 @@ export function CreateProjectModal({
               type="date"
               value={dueDate}
               onChange={(event) => updateDueDate(event.target.value)}
-              className="h-4 w-[7.5rem] bg-transparent text-xs outline-none"
+              className="h-4 w-[9.25rem] max-w-full bg-transparent text-xs tabular-nums outline-none"
             />
           </label>
 

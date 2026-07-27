@@ -998,7 +998,7 @@ function ProjectPreviewProp({
   children: React.ReactNode;
 }) {
   return (
-    <div className="grid grid-cols-[5.5rem_minmax(0,1fr)] items-start gap-3 py-1.5">
+    <div className="grid grid-cols-[4.75rem_minmax(0,1fr)] items-start gap-3 py-1.5">
       <span className="text-xs text-muted-foreground">{label}</span>
       <div className="min-w-0 text-xs text-foreground">{children}</div>
     </div>
@@ -1227,7 +1227,7 @@ function ProjectQuickViewDialog({
           </DialogDescription>
         </DialogHeader>
 
-        <div className="grid gap-5 md:grid-cols-[minmax(0,1fr)_14rem]">
+        <div className="grid gap-5 md:grid-cols-[minmax(0,1fr)_18rem]">
           <section className="min-w-0">
             <h3 className="mb-2 text-xs font-medium text-muted-foreground">
               {t(($) => $.detail.section_description)}
@@ -1336,7 +1336,7 @@ function ProjectQuickViewDialog({
                 onChange={(event) =>
                   handleDraftUpdate({ start_date: event.target.value || null })
                 }
-                className="h-7 text-xs"
+                className="h-7 w-[9.25rem] max-w-full text-xs tabular-nums"
               />
             </ProjectPreviewProp>
             <ProjectPreviewProp label={t(($) => $.table.due_date)}>
@@ -1348,7 +1348,7 @@ function ProjectQuickViewDialog({
                   handleDraftUpdate({ due_date: event.target.value || null })
                 }
                 className={cn(
-                  "h-7 text-xs",
+                  "h-7 w-[9.25rem] max-w-full text-xs tabular-nums",
                   draft.due_date && isPastDateOnly(draft.due_date) && "text-destructive",
                 )}
               />
