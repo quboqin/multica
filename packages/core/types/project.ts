@@ -14,6 +14,8 @@ export interface Project {
   lead_type: "member" | "agent" | null;
   lead_id: string | null;
   milestone_id: string | null;
+  start_date: string | null;
+  due_date: string | null;
   created_at: string;
   updated_at: string;
   issue_count: number;

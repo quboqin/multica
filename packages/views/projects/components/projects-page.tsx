@@ -55,14 +55,20 @@ import {
   useCreatePin,
   useDeletePin,
 } from "@multica/core/pins";
-import { PROJECT_STATUS_CONFIG, PROJECT_STATUS_ORDER } from "@multica/core/projects/config";
+import { milestoneListOptions } from "@multica/core/milestones";
+import {
+  PROJECT_PRIORITY_CONFIG,
+  PROJECT_STATUS_CONFIG,
+  PROJECT_STATUS_ORDER,
+} from "@multica/core/projects/config";
+import { formatDateOnly, isPastDateOnly } from "@multica/core/issues/date";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { useWorkspacePaths } from "@multica/core/paths";
 import { useAuthStore } from "@multica/core/auth";
 import { useActorName } from "@multica/core/workspace/hooks";
 import { memberListOptions } from "@multica/core/workspace/queries";
 import { useModalStore } from "@multica/core/modals";
-import { AppLink, useRowLink } from "../../navigation";
+import { AppLink } from "../../navigation";
 import { ActorAvatar } from "../../common/actor-avatar";
 import { FILTER_ITEM_CLASS, HoverCheck } from "../../common/hover-check";
 import { Skeleton } from "@multica/ui/components/ui/skeleton";
@@ -112,6 +118,7 @@ import {
   TooltipTrigger,
 } from "@multica/ui/components/ui/tooltip";
 import type {
+  Milestone,
   MemberWithUser,
   Project,
   ProjectPriority,
@@ -122,9 +129,11 @@ import { PageHeader } from "../../layout/page-header";
 import { ProjectIcon } from "./project-icon";
 import { useT } from "../../i18n";
 import { matchesPinyin } from "../../editor/extensions/pinyin-match";
-import { useFormatRelativeDate, useProjectStatusLabels } from "./labels";
+import { useFormatRelativeDate, useProjectPriorityLabels, useProjectStatusLabels } from "./labels";
 import { ProjectStatusBadge, ProjectPriorityBadge } from "./project-badge";
 import { ProjectLeadPicker } from "./project-lead-picker";
+import { LabelChip } from "../../labels/label-chip";
+import { Markdown } from "../../common/markdown";
 
 // Sort order maps for the enum columns (header sort needs a total order).
 const PRIORITY_ORDER: Record<ProjectPriority, number> = {
@@ -219,6 +228,19 @@ function makeProjectKanbanCollision(columnIds: Set<string>): CollisionDetection 
 const progressOf = (p: Project) =>
   p.issue_count > 0 ? p.done_count / p.issue_count : -1;
 
+function formatProjectDate(date: string | null | undefined): string {
+  return formatDateOnly(date, { month: "short", day: "numeric" }, "en-US");
+}
+
+function milestoneStatusDotClass(status: string): string {
+  if (status === "completed" || status === "cancelled") {
+    return "bg-muted-foreground";
+  }
+  if (status === "in_progress") return "bg-warning";
+  if (status === "paused") return "bg-muted-foreground";
+  return "bg-info";
+}
+
 // Composite "type:id" lead value so the string[] filter holds member/agent
 // refs alike.
 function leadFilterValue(p: Project): string | null {
@@ -227,32 +249,34 @@ function leadFilterValue(p: Project): string | null {
 
 // ---------------------------------------------------------------------------
 // Table (compact) view — ListGrid. Name + status are the core columns;
-// priority/progress/lead/issues/created collapse below @2xl, with min-width
-// + the wrapper's overflow as the escape valve. Rows use whole-row mouse
-// navigation; inline controls stop propagation so edit/menu clicks stay local.
+// progress/lead/plan/due/updated/issues/created collapse below @2xl, with min-width
+// + the wrapper's overflow as the escape valve. The title link keeps direct
+// navigation; non-control row surface opens the quick project preview.
 // ---------------------------------------------------------------------------
 
 const COLUMN_WIDTHS: Record<ProjectColumnKey, number> = {
-  priority: 116,
   progress: 88,
   lead: 132,
+  plan: 148,
+  due_date: 104,
+  updated: 104,
   issues: 80,
   created: 104,
 };
 
-// Fixed tracks: edges 12+12, checkbox 16, name min 200, status 116,
-// kebab 28 = 384, plus the 10 gap-x-3 gaps between the wide template's
-// 11 tracks.
-const FIXED_TRACKS_WIDTH = 384 + 10 * 12;
+// Fixed tracks: edges 12+12, checkbox 16, name min 240, status 116,
+// kebab 28 = 424, plus the 12 gap-x-3 gaps between the wide template's
+// 13 tracks.
+const FIXED_TRACKS_WIDTH = 424 + 12 * 12;
 
-// Render/track order: checkbox, name, status (core, fixed 116px), priority,
-// progress, lead, issues, created, kebab. MUST be a literal string —
+// Render/track order: checkbox, name, status (core, fixed 116px),
+// progress, lead, plan, due, updated, issues, created, kebab. MUST be a literal string —
 // Tailwind can't see interpolated `grid-cols-[...]` arbitrary values, so an
 // interpolated width silently drops the whole template and the grid
 // collapses to one column.
 const GRID_COLS =
   "grid-cols-[0.75rem_1rem_minmax(120px,1fr)_116px_1.75rem_0.75rem] " +
-  "@2xl:grid-cols-[0.75rem_1rem_minmax(200px,1fr)_116px_var(--pjc-priority)_var(--pjc-progress)_var(--pjc-lead)_var(--pjc-issues)_var(--pjc-created)_1.75rem_0.75rem]";
+  "@2xl:grid-cols-[0.75rem_1rem_minmax(240px,1fr)_116px_var(--pjc-progress)_var(--pjc-lead)_var(--pjc-plan)_var(--pjc-due)_var(--pjc-updated)_var(--pjc-issues)_var(--pjc-created)_1.75rem_0.75rem]";
 
 const stopRowNavigation = (e: MouseEvent) => e.stopPropagation();
 
@@ -268,9 +292,11 @@ function columnTrackVars(
       0,
     );
   return {
-    "--pjc-priority": width("priority"),
     "--pjc-progress": width("progress"),
     "--pjc-lead": width("lead"),
+    "--pjc-plan": width("plan"),
+    "--pjc-due": width("due_date"),
+    "--pjc-updated": width("updated"),
     "--pjc-issues": width("issues"),
     "--pjc-created": width("created"),
     "--pjc-minw": `${minWidth}px`,
@@ -307,8 +333,8 @@ function ProgressRing({ project }: { project: Project }) {
   );
 }
 
-// Compact rows own whole-row navigation; callers stop propagation around this
-// menu so action clicks do not bubble into the rowLink handler.
+// Compact rows open a preview from the non-control row surface; callers stop
+// propagation around this menu so action clicks stay local.
 function ProjectRowActions({
   project,
   pinned,
@@ -436,22 +462,24 @@ function CheckboxCell({
 
 function ProjectTableRow({
   project,
+  milestone,
   pinned,
   canDelete,
   isColVisible,
   selected,
   onToggleSelect,
   rowHref,
-  rowLink,
+  onOpenPreview,
 }: {
   project: Project;
+  milestone: Milestone | null;
   pinned: boolean;
   canDelete: boolean;
   isColVisible: (key: ProjectColumnKey) => boolean;
   selected: boolean;
   onToggleSelect: () => void;
   rowHref: string;
-  rowLink: ReturnType<typeof useRowLink>;
+  onOpenPreview: (project: Project) => void;
 }) {
   const formatRelativeDate = useFormatRelativeDate();
   const updateProject = useUpdateProject();
@@ -462,29 +490,27 @@ function ProjectTableRow({
 
   return (
     <ListGridRow
-      className={`h-11 cursor-pointer ${selected ? "bg-accent/30" : ""}`}
-      {...rowLink(rowHref)}
+      className={`h-auto min-h-14 cursor-pointer py-1.5 ${selected ? "bg-accent/30" : ""}`}
+      onClick={() => onOpenPreview(project)}
     >
       <CheckboxCell checked={selected} onToggle={onToggleSelect} />
-      <ListGridCell className="gap-2">
-        <ProjectIcon project={project} size="sm" />
-        <span className="min-w-0 truncate text-sm font-medium">
+      <ListGridCell className="items-start gap-2">
+        <ProjectIcon project={project} size="sm" className="mt-0.5" />
+        <AppLink
+          href={rowHref}
+          className="min-w-0 flex-1 break-words text-sm font-medium leading-snug line-clamp-2 hover:text-primary"
+          title={project.title}
+          onClickCapture={stopRowNavigation}
+          onAuxClick={stopRowNavigation}
+        >
           {project.title}
-        </span>
+        </AppLink>
       </ListGridCell>
 
       {/* status — core column, always visible */}
       <ListGridCell onClick={stopRowNavigation} onAuxClick={stopRowNavigation}>
         <ProjectStatusBadge project={project} handleUpdate={handleUpdate} align="start" />
       </ListGridCell>
-
-      {isColVisible("priority") ? (
-        <ListGridCell className="hidden @2xl:flex" onClick={stopRowNavigation} onAuxClick={stopRowNavigation}>
-          <ProjectPriorityBadge project={project} handleUpdate={handleUpdate} align="start" />
-        </ListGridCell>
-      ) : (
-        <ListGridCell className="hidden px-0 @2xl:flex" />
-      )}
 
       {isColVisible("progress") ? (
         <ListGridCell className="hidden @2xl:flex">
@@ -516,6 +542,43 @@ function ProjectTableRow({
               </button>
             )}
           />
+        </ListGridCell>
+      ) : (
+        <ListGridCell className="hidden px-0 @2xl:flex" />
+      )}
+
+      {isColVisible("plan") ? (
+        <ListGridCell className="hidden @2xl:flex">
+          {milestone ? (
+            <span className="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
+              <span className={cn("size-2 shrink-0 rounded-full", milestoneStatusDotClass(milestone.status))} />
+              <span className="min-w-0 truncate">{milestone.title}</span>
+            </span>
+          ) : (
+            <span className="text-xs text-muted-foreground/50">—</span>
+          )}
+        </ListGridCell>
+      ) : (
+        <ListGridCell className="hidden px-0 @2xl:flex" />
+      )}
+
+      {isColVisible("due_date") ? (
+        <ListGridCell className="hidden whitespace-nowrap text-xs tabular-nums @2xl:flex">
+          {project.due_date ? (
+            <span className={cn(isPastDateOnly(project.due_date) ? "text-destructive" : "text-muted-foreground")}>
+              {formatProjectDate(project.due_date)}
+            </span>
+          ) : (
+            <span className="text-muted-foreground/50">—</span>
+          )}
+        </ListGridCell>
+      ) : (
+        <ListGridCell className="hidden px-0 @2xl:flex" />
+      )}
+
+      {isColVisible("updated") ? (
+        <ListGridCell className="hidden whitespace-nowrap text-xs tabular-nums text-muted-foreground @2xl:flex">
+          {formatRelativeDate(project.updated_at)}
         </ListGridCell>
       ) : (
         <ListGridCell className="hidden px-0 @2xl:flex" />
@@ -592,17 +655,6 @@ function ProjectTableHeader({
       <ListGridHeaderCell sorted={sorted("status")} onSort={() => onSort("status")}>
         {t(($) => $.table.status)}
       </ListGridHeaderCell>
-      {isColVisible("priority") ? (
-        <ListGridHeaderCell
-          className="hidden @2xl:flex"
-          sorted={sorted("priority")}
-          onSort={() => onSort("priority")}
-        >
-          {t(($) => $.table.priority)}
-        </ListGridHeaderCell>
-      ) : (
-        <ListGridHeaderCell className="hidden px-0 @2xl:flex" />
-      )}
       {isColVisible("progress") ? (
         <ListGridHeaderCell
           className="hidden @2xl:flex"
@@ -617,6 +669,35 @@ function ProjectTableHeader({
       {isColVisible("lead") ? (
         <ListGridHeaderCell className="hidden @2xl:flex">
           {t(($) => $.table.lead)}
+        </ListGridHeaderCell>
+      ) : (
+        <ListGridHeaderCell className="hidden px-0 @2xl:flex" />
+      )}
+      {isColVisible("plan") ? (
+        <ListGridHeaderCell className="hidden @2xl:flex">
+          {t(($) => $.table.plan)}
+        </ListGridHeaderCell>
+      ) : (
+        <ListGridHeaderCell className="hidden px-0 @2xl:flex" />
+      )}
+      {isColVisible("due_date") ? (
+        <ListGridHeaderCell
+          className="hidden @2xl:flex"
+          sorted={sorted("due_date")}
+          onSort={() => onSort("due_date")}
+        >
+          {t(($) => $.table.due_date)}
+        </ListGridHeaderCell>
+      ) : (
+        <ListGridHeaderCell className="hidden px-0 @2xl:flex" />
+      )}
+      {isColVisible("updated") ? (
+        <ListGridHeaderCell
+          className="hidden @2xl:flex"
+          sorted={sorted("updated")}
+          onSort={() => onSort("updated")}
+        >
+          {t(($) => $.table.updated)}
         </ListGridHeaderCell>
       ) : (
         <ListGridHeaderCell className="hidden px-0 @2xl:flex" />
@@ -673,45 +754,52 @@ function ProjectCard({
   return (
     <div className="group/card group/row flex flex-col rounded-md border bg-card transition-colors hover:border-primary/50">
       <div className="p-3 pb-2">
-        <div className="flex items-center gap-2">
+        <div className="flex items-start gap-2">
           <AppLink
             href={wsPaths.projectDetail(project.id)}
-            className="flex min-w-0 flex-1 items-center gap-2"
+            className="flex min-w-0 flex-1 items-start gap-2"
           >
-            <ProjectIcon project={project} size="sm" />
-            <h3 className="truncate text-sm font-medium">{project.title}</h3>
+            <ProjectIcon project={project} size="sm" className="mt-0.5" />
+            <h3
+              title={project.title}
+              className="min-w-0 flex-1 break-words text-sm font-medium leading-snug line-clamp-2"
+            >
+              {project.title}
+            </h3>
           </AppLink>
           <ProjectRowActions project={project} pinned={pinned} canDelete={canDelete} />
-          <ProjectStatusBadge project={project} handleUpdate={handleUpdate} triggerClassName="shrink-0" />
         </div>
 
-        {project.issue_count > 0 ? (
-          <div className="flex items-center justify-end gap-1.5 pt-2">
-            <div className="relative h-4 w-4">
-              <svg className="h-4 w-4 -rotate-90" viewBox="0 0 16 16">
-                <circle className="text-muted" strokeWidth="2" stroke="currentColor" fill="none" r="6" cx="8" cy="8" />
-                <circle
-                  className="text-emerald-500"
-                  strokeWidth="2"
-                  stroke="currentColor"
-                  fill="none"
-                  r="6"
-                  cx="8"
-                  cy="8"
-                  strokeDasharray={`${progressPercent * 0.377} 37.7`}
-                  strokeLinecap="round"
-                />
-              </svg>
+        <div className="mt-2 flex min-h-5 items-center justify-between gap-2">
+          <ProjectStatusBadge project={project} handleUpdate={handleUpdate} triggerClassName="shrink-0" align="start" />
+          {project.issue_count > 0 ? (
+            <div className="flex items-center justify-end gap-1.5">
+              <div className="relative h-4 w-4">
+                <svg className="h-4 w-4 -rotate-90" viewBox="0 0 16 16">
+                  <circle className="text-muted" strokeWidth="2" stroke="currentColor" fill="none" r="6" cx="8" cy="8" />
+                  <circle
+                    className="text-emerald-500"
+                    strokeWidth="2"
+                    stroke="currentColor"
+                    fill="none"
+                    r="6"
+                    cx="8"
+                    cy="8"
+                    strokeDasharray={`${progressPercent * 0.377} 37.7`}
+                    strokeLinecap="round"
+                  />
+                </svg>
+              </div>
+              <span className="text-[10px] tabular-nums text-muted-foreground">
+                {project.done_count}/{project.issue_count}
+              </span>
             </div>
-            <span className="text-[10px] tabular-nums text-muted-foreground">
-              {project.done_count}/{project.issue_count}
+          ) : (
+            <span className="text-[10px] text-muted-foreground">
+              {t(($) => $.detail.no_issues_yet)}
             </span>
-          </div>
-        ) : (
-          <span className="flex justify-end pt-2 text-[10px] text-muted-foreground">
-            {t(($) => $.detail.no_issues_yet)}
-          </span>
-        )}
+          )}
+        </div>
       </div>
 
       <div className="mt-0 flex items-center justify-between border-t px-3 pb-3 pt-2">
@@ -755,8 +843,24 @@ const STATUS_VALUES: ProjectStatus[] = [
   "cancelled",
 ];
 const PRIORITY_VALUES: ProjectPriority[] = ["urgent", "high", "medium", "low", "none"];
-const COLUMN_KEYS: ProjectColumnKey[] = ["priority", "progress", "lead", "issues", "created"];
-const SORT_FIELDS: ProjectSortField[] = ["name", "priority", "status", "progress", "created"];
+const COLUMN_KEYS: ProjectColumnKey[] = [
+  "progress",
+  "lead",
+  "plan",
+  "due_date",
+  "updated",
+  "issues",
+  "created",
+];
+const SORT_FIELDS: ProjectSortField[] = [
+  "name",
+  "priority",
+  "status",
+  "progress",
+  "due_date",
+  "updated",
+  "created",
+];
 
 function countActiveFilters(f: ProjectListFilters): number {
   let c = 0;
@@ -859,6 +963,159 @@ function ProjectBatchToolbar({
         </DialogContent>
       </Dialog>
     </>
+  );
+}
+
+function ProjectPreviewProp({
+  label,
+  children,
+}: {
+  label: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="grid grid-cols-[5.5rem_minmax(0,1fr)] items-start gap-3 py-1.5">
+      <span className="text-xs text-muted-foreground">{label}</span>
+      <div className="min-w-0 text-xs text-foreground">{children}</div>
+    </div>
+  );
+}
+
+function ProjectQuickViewDialog({
+  project,
+  milestone,
+  open,
+  onOpenChange,
+  getActorName,
+}: {
+  project: Project | null;
+  milestone: Milestone | null;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  getActorName: (type: string, id: string) => string;
+}) {
+  const { t } = useT("projects");
+  const statusLabels = useProjectStatusLabels();
+  const priorityLabels = useProjectPriorityLabels();
+
+  if (!project) return null;
+
+  const statusCfg = PROJECT_STATUS_CONFIG[project.status];
+  const priorityCfg = PROJECT_PRIORITY_CONFIG[project.priority];
+  const leadName =
+    project.lead_type && project.lead_id
+      ? getActorName(project.lead_type, project.lead_id)
+      : t(($) => $.lead.no_lead);
+  const progress =
+    project.issue_count > 0
+      ? `${project.done_count}/${project.issue_count}`
+      : t(($) => $.detail.no_issues_yet);
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-h-[min(720px,calc(100vh-2rem))] overflow-y-auto sm:max-w-2xl">
+        <DialogHeader>
+          <div className="flex min-w-0 items-start gap-2 pr-6">
+            <ProjectIcon project={project} size="sm" className="mt-0.5" />
+            <DialogTitle className="min-w-0 break-words leading-snug">
+              {project.title}
+            </DialogTitle>
+          </div>
+          <DialogDescription className="sr-only">
+            {t(($) => $.preview.description)}
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="grid gap-5 md:grid-cols-[minmax(0,1fr)_14rem]">
+          <section className="min-w-0">
+            <h3 className="mb-2 text-xs font-medium text-muted-foreground">
+              {t(($) => $.detail.section_description)}
+            </h3>
+            {project.description ? (
+              <div className="max-h-80 overflow-y-auto rounded-md border bg-background/60 px-3 py-2">
+                <Markdown className="prose-sm max-w-none">
+                  {project.description}
+                </Markdown>
+              </div>
+            ) : (
+              <div className="rounded-md border border-dashed px-3 py-6 text-center text-xs text-muted-foreground">
+                {t(($) => $.preview.no_description)}
+              </div>
+            )}
+          </section>
+
+          <aside className="min-w-0 rounded-md border bg-muted/25 px-3 py-2">
+            <ProjectPreviewProp label={t(($) => $.table.status)}>
+              <span className={cn("inline-flex items-center rounded-full px-2 py-0.5 font-medium", statusCfg.badgeBg, statusCfg.badgeText)}>
+                {statusLabels[project.status]}
+              </span>
+            </ProjectPreviewProp>
+            <ProjectPreviewProp label={t(($) => $.table.priority)}>
+              <span className={cn("inline-flex items-center rounded-full px-2 py-0.5 font-medium", priorityCfg.badgeBg, priorityCfg.badgeText)}>
+                {priorityLabels[project.priority]}
+              </span>
+            </ProjectPreviewProp>
+            <ProjectPreviewProp label={t(($) => $.table.lead)}>
+              <span className="truncate text-muted-foreground">{leadName}</span>
+            </ProjectPreviewProp>
+            <ProjectPreviewProp label={t(($) => $.table.plan)}>
+              {milestone ? (
+                <span className="flex min-w-0 items-center gap-1.5">
+                  <span className={cn("size-2 shrink-0 rounded-full", milestoneStatusDotClass(milestone.status))} />
+                  <span className="min-w-0 truncate">{milestone.title}</span>
+                </span>
+              ) : (
+                <span className="text-muted-foreground">{t(($) => $.detail.no_plan)}</span>
+              )}
+            </ProjectPreviewProp>
+            <ProjectPreviewProp label={t(($) => $.table.progress)}>
+              <span className="tabular-nums text-muted-foreground">{progress}</span>
+            </ProjectPreviewProp>
+            <ProjectPreviewProp label={t(($) => $.table.start_date)}>
+              <span className="tabular-nums text-muted-foreground">
+                {formatProjectDate(project.start_date) || "—"}
+              </span>
+            </ProjectPreviewProp>
+            <ProjectPreviewProp label={t(($) => $.table.due_date)}>
+              {project.due_date ? (
+                <span className={cn("tabular-nums", isPastDateOnly(project.due_date) ? "text-destructive" : "text-muted-foreground")}>
+                  {formatProjectDate(project.due_date)}
+                </span>
+              ) : (
+                <span className="text-muted-foreground">—</span>
+              )}
+            </ProjectPreviewProp>
+            <ProjectPreviewProp label={t(($) => $.table.updated)}>
+              <span className="tabular-nums text-muted-foreground">
+                {formatProjectDate(project.updated_at) || project.updated_at}
+              </span>
+            </ProjectPreviewProp>
+            <ProjectPreviewProp label={t(($) => $.table.created)}>
+              <span className="tabular-nums text-muted-foreground">
+                {formatProjectDate(project.created_at) || project.created_at}
+              </span>
+            </ProjectPreviewProp>
+            <ProjectPreviewProp label={t(($) => $.table.issues)}>
+              <span className="tabular-nums text-muted-foreground">{project.issue_count}</span>
+            </ProjectPreviewProp>
+            <ProjectPreviewProp label={t(($) => $.preview.resources)}>
+              <span className="tabular-nums text-muted-foreground">{project.resource_count}</span>
+            </ProjectPreviewProp>
+            <ProjectPreviewProp label={t(($) => $.table.labels)}>
+              {project.labels && project.labels.length > 0 ? (
+                <span className="flex flex-wrap gap-1">
+                  {project.labels.map((label) => (
+                    <LabelChip key={label.id} label={label} fullName />
+                  ))}
+                </span>
+              ) : (
+                <span className="text-muted-foreground">—</span>
+              )}
+            </ProjectPreviewProp>
+          </aside>
+        </div>
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -1140,7 +1397,6 @@ export function ProjectsPage() {
   const { t } = useT("projects");
   const wsId = useWorkspaceId();
   const wsPaths = useWorkspacePaths();
-  const rowLink = useRowLink();
   const currentUser = useAuthStore((s) => s.user);
   const { getActorName } = useActorName();
   const initialMilestoneId =
@@ -1169,6 +1425,7 @@ export function ProjectsPage() {
     ),
   );
   const { data: members = [] } = useQuery(memberListOptions(wsId));
+  const { data: milestones = [] } = useQuery(milestoneListOptions(wsId));
   const { data: pins = [] } = useQuery({
     ...pinListOptions(wsId, currentUser?.id ?? ""),
     enabled: !!wsId && !!currentUser?.id,
@@ -1191,8 +1448,15 @@ export function ProjectsPage() {
     return s;
   }, [pins]);
 
+  const milestoneById = useMemo(() => {
+    const map = new Map<string, Milestone>();
+    for (const milestone of milestones) map.set(milestone.id, milestone);
+    return map;
+  }, [milestones]);
+
   const [search, setSearch] = useState("");
   const [selectedIds, setSelectedIds] = useState<ReadonlySet<string>>(new Set());
+  const [previewProject, setPreviewProject] = useState<Project | null>(null);
   const toggleSelected = (id: string) =>
     setSelectedIds((prev) => {
       const next = new Set(prev);
@@ -1253,6 +1517,21 @@ export function ProjectsPage() {
       if (sortField === "progress") {
         return (progressOf(a) - progressOf(b)) * dir || a.title.localeCompare(b.title);
       }
+      if (sortField === "due_date") {
+        if (!a.due_date && !b.due_date) return a.title.localeCompare(b.title);
+        if (!a.due_date) return 1;
+        if (!b.due_date) return -1;
+        return (
+          (Date.parse(a.due_date) - Date.parse(b.due_date)) * dir ||
+          a.title.localeCompare(b.title)
+        );
+      }
+      if (sortField === "updated") {
+        return (
+          (Date.parse(a.updated_at) - Date.parse(b.updated_at)) * dir ||
+          a.title.localeCompare(b.title)
+        );
+      }
       return (Date.parse(a.created_at) - Date.parse(b.created_at)) * dir;
     });
     return sorted;
@@ -1273,17 +1552,25 @@ export function ProjectsPage() {
           ? t(($) => $.table.status)
           : f === "progress"
             ? t(($) => $.table.progress)
-            : t(($) => $.table.created);
+            : f === "due_date"
+              ? t(($) => $.table.due_date)
+              : f === "updated"
+                ? t(($) => $.table.updated)
+                : t(($) => $.table.created);
   const columnLabel = (k: ProjectColumnKey) =>
-    k === "priority"
-      ? t(($) => $.table.priority)
-      : k === "progress"
-        ? t(($) => $.table.progress)
-        : k === "lead"
-          ? t(($) => $.table.lead)
-          : k === "issues"
-            ? t(($) => $.table.issues)
-            : t(($) => $.table.created);
+    k === "progress"
+      ? t(($) => $.table.progress)
+      : k === "lead"
+        ? t(($) => $.table.lead)
+        : k === "plan"
+          ? t(($) => $.table.plan)
+          : k === "due_date"
+            ? t(($) => $.table.due_date)
+            : k === "updated"
+              ? t(($) => $.table.updated)
+              : k === "issues"
+                ? t(($) => $.table.issues)
+                : t(($) => $.table.created);
 
   const showEmpty = !isLoading && projects.length === 0;
   const countBadge = (n: number) => (
@@ -1325,6 +1612,20 @@ export function ProjectsPage() {
         </div>
       ) : (
         <>
+          <ProjectQuickViewDialog
+            project={previewProject}
+            milestone={
+              previewProject?.milestone_id
+                ? (milestoneById.get(previewProject.milestone_id) ?? null)
+                : null
+            }
+            open={previewProject != null}
+            onOpenChange={(open) => {
+              if (!open) setPreviewProject(null);
+            }}
+            getActorName={getActorName}
+          />
+
           {/* Toolbar */}
           <div className="flex h-12 shrink-0 items-center justify-between gap-2 px-5">
             <div className="flex min-w-0 items-center gap-2">
@@ -1591,13 +1892,18 @@ export function ProjectsPage() {
                   <ProjectTableRow
                     key={project.id}
                     project={project}
+                    milestone={
+                      project.milestone_id
+                        ? (milestoneById.get(project.milestone_id) ?? null)
+                        : null
+                    }
                     pinned={pinnedProjectIds.has(project.id)}
                     canDelete={isWorkspaceAdmin}
                     isColVisible={isColVisible}
                     selected={selectedIds.has(project.id)}
                     onToggleSelect={() => toggleSelected(project.id)}
                     rowHref={wsPaths.projectDetail(project.id)}
-                    rowLink={rowLink}
+                    onOpenPreview={setPreviewProject}
                   />
                 ))}
               </ListGrid>
@@ -1628,7 +1934,7 @@ function LoadingState({ isCompact }: { isCompact: boolean }) {
       <div className="min-h-0 flex-1 overflow-auto px-5 pt-4">
         <div className="space-y-2">
           {Array.from({ length: 6 }).map((_, i) => (
-            <Skeleton key={i} className="h-11 w-full rounded-md" />
+            <Skeleton key={i} className="h-14 w-full rounded-md" />
           ))}
         </div>
       </div>

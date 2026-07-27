@@ -28,6 +28,8 @@ type ProjectResponse struct {
 	LeadType    *string          `json:"lead_type"`
 	LeadID      *string          `json:"lead_id"`
 	MilestoneID *string          `json:"milestone_id"`
+	StartDate   *string          `json:"start_date"`
+	DueDate     *string          `json:"due_date"`
 	CreatedAt   string           `json:"created_at"`
 	UpdatedAt   string           `json:"updated_at"`
 	IssueCount  int64            `json:"issue_count"`
@@ -52,6 +54,8 @@ func projectToResponse(p db.Project) ProjectResponse {
 		LeadType:    textToPtr(p.LeadType),
 		LeadID:      uuidToPtr(p.LeadID),
 		MilestoneID: uuidToPtr(p.MilestoneID),
+		StartDate:   dateToPtr(p.StartDate),
+		DueDate:     dateToPtr(p.DueDate),
 		CreatedAt:   timestampToString(p.CreatedAt),
 		UpdatedAt:   timestampToString(p.UpdatedAt),
 	}

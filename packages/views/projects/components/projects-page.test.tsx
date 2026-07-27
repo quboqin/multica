@@ -1,6 +1,6 @@
 import React from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, screen, within } from "@testing-library/react";
+import { screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { Project } from "@multica/core/types";
 import { renderWithI18n } from "../../test/i18n";
@@ -187,6 +187,8 @@ const PROJECT: Project = {
   lead_type: null,
   lead_id: null,
   milestone_id: null,
+  start_date: null,
+  due_date: null,
   created_at: "2026-06-01T00:00:00Z",
   updated_at: "2026-06-01T00:00:00Z",
   issue_count: 3,
@@ -243,28 +245,38 @@ beforeEach(() => {
 });
 
 describe("ProjectsPage compact row navigation", () => {
-  it("renders the project name as text, not a title link", () => {
+  it("renders the project name as the title link", () => {
     renderProjects();
 
     const row = projectRow();
-    expect(within(row).getByText(PROJECT.title).tagName).toBe("SPAN");
     expect(
-      within(row).queryByRole("link", { name: PROJECT.title }),
-    ).not.toBeInTheDocument();
+      within(row).getByRole("link", { name: PROJECT.title }),
+    ).toHaveAttribute("href", "/test-workspace/projects/project-1");
   });
 
-  it("navigates from the row surface", async () => {
+  it("navigates from the title link", async () => {
+    const user = userEvent.setup();
+    const push = vi.fn();
+    renderProjects(makeAdapter({ push }));
+
+    await user.click(within(projectRow()).getByRole("link", { name: PROJECT.title }));
+
+    expect(push).toHaveBeenCalledWith("/test-workspace/projects/project-1");
+    expect(push).toHaveBeenCalledTimes(1);
+  });
+
+  it("opens the project preview from the row surface", async () => {
     const user = userEvent.setup();
     const push = vi.fn();
     renderProjects(makeAdapter({ push }));
 
     await user.click(projectRow());
 
-    expect(push).toHaveBeenCalledWith("/test-workspace/projects/project-1");
-    expect(push).toHaveBeenCalledTimes(1);
+    expect(screen.getByText("No description")).toBeInTheDocument();
+    expect(push).not.toHaveBeenCalled();
   });
 
-  it("does not navigate when inline controls are clicked", async () => {
+  it("does not open the preview or navigate when inline controls are clicked", async () => {
     const user = userEvent.setup();
     const push = vi.fn();
     renderProjects(makeAdapter({ push }));
@@ -273,53 +285,9 @@ describe("ProjectsPage compact row navigation", () => {
     await user.click(within(row).getByRole("button", { pressed: false }));
     await user.click(within(row).getByRole("button", { name: "Project actions" }));
     await user.click(within(row).getAllByRole("button", { name: "In Progress" })[0]!);
-    await user.click(within(row).getAllByRole("button", { name: "High" })[0]!);
     await user.click(within(row).getByRole("button", { name: "—" }));
 
     expect(push).not.toHaveBeenCalled();
-  });
-
-  it("uses the rowLink modifier and middle-click paths when openInNewTab is available", () => {
-    const push = vi.fn();
-    const openInNewTab = vi.fn();
-    renderProjects(makeAdapter({ push, openInNewTab }));
-    const row = projectRow();
-
-    fireEvent.click(row, { metaKey: true });
-    fireEvent.click(row, { ctrlKey: true });
-    const middleClick = new MouseEvent("auxclick", {
-      bubbles: true,
-      button: 1,
-      cancelable: true,
-    });
-    row.dispatchEvent(middleClick);
-
-    expect(middleClick.defaultPrevented).toBe(true);
-    expect(openInNewTab).toHaveBeenCalledTimes(3);
-    expect(openInNewTab).toHaveBeenNthCalledWith(1, "/test-workspace/projects/project-1");
-    expect(openInNewTab).toHaveBeenNthCalledWith(2, "/test-workspace/projects/project-1");
-    expect(openInNewTab).toHaveBeenNthCalledWith(3, "/test-workspace/projects/project-1");
-    expect(push).not.toHaveBeenCalled();
-  });
-
-  it("has a single rowLink path for modifier and middle clicks without openInNewTab", () => {
-    const push = vi.fn();
-    renderProjects(makeAdapter({ push }));
-    const row = projectRow();
-
-    fireEvent.click(row, { metaKey: true });
-    fireEvent.click(row, { ctrlKey: true });
-    const middleClick = new MouseEvent("auxclick", {
-      bubbles: true,
-      button: 1,
-      cancelable: true,
-    });
-    row.dispatchEvent(middleClick);
-
-    expect(middleClick.defaultPrevented).toBe(true);
-    expect(push).toHaveBeenCalledTimes(3);
-    expect(push).toHaveBeenNthCalledWith(1, "/test-workspace/projects/project-1");
-    expect(push).toHaveBeenNthCalledWith(2, "/test-workspace/projects/project-1");
-    expect(push).toHaveBeenNthCalledWith(3, "/test-workspace/projects/project-1");
+    expect(screen.queryByText("No description")).not.toBeInTheDocument();
   });
 });

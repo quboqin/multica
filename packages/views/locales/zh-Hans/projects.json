@@ -25,6 +25,9 @@
     "status": "状态",
     "progress": "进度",
     "lead": "负责人",
+    "start_date": "开始时间",
+    "due_date": "截止时间",
+    "updated": "最近更新",
     "created": "创建时间",
     "issues": "Issue 数",
     "labels": "标签",
@@ -79,6 +82,11 @@
     "toast_project_deleted": "已删除需求",
     "toast_move_issue_failed": "移动任务失败",
     "no_plan": "无计划"
+  },
+  "preview": {
+    "description": "查看需求属性和描述",
+    "no_description": "暂无描述",
+    "resources": "资源"
   },
   "resources": {
     "section_header": "资源",
