@@ -4,12 +4,14 @@ import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } fr
 import {
   ArrowDown,
   ArrowUp,
+  Check,
   ChevronDown,
   Filter,
   FolderKanban,
-  Info,
   LayoutGrid,
+  Loader2,
   MoreHorizontal,
+  Pencil,
   Pin,
   PinOff,
   Plus,
@@ -76,6 +78,7 @@ import { Skeleton } from "@multica/ui/components/ui/skeleton";
 import { Button } from "@multica/ui/components/ui/button";
 import { Checkbox } from "@multica/ui/components/ui/checkbox";
 import { Input } from "@multica/ui/components/ui/input";
+import { Textarea } from "@multica/ui/components/ui/textarea";
 import { cn } from "@multica/ui/lib/utils";
 import {
   Dialog,
@@ -492,7 +495,6 @@ function ProjectTableRow({
   rowHref: string;
   onOpenPreview: (project: Project) => void;
 }) {
-  const { t } = useT("projects");
   const formatRelativeDate = useFormatRelativeDate();
   const updateProject = useUpdateProject();
   const handleUpdate = useCallback(
@@ -511,25 +513,6 @@ function ProjectTableRow({
       <CheckboxCell checked={selected} onToggle={onToggleSelect} />
       <ListGridCell className="items-start gap-2">
         <ProjectIcon project={project} size="sm" className="mt-0.5" />
-        <Tooltip>
-          <TooltipTrigger
-            render={
-              <button
-                type="button"
-                aria-label={t(($) => $.preview.open)}
-                className="mt-0.5 flex size-6 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
-                onClick={(e) => {
-                  stopRowNavigation(e);
-                  onOpenPreview(project);
-                }}
-                onAuxClick={stopRowNavigation}
-              >
-                <Info className="size-3.5" />
-              </button>
-            }
-          />
-          <TooltipContent side="bottom">{t(($) => $.preview.open)}</TooltipContent>
-        </Tooltip>
         <div className="min-w-0 flex-1">
           <AppLink
             href={rowHref}
@@ -1017,45 +1000,222 @@ function ProjectPreviewProp({
   );
 }
 
+interface ProjectQuickViewDraft {
+  title: string;
+  description: string;
+  status: ProjectStatus;
+  priority: ProjectPriority;
+  lead_type: "member" | "agent" | null;
+  lead_id: string | null;
+  milestone_id: string | null;
+}
+
+const EMPTY_PROJECT_QUICK_VIEW_DRAFT: ProjectQuickViewDraft = {
+  title: "",
+  description: "",
+  status: "planned",
+  priority: "none",
+  lead_type: null,
+  lead_id: null,
+  milestone_id: null,
+};
+
+function projectToQuickViewDraft(project: Project | null): ProjectQuickViewDraft {
+  if (!project) return { ...EMPTY_PROJECT_QUICK_VIEW_DRAFT };
+  return {
+    title: project.title,
+    description: project.description ?? "",
+    status: project.status,
+    priority: project.priority,
+    lead_type: project.lead_type,
+    lead_id: project.lead_id,
+    milestone_id: project.milestone_id,
+  };
+}
+
+function mergeProjectQuickViewDraft(
+  draft: ProjectQuickViewDraft,
+  data: UpdateProjectRequest,
+): ProjectQuickViewDraft {
+  return {
+    ...draft,
+    ...(data.title !== undefined ? { title: data.title } : {}),
+    ...(data.description !== undefined ? { description: data.description ?? "" } : {}),
+    ...(data.status !== undefined ? { status: data.status } : {}),
+    ...(data.priority !== undefined ? { priority: data.priority } : {}),
+    ...(data.lead_type !== undefined ? { lead_type: data.lead_type } : {}),
+    ...(data.lead_id !== undefined ? { lead_id: data.lead_id } : {}),
+    ...(data.milestone_id !== undefined ? { milestone_id: data.milestone_id } : {}),
+  };
+}
+
 function ProjectQuickViewDialog({
   project,
   milestone,
+  milestones,
   open,
   onOpenChange,
   getActorName,
+  onProjectUpdated,
 }: {
   project: Project | null;
   milestone: Milestone | null;
+  milestones: Milestone[];
   open: boolean;
   onOpenChange: (open: boolean) => void;
   getActorName: (type: string, id: string) => string;
+  onProjectUpdated: (project: Project) => void;
 }) {
   const { t } = useT("projects");
   const statusLabels = useProjectStatusLabels();
   const priorityLabels = useProjectPriorityLabels();
+  const updateProject = useUpdateProject();
+  const [isEditing, setIsEditing] = useState(false);
+  const [draft, setDraft] = useState<ProjectQuickViewDraft>(() =>
+    projectToQuickViewDraft(project),
+  );
+
+  useEffect(() => {
+    if (open && project) {
+      setDraft(projectToQuickViewDraft(project));
+      setIsEditing(false);
+    }
+    if (!open) setIsEditing(false);
+  }, [open, project]);
+
+  const handleDraftUpdate = useCallback((data: UpdateProjectRequest) => {
+    setDraft((prev) => mergeProjectQuickViewDraft(prev, data));
+  }, []);
 
   if (!project) return null;
 
-  const statusCfg = PROJECT_STATUS_CONFIG[project.status];
-  const priorityCfg = PROJECT_PRIORITY_CONFIG[project.priority];
+  const editableProject: Project = {
+    ...project,
+    title: draft.title,
+    description: draft.description.trim() || null,
+    status: draft.status,
+    priority: draft.priority,
+    lead_type: draft.lead_type,
+    lead_id: draft.lead_id,
+    milestone_id: draft.milestone_id,
+  };
+  const displayProject = isEditing ? editableProject : project;
+  const displayMilestone =
+    displayProject.milestone_id
+      ? (milestones.find((item) => item.id === displayProject.milestone_id) ?? milestone)
+      : null;
+  const statusCfg = PROJECT_STATUS_CONFIG[displayProject.status];
+  const priorityCfg = PROJECT_PRIORITY_CONFIG[displayProject.priority];
   const leadName =
-    project.lead_type && project.lead_id
-      ? getActorName(project.lead_type, project.lead_id)
+    displayProject.lead_type && displayProject.lead_id
+      ? getActorName(displayProject.lead_type, displayProject.lead_id)
       : t(($) => $.lead.no_lead);
   const progress =
     project.issue_count > 0
       ? `${project.done_count}/${project.issue_count}`
       : t(($) => $.detail.no_issues_yet);
+  const handleCancelEdit = () => {
+    setDraft(projectToQuickViewDraft(project));
+    setIsEditing(false);
+  };
+  const handleSave = () => {
+    const nextTitle = draft.title.trim();
+    if (!nextTitle) {
+      toast.error(t(($) => $.preview.title_required));
+      return;
+    }
+
+    const payload: UpdateProjectRequest = {
+      title: nextTitle,
+      description: draft.description.trim() || null,
+      status: draft.status,
+      priority: draft.priority,
+      lead_type: draft.lead_type,
+      lead_id: draft.lead_id,
+      milestone_id: draft.milestone_id,
+    };
+
+    updateProject.mutate(
+      { id: project.id, ...payload },
+      {
+        onSuccess: (updatedProject) => {
+          onProjectUpdated(updatedProject);
+          setDraft(projectToQuickViewDraft(updatedProject));
+          setIsEditing(false);
+          toast.success(t(($) => $.preview.toast_saved));
+        },
+        onError: (err) => {
+          toast.error(
+            err instanceof Error && err.message
+              ? err.message
+              : t(($) => $.preview.toast_failed),
+          );
+        },
+      },
+    );
+  };
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-h-[min(720px,calc(100vh-2rem))] overflow-y-auto sm:max-w-2xl">
         <DialogHeader>
-          <div className="flex min-w-0 items-start gap-2 pr-6">
-            <ProjectIcon project={project} size="sm" className="mt-0.5" />
-            <DialogTitle className="min-w-0 break-words leading-snug">
-              {project.title}
-            </DialogTitle>
+          <div className="flex min-w-0 items-start justify-between gap-3 pr-7">
+            <div className="flex min-w-0 flex-1 items-start gap-2">
+              <ProjectIcon project={displayProject} size="sm" className="mt-0.5" />
+              {isEditing ? (
+                <>
+                  <DialogTitle className="sr-only">{project.title}</DialogTitle>
+                  <Input
+                    aria-label={t(($) => $.detail.title_placeholder)}
+                    value={draft.title}
+                    onChange={(event) => handleDraftUpdate({ title: event.target.value })}
+                    className="h-8 min-w-0 text-sm font-medium"
+                  />
+                </>
+              ) : (
+                <DialogTitle className="min-w-0 break-words leading-snug">
+                  {project.title}
+                </DialogTitle>
+              )}
+            </div>
+            {isEditing ? (
+              <div className="flex shrink-0 items-center gap-1">
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  onClick={handleCancelEdit}
+                  disabled={updateProject.isPending}
+                >
+                  <X className="size-3.5" />
+                  {t(($) => $.preview.cancel)}
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  onClick={handleSave}
+                  disabled={updateProject.isPending || !draft.title.trim()}
+                >
+                  {updateProject.isPending ? (
+                    <Loader2 className="size-3.5 animate-spin" />
+                  ) : (
+                    <Check className="size-3.5" />
+                  )}
+                  {t(($) => $.preview.save)}
+                </Button>
+              </div>
+            ) : (
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                className="shrink-0 text-muted-foreground"
+                onClick={() => setIsEditing(true)}
+              >
+                <Pencil className="size-3.5" />
+                {t(($) => $.preview.edit)}
+              </Button>
+            )}
           </div>
           <DialogDescription className="sr-only">
             {t(($) => $.preview.description)}
@@ -1067,7 +1227,17 @@ function ProjectQuickViewDialog({
             <h3 className="mb-2 text-xs font-medium text-muted-foreground">
               {t(($) => $.detail.section_description)}
             </h3>
-            {project.description ? (
+            {isEditing ? (
+              <Textarea
+                aria-label={t(($) => $.detail.section_description)}
+                value={draft.description}
+                onChange={(event) =>
+                  handleDraftUpdate({ description: event.target.value })
+                }
+                placeholder={t(($) => $.detail.description_placeholder)}
+                className="min-h-56 resize-y text-sm"
+              />
+            ) : project.description ? (
               <div className="max-h-80 overflow-y-auto rounded-md border bg-background/60 px-3 py-2">
                 <Markdown className="prose-sm max-w-none">
                   {project.description}
@@ -1082,23 +1252,106 @@ function ProjectQuickViewDialog({
 
           <aside className="min-w-0 rounded-md border bg-muted/25 px-3 py-2">
             <ProjectPreviewProp label={t(($) => $.table.status)}>
-              <span className={cn("inline-flex items-center rounded-full px-2 py-0.5 font-medium", statusCfg.badgeBg, statusCfg.badgeText)}>
-                {statusLabels[project.status]}
-              </span>
+              {isEditing ? (
+                <ProjectStatusBadge
+                  project={editableProject}
+                  handleUpdate={handleDraftUpdate}
+                  align="start"
+                />
+              ) : (
+                <span className={cn("inline-flex items-center rounded-full px-2 py-0.5 font-medium", statusCfg.badgeBg, statusCfg.badgeText)}>
+                  {statusLabels[displayProject.status]}
+                </span>
+              )}
             </ProjectPreviewProp>
             <ProjectPreviewProp label={t(($) => $.table.priority)}>
-              <span className={cn("inline-flex items-center rounded-full px-2 py-0.5 font-medium", priorityCfg.badgeBg, priorityCfg.badgeText)}>
-                {priorityLabels[project.priority]}
-              </span>
+              {isEditing ? (
+                <ProjectPriorityBadge
+                  project={editableProject}
+                  handleUpdate={handleDraftUpdate}
+                  align="start"
+                />
+              ) : (
+                <span className={cn("inline-flex items-center rounded-full px-2 py-0.5 font-medium", priorityCfg.badgeBg, priorityCfg.badgeText)}>
+                  {priorityLabels[displayProject.priority]}
+                </span>
+              )}
             </ProjectPreviewProp>
             <ProjectPreviewProp label={t(($) => $.table.lead)}>
-              <span className="truncate text-muted-foreground">{leadName}</span>
+              {isEditing ? (
+                <ProjectLeadPicker
+                  project={editableProject}
+                  handleUpdate={handleDraftUpdate}
+                  align="start"
+                  renderTrigger={(selectedLeadName) => (
+                    <button
+                      type="button"
+                      className="flex min-w-0 items-center gap-1.5 rounded px-1 py-0.5 transition-colors hover:bg-accent/60"
+                    >
+                      {editableProject.lead_type && editableProject.lead_id ? (
+                        <ActorAvatar
+                          actorType={editableProject.lead_type}
+                          actorId={editableProject.lead_id}
+                          size={18}
+                          enableHoverCard
+                        />
+                      ) : (
+                        <span className="inline-flex h-[18px] w-[18px] rounded-full border border-dashed border-muted-foreground/30" />
+                      )}
+                      <span className="min-w-0 truncate text-xs text-muted-foreground">
+                        {selectedLeadName ?? t(($) => $.lead.no_lead)}
+                      </span>
+                    </button>
+                  )}
+                />
+              ) : (
+                <span className="truncate text-muted-foreground">{leadName}</span>
+              )}
             </ProjectPreviewProp>
             <ProjectPreviewProp label={t(($) => $.table.plan)}>
-              {milestone ? (
+              {isEditing ? (
+                <DropdownMenu>
+                  <DropdownMenuTrigger
+                    render={
+                      <button
+                        type="button"
+                        className="inline-flex min-w-0 items-center gap-1.5 rounded px-1 py-0.5 transition-colors hover:bg-accent/60"
+                      >
+                        {displayMilestone ? (
+                          <>
+                            <span className={cn("size-2 shrink-0 rounded-full", milestoneStatusDotClass(displayMilestone.status))} />
+                            <span className="min-w-0 truncate">{displayMilestone.title}</span>
+                          </>
+                        ) : (
+                          <span className="text-muted-foreground">{t(($) => $.detail.no_plan)}</span>
+                        )}
+                      </button>
+                    }
+                  />
+                  <DropdownMenuContent align="start" className="w-56">
+                    <DropdownMenuItem onClick={() => handleDraftUpdate({ milestone_id: null })}>
+                      <span className="text-muted-foreground">{t(($) => $.detail.no_plan)}</span>
+                      {!editableProject.milestone_id && <Check className="ml-auto h-3.5 w-3.5" />}
+                    </DropdownMenuItem>
+                    {milestones.length > 0 && <DropdownMenuSeparator />}
+                    {milestones.map((item) => (
+                      <DropdownMenuItem
+                        key={item.id}
+                        onClick={() => handleDraftUpdate({ milestone_id: item.id })}
+                      >
+                        <span className={cn("size-2 rounded-full", milestoneStatusDotClass(item.status))} />
+                        <span className="truncate">{item.title}</span>
+                        {item.id === editableProject.milestone_id && (
+                          <Check className="ml-auto h-3.5 w-3.5" />
+                        )}
+                      </DropdownMenuItem>
+                    ))}
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              ) : displayMilestone ? (
                 <span className="flex min-w-0 items-center gap-1.5">
-                  <span className={cn("size-2 shrink-0 rounded-full", milestoneStatusDotClass(milestone.status))} />
-                  <span className="min-w-0 truncate">{milestone.title}</span>
+                  <span className={cn("size-2 shrink-0 rounded-full", milestoneStatusDotClass(displayMilestone.status))} />
+                  <span className="min-w-0 truncate">{displayMilestone.title}</span>
                 </span>
               ) : (
                 <span className="text-muted-foreground">{t(($) => $.detail.no_plan)}</span>
@@ -1655,11 +1908,13 @@ export function ProjectsPage() {
                 ? (milestoneById.get(previewProject.milestone_id) ?? null)
                 : null
             }
+            milestones={milestones}
             open={previewProject != null}
             onOpenChange={(open) => {
               if (!open) setPreviewProject(null);
             }}
             getActorName={getActorName}
+            onProjectUpdated={setPreviewProject}
           />
 
           {/* Toolbar */}

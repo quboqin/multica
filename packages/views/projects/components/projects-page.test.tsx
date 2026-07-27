@@ -57,7 +57,7 @@ vi.mock("@tanstack/react-query", () => ({
 
 vi.mock("@multica/core/projects", () => ({
   projectListOptions: () => ({ queryKey: ["projects"] }),
-  useUpdateProject: () => ({ mutate: mocks.updateProject }),
+  useUpdateProject: () => ({ mutate: mocks.updateProject, isPending: false }),
   useDeleteProject: () => ({ mutate: mocks.deleteProject }),
   useProjectViewStore: (selector: (state: unknown) => unknown) =>
     selector(mocks.projectViewState),
@@ -74,6 +74,7 @@ vi.mock("@multica/core/hooks", () => ({
 }));
 
 vi.mock("@multica/core/paths", () => ({
+  useWorkspaceSlug: () => "test-workspace",
   useWorkspacePaths: () => ({
     projectDetail: (id: string) => `/test-workspace/projects/${id}`,
     memberDetail: (id: string) => `/test-workspace/members/${id}`,
@@ -235,7 +236,15 @@ beforeEach(() => {
   ];
   mocks.agents = [];
   mocks.pins = [];
-  mocks.updateProject.mockClear();
+  mocks.updateProject.mockReset();
+  mocks.updateProject.mockImplementation(
+    (
+      vars: { id: string } & Partial<Project>,
+      options?: { onSuccess?: (project: Project) => void },
+    ) => {
+      options?.onSuccess?.({ ...PROJECT, ...vars });
+    },
+  );
   mocks.deleteProject.mockClear();
   mocks.createPin.mockClear();
   mocks.deletePin.mockClear();
@@ -285,18 +294,6 @@ describe("ProjectsPage compact row navigation", () => {
     expect(push).not.toHaveBeenCalled();
   });
 
-  it("opens the project preview from the explicit preview button", async () => {
-    const user = userEvent.setup();
-    const push = vi.fn();
-    renderProjects(makeAdapter({ push }));
-    const row = projectRow();
-
-    await user.click(within(row).getByRole("button", { name: "Preview details" }));
-
-    expect(screen.getByText("No description")).toBeInTheDocument();
-    expect(push).not.toHaveBeenCalled();
-  });
-
   it("does not open the preview or navigate when inline controls are clicked", async () => {
     const user = userEvent.setup();
     const push = vi.fn();
@@ -310,5 +307,39 @@ describe("ProjectsPage compact row navigation", () => {
 
     expect(push).not.toHaveBeenCalled();
     expect(screen.queryByText("No description")).not.toBeInTheDocument();
+  });
+
+  it("saves edits from the project preview", async () => {
+    const user = userEvent.setup();
+    renderProjects();
+    const row = projectRow();
+    const titleSurface = within(row).getByRole("link", { name: PROJECT.title })
+      .parentElement;
+
+    if (!titleSurface) throw new Error("project title surface not found");
+
+    await user.click(titleSurface);
+    await user.click(screen.getByRole("button", { name: "Edit" }));
+    await user.clear(screen.getByLabelText("Project title"));
+    await user.type(screen.getByLabelText("Project title"), "Updated Plan");
+    await user.type(screen.getByLabelText("Description"), "Updated description");
+    await user.click(screen.getByRole("button", { name: "Save" }));
+
+    expect(mocks.updateProject).toHaveBeenLastCalledWith(
+      {
+        id: PROJECT.id,
+        title: "Updated Plan",
+        description: "Updated description",
+        status: PROJECT.status,
+        priority: PROJECT.priority,
+        lead_type: null,
+        lead_id: null,
+        milestone_id: null,
+      },
+      expect.objectContaining({
+        onSuccess: expect.any(Function),
+        onError: expect.any(Function),
+      }),
+    );
   });
 });

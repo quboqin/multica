@@ -87,7 +87,13 @@
     "open": "세부 정보 보기",
     "description": "View project properties and description",
     "no_description": "No description",
-    "resources": "Resources"
+    "resources": "Resources",
+    "edit": "편집",
+    "save": "저장",
+    "cancel": "취소",
+    "title_required": "프로젝트 제목이 필요합니다",
+    "toast_saved": "프로젝트를 업데이트했습니다",
+    "toast_failed": "프로젝트를 업데이트하지 못했습니다"
   },
   "resources": {
     "section_header": "리소스",

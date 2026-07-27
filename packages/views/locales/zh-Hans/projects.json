@@ -87,7 +87,13 @@
     "open": "查看详情",
     "description": "查看需求属性和描述",
     "no_description": "暂无描述",
-    "resources": "资源"
+    "resources": "资源",
+    "edit": "编辑",
+    "save": "保存",
+    "cancel": "取消",
+    "title_required": "请输入需求标题",
+    "toast_saved": "已更新需求",
+    "toast_failed": "更新需求失败"
   },
   "resources": {
     "section_header": "资源",

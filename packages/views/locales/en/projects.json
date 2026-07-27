@@ -87,7 +87,13 @@
     "open": "Preview details",
     "description": "View project properties and description",
     "no_description": "No description",
-    "resources": "Resources"
+    "resources": "Resources",
+    "edit": "Edit",
+    "save": "Save",
+    "cancel": "Cancel",
+    "title_required": "Project title is required",
+    "toast_saved": "Project updated",
+    "toast_failed": "Failed to update project"
   },
   "resources": {
     "section_header": "Resources",

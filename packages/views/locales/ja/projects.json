@@ -87,7 +87,13 @@
     "open": "詳細を表示",
     "description": "View project properties and description",
     "no_description": "No description",
-    "resources": "Resources"
+    "resources": "Resources",
+    "edit": "編集",
+    "save": "保存",
+    "cancel": "キャンセル",
+    "title_required": "プロジェクトのタイトルは必須です",
+    "toast_saved": "プロジェクトを更新しました",
+    "toast_failed": "プロジェクトを更新できませんでした"
   },
   "resources": {
     "section_header": "リソース",
