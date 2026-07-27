@@ -11,7 +11,6 @@ import {
   LayoutGrid,
   Loader2,
   MoreHorizontal,
-  Pencil,
   Pin,
   PinOff,
   Plus,
@@ -60,7 +59,6 @@ import {
 } from "@multica/core/pins";
 import { milestoneListOptions } from "@multica/core/milestones";
 import {
-  PROJECT_PRIORITY_CONFIG,
   PROJECT_STATUS_CONFIG,
   PROJECT_STATUS_ORDER,
 } from "@multica/core/projects/config";
@@ -137,7 +135,6 @@ import { useFormatRelativeDate, useProjectPriorityLabels, useProjectStatusLabels
 import { ProjectStatusBadge, ProjectPriorityBadge } from "./project-badge";
 import { ProjectLeadPicker } from "./project-lead-picker";
 import { LabelChip } from "../../labels/label-chip";
-import { Markdown } from "../../common/markdown";
 
 // Sort order maps for the enum columns (header sort needs a total order).
 const PRIORITY_ORDER: Record<ProjectPriority, number> = {
@@ -752,10 +749,12 @@ function ProjectCard({
   project,
   pinned,
   canDelete,
+  onOpenPreview,
 }: {
   project: Project;
   pinned: boolean;
   canDelete: boolean;
+  onOpenPreview: (project: Project) => void;
 }) {
   const { t } = useT("projects");
   const wsPaths = useWorkspacePaths();
@@ -771,7 +770,13 @@ function ProjectCard({
       : 0;
 
   return (
-    <div className="group/card group/row flex flex-col rounded-md border bg-card transition-colors hover:border-primary/50">
+    <div
+      className="group/card group/row flex cursor-pointer flex-col rounded-md border bg-card transition-colors hover:border-primary/50"
+      onClick={(e) => {
+        if (shouldIgnoreRowPreview(e)) return;
+        onOpenPreview(project);
+      }}
+    >
       <div className="p-3 pb-2">
         <div className="flex items-start gap-2">
           <AppLink
@@ -1008,6 +1013,8 @@ interface ProjectQuickViewDraft {
   lead_type: "member" | "agent" | null;
   lead_id: string | null;
   milestone_id: string | null;
+  start_date: string | null;
+  due_date: string | null;
 }
 
 const EMPTY_PROJECT_QUICK_VIEW_DRAFT: ProjectQuickViewDraft = {
@@ -1018,6 +1025,8 @@ const EMPTY_PROJECT_QUICK_VIEW_DRAFT: ProjectQuickViewDraft = {
   lead_type: null,
   lead_id: null,
   milestone_id: null,
+  start_date: null,
+  due_date: null,
 };
 
 function projectToQuickViewDraft(project: Project | null): ProjectQuickViewDraft {
@@ -1030,6 +1039,8 @@ function projectToQuickViewDraft(project: Project | null): ProjectQuickViewDraft
     lead_type: project.lead_type,
     lead_id: project.lead_id,
     milestone_id: project.milestone_id,
+    start_date: project.start_date,
+    due_date: project.due_date,
   };
 }
 
@@ -1046,7 +1057,41 @@ function mergeProjectQuickViewDraft(
     ...(data.lead_type !== undefined ? { lead_type: data.lead_type } : {}),
     ...(data.lead_id !== undefined ? { lead_id: data.lead_id } : {}),
     ...(data.milestone_id !== undefined ? { milestone_id: data.milestone_id } : {}),
+    ...(data.start_date !== undefined ? { start_date: data.start_date } : {}),
+    ...(data.due_date !== undefined ? { due_date: data.due_date } : {}),
   };
+}
+
+function projectQuickViewPayload(draft: ProjectQuickViewDraft): UpdateProjectRequest {
+  return {
+    title: draft.title.trim(),
+    description: draft.description.trim() || null,
+    status: draft.status,
+    priority: draft.priority,
+    lead_type: draft.lead_type,
+    lead_id: draft.lead_id,
+    milestone_id: draft.milestone_id,
+    start_date: draft.start_date || null,
+    due_date: draft.due_date || null,
+  };
+}
+
+function isProjectQuickViewDirty(
+  project: Project,
+  draft: ProjectQuickViewDraft,
+): boolean {
+  const payload = projectQuickViewPayload(draft);
+  return (
+    payload.title !== project.title ||
+    payload.description !== (project.description || null) ||
+    payload.status !== project.status ||
+    payload.priority !== project.priority ||
+    payload.lead_type !== project.lead_type ||
+    payload.lead_id !== project.lead_id ||
+    payload.milestone_id !== project.milestone_id ||
+    payload.start_date !== project.start_date ||
+    payload.due_date !== project.due_date
+  );
 }
 
 function ProjectQuickViewDialog({
@@ -1055,7 +1100,6 @@ function ProjectQuickViewDialog({
   milestones,
   open,
   onOpenChange,
-  getActorName,
   onProjectUpdated,
 }: {
   project: Project | null;
@@ -1063,14 +1107,10 @@ function ProjectQuickViewDialog({
   milestones: Milestone[];
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  getActorName: (type: string, id: string) => string;
   onProjectUpdated: (project: Project) => void;
 }) {
   const { t } = useT("projects");
-  const statusLabels = useProjectStatusLabels();
-  const priorityLabels = useProjectPriorityLabels();
   const updateProject = useUpdateProject();
-  const [isEditing, setIsEditing] = useState(false);
   const [draft, setDraft] = useState<ProjectQuickViewDraft>(() =>
     projectToQuickViewDraft(project),
   );
@@ -1078,9 +1118,7 @@ function ProjectQuickViewDialog({
   useEffect(() => {
     if (open && project) {
       setDraft(projectToQuickViewDraft(project));
-      setIsEditing(false);
     }
-    if (!open) setIsEditing(false);
   }, [open, project]);
 
   const handleDraftUpdate = useCallback((data: UpdateProjectRequest) => {
@@ -1098,25 +1136,20 @@ function ProjectQuickViewDialog({
     lead_type: draft.lead_type,
     lead_id: draft.lead_id,
     milestone_id: draft.milestone_id,
+    start_date: draft.start_date,
+    due_date: draft.due_date,
   };
-  const displayProject = isEditing ? editableProject : project;
   const displayMilestone =
-    displayProject.milestone_id
-      ? (milestones.find((item) => item.id === displayProject.milestone_id) ?? milestone)
+    editableProject.milestone_id
+      ? (milestones.find((item) => item.id === editableProject.milestone_id) ?? milestone)
       : null;
-  const statusCfg = PROJECT_STATUS_CONFIG[displayProject.status];
-  const priorityCfg = PROJECT_PRIORITY_CONFIG[displayProject.priority];
-  const leadName =
-    displayProject.lead_type && displayProject.lead_id
-      ? getActorName(displayProject.lead_type, displayProject.lead_id)
-      : t(($) => $.lead.no_lead);
   const progress =
     project.issue_count > 0
       ? `${project.done_count}/${project.issue_count}`
       : t(($) => $.detail.no_issues_yet);
-  const handleCancelEdit = () => {
+  const isDirty = isProjectQuickViewDirty(project, draft);
+  const handleCancel = () => {
     setDraft(projectToQuickViewDraft(project));
-    setIsEditing(false);
   };
   const handleSave = () => {
     const nextTitle = draft.title.trim();
@@ -1125,15 +1158,7 @@ function ProjectQuickViewDialog({
       return;
     }
 
-    const payload: UpdateProjectRequest = {
-      title: nextTitle,
-      description: draft.description.trim() || null,
-      status: draft.status,
-      priority: draft.priority,
-      lead_type: draft.lead_type,
-      lead_id: draft.lead_id,
-      milestone_id: draft.milestone_id,
-    };
+    const payload = projectQuickViewPayload(draft);
 
     updateProject.mutate(
       { id: project.id, ...payload },
@@ -1141,7 +1166,6 @@ function ProjectQuickViewDialog({
         onSuccess: (updatedProject) => {
           onProjectUpdated(updatedProject);
           setDraft(projectToQuickViewDraft(updatedProject));
-          setIsEditing(false);
           toast.success(t(($) => $.preview.toast_saved));
         },
         onError: (err) => {
@@ -1161,30 +1185,22 @@ function ProjectQuickViewDialog({
         <DialogHeader>
           <div className="flex min-w-0 items-start justify-between gap-3 pr-7">
             <div className="flex min-w-0 flex-1 items-start gap-2">
-              <ProjectIcon project={displayProject} size="sm" className="mt-0.5" />
-              {isEditing ? (
-                <>
-                  <DialogTitle className="sr-only">{project.title}</DialogTitle>
-                  <Input
-                    aria-label={t(($) => $.detail.title_placeholder)}
-                    value={draft.title}
-                    onChange={(event) => handleDraftUpdate({ title: event.target.value })}
-                    className="h-8 min-w-0 text-sm font-medium"
-                  />
-                </>
-              ) : (
-                <DialogTitle className="min-w-0 break-words leading-snug">
-                  {project.title}
-                </DialogTitle>
-              )}
+              <ProjectIcon project={editableProject} size="sm" className="mt-0.5" />
+              <DialogTitle className="sr-only">{project.title}</DialogTitle>
+              <Input
+                aria-label={t(($) => $.detail.title_placeholder)}
+                value={draft.title}
+                onChange={(event) => handleDraftUpdate({ title: event.target.value })}
+                className="h-8 min-w-0 text-sm font-medium"
+              />
             </div>
-            {isEditing ? (
+            {isDirty && (
               <div className="flex shrink-0 items-center gap-1">
                 <Button
                   type="button"
                   variant="ghost"
                   size="sm"
-                  onClick={handleCancelEdit}
+                  onClick={handleCancel}
                   disabled={updateProject.isPending}
                 >
                   <X className="size-3.5" />
@@ -1204,17 +1220,6 @@ function ProjectQuickViewDialog({
                   {t(($) => $.preview.save)}
                 </Button>
               </div>
-            ) : (
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                className="shrink-0 text-muted-foreground"
-                onClick={() => setIsEditing(true)}
-              >
-                <Pencil className="size-3.5" />
-                {t(($) => $.preview.edit)}
-              </Button>
             )}
           </div>
           <DialogDescription className="sr-only">
@@ -1227,152 +1232,126 @@ function ProjectQuickViewDialog({
             <h3 className="mb-2 text-xs font-medium text-muted-foreground">
               {t(($) => $.detail.section_description)}
             </h3>
-            {isEditing ? (
-              <Textarea
-                aria-label={t(($) => $.detail.section_description)}
-                value={draft.description}
-                onChange={(event) =>
-                  handleDraftUpdate({ description: event.target.value })
-                }
-                placeholder={t(($) => $.detail.description_placeholder)}
-                className="min-h-56 resize-y text-sm"
-              />
-            ) : project.description ? (
-              <div className="max-h-80 overflow-y-auto rounded-md border bg-background/60 px-3 py-2">
-                <Markdown className="prose-sm max-w-none">
-                  {project.description}
-                </Markdown>
-              </div>
-            ) : (
-              <div className="rounded-md border border-dashed px-3 py-6 text-center text-xs text-muted-foreground">
-                {t(($) => $.preview.no_description)}
-              </div>
-            )}
+            <Textarea
+              aria-label={t(($) => $.detail.section_description)}
+              value={draft.description}
+              onChange={(event) =>
+                handleDraftUpdate({ description: event.target.value })
+              }
+              placeholder={t(($) => $.detail.description_placeholder)}
+              className="min-h-56 resize-y text-sm"
+            />
           </section>
 
           <aside className="min-w-0 rounded-md border bg-muted/25 px-3 py-2">
             <ProjectPreviewProp label={t(($) => $.table.status)}>
-              {isEditing ? (
-                <ProjectStatusBadge
-                  project={editableProject}
-                  handleUpdate={handleDraftUpdate}
-                  align="start"
-                />
-              ) : (
-                <span className={cn("inline-flex items-center rounded-full px-2 py-0.5 font-medium", statusCfg.badgeBg, statusCfg.badgeText)}>
-                  {statusLabels[displayProject.status]}
-                </span>
-              )}
+              <ProjectStatusBadge
+                project={editableProject}
+                handleUpdate={handleDraftUpdate}
+                align="start"
+              />
             </ProjectPreviewProp>
             <ProjectPreviewProp label={t(($) => $.table.priority)}>
-              {isEditing ? (
-                <ProjectPriorityBadge
-                  project={editableProject}
-                  handleUpdate={handleDraftUpdate}
-                  align="start"
-                />
-              ) : (
-                <span className={cn("inline-flex items-center rounded-full px-2 py-0.5 font-medium", priorityCfg.badgeBg, priorityCfg.badgeText)}>
-                  {priorityLabels[displayProject.priority]}
-                </span>
-              )}
+              <ProjectPriorityBadge
+                project={editableProject}
+                handleUpdate={handleDraftUpdate}
+                align="start"
+              />
             </ProjectPreviewProp>
             <ProjectPreviewProp label={t(($) => $.table.lead)}>
-              {isEditing ? (
-                <ProjectLeadPicker
-                  project={editableProject}
-                  handleUpdate={handleDraftUpdate}
-                  align="start"
-                  renderTrigger={(selectedLeadName) => (
-                    <button
-                      type="button"
-                      className="flex min-w-0 items-center gap-1.5 rounded px-1 py-0.5 transition-colors hover:bg-accent/60"
-                    >
-                      {editableProject.lead_type && editableProject.lead_id ? (
-                        <ActorAvatar
-                          actorType={editableProject.lead_type}
-                          actorId={editableProject.lead_id}
-                          size={18}
-                          enableHoverCard
-                        />
-                      ) : (
-                        <span className="inline-flex h-[18px] w-[18px] rounded-full border border-dashed border-muted-foreground/30" />
-                      )}
-                      <span className="min-w-0 truncate text-xs text-muted-foreground">
-                        {selectedLeadName ?? t(($) => $.lead.no_lead)}
-                      </span>
-                    </button>
-                  )}
-                />
-              ) : (
-                <span className="truncate text-muted-foreground">{leadName}</span>
-              )}
+              <ProjectLeadPicker
+                project={editableProject}
+                handleUpdate={handleDraftUpdate}
+                align="start"
+                renderTrigger={(selectedLeadName) => (
+                  <button
+                    type="button"
+                    className="flex min-w-0 items-center gap-1.5 rounded px-1 py-0.5 transition-colors hover:bg-accent/60"
+                  >
+                    {editableProject.lead_type && editableProject.lead_id ? (
+                      <ActorAvatar
+                        actorType={editableProject.lead_type}
+                        actorId={editableProject.lead_id}
+                        size={18}
+                        enableHoverCard
+                      />
+                    ) : (
+                      <span className="inline-flex h-[18px] w-[18px] rounded-full border border-dashed border-muted-foreground/30" />
+                    )}
+                    <span className="min-w-0 truncate text-xs text-muted-foreground">
+                      {selectedLeadName ?? t(($) => $.lead.no_lead)}
+                    </span>
+                  </button>
+                )}
+              />
             </ProjectPreviewProp>
             <ProjectPreviewProp label={t(($) => $.table.plan)}>
-              {isEditing ? (
-                <DropdownMenu>
-                  <DropdownMenuTrigger
-                    render={
-                      <button
-                        type="button"
-                        className="inline-flex min-w-0 items-center gap-1.5 rounded px-1 py-0.5 transition-colors hover:bg-accent/60"
-                      >
-                        {displayMilestone ? (
-                          <>
-                            <span className={cn("size-2 shrink-0 rounded-full", milestoneStatusDotClass(displayMilestone.status))} />
-                            <span className="min-w-0 truncate">{displayMilestone.title}</span>
-                          </>
-                        ) : (
-                          <span className="text-muted-foreground">{t(($) => $.detail.no_plan)}</span>
-                        )}
-                      </button>
-                    }
-                  />
-                  <DropdownMenuContent align="start" className="w-56">
-                    <DropdownMenuItem onClick={() => handleDraftUpdate({ milestone_id: null })}>
-                      <span className="text-muted-foreground">{t(($) => $.detail.no_plan)}</span>
-                      {!editableProject.milestone_id && <Check className="ml-auto h-3.5 w-3.5" />}
+              <DropdownMenu>
+                <DropdownMenuTrigger
+                  render={
+                    <button
+                      type="button"
+                      className="inline-flex min-w-0 items-center gap-1.5 rounded px-1 py-0.5 transition-colors hover:bg-accent/60"
+                    >
+                      {displayMilestone ? (
+                        <>
+                          <span className={cn("size-2 shrink-0 rounded-full", milestoneStatusDotClass(displayMilestone.status))} />
+                          <span className="min-w-0 truncate">{displayMilestone.title}</span>
+                        </>
+                      ) : (
+                        <span className="text-muted-foreground">{t(($) => $.detail.no_plan)}</span>
+                      )}
+                    </button>
+                  }
+                />
+                <DropdownMenuContent align="start" className="w-56">
+                  <DropdownMenuItem onClick={() => handleDraftUpdate({ milestone_id: null })}>
+                    <span className="text-muted-foreground">{t(($) => $.detail.no_plan)}</span>
+                    {!editableProject.milestone_id && <Check className="ml-auto h-3.5 w-3.5" />}
+                  </DropdownMenuItem>
+                  {milestones.length > 0 && <DropdownMenuSeparator />}
+                  {milestones.map((item) => (
+                    <DropdownMenuItem
+                      key={item.id}
+                      onClick={() => handleDraftUpdate({ milestone_id: item.id })}
+                    >
+                      <span className={cn("size-2 rounded-full", milestoneStatusDotClass(item.status))} />
+                      <span className="truncate">{item.title}</span>
+                      {item.id === editableProject.milestone_id && (
+                        <Check className="ml-auto h-3.5 w-3.5" />
+                      )}
                     </DropdownMenuItem>
-                    {milestones.length > 0 && <DropdownMenuSeparator />}
-                    {milestones.map((item) => (
-                      <DropdownMenuItem
-                        key={item.id}
-                        onClick={() => handleDraftUpdate({ milestone_id: item.id })}
-                      >
-                        <span className={cn("size-2 rounded-full", milestoneStatusDotClass(item.status))} />
-                        <span className="truncate">{item.title}</span>
-                        {item.id === editableProject.milestone_id && (
-                          <Check className="ml-auto h-3.5 w-3.5" />
-                        )}
-                      </DropdownMenuItem>
-                    ))}
-                  </DropdownMenuContent>
-                </DropdownMenu>
-              ) : displayMilestone ? (
-                <span className="flex min-w-0 items-center gap-1.5">
-                  <span className={cn("size-2 shrink-0 rounded-full", milestoneStatusDotClass(displayMilestone.status))} />
-                  <span className="min-w-0 truncate">{displayMilestone.title}</span>
-                </span>
-              ) : (
-                <span className="text-muted-foreground">{t(($) => $.detail.no_plan)}</span>
-              )}
+                  ))}
+                </DropdownMenuContent>
+              </DropdownMenu>
             </ProjectPreviewProp>
             <ProjectPreviewProp label={t(($) => $.table.progress)}>
               <span className="tabular-nums text-muted-foreground">{progress}</span>
             </ProjectPreviewProp>
             <ProjectPreviewProp label={t(($) => $.table.start_date)}>
-              <span className="tabular-nums text-muted-foreground">
-                {formatProjectDate(project.start_date) || "—"}
-              </span>
+              <Input
+                aria-label={t(($) => $.table.start_date)}
+                type="date"
+                value={draft.start_date ?? ""}
+                onChange={(event) =>
+                  handleDraftUpdate({ start_date: event.target.value || null })
+                }
+                className="h-7 text-xs"
+              />
             </ProjectPreviewProp>
             <ProjectPreviewProp label={t(($) => $.table.due_date)}>
-              {project.due_date ? (
-                <span className={cn("tabular-nums", isPastDateOnly(project.due_date) ? "text-destructive" : "text-muted-foreground")}>
-                  {formatProjectDate(project.due_date)}
-                </span>
-              ) : (
-                <span className="text-muted-foreground">—</span>
-              )}
+              <Input
+                aria-label={t(($) => $.table.due_date)}
+                type="date"
+                value={draft.due_date ?? ""}
+                onChange={(event) =>
+                  handleDraftUpdate({ due_date: event.target.value || null })
+                }
+                className={cn(
+                  "h-7 text-xs",
+                  draft.due_date && isPastDateOnly(draft.due_date) && "text-destructive",
+                )}
+              />
             </ProjectPreviewProp>
             <ProjectPreviewProp label={t(($) => $.table.updated)}>
               <span className="tabular-nums text-muted-foreground">
@@ -1412,10 +1391,12 @@ function ProjectStatusBuckets({
   projects,
   pinnedProjectIds,
   canDelete,
+  onOpenPreview,
 }: {
   projects: Project[];
   pinnedProjectIds: Set<string>;
   canDelete: boolean;
+  onOpenPreview: (project: Project) => void;
 }) {
   const { t } = useT("projects");
   const statusLabels = useProjectStatusLabels();
@@ -1545,6 +1526,7 @@ function ProjectStatusBuckets({
             projectMap={projectMapRef.current}
             pinnedProjectIds={pinnedProjectIds}
             canDelete={canDelete}
+            onOpenPreview={onOpenPreview}
             statusLabel={statusLabels[status]}
             emptyLabel={t(($) => $.page.empty)}
           />
@@ -1557,6 +1539,7 @@ function ProjectStatusBuckets({
               project={activeProject}
               pinned={pinnedProjectIds.has(activeProject.id)}
               canDelete={canDelete}
+              onOpenPreview={onOpenPreview}
             />
           </div>
         )}
@@ -1571,6 +1554,7 @@ function ProjectStatusColumn({
   projectMap,
   pinnedProjectIds,
   canDelete,
+  onOpenPreview,
   statusLabel,
   emptyLabel,
 }: {
@@ -1579,6 +1563,7 @@ function ProjectStatusColumn({
   projectMap: Map<string, Project>;
   pinnedProjectIds: Set<string>;
   canDelete: boolean;
+  onOpenPreview: (project: Project) => void;
   statusLabel: string;
   emptyLabel: string;
 }) {
@@ -1627,6 +1612,7 @@ function ProjectStatusColumn({
               project={project}
               pinned={pinnedProjectIds.has(project.id)}
               canDelete={canDelete}
+              onOpenPreview={onOpenPreview}
             />
           ))}
           {projects.length === 0 && (
@@ -1644,10 +1630,12 @@ function SortableProjectCard({
   project,
   pinned,
   canDelete,
+  onOpenPreview,
 }: {
   project: Project;
   pinned: boolean;
   canDelete: boolean;
+  onOpenPreview: (project: Project) => void;
 }) {
   const {
     attributes,
@@ -1673,7 +1661,12 @@ function SortableProjectCard({
       {...listeners}
       className={cn("touch-none", isDragging && "pointer-events-none opacity-30")}
     >
-      <ProjectCard project={project} pinned={pinned} canDelete={canDelete} />
+      <ProjectCard
+        project={project}
+        pinned={pinned}
+        canDelete={canDelete}
+        onOpenPreview={onOpenPreview}
+      />
     </div>
   );
 }
@@ -1913,7 +1906,6 @@ export function ProjectsPage() {
             onOpenChange={(open) => {
               if (!open) setPreviewProject(null);
             }}
-            getActorName={getActorName}
             onProjectUpdated={setPreviewProject}
           />
 
@@ -2204,6 +2196,7 @@ export function ProjectsPage() {
               projects={visible}
               pinnedProjectIds={pinnedProjectIds}
               canDelete={isWorkspaceAdmin}
+              onOpenPreview={setPreviewProject}
             />
           )}
 

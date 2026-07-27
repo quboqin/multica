@@ -26,9 +26,9 @@ func (q *Queries) CountIssuesByProject(ctx context.Context, projectID pgtype.UUI
 const createProject = `-- name: CreateProject :one
 INSERT INTO project (
     workspace_id, title, description, icon, status,
-    lead_type, lead_id, priority, milestone_id
+    lead_type, lead_id, priority, milestone_id, start_date, due_date
 ) VALUES (
-    $1, $2, $3, $4, $5, $6, $7, $8, $9
+    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11
 ) RETURNING id, workspace_id, title, description, icon, status, lead_type, lead_id, created_at, updated_at, priority, start_date, due_date, milestone_id
 `
 
@@ -42,6 +42,8 @@ type CreateProjectParams struct {
 	LeadID      pgtype.UUID `json:"lead_id"`
 	Priority    string      `json:"priority"`
 	MilestoneID pgtype.UUID `json:"milestone_id"`
+	StartDate   pgtype.Date `json:"start_date"`
+	DueDate     pgtype.Date `json:"due_date"`
 }
 
 func (q *Queries) CreateProject(ctx context.Context, arg CreateProjectParams) (Project, error) {
@@ -55,6 +57,8 @@ func (q *Queries) CreateProject(ctx context.Context, arg CreateProjectParams) (P
 		arg.LeadID,
 		arg.Priority,
 		arg.MilestoneID,
+		arg.StartDate,
+		arg.DueDate,
 	)
 	var i Project
 	err := row.Scan(
@@ -251,6 +255,8 @@ UPDATE project SET
     lead_type = $7,
     lead_id = $8,
     milestone_id = $9,
+    start_date = $10,
+    due_date = $11,
     updated_at = now()
 WHERE id = $1
 RETURNING id, workspace_id, title, description, icon, status, lead_type, lead_id, created_at, updated_at, priority, start_date, due_date, milestone_id
@@ -266,6 +272,8 @@ type UpdateProjectParams struct {
 	LeadType    pgtype.Text `json:"lead_type"`
 	LeadID      pgtype.UUID `json:"lead_id"`
 	MilestoneID pgtype.UUID `json:"milestone_id"`
+	StartDate   pgtype.Date `json:"start_date"`
+	DueDate     pgtype.Date `json:"due_date"`
 }
 
 func (q *Queries) UpdateProject(ctx context.Context, arg UpdateProjectParams) (Project, error) {
@@ -279,6 +287,8 @@ func (q *Queries) UpdateProject(ctx context.Context, arg UpdateProjectParams) (P
 		arg.LeadType,
 		arg.LeadID,
 		arg.MilestoneID,
+		arg.StartDate,
+		arg.DueDate,
 	)
 	var i Project
 	err := row.Scan(

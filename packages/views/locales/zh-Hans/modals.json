@@ -111,6 +111,8 @@
     "repos_add": "添加",
     "repos_selected": "已选",
     "no_plan": "无计划",
+    "start_date": "开始",
+    "due_date": "截止",
     "source_pill_local": "本地目录",
     "source_tab_repos": "GitHub 仓库",
     "source_tab_local": "本地目录",

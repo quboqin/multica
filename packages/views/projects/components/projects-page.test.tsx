@@ -1,6 +1,6 @@
 import React from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { screen, within } from "@testing-library/react";
+import { fireEvent, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { Project } from "@multica/core/types";
 import { renderWithI18n } from "../../test/i18n";
@@ -229,6 +229,25 @@ function projectRow() {
   return row as HTMLElement;
 }
 
+function projectCard() {
+  const card = screen
+    .getByRole("link", { name: PROJECT.title })
+    .closest('[class~="group/card"]');
+  if (!card) throw new Error("project card not found");
+  return card as HTMLElement;
+}
+
+function dateInput(label: string) {
+  const input = screen
+    .getAllByLabelText(label)
+    .find(
+      (element): element is HTMLInputElement =>
+        element instanceof HTMLInputElement && element.type === "date",
+    );
+  if (!input) throw new Error(`${label} date input not found`);
+  return input;
+}
+
 beforeEach(() => {
   mocks.projects = [PROJECT];
   mocks.members = [
@@ -275,7 +294,7 @@ describe("ProjectsPage compact row navigation", () => {
 
     expect(push).toHaveBeenCalledWith("/test-workspace/projects/project-1");
     expect(push).toHaveBeenCalledTimes(1);
-    expect(screen.queryByText("No description")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Project title")).not.toBeInTheDocument();
   });
 
   it("opens the project preview from the title cell surface outside the link", async () => {
@@ -290,7 +309,19 @@ describe("ProjectsPage compact row navigation", () => {
 
     await user.click(titleSurface);
 
-    expect(screen.getByText("No description")).toBeInTheDocument();
+    expect(screen.getByLabelText("Project title")).toHaveValue(PROJECT.title);
+    expect(push).not.toHaveBeenCalled();
+  });
+
+  it("opens the project preview from a kanban card surface outside controls", async () => {
+    const user = userEvent.setup();
+    const push = vi.fn();
+    mocks.projectViewState.viewMode = "comfortable";
+    renderProjects(makeAdapter({ push }));
+
+    await user.click(projectCard());
+
+    expect(screen.getByLabelText("Project title")).toHaveValue(PROJECT.title);
     expect(push).not.toHaveBeenCalled();
   });
 
@@ -306,7 +337,7 @@ describe("ProjectsPage compact row navigation", () => {
     await user.click(within(row).getByRole("button", { name: "—" }));
 
     expect(push).not.toHaveBeenCalled();
-    expect(screen.queryByText("No description")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Project title")).not.toBeInTheDocument();
   });
 
   it("saves edits from the project preview", async () => {
@@ -319,10 +350,15 @@ describe("ProjectsPage compact row navigation", () => {
     if (!titleSurface) throw new Error("project title surface not found");
 
     await user.click(titleSurface);
-    await user.click(screen.getByRole("button", { name: "Edit" }));
     await user.clear(screen.getByLabelText("Project title"));
     await user.type(screen.getByLabelText("Project title"), "Updated Plan");
     await user.type(screen.getByLabelText("Description"), "Updated description");
+    fireEvent.change(dateInput("Start"), {
+      target: { value: "2026-07-28" },
+    });
+    fireEvent.change(dateInput("Due"), {
+      target: { value: "2026-08-01" },
+    });
     await user.click(screen.getByRole("button", { name: "Save" }));
 
     expect(mocks.updateProject).toHaveBeenLastCalledWith(
@@ -335,6 +371,8 @@ describe("ProjectsPage compact row navigation", () => {
         lead_type: null,
         lead_id: null,
         milestone_id: null,
+        start_date: "2026-07-28",
+        due_date: "2026-08-01",
       },
       expect.objectContaining({
         onSuccess: expect.any(Function),

@@ -11,6 +11,8 @@ interface ProjectDraft {
   priority: ProjectPriority;
   leadType?: "member" | "agent";
   leadId?: string;
+  startDate?: string;
+  dueDate?: string;
   icon?: string;
 }
 
@@ -21,6 +23,8 @@ const EMPTY_DRAFT: ProjectDraft = {
   priority: "none",
   leadType: undefined,
   leadId: undefined,
+  startDate: undefined,
+  dueDate: undefined,
   icon: undefined,
 };
 
@@ -41,7 +45,7 @@ export const useProjectDraftStore = create<ProjectDraftStore>()(
         set({ draft: { ...EMPTY_DRAFT } }),
       hasDraft: () => {
         const { draft } = get();
-        return !!(draft.title || draft.description);
+        return !!(draft.title || draft.description || draft.startDate || draft.dueDate);
       },
     }),
     {
