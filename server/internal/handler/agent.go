@@ -979,6 +979,19 @@ func (h *Handler) CreateAgent(w http.ResponseWriter, r *http.Request) {
 	if rawMcpConfig, ok := rawFields["mcp_config"]; ok && !bytes.Equal(bytes.TrimSpace(rawMcpConfig), []byte("null")) {
 		mc = append([]byte(nil), rawMcpConfig...)
 	}
+	usesWorkspaceMCPRefs, err := agentMCPConfigUsesWorkspaceRefs(mc)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if usesWorkspaceMCPRefs && !roleAllowed(member.Role, "owner", "admin") {
+		writeError(w, http.StatusForbidden, "only workspace owners or admins can reference workspace MCP connections")
+		return
+	}
+	if err := h.validateAgentWorkspaceMCPRefs(r.Context(), workspaceID, mc); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 
 	created, err := h.Queries.CreateAgent(r.Context(), db.CreateAgentParams{
 		WorkspaceID:        wsUUID,
@@ -1230,6 +1243,20 @@ func (h *Handler) UpdateAgent(w http.ResponseWriter, r *http.Request) {
 	shouldClearMcpConfig := hasMcpConfig && bytes.Equal(bytes.TrimSpace(rawMcpConfig), []byte("null"))
 	if hasMcpConfig && !shouldClearMcpConfig {
 		params.McpConfig = append([]byte(nil), rawMcpConfig...)
+		usesWorkspaceMCPRefs, err := agentMCPConfigUsesWorkspaceRefs(params.McpConfig)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		if usesWorkspaceMCPRefs {
+			if _, ok := h.requireWorkspaceRole(w, r, uuidToString(existing.WorkspaceID), "agent not found", "owner", "admin"); !ok {
+				return
+			}
+		}
+		if err := h.validateAgentWorkspaceMCPRefs(r.Context(), uuidToString(existing.WorkspaceID), params.McpConfig); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
 	}
 
 	// Resolve the runtime that will be in force after this update so the

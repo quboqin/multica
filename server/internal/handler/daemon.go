@@ -1136,6 +1136,12 @@ func (h *Handler) ClaimTaskByRuntime(w http.ResponseWriter, r *http.Request) {
 		var mcpConfig json.RawMessage
 		if agent.McpConfig != nil {
 			mcpConfig = json.RawMessage(agent.McpConfig)
+			materialized, err := h.materializeAgentWorkspaceMCPRefs(r.Context(), runtimeWorkspaceID, mcpConfig, slog.Default())
+			if err != nil {
+				slog.Warn("failed to materialize workspace MCP references", "agent_id", uuidToString(agent.ID), "workspace_id", runtimeWorkspaceID, "error", err)
+			} else {
+				mcpConfig = materialized
+			}
 		}
 		// runtime_config is stored as JSONB and may legitimately be the
 		// empty object `{}` for agents that haven't opted into any

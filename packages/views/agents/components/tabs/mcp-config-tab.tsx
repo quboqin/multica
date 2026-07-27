@@ -1,19 +1,24 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Eraser, Loader2, Lock, Save } from "lucide-react";
-import type { Agent, IntegrationTokens } from "@multica/core/types";
+import { useQuery } from "@tanstack/react-query";
+import { Eraser, Loader2, Lock, PlugZap, Save } from "lucide-react";
+import type { Agent, IntegrationTokens, WorkspaceMCPConnection } from "@multica/core/types";
 import { useAuthStore } from "@multica/core/auth";
+import { useWorkspaceId } from "@multica/core/hooks";
 import {
   DEFAULT_INTEGRATION_TOKEN_KEYS,
   integrationTokenPlaceholder,
 } from "@multica/core/integration-tokens";
+import { workspaceMCPConnectionsOptions } from "@multica/core/workspace-mcp";
 import { Button } from "@multica/ui/components/ui/button";
 import { Textarea } from "@multica/ui/components/ui/textarea";
 import { toast } from "sonner";
 import { useT } from "../../../i18n";
 
 const EMPTY_INTEGRATION_TOKENS: IntegrationTokens = {};
+const WORKSPACE_MCP_REFS_KEY = "workspaceMcpRefs";
+const WORKSPACE_MCP_REFS_SNAKE_KEY = "workspace_mcp_refs";
 
 // `null` and the empty string are the two ways the user can mean "no
 // config" — the server stores either as a NULL column and the daemon
@@ -23,6 +28,54 @@ const EMPTY_INTEGRATION_TOKENS: IntegrationTokens = {};
 function configToText(value: unknown): string {
   if (value === null || value === undefined) return "";
   return JSON.stringify(value, null, 2);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function workspaceMCPRefs(value: unknown): Array<Record<string, unknown>> {
+  if (!isRecord(value)) return [];
+  const refs = value[WORKSPACE_MCP_REFS_KEY] ?? value[WORKSPACE_MCP_REFS_SNAKE_KEY];
+  if (!Array.isArray(refs)) return [];
+  return refs.filter(isRecord);
+}
+
+function workspaceMCPConnectionId(ref: Record<string, unknown>): string {
+  const value = ref.connectionId ?? ref.connection_id;
+  return typeof value === "string" ? value : "";
+}
+
+function normalizeServerName(value: string): string {
+  const out = value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, "-")
+    .replace(/[-_]+$/g, "")
+    .replace(/^[-_]+/g, "")
+    .slice(0, 64)
+    .replace(/[-_]+$/g, "");
+  return out || "workspace-mcp";
+}
+
+function defaultWorkspaceMCPServerName(connection: WorkspaceMCPConnection): string {
+  return normalizeServerName(`workspace-${connection.name || connection.capability || "mcp"}`);
+}
+
+function setWorkspaceMCPRef(
+  value: unknown | null,
+  connection: WorkspaceMCPConnection | null,
+): unknown | null {
+  const next: Record<string, unknown> = isRecord(value) ? { ...value } : {};
+  delete next[WORKSPACE_MCP_REFS_KEY];
+  delete next[WORKSPACE_MCP_REFS_SNAKE_KEY];
+  if (connection) {
+    next[WORKSPACE_MCP_REFS_KEY] = [{
+      connectionId: connection.id,
+      serverName: defaultWorkspaceMCPServerName(connection),
+    }];
+  }
+  return Object.keys(next).length > 0 ? next : null;
 }
 
 export function McpConfigTab({
@@ -35,6 +88,7 @@ export function McpConfigTab({
   onDirtyChange?: (dirty: boolean) => void;
 }) {
   const { t } = useT("agents");
+  const wsId = useWorkspaceId();
   const integrationTokens = useAuthStore(
     (s) => s.user?.integration_tokens ?? EMPTY_INTEGRATION_TOKENS,
   );
@@ -43,6 +97,15 @@ export function McpConfigTab({
   const original = useMemo(() => configToText(agent.mcp_config), [agent.mcp_config]);
   const [text, setText] = useState(original);
   const [saving, setSaving] = useState(false);
+  const workspaceConnectionsQuery = useQuery({
+    ...workspaceMCPConnectionsOptions(wsId),
+    enabled: !!wsId && !redacted,
+  });
+  const activeWorkspaceConnections = useMemo(
+    () => (workspaceConnectionsQuery.data?.connections ?? [])
+      .filter((connection) => connection.status === "active"),
+    [workspaceConnectionsQuery.data?.connections],
+  );
   const profileCredentialPlaceholders = useMemo(() => {
     const keys = new Set(DEFAULT_INTEGRATION_TOKEN_KEYS);
     for (const [key, value] of Object.entries(integrationTokens)) {
@@ -100,6 +163,12 @@ export function McpConfigTab({
   }, [trimmed]);
 
   const dirty = text !== original;
+  const selectedWorkspaceConnectionId = parseResult.ok
+    ? workspaceMCPConnectionId(workspaceMCPRefs(parseResult.value)[0] ?? {})
+    : "";
+  const selectedWorkspaceConnection = activeWorkspaceConnections.find(
+    (connection) => connection.id === selectedWorkspaceConnectionId,
+  ) ?? null;
 
   useEffect(() => {
     onDirtyChange?.(dirty);
@@ -144,6 +213,12 @@ export function McpConfigTab({
     setText("");
   };
 
+  const handleWorkspaceConnectionChange = (connectionId: string) => {
+    if (!parseResult.ok) return;
+    const connection = activeWorkspaceConnections.find((item) => item.id === connectionId) ?? null;
+    setText(configToText(setWorkspaceMCPRef(parseResult.value, connection)));
+  };
+
   const showInvalid = trimmed !== "" && !parseResult.ok;
   const invalidMessage = !parseResult.ok && parseResult.error === "mcp_config_not_object"
     ? t(($) => $.tab_body.mcp_config.invalid_not_object)
@@ -183,6 +258,58 @@ export function McpConfigTab({
             <Eraser className="h-3 w-3" />
             {t(($) => $.tab_body.mcp_config.clear_action)}
           </Button>
+        )}
+      </div>
+
+      <div className="rounded-md border bg-muted/20 p-3">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+          <div className="min-w-0 space-y-1">
+            <p className="flex items-center gap-2 text-xs font-medium text-foreground">
+              <PlugZap className="h-3.5 w-3.5 text-muted-foreground" />
+              {t(($) => $.tab_body.mcp_config.workspace_refs_title)}
+            </p>
+            <p className="text-xs text-muted-foreground">
+              {t(($) => $.tab_body.mcp_config.workspace_refs_hint)}
+            </p>
+          </div>
+          <label className="flex min-w-[220px] flex-col gap-1 text-xs text-muted-foreground">
+            <span>{t(($) => $.tab_body.mcp_config.workspace_select_label)}</span>
+            <select
+              value={selectedWorkspaceConnectionId}
+              onChange={(event) => handleWorkspaceConnectionChange(event.target.value)}
+              disabled={!parseResult.ok || workspaceConnectionsQuery.isLoading}
+              className="h-8 rounded-md border border-input bg-background px-2 text-xs text-foreground outline-none focus:border-ring focus:ring-2 focus:ring-ring/30 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              <option value="">
+                {workspaceConnectionsQuery.isLoading
+                  ? t(($) => $.tab_body.mcp_config.workspace_loading)
+                  : t(($) => $.tab_body.mcp_config.workspace_none)}
+              </option>
+              {activeWorkspaceConnections.map((connection) => (
+                <option key={connection.id} value={connection.id}>
+                  {connection.name}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
+        {!workspaceConnectionsQuery.isLoading && activeWorkspaceConnections.length === 0 && (
+          <p className="mt-2 text-xs text-muted-foreground">
+            {t(($) => $.tab_body.mcp_config.workspace_empty)}
+          </p>
+        )}
+        {!parseResult.ok && (
+          <p className="mt-2 text-xs text-destructive">
+            {t(($) => $.tab_body.mcp_config.workspace_invalid_json_hint)}
+          </p>
+        )}
+        {selectedWorkspaceConnection && (
+          <p className="mt-2 truncate text-xs text-muted-foreground">
+            {t(($) => $.tab_body.mcp_config.workspace_selected_summary, {
+              serverName: defaultWorkspaceMCPServerName(selectedWorkspaceConnection),
+              capability: selectedWorkspaceConnection.capability,
+            })}
+          </p>
         )}
       </div>
 

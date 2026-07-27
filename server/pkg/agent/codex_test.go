@@ -2088,6 +2088,25 @@ func TestEnsureCodexMcpConfigWritesManagedBlock(t *testing.T) {
 	}
 }
 
+func TestRenderCodexMcpServersBlockMapsHeadersToHTTPHeaders(t *testing.T) {
+	t.Parallel()
+
+	raw := json.RawMessage(`{"mcpServers":{"workspace_creative":{"url":"http://127.0.0.1:19518/mcp","headers":{"Authorization":"Bearer test"}}}}`)
+	block, hasServers, err := renderCodexMcpServersBlock(raw)
+	if err != nil {
+		t.Fatalf("renderCodexMcpServersBlock: %v", err)
+	}
+	if !hasServers {
+		t.Fatal("hasServers = false, want true")
+	}
+	if !strings.Contains(block, `http_headers = { Authorization = "Bearer test" }`) {
+		t.Fatalf("expected headers to render as http_headers, got:\n%s", block)
+	}
+	if strings.Contains(block, "\nheaders = ") {
+		t.Fatalf("raw headers key should not be emitted for Codex, got:\n%s", block)
+	}
+}
+
 func TestEnsureCodexMcpConfigForces0600OnPreexistingFile(t *testing.T) {
 	t.Parallel()
 	if runtime.GOOS == "windows" {

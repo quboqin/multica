@@ -293,9 +293,9 @@ func ensureCodexMcpConfig(configPath string, mcpConfig json.RawMessage, logger *
 // servers to render (empty/null mcp_config) and the caller should only
 // strip the prior managed block.
 //
-// Claude-style camelCase keys (`args`, `env`, `command`, `url`) pass
-// through verbatim — Codex's config schema happens to use the same
-// names today. If they ever diverge, rename here rather than in the UI.
+// Most Claude-style keys (`args`, `env`, `command`, `url`) pass through
+// verbatim. HTTP headers are the one known schema divergence: common MCP
+// JSON uses `headers`, while Codex config.toml uses `http_headers`.
 func renderCodexMcpServersBlock(raw json.RawMessage) (string, bool, error) {
 	if len(raw) == 0 {
 		return "", false, nil
@@ -342,11 +342,18 @@ func renderCodexMcpServersBlock(raw json.RawMessage) (string, bool, error) {
 		}
 		sort.Strings(keys)
 		for _, k := range keys {
+			tomlKey := k
+			if k == "headers" {
+				if _, hasCodexHeaders := serverVal["http_headers"]; hasCodexHeaders {
+					continue
+				}
+				tomlKey = "http_headers"
+			}
 			tomlValue, err := jsonValueToCodexTOMLInline(serverVal[k])
 			if err != nil {
 				return "", false, fmt.Errorf("mcp_servers.%s.%s: %w", name, k, err)
 			}
-			sb.WriteString(codexTOMLKey(k))
+			sb.WriteString(codexTOMLKey(tomlKey))
 			sb.WriteString(" = ")
 			sb.WriteString(tomlValue)
 			sb.WriteString("\n")

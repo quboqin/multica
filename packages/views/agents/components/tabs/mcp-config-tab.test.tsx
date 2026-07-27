@@ -3,6 +3,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { Agent } from "@multica/core/types";
 import { I18nProvider } from "@multica/core/i18n/react";
 import enCommon from "../../../locales/en/common.json";
@@ -16,6 +17,28 @@ const authUserRef = vi.hoisted(() => ({
       notion_token: "secret-notion",
     } as Record<string, string>,
   },
+}));
+const workspaceConnectionsRef = vi.hoisted(() => ({
+  current: [
+    {
+      id: "11111111-1111-1111-1111-111111111111",
+      workspace_id: "ws-1",
+      name: "Ad Creative FAT",
+      capability: "creative_edit",
+      transport: "streamable_http",
+      server_url: "http://10.0.0.10:19518/mcp",
+      tool_create: "create_creative_job",
+      tool_get: "get_creative_job",
+      status: "active",
+      is_default: true,
+      has_secret_headers: true,
+      secret_header_names: ["Authorization"],
+      last_verified_at: "",
+      last_error: "",
+      created_at: "",
+      updated_at: "",
+    },
+  ],
 }));
 
 vi.mock("sonner", () => ({
@@ -34,6 +57,17 @@ vi.mock("@multica/core/auth", () => {
   );
   return { useAuthStore };
 });
+
+vi.mock("@multica/core/hooks", () => ({
+  useWorkspaceId: () => "ws-1",
+}));
+
+vi.mock("@multica/core/workspace-mcp", () => ({
+  workspaceMCPConnectionsOptions: () => ({
+    queryKey: ["workspace-mcp", "ws-1", "connections"],
+    queryFn: async () => ({ connections: workspaceConnectionsRef.current }),
+  }),
+}));
 
 import { McpConfigTab } from "./mcp-config-tab";
 
@@ -65,10 +99,19 @@ function renderTab(
   onSave = vi.fn().mockResolvedValue(undefined),
 ) {
   const agent = { ...baseAgent, ...overrides };
+  const queryClient = new QueryClient({
+    defaultOptions: {
+      queries: {
+        retry: false,
+      },
+    },
+  });
   const result = render(
-    <I18nProvider locale="en" resources={TEST_RESOURCES}>
-      <McpConfigTab agent={agent} onSave={onSave} />
-    </I18nProvider>,
+    <QueryClientProvider client={queryClient}>
+      <I18nProvider locale="en" resources={TEST_RESOURCES}>
+        <McpConfigTab agent={agent} onSave={onSave} />
+      </I18nProvider>
+    </QueryClientProvider>,
   );
   return { ...result, onSave };
 }
@@ -82,6 +125,26 @@ describe("McpConfigTab", () => {
         notion_token: "secret-notion",
       },
     };
+    workspaceConnectionsRef.current = [
+      {
+        id: "11111111-1111-1111-1111-111111111111",
+        workspace_id: "ws-1",
+        name: "Ad Creative FAT",
+        capability: "creative_edit",
+        transport: "streamable_http",
+        server_url: "http://10.0.0.10:19518/mcp",
+        tool_create: "create_creative_job",
+        tool_get: "get_creative_job",
+        status: "active",
+        is_default: true,
+        has_secret_headers: true,
+        secret_header_names: ["Authorization"],
+        last_verified_at: "",
+        last_error: "",
+        created_at: "",
+        updated_at: "",
+      },
+    ];
   });
 
   it("renders a read-only redacted state when the server omitted the value", () => {
@@ -171,6 +234,41 @@ describe("McpConfigTab", () => {
     });
   });
 
+  it("adds a workspace MCP reference while preserving custom runtime servers", async () => {
+    const user = userEvent.setup();
+    const custom = { mcpServers: { github: { command: "github-mcp" } } };
+    const { onSave } = renderTab({ mcp_config: custom });
+
+    await screen.findByRole("option", { name: "Ad Creative FAT" });
+    fireEvent.change(screen.getByLabelText(/Connection/i), {
+      target: { value: "11111111-1111-1111-1111-111111111111" },
+    });
+
+    const editor = screen.getByLabelText(/MCP config JSON editor/i) as HTMLTextAreaElement;
+    const draft = JSON.parse(editor.value);
+    expect(draft.mcpServers.github.command).toBe("github-mcp");
+    expect(draft.workspaceMcpRefs).toEqual([
+      {
+        connectionId: "11111111-1111-1111-1111-111111111111",
+        serverName: "workspace-ad-creative-fat",
+      },
+    ]);
+
+    await user.click(screen.getByRole("button", { name: /save/i }));
+
+    expect(onSave).toHaveBeenCalledWith({
+      mcp_config: {
+        mcpServers: { github: { command: "github-mcp" } },
+        workspaceMcpRefs: [
+          {
+            connectionId: "11111111-1111-1111-1111-111111111111",
+            serverName: "workspace-ad-creative-fat",
+          },
+        ],
+      },
+    });
+  });
+
   it("clearing the editor saves null to wipe the column", async () => {
     const user = userEvent.setup();
     const { onSave } = renderTab({ mcp_config: { mcpServers: {} } });
@@ -222,11 +320,14 @@ describe("McpConfigTab", () => {
     const initial = { mcpServers: { fetch: { command: "uvx" } } };
     const updated = { mcpServers: { fetch: { command: "npx" } } };
     const agent = { ...baseAgent, mcp_config: initial };
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 
     const { rerender } = render(
-      <I18nProvider locale="en" resources={TEST_RESOURCES}>
-        <McpConfigTab agent={agent} onSave={vi.fn()} />
-      </I18nProvider>,
+      <QueryClientProvider client={queryClient}>
+        <I18nProvider locale="en" resources={TEST_RESOURCES}>
+          <McpConfigTab agent={agent} onSave={vi.fn()} />
+        </I18nProvider>
+      </QueryClientProvider>,
     );
 
     const editor = screen.getByLabelText(
@@ -235,12 +336,14 @@ describe("McpConfigTab", () => {
     expect(editor.value).toBe(JSON.stringify(initial, null, 2));
 
     rerender(
-      <I18nProvider locale="en" resources={TEST_RESOURCES}>
-        <McpConfigTab
-          agent={{ ...agent, mcp_config: updated }}
-          onSave={vi.fn()}
-        />
-      </I18nProvider>,
+      <QueryClientProvider client={queryClient}>
+        <I18nProvider locale="en" resources={TEST_RESOURCES}>
+          <McpConfigTab
+            agent={{ ...agent, mcp_config: updated }}
+            onSave={vi.fn()}
+          />
+        </I18nProvider>
+      </QueryClientProvider>,
     );
 
     // Editor follows the new prop and the dirty hint is NOT shown — if it
@@ -255,11 +358,14 @@ describe("McpConfigTab", () => {
     const initial = { mcpServers: { fetch: { command: "uvx" } } };
     const updated = { mcpServers: { fetch: { command: "npx" } } };
     const agent = { ...baseAgent, mcp_config: initial };
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 
     const { rerender } = render(
-      <I18nProvider locale="en" resources={TEST_RESOURCES}>
-        <McpConfigTab agent={agent} onSave={vi.fn()} />
-      </I18nProvider>,
+      <QueryClientProvider client={queryClient}>
+        <I18nProvider locale="en" resources={TEST_RESOURCES}>
+          <McpConfigTab agent={agent} onSave={vi.fn()} />
+        </I18nProvider>
+      </QueryClientProvider>,
     );
 
     const editor = screen.getByLabelText(
@@ -270,12 +376,14 @@ describe("McpConfigTab", () => {
     expect(editor.value).toBe(draft);
 
     rerender(
-      <I18nProvider locale="en" resources={TEST_RESOURCES}>
-        <McpConfigTab
-          agent={{ ...agent, mcp_config: updated }}
-          onSave={vi.fn()}
-        />
-      </I18nProvider>,
+      <QueryClientProvider client={queryClient}>
+        <I18nProvider locale="en" resources={TEST_RESOURCES}>
+          <McpConfigTab
+            agent={{ ...agent, mcp_config: updated }}
+            onSave={vi.fn()}
+          />
+        </I18nProvider>
+      </QueryClientProvider>,
     );
 
     expect(editor.value).toBe(draft);
