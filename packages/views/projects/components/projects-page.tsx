@@ -278,7 +278,17 @@ const GRID_COLS =
   "grid-cols-[0.75rem_1rem_minmax(120px,1fr)_116px_1.75rem_0.75rem] " +
   "@2xl:grid-cols-[0.75rem_1rem_minmax(240px,1fr)_116px_var(--pjc-progress)_var(--pjc-lead)_var(--pjc-plan)_var(--pjc-due)_var(--pjc-updated)_var(--pjc-issues)_var(--pjc-created)_1.75rem_0.75rem]";
 
+const ROW_PREVIEW_IGNORE_SELECTOR =
+  "a, button, input, textarea, select, [role='button'], [role='checkbox'], [role='menuitem'], [data-row-preview-ignore]";
+
 const stopRowNavigation = (e: MouseEvent) => e.stopPropagation();
+
+function shouldIgnoreRowPreview(e: MouseEvent<HTMLElement>): boolean {
+  const target = e.target;
+  if (!(target instanceof Element)) return false;
+  const ignored = target.closest(ROW_PREVIEW_IGNORE_SELECTOR);
+  return ignored != null && e.currentTarget.contains(ignored);
+}
 
 function columnTrackVars(
   isVisible: (key: ProjectColumnKey) => boolean,
@@ -491,24 +501,29 @@ function ProjectTableRow({
   return (
     <ListGridRow
       className={`h-auto min-h-14 cursor-pointer py-1.5 ${selected ? "bg-accent/30" : ""}`}
-      onClick={() => onOpenPreview(project)}
+      onClick={(e) => {
+        if (shouldIgnoreRowPreview(e)) return;
+        onOpenPreview(project);
+      }}
     >
       <CheckboxCell checked={selected} onToggle={onToggleSelect} />
       <ListGridCell className="items-start gap-2">
         <ProjectIcon project={project} size="sm" className="mt-0.5" />
-        <AppLink
-          href={rowHref}
-          className="min-w-0 flex-1 break-words text-sm font-medium leading-snug line-clamp-2 hover:text-primary"
-          title={project.title}
-          onClickCapture={stopRowNavigation}
-          onAuxClick={stopRowNavigation}
-        >
-          {project.title}
-        </AppLink>
+        <div className="min-w-0 flex-1">
+          <AppLink
+            href={rowHref}
+            className="inline-flex max-w-full hover:text-primary"
+            title={project.title}
+          >
+            <span className="min-w-0 break-words text-sm font-medium leading-snug line-clamp-2">
+              {project.title}
+            </span>
+          </AppLink>
+        </div>
       </ListGridCell>
 
       {/* status — core column, always visible */}
-      <ListGridCell onClick={stopRowNavigation} onAuxClick={stopRowNavigation}>
+      <ListGridCell>
         <ProjectStatusBadge project={project} handleUpdate={handleUpdate} align="start" />
       </ListGridCell>
 
@@ -521,7 +536,7 @@ function ProjectTableRow({
       )}
 
       {isColVisible("lead") ? (
-        <ListGridCell className="hidden @2xl:flex" onClick={stopRowNavigation} onAuxClick={stopRowNavigation}>
+        <ListGridCell className="hidden @2xl:flex">
           <ProjectLeadPicker
             project={project}
             handleUpdate={handleUpdate}

@@ -34,6 +34,9 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("@tanstack/react-query", () => ({
+  queryOptions: <TOptions extends { queryKey?: readonly unknown[] }>(
+    options: TOptions,
+  ) => options,
   useQuery: (options: { queryKey?: readonly unknown[] }) => {
     const key = options.queryKey?.[0];
     if (key === "projects") {
@@ -263,14 +266,20 @@ describe("ProjectsPage compact row navigation", () => {
 
     expect(push).toHaveBeenCalledWith("/test-workspace/projects/project-1");
     expect(push).toHaveBeenCalledTimes(1);
+    expect(screen.queryByText("No description")).not.toBeInTheDocument();
   });
 
-  it("opens the project preview from the row surface", async () => {
+  it("opens the project preview from the title cell surface outside the link", async () => {
     const user = userEvent.setup();
     const push = vi.fn();
     renderProjects(makeAdapter({ push }));
+    const row = projectRow();
+    const titleSurface = within(row).getByRole("link", { name: PROJECT.title })
+      .parentElement;
 
-    await user.click(projectRow());
+    if (!titleSurface) throw new Error("project title surface not found");
+
+    await user.click(titleSurface);
 
     expect(screen.getByText("No description")).toBeInTheDocument();
     expect(push).not.toHaveBeenCalled();
