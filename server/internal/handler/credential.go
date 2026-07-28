@@ -237,6 +237,17 @@ func (h *Handler) RunCredentialCrawl(w http.ResponseWriter, r *http.Request) {
 	if len(req.Params) == 0 {
 		req.Params = json.RawMessage(`{}`)
 	}
+	var issue db.Issue
+	hasIssue := false
+	if strings.TrimSpace(req.IssueID) != "" {
+		var ok bool
+		issue, ok = h.loadIssueForUser(w, r, req.IssueID)
+		if !ok {
+			return
+		}
+		hasIssue = true
+		req.Params = h.materialSearchParamsWithStrategyMemory(r.Context(), issue, req.ConnectorID, req.Capability, req.Params)
+	}
 	result, err := h.CredentialBroker.RunCrawl(r.Context(), broker.RunCrawlInput{
 		WorkspaceID: workspaceID,
 		ProfileID:   profileID,
@@ -248,11 +259,7 @@ func (h *Handler) RunCredentialCrawl(w http.ResponseWriter, r *http.Request) {
 		writeCredentialBrokerError(w, err)
 		return
 	}
-	if strings.TrimSpace(req.IssueID) != "" {
-		issue, ok := h.loadIssueForUser(w, r, req.IssueID)
-		if !ok {
-			return
-		}
+	if hasIssue {
 		materials := creativeMaterialsFromCrawlRaw(result.Raw)
 		importSummary, err := h.importCreativeMaterialsForIssue(r.Context(), creativeMaterialImportInput{
 			IssueID:      issue.ID,
@@ -269,6 +276,9 @@ func (h *Handler) RunCredentialCrawl(w http.ResponseWriter, r *http.Request) {
 			slog.Warn("credential crawl creative import failed", append(logger.RequestAttrs(r), "error", err, "issue_id", req.IssueID)...)
 			writeError(w, http.StatusInternalServerError, "crawl completed but failed to import creative materials")
 			return
+		}
+		if err := h.recordCreativeMaterialCrawlStrategyMemory(r.Context(), issue, req.ConnectorID, req.Capability, result.Raw, importSummary.RunID); err != nil {
+			slog.Warn("credential crawl strategy memory update failed", append(logger.RequestAttrs(r), "error", err, "issue_id", req.IssueID)...)
 		}
 		writeJSON(w, http.StatusOK, map[string]any{
 			"status":             result.Status,

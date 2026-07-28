@@ -3,10 +3,12 @@ import assert from "node:assert/strict";
 
 import {
   appGrowingAppMaterialListVariables,
+  appGrowingBrandFromStrategyMemory,
   appGrowingGraphQLDateWindow,
   appGrowingGraphQLRequest,
   appGrowingMaterialURL,
   appGrowingSearchAppVariables,
+  appGrowingShouldUseAdaptiveBrowserFallback,
   captureAppGrowingMaterialPage,
   connectorForID,
   connectorGraphQLHeaders,
@@ -286,6 +288,41 @@ test("classifies AppGrowing GraphQL HTTP rejections as capture errors", async ()
   assert.equal(result.status, 406);
   assert.match(result.error, /^appgrowing_graphql_http_406/);
   assert.match(result.error, /Language/);
+});
+
+test("uses learned AppGrowing brand ids from adaptive strategy memory", () => {
+  const brand = appGrowingBrandFromStrategyMemory({
+    _adaptive_strategy_memory: {
+      enabled: true,
+      memories: {
+        easycash: {
+          brand_id: "brand-memory-1",
+          brand_name: "Easycash",
+        },
+      },
+    },
+  }, "Easycash");
+
+  assert.deepEqual(brand, {
+    id: "brand-memory-1",
+    name: "Easycash",
+    source: "strategy_memory",
+  });
+});
+
+test("enables adaptive browser fallback after GraphQL path failures", () => {
+  assert.equal(appGrowingShouldUseAdaptiveBrowserFallback([
+    { source: "graphql_api", error: "appgrowing_graphql_http_406" },
+    { source: "graphql_api", error: "app_brand_not_found" },
+  ], { memories: {} }), true);
+
+  assert.equal(appGrowingShouldUseAdaptiveBrowserFallback([
+    { source: "graphql_api", error: "" },
+  ], { memories: {} }), false);
+
+  assert.equal(appGrowingShouldUseAdaptiveBrowserFallback([], {
+    memories: { easycash: { preferred_source: "browser_network" } },
+  }), true);
 });
 
 test("extracts AppGrowing materials from detailed appMaterialList GraphQL results", () => {

@@ -1,0 +1,1 @@
+DROP TABLE IF EXISTS creative_material_crawl_strategy_memory;
