@@ -1153,7 +1153,7 @@ function connectorGraphQLHeaders(connector, operationName = "") {
     headers["x-operation-name"] = operationName;
   }
   if (connector.id === "appgrowing") {
-    headers["accept-language"] = "en-US,en;q=0.9";
+    headers["accept-language"] = "en";
     headers.origin = "https://appgrowing-global.youcloud.com";
     headers.referer = "https://appgrowing-global.youcloud.com/";
     headers["user-agent"] = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121 Safari/537.36";
@@ -2185,14 +2185,17 @@ async function runAppGrowingMaterialSearch(page, context, connector, params = {}
     fallbackToTopMaterials: params.fallback_to_top_materials === true,
   });
   const needsReauth = captured.some((capture) => capture.needs_reauth === true);
+  const blockingError = appGrowingMaterialSearchBlockingError(captured, materials);
   const budgetNote = timeBudgetExhausted ? "; stopped early because the material_search time budget was exhausted" : "";
   return {
-    status: needsReauth ? "need_reauth" : "completed",
+    status: needsReauth ? "need_reauth" : blockingError ? "failed" : "completed",
     downloaded: 0,
     output_prefix: `local://credential-broker/${params.profile_id || "appgrowing"}/materials`,
     message: needsReauth
       ? "AppGrowing reported that the account was logged out; re-authentication is required"
-      : `selected ${selection.selected.length} AppGrowing materials from ${competitors.length} competitors; asset download storage is not configured${budgetNote}`,
+      : blockingError
+        ? `AppGrowing material_search failed before reading material data: ${blockingError}`
+        : `selected ${selection.selected.length} AppGrowing materials from ${competitors.length} competitors; asset download storage is not configured${budgetNote}`,
     raw: {
       connector_id: connector.id,
       capability: "material_search",
@@ -2229,6 +2232,36 @@ async function runAppGrowingMaterialSearch(page, context, connector, params = {}
       selected_materials: selection.selected,
     },
   };
+}
+
+function appGrowingMaterialSearchBlockingError(captured, materials) {
+  if (materials.length > 0) {
+    return "";
+  }
+  const attempts = captured.filter((capture) => capture && !capture.skipped);
+  if (attempts.length === 0) {
+    return "";
+  }
+  const successfulAttempts = attempts.filter((capture) => !capture.error);
+  if (successfulAttempts.length > 0) {
+    return "";
+  }
+  const blockingErrors = attempts
+    .map((capture) => String(capture.error || "").trim())
+    .filter((error) => error && !appGrowingMaterialSearchNonBlockingError(error));
+  if (blockingErrors.length === 0) {
+    return "";
+  }
+  const counts = new Map();
+  for (const error of blockingErrors) {
+    counts.set(error, (counts.get(error) || 0) + 1);
+  }
+  const [primary] = Array.from(counts.entries()).sort((a, b) => b[1] - a[1])[0] || [];
+  return `${primary || blockingErrors[0]} (${blockingErrors.length} capture attempts failed)`;
+}
+
+function appGrowingMaterialSearchNonBlockingError(error) {
+  return error === "app_brand_not_found" || error === "browser_fallback_disabled_for_bulk_material_search";
 }
 
 function appGrowingPlannedMaterialPages(competitors, priorityCompetitors, pageLimit, priorityPageLimit) {
@@ -2395,17 +2428,41 @@ function appGrowingGraphQLRequest(context, connector, operationName, query, vari
     headers: connectorGraphQLHeaders(connector, operationName),
     timeout,
   }).then(async (response) => {
+    const status = response.status();
+    let text = "";
+    try {
+      text = await response.text();
+    } catch {
+      text = "";
+    }
     let body = null;
     try {
-      body = await response.json();
+      body = text ? JSON.parse(text) : null;
     } catch {
       body = null;
     }
-    return {
-      status: response.status(),
+    const result = {
+      status,
       body,
     };
+    if (status < 200 || status >= 300) {
+      result.error = appGrowingGraphQLHTTPErrorMessage(status, body, text);
+    }
+    return result;
   });
+}
+
+function appGrowingGraphQLHTTPErrorMessage(status, body, text) {
+  const bodyError = appGrowingGraphQLErrorMessage(body) || appGrowingCompactResponseText(text);
+  return [`appgrowing_graphql_http_${status}`, bodyError].filter(Boolean).join(": ");
+}
+
+function appGrowingCompactResponseText(text) {
+  if (typeof text !== "string") {
+    return "";
+  }
+  const compact = text.replace(/\s+/g, " ").trim();
+  return compact.length > 180 ? `${compact.slice(0, 177)}...` : compact;
 }
 
 function appGrowingGraphQLResponseSummary(operationName, result) {
@@ -3799,9 +3856,11 @@ const server = http.createServer(async (req, res) => {
 export {
   appGrowingAppMaterialListVariables,
   appGrowingGraphQLDateWindow,
+  appGrowingGraphQLRequest,
   appGrowingMaterialURL,
   appGrowingSearchAppVariables,
   captureAppGrowingMaterialPage,
+  connectorGraphQLHeaders,
   connectorForID,
   connectorTargetURL,
   extractAppGrowingMaterials,

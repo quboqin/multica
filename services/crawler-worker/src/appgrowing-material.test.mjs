@@ -4,9 +4,12 @@ import assert from "node:assert/strict";
 import {
   appGrowingAppMaterialListVariables,
   appGrowingGraphQLDateWindow,
+  appGrowingGraphQLRequest,
   appGrowingMaterialURL,
   appGrowingSearchAppVariables,
   captureAppGrowingMaterialPage,
+  connectorForID,
+  connectorGraphQLHeaders,
   extractAppGrowingMaterials,
   isBrowserPageCrashError,
   shouldBlockAppGrowingCrawlResource,
@@ -253,6 +256,36 @@ test("builds AppGrowing searchApp variables for competitor brand lookup", () => 
     page: 1,
     hadAdvert: 1,
   });
+});
+
+test("uses AppGrowing accepted GraphQL language header", () => {
+  const headers = connectorGraphQLHeaders(connectorForID("appgrowing"), "searchApp");
+
+  assert.equal(headers["accept-language"], "en");
+});
+
+test("classifies AppGrowing GraphQL HTTP rejections as capture errors", async () => {
+  const connector = connectorForID("appgrowing");
+  const context = {
+    request: {
+      async post(url, options) {
+        assert.equal(url, connector.graphQLURL);
+        assert.equal(options.headers["accept-language"], "en");
+        return {
+          status: () => 406,
+          async text() {
+            return "The Language: [en-US,en;q=0.9] is no acceptable";
+          },
+        };
+      },
+    },
+  };
+
+  const result = await appGrowingGraphQLRequest(context, connector, "searchApp", "query SearchApp { searchAppBrand { data } }", {});
+
+  assert.equal(result.status, 406);
+  assert.match(result.error, /^appgrowing_graphql_http_406/);
+  assert.match(result.error, /Language/);
 });
 
 test("extracts AppGrowing materials from detailed appMaterialList GraphQL results", () => {
