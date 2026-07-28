@@ -10,6 +10,7 @@ import {
   extractAppGrowingMaterials,
   isBrowserPageCrashError,
   shouldBlockAppGrowingCrawlResource,
+  shouldUseAppGrowingBrowserFallback,
 } from "./index.mjs";
 
 test("extracts AppGrowing material resources from nested GraphQL list rows", () => {
@@ -153,6 +154,13 @@ test("blocks heavyweight AppGrowing fallback resources", () => {
   assert.equal(shouldBlockAppGrowingCrawlResource(request("media", "https://cdn.example.com/ad.mp4")), true);
   assert.equal(shouldBlockAppGrowingCrawlResource(request("script", "https://www.googletagmanager.com/gtm.js")), true);
   assert.equal(shouldBlockAppGrowingCrawlResource(request("xhr", "https://api-appgrowing-global.youcloud.com/graphql")), false);
+});
+
+test("disables AppGrowing browser fallback by default for bulk material searches", () => {
+  assert.equal(shouldUseAppGrowingBrowserFallback({}, 1), true);
+  assert.equal(shouldUseAppGrowingBrowserFallback({}, 2), false);
+  assert.equal(shouldUseAppGrowingBrowserFallback({ browser_capture_fallback: true }, 10), true);
+  assert.equal(shouldUseAppGrowingBrowserFallback({ browser_capture_fallback: false }, 1), false);
 });
 
 test("captures AppGrowing browser page crashes as page-level errors", async () => {

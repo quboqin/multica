@@ -328,6 +328,14 @@ func writeCredentialBrokerError(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusConflict, err.Error())
 	case errors.Is(err, broker.ErrWorkerNotConfigured):
 		writeError(w, http.StatusServiceUnavailable, err.Error())
+	case errors.Is(err, broker.ErrWorkerRequestInvalid):
+		writeError(w, http.StatusBadRequest, err.Error())
+	case errors.Is(err, broker.ErrWorkerBusy):
+		writeError(w, http.StatusTooManyRequests, err.Error())
+	case errors.Is(err, broker.ErrWorkerTimeout):
+		writeError(w, http.StatusGatewayTimeout, err.Error())
+	case errors.Is(err, broker.ErrWorkerUnavailable):
+		writeError(w, http.StatusServiceUnavailable, err.Error())
 	case isNotFound(err):
 		writeError(w, http.StatusNotFound, "credential resource not found")
 	default:

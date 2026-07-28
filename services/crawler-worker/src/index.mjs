@@ -28,6 +28,9 @@ const streamFrameIntervalMS = Math.max(
   100,
   Math.min(1000, positiveIntegerEnv("CRAWLER_WORKER_STREAM_FRAME_MS", 180)),
 );
+const appGrowingMaterialSearchBudgetMS = positiveIntegerEnv("APPGROWING_MATERIAL_SEARCH_BUDGET_MS", 240_000);
+const appGrowingGraphQLTimeoutMS = positiveIntegerEnv("APPGROWING_GRAPHQL_TIMEOUT_MS", 12_000);
+const appGrowingBrowserFallbackMinBudgetMS = positiveIntegerEnv("APPGROWING_BROWSER_FALLBACK_MIN_BUDGET_MS", 75_000);
 
 const builtInConnectors = {
   appgrowing: {
@@ -2035,21 +2038,54 @@ async function runAppGrowingMaterialSearch(page, context, connector, params = {}
   const pageLimit = positiveIntegerParam(params.pages_per_competitor, 1, 1, 5);
   const priorityPageLimit = positiveIntegerParam(params.priority_pages_per_competitor, Math.max(2, pageLimit), 1, 8);
   const captureTimeoutMS = positiveIntegerParam(params.capture_timeout_ms, 12_000, 3_000, 60_000);
+  const graphQLTimeoutMS = positiveIntegerParam(params.graphql_timeout_ms, appGrowingGraphQLTimeoutMS, 3_000, 30_000);
+  const searchBudgetMS = positiveIntegerParam(
+    params.material_search_budget_ms ?? params.crawl_budget_ms,
+    appGrowingMaterialSearchBudgetMS,
+    30_000,
+    14 * 60_000,
+  );
+  const startedAt = Date.now();
+  const deadline = startedAt + searchBudgetMS;
+  const plannedPages = appGrowingPlannedMaterialPages(competitors, priorityCompetitors, pageLimit, priorityPageLimit);
+  const browserFallbackEnabled = shouldUseAppGrowingBrowserFallback(params, plannedPages);
   const rules = normalizeMaterialRules(params.selection_rules || params.rules);
 
   const captured = [];
   const materials = [];
+  let timeBudgetExhausted = false;
+  const markBudgetExhausted = (source, competitor = "", priority = false, pageNumber = null) => {
+    timeBudgetExhausted = true;
+    captured.push({
+      competitor,
+      priority,
+      page: pageNumber,
+      source,
+      skipped: true,
+      error: "material_search_time_budget_exhausted",
+      remaining_budget_ms: appGrowingRemainingBudgetMS(deadline),
+      materials_found: 0,
+    });
+  };
+
   if (params.graphql_material_search !== false) {
     const brandCache = new Map();
+    graphqlSearch:
     for (const competitor of competitors) {
       const priority = priorityCompetitors.has(normalizeCompetitorKey(competitor));
       const pages = priority ? priorityPageLimit : pageLimit;
       for (let pageNumber = 1; pageNumber <= pages; pageNumber += 1) {
+        if (!appGrowingHasBudget(deadline, Math.min(5_000, graphQLTimeoutMS))) {
+          markBudgetExhausted("graphql_api", competitor, priority, pageNumber);
+          break graphqlSearch;
+        }
         const capture = await captureAppGrowingMaterialPageViaGraphQL(context, connector, {
           competitor,
           pageNumber,
           params,
           brandCache,
+          deadline,
+          graphQLTimeoutMS,
         });
         captured.push({
           competitor,
@@ -2077,67 +2113,86 @@ async function runAppGrowingMaterialSearch(page, context, connector, params = {}
     }
   }
 
-  if (materials.length === 0 && params.browser_capture_fallback !== false) {
-    let browserCapturePage = page;
-    let browserFallbackStopped = false;
-    for (const competitor of competitors) {
-      if (browserFallbackStopped) {
-        break;
-      }
-      const priority = priorityCompetitors.has(normalizeCompetitorKey(competitor));
-      const pages = priority ? priorityPageLimit : pageLimit;
-      for (let pageNumber = 1; pageNumber <= pages; pageNumber += 1) {
-        const capture = await captureAppGrowingMaterialPage(browserCapturePage, connector, {
-          competitor,
-          pageNumber,
-          params,
-          captureTimeoutMS,
-        });
-        captured.push({
-          competitor,
-          priority,
-          page: pageNumber,
-          source: "browser_network",
-          url: capture.url,
-          graphQL_operations: capture.operations,
-          graphQL_responses: capture.responses,
-          page_snapshot: capture.snapshot,
-          needs_reauth: capture.needsReauth,
-          error: capture.error,
-          page_crashed: capture.pageCrashed,
-          materials_found: capture.materials.length,
-        });
-        for (const material of capture.materials) {
-          materials.push({
-            ...material,
+  if (materials.length === 0 && browserFallbackEnabled) {
+    if (!appGrowingHasBudget(deadline, appGrowingBrowserFallbackMinBudgetMS)) {
+      markBudgetExhausted("browser_network");
+    } else {
+      let browserCapturePage = page;
+      let browserFallbackStopped = false;
+      browserFallback:
+      for (const competitor of competitors) {
+        if (browserFallbackStopped) {
+          break;
+        }
+        const priority = priorityCompetitors.has(normalizeCompetitorKey(competitor));
+        const pages = priority ? priorityPageLimit : pageLimit;
+        for (let pageNumber = 1; pageNumber <= pages; pageNumber += 1) {
+          if (!appGrowingHasBudget(deadline, appGrowingBrowserFallbackMinBudgetMS)) {
+            markBudgetExhausted("browser_network", competitor, priority, pageNumber);
+            break browserFallback;
+          }
+          const capture = await captureAppGrowingMaterialPage(browserCapturePage, connector, {
+            competitor,
+            pageNumber,
+            params,
+            captureTimeoutMS,
+            pageTimeoutMS: appGrowingRequestTimeoutMS(deadline, 60_000),
+          });
+          captured.push({
             competitor,
             priority,
+            page: pageNumber,
+            source: "browser_network",
+            url: capture.url,
+            graphQL_operations: capture.operations,
+            graphQL_responses: capture.responses,
+            page_snapshot: capture.snapshot,
+            needs_reauth: capture.needsReauth,
+            error: capture.error,
+            page_crashed: capture.pageCrashed,
+            materials_found: capture.materials.length,
           });
-        }
-        if (capture.pageCrashed) {
-          const replacementPage = await recreateAppGrowingCapturePage(context, browserCapturePage)
-            .catch(() => null);
-          if (!replacementPage) {
-            browserFallbackStopped = true;
-            break;
+          for (const material of capture.materials) {
+            materials.push({
+              ...material,
+              competitor,
+              priority,
+            });
           }
-          browserCapturePage = replacementPage;
+          if (capture.pageCrashed) {
+            const replacementPage = await recreateAppGrowingCapturePage(context, browserCapturePage)
+              .catch(() => null);
+            if (!replacementPage) {
+              browserFallbackStopped = true;
+              break;
+            }
+            browserCapturePage = replacementPage;
+          }
         }
       }
     }
+  } else if (materials.length === 0 && params.browser_capture_fallback !== false) {
+    captured.push({
+      source: "browser_network",
+      skipped: true,
+      error: "browser_fallback_disabled_for_bulk_material_search",
+      planned_pages: plannedPages,
+      materials_found: 0,
+    });
   }
 
   const selection = selectAppGrowingMaterials(materials, rules, totalLimit, {
     fallbackToTopMaterials: params.fallback_to_top_materials === true,
   });
   const needsReauth = captured.some((capture) => capture.needs_reauth === true);
+  const budgetNote = timeBudgetExhausted ? "; stopped early because the material_search time budget was exhausted" : "";
   return {
     status: needsReauth ? "need_reauth" : "completed",
     downloaded: 0,
     output_prefix: `local://credential-broker/${params.profile_id || "appgrowing"}/materials`,
     message: needsReauth
       ? "AppGrowing reported that the account was logged out; re-authentication is required"
-      : `selected ${selection.selected.length} AppGrowing materials from ${competitors.length} competitors; asset download storage is not configured`,
+      : `selected ${selection.selected.length} AppGrowing materials from ${competitors.length} competitors; asset download storage is not configured${budgetNote}`,
     raw: {
       connector_id: connector.id,
       capability: "material_search",
@@ -2151,6 +2206,13 @@ async function runAppGrowingMaterialSearch(page, context, connector, params = {}
         total_limit: totalLimit,
         pages_per_competitor: pageLimit,
         priority_pages_per_competitor: priorityPageLimit,
+        planned_pages: plannedPages,
+        graphql_timeout_ms: graphQLTimeoutMS,
+        time_budget_ms: searchBudgetMS,
+        elapsed_ms: Date.now() - startedAt,
+        remaining_budget_ms: appGrowingRemainingBudgetMS(deadline),
+        time_budget_exhausted: timeBudgetExhausted,
+        browser_capture_fallback: browserFallbackEnabled,
         fallback_to_top_materials: params.fallback_to_top_materials === true,
       },
       captured,
@@ -2167,6 +2229,46 @@ async function runAppGrowingMaterialSearch(page, context, connector, params = {}
       selected_materials: selection.selected,
     },
   };
+}
+
+function appGrowingPlannedMaterialPages(competitors, priorityCompetitors, pageLimit, priorityPageLimit) {
+  return competitors.reduce((total, competitor) => {
+    const priority = priorityCompetitors.has(normalizeCompetitorKey(competitor));
+    return total + (priority ? priorityPageLimit : pageLimit);
+  }, 0);
+}
+
+function shouldUseAppGrowingBrowserFallback(params = {}, plannedPages = 1) {
+  if (params.browser_capture_fallback === true) {
+    return true;
+  }
+  if (params.browser_capture_fallback === false) {
+    return false;
+  }
+  return plannedPages <= 1;
+}
+
+function appGrowingRemainingBudgetMS(deadline) {
+  if (!Number.isFinite(deadline)) {
+    return Number.POSITIVE_INFINITY;
+  }
+  return Math.max(0, deadline - Date.now());
+}
+
+function appGrowingHasBudget(deadline, minBudgetMS = 1) {
+  return appGrowingRemainingBudgetMS(deadline) >= minBudgetMS;
+}
+
+function appGrowingRequestTimeoutMS(deadline, desiredTimeoutMS) {
+  const desired = positiveIntegerParam(desiredTimeoutMS, appGrowingGraphQLTimeoutMS, 1_000, 60_000);
+  const remaining = appGrowingRemainingBudgetMS(deadline);
+  if (!Number.isFinite(remaining)) {
+    return desired;
+  }
+  if (remaining <= 0) {
+    return 1;
+  }
+  return Math.max(1, Math.min(desired, Math.max(1, remaining - 500)));
 }
 
 async function captureAppGrowingMaterialPageViaGraphQL(context, connector, options) {
@@ -2190,8 +2292,15 @@ async function captureAppGrowingMaterialPageViaGraphQL(context, connector, optio
   let lastError = "";
   for (const order of appGrowingGraphQLMaterialOrders(options.params)) {
     const variables = appGrowingAppMaterialListVariables(options.params, brand.id, options.pageNumber, new Date(), order);
-    const result = await appGrowingGraphQLRequest(context, connector, "appMaterialList", APPGROWING_APP_MATERIAL_LIST_QUERY, variables)
-      .catch((error) => ({ error: error instanceof Error ? error.message : String(error), status: null, body: null }));
+    const result = await appGrowingGraphQLRequest(
+      context,
+      connector,
+      "appMaterialList",
+      APPGROWING_APP_MATERIAL_LIST_QUERY,
+      variables,
+      options.graphQLTimeoutMS,
+      options.deadline,
+    ).catch((error) => ({ error: error instanceof Error ? error.message : String(error), status: null, body: null }));
     operations.add("appMaterialList");
     responses.push(appGrowingGraphQLResponseSummary("appMaterialList", result));
     if (result.error) {
@@ -2244,8 +2353,15 @@ async function resolveAppGrowingBrand(context, connector, options, responses, op
   }
 
   const variables = appGrowingSearchAppVariables(competitor, options.params);
-  const result = await appGrowingGraphQLRequest(context, connector, "searchApp", APPGROWING_SEARCH_APP_QUERY, variables)
-    .catch((error) => ({ error: error instanceof Error ? error.message : String(error), status: null, body: null }));
+  const result = await appGrowingGraphQLRequest(
+    context,
+    connector,
+    "searchApp",
+    APPGROWING_SEARCH_APP_QUERY,
+    variables,
+    options.graphQLTimeoutMS,
+    options.deadline,
+  ).catch((error) => ({ error: error instanceof Error ? error.message : String(error), status: null, body: null }));
   operations.add("searchApp");
   responses.push(appGrowingGraphQLResponseSummary("searchApp", result));
   if (result.error) {
@@ -2265,10 +2381,11 @@ async function resolveAppGrowingBrand(context, connector, options, responses, op
   return brand;
 }
 
-function appGrowingGraphQLRequest(context, connector, operationName, query, variables) {
+function appGrowingGraphQLRequest(context, connector, operationName, query, variables, timeoutMS = appGrowingGraphQLTimeoutMS, deadline = NaN) {
   if (!context?.request || !connector.graphQLURL) {
     throw new Error("AppGrowing GraphQL request context is unavailable");
   }
+  const timeout = appGrowingRequestTimeoutMS(deadline, timeoutMS);
   return context.request.post(connector.graphQLURL, {
     data: {
       operationName,
@@ -2276,7 +2393,7 @@ function appGrowingGraphQLRequest(context, connector, operationName, query, vari
       variables,
     },
     headers: connectorGraphQLHeaders(connector, operationName),
-    timeout: 30_000,
+    timeout,
   }).then(async (response) => {
     let body = null;
     try {
@@ -2516,7 +2633,7 @@ async function captureAppGrowingMaterialPage(page, connector, options) {
   }
   page.on("response", onResponse);
   try {
-    await page.goto(url, { waitUntil: "domcontentloaded", timeout: 60_000 });
+    await page.goto(url, { waitUntil: "domcontentloaded", timeout: positiveIntegerParam(options.pageTimeoutMS, 60_000, 1_000, 60_000) });
     await Promise.race([
       page.waitForLoadState("networkidle", { timeout: options.captureTimeoutMS }).catch(() => null),
       sleep(options.captureTimeoutMS),
@@ -3692,6 +3809,7 @@ export {
   normalizeDeclarativeConnector,
   normalizeAppGrowingMaterial,
   shouldBlockAppGrowingCrawlResource,
+  shouldUseAppGrowingBrowserFallback,
 };
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
