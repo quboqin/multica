@@ -9,7 +9,9 @@ description: "Coordinate an advertising-material squad when each selected image 
 
 每次被唤醒时：
 
-1. 读取当前 Issue、子 Issue、评论、附件和创意上下文快照。
+1. 读取当前 Issue、直接子 Issue、评论、附件和创意上下文快照。直接子 Issue 必须使用
+   `multica issue children <当前 Issue ID> --output json` 一次获取；不要拉取工作区全量 Issue 后
+   本地翻页筛选。
 2. 读取小队名册中每个成员的职责、Skill 名称和 Skill 描述。
 3. 判断所有已经满足依赖但尚不存在的专业任务，选择能力最匹配的成员，并在本次唤醒中把这些
    任务全部创建为直接子 Issue。禁止一次只派一个已就绪任务。

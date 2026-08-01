@@ -695,7 +695,7 @@ Settings 是所有"配置即工作"动作的汇总：agent 的 prompt、workspac
 
 ```bash
 multica workspace list | get | watch | unwatch
-multica issue list | get | create | update | assign | status
+multica issue list | get | children | create | update | assign | status
 multica issue comment list | add | delete
 multica issue runs <id>                 # 查看任务执行历史
 multica issue run-messages <task-id>    # 查看某次执行的消息

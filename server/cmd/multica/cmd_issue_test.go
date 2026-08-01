@@ -435,6 +435,63 @@ func TestRunIssuePullRequestsListsLinkedPRsAsJSON(t *testing.T) {
 	}
 }
 
+func TestRunIssueChildrenListsOnlyDirectChildren(t *testing.T) {
+	var gotPaths []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPaths = append(gotPaths, r.URL.Path)
+		switch r.URL.Path {
+		case "/api/issues/ADC-140":
+			json.NewEncoder(w).Encode(map[string]any{
+				"id":         "parent-uuid",
+				"identifier": "ADC-140",
+				"title":      "Creative work",
+			})
+		case "/api/issues/parent-uuid/children":
+			json.NewEncoder(w).Encode(map[string]any{
+				"issues": []map[string]any{
+					{
+						"id":              "child-uuid",
+						"identifier":      "ADC-141",
+						"parent_issue_id": "parent-uuid",
+						"title":           "Plan",
+						"status":          "done",
+						"priority":        "high",
+					},
+				},
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	t.Setenv("MULTICA_SERVER_URL", srv.URL)
+	t.Setenv("MULTICA_WORKSPACE_ID", "ws-1")
+	t.Setenv("MULTICA_TOKEN", "test-token")
+
+	cmd := &cobra.Command{Use: "children"}
+	cmd.Flags().String("output", "json", "")
+	cmd.Flags().Bool("full-id", false, "")
+	out, err := captureStdout(t, func() error {
+		return runIssueChildren(cmd, []string{"ADC-140"})
+	})
+	if err != nil {
+		t.Fatalf("runIssueChildren: %v", err)
+	}
+	if strings.Join(gotPaths, ",") != "/api/issues/ADC-140,/api/issues/parent-uuid/children" {
+		t.Fatalf("paths = %v", gotPaths)
+	}
+	var result struct {
+		Issues []map[string]any `json:"issues"`
+	}
+	if err := json.Unmarshal([]byte(out), &result); err != nil {
+		t.Fatalf("decode output: %v\n%s", err, out)
+	}
+	if len(result.Issues) != 1 || result.Issues[0]["identifier"] != "ADC-141" {
+		t.Fatalf("unexpected children: %#v", result.Issues)
+	}
+}
+
 func TestRunIssuePullRequestsTableIncludesCoreFields(t *testing.T) {
 	prs := []map[string]any{{
 		"url":    "https://github.com/multica-ai/multica/pull/42",

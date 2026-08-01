@@ -16,6 +16,9 @@ allowed-tools: Bash(multica *), Bash(python *)
 `references/image_prime_compose.py`，不是市场资源文件。只有 `qr_validation.status=passed`、
 三个模板解码记录齐全且 `approved_payload` 与 `qr_payload` 完全一致时才允许执行；否则回传
 `needs_input`，不能自行选择网址。用附件 ID 下载，不接受本机固定路径或其他市场的替代文件。
+先创建本 Issue 独立工作目录，再对六个输入分别执行
+`multica attachment download <attachment-id> --output-dir <输入目录>`；运行时支持并行工具调用时，
+一次并行发出六个下载，不要先查询 attachment 帮助或串行探索命令。
 运行本 Skill 提供的脚本，先叠加完整透明 Prime 资产层，再在模板固有
 右上 QR 槽位生成 `qr_validation.approved_payload` 的整数模块二维码，并对最终 PNG 机器解码。
 成品解码内容必须同时等于 `approved_payload` 和三个模板的 `decoded_payload`。模板的 Logo、

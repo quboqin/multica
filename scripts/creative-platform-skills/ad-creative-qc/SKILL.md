@@ -14,6 +14,9 @@ allowed-tools: Bash(multica *), Bash(python *)
 
 一个 QC Issue 只验收一个创意变体。读取完整 Issue 与评论，确认 `1080x1080`、`1200x628`、
 `800x1000` 三张最新最终成图齐备并下载；三张必须候选 ID、变体编号、文案版本和修订一致。
+先创建本 Issue 独立工作目录，再对三张 PNG 和三份 JSON 证据分别执行
+`multica attachment download <attachment-id> --output-dir <验收目录>`；运行时支持并行工具调用时，
+一次并行发出六个下载，不要先查询 attachment 帮助或串行探索命令。
 本角色不生成图片。
 
 按正常观看比例检查最终像素：原生尺寸、满版构图、视觉平衡、批准文案可读性、完整
