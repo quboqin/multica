@@ -70,6 +70,10 @@ const SKILL_MD = "SKILL.md";
 
 type DraftFile = { id?: string; path: string; content: string };
 
+function formatSkillConfig(config: Record<string, unknown>) {
+  return JSON.stringify(config ?? {}, null, 2);
+}
+
 // ---------------------------------------------------------------------------
 // File path validation + inline add
 // ---------------------------------------------------------------------------
@@ -276,6 +280,7 @@ export function SkillDetailPage({ skillId }: { skillId: string }) {
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const [content, setContent] = useState("");
+  const [config, setConfig] = useState("");
   const [files, setFiles] = useState<DraftFile[]>([]);
   const [selectedPath, setSelectedPath] = useState(SKILL_MD);
   const [saving, setSaving] = useState(false);
@@ -284,8 +289,8 @@ export function SkillDetailPage({ skillId }: { skillId: string }) {
   const [addingFile, setAddingFile] = useState(false);
   const [conflictPending, setConflictPending] = useState(false);
 
-  const draftRef = useRef({ name, description, content, files });
-  draftRef.current = { name, description, content, files };
+  const draftRef = useRef({ name, description, content, config, files });
+  draftRef.current = { name, description, content, config, files };
 
   const seededKeyRef = useRef<string | null>(null);
 
@@ -310,6 +315,7 @@ export function SkillDetailPage({ skillId }: { skillId: string }) {
         d.name.trim() !== skill.name ||
         d.description.trim() !== skill.description ||
         d.content !== skill.content ||
+        d.config !== formatSkillConfig(skill.config) ||
         draftFilesJson !== serverFilesJson;
       if (hasEdits) {
         setConflictPending(true);
@@ -322,6 +328,7 @@ export function SkillDetailPage({ skillId }: { skillId: string }) {
     setName(skill.name);
     setDescription(skill.description);
     setContent(skill.content);
+    setConfig(formatSkillConfig(skill.config));
     setFiles(
       (skill.files ?? []).map((f: SkillFile) => ({
         id: f.id,
@@ -381,14 +388,16 @@ export function SkillDetailPage({ skillId }: { skillId: string }) {
       name.trim() !== skill.name ||
       description.trim() !== skill.description ||
       content !== skill.content ||
+      config !== formatSkillConfig(skill.config) ||
       JSON.stringify(draftFiles) !== JSON.stringify(serverFiles)
     );
-  }, [skill, name, description, content, files]);
+  }, [skill, name, description, content, config, files]);
 
   const seedFromSkill = (s: Skill) => {
     setName(s.name);
     setDescription(s.description);
     setContent(s.content);
+    setConfig(formatSkillConfig(s.config));
     setFiles(
       (s.files ?? []).map((f: SkillFile) => ({
         id: f.id,
@@ -402,12 +411,20 @@ export function SkillDetailPage({ skillId }: { skillId: string }) {
     if (!skill || !canEdit) return;
     const trimmedName = name.trim();
     const trimmedDesc = description.trim();
+    let parsedConfig: Record<string, unknown>;
+    try {
+      parsedConfig = JSON.parse(config || "{}") as Record<string, unknown>;
+    } catch {
+      toast.error("市场包配置必须是有效 JSON");
+      return;
+    }
     setSaving(true);
     try {
       const payload: UpdateSkillRequest = {
         name: trimmedName,
         description: trimmedDesc,
         content,
+        config: parsedConfig,
         files: files.filter((f) => f.path.trim()),
       };
       const updated = await api.updateSkill(skill.id, payload);

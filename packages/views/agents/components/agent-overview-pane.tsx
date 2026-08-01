@@ -7,14 +7,12 @@ import {
   FileText,
   KeyRound,
   ListTodo,
-  Plug,
   Router,
   Terminal,
   Webhook,
 } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import type { Agent, AgentRuntime } from "@multica/core/types";
-import { providerSupportsMcpConfig } from "@multica/core/agents";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { larkInstallationsOptions } from "@multica/core/lark";
 import {
@@ -32,7 +30,6 @@ import { InstructionsTab } from "./tabs/instructions-tab";
 import { SkillsTab } from "./tabs/skills-tab";
 import { EnvTab } from "./tabs/env-tab";
 import { CustomArgsTab } from "./tabs/custom-args-tab";
-import { McpConfigTab } from "./tabs/mcp-config-tab";
 import { IntegrationsTab } from "./tabs/integrations-tab";
 import { RuntimeConfigTab } from "./tabs/runtime-config-tab";
 import { ActorIssuesPanel } from "../../common/actor-issues-panel";
@@ -45,18 +42,16 @@ export type DetailTab =
   | "skills"
   | "env"
   | "custom_args"
-  | "mcp_config"
   | "integrations"
   | "runtime_config";
 
-const TAB_LABEL_KEY: Record<DetailTab, "activity" | "tasks" | "instructions" | "skills" | "environment" | "custom_args" | "mcp_config" | "integrations" | "runtime_config"> = {
+const TAB_LABEL_KEY: Record<DetailTab, "activity" | "tasks" | "instructions" | "skills" | "environment" | "custom_args" | "integrations" | "runtime_config"> = {
   activity: "activity",
   tasks: "tasks",
   instructions: "instructions",
   skills: "skills",
   env: "environment",
   custom_args: "custom_args",
-  mcp_config: "mcp_config",
   integrations: "integrations",
   runtime_config: "runtime_config",
 };
@@ -71,7 +66,6 @@ const detailTabs: {
   { id: "skills", icon: BookOpenText },
   { id: "env", icon: KeyRound },
   { id: "custom_args", icon: Terminal },
-  { id: "mcp_config", icon: Plug },
   { id: "integrations", icon: Webhook },
   { id: "runtime_config", icon: Router },
 ];
@@ -142,11 +136,6 @@ export function AgentOverviewPane({
   });
   const larkConfigured = larkListing?.configured === true;
 
-  // The MCP tab is only shown when the agent's runtime backend actually
-  // consumes mcp_config — see providerSupportsMcpConfig. We default to
-  // showing it when the runtime row hasn't loaded yet so a slow fetch
-  // can't transiently flicker the tab off and then on.
-  //
   // The Integrations tab only appears once the deployment has Lark wired
   // (configured). Unlike MCP we default to HIDING while the listing loads:
   // deployments without Lark are the common case, so flashing the tab on
@@ -157,18 +146,15 @@ export function AgentOverviewPane({
   // backend currently reads, so surfacing the tab would let users save values
   // their runtime ignores — same anti-footgun rationale as the MCP gate.
   const visibleTabs = useMemo(() => {
-    const showMcp = runtime ? providerSupportsMcpConfig(runtime.provider) : true;
     const showRuntimeConfig = runtime ? runtime.provider === "openclaw" : false;
     return detailTabs.filter((tab) => {
-      if (tab.id === "mcp_config") return showMcp;
       if (tab.id === "integrations") return larkConfigured;
       if (tab.id === "runtime_config") return showRuntimeConfig;
       return true;
     });
   }, [runtime, larkConfigured]);
 
-  // If the active tab disappears (e.g. user just switched the agent's
-  // runtime to one that doesn't read mcp_config), fall back to Activity
+  // If the active tab disappears, fall back to Activity
   // for this render so the pane is never empty. The user's stored
   // activeTab is left alone — switching back to a supporting runtime
   // brings their selection back.
@@ -264,15 +250,6 @@ export function AgentOverviewPane({
             <CustomArgsTab
               agent={agent}
               runtimeDevice={runtime ?? undefined}
-              onSave={(updates) => onUpdate(agent.id, updates)}
-              onDirtyChange={setActiveDirty}
-            />
-          </TabContent>
-        )}
-        {effectiveTab === "mcp_config" && (
-          <TabContent>
-            <McpConfigTab
-              agent={agent}
               onSave={(updates) => onUpdate(agent.id, updates)}
               onDirtyChange={setActiveDirty}
             />

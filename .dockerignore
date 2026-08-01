@@ -4,9 +4,14 @@ node_modules
 
 # Build outputs
 .next
+**/.next
 dist
 server/bin
 server/tmp
+server/data
+tmp
+**/__pycache__
+.gami
 
 # Git
 .git

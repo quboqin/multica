@@ -1,13 +1,4 @@
-export type CreativeMaterialStatus =
-  | "new"
-  | "selected"
-  | "rejected"
-  | "sent_to_edit"
-  | "edited"
-  | "approved"
-  | "archived"
-  | string;
-
+export type CreativeMaterialStatus = "new" | "selected" | "rejected" | "archived" | string;
 export type CreativeMaterialAssetType = "image" | "video" | "unknown" | string;
 
 export interface CreativeMaterialCandidate {
@@ -40,7 +31,7 @@ export interface CreativeMaterialCandidate {
   last_seen_at: string;
   created_at: string;
   updated_at: string;
-  raw?: unknown;
+  source_attachment_id: string;
 }
 
 export interface CreativeMaterialSummary {
@@ -67,123 +58,8 @@ export interface CreativeMaterialCrawlRun {
   created_at: string;
 }
 
-export interface CreativeEditAsset {
-  id: string;
-  variant_id: string;
-  width: number;
-  height: number;
-  label: string;
-  asset_url: string;
-  content_type: string;
-  created_at: string;
-}
-
-export type CreativeEditFeedbackDecision =
-  | "accepted"
-  | "rejected"
-  | "needs_revision";
-
-export type CreativeEditFeedbackReason =
-  | "ready_to_publish"
-  | "copy_accurate"
-  | "benefit_clear"
-  | "layout_match"
-  | "brand_complete"
-  | "copy_error"
-  | "copy_too_long"
-  | "benefit_mismatch"
-  | "layout_mismatch"
-  | "missing_content"
-  | "brand_compliance"
-  | "visual_quality"
-  | "other";
-
-export interface CreativeEditProcessSnapshot {
-  job_status?: string;
-  job_stage?: string;
-  job_progress?: number;
-  job_prompt?: string;
-  process_data?: Record<string, unknown>;
-  dynamic_rules?: {
-    market?: string;
-    strategy?: string;
-    variant_count?: number;
-    sizes?: { width?: number; height?: number; label?: string }[];
-    [key: string]: unknown;
-  };
-  external_status?: string;
-  external_provider?: string;
-  poll_attempts?: number;
-  job_created_at?: string;
-  job_updated_at?: string;
-  job_completed_at?: string | null;
-  last_poll_at?: string | null;
-  source_candidate?: {
-    competitor?: string;
-    title?: string;
-    asset_type?: string;
-    [key: string]: unknown;
-  };
-  variant_index?: number;
-  variant_qc_status?: string;
-  variant_created_at?: string;
-  asset_count?: number;
-  assets?: { width?: number; height?: number; label?: string }[];
-  [key: string]: unknown;
-}
-
-export interface CreativeEditFeedback {
-  id: string;
-  workspace_id: string;
-  issue_id: string;
-  job_id: string;
-  candidate_id: string;
-  variant_id: string;
-  decision: CreativeEditFeedbackDecision | string;
-  reason_codes: (CreativeEditFeedbackReason | string)[];
-  suggestion: string;
-  process_snapshot: CreativeEditProcessSnapshot;
-  created_by: string;
-  created_by_name: string;
-  created_at: string;
-}
-
-export interface CreativeEditVariant {
-  id: string;
-  job_id: string;
-  candidate_id: string;
-  variant_index: number;
-  title: string;
-  description: string;
-  qc_status: string;
-  created_at: string;
-  assets: CreativeEditAsset[];
-  feedback: CreativeEditFeedback[];
-}
-
-export interface CreativeEditJob {
-  id: string;
-  workspace_id: string;
-  issue_id: string;
-  status: string;
-  prompt: string;
-  rules: unknown;
-  process_data: Record<string, unknown>;
-  external_provider: string;
-  mcp_connection_id: string;
-  external_job_id: string;
-  external_status: string;
-  stage: string;
-  progress: number;
-  last_poll_at: string;
-  next_poll_at: string;
-  completed_at: string;
-  error_message: string;
-  poll_attempts: number;
-  created_at: string;
-  updated_at: string;
-  candidate_ids: string[];
-  variants: CreativeEditVariant[];
+export interface CreativeMaterialLibraryResponse {
+  candidates: CreativeMaterialCandidate[];
 }
 
 export interface CreativeMaterialsResponse {
@@ -191,9 +67,161 @@ export interface CreativeMaterialsResponse {
   summary: CreativeMaterialSummary;
   candidates: CreativeMaterialCandidate[];
   crawl_runs: CreativeMaterialCrawlRun[];
-  edit_jobs: CreativeEditJob[];
+  context: CreativeIssueContext | null;
+  items: CreativeIssueItem[];
 }
 
+export type CreativeResourceKind = "copy_library" | "market_pack";
+export type CreativeResourceStatus = "draft" | "published" | "archived";
+
+export interface CreativeResource {
+  id: string;
+  workspace_id: string;
+  kind: CreativeResourceKind;
+  name: string;
+  description: string;
+  status: CreativeResourceStatus;
+  version: number;
+  published_version: number;
+  config: Record<string, unknown>;
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CreativeResourceListResponse {
+  resources: CreativeResource[];
+}
+
+export interface CreativeResourceFile {
+  id: string;
+  resource_id: string;
+  attachment_id: string;
+  role: string;
+  label: string;
+  metadata: Record<string, unknown>;
+  filename: string;
+  url: string;
+  content_type: string;
+  size_bytes: number;
+  created_version: number;
+  created_at: string;
+}
+
+export interface CreativeResourceFileListResponse {
+  files: CreativeResourceFile[];
+}
+
+export interface CreateCreativeResourceRequest {
+  kind: CreativeResourceKind;
+  name: string;
+  description?: string;
+  config?: Record<string, unknown>;
+}
+
+export interface UpdateCreativeResourceRequest {
+  name: string;
+  description?: string;
+  config: Record<string, unknown>;
+}
+
+export type CreativeCopyStatus = "draft" | "approved" | "disabled";
+
+export interface CreativeCopyEntry {
+  id: string;
+  workspace_id: string;
+  library_id: string;
+  external_key: string;
+  headline: string;
+  subheadline: string;
+  benefit: string;
+  cta: string;
+  legal_text: string;
+  copy_role: string;
+  market: string;
+  locale: string;
+  tags: string[];
+  status: CreativeCopyStatus;
+  version: number;
+  metadata: Record<string, unknown>;
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CreativeCopyEntryListResponse {
+  entries: CreativeCopyEntry[];
+}
+
+export type CreativeCopyEntryInput = Omit<CreativeCopyEntry,
+  "id" | "workspace_id" | "library_id" | "version" | "created_by" | "created_at" | "updated_at"
+>;
+
+export interface ImportCreativeCopyEntriesRequest {
+  mode: "append" | "upsert" | "replace";
+  source_filename: string;
+  mapping: Record<string, string>;
+  entries: CreativeCopyEntryInput[];
+}
+
+export interface CreativeCopyImportResult {
+  created: number;
+  updated: number;
+  skipped: number;
+  resource: CreativeResource;
+}
+
+export interface CreativeIssueContext {
+  issue_id: string;
+  workspace_id: string;
+  market_pack_id: string;
+  squad_id: string;
+  snapshot: Record<string, unknown>;
+  updated_at: string;
+}
+
+export interface CreativeIssueItem {
+  issue_id: string;
+  candidate_id: string;
+  copy_entry_id: string;
+  copy_snapshot: Record<string, unknown>;
+  creative_brief: CreativeBrief;
+  work_issue_id: string;
+  revision: number;
+  status: "ready" | "running" | "published" | "blocked" | string;
+  updated_at: string;
+}
+
+export type CreativeBriefStatus = "requested" | "draft" | "confirmed" | string;
+export type CreativeBriefSource = "ai" | "user" | "mixed" | string;
+
+export interface CreativeBrief {
+  theme: string;
+  theme_elements: string[];
+  primary_benefit: string;
+  secondary_benefits: string[];
+  benefit_value: string;
+  evidence: string[];
+  detected_text: string[];
+  visual_type: string;
+  analysis_summary: string;
+  status: CreativeBriefStatus;
+  source: CreativeBriefSource;
+  confidence: number | null;
+  analysis_issue_id: string;
+}
+
+export interface PutCreativeIssueContextRequest {
+  market_pack_id: string;
+  squad_id: string;
+}
+
+export interface UpdateCreativeMaterialCandidateRequest {
+  status: CreativeMaterialStatus;
+  note?: string;
+}
+
+export interface CreativeImportSummary { run_id: string; imported_count: number; existing_count: number; total_count: number; skipped_count: number; }
 export interface CreativeMaterialInput {
   external_id?: string;
   dedupe_key?: string;
@@ -204,43 +232,24 @@ export interface CreativeMaterialInput {
   resource_url?: string;
   poster_url?: string;
   original_url?: string;
-  duration_days?: number | null;
-  impression_estimate?: number | null;
   media_names?: string[];
   area_names?: string[];
   language_names?: string[];
   platform_names?: string[];
-  raw?: unknown;
+  raw?: Record<string, unknown>;
 }
-
-export interface ImportCreativeMaterialsRequest {
-  connector_id?: string;
-  query_summary?: string;
-  params?: Record<string, unknown>;
-  materials: CreativeMaterialInput[];
-}
-
-export interface CreativeImportSummary {
-  run_id: string;
-  imported_count: number;
-  existing_count: number;
-  total_count: number;
-  skipped_count: number;
-}
-
-export interface UpdateCreativeMaterialCandidateRequest {
-  status: CreativeMaterialStatus;
+export interface ImportCreativeMaterialsRequest { connector_id?: string; query_summary?: string; params?: Record<string, unknown>; materials: CreativeMaterialInput[]; }
+export interface ImportCreativeMaterialLibraryRequest {
+  attachment_id?: string;
+  source_url?: string;
+  title?: string;
+  competitor?: string;
+  asset_type?: CreativeMaterialAssetType;
+  area_names?: string[];
+  language_names?: string[];
+  platform_names?: string[];
+  tags?: string[];
   note?: string;
 }
-
-export interface CreateCreativeEditJobRequest {
-  candidate_ids?: string[];
-  prompt?: string;
-  rules?: Record<string, unknown>;
-}
-
-export interface CreateCreativeEditFeedbackRequest {
-  decision: CreativeEditFeedbackDecision;
-  reason_codes: CreativeEditFeedbackReason[];
-  suggestion?: string;
-}
+export interface CreativeMaterialImportResult { id: string; }
+export interface CreativeMaterialArchiveRetryResult { scheduled_count: number; }

@@ -84,7 +84,7 @@ JSON:
 multica crawl run \
   --connector appgrowing \
   --capability material_search \
-  --timeout 5m \
+  --timeout 15m \
   --intent-file appgrowing-weekly.md
 ```
 

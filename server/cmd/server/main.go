@@ -349,7 +349,6 @@ func main() {
 	go heartbeatScheduler.Run(sweepCtx)
 	go runAutopilotScheduler(autopilotCtx, queries, autopilotSvc)
 	go runAutopilotFailureMonitor(autopilotCtx, queries, bus, envFailureMonitorConfig())
-	go runCreativeEditReconciler(sweepCtx, h)
 	go runCreativeMaterialArchiver(sweepCtx, h)
 	go runDBStatsLogger(sweepCtx, pool)
 

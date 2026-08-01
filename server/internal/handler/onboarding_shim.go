@@ -227,7 +227,6 @@ func (h *Handler) BootstrapOnboardingRuntime(w http.ResponseWriter, r *http.Requ
 			Instructions:       onboardingAssistantInstructions,
 			CustomEnv:          []byte("{}"),
 			CustomArgs:         []byte("[]"),
-			McpConfig:          nil,
 			Model:              pgtype.Text{},
 		})
 		if err != nil {

@@ -4,10 +4,13 @@ import assert from "node:assert/strict";
 import {
   appGrowingAppMaterialListVariables,
   appGrowingBrandFromStrategyMemory,
+  appGrowingBrowserFallbackCompetitors,
+  appGrowingCompetitorDiagnostics,
   appGrowingGraphQLDateWindow,
   appGrowingGraphQLRequest,
   appGrowingMaterialURL,
   appGrowingSearchAppVariables,
+  appGrowingSelectionMixSummary,
   appGrowingShouldUseAdaptiveBrowserFallback,
   captureAppGrowingMaterialPage,
   connectorForID,
@@ -17,6 +20,33 @@ import {
   shouldBlockAppGrowingCrawlResource,
   shouldUseAppGrowingBrowserFallback,
 } from "./index.mjs";
+
+test("reports the actual selected material mix instead of the configured target", () => {
+  const selected = [
+    ...Array.from({ length: 20 }, () => ({ bucket: "new" })),
+    ...Array.from({ length: 5 }, () => ({ bucket: "volume" })),
+  ];
+
+  assert.deepEqual(
+    appGrowingSelectionMixSummary(
+      selected,
+      {
+        new_materials: { ratio: 0.4 },
+        volume_materials: { ratio: 0.6 },
+      },
+      25,
+    ),
+    {
+      target: { new_materials: 10, volume_materials: 15 },
+      actual: { new_materials: 20, volume_materials: 5, other_materials: 0 },
+      actual_ratio: { new_materials: 0.8, volume_materials: 0.2, other_materials: 0 },
+      shortfall: { new_materials: 0, volume_materials: 10 },
+      selected: 25,
+      requested_limit: 25,
+      ratio_target_met: false,
+    },
+  );
+});
 
 test("extracts AppGrowing material resources from nested GraphQL list rows", () => {
   const materials = extractAppGrowingMaterials({
@@ -323,6 +353,83 @@ test("enables adaptive browser fallback after GraphQL path failures", () => {
   assert.equal(appGrowingShouldUseAdaptiveBrowserFallback([], {
     memories: { easycash: { preferred_source: "browser_network" } },
   }), true);
+});
+
+test("falls back per competitor when only some GraphQL pages return material", () => {
+  const competitors = ["Easycash", "Kredit Pintar", "Adapundi"];
+  const captured = [
+    { source: "graphql_api", competitor: "Easycash", page: 1, materials_found: 12, error: "" },
+    { source: "graphql_api", competitor: "Kredit Pintar", page: 1, materials_found: 0, error: "appgrowing_graphql_http_406" },
+    { source: "graphql_api", competitor: "Kredit Pintar", page: 2, materials_found: 0, error: "appgrowing_graphql_http_406" },
+    { source: "graphql_api", competitor: "Adapundi", page: 1, materials_found: 0, error: "" },
+  ];
+
+  assert.deepEqual(appGrowingBrowserFallbackCompetitors(
+    competitors,
+    captured,
+    {},
+    { memories: {} },
+    false,
+    true,
+  ), ["Kredit Pintar", "Adapundi"]);
+  assert.deepEqual(appGrowingBrowserFallbackCompetitors(
+    competitors,
+    captured,
+    { browser_capture_fallback: false },
+    { memories: {} },
+    false,
+    true,
+  ), []);
+});
+
+test("reports multi-page coverage and per-competitor browser fallback", () => {
+  const diagnostics = appGrowingCompetitorDiagnostics(
+    ["Easycash", "Kredit Pintar"],
+    new Set(["easycash"]),
+    3,
+    5,
+    [
+      { source: "graphql_api", competitor: "Easycash", page: 1, materials_found: 3, error: "" },
+      { source: "graphql_api", competitor: "Easycash", page: 2, materials_found: 2, error: "" },
+      { source: "graphql_api", competitor: "Easycash", page: 3, materials_found: 0, error: "" },
+      { source: "graphql_api", competitor: "Easycash", page: 4, materials_found: 1, error: "" },
+      { source: "graphql_api", competitor: "Easycash", page: 5, materials_found: 0, error: "" },
+      { source: "graphql_api", competitor: "Kredit Pintar", page: 1, materials_found: 0, error: "appgrowing_graphql_http_406" },
+      { source: "browser_network", competitor: "Kredit Pintar", page: 1, materials_found: 4, error: "" },
+      { source: "browser_network", competitor: "Kredit Pintar", page: 2, materials_found: 0, error: "" },
+      { source: "browser_network", competitor: "Kredit Pintar", page: 3, materials_found: 0, error: "material_search_time_budget_exhausted", skipped: true },
+    ],
+    [
+      { competitor: "Easycash" },
+      { competitor: "Kredit Pintar" },
+      { competitor: "Kredit Pintar" },
+    ],
+  );
+
+  assert.deepEqual(diagnostics[0], {
+    competitor: "Easycash",
+    priority: true,
+    requested_pages: 5,
+    coverage_complete: true,
+    status: "found",
+    materials_found: 6,
+    selected: 1,
+    browser_fallback_used: false,
+    errors: [],
+    pages: [
+      { page: 1, status: "found", materials_found: 3, attempts: [{ source: "graphql_api", materials_found: 3, error: "", needs_reauth: false, skipped: false }] },
+      { page: 2, status: "found", materials_found: 2, attempts: [{ source: "graphql_api", materials_found: 2, error: "", needs_reauth: false, skipped: false }] },
+      { page: 3, status: "no_match", materials_found: 0, attempts: [{ source: "graphql_api", materials_found: 0, error: "", needs_reauth: false, skipped: false }] },
+      { page: 4, status: "found", materials_found: 1, attempts: [{ source: "graphql_api", materials_found: 1, error: "", needs_reauth: false, skipped: false }] },
+      { page: 5, status: "no_match", materials_found: 0, attempts: [{ source: "graphql_api", materials_found: 0, error: "", needs_reauth: false, skipped: false }] },
+    ],
+  });
+  assert.equal(diagnostics[1].requested_pages, 3);
+  assert.equal(diagnostics[1].coverage_complete, false);
+  assert.equal(diagnostics[1].status, "found_incomplete");
+  assert.equal(diagnostics[1].browser_fallback_used, true);
+  assert.equal(diagnostics[1].pages[2].status, "budget_exhausted");
+  assert.equal(diagnostics[1].selected, 2);
 });
 
 test("extracts AppGrowing materials from detailed appMaterialList GraphQL results", () => {

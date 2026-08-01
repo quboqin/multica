@@ -150,6 +150,38 @@ func TestBuildSquadLeaderBriefing_FullSquad(t *testing.T) {
 	}
 }
 
+func TestBuildSquadLeaderBriefing_IncludesAgentSkills(t *testing.T) {
+	ctx := context.Background()
+	leaderID, _ := seededLeaderAgent(t)
+	squad := seedSquadForBriefing(t, leaderID, "Capability Squad", "")
+	helperID := createHandlerTestAgent(t, "Image Specialist", []byte("[]"))
+	addAgentMember(t, squad.ID, helperID, "image production")
+
+	var skillID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO skill (workspace_id, name, description, content, config, created_by)
+		VALUES ($1, 'Image Production', 'Generates one native composition for each requested size.', '', '{}', $2)
+		RETURNING id
+	`, testWorkspaceID, testUserID).Scan(&skillID); err != nil {
+		t.Fatalf("create skill: %v", err)
+	}
+	t.Cleanup(func() { testPool.Exec(ctx, `DELETE FROM skill WHERE id = $1`, skillID) })
+	if _, err := testPool.Exec(ctx, `INSERT INTO agent_skill (agent_id, skill_id) VALUES ($1, $2)`, helperID, skillID); err != nil {
+		t.Fatalf("assign skill: %v", err)
+	}
+
+	out := buildSquadLeaderBriefing(ctx, testHandler.Queries, squad)
+	for _, want := range []string{
+		"Image Specialist",
+		"skills: Image Production",
+		"Generates one native composition for each requested size.",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("expected briefing to contain %q\n--- briefing ---\n%s", want, out)
+		}
+	}
+}
+
 func TestBuildSquadLeaderBriefing_OnlyLeader(t *testing.T) {
 	ctx := context.Background()
 	leaderID, _ := seededLeaderAgent(t)

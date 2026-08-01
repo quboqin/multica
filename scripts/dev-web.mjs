@@ -17,7 +17,7 @@ const baseURL = process.env.MULTICA_WEB_WARMUP_URL || `http://localhost:${port}`
 console.log(`[web dev] starting Next.js on ${baseURL}`);
 const next = spawn(
   process.execPath,
-  [nextBin, "dev", "--webpack", "--port", port],
+  [nextBin, "dev", "--turbopack", "--port", port],
   {
     cwd: webRoot,
     env: process.env,
@@ -26,7 +26,7 @@ const next = spawn(
 );
 
 let warmup;
-if (process.env.MULTICA_WEB_WARMUP?.toLowerCase() !== "false") {
+if (process.env.MULTICA_WEB_WARMUP?.toLowerCase() === "true") {
   warmup = spawn(
     process.execPath,
     [warmupScript, "--base-url", baseURL],

@@ -1119,7 +1119,7 @@ func (h *Handler) ClaimTaskByRuntime(w http.ResponseWriter, r *http.Request) {
 		// Workspace-bound skills first, then platform built-in skills. Built-in
 		// names carry a "multica-" prefix so their on-disk slugs never collide
 		// with a user-authored workspace skill (see writeSkillFiles).
-		skills := h.TaskService.LoadAgentSkills(r.Context(), task.AgentID)
+		skills := h.TaskService.LoadAgentSkillsForIssue(r.Context(), task.AgentID, task.IssueID)
 		skills = append(skills, h.TaskService.BuiltinSkills()...)
 		var customEnv map[string]string
 		if agent.CustomEnv != nil {
@@ -1131,16 +1131,6 @@ func (h *Handler) ClaimTaskByRuntime(w http.ResponseWriter, r *http.Request) {
 		if agent.CustomArgs != nil {
 			if err := json.Unmarshal(agent.CustomArgs, &customArgs); err != nil {
 				slog.Warn("failed to unmarshal agent custom_args", "agent_id", uuidToString(agent.ID), "error", err)
-			}
-		}
-		var mcpConfig json.RawMessage
-		if agent.McpConfig != nil {
-			mcpConfig = json.RawMessage(agent.McpConfig)
-			materialized, err := h.materializeAgentWorkspaceMCPRefs(r.Context(), runtimeWorkspaceID, mcpConfig, slog.Default())
-			if err != nil {
-				slog.Warn("failed to materialize workspace MCP references", "agent_id", uuidToString(agent.ID), "workspace_id", runtimeWorkspaceID, "error", err)
-			} else {
-				mcpConfig = materialized
 			}
 		}
 		// runtime_config is stored as JSONB and may legitimately be the
@@ -1158,7 +1148,6 @@ func (h *Handler) ClaimTaskByRuntime(w http.ResponseWriter, r *http.Request) {
 			Skills:        skills,
 			CustomEnv:     customEnv,
 			CustomArgs:    customArgs,
-			McpConfig:     mcpConfig,
 			Model:         agent.Model.String,
 			ThinkingLevel: agent.ThinkingLevel.String,
 			RuntimeConfig: runtimeConfig,

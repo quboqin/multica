@@ -1,41 +1,57 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  ArrowLeft,
-  ChevronRight,
   Check,
+  ChevronLeft,
+  ChevronRight,
   Download,
   ExternalLink,
+  FileUp,
   ImageIcon,
+  Library,
   Maximize2,
+  Package,
+  RefreshCw,
   RotateCcw,
   Search,
+  Settings2,
   Sparkles,
+  Target,
   Video,
   X,
 } from "lucide-react";
+import { zipSync } from "fflate";
 import type {
-  CreateCreativeEditFeedbackRequest,
-  CreativeEditJob,
+  CreativeCopyEntry,
+  CreativeCopyEntryInput,
+  CreativeIssueItem,
   CreativeMaterialCandidate,
   Issue,
 } from "@multica/core/types";
 import { api } from "@multica/core/api";
-import { creativeKeys, creativeMaterialsOptions } from "@multica/core/creative";
+import {
+  creativeCopyEntriesOptions,
+  creativeKeys,
+  creativeMaterialLibraryOptions,
+  creativeMaterialsOptions,
+  creativeResourcesOptions,
+} from "@multica/core/creative";
+import { credentialProfilesOptions } from "@multica/core/credential";
 import { useWorkspaceId } from "@multica/core/hooks";
+import { useFileUpload } from "@multica/core/hooks/use-file-upload";
+import { issueAttachmentsOptions, issueKeys, issueTimelineOptions } from "@multica/core/issues/queries";
+import { squadListOptions } from "@multica/core/workspace/queries";
 import { Badge } from "@multica/ui/components/ui/badge";
 import { Button } from "@multica/ui/components/ui/button";
-import { Checkbox } from "@multica/ui/components/ui/checkbox";
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@multica/ui/components/ui/dialog";
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@multica/ui/components/ui/dialog";
 import { Input } from "@multica/ui/components/ui/input";
+import { Label } from "@multica/ui/components/ui/label";
 import { NativeSelect, NativeSelectOption } from "@multica/ui/components/ui/native-select";
 import { Textarea } from "@multica/ui/components/ui/textarea";
 import { cn } from "@multica/ui/lib/utils";
 import { toast } from "sonner";
-import { CreativeQcAttemptHistory, extractCreativeQcAttemptRounds } from "./creative-qc-attempt-history";
-import { CreativeVariantFeedback } from "./creative-variant-feedback";
 
 type CandidateFilter = {
   status: string;
@@ -57,6 +73,16 @@ type MediaPreviewItem = {
   openUrl?: string;
 };
 
+type ContextDraft = {
+  market_pack_id: string;
+  squad_id: string;
+};
+
+type CopyDraft = Pick<CreativeCopyEntryInput, "headline" | "subheadline" | "benefit" | "cta" | "legal_text">;
+type CreativeBriefDraft = CreativeIssueItem["creative_brief"];
+type CreativeDeliveryAsset = { id: string; filename: string; url: string; download_url?: string | null; markdown_url?: string | null };
+type CreativeAdjustmentTarget = { candidateId: string; asset: CreativeDeliveryAsset; groupAssets: CreativeDeliveryAsset[] };
+
 const DEFAULT_FILTER: CandidateFilter = {
   status: "all",
   competitor: "all",
@@ -68,1758 +94,542 @@ const DEFAULT_FILTER: CandidateFilter = {
   text: "",
 };
 
-const STATUS_LABEL: Record<string, string> = {
-  new: "待选",
-  selected: "已选择",
-  rejected: "不采用",
-  sent_to_edit: "修图中",
-  edited: "已出图",
-  approved: "已确认",
-  archived: "已归档",
+const EMPTY_CONTEXT: ContextDraft = { market_pack_id: "", squad_id: "" };
+const EMPTY_COPY: CopyDraft = { headline: "", subheadline: "", benefit: "", cta: "", legal_text: "" };
+const EMPTY_BRIEF: CreativeBriefDraft = {
+  theme: "", theme_elements: [], primary_benefit: "", secondary_benefits: [],
+  benefit_value: "", evidence: [], detected_text: [], visual_type: "",
+  analysis_summary: "", status: "", source: "", confidence: null,
+  analysis_issue_id: "",
 };
-
-const creativeEditPromptDraftKey = (workspaceId: string, issueId: string) =>
-  `multica:creative-edit-prompt:${workspaceId}:${issueId}`;
-
-const creativeEditViewedJobsKey = (workspaceId: string, issueId: string) =>
-  `multica:creative-edit-viewed:${workspaceId}:${issueId}`;
-
-function readCreativeEditPromptDraft(key: string) {
-  if (typeof window === "undefined") return "";
-  try {
-    return window.sessionStorage.getItem(key) ?? "";
-  } catch {
-    return "";
-  }
-}
-
-function writeCreativeEditPromptDraft(key: string, value: string) {
-  if (typeof window === "undefined") return;
-  try {
-    if (value) window.sessionStorage.setItem(key, value);
-    else window.sessionStorage.removeItem(key);
-  } catch {
-    // The input remains usable when session storage is unavailable.
-  }
-}
-
-function readCreativeEditViewedJobs(key: string) {
-  if (typeof window === "undefined") return new Set<string>();
-  try {
-    const value = JSON.parse(window.localStorage.getItem(key) ?? "[]");
-    return new Set(Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : []);
-  } catch {
-    return new Set<string>();
-  }
-}
-
-function writeCreativeEditViewedJobs(key: string, jobIDs: Set<string>) {
-  if (typeof window === "undefined") return;
-  try {
-    window.localStorage.setItem(key, JSON.stringify([...jobIDs]));
-  } catch {
-    // Viewing the result board does not depend on local storage being available.
-  }
-}
-
-function creativeEditJobHistory(jobs: CreativeEditJob[]) {
-  return [...jobs]
-    .sort((left, right) => Date.parse(left.created_at) - Date.parse(right.created_at))
-    .map((job, index) => ({ job, sequence: index + 1 }))
-    .reverse();
-}
-
-function formatCreativeEditJobTime(value: string) {
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "时间未知";
-  return new Intl.DateTimeFormat("zh-CN", {
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: false,
-  }).format(date);
-}
-
-function creativePreviewEmptyMessage(errorMessage: string) {
-  if (/service restarted/i.test(errorMessage)) {
-    return "服务重启导致本次任务未完成，未产生可查看的生成图。";
-  }
-  if (/no conceptual variant/i.test(errorMessage)) {
-    return "本次生成图均未通过质检，详细原因可在看板的 QC 每轮记录查看。";
-  }
-  return "本次未产生可查看的生成图；详细原因可在看板的 QC 每轮记录查看。";
-}
-
-function saveCreativeDownload(blob: Blob, filename: string) {
-  const url = URL.createObjectURL(blob);
-  const anchor = document.createElement("a");
-  anchor.href = url;
-  anchor.download = filename;
-  anchor.style.display = "none";
-  document.body.appendChild(anchor);
-  anchor.click();
-  anchor.remove();
-  window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
-}
-
-function creativeEditAssetPreviewURL(issueID: string, assetID: string, workspaceID: string) {
-  if (!assetID) return "";
-  const path = `/api/issues/${encodeURIComponent(issueID)}/creative-edit-assets/${encodeURIComponent(assetID)}/preview`;
-  if (!workspaceID) return path;
-  const params = new URLSearchParams({ workspace_id: workspaceID });
-  return `${path}?${params.toString()}`;
-}
+const STATUS_LABEL: Record<string, string> = { new: "待选", selected: "已选择", rejected: "不采用", archived: "已归档" };
 
 export function CreativeMaterialPool({ issue }: { issue: Issue }) {
   const wsId = useWorkspaceId();
-  const qc = useQueryClient();
+  const queryClient = useQueryClient();
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const { upload, uploading } = useFileUpload(api);
   const [filter, setFilter] = useState<CandidateFilter>(DEFAULT_FILTER);
-  const [editPrompt, setEditPrompt] = useState("");
-  const editPromptDraftKey = creativeEditPromptDraftKey(wsId, issue.id);
-  const editViewedJobsKey = creativeEditViewedJobsKey(wsId, issue.id);
-  const [activeJobId, setActiveJobId] = useState("");
-  const [activeCandidateId, setActiveCandidateId] = useState("");
-  const [viewedJobIDs, setViewedJobIDs] = useState<Set<string>>(() => readCreativeEditViewedJobs(editViewedJobsKey));
-  const [previewItem, setPreviewItem] = useState<MediaPreviewItem | null>(null);
-  const [candidateOrder, setCandidateOrder] = useState<Record<string, number>>({});
+  const [candidatePoolExpanded, setCandidatePoolExpanded] = useState(true);
+  const [resultBoardExpanded, setResultBoardExpanded] = useState(true);
   const [poolPreviewOpen, setPoolPreviewOpen] = useState(false);
-  const [resultPreviewOpen, setResultPreviewOpen] = useState(false);
-  const [candidatePoolExpanded, setCandidatePoolExpanded] = useState(false);
-  const [resultBoardExpanded, setResultBoardExpanded] = useState(false);
+  const [libraryOpen, setLibraryOpen] = useState(false);
+  const [previewItem, setPreviewItem] = useState<MediaPreviewItem | null>(null);
+  const [copyCandidateId, setCopyCandidateId] = useState("");
+  const [adjustmentTarget, setAdjustmentTarget] = useState<CreativeAdjustmentTarget | null>(null);
+  const [adjustmentOpen, setAdjustmentOpen] = useState(false);
+  const [activeAssetId, setActiveAssetId] = useState("");
+  const [contextDraft, setContextDraft] = useState<ContextDraft>(EMPTY_CONTEXT);
 
-  const workflowEnabled = issue.metadata?.workflow === "creative_material";
-  const query = useQuery(creativeMaterialsOptions(wsId, issue.id));
-  const data = query.data;
-  const visible = workflowEnabled
-    || !!data?.enabled
-    || (data?.candidates.length ?? 0) > 0
-    || (data?.edit_jobs.length ?? 0) > 0;
+  const materials = useQuery(creativeMaterialsOptions(wsId, issue.id));
+  const attachments = useQuery(issueAttachmentsOptions(issue.id));
+  const timeline = useQuery(issueTimelineOptions(issue.id));
+  const resources = useQuery(creativeResourcesOptions(wsId));
+  const squads = useQuery(squadListOptions(wsId));
+  const profiles = useQuery(credentialProfilesOptions(wsId));
+  const library = useQuery(creativeMaterialLibraryOptions(wsId));
+  const candidates = useMemo(() => materials.data?.candidates ?? [], [materials.data?.candidates]);
+  const selectedCandidates = candidates.filter((candidate) => candidate.status === "selected");
+  const marketPacks = (resources.data?.resources ?? []).filter((resource) => resource.kind === "market_pack" && resource.status === "published");
+  const currentContext = materials.data?.context;
+  const defaultMarketPackId = marketPacks[0]?.id ?? "";
+  const defaultSquadId = squads.data?.[0]?.id ?? "";
 
+  useEffect(() => {
+    setContextDraft({
+      market_pack_id: currentContext?.market_pack_id || defaultMarketPackId,
+      squad_id: currentContext?.squad_id || defaultSquadId,
+    });
+  }, [currentContext?.market_pack_id, currentContext?.squad_id, defaultMarketPackId, defaultSquadId]);
+
+  const activeMarketPack = marketPacks.find((resource) => resource.id === contextDraft.market_pack_id);
+  const copyLibraryId = stringConfig(activeMarketPack?.config, "copy_library_id");
+  const benefitOptions = stringArrayConfig(activeMarketPack?.config, "benefit_taxonomy");
+  const themeOptions = stringArrayConfig(activeMarketPack?.config, "theme_presets");
+  const copyEntries = useQuery(creativeCopyEntriesOptions(wsId, copyLibraryId));
+  const itemByCandidate = useMemo(() => new Map((materials.data?.items ?? []).map((item) => [item.candidate_id, item])), [materials.data?.items]);
+  const filteredCandidates = useMemo(() => candidates.filter((candidate) => candidateMatchesFilter(candidate, filter)), [candidates, filter]);
+  const finalAssets = useMemo(() => (attachments.data ?? []).filter((attachment) => attachment.content_type.startsWith("image/") && isCreativeDeliveryFilename(attachment.filename)), [attachments.data]);
+  const resultCandidateByAttachment = useMemo(() => {
+    const result = new Map<string, string>();
+    for (const entry of timeline.data ?? []) {
+      if (entry.type !== "comment" || !entry.content) continue;
+      const candidateId = candidateIdFromResultComment(entry.content);
+      if (!candidateId) continue;
+      for (const attachment of entry.attachments ?? []) result.set(attachment.id, candidateId);
+    }
+    return result;
+  }, [timeline.data]);
+  const activeAsset = finalAssets.find((asset) => asset.id === activeAssetId) ?? finalAssets[0];
+  const latestCrawl = materials.data?.crawl_runs[0];
+  const contextReady = Boolean(currentContext?.market_pack_id && currentContext?.squad_id);
+  const briefReadyItems = selectedCandidates.filter((candidate) => itemByCandidate.get(candidate.id)?.creative_brief.primary_benefit);
+  const copyReadyItems = selectedCandidates.filter((candidate) => itemByCandidate.get(candidate.id)?.copy_entry_id);
+  const readyItems = selectedCandidates.filter((candidate) => {
+    const item = itemByCandidate.get(candidate.id);
+    return Boolean(item?.copy_entry_id && item.creative_brief.primary_benefit);
+  });
+  const briefsToAnalyze = selectedCandidates.filter((candidate) => {
+    const brief = itemByCandidate.get(candidate.id)?.creative_brief;
+    return !brief?.primary_benefit && brief?.status !== "requested";
+  });
+
+  const refreshMaterials = () => queryClient.invalidateQueries({ queryKey: creativeKeys.issue(wsId, issue.id) });
   const updateCandidate = useMutation({
-    mutationFn: (input: { candidateId: string; status: string }) =>
-      api.updateCreativeMaterialCandidate(issue.id, input.candidateId, { status: input.status }),
-    onSuccess: (next) => {
-      qc.setQueryData(creativeKeys.issue(wsId, issue.id), next);
-    },
+    mutationFn: ({ id, status }: { id: string; status: string }) => api.updateCreativeMaterialCandidate(issue.id, id, { status }),
+    onSuccess: (data) => queryClient.setQueryData(creativeKeys.issue(wsId, issue.id), data),
     onError: () => toast.error("候选状态更新失败"),
   });
-
-  const requestCreativeAgent = useMutation({
-    mutationFn: async (candidateIds: string[]) => {
-      const agents = await api.listAgents({ workspace_id: wsId });
-      const agent = agents.find((item) => item.name.trim() === "修图智能体")
-        ?? agents.find((item) => item.name.includes("修图"));
-      if (!agent) throw new Error("修图智能体未配置");
-      const direction = editPrompt.trim();
-      const content = [
-        `[@${agent.name}](mention://agent/${agent.id}) 请处理当前已勾选的 ${candidateIds.length} 张素材。`,
-        direction ? `补充要求：${direction}` : "请根据参考图判断主利益点，并按当前市场 profile、已确认文案和品牌规则生成修图。",
-      ].join("\n\n");
-      return api.createComment(issue.id, content);
+  const saveContext = useMutation({
+    mutationFn: () => api.putCreativeIssueContext(issue.id, contextDraft),
+    onSuccess: () => { refreshMaterials(); toast.success("本 Issue 已固定资源快照"); },
+    onError: (error) => toast.error(error instanceof Error ? error.message : "资源上下文保存失败"),
+  });
+  const assignCopy = useMutation({
+    mutationFn: ({ candidateId, copyEntryId }: { candidateId: string; copyEntryId: string }) => api.putCreativeItemCopy(issue.id, candidateId, copyEntryId),
+    onSuccess: (_, variables) => {
+      refreshMaterials();
+      const next = selectedCandidates.find((candidate) => candidate.id !== variables.candidateId && !itemByCandidate.get(candidate.id)?.copy_entry_id);
+      setCopyCandidateId(next?.id ?? variables.candidateId);
+      toast.success(next ? "文案已固定，已切到下一张" : "该图文案已固定");
     },
-    onSuccess: () => {
-      toast.success("已交给修图智能体");
-      setEditPrompt("");
-      writeCreativeEditPromptDraft(editPromptDraftKey, "");
+    onError: (error) => toast.error(error instanceof Error ? error.message : "文案选择失败"),
+  });
+  const saveBrief = useMutation({
+    mutationFn: ({ candidateId, brief }: { candidateId: string; brief: CreativeBriefDraft }) => api.putCreativeItemBrief(issue.id, candidateId, brief),
+    onSuccess: () => { refreshMaterials(); toast.success("创意简报已保存，文案推荐已更新"); },
+    onError: (error) => toast.error(error instanceof Error ? error.message : "创意简报保存失败"),
+  });
+  const requestAnalysis = useMutation({
+    mutationFn: async (targets: CreativeMaterialCandidate[]) => {
+      if (!currentContext?.squad_id) throw new Error("先固定市场资源包和执行小队");
+      await mapWithConcurrency(targets, 4, async (candidate) => {
+        const current = itemByCandidate.get(candidate.id)?.creative_brief ?? EMPTY_BRIEF;
+        const analysisIssue = await api.createIssue({
+          title: `素材理解 · ${candidate.title || candidate.competitor || candidate.id}`,
+          description: `目标候选池 Issue：${issue.id}\n候选 ID：${candidate.id}\n市场资源包：${currentContext.market_pack_id}\n\n使用广告参考分析 Skill 读取候选图真实像素和文字，分别识别视觉主题、主题元素、主利益点、辅助利益点、具体数值和证据。将结构化结果回写目标候选图；主题不能替代金融利益点，采集标题和标签只能作为弱辅助。`,
+          parent_issue_id: issue.id,
+          assignee_type: "squad",
+          assignee_id: currentContext.squad_id,
+          status: "todo",
+        });
+        await api.putCreativeItemBrief(issue.id, candidate.id, {
+          ...current,
+          status: "requested",
+          source: current.source === "user" || current.source === "mixed" ? "mixed" : "ai",
+          analysis_issue_id: analysisIssue.id,
+        });
+      });
+      return targets.length;
     },
-    onError: (error) => toast.error(error instanceof Error && error.message.includes("未配置") ? error.message : "无法交给修图智能体"),
+    onSuccess: (count) => {
+      refreshMaterials();
+      queryClient.invalidateQueries({ queryKey: issueKeys.children(wsId, issue.id) });
+      toast.success(`已委派 ${count} 张素材理解任务`);
+    },
+    onError: (error) => toast.error(error instanceof Error ? error.message : "无法发起素材理解"),
+  });
+  const createCustomCopy = useMutation({
+    mutationFn: async ({ candidateId, value }: { candidateId: string; value: CopyDraft }) => {
+      if (!copyLibraryId) throw new Error("市场资源包尚未绑定文案库");
+      const externalKey = `issue-${issue.id}-candidate-${candidateId}-${Date.now()}`;
+      await api.importCreativeCopyEntries(copyLibraryId, {
+        mode: "upsert",
+        source_filename: "Issue 在线编辑",
+        mapping: {},
+        entries: [{ ...value, external_key: externalKey, copy_role: "issue_override", market: stringConfig(activeMarketPack?.config, "market"), locale: stringConfig(activeMarketPack?.config, "locale"), tags: ["issue-override"], status: "approved", metadata: { issue_id: issue.id, candidate_id: candidateId } }],
+      });
+      const latest = await api.listCreativeCopyEntries(copyLibraryId);
+      const created = latest.entries.find((entry) => entry.external_key === externalKey);
+      if (!created) throw new Error("新文案保存后未能读取");
+      return api.putCreativeItemCopy(issue.id, candidateId, created.id);
+    },
+    onSuccess: (_, variables) => {
+      queryClient.invalidateQueries({ queryKey: creativeKeys.copyEntries(wsId, copyLibraryId) });
+      refreshMaterials();
+      const next = selectedCandidates.find((candidate) => candidate.id !== variables.candidateId && !itemByCandidate.get(candidate.id)?.copy_entry_id);
+      setCopyCandidateId(next?.id ?? variables.candidateId);
+      toast.success(next ? "自定义文案已保存，已切到下一张" : "本图自定义文案已保存并选中");
+    },
+    onError: (error) => toast.error(error instanceof Error ? error.message : "自定义文案保存失败"),
+  });
+  const importFromLibrary = useMutation({
+    mutationFn: (selected: CreativeMaterialCandidate[]) => api.importCreativeMaterials(issue.id, { connector_id: "workspace-library", query_summary: "从工作区素材库导入", materials: selected.map(candidateToImport) }),
+    onSuccess: () => { refreshMaterials(); setLibraryOpen(false); toast.success("素材已加入候选池"); },
+    onError: () => toast.error("素材库导入失败"),
+  });
+  const uploadCandidate = useMutation({
+    mutationFn: async (file: File) => {
+      const uploaded = await upload(file);
+      if (!uploaded) throw new Error("文件上传失败");
+      return api.importCreativeMaterials(issue.id, { connector_id: "manual-upload", query_summary: "人工上传", materials: [{ external_id: uploaded.id, dedupe_key: `attachment:${uploaded.id}`, competitor: "人工上传", title: file.name, asset_type: "image", preview_url: uploaded.markdownLink, resource_url: uploaded.markdownLink, original_url: uploaded.markdownLink, raw: { attachment_id: uploaded.id } }] });
+    },
+    onSuccess: () => { refreshMaterials(); toast.success("图片已加入候选池"); },
+    onError: (error) => toast.error(error instanceof Error ? error.message : "图片导入失败"),
+  });
+  const requestCrawl = useMutation({
+    mutationFn: async () => {
+      if (!contextReady) throw new Error("先固定市场资源包和执行小队");
+      const profile = (profiles.data?.profiles ?? []).find((item) => item.connector_id === "appgrowing" && item.status === "active");
+      if (!profile) throw new Error("AppGrowing 尚未授权，请前往设置 - 集成绑定");
+      return api.createIssue({
+        title: `真实素材采集 · ${issue.identifier}`,
+        description: `目标候选池 Issue：${issue.id}\n连接器：AppGrowing\n授权配置：${profile.id}\n\n读取父 Issue 的业务筛选条件，使用 AppGrowing 素材采集 Skill 创建并委派采集子 Issue。真实结果只导入父 Issue 原生候选池。`,
+        parent_issue_id: issue.id,
+        assignee_type: "squad",
+        assignee_id: currentContext!.squad_id,
+        status: "todo",
+      });
+    },
+    onSuccess: () => { queryClient.invalidateQueries({ queryKey: issueKeys.children(wsId, issue.id) }); toast.success("Leader 已收到真实采集请求"); },
+    onError: (error) => toast.error(error instanceof Error ? error.message : "无法发起采集"),
+  });
+  const startCreative = useMutation({
+    mutationFn: async () => {
+      if (!currentContext) throw new Error("先固定资源上下文");
+      const targets = selectedCandidates.filter((candidate) => {
+        const item = itemByCandidate.get(candidate.id);
+        return item?.copy_entry_id && !item.work_issue_id;
+      });
+      if (targets.length === 0) throw new Error("没有待创建的逐图任务");
+      await mapWithConcurrency(targets, 4, async (candidate) => {
+        const item = itemByCandidate.get(candidate.id)!;
+        const copy = item.copy_snapshot as Partial<CreativeCopyEntry>;
+        const brief = item.creative_brief;
+        const created = await api.createIssue({
+          title: `创意图 · ${candidate.title || candidate.competitor || candidate.id} · r${item.revision}`,
+          description: `父候选池：${issue.id}\n候选 ID：${candidate.id}\n文案记录：${item.copy_entry_id} · v${copy.version ?? 1}\n创意组合：${creativeBriefLabel(brief)}\n主利益点：${brief.primary_benefit}${brief.benefit_value ? ` · ${brief.benefit_value}` : ""}\n市场资源包：${currentContext.market_pack_id}\n执行小队：${currentContext.squad_id}\n\n使用父 Issue 固定快照中的创意简报、文案和资源。主题控制视觉表达，主利益点控制信息层级；Leader 根据小队成员绑定的平台 skill 和当前证据动态委派，只把验收通过的三尺寸成图发布回父 Issue。`,
+          parent_issue_id: issue.id,
+          assignee_type: "squad",
+          assignee_id: currentContext.squad_id,
+          status: "todo",
+        });
+        await api.putCreativeItemWorkIssue(issue.id, candidate.id, created.id);
+      });
+      return targets.length;
+    },
+    onSuccess: (count) => { refreshMaterials(); queryClient.invalidateQueries({ queryKey: issueKeys.children(wsId, issue.id) }); toast.success(`已按图片创建 ${count} 个 Leader 协作 Issue`); },
+    onError: (error) => toast.error(error instanceof Error ? error.message : "无法开始修图"),
   });
 
-  const syncEditJob = useMutation({
-    mutationFn: (jobId: string) => api.syncCreativeEditJob(issue.id, jobId),
-    onSuccess: (next) => {
-      qc.setQueryData(creativeKeys.issue(wsId, issue.id), next);
-      toast.success("已同步修图结果");
-    },
-    onError: () => toast.error("同步修图任务失败"),
-  });
+  const workflowEnabled = issue.metadata["workflow"] === "creative_material" || candidates.length > 0 || finalAssets.length > 0;
+  if (!workflowEnabled) return null;
 
-  const downloadEditJob = useMutation({
-    mutationFn: (input: { jobId: string; assetIDs?: string[]; includeOriginal?: boolean }) => {
-      const hasOptions = input.assetIDs !== undefined || input.includeOriginal !== undefined;
-      return api.downloadCreativeEditJob(issue.id, input.jobId, hasOptions
-        ? { assetIds: input.assetIDs, includeOriginal: input.includeOriginal }
-        : undefined);
-    },
-    onSuccess: ({ blob, filename }) => saveCreativeDownload(blob, filename),
-    onError: () => toast.error("素材包下载失败"),
-  });
-
-  const downloadSelectedEditJob = useMutation({
-    mutationFn: (input: { jobId: string; assetIDs: string[]; includeOriginal: boolean }) =>
-      api.downloadCreativeEditJob(issue.id, input.jobId, {
-        assetIds: input.assetIDs,
-        includeOriginal: input.includeOriginal,
-      }),
-    onSuccess: ({ blob, filename }) => saveCreativeDownload(blob, filename),
-    onError: () => toast.error("选中素材下载失败"),
-  });
-
-  const submitVariantFeedback = useMutation({
-    mutationFn: (input: {
-      jobId: string;
-      variantId: string;
-      feedback: CreateCreativeEditFeedbackRequest;
-    }) => api.createCreativeEditFeedback(
-      issue.id,
-      input.jobId,
-      input.variantId,
-      input.feedback,
-    ),
-    onSuccess: (next) => {
-      qc.setQueryData(creativeKeys.issue(wsId, issue.id), next);
-      toast.success("反馈已记录");
-    },
-    onError: () => toast.error("无法保存反馈"),
-  });
-
-  const candidates = data?.candidates ?? [];
-
-  useEffect(() => {
-    setEditPrompt(readCreativeEditPromptDraft(editPromptDraftKey));
-  }, [editPromptDraftKey]);
-
-  useEffect(() => {
-    setViewedJobIDs(readCreativeEditViewedJobs(editViewedJobsKey));
-  }, [editViewedJobsKey]);
-
-  useEffect(() => {
-    setCandidateOrder({});
-    setCandidatePoolExpanded(false);
-    setResultBoardExpanded(false);
-  }, [issue.id]);
-
-  useEffect(() => {
-    if (candidates.length === 0) return;
-    setCandidateOrder((current) => {
-      let next = current;
-      let maxOrder = Math.max(-1, ...Object.values(current));
-      for (const candidate of candidates) {
-        if (next[candidate.id] == null) {
-          if (next === current) next = { ...current };
-          next[candidate.id] = ++maxOrder;
-        }
-      }
-      return next;
-    });
-  }, [candidates]);
-
-  const displayCandidates = useMemo(
-    () => [...candidates].sort((left, right) =>
-      (candidateOrder[left.id] ?? 0) - (candidateOrder[right.id] ?? 0),
-    ),
-    [candidateOrder, candidates],
-  );
-  const selectedCandidates = useMemo(
-    () => candidates.filter((candidate) => candidate.status === "selected"),
-    [candidates],
-  );
-  const candidateByID = useMemo(() => {
-    const map = new Map<string, CreativeMaterialCandidate>();
-    for (const candidate of candidates) map.set(candidate.id, candidate);
-    return map;
-  }, [candidates]);
-
-  const filteredCandidates = useMemo(
-    () => displayCandidates.filter((candidate) => candidateMatchesFilter(candidate, filter)),
-    [displayCandidates, filter],
-  );
-  const hasActiveFilter = !candidateFilterEquals(filter, DEFAULT_FILTER);
-
-  const latestJob = data?.edit_jobs[0];
-  const activeJob = useMemo(
-    () => data?.edit_jobs.find((job) => job.id === activeJobId) ?? latestJob,
-    [activeJobId, data?.edit_jobs, latestJob],
-  );
-  const activeJobCandidates = activeJob?.candidate_ids ?? [];
-  useEffect(() => {
-    if (!activeJob && activeJobId) setActiveJobId("");
-    if (activeJob && activeJob.id !== activeJobId) setActiveJobId(activeJob.id);
-  }, [activeJob, activeJobId]);
-
-  useEffect(() => {
-    if (!activeJob) return;
-    const nextCandidateID = activeJob.candidate_ids.includes(activeCandidateId)
-      ? activeCandidateId
-      : activeJob.candidate_ids[0] ?? "";
-    if (nextCandidateID !== activeCandidateId) setActiveCandidateId(nextCandidateID);
-  }, [activeCandidateId, activeJob]);
-
-  useEffect(() => {
-    if (!activeJob || viewedJobIDs.has(activeJob.id) || (!resultBoardExpanded && !resultPreviewOpen)) return;
-    setViewedJobIDs((current) => {
-      if (current.has(activeJob.id)) return current;
-      const next = new Set(current).add(activeJob.id);
-      writeCreativeEditViewedJobs(editViewedJobsKey, next);
-      return next;
-    });
-  }, [activeJob, editViewedJobsKey, resultBoardExpanded, resultPreviewOpen, viewedJobIDs]);
-
-  if (!visible && !query.isLoading) return null;
-  if (!visible && query.isLoading) return null;
-
-  return (
-    <section className="space-y-3">
-      <div className="rounded-lg border bg-background">
-        <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3">
-          <button
-            type="button"
-            className="group flex min-w-0 flex-1 items-center gap-2 text-left outline-none focus-visible:ring-2 focus-visible:ring-primary"
-            aria-expanded={candidatePoolExpanded}
-            aria-label={candidatePoolExpanded ? "收起素材候选池" : "展开素材候选池"}
-            onClick={() => setCandidatePoolExpanded((open) => !open)}
-          >
-            <ChevronRight className={cn("h-4 w-4 shrink-0 text-muted-foreground transition-transform", candidatePoolExpanded && "rotate-90")} />
-            <span className="min-w-0">
-              <span className="flex flex-wrap items-center gap-2">
-                <span className="text-sm font-semibold">素材候选池</span>
-                <Badge variant="outline">{data?.summary.total ?? 0} 条素材</Badge>
-                <Badge variant="outline">已选 {selectedCandidates.length}</Badge>
-                {(data?.edit_jobs.length ?? 0) > 0 && (
-                  <Badge variant="outline">出图记录 {data?.edit_jobs.length}</Badge>
-                )}
-              </span>
-            </span>
-          </button>
-          <div className="flex shrink-0 items-center gap-2">
-            <Button
-              size="sm"
-              variant="outline"
-              disabled={candidates.length === 0}
-              onClick={() => setPoolPreviewOpen(true)}
-            >
-              <Maximize2 className="h-4 w-4" />
-              预览候选池
-            </Button>
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={() => setCandidatePoolExpanded((open) => !open)}
-            >
-              {candidatePoolExpanded ? "收起" : "展开"}
-            </Button>
-          </div>
-        </div>
-
-        {candidatePoolExpanded && (
-          <div className="border-t">
-            <div className="flex flex-wrap items-center justify-between gap-2 border-b bg-muted/20 px-4 py-3">
-              <div className="min-w-60 flex-1">
-                <Textarea
-                  value={editPrompt}
-                  onChange={(event) => {
-                    const value = event.target.value;
-                    setEditPrompt(value);
-                    writeCreativeEditPromptDraft(editPromptDraftKey, value);
-                  }}
-                  placeholder="给修图智能体的补充要求，可不填"
-                  className="h-9 min-h-9 resize-none text-xs"
-                />
-              </div>
-              <div className="flex shrink-0 items-center gap-2">
-                <Button
-                  size="sm"
-                  disabled={selectedCandidates.length === 0 || requestCreativeAgent.isPending}
-                  onClick={() => requestCreativeAgent.mutate(selectedCandidates.map((candidate) => candidate.id))}
-                >
-                  <Sparkles className="h-4 w-4" />
-                  {requestCreativeAgent.isPending ? "正在交办" : "交给修图智能体"}
-                </Button>
-              </div>
-            </div>
-
-            <div className="space-y-4 p-4">
-              <CandidateFilters
-                candidates={candidates}
-                filter={filter}
-                onChange={setFilter}
-              />
-
-              <div className="flex items-center justify-between gap-3 text-xs text-muted-foreground">
-                <span>当前显示 {filteredCandidates.length} / {candidates.length} 条</span>
-                {hasActiveFilter && (
-                  <button
-                    type="button"
-                    className="inline-flex items-center gap-1 hover:text-foreground"
-                    onClick={() => setFilter(DEFAULT_FILTER)}
-                  >
-                    <RotateCcw className="h-3.5 w-3.5" />
-                    显示全部
-                  </button>
-                )}
-              </div>
-
-              {filteredCandidates.length === 0 ? (
-                <div className="rounded-md border border-dashed px-4 py-8 text-center text-sm text-muted-foreground">
-                  当前筛选下没有候选素材。
-                </div>
-              ) : (
-                <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-                  {filteredCandidates.map((candidate) => (
-                    <CandidateCard
-                      key={candidate.id}
-                      candidate={candidate}
-                      busy={updateCandidate.isPending}
-                      onStatus={(status) => updateCandidate.mutate({ candidateId: candidate.id, status })}
-                      onPreview={setPreviewItem}
-                    />
-                  ))}
-                </div>
-              )}
-            </div>
-          </div>
-        )}
+  return <section className="space-y-4 border-y py-5">
+    <div className="border bg-background">
+      <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3">
+        <button type="button" className="flex min-w-0 flex-1 items-center gap-2 text-left" onClick={() => setCandidatePoolExpanded((value) => !value)}><ChevronRight className={cn("h-4 w-4 shrink-0 text-muted-foreground transition-transform", candidatePoolExpanded && "rotate-90")} /><span className="text-sm font-semibold">素材候选池</span><Badge variant="outline">{candidates.length} 张</Badge><Badge variant="outline">已选 {selectedCandidates.length}</Badge></button>
+        <div className="flex flex-wrap items-center gap-2"><input ref={fileInputRef} type="file" accept="image/*" className="hidden" onChange={(event) => { const file = event.target.files?.[0]; if (file) uploadCandidate.mutate(file); event.currentTarget.value = ""; }} /><Button size="sm" variant="outline" onClick={() => requestCrawl.mutate()} disabled={requestCrawl.isPending}><RefreshCw className={cn("h-4 w-4", requestCrawl.isPending && "animate-spin")} />采集素材</Button><Button size="sm" variant="outline" onClick={() => setLibraryOpen(true)}><Library className="h-4 w-4" />素材库</Button><Button size="icon-sm" variant="outline" title="上传图片" onClick={() => fileInputRef.current?.click()} disabled={uploading || uploadCandidate.isPending}><FileUp className="h-4 w-4" /></Button><Button size="icon-sm" variant="outline" title="放大候选池" onClick={() => setPoolPreviewOpen(true)} disabled={candidates.length === 0}><Maximize2 className="h-4 w-4" /></Button></div>
       </div>
-
-      {activeJob && (
-        <EditResultBoard
-          jobs={data?.edit_jobs ?? []}
-          job={activeJob}
-          activeCandidateId={activeCandidateId}
-          activeJobCandidates={activeJobCandidates}
-          candidateByID={candidateByID}
-          viewedJobIDs={viewedJobIDs}
-          expanded={resultBoardExpanded}
-          onExpandedChange={setResultBoardExpanded}
-          onJobChange={setActiveJobId}
-          onCandidateChange={setActiveCandidateId}
-          onSyncJob={(jobId) => syncEditJob.mutate(jobId)}
-          onDownloadJob={(jobId) => downloadEditJob.mutate({ jobId })}
-          syncingJobId={syncEditJob.isPending ? syncEditJob.variables : undefined}
-          downloadingJobId={downloadEditJob.isPending ? downloadEditJob.variables?.jobId : undefined}
-          submittingFeedbackVariantId={submitVariantFeedback.isPending
-            ? submitVariantFeedback.variables?.variantId
-            : undefined}
-          workspaceId={wsId}
-          onSubmitFeedback={async (jobId, variantId, feedback) => {
-            await submitVariantFeedback.mutateAsync({ jobId, variantId, feedback });
-          }}
-          onOpenLargePreview={() => setResultPreviewOpen(true)}
-          onPreview={setPreviewItem}
-        />
-      )}
-      <CandidatePoolPreviewDialog
-        open={poolPreviewOpen}
-        onOpenChange={setPoolPreviewOpen}
-        candidates={displayCandidates}
-        filter={filter}
-        onFilterChange={setFilter}
-        selectedCount={selectedCandidates.length}
-        busy={updateCandidate.isPending}
-        onStatus={(candidateId, status) => updateCandidate.mutate({ candidateId, status })}
-        onPreview={setPreviewItem}
-      />
-      {activeJob && (
-        <CreativeResultPreviewDialog
-          open={resultPreviewOpen}
-          onOpenChange={setResultPreviewOpen}
-          job={activeJob}
-          activeCandidateId={activeCandidateId}
-          candidateByID={candidateByID}
-          workspaceId={wsId}
-          onPreview={setPreviewItem}
-          downloading={downloadSelectedEditJob.isPending}
-          onDownloadSelected={(assetIDs, includeOriginal) => {
-            downloadSelectedEditJob.mutate({ jobId: activeJob.id, assetIDs, includeOriginal });
-          }}
-        />
-      )}
-      <MediaPreviewDialog
-        item={previewItem}
-        onOpenChange={(open) => {
-          if (!open) setPreviewItem(null);
-        }}
-      />
-    </section>
-  );
-}
-
-function CandidatePoolPreviewDialog({
-  open,
-  onOpenChange,
-  candidates,
-  filter,
-  onFilterChange,
-  selectedCount,
-  busy,
-  onStatus,
-  onPreview,
-}: {
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-  candidates: CreativeMaterialCandidate[];
-  filter: CandidateFilter;
-  onFilterChange: (filter: CandidateFilter) => void;
-  selectedCount: number;
-  busy: boolean;
-  onStatus: (candidateId: string, status: string) => void;
-  onPreview: (item: MediaPreviewItem) => void;
-}) {
-  const filteredCandidates = useMemo(
-    () => candidates.filter((candidate) => candidateMatchesFilter(candidate, filter)),
-    [candidates, filter],
-  );
-  const hasActiveFilter = !candidateFilterEquals(filter, DEFAULT_FILTER);
-
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="grid h-[94vh] grid-rows-[auto_minmax(0,1fr)] gap-0 overflow-hidden p-0 sm:max-w-[min(98vw,1440px)]">
-        <DialogHeader className="border-b px-5 py-4 pr-12">
-          <div className="flex flex-wrap items-start justify-between gap-3">
-            <div className="min-w-0">
-              <DialogTitle className="text-lg">素材候选池预览</DialogTitle>
-              <div className="mt-2 flex flex-wrap items-center gap-2">
-                <Badge variant="outline">{candidates.length} 条素材</Badge>
-                <Badge variant="outline">当前显示 {filteredCandidates.length}</Badge>
-                <Badge variant="outline">已选 {selectedCount}</Badge>
-              </div>
-            </div>
-            {hasActiveFilter && (
-              <button
-                type="button"
-                className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
-                onClick={() => onFilterChange(DEFAULT_FILTER)}
-              >
-                <RotateCcw className="h-3.5 w-3.5" />
-                显示全部
-              </button>
-            )}
-          </div>
-          <div className="mt-4">
-            <CandidateFilters
-              candidates={candidates}
-              filter={filter}
-              onChange={onFilterChange}
-            />
-          </div>
-        </DialogHeader>
-        <div className="min-h-0 overflow-y-auto bg-muted/30 p-5">
-          {filteredCandidates.length === 0 ? (
-            <div className="flex h-64 items-center justify-center rounded-lg border border-dashed bg-background text-sm text-muted-foreground">
-              当前筛选下没有候选素材。
-            </div>
-          ) : (
-            <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-              {filteredCandidates.map((candidate) => (
-                <CandidatePreviewCard
-                  key={candidate.id}
-                  candidate={candidate}
-                  busy={busy}
-                  onStatus={(status) => onStatus(candidate.id, status)}
-                  onPreview={onPreview}
-                />
-              ))}
-            </div>
-          )}
-        </div>
-      </DialogContent>
-    </Dialog>
-  );
-}
-
-function CandidateFilters({
-  candidates,
-  filter,
-  onChange,
-}: {
-  candidates: CreativeMaterialCandidate[];
-  filter: CandidateFilter;
-  onChange: (filter: CandidateFilter) => void;
-}) {
-  const competitors = uniqueOptions(candidates.map((candidate) => candidate.competitor));
-  const assetTypes = uniqueOptions(candidates.map((candidate) => candidate.asset_type));
-  const medias = uniqueOptions(candidates.flatMap((candidate) => candidate.media_names));
-  const areas = uniqueOptions(candidates.flatMap((candidate) => candidate.area_names));
-  const languages = uniqueOptions(candidates.flatMap((candidate) => candidate.language_names));
-  const platforms = uniqueOptions(candidates.flatMap((candidate) => candidate.platform_names));
-
-  const set = (key: keyof CandidateFilter, value: string) =>
-    onChange({ ...filter, [key]: value });
-
-  return (
-    <div className="grid gap-2 md:grid-cols-4 xl:grid-cols-8">
-      <FilterSelect label="状态" value={filter.status} values={["new", "selected", "sent_to_edit", "edited", "rejected", "approved", "archived"]} labels={STATUS_LABEL} onChange={(value) => set("status", value)} />
-      <FilterSelect label="竞品" value={filter.competitor} values={competitors} onChange={(value) => set("competitor", value)} />
-      <FilterSelect label="类型" value={filter.assetType} values={assetTypes} labels={{ image: "图片", video: "视频", unknown: "未知" }} onChange={(value) => set("assetType", value)} />
-      <FilterSelect label="媒体" value={filter.media} values={medias} onChange={(value) => set("media", value)} />
-      <FilterSelect label="地区" value={filter.area} values={areas} onChange={(value) => set("area", value)} />
-      <FilterSelect label="语言" value={filter.language} values={languages} onChange={(value) => set("language", value)} />
-      <FilterSelect label="设备" value={filter.platform} values={platforms} onChange={(value) => set("platform", value)} />
-      <label className="grid gap-1 text-xs font-medium text-muted-foreground">
-        标题搜索
-        <div className="relative">
-          <Search className="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
-          <Input
-            value={filter.text}
-            onChange={(event) => set("text", event.target.value)}
-            className="h-8 pl-7 text-sm"
-          />
-        </div>
-      </label>
+      {candidatePoolExpanded && <div className="border-t">
+        <div className="grid gap-3 border-b bg-muted/20 px-4 py-3 lg:grid-cols-[minmax(220px,1fr)_minmax(220px,1fr)_auto] lg:items-end"><Field label="市场资源包"><NativeSelect value={contextDraft.market_pack_id} onChange={(event) => setContextDraft({ ...contextDraft, market_pack_id: event.target.value })}><NativeSelectOption value="">选择已发布资源包</NativeSelectOption>{marketPacks.map((resource) => <NativeSelectOption key={resource.id} value={resource.id}>{resource.name} · v{resource.published_version}</NativeSelectOption>)}</NativeSelect></Field><Field label="执行小队"><NativeSelect value={contextDraft.squad_id} onChange={(event) => setContextDraft({ ...contextDraft, squad_id: event.target.value })}><NativeSelectOption value="">选择小队</NativeSelectOption>{(squads.data ?? []).map((squad) => <NativeSelectOption key={squad.id} value={squad.id}>{squad.name}</NativeSelectOption>)}</NativeSelect></Field><Button size="sm" onClick={() => saveContext.mutate()} disabled={saveContext.isPending || !contextDraft.market_pack_id || !contextDraft.squad_id}><Settings2 className="h-4 w-4" />{contextReady ? "更新快照" : "固定资源"}</Button></div>
+        {selectedCandidates.length > 0 && <div className="sticky top-0 z-10 flex flex-wrap items-center justify-between gap-3 border-b bg-background/95 px-4 py-3 shadow-sm backdrop-blur"><div><p className="text-sm font-medium">已选 {selectedCandidates.length} 张 · 已识别利益点 {briefReadyItems.length} 张 · 已定文案 {copyReadyItems.length} 张</p><p className="mt-0.5 text-xs text-muted-foreground">每张图独立保存“主题 × 主利益点”、文案和修图分支；采集信息不直接决定推荐。</p></div><div className="flex flex-wrap gap-2">{briefsToAnalyze.length > 0 && <Button size="sm" variant="outline" onClick={() => requestAnalysis.mutate(briefsToAnalyze)} disabled={requestAnalysis.isPending || !contextReady}><Sparkles className={cn("h-4 w-4", requestAnalysis.isPending && "animate-pulse")} />识别创意 ({briefsToAnalyze.length})</Button>}<Button size="sm" variant="outline" onClick={() => setCopyCandidateId(selectedCandidates.find((candidate) => !itemByCandidate.get(candidate.id)?.creative_brief.primary_benefit || !itemByCandidate.get(candidate.id)?.copy_entry_id)?.id ?? selectedCandidates[0]?.id ?? "")}><Settings2 className="h-4 w-4" />逐图配置</Button><Button size="sm" onClick={() => startCreative.mutate()} disabled={startCreative.isPending || !contextReady || readyItems.length !== selectedCandidates.length}>{startCreative.isPending ? "正在创建" : `开始修图 (${selectedCandidates.length})`}</Button></div></div>}
+        <div className="px-4 py-4"><div className="mb-3 flex flex-wrap items-center justify-between gap-3"><p className="text-xs text-muted-foreground">{latestCrawl ? `${latestCrawl.query_summary} · 新增 ${latestCrawl.imported_count}` : "等待真实采集、素材库导入或人工上传"}</p>{!candidateFilterEquals(filter, DEFAULT_FILTER) && <button type="button" className="inline-flex items-center gap-1 text-xs text-muted-foreground" onClick={() => setFilter(DEFAULT_FILTER)}><RotateCcw className="h-3.5 w-3.5" />显示全部</button>}</div><CandidateFilters candidates={candidates} filter={filter} onChange={setFilter} /><div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-3">{filteredCandidates.map((candidate) => <CandidateCard key={candidate.id} candidate={candidate} item={itemByCandidate.get(candidate.id)} busy={updateCandidate.isPending} onStatus={(status) => updateCandidate.mutate({ id: candidate.id, status })} onPreview={setPreviewItem} onCopy={() => setCopyCandidateId(candidate.id)} />)}</div>{filteredCandidates.length === 0 && <div className="mt-4 flex min-h-36 items-center justify-center border border-dashed text-sm text-muted-foreground">候选池暂无匹配素材</div>}</div>
+      </div>}
     </div>
-  );
+
+    <IssueResultBoard archiveName={`${issue.identifier}-修图结果`} assets={finalAssets} activeAsset={activeAsset} candidates={candidates} candidateByAttachment={resultCandidateByAttachment} expanded={resultBoardExpanded} onExpandedChange={setResultBoardExpanded} onAssetChange={setActiveAssetId} onPreview={setPreviewItem} onAdjust={(target) => { setAdjustmentTarget(target); setAdjustmentOpen(true); }} />
+
+    <CandidatePoolPreviewDialog open={poolPreviewOpen} onOpenChange={setPoolPreviewOpen} candidates={candidates} items={materials.data?.items ?? []} filter={filter} onFilterChange={setFilter} selectedCount={selectedCandidates.length} busy={updateCandidate.isPending} onStatus={(candidateId, status) => updateCandidate.mutate({ id: candidateId, status })} onPreview={setPreviewItem} onCopy={(candidateId) => { setPoolPreviewOpen(false); setCopyCandidateId(candidateId); }} />
+    <MaterialLibraryDialog open={libraryOpen} onOpenChange={setLibraryOpen} candidates={library.data?.candidates ?? []} existingIds={new Set(candidates.map((candidate) => candidate.id))} busy={importFromLibrary.isPending} onImport={(selected) => importFromLibrary.mutate(selected)} />
+    <CopyPickerDialog candidates={selectedCandidates} activeCandidateId={copyCandidateId} entries={copyEntries.data?.entries ?? []} items={materials.data?.items ?? []} benefitOptions={benefitOptions} themeOptions={themeOptions} busy={assignCopy.isPending || createCustomCopy.isPending || saveBrief.isPending} analysisBusy={requestAnalysis.isPending} onCandidateId={setCopyCandidateId} onClose={() => setCopyCandidateId("")} onPick={(candidateId, copyEntryId) => assignCopy.mutate({ candidateId, copyEntryId })} onCustom={(candidateId, value) => createCustomCopy.mutate({ candidateId, value })} onBrief={(candidateId, brief) => saveBrief.mutate({ candidateId, brief })} onAnalyze={(candidate) => requestAnalysis.mutate([candidate])} />
+    <AdjustmentDialog open={adjustmentOpen} onOpenChange={setAdjustmentOpen} candidates={selectedCandidates} target={adjustmentTarget} context={currentContext} items={materials.data?.items ?? []} busy={false} onCreated={() => { setAdjustmentOpen(false); queryClient.invalidateQueries({ queryKey: issueKeys.children(wsId, issue.id) }); }} />
+    <MediaPreviewDialog item={previewItem} onOpenChange={(open) => !open && setPreviewItem(null)} />
+  </section>;
 }
 
-function FilterSelect({
-  label,
-  value,
-  values,
-  labels = {},
-  onChange,
-}: {
-  label: string;
-  value: string;
-  values: string[];
-  labels?: Record<string, string>;
-  onChange: (value: string) => void;
-}) {
-  return (
-    <label className="grid gap-1 text-xs font-medium text-muted-foreground">
-      {label}
-      <NativeSelect
-        size="sm"
-        value={value}
-        className="w-full"
-        onChange={(event) => onChange(event.target.value)}
-      >
-        <NativeSelectOption value="all">全部</NativeSelectOption>
-        {values.map((item) => (
-          <NativeSelectOption key={item} value={item}>
-            {labels[item] ?? item}
-          </NativeSelectOption>
-        ))}
-      </NativeSelect>
-    </label>
-  );
+function CandidatePoolPreviewDialog({ open, onOpenChange, candidates, items, filter, onFilterChange, selectedCount, busy, onStatus, onPreview, onCopy }: { open: boolean; onOpenChange: (open: boolean) => void; candidates: CreativeMaterialCandidate[]; items: CreativeIssueItem[]; filter: CandidateFilter; onFilterChange: (filter: CandidateFilter) => void; selectedCount: number; busy: boolean; onStatus: (candidateId: string, status: string) => void; onPreview: (item: MediaPreviewItem) => void; onCopy: (candidateId: string) => void }) {
+  const filtered = candidates.filter((candidate) => candidateMatchesFilter(candidate, filter));
+  const itemByCandidate = new Map(items.map((item) => [item.candidate_id, item]));
+  return <Dialog open={open} onOpenChange={onOpenChange}><DialogContent className="grid h-[94vh] grid-rows-[auto_minmax(0,1fr)] gap-0 overflow-hidden p-0 sm:max-w-[min(98vw,1440px)]"><DialogHeader className="border-b px-5 py-4 pr-12"><DialogTitle>素材候选池</DialogTitle><div className="mt-2 flex gap-2"><Badge variant="outline">{candidates.length} 张</Badge><Badge variant="outline">已选 {selectedCount}</Badge></div><div className="mt-4"><CandidateFilters candidates={candidates} filter={filter} onChange={onFilterChange} /></div></DialogHeader><div className="min-h-0 overflow-y-auto bg-muted/20 p-5"><div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">{filtered.map((candidate) => <CandidateCard key={candidate.id} candidate={candidate} item={itemByCandidate.get(candidate.id)} busy={busy} onStatus={(status) => onStatus(candidate.id, status)} onPreview={onPreview} onCopy={() => onCopy(candidate.id)} />)}</div></div></DialogContent></Dialog>;
 }
 
-function CandidateCard({
-  candidate,
-  busy,
-  onStatus,
-  onPreview,
-}: {
-  candidate: CreativeMaterialCandidate;
-  busy: boolean;
-  onStatus: (status: string) => void;
-  onPreview: (item: MediaPreviewItem) => void;
-}) {
+function CandidateFilters({ candidates, filter, onChange }: { candidates: CreativeMaterialCandidate[]; filter: CandidateFilter; onChange: (filter: CandidateFilter) => void }) {
+  const set = (key: keyof CandidateFilter, value: string) => onChange({ ...filter, [key]: value });
+  return <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-8"><FilterSelect label="状态" value={filter.status} values={["new", "selected", "rejected"]} labels={STATUS_LABEL} onChange={(value) => set("status", value)} /><FilterSelect label="竞品" value={filter.competitor} values={uniqueOptions(candidates.map((candidate) => candidate.competitor))} onChange={(value) => set("competitor", value)} /><FilterSelect label="类型" value={filter.assetType} values={uniqueOptions(candidates.map((candidate) => candidate.asset_type))} onChange={(value) => set("assetType", value)} /><FilterSelect label="媒体" value={filter.media} values={uniqueOptions(candidates.flatMap((candidate) => candidate.media_names))} onChange={(value) => set("media", value)} /><FilterSelect label="地区" value={filter.area} values={uniqueOptions(candidates.flatMap((candidate) => candidate.area_names))} onChange={(value) => set("area", value)} /><FilterSelect label="语言" value={filter.language} values={uniqueOptions(candidates.flatMap((candidate) => candidate.language_names))} onChange={(value) => set("language", value)} /><FilterSelect label="设备" value={filter.platform} values={uniqueOptions(candidates.flatMap((candidate) => candidate.platform_names))} onChange={(value) => set("platform", value)} /><label className="grid gap-1 text-xs font-medium text-muted-foreground">搜索<div className="relative"><Search className="absolute left-2 top-2 h-4 w-4" /><Input value={filter.text} onChange={(event) => set("text", event.target.value)} className="h-8 pl-7" /></div></label></div>;
+}
+
+function FilterSelect({ label, value, values, labels = {}, onChange }: { label: string; value: string; values: string[]; labels?: Record<string, string>; onChange: (value: string) => void }) {
+  return <label className="grid gap-1 text-xs font-medium text-muted-foreground">{label}<NativeSelect size="sm" value={value} onChange={(event) => onChange(event.target.value)}><NativeSelectOption value="all">全部</NativeSelectOption>{values.map((item) => <NativeSelectOption key={item} value={item}>{labels[item] ?? item}</NativeSelectOption>)}</NativeSelect></label>;
+}
+
+function CandidateCard({ candidate, item, busy, onStatus, onPreview, onCopy }: { candidate: CreativeMaterialCandidate; item?: CreativeIssueItem; busy: boolean; onStatus: (status: string) => void; onPreview: (item: MediaPreviewItem) => void; onCopy?: () => void }) {
   const mediaURL = firstNonEmpty(candidate.archived_url, candidate.preview_url, candidate.poster_url, candidate.resource_url);
-  const previewURL = candidate.asset_type === "video"
-    ? firstNonEmpty(candidate.resource_url, mediaURL)
-    : mediaURL;
-  const openURL = firstNonEmpty(candidate.resource_url, candidate.preview_url, candidate.poster_url, candidate.original_url);
-  const isSelected = candidate.status === "selected";
-  const isRejected = candidate.status === "rejected";
-
-  return (
-    <article
-      className={cn(
-        "group overflow-hidden rounded-lg border bg-card transition-colors",
-        isSelected && "border-emerald-500/70 ring-1 ring-emerald-500/20",
-        isRejected && "opacity-55",
-        !isRejected && "hover:border-foreground/20",
-      )}
-      role="button"
-      tabIndex={0}
-      aria-pressed={isSelected}
-      onClick={() => onStatus(isSelected ? "new" : "selected")}
-      onKeyDown={(event) => {
-        if (event.key === "Enter" || event.key === " ") {
-          event.preventDefault();
-          onStatus(isSelected ? "new" : "selected");
-        }
-      }}
-    >
-      <div className="relative aspect-[4/3] bg-muted">
-        <MediaPreview
-          url={previewURL}
-          posterUrl={candidate.poster_url || candidate.preview_url}
-          alt={candidate.title || candidate.competitor}
-          assetType={candidate.asset_type}
-          compact
-        />
-        {previewURL && (
-          <button
-            type="button"
-            className="absolute bottom-2 right-2 inline-flex h-8 w-8 items-center justify-center rounded-md bg-background/90 text-foreground opacity-0 shadow-sm ring-1 ring-border transition hover:bg-background group-hover:opacity-100 focus:opacity-100 focus-visible:ring-2 focus-visible:ring-primary"
-            onClick={(event) => {
-              event.stopPropagation();
-              onPreview({
-              url: previewURL,
-              posterUrl: candidate.poster_url || candidate.preview_url,
-              title: candidate.title || candidate.competitor || "素材预览",
-              subtitle: candidate.competitor,
-              assetType: candidate.asset_type,
-              openUrl: openURL,
-              });
-            }}
-            aria-label="放大预览素材"
-          >
-            <Maximize2 className="h-4 w-4" />
-          </button>
-        )}
-        <Badge variant="secondary" className="absolute left-2 top-2 bg-background/90">
-          {candidate.asset_type === "video" ? <Video className="h-3 w-3" /> : <ImageIcon className="h-3 w-3" />}
-          {candidate.asset_type === "video" ? "视频" : "图片"}
-        </Badge>
-        {isSelected && (
-          <span className="absolute right-2 top-2 inline-flex h-7 w-7 items-center justify-center rounded-full bg-emerald-500 text-white shadow-sm">
-            <Check className="h-4 w-4" />
-          </span>
-        )}
-        {isRejected && (
-          <Badge variant="secondary" className="absolute right-2 top-2 bg-background/90 text-muted-foreground">
-            不采用
-          </Badge>
-        )}
-      </div>
-      <div className="space-y-3 p-3">
-        <div className="min-w-0">
-          <h3 className="truncate text-sm font-semibold">{candidate.competitor || "未命名竞品"}</h3>
-          <p className="mt-1 line-clamp-2 min-h-9 text-sm text-muted-foreground">
-            {candidate.title || "未返回标题"}
-          </p>
-        </div>
-        <div className="grid grid-cols-2 gap-2 rounded-md bg-muted/50 p-2 text-xs">
-          <Metric label="投放天数" value={formatDuration(candidate.duration_days)} />
-          <Metric label="曝光估算" value={formatImpression(candidate.impression_estimate)} />
-        </div>
-        <div className="space-y-1">
-          <MetaChips label="媒体" values={candidate.media_names} limit={3} />
-          <MetaChips label="地区" values={candidate.area_names} limit={2} />
-        </div>
-        <div className="flex items-center justify-between gap-2">
-          <span className="text-xs text-muted-foreground">
-            {isSelected ? "已选中" : "点卡片选择"}
-          </span>
-          <Button
-            size="sm"
-            variant="ghost"
-            disabled={busy}
-            className={cn(
-              "h-7 px-2 text-xs text-muted-foreground hover:text-foreground",
-              !isRejected && "opacity-0 transition-opacity group-hover:opacity-100 focus:opacity-100",
-            )}
-            onClick={(event) => {
-              event.stopPropagation();
-              onStatus(isRejected ? "new" : "rejected");
-            }}
-          >
-            <X className="h-4 w-4" />
-            {isRejected ? "恢复" : "不采用"}
-          </Button>
-        </div>
-      </div>
-    </article>
-  );
+  const previewURL = candidate.asset_type === "video" ? firstNonEmpty(candidate.resource_url, mediaURL) : mediaURL;
+  const selected = candidate.status === "selected";
+  const rejected = candidate.status === "rejected";
+  const copy = item?.copy_snapshot as Partial<CreativeCopyEntry> | undefined;
+  const brief = item?.creative_brief;
+  return <article className={cn("group overflow-hidden border bg-background", selected && "border-emerald-600 ring-1 ring-emerald-600/20", rejected && "opacity-55")}><button type="button" className="relative block aspect-[4/3] w-full bg-muted" onClick={() => onPreview({ url: previewURL, posterUrl: candidate.poster_url || candidate.preview_url, title: candidate.title || candidate.competitor || "素材预览", subtitle: candidate.competitor, assetType: candidate.asset_type, openUrl: firstNonEmpty(candidate.resource_url, candidate.original_url) })}><MediaPreview url={previewURL} posterUrl={candidate.poster_url || candidate.preview_url} alt={candidate.title || candidate.competitor} assetType={candidate.asset_type} compact /><Badge variant="secondary" className="absolute left-2 top-2 bg-background/90">{candidate.asset_type === "video" ? <Video className="h-3 w-3" /> : <ImageIcon className="h-3 w-3" />}{candidate.asset_type === "video" ? "视频" : "图片"}</Badge>{selected && <span className="absolute right-2 top-2 inline-flex h-7 w-7 items-center justify-center rounded-full bg-emerald-600 text-white"><Check className="h-4 w-4" /></span>}</button><div className="space-y-3 p-3"><div><h3 className="truncate text-sm font-semibold">{candidate.competitor || "未命名竞品"}</h3><p className="mt-1 line-clamp-2 min-h-9 text-sm text-muted-foreground">{candidate.title || "未返回标题"}</p></div><div className="grid grid-cols-2 gap-2 bg-muted/50 p-2 text-xs"><Metric label="投放天数" value={formatDuration(candidate.duration_days)} /><Metric label="曝光估算" value={formatImpression(candidate.impression_estimate)} /></div>{selected && <button type="button" onClick={onCopy} className="w-full border-l-2 border-emerald-600 bg-muted/30 px-3 py-2 text-left"><span className="flex items-center gap-1 text-[10px] text-muted-foreground"><Target className="h-3 w-3" />创意组合{brief?.status === "requested" && " · 识别中"}</span><span className="mt-0.5 block truncate text-sm font-medium">{brief?.primary_benefit ? creativeBriefLabel(brief) : "识别或填写主利益点"}</span><span className="mt-1 block truncate text-xs text-muted-foreground">{copy?.headline || "选择或编辑文案"}</span></button>}<div className="flex items-center justify-between"><Button size="sm" variant={selected ? "outline" : "default"} disabled={busy} onClick={() => onStatus(selected ? "new" : "selected")}>{selected ? "取消选择" : "选择素材"}</Button><Button size="sm" variant="ghost" disabled={busy} onClick={() => onStatus(rejected ? "new" : "rejected")}><X className="h-4 w-4" />{rejected ? "恢复" : "不采用"}</Button></div></div></article>;
 }
 
-function CandidatePreviewCard({
-  candidate,
-  busy,
-  onStatus,
-  onPreview,
-}: {
-  candidate: CreativeMaterialCandidate;
-  busy: boolean;
-  onStatus: (status: string) => void;
-  onPreview: (item: MediaPreviewItem) => void;
-}) {
-  const mediaURL = firstNonEmpty(candidate.archived_url, candidate.preview_url, candidate.poster_url, candidate.resource_url);
-  const previewURL = candidate.asset_type === "video"
-    ? firstNonEmpty(candidate.resource_url, mediaURL)
-    : mediaURL;
-  const openURL = firstNonEmpty(candidate.resource_url, candidate.preview_url, candidate.poster_url, candidate.original_url);
-  const isSelected = candidate.status === "selected";
-  const isRejected = candidate.status === "rejected";
-
-  return (
-    <article
-      className={cn(
-        "group overflow-hidden rounded-lg border bg-background shadow-sm transition-colors",
-        isSelected && "border-emerald-500/70 ring-1 ring-emerald-500/20",
-        isRejected && "opacity-55",
-        !isRejected && "hover:border-foreground/20",
-      )}
-      role="button"
-      tabIndex={0}
-      aria-pressed={isSelected}
-      onClick={() => onStatus(isSelected ? "new" : "selected")}
-      onKeyDown={(event) => {
-        if (event.key === "Enter" || event.key === " ") {
-          event.preventDefault();
-          onStatus(isSelected ? "new" : "selected");
-        }
-      }}
-    >
-      <div className="relative aspect-[4/3] w-full bg-muted">
-        <MediaPreview
-          url={previewURL}
-          posterUrl={candidate.poster_url || candidate.preview_url}
-          alt={candidate.title || candidate.competitor}
-          assetType={candidate.asset_type}
-          compact
-        />
-        <Badge variant="secondary" className="absolute left-3 top-3 bg-background/90">
-          {candidate.asset_type === "video" ? <Video className="h-3 w-3" /> : <ImageIcon className="h-3 w-3" />}
-          {candidate.asset_type === "video" ? "视频" : "图片"}
-        </Badge>
-        {isSelected && (
-          <span className="absolute right-3 top-3 inline-flex h-8 w-8 items-center justify-center rounded-full bg-emerald-500 text-white shadow-sm">
-            <Check className="h-4 w-4" />
-          </span>
-        )}
-        {isRejected && (
-          <Badge variant="secondary" className="absolute right-3 top-3 bg-background/90 text-muted-foreground">
-            不采用
-          </Badge>
-        )}
-        {previewURL && (
-          <button
-            type="button"
-            className="absolute bottom-3 right-3 inline-flex h-8 w-8 items-center justify-center rounded-md bg-background/90 text-foreground opacity-0 shadow-sm ring-1 ring-border transition hover:bg-background group-hover:opacity-100 focus:opacity-100 focus-visible:ring-2 focus-visible:ring-primary"
-            onClick={(event) => {
-              event.stopPropagation();
-              if (!previewURL) return;
-          onPreview({
-            url: previewURL,
-            posterUrl: candidate.poster_url || candidate.preview_url,
-            title: candidate.title || candidate.competitor || "素材预览",
-            subtitle: candidate.competitor,
-            assetType: candidate.asset_type,
-            openUrl: openURL,
-          });
-            }}
-            aria-label="放大预览素材"
-          >
-            <Maximize2 className="h-3.5 w-3.5" />
-          </button>
-        )}
-      </div>
-      <div className="space-y-3 p-3">
-        <div className="flex items-start justify-between gap-3">
-          <div className="min-w-0">
-            <h3 className="truncate text-sm font-semibold">{candidate.competitor || "未命名竞品"}</h3>
-            <p className="mt-1 line-clamp-2 min-h-10 text-sm text-muted-foreground">
-              {candidate.title || "未返回标题"}
-            </p>
-          </div>
-        </div>
-        <div className="grid grid-cols-2 gap-2 rounded-md bg-muted/50 p-2 text-xs">
-          <Metric label="投放天数" value={formatDuration(candidate.duration_days)} />
-          <Metric label="曝光估算" value={formatImpression(candidate.impression_estimate)} />
-        </div>
-        <div className="grid gap-1">
-          <MetaChips label="媒体" values={candidate.media_names} limit={5} />
-          <MetaChips label="地区" values={candidate.area_names} limit={4} />
-          <MetaChips label="语言" values={candidate.language_names} limit={3} />
-          <MetaChips label="设备" values={candidate.platform_names} limit={3} />
-        </div>
-        <div className="flex items-center justify-between gap-2">
-          <span className="text-xs text-muted-foreground">
-            {isSelected ? "已选中" : "点卡片选择"}
-          </span>
-          <Button
-            size="sm"
-            variant="ghost"
-            disabled={busy}
-            className={cn(
-              "h-7 px-2 text-xs text-muted-foreground hover:text-foreground",
-              !isRejected && "opacity-0 transition-opacity group-hover:opacity-100 focus:opacity-100",
-            )}
-            onClick={(event) => {
-              event.stopPropagation();
-              onStatus(isRejected ? "new" : "rejected");
-            }}
-          >
-            <X className="h-4 w-4" />
-            {isRejected ? "恢复" : "不采用"}
-          </Button>
-        </div>
-      </div>
-    </article>
-  );
+function MaterialLibraryDialog({ open, onOpenChange, candidates, existingIds, busy, onImport }: { open: boolean; onOpenChange: (open: boolean) => void; candidates: CreativeMaterialCandidate[]; existingIds: Set<string>; busy: boolean; onImport: (selected: CreativeMaterialCandidate[]) => void }) {
+  const [selected, setSelected] = useState<string[]>([]);
+  useEffect(() => { if (!open) setSelected([]); }, [open]);
+  const available = candidates.filter((candidate) => !existingIds.has(candidate.id));
+  return <Dialog open={open} onOpenChange={onOpenChange}><DialogContent className="max-w-5xl"><DialogHeader><DialogTitle>从工作区素材库导入</DialogTitle></DialogHeader><div className="grid max-h-[62vh] grid-cols-2 gap-px overflow-y-auto border bg-border md:grid-cols-3 lg:grid-cols-4">{available.map((candidate) => { const checked = selected.includes(candidate.id); return <button key={candidate.id} type="button" onClick={() => setSelected(checked ? selected.filter((id) => id !== candidate.id) : [...selected, candidate.id])} className={cn("bg-background text-left", checked && "ring-2 ring-inset ring-emerald-600")}><div className="aspect-[4/3] bg-muted"><MediaPreview url={firstNonEmpty(candidate.archived_url, candidate.preview_url)} alt={candidate.title || candidate.competitor} compact /></div><div className="p-2"><p className="truncate text-sm font-medium">{candidate.title || candidate.competitor}</p><p className="truncate text-xs text-muted-foreground">{candidate.competitor}</p></div></button>; })}</div><DialogFooter><Button variant="outline" onClick={() => onOpenChange(false)}>取消</Button><Button disabled={selected.length === 0 || busy} onClick={() => onImport(available.filter((candidate) => selected.includes(candidate.id)))}>导入 {selected.length} 张</Button></DialogFooter></DialogContent></Dialog>;
 }
 
-function Metric({ label, value }: { label: string; value: string }) {
-  return (
-    <div>
-      <div className="text-muted-foreground">{label}</div>
-      <div className="font-semibold">{value}</div>
-    </div>
-  );
-}
-
-function MetaChips({
-  label,
-  values,
-  limit,
-}: {
-  label: string;
-  values: string[];
-  limit: number;
-}) {
-  if (values.length === 0) return null;
-  const shown = values.slice(0, limit);
-  const hidden = values.length - shown.length;
-  return (
-    <div className="flex min-w-0 flex-wrap items-center gap-1 text-xs text-muted-foreground">
-      <span className="mr-1 shrink-0">{label}</span>
-      {shown.map((value) => (
-        <span
-          key={value}
-          className="max-w-24 truncate rounded-md bg-muted px-1.5 py-0.5 text-muted-foreground"
-          title={value}
-        >
-          {value}
-        </span>
-      ))}
-      {hidden > 0 && (
-        <span className="rounded-md bg-muted px-1.5 py-0.5 text-muted-foreground">
-          +{hidden}
-        </span>
-      )}
-    </div>
-  );
-}
-
-function CreativeResultPreviewDialog({
-  open,
-  onOpenChange,
-  job,
-  activeCandidateId,
-  candidateByID,
-  workspaceId,
-  onPreview,
-  downloading,
-  onDownloadSelected,
-}: {
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-  job: CreativeEditJob;
-  activeCandidateId: string;
-  candidateByID: Map<string, CreativeMaterialCandidate>;
-  workspaceId: string;
-  onPreview: (item: MediaPreviewItem) => void;
-  downloading: boolean;
-  onDownloadSelected: (assetIDs: string[], includeOriginal: boolean) => void;
-}) {
-  const candidate = candidateByID.get(activeCandidateId);
-  const sourceURL = candidate
-    ? firstNonEmpty(candidate.archived_url, candidate.preview_url, candidate.poster_url, candidate.resource_url)
-    : "";
-  const variants = job.variants.filter((variant) => variant.candidate_id === activeCandidateId);
-  const expectedVariantCount = creativeEditExpectedVariantCount(job);
-  const [detailVariantID, setDetailVariantID] = useState("");
-  const detailVariant = variants.find((variant) => variant.id === detailVariantID);
-  const variantPreviews = variants.map((variant) => ({
-    variant,
-    asset: variant.assets.find((asset) => asset.label === "1080x1080") ?? variant.assets[0],
-  })).filter((item): item is { variant: typeof variants[number]; asset: NonNullable<typeof variants[number]["assets"][number]> } => !!item.asset);
-  const deliveryAssets = variants.flatMap((variant) => variant.assets.map((asset) => ({ variant, asset })));
-  const [selectedAssetIDs, setSelectedAssetIDs] = useState<Set<string>>(new Set());
-  const [includeOriginal, setIncludeOriginal] = useState(true);
-  const qcAttempts = extractCreativeQcAttemptRounds(job.process_data, activeCandidateId)
-    .flatMap((round) => round.attempts.map((attempt) => ({ round, attempt })))
-    .filter(({ attempt }) => !!attempt.imageUrl);
-
+function CopyPickerDialog({ candidates, activeCandidateId, entries, items, benefitOptions, themeOptions, busy, analysisBusy, onCandidateId, onClose, onPick, onCustom, onBrief, onAnalyze }: { candidates: CreativeMaterialCandidate[]; activeCandidateId: string; entries: CreativeCopyEntry[]; items: CreativeIssueItem[]; benefitOptions: string[]; themeOptions: string[]; busy: boolean; analysisBusy: boolean; onCandidateId: (id: string) => void; onClose: () => void; onPick: (candidateId: string, copyEntryId: string) => void; onCustom: (candidateId: string, value: CopyDraft) => void; onBrief: (candidateId: string, value: CreativeBriefDraft) => void; onAnalyze: (candidate: CreativeMaterialCandidate) => void }) {
+  const [mode, setMode] = useState<"library" | "custom">("library");
+  const [search, setSearch] = useState("");
+  const [draft, setDraft] = useState<CopyDraft>(EMPTY_COPY);
+  const [briefDraft, setBriefDraft] = useState<CreativeBriefDraft>(EMPTY_BRIEF);
+  const [briefEditing, setBriefEditing] = useState(false);
+  const activeIndex = Math.max(0, candidates.findIndex((candidate) => candidate.id === activeCandidateId));
+  const candidate = candidates[activeIndex];
+  const selected = items.find((item) => item.candidate_id === candidate?.id);
+  const currentBrief = selected?.creative_brief ?? EMPTY_BRIEF;
+  const recommendations = useMemo(() => candidate ? recommendCopyEntries(candidate, entries, currentBrief) : [], [candidate, entries, currentBrief]);
+  const visible = useMemo(() => {
+    const needle = search.trim().toLocaleLowerCase();
+    if (!needle) return recommendations;
+    return recommendations.filter(({ entry }) => [entry.external_key, entry.headline, entry.subheadline, entry.benefit, entry.cta, entry.copy_role, ...entry.tags].join(" ").toLocaleLowerCase().includes(needle));
+  }, [recommendations, search]);
   useEffect(() => {
-    setDetailVariantID("");
-    setSelectedAssetIDs(new Set(deliveryAssets.map(({ asset }) => asset.id)));
-    setIncludeOriginal(true);
-  }, [open, job.id, activeCandidateId]);
-
-  const toggleAssets = (assetIDs: string[], checked: boolean) => {
-    setSelectedAssetIDs((current) => {
-      const next = new Set(current);
-      for (const assetID of assetIDs) {
-        if (checked) next.add(assetID);
-        else next.delete(assetID);
-      }
-      return next;
-    });
+    if (!candidate) return;
+    const copy = selected?.copy_snapshot as Partial<CreativeCopyEntry> | undefined;
+    setDraft({ headline: copy?.headline ?? "", subheadline: copy?.subheadline ?? "", benefit: copy?.benefit ?? "", cta: copy?.cta ?? "", legal_text: copy?.legal_text ?? "" });
+    setBriefDraft({ ...currentBrief, theme_elements: [...currentBrief.theme_elements], secondary_benefits: [...currentBrief.secondary_benefits], evidence: [...currentBrief.evidence], detected_text: [...currentBrief.detected_text] });
+    setBriefEditing(false);
+    setMode("library");
+    setSearch("");
+  }, [candidate, currentBrief, selected]);
+  const move = (offset: number) => {
+    if (!candidates.length) return;
+    onCandidateId(candidates[(activeIndex + offset + candidates.length) % candidates.length]?.id ?? "");
   };
-
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="grid h-[94vh] grid-rows-[auto_minmax(0,1fr)] gap-0 overflow-hidden p-0 sm:max-w-[min(98vw,1440px)]">
-        <DialogHeader className="border-b px-5 py-4 pr-12">
-          <div className="flex flex-wrap items-start justify-between gap-3">
-            <div className="min-w-0">
-              <div className="flex items-center gap-2">
-                {detailVariant && (
-                  <Button
-                    size="icon-sm"
-                    variant="ghost"
-                    title="返回变体列表"
-                    aria-label="返回变体列表"
-                    onClick={() => setDetailVariantID("")}
-                  >
-                    <ArrowLeft className="h-4 w-4" />
-                  </Button>
-                )}
-                <DialogTitle className="text-lg">
-                  {detailVariant ? `变体 ${detailVariant.variant_index} 尺寸预览` : "修图结果预览"}
-                </DialogTitle>
-              </div>
-              <div className="mt-2 flex flex-wrap items-center gap-2">
-                <Badge variant="outline">{candidate?.competitor || "当前素材"}</Badge>
-                <Badge variant="outline">已完成 {variants.length}/{expectedVariantCount} 变体</Badge>
-                <Badge variant="outline">每个变体 3 个尺寸</Badge>
-                {qcAttempts.length > 0 && <Badge variant="outline">QC 尝试 {qcAttempts.length} 张</Badge>}
-                <Badge variant="outline">已选 {selectedAssetIDs.size} 张</Badge>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  disabled={selectedAssetIDs.size === 0 || downloading}
-                  onClick={() => onDownloadSelected([...selectedAssetIDs], includeOriginal)}
-                >
-                  <Download className="h-4 w-4" />
-                  {downloading ? "正在打包" : "下载已选"}
-                </Button>
-              </div>
-            </div>
-          </div>
-        </DialogHeader>
-        <div className="min-h-0 overflow-y-auto bg-muted/30 p-5">
-          {detailVariant ? (
-            <div className="grid items-start gap-4 md:grid-cols-2 xl:grid-cols-3">
-              {detailVariant.assets.map((asset) => (
-                <article key={asset.id} className="group overflow-hidden rounded-lg border bg-card">
-                  <button
-                    type="button"
-                    className="relative block w-full cursor-zoom-in bg-muted text-left outline-none ring-inset focus-visible:ring-2 focus-visible:ring-primary"
-                    style={{ aspectRatio: `${asset.width} / ${asset.height}` }}
-                    onClick={() => asset.asset_url && onPreview({
-                      url: creativeEditAssetPreviewURL(job.issue_id, asset.id, workspaceId),
-                      title: `变体 ${detailVariant.variant_index} - ${asset.label || `${asset.width}x${asset.height}`}`,
-                      subtitle: candidate?.competitor,
-                      assetType: asset.content_type.startsWith("video/") ? "video" : "image",
-                      openUrl: asset.asset_url,
-                    })}
-                  >
-                    <MediaPreview url={creativeEditAssetPreviewURL(job.issue_id, asset.id, workspaceId)} alt={asset.label || `${asset.width}x${asset.height}`} compact />
-                    <span className="absolute left-2 top-2" onClick={(event) => event.stopPropagation()}>
-                      <Checkbox
-                        checked={selectedAssetIDs.has(asset.id)}
-                        aria-label={`选择变体 ${detailVariant.variant_index} 的 ${asset.label}`}
-                        className="bg-background/90"
-                        onCheckedChange={(checked) => toggleAssets([asset.id], checked === true)}
-                      />
-                    </span>
-                  </button>
-                  <div className="flex items-center justify-between gap-2 p-3 text-sm">
-                    <span className="font-semibold">{asset.label || `${asset.width}x${asset.height}`}</span>
-                    <span className="text-xs text-muted-foreground">变体 {detailVariant.variant_index}</span>
-                  </div>
-                </article>
-              ))}
-            </div>
-          ) : (
-            <>
-              <div className="grid items-start gap-4 md:grid-cols-2 xl:grid-cols-3">
-            <article className="group overflow-hidden rounded-lg border bg-card">
-              <div className="relative aspect-[4/3] bg-muted">
-                {sourceURL ? (
-                  <button
-                    type="button"
-                    className="h-full w-full cursor-zoom-in outline-none ring-inset focus-visible:ring-2 focus-visible:ring-primary"
-                    onClick={() => onPreview({
-                      url: sourceURL,
-                      posterUrl: candidate?.poster_url || candidate?.preview_url,
-                      title: candidate?.title || candidate?.competitor || "原始参考图",
-                      subtitle: candidate?.competitor,
-                      assetType: candidate?.asset_type,
-                      openUrl: firstNonEmpty(candidate?.resource_url || "", candidate?.preview_url || "", candidate?.poster_url || "", candidate?.original_url || ""),
-                    })}
-                  >
-                    <MediaPreview
-                      url={sourceURL}
-                      posterUrl={candidate?.poster_url || candidate?.preview_url}
-                      alt={candidate?.title || candidate?.competitor || "原始参考图"}
-                      assetType={candidate?.asset_type}
-                      compact
-                    />
-                  </button>
-                ) : (
-                  <div className="flex h-full items-center justify-center text-muted-foreground"><ImageIcon className="h-8 w-8" /></div>
-                )}
-                <span className="absolute left-2 top-2" onClick={(event) => event.stopPropagation()}>
-                  <Checkbox checked={includeOriginal} aria-label="下载时包含原始参考图" className="bg-background/90" onCheckedChange={(checked) => setIncludeOriginal(checked === true)} />
-                </span>
-                <Badge variant="secondary" className="absolute right-2 top-2 bg-background/90">原始参考图</Badge>
-              </div>
-              <div className="flex items-center justify-between gap-2 p-3">
-                <span className="truncate text-sm font-semibold">{candidate?.competitor || "素材"}</span>
-                <Maximize2 className="h-4 w-4 shrink-0 text-muted-foreground" />
-              </div>
-            </article>
-            {variantPreviews.length === 0 && qcAttempts.length === 0 && (
-              <div className="col-span-full flex min-h-48 flex-col items-center justify-center border border-dashed bg-background px-6 text-center">
-                <ImageIcon className="h-8 w-8 text-muted-foreground" />
-                <p className="mt-3 text-sm font-semibold">本次未产出可预览的生成图</p>
-                <p className="mt-1 max-w-xl text-xs leading-5 text-muted-foreground">
-                  {creativePreviewEmptyMessage(job.error_message)}
-                </p>
-              </div>
-            )}
-            {variantPreviews.map(({ variant, asset }) => {
-              const variantAssetIDs = variant.assets.map((item) => item.id);
-              const allSelected = variantAssetIDs.every((assetID) => selectedAssetIDs.has(assetID));
-              return (
-              <article key={variant.id} className="group overflow-hidden rounded-lg border bg-card transition-colors hover:border-foreground/20">
-                <button
-                  type="button"
-                  className="relative block w-full cursor-pointer bg-muted text-left outline-none ring-inset focus-visible:ring-2 focus-visible:ring-primary"
-                  style={{ aspectRatio: `${asset.width} / ${asset.height}` }}
-                  onClick={() => setDetailVariantID(variant.id)}
-                >
-                  {asset.asset_url ? (
-                    <MediaPreview url={creativeEditAssetPreviewURL(job.issue_id, asset.id, workspaceId)} alt={asset.label || `${asset.width}x${asset.height}`} compact />
-                  ) : (
-                    <span className="flex h-full items-center justify-center text-muted-foreground"><ImageIcon className="h-8 w-8" /></span>
-                  )}
-                  <span className="absolute left-2 top-2" onClick={(event) => event.stopPropagation()}>
-                    <Checkbox checked={allSelected} aria-label={`选择变体 ${variant.variant_index} 的全部尺寸`} className="bg-background/90" onCheckedChange={(checked) => toggleAssets(variantAssetIDs, checked === true)} />
-                  </span>
-                  <Badge variant="secondary" className="absolute right-2 top-2 bg-background/90">变体 {variant.variant_index}</Badge>
-                  <span className="absolute bottom-2 right-2 inline-flex h-8 w-8 items-center justify-center rounded-md bg-background/90 text-foreground opacity-0 shadow-sm ring-1 ring-border transition group-hover:opacity-100 group-focus-within:opacity-100">
-                    <Maximize2 className="h-4 w-4" />
-                  </span>
-                </button>
-                <div className="flex items-center justify-between gap-2 p-3 text-sm">
-                  <span className="font-semibold">变体 {variant.variant_index}</span>
-                  <span className="text-xs text-muted-foreground">{variant.assets.length} 个尺寸</span>
-                </div>
-              </article>
-              );
-            })}
-              </div>
-              {qcAttempts.length > 0 && (
-                <section className="mt-6 border-t pt-5">
-                  <div className="mb-3">
-                    <div className="text-sm font-semibold">QC 过程图</div>
-                    <p className="mt-1 text-xs text-muted-foreground">仅用于回看失败原因，不属于可交付成图。</p>
-                  </div>
-                  <div className="grid items-start gap-4 md:grid-cols-2 xl:grid-cols-3">
-            {qcAttempts.map(({ round, attempt }) => (
-              <article key={`qc:${attempt.key}`} className="group overflow-hidden rounded-lg border border-dashed bg-card">
-                <button
-                  type="button"
-                  className="relative block aspect-[4/3] w-full cursor-zoom-in bg-muted text-left outline-none ring-inset focus-visible:ring-2 focus-visible:ring-primary"
-                  onClick={() => onPreview({
-                    url: attempt.imageUrl,
-                    title: `第 ${round.round} 轮 · 概念 ${attempt.conceptIndex} · ${attempt.size}`,
-                    subtitle: candidate?.competitor,
-                    assetType: "image",
-                    openUrl: attempt.imageUrl,
-                  })}
-                >
-                  <MediaPreview url={attempt.imageUrl} alt={`第 ${round.round} 轮概念 ${attempt.conceptIndex} ${attempt.size} 尝试图`} compact />
-                  <Badge variant="secondary" className="absolute left-2 top-2 bg-background/90">QC 尝试</Badge>
-                  <span className={cn(
-                    "absolute right-2 top-2 rounded-md bg-background/90 px-2 py-1 text-xs font-medium",
-                    attempt.verdict === "pass" ? "text-emerald-700 dark:text-emerald-300" : "text-destructive",
-                  )}>
-                    {attempt.verdict === "pass" ? "通过" : attempt.verdict === "generation_error" ? "生成失败" : "未通过"}
-                  </span>
-                </button>
-                <div className="flex items-center justify-between gap-2 p-3 text-sm">
-                  <span className="font-semibold">第 {round.round} 轮 · {attempt.size}</span>
-                  <span className="text-xs text-muted-foreground">概念 {attempt.conceptIndex}</span>
-                </div>
-              </article>
-            ))}
-                  </div>
-                </section>
-              )}
-            </>
-          )}
-        </div>
-      </DialogContent>
-    </Dialog>
-  );
-}
-
-function EditResultBoard({
-  jobs,
-  job,
-  activeCandidateId,
-  activeJobCandidates,
-  candidateByID,
-  viewedJobIDs,
-  expanded,
-  onExpandedChange,
-  workspaceId,
-  onJobChange,
-  onCandidateChange,
-  onSyncJob,
-  onDownloadJob,
-  syncingJobId,
-  downloadingJobId,
-  submittingFeedbackVariantId,
-  onSubmitFeedback,
-  onOpenLargePreview,
-  onPreview,
-}: {
-  jobs: CreativeEditJob[];
-  job: CreativeEditJob;
-  activeCandidateId: string;
-  activeJobCandidates: string[];
-  candidateByID: Map<string, CreativeMaterialCandidate>;
-  viewedJobIDs: Set<string>;
-  expanded: boolean;
-  onExpandedChange: (expanded: boolean) => void;
-  workspaceId: string;
-  onJobChange: (id: string) => void;
-  onCandidateChange: (id: string) => void;
-  onSyncJob: (id: string) => void;
-  onDownloadJob: (id: string) => void;
-  syncingJobId?: string;
-  downloadingJobId?: string;
-  submittingFeedbackVariantId?: string;
-  onSubmitFeedback: (
-    jobId: string,
-    variantId: string,
-    feedback: CreateCreativeEditFeedbackRequest,
-  ) => Promise<void>;
-  onOpenLargePreview: () => void;
-  onPreview: (item: MediaPreviewItem) => void;
-}) {
-  const variants = job.variants.filter((variant) => variant.candidate_id === activeCandidateId);
-  const activeCandidate = candidateByID.get(activeCandidateId);
-  const activeCandidateURL = activeCandidate
-    ? firstNonEmpty(activeCandidate.archived_url, activeCandidate.preview_url, activeCandidate.poster_url, activeCandidate.resource_url)
-    : "";
-  const isSyncing = syncingJobId === job.id;
-  const hasResults = variants.length > 0;
-  const expectedVariantCount = creativeEditExpectedVariantCount(job);
-  const completedVariantCount = variants.length;
-  const isPartialResult = completedVariantCount > 0 && completedVariantCount < expectedVariantCount;
-  const canDownload = canDownloadCreativeEditJob(job);
-  const history = creativeEditJobHistory(jobs);
-
-  return (
-    <div className="rounded-lg border bg-muted/20">
-      <div className={cn("flex flex-wrap items-center justify-between gap-3 px-3 py-3", expanded && "border-b")}>
-        <button
-          type="button"
-          className="group flex min-w-0 flex-1 items-start gap-2 text-left outline-none focus-visible:ring-2 focus-visible:ring-primary"
-          aria-expanded={expanded}
-          aria-label={expanded ? "收起修图结果看板" : "展开修图结果看板"}
-          onClick={() => onExpandedChange(!expanded)}
-        >
-          <ChevronRight className={cn("mt-0.5 h-4 w-4 shrink-0 text-muted-foreground transition-transform", expanded && "rotate-90")} />
-          <span className="min-w-0">
-            <span className="block text-sm font-semibold">修图结果看板</span>
-            <span className="mt-1 block text-xs text-muted-foreground">
-              {hasResults
-                ? "下方用于对照原图并反馈变体；三种尺寸可在“预览成图”中查看。"
-                : "任务已提交，结果会自动更新。"}
-            </span>
-          </span>
-        </button>
-        <div className="flex flex-wrap items-center gap-2">
-          {hasResults ? (
-            <Badge variant={isPartialResult ? "secondary" : "outline"}>
-              已完成 {completedVariantCount}/{expectedVariantCount} 变体
-            </Badge>
-          ) : (
-            <Badge variant="outline">{creativeEditJobStatusLabel(job.status)}</Badge>
-          )}
-          {canDownload && (
-            <Button
-              size="sm"
-              variant="outline"
-              title="下载全部选中原图，以及每个变体的 1080x1080、800x1000、1200x628 成图"
-              disabled={downloadingJobId === job.id}
-              onClick={() => onDownloadJob(job.id)}
-            >
-              <Download className="h-4 w-4" />
-              {downloadingJobId === job.id ? "正在打包" : "全部下载"}
-            </Button>
-          )}
-          <Button
-            size="sm"
-            variant="outline"
-            onClick={onOpenLargePreview}
-          >
-            <Maximize2 className="h-4 w-4" />
-            预览成图
-          </Button>
-          <Button
-            size="sm"
-            variant="outline"
-            onClick={() => onExpandedChange(!expanded)}
-          >
-            {expanded ? "收起" : "展开"}
-          </Button>
-        </div>
+  const saveCurrentBrief = () => {
+    if (!candidate || !briefDraft.primary_benefit.trim()) return;
+    onBrief(candidate.id, {
+      ...briefDraft,
+      theme: briefDraft.theme.trim(),
+      theme_elements: uniqueOptions(briefDraft.theme_elements),
+      primary_benefit: briefDraft.primary_benefit.trim(),
+      secondary_benefits: uniqueOptions(briefDraft.secondary_benefits),
+      benefit_value: briefDraft.benefit_value.trim(),
+      evidence: uniqueOptions(briefDraft.evidence),
+      detected_text: uniqueOptions(briefDraft.detected_text),
+      visual_type: briefDraft.visual_type.trim(),
+      analysis_summary: briefDraft.analysis_summary.trim(),
+      status: "confirmed",
+      source: currentBrief.source === "ai" || currentBrief.source === "mixed" ? "mixed" : "user",
+    });
+    setBriefEditing(false);
+  };
+  return <Dialog open={Boolean(candidate && activeCandidateId)} onOpenChange={(open) => !open && onClose()}><DialogContent className="grid h-[94vh] grid-rows-[auto_minmax(0,1fr)] gap-0 overflow-hidden p-0 sm:max-w-[min(98vw,1560px)]">
+    <DialogHeader className="flex-row items-center justify-between border-b px-5 py-4 pr-14"><div><DialogTitle>逐图配置创意与文案</DialogTitle><p className="mt-1 text-xs text-muted-foreground">第 {activeIndex + 1} / {candidates.length} 张 · 已识别利益点 {items.filter((item) => candidates.some((candidate) => candidate.id === item.candidate_id) && item.creative_brief.primary_benefit).length} 张 · 已定文案 {items.filter((item) => candidates.some((candidate) => candidate.id === item.candidate_id) && item.copy_entry_id).length} 张</p></div><div className="flex gap-2"><Button size="icon-sm" variant="outline" title="上一张" onClick={() => move(-1)}><ChevronLeft className="h-4 w-4" /></Button><Button size="icon-sm" variant="outline" title="下一张" onClick={() => move(1)}><ChevronRight className="h-4 w-4" /></Button></div></DialogHeader>
+    <div className="grid min-h-0 lg:grid-cols-[180px_minmax(320px,1fr)_minmax(460px,560px)]">
+      <div className="min-h-0 overflow-y-auto border-r bg-muted/15 p-2"><div className="space-y-2">{candidates.map((item, index) => { const itemCopy = items.find((value) => value.candidate_id === item.id); return <button key={item.id} type="button" onClick={() => onCandidateId(item.id)} className={cn("grid w-full grid-cols-[52px_minmax(0,1fr)] gap-2 border bg-background p-2 text-left", item.id === candidate?.id && "border-emerald-600 ring-1 ring-emerald-600/20")}><div className="aspect-square overflow-hidden bg-muted"><MediaPreview url={firstNonEmpty(item.archived_url, item.preview_url, item.poster_url)} alt={item.title || item.competitor} compact /></div><div className="min-w-0"><p className="truncate text-xs font-medium">{index + 1}. {item.title || item.competitor}</p><p className={cn("mt-1 truncate text-[11px]", itemCopy?.creative_brief.primary_benefit ? "text-emerald-700" : "text-muted-foreground")}>{itemCopy?.creative_brief.primary_benefit ? creativeBriefLabel(itemCopy.creative_brief) : itemCopy?.creative_brief.status === "requested" ? "识别中" : "待定利益点"}</p><p className="mt-0.5 truncate text-[11px] text-muted-foreground">{itemCopy?.copy_entry_id ? (itemCopy.copy_snapshot as Partial<CreativeCopyEntry>).headline || "已定文案" : "待定文案"}</p></div></button>; })}</div></div>
+      <div className="flex min-h-0 flex-col border-r bg-black"><div className="flex min-h-0 flex-1 items-center justify-center p-4">{candidate && <MediaPreview url={firstNonEmpty(candidate.archived_url, candidate.preview_url, candidate.poster_url, candidate.resource_url)} posterUrl={candidate.poster_url} alt={candidate.title || candidate.competitor} assetType={candidate.asset_type} />}</div><div className="border-t border-white/15 bg-black px-4 py-3 text-white"><p className="truncate text-sm font-medium">{candidate?.title || candidate?.competitor}</p><p className="mt-1 truncate text-xs text-white/60">{candidate?.competitor}</p></div></div>
+      <div className="grid min-h-0 grid-rows-[auto_auto_minmax(0,1fr)_auto] bg-background">
+        <div className="border-b bg-muted/20 px-4 py-3">{briefEditing ? <div className="space-y-3"><div className="flex items-center justify-between gap-3"><div><p className="text-sm font-semibold">创意简报</p><p className="text-xs text-muted-foreground">主题控制视觉，主利益点控制文案与信息层级。</p></div><Button size="sm" variant="ghost" onClick={() => setBriefEditing(false)}>取消</Button></div><datalist id="creative-theme-options">{themeOptions.map((value) => <option key={value} value={value} />)}</datalist><datalist id="creative-benefit-options">{benefitOptions.map((value) => <option key={value} value={value} />)}</datalist><div className="grid gap-2 sm:grid-cols-2"><Field label="视觉主题"><Input list="creative-theme-options" value={briefDraft.theme} placeholder="如：世界杯 / 足球赛事" onChange={(event) => setBriefDraft({ ...briefDraft, theme: event.target.value })} /></Field><Field label="主利益点"><Input list="creative-benefit-options" value={briefDraft.primary_benefit} placeholder="如：费用减免" onChange={(event) => setBriefDraft({ ...briefDraft, primary_benefit: event.target.value })} /></Field><Field label="主题元素"><Input value={briefDraft.theme_elements.join("、")} placeholder="球场、足球、欢呼" onChange={(event) => setBriefDraft({ ...briefDraft, theme_elements: splitBriefList(event.target.value) })} /></Field><Field label="辅助利益点"><Input value={briefDraft.secondary_benefits.join("、")} placeholder="低利率、灵活期限" onChange={(event) => setBriefDraft({ ...briefDraft, secondary_benefits: splitBriefList(event.target.value) })} /></Field><Field label="关键数值"><Input value={briefDraft.benefit_value} placeholder="如：Biaya turun 25%" onChange={(event) => setBriefDraft({ ...briefDraft, benefit_value: event.target.value })} /></Field><Field label="画面类型"><Input value={briefDraft.visual_type} placeholder="如：主题活动海报" onChange={(event) => setBriefDraft({ ...briefDraft, visual_type: event.target.value })} /></Field><Field label="识别证据" wide><Textarea rows={2} value={briefDraft.evidence.join("\n")} placeholder="每行一条图片中的文字或视觉证据" onChange={(event) => setBriefDraft({ ...briefDraft, evidence: splitBriefList(event.target.value) })} /></Field></div><div className="flex justify-end"><Button size="sm" disabled={busy || !briefDraft.primary_benefit.trim()} onClick={saveCurrentBrief}>确认创意简报</Button></div></div> : <div className="flex items-start justify-between gap-3"><div className="min-w-0"><div className="flex flex-wrap items-center gap-2"><Target className="h-4 w-4 text-emerald-700" /><span className="text-sm font-semibold">{currentBrief.primary_benefit ? creativeBriefLabel(currentBrief) : currentBrief.status === "requested" ? "正在识别主题与利益点" : "尚未识别主利益点"}</span>{currentBrief.status === "draft" && <Badge variant="outline">AI 待确认</Badge>}{currentBrief.status === "confirmed" && <Badge variant="outline">已确认</Badge>}</div>{currentBrief.evidence.length > 0 && <p className="mt-1 line-clamp-2 text-xs text-muted-foreground">依据：{currentBrief.evidence.join("；")}</p>}</div><div className="flex shrink-0 gap-1"><Button size="sm" variant="ghost" disabled={analysisBusy || !candidate || currentBrief.status === "requested"} onClick={() => candidate && onAnalyze(candidate)}><Sparkles className="h-4 w-4" />{currentBrief.status === "requested" ? "识别中" : currentBrief.primary_benefit ? "重新识别" : "AI 识别"}</Button><Button size="sm" variant="outline" onClick={() => setBriefEditing(true)}>编辑</Button></div></div>}</div>
+        <div className="flex border-b px-4"><button type="button" className={cn("border-b-2 px-4 py-3 text-sm", mode === "library" ? "border-emerald-600 font-medium" : "border-transparent text-muted-foreground")} onClick={() => setMode("library")}>文案库推荐</button><button type="button" className={cn("border-b-2 px-4 py-3 text-sm", mode === "custom" ? "border-emerald-600 font-medium" : "border-transparent text-muted-foreground")} onClick={() => setMode("custom")}>精准编辑</button></div>
+        {mode === "library" ? <div className="min-h-0 overflow-y-auto p-4">{!currentBrief.primary_benefit && <div className="mb-3 border-l-2 border-amber-500 bg-amber-50/60 px-3 py-2 text-xs text-amber-950 dark:bg-amber-950/20 dark:text-amber-100">先识别或填写主利益点，才能得到可靠的文案匹配；当前只按通用可用性排序。</div>}<div className="relative"><Search className="pointer-events-none absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" /><Input className="pl-8" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="搜索标题、卖点、职责或标签" /></div><div className="mt-3 divide-y border">{visible.map(({ entry, reasons }, index) => <button key={entry.id} type="button" onClick={() => candidate && onPick(candidate.id, entry.id)} disabled={busy} className="block w-full px-4 py-3 text-left hover:bg-muted/40"><div className="flex flex-wrap items-center gap-2"><span className="text-sm font-semibold">{entry.headline || entry.subheadline || entry.external_key}</span>{index < 3 && currentBrief.primary_benefit && reasons.length > 0 && <Badge variant="outline">利益点匹配</Badge>}{selected?.copy_entry_id === entry.id && <Badge>当前</Badge>}</div><p className="mt-1 line-clamp-3 whitespace-pre-line text-sm text-muted-foreground">{entry.subheadline || entry.benefit || entry.cta || "无补充文案"}</p>{reasons.length > 0 && <div className="mt-2 flex flex-wrap gap-1">{reasons.map((reason) => <span key={reason} className="bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">{reason}</span>)}</div>}</button>)}{visible.length === 0 && <div className="px-4 py-10 text-center text-sm text-muted-foreground">没有匹配文案</div>}</div></div> : <div className="min-h-0 overflow-y-auto p-4"><div className="grid gap-3 sm:grid-cols-2"><Field label="主标题" wide><Input value={draft.headline} onChange={(event) => setDraft({ ...draft, headline: event.target.value })} /></Field><Field label="副标题" wide><Input value={draft.subheadline} onChange={(event) => setDraft({ ...draft, subheadline: event.target.value })} /></Field><Field label="卖点" wide><Textarea rows={5} value={draft.benefit} onChange={(event) => setDraft({ ...draft, benefit: event.target.value })} /></Field><Field label="CTA"><Input value={draft.cta} onChange={(event) => setDraft({ ...draft, cta: event.target.value })} /></Field><Field label="合规文字" wide><Textarea rows={4} value={draft.legal_text} onChange={(event) => setDraft({ ...draft, legal_text: event.target.value })} /></Field></div></div>}
+        <DialogFooter className="border-t px-4 py-3"><Button variant="outline" onClick={onClose}>完成</Button>{mode === "custom" && <Button disabled={busy || !candidate || !draft.headline.trim()} onClick={() => candidate && onCustom(candidate.id, draft)}>保存并用于本图</Button>}</DialogFooter>
       </div>
-      {expanded && (
-        <>
-      <div className="border-b bg-background/60 px-3 py-2">
-        <div className="flex items-center gap-2 overflow-x-auto pb-1" role="tablist" aria-label="出图记录">
-          {history.map(({ job: item, sequence }) => {
-            const isActive = item.id === job.id;
-            const isViewed = viewedJobIDs.has(item.id);
-            return (
-              <button
-                key={item.id}
-                type="button"
-                role="tab"
-                aria-selected={isActive}
-                className={cn(
-                  "relative flex shrink-0 items-center gap-2 rounded-md border px-2.5 py-2 text-left text-xs outline-none transition-colors hover:border-primary/50 focus-visible:ring-2 focus-visible:ring-primary",
-                  isActive ? "border-primary bg-primary/5 ring-1 ring-primary" : "bg-background",
-                )}
-                onClick={() => onJobChange(item.id)}
-              >
-                {!isViewed && <span className="absolute right-1.5 top-1.5 h-1.5 w-1.5 rounded-full bg-primary" aria-label="未查看" />}
-                <span className="font-semibold">出图 {sequence}</span>
-                <span className="text-muted-foreground">{formatCreativeEditJobTime(item.created_at)}</span>
-                <Badge variant={item.status === "failed" ? "destructive" : item.status === "partial" ? "secondary" : "outline"} className="h-5 px-1.5 text-[10px]">
-                  {creativeEditJobStatusLabel(item.status)}
-                </Badge>
-              </button>
-            );
-          })}
-        </div>
-      </div>
-      {activeJobCandidates.length > 1 && (
-        <div className="border-b bg-background/40 px-3 py-2.5">
-          <div className="flex items-center gap-3 overflow-x-auto pb-1" role="tablist" aria-label="本批素材">
-            <span className="shrink-0 text-xs font-medium text-muted-foreground">本批素材</span>
-            {activeJobCandidates.map((candidateID, index) => {
-              const candidate = candidateByID.get(candidateID);
-              const candidateURL = candidate
-                ? firstNonEmpty(candidate.archived_url, candidate.preview_url, candidate.poster_url, candidate.resource_url)
-                : "";
-              const candidateVariants = job.variants.filter((variant) => variant.candidate_id === candidateID).length;
-              const isActive = candidateID === activeCandidateId;
-              return (
-                <button
-                  key={candidateID}
-                  type="button"
-                  role="tab"
-                  aria-selected={isActive}
-                  className={cn(
-                    "flex w-48 shrink-0 items-center gap-2 rounded-md border p-1.5 text-left outline-none transition-colors hover:border-primary/50 focus-visible:ring-2 focus-visible:ring-primary",
-                    isActive ? "border-primary bg-primary/5 ring-1 ring-primary" : "bg-background",
-                  )}
-                  onClick={() => onCandidateChange(candidateID)}
-                >
-                  <span className="flex h-10 w-10 shrink-0 overflow-hidden rounded-sm bg-muted">
-                    {candidateURL ? (
-                      <MediaPreview url={candidateURL} alt={candidate?.title || `素材 ${index + 1}`} compact />
-                    ) : (
-                      <span className="flex h-full w-full items-center justify-center text-muted-foreground"><ImageIcon className="h-4 w-4" /></span>
-                    )}
-                  </span>
-                  <span className="min-w-0 flex-1">
-                    <span className="block truncate text-xs font-semibold">素材 {index + 1} · {candidate?.competitor || "未知来源"}</span>
-                    <span className="block truncate text-[11px] text-muted-foreground">{candidateVariants}/{expectedVariantCount} 变体</span>
-                  </span>
-                </button>
-              );
-            })}
-          </div>
-        </div>
-      )}
-      <div className="grid gap-3 p-3 lg:grid-cols-[260px_1fr]">
-        <div className="rounded-md border bg-background p-3">
-          <div className="text-xs text-muted-foreground">当前素材</div>
-          <div className="mt-1 text-sm font-semibold">{activeCandidate?.competitor || "素材"}</div>
-          <p className="mt-1 line-clamp-3 text-xs text-muted-foreground">{activeCandidate?.title || "未返回标题"}</p>
-          <div className="mt-3 aspect-[4/3] overflow-hidden rounded-md bg-muted">
-            {activeCandidate && activeCandidateURL ? (
-              <button
-                type="button"
-                className="group/media relative h-full w-full cursor-zoom-in outline-none ring-inset focus-visible:ring-2 focus-visible:ring-primary"
-                onClick={() => onPreview({
-                  url: activeCandidateURL,
-                  posterUrl: activeCandidate.poster_url || activeCandidate.preview_url,
-                  title: activeCandidate.title || activeCandidate.competitor || "素材预览",
-                  subtitle: activeCandidate.competitor,
-                  assetType: activeCandidate.asset_type,
-                  openUrl: firstNonEmpty(activeCandidate.resource_url, activeCandidate.preview_url, activeCandidate.poster_url, activeCandidate.original_url),
-                })}
-              >
-                <MediaPreview
-                  url={activeCandidateURL}
-                  posterUrl={activeCandidate.poster_url || activeCandidate.preview_url}
-                  alt={activeCandidate.title || activeCandidate.competitor}
-                  assetType={activeCandidate.asset_type}
-                  compact
-                />
-                <span className="absolute bottom-2 right-2 inline-flex items-center gap-1 rounded-md bg-background/90 px-2 py-1 text-xs font-medium opacity-0 shadow-sm ring-1 ring-border transition group-hover/media:opacity-100">
-                  <Maximize2 className="h-3.5 w-3.5" />
-                  预览
-                </span>
-              </button>
-            ) : (
-              <div className="flex h-full items-center justify-center text-muted-foreground">
-                <ImageIcon className="h-7 w-7" />
-              </div>
-            )}
-          </div>
-        </div>
-        <div className="space-y-3">
-          {!hasResults ? (
-            <CreativeEditJobPendingPanel
-              job={job}
-              isSyncing={isSyncing}
-              onSync={() => onSyncJob(job.id)}
-            />
-          ) : (
-            <>
-              <div className="rounded-md border bg-background p-3">
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <div>
-                    <div className="text-sm font-semibold">全部已完成变体</div>
-                    <p className="mt-1 text-xs text-muted-foreground">选择变体反馈；尺寸在预览成图中查看。</p>
-                  </div>
-                  {isPartialResult && (
-                    <Badge variant="secondary">第 {completedVariantCount + 1} 个变体未完成</Badge>
-                  )}
-                </div>
-              </div>
-              <div className="grid gap-3 xl:grid-cols-2">
-              {variants.map((variant) => {
-                const previewAsset = variant.assets.find((asset) => asset.label === "1080x1080") ?? variant.assets[0];
-                return (
-                <section key={variant.id} className="rounded-md border bg-background p-3">
-                  <div className="flex flex-wrap items-center justify-between gap-2">
-                    <div>
-                      <div className="text-sm font-semibold">变体 {variant.variant_index}</div>
-                      {variant.description && <p className="mt-1 text-xs text-muted-foreground">{variant.description}</p>}
-                    </div>
-                    <Badge variant="outline">质检 {variant.qc_status || "待处理"}</Badge>
-                  </div>
-                  <button
-                    type="button"
-                    className="group mt-3 block w-full overflow-hidden rounded-md border bg-muted text-left outline-none transition-colors hover:border-primary/50 focus-visible:ring-2 focus-visible:ring-primary"
-                    onClick={() => previewAsset?.asset_url && onPreview({
-                      url: creativeEditAssetPreviewURL(job.issue_id, previewAsset.id, workspaceId),
-                      title: `变体 ${variant.variant_index} - ${previewAsset.label || `${previewAsset.width}x${previewAsset.height}`}`,
-                      subtitle: activeCandidate?.competitor,
-                      assetType: previewAsset.content_type.startsWith("video/") ? "video" : "image",
-                      openUrl: previewAsset.asset_url,
-                    })}
-                  >
-                    <div className="relative aspect-square bg-muted">
-                      {previewAsset?.asset_url ? <MediaPreview url={creativeEditAssetPreviewURL(job.issue_id, previewAsset.id, workspaceId)} alt={`变体 ${variant.variant_index}`} compact /> : (
-                        <div className="flex h-full items-center justify-center text-muted-foreground"><ImageIcon className="h-7 w-7" /></div>
-                      )}
-                      <span className="absolute bottom-2 right-2 inline-flex items-center rounded-md bg-background/90 p-1.5 opacity-0 shadow-sm ring-1 ring-border transition group-hover:opacity-100">
-                        <Maximize2 className="h-3.5 w-3.5" />
-                      </span>
-                    </div>
-                  </button>
-                  <div className="mt-3">
-                    <CreativeVariantFeedback
-                      variant={variant}
-                      submitting={submittingFeedbackVariantId === variant.id}
-                      onSubmit={(feedback) => onSubmitFeedback(job.id, variant.id, feedback)}
-                    />
-                  </div>
-                </section>
-                );
-              })}
-              </div>
-            </>
-          )}
-        </div>
-        <div className="lg:col-span-2" data-testid="creative-qc-history-full-width">
-          <CreativeQcAttemptHistory
-            processData={job.process_data}
-            candidateId={activeCandidateId}
-            candidateName={activeCandidate?.competitor}
-            onPreview={onPreview}
-          />
-        </div>
-      </div>
-        </>
-      )}
     </div>
-  );
+  </DialogContent></Dialog>;
 }
 
-function CreativeEditJobPendingPanel({
-  job,
-  isSyncing,
-  onSync,
-}: {
-  job: CreativeEditJob;
-  isSyncing: boolean;
-  onSync: () => void;
-}) {
-  const progress = clampPercent(job.progress);
-  const title = creativeEditJobPanelTitle(job.status);
-  const isTerminal = new Set(["completed", "partial", "failed"]).has(job.status);
-
-  return (
-    <div className="rounded-md border bg-background p-4">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div className="min-w-0">
-          <div className="flex flex-wrap items-center gap-2">
-            <h4 className="text-sm font-semibold">{title}</h4>
-            <Badge variant="outline">{creativeEditJobStatusLabel(job.status)}</Badge>
-          </div>
-          <p className="mt-2 text-xs text-muted-foreground">
-            {isTerminal
-              ? "最终成图可能为空，但已生成的尝试图和每轮 QC 结论仍会保留在下方。"
-              : "后台会自动同步；离开页面或服务重启后，任务仍会继续。"}
-          </p>
-        </div>
-        <Button
-          size="icon-sm"
-          variant="ghost"
-          disabled={isSyncing}
-          onClick={onSync}
-          title="立即同步"
-          aria-label="立即同步"
-        >
-          <RotateCcw className={cn("h-4 w-4", isSyncing && "animate-spin")} />
-        </Button>
-      </div>
-      <div className="mt-4">
-        <div className="mb-2 flex items-center justify-between text-xs text-muted-foreground">
-          <span>{job.stage || "等待结果"}</span>
-          <span>{progress}%</span>
-        </div>
-        <div className="h-2 overflow-hidden rounded-full bg-muted">
-          <div
-            className="h-full rounded-full bg-primary transition-all"
-            style={{ width: `${progress}%` }}
-          />
-        </div>
-      </div>
-      <div className="mt-3 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-        <span>{createCreativeJobToolNameText()}</span>
-        {job.external_job_id && (
-          <span className="max-w-full truncate">job {job.external_job_id}</span>
-        )}
-      </div>
-      {job.error_message && (
-        <p className="mt-3 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">
-          {job.error_message}
-        </p>
-      )}
-    </div>
-  );
+function IssueResultBoard({ archiveName, assets, activeAsset, candidates, candidateByAttachment, expanded, onExpandedChange, onAssetChange, onPreview, onAdjust }: { archiveName: string; assets: CreativeDeliveryAsset[]; activeAsset?: CreativeDeliveryAsset; candidates: CreativeMaterialCandidate[]; candidateByAttachment: ReadonlyMap<string, string>; expanded: boolean; onExpandedChange: (expanded: boolean) => void; onAssetChange: (id: string) => void; onPreview: (item: MediaPreviewItem) => void; onAdjust: (target: CreativeAdjustmentTarget) => void }) {
+  const [downloading, setDownloading] = useState<"all" | "group" | "">("");
+  const groups = groupCreativeDeliveries(assets);
+  const latestAssets = groups.flatMap((group) => group.assets);
+  const activeGroup = groups.find((group) => group.assets.some((asset) => asset.id === activeAsset?.id)) ?? groups[0];
+  const groupAssets = activeGroup?.assets ?? [];
+  const currentAsset = groupAssets.find((asset) => asset.id === activeAsset?.id) ?? groupAssets[0];
+  const candidateId = activeGroup ? candidateIdForResultGroup(activeGroup, candidateByAttachment, candidates) : "";
+  const sourceCandidate = candidates.find((candidate) => candidate.id === candidateId);
+  const sourceURL = sourceCandidate ? firstNonEmpty(sourceCandidate.archived_url, sourceCandidate.preview_url, sourceCandidate.poster_url, sourceCandidate.resource_url) : "";
+  const previewResult = () => currentAsset && onPreview({ url: currentAsset.markdown_url || currentAsset.url, title: currentAsset.filename, assetType: "image", openUrl: currentAsset.download_url || currentAsset.url });
+  const previewSource = () => sourceCandidate && onPreview({ url: sourceURL, posterUrl: sourceCandidate.poster_url, title: sourceCandidate.title || sourceCandidate.competitor || "原始素材", subtitle: sourceCandidate.competitor, assetType: sourceCandidate.asset_type, openUrl: firstNonEmpty(sourceCandidate.original_url, sourceCandidate.resource_url) });
+  const downloadZip = async (scope: "all" | "group") => {
+    setDownloading(scope);
+    try {
+      if (scope === "all") await downloadCreativeZip(groups.flatMap((group) => group.assets.map((asset) => ({ ...asset, folder: group.label }))), archiveName);
+      else if (activeGroup) await downloadCreativeZip(activeGroup.assets.map((asset) => ({ ...asset, folder: activeGroup.label })), `${archiveName}-${activeGroup.label}`);
+    } finally {
+      setDownloading("");
+    }
+  };
+  return <div className="border bg-background"><div className={cn("flex flex-wrap items-center justify-between gap-3 px-4 py-3", expanded && "border-b")}><button type="button" className="flex min-w-0 flex-1 items-center gap-2 text-left" onClick={() => onExpandedChange(!expanded)}><ChevronRight className={cn("h-4 w-4 text-muted-foreground transition-transform", expanded && "rotate-90")} /><span className="text-sm font-semibold">修图结果看板</span><Badge variant="outline">{groups.length} 张创意</Badge><Badge variant="outline">{latestAssets.length} 个最新尺寸</Badge></button>{currentAsset && <div className="flex flex-wrap gap-2"><Button size="sm" variant="outline" disabled={Boolean(downloading)} onClick={() => void downloadZip("all")}><Package className="h-4 w-4" />{downloading === "all" ? "打包中" : "下载全部 ZIP"}</Button><Button size="icon-sm" variant="outline" title="下载当前尺寸" onClick={() => void downloadCreativeAssets([currentAsset])}><Download className="h-4 w-4" /></Button><Button size="sm" variant="outline" disabled={Boolean(downloading)} onClick={() => void downloadZip("group")}><Download className="h-4 w-4" />{downloading === "group" ? "打包中" : "本创意 ZIP"}</Button>{candidateId && <Button size="sm" variant="outline" onClick={() => onAdjust({ candidateId, asset: currentAsset, groupAssets })}>调整这张图</Button>}</div>}</div>{expanded && (assets.length ? <div className="grid min-h-80 lg:grid-cols-[240px_minmax(0,1fr)]"><div className="border-r">{groups.map((group) => { const groupCandidateId = candidateIdForResultGroup(group, candidateByAttachment, candidates); const groupCandidate = candidates.find((candidate) => candidate.id === groupCandidateId); return <button key={group.key} type="button" className={cn("block w-full border-b px-3 py-3 text-left", group.key === activeGroup?.key && "bg-muted/50 shadow-[inset_2px_0_0_hsl(var(--primary))]")} onClick={() => onAssetChange(group.assets[0]?.id ?? "")}><p className="truncate text-sm font-medium">{groupCandidate?.title || group.label}</p><p className="mt-1 truncate text-xs text-muted-foreground">{groupCandidate?.competitor || `${group.assets.length} 个尺寸`}</p></button>; })}</div><div className="min-w-0"><div className="flex gap-2 overflow-x-auto border-b p-3">{groupAssets.map((asset) => <button key={asset.id} type="button" className={cn("shrink-0 border px-3 py-2 text-xs", asset.id === currentAsset?.id && "border-emerald-600 bg-emerald-600/5")} onClick={() => onAssetChange(asset.id)}><span className="font-semibold">{creativeDeliveryInfo(asset.filename)?.size}</span><span className="ml-2 text-muted-foreground">通过</span></button>)}</div><div className={cn("grid min-h-[420px]", sourceCandidate && sourceURL ? "md:grid-cols-2" : "grid-cols-1")}>{sourceCandidate && sourceURL && <button type="button" className="grid min-h-0 grid-rows-[auto_minmax(0,1fr)] border-r text-left" onClick={previewSource}><span className="border-b bg-muted/30 px-4 py-2 text-xs font-medium">原始素材</span><span className="flex h-[min(58vh,620px)] items-center justify-center bg-muted/15 p-4"><MediaPreview url={sourceURL} posterUrl={sourceCandidate.poster_url} alt={sourceCandidate.title || sourceCandidate.competitor} assetType={sourceCandidate.asset_type} compact /></span></button>}<button type="button" className="grid min-h-0 grid-rows-[auto_minmax(0,1fr)] text-left" onClick={previewResult}><span className="border-b bg-muted/30 px-4 py-2 text-xs font-medium">修图结果 · {creativeDeliveryInfo(currentAsset?.filename ?? "")?.size}</span><span className="flex h-[min(58vh,620px)] items-center justify-center bg-muted/15 p-4">{currentAsset && <MediaPreview url={currentAsset.markdown_url || currentAsset.url} alt={currentAsset.filename} compact />}</span></button></div><div className="border-t px-4 py-3"><p className="break-all text-sm font-medium">{currentAsset?.filename}</p></div></div></div> : <div className="flex min-h-48 items-center justify-center text-sm text-muted-foreground">Leader 发布验收通过的成图后会显示在这里</div>)}</div>;
 }
 
-function MediaPreview({
-  url,
-  alt,
-  assetType,
-  posterUrl,
-  compact = false,
-}: {
-  url: string;
-  alt: string;
-  assetType?: string;
-  posterUrl?: string;
-  compact?: boolean;
-}) {
-  if (!url) {
-    return (
-      <div className="flex h-full w-full items-center justify-center text-muted-foreground">
-        <ImageIcon className="h-8 w-8" />
-      </div>
-    );
+function AdjustmentDialog({ open, onOpenChange, candidates, target, context, items, busy, onCreated }: { open: boolean; onOpenChange: (open: boolean) => void; candidates: CreativeMaterialCandidate[]; target: CreativeAdjustmentTarget | null; context: { squad_id: string } | null | undefined; items: CreativeIssueItem[]; busy: boolean; onCreated: () => void }) {
+  const [text, setText] = useState("");
+  const [scope, setScope] = useState<"current" | "all">("current");
+  const candidate = candidates.find((value) => value.id === target?.candidateId);
+  const currentSize = creativeDeliveryInfo(target?.asset.filename ?? "")?.size ?? "当前尺寸";
+  const sourceURL = candidate ? firstNonEmpty(candidate.archived_url, candidate.preview_url, candidate.poster_url, candidate.resource_url) : "";
+  useEffect(() => { if (open) { setText(""); setScope("current"); } }, [open, target?.asset.id]);
+  const create = useMutation({ mutationFn: async () => {
+    if (!target) throw new Error("没有选中待调整成图");
+    const item = items.find((value) => value.candidate_id === target.candidateId);
+    if (!context?.squad_id || !item?.work_issue_id) throw new Error("该图尚未建立协作 Issue");
+    const affected = scope === "current" ? [target.asset] : target.groupAssets;
+    return api.createIssue({
+      title: `用户调整 · ${scope === "current" ? currentSize : "三尺寸"} · r${item.revision + 1}`,
+      description: `候选 ID：${target.candidateId}\n原创意工作 Issue：${item.work_issue_id}\n调整范围：${scope === "current" ? `仅 ${currentSize}` : "整组三尺寸"}\n基准成图附件：${target.asset.id} · ${target.asset.filename}\n受影响附件：\n${affected.map((asset) => `- ${asset.id} · ${asset.filename}`).join("\n")}\n\n用户反馈：\n${text}\n\nLeader 读取当前成图和历史通过证据，只委派受影响的尺寸与专业步骤。未受影响尺寸沿用已通过附件，不重新生成。`,
+      parent_issue_id: item.work_issue_id,
+      assignee_type: "squad",
+      assignee_id: context.squad_id,
+      status: "todo",
+    });
+  }, onSuccess: () => { toast.success("调整请求已交给 Leader"); onCreated(); }, onError: (error) => toast.error(error instanceof Error ? error.message : "无法创建调整任务") });
+  return <Dialog open={open} onOpenChange={onOpenChange}><DialogContent className="sm:max-w-[min(94vw,1040px)]"><DialogHeader><DialogTitle>调整成图</DialogTitle><p className="text-xs text-muted-foreground">反馈会进入当前创意的返工子 Issue，未选中的尺寸继续沿用已通过结果。</p></DialogHeader>{target && <div className={cn("grid overflow-hidden border bg-muted/10", sourceURL ? "md:grid-cols-2" : "grid-cols-1")}>{sourceURL && <div className="grid grid-rows-[auto_260px] border-r"><div className="border-b px-3 py-2 text-xs font-medium">原始素材</div><div className="flex items-center justify-center p-3"><MediaPreview url={sourceURL} posterUrl={candidate?.poster_url} alt={candidate?.title || "原始素材"} assetType={candidate?.asset_type} compact /></div></div>}<div className="grid grid-rows-[auto_260px]"><div className="border-b px-3 py-2 text-xs font-medium">当前成图 · {currentSize}</div><div className="flex items-center justify-center p-3"><MediaPreview url={target.asset.markdown_url || target.asset.url} alt={target.asset.filename} compact /></div></div></div>}<div className="grid gap-3 sm:grid-cols-2"><Field label="调整范围"><NativeSelect value={scope} onChange={(event) => setScope(event.target.value as "current" | "all")}><NativeSelectOption value="current">仅当前尺寸 · {currentSize}</NativeSelectOption><NativeSelectOption value="all">整组三尺寸</NativeSelectOption></NativeSelect></Field><Field label="基准文件"><Input value={target?.asset.filename ?? ""} readOnly /></Field><Field label="调整内容" wide><Textarea rows={6} value={text} onChange={(event) => setText(event.target.value)} placeholder="例如：四角文案被深色背景挡住，改成浅色高对比底；中央构图和另外两个尺寸不变。" /></Field></div><DialogFooter><Button variant="outline" onClick={() => onOpenChange(false)}>取消</Button><Button disabled={busy || create.isPending || !target || !text.trim()} onClick={() => create.mutate()}>交给 Leader</Button></DialogFooter></DialogContent></Dialog>;
+}
+
+function Field({ label, children, wide = false }: { label: string; children: React.ReactNode; wide?: boolean }) { return <div className={cn("space-y-1.5", wide && "sm:col-span-2")}><Label className="text-xs text-muted-foreground">{label}</Label>{children}</div>; }
+function MediaPreview({ url, alt, assetType, posterUrl, compact = false }: { url: string; alt: string; assetType?: string; posterUrl?: string; compact?: boolean }) { if (!url) return <div className="flex h-full w-full items-center justify-center text-muted-foreground"><ImageIcon className="h-8 w-8" /></div>; if (assetType === "video" || isVideoURL(url)) return <video src={url} poster={posterUrl} controls={!compact} muted playsInline preload="metadata" className="h-full w-full object-contain" />; return <img src={url} alt={alt} className="h-full w-full object-contain" />; }
+function MediaPreviewDialog({ item, onOpenChange }: { item: MediaPreviewItem | null; onOpenChange: (open: boolean) => void }) { return <Dialog open={!!item} onOpenChange={onOpenChange}><DialogContent className="max-h-[94vh] gap-0 overflow-hidden p-0 sm:max-w-[min(96vw,1280px)]"><DialogHeader className="border-b px-4 py-3 pr-12"><DialogTitle className="truncate text-sm">{item?.subtitle ? `${item.subtitle} - ${item.title}` : item?.title}</DialogTitle>{item?.openUrl && <a href={item.openUrl} target="_blank" rel="noopener noreferrer" className="mt-1 inline-flex items-center gap-1 text-xs"><ExternalLink className="h-3.5 w-3.5" />打开原始素材</a>}</DialogHeader><div className="flex h-[min(78vh,820px)] items-center justify-center bg-black p-3">{item && <MediaPreview url={item.url} posterUrl={item.posterUrl} alt={item.title} assetType={item.assetType} />}</div></DialogContent></Dialog>; }
+function Metric({ label, value }: { label: string; value: string }) { return <div><div className="text-muted-foreground">{label}</div><div className="font-semibold">{value}</div></div>; }
+function candidateMatchesFilter(candidate: CreativeMaterialCandidate, filter: CandidateFilter) { if (filter.status !== "all" && candidate.status !== filter.status) return false; if (filter.competitor !== "all" && candidate.competitor !== filter.competitor) return false; if (filter.assetType !== "all" && candidate.asset_type !== filter.assetType) return false; if (filter.media !== "all" && !candidate.media_names.includes(filter.media)) return false; if (filter.area !== "all" && !candidate.area_names.includes(filter.area)) return false; if (filter.language !== "all" && !candidate.language_names.includes(filter.language)) return false; if (filter.platform !== "all" && !candidate.platform_names.includes(filter.platform)) return false; const text = filter.text.trim().toLowerCase(); return !text || [candidate.title, candidate.competitor, ...candidate.media_names, ...candidate.area_names, ...candidate.language_names, ...candidate.platform_names].join(" ").toLowerCase().includes(text); }
+function candidateFilterEquals(left: CandidateFilter, right: CandidateFilter) { return left.status === right.status && left.competitor === right.competitor && left.assetType === right.assetType && left.media === right.media && left.area === right.area && left.language === right.language && left.platform === right.platform && left.text === right.text; }
+function candidateToImport(candidate: CreativeMaterialCandidate) { return { external_id: candidate.external_id, dedupe_key: candidate.dedupe_key, competitor: candidate.competitor, title: candidate.title, asset_type: candidate.asset_type, preview_url: firstNonEmpty(candidate.archived_url, candidate.preview_url), resource_url: candidate.resource_url, poster_url: candidate.poster_url, original_url: candidate.original_url, media_names: candidate.media_names, area_names: candidate.area_names, language_names: candidate.language_names, platform_names: candidate.platform_names, raw: { source_candidate_id: candidate.id } }; }
+function stringConfig(config: Record<string, unknown> | undefined, key: string) { const value = config?.[key]; return typeof value === "string" ? value : ""; }
+function stringArrayConfig(config: Record<string, unknown> | undefined, key: string) { const value = config?.[key]; return Array.isArray(value) ? uniqueOptions(value.filter((item): item is string => typeof item === "string")) : []; }
+function uniqueOptions(values: string[]) { return [...new Set(values.map((value) => value.trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b)); }
+function splitBriefList(value: string) { return uniqueOptions(value.split(/[\n,，、;；]+/)); }
+function creativeBriefLabel(brief: CreativeBriefDraft) { return [brief.theme, brief.primary_benefit].filter(Boolean).join(" × ") || "待配置"; }
+async function mapWithConcurrency<T>(items: T[], concurrency: number, task: (item: T) => Promise<void>) {
+  const queue = [...items];
+  await Promise.all(Array.from({ length: Math.min(concurrency, queue.length) }, async () => {
+    while (queue.length > 0) {
+      const item = queue.shift();
+      if (item !== undefined) await task(item);
+    }
+  }));
+}
+function firstNonEmpty(...values: string[]) { return values.find((value) => value.trim() !== "")?.trim() ?? ""; }
+function isVideoURL(url: string) { return /\.(mp4|mov|webm|m3u8)(?:[?#].*)?$/i.test(url); }
+function formatDuration(value: number | null) { return value == null ? "-" : `${Math.round(value).toLocaleString()} 天`; }
+function formatImpression(value: number | null) { if (value == null) return "-"; if (value >= 1_000_000) return `${trimNumber(value / 1_000_000)}M`; if (value >= 1_000) return `${trimNumber(value / 1_000)}K`; return Math.round(value).toLocaleString(); }
+function trimNumber(value: number) { return value.toFixed(value >= 10 ? 0 : 1).replace(/\.0$/, ""); }
+
+const COPY_INTENT_RULES = [
+  { key: "repayment_plan", label: "还款/分期", pattern: /还款|分期|期限|cicilan|angsuran|tenor|repayment|pelunasan/i },
+  { key: "rate_down", label: "利率", pattern: /低利率|降息|利率|bunga|suku bunga|interest|rate down|0[,.]0\d\s*%/i },
+  { key: "interest_free", label: "免息", pattern: /免息|0\s*%|bebas bunga|interest free/i },
+  { key: "fee_reduction", label: "费用减免", pattern: /降费|费用减免|减免|biaya|uang muka|fee|potongan/i },
+  { key: "limit_amount", label: "额度", pattern: /额度|limit|jumlah pinjaman|pencairan|dana|rp\s*\d|juta/i },
+  { key: "fast_disbursement", label: "快速放款", pattern: /快速放款|到账|秒批|cepat cair|pencairan cepat|cair dalam|menit/i },
+  { key: "easy_application", label: "低门槛", pattern: /低门槛|易申请|mudah|tanpa jaminan|cukup ktp|syarat/i },
+  { key: "app_interface", label: "App 界面", pattern: /app|phone|screen|interface|halaman|beranda|whatsapp/i },
+  { key: "comparison", label: "对比", pattern: /comparison|perbandingan|bandingkan/i },
+] as const;
+
+export function recommendCopyEntries(candidate: CreativeMaterialCandidate, entries: CreativeCopyEntry[], brief: CreativeBriefDraft = EMPTY_BRIEF) {
+  const hasPrimaryBenefit = Boolean(brief.primary_benefit.trim());
+  const primaryText = [brief.primary_benefit, brief.benefit_value].join(" ").toLocaleLowerCase();
+  const secondaryText = brief.secondary_benefits.join(" ").toLocaleLowerCase();
+  const primaryIntents = COPY_INTENT_RULES.filter((rule) => rule.pattern.test(primaryText) || primaryText.includes(rule.key));
+  const secondaryIntents = COPY_INTENT_RULES.filter((rule) => rule.pattern.test(secondaryText) || secondaryText.includes(rule.key));
+  const benefitTokens = signalTokens([brief.primary_benefit, ...brief.secondary_benefits, brief.benefit_value].join(" "));
+  const themeTokens = signalTokens([brief.theme, ...brief.theme_elements].join(" "));
+  const fallbackText = [candidate.title, ...candidate.tags, ...candidate.media_names].join(" ").toLocaleLowerCase();
+  const fallbackIntents = hasPrimaryBenefit ? [] : COPY_INTENT_RULES.filter((rule) => rule.pattern.test(fallbackText));
+  return entries.filter((entry) => entry.status === "approved").map((entry) => {
+    const entryText = [entry.headline, entry.subheadline, entry.benefit, entry.cta, entry.copy_role, ...entry.tags, JSON.stringify(entry.metadata)].join(" ").toLocaleLowerCase();
+    const matches = (rule: (typeof COPY_INTENT_RULES)[number]) => entryText.includes(rule.key) || entryText.includes(rule.key.replaceAll("_", " ")) || rule.pattern.test(entryText);
+    const matchedPrimary = primaryIntents.filter(matches);
+    const matchedSecondary = secondaryIntents.filter(matches);
+    const matchedFallback = fallbackIntents.filter(matches);
+    const benefitOverlap = benefitTokens.filter((token) => entryText.includes(token)).slice(0, 3);
+    const themeOverlap = themeTokens.filter((token) => entryText.includes(token)).slice(0, 2);
+    const conciseScore = Math.max(0, 8 - Math.round([entry.headline, entry.subheadline, entry.benefit, entry.cta].join(" ").length / 50));
+    const score = matchedPrimary.length * 100 + matchedSecondary.length * 30 + benefitOverlap.length * 18 + themeOverlap.length * 8 + matchedFallback.length * 8 + conciseScore;
+    const reasons = hasPrimaryBenefit
+      ? [...matchedPrimary.map((rule) => `主利益点：${rule.label}`), ...matchedSecondary.map((rule) => `辅助利益点：${rule.label}`), ...benefitOverlap.map((token) => `利益点词：${token}`), ...themeOverlap.map((token) => `主题词：${token}`)].slice(0, 4)
+      : matchedFallback.map((rule) => `采集信息兜底：${rule.label}`).slice(0, 2);
+    return { entry, score, reasons };
+  }).sort((left, right) => right.score - left.score || Date.parse(right.entry.updated_at) - Date.parse(left.entry.updated_at) || left.entry.external_key.localeCompare(right.entry.external_key));
+}
+
+function signalTokens(value: string) {
+  const stop = new Set(["adakami", "easycash", "kredit", "pintar", "adapundi", "bantusaku", "rupiah", "cepat", "julo", "indonesia", "image", "video"]);
+  return [...new Set(value.toLocaleLowerCase().split(/[^\p{L}\p{N}%]+/u).filter((token) => token.length >= 4 && !stop.has(token)))];
+}
+
+const CREATIVE_CANDIDATE_ID = /候选\s*ID\s*[：:]\s*`?([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})`?/i;
+
+export function candidateIdFromResultComment(content: string) {
+  return content.match(CREATIVE_CANDIDATE_ID)?.[1] ?? "";
+}
+
+function candidateIdForResultGroup<T extends { id: string; filename: string }>(group: { key: string; assets: T[] }, candidateByAttachment: ReadonlyMap<string, string>, candidates: CreativeMaterialCandidate[]) {
+  for (const asset of group.assets) {
+    const candidateId = candidateByAttachment.get(asset.id);
+    if (candidateId) return candidateId;
   }
-  if (assetType === "video" || isVideoURL(url)) {
-    return (
-      <video
-        src={url}
-        poster={posterUrl}
-        controls={!compact}
-        muted
-        playsInline
-        preload="metadata"
-        className="h-full w-full object-contain"
-      />
-    );
+  return candidates.find((candidate) => group.key.includes(candidate.id))?.id ?? "";
+}
+
+const LEGACY_CREATIVE_DELIVERY_FILENAME = /^(?:(.+)__)?(?:prime-)?(1080x1080|1200x628|800x1000)\.png$/i;
+const VERSIONED_CREATIVE_DELIVERY_FILENAME = /^(.+)_(1080x1080|1200x628|800x1000)_v(\d+)\.png$/i;
+
+export function creativeDeliveryInfo(filename: string) {
+  const legacy = filename.match(LEGACY_CREATIVE_DELIVERY_FILENAME);
+  if (legacy?.[2]) return { branch: legacy[1] || "current", size: legacy[2], revision: null };
+  const versioned = filename.match(VERSIONED_CREATIVE_DELIVERY_FILENAME);
+  return versioned?.[1] && versioned[2] && versioned[3]
+    ? { branch: versioned[1], size: versioned[2], revision: Number(versioned[3]) }
+    : null;
+}
+
+export function isCreativeDeliveryFilename(filename: string) { return creativeDeliveryInfo(filename) !== null; }
+export function groupCreativeDeliveries<T extends { id: string; filename: string }>(assets: T[]) {
+  const groups = new Map<string, { key: string; label: string; bySize: Map<string, { asset: T; revision: number }> }>();
+  for (const asset of assets) {
+    const info = creativeDeliveryInfo(asset.filename);
+    if (!info) continue;
+    const group = groups.get(info.branch) ?? {
+      key: info.branch,
+      label: info.branch === "current" ? "本轮交付" : info.branch,
+      bySize: new Map<string, { asset: T; revision: number }>(),
+    };
+    const revision = info.revision ?? 0;
+    const current = group.bySize.get(info.size);
+    if (!current || revision >= current.revision) {
+      group.bySize.set(info.size, { asset, revision });
+    }
+    groups.set(info.branch, group);
   }
-  return <img src={url} alt={alt} className="h-full w-full object-contain" />;
+  return [...groups.values()].map((group) => ({
+    key: group.key,
+    label: group.label,
+    assets: [...group.bySize.values()].map(({ asset }) => asset).sort((left, right) => (
+      creativeDeliveryInfo(left.filename)?.size ?? ""
+    ).localeCompare(creativeDeliveryInfo(right.filename)?.size ?? "")),
+  }));
 }
+async function downloadCreativeAssets(assets: { filename: string; download_url?: string | null; url: string }[]) { try { for (const asset of assets) { const response = await fetch(asset.download_url || asset.url, { credentials: "include" }); if (!response.ok) throw new Error(asset.filename); const href = URL.createObjectURL(await response.blob()); const anchor = document.createElement("a"); anchor.href = href; anchor.download = asset.filename; document.body.appendChild(anchor); anchor.click(); anchor.remove(); URL.revokeObjectURL(href); } } catch { toast.error("下载交付图失败，请稍后重试"); } }
 
-function MediaPreviewDialog({
-  item,
-  onOpenChange,
-}: {
-  item: MediaPreviewItem | null;
-  onOpenChange: (open: boolean) => void;
-}) {
-  return (
-    <Dialog open={!!item} onOpenChange={onOpenChange}>
-      <DialogContent className="max-h-[94vh] gap-0 overflow-hidden p-0 sm:max-w-[min(96vw,1280px)]">
-        <DialogHeader className="border-b px-4 py-3 pr-12">
-          <DialogTitle className="truncate text-sm">
-            {item?.subtitle ? `${item.subtitle} - ${item.title}` : (item?.title ?? "素材预览")}
-          </DialogTitle>
-          <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-            {item?.assetType && (
-              <Badge variant="outline">{item.assetType === "video" ? "视频" : "图片"}</Badge>
-            )}
-            {item?.openUrl && (
-              <a
-                href={item.openUrl}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="inline-flex items-center gap-1 text-foreground hover:underline"
-              >
-                <ExternalLink className="h-3.5 w-3.5" />
-                打开原始素材
-              </a>
-            )}
-          </div>
-        </DialogHeader>
-        <div className="flex h-[min(78vh,820px)] items-center justify-center bg-black p-3">
-          {item && (
-            <MediaPreview
-              url={item.url}
-              posterUrl={item.posterUrl}
-              alt={item.title}
-              assetType={item.assetType}
-            />
-          )}
-        </div>
-      </DialogContent>
-    </Dialog>
-  );
-}
-
-function candidateMatchesFilter(candidate: CreativeMaterialCandidate, filter: CandidateFilter) {
-  if (filter.status !== "all" && candidate.status !== filter.status) return false;
-  if (filter.competitor !== "all" && candidate.competitor !== filter.competitor) return false;
-  if (filter.assetType !== "all" && candidate.asset_type !== filter.assetType) return false;
-  if (filter.media !== "all" && !candidate.media_names.includes(filter.media)) return false;
-  if (filter.area !== "all" && !candidate.area_names.includes(filter.area)) return false;
-  if (filter.language !== "all" && !candidate.language_names.includes(filter.language)) return false;
-  if (filter.platform !== "all" && !candidate.platform_names.includes(filter.platform)) return false;
-  const text = filter.text.trim().toLowerCase();
-  if (text) {
-    const haystack = [
-      candidate.title,
-      candidate.competitor,
-      candidate.media_names.join(" "),
-      candidate.area_names.join(" "),
-      candidate.language_names.join(" "),
-      candidate.platform_names.join(" "),
-    ].join(" ").toLowerCase();
-    if (!haystack.includes(text)) return false;
-  }
-  return true;
-}
-
-function candidateFilterEquals(left: CandidateFilter, right: CandidateFilter) {
-  return left.status === right.status
-    && left.competitor === right.competitor
-    && left.assetType === right.assetType
-    && left.media === right.media
-    && left.area === right.area
-    && left.language === right.language
-    && left.platform === right.platform
-    && left.text === right.text;
-}
-
-function uniqueOptions(values: string[]) {
-  return [...new Set(values.map((value) => value.trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b));
-}
-
-function firstNonEmpty(...values: string[]) {
-  return values.find((value) => value.trim() !== "")?.trim() ?? "";
-}
-
-function isVideoURL(url: string) {
-  return /\.(mp4|mov|webm|m3u8)(?:[?#].*)?$/i.test(url);
-}
-
-function creativeEditExpectedVariantCount(job: CreativeEditJob) {
-  const rules = parseCreativeEditRules(job.rules);
-  const value = rules?.variant_count;
-  if (typeof value === "number" && Number.isInteger(value) && value >= 1 && value <= 6) return value;
-  return 3;
-}
-
-function creativeEditDeliverableAssetCount(job: CreativeEditJob) {
-  return job.variants.reduce((count, variant) => count + variant.assets.length, 0);
-}
-
-function canDownloadCreativeEditJob(job: CreativeEditJob) {
-  return (job.status === "completed" || job.status === "partial")
-    && creativeEditDeliverableAssetCount(job) > 0;
-}
-
-function parseCreativeEditRules(rules: unknown): Record<string, unknown> | null {
-  if (rules && typeof rules === "object" && !Array.isArray(rules)) {
-    return rules as Record<string, unknown>;
-  }
-  if (typeof rules !== "string") return null;
+async function downloadCreativeZip(assets: (CreativeDeliveryAsset & { folder: string })[], archiveName: string) {
   try {
-    const parsed: unknown = JSON.parse(rules);
-    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
-      ? parsed as Record<string, unknown>
-      : null;
+    const files: Record<string, Uint8Array> = {};
+    await Promise.all(assets.map(async (asset) => {
+      const response = await fetch(asset.download_url || asset.url, { credentials: "include" });
+      if (!response.ok) throw new Error(asset.filename);
+      files[`${safeArchiveName(asset.folder)}/${safeArchiveName(asset.filename)}`] = new Uint8Array(await response.arrayBuffer());
+    }));
+    const archive = zipSync(files, { level: 0 });
+    const archiveBuffer = new ArrayBuffer(archive.byteLength);
+    new Uint8Array(archiveBuffer).set(archive);
+    const href = URL.createObjectURL(new Blob([archiveBuffer], { type: "application/zip" }));
+    const anchor = document.createElement("a");
+    anchor.href = href;
+    anchor.download = `${safeArchiveName(archiveName)}.zip`;
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    window.setTimeout(() => URL.revokeObjectURL(href), 1000);
   } catch {
-    return null;
+    toast.error("打包下载失败，请稍后重试");
   }
 }
 
-function creativeEditJobStatusLabel(status: string) {
-  switch (status) {
-    case "queued":
-      return "排队中";
-    case "running":
-      return "生成中";
-    case "completed":
-      return "已完成";
-    case "partial":
-      return "部分完成";
-    case "failed":
-      return "失败";
-    default:
-      return status || "等待同步";
-  }
-}
-
-function creativeEditJobPanelTitle(status: string) {
-  switch (status) {
-    case "queued": return "等待生成";
-    case "running": return "生成中";
-    case "completed": return "没有通过 QC 的最终成图";
-    case "partial": return "部分成图通过 QC";
-    case "failed": return "任务失败";
-    default: return "任务状态";
-  }
-}
-
-function clampPercent(value: number) {
-  if (!Number.isFinite(value)) return 0;
-  return Math.max(0, Math.min(100, Math.round(value)));
-}
-
-function createCreativeJobToolNameText() {
-  return "create_creative_job -> get_creative_job";
-}
-
-function formatDuration(value: number | null) {
-  if (value == null) return "-";
-  return `${Math.round(value).toLocaleString()} 天`;
-}
-
-function formatImpression(value: number | null) {
-  if (value == null) return "-";
-  if (value >= 1_000_000) return `${trimNumber(value / 1_000_000)}M`;
-  if (value >= 1_000) return `${trimNumber(value / 1_000)}K`;
-  return Math.round(value).toLocaleString();
-}
-
-function trimNumber(value: number) {
-  return value.toFixed(value >= 10 ? 0 : 1).replace(/\.0$/, "");
+function safeArchiveName(value: string) {
+  const printable = [...value].map((character) => character.charCodeAt(0) < 32 ? "_" : character).join("");
+  return printable.replace(/[<>:"/\\|?*]/g, "_").replace(/\s+/g, " ").trim() || "creative-assets";
 }

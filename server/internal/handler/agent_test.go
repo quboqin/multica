@@ -1,7 +1,6 @@
 package handler
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -187,29 +186,6 @@ func TestCreateAgent_RejectsDuplicateName(t *testing.T) {
 	testHandler.CreateAgent(w2, newRequest(http.MethodPost, "/api/agents", body))
 	if w2.Code != http.StatusConflict {
 		t.Fatalf("second CreateAgent with duplicate name: expected 409, got %d: %s", w2.Code, w2.Body.String())
-	}
-}
-
-func TestWorkspaceAlwaysRedactSecrets(t *testing.T) {
-	tests := []struct {
-		name     string
-		settings []byte
-		want     bool
-	}{
-		{"nil settings", nil, false},
-		{"empty settings", []byte(`{}`), false},
-		{"false", []byte(`{"always_redact_env": false}`), false},
-		{"true", []byte(`{"always_redact_env": true}`), true},
-		{"invalid json", []byte(`not json`), false},
-		{"other fields only", []byte(`{"theme": "dark"}`), false},
-		{"true among other fields", []byte(`{"theme": "dark", "always_redact_env": true}`), true},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := workspaceAlwaysRedactSecrets(tt.settings); got != tt.want {
-				t.Errorf("workspaceAlwaysRedactSecrets(%q) = %v, want %v", tt.settings, got, tt.want)
-			}
-		})
 	}
 }
 
@@ -681,95 +657,6 @@ func TestAgentResponseShape_HasNoLegacyEnvFields(t *testing.T) {
 		case "custom_env", "custom_env_redacted", "custom_env_redacted_reason":
 			t.Errorf("AgentResponse must not carry %q field (MUL-2600)", tag)
 		}
-	}
-}
-
-// TestUpdateAgent_RedactsMcpConfigForAgentActor closes the second leg
-// of MUL-2600 review #2: an agent process with a task token (or with
-// the X-Actor-Source server marker) must not be able to scrape another
-// agent's mcp_config via an unrelated mutation response. Even when the
-// host PAT would otherwise satisfy canManageAgent, the response body
-// must come back with mcp_config redacted.
-func TestUpdateAgent_RedactsMcpConfigForAgentActor(t *testing.T) {
-	if testHandler == nil {
-		t.Skip("database not available")
-	}
-
-	// The target agent has a populated mcp_config that historically would
-	// be leaked back via the UpdateAgent / ArchiveAgent / RestoreAgent
-	// HTTP response.
-	target := createHandlerTestAgent(t, "mut-mcp-target", []byte(`{"server":"secret-config"}`))
-
-	// A second agent acts as the "calling" agent process whose task
-	// token authenticated the request. It is registered in the same
-	// workspace so resolveActor recognises X-Agent-ID as valid.
-	caller := createHandlerTestAgent(t, "mut-mcp-caller", nil)
-	taskID := insertHandlerTestTask(t, caller)
-
-	desc := "trivial mutation that should NOT leak target mcp_config"
-	req := newRequest(http.MethodPut, "/api/agents/"+target, map[string]any{
-		"description": desc,
-	})
-	req = withURLParam(req, "id", target)
-	// Simulate a task-token-authenticated agent request. The auth
-	// middleware would normally set these; we mimic both the modern
-	// path (X-Actor-Source) and the legacy header pair so the test is
-	// resilient to either resolveActor branch.
-	req.Header.Set("X-Actor-Source", "task_token")
-	req.Header.Set("X-Agent-ID", caller)
-	req.Header.Set("X-Task-ID", taskID)
-	w := httptest.NewRecorder()
-	testHandler.UpdateAgent(w, req)
-	if w.Code != http.StatusOK {
-		t.Fatalf("UpdateAgent: expected 200, got %d: %s", w.Code, w.Body.String())
-	}
-
-	var resp AgentResponse
-	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
-		t.Fatalf("decode response: %v", err)
-	}
-	// The response contract keeps `mcp_config` always-present so clients
-	// can distinguish "no config" vs "redacted" via the companion flag.
-	// `json.RawMessage` of a JSON null decodes to the literal bytes
-	// `null`, not Go nil — so check for "no secret-bearing content"
-	// rather than `!= nil`.
-	if len(resp.McpConfig) > 0 && !bytes.Equal(bytes.TrimSpace(resp.McpConfig), []byte("null")) {
-		t.Errorf("UpdateAgent response leaked mcp_config to agent actor: %s", string(resp.McpConfig))
-	}
-	if !resp.McpConfigRedacted {
-		t.Errorf("UpdateAgent response should set mcp_config_redacted=true for agent actor")
-	}
-}
-
-// TestUpdateAgent_KeepsMcpConfigForMemberActor is the matching positive
-// test — a normal member request (owner/admin) still receives the full
-// mcp_config in the mutation response, so the redaction does not
-// accidentally regress the legitimate Web admin flow.
-func TestUpdateAgent_KeepsMcpConfigForMemberActor(t *testing.T) {
-	if testHandler == nil {
-		t.Skip("database not available")
-	}
-
-	target := createHandlerTestAgent(t, "mut-mcp-member", []byte(`{"server":"member-visible"}`))
-
-	req := newRequest(http.MethodPut, "/api/agents/"+target, map[string]any{
-		"description": "owner-visible mutation",
-	})
-	req = withURLParam(req, "id", target)
-	w := httptest.NewRecorder()
-	testHandler.UpdateAgent(w, req)
-	if w.Code != http.StatusOK {
-		t.Fatalf("UpdateAgent: expected 200, got %d: %s", w.Code, w.Body.String())
-	}
-	var resp AgentResponse
-	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
-		t.Fatalf("decode response: %v", err)
-	}
-	if resp.McpConfig == nil {
-		t.Errorf("UpdateAgent response should keep mcp_config for member actor; got nil")
-	}
-	if resp.McpConfigRedacted {
-		t.Errorf("UpdateAgent response should NOT mark mcp_config redacted for member actor")
 	}
 }
 

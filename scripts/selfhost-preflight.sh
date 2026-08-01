@@ -35,10 +35,6 @@ if [[ -z "${BROKER_STATE_KEY:-}" ]]; then
   fail "set BROKER_STATE_KEY in $ENV_FILE"
 fi
 
-if [[ -z "${MULTICA_WORKSPACE_MCP_KEY:-}" ]]; then
-  fail "set MULTICA_WORKSPACE_MCP_KEY in $ENV_FILE"
-fi
-
 if [[ -n "${MULTICA_PUBLIC_URL:-}" && ! "${MULTICA_PUBLIC_URL}" =~ ^https:// ]]; then
   fail "MULTICA_PUBLIC_URL must use https in a public deployment"
 fi

@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
@@ -132,7 +133,9 @@ func buildSquadRoster(ctx context.Context, q *db.Queries, squad db.Squad) string
 	sb.WriteString(leaderName)
 	sb.WriteString(" — agent — `")
 	sb.WriteString(formatMention(leaderName, "agent", util.UUIDToString(squad.LeaderID)))
-	sb.WriteString("`\n")
+	sb.WriteString("`")
+	sb.WriteString(formatAgentSkillSummary(ctx, q, squad.LeaderID))
+	sb.WriteString("\n")
 
 	members, err := q.ListSquadMembers(ctx, squad.ID)
 	if err != nil {
@@ -178,7 +181,8 @@ func renderMemberRow(ctx context.Context, q *db.Queries, m db.SquadMember) strin
 		if ag.ArchivedAt.Valid {
 			return ""
 		}
-		return formatRosterRow(ag.Name, "agent", role, formatMention(ag.Name, "agent", id))
+		return formatRosterRow(ag.Name, "agent", role, formatMention(ag.Name, "agent", id)) +
+			formatAgentSkillSummary(ctx, q, m.MemberID) + "\n"
 	case "member":
 		user, err := q.GetUser(ctx, m.MemberID)
 		if err != nil {
@@ -187,7 +191,7 @@ func renderMemberRow(ctx context.Context, q *db.Queries, m db.SquadMember) strin
 		// Mention syntax for humans uses the user_id (matches the rest of
 		// the product — see util.MentionRe and frontend mention payloads).
 		userID := util.UUIDToString(m.MemberID)
-		return formatRosterRow(user.Name, "member (human)", role, formatMention(user.Name, "member", userID))
+		return formatRosterRow(user.Name, "member (human)", role, formatMention(user.Name, "member", userID)) + "\n"
 	default:
 		return ""
 	}
@@ -206,8 +210,24 @@ func formatRosterRow(name, kind, role, mention string) string {
 	}
 	sb.WriteString(" — `")
 	sb.WriteString(mention)
-	sb.WriteString("`\n")
+	sb.WriteString("`")
 	return sb.String()
+}
+
+func formatAgentSkillSummary(ctx context.Context, q *db.Queries, agentID pgtype.UUID) string {
+	skills, err := q.ListAgentSkillSummaries(ctx, agentID)
+	if err != nil || len(skills) == 0 {
+		return " — skills: none"
+	}
+	parts := make([]string, 0, len(skills))
+	for _, skill := range skills {
+		part := skill.Name
+		if description := strings.TrimSpace(skill.Description); description != "" {
+			part += " (" + description + ")"
+		}
+		parts = append(parts, part)
+	}
+	return " — skills: " + strings.Join(parts, "; ")
 }
 
 // formatMention emits a mention markdown string that round-trips through

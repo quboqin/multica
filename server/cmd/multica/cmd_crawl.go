@@ -100,7 +100,7 @@ func runCrawlRun(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-const crawlRunHTTPTimeout = 5 * time.Minute
+const crawlRunHTTPTimeout = 15 * time.Minute
 
 func resolveCrawlIntent(cmd *cobra.Command) (string, error) {
 	intent, _ := cmd.Flags().GetString("intent")

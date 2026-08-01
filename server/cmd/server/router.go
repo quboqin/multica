@@ -161,29 +161,14 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 		LarkLoginStateSecret:       strings.TrimSpace(os.Getenv("MULTICA_LARK_LOGIN_STATE_SECRET")),
 	}
 	h := handler.New(queries, pool, hub, bus, emailSvc, store, cfSigner, analyticsClient, signupConfig, daemonHub)
-	mockCreativeProvider := creative.NewMockProvider(envDuration("MULTICA_CREATIVE_MOCK_DELAY", 4*time.Second))
-	h.CreativeEditProvider = mockCreativeProvider
-	var workspaceMCPBox *secretbox.Box
-	if workspaceMCPKey, err := secretbox.LoadKey("MULTICA_WORKSPACE_MCP_KEY"); err == nil {
-		workspaceMCPBox, err = secretbox.New(workspaceMCPKey)
-		if err != nil {
-			slog.Error("workspace MCP secret encryption initialization failed", "error", err)
-		}
-	} else {
-		slog.Warn("workspace MCP secret encryption disabled; connections with secret headers cannot be saved", "error", err)
+	creativeArchiveAllowedHosts := splitAndTrim(os.Getenv("MULTICA_CREATIVE_ARCHIVE_ALLOWED_HOSTS"))
+	if len(creativeArchiveAllowedHosts) == 0 {
+		creativeArchiveAllowedHosts = []string{"creative-ag-global-esa.umcdn.cn"}
 	}
-	h.WorkspaceMCPSecretBox = workspaceMCPBox
-	h.CreativeProviderResolver = creative.NewDatabaseProviderResolver(
-		pool,
-		workspaceMCPBox,
-		mockCreativeProvider,
-		envDuration("MULTICA_WORKSPACE_MCP_TIMEOUT", 45*time.Second),
-		splitAndTrim(os.Getenv("MULTICA_WORKSPACE_MCP_ALLOWED_HOSTS")),
-	)
 	h.CreativeAssetDownloader = creative.NewDownloader(
 		envDuration("MULTICA_CREATIVE_ARCHIVE_TIMEOUT", 30*time.Second),
 		envPositiveInt64("MULTICA_CREATIVE_ARCHIVE_MAX_BYTES", 100<<20),
-		splitAndTrim(os.Getenv("MULTICA_CREATIVE_ARCHIVE_ALLOWED_HOSTS")),
+		creativeArchiveAllowedHosts,
 	)
 	connectorRegistry, err := broker.RegistryWithJSON(os.Getenv("MULTICA_CREDENTIAL_CONNECTORS_JSON"))
 	if err != nil {
@@ -193,7 +178,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 	h.CredentialBroker = broker.NewServiceWithRegistry(queries, broker.NewHTTPWorkerClientWithTimeouts(
 		os.Getenv("MULTICA_BROKER_WORKER_URL"),
 		envDuration("MULTICA_BROKER_WORKER_TIMEOUT", 120*time.Second),
-		envDuration("MULTICA_BROKER_CRAWL_TIMEOUT", 5*time.Minute),
+		envDuration("MULTICA_BROKER_CRAWL_TIMEOUT", 15*time.Minute),
 	), connectorRegistry)
 	h.Metrics = opts.BusinessMetrics
 	h.TaskService.Metrics = opts.BusinessMetrics
@@ -748,15 +733,25 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 			})
 			r.Post("/api/credential-crawl", h.RunCredentialCrawl)
 
-			// Workspace MCP connections are shared backend integrations. Their
-			// secret headers never leave the server after creation.
-			r.Route("/api/workspace-mcp-connections", func(r chi.Router) {
-				r.Use(handler.RequireHumanActor)
-				r.Get("/", h.ListWorkspaceMCPConnections)
-				r.Post("/", h.CreateWorkspaceMCPConnection)
-				r.Put("/{id}", h.UpdateWorkspaceMCPConnection)
-				r.Delete("/{id}", h.DisableWorkspaceMCPConnection)
-				r.Post("/{id}/verify", h.VerifyWorkspaceMCPConnection)
+			// Creative Studio resources are workspace-scoped configuration.
+			r.Route("/api/creative", func(r chi.Router) {
+				r.Get("/materials", h.ListCreativeMaterialLibrary)
+				r.With(handler.RequireHumanActor).Post("/materials/import", h.ImportCreativeMaterialLibrary)
+				r.With(handler.RequireHumanActor).Post("/materials/archive/retry", h.RetryCreativeMaterialArchives)
+				r.Get("/resources", h.ListCreativeResources)
+				r.With(handler.RequireHumanActor).Post("/resources", h.CreateCreativeResource)
+				r.Route("/resources/{id}", func(r chi.Router) {
+					r.Get("/files", h.ListCreativeResourceFiles)
+					r.With(handler.RequireHumanActor).Post("/files", h.AddCreativeResourceFile)
+					r.With(handler.RequireHumanActor).Put("/files/{fileId}", h.UpdateCreativeResourceFile)
+					r.With(handler.RequireHumanActor).Delete("/files/{fileId}", h.RemoveCreativeResourceFile)
+					r.With(handler.RequireHumanActor).Put("/", h.UpdateCreativeResource)
+					r.With(handler.RequireHumanActor).Post("/publish", h.PublishCreativeResource)
+					r.With(handler.RequireHumanActor).Delete("/", h.ArchiveCreativeResource)
+				})
+				r.Get("/copy-libraries/{id}/entries", h.ListCreativeCopyEntries)
+				r.With(handler.RequireHumanActor).Post("/copy-libraries/{id}/entries/import", h.ImportCreativeCopyEntries)
+				r.With(handler.RequireHumanActor).Put("/copy-entries/{entryId}", h.UpdateCreativeCopyEntry)
 			})
 
 			// Issues
@@ -795,11 +790,10 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Get("/creative-materials", h.GetCreativeMaterials)
 					r.Post("/creative-materials/import", h.ImportCreativeMaterials)
 					r.Patch("/creative-materials/{candidateId}", h.UpdateCreativeMaterialCandidate)
-					r.Post("/creative-edit-jobs", h.CreateCreativeEditJob)
-					r.Post("/creative-edit-jobs/{jobId}/sync", h.SyncCreativeEditJob)
-					r.With(handler.RequireHumanActor).Post("/creative-edit-jobs/{jobId}/variants/{variantId}/feedback", h.CreateCreativeEditFeedback)
-					r.Get("/creative-edit-assets/{assetId}/preview", h.PreviewCreativeEditAsset)
-					r.Get("/creative-edit-jobs/{jobId}/download", h.DownloadCreativeEditJob)
+					r.With(handler.RequireHumanActor).Put("/creative-context", h.PutCreativeIssueContext)
+					r.With(handler.RequireHumanActor).Put("/creative-materials/{candidateId}/copy", h.PutCreativeItemCopy)
+					r.Put("/creative-materials/{candidateId}/brief", h.PutCreativeItemBrief)
+					r.With(handler.RequireHumanActor).Put("/creative-materials/{candidateId}/work-issue", h.PutCreativeItemWorkIssue)
 					r.Get("/labels", h.ListLabelsForIssue)
 					r.Post("/labels", h.AttachLabel)
 					r.Delete("/labels/{labelId}", h.DetachLabel)

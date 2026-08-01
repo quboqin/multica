@@ -43,7 +43,7 @@ const allowedDevOrigins = process.env.CORS_ALLOWED_ORIGINS
       .filter(Boolean)
   : undefined;
 
-const webWarmupEnabled = process.env.MULTICA_WEB_WARMUP?.toLowerCase() !== "false";
+const webWarmupEnabled = process.env.MULTICA_WEB_WARMUP?.toLowerCase() === "true";
 const warmPageMaxInactiveAge = positiveInteger(
   process.env.MULTICA_WEB_WARMUP_MAX_INACTIVE_MS,
   60 * 60 * 1000,

@@ -2030,26 +2030,42 @@ func (s *TaskService) publishAgentStatus(agent db.Agent) {
 	})
 }
 
-// LoadAgentSkills loads an agent's skills with their files for task execution.
-func (s *TaskService) LoadAgentSkills(ctx context.Context, agentID pgtype.UUID) []AgentSkillData {
+// LoadAgentSkillsForIssue loads normal role skills and adds an immutable,
+// task-scoped reference skill for the creative context pinned on this issue or
+// an ancestor. Uploaded market assets remain platform resources; agents receive
+// their versioned URLs and per-image copy without duplicating them into prompts.
+func (s *TaskService) LoadAgentSkillsForIssue(ctx context.Context, agentID, issueID pgtype.UUID) []AgentSkillData {
 	skills, err := s.Queries.ListAgentSkills(ctx, agentID)
-	if err != nil || len(skills) == 0 {
-		return nil
-	}
-
 	result := make([]AgentSkillData, 0, len(skills))
-	for _, sk := range skills {
-		data := AgentSkillData{
-			ID:          util.UUIDToString(sk.ID),
-			Name:        sk.Name,
-			Description: sk.Description,
-			Content:     sk.Content,
+	if err == nil {
+		for _, sk := range skills {
+			data := AgentSkillData{
+				ID:          util.UUIDToString(sk.ID),
+				Name:        sk.Name,
+				Description: sk.Description,
+				Content:     sk.Content,
+			}
+			files, _ := s.Queries.ListSkillFiles(ctx, sk.ID)
+			for _, f := range files {
+				data.Files = append(data.Files, AgentSkillFileData{Path: f.Path, Content: f.Content})
+			}
+			result = append(result, data)
 		}
-		files, _ := s.Queries.ListSkillFiles(ctx, sk.ID)
-		for _, f := range files {
-			data.Files = append(data.Files, AgentSkillFileData{Path: f.Path, Content: f.Content})
+	}
+	if resourceContext, loadErr := s.Queries.GetCreativeTaskResourceContext(ctx, issueID); loadErr == nil {
+		var formatted any
+		if json.Unmarshal(resourceContext, &formatted) == nil {
+			resourceContext, _ = json.MarshalIndent(formatted, "", "  ")
 		}
-		result = append(result, data)
+		result = append(result, AgentSkillData{
+			ID:          "creative-issue-resources",
+			Name:        "creative-issue-resources",
+			Description: "当前创意 Issue 固定的市场资源、素材槽位与逐图文案快照",
+			Content: "# 当前创意 Issue 资源\n\n" +
+				"执行前读取 `references/issue-resources.json`。其中 `pinned_resources` 是父 Issue 固定的版本快照，`selected_item` 是当前创意图和文案；不得改用工作区其他版本。\n\n" +
+				"市场文件通过 `pinned_resources.market_pack.files` 按 role 获取。角色 Skill 决定如何使用这些资源；缺少必需槽位时向 Leader 报告，不得虚构或静默替代。",
+			Files: []AgentSkillFileData{{Path: "references/issue-resources.json", Content: string(resourceContext)}},
+		})
 	}
 	return result
 }

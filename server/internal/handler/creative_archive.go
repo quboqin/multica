@@ -10,7 +10,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
-const maxCreativeArchiveAttempts = 5
+const maxCreativeArchiveAttempts = 8
 
 type creativeArchiveCandidate struct {
 	ID          pgtype.UUID
@@ -34,12 +34,38 @@ func (h *Handler) ArchiveDueCreativeMaterials(ctx context.Context, limit int) (i
 	if limit <= 0 || limit > 100 {
 		limit = 10
 	}
+	// Recover claims left behind by a stopped server before looking for new work.
+	// A final-attempt claim becomes a visible failure; earlier claims are retried.
+	if _, err := h.DB.Exec(ctx, `
+UPDATE creative_material_candidate
+SET archive_status = CASE WHEN archive_attempts >= $1 THEN 'failed' ELSE 'pending' END,
+    archive_error = CASE
+      WHEN archive_error <> '' THEN archive_error
+      ELSE 'archive worker stopped before completing this attempt'
+    END,
+    next_archive_at = now(), updated_at = now()
+WHERE archived_url = '' AND archive_status = 'running' AND next_archive_at <= now()
+`, maxCreativeArchiveAttempts); err != nil {
+		return 0, err
+	}
+	if _, err := h.DB.Exec(ctx, `
+UPDATE creative_material_candidate
+SET archive_status = 'failed',
+    archive_error = CASE
+      WHEN archive_error <> '' THEN archive_error
+      ELSE 'archive retry limit reached before a stable file was saved'
+    END,
+    updated_at = now()
+WHERE archived_url = '' AND archive_status = 'pending' AND archive_attempts >= $1
+`, maxCreativeArchiveAttempts); err != nil {
+		return 0, err
+	}
 	rows, err := h.DB.Query(ctx, `
 WITH due AS (
   SELECT id
   FROM creative_material_candidate
   WHERE archived_url = ''
-    AND archive_status IN ('pending', 'running')
+    AND archive_status = 'pending'
     AND archive_attempts < $2
     AND next_archive_at <= now()
   ORDER BY next_archive_at, created_at
@@ -48,7 +74,7 @@ WITH due AS (
 )
 UPDATE creative_material_candidate c
 SET archive_status = 'running', archive_attempts = archive_attempts + 1,
-    next_archive_at = now() + interval '2 minutes', archive_error = '', updated_at = now()
+    next_archive_at = now() + interval '2 minutes', updated_at = now()
 FROM due
 WHERE c.id = due.id
 RETURNING c.id, c.workspace_id, c.asset_type, c.preview_url, c.resource_url, c.poster_url
@@ -126,7 +152,9 @@ func (h *Handler) markCreativeArchiveFailed(ctx context.Context, candidateID pgt
 UPDATE creative_material_candidate
 SET archive_status = CASE WHEN archive_attempts >= $2 THEN 'failed' ELSE 'pending' END,
     archive_error = $3,
-    next_archive_at = now() + make_interval(secs => LEAST(300, GREATEST(10, archive_attempts * 10))),
+    next_archive_at = now() + make_interval(
+      secs => LEAST(900, GREATEST(15, (power(2, LEAST(archive_attempts, 6)) * 5)::int))
+    ),
     updated_at = now()
 WHERE id = $1
 `, candidateID, maxCreativeArchiveAttempts, truncateCreativeArchiveError(archiveErr.Error()))

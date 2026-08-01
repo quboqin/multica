@@ -8,6 +8,22 @@ import (
 	"testing"
 )
 
+func TestBriefIncludesPlatformCreativeImageEditing(t *testing.T) {
+	t.Parallel()
+	out := buildMetaSkillContent("codex", TaskContextForEnv{IssueID: "11111111-2222-3333-4444-555555555555"})
+	for _, want := range []string{
+		"### Image processing",
+		"`multica image edit",
+		"OPENAI_IMAGE_EDIT_PATH",
+		"report `needs_input`",
+		"Do not collapse these artifacts",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("brief missing platform image editing guidance %q", want)
+		}
+	}
+}
+
 // Sub-issue Creation section — after MUL-2538 the platform posts the
 // child-done parent notification itself, so the brief no longer carries
 // any parent-notification rule (per Bohan's call on PR #3055: delete the

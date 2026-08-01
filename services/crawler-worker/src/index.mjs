@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import fs from "node:fs";
 import http from "node:http";
 import { Buffer } from "node:buffer";
 import { pathToFileURL } from "node:url";
@@ -20,6 +21,7 @@ const databaseURL = process.env.DATABASE_URL || "";
 const keyVersion = process.env.BROKER_STATE_KEY_VERSION || "v1";
 const loginSessionTTLMS = Number(process.env.CRAWLER_WORKER_LOGIN_TTL_MS || 15 * 60 * 1000);
 const remoteBrowserUI = process.env.CRAWLER_WORKER_REMOTE_UI === "true";
+const browserProxyServer = String(process.env.CRAWLER_WORKER_BROWSER_PROXY || "").trim();
 const sessionViewport = {
   width: positiveIntegerEnv("CRAWLER_WORKER_VIEWPORT_WIDTH", 1440),
   height: positiveIntegerEnv("CRAWLER_WORKER_VIEWPORT_HEIGHT", 1000),
@@ -28,9 +30,17 @@ const streamFrameIntervalMS = Math.max(
   100,
   Math.min(1000, positiveIntegerEnv("CRAWLER_WORKER_STREAM_FRAME_MS", 180)),
 );
-const appGrowingMaterialSearchBudgetMS = positiveIntegerEnv("APPGROWING_MATERIAL_SEARCH_BUDGET_MS", 240_000);
+const appGrowingMaterialSearchBudgetMS = positiveIntegerEnv("APPGROWING_MATERIAL_SEARCH_BUDGET_MS", 12 * 60_000);
 const appGrowingGraphQLTimeoutMS = positiveIntegerEnv("APPGROWING_GRAPHQL_TIMEOUT_MS", 12_000);
 const appGrowingBrowserFallbackMinBudgetMS = positiveIntegerEnv("APPGROWING_BROWSER_FALLBACK_MIN_BUDGET_MS", 75_000);
+
+function chromiumLaunchOptions(headless) {
+  return {
+    headless,
+    args: ["--disable-blink-features=AutomationControlled"],
+    ...(browserProxyServer ? { proxy: { server: browserProxyServer } } : {}),
+  };
+}
 
 const builtInConnectors = {
   appgrowing: {
@@ -722,10 +732,7 @@ async function openControlledBrowser(session, token) {
   const releaseBrowserSlot = acquireBrowserSlot();
   let browser;
   try {
-    browser = await chromium.launch({
-      headless,
-      args: ["--disable-blink-features=AutomationControlled"],
-    });
+    browser = await chromium.launch(chromiumLaunchOptions(headless));
     const context = await browser.newContext({
       viewport: session.viewport || sessionViewport,
     });
@@ -1330,6 +1337,25 @@ function summarizeCredentialState(storageState, connector, sessionStorageState =
   };
 }
 
+function unavailableSessionHTML() {
+  return `<!doctype html>
+<meta charset="utf-8">
+<title>Multica Credential Broker</title>
+<style>
+html,body{height:100%}body{display:grid;place-items:center;margin:0;background:#151515;color:#f5f2ea;font:14px/1.5 ui-sans-serif,system-ui,-apple-system,Segoe UI,sans-serif}
+.message{max-width:520px;padding:20px;border:1px solid #393939;background:#202020}.message strong{display:block;margin-bottom:6px;font-size:16px}
+</style>
+<div class="message"><strong>Browser session ended</strong>Close this window. Start a new binding only if the credential was not saved.</div>`;
+}
+
+function unavailableSessionImage() {
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="720" viewBox="0 0 1280 720">
+<rect width="1280" height="720" fill="#202020"/>
+<text x="640" y="338" fill="#f5f2ea" font-family="Arial, sans-serif" font-size="30" font-weight="600" text-anchor="middle">Browser session ended</text>
+<text x="640" y="386" fill="#b9b9b9" font-family="Arial, sans-serif" font-size="20" text-anchor="middle">Close this window. Start a new binding only if the credential was not saved.</text>
+</svg>`;
+}
+
 function sessionHTML(token, session) {
   const statusURL = `/sessions/${encodeURIComponent(token)}/status`;
   const openURL = `/sessions/${encodeURIComponent(token)}/open`;
@@ -1433,6 +1459,7 @@ let pendingResize = null;
 let lastResize = { width: 0, height: 0 };
 let inputChain = Promise.resolve();
 let completionPosted = false;
+let sessionUnavailable = false;
 
 function closeRemoteBrowser() {
   if (completed) {
@@ -1531,6 +1558,51 @@ function renderStatus(body) {
   }
 }
 
+function stopRemoteSession(message, body = {}) {
+  sessionUnavailable = true;
+  streamStarted = false;
+  browserOpen = false;
+  completed = true;
+  if (polling) {
+    window.clearInterval(polling);
+    polling = 0;
+  }
+  shot.onerror = null;
+  shot.removeAttribute("src");
+  shot.hidden = true;
+  empty.hidden = false;
+  empty.textContent = message;
+  setStatus("Session ended", "error", "");
+  debug({ status: "session_unavailable", ...body });
+  window.parent?.postMessage({
+    type: "multica:credential-session-unavailable",
+    status: body.status || null,
+    error: body.error || message,
+  }, "*");
+}
+
+async function recoverStream() {
+  const resp = await fetch(urls.status).catch(() => null);
+  if (!resp) {
+    if (!completed && !sessionUnavailable) {
+      window.setTimeout(startStream, 1200);
+    }
+    return;
+  }
+  const body = await parseResponse(resp);
+  if (!resp.ok) {
+    stopRemoteSession(
+      "This browser session has ended. Close this window and start a new binding only if needed.",
+      { status: resp.status, error: body.error || body.raw || null },
+    );
+    return;
+  }
+  renderStatus(body);
+  if (!completed && !sessionUnavailable) {
+    window.setTimeout(startStream, 800);
+  }
+}
+
 function renderShot(body) {
   shot.src = "data:" + body.mime_type + ";base64," + body.image_base64;
   lastViewport = body.viewport || lastViewport;
@@ -1561,10 +1633,10 @@ function startStream() {
   };
   shot.onerror = () => {
     streamStarted = false;
-    if (!completed) {
+    if (!completed && !sessionUnavailable) {
       empty.hidden = false;
       empty.textContent = "Reconnecting remote browser...";
-      window.setTimeout(startStream, 800);
+      recoverStream();
     }
   };
   shot.src = urls.stream + "?t=" + Date.now();
@@ -1741,6 +1813,12 @@ function startPolling() {
     const resp = await fetch(urls.status).catch(() => null);
     if (resp?.ok) {
       renderStatus(await parseResponse(resp));
+    } else if (resp) {
+      const body = await parseResponse(resp);
+      stopRemoteSession(
+        "This browser session has ended. Close this window and start a new binding only if needed.",
+        { status: resp.status, error: body.error || body.raw || null },
+      );
     }
   }, 1000);
 }
@@ -2035,8 +2113,8 @@ async function runAppGrowingMaterialSearch(page, context, connector, params = {}
     normalizeCompetitors(params.priority_competitors).map(normalizeCompetitorKey),
   );
   const totalLimit = positiveIntegerParam(params.limit, 25, 1, 200);
-  const pageLimit = positiveIntegerParam(params.pages_per_competitor, 1, 1, 5);
-  const priorityPageLimit = positiveIntegerParam(params.priority_pages_per_competitor, Math.max(2, pageLimit), 1, 8);
+  const pageLimit = positiveIntegerParam(params.pages_per_competitor, 3, 1, 5);
+  const priorityPageLimit = positiveIntegerParam(params.priority_pages_per_competitor, Math.max(5, pageLimit), 1, 8);
   const captureTimeoutMS = positiveIntegerParam(params.capture_timeout_ms, 12_000, 3_000, 60_000);
   const graphQLTimeoutMS = positiveIntegerParam(params.graphql_timeout_ms, appGrowingGraphQLTimeoutMS, 3_000, 30_000);
   const searchBudgetMS = positiveIntegerParam(
@@ -2125,21 +2203,32 @@ async function runAppGrowingMaterialSearch(page, context, connector, params = {}
     }
   }
 
+  const browserFallbackCompetitors = appGrowingBrowserFallbackCompetitors(
+    competitors,
+    captured,
+    params,
+    adaptiveMemory,
+    browserFallbackEnabled,
+    adaptiveMode,
+  );
   const adaptiveBrowserFallbackEnabled = adaptiveMode
     && !browserFallbackEnabled
-    && appGrowingShouldUseAdaptiveBrowserFallback(captured, adaptiveMemory);
+    && browserFallbackCompetitors.length > 0;
   if (adaptiveBrowserFallbackEnabled) {
-    appGrowingAddAutoAdjustment(autoAdjustments, "enabled browser fallback after AppGrowing API path failed or prior memory preferred it");
+    appGrowingAddAutoAdjustment(
+      autoAdjustments,
+      `enabled browser fallback for ${browserFallbackCompetitors.join(", ")} after their AppGrowing API pages returned no material`,
+    );
   }
 
-  if (materials.length === 0 && (browserFallbackEnabled || adaptiveBrowserFallbackEnabled)) {
+  if (browserFallbackCompetitors.length > 0) {
     if (!appGrowingHasBudget(deadline, appGrowingBrowserFallbackMinBudgetMS)) {
       markBudgetExhausted("browser_network");
     } else {
       let browserCapturePage = page;
       let browserFallbackStopped = false;
       browserFallback:
-      for (const competitor of competitors) {
+      for (const competitor of browserFallbackCompetitors) {
         if (browserFallbackStopped) {
           break;
         }
@@ -2226,9 +2315,21 @@ async function runAppGrowingMaterialSearch(page, context, connector, params = {}
     ...material,
     selection_match: strictMaterialKeys.has(appGrowingMaterialIdentityKey(material)) ? "strict" : "supplement",
   }));
+  const selectionSummary = appGrowingSelectionMixSummary(selectedMaterials, rules, totalLimit);
+  const competitorDiagnostics = appGrowingCompetitorDiagnostics(
+    competitors,
+    priorityCompetitors,
+    pageLimit,
+    priorityPageLimit,
+    captured,
+    selectedMaterials,
+  );
   const needsReauth = captured.some((capture) => capture.needs_reauth === true);
   const blockingError = appGrowingMaterialSearchBlockingError(captured, materials);
   const budgetNote = timeBudgetExhausted ? "; stopped early because the material_search time budget was exhausted" : "";
+  const mixNote = selectionSummary.ratio_target_met
+    ? `actual mix new ${selectionSummary.actual.new_materials}, volume ${selectionSummary.actual.volume_materials}; target met`
+    : `actual mix new ${selectionSummary.actual.new_materials}, volume ${selectionSummary.actual.volume_materials}; target ${selectionSummary.target.new_materials}/${selectionSummary.target.volume_materials} not met`;
   return {
     status: needsReauth ? "need_reauth" : blockingError ? "failed" : "completed",
     downloaded: 0,
@@ -2237,7 +2338,8 @@ async function runAppGrowingMaterialSearch(page, context, connector, params = {}
       ? "AppGrowing reported that the account was logged out; re-authentication is required"
       : blockingError
         ? `AppGrowing material_search failed before reading material data: ${blockingError}`
-        : `selected ${selection.selected.length} AppGrowing materials from ${competitors.length} competitors; asset download storage is not configured${budgetNote}`,
+        : `selected ${selection.selected.length} AppGrowing materials from ${competitors.length} competitors; ${mixNote}; asset download storage is not configured${budgetNote}`,
+    selection_summary: selectionSummary,
     raw: {
       connector_id: connector.id,
       capability: "material_search",
@@ -2260,12 +2362,15 @@ async function runAppGrowingMaterialSearch(page, context, connector, params = {}
         browser_capture_fallback: browserFallbackEnabled,
         adaptive_mode: adaptiveMode,
         adaptive_browser_fallback: adaptiveBrowserFallbackEnabled,
+        browser_fallback_competitors: browserFallbackCompetitors,
         adaptive_memory_scopes: Object.keys(adaptiveMemory.memories || {}).sort(),
         fallback_to_top_materials: params.fallback_to_top_materials === true,
       },
       captured,
+      competitor_diagnostics: competitorDiagnostics,
       auto_adjustments: autoAdjustments,
       learned_strategies: learnedStrategies,
+      selection_summary: selectionSummary,
       totals: {
         materials_seen: materials.length,
         unique_materials: selection.unique.length,
@@ -2358,6 +2463,129 @@ function appGrowingShouldUseAdaptiveBrowserFallback(captured, adaptiveMemory) {
   }
   const attempts = captured.filter((capture) => capture?.source === "graphql_api" && !capture.skipped);
   return attempts.length > 0 && attempts.every((capture) => String(capture.error || "").trim() !== "");
+}
+
+function appGrowingCompetitorDiagnostics(
+  competitors,
+  priorityCompetitors,
+  pageLimit,
+  priorityPageLimit,
+  captured,
+  selectedMaterials = [],
+) {
+  return competitors.map((competitor) => {
+    const competitorKey = normalizeCompetitorKey(competitor);
+    const priority = priorityCompetitors.has(competitorKey);
+    const requestedPages = priority ? priorityPageLimit : pageLimit;
+    const attempts = captured.filter((capture) => (
+      normalizeCompetitorKey(capture.competitor) === competitorKey
+      && Number.isInteger(Number(capture.page))
+    ));
+    const pageResults = Array.from({ length: requestedPages }, (_, index) => {
+      const page = index + 1;
+      const pageAttempts = attempts.filter((capture) => Number(capture.page) === page);
+      const materialsFound = pageAttempts.reduce(
+        (total, capture) => total + Math.max(0, Number(capture.materials_found) || 0),
+        0,
+      );
+      const needsReauth = pageAttempts.some((capture) => capture.needs_reauth === true);
+      const budgetExhausted = pageAttempts.some((capture) => capture.error === "material_search_time_budget_exhausted");
+      const attempted = pageAttempts.some((capture) => capture.skipped !== true);
+      const succeeded = pageAttempts.some((capture) => capture.skipped !== true && !capture.error);
+      let status = "not_attempted";
+      if (needsReauth) {
+        status = "need_reauth";
+      } else if (materialsFound > 0) {
+        status = "found";
+      } else if (budgetExhausted) {
+        status = "budget_exhausted";
+      } else if (succeeded) {
+        status = "no_match";
+      } else if (attempted) {
+        status = "failed";
+      }
+      return {
+        page,
+        status,
+        materials_found: materialsFound,
+        attempts: pageAttempts.map((capture) => ({
+          source: capture.source,
+          materials_found: Math.max(0, Number(capture.materials_found) || 0),
+          error: capture.error || "",
+          needs_reauth: capture.needs_reauth === true,
+          skipped: capture.skipped === true,
+        })),
+      };
+    });
+    const materialsFound = pageResults.reduce((total, result) => total + result.materials_found, 0);
+    const errors = Array.from(new Set(
+      attempts.map((capture) => capture.error).filter(Boolean),
+    ));
+    const needsReauth = pageResults.some((result) => result.status === "need_reauth");
+    const budgetExhausted = pageResults.some((result) => result.status === "budget_exhausted");
+    const coverageComplete = pageResults.every((result) => result.status !== "not_attempted" && result.status !== "budget_exhausted");
+    let status = "no_match";
+    if (needsReauth) {
+      status = "need_reauth";
+    } else if (materialsFound > 0) {
+      status = coverageComplete ? "found" : "found_incomplete";
+    } else if (budgetExhausted) {
+      status = "budget_exhausted";
+    } else if (pageResults.some((result) => result.status === "failed")) {
+      status = "failed";
+    } else if (!coverageComplete) {
+      status = "not_attempted";
+    }
+    return {
+      competitor,
+      priority,
+      requested_pages: requestedPages,
+      coverage_complete: coverageComplete,
+      status,
+      materials_found: materialsFound,
+      selected: selectedMaterials.filter(
+        (material) => normalizeCompetitorKey(material.competitor) === competitorKey,
+      ).length,
+      browser_fallback_used: attempts.some((capture) => capture.source === "browser_network"),
+      errors,
+      pages: pageResults,
+    };
+  });
+}
+
+function appGrowingBrowserFallbackCompetitors(
+  competitors,
+  captured,
+  params = {},
+  adaptiveMemory = {},
+  browserFallbackEnabled = false,
+  adaptiveMode = true,
+) {
+  if (params.browser_capture_fallback === false) {
+    return [];
+  }
+  const memories = adaptiveMemory?.memories || {};
+  return competitors.filter((competitor) => {
+    const key = normalizeCompetitorKey(competitor);
+    const attempts = captured.filter((capture) =>
+      capture?.source === "graphql_api"
+      && normalizeCompetitorKey(capture.competitor) === key
+      && !capture.skipped,
+    );
+    if (attempts.some((capture) => Number(capture.materials_found) > 0)) {
+      return false;
+    }
+    if (browserFallbackEnabled) {
+      return true;
+    }
+    if (!adaptiveMode) {
+      return false;
+    }
+    if (memories[key]?.preferred_source === "browser_network") {
+      return true;
+    }
+    return attempts.length > 0;
+  });
 }
 
 function appGrowingAddAutoAdjustment(adjustments, message) {
@@ -3356,6 +3584,49 @@ function selectAppGrowingMaterials(materials, rules, totalLimit, options = {}) {
   };
 }
 
+function appGrowingSelectionMixSummary(selectedMaterials, rules, totalLimit) {
+  const numericLimit = Number(totalLimit);
+  const safeLimit = Math.max(0, Number.isFinite(numericLimit) ? Math.floor(numericLimit) : 0);
+  const newRatio = Number(rules?.new_materials?.ratio);
+  const targetNew = Math.min(
+    safeLimit,
+    Math.max(0, Math.round(safeLimit * (Number.isFinite(newRatio) ? newRatio : 0))),
+  );
+  const targetVolume = Math.max(0, safeLimit - targetNew);
+  const actualNew = selectedMaterials.filter((material) => material?.bucket === "new").length;
+  const actualVolume = selectedMaterials.filter((material) => material?.bucket === "volume").length;
+  const actualOther = Math.max(0, selectedMaterials.length - actualNew - actualVolume);
+  const selectedCount = selectedMaterials.length;
+  const ratio = (count) => selectedCount > 0 ? Number((count / selectedCount).toFixed(4)) : 0;
+
+  return {
+    target: {
+      new_materials: targetNew,
+      volume_materials: targetVolume,
+    },
+    actual: {
+      new_materials: actualNew,
+      volume_materials: actualVolume,
+      other_materials: actualOther,
+    },
+    actual_ratio: {
+      new_materials: ratio(actualNew),
+      volume_materials: ratio(actualVolume),
+      other_materials: ratio(actualOther),
+    },
+    shortfall: {
+      new_materials: Math.max(0, targetNew - actualNew),
+      volume_materials: Math.max(0, targetVolume - actualVolume),
+    },
+    selected: selectedCount,
+    requested_limit: safeLimit,
+    ratio_target_met: selectedCount === safeLimit
+      && actualOther === 0
+      && actualNew === targetNew
+      && actualVolume === targetVolume,
+  };
+}
+
 function matchesUpperBound(value, rule, prefix) {
   const number = Number(value);
   if (!Number.isFinite(number)) {
@@ -3724,10 +3995,7 @@ async function runCrawl(body) {
   let browser;
   let crawlerBrowserTimeout;
   try {
-    browser = await chromium.launch({
-      headless: crawlerHeadless(connector),
-      args: ["--disable-blink-features=AutomationControlled"],
-    });
+    browser = await chromium.launch(chromiumLaunchOptions(crawlerHeadless(connector)));
     crawlerBrowserTimeout = setTimeout(() => {
       void browser.close().catch(() => {});
     }, crawlerBrowserTimeoutMS);
@@ -3932,10 +4200,12 @@ const server = http.createServer(async (req, res) => {
     const url = new URL(req.url || "/", publicURL);
 
     if (req.method === "GET" && (url.pathname === "/healthz" || url.pathname === "/readyz")) {
-      writeJSON(res, 200, {
-        ok: true,
+      const playwrightReady = fs.existsSync(chromium.executablePath());
+      const isReadinessProbe = url.pathname === "/readyz";
+      writeJSON(res, isReadinessProbe && !playwrightReady ? 503 : 200, {
+        ok: !isReadinessProbe || playwrightReady,
         service: "crawler-worker",
-        playwright: true,
+        playwright: playwrightReady,
         remote_ui: remoteBrowserUI,
         active_browsers: browserCapacity.active(),
         max_open_browsers: browserCapacity.limit(),
@@ -3977,6 +4247,22 @@ const server = http.createServer(async (req, res) => {
     if (sessionPath) {
       const session = getSession(sessionPath.token);
       if (!session) {
+        if (req.method === "GET" && sessionPath.action === "stream") {
+          res.writeHead(200, {
+            "content-type": "image/svg+xml; charset=utf-8",
+            "cache-control": "no-store",
+          });
+          res.end(unavailableSessionImage());
+          return;
+        }
+        if (req.method === "GET" && sessionPath.action === "") {
+          res.writeHead(410, {
+            "content-type": "text/html; charset=utf-8",
+            "cache-control": "no-store",
+          });
+          res.end(unavailableSessionHTML());
+          return;
+        }
         writeJSON(res, 404, { error: "login session not found in worker; start a new binding session" });
         return;
       }
@@ -4032,10 +4318,13 @@ const server = http.createServer(async (req, res) => {
 export {
   appGrowingAppMaterialListVariables,
   appGrowingBrandFromStrategyMemory,
+  appGrowingBrowserFallbackCompetitors,
+  appGrowingCompetitorDiagnostics,
   appGrowingGraphQLDateWindow,
   appGrowingGraphQLRequest,
   appGrowingMaterialURL,
   appGrowingSearchAppVariables,
+  appGrowingSelectionMixSummary,
   appGrowingShouldUseAdaptiveBrowserFallback,
   captureAppGrowingMaterialPage,
   connectorGraphQLHeaders,
@@ -4054,6 +4343,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     console.log(`crawler-worker listening on ${publicURL}`);
     console.log(`completion callback target: ${apiURL}/api/credential-login-sessions/complete`);
     console.log(`remote browser UI: ${remoteBrowserUI ? "enabled" : "disabled"}`);
+    console.log(`browser proxy: ${browserProxyServer ? "configured" : "disabled"}`);
     if (databaseURL) {
       console.log("credential DB store enabled");
     } else {

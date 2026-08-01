@@ -24,9 +24,10 @@ type Download struct {
 }
 
 type Downloader struct {
-	client       *http.Client
-	maxBytes     int64
-	allowedHosts []string
+	client            *http.Client
+	allowedHostClient *http.Client
+	maxBytes          int64
+	allowedHosts      []string
 }
 
 func NewDownloader(timeout time.Duration, maxBytes int64, allowedHosts []string) *Downloader {
@@ -46,17 +47,30 @@ func NewDownloader(timeout time.Duration, maxBytes int64, allowedHosts []string)
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.Proxy = nil
 	transport.DialContext = downloader.dialContext
-	downloader.client = &http.Client{
+	downloader.client = downloader.newHTTPClient(timeout, transport, false)
+	allowedHostTransport := http.DefaultTransport.(*http.Transport).Clone()
+	allowedHostTransport.Proxy = http.ProxyFromEnvironment
+	downloader.allowedHostClient = downloader.newHTTPClient(timeout, allowedHostTransport, true)
+	return downloader
+}
+
+func (d *Downloader) newHTTPClient(timeout time.Duration, transport http.RoundTripper, requireAllowedHost bool) *http.Client {
+	return &http.Client{
 		Timeout:   timeout,
 		Transport: transport,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			if len(via) >= 5 {
 				return errors.New("too many redirects")
 			}
-			return downloader.validateURL(req.URL)
+			if err := d.validateURL(req.URL); err != nil {
+				return err
+			}
+			if requireAllowedHost && !d.hostExplicitlyAllowed(req.URL.Hostname()) {
+				return fmt.Errorf("creative asset redirect host %q is not allowed", req.URL.Hostname())
+			}
+			return nil
 		},
 	}
-	return downloader
 }
 
 func (d *Downloader) Fetch(ctx context.Context, rawURL string) (Download, error) {
@@ -72,7 +86,11 @@ func (d *Downloader) Fetch(ctx context.Context, rawURL string) (Download, error)
 		return Download{}, err
 	}
 	req.Header.Set("User-Agent", "Multica-Creative-Archiver/1.0")
-	resp, err := d.client.Do(req)
+	client := d.client
+	if d.hostExplicitlyAllowed(parsed.Hostname()) {
+		client = d.allowedHostClient
+	}
+	resp, err := client.Do(req)
 	if err != nil {
 		return Download{}, fmt.Errorf("download creative asset: %w", err)
 	}

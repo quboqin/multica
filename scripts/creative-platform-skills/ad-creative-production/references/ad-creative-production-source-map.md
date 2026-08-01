@@ -1,0 +1,15 @@
+# Issue-Native Ad Creative Production Source Map
+
+| Contract | Source |
+| --- | --- |
+| `multica creative materials <issue-id> --selected` reads the existing Issue creative-materials endpoint and filters to person-selected candidates | `server/cmd/multica/cmd_creative.go:runCreativeMaterials` |
+| `multica creative material download <issue-id> <candidate-id>` downloads only a person-selected candidate whose platform archive is completed | `server/cmd/multica/cmd_creative.go:runCreativeMaterialDownload` |
+| `multica image edit` invokes the image capability configured on the local daemon and writes the generated bitmap to the requested output path | `server/cmd/multica/cmd_creative.go:runImageEdit` |
+| `multica issue comment add` supports local `--attachment` files | `server/cmd/multica/cmd_issue.go:runIssueCommentAdd` |
+| Comment attachments upload before the Issue comment is posted | `server/cmd/multica/cmd_issue.go:runIssueCommentAdd` |
+| `multica attachment download` gets attachment metadata through the authenticated API and writes a local file | `server/cmd/multica/cmd_attachment.go:runAttachmentDownload` |
+| The runtime brief requires platform attachments and resources to go through the Multica CLI | `server/internal/daemon/execenv/runtime_config.go` |
+| An `mention://agent/<uuid>` comment link wakes an eligible agent task | `server/internal/handler/comment.go:computeMentionedAgentCommentTriggers` |
+| Candidate selections and per-image copy snapshots are persisted on the Issue before image work is delegated | `server/internal/handler/creative_platform.go` |
+
+Reconfirm these paths before changing the direct-delivery contract.

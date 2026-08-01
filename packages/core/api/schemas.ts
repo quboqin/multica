@@ -14,13 +14,22 @@ import type {
   CreateAgentFromTemplateResponse,
   CreateBillingCheckoutSessionResponse,
   CreateBillingPortalSessionResponse,
+  CreativeCopyEntry,
+  CreativeCopyEntryListResponse,
+  CreativeCopyImportResult,
   CreativeImportSummary,
+  CreativeIssueContext,
+  CreativeIssueItem,
+  CreativeMaterialLibraryResponse,
   CreativeMaterialsResponse,
+  CreativeResource,
+  CreativeResourceFile,
+  CreativeResourceFileListResponse,
+  CreativeResourceListResponse,
   CredentialCrawlResult,
   GroupedIssuesResponse,
   ListCredentialConnectorsResponse,
   ListCredentialProfilesResponse,
-  ListWorkspaceMCPConnectionsResponse,
   ListIssuesResponse,
   ListWebhookDeliveriesResponse,
   StartCredentialLoginSessionResponse,
@@ -30,8 +39,6 @@ import type {
   TimelineEntry,
   User,
   WebhookDelivery,
-  VerifyWorkspaceMCPConnectionResponse,
-  WorkspaceMCPConnection,
 } from "../types";
 import type { CloudRuntimeNode } from "../runtimes/cloud-runtime";
 
@@ -326,64 +333,6 @@ export const EMPTY_LIST_CREDENTIAL_PROFILES_RESPONSE: ListCredentialProfilesResp
   profiles: [],
 };
 
-export const WorkspaceMCPConnectionSchema = z.object({
-  id: z.string().default(""),
-  workspace_id: z.string().default(""),
-  name: z.string().default(""),
-  capability: z.string().default("creative_edit"),
-  transport: z.string().default("streamable_http"),
-  server_url: z.string().default(""),
-  tool_create: z.string().default("create_creative_job"),
-  tool_get: z.string().default("get_creative_job"),
-  status: z.string().default("disabled"),
-  is_default: z.boolean().default(false),
-  has_secret_headers: z.boolean().default(false),
-  secret_header_names: z.array(z.string()).default([]),
-  last_verified_at: z.string().default(""),
-  last_error: z.string().default(""),
-  created_at: z.string().default(""),
-  updated_at: z.string().default(""),
-}).loose();
-
-export const ListWorkspaceMCPConnectionsResponseSchema = z.object({
-  connections: z.array(WorkspaceMCPConnectionSchema).default([]),
-}).loose();
-
-export const VerifyWorkspaceMCPConnectionResponseSchema = z.object({
-  ok: z.boolean().default(false),
-  provider: z.string().default(""),
-  tools: z.array(z.string()).default([]),
-}).loose();
-
-export const EMPTY_WORKSPACE_MCP_CONNECTION: WorkspaceMCPConnection = {
-  id: "",
-  workspace_id: "",
-  name: "",
-  capability: "creative_edit",
-  transport: "streamable_http",
-  server_url: "",
-  tool_create: "create_creative_job",
-  tool_get: "get_creative_job",
-  status: "disabled",
-  is_default: false,
-  has_secret_headers: false,
-  secret_header_names: [],
-  last_verified_at: "",
-  last_error: "",
-  created_at: "",
-  updated_at: "",
-};
-
-export const EMPTY_LIST_WORKSPACE_MCP_CONNECTIONS_RESPONSE: ListWorkspaceMCPConnectionsResponse = {
-  connections: [],
-};
-
-export const EMPTY_VERIFY_WORKSPACE_MCP_CONNECTION_RESPONSE: VerifyWorkspaceMCPConnectionResponse = {
-  ok: false,
-  provider: "",
-  tools: [],
-};
-
 export const EMPTY_START_CREDENTIAL_LOGIN_SESSION_RESPONSE: StartCredentialLoginSessionResponse = {
   profile: {
     id: "",
@@ -444,8 +393,17 @@ export const CreativeMaterialCandidateSchema = z.object({
   last_seen_at: z.string().default(""),
   created_at: z.string().default(""),
   updated_at: z.string().default(""),
+  source_attachment_id: z.string().default(""),
   raw: z.unknown().optional(),
 }).loose();
+
+export const CreativeMaterialLibrarySchema = z.object({
+  candidates: z.array(CreativeMaterialCandidateSchema).default([]),
+}).loose();
+
+export const EMPTY_CREATIVE_MATERIAL_LIBRARY: CreativeMaterialLibraryResponse = { candidates: [] };
+export const CreativeMaterialImportResultSchema = z.object({ id: z.string().default("") });
+export const EMPTY_CREATIVE_MATERIAL_IMPORT_RESULT = { id: "" };
 
 export const CreativeMaterialSummarySchema = z.object({
   total: z.number().default(0),
@@ -471,69 +429,46 @@ export const CreativeMaterialCrawlRunSchema = z.object({
   created_at: z.string().default(""),
 }).loose();
 
-export const CreativeEditAssetSchema = z.object({
-  id: z.string().default(""),
-  variant_id: z.string().default(""),
-  width: z.number().default(0),
-  height: z.number().default(0),
-  label: z.string().default(""),
-  asset_url: z.string().default(""),
-  content_type: z.string().default(""),
-  created_at: z.string().default(""),
-}).loose();
-
-export const CreativeEditFeedbackSchema = z.object({
-  id: z.string().default(""),
-  workspace_id: z.string().default(""),
+export const CreativeIssueContextSchema = z.object({
   issue_id: z.string().default(""),
-  job_id: z.string().default(""),
-  candidate_id: z.string().default(""),
-  variant_id: z.string().default(""),
-  decision: z.string().default(""),
-  reason_codes: z.array(z.string()).catch([]).default([]),
-  suggestion: z.string().default(""),
-  process_snapshot: z.record(z.string(), z.unknown()).catch({}).default({}),
-  created_by: z.string().default(""),
-  created_by_name: z.string().default(""),
-  created_at: z.string().default(""),
-}).loose();
-
-export const CreativeEditVariantSchema = z.object({
-  id: z.string().default(""),
-  job_id: z.string().default(""),
-  candidate_id: z.string().default(""),
-  variant_index: z.number().default(0),
-  title: z.string().default(""),
-  description: z.string().default(""),
-  qc_status: z.string().default(""),
-  created_at: z.string().default(""),
-  assets: z.array(CreativeEditAssetSchema).default([]),
-  feedback: z.array(CreativeEditFeedbackSchema).default([]),
-}).loose();
-
-export const CreativeEditJobSchema = z.object({
-  id: z.string().default(""),
   workspace_id: z.string().default(""),
-  issue_id: z.string().default(""),
-  status: z.string().default(""),
-  prompt: z.string().default(""),
-  rules: z.unknown().optional(),
-  process_data: z.record(z.string(), z.unknown()).catch({}).default({}),
-  external_provider: z.string().default(""),
-  mcp_connection_id: z.string().default(""),
-  external_job_id: z.string().default(""),
-  external_status: z.string().default(""),
-  stage: z.string().default(""),
-  progress: z.number().default(0),
-  last_poll_at: z.string().default(""),
-  next_poll_at: z.string().default(""),
-  completed_at: z.string().default(""),
-  error_message: z.string().default(""),
-  poll_attempts: z.number().default(0),
-  created_at: z.string().default(""),
+  market_pack_id: z.string().default(""),
+  squad_id: z.string().default(""),
+  snapshot: z.record(z.string(), z.unknown()).default({}),
   updated_at: z.string().default(""),
-  candidate_ids: z.array(z.string()).default([]),
-  variants: z.array(CreativeEditVariantSchema).default([]),
+}).loose();
+
+export const CreativeBriefSchema = z.object({
+  theme: z.string().default(""),
+  theme_elements: z.array(z.string()).default([]),
+  primary_benefit: z.string().default(""),
+  secondary_benefits: z.array(z.string()).default([]),
+  benefit_value: z.string().default(""),
+  evidence: z.array(z.string()).default([]),
+  detected_text: z.array(z.string()).default([]),
+  visual_type: z.string().default(""),
+  analysis_summary: z.string().default(""),
+  status: z.string().default(""),
+  source: z.string().default(""),
+  confidence: z.number().min(0).max(1).nullable().default(null),
+  analysis_issue_id: z.string().default(""),
+}).loose();
+
+export const CreativeIssueItemSchema = z.object({
+  issue_id: z.string().default(""),
+  candidate_id: z.string().default(""),
+  copy_entry_id: z.string().default(""),
+  copy_snapshot: z.record(z.string(), z.unknown()).default({}),
+  creative_brief: CreativeBriefSchema.default({
+    theme: "", theme_elements: [], primary_benefit: "", secondary_benefits: [],
+    benefit_value: "", evidence: [], detected_text: [], visual_type: "",
+    analysis_summary: "", status: "", source: "", confidence: null,
+    analysis_issue_id: "",
+  }),
+  work_issue_id: z.string().default(""),
+  revision: z.number().default(1),
+  status: z.string().default("ready"),
+  updated_at: z.string().default(""),
 }).loose();
 
 export const CreativeMaterialsResponseSchema = z.object({
@@ -550,7 +485,8 @@ export const CreativeMaterialsResponseSchema = z.object({
   }),
   candidates: z.array(CreativeMaterialCandidateSchema).default([]),
   crawl_runs: z.array(CreativeMaterialCrawlRunSchema).default([]),
-  edit_jobs: z.array(CreativeEditJobSchema).default([]),
+  context: CreativeIssueContextSchema.nullable().optional().transform((value) => value ?? null),
+  items: z.array(CreativeIssueItemSchema).default([]),
 }).loose();
 
 export const EMPTY_CREATIVE_MATERIALS_RESPONSE: CreativeMaterialsResponse = {
@@ -567,7 +503,117 @@ export const EMPTY_CREATIVE_MATERIALS_RESPONSE: CreativeMaterialsResponse = {
   },
   candidates: [],
   crawl_runs: [],
-  edit_jobs: [],
+  context: null,
+  items: [],
+};
+
+export const CreativeResourceSchema = z.object({
+  id: z.string().default(""),
+  workspace_id: z.string().default(""),
+  kind: z.enum(["copy_library", "market_pack"]).default("copy_library"),
+  name: z.string().default(""),
+  description: z.string().default(""),
+  status: z.enum(["draft", "published", "archived"]).default("draft"),
+  version: z.number().default(1),
+  published_version: z.number().default(0),
+  config: z.record(z.string(), z.unknown()).default({}),
+  created_by: z.string().default(""),
+  created_at: z.string().default(""),
+  updated_at: z.string().default(""),
+}).loose();
+
+export const CreativeResourceListSchema = z.object({
+  resources: z.array(CreativeResourceSchema).default([]),
+}).loose();
+
+export const CreativeResourceFileSchema = z.object({
+  id: z.string().default(""),
+  resource_id: z.string().default(""),
+  attachment_id: z.string().default(""),
+  role: z.string().default(""),
+  label: z.string().default(""),
+  metadata: z.record(z.string(), z.unknown()).default({}),
+  filename: z.string().default(""),
+  url: z.string().default(""),
+  content_type: z.string().default("application/octet-stream"),
+  size_bytes: z.number().default(0),
+  created_version: z.number().default(1),
+  created_at: z.string().default(""),
+}).loose();
+
+export const CreativeResourceFileListSchema = z.object({
+  files: z.array(CreativeResourceFileSchema).default([]),
+}).loose();
+
+export const CreativeCopyEntrySchema = z.object({
+  id: z.string().default(""),
+  workspace_id: z.string().default(""),
+  library_id: z.string().default(""),
+  external_key: z.string().default(""),
+  headline: z.string().default(""),
+  subheadline: z.string().default(""),
+  benefit: z.string().default(""),
+  cta: z.string().default(""),
+  legal_text: z.string().default(""),
+  copy_role: z.string().default(""),
+  market: z.string().default(""),
+  locale: z.string().default(""),
+  tags: z.array(z.string()).default([]),
+  status: z.enum(["draft", "approved", "disabled"]).default("draft"),
+  version: z.number().default(1),
+  metadata: z.record(z.string(), z.unknown()).default({}),
+  created_by: z.string().default(""),
+  created_at: z.string().default(""),
+  updated_at: z.string().default(""),
+}).loose();
+
+export const CreativeCopyEntryListSchema = z.object({
+  entries: z.array(CreativeCopyEntrySchema).default([]),
+}).loose();
+
+export const CreativeCopyImportResultSchema = z.object({
+  created: z.number().default(0),
+  updated: z.number().default(0),
+  skipped: z.number().default(0),
+  resource: CreativeResourceSchema,
+}).loose();
+
+export const EMPTY_CREATIVE_RESOURCE: CreativeResource = {
+  id: "", workspace_id: "", kind: "copy_library", name: "", description: "",
+  status: "draft", version: 1, published_version: 0, config: {}, created_by: "",
+  created_at: "", updated_at: "",
+};
+
+export const EMPTY_CREATIVE_RESOURCE_LIST: CreativeResourceListResponse = { resources: [] };
+export const EMPTY_CREATIVE_RESOURCE_FILE: CreativeResourceFile = {
+  id: "", resource_id: "", attachment_id: "", role: "", label: "", metadata: {},
+  filename: "", url: "", content_type: "application/octet-stream", size_bytes: 0,
+  created_version: 1, created_at: "",
+};
+export const EMPTY_CREATIVE_RESOURCE_FILE_LIST: CreativeResourceFileListResponse = { files: [] };
+export const EMPTY_CREATIVE_COPY_ENTRY: CreativeCopyEntry = {
+  id: "", workspace_id: "", library_id: "", external_key: "", headline: "",
+  subheadline: "", benefit: "", cta: "", legal_text: "", copy_role: "",
+  market: "", locale: "", tags: [], status: "draft", version: 1, metadata: {},
+  created_by: "", created_at: "", updated_at: "",
+};
+export const EMPTY_CREATIVE_COPY_ENTRY_LIST: CreativeCopyEntryListResponse = { entries: [] };
+export const EMPTY_CREATIVE_COPY_IMPORT_RESULT: CreativeCopyImportResult = {
+  created: 0, updated: 0, skipped: 0, resource: EMPTY_CREATIVE_RESOURCE,
+};
+export const EMPTY_CREATIVE_ISSUE_CONTEXT: CreativeIssueContext = {
+  issue_id: "", workspace_id: "", market_pack_id: "",
+  squad_id: "", snapshot: {}, updated_at: "",
+};
+export const EMPTY_CREATIVE_ISSUE_ITEM: CreativeIssueItem = {
+  issue_id: "", candidate_id: "", copy_entry_id: "", copy_snapshot: {},
+  creative_brief: {
+    theme: "", theme_elements: [], primary_benefit: "", secondary_benefits: [],
+    benefit_value: "", evidence: [], detected_text: [], visual_type: "",
+    analysis_summary: "", status: "", source: "", confidence: null,
+    analysis_issue_id: "",
+  },
+  work_issue_id: "", revision: 1, status: "ready", updated_at: "",
 };
 
 export const CreativeImportSummarySchema = z.object({

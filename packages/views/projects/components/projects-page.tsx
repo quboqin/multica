@@ -131,7 +131,7 @@ import { PageHeader } from "../../layout/page-header";
 import { ProjectIcon } from "./project-icon";
 import { useT } from "../../i18n";
 import { matchesPinyin } from "../../editor/extensions/pinyin-match";
-import { useFormatRelativeDate, useProjectPriorityLabels, useProjectStatusLabels } from "./labels";
+import { useFormatRelativeDate, useProjectStatusLabels } from "./labels";
 import { ProjectStatusBadge, ProjectPriorityBadge } from "./project-badge";
 import { ProjectLeadPicker } from "./project-lead-picker";
 import { LabelChip } from "../../labels/label-chip";
