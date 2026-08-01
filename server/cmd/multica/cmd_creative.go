@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"mime"
@@ -72,6 +73,26 @@ type openAIImageEditResponse struct {
 	} `json:"data"`
 }
 
+type imageEditHTTPError struct {
+	StatusCode int
+	RequestID  string
+	RetryAfter string
+	Body       string
+}
+
+func (e *imageEditHTTPError) Error() string {
+	return fmt.Sprintf("GPT Image edit failed with status %d (request_id=%s): %s", e.StatusCode, e.RequestID, e.Body)
+}
+
+type imageEditTransportError struct {
+	err error
+}
+
+func (e *imageEditTransportError) Error() string {
+	return fmt.Sprintf("request GPT Image edit: %v", e.err)
+}
+func (e *imageEditTransportError) Unwrap() error { return e.err }
+
 type creativeMaterialsCLIResponse struct {
 	Candidates []creativeMaterialCandidateCLI `json:"candidates"`
 	Items      []creativeIssueItemCLI         `json:"items"`
@@ -123,6 +144,7 @@ func init() {
 	imageEditCmd.Flags().String("model", "gpt-image-2", "GPT Image model")
 	imageEditCmd.Flags().String("size", "auto", "Canvas size, e.g. 1088x1360 or auto")
 	imageEditCmd.Flags().String("quality", "", "Optional image quality: low, medium, high, or auto")
+	imageEditCmd.Flags().Int("max-attempts", 3, "Maximum attempts for transient image API failures (1-5)")
 	imageEditCmd.Flags().String("output-file", "", "Output PNG file")
 	imageEditCmd.Flags().String("output", "json", "Output format: json or table")
 }
@@ -266,9 +288,13 @@ func runImageEdit(cmd *cobra.Command, _ []string) error {
 		imageField = "image"
 	}
 	mask, _ := cmd.Flags().GetString("mask")
+	maxAttempts, _ := cmd.Flags().GetInt("max-attempts")
+	if maxAttempts < 1 || maxAttempts > 5 {
+		return fmt.Errorf("--max-attempts must be between 1 and 5")
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), cli.AtLeastAPITimeout(10*time.Minute))
 	defer cancel()
-	image, requestID, err := requestGPTImageEdit(ctx, http.DefaultClient, endpoint, apiKey, model, imageField, inputs, mask, prompt, size, quality)
+	image, requestID, attempts, err := requestGPTImageEditWithRetry(ctx, http.DefaultClient, endpoint, apiKey, model, imageField, inputs, mask, prompt, size, quality, maxAttempts)
 	if err != nil {
 		return err
 	}
@@ -283,12 +309,56 @@ func runImageEdit(cmd *cobra.Command, _ []string) error {
 		abs = outputFile
 	}
 	output, _ := cmd.Flags().GetString("output")
-	result := map[string]any{"model": model, "input_count": len(inputs), "size": size, "quality": quality, "path": abs, "bytes": len(image), "request_id": requestID}
+	result := map[string]any{"model": model, "input_count": len(inputs), "size": size, "quality": quality, "path": abs, "bytes": len(image), "request_id": requestID, "attempts": attempts}
 	if output == "table" {
 		cli.PrintTable(os.Stdout, []string{"MODEL", "INPUTS", "SIZE", "QUALITY", "BYTES", "REQUEST ID", "PATH"}, [][]string{{model, strconv.Itoa(len(inputs)), size, quality, strconv.Itoa(len(image)), requestID, abs}})
 		return nil
 	}
 	return cli.PrintJSON(os.Stdout, result)
+}
+
+func requestGPTImageEditWithRetry(ctx context.Context, client *http.Client, endpoint, apiKey, model, imageField string, inputs []string, mask, prompt, size, quality string, maxAttempts int) ([]byte, string, int, error) {
+	var lastRequestID string
+	var lastErr error
+	usedAttempts := 0
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		usedAttempts = attempt
+		image, requestID, err := requestGPTImageEdit(ctx, client, endpoint, apiKey, model, imageField, inputs, mask, prompt, size, quality)
+		if err == nil {
+			return image, requestID, attempt, nil
+		}
+		lastRequestID, lastErr = requestID, err
+		delay, retry := imageEditRetryDelay(err, attempt)
+		if !retry || attempt == maxAttempts {
+			break
+		}
+		timer := time.NewTimer(delay)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return nil, lastRequestID, attempt, ctx.Err()
+		case <-timer.C:
+		}
+	}
+	return nil, lastRequestID, usedAttempts, fmt.Errorf("GPT Image edit failed after %d attempt(s): %w", usedAttempts, lastErr)
+}
+
+func imageEditRetryDelay(err error, attempt int) (time.Duration, bool) {
+	var httpErr *imageEditHTTPError
+	if errors.As(err, &httpErr) {
+		if httpErr.StatusCode != http.StatusRequestTimeout && httpErr.StatusCode != http.StatusTooManyRequests && httpErr.StatusCode < 500 {
+			return 0, false
+		}
+		if seconds, parseErr := strconv.Atoi(strings.TrimSpace(httpErr.RetryAfter)); parseErr == nil && seconds >= 0 {
+			return minDuration(time.Duration(seconds)*time.Second, 30*time.Second), true
+		}
+		return minDuration(time.Duration(1<<maxInt(attempt-1, 0))*2*time.Second, 30*time.Second), true
+	}
+	var transportErr *imageEditTransportError
+	if errors.As(err, &transportErr) {
+		return minDuration(time.Duration(1<<maxInt(attempt-1, 0))*2*time.Second, 30*time.Second), true
+	}
+	return 0, false
 }
 
 func openAIImageEditEndpoint(rawBaseURL, rawPath string) (string, error) {
@@ -366,7 +436,7 @@ func requestGPTImageEdit(ctx context.Context, client *http.Client, endpoint, api
 	req.Header.Set("Content-Type", writer.FormDataContentType())
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, "", fmt.Errorf("request GPT Image edit: %w", err)
+		return nil, "", &imageEditTransportError{err: err}
 	}
 	defer resp.Body.Close()
 	payload, readErr := io.ReadAll(io.LimitReader(resp.Body, 32<<20))
@@ -375,7 +445,12 @@ func requestGPTImageEdit(ctx context.Context, client *http.Client, endpoint, api
 	}
 	requestID := resp.Header.Get("x-request-id")
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, requestID, fmt.Errorf("GPT Image edit failed with status %d (request_id=%s): %s", resp.StatusCode, requestID, truncateCLIError(payload, 1000))
+		return nil, requestID, &imageEditHTTPError{
+			StatusCode: resp.StatusCode,
+			RequestID:  requestID,
+			RetryAfter: resp.Header.Get("Retry-After"),
+			Body:       truncateCLIError(payload, 1000),
+		}
 	}
 	var response openAIImageEditResponse
 	if err := json.Unmarshal(payload, &response); err != nil {
@@ -439,6 +514,13 @@ func minInt(a, b int) int {
 }
 func maxInt(a, b int) int {
 	if a > b {
+		return a
+	}
+	return b
+}
+
+func minDuration(a, b time.Duration) time.Duration {
+	if a < b {
 		return a
 	}
 	return b

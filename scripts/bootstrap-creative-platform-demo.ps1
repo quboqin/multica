@@ -101,7 +101,8 @@ function Set-AgentDefinition {
         [Parameter(Mandatory)][string]$Description,
         [Parameter(Mandatory)][string]$Instructions,
         [Parameter(Mandatory)][string[]]$SkillIDs,
-        [string]$RuntimeID
+        [string]$RuntimeID,
+        [ValidateRange(1, 8)][int]$MaxConcurrentTasks = 3
     )
     $agents = Get-Items (Invoke-MulticaApi -Method Get -Path '/api/agents') ''
     $agent = $agents | Where-Object name -eq $Name | Select-Object -First 1
@@ -116,7 +117,7 @@ function Set-AgentDefinition {
             custom_env = @{}
             custom_args = @()
             visibility = 'workspace'
-            max_concurrent_tasks = 3
+            max_concurrent_tasks = $MaxConcurrentTasks
             model = ''
             thinking_level = ''
         }
@@ -125,7 +126,7 @@ function Set-AgentDefinition {
             description = $Description
             instructions = $Instructions
             visibility = 'workspace'
-            max_concurrent_tasks = 3
+            max_concurrent_tasks = $MaxConcurrentTasks
         }
     }
     Invoke-MulticaApi -Method Put -Path "/api/agents/$($agent.id)/skills" -Body @{ skill_ids = $SkillIDs } | Out-Null
@@ -187,30 +188,30 @@ foreach ($legacy in $existingSkills | Where-Object {
 
 $collectorSkill = Set-WorkspaceSkill -Name 'AppGrowing 素材采集' -Description '将自然语言筛选条件转换成真实 AppGrowing 多页查询并写入父 Issue 候选池。' -Directory (Join-Path $skillTemplateRoot 'appgrowing-material-collector') -Config @{ kind = 'creative_role'; capability = 'material_collection'; version = 1 }
 $analysisSkill = Set-WorkspaceSkill -Name '广告参考分析' -Description '读取真实图片，识别主题、金融利益点、文字证据、App UI 和构图风险，并回写平台创意简报。' -Directory (Join-Path $skillTemplateRoot 'ad-creative-analysis') -Config @{ kind = 'creative_role'; capability = 'reference_analysis'; version = 2 }
-$planSkill = Set-WorkspaceSkill -Name '广告生成方案' -Description '把“主题 × 主利益点”、参考分析和逐图文案快照转成可审计的分尺寸生成规格。' -Directory (Join-Path $skillTemplateRoot 'ad-creative-plan') -Config @{ kind = 'creative_role'; capability = 'generation_plan'; version = 2 }
-$productionSkill = Set-WorkspaceSkill -Name '广告图像编辑' -Description '调用平台图像接口生成逐尺寸无品牌底图并回传证据。' -Directory (Join-Path $skillTemplateRoot 'ad-creative-production') -Config @{ kind = 'creative_role'; capability = 'image_edit'; version = 1 }
-$composeSkill = Set-WorkspaceSkill -Name 'Prime 完整贴图' -Description '从市场资源包读取完整 Prime 资产，对每个尺寸完成贴图和二维码校验。' -Directory (Join-Path $skillTemplateRoot 'ad-creative-prime-compose') -Config @{ kind = 'creative_role'; capability = 'prime_compose'; version = 1 }
-$qcSkill = Set-WorkspaceSkill -Name '广告成图验收' -Description '核验最终三尺寸成图、文案、二维码、贴图资产和合规风险。' -Directory (Join-Path $skillTemplateRoot 'ad-creative-qc') -Config @{ kind = 'creative_role'; capability = 'quality_control'; version = 1 }
+$planSkill = Set-WorkspaceSkill -Name '广告生成方案' -Description '把“主题 × 主利益点”、参考分析和逐图文案快照转成 3 个创意变体及其原生三尺寸生成规格。' -Directory (Join-Path $skillTemplateRoot 'ad-creative-plan') -Config @{ kind = 'creative_role'; capability = 'generation_plan'; version = 3 }
+$productionSkill = Set-WorkspaceSkill -Name '广告图像编辑' -Description '按创意母版和原生尺寸重排调用平台图像接口，最多并发执行 5 个图片任务。' -Directory (Join-Path $skillTemplateRoot 'ad-creative-production') -Config @{ kind = 'creative_role'; capability = 'image_edit'; version = 2 }
+$composeSkill = Set-WorkspaceSkill -Name 'Prime 完整贴图' -Description '从市场资源包读取完整 Prime 资产，按创意批量完成三尺寸贴图和二维码校验。' -Directory (Join-Path $skillTemplateRoot 'ad-creative-prime-compose') -Config @{ kind = 'creative_role'; capability = 'prime_compose'; version = 2 }
+$qcSkill = Set-WorkspaceSkill -Name '广告成图验收' -Description '按创意核验三尺寸成图、文案、二维码、贴图资产和合规风险。' -Directory (Join-Path $skillTemplateRoot 'ad-creative-qc') -Config @{ kind = 'creative_role'; capability = 'quality_control'; version = 2 }
 
 $agents = Get-Items (Invoke-MulticaApi -Method Get -Path '/api/agents') ''
 $leaderSeed = $agents | Where-Object name -eq '素材小队 Leader' | Select-Object -First 1
 if (-not $leaderSeed) { throw '素材小队 Leader does not exist' }
 $runtimeID = $leaderSeed.runtime_id
 
-$collector = Set-AgentDefinition -Name 'AppGrowing 素材采集智能体' -Description '逐竞品多页采集并将真实结果导入父 Issue 候选池。' -Instructions '全程使用中文。只执行当前采集子 Issue 指定的真实 AppGrowing 查询。逐家核对普通竞品至少 3 页、优先竞品至少 5 页；单家接口为空或失败时对该家启用 Playwright 补查。结果只进入父 Issue 原生候选池，逐页证据与失败原因留在当前子 Issue。' -SkillIDs @($collectorSkill.id) -RuntimeID $runtimeID
+$collector = Set-AgentDefinition -Name 'AppGrowing 素材采集智能体' -Description '逐竞品多页采集并将真实结果导入父 Issue 候选池。' -Instructions '全程使用中文。只执行当前采集子 Issue 指定的真实 AppGrowing 查询。逐家核对普通竞品至少 3 页、优先竞品至少 5 页；单家接口为空或失败时对该家启用 Playwright 补查。结果只进入父 Issue 原生候选池，逐页证据与失败原因留在当前子 Issue。' -SkillIDs @($collectorSkill.id) -RuntimeID $runtimeID -MaxConcurrentTasks 2
 $specialistHandoff = '完成后把全部过程、附件和证据留在当前专业子 Issue并将其置为 done。平台会自动向直接父 Issue 发送最小完成回执并唤醒小队；不要手工评论父 Issue，也不要 @Leader，以免重复触发。'
-$analyst = Set-AgentDefinition -Name '广告参考分析智能体' -Description '逐图读取真实像素，识别主题、利益点、文字证据和构图风险。' -Instructions "全程使用中文。只分析当前专业子 Issue 指定的候选图和市场资源快照。必须读取真实图片像素，分别识别视觉主题与金融主利益点，把结构化创意简报回写目标候选池；采集标题、标签和媒体只能弱辅助。详细证据留在当前子 Issue，不生成图片。$specialistHandoff" -SkillIDs @($analysisSkill.id) -RuntimeID $runtimeID
-$planner = Set-AgentDefinition -Name '生成方案智能体' -Description '把逐图输入快照转成三个尺寸的生成规格。' -Instructions "全程使用中文。读取当前专业子 Issue 引用的参考分析、逐图文案和市场资源快照，输出可审计的逐尺寸生成规格。只在当前子 Issue 讨论提示词和取舍，不生成图片。$specialistHandoff" -SkillIDs @($planSkill.id) -RuntimeID $runtimeID
-$producer = Set-AgentDefinition -Name '图像编辑智能体' -Description '执行逐尺寸图像编辑并回传待包装底图。' -Instructions "全程使用中文。只执行当前专业子 Issue 引用的已批准生成规格，使用平台 image edit 能力生成对应尺寸的满版底图，回传来源、提示词、模型、请求 ID 和附件。每个尺寸独立构图，不添加二维码或合规贴图。候选图含竞品 App UI 时，必须同时输入分析成员选中的 AdaKami App UI 参考图并完成替换；除此之外不自行添加品牌资产。$specialistHandoff" -SkillIDs @($productionSkill.id) -RuntimeID $runtimeID
-$composer = Set-AgentDefinition -Name 'Prime 包装智能体' -Description '使用本次市场资源快照完成三尺寸完整贴图和二维码校验。' -Instructions "全程使用中文。只读取当前专业子 Issue 引用的版本化资源附件，使用对应尺寸完整 Prime 贴图和 Skill 自带确定性合成脚本完成包装。不得使用本机固定素材路径。最终附件和二维码机器校验证据只留在当前子 Issue。$specialistHandoff" -SkillIDs @($composeSkill.id) -RuntimeID $runtimeID
-$reviewer = Set-AgentDefinition -Name '广告验收智能体' -Description '验收当前创意分支的三尺寸最终成图并给出通过或返工。' -Instructions "全程使用中文。只验收当前专业子 Issue 引用的三尺寸最终成图与快照证据。逐项检查尺寸、满版构图、批准文案、完整 Prime 资产、二维码解码和合规风险；失败时明确指出仅需重开的受影响任务。$specialistHandoff" -SkillIDs @($qcSkill.id) -RuntimeID $runtimeID
+$analyst = Set-AgentDefinition -Name '广告参考分析智能体' -Description '逐图读取真实像素，识别主题、利益点、文字证据和构图风险。' -Instructions "全程使用中文。只分析当前专业子 Issue 指定的候选图和市场资源快照。必须读取真实图片像素，分别识别视觉主题与金融主利益点，把结构化创意简报回写目标候选池；采集标题、标签和媒体只能弱辅助。详细证据留在当前子 Issue，不生成图片。$specialistHandoff" -SkillIDs @($analysisSkill.id) -RuntimeID $runtimeID -MaxConcurrentTasks 4
+$planner = Set-AgentDefinition -Name '生成方案智能体' -Description '把逐图输入快照转成 3 个创意变体和三尺寸生成规格。' -Instructions "全程使用中文。读取当前专业子 Issue 引用的参考分析、逐图文案和市场资源快照，输出 V01、V02、V03 三个差异明确的创意母版规格，以及每个母版的横版和竖版原生重排约束。只在当前子 Issue 讨论提示词和取舍，不生成图片。$specialistHandoff" -SkillIDs @($planSkill.id) -RuntimeID $runtimeID -MaxConcurrentTasks 3
+$producer = Set-AgentDefinition -Name '图像编辑智能体' -Description '最多 5 路并发执行创意母版或单个尺寸的原生图像编辑。' -Instructions "全程使用中文。只执行当前专业子 Issue 引用的一个创意母版或一个尺寸重排规格，使用平台 image edit 能力生成满版底图，回传来源、变体编号、提示词、模型、请求 ID、尝试次数和附件。V01-V03 的方形母版相互独立；横版和竖版必须把已通过的对应母版作为第一参考原生重排。不得裁切、加边、拉伸，不添加二维码或合规贴图。候选图含竞品 App UI 时，必须同时输入分析成员选中的 AdaKami App UI 参考图并完成替换。$specialistHandoff" -SkillIDs @($productionSkill.id) -RuntimeID $runtimeID -MaxConcurrentTasks 5
+$composer = Set-AgentDefinition -Name 'Prime 包装智能体' -Description '按单个创意批量完成三个尺寸的完整贴图和二维码校验。' -Instructions "全程使用中文。一个专业子 Issue 处理一个创意变体的三个尺寸。只读取当前专业子 Issue 引用的版本化资源附件，使用对应尺寸完整 Prime 贴图和 Skill 自带确定性合成脚本完成包装。不得使用本机固定素材路径。三个最终附件和二维码机器校验证据只留在当前子 Issue。$specialistHandoff" -SkillIDs @($composeSkill.id) -RuntimeID $runtimeID -MaxConcurrentTasks 4
+$reviewer = Set-AgentDefinition -Name '广告验收智能体' -Description '按单个创意验收三个尺寸最终成图并给出通过或返工。' -Instructions "全程使用中文。一个专业子 Issue 验收一个创意变体的三个尺寸最终成图与快照证据。逐项检查尺寸、满版构图、批准文案、完整 Prime 资产、二维码解码和合规风险；失败时明确指出该变体中仅需重开的受影响尺寸。$specialistHandoff" -SkillIDs @($qcSkill.id) -RuntimeID $runtimeID -MaxConcurrentTasks 3
 
 $squads = Get-Items (Invoke-MulticaApi -Method Get -Path '/api/squads') ''
 $squad = $squads | Where-Object name -eq 'AdaKami 素材小队' | Select-Object -First 1
 if (-not $squad) {
     $squad = Invoke-MulticaApi -Method Post -Path '/api/squads' -Body @{
         name = 'AdaKami 素材小队'
-        description = '从 AppGrowing 候选采集、逐图文案确认到三尺寸修图、完整贴图和验收发布。'
+        description = '从 AppGrowing 候选采集、逐图文案确认到每张素材 3 个创意、每创意 3 个尺寸的修图交付。'
         leader_id = $leaderSeed.id
     }
 }
@@ -241,8 +242,8 @@ foreach ($definition in $memberDefinitions) {
 }
 
 $leaderSkillDirectory = Join-Path $skillTemplateRoot 'ad-creative-leadership'
-$leaderSkill = Set-WorkspaceSkill -Name '创意素材协作' -Aliases @('素材小队 Leader 编排') -Description '帮助素材小队 Leader 根据当前证据和成员 Skill 动态委派素材理解、返工并发布结果。' -Directory $leaderSkillDirectory -Config @{ kind = 'creative_role'; capability = 'creative_leadership'; version = 6 }
-$leader = Set-AgentDefinition -Name '素材小队 Leader' -Description '管理候选池素材理解、逐图委派、返工和最终结果发布。' -Instructions '全程使用中文。你只负责判断、委派、验收汇总和发布。每次读取小队名册中成员的职责和 Skill，再按当前证据挑选合适成员，不依赖固定流程节点。候选池发起的素材理解请求只委派参考分析成员读取真实像素并回写结构化创意简报，不启动成图链路。父 Issue 对用户只展示候选池、结果看板和必要结论；每张选中素材创建一个独立创意工作 Issue。每次委派专业成员必须新建当前创意工作 Issue 的直接子 Issue，以 todo 状态分配目标智能体；禁止在当前创意工作 Issue 用 @mention 代替子 Issue，当前 Issue 只留不含成员 mention 的子 Issue 链接和必要结论。所有角色对话、提示词、模型证据和返工都进入各自专业子 Issue。必须读取专业子 Issue 完整时间线到最新人工决定；未解决风险不能作为有效完成证据，也不能用重新包装绕过底图问题，但人工已接受且只涉及连续背景、空白卡片下缘或阴影的 Prime 外围缓冲区差异应继续进入真实合成和独立 QC，不能因历史失败评论继续阻断。只有通过验收的三个尺寸才能由你发布到父 Issue 结果看板；发布前按市场资源包 naming_rule 规范化文件名，同一候选的三个尺寸必须使用相同前缀；发布命令必须以快照中的 parent_issue_id 为目标，并在回执中确认每个附件的 issue_id 等于该父 ID。发布确认后将当前创意工作 Issue 置为 done；调整 Issue 完成唤醒上级时只核对并收口，不重复发布；最外层候选池 Issue 不自动关闭。' -SkillIDs @($leaderSkill.id) -RuntimeID $runtimeID
+$leaderSkill = Set-WorkspaceSkill -Name '创意素材协作' -Aliases @('素材小队 Leader 编排') -Description '帮助素材小队 Leader 批量委派 3 个创意变体的母版、尺寸重排、包装、验收和发布。' -Directory $leaderSkillDirectory -Config @{ kind = 'creative_role'; capability = 'creative_leadership'; version = 7 }
+$leader = Set-AgentDefinition -Name '素材小队 Leader' -Description '管理候选池素材理解、3×3 创意委派、返工和最终结果发布。' -Instructions '全程使用中文。你只负责判断、批量委派、验收汇总和发布。每次读取小队名册中成员的职责和 Skill，再按当前证据挑选合适成员。候选池发起的素材理解请求只委派参考分析成员读取真实像素并回写结构化创意简报，不启动成图链路。父 Issue 对用户只展示候选池、结果看板和必要结论；每张选中素材创建一个独立创意工作 Issue，每个工作 Issue 必须交付 V01、V02、V03 三个创意变体，每个变体原生交付 1080x1080、1200x628、800x1000。每次唤醒先读取全部直接子 Issue，再一次创建所有已经满足依赖且尚不存在的专业子 Issue；禁止一次只派一个可并行任务。先并发三个方形母版，某个母版通过后立即并发该变体的横版和竖版；一个 Prime 子 Issue 批量包装一个变体的三个尺寸，一个 QC 子 Issue批量验收一个变体的三个尺寸。所有角色对话、提示词、模型证据和返工都留在专业子 Issue。创建前按候选 ID、修订、V01-V03、尺寸和能力检查已有子 Issue，禁止重复创建。只有三个变体各自三尺寸全部通过才能发布 9 张图；文件名必须包含 V01-V03，发布目标必须是快照中的 parent_issue_id。调整只影响目标变体和尺寸，其他通过结果沿用。发布确认后将当前创意工作 Issue 置为 done；最外层候选池 Issue 不自动关闭。' -SkillIDs @($leaderSkill.id) -RuntimeID $runtimeID -MaxConcurrentTasks 5
 
 $resources = Get-Items (Invoke-MulticaApi -Method Get -Path '/api/creative/resources') 'resources'
 $copyLibrary = $resources | Where-Object { $_.kind -eq 'copy_library' -and $_.name -eq 'AdaKami Indonesia 文案库' } | Select-Object -First 1

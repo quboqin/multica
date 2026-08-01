@@ -4,7 +4,7 @@
 | --- | --- |
 | `multica creative materials <issue-id> --selected` reads the existing Issue creative-materials endpoint and filters to person-selected candidates | `server/cmd/multica/cmd_creative.go:runCreativeMaterials` |
 | `multica creative material download <issue-id> <candidate-id>` downloads only a person-selected candidate whose platform archive is completed | `server/cmd/multica/cmd_creative.go:runCreativeMaterialDownload` |
-| `multica image edit` invokes the image capability configured on the local daemon and writes the generated bitmap to the requested output path | `server/cmd/multica/cmd_creative.go:runImageEdit` |
+| `multica image edit --max-attempts 3` invokes the daemon image capability, retries transient 408/429/5xx or transport failures, and reports the actual attempt count | `server/cmd/multica/cmd_creative.go:runImageEdit`, `server/cmd/multica/cmd_creative.go:requestGPTImageEditWithRetry` |
 | `multica issue comment add` supports local `--attachment` files | `server/cmd/multica/cmd_issue.go:runIssueCommentAdd` |
 | Comment attachments upload before the Issue comment is posted | `server/cmd/multica/cmd_issue.go:runIssueCommentAdd` |
 | `multica attachment download` gets attachment metadata through the authenticated API and writes a local file | `server/cmd/multica/cmd_attachment.go:runAttachmentDownload` |

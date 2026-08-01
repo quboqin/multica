@@ -96,6 +96,35 @@ func TestRequestGPTImageEdit(t *testing.T) {
 	}
 }
 
+func TestRequestGPTImageEditWithRetryRecoversFromRateLimit(t *testing.T) {
+	input := filepath.Join(t.TempDir(), "reference.png")
+	if err := os.WriteFile(input, []byte("source-bytes"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	attempts := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		attempts++
+		if attempts < 3 {
+			w.Header().Set("Retry-After", "0")
+			w.Header().Set("x-request-id", "req_rate_limited")
+			w.WriteHeader(http.StatusTooManyRequests)
+			_, _ = w.Write([]byte(`{"error":{"message":"busy"}}`))
+			return
+		}
+		w.Header().Set("x-request-id", "req_recovered")
+		_, _ = w.Write([]byte(`{"data":[{"b64_json":"` + base64.StdEncoding.EncodeToString([]byte("png-bytes")) + `"}]}`))
+	}))
+	defer server.Close()
+
+	image, requestID, usedAttempts, err := requestGPTImageEditWithRetry(
+		context.Background(), server.Client(), server.URL, "test-key", "gpt-image-2", "image",
+		[]string{input}, "", "change the layout", "1088x1088", "medium", 3,
+	)
+	if err != nil || string(image) != "png-bytes" || requestID != "req_recovered" || usedAttempts != 3 {
+		t.Fatalf("requestGPTImageEditWithRetry() = %q, %q, %d, %v", image, requestID, usedAttempts, err)
+	}
+}
+
 func TestImageEditFileContentType(t *testing.T) {
 	cases := map[string]string{
 		"reference.png":  "image/png",

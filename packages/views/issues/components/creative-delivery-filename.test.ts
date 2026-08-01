@@ -70,6 +70,26 @@ describe("creative delivery filenames", () => {
     ]);
   });
 
+  it("keeps three variants of one candidate as three creative groups", () => {
+    const filenames = [1, 2, 3].flatMap((variant) =>
+      ["1080x1080", "1200x628", "800x1000"].map(
+        (size) => `August_AdaKami_Indonesia_candidate-42_V0${variant}_${size}_v1.png`,
+      ),
+    );
+    const groups = groupCreativeDeliveries(
+      filenames.map((filename, index) => ({ id: String(index), filename })),
+    );
+
+    expect(groups).toHaveLength(3);
+    expect(groups.map((group) => group.variant)).toEqual([1, 2, 3]);
+    expect(groups.every((group) => group.assets.length === 3)).toBe(true);
+    expect(groups.map((group) => group.setKey)).toEqual([
+      "August_AdaKami_Indonesia_candidate-42",
+      "August_AdaKami_Indonesia_candidate-42",
+      "August_AdaKami_Indonesia_candidate-42",
+    ]);
+  });
+
   it("links a published result comment back to its source candidate", () => {
     expect(candidateIdFromResultComment("结果发布\n候选 ID：`7c618bb5-6efe-4b55-8eaa-4be430b6e536`\n三尺寸通过")).toBe(
       "7c618bb5-6efe-4b55-8eaa-4be430b6e536",

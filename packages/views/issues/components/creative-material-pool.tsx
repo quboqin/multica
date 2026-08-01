@@ -81,7 +81,7 @@ type ContextDraft = {
 type CopyDraft = Pick<CreativeCopyEntryInput, "headline" | "subheadline" | "benefit" | "cta" | "legal_text">;
 type CreativeBriefDraft = CreativeIssueItem["creative_brief"];
 type CreativeDeliveryAsset = { id: string; filename: string; url: string; download_url?: string | null; markdown_url?: string | null };
-type CreativeAdjustmentTarget = { candidateId: string; asset: CreativeDeliveryAsset; groupAssets: CreativeDeliveryAsset[] };
+type CreativeAdjustmentTarget = { candidateId: string; asset: CreativeDeliveryAsset; groupAssets: CreativeDeliveryAsset[]; variant?: number | null };
 
 const DEFAULT_FILTER: CandidateFilter = {
   status: "all",
@@ -130,6 +130,7 @@ export function CreativeMaterialPool({ issue }: { issue: Issue }) {
   const library = useQuery(creativeMaterialLibraryOptions(wsId));
   const candidates = useMemo(() => materials.data?.candidates ?? [], [materials.data?.candidates]);
   const selectedCandidates = candidates.filter((candidate) => candidate.status === "selected");
+  const expectedDeliveryCount = selectedCandidates.length * 9;
   const marketPacks = (resources.data?.resources ?? []).filter((resource) => resource.kind === "market_pack" && resource.status === "published");
   const currentContext = materials.data?.context;
   const defaultMarketPackId = marketPacks[0]?.id ?? "";
@@ -298,7 +299,7 @@ export function CreativeMaterialPool({ issue }: { issue: Issue }) {
         const brief = item.creative_brief;
         const created = await api.createIssue({
           title: `创意图 · ${candidate.title || candidate.competitor || candidate.id} · r${item.revision}`,
-          description: `父候选池：${issue.id}\n候选 ID：${candidate.id}\n文案记录：${item.copy_entry_id} · v${copy.version ?? 1}\n创意组合：${creativeBriefLabel(brief)}\n主利益点：${brief.primary_benefit}${brief.benefit_value ? ` · ${brief.benefit_value}` : ""}\n市场资源包：${currentContext.market_pack_id}\n执行小队：${currentContext.squad_id}\n\n使用父 Issue 固定快照中的创意简报、文案和资源。主题控制视觉表达，主利益点控制信息层级；Leader 根据小队成员绑定的平台 skill 和当前证据动态委派，只把验收通过的三尺寸成图发布回父 Issue。`,
+          description: `父候选池：${issue.id}\n候选 ID：${candidate.id}\n文案记录：${item.copy_entry_id} · v${copy.version ?? 1}\n创意组合：${creativeBriefLabel(brief)}\n主利益点：${brief.primary_benefit}${brief.benefit_value ? ` · ${brief.benefit_value}` : ""}\n市场资源包：${currentContext.market_pack_id}\n执行小队：${currentContext.squad_id}\n修订：r${item.revision}\n\n交付契约：为本候选生成 V01、V02、V03 三个有明确视觉差异的创意变体；每个变体原生交付 1080x1080、1200x628、800x1000 三个尺寸，共 9 张最终成图。先并发生成三个 1080x1080 创意母版；每个母版通过后，立即以该母版为第一参考并发原生重排横版和竖版。尺寸不是变体，禁止由一个尺寸裁切、加边或拉伸得到另外两个尺寸。\n\n使用父 Issue 固定快照中的创意简报、文案和资源。主题控制视觉表达，主利益点控制信息层级；Leader 一次创建所有已满足依赖的专业子 issue，按变体隔离证据和返工，只把 3 个变体各自验收通过的三尺寸成图发布回父 Issue。`,
           parent_issue_id: issue.id,
           assignee_type: "squad",
           assignee_id: currentContext.squad_id,
@@ -308,7 +309,7 @@ export function CreativeMaterialPool({ issue }: { issue: Issue }) {
       });
       return targets.length;
     },
-    onSuccess: (count) => { refreshMaterials(); queryClient.invalidateQueries({ queryKey: issueKeys.children(wsId, issue.id) }); toast.success(`已按图片创建 ${count} 个 Leader 协作 Issue`); },
+    onSuccess: (count) => { refreshMaterials(); queryClient.invalidateQueries({ queryKey: issueKeys.children(wsId, issue.id) }); toast.success(`已创建 ${count} 套创意任务，每套将交付 3 个创意 × 3 个尺寸`); },
     onError: (error) => toast.error(error instanceof Error ? error.message : "无法开始修图"),
   });
 
@@ -323,7 +324,7 @@ export function CreativeMaterialPool({ issue }: { issue: Issue }) {
       </div>
       {candidatePoolExpanded && <div className="border-t">
         <div className="grid gap-3 border-b bg-muted/20 px-4 py-3 lg:grid-cols-[minmax(220px,1fr)_minmax(220px,1fr)_auto] lg:items-end"><Field label="市场资源包"><NativeSelect value={contextDraft.market_pack_id} onChange={(event) => setContextDraft({ ...contextDraft, market_pack_id: event.target.value })}><NativeSelectOption value="">选择已发布资源包</NativeSelectOption>{marketPacks.map((resource) => <NativeSelectOption key={resource.id} value={resource.id}>{resource.name} · v{resource.published_version}</NativeSelectOption>)}</NativeSelect></Field><Field label="执行小队"><NativeSelect value={contextDraft.squad_id} onChange={(event) => setContextDraft({ ...contextDraft, squad_id: event.target.value })}><NativeSelectOption value="">选择小队</NativeSelectOption>{(squads.data ?? []).map((squad) => <NativeSelectOption key={squad.id} value={squad.id}>{squad.name}</NativeSelectOption>)}</NativeSelect></Field><Button size="sm" onClick={() => saveContext.mutate()} disabled={saveContext.isPending || !contextDraft.market_pack_id || !contextDraft.squad_id}><Settings2 className="h-4 w-4" />{contextReady ? "更新快照" : "固定资源"}</Button></div>
-        {selectedCandidates.length > 0 && <div className="sticky top-0 z-10 flex flex-wrap items-center justify-between gap-3 border-b bg-background/95 px-4 py-3 shadow-sm backdrop-blur"><div><p className="text-sm font-medium">已选 {selectedCandidates.length} 张 · 已识别利益点 {briefReadyItems.length} 张 · 已定文案 {copyReadyItems.length} 张</p><p className="mt-0.5 text-xs text-muted-foreground">每张图独立保存“主题 × 主利益点”、文案和修图分支；采集信息不直接决定推荐。</p></div><div className="flex flex-wrap gap-2">{briefsToAnalyze.length > 0 && <Button size="sm" variant="outline" onClick={() => requestAnalysis.mutate(briefsToAnalyze)} disabled={requestAnalysis.isPending || !contextReady}><Sparkles className={cn("h-4 w-4", requestAnalysis.isPending && "animate-pulse")} />识别创意 ({briefsToAnalyze.length})</Button>}<Button size="sm" variant="outline" onClick={() => setCopyCandidateId(selectedCandidates.find((candidate) => !itemByCandidate.get(candidate.id)?.creative_brief.primary_benefit || !itemByCandidate.get(candidate.id)?.copy_entry_id)?.id ?? selectedCandidates[0]?.id ?? "")}><Settings2 className="h-4 w-4" />逐图配置</Button><Button size="sm" onClick={() => startCreative.mutate()} disabled={startCreative.isPending || !contextReady || readyItems.length !== selectedCandidates.length}>{startCreative.isPending ? "正在创建" : `开始修图 (${selectedCandidates.length})`}</Button></div></div>}
+        {selectedCandidates.length > 0 && <div className="sticky top-0 z-10 flex flex-wrap items-center justify-between gap-3 border-b bg-background/95 px-4 py-3 shadow-sm backdrop-blur"><div><p className="text-sm font-medium">已选 {selectedCandidates.length} 张 · 已识别利益点 {briefReadyItems.length} 张 · 已定文案 {copyReadyItems.length} 张</p><p className="mt-0.5 text-xs text-muted-foreground">每张图交付 3 个创意 × 3 个尺寸，预计 {expectedDeliveryCount} 张；文案与返工按素材和创意独立保存。</p></div><div className="flex flex-wrap gap-2">{briefsToAnalyze.length > 0 && <Button size="sm" variant="outline" onClick={() => requestAnalysis.mutate(briefsToAnalyze)} disabled={requestAnalysis.isPending || !contextReady}><Sparkles className={cn("h-4 w-4", requestAnalysis.isPending && "animate-pulse")} />识别创意 ({briefsToAnalyze.length})</Button>}<Button size="sm" variant="outline" onClick={() => setCopyCandidateId(selectedCandidates.find((candidate) => !itemByCandidate.get(candidate.id)?.creative_brief.primary_benefit || !itemByCandidate.get(candidate.id)?.copy_entry_id)?.id ?? selectedCandidates[0]?.id ?? "")}><Settings2 className="h-4 w-4" />逐图配置</Button><Button size="sm" onClick={() => startCreative.mutate()} disabled={startCreative.isPending || !contextReady || readyItems.length !== selectedCandidates.length}>{startCreative.isPending ? "正在创建" : `生成 ${selectedCandidates.length} 套创意`}</Button></div></div>}
         <div className="px-4 py-4"><div className="mb-3 flex flex-wrap items-center justify-between gap-3"><p className="text-xs text-muted-foreground">{latestCrawl ? `${latestCrawl.query_summary} · 新增 ${latestCrawl.imported_count}` : "等待真实采集、素材库导入或人工上传"}</p>{!candidateFilterEquals(filter, DEFAULT_FILTER) && <button type="button" className="inline-flex items-center gap-1 text-xs text-muted-foreground" onClick={() => setFilter(DEFAULT_FILTER)}><RotateCcw className="h-3.5 w-3.5" />显示全部</button>}</div><CandidateFilters candidates={candidates} filter={filter} onChange={setFilter} /><div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-3">{filteredCandidates.map((candidate) => <CandidateCard key={candidate.id} candidate={candidate} item={itemByCandidate.get(candidate.id)} busy={updateCandidate.isPending} onStatus={(status) => updateCandidate.mutate({ id: candidate.id, status })} onPreview={setPreviewItem} onCopy={() => setCopyCandidateId(candidate.id)} />)}</div>{filteredCandidates.length === 0 && <div className="mt-4 flex min-h-36 items-center justify-center border border-dashed text-sm text-muted-foreground">候选池暂无匹配素材</div>}</div>
       </div>}
     </div>
@@ -432,35 +433,302 @@ function CopyPickerDialog({ candidates, activeCandidateId, entries, items, benef
   </DialogContent></Dialog>;
 }
 
-function IssueResultBoard({ archiveName, assets, activeAsset, candidates, candidateByAttachment, expanded, onExpandedChange, onAssetChange, onPreview, onAdjust }: { archiveName: string; assets: CreativeDeliveryAsset[]; activeAsset?: CreativeDeliveryAsset; candidates: CreativeMaterialCandidate[]; candidateByAttachment: ReadonlyMap<string, string>; expanded: boolean; onExpandedChange: (expanded: boolean) => void; onAssetChange: (id: string) => void; onPreview: (item: MediaPreviewItem) => void; onAdjust: (target: CreativeAdjustmentTarget) => void }) {
+function IssueResultBoard({
+  archiveName,
+  assets,
+  activeAsset,
+  candidates,
+  candidateByAttachment,
+  expanded,
+  onExpandedChange,
+  onAssetChange,
+  onPreview,
+  onAdjust,
+}: {
+  archiveName: string;
+  assets: CreativeDeliveryAsset[];
+  activeAsset?: CreativeDeliveryAsset;
+  candidates: CreativeMaterialCandidate[];
+  candidateByAttachment: ReadonlyMap<string, string>;
+  expanded: boolean;
+  onExpandedChange: (expanded: boolean) => void;
+  onAssetChange: (id: string) => void;
+  onPreview: (item: MediaPreviewItem) => void;
+  onAdjust: (target: CreativeAdjustmentTarget) => void;
+}) {
   const [downloading, setDownloading] = useState<"all" | "group" | "">("");
   const groups = groupCreativeDeliveries(assets);
   const latestAssets = groups.flatMap((group) => group.assets);
-  const activeGroup = groups.find((group) => group.assets.some((asset) => asset.id === activeAsset?.id)) ?? groups[0];
+  const activeGroup =
+    groups.find((group) =>
+      group.assets.some((asset) => asset.id === activeAsset?.id),
+    ) ?? groups[0];
   const groupAssets = activeGroup?.assets ?? [];
-  const currentAsset = groupAssets.find((asset) => asset.id === activeAsset?.id) ?? groupAssets[0];
-  const candidateId = activeGroup ? candidateIdForResultGroup(activeGroup, candidateByAttachment, candidates) : "";
-  const sourceCandidate = candidates.find((candidate) => candidate.id === candidateId);
-  const sourceURL = sourceCandidate ? firstNonEmpty(sourceCandidate.archived_url, sourceCandidate.preview_url, sourceCandidate.poster_url, sourceCandidate.resource_url) : "";
-  const previewResult = () => currentAsset && onPreview({ url: currentAsset.markdown_url || currentAsset.url, title: currentAsset.filename, assetType: "image", openUrl: currentAsset.download_url || currentAsset.url });
-  const previewSource = () => sourceCandidate && onPreview({ url: sourceURL, posterUrl: sourceCandidate.poster_url, title: sourceCandidate.title || sourceCandidate.competitor || "原始素材", subtitle: sourceCandidate.competitor, assetType: sourceCandidate.asset_type, openUrl: firstNonEmpty(sourceCandidate.original_url, sourceCandidate.resource_url) });
+  const currentAsset =
+    groupAssets.find((asset) => asset.id === activeAsset?.id) ?? groupAssets[0];
+  const candidateId = activeGroup
+    ? candidateIdForResultGroup(activeGroup, candidateByAttachment, candidates)
+    : "";
+  const sourceCandidate = candidates.find(
+    (candidate) => candidate.id === candidateId,
+  );
+  const sourceURL = sourceCandidate
+    ? firstNonEmpty(
+        sourceCandidate.archived_url,
+        sourceCandidate.preview_url,
+        sourceCandidate.poster_url,
+        sourceCandidate.resource_url,
+      )
+    : "";
+  const previewResult = () =>
+    currentAsset &&
+    onPreview({
+      url: currentAsset.markdown_url || currentAsset.url,
+      title: currentAsset.filename,
+      assetType: "image",
+      openUrl: currentAsset.download_url || currentAsset.url,
+    });
+  const previewSource = () =>
+    sourceCandidate &&
+    onPreview({
+      url: sourceURL,
+      posterUrl: sourceCandidate.poster_url,
+      title: sourceCandidate.title || sourceCandidate.competitor || "原始素材",
+      subtitle: sourceCandidate.competitor,
+      assetType: sourceCandidate.asset_type,
+      openUrl: firstNonEmpty(
+        sourceCandidate.original_url,
+        sourceCandidate.resource_url,
+      ),
+    });
   const downloadZip = async (scope: "all" | "group") => {
     setDownloading(scope);
     try {
-      if (scope === "all") await downloadCreativeZip(groups.flatMap((group) => group.assets.map((asset) => ({ ...asset, folder: group.label }))), archiveName);
-      else if (activeGroup) await downloadCreativeZip(activeGroup.assets.map((asset) => ({ ...asset, folder: activeGroup.label })), `${archiveName}-${activeGroup.label}`);
+      if (scope === "all")
+        await downloadCreativeZip(
+          groups.flatMap((group) =>
+            group.assets.map((asset) => ({ ...asset, folder: group.label })),
+          ),
+          archiveName,
+        );
+      else if (activeGroup)
+        await downloadCreativeZip(
+          activeGroup.assets.map((asset) => ({
+            ...asset,
+            folder: activeGroup.label,
+          })),
+          `${archiveName}-${activeGroup.label}`,
+        );
     } finally {
       setDownloading("");
     }
   };
-  return <div className="border bg-background"><div className={cn("flex flex-wrap items-center justify-between gap-3 px-4 py-3", expanded && "border-b")}><button type="button" className="flex min-w-0 flex-1 items-center gap-2 text-left" onClick={() => onExpandedChange(!expanded)}><ChevronRight className={cn("h-4 w-4 text-muted-foreground transition-transform", expanded && "rotate-90")} /><span className="text-sm font-semibold">修图结果看板</span><Badge variant="outline">{groups.length} 张创意</Badge><Badge variant="outline">{latestAssets.length} 个最新尺寸</Badge></button>{currentAsset && <div className="flex flex-wrap gap-2"><Button size="sm" variant="outline" disabled={Boolean(downloading)} onClick={() => void downloadZip("all")}><Package className="h-4 w-4" />{downloading === "all" ? "打包中" : "下载全部 ZIP"}</Button><Button size="icon-sm" variant="outline" title="下载当前尺寸" onClick={() => void downloadCreativeAssets([currentAsset])}><Download className="h-4 w-4" /></Button><Button size="sm" variant="outline" disabled={Boolean(downloading)} onClick={() => void downloadZip("group")}><Download className="h-4 w-4" />{downloading === "group" ? "打包中" : "本创意 ZIP"}</Button>{candidateId && <Button size="sm" variant="outline" onClick={() => onAdjust({ candidateId, asset: currentAsset, groupAssets })}>调整这张图</Button>}</div>}</div>{expanded && (assets.length ? <div className="grid min-h-80 lg:grid-cols-[240px_minmax(0,1fr)]"><div className="border-r">{groups.map((group) => { const groupCandidateId = candidateIdForResultGroup(group, candidateByAttachment, candidates); const groupCandidate = candidates.find((candidate) => candidate.id === groupCandidateId); return <button key={group.key} type="button" className={cn("block w-full border-b px-3 py-3 text-left", group.key === activeGroup?.key && "bg-muted/50 shadow-[inset_2px_0_0_hsl(var(--primary))]")} onClick={() => onAssetChange(group.assets[0]?.id ?? "")}><p className="truncate text-sm font-medium">{groupCandidate?.title || group.label}</p><p className="mt-1 truncate text-xs text-muted-foreground">{groupCandidate?.competitor || `${group.assets.length} 个尺寸`}</p></button>; })}</div><div className="min-w-0"><div className="flex gap-2 overflow-x-auto border-b p-3">{groupAssets.map((asset) => <button key={asset.id} type="button" className={cn("shrink-0 border px-3 py-2 text-xs", asset.id === currentAsset?.id && "border-emerald-600 bg-emerald-600/5")} onClick={() => onAssetChange(asset.id)}><span className="font-semibold">{creativeDeliveryInfo(asset.filename)?.size}</span><span className="ml-2 text-muted-foreground">通过</span></button>)}</div><div className={cn("grid min-h-[420px]", sourceCandidate && sourceURL ? "md:grid-cols-2" : "grid-cols-1")}>{sourceCandidate && sourceURL && <button type="button" className="grid min-h-0 grid-rows-[auto_minmax(0,1fr)] border-r text-left" onClick={previewSource}><span className="border-b bg-muted/30 px-4 py-2 text-xs font-medium">原始素材</span><span className="flex h-[min(58vh,620px)] items-center justify-center bg-muted/15 p-4"><MediaPreview url={sourceURL} posterUrl={sourceCandidate.poster_url} alt={sourceCandidate.title || sourceCandidate.competitor} assetType={sourceCandidate.asset_type} compact /></span></button>}<button type="button" className="grid min-h-0 grid-rows-[auto_minmax(0,1fr)] text-left" onClick={previewResult}><span className="border-b bg-muted/30 px-4 py-2 text-xs font-medium">修图结果 · {creativeDeliveryInfo(currentAsset?.filename ?? "")?.size}</span><span className="flex h-[min(58vh,620px)] items-center justify-center bg-muted/15 p-4">{currentAsset && <MediaPreview url={currentAsset.markdown_url || currentAsset.url} alt={currentAsset.filename} compact />}</span></button></div><div className="border-t px-4 py-3"><p className="break-all text-sm font-medium">{currentAsset?.filename}</p></div></div></div> : <div className="flex min-h-48 items-center justify-center text-sm text-muted-foreground">Leader 发布验收通过的成图后会显示在这里</div>)}</div>;
+  return (
+    <div className="border bg-background">
+      <div
+        className={cn(
+          "flex flex-wrap items-center justify-between gap-3 px-4 py-3",
+          expanded && "border-b",
+        )}
+      >
+        <button
+          type="button"
+          className="flex min-w-0 flex-1 items-center gap-2 text-left"
+          onClick={() => onExpandedChange(!expanded)}
+        >
+          <ChevronRight
+            className={cn(
+              "h-4 w-4 text-muted-foreground transition-transform",
+              expanded && "rotate-90",
+            )}
+          />
+          <span className="text-sm font-semibold">修图结果看板</span>
+          <Badge variant="outline">{groups.length} 张创意</Badge>
+          <Badge variant="outline">{latestAssets.length} 个最新尺寸</Badge>
+        </button>
+        {currentAsset && (
+          <div className="flex flex-wrap gap-2">
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={Boolean(downloading)}
+              onClick={() => void downloadZip("all")}
+            >
+              <Package className="h-4 w-4" />
+              {downloading === "all" ? "打包中" : "下载全部 ZIP"}
+            </Button>
+            <Button
+              size="icon-sm"
+              variant="outline"
+              title="下载当前尺寸"
+              onClick={() => void downloadCreativeAssets([currentAsset])}
+            >
+              <Download className="h-4 w-4" />
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={Boolean(downloading)}
+              onClick={() => void downloadZip("group")}
+            >
+              <Download className="h-4 w-4" />
+              {downloading === "group" ? "打包中" : "本创意 ZIP"}
+            </Button>
+            {candidateId && (
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() =>
+                  onAdjust({
+                    candidateId,
+                    asset: currentAsset,
+                    groupAssets,
+                    variant: activeGroup?.variant ?? null,
+                  })
+                }
+              >
+                调整当前创意
+              </Button>
+            )}
+          </div>
+        )}
+      </div>
+      {expanded &&
+        (assets.length ? (
+          <div className="grid min-h-80 lg:grid-cols-[240px_minmax(0,1fr)]">
+            <div className="border-r">
+              {groups.map((group) => {
+                const groupCandidateId = candidateIdForResultGroup(
+                  group,
+                  candidateByAttachment,
+                  candidates,
+                );
+                const groupCandidate = candidates.find(
+                  (candidate) => candidate.id === groupCandidateId,
+                );
+                return (
+                  <button
+                    key={group.key}
+                    type="button"
+                    className={cn(
+                      "block w-full border-b px-3 py-3 text-left",
+                      group.key === activeGroup?.key &&
+                        "bg-muted/50 shadow-[inset_2px_0_0_hsl(var(--primary))]",
+                    )}
+                    onClick={() => onAssetChange(group.assets[0]?.id ?? "")}
+                  >
+                    <p className="truncate text-sm font-medium">
+                      {group.variant
+                        ? `创意 ${group.variant} · V${String(group.variant).padStart(2, "0")}`
+                        : groupCandidate?.title || group.label}
+                    </p>
+                    <p className="mt-1 truncate text-xs text-muted-foreground">
+                      {group.variant
+                        ? groupCandidate?.title ||
+                          groupCandidate?.competitor ||
+                          `${group.assets.length} 个尺寸`
+                        : groupCandidate?.competitor ||
+                          `${group.assets.length} 个尺寸`}
+                    </p>
+                  </button>
+                );
+              })}
+            </div>
+            <div className="min-w-0">
+              <div className="flex gap-2 overflow-x-auto border-b p-3">
+                {groupAssets.map((asset) => (
+                  <button
+                    key={asset.id}
+                    type="button"
+                    className={cn(
+                      "shrink-0 border px-3 py-2 text-xs",
+                      asset.id === currentAsset?.id &&
+                        "border-emerald-600 bg-emerald-600/5",
+                    )}
+                    onClick={() => onAssetChange(asset.id)}
+                  >
+                    <span className="font-semibold">
+                      {creativeDeliveryInfo(asset.filename)?.size}
+                    </span>
+                    <span className="ml-2 text-muted-foreground">通过</span>
+                  </button>
+                ))}
+              </div>
+              <div
+                className={cn(
+                  "grid min-h-[420px]",
+                  sourceCandidate && sourceURL
+                    ? "md:grid-cols-2"
+                    : "grid-cols-1",
+                )}
+              >
+                {sourceCandidate && sourceURL && (
+                  <button
+                    type="button"
+                    className="grid min-h-0 grid-rows-[auto_minmax(0,1fr)] border-r text-left"
+                    onClick={previewSource}
+                  >
+                    <span className="border-b bg-muted/30 px-4 py-2 text-xs font-medium">
+                      原始素材
+                    </span>
+                    <span className="flex h-[min(58vh,620px)] items-center justify-center bg-muted/15 p-4">
+                      <MediaPreview
+                        url={sourceURL}
+                        posterUrl={sourceCandidate.poster_url}
+                        alt={
+                          sourceCandidate.title || sourceCandidate.competitor
+                        }
+                        assetType={sourceCandidate.asset_type}
+                        compact
+                      />
+                    </span>
+                  </button>
+                )}
+                <button
+                  type="button"
+                  className="grid min-h-0 grid-rows-[auto_minmax(0,1fr)] text-left"
+                  onClick={previewResult}
+                >
+                  <span className="border-b bg-muted/30 px-4 py-2 text-xs font-medium">
+                    修图结果
+                    {activeGroup?.variant ? ` · 创意 ${activeGroup.variant}` : ""} ·{" "}
+                    {creativeDeliveryInfo(currentAsset?.filename ?? "")?.size}
+                  </span>
+                  <span className="flex h-[min(58vh,620px)] items-center justify-center bg-muted/15 p-4">
+                    {currentAsset && (
+                      <MediaPreview
+                        url={currentAsset.markdown_url || currentAsset.url}
+                        alt={currentAsset.filename}
+                        compact
+                      />
+                    )}
+                  </span>
+                </button>
+              </div>
+              <div className="border-t px-4 py-3">
+                <p className="break-all text-sm font-medium">
+                  {currentAsset?.filename}
+                </p>
+              </div>
+            </div>
+          </div>
+        ) : (
+          <div className="flex min-h-48 items-center justify-center text-sm text-muted-foreground">
+            Leader 发布验收通过的成图后会显示在这里
+          </div>
+        ))}
+    </div>
+  );
 }
 
 function AdjustmentDialog({ open, onOpenChange, candidates, target, context, items, busy, onCreated }: { open: boolean; onOpenChange: (open: boolean) => void; candidates: CreativeMaterialCandidate[]; target: CreativeAdjustmentTarget | null; context: { squad_id: string } | null | undefined; items: CreativeIssueItem[]; busy: boolean; onCreated: () => void }) {
   const [text, setText] = useState("");
   const [scope, setScope] = useState<"current" | "all">("current");
   const candidate = candidates.find((value) => value.id === target?.candidateId);
-  const currentSize = creativeDeliveryInfo(target?.asset.filename ?? "")?.size ?? "当前尺寸";
+  const currentDelivery = creativeDeliveryInfo(target?.asset.filename ?? "");
+  const currentSize = currentDelivery?.size ?? "当前尺寸";
+  const currentVariant = target?.variant ?? (currentDelivery ? creativeVariantBranch(currentDelivery.branch).variant : null);
+  const variantLabel = currentVariant ? `创意 ${currentVariant}` : "当前创意";
   const sourceURL = candidate ? firstNonEmpty(candidate.archived_url, candidate.preview_url, candidate.poster_url, candidate.resource_url) : "";
   useEffect(() => { if (open) { setText(""); setScope("current"); } }, [open, target?.asset.id]);
   const create = useMutation({ mutationFn: async () => {
@@ -469,8 +737,8 @@ function AdjustmentDialog({ open, onOpenChange, candidates, target, context, ite
     if (!context?.squad_id || !item?.work_issue_id) throw new Error("该图尚未建立协作 Issue");
     const affected = scope === "current" ? [target.asset] : target.groupAssets;
     return api.createIssue({
-      title: `用户调整 · ${scope === "current" ? currentSize : "三尺寸"} · r${item.revision + 1}`,
-      description: `候选 ID：${target.candidateId}\n原创意工作 Issue：${item.work_issue_id}\n调整范围：${scope === "current" ? `仅 ${currentSize}` : "整组三尺寸"}\n基准成图附件：${target.asset.id} · ${target.asset.filename}\n受影响附件：\n${affected.map((asset) => `- ${asset.id} · ${asset.filename}`).join("\n")}\n\n用户反馈：\n${text}\n\nLeader 读取当前成图和历史通过证据，只委派受影响的尺寸与专业步骤。未受影响尺寸沿用已通过附件，不重新生成。`,
+      title: `用户调整 · ${variantLabel} · ${scope === "current" ? currentSize : "三尺寸"} · r${item.revision + 1}`,
+      description: `候选 ID：${target.candidateId}\n原创意工作 Issue：${item.work_issue_id}\n目标创意：${variantLabel}${currentVariant ? ` · V0${currentVariant}` : ""}\n调整范围：${scope === "current" ? `仅 ${currentSize}` : "整组三尺寸"}\n基准成图附件：${target.asset.id} · ${target.asset.filename}\n受影响附件：\n${affected.map((asset) => `- ${asset.id} · ${asset.filename}`).join("\n")}\n\n用户反馈：\n${text}\n\nLeader 读取当前成图和历史通过证据，只委派目标创意中受影响的尺寸与专业步骤。其他创意和未受影响尺寸沿用已通过附件，不重新生成。`,
       parent_issue_id: item.work_issue_id,
       assignee_type: "squad",
       assignee_id: context.squad_id,
@@ -579,13 +847,16 @@ export function creativeDeliveryInfo(filename: string) {
 
 export function isCreativeDeliveryFilename(filename: string) { return creativeDeliveryInfo(filename) !== null; }
 export function groupCreativeDeliveries<T extends { id: string; filename: string }>(assets: T[]) {
-  const groups = new Map<string, { key: string; label: string; bySize: Map<string, { asset: T; revision: number }> }>();
+  const groups = new Map<string, { key: string; label: string; setKey: string; variant: number | null; bySize: Map<string, { asset: T; revision: number }> }>();
   for (const asset of assets) {
     const info = creativeDeliveryInfo(asset.filename);
     if (!info) continue;
+    const variantInfo = creativeVariantBranch(info.branch);
     const group = groups.get(info.branch) ?? {
       key: info.branch,
       label: info.branch === "current" ? "本轮交付" : info.branch,
+      setKey: variantInfo.setKey,
+      variant: variantInfo.variant,
       bySize: new Map<string, { asset: T; revision: number }>(),
     };
     const revision = info.revision ?? 0;
@@ -598,10 +869,19 @@ export function groupCreativeDeliveries<T extends { id: string; filename: string
   return [...groups.values()].map((group) => ({
     key: group.key,
     label: group.label,
+    setKey: group.setKey,
+    variant: group.variant,
     assets: [...group.bySize.values()].map(({ asset }) => asset).sort((left, right) => (
       creativeDeliveryInfo(left.filename)?.size ?? ""
     ).localeCompare(creativeDeliveryInfo(right.filename)?.size ?? "")),
   }));
+}
+
+function creativeVariantBranch(branch: string) {
+  const match = branch.match(/^(.+)_V(\d{2})$/i);
+  return match?.[1] && match[2]
+    ? { setKey: match[1], variant: Number(match[2]) }
+    : { setKey: branch, variant: null };
 }
 async function downloadCreativeAssets(assets: { filename: string; download_url?: string | null; url: string }[]) { try { for (const asset of assets) { const response = await fetch(asset.download_url || asset.url, { credentials: "include" }); if (!response.ok) throw new Error(asset.filename); const href = URL.createObjectURL(await response.blob()); const anchor = document.createElement("a"); anchor.href = href; anchor.download = asset.filename; document.body.appendChild(anchor); anchor.click(); anchor.remove(); URL.revokeObjectURL(href); } } catch { toast.error("下载交付图失败，请稍后重试"); } }
 

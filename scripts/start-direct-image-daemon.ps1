@@ -2,8 +2,8 @@ param(
     [Parameter(Mandatory = $false)]
     [SecureString]$ImageApiKey,
 
-    [ValidateRange(1, 8)]
-    [int]$MaxConcurrentTasks = 3
+    [ValidateRange(5, 12)]
+    [int]$MaxConcurrentTasks = 8
 )
 
 $ErrorActionPreference = 'Stop'
