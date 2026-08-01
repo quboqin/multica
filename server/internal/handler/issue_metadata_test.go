@@ -245,6 +245,35 @@ func TestNewIssueDefaultsToEmptyMetadata(t *testing.T) {
 	}
 }
 
+func TestCreateIssuePersistsMetadataBeforeAssignment(t *testing.T) {
+	w := httptest.NewRecorder()
+	req := newRequest("POST", "/api/issues?workspace_id="+testWorkspaceID, map[string]any{
+		"title":    "Adjustment with metadata",
+		"status":   "backlog",
+		"priority": "medium",
+		"metadata": map[string]any{
+			"workflow":          "creative_adjustment",
+			"creative_variant":  2,
+			"creative_scope":    "size",
+			"creative_revision": 4,
+		},
+	})
+	testHandler.CreateIssue(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("CreateIssue: expected 201, got %d: %s", w.Code, w.Body.String())
+	}
+	var issue IssueResponse
+	if err := json.NewDecoder(w.Body).Decode(&issue); err != nil {
+		t.Fatal(err)
+	}
+	if issue.Metadata["workflow"] != "creative_adjustment" || issue.Metadata["creative_scope"] != "size" {
+		t.Fatalf("metadata not returned atomically: %#v", issue.Metadata)
+	}
+	if issue.Metadata["creative_revision"] != float64(4) {
+		t.Fatalf("creative_revision = %#v", issue.Metadata["creative_revision"])
+	}
+}
+
 func createMetadataTestIssue(t *testing.T, title string) string {
 	t.Helper()
 	w := httptest.NewRecorder()

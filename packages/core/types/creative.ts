@@ -69,6 +69,74 @@ export interface CreativeMaterialsResponse {
   crawl_runs: CreativeMaterialCrawlRun[];
   context: CreativeIssueContext | null;
   items: CreativeIssueItem[];
+  deliveries: CreativeDelivery[];
+  adjustments: CreativeAdjustmentRequest[];
+}
+
+export type CreativeDeliverySize = "1080x1080" | "1200x628" | "800x1000";
+
+export interface CreativeDelivery {
+  id: string;
+  issue_id: string;
+  candidate_id: string;
+  work_issue_id: string;
+  variant: number;
+  size: CreativeDeliverySize;
+  revision: number;
+  base_attachment_id: string;
+  final_attachment_id: string;
+  prime_evidence_attachment_id: string;
+  qc_issue_id: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CreativeAdjustmentRequest {
+  id: string;
+  issue_id: string;
+  candidate_id: string;
+  work_issue_id: string;
+  adjustment_issue_id: string;
+  variant: number;
+  scope: "size" | "variant";
+  size: CreativeDeliverySize | "";
+  revision: number;
+  instruction: string;
+  target_attachment_ids: string[];
+  base_attachment_ids: string[];
+  status: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export type RegisterCreativeDeliveryInput = Pick<
+  CreativeDelivery,
+  | "candidate_id"
+  | "work_issue_id"
+  | "variant"
+  | "size"
+  | "revision"
+  | "base_attachment_id"
+  | "final_attachment_id"
+  | "prime_evidence_attachment_id"
+  | "qc_issue_id"
+>;
+
+export interface RegisterCreativeDeliveriesRequest {
+  deliveries: RegisterCreativeDeliveryInput[];
+}
+
+export interface RegisterCreativeDeliveriesResponse {
+  deliveries: CreativeDelivery[];
+}
+
+export interface CreateCreativeAdjustmentRequest {
+  variant: number;
+  scope: "size" | "variant";
+  size?: CreativeDeliverySize;
+  instruction: string;
+  target_attachment_ids: string[];
+  base_attachment_ids: string[];
 }
 
 export type CreativeResourceKind = "copy_library" | "market_pack";

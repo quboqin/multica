@@ -17,6 +17,8 @@ import type {
   CreativeCopyEntry,
   CreativeCopyEntryListResponse,
   CreativeCopyImportResult,
+	CreativeAdjustmentRequest,
+	CreativeDelivery,
   CreativeImportSummary,
   CreativeIssueContext,
   CreativeIssueItem,
@@ -471,6 +473,56 @@ export const CreativeIssueItemSchema = z.object({
   updated_at: z.string().default(""),
 }).loose();
 
+export const CreativeDeliverySchema = z.object({
+  id: z.string().default(""),
+  issue_id: z.string().default(""),
+  candidate_id: z.string().default(""),
+  work_issue_id: z.string().default(""),
+  variant: z.number().int().min(1).max(3),
+  size: z.enum(["1080x1080", "1200x628", "800x1000"]),
+  revision: z.number().int().positive(),
+  base_attachment_id: z.string().default(""),
+  final_attachment_id: z.string().default(""),
+  prime_evidence_attachment_id: z.string().default(""),
+  qc_issue_id: z.string().default(""),
+  created_at: z.string().default(""),
+  updated_at: z.string().default(""),
+}).loose();
+
+export const CreativeAdjustmentRequestSchema = z.object({
+  id: z.string().default(""),
+  issue_id: z.string().default(""),
+  candidate_id: z.string().default(""),
+  work_issue_id: z.string().default(""),
+  adjustment_issue_id: z.string().default(""),
+  variant: z.number().int().min(1).max(3),
+  scope: z.enum(["size", "variant"]),
+  size: z.union([z.enum(["1080x1080", "1200x628", "800x1000"]), z.literal("")]),
+  revision: z.number().int().positive(),
+  instruction: z.string().default(""),
+  target_attachment_ids: z.array(z.string()).default([]),
+  base_attachment_ids: z.array(z.string()).default([]),
+  status: z.string().default("pending"),
+  created_at: z.string().default(""),
+  updated_at: z.string().default(""),
+}).loose();
+
+export const RegisterCreativeDeliveriesResponseSchema = z.object({
+  deliveries: z.array(CreativeDeliverySchema).default([]),
+}).loose();
+
+export const EMPTY_CREATIVE_DELIVERY: CreativeDelivery = {
+  id: "", issue_id: "", candidate_id: "", work_issue_id: "", variant: 1,
+  size: "1080x1080", revision: 1, base_attachment_id: "", final_attachment_id: "",
+  prime_evidence_attachment_id: "", qc_issue_id: "", created_at: "", updated_at: "",
+};
+
+export const EMPTY_CREATIVE_ADJUSTMENT_REQUEST: CreativeAdjustmentRequest = {
+  id: "", issue_id: "", candidate_id: "", work_issue_id: "", adjustment_issue_id: "",
+  variant: 1, scope: "size", size: "1080x1080", revision: 1, instruction: "",
+  target_attachment_ids: [], base_attachment_ids: [], status: "pending", created_at: "", updated_at: "",
+};
+
 export const CreativeMaterialsResponseSchema = z.object({
   enabled: z.boolean().default(false),
   summary: CreativeMaterialSummarySchema.default({
@@ -487,6 +539,8 @@ export const CreativeMaterialsResponseSchema = z.object({
   crawl_runs: z.array(CreativeMaterialCrawlRunSchema).default([]),
   context: CreativeIssueContextSchema.nullable().optional().transform((value) => value ?? null),
   items: z.array(CreativeIssueItemSchema).default([]),
+	deliveries: z.array(CreativeDeliverySchema).default([]),
+	adjustments: z.array(CreativeAdjustmentRequestSchema).default([]),
 }).loose();
 
 export const EMPTY_CREATIVE_MATERIALS_RESPONSE: CreativeMaterialsResponse = {
@@ -505,6 +559,8 @@ export const EMPTY_CREATIVE_MATERIALS_RESPONSE: CreativeMaterialsResponse = {
   crawl_runs: [],
   context: null,
   items: [],
+	deliveries: [],
+	adjustments: [],
 };
 
 export const CreativeResourceSchema = z.object({

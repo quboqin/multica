@@ -11,6 +11,11 @@ allowed-tools: Bash(multica *), Bash(python *)
 快照；当前运行时只挂载本 Skill 及其 `references/`，不要查找其他 Skill 的本地文件。
 不要分析竞品、编写提示词、执行 Prime 包装或做最终验收。
 
+精准返工任务必须读取上层返工 Issue 的结构化 metadata。只生成指定的一个尺寸；输入中把
+`creative_base_attachment_ids` 对应的上一版无品牌底图放在第一位，并把用户反馈写成局部修改
+要求。带 Prime、Logo、条款、商店徽章和二维码的最终成图只能用于视觉对照，不能作为第一图像
+输入，也不能让模型重画这些确定性资产。
+
 ## 1. 读取 Issue 与生成规格
 
 先读取当前 Issue 及全部评论，只能使用人工选中的素材：

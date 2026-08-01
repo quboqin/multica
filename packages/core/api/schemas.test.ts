@@ -127,6 +127,29 @@ describe("creative material schemas", () => {
 
     expect(parsed.candidates[0]?.archived_url).toBe("");
     expect(parsed.candidates[0]?.archive_status).toBe("pending");
+		expect(parsed.deliveries).toEqual([]);
+		expect(parsed.adjustments).toEqual([]);
+  });
+
+  it("preserves structured deliveries and adjustment requests", () => {
+    const parsed = CreativeMaterialsResponseSchema.parse({
+      enabled: true,
+      deliveries: [{
+        variant: 2,
+        size: "1200x628",
+        revision: 3,
+        final_attachment_id: "final-1",
+      }],
+      adjustments: [{
+        variant: 2,
+        scope: "size",
+        size: "1200x628",
+        revision: 4,
+        target_attachment_ids: ["final-1"],
+      }],
+    });
+    expect(parsed.deliveries[0]?.final_attachment_id).toBe("final-1");
+    expect(parsed.adjustments[0]?.scope).toBe("size");
   });
 
   it("keeps platform resources renderable when optional fields are absent", () => {

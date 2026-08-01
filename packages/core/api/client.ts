@@ -132,6 +132,10 @@ import type {
   BillingCheckoutSessionStatus,
   CreateBillingPortalSessionResponse,
   CreativeImportSummary,
+	CreativeAdjustmentRequest,
+	CreateCreativeAdjustmentRequest,
+	RegisterCreativeDeliveriesRequest,
+	RegisterCreativeDeliveriesResponse,
   CreativeCopyEntry,
   CreativeCopyEntryInput,
   CreativeCopyEntryListResponse,
@@ -267,6 +271,9 @@ import {
   CreativeCopyImportResultSchema,
   CreativeIssueContextSchema,
   CreativeIssueItemSchema,
+	CreativeAdjustmentRequestSchema,
+	EMPTY_CREATIVE_ADJUSTMENT_REQUEST,
+	RegisterCreativeDeliveriesResponseSchema,
   CreativeMaterialLibrarySchema,
   CreativeMaterialImportResultSchema,
   CreativeMaterialsResponseSchema,
@@ -2760,6 +2767,48 @@ export class ApiClient {
     });
     return parseWithFallback(raw, CreativeIssueItemSchema, EMPTY_CREATIVE_ISSUE_ITEM, {
       endpoint: "PUT /api/issues/:id/creative-materials/:candidateId/work-issue",
+    });
+  }
+
+  async registerCreativeDeliveries(
+    issueId: string,
+    data: RegisterCreativeDeliveriesRequest,
+  ): Promise<RegisterCreativeDeliveriesResponse> {
+    const raw = await this.fetch<unknown>(`/api/issues/${issueId}/creative-deliveries/register`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+    return parseWithFallback(raw, RegisterCreativeDeliveriesResponseSchema, { deliveries: [] }, {
+      endpoint: "POST /api/issues/:id/creative-deliveries/register",
+    });
+  }
+
+  async createCreativeAdjustment(
+    issueId: string,
+    candidateId: string,
+    data: CreateCreativeAdjustmentRequest,
+  ): Promise<CreativeAdjustmentRequest> {
+    const raw = await this.fetch<unknown>(
+      `/api/issues/${issueId}/creative-materials/${candidateId}/adjustments`,
+      { method: "POST", body: JSON.stringify(data) },
+    );
+    return parseWithFallback(raw, CreativeAdjustmentRequestSchema, EMPTY_CREATIVE_ADJUSTMENT_REQUEST, {
+      endpoint: "POST /api/issues/:id/creative-materials/:candidateId/adjustments",
+    });
+  }
+
+  async bindCreativeAdjustmentIssue(
+    issueId: string,
+    candidateId: string,
+    adjustmentId: string,
+    adjustmentIssueId: string,
+  ): Promise<CreativeAdjustmentRequest> {
+    const raw = await this.fetch<unknown>(
+      `/api/issues/${issueId}/creative-materials/${candidateId}/adjustments/${adjustmentId}/issue`,
+      { method: "PUT", body: JSON.stringify({ adjustment_issue_id: adjustmentIssueId }) },
+    );
+    return parseWithFallback(raw, CreativeAdjustmentRequestSchema, EMPTY_CREATIVE_ADJUSTMENT_REQUEST, {
+      endpoint: "PUT /api/issues/:id/creative-materials/:candidateId/adjustments/:adjustmentId/issue",
     });
   }
 

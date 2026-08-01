@@ -16,6 +16,7 @@ export interface CreateIssueRequest {
   start_date?: string;
   due_date?: string;
   attachment_ids?: string[];
+	metadata?: IssueMetadata;
 }
 
 export interface UpdateIssueRequest {

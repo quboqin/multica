@@ -825,3 +825,42 @@ ADC-140 创意工作
 首次现场查询附件命令。平台新增 `multica issue children <issue-id>` 直接子项命令；Leader Skill
 固定使用该命令，Prime/QC Skill 固定并行执行 `multica attachment download`。后续性能验收以本次
 61 分 9 秒为新基线，重点继续压缩图片智能体调用前后准备时间和同一父 Issue 的无动作唤醒。
+
+## 22. 结果看板来源映射与局部返工（2026-08-02）
+
+### 22.1 平台数据能力
+
+迁移 252 增加 `creative_delivery` 和 `creative_adjustment_request`。前者持久化每张最终成图的
+候选来源、原创意工作 Issue、变体、尺寸、修订、无品牌底图、Prime 包装证据和 QC Issue；后者
+记录用户选择的返工范围、精确目标附件、基准附件、反馈文字及调整子 Issue。
+
+新增平台接口和 CLI：
+
+- 注册交付清单：`multica creative delivery register <issue-id> --input-file <manifest.json>`；
+- 创建单尺寸或整变体调整请求，并把调整子 Issue 绑定回请求；
+- Issue 创建请求支持扁平基础类型 metadata，在事务提交和智能体入队前完成持久化。
+
+这使任务分派所需的目标范围在智能体第一次启动时就已确定，不再依赖创建后补写描述或评论。
+
+### 22.2 页面交互
+
+结果看板优先读取结构化交付记录，并保留旧文件名解析作为历史兼容。每个创意组展示对应竞品
+原图和三个当前尺寸；“调整当前创意”弹窗同时展示竞品原图与当前成图，允许选择“仅当前尺寸”
+或“当前创意三尺寸”。调整完成后新修订替换当前展示，旧附件不覆盖、不删除。
+
+### 22.3 Skill 契约
+
+Leader Skill v8 识别 `creative_adjustment` metadata，只委派受影响范围；图像编辑 Skill v3 以
+上一修订的无品牌底图为第一输入，不把带 Prime 的最终图作为模型编辑底图；Prime 与 QC Skill
+v3 同时支持一张和三张的局部处理。Leader 发布成功后必须登记交付清单，平台页面不再依赖自然
+语言评论建立来源关系。
+
+### 22.4 验证与部署
+
+- 本地 API 镜像升级为 `localhost/multica-direct-backend:creative-platform-v9`，迁移 252 已应用，
+  `/readyz` 的数据库和迁移均为 `ok`。
+- `direct-image2` daemon 使用新 CLI 运行，总并发仍为 8；图像编辑智能体并发仍为 5。
+- `ADC-135` 已登记 9 条 R4 交付记录，精确覆盖 3 个变体和 3 个尺寸；父 Issue 仍有 10 条真实
+  AppGrowing 候选。
+- Core schema 测试 37/37、结果文件名与历史兼容测试 7/7 通过；Core/Views TypeScript 检查通过；
+  Go 接口、Issue metadata 和真实数据库集成测试通过；四个相关 Skill 通过快速校验。

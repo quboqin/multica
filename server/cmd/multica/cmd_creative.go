@@ -46,6 +46,18 @@ var creativeMaterialCmd = &cobra.Command{
 	Short: "Work with one creative material candidate",
 }
 
+var creativeDeliveryCmd = &cobra.Command{
+	Use:   "delivery",
+	Short: "Register final creative deliveries",
+}
+
+var creativeDeliveryRegisterCmd = &cobra.Command{
+	Use:   "register <issue-id>",
+	Short: "Register final attachments and their source mapping from a JSON manifest",
+	Args:  exactArgs(1),
+	RunE:  runCreativeDeliveryRegister,
+}
+
 var creativeMaterialDownloadCmd = &cobra.Command{
 	Use:   "download <issue-id> <candidate-id>",
 	Short: "Download a selected candidate from platform archive storage",
@@ -125,6 +137,8 @@ type creativeMaterialCandidateCLI struct {
 func init() {
 	creativeCmd.AddCommand(creativeMaterialsCmd)
 	creativeCmd.AddCommand(creativeMaterialCmd)
+	creativeCmd.AddCommand(creativeDeliveryCmd)
+	creativeDeliveryCmd.AddCommand(creativeDeliveryRegisterCmd)
 	creativeMaterialCmd.AddCommand(creativeMaterialDownloadCmd)
 	creativeMaterialCmd.AddCommand(creativeMaterialBriefCmd)
 	imageCmd.AddCommand(imageEditCmd)
@@ -135,6 +149,8 @@ func init() {
 	creativeMaterialDownloadCmd.Flags().String("output", "json", "Output format: json or table")
 	creativeMaterialBriefCmd.Flags().String("input-file", "", "UTF-8 JSON file containing the creative brief")
 	creativeMaterialBriefCmd.Flags().String("output", "json", "Output format: json or table")
+	creativeDeliveryRegisterCmd.Flags().String("input-file", "", "UTF-8 JSON manifest containing a deliveries array")
+	creativeDeliveryRegisterCmd.Flags().String("output", "json", "Output format: json")
 
 	imageEditCmd.Flags().StringSlice("input", nil, "Reference image files (1-16 files)")
 	imageEditCmd.Flags().String("mask", "", "Optional PNG mask with alpha channel")
@@ -147,6 +163,38 @@ func init() {
 	imageEditCmd.Flags().Int("max-attempts", 3, "Maximum attempts for transient image API failures (1-5)")
 	imageEditCmd.Flags().String("output-file", "", "Output PNG file")
 	imageEditCmd.Flags().String("output", "json", "Output format: json or table")
+}
+
+func runCreativeDeliveryRegister(cmd *cobra.Command, args []string) error {
+	client, err := newAPIClient(cmd)
+	if err != nil {
+		return err
+	}
+	inputFile, _ := cmd.Flags().GetString("input-file")
+	if strings.TrimSpace(inputFile) == "" {
+		return fmt.Errorf("--input-file is required")
+	}
+	payload, err := os.ReadFile(inputFile)
+	if err != nil {
+		return fmt.Errorf("read creative delivery manifest: %w", err)
+	}
+	var manifest struct {
+		Deliveries []json.RawMessage `json:"deliveries"`
+	}
+	if err := json.Unmarshal(payload, &manifest); err != nil {
+		return fmt.Errorf("decode creative delivery manifest: %w", err)
+	}
+	if len(manifest.Deliveries) == 0 || len(manifest.Deliveries) > 9 {
+		return fmt.Errorf("creative delivery manifest must contain between 1 and 9 deliveries")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), cli.AtLeastAPITimeout(60*time.Second))
+	defer cancel()
+	var result map[string]any
+	path := "/api/issues/" + url.PathEscape(args[0]) + "/creative-deliveries/register"
+	if err := client.PostJSON(ctx, path, json.RawMessage(payload), &result); err != nil {
+		return err
+	}
+	return cli.PrintJSON(os.Stdout, result)
 }
 
 func runCreativeMaterialBrief(cmd *cobra.Command, args []string) error {

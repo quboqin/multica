@@ -78,12 +78,14 @@ type creativeMaterialCrawlRunResponse struct {
 }
 
 type creativeMaterialsResponse struct {
-	Enabled    bool                                `json:"enabled"`
-	Summary    creativeMaterialSummaryResponse     `json:"summary"`
-	Candidates []creativeMaterialCandidateResponse `json:"candidates"`
-	CrawlRuns  []creativeMaterialCrawlRunResponse  `json:"crawl_runs"`
-	Context    *creativeIssueContextResponse       `json:"context,omitempty"`
-	Items      []creativeIssueItemResponse         `json:"items"`
+	Enabled     bool                                `json:"enabled"`
+	Summary     creativeMaterialSummaryResponse     `json:"summary"`
+	Candidates  []creativeMaterialCandidateResponse `json:"candidates"`
+	CrawlRuns   []creativeMaterialCrawlRunResponse  `json:"crawl_runs"`
+	Context     *creativeIssueContextResponse       `json:"context,omitempty"`
+	Items       []creativeIssueItemResponse         `json:"items"`
+	Deliveries  []creativeDeliveryResponse          `json:"deliveries"`
+	Adjustments []creativeAdjustmentRequestResponse `json:"adjustments"`
 }
 
 type creativeImportSummary struct {
@@ -447,6 +449,16 @@ func (h *Handler) loadCreativeMaterialsResponse(ctx context.Context, issueID, wo
 	}
 	resp.Context = creativeContext
 	resp.Items = items
+	deliveries, err := listCreativeDeliveries(ctx, h.DB, issueID, workspaceID)
+	if err != nil {
+		return resp, err
+	}
+	resp.Deliveries = deliveries
+	adjustments, err := listCreativeAdjustments(ctx, h.DB, issueID, workspaceID)
+	if err != nil {
+		return resp, err
+	}
+	resp.Adjustments = adjustments
 	if len(resp.Candidates) > 0 || len(resp.CrawlRuns) > 0 {
 		resp.Enabled = true
 	}

@@ -2024,17 +2024,18 @@ func readRuntimeCLIVersion(metadata []byte) string {
 }
 
 type CreateIssueRequest struct {
-	Title         string   `json:"title"`
-	Description   *string  `json:"description"`
-	Status        string   `json:"status"`
-	Priority      string   `json:"priority"`
-	AssigneeType  *string  `json:"assignee_type"`
-	AssigneeID    *string  `json:"assignee_id"`
-	ParentIssueID *string  `json:"parent_issue_id"`
-	ProjectID     *string  `json:"project_id"`
-	StartDate     *string  `json:"start_date"`
-	DueDate       *string  `json:"due_date"`
-	AttachmentIDs []string `json:"attachment_ids,omitempty"`
+	Title         string                     `json:"title"`
+	Description   *string                    `json:"description"`
+	Status        string                     `json:"status"`
+	Priority      string                     `json:"priority"`
+	AssigneeType  *string                    `json:"assignee_type"`
+	AssigneeID    *string                    `json:"assignee_id"`
+	ParentIssueID *string                    `json:"parent_issue_id"`
+	ProjectID     *string                    `json:"project_id"`
+	StartDate     *string                    `json:"start_date"`
+	DueDate       *string                    `json:"due_date"`
+	AttachmentIDs []string                   `json:"attachment_ids,omitempty"`
+	Metadata      map[string]json.RawMessage `json:"metadata,omitempty"`
 	// OriginType / OriginID stamp the new issue with its provenance so
 	// platform-internal flows can deterministically locate it later. Only
 	// trusted callers should set these — currently the daemon CLI passes
@@ -2059,6 +2060,11 @@ func (h *Handler) CreateIssue(w http.ResponseWriter, r *http.Request) {
 
 	if req.Title == "" {
 		writeError(w, http.StatusBadRequest, "title is required")
+		return
+	}
+	metadata, err := validateIssueMetadataInput(req.Metadata)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
@@ -2219,6 +2225,7 @@ func (h *Handler) CreateIssue(w http.ResponseWriter, r *http.Request) {
 		OriginType:     originType,
 		OriginID:       originID,
 		AttachmentIDs:  attachmentIDs,
+		Metadata:       metadata,
 		AllowDuplicate: req.AllowDuplicate,
 	}, service.IssueCreateOpts{
 		ActorID:          actualCreatorID,

@@ -26,6 +26,7 @@ import { zipSync } from "fflate";
 import type {
   CreativeCopyEntry,
   CreativeCopyEntryInput,
+	CreativeDelivery,
   CreativeIssueItem,
   CreativeMaterialCandidate,
   Issue,
@@ -81,7 +82,14 @@ type ContextDraft = {
 type CopyDraft = Pick<CreativeCopyEntryInput, "headline" | "subheadline" | "benefit" | "cta" | "legal_text">;
 type CreativeBriefDraft = CreativeIssueItem["creative_brief"];
 type CreativeDeliveryAsset = { id: string; filename: string; url: string; download_url?: string | null; markdown_url?: string | null };
-type CreativeAdjustmentTarget = { candidateId: string; asset: CreativeDeliveryAsset; groupAssets: CreativeDeliveryAsset[]; variant?: number | null };
+type CreativeAdjustmentTarget = {
+  candidateId: string;
+  asset: CreativeDeliveryAsset;
+  groupAssets: CreativeDeliveryAsset[];
+  delivery?: CreativeDelivery;
+  groupDeliveries: CreativeDelivery[];
+  variant?: number | null;
+};
 
 const DEFAULT_FILTER: CandidateFilter = {
   status: "all",
@@ -150,17 +158,22 @@ export function CreativeMaterialPool({ issue }: { issue: Issue }) {
   const copyEntries = useQuery(creativeCopyEntriesOptions(wsId, copyLibraryId));
   const itemByCandidate = useMemo(() => new Map((materials.data?.items ?? []).map((item) => [item.candidate_id, item])), [materials.data?.items]);
   const filteredCandidates = useMemo(() => candidates.filter((candidate) => candidateMatchesFilter(candidate, filter)), [candidates, filter]);
-  const finalAssets = useMemo(() => (attachments.data ?? []).filter((attachment) => attachment.content_type.startsWith("image/") && isCreativeDeliveryFilename(attachment.filename)), [attachments.data]);
+  const deliveries = useMemo(() => materials.data?.deliveries ?? [], [materials.data?.deliveries]);
+  const deliveryByAttachment = useMemo(() => new Map(deliveries.map((delivery) => [delivery.final_attachment_id, delivery])), [deliveries]);
+  const finalAssets = useMemo(() => (attachments.data ?? []).filter((attachment) => attachment.content_type.startsWith("image/") && (isCreativeDeliveryFilename(attachment.filename) || deliveryByAttachment.has(attachment.id))), [attachments.data, deliveryByAttachment]);
   const resultCandidateByAttachment = useMemo(() => {
     const result = new Map<string, string>();
+		for (const delivery of deliveries) result.set(delivery.final_attachment_id, delivery.candidate_id);
     for (const entry of timeline.data ?? []) {
       if (entry.type !== "comment" || !entry.content) continue;
       const candidateId = candidateIdFromResultComment(entry.content);
       if (!candidateId) continue;
-      for (const attachment of entry.attachments ?? []) result.set(attachment.id, candidateId);
+			for (const attachment of entry.attachments ?? []) {
+				if (!result.has(attachment.id)) result.set(attachment.id, candidateId);
+			}
     }
     return result;
-  }, [timeline.data]);
+  }, [deliveries, timeline.data]);
   const activeAsset = finalAssets.find((asset) => asset.id === activeAssetId) ?? finalAssets[0];
   const latestCrawl = materials.data?.crawl_runs[0];
   const contextReady = Boolean(currentContext?.market_pack_id && currentContext?.squad_id);
@@ -329,12 +342,12 @@ export function CreativeMaterialPool({ issue }: { issue: Issue }) {
       </div>}
     </div>
 
-    <IssueResultBoard archiveName={`${issue.identifier}-修图结果`} assets={finalAssets} activeAsset={activeAsset} candidates={candidates} candidateByAttachment={resultCandidateByAttachment} expanded={resultBoardExpanded} onExpandedChange={setResultBoardExpanded} onAssetChange={setActiveAssetId} onPreview={setPreviewItem} onAdjust={(target) => { setAdjustmentTarget(target); setAdjustmentOpen(true); }} />
+		<IssueResultBoard archiveName={`${issue.identifier}-修图结果`} assets={finalAssets} activeAsset={activeAsset} candidates={candidates} candidateByAttachment={resultCandidateByAttachment} deliveryByAttachment={deliveryByAttachment} expanded={resultBoardExpanded} onExpandedChange={setResultBoardExpanded} onAssetChange={setActiveAssetId} onPreview={setPreviewItem} onAdjust={(target) => { setAdjustmentTarget(target); setAdjustmentOpen(true); }} />
 
     <CandidatePoolPreviewDialog open={poolPreviewOpen} onOpenChange={setPoolPreviewOpen} candidates={candidates} items={materials.data?.items ?? []} filter={filter} onFilterChange={setFilter} selectedCount={selectedCandidates.length} busy={updateCandidate.isPending} onStatus={(candidateId, status) => updateCandidate.mutate({ id: candidateId, status })} onPreview={setPreviewItem} onCopy={(candidateId) => { setPoolPreviewOpen(false); setCopyCandidateId(candidateId); }} />
     <MaterialLibraryDialog open={libraryOpen} onOpenChange={setLibraryOpen} candidates={library.data?.candidates ?? []} existingIds={new Set(candidates.map((candidate) => candidate.id))} busy={importFromLibrary.isPending} onImport={(selected) => importFromLibrary.mutate(selected)} />
     <CopyPickerDialog candidates={selectedCandidates} activeCandidateId={copyCandidateId} entries={copyEntries.data?.entries ?? []} items={materials.data?.items ?? []} benefitOptions={benefitOptions} themeOptions={themeOptions} busy={assignCopy.isPending || createCustomCopy.isPending || saveBrief.isPending} analysisBusy={requestAnalysis.isPending} onCandidateId={setCopyCandidateId} onClose={() => setCopyCandidateId("")} onPick={(candidateId, copyEntryId) => assignCopy.mutate({ candidateId, copyEntryId })} onCustom={(candidateId, value) => createCustomCopy.mutate({ candidateId, value })} onBrief={(candidateId, brief) => saveBrief.mutate({ candidateId, brief })} onAnalyze={(candidate) => requestAnalysis.mutate([candidate])} />
-    <AdjustmentDialog open={adjustmentOpen} onOpenChange={setAdjustmentOpen} candidates={selectedCandidates} target={adjustmentTarget} context={currentContext} items={materials.data?.items ?? []} busy={false} onCreated={() => { setAdjustmentOpen(false); queryClient.invalidateQueries({ queryKey: issueKeys.children(wsId, issue.id) }); }} />
+		<AdjustmentDialog open={adjustmentOpen} onOpenChange={setAdjustmentOpen} issue={issue} candidates={selectedCandidates} target={adjustmentTarget} context={currentContext} items={materials.data?.items ?? []} onCreated={() => { setAdjustmentOpen(false); refreshMaterials(); queryClient.invalidateQueries({ queryKey: issueKeys.children(wsId, issue.id) }); }} />
     <MediaPreviewDialog item={previewItem} onOpenChange={(open) => !open && setPreviewItem(null)} />
   </section>;
 }
@@ -439,6 +452,7 @@ function IssueResultBoard({
   activeAsset,
   candidates,
   candidateByAttachment,
+	deliveryByAttachment,
   expanded,
   onExpandedChange,
   onAssetChange,
@@ -450,6 +464,7 @@ function IssueResultBoard({
   activeAsset?: CreativeDeliveryAsset;
   candidates: CreativeMaterialCandidate[];
   candidateByAttachment: ReadonlyMap<string, string>;
+	deliveryByAttachment: ReadonlyMap<string, CreativeDelivery>;
   expanded: boolean;
   onExpandedChange: (expanded: boolean) => void;
   onAssetChange: (id: string) => void;
@@ -464,6 +479,10 @@ function IssueResultBoard({
       group.assets.some((asset) => asset.id === activeAsset?.id),
     ) ?? groups[0];
   const groupAssets = activeGroup?.assets ?? [];
+	const groupDeliveries = groupAssets.flatMap((asset) => {
+		const delivery = deliveryByAttachment.get(asset.id);
+		return delivery ? [delivery] : [];
+	});
   const currentAsset =
     groupAssets.find((asset) => asset.id === activeAsset?.id) ?? groupAssets[0];
   const candidateId = activeGroup
@@ -583,6 +602,8 @@ function IssueResultBoard({
                     candidateId,
                     asset: currentAsset,
                     groupAssets,
+							delivery: deliveryByAttachment.get(currentAsset.id),
+							groupDeliveries,
                     variant: activeGroup?.variant ?? null,
                   })
                 }
@@ -721,31 +742,58 @@ function IssueResultBoard({
   );
 }
 
-function AdjustmentDialog({ open, onOpenChange, candidates, target, context, items, busy, onCreated }: { open: boolean; onOpenChange: (open: boolean) => void; candidates: CreativeMaterialCandidate[]; target: CreativeAdjustmentTarget | null; context: { squad_id: string } | null | undefined; items: CreativeIssueItem[]; busy: boolean; onCreated: () => void }) {
+function AdjustmentDialog({ open, onOpenChange, issue, candidates, target, context, items, onCreated }: { open: boolean; onOpenChange: (open: boolean) => void; issue: Issue; candidates: CreativeMaterialCandidate[]; target: CreativeAdjustmentTarget | null; context: { squad_id: string } | null | undefined; items: CreativeIssueItem[]; onCreated: () => void }) {
   const [text, setText] = useState("");
-  const [scope, setScope] = useState<"current" | "all">("current");
+	const [scope, setScope] = useState<"size" | "variant">("size");
   const candidate = candidates.find((value) => value.id === target?.candidateId);
   const currentDelivery = creativeDeliveryInfo(target?.asset.filename ?? "");
-  const currentSize = currentDelivery?.size ?? "当前尺寸";
+	const currentSize = target?.delivery?.size ?? currentDelivery?.size ?? "当前尺寸";
   const currentVariant = target?.variant ?? (currentDelivery ? creativeVariantBranch(currentDelivery.branch).variant : null);
   const variantLabel = currentVariant ? `创意 ${currentVariant}` : "当前创意";
   const sourceURL = candidate ? firstNonEmpty(candidate.archived_url, candidate.preview_url, candidate.poster_url, candidate.resource_url) : "";
-  useEffect(() => { if (open) { setText(""); setScope("current"); } }, [open, target?.asset.id]);
+	useEffect(() => { if (open) { setText(""); setScope("size"); } }, [open, target?.asset.id]);
   const create = useMutation({ mutationFn: async () => {
     if (!target) throw new Error("没有选中待调整成图");
     const item = items.find((value) => value.candidate_id === target.candidateId);
     if (!context?.squad_id || !item?.work_issue_id) throw new Error("该图尚未建立协作 Issue");
-    const affected = scope === "current" ? [target.asset] : target.groupAssets;
-    return api.createIssue({
-      title: `用户调整 · ${variantLabel} · ${scope === "current" ? currentSize : "三尺寸"} · r${item.revision + 1}`,
-      description: `候选 ID：${target.candidateId}\n原创意工作 Issue：${item.work_issue_id}\n目标创意：${variantLabel}${currentVariant ? ` · V0${currentVariant}` : ""}\n调整范围：${scope === "current" ? `仅 ${currentSize}` : "整组三尺寸"}\n基准成图附件：${target.asset.id} · ${target.asset.filename}\n受影响附件：\n${affected.map((asset) => `- ${asset.id} · ${asset.filename}`).join("\n")}\n\n用户反馈：\n${text}\n\nLeader 读取当前成图和历史通过证据，只委派目标创意中受影响的尺寸与专业步骤。其他创意和未受影响尺寸沿用已通过附件，不重新生成。`,
+		if (!currentVariant) throw new Error("当前成图缺少创意变体编号");
+		const affected = scope === "size" ? [target.asset] : target.groupAssets;
+		const affectedDeliveries = scope === "size"
+			? (target.delivery ? [target.delivery] : [])
+			: target.groupDeliveries;
+		if (affectedDeliveries.length !== affected.length) throw new Error("当前成图尚未登记交付映射，请刷新后重试");
+		const adjustment = await api.createCreativeAdjustment(issue.id, target.candidateId, {
+			variant: currentVariant,
+			scope,
+			...(scope === "size" ? { size: currentSize as CreativeDelivery["size"] } : {}),
+			instruction: text.trim(),
+			target_attachment_ids: affected.map((asset) => asset.id),
+			base_attachment_ids: affectedDeliveries.map((delivery) => delivery.base_attachment_id).filter(Boolean),
+		});
+		const created = await api.createIssue({
+			title: `V${String(currentVariant).padStart(2, "0")} / ${scope === "size" ? currentSize : "三尺寸"} 精准调整 · R${adjustment.revision}`,
+			description: `目标创意：${variantLabel}\n调整范围：${scope === "size" ? `仅 ${currentSize}` : "当前创意的三个尺寸"}\n\n用户反馈：\n${text.trim()}`,
       parent_issue_id: item.work_issue_id,
       assignee_type: "squad",
       assignee_id: context.squad_id,
       status: "todo",
+			metadata: {
+				workflow: "creative_adjustment",
+				creative_adjustment_id: adjustment.id,
+				creative_candidate_id: target.candidateId,
+				creative_work_issue_id: item.work_issue_id,
+				creative_variant: currentVariant,
+				creative_scope: scope,
+				...(scope === "size" ? { creative_size: currentSize } : {}),
+				creative_revision: adjustment.revision,
+				creative_target_attachment_ids: affected.map((asset) => asset.id).join(","),
+				creative_base_attachment_ids: affectedDeliveries.map((delivery) => delivery.base_attachment_id).filter(Boolean).join(","),
+			},
     });
+		await api.bindCreativeAdjustmentIssue(issue.id, target.candidateId, adjustment.id, created.id);
+		return created;
   }, onSuccess: () => { toast.success("调整请求已交给 Leader"); onCreated(); }, onError: (error) => toast.error(error instanceof Error ? error.message : "无法创建调整任务") });
-  return <Dialog open={open} onOpenChange={onOpenChange}><DialogContent className="sm:max-w-[min(94vw,1040px)]"><DialogHeader><DialogTitle>调整成图</DialogTitle><p className="text-xs text-muted-foreground">反馈会进入当前创意的返工子 Issue，未选中的尺寸继续沿用已通过结果。</p></DialogHeader>{target && <div className={cn("grid overflow-hidden border bg-muted/10", sourceURL ? "md:grid-cols-2" : "grid-cols-1")}>{sourceURL && <div className="grid grid-rows-[auto_260px] border-r"><div className="border-b px-3 py-2 text-xs font-medium">原始素材</div><div className="flex items-center justify-center p-3"><MediaPreview url={sourceURL} posterUrl={candidate?.poster_url} alt={candidate?.title || "原始素材"} assetType={candidate?.asset_type} compact /></div></div>}<div className="grid grid-rows-[auto_260px]"><div className="border-b px-3 py-2 text-xs font-medium">当前成图 · {currentSize}</div><div className="flex items-center justify-center p-3"><MediaPreview url={target.asset.markdown_url || target.asset.url} alt={target.asset.filename} compact /></div></div></div>}<div className="grid gap-3 sm:grid-cols-2"><Field label="调整范围"><NativeSelect value={scope} onChange={(event) => setScope(event.target.value as "current" | "all")}><NativeSelectOption value="current">仅当前尺寸 · {currentSize}</NativeSelectOption><NativeSelectOption value="all">整组三尺寸</NativeSelectOption></NativeSelect></Field><Field label="基准文件"><Input value={target?.asset.filename ?? ""} readOnly /></Field><Field label="调整内容" wide><Textarea rows={6} value={text} onChange={(event) => setText(event.target.value)} placeholder="例如：四角文案被深色背景挡住，改成浅色高对比底；中央构图和另外两个尺寸不变。" /></Field></div><DialogFooter><Button variant="outline" onClick={() => onOpenChange(false)}>取消</Button><Button disabled={busy || create.isPending || !target || !text.trim()} onClick={() => create.mutate()}>交给 Leader</Button></DialogFooter></DialogContent></Dialog>;
+	return <Dialog open={open} onOpenChange={onOpenChange}><DialogContent className="sm:max-w-[min(94vw,1040px)]"><DialogHeader><DialogTitle>精准调整成图</DialogTitle><p className="text-xs text-muted-foreground">单尺寸只重做这一张；整创意会重做当前 V0{currentVariant ?? "-"} 的三个尺寸。历史版本继续保留。</p></DialogHeader>{target && <div className={cn("grid overflow-hidden border bg-muted/10", sourceURL ? "md:grid-cols-2" : "grid-cols-1")}>{sourceURL && <div className="grid grid-rows-[auto_260px] border-r"><div className="border-b px-3 py-2 text-xs font-medium">竞品原图</div><div className="flex items-center justify-center p-3"><MediaPreview url={sourceURL} posterUrl={candidate?.poster_url} alt={candidate?.title || "竞品原图"} assetType={candidate?.asset_type} compact /></div></div>}<div className="grid grid-rows-[auto_260px]"><div className="border-b px-3 py-2 text-xs font-medium">当前成图 · {currentSize}</div><div className="flex items-center justify-center p-3"><MediaPreview url={target.asset.markdown_url || target.asset.url} alt={target.asset.filename} compact /></div></div></div>}<div className="grid gap-3 sm:grid-cols-2"><Field label="调整范围"><NativeSelect value={scope} onChange={(event) => setScope(event.target.value as "size" | "variant")}><NativeSelectOption value="size">仅当前尺寸 · {currentSize}</NativeSelectOption><NativeSelectOption value="variant">当前创意 V{String(currentVariant ?? "-").padStart(2, "0")} · 三尺寸</NativeSelectOption></NativeSelect></Field><Field label="基准文件"><Input value={target?.asset.filename ?? ""} readOnly /></Field><Field label="调整内容" wide><Textarea rows={6} value={text} onChange={(event) => setText(event.target.value)} placeholder="例如：四角文案被深色背景挡住，改成浅色高对比底；中央构图和另外两个尺寸不变。" /></Field></div><DialogFooter><Button variant="outline" onClick={() => onOpenChange(false)}>取消</Button><Button disabled={create.isPending || !target || !text.trim()} onClick={() => create.mutate()}>{create.isPending ? "正在创建" : "交给 Leader"}</Button></DialogFooter></DialogContent></Dialog>;
 }
 
 function Field({ label, children, wide = false }: { label: string; children: React.ReactNode; wide?: boolean }) { return <div className={cn("space-y-1.5", wide && "sm:col-span-2")}><Label className="text-xs text-muted-foreground">{label}</Label>{children}</div>; }
@@ -819,7 +867,7 @@ function signalTokens(value: string) {
   return [...new Set(value.toLocaleLowerCase().split(/[^\p{L}\p{N}%]+/u).filter((token) => token.length >= 4 && !stop.has(token)))];
 }
 
-const CREATIVE_CANDIDATE_ID = /候选\s*ID\s*[：:]\s*`?([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})`?/i;
+const CREATIVE_CANDIDATE_ID = /候选(?:\s*ID|\s*素材)\s*[：:]\s*`?([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})`?/i;
 
 export function candidateIdFromResultComment(content: string) {
   return content.match(CREATIVE_CANDIDATE_ID)?.[1] ?? "";

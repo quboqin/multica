@@ -269,6 +269,12 @@ Metadata is durable issue state. Reading metadata is safe. Writing a metadata ke
 is a state mutation and should be tied to an explicit task requirement to record
 that state for later readers or runs.
 
+Platform/API issue creation may include a flat primitive `metadata` object. It is
+stored in the same transaction as the new Issue, before an assigned agent is
+enqueued, so workflow routers can rely on start-time metadata. The CLI's
+single-key `metadata set` command remains the mutation surface for an existing
+Issue.
+
 High-signal keys (reuse these names so queries stay consistent):
 
 - `pr_url`

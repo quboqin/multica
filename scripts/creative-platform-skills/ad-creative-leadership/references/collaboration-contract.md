@@ -41,6 +41,18 @@ ID、修订、变体、尺寸和能力去重；子 Issue 完成事件负责再�
 保留此前通过的证据和历史产物。判断必须读取完整时间线到最新人工决定，不能因历史评论仍有
 失败词而覆盖后续接受结论。
 
+## 精准返工
+
+平台创建的返工 Issue 使用 `metadata.workflow=creative_adjustment`。Leader 必须直接读取 metadata，
+不得从标题或自然语言评论猜测作用域。`creative_scope=size` 精确到一个变体和一个尺寸；
+`creative_scope=variant` 精确到一个变体的三个尺寸。`creative_target_attachment_ids` 是用户看到的
+当前最终成图，`creative_base_attachment_ids` 是允许再次送入图像模型的无品牌底图。
+
+需要修改画面时，上一版对应尺寸的无品牌底图必须是第一图像输入。最终成图包含确定性 Prime、
+条款和二维码，只用于人类对照与问题定位，不作为模型第一输入。只涉及模板、二维码或确定性
+覆盖位置时，跳过图像生成，直接重跑作用域内 Prime。每个作用域完成后独立 QC；单尺寸通过即可
+完成单尺寸 QC Issue，不等待另外两个沿用尺寸。
+
 人工可以接受不影响批准文案和关键主体的非阻断视觉差异。Prime 外围缓冲区内只有连续背景、
 空白卡片下缘或阴影，且人工已明确接受时，Leader 应继续创建 Prime 包装任务，让真实合成图和
 独立 QC 验证；这不是用包装绕过底图问题。关键文案、金额、按钮、主体或关键卡片内容进入模板
@@ -62,4 +74,9 @@ ID、修订、变体、尺寸和能力去重；子 Issue 完成事件负责再�
 - 每张候选交付 V01-V03 三个创意，每个创意交付三个尺寸，共九张最终成图。
 - 文件名必须包含 V01-V03；同一变体的三个交付文件使用相同前缀，只允许尺寸和修订号不同。
 - 发布目标必须是快照中的 `parent_issue_id`；发布后逐个确认附件的 `issue_id`。
+- 每张新成图必须登记到平台交付表。manifest 格式为
+  `{"deliveries":[{"candidate_id":"...","work_issue_id":"...","variant":2,"size":"1200x628","revision":4,"base_attachment_id":"...","final_attachment_id":"...","prime_evidence_attachment_id":"...","qc_issue_id":"..."}]}`。
+- 初次交付一次登记九条；精准返工按作用域登记一条或三条。使用
+  `multica creative delivery register <父 Issue ID> --input-file <manifest.json> --output json`，不得只靠评论中的候选 ID 建立关联。
+- 新修订使用 `naming_rule` 生成相同稳定前缀和更高 `_vN`；旧附件与旧登记记录不得覆盖或删除。
 - 九张最终成图全部发布后关闭该候选的创意工作 Issue，最外层候选池 Issue 由用户决定何时关闭。

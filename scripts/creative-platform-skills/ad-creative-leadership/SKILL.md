@@ -20,14 +20,27 @@ description: "Coordinate an advertising-material squad when each selected image 
    已经解决，不得因为评论仍保留历史风险文字而阻断后续。
 5. 只有 V01-V03 各三个尺寸全部验收通过，才能把九张交付发布到父 Issue 结果看板。
 
+当前 Issue 的 `metadata.workflow=creative_adjustment` 时，不重新执行完整九图流程。以 metadata 中的
+`creative_adjustment_id`、`creative_candidate_id`、`creative_variant`、`creative_scope`、
+`creative_size`、`creative_revision`、目标成图附件和无品牌底图附件为唯一作用域：
+
+- `creative_scope=size`：只处理指定变体的指定尺寸；
+- `creative_scope=variant`：只处理指定变体的三个尺寸；
+- 其他变体和未选尺寸直接沿用，不创建任务、不重新包装、不重新验收。
+
+先判断反馈需要修改无品牌画面，还是只涉及 Prime/QR 确定性包装。需要修改画面时，只为作用域内
+尺寸创建图像编辑子 Issue，并要求把上一版无品牌底图作为第一图像输入；不得把带 Prime、Logo、
+条款和二维码的最终成图作为模型第一输入。随后只对作用域内一张或三张图执行 Prime 和 QC。
+
 没有数据依赖的任务必须并发委派：多张候选图的素材理解相互独立；多张创意工作 Issue 相互
 独立。每张候选图固定交付 `V01`、`V02`、`V03` 三个差异明确的创意变体，每个变体固定交付
 `1080x1080`、`1200x628`、`800x1000` 三个原生尺寸，共九张图。方案完成后，一次创建三个
 `图像编辑 · V0X · 1080x1080 · rN` 母版子 Issue。某个母版通过后，一次创建该变体的横版与
 竖版重排子 Issue；两者都把已通过母版作为第一图像输入。禁止裁切、加边或拉伸母版。
 
-同一变体三张底图齐备后，创建一个 `Prime 包装 · V0X · 三尺寸 · rN` 子 Issue 批量包装；包装
-完成后创建一个 `广告验收 · V0X · 三尺寸 · rN` 子 Issue 批量验收。三个变体的包装和 QC 互相
+初次生产中，同一变体三张底图齐备后，创建一个 `Prime 包装 · V0X · 三尺寸 · rN` 子 Issue
+批量包装；包装完成后创建一个 `广告验收 · V0X · 三尺寸 · rN` 子 Issue 批量验收。精准返工按
+metadata 作用域创建单尺寸或三尺寸 Prime/QC Issue。三个变体的包装和 QC 互相
 独立，可以并行。只有“简报后选文案”、“方案后三个母版”、“母版后同变体两个重排”、
 “同变体三底图后包装”、“包装后终检”和“九张全部通过后发布”保留依赖门槛。图像编辑成员
 最多五路并发，其余成员按平台配置执行；Leader 不在单个 Issue 内轮询或等待。
@@ -63,4 +76,8 @@ Leader 被唤醒后先读取所有直接子 Issue，再批量创建所有新近�
 
 发布前按市场资源包的 `naming_rule` 统一同一候选的九张文件名。文件名必须包含 `V01`、`V02`
 或 `V03`，同一变体的三个尺寸使用相同前缀，并确认附件写入快照中的 `parent_issue_id`。
+附件上传后必须生成交付 manifest，并执行
+`multica creative delivery register <父 Issue ID> --input-file <manifest.json> --output json`。
+结果看板以该登记记录关联竞品原图、变体、尺寸、修订、底图和 QC 证据；评论文案不承担关联
+职责。精准返工只登记本轮通过的一张或三张新成图，旧交付记录和附件必须保留。
 详细判断和发布边界见 `references/collaboration-contract.md`。

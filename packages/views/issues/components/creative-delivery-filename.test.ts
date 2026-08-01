@@ -94,6 +94,9 @@ describe("creative delivery filenames", () => {
     expect(candidateIdFromResultComment("结果发布\n候选 ID：`7c618bb5-6efe-4b55-8eaa-4be430b6e536`\n三尺寸通过")).toBe(
       "7c618bb5-6efe-4b55-8eaa-4be430b6e536",
     );
+    expect(candidateIdFromResultComment("已发布 9 张图\n候选素材：`19c9a621-51c2-4dad-9529-c4544865066e`；文案快照 v15")).toBe(
+      "19c9a621-51c2-4dad-9529-c4544865066e",
+    );
   });
 
   it("ranks approved copy by the confirmed primary benefit instead of crawl metadata", () => {

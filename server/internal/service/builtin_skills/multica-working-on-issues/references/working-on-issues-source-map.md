@@ -157,6 +157,7 @@ line 2537).
 | `multica issue metadata set <issue-id> --key --value [--type]` | `server/cmd/multica/cmd_issue_metadata.go:80,109-111` |
 | `multica issue metadata delete <issue-id> --key` | `server/cmd/multica/cmd_issue_metadata.go:93,113` |
 | API routes (PUT/DELETE `/metadata/{key}`) | `server/cmd/server/router.go:478-479` |
+| `POST /issues` accepts a validated flat primitive `metadata` object and persists it inside `IssueService.Create` before create-time enqueue | `server/internal/handler/issue.go:CreateIssue`, `server/internal/service/issue.go:IssueService.Create` |
 
 `--value` is JSON-parsed by default (bool/number sniff); `--type` forces
 `string`/`number`/`bool`.

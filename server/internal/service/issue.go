@@ -66,6 +66,7 @@ type IssueCreateParams struct {
 	OriginType     pgtype.Text
 	OriginID       pgtype.UUID
 	AttachmentIDs  []pgtype.UUID
+	Metadata       []byte
 	AllowDuplicate bool
 }
 
@@ -265,6 +266,12 @@ func (s *IssueService) Create(ctx context.Context, p IssueCreateParams, opts Iss
 	}
 	if err != nil {
 		return IssueCreateResult{}, fmt.Errorf("create issue: %w", err)
+	}
+	if len(p.Metadata) > 0 {
+		if _, err := tx.Exec(ctx, `UPDATE issue SET metadata = $2::jsonb WHERE id = $1`, issue.ID, string(p.Metadata)); err != nil {
+			return IssueCreateResult{}, fmt.Errorf("set issue metadata: %w", err)
+		}
+		issue.Metadata = p.Metadata
 	}
 
 	if err := tx.Commit(ctx); err != nil {
