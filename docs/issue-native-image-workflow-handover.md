@@ -178,7 +178,12 @@ V03 顶底硬区碰撞由 Leader 自动创建 `ADC-168` 恢复，V01 只有竖�
 
 ## GPT-5.6 智能体配置
 
-Codex 智能体模型下拉已提供 `GPT-5.6 Sol`（模型 ID `gpt-5.6-sol`），并保留 `GPT-5.5`。
-努力程度跟随 daemon 的真实模型目录，当前是 `low / medium / high / xhigh / max / ultra`，默认
-`low`。API 和 daemon 均已部署支持这些值；现有素材小队不会被自动切换，用户可在智能体页面逐个
-选择模型和努力程度。
+Codex 智能体模型下拉提供通用 `GPT-5.6`、旗舰 `GPT-5.6 Sol`、均衡型 `GPT-5.6 Terra` 和
+高吞吐型 `GPT-5.6 Luna`，并保留 `GPT-5.5`。平台优先采用 daemon 的真实模型目录：当前 Sol
+和 Terra 支持 `low / medium / high / xhigh / max / ultra`，Sol 默认 `low`；Luna 支持
+`low / medium / high / xhigh / max`；通用 `gpt-5.6` 使用官方 API 的
+`none / low / medium / high / xhigh / max`，默认 `medium`。runtime 未枚举型号时平台也会使用这套
+官方 API 档位兜底。现有素材小队不会被自动切换，用户可在智能体页面逐个选择模型和努力程度。
+
+结果看板按一张来源素材一屏比较：上方横向切换素材，下方固定并排显示竞品原图与 V01-V03，
+每列可直接切换三个尺寸；较窄窗口横向滚动，不再纵向堆叠。点击任一原图或成图仍可进入大图预览。

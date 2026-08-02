@@ -257,6 +257,15 @@ var codexEffortLabel = map[string]string{
 	"ultra":   "Ultra",
 }
 
+var codexGPT56APIEfforts = []ThinkingLevel{
+	{Value: "none", Label: "None"},
+	{Value: "low", Label: "Low"},
+	{Value: "medium", Label: "Medium"},
+	{Value: "high", Label: "High"},
+	{Value: "xhigh", Label: "Extra high"},
+	{Value: "max", Label: "Max"},
+}
+
 // codexDebugModelsResponse mirrors the JSON shape emitted by
 // `codex debug models` (Codex 0.131.0+). Only the fields we
 // consume are typed; unknown keys are ignored.
@@ -280,7 +289,23 @@ func annotateCodexThinking(ctx context.Context, models []Model, executablePath s
 	for i := range models {
 		if t, ok := mapping[models[i].ID]; ok && t != nil {
 			models[i].Thinking = t
+			continue
 		}
+		if isGPT56APIModel(models[i].ID) {
+			models[i].Thinking = &ModelThinking{
+				SupportedLevels: append([]ThinkingLevel(nil), codexGPT56APIEfforts...),
+				DefaultLevel:    "medium",
+			}
+		}
+	}
+}
+
+func isGPT56APIModel(modelID string) bool {
+	switch modelID {
+	case "gpt-5.6", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna":
+		return true
+	default:
+		return false
 	}
 }
 

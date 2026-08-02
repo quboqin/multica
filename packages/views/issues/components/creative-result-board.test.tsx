@@ -91,6 +91,45 @@ describe("creative result board preview", () => {
     expect(screen.queryByTitle("放大修图看板")).not.toBeInTheDocument();
   });
 
+  it("keeps the source and three creative variants in one horizontal board", () => {
+    const sizes = ["1080x1080", "1200x628", "800x1000"];
+    const assets = [1, 2, 3].flatMap((variant) =>
+      sizes.map((size) => ({
+        ...asset,
+        id: `final-${variant}-${size}`,
+        filename: `August_AdaKami_Indonesia_candidate-42_V${String(variant).padStart(2, "0")}_${size}_v1.png`,
+        url: `https://cdn.example.com/v${variant}-${size}.png`,
+      })),
+    );
+
+    render(
+      <IssueResultBoard
+        archiveName="ADC-135-results"
+        assets={assets}
+        activeAsset={assets[0]}
+        candidates={[candidate]}
+        candidateByAttachment={new Map(assets.map((item) => [item.id, candidate.id]))}
+        deliveryByAttachment={new Map()}
+        expanded
+        onExpandedChange={vi.fn()}
+        onAssetChange={vi.fn()}
+        onPreview={vi.fn()}
+        onOpenBoardPreview={vi.fn()}
+        onAdjust={vi.fn()}
+        onCandidateFeedback={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByTestId("creative-material-strip")).toHaveClass("overflow-x-auto");
+    const board = screen.getByTestId("creative-variant-board");
+    expect(board).toHaveClass("min-w-[1120px]");
+    expect(screen.getByText("竞品原图")).toBeInTheDocument();
+    expect(screen.getByText("V01")).toBeInTheDocument();
+    expect(screen.getByText("V02")).toBeInTheDocument();
+    expect(screen.getByText("V03")).toBeInTheDocument();
+    expect(screen.getAllByText("1080x1080")).toHaveLength(3);
+  });
+
   it("groups variants under their source material", () => {
     const secondAsset = {
       ...asset,

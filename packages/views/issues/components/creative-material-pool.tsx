@@ -570,13 +570,13 @@ export function IssueResultBoard({
         sourceCandidate.resource_url,
       )
     : "";
-  const previewResult = () =>
-    currentAsset &&
+  const previewResult = (asset: CreativeDeliveryAsset | undefined = currentAsset) =>
+    asset &&
     onPreview({
-      url: currentAsset.markdown_url || currentAsset.url,
-      title: currentAsset.filename,
+      url: asset.markdown_url || asset.url,
+      title: asset.filename,
       assetType: "image",
-      openUrl: currentAsset.download_url || currentAsset.url,
+      openUrl: asset.download_url || asset.url,
     });
   const previewSource = () =>
     sourceCandidate &&
@@ -730,150 +730,122 @@ export function IssueResultBoard({
         (assets.length ? (
           <div
             className={cn(
-              "grid min-h-80 lg:grid-cols-[240px_minmax(0,1fr)]",
-              previewMode && "lg:h-full lg:min-h-0",
+              "min-h-80",
+              previewMode && "lg:grid lg:h-full lg:min-h-0 lg:grid-rows-[auto_minmax(0,1fr)]",
             )}
           >
-            <div
-              className={cn(
-                "border-r",
-                previewMode && "lg:min-h-0 lg:overflow-y-auto",
-              )}
-            >
+            <div className="flex gap-2 overflow-x-auto border-b bg-muted/15 p-3" data-testid="creative-material-strip">
               {candidateGroups.map((candidateGroup, index) => (
-                <section key={candidateGroup.candidateId || candidateGroup.label} className="border-b">
-                  <button
-                    type="button"
-                    className={cn(
-                      "grid w-full grid-cols-[48px_minmax(0,1fr)] gap-3 bg-muted/20 p-3 text-left",
-                      candidateGroup.candidateId === candidateId && "bg-muted/50",
-                    )}
-                    onClick={() => onAssetChange(candidateGroup.groups[0]?.assets[0]?.id ?? "")}
-                  >
-                    <span className="aspect-square overflow-hidden border bg-background">
-                      {candidateGroup.candidate && <MediaPreview url={firstNonEmpty(candidateGroup.candidate.archived_url, candidateGroup.candidate.preview_url, candidateGroup.candidate.poster_url)} alt={candidateGroup.label} compact />}
-                    </span>
-                    <span className="min-w-0">
-                      <span className="block truncate text-xs font-semibold">素材 {index + 1} · {candidateGroup.label}</span>
-                      <span className="mt-1 block truncate text-[11px] text-muted-foreground">{candidateGroup.groups.length} 个创意 · {candidateGroup.groups.flatMap((group) => group.assets).length} 个尺寸</span>
-                    </span>
-                  </button>
-                  <div className="grid grid-cols-3 gap-px bg-border">
-                    {candidateGroup.groups.map((group) => (
-                      <button
-                        key={group.key}
-                        type="button"
-                        className={cn(
-                          "bg-background px-2 py-2 text-center text-xs",
-                          group.key === activeGroup?.key && "bg-emerald-600/10 font-semibold text-emerald-800",
-                        )}
-                        onClick={() => onAssetChange(group.assets[0]?.id ?? "")}
-                      >
-                        {group.variant ? `V${String(group.variant).padStart(2, "0")}` : group.label}
-                      </button>
-                    ))}
-                  </div>
-                </section>
+                <button
+                  key={candidateGroup.candidateId || candidateGroup.label}
+                  type="button"
+                  className={cn(
+                    "grid min-w-[220px] max-w-[280px] shrink-0 grid-cols-[52px_minmax(0,1fr)] gap-3 border bg-background p-2 text-left",
+                    candidateGroup.candidateId === candidateId && "border-emerald-600 bg-emerald-600/5 ring-1 ring-emerald-600/20",
+                  )}
+                  onClick={() => onAssetChange(candidateGroup.groups[0]?.assets[0]?.id ?? "")}
+                >
+                  <span className="aspect-square overflow-hidden border bg-muted">
+                    {candidateGroup.candidate && <MediaPreview url={firstNonEmpty(candidateGroup.candidate.archived_url, candidateGroup.candidate.preview_url, candidateGroup.candidate.poster_url)} alt={candidateGroup.label} compact />}
+                  </span>
+                  <span className="min-w-0 self-center">
+                    <span className="block truncate text-xs font-semibold">素材 {index + 1} · {candidateGroup.label}</span>
+                    <span className="mt-1 block truncate text-[11px] text-muted-foreground">{candidateGroup.groups.length} 个创意 · {candidateGroup.groups.flatMap((group) => group.assets).length} 个尺寸</span>
+                  </span>
+                </button>
               ))}
             </div>
-            <div
-              className={cn(
-                "min-w-0",
-                previewMode &&
-                  "lg:grid lg:min-h-0 lg:grid-rows-[auto_minmax(0,1fr)_auto]",
-              )}
-            >
-              <div className="flex gap-2 overflow-x-auto border-b p-3">
-                {groupAssets.map((asset) => (
-                  <button
-                    key={asset.id}
-                    type="button"
-                    className={cn(
-                      "shrink-0 border px-3 py-2 text-xs",
-                      asset.id === currentAsset?.id &&
-                        "border-emerald-600 bg-emerald-600/5",
-                    )}
-                    onClick={() => onAssetChange(asset.id)}
-                  >
-                    <span className="font-semibold">
-                      {creativeDeliveryInfo(asset.filename)?.size}
-                    </span>
-                    <span className="ml-2 text-muted-foreground">通过</span>
-                  </button>
-                ))}
-              </div>
+            <div className={cn("min-h-0 overflow-x-auto", previewMode && "lg:h-full")}>
               <div
+                data-testid="creative-variant-board"
                 className={cn(
-                  "grid min-h-[420px]",
-                  previewMode && "lg:min-h-0",
-                  sourceCandidate && sourceURL
-                    ? "md:grid-cols-2"
-                    : "grid-cols-1",
+                  "grid min-w-[1120px] grid-cols-[minmax(220px,0.8fr)_repeat(3,minmax(260px,1fr))] divide-x",
+                  previewMode && "lg:h-full",
                 )}
               >
-                {sourceCandidate && sourceURL && (
-                  <button
-                    type="button"
-                    className="grid min-h-0 grid-rows-[auto_minmax(0,1fr)] border-r text-left"
-                    onClick={previewSource}
-                    title="查看竞品原图大图"
-                  >
-                    <span className="flex items-center justify-between gap-2 border-b bg-muted/30 px-4 py-2 text-xs font-medium">
-                      竞品原图
-                      <Maximize2 className="h-3.5 w-3.5 text-muted-foreground" />
-                    </span>
-                    <span
+                <section className="grid min-h-0 grid-rows-[auto_minmax(0,1fr)_auto] bg-muted/10">
+                  <div className="flex items-center justify-between border-b px-3 py-2.5 text-xs font-semibold">
+                    <span>竞品原图</span>
+                    <Badge variant="outline">参考基准</Badge>
+                  </div>
+                  {sourceCandidate && sourceURL ? (
+                    <button
+                      type="button"
                       className={cn(
-                        "flex items-center justify-center bg-black p-4",
-                        previewMode ? "h-full min-h-[320px]" : "h-[min(58vh,620px)]",
+                        "flex min-h-0 items-center justify-center bg-black p-3",
+                        previewMode ? "h-full min-h-[320px]" : "h-[min(56vh,600px)]",
                       )}
+                      onClick={previewSource}
+                      title="查看竞品原图大图"
                     >
                       <MediaPreview
                         url={sourceURL}
                         posterUrl={sourceCandidate.poster_url}
-                        alt={
-                          sourceCandidate.title || sourceCandidate.competitor
-                        }
+                        alt={sourceCandidate.title || sourceCandidate.competitor}
                         assetType={sourceCandidate.asset_type}
                         compact
                       />
-                    </span>
-                  </button>
-                )}
-                <button
-                  type="button"
-                  className="grid min-h-0 grid-rows-[auto_minmax(0,1fr)] text-left"
-                  onClick={previewResult}
-                  title="查看修图结果大图"
-                >
-                  <span className="flex items-center justify-between gap-2 border-b bg-muted/30 px-4 py-2 text-xs font-medium">
-                    <span>
-                      修图结果
-                      {activeGroup?.variant ? ` · 创意 ${activeGroup.variant}` : ""} ·{" "}
-                      {creativeDeliveryInfo(currentAsset?.filename ?? "")?.size}
-                    </span>
-                    <Maximize2 className="h-3.5 w-3.5 text-muted-foreground" />
-                  </span>
-                  <span
-                    className={cn(
-                      "flex items-center justify-center bg-black p-4",
-                      previewMode ? "h-full min-h-[320px]" : "h-[min(58vh,620px)]",
-                    )}
-                  >
-                    {currentAsset && (
-                      <MediaPreview
-                        url={currentAsset.markdown_url || currentAsset.url}
-                        alt={currentAsset.filename}
-                        compact
-                      />
-                    )}
-                  </span>
-                </button>
-              </div>
-              <div className="border-t px-4 py-3">
-                <p className="break-all text-sm font-medium">
-                  {currentAsset?.filename}
-                </p>
+                    </button>
+                  ) : (
+                    <div className="flex min-h-[320px] items-center justify-center px-4 text-center text-xs text-muted-foreground">来源素材尚未映射</div>
+                  )}
+                  <div className="border-t px-3 py-2.5">
+                    <p className="truncate text-xs font-medium">{sourceCandidate?.title || sourceCandidate?.competitor || "原始素材"}</p>
+                    <p className="mt-1 truncate text-[11px] text-muted-foreground">{sourceCandidate?.competitor || "-"}</p>
+                  </div>
+                </section>
+                {(activeCandidateGroup?.groups ?? []).map((group) => {
+                  const preferredSize = group.key === activeGroup?.key
+                    ? creativeDeliveryInfo(currentAsset?.filename ?? "")?.size
+                    : "1080x1080";
+                  const displayedAsset = group.assets.find((asset) => creativeDeliveryInfo(asset.filename)?.size === preferredSize) ?? group.assets[0];
+                  const active = group.key === activeGroup?.key;
+                  return (
+                    <section key={group.key} className={cn("grid min-h-0 grid-rows-[auto_auto_minmax(0,1fr)_auto]", active && "bg-emerald-600/[0.03]")}>
+                      <button
+                        type="button"
+                        className={cn("flex items-center justify-between border-b px-3 py-2.5 text-left", active && "text-emerald-800")}
+                        onClick={() => onAssetChange(displayedAsset?.id ?? "")}
+                      >
+                        <span className="text-sm font-semibold">{group.variant ? `V${String(group.variant).padStart(2, "0")}` : group.label}</span>
+                        <Badge variant={active ? "default" : "outline"}>{group.assets.length}/3 通过</Badge>
+                      </button>
+                      <div className="grid grid-cols-3 gap-px border-b bg-border">
+                        {group.assets.map((asset) => (
+                          <button
+                            key={asset.id}
+                            type="button"
+                            className={cn(
+                              "bg-background px-2 py-2 text-[11px] font-medium",
+                              asset.id === displayedAsset?.id && "bg-emerald-600/10 text-emerald-800",
+                            )}
+                            onClick={() => onAssetChange(asset.id)}
+                          >
+                            {creativeDeliveryInfo(asset.filename)?.size}
+                          </button>
+                        ))}
+                      </div>
+                      <button
+                        type="button"
+                        className={cn(
+                          "flex min-h-0 items-center justify-center bg-black p-3",
+                          previewMode ? "h-full min-h-[320px]" : "h-[min(56vh,600px)]",
+                        )}
+                        onClick={() => {
+                          if (displayedAsset) onAssetChange(displayedAsset.id);
+                          previewResult(displayedAsset);
+                        }}
+                        title="查看修图结果大图"
+                      >
+                        {displayedAsset && <MediaPreview url={displayedAsset.markdown_url || displayedAsset.url} alt={displayedAsset.filename} compact />}
+                      </button>
+                      <div className="border-t px-3 py-2.5">
+                        <p className="truncate text-xs font-medium" title={displayedAsset?.filename}>{displayedAsset?.filename}</p>
+                        <p className="mt-1 text-[11px] text-muted-foreground">点击图片放大查看</p>
+                      </div>
+                    </section>
+                  );
+                })}
               </div>
             </div>
           </div>

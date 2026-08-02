@@ -260,6 +260,38 @@ func TestParseCodexDebugModels_Malformed(t *testing.T) {
 	}
 }
 
+func TestAnnotateCodexThinkingUsesGPT56APIFallback(t *testing.T) {
+	resetThinkingCacheForTests()
+	defer resetThinkingCacheForTests()
+
+	models := codexStaticModels()
+	annotateCodexThinking(context.Background(), models, filepath.Join(t.TempDir(), "missing-codex"))
+
+	for _, modelID := range []string{"gpt-5.6", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"} {
+		var found *Model
+		for i := range models {
+			if models[i].ID == modelID {
+				found = &models[i]
+				break
+			}
+		}
+		if found == nil || found.Thinking == nil {
+			t.Fatalf("%s missing API effort fallback: %+v", modelID, found)
+		}
+		if found.Thinking.DefaultLevel != "medium" {
+			t.Errorf("%s default effort = %q, want medium", modelID, found.Thinking.DefaultLevel)
+		}
+		got := make([]string, 0, len(found.Thinking.SupportedLevels))
+		for _, level := range found.Thinking.SupportedLevels {
+			got = append(got, level.Value)
+		}
+		want := []string{"none", "low", "medium", "high", "xhigh", "max"}
+		if !reflect.DeepEqual(got, want) {
+			t.Errorf("%s efforts = %v, want %v", modelID, got, want)
+		}
+	}
+}
+
 // ── IsKnownThinkingValue (server-side enum gate) ─────────────────────
 
 func TestIsKnownThinkingValue(t *testing.T) {

@@ -111,7 +111,7 @@ func TestGeminiStaticModelsExposesAliasesAndGemini3(t *testing.T) {
 	}
 }
 
-func TestCodexStaticModelsExposesGPT56Sol(t *testing.T) {
+func TestCodexStaticModelsExposesGPT56Family(t *testing.T) {
 	// Codex CLI has no `models list` subcommand so the catalog is
 	// hand-maintained. Regression guard for multica-ai/multica#2009 —
 	// GPT-5.6 Sol must be selectable, and the badge default must point at
@@ -122,7 +122,7 @@ func TestCodexStaticModelsExposesGPT56Sol(t *testing.T) {
 		ids[m.ID] = m
 	}
 	for _, want := range []string{
-		"gpt-5.6-sol",
+		"gpt-5.6", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna",
 		"gpt-5.5", "gpt-5.5-mini",
 		"gpt-5.4", "gpt-5.4-mini",
 		"gpt-5.3-codex", "gpt-5",

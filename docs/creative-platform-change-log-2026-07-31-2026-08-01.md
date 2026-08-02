@@ -920,13 +920,20 @@ ADC-159 创意工作
 
 ## 24. GPT-5.6 平台模型目录（2026-08-02）
 
-Codex 智能体模型目录新增 `gpt-5.6-sol`（页面显示 `GPT-5.6 Sol`）并设为最新默认展示项，
-`gpt-5.5` 继续保留。努力程度由本机 Codex 0.144.6 的结构化模型目录动态提供，当前完整显示
-`low`、`medium`、`high`、`xhigh`、`max`、`ultra`，默认是 `low`；API 同步接受 `max` 和
-`ultra`，因此选择可以持久化并传给 daemon。此次只增加平台可选项，没有自动改写现有素材小队
-各智能体的模型。
+Codex 智能体模型目录提供完整 GPT-5.6 家族：通用别名 `gpt-5.6`、旗舰 `gpt-5.6-sol`、均衡型
+`gpt-5.6-terra` 和高吞吐型 `gpt-5.6-luna`，`gpt-5.6-sol` 作为最新默认展示项，`gpt-5.5`
+继续保留。平台优先采用本机 Codex 的结构化模型目录；本机已识别的 Sol 当前显示 `low`、
+`medium`、`high`、`xhigh`、`max`、`ultra`，默认 `low`。未被本机目录枚举的 5.6 型号使用官方 API
+努力程度 `none / low / medium / high / xhigh / max`，默认 `medium`。此次只增加平台可选项，没有
+自动改写现有素材小队各智能体的模型。
 
-API 已部署为 `localhost/multica-direct-backend:creative-platform-v12`，`direct-image2` daemon
-使用同一版 CLI，`/readyz` 数据库与迁移检查均为 `ok`。平台端到端模型请求已实际返回
-`gpt-5.6-sol` 及六档努力程度；`ADC-135` 页面返回 HTTP 200。相关 Go 测试、Core/Views 类型检查、
-结果看板 11 个定向测试、五个 Skill 校验和 PowerShell 语法检查通过。
+修图结果看板同步改为横向比较：上方是多素材切换条，下方固定按“竞品原图 / V01 / V02 / V03”
+并排展示，每个创意直接切换三个尺寸；窗口不足时横向滚动，不再把创意纵向堆叠。原图和任一结果
+仍可点击放大，单尺寸、单素材 ZIP、全部 ZIP 和自然语言调整入口保持不变。
+
+API 已部署为 `localhost/multica-direct-backend:creative-platform-v13`，`direct-image2` daemon 使用
+同版 CLI，最大任务并发保持 8。平台端到端模型发现实测返回：Sol 为
+`low / medium / high / xhigh / max / ultra`，Terra 为
+`low / medium / high / xhigh / max / ultra`，Luna 为 `low / medium / high / xhigh / max`，
+通用 `gpt-5.6` 为 `none / low / medium / high / xhigh / max`。`/readyz` 数据库与迁移检查均为
+`ok`，前端类型检查和结果看板 12 个定向测试通过。
