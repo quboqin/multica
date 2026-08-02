@@ -269,6 +269,12 @@ export interface CreativeBrief {
   primary_benefit: string;
   secondary_benefits: string[];
   benefit_value: string;
+  source_semantics: string;
+  information_mechanism: string;
+  visual_anchors: string[];
+  palette_anchors: string[];
+  must_preserve: string[];
+  allowed_variations: string[];
   evidence: string[];
   detected_text: string[];
   visual_type: string;

@@ -19,6 +19,18 @@ allowed-tools: Bash(multica *)
 - 金融利益点：主利益点、辅助利益点、具体金额/比例/期限。主利益点必须有图片文字、图表或
   明确视觉结构作为证据；无法判断时留空，不用标题猜测。
 
+再提取后续创意必须继承的原图锚点：
+
+- `source_semantics`：原图在讲什么业务场景，例如“分期还款计划”，不能只写“金融广告”；
+- `information_mechanism`：原图用什么结构解释利益点，例如“多档期限对应月供的表格”；
+- `visual_anchors`：承载语义的主体、卡片、表格、图标和层级；
+- `palette_anchors`：主色家族和明暗关系，不要求记录每个十六进制色值；
+- `must_preserve`：除非用户明确要求改变，否则三个变体都必须保留的语义、结构和色系；
+- `allowed_variations`：在不破坏上述锚点时可以变化的版式、信息组织和视觉处理。
+
+默认把原图的业务场景、信息机制、主色家族和关键视觉主体写入 `must_preserve`。不能因为要做
+三个创意，就建议换成与原图无关的人物、房屋、预算或其他场景。
+
 OCR 或逐区域读取图片文字，记录支持结论的短证据，不复制竞品品牌、二维码或法律文字作为
 AdaKami 主张。置信度按 0 到 1 记录。主题涉及世界杯等赛事时，只记录通用足球视觉信号；
 除非市场资源包提供已批准资产，不得建议官方 Logo、奖杯仿制、球队徽章或合作关系。
@@ -32,6 +44,12 @@ AdaKami 主张。置信度按 0 到 1 记录。主题涉及世界杯等赛事时
   "primary_benefit": "费用减免",
   "secondary_benefits": ["低利率"],
   "benefit_value": "Biaya turun 25%",
+  "source_semantics": "以足球赛事氛围表达费用减免活动",
+  "information_mechanism": "赛事主视觉加一条醒目的降费信息",
+  "visual_anchors": ["足球", "球场", "主标题利益点"],
+  "palette_anchors": ["品牌绿为主色", "高对比浅色文字"],
+  "must_preserve": ["足球赛事语义", "费用减免为第一信息", "绿色主色家族"],
+  "allowed_variations": ["主视觉位置", "标题与利益点的信息层级", "卡片布局"],
   "evidence": ["画面主标题明确出现 biaya 与 25%"],
   "detected_text": ["Potongan biaya 25%"],
   "visual_type": "主题活动海报",

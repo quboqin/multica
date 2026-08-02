@@ -3,7 +3,12 @@ import { describe, expect, it, vi } from "vitest";
 
 import type { CreativeMaterialCandidate } from "@multica/core/types";
 
-import { IssueResultBoard, ResultBoardPreviewDialog } from "./creative-material-pool";
+import {
+  groupCreativeDeliveriesByCandidate,
+  inferCreativeFeedbackDecision,
+  IssueResultBoard,
+  ResultBoardPreviewDialog,
+} from "./creative-material-pool";
 
 const asset = {
   id: "final-1",
@@ -44,6 +49,7 @@ describe("creative result board preview", () => {
         onPreview={onPreview}
         onOpenBoardPreview={onOpenBoardPreview}
         onAdjust={vi.fn()}
+        onCandidateFeedback={vi.fn()}
       />,
     );
 
@@ -75,6 +81,7 @@ describe("creative result board preview", () => {
         onAssetChange={vi.fn()}
         onPreview={vi.fn()}
         onAdjust={vi.fn()}
+        onCandidateFeedback={vi.fn()}
       />,
     );
 
@@ -82,5 +89,31 @@ describe("creative result board preview", () => {
     expect(screen.getByTitle("查看竞品原图大图")).toBeInTheDocument();
     expect(screen.getByTitle("查看修图结果大图")).toBeInTheDocument();
     expect(screen.queryByTitle("放大修图看板")).not.toBeInTheDocument();
+  });
+
+  it("groups variants under their source material", () => {
+    const secondAsset = {
+      ...asset,
+      id: "final-2",
+      filename: "August_AdaKami_Indonesia_candidate-99_V01_1080x1080_v1.png",
+    };
+    const secondCandidate = { ...candidate, id: "candidate-99", title: "Repayment plan" };
+    const groups = groupCreativeDeliveriesByCandidate(
+      [asset, secondAsset],
+      new Map([[asset.id, candidate.id], [secondAsset.id, secondCandidate.id]]),
+      [candidate, secondCandidate],
+    );
+
+    expect(groups).toHaveLength(2);
+    expect(groups[0]?.candidateId).toBe(candidate.id);
+    expect(groups[1]?.candidateId).toBe(secondCandidate.id);
+    expect(groups[1]?.groups[0]?.variant).toBe(1);
+  });
+
+  it("understands natural-language variant preservation and replanning", () => {
+    expect(inferCreativeFeedbackDecision(
+      "V01 保留，V02 和 V03 重做。保持还款计划和蓝白主色。",
+      [1, 2, 3],
+    )).toEqual({ variants: [2, 3], mode: "replan" });
   });
 });

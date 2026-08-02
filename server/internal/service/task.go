@@ -2053,6 +2053,7 @@ func (s *TaskService) LoadAgentSkillsForIssue(ctx context.Context, agentID, issu
 		}
 	}
 	if resourceContext, loadErr := s.Queries.GetCreativeTaskResourceContext(ctx, issueID); loadErr == nil {
+		resourceContext = compactCreativeTaskResourceContext(resourceContext)
 		var formatted any
 		if json.Unmarshal(resourceContext, &formatted) == nil {
 			resourceContext, _ = json.MarshalIndent(formatted, "", "  ")
@@ -2068,6 +2069,39 @@ func (s *TaskService) LoadAgentSkillsForIssue(ctx context.Context, agentID, issu
 		})
 	}
 	return result
+}
+
+// compactCreativeTaskResourceContext keeps the immutable resource snapshot but
+// removes duplicated Skill bodies from the squad directory. The assigned
+// agent's current Skill is already mounted separately, while Leader only needs
+// member roles and Skill metadata to delegate work.
+func compactCreativeTaskResourceContext(raw []byte) []byte {
+	var root map[string]any
+	if json.Unmarshal(raw, &root) != nil {
+		return raw
+	}
+	pinned, _ := root["pinned_resources"].(map[string]any)
+	squad, _ := pinned["squad"].(map[string]any)
+	compactActor := func(value any) {
+		actor, _ := value.(map[string]any)
+		skills, _ := actor["skills"].([]any)
+		for _, value := range skills {
+			skill, _ := value.(map[string]any)
+			delete(skill, "content")
+			delete(skill, "references")
+		}
+	}
+	compactActor(squad["leader"])
+	if members, ok := squad["members"].([]any); ok {
+		for _, member := range members {
+			compactActor(member)
+		}
+	}
+	compacted, err := json.Marshal(root)
+	if err != nil {
+		return raw
+	}
+	return compacted
 }
 
 // AgentSkillData represents a skill for task execution responses.

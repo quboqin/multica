@@ -90,19 +90,25 @@ type creativeIssueItemResponse struct {
 }
 
 type creativeBriefInput struct {
-	Theme             string   `json:"theme"`
-	ThemeElements     []string `json:"theme_elements"`
-	PrimaryBenefit    string   `json:"primary_benefit"`
-	SecondaryBenefits []string `json:"secondary_benefits"`
-	BenefitValue      string   `json:"benefit_value"`
-	Evidence          []string `json:"evidence"`
-	DetectedText      []string `json:"detected_text"`
-	VisualType        string   `json:"visual_type"`
-	AnalysisSummary   string   `json:"analysis_summary"`
-	Status            string   `json:"status"`
-	Source            string   `json:"source"`
-	Confidence        *float64 `json:"confidence"`
-	AnalysisIssueID   string   `json:"analysis_issue_id"`
+	Theme                string   `json:"theme"`
+	ThemeElements        []string `json:"theme_elements"`
+	PrimaryBenefit       string   `json:"primary_benefit"`
+	SecondaryBenefits    []string `json:"secondary_benefits"`
+	BenefitValue         string   `json:"benefit_value"`
+	SourceSemantics      string   `json:"source_semantics"`
+	InformationMechanism string   `json:"information_mechanism"`
+	VisualAnchors        []string `json:"visual_anchors"`
+	PaletteAnchors       []string `json:"palette_anchors"`
+	MustPreserve         []string `json:"must_preserve"`
+	AllowedVariations    []string `json:"allowed_variations"`
+	Evidence             []string `json:"evidence"`
+	DetectedText         []string `json:"detected_text"`
+	VisualType           string   `json:"visual_type"`
+	AnalysisSummary      string   `json:"analysis_summary"`
+	Status               string   `json:"status"`
+	Source               string   `json:"source"`
+	Confidence           *float64 `json:"confidence"`
+	AnalysisIssueID      string   `json:"analysis_issue_id"`
 }
 
 type creativeCopyEntryInput struct {
@@ -1586,14 +1592,20 @@ func normalizeCreativeBrief(input creativeBriefInput) (creativeBriefInput, error
 	input.Theme = strings.TrimSpace(input.Theme)
 	input.PrimaryBenefit = strings.TrimSpace(input.PrimaryBenefit)
 	input.BenefitValue = strings.TrimSpace(input.BenefitValue)
+	input.SourceSemantics = strings.TrimSpace(input.SourceSemantics)
+	input.InformationMechanism = strings.TrimSpace(input.InformationMechanism)
 	input.VisualType = strings.TrimSpace(input.VisualType)
 	input.AnalysisSummary = strings.TrimSpace(input.AnalysisSummary)
 	input.AnalysisIssueID = strings.TrimSpace(input.AnalysisIssueID)
 	input.ThemeElements = normalizedCreativeBriefList(input.ThemeElements, 12)
 	input.SecondaryBenefits = normalizedCreativeBriefList(input.SecondaryBenefits, 12)
+	input.VisualAnchors = normalizedCreativeBriefList(input.VisualAnchors, 12)
+	input.PaletteAnchors = normalizedCreativeBriefList(input.PaletteAnchors, 8)
+	input.MustPreserve = normalizedCreativeBriefList(input.MustPreserve, 16)
+	input.AllowedVariations = normalizedCreativeBriefList(input.AllowedVariations, 16)
 	input.Evidence = normalizedCreativeBriefList(input.Evidence, 16)
 	input.DetectedText = normalizedCreativeBriefList(input.DetectedText, 32)
-	if len([]rune(input.Theme)) > 120 || len([]rune(input.PrimaryBenefit)) > 120 || len([]rune(input.BenefitValue)) > 160 || len([]rune(input.VisualType)) > 120 || len([]rune(input.AnalysisSummary)) > 2000 {
+	if len([]rune(input.Theme)) > 120 || len([]rune(input.PrimaryBenefit)) > 120 || len([]rune(input.BenefitValue)) > 160 || len([]rune(input.SourceSemantics)) > 300 || len([]rune(input.InformationMechanism)) > 300 || len([]rune(input.VisualType)) > 120 || len([]rune(input.AnalysisSummary)) > 2000 {
 		return creativeBriefInput{}, errors.New("creative brief field is too long")
 	}
 	switch input.Status {

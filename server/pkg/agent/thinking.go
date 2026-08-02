@@ -15,7 +15,7 @@ import (
 // UI without hard-coding (and getting wrong) what's installed locally.
 //
 // MUL-2339: we deliberately do not flatten Claude's `low|medium|high|
-// xhigh|max` and Codex's `none|minimal|low|medium|high|xhigh` onto a
+// xhigh|max` and Codex's model-specific reasoning levels onto a
 // shared enum. OpenCode exposes provider-specific model variants through
 // `opencode run --variant`, and those names can be extended by local
 // opencode.json config. What users pick must round-trip exactly through
@@ -253,6 +253,8 @@ var codexEffortLabel = map[string]string{
 	"medium":  "Medium",
 	"high":    "High",
 	"xhigh":   "Extra high",
+	"max":     "Max",
+	"ultra":   "Ultra",
 }
 
 // codexDebugModelsResponse mirrors the JSON shape emitted by
@@ -603,6 +605,8 @@ var providerThinkingEnums = map[string]map[string]bool{
 		"medium":  true,
 		"high":    true,
 		"xhigh":   true,
+		"max":     true,
+		"ultra":   true,
 	},
 	"codebuddy": {
 		"low":    true,

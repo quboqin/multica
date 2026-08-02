@@ -173,6 +173,15 @@ func TestParseCodexDebugModels(t *testing.T) {
 	raw := []byte(`{
 		"models": [
 			{
+				"slug": "gpt-5.6-sol",
+				"default_reasoning_level": "low",
+				"supported_reasoning_levels": [
+					{"effort": "low", "description": "Fast"},
+					{"effort": "max", "description": "Maximum"},
+					{"effort": "ultra", "description": "Automatic delegation"}
+				]
+			},
+			{
 				"slug": "gpt-5.5",
 				"default_reasoning_level": "medium",
 				"supported_reasoning_levels": [
@@ -197,6 +206,19 @@ func TestParseCodexDebugModels(t *testing.T) {
 		]
 	}`)
 	got := parseCodexDebugModels(raw)
+	gpt56, ok := got["gpt-5.6-sol"]
+	if !ok || gpt56 == nil {
+		t.Fatalf("missing gpt-5.6-sol entry: %+v", got)
+	}
+	if gpt56.DefaultLevel != "low" {
+		t.Errorf("gpt-5.6-sol default: got %q, want low", gpt56.DefaultLevel)
+	}
+	if len(gpt56.SupportedLevels) != 3 {
+		t.Errorf("gpt-5.6-sol supported count: got %d, want 3", len(gpt56.SupportedLevels))
+	}
+	if gpt56.SupportedLevels[1].Label != "Max" || gpt56.SupportedLevels[2].Label != "Ultra" {
+		t.Errorf("gpt-5.6-sol labels: got %+v", gpt56.SupportedLevels)
+	}
 
 	gpt55, ok := got["gpt-5.5"]
 	if !ok || gpt55 == nil {
@@ -256,7 +278,8 @@ func TestIsKnownThinkingValue(t *testing.T) {
 		{"codex", "none", true},
 		{"codex", "minimal", true},
 		{"codex", "xhigh", true},
-		{"codex", "max", false}, // Claude-only token rejected for Codex
+		{"codex", "max", true},
+		{"codex", "ultra", true},
 		{"opencode", "", true},
 		{"opencode", "max", true},
 		{"opencode", "fast-mode", true},  // custom opencode.json variant names are valid

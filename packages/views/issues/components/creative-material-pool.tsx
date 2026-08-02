@@ -90,6 +90,10 @@ type CreativeAdjustmentTarget = {
   groupDeliveries: CreativeDelivery[];
   variant?: number | null;
 };
+type CreativeCandidateFeedbackTarget = {
+  candidateId: string;
+  activeVariant?: number | null;
+};
 
 const DEFAULT_FILTER: CandidateFilter = {
   status: "all",
@@ -106,7 +110,9 @@ const EMPTY_CONTEXT: ContextDraft = { market_pack_id: "", squad_id: "" };
 const EMPTY_COPY: CopyDraft = { headline: "", subheadline: "", benefit: "", cta: "", legal_text: "" };
 const EMPTY_BRIEF: CreativeBriefDraft = {
   theme: "", theme_elements: [], primary_benefit: "", secondary_benefits: [],
-  benefit_value: "", evidence: [], detected_text: [], visual_type: "",
+  benefit_value: "", source_semantics: "", information_mechanism: "",
+  visual_anchors: [], palette_anchors: [], must_preserve: [], allowed_variations: [],
+  evidence: [], detected_text: [], visual_type: "",
   analysis_summary: "", status: "", source: "", confidence: null,
   analysis_issue_id: "",
 };
@@ -126,6 +132,7 @@ export function CreativeMaterialPool({ issue }: { issue: Issue }) {
   const [previewItem, setPreviewItem] = useState<MediaPreviewItem | null>(null);
   const [copyCandidateId, setCopyCandidateId] = useState("");
   const [adjustmentTarget, setAdjustmentTarget] = useState<CreativeAdjustmentTarget | null>(null);
+  const [candidateFeedbackTarget, setCandidateFeedbackTarget] = useState<CreativeCandidateFeedbackTarget | null>(null);
   const [adjustmentOpen, setAdjustmentOpen] = useState(false);
   const [activeAssetId, setActiveAssetId] = useState("");
   const [contextDraft, setContextDraft] = useState<ContextDraft>(EMPTY_CONTEXT);
@@ -313,7 +320,7 @@ export function CreativeMaterialPool({ issue }: { issue: Issue }) {
         const brief = item.creative_brief;
         const created = await api.createIssue({
           title: `创意图 · ${candidate.title || candidate.competitor || candidate.id} · r${item.revision}`,
-          description: `父候选池：${issue.id}\n候选 ID：${candidate.id}\n文案记录：${item.copy_entry_id} · v${copy.version ?? 1}\n创意组合：${creativeBriefLabel(brief)}\n主利益点：${brief.primary_benefit}${brief.benefit_value ? ` · ${brief.benefit_value}` : ""}\n市场资源包：${currentContext.market_pack_id}\n执行小队：${currentContext.squad_id}\n修订：r${item.revision}\n\n交付契约：为本候选生成 V01、V02、V03 三个有明确视觉差异的创意变体；每个变体原生交付 1080x1080、1200x628、800x1000 三个尺寸，共 9 张最终成图。先并发生成三个 1080x1080 创意母版；每个母版通过后，立即以该母版为第一参考并发原生重排横版和竖版。尺寸不是变体，禁止由一个尺寸裁切、加边或拉伸得到另外两个尺寸。\n\n使用父 Issue 固定快照中的创意简报、文案和资源。主题控制视觉表达，主利益点控制信息层级；Leader 一次创建所有已满足依赖的专业子 issue，按变体隔离证据和返工，只把 3 个变体各自验收通过的三尺寸成图发布回父 Issue。`,
+          description: `父候选池：${issue.id}\n候选 ID：${candidate.id}\n文案记录：${item.copy_entry_id} · v${copy.version ?? 1}\n创意组合：${creativeBriefLabel(brief)}\n主利益点：${brief.primary_benefit}${brief.benefit_value ? ` · ${brief.benefit_value}` : ""}\n原图业务语义：${brief.source_semantics || "以结构化简报为准"}\n原图信息机制：${brief.information_mechanism || "以结构化简报为准"}\n必须保留：${brief.must_preserve.join("、") || "业务语义、信息机制、关键视觉和主色家族"}\n允许变化：${brief.allowed_variations.join("、") || "版式骨架、信息组织和视觉处理"}\n市场资源包：${currentContext.market_pack_id}\n执行小队：${currentContext.squad_id}\n修订：r${item.revision}\n\n交付契约：为本候选生成 V01、V02、V03 三个同题创意变体；默认继承原图业务语义、信息机制、关键视觉锚点和主色家族，只在版式骨架、信息组织和视觉处理上形成明确差异。每个变体原生交付 1080x1080、1200x628、800x1000 三个尺寸，共 9 张最终成图。先并发生成三个 1080x1080 创意母版；每个母版通过后，立即以该母版为第一参考并发原生重排横版和竖版。尺寸不是变体，禁止由一个尺寸裁切、加边或拉伸得到另外两个尺寸。\n\n使用父 Issue 固定快照中的创意简报、文案和资源。主题控制视觉表达，主利益点控制信息层级；Leader 一次创建所有已满足依赖的专业子 issue，按变体隔离证据和返工，只把 3 个变体各自验收通过的三尺寸成图发布回父 Issue。`,
           parent_issue_id: issue.id,
           assignee_type: "squad",
           assignee_id: currentContext.squad_id,
@@ -343,13 +350,14 @@ export function CreativeMaterialPool({ issue }: { issue: Issue }) {
       </div>}
     </div>
 
-    <IssueResultBoard archiveName={`${issue.identifier}-修图结果`} assets={finalAssets} activeAsset={activeAsset} candidates={candidates} candidateByAttachment={resultCandidateByAttachment} deliveryByAttachment={deliveryByAttachment} expanded={resultBoardExpanded} onExpandedChange={setResultBoardExpanded} onAssetChange={setActiveAssetId} onPreview={setPreviewItem} onOpenBoardPreview={() => setResultPreviewOpen(true)} onAdjust={(target) => { setAdjustmentTarget(target); setAdjustmentOpen(true); }} />
+    <IssueResultBoard archiveName={`${issue.identifier}-修图结果`} assets={finalAssets} activeAsset={activeAsset} candidates={candidates} candidateByAttachment={resultCandidateByAttachment} deliveryByAttachment={deliveryByAttachment} expanded={resultBoardExpanded} onExpandedChange={setResultBoardExpanded} onAssetChange={setActiveAssetId} onPreview={setPreviewItem} onOpenBoardPreview={() => setResultPreviewOpen(true)} onAdjust={(target) => { setAdjustmentTarget(target); setAdjustmentOpen(true); }} onCandidateFeedback={setCandidateFeedbackTarget} />
 
     <CandidatePoolPreviewDialog open={poolPreviewOpen} onOpenChange={setPoolPreviewOpen} candidates={candidates} items={materials.data?.items ?? []} filter={filter} onFilterChange={setFilter} selectedCount={selectedCandidates.length} busy={updateCandidate.isPending} onStatus={(candidateId, status) => updateCandidate.mutate({ id: candidateId, status })} onPreview={setPreviewItem} onCopy={(candidateId) => { setPoolPreviewOpen(false); setCopyCandidateId(candidateId); }} />
-    <ResultBoardPreviewDialog open={resultPreviewOpen} onOpenChange={setResultPreviewOpen} archiveName={`${issue.identifier}-修图结果`} assets={finalAssets} activeAsset={activeAsset} candidates={candidates} candidateByAttachment={resultCandidateByAttachment} deliveryByAttachment={deliveryByAttachment} onAssetChange={setActiveAssetId} onPreview={setPreviewItem} onAdjust={(target) => { setResultPreviewOpen(false); setAdjustmentTarget(target); setAdjustmentOpen(true); }} />
+    <ResultBoardPreviewDialog open={resultPreviewOpen} onOpenChange={setResultPreviewOpen} archiveName={`${issue.identifier}-修图结果`} assets={finalAssets} activeAsset={activeAsset} candidates={candidates} candidateByAttachment={resultCandidateByAttachment} deliveryByAttachment={deliveryByAttachment} onAssetChange={setActiveAssetId} onPreview={setPreviewItem} onAdjust={(target) => { setResultPreviewOpen(false); setAdjustmentTarget(target); setAdjustmentOpen(true); }} onCandidateFeedback={(target) => { setResultPreviewOpen(false); setCandidateFeedbackTarget(target); }} />
     <MaterialLibraryDialog open={libraryOpen} onOpenChange={setLibraryOpen} candidates={library.data?.candidates ?? []} existingIds={new Set(candidates.map((candidate) => candidate.id))} busy={importFromLibrary.isPending} onImport={(selected) => importFromLibrary.mutate(selected)} />
     <CopyPickerDialog candidates={selectedCandidates} activeCandidateId={copyCandidateId} entries={copyEntries.data?.entries ?? []} items={materials.data?.items ?? []} benefitOptions={benefitOptions} themeOptions={themeOptions} busy={assignCopy.isPending || createCustomCopy.isPending || saveBrief.isPending} analysisBusy={requestAnalysis.isPending} onCandidateId={setCopyCandidateId} onClose={() => setCopyCandidateId("")} onPick={(candidateId, copyEntryId) => assignCopy.mutate({ candidateId, copyEntryId })} onCustom={(candidateId, value) => createCustomCopy.mutate({ candidateId, value })} onBrief={(candidateId, brief) => saveBrief.mutate({ candidateId, brief })} onAnalyze={(candidate) => requestAnalysis.mutate([candidate])} />
 		<AdjustmentDialog open={adjustmentOpen} onOpenChange={setAdjustmentOpen} issue={issue} candidates={selectedCandidates} target={adjustmentTarget} context={currentContext} items={materials.data?.items ?? []} onCreated={() => { setAdjustmentOpen(false); refreshMaterials(); queryClient.invalidateQueries({ queryKey: issueKeys.children(wsId, issue.id) }); }} />
+    <CandidateFeedbackDialog open={Boolean(candidateFeedbackTarget)} onOpenChange={(open) => !open && setCandidateFeedbackTarget(null)} issue={issue} candidates={selectedCandidates} target={candidateFeedbackTarget} assets={finalAssets} candidateByAttachment={resultCandidateByAttachment} deliveryByAttachment={deliveryByAttachment} context={currentContext} items={materials.data?.items ?? []} onCreated={() => { setCandidateFeedbackTarget(null); refreshMaterials(); queryClient.invalidateQueries({ queryKey: issueKeys.children(wsId, issue.id) }); }} />
     <MediaPreviewDialog item={previewItem} onOpenChange={(open) => !open && setPreviewItem(null)} />
   </section>;
 }
@@ -370,6 +378,7 @@ type ResultBoardProps = {
   onAssetChange: (id: string) => void;
   onPreview: (item: MediaPreviewItem) => void;
   onAdjust: (target: CreativeAdjustmentTarget) => void;
+  onCandidateFeedback: (target: CreativeCandidateFeedbackTarget) => void;
 };
 
 export function ResultBoardPreviewDialog({
@@ -381,13 +390,19 @@ export function ResultBoardPreviewDialog({
   onOpenChange: (open: boolean) => void;
 }) {
   const groups = groupCreativeDeliveries(boardProps.assets);
+  const candidateGroups = groupCreativeDeliveriesByCandidate(
+    boardProps.assets,
+    boardProps.candidateByAttachment,
+    boardProps.candidates,
+  );
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="grid h-[94vh] grid-rows-[auto_minmax(0,1fr)] gap-0 overflow-hidden p-0 sm:max-w-[min(98vw,1560px)]">
         <DialogHeader className="border-b px-5 py-4 pr-14">
           <div className="flex flex-wrap items-center gap-2">
             <DialogTitle>修图结果看板预览</DialogTitle>
-            <Badge variant="outline">{groups.length} 张创意</Badge>
+            <Badge variant="outline">{candidateGroups.length} 张素材</Badge>
+            <Badge variant="outline">{groups.length} 个创意</Badge>
             <Badge variant="outline">
               {groups.flatMap((group) => group.assets).length} 个最新尺寸
             </Badge>
@@ -452,7 +467,7 @@ function CopyPickerDialog({ candidates, activeCandidateId, entries, items, benef
     if (!candidate) return;
     const copy = selected?.copy_snapshot as Partial<CreativeCopyEntry> | undefined;
     setDraft({ headline: copy?.headline ?? "", subheadline: copy?.subheadline ?? "", benefit: copy?.benefit ?? "", cta: copy?.cta ?? "", legal_text: copy?.legal_text ?? "" });
-    setBriefDraft({ ...currentBrief, theme_elements: [...currentBrief.theme_elements], secondary_benefits: [...currentBrief.secondary_benefits], evidence: [...currentBrief.evidence], detected_text: [...currentBrief.detected_text] });
+    setBriefDraft({ ...currentBrief, theme_elements: [...currentBrief.theme_elements], secondary_benefits: [...currentBrief.secondary_benefits], visual_anchors: [...currentBrief.visual_anchors], palette_anchors: [...currentBrief.palette_anchors], must_preserve: [...currentBrief.must_preserve], allowed_variations: [...currentBrief.allowed_variations], evidence: [...currentBrief.evidence], detected_text: [...currentBrief.detected_text] });
     setBriefEditing(false);
     setMode("library");
     setSearch("");
@@ -470,6 +485,12 @@ function CopyPickerDialog({ candidates, activeCandidateId, entries, items, benef
       primary_benefit: briefDraft.primary_benefit.trim(),
       secondary_benefits: uniqueOptions(briefDraft.secondary_benefits),
       benefit_value: briefDraft.benefit_value.trim(),
+      source_semantics: briefDraft.source_semantics.trim(),
+      information_mechanism: briefDraft.information_mechanism.trim(),
+      visual_anchors: uniqueOptions(briefDraft.visual_anchors),
+      palette_anchors: uniqueOptions(briefDraft.palette_anchors),
+      must_preserve: uniqueOptions(briefDraft.must_preserve),
+      allowed_variations: uniqueOptions(briefDraft.allowed_variations),
       evidence: uniqueOptions(briefDraft.evidence),
       detected_text: uniqueOptions(briefDraft.detected_text),
       visual_type: briefDraft.visual_type.trim(),
@@ -507,6 +528,7 @@ export function IssueResultBoard({
   onPreview,
   onOpenBoardPreview,
   onAdjust,
+  onCandidateFeedback,
   previewMode = false,
 }: ResultBoardProps & {
   expanded: boolean;
@@ -516,6 +538,11 @@ export function IssueResultBoard({
 }) {
   const [downloading, setDownloading] = useState<"all" | "group" | "">("");
   const groups = groupCreativeDeliveries(assets);
+  const candidateGroups = groupCreativeDeliveriesByCandidate(
+    assets,
+    candidateByAttachment,
+    candidates,
+  );
   const latestAssets = groups.flatMap((group) => group.assets);
   const activeGroup =
     groups.find((group) =>
@@ -531,6 +558,7 @@ export function IssueResultBoard({
   const candidateId = activeGroup
     ? candidateIdForResultGroup(activeGroup, candidateByAttachment, candidates)
     : "";
+  const activeCandidateGroup = candidateGroups.find((group) => group.candidateId === candidateId);
   const sourceCandidate = candidates.find(
     (candidate) => candidate.id === candidateId,
   );
@@ -568,18 +596,25 @@ export function IssueResultBoard({
     try {
       if (scope === "all")
         await downloadCreativeZip(
-          groups.flatMap((group) =>
-            group.assets.map((asset) => ({ ...asset, folder: group.label })),
+          candidateGroups.flatMap((candidateGroup) =>
+            candidateGroup.groups.flatMap((group) =>
+              group.assets.map((asset) => ({
+                ...asset,
+                folder: `${candidateGroup.label}/${group.variant ? `V${String(group.variant).padStart(2, "0")}` : group.label}`,
+              })),
+            ),
           ),
           archiveName,
         );
-      else if (activeGroup)
+      else if (activeCandidateGroup)
         await downloadCreativeZip(
-          activeGroup.assets.map((asset) => ({
-            ...asset,
-            folder: activeGroup.label,
-          })),
-          `${archiveName}-${activeGroup.label}`,
+          activeCandidateGroup.groups.flatMap((group) =>
+            group.assets.map((asset) => ({
+              ...asset,
+              folder: group.variant ? `V${String(group.variant).padStart(2, "0")}` : group.label,
+            })),
+          ),
+          `${archiveName}-${activeCandidateGroup.label}`,
         );
     } finally {
       setDownloading("");
@@ -618,7 +653,8 @@ export function IssueResultBoard({
               )}
             />
             <span className="text-sm font-semibold">修图结果看板</span>
-            <Badge variant="outline">{groups.length} 张创意</Badge>
+            <Badge variant="outline">{candidateGroups.length} 张素材</Badge>
+            <Badge variant="outline">{groups.length} 个创意</Badge>
             <Badge variant="outline">{latestAssets.length} 个最新尺寸</Badge>
           </button>
         )}
@@ -658,8 +694,17 @@ export function IssueResultBoard({
               onClick={() => void downloadZip("group")}
             >
               <Download className="h-4 w-4" />
-              {downloading === "group" ? "打包中" : "本创意 ZIP"}
+              {downloading === "group" ? "打包中" : "本素材 ZIP"}
             </Button>
+            {candidateId && (
+              <Button
+                size="sm"
+                onClick={() => onCandidateFeedback({ candidateId, activeVariant: activeGroup?.variant ?? null })}
+              >
+                <Sparkles className="h-4 w-4" />
+                自然语言调整
+              </Button>
+            )}
             {candidateId && (
               <Button
                 size="sm"
@@ -695,42 +740,41 @@ export function IssueResultBoard({
                 previewMode && "lg:min-h-0 lg:overflow-y-auto",
               )}
             >
-              {groups.map((group) => {
-                const groupCandidateId = candidateIdForResultGroup(
-                  group,
-                  candidateByAttachment,
-                  candidates,
-                );
-                const groupCandidate = candidates.find(
-                  (candidate) => candidate.id === groupCandidateId,
-                );
-                return (
+              {candidateGroups.map((candidateGroup, index) => (
+                <section key={candidateGroup.candidateId || candidateGroup.label} className="border-b">
                   <button
-                    key={group.key}
                     type="button"
                     className={cn(
-                      "block w-full border-b px-3 py-3 text-left",
-                      group.key === activeGroup?.key &&
-                        "bg-muted/50 shadow-[inset_2px_0_0_hsl(var(--primary))]",
+                      "grid w-full grid-cols-[48px_minmax(0,1fr)] gap-3 bg-muted/20 p-3 text-left",
+                      candidateGroup.candidateId === candidateId && "bg-muted/50",
                     )}
-                    onClick={() => onAssetChange(group.assets[0]?.id ?? "")}
+                    onClick={() => onAssetChange(candidateGroup.groups[0]?.assets[0]?.id ?? "")}
                   >
-                    <p className="truncate text-sm font-medium">
-                      {group.variant
-                        ? `创意 ${group.variant} · V${String(group.variant).padStart(2, "0")}`
-                        : groupCandidate?.title || group.label}
-                    </p>
-                    <p className="mt-1 truncate text-xs text-muted-foreground">
-                      {group.variant
-                        ? groupCandidate?.title ||
-                          groupCandidate?.competitor ||
-                          `${group.assets.length} 个尺寸`
-                        : groupCandidate?.competitor ||
-                          `${group.assets.length} 个尺寸`}
-                    </p>
+                    <span className="aspect-square overflow-hidden border bg-background">
+                      {candidateGroup.candidate && <MediaPreview url={firstNonEmpty(candidateGroup.candidate.archived_url, candidateGroup.candidate.preview_url, candidateGroup.candidate.poster_url)} alt={candidateGroup.label} compact />}
+                    </span>
+                    <span className="min-w-0">
+                      <span className="block truncate text-xs font-semibold">素材 {index + 1} · {candidateGroup.label}</span>
+                      <span className="mt-1 block truncate text-[11px] text-muted-foreground">{candidateGroup.groups.length} 个创意 · {candidateGroup.groups.flatMap((group) => group.assets).length} 个尺寸</span>
+                    </span>
                   </button>
-                );
-              })}
+                  <div className="grid grid-cols-3 gap-px bg-border">
+                    {candidateGroup.groups.map((group) => (
+                      <button
+                        key={group.key}
+                        type="button"
+                        className={cn(
+                          "bg-background px-2 py-2 text-center text-xs",
+                          group.key === activeGroup?.key && "bg-emerald-600/10 font-semibold text-emerald-800",
+                        )}
+                        onClick={() => onAssetChange(group.assets[0]?.id ?? "")}
+                      >
+                        {group.variant ? `V${String(group.variant).padStart(2, "0")}` : group.label}
+                      </button>
+                    ))}
+                  </div>
+                </section>
+              ))}
             </div>
             <div
               className={cn(
@@ -840,6 +884,69 @@ export function IssueResultBoard({
         ))}
     </div>
   );
+}
+
+function CandidateFeedbackDialog({ open, onOpenChange, issue, candidates, target, assets, candidateByAttachment, deliveryByAttachment, context, items, onCreated }: { open: boolean; onOpenChange: (open: boolean) => void; issue: Issue; candidates: CreativeMaterialCandidate[]; target: CreativeCandidateFeedbackTarget | null; assets: CreativeDeliveryAsset[]; candidateByAttachment: ReadonlyMap<string, string>; deliveryByAttachment: ReadonlyMap<string, CreativeDelivery>; context: { squad_id: string } | null | undefined; items: CreativeIssueItem[]; onCreated: () => void }) {
+  const [text, setText] = useState("");
+  const candidate = candidates.find((value) => value.id === target?.candidateId);
+  const candidateGroups = groupCreativeDeliveriesByCandidate(assets, candidateByAttachment, candidates).find((group) => group.candidateId === target?.candidateId);
+  const availableVariants = uniqueNumbers((candidateGroups?.groups ?? []).flatMap((group) => group.variant ? [group.variant] : []));
+  const decision = inferCreativeFeedbackDecision(text, availableVariants);
+  const item = items.find((value) => value.candidate_id === target?.candidateId);
+  const sourceURL = candidate ? firstNonEmpty(candidate.archived_url, candidate.preview_url, candidate.poster_url, candidate.resource_url) : "";
+  useEffect(() => { if (open) setText(""); }, [open, target?.candidateId]);
+  const create = useMutation({
+    mutationFn: async () => {
+      if (!target || !candidate || !candidateGroups) throw new Error("没有可调整的素材交付");
+      if (!context?.squad_id || !item?.work_issue_id) throw new Error("该素材尚未建立协作 Issue");
+      if (!text.trim() || decision.variants.length === 0) throw new Error("请说明需要调整的创意");
+      for (const variant of decision.variants) {
+        const group = candidateGroups.groups.find((value) => value.variant === variant);
+        if (!group || group.assets.length !== 3) throw new Error(`V${String(variant).padStart(2, "0")} 尚未完整交付三个尺寸`);
+        const deliveries = group.assets.flatMap((asset) => {
+          const delivery = deliveryByAttachment.get(asset.id);
+          return delivery ? [delivery] : [];
+        });
+        if (deliveries.length !== 3) throw new Error(`V${String(variant).padStart(2, "0")} 缺少交付映射`);
+        const adjustment = await api.createCreativeAdjustment(issue.id, target.candidateId, {
+          variant,
+          scope: "variant",
+          instruction: text.trim(),
+          target_attachment_ids: group.assets.map((asset) => asset.id),
+          base_attachment_ids: deliveries.map((delivery) => delivery.base_attachment_id).filter(Boolean),
+        });
+        const variantCode = `V${String(variant).padStart(2, "0")}`;
+        const modeLabel = decision.mode === "replan" ? "创意重做" : "整体调整";
+        const created = await api.createIssue({
+          title: `${variantCode} ${modeLabel} · R${adjustment.revision}`,
+          description: `目标素材：${candidate.title || candidate.competitor || candidate.id}\n目标创意：${variantCode}\n处理方式：${decision.mode === "replan" ? "从竞品原图重新规划，不沿用偏题底图" : "基于上一版无品牌底图调整"}\n\n用户反馈：\n${text.trim()}\n\n原图锚点：\n业务语义：${item.creative_brief.source_semantics || "以已确认 brief 为准"}\n信息机制：${item.creative_brief.information_mechanism || "以已确认 brief 为准"}\n必须保留：${item.creative_brief.must_preserve.join("、") || "以已确认 brief 为准"}`,
+          parent_issue_id: item.work_issue_id,
+          assignee_type: "squad",
+          assignee_id: context.squad_id,
+          status: "todo",
+          metadata: {
+            workflow: "creative_adjustment",
+            creative_adjustment_mode: decision.mode,
+            creative_adjustment_id: adjustment.id,
+            creative_candidate_id: target.candidateId,
+            creative_work_issue_id: item.work_issue_id,
+            creative_variant: variant,
+            creative_scope: "variant",
+            creative_revision: adjustment.revision,
+            creative_target_attachment_ids: group.assets.map((asset) => asset.id).join(","),
+            creative_base_attachment_ids: deliveries.map((delivery) => delivery.base_attachment_id).filter(Boolean).join(","),
+          },
+        });
+        await api.bindCreativeAdjustmentIssue(issue.id, target.candidateId, adjustment.id, created.id);
+      }
+      return decision.variants.length;
+    },
+    onSuccess: (count) => { toast.success(`已交给 Leader，影响 ${count} 个创意`); onCreated(); },
+    onError: (error) => toast.error(error instanceof Error ? error.message : "无法创建调整任务"),
+  });
+  const affectedLabel = decision.variants.map((variant) => `V${String(variant).padStart(2, "0")}`).join("、");
+  const preservedLabel = availableVariants.filter((variant) => !decision.variants.includes(variant)).map((variant) => `V${String(variant).padStart(2, "0")}`).join("、");
+  return <Dialog open={open} onOpenChange={onOpenChange}><DialogContent className="sm:max-w-[min(94vw,1120px)]"><DialogHeader><DialogTitle>用自然语言调整这张素材</DialogTitle><p className="text-xs text-muted-foreground">直接说明哪些创意保留、哪些重做，以及必须延续原图的内容。Leader 会把细节留在对应子 Issue。</p></DialogHeader>{candidate && <div className="grid overflow-hidden border bg-muted/10 md:grid-cols-[280px_minmax(0,1fr)]"><div className="grid grid-rows-[auto_260px] border-r"><div className="border-b px-3 py-2 text-xs font-medium">竞品原图</div><div className="flex items-center justify-center bg-black p-3"><MediaPreview url={sourceURL} posterUrl={candidate.poster_url} alt={candidate.title || candidate.competitor} assetType={candidate.asset_type} compact /></div></div><div><div className="border-b px-3 py-2 text-xs font-medium">当前三个创意</div><div className="grid grid-cols-3 gap-px bg-border">{(candidateGroups?.groups ?? []).map((group) => { const preview = group.assets.find((asset) => deliveryByAttachment.get(asset.id)?.size === "1080x1080") ?? group.assets[0]; return <div key={group.key} className="grid grid-rows-[34px_226px] bg-background"><div className="flex items-center justify-center text-xs font-semibold">V{String(group.variant ?? "-").padStart(2, "0")}</div><div className="flex items-center justify-center bg-black p-2">{preview && <MediaPreview url={preview.markdown_url || preview.url} alt={preview.filename} compact />}</div></div>; })}</div></div></div>}<Field label="你想怎么改"><Textarea rows={5} value={text} onChange={(event) => setText(event.target.value)} placeholder="例如：V01 保留，V02 和 V03 重做。都保持原图的还款计划、多档月供表格和蓝白主色，不要改成家庭人物场景。三个变体只在表格布局和信息层级上区分。" /></Field><div className="border-l-2 border-emerald-600 bg-muted/30 px-3 py-2 text-sm"><span className="font-medium">{decision.mode === "replan" ? "从原图重新规划" : "基于当前底图调整"}</span><span className="text-muted-foreground"> · {affectedLabel ? `影响 ${affectedLabel}` : "等待识别目标"}{preservedLabel ? ` · ${preservedLabel} 保留` : ""}</span></div><DialogFooter><Button variant="outline" onClick={() => onOpenChange(false)}>取消</Button><Button disabled={create.isPending || !text.trim() || decision.variants.length === 0} onClick={() => create.mutate()}>{create.isPending ? "正在创建" : "交给 Leader"}</Button></DialogFooter></DialogContent></Dialog>;
 }
 
 function AdjustmentDialog({ open, onOpenChange, issue, candidates, target, context, items, onCreated }: { open: boolean; onOpenChange: (open: boolean) => void; issue: Issue; candidates: CreativeMaterialCandidate[]; target: CreativeAdjustmentTarget | null; context: { squad_id: string } | null | undefined; items: CreativeIssueItem[]; onCreated: () => void }) {
@@ -1023,6 +1130,55 @@ export function groupCreativeDeliveries<T extends { id: string; filename: string
       creativeDeliveryInfo(left.filename)?.size ?? ""
     ).localeCompare(creativeDeliveryInfo(right.filename)?.size ?? "")),
   }));
+}
+
+export function groupCreativeDeliveriesByCandidate<T extends { id: string; filename: string }>(assets: T[], candidateByAttachment: ReadonlyMap<string, string>, candidates: CreativeMaterialCandidate[]) {
+  const candidateOrder = new Map(candidates.map((candidate, index) => [candidate.id, index]));
+  const result = new Map<string, { candidateId: string; candidate?: CreativeMaterialCandidate; label: string; groups: ReturnType<typeof groupCreativeDeliveries<T>> }>();
+  for (const group of groupCreativeDeliveries(assets)) {
+    const mappedCandidateId = candidateIdForResultGroup(group, candidateByAttachment, candidates);
+    const candidateId = mappedCandidateId || `unmapped:${group.setKey}`;
+    const candidate = candidates.find((value) => value.id === mappedCandidateId);
+    const existing = result.get(candidateId) ?? {
+      candidateId: mappedCandidateId,
+      candidate,
+      label: candidate?.title || candidate?.competitor || group.setKey || "未映射素材",
+      groups: [],
+    };
+    existing.groups.push(group);
+    result.set(candidateId, existing);
+  }
+  return [...result.values()]
+    .map((group) => ({ ...group, groups: group.groups.sort((left, right) => (left.variant ?? 99) - (right.variant ?? 99)) }))
+    .sort((left, right) => (candidateOrder.get(left.candidateId) ?? Number.MAX_SAFE_INTEGER) - (candidateOrder.get(right.candidateId) ?? Number.MAX_SAFE_INTEGER));
+}
+
+export function inferCreativeFeedbackDecision(text: string, availableVariants: number[]) {
+  const available = uniqueNumbers(availableVariants.filter((variant) => variant >= 1 && variant <= 3));
+  const targeted = new Set<number>();
+  const preserved = new Set<number>();
+  for (const clause of text.split(/[，,。；;\n]+/)) {
+    const variants = [...clause.matchAll(/V0?([1-3])|(?:创意|变体)\s*([1-3])/gi)].flatMap((match) => {
+      const value = Number(match[1] || match[2]);
+      return Number.isInteger(value) ? [value] : [];
+    });
+    if (/保留|不动|不用改|保持不变|无需调整/.test(clause)) {
+      for (const variant of variants) preserved.add(variant);
+    } else {
+      for (const variant of variants) targeted.add(variant);
+    }
+  }
+  const variants = targeted.size > 0
+    ? available.filter((variant) => targeted.has(variant) && !preserved.has(variant))
+    : available.filter((variant) => !preserved.has(variant));
+  return {
+    variants,
+    mode: /重做|重新(?:规划|设计|出图|生成)|跑偏|偏题|和原图没关系|回到原图|换回|不再沿用/.test(text) ? "replan" as const : "edit" as const,
+  };
+}
+
+function uniqueNumbers(values: number[]) {
+  return [...new Set(values)].sort((left, right) => left - right);
 }
 
 function creativeVariantBranch(branch: string) {

@@ -25,6 +25,12 @@ Prime 模板的左上品牌/右上条款/底部合规区是否存在且不被遮
 动态二维码。拒绝二维码框/占位框、整条空白带、人脸/文案/CTA 碰撞、复制竞品品牌或
 没有依据的金融承诺。
 
+同时把每个变体和原候选图、结构化 brief 对照，逐项检查 `source_semantics`、
+`information_mechanism`、`visual_anchors`、`palette_anchors` 和 `must_preserve`。默认必须保持同一
+业务场景、同一信息机制和同一主色家族；版式和视觉处理可以变化。若变体把还款计划改成家庭
+预算、把表格机制改成无关人物海报、或未经许可改变主色家族，必须 `QC FAIL`，即使文案和 QR
+均正确。只有 Issue 中存在用户明确放开该锚点的原话时才允许通过，并在 QC 证据中引用。
+
 重新运行二维码机器解码，并把实际解码内容同时与输入快照的 `approved_payload`、
 `qr_payload` 和三个 Prime 模板的 `decoded_payload` 比对。任何一个值不同都必须 `QC FAIL`，
 不能只拿市场包里同一个自由文本字段自证。向 Issue
