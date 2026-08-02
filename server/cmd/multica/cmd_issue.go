@@ -288,6 +288,7 @@ func init() {
 	// issue children
 	issueChildrenCmd.Flags().String("output", "table", "Output format: table or json")
 	issueChildrenCmd.Flags().Bool("full-id", false, "Show full UUIDs in table output")
+	issueChildrenCmd.Flags().Bool("compact", false, "Omit descriptions and attachments from JSON output")
 
 	// issue pull-requests
 	issuePullRequestsCmd.Flags().String("output", "table", "Output format: table or json")
@@ -546,6 +547,29 @@ func runIssuePullRequests(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
+func compactIssueChildrenResult(result map[string]any) map[string]any {
+	issuesRaw, _ := result["issues"].([]any)
+	issues := make([]map[string]any, 0, len(issuesRaw))
+	fields := []string{
+		"id", "identifier", "parent_issue_id", "title", "status", "priority",
+		"assignee_type", "assignee_id", "metadata", "created_at", "updated_at",
+	}
+	for _, raw := range issuesRaw {
+		issue, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		compact := make(map[string]any, len(fields))
+		for _, field := range fields {
+			if value, exists := issue[field]; exists {
+				compact[field] = value
+			}
+		}
+		issues = append(issues, compact)
+	}
+	return map[string]any{"issues": issues}
+}
+
 func normalizePullRequestList(raw []any) []map[string]any {
 	prs := make([]map[string]any, 0, len(raw))
 	for _, item := range raw {
@@ -650,6 +674,10 @@ func runIssueChildren(cmd *cobra.Command, args []string) error {
 
 	output, _ := cmd.Flags().GetString("output")
 	if output == "json" {
+		compact, _ := cmd.Flags().GetBool("compact")
+		if compact {
+			result = compactIssueChildrenResult(result)
+		}
 		return cli.PrintJSON(os.Stdout, result)
 	}
 

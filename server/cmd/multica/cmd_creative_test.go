@@ -3,13 +3,18 @@ package main
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func TestFirstCreativeCandidateSourcePrefersArchivedAsset(t *testing.T) {
@@ -145,5 +150,149 @@ func TestTruncateCLIError(t *testing.T) {
 	}
 	if got := truncateCLIError([]byte(strings.Repeat("x", 10)), 4); got != "xxxx..." {
 		t.Fatalf("truncateCLIError = %q", got)
+	}
+}
+
+func TestCreativeMaterialsCLIResponsePreservesDeliveries(t *testing.T) {
+	var response creativeMaterialsCLIResponse
+	err := json.Unmarshal([]byte(`{
+		"candidates":[],"items":[],"context":{},"adjustment_requests":[],
+		"deliveries":[{
+			"id":"delivery-1","issue_id":"issue-1","candidate_id":"candidate-1",
+			"work_issue_id":"work-1","variant":3,"size":"1200x628","revision":2,
+			"base_attachment_id":"base-1","final_attachment_id":"final-1",
+			"prime_evidence_attachment_id":"prime-1","qc_issue_id":"qc-1"
+		}]
+	}`), &response)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(response.Deliveries) != 1 {
+		t.Fatalf("deliveries = %d, want 1", len(response.Deliveries))
+	}
+	delivery := response.Deliveries[0]
+	if delivery.CandidateID != "candidate-1" || delivery.Variant != 3 || delivery.Size != "1200x628" || delivery.FinalAttachmentID != "final-1" {
+		t.Fatalf("delivery = %#v", delivery)
+	}
+}
+
+func TestExecuteImageEditBatchRunsDependentJobsTogether(t *testing.T) {
+	t.Setenv("MULTICA_IMAGE_SLOT_DIR", t.TempDir())
+	t.Setenv("MULTICA_IMAGE_MAX_CONCURRENT", "5")
+	workDir := t.TempDir()
+	reference := filepath.Join(workDir, "reference.png")
+	if err := os.WriteFile(reference, []byte("reference"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	var inFlight atomic.Int32
+	var maxInFlight atomic.Int32
+	var derivativeCount atomic.Int32
+	releaseDerivatives := make(chan struct{})
+	var releaseOnce sync.Once
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		current := inFlight.Add(1)
+		defer inFlight.Add(-1)
+		for {
+			previous := maxInFlight.Load()
+			if current <= previous || maxInFlight.CompareAndSwap(previous, current) {
+				break
+			}
+		}
+		if err := r.ParseMultipartForm(4 << 20); err != nil {
+			t.Error(err)
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		size := r.FormValue("size")
+		payload := "square"
+		if size != "1088x1088" {
+			files := r.MultipartForm.File["image"]
+			if len(files) != 2 || files[0].Filename != "square.png" {
+				t.Errorf("derivative inputs = %#v", files)
+			}
+			opened, err := files[0].Open()
+			if err != nil {
+				t.Error(err)
+			} else {
+				body, readErr := io.ReadAll(opened)
+				_ = opened.Close()
+				if readErr != nil || string(body) != "square" {
+					t.Errorf("derivative source = %q, %v", body, readErr)
+				}
+			}
+			payload = size
+			if derivativeCount.Add(1) == 2 {
+				releaseOnce.Do(func() { close(releaseDerivatives) })
+			}
+			select {
+			case <-releaseDerivatives:
+			case <-time.After(2 * time.Second):
+				t.Error("derivative jobs did not overlap")
+			}
+		}
+		w.Header().Set("x-request-id", "req-"+size)
+		_, _ = fmt.Fprintf(w, `{"data":[{"b64_json":"%s"}]}`, base64.StdEncoding.EncodeToString([]byte(payload)))
+	}))
+	defer server.Close()
+
+	batch := preparedImageEditBatch{
+		MaxConcurrency: 2,
+		Jobs: []preparedImageEditJob{
+			{ID: "square", Inputs: []imageEditBatchInput{{Path: reference}}, Prompt: "square", Model: "gpt-image-2", Size: "1088x1088", MaxAttempts: 1, OutputFile: filepath.Join(workDir, "square.png")},
+			{ID: "landscape", Inputs: []imageEditBatchInput{{Job: "square"}, {Path: reference}}, Prompt: "landscape", Model: "gpt-image-2", Size: "1680x880", MaxAttempts: 1, OutputFile: filepath.Join(workDir, "landscape.png"), DependsOn: []string{"square"}},
+			{ID: "portrait", Inputs: []imageEditBatchInput{{Job: "square"}, {Path: reference}}, Prompt: "portrait", Model: "gpt-image-2", Size: "832x1040", MaxAttempts: 1, OutputFile: filepath.Join(workDir, "portrait.png"), DependsOn: []string{"square"}},
+		},
+	}
+	summary := executeImageEditBatch(context.Background(), server.Client(), server.URL, "test-key", "image", batch)
+	if summary.Succeeded != 3 || summary.Failed != 0 || summary.Skipped != 0 {
+		t.Fatalf("summary = %+v", summary)
+	}
+	if maxInFlight.Load() != 2 {
+		t.Fatalf("max in-flight requests = %d, want 2", maxInFlight.Load())
+	}
+}
+
+func TestGlobalImageSlotsBoundConcurrency(t *testing.T) {
+	t.Setenv("MULTICA_IMAGE_SLOT_DIR", t.TempDir())
+	t.Setenv("MULTICA_IMAGE_MAX_CONCURRENT", "2")
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	type acquisition struct {
+		release func() error
+		err     error
+	}
+	acquired := make(chan acquisition, 3)
+	for range 3 {
+		go func() {
+			release, err := acquireGlobalImageSlot(ctx, "https://provider.example/images", "account-key")
+			acquired <- acquisition{release: release, err: err}
+		}()
+	}
+	first := <-acquired
+	second := <-acquired
+	if first.err != nil || second.err != nil {
+		t.Fatalf("initial acquisitions = %v, %v", first.err, second.err)
+	}
+	select {
+	case third := <-acquired:
+		if third.release != nil {
+			_ = third.release()
+		}
+		t.Fatal("third acquisition bypassed the two-slot limit")
+	case <-time.After(150 * time.Millisecond):
+	}
+	if err := first.release(); err != nil {
+		t.Fatal(err)
+	}
+	third := <-acquired
+	if third.err != nil {
+		t.Fatal(third.err)
+	}
+	if err := second.release(); err != nil {
+		t.Fatal(err)
+	}
+	if err := third.release(); err != nil {
+		t.Fatal(err)
 	}
 }

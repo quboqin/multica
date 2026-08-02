@@ -45,12 +45,14 @@ $oldApiKey = $env:OPENAI_API_KEY
 $oldBaseUrl = $env:OPENAI_BASE_URL
 $oldEditPath = $env:OPENAI_IMAGE_EDIT_PATH
 $oldFileField = $env:OPENAI_IMAGE_FILE_FIELD
+$oldImageConcurrency = $env:MULTICA_IMAGE_MAX_CONCURRENT
 
 try {
     $env:OPENAI_API_KEY = $credential.Password
     $env:OPENAI_BASE_URL = 'http://one-ai.adakamicorp.id'
     $env:OPENAI_IMAGE_EDIT_PATH = '/images/edits'
     $env:OPENAI_IMAGE_FILE_FIELD = 'image'
+    $env:MULTICA_IMAGE_MAX_CONCURRENT = '20'
 
     $startedAt = Get-Date
     $processes = foreach ($index in 1..$Concurrency) {
@@ -140,4 +142,5 @@ finally {
     if ($null -eq $oldBaseUrl) { Remove-Item Env:OPENAI_BASE_URL -ErrorAction SilentlyContinue } else { $env:OPENAI_BASE_URL = $oldBaseUrl }
     if ($null -eq $oldEditPath) { Remove-Item Env:OPENAI_IMAGE_EDIT_PATH -ErrorAction SilentlyContinue } else { $env:OPENAI_IMAGE_EDIT_PATH = $oldEditPath }
     if ($null -eq $oldFileField) { Remove-Item Env:OPENAI_IMAGE_FILE_FIELD -ErrorAction SilentlyContinue } else { $env:OPENAI_IMAGE_FILE_FIELD = $oldFileField }
+    if ($null -eq $oldImageConcurrency) { Remove-Item Env:MULTICA_IMAGE_MAX_CONCURRENT -ErrorAction SilentlyContinue } else { $env:MULTICA_IMAGE_MAX_CONCURRENT = $oldImageConcurrency }
 }

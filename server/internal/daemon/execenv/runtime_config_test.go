@@ -14,6 +14,8 @@ func TestBriefIncludesPlatformCreativeImageEditing(t *testing.T) {
 	for _, want := range []string{
 		"### Image processing",
 		"`multica image edit",
+		"`multica image edit-batch",
+		"`multica issue create-batch",
 		"OPENAI_IMAGE_EDIT_PATH",
 		"report `needs_input`",
 		"Do not collapse these artifacts",

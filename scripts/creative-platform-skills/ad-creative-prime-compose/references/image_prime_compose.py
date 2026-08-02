@@ -156,24 +156,63 @@ def compose(input_path: Path, template_path: Path, output_path: Path, payload: s
     return result
 
 
+def resolve_manifest_path(base_dir: Path, value: str) -> Path:
+    path = Path(value)
+    return path if path.is_absolute() else base_dir / path
+
+
+def compose_manifest(manifest_path: Path) -> dict:
+    payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    jobs = payload.get("jobs")
+    if not isinstance(jobs, list) or not 1 <= len(jobs) <= 50:
+        raise ValueError("manifest jobs must contain between 1 and 50 entries")
+    base_dir = manifest_path.resolve().parent
+    results = []
+    seen_ids = set()
+    for index, job in enumerate(jobs, start=1):
+        if not isinstance(job, dict):
+            raise ValueError(f"manifest job {index} must be an object")
+        job_id = str(job.get("id") or f"job-{index}").strip()
+        if not job_id or job_id in seen_ids:
+            raise ValueError(f"manifest job id must be non-empty and unique: {job_id!r}")
+        seen_ids.add(job_id)
+        try:
+            result = compose(
+                resolve_manifest_path(base_dir, str(job["input"])),
+                resolve_manifest_path(base_dir, str(job["template"])),
+                resolve_manifest_path(base_dir, str(job["output"])),
+                str(job["qr_payload"]),
+            )
+            results.append({"id": job_id, "status": "succeeded", **result})
+        except Exception as error:
+            results.append({"id": job_id, "status": "failed", "error": str(error)})
+    failed = sum(result["status"] == "failed" for result in results)
+    return {
+        "succeeded": len(results) - failed,
+        "failed": failed,
+        "results": results,
+    }
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--input", required=True)
-    parser.add_argument("--template", required=True)
-    parser.add_argument("--output", required=True)
-    parser.add_argument("--qr-payload", required=True)
+    parser.add_argument("--manifest")
+    parser.add_argument("--input")
+    parser.add_argument("--template")
+    parser.add_argument("--output")
+    parser.add_argument("--qr-payload")
     args = parser.parse_args()
-    print(
-        json.dumps(
-            compose(
-                Path(args.input),
-                Path(args.template),
-                Path(args.output),
-                args.qr_payload,
-            ),
-            ensure_ascii=False,
-        )
-    )
+    if args.manifest:
+        if any((args.input, args.template, args.output, args.qr_payload)):
+            parser.error("--manifest cannot be combined with single-image arguments")
+        result = compose_manifest(Path(args.manifest))
+        print(json.dumps(result, ensure_ascii=False))
+        if result["failed"]:
+            raise SystemExit(1)
+        return
+    if not all((args.input, args.template, args.output, args.qr_payload)):
+        parser.error("single-image mode requires --input, --template, --output and --qr-payload")
+    print(json.dumps(compose(Path(args.input), Path(args.template), Path(args.output), args.qr_payload), ensure_ascii=False))
 
 
 if __name__ == "__main__":

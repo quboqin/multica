@@ -13,6 +13,8 @@ import (
 	"strings"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/multica-ai/multica/server/internal/logger"
@@ -312,7 +314,24 @@ RETURNING id::text
 		}
 		var candidateID string
 		var inserted bool
-		err := tx.QueryRow(ctx, `
+		if connectorID == "workspace-library" {
+			sourceCandidateID := workspaceLibrarySourceCandidateID(material.Raw)
+			if sourceCandidateID != "" {
+				err = tx.QueryRow(ctx, `
+UPDATE creative_material_candidate
+SET last_seen_at = now(), updated_at = now()
+WHERE id = $1::uuid AND workspace_id = $2
+RETURNING id::text
+`, sourceCandidateID, in.WorkspaceID).Scan(&candidateID)
+				if errors.Is(err, pgx.ErrNoRows) {
+					candidateID = ""
+				} else if err != nil {
+					return creativeImportSummary{}, err
+				}
+			}
+		}
+		if candidateID == "" {
+			err = tx.QueryRow(ctx, `
 WITH upsert AS (
   INSERT INTO creative_material_candidate (
     workspace_id, connector_id, external_id, dedupe_key, competitor, title,
@@ -362,11 +381,12 @@ WITH upsert AS (
 )
 SELECT id::text, inserted FROM upsert
 `, in.WorkspaceID, connectorID, material.ExternalID, dedupeKey, material.Competitor, material.Title,
-			material.AssetType, material.PreviewURL, material.ResourceURL, material.PosterURL, material.OriginalURL,
-			material.DurationDays, material.ImpressionEstimate, material.MediaNames, material.AreaNames,
-			material.LanguageNames, material.PlatformNames, raw).Scan(&candidateID, &inserted)
-		if err != nil {
-			return creativeImportSummary{}, err
+				material.AssetType, material.PreviewURL, material.ResourceURL, material.PosterURL, material.OriginalURL,
+				material.DurationDays, material.ImpressionEstimate, material.MediaNames, material.AreaNames,
+				material.LanguageNames, material.PlatformNames, raw).Scan(&candidateID, &inserted)
+			if err != nil {
+				return creativeImportSummary{}, err
+			}
 		}
 		if inserted {
 			summary.ImportedCount++
@@ -408,6 +428,20 @@ WHERE id = $1 AND workspace_id = $2
 	}
 	h.publishCreativeMaterialsUpdated(in.WorkspaceID, in.IssueID, in.ActorType, in.ActorID)
 	return summary, nil
+}
+
+func workspaceLibrarySourceCandidateID(raw json.RawMessage) string {
+	var metadata struct {
+		SourceCandidateID string `json:"source_candidate_id"`
+	}
+	if len(raw) == 0 || json.Unmarshal(raw, &metadata) != nil {
+		return ""
+	}
+	candidateID := strings.TrimSpace(metadata.SourceCandidateID)
+	if _, err := uuid.Parse(candidateID); err != nil {
+		return ""
+	}
+	return candidateID
 }
 
 func (h *Handler) loadCreativeMaterialsResponse(ctx context.Context, issueID, workspaceID pgtype.UUID, metadata map[string]any) (creativeMaterialsResponse, error) {

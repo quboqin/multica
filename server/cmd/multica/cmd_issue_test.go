@@ -11,12 +11,64 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/spf13/cobra"
 
 	"github.com/multica-ai/multica/server/internal/cli"
 )
+
+func TestExecuteIssueCreateBatchCreatesNativeIssuesConcurrently(t *testing.T) {
+	var inFlight atomic.Int32
+	var maxInFlight atomic.Int32
+	var sequence atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/api/issues" {
+			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		current := inFlight.Add(1)
+		defer inFlight.Add(-1)
+		for {
+			previous := maxInFlight.Load()
+			if current <= previous || maxInFlight.CompareAndSwap(previous, current) {
+				break
+			}
+		}
+		time.Sleep(50 * time.Millisecond)
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Error(err)
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		number := sequence.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprintf(w, `{"id":"id-%d","identifier":"MUL-%d","title":%q}`, number, number, fmt.Sprint(body["title"]))
+	}))
+	defer server.Close()
+	client := cli.NewAPIClient(server.URL, "workspace-id", "token")
+	items := []preparedIssueCreateBatchItem{
+		{Key: "v01", Body: map[string]any{"title": "V01"}},
+		{Key: "v02", Body: map[string]any{"title": "V02"}},
+		{Key: "v03", Body: map[string]any{"title": "V03"}},
+	}
+	summary := executeIssueCreateBatch(context.Background(), client, 3, items)
+	if summary.Created != 3 || summary.Failed != 0 {
+		t.Fatalf("summary = %+v", summary)
+	}
+	if maxInFlight.Load() != 3 {
+		t.Fatalf("max in-flight creates = %d, want 3", maxInFlight.Load())
+	}
+	for index, result := range summary.Results {
+		if result.Key != items[index].Key || result.Status != "created" || result.ID == "" {
+			t.Fatalf("result %d = %+v", index, result)
+		}
+	}
+}
 
 // stderrCapture redirects os.Stderr through a pipe so a test can assert on
 // the human-facing strings runIssueCommentList prints alongside its JSON
@@ -472,6 +524,7 @@ func TestRunIssueChildrenListsOnlyDirectChildren(t *testing.T) {
 	cmd := &cobra.Command{Use: "children"}
 	cmd.Flags().String("output", "json", "")
 	cmd.Flags().Bool("full-id", false, "")
+	cmd.Flags().Bool("compact", false, "")
 	out, err := captureStdout(t, func() error {
 		return runIssueChildren(cmd, []string{"ADC-140"})
 	})
@@ -489,6 +542,57 @@ func TestRunIssueChildrenListsOnlyDirectChildren(t *testing.T) {
 	}
 	if len(result.Issues) != 1 || result.Issues[0]["identifier"] != "ADC-141" {
 		t.Fatalf("unexpected children: %#v", result.Issues)
+	}
+}
+
+func TestRunIssueChildrenCompactJSONOmitsHeavyFields(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/issues/ADC-140":
+			json.NewEncoder(w).Encode(map[string]any{"id": "parent-uuid", "identifier": "ADC-140"})
+		case "/api/issues/parent-uuid/children":
+			json.NewEncoder(w).Encode(map[string]any{"issues": []map[string]any{{
+				"id": "child-uuid", "identifier": "ADC-141", "title": "Plan", "status": "done",
+				"priority": "high", "metadata": map[string]any{"workflow": "creative_plan"},
+				"description": "large description", "attachments": []map[string]any{{"id": "attachment-1"}},
+			}}})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	t.Setenv("MULTICA_SERVER_URL", srv.URL)
+	t.Setenv("MULTICA_WORKSPACE_ID", "ws-1")
+	t.Setenv("MULTICA_TOKEN", "test-token")
+
+	cmd := &cobra.Command{Use: "children"}
+	cmd.Flags().String("output", "json", "")
+	cmd.Flags().Bool("full-id", false, "")
+	cmd.Flags().Bool("compact", true, "")
+	out, err := captureStdout(t, func() error {
+		return runIssueChildren(cmd, []string{"ADC-140"})
+	})
+	if err != nil {
+		t.Fatalf("runIssueChildren: %v", err)
+	}
+	var result struct {
+		Issues []map[string]any `json:"issues"`
+	}
+	if err := json.Unmarshal([]byte(out), &result); err != nil {
+		t.Fatalf("decode output: %v\n%s", err, out)
+	}
+	if len(result.Issues) != 1 || result.Issues[0]["identifier"] != "ADC-141" {
+		t.Fatalf("unexpected children: %#v", result.Issues)
+	}
+	if _, exists := result.Issues[0]["description"]; exists {
+		t.Fatalf("compact child includes description: %#v", result.Issues[0])
+	}
+	if _, exists := result.Issues[0]["attachments"]; exists {
+		t.Fatalf("compact child includes attachments: %#v", result.Issues[0])
+	}
+	if result.Issues[0]["metadata"].(map[string]any)["workflow"] != "creative_plan" {
+		t.Fatalf("compact child lost metadata: %#v", result.Issues[0])
 	}
 }
 

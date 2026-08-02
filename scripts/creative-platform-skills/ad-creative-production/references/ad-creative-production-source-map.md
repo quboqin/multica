@@ -5,6 +5,10 @@
 | `multica creative materials <issue-id> --selected` reads the existing Issue creative-materials endpoint and filters to person-selected candidates | `server/cmd/multica/cmd_creative.go:runCreativeMaterials` |
 | `multica creative material download <issue-id> <candidate-id>` downloads only a person-selected candidate whose platform archive is completed | `server/cmd/multica/cmd_creative.go:runCreativeMaterialDownload` |
 | `multica image edit --max-attempts 3` invokes the daemon image capability, retries transient 408/429/5xx or transport failures, and reports the actual attempt count | `server/cmd/multica/cmd_creative.go:runImageEdit`, `server/cmd/multica/cmd_creative.go:requestGPTImageEditWithRetry` |
+| `multica image edit-batch` executes a generic dependency-aware image DAG and returns per-job request IDs, attempts, bytes, paths, and durations | `server/cmd/multica/cmd_image_batch.go` |
+| Relative batch paths are resolved against the manifest directory, so colocated inputs, prompts, and outputs use bare filenames | `server/cmd/multica/cmd_image_batch.go:loadImageEditBatchManifest` |
+| Exact delivery dimensions use bounded deterministic cover-resize; after two provider ratio failures, an explicit bounded full-content edge-fade extension is available and recorded in evidence | `references/normalize_image.py` |
+| All direct and batch image requests share a host-wide provider slot limiter, defaulting to five concurrent calls | `server/cmd/multica/image_slots.go`, `server/cmd/multica/image_slot_lock_windows.go`, `server/cmd/multica/image_slot_lock_unix.go` |
 | `multica issue comment add` supports local `--attachment` files | `server/cmd/multica/cmd_issue.go:runIssueCommentAdd` |
 | Comment attachments upload before the Issue comment is posted | `server/cmd/multica/cmd_issue.go:runIssueCommentAdd` |
 | `multica attachment download` gets attachment metadata through the authenticated API and writes a local file | `server/cmd/multica/cmd_attachment.go:runAttachmentDownload` |

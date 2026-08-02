@@ -106,9 +106,27 @@ func (e *imageEditTransportError) Error() string {
 func (e *imageEditTransportError) Unwrap() error { return e.err }
 
 type creativeMaterialsCLIResponse struct {
-	Candidates []creativeMaterialCandidateCLI `json:"candidates"`
-	Items      []creativeIssueItemCLI         `json:"items"`
-	Context    json.RawMessage                `json:"context"`
+	Candidates         []creativeMaterialCandidateCLI `json:"candidates"`
+	Items              []creativeIssueItemCLI         `json:"items"`
+	Deliveries         []creativeDeliveryCLI          `json:"deliveries"`
+	AdjustmentRequests []json.RawMessage              `json:"adjustment_requests"`
+	Context            json.RawMessage                `json:"context"`
+}
+
+type creativeDeliveryCLI struct {
+	ID                        string `json:"id"`
+	IssueID                   string `json:"issue_id"`
+	CandidateID               string `json:"candidate_id"`
+	WorkIssueID               string `json:"work_issue_id"`
+	Variant                   int    `json:"variant"`
+	Size                      string `json:"size"`
+	Revision                  int    `json:"revision"`
+	BaseAttachmentID          string `json:"base_attachment_id"`
+	FinalAttachmentID         string `json:"final_attachment_id"`
+	PrimeEvidenceAttachmentID string `json:"prime_evidence_attachment_id"`
+	QCIssueID                 string `json:"qc_issue_id"`
+	CreatedAt                 string `json:"created_at"`
+	UpdatedAt                 string `json:"updated_at"`
 }
 
 type creativeIssueItemCLI struct {
@@ -342,7 +360,7 @@ func runImageEdit(cmd *cobra.Command, _ []string) error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), cli.AtLeastAPITimeout(10*time.Minute))
 	defer cancel()
-	image, requestID, attempts, err := requestGPTImageEditWithRetry(ctx, http.DefaultClient, endpoint, apiKey, model, imageField, inputs, mask, prompt, size, quality, maxAttempts)
+	image, requestID, attempts, err := requestGPTImageEditWithRetryAndSlots(ctx, http.DefaultClient, endpoint, apiKey, model, imageField, inputs, mask, prompt, size, quality, maxAttempts)
 	if err != nil {
 		return err
 	}
@@ -366,12 +384,35 @@ func runImageEdit(cmd *cobra.Command, _ []string) error {
 }
 
 func requestGPTImageEditWithRetry(ctx context.Context, client *http.Client, endpoint, apiKey, model, imageField string, inputs []string, mask, prompt, size, quality string, maxAttempts int) ([]byte, string, int, error) {
+	return requestGPTImageEditWithRetryUsingSlots(ctx, client, endpoint, apiKey, model, imageField, inputs, mask, prompt, size, quality, maxAttempts, nil)
+}
+
+func requestGPTImageEditWithRetryAndSlots(ctx context.Context, client *http.Client, endpoint, apiKey, model, imageField string, inputs []string, mask, prompt, size, quality string, maxAttempts int) ([]byte, string, int, error) {
+	return requestGPTImageEditWithRetryUsingSlots(ctx, client, endpoint, apiKey, model, imageField, inputs, mask, prompt, size, quality, maxAttempts, acquireGlobalImageSlot)
+}
+
+type imageSlotAcquirer func(context.Context, string, string) (func() error, error)
+
+func requestGPTImageEditWithRetryUsingSlots(ctx context.Context, client *http.Client, endpoint, apiKey, model, imageField string, inputs []string, mask, prompt, size, quality string, maxAttempts int, acquire imageSlotAcquirer) ([]byte, string, int, error) {
 	var lastRequestID string
 	var lastErr error
 	usedAttempts := 0
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
 		usedAttempts = attempt
+		var release func() error
+		if acquire != nil {
+			var err error
+			release, err = acquire(ctx, endpoint, apiKey)
+			if err != nil {
+				return nil, lastRequestID, attempt, fmt.Errorf("acquire image concurrency slot: %w", err)
+			}
+		}
 		image, requestID, err := requestGPTImageEdit(ctx, client, endpoint, apiKey, model, imageField, inputs, mask, prompt, size, quality)
+		if release != nil {
+			if releaseErr := release(); err == nil && releaseErr != nil {
+				err = fmt.Errorf("release image concurrency slot: %w", releaseErr)
+			}
+		}
 		if err == nil {
 			return image, requestID, attempt, nil
 		}
@@ -603,6 +644,13 @@ func runCreativeMaterials(cmd *cobra.Command, args []string) error {
 			}
 		}
 		response.Items = filteredItems
+		filteredDeliveries := make([]creativeDeliveryCLI, 0, len(response.Deliveries))
+		for _, delivery := range response.Deliveries {
+			if _, selected := selectedIDs[delivery.CandidateID]; selected {
+				filteredDeliveries = append(filteredDeliveries, delivery)
+			}
+		}
+		response.Deliveries = filteredDeliveries
 	}
 	output, _ := cmd.Flags().GetString("output")
 	if output == "json" {
