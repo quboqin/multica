@@ -26,7 +26,7 @@ import { zipSync } from "fflate";
 import type {
   CreativeCopyEntry,
   CreativeCopyEntryInput,
-	CreativeDelivery,
+  CreativeDelivery,
   CreativeIssueItem,
   CreativeMaterialCandidate,
   Issue,
@@ -121,6 +121,7 @@ export function CreativeMaterialPool({ issue }: { issue: Issue }) {
   const [candidatePoolExpanded, setCandidatePoolExpanded] = useState(true);
   const [resultBoardExpanded, setResultBoardExpanded] = useState(true);
   const [poolPreviewOpen, setPoolPreviewOpen] = useState(false);
+  const [resultPreviewOpen, setResultPreviewOpen] = useState(false);
   const [libraryOpen, setLibraryOpen] = useState(false);
   const [previewItem, setPreviewItem] = useState<MediaPreviewItem | null>(null);
   const [copyCandidateId, setCopyCandidateId] = useState("");
@@ -342,9 +343,10 @@ export function CreativeMaterialPool({ issue }: { issue: Issue }) {
       </div>}
     </div>
 
-		<IssueResultBoard archiveName={`${issue.identifier}-修图结果`} assets={finalAssets} activeAsset={activeAsset} candidates={candidates} candidateByAttachment={resultCandidateByAttachment} deliveryByAttachment={deliveryByAttachment} expanded={resultBoardExpanded} onExpandedChange={setResultBoardExpanded} onAssetChange={setActiveAssetId} onPreview={setPreviewItem} onAdjust={(target) => { setAdjustmentTarget(target); setAdjustmentOpen(true); }} />
+    <IssueResultBoard archiveName={`${issue.identifier}-修图结果`} assets={finalAssets} activeAsset={activeAsset} candidates={candidates} candidateByAttachment={resultCandidateByAttachment} deliveryByAttachment={deliveryByAttachment} expanded={resultBoardExpanded} onExpandedChange={setResultBoardExpanded} onAssetChange={setActiveAssetId} onPreview={setPreviewItem} onOpenBoardPreview={() => setResultPreviewOpen(true)} onAdjust={(target) => { setAdjustmentTarget(target); setAdjustmentOpen(true); }} />
 
     <CandidatePoolPreviewDialog open={poolPreviewOpen} onOpenChange={setPoolPreviewOpen} candidates={candidates} items={materials.data?.items ?? []} filter={filter} onFilterChange={setFilter} selectedCount={selectedCandidates.length} busy={updateCandidate.isPending} onStatus={(candidateId, status) => updateCandidate.mutate({ id: candidateId, status })} onPreview={setPreviewItem} onCopy={(candidateId) => { setPoolPreviewOpen(false); setCopyCandidateId(candidateId); }} />
+    <ResultBoardPreviewDialog open={resultPreviewOpen} onOpenChange={setResultPreviewOpen} archiveName={`${issue.identifier}-修图结果`} assets={finalAssets} activeAsset={activeAsset} candidates={candidates} candidateByAttachment={resultCandidateByAttachment} deliveryByAttachment={deliveryByAttachment} onAssetChange={setActiveAssetId} onPreview={setPreviewItem} onAdjust={(target) => { setResultPreviewOpen(false); setAdjustmentTarget(target); setAdjustmentOpen(true); }} />
     <MaterialLibraryDialog open={libraryOpen} onOpenChange={setLibraryOpen} candidates={library.data?.candidates ?? []} existingIds={new Set(candidates.map((candidate) => candidate.id))} busy={importFromLibrary.isPending} onImport={(selected) => importFromLibrary.mutate(selected)} />
     <CopyPickerDialog candidates={selectedCandidates} activeCandidateId={copyCandidateId} entries={copyEntries.data?.entries ?? []} items={materials.data?.items ?? []} benefitOptions={benefitOptions} themeOptions={themeOptions} busy={assignCopy.isPending || createCustomCopy.isPending || saveBrief.isPending} analysisBusy={requestAnalysis.isPending} onCandidateId={setCopyCandidateId} onClose={() => setCopyCandidateId("")} onPick={(candidateId, copyEntryId) => assignCopy.mutate({ candidateId, copyEntryId })} onCustom={(candidateId, value) => createCustomCopy.mutate({ candidateId, value })} onBrief={(candidateId, brief) => saveBrief.mutate({ candidateId, brief })} onAnalyze={(candidate) => requestAnalysis.mutate([candidate])} />
 		<AdjustmentDialog open={adjustmentOpen} onOpenChange={setAdjustmentOpen} issue={issue} candidates={selectedCandidates} target={adjustmentTarget} context={currentContext} items={materials.data?.items ?? []} onCreated={() => { setAdjustmentOpen(false); refreshMaterials(); queryClient.invalidateQueries({ queryKey: issueKeys.children(wsId, issue.id) }); }} />
@@ -356,6 +358,52 @@ function CandidatePoolPreviewDialog({ open, onOpenChange, candidates, items, fil
   const filtered = candidates.filter((candidate) => candidateMatchesFilter(candidate, filter));
   const itemByCandidate = new Map(items.map((item) => [item.candidate_id, item]));
   return <Dialog open={open} onOpenChange={onOpenChange}><DialogContent className="grid h-[94vh] grid-rows-[auto_minmax(0,1fr)] gap-0 overflow-hidden p-0 sm:max-w-[min(98vw,1440px)]"><DialogHeader className="border-b px-5 py-4 pr-12"><DialogTitle>素材候选池</DialogTitle><div className="mt-2 flex gap-2"><Badge variant="outline">{candidates.length} 张</Badge><Badge variant="outline">已选 {selectedCount}</Badge></div><div className="mt-4"><CandidateFilters candidates={candidates} filter={filter} onChange={onFilterChange} /></div></DialogHeader><div className="min-h-0 overflow-y-auto bg-muted/20 p-5"><div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">{filtered.map((candidate) => <CandidateCard key={candidate.id} candidate={candidate} item={itemByCandidate.get(candidate.id)} busy={busy} onStatus={(status) => onStatus(candidate.id, status)} onPreview={onPreview} onCopy={() => onCopy(candidate.id)} />)}</div></div></DialogContent></Dialog>;
+}
+
+type ResultBoardProps = {
+  archiveName: string;
+  assets: CreativeDeliveryAsset[];
+  activeAsset?: CreativeDeliveryAsset;
+  candidates: CreativeMaterialCandidate[];
+  candidateByAttachment: ReadonlyMap<string, string>;
+  deliveryByAttachment: ReadonlyMap<string, CreativeDelivery>;
+  onAssetChange: (id: string) => void;
+  onPreview: (item: MediaPreviewItem) => void;
+  onAdjust: (target: CreativeAdjustmentTarget) => void;
+};
+
+export function ResultBoardPreviewDialog({
+  open,
+  onOpenChange,
+  ...boardProps
+}: ResultBoardProps & {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+}) {
+  const groups = groupCreativeDeliveries(boardProps.assets);
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="grid h-[94vh] grid-rows-[auto_minmax(0,1fr)] gap-0 overflow-hidden p-0 sm:max-w-[min(98vw,1560px)]">
+        <DialogHeader className="border-b px-5 py-4 pr-14">
+          <div className="flex flex-wrap items-center gap-2">
+            <DialogTitle>修图结果看板预览</DialogTitle>
+            <Badge variant="outline">{groups.length} 张创意</Badge>
+            <Badge variant="outline">
+              {groups.flatMap((group) => group.assets).length} 个最新尺寸
+            </Badge>
+          </div>
+        </DialogHeader>
+        <div className="min-h-0 overflow-y-auto lg:overflow-hidden">
+          <IssueResultBoard
+            {...boardProps}
+            expanded
+            onExpandedChange={() => undefined}
+            previewMode
+          />
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
 }
 
 function CandidateFilters({ candidates, filter, onChange }: { candidates: CreativeMaterialCandidate[]; filter: CandidateFilter; onChange: (filter: CandidateFilter) => void }) {
@@ -446,30 +494,25 @@ function CopyPickerDialog({ candidates, activeCandidateId, entries, items, benef
   </DialogContent></Dialog>;
 }
 
-function IssueResultBoard({
+export function IssueResultBoard({
   archiveName,
   assets,
   activeAsset,
   candidates,
   candidateByAttachment,
-	deliveryByAttachment,
+  deliveryByAttachment,
   expanded,
   onExpandedChange,
   onAssetChange,
   onPreview,
+  onOpenBoardPreview,
   onAdjust,
-}: {
-  archiveName: string;
-  assets: CreativeDeliveryAsset[];
-  activeAsset?: CreativeDeliveryAsset;
-  candidates: CreativeMaterialCandidate[];
-  candidateByAttachment: ReadonlyMap<string, string>;
-	deliveryByAttachment: ReadonlyMap<string, CreativeDelivery>;
+  previewMode = false,
+}: ResultBoardProps & {
   expanded: boolean;
   onExpandedChange: (expanded: boolean) => void;
-  onAssetChange: (id: string) => void;
-  onPreview: (item: MediaPreviewItem) => void;
-  onAdjust: (target: CreativeAdjustmentTarget) => void;
+  onOpenBoardPreview?: () => void;
+  previewMode?: boolean;
 }) {
   const [downloading, setDownloading] = useState<"all" | "group" | "">("");
   const groups = groupCreativeDeliveries(assets);
@@ -479,10 +522,10 @@ function IssueResultBoard({
       group.assets.some((asset) => asset.id === activeAsset?.id),
     ) ?? groups[0];
   const groupAssets = activeGroup?.assets ?? [];
-	const groupDeliveries = groupAssets.flatMap((asset) => {
-		const delivery = deliveryByAttachment.get(asset.id);
-		return delivery ? [delivery] : [];
-	});
+  const groupDeliveries = groupAssets.flatMap((asset) => {
+    const delivery = deliveryByAttachment.get(asset.id);
+    return delivery ? [delivery] : [];
+  });
   const currentAsset =
     groupAssets.find((asset) => asset.id === activeAsset?.id) ?? groupAssets[0];
   const candidateId = activeGroup
@@ -543,30 +586,54 @@ function IssueResultBoard({
     }
   };
   return (
-    <div className="border bg-background">
+    <div
+      className={cn(
+        "border bg-background",
+        previewMode &&
+          "min-h-full border-0 lg:grid lg:h-full lg:min-h-0 lg:grid-rows-[auto_minmax(0,1fr)]",
+      )}
+    >
       <div
         className={cn(
           "flex flex-wrap items-center justify-between gap-3 px-4 py-3",
           expanded && "border-b",
         )}
       >
-        <button
-          type="button"
-          className="flex min-w-0 flex-1 items-center gap-2 text-left"
-          onClick={() => onExpandedChange(!expanded)}
-        >
-          <ChevronRight
-            className={cn(
-              "h-4 w-4 text-muted-foreground transition-transform",
-              expanded && "rotate-90",
-            )}
-          />
-          <span className="text-sm font-semibold">修图结果看板</span>
-          <Badge variant="outline">{groups.length} 张创意</Badge>
-          <Badge variant="outline">{latestAssets.length} 个最新尺寸</Badge>
-        </button>
+        {previewMode ? (
+          <div className="min-w-0 flex-1">
+            <p className="truncate text-xs text-muted-foreground">
+              {currentAsset?.filename || "选择创意和尺寸查看大图对比"}
+            </p>
+          </div>
+        ) : (
+          <button
+            type="button"
+            className="flex min-w-0 flex-1 items-center gap-2 text-left"
+            onClick={() => onExpandedChange(!expanded)}
+          >
+            <ChevronRight
+              className={cn(
+                "h-4 w-4 text-muted-foreground transition-transform",
+                expanded && "rotate-90",
+              )}
+            />
+            <span className="text-sm font-semibold">修图结果看板</span>
+            <Badge variant="outline">{groups.length} 张创意</Badge>
+            <Badge variant="outline">{latestAssets.length} 个最新尺寸</Badge>
+          </button>
+        )}
         {currentAsset && (
           <div className="flex flex-wrap gap-2">
+            {!previewMode && onOpenBoardPreview && (
+              <Button
+                size="icon-sm"
+                variant="outline"
+                title="放大修图看板"
+                onClick={onOpenBoardPreview}
+              >
+                <Maximize2 className="h-4 w-4" />
+              </Button>
+            )}
             <Button
               size="sm"
               variant="outline"
@@ -602,8 +669,8 @@ function IssueResultBoard({
                     candidateId,
                     asset: currentAsset,
                     groupAssets,
-							delivery: deliveryByAttachment.get(currentAsset.id),
-							groupDeliveries,
+                    delivery: deliveryByAttachment.get(currentAsset.id),
+                    groupDeliveries,
                     variant: activeGroup?.variant ?? null,
                   })
                 }
@@ -616,8 +683,18 @@ function IssueResultBoard({
       </div>
       {expanded &&
         (assets.length ? (
-          <div className="grid min-h-80 lg:grid-cols-[240px_minmax(0,1fr)]">
-            <div className="border-r">
+          <div
+            className={cn(
+              "grid min-h-80 lg:grid-cols-[240px_minmax(0,1fr)]",
+              previewMode && "lg:h-full lg:min-h-0",
+            )}
+          >
+            <div
+              className={cn(
+                "border-r",
+                previewMode && "lg:min-h-0 lg:overflow-y-auto",
+              )}
+            >
               {groups.map((group) => {
                 const groupCandidateId = candidateIdForResultGroup(
                   group,
@@ -655,7 +732,13 @@ function IssueResultBoard({
                 );
               })}
             </div>
-            <div className="min-w-0">
+            <div
+              className={cn(
+                "min-w-0",
+                previewMode &&
+                  "lg:grid lg:min-h-0 lg:grid-rows-[auto_minmax(0,1fr)_auto]",
+              )}
+            >
               <div className="flex gap-2 overflow-x-auto border-b p-3">
                 {groupAssets.map((asset) => (
                   <button
@@ -678,6 +761,7 @@ function IssueResultBoard({
               <div
                 className={cn(
                   "grid min-h-[420px]",
+                  previewMode && "lg:min-h-0",
                   sourceCandidate && sourceURL
                     ? "md:grid-cols-2"
                     : "grid-cols-1",
@@ -688,11 +772,18 @@ function IssueResultBoard({
                     type="button"
                     className="grid min-h-0 grid-rows-[auto_minmax(0,1fr)] border-r text-left"
                     onClick={previewSource}
+                    title="查看竞品原图大图"
                   >
-                    <span className="border-b bg-muted/30 px-4 py-2 text-xs font-medium">
-                      原始素材
+                    <span className="flex items-center justify-between gap-2 border-b bg-muted/30 px-4 py-2 text-xs font-medium">
+                      竞品原图
+                      <Maximize2 className="h-3.5 w-3.5 text-muted-foreground" />
                     </span>
-                    <span className="flex h-[min(58vh,620px)] items-center justify-center bg-muted/15 p-4">
+                    <span
+                      className={cn(
+                        "flex items-center justify-center bg-black p-4",
+                        previewMode ? "h-full min-h-[320px]" : "h-[min(58vh,620px)]",
+                      )}
+                    >
                       <MediaPreview
                         url={sourceURL}
                         posterUrl={sourceCandidate.poster_url}
@@ -709,13 +800,22 @@ function IssueResultBoard({
                   type="button"
                   className="grid min-h-0 grid-rows-[auto_minmax(0,1fr)] text-left"
                   onClick={previewResult}
+                  title="查看修图结果大图"
                 >
-                  <span className="border-b bg-muted/30 px-4 py-2 text-xs font-medium">
-                    修图结果
-                    {activeGroup?.variant ? ` · 创意 ${activeGroup.variant}` : ""} ·{" "}
-                    {creativeDeliveryInfo(currentAsset?.filename ?? "")?.size}
+                  <span className="flex items-center justify-between gap-2 border-b bg-muted/30 px-4 py-2 text-xs font-medium">
+                    <span>
+                      修图结果
+                      {activeGroup?.variant ? ` · 创意 ${activeGroup.variant}` : ""} ·{" "}
+                      {creativeDeliveryInfo(currentAsset?.filename ?? "")?.size}
+                    </span>
+                    <Maximize2 className="h-3.5 w-3.5 text-muted-foreground" />
                   </span>
-                  <span className="flex h-[min(58vh,620px)] items-center justify-center bg-muted/15 p-4">
+                  <span
+                    className={cn(
+                      "flex items-center justify-center bg-black p-4",
+                      previewMode ? "h-full min-h-[320px]" : "h-[min(58vh,620px)]",
+                    )}
+                  >
                     {currentAsset && (
                       <MediaPreview
                         url={currentAsset.markdown_url || currentAsset.url}
