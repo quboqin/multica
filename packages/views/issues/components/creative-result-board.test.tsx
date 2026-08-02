@@ -91,7 +91,7 @@ describe("creative result board preview", () => {
     expect(screen.queryByTitle("放大修图看板")).not.toBeInTheDocument();
   });
 
-  it("keeps the source and three creative variants in one horizontal board", () => {
+  it("keeps three variants in a horizontal selector and compares one result at full width", () => {
     const sizes = ["1080x1080", "1200x628", "800x1000"];
     const assets = [1, 2, 3].flatMap((variant) =>
       sizes.map((size) => ({
@@ -102,6 +102,7 @@ describe("creative result board preview", () => {
       })),
     );
 
+    const onAssetChange = vi.fn();
     render(
       <IssueResultBoard
         archiveName="ADC-135-results"
@@ -112,7 +113,7 @@ describe("creative result board preview", () => {
         deliveryByAttachment={new Map()}
         expanded
         onExpandedChange={vi.fn()}
-        onAssetChange={vi.fn()}
+        onAssetChange={onAssetChange}
         onPreview={vi.fn()}
         onOpenBoardPreview={vi.fn()}
         onAdjust={vi.fn()}
@@ -121,14 +122,19 @@ describe("creative result board preview", () => {
     );
 
     expect(screen.getByTestId("creative-material-strip")).toHaveClass("overflow-x-auto");
-    const board = screen.getByTestId("creative-variant-board");
-    expect(board).toHaveClass("min-w-[920px]");
+    expect(screen.getByTestId("creative-variant-strip")).toHaveClass("overflow-x-auto");
+    const board = screen.getByTestId("creative-comparison-board");
+    expect(board).toHaveClass("min-w-[760px]");
     expect(screen.getByText("竞品原图")).toBeInTheDocument();
-    expect(screen.getByText("原始尺寸")).toBeInTheDocument();
     expect(screen.getByText("V01")).toBeInTheDocument();
     expect(screen.getByText("V02")).toBeInTheDocument();
     expect(screen.getByText("V03")).toBeInTheDocument();
-    expect(screen.getAllByText("1080x1080")).toHaveLength(3);
+    expect(screen.getByText("当前结果 · V01")).toBeInTheDocument();
+    expect(screen.getAllByTitle("查看修图结果大图")).toHaveLength(1);
+    expect(screen.getAllByText("1080x1080")).toHaveLength(1);
+
+    fireEvent.click(screen.getByText("V02"));
+    expect(onAssetChange).toHaveBeenCalledWith("final-2-1080x1080");
   });
 
   it("groups variants under their source material", () => {

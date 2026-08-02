@@ -729,7 +729,7 @@ export function IssueResultBoard({
           <div
             className={cn(
               "min-h-80",
-              previewMode && "lg:grid lg:h-full lg:min-h-0 lg:grid-rows-[auto_minmax(0,1fr)]",
+              previewMode && "lg:grid lg:h-full lg:min-h-0 lg:grid-rows-[auto_auto_minmax(0,1fr)]",
             )}
           >
             <div className="flex gap-2 overflow-x-auto border-b bg-muted/15 p-3" data-testid="creative-material-strip">
@@ -753,26 +753,68 @@ export function IssueResultBoard({
                 </button>
               ))}
             </div>
+            <div
+              className="flex gap-2 overflow-x-auto border-b px-3 py-2"
+              data-testid="creative-variant-strip"
+            >
+              {(activeCandidateGroup?.groups ?? []).map((group) => {
+                const representative = group.assets.find(
+                  (asset) => creativeDeliveryInfo(asset.filename)?.size === "1080x1080",
+                ) ?? group.assets[0];
+                const active = group.key === activeGroup?.key;
+                return (
+                  <button
+                    key={group.key}
+                    type="button"
+                    className={cn(
+                      "grid min-w-[180px] shrink-0 grid-cols-[44px_minmax(0,1fr)] items-center gap-2 border bg-background p-1.5 text-left",
+                      active && "border-emerald-600 bg-emerald-600/5 ring-1 ring-emerald-600/20",
+                    )}
+                    onClick={() => onAssetChange(representative?.id ?? "")}
+                  >
+                    <span className="aspect-square overflow-hidden bg-black">
+                      {representative && (
+                        <MediaPreview
+                          url={representative.markdown_url || representative.url}
+                          alt={representative.filename}
+                          compact
+                        />
+                      )}
+                    </span>
+                    <span className="min-w-0">
+                      <span className="block text-xs font-semibold">
+                        {group.variant ? `V${String(group.variant).padStart(2, "0")}` : group.label}
+                      </span>
+                      <span className="mt-0.5 block text-[11px] text-muted-foreground">
+                        {group.assets.length}/3 尺寸通过
+                      </span>
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
             <div className={cn("min-h-0 overflow-x-auto", previewMode && "lg:h-full")}>
               <div
-                data-testid="creative-variant-board"
+                data-testid="creative-comparison-board"
                 className={cn(
-                  "grid min-w-[920px] grid-cols-[minmax(190px,0.82fr)_repeat(3,minmax(220px,1fr))] divide-x",
+                  "grid min-w-[760px] grid-cols-2 divide-x",
                   previewMode && "lg:h-full",
                 )}
               >
-                <section className="grid min-h-0 grid-rows-[auto_auto_minmax(0,1fr)_auto] bg-muted/10">
-                  <div className="flex items-center justify-between border-b px-3 py-2.5 text-xs font-semibold">
+                <section className="grid min-h-0 min-w-0 grid-rows-[auto_auto_minmax(0,1fr)_auto] bg-muted/10">
+                  <div className="flex h-[45px] items-center justify-between border-b px-4 text-xs font-semibold">
                     <span>竞品原图</span>
                     <Badge variant="outline">参考基准</Badge>
                   </div>
-                  <div className="flex h-[45px] items-center border-b px-3 text-[11px] text-muted-foreground">原始尺寸</div>
+                  <div className="flex h-[48px] items-center border-b px-4 text-[11px] text-muted-foreground">
+                    原始尺寸 · 点击图片查看大图
+                  </div>
                   {sourceCandidate && sourceURL ? (
                     <button
                       type="button"
                       className={cn(
-                        "flex min-h-0 items-center justify-center bg-black p-3",
-                        previewMode ? "h-full min-h-[320px]" : "h-[min(56vh,600px)]",
+                        "flex min-h-0 items-center justify-center overflow-hidden bg-black p-4",
+                        previewMode ? "h-full min-h-[420px]" : "h-[min(66vh,720px)]",
                       )}
                       onClick={previewSource}
                       title="查看竞品原图大图"
@@ -786,76 +828,68 @@ export function IssueResultBoard({
                       />
                     </button>
                   ) : (
-                    <div className="flex min-h-[320px] items-center justify-center px-4 text-center text-xs text-muted-foreground">来源素材尚未映射</div>
+                    <div className="flex min-h-[420px] items-center justify-center px-4 text-center text-xs text-muted-foreground">来源素材尚未映射</div>
                   )}
-                  <div className="border-t px-3 py-2.5">
+                  <div className="min-w-0 border-t px-4 py-3">
                     <p className="truncate text-xs font-medium">{sourceCandidate?.title || sourceCandidate?.competitor || "原始素材"}</p>
                     <p className="mt-1 truncate text-[11px] text-muted-foreground">{sourceCandidate?.competitor || "-"}</p>
                   </div>
                 </section>
-                {(activeCandidateGroup?.groups ?? []).map((group) => {
-                  const preferredSize = group.key === activeGroup?.key
-                    ? creativeDeliveryInfo(currentAsset?.filename ?? "")?.size
-                    : "1080x1080";
-                  const displayedAsset = group.assets.find((asset) => creativeDeliveryInfo(asset.filename)?.size === preferredSize) ?? group.assets[0];
-                  const active = group.key === activeGroup?.key;
-                  return (
-                    <section key={group.key} className={cn("grid min-h-0 grid-rows-[auto_auto_minmax(0,1fr)_auto]", active && "bg-emerald-600/[0.03]")}>
-                      <button
-                        type="button"
-                        className={cn("flex items-center justify-between border-b px-3 py-2.5 text-left", active && "text-emerald-800")}
-                        onClick={() => onAssetChange(displayedAsset?.id ?? "")}
-                      >
-                        <span className="text-sm font-semibold">{group.variant ? `V${String(group.variant).padStart(2, "0")}` : group.label}</span>
-                        <Badge variant={active ? "default" : "outline"}>{group.assets.length}/3 通过</Badge>
-                      </button>
-                      <div className="grid h-[45px] grid-cols-3 gap-px border-b bg-border">
-                        {group.assets.map((asset) => {
-                          const size = creativeDeliveryInfo(asset.filename)?.size;
-                          const format = size === "1080x1080"
-                            ? "方形"
-                            : size === "1200x628"
-                              ? "横版"
-                              : size === "800x1000"
-                                ? "竖版"
-                                : "尺寸";
-                          return (
-                            <button
-                              key={asset.id}
-                              type="button"
-                              className={cn(
-                                "grid min-w-0 place-content-center bg-background px-1 py-1 text-[10px] font-medium leading-tight",
-                                asset.id === displayedAsset?.id && "bg-emerald-600/10 text-emerald-800",
-                              )}
-                              onClick={() => onAssetChange(asset.id)}
-                            >
-                              <span className="block text-muted-foreground">{format}</span>
-                              <span className="block whitespace-nowrap">{size}</span>
-                            </button>
-                          );
-                        })}
-                      </div>
-                      <button
-                        type="button"
-                        className={cn(
-                          "flex min-h-0 items-center justify-center bg-black p-3",
-                          previewMode ? "h-full min-h-[320px]" : "h-[min(56vh,600px)]",
-                        )}
-                        onClick={() => {
-                          if (displayedAsset) onAssetChange(displayedAsset.id);
-                          previewResult(displayedAsset);
-                        }}
-                        title="查看修图结果大图"
-                      >
-                        {displayedAsset && <MediaPreview url={displayedAsset.markdown_url || displayedAsset.url} alt={displayedAsset.filename} compact />}
-                      </button>
-                      <div className="border-t px-3 py-2.5">
-                        <p className="truncate text-xs font-medium" title={displayedAsset?.filename}>{displayedAsset?.filename}</p>
-                        <p className="mt-1 text-[11px] text-muted-foreground">点击图片放大查看</p>
-                      </div>
-                    </section>
-                  );
-                })}
+                <section className="grid min-h-0 min-w-0 grid-rows-[auto_auto_minmax(0,1fr)_auto]">
+                  <div className="flex h-[45px] items-center justify-between border-b px-4">
+                    <span className="text-xs font-semibold">
+                      当前结果{activeGroup?.variant ? ` · V${String(activeGroup.variant).padStart(2, "0")}` : ""}
+                    </span>
+                    <Badge>{groupAssets.length}/3 通过</Badge>
+                  </div>
+                  <div className="grid h-[48px] grid-cols-3 gap-px border-b bg-border">
+                    {groupAssets.map((asset) => {
+                      const size = creativeDeliveryInfo(asset.filename)?.size;
+                      const format = size === "1080x1080"
+                        ? "方形"
+                        : size === "1200x628"
+                          ? "横版"
+                          : size === "800x1000"
+                            ? "竖版"
+                            : "尺寸";
+                      return (
+                        <button
+                          key={asset.id}
+                          type="button"
+                          className={cn(
+                            "grid min-w-0 place-content-center bg-background px-1 py-1 text-[10px] font-medium leading-tight",
+                            asset.id === currentAsset?.id && "bg-emerald-600/10 text-emerald-800",
+                          )}
+                          onClick={() => onAssetChange(asset.id)}
+                        >
+                          <span className="block text-muted-foreground">{format}</span>
+                          <span className="block whitespace-nowrap">{size}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                  <button
+                    type="button"
+                    className={cn(
+                      "flex min-h-0 items-center justify-center overflow-hidden bg-black p-4",
+                      previewMode ? "h-full min-h-[420px]" : "h-[min(66vh,720px)]",
+                    )}
+                    onClick={() => previewResult(currentAsset)}
+                    title="查看修图结果大图"
+                  >
+                    {currentAsset && (
+                      <MediaPreview
+                        url={currentAsset.markdown_url || currentAsset.url}
+                        alt={currentAsset.filename}
+                        compact
+                      />
+                    )}
+                  </button>
+                  <div className="min-w-0 border-t px-4 py-3">
+                    <p className="truncate text-xs font-medium" title={currentAsset?.filename}>{currentAsset?.filename}</p>
+                    <p className="mt-1 text-[11px] text-muted-foreground">点击图片放大查看完整细节</p>
+                  </div>
+                </section>
               </div>
             </div>
           </div>
