@@ -86,8 +86,9 @@ describe("creative result board preview", () => {
     );
 
     expect(screen.getByText("修图结果看板预览")).toBeInTheDocument();
-    expect(screen.getByTitle("查看竞品原图大图")).toBeInTheDocument();
-    expect(screen.getByTitle("查看修图结果大图")).toBeInTheDocument();
+    expect(screen.getByTestId("creative-preview-toolbar")).toHaveClass("pr-14");
+    expect(screen.getByTitle("查看竞品原图大图")).toHaveClass("h-full", "min-h-0");
+    expect(screen.getByTitle("查看修图结果大图")).toHaveClass("h-full", "min-h-0");
     expect(screen.queryByTitle("放大修图看板")).not.toBeInTheDocument();
   });
 

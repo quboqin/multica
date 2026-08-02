@@ -389,26 +389,11 @@ export function ResultBoardPreviewDialog({
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }) {
-  const groups = groupCreativeDeliveries(boardProps.assets);
-  const candidateGroups = groupCreativeDeliveriesByCandidate(
-    boardProps.assets,
-    boardProps.candidateByAttachment,
-    boardProps.candidates,
-  );
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="grid h-[94vh] grid-rows-[auto_minmax(0,1fr)] gap-0 overflow-hidden p-0 sm:max-w-[min(98vw,1560px)]">
-        <DialogHeader className="border-b px-5 py-4 pr-14">
-          <div className="flex flex-wrap items-center gap-2">
-            <DialogTitle>修图结果看板预览</DialogTitle>
-            <Badge variant="outline">{candidateGroups.length} 张素材</Badge>
-            <Badge variant="outline">{groups.length} 个创意</Badge>
-            <Badge variant="outline">
-              {groups.flatMap((group) => group.assets).length} 个最新尺寸
-            </Badge>
-          </div>
-        </DialogHeader>
-        <div className="min-h-0 overflow-y-auto lg:overflow-hidden">
+      <DialogContent className="grid h-[96vh] grid-rows-[minmax(0,1fr)] gap-0 overflow-hidden p-0 sm:max-w-[min(98vw,1720px)]">
+        <DialogTitle className="sr-only">修图结果看板预览</DialogTitle>
+        <div className="min-h-0 overflow-hidden">
           <IssueResultBoard
             {...boardProps}
             expanded
@@ -625,14 +610,23 @@ export function IssueResultBoard({
       className={cn(
         "border bg-background",
         previewMode &&
-          "min-h-full border-0 lg:grid lg:h-full lg:min-h-0 lg:grid-rows-[auto_minmax(0,1fr)]",
+          "h-full min-h-0 overflow-hidden border-0 lg:grid lg:grid-rows-[auto_minmax(0,1fr)]",
       )}
     >
-      <div className={cn(expanded && "border-b")}>
-        <div className="flex min-w-0 items-center gap-2 px-4 py-3">
+      <div
+        className={cn(
+          expanded && "border-b",
+          previewMode && "flex min-w-0 items-center gap-3 px-4 py-2 pr-14",
+        )}
+        data-testid={previewMode ? "creative-preview-toolbar" : undefined}
+      >
+        <div className={cn("flex min-w-0 items-center gap-2 px-4 py-3", previewMode && "flex-1 p-0")}>
           {previewMode ? (
-            <div className="min-w-0 flex-1">
-              <p className="truncate text-xs text-muted-foreground">
+            <div className="flex min-w-0 flex-1 items-center gap-2">
+              <span className="shrink-0 text-sm font-semibold">修图结果看板</span>
+              <Badge variant="outline">{candidateGroups.length} 张素材</Badge>
+              <Badge variant="outline">{groups.length} 个创意</Badge>
+              <p className="min-w-0 truncate text-xs text-muted-foreground" title={currentAsset?.filename}>
                 {currentAsset?.filename || "选择创意和尺寸查看大图对比"}
               </p>
             </div>
@@ -667,7 +661,12 @@ export function IssueResultBoard({
           )}
         </div>
         {currentAsset && (
-          <div className="flex flex-wrap items-center gap-2 border-t bg-muted/10 px-4 py-2">
+          <div
+            className={cn(
+              "flex flex-wrap items-center gap-2 border-t bg-muted/10 px-4 py-2",
+              previewMode && "max-w-[65%] shrink-0 flex-nowrap overflow-x-auto border-0 bg-transparent p-0",
+            )}
+          >
             <Button
               size="sm"
               variant="outline"
@@ -732,13 +731,20 @@ export function IssueResultBoard({
               previewMode && "lg:grid lg:h-full lg:min-h-0 lg:grid-rows-[auto_auto_minmax(0,1fr)]",
             )}
           >
-            <div className="flex gap-2 overflow-x-auto border-b bg-muted/15 p-3" data-testid="creative-material-strip">
+            <div
+              className={cn(
+                "flex gap-2 overflow-x-auto border-b bg-muted/15 p-3",
+                previewMode && "p-2",
+              )}
+              data-testid="creative-material-strip"
+            >
               {candidateGroups.map((candidateGroup, index) => (
                 <button
                   key={candidateGroup.candidateId || candidateGroup.label}
                   type="button"
                   className={cn(
                     "grid min-w-[220px] max-w-[280px] shrink-0 grid-cols-[52px_minmax(0,1fr)] gap-3 border bg-background p-2 text-left",
+                    previewMode && "min-w-[200px] grid-cols-[40px_minmax(0,1fr)] gap-2 p-1.5",
                     candidateGroup.candidateId === candidateId && "border-emerald-600 bg-emerald-600/5 ring-1 ring-emerald-600/20",
                   )}
                   onClick={() => onAssetChange(candidateGroup.groups[0]?.assets[0]?.id ?? "")}
@@ -754,7 +760,10 @@ export function IssueResultBoard({
               ))}
             </div>
             <div
-              className="flex gap-2 overflow-x-auto border-b px-3 py-2"
+              className={cn(
+                "flex gap-2 overflow-x-auto border-b px-3 py-2",
+                previewMode && "px-2 py-1.5",
+              )}
               data-testid="creative-variant-strip"
             >
               {(activeCandidateGroup?.groups ?? []).map((group) => {
@@ -768,6 +777,7 @@ export function IssueResultBoard({
                     type="button"
                     className={cn(
                       "grid min-w-[180px] shrink-0 grid-cols-[44px_minmax(0,1fr)] items-center gap-2 border bg-background p-1.5 text-left",
+                      previewMode && "min-w-[160px] grid-cols-[36px_minmax(0,1fr)] p-1",
                       active && "border-emerald-600 bg-emerald-600/5 ring-1 ring-emerald-600/20",
                     )}
                     onClick={() => onAssetChange(representative?.id ?? "")}
@@ -793,7 +803,7 @@ export function IssueResultBoard({
                 );
               })}
             </div>
-            <div className={cn("min-h-0 overflow-x-auto", previewMode && "lg:h-full")}>
+            <div className={cn("min-h-0 overflow-x-auto", previewMode && "h-full overflow-y-hidden")}>
               <div
                 data-testid="creative-comparison-board"
                 className={cn(
@@ -814,7 +824,7 @@ export function IssueResultBoard({
                       type="button"
                       className={cn(
                         "flex min-h-0 items-center justify-center overflow-hidden bg-black p-4",
-                        previewMode ? "h-full min-h-[420px]" : "h-[min(66vh,720px)]",
+                        previewMode ? "h-full" : "h-[min(66vh,720px)]",
                       )}
                       onClick={previewSource}
                       title="查看竞品原图大图"
@@ -828,7 +838,10 @@ export function IssueResultBoard({
                       />
                     </button>
                   ) : (
-                    <div className="flex min-h-[420px] items-center justify-center px-4 text-center text-xs text-muted-foreground">来源素材尚未映射</div>
+                    <div className={cn(
+                      "flex items-center justify-center px-4 text-center text-xs text-muted-foreground",
+                      previewMode ? "h-full min-h-0" : "min-h-[420px]",
+                    )}>来源素材尚未映射</div>
                   )}
                   <div className="min-w-0 border-t px-4 py-3">
                     <p className="truncate text-xs font-medium">{sourceCandidate?.title || sourceCandidate?.competitor || "原始素材"}</p>
@@ -872,7 +885,7 @@ export function IssueResultBoard({
                     type="button"
                     className={cn(
                       "flex min-h-0 items-center justify-center overflow-hidden bg-black p-4",
-                      previewMode ? "h-full min-h-[420px]" : "h-[min(66vh,720px)]",
+                      previewMode ? "h-full" : "h-[min(66vh,720px)]",
                     )}
                     onClick={() => previewResult(currentAsset)}
                     title="查看修图结果大图"
