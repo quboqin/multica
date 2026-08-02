@@ -628,48 +628,46 @@ export function IssueResultBoard({
           "min-h-full border-0 lg:grid lg:h-full lg:min-h-0 lg:grid-rows-[auto_minmax(0,1fr)]",
       )}
     >
-      <div
-        className={cn(
-          "flex flex-wrap items-center justify-between gap-3 px-4 py-3",
-          expanded && "border-b",
-        )}
-      >
-        {previewMode ? (
-          <div className="min-w-0 flex-1">
-            <p className="truncate text-xs text-muted-foreground">
-              {currentAsset?.filename || "选择创意和尺寸查看大图对比"}
-            </p>
-          </div>
-        ) : (
-          <button
-            type="button"
-            className="flex min-w-0 flex-1 items-center gap-2 text-left"
-            onClick={() => onExpandedChange(!expanded)}
-          >
-            <ChevronRight
-              className={cn(
-                "h-4 w-4 text-muted-foreground transition-transform",
-                expanded && "rotate-90",
-              )}
-            />
-            <span className="text-sm font-semibold">修图结果看板</span>
-            <Badge variant="outline">{candidateGroups.length} 张素材</Badge>
-            <Badge variant="outline">{groups.length} 个创意</Badge>
-            <Badge variant="outline">{latestAssets.length} 个最新尺寸</Badge>
-          </button>
-        )}
+      <div className={cn(expanded && "border-b")}>
+        <div className="flex min-w-0 items-center gap-2 px-4 py-3">
+          {previewMode ? (
+            <div className="min-w-0 flex-1">
+              <p className="truncate text-xs text-muted-foreground">
+                {currentAsset?.filename || "选择创意和尺寸查看大图对比"}
+              </p>
+            </div>
+          ) : (
+            <button
+              type="button"
+              className="flex min-w-0 flex-1 items-center gap-2 text-left"
+              onClick={() => onExpandedChange(!expanded)}
+            >
+              <ChevronRight
+                className={cn(
+                  "h-4 w-4 text-muted-foreground transition-transform",
+                  expanded && "rotate-90",
+                )}
+              />
+              <span className="shrink-0 whitespace-nowrap text-sm font-semibold">修图结果看板</span>
+              <Badge variant="outline">{candidateGroups.length} 张素材</Badge>
+              <Badge variant="outline">{groups.length} 个创意</Badge>
+              <Badge variant="outline">{latestAssets.length} 张成图</Badge>
+            </button>
+          )}
+          {!previewMode && onOpenBoardPreview && currentAsset && (
+            <Button
+              size="icon-sm"
+              variant="outline"
+              className="shrink-0"
+              title="放大修图看板"
+              onClick={onOpenBoardPreview}
+            >
+              <Maximize2 className="h-4 w-4" />
+            </Button>
+          )}
+        </div>
         {currentAsset && (
-          <div className="flex flex-wrap gap-2">
-            {!previewMode && onOpenBoardPreview && (
-              <Button
-                size="icon-sm"
-                variant="outline"
-                title="放大修图看板"
-                onClick={onOpenBoardPreview}
-              >
-                <Maximize2 className="h-4 w-4" />
-              </Button>
-            )}
+          <div className="flex flex-wrap items-center gap-2 border-t bg-muted/10 px-4 py-2">
             <Button
               size="sm"
               variant="outline"
@@ -677,7 +675,7 @@ export function IssueResultBoard({
               onClick={() => void downloadZip("all")}
             >
               <Package className="h-4 w-4" />
-              {downloading === "all" ? "打包中" : "下载全部 ZIP"}
+              {downloading === "all" ? "打包中" : "全部 ZIP"}
             </Button>
             <Button
               size="icon-sm"
@@ -759,15 +757,16 @@ export function IssueResultBoard({
               <div
                 data-testid="creative-variant-board"
                 className={cn(
-                  "grid min-w-[1120px] grid-cols-[minmax(220px,0.8fr)_repeat(3,minmax(260px,1fr))] divide-x",
+                  "grid min-w-[920px] grid-cols-[minmax(190px,0.82fr)_repeat(3,minmax(220px,1fr))] divide-x",
                   previewMode && "lg:h-full",
                 )}
               >
-                <section className="grid min-h-0 grid-rows-[auto_minmax(0,1fr)_auto] bg-muted/10">
+                <section className="grid min-h-0 grid-rows-[auto_auto_minmax(0,1fr)_auto] bg-muted/10">
                   <div className="flex items-center justify-between border-b px-3 py-2.5 text-xs font-semibold">
                     <span>竞品原图</span>
                     <Badge variant="outline">参考基准</Badge>
                   </div>
+                  <div className="flex h-[45px] items-center border-b px-3 text-[11px] text-muted-foreground">原始尺寸</div>
                   {sourceCandidate && sourceURL ? (
                     <button
                       type="button"
@@ -810,20 +809,31 @@ export function IssueResultBoard({
                         <span className="text-sm font-semibold">{group.variant ? `V${String(group.variant).padStart(2, "0")}` : group.label}</span>
                         <Badge variant={active ? "default" : "outline"}>{group.assets.length}/3 通过</Badge>
                       </button>
-                      <div className="grid grid-cols-3 gap-px border-b bg-border">
-                        {group.assets.map((asset) => (
-                          <button
-                            key={asset.id}
-                            type="button"
-                            className={cn(
-                              "bg-background px-2 py-2 text-[11px] font-medium",
-                              asset.id === displayedAsset?.id && "bg-emerald-600/10 text-emerald-800",
-                            )}
-                            onClick={() => onAssetChange(asset.id)}
-                          >
-                            {creativeDeliveryInfo(asset.filename)?.size}
-                          </button>
-                        ))}
+                      <div className="grid h-[45px] grid-cols-3 gap-px border-b bg-border">
+                        {group.assets.map((asset) => {
+                          const size = creativeDeliveryInfo(asset.filename)?.size;
+                          const format = size === "1080x1080"
+                            ? "方形"
+                            : size === "1200x628"
+                              ? "横版"
+                              : size === "800x1000"
+                                ? "竖版"
+                                : "尺寸";
+                          return (
+                            <button
+                              key={asset.id}
+                              type="button"
+                              className={cn(
+                                "grid min-w-0 place-content-center bg-background px-1 py-1 text-[10px] font-medium leading-tight",
+                                asset.id === displayedAsset?.id && "bg-emerald-600/10 text-emerald-800",
+                              )}
+                              onClick={() => onAssetChange(asset.id)}
+                            >
+                              <span className="block text-muted-foreground">{format}</span>
+                              <span className="block whitespace-nowrap">{size}</span>
+                            </button>
+                          );
+                        })}
                       </div>
                       <button
                         type="button"

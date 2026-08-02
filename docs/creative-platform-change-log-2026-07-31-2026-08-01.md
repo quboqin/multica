@@ -937,3 +937,8 @@ API 已部署为 `localhost/multica-direct-backend:creative-platform-v13`，`dir
 `low / medium / high / xhigh / max / ultra`，Luna 为 `low / medium / high / xhigh / max`，
 通用 `gpt-5.6` 为 `none / low / medium / high / xhigh / max`。`/readyz` 数据库与迁移检查均为
 `ok`，前端类型检查和结果看板 12 个定向测试通过。
+
+结果看板首版横排在约 1000 像素宽的 Issue 内容区暴露三个布局问题：标题被操作按钮挤成竖排、
+原图列缺少尺寸占位导致图片与创意列错行、1120 像素最小画布使首屏只能看到两列半。现已将标题
+与操作区拆成稳定的上下两行，原图和 V01-V03 使用同构四行网格，并把横向画布收敛到 920 像素；
+三个尺寸使用固定高度的“方形/横版/竖版 + 尺寸”两行控制，不再截断 `800x1000`。

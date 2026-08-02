@@ -122,8 +122,9 @@ describe("creative result board preview", () => {
 
     expect(screen.getByTestId("creative-material-strip")).toHaveClass("overflow-x-auto");
     const board = screen.getByTestId("creative-variant-board");
-    expect(board).toHaveClass("min-w-[1120px]");
+    expect(board).toHaveClass("min-w-[920px]");
     expect(screen.getByText("竞品原图")).toBeInTheDocument();
+    expect(screen.getByText("原始尺寸")).toBeInTheDocument();
     expect(screen.getByText("V01")).toBeInTheDocument();
     expect(screen.getByText("V02")).toBeInTheDocument();
     expect(screen.getByText("V03")).toBeInTheDocument();
