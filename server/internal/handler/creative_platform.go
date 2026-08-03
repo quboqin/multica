@@ -1177,10 +1177,10 @@ func (h *Handler) PutCreativeItemBrief(w http.ResponseWriter, r *http.Request) {
 	if err := h.DB.QueryRow(r.Context(), `
 SELECT EXISTS(
   SELECT 1 FROM creative_material_issue_candidate
-  WHERE issue_id = $1 AND workspace_id = $2 AND candidate_id = $3 AND status = 'selected'
+  WHERE issue_id = $1 AND workspace_id = $2 AND candidate_id = $3
 )
 `, issue.ID, issue.WorkspaceID, candidateID).Scan(&candidateExists); err != nil || !candidateExists {
-		writeError(w, http.StatusUnprocessableEntity, "candidate must be selected before saving a creative brief")
+		writeError(w, http.StatusUnprocessableEntity, "candidate must belong to the issue before saving a creative brief")
 		return
 	}
 	encoded, err := json.Marshal(brief)

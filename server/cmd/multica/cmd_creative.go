@@ -107,10 +107,23 @@ func (e *imageEditTransportError) Unwrap() error { return e.err }
 
 type creativeMaterialsCLIResponse struct {
 	Candidates  []creativeMaterialCandidateCLI `json:"candidates"`
+	CrawlRuns   []creativeMaterialCrawlRunCLI  `json:"crawl_runs"`
 	Items       []creativeIssueItemCLI         `json:"items"`
 	Deliveries  []creativeDeliveryCLI          `json:"deliveries"`
 	Adjustments []json.RawMessage              `json:"adjustments"`
 	Context     json.RawMessage                `json:"context"`
+}
+
+type creativeMaterialCrawlRunCLI struct {
+	ID            string `json:"id"`
+	IssueID       string `json:"issue_id"`
+	ConnectorID   string `json:"connector_id"`
+	QuerySummary  string `json:"query_summary"`
+	Status        string `json:"status"`
+	ImportedCount int    `json:"imported_count"`
+	ExistingCount int    `json:"existing_count"`
+	TotalCount    int    `json:"total_count"`
+	CreatedAt     string `json:"created_at"`
 }
 
 type creativeDeliveryCLI struct {
@@ -140,16 +153,20 @@ type creativeIssueItemCLI struct {
 }
 
 type creativeMaterialCandidateCLI struct {
-	ID            string `json:"id"`
-	Competitor    string `json:"competitor"`
-	Title         string `json:"title"`
-	AssetType     string `json:"asset_type"`
-	PreviewURL    string `json:"preview_url"`
-	ResourceURL   string `json:"resource_url"`
-	PosterURL     string `json:"poster_url"`
-	ArchivedURL   string `json:"archived_url"`
-	ArchiveStatus string `json:"archive_status"`
-	Status        string `json:"status"`
+	ID                 string `json:"id"`
+	Competitor         string `json:"competitor"`
+	Title              string `json:"title"`
+	AssetType          string `json:"asset_type"`
+	PreviewURL         string `json:"preview_url"`
+	ResourceURL        string `json:"resource_url"`
+	PosterURL          string `json:"poster_url"`
+	ArchivedURL        string `json:"archived_url"`
+	ArchiveStatus      string `json:"archive_status"`
+	Status             string `json:"status"`
+	SourceAttachmentID string `json:"source_attachment_id"`
+	SourceIssueID      string `json:"source_issue_id"`
+	SourceRunID        string `json:"source_run_id"`
+	IsNewInRun         bool   `json:"is_new_in_run"`
 }
 
 func init() {
@@ -275,9 +292,6 @@ func runCreativeMaterialDownload(cmd *cobra.Command, args []string) error {
 	}
 	if selected == nil {
 		return fmt.Errorf("creative material candidate %s was not found on issue %s", args[1], args[0])
-	}
-	if selected.Status != "selected" {
-		return fmt.Errorf("creative material candidate %s is not selected", args[1])
 	}
 	if selected.ArchiveStatus != "completed" || strings.TrimSpace(selected.ArchivedURL) == "" {
 		return fmt.Errorf("creative material candidate %s is not available in platform archive storage", args[1])

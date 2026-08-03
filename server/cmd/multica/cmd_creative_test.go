@@ -156,7 +156,13 @@ func TestTruncateCLIError(t *testing.T) {
 func TestCreativeMaterialsCLIResponsePreservesDeliveries(t *testing.T) {
 	var response creativeMaterialsCLIResponse
 	err := json.Unmarshal([]byte(`{
-		"candidates":[],"items":[],"context":{},"adjustment_requests":[],
+		"candidates":[{
+			"id":"candidate-1","source_issue_id":"issue-1","source_run_id":"run-1","is_new_in_run":true
+		}],
+		"crawl_runs":[{
+			"id":"run-1","issue_id":"issue-1","status":"completed","imported_count":25
+		}],
+		"items":[],"context":{},"adjustment_requests":[],
 		"deliveries":[{
 			"id":"delivery-1","issue_id":"issue-1","candidate_id":"candidate-1",
 			"work_issue_id":"work-1","variant":3,"size":"1200x628","revision":2,
@@ -169,6 +175,12 @@ func TestCreativeMaterialsCLIResponsePreservesDeliveries(t *testing.T) {
 	}
 	if len(response.Deliveries) != 1 {
 		t.Fatalf("deliveries = %d, want 1", len(response.Deliveries))
+	}
+	if len(response.CrawlRuns) != 1 || response.CrawlRuns[0].ID != "run-1" || response.CrawlRuns[0].ImportedCount != 25 {
+		t.Fatalf("crawl runs = %#v", response.CrawlRuns)
+	}
+	if len(response.Candidates) != 1 || response.Candidates[0].SourceRunID != "run-1" || !response.Candidates[0].IsNewInRun {
+		t.Fatalf("candidate crawl identity = %#v", response.Candidates)
 	}
 	delivery := response.Deliveries[0]
 	if delivery.CandidateID != "candidate-1" || delivery.Variant != 3 || delivery.Size != "1200x628" || delivery.FinalAttachmentID != "final-1" {

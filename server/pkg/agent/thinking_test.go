@@ -267,7 +267,7 @@ func TestAnnotateCodexThinkingUsesGPT56APIFallback(t *testing.T) {
 	models := codexStaticModels()
 	annotateCodexThinking(context.Background(), models, filepath.Join(t.TempDir(), "missing-codex"))
 
-	for _, modelID := range []string{"gpt-5.6", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"} {
+	for _, modelID := range []string{"gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"} {
 		var found *Model
 		for i := range models {
 			if models[i].ID == modelID {

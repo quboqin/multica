@@ -24,6 +24,29 @@ description: "Coordinate an advertising-material squad when each selected image 
 5. 只有 V01-V03 各三个尺寸均为 `QC PASS` 或 `QC PASS WITH WARNINGS`，且逐图
    `blocking_failures` 均为空，才能把九张交付发布到父 Issue 结果看板。
 
+## 采集与素材预分析
+
+当前 Issue 的 `metadata.workflow=creative_collection` 时，它是一次可见的采集协调任务，不是成图
+任务。目标候选池从 `metadata.target_issue_id` 读取：
+
+1. 如果尚无 `metadata.workflow=creative_material_collection` 的直接子 Issue，只创建一个子 Issue，
+   分配给 AppGrowing 素材采集成员，要求把真实结果导入目标候选池，然后立即结束本轮。
+2. 采集子 Issue 未完成时不创建分析任务。采集完成后，定位本 Skill 的实际目录并执行：
+
+   ```text
+   python <当前 Skill 目录>/references/delegate_preanalysis.py --target-issue <目标候选池 Issue> --coordinator-issue <当前 Issue> --assignee 广告参考分析智能体 --max-concurrency 4
+   ```
+
+   脚本只读取最新抓取批次中 `is_new_in_run=true`、已归档、尚无利益点简报的图片；一次批量创建
+   独立参考分析子 Issue，并把候选卡标记为“素材预分析中”。不要让用户先选择素材，也不要为每张
+   素材再创建一层小队协调 Issue。
+3. 脚本创建任务后立即结束本轮，不轮询。所有参考分析子 Issue 完成后，核对目标候选池的本次新增
+   图片：成功项必须已有结构化 brief；失败项如实列出。只在这时汇总“采集 + 素材预分析”结果并
+   将当前协调 Issue 置为 `done`。
+
+该分支只做真实采集和理解，不启动方案、图像编辑、Prime 或 QC。视频暂不进入自动图片预分析，
+保留在候选池供用户查看；后续具备抽帧能力后可在平台 Skill 中扩展。
+
 初次生产的方案依赖是硬门槛。若当前创意工作 Issue 下不存在状态为 `done` 的
 `metadata.workflow=creative_plan` 子 Issue，且该子 Issue 没有交付方案附件，则本轮只能创建一个
 方案子 Issue并立即结束；不得把工作 Issue 描述、用户文案或 Leader 自己的推断当作已完成方案，
@@ -106,7 +129,7 @@ schema 不兼容，且结论明确说明成图无需重做，则修复 Skill 后
 新建“复验”Issue。只有 QC 已指出具体成图缺陷并且受影响图片完成新修订后，才能创建引用新 Prime
 证据的新 QC Issue。
 
-当前 Issue 若是候选池页面发起的“素材理解”请求，只委派参考分析成员读取真实图片并把结构化
+当前 Issue 若是候选池页面对人工上传或历史漏分析素材发起的“素材理解”请求，只委派参考分析成员读取真实图片并把结构化
 创意简报回写目标候选池，不启动图像编辑、包装或 QC。创意简报必须把视觉主题与主利益点分开；
 标题、标签和采集元数据不能替代像素证据。分析还必须固化业务语义、信息机制、视觉锚点、色系
 锚点、必须保留项和允许变化项，供策划、生成和 QC 使用。

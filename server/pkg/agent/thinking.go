@@ -302,7 +302,7 @@ func annotateCodexThinking(ctx context.Context, models []Model, executablePath s
 
 func isGPT56APIModel(modelID string) bool {
 	switch modelID {
-	case "gpt-5.6", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna":
+	case "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna":
 		return true
 	default:
 		return false

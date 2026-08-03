@@ -7,7 +7,9 @@ allowed-tools: Bash(multica *)
 # 广告参考与创意理解
 
 读取完整 Issue 和评论，从任务描述取得目标候选池 Issue ID 和候选 ID。只能分析
-`multica creative materials <目标候选池 Issue ID> --selected --output json` 返回的人工已选候选。
+`multica creative materials <目标候选池 Issue ID> --output json` 返回、且 ID 与任务完全一致的候选。
+采集流程会在用户选图前分析本次新增素材，因此候选状态可以是 `new` 或 `selected`；不得以“尚未
+选择”为由跳过。
 用 `multica creative material download` 下载平台归档文件，并以运行时原生视觉能力读取真实像素；
 标题、标签、媒体和采集元数据只能辅助核对，不能作为主利益点结论。素材不可读时回传
 `needs_input` 并结束。

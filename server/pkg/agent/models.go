@@ -233,7 +233,6 @@ func claudeStaticModels() []Model {
 func codexStaticModels() []Model {
 	return []Model{
 		{ID: "gpt-5.6-sol", Label: "GPT-5.6 Sol", Provider: "openai", Default: true},
-		{ID: "gpt-5.6", Label: "GPT-5.6", Provider: "openai"},
 		{ID: "gpt-5.6-terra", Label: "GPT-5.6 Terra", Provider: "openai"},
 		{ID: "gpt-5.6-luna", Label: "GPT-5.6 Luna", Provider: "openai"},
 		{ID: "gpt-5.5", Label: "GPT-5.5", Provider: "openai"},

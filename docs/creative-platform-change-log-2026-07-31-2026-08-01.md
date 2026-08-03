@@ -920,9 +920,9 @@ ADC-159 创意工作
 
 ## 24. GPT-5.6 平台模型目录（2026-08-02）
 
-Codex 智能体模型目录提供完整 GPT-5.6 家族：通用别名 `gpt-5.6`、旗舰 `gpt-5.6-sol`、均衡型
-`gpt-5.6-terra` 和高吞吐型 `gpt-5.6-luna`，`gpt-5.6-sol` 作为最新默认展示项，`gpt-5.5`
-继续保留。平台优先采用本机 Codex 的结构化模型目录；本机已识别的 Sol 当前显示 `low`、
+Codex 智能体模型目录提供旗舰 `gpt-5.6-sol`、均衡型 `gpt-5.6-terra` 和高吞吐型
+`gpt-5.6-luna`，`gpt-5.6-sol` 作为最新默认展示项，`gpt-5.5` 继续保留。平台优先采用本机
+Codex 的结构化模型目录；本机已识别的 Sol 当前显示 `low`、
 `medium`、`high`、`xhigh`、`max`、`ultra`，默认 `low`。未被本机目录枚举的 5.6 型号使用官方 API
 努力程度 `none / low / medium / high / xhigh / max`，默认 `medium`。此次只增加平台可选项，没有
 自动改写现有素材小队各智能体的模型。
@@ -934,9 +934,8 @@ Codex 智能体模型目录提供完整 GPT-5.6 家族：通用别名 `gpt-5.6`�
 API 已部署为 `localhost/multica-direct-backend:creative-platform-v13`，`direct-image2` daemon 使用
 同版 CLI，最大任务并发保持 8。平台端到端模型发现实测返回：Sol 为
 `low / medium / high / xhigh / max / ultra`，Terra 为
-`low / medium / high / xhigh / max / ultra`，Luna 为 `low / medium / high / xhigh / max`，
-通用 `gpt-5.6` 为 `none / low / medium / high / xhigh / max`。`/readyz` 数据库与迁移检查均为
-`ok`，前端类型检查和结果看板 12 个定向测试通过。
+`low / medium / high / xhigh / max / ultra`，Luna 为 `low / medium / high / xhigh / max`。
+`/readyz` 数据库与迁移检查均为 `ok`，前端类型检查和结果看板 12 个定向测试通过。
 
 首版四张大图横排在约 1000 像素宽的 Issue 内容区导致图片过窄、文件名相互挤压，无法承担清晰
 对比。现已将标题与操作区拆成稳定的上下两行，并取消四张大图同屏：V01-V03 只作为横向缩略

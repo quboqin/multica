@@ -122,7 +122,7 @@ func TestCodexStaticModelsExposesGPT56Family(t *testing.T) {
 		ids[m.ID] = m
 	}
 	for _, want := range []string{
-		"gpt-5.6", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna",
+		"gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna",
 		"gpt-5.5", "gpt-5.5-mini",
 		"gpt-5.4", "gpt-5.4-mini",
 		"gpt-5.3-codex", "gpt-5",
@@ -131,6 +131,9 @@ func TestCodexStaticModelsExposesGPT56Family(t *testing.T) {
 		if _, ok := ids[want]; !ok {
 			t.Errorf("missing expected Codex model %q in: %+v", want, models)
 		}
+	}
+	if _, ok := ids["gpt-5.6"]; ok {
+		t.Errorf("unsupported `gpt-5.6` entry must not be exposed: %+v", models)
 	}
 	latest, ok := ids["gpt-5.6-sol"]
 	if !ok || !latest.Default {
