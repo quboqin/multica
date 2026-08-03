@@ -169,6 +169,7 @@ def compose_manifest(manifest_path: Path) -> dict:
     base_dir = manifest_path.resolve().parent
     results = []
     seen_ids = set()
+    seen_outputs = set()
     for index, job in enumerate(jobs, start=1):
         if not isinstance(job, dict):
             raise ValueError(f"manifest job {index} must be an object")
@@ -176,11 +177,15 @@ def compose_manifest(manifest_path: Path) -> dict:
         if not job_id or job_id in seen_ids:
             raise ValueError(f"manifest job id must be non-empty and unique: {job_id!r}")
         seen_ids.add(job_id)
+        output_path = resolve_manifest_path(base_dir, str(job["output"])).resolve()
+        if output_path in seen_outputs:
+            raise ValueError(f"manifest output path must be unique: {output_path}")
+        seen_outputs.add(output_path)
         try:
             result = compose(
                 resolve_manifest_path(base_dir, str(job["input"])),
                 resolve_manifest_path(base_dir, str(job["template"])),
-                resolve_manifest_path(base_dir, str(job["output"])),
+                output_path,
                 str(job["qr_payload"]),
             )
             results.append({"id": job_id, "status": "succeeded", **result})

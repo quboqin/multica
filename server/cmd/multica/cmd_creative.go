@@ -106,11 +106,11 @@ func (e *imageEditTransportError) Error() string {
 func (e *imageEditTransportError) Unwrap() error { return e.err }
 
 type creativeMaterialsCLIResponse struct {
-	Candidates         []creativeMaterialCandidateCLI `json:"candidates"`
-	Items              []creativeIssueItemCLI         `json:"items"`
-	Deliveries         []creativeDeliveryCLI          `json:"deliveries"`
-	AdjustmentRequests []json.RawMessage              `json:"adjustment_requests"`
-	Context            json.RawMessage                `json:"context"`
+	Candidates  []creativeMaterialCandidateCLI `json:"candidates"`
+	Items       []creativeIssueItemCLI         `json:"items"`
+	Deliveries  []creativeDeliveryCLI          `json:"deliveries"`
+	Adjustments []json.RawMessage              `json:"adjustments"`
+	Context     json.RawMessage                `json:"context"`
 }
 
 type creativeDeliveryCLI struct {

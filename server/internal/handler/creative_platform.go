@@ -172,16 +172,26 @@ func (h *Handler) ListCreativeMaterialLibrary(w http.ResponseWriter, r *http.Req
 	}
 	rows, err := h.DB.Query(r.Context(), `
 SELECT
-  id::text, workspace_id::text, connector_id, COALESCE(external_id, ''),
-  dedupe_key, competitor, title, asset_type,
-  preview_url, resource_url, poster_url, original_url,
-  archived_url, archive_status, archive_error,
-  duration_days, impression_estimate, media_names, area_names,
-  language_names, platform_names, tags, note, COALESCE(source_attachment_id::text, ''),
-  first_seen_at::text, last_seen_at::text, created_at::text, updated_at::text
-FROM creative_material_candidate
-WHERE workspace_id = $1
-ORDER BY last_seen_at DESC
+  c.id::text, c.workspace_id::text, c.connector_id, COALESCE(c.external_id, ''),
+  c.dedupe_key, c.competitor, c.title, c.asset_type,
+  c.preview_url, c.resource_url, c.poster_url, c.original_url,
+  c.archived_url, c.archive_status, c.archive_error,
+  c.duration_days, c.impression_estimate, c.media_names, c.area_names,
+  c.language_names, c.platform_names, c.tags || COALESCE(latest.tags, '{}'::text[]),
+  COALESCE(NULLIF(latest.note, ''), c.note), COALESCE(latest.selected_at::text, ''),
+  c.first_seen_at::text, c.last_seen_at::text, c.created_at::text, c.updated_at::text,
+  COALESCE(c.source_attachment_id::text, ''), COALESCE(latest.status, 'new'),
+  COALESCE(latest.issue_id::text, ''), COALESCE(latest.source_run_id::text, ''), false
+FROM creative_material_candidate c
+LEFT JOIN LATERAL (
+  SELECT ic.issue_id, ic.source_run_id, ic.status, ic.tags, ic.note, ic.selected_at
+  FROM creative_material_issue_candidate ic
+  WHERE ic.workspace_id = c.workspace_id AND ic.candidate_id = c.id
+  ORDER BY ic.updated_at DESC
+  LIMIT 1
+) latest ON true
+WHERE c.workspace_id = $1
+ORDER BY c.last_seen_at DESC
 LIMIT 500
 `, workspaceID)
 	if err != nil {
@@ -194,22 +204,25 @@ LIMIT 500
 		var item creativeMaterialCandidateResponse
 		var duration pgtype.Float8
 		var impression pgtype.Int8
+		var selectedAt string
 		if err := rows.Scan(
 			&item.ID, &item.WorkspaceID, &item.ConnectorID, &item.ExternalID,
 			&item.DedupeKey, &item.Competitor, &item.Title, &item.AssetType,
 			&item.PreviewURL, &item.ResourceURL, &item.PosterURL, &item.OriginalURL,
 			&item.ArchivedURL, &item.ArchiveStatus, &item.ArchiveError,
 			&duration, &impression, &item.MediaNames, &item.AreaNames,
-			&item.LanguageNames, &item.PlatformNames, &item.Tags, &item.Note, &item.SourceAttachmentID,
-			&item.FirstSeenAt, &item.LastSeenAt,
-			&item.CreatedAt, &item.UpdatedAt,
+			&item.LanguageNames, &item.PlatformNames, &item.Tags, &item.Note, &selectedAt,
+			&item.FirstSeenAt, &item.LastSeenAt, &item.CreatedAt, &item.UpdatedAt,
+			&item.SourceAttachmentID, &item.Status, &item.SourceIssueID, &item.SourceRunID, &item.IsNewInRun,
 		); err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to read creative material library")
 			return
 		}
 		item.DurationDays = float8Ptr(duration)
 		item.ImpressionEstimate = int8Ptr(impression)
-		item.Status = "library"
+		if selectedAt != "" {
+			item.SelectedAt = &selectedAt
+		}
 		candidates = append(candidates, item)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"candidates": candidates})

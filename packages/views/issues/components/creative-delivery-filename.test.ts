@@ -44,6 +44,19 @@ describe("creative delivery filenames", () => {
     });
   });
 
+  it("accepts production revision and Prime suffixes", () => {
+    expect(creativeDeliveryInfo("V01_1080x1080_r2_prime.png")).toEqual({
+      branch: "V01",
+      size: "1080x1080",
+      revision: 2,
+    });
+    expect(creativeDeliveryInfo("2026-08_AdaKami_Indonesia_candidate_V03_800x1000_r1.png")).toEqual({
+      branch: "2026-08_AdaKami_Indonesia_candidate_V03",
+      size: "800x1000",
+      revision: 1,
+    });
+  });
+
   it("rejects source and evidence images that are not final deliveries", () => {
     expect(isCreativeDeliveryFilename("adc47_base_800x1000.png")).toBe(false);
     expect(isCreativeDeliveryFilename("prime_template.png")).toBe(false);

@@ -2115,6 +2115,14 @@ async function runAppGrowingMaterialSearch(page, context, connector, params = {}
   const totalLimit = positiveIntegerParam(params.limit, 25, 1, 200);
   const pageLimit = positiveIntegerParam(params.pages_per_competitor, 3, 1, 5);
   const priorityPageLimit = positiveIntegerParam(params.priority_pages_per_competitor, Math.max(5, pageLimit), 1, 8);
+  const novelOnly = params.novel_only === true;
+  const maxPageLimit = novelOnly
+    ? positiveIntegerParam(params.max_pages_per_competitor, Math.max(10, pageLimit), pageLimit, 30)
+    : pageLimit;
+  const maxPriorityPageLimit = novelOnly
+    ? positiveIntegerParam(params.max_priority_pages_per_competitor, Math.max(15, priorityPageLimit), priorityPageLimit, 30)
+    : priorityPageLimit;
+  const excludedDedupeKeys = new Set(normalizeSearchParamList(params.exclude_dedupe_keys));
   const captureTimeoutMS = positiveIntegerParam(params.capture_timeout_ms, 12_000, 3_000, 60_000);
   const graphQLTimeoutMS = positiveIntegerParam(params.graphql_timeout_ms, appGrowingGraphQLTimeoutMS, 3_000, 30_000);
   const searchBudgetMS = positiveIntegerParam(
@@ -2154,10 +2162,13 @@ async function runAppGrowingMaterialSearch(page, context, connector, params = {}
   if (params.graphql_material_search !== false) {
     const brandCache = new Map();
     graphqlSearch:
-    for (const competitor of competitors) {
-      const priority = priorityCompetitors.has(normalizeCompetitorKey(competitor));
-      const pages = priority ? priorityPageLimit : pageLimit;
-      for (let pageNumber = 1; pageNumber <= pages; pageNumber += 1) {
+    for (let pageNumber = 1; pageNumber <= maxPriorityPageLimit; pageNumber += 1) {
+      for (const competitor of competitors) {
+        const priority = priorityCompetitors.has(normalizeCompetitorKey(competitor));
+        const pages = priority ? maxPriorityPageLimit : maxPageLimit;
+        if (pageNumber > pages) {
+          continue;
+        }
         if (!appGrowingHasBudget(deadline, Math.min(5_000, graphQLTimeoutMS))) {
           markBudgetExhausted("graphql_api", competitor, priority, pageNumber);
           break graphqlSearch;
@@ -2200,17 +2211,23 @@ async function runAppGrowingMaterialSearch(page, context, connector, params = {}
           });
         }
       }
+      if (pageNumber >= Math.max(pageLimit, priorityPageLimit)
+        && appGrowingNovelTargetMet(materials, rules, totalLimit, excludedDedupeKeys)) {
+        break;
+      }
     }
   }
 
-  const browserFallbackCompetitors = appGrowingBrowserFallbackCompetitors(
-    competitors,
-    captured,
-    params,
-    adaptiveMemory,
-    browserFallbackEnabled,
-    adaptiveMode,
-  );
+  const browserFallbackCompetitors = appGrowingNovelTargetMet(materials, rules, totalLimit, excludedDedupeKeys)
+    ? []
+    : appGrowingBrowserFallbackCompetitors(
+      competitors,
+      captured,
+      params,
+      adaptiveMemory,
+      browserFallbackEnabled,
+      adaptiveMode,
+    );
   const adaptiveBrowserFallbackEnabled = adaptiveMode
     && !browserFallbackEnabled
     && browserFallbackCompetitors.length > 0;
@@ -2228,13 +2245,16 @@ async function runAppGrowingMaterialSearch(page, context, connector, params = {}
       let browserCapturePage = page;
       let browserFallbackStopped = false;
       browserFallback:
-      for (const competitor of browserFallbackCompetitors) {
-        if (browserFallbackStopped) {
-          break;
-        }
-        const priority = priorityCompetitors.has(normalizeCompetitorKey(competitor));
-        const pages = priority ? priorityPageLimit : pageLimit;
-        for (let pageNumber = 1; pageNumber <= pages; pageNumber += 1) {
+      for (let pageNumber = 1; pageNumber <= maxPriorityPageLimit; pageNumber += 1) {
+        for (const competitor of browserFallbackCompetitors) {
+          if (browserFallbackStopped) {
+            break browserFallback;
+          }
+          const priority = priorityCompetitors.has(normalizeCompetitorKey(competitor));
+          const pages = priority ? maxPriorityPageLimit : maxPageLimit;
+          if (pageNumber > pages) {
+            continue;
+          }
           if (!appGrowingHasBudget(deadline, appGrowingBrowserFallbackMinBudgetMS)) {
             markBudgetExhausted("browser_network", competitor, priority, pageNumber);
             break browserFallback;
@@ -2280,6 +2300,10 @@ async function runAppGrowingMaterialSearch(page, context, connector, params = {}
             browserCapturePage = replacementPage;
           }
         }
+        if (pageNumber >= Math.max(pageLimit, priorityPageLimit)
+          && appGrowingNovelTargetMet(materials, rules, totalLimit, excludedDedupeKeys)) {
+          break;
+        }
       }
     }
   } else if (materials.length === 0 && params.browser_capture_fallback !== false) {
@@ -2294,6 +2318,7 @@ async function runAppGrowingMaterialSearch(page, context, connector, params = {}
 
   const strictSelection = selectAppGrowingMaterials(materials, rules, totalLimit, {
     fallbackToTopMaterials: false,
+    excludedKeys: excludedDedupeKeys,
   });
   let selection = strictSelection;
   let supplementCount = 0;
@@ -2301,6 +2326,7 @@ async function runAppGrowingMaterialSearch(page, context, connector, params = {}
   if (explicitTopFallback || (adaptiveMode && strictSelection.selected.length === 0 && strictSelection.unique.length > 0)) {
     const fallbackSelection = selectAppGrowingMaterials(materials, rules, totalLimit, {
       fallbackToTopMaterials: true,
+      excludedKeys: excludedDedupeKeys,
     });
     if (fallbackSelection.selected.length > strictSelection.selected.length) {
       selection = fallbackSelection;
@@ -2313,6 +2339,7 @@ async function runAppGrowingMaterialSearch(page, context, connector, params = {}
   const strictMaterialKeys = new Set(strictSelection.selected.map(appGrowingMaterialIdentityKey));
   const selectedMaterials = selection.selected.map((material) => ({
     ...material,
+    dedupe_key: appGrowingMaterialDedupeKey(material),
     selection_match: strictMaterialKeys.has(appGrowingMaterialIdentityKey(material)) ? "strict" : "supplement",
   }));
   const selectionSummary = appGrowingSelectionMixSummary(selectedMaterials, rules, totalLimit);
@@ -2338,7 +2365,7 @@ async function runAppGrowingMaterialSearch(page, context, connector, params = {}
       ? "AppGrowing reported that the account was logged out; re-authentication is required"
       : blockingError
         ? `AppGrowing material_search failed before reading material data: ${blockingError}`
-        : `selected ${selection.selected.length} AppGrowing materials from ${competitors.length} competitors; ${mixNote}; asset download storage is not configured${budgetNote}`,
+        : `selected ${selection.selected.length} new AppGrowing materials from ${competitors.length} competitors after filtering ${selection.excludedCount} previously seen assets; ${mixNote}; asset download storage is not configured${budgetNote}`,
     selection_summary: selectionSummary,
     raw: {
       connector_id: connector.id,
@@ -2353,6 +2380,9 @@ async function runAppGrowingMaterialSearch(page, context, connector, params = {}
         total_limit: totalLimit,
         pages_per_competitor: pageLimit,
         priority_pages_per_competitor: priorityPageLimit,
+        max_pages_per_competitor: maxPageLimit,
+        max_priority_pages_per_competitor: maxPriorityPageLimit,
+        novel_only: novelOnly,
         planned_pages: plannedPages,
         graphql_timeout_ms: graphQLTimeoutMS,
         time_budget_ms: searchBudgetMS,
@@ -2379,6 +2409,7 @@ async function runAppGrowingMaterialSearch(page, context, connector, params = {}
         strict_count: strictSelection.selected.length,
         supplement_count: supplementCount,
         selected: selection.selected.length,
+        historical_materials_filtered: selection.excludedCount,
         missing_duration_days: selection.unique.filter((item) => !Number.isFinite(Number(item.duration_days))).length,
         missing_impression_estimate: selection.unique.filter((item) => !Number.isFinite(Number(item.impression_estimate))).length,
       },
@@ -2640,7 +2671,27 @@ function appGrowingAddLearnedSourceStrategy(out, seen, competitor, preferredSour
 }
 
 function appGrowingMaterialIdentityKey(material) {
-  return String(material?.resource_url || material?.preview_url || material?.poster_url || material?.material_id || material?.title || JSON.stringify(material || {}));
+  return appGrowingMaterialDedupeKey(material)
+    || String(material?.material_id || material?.title || JSON.stringify(material || {}));
+}
+
+function appGrowingMaterialDedupeKey(material) {
+  const raw = String(material?.resource_url || material?.preview_url || material?.poster_url || material?.landing_url || "").trim();
+  if (!raw) {
+    return "";
+  }
+  let identity = raw;
+  try {
+    const url = new URL(raw);
+    url.search = "";
+    url.hash = "";
+    url.protocol = url.protocol.toLowerCase();
+    url.hostname = url.hostname.toLowerCase();
+    identity = url.toString();
+  } catch {
+    // Keep non-URL resource identifiers stable as provided.
+  }
+  return `sha256:${crypto.createHash("sha256").update(identity).digest("hex")}`;
 }
 
 function appGrowingPlannedMaterialPages(competitors, priorityCompetitors, pageLimit, priorityPageLimit) {
@@ -3549,7 +3600,9 @@ function appGrowingResourceCandidates(item, creative) {
 }
 
 function selectAppGrowingMaterials(materials, rules, totalLimit, options = {}) {
-  const unique = uniqueMaterials(materials);
+  const allUnique = uniqueMaterials(materials);
+  const excludedKeys = options.excludedKeys instanceof Set ? options.excludedKeys : new Set();
+  const unique = allUnique.filter((material) => !excludedKeys.has(appGrowingMaterialDedupeKey(material)));
   const newCandidates = unique
     .filter((item) =>
       matchesUpperBound(item.duration_days, rules.new_materials, "duration_days")
@@ -3581,7 +3634,15 @@ function selectAppGrowingMaterials(materials, rules, totalLimit, options = {}) {
     newCandidates,
     volumeCandidates,
     selected,
+    excludedCount: allUnique.length - unique.length,
   };
+}
+
+function appGrowingNovelTargetMet(materials, rules, totalLimit, excludedKeys) {
+  return selectAppGrowingMaterials(materials, rules, totalLimit, {
+    fallbackToTopMaterials: false,
+    excludedKeys,
+  }).selected.length >= totalLimit;
 }
 
 function appGrowingSelectionMixSummary(selectedMaterials, rules, totalLimit) {
@@ -3681,7 +3742,9 @@ function uniqueMaterials(materials) {
   const seen = new Set();
   const out = [];
   for (const material of materials) {
-    const key = material.resource_url || material.material_id || `${material.competitor}:${material.title}:${material.duration_days}:${material.impression_estimate}`;
+    const key = appGrowingMaterialDedupeKey(material)
+      || material.material_id
+      || `${material.competitor}:${material.title}:${material.duration_days}:${material.impression_estimate}`;
     if (!key || seen.has(key)) {
       continue;
     }
@@ -3697,7 +3760,7 @@ function takeCandidates(candidates, limit, bucket, selected, selectedKeys) {
     if (remaining <= 0) {
       break;
     }
-    const key = candidate.resource_url || candidate.material_id;
+    const key = appGrowingMaterialDedupeKey(candidate) || candidate.material_id;
     if (key && selectedKeys.has(key)) {
       continue;
     }
@@ -4322,6 +4385,7 @@ export {
   appGrowingCompetitorDiagnostics,
   appGrowingGraphQLDateWindow,
   appGrowingGraphQLRequest,
+  appGrowingMaterialDedupeKey,
   appGrowingMaterialURL,
   appGrowingSearchAppVariables,
   appGrowingSelectionMixSummary,
@@ -4334,6 +4398,7 @@ export {
   isBrowserPageCrashError,
   normalizeDeclarativeConnector,
   normalizeAppGrowingMaterial,
+  selectAppGrowingMaterials,
   shouldBlockAppGrowingCrawlResource,
   shouldUseAppGrowingBrowserFallback,
 };

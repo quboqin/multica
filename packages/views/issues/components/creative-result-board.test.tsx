@@ -4,9 +4,12 @@ import { describe, expect, it, vi } from "vitest";
 import type { CreativeMaterialCandidate } from "@multica/core/types";
 
 import {
+  creativeMaterialPoolCandidatesForScope,
+  creativeResultCandidates,
   groupCreativeDeliveriesByCandidate,
   inferCreativeFeedbackDecision,
   IssueResultBoard,
+  mergeCreativeMaterialPoolCandidates,
   ResultBoardPreviewDialog,
 } from "./creative-material-pool";
 
@@ -31,6 +34,52 @@ const candidate = {
 } as unknown as CreativeMaterialCandidate;
 
 describe("creative result board preview", () => {
+  it("keeps selected candidates out of the result board until production starts", () => {
+    const selected = { ...candidate, status: "selected" } as CreativeMaterialCandidate;
+    expect(creativeResultCandidates([selected], [], [])).toEqual([]);
+    expect(creativeResultCandidates([selected], [{ candidate_id: selected.id, work_issue_id: "work-1" }] as never, [])).toEqual([selected]);
+  });
+
+  it("merges the full material pool and separates current-run assets from pending history", () => {
+    const current = { ...candidate, id: "current", source_issue_id: "issue-1", is_new_in_run: true, status: "new" } as CreativeMaterialCandidate;
+    const historical = { ...candidate, id: "historical", source_issue_id: "issue-old", is_new_in_run: false, status: "new" } as CreativeMaterialCandidate;
+    const merged = mergeCreativeMaterialPoolCandidates([current], [current, historical]);
+
+    expect(merged.map((value) => value.id)).toEqual(["current", "historical"]);
+    expect(creativeMaterialPoolCandidatesForScope(merged, new Set([current.id]), "issue-1", "current")).toEqual([current]);
+    expect(creativeMaterialPoolCandidatesForScope(merged, new Set([current.id]), "issue-1", "pending")).toEqual([historical]);
+  });
+
+  it("keeps the selected source visible before the first delivery", () => {
+    const onOpenBoardPreview = vi.fn();
+    const onPreview = vi.fn();
+
+    render(
+      <IssueResultBoard
+        archiveName="ADC-new-results"
+        assets={[]}
+        candidates={[{ ...candidate, status: "selected" } as CreativeMaterialCandidate]}
+        candidateByAttachment={new Map()}
+        deliveryByAttachment={new Map()}
+        expanded
+        onExpandedChange={vi.fn()}
+        onAssetChange={vi.fn()}
+        onPreview={onPreview}
+        onOpenBoardPreview={onOpenBoardPreview}
+        onAdjust={vi.fn()}
+        onCandidateFeedback={vi.fn()}
+      />,
+    );
+
+    expect(screen.getAllByText("等待首批成图").length).toBeGreaterThan(0);
+    expect(screen.getByText("0/9")).toBeInTheDocument();
+    expect(screen.getAllByAltText(candidate.title).every((image) => image.getAttribute("src") === candidate.archived_url)).toBe(true);
+    fireEvent.click(screen.getByTitle("放大修图看板"));
+    expect(onOpenBoardPreview).toHaveBeenCalledOnce();
+    fireEvent.click(screen.getByTitle("查看竞品原图大图"));
+    expect(onPreview).toHaveBeenLastCalledWith(expect.objectContaining({ url: candidate.archived_url }));
+  });
+
   it("exposes board, source, and result enlargement actions", () => {
     const onOpenBoardPreview = vi.fn();
     const onPreview = vi.fn();
@@ -155,6 +204,37 @@ describe("creative result board preview", () => {
     expect(groups[0]?.candidateId).toBe(candidate.id);
     expect(groups[1]?.candidateId).toBe(secondCandidate.id);
     expect(groups[1]?.groups[0]?.variant).toBe(1);
+  });
+
+  it("uses structured deliveries for production Prime filenames", () => {
+    const assets = [1, 2, 3].flatMap((variant) =>
+      ["1080x1080", "1200x628", "800x1000"].map((size) => ({
+        ...asset,
+        id: `prime-${variant}-${size}`,
+        filename: `V0${variant}_${size}_r2_prime.png`,
+      })),
+    );
+    const deliveries = new Map(assets.map((item) => {
+      const match = item.filename.match(/^V0(\d)_(1080x1080|1200x628|800x1000)/);
+      return [item.id, {
+        candidate_id: candidate.id,
+        variant: Number(match?.[1]),
+        size: match?.[2],
+        revision: 2,
+      }];
+    }));
+
+    const groups = groupCreativeDeliveriesByCandidate(
+      assets,
+      new Map(assets.map((item) => [item.id, candidate.id])),
+      [candidate],
+      deliveries as never,
+    );
+
+    expect(groups).toHaveLength(1);
+    expect(groups[0]?.groups).toHaveLength(3);
+    expect(groups[0]?.groups.map((group) => group.variant)).toEqual([1, 2, 3]);
+    expect(groups[0]?.groups.every((group) => group.assets.length === 3)).toBe(true);
   });
 
   it("understands natural-language variant preservation and replanning", () => {

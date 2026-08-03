@@ -7,6 +7,80 @@ import (
 	"testing"
 )
 
+func TestCreativeMaterialDedupeUsesStableAssetURL(t *testing.T) {
+	first := creativeMaterialDedupeKey(creativeMaterialInput{
+		ExternalID:  "material-1",
+		ResourceURL: "https://cdn.example.com/a.jpg?auth_key=first",
+	})
+	second := creativeMaterialDedupeKey(creativeMaterialInput{
+		ExternalID:  "material-1",
+		ResourceURL: "https://cdn.example.com/a.jpg?auth_key=second",
+	})
+	sibling := creativeMaterialDedupeKey(creativeMaterialInput{
+		ExternalID:  "material-1",
+		ResourceURL: "https://cdn.example.com/b.jpg?auth_key=first",
+	})
+	if first != second {
+		t.Fatalf("temporary auth parameters changed dedupe key: %q != %q", first, second)
+	}
+	if first == sibling {
+		t.Fatal("different assets under one AppGrowing material were collapsed")
+	}
+}
+
+func TestUniqueCreativeMaterialInputsCountsFinalAssets(t *testing.T) {
+	inputs := []creativeMaterialInput{
+		{ResourceURL: "https://cdn.example.com/a.jpg?auth_key=first", AssetType: "image"},
+		{ResourceURL: "https://cdn.example.com/a.jpg?auth_key=second", AssetType: "image"},
+		{ResourceURL: "https://cdn.example.com/b.jpg", AssetType: "image"},
+		{},
+	}
+	materials, skipped := uniqueCreativeMaterialInputs(inputs)
+	if len(materials) != 2 || skipped != 2 {
+		t.Fatalf("unique inputs = %d skipped = %d, want 2 and 2", len(materials), skipped)
+	}
+}
+
+func TestUpdateCreativeMaterialCandidateCanRejectLibraryAsset(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+	issueID := createCreativeDeliveryTestIssue(t, "Reject library asset", "")
+	var candidateID string
+	if err := testPool.QueryRow(t.Context(), `
+INSERT INTO creative_material_candidate (
+  workspace_id, connector_id, dedupe_key, competitor, title, asset_type,
+  preview_url, resource_url, raw
+) VALUES ($1, 'appgrowing', $2, 'Easycash', 'Historical asset', 'image',
+  'https://example.test/history.png', 'https://example.test/history.png', '{}'::jsonb)
+RETURNING id::text
+`, testWorkspaceID, "reject-library-"+issueID).Scan(&candidateID); err != nil {
+		t.Fatal(err)
+	}
+
+	w := httptest.NewRecorder()
+	req := newRequest(http.MethodPatch, "/api/issues/"+issueID+"/creative-materials/"+candidateID, map[string]any{
+		"status": "rejected",
+	})
+	req = withURLParam(req, "id", issueID)
+	req = withURLParam(req, "candidateId", candidateID)
+	testHandler.UpdateCreativeMaterialCandidate(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("UpdateCreativeMaterialCandidate: %d %s", w.Code, w.Body.String())
+	}
+
+	var status string
+	if err := testPool.QueryRow(t.Context(), `
+SELECT status FROM creative_material_issue_candidate
+WHERE issue_id = $1 AND candidate_id = $2
+`, issueID, candidateID).Scan(&status); err != nil {
+		t.Fatal(err)
+	}
+	if status != "rejected" {
+		t.Fatalf("status = %q, want rejected", status)
+	}
+}
+
 func TestWorkspaceLibraryImportReusesArchivedCandidate(t *testing.T) {
 	if testHandler == nil {
 		t.Skip("database not available")

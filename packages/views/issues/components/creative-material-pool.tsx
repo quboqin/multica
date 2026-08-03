@@ -10,7 +10,6 @@ import {
   ExternalLink,
   FileUp,
   ImageIcon,
-  Library,
   Maximize2,
   Package,
   RefreshCw,
@@ -64,6 +63,7 @@ type CandidateFilter = {
   platform: string;
   text: string;
 };
+type CandidatePoolScope = "current" | "pending" | "all";
 
 type MediaPreviewItem = {
   url: string;
@@ -128,7 +128,7 @@ export function CreativeMaterialPool({ issue }: { issue: Issue }) {
   const [resultBoardExpanded, setResultBoardExpanded] = useState(true);
   const [poolPreviewOpen, setPoolPreviewOpen] = useState(false);
   const [resultPreviewOpen, setResultPreviewOpen] = useState(false);
-  const [libraryOpen, setLibraryOpen] = useState(false);
+  const [poolScope, setPoolScope] = useState<CandidatePoolScope>("all");
   const [previewItem, setPreviewItem] = useState<MediaPreviewItem | null>(null);
   const [copyCandidateId, setCopyCandidateId] = useState("");
   const [adjustmentTarget, setAdjustmentTarget] = useState<CreativeAdjustmentTarget | null>(null);
@@ -145,6 +145,19 @@ export function CreativeMaterialPool({ issue }: { issue: Issue }) {
   const profiles = useQuery(credentialProfilesOptions(wsId));
   const library = useQuery(creativeMaterialLibraryOptions(wsId));
   const candidates = useMemo(() => materials.data?.candidates ?? [], [materials.data?.candidates]);
+  const currentCandidateIds = useMemo(() => new Set(candidates.map((candidate) => candidate.id)), [candidates]);
+  const poolCandidates = useMemo(
+    () => mergeCreativeMaterialPoolCandidates(candidates, library.data?.candidates ?? []),
+    [candidates, library.data?.candidates],
+  );
+  const poolScopeCounts = useMemo(
+    () => creativeMaterialPoolScopeCounts(poolCandidates, currentCandidateIds, issue.id),
+    [currentCandidateIds, issue.id, poolCandidates],
+  );
+  const scopedCandidates = useMemo(
+    () => creativeMaterialPoolCandidatesForScope(poolCandidates, currentCandidateIds, issue.id, poolScope),
+    [currentCandidateIds, issue.id, poolCandidates, poolScope],
+  );
   const selectedCandidates = candidates.filter((candidate) => candidate.status === "selected");
   const expectedDeliveryCount = selectedCandidates.length * 9;
   const marketPacks = (resources.data?.resources ?? []).filter((resource) => resource.kind === "market_pack" && resource.status === "published");
@@ -165,8 +178,12 @@ export function CreativeMaterialPool({ issue }: { issue: Issue }) {
   const themeOptions = stringArrayConfig(activeMarketPack?.config, "theme_presets");
   const copyEntries = useQuery(creativeCopyEntriesOptions(wsId, copyLibraryId));
   const itemByCandidate = useMemo(() => new Map((materials.data?.items ?? []).map((item) => [item.candidate_id, item])), [materials.data?.items]);
-  const filteredCandidates = useMemo(() => candidates.filter((candidate) => candidateMatchesFilter(candidate, filter)), [candidates, filter]);
+  const filteredCandidates = useMemo(() => scopedCandidates.filter((candidate) => candidateMatchesFilter(candidate, filter)), [filter, scopedCandidates]);
   const deliveries = useMemo(() => materials.data?.deliveries ?? [], [materials.data?.deliveries]);
+  const resultCandidates = useMemo(
+    () => creativeResultCandidates(candidates, materials.data?.items ?? [], deliveries),
+    [candidates, deliveries, materials.data?.items],
+  );
   const deliveryByAttachment = useMemo(() => new Map(deliveries.map((delivery) => [delivery.final_attachment_id, delivery])), [deliveries]);
   const finalAssets = useMemo(() => (attachments.data ?? []).filter((attachment) => attachment.content_type.startsWith("image/") && (isCreativeDeliveryFilename(attachment.filename) || deliveryByAttachment.has(attachment.id))), [attachments.data, deliveryByAttachment]);
   const resultCandidateByAttachment = useMemo(() => {
@@ -185,6 +202,7 @@ export function CreativeMaterialPool({ issue }: { issue: Issue }) {
   const activeAsset = finalAssets.find((asset) => asset.id === activeAssetId) ?? finalAssets[0];
   const latestCrawl = materials.data?.crawl_runs[0];
   const contextReady = Boolean(currentContext?.market_pack_id && currentContext?.squad_id);
+  const contextConfigured = Boolean(contextDraft.market_pack_id && contextDraft.squad_id);
   const briefReadyItems = selectedCandidates.filter((candidate) => itemByCandidate.get(candidate.id)?.creative_brief.primary_benefit);
   const copyReadyItems = selectedCandidates.filter((candidate) => itemByCandidate.get(candidate.id)?.copy_entry_id);
   const readyItems = selectedCandidates.filter((candidate) => {
@@ -195,11 +213,31 @@ export function CreativeMaterialPool({ issue }: { issue: Issue }) {
     const brief = itemByCandidate.get(candidate.id)?.creative_brief;
     return !brief?.primary_benefit && brief?.status !== "requested";
   });
+  const creativeActionBlockReason = !contextConfigured
+    ? "先选择市场资源包和执行小队"
+    : selectedCandidates.length === 0
+      ? "先在候选池选择素材"
+      : briefReadyItems.length !== selectedCandidates.length
+        ? `还有 ${selectedCandidates.length - briefReadyItems.length} 张素材需要识别或确认利益点`
+        : copyReadyItems.length !== selectedCandidates.length
+          ? `还有 ${selectedCandidates.length - copyReadyItems.length} 张素材需要确认文案`
+          : "";
 
   const refreshMaterials = () => queryClient.invalidateQueries({ queryKey: creativeKeys.issue(wsId, issue.id) });
+  const ensureContext = async () => {
+    if (
+      currentContext?.market_pack_id === contextDraft.market_pack_id &&
+      currentContext?.squad_id === contextDraft.squad_id
+    ) return currentContext;
+    if (!contextConfigured) throw new Error("先选择市场资源包和执行小队");
+    return api.putCreativeIssueContext(issue.id, contextDraft);
+  };
   const updateCandidate = useMutation({
     mutationFn: ({ id, status }: { id: string; status: string }) => api.updateCreativeMaterialCandidate(issue.id, id, { status }),
-    onSuccess: (data) => queryClient.setQueryData(creativeKeys.issue(wsId, issue.id), data),
+    onSuccess: (data) => {
+      queryClient.setQueryData(creativeKeys.issue(wsId, issue.id), data);
+      queryClient.invalidateQueries({ queryKey: creativeKeys.materials(wsId) });
+    },
     onError: () => toast.error("候选状态更新失败"),
   });
   const saveContext = useMutation({
@@ -224,15 +262,15 @@ export function CreativeMaterialPool({ issue }: { issue: Issue }) {
   });
   const requestAnalysis = useMutation({
     mutationFn: async (targets: CreativeMaterialCandidate[]) => {
-      if (!currentContext?.squad_id) throw new Error("先固定市场资源包和执行小队");
+      const context = await ensureContext();
       await mapWithConcurrency(targets, 4, async (candidate) => {
         const current = itemByCandidate.get(candidate.id)?.creative_brief ?? EMPTY_BRIEF;
         const analysisIssue = await api.createIssue({
           title: `素材理解 · ${candidate.title || candidate.competitor || candidate.id}`,
-          description: `目标候选池 Issue：${issue.id}\n候选 ID：${candidate.id}\n市场资源包：${currentContext.market_pack_id}\n\n使用广告参考分析 Skill 读取候选图真实像素和文字，分别识别视觉主题、主题元素、主利益点、辅助利益点、具体数值和证据。将结构化结果回写目标候选图；主题不能替代金融利益点，采集标题和标签只能作为弱辅助。`,
+          description: `目标候选池 Issue：${issue.id}\n候选 ID：${candidate.id}\n市场资源包：${context.market_pack_id}\n\n使用广告参考分析 Skill 读取候选图真实像素和文字，分别识别视觉主题、主题元素、主利益点、辅助利益点、具体数值和证据。将结构化结果回写目标候选图；主题不能替代金融利益点，采集标题和标签只能作为弱辅助。`,
           parent_issue_id: issue.id,
           assignee_type: "squad",
-          assignee_id: currentContext.squad_id,
+          assignee_id: context.squad_id,
           status: "todo",
         });
         await api.putCreativeItemBrief(issue.id, candidate.id, {
@@ -275,11 +313,6 @@ export function CreativeMaterialPool({ issue }: { issue: Issue }) {
     },
     onError: (error) => toast.error(error instanceof Error ? error.message : "自定义文案保存失败"),
   });
-  const importFromLibrary = useMutation({
-    mutationFn: (selected: CreativeMaterialCandidate[]) => api.importCreativeMaterials(issue.id, { connector_id: "workspace-library", query_summary: "从工作区素材库导入", materials: selected.map(candidateToImport) }),
-    onSuccess: () => { refreshMaterials(); setLibraryOpen(false); toast.success("素材已加入候选池"); },
-    onError: () => toast.error("素材库导入失败"),
-  });
   const uploadCandidate = useMutation({
     mutationFn: async (file: File) => {
       const uploaded = await upload(file);
@@ -291,7 +324,7 @@ export function CreativeMaterialPool({ issue }: { issue: Issue }) {
   });
   const requestCrawl = useMutation({
     mutationFn: async () => {
-      if (!contextReady) throw new Error("先固定市场资源包和执行小队");
+      const context = await ensureContext();
       const profile = (profiles.data?.profiles ?? []).find((item) => item.connector_id === "appgrowing" && item.status === "active");
       if (!profile) throw new Error("AppGrowing 尚未授权，请前往设置 - 集成绑定");
       return api.createIssue({
@@ -299,7 +332,7 @@ export function CreativeMaterialPool({ issue }: { issue: Issue }) {
         description: `目标候选池 Issue：${issue.id}\n连接器：AppGrowing\n授权配置：${profile.id}\n\n读取父 Issue 的业务筛选条件，使用 AppGrowing 素材采集 Skill 创建并委派采集子 Issue。真实结果只导入父 Issue 原生候选池。`,
         parent_issue_id: issue.id,
         assignee_type: "squad",
-        assignee_id: currentContext!.squad_id,
+        assignee_id: context.squad_id,
         status: "todo",
       });
     },
@@ -308,7 +341,7 @@ export function CreativeMaterialPool({ issue }: { issue: Issue }) {
   });
   const startCreative = useMutation({
     mutationFn: async () => {
-      if (!currentContext) throw new Error("先固定资源上下文");
+      const context = await ensureContext();
       const targets = selectedCandidates.filter((candidate) => {
         const item = itemByCandidate.get(candidate.id);
         return item?.copy_entry_id && !item.work_issue_id;
@@ -320,10 +353,10 @@ export function CreativeMaterialPool({ issue }: { issue: Issue }) {
         const brief = item.creative_brief;
         const created = await api.createIssue({
           title: `创意图 · ${candidate.title || candidate.competitor || candidate.id} · r${item.revision}`,
-          description: `父候选池：${issue.id}\n候选 ID：${candidate.id}\n文案记录：${item.copy_entry_id} · v${copy.version ?? 1}\n创意组合：${creativeBriefLabel(brief)}\n主利益点：${brief.primary_benefit}${brief.benefit_value ? ` · ${brief.benefit_value}` : ""}\n原图业务语义：${brief.source_semantics || "以结构化简报为准"}\n原图信息机制：${brief.information_mechanism || "以结构化简报为准"}\n必须保留：${brief.must_preserve.join("、") || "业务语义、信息机制、关键视觉和主色家族"}\n允许变化：${brief.allowed_variations.join("、") || "版式骨架、信息组织和视觉处理"}\n市场资源包：${currentContext.market_pack_id}\n执行小队：${currentContext.squad_id}\n修订：r${item.revision}\n\n交付契约：为本候选生成 V01、V02、V03 三个同题创意变体；默认继承原图业务语义、信息机制、关键视觉锚点和主色家族，只在版式骨架、信息组织和视觉处理上形成明确差异。每个变体原生交付 1080x1080、1200x628、800x1000 三个尺寸，共 9 张最终成图。方案完成后一次委派三个变体 Issue；每个变体 Issue 内先生成并检查 1080x1080 方形母版，再以该母版为第一参考同轮并发原生重排 1200x628 横版和 800x1000 竖版。尺寸不是变体，禁止由一个尺寸裁切、加边或拉伸得到另外两个尺寸。三个变体全部完成后，由一个 Prime Issue 批量包装九图，再由一个 QC Issue 批量验收九图。\n\n使用父 Issue 固定快照中的创意简报、文案和资源。主题控制视觉表达，主利益点控制信息层级；Leader 一次创建所有已满足依赖的专业子 Issue，按变体隔离生成证据和返工，只把全部验收通过的 9 张成图发布回父 Issue。`,
+          description: `父候选池：${issue.id}\n候选 ID：${candidate.id}\n文案记录：${item.copy_entry_id} · v${copy.version ?? 1}\n创意组合：${creativeBriefLabel(brief)}\n主利益点：${brief.primary_benefit}${brief.benefit_value ? ` · ${brief.benefit_value}` : ""}\n原图业务语义：${brief.source_semantics || "以结构化简报为准"}\n原图信息机制：${brief.information_mechanism || "以结构化简报为准"}\n必须保留：${brief.must_preserve.join("、") || "业务语义、信息机制、关键视觉和主色家族"}\n允许变化：${brief.allowed_variations.join("、") || "版式骨架、信息组织和视觉处理"}\n市场资源包：${context.market_pack_id}\n执行小队：${context.squad_id}\n修订：r${item.revision}\n\n交付契约：为本候选生成 V01、V02、V03 三个同题创意变体；默认继承原图业务语义、信息机制、关键视觉锚点和主色家族，只在版式骨架、信息组织和视觉处理上形成明确差异。每个变体原生交付 1080x1080、1200x628、800x1000 三个尺寸，共 9 张最终成图。方案完成后一次委派三个变体 Issue；每个变体 Issue 内先生成并检查 1080x1080 方形母版，再以该母版为第一参考同轮并发原生重排 1200x628 横版和 800x1000 竖版。尺寸不是变体，禁止由一个尺寸裁切、加边或拉伸得到另外两个尺寸。三个变体全部完成后，由一个 Prime Issue 批量包装九图，再由一个 QC Issue 批量验收九图。\n\n使用父 Issue 固定快照中的创意简报、文案和资源。主题控制视觉表达，主利益点控制信息层级；Leader 一次创建所有已满足依赖的专业子 Issue，按变体隔离生成证据和返工，只把全部验收通过的 9 张成图发布回父 Issue。`,
           parent_issue_id: issue.id,
           assignee_type: "squad",
-          assignee_id: currentContext.squad_id,
+          assignee_id: context.squad_id,
           status: "todo",
         });
         await api.putCreativeItemWorkIssue(issue.id, candidate.id, created.id);
@@ -340,21 +373,20 @@ export function CreativeMaterialPool({ issue }: { issue: Issue }) {
   return <section className="space-y-4 border-y py-5">
     <div className="border bg-background">
       <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3">
-        <button type="button" className="flex min-w-0 flex-1 items-center gap-2 text-left" onClick={() => setCandidatePoolExpanded((value) => !value)}><ChevronRight className={cn("h-4 w-4 shrink-0 text-muted-foreground transition-transform", candidatePoolExpanded && "rotate-90")} /><span className="text-sm font-semibold">素材候选池</span><Badge variant="outline">{candidates.length} 张</Badge><Badge variant="outline">已选 {selectedCandidates.length}</Badge></button>
-        <div className="flex flex-wrap items-center gap-2"><input ref={fileInputRef} type="file" accept="image/*" className="hidden" onChange={(event) => { const file = event.target.files?.[0]; if (file) uploadCandidate.mutate(file); event.currentTarget.value = ""; }} /><Button size="sm" variant="outline" onClick={() => requestCrawl.mutate()} disabled={requestCrawl.isPending}><RefreshCw className={cn("h-4 w-4", requestCrawl.isPending && "animate-spin")} />采集素材</Button><Button size="sm" variant="outline" onClick={() => setLibraryOpen(true)}><Library className="h-4 w-4" />素材库</Button><Button size="icon-sm" variant="outline" title="上传图片" onClick={() => fileInputRef.current?.click()} disabled={uploading || uploadCandidate.isPending}><FileUp className="h-4 w-4" /></Button><Button size="icon-sm" variant="outline" title="放大候选池" onClick={() => setPoolPreviewOpen(true)} disabled={candidates.length === 0}><Maximize2 className="h-4 w-4" /></Button></div>
+        <button type="button" className="flex min-w-0 flex-1 items-center gap-2 text-left" onClick={() => setCandidatePoolExpanded((value) => !value)}><ChevronRight className={cn("h-4 w-4 shrink-0 text-muted-foreground transition-transform", candidatePoolExpanded && "rotate-90")} /><span className="text-sm font-semibold">素材候选池</span><Badge variant="outline">{poolCandidates.length} 张</Badge><Badge variant="outline">已选 {selectedCandidates.length}</Badge></button>
+        <div className="flex flex-wrap items-center gap-2"><input ref={fileInputRef} type="file" accept="image/*" className="hidden" onChange={(event) => { const file = event.target.files?.[0]; if (file) uploadCandidate.mutate(file); event.currentTarget.value = ""; }} /><Button size="sm" variant="outline" onClick={() => requestCrawl.mutate()} disabled={requestCrawl.isPending}><RefreshCw className={cn("h-4 w-4", requestCrawl.isPending && "animate-spin")} />采集素材</Button><Button size="icon-sm" variant="outline" title="上传图片" onClick={() => fileInputRef.current?.click()} disabled={uploading || uploadCandidate.isPending}><FileUp className="h-4 w-4" /></Button><Button size="icon-sm" variant="outline" title="放大候选池" onClick={() => setPoolPreviewOpen(true)} disabled={poolCandidates.length === 0}><Maximize2 className="h-4 w-4" /></Button></div>
       </div>
       {candidatePoolExpanded && <div className="border-t">
         <div className="grid gap-3 border-b bg-muted/20 px-4 py-3 lg:grid-cols-[minmax(220px,1fr)_minmax(220px,1fr)_auto] lg:items-end"><Field label="市场资源包"><NativeSelect value={contextDraft.market_pack_id} onChange={(event) => setContextDraft({ ...contextDraft, market_pack_id: event.target.value })}><NativeSelectOption value="">选择已发布资源包</NativeSelectOption>{marketPacks.map((resource) => <NativeSelectOption key={resource.id} value={resource.id}>{resource.name} · v{resource.published_version}</NativeSelectOption>)}</NativeSelect></Field><Field label="执行小队"><NativeSelect value={contextDraft.squad_id} onChange={(event) => setContextDraft({ ...contextDraft, squad_id: event.target.value })}><NativeSelectOption value="">选择小队</NativeSelectOption>{(squads.data ?? []).map((squad) => <NativeSelectOption key={squad.id} value={squad.id}>{squad.name}</NativeSelectOption>)}</NativeSelect></Field><Button size="sm" onClick={() => saveContext.mutate()} disabled={saveContext.isPending || !contextDraft.market_pack_id || !contextDraft.squad_id}><Settings2 className="h-4 w-4" />{contextReady ? "更新快照" : "固定资源"}</Button></div>
-        {selectedCandidates.length > 0 && <div className="sticky top-0 z-10 flex flex-wrap items-center justify-between gap-3 border-b bg-background/95 px-4 py-3 shadow-sm backdrop-blur"><div><p className="text-sm font-medium">已选 {selectedCandidates.length} 张 · 已识别利益点 {briefReadyItems.length} 张 · 已定文案 {copyReadyItems.length} 张</p><p className="mt-0.5 text-xs text-muted-foreground">每张图交付 3 个创意 × 3 个尺寸，预计 {expectedDeliveryCount} 张；文案与返工按素材和创意独立保存。</p></div><div className="flex flex-wrap gap-2">{briefsToAnalyze.length > 0 && <Button size="sm" variant="outline" onClick={() => requestAnalysis.mutate(briefsToAnalyze)} disabled={requestAnalysis.isPending || !contextReady}><Sparkles className={cn("h-4 w-4", requestAnalysis.isPending && "animate-pulse")} />识别创意 ({briefsToAnalyze.length})</Button>}<Button size="sm" variant="outline" onClick={() => setCopyCandidateId(selectedCandidates.find((candidate) => !itemByCandidate.get(candidate.id)?.creative_brief.primary_benefit || !itemByCandidate.get(candidate.id)?.copy_entry_id)?.id ?? selectedCandidates[0]?.id ?? "")}><Settings2 className="h-4 w-4" />逐图配置</Button><Button size="sm" onClick={() => startCreative.mutate()} disabled={startCreative.isPending || !contextReady || readyItems.length !== selectedCandidates.length}>{startCreative.isPending ? "正在创建" : `生成 ${selectedCandidates.length} 套创意`}</Button></div></div>}
-        <div className="px-4 py-4"><div className="mb-3 flex flex-wrap items-center justify-between gap-3"><p className="text-xs text-muted-foreground">{latestCrawl ? `${latestCrawl.query_summary} · 新增 ${latestCrawl.imported_count}` : "等待真实采集、素材库导入或人工上传"}</p>{!candidateFilterEquals(filter, DEFAULT_FILTER) && <button type="button" className="inline-flex items-center gap-1 text-xs text-muted-foreground" onClick={() => setFilter(DEFAULT_FILTER)}><RotateCcw className="h-3.5 w-3.5" />显示全部</button>}</div><CandidateFilters candidates={candidates} filter={filter} onChange={setFilter} /><div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-3">{filteredCandidates.map((candidate) => <CandidateCard key={candidate.id} candidate={candidate} item={itemByCandidate.get(candidate.id)} busy={updateCandidate.isPending} onStatus={(status) => updateCandidate.mutate({ id: candidate.id, status })} onPreview={setPreviewItem} onCopy={() => setCopyCandidateId(candidate.id)} />)}</div>{filteredCandidates.length === 0 && <div className="mt-4 flex min-h-36 items-center justify-center border border-dashed text-sm text-muted-foreground">候选池暂无匹配素材</div>}</div>
+        {selectedCandidates.length > 0 && <div className="sticky top-0 z-10 flex flex-wrap items-center justify-between gap-3 border-b bg-background/95 px-4 py-3 shadow-sm backdrop-blur"><div><p className="text-sm font-medium">已选 {selectedCandidates.length} 张 · 已识别利益点 {briefReadyItems.length} 张 · 已定文案 {copyReadyItems.length} 张</p><p className="mt-0.5 text-xs text-muted-foreground">每张图交付 3 个创意 × 3 个尺寸，预计 {expectedDeliveryCount} 张；文案与返工按素材和创意独立保存。</p>{creativeActionBlockReason && <p className="mt-1 text-xs text-amber-700">{creativeActionBlockReason}</p>}</div><div className="flex flex-wrap gap-2">{briefsToAnalyze.length > 0 && <Button size="sm" variant="outline" title={!contextConfigured ? creativeActionBlockReason : "委派素材理解子任务"} onClick={() => requestAnalysis.mutate(briefsToAnalyze)} disabled={requestAnalysis.isPending || !contextConfigured}><Sparkles className={cn("h-4 w-4", requestAnalysis.isPending && "animate-pulse")} />识别创意 ({briefsToAnalyze.length})</Button>}<Button size="sm" variant="outline" onClick={() => setCopyCandidateId(selectedCandidates.find((candidate) => !itemByCandidate.get(candidate.id)?.creative_brief.primary_benefit || !itemByCandidate.get(candidate.id)?.copy_entry_id)?.id ?? selectedCandidates[0]?.id ?? "")}><Settings2 className="h-4 w-4" />逐图配置</Button><Button size="sm" title={creativeActionBlockReason || "创建逐素材生产子任务"} onClick={() => startCreative.mutate()} disabled={startCreative.isPending || Boolean(creativeActionBlockReason) || readyItems.length !== selectedCandidates.length}>{startCreative.isPending ? "正在创建" : `生成 ${selectedCandidates.length} 套创意`}</Button></div></div>}
+        <div className="px-4 py-4"><div className="mb-3 flex flex-wrap items-center justify-between gap-3"><p className="text-xs text-muted-foreground">{latestCrawl ? `${latestCrawl.query_summary} · 本次新增 ${latestCrawl.imported_count}` : "等待真实采集或人工上传"}</p>{!candidateFilterEquals(filter, DEFAULT_FILTER) && <button type="button" className="inline-flex items-center gap-1 text-xs text-muted-foreground" onClick={() => setFilter(DEFAULT_FILTER)}><RotateCcw className="h-3.5 w-3.5" />清除筛选</button>}</div><CandidatePoolScopeTabs value={poolScope} counts={poolScopeCounts} onChange={setPoolScope} /><div className="mt-3"><CandidateFilters candidates={scopedCandidates} filter={filter} onChange={setFilter} /></div><div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-3">{filteredCandidates.map((candidate) => <CandidateCard key={candidate.id} candidate={candidate} item={itemByCandidate.get(candidate.id)} inCurrentIssue={currentCandidateIds.has(candidate.id)} isCurrentRun={isCurrentRunCandidate(candidate, issue.id)} busy={updateCandidate.isPending} onStatus={(status) => updateCandidate.mutate({ id: candidate.id, status })} onPreview={setPreviewItem} onCopy={() => setCopyCandidateId(candidate.id)} />)}</div>{filteredCandidates.length === 0 && <div className="mt-4 flex min-h-36 items-center justify-center border border-dashed text-sm text-muted-foreground">当前范围暂无匹配素材</div>}</div>
       </div>}
     </div>
 
-    <IssueResultBoard archiveName={`${issue.identifier}-修图结果`} assets={finalAssets} activeAsset={activeAsset} candidates={candidates} candidateByAttachment={resultCandidateByAttachment} deliveryByAttachment={deliveryByAttachment} expanded={resultBoardExpanded} onExpandedChange={setResultBoardExpanded} onAssetChange={setActiveAssetId} onPreview={setPreviewItem} onOpenBoardPreview={() => setResultPreviewOpen(true)} onAdjust={(target) => { setAdjustmentTarget(target); setAdjustmentOpen(true); }} onCandidateFeedback={setCandidateFeedbackTarget} />
+    <IssueResultBoard archiveName={`${issue.identifier}-修图结果`} assets={finalAssets} activeAsset={activeAsset} candidates={resultCandidates} candidateByAttachment={resultCandidateByAttachment} deliveryByAttachment={deliveryByAttachment} expanded={resultBoardExpanded} onExpandedChange={setResultBoardExpanded} onAssetChange={setActiveAssetId} onPreview={setPreviewItem} onOpenBoardPreview={() => setResultPreviewOpen(true)} onAdjust={(target) => { setAdjustmentTarget(target); setAdjustmentOpen(true); }} onCandidateFeedback={setCandidateFeedbackTarget} />
 
-    <CandidatePoolPreviewDialog open={poolPreviewOpen} onOpenChange={setPoolPreviewOpen} candidates={candidates} items={materials.data?.items ?? []} filter={filter} onFilterChange={setFilter} selectedCount={selectedCandidates.length} busy={updateCandidate.isPending} onStatus={(candidateId, status) => updateCandidate.mutate({ id: candidateId, status })} onPreview={setPreviewItem} onCopy={(candidateId) => { setPoolPreviewOpen(false); setCopyCandidateId(candidateId); }} />
-    <ResultBoardPreviewDialog open={resultPreviewOpen} onOpenChange={setResultPreviewOpen} archiveName={`${issue.identifier}-修图结果`} assets={finalAssets} activeAsset={activeAsset} candidates={candidates} candidateByAttachment={resultCandidateByAttachment} deliveryByAttachment={deliveryByAttachment} onAssetChange={setActiveAssetId} onPreview={setPreviewItem} onAdjust={(target) => { setResultPreviewOpen(false); setAdjustmentTarget(target); setAdjustmentOpen(true); }} onCandidateFeedback={(target) => { setResultPreviewOpen(false); setCandidateFeedbackTarget(target); }} />
-    <MaterialLibraryDialog open={libraryOpen} onOpenChange={setLibraryOpen} candidates={library.data?.candidates ?? []} existingIds={new Set(candidates.map((candidate) => candidate.id))} busy={importFromLibrary.isPending} onImport={(selected) => importFromLibrary.mutate(selected)} />
+    <CandidatePoolPreviewDialog open={poolPreviewOpen} onOpenChange={setPoolPreviewOpen} candidates={poolCandidates} currentCandidateIds={currentCandidateIds} issueId={issue.id} scope={poolScope} onScopeChange={setPoolScope} scopeCounts={poolScopeCounts} items={materials.data?.items ?? []} filter={filter} onFilterChange={setFilter} selectedCount={selectedCandidates.length} busy={updateCandidate.isPending} onStatus={(candidateId, status) => updateCandidate.mutate({ id: candidateId, status })} onPreview={setPreviewItem} onCopy={(candidateId) => { setPoolPreviewOpen(false); setCopyCandidateId(candidateId); }} />
+    <ResultBoardPreviewDialog open={resultPreviewOpen} onOpenChange={setResultPreviewOpen} archiveName={`${issue.identifier}-修图结果`} assets={finalAssets} activeAsset={activeAsset} candidates={resultCandidates} candidateByAttachment={resultCandidateByAttachment} deliveryByAttachment={deliveryByAttachment} onAssetChange={setActiveAssetId} onPreview={setPreviewItem} onAdjust={(target) => { setResultPreviewOpen(false); setAdjustmentTarget(target); setAdjustmentOpen(true); }} onCandidateFeedback={(target) => { setResultPreviewOpen(false); setCandidateFeedbackTarget(target); }} />
     <CopyPickerDialog candidates={selectedCandidates} activeCandidateId={copyCandidateId} entries={copyEntries.data?.entries ?? []} items={materials.data?.items ?? []} benefitOptions={benefitOptions} themeOptions={themeOptions} busy={assignCopy.isPending || createCustomCopy.isPending || saveBrief.isPending} analysisBusy={requestAnalysis.isPending} onCandidateId={setCopyCandidateId} onClose={() => setCopyCandidateId("")} onPick={(candidateId, copyEntryId) => assignCopy.mutate({ candidateId, copyEntryId })} onCustom={(candidateId, value) => createCustomCopy.mutate({ candidateId, value })} onBrief={(candidateId, brief) => saveBrief.mutate({ candidateId, brief })} onAnalyze={(candidate) => requestAnalysis.mutate([candidate])} />
 		<AdjustmentDialog open={adjustmentOpen} onOpenChange={setAdjustmentOpen} issue={issue} candidates={selectedCandidates} target={adjustmentTarget} context={currentContext} items={materials.data?.items ?? []} onCreated={() => { setAdjustmentOpen(false); refreshMaterials(); queryClient.invalidateQueries({ queryKey: issueKeys.children(wsId, issue.id) }); }} />
     <CandidateFeedbackDialog open={Boolean(candidateFeedbackTarget)} onOpenChange={(open) => !open && setCandidateFeedbackTarget(null)} issue={issue} candidates={selectedCandidates} target={candidateFeedbackTarget} assets={finalAssets} candidateByAttachment={resultCandidateByAttachment} deliveryByAttachment={deliveryByAttachment} context={currentContext} items={materials.data?.items ?? []} onCreated={() => { setCandidateFeedbackTarget(null); refreshMaterials(); queryClient.invalidateQueries({ queryKey: issueKeys.children(wsId, issue.id) }); }} />
@@ -362,10 +394,11 @@ export function CreativeMaterialPool({ issue }: { issue: Issue }) {
   </section>;
 }
 
-function CandidatePoolPreviewDialog({ open, onOpenChange, candidates, items, filter, onFilterChange, selectedCount, busy, onStatus, onPreview, onCopy }: { open: boolean; onOpenChange: (open: boolean) => void; candidates: CreativeMaterialCandidate[]; items: CreativeIssueItem[]; filter: CandidateFilter; onFilterChange: (filter: CandidateFilter) => void; selectedCount: number; busy: boolean; onStatus: (candidateId: string, status: string) => void; onPreview: (item: MediaPreviewItem) => void; onCopy: (candidateId: string) => void }) {
-  const filtered = candidates.filter((candidate) => candidateMatchesFilter(candidate, filter));
+function CandidatePoolPreviewDialog({ open, onOpenChange, candidates, currentCandidateIds, issueId, scope, onScopeChange, scopeCounts, items, filter, onFilterChange, selectedCount, busy, onStatus, onPreview, onCopy }: { open: boolean; onOpenChange: (open: boolean) => void; candidates: CreativeMaterialCandidate[]; currentCandidateIds: ReadonlySet<string>; issueId: string; scope: CandidatePoolScope; onScopeChange: (scope: CandidatePoolScope) => void; scopeCounts: Record<CandidatePoolScope, number>; items: CreativeIssueItem[]; filter: CandidateFilter; onFilterChange: (filter: CandidateFilter) => void; selectedCount: number; busy: boolean; onStatus: (candidateId: string, status: string) => void; onPreview: (item: MediaPreviewItem) => void; onCopy: (candidateId: string) => void }) {
+  const scoped = creativeMaterialPoolCandidatesForScope(candidates, currentCandidateIds, issueId, scope);
+  const filtered = scoped.filter((candidate) => candidateMatchesFilter(candidate, filter));
   const itemByCandidate = new Map(items.map((item) => [item.candidate_id, item]));
-  return <Dialog open={open} onOpenChange={onOpenChange}><DialogContent className="grid h-[94vh] grid-rows-[auto_minmax(0,1fr)] gap-0 overflow-hidden p-0 sm:max-w-[min(98vw,1440px)]"><DialogHeader className="border-b px-5 py-4 pr-12"><DialogTitle>素材候选池</DialogTitle><div className="mt-2 flex gap-2"><Badge variant="outline">{candidates.length} 张</Badge><Badge variant="outline">已选 {selectedCount}</Badge></div><div className="mt-4"><CandidateFilters candidates={candidates} filter={filter} onChange={onFilterChange} /></div></DialogHeader><div className="min-h-0 overflow-y-auto bg-muted/20 p-5"><div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">{filtered.map((candidate) => <CandidateCard key={candidate.id} candidate={candidate} item={itemByCandidate.get(candidate.id)} busy={busy} onStatus={(status) => onStatus(candidate.id, status)} onPreview={onPreview} onCopy={() => onCopy(candidate.id)} />)}</div></div></DialogContent></Dialog>;
+  return <Dialog open={open} onOpenChange={onOpenChange}><DialogContent className="grid h-[94vh] grid-rows-[auto_minmax(0,1fr)] gap-0 overflow-hidden p-0 sm:max-w-[min(98vw,1440px)]"><DialogHeader className="border-b px-5 py-4 pr-12"><DialogTitle>素材候选池</DialogTitle><div className="mt-2 flex gap-2"><Badge variant="outline">{candidates.length} 张</Badge><Badge variant="outline">当前已选 {selectedCount}</Badge></div><div className="mt-4"><CandidatePoolScopeTabs value={scope} counts={scopeCounts} onChange={onScopeChange} /></div><div className="mt-3"><CandidateFilters candidates={scoped} filter={filter} onChange={onFilterChange} /></div></DialogHeader><div className="min-h-0 overflow-y-auto bg-muted/20 p-5"><div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">{filtered.map((candidate) => <CandidateCard key={candidate.id} candidate={candidate} item={itemByCandidate.get(candidate.id)} inCurrentIssue={currentCandidateIds.has(candidate.id)} isCurrentRun={isCurrentRunCandidate(candidate, issueId)} busy={busy} onStatus={(status) => onStatus(candidate.id, status)} onPreview={onPreview} onCopy={() => onCopy(candidate.id)} />)}</div>{filtered.length === 0 && <div className="flex min-h-48 items-center justify-center border border-dashed bg-background text-sm text-muted-foreground">当前范围暂无匹配素材</div>}</div></DialogContent></Dialog>;
 }
 
 type ResultBoardProps = {
@@ -415,21 +448,24 @@ function FilterSelect({ label, value, values, labels = {}, onChange }: { label: 
   return <label className="grid gap-1 text-xs font-medium text-muted-foreground">{label}<NativeSelect size="sm" value={value} onChange={(event) => onChange(event.target.value)}><NativeSelectOption value="all">全部</NativeSelectOption>{values.map((item) => <NativeSelectOption key={item} value={item}>{labels[item] ?? item}</NativeSelectOption>)}</NativeSelect></label>;
 }
 
-function CandidateCard({ candidate, item, busy, onStatus, onPreview, onCopy }: { candidate: CreativeMaterialCandidate; item?: CreativeIssueItem; busy: boolean; onStatus: (status: string) => void; onPreview: (item: MediaPreviewItem) => void; onCopy?: () => void }) {
-  const mediaURL = firstNonEmpty(candidate.archived_url, candidate.preview_url, candidate.poster_url, candidate.resource_url);
-  const previewURL = candidate.asset_type === "video" ? firstNonEmpty(candidate.resource_url, mediaURL) : mediaURL;
-  const selected = candidate.status === "selected";
-  const rejected = candidate.status === "rejected";
-  const copy = item?.copy_snapshot as Partial<CreativeCopyEntry> | undefined;
-  const brief = item?.creative_brief;
-  return <article className={cn("group overflow-hidden border bg-background", selected && "border-emerald-600 ring-1 ring-emerald-600/20", rejected && "opacity-55")}><button type="button" className="relative block aspect-[4/3] w-full bg-muted" onClick={() => onPreview({ url: previewURL, posterUrl: candidate.poster_url || candidate.preview_url, title: candidate.title || candidate.competitor || "素材预览", subtitle: candidate.competitor, assetType: candidate.asset_type, openUrl: firstNonEmpty(candidate.resource_url, candidate.original_url) })}><MediaPreview url={previewURL} posterUrl={candidate.poster_url || candidate.preview_url} alt={candidate.title || candidate.competitor} assetType={candidate.asset_type} compact /><Badge variant="secondary" className="absolute left-2 top-2 bg-background/90">{candidate.asset_type === "video" ? <Video className="h-3 w-3" /> : <ImageIcon className="h-3 w-3" />}{candidate.asset_type === "video" ? "视频" : "图片"}</Badge>{selected && <span className="absolute right-2 top-2 inline-flex h-7 w-7 items-center justify-center rounded-full bg-emerald-600 text-white"><Check className="h-4 w-4" /></span>}</button><div className="space-y-3 p-3"><div><h3 className="truncate text-sm font-semibold">{candidate.competitor || "未命名竞品"}</h3><p className="mt-1 line-clamp-2 min-h-9 text-sm text-muted-foreground">{candidate.title || "未返回标题"}</p></div><div className="grid grid-cols-2 gap-2 bg-muted/50 p-2 text-xs"><Metric label="投放天数" value={formatDuration(candidate.duration_days)} /><Metric label="曝光估算" value={formatImpression(candidate.impression_estimate)} /></div>{selected && <button type="button" onClick={onCopy} className="w-full border-l-2 border-emerald-600 bg-muted/30 px-3 py-2 text-left"><span className="flex items-center gap-1 text-[10px] text-muted-foreground"><Target className="h-3 w-3" />创意组合{brief?.status === "requested" && " · 识别中"}</span><span className="mt-0.5 block truncate text-sm font-medium">{brief?.primary_benefit ? creativeBriefLabel(brief) : "识别或填写主利益点"}</span><span className="mt-1 block truncate text-xs text-muted-foreground">{copy?.headline || "选择或编辑文案"}</span></button>}<div className="flex items-center justify-between"><Button size="sm" variant={selected ? "outline" : "default"} disabled={busy} onClick={() => onStatus(selected ? "new" : "selected")}>{selected ? "取消选择" : "选择素材"}</Button><Button size="sm" variant="ghost" disabled={busy} onClick={() => onStatus(rejected ? "new" : "rejected")}><X className="h-4 w-4" />{rejected ? "恢复" : "不采用"}</Button></div></div></article>;
+function CandidatePoolScopeTabs({ value, counts, onChange }: { value: CandidatePoolScope; counts: Record<CandidatePoolScope, number>; onChange: (scope: CandidatePoolScope) => void }) {
+  const options: { value: CandidatePoolScope; label: string }[] = [
+    { value: "current", label: "本次新增" },
+    { value: "pending", label: "待处理历史" },
+    { value: "all", label: "全部素材" },
+  ];
+  return <div className="inline-grid grid-cols-3 border bg-background">{options.map((option) => <button key={option.value} type="button" className={cn("min-w-24 border-r px-3 py-2 text-xs font-medium last:border-r-0", value === option.value ? "bg-foreground text-background" : "text-muted-foreground hover:bg-muted")} onClick={() => onChange(option.value)}>{option.label} {counts[option.value]}</button>)}</div>;
 }
 
-function MaterialLibraryDialog({ open, onOpenChange, candidates, existingIds, busy, onImport }: { open: boolean; onOpenChange: (open: boolean) => void; candidates: CreativeMaterialCandidate[]; existingIds: Set<string>; busy: boolean; onImport: (selected: CreativeMaterialCandidate[]) => void }) {
-  const [selected, setSelected] = useState<string[]>([]);
-  useEffect(() => { if (!open) setSelected([]); }, [open]);
-  const available = candidates.filter((candidate) => !existingIds.has(candidate.id));
-  return <Dialog open={open} onOpenChange={onOpenChange}><DialogContent className="max-w-5xl"><DialogHeader><DialogTitle>从工作区素材库导入</DialogTitle></DialogHeader><div className="grid max-h-[62vh] grid-cols-2 gap-px overflow-y-auto border bg-border md:grid-cols-3 lg:grid-cols-4">{available.map((candidate) => { const checked = selected.includes(candidate.id); return <button key={candidate.id} type="button" onClick={() => setSelected(checked ? selected.filter((id) => id !== candidate.id) : [...selected, candidate.id])} className={cn("bg-background text-left", checked && "ring-2 ring-inset ring-emerald-600")}><div className="aspect-[4/3] bg-muted"><MediaPreview url={firstNonEmpty(candidate.archived_url, candidate.preview_url)} alt={candidate.title || candidate.competitor} compact /></div><div className="p-2"><p className="truncate text-sm font-medium">{candidate.title || candidate.competitor}</p><p className="truncate text-xs text-muted-foreground">{candidate.competitor}</p></div></button>; })}</div><DialogFooter><Button variant="outline" onClick={() => onOpenChange(false)}>取消</Button><Button disabled={selected.length === 0 || busy} onClick={() => onImport(available.filter((candidate) => selected.includes(candidate.id)))}>导入 {selected.length} 张</Button></DialogFooter></DialogContent></Dialog>;
+function CandidateCard({ candidate, item, inCurrentIssue = true, isCurrentRun = false, busy, onStatus, onPreview, onCopy }: { candidate: CreativeMaterialCandidate; item?: CreativeIssueItem; inCurrentIssue?: boolean; isCurrentRun?: boolean; busy: boolean; onStatus: (status: string) => void; onPreview: (item: MediaPreviewItem) => void; onCopy?: () => void }) {
+  const mediaURL = firstNonEmpty(candidate.archived_url, candidate.preview_url, candidate.poster_url, candidate.resource_url);
+  const previewURL = candidate.asset_type === "video" ? firstNonEmpty(candidate.resource_url, mediaURL) : mediaURL;
+  const selected = inCurrentIssue && candidate.status === "selected";
+  const rejected = inCurrentIssue && candidate.status === "rejected";
+  const copy = item?.copy_snapshot as Partial<CreativeCopyEntry> | undefined;
+  const brief = item?.creative_brief;
+  const historyLabel = candidate.status === "rejected" ? "历史不采用" : candidate.status === "selected" ? "其他批次已选" : "历史待处理";
+  return <article className={cn("group overflow-hidden border bg-background", selected && "border-emerald-600 ring-1 ring-emerald-600/20", rejected && "opacity-55")}><button type="button" className="relative block aspect-[4/3] w-full bg-muted" onClick={() => onPreview({ url: previewURL, posterUrl: candidate.poster_url || candidate.preview_url, title: candidate.title || candidate.competitor || "素材预览", subtitle: candidate.competitor, assetType: candidate.asset_type, openUrl: firstNonEmpty(candidate.resource_url, candidate.original_url) })}><MediaPreview url={previewURL} posterUrl={candidate.poster_url || candidate.preview_url} alt={candidate.title || candidate.competitor} assetType={candidate.asset_type} compact /><div className="absolute left-2 top-2 flex gap-1"><Badge variant="secondary" className="bg-background/90">{candidate.asset_type === "video" ? <Video className="h-3 w-3" /> : <ImageIcon className="h-3 w-3" />}{candidate.asset_type === "video" ? "视频" : "图片"}</Badge><Badge variant={isCurrentRun ? "default" : "outline"} className="bg-background/90 text-foreground">{isCurrentRun ? "本次新增" : inCurrentIssue ? STATUS_LABEL[candidate.status] ?? "当前批次" : historyLabel}</Badge></div>{selected && <span className="absolute right-2 top-2 inline-flex h-7 w-7 items-center justify-center rounded-full bg-emerald-600 text-white"><Check className="h-4 w-4" /></span>}</button><div className="space-y-3 p-3"><div><h3 className="truncate text-sm font-semibold">{candidate.competitor || "未命名竞品"}</h3><p className="mt-1 line-clamp-2 min-h-9 text-sm text-muted-foreground">{candidate.title || "未返回标题"}</p></div><div className="grid grid-cols-2 gap-2 bg-muted/50 p-2 text-xs"><Metric label="投放天数" value={formatDuration(candidate.duration_days)} /><Metric label="曝光估算" value={formatImpression(candidate.impression_estimate)} /></div>{selected && <button type="button" onClick={onCopy} className="w-full border-l-2 border-emerald-600 bg-muted/30 px-3 py-2 text-left"><span className="flex items-center gap-1 text-[10px] text-muted-foreground"><Target className="h-3 w-3" />创意组合{brief?.status === "requested" && " · 识别中"}</span><span className="mt-0.5 block truncate text-sm font-medium">{brief?.primary_benefit ? creativeBriefLabel(brief) : "识别或填写主利益点"}</span><span className="mt-1 block truncate text-xs text-muted-foreground">{copy?.headline || "选择或编辑文案"}</span></button>}<div className="flex items-center justify-between"><Button size="sm" variant={selected ? "outline" : "default"} disabled={busy} onClick={() => onStatus(selected ? "new" : "selected")}>{selected ? "取消选择" : "选择素材"}</Button><Button size="sm" variant="ghost" disabled={busy} onClick={() => onStatus(rejected ? "new" : "rejected")}><X className="h-4 w-4" />{rejected ? "恢复" : "不采用"}</Button></div></div></article>;
 }
 
 function CopyPickerDialog({ candidates, activeCandidateId, entries, items, benefitOptions, themeOptions, busy, analysisBusy, onCandidateId, onClose, onPick, onCustom, onBrief, onAnalyze }: { candidates: CreativeMaterialCandidate[]; activeCandidateId: string; entries: CreativeCopyEntry[]; items: CreativeIssueItem[]; benefitOptions: string[]; themeOptions: string[]; busy: boolean; analysisBusy: boolean; onCandidateId: (id: string) => void; onClose: () => void; onPick: (candidateId: string, copyEntryId: string) => void; onCustom: (candidateId: string, value: CopyDraft) => void; onBrief: (candidateId: string, value: CreativeBriefDraft) => void; onAnalyze: (candidate: CreativeMaterialCandidate) => void }) {
@@ -522,11 +558,13 @@ export function IssueResultBoard({
   previewMode?: boolean;
 }) {
   const [downloading, setDownloading] = useState<"all" | "group" | "">("");
-  const groups = groupCreativeDeliveries(assets);
+  const [waitingCandidateId, setWaitingCandidateId] = useState("");
+  const groups = groupCreativeDeliveries(assets, deliveryByAttachment);
   const candidateGroups = groupCreativeDeliveriesByCandidate(
     assets,
     candidateByAttachment,
     candidates,
+    deliveryByAttachment,
   );
   const latestAssets = groups.flatMap((group) => group.assets);
   const activeGroup =
@@ -540,9 +578,11 @@ export function IssueResultBoard({
   });
   const currentAsset =
     groupAssets.find((asset) => asset.id === activeAsset?.id) ?? groupAssets[0];
+  const selectedSourceCandidates = candidates.filter((candidate) => candidate.status === "selected");
+  const waitingCandidates = selectedSourceCandidates.length ? selectedSourceCandidates : candidates;
   const candidateId = activeGroup
     ? candidateIdForResultGroup(activeGroup, candidateByAttachment, candidates)
-    : "";
+    : waitingCandidateId || waitingCandidates[0]?.id || "";
   const activeCandidateGroup = candidateGroups.find((group) => group.candidateId === candidateId);
   const sourceCandidate = candidates.find(
     (candidate) => candidate.id === candidateId,
@@ -555,6 +595,7 @@ export function IssueResultBoard({
         sourceCandidate.resource_url,
       )
     : "";
+  const visibleCandidateCount = candidateGroups.length || waitingCandidates.length;
   const previewResult = (asset: CreativeDeliveryAsset | undefined = currentAsset) =>
     asset &&
     onPreview({
@@ -624,10 +665,10 @@ export function IssueResultBoard({
           {previewMode ? (
             <div className="flex min-w-0 flex-1 items-center gap-2">
               <span className="shrink-0 text-sm font-semibold">修图结果看板</span>
-              <Badge variant="outline">{candidateGroups.length} 张素材</Badge>
+              <Badge variant="outline">{visibleCandidateCount} 张素材</Badge>
               <Badge variant="outline">{groups.length} 个创意</Badge>
               <p className="min-w-0 truncate text-xs text-muted-foreground" title={currentAsset?.filename}>
-                {currentAsset?.filename || "选择创意和尺寸查看大图对比"}
+                {currentAsset?.filename || "等待首批成图"}
               </p>
             </div>
           ) : (
@@ -643,12 +684,12 @@ export function IssueResultBoard({
                 )}
               />
               <span className="shrink-0 whitespace-nowrap text-sm font-semibold">修图结果看板</span>
-              <Badge variant="outline">{candidateGroups.length} 张素材</Badge>
+              <Badge variant="outline">{visibleCandidateCount} 张素材</Badge>
               <Badge variant="outline">{groups.length} 个创意</Badge>
               <Badge variant="outline">{latestAssets.length} 张成图</Badge>
             </button>
           )}
-          {!previewMode && onOpenBoardPreview && currentAsset && (
+          {!previewMode && onOpenBoardPreview && (currentAsset || sourceCandidate) && (
             <Button
               size="icon-sm"
               variant="outline"
@@ -768,7 +809,7 @@ export function IssueResultBoard({
             >
               {(activeCandidateGroup?.groups ?? []).map((group) => {
                 const representative = group.assets.find(
-                  (asset) => creativeDeliveryInfo(asset.filename)?.size === "1080x1080",
+                  (asset) => creativeDeliveryInfoForAsset(asset, deliveryByAttachment)?.size === "1080x1080",
                 ) ?? group.assets[0];
                 const active = group.key === activeGroup?.key;
                 return (
@@ -857,7 +898,7 @@ export function IssueResultBoard({
                   </div>
                   <div className="grid h-[48px] grid-cols-3 gap-px border-b bg-border">
                     {groupAssets.map((asset) => {
-                      const size = creativeDeliveryInfo(asset.filename)?.size;
+                      const size = creativeDeliveryInfoForAsset(asset, deliveryByAttachment)?.size;
                       const format = size === "1080x1080"
                         ? "方形"
                         : size === "1200x628"
@@ -906,10 +947,92 @@ export function IssueResultBoard({
               </div>
             </div>
           </div>
-        ) : (
-          <div className="flex min-h-48 items-center justify-center text-sm text-muted-foreground">
-            Leader 发布验收通过的成图后会显示在这里
+        ) : sourceCandidate ? (
+          <div className={cn(
+            "min-h-80",
+            previewMode && "lg:grid lg:h-full lg:min-h-0 lg:grid-rows-[auto_minmax(0,1fr)]",
+          )}>
+            <div
+              className={cn("flex gap-2 overflow-x-auto border-b bg-muted/15 p-3", previewMode && "p-2")}
+              data-testid="creative-material-strip"
+            >
+              {waitingCandidates.map((candidate, index) => (
+                <button
+                  key={candidate.id}
+                  type="button"
+                  className={cn(
+                    "grid min-w-[220px] max-w-[280px] shrink-0 grid-cols-[52px_minmax(0,1fr)] gap-3 border bg-background p-2 text-left",
+                    previewMode && "min-w-[200px] grid-cols-[40px_minmax(0,1fr)] gap-2 p-1.5",
+                    candidate.id === candidateId && "border-emerald-600 bg-emerald-600/5 ring-1 ring-emerald-600/20",
+                  )}
+                  onClick={() => setWaitingCandidateId(candidate.id)}
+                >
+                  <span className="aspect-square overflow-hidden border bg-muted">
+                    <MediaPreview
+                      url={firstNonEmpty(candidate.archived_url, candidate.preview_url, candidate.poster_url, candidate.resource_url)}
+                      posterUrl={candidate.poster_url}
+                      alt={candidate.title || candidate.competitor || `素材 ${index + 1}`}
+                      assetType={candidate.asset_type}
+                      compact
+                    />
+                  </span>
+                  <span className="min-w-0 self-center">
+                    <span className="block truncate text-xs font-semibold">素材 {index + 1} · {candidate.title || candidate.competitor || "原始素材"}</span>
+                    <span className="mt-1 block text-[11px] text-muted-foreground">等待成图</span>
+                  </span>
+                </button>
+              ))}
+            </div>
+            <div className={cn("min-h-0 overflow-x-auto", previewMode && "h-full overflow-y-hidden")}>
+              <div
+                data-testid="creative-comparison-board"
+                className={cn("grid min-w-[760px] grid-cols-2 divide-x", previewMode && "lg:h-full")}
+              >
+                <section className="grid min-h-0 min-w-0 grid-rows-[auto_minmax(0,1fr)_auto] bg-muted/10">
+                  <div className="flex h-[45px] items-center justify-between border-b px-4 text-xs font-semibold">
+                    <span>竞品原图</span>
+                    <Badge variant="outline">参考基准</Badge>
+                  </div>
+                  <button
+                    type="button"
+                    className={cn(
+                      "flex min-h-0 items-center justify-center overflow-hidden bg-black p-4",
+                      previewMode ? "h-full" : "h-[min(66vh,720px)]",
+                    )}
+                    onClick={previewSource}
+                    title="查看竞品原图大图"
+                  >
+                    <MediaPreview
+                      url={sourceURL}
+                      posterUrl={sourceCandidate.poster_url}
+                      alt={sourceCandidate.title || sourceCandidate.competitor}
+                      assetType={sourceCandidate.asset_type}
+                      compact
+                    />
+                  </button>
+                  <div className="min-w-0 border-t px-4 py-3">
+                    <p className="truncate text-xs font-medium">{sourceCandidate.title || sourceCandidate.competitor || "原始素材"}</p>
+                    <p className="mt-1 truncate text-[11px] text-muted-foreground">{sourceCandidate.competitor || "-"}</p>
+                  </div>
+                </section>
+                <section className="grid min-h-0 min-w-0 grid-rows-[auto_minmax(0,1fr)_auto]">
+                  <div className="flex h-[45px] items-center justify-between border-b px-4">
+                    <span className="text-xs font-semibold">当前结果</span>
+                    <Badge variant="outline">0/9</Badge>
+                  </div>
+                  <div className={cn(
+                    "flex min-h-0 items-center justify-center bg-muted/20 px-6 text-center text-sm text-muted-foreground",
+                    previewMode ? "h-full" : "h-[min(66vh,720px)]",
+                  )}>
+                    等待首批成图
+                  </div>
+                  <div className="border-t px-4 py-3 text-[11px] text-muted-foreground">结果尚未发布</div>
+                </section>
+              </div>
+            </div>
           </div>
+        ) : (
+          <div className="flex min-h-48 items-center justify-center px-6 text-center text-sm text-muted-foreground">生产任务创建后，修图素材和成图会显示在这里</div>
         ))}
     </div>
   );
@@ -918,7 +1041,7 @@ export function IssueResultBoard({
 function CandidateFeedbackDialog({ open, onOpenChange, issue, candidates, target, assets, candidateByAttachment, deliveryByAttachment, context, items, onCreated }: { open: boolean; onOpenChange: (open: boolean) => void; issue: Issue; candidates: CreativeMaterialCandidate[]; target: CreativeCandidateFeedbackTarget | null; assets: CreativeDeliveryAsset[]; candidateByAttachment: ReadonlyMap<string, string>; deliveryByAttachment: ReadonlyMap<string, CreativeDelivery>; context: { squad_id: string } | null | undefined; items: CreativeIssueItem[]; onCreated: () => void }) {
   const [text, setText] = useState("");
   const candidate = candidates.find((value) => value.id === target?.candidateId);
-  const candidateGroups = groupCreativeDeliveriesByCandidate(assets, candidateByAttachment, candidates).find((group) => group.candidateId === target?.candidateId);
+  const candidateGroups = groupCreativeDeliveriesByCandidate(assets, candidateByAttachment, candidates, deliveryByAttachment).find((group) => group.candidateId === target?.candidateId);
   const availableVariants = uniqueNumbers((candidateGroups?.groups ?? []).flatMap((group) => group.variant ? [group.variant] : []));
   const decision = inferCreativeFeedbackDecision(text, availableVariants);
   const item = items.find((value) => value.candidate_id === target?.candidateId);
@@ -1038,7 +1161,36 @@ function MediaPreviewDialog({ item, onOpenChange }: { item: MediaPreviewItem | n
 function Metric({ label, value }: { label: string; value: string }) { return <div><div className="text-muted-foreground">{label}</div><div className="font-semibold">{value}</div></div>; }
 function candidateMatchesFilter(candidate: CreativeMaterialCandidate, filter: CandidateFilter) { if (filter.status !== "all" && candidate.status !== filter.status) return false; if (filter.competitor !== "all" && candidate.competitor !== filter.competitor) return false; if (filter.assetType !== "all" && candidate.asset_type !== filter.assetType) return false; if (filter.media !== "all" && !candidate.media_names.includes(filter.media)) return false; if (filter.area !== "all" && !candidate.area_names.includes(filter.area)) return false; if (filter.language !== "all" && !candidate.language_names.includes(filter.language)) return false; if (filter.platform !== "all" && !candidate.platform_names.includes(filter.platform)) return false; const text = filter.text.trim().toLowerCase(); return !text || [candidate.title, candidate.competitor, ...candidate.media_names, ...candidate.area_names, ...candidate.language_names, ...candidate.platform_names].join(" ").toLowerCase().includes(text); }
 function candidateFilterEquals(left: CandidateFilter, right: CandidateFilter) { return left.status === right.status && left.competitor === right.competitor && left.assetType === right.assetType && left.media === right.media && left.area === right.area && left.language === right.language && left.platform === right.platform && left.text === right.text; }
-function candidateToImport(candidate: CreativeMaterialCandidate) { return { external_id: candidate.external_id, dedupe_key: candidate.dedupe_key, competitor: candidate.competitor, title: candidate.title, asset_type: candidate.asset_type, preview_url: firstNonEmpty(candidate.archived_url, candidate.preview_url), resource_url: candidate.resource_url, poster_url: candidate.poster_url, original_url: candidate.original_url, media_names: candidate.media_names, area_names: candidate.area_names, language_names: candidate.language_names, platform_names: candidate.platform_names, raw: { source_candidate_id: candidate.id } }; }
+export function mergeCreativeMaterialPoolCandidates(current: CreativeMaterialCandidate[], library: CreativeMaterialCandidate[]) {
+  const currentIds = new Set(current.map((candidate) => candidate.id));
+  return [...current, ...library.filter((candidate) => !currentIds.has(candidate.id))];
+}
+
+export function isCurrentRunCandidate(candidate: CreativeMaterialCandidate, issueId: string) {
+  return candidate.source_issue_id === issueId && candidate.is_new_in_run;
+}
+
+export function creativeMaterialPoolCandidatesForScope(candidates: CreativeMaterialCandidate[], _currentIds: ReadonlySet<string>, issueId: string, scope: CandidatePoolScope) {
+  if (scope === "current") return candidates.filter((candidate) => isCurrentRunCandidate(candidate, issueId));
+  if (scope === "pending") return candidates.filter((candidate) => !isCurrentRunCandidate(candidate, issueId) && candidate.status === "new");
+  return candidates;
+}
+
+export function creativeMaterialPoolScopeCounts(candidates: CreativeMaterialCandidate[], currentIds: ReadonlySet<string>, issueId: string): Record<CandidatePoolScope, number> {
+  return {
+    current: creativeMaterialPoolCandidatesForScope(candidates, currentIds, issueId, "current").length,
+    pending: creativeMaterialPoolCandidatesForScope(candidates, currentIds, issueId, "pending").length,
+    all: candidates.length,
+  };
+}
+
+export function creativeResultCandidates(candidates: CreativeMaterialCandidate[], items: CreativeIssueItem[], deliveries: CreativeDelivery[]) {
+  const startedIds = new Set(deliveries.map((delivery) => delivery.candidate_id));
+  for (const item of items) {
+    if (item.work_issue_id) startedIds.add(item.candidate_id);
+  }
+  return candidates.filter((candidate) => startedIds.has(candidate.id));
+}
 function stringConfig(config: Record<string, unknown> | undefined, key: string) { const value = config?.[key]; return typeof value === "string" ? value : ""; }
 function stringArrayConfig(config: Record<string, unknown> | undefined, key: string) { const value = config?.[key]; return Array.isArray(value) ? uniqueOptions(value.filter((item): item is string => typeof item === "string")) : []; }
 function uniqueOptions(values: string[]) { return [...new Set(values.map((value) => value.trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b)); }
@@ -1118,22 +1270,35 @@ function candidateIdForResultGroup<T extends { id: string; filename: string }>(g
 }
 
 const LEGACY_CREATIVE_DELIVERY_FILENAME = /^(?:(.+)__)?(?:prime-)?(1080x1080|1200x628|800x1000)\.png$/i;
-const VERSIONED_CREATIVE_DELIVERY_FILENAME = /^(.+)_(1080x1080|1200x628|800x1000)_v(\d+)\.png$/i;
+const REVISIONED_CREATIVE_DELIVERY_FILENAME = /^(.+)_(1080x1080|1200x628|800x1000)_[vr](\d+)(?:_prime)?\.png$/i;
+type CreativeDeliveryIndex = ReadonlyMap<string, Pick<CreativeDelivery, "candidate_id" | "variant" | "size" | "revision">>;
 
 export function creativeDeliveryInfo(filename: string) {
   const legacy = filename.match(LEGACY_CREATIVE_DELIVERY_FILENAME);
   if (legacy?.[2]) return { branch: legacy[1] || "current", size: legacy[2], revision: null };
-  const versioned = filename.match(VERSIONED_CREATIVE_DELIVERY_FILENAME);
+  const versioned = filename.match(REVISIONED_CREATIVE_DELIVERY_FILENAME);
   return versioned?.[1] && versioned[2] && versioned[3]
     ? { branch: versioned[1], size: versioned[2], revision: Number(versioned[3]) }
     : null;
 }
 
 export function isCreativeDeliveryFilename(filename: string) { return creativeDeliveryInfo(filename) !== null; }
-export function groupCreativeDeliveries<T extends { id: string; filename: string }>(assets: T[]) {
+function creativeDeliveryInfoForAsset<T extends { id: string; filename: string }>(asset: T, deliveryByAttachment?: CreativeDeliveryIndex) {
+  const delivery = deliveryByAttachment?.get(asset.id);
+  if (delivery) {
+    return {
+      branch: `${delivery.candidate_id}_V${String(delivery.variant).padStart(2, "0")}`,
+      size: delivery.size,
+      revision: delivery.revision,
+    };
+  }
+  return creativeDeliveryInfo(asset.filename);
+}
+
+export function groupCreativeDeliveries<T extends { id: string; filename: string }>(assets: T[], deliveryByAttachment?: CreativeDeliveryIndex) {
   const groups = new Map<string, { key: string; label: string; setKey: string; variant: number | null; bySize: Map<string, { asset: T; revision: number }> }>();
   for (const asset of assets) {
-    const info = creativeDeliveryInfo(asset.filename);
+    const info = creativeDeliveryInfoForAsset(asset, deliveryByAttachment);
     if (!info) continue;
     const variantInfo = creativeVariantBranch(info.branch);
     const group = groups.get(info.branch) ?? {
@@ -1156,15 +1321,15 @@ export function groupCreativeDeliveries<T extends { id: string; filename: string
     setKey: group.setKey,
     variant: group.variant,
     assets: [...group.bySize.values()].map(({ asset }) => asset).sort((left, right) => (
-      creativeDeliveryInfo(left.filename)?.size ?? ""
-    ).localeCompare(creativeDeliveryInfo(right.filename)?.size ?? "")),
+      creativeDeliveryInfoForAsset(left, deliveryByAttachment)?.size ?? ""
+    ).localeCompare(creativeDeliveryInfoForAsset(right, deliveryByAttachment)?.size ?? "")),
   }));
 }
 
-export function groupCreativeDeliveriesByCandidate<T extends { id: string; filename: string }>(assets: T[], candidateByAttachment: ReadonlyMap<string, string>, candidates: CreativeMaterialCandidate[]) {
+export function groupCreativeDeliveriesByCandidate<T extends { id: string; filename: string }>(assets: T[], candidateByAttachment: ReadonlyMap<string, string>, candidates: CreativeMaterialCandidate[], deliveryByAttachment?: CreativeDeliveryIndex) {
   const candidateOrder = new Map(candidates.map((candidate, index) => [candidate.id, index]));
   const result = new Map<string, { candidateId: string; candidate?: CreativeMaterialCandidate; label: string; groups: ReturnType<typeof groupCreativeDeliveries<T>> }>();
-  for (const group of groupCreativeDeliveries(assets)) {
+  for (const group of groupCreativeDeliveries(assets, deliveryByAttachment)) {
     const mappedCandidateId = candidateIdForResultGroup(group, candidateByAttachment, candidates);
     const candidateId = mappedCandidateId || `unmapped:${group.setKey}`;
     const candidate = candidates.find((value) => value.id === mappedCandidateId);
@@ -1211,9 +1376,9 @@ function uniqueNumbers(values: number[]) {
 }
 
 function creativeVariantBranch(branch: string) {
-  const match = branch.match(/^(.+)_V(\d{2})$/i);
-  return match?.[1] && match[2]
-    ? { setKey: match[1], variant: Number(match[2]) }
+  const match = branch.match(/^(?:(.+)_)?V(\d{2})$/i);
+  return match?.[2]
+    ? { setKey: match[1] || "current", variant: Number(match[2]) }
     : { setKey: branch, variant: null };
 }
 async function downloadCreativeAssets(assets: { filename: string; download_url?: string | null; url: string }[]) { try { for (const asset of assets) { const response = await fetch(asset.download_url || asset.url, { credentials: "include" }); if (!response.ok) throw new Error(asset.filename); const href = URL.createObjectURL(await response.blob()); const anchor = document.createElement("a"); anchor.href = href; anchor.download = asset.filename; document.body.appendChild(anchor); anchor.click(); anchor.remove(); URL.revokeObjectURL(href); } } catch { toast.error("下载交付图失败，请稍后重试"); } }

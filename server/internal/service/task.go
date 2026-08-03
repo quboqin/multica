@@ -2062,13 +2062,17 @@ func (s *TaskService) LoadAgentSkillsForIssue(ctx context.Context, agentID, issu
 			ID:          "creative-issue-resources",
 			Name:        "creative-issue-resources",
 			Description: "当前创意 Issue 固定的市场资源、素材槽位与逐图文案快照",
-			Content: "# 当前创意 Issue 资源\n\n" +
-				"执行前读取 `references/issue-resources.json`。其中 `pinned_resources` 是父 Issue 固定的版本快照，`selected_item` 是当前创意图和文案；不得改用工作区其他版本。\n\n" +
-				"市场文件通过 `pinned_resources.market_pack.files` 按 role 获取。角色 Skill 决定如何使用这些资源；缺少必需槽位时向 Leader 报告，不得虚构或静默替代。",
-			Files: []AgentSkillFileData{{Path: "references/issue-resources.json", Content: string(resourceContext)}},
+			Content:     creativeIssueResourceSkillContent(),
+			Files:       []AgentSkillFileData{{Path: "references/issue-resources.json", Content: string(resourceContext)}},
 		})
 	}
 	return result
+}
+
+func creativeIssueResourceSkillContent() string {
+	return "# 当前创意 Issue 资源\n\n" +
+		"执行前读取本 Skill 目录内的 `references/issue-resources.json`。先定位刚刚读取的 `creative-issue-resources/SKILL.md`，再以它所在目录为基准解析 `references/issue-resources.json`；该文件不在任务工作目录，禁止用工作目录相对路径判断它缺失。其中 `pinned_resources` 是父 Issue 固定的版本快照，`selected_item` 是当前创意图和文案；不得改用工作区其他版本。\n\n" +
+		"市场文件通过 `pinned_resources.market_pack.files` 按 role 获取。角色 Skill 决定如何使用这些资源；缺少必需槽位时向 Leader 报告，不得虚构或静默替代。"
 }
 
 // compactCreativeTaskResourceContext keeps the immutable resource snapshot but

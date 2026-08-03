@@ -247,6 +247,13 @@ func (h *Handler) RunCredentialCrawl(w http.ResponseWriter, r *http.Request) {
 		}
 		hasIssue = true
 		req.Params = h.materialSearchParamsWithStrategyMemory(r.Context(), issue, req.ConnectorID, req.Capability, req.Params)
+		var noveltyErr error
+		req.Params, noveltyErr = h.materialSearchParamsWithNovelty(r.Context(), issue.WorkspaceID, req.ConnectorID, req.Capability, req.Params)
+		if noveltyErr != nil {
+			slog.Warn("load creative material novelty exclusions failed", append(logger.RequestAttrs(r), "error", noveltyErr, "issue_id", req.IssueID)...)
+			writeError(w, http.StatusInternalServerError, "failed to prepare material novelty filter")
+			return
+		}
 	}
 	result, err := h.CredentialBroker.RunCrawl(r.Context(), broker.RunCrawlInput{
 		WorkspaceID: workspaceID,

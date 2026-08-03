@@ -2,6 +2,7 @@ package service
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 )
 
@@ -54,5 +55,12 @@ func TestCompactCreativeTaskResourceContextKeepsMalformedInput(t *testing.T) {
 	raw := []byte(`{"broken"`)
 	if got := string(compactCreativeTaskResourceContext(raw)); got != string(raw) {
 		t.Fatalf("malformed input changed: %q", got)
+	}
+}
+
+func TestCreativeIssueResourceSkillExplainsRelativeReferencePath(t *testing.T) {
+	const guidance = "先定位刚刚读取的 `creative-issue-resources/SKILL.md`，再以它所在目录为基准解析 `references/issue-resources.json`"
+	if !strings.Contains(creativeIssueResourceSkillContent(), guidance) {
+		t.Fatalf("resource skill must explain how to resolve its reference file")
 	}
 }

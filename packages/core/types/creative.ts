@@ -32,6 +32,9 @@ export interface CreativeMaterialCandidate {
   created_at: string;
   updated_at: string;
   source_attachment_id: string;
+  source_issue_id: string;
+  source_run_id: string;
+  is_new_in_run: boolean;
 }
 
 export interface CreativeMaterialSummary {

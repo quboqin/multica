@@ -21,7 +21,8 @@ description: "Coordinate an advertising-material squad when each selected image 
 4. 创建完本轮任务后立即结束执行，由子 Issue 完成事件再次唤醒；不得轮询、休眠或占住执行槽。
    存在未解决风险时只返工受影响的变体和尺寸。人工明确接受的非阻断差异
    已经解决，不得因为评论仍保留历史风险文字而阻断后续。
-5. 只有 V01-V03 各三个尺寸全部验收通过，才能把九张交付发布到父 Issue 结果看板。
+5. 只有 V01-V03 各三个尺寸均为 `QC PASS` 或 `QC PASS WITH WARNINGS`，且逐图
+   `blocking_failures` 均为空，才能把九张交付发布到父 Issue 结果看板。
 
 初次生产的方案依赖是硬门槛。若当前创意工作 Issue 下不存在状态为 `done` 的
 `metadata.workflow=creative_plan` 子 Issue，且该子 Issue 没有交付方案附件，则本轮只能创建一个
@@ -130,11 +131,29 @@ Leader 被唤醒后先读取所有直接子 Issue，再批量创建所有新近�
 已取消图像编辑 Issue 属于无效委派；方案完成后必须使用真实 `plan_issue_id` 创建新的 V01-V03
 任务，不能复用、续跑或等待这些无效 Issue。
 
-只有 Prime 包装后的真实合成图或独立 QC 明确证明品牌、条款、二维码、商店徽章、监管资产不可读，
-或批准文案/关键内容被实际遮挡时，才触发同尺寸“安全区恢复”。不得根据无品牌底图进入顶部或底部
-合并避让带的坐标推断成图失败。恢复任务沿用原候选、获批文案、变体骨架和无品牌底图，精确修复
-已证实的真实冲突，不改变业务语义、信息机制、色系或文案。原 Issue 和附件保留用于审计。每个
-“变体 + 尺寸 + 修订”最多自动恢复一次；恢复仍失败才向用户报告精确冲突并等待决定。
+只有 Prime 包装后的真实合成图或独立 QC 在 `blocking_failures` 中明确证明品牌、条款、二维码、
+商店徽章、监管资产不可读，或获批文案/关键内容被实际遮挡，才触发同尺寸“安全区恢复”。不得根据
+无品牌底图进入顶部/底部软引导，或根据非关键装饰进入真实矩形，推断成图失败。恢复任务沿用原候选、
+获批文案、变体骨架和无品牌底图，只移动已证实碰撞的元素；不得删改获批文案、金额、期限、利率、
+业务语义、`information_mechanism`、`must_preserve`、表格、人物或关键卡片。原 Issue 和附件保留用于
+审计。每个“变体 + 尺寸 + 修订”最多自动恢复一次；恢复仍失败才向用户报告精确冲突并等待决定。
+
+当前工作 Issue 的 metadata 含 `creative_observation_mode=true` 时，任何 `needs_input`、工具异常或
+`blocking_failures` 都必须停在当前现场：在工作 Issue 留一条包含子 Issue、附件和真实原因的最小
+说明，不创建恢复 Issue、不重试图片调用、不用测试数据代替。`quality_warnings` 不属于问题中断，
+仍按下述规则发布到结果看板，供用户观察后决定。
+
+QC 子 Issue 只有在附件中同时存在机器 evidence、九宫格和硬区放大证据，并且评论为作用域内每张图
+明确列出 `checked_region_ids`、`actual_hard_regions_clear`、`prime_assets_readable`、
+`key_content_preserved`、`blocking_failures` 和 `quality_warnings` 时，才可视为完成验收。缺少逐图字段、
+硬区证据或布局契约时，即使评论包含 `QC PASS` 也不满足发布依赖，必须要求原 QC Issue 补齐，不能
+直接创建发布或结果登记。只有 `blocking_failures` 非空才进入恢复或观察模式中断；
+`QC PASS WITH WARNINGS` 必须正常发布九张图，并在工作 Issue 留一条警告摘要，不能自动返工。
+
+把 QC 阻断项转成返工描述时，所有“移除”必须写清局部范围：要求把冲突元素移出或缩放到具体
+region ID 的矩形之外，并在该矩形内恢复连续低纹理背景。返工描述必须同时要求获批文案、金融事实、
+`information_mechanism`、`must_preserve`、表格、人物和卡片在安全区内完整保留；禁止产生
+“整图删除表格/人物”这种会破坏原图语义的歧义。
 
 同一个 QC Issue 报告多张真实成图缺陷时，先按变体聚合，禁止逐尺寸创建一串恢复 Issue。使用一次
 `issue create-batch`，每个受影响变体最多创建一个图像编辑恢复 Issue：该变体三个尺寸全失败时使用
@@ -153,10 +172,10 @@ Issue 相互独立并发执行；全部完成后只创建一个 `creative_scope=
 Prime。只有机器规范化脚本失败或画面自身存在实际问题才算尺寸失败；原始 PNG 像素与请求值不完全
 相等不能覆盖脚本已经通过的比例结论。
 
-不要只按 `needs_input`、`approved_with_risk` 等单个词判断证据状态，必须读取该专业子 Issue 的
-时间线到最新人工决定。无品牌底图中的避让带差异应继续进入 Prime 包装，由真实合成图和独立 QC
-判断遮挡；这不属于用包装绕过底图问题。只有真实 Prime 成图已经证明资产不可读或关键内容被遮挡，
-才是必须返工的未解决问题。
+不要只按 `needs_input`、`QC PASS WITH WARNINGS` 等单个词判断证据状态，必须读取该专业子 Issue 的
+逐图 `blocking_failures` 和时间线到最新人工决定。无品牌底图中的软引导差异应继续进入 Prime 包装，
+由真实合成图和独立 QC 判断遮挡；这不属于用包装绕过底图问题。只有真实 Prime 成图已经证明资产
+不可读、关键内容被遮挡或关键内容遭到删改，才是必须返工的未解决问题。
 
 候选图包含竞品 App 界面时，要求分析成员查看市场资源包中全部 `app_ui_reference` 文件并选择
 最匹配的 AdaKami 界面。后续生成不得保留或仿造竞品 App UI。

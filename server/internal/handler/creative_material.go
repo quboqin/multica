@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -52,6 +54,9 @@ type creativeMaterialCandidateResponse struct {
 	CreatedAt          string           `json:"created_at"`
 	UpdatedAt          string           `json:"updated_at"`
 	SourceAttachmentID string           `json:"source_attachment_id"`
+	SourceIssueID      string           `json:"source_issue_id"`
+	SourceRunID        string           `json:"source_run_id"`
+	IsNewInRun         bool             `json:"is_new_in_run"`
 	Raw                *json.RawMessage `json:"raw,omitempty"`
 }
 
@@ -181,9 +186,8 @@ func (h *Handler) UpdateCreativeMaterialCandidate(w http.ResponseWriter, r *http
 	if !ok {
 		return
 	}
-	candidateID := strings.TrimSpace(chi.URLParam(r, "candidateId"))
-	if candidateID == "" {
-		writeError(w, http.StatusBadRequest, "candidate_id is required")
+	candidateID, ok := parseUUIDOrBadRequest(w, chi.URLParam(r, "candidateId"), "candidate_id")
+	if !ok {
 		return
 	}
 	userID, ok := requireUserID(w, r)
@@ -214,22 +218,37 @@ func (h *Handler) UpdateCreativeMaterialCandidate(w http.ResponseWriter, r *http
 	if status == "selected" {
 		selectedBy = requestingUserID
 	}
-	tag, err := h.DB.Exec(r.Context(), `
-UPDATE creative_material_issue_candidate
-SET status = $3,
-    note = $4,
-    selected_by = CASE WHEN $3 = 'selected' THEN $5::uuid ELSE NULL END,
-    selected_at = CASE WHEN $3 = 'selected' THEN now() ELSE NULL END,
-    updated_at = now()
-WHERE issue_id = $1 AND workspace_id = $2 AND candidate_id = $6::uuid
-`, issue.ID, issue.WorkspaceID, status, strings.TrimSpace(req.Note), selectedBy, candidateID)
-	if err != nil {
-		slog.Warn("update creative material candidate failed", append(logger.RequestAttrs(r), "error", err, "candidate_id", candidateID)...)
-		writeError(w, http.StatusInternalServerError, "failed to update creative material candidate")
+	var candidateExists bool
+	if err := h.DB.QueryRow(r.Context(), `
+SELECT EXISTS(
+  SELECT 1 FROM creative_material_candidate WHERE id = $1 AND workspace_id = $2
+)
+`, candidateID, issue.WorkspaceID).Scan(&candidateExists); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to load creative material candidate")
 		return
 	}
-	if tag.RowsAffected() == 0 {
+	if !candidateExists {
 		writeError(w, http.StatusNotFound, "creative material candidate not found")
+		return
+	}
+	_, err := h.DB.Exec(r.Context(), `
+INSERT INTO creative_material_issue_candidate (
+  issue_id, candidate_id, workspace_id, status, note, selected_by, selected_at
+) VALUES (
+  $1, $2, $3, $4, $5,
+  CASE WHEN $4 = 'selected' THEN $6::uuid ELSE NULL END,
+  CASE WHEN $4 = 'selected' THEN now() ELSE NULL END
+)
+ON CONFLICT (issue_id, candidate_id) DO UPDATE SET
+  status = EXCLUDED.status,
+  note = EXCLUDED.note,
+  selected_by = EXCLUDED.selected_by,
+  selected_at = EXCLUDED.selected_at,
+  updated_at = now()
+`, issue.ID, candidateID, issue.WorkspaceID, status, strings.TrimSpace(req.Note), selectedBy)
+	if err != nil {
+		slog.Warn("update creative material candidate failed", append(logger.RequestAttrs(r), "error", err, "candidate_id", uuidToString(candidateID))...)
+		writeError(w, http.StatusInternalServerError, "failed to update creative material candidate")
 		return
 	}
 	if status == "selected" {
@@ -240,7 +259,7 @@ SET archive_status = 'pending', archive_attempts = 0, archive_error = '',
 WHERE id = $1::uuid AND workspace_id = $2 AND archived_url = ''
   AND archive_status <> 'running'
 `, candidateID, issue.WorkspaceID); err != nil {
-			slog.Warn("reset selected creative material archive failed", append(logger.RequestAttrs(r), "error", err, "candidate_id", candidateID)...)
+			slog.Warn("reset selected creative material archive failed", append(logger.RequestAttrs(r), "error", err, "candidate_id", uuidToString(candidateID))...)
 			writeError(w, http.StatusInternalServerError, "failed to schedule selected creative material archive")
 			return
 		}
@@ -296,18 +315,10 @@ RETURNING id::text
 		return creativeImportSummary{}, err
 	}
 
-	summary := creativeImportSummary{RunID: runID, TotalCount: len(in.Materials)}
-	for _, material := range in.Materials {
-		material = normalizeCreativeMaterialInput(material)
-		if !creativeMaterialHasUsableAsset(material) {
-			summary.SkippedCount++
-			continue
-		}
+	materials, skippedCount := uniqueCreativeMaterialInputs(in.Materials)
+	summary := creativeImportSummary{RunID: runID, TotalCount: len(materials), SkippedCount: skippedCount}
+	for _, material := range materials {
 		dedupeKey := creativeMaterialDedupeKey(material)
-		if dedupeKey == "" {
-			summary.SkippedCount++
-			continue
-		}
 		raw := strings.TrimSpace(string(material.Raw))
 		if raw == "" {
 			raw = "{}"
@@ -511,8 +522,11 @@ SELECT
   COALESCE(NULLIF(ic.note, ''), c.note),
   COALESCE(ic.selected_at::text, ''), c.first_seen_at::text, c.last_seen_at::text,
   c.created_at::text, c.updated_at::text
+  , COALESCE(ic.issue_id::text, ''), COALESCE(ic.source_run_id::text, ''),
+  COALESCE(c.created_at >= cr.created_at, false)
 FROM creative_material_issue_candidate ic
 JOIN creative_material_candidate c ON c.id = ic.candidate_id
+LEFT JOIN creative_material_crawl_run cr ON cr.id = ic.source_run_id
 WHERE ic.issue_id = $1 AND ic.workspace_id = $2
 ORDER BY
   CASE ic.status
@@ -544,6 +558,7 @@ ORDER BY
 			&duration, &impression, &item.MediaNames, &item.AreaNames,
 			&item.LanguageNames, &item.PlatformNames, &item.Status, &item.Tags, &item.Note,
 			&selectedAt, &item.FirstSeenAt, &item.LastSeenAt, &item.CreatedAt, &item.UpdatedAt,
+			&item.SourceIssueID, &item.SourceRunID, &item.IsNewInRun,
 		); err != nil {
 			return nil, err
 		}
@@ -656,7 +671,10 @@ func creativeMaterialDedupeKey(in creativeMaterialInput) string {
 	if strings.TrimSpace(in.DedupeKey) != "" {
 		return strings.TrimSpace(in.DedupeKey)
 	}
-	base := firstNonEmpty(in.ExternalID, in.ResourceURL, in.PreviewURL, in.PosterURL, in.OriginalURL)
+	base := creativeMaterialAssetIdentity(in)
+	if base == "" {
+		base = strings.TrimSpace(in.ExternalID)
+	}
 	if base == "" {
 		base = strings.TrimSpace(in.Competitor + "|" + in.Title + "|" + in.AssetType)
 	}
@@ -665,6 +683,101 @@ func creativeMaterialDedupeKey(in creativeMaterialInput) string {
 	}
 	sum := sha256.Sum256([]byte(base))
 	return "sha256:" + hex.EncodeToString(sum[:])
+}
+
+func creativeMaterialAssetIdentity(in creativeMaterialInput) string {
+	raw := firstNonEmpty(in.ResourceURL, in.PreviewURL, in.PosterURL, in.OriginalURL)
+	if raw == "" {
+		return ""
+	}
+	parsed, err := url.Parse(raw)
+	if err != nil || parsed.Host == "" {
+		return raw
+	}
+	parsed.RawQuery = ""
+	parsed.Fragment = ""
+	parsed.Scheme = strings.ToLower(parsed.Scheme)
+	parsed.Host = strings.ToLower(parsed.Host)
+	return parsed.String()
+}
+
+func uniqueCreativeMaterialInputs(inputs []creativeMaterialInput) ([]creativeMaterialInput, int) {
+	seen := make(map[string]struct{}, len(inputs))
+	out := make([]creativeMaterialInput, 0, len(inputs))
+	skipped := 0
+	for _, material := range inputs {
+		material = normalizeCreativeMaterialInput(material)
+		if !creativeMaterialHasUsableAsset(material) {
+			skipped++
+			continue
+		}
+		key := creativeMaterialDedupeKey(material)
+		if key == "" {
+			skipped++
+			continue
+		}
+		if _, exists := seen[key]; exists {
+			skipped++
+			continue
+		}
+		seen[key] = struct{}{}
+		material.DedupeKey = key
+		out = append(out, material)
+	}
+	return out, skipped
+}
+
+func (h *Handler) materialSearchParamsWithNovelty(ctx context.Context, workspaceID pgtype.UUID, connectorID, capability string, raw json.RawMessage) (json.RawMessage, error) {
+	if strings.TrimSpace(connectorID) != "appgrowing" || strings.TrimSpace(capability) != "material_search" {
+		return raw, nil
+	}
+	params := map[string]any{}
+	if len(raw) > 0 {
+		if err := json.Unmarshal(raw, &params); err != nil {
+			return nil, err
+		}
+	}
+	if novelOnly, exists := params["novel_only"].(bool); exists && !novelOnly {
+		return raw, nil
+	}
+	params["novel_only"] = true
+	keys := map[string]struct{}{}
+	if values, ok := params["exclude_dedupe_keys"].([]any); ok {
+		for _, value := range values {
+			key := strings.TrimSpace(fmt.Sprint(value))
+			if key != "" {
+				keys[key] = struct{}{}
+			}
+		}
+	}
+	rows, err := h.DB.Query(ctx, `
+SELECT resource_url, preview_url, poster_url, original_url
+FROM creative_material_candidate
+WHERE workspace_id = $1 AND connector_id = 'appgrowing'
+`, workspaceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var material creativeMaterialInput
+		if err := rows.Scan(&material.ResourceURL, &material.PreviewURL, &material.PosterURL, &material.OriginalURL); err != nil {
+			return nil, err
+		}
+		if key := creativeMaterialDedupeKey(material); key != "" {
+			keys[key] = struct{}{}
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	exclusions := make([]string, 0, len(keys))
+	for key := range keys {
+		exclusions = append(exclusions, key)
+	}
+	sort.Strings(exclusions)
+	params["exclude_dedupe_keys"] = exclusions
+	return json.Marshal(params)
 }
 
 func uniqueNonEmptyStrings(values []string) []string {
@@ -806,6 +919,7 @@ func creativeMaterialInputFromMap(obj map[string]any) (creativeMaterialInput, bo
 	raw, _ := json.Marshal(obj)
 	input := creativeMaterialInput{
 		ExternalID:         stringFromAny(firstAnyAtKeys(obj, "material_id", "external_id", "id", "creative_id")),
+		DedupeKey:          stringFromAny(firstAnyAtKeys(obj, "dedupe_key")),
 		Competitor:         stringFromAny(firstAnyAtKeys(obj, "competitor", "brand", "app_name")),
 		Title:              stringFromAny(firstAnyAtKeys(obj, "title", "name", "description")),
 		AssetType:          normalizeCreativeAssetType(stringFromAny(firstAnyAtKeys(obj, "asset_type", "type"))),

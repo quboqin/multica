@@ -21,6 +21,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--images-dir", required=True)
     parser.add_argument("--output", required=True)
     parser.add_argument("--contact-sheet", required=True)
+    parser.add_argument("--hard-region-sheet", required=True)
     return parser.parse_args()
 
 
@@ -61,6 +62,53 @@ def make_contact_sheet(images: list[tuple[str, Path]], output: Path) -> None:
         py = y + label_height + (cell_height - preview.height) // 2
         sheet.paste(preview, (px, py))
         draw.text((x, y + 8), label, fill="black", font=font)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    sheet.save(output, format="PNG", optimize=True)
+
+
+def resolve_layout_contract(manifest: dict, size: str) -> dict | None:
+    contract = manifest.get("prime_layout_contract") or manifest.get("layout_contract") or {}
+    layouts = contract.get("layouts") if isinstance(contract, dict) else None
+    layout = layouts.get(size) if isinstance(layouts, dict) else None
+    if not isinstance(layout, dict):
+        return None
+    if not isinstance(layout.get("hard_regions"), list):
+        return None
+    if not isinstance(layout.get("top_key_content_exclusion_end"), int):
+        return None
+    if not isinstance(layout.get("bottom_key_content_exclusion_start"), int):
+        return None
+    return layout
+
+
+def make_hard_region_sheet(images: list[tuple[str, Path, dict]], output: Path) -> None:
+    row_width, row_height, gap = 1500, 430, 18
+    sheet = Image.new("RGB", (row_width, gap + len(images) * (row_height + gap)), "white")
+    draw = ImageDraw.Draw(sheet)
+    font = ImageFont.load_default()
+    for index, (label, path, layout) in enumerate(images):
+        y = gap + index * (row_height + gap)
+        with Image.open(path) as source:
+            image = source.convert("RGB")
+        annotated = image.copy()
+        overlay = ImageDraw.Draw(annotated)
+        for region in layout.get("hard_regions", []):
+            box = tuple(int(region[key]) for key in ("x1", "y1", "x2", "y2"))
+            overlay.rectangle(box, outline=(220, 38, 38), width=max(2, image.width // 400))
+        full = ImageOps.contain(annotated, (360, 360), Image.Resampling.LANCZOS)
+        sheet.paste(full, (12 + (360 - full.width) // 2, y + 44 + (360 - full.height) // 2))
+        top_end = max(1, min(image.height, int(layout["top_key_content_exclusion_end"])))
+        bottom_start = max(0, min(image.height - 1, int(layout["bottom_key_content_exclusion_start"])))
+        strips = [
+            ("TOP CONTEXT (SOFT GUIDE, NON-BLOCKING)", image.crop((0, 0, image.width, top_end))),
+            ("BOTTOM CONTEXT (SOFT GUIDE, NON-BLOCKING)", image.crop((0, bottom_start, image.width, image.height))),
+        ]
+        for strip_index, (strip_label, crop) in enumerate(strips):
+            target_y = y + 44 + strip_index * 190
+            preview = ImageOps.contain(crop, (1080, 150), Image.Resampling.LANCZOS)
+            sheet.paste(preview, (400, target_y + 24 + (150 - preview.height) // 2))
+            draw.text((400, target_y), strip_label, fill="black", font=font)
+        draw.text((12, y + 12), label, fill="black", font=font)
     output.parent.mkdir(parents=True, exist_ok=True)
     sheet.save(output, format="PNG", optimize=True)
 
@@ -109,6 +157,7 @@ def main() -> int:
 
     results = []
     contact_images: list[tuple[str, Path]] = []
+    hard_region_images: list[tuple[str, Path, dict]] = []
     for job in manifest.get("jobs", []):
         compose_item = compose_by_id.get(job.get("id"), {})
         contract = resolve_job_contract(job, compose_item, manifest, images_dir)
@@ -118,6 +167,7 @@ def main() -> int:
         revision = contract["revision"]
         approved_payload = contract["approved_payload"]
         expected_width, expected_height = (int(value) for value in size.lower().split("x", 1))
+        layout = resolve_layout_contract(manifest, size)
         exists = image_path.is_file()
         actual_size = None
         white_ratio = None
@@ -126,6 +176,8 @@ def main() -> int:
                 actual_size = list(image.size)
                 white_ratio = edge_white_ratio(image)
             contact_images.append((f"{variant} {size}", image_path))
+            if layout is not None:
+                hard_region_images.append((f"{variant} {size}", image_path, layout))
         decoded = decode_qr(image_path) if exists else ""
         checks = {
             "exists": exists,
@@ -134,7 +186,10 @@ def main() -> int:
             "compose": compose_item.get("status") == "succeeded" and compose_item.get("passed") is True,
             "qr": bool(approved_payload) and decoded == approved_payload and compose_item.get("decoded") == approved_payload,
             "full_bleed": white_ratio is not None and white_ratio < 0.5,
+            "layout_contract": layout is not None,
         }
+        blocking_check_names = ("exists", "dimensions", "filename", "compose", "qr", "layout_contract")
+        blocking_checks_passed = all(checks[name] for name in blocking_check_names)
         results.append({
             "id": job["id"],
             "variant": variant,
@@ -145,11 +200,20 @@ def main() -> int:
             "decoded_qr": decoded,
             "approved_payload": approved_payload,
             "edge_white_ratio": round(white_ratio, 6) if white_ratio is not None else None,
+            "hard_region_review": {
+                "top_key_content_exclusion_end": layout.get("top_key_content_exclusion_end") if layout else None,
+                "bottom_key_content_exclusion_start": layout.get("bottom_key_content_exclusion_start") if layout else None,
+                "soft_guides_non_blocking": True,
+                "regions": layout.get("hard_regions", []) if layout else [],
+                "semantic_review_required": True,
+            },
             "checks": checks,
-            "passed": all(checks.values()),
+            "machine_warnings": [] if checks["full_bleed"] else ["edge_white_ratio_needs_visual_review"],
+            "passed": blocking_checks_passed,
         })
 
     make_contact_sheet(contact_images, Path(args.contact_sheet).resolve())
+    make_hard_region_sheet(hard_region_images, Path(args.hard_region_sheet).resolve())
     evidence = {
         "candidate_id": manifest.get("candidate_id"),
         "revision": manifest.get("revision"),
@@ -157,6 +221,7 @@ def main() -> int:
         "copy_snapshot": manifest.get("copy_snapshot"),
         "approved_payloads": sorted({item["approved_payload"] for item in results if item["approved_payload"]}),
         "compose_summary": {"succeeded": compose.get("succeeded"), "failed": compose.get("failed")},
+        "hard_region_sheet": str(Path(args.hard_region_sheet).resolve()),
         "passed": bool(results) and all(item["passed"] for item in results),
         "results": results,
     }

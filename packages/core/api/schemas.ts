@@ -396,6 +396,9 @@ export const CreativeMaterialCandidateSchema = z.object({
   created_at: z.string().default(""),
   updated_at: z.string().default(""),
   source_attachment_id: z.string().default(""),
+  source_issue_id: z.string().default(""),
+  source_run_id: z.string().default(""),
+  is_new_in_run: z.boolean().default(false),
   raw: z.unknown().optional(),
 }).loose();
 

@@ -127,6 +127,9 @@ describe("creative material schemas", () => {
 
     expect(parsed.candidates[0]?.archived_url).toBe("");
     expect(parsed.candidates[0]?.archive_status).toBe("pending");
+		expect(parsed.candidates[0]?.source_issue_id).toBe("");
+		expect(parsed.candidates[0]?.source_run_id).toBe("");
+		expect(parsed.candidates[0]?.is_new_in_run).toBe(false);
 		expect(parsed.deliveries).toEqual([]);
 		expect(parsed.adjustments).toEqual([]);
   });

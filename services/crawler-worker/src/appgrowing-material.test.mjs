@@ -8,6 +8,7 @@ import {
   appGrowingCompetitorDiagnostics,
   appGrowingGraphQLDateWindow,
   appGrowingGraphQLRequest,
+  appGrowingMaterialDedupeKey,
   appGrowingMaterialURL,
   appGrowingSearchAppVariables,
   appGrowingSelectionMixSummary,
@@ -17,9 +18,49 @@ import {
   connectorGraphQLHeaders,
   extractAppGrowingMaterials,
   isBrowserPageCrashError,
+  selectAppGrowingMaterials,
   shouldBlockAppGrowingCrawlResource,
   shouldUseAppGrowingBrowserFallback,
 } from "./index.mjs";
+
+test("uses the asset path instead of temporary auth parameters for material identity", () => {
+  const first = appGrowingMaterialDedupeKey({
+    material_id: "material-1",
+    resource_url: "https://cdn.example.com/a.jpg?auth_key=first",
+  });
+  const second = appGrowingMaterialDedupeKey({
+    material_id: "material-1",
+    resource_url: "https://cdn.example.com/a.jpg?auth_key=second",
+  });
+  const sibling = appGrowingMaterialDedupeKey({
+    material_id: "material-1",
+    resource_url: "https://cdn.example.com/b.jpg?auth_key=first",
+  });
+
+  assert.equal(first, second);
+  assert.notEqual(first, sibling);
+});
+
+test("filters previously seen assets before filling the requested material limit", () => {
+  const rules = {
+    new_materials: { ratio: 0.4, duration_days_lt: 7, impression_gt: 1000 },
+    volume_materials: { ratio: 0.6, duration_days_gt: 30, impression_gte: 10_000_000 },
+  };
+  const materials = [
+    { resource_url: "https://cdn.example.com/seen.jpg", duration_days: 2, impression_estimate: 20_000 },
+    { resource_url: "https://cdn.example.com/new.jpg", duration_days: 3, impression_estimate: 30_000 },
+    { resource_url: "https://cdn.example.com/volume.jpg", duration_days: 90, impression_estimate: 20_000_000 },
+  ];
+  const excludedKeys = new Set([appGrowingMaterialDedupeKey(materials[0])]);
+
+  const selection = selectAppGrowingMaterials(materials, rules, 2, { excludedKeys });
+
+  assert.equal(selection.excludedCount, 1);
+  assert.deepEqual(selection.selected.map((item) => item.resource_url), [
+    "https://cdn.example.com/new.jpg",
+    "https://cdn.example.com/volume.jpg",
+  ]);
+});
 
 test("reports the actual selected material mix instead of the configured target", () => {
   const selected = [
