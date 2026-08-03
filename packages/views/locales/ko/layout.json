@@ -2,6 +2,7 @@
   "nav": {
     "inbox": "인박스",
     "my_issues": "내 이슈",
+    "my_favorites": "내 즐겨찾기",
     "issues": "이슈",
     "plans": "Plans",
     "projects": "프로젝트",
@@ -25,6 +26,83 @@
   "workspace_loader": {
     "loading_workspace": "워크스페이스 로딩 중...",
     "loading_named_prefix": "로딩 중"
+  },
+  "favorites": {
+    "page": {
+      "title": "내 즐겨찾기",
+      "new_category": "새 분류",
+      "empty_categories_title": "즐겨찾기 분류가 없습니다",
+      "empty_categories_description": "처음 즐겨찾기에 추가하면 기본 분류가 만들어집니다. 지금 직접 만들 수도 있습니다.",
+      "category_empty_title": "이 분류에 즐겨찾기가 없습니다",
+      "category_empty_description": "즐겨찾기를 이곳으로 이동해 정리할 수 있습니다.",
+      "category_not_found": "즐겨찾기 분류를 찾을 수 없습니다.",
+      "back_to_categories": "즐겨찾기 분류로 돌아가기",
+      "documents": "즐겨찾기 {{count}}개",
+      "load_failed": "즐겨찾기를 불러올 수 없습니다.",
+      "retry": "다시 시도",
+      "open_source_conversation": "원본 작업 대화로 이동",
+      "filter_label": "즐겨찾기 유형",
+      "filter_all": "전체",
+      "filter_issue": "작업",
+      "filter_project": "프로젝트",
+      "filter_markdown": "MD",
+      "filter_html": "HTML",
+      "filter_empty_title": "이 유형의 즐겨찾기가 없습니다"
+    },
+    "item": {
+      "add": "즐겨찾기에 추가",
+      "remove": "즐겨찾기에서 제거",
+      "saved_to": "\"{{category}}\"에 저장했습니다.",
+      "removed": "즐겨찾기에서 제거했습니다.",
+      "change_category": "분류 변경",
+      "save_failed": "즐겨찾기에 추가하지 못했습니다.",
+      "remove_failed": "즐겨찾기에서 제거하지 못했습니다.",
+      "unavailable": "사용할 수 없는 즐겨찾기"
+    },
+    "category": {
+      "default_name": "기본",
+      "new_tooltip": "즐겨찾기 분류 만들기",
+      "actions_tooltip": "즐겨찾기 분류 관리"
+    },
+    "create_dialog": {
+      "title": "즐겨찾기 분류 만들기",
+      "description": "즐겨찾기는 분류 안에 저장됩니다.",
+      "name_label": "분류 이름",
+      "name_placeholder": "예: 조사 자료",
+      "cancel": "취소",
+      "create": "만들기",
+      "creating": "만드는 중...",
+      "created": "즐겨찾기 분류를 만들었습니다.",
+      "failed": "즐겨찾기 분류를 만들지 못했습니다."
+    },
+    "move_dialog": {
+      "title": "즐겨찾기 분류 변경",
+      "description": "\"{{filename}}\"을 저장할 분류를 선택하세요.",
+      "new_category": "새 분류",
+      "moved": "\"{{category}}\"(으)로 이동했습니다.",
+      "failed": "즐겨찾기 분류를 변경하지 못했습니다."
+    },
+    "rename_dialog": {
+      "action": "이름 변경",
+      "title": "분류 이름 변경",
+      "description": "즐겨찾기 분류의 이름을 변경합니다.",
+      "name_label": "분류 이름",
+      "cancel": "취소",
+      "save": "저장",
+      "saving": "저장 중...",
+      "renamed": "분류 이름을 변경했습니다.",
+      "failed": "즐겨찾기 분류의 이름을 변경하지 못했습니다."
+    },
+    "delete_dialog": {
+      "action": "삭제",
+      "title": "즐겨찾기 분류 삭제",
+      "description": "\"{{name}}\" 분류를 삭제할까요? 포함된 즐겨찾기 {{count}}개도 제거되며 되돌릴 수 없습니다.",
+      "cancel": "취소",
+      "delete": "삭제",
+      "deleting": "삭제 중...",
+      "deleted": "분류와 포함된 즐겨찾기를 삭제했습니다.",
+      "failed": "즐겨찾기 분류를 삭제하지 못했습니다."
+    }
   },
   "sidebar": {
     "unpin_tooltip": "고정 해제",

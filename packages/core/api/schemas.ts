@@ -4,6 +4,8 @@ import type {
   AgentTemplate,
   AgentTemplateSummary,
   Attachment,
+  Favorite,
+  FavoriteCategory,
   BillingBalance,
   BillingBatchesPage,
   BillingCheckoutSessionStatus,
@@ -11,6 +13,9 @@ import type {
   BillingTopupsPage,
   BillingTransactionsPage,
   CancelTaskResponse,
+  ChatMessage,
+  ChatMessageFeedback,
+  ChatMessagesPage,
   CreateAgentFromTemplateResponse,
   CreateBillingCheckoutSessionResponse,
   CreateBillingPortalSessionResponse,
@@ -118,6 +123,148 @@ export const AttachmentResponseSchema = z.object({
   chat_message_id: z.string().nullable().optional(),
 }).loose();
 
+const FavoriteAttachmentSchema = AttachmentResponseSchema.extend({
+  workspace_id: z.string(),
+  issue_id: z.string().nullable().optional().default(null),
+  comment_id: z.string().nullable().optional().default(null),
+  chat_session_id: z.string().nullable().optional().default(null),
+  chat_message_id: z.string().nullable().optional().default(null),
+  uploader_type: z.string().default(""),
+  uploader_id: z.string().default(""),
+  content_type: z.string().default(""),
+  size_bytes: z.number().default(0),
+  created_at: z.string().default(""),
+}).loose();
+
+const ChatMessageFeedbackSchema = z.object({
+  sentiment: z.string().nullable().catch(null),
+  comment: z.string().catch(""),
+}).loose().transform((feedback): ChatMessageFeedback => {
+  return {
+    sentiment: feedback.sentiment === "positive" || feedback.sentiment === "negative"
+      ? feedback.sentiment
+      : null,
+    comment: feedback.comment,
+  };
+});
+
+export const ChatMessageSchema = z.object({
+  id: z.string(),
+  chat_session_id: z.string().default(""),
+  role: z.enum(["user", "assistant"]).catch("assistant"),
+  content: z.string().default(""),
+  task_id: z.string().nullish().transform((value) => value ?? null),
+  created_at: z.string(),
+  attachments: z.array(FavoriteAttachmentSchema).optional(),
+  failure_reason: z.string().nullish().optional(),
+  elapsed_ms: z.number().nullish().optional(),
+  feedback: ChatMessageFeedbackSchema.nullish().optional(),
+}).loose();
+
+export const ChatMessageListSchema = z.array(ChatMessageSchema);
+
+const ChatMessagesCursorSchema = z.object({
+  created_at: z.string(),
+  id: z.string(),
+}).loose();
+
+export const ChatMessagesPageSchema = z.object({
+  messages: ChatMessageListSchema.catch([]),
+  limit: z.number().int().positive().catch(50),
+  has_more: z.boolean().catch(false),
+  next_cursor: ChatMessagesCursorSchema.nullish().optional(),
+}).loose();
+
+export const EMPTY_CHAT_MESSAGE_LIST: ChatMessage[] = [];
+
+export const EMPTY_CHAT_MESSAGES_PAGE: ChatMessagesPage = {
+  messages: [],
+  limit: 50,
+  has_more: false,
+  next_cursor: null,
+};
+
+export const FavoriteCategoryResponseSchema = z.object({
+  id: z.string(),
+  workspace_id: z.string(),
+  user_id: z.string(),
+  name: z.string(),
+  is_default: z.boolean(),
+  favorite_count: z.number().default(0),
+  created_at: z.string(),
+  updated_at: z.string(),
+}).loose().transform((category): FavoriteCategory => ({
+  id: category.id,
+  workspaceId: category.workspace_id,
+  userId: category.user_id,
+  name: category.name,
+  isDefault: category.is_default,
+  favoriteCount: category.favorite_count,
+  createdAt: category.created_at,
+  updatedAt: category.updated_at,
+}));
+
+export const FavoriteCategoryListSchema = z.array(
+  FavoriteCategoryResponseSchema,
+);
+
+const FavoriteResponseBaseSchema = z.object({
+  id: z.string(),
+  workspace_id: z.string(),
+  user_id: z.string(),
+  item_id: z.string(),
+  category: FavoriteCategoryResponseSchema,
+  created_at: z.string(),
+}).loose();
+
+export const FavoriteResponseSchema = z
+  .discriminatedUnion("item_type", [
+    FavoriteResponseBaseSchema.extend({
+      item_type: z.literal("attachment"),
+      attachment: FavoriteAttachmentSchema,
+    }),
+    FavoriteResponseBaseSchema.extend({ item_type: z.literal("issue") }),
+    FavoriteResponseBaseSchema.extend({ item_type: z.literal("project") }),
+  ])
+  .transform((favorite): Favorite => {
+    const base = {
+      id: favorite.id,
+      workspaceId: favorite.workspace_id,
+      userId: favorite.user_id,
+      itemId: favorite.item_id,
+      category: favorite.category,
+      createdAt: favorite.created_at,
+    };
+    return favorite.item_type === "attachment"
+      ? {
+          ...base,
+          itemType: "attachment",
+          attachment: favorite.attachment as Attachment,
+        }
+      : { ...base, itemType: favorite.item_type };
+  });
+
+export const FavoriteListSchema = z.array(z.unknown()).transform(
+  (items): Favorite[] => items.flatMap((item) => {
+    const parsed = FavoriteResponseSchema.safeParse(item);
+    return parsed.success ? [parsed.data] : [];
+  }),
+);
+
+export const EMPTY_FAVORITES: Favorite[] = [];
+export const EMPTY_FAVORITE_CATEGORIES: FavoriteCategory[] = [];
+
+export const EMPTY_FAVORITE_CATEGORY: FavoriteCategory = {
+  id: "",
+  workspaceId: "",
+  userId: "",
+  name: "",
+  isDefault: false,
+  favoriteCount: 0,
+  createdAt: "",
+  updatedAt: "",
+};
+
 export const EMPTY_ATTACHMENT: Attachment = {
   id: "",
   workspace_id: "",
@@ -134,6 +281,16 @@ export const EMPTY_ATTACHMENT: Attachment = {
   content_type: "",
   size_bytes: 0,
   created_at: "",
+};
+
+export const EMPTY_FAVORITE: Favorite = {
+  id: "",
+  workspaceId: "",
+  userId: "",
+  itemType: "issue",
+  itemId: "",
+  category: EMPTY_FAVORITE_CATEGORY,
+  createdAt: "",
 };
 
 // All object schemas use `.loose()` so unknown server-side fields pass

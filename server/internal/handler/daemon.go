@@ -2467,10 +2467,9 @@ func (h *Handler) GetIssueGCCheck(w http.ResponseWriter, r *http.Request) {
 }
 
 // GetChatSessionGCCheck returns the status and updated_at of a chat session
-// for the daemon GC loop. A 404 here means the session was hard-deleted
-// (DeleteChatSession in chat.go runs a real DELETE), which the daemon treats
-// as an immediate-clean signal — the user's explicit delete is the strongest
-// reclaim authorization we can get.
+// for the daemon GC loop. Inactive sessions are reported as "deleted", which
+// the daemon treats as an immediate-clean signal — the user's explicit delete
+// is the strongest reclaim authorization we can get.
 //
 // Same anti-enumeration shape as GetIssueGCCheck: workspace mismatch returns
 // the same 404 so a scoped daemon token can't probe other workspaces.
@@ -2488,8 +2487,12 @@ func (h *Handler) GetChatSessionGCCheck(w http.ResponseWriter, r *http.Request) 
 	if !h.requireDaemonWorkspaceAccess(w, r, uuidToString(session.WorkspaceID)) {
 		return
 	}
+	status := session.Status
+	if !session.IsActive {
+		status = "deleted"
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"status":     session.Status,
+		"status":     status,
 		"updated_at": session.UpdatedAt.Time,
 	})
 }

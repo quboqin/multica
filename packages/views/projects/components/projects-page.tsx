@@ -70,6 +70,8 @@ import { useActorName } from "@multica/core/workspace/hooks";
 import { memberListOptions } from "@multica/core/workspace/queries";
 import { useModalStore } from "@multica/core/modals";
 import { AppLink } from "../../navigation";
+import { FavoriteItemAction } from "../../favorites/components/favorite-item-action";
+import { FavoriteCategoryDialog } from "../../favorites/components/favorite-category-dialog";
 import { ActorAvatar } from "../../common/actor-avatar";
 import { FILTER_ITEM_CLASS, HoverCheck } from "../../common/hover-check";
 import { Skeleton } from "@multica/ui/components/ui/skeleton";
@@ -360,6 +362,7 @@ function ProjectRowActions({
   const deletePin = useDeletePin();
   const deleteProject = useDeleteProject();
   const [deleteOpen, setDeleteOpen] = useState(false);
+  const [favoriteCategoryId, setFavoriteCategoryId] = useState<string | null>(null);
 
   const togglePin = () => {
     if (pinned) deletePin.mutate({ itemType: "project", itemId: project.id });
@@ -389,6 +392,15 @@ function ProjectRowActions({
             )}
             {pinned ? t(($) => $.page.unpin) : t(($) => $.page.pin)}
           </DropdownMenuItem>
+          <FavoriteItemAction
+            presentation="menu"
+            itemType="project"
+            itemId={project.id}
+            itemLabel={project.title}
+            onRequestCategoryChange={(favorite) =>
+              setFavoriteCategoryId(favorite.category.id)
+            }
+          />
           {canDelete && (
             <>
               <DropdownMenuSeparator />
@@ -403,6 +415,19 @@ function ProjectRowActions({
           )}
         </DropdownMenuContent>
       </DropdownMenu>
+
+      {favoriteCategoryId && (
+        <FavoriteCategoryDialog
+          open
+          onOpenChange={(open) => {
+            if (!open) setFavoriteCategoryId(null);
+          }}
+          itemType="project"
+          itemId={project.id}
+          itemLabel={project.title}
+          currentCategoryId={favoriteCategoryId}
+        />
+      )}
 
       <Dialog open={deleteOpen} onOpenChange={setDeleteOpen}>
         <DialogContent className="sm:max-w-md">

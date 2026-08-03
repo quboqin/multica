@@ -25,6 +25,28 @@
     "copy_action": "复制",
     "copied_toast": "已复制",
     "copy_failed_toast": "复制失败",
+    "positive_feedback_action": "点赞",
+    "negative_feedback_action": "点踩",
+    "feedback_dialog": {
+      "comment_action": "添加评论",
+      "edit_comment_action": "修改评论",
+      "comment_title": "添加评论",
+      "edit_comment_title": "修改评论",
+      "comment_description": "评论可独立于点赞或点踩保存。",
+      "negative_title": "这条回复哪里需要改进？",
+      "negative_description": "请说明这条回复存在的问题。",
+      "comment_optional": "评论（选填）",
+      "comment_required": "评论（必填）",
+      "comment_placeholder": "输入评论...",
+      "cancel": "取消",
+      "submit": "提交反馈",
+      "submitting": "提交中...",
+      "success_toast": "已提交反馈",
+      "error_toast": "无法提交反馈",
+      "remove_action": "取消反馈",
+      "removed_toast": "已取消反馈",
+      "remove_error_toast": "无法取消反馈"
+    },
     "loading_older": "正在加载更早的消息…"
   },
   "session_history": {

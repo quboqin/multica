@@ -69,6 +69,12 @@ vi.mock("@multica/core/pins", () => ({
   useDeletePin: () => ({ mutate: mocks.deletePin }),
 }));
 
+vi.mock("../../favorites/components/favorite-item-action", () => ({
+  FavoriteItemAction: ({ itemLabel }: { itemLabel: string }) => (
+    <button type="button">Favorite {itemLabel}</button>
+  ),
+}));
+
 vi.mock("@multica/core/hooks", () => ({
   useWorkspaceId: () => "workspace-1",
 }));

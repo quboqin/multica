@@ -54,15 +54,19 @@ type mockStorage struct {
 	files               map[string][]byte
 	presignCalls        []string
 	presignDispositions []string
+	onUpload            func()
 }
 
 func (m *mockStorage) Upload(_ context.Context, key string, data []byte, _ string, _ string) (string, error) {
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	if m.files == nil {
 		m.files = map[string][]byte{}
 	}
 	m.files[key] = append([]byte(nil), data...)
+	m.mu.Unlock()
+	if m.onUpload != nil {
+		m.onUpload()
+	}
 	return fmt.Sprintf("https://cdn.example.com/%s", key), nil
 }
 
@@ -271,6 +275,72 @@ func TestUploadFileResolvesWorkspaceViaIDHeaderStill(t *testing.T) {
 		"uuid-upload.txt",
 	); err != nil {
 		t.Fatalf("cleanup attachment: %v", err)
+	}
+}
+
+func TestUploadFileRemovesObjectWhenIssueBecomesInactive(t *testing.T) {
+	issueID := createTestIssue(t, "Inactive during attachment upload", "todo", "none")
+	t.Cleanup(func() {
+		testPool.Exec(context.Background(), `DELETE FROM issue WHERE id = $1`, issueID)
+	})
+
+	store := &mockStorage{}
+	store.onUpload = func() {
+		if _, err := testPool.Exec(
+			context.Background(),
+			`UPDATE issue SET is_active = FALSE WHERE id = $1`,
+			issueID,
+		); err != nil {
+			t.Errorf("deactivate issue during upload: %v", err)
+		}
+	}
+	origStorage := testHandler.Storage
+	testHandler.Storage = store
+	defer func() { testHandler.Storage = origStorage }()
+
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	part, err := writer.CreateFormFile("file", "inactive-issue.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := part.Write([]byte("discard me")); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.WriteField("issue_id", issueID); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequest("POST", "/api/upload-file", &body)
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	req.Header.Set("X-User-ID", testUserID)
+	req.Header.Set("X-Workspace-ID", testWorkspaceID)
+	w := httptest.NewRecorder()
+	testHandler.UploadFile(w, req)
+
+	if w.Code != http.StatusConflict {
+		t.Fatalf("UploadFile with concurrently deleted issue: expected 409, got %d: %s", w.Code, w.Body.String())
+	}
+	store.mu.Lock()
+	remainingObjects := len(store.files)
+	store.mu.Unlock()
+	if remainingObjects != 0 {
+		t.Fatalf("uploaded objects remaining after rejected attachment: got %d, want 0", remainingObjects)
+	}
+	var attachmentCount int
+	if err := testPool.QueryRow(
+		context.Background(),
+		`SELECT count(*) FROM attachment WHERE issue_id = $1 AND filename = $2`,
+		issueID,
+		"inactive-issue.txt",
+	).Scan(&attachmentCount); err != nil {
+		t.Fatalf("count rejected attachments: %v", err)
+	}
+	if attachmentCount != 0 {
+		t.Fatalf("attachment rows after rejected upload: got %d, want 0", attachmentCount)
 	}
 }
 

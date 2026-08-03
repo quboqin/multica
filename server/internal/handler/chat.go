@@ -302,11 +302,10 @@ func (h *Handler) UpdateChatSession(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, chatSessionToResponse(updated))
 }
 
-// DeleteChatSession hard-deletes a chat session owned by the caller. The
-// row lock + cancel + delete run inside a single tx so a concurrent
-// SendChatMessage cannot enqueue a task that would later be orphaned by
-// the FK ON DELETE SET NULL on agent_task_queue.chat_session_id. Cancel
-// failure aborts the delete; events fire only after commit.
+// DeleteChatSession logically deletes a chat session owned by the caller. The
+// row lock + cancel + deactivate run inside a single tx so a concurrent
+// SendChatMessage cannot enqueue a task after the session becomes hidden.
+// Cancel failure aborts the delete; events fire only after commit.
 func (h *Handler) DeleteChatSession(w http.ResponseWriter, r *http.Request) {
 	userID, ok := requireUserID(w, r)
 	if !ok {
@@ -328,10 +327,9 @@ func (h *Handler) DeleteChatSession(w http.ResponseWriter, r *http.Request) {
 	defer tx.Rollback(r.Context())
 	qtx := h.Queries.WithTx(tx)
 
-	// FOR UPDATE on the chat_session row blocks any concurrent INSERT into
-	// agent_task_queue that references it (the FK validation needs a
-	// KEY SHARE lock). After we commit the delete, the blocked INSERT
-	// fails its FK check, so it can't land an orphaned task.
+	// FOR UPDATE on the chat_session row blocks concurrent CreateChatMessage
+	// and CreateChatTask active checks. After commit, blocked requests observe
+	// is_active = FALSE and cannot append work to a hidden session.
 	if _, err := qtx.LockChatSessionForDelete(r.Context(), session.ID); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			// Already gone — treat as idempotent success.
@@ -348,10 +346,11 @@ func (h *Handler) DeleteChatSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := qtx.DeleteChatSession(r.Context(), db.DeleteChatSessionParams{
+	affected, err := qtx.DeleteChatSession(r.Context(), db.DeleteChatSessionParams{
 		ID:          session.ID,
 		WorkspaceID: session.WorkspaceID,
-	}); err != nil {
+	})
+	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to delete chat session")
 		return
 	}
@@ -362,14 +361,16 @@ func (h *Handler) DeleteChatSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Post-commit broadcasts. Subscribers should never observe events for a
-	// tx that didn't actually persist.
-	h.TaskService.BroadcastCancelledTasks(r.Context(), cancelled)
+	if affected > 0 {
+		// Post-commit broadcasts. Subscribers should never observe events for a
+		// tx that didn't actually persist.
+		h.TaskService.BroadcastCancelledTasks(r.Context(), cancelled)
 
-	resolvedSessionID := uuidToString(session.ID)
-	h.publishChat(protocol.EventChatSessionDeleted, workspaceID, "member", userID, resolvedSessionID, protocol.ChatSessionDeletedPayload{
-		ChatSessionID: resolvedSessionID,
-	})
+		resolvedSessionID := uuidToString(session.ID)
+		h.publishChat(protocol.EventChatSessionDeleted, workspaceID, "member", userID, resolvedSessionID, protocol.ChatSessionDeletedPayload{
+			ChatSessionID: resolvedSessionID,
+		})
+	}
 
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -445,6 +446,10 @@ func (h *Handler) SendChatMessage(w http.ResponseWriter, r *http.Request) {
 		Content:       req.Content,
 	})
 	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			writeError(w, http.StatusNotFound, "chat session not found")
+			return
+		}
 		writeError(w, http.StatusInternalServerError, "failed to create chat message")
 		return
 	}
@@ -587,10 +592,16 @@ func (h *Handler) ListChatMessages(w http.ResponseWriter, r *http.Request) {
 		messageIDs[i] = m.ID
 	}
 	groupedAtt := h.groupChatMessageAttachments(r.Context(), workspaceID, messageIDs)
+	groupedFeedback, err := h.listChatMessageFeedback(r.Context(), workspaceID, userID, messageIDs)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to list chat message feedback")
+		return
+	}
 
 	resp := make([]ChatMessageResponse, len(messages))
 	for i, m := range messages {
-		resp[i] = chatMessageToResponse(m, groupedAtt[uuidToString(m.ID)])
+		messageID := uuidToString(m.ID)
+		resp[i] = chatMessageToResponse(m, groupedAtt[messageID], groupedFeedback[messageID])
 	}
 	writeJSON(w, http.StatusOK, resp)
 }
@@ -648,10 +659,16 @@ func (h *Handler) ListChatMessagesPage(w http.ResponseWriter, r *http.Request) {
 		messageIDs[i] = m.ID
 	}
 	groupedAtt := h.groupChatMessageAttachments(r.Context(), workspaceID, messageIDs)
+	groupedFeedback, err := h.listChatMessageFeedback(r.Context(), workspaceID, userID, messageIDs)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to list chat message feedback")
+		return
+	}
 
 	resp := make([]ChatMessageResponse, len(messages))
 	for i, m := range messages {
-		resp[i] = chatMessageToResponse(m, groupedAtt[uuidToString(m.ID)])
+		messageID := uuidToString(m.ID)
+		resp[i] = chatMessageToResponse(m, groupedAtt[messageID], groupedFeedback[messageID])
 	}
 	writeJSON(w, http.StatusOK, ChatMessagesPageResponse{
 		Messages:   resp,
@@ -955,6 +972,8 @@ type ChatMessageResponse struct {
 	// ElapsedMs is the wall-clock duration from task creation to terminal
 	// state. Drives "Replied in 38s" / "Failed after 12s" captions.
 	ElapsedMs *int64 `json:"elapsed_ms"`
+	// Feedback is scoped to the requesting user and omitted when unset.
+	Feedback *ChatMessageFeedbackResponse `json:"feedback,omitempty"`
 	// Attachments linked to this message via chat_message_id. The chat
 	// bubble renders file cards from these, and the daemon claim path
 	// (daemon.go) pulls structured metadata from the same source so the
@@ -976,7 +995,11 @@ func chatSessionToResponse(s db.ChatSession) ChatSessionResponse {
 	}
 }
 
-func chatMessageToResponse(m db.ChatMessage, attachments []AttachmentResponse) ChatMessageResponse {
+func chatMessageToResponse(
+	m db.ChatMessage,
+	attachments []AttachmentResponse,
+	feedback *ChatMessageFeedbackResponse,
+) ChatMessageResponse {
 	return ChatMessageResponse{
 		ID:            uuidToString(m.ID),
 		ChatSessionID: uuidToString(m.ChatSessionID),
@@ -986,6 +1009,7 @@ func chatMessageToResponse(m db.ChatMessage, attachments []AttachmentResponse) C
 		CreatedAt:     timestampToString(m.CreatedAt),
 		FailureReason: textToPtr(m.FailureReason),
 		ElapsedMs:     int8ToPtr(m.ElapsedMs),
+		Feedback:      feedback,
 		Attachments:   attachments,
 	}
 }

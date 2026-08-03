@@ -29,6 +29,7 @@ import type { ChatTimelineItem } from "@multica/core/chat";
 import { failureReasonLabel } from "../../agents/components/tabs/task-failure";
 import { buildTimeline } from "../../common/task-transcript";
 import { TaskStatusPill } from "./task-status-pill";
+import { MessageFeedbackActions } from "./message-feedback-actions";
 import { formatElapsedMs } from "../lib/format";
 import { splitTimeline, extractCopyText } from "../lib/copy-text";
 import { useT } from "../../i18n";
@@ -292,6 +293,13 @@ function MessageFooter({
         <ElapsedCaption variant="replied" elapsedMs={message.elapsed_ms} />
       )}
       {showCopy && <MessageCopyButton message={message} timeline={timeline} />}
+      {showCopy && (
+        <MessageFeedbackActions
+          sessionId={message.chat_session_id}
+          messageId={message.id}
+          feedback={message.feedback}
+        />
+      )}
     </div>
   );
 }

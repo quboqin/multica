@@ -951,7 +951,16 @@ func TestShouldCleanTaskDir_KindDispatch(t *testing.T) {
 			want: gcActionSkip,
 		},
 		{
-			name: "chat 404 — hard-deleted, clean immediately (no mtime gate)",
+			name: "chat deleted — clean immediately (no mtime gate)",
+			meta: &execenv.GCMeta{Kind: execenv.GCKindChat, ChatSessionID: chatID, WorkspaceID: "ws"},
+			servers: []serverResp{{
+				path: "/api/daemon/chat-sessions/" + chatID + "/gc-check",
+				body: map[string]any{"status": "deleted", "updated_at": withinTTL},
+			}},
+			want: gcActionClean,
+		},
+		{
+			name: "chat 404 — inaccessible, clean immediately (no mtime gate)",
 			meta: &execenv.GCMeta{Kind: execenv.GCKindChat, ChatSessionID: chatID, WorkspaceID: "ws"},
 			servers: []serverResp{{
 				path:   "/api/daemon/chat-sessions/" + chatID + "/gc-check",
@@ -1178,19 +1187,23 @@ func gitRefExists(t *testing.T, repoPath, ref string) bool {
 	return true
 }
 
-// TestShouldCleanTaskDir_ChatHardDeletedFreshMtime locks acceptance #3:
-// when a user hard-deletes a chat session, the workdir must be reclaimed
-// on the next GC cycle (≤ GCInterval), not deferred to GCOrphanTTL. A
-// directory that was just created (mtime well within GCOrphanTTL) but
-// whose chat session now 404s must therefore return gcActionClean.
-func TestShouldCleanTaskDir_ChatHardDeletedFreshMtime(t *testing.T) {
+// TestShouldCleanTaskDir_ChatDeletedFreshMtime locks acceptance #3: when a
+// user deletes a chat session, the workdir must be reclaimed on the next GC
+// cycle (≤ GCInterval), not deferred to GCOrphanTTL. A directory that was just
+// created (mtime well within GCOrphanTTL) but whose chat session is now
+// inactive must therefore return gcActionClean.
+func TestShouldCleanTaskDir_ChatDeletedFreshMtime(t *testing.T) {
 	t.Parallel()
 	chatID := "ffffffff-ffff-ffff-ffff-ffffffffff02"
 
 	mux := http.NewServeMux()
 	mux.HandleFunc(fmt.Sprintf("/api/daemon/chat-sessions/%s/gc-check", chatID), func(w http.ResponseWriter, r *http.Request) {
-		// Simulate hard-deleted session (DeleteChatSession ran).
-		w.WriteHeader(http.StatusNotFound)
+		// Simulate logically deleted session (DeleteChatSession ran).
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"status":     "deleted",
+			"updated_at": time.Now().UTC().Format(time.RFC3339),
+		})
 	})
 
 	d := newGCTestDaemon(t, mux)
@@ -1203,18 +1216,18 @@ func TestShouldCleanTaskDir_ChatHardDeletedFreshMtime(t *testing.T) {
 		WorkspaceID:   "ws",
 		CompletedAt:   time.Now(),
 	}
-	taskDir := createTaskDir(t, d.cfg.WorkspacesRoot, "ws", "hard-deleted-chat", meta)
+	taskDir := createTaskDir(t, d.cfg.WorkspacesRoot, "ws", "deleted-chat", meta)
 	// taskDir mtime is now-ish — well within any sane GCOrphanTTL.
 
 	if got := d.shouldCleanTaskDir(context.Background(), taskDir); got != gcActionClean {
-		t.Fatalf("hard-deleted chat with fresh mtime must clean immediately, got %d", got)
+		t.Fatalf("deleted chat with fresh mtime must clean immediately, got %d", got)
 	}
 }
 
 // TestShouldCleanTaskDir_ChatActiveResistsOldMtime is the explicit acceptance
 // criterion #2: an active chat session whose workdir is older than
 // GCOrphanTTL must NOT be reclaimed. The only path to clean an active
-// session's workdir is for the user to archive or hard-delete the session.
+// session's workdir is for the user to archive or delete the session.
 func TestShouldCleanTaskDir_ChatActiveResistsOldMtime(t *testing.T) {
 	t.Parallel()
 	chatID := "ffffffff-ffff-ffff-ffff-ffffffffff01"

@@ -9,6 +9,9 @@ vi.mock("../i18n", () => ({
         attachment: {
           preview: "Preview",
           preview_loading: "Loading preview…",
+          favorite: "Add to favorites",
+          unfavorite: "Remove from favorites",
+          change_favorite_category: "Change category",
         },
         file_card: { uploading: "Uploading {{filename}}" },
       }),
@@ -86,6 +89,25 @@ describe("AttachmentCard — chrome row", () => {
 });
 
 describe("AttachmentCard — Eye / Download buttons", () => {
+  it("renders an optional trailing toolbar action", () => {
+    render(
+      <AttachmentCard
+        filename="report.md"
+        contentType="text/markdown"
+        attachmentId="att-1"
+        href="https://cdn.example/report.md"
+        onPreview={() => {}}
+        onDownload={() => {}}
+        trailingAction={<a href="/issues/issue-1?comment=comment-1">Open source</a>}
+      />,
+    );
+
+    expect(screen.getByRole("link", { name: "Open source" })).toHaveAttribute(
+      "href",
+      "/issues/issue-1?comment=comment-1",
+    );
+  });
+
   it("invokes onPreview when Eye is clicked", () => {
     const onPreview = vi.fn();
     render(
@@ -116,6 +138,80 @@ describe("AttachmentCard — Eye / Download buttons", () => {
     );
     fireEvent.mouseDown(screen.getByTitle("Download"));
     expect(onDownload).toHaveBeenCalled();
+  });
+
+  it("toggles the favorite state for persisted attachments", () => {
+    const onToggleFavorite = vi.fn();
+    const { rerender } = render(
+      <AttachmentCard
+        filename="report.md"
+        contentType="text/markdown"
+        attachmentId="att-1"
+        href="https://cdn.example/report.md"
+        isFavorite={false}
+        onToggleFavorite={onToggleFavorite}
+        onPreview={() => {}}
+        onDownload={() => {}}
+      />,
+    );
+
+    fireEvent.mouseDown(screen.getByTitle("Add to favorites"));
+    expect(onToggleFavorite).toHaveBeenCalledTimes(1);
+
+    rerender(
+      <AttachmentCard
+        filename="report.md"
+        contentType="text/markdown"
+        attachmentId="att-1"
+        href="https://cdn.example/report.md"
+        isFavorite
+        onToggleFavorite={onToggleFavorite}
+        onPreview={() => {}}
+        onDownload={() => {}}
+      />,
+    );
+    expect(screen.getByTitle("Remove from favorites")).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("opens the category picker for an existing favorite", () => {
+    const onChangeFavoriteCategory = vi.fn();
+    render(
+      <AttachmentCard
+        filename="report.md"
+        contentType="text/markdown"
+        attachmentId="att-1"
+        href="https://cdn.example/report.md"
+        isFavorite
+        onToggleFavorite={() => {}}
+        onChangeFavoriteCategory={onChangeFavoriteCategory}
+        onPreview={() => {}}
+        onDownload={() => {}}
+      />,
+    );
+
+    fireEvent.mouseDown(screen.getByTitle("Change category"));
+    expect(onChangeFavoriteCategory).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByTitle("Change category"));
+    expect(onChangeFavoriteCategory).toHaveBeenCalledTimes(1);
+  });
+
+  it("hides the category picker action for documents that are not favorited", () => {
+    render(
+      <AttachmentCard
+        filename="report.md"
+        contentType="text/markdown"
+        attachmentId="att-1"
+        href="https://cdn.example/report.md"
+        isFavorite={false}
+        onToggleFavorite={() => {}}
+        onChangeFavoriteCategory={() => {}}
+        onPreview={() => {}}
+        onDownload={() => {}}
+      />,
+    );
+
+    expect(screen.queryByTitle("Change category")).toBeNull();
   });
 
   it("hides Eye and Download buttons while uploading", () => {

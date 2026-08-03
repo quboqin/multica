@@ -9,7 +9,17 @@
  * that decision out of this file so this stays a single-purpose row UI.
  */
 
-import { Download, Eye, FileText, Loader2, Trash2 } from "lucide-react";
+import type { ReactNode } from "react";
+import {
+  Download,
+  Eye,
+  FileText,
+  FolderInput,
+  Loader2,
+  Star,
+  Trash2,
+} from "lucide-react";
+import { cn } from "@multica/ui/lib/utils";
 import { useT } from "../i18n";
 import { getPreviewKind } from "./utils/preview";
 
@@ -19,9 +29,14 @@ interface AttachmentCardChromeProps {
   canPreview: boolean;
   canDownload: boolean;
   canDelete?: boolean;
+  isFavorite?: boolean;
+  favoritePending?: boolean;
   onPreview: () => void;
   onDownload: () => void;
   onDelete?: () => void;
+  onToggleFavorite?: () => void;
+  onChangeFavoriteCategory?: () => void;
+  trailingAction?: ReactNode;
 }
 
 function AttachmentCardChrome({
@@ -30,9 +45,14 @@ function AttachmentCardChrome({
   canPreview,
   canDownload,
   canDelete,
+  isFavorite,
+  favoritePending,
   onPreview,
   onDownload,
   onDelete,
+  onToggleFavorite,
+  onChangeFavoriteCategory,
+  trailingAction,
 }: AttachmentCardChromeProps) {
   const { t } = useT("editor");
   return (
@@ -52,6 +72,38 @@ function AttachmentCardChrome({
             : filename}
         </p>
       </div>
+      {!uploading && onToggleFavorite && (
+        <button
+          type="button"
+          className="shrink-0 rounded-md p-1 text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground disabled:pointer-events-none disabled:opacity-50"
+          title={t(($) => isFavorite ? $.attachment.unfavorite : $.attachment.favorite)}
+          aria-label={t(($) => isFavorite ? $.attachment.unfavorite : $.attachment.favorite)}
+          aria-pressed={isFavorite === true}
+          disabled={favoritePending}
+          onMouseDown={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            onToggleFavorite();
+          }}
+        >
+          <Star className="size-3.5" fill={isFavorite ? "currentColor" : "none"} />
+        </button>
+      )}
+      {!uploading && isFavorite && onChangeFavoriteCategory && (
+        <button
+          type="button"
+          className="shrink-0 rounded-md p-1 text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
+          title={t(($) => $.attachment.change_favorite_category)}
+          aria-label={t(($) => $.attachment.change_favorite_category)}
+          onClick={(e) => {
+            e.stopPropagation();
+            onChangeFavoriteCategory();
+          }}
+        >
+          <FolderInput className="size-3.5" />
+        </button>
+      )}
+      {!uploading && trailingAction}
       {!uploading && canPreview && (
         <button
           type="button"
@@ -122,6 +174,17 @@ export interface AttachmentCardProps {
   onDownload: () => void;
   /** Optional remove button, used by editable comment/file-card surfaces. */
   onDelete?: () => void;
+  /** Current server-backed favorite state for this attachment. */
+  isFavorite?: boolean;
+  /** Disables the favorite control while its mutation is in flight. */
+  favoritePending?: boolean;
+  /** Optional favorite toggle; omitted for URL-only and in-flight files. */
+  onToggleFavorite?: () => void;
+  /** Opens the category picker for an existing favorite. */
+  onChangeFavoriteCategory?: () => void;
+  /** Optional action rendered with the file-card toolbar controls. */
+  trailingAction?: ReactNode;
+  className?: string;
 }
 
 export function AttachmentCard({
@@ -133,6 +196,12 @@ export function AttachmentCard({
   onPreview,
   onDownload,
   onDelete,
+  isFavorite,
+  favoritePending,
+  onToggleFavorite,
+  onChangeFavoriteCategory,
+  trailingAction,
+  className,
 }: AttachmentCardProps) {
   const kind = filename ? getPreviewKind(contentType, filename) : null;
   // Media kinds (pdf/video/audio) are previewable from a URL alone — the
@@ -146,16 +215,21 @@ export function AttachmentCard({
     !!href && kind !== null && (!!attachmentId || isUrlPreviewableKind);
 
   return (
-    <div className="my-1">
+    <div className={cn("my-1", className)}>
       <AttachmentCardChrome
         filename={filename}
         uploading={uploading}
         canPreview={canPreview}
         canDownload={!!href}
         canDelete={!!onDelete}
+        isFavorite={isFavorite}
+        favoritePending={favoritePending}
         onPreview={onPreview}
         onDownload={onDownload}
         onDelete={onDelete}
+        onToggleFavorite={onToggleFavorite}
+        onChangeFavoriteCategory={onChangeFavoriteCategory}
+        trailingAction={trailingAction}
       />
     </div>
   );

@@ -304,11 +304,9 @@ func (d *Daemon) gcDecisionChat(ctx context.Context, taskDir string, meta *exece
 	status, err := d.client.GetChatSessionGCCheck(ctx, meta.ChatSessionID)
 	if err != nil {
 		if isAccessNotFound(err) {
-			// 404 means the chat_session row is gone — DeleteChatSession is
-			// a real DELETE, so a hard delete propagates here as soon as
-			// the user clicks the button. This is the strongest reclaim
-			// signal we get and it's exactly acceptance criterion #3:
-			// reclaim within one GC cycle (≤ GCInterval), not 72h.
+			// 404 means the chat_session row is not visible to this daemon.
+			// Treat it as an immediate cleanup signal because the local
+			// workdir is only useful while the server-side chat session exists.
 			//
 			// We don't gate on mtime: every chat_session_id in a meta file
 			// was written by this daemon under its current token, so there
@@ -317,7 +315,7 @@ func (d *Daemon) gcDecisionChat(ctx context.Context, taskDir string, meta *exece
 				"dir", filepath.Base(taskDir),
 				"kind", "chat",
 				"chat_session", meta.ChatSessionID,
-				"reason", "session not accessible (hard-deleted)",
+				"reason", "session not accessible",
 			)
 			return gcActionClean
 		}
@@ -342,6 +340,15 @@ func (d *Daemon) gcDecisionChat(ctx context.Context, taskDir string, meta *exece
 			)
 			return gcActionClean
 		}
+	case "deleted":
+		d.logger.Info("gc: eligible for cleanup",
+			"dir", filepath.Base(taskDir),
+			"kind", "chat",
+			"chat_session", meta.ChatSessionID,
+			"status", status.Status,
+			"updated_at", status.UpdatedAt.Format(time.RFC3339),
+		)
+		return gcActionClean
 	}
 	return gcActionSkip
 }

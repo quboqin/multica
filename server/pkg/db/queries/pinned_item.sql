@@ -1,7 +1,14 @@
 -- name: ListPinnedItems :many
-SELECT * FROM pinned_item
-WHERE workspace_id = $1 AND user_id = $2
-ORDER BY position ASC, created_at ASC;
+SELECT p.* FROM pinned_item p
+WHERE p.workspace_id = $1 AND p.user_id = $2
+  AND (
+    p.item_type <> 'issue'
+    OR EXISTS (
+      SELECT 1 FROM issue i
+      WHERE i.id = p.item_id AND i.is_active = TRUE
+    )
+  )
+ORDER BY p.position ASC, p.created_at ASC;
 
 -- name: CreatePinnedItem :one
 INSERT INTO pinned_item (workspace_id, user_id, item_type, item_id, position)

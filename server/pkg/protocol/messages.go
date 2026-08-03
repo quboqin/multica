@@ -95,7 +95,7 @@ type ChatSessionReadPayload struct {
 	ChatSessionID string `json:"chat_session_id"`
 }
 
-// ChatSessionDeletedPayload is broadcast when a chat session is hard-deleted
+// ChatSessionDeletedPayload is broadcast when a chat session is deleted
 // so other tabs/devices drop it from their session lists and reset the active
 // pointer if it referenced the deleted session.
 type ChatSessionDeletedPayload struct {

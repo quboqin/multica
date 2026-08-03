@@ -2,6 +2,7 @@
   "nav": {
     "inbox": "收件箱",
     "my_issues": "我的任务",
+    "my_favorites": "我的收藏",
     "issues": "任务",
     "plans": "计划",
     "projects": "需求",
@@ -25,6 +26,83 @@
   "workspace_loader": {
     "loading_workspace": "正在加载工作区...",
     "loading_named_prefix": "正在加载"
+  },
+  "favorites": {
+    "page": {
+      "title": "我的收藏",
+      "new_category": "新建分类",
+      "empty_categories_title": "暂无收藏分类",
+      "empty_categories_description": "首次收藏时会自动创建默认分类，你也可以现在新建。",
+      "category_empty_title": "此分类暂无收藏",
+      "category_empty_description": "你可以把收藏内容移动到这里。",
+      "category_not_found": "未找到该收藏分类。",
+      "back_to_categories": "返回收藏分类",
+      "documents": "{{count}} 个收藏",
+      "load_failed": "无法加载收藏内容。",
+      "retry": "重试",
+      "open_source_conversation": "跳转到对应的任务对话",
+      "filter_label": "收藏类型",
+      "filter_all": "全部",
+      "filter_issue": "任务",
+      "filter_project": "需求",
+      "filter_markdown": "MD",
+      "filter_html": "HTML",
+      "filter_empty_title": "此类型暂无收藏"
+    },
+    "item": {
+      "add": "添加收藏",
+      "remove": "取消收藏",
+      "saved_to": "已收藏到“{{category}}”。",
+      "removed": "已取消收藏。",
+      "change_category": "修改分类",
+      "save_failed": "无法添加收藏。",
+      "remove_failed": "无法取消收藏。",
+      "unavailable": "收藏内容不可用"
+    },
+    "category": {
+      "default_name": "默认分类",
+      "new_tooltip": "新建收藏分类",
+      "actions_tooltip": "管理收藏分类"
+    },
+    "create_dialog": {
+      "title": "新建收藏分类",
+      "description": "收藏内容必须放在一个分类中。",
+      "name_label": "分类名称",
+      "name_placeholder": "例如：调研资料",
+      "cancel": "取消",
+      "create": "创建",
+      "creating": "创建中...",
+      "created": "收藏分类已创建。",
+      "failed": "无法创建收藏分类。"
+    },
+    "move_dialog": {
+      "title": "修改收藏分类",
+      "description": "选择“{{filename}}”要保存到的分类。",
+      "new_category": "新建分类",
+      "moved": "已移到“{{category}}”。",
+      "failed": "无法修改收藏分类。"
+    },
+    "rename_dialog": {
+      "action": "重命名",
+      "title": "重命名分类",
+      "description": "修改收藏分类的名称。",
+      "name_label": "分类名称",
+      "cancel": "取消",
+      "save": "保存",
+      "saving": "保存中...",
+      "renamed": "分类名称已更新。",
+      "failed": "无法重命名收藏分类。"
+    },
+    "delete_dialog": {
+      "action": "删除",
+      "title": "删除收藏分类",
+      "description": "删除“{{name}}”？其中 {{count}} 个收藏会同时移除，此操作无法撤销。",
+      "cancel": "取消",
+      "delete": "删除",
+      "deleting": "删除中...",
+      "deleted": "分类已删除，其中的收藏内容已移除。",
+      "failed": "无法删除收藏分类。"
+    }
   },
   "sidebar": {
     "unpin_tooltip": "取消固定",

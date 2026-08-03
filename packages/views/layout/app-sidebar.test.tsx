@@ -1,11 +1,26 @@
 import { render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ApiError } from "@multica/core/api";
 import { AppSidebar } from "./app-sidebar";
 
-const { detail, deletePin, pins } = vi.hoisted(() => ({
+const { detail, deletePin, favoriteCategories, pins } = vi.hoisted(() => ({
   detail: { current: { isPending: false, isError: false, data: null as unknown, error: null as unknown } },
   deletePin: vi.fn(),
+  favoriteCategories: {
+    current: [
+      {
+        id: "category-1",
+        workspaceId: "ws-1",
+        userId: "user-1",
+        name: "Research",
+        isDefault: false,
+        favoriteCount: 2,
+        createdAt: "2026-07-21T00:00:00Z",
+        updatedAt: "2026-07-21T00:00:00Z",
+      },
+    ],
+  },
   pins: {
     current: [
       {
@@ -20,6 +35,7 @@ const { detail, deletePin, pins } = vi.hoisted(() => ({
     ],
   },
 }));
+const researchCategory = favoriteCategories.current[0]!;
 
 vi.mock("@dnd-kit/core", () => ({
   DndContext: ({ children }: { children: React.ReactNode }) => <>{children}</>,
@@ -34,7 +50,9 @@ vi.mock("@dnd-kit/sortable", () => ({
   verticalListSortingStrategy: vi.fn(),
 }));
 vi.mock("@dnd-kit/utilities", () => ({ CSS: { Transform: { toString: () => undefined } } }));
-vi.mock("@multica/ui/components/ui/sidebar", () => ({
+vi.mock("@multica/ui/components/ui/sidebar", async () => {
+  const React = await import("react");
+  return {
   Sidebar: ({ children }: { children: React.ReactNode }) => <>{children}</>,
   SidebarContent: ({ children }: { children: React.ReactNode }) => <>{children}</>,
   SidebarFooter: ({ children }: { children: React.ReactNode }) => <>{children}</>,
@@ -43,13 +61,20 @@ vi.mock("@multica/ui/components/ui/sidebar", () => ({
   SidebarGroupLabel: ({ children }: { children: React.ReactNode }) => <>{children}</>,
   SidebarHeader: ({ children }: { children: React.ReactNode }) => <>{children}</>,
   SidebarMenu: ({ children }: { children: React.ReactNode }) => <>{children}</>,
-  SidebarMenuButton: ({ children }: { children: React.ReactNode }) => <button type="button">{children}</button>,
+  SidebarMenuButton: ({ children, render, ...props }: { children: React.ReactNode; render?: React.ReactElement }) =>
+    render && React.isValidElement(render)
+      ? React.cloneElement(render, props, children)
+      : <button type="button" {...props}>{children}</button>,
   SidebarMenuItem: ({ children }: { children: React.ReactNode }) => <>{children}</>,
   SidebarMenuSub: ({ children }: { children: React.ReactNode }) => <>{children}</>,
-  SidebarMenuSubButton: ({ children }: { children: React.ReactNode }) => <a>{children}</a>,
+  SidebarMenuSubButton: ({ children, render, ...props }: { children: React.ReactNode; render?: React.ReactElement }) =>
+    render && React.isValidElement(render)
+      ? React.cloneElement(render, props, children)
+      : <button type="button" {...props}>{children}</button>,
   SidebarMenuSubItem: ({ children }: { children: React.ReactNode }) => <>{children}</>,
   SidebarRail: () => null,
-}));
+  };
+});
 vi.mock("@multica/ui/components/ui/dropdown-menu", () => ({
   DropdownMenu: ({ children }: { children: React.ReactNode }) => <>{children}</>,
   DropdownMenuContent: () => null,
@@ -59,11 +84,35 @@ vi.mock("@multica/ui/components/ui/dropdown-menu", () => ({
   DropdownMenuSeparator: () => null,
   DropdownMenuTrigger: ({ render }: { render: React.ReactNode }) => <>{render}</>,
 }));
-vi.mock("@multica/ui/components/ui/collapsible", () => ({
-  Collapsible: ({ children }: { children: React.ReactNode }) => <>{children}</>,
-  CollapsibleContent: ({ children }: { children: React.ReactNode }) => <>{children}</>,
-  CollapsibleTrigger: () => <button type="button" />,
-}));
+vi.mock("@multica/ui/components/ui/collapsible", async () => {
+  const React = await import("react");
+  const CollapsibleContext = React.createContext({ open: true, toggle: () => {} });
+  return {
+    Collapsible: ({
+      children,
+      open = true,
+      onOpenChange,
+    }: {
+      children: React.ReactNode;
+      open?: boolean;
+      onOpenChange?: (open: boolean) => void;
+    }) => (
+      <CollapsibleContext.Provider
+        value={{ open, toggle: () => onOpenChange?.(!open) }}
+      >
+        {children}
+      </CollapsibleContext.Provider>
+    ),
+    CollapsibleContent: ({ children }: { children: React.ReactNode }) => {
+      const { open } = React.useContext(CollapsibleContext);
+      return open ? <>{children}</> : null;
+    },
+    CollapsibleTrigger: (props: React.ButtonHTMLAttributes<HTMLButtonElement>) => {
+      const { toggle } = React.useContext(CollapsibleContext);
+      return <button type="button" {...props} onClick={toggle} />;
+    },
+  };
+});
 vi.mock("@multica/ui/components/ui/tooltip", () => ({
   Tooltip: ({ children }: { children: React.ReactNode }) => <>{children}</>,
   TooltipContent: ({ children }: { children: React.ReactNode }) => <>{children}</>,
@@ -79,6 +128,12 @@ vi.mock("../navigation", () => ({
 vi.mock("../projects/components/project-icon", () => ({ ProjectIcon: () => <span /> }));
 vi.mock("../workspace/workspace-avatar", () => ({ WorkspaceAvatar: () => <span /> }));
 vi.mock("@multica/ui/components/common/actor-avatar", () => ({ ActorAvatar: () => <span /> }));
+vi.mock("../favorites/components/favorite-category-actions", () => ({
+  FavoriteCategoryActions: () => null,
+}));
+vi.mock("../favorites/components/favorite-category-dialog", () => ({
+  CreateFavoriteCategoryDialog: () => null,
+}));
 
 vi.mock("@multica/core/auth", () => ({
   useAuthStore: (selector: (state: { user: { id: string } }) => unknown) => selector({ user: { id: "user-1" } }),
@@ -89,6 +144,8 @@ vi.mock("@multica/core/paths", () => ({
   useWorkspacePaths: () => ({
     inbox: () => "/acme/inbox",
     myIssues: () => "/acme/my-issues",
+    favorites: () => "/acme/favorites",
+    favoriteCategory: (id: string) => `/acme/favorites/${id}`,
     issues: () => "/acme/issues",
     plans: () => "/acme/plans",
     kpi: () => "/acme/kpi",
@@ -139,6 +196,9 @@ vi.mock("@tanstack/react-query", async (importOriginal) => ({
   useQuery: ({ queryKey }: { queryKey: readonly unknown[] }) => {
     if (queryKey[0] === "pins") return { data: pins.current };
     if (queryKey[0] === "issue") return detail.current;
+    if (queryKey[0] === "favorites" && queryKey[2] === "categories") {
+      return { data: favoriteCategories.current };
+    }
     return { data: [] };
   },
   useQueryClient: () => ({ fetchQuery: vi.fn(), invalidateQueries: vi.fn() }),
@@ -166,5 +226,39 @@ describe("PinRow", () => {
     detail.current = { isPending: false, isError: false, data: { identifier: "MUL-123", title: "Keep this pin", status: "todo" }, error: null };
     render(<AppSidebar />);
     expect(await screen.findByText("MUL-123 Keep this pin")).toBeInTheDocument();
+  });
+});
+
+describe("favorite categories", () => {
+  beforeEach(() => {
+    favoriteCategories.current = [researchCategory];
+  });
+
+  it("collapses and expands from the My Favorites row", async () => {
+    const user = userEvent.setup();
+    render(<AppSidebar />);
+
+    expect(screen.getByText("Research")).toBeInTheDocument();
+    const trigger = document.querySelector(".lucide-star")?.closest("button");
+    expect(trigger).not.toBeNull();
+
+    await user.click(trigger!);
+    expect(screen.queryByText("Research")).not.toBeInTheDocument();
+
+    await user.click(trigger!);
+    expect(screen.getByText("Research")).toBeInTheDocument();
+  });
+
+  it("hides the expand control when there are no categories", () => {
+    favoriteCategories.current = [];
+    render(<AppSidebar />);
+
+    const favoritesButton = document
+      .querySelector(".lucide-star")
+      ?.closest("button");
+    expect(favoritesButton).not.toBeNull();
+    expect(
+      favoritesButton?.querySelector(".lucide-chevron-right"),
+    ).toBeNull();
   });
 });

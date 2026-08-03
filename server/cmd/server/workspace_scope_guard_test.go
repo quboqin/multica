@@ -41,6 +41,13 @@ func TestWorkspaceScopeGuard(t *testing.T) {
 			t.Fatalf("cross-workspace DeleteIssue: expected nil error (no-op), got %v", err)
 		}
 		assertRowExists(t, ctx, "issue", id)
+		var isActive bool
+		if err := testPool.QueryRow(ctx, `SELECT is_active FROM issue WHERE id = $1`, util.UUIDToString(id)).Scan(&isActive); err != nil {
+			t.Fatalf("re-read issue: %v", err)
+		}
+		if !isActive {
+			t.Fatal("cross-workspace DeleteIssue hid the issue")
+		}
 	})
 
 	t.Run("DeleteComment", func(t *testing.T) {
@@ -79,8 +86,12 @@ func TestWorkspaceScopeGuard(t *testing.T) {
 		id := seedChatSession(t, ctx)
 		t.Cleanup(func() { testPool.Exec(ctx, `DELETE FROM chat_session WHERE id = $1`, util.UUIDToString(id)) })
 
-		if err := queries.DeleteChatSession(ctx, db.DeleteChatSessionParams{ID: id, WorkspaceID: wsB}); err != nil {
+		rows, err := queries.DeleteChatSession(ctx, db.DeleteChatSessionParams{ID: id, WorkspaceID: wsB})
+		if err != nil {
 			t.Fatalf("cross-workspace DeleteChatSession: expected nil error (no-op), got %v", err)
+		}
+		if rows != 0 {
+			t.Fatalf("cross-workspace DeleteChatSession: expected 0 affected rows, got %d", rows)
 		}
 		assertRowExists(t, ctx, "chat_session", id)
 	})
@@ -114,16 +125,49 @@ func TestWorkspaceScopeGuard(t *testing.T) {
 	t.Run("InWorkspaceCallsStillWork", func(t *testing.T) {
 		id := seedIssue(t, ctx)
 		t.Cleanup(func() { testPool.Exec(ctx, `DELETE FROM issue WHERE id = $1`, util.UUIDToString(id)) })
+		commentID := seedComment(t, ctx, id)
+		childID := seedIssue(t, ctx)
+		t.Cleanup(func() { testPool.Exec(ctx, `DELETE FROM issue WHERE id = $1`, util.UUIDToString(childID)) })
+		if _, err := testPool.Exec(ctx, `UPDATE issue SET parent_issue_id = $1 WHERE id = $2`, util.UUIDToString(id), util.UUIDToString(childID)); err != nil {
+			t.Fatalf("link child issue: %v", err)
+		}
+		var attachmentID string
+		if err := testPool.QueryRow(ctx, `
+			INSERT INTO attachment (
+				workspace_id, issue_id, comment_id, uploader_type, uploader_id,
+				filename, url, content_type, size_bytes
+			) VALUES ($1, $2, $3, 'member', $4, 'audit.md', 'test://audit.md', 'text/markdown', 1)
+			RETURNING id
+		`, testWorkspaceID, util.UUIDToString(id), util.UUIDToString(commentID), testUserID).Scan(&attachmentID); err != nil {
+			t.Fatalf("seed attachment: %v", err)
+		}
 
 		if err := queries.DeleteIssue(ctx, db.DeleteIssueParams{ID: id, WorkspaceID: wsA}); err != nil {
 			t.Fatalf("in-workspace DeleteIssue: %v", err)
 		}
-		var count int
-		if err := testPool.QueryRow(ctx, `SELECT count(*) FROM issue WHERE id = $1`, util.UUIDToString(id)).Scan(&count); err != nil {
-			t.Fatalf("count issue: %v", err)
+		var isActive bool
+		if err := testPool.QueryRow(ctx, `SELECT is_active FROM issue WHERE id = $1`, util.UUIDToString(id)).Scan(&isActive); err != nil {
+			t.Fatalf("re-read issue: %v", err)
 		}
-		if count != 0 {
-			t.Fatalf("in-workspace DeleteIssue did not remove the row")
+		if isActive {
+			t.Fatal("in-workspace DeleteIssue did not hide the row")
+		}
+
+		var commentActive bool
+		if err := testPool.QueryRow(ctx, `SELECT is_active FROM comment WHERE id = $1`, util.UUIDToString(commentID)).Scan(&commentActive); err != nil {
+			t.Fatalf("re-read comment: %v", err)
+		}
+		if commentActive {
+			t.Fatal("issue delete did not hide its comment")
+		}
+		assertRowExists(t, ctx, "attachment", parseUUID(attachmentID))
+
+		var parentID pgtype.UUID
+		if err := testPool.QueryRow(ctx, `SELECT parent_issue_id FROM issue WHERE id = $1`, util.UUIDToString(childID)).Scan(&parentID); err != nil {
+			t.Fatalf("re-read child issue: %v", err)
+		}
+		if parentID.Valid {
+			t.Fatal("issue delete did not detach its active child")
 		}
 	})
 }

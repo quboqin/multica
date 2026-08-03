@@ -1,11 +1,94 @@
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import {
+  useMutation,
+  useQueryClient,
+  type InfiniteData,
+  type QueryClient,
+} from "@tanstack/react-query";
 import { api } from "../api";
 import { useWorkspaceId } from "../hooks";
 import { chatKeys } from "./queries";
 import { createLogger } from "../logger";
-import type { ChatSession } from "../types";
+import type {
+  ChatMessage,
+  ChatMessageFeedback,
+  ChatMessageFeedbackSentiment,
+  ChatMessagesPage,
+  ChatSession,
+} from "../types";
 
 const logger = createLogger("chat.mut");
+
+export type { ChatMessageFeedbackSentiment } from "../types";
+
+export interface UpsertChatMessageFeedbackInput {
+  sessionId: string;
+  messageId: string;
+  sentiment: ChatMessageFeedbackSentiment | null;
+  comment: string;
+}
+
+function patchMessageFeedback(
+  messages: ChatMessage[] | undefined,
+  messageId: string,
+  feedback: ChatMessageFeedback | undefined,
+): ChatMessage[] | undefined {
+  return messages?.map((message) =>
+    message.id === messageId ? { ...message, feedback } : message,
+  );
+}
+
+function setMessageFeedback(
+  qc: QueryClient,
+  sessionId: string,
+  messageId: string,
+  feedback: ChatMessageFeedback | undefined,
+) {
+  qc.setQueryData<ChatMessage[] | undefined>(
+    chatKeys.messages(sessionId),
+    (messages) => patchMessageFeedback(messages, messageId, feedback),
+  );
+  qc.setQueryData<InfiniteData<ChatMessagesPage> | undefined>(
+    chatKeys.messagesPage(sessionId),
+    (data) => data && ({
+      ...data,
+      pages: data.pages.map((page) => ({
+        ...page,
+        messages: patchMessageFeedback(page.messages, messageId, feedback) ?? [],
+      })),
+    }),
+  );
+}
+
+export function useUpsertChatMessageFeedback() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ sessionId, messageId, sentiment, comment }: UpsertChatMessageFeedbackInput) =>
+      api.upsertChatMessageFeedback(sessionId, messageId, { sentiment, comment }),
+    onMutate: async (input) => {
+      await Promise.all([
+        qc.cancelQueries({ queryKey: chatKeys.messages(input.sessionId) }),
+        qc.cancelQueries({ queryKey: chatKeys.messagesPage(input.sessionId) }),
+      ]);
+      const previousMessages = qc.getQueryData<ChatMessage[]>(chatKeys.messages(input.sessionId));
+      const previousPages = qc.getQueryData<InfiniteData<ChatMessagesPage>>(
+        chatKeys.messagesPage(input.sessionId),
+      );
+      const feedback = input.sentiment === null && input.comment === ""
+        ? undefined
+        : { sentiment: input.sentiment, comment: input.comment };
+      setMessageFeedback(qc, input.sessionId, input.messageId, feedback);
+      return { previousMessages, previousPages };
+    },
+    onError: (_error, input, context) => {
+      qc.setQueryData(chatKeys.messages(input.sessionId), context?.previousMessages);
+      qc.setQueryData(chatKeys.messagesPage(input.sessionId), context?.previousPages);
+    },
+    onSettled: (_data, _error, input) => {
+      qc.invalidateQueries({ queryKey: chatKeys.messages(input.sessionId) });
+      qc.invalidateQueries({ queryKey: chatKeys.messagesPage(input.sessionId) });
+    },
+  });
+}
 
 export function useCreateChatSession() {
   const qc = useQueryClient();
@@ -104,7 +187,7 @@ export function useUpdateChatSession() {
 }
 
 /**
- * Hard-deletes a chat session. Optimistically removes the row from the
+ * Deletes a chat session. Optimistically removes the row from the
  * sessions list so the dropdown updates instantly; rolls back on error.
  * The matching `chat:session_deleted` WS event keeps other tabs/devices
  * in sync — see use-realtime-sync.ts.

@@ -584,7 +584,7 @@ func (q *Queries) RemoveSquadMember(ctx context.Context, arg RemoveSquadMemberPa
 
 const transferSquadAssignees = `-- name: TransferSquadAssignees :exec
 UPDATE issue SET assignee_type = 'agent', assignee_id = $2, updated_at = now()
-WHERE assignee_type = 'squad' AND assignee_id = $1
+WHERE assignee_type = 'squad' AND assignee_id = $1 AND is_active = TRUE
 `
 
 type TransferSquadAssigneesParams struct {

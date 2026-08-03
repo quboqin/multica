@@ -44,7 +44,7 @@ DELETE FROM project WHERE id = $1 AND workspace_id = $2;
 
 -- name: CountIssuesByProject :one
 SELECT count(*) FROM issue
-WHERE project_id = $1;
+WHERE project_id = $1 AND is_active = TRUE;
 
 -- name: GetProjectIssueStats :many
 SELECT project_id,
@@ -52,4 +52,5 @@ SELECT project_id,
        count(*) FILTER (WHERE status IN ('done', 'cancelled'))::bigint AS done_count
 FROM issue
 WHERE project_id = ANY(sqlc.arg('project_ids')::uuid[])
+  AND is_active = TRUE
 GROUP BY project_id;

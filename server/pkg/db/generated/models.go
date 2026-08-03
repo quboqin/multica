@@ -362,6 +362,17 @@ type ChatMessage struct {
 	MessageKind   string             `json:"message_kind"`
 }
 
+type ChatMessageFeedback struct {
+	ID            pgtype.UUID        `json:"id"`
+	WorkspaceID   pgtype.UUID        `json:"workspace_id"`
+	UserID        pgtype.UUID        `json:"user_id"`
+	ChatMessageID pgtype.UUID        `json:"chat_message_id"`
+	Sentiment     pgtype.Text        `json:"sentiment"`
+	Comment       string             `json:"comment"`
+	CreatedAt     pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt     pgtype.Timestamptz `json:"updated_at"`
+}
+
 type ChatPinnedAgent struct {
 	ID          pgtype.UUID        `json:"id"`
 	WorkspaceID pgtype.UUID        `json:"workspace_id"`
@@ -387,6 +398,7 @@ type ChatSession struct {
 	LastReadAt   pgtype.Timestamptz `json:"last_read_at"`
 	IsAgentIntro bool               `json:"is_agent_intro"`
 	PinnedAt     pgtype.Timestamptz `json:"pinned_at"`
+	IsActive     bool               `json:"is_active"`
 }
 
 type Comment struct {
@@ -404,6 +416,7 @@ type Comment struct {
 	ResolvedByType pgtype.Text        `json:"resolved_by_type"`
 	ResolvedByID   pgtype.UUID        `json:"resolved_by_id"`
 	SourceTaskID   pgtype.UUID        `json:"source_task_id"`
+	IsActive       bool               `json:"is_active"`
 }
 
 type CommentReaction struct {
@@ -551,6 +564,23 @@ type CreativeMaterialCrawlRun struct {
 	CreatedAt     pgtype.Timestamptz `json:"created_at"`
 }
 
+type CreativeMaterialCrawlStrategyMemory struct {
+	ID           pgtype.UUID        `json:"id"`
+	WorkspaceID  pgtype.UUID        `json:"workspace_id"`
+	ProjectID    string             `json:"project_id"`
+	ConnectorID  string             `json:"connector_id"`
+	Capability   string             `json:"capability"`
+	ScopeKey     string             `json:"scope_key"`
+	Memory       []byte             `json:"memory"`
+	SuccessCount int32              `json:"success_count"`
+	FailureCount int32              `json:"failure_count"`
+	LastError    string             `json:"last_error"`
+	LastRunID    pgtype.UUID        `json:"last_run_id"`
+	LastSeenAt   pgtype.Timestamptz `json:"last_seen_at"`
+	CreatedAt    pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt    pgtype.Timestamptz `json:"updated_at"`
+}
+
 type CreativeMaterialIssueCandidate struct {
 	IssueID     pgtype.UUID        `json:"issue_id"`
 	CandidateID pgtype.UUID        `json:"candidate_id"`
@@ -616,6 +646,26 @@ type DaemonToken struct {
 	WorkspaceID pgtype.UUID        `json:"workspace_id"`
 	DaemonID    string             `json:"daemon_id"`
 	ExpiresAt   pgtype.Timestamptz `json:"expires_at"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+}
+
+type FavoriteCategory struct {
+	ID          pgtype.UUID        `json:"id"`
+	WorkspaceID pgtype.UUID        `json:"workspace_id"`
+	UserID      pgtype.UUID        `json:"user_id"`
+	Name        string             `json:"name"`
+	IsDefault   bool               `json:"is_default"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
+}
+
+type FavoriteItem struct {
+	ID          pgtype.UUID        `json:"id"`
+	WorkspaceID pgtype.UUID        `json:"workspace_id"`
+	UserID      pgtype.UUID        `json:"user_id"`
+	ItemType    string             `json:"item_type"`
+	ItemID      pgtype.UUID        `json:"item_id"`
+	CategoryID  pgtype.UUID        `json:"category_id"`
 	CreatedAt   pgtype.Timestamptz `json:"created_at"`
 }
 
@@ -745,6 +795,7 @@ type Issue struct {
 	Metadata           []byte             `json:"metadata"`
 	Stage              pgtype.Int4        `json:"stage"`
 	Properties         []byte             `json:"properties"`
+	IsActive           bool               `json:"is_active"`
 }
 
 type IssueDependency struct {

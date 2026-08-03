@@ -37,6 +37,7 @@ WHERE EXISTS (
     SELECT 1 FROM issue i
     WHERE i.id = sqlc.arg('issue_id')::uuid
       AND i.workspace_id = sqlc.arg('workspace_id')::uuid
+      AND i.is_active = TRUE
 )
 AND EXISTS (
     SELECT 1 FROM issue_label l
