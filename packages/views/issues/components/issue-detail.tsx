@@ -59,7 +59,9 @@ import { collectThreadReplies, deriveThreadResolution } from "./thread-utils";
 import { IssueAgentHeaderChip } from "./issue-agent-header-chip";
 import { ExecutionLogSection } from "./execution-log-section";
 import { PullRequestList } from "./pull-request-list";
-import { CreativeMaterialPool } from "./creative-material-pool";
+import { CreativeOrderSummary } from "./creative-order-summary";
+import { CreativeMaterialMigrationNotice } from "./creative-material-migration-notice";
+import { getCreativeIssueSurface } from "./creative-issue-surface";
 import { PreviewSessionsSection } from "./preview-sessions-section";
 import { useGitHubSettings } from "@multica/core/github";
 import { useQuery } from "@tanstack/react-query";
@@ -88,6 +90,7 @@ import { cn } from "@multica/ui/lib/utils";
 import { ProgressRing } from "./progress-ring";
 import { matchesPinyin } from "../../editor/extensions/pinyin-match";
 import { useT } from "../../i18n";
+import { sortWorkflowChildren } from "../utils/workflow-order";
 import { useIssueDetailScrollRestore } from "../hooks/use-issue-detail-scroll-restore";
 
 function SubscriberPopoverContent({
@@ -1065,6 +1068,7 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
     ...childIssuesOptions(wsId, id),
     enabled: !!issue,
   });
+  const orderedChildIssues = useMemo(() => sortWorkflowChildren(childIssues), [childIssues]);
   // Parent's children — used to render the "x/y" progress next to the
   // "Sub-issue of …" breadcrumb under the title.
   const { data: parentChildIssues = [] } = useQuery({
@@ -1085,7 +1089,7 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
     return clearSelection;
   }, [id, clearSelection]);
 
-  const childIssueIds = useMemo(() => childIssues.map((c) => c.id), [childIssues]);
+  const childIssueIds = useMemo(() => orderedChildIssues.map((c) => c.id), [orderedChildIssues]);
   const childSelectedCount = childIssueIds.filter((cid) =>
     selectedIds.has(cid),
   ).length;
@@ -1953,8 +1957,8 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
               </button>
             </div>
           )}
-          {childIssues.length > 0 && (() => {
-            const doneCount = childIssues.filter((c) => c.status === "done").length;
+          {orderedChildIssues.length > 0 && (() => {
+            const doneCount = orderedChildIssues.filter((c) => c.status === "done").length;
             return (
               <div className="mt-10 group/sub-issues">
                 {/* Header */}
@@ -1973,9 +1977,9 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
                     <span>{t(($) => $.detail.sub_issues_label)}</span>
                   </button>
                   <div className="inline-flex items-center gap-1.5 rounded-full bg-muted/60 px-2 py-0.5">
-                    <ProgressRing done={doneCount} total={childIssues.length} size={11} />
+                    <ProgressRing done={doneCount} total={orderedChildIssues.length} size={11} />
                     <span className="text-[11px] text-muted-foreground tabular-nums font-medium">
-                      {doneCount}/{childIssues.length}
+                      {doneCount}/{orderedChildIssues.length}
                     </span>
                   </div>
                   <input
@@ -2017,7 +2021,7 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
                 {/* List */}
                 {!subIssuesCollapsed && (
                   <div className="overflow-hidden rounded-lg border bg-card/30 divide-y divide-border/60">
-                    {childIssues.map((child) => (
+                    {orderedChildIssues.map((child) => (
                       <SubIssueRow key={child.id} child={child} />
                     ))}
                   </div>
@@ -2026,7 +2030,12 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
             );
           })()}
 
-          <CreativeMaterialPool issue={issue} />
+          {(() => {
+            const creativeSurface = getCreativeIssueSurface(issue);
+            if (creativeSurface?.kind === "order") return <CreativeOrderSummary orderId={creativeSurface.orderId} />;
+            if (creativeSurface?.kind === "migration") return <CreativeMaterialMigrationNotice />;
+            return null;
+          })()}
 
           <div className="my-8 border-t" />
 

@@ -1,0 +1,1 @@
+DROP TABLE IF EXISTS creative_order_variant_qc_resolution;

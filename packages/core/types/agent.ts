@@ -168,6 +168,10 @@ export interface AgentTask {
   attribution?: TaskAttribution;
 }
 
+export interface AgentTaskFanoutResponse {
+  tasks: AgentTask[];
+}
+
 export interface Agent {
   id: string;
   workspace_id: string;

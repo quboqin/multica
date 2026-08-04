@@ -46,6 +46,18 @@ var creativeMaterialCmd = &cobra.Command{
 	Short: "Work with one creative material candidate",
 }
 
+var creativeContextCmd = &cobra.Command{
+	Use:   "context",
+	Short: "Manage the fixed creative resource snapshot for an issue",
+}
+
+var creativeContextSetCmd = &cobra.Command{
+	Use:   "set <issue-id>",
+	Short: "Fix a published market pack and execution squad to an issue",
+	Args:  exactArgs(1),
+	RunE:  runCreativeContextSet,
+}
+
 var creativeDeliveryCmd = &cobra.Command{
 	Use:   "delivery",
 	Short: "Register final creative deliveries",
@@ -93,6 +105,9 @@ type imageEditHTTPError struct {
 }
 
 func (e *imageEditHTTPError) Error() string {
+	if e.RetryAfter != "" {
+		return fmt.Sprintf("GPT Image edit failed with status %d (request_id=%s, retry_after=%s): %s", e.StatusCode, e.RequestID, e.RetryAfter, e.Body)
+	}
 	return fmt.Sprintf("GPT Image edit failed with status %d (request_id=%s): %s", e.StatusCode, e.RequestID, e.Body)
 }
 
@@ -160,6 +175,7 @@ type creativeMaterialCandidateCLI struct {
 	PreviewURL         string `json:"preview_url"`
 	ResourceURL        string `json:"resource_url"`
 	PosterURL          string `json:"poster_url"`
+	OriginalURL        string `json:"original_url"`
 	ArchivedURL        string `json:"archived_url"`
 	ArchiveStatus      string `json:"archive_status"`
 	Status             string `json:"status"`
@@ -172,7 +188,9 @@ type creativeMaterialCandidateCLI struct {
 func init() {
 	creativeCmd.AddCommand(creativeMaterialsCmd)
 	creativeCmd.AddCommand(creativeMaterialCmd)
+	creativeCmd.AddCommand(creativeContextCmd)
 	creativeCmd.AddCommand(creativeDeliveryCmd)
+	creativeContextCmd.AddCommand(creativeContextSetCmd)
 	creativeDeliveryCmd.AddCommand(creativeDeliveryRegisterCmd)
 	creativeMaterialCmd.AddCommand(creativeMaterialDownloadCmd)
 	creativeMaterialCmd.AddCommand(creativeMaterialBriefCmd)
@@ -184,6 +202,9 @@ func init() {
 	creativeMaterialDownloadCmd.Flags().String("output", "json", "Output format: json or table")
 	creativeMaterialBriefCmd.Flags().String("input-file", "", "UTF-8 JSON file containing the creative brief")
 	creativeMaterialBriefCmd.Flags().String("output", "json", "Output format: json or table")
+	creativeContextSetCmd.Flags().String("market-pack-id", "", "Published creative market pack UUID")
+	creativeContextSetCmd.Flags().String("squad-id", "", "Execution squad UUID")
+	creativeContextSetCmd.Flags().String("output", "json", "Output format: json")
 	creativeDeliveryRegisterCmd.Flags().String("input-file", "", "UTF-8 JSON manifest containing a deliveries array")
 	creativeDeliveryRegisterCmd.Flags().String("output", "json", "Output format: json")
 
@@ -198,6 +219,27 @@ func init() {
 	imageEditCmd.Flags().Int("max-attempts", 3, "Maximum attempts for transient image API failures (1-5)")
 	imageEditCmd.Flags().String("output-file", "", "Output PNG file")
 	imageEditCmd.Flags().String("output", "json", "Output format: json or table")
+}
+
+func runCreativeContextSet(cmd *cobra.Command, args []string) error {
+	client, err := newAPIClient(cmd)
+	if err != nil {
+		return err
+	}
+	marketPackID, _ := cmd.Flags().GetString("market-pack-id")
+	squadID, _ := cmd.Flags().GetString("squad-id")
+	if strings.TrimSpace(marketPackID) == "" || strings.TrimSpace(squadID) == "" {
+		return fmt.Errorf("--market-pack-id and --squad-id are required")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), cli.AtLeastAPITimeout(60*time.Second))
+	defer cancel()
+	var result map[string]any
+	path := "/api/issues/" + url.PathEscape(args[0]) + "/creative-context"
+	body := map[string]string{"market_pack_id": marketPackID, "squad_id": squadID}
+	if err := client.PutJSON(ctx, path, body, &result); err != nil {
+		return err
+	}
+	return cli.PrintJSON(os.Stdout, result)
 }
 
 func runCreativeDeliveryRegister(cmd *cobra.Command, args []string) error {
@@ -367,6 +409,10 @@ func runImageEdit(cmd *cobra.Command, _ []string) error {
 	if imageField == "" {
 		imageField = "image"
 	}
+	providerSlotLimit, err := configuredImageConcurrency()
+	if err != nil {
+		return err
+	}
 	mask, _ := cmd.Flags().GetString("mask")
 	maxAttempts, _ := cmd.Flags().GetInt("max-attempts")
 	if maxAttempts < 1 || maxAttempts > 5 {
@@ -389,7 +435,7 @@ func runImageEdit(cmd *cobra.Command, _ []string) error {
 		abs = outputFile
 	}
 	output, _ := cmd.Flags().GetString("output")
-	result := map[string]any{"model": model, "input_count": len(inputs), "size": size, "quality": quality, "path": abs, "bytes": len(image), "request_id": requestID, "attempts": attempts}
+	result := map[string]any{"model": model, "input_count": len(inputs), "size": size, "quality": quality, "path": abs, "bytes": len(image), "request_id": requestID, "attempts": attempts, "provider_slot_limit": providerSlotLimit}
 	if output == "table" {
 		cli.PrintTable(os.Stdout, []string{"MODEL", "INPUTS", "SIZE", "QUALITY", "BYTES", "REQUEST ID", "PATH"}, [][]string{{model, strconv.Itoa(len(inputs)), size, quality, strconv.Itoa(len(image)), requestID, abs}})
 		return nil

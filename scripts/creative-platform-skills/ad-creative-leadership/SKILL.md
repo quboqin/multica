@@ -1,219 +1,217 @@
 ---
 name: coordinate-ad-creative-squad
-description: "Coordinate an advertising-material squad when each selected image must produce three distinct creative variants in three native sizes, with visible child-Issue delegation, scoped revision, quality review, and final publication."
+description: "Coordinate a creative order through native Multica tasks while keeping one user-facing Issue, three coherent variants, independent quality review, and incremental delivery."
+allowed-tools: Bash(multica *)
 ---
 
 # 协作广告素材小队
 
-只做判断、委派、验收汇总和发布，不替代专业成员执行工作。
+只做判断、委派、状态收口和发布，不代替专业成员分析或生成图片。读取
+`references/collaboration-contract.md` 并严格执行。
 
-每次被唤醒时：
+## 业务对象
 
-1. 读取当前 Issue、直接子 Issue、评论、附件和创意上下文快照。直接子 Issue 必须使用
-   `multica issue children <当前 Issue ID> --compact --output json` 一次获取；不要拉取工作区全量 Issue
-   后本地翻页筛选。compact 结果足够做依赖和去重判断；只对本轮真正需要交接或验收的专业子 Issue
-   再调用 `issue get` 和 `issue comment list`，不要重复读取所有已完成兄弟的长描述和附件。
-2. 读取小队名册中每个成员的职责、Skill 名称和 Skill 描述。
-3. 判断所有已经满足依赖但尚不存在的专业任务，选择能力最匹配的成员，并在本次唤醒中把这些
-   任务全部创建为直接子 Issue。两个及以上任务必须写入 manifest 并使用
-   `multica issue create-batch --input-file <manifest.json> --output json` 一次委派；禁止一次只派一个
-   已就绪任务。
-4. 创建完本轮任务后立即结束执行，由子 Issue 完成事件再次唤醒；不得轮询、休眠或占住执行槽。
-   存在未解决风险时只返工受影响的变体和尺寸。人工明确接受的非阻断差异
-   已经解决，不得因为评论仍保留历史风险文字而阻断后续。
-5. 只有 V01-V03 各三个尺寸均为 `QC PASS` 或 `QC PASS WITH WARNINGS`，且逐图
-   `blocking_failures` 均为空，才能把九张交付发布到父 Issue 结果看板。
+- `Crawl Run` 记录一次采集和素材预分析，不创建 Issue。
+- `Creative Order` 记录一次正式生产；每个订单只关联一个用户可见 Issue。
+- `Source Analysis`、`Order Item`、`Variant`、`Asset` 和 `QC Report` 是创意领域数据。
+- 原生 `agent_task_queue` task 是机器执行单位。不得创建 Task Batch、Work Unit、分析 Issue、变体
+  Issue、Prime Issue 或 QC Issue。
+- task 通过 `trigger_evidence_kind` 和 `trigger_evidence_ref_id` 关联 Crawl Run、订单项或变体。
 
-## 采集与素材预分析
+Issue 只保留用户目标、补充想法、人工决定、真实阻塞和最终验收。模型输入、调用证据、逐图检查和
+中间文件写入对应领域对象及 task，不在 Issue 评论中复制流水账。
 
-当前 Issue 的 `metadata.workflow=creative_collection` 时，它是一次可见的采集协调任务，不是成图
-任务。目标候选池从 `metadata.target_issue_id` 读取：
+## 每次唤醒
 
-1. 如果尚无 `metadata.workflow=creative_material_collection` 的直接子 Issue，只创建一个子 Issue，
-   分配给 AppGrowing 素材采集成员，要求把真实结果导入目标候选池，然后立即结束本轮。
-2. 采集子 Issue 未完成时不创建分析任务。采集完成后，定位本 Skill 的实际目录并执行：
+1. 从当前 Issue metadata 读取 `creative_order_id`，获取订单及其 items、variants、assets、QC 状态。
+   缺少订单 ID 时报告配置错误，不按标题或子 Issue 猜测。
+2. 查询本订单关联的原生 task，确认正在运行、已完成、失败和取消的项。委派幂等键固定为
+   `target_agent_id + trigger_evidence_kind + trigger_evidence_ref_id + item_key`；其中 `item_key` 必须包含
+   领域对象 ID、revision 和 lane/scope。一个 source 可以合法承载多个 item，不能只因 source 下已有一条
+   task 就跳过其他就绪项。
+3. 一次找出所有已满足依赖且尚无有效 task 的工作，按能力分组，通过
+   `multica task fanout --agent <agent-id> --input-file <manifest.json> --output json` 批量委派。
+4. 提交后立即结束。不得轮询、休眠、占住执行槽，也不得为等待中的机器步骤创建 Issue。
+5. 同一订单项的 V01、V02、V03 独立推进；某个变体通过 QC 后立即登记并展示该 revision 的
+   `expected_sizes` 成图，不等待兄弟变体。
 
-   ```text
-   python <当前 Skill 目录>/references/delegate_preanalysis.py --target-issue <目标候选池 Issue> --coordinator-issue <当前 Issue> --assignee 广告参考分析智能体 --max-concurrency 4
-   ```
+标准订单的 Leader 直接委派每个 Order Item 的方案 task。后续使用同一可追溯委派链推进，避免让 Leader 轮询：
 
-   脚本只读取最新抓取批次中 `is_new_in_run=true`、已归档、尚无利益点简报的图片；一次批量创建
-   独立参考分析子 Issue，并把候选卡标记为“素材预分析中”。不要让用户先选择素材，也不要为每张
-   素材再创建一层小队协调 Issue。
-3. 脚本创建任务后立即结束本轮，不轮询。所有参考分析子 Issue 完成后，核对目标候选池的本次新增
-   图片：成功项必须已有结构化 brief；失败项如实列出。只在这时汇总“采集 + 素材预分析”结果并
-   将当前协调 Issue 置为 `done`。
+- 方案 task 写入 V01-V03 后，一次 fanout 三个 production task；
+- 每个 production task 完成自己的 `expected_sizes` 后，fanout 自己 Variant 的 Prime task；
+- Prime task 完成全部 `expected_sizes` 后，一次 fanout technical 与 visual 两个 QC task；
+- 每条 QC task 写完自己的报告后调用 `multica creative order qc-finalize`；后完成者由服务端事务锁唯一
+  收口该 Variant，QC task 不自行复制 delivered asset。
 
-该分支只做真实采集和理解，不启动方案、图像编辑、Prime 或 QC。视频暂不进入自动图片预分析，
-保留在候选池供用户查看；后续具备抽帧能力后可在平台 Skill 中扩展。
+主链所有权是单向且唯一的：Leader 只创建方案 task 并在人工重试或异常恢复时做 reconciliation；Planner
+只创建本 Order Item 缺失的 production task；每个 Production task 只创建本 Variant/revision 的 Prime task；
+Prime 只创建本 Variant/revision 缺失的 QC lane。任何成员都不得越级重建其他阶段。Leader 被再次唤醒时
+只补齐根据上述复合幂等键确实缺失的 task，不与下游成员争抢正常推进权。
 
-初次生产的方案依赖是硬门槛。若当前创意工作 Issue 下不存在状态为 `done` 的
-`metadata.workflow=creative_plan` 子 Issue，且该子 Issue 没有交付方案附件，则本轮只能创建一个
-方案子 Issue并立即结束；不得把工作 Issue 描述、用户文案或 Leader 自己的推断当作已完成方案，
-也不得提前创建任何图像编辑 Issue。只有方案附件已经完成，才允许把其附件 ID 和
-`plan_issue_id` 写入三个图像编辑 Issue 并批量委派。
+下游 agent ID 必须来自订单冻结的 squad snapshot 或当前 task context，不能按名称猜测。每次 fanout 前先
+用 `multica task by-source list` 查询目标 agent、evidence kind/ref；存在 active 或成功 task，或领域对象
+已达到下一阶段时不再委派。整条链通过 `delegated_from_task_id` 复制最初 Leader task 的人工归因。
 
-批量委派 manifest 使用共享父 Issue、状态和负责人，再给每个任务独立标题、描述与幂等 metadata：
+## Fanout 契约
+
+manifest 使用以下结构：
 
 ```json
 {
-  "max_concurrency": 3,
-  "defaults": {
-    "parent": "ADC-123",
-    "status": "todo",
-    "priority": "high",
-    "assignee": "图像编辑智能体"
-  },
-  "issues": [
+  "trigger_evidence_kind": "creative_order_item_plan",
+  "trigger_evidence_ref_id": "<order-item-id>",
+  "items": [
     {
-      "key": "v01",
-      "title": "图像编辑 · V01 · 三尺寸 · r1",
-      "description": "父 Issue、候选、简报、文案与快照引用",
-      "metadata": {"workflow": "creative_production", "variant": "V01", "revision": 1}
-    },
-    {
-      "key": "v02",
-      "title": "图像编辑 · V02 · 三尺寸 · r1",
-      "description": "父 Issue、候选、简报、文案与快照引用",
-      "metadata": {"workflow": "creative_production", "variant": "V02", "revision": 1}
+      "item_key": "<order-item-id>:r1",
+      "context": {
+        "type": "creative_domain_task",
+        "workflow": "creative_plan",
+        "creative_order_id": "<order-id>",
+        "issue_id": "<root-order-issue-id>",
+        "leader_agent_id": "<frozen-leader-agent-id>",
+        "creative_order_item_id": "<item-id>",
+        "candidate_id": "<candidate-id>",
+        "revision": 1,
+        "scope": "order_item",
+        "producer_agent_id": "<frozen-producer-agent-id>",
+        "prime_agent_id": "<frozen-prime-agent-id>",
+        "reviewer_agent_id": "<frozen-reviewer-agent-id>"
+      }
     }
   ]
 }
 ```
 
-实际初次生产必须包含 V01、V02、V03 三项。命令返回部分失败时，只针对 `failed` 项补建；已经
-返回 `created` 的 Issue 不得重建。
+同一次调用中的 `trigger_evidence_kind` 和 `trigger_evidence_ref_id` 是一组任务的来源证据。不同对象需
+要不同 source 时，生成不同 manifest。重复唤醒先按 source 查询，再逐项比较 `item_key`；同一 source
+已有一个 item 不代表其他 item 已创建。只有用户明确重试失败项时才使用 `retry-failed`；取消只影响尚未
+完成的 task。
 
-当前 Issue 的 `metadata.workflow=creative_adjustment` 时，不重新执行完整九图流程。以 metadata 中的
-`creative_adjustment_id`、`creative_candidate_id`、`creative_variant`、`creative_scope`、
-`creative_size`、`creative_revision`、目标成图附件和无品牌底图附件为唯一作用域：
+订单 task context 必须从订单和当前 Issue 携带并逐级原样透传 `issue_id`、`leader_agent_id`，以及领域
+对象 UUID、修订、作用域和输入快照版本。不得只传自然语言标题，也不得
+依赖当前 Issue 评论推断候选、文案、尺寸或附件。
 
-- `creative_scope=size`：只处理指定变体的指定尺寸；
-- `creative_scope=variant`：只处理指定变体的三个尺寸；
-- `creative_scope=variant_subset`：只处理指定变体的 `affected_sizes`，用于一次 QC 中同一变体有多个
-  尺寸失败的批量恢复；
-- `creative_scope=batch`：只用于恢复后的 Prime/QC，处理 metadata 明确列出的 1-9 张变更图；
-- 其他变体和未选尺寸直接沿用，不创建任务、不重新包装、不重新验收。
+## 阶段一：方案
 
-若同时存在 `creative_adjustment_mode=replan`，先委派方案成员只重做 metadata 指定的变体方案，
-再委派图像编辑。该模式必须以原候选图和 brief 锚点为起点，不把上一版无品牌底图作为第一输入；
-未指定变体保持原修订。普通精准调整仍以上一版无品牌底图为第一输入。用户一次自然语言反馈
-命中多个变体时，平台会为每个变体建立独立直接子 Issue；这些 Issue 相互独立，应并发推进。
+每个就绪 Order Item 委派一个 `creative_plan` task 给生成方案智能体。输入必须包含：
 
-先判断反馈需要修改无品牌画面，还是只涉及 Prime/QR 确定性包装。需要修改画面时，只为作用域内
-尺寸创建图像编辑子 Issue，并要求把上一版无品牌底图作为第一图像输入；不得把带 Prime、Logo、
-条款和二维码的最终成图作为模型第一输入。随后只对作用域内一张或三张图执行 Prime 和 QC。
+- Source Analysis ID 和版本；
+- 已确认主题、用户补充想法；
+- 已选或人工编辑的文案快照；
+- 市场资源包、品牌资源和 App UI 引用快照；
+- 原图附件与必须保留、允许变化项。
 
-没有数据依赖的任务必须并发委派：多张候选图的素材理解相互独立；多张创意工作 Issue 相互
-独立。每张候选图固定交付 `V01`、`V02`、`V03` 三个差异明确的创意变体，每个变体固定交付
-`1080x1080`、`1200x628`、`800x1000` 三个原生尺寸，共九张图。方案完成后，用一个 batch manifest
-一次创建三个 `图像编辑 · V0X · 三尺寸 · rN` 子 Issue。每个变体 Issue 内部先生成并检查方形
-母版，再由同一智能体使用 `image edit-batch` 同时生成横版和竖版；Leader 不再为三个尺寸创建
-额外子 Issue，也不介入变体内部两波执行。
+先从订单 `input_snapshot.squad_snapshot` 读取小队和角色 ID；缺失时可用其中的 `squad_id` 调用
+`multica squad member list <squad-id> --output json` 补齐一次，并把实际使用的角色映射写回任务 context。
+用户选择的小队中缺少方案、图像编辑、完整贴图或质量验收角色时，订单进入 `action_required` 并提示
+缺少的角色，不得按智能体名称猜测。对每个 Order Item 查询/创建一个
+`creative_order_item_plan` source；manifest 采用上面的结构，目标是冻结的方案智能体 ID。
 
-初次生产中，V01-V03 三个变体 Issue 全部交付三尺寸底图后，只创建一个
-`Prime 包装 · V01-V03 · 九图 · rN` 子 Issue批量包装；包装完成后只创建一个
-`广告验收 · V01-V03 · 九图 · rN` 子 Issue 批量验收。精准返工继续按 metadata 作用域创建单尺寸
-或单变体三尺寸 Prime/QC Issue；同一轮 QC 的成图缺陷恢复则按下述分组规则创建一个批量 Prime/QC。
-只有“简报后选文案”、“方案后三个变体”、“九张底图后包装”、
-“包装后终检”和“终检通过后发布”保留依赖门槛。图片实际请求由平台跨进程槽位限制为五路；
-Leader 不在单个 Issue 内轮询或等待。
+方案固定创建 V01、V02、V03 三个差异明确的变体。三个变体共享同一业务语义、批准文案和合规
+事实，只允许改变版式、信息组织和视觉表达。方案角色把结构化规格写入 Variant，不把 Markdown
+附件当成唯一交付物。
 
-Prime 子 Issue 必须把原始包装 manifest、`compose_result.json` 和作用域内最终图一起交付。创建 QC
-Issue 时直接引用这两份附件 ID 和全部最终图附件 ID，并把资源快照中的 `creative_brief` 锚点摘要
-写入描述；不得要求 QC 从另一份包装 evidence 重建输入，也不得要求它重新下载完整方案 Markdown。
-QC Issue metadata 必须同时写入 `prime_issue_id`、`manifest_attachment_id` 和
-`compose_result_attachment_id`。同一 Prime Issue 和同一对证据附件只允许一个未取消的 QC Issue；
-无论它是 todo、in_progress、blocked 还是 done，都不得再建第二个。若 QC 失败原因仅为工具或证据
-schema 不兼容，且结论明确说明成图无需重做，则修复 Skill 后在原 QC Issue 追加评论触发复验，不能
-新建“复验”Issue。只有 QC 已指出具体成图缺陷并且受影响图片完成新修订后，才能创建引用新 Prime
-证据的新 QC Issue。
+文案检索、相似推荐、差异说明、用户选择和人工编辑都发生在页面确认阶段，并在创建订单前冻结为
+`copy_snapshot`。Leader 和 Planner 只消费该快照；不得在设计阶段重新推荐、替换、拼接或根据竞品数字
+改写文案。快照缺少必要事实是输入错误，才进入 `action_required`。
 
-当前 Issue 若是候选池页面对人工上传或历史漏分析素材发起的“素材理解”请求，只委派参考分析成员读取真实图片并把结构化
-创意简报回写目标候选池，不启动图像编辑、包装或 QC。创意简报必须把视觉主题与主利益点分开；
-标题、标签和采集元数据不能替代像素证据。分析还必须固化业务语义、信息机制、视觉锚点、色系
-锚点、必须保留项和允许变化项，供策划、生成和 QC 使用。
+## 阶段二：三变体生成
 
-父 Issue 只保留候选池、结果看板和用户必须知道的结论。每张入选素材建立独立创意工作
-Issue；专业讨论、提示词、模型调用证据、包装和返工都留在对应子 Issue。多张素材相互独立时
-可以并行委派，但不能把不同素材的文案、资源和证据混在一起。
+三个 Variant 的 `creative_production` task 一次 fanout，允许并发。每个 task 内：
 
-专业任务一律通过“新建直接子 Issue + 分配给目标智能体 + `todo` 状态”触发。禁止在当前创意
-工作 Issue 里通过 `@mention` 委派成员，也禁止让专业成员直接在当前创意工作 Issue 上执行。
-Leader 只在当前 Issue 留一条不含成员 mention 的子 Issue 链接和必要结论。子 Issue 标题按
-“能力 · 对象 · 修订”命名，描述必须带回当前创意工作 Issue、最外层候选池 Issue、候选 ID、
-创意简报、文案版本和上下文快照引用。
+1. 先生成 `1080x1080` 无品牌方形母版；
+2. 方形母版可用后，立即以它为第一参考并发生成 `1200x628` 和 `800x1000`；
+3. 不要求方形先经过 Prime 或独立 QC；
+4. 三尺寸必须引用同一个 `asset_family_id`，保存 `derived_from_asset_id`、提示词版本、模型请求 ID、
+   尺寸和修订；
+5. 横竖版是原生重排，不得裁切、拉伸、加边或重新发明内容；人物、产品、批准文案、金额、业务
+   语义和关键信息必须与方形一致。
 
-专业成员完成证据后直接把专业子 Issue 置为 `done`，不要再向父 Issue 发评论或 `@mention`。
-平台会自动在直接父 Issue 生成一条最小完成回执并唤醒小队，手工回执会造成 Leader 重复执行。
-Leader 被唤醒后先读取所有直接子 Issue，再批量创建所有新近就绪的专业子 Issue、局部返工或发布。
-创建前按“候选 ID + 修订 + V01/V02/V03 + 作用域 + 能力”检查已有标题、描述和附件，保证重复
-唤醒不会重复委派、重复调用模型或重复发布。
+某个尺寸失败只把该 Asset 标为失败；另外两个尺寸和兄弟变体继续。恢复时只重提缺失尺寸，禁止
+重做已有可用资产。
 
-状态为 `cancelled` 的子 Issue 不满足任何依赖，也不占用幂等键。特别是没有 `plan_issue_id` 的
-已取消图像编辑 Issue 属于无效委派；方案完成后必须使用真实 `plan_issue_id` 创建新的 V01-V03
-任务，不能复用、续跑或等待这些无效 Issue。
+## 阶段三：Prime
 
-只有 Prime 包装后的真实合成图或独立 QC 在 `blocking_failures` 中明确证明品牌、条款、二维码、
-商店徽章、监管资产不可读，或获批文案/关键内容被实际遮挡，才触发同尺寸“安全区恢复”。不得根据
-无品牌底图进入顶部/底部软引导，或根据非关键装饰进入真实矩形，推断成图失败。恢复任务沿用原候选、
-获批文案、变体骨架和无品牌底图，只移动已证实碰撞的元素；不得删改获批文案、金额、期限、利率、
-业务语义、`information_mechanism`、`must_preserve`、表格、人物或关键卡片。原 Issue 和附件保留用于
-审计。每个“变体 + 尺寸 + 修订”最多自动恢复一次；恢复仍失败才向用户报告精确冲突并等待决定。
+标准 Variant 的三个 `expected_sizes` 无品牌底图齐备后，委派一个 `creative_prime` task。直接改图的
+`expected_sizes` 是用户本次发布的受影响尺寸，可以是 1-3 张。Prime 在一次批处理中只处理该 task 明确
+给出的尺寸，使用版本化品牌、条款、二维码和商店徽章资产。每张结果都保存原始底图、模板、合成
+manifest、输出附件和机器校验证据；不得要求 direct edit 补造未受影响的尺寸。
 
-当前工作 Issue 的 metadata 含 `creative_observation_mode=true` 时，任何 `needs_input`、工具异常或
-`blocking_failures` 都必须停在当前现场：在工作 Issue 留一条包含子 Issue、附件和真实原因的最小
-说明，不创建恢复 Issue、不重试图片调用、不用测试数据代替。`quality_warnings` 不属于问题中断，
-仍按下述规则发布到结果看板，供用户观察后决定。
+底图进入 Prime 引导区不构成失败。只有最终合成图实际遮挡获批关键内容、监管资产不可读或二维码
+不可解码，才进入 QC 阻断结论。
 
-QC 子 Issue 只有在附件中同时存在机器 evidence、九宫格和硬区放大证据，并且评论为作用域内每张图
-明确列出 `checked_region_ids`、`actual_hard_regions_clear`、`prime_assets_readable`、
-`key_content_preserved`、`blocking_failures` 和 `quality_warnings` 时，才可视为完成验收。缺少逐图字段、
-硬区证据或布局契约时，即使评论包含 `QC PASS` 也不满足发布依赖，必须要求原 QC Issue 补齐，不能
-直接创建发布或结果登记。只有 `blocking_failures` 非空才进入恢复或观察模式中断；
-`QC PASS WITH WARNINGS` 必须正常发布九张图，并在工作 Issue 留一条警告摘要，不能自动返工。
+## 阶段四：独立 QC 并发
 
-把 QC 阻断项转成返工描述时，所有“移除”必须写清局部范围：要求把冲突元素移出或缩放到具体
-region ID 的矩形之外，并在该矩形内恢复连续低纹理背景。返工描述必须同时要求获批文案、金融事实、
-`information_mechanism`、`must_preserve`、表格、人物和卡片在安全区内完整保留；禁止产生
-“整图删除表格/人物”这种会破坏原图语义的歧义。
+当前 revision 的全部 `expected_sizes` Prime 成图齐备后，同时委派两类只读 QC task：
 
-同一个 QC Issue 报告多张真实成图缺陷时，先按变体聚合，禁止逐尺寸创建一串恢复 Issue。使用一次
-`issue create-batch`，每个受影响变体最多创建一个图像编辑恢复 Issue：该变体三个尺寸全失败时使用
-`creative_scope=variant`；只失败部分尺寸时使用 `creative_scope=variant_subset` 并写入
-`affected_sizes`。每个尺寸都必须写入上一版无品牌底图附件 ID 和 QC 的实际碰撞证据。所有恢复
-Issue 相互独立并发执行；全部完成后只创建一个 `creative_scope=batch` 的恢复 Prime Issue，统一包装
-本轮 1-9 张变更图，再只创建一个引用同一 manifest/compose result 的恢复 QC Issue。先前 QC 已通过
-且未变化的尺寸直接沿用，不重新包装、不重新验收。恢复 QC 通过后，一次登记新修订与沿用结果，
-保证结果看板仍是一套完整九图。
+- `creative_qc_technical`：检查尺寸、文件完整性、四角/底部 Prime 资产、二维码可解码、硬区遮挡；
+- `creative_qc_visual`：检查清晰度、伪影、文案可读性、原图语义和变体规格保持；多尺寸时再检查内容一致性。
 
-若旧版图像编辑或安全区恢复 Issue 已产生可读、满版、无竞品品牌和无模型二维码的方形底图，但只因
-后续尺寸缺失而阻断，Leader 应复用最佳方形附件，创建一个
-`metadata.workflow=creative_production_continuation`、`scope=dependent_sizes` 的续跑 Issue。metadata
-必须写入 `base_attachment_id`、`missing_sizes` 和 `accepted_size_attachment_ids`：只缺一项就只补
-该尺寸，两项都缺才并发生成横版和竖版；不得重做方形或已通过尺寸。三张底图齐备后照常进入九图
-Prime。只有机器规范化脚本失败或画面自身存在实际问题才算尺寸失败；原始 PNG 像素与请求值不完全
-相等不能覆盖脚本已经通过的比例结论。
+两类 QC 使用相同 Variant、revision、`expected_sizes` 和最终图集合，但写入独立 QC Report。标准生产
+检查三尺寸一致性；direct edit 单尺寸只检查该尺寸及其来源保持，多尺寸才做跨尺寸一致性。聚合规则：任一
+`blocking_failures` 非空则该变体 `action_required`；只有两份报告都完成且无阻断才通过。工具异常只
+标记对应检查失败，不覆盖另一份报告，也不阻塞兄弟变体。
 
-不要只按 `needs_input`、`QC PASS WITH WARNINGS` 等单个词判断证据状态，必须读取该专业子 Issue 的
-逐图 `blocking_failures` 和时间线到最新人工决定。无品牌底图中的软引导差异应继续进入 Prime 包装，
-由真实合成图和独立 QC 判断遮挡；这不属于用包装绕过底图问题。只有真实 Prime 成图已经证明资产
-不可读、关键内容被遮挡或关键内容遭到删改，才是必须返工的未解决问题。
+`qc-finalize` 是唯一发布 barrier：两 lane 未齐返回 `pending`；通过时按 `expected_sizes` 原子登记 delivered asset；
+失败时只进入 `action_required`，不得自动返工。每个 Variant/revision 只有一个 resolution 和一条 Inbox。
 
-候选图包含竞品 App 界面时，要求分析成员查看市场资源包中全部 `app_ui_reference` 文件并选择
-最匹配的 AdaKami 界面。后续生成不得保留或仿造竞品 App UI。
+四角检查以实际 Prime 成图为准，不以原参考图人物或装饰进入模板矩形为失败。原图本来就有的构图
+不能仅因几何预测被拦截。
 
-发布前按市场资源包的 `naming_rule` 统一同一候选的九张文件名。文件名必须包含 `V01`、`V02`
-或 `V03`，同一变体的三个尺寸使用相同前缀，并确认附件写入快照中的 `parent_issue_id`。
-附件上传后必须生成交付 manifest，并执行
-`multica creative delivery register <父 Issue ID> --input-file <manifest.json> --output json`。
-结果看板以该登记记录关联竞品原图、变体、尺寸、修订、底图和 QC 证据；评论文案不承担关联
-职责。精准返工只登记本轮通过的一张或三张新成图，旧交付记录和附件必须保留。
+## 返工
 
-恢复批次发布前必须读取 `multica creative materials <父 Issue ID> --output json` 的 `deliveries`，构造
-当前应交付的完整“候选 + V01-V03 + 三尺寸”九键集合。所有变更图必须登记；所有沿用图若已有
-对应交付记录则复用，若仅在早期 QC 中通过但从未发布登记，必须把本次发布到父 Issue 的新附件 ID、
-原底图、原 Prime 证据和原 QC Issue 一并加入同一个登记 manifest，不能假设历史记录存在。登记后
-重新读取并验证九键全部可追溯，缺一项都不能宣称发布完成。最后执行工作 Issue `status done`，再用
-`issue get` 验证实际状态；文字回复不能代替落库结果。
-详细判断和发布边界见 `references/collaboration-contract.md`。
+返工不是自动硬门槛。QC 阻断后先向用户展示原图/成图、问题区域和建议作用域，由用户选择接受、
+局部调整或放弃。每个 Variant 最多一轮返工：
+
+- `size`：只处理一张尺寸；
+- `variant_subset`：同一变体的一组尺寸；
+- `variant`：标准生产为同一变体三张，direct edit 为本次 `expected_sizes`；
+- `replan`：只重做指定变体方案，再生产该变体。
+
+普通返工以对应尺寸上一版无品牌底图为第一输入；`replan` 以原候选图为第一输入。不得重做无关变体
+和已接受尺寸。返工后的 Prime 与两类 QC 仍使用 task，revision 加一。第二轮仍失败时停止模型调用，
+保留已通过资产并等待用户决定。
+
+## 发布与用户状态
+
+某个 Variant 的两份 QC 报告通过后，立即把该 revision 的 `expected_sizes` Asset 登记为可交付并更新订单聚合状态。结果页必须
+能从每张成图回到候选原图、Source Analysis、Variant 规格、方形母版和 Prime/QC 证据。
+
+只有以下事件写入订单 Issue 评论，且每个阶段按订单项、变体、修订去重：
+
+1. 订单开始生产；
+2. 某个变体已交付该 revision 的 `expected_sizes` 成图；
+3. 需要用户决定的真实阻塞；
+4. 整个订单完成。
+
+QC 的事务化 finalize 会给订单创建人发送原生 Inbox 提醒。收到整单完成或真实阻塞的唯一收口评论后，
+Leader 只汇总一次订单状态；完成时在最终评论中明确 @订单创建人并附结果看板入口，阻塞时只列需要
+业务选择的变体和作用域。不得因单条 QC task 完成重复唤醒或逐条提醒。
+
+Leader 只有在回读确认全部 Variant 均为 `completed` 时才把订单 Issue 更新为 `done`。存在
+`action_required`、运行中或缺失结果时保持 `todo`；不得因收到一条成功通知提前关闭 Issue。
+
+排队、上下文准备、单个 task 完成、内部重试和工具日志不写评论。页面从领域状态展示实时进度，不
+要求业务用户进入 task 详情或子 Issue。
+
+用户对候选、文案推荐、变体、成图和 QC 的采用、拒绝、替换、编辑、误判、漏检以及图片区域标注
+必须写入追加式反馈事件；当前状态可以更新，但历史事件不得覆盖或删除。用户在高清对比工作区确认
+后，订单才进入最终 `accepted`。
+
+## 直接改图
+
+当订单 `input_snapshot.mode=direct_edit` 时，冻结的 squad snapshot 必须同时包含 `direct_edit_agent_id`、
+`prime_agent_id` 和 `reviewer_agent_id`。Leader 只能把首次任务委派给 direct edit 角色，后两者仅供它续链；
+不得选择图像编辑、方案、分析或采集角色，也不得按名称猜 Agent。缺少任一 ID 时进入 `action_required`，
+不能创建一个注定无法完成 Prime/QC 的 direct task。
+
+使用一个 `creative_order_item_direct_edit` task，context 固定携带 `creative_order_id`、`issue_id`、
+`leader_agent_id`、`creative_order_item_id`、`variant_id`、`source_asset_id`、`source_attachment_id`、
+`user_request`、`target_size`、`expected_sizes: [target_size]`、`delivery_mode`、`prime_agent_id`、
+`reviewer_agent_id` 与 `revision`。这里的 `revision`
+是 source revision，直接改图只生成一个指定尺寸的 `output_revision=revision+1`：
+源资产保持不可变，输出必须以源资产为 `derived_from_asset_id`，不得改写 revision N 的 source asset。
+
+`delivery_mode=preview` 只保留 generated asset，不委派 Prime 或 QC，也不标记正式交付。`delivery_mode=publish`
+在 output revision 的 generated asset 完成后，只为该 variant 的 `expected_sizes` 委派一个 Prime task；Prime 完成后并发委派
+technical 与 visual QC，并按普通 QC finalize 收口。不得触发采集、参考分析、三变体规划或普通生产。

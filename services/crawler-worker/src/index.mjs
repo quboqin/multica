@@ -735,6 +735,7 @@ async function openControlledBrowser(session, token) {
     browser = await chromium.launch(chromiumLaunchOptions(headless));
     const context = await browser.newContext({
       viewport: session.viewport || sessionViewport,
+      ...(connector.id === "appgrowing" ? { locale: "en" } : {}),
     });
     await context.addInitScript(() => {
       Object.defineProperty(navigator, "webdriver", {
@@ -744,9 +745,6 @@ async function openControlledBrowser(session, token) {
     const page = await context.newPage();
     attachAuthWatcher(page, connector, (authCheck) => {
       session.authCheck = authCheck;
-      if (authCheck.authenticated) {
-        scheduleAutoComplete(session, token, "auth_watcher");
-      }
     });
     session.browser = browser;
     session.context = context;
@@ -978,6 +976,7 @@ async function completeSession(session, token) {
     };
   }
   assertSessionNotExpired(session);
+  session.error = "";
   if (!session.context) {
     throw userError("open the controlled browser and finish login before completing");
   }
@@ -991,9 +990,21 @@ async function completeSession(session, token) {
   if (!hasConnectorState(storageState, connector)) {
     throw userError("AppGrowing login state was not detected; finish login in the controlled browser before completing");
   }
-  const authCheck = await refreshSessionAuth(session, connector);
+  let authCheck = await refreshSessionAuth(session, connector);
+  const identityVerificationError = connectorAuthVerificationError(authCheck);
+  if (identityVerificationError) {
+    throw userError(`AppGrowing user verification failed: ${identityVerificationError}`);
+  }
   if (!authCheck.authenticated) {
     throw userError("AppGrowing authenticated user was not detected; finish login in the controlled browser before completing");
+  }
+  const businessProbe = await verifyAppGrowingBusinessAccess(session.page || session.context, connector, authCheck);
+  authCheck = businessProbe.authCheck;
+  if (businessProbe.needsReauth) {
+    throw userError("AppGrowing material access reports an expired login; finish login in the controlled browser before completing");
+  }
+  if (businessProbe.verificationError) {
+    throw userError(`AppGrowing material access verification failed: ${businessProbe.verificationError}`);
   }
   const verification = {
     current_url: currentURL,
@@ -1028,23 +1039,6 @@ async function completeSession(session, token) {
     ...JSON.parse(text),
     verification,
   };
-}
-
-function scheduleAutoComplete(session, token, reason) {
-  if (!token || session.status === "completed" || session.autoCompleting) {
-    return;
-  }
-  session.autoCompleting = true;
-  session.autoCompleteReason = reason;
-  setTimeout(async () => {
-    try {
-      await completeSession(session, token);
-    } catch (err) {
-      session.error = err instanceof Error ? err.message : String(err);
-    } finally {
-      session.autoCompleting = false;
-    }
-  }, 800);
 }
 
 function isLoginURL(url, connector) {
@@ -1171,13 +1165,16 @@ function connectorGraphQLHeaders(connector, operationName = "") {
 function authCheckFromBody(body, connector, httpStatus, method) {
   const check = connector.authCheck;
   const userID = valueAtPath(body, check.userIDPath);
+  const upstreamError = connector.id === "appgrowing" ? appGrowingGraphQLErrorMessage(body) : "";
+  const userIDPresent = typeof userID === "string" ? userID.trim() !== "" : Boolean(userID);
   return {
-    authenticated: typeof userID === "string" ? userID.trim() !== "" : Boolean(userID),
+    authenticated: userIDPresent && !upstreamError,
     method,
     http_status: httpStatus,
-    user_id_present: typeof userID === "string" ? userID.trim() !== "" : Boolean(userID),
+    user_id_present: userIDPresent,
     team_present: Boolean(valueAtPath(body, ["data", "userinfo", "teamInfo"])),
     plan_present: Boolean(valueAtPath(body, ["data", "userinfo", "purchasePlanInfo"])),
+    upstream_error: upstreamError || undefined,
     observed_at: new Date().toISOString(),
   };
 }
@@ -1191,17 +1188,6 @@ function authCheckUnavailable(err, method) {
     team_present: false,
     plan_present: false,
     probe_error: err instanceof Error ? err.message : String(err),
-    observed_at: new Date().toISOString(),
-  };
-}
-
-function browserStateAuthFallback(authCheck, method) {
-  return {
-    ...authCheck,
-    authenticated: true,
-    method,
-    browser_state_present: true,
-    user_id_present: authCheck?.user_id_present === true,
     observed_at: new Date().toISOString(),
   };
 }
@@ -1274,17 +1260,33 @@ async function refreshSessionAuth(session, connector) {
     timeout: 60_000,
   }).catch(() => {});
   const pageAuthCheck = await waitForAuth;
-  if (pageAuthCheck) {
+  if (pageAuthCheck?.authenticated) {
     session.authCheck = pageAuthCheck;
     return pageAuthCheck;
   }
-  session.authCheck = await verifyConnectorPageAuth(session.page, connector).catch(async () =>
-    verifyConnectorAuth(session.context, connector),
-  );
-  if (!session.authCheck.authenticated && !isLoginURL(session.page.url(), connector)) {
-    session.authCheck = browserStateAuthFallback(session.authCheck, "browser_state_non_login_url");
+  const pageCheck = await verifyConnectorPageAuth(session.page, connector).catch(() => pageAuthCheck);
+  if (pageCheck?.authenticated) {
+    session.authCheck = pageCheck;
+    return pageCheck;
   }
+  const workerCheck = await verifyConnectorAuth(session.context, connector);
+  session.authCheck = workerCheck.authenticated ? workerCheck : (pageCheck || workerCheck);
   return session.authCheck;
+}
+
+function connectorAuthVerificationError(authCheck) {
+  if (authCheck?.probe_error) {
+    return String(authCheck.probe_error);
+  }
+  const upstreamError = String(authCheck?.upstream_error || "").trim();
+  if (upstreamError && !/05:403005|login has expired|please log in again|account was logged out|session (?:has )?expired/i.test(upstreamError)) {
+    return upstreamError;
+  }
+  const status = Number(authCheck?.http_status);
+  if (Number.isFinite(status) && (status < 200 || status >= 300)) {
+    return `userinfo verification returned HTTP ${status}`;
+  }
+  return "";
 }
 
 function valueAtPath(value, path) {
@@ -1382,6 +1384,9 @@ h1{font-size:15px;line-height:1.2;margin:0}
 .pill[data-tone="warn"]{background:#fff2cc;color:#6d4d00}
 .pill[data-tone="error"]{background:#fde7e7;color:#8a1f1f}
 .url{max-width:34vw;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#707070;font-size:12px}
+.errorline{max-width:34vw;color:#8a1f1f;font-size:12px;line-height:1.35}
+.retry{height:28px;border:1px solid #c9c9c9;border-radius:4px;padding:0 10px;background:#fff;color:#242424;font:600 12px ui-sans-serif,system-ui,-apple-system,Segoe UI,sans-serif;cursor:pointer;white-space:nowrap}
+.retry:hover{background:#f4f4f4}.retry:disabled{cursor:default;opacity:.55}
 .viewport{flex:1;min-height:0;overflow:hidden;padding:10px;background:#151515}
 .stage{position:relative;display:grid;place-items:center;height:100%;min-height:420px;background:#202020;border:1px solid #2d2d2d;overflow:hidden;outline:none}
 .stage:focus{box-shadow:0 0 0 2px #2d6cdf inset}
@@ -1402,6 +1407,8 @@ h1{font-size:15px;line-height:1.2;margin:0}
     <div class="meta">Profile ${escapeHTML(session.profileID)} expires ${escapeHTML(new Date(session.expiresAt).toLocaleString())}</div>
   </div>
   <div class="statusline">
+    <span id="errorLine" class="errorline" hidden></span>
+    <button id="retryButton" class="retry" type="button" hidden>Retry save</button>
     <span id="statusPill" class="pill">Starting</span>
     <span id="urlLine" class="url"></span>
   </div>
@@ -1424,6 +1431,8 @@ const stage = document.querySelector("#stage");
 const empty = document.querySelector("#empty");
 const statusPill = document.querySelector("#statusPill");
 const urlLine = document.querySelector("#urlLine");
+const errorLine = document.querySelector("#errorLine");
+const retryButton = document.querySelector("#retryButton");
 const scrollbar = document.querySelector("#scrollbar");
 const scrollThumb = document.querySelector("#scrollThumb");
 const urls = {
@@ -1499,6 +1508,11 @@ async function status() {
 
 function renderStatus(body) {
   const url = body.current_url || body.verification?.current_url || "";
+  const error = body.error || "";
+  errorLine.textContent = error;
+  errorLine.hidden = !error;
+  retryButton.hidden = !error;
+  retryButton.disabled = completeBusy;
   if (body.viewport) {
     lastViewport = body.viewport;
   }
@@ -1549,11 +1563,11 @@ function renderStatus(body) {
     error: body.error || null
   });
 
-  if (!completed && body.auth_check?.authenticated) {
+  if (!completed && !body.error && body.auth_check?.authenticated) {
     autoComplete("auth_detected", false);
     return;
   }
-  if (!completed && looksReadyForCompletion(url)) {
+  if (!completed && !body.error && looksReadyForCompletion(url)) {
     autoComplete("app_page_detected", false);
   }
 }
@@ -1611,11 +1625,11 @@ function renderShot(body) {
     ...(body.status || {}),
     current_url: body.current_url,
   });
-  if (body.status?.auth_check?.authenticated) {
+  if (!body.status?.error && body.status?.auth_check?.authenticated) {
     autoComplete("auth_detected", false);
     return;
   }
-  if (looksReadyForCompletion(body.current_url)) {
+  if (!body.status?.error && looksReadyForCompletion(body.current_url)) {
     autoComplete("app_page_detected", false);
   }
 }
@@ -1851,24 +1865,27 @@ async function autoComplete(reason, force) {
   }
   lastAutoCompleteAt = now;
   completeBusy = true;
+  errorLine.hidden = true;
+  retryButton.hidden = true;
   setStatus("Saving", "warn", urlLine.textContent);
   try {
     const resp = await fetch(urls.complete, {method: "POST"});
     const body = await parseResponse(resp);
     renderStatus(body);
     if (!resp.ok) {
-      if (!force) {
-        setStatus("Waiting for login", "warn", urlLine.textContent);
-        debug({ status: "waiting", auto_complete_attempt: reason, error: body.error || body.raw || null });
-      }
+      debug({ status: "action_needed", auto_complete_attempt: reason, error: body.error || body.raw || null });
       completeBusy = false;
+      retryButton.disabled = false;
       return;
     }
     completed = true;
   } finally {
     completeBusy = false;
+    retryButton.disabled = false;
   }
 }
+
+retryButton.addEventListener("click", () => autoComplete("manual_retry", true));
 
 async function sendInput(action, options = {}) {
   const next = inputChain
@@ -2174,6 +2191,7 @@ async function runAppGrowingMaterialSearch(page, context, connector, params = {}
           break graphqlSearch;
         }
         const capture = await captureAppGrowingMaterialPageViaGraphQL(context, connector, {
+          page,
           competitor,
           pageNumber,
           params,
@@ -2194,9 +2212,13 @@ async function runAppGrowingMaterialSearch(page, context, connector, params = {}
           graphQL_responses: capture.responses,
           total: capture.total,
           limit: capture.limit,
+          needs_reauth: capture.needsReauth === true,
           error: capture.error,
           materials_found: capture.materials.length,
         });
+        if (capture.needsReauth) {
+          break graphqlSearch;
+        }
         if (capture.appBrandSource === "strategy_memory") {
           appGrowingAddAutoAdjustment(autoAdjustments, `used learned AppGrowing brand id for ${competitor}`);
         }
@@ -2218,7 +2240,8 @@ async function runAppGrowingMaterialSearch(page, context, connector, params = {}
     }
   }
 
-  const browserFallbackCompetitors = appGrowingNovelTargetMet(materials, rules, totalLimit, excludedDedupeKeys)
+  const graphQLNeedsReauth = captured.some((capture) => capture.needs_reauth === true);
+  const browserFallbackCompetitors = graphQLNeedsReauth || appGrowingNovelTargetMet(materials, rules, totalLimit, excludedDedupeKeys)
     ? []
     : appGrowingBrowserFallbackCompetitors(
       competitors,
@@ -2748,6 +2771,7 @@ async function captureAppGrowingMaterialPageViaGraphQL(context, connector, optio
       appBrandSource: brand.source || "",
       total: null,
       limit: null,
+      needsReauth: brand.needsReauth === true,
       error: brand.error || "app_brand_not_found",
       materials: [],
     };
@@ -2757,7 +2781,7 @@ async function captureAppGrowingMaterialPageViaGraphQL(context, connector, optio
   for (const order of appGrowingGraphQLMaterialOrders(options.params)) {
     const variables = appGrowingAppMaterialListVariables(options.params, brand.id, options.pageNumber, new Date(), order);
     const result = await appGrowingGraphQLRequest(
-      context,
+      options.page || context,
       connector,
       "appMaterialList",
       APPGROWING_APP_MATERIAL_LIST_QUERY,
@@ -2773,6 +2797,21 @@ async function captureAppGrowingMaterialPageViaGraphQL(context, connector, optio
     }
     const error = appGrowingGraphQLErrorMessage(result.body);
     if (error) {
+      if (appGrowingGraphQLNeedsReauth(result.body)) {
+        return {
+          url: connector.graphQLURL,
+          operations: Array.from(operations).sort(),
+          responses,
+          appBrandID: brand.id,
+          appBrandName: brand.name || "",
+          appBrandSource: brand.source || "",
+          total: null,
+          limit: null,
+          needsReauth: true,
+          error,
+          materials: [],
+        };
+      }
       lastError = error;
       continue;
     }
@@ -2786,6 +2825,7 @@ async function captureAppGrowingMaterialPageViaGraphQL(context, connector, optio
       appBrandSource: brand.source || "",
       total: parseNumericValue(valueAtPath(result.body, ["data", "materialList", "total"])),
       limit: parseNumericValue(valueAtPath(result.body, ["data", "materialList", "limit"])),
+      needsReauth: false,
       error: "",
       materials,
     };
@@ -2800,6 +2840,7 @@ async function captureAppGrowingMaterialPageViaGraphQL(context, connector, optio
     appBrandSource: brand.source || "",
     total: null,
     limit: null,
+    needsReauth: false,
     error: lastError || "app_material_list_failed",
     materials: [],
   };
@@ -2832,7 +2873,7 @@ async function resolveAppGrowingBrand(context, connector, options, responses, op
   for (const keyword of keywords) {
     const variables = appGrowingSearchAppVariables(keyword, options.params);
     const result = await appGrowingGraphQLRequest(
-      context,
+      options.page || context,
       connector,
       "searchApp",
       APPGROWING_SEARCH_APP_QUERY,
@@ -2848,6 +2889,17 @@ async function resolveAppGrowingBrand(context, connector, options, responses, op
     }
     const error = appGrowingGraphQLErrorMessage(result.body);
     if (error) {
+      if (appGrowingGraphQLNeedsReauth(result.body)) {
+        const expired = {
+          id: "",
+          name: competitor,
+          source: "searchApp",
+          needsReauth: true,
+          error,
+        };
+        options.brandCache?.set(key, expired);
+        return expired;
+      }
       lastError = error;
       continue;
     }
@@ -2869,17 +2921,47 @@ async function resolveAppGrowingBrand(context, connector, options, responses, op
   return brand;
 }
 
-function appGrowingGraphQLRequest(context, connector, operationName, query, variables, timeoutMS = appGrowingGraphQLTimeoutMS, deadline = NaN) {
-  if (!context?.request || !connector.graphQLURL) {
+function appGrowingGraphQLRequest(requestTarget, connector, operationName, query, variables, timeoutMS = appGrowingGraphQLTimeoutMS, deadline = NaN) {
+  if (!connector.graphQLURL) {
     throw new Error("AppGrowing GraphQL request context is unavailable");
   }
   const timeout = appGrowingRequestTimeoutMS(deadline, timeoutMS);
-  return context.request.post(connector.graphQLURL, {
-    data: {
-      operationName,
-      query,
-      variables,
-    },
+  const payload = { operationName, query, variables };
+  if (typeof requestTarget?.evaluate === "function") {
+    const headers = connectorGraphQLHeaders(connector, operationName);
+    delete headers.origin;
+    delete headers.referer;
+    delete headers["user-agent"];
+    return requestTarget.evaluate(async ({ url, data, requestHeaders, requestTimeoutMS }) => {
+      const controller = new AbortController();
+      const timer = window.setTimeout(() => controller.abort(), requestTimeoutMS);
+      try {
+        const response = await fetch(url, {
+          method: "POST",
+          credentials: "include",
+          headers: requestHeaders,
+          body: JSON.stringify(data),
+          signal: controller.signal,
+        });
+        return {
+          status: response.status,
+          text: await response.text(),
+        };
+      } finally {
+        window.clearTimeout(timer);
+      }
+    }, {
+      url: connector.graphQLURL,
+      data: payload,
+      requestHeaders: headers,
+      requestTimeoutMS: timeout,
+    }).then(({ status, text }) => appGrowingGraphQLResult(status, text));
+  }
+  if (!requestTarget?.request) {
+    throw new Error("AppGrowing GraphQL request context is unavailable");
+  }
+  return requestTarget.request.post(connector.graphQLURL, {
+    data: payload,
     headers: connectorGraphQLHeaders(connector, operationName),
     timeout,
   }).then(async (response) => {
@@ -2890,21 +2972,22 @@ function appGrowingGraphQLRequest(context, connector, operationName, query, vari
     } catch {
       text = "";
     }
-    let body = null;
-    try {
-      body = text ? JSON.parse(text) : null;
-    } catch {
-      body = null;
-    }
-    const result = {
-      status,
-      body,
-    };
-    if (status < 200 || status >= 300) {
-      result.error = appGrowingGraphQLHTTPErrorMessage(status, body, text);
-    }
-    return result;
+    return appGrowingGraphQLResult(status, text);
   });
+}
+
+function appGrowingGraphQLResult(status, text) {
+  let body = null;
+  try {
+    body = text ? JSON.parse(text) : null;
+  } catch {
+    body = null;
+  }
+  const result = { status, body };
+  if (status < 200 || status >= 300) {
+    result.error = appGrowingGraphQLHTTPErrorMessage(status, body, text);
+  }
+  return result;
 }
 
 function appGrowingGraphQLHTTPErrorMessage(status, body, text) {
@@ -2924,8 +3007,78 @@ function appGrowingGraphQLResponseSummary(operationName, result) {
   return {
     status: result.status ?? null,
     operations: [operationName],
+    needs_reauth: appGrowingGraphQLNeedsReauth(result.body) || undefined,
     error: result.error || appGrowingGraphQLErrorMessage(result.body) || undefined,
   };
+}
+
+function appGrowingGraphQLNeedsReauth(body) {
+  const errors = Array.isArray(body?.errors) ? body.errors : [];
+  return errors.some((error) => {
+    const extensions = error?.extensions;
+    const code = String(extensions && typeof extensions === "object" ? extensions.c || extensions.code || "" : "").trim();
+    const message = String(extensions && typeof extensions === "object" ? extensions.m || error?.message || "" : error?.message || "").trim();
+    return code === "05:403005"
+      || /login has expired|please log in again|account was logged out|session (?:has )?expired/i.test(message);
+  });
+}
+
+function appGrowingBusinessProbeResult(authCheck, result) {
+  const graphQLError = appGrowingGraphQLErrorMessage(result?.body);
+  const hasSearchData = result?.body?.data
+    && Object.prototype.hasOwnProperty.call(result.body.data, "searchAppBrand");
+  const responseError = result?.error
+    || graphQLError
+    || (!hasSearchData ? "searchApp verification returned no searchAppBrand data" : "");
+  const needsReauth = appGrowingGraphQLNeedsReauth(result?.body);
+  const businessAuthenticated = authCheck?.authenticated === true && !responseError;
+  const method = [authCheck?.method, "searchApp"].filter(Boolean).join("+");
+  const businessCheck = {
+    authenticated: businessAuthenticated,
+    operation: "searchApp",
+    http_status: result?.status ?? null,
+    needs_reauth: needsReauth,
+    upstream_error: responseError || undefined,
+    observed_at: new Date().toISOString(),
+  };
+  return {
+    authCheck: {
+      ...authCheck,
+      authenticated: businessAuthenticated,
+      method,
+      upstream_error: responseError || undefined,
+      business_check: businessCheck,
+    },
+    needsReauth,
+    verificationError: responseError && !needsReauth ? responseError : "",
+  };
+}
+
+async function verifyAppGrowingBusinessAccess(requestTarget, connector, authCheck) {
+  if (connector.id !== "appgrowing" || authCheck?.authenticated !== true) {
+    return {
+      authCheck,
+      needsReauth: false,
+      verificationError: "",
+    };
+  }
+  let result;
+  try {
+    result = await appGrowingGraphQLRequest(
+      requestTarget,
+      connector,
+      "searchApp",
+      APPGROWING_SEARCH_APP_QUERY,
+      appGrowingSearchAppVariables("Easycash", { purpose: 2 }),
+    );
+  } catch (err) {
+    result = {
+      status: null,
+      body: null,
+      error: err instanceof Error ? err.message : String(err),
+    };
+  }
+  return appGrowingBusinessProbeResult(authCheck, result);
 }
 
 function appGrowingGraphQLErrorMessage(body) {
@@ -3124,12 +3277,15 @@ async function captureAppGrowingMaterialPage(page, connector, options) {
     for (const operationName of operationNames) {
       operations.add(operationName);
     }
-    responses.push({
+    const summary = {
       status: response.status(),
       operations: operationNames,
-    });
+    };
+    responses.push(summary);
     try {
       const body = await response.json();
+      summary.needs_reauth = appGrowingGraphQLNeedsReauth(body) || undefined;
+      summary.error = appGrowingGraphQLErrorMessage(body) || undefined;
       const materials = extractAppGrowingMaterials(body);
       if (materials.length > 0) {
         captured.push(...materials);
@@ -3172,7 +3328,8 @@ async function captureAppGrowingMaterialPage(page, connector, options) {
     operations: Array.from(operations).sort(),
     responses,
     snapshot,
-    needsReauth: pageSnapshotHasAnonymousText(snapshot, connector),
+    needsReauth: pageSnapshotHasAnonymousText(snapshot, connector)
+      || responses.some((response) => response.needs_reauth === true),
     error: captureError,
     pageCrashed,
     materials: captured,
@@ -4062,7 +4219,10 @@ async function runCrawl(body) {
     crawlerBrowserTimeout = setTimeout(() => {
       void browser.close().catch(() => {});
     }, crawlerBrowserTimeoutMS);
-    const context = await browser.newContext({ storageState });
+    const context = await browser.newContext({
+      storageState,
+      ...(connector.id === "appgrowing" ? { locale: "en" } : {}),
+    });
     await restoreSessionStorage(context, sessionStorageState);
     const page = await context.newPage();
     attachAuthWatcher(page, connector, (latestAuthCheck) => {
@@ -4075,15 +4235,25 @@ async function runCrawl(body) {
     const title = await page.title().catch(() => "");
     const currentURL = page.url();
     if (!authCheck.authenticated) {
-      authCheck = await verifyConnectorPageAuth(page, connector).catch(async () =>
-        verifyConnectorAuth(context, connector),
-      );
+      const pageCheck = await verifyConnectorPageAuth(page, connector).catch(() => authCheck);
+      authCheck = pageCheck?.authenticated ? pageCheck : await verifyConnectorAuth(context, connector);
     }
     const loginDetected = isLoginURL(currentURL, connector);
-    if (!authCheck.authenticated && !loginDetected) {
-      authCheck = browserStateAuthFallback(authCheck, "browser_state_non_login_url");
+    const profileVerify = capability === "profile_verify";
+    const identityVerificationError = loginDetected ? "" : connectorAuthVerificationError(authCheck);
+    let businessProbe = {
+      authCheck,
+      needsReauth: false,
+      verificationError: identityVerificationError,
+    };
+    if (profileVerify && authCheck.authenticated && !loginDetected && !identityVerificationError) {
+      businessProbe = await verifyAppGrowingBusinessAccess(page, connector, authCheck);
+      authCheck = businessProbe.authCheck;
     }
-    const needsReauth = !authCheck.authenticated || loginDetected;
+    const needsReauth = loginDetected
+      || (!authCheck.authenticated && !businessProbe.verificationError)
+      || businessProbe.needsReauth;
+    const verificationFailed = Boolean(businessProbe.verificationError);
     const authProbe = {
       url: currentURL,
       title,
@@ -4091,7 +4261,7 @@ async function runCrawl(body) {
       login_detected: loginDetected,
       auth_check: authCheck,
     };
-    if (!needsReauth && capability === "material_search") {
+    if (!needsReauth && !verificationFailed && capability === "material_search") {
       if (connector.id !== "appgrowing") {
         throw userError(`connector ${connector.id} has no material_search executor`, 400);
       }
@@ -4110,20 +4280,21 @@ async function runCrawl(body) {
       };
     }
     let extracted = {};
-    if (!needsReauth && capability === "page_extract") {
+    if (!needsReauth && !verificationFailed && capability === "page_extract") {
       await runDeclarativePageSteps(page, body.params?.steps);
       extracted = await extractDeclarativePageData(page, body.params);
     }
     await context.close();
-    const profileVerify = capability === "profile_verify";
     return {
-      status: needsReauth ? "need_reauth" : "completed",
+      status: needsReauth ? "need_reauth" : verificationFailed ? "failed" : "completed",
       downloaded: 0,
       output_prefix: `local://credential-broker/${body.profile_id || "unknown"}`,
       message: needsReauth
-        ? "stored browser state reached a login page; re-authentication is required"
+        ? "stored browser state cannot access AppGrowing materials; re-authentication is required"
+        : verificationFailed
+          ? `AppGrowing credential verification failed: ${businessProbe.verificationError}`
         : profileVerify
-          ? `stored browser state verified for ${connector.id}`
+          ? `stored browser state and material access verified for ${connector.id}`
           : `page_extract completed for ${connector.id}`,
       raw: {
         connector_id: body.connector_id,
@@ -4350,7 +4521,12 @@ const server = http.createServer(async (req, res) => {
         return;
       }
       if (req.method === "POST" && sessionPath.action === "complete") {
-        writeJSON(res, 200, await completeSession(session, sessionPath.token));
+        try {
+          writeJSON(res, 200, await completeSession(session, sessionPath.token));
+        } catch (err) {
+          session.error = err instanceof Error ? err.message : String(err);
+          throw err;
+        }
         return;
       }
       if (req.method === "GET" && sessionPath.action === "screenshot") {
@@ -4384,6 +4560,8 @@ export {
   appGrowingBrowserFallbackCompetitors,
   appGrowingCompetitorDiagnostics,
   appGrowingGraphQLDateWindow,
+  appGrowingBusinessProbeResult,
+  appGrowingGraphQLNeedsReauth,
   appGrowingGraphQLRequest,
   appGrowingMaterialDedupeKey,
   appGrowingMaterialURL,
@@ -4391,7 +4569,9 @@ export {
   appGrowingSelectionMixSummary,
   appGrowingShouldUseAdaptiveBrowserFallback,
   captureAppGrowingMaterialPage,
+  authCheckFromBody,
   connectorGraphQLHeaders,
+  connectorAuthVerificationError,
   connectorForID,
   connectorTargetURL,
   extractAppGrowingMaterials,

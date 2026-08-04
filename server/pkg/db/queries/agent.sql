@@ -133,7 +133,7 @@ INSERT INTO agent_task_queue (
     trigger_summary, force_fresh_session, is_leader_task, requesting_user_id,
     originator_user_id, accountable_user_id, originator_source,
     delegated_from_task_id, rule_version_id, rerun_of_task_id,
-    trigger_evidence_kind, trigger_evidence_ref_id
+    trigger_evidence_kind, trigger_evidence_ref_id, context
 )
 VALUES (
     $1, $2, $3, 'queued', $4, sqlc.narg(trigger_comment_id),
@@ -148,7 +148,8 @@ VALUES (
     sqlc.narg('rule_version_id'),
     sqlc.narg('rerun_of_task_id'),
     sqlc.narg('trigger_evidence_kind'),
-    sqlc.narg('trigger_evidence_ref_id')
+    sqlc.narg('trigger_evidence_ref_id'),
+    sqlc.narg('context')
 )
 RETURNING *;
 
@@ -191,7 +192,8 @@ WHERE id = $1 AND issue_id IS NULL;
 -- incremented; max_attempts, trigger_comment_id, and is_leader_task are
 -- inherited so the retried task keeps the same squad-role provenance as its
 -- parent and the self-trigger guard in shouldEnqueueSquadLeaderOnComment
--- continues to recognise it as a leader task.
+-- continues to recognise it as a leader task. Only failed parents with an
+-- unused attempt can be cloned; exhausted or non-failed parents return no row.
 INSERT INTO agent_task_queue (
     agent_id, runtime_id, issue_id, chat_session_id, autopilot_run_id,
     status, priority, trigger_comment_id, trigger_summary, context,
@@ -214,6 +216,8 @@ SELECT
     p.id, p.trigger_evidence_kind, p.trigger_evidence_ref_id
 FROM agent_task_queue p
 WHERE p.id = $1
+  AND p.status = 'failed'
+  AND p.attempt < p.max_attempts
 RETURNING *;
 
 -- name: CancelAgentTasksByIssue :many
@@ -292,10 +296,11 @@ WHERE atq.id = $1 AND a.workspace_id = $2;
 -- already dispatched or running. This allows different agents to work on the same
 -- issue in parallel while preventing a single agent from running duplicate tasks.
 -- Chat tasks (issue_id IS NULL) use chat_session_id for serialization instead.
--- Quick-create tasks have no issue / chat / autopilot link, so they serialize on
--- "any other quick-create-shaped task" (all four FKs NULL) for the same agent —
--- otherwise a user mashing the create button could fire concurrent quick-creates
--- whose completion lookup would race over "most recent issue by this agent".
+-- Actual quick-create tasks have no issue / chat / autopilot link and carry
+-- context.type = "quick_create". They serialize with each other because their
+-- completion lookup creates and links an Issue. Other no-issue direct tasks
+-- may carry domain context and evidence, so agent.max_concurrent_tasks governs
+-- their concurrency just like ordinary cross-issue work.
 UPDATE agent_task_queue
 SET status = 'dispatched', dispatched_at = now()
 WHERE id = (
@@ -309,12 +314,8 @@ WHERE id = (
               (atq.issue_id IS NOT NULL AND active.issue_id = atq.issue_id)
               OR (atq.chat_session_id IS NOT NULL AND active.chat_session_id = atq.chat_session_id)
               OR (
-                atq.issue_id IS NULL
-                AND atq.chat_session_id IS NULL
-                AND atq.autopilot_run_id IS NULL
-                AND active.issue_id IS NULL
-                AND active.chat_session_id IS NULL
-                AND active.autopilot_run_id IS NULL
+                COALESCE(atq.context ->> 'type', '') = 'quick_create'
+                AND COALESCE(active.context ->> 'type', '') = 'quick_create'
               )
             )
       )

@@ -1,52 +1,77 @@
 ---
 name: multica-ad-creative-prime-compose
-description: "当一张素材的三个创意九张底图或精准返工作用域已完成，需要批量叠加 Prime 模板、覆盖动态 QR 并回传机器解码证据时使用。"
+description: "为一个 Creative Order Variant 的 expected_sizes 底图确定性叠加 Prime 和动态 QR，并登记 primed assets 时使用。"
 allowed-tools: Bash(multica *), Bash(python *)
 ---
 
-# AdaKami Prime 包装
+# Prime 合成
 
-初次交付时，一个包装 Issue 处理同一素材的 V01-V03 共九张无品牌底图；
-`creative_scope=size` 的精准返工只接收 metadata 指定的一张，`creative_scope=variant` 接收该变体
-三张；`creative_scope=batch` 接收 metadata 明确列出的本轮 1-9 张变更图。不得要求作用域外尺寸，
-也不得重画、改文案、补 Logo 或生成监管/商店资产。
+只处理指定 `<order-id>`、`<variant-id>`、revision 和 task context 的 `expected_sizes`。先运行
+`multica creative order get <order-id> --output json`，选择该 variant、revision 中 size_key 正好属于
+`expected_sizes` 的 `stage: "generated"` assets。标准生产的集合固定为三尺寸；direct edit 可以是 1-3 个
+受影响尺寸。集合缺失、重复或混入其他 revision 时进入 `action_required`，不得补造未声明尺寸。
 
-从本次已发布市场资源包快照读取 `prime_square`、`prime_landscape`、`prime_portrait`、
-`qr_payload` 和服务端生成的 `qr_validation`。确定性合成工具来自本 Skill 自带的
-`references/image_prime_compose.py`，不是市场资源文件。只有 `qr_validation.status=passed`、
-三个模板解码记录齐全且 `approved_payload` 与 `qr_payload` 完全一致时才允许执行；否则回传
-`needs_input`，不能自行选择网址。用附件 ID 下载，不接受本机固定路径或其他市场的替代文件。
-市场资源快照由运行时动态 Skill `creative-issue-resources` 提供。读取该 Skill 的 `SKILL.md` 后，
-必须以它所在目录为基准打开同目录下的 `references/issue-resources.json`；不得在任务工作目录中
-查找 `references/issue-resources.json`，也不得因为工作目录没有该文件就判定资源缺失。
-先使用 Python `Path.mkdir(parents=True, exist_ok=True)` 显式、幂等地创建本 Issue 独立工作目录。
-每个变体或 job 必须预先创建独立输入子目录，因为不同附件的原始文件名可能同为
-`square.png`、`landscape.png` 或 `portrait.png`；禁止把不同变体下载到同一目录后再靠覆盖结果判断。
-确认所有目录存在后，再对作用域内底图、对应模板和校验证据分别执行
-`multica attachment download <attachment-id> --output-dir <输入目录>`；运行时支持并行工具调用时，
-一次并行发出全部下载，不要让多个下载进程同时负责首次创建同一目录，也不要先查询 attachment
-帮助或串行探索命令。
-包装 manifest 必须原样写入资源快照中的 `prime_layout_contract`，包括每个尺寸的
-`top_key_content_exclusion_end`、`bottom_key_content_exclusion_start`、`hard_regions` 和
-`backdrop_rule`；禁止只写资源包 ID 或在本地重新估算坐标。缺少该契约时必须 `needs_input`，因为
-后续 QC 无法提供逐图硬区证据。
-运行本 Skill 提供的脚本，先叠加完整透明 Prime 资产层，再在模板固有
-右上 QR 槽位生成 `qr_validation.approved_payload` 的整数模块二维码，并对最终 PNG 机器解码。
-成品解码内容必须同时等于 `approved_payload` 和三个模板的 `decoded_payload`。模板的 Logo、
-条款文字、商店徽章、OJK、AFPI、PINDAR 和合规页脚必须原样保留。
+一个 variant/revision 的一次 Prime task 必须批量处理全部 `expected_sizes`，不能拆成多个工作流；定向返工
+仅替换受影响尺寸时，仍以相同 `asset_family_id`、variant 与 revision 关联，未变化输入指纹的 primed 资产
+直接复用。
 
-把作用域内全部输入写成脚本 batch manifest，并只运行一次
-`python references/image_prime_compose.py --manifest <manifest.json>`。初次交付 manifest 必须有九个
-job，普通精准返工为一个或三个 job，`creative_scope=batch` 为 metadata 中列出的任意 1-9 个 job。
-每个 job 的输出文件名必须按市场包 `naming_rule` 展开并包含 `V01`、`V02` 或 `V03`；执行前必须
-确认全部输出路径唯一。规则缺少 `{variant}` 或展开后发生重名时不得运行，应回传配置错误让 Leader
-刷新市场包快照，禁止靠顺序覆盖同名文件。
-脚本逐图输出状态、QR 坐标、二维码边长和机器解码结果；成功图
-必须把标准输出直接保存为 `compose_result.json`。成功图、原始 batch manifest 和
-`compose_result.json` 作为同一条评论的附件一次回传；不得只上传一份重新整理的 evidence，也不得
-临时编写脚本再次复制这两份 JSON。原生附件记录已经提供最终附件 ID，不需要为了把 ID 抄进另一份
-JSON 而增加第二轮加工。评论必须逐图写清变体编号、源图附件 ID、资源包版本、模板文件、最终尺寸、
-批准快照版本和解码比对结果。二维码无法解码、与批准快照不一致或尺寸不在契约内时，
-只重跑失败 job，已经成功且输入指纹未变化的结果直接复用。全部作用域附件和证据上传成功后把
-当前包装 Issue 置为 `done`，让 Leader 创建一个独立 QC Issue；不要停在 `in_review`，包装角色不
-代替 QC 审批。
+只从订单冻结的已发布市场资源包快照读取与 `expected_sizes` 对应的 Prime 附件、`qr_payload`、
+`qr_validation`、`naming_rule` 与完整 `prime_layout_contract`。只有 `qr_validation.status=passed`，
+`expected_sizes` 对应的每个模板均有机器解码值，且 `approved_payload` 与 `qr_payload` 完全一致时才可执行。
+结构化 config 是操作规则，附件 ID 是实际文件，`brand_guideline` 不能覆盖两者。缺失时将 variant 写为
+`action_required`，不得读取本机固定路径、未冻结市场包、自选网址或替换素材。
+
+为每个尺寸创建独立目录，使用 `multica attachment download <attachment-id> --output-dir <dir>` 下载无品牌
+底图、Prime 模板和校验证据。manifest 原样携带每个尺寸的 `hard_regions`、`backdrop_rule`、
+`top_key_content_exclusion_end` 与 `bottom_key_content_exclusion_start`，禁止本地重估矩形。
+
+用本 Skill 自带脚本一次运行全部 `expected_sizes`：
+
+```bash
+python <当前 Skill 目录>/references/image_prime_compose.py --manifest <manifest.json>
+```
+
+脚本先叠加完整透明 Prime 资产层，再在模板固有右上 QR 槽生成 `approved_payload` 的整数模块二维码，
+并对最终 PNG 机器解码。每张成品解码内容必须同时等于 `approved_payload` 和相应模板的
+`decoded_payload`；模板中的 Logo、条款、商店徽章、OJK、AFPI、PINDAR 与合规页脚必须原样保留。输出
+文件名按 `naming_rule` 展开并包含订单中的真实 `variant_key`：标准生产为 `V01`/`V02`/`V03`，直接改图
+为 `direct_edit`。不得为满足命名规则伪造另一种 variant key，执行前确认同订单内唯一。
+
+上传全部成图、原始 manifest 与 `compose_result.json`：
+
+```bash
+multica attachment upload <final.png> --output json
+```
+
+以返回 attachment ID 对每张调用：
+
+```bash
+multica creative order asset-put <order-id> --input-file <primed-asset.json> --output json
+```
+
+每个 `primed-asset.json` 写 `variant_id`、原 generated asset 的 `asset_family_id`、`size_key`、`revision`、
+`stage: "primed"`、`attachment_id`、`derived_from_asset_id`、资源包版本、模板文件和 QR/compose evidence，
+并设 `status: "completed"`。附件上传不受当前 CLI 支持时，只使用领域 API 或已返回附件 ID；不得换用
+旧交付接口。
+
+全部 `expected_sizes` primed assets 完整后，从当前 task context 读取 `reviewer_agent_id`，先查询该 variant
+已有的 QC task：
+
+```bash
+multica task by-source list --agent <reviewer-agent-id> \
+  --kind creative_order_variant_qc --ref <variant-id> --output json
+```
+
+逐个检查 `<variant-id>:technical:r<revision>` 与 `<variant-id>:visual:r<revision>`：只把没有
+active/succeeded task 且当前 revision 尚无对应完整 QC report 的 lane 加入同一个 manifest。一个 lane 已存在
+不能阻止另一个 lane 补齐。`trigger_evidence_kind` 为 `creative_order_variant_qc`、ref 为 variant ID；两个
+`item_key` 分别为上述值。context 都使用
+`type: creative_domain_task`，从当前 task 原样复制 `issue_id`、`leader_agent_id`，并携带
+order/item/variant/revision、`expected_sizes` 和对应 primed asset ID，只有 workflow 分别为
+`creative_qc_technical` 与 `creative_qc_visual`。不得把它们串行化，也不得等待其中一个完成后再创建另一个：
+
+```bash
+multica task fanout --agent <reviewer-agent-id> --input-file <qc-manifest.json> --output json
+```
+
+提交后立即结束。Prime 不做 QC 放行，不创建或修改任何 Issue；执行证据保留在 Prime task 和领域 Asset。

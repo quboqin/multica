@@ -1,4 +1,4 @@
-export type CreativeMaterialStatus = "new" | "selected" | "rejected" | "archived" | string;
+export type CreativeMaterialStatus = "unseen" | "new" | "viewed" | "shortlisted" | "selected" | "rejected" | "archived" | string;
 export type CreativeMaterialAssetType = "image" | "video" | "unknown" | string;
 
 export interface CreativeMaterialCandidate {
@@ -35,6 +35,8 @@ export interface CreativeMaterialCandidate {
   source_issue_id: string;
   source_run_id: string;
   is_new_in_run: boolean;
+  analysis_status?: "pending" | "running" | "completed" | "failed" | string;
+  analysis_error?: string;
 }
 
 export interface CreativeMaterialSummary {
@@ -52,17 +54,31 @@ export interface CreativeMaterialCrawlRun {
   id: string;
   workspace_id: string;
   issue_id: string;
+  autopilot_run_id: string;
+  rerun_of_id: string;
   connector_id: string;
   query_summary: string;
   status: string;
+  error_code: string;
+  error_message: string;
   imported_count: number;
   existing_count: number;
   total_count: number;
+  candidate_metrics: {
+    total: number;
+    analyzed: number;
+    analysis_failed: number;
+    selected: number;
+    rejected: number;
+  };
+  started_at: string;
+  finished_at: string;
   created_at: string;
 }
 
 export interface CreativeMaterialLibraryResponse {
   candidates: CreativeMaterialCandidate[];
+  crawl_runs?: CreativeMaterialCrawlRun[];
 }
 
 export interface CreativeMaterialsResponse {
@@ -266,6 +282,12 @@ export interface CreativeIssueItem {
 export type CreativeBriefStatus = "requested" | "draft" | "confirmed" | string;
 export type CreativeBriefSource = "ai" | "user" | "mixed" | string;
 
+export interface CreativeBriefAppUIReference {
+  resource_file_id: string;
+  attachment_id: string;
+  reason: string;
+}
+
 export interface CreativeBrief {
   theme: string;
   theme_elements: string[];
@@ -282,6 +304,9 @@ export interface CreativeBrief {
   detected_text: string[];
   visual_type: string;
   analysis_summary: string;
+  user_direction: string;
+  app_ui_replacement_required: boolean;
+  selected_app_ui_references: CreativeBriefAppUIReference[];
   status: CreativeBriefStatus;
   source: CreativeBriefSource;
   confidence: number | null;
@@ -296,6 +321,137 @@ export interface PutCreativeIssueContextRequest {
 export interface UpdateCreativeMaterialCandidateRequest {
   status: CreativeMaterialStatus;
   note?: string;
+}
+
+export type CreativeFeedbackSubjectType = "candidate" | "recommended_copy" | "variant" | "asset" | "qc" | string;
+export type CreativeFeedbackDecision = "selected" | "rejected" | "accepted" | "replaced" | "needs_revision" | "abandoned" | "reported" | "" | string;
+export type CreativeFeedbackScope = "size" | "variant" | "order" | string;
+
+export interface CreativeFeedbackAnnotation {
+  id: string;
+  asset_id: string;
+  kind: "point" | "rect" | string;
+  issue_type: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  scope: CreativeFeedbackScope;
+  comment: string;
+}
+
+export interface CreateCreativeFeedbackRequest {
+  idempotency_key?: string;
+  issue_id: string;
+  subject_type: CreativeFeedbackSubjectType;
+  subject_id: string;
+  event_type: string;
+  decision: CreativeFeedbackDecision;
+  reason_codes?: string[];
+  comment?: string;
+  annotation?: CreativeFeedbackAnnotation;
+  context_snapshot?: Record<string, unknown>;
+}
+
+export interface CreativeFeedbackEvent extends CreateCreativeFeedbackRequest {
+  id: string;
+  workspace_id: string;
+  actor_id: string;
+  created_at: string;
+}
+
+export interface CreateCreativeFeedbackResponse {
+  id: string;
+  idempotency_key: string;
+  workspace_id: string;
+  issue_id: string;
+  actor_type: string;
+  actor_id: string;
+  subject_type: CreativeFeedbackSubjectType;
+  subject_id: string;
+  event_type: string;
+  decision: CreativeFeedbackDecision;
+  reason_codes: string[];
+  comment: string;
+  annotation?: CreativeFeedbackAnnotation;
+  context_snapshot: Record<string, unknown>;
+  undo_of_id: string;
+  created_at: string;
+}
+
+export interface CreativeFeedbackEventListResponse {
+  events: CreateCreativeFeedbackResponse[];
+}
+
+export interface CreativeOrder {
+  id: string;
+  workspace_id: string;
+  issue_id: string;
+  status: string;
+  derived_status: string;
+  input_snapshot: Record<string, unknown>;
+  trigger_evidence_kind: string;
+  trigger_evidence_ref_id: string;
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+  workflow_failures: CreativeOrderWorkflowFailure[];
+  items: CreativeOrderItem[];
+}
+
+export interface CreativeOrderWorkflowFailure {
+  task_id: string;
+  agent_id: string;
+  workflow: string;
+  scope: string;
+  subject_id: string;
+  item_key: string;
+  trigger_evidence_kind: string;
+  trigger_evidence_ref_id: string;
+  failure_reason: string;
+  error: string;
+  failed_at: string;
+  retryable: boolean;
+}
+
+export interface CreativeOrderListResponse { orders: CreativeOrder[]; }
+export interface CreateCreativeOrderRequest { issue_id: string; submission_key?: string; status: string; input_snapshot: Record<string, unknown>; trigger_evidence_kind: string; trigger_evidence_ref_id: string; items: { candidate_id: string; source_analysis_id: string; copy_snapshot: Record<string, unknown>; direction: string }[]; }
+export interface CreativeSourceAnalysis { id: string; candidate_id: string; analysis_version: number; status: string; summary: string; result: Record<string, unknown>; error_code: string; error_message: string; trigger_evidence_kind: string; trigger_evidence_ref_id: string; created_at: string; completed_at: string; }
+export interface CreativeSourceAnalysisListResponse { analyses: CreativeSourceAnalysis[]; }
+export interface CreativeOrderItem { id: string; order_id: string; candidate_id: string; source_analysis_id: string; copy_snapshot: Record<string, unknown>; direction: string; status: string; created_at: string; updated_at: string; variants: CreativeOrderVariant[]; }
+export interface CreativeOrderVariant { id: string; order_item_id: string; variant_key: string; brief: Record<string, unknown>; revision: number; status: string; qc_status: string; created_at: string; updated_at: string; assets: CreativeOrderAsset[]; qc_reports: CreativeOrderQCReport[]; }
+export interface CreativeOrderAsset { id: string; variant_id: string; asset_family_id: string; size_key: CreativeDeliverySize | string; revision: number; stage: "generated" | "primed" | "delivered" | string; attachment_id: string; derived_from_asset_id: string; metadata: Record<string, unknown>; evidence: Record<string, unknown>; status: string; created_at: string; updated_at: string; }
+export interface CreativeOrderQCReport { id: string; variant_id: string; lane: "technical" | "visual" | string; revision: number; status: string; findings: Record<string, unknown>; trigger_evidence_kind: string; trigger_evidence_ref_id: string; created_at: string; updated_at: string; }
+export interface CreativeOrderQCFinalizeResponse {
+  created: boolean;
+  finalized: boolean;
+  outcome: "pending" | "delivered" | "action_required" | string;
+  variant_id: string;
+  revision: number;
+  technical_status: string;
+  visual_status: string;
+  delivered_asset_count: number;
+  order_aggregate_status: string;
+  inbox_item_id?: string;
+}
+
+export type CreativeDirectEditDeliveryMode = "preview" | "publish";
+
+export interface CreateCreativeDirectEditRequest {
+  issue_id: string;
+  submission_key?: string;
+  candidate_id: string;
+  user_request: string;
+  target_size: CreativeDeliverySize;
+  delivery_mode: CreativeDirectEditDeliveryMode;
+  squad_id: string;
+}
+
+export interface CreativeDirectEditResponse {
+  order: CreativeOrder;
+  item: CreativeOrderItem;
+  variant: CreativeOrderVariant;
+  source_asset: CreativeOrderAsset;
 }
 
 export interface CreativeImportSummary { run_id: string; imported_count: number; existing_count: number; total_count: number; skipped_count: number; }

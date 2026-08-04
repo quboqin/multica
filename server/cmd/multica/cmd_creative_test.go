@@ -28,6 +28,24 @@ func TestFirstCreativeCandidateSourcePrefersArchivedAsset(t *testing.T) {
 	}
 }
 
+func TestCreativeLibraryDownloadSourceUsesOriginWhileArchiveIsPending(t *testing.T) {
+	candidate := creativeMaterialCandidateCLI{
+		ArchiveStatus: "pending",
+		ArchivedURL:   "https://multica.example.test/incomplete.png",
+		OriginalURL:   "https://cdn.example.test/original.png",
+		PreviewURL:    "https://cdn.example.test/preview.png",
+	}
+	gotURL, gotSource := creativeLibraryDownloadSource(candidate)
+	if gotURL != candidate.OriginalURL || gotSource != "origin" {
+		t.Fatalf("creativeLibraryDownloadSource() = (%q, %q), want (%q, origin)", gotURL, gotSource, candidate.OriginalURL)
+	}
+	candidate.ArchiveStatus = "completed"
+	gotURL, gotSource = creativeLibraryDownloadSource(candidate)
+	if gotURL != candidate.ArchivedURL || gotSource != "archive" {
+		t.Fatalf("completed creativeLibraryDownloadSource() = (%q, %q), want (%q, archive)", gotURL, gotSource, candidate.ArchivedURL)
+	}
+}
+
 func TestValidateGPTImageSize(t *testing.T) {
 	for _, size := range []string{"auto", "1024x1536", "1088x1360"} {
 		if err := validateGPTImageSize(size); err != nil {
@@ -153,6 +171,20 @@ func TestTruncateCLIError(t *testing.T) {
 	}
 }
 
+func TestCrawlParamsWithAnalysisAgentPreservesExistingIntent(t *testing.T) {
+	params, err := crawlParamsWithAnalysisAgent(json.RawMessage(`{"intent":"cash loan"}`), "agent-123")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(params, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got["intent"] != "cash loan" || got["analysis_agent_id"] != "agent-123" {
+		t.Fatalf("params = %#v", got)
+	}
+}
+
 func TestCreativeMaterialsCLIResponsePreservesDeliveries(t *testing.T) {
 	var response creativeMaterialsCLIResponse
 	err := json.Unmarshal([]byte(`{
@@ -185,6 +217,40 @@ func TestCreativeMaterialsCLIResponsePreservesDeliveries(t *testing.T) {
 	delivery := response.Deliveries[0]
 	if delivery.CandidateID != "candidate-1" || delivery.Variant != 3 || delivery.Size != "1200x628" || delivery.FinalAttachmentID != "final-1" {
 		t.Fatalf("delivery = %#v", delivery)
+	}
+}
+
+func TestFilterCreativeLibraryByRunKeepsOnlyMatchingCandidates(t *testing.T) {
+	input := map[string]any{
+		"candidates": []any{
+			map[string]any{"id": "one", "source_run_id": "run-a"},
+			map[string]any{"id": "two", "source_run_id": "run-b"},
+		},
+		"crawl_runs": []any{map[string]any{"id": "run-a"}},
+	}
+	filtered := filterCreativeLibraryByRun(input, "run-a")
+	candidates := anySlice(filtered["candidates"])
+	if len(candidates) != 1 || candidates[0].(map[string]any)["id"] != "one" {
+		t.Fatalf("filtered candidates = %#v", candidates)
+	}
+	if filtered["crawl_run_id"] != "run-a" {
+		t.Fatalf("crawl_run_id = %#v", filtered["crawl_run_id"])
+	}
+	if len(anySlice(input["candidates"])) != 2 {
+		t.Fatal("filter mutated the source response")
+	}
+}
+
+func TestCreativeLibraryListCommandExposesRunFilter(t *testing.T) {
+	command, _, err := rootCmd.Find([]string{"creative", "library", "list"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if command != creativeLibraryListCmd || !command.Runnable() {
+		t.Fatalf("creative library list command = %#v", command)
+	}
+	if command.Flags().Lookup("run-id") == nil || command.Flags().Lookup("output") == nil {
+		t.Fatal("creative library list must expose run-id and output flags")
 	}
 }
 

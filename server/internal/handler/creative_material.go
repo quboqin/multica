@@ -57,6 +57,8 @@ type creativeMaterialCandidateResponse struct {
 	SourceIssueID      string           `json:"source_issue_id"`
 	SourceRunID        string           `json:"source_run_id"`
 	IsNewInRun         bool             `json:"is_new_in_run"`
+	AnalysisStatus     string           `json:"analysis_status"`
+	AnalysisError      string           `json:"analysis_error"`
 	Raw                *json.RawMessage `json:"raw,omitempty"`
 }
 
@@ -72,16 +74,32 @@ type creativeMaterialSummaryResponse struct {
 }
 
 type creativeMaterialCrawlRunResponse struct {
-	ID            string `json:"id"`
-	WorkspaceID   string `json:"workspace_id"`
-	IssueID       string `json:"issue_id"`
-	ConnectorID   string `json:"connector_id"`
-	QuerySummary  string `json:"query_summary"`
-	Status        string `json:"status"`
-	ImportedCount int    `json:"imported_count"`
-	ExistingCount int    `json:"existing_count"`
-	TotalCount    int    `json:"total_count"`
-	CreatedAt     string `json:"created_at"`
+	ID               string                             `json:"id"`
+	WorkspaceID      string                             `json:"workspace_id"`
+	IssueID          string                             `json:"issue_id"`
+	AutopilotRunID   string                             `json:"autopilot_run_id"`
+	RerunOfID        string                             `json:"rerun_of_id"`
+	ConnectorID      string                             `json:"connector_id"`
+	QuerySummary     string                             `json:"query_summary"`
+	AnalysisAgentID  string                             `json:"analysis_agent_id"`
+	Status           string                             `json:"status"`
+	ErrorCode        string                             `json:"error_code"`
+	ErrorMessage     string                             `json:"error_message"`
+	ImportedCount    int                                `json:"imported_count"`
+	ExistingCount    int                                `json:"existing_count"`
+	TotalCount       int                                `json:"total_count"`
+	CandidateMetrics creativeMaterialRunMetricsResponse `json:"candidate_metrics"`
+	StartedAt        string                             `json:"started_at"`
+	FinishedAt       string                             `json:"finished_at"`
+	CreatedAt        string                             `json:"created_at"`
+}
+
+type creativeMaterialRunMetricsResponse struct {
+	Total          int `json:"total"`
+	Analyzed       int `json:"analyzed"`
+	AnalysisFailed int `json:"analysis_failed"`
+	Selected       int `json:"selected"`
+	Rejected       int `json:"rejected"`
 }
 
 type creativeMaterialsResponse struct {
@@ -274,18 +292,66 @@ WHERE id = $1::uuid AND workspace_id = $2 AND archived_url = ''
 }
 
 type creativeMaterialImportInput struct {
-	IssueID      pgtype.UUID
-	WorkspaceID  pgtype.UUID
-	ConnectorID  string
-	QuerySummary string
-	Params       json.RawMessage
-	Materials    []creativeMaterialInput
-	ActorType    string
-	ActorID      string
-	UserID       pgtype.UUID
+	// RunID is set when the caller has already persisted the lifecycle record
+	// before invoking an external crawler. Import then completes that same run.
+	RunID          string
+	IssueID        pgtype.UUID
+	WorkspaceID    pgtype.UUID
+	AutopilotRunID pgtype.UUID
+	ConnectorID    string
+	QuerySummary   string
+	Params         json.RawMessage
+	Materials      []creativeMaterialInput
+	ActorType      string
+	ActorID        string
+	UserID         pgtype.UUID
+}
+
+func (h *Handler) startCreativeMaterialCrawlRun(ctx context.Context, in creativeMaterialImportInput) (string, error) {
+	connectorID := strings.TrimSpace(in.ConnectorID)
+	if connectorID == "" {
+		connectorID = "appgrowing"
+	}
+	params := strings.TrimSpace(string(in.Params))
+	if params == "" {
+		params = "{}"
+	}
+	var runID string
+	err := h.DB.QueryRow(ctx, `
+INSERT INTO creative_material_crawl_run (
+  workspace_id, issue_id, connector_id, query_summary, params, status,
+  autopilot_run_id, started_at, created_by_type, created_by_id
+) VALUES ($1, $2, $3, $4, $5::jsonb, 'running', $6, now(), $7, $8::uuid)
+RETURNING id::text
+`, in.WorkspaceID, nullableUUID(in.IssueID, in.IssueID.Valid), connectorID, strings.TrimSpace(in.QuerySummary), params,
+		nullableUUID(in.AutopilotRunID, in.AutopilotRunID.Valid), in.ActorType, in.ActorID).Scan(&runID)
+	return runID, err
+}
+
+func (h *Handler) failCreativeMaterialCrawlRun(ctx context.Context, workspaceID pgtype.UUID, runID, status, errorCode, errorMessage string) {
+	if strings.TrimSpace(runID) == "" {
+		return
+	}
+	if status != "action_required" {
+		status = "failed"
+	}
+	if _, err := h.DB.Exec(ctx, `
+UPDATE creative_material_crawl_run
+SET status = $3, error_code = $4, error_message = $5, finished_at = now()
+WHERE id = $1::uuid AND workspace_id = $2
+`, runID, workspaceID, status, strings.TrimSpace(errorCode), strings.TrimSpace(errorMessage)); err != nil {
+		slog.Warn("mark creative crawl run failed", "crawl_run_id", runID, "error", err)
+	}
 }
 
 func (h *Handler) importCreativeMaterialsForIssue(ctx context.Context, in creativeMaterialImportInput) (creativeImportSummary, error) {
+	if !in.IssueID.Valid {
+		return creativeImportSummary{}, errors.New("issue_id is required for issue import")
+	}
+	return h.importCreativeMaterials(ctx, in)
+}
+
+func (h *Handler) importCreativeMaterials(ctx context.Context, in creativeMaterialImportInput) (creativeImportSummary, error) {
 	if h.TxStarter == nil {
 		return creativeImportSummary{}, errors.New("transaction starter not configured")
 	}
@@ -303,16 +369,32 @@ func (h *Handler) importCreativeMaterialsForIssue(ctx context.Context, in creati
 	}
 	defer tx.Rollback(ctx)
 
-	var runID string
-	err = tx.QueryRow(ctx, `
+	runID := strings.TrimSpace(in.RunID)
+	if runID == "" {
+		err = tx.QueryRow(ctx, `
 INSERT INTO creative_material_crawl_run (
   workspace_id, issue_id, connector_id, query_summary, params, status,
-  created_by_type, created_by_id
-) VALUES ($1, $2, $3, $4, $5::jsonb, 'completed', $6, $7::uuid)
+  autopilot_run_id, started_at, created_by_type, created_by_id
+) VALUES ($1, $2, $3, $4, $5::jsonb, 'running', $6, now(), $7, $8::uuid)
 RETURNING id::text
-`, in.WorkspaceID, in.IssueID, connectorID, strings.TrimSpace(in.QuerySummary), params, in.ActorType, in.ActorID).Scan(&runID)
-	if err != nil {
-		return creativeImportSummary{}, err
+`, in.WorkspaceID, nullableUUID(in.IssueID, in.IssueID.Valid), connectorID, strings.TrimSpace(in.QuerySummary), params,
+			nullableUUID(in.AutopilotRunID, in.AutopilotRunID.Valid), in.ActorType, in.ActorID).Scan(&runID)
+		if err != nil {
+			return creativeImportSummary{}, err
+		}
+	} else {
+		commandTag, updateErr := tx.Exec(ctx, `
+UPDATE creative_material_crawl_run
+SET status = 'running', started_at = COALESCE(started_at, now()),
+    error_code = '', error_message = ''
+WHERE id = $1::uuid AND workspace_id = $2
+`, runID, in.WorkspaceID)
+		if updateErr != nil {
+			return creativeImportSummary{}, updateErr
+		}
+		if commandTag.RowsAffected() != 1 {
+			return creativeImportSummary{}, errors.New("crawl run does not belong to workspace")
+		}
 	}
 
 	materials, skippedCount := uniqueCreativeMaterialInputs(in.Materials)
@@ -405,6 +487,20 @@ SELECT id::text, inserted FROM upsert
 			summary.ExistingCount++
 		}
 		_, err = tx.Exec(ctx, `
+INSERT INTO creative_material_crawl_run_candidate (
+  run_id, candidate_id, workspace_id, is_new_in_run
+) VALUES ($1::uuid, $2::uuid, $3, $4)
+ON CONFLICT (run_id, candidate_id) DO UPDATE SET
+  is_new_in_run = EXCLUDED.is_new_in_run,
+  updated_at = now()
+`, runID, candidateID, in.WorkspaceID, inserted)
+		if err != nil {
+			return creativeImportSummary{}, err
+		}
+		if !in.IssueID.Valid {
+			continue
+		}
+		_, err = tx.Exec(ctx, `
 INSERT INTO creative_material_issue_candidate (
   issue_id, candidate_id, workspace_id, source_run_id
 ) VALUES ($1, $2::uuid, $3, $4::uuid)
@@ -419,20 +515,23 @@ ON CONFLICT (issue_id, candidate_id) DO UPDATE SET
 
 	_, err = tx.Exec(ctx, `
 UPDATE creative_material_crawl_run
-SET imported_count = $3, existing_count = $4, total_count = $5
+SET imported_count = $3, existing_count = $4, total_count = $5,
+    status = 'completed', finished_at = now()
 WHERE id = $1::uuid AND workspace_id = $2
 `, runID, in.WorkspaceID, summary.ImportedCount, summary.ExistingCount, summary.TotalCount)
 	if err != nil {
 		return creativeImportSummary{}, err
 	}
-	_, err = tx.Exec(ctx, `
+	if in.IssueID.Valid {
+		_, err = tx.Exec(ctx, `
 UPDATE issue
 SET metadata = jsonb_set(metadata, '{workflow}', '"creative_material"'::jsonb),
     updated_at = now()
 WHERE id = $1 AND workspace_id = $2
 `, in.IssueID, in.WorkspaceID)
-	if err != nil {
-		return creativeImportSummary{}, err
+		if err != nil {
+			return creativeImportSummary{}, err
+		}
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return creativeImportSummary{}, err
@@ -573,14 +672,70 @@ ORDER BY
 }
 
 func (h *Handler) listCreativeCrawlRuns(ctx context.Context, issueID, workspaceID pgtype.UUID) ([]creativeMaterialCrawlRunResponse, error) {
+	return h.listCreativeCrawlRunsForWorkspace(ctx, workspaceID, issueID, true)
+}
+
+func (h *Handler) ListCreativeCrawlRuns(w http.ResponseWriter, r *http.Request) {
+	workspaceIDRaw := h.resolveWorkspaceID(r)
+	if _, ok := h.workspaceMember(w, r, workspaceIDRaw); !ok {
+		return
+	}
+	workspaceID, ok := parseUUIDOrBadRequest(w, workspaceIDRaw, "workspace_id")
+	if !ok {
+		return
+	}
+	runs, err := h.listCreativeCrawlRunsForWorkspace(r.Context(), workspaceID, pgtype.UUID{}, false)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to list creative crawl runs")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"crawl_runs": runs})
+}
+
+func (h *Handler) listCreativeCrawlRunsForWorkspace(ctx context.Context, workspaceID, issueID pgtype.UUID, filterIssue bool) ([]creativeMaterialCrawlRunResponse, error) {
 	rows, err := h.DB.Query(ctx, `
-SELECT id::text, workspace_id::text, COALESCE(issue_id::text, ''), connector_id,
-       query_summary, status, imported_count, existing_count, total_count, created_at::text
-FROM creative_material_crawl_run
-WHERE issue_id = $1 AND workspace_id = $2
-ORDER BY created_at DESC
+WITH crawl_candidate_analysis AS (
+  SELECT rc.run_id, rc.candidate_id, rc.workspace_id,
+         CASE
+           WHEN rc.analysis_status = 'completed' THEN rc.analysis_status
+           WHEN EXISTS(
+             SELECT 1
+             FROM agent_task_queue task
+             WHERE task.trigger_evidence_kind = 'creative_crawl_run_analysis'
+               AND task.trigger_evidence_ref_id = rc.run_id
+               AND task.status = 'failed'
+               AND task.context->>'candidate_id' = rc.candidate_id::text
+           ) AND NOT EXISTS(
+             SELECT 1
+             FROM creative_source_analysis analysis
+             WHERE analysis.candidate_id = rc.candidate_id
+               AND analysis.trigger_evidence_kind = 'crawl_run'
+               AND analysis.trigger_evidence_ref_id = rc.run_id
+               AND analysis.status = 'completed'
+           ) THEN 'failed'
+           ELSE rc.analysis_status
+         END AS analysis_status
+  FROM creative_material_crawl_run_candidate rc
+)
+SELECT cr.id::text, cr.workspace_id::text, COALESCE(cr.issue_id::text, ''),
+       COALESCE(cr.autopilot_run_id::text, ''), COALESCE(cr.rerun_of_id::text, ''),
+       cr.connector_id, cr.query_summary, COALESCE(cr.params->>'analysis_agent_id', ''),
+       cr.status, cr.error_code, cr.error_message,
+       cr.imported_count, cr.existing_count, cr.total_count,
+       count(rc.candidate_id)::int,
+       count(*) FILTER (WHERE rc.analysis_status = 'completed')::int,
+       count(*) FILTER (WHERE rc.analysis_status = 'failed')::int,
+       count(*) FILTER (WHERE EXISTS(SELECT 1 FROM creative_material_issue_candidate ic WHERE ic.candidate_id = rc.candidate_id AND ic.workspace_id = cr.workspace_id AND ic.status = 'selected'))::int,
+       count(*) FILTER (WHERE EXISTS(SELECT 1 FROM creative_material_issue_candidate ic WHERE ic.candidate_id = rc.candidate_id AND ic.workspace_id = cr.workspace_id AND ic.status = 'rejected'))::int,
+       COALESCE(cr.started_at::text, ''), COALESCE(cr.finished_at::text, ''), cr.created_at::text
+FROM creative_material_crawl_run cr
+LEFT JOIN crawl_candidate_analysis rc
+  ON rc.run_id = cr.id AND rc.workspace_id = cr.workspace_id
+WHERE cr.workspace_id = $1 AND (NOT $2::boolean OR cr.issue_id = $3)
+GROUP BY cr.id
+ORDER BY cr.created_at DESC
 LIMIT 20
-`, issueID, workspaceID)
+`, workspaceID, filterIssue, nullableUUID(issueID, filterIssue))
 	if err != nil {
 		return nil, err
 	}
@@ -588,7 +743,15 @@ LIMIT 20
 	out := []creativeMaterialCrawlRunResponse{}
 	for rows.Next() {
 		var item creativeMaterialCrawlRunResponse
-		if err := rows.Scan(&item.ID, &item.WorkspaceID, &item.IssueID, &item.ConnectorID, &item.QuerySummary, &item.Status, &item.ImportedCount, &item.ExistingCount, &item.TotalCount, &item.CreatedAt); err != nil {
+		if err := rows.Scan(
+			&item.ID, &item.WorkspaceID, &item.IssueID, &item.AutopilotRunID, &item.RerunOfID,
+			&item.ConnectorID, &item.QuerySummary, &item.AnalysisAgentID,
+			&item.Status, &item.ErrorCode, &item.ErrorMessage,
+			&item.ImportedCount, &item.ExistingCount, &item.TotalCount,
+			&item.CandidateMetrics.Total, &item.CandidateMetrics.Analyzed, &item.CandidateMetrics.AnalysisFailed,
+			&item.CandidateMetrics.Selected, &item.CandidateMetrics.Rejected,
+			&item.StartedAt, &item.FinishedAt, &item.CreatedAt,
+		); err != nil {
 			return nil, err
 		}
 		out = append(out, item)

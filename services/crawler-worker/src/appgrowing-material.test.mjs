@@ -7,6 +7,8 @@ import {
   appGrowingBrowserFallbackCompetitors,
   appGrowingCompetitorDiagnostics,
   appGrowingGraphQLDateWindow,
+  appGrowingBusinessProbeResult,
+  appGrowingGraphQLNeedsReauth,
   appGrowingGraphQLRequest,
   appGrowingMaterialDedupeKey,
   appGrowingMaterialURL,
@@ -14,8 +16,10 @@ import {
   appGrowingSelectionMixSummary,
   appGrowingShouldUseAdaptiveBrowserFallback,
   captureAppGrowingMaterialPage,
+  authCheckFromBody,
   connectorForID,
   connectorGraphQLHeaders,
+  connectorAuthVerificationError,
   extractAppGrowingMaterials,
   isBrowserPageCrashError,
   selectAppGrowingMaterials,
@@ -361,6 +365,35 @@ test("classifies AppGrowing GraphQL HTTP rejections as capture errors", async ()
   assert.match(result.error, /Language/);
 });
 
+test("runs AppGrowing GraphQL probes inside the authenticated browser page", async () => {
+  const connector = connectorForID("appgrowing");
+  const page = {
+    async evaluate(_callback, args) {
+      assert.equal(args.url, connector.graphQLURL);
+      assert.equal(args.data.operationName, "searchApp");
+      assert.equal(args.requestHeaders["accept-language"], "en");
+      assert.equal(args.requestHeaders.origin, undefined);
+      assert.equal(args.requestHeaders.referer, undefined);
+      assert.equal(args.requestHeaders["user-agent"], undefined);
+      return {
+        status: 200,
+        text: JSON.stringify({ data: { searchAppBrand: { data: [] } } }),
+      };
+    },
+  };
+
+  const result = await appGrowingGraphQLRequest(
+    page,
+    connector,
+    "searchApp",
+    "query searchApp { searchAppBrand { data } }",
+    { keyword: "Easycash" },
+  );
+
+  assert.equal(result.status, 200);
+  assert.deepEqual(result.body, { data: { searchAppBrand: { data: [] } } });
+});
+
 test("uses learned AppGrowing brand ids from adaptive strategy memory", () => {
   const brand = appGrowingBrandFromStrategyMemory({
     _adaptive_strategy_memory: {
@@ -394,6 +427,101 @@ test("enables adaptive browser fallback after GraphQL path failures", () => {
   assert.equal(appGrowingShouldUseAdaptiveBrowserFallback([], {
     memories: { easycash: { preferred_source: "browser_network" } },
   }), true);
+});
+
+test("treats AppGrowing application-level login expiry as unauthenticated", () => {
+  const connector = connectorForID("appgrowing");
+  const expired = {
+    errors: [{
+      message: "Login has expired",
+      extensions: { c: "05:403005", m: "Login has expired. Please log in again." },
+    }],
+  };
+
+  assert.equal(appGrowingGraphQLNeedsReauth(expired), true);
+  assert.equal(appGrowingGraphQLNeedsReauth({ data: { userinfo: { user_id: "user-1" } } }), false);
+  const authCheck = authCheckFromBody(expired, connector, 200, "test");
+  assert.match(authCheck.observed_at, /^\d{4}-\d{2}-\d{2}T/);
+  delete authCheck.observed_at;
+  assert.deepEqual(authCheck, {
+    authenticated: false,
+    method: "test",
+    http_status: 200,
+    user_id_present: false,
+    team_present: false,
+    plan_present: false,
+    upstream_error: "05:403005: Login has expired. Please log in again.",
+  });
+});
+
+test("requires both userinfo and searchApp access for AppGrowing verification", () => {
+  const baseAuth = {
+    authenticated: true,
+    method: "graphql_userinfo",
+    user_id_present: true,
+  };
+  const result = appGrowingBusinessProbeResult(baseAuth, {
+    status: 200,
+    body: { data: { searchAppBrand: { data: [] } } },
+  });
+
+  assert.equal(result.needsReauth, false);
+  assert.equal(result.verificationError, "");
+  assert.equal(result.authCheck.authenticated, true);
+  assert.equal(result.authCheck.method, "graphql_userinfo+searchApp");
+  assert.equal(result.authCheck.business_check.authenticated, true);
+});
+
+test("classifies searchApp login expiry as reauthentication instead of generic failure", () => {
+  const result = appGrowingBusinessProbeResult(
+    { authenticated: true, method: "graphql_userinfo", user_id_present: true },
+    {
+      status: 200,
+      body: {
+        errors: [{
+          message: "Login has expired",
+          extensions: { c: "05:403005", m: "Login has expired. Please log in again." },
+        }],
+      },
+    },
+  );
+
+  assert.equal(result.needsReauth, true);
+  assert.equal(result.verificationError, "");
+  assert.equal(result.authCheck.authenticated, false);
+  assert.match(result.authCheck.upstream_error, /05:403005/);
+});
+
+test("reports non-auth searchApp errors without guessing that login expired", () => {
+  const result = appGrowingBusinessProbeResult(
+    { authenticated: true, method: "graphql_userinfo", user_id_present: true },
+    {
+      status: 503,
+      body: null,
+      error: "appgrowing_graphql_http_503: upstream unavailable",
+    },
+  );
+
+  assert.equal(result.needsReauth, false);
+  assert.match(result.verificationError, /upstream unavailable/);
+  assert.equal(result.authCheck.authenticated, false);
+  assert.equal(result.authCheck.business_check.needs_reauth, false);
+});
+
+test("does not classify userinfo transport and upstream errors as expired login", () => {
+  assert.equal(connectorAuthVerificationError({
+    authenticated: false,
+    probe_error: "request timed out",
+  }), "request timed out");
+  assert.equal(connectorAuthVerificationError({
+    authenticated: false,
+    http_status: 503,
+  }), "userinfo verification returned HTTP 503");
+  assert.equal(connectorAuthVerificationError({
+    authenticated: false,
+    http_status: 200,
+    upstream_error: "05:403005: Login has expired. Please log in again.",
+  }), "");
 });
 
 test("falls back per competitor when only some GraphQL pages return material", () => {

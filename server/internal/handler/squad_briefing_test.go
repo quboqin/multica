@@ -31,6 +31,63 @@ func TestSquadOperatingProtocolWarnsAgainstDualTrigger(t *testing.T) {
 	}
 }
 
+func TestBuildTaskAwareSquadLeaderBriefing_CreativeDomainUsesDomainContract(t *testing.T) {
+	t.Parallel()
+
+	out := buildTaskAwareSquadLeaderBriefing(context.Background(), nil, db.Squad{}, []byte(`{
+  "type": "creative_domain_task",
+  "workflow": "creative_production"
+}`))
+
+	for _, want := range []string{
+		"## Creative Domain Task Protocol",
+		"task context and bound Skills are authoritative",
+		"domain objects and native task results",
+		"Issue limited to user decisions, genuine blockers, and final acceptance",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("creative-domain briefing missing %q\n--- briefing ---\n%s", want, out)
+		}
+	}
+	for _, banned := range []string{
+		"Squad Operating Protocol",
+		"Squad Roster",
+		"Squad Instructions",
+		"@mention",
+		"multica squad activity",
+		"child issue",
+	} {
+		if strings.Contains(out, banned) {
+			t.Errorf("creative-domain briefing must not contain generic squad protocol %q\n--- briefing ---\n%s", banned, out)
+		}
+	}
+}
+
+func TestIsCreativeDomainTaskContextRequiresExactTopLevelType(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		raw  string
+		want bool
+	}{
+		{name: "creative domain", raw: `{"type":"creative_domain_task"}`, want: true},
+		{name: "ordinary task", raw: `{"type":"issue_task"}`},
+		{name: "nested lookalike", raw: `{"payload":{"type":"creative_domain_task"}}`},
+		{name: "malformed", raw: `{"type":`},
+		{name: "empty"},
+	}
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := isCreativeDomainTaskContext([]byte(tt.raw)); got != tt.want {
+				t.Fatalf("isCreativeDomainTaskContext(%q) = %v, want %v", tt.raw, got, tt.want)
+			}
+		})
+	}
+}
+
 // seedSquadForBriefing creates a squad with the seeded test agent as
 // leader. Returns the loaded db.Squad and a cleanup-registered ID.
 func seedSquadForBriefing(t *testing.T, leaderID string, name, instructions string) db.Squad {
@@ -125,6 +182,10 @@ func TestBuildSquadLeaderBriefing_FullSquad(t *testing.T) {
 	addHumanMember(t, squad.ID, userID, "reviewer")
 
 	out := buildSquadLeaderBriefing(ctx, testHandler.Queries, squad)
+	taskAwareOut := buildTaskAwareSquadLeaderBriefing(ctx, testHandler.Queries, squad, []byte(`{"type":"issue_task"}`))
+	if taskAwareOut != out {
+		t.Fatalf("ordinary squad task briefing changed after task-aware routing\n--- want ---\n%s\n--- got ---\n%s", out, taskAwareOut)
+	}
 
 	for _, want := range []string{
 		"## Squad Operating Protocol",
@@ -283,6 +344,10 @@ func claimAndDecodeAgent(t *testing.T, runtimeID string) *TaskAgentData {
 // queueSquadIssueTaskFor creates an issue assigned to the squad and a queued
 // task for the given (agentID, runtimeID). Returns the issue + task IDs.
 func queueSquadIssueTaskFor(t *testing.T, squadID, agentID, runtimeID string, issueNumber int) (issueID, taskID string) {
+	return queueSquadIssueTaskWithContextFor(t, squadID, agentID, runtimeID, issueNumber, nil)
+}
+
+func queueSquadIssueTaskWithContextFor(t *testing.T, squadID, agentID, runtimeID string, issueNumber int, taskContext []byte) (issueID, taskID string) {
 	t.Helper()
 	ctx := context.Background()
 	if err := testPool.QueryRow(ctx, `
@@ -297,11 +362,14 @@ RETURNING id
 	}
 	t.Cleanup(func() { testPool.Exec(ctx, `DELETE FROM issue WHERE id = $1`, issueID) })
 
+	if len(taskContext) == 0 {
+		taskContext = []byte(`{}`)
+	}
 	if err := testPool.QueryRow(ctx, `
-INSERT INTO agent_task_queue (agent_id, runtime_id, issue_id, status, priority)
-VALUES ($1, $2, $3, 'queued', 0)
+INSERT INTO agent_task_queue (agent_id, runtime_id, issue_id, status, priority, context)
+VALUES ($1, $2, $3, 'queued', 0, $4)
 RETURNING id
-`, agentID, runtimeID, issueID).Scan(&taskID); err != nil {
+`, agentID, runtimeID, issueID, taskContext).Scan(&taskID); err != nil {
 		t.Fatalf("queue task: %v", err)
 	}
 	t.Cleanup(func() { testPool.Exec(ctx, `DELETE FROM agent_task_queue WHERE id = $1`, taskID) })
@@ -343,6 +411,47 @@ func TestClaimTask_LeaderGetsBriefing(t *testing.T) {
 	} {
 		if !strings.Contains(agent.Instructions, want) {
 			t.Errorf("expected agent.instructions to contain %q\n--- instructions ---\n%s", want, agent.Instructions)
+		}
+	}
+}
+
+func TestClaimTask_CreativeDomainLeaderGetsNoGenericSquadProtocol(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+	ctx := context.Background()
+
+	leaderID := createHandlerTestAgent(t, "Creative Domain Leader", []byte("[]"))
+	var runtimeID string
+	if err := testPool.QueryRow(ctx, `SELECT runtime_id FROM agent WHERE id = $1`, leaderID).Scan(&runtimeID); err != nil {
+		t.Fatalf("get leader runtime: %v", err)
+	}
+	squad := seedSquadForBriefing(t, leaderID, "Creative Domain Squad", "Delegate every step by mention.")
+	helperID := createHandlerTestAgent(t, "Creative Domain Helper", []byte("[]"))
+	addAgentMember(t, squad.ID, helperID, "producer")
+
+	taskContext, err := json.Marshal(map[string]any{
+		"type":     "creative_domain_task",
+		"workflow": "creative_production",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	queueSquadIssueTaskWithContextFor(t, util.UUIDToString(squad.ID), leaderID, runtimeID, 95003, taskContext)
+
+	agent := claimAndDecodeAgent(t, runtimeID)
+	if !strings.Contains(agent.Instructions, "## Creative Domain Task Protocol") {
+		t.Fatalf("creative-domain leader must receive the domain contract\n--- instructions ---\n%s", agent.Instructions)
+	}
+	for _, banned := range []string{
+		"## Squad Operating Protocol",
+		"## Squad Roster",
+		"## Squad Instructions",
+		"multica squad activity",
+		"Delegate every step by mention.",
+	} {
+		if strings.Contains(agent.Instructions, banned) {
+			t.Errorf("creative-domain leader must not receive generic squad briefing %q\n--- instructions ---\n%s", banned, agent.Instructions)
 		}
 	}
 }

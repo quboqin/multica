@@ -1,35 +1,29 @@
 ---
 name: multica-ad-creative-qc
-description: "当一张素材的三个创意九张成图或精准返工作用域齐备，需要批量进行二维码、可见文案、构图和金融合规终检时使用。"
+description: "对 Creative Order Variant 的 Prime 成图执行独立 technical 或 visual QC，并写入 native QC report 时使用。"
 allowed-tools: Bash(multica *), Bash(python *)
 ---
 
 # 广告成图终检
 
-当前运行时只挂载本 Skill，不要查找其他 Skill 的本地文件。确认 Issue 描述或评论中
-存在本轮候选 ID、文案记录及版本、市场资源包及版本、源成图附件 ID、服务端 QR 校验
-快照和包装脚本 JSON 证据。QR 校验快照必须为 `passed`，并包含三个 Prime 模板各自的机器
-解码值。缺少任一必需证据时，发布 `needs_input` 或 `QC FAIL`，不能
-用竞品内容补全。
+每个 variant/revision 必须有两个独立 native task，`creative_qc_technical` 和 `creative_qc_visual`。两者都从
+task context 读取完全相同且非空的 `expected_sizes`，再用
+`multica creative order get <order-id> --output json` 读取同一 variant、revision 中对应的
+`stage: "primed"` assets。标准生产检查三个尺寸；direct edit 检查本次发布的 1-3 个受影响尺寸。两 lane
+并发运行，不得合并成一个任务或将一个作为另一个的前置条件。每条任务仅写自己的 lane。
+QC 不创建 Issue；task、QC Report、机器 evidence 和根订单 Issue 上的去重收口评论共同构成留痕。
 
-初次交付时，一个 QC Issue 验收同一素材的 V01-V03 共九张成图；`creative_scope=variant` 验收
-指定变体三个尺寸，`creative_scope=size` 只验收 metadata 指定的一张，不等待或重复检查沿用
-尺寸；`creative_scope=batch` 只验收 metadata 明确列出的本轮 1-9 张变更图，不重复检查先前已经
-通过且附件未变化的尺寸。作用域内图片必须候选 ID、变体编号、文案版本和修订一致。先使用 Python
-`Path.mkdir(parents=True, exist_ok=True)` 显式、幂等地创建本 Issue 独立工作目录，确认目录存在后，
-再对作用域内 PNG 和
-JSON 证据分别执行
-`multica attachment download <attachment-id> --output-dir <验收目录>`；运行时支持并行工具调用时，
-一次并行发出全部下载，不要让多个下载进程同时负责首次创建同一目录，也不要先查询 attachment
-帮助或串行探索命令。
-本角色不生成图片。
+开始时校验 task context 的 `issue_id` 与订单 `issue_id` 一致，并保留 `leader_agent_id`。缺失或不一致
+属于委派契约错误，写失败 QC 报告后结束；不得按 Issue 标题、当前评论或 Agent 名称猜测。
 
-直接下载 Prime Issue 附件中原样的包装 manifest、`compose_result.json` 和作用域内最终图；如果
-Prime 已按契约提供这两份 JSON，不得从包装评论或其他 evidence 重新构造。包装 manifest 使用
-Prime 脚本原生的 `id/input/template/output/qr_payload` 作业字段；尺寸、状态和解码结果来自同 ID 的
-compose result。QC 工具直接兼容该原生契约，不得要求 Prime 改写成另一套
-`output_file/variant/size` 字段。下载后不要临时编写 Pillow/OpenCV 校验脚本。使用当前 Skill 自带
-工具一次完成尺寸、文件名、Prime 批次结果、QR 独立复解码、满版边缘和九宫格证据：
+下载全部 `expected_sizes` Prime 成图、原始 manifest 与 `compose_result.json`。集合缺失、重复、revision
+不一致或夹带未声明尺寸时，本 lane 必须失败。使用返回的 attachment ID：
+
+```bash
+multica attachment download <attachment-id> --output-dir <inspection-dir>
+```
+
+不得从其他来源重建 manifest，也不得临时编写 Pillow/OpenCV 校验脚本。先运行本 Skill 的工具：
 
 ```bash
 python <当前 Skill 目录>/references/qc_batch.py \
@@ -41,64 +35,69 @@ python <当前 Skill 目录>/references/qc_batch.py \
   --hard-region-sheet <qc-hard-region-sheet.png>
 ```
 
-脚本路径按运行时实际读取到的 `SKILL.md` 目录解析。原始 Prime 模板可以高于交付分辨率，包装脚本
-会按目标画布缩放；QC 不得因为模板原文件尺寸与最终图不同而误报失败。机器工具不替代后续语义、
-文案和遮挡人工判断。`edge_white_ratio_needs_visual_review` 只提示人工确认是否存在真实加边；浅色或
-白色满版设计不得仅凭边缘颜色判失败。
+该脚本检查尺寸、命名、Prime 批次结果、QR 独立复解码、满版边缘和九宫格证据。原 Prime 模板可高于交付
+分辨率，按目标画布缩放不是失败；`edge_white_ratio_needs_visual_review` 只是人工复核提示，浅色满版
+设计不得仅因边缘颜色判失败。
 
-机器检查通过后，先用脚本生成的九宫格接触表在原始分辨率做整批语义和构图复核。只有某个单元格
-存在文字、遮挡、对比度或数值歧义时，才单独打开对应原图；不得固定逐张再次打开九个文件。
-同时必须打开 `qc-hard-region-sheet.png` 的原始分辨率版本。红框是市场包 `hard_regions` 的真实 Prime
-资产矩形，也是唯一空间硬门槛；顶部和底部上下文切片只帮助放大观察，属于 `soft guide`，不能把
-整条切片当成硬区。关键内容进入软引导范围但没有与任何红框相交时不得判失败或要求返工。
+`technical` lane 验证文件完整性、目标尺寸、manifest/compose 对应关系、QR 解码、Prime 资产和
+`backdrop_rule`。`visual` lane 对照获批 `copy_snapshot`、brief 和对应 source/generated asset，验证可见
+文案、金融数值、主题、主体、业务语义、信息层级和图像质量。标准生产使用方形作为横竖版基线；direct
+edit 单尺寸检查与来源的保持，多尺寸只在 `expected_sizes` 内检查同内容族。二者都打开
+`qc-hard-region-sheet.png` 的原尺寸；只有 red-frame `hard_regions` 是空间硬区，顶部/底部切片是软引导。
 
-逐图检查每个红框：Logo/条款/QR/商店徽章/监管资产下方应是连续、低纹理且具有足够对比度的背景。
-Prime 资产不可读，或者 Prime 实际压住标题、批准金融数字、人脸、按钮、表格、关键卡片和正文，
-属于阻断问题。仅有装饰纹理、阴影、非关键背景元素进入红框，但 Prime 资产和全部关键内容仍清晰，
-记录质量警告，不得扩大成全图返工。
+真实 Prime 资产不可读，或实际压住标题、获批金融数字、人脸、按钮、表格、关键卡片或正文时是阻断。
+原始底图中的人物、手臂、模型、装饰或几何位置进入硬区本身不是阻断，不能在未看到合成图前误拦；
+仅装饰纹理、阴影、一般视觉平衡或非关键锚点偏差记 `quality_warnings`，不扩展为自动返工。
 
-候选
-锚点优先读取本 Issue 已注入的资源快照 `selected_item.creative_brief`，不要重复下载 30KB 以上的
-完整方案附件。机器 evidence、九宫格和逐图评论已经构成完整验收证据，不要再写脚本合并出一份
-重复的 `qc_evidence_final.json`。
+每条 lane 写出 `blocking_failures`、`quality_warnings`、逐尺寸 `checked_region_ids`、
+`actual_hard_regions_clear`、`prime_assets_readable`、`key_content_preserved`、机器 evidence 与人工结论。
+`blocking_failures` 非空时 `status` 必须是 `failed`，绝不能写成 `warning` 或 `passed`；`passed` 和
+`warning` 都要求 `blocking_failures=[]`。状态只能是 `passed`、`warning`、`failed` 或 `pending`。上传机器 evidence、九宫格和硬区图，取得 attachment
+ID 后将其放入 findings/evidence 引用；上传不支持时仅使用已有领域附件 ID 或请求 domain attachment API。
+写入：
 
-按正常观看比例检查最终像素，并把结论分成 `blocking_failures` 和 `quality_warnings`。只有下列问题
-可以进入 `blocking_failures`：文件缺失或损坏、尺寸/包装/二维码机器校验失败；任一 Prime Logo、
-条款二维码、商店徽章或监管标识缺失、损坏或无法正常辨认；竞品品牌、竞品二维码、竞品法律文字
-或竞品 App UI 残留；获批文案、金额、期限、利率或 `must_preserve` 关键内容缺失、被改写、事实错误
-或被实际遮挡到无法理解；严重破图。以上任一项存在才发布 `QC FAIL`。
+```bash
+multica creative order qc-put <order-id> --input-file <qc-report.json> --output json
+```
 
-视觉平衡、局部拥挤、装饰元素接近 Prime、一般性对比度不足、非关键视觉锚点偏差但主信息仍完整，
-都写入 `quality_warnings`。这些问题不得触发自动重做；整批没有阻断问题但存在警告时发布
-`QC PASS WITH WARNINGS`，让结果正常进入看板并留待用户用自然语言决定是否调整。
+`qc-report.json` 至少含：
 
-同时执行市场包 `prime_layout_contract.backdrop_rule`。同色或深色背景只有在导致 Logo、右上条款、
-二维码或底部监管资产无法正常辨认时才是阻断问题；资产仍清晰时只记录警告。二维码可解码不能
-替代其余 Prime 资产可见性。
+```json
+{
+  "variant_id": "<variant-id>",
+  "lane": "technical",
+  "revision": 1,
+  "status": "passed",
+  "findings": {
+    "expected_sizes": ["1080x1080", "1200x628", "800x1000"],
+    "checked_assets": ["..."],
+    "blocking_failures": [],
+    "quality_warnings": []
+  }
+}
+```
 
-同时把每个变体和原候选图、结构化 brief 对照，逐项检查 `source_semantics`、
-`information_mechanism`、`visual_anchors`、`palette_anchors` 和 `must_preserve`。获批文案、金融事实、
-`information_mechanism` 和 `must_preserve` 是不可变的关键内容：缺失、改写或换成另一件事必须
-`QC FAIL`。`visual_anchors` 和 `palette_anchors` 中未被列入 `must_preserve` 的一般风格偏差只记警告；
-只有 Issue 中存在用户明确原话时才能放开关键内容，并在 QC 证据中引用。
+写入当前 lane 后必须立即调用事务化 barrier，不再由 QC task 自己登记 delivered asset 或修改 variant：
 
-重新运行二维码机器解码，并把实际解码内容同时与输入快照的 `approved_payload`、
-`qr_payload` 和三个 Prime 模板的 `decoded_payload` 比对。任何一个值不同都必须 `QC FAIL`，
-不能只拿市场包里同一个自由文本字段自证。向 Issue 发布以 `QC PASS`、
-`QC PASS WITH WARNINGS`、`QC FAIL` 或 `needs_input` 开头的中文评论，并附机器 evidence JSON、九宫格和
-`qc-hard-region-sheet.png`。为作用域内每张图列出 `checked_region_ids`、`actual_hard_regions_clear`、
-`prime_assets_readable`、`key_content_preserved`、`blocking_failures` 和 `quality_warnings`。
-`actual_hard_regions_clear` 只判断真实红框，不得包含顶部/底部软引导。缺一张、缺一个字段或只写
-“整体无问题”都不得发布 PASS；这些字段是语义验收结论，不得直接复制机器 evidence 的 `passed`。
-先给整批摘要，再逐变体、逐尺寸
-列出来源图、二维码解码证据、关键内容检查、阻断问题和质量警告。只有阻断问题才给出精确重跑
-指令；一个尺寸失败时只要求重开该变体的该尺寸及其后续包装，不得重做其他变体或已通过尺寸。
-九张图可以在一次
-语义检查中共同读取；批量恢复也必须在一个 QC Issue 中共同读取，但每张必须有独立结论。作用域内
-所有图片通过即可置为 `done`；没有成图或
-解码器时，必须如实写 `needs_input`，不得声称验收通过。
+```bash
+multica creative order qc-finalize <order-id> \
+  --variant <variant-id> --revision <revision> --output json
+```
 
-硬区返工措辞必须限定为空间操作：写“把表格、人物或标题移出/缩放到对应 region ID 的矩形之外，
-并在该矩形内改为连续低纹理背景”，不得简写成“移除表格/人物”。返工指令必须明确获批文案、金额、
-期限、利率、`information_mechanism`、`must_preserve`、表格、人物和关键卡片继续保留；不得为了清空
-硬区删掉关键内容、改变业务语义，或把整张图退化为只剩利益点标题的泛海报。
+每条 lane 都调用一次。响应 `outcome=pending` 表示另一 lane 尚未完成，当前 task 立即结束，不轮询、不休眠；
+`created=false, finalized=true` 表示另一条 task 已完成收口，幂等退出。只有 `created=true` 的 winner 处理
+Issue 留痕：
+
+- `outcome=delivered`：服务已在同一事务把 `expected_sizes` Prime 资产登记为 delivered、完成 variant 并发送 Inbox；
+- `outcome=action_required`：服务只把 variant 标为需要处理并发送 Inbox，不自动创建返工 task；
+- `order_aggregate_status=completed` 时，用 UTF-8 `--content-file` 向 context 的 `issue_id` 写一条非 `/note`
+  收口评论，说明订单领域状态已全部完成并请 Leader 汇总；这会且只会唤醒一次 Leader；
+- 单个 variant 完成或阻断只写 `/note` 进度评论，不唤醒 Leader。结构化 findings 和建议作用域已经保存在
+  QC Report，评论不得复制模型日志。
+
+QC 不得自动返工。用户在高清对比工作区查看原图、成图和实际问题区域后，选择接受风险、局部调整、
+重做该变体或放弃。若选择调整，Leader 最多委派一轮，revision 加一；第二轮仍失败时停止模型调用。
+返工指令只能把关键内容移出对应矩形并在其中补连续低纹理背景，不能删除人物、表格、获批文案或改变
+业务语义。
+
+两 lane 的 `expected_sizes` 或其对应资产集合不一致也属于阻断，不得由任一 QC task 自行缩小检查范围。

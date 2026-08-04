@@ -736,8 +736,23 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 			// Creative Studio resources are workspace-scoped configuration.
 			r.Route("/api/creative", func(r chi.Router) {
 				r.Get("/materials", h.ListCreativeMaterialLibrary)
+				r.Get("/crawl-runs", h.ListCreativeCrawlRuns)
 				r.With(handler.RequireHumanActor).Post("/materials/import", h.ImportCreativeMaterialLibrary)
 				r.With(handler.RequireHumanActor).Post("/materials/archive/retry", h.RetryCreativeMaterialArchives)
+				r.Get("/source-analyses", h.ListCreativeSourceAnalyses)
+				r.Post("/source-analyses", h.CreateCreativeSourceAnalysis)
+				r.With(handler.RequireHumanActor).Post("/direct-edits", h.CreateCreativeDirectEdit)
+				r.Route("/orders", func(r chi.Router) {
+					r.Get("/", h.ListCreativeOrders)
+					r.Post("/", h.CreateCreativeOrder)
+					r.Route("/{id}", func(r chi.Router) {
+						r.Get("/", h.GetCreativeOrder)
+						r.Put("/variants", h.UpsertCreativeOrderVariant)
+						r.Put("/assets", h.UpsertCreativeOrderAsset)
+						r.Put("/qc-reports", h.UpsertCreativeOrderQC)
+						r.Post("/qc-finalize", h.FinalizeCreativeOrderQC)
+					})
+				})
 				r.Get("/resources", h.ListCreativeResources)
 				r.With(handler.RequireHumanActor).Post("/resources", h.CreateCreativeResource)
 				r.Route("/resources/{id}", func(r chi.Router) {
@@ -753,6 +768,10 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 				r.With(handler.RequireHumanActor).Post("/copy-libraries/{id}/entries/import", h.ImportCreativeCopyEntries)
 				r.With(handler.RequireHumanActor).Put("/copy-entries/{entryId}", h.UpdateCreativeCopyEntry)
 			})
+			r.Get("/api/creative-feedback-events", h.ListCreativeFeedbackEvents)
+			r.Get("/api/creative-feedback-events/metrics", h.GetCreativeFeedbackMetrics)
+			r.With(handler.RequireHumanActor).Post("/api/creative-feedback-events", h.CreateCreativeFeedbackEvent)
+			r.With(handler.RequireHumanActor).Post("/api/creative-feedback-events/{id}/undo", h.UndoCreativeFeedbackEvent)
 
 			// Issues
 			r.Route("/api/issues", func(r chi.Router) {
@@ -793,7 +812,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Post("/creative-deliveries/register", h.RegisterCreativeDeliveries)
 					r.With(handler.RequireHumanActor).Post("/creative-materials/{candidateId}/adjustments", h.CreateCreativeAdjustment)
 					r.With(handler.RequireHumanActor).Put("/creative-materials/{candidateId}/adjustments/{adjustmentId}/issue", h.BindCreativeAdjustmentIssue)
-					r.With(handler.RequireHumanActor).Put("/creative-context", h.PutCreativeIssueContext)
+					r.Put("/creative-context", h.PutCreativeIssueContext)
 					r.With(handler.RequireHumanActor).Put("/creative-materials/{candidateId}/copy", h.PutCreativeItemCopy)
 					r.Put("/creative-materials/{candidateId}/brief", h.PutCreativeItemBrief)
 					r.With(handler.RequireHumanActor).Put("/creative-materials/{candidateId}/work-issue", h.PutCreativeItemWorkIssue)
@@ -805,6 +824,13 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Delete("/metadata/{key}", h.DeleteIssueMetadataKey)
 					r.Get("/pull-requests", h.ListPullRequestsForIssue)
 				})
+			})
+
+			r.Route("/api/agents/{agentId}/tasks", func(r chi.Router) {
+				r.Post("/fanout", h.FanoutAgentTasks)
+				r.Get("/by-source", h.ListAgentTasksBySource)
+				r.Post("/by-source/cancel", h.CancelAgentTasksBySource)
+				r.Post("/by-source/retry-failed", h.RetryFailedAgentTasksBySource)
 			})
 
 			// Preview sessions

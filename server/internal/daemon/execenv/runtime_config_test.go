@@ -1,6 +1,7 @@
 package execenv
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -12,6 +13,7 @@ func TestBriefIncludesPlatformCreativeImageEditing(t *testing.T) {
 	t.Parallel()
 	out := buildMetaSkillContent("codex", TaskContextForEnv{IssueID: "11111111-2222-3333-4444-555555555555"})
 	for _, want := range []string{
+		"You are a coding agent in the Multica platform",
 		"### Image processing",
 		"`multica image edit",
 		"`multica image edit-batch",
@@ -22,6 +24,55 @@ func TestBriefIncludesPlatformCreativeImageEditing(t *testing.T) {
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("brief missing platform image editing guidance %q", want)
+		}
+	}
+}
+
+func TestCreativeDomainBriefDefersToDomainContractAndBoundSkills(t *testing.T) {
+	t.Parallel()
+
+	out := buildMetaSkillContent("codex", TaskContextForEnv{
+		TaskContext:   json.RawMessage(`{"type":"creative_domain_task","workflow":"creative_production"}`),
+		IsSquadLeader: true,
+		AgentSkills: []SkillContextForEnv{
+			{Name: "Creative Production", Description: "Execute the bound production stage."},
+		},
+	})
+
+	for _, want := range []string{
+		"You are an agent in the Multica platform",
+		"This is a structured creative-domain task",
+		"task context and bound Skills are authoritative",
+		"domain objects and native task results",
+		"Issue limited to user decisions, genuine blockers, and final acceptance",
+		"## Skills",
+		"Creative Production",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("creative-domain runtime brief missing %q\n--- brief ---\n%s", want, out)
+		}
+	}
+	for _, banned := range []string{
+		"You are a coding agent",
+		"### Image processing",
+		"attach the result to the Issue",
+		"post every material decision",
+		"## Comment Formatting",
+		"## Issue Metadata",
+		"## Instruction Precedence",
+		"You are responsible for managing the issue status",
+		"multica issue get  --output json",
+		"read the full comment history",
+		"Post your final results as a comment",
+		"## Sub-issue Creation",
+		"## Mentions",
+		"multica squad activity",
+		"post a comment mentioning the workspace owner",
+		"## Output",
+		"Final results MUST be delivered",
+	} {
+		if strings.Contains(out, banned) {
+			t.Errorf("creative-domain runtime brief must not contain generic Issue/Squad protocol %q\n--- brief ---\n%s", banned, out)
 		}
 	}
 }

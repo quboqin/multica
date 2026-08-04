@@ -80,12 +80,13 @@ type imageEditBatchResult struct {
 }
 
 type imageEditBatchSummary struct {
-	MaxConcurrency int                    `json:"max_concurrency"`
-	WallSeconds    float64                `json:"wall_seconds"`
-	Succeeded      int                    `json:"succeeded"`
-	Failed         int                    `json:"failed"`
-	Skipped        int                    `json:"skipped"`
-	Results        []imageEditBatchResult `json:"results"`
+	MaxConcurrency    int                    `json:"max_concurrency"`
+	ProviderSlotLimit int                    `json:"provider_slot_limit"`
+	WallSeconds       float64                `json:"wall_seconds"`
+	Succeeded         int                    `json:"succeeded"`
+	Failed            int                    `json:"failed"`
+	Skipped           int                    `json:"skipped"`
+	Results           []imageEditBatchResult `json:"results"`
 }
 
 var imageEditBatchJobIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
@@ -117,9 +118,14 @@ func runImageEditBatch(cmd *cobra.Command, _ []string) error {
 	if imageField == "" {
 		imageField = "image"
 	}
+	providerSlotLimit, err := configuredImageConcurrency()
+	if err != nil {
+		return err
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), cli.AtLeastAPITimeout(35*time.Minute))
 	defer cancel()
 	summary := executeImageEditBatch(ctx, http.DefaultClient, endpoint, apiKey, imageField, batch)
+	summary.ProviderSlotLimit = providerSlotLimit
 	if err := cli.PrintJSON(os.Stdout, summary); err != nil {
 		return err
 	}

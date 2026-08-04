@@ -36,7 +36,7 @@ var codexBlockedArgs = map[string]blockedArgMode{
 const (
 	codexStderrTailBytes                   = 2048
 	defaultCodexSemanticInactivityTimeout  = 10 * time.Minute
-	defaultCodexFirstTurnNoProgressTimeout = 30 * time.Second
+	defaultCodexFirstTurnNoProgressTimeout = 60 * time.Second
 	codexVersionDiagnosticTimeout          = 2 * time.Second
 	// Successful Codex runs have already emitted the final turn output. Keep
 	// their shutdown grace short so user-visible chat completion is not held
@@ -775,6 +775,7 @@ func (b *codexBackend) Execute(ctx context.Context, prompt string, opts ExecOpti
 		defer semanticTimer.Stop()
 
 		firstTurnNoProgressTimeout := codexFirstTurnNoProgressTimeout(semanticInactivityTimeout)
+		firstTurnNoProgressUsesSemanticTimer := firstTurnNoProgressTimeout == semanticInactivityTimeout
 		var firstTurnNoProgressTimer *time.Timer
 		var firstTurnNoProgressTimerC <-chan time.Time
 		firstTurnStarted := false
@@ -825,8 +826,10 @@ func (b *codexBackend) Execute(ctx context.Context, prompt string, opts ExecOpti
 				}
 				if activity == "status:running" && !firstTurnStarted {
 					firstTurnStarted = true
-					firstTurnNoProgressTimer = time.NewTimer(firstTurnNoProgressTimeout)
-					firstTurnNoProgressTimerC = firstTurnNoProgressTimer.C
+					if !firstTurnNoProgressUsesSemanticTimer {
+						firstTurnNoProgressTimer = time.NewTimer(firstTurnNoProgressTimeout)
+						firstTurnNoProgressTimerC = firstTurnNoProgressTimer.C
+					}
 				} else if firstTurnStarted && !firstTurnProgressObserved && isCodexFirstTurnProgressActivity(activity) {
 					firstTurnProgressObserved = true
 					stopFirstTurnNoProgressTimer()
@@ -857,6 +860,23 @@ func (b *codexBackend) Execute(ctx context.Context, prompt string, opts ExecOpti
 						"thread_id", threadID,
 						"turn_id", c.turnID,
 						"grace", codexFinalAnswerCompletionGrace.String(),
+						"last_activity", lastSemanticActivityDescription,
+					)
+				} else if firstTurnNoProgressUsesSemanticTimer && firstTurnStarted && !firstTurnProgressObserved {
+					finalStatus = "timeout"
+					timeoutDiagnostic = codexTimeoutDiagnostic{
+						Kind:         codexTimeoutFirstTurnNoProgress,
+						Timeout:      firstTurnNoProgressTimeout,
+						LastActivity: lastSemanticActivityDescription,
+						ThreadID:     threadID,
+						TurnID:       c.turnID,
+						Model:        opts.Model,
+					}
+					b.cfg.Logger.Warn(CodexFirstTurnNoProgressMarker,
+						"pid", cmd.Process.Pid,
+						"thread_id", threadID,
+						"turn_id", c.turnID,
+						"timeout", firstTurnNoProgressTimeout.String(),
 						"last_activity", lastSemanticActivityDescription,
 					)
 				} else {
@@ -1146,11 +1166,7 @@ func codexFirstTurnNoProgressTimeout(semanticInactivityTimeout time.Duration) ti
 	if semanticInactivityTimeout <= 0 || semanticInactivityTimeout > defaultCodexFirstTurnNoProgressTimeout {
 		return defaultCodexFirstTurnNoProgressTimeout
 	}
-	scaled := semanticInactivityTimeout * 4 / 5
-	if scaled <= 0 {
-		return semanticInactivityTimeout
-	}
-	return scaled
+	return semanticInactivityTimeout
 }
 
 func isCodexFirstTurnProgressActivity(activity string) bool {

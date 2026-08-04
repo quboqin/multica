@@ -7,7 +7,35 @@ import {
   isCreativeDeliveryFilename,
   recommendCopyEntries,
 } from "./creative-material-pool";
-import type { CreativeCopyEntry, CreativeMaterialCandidate } from "@multica/core/types";
+import type { CreativeBrief, CreativeCopyEntry, CreativeMaterialCandidate } from "@multica/core/types";
+
+function confirmedBrief(overrides: Partial<CreativeBrief> = {}): CreativeBrief {
+  return {
+    theme: "",
+    theme_elements: [],
+    primary_benefit: "",
+    secondary_benefits: [],
+    benefit_value: "",
+    source_semantics: "",
+    information_mechanism: "",
+    visual_anchors: [],
+    palette_anchors: [],
+    must_preserve: [],
+    allowed_variations: [],
+    evidence: [],
+    detected_text: [],
+    visual_type: "",
+    analysis_summary: "",
+    user_direction: "",
+    app_ui_replacement_required: false,
+    selected_app_ui_references: [],
+    status: "confirmed",
+    source: "mixed",
+    confidence: 0.96,
+    analysis_issue_id: "",
+    ...overrides,
+  };
+}
 
 describe("creative delivery filenames", () => {
   it("accepts the market pack naming rule and groups all sizes by its stable prefix", () => {
@@ -147,6 +175,9 @@ describe("creative delivery filenames", () => {
       detected_text: ["Potongan biaya 25%"],
       visual_type: "主题活动海报",
       analysis_summary: "足球赛事氛围承载降费主张",
+      user_direction: "",
+      app_ui_replacement_required: false,
+      selected_app_ui_references: [],
       status: "confirmed",
       source: "mixed",
       confidence: 0.96,
@@ -155,4 +186,65 @@ describe("creative delivery filenames", () => {
     expect(ranked[0]?.entry.id).toBe("fee");
     expect(ranked[0]?.reasons).toContain("主利益点：费用减免");
   });
+  it("uses the catalog keyword instead of a wrong legacy suggested type", () => {
+    const candidate = { id: "candidate-a", title: "", tags: [], media_names: [] } as unknown as CreativeMaterialCandidate;
+    const base = {
+      status: "approved",
+      tags: [],
+      subheadline: "",
+      benefit: "Limit hingga Rp80 juta dan bunga rendah",
+      cta: "",
+      copy_role: "PRIME DESIGN",
+      updated_at: "2026-08-01T00:00:00Z",
+    } as unknown as CreativeCopyEntry;
+    const ranked = recommendCopyEntries(candidate, [
+      { ...base, id: "rate", external_key: "rate", headline: "Bunga mulai 0,01%", metadata: { content_keyword: "RATE DOWN", suggested_copy_type: "fee_reduction" } },
+      { ...base, id: "fee", external_key: "fee", headline: "Tanpa biaya di awal", metadata: { content_keyword: "0% UANG MUKA", suggested_copy_type: "interest_free" } },
+    ], confirmedBrief({ primary_benefit: "费用减免" }));
+
+    expect(ranked[0]?.entry.id).toBe("fee");
+    expect(ranked[0]?.exactPrimaryMatch).toBe(true);
+    expect(ranked.find(({ entry }) => entry.id === "rate")?.exactPrimaryMatch).toBe(false);
+  });
+
+  it("uses bilingual theme tags only after the primary benefit matches", () => {
+    const candidate = { id: "candidate-a", title: "", tags: [], media_names: [] } as unknown as CreativeMaterialCandidate;
+    const base = {
+      status: "approved",
+      tags: [],
+      subheadline: "",
+      benefit: "",
+      cta: "",
+      copy_role: "PRIME DESIGN",
+      updated_at: "2026-08-01T00:00:00Z",
+      metadata: { primary_intent: "fee_reduction" },
+    } as unknown as CreativeCopyEntry;
+    const ranked = recommendCopyEntries(candidate, [
+      { ...base, id: "generic", external_key: "generic", headline: "Potongan biaya 25%" },
+      { ...base, id: "football", external_key: "football", headline: "Gol hemat biaya", metadata: { primary_intent: "fee_reduction", theme_tags: ["football"] } },
+    ], confirmedBrief({ theme: "世界杯 / 足球赛事", theme_elements: ["足球", "球场"], primary_benefit: "费用减免" }));
+
+    expect(ranked[0]?.entry.id).toBe("football");
+    expect(ranked[0]?.reasons).toContain("主题：足球赛事");
+  });
+
+  it("does not recommend a custom override created for another candidate", () => {
+    const candidate = { id: "candidate-a", title: "", tags: [], media_names: [] } as unknown as CreativeMaterialCandidate;
+    const override = {
+      id: "override",
+      external_key: "override",
+      status: "approved",
+      headline: "Issue 专属文案",
+      subheadline: "",
+      benefit: "",
+      cta: "",
+      copy_role: "issue_override",
+      tags: [],
+      metadata: { candidate_id: "candidate-b" },
+      updated_at: "2026-08-01T00:00:00Z",
+    } as unknown as CreativeCopyEntry;
+
+    expect(recommendCopyEntries(candidate, [override], confirmedBrief({ primary_benefit: "费用减免" }))).toHaveLength(0);
+  });
+
 });

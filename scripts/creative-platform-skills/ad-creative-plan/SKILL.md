@@ -1,84 +1,112 @@
 ---
 name: multica-ad-creative-plan
-description: "当 Multica Issue 已有广告参考分析 brief 和完整创意输入快照，需要规划 V01-V03 三个差异明确的创意母版及其三尺寸原生重排规格时使用。"
+description: "为 Creative Order 的候选素材规划 V01-V03 创意变体及三尺寸原生重排，并写入 native variant 领域记录时使用。"
 allowed-tools: Bash(multica *)
 ---
 
-# 广告生成方案
+# 广告创意方案
 
-读取完整 Issue、metadata 和评论。只使用输入快照中的用户确认或 AI 草稿创意简报、获批文案、
-品牌资产、QR 引用和尺寸，以及参考分析 brief；不要把竞品信息变成产品主张。创意简报中的
-`primary_benefit` 决定信息层级和文案焦点，`theme` 与 `theme_elements` 决定视觉表达；两者必须
-同时写入生成规格，不能用主题替换利益点。
+只使用 native Creative Order。开始时执行：
 
-先对父候选池执行 `multica creative materials <父 Issue> --selected --output json`，以目标候选的
-`copy_snapshot` 为文案唯一权威。方案只决定布局和信息层级，不得手工转抄、计算或修正金融数字。
-把 `copy_snapshot.id`、`version` 和需要展示的 headline/subheadline/benefit/cta/legal_text 原样引用到
-方案；任何金额、利率、期限或金融承诺必须逐字存在于该快照。若 Issue 描述、旧方案或模型记忆与
-快照冲突，使用快照并在方案中标出冲突来源，禁止声称错误转抄是“快照原文”。
+```bash
+multica creative order get <order-id> --output json
+```
 
-例如“世界杯 / 足球赛事 × 费用减免”应保持降费为主信息，用足球、球场、欢呼等通用视觉语言
-组织画面。除非市场资源快照含已批准赛事资产，禁止官方 Logo、球队徽章、官方奖杯造型、球星
-肖像或暗示赞助合作。主题不得引入文案库没有批准的新金融数字或承诺。
+Planner 的读取命令是封闭白名单：除上面的 `creative order get` 外，仅在订单只保存
+`source_analysis_id`、未内嵌对应分析结果时执行下文的 `creative source-analysis list`。不得调用不存在的
+`multica creative material get`，也不得读取面向旧 Issue 流程的 `creative materials`、`creative material
+download` 或 `creative context`。Planner 不读取原始图片像素；后续 Producer 使用 candidate ID 通过
+`creative library download` 获取归档原图。若订单或指定 Source Analysis 缺少规划必需字段，直接按下文
+写入 `action_required`，不要通过 `--help` 猜测其他素材读取命令。
 
-向同一 Issue 发布一份 3 x 3 生成清单。每张候选图固定规划 `V01`、`V02`、`V03` 三个创意
-变体；每个变体交付 `1080x1080`、`1200x628`、`800x1000` 三个尺寸，共九张最终成图。
-默认使用“同题变体”：三个变体必须同时继承 brief 的 `source_semantics`、
-`information_mechanism`、`visual_anchors`、`palette_anchors` 和 `must_preserve`。差异应来自版式骨架、
-信息组织、关键卡片形态或视觉处理，不能把业务场景换成另一件事，也不能脱离原图主色家族。
-“创意差异”不等于“换主题”。只有用户明确允许换场景、换信息机制或换色系时，才能越过对应
-锚点，并在方案中逐项引用用户原话作为放开依据。
+从目标 `item` 的 `copy_snapshot`、`direction`、关联 source analysis 与 order `input_snapshot` 读取获批文案、
+市场资源、用户方向和结构化锚点。`copy_snapshot` 是页面确认阶段已经推荐、选择或人工编辑后冻结的结果，
+也是金融数字、期限、利率和可见文案的唯一真值。Planner 不再次搜索文案库、不推荐、不替换、不拼接
+文案；竞品 `benefit_value`、`detected_text` 和分析证据只可作为创意观察，绝不成为展示事实。快照缺少表达
+主利益点的必要内容时，在变体 `brief` 中写明 `needs_input` 和缺失字段，并用 `variant-put` 写入
+`action_required`；不得猜测或补造内容。
 
-每个变体规格增加 `anchor_retention`，逐项说明如何保留原图业务语义、信息机制、视觉锚点和
-色系锚点。缺少任一说明时方案不完整。只改颜色、背景纹理、装饰物或镜头微调仍不算不同创意，
-但为了制造差异引入与原图无关的人物、家庭、住房、建设或其他场景同样不合格。三者共用用户
-确认的主题、主利益点、文案、金融事实和合规边界。
+市场规则的唯一来源是订单 `input_snapshot` 中冻结的已发布市场资源包 ID、版本、结构化 config 与附件
+ID。结构化 config 决定尺寸、文案库、QR、Prime 布局和合规规则；版本化附件提供实际 Prime、App UI 和
+品牌文件；`brand_guideline` Markdown 只做补充说明，不能覆盖结构化字段。不得读取本机 profile、固定
+路径或未冻结市场包的最新版本。冻结快照内部若互相冲突，写明冲突字段并进入 `action_required`，不自行
+选择一套规则。
 
-每个变体先给出一个 `1080x1080` 方形创意母版规格，再给出基于该母版的横版和竖版原生重排
-规格。重排规格必须明确把已通过的同变体母版作为第一图像输入，保持核心视觉概念、主体身份、
-文案和风格，但重新组织空间，不能裁切、加边、拉伸或从候选图重新发明另一套创意。三个母版
-之间没有依赖，应该同时执行；同一变体的横版与竖版仅依赖自己的母版，母版一通过即可同时执行。
+订单详情只保存 `source_analysis_id`、未内嵌对应分析结果时，按候选读取原始分析结果：
 
-生成清单对九个任务逐项包含：变体编号、任务类型（母版或重排）、完整原样提示词、目标尺寸、
-来源候选或附件 ID、第一图像输入、获批文案/资产记录 ID、必须保留元素、禁止元素、完整 Prime
-全部实际覆盖区避让约束，以及“禁止生成二维码、Logo、商店徽章、监管标识和合规页脚”。提示词
-必须要求每种尺寸原生构图。
+```bash
+multica creative source-analysis list --candidate-id <candidate-id> --output json
+```
 
-发布方案前，从九个提示词提取所有 `Rp...`、百分比、`JUTA`、`BULAN`、`HARI` 和 `TRILIUN`
-金融 token，与 `copy_snapshot` 原文逐项比对；出现快照中不存在的 token 时不得发布方案，必须修正。
-方案附件增加 `copy_snapshot_verification`，记录候选 ID、文案 ID、版本和 `passed=true`，但不要复制
-一份可独立漂移的“修正后数据表”。
+只使用与 `source_analysis_id` 和版本一致的 completed 记录，不得退回标题、标签或评论猜测分析结论。
 
-当前图片 provider 的竖版使用已实测可稳定返回 4:5 的 `1024x1280` 模型画布，再等比规范化为
-`800x1000`。不要使用会被网关降级成近似 2:3 的 `832x1040` 或 `1088x1360`，也不要规划额外裁切区。
+当 Source Analysis 的 `app_ui_detected=true` 时，由 Planner 在冻结市场附件中筛选
+`role=app_ui_reference`，根据 `app_ui_type`、附件 tags、页面结构和所需画布选择最匹配的品牌 UI。把附件
+ID、匹配依据和替换要求写入 Variant brief；不得沿用竞品 UI，也不得让分析智能体预选品牌附件。若参考
+图不含 App UI，则不选；若明确需要替换但冻结市场包没有兼容附件，写 `needs_input`，不从网络或本机补图。
 
-市场包配置存在 `prime_layout_contract` 时，直接使用其中每个尺寸的 `hard_regions` 和
-`backdrop_rule`。`hard_regions` 是 Prime PNG 实际不透明图文资产的坐标合同，也是唯一空间硬门槛；
-不要下载 Prime PNG、计算 alpha 边界或凭图片重新推导坐标。配置缺失时报告市场包需要补齐，不要在
-每个创意 Issue 内临时测量并形成另一套规则。
+每个目标 item 固定规划 `V01`、`V02`、`V03`。它们必须保留 `source_semantics`、
+`information_mechanism`、`visual_anchors`、`palette_anchors`、`must_preserve`、获批文案和合规边界；
+差异来自版式骨架、信息组织、关键卡片形态或视觉处理，而不是改换业务场景或主色家族。每个标准生产
+变体有同一内容族的三个 `expected_sizes`：`1080x1080`、`1200x628`、`800x1000`。方形是该变体母版，横竖版都是原生重排，
+保留同一主体身份、文案和信息层级，不得裁切、加边、拉伸或重新发明另一套创意。
 
-`top_key_content_exclusion_end`、`bottom_key_content_exclusion_start` 只用于生成读图证据时截取顶部和
-底部上下文，属于软引导，不能合并成全宽硬带，也不能据此要求中间区域之外完全没有内容。标题、
-数字、人脸、按钮、表格、卡片和正文可以使用顶部中央、底部中央或侧边空间，只要不与任何真实
-`hard_regions` 相交。外围缓冲区只要求尽量低纹理；空白卡片下缘、阴影或连续背景进入缓冲区不构成
-失败。不得凭经验扩大模板覆盖区，最终遮挡判断以 Prime 包装后的真实合成图为准。
+每个 `brief` 至少包含：
 
-每个尺寸方案必须有单独的 `prime_clearance_checklist`。逐一列出该尺寸每个 `hard_regions[].id`、
-精确坐标、标题/金融数字/人脸与手/按钮/表格/关键卡片/正文相对该矩形的避让方式和结论。布局坐标
-已经与真实硬区相交时必须在方案阶段移动该元素，不能删掉元素、改写文案、换掉信息机制或把冲突
-留给图片生成智能体猜测。V01-V03 和三个尺寸都要独立列出结论，禁止用一条通用描述覆盖九种布局。
-提示词必须明确：硬区内延续邻近的自然背景、颜色和低纹理，不生成白色留白、边框、占位框或任何
-品牌资产；硬区之外按原图语义正常构图。不得再生成“顶部关键内容避让带”或“底部关键内容避让带”。
+- `candidate_id`、来源素材 candidate ID、`copy_snapshot` ID/版本和冻结资源包 ID/版本；
+- `copy_adaptation`、完整原样提示词、禁止元素和必保元素；
+- V01-V03 各自的 `anchor_retention` 与三个尺寸的生成任务；
+- 每个尺寸的模型画布、目标尺寸、第一图像输入、内容一致性要求；
+- 原样的 `prime_layout_contract`，包括 `hard_regions` 与 `backdrop_rule`；
+- 每个 `hard_regions[].id` 的 `prime_clearance_checklist`，以及需要替换 App UI 时由本角色选择的
+  `selected_app_ui_reference_ids` 和选择依据。
 
-获批文案、金额、期限、利率、`information_mechanism`、`must_preserve` 和用户确认的关键内容是内容
-硬门槛。三个变体和三个尺寸只能重排这些内容，不能遗漏、概括、改写或用另一种场景替代。
+`hard_regions` 是后续 Prime 实际资产的坐标合同。布局时让标题、获批金融数字、人脸、按钮、表格、
+关键卡片和正文避开真实矩形；矩形内要求连续、低纹理背景且不生成二维码、Logo、商店徽章、监管标识或
+合规页脚。顶部/底部上下文范围只是软引导，不能扩大为整条硬带。原图已有的人物、手臂、模型、装饰或
+几何位置进入矩形，不是方案失败条件，也不得为了清空矩形删改关键内容；真实遮挡只由合成后的 QC 判断。
 
-若参考分析认定候选图含竞品 App UI，生成规格必须列出已选择的 `app_ui_reference` 资源文件
-ID 和附件 ID，并要求图像编辑把这些文件与候选图一起作为模型输入，用 AdaKami 真实界面替换
-竞品界面。不得让模型凭文字虚构 AdaKami 页面。若分析认定不含 App UI，不附加 UI 参考图。
+方形、横版、竖版的依赖必须写为：横版和竖版仅依赖同变体方形底图完成，方形完成后二者立即并发；
+不得等待 Prime 或 QC，也不得跨变体等待。
 
-快照不完整时，发布 `needs_input` 并列出缺失字段；完整时交接图像编辑阶段。本角色只产出
-生成规格，不调用图像模型、执行包装或 QC。
+用每个 item 的真实 `id` 写入三个变体：
 
-精准调整 Issue 的 metadata 含 `creative_adjustment_mode=replan` 时，只重新规划指定变体。
-必须以原候选图和结构化锚点为起点，不沿用已经偏题的上一版底图；未受影响变体保持不变。
+```bash
+multica creative order variant-put <order-id> --input-file <V01.json> --output json
+```
+
+`V01.json`、`V02.json`、`V03.json` 均为 JSON 对象，至少含：
+
+```json
+{
+  "order_item_id": "<item-id>",
+  "variant_key": "V01",
+  "brief": { "...": "完整结构化生成规格" },
+  "status": "queued"
+}
+```
+
+写入后以 `creative order get` 返回的 variant ID 为后续生产、Prime 和 QC 的唯一关联键。不要用会话状态、
+task context 或外部表保存交付状态。
+
+三个变体写入成功后，从当前 task context 或订单冻结的 squad snapshot 读取 `producer_agent_id`、
+`prime_agent_id` 和 `reviewer_agent_id`。先查询该 Order Item 已有的生产 task：
+
+```bash
+multica task by-source list --agent <producer-agent-id> \
+  --kind creative_order_item_production --ref <order-item-id> --output json
+```
+
+逐一按 `source + item_key` 检查三个变体。当某个 `<variant-id>:r<revision>` 没有 active/succeeded task，
+且该 revision 还没有完整 generated assets 时，把它加入 manifest；一个 source 下已有其他 variant task
+不能阻止缺失项继续委派。每项 `item_key` 为 `<variant-id>:r<revision>`，`context.type` 固定为
+`creative_domain_task`，并携带 `workflow: creative_production`、从当前 task 原样复制的 `issue_id`、
+`leader_agent_id`、order/item/variant/candidate ID、revision、
+`expected_sizes`、`prime_agent_id` 和 `reviewer_agent_id`。执行后立即结束，不等待生产结果：
+
+把 V01-V03 中所有就绪项放入同一个 manifest，一次 fanout；不得按变体串行调用三次，也不得等待某个
+production task 完成后才提交兄弟变体。
+
+```bash
+multica task fanout --agent <producer-agent-id> --input-file <production-manifest.json> --output json
+```

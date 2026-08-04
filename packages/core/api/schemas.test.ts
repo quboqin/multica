@@ -2,7 +2,14 @@ import { describe, expect, it } from "vitest";
 import {
   AppConfigSchema,
   CredentialCrawlResultSchema,
+  CreativeBriefSchema,
+  CreativeDirectEditResponseSchema,
+  CreativeFeedbackEventListResponseSchema,
+  CreativeOrderQCFinalizeResponseSchema,
+  CreativeOrderSchema,
+  CreateCreativeFeedbackResponseSchema,
   CreativeIssueContextSchema,
+  CreativeMaterialLibrarySchema,
   CreativeMaterialImportResultSchema,
   CreativeMaterialsResponseSchema,
   CreativeResourceFileListSchema,
@@ -119,6 +126,78 @@ describe("credential broker schemas", () => {
 });
 
 describe("creative material schemas", () => {
+  it("preserves workflow failures and defaults them for older creative orders", () => {
+    expect(CreativeOrderSchema.parse({ id: "order-1" }).workflow_failures).toEqual([]);
+    expect(CreativeOrderSchema.parse({
+      id: "order-1",
+      workflow_failures: [{
+        task_id: "task-1",
+        agent_id: "agent-1",
+        workflow: "creative_production",
+        scope: "order_item",
+        subject_id: "item-1",
+        item_key: "variant-a",
+        trigger_evidence_kind: "creative_order_item_production",
+        trigger_evidence_ref_id: "item-1",
+        failure_reason: "provider_rate_limited",
+        error: "429 Too Many Requests",
+        failed_at: "2026-08-04T12:00:00Z",
+        retryable: true,
+      }],
+    }).workflow_failures[0]).toEqual(expect.objectContaining({
+      task_id: "task-1",
+      workflow: "creative_production",
+      error: "429 Too Many Requests",
+      retryable: true,
+    }));
+    expect(CreativeOrderSchema.safeParse({ id: "order-1", workflow_failures: null }).success).toBe(false);
+  });
+
+  it("fails closed for malformed unified feedback responses", () => {
+    expect(CreateCreativeFeedbackResponseSchema.safeParse({ id: "feedback-1", annotation: { x: "not-a-number" } }).success).toBe(false);
+  });
+
+  it("defaults a partial QC finalization response and rejects null bodies", () => {
+    expect(CreativeOrderQCFinalizeResponseSchema.parse({ outcome: "delivered" })).toEqual(expect.objectContaining({
+      created: false, finalized: false, outcome: "delivered", delivered_asset_count: 0,
+    }));
+    expect(CreativeOrderQCFinalizeResponseSchema.safeParse(null).success).toBe(false);
+  });
+
+  it("parses direct image edit responses defensively", () => {
+    expect(CreativeDirectEditResponseSchema.parse({ order: { id: "order-1" }, source_asset: null })).toEqual(expect.objectContaining({
+      order: expect.objectContaining({ id: "order-1" }),
+      item: expect.objectContaining({ id: "" }),
+      source_asset: expect.objectContaining({ id: "" }),
+    }));
+    expect(CreativeDirectEditResponseSchema.safeParse(null).success).toBe(false);
+  });
+
+  it("accepts the backend empty annotation object without inventing a point", () => {
+    const parsed = CreativeFeedbackEventListResponseSchema.parse({ events: [{ id: "feedback-1", annotation: {} }] });
+    expect(parsed.events[0]?.annotation).toBeUndefined();
+    expect(parsed.events[0]?.idempotency_key).toBe("");
+  });
+
+  it("defaults a missing feedback list but rejects a null list", () => {
+    expect(CreativeFeedbackEventListResponseSchema.parse({})).toEqual({ events: [] });
+    expect(CreativeFeedbackEventListResponseSchema.safeParse({ events: null }).success).toBe(false);
+  });
+  it("defaults structured App UI selections from an older creative brief", () => {
+    const parsed = CreativeBriefSchema.parse({ status: "draft", source: "ai" });
+
+    expect(parsed.app_ui_replacement_required).toBe(false);
+    expect(parsed.selected_app_ui_references).toEqual([]);
+    expect(parsed.user_direction).toBe("");
+  });
+
+  it("rejects malformed App UI selections so the API fallback remains usable", () => {
+    expect(CreativeBriefSchema.safeParse({
+      app_ui_replacement_required: true,
+      selected_app_ui_references: null,
+    }).success).toBe(false);
+  });
+
   it("defaults recovery and archive fields from an older backend", () => {
     const parsed = CreativeMaterialsResponseSchema.parse({
       enabled: true,
@@ -132,6 +211,16 @@ describe("creative material schemas", () => {
 		expect(parsed.candidates[0]?.is_new_in_run).toBe(false);
 		expect(parsed.deliveries).toEqual([]);
 		expect(parsed.adjustments).toEqual([]);
+  });
+
+  it("keeps an unrun material library renderable and falls back on malformed Crawl Runs", () => {
+    expect(CreativeMaterialLibrarySchema.parse({ candidates: [] })).toEqual({ candidates: [], crawl_runs: [] });
+    expect(parseWithFallback(
+      { candidates: [], crawl_runs: null },
+      CreativeMaterialLibrarySchema,
+      { candidates: [], crawl_runs: [] },
+      { endpoint: "GET /api/creative/materials" },
+    )).toEqual({ candidates: [], crawl_runs: [] });
   });
 
   it("preserves structured deliveries and adjustment requests", () => {

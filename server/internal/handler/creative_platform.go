@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"strings"
@@ -14,6 +15,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
+	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
 type creativeResourceResponse struct {
@@ -90,25 +92,34 @@ type creativeIssueItemResponse struct {
 }
 
 type creativeBriefInput struct {
-	Theme                string   `json:"theme"`
-	ThemeElements        []string `json:"theme_elements"`
-	PrimaryBenefit       string   `json:"primary_benefit"`
-	SecondaryBenefits    []string `json:"secondary_benefits"`
-	BenefitValue         string   `json:"benefit_value"`
-	SourceSemantics      string   `json:"source_semantics"`
-	InformationMechanism string   `json:"information_mechanism"`
-	VisualAnchors        []string `json:"visual_anchors"`
-	PaletteAnchors       []string `json:"palette_anchors"`
-	MustPreserve         []string `json:"must_preserve"`
-	AllowedVariations    []string `json:"allowed_variations"`
-	Evidence             []string `json:"evidence"`
-	DetectedText         []string `json:"detected_text"`
-	VisualType           string   `json:"visual_type"`
-	AnalysisSummary      string   `json:"analysis_summary"`
-	Status               string   `json:"status"`
-	Source               string   `json:"source"`
-	Confidence           *float64 `json:"confidence"`
-	AnalysisIssueID      string   `json:"analysis_issue_id"`
+	Theme                    string                             `json:"theme"`
+	ThemeElements            []string                           `json:"theme_elements"`
+	PrimaryBenefit           string                             `json:"primary_benefit"`
+	SecondaryBenefits        []string                           `json:"secondary_benefits"`
+	BenefitValue             string                             `json:"benefit_value"`
+	SourceSemantics          string                             `json:"source_semantics"`
+	InformationMechanism     string                             `json:"information_mechanism"`
+	VisualAnchors            []string                           `json:"visual_anchors"`
+	PaletteAnchors           []string                           `json:"palette_anchors"`
+	MustPreserve             []string                           `json:"must_preserve"`
+	AllowedVariations        []string                           `json:"allowed_variations"`
+	Evidence                 []string                           `json:"evidence"`
+	DetectedText             []string                           `json:"detected_text"`
+	VisualType               string                             `json:"visual_type"`
+	AnalysisSummary          string                             `json:"analysis_summary"`
+	UserDirection            string                             `json:"user_direction"`
+	AppUIReplacementRequired bool                               `json:"app_ui_replacement_required"`
+	SelectedAppUIReferences  []creativeBriefAppUIReferenceInput `json:"selected_app_ui_references"`
+	Status                   string                             `json:"status"`
+	Source                   string                             `json:"source"`
+	Confidence               *float64                           `json:"confidence"`
+	AnalysisIssueID          string                             `json:"analysis_issue_id"`
+}
+
+type creativeBriefAppUIReferenceInput struct {
+	ResourceFileID string `json:"resource_file_id"`
+	AttachmentID   string `json:"attachment_id"`
+	Reason         string `json:"reason"`
 }
 
 type creativeCopyEntryInput struct {
@@ -170,6 +181,16 @@ func (h *Handler) ListCreativeMaterialLibrary(w http.ResponseWriter, r *http.Req
 	if !ok {
 		return
 	}
+	runID := pgtype.UUID{}
+	filterRun := false
+	if rawRunID := strings.TrimSpace(r.URL.Query().Get("run_id")); rawRunID != "" {
+		var parsed bool
+		runID, parsed = parseUUIDOrBadRequest(w, rawRunID, "run_id")
+		if !parsed {
+			return
+		}
+		filterRun = true
+	}
 	rows, err := h.DB.Query(r.Context(), `
 SELECT
   c.id::text, c.workspace_id::text, c.connector_id, COALESCE(c.external_id, ''),
@@ -181,19 +202,77 @@ SELECT
   COALESCE(NULLIF(latest.note, ''), c.note), COALESCE(latest.selected_at::text, ''),
   c.first_seen_at::text, c.last_seen_at::text, c.created_at::text, c.updated_at::text,
   COALESCE(c.source_attachment_id::text, ''), COALESCE(latest.status, 'new'),
-  COALESCE(latest.issue_id::text, ''), COALESCE(latest.source_run_id::text, ''), false
+  COALESCE(latest.issue_id::text, ''), COALESCE(run.run_id::text, ''),
+  COALESCE(run.is_new_in_run, false), COALESCE(run.analysis_status, 'pending'),
+  COALESCE(run.analysis_error, '')
 FROM creative_material_candidate c
 LEFT JOIN LATERAL (
-  SELECT ic.issue_id, ic.source_run_id, ic.status, ic.tags, ic.note, ic.selected_at
+  SELECT ic.issue_id, ic.status, ic.tags, ic.note, ic.selected_at
   FROM creative_material_issue_candidate ic
   WHERE ic.workspace_id = c.workspace_id AND ic.candidate_id = c.id
   ORDER BY ic.updated_at DESC
   LIMIT 1
 ) latest ON true
-WHERE c.workspace_id = $1
+LEFT JOIN LATERAL (
+  SELECT rc.run_id, rc.is_new_in_run,
+         CASE
+           WHEN rc.analysis_status = 'completed' THEN rc.analysis_status
+           WHEN EXISTS(
+             SELECT 1
+             FROM agent_task_queue task
+             WHERE task.trigger_evidence_kind = 'creative_crawl_run_analysis'
+               AND task.trigger_evidence_ref_id = rc.run_id
+               AND task.status = 'failed'
+               AND task.context->>'candidate_id' = rc.candidate_id::text
+           ) AND NOT EXISTS(
+             SELECT 1
+             FROM creative_source_analysis analysis
+             WHERE analysis.candidate_id = rc.candidate_id
+               AND analysis.trigger_evidence_kind = 'crawl_run'
+               AND analysis.trigger_evidence_ref_id = rc.run_id
+               AND analysis.status = 'completed'
+           ) THEN 'failed'
+           ELSE rc.analysis_status
+         END AS analysis_status,
+         CASE
+           WHEN rc.analysis_status = 'completed' THEN rc.analysis_error
+           WHEN EXISTS(
+             SELECT 1
+             FROM agent_task_queue task
+             WHERE task.trigger_evidence_kind = 'creative_crawl_run_analysis'
+               AND task.trigger_evidence_ref_id = rc.run_id
+               AND task.status = 'failed'
+               AND task.context->>'candidate_id' = rc.candidate_id::text
+           ) AND NOT EXISTS(
+             SELECT 1
+             FROM creative_source_analysis analysis
+             WHERE analysis.candidate_id = rc.candidate_id
+               AND analysis.trigger_evidence_kind = 'crawl_run'
+               AND analysis.trigger_evidence_ref_id = rc.run_id
+               AND analysis.status = 'completed'
+           ) THEN COALESCE((
+             SELECT NULLIF(task.error, '')
+             FROM agent_task_queue task
+             WHERE task.trigger_evidence_kind = 'creative_crawl_run_analysis'
+               AND task.trigger_evidence_ref_id = rc.run_id
+               AND task.status = 'failed'
+               AND task.context->>'candidate_id' = rc.candidate_id::text
+             ORDER BY task.completed_at DESC NULLS LAST, task.created_at DESC
+             LIMIT 1
+           ), 'analysis task failed before a source analysis was recorded')
+           ELSE rc.analysis_error
+         END AS analysis_error
+  FROM creative_material_crawl_run_candidate rc
+  JOIN creative_material_crawl_run cr ON cr.id = rc.run_id
+  WHERE rc.workspace_id = c.workspace_id AND rc.candidate_id = c.id
+    AND (NOT $2::boolean OR rc.run_id = $3)
+  ORDER BY cr.created_at DESC, rc.created_at DESC
+  LIMIT 1
+) run ON true
+WHERE c.workspace_id = $1 AND (NOT $2::boolean OR run.run_id IS NOT NULL)
 ORDER BY c.last_seen_at DESC
 LIMIT 500
-`, workspaceID)
+`, workspaceID, filterRun, nullableUUID(runID, filterRun))
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list creative material library")
 		return
@@ -214,6 +293,7 @@ LIMIT 500
 			&item.LanguageNames, &item.PlatformNames, &item.Tags, &item.Note, &selectedAt,
 			&item.FirstSeenAt, &item.LastSeenAt, &item.CreatedAt, &item.UpdatedAt,
 			&item.SourceAttachmentID, &item.Status, &item.SourceIssueID, &item.SourceRunID, &item.IsNewInRun,
+			&item.AnalysisStatus, &item.AnalysisError,
 		); err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to read creative material library")
 			return
@@ -225,7 +305,17 @@ LIMIT 500
 		}
 		candidates = append(candidates, item)
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"candidates": candidates})
+	if err := rows.Err(); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to read creative material library")
+		return
+	}
+	rows.Close()
+	runs, err := h.listCreativeCrawlRunsForWorkspace(r.Context(), workspaceID, pgtype.UUID{}, false)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to list creative crawl runs")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"candidates": candidates, "crawl_runs": runs})
 }
 
 func (h *Handler) RetryCreativeMaterialArchives(w http.ResponseWriter, r *http.Request) {
@@ -1045,12 +1135,26 @@ func (h *Handler) PutCreativeIssueContext(w http.ResponseWriter, r *http.Request
 	if !ok {
 		return
 	}
+	actorType, actorID := h.resolveActor(r, userID, uuidToString(issue.WorkspaceID))
+	if actorType == "agent" {
+		if !issue.AssigneeType.Valid || issue.AssigneeType.String != "squad" || issue.AssigneeID != squadID {
+			writeError(w, http.StatusForbidden, "agent can only bind the issue's assigned squad")
+			return
+		}
+		squad, err := h.Queries.GetSquadInWorkspace(r.Context(), db.GetSquadInWorkspaceParams{
+			ID:          squadID,
+			WorkspaceID: issue.WorkspaceID,
+		})
+		if err != nil || !creativeContextAgentCanBind(issue, squadID, actorID, squad) {
+			writeError(w, http.StatusForbidden, "only the assigned squad leader can bind creative context")
+			return
+		}
+	}
 	snapshot, err := h.buildCreativeIssueSnapshot(r.Context(), issue.WorkspaceID, marketPackID, squadID)
 	if err != nil {
 		writeError(w, http.StatusUnprocessableEntity, err.Error())
 		return
 	}
-	actorType, actorID := h.resolveActor(r, userID, uuidToString(issue.WorkspaceID))
 	requestingUserID := h.requestingUserIDFromRequest(r, actorType, actorID)
 	if !requestingUserID.Valid {
 		writeError(w, http.StatusForbidden, "requesting user not available")
@@ -1075,6 +1179,12 @@ RETURNING issue_id::text, workspace_id::text, market_pack_id::text,
 	}
 	h.publishCreativeMaterialsUpdated(issue.WorkspaceID, issue.ID, actorType, actorID)
 	writeJSON(w, http.StatusOK, context)
+}
+
+func creativeContextAgentCanBind(issue db.Issue, requestedSquadID pgtype.UUID, actorID string, squad db.Squad) bool {
+	return issue.AssigneeType.Valid && issue.AssigneeType.String == "squad" &&
+		issue.AssigneeID == requestedSquadID && squad.ID == requestedSquadID &&
+		squad.WorkspaceID == issue.WorkspaceID && uuidToString(squad.LeaderID) == actorID
 }
 
 func (h *Handler) PutCreativeItemCopy(w http.ResponseWriter, r *http.Request) {
@@ -1161,11 +1271,9 @@ func (h *Handler) PutCreativeItemBrief(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	var input creativeBriefInput
-	decoder := json.NewDecoder(r.Body)
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&input); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid creative brief")
+	input, err := decodeCreativeBrief(r.Body)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	brief, err := normalizeCreativeBrief(input)
@@ -1601,6 +1709,16 @@ func scanCreativeIssueItem(row rowScanner) (creativeIssueItemResponse, error) {
 	return item, err
 }
 
+func decodeCreativeBrief(reader io.Reader) (creativeBriefInput, error) {
+	var input creativeBriefInput
+	decoder := json.NewDecoder(reader)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&input); err != nil {
+		return creativeBriefInput{}, fmt.Errorf("invalid creative brief: %w", err)
+	}
+	return input, nil
+}
+
 func normalizeCreativeBrief(input creativeBriefInput) (creativeBriefInput, error) {
 	input.Theme = strings.TrimSpace(input.Theme)
 	input.PrimaryBenefit = strings.TrimSpace(input.PrimaryBenefit)
@@ -1609,6 +1727,7 @@ func normalizeCreativeBrief(input creativeBriefInput) (creativeBriefInput, error
 	input.InformationMechanism = strings.TrimSpace(input.InformationMechanism)
 	input.VisualType = strings.TrimSpace(input.VisualType)
 	input.AnalysisSummary = strings.TrimSpace(input.AnalysisSummary)
+	input.UserDirection = strings.TrimSpace(input.UserDirection)
 	input.AnalysisIssueID = strings.TrimSpace(input.AnalysisIssueID)
 	input.ThemeElements = normalizedCreativeBriefList(input.ThemeElements, 12)
 	input.SecondaryBenefits = normalizedCreativeBriefList(input.SecondaryBenefits, 12)
@@ -1618,7 +1737,18 @@ func normalizeCreativeBrief(input creativeBriefInput) (creativeBriefInput, error
 	input.AllowedVariations = normalizedCreativeBriefList(input.AllowedVariations, 16)
 	input.Evidence = normalizedCreativeBriefList(input.Evidence, 16)
 	input.DetectedText = normalizedCreativeBriefList(input.DetectedText, 32)
-	if len([]rune(input.Theme)) > 120 || len([]rune(input.PrimaryBenefit)) > 120 || len([]rune(input.BenefitValue)) > 160 || len([]rune(input.SourceSemantics)) > 300 || len([]rune(input.InformationMechanism)) > 300 || len([]rune(input.VisualType)) > 120 || len([]rune(input.AnalysisSummary)) > 2000 {
+	var err error
+	input.SelectedAppUIReferences, err = normalizedCreativeBriefAppUIReferences(input.SelectedAppUIReferences, 8)
+	if err != nil {
+		return creativeBriefInput{}, err
+	}
+	if len(input.SelectedAppUIReferences) > 0 {
+		input.AppUIReplacementRequired = true
+	}
+	if input.AppUIReplacementRequired && len(input.SelectedAppUIReferences) == 0 {
+		return creativeBriefInput{}, errors.New("creative brief requires at least one selected App UI reference")
+	}
+	if len([]rune(input.Theme)) > 120 || len([]rune(input.PrimaryBenefit)) > 120 || len([]rune(input.BenefitValue)) > 160 || len([]rune(input.SourceSemantics)) > 300 || len([]rune(input.InformationMechanism)) > 300 || len([]rune(input.VisualType)) > 120 || len([]rune(input.AnalysisSummary)) > 2000 || len([]rune(input.UserDirection)) > 2000 {
 		return creativeBriefInput{}, errors.New("creative brief field is too long")
 	}
 	switch input.Status {
@@ -1635,6 +1765,32 @@ func normalizeCreativeBrief(input creativeBriefInput) (creativeBriefInput, error
 		return creativeBriefInput{}, errors.New("creative brief confidence must be between 0 and 1")
 	}
 	return input, nil
+}
+
+func normalizedCreativeBriefAppUIReferences(values []creativeBriefAppUIReferenceInput, limit int) ([]creativeBriefAppUIReferenceInput, error) {
+	result := make([]creativeBriefAppUIReferenceInput, 0, min(len(values), limit))
+	seen := map[string]struct{}{}
+	for _, value := range values {
+		value.ResourceFileID = strings.TrimSpace(value.ResourceFileID)
+		value.AttachmentID = strings.TrimSpace(value.AttachmentID)
+		value.Reason = strings.TrimSpace(value.Reason)
+		if value.ResourceFileID == "" || value.AttachmentID == "" || value.Reason == "" {
+			return nil, errors.New("creative brief App UI references require resource_file_id, attachment_id, and reason")
+		}
+		if len([]rune(value.Reason)) > 300 {
+			return nil, errors.New("creative brief App UI reference reason is too long")
+		}
+		key := strings.ToLower(value.ResourceFileID + "\x00" + value.AttachmentID)
+		if _, exists := seen[key]; exists {
+			continue
+		}
+		seen[key] = struct{}{}
+		result = append(result, value)
+		if len(result) == limit {
+			break
+		}
+	}
+	return result, nil
 }
 
 func normalizedCreativeBriefList(values []string, limit int) []string {

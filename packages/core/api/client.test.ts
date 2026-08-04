@@ -832,3 +832,61 @@ describe("ApiClient", () => {
     });
   });
 });
+
+describe("creative feedback endpoint", () => {
+  it("posts the unified event contract and degrades malformed responses", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ event: { annotation: { x: "broken" } } }), { status: 200, headers: { "Content-Type": "application/json" } }));
+    vi.stubGlobal("fetch", fetchMock);
+    const client = new ApiClient("https://api.example.test");
+    const request = { idempotency_key: "submission-1:asset-1:report_issue:needs_revision", issue_id: "issue-1", subject_type: "asset" as const, subject_id: "asset-1", event_type: "report_issue", decision: "needs_revision" as const };
+    await expect(client.createCreativeFeedback(request)).resolves.toEqual(expect.objectContaining({ id: "", idempotency_key: "" }));
+    expect(fetchMock).toHaveBeenCalledWith("https://api.example.test/api/creative-feedback-events", expect.objectContaining({ method: "POST", body: JSON.stringify(request) }));
+  });
+
+  it("lists and undoes feedback through the append-only API", async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ events: [{ id: "feedback-1", annotation: {} }] }), { status: 200, headers: { "Content-Type": "application/json" } }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ id: "undo-1", event_type: "undo", undo_of_id: "feedback-1", annotation: {} }), { status: 201, headers: { "Content-Type": "application/json" } }));
+    vi.stubGlobal("fetch", fetchMock);
+    const client = new ApiClient("https://api.example.test");
+
+    await expect(client.listCreativeFeedback("candidate")).resolves.toEqual(expect.objectContaining({ events: [expect.objectContaining({ id: "feedback-1", annotation: undefined })] }));
+    await expect(client.undoCreativeFeedback("feedback-1")).resolves.toEqual(expect.objectContaining({ id: "undo-1", undo_of_id: "feedback-1" }));
+    expect(fetchMock).toHaveBeenNthCalledWith(1, "https://api.example.test/api/creative-feedback-events?subject_type=candidate", expect.any(Object));
+    expect(fetchMock).toHaveBeenNthCalledWith(2, "https://api.example.test/api/creative-feedback-events/feedback-1/undo", expect.objectContaining({ method: "POST" }));
+  });
+
+  it("finalizes QC through the atomic order endpoint and degrades malformed output", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ outcome: null }), { status: 200, headers: { "Content-Type": "application/json" } }));
+    vi.stubGlobal("fetch", fetchMock);
+    const client = new ApiClient("https://api.example.test");
+
+    await expect(client.finalizeCreativeOrderQC("order-1", "variant-1", 2)).resolves.toEqual(expect.objectContaining({ outcome: "pending", revision: 1 }));
+    expect(fetchMock).toHaveBeenCalledWith("https://api.example.test/api/creative/orders/order-1/qc-finalize", expect.objectContaining({
+      method: "POST", body: JSON.stringify({ variant_id: "variant-1", revision: 2 }),
+    }));
+  });
+
+  it("retries failed agent tasks using their exact source evidence", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ tasks: null }), { status: 201, headers: { "Content-Type": "application/json" } }));
+    vi.stubGlobal("fetch", fetchMock);
+    const client = new ApiClient("https://api.example.test");
+
+    await expect(client.retryFailedAgentTasksBySource("agent/1", "creative_order_variant_qc", "variant 1"))
+      .resolves.toEqual({ tasks: [] });
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://api.example.test/api/agents/agent%2F1/tasks/by-source/retry-failed?trigger_evidence_kind=creative_order_variant_qc&trigger_evidence_ref_id=variant+1",
+      expect.objectContaining({ method: "POST" }),
+    );
+  });
+
+  it("creates direct image edits through the atomic endpoint", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ order: { id: "order-1" }, item: {}, variant: {}, source_asset: {} }), { status: 201, headers: { "Content-Type": "application/json" } }));
+    vi.stubGlobal("fetch", fetchMock);
+    const client = new ApiClient("https://api.example.test");
+    const request = { issue_id: "issue-1", candidate_id: "candidate-1", user_request: "调整标题", target_size: "1080x1080" as const, delivery_mode: "preview" as const, squad_id: "squad-1" };
+
+    await expect(client.createCreativeDirectEdit(request)).resolves.toEqual(expect.objectContaining({ order: expect.objectContaining({ id: "order-1" }) }));
+    expect(fetchMock).toHaveBeenCalledWith("https://api.example.test/api/creative/direct-edits", expect.objectContaining({ method: "POST", body: JSON.stringify(request) }));
+  });
+});

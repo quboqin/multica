@@ -3513,6 +3513,194 @@ func TestGetTaskGCCheck(t *testing.T) {
 	}
 }
 
+func TestDirectTaskDaemonLifecycleUsesAgentWorkspace(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+	ctx := context.Background()
+	var agentID, runtimeID string
+	if err := testPool.QueryRow(ctx, `
+SELECT a.id, a.runtime_id FROM agent a WHERE a.workspace_id = $1 LIMIT 1
+`, testWorkspaceID).Scan(&agentID, &runtimeID); err != nil {
+		t.Fatalf("setup: get agent: %v", err)
+	}
+	contextJSON, _ := json.Marshal(map[string]any{
+		"type": "creative_domain_task", "workflow": "test_direct_lifecycle", "item_key": "candidate-1:v1",
+	})
+	var taskID string
+	if err := testPool.QueryRow(ctx, `
+INSERT INTO agent_task_queue (agent_id, runtime_id, status, priority, context)
+VALUES ($1, $2, 'dispatched', 0, $3) RETURNING id
+`, agentID, runtimeID, contextJSON).Scan(&taskID); err != nil {
+		t.Fatalf("setup: create direct task: %v", err)
+	}
+	t.Cleanup(func() { _, _ = testPool.Exec(ctx, `DELETE FROM agent_task_queue WHERE id = $1`, taskID) })
+
+	w := httptest.NewRecorder()
+	req := newDaemonTokenRequest(http.MethodPost, "/api/daemon/tasks/"+taskID+"/start", nil, testWorkspaceID, "direct-daemon")
+	req = withURLParam(req, "taskId", taskID)
+	testHandler.StartTask(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("start direct task: %d %s", w.Code, w.Body.String())
+	}
+
+	w = httptest.NewRecorder()
+	req = newDaemonTokenRequest(http.MethodPost, "/api/daemon/tasks/"+taskID+"/progress", TaskProgressRequest{Summary: "analyzing", Step: 1, Total: 1}, testWorkspaceID, "direct-daemon")
+	req = withURLParam(req, "taskId", taskID)
+	testHandler.ReportTaskProgress(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("progress direct task: %d %s", w.Code, w.Body.String())
+	}
+
+	w = httptest.NewRecorder()
+	req = newDaemonTokenRequest(http.MethodPost, "/api/daemon/tasks/"+taskID+"/complete", TaskCompleteRequest{Output: "done"}, testWorkspaceID, "direct-daemon")
+	req = withURLParam(req, "taskId", taskID)
+	testHandler.CompleteTask(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("complete direct task: %d %s", w.Code, w.Body.String())
+	}
+	var status string
+	if err := testPool.QueryRow(ctx, `SELECT status FROM agent_task_queue WHERE id = $1`, taskID).Scan(&status); err != nil {
+		t.Fatal(err)
+	}
+	if status != "completed" {
+		t.Fatalf("direct task status = %q, want completed", status)
+	}
+}
+
+func TestCompleteReferenceAnalysisTaskRequiresCompletedArtifact(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+	ctx := t.Context()
+	issueID, candidateID := createCreativeFeedbackCandidate(t, "missing reference analysis output")
+	var runID string
+	if err := testPool.QueryRow(ctx, `
+INSERT INTO creative_material_crawl_run (workspace_id, issue_id, connector_id, status, created_by_type, created_by_id)
+VALUES ($1, $2, 'test', 'completed', 'member', $3) RETURNING id::text
+`, testWorkspaceID, issueID, testUserID).Scan(&runID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := testPool.Exec(ctx, `
+INSERT INTO creative_material_crawl_run_candidate (run_id, candidate_id, workspace_id, is_new_in_run, analysis_status)
+VALUES ($1, $2, $3, true, 'running')
+`, runID, candidateID, testWorkspaceID); err != nil {
+		t.Fatal(err)
+	}
+
+	var agentID, runtimeID string
+	if err := testPool.QueryRow(ctx, `
+SELECT a.id, a.runtime_id FROM agent a WHERE a.workspace_id = $1 LIMIT 1
+`, testWorkspaceID).Scan(&agentID, &runtimeID); err != nil {
+		t.Fatal(err)
+	}
+	contextJSON, _ := json.Marshal(map[string]any{
+		"type":             "creative_domain_task",
+		"workflow":         "creative_reference_analysis",
+		"item_key":         candidateID + ":v1",
+		"candidate_id":     candidateID,
+		"crawl_run_id":     runID,
+		"analysis_version": 1,
+	})
+	var taskID string
+	if err := testPool.QueryRow(ctx, `
+INSERT INTO agent_task_queue (
+  agent_id, runtime_id, status, priority, context, trigger_evidence_kind, trigger_evidence_ref_id, started_at
+)
+VALUES ($1, $2, 'running', 0, $3, 'creative_crawl_run_analysis', $4, now()) RETURNING id::text
+`, agentID, runtimeID, contextJSON, runID).Scan(&taskID); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _, _ = testPool.Exec(t.Context(), `DELETE FROM agent_task_queue WHERE id = $1`, taskID) })
+
+	w := httptest.NewRecorder()
+	req := newDaemonTokenRequest(http.MethodPost, "/api/daemon/tasks/"+taskID+"/complete", TaskCompleteRequest{Output: "done"}, testWorkspaceID, "direct-daemon")
+	req = withURLParam(req, "taskId", taskID)
+	testHandler.CompleteTask(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("complete reference analysis task: %d %s", w.Code, w.Body.String())
+	}
+	var status, failureReason, taskError string
+	if err := testPool.QueryRow(ctx, `
+SELECT status, COALESCE(failure_reason, ''), COALESCE(error, '')
+FROM agent_task_queue WHERE id = $1
+`, taskID).Scan(&status, &failureReason, &taskError); err != nil {
+		t.Fatal(err)
+	}
+	if status != "failed" || failureReason != "creative_output_missing" {
+		t.Fatalf("task terminal state = (%q, %q), want (failed, creative_output_missing)", status, failureReason)
+	}
+	if !strings.Contains(taskError, "completed source analysis") {
+		t.Fatalf("task error = %q, want missing artifact explanation", taskError)
+	}
+}
+
+func TestCompleteReferenceAnalysisTaskAcceptsMatchingArtifact(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+	ctx := t.Context()
+	issueID, candidateID := createCreativeFeedbackCandidate(t, "completed reference analysis output")
+	var runID string
+	if err := testPool.QueryRow(ctx, `
+INSERT INTO creative_material_crawl_run (workspace_id, issue_id, connector_id, status, created_by_type, created_by_id)
+VALUES ($1, $2, 'test', 'completed', 'member', $3) RETURNING id::text
+`, testWorkspaceID, issueID, testUserID).Scan(&runID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := testPool.Exec(ctx, `
+INSERT INTO creative_material_crawl_run_candidate (run_id, candidate_id, workspace_id, is_new_in_run, analysis_status)
+VALUES ($1, $2, $3, true, 'completed');
+INSERT INTO creative_source_analysis (
+  workspace_id, candidate_id, analysis_version, status, summary, result,
+  trigger_evidence_kind, trigger_evidence_ref_id, completed_at
+)
+VALUES ($3, $2, 1, 'completed', 'done', '{}'::jsonb, 'crawl_run', $1, now())
+`, runID, candidateID, testWorkspaceID); err != nil {
+		t.Fatal(err)
+	}
+
+	var agentID, runtimeID string
+	if err := testPool.QueryRow(ctx, `
+SELECT a.id, a.runtime_id FROM agent a WHERE a.workspace_id = $1 LIMIT 1
+`, testWorkspaceID).Scan(&agentID, &runtimeID); err != nil {
+		t.Fatal(err)
+	}
+	contextJSON, _ := json.Marshal(map[string]any{
+		"type":             "creative_domain_task",
+		"workflow":         "creative_reference_analysis",
+		"item_key":         candidateID + ":v1",
+		"candidate_id":     candidateID,
+		"crawl_run_id":     runID,
+		"analysis_version": 1,
+	})
+	var taskID string
+	if err := testPool.QueryRow(ctx, `
+INSERT INTO agent_task_queue (
+  agent_id, runtime_id, status, priority, context, trigger_evidence_kind, trigger_evidence_ref_id, started_at
+)
+VALUES ($1, $2, 'running', 0, $3, 'creative_crawl_run_analysis', $4, now()) RETURNING id::text
+`, agentID, runtimeID, contextJSON, runID).Scan(&taskID); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _, _ = testPool.Exec(t.Context(), `DELETE FROM agent_task_queue WHERE id = $1`, taskID) })
+
+	w := httptest.NewRecorder()
+	req := newDaemonTokenRequest(http.MethodPost, "/api/daemon/tasks/"+taskID+"/complete", TaskCompleteRequest{Output: "done"}, testWorkspaceID, "direct-daemon")
+	req = withURLParam(req, "taskId", taskID)
+	testHandler.CompleteTask(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("complete reference analysis task: %d %s", w.Code, w.Body.String())
+	}
+	var status string
+	if err := testPool.QueryRow(ctx, `SELECT status FROM agent_task_queue WHERE id = $1`, taskID).Scan(&status); err != nil {
+		t.Fatal(err)
+	}
+	if status != "completed" {
+		t.Fatalf("task status = %q, want completed", status)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Membership Cache Integration Tests
 //

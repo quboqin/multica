@@ -596,8 +596,11 @@ export function useRealtimeSync(
     const unsubCreativeMaterialsUpdated = ws.on("creative_materials:updated", (p) => {
       const payload = p as CreativeMaterialsUpdatedPayload;
       const wsId = getCurrentWsId();
-      if (!wsId || !payload.issue_id) return;
-      qc.invalidateQueries({ queryKey: creativeKeys.issue(wsId, payload.issue_id) });
+      if (!wsId) return;
+      qc.invalidateQueries({ queryKey: creativeKeys.all(wsId) });
+      if (payload.issue_id) {
+        qc.invalidateQueries({ queryKey: creativeKeys.issue(wsId, payload.issue_id) });
+      }
     });
 
     const unsubIssueCreated = ws.on("issue:created", (p) => {

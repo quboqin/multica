@@ -13,6 +13,11 @@ export const creativeKeys = {
     [...creativeKeys.all(wsId), "copy-entries", libraryId] as const,
   issue: (wsId: string, issueId: string) =>
     [...creativeKeys.all(wsId), "issue", issueId] as const,
+  orders: (wsId: string) => [...creativeKeys.all(wsId), "orders"] as const,
+  order: (wsId: string, orderId: string) => [...creativeKeys.orders(wsId), orderId] as const,
+  analyses: (wsId: string) => [...creativeKeys.all(wsId), "source-analyses"] as const,
+  feedback: (wsId: string, subjectType = "", subjectId = "") =>
+    [...creativeKeys.all(wsId), "feedback", subjectType, subjectId] as const,
 };
 
 export const creativeMaterialLibraryOptions = (wsId: string) =>
@@ -49,3 +54,12 @@ export const creativeMaterialsOptions = (wsId: string, issueId: string) =>
     queryFn: () => api.getCreativeMaterials(issueId),
     enabled: !!wsId && !!issueId,
   });
+
+export const creativeOrdersOptions = (wsId: string) => queryOptions({ queryKey: creativeKeys.orders(wsId), queryFn: () => api.listCreativeOrders(), enabled: !!wsId });
+export const creativeOrderOptions = (wsId: string, orderId: string) => queryOptions({ queryKey: creativeKeys.order(wsId, orderId), queryFn: () => api.getCreativeOrder(orderId), enabled: !!wsId && !!orderId });
+export const creativeSourceAnalysesOptions = (wsId: string) => queryOptions({ queryKey: creativeKeys.analyses(wsId), queryFn: () => api.listCreativeSourceAnalyses(), enabled: !!wsId });
+export const creativeFeedbackOptions = (wsId: string, subjectType = "", subjectId = "") => queryOptions({
+  queryKey: creativeKeys.feedback(wsId, subjectType, subjectId),
+  queryFn: () => api.listCreativeFeedback(subjectType, subjectId),
+  enabled: !!wsId,
+});

@@ -76,6 +76,7 @@ func init() {
 	versionCmd.GroupID = groupAdditional
 
 	rootCmd.AddCommand(issueCmd)
+	rootCmd.AddCommand(taskCmd)
 	rootCmd.AddCommand(projectCmd)
 	rootCmd.AddCommand(planCmd)
 	rootCmd.AddCommand(kpiCmd)

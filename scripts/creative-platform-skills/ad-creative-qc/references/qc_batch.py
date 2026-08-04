@@ -141,6 +141,7 @@ def resolve_job_contract(job: dict, compose_item: dict, manifest: dict, images_d
     )
     return {
         "image_path": image_path,
+        "expected_output_name": output_name,
         "variant": variant,
         "size": size,
         "revision": revision,
@@ -162,6 +163,7 @@ def main() -> int:
         compose_item = compose_by_id.get(job.get("id"), {})
         contract = resolve_job_contract(job, compose_item, manifest, images_dir)
         image_path = contract["image_path"]
+        expected_output_name = contract["expected_output_name"]
         variant = contract["variant"]
         size = contract["size"]
         revision = contract["revision"]
@@ -182,7 +184,7 @@ def main() -> int:
         checks = {
             "exists": exists,
             "dimensions": actual_size == [expected_width, expected_height],
-            "filename": variant in image_path.name and (revision is None or f"_r{revision}" in image_path.name),
+            "filename": bool(expected_output_name) and image_path.name == expected_output_name,
             "compose": compose_item.get("status") == "succeeded" and compose_item.get("passed") is True,
             "qr": bool(approved_payload) and decoded == approved_payload and compose_item.get("decoded") == approved_payload,
             "full_bleed": white_ratio is not None and white_ratio < 0.5,

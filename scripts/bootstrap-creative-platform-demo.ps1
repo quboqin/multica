@@ -104,7 +104,7 @@ function Set-AgentDefinition {
         [string]$RuntimeID,
         [string]$Model = 'gpt-5.6-luna',
         [string]$ThinkingLevel = 'low',
-        [ValidateRange(1, 8)][int]$MaxConcurrentTasks = 3
+        [ValidateRange(1, 12)][int]$MaxConcurrentTasks = 3
     )
     $agents = Get-Items (Invoke-MulticaApi -Method Get -Path '/api/agents') ''
     $agent = $agents | Where-Object name -eq $Name | Select-Object -First 1
@@ -152,20 +152,37 @@ function Add-MarketFile {
     $files = Get-Items (Invoke-MulticaApi -Method Get -Path "/api/creative/resources/$($MarketPack.id)/files") 'files'
     $filename = [IO.Path]::GetFileName($Path)
     $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $Path).Hash.ToLowerInvariant()
+    $fileMetadata = @{} + $Metadata
+    $fileMetadata.sha256 = $hash
+    $fileMetadata.source_filename = $filename
     $roleFiles = @($files | Where-Object role -eq $Role)
     $matching = $roleFiles | Where-Object {
         $_.filename -eq $filename -and $_.metadata.sha256 -eq $hash
     } | Select-Object -First 1
-    if ($matching -and ($Multiple -or $roleFiles.Count -eq 1)) { return }
+    if ($matching -and ($Multiple -or $roleFiles.Count -eq 1)) {
+        $metadataMatches = @($matching.metadata.PSObject.Properties).Count -eq $fileMetadata.Count
+        foreach ($key in $fileMetadata.Keys) {
+            $actual = $matching.metadata.PSObject.Properties[$key]
+            if ($null -eq $actual -or
+                ($actual.Value | ConvertTo-Json -Depth 100 -Compress) -ne ($fileMetadata[$key] | ConvertTo-Json -Depth 100 -Compress)) {
+                $metadataMatches = $false
+                break
+            }
+        }
+        if ($matching.label -eq $Label -and $metadataMatches) { return }
+        Invoke-MulticaApi -Method Put -Path "/api/creative/resources/$($MarketPack.id)/files/$($matching.id)" -Body @{
+            role = $Role
+            label = $Label
+            metadata = $fileMetadata
+        } | Out-Null
+        return
+    }
     if (-not $Multiple) {
         foreach ($existing in $roleFiles) {
             Invoke-MulticaApi -Method Delete -Path "/api/creative/resources/$($MarketPack.id)/files/$($existing.id)" | Out-Null
         }
     }
     $uploaded = Invoke-RestMethod -Method Post -Uri "$ApiUrl/api/upload-file" -Headers $headers -Form @{ file = Get-Item -LiteralPath $Path }
-    $fileMetadata = @{} + $Metadata
-    $fileMetadata.sha256 = $hash
-    $fileMetadata.source_filename = $filename
     Invoke-MulticaApi -Method Post -Path "/api/creative/resources/$($MarketPack.id)/files" -Body @{
         attachment_id = $uploaded.id
         role = $Role
@@ -190,25 +207,27 @@ foreach ($legacy in $existingSkills | Where-Object {
     Invoke-MulticaApi -Method Delete -Path "/api/skills/$($legacy.id)" | Out-Null
 }
 
-$collectorSkill = Set-WorkspaceSkill -Name 'AppGrowing 素材采集' -Description '将自然语言筛选条件转换成真实 AppGrowing 多页查询，过滤工作区历史重复并补足平台新素材。' -Directory (Join-Path $skillTemplateRoot 'appgrowing-material-collector') -Config @{ kind = 'creative_role'; capability = 'material_collection'; version = 3 }
-$analysisSkill = Set-WorkspaceSkill -Name '广告参考分析' -Description '读取真实图片，识别主题、金融利益点、原图语义锚点、App UI 和构图风险，并回写平台创意简报。' -Directory (Join-Path $skillTemplateRoot 'ad-creative-analysis') -Config @{ kind = 'creative_role'; capability = 'reference_analysis'; version = 4 }
-$planSkill = Set-WorkspaceSkill -Name '广告生成方案' -Description '以平台文案快照为唯一权威，把原图语义锚点、主题和利益点转成 3 个同题创意变体及其三尺寸规格。' -Directory (Join-Path $skillTemplateRoot 'ad-creative-plan') -Config @{ kind = 'creative_role'; capability = 'generation_plan'; version = 11 }
-$productionSkill = Set-WorkspaceSkill -Name '广告图像编辑' -Description '一个变体内生成方形母版并发重排横竖版；执行文案快照校验、超时落盘恢复和作用域续跑。' -Directory (Join-Path $skillTemplateRoot 'ad-creative-production') -Config @{ kind = 'creative_role'; capability = 'image_edit'; version = 16 }
-$composeSkill = Set-WorkspaceSkill -Name 'Prime 完整贴图' -Description '从运行时动态资源 Skill 读取完整 Prime 资产；隔离输入并校验唯一文件名后批量包装九张图。' -Directory (Join-Path $skillTemplateRoot 'ad-creative-prime-compose') -Config @{ kind = 'creative_role'; capability = 'prime_compose'; version = 11 }
-$qcSkill = Set-WorkspaceSkill -Name '广告成图验收' -Description '初次生产批量验收九张图；恢复时在一个 Issue 内验收任意变更子集并沿用未变化结果。' -Directory (Join-Path $skillTemplateRoot 'ad-creative-qc') -Config @{ kind = 'creative_role'; capability = 'quality_control'; version = 11 }
+$collectorSkill = Set-WorkspaceSkill -Name 'AppGrowing 素材采集' -Description '创建 Crawl Run，执行真实 AppGrowing 多页采集，并用原生 task fanout 自动预分析新增图片。' -Directory (Join-Path $skillTemplateRoot 'appgrowing-material-collector') -Config @{ kind = 'creative_role'; capability = 'material_collection'; version = 9 }
+$analysisSkill = Set-WorkspaceSkill -Name '广告参考分析' -Description '市场中立地读取真实图片，识别主题、金融利益点、原图语义锚点、App UI 类型和通用布局。' -Directory (Join-Path $skillTemplateRoot 'ad-creative-analysis') -Config @{ kind = 'creative_role'; capability = 'reference_analysis'; version = 11 }
+$planSkill = Set-WorkspaceSkill -Name '广告生成方案' -Description '消费已确认文案和冻结市场快照，选择品牌 UI 并规划 3 个同题创意变体。' -Directory (Join-Path $skillTemplateRoot 'ad-creative-plan') -Config @{ kind = 'creative_role'; capability = 'generation_plan'; version = 18 }
+$productionSkill = Set-WorkspaceSkill -Name '广告图像编辑' -Description '一个变体 task 内生成方形母版并发重排横竖版；三尺寸共享内容族和修订。' -Directory (Join-Path $skillTemplateRoot 'ad-creative-production') -Config @{ kind = 'creative_role'; capability = 'image_edit'; version = 20 }
+$directEditSkill = Set-WorkspaceSkill -Name '广告图片直接修改' -Description '基于用户自然语言和指定底图执行自由修改；正式交付按 expected_sizes 补 Prime 与独立 QC。' -Directory (Join-Path $skillTemplateRoot 'ad-creative-direct-edit') -Config @{ kind = 'creative_role'; capability = 'direct_image_edit'; version = 5 }
+$composeSkill = Set-WorkspaceSkill -Name 'Prime 完整贴图' -Description '按变体一次包装 expected_sizes，并把最终图和逐图机器证据写入领域资产。' -Directory (Join-Path $skillTemplateRoot 'ad-creative-prime-compose') -Config @{ kind = 'creative_role'; capability = 'prime_compose'; version = 16 }
+$qcSkill = Set-WorkspaceSkill -Name '广告成图验收' -Description '通过并发技术 QC 与视觉 QC 检查 expected_sizes 的四角、画质和内容一致性。' -Directory (Join-Path $skillTemplateRoot 'ad-creative-qc') -Config @{ kind = 'creative_role'; capability = 'quality_control'; version = 19 }
 
 $agents = Get-Items (Invoke-MulticaApi -Method Get -Path '/api/agents') ''
 $leaderSeed = $agents | Where-Object name -eq '素材小队 Leader' | Select-Object -First 1
 if (-not $leaderSeed) { throw '素材小队 Leader does not exist' }
 $runtimeID = $leaderSeed.runtime_id
 
-$collector = Set-AgentDefinition -Name 'AppGrowing 素材采集智能体' -Description '逐竞品多页采集并将真实结果导入父 Issue 候选池。' -Instructions '全程使用中文。只执行当前采集子 Issue 指定的真实 AppGrowing 查询。逐家核对普通竞品至少 3 页、优先竞品至少 5 页；过滤工作区历史重复后仍不足目标数量时继续按竞品轮询翻页，直到凑足平台新素材、达到预算或没有更多结果。单家接口为空或失败时对该家启用 Playwright 补查。结果只进入父 Issue 原生候选池，逐页证据与失败原因留在当前子 Issue。' -SkillIDs @($collectorSkill.id) -RuntimeID $runtimeID -MaxConcurrentTasks 2
-$specialistHandoff = '完成后把全部过程、附件和证据留在当前专业子 Issue并将其置为 done。平台会自动向直接父 Issue 发送最小完成回执并唤醒小队；不要手工评论父 Issue，也不要 @Leader，以免重复触发。'
-$analyst = Set-AgentDefinition -Name '广告参考分析智能体' -Description '逐图读取真实像素，识别主题、利益点、原图锚点和构图风险。' -Instructions "全程使用中文。只分析当前专业子 Issue 指定的候选图和市场资源快照；候选可以尚未被用户选择。必须读取真实图片像素，分别识别视觉主题、金融主利益点、业务语义、信息机制、视觉锚点和色系锚点，把结构化创意简报回写目标候选池；采集标题、标签和媒体只能弱辅助。详细证据留在当前子 Issue，不生成图片。$specialistHandoff" -SkillIDs @($analysisSkill.id) -RuntimeID $runtimeID -Model 'gpt-5.6-sol' -ThinkingLevel 'low' -MaxConcurrentTasks 4
-$planner = Set-AgentDefinition -Name '生成方案智能体' -Description '把逐图输入快照转成 3 个同题创意变体和三尺寸生成规格。' -Instructions "全程使用中文。读取当前专业子 Issue 引用的参考分析、逐图文案和市场资源快照，默认保持原图业务语义、信息机制、关键视觉和主色家族，输出 V01、V02、V03 三个在版式与信息组织上差异明确的创意母版规格，以及每个母版的横版和竖版原生重排约束。只有用户明确放开时才能换场景或换色系。只在当前子 Issue 讨论提示词和取舍，不生成图片。$specialistHandoff" -SkillIDs @($planSkill.id) -RuntimeID $runtimeID -Model 'gpt-5.6-terra' -ThinkingLevel 'medium' -MaxConcurrentTasks 3
-$producer = Set-AgentDefinition -Name '图像编辑智能体' -Description '在一个变体 Issue 内完成方形母版和并发横竖版，也支持作用域内精准返工与依赖尺寸续跑。' -Instructions "全程使用中文。初次生产时，一个专业子 Issue 负责一个创意变体的三个尺寸：先用平台 image edit 生成并检查 1080x1080 方形母版，再用 image edit-batch 同轮并发生成 1200x628 横版和 800x1000 竖版；竖版模型画布首轮固定使用 1024x1280，只有实际返回比例错误时才允许用 1280x1600 重试一次。横版和竖版必须把已通过的方形母版作为第一参考做原生重排。scope=dependent_sizes 时复用指定方形附件并只生成 missing_sizes，禁止重做 accepted_size_attachment_ids 已列出的通过尺寸。规范化脚本成功即表示比例通过，不能因原始 PNG 像素与请求值不完全相等而重做。一次回传作用域内尺寸的来源、提示词、模型、请求 ID、尝试次数、耗时和附件。Prime 合并避让带只用于首轮提示，底图不得因坐标推测遮挡而重试或阻断；真实资产可见性由 Prime 成图和 QC 判断。精准返工严格按结构化作用域执行一张、三张或 affected_sizes 子集；同一变体多个安全区失败必须放在一个 image edit-batch，不拆 Issue。普通返工把各尺寸上一版无品牌底图作为对应 job 第一输入，creative_adjustment_mode=replan 时改用原候选图。默认保持原图业务语义、信息机制、关键视觉和主色家族。不得把带 Prime 和二维码的最终成图作为第一输入，不得裁切、加边、拉伸或添加二维码与合规贴图。候选图含竞品 App UI 时，必须同时输入分析成员选中的 AdaKami App UI 参考图并完成替换。$specialistHandoff" -SkillIDs @($productionSkill.id) -RuntimeID $runtimeID -Model 'gpt-5.6-terra' -ThinkingLevel 'low' -MaxConcurrentTasks 5
-$composer = Set-AgentDefinition -Name 'Prime 包装智能体' -Description '初次生产批量包装九张图，恢复时批量包装任意变更子集。' -Instructions "全程使用中文。初次生产时，一个专业子 Issue 处理 V01-V03 的九张底图，使用 Skill 自带的批量确定性合成脚本一次完成对应尺寸的完整 Prime 贴图和二维码机器校验。精准返工按上层结构化作用域处理一张、一个变体三张或同轮恢复的任意 1-9 张变更子集；不能按失败图片数拆 Issue。只读取当前专业子 Issue 引用的版本化资源附件，不得使用本机固定素材路径。成功结果、逐图校验证据和失败项只留在当前子 Issue；单项失败不得丢弃其他成功项。$specialistHandoff" -SkillIDs @($composeSkill.id) -RuntimeID $runtimeID -Model 'gpt-5.6-terra' -ThinkingLevel 'low' -MaxConcurrentTasks 4
-$reviewer = Set-AgentDefinition -Name '广告验收智能体' -Description '初次生产批量验收九张图，恢复时批量验收任意变更子集。' -Instructions "全程使用中文。初次生产时，一个专业子 Issue 验收 V01-V03 的九张最终成图；精准返工按上层结构化作用域验收一张、一个变体三张或同轮恢复的任意 1-9 张变更子集。九张图或恢复子集可以共同读取，但必须逐图给出独立结论。逐项对照原图锚点检查业务语义、信息机制、关键视觉和主色家族，再检查尺寸、满版构图、批准文案、完整 Prime 资产、二维码解码和合规风险；失败时只指出需重开的具体变体和尺寸，已通过结果继续沿用。$specialistHandoff" -SkillIDs @($qcSkill.id) -RuntimeID $runtimeID -Model 'gpt-5.6-terra' -ThinkingLevel 'medium' -MaxConcurrentTasks 3
+$specialistHandoff = '只处理 task context 明确指定的领域对象、修订和作用域。结构化交付与证据写回 Creative Order、Variant、Asset、Source Analysis 或 QC Report；不要新建或修改 Issue，不要 @Leader，不要用评论代替领域数据。出现凭证、输入或工具问题时写入当前对象的 error_code/error_message 并让 task 失败；兄弟对象继续执行。'
+$analyst = Set-AgentDefinition -Name '广告参考分析智能体' -Description '逐图读取真实像素，市场中立地识别主题、利益点、原图锚点、App UI 类型和通用布局。' -Instructions "全程使用中文。只分析 task context 指定的 candidate_id 和 Crawl Run；候选可以尚未被用户选择。优先读取平台归档图片，归档尚未完成时读取采集保存的真实源图片，分别识别视觉主题、金融主利益点、业务语义、信息机制、视觉锚点、色系锚点、App UI 通用类型和布局约束，把结果写入 Source Analysis；标题、标签和媒体只能弱辅助。不得读取或选择品牌市场包、App UI 附件或 Prime 资产，不生成图片。$specialistHandoff" -SkillIDs @($analysisSkill.id) -RuntimeID $runtimeID -Model 'gpt-5.6-luna' -ThinkingLevel 'low' -MaxConcurrentTasks 6
+$collector = Set-AgentDefinition -Name 'AppGrowing 素材采集智能体' -Description '运行 Crawl Run，导入真实素材并并发委派新增图片预分析。' -Instructions "全程使用中文。只执行 task context 指定的真实 AppGrowing 查询。广告参考分析智能体 ID 固定为 $($analyst.id)，必须作为 analysis_agent_id 写入 Crawl Run 参数并用于 fanout，不得按名称猜测。逐家核对普通竞品至少 3 页、优先竞品至少 5 页；过滤工作区历史重复后继续轮询翻页，直到凑足平台新素材、达到预算或没有更多结果。单家接口为空或失败时对该家启用 Playwright 补查。结果、逐页证据和失败原因写入 Crawl Run；采集入库后立即用原生 task fanout 委派本次新增图片，分析优先读取平台归档，归档未完成时回退到真实源图片。不得创建 Issue 或使用测试数据。" -SkillIDs @($collectorSkill.id) -RuntimeID $runtimeID -MaxConcurrentTasks 2
+$planner = Set-AgentDefinition -Name '生成方案智能体' -Description '消费已确认文案和冻结市场快照，把订单项转成 3 个同题创意变体。' -Instructions "全程使用中文。读取 task context 指定的 Order Item、Source Analysis、copy_snapshot 和冻结市场资源快照；不得重新推荐、选择、拼接或改写文案。需要替换 App UI 时，由本角色根据分析的通用 UI 类型从冻结市场附件中选择最匹配的品牌 UI。保持原图业务语义、信息机制、关键视觉和主色家族，写入 V01、V02、V03 三个版式与信息组织差异明确的 Variant 规格。三个变体就绪后放入同一个 manifest 一次 fanout 给图像编辑智能体，不得串行委派。只有用户明确放开时才能换场景或换色系。不生成图片。$specialistHandoff" -SkillIDs @($planSkill.id) -RuntimeID $runtimeID -Model 'gpt-5.6-terra' -ThinkingLevel 'medium' -MaxConcurrentTasks 3
+$producer = Set-AgentDefinition -Name '图像编辑智能体' -Description '执行标准变体三尺寸生产和精准返工。' -Instructions "全程使用中文。只执行广告图像编辑 Skill 的 creative_production task。初次生产时一个 task 负责一个 Variant：生成 1080x1080 方形母版后，立即把它作为第一参考并发原生重排 1200x628 和 800x1000；三张共享 asset_family_id、批准文案、业务语义、人物和产品。只恢复 missing_sizes，禁止重做已通过尺寸。底图硬区风险交给 Prime/QC 对最终图判断。普通返工使用上一版对应无品牌底图，replan 使用原候选图；不得把带 Prime 的最终图作为第一输入。不得处理 direct_edit，不得触发采集、参考分析或三变体规划。$specialistHandoff" -SkillIDs @($productionSkill.id) -RuntimeID $runtimeID -Model 'gpt-5.6-terra' -ThinkingLevel 'low' -MaxConcurrentTasks 3
+$directEditor = Set-AgentDefinition -Name '图片直接修改智能体' -Description '只按用户自然语言修改指定 expected_sizes 的固定来源底图。' -Instructions "全程使用中文。只执行广告图片直接修改 Skill 的 creative_direct_edit task。读取 task context 固定的 source_asset_id、source_attachment_id、user_request、target_size、expected_sizes、delivery_mode、prime_agent_id、reviewer_agent_id 和 source revision；源资产不可覆盖，输出必须写为 source revision + 1，并以 source asset 为 derived_from_asset_id。不得执行采集、参考分析、三变体规划或普通生产。preview 只写 generated asset；publish 才按同一 expected_sizes 委派 Prime，Prime 再委派两路 QC。$specialistHandoff" -SkillIDs @($directEditSkill.id) -RuntimeID $runtimeID -Model 'gpt-5.6-terra' -ThinkingLevel 'low' -MaxConcurrentTasks 2
+$composer = Set-AgentDefinition -Name 'Prime 包装智能体' -Description '按变体一次包装 expected_sizes 并写入逐图机器证据。' -Instructions "全程使用中文。每个 task 只处理 context 指定的 Variant、revision、expected_sizes 和对应 1-3 张无品牌底图；一次 batch 应用冻结市场快照中的版本化 Prime、条款、二维码和商店徽章。逐张写入来源 Asset、模板、manifest、最终附件、二维码解码和四角/底部校验证据。单项失败不得丢弃其他成功项，不创建 Issue。$specialistHandoff" -SkillIDs @($composeSkill.id) -RuntimeID $runtimeID -Model 'gpt-5.6-terra' -ThinkingLevel 'low' -MaxConcurrentTasks 3
+$reviewer = Set-AgentDefinition -Name '广告验收智能体' -Description '并发执行技术 QC 和视觉 QC，重点检查四角、画质和 expected_sizes 内容一致性。' -Instructions "全程使用中文。严格按 task context 的 workflow、revision 和 expected_sizes 执行技术 QC 或视觉 QC。技术 QC 检查尺寸、文件、四角/底部 Prime、二维码和真实硬区遮挡；视觉 QC 检查清晰度、伪影、批准文案、原图语义，并在多尺寸时检查同变体一致性。原图本来存在的人物或装饰不能仅因几何预测判失败。blocking_failures 非空时 status 必须为 failed。写入独立 QC Report 后必须调用 qc-finalize，由服务端事务化收口；失败只进入 action_required，不自动返工。只指出实际失败尺寸，不影响其他变体。$specialistHandoff" -SkillIDs @($qcSkill.id) -RuntimeID $runtimeID -Model 'gpt-5.6-terra' -ThinkingLevel 'medium' -MaxConcurrentTasks 6
 
 $squads = Get-Items (Invoke-MulticaApi -Method Get -Path '/api/squads') ''
 $squad = $squads | Where-Object name -eq 'AdaKami 素材小队' | Select-Object -First 1
@@ -220,7 +239,7 @@ if (-not $squad) {
     }
 }
 Invoke-MulticaApi -Method Put -Path "/api/squads/$($squad.id)" -Body @{
-    instructions = 'Leader 读取当前 Issue 证据以及名册中每个智能体的职责和平台 Skill，动态选择合适成员。父 Issue 只保留候选池、结果看板和必须让用户看到的结论；每张选图一个创意工作 Issue。每个专业任务必须新建并分配直接子 Issue，禁止在创意工作 Issue 内用 @mention 委派成员；专业讨论和附件证据都留在专业子 Issue。'
+    instructions = 'Leader 读取 Creative Order 领域状态以及名册中每个智能体的职责和平台 Skill，动态选择成员。一个订单只关联一个用户可见 Issue；分析、方案、变体生成、Prime 和 QC 通过原生 task fanout 委派，不创建子 Issue。领域对象保存过程与证据，Issue 只保留用户目标、决定、真实阻塞和最终验收。'
 } | Out-Null
 
 $memberDefinitions = @(
@@ -228,6 +247,7 @@ $memberDefinitions = @(
     @{ agent = $analyst; role = '参考分析' },
     @{ agent = $planner; role = '生成方案' },
     @{ agent = $producer; role = '图像编辑' },
+    @{ agent = $directEditor; role = '图片直接修改' },
     @{ agent = $composer; role = '完整贴图' },
     @{ agent = $reviewer; role = '质量验收' }
 )
@@ -246,8 +266,8 @@ foreach ($definition in $memberDefinitions) {
 }
 
 $leaderSkillDirectory = Join-Path $skillTemplateRoot 'ad-creative-leadership'
-$leaderSkill = Set-WorkspaceSkill -Name '创意素材协作' -Aliases @('素材小队 Leader 编排') -Description '帮助素材小队 Leader 串联真实采集、批量素材预分析、同题 3×3 生产、精准返工、验收和登记发布。' -Directory $leaderSkillDirectory -Config @{ kind = 'creative_role'; capability = 'creative_leadership'; version = 24 }
-$leader = Set-AgentDefinition -Name '素材小队 Leader' -Description '管理真实采集、候选池素材预分析、3×3 创意委派、精准返工和结构化结果发布。' -Instructions '全程使用中文。只负责判断、批量委派、验收汇总和发布，不代替专业成员执行。严格遵循绑定的创意素材协作 Skill：creative_collection 先委派真实采集，完成后批量委派本次新增图片的参考分析；人工上传或历史漏分析素材保留按需分析；选中文案确认后才进入逐素材 3×3 生产。所有专业过程留在直接子 Issue，父候选池只展示候选池、结果看板和必要结论。每次唤醒读取直接子 Issue，一次创建所有已就绪任务后立即结束，不轮询、不重复委派。' -SkillIDs @($leaderSkill.id) -RuntimeID $runtimeID -Model 'gpt-5.6-terra' -ThinkingLevel 'medium' -MaxConcurrentTasks 3
+$leaderSkill = Set-WorkspaceSkill -Name '创意素材协作' -Aliases @('素材小队 Leader 编排') -Description '使用原生 task fanout 串联标准三变体生产或独立直接改图、Prime、并发 QC 与增量发布。' -Directory $leaderSkillDirectory -Config @{ kind = 'creative_role'; capability = 'creative_leadership'; version = 44 }
+$leader = Set-AgentDefinition -Name '素材小队 Leader' -Description '管理 Creative Order 的并发生产、独立直接改图和结构化结果发布。' -Instructions '全程使用中文。只负责判断、批量委派、状态收口和发布，不代替专业成员执行。严格遵循创意素材协作 Skill：一个订单只关联一个用户 Issue；所有机器阶段使用原生 task fanout，禁止创建分析、变体、Prime 或 QC 子 Issue。Leader 只发起方案并在人工重试或异常恢复时补齐任务；Planner、Production、Prime 各自只委派直接下一阶段。按 target agent + source + item_key 去重，不能因 source 下已有其他 item 就跳过。direct_edit 订单只能委派“图片直接修改”角色，绝不触发采集、参考分析、三变体规划或普通生产；preview 不进入正式交付，publish 才按 expected_sizes 继续 Prime 与双路 QC。每次唤醒读取订单领域状态和冻结 squad snapshot，一次创建所有已就绪任务后立即结束，不轮询、不重复委派。' -SkillIDs @($leaderSkill.id) -RuntimeID $runtimeID -Model 'gpt-5.6-terra' -ThinkingLevel 'medium' -MaxConcurrentTasks 2
 
 $resources = Get-Items (Invoke-MulticaApi -Method Get -Path '/api/creative/resources') 'resources'
 $copyLibrary = $resources | Where-Object { $_.kind -eq 'copy_library' -and $_.name -eq 'AdaKami Indonesia 文案库' } | Select-Object -First 1
@@ -260,13 +280,53 @@ if (-not $copyLibrary) {
     }
 }
 
+function Get-CopyPrimaryIntent {
+    param([string]$ContentKeyword, [string]$SuggestedType)
+
+    $keyword = $ContentKeyword.Trim().ToUpperInvariant()
+    switch -Regex ($keyword) {
+        '^REPAYMENT PLAN$' { return 'repayment_plan' }
+        '^RATE DOWN$' { return 'rate_down' }
+        'INTEREST FREE' { return 'interest_free' }
+        '^0% UANG MUKA$' { return 'fee_reduction' }
+        '^NUM(?: GROWTH)?$' { return 'limit_amount' }
+        '^EARLY REPAYMENT$' { return 'early_repayment' }
+        '^(PHONE TYPE|PHONE|APP STORE PAGES|PROGRESS BAR|USER INFORMATION|CALCULATOR|WHATSAPP|E-WALLET)$' { return 'app_interface' }
+        '^COMPARISON$' { return 'comparison' }
+        '^CONSUMPTION SCENARIOS$' { return 'lifestyle_scenario' }
+    }
+
+    $legacy = $SuggestedType.Trim().ToLowerInvariant()
+    switch ($legacy) {
+        'limit_or_amount' { return 'limit_amount' }
+        'user_interface' { return 'app_interface' }
+        default { return $legacy }
+    }
+}
+
+function Get-CopyThemeTags {
+    param([string]$ContentKeyword, [string]$CopyText)
+
+    $value = "$ContentKeyword $CopyText"
+    $themeTags = @()
+    if ($value -match '(?i)world cup|piala dunia|sepak bola|lapangan|\bbola\b|\bgol\b') { $themeTags += 'football' }
+    if ($value -match '(?i)ramadan|ramadhan|puasa') { $themeTags += 'ramadan' }
+    if ($value -match '(?i)lebaran|idul fitri|\beid\b') { $themeTags += 'eid' }
+    if ($value -match '(?i)payday|gajian|tanggal gajian') { $themeTags += 'payday' }
+    if ($value -match '(?i)sekolah|school|tahun ajaran') { $themeTags += 'school' }
+    if ($value -match '(?i)akhir tahun|year end') { $themeTags += 'year_end' }
+    return @($themeTags | Select-Object -Unique)
+}
+
 $catalog = Get-Content -Raw -LiteralPath $CatalogPath | ConvertFrom-Json -Depth 100
 $copyEntries = foreach ($record in @($catalog.records)) {
     $lines = @([regex]::Split([string]$record.copy_text, '\r?\n') | ForEach-Object { $_.Trim() } | Where-Object { $_ })
     $headline = if ($lines.Count) { $lines[0] } else { [string]$record.copy_text }
     $benefit = if ($lines.Count -gt 1) { ($lines | Select-Object -Skip 1) -join "`n" } else { '' }
     $approved = $record.eligible_for_static_image -and $record.selectable_for_generation -and $record.ready_without_inputs
-    $tags = @($record.month, $record.content_keyword, $record.suggested_copy_type, $record.set_label) | Where-Object { $_ } | Select-Object -Unique
+    $primaryIntent = Get-CopyPrimaryIntent -ContentKeyword ([string]$record.content_keyword) -SuggestedType ([string]$record.suggested_copy_type)
+    $themeTags = @(Get-CopyThemeTags -ContentKeyword ([string]$record.content_keyword) -CopyText ([string]$record.copy_text))
+    $tags = @($record.month, $record.content_keyword, $primaryIntent, $record.set_label) + $themeTags | Where-Object { $_ } | Select-Object -Unique
     @{
         external_key = [string]$record.record_id
         headline = $headline
@@ -283,6 +343,8 @@ $copyEntries = foreach ($record in @($catalog.records)) {
             source = $record.source
             original_copy = [string]$record.copy_text
             content_keyword = [string]$record.content_keyword
+            primary_intent = $primaryIntent
+            theme_tags = $themeTags
             suggested_copy_type = [string]$record.suggested_copy_type
             required_inputs = @($record.required_inputs)
             notes = $record.notes
@@ -309,6 +371,8 @@ $copyLibrary = Invoke-MulticaApi -Method Post -Path "/api/creative/resources/$($
 $resources = Get-Items (Invoke-MulticaApi -Method Get -Path '/api/creative/resources') 'resources'
 $marketPack = $resources | Where-Object { $_.kind -eq 'market_pack' -and $_.name -eq 'AdaKami Indonesia 市场资源包' } | Select-Object -First 1
 $marketConfig = @{
+    contract_authority = 'published_market_pack_snapshot'
+    rule_precedence = @('structured_config','versioned_attachments','brand_guideline')
     brand = 'AdaKami'
     market = 'Indonesia'
     locale = 'id-ID'
@@ -386,7 +450,7 @@ foreach ($appUIPath in $AppUIReferencePaths) {
         market = 'Indonesia'
         locale = 'id-ID'
         tags = @('app-ui', 'homepage', 'new-customer', 'loan-limit')
-        description = '当竞品素材包含 App 界面时，分析智能体从全部 App UI 参考图中判断并选择最匹配的一张；图像编辑必须替换为 AdaKami 自有界面，不得保留或仿造竞品 UI。'
+        description = '参考分析只识别通用 App UI 类型；Planner 根据订单冻结的市场快照从全部 App UI 参考图中选择最匹配的一张。图像编辑必须替换为 AdaKami 自有界面，不得保留或仿造竞品 UI。'
     }
 }
 $marketPack = Invoke-MulticaApi -Method Put -Path "/api/creative/resources/$($marketPack.id)" -Body @{
@@ -398,8 +462,12 @@ $marketPack = Invoke-MulticaApi -Method Post -Path "/api/creative/resources/$($m
 
 $autopilots = Get-Items (Invoke-MulticaApi -Method Get -Path '/api/autopilots') 'autopilots'
 $autopilot = $autopilots | Where-Object { $_.title -eq '印尼竞品素材周度采集' -or $_.title -eq '印尼与马来竞品素材周度采集' } | Select-Object -First 1
-$autopilotDescription = @'
-每周抓取 AppGrowing 印度尼西亚的现金贷/金融竞品素材，并创建一个创意批次父 Issue。
+$autopilotDescription = @"
+每周抓取 AppGrowing 印度尼西亚的现金贷/金融竞品素材，并创建一个可追踪的 Crawl Run。
+
+市场资源包 ID：$($marketPack.id)
+执行小队 ID：$($squad.id)
+参考分析智能体 ID：$($analyst.id)
 
 竞品：Easycash、Kredit Pintar、Adapundi、BantuSaku、Rupiah Cepat、UATAS、JULO
 优先竞品：Easycash、Kredit Pintar、Adapundi
@@ -411,25 +479,23 @@ $autopilotDescription = @'
 选材：新素材 40%，投放少于 7 天且曝光估算大于 1K；跑量素材 60%，投放超过 30 天且曝光估算不低于 10M
 最多输出：25 条
 
-先委派素材采集智能体执行真实 AppGrowing 多页采集。素材必须进入父 Issue 原生候选池；完成后等待用户逐图选择文案并开始修图。授权失效时提示用户前往“设置 - 集成”重新绑定，不能用测试数据替代。
-'@
+执行真实 AppGrowing 多页采集，结果进入创意工厂素材库并关联当前 Crawl Run；素材入库后立即用原生 task fanout 对本次新增图片并发执行逐图创意分析，归档未完成时允许分析读取真实源图片。分析完成后在创意工厂提醒用户选图、确认主题与文案。整个采集与预分析阶段不创建 Issue。授权失效时将 Crawl Run 标为 action_required，并提示用户前往“设置 - 集成”重新绑定，不能用测试数据替代。
+"@
 if (-not $autopilot) {
     $autopilot = Invoke-MulticaApi -Method Post -Path '/api/autopilots' -Body @{
         title = '印尼竞品素材周度采集'
         description = $autopilotDescription
-        assignee_type = 'squad'
-        assignee_id = $squad.id
-        execution_mode = 'create_issue'
-        issue_title_template = '{{date}} 竞品素材抓取'
+        assignee_type = 'agent'
+        assignee_id = $collector.id
+        execution_mode = 'run_only'
     }
 } else {
     $autopilot = Invoke-MulticaApi -Method Patch -Path "/api/autopilots/$($autopilot.id)" -Body @{
         title = '印尼竞品素材周度采集'
         description = $autopilotDescription
-        assignee_type = 'squad'
-        assignee_id = $squad.id
-        execution_mode = 'create_issue'
-        issue_title_template = '{{date}} 竞品素材抓取'
+        assignee_type = 'agent'
+        assignee_id = $collector.id
+        execution_mode = 'run_only'
         status = 'active'
     }
 }

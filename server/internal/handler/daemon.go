@@ -1216,7 +1216,7 @@ func (h *Handler) ClaimTaskByRuntime(w http.ResponseWriter, r *http.Request) {
 					ID:          issue.AssigneeID,
 					WorkspaceID: issue.WorkspaceID,
 				}); err == nil && uuidToString(squad.LeaderID) == resp.Agent.ID {
-					briefing := buildSquadLeaderBriefing(r.Context(), h.Queries, squad)
+					briefing := buildTaskAwareSquadLeaderBriefing(r.Context(), h.Queries, squad, task.Context)
 					if strings.TrimSpace(resp.Agent.Instructions) == "" {
 						resp.Agent.Instructions = briefing
 					} else {
@@ -1921,17 +1921,10 @@ func (h *Handler) ReportTaskProgress(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Verify ownership and resolve workspace ID.
-	task, ok := h.requireDaemonTaskAccess(w, r, taskID)
+	// Verify ownership and retain the workspace for direct-task progress events.
+	_, workspaceID, ok := h.requireDaemonTaskAccessWithWorkspace(w, r, taskID)
 	if !ok {
 		return
-	}
-
-	workspaceID := ""
-	if task.IssueID.Valid {
-		if issue, err := h.Queries.GetIssue(r.Context(), task.IssueID); err == nil {
-			workspaceID = uuidToString(issue.WorkspaceID)
-		}
 	}
 
 	h.TaskService.ReportProgress(r.Context(), taskID, workspaceID, req.Summary, req.Step, req.Total)
@@ -1946,11 +1939,62 @@ type TaskCompleteRequest struct {
 	WorkDir   string `json:"work_dir"`   // working directory used during execution
 }
 
+type creativeReferenceAnalysisTaskContext struct {
+	Workflow        string `json:"workflow"`
+	CandidateID     string `json:"candidate_id"`
+	CrawlRunID      string `json:"crawl_run_id"`
+	AnalysisVersion int32  `json:"analysis_version"`
+}
+
+func (h *Handler) referenceAnalysisCompletionError(ctx context.Context, task db.AgentTaskQueue, workspaceID string) (string, error) {
+	if !task.TriggerEvidenceKind.Valid || task.TriggerEvidenceKind.String != "creative_crawl_run_analysis" {
+		return "", nil
+	}
+	if task.Status == "completed" || task.Status == "failed" || task.Status == "cancelled" {
+		return "", nil
+	}
+	var taskContext creativeReferenceAnalysisTaskContext
+	if err := json.Unmarshal(task.Context, &taskContext); err != nil || taskContext.Workflow != "creative_reference_analysis" {
+		return "reference analysis task completed with invalid task context", nil
+	}
+	candidateID, candidateErr := util.ParseUUID(strings.TrimSpace(taskContext.CandidateID))
+	crawlRunID, crawlRunErr := util.ParseUUID(strings.TrimSpace(taskContext.CrawlRunID))
+	resolvedWorkspaceID, workspaceErr := util.ParseUUID(strings.TrimSpace(workspaceID))
+	if candidateErr != nil || crawlRunErr != nil || workspaceErr != nil || taskContext.AnalysisVersion < 1 ||
+		!task.TriggerEvidenceRefID.Valid || task.TriggerEvidenceRefID != crawlRunID {
+		return "reference analysis task completed with invalid artifact coordinates", nil
+	}
+	var exists bool
+	if err := h.DB.QueryRow(ctx, `
+SELECT EXISTS(
+  SELECT 1
+  FROM creative_source_analysis analysis
+  JOIN creative_material_crawl_run_candidate relation
+    ON relation.run_id = analysis.trigger_evidence_ref_id
+   AND relation.candidate_id = analysis.candidate_id
+   AND relation.workspace_id = analysis.workspace_id
+  WHERE analysis.candidate_id = $1
+    AND analysis.analysis_version = $2
+    AND analysis.status = 'completed'
+    AND analysis.trigger_evidence_kind = 'crawl_run'
+    AND analysis.trigger_evidence_ref_id = $3
+    AND analysis.workspace_id = $4
+    AND relation.analysis_status = 'completed'
+)
+`, candidateID, taskContext.AnalysisVersion, crawlRunID, resolvedWorkspaceID).Scan(&exists); err != nil {
+		return "", err
+	}
+	if !exists {
+		return "reference analysis task completed without a matching completed source analysis", nil
+	}
+	return "", nil
+}
+
 func (h *Handler) CompleteTask(w http.ResponseWriter, r *http.Request) {
 	taskID := chi.URLParam(r, "taskId")
 
 	// Verify the caller owns this task's workspace.
-	_, workspaceID, ok := h.requireDaemonTaskAccessWithWorkspace(w, r, taskID)
+	existingTask, workspaceID, ok := h.requireDaemonTaskAccessWithWorkspace(w, r, taskID)
 	if !ok {
 		return
 	}
@@ -1958,6 +2002,25 @@ func (h *Handler) CompleteTask(w http.ResponseWriter, r *http.Request) {
 	var req TaskCompleteRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	if artifactError, err := h.referenceAnalysisCompletionError(r.Context(), existingTask, workspaceID); err != nil {
+		slog.Error("validate reference analysis task output failed", "task_id", taskID, "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to validate task output")
+		return
+	} else if artifactError != "" {
+		task, failErr := h.TaskService.FailTask(r.Context(), existingTask.ID, artifactError, req.SessionID, req.WorkDir, "creative_output_missing")
+		if failErr != nil {
+			slog.Warn("fail reference analysis task without output", "task_id", taskID, "error", failErr)
+			writeError(w, http.StatusBadRequest, failErr.Error())
+			return
+		}
+		if err := h.Queries.DeleteTaskTokensByTask(r.Context(), task.ID); err != nil {
+			slog.Warn("complete task without output: failed to revoke task tokens", "task_id", uuidToString(task.ID), "error", err)
+		}
+		slog.Warn("reference analysis task failed closed", "task_id", taskID, "error", artifactError)
+		writeJSON(w, http.StatusOK, h.hydratedTaskResponse(r.Context(), *task, workspaceID))
 		return
 	}
 

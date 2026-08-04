@@ -668,14 +668,10 @@ WHERE id = (
             AND (
               (atq.issue_id IS NOT NULL AND active.issue_id = atq.issue_id)
               OR (atq.chat_session_id IS NOT NULL AND active.chat_session_id = atq.chat_session_id)
-              OR (
-                atq.issue_id IS NULL
-                AND atq.chat_session_id IS NULL
-                AND atq.autopilot_run_id IS NULL
-                AND active.issue_id IS NULL
-                AND active.chat_session_id IS NULL
-                AND active.autopilot_run_id IS NULL
-              )
+		      OR (
+		        COALESCE(atq.context ->> 'type', '') = 'quick_create'
+		        AND COALESCE(active.context ->> 'type', '') = 'quick_create'
+		      )
             )
       )
     ORDER BY atq.priority DESC, atq.created_at ASC
@@ -690,10 +686,9 @@ RETURNING id, agent_id, issue_id, status, priority, dispatched_at, started_at, c
 // already dispatched or running. This allows different agents to work on the same
 // issue in parallel while preventing a single agent from running duplicate tasks.
 // Chat tasks (issue_id IS NULL) use chat_session_id for serialization instead.
-// Quick-create tasks have no issue / chat / autopilot link, so they serialize on
-// "any other quick-create-shaped task" (all four FKs NULL) for the same agent —
-// otherwise a user mashing the create button could fire concurrent quick-creates
-// whose completion lookup would race over "most recent issue by this agent".
+// Actual quick-create tasks are identified by context.type and serialize with
+// each other. Other no-issue direct tasks carry domain context and may claim
+// concurrently up to the agent's configured capacity.
 func (q *Queries) ClaimAgentTask(ctx context.Context, agentID pgtype.UUID) (AgentTaskQueue, error) {
 	row := q.db.QueryRow(ctx, claimAgentTask, agentID)
 	var i AgentTaskQueue
@@ -961,7 +956,7 @@ INSERT INTO agent_task_queue (
     trigger_summary, force_fresh_session, is_leader_task, requesting_user_id,
     originator_user_id, accountable_user_id, originator_source,
     delegated_from_task_id, rule_version_id, rerun_of_task_id,
-    trigger_evidence_kind, trigger_evidence_ref_id
+    trigger_evidence_kind, trigger_evidence_ref_id, context
 )
 VALUES (
     $1, $2, $3, 'queued', $4, $5,
@@ -976,7 +971,8 @@ VALUES (
     $14,
     $15,
     $16,
-    $17
+    $17,
+    $18
 )
 RETURNING id, agent_id, issue_id, status, priority, dispatched_at, started_at, completed_at, result, error, created_at, context, runtime_id, session_id, work_dir, trigger_comment_id, chat_session_id, autopilot_run_id, attempt, max_attempts, parent_task_id, failure_reason, trigger_summary, force_fresh_session, is_leader_task, wait_reason, initiator_user_id, handoff_note, prepare_lease_expires_at, squad_id, runtime_mcp_overlay, escalation_for_task_id, fire_at, originator_user_id, runtime_connected_apps, coalesced_comment_ids, delivered_comment_ids, chat_input_task_id, chat_finalize_deferred_at, originator_source, delegated_from_task_id, retry_of_task_id, rerun_of_task_id, rule_version_id, trigger_evidence_kind, trigger_evidence_ref_id, accountable_user_id, requesting_user_id
 `
@@ -999,6 +995,7 @@ type CreateAgentTaskParams struct {
 	RerunOfTaskID        pgtype.UUID `json:"rerun_of_task_id"`
 	TriggerEvidenceKind  pgtype.Text `json:"trigger_evidence_kind"`
 	TriggerEvidenceRefID pgtype.UUID `json:"trigger_evidence_ref_id"`
+	Context              []byte      `json:"context"`
 }
 
 func (q *Queries) CreateAgentTask(ctx context.Context, arg CreateAgentTaskParams) (AgentTaskQueue, error) {
@@ -1020,6 +1017,7 @@ func (q *Queries) CreateAgentTask(ctx context.Context, arg CreateAgentTaskParams
 		arg.RerunOfTaskID,
 		arg.TriggerEvidenceKind,
 		arg.TriggerEvidenceRefID,
+		arg.Context,
 	)
 	var i AgentTaskQueue
 	err := row.Scan(
@@ -1198,6 +1196,8 @@ SELECT
     p.id, p.trigger_evidence_kind, p.trigger_evidence_ref_id
 FROM agent_task_queue p
 WHERE p.id = $1
+  AND p.status = 'failed'
+  AND p.attempt < p.max_attempts
 RETURNING id, agent_id, issue_id, status, priority, dispatched_at, started_at, completed_at, result, error, created_at, context, runtime_id, session_id, work_dir, trigger_comment_id, chat_session_id, autopilot_run_id, attempt, max_attempts, parent_task_id, failure_reason, trigger_summary, force_fresh_session, is_leader_task, wait_reason, initiator_user_id, handoff_note, prepare_lease_expires_at, squad_id, runtime_mcp_overlay, escalation_for_task_id, fire_at, originator_user_id, runtime_connected_apps, coalesced_comment_ids, delivered_comment_ids, chat_input_task_id, chat_finalize_deferred_at, originator_source, delegated_from_task_id, retry_of_task_id, rerun_of_task_id, rule_version_id, trigger_evidence_kind, trigger_evidence_ref_id, accountable_user_id, requesting_user_id
 `
 
@@ -1210,7 +1210,8 @@ RETURNING id, agent_id, issue_id, status, priority, dispatched_at, started_at, c
 // incremented; max_attempts, trigger_comment_id, and is_leader_task are
 // inherited so the retried task keeps the same squad-role provenance as its
 // parent and the self-trigger guard in shouldEnqueueSquadLeaderOnComment
-// continues to recognise it as a leader task.
+// continues to recognise it as a leader task. Only failed parents with an
+// unused attempt can be cloned; exhausted or non-failed parents return no row.
 func (q *Queries) CreateRetryTask(ctx context.Context, id pgtype.UUID) (AgentTaskQueue, error) {
 	row := q.db.QueryRow(ctx, createRetryTask, id)
 	var i AgentTaskQueue

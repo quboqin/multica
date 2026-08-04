@@ -1,43 +1,43 @@
 ---
 name: multica-ad-creative-analysis
-description: "当 Multica 候选图需要识别视觉主题、金融利益点、画面文字、App UI 或生成前布局风险，并将结构化创意简报回写平台时使用。"
+description: "当原生 task 指定一张候选图，需要读取真实像素并把主题、利益点、语义锚点和构图风险写入 Source Analysis 时使用。"
 allowed-tools: Bash(multica *)
 ---
 
 # 广告参考与创意理解
 
-读取完整 Issue 和评论，从任务描述取得目标候选池 Issue ID 和候选 ID。只能分析
-`multica creative materials <目标候选池 Issue ID> --output json` 返回、且 ID 与任务完全一致的候选。
-采集流程会在用户选图前分析本次新增素材，因此候选状态可以是 `new` 或 `selected`；不得以“尚未
-选择”为由跳过。
-用 `multica creative material download` 下载平台归档文件，并以运行时原生视觉能力读取真实像素；
-标题、标签、媒体和采集元数据只能辅助核对，不能作为主利益点结论。素材不可读时回传
-`needs_input` 并结束。
+只读取 task context 中的 `crawl_run_id`、`candidate_id` 和 `analysis_version`。不得从 Issue 标题、评论
+或其他 task 猜测候选。候选可以尚未被用户选择。本阶段必须市场中立：不得读取或选择品牌市场包、
+Prime 模板、品牌 App UI 附件和批准文案。
 
-先分别识别两条轴：
+执行：
 
-- 视觉主题：赛事、节日、生活场景等，以及可见主题元素。例如“世界杯 / 足球赛事”与球场、
-  足球、观众；主题不是金融利益点。
-- 金融利益点：主利益点、辅助利益点、具体金额/比例/期限。主利益点必须有图片文字、图表或
-  明确视觉结构作为证据；无法判断时留空，不用标题猜测。
+```text
+multica creative library download <candidate-id> --output-file <path> --output json
+```
 
-再提取后续创意必须继承的原图锚点：
+必须以运行时原生视觉能力读取下载文件的真实像素。标题、标签和采集元数据只能弱辅助；图片不可读
+时提交失败 Source Analysis，写明 `error_code=asset_unreadable`，不得用元数据补结论。
 
-- `source_semantics`：原图在讲什么业务场景，例如“分期还款计划”，不能只写“金融广告”；
-- `information_mechanism`：原图用什么结构解释利益点，例如“多档期限对应月供的表格”；
-- `visual_anchors`：承载语义的主体、卡片、表格、图标和层级；
-- `palette_anchors`：主色家族和明暗关系，不要求记录每个十六进制色值；
-- `must_preserve`：除非用户明确要求改变，否则三个变体都必须保留的语义、结构和色系；
-- `allowed_variations`：在不破坏上述锚点时可以变化的版式、信息组织和视觉处理。
+分别识别：
 
-默认把原图的业务场景、信息机制、主色家族和关键视觉主体写入 `must_preserve`。不能因为要做
-三个创意，就建议换成与原图无关的人物、房屋、预算或其他场景。
+- `theme` 与 `theme_elements`：赛事、节日、生活场景及可见元素；
+- `primary_benefit`、`secondary_benefits`、`benefit_value`：金融利益点和可见金额/比例/期限；
+- `source_semantics`：原图具体业务场景；
+- `information_mechanism`：表格、卡片、步骤、对比等解释结构；
+- `visual_anchors`、`palette_anchors`：关键主体、信息层级、主色家族；
+- `must_preserve`、`allowed_variations`：后续三变体的固定项和可变项；
+- `detected_text`、`evidence`、`confidence`：像素证据和置信度；
+- `app_ui_detected`、`app_ui_type`、`app_ui_visual_characteristics`：只描述是否存在 App UI、通用页面类型
+  （如首页、额度页、申请步骤、还款页）及可见结构；不选择任何品牌附件；
+- `layout_constraints`、`edge_content_density`：记录画面的一般布局约束和边缘关键内容密度，不映射任何
+  市场的 Prime 槽位或硬区。
 
-OCR 或逐区域读取图片文字，记录支持结论的短证据，不复制竞品品牌、二维码或法律文字作为
-AdaKami 主张。置信度按 0 到 1 记录。主题涉及世界杯等赛事时，只记录通用足球视觉信号；
-除非市场资源包提供已批准资产，不得建议官方 Logo、奖杯仿制、球队徽章或合作关系。
+竞品图上的金额、利率和期限只是观察证据，不是最终可用文案，不写入 `must_preserve`。默认保留原图
+业务语义、信息机制、关键主体和主色家族。不能为了做三套变体建议换成无关场景。赛事只记录通用
+视觉信号，除非资源包提供已批准资产，不建议官方 Logo、奖杯仿制、球队徽章或合作关系。
 
-把结果写入临时 JSON 文件，字段必须完整：
+`result` 示例：
 
 ```json
 {
@@ -47,39 +47,53 @@ AdaKami 主张。置信度按 0 到 1 记录。主题涉及世界杯等赛事时
   "secondary_benefits": ["低利率"],
   "benefit_value": "Biaya turun 25%",
   "source_semantics": "以足球赛事氛围表达费用减免活动",
-  "information_mechanism": "赛事主视觉加一条醒目的降费信息",
+  "information_mechanism": "赛事主视觉加醒目的降费信息",
   "visual_anchors": ["足球", "球场", "主标题利益点"],
-  "palette_anchors": ["品牌绿为主色", "高对比浅色文字"],
+  "palette_anchors": ["绿色主色家族", "高对比浅色文字"],
   "must_preserve": ["足球赛事语义", "费用减免为第一信息", "绿色主色家族"],
-  "allowed_variations": ["主视觉位置", "标题与利益点的信息层级", "卡片布局"],
-  "evidence": ["画面主标题明确出现 biaya 与 25%"],
+  "allowed_variations": ["主视觉位置", "信息层级", "卡片布局"],
   "detected_text": ["Potongan biaya 25%"],
+  "evidence": ["画面主标题明确出现 biaya 与 25%"],
   "visual_type": "主题活动海报",
   "analysis_summary": "足球赛事氛围承载降费主张",
-  "status": "draft",
-  "source": "ai",
-  "confidence": 0.9,
-  "analysis_issue_id": "<当前分析 Issue ID>"
+  "layout_constraints": ["主标题需要保持第一视觉层级", "足球和人物需要完整可见"],
+  "edge_content_density": {
+    "top_left": "low",
+    "top_right": "medium",
+    "bottom": "low"
+  },
+  "app_ui_detected": false,
+  "app_ui_type": null,
+  "app_ui_visual_characteristics": [],
+  "confidence": 0.9
 }
 ```
 
-执行 `multica creative material brief <目标候选池 Issue ID> <候选 ID> --input-file <JSON 文件> --output json`
-回写平台。用户会在候选池逐图确认或修改；不要把结构化结果只留在评论里。
+用完整 envelope 写回：
 
-向当前分析 Issue 回传一条中文、精简的布局说明，必须包含：原始比例、目标比例下的
-视觉层级、视觉中心、人物和产品的位置，以及完整 Prime 模板三个覆盖区（左上品牌、
-右上条款/QR、底部合规）的碰撞风险。发生碰撞时，应建议重生成干净构图，绝不把主体
-压进中央或挪走品牌资产。参考图只可提供构图信号，严禁复制品牌、文案、金额、二维码、
-法律文字或 Logo。本角色不生成图片、不贴 Prime 模板。
+```json
+{
+  "candidate_id": "<candidate-id>",
+  "analysis_version": 1,
+  "status": "completed",
+  "summary": "足球赛事氛围承载降费主张",
+  "result": {},
+  "trigger_evidence_kind": "crawl_run",
+  "trigger_evidence_ref_id": "<run-id>"
+}
+```
 
-输入快照完整时，输出的 Prime 覆盖风险是给后续生成方案的重构约束，不要求用户补写 QR。
-本角色不生成图片、不调用外部素材连接器。
+执行：
 
-同时读取市场资源快照中的全部 `app_ui_reference` 文件。先判断候选图是否展示 App 界面：
+```text
+multica creative source-analysis put --input-file <JSON文件> --output json
+multica creative source-analysis list --candidate-id <candidate-id> --output json
+```
 
-- 不含 App UI 时，明确记录“不需要 UI 替换”；
-- 含 App UI 时，比较参考文件的页面类型、信息结构、视觉密度和目标构图，选择一张或多张最
-  合适的 AdaKami UI，并在 brief 中记录资源文件 ID、附件 ID 和选择理由；
-- 没有合适参考时回传 `needs_input`，不能要求后续模型虚构 AdaKami 界面。
+回读必须存在相同 `candidate_id`、`analysis_version` 和 `status=completed` 才成功结束 task。写入失败时
+以 `status=failed` 保存真实 error code/message，并让 task 失败。不得新建或修改 Issue，也不得只在
+评论中留下分析。
 
-后续规格必须把所选 UI 文件作为图像引用，禁止保留、临摹或改写竞品 App UI。
+原参考图的主体靠近画布边缘只作为通用布局证据，不映射品牌模板，也不自动构成失败。市场适配、
+品牌 App UI 选择和 Prime 硬区映射由 Planner 使用订单冻结的市场快照完成，最终遮挡以 Prime 成图及
+独立 QC 的实际可读性为准。本角色不生成图片、不调用外部素材连接器。

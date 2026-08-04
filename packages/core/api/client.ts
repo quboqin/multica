@@ -12,6 +12,7 @@ import type {
   ListIssuesParams,
   ListGroupedIssuesParams,
   Agent,
+  AgentTaskFanoutResponse,
   CreateAgentRequest,
   AgentTemplate,
   AgentTemplateSummary,
@@ -134,6 +135,15 @@ import type {
   CreativeImportSummary,
 	CreativeAdjustmentRequest,
 	CreateCreativeAdjustmentRequest,
+	CreateCreativeFeedbackRequest,
+	CreateCreativeFeedbackResponse,
+	CreativeFeedbackEventListResponse,
+	CreativeOrderListResponse,
+	CreativeOrder,
+	CreativeOrderQCFinalizeResponse,
+	CreateCreativeOrderRequest,
+	CreateCreativeDirectEditRequest,
+	CreativeDirectEditResponse,
 	RegisterCreativeDeliveriesRequest,
 	RegisterCreativeDeliveriesResponse,
   CreativeCopyEntry,
@@ -179,6 +189,7 @@ import { getCurrentSlug } from "../platform/workspace-storage";
 import { parseWithFallback } from "./schema";
 import {
   AgentTemplateSchema,
+  AgentTaskFanoutResponseSchema,
   AgentTemplateSummaryListSchema,
   AttachmentResponseSchema,
   CancelTaskResponseSchema,
@@ -195,6 +206,7 @@ import {
   DashboardUsageByUserDailyListSchema,
   DashboardUsageDailyListSchema,
   EMPTY_AGENT_TEMPLATE_DETAIL,
+  EMPTY_AGENT_TASK_FANOUT_RESPONSE,
   EMPTY_AGENT_TEMPLATE_SUMMARY_LIST,
   EMPTY_APP_CONFIG,
   EMPTY_ATTACHMENT,
@@ -273,6 +285,19 @@ import {
   CreativeIssueItemSchema,
 	CreativeAdjustmentRequestSchema,
 	EMPTY_CREATIVE_ADJUSTMENT_REQUEST,
+	CreateCreativeFeedbackResponseSchema,
+	EMPTY_CREATIVE_FEEDBACK_RESPONSE,
+	CreativeFeedbackEventListResponseSchema,
+	EMPTY_CREATIVE_FEEDBACK_EVENT_LIST_RESPONSE,
+	CreativeOrderListResponseSchema,
+	CreativeOrderSchema,
+	CreativeOrderQCFinalizeResponseSchema,
+	CreativeDirectEditResponseSchema,
+	EMPTY_CREATIVE_DIRECT_EDIT_RESPONSE,
+	EMPTY_CREATIVE_ORDER_QC_FINALIZE_RESPONSE,
+	CreativeSourceAnalysisListResponseSchema,
+	EMPTY_CREATIVE_SOURCE_ANALYSIS_LIST_RESPONSE,
+	EMPTY_CREATIVE_ORDER_LIST_RESPONSE,
 	RegisterCreativeDeliveriesResponseSchema,
   CreativeMaterialLibrarySchema,
   CreativeMaterialImportResultSchema,
@@ -346,6 +371,19 @@ export class ApiError extends Error {
     this.statusText = statusText;
     this.body = body;
   }
+}
+
+function unsupportedCreativeBriefExtensionField(
+  error: unknown,
+): string | null {
+  if (!(error instanceof ApiError) || error.status !== 400) return null;
+  return error.message.match(/unknown field "(user_direction|app_ui_replacement_required|selected_app_ui_references)"/)?.[1] ?? null;
+}
+
+function creativeBriefHasExtensionContent(brief: CreativeIssueItem["creative_brief"]): boolean {
+  return Boolean(brief.user_direction.trim())
+    || brief.app_ui_replacement_required
+    || brief.selected_app_ui_references.length > 0;
 }
 
 // Thrown by getAttachmentTextContent when the server refuses to inline a
@@ -450,23 +488,24 @@ export class ApiClient {
   // path, plain text for the attachment-preview proxy, etc.
   private async fetchRaw(
     path: string,
-    init?: RequestInit & { extraHeaders?: Record<string, string> },
+    init?: RequestInit & { extraHeaders?: Record<string, string>; suppressErrorLog?: boolean },
   ): Promise<Response> {
     const rid = createRequestId();
     const start = Date.now();
     const method = init?.method ?? "GET";
+    const { extraHeaders, suppressErrorLog, ...requestInit } = init ?? {};
 
     const headers: Record<string, string> = {
       "X-Request-ID": rid,
       ...this.authHeaders(),
-      ...(init?.extraHeaders ?? {}),
-      ...((init?.headers as Record<string, string>) ?? {}),
+      ...(extraHeaders ?? {}),
+      ...((requestInit.headers as Record<string, string>) ?? {}),
     };
 
     this.logger.info(`→ ${method} ${path}`, { rid });
 
     const res = await fetch(`${this.baseUrl}${path}`, {
-      ...init,
+      ...requestInit,
       headers,
       credentials: "include",
     });
@@ -474,8 +513,10 @@ export class ApiClient {
     if (!res.ok) {
       if (res.status === 401) this.handleUnauthorized();
       const { message, body } = await this.parseErrorBody(res, `API error: ${res.status} ${res.statusText}`);
-      const logLevel = res.status === 401 || res.status === 404 ? "warn" : "error";
-      this.logger[logLevel](`← ${res.status} ${path}`, { rid, duration: `${Date.now() - start}ms`, error: message });
+      if (!suppressErrorLog) {
+        const logLevel = res.status === 401 || res.status === 404 ? "warn" : "error";
+        this.logger[logLevel](`← ${res.status} ${path}`, { rid, duration: `${Date.now() - start}ms`, error: message });
+      }
       throw new ApiError(message, res.status, res.statusText, body);
     }
 
@@ -483,7 +524,7 @@ export class ApiClient {
     return res;
   }
 
-  private async fetch<T>(path: string, init?: RequestInit): Promise<T> {
+  private async fetch<T>(path: string, init?: RequestInit & { suppressErrorLog?: boolean }): Promise<T> {
     const res = await this.fetchRaw(path, {
       ...init,
       extraHeaders: { "Content-Type": "application/json" },
@@ -2543,6 +2584,24 @@ export class ApiClient {
     );
   }
 
+  async retryFailedAgentTasksBySource(
+    agentId: string,
+    triggerEvidenceKind: string,
+    triggerEvidenceRefId: string,
+  ): Promise<AgentTaskFanoutResponse> {
+    const params = new URLSearchParams({
+      trigger_evidence_kind: triggerEvidenceKind,
+      trigger_evidence_ref_id: triggerEvidenceRefId,
+    });
+    const raw = await this.fetch<unknown>(
+      `/api/agents/${encodeURIComponent(agentId)}/tasks/by-source/retry-failed?${params.toString()}`,
+      { method: "POST" },
+    );
+    return parseWithFallback(raw, AgentTaskFanoutResponseSchema, EMPTY_AGENT_TASK_FANOUT_RESPONSE, {
+      endpoint: "POST /api/agents/{agentId}/tasks/by-source/retry-failed",
+    });
+  }
+
   // Creative Studio resources
   async listCreativeMaterialLibrary(): Promise<CreativeMaterialLibraryResponse> {
     const raw = await this.fetch<unknown>("/api/creative/materials");
@@ -2727,6 +2786,72 @@ export class ApiClient {
     );
   }
 
+  async createCreativeFeedback(data: CreateCreativeFeedbackRequest): Promise<CreateCreativeFeedbackResponse> {
+    const raw = await this.fetch<unknown>("/api/creative-feedback-events", {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+    return parseWithFallback(raw, CreateCreativeFeedbackResponseSchema, EMPTY_CREATIVE_FEEDBACK_RESPONSE, {
+      endpoint: "POST /api/creative-feedback-events",
+    });
+  }
+
+  async listCreativeFeedback(subjectType?: string, subjectId?: string): Promise<CreativeFeedbackEventListResponse> {
+    const params = new URLSearchParams();
+    if (subjectType) params.set("subject_type", subjectType);
+    if (subjectId) params.set("subject_id", subjectId);
+    const query = params.size > 0 ? `?${params.toString()}` : "";
+    const raw = await this.fetch<unknown>(`/api/creative-feedback-events${query}`);
+    return parseWithFallback(raw, CreativeFeedbackEventListResponseSchema, EMPTY_CREATIVE_FEEDBACK_EVENT_LIST_RESPONSE, {
+      endpoint: "GET /api/creative-feedback-events",
+    });
+  }
+
+  async undoCreativeFeedback(id: string): Promise<CreateCreativeFeedbackResponse> {
+    const raw = await this.fetch<unknown>(`/api/creative-feedback-events/${id}/undo`, { method: "POST" });
+    return parseWithFallback(raw, CreateCreativeFeedbackResponseSchema, EMPTY_CREATIVE_FEEDBACK_RESPONSE, {
+      endpoint: "POST /api/creative-feedback-events/:id/undo",
+    });
+  }
+
+  async listCreativeOrders(): Promise<CreativeOrderListResponse> {
+    const raw = await this.fetch<unknown>("/api/creative/orders");
+    return parseWithFallback(raw, CreativeOrderListResponseSchema, EMPTY_CREATIVE_ORDER_LIST_RESPONSE, { endpoint: "GET /api/creative/orders" });
+  }
+
+  async getCreativeOrder(id: string): Promise<CreativeOrder> {
+    const raw = await this.fetch<unknown>(`/api/creative/orders/${id}`);
+    return parseWithFallback(raw, CreativeOrderSchema, { id: "", workspace_id: "", issue_id: "", status: "draft", derived_status: "draft", input_snapshot: {}, trigger_evidence_kind: "", trigger_evidence_ref_id: "", created_by: "", created_at: "", updated_at: "", workflow_failures: [], items: [] }, { endpoint: "GET /api/creative/orders/:id" });
+  }
+
+  async createCreativeOrder(data: CreateCreativeOrderRequest): Promise<CreativeOrder> {
+    const raw = await this.fetch<unknown>("/api/creative/orders", { method: "POST", body: JSON.stringify(data) });
+    return parseWithFallback(raw, CreativeOrderSchema, { id: "", workspace_id: "", issue_id: "", status: "draft", derived_status: "draft", input_snapshot: {}, trigger_evidence_kind: "", trigger_evidence_ref_id: "", created_by: "", created_at: "", updated_at: "", workflow_failures: [], items: [] }, { endpoint: "POST /api/creative/orders" });
+  }
+
+  async createCreativeDirectEdit(data: CreateCreativeDirectEditRequest): Promise<CreativeDirectEditResponse> {
+    const raw = await this.fetch<unknown>("/api/creative/direct-edits", { method: "POST", body: JSON.stringify(data) });
+    return parseWithFallback(raw, CreativeDirectEditResponseSchema, EMPTY_CREATIVE_DIRECT_EDIT_RESPONSE, {
+      endpoint: "POST /api/creative/direct-edits",
+    });
+  }
+
+  async finalizeCreativeOrderQC(orderId: string, variantId: string, revision: number): Promise<CreativeOrderQCFinalizeResponse> {
+    const raw = await this.fetch<unknown>(`/api/creative/orders/${orderId}/qc-finalize`, {
+      method: "POST",
+      body: JSON.stringify({ variant_id: variantId, revision }),
+    });
+    return parseWithFallback(raw, CreativeOrderQCFinalizeResponseSchema, EMPTY_CREATIVE_ORDER_QC_FINALIZE_RESPONSE, {
+      endpoint: "POST /api/creative/orders/:id/qc-finalize",
+    });
+  }
+
+  async listCreativeSourceAnalyses(candidateId?: string) {
+    const query = candidateId ? `?candidate_id=${encodeURIComponent(candidateId)}` : "";
+    const raw = await this.fetch<unknown>(`/api/creative/source-analyses${query}`);
+    return parseWithFallback(raw, CreativeSourceAnalysisListResponseSchema, EMPTY_CREATIVE_SOURCE_ANALYSIS_LIST_RESPONSE, { endpoint: "GET /api/creative/source-analyses" });
+  }
+
   async putCreativeIssueContext(
     issueId: string,
     data: PutCreativeIssueContextRequest,
@@ -2751,13 +2876,37 @@ export class ApiClient {
   }
 
   async putCreativeItemBrief(issueId: string, candidateId: string, creativeBrief: CreativeIssueItem["creative_brief"]): Promise<CreativeIssueItem> {
-    const raw = await this.fetch<unknown>(`/api/issues/${issueId}/creative-materials/${candidateId}/brief`, {
-      method: "PUT",
-      body: JSON.stringify(creativeBrief),
-    });
-    return parseWithFallback(raw, CreativeIssueItemSchema, EMPTY_CREATIVE_ISSUE_ITEM, {
+    const path = `/api/issues/${issueId}/creative-materials/${candidateId}/brief`;
+    const parseItem = (raw: unknown) => parseWithFallback(raw, CreativeIssueItemSchema, EMPTY_CREATIVE_ISSUE_ITEM, {
       endpoint: "PUT /api/issues/:id/creative-materials/:candidateId/brief",
     });
+    try {
+      return parseItem(await this.fetch<unknown>(path, {
+        method: "PUT",
+        body: JSON.stringify(creativeBrief),
+        suppressErrorLog: true,
+      }));
+    } catch (error) {
+      if (!unsupportedCreativeBriefExtensionField(error)) {
+        this.logger.error(`← brief save failed ${path}`, {
+          error: error instanceof Error ? error.message : String(error),
+        });
+        throw error;
+      }
+      if (creativeBriefHasExtensionContent(creativeBrief)) {
+        throw new Error("当前运行服务尚未支持保存补充创意想法或 App UI 引用；为避免丢失内容，本次未保存。请更新服务后重试。");
+      }
+      const {
+        user_direction: _userDirection,
+        app_ui_replacement_required: _appUIReplacementRequired,
+        selected_app_ui_references: _selectedAppUIReferences,
+        ...legacyBrief
+      } = creativeBrief;
+      return parseItem(await this.fetch<unknown>(path, {
+        method: "PUT",
+        body: JSON.stringify(legacyBrief),
+      }));
+    }
   }
 
   async putCreativeItemWorkIssue(issueId: string, candidateId: string, workIssueId: string): Promise<CreativeIssueItem> {

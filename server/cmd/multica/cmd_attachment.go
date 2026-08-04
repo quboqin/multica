@@ -30,10 +30,44 @@ var attachmentDownloadCmd = &cobra.Command{
 	RunE: runAttachmentDownload,
 }
 
+var attachmentUploadCmd = &cobra.Command{
+	Use:   "upload <file>",
+	Short: "Upload a workspace attachment without linking it to an Issue",
+	Args:  exactArgs(1),
+	RunE:  runAttachmentUpload,
+}
+
 func init() {
-	attachmentCmd.AddCommand(attachmentDownloadCmd)
+	attachmentCmd.AddCommand(attachmentDownloadCmd, attachmentUploadCmd)
 
 	attachmentDownloadCmd.Flags().StringP("output-dir", "o", ".", "Directory to save the downloaded file")
+	attachmentUploadCmd.Flags().String("output", "json", "Output format: json")
+}
+
+func runAttachmentUpload(cmd *cobra.Command, args []string) error {
+	data, err := os.ReadFile(args[0])
+	if err != nil {
+		return fmt.Errorf("read attachment: %w", err)
+	}
+	client, err := newAPIClient(cmd)
+	if err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), cli.AtLeastAPITimeout(60*time.Second))
+	defer cancel()
+	id, uploadURL, err := client.UploadFileWithURL(ctx, data, filepath.Base(args[0]))
+	if err != nil {
+		return fmt.Errorf("upload attachment: %w", err)
+	}
+	if id == "" {
+		return fmt.Errorf("upload response missing attachment id")
+	}
+	return cli.PrintJSON(os.Stdout, map[string]any{
+		"id":       id,
+		"url":      uploadURL,
+		"filename": filepath.Base(args[0]),
+		"size":     len(data),
+	})
 }
 
 func runAttachmentDownload(cmd *cobra.Command, args []string) error {

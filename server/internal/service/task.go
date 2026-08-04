@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/analytics"
 	"github.com/multica-ai/multica/server/internal/attribution"
@@ -536,18 +537,288 @@ func (s *TaskService) EnqueueTaskForIssueByUser(ctx context.Context, issue db.Is
 	return s.enqueueIssueTask(ctx, issue, commentID, false, requestingUserID, requestingUserID, attribution.Result{})
 }
 
+// DirectTaskFanoutItem is one independently schedulable direct task. Context
+// remains domain-owned JSON; TaskService only adds the stable item_key needed
+// to deduplicate active attempts.
+type DirectTaskFanoutItem struct {
+	ItemKey string          `json:"item_key"`
+	Context json.RawMessage `json:"context"`
+}
+
+// DirectTaskFanout describes a set of native agent_task_queue rows. It has no
+// persisted batch identity: the evidence pair and each item key are the
+// caller-owned aggregation and idempotency handles.
+type DirectTaskFanout struct {
+	Agent                db.Agent
+	RequestingUserID     pgtype.UUID
+	Attribution          attribution.Result
+	TriggerEvidenceKind  string
+	TriggerEvidenceRefID pgtype.UUID
+	Items                []DirectTaskFanoutItem
+}
+
+func (s *TaskService) EnqueueDirectTaskFanout(ctx context.Context, fanout DirectTaskFanout) ([]db.AgentTaskQueue, error) {
+	if fanout.Agent.ArchivedAt.Valid {
+		return nil, fmt.Errorf("agent is archived")
+	}
+	if strings.TrimSpace(fanout.TriggerEvidenceKind) == "" || !fanout.TriggerEvidenceRefID.Valid {
+		return nil, fmt.Errorf("trigger evidence kind and ref id are required")
+	}
+	if len(fanout.Items) == 0 || len(fanout.Items) > 100 {
+		return nil, fmt.Errorf("fanout must contain between 1 and 100 items")
+	}
+
+	contexts := make([][]byte, len(fanout.Items))
+	seen := make(map[string]struct{}, len(fanout.Items))
+	for i, item := range fanout.Items {
+		key := strings.TrimSpace(item.ItemKey)
+		if key == "" || len(key) > 256 {
+			return nil, fmt.Errorf("fanout item key must contain between 1 and 256 characters")
+		}
+		if _, exists := seen[key]; exists {
+			return nil, fmt.Errorf("fanout has duplicate item key %q", key)
+		}
+		context, err := normalizeDirectTaskContext(item.Context, key)
+		if err != nil {
+			return nil, fmt.Errorf("fanout item %q: %w", key, err)
+		}
+		contexts[i] = context
+		seen[key] = struct{}{}
+	}
+
+	tx, err := s.TxStarter.Begin(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("begin task fanout transaction: %w", err)
+	}
+	defer tx.Rollback(ctx)
+	qtx := s.Queries.WithTx(tx)
+	tasks := make([]db.AgentTaskQueue, 0, len(fanout.Items))
+	created := make([]db.AgentTaskQueue, 0, len(fanout.Items))
+	for i, item := range fanout.Items {
+		// PostgreSQL aborts the current transaction after a unique violation.
+		// Isolate each insert in a savepoint so an active-task conflict can be
+		// resolved to the existing row without poisoning the whole fanout.
+		itemTx, beginErr := tx.Begin(ctx)
+		if beginErr != nil {
+			return nil, fmt.Errorf("begin direct task %q savepoint: %w", item.ItemKey, beginErr)
+		}
+		itemQueries := s.Queries.WithTx(itemTx)
+		task, err := itemQueries.CreateAgentTask(ctx, db.CreateAgentTaskParams{
+			AgentID:              fanout.Agent.ID,
+			RuntimeID:            fanout.Agent.RuntimeID,
+			Priority:             0,
+			RequestingUserID:     fanout.RequestingUserID,
+			OriginatorUserID:     fanout.Attribution.UserID,
+			AccountableUserID:    fanout.Attribution.AccountableUserID,
+			OriginatorSource:     pgtype.Text{String: fanout.Attribution.Source.String(), Valid: true},
+			DelegatedFromTaskID:  fanout.Attribution.DelegatedFromTaskID,
+			TriggerEvidenceKind:  pgtype.Text{String: fanout.TriggerEvidenceKind, Valid: true},
+			TriggerEvidenceRefID: fanout.TriggerEvidenceRefID,
+			Context:              contexts[i],
+		})
+		if err != nil && isUniqueTaskFanoutViolation(err) {
+			if rollbackErr := itemTx.Rollback(ctx); rollbackErr != nil {
+				return nil, fmt.Errorf("rollback duplicate direct task %q savepoint: %w", item.ItemKey, rollbackErr)
+			}
+			existing, listErr := qtx.ListAgentTasks(ctx, fanout.Agent.ID)
+			if listErr != nil {
+				return nil, fmt.Errorf("find duplicate direct task %q: %w", item.ItemKey, listErr)
+			}
+			for _, candidate := range existing {
+				if directTaskMatches(candidate, fanout.TriggerEvidenceKind, fanout.TriggerEvidenceRefID, "active") && directTaskItemKey(candidate) == strings.TrimSpace(item.ItemKey) {
+					task = candidate
+					err = nil
+					break
+				}
+			}
+		} else if err == nil {
+			if commitErr := itemTx.Commit(ctx); commitErr != nil {
+				return nil, fmt.Errorf("commit direct task %q savepoint: %w", item.ItemKey, commitErr)
+			}
+			created = append(created, task)
+		} else {
+			_ = itemTx.Rollback(ctx)
+		}
+		if err != nil {
+			return nil, fmt.Errorf("enqueue direct task %q: %w", item.ItemKey, err)
+		}
+		tasks = append(tasks, task)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("commit task fanout transaction: %w", err)
+	}
+	for _, task := range created {
+		s.broadcastTaskEvent(ctx, protocol.EventTaskQueued, task)
+		s.NotifyTaskEnqueued(ctx, task)
+	}
+	return tasks, nil
+}
+
+func normalizeDirectTaskContext(raw json.RawMessage, itemKey string) ([]byte, error) {
+	var context map[string]json.RawMessage
+	if len(raw) == 0 || json.Unmarshal(raw, &context) != nil || context == nil {
+		return nil, fmt.Errorf("context must be a JSON object")
+	}
+	var taskType string
+	if rawType, ok := context["type"]; !ok || json.Unmarshal(rawType, &taskType) != nil || strings.TrimSpace(taskType) == "" {
+		return nil, fmt.Errorf("context.type is required")
+	}
+	if taskType == QuickCreateContextType {
+		return nil, fmt.Errorf("context.type quick_create is reserved")
+	}
+	if rawKey, ok := context["item_key"]; ok {
+		var supplied string
+		if json.Unmarshal(rawKey, &supplied) != nil || supplied != itemKey {
+			return nil, fmt.Errorf("context.item_key must match item_key")
+		}
+	} else {
+		encoded, _ := json.Marshal(itemKey)
+		context["item_key"] = encoded
+	}
+	return json.Marshal(context)
+}
+
+func isUniqueTaskFanoutViolation(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "23505" && pgErr.ConstraintName == "idx_one_active_direct_task_per_evidence_item"
+}
+
+func (s *TaskService) CancelDirectTasksByEvidence(ctx context.Context, agentID pgtype.UUID, evidenceKind string, evidenceRefID pgtype.UUID) ([]db.AgentTaskQueue, error) {
+	active, err := s.ListDirectTasksByEvidence(ctx, agentID, evidenceKind, evidenceRefID, "active")
+	if err != nil {
+		return nil, err
+	}
+	cancelled := make([]db.AgentTaskQueue, 0, len(active))
+	for _, task := range active {
+		cancelledTask, err := s.CancelTask(ctx, task.ID)
+		if err != nil {
+			return nil, err
+		}
+		cancelled = append(cancelled, *cancelledTask)
+	}
+	return cancelled, nil
+}
+
+func (s *TaskService) RetryFailedDirectTasksByEvidence(ctx context.Context, agentID pgtype.UUID, evidenceKind string, evidenceRefID pgtype.UUID) ([]db.AgentTaskQueue, error) {
+	tasks, err := s.ListDirectTasksByEvidence(ctx, agentID, evidenceKind, evidenceRefID, "")
+	if err != nil {
+		return nil, err
+	}
+	failed := latestRetryableFailedDirectTasks(tasks)
+	retried := make([]db.AgentTaskQueue, 0, len(failed))
+	for _, task := range failed {
+		child, err := s.Queries.CreateRetryTask(ctx, task.ID)
+		if isUniqueTaskFanoutViolation(err) || errors.Is(err, pgx.ErrNoRows) {
+			continue
+		}
+		if err != nil {
+			return nil, fmt.Errorf("retry direct task %s: %w", util.UUIDToString(task.ID), err)
+		}
+		retried = append(retried, child)
+		s.broadcastTaskEvent(ctx, protocol.EventTaskQueued, child)
+		s.NotifyTaskEnqueued(ctx, child)
+	}
+	return retried, nil
+}
+
+// latestRetryableFailedDirectTasks keeps one current state per item key. A
+// later queued, running, completed, or cancelled attempt recovers the older
+// failure; an exhausted failed attempt remains visible but cannot be cloned.
+func latestRetryableFailedDirectTasks(tasks []db.AgentTaskQueue) []db.AgentTaskQueue {
+	latest := make([]db.AgentTaskQueue, 0, len(tasks))
+	indexByItemKey := make(map[string]int, len(tasks))
+	for _, task := range tasks {
+		itemKey := directTaskItemKey(task)
+		if index, ok := indexByItemKey[itemKey]; ok {
+			if directTaskIsNewer(task, latest[index]) {
+				latest[index] = task
+			}
+			continue
+		}
+		indexByItemKey[itemKey] = len(latest)
+		latest = append(latest, task)
+	}
+
+	failed := make([]db.AgentTaskQueue, 0, len(latest))
+	for _, task := range latest {
+		if task.Status == "failed" && task.Attempt < task.MaxAttempts {
+			failed = append(failed, task)
+		}
+	}
+	return failed
+}
+
+func directTaskIsNewer(candidate, current db.AgentTaskQueue) bool {
+	if candidate.CreatedAt.Valid != current.CreatedAt.Valid {
+		return candidate.CreatedAt.Valid
+	}
+	if candidate.CreatedAt.Valid && !candidate.CreatedAt.Time.Equal(current.CreatedAt.Time) {
+		return candidate.CreatedAt.Time.After(current.CreatedAt.Time)
+	}
+	return util.UUIDToString(candidate.ID) > util.UUIDToString(current.ID)
+}
+
+// ListDirectTasksByEvidence finds native no-issue tasks for a domain-owned
+// evidence pair. It deliberately uses the established per-agent query so the
+// source filter does not create a second task-listing contract in sqlc.
+func (s *TaskService) ListDirectTasksByEvidence(ctx context.Context, agentID pgtype.UUID, evidenceKind string, evidenceRefID pgtype.UUID, status string) ([]db.AgentTaskQueue, error) {
+	tasks, err := s.Queries.ListAgentTasks(ctx, agentID)
+	if err != nil {
+		return nil, err
+	}
+	matched := make([]db.AgentTaskQueue, 0)
+	for _, task := range tasks {
+		if directTaskMatches(task, evidenceKind, evidenceRefID, status) {
+			matched = append(matched, task)
+		}
+	}
+	return matched, nil
+}
+
+func directTaskMatches(task db.AgentTaskQueue, evidenceKind string, evidenceRefID pgtype.UUID, status string) bool {
+	if task.IssueID.Valid || task.ChatSessionID.Valid || task.AutopilotRunID.Valid || !task.TriggerEvidenceKind.Valid || task.TriggerEvidenceKind.String != evidenceKind || !task.TriggerEvidenceRefID.Valid || task.TriggerEvidenceRefID != evidenceRefID {
+		return false
+	}
+	switch status {
+	case "active":
+		return task.Status == "queued" || task.Status == "dispatched" || task.Status == "running" || task.Status == "waiting_local_directory"
+	case "":
+		return true
+	default:
+		return task.Status == status
+	}
+}
+
+func directTaskItemKey(task db.AgentTaskQueue) string {
+	var context struct {
+		ItemKey string `json:"item_key"`
+	}
+	if json.Unmarshal(task.Context, &context) != nil {
+		return ""
+	}
+	return context.ItemKey
+}
+
 // enqueueIssueTask is the shared implementation behind EnqueueTaskForIssue
 // and the manual rerun path. forceFreshSession=true marks the task so the
 // daemon claim handler skips the (agent_id, issue_id) resume lookup — the
 // user already judged the prior output bad, a fresh agent session is the
 // expected behavior.
 func (s *TaskService) enqueueIssueTask(ctx context.Context, issue db.Issue, triggerCommentID pgtype.UUID, forceFreshSession bool, requestingUserID pgtype.UUID, actorUserID pgtype.UUID, attrOverride attribution.Result) (db.AgentTaskQueue, error) {
+	return s.enqueueIssueTaskWithContext(ctx, issue, triggerCommentID, forceFreshSession, requestingUserID, actorUserID, attrOverride, nil)
+}
+
+func (s *TaskService) enqueueIssueTaskWithContext(ctx context.Context, issue db.Issue, triggerCommentID pgtype.UUID, forceFreshSession bool, requestingUserID pgtype.UUID, actorUserID pgtype.UUID, attrOverride attribution.Result, taskContext []byte) (db.AgentTaskQueue, error) {
+	return s.enqueueIssueTaskWithContextUsingQueries(ctx, s.Queries, issue, triggerCommentID, forceFreshSession, requestingUserID, actorUserID, attrOverride, taskContext, true)
+}
+
+func (s *TaskService) enqueueIssueTaskWithContextUsingQueries(ctx context.Context, queries *db.Queries, issue db.Issue, triggerCommentID pgtype.UUID, forceFreshSession bool, requestingUserID pgtype.UUID, actorUserID pgtype.UUID, attrOverride attribution.Result, taskContext []byte, emitEvents bool) (db.AgentTaskQueue, error) {
 	if !issue.AssigneeID.Valid {
 		slog.Error("task enqueue failed", "issue_id", util.UUIDToString(issue.ID), "error", "issue has no assignee")
 		return db.AgentTaskQueue{}, fmt.Errorf("issue has no assignee")
 	}
 
-	agent, err := s.Queries.GetAgent(ctx, issue.AssigneeID)
+	agent, err := queries.GetAgent(ctx, issue.AssigneeID)
 	if err != nil {
 		slog.Error("task enqueue failed", "issue_id", util.UUIDToString(issue.ID), "error", err)
 		return db.AgentTaskQueue{}, fmt.Errorf("load agent: %w", err)
@@ -571,7 +842,7 @@ func (s *TaskService) enqueueIssueTask(ctx context.Context, issue db.Issue, trig
 		return db.AgentTaskQueue{}, err
 	}
 
-	task, err := s.Queries.CreateAgentTask(ctx, db.CreateAgentTaskParams{
+	task, err := queries.CreateAgentTask(ctx, db.CreateAgentTaskParams{
 		AgentID:              issue.AssigneeID,
 		RuntimeID:            agent.RuntimeID,
 		IssueID:              issue.ID,
@@ -588,6 +859,7 @@ func (s *TaskService) enqueueIssueTask(ctx context.Context, issue db.Issue, trig
 		RerunOfTaskID:        attr.RerunOfTaskID,
 		TriggerEvidenceKind:  evidenceText(attr.EvidenceKind),
 		TriggerEvidenceRefID: attr.EvidenceRefID,
+		Context:              taskContext,
 	})
 	if err != nil {
 		slog.Error("task enqueue failed", "issue_id", util.UUIDToString(issue.ID), "error", err)
@@ -601,6 +873,9 @@ func (s *TaskService) enqueueIssueTask(ctx context.Context, issue db.Issue, trig
 		"force_fresh_session", forceFreshSession,
 		"requesting_user_id", util.UUIDToString(requestingUserID),
 	)
+	if !emitEvents {
+		return task, nil
+	}
 	// Order matters: broadcast first, notify daemon second. notifyTaskAvailable
 	// kicks an in-process channel that the daemon picks up over HTTP and
 	// claims; the claim path then emits its own task:dispatch. Doing the
@@ -2247,7 +2522,8 @@ func (s *TaskService) broadcastTaskEvent(ctx context.Context, eventType string, 
 
 // ResolveTaskWorkspaceID determines the workspace ID for a task.
 // For issue tasks, it comes from the issue. For chat tasks, from the chat session.
-// For autopilot tasks, from the autopilot via its run.
+// For autopilot tasks, from the autopilot via its run. Direct tasks fall back
+// to the assigned agent's workspace, which is fixed when fanout is validated.
 // Returns "" when none of the links resolve — callers treat that as "not found".
 func (s *TaskService) ResolveTaskWorkspaceID(ctx context.Context, task db.AgentTaskQueue) string {
 	if task.IssueID.Valid {
@@ -2274,6 +2550,14 @@ func (s *TaskService) ResolveTaskWorkspaceID(ctx context.Context, task db.AgentT
 	// broadcasts, which is why quick-create tasks appeared stuck queued.
 	if qc, ok := s.parseQuickCreateContext(task); ok {
 		return qc.WorkspaceID
+	}
+	// Only truly direct tasks use the agent fallback. A task whose issue,
+	// chat, or autopilot link has gone missing must remain not-found so the
+	// daemon stops work tied to a deleted parent.
+	if !task.IssueID.Valid && !task.ChatSessionID.Valid && !task.AutopilotRunID.Valid {
+		if agent, err := s.Queries.GetAgent(ctx, task.AgentID); err == nil {
+			return util.UUIDToString(agent.WorkspaceID)
+		}
 	}
 	return ""
 }

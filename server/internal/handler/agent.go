@@ -33,16 +33,16 @@ import (
 const maxAgentDescriptionLength = 255
 
 type AgentResponse struct {
-	ID            string          `json:"id"`
-	WorkspaceID   string          `json:"workspace_id"`
-	RuntimeID     string          `json:"runtime_id"`
-	Name          string          `json:"name"`
-	Description   string          `json:"description"`
-	Instructions  string          `json:"instructions"`
-	AvatarURL     *string         `json:"avatar_url"`
-	RuntimeMode   string          `json:"runtime_mode"`
-	RuntimeConfig any             `json:"runtime_config"`
-	CustomArgs    []string        `json:"custom_args"`
+	ID            string   `json:"id"`
+	WorkspaceID   string   `json:"workspace_id"`
+	RuntimeID     string   `json:"runtime_id"`
+	Name          string   `json:"name"`
+	Description   string   `json:"description"`
+	Instructions  string   `json:"instructions"`
+	AvatarURL     *string  `json:"avatar_url"`
+	RuntimeMode   string   `json:"runtime_mode"`
+	RuntimeConfig any      `json:"runtime_config"`
+	CustomArgs    []string `json:"custom_args"`
 	// custom_env is intentionally NOT serialized on agent resources. The
 	// agent_list/get/create/update/archive/restore responses and WS events
 	// only expose coarse metadata (has_custom_env, custom_env_key_count) so
@@ -223,6 +223,7 @@ type AgentTaskResponse struct {
 	RuntimeID        string           `json:"runtime_id"`
 	IssueID          string           `json:"issue_id"`
 	WorkspaceID      string           `json:"workspace_id"`
+	Context          json.RawMessage  `json:"context,omitempty"`
 	RequestingUserID string           `json:"requesting_user_id,omitempty"`
 	Attribution      *TaskAttribution `json:"attribution,omitempty"`
 	// WorkspaceContext is the workspace-level system prompt set in workspace
@@ -420,7 +421,7 @@ func taskToResponse(t db.AgentTaskQueue, workspaceID string) AgentTaskResponse {
 	if t.WorkDir.Valid {
 		workDir = t.WorkDir.String
 	}
-	return AgentTaskResponse{
+	response := AgentTaskResponse{
 		ID:               uuidToString(t.ID),
 		AgentID:          uuidToString(t.AgentID),
 		RuntimeID:        uuidToString(t.RuntimeID),
@@ -450,7 +451,9 @@ func taskToResponse(t db.AgentTaskQueue, workspaceID string) AgentTaskResponse {
 		ChatSessionID:  uuidToString(t.ChatSessionID),
 		AutopilotRunID: uuidToString(t.AutopilotRunID),
 		Kind:           computeTaskKind(t),
+		Context:        t.Context,
 	}
+	return response
 }
 
 func taskAttributionBase(t db.AgentTaskQueue) *TaskAttribution {
@@ -995,11 +998,11 @@ type UpdateAgentRequest struct {
 	// actually unchanged, and so a client that round-tripped a
 	// previously-returned masked map cannot silently overwrite real
 	// secret values with literal `****`. See MUL-2600.
-	CustomArgs         *[]string        `json:"custom_args"`
-	Visibility         *string          `json:"visibility"`
-	Status             *string          `json:"status"`
-	MaxConcurrentTasks *int32           `json:"max_concurrent_tasks"`
-	Model              *string          `json:"model"`
+	CustomArgs         *[]string `json:"custom_args"`
+	Visibility         *string   `json:"visibility"`
+	Status             *string   `json:"status"`
+	MaxConcurrentTasks *int32    `json:"max_concurrent_tasks"`
+	Model              *string   `json:"model"`
 	// ThinkingLevel is treated as a tri-state per-MUL-2339:
 	//   - field omitted → no change (leave existing value alone)
 	//   - field present with "" → explicit clear (use runtime default)

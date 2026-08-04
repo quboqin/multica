@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/multica-ai/multica/server/internal/broker"
@@ -245,6 +246,10 @@ func (h *Handler) RunCredentialCrawl(w http.ResponseWriter, r *http.Request) {
 		if !ok {
 			return
 		}
+		if issue.WorkspaceID != workspaceID {
+			writeError(w, http.StatusUnprocessableEntity, "issue must belong to the selected workspace")
+			return
+		}
 		hasIssue = true
 		req.Params = h.materialSearchParamsWithStrategyMemory(r.Context(), issue, req.ConnectorID, req.Capability, req.Params)
 		var noveltyErr error
@@ -255,6 +260,35 @@ func (h *Handler) RunCredentialCrawl(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	importInput := creativeMaterialImportInput{
+		WorkspaceID:    workspaceID,
+		AutopilotRunID: h.autopilotRunIDFromCurrentTask(r, actorType),
+		ConnectorID:    req.ConnectorID,
+		QuerySummary:   req.Capability,
+		Params:         req.Params,
+		ActorType:      actorType,
+		ActorID:        actorID,
+		UserID:         requestingUserID,
+	}
+	if hasIssue {
+		importInput.IssueID = issue.ID
+		importInput.WorkspaceID = issue.WorkspaceID
+	}
+
+	// Keep a run record even when broker-side credential resolution fails.
+	// Successful import adopts the same record rather than inserting another.
+	crawlRunID := ""
+	if strings.TrimSpace(req.Capability) == "material_search" {
+		var runErr error
+		crawlRunID, runErr = h.startCreativeMaterialCrawlRun(r.Context(), importInput)
+		if runErr != nil {
+			slog.Warn("create credential crawl run failed", append(logger.RequestAttrs(r), "error", runErr)...)
+			writeError(w, http.StatusInternalServerError, "failed to create crawl run")
+			return
+		}
+		importInput.RunID = crawlRunID
+	}
+
 	result, err := h.CredentialBroker.RunCrawl(r.Context(), broker.RunCrawlInput{
 		WorkspaceID: workspaceID,
 		ProfileID:   profileID,
@@ -263,41 +297,112 @@ func (h *Handler) RunCredentialCrawl(w http.ResponseWriter, r *http.Request) {
 		Params:      req.Params,
 	})
 	if err != nil {
-		writeCredentialBrokerError(w, err)
+		failureStatus := "failed"
+		if credentialCrawlRequiresLogin(err) {
+			failureStatus = "action_required"
+		}
+		h.failCreativeMaterialCrawlRun(r.Context(), workspaceID, crawlRunID, failureStatus, credentialCrawlErrorCode(err), err.Error())
+		writeCredentialCrawlError(w, err, crawlRunID)
+		return
+	}
+	if result.Status == broker.StatusNeedReauth {
+		message := "credential authorization expired; reconnect and retry this crawl"
+		h.failCreativeMaterialCrawlRun(r.Context(), workspaceID, crawlRunID, "action_required", "credential_reauth_required", message)
+		writeJSON(w, http.StatusConflict, map[string]any{
+			"status":       result.Status,
+			"message":      message,
+			"crawl_run_id": crawlRunID,
+		})
+		return
+	}
+	materials := creativeMaterialsFromCrawlRaw(result.Raw)
+	importInput.Materials = materials
+	importSummary, err := h.importCreativeMaterials(r.Context(), importInput)
+	if err != nil {
+		slog.Warn("credential crawl creative import failed", append(logger.RequestAttrs(r), "error", err, "issue_id", req.IssueID)...)
+		h.failCreativeMaterialCrawlRun(r.Context(), workspaceID, crawlRunID, "failed", "creative_material_import_failed", "crawl completed but failed to import creative materials")
+		writeJSON(w, http.StatusInternalServerError, map[string]any{
+			"error":        "crawl completed but failed to import creative materials",
+			"crawl_run_id": crawlRunID,
+		})
 		return
 	}
 	if hasIssue {
-		materials := creativeMaterialsFromCrawlRaw(result.Raw)
-		importSummary, err := h.importCreativeMaterialsForIssue(r.Context(), creativeMaterialImportInput{
-			IssueID:      issue.ID,
-			WorkspaceID:  issue.WorkspaceID,
-			ConnectorID:  req.ConnectorID,
-			QuerySummary: req.Capability,
-			Params:       req.Params,
-			Materials:    materials,
-			ActorType:    actorType,
-			ActorID:      actorID,
-			UserID:       requestingUserID,
-		})
-		if err != nil {
-			slog.Warn("credential crawl creative import failed", append(logger.RequestAttrs(r), "error", err, "issue_id", req.IssueID)...)
-			writeError(w, http.StatusInternalServerError, "crawl completed but failed to import creative materials")
-			return
-		}
 		if err := h.recordCreativeMaterialCrawlStrategyMemory(r.Context(), issue, req.ConnectorID, req.Capability, result.Raw, importSummary.RunID); err != nil {
 			slog.Warn("credential crawl strategy memory update failed", append(logger.RequestAttrs(r), "error", err, "issue_id", req.IssueID)...)
 		}
-		writeJSON(w, http.StatusOK, map[string]any{
-			"status":             result.Status,
-			"downloaded":         result.Downloaded,
-			"output_prefix":      result.OutputPrefix,
-			"message":            result.Message,
-			"raw":                result.Raw,
-			"creative_materials": importSummary,
-		})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"status":             result.Status,
+		"downloaded":         result.Downloaded,
+		"output_prefix":      result.OutputPrefix,
+		"message":            result.Message,
+		"raw":                result.Raw,
+		"crawl_run_id":       firstNonEmpty(crawlRunID, importSummary.RunID),
+		"analysis_agent_id":  creativeCrawlAnalysisAgentID(req.Params),
+		"creative_materials": importSummary,
+	})
+}
+
+func creativeCrawlAnalysisAgentID(params json.RawMessage) string {
+	var values struct {
+		AnalysisAgentID string `json:"analysis_agent_id"`
+	}
+	if json.Unmarshal(params, &values) != nil {
+		return ""
+	}
+	return strings.TrimSpace(values.AnalysisAgentID)
+}
+
+func credentialCrawlRequiresLogin(err error) bool {
+	return errors.Is(err, broker.ErrProfileNotActive) || isNotFound(err)
+}
+
+func credentialCrawlErrorCode(err error) string {
+	switch {
+	case errors.Is(err, broker.ErrProfileNotActive):
+		return "credential_not_active"
+	case errors.Is(err, broker.ErrProfileRequired):
+		return "credential_required"
+	case isNotFound(err):
+		return "credential_not_found"
+	case errors.Is(err, broker.ErrWorkerTimeout):
+		return "worker_timeout"
+	case errors.Is(err, broker.ErrWorkerBusy):
+		return "worker_busy"
+	case errors.Is(err, broker.ErrWorkerUnavailable):
+		return "worker_unavailable"
+	default:
+		return "credential_crawl_failed"
+	}
+}
+
+func writeCredentialCrawlError(w http.ResponseWriter, err error, crawlRunID string) {
+	status := credentialBrokerErrorStatus(err)
+	message := err.Error()
+	if isNotFound(err) {
+		message = "credential resource not found"
+	}
+	if strings.TrimSpace(crawlRunID) == "" {
+		writeError(w, status, message)
 		return
 	}
-	writeJSON(w, http.StatusOK, result)
+	writeJSON(w, status, map[string]string{"error": message, "crawl_run_id": crawlRunID})
+}
+
+func (h *Handler) autopilotRunIDFromCurrentTask(r *http.Request, actorType string) pgtype.UUID {
+	if actorType != "agent" {
+		return pgtype.UUID{}
+	}
+	taskID, err := uuid.Parse(strings.TrimSpace(r.Header.Get("X-Task-ID")))
+	if err != nil {
+		return pgtype.UUID{}
+	}
+	task, err := h.Queries.GetAgentTask(r.Context(), parseUUID(taskID.String()))
+	if err != nil {
+		return pgtype.UUID{}
+	}
+	return task.AutopilotRunID
 }
 
 func (h *Handler) credentialWorkspaceScope(w http.ResponseWriter, r *http.Request, manage bool) (pgtype.UUID, pgtype.UUID, bool) {
@@ -332,31 +437,40 @@ func (h *Handler) credentialWorkspaceScope(w http.ResponseWriter, r *http.Reques
 }
 
 func writeCredentialBrokerError(w http.ResponseWriter, err error) {
+	status := credentialBrokerErrorStatus(err)
+	if isNotFound(err) {
+		writeError(w, status, "credential resource not found")
+		return
+	}
+	writeError(w, status, err.Error())
+}
+
+func credentialBrokerErrorStatus(err error) int {
 	switch {
 	case errors.Is(err, broker.ErrProfileRequired):
-		writeError(w, http.StatusBadRequest, err.Error())
+		return http.StatusBadRequest
 	case errors.Is(err, broker.ErrConnectorUnknown):
-		writeError(w, http.StatusBadRequest, err.Error())
+		return http.StatusBadRequest
 	case errors.Is(err, broker.ErrProfileConnectorMismatch):
-		writeError(w, http.StatusBadRequest, err.Error())
+		return http.StatusBadRequest
 	case errors.Is(err, broker.ErrUnsafeParams):
-		writeError(w, http.StatusBadRequest, err.Error())
+		return http.StatusBadRequest
 	case errors.Is(err, broker.ErrProfileNotActive):
-		writeError(w, http.StatusConflict, err.Error())
+		return http.StatusConflict
 	case errors.Is(err, broker.ErrWorkerNotConfigured):
-		writeError(w, http.StatusServiceUnavailable, err.Error())
+		return http.StatusServiceUnavailable
 	case errors.Is(err, broker.ErrWorkerRequestInvalid):
-		writeError(w, http.StatusBadRequest, err.Error())
+		return http.StatusBadRequest
 	case errors.Is(err, broker.ErrWorkerBusy):
-		writeError(w, http.StatusTooManyRequests, err.Error())
+		return http.StatusTooManyRequests
 	case errors.Is(err, broker.ErrWorkerTimeout):
-		writeError(w, http.StatusGatewayTimeout, err.Error())
+		return http.StatusGatewayTimeout
 	case errors.Is(err, broker.ErrWorkerUnavailable):
-		writeError(w, http.StatusServiceUnavailable, err.Error())
+		return http.StatusServiceUnavailable
 	case isNotFound(err):
-		writeError(w, http.StatusNotFound, "credential resource not found")
+		return http.StatusNotFound
 	default:
-		writeError(w, http.StatusInternalServerError, err.Error())
+		return http.StatusInternalServerError
 	}
 }
 

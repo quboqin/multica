@@ -12,7 +12,7 @@ import (
 	"time"
 )
 
-const defaultImageConcurrency = 5
+const defaultImageConcurrency = 9
 
 func configuredImageConcurrency() (int, error) {
 	raw := strings.TrimSpace(os.Getenv("MULTICA_IMAGE_MAX_CONCURRENT"))

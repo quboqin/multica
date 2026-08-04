@@ -1,102 +1,124 @@
-# 协作与证据契约
+# 创意小队协作契约
 
-## 有效输入
+## 边界
 
-- 父候选池 Issue ID 和候选 ID；
-- 候选的稳定归档文件，不能把外部临时签名 URL 作为运行输入；
-- 候选图结构化创意简报：视觉主题、主利益点、辅助利益点、图片证据和用户确认状态；
-- 当前图片选定的文案及版本；
-- 已发布市场资源包版本、资源文件和服务端二维码校验快照；
-- 当前小队、Leader、成员职责以及每个智能体的平台 Skill。
+Multica 的原生智能体通过 `agent_task_queue` 执行工作。创意领域对象保存业务状态，Issue 保存需要
+人参与的目标和验收。两者不能互相冒充。
 
-缺项时只请求缺失项，不猜测竞品品牌、金融事实、合规文字或二维码。
+- Crawl Run、Source Analysis、Order Item、Variant、Asset、QC Report 都不是 Issue。
+- 不新增 Task Batch 或 Work Unit。
+- 一个正式 Creative Order 最多一个用户可见 Issue。
+- 采集、逐图分析、方案、生成、Prime、QC 不创建子 Issue。
+- task 详情可供排障和审计，但默认不占用业务看板。
 
-主题与利益点是独立输入。例如“世界杯 / 足球赛事 × 费用减免”中，足球视觉只控制画面语言，
-费用减免控制信息层级和文案匹配。采集标题、媒体、标签和接口元数据只能作为弱辅助；参考分析
-成员必须读取真实像素，并用平台 brief 接口回写结构化证据。用户修订后的简报优先于 AI 草稿。
+## 原生 task 来源
 
-## 动态委派
+每个 task 都必须有稳定来源：
 
-根据当前证据缺口选择成员，不维护固定节点或固定顺序。任务由能力和对象命名，例如
-“参考分析 · Easycash 首页”或“图像编辑 · 1200x628”。每个专业任务必须创建为当前创意工作
-Issue 的直接子 Issue，并以 `todo` 状态分配给目标智能体。分配本身会触发执行，禁止在当前
-创意工作 Issue 用 `@mention` 代替子 Issue，也不要对同一个子 Issue 重复触发。
+| 阶段 | `trigger_evidence_kind` | `trigger_evidence_ref_id` |
+| --- | --- | --- |
+| 参考分析 | `creative_crawl_run_analysis` | Crawl Run UUID；候选在 `item_key` |
+| 方案 | `creative_order_item_plan` | Order Item UUID |
+| 生成 | `creative_order_item_production` | Order Item UUID；Variant 在 `item_key` |
+| Prime | `creative_order_variant_prime` | Variant UUID |
+| 技术与视觉 QC | `creative_order_variant_qc` | Variant UUID；lane 在 `item_key` |
+| 直接改图 | `creative_order_item_direct_edit` | Order Item UUID |
 
-专业子 Issue 完成后直接置为 `done`。平台会自动在直接父 Issue 生成“状态 + 子 Issue 链接”的
-最小回执并唤醒小队；专业成员禁止再手工评论父 Issue 或 mention Leader，避免重复执行。所有
-专业过程、模型输入输出和附件只保存在专业子 Issue。
+上表是原生 task 的来源类型。Source Analysis 领域对象写回时使用
+`trigger_evidence_kind=crawl_run`，引用同一个 Crawl Run UUID；两类字段不可混用。
 
-采集协调 Issue 是同一套动态委派的前置用法：先委派一个真实采集子 Issue，采集完成后按最新
-`source_run_id` 对本次新增图片批量创建参考分析子 Issue。分析任务与采集任务都在采集协调 Issue
-下，候选池外层不展开逐图对话。每张素材独立分析，最多四路并发；不能因为素材尚未被用户选择而
-跳过，也不能在页面点击“识别创意”后才开始常规分析。
+委派幂等键是目标 Agent、source pair（`trigger_evidence_kind` + `trigger_evidence_ref_id`）与
+`item_key` 的组合。同一 source 可以包含多个并行 item；每次补任务都必须逐项比较 `item_key`，不能用
+“source 下已有 task”替代。重试失败项创建带 `retry_of_task_id` 的新 task，取消只作用于未完成 task。
+Agent 委派时复制 `delegated_from_task_id`、顶层人工 originator 和 accountable human；
+成员直接发起时按工作区权限写入本人归因。
 
-并发按证据依赖决定，不按固定阶段排队。每个候选固定有三个创意变体，每个变体固定有三个原生
-尺寸。生成方案完成后使用 `multica issue create-batch` 同时委派 V01-V03 三个变体 Issue；每个
-变体 Issue 内先生成并检查方形母版，再使用 `multica image edit-batch` 同时生成横版和竖版。
-每个重排必须把对应母版作为第一图像输入，不能从候选图重新发明创意，也不能裁切、加边或拉伸
-母版。九张底图齐备后，用一个 Prime Issue 批量包装，再用一个 QC Issue 批量验收。平台跨进程
-图片槽位合计限制为 5，给六路图像接口额度保留一路。
+所有订单阶段的 context 必须逐级原样携带根订单 `issue_id` 与冻结的 `leader_agent_id`。后端按 workflow
+校验这两个 UUID 及 source 对象；任何一层遗漏都拒绝整批 fanout，不创建部分任务。
 
-Leader 每次唤醒必须先读取全部直接子 Issue，并在同一轮创建所有已经满足依赖且尚不存在的任务，
-随后立即结束。两个及以上任务写入 manifest，用一次 `issue create-batch` 委派。禁止一次只创建
-一个可并行任务，也禁止轮询、休眠或等待子 Issue。创建前按候选 ID、修订、变体、作用域和能力
-去重；子 Issue 完成事件负责再次唤醒 Leader。
+方案、生产和 Prime 成员可以按订单冻结的 squad agent ID 委派下一阶段。它们不能改换负责人，也不能
+按名称猜 Agent。这些 A2A task 仍属于最初 Leader 的委派链；专业成员只创建契约中的下一阶段，不得
+越级创建其他业务。
 
-直接子 Issue 列表使用 `multica issue children <当前 Issue ID> --compact --output json`。compact 列表
-用于判断状态、metadata 和是否已经创建；Leader 只深入读取当前依赖门槛对应的专业 Issue，不要在
-每次唤醒时重新加载所有历史描述、评论和附件。
+直接改图订单的 `input_snapshot.mode` 为 `direct_edit`，冻结 snapshot 必须包含
+`direct_edit_agent_id`、`prime_agent_id` 和 `reviewer_agent_id`。Leader 只能把
+`creative_order_item_direct_edit` 委派给 direct edit Agent；不得复用
+生产、方案、分析或采集角色。其 context 还必须携带 source asset/attachment、用户原话、目标尺寸、
+`expected_sizes=[target_size]`、delivery mode、Prime Agent ID 和 Reviewer Agent ID。context revision 表示
+source revision；source asset 不可覆盖，
+编辑输出使用 `output_revision=revision+1` 并以 source asset 写入
+`derived_from_asset_id`。preview 不进入 Prime/QC；publish 只进入对应尺寸的 Prime 与双路 QC。
 
-成员声明 `needs_input`、`QC FAIL`，或逐图 `blocking_failures` 仍非空时，输出无效，即使 Issue 状态
-已经是 `done`。只重开受影响的图片或尺寸，保留此前通过的证据和历史产物。`QC PASS WITH WARNINGS`
-中的 `quality_warnings` 必须正常发布到结果看板，不得自动重做。判断必须读取完整时间线到最新人工
-决定，不能因历史评论仍有失败词而覆盖后续接受结论。
+## Fanout
 
-## 精准返工
+使用 `multica task fanout`，不要用 mention 或批量创建 Issue。manifest 示例：
 
-平台创建的返工 Issue 使用 `metadata.workflow=creative_adjustment`。Leader 必须直接读取 metadata，
-不得从标题或自然语言评论猜测作用域。`creative_scope=size` 精确到一个变体和一个尺寸；
-`creative_scope=variant` 精确到一个变体的三个尺寸；`creative_scope=variant_subset` 精确到同一变体
-的 `affected_sizes`；`creative_scope=batch` 只用于把同轮恢复后的 1-9 张变更图合并执行 Prime/QC。
-`creative_target_attachment_ids` 是用户看到的
-当前最终成图，`creative_base_attachment_ids` 是允许再次送入图像模型的无品牌底图。
+```json
+{
+  "trigger_evidence_kind": "creative_crawl_run_analysis",
+  "trigger_evidence_ref_id": "<run-id>",
+  "items": [
+    {
+      "item_key": "<candidate-id>:v1",
+      "context": {
+        "type": "creative_domain_task",
+        "workflow": "creative_reference_analysis",
+        "crawl_run_id": "<run-id>",
+        "candidate_id": "<candidate-id>",
+        "analysis_version": 1
+      }
+    }
+  ]
+}
+```
 
-需要修改画面时，上一版对应尺寸的无品牌底图必须是第一图像输入。最终成图包含确定性 Prime、
-条款和二维码，只用于人类对照与问题定位，不作为模型第一输入。只涉及模板、二维码或确定性
-覆盖位置时，跳过图像生成，直接重跑作用域内 Prime。每个作用域完成后独立 QC；单尺寸通过即可
-完成单尺寸 QC Issue，不等待另外两个沿用尺寸。
+平台必须原子验证整个 manifest 的工作区、目标 Agent、调用权限、source 和 item key；某一项格式错误
+时不创建部分任务。合法任务可在 Agent 的 `max_concurrent_tasks` 与运行时总并发限制内并发认领。
+创意图片调用还受独立 provider image slot 限制，不能用提高 Agent task 并发绕过 429 保护。
 
-同一个 QC 批次出现多个真实成图缺陷时，Leader 必须先按变体聚合并用一次批量创建发出恢复任务，
-每个变体最多一个图像编辑 Issue。恢复底图全部完成后，本轮所有变更图共用一个批量 Prime Issue
-和一个批量 QC Issue；已通过且未变化的图直接沿用。不得按失败图片数量创建 Prime/QC 流水线。
+## 状态聚合
 
-市场包 `hard_regions` 是 Prime 实际资产矩形，也是唯一空间硬门槛；顶部/底部上下文切片只是读图
-辅助，不得合并成全宽避让带。Leader 应让底图进入 Prime 包装，再由真实合成图和独立 QC 判断资产
-可读性与实际遮挡；这不是用包装绕过问题。只有真实 Prime 成图已证明品牌、条款、二维码、商店
-徽章或监管资产不可读，或获批文案、金融事实、`information_mechanism`、`must_preserve` 被删改或
-实际遮挡时，才返工对应底图和尺寸。返工只移动冲突元素，不得删除或改写这些关键内容。
+状态由领域对象和关联 task 派生，不由评论文字派生：
 
-## App UI 参考资源
+- 任一 item queued/running 时，阶段为 running；
+- 成功和失败并存时为 partial；
+- 所有 item 成功时为 completed；
+- 所有可运行项失败时为 failed；
+- 需要凭证、配置或用户决定时为 action_required；
+- 用户取消时为 cancelled。
 
-市场资源包可以包含多条 `app_ui_reference`。分析成员先判断竞品图是否展示 App UI；若展示，
-比较所有参考图的页面类型、信息密度、组件结构和目标构图，选出一张或多张最合适的引用，并在
-分析结论中记录所选资源文件 ID。图像编辑成员必须使用该选择替换竞品 UI。若没有合适参考，
-应向 Leader 报告资源缺口，不能生成虚构的 AdaKami 产品界面。
+失败项不阻塞同批其他对象。已完成的变体即时发布，订单可以长期保持 partial。迟到 task 只能写入
+自己声明的 revision；如果当前领域对象已有更高 revision，服务端拒绝旧结果覆盖。
 
-## 发布边界
+## 生产一致性
 
-- 父 Issue 只承载候选池、结果看板和必要结论。
-- 候选采集结果直接写入父 Issue 候选池，逐页证据留在采集子 Issue。
-- 每张选中素材对应一个创意工作 Issue，图片之间的文案和修订隔离。
-- 最终图片必须通过尺寸、批准文案、关键内容、Prime 完整贴图、二维码和合规硬检查；一般构图和
-  视觉问题作为质量警告发布，由用户决定是否自然语言调整。
-- 每张候选交付 V01-V03 三个创意，每个创意交付三个尺寸，共九张最终成图；初次生产的专业子
-  Issue 固定为一个方案、三个变体图片、一个九图 Prime、一个九图 QC。
-- 文件名必须包含 V01-V03；同一变体的三个交付文件使用相同前缀，只允许尺寸和修订号不同。
-- 发布目标必须是快照中的 `parent_issue_id`；发布后逐个确认附件的 `issue_id`。
-- 每张新成图必须登记到平台交付表。manifest 格式为
-  `{"deliveries":[{"candidate_id":"...","work_issue_id":"...","variant":2,"size":"1200x628","revision":4,"base_attachment_id":"...","final_attachment_id":"...","prime_evidence_attachment_id":"...","qc_issue_id":"..."}]}`。
-- 初次交付一次登记九条；精准返工按作用域登记一条或三条。使用
-  `multica creative delivery register <父 Issue ID> --input-file <manifest.json> --output json`，不得只靠评论中的候选 ID 建立关联。
-- 新修订使用 `naming_rule` 生成相同稳定前缀和更高 `_vN`；旧附件与旧登记记录不得覆盖或删除。
-- 九张最终成图全部发布后关闭该候选的创意工作 Issue，最外层候选池 Issue 由用户决定何时关闭。
+标准生产的每个 Variant 是一个内容族，`expected_sizes` 固定为 square、landscape、portrait 三个 Asset；
+direct edit 的 `expected_sizes` 固定为本次用户发布的受影响尺寸，可以只有一个：
+
+- square 是内容母版；横竖版保存 `derived_from_asset_id=square`；
+- 三张共享批准文案、业务语义、主要人物/产品、信息层级和 `asset_family_id`；
+- 尺寸变化通过原生重排完成，不得裁切、拉伸或引入不同场景；
+- Prime 只加入版本化四角/底部资产，不修改创意底图内容。
+
+Prime 和 QC 只要求当前 revision 的 `expected_sizes` 完整，不要求 direct edit 生成未受影响尺寸。技术 QC
+与视觉 QC 并发。技术 QC 重点检查四角、底部、二维码、尺寸和文件；视觉 QC 重点检查画质、文字、语义，
+并在 `expected_sizes` 多于一个时检查跨尺寸一致性。两份报告都无阻断才通过。
+
+## 人工反馈
+
+以下操作必须在发生时追加 feedback event：
+
+- 素材采用、拒绝、恢复、归档；
+- 文案推荐曝光、采用、替换、人工编辑及原因；
+- 变体接受、调整、放弃；
+- 成图接受、下载、报告问题、图片点位或矩形标注；
+- QC 漏检、误判和用户接受风险。
+
+事件保存 subject、decision、reason codes、自由说明、相对坐标标注、用户、时间、关联 Crawl Run/
+订单/分析/推荐/资源/Skill/修订快照。撤销通过新事件引用原事件，不物理删除历史。
+
+## 用户可见内容
+
+业务页面显示 Crawl Run 进度、候选分析、文案选择、订单状态、原图与成图高清对比、问题标注和下载。
+订单 Issue 只显示摘要和跳转。只有需要用户决策的阻塞才通知用户，内部 task 失败保留在执行详情中并
+允许按 source 重试。

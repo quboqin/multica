@@ -109,7 +109,7 @@ RETURNING c.id, c.workspace_id, c.asset_type, c.preview_url, c.resource_url, c.p
 func (h *Handler) archiveCreativeMaterial(ctx context.Context, candidate creativeArchiveCandidate) error {
 	sourceURL := creativeArchiveSource(candidate)
 	if sourceURL == "" {
-		return h.markCreativeArchiveFailed(ctx, candidate.ID, errors.New("creative material has no downloadable asset URL"))
+		return h.markCreativeArchiveFailed(ctx, candidate, errors.New("creative material has no downloadable asset URL"))
 	}
 	if strings.HasPrefix(sourceURL, "/uploads/") {
 		return h.completeCreativeArchive(ctx, candidate, sourceURL)
@@ -117,7 +117,7 @@ func (h *Handler) archiveCreativeMaterial(ctx context.Context, candidate creativ
 
 	download, err := h.CreativeAssetDownloader.Fetch(ctx, sourceURL)
 	if err != nil {
-		_ = h.markCreativeArchiveFailed(ctx, candidate.ID, err)
+		_ = h.markCreativeArchiveFailed(ctx, candidate, err)
 		return err
 	}
 	key := fmt.Sprintf(
@@ -128,7 +128,7 @@ func (h *Handler) archiveCreativeMaterial(ctx context.Context, candidate creativ
 	)
 	archivedURL, err := h.Storage.Upload(ctx, key, download.Data, download.ContentType, "source"+download.Extension)
 	if err != nil {
-		_ = h.markCreativeArchiveFailed(ctx, candidate.ID, err)
+		_ = h.markCreativeArchiveFailed(ctx, candidate, err)
 		return err
 	}
 	return h.completeCreativeArchive(ctx, candidate, archivedURL)
@@ -143,11 +143,11 @@ WHERE id = $1
 `, candidate.ID, archivedURL); err != nil {
 		return err
 	}
-	h.publishCreativeArchiveCandidateIssues(ctx, candidate.WorkspaceID, candidate.ID)
+	h.publishCreativeMaterialsUpdated(candidate.WorkspaceID, pgtype.UUID{}, "system", "")
 	return nil
 }
 
-func (h *Handler) markCreativeArchiveFailed(ctx context.Context, candidateID pgtype.UUID, archiveErr error) error {
+func (h *Handler) markCreativeArchiveFailed(ctx context.Context, candidate creativeArchiveCandidate, archiveErr error) error {
 	_, err := h.DB.Exec(ctx, `
 UPDATE creative_material_candidate
 SET archive_status = CASE WHEN archive_attempts >= $2 THEN 'failed' ELSE 'pending' END,
@@ -157,26 +157,11 @@ SET archive_status = CASE WHEN archive_attempts >= $2 THEN 'failed' ELSE 'pendin
     ),
     updated_at = now()
 WHERE id = $1
-`, candidateID, maxCreativeArchiveAttempts, truncateCreativeArchiveError(archiveErr.Error()))
+	`, candidate.ID, maxCreativeArchiveAttempts, truncateCreativeArchiveError(archiveErr.Error()))
+	if err == nil {
+		h.publishCreativeMaterialsUpdated(candidate.WorkspaceID, pgtype.UUID{}, "system", "")
+	}
 	return err
-}
-
-func (h *Handler) publishCreativeArchiveCandidateIssues(ctx context.Context, workspaceID, candidateID pgtype.UUID) {
-	rows, err := h.DB.Query(ctx, `
-SELECT issue_id
-FROM creative_material_issue_candidate
-WHERE workspace_id = $1 AND candidate_id = $2
-`, workspaceID, candidateID)
-	if err != nil {
-		return
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var issueID pgtype.UUID
-		if rows.Scan(&issueID) == nil {
-			h.publishCreativeMaterialsUpdated(workspaceID, issueID, "system", "")
-		}
-	}
 }
 
 func creativeArchiveSource(candidate creativeArchiveCandidate) string {

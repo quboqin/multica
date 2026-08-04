@@ -26,6 +26,7 @@ describe("paths.workspace(slug)", () => {
     expect(ws.squads()).toBe("/acme/squads");
     expect(ws.squadDetail("sq_1")).toBe("/acme/squads/sq_1");
     expect(ws.creative()).toBe("/acme/creative");
+    expect(ws.creativeOrder("order 1")).toBe("/acme/creative?tab=orders&order=order%201");
     expect(ws.settings()).toBe("/acme/settings");
     expect(ws.attachmentPreview("att_42")).toBe("/acme/attachments/att_42/preview");
   });

@@ -443,6 +443,48 @@ func TestWriteContextFiles(t *testing.T) {
 	}
 }
 
+func TestRenderIssueContextCreativeDomainTask(t *testing.T) {
+	t.Parallel()
+
+	rawContext := json.RawMessage(`{"type":"creative_domain_task","workflow":"creative_reference_analysis","item_key":"candidate-1:v1"}`)
+	out := renderIssueContext("codex", TaskContextForEnv{
+		TaskContext:      rawContext,
+		TriggerCommentID: "must-not-render",
+		AgentSkills: []SkillContextForEnv{
+			{Name: "Reference Analysis", Content: "Detailed skill body must not be copied here."},
+			{Name: "Creative Resources", Content: "Another detailed skill body."},
+		},
+	})
+
+	for _, want := range []string{
+		"# Creative Domain Task",
+		"JSON task context below is authoritative",
+		string(rawContext),
+		"## Bound Skills",
+		"Reference Analysis",
+		"Creative Resources",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("creative-domain issue context missing %q\n--- context ---\n%s", want, out)
+		}
+	}
+	for _, banned := range []string{
+		"# Task Assignment",
+		"**Issue ID:**",
+		"**Trigger:**",
+		"must-not-render",
+		"## Quick Start",
+		"multica issue get",
+		"## Agent Skills",
+		"Detailed skill body",
+		"Another detailed skill body",
+	} {
+		if strings.Contains(out, banned) {
+			t.Errorf("creative-domain issue context must not contain generic Issue protocol or skill contents %q\n--- context ---\n%s", banned, out)
+		}
+	}
+}
+
 func TestWriteContextFilesOmitsSkillsWhenEmpty(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
@@ -957,8 +999,11 @@ func TestInjectRuntimeConfigCodex(t *testing.T) {
 	dir := t.TempDir()
 
 	ctx := TaskContextForEnv{
-		IssueID:     "test-issue-id",
-		AgentSkills: []SkillContextForEnv{{Name: "Coding", Content: "Write good code."}},
+		IssueID: "test-issue-id",
+		AgentSkills: []SkillContextForEnv{
+			{Name: "广告参考分析", Content: "Analyze images."},
+			{Name: "creative-issue-resources", Content: "Read issue resources."},
+		},
 	}
 
 	if _, err := InjectRuntimeConfig(dir, "codex", ctx); err != nil {
@@ -974,8 +1019,15 @@ func TestInjectRuntimeConfigCodex(t *testing.T) {
 	if !strings.Contains(s, "Multica Agent Runtime") {
 		t.Error("AGENTS.md missing meta skill header")
 	}
-	if !strings.Contains(s, "Coding") {
-		t.Error("AGENTS.md missing skill name")
+	for _, want := range []string{
+		"广告参考分析",
+		"`r0` skill root maps to the `skills` directory inside the active `CODEX_HOME`",
+		"(file: r0/skill/SKILL.md)",
+		"(file: r0/creative-issue-resources/SKILL.md)",
+	} {
+		if !strings.Contains(s, want) {
+			t.Errorf("AGENTS.md missing %q", want)
+		}
 	}
 }
 

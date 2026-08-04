@@ -1,6 +1,7 @@
 package service
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -8,6 +9,38 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
+
+func TestAutopilotIssueMetadata(t *testing.T) {
+	apID := pgtype.UUID{Bytes: [16]byte{1}, Valid: true}
+	runID := pgtype.UUID{Bytes: [16]byte{2}, Valid: true}
+	entries := autopilotIssueMetadata(
+		db.Autopilot{ID: apID},
+		db.AutopilotRun{ID: runID, Source: "manual"},
+	)
+
+	got := make(map[string]string, len(entries))
+	for _, entry := range entries {
+		var value string
+		if err := json.Unmarshal(entry.value, &value); err != nil {
+			t.Fatalf("metadata %q is not a JSON string: %v", entry.key, err)
+		}
+		got[entry.key] = value
+	}
+
+	want := map[string]string{
+		"autopilot_id":     "01000000-0000-0000-0000-000000000000",
+		"autopilot_run_id": "02000000-0000-0000-0000-000000000000",
+		"autopilot_source": "manual",
+	}
+	if len(got) != len(want) {
+		t.Fatalf("metadata count = %d, want %d", len(got), len(want))
+	}
+	for key, value := range want {
+		if got[key] != value {
+			t.Fatalf("metadata[%q] = %q, want %q", key, got[key], value)
+		}
+	}
+}
 
 func TestAutopilotErrorType(t *testing.T) {
 	cases := map[string]string{

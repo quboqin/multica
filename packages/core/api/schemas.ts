@@ -399,16 +399,110 @@ export const CreativeMaterialCandidateSchema = z.object({
   source_issue_id: z.string().default(""),
   source_run_id: z.string().default(""),
   is_new_in_run: z.boolean().default(false),
+  analysis_status: z.string().default("pending"),
+  analysis_error: z.string().default(""),
   raw: z.unknown().optional(),
 }).loose();
 
 export const CreativeMaterialLibrarySchema = z.object({
   candidates: z.array(CreativeMaterialCandidateSchema).default([]),
+  crawl_runs: z.array(z.object({
+    id: z.string().default(""), workspace_id: z.string().default(""), issue_id: z.string().default(""),
+    autopilot_run_id: z.string().default(""), rerun_of_id: z.string().default(""), connector_id: z.string().default(""),
+    query_summary: z.string().default(""), status: z.string().default(""), error_code: z.string().default(""),
+    error_message: z.string().default(""), imported_count: z.number().default(0), existing_count: z.number().default(0),
+    total_count: z.number().default(0), candidate_metrics: z.object({ total: z.number().default(0), analyzed: z.number().default(0), analysis_failed: z.number().default(0), selected: z.number().default(0), rejected: z.number().default(0) }).default({ total: 0, analyzed: 0, analysis_failed: 0, selected: 0, rejected: 0 }),
+    started_at: z.string().default(""), finished_at: z.string().default(""), created_at: z.string().default(""),
+  }).loose()).default([]),
 }).loose();
 
-export const EMPTY_CREATIVE_MATERIAL_LIBRARY: CreativeMaterialLibraryResponse = { candidates: [] };
+export const EMPTY_CREATIVE_MATERIAL_LIBRARY: CreativeMaterialLibraryResponse = { candidates: [], crawl_runs: [] };
 export const CreativeMaterialImportResultSchema = z.object({ id: z.string().default("") });
 export const EMPTY_CREATIVE_MATERIAL_IMPORT_RESULT = { id: "" };
+
+const CreativeFeedbackAnnotationSchema = z.object({
+  id: z.string().default(""),
+  asset_id: z.string().default(""),
+  kind: z.string().default("point"),
+  issue_type: z.string().default("other"),
+  x: z.number(),
+  y: z.number(),
+  width: z.number(),
+  height: z.number(),
+  scope: z.string().default("size"),
+  comment: z.string().default(""),
+}).loose();
+
+const CreativeFeedbackAnnotationFieldSchema = z.preprocess(
+  (value) => value && typeof value === "object" && !Array.isArray(value) && Object.keys(value).length === 0 ? undefined : value,
+  CreativeFeedbackAnnotationSchema.optional(),
+);
+
+export const CreativeFeedbackEventSchema = z.object({
+  id: z.string().default(""),
+  idempotency_key: z.string().default(""),
+  workspace_id: z.string().default(""),
+  actor_id: z.string().default(""),
+  issue_id: z.string().default(""),
+  subject_type: z.string().default(""),
+  subject_id: z.string().default(""),
+  event_type: z.string().default(""),
+  decision: z.string().default(""),
+  reason_codes: z.array(z.string()).default([]),
+  comment: z.string().default(""),
+  annotation: CreativeFeedbackAnnotationFieldSchema,
+  context_snapshot: z.record(z.string(), z.unknown()).default({}),
+  created_at: z.string().default(""),
+}).loose();
+
+export const CreateCreativeFeedbackResponseSchema = CreativeFeedbackEventSchema.extend({
+  actor_type: z.string().default(""),
+  undo_of_id: z.string().default(""),
+}).loose();
+
+export const CreativeFeedbackEventListResponseSchema = z.object({
+  events: z.array(CreateCreativeFeedbackResponseSchema).default([]),
+}).loose();
+
+export const EMPTY_CREATIVE_FEEDBACK_RESPONSE = { id: "", idempotency_key: "", workspace_id: "", issue_id: "", actor_type: "", actor_id: "", subject_type: "", subject_id: "", event_type: "", decision: "", reason_codes: [], comment: "", context_snapshot: {}, undo_of_id: "", created_at: "" };
+export const EMPTY_CREATIVE_FEEDBACK_EVENT_LIST_RESPONSE = { events: [] };
+
+const CreativeOrderAssetSchema = z.object({ id: z.string().default(""), variant_id: z.string().default(""), asset_family_id: z.string().default(""), size_key: z.string().default(""), revision: z.number().default(1), stage: z.string().default("generated"), attachment_id: z.string().default(""), derived_from_asset_id: z.string().default(""), metadata: z.record(z.string(), z.unknown()).default({}), evidence: z.record(z.string(), z.unknown()).default({}), status: z.string().default("queued"), created_at: z.string().default(""), updated_at: z.string().default("") }).loose();
+const CreativeOrderQCReportSchema = z.object({ id: z.string().default(""), variant_id: z.string().default(""), lane: z.string().default(""), revision: z.number().default(1), status: z.string().default("pending"), findings: z.record(z.string(), z.unknown()).default({}), trigger_evidence_kind: z.string().default(""), trigger_evidence_ref_id: z.string().default(""), created_at: z.string().default(""), updated_at: z.string().default("") }).loose();
+const CreativeOrderVariantSchema = z.object({ id: z.string().default(""), order_item_id: z.string().default(""), variant_key: z.string().default(""), brief: z.record(z.string(), z.unknown()).default({}), revision: z.number().default(1), status: z.string().default("queued"), qc_status: z.string().default("pending"), assets: z.array(CreativeOrderAssetSchema).default([]), qc_reports: z.array(CreativeOrderQCReportSchema).default([]), created_at: z.string().default(""), updated_at: z.string().default("") }).loose();
+const CreativeOrderItemSchema = z.object({ id: z.string().default(""), order_id: z.string().default(""), candidate_id: z.string().default(""), source_analysis_id: z.string().default(""), copy_snapshot: z.record(z.string(), z.unknown()).default({}), direction: z.string().default(""), status: z.string().default(""), variants: z.array(CreativeOrderVariantSchema).default([]), created_at: z.string().default(""), updated_at: z.string().default("") }).loose();
+export const CreativeOrderWorkflowFailureSchema = z.object({
+  task_id: z.string().default(""), agent_id: z.string().default(""), workflow: z.string().default(""),
+  scope: z.string().default(""), subject_id: z.string().default(""), item_key: z.string().default(""),
+  trigger_evidence_kind: z.string().default(""), trigger_evidence_ref_id: z.string().default(""),
+  failure_reason: z.string().default(""), error: z.string().default(""), failed_at: z.string().default(""),
+  retryable: z.boolean().default(false),
+}).loose();
+export const CreativeOrderSchema = z.object({ id: z.string().default(""), workspace_id: z.string().default(""), issue_id: z.string().default(""), status: z.string().default("draft"), derived_status: z.string().default("draft"), input_snapshot: z.record(z.string(), z.unknown()).default({}), trigger_evidence_kind: z.string().default(""), trigger_evidence_ref_id: z.string().default(""), created_by: z.string().default(""), created_at: z.string().default(""), updated_at: z.string().default(""), workflow_failures: z.array(CreativeOrderWorkflowFailureSchema).default([]), items: z.array(CreativeOrderItemSchema).default([]) }).loose();
+export const CreativeOrderListResponseSchema = z.object({ orders: z.array(CreativeOrderSchema).default([]) }).loose();
+export const EMPTY_CREATIVE_ORDER_LIST_RESPONSE = { orders: [] };
+export const CreativeDirectEditResponseSchema = z.object({
+  order: z.preprocess((value) => value ?? {}, CreativeOrderSchema),
+  item: z.preprocess((value) => value ?? {}, CreativeOrderItemSchema),
+  variant: z.preprocess((value) => value ?? {}, CreativeOrderVariantSchema),
+  source_asset: z.preprocess((value) => value ?? {}, CreativeOrderAssetSchema),
+}).loose();
+export const EMPTY_CREATIVE_DIRECT_EDIT_RESPONSE = {
+  order: { id: "", workspace_id: "", issue_id: "", status: "draft", derived_status: "draft", input_snapshot: {}, trigger_evidence_kind: "", trigger_evidence_ref_id: "", created_by: "", created_at: "", updated_at: "", workflow_failures: [], items: [] },
+  item: { id: "", order_id: "", candidate_id: "", source_analysis_id: "", copy_snapshot: {}, direction: "", status: "", variants: [], created_at: "", updated_at: "" },
+  variant: { id: "", order_item_id: "", variant_key: "", brief: {}, revision: 1, status: "queued", qc_status: "pending", assets: [], qc_reports: [], created_at: "", updated_at: "" },
+  source_asset: { id: "", variant_id: "", asset_family_id: "", size_key: "", revision: 1, stage: "generated", attachment_id: "", derived_from_asset_id: "", metadata: {}, evidence: {}, status: "queued", created_at: "", updated_at: "" },
+};
+export const CreativeOrderQCFinalizeResponseSchema = z.object({
+  created: z.boolean().default(false), finalized: z.boolean().default(false), outcome: z.string().default("pending"),
+  variant_id: z.string().default(""), revision: z.number().default(1), technical_status: z.string().default(""),
+  visual_status: z.string().default(""), delivered_asset_count: z.number().default(0),
+  order_aggregate_status: z.string().default("queued"), inbox_item_id: z.string().default(""),
+}).loose();
+export const EMPTY_CREATIVE_ORDER_QC_FINALIZE_RESPONSE = { created: false, finalized: false, outcome: "pending", variant_id: "", revision: 1, technical_status: "", visual_status: "", delivered_asset_count: 0, order_aggregate_status: "queued", inbox_item_id: "" };
+export const CreativeSourceAnalysisSchema = z.object({ id: z.string().default(""), candidate_id: z.string().default(""), analysis_version: z.number().default(0), status: z.string().default("pending"), summary: z.string().default(""), result: z.record(z.string(), z.unknown()).default({}), error_code: z.string().default(""), error_message: z.string().default(""), trigger_evidence_kind: z.string().default(""), trigger_evidence_ref_id: z.string().default(""), created_at: z.string().default(""), completed_at: z.string().default("") }).loose();
+export const CreativeSourceAnalysisListResponseSchema = z.object({ analyses: z.array(CreativeSourceAnalysisSchema).default([]) }).loose();
+export const EMPTY_CREATIVE_SOURCE_ANALYSIS_LIST_RESPONSE = { analyses: [] };
 
 export const CreativeMaterialSummarySchema = z.object({
   total: z.number().default(0),
@@ -459,6 +553,13 @@ export const CreativeBriefSchema = z.object({
   detected_text: z.array(z.string()).default([]),
   visual_type: z.string().default(""),
   analysis_summary: z.string().default(""),
+  user_direction: z.string().default(""),
+  app_ui_replacement_required: z.boolean().default(false),
+  selected_app_ui_references: z.array(z.object({
+    resource_file_id: z.string().default(""),
+    attachment_id: z.string().default(""),
+    reason: z.string().default(""),
+  }).loose()).default([]),
   status: z.string().default(""),
   source: z.string().default(""),
   confidence: z.number().min(0).max(1).nullable().default(null),
@@ -475,7 +576,8 @@ export const CreativeIssueItemSchema = z.object({
     benefit_value: "", source_semantics: "", information_mechanism: "",
     visual_anchors: [], palette_anchors: [], must_preserve: [], allowed_variations: [],
     evidence: [], detected_text: [], visual_type: "",
-    analysis_summary: "", status: "", source: "", confidence: null,
+    analysis_summary: "", user_direction: "", status: "", source: "", confidence: null,
+    app_ui_replacement_required: false, selected_app_ui_references: [],
     analysis_issue_id: "",
   }),
   work_issue_id: z.string().default(""),
@@ -679,7 +781,8 @@ export const EMPTY_CREATIVE_ISSUE_ITEM: CreativeIssueItem = {
     benefit_value: "", source_semantics: "", information_mechanism: "",
     visual_anchors: [], palette_anchors: [], must_preserve: [], allowed_variations: [],
     evidence: [], detected_text: [], visual_type: "",
-    analysis_summary: "", status: "", source: "", confidence: null,
+    analysis_summary: "", user_direction: "", status: "", source: "", confidence: null,
+    app_ui_replacement_required: false, selected_app_ui_references: [],
     analysis_issue_id: "",
   },
   work_issue_id: "", revision: 1, status: "ready", updated_at: "",
@@ -1034,6 +1137,12 @@ const AgentTaskResponseSchema = z.object({
   relative_work_dir: z.string().optional(),
   attribution: TaskAttributionSchema.optional(),
 }).loose();
+
+export const AgentTaskFanoutResponseSchema = z.object({
+  tasks: z.array(AgentTaskResponseSchema).default([]),
+}).loose();
+
+export const EMPTY_AGENT_TASK_FANOUT_RESPONSE = { tasks: [] };
 
 const CancelledChatMessageSchema = z.object({
   chat_session_id: z.string(),

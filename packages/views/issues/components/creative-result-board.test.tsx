@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { CreativeMaterialCandidate } from "@multica/core/types";
 
 import {
+  creativeProductionProgress,
   creativeMaterialPoolCandidatesForScope,
   creativeResultCandidates,
   groupCreativeDeliveriesByCandidate,
@@ -78,6 +79,25 @@ describe("creative result board preview", () => {
     expect(onOpenBoardPreview).toHaveBeenCalledOnce();
     fireEvent.click(screen.getByTitle("查看竞品原图大图"));
     expect(onPreview).toHaveBeenLastCalledWith(expect.objectContaining({ url: candidate.archived_url }));
+  });
+
+  it("summarizes blocked production on the parent candidate instead of rendering a child workflow surface", () => {
+    const progress = creativeProductionProgress(
+      [{ candidate_id: candidate.id, work_issue_id: "work-1" }] as never,
+      new Map([["work-1", [{
+        id: "production-2",
+        identifier: "ADC-301",
+        title: "图像编辑 · V02 · 三尺寸",
+        status: "blocked",
+        metadata: { workflow: "creative_production", variant: "V02" },
+      }]]]) as never,
+    );
+
+    expect(progress).toEqual([expect.objectContaining({
+      candidate_id: candidate.id,
+      work_issue_id: "work-1",
+      tasks: [expect.objectContaining({ identifier: "ADC-301", status: "blocked", variant: "V02" })],
+    })]);
   });
 
   it("exposes board, source, and result enlargement actions", () => {

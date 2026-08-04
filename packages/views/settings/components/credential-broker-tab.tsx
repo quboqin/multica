@@ -121,8 +121,10 @@ export function CredentialBrokerTab() {
       const authCheck = readAuthCheck(result);
       if (result.status === "completed" && authCheck?.authenticated === true) {
         toast.success(t(($) => $.credential.toast_verified));
-      } else {
+      } else if (result.status === "need_reauth") {
         toast.error(t(($) => $.credential.toast_verify_needs_reauth));
+      } else {
+        toast.error(result.message || t(($) => $.credential.toast_verify_failed));
       }
       await qc.invalidateQueries({ queryKey: credentialKeys.profiles(wsId) });
     },

@@ -1,0 +1,294 @@
+package handler
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"testing"
+
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
+	"github.com/multica-ai/multica/server/internal/service"
+)
+
+func TestClaimAgentTask_DirectFanoutParallelButQuickCreateSerial(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	ctx := context.Background()
+	agentID := createHandlerTestAgent(t, "direct-fanout-claim", []byte(`{}`))
+	evidenceID := uuid.NewString()
+	insert := func(context string) string {
+		var taskID string
+		if err := testPool.QueryRow(ctx, `
+			INSERT INTO agent_task_queue (
+				agent_id, runtime_id, status, priority, context,
+				trigger_evidence_kind, trigger_evidence_ref_id
+			) VALUES ($1, $2, 'queued', 0, $3::jsonb, 'creative_candidate', $4::uuid)
+			RETURNING id`, agentID, testRuntimeID, context, evidenceID).Scan(&taskID); err != nil {
+			t.Fatalf("insert task: %v", err)
+		}
+		return taskID
+	}
+	ids := []string{
+		insert(`{"type":"creative_analysis","item_key":"one"}`),
+		insert(`{"type":"creative_analysis","item_key":"two"}`),
+		insert(`{"type":"quick_create","item_key":"quick-one"}`),
+		insert(`{"type":"quick_create","item_key":"quick-two"}`),
+	}
+	t.Cleanup(func() {
+		for _, id := range ids {
+			testPool.Exec(context.Background(), `DELETE FROM agent_task_queue WHERE id = $1`, id)
+		}
+	})
+
+	for i := 0; i < 2; i++ {
+		task, err := testHandler.Queries.ClaimAgentTask(ctx, parseUUID(agentID))
+		if err != nil {
+			t.Fatalf("claim direct task %d: %v", i, err)
+		}
+		if _, err := testHandler.Queries.StartAgentTask(ctx, task.ID); err != nil {
+			t.Fatalf("start direct task %d: %v", i, err)
+		}
+	}
+
+	quick, err := testHandler.Queries.ClaimAgentTask(ctx, parseUUID(agentID))
+	if err != nil {
+		t.Fatalf("quick-create must claim while direct tasks run: %v", err)
+	}
+	if _, err := testHandler.Queries.StartAgentTask(ctx, quick.ID); err != nil {
+		t.Fatalf("start quick-create: %v", err)
+	}
+	if _, err := testHandler.Queries.ClaimAgentTask(ctx, parseUUID(agentID)); !errors.Is(err, pgx.ErrNoRows) {
+		t.Fatalf("second quick-create claim error = %v, want no rows", err)
+	}
+}
+
+func TestFanoutAgentTasks_TaskTokenPreservesDelegatingTask(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	ctx := context.Background()
+	delegatorID := createHandlerTestAgent(t, "direct-fanout-delegator", []byte(`{}`))
+	targetID := createHandlerTestAgent(t, "direct-fanout-target", []byte(`{}`))
+	var parentTaskID string
+	if err := testPool.QueryRow(ctx, `
+INSERT INTO agent_task_queue (
+  agent_id, runtime_id, status, priority, originator_user_id, accountable_user_id, requesting_user_id, originator_source
+)
+VALUES ($1, (SELECT runtime_id FROM agent WHERE id = $1), 'running', 0, $2, $2, $2, 'direct_human')
+RETURNING id::text
+`, delegatorID, testUserID).Scan(&parentTaskID); err != nil {
+		t.Fatalf("create delegating task: %v", err)
+	}
+	childTaskIDs := []string{}
+	t.Cleanup(func() {
+		for _, taskID := range childTaskIDs {
+			_, _ = testPool.Exec(context.Background(), `DELETE FROM agent_task_queue WHERE id = $1`, taskID)
+		}
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM agent_task_queue WHERE id = $1`, parentTaskID)
+	})
+
+	w := httptest.NewRecorder()
+	req := newRequest(http.MethodPost, "/api/agents/"+targetID+"/tasks/fanout", taskFanoutRequest{
+		TriggerEvidenceKind:  "generic_test_evidence",
+		TriggerEvidenceRefID: uuid.NewString(),
+		Items: []service.DirectTaskFanoutItem{{
+			ItemKey: "delegated-item",
+			Context: json.RawMessage(`{"type":"creative_analysis"}`),
+		}},
+	})
+	req = withURLParam(req, "agentId", targetID)
+	req.Header.Set("X-Actor-Source", "task_token")
+	req.Header.Set("X-Agent-ID", delegatorID)
+	req.Header.Set("X-Task-ID", parentTaskID)
+	testHandler.FanoutAgentTasks(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("task-token fanout: %d %s", w.Code, w.Body.String())
+	}
+	var response taskFanoutResponse
+	if err := json.NewDecoder(w.Body).Decode(&response); err != nil {
+		t.Fatal(err)
+	}
+	if len(response.Tasks) != 1 {
+		t.Fatalf("fanout tasks = %#v", response.Tasks)
+	}
+	childTaskIDs = append(childTaskIDs, response.Tasks[0].ID)
+	var delegatedFrom string
+	if err := testPool.QueryRow(ctx, `SELECT COALESCE(delegated_from_task_id::text, '') FROM agent_task_queue WHERE id = $1`, response.Tasks[0].ID).Scan(&delegatedFrom); err != nil {
+		t.Fatal(err)
+	}
+	if delegatedFrom != parentTaskID {
+		t.Fatalf("delegated_from_task_id = %q, want %q", delegatedFrom, parentTaskID)
+	}
+}
+
+func TestFanoutAgentTasks_ReusesActiveTaskAfterUniqueConflict(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	agentID := createHandlerTestAgent(t, "direct-fanout-idempotent", []byte(`{}`))
+	evidenceID := uuid.NewString()
+	request := taskFanoutRequest{
+		TriggerEvidenceKind:  "generic_test_evidence",
+		TriggerEvidenceRefID: evidenceID,
+		Items: []service.DirectTaskFanoutItem{{
+			ItemKey: "same-item",
+			Context: json.RawMessage(`{"type":"creative_analysis"}`),
+		}},
+	}
+	call := func() taskFanoutResponse {
+		w := httptest.NewRecorder()
+		req := newRequest(http.MethodPost, "/api/agents/"+agentID+"/tasks/fanout", request)
+		req = withURLParam(req, "agentId", agentID)
+		testHandler.FanoutAgentTasks(w, req)
+		if w.Code != http.StatusCreated {
+			t.Fatalf("fanout: %d %s", w.Code, w.Body.String())
+		}
+		var response taskFanoutResponse
+		if err := json.NewDecoder(w.Body).Decode(&response); err != nil {
+			t.Fatal(err)
+		}
+		if len(response.Tasks) != 1 {
+			t.Fatalf("tasks = %#v", response.Tasks)
+		}
+		return response
+	}
+	first := call()
+	second := call()
+	if second.Tasks[0].ID != first.Tasks[0].ID {
+		t.Fatalf("duplicate fanout task = %s, want %s", second.Tasks[0].ID, first.Tasks[0].ID)
+	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM agent_task_queue WHERE id = $1`, first.Tasks[0].ID)
+	})
+}
+
+func TestRetryFailedAgentTasksBySourceRetriesOnlyLatestUnrecoveredWithinBudget(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	ctx := context.Background()
+	agentID := createHandlerTestAgent(t, "direct-retry-latest-"+uuid.NewString(), nil)
+	evidenceKind := "generic_test_evidence"
+	evidenceID := uuid.NewString()
+	insert := func(itemKey, status, failureReason string, attempt, maxAttempts, offsetSeconds int) string {
+		t.Helper()
+		contextValue, err := json.Marshal(map[string]any{"type": "creative_domain_task", "item_key": itemKey})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var taskID string
+		if err := testPool.QueryRow(ctx, `
+INSERT INTO agent_task_queue (
+  agent_id, runtime_id, status, context, trigger_evidence_kind, trigger_evidence_ref_id,
+  failure_reason, error, completed_at, attempt, max_attempts, created_at
+)
+VALUES (
+  $1, (SELECT runtime_id FROM agent WHERE id = $1), $2, $3::jsonb, $4, $5,
+  NULLIF($6, ''), CASE WHEN $2 = 'failed' THEN 'provider returned 429' ELSE NULL END,
+  CASE WHEN $2 IN ('completed', 'failed', 'cancelled') THEN now() + ($9 * interval '1 second') ELSE NULL END,
+  $7, $8, now() + ($9 * interval '1 second')
+)
+RETURNING id::text
+`, agentID, status, contextValue, evidenceKind, evidenceID, failureReason, attempt, maxAttempts, offsetSeconds).Scan(&taskID); err != nil {
+			t.Fatal(err)
+		}
+		return taskID
+	}
+
+	openFailureID := insert("open", "failed", "provider_rate_limited", 1, 2, -30)
+	recoveredFailureID := insert("recovered", "failed", "provider_rate_limited", 1, 2, -50)
+	insert("recovered", "completed", "", 2, 2, -20)
+	exhaustedFailureID := insert("exhausted", "failed", "provider_rate_limited", 2, 2, -10)
+
+	if _, err := testHandler.Queries.CreateRetryTask(ctx, parseUUID(exhaustedFailureID)); !errors.Is(err, pgx.ErrNoRows) {
+		t.Fatalf("CreateRetryTask exhausted error = %v, want no rows", err)
+	}
+
+	retry := func() taskFanoutResponse {
+		t.Helper()
+		w := httptest.NewRecorder()
+		req := newRequest(http.MethodPost, "/api/agents/"+agentID+"/tasks/by-source/retry?trigger_evidence_kind="+evidenceKind+"&trigger_evidence_ref_id="+evidenceID, nil)
+		req = withURLParam(req, "agentId", agentID)
+		testHandler.RetryFailedAgentTasksBySource(w, req)
+		if w.Code != http.StatusCreated {
+			t.Fatalf("RetryFailedAgentTasksBySource: %d %s", w.Code, w.Body.String())
+		}
+		var response taskFanoutResponse
+		if err := json.NewDecoder(w.Body).Decode(&response); err != nil {
+			t.Fatal(err)
+		}
+		return response
+	}
+
+	response := retry()
+	if len(response.Tasks) != 1 {
+		t.Fatalf("retried tasks = %#v, want only open failure", response.Tasks)
+	}
+	childID := response.Tasks[0].ID
+	var retryOf string
+	if err := testPool.QueryRow(ctx, `SELECT COALESCE(retry_of_task_id::text, '') FROM agent_task_queue WHERE id = $1`, childID).Scan(&retryOf); err != nil {
+		t.Fatal(err)
+	}
+	if retryOf != openFailureID {
+		t.Fatalf("retry_of_task_id = %q, want %q", retryOf, openFailureID)
+	}
+	var wronglyRetried int
+	if err := testPool.QueryRow(ctx, `SELECT count(*) FROM agent_task_queue WHERE retry_of_task_id IN ($1, $2)`, recoveredFailureID, exhaustedFailureID).Scan(&wronglyRetried); err != nil {
+		t.Fatal(err)
+	}
+	if wronglyRetried != 0 {
+		t.Fatalf("superseded or exhausted failures retried %d times", wronglyRetried)
+	}
+
+	if _, err := testPool.Exec(ctx, `
+UPDATE agent_task_queue
+SET status = 'failed', failure_reason = 'provider_rate_limited', error = 'provider returned 429', completed_at = now()
+WHERE id = $1`, childID); err != nil {
+		t.Fatal(err)
+	}
+	if second := retry(); len(second.Tasks) != 0 {
+		t.Fatalf("exhausted latest attempt retried again: %#v", second.Tasks)
+	}
+}
+
+func TestValidateCreativeTaskFanoutContextRequiresOrderTrace(t *testing.T) {
+	ref := parseUUID(uuid.NewString())
+	valid := []service.DirectTaskFanoutItem{{ItemKey: "v01:r1", Context: json.RawMessage(fmt.Sprintf(`{
+  "type":"creative_domain_task","workflow":"creative_production",
+  "creative_order_id":"%s","issue_id":"%s","leader_agent_id":"%s",
+  "creative_order_item_id":"%s","variant_id":"%s"
+}`, uuid.NewString(), uuid.NewString(), uuid.NewString(), uuidToString(ref), uuid.NewString()))}}
+	if err := validateCreativeTaskFanoutContext("creative_order_item_production", ref, valid); err != nil {
+		t.Fatalf("valid production context: %v", err)
+	}
+	missingIssue := []service.DirectTaskFanoutItem{{ItemKey: "v01:r1", Context: json.RawMessage(fmt.Sprintf(`{
+  "type":"creative_domain_task","workflow":"creative_production",
+  "creative_order_id":"%s","leader_agent_id":"%s",
+  "creative_order_item_id":"%s"
+}`, uuid.NewString(), uuid.NewString(), uuidToString(ref)))}}
+	if err := validateCreativeTaskFanoutContext("creative_order_item_production", ref, missingIssue); err == nil {
+		t.Fatal("production context without issue_id unexpectedly passed")
+	}
+}
+
+func TestCreativeTaskRequiredCapability(t *testing.T) {
+	tests := map[string]string{
+		"creative_crawl_run_analysis":     "reference_analysis",
+		"creative_order_item_plan":        "generation_plan",
+		"creative_order_item_production":  "image_edit",
+		"creative_order_variant_prime":    "prime_compose",
+		"creative_order_variant_qc":       "quality_control",
+		"creative_order_item_direct_edit": "direct_image_edit",
+		"generic_test_evidence":           "",
+	}
+	for kind, want := range tests {
+		if got := creativeTaskRequiredCapability(kind); got != want {
+			t.Errorf("creativeTaskRequiredCapability(%q) = %q, want %q", kind, got, want)
+		}
+	}
+}

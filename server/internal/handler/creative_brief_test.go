@@ -1,6 +1,9 @@
 package handler
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestNormalizeCreativeBriefSeparatesThemeAndBenefit(t *testing.T) {
 	confidence := 0.92
@@ -16,6 +19,7 @@ func TestNormalizeCreativeBriefSeparatesThemeAndBenefit(t *testing.T) {
 		MustPreserve:         []string{"还款计划语义"},
 		AllowedVariations:    []string{"表格布局"},
 		Evidence:             []string{"主标题出现 biaya 25%"},
+		UserDirection:        " 保持绿色版式，CTA 更突出 ",
 		Status:               "draft",
 		Source:               "ai",
 		Confidence:           &confidence,
@@ -35,6 +39,9 @@ func TestNormalizeCreativeBriefSeparatesThemeAndBenefit(t *testing.T) {
 	if len(brief.VisualAnchors) != 2 || len(brief.MustPreserve) != 1 || len(brief.AllowedVariations) != 1 {
 		t.Fatalf("anchors=%v preserve=%v variations=%v", brief.VisualAnchors, brief.MustPreserve, brief.AllowedVariations)
 	}
+	if brief.UserDirection != "保持绿色版式，CTA 更突出" {
+		t.Fatalf("user_direction=%q", brief.UserDirection)
+	}
 }
 
 func TestNormalizeCreativeBriefRejectsInvalidConfidence(t *testing.T) {
@@ -44,5 +51,46 @@ func TestNormalizeCreativeBriefRejectsInvalidConfidence(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("expected invalid confidence to fail")
+	}
+}
+
+func TestNormalizeCreativeBriefKeepsStructuredAppUIReferences(t *testing.T) {
+	brief, err := normalizeCreativeBrief(creativeBriefInput{
+		SelectedAppUIReferences: []creativeBriefAppUIReferenceInput{
+			{ResourceFileID: " file-1 ", AttachmentID: " attachment-1 ", Reason: " 首页结构最接近 "},
+			{ResourceFileID: "file-1", AttachmentID: "attachment-1", Reason: "duplicate"},
+		},
+		Status: "draft",
+		Source: "ai",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !brief.AppUIReplacementRequired {
+		t.Fatal("selected App UI references must require replacement")
+	}
+	if len(brief.SelectedAppUIReferences) != 1 {
+		t.Fatalf("selected_app_ui_references=%v", brief.SelectedAppUIReferences)
+	}
+	if got := brief.SelectedAppUIReferences[0]; got.ResourceFileID != "file-1" || got.AttachmentID != "attachment-1" || got.Reason != "首页结构最接近" {
+		t.Fatalf("selected_app_ui_reference=%+v", got)
+	}
+}
+
+func TestNormalizeCreativeBriefRequiresReferenceWhenReplacingAppUI(t *testing.T) {
+	_, err := normalizeCreativeBrief(creativeBriefInput{
+		AppUIReplacementRequired: true,
+		Status:                   "draft",
+		Source:                   "ai",
+	})
+	if err == nil || !strings.Contains(err.Error(), "at least one selected App UI reference") {
+		t.Fatalf("err=%v", err)
+	}
+}
+
+func TestDecodeCreativeBriefReportsUnknownField(t *testing.T) {
+	_, err := decodeCreativeBrief(strings.NewReader(`{"status":"draft","source":"ai","layout_guidance":"hero left"}`))
+	if err == nil || !strings.Contains(err.Error(), `unknown field "layout_guidance"`) {
+		t.Fatalf("err=%v", err)
 	}
 }

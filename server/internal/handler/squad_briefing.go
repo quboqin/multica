@@ -2,12 +2,17 @@ package handler
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
+
+const creativeDomainTaskProtocol = `## Creative Domain Task Protocol
+
+This is a structured creative-domain task. Its task context and bound Skills are authoritative. Record execution evidence in domain objects and native task results; keep the Issue limited to user decisions, genuine blockers, and final acceptance.`
 
 // squadOperatingProtocol is the hard-coded system-level briefing prepended to
 // every squad-leader claim. It explains the leader's coordinator role, the
@@ -115,6 +120,24 @@ func buildSquadLeaderBriefing(ctx context.Context, q *db.Queries, squad db.Squad
 		sb.WriteString(trimmed)
 	}
 	return sb.String()
+}
+
+// buildTaskAwareSquadLeaderBriefing keeps the generic squad coordinator
+// protocol out of structured creative-domain tasks. Those tasks already carry
+// an explicit domain contract and bound Skills, so mention-driven delegation
+// would duplicate orchestration and pollute the user-facing Issue.
+func buildTaskAwareSquadLeaderBriefing(ctx context.Context, q *db.Queries, squad db.Squad, taskContext []byte) string {
+	if isCreativeDomainTaskContext(taskContext) {
+		return creativeDomainTaskProtocol
+	}
+	return buildSquadLeaderBriefing(ctx, q, squad)
+}
+
+func isCreativeDomainTaskContext(taskContext []byte) bool {
+	var envelope struct {
+		Type string `json:"type"`
+	}
+	return json.Unmarshal(taskContext, &envelope) == nil && envelope.Type == "creative_domain_task"
 }
 
 // buildSquadRoster renders the "## Squad Roster" section: a leader self-row

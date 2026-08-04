@@ -53,6 +53,40 @@ func TestWriteCredentialBrokerErrorClassifiesWorkerFailures(t *testing.T) {
 	}
 }
 
+func TestCredentialCrawlFailureKeepsActionRequiredSeparateFromRealFailure(t *testing.T) {
+	if !credentialCrawlRequiresLogin(broker.ErrProfileNotActive) {
+		t.Fatal("inactive profile should require login")
+	}
+	if credentialCrawlRequiresLogin(broker.ErrWorkerTimeout) {
+		t.Fatal("worker timeout must remain a real crawl failure")
+	}
+	if got := credentialCrawlErrorCode(broker.ErrWorkerTimeout); got != "worker_timeout" {
+		t.Fatalf("worker timeout code = %q", got)
+	}
+
+	recorder := httptest.NewRecorder()
+	writeCredentialCrawlError(recorder, broker.ErrProfileNotActive, "run-123")
+	if recorder.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusConflict)
+	}
+	var payload map[string]string
+	if err := json.NewDecoder(recorder.Body).Decode(&payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload["crawl_run_id"] != "run-123" {
+		t.Fatalf("response missing stable crawl run: %#v", payload)
+	}
+}
+
+func TestCreativeCrawlAnalysisAgentIDReadsOnlyValidParams(t *testing.T) {
+	if got := creativeCrawlAnalysisAgentID(json.RawMessage(`{"analysis_agent_id":" analyst-1 "}`)); got != "analyst-1" {
+		t.Fatalf("analysis agent id = %q", got)
+	}
+	if got := creativeCrawlAnalysisAgentID(json.RawMessage(`not-json`)); got != "" {
+		t.Fatalf("invalid params yielded %q", got)
+	}
+}
+
 func TestCredentialWorkspaceScopeAllowsMembersToViewButNotManage(t *testing.T) {
 	if testHandler == nil {
 		t.Skip("database not available")

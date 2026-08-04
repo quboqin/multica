@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { cloneElement, useEffect, useId, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   AlertTriangle,
@@ -11,8 +11,10 @@ import {
   FileSpreadsheet,
   FolderOpen,
   Globe2,
+  Layers3,
   Plus,
   QrCode,
+  RefreshCw,
   Save,
   Search,
   Settings2,
@@ -21,13 +23,23 @@ import {
 import { api } from "@multica/core/api";
 import {
   creativeCopyEntriesOptions,
+  creativeFeedbackOptions,
   creativeKeys,
+  creativeOrderOptions,
+  creativeOrdersOptions,
+  creativeMaterialLibraryOptions,
   creativeResourcesOptions,
 } from "@multica/core/creative";
 import { useWorkspaceId } from "@multica/core/hooks";
+import { useWorkspacePaths } from "@multica/core/paths";
+import { resolvePublicFileUrl } from "@multica/core/workspace/avatar-url";
 import type {
   CreativeCopyEntry,
   CreativeCopyEntryInput,
+  CreativeOrder,
+  CreativeOrderAsset,
+  CreativeOrderWorkflowFailure,
+  CreativeOrderVariant,
   CreativeResource,
   CreativeResourceKind,
 } from "@multica/core/types";
@@ -49,8 +61,11 @@ import { Textarea } from "@multica/ui/components/ui/textarea";
 import { cn } from "@multica/ui/lib/utils";
 import { toast } from "sonner";
 import { PageHeader } from "../../layout/page-header";
+import { useNavigation } from "../../navigation";
 import { readCopySpreadsheet, type SpreadsheetData } from "../lib/xlsx-copy-import";
 import { CreativeMaterialLibrary } from "./creative-material-library";
+import { CreativeCollectionPlans } from "./creative-collection-plans";
+import { CreativeComparisonWorkspace, type CreativeAnnotationDraft } from "./creative-comparison-workspace";
 import { MarketResourceFiles } from "./market-resource-files";
 
 type CopyField = keyof Pick<
@@ -94,13 +109,60 @@ const EMPTY_COPY: CreativeCopyEntryInput = {
   metadata: {},
 };
 
+type CreativeStudioTab = "discovery" | "orders" | "copy" | "market";
+
+function creativeStudioTab(searchParams: URLSearchParams): CreativeStudioTab {
+  if (searchParams.get("order")) return "orders";
+  const tab = searchParams.get("tab");
+  return tab === "orders" || tab === "copy" || tab === "market" ? tab : "discovery";
+}
+
+export function creativeStudioPath(
+  pathname: string,
+  searchParams: URLSearchParams,
+  tab: CreativeStudioTab,
+  orderId = "",
+): string {
+  const next = new URLSearchParams(searchParams);
+  next.delete("tab");
+  next.delete("order");
+  if (tab !== "discovery") next.set("tab", tab);
+  if (tab === "orders" && orderId) next.set("order", orderId);
+  const query = next.toString();
+  return query ? `${pathname}?${query}` : pathname;
+}
+
 export function CreativeStudioPage() {
   const wsId = useWorkspaceId();
   const queryClient = useQueryClient();
-  const [tab, setTab] = useState("materials");
+  const navigation = useNavigation();
+  const routeOrderId = navigation.searchParams.get("order") ?? "";
+  const routeTab = creativeStudioTab(navigation.searchParams);
+  const [tab, setTab] = useState<CreativeStudioTab>(routeTab);
+  const [selectedOrderId, setSelectedOrderId] = useState(routeOrderId);
   const [createKind, setCreateKind] = useState<CreativeResourceKind | null>(null);
   const resources = useQuery(creativeResourcesOptions(wsId));
   const allResources = resources.data?.resources ?? [];
+
+  useEffect(() => {
+    setTab(routeTab);
+    setSelectedOrderId(routeOrderId);
+  }, [routeOrderId, routeTab]);
+
+  const navigateStudio = (nextTab: CreativeStudioTab, orderId = "", mode: "push" | "replace" = "replace") => {
+    setTab(nextTab);
+    setSelectedOrderId(nextTab === "orders" ? orderId : "");
+    const path = creativeStudioPath(navigation.pathname, navigation.searchParams, nextTab, orderId);
+    if (mode === "push") navigation.push(path);
+    else navigation.replace(path);
+  };
+
+  const changeTab = (value: string) => {
+    const nextTab: CreativeStudioTab = value === "orders" || value === "copy" || value === "market" ? value : "discovery";
+    navigateStudio(nextTab, nextTab === "orders" ? selectedOrderId : "");
+  };
+
+  const openOrder = (orderId: string) => navigateStudio("orders", orderId, "push");
 
   const refreshResources = () => queryClient.invalidateQueries({ queryKey: creativeKeys.resources(wsId) });
   const archiveResource = useMutation({
@@ -120,18 +182,20 @@ export function CreativeStudioPage() {
         <Badge variant="outline">{allResources.length} 个可配置资源</Badge>
       </PageHeader>
 
-      <Tabs value={tab} onValueChange={setTab} className="flex min-h-0 flex-1 flex-col">
+      <Tabs value={tab} onValueChange={changeTab} className="flex min-h-0 flex-1 flex-col">
         <div className="border-b px-5 py-2">
-          <TabsList className="h-8">
-            <TabsTrigger value="materials"><FolderOpen className="h-3.5 w-3.5" />素材库</TabsTrigger>
+          <TabsList className="h-8 overflow-x-auto">
+            <TabsTrigger value="discovery"><FolderOpen className="h-3.5 w-3.5" />采集运行 / 素材发现</TabsTrigger>
+            <TabsTrigger value="orders"><Layers3 className="h-3.5 w-3.5" />创意订单 / 交付</TabsTrigger>
             <TabsTrigger value="copy"><BookOpenText className="h-3.5 w-3.5" />文案库</TabsTrigger>
             <TabsTrigger value="market"><Globe2 className="h-3.5 w-3.5" />市场资源包</TabsTrigger>
           </TabsList>
         </div>
 
-        <TabsContent value="materials" className="min-h-0 flex-1 overflow-y-auto p-5">
-          <CreativeMaterialLibrary />
+        <TabsContent value="discovery" className="min-h-0 flex-1 overflow-y-auto p-5">
+          <CreativeDiscoveryWorkspace onOrderCreated={openOrder} />
         </TabsContent>
+        <TabsContent value="orders" className="min-h-0 flex-1 overflow-y-auto p-5"><CreativeOrdersWorkspace selectedOrderId={selectedOrderId} onSelectOrder={openOrder} onBack={() => navigateStudio("orders")} /></TabsContent>
         <TabsContent value="copy" className="min-h-0 flex-1 overflow-hidden p-5">
           <CopyLibraries
             resources={allResources.filter((resource) => resource.kind === "copy_library")}
@@ -155,6 +219,259 @@ export function CreativeStudioPage() {
       }} />
     </div>
   );
+}
+
+function CreativeDiscoveryWorkspace({ onOrderCreated }: { onOrderCreated: (orderId: string) => void }) {
+  return <div className="mx-auto max-w-[1440px] space-y-4"><div className="flex flex-wrap items-end justify-between gap-3 border-b pb-3"><div><h2 className="text-base font-semibold">采集运行与素材发现</h2><p className="mt-1 text-sm text-muted-foreground">浏览已归档的竞品参考；素材进入订单前保持独立于 issue。</p></div><Badge variant="outline">稳定原图优先</Badge></div><CreativeCollectionPlans /><CreativeMaterialLibrary onOrderCreated={onOrderCreated} /></div>;
+}
+
+function CreativeOrdersWorkspace({ selectedOrderId, onSelectOrder, onBack }: { selectedOrderId: string; onSelectOrder: (orderId: string) => void; onBack: () => void }) {
+  const wsId = useWorkspaceId();
+  const navigation = useNavigation();
+  const workspacePaths = useWorkspacePaths();
+  const orders = useQuery(creativeOrdersOptions(wsId));
+  const creativeOrders = orders.data?.orders ?? [];
+  if (selectedOrderId) return <CreativeOrderDetail orderId={selectedOrderId} onBack={onBack} />;
+  return <div className="mx-auto max-w-[1440px] space-y-4"><div className="flex flex-wrap items-end justify-between gap-3 border-b pb-3"><div><h2 className="text-base font-semibold">创意订单与交付</h2><p className="mt-1 text-sm text-muted-foreground">订单 API 是交付进度的来源；关联 issue 只用于协作摘要和跳转。</p></div><Badge variant="outline">{creativeOrders.length} 个订单</Badge></div><div className="grid gap-2">{creativeOrders.map((order) => <div key={order.id} className="grid min-h-16 grid-cols-[minmax(0,1fr)_auto] items-center gap-4 border bg-background px-4 py-3"><button type="button" className="min-w-0 text-left" onClick={() => onSelectOrder(order.id)}><span className="block truncate text-sm font-semibold">订单 {order.id.slice(0, 8)}</span><span className="mt-1 block text-[11px] text-muted-foreground">{order.trigger_evidence_kind || "人工创建"} · 更新于 {order.updated_at || "-"}</span></button><span className="flex items-center gap-2"><Badge variant="outline">{order.derived_status || order.status}</Badge>{order.issue_id && <Button size="sm" variant="outline" onClick={() => navigation.push(workspacePaths.issueDetail(order.issue_id))}>查看 issue 摘要</Button>}</span></div>)}</div>{!orders.isLoading && creativeOrders.length === 0 && <div className="flex min-h-64 items-center justify-center border border-dashed text-sm text-muted-foreground">暂无创意订单。采集后的素材会在创建订单后出现在这里。</div>}</div>;
+}
+
+function CreativeOrderDetail({ orderId, onBack }: { orderId: string; onBack: () => void }) {
+  const wsId = useWorkspaceId();
+  const queryClient = useQueryClient();
+  const order = useQuery(creativeOrderOptions(wsId, orderId));
+  const library = useQuery(creativeMaterialLibraryOptions(wsId));
+  const feedback = useQuery(creativeFeedbackOptions(wsId, "variant"));
+  const data = order.data;
+  const assets = data?.items.flatMap((item) => item.variants.flatMap((variant) => variant.assets)) ?? [];
+  const ids = [...new Set(assets.map((asset) => asset.attachment_id).filter(Boolean))];
+  const attachments = useQuery({ queryKey: ["creative", wsId, "order-attachments", orderId, ids], queryFn: () => Promise.all(ids.map((id) => api.getAttachment(id))), enabled: ids.length > 0 });
+  const byId = new Map((attachments.data ?? []).map((item) => [item.id, item]));
+  const reviewAssets = selectCreativeReviewAssets(assets);
+  const [activeAssetId, setActiveAssetId] = useState("");
+  const [adjustOpen, setAdjustOpen] = useState(false);
+  const [adjustment, setAdjustment] = useState("");
+  const [adjustBusy, setAdjustBusy] = useState(false);
+  const [retryingTaskId, setRetryingTaskId] = useState("");
+  const defaultAsset = reviewAssets.find((asset) => asset.status === "completed") ?? reviewAssets[0];
+  const active = reviewAssets.find((asset) => asset.id === activeAssetId) ?? defaultAsset;
+  const variantById = new Map(data?.items.flatMap((item) => item.variants.map((variant) => [variant.id, { variant, item }] as const)) ?? []);
+  const activeVariant = active ? variantById.get(active.variant_id) : undefined;
+  const variantDecisions = useMemo(() => latestVariantFeedback(feedback.data?.events ?? []), [feedback.data?.events]);
+  const acceptanceStatus = creativeOrderAcceptanceStatus(data, variantDecisions);
+  const activeReadiness = activeVariant ? creativeVariantAcceptanceReadiness(activeVariant.variant) : { ready: false, status: "正在读取变体交付状态" };
+  const activeAccepted = activeVariant ? variantDecisions.get(activeVariant.variant.id) === "accepted" : false;
+  const source = library.data?.candidates.find((candidate) => candidate.id === activeVariant?.item.candidate_id);
+  const generatedFor = (asset: CreativeOrderAsset) => assets.find((candidate) => candidate.status === "completed" && candidate.variant_id === asset.variant_id && candidate.size_key === asset.size_key && candidate.revision === asset.revision && candidate.stage === "generated");
+  const attachmentURL = (asset?: CreativeOrderAsset) => {
+    const attachment = asset ? byId.get(asset.attachment_id) : undefined;
+    return resolvePublicFileUrl(attachment?.download_url || attachment?.url) ?? "";
+  };
+  const comparisonAssets = reviewAssets.filter((asset) => byId.has(asset.attachment_id)).map((asset) => ({ id: asset.id, label: `${asset.stage} · ${asset.size_key}`, finalUrl: attachmentURL(asset), baseUrl: attachmentURL(generatedFor(asset)), thumbnailUrl: byId.get(asset.attachment_id)?.url, size: asset.size_key, variant: variantById.get(asset.variant_id)?.variant.variant_key || "" }));
+
+  const event = async (asset: CreativeOrderAsset, decision: "accepted" | "abandoned" | "downloaded") => {
+    const variant = variantById.get(asset.variant_id)?.variant;
+    if (!variant) return;
+    if (decision === "accepted") {
+      const readiness = creativeVariantAcceptanceReadiness(variant);
+      if (!readiness.ready) {
+        toast.error(readiness.status);
+        return;
+      }
+    }
+    try {
+      if (decision === "downloaded") {
+        await api.createCreativeFeedback({ issue_id: data?.issue_id ?? "", subject_type: "asset", subject_id: asset.id, event_type: "viewed", decision: "", context_snapshot: { action: "download", order_id: orderId, variant_id: asset.variant_id, size_key: asset.size_key, revision: asset.revision } });
+        return;
+      }
+      await api.createCreativeFeedback({ issue_id: data?.issue_id ?? "", subject_type: "variant", subject_id: variant.id, event_type: "decision", decision, reason_codes: decision === "abandoned" ? ["other"] : [], comment: decision === "abandoned" ? "用户放弃当前变体" : "", context_snapshot: { order_id: orderId, asset_id: asset.id, size_key: asset.size_key, revision: asset.revision } });
+      await Promise.all([
+        order.refetch(),
+        feedback.refetch(),
+      ]);
+      toast.success(decision === "accepted" ? "已接受当前变体" : "已记录放弃决定");
+    } catch (error) { toast.error(error instanceof Error ? error.message : "无法记录决定"); }
+  };
+  const annotation = async (asset: CreativeOrderAsset, draft: CreativeAnnotationDraft) => {
+    try {
+      await api.createCreativeFeedback({ issue_id: data?.issue_id ?? "", subject_type: "asset", subject_id: asset.id, event_type: "annotation", decision: "needs_revision", reason_codes: [assetFeedbackReason(draft.issueType)], comment: draft.comment, annotation: { id: crypto.randomUUID(), asset_id: asset.id, kind: draft.kind, issue_type: draft.issueType, x: draft.x, y: draft.y, width: draft.width, height: draft.height, scope: draft.scope, comment: draft.comment }, context_snapshot: { order_id: orderId, variant_id: asset.variant_id, size_key: asset.size_key, revision: asset.revision } });
+      toast.success("问题标注已保存");
+    } catch (error) { toast.error(error instanceof Error ? error.message : "无法保存问题标注"); }
+  };
+  const submitAdjustment = async () => {
+    if (!active || !data?.issue_id || !adjustment.trim()) return;
+    setAdjustBusy(true);
+    try {
+      await api.createCreativeFeedback({ issue_id: data.issue_id, subject_type: "asset", subject_id: active.id, event_type: "decision", decision: "needs_revision", reason_codes: ["other"], comment: adjustment.trim(), context_snapshot: { order_id: orderId, variant_id: active.variant_id, size_key: active.size_key, revision: active.revision } });
+      await api.createComment(data.issue_id, `用户在创意工厂提出调整：\n\n${adjustment.trim()}\n\n目标：${activeVariant?.variant.variant_key || active.variant_id} · ${active.size_key} · r${active.revision}。请按订单当前资产创建精准返工或直接改图 task，只处理受影响范围并保留其他已通过资产。`);
+      setAdjustment(""); setAdjustOpen(false); toast.success("调整请求已提交给素材小队");
+    } catch (error) { toast.error(error instanceof Error ? error.message : "无法提交调整请求"); }
+    finally { setAdjustBusy(false); }
+  };
+
+  const retryFailure = async (failure: CreativeOrderWorkflowFailure) => {
+    if (!canRetryWorkflowFailure(failure)) return;
+    setRetryingTaskId(failure.task_id);
+    try {
+      await api.retryFailedAgentTasksBySource(
+        failure.agent_id,
+        failure.trigger_evidence_kind,
+        failure.trigger_evidence_ref_id,
+      );
+      await Promise.all([
+        order.refetch(),
+        queryClient.invalidateQueries({ queryKey: creativeKeys.orders(wsId) }),
+      ]);
+      toast.success("失败步骤已重新排队");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "无法重试失败步骤");
+    } finally {
+      setRetryingTaskId("");
+    }
+  };
+
+  return <div className="mx-auto max-w-[1440px] space-y-4"><div className="flex items-center justify-between border-b pb-3"><div><Button size="sm" variant="ghost" onClick={onBack}>返回订单</Button><h2 className="mt-2 text-base font-semibold">订单 {orderId.slice(0, 8)}</h2></div><div className="flex items-center gap-2"><Badge variant="outline">{data?.derived_status || data?.status || "加载中"}</Badge><Badge variant={acceptanceStatus === "已验收" ? "default" : "secondary"}>{acceptanceStatus}</Badge></div></div>{data && <OrderProgress order={data} variantDecisions={variantDecisions} />}{data && <CreativeOrderFailureNotice failures={data.workflow_failures ?? []} retryingTaskId={retryingTaskId} onRetry={(failure) => void retryFailure(failure)} />}{active && attachmentURL(active) && <div className="h-[min(78vh,860px)] min-h-[620px] overflow-hidden border"><CreativeComparisonWorkspace source={{ label: source?.title || "原始素材", url: resolvePublicFileUrl(source?.archived_url || source?.preview_url) ?? "" }} result={{ id: active.id, label: `${activeVariant?.variant.variant_key || "结果"} · ${active.size_key}`, finalUrl: attachmentURL(active), baseUrl: attachmentURL(generatedFor(active)), size: active.size_key, variant: activeVariant?.variant.variant_key }} assets={comparisonAssets} onAssetChange={setActiveAssetId} onAdjust={() => setAdjustOpen(true)} onDecision={(decision) => void event(active, decision)} onAnnotation={(draft) => void annotation(active, draft)} acceptance={{ enabled: activeReadiness.ready && !activeAccepted, status: !activeReadiness.ready ? activeReadiness.status : activeAccepted ? "当前变体已验收" : activeReadiness.status }} /></div>}{data && !order.isLoading && reviewAssets.length === 0 && <div className="flex min-h-72 items-center justify-center border border-dashed px-6 text-center text-sm text-muted-foreground">{creativeOrderWaitingMessage(data.workflow_failures ?? [])}</div>}<Dialog open={adjustOpen} onOpenChange={setAdjustOpen}><DialogContent className="max-w-xl"><DialogHeader><DialogTitle>调整当前成图</DialogTitle><DialogDescription>{activeVariant?.variant.variant_key || "当前变体"} · {active?.size_key}。请求会记录到订单反馈，并通知小队 Leader 精准委派。</DialogDescription></DialogHeader><Textarea rows={5} value={adjustment} onChange={(event) => setAdjustment(event.target.value)} placeholder="说明需要改什么、必须保留什么，以及只影响当前尺寸还是整个变体..." /><DialogFooter><Button variant="outline" onClick={() => setAdjustOpen(false)}>取消</Button><Button disabled={adjustBusy || !adjustment.trim()} onClick={() => void submitAdjustment()}>{adjustBusy ? "正在提交" : "提交调整"}</Button></DialogFooter></DialogContent></Dialog></div>;
+}
+
+export function CreativeOrderFailureNotice({ failures, retryingTaskId, onRetry }: {
+  failures: CreativeOrderWorkflowFailure[];
+  retryingTaskId: string;
+  onRetry: (failure: CreativeOrderWorkflowFailure) => void;
+}) {
+  if (failures.length === 0) return null;
+  return <section className="border border-destructive/40 bg-destructive/5" role="alert" aria-label="创意流程失败">
+    <div className="flex gap-3 border-b border-destructive/30 px-4 py-3"><AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-destructive" /><div><h3 className="text-sm font-semibold">创意流程需要处理</h3><p className="mt-1 text-xs text-muted-foreground">以下步骤已经失败，不会继续以“等待成图”隐藏。可重试任务会从原失败来源重新排队。</p></div></div>
+    <div className="divide-y divide-destructive/20">{failures.map((failure) => {
+      const retryable = canRetryWorkflowFailure(failure);
+      const busy = retryingTaskId === failure.task_id;
+      return <div key={failure.task_id || `${failure.workflow}:${failure.subject_id}:${failure.failed_at}`} className="px-4 py-3">
+        <div className="min-w-0"><div className="flex flex-wrap items-center gap-2"><span className="text-sm font-medium">失败步骤：{creativeWorkflowLabel(failure.workflow)}</span>{failure.item_key && <Badge variant="outline" title={failure.item_key}>对象 {failure.item_key.slice(0, 8)}</Badge>}</div><p className="mt-1 break-words text-sm text-destructive">{workflowFailureMessage(failure)}</p><p className="mt-1 break-words text-xs text-muted-foreground">范围：{failure.scope || "未提供"}{failure.failure_reason && failure.error !== failure.failure_reason ? ` · 分类：${failure.failure_reason}` : ""}</p></div>
+        <div className="mt-3">{failure.retryable ? <Button size="sm" variant="outline" disabled={!retryable || busy || Boolean(retryingTaskId)} onClick={() => onRetry(failure)}><RefreshCw className={cn("h-4 w-4", busy && "animate-spin")} />{busy ? "正在重试" : retryable ? "重试失败步骤" : "缺少重试来源"}</Button> : <span className="text-xs text-muted-foreground">需要人工处理</span>}</div>
+      </div>;
+    })}</div>
+  </section>;
+}
+
+export function creativeOrderWaitingMessage(failures: CreativeOrderWorkflowFailure[]): string {
+  return failures.length > 0
+    ? "失败步骤恢复后，首批成图会自动出现在这里。"
+    : "正在等待首批成图。各变体完成后会立即出现在这里。";
+}
+
+function canRetryWorkflowFailure(failure: CreativeOrderWorkflowFailure): boolean {
+  return failure.retryable && Boolean(failure.agent_id && failure.trigger_evidence_kind && failure.trigger_evidence_ref_id);
+}
+
+function workflowFailureMessage(failure: CreativeOrderWorkflowFailure): string {
+  return failure.error || failure.failure_reason || "任务执行失败，未返回详细原因";
+}
+
+function creativeWorkflowLabel(workflow: string): string {
+  const labels: Record<string, string> = {
+    creative_reference_analysis: "参考分析",
+    creative_plan: "创意方案",
+    creative_production: "底图生成",
+    creative_prime: "四角贴片",
+    creative_qc_technical: "技术质检",
+    creative_qc_visual: "视觉质检",
+    creative_direct_edit: "直接改图",
+  };
+  return labels[workflow] || workflow || "未知步骤";
+}
+
+export function selectCreativeReviewAssets(assets: CreativeOrderAsset[]): CreativeOrderAsset[] {
+  const selected = new Map<string, CreativeOrderAsset>();
+  for (const asset of assets) {
+    if (asset.status !== "completed" || !asset.attachment_id) continue;
+    const key = `${asset.variant_id}:${asset.size_key}`;
+    const current = selected.get(key);
+    if (!current || compareCreativeAssets(asset, current) > 0) selected.set(key, asset);
+  }
+  return [...selected.values()].sort((left, right) =>
+    left.variant_id.localeCompare(right.variant_id) || left.size_key.localeCompare(right.size_key),
+  );
+}
+
+function compareCreativeAssets(left: CreativeOrderAsset, right: CreativeOrderAsset): number {
+  if (left.revision !== right.revision) return left.revision - right.revision;
+  const stageRank = (asset: CreativeOrderAsset) => asset.stage === "delivered" ? 3 : asset.stage === "primed" ? 2 : asset.stage === "generated" ? 1 : 0;
+  const stageDifference = stageRank(left) - stageRank(right);
+  if (stageDifference !== 0) return stageDifference;
+  const updatedDifference = (Date.parse(left.updated_at) || 0) - (Date.parse(right.updated_at) || 0);
+  return updatedDifference || left.id.localeCompare(right.id);
+}
+
+const REQUIRED_CREATIVE_DELIVERY_SIZES = ["1080x1080", "1200x628", "800x1000"] as const;
+
+export function creativeVariantAcceptanceReadiness(variant: CreativeOrderVariant): { ready: boolean; status: string } {
+  const revision = variant.revision;
+  const completedSizes = (stage: "primed" | "delivered") => new Set(variant.assets
+    .filter((asset) => asset.revision === revision && asset.stage === stage && asset.status === "completed" && asset.attachment_id)
+    .map((asset) => asset.size_key)
+    .filter((size) => REQUIRED_CREATIVE_DELIVERY_SIZES.includes(size as typeof REQUIRED_CREATIVE_DELIVERY_SIZES[number])));
+  const primedSizes = completedSizes("primed");
+  if (primedSizes.size < REQUIRED_CREATIVE_DELIVERY_SIZES.length) {
+    return { ready: false, status: `等待 Prime：已完成 ${primedSizes.size}/${REQUIRED_CREATIVE_DELIVERY_SIZES.length} 个尺寸` };
+  }
+
+  const reportByLane = new Map(variant.qc_reports
+    .filter((report) => report.revision === revision && (report.lane === "technical" || report.lane === "visual"))
+    .map((report) => [report.lane, report.status]));
+  const technical = reportByLane.get("technical") ?? "pending";
+  const visual = reportByLane.get("visual") ?? "pending";
+  if (technical === "failed" || visual === "failed") {
+    return { ready: false, status: `QC 未通过：technical ${qcStatusLabel(technical)}，visual ${qcStatusLabel(visual)}` };
+  }
+  const qcComplete = (status: string) => status === "passed" || status === "warning";
+  if (!qcComplete(technical) || !qcComplete(visual)) {
+    return { ready: false, status: `等待双路 QC：technical ${qcStatusLabel(technical)}，visual ${qcStatusLabel(visual)}` };
+  }
+
+  const deliveredSizes = completedSizes("delivered");
+  if (deliveredSizes.size < REQUIRED_CREATIVE_DELIVERY_SIZES.length) {
+    return { ready: false, status: `等待正式交付：已完成 ${deliveredSizes.size}/${REQUIRED_CREATIVE_DELIVERY_SIZES.length} 个尺寸` };
+  }
+  if (variant.status !== "completed") {
+    return { ready: false, status: `等待变体完成：当前状态 ${variant.status}` };
+  }
+  return { ready: true, status: "三尺寸、Prime 与双路 QC 均已完成，可以验收" };
+}
+
+function qcStatusLabel(status: string): string {
+  if (status === "passed") return "通过";
+  if (status === "warning") return "通过（有提醒）";
+  if (status === "failed") return "失败";
+  return "待完成";
+}
+
+function OrderProgress({ order, variantDecisions }: { order: CreativeOrder; variantDecisions: Map<string, string> }) { return <div className="divide-y border">{order.items.map((item) => <div key={item.id} className="p-3"><p className="break-words text-sm font-medium">{item.direction || `候选 ${item.candidate_id.slice(0, 8)}`}</p>{item.variants.map((variant) => {
+  const readiness = creativeVariantAcceptanceReadiness(variant);
+  const accepted = readiness.ready && variantDecisions.get(variant.id) === "accepted";
+  return <div key={variant.id} className="mt-2 flex flex-wrap gap-2 text-xs"><Badge variant="outline">{variant.variant_key}</Badge><span>{variant.status} · QC {variant.qc_status}</span><span>{variant.assets.length} 个资产</span><Badge variant={accepted ? "default" : "secondary"}>{accepted ? "已验收" : "待验收"}</Badge>{!accepted && <span className="text-muted-foreground">{readiness.status}</span>}{variant.qc_reports.map((report) => <Badge key={report.id} variant="outline">{report.lane}: {report.status}</Badge>)}</div>;
+})}</div>)}</div>; }
+
+export function latestVariantFeedback(events: { id: string; subject_id: string; event_type: string; decision: string; undo_of_id: string; created_at?: string }[]): Map<string, string> {
+  const undone = new Set(events.filter((event) => event.event_type === "undo" && event.undo_of_id).map((event) => event.undo_of_id));
+  const latest = new Map<string, { decision: string; created_at: string; id: string }>();
+  for (const event of events.filter((event) => event.event_type === "decision" && !undone.has(event.id))) {
+    const current = latest.get(event.subject_id);
+    const currentTime = Date.parse(current?.created_at ?? "") || 0;
+    const eventTime = Date.parse(event.created_at ?? "") || 0;
+    if (!current || eventTime > currentTime || (eventTime === currentTime && event.id.localeCompare(current.id) > 0)) latest.set(event.subject_id, { decision: event.decision, created_at: event.created_at ?? "", id: event.id });
+  }
+  return new Map([...latest.entries()].map(([variantId, event]) => [variantId, event.decision]));
+}
+
+export function creativeOrderAcceptanceStatus(order: CreativeOrder | undefined, variantDecisions: Map<string, string>): "待验收" | "已验收" {
+  const variants = order?.items.flatMap((item) => item.variants) ?? [];
+  return variants.length > 0 && variants.every((variant) => creativeVariantAcceptanceReadiness(variant).ready && variantDecisions.get(variant.id) === "accepted") ? "已验收" : "待验收";
+}
+
+function assetFeedbackReason(issueType: string): string {
+  if (issueType === "theme_drift") return "theme_mismatch";
+  if (issueType === "artifact") return "broken_image";
+  if (issueType === "brand_prime") return "brand_or_prime";
+  if (issueType === "copy_error") return "copy_error";
+  return "other";
 }
 
 function CopyLibraries({ resources, onCreate, onArchive }: {
@@ -254,7 +571,7 @@ function CopyLibraries({ resources, onCreate, onArchive }: {
                 <Button size="sm" variant="outline" onClick={() => fileRef.current?.click()}><Upload className="h-4 w-4" />导入 Excel</Button>
                 <Button size="sm" variant="outline" onClick={() => setEditing("new")}><Plus className="h-4 w-4" />添加文案</Button>
                 <PublishButton resource={active} />
-                <Button size="icon-sm" variant="ghost" title="归档文案库" onClick={() => onArchive(active.id)}><Archive className="h-4 w-4" /></Button>
+                <Button size="icon-sm" variant="ghost" title="归档文案库" aria-label="归档文案库" onClick={() => onArchive(active.id)}><Archive className="h-4 w-4" /></Button>
                 </div>
               </div>
               <div className="mt-3 flex items-center gap-3">
@@ -274,7 +591,7 @@ function CopyLibraries({ resources, onCreate, onArchive }: {
                   <span className="truncate">{entry.copy_role || "通用"}</span>
                   <span className="truncate">{entry.market || "-"}</span>
                   <Badge variant="outline" className="w-fit text-[10px]">{copyStatusLabel(entry.status)}</Badge>
-                  <Button size="icon-sm" variant="ghost" title="编辑文案" onClick={() => setEditing(entry)}><Settings2 className="h-4 w-4" /></Button>
+                  <Button size="icon-sm" variant="ghost" title="编辑文案" aria-label="编辑文案" onClick={() => setEditing(entry)}><Settings2 className="h-4 w-4" /></Button>
                 </div>
               ))}
               {!entries.isLoading && (entries.data?.entries.length ?? 0) === 0 && <div className="py-20 text-center text-sm text-muted-foreground">导入 Excel 或在线添加第一条文案。</div>}
@@ -338,7 +655,7 @@ function ResourceEditor({ resources, copyLibraries, onCreate, onArchive }: {
               <div className="flex items-center gap-2">
                 <Button size="sm" variant="outline" onClick={() => save.mutate()} disabled={save.isPending}><Save className="h-4 w-4" />保存草稿</Button>
                 <PublishButton resource={active} />
-                <Button size="icon-sm" variant="ghost" title="归档资源" onClick={() => onArchive(active.id)}><Archive className="h-4 w-4" /></Button>
+                <Button size="icon-sm" variant="ghost" title="归档资源" aria-label="归档资源" onClick={() => onArchive(active.id)}><Archive className="h-4 w-4" /></Button>
               </div>
             </div>
             <MarketPackForm resource={active} value={draft} onChange={setDraft} copyLibraries={copyLibraries} />
@@ -410,7 +727,7 @@ function ResourceList({ title, resources, activeId, onSelect, onCreate }: {
     <aside className="min-h-0 overflow-y-auto border-r bg-muted/15">
       <div className="sticky top-0 flex items-center justify-between border-b bg-background px-3 py-2.5">
         <span className="text-sm font-semibold">{title}</span>
-        <Button size="icon-sm" variant="ghost" title={`创建${title}`} onClick={onCreate}><Plus className="h-4 w-4" /></Button>
+        <Button size="icon-sm" variant="ghost" title={`创建${title}`} aria-label={`创建${title}`} onClick={onCreate}><Plus className="h-4 w-4" /></Button>
       </div>
       {resources.map((resource) => (
         <button key={resource.id} type="button" onClick={() => onSelect(resource.id)} className={cn("block w-full border-b px-3 py-3 text-left hover:bg-muted/40", resource.id === activeId && "bg-background shadow-[inset_2px_0_0_hsl(var(--primary))]") }>
@@ -486,8 +803,10 @@ function FormSection({ title, description, children }: { title: string; descript
   return <section><div className="mb-3"><h3 className="text-sm font-semibold">{title}</h3><p className="mt-1 text-xs text-muted-foreground">{description}</p></div><div className="grid grid-cols-1 gap-4 border-t pt-4 sm:grid-cols-2">{children}</div></section>;
 }
 
-function Field({ label, children, wide = false }: { label: string; children: React.ReactNode; wide?: boolean }) {
-  return <div className={cn("space-y-1.5", wide && "sm:col-span-2")}><Label className="text-xs text-muted-foreground">{label}</Label>{children}</div>;
+function Field({ label, children, wide = false }: { label: string; children: React.ReactElement<{ id?: string }>; wide?: boolean }) {
+  const generatedId = useId();
+  const controlId = children.props.id || generatedId;
+  return <div className={cn("space-y-1.5", wide && "sm:col-span-2")}><Label htmlFor={controlId} className="text-xs text-muted-foreground">{label}</Label>{cloneElement(children, { id: controlId })}</div>;
 }
 
 function EmptyResource({ title, action, onAction }: { title: string; action: string; onAction: () => void }) {

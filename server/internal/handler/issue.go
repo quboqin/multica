@@ -2262,6 +2262,12 @@ func (h *Handler) CreateIssue(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to create issue: "+err.Error())
 		return
 	}
+	if res.Reused {
+		resp := issueToResponse(res.Issue, prefix)
+		resp.Attachments = buildAttachmentResponses(res.Attachments)
+		writeJSON(w, http.StatusOK, resp)
+		return
+	}
 
 	issue := res.Issue
 	slog.Info("issue created", append(logger.RequestAttrs(r), "issue_id", uuidToString(issue.ID), "title", issue.Title, "status", issue.Status, "workspace_id", workspaceID)...)
