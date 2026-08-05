@@ -75,6 +75,11 @@ technical QC 或 visual QC，也不等待其他变体。三张必须保持同一
 不等于创意返工。每个尺寸最多一次有明确原因的定向返工；成功且输入指纹不变的输出直接复用。没有
 合法 image-edit 配置时，将 variant 写为 `action_required` 并记录缺失配置。
 
+图片请求可能在本地环境中运行数分钟。通过 `exec_command` 执行 `multica image edit` 或
+`multica image edit-batch` 时必须显式设置 `timeout_ms: 1800000`（30 分钟），不能使用工具默认等待
+上限；CLI 自身的 35 分钟网络上限继续生效。等待期间只要进程仍在运行就不重复提交。若外层工具仍然
+超时，先检查每个 `output_file` 是否已落盘，并只补缺失输出，不能重做已完成 job。
+
 每张模型输出必须经本 Skill 的规范化脚本变为精确交付尺寸，并保留 JSON evidence：
 
 ```bash
