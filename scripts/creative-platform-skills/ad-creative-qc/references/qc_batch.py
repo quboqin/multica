@@ -66,10 +66,7 @@ def make_contact_sheet(images: list[tuple[str, Path]], output: Path) -> None:
     sheet.save(output, format="PNG", optimize=True)
 
 
-def resolve_layout_contract(manifest: dict, size: str) -> dict | None:
-    contract = manifest.get("prime_layout_contract") or manifest.get("layout_contract") or {}
-    layouts = contract.get("layouts") if isinstance(contract, dict) else None
-    layout = layouts.get(size) if isinstance(layouts, dict) else None
+def valid_layout_contract(layout: object) -> dict | None:
     if not isinstance(layout, dict):
         return None
     if not isinstance(layout.get("hard_regions"), list):
@@ -79,6 +76,18 @@ def resolve_layout_contract(manifest: dict, size: str) -> dict | None:
     if not isinstance(layout.get("bottom_key_content_exclusion_start"), int):
         return None
     return layout
+
+
+def resolve_layout_contract(manifest: dict, job: dict, size: str) -> dict | None:
+    # Prime compose manifests carry the exact size-specific contract on each
+    # job. Keep top-level layout support for older archived manifests.
+    direct = job.get("layout_contract") or job.get("layout") or job
+    layout = valid_layout_contract(direct)
+    if layout is not None:
+        return layout
+    contract = manifest.get("prime_layout_contract") or manifest.get("layout_contract") or {}
+    layouts = contract.get("layouts") if isinstance(contract, dict) else None
+    return valid_layout_contract(layouts.get(size) if isinstance(layouts, dict) else None)
 
 
 def make_hard_region_sheet(images: list[tuple[str, Path, dict]], output: Path) -> None:
@@ -169,7 +178,7 @@ def main() -> int:
         revision = contract["revision"]
         approved_payload = contract["approved_payload"]
         expected_width, expected_height = (int(value) for value in size.lower().split("x", 1))
-        layout = resolve_layout_contract(manifest, size)
+        layout = resolve_layout_contract(manifest, job, size)
         exists = image_path.is_file()
         actual_size = None
         white_ratio = None

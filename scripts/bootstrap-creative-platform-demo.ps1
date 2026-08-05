@@ -213,7 +213,7 @@ $planSkill = Set-WorkspaceSkill -Name '广告生成方案' -Description '消费�
 $productionSkill = Set-WorkspaceSkill -Name '广告图像编辑' -Description '一个变体 task 内生成方形母版并发重排横竖版；三尺寸共享内容族和修订。' -Directory (Join-Path $skillTemplateRoot 'ad-creative-production') -Config @{ kind = 'creative_role'; capability = 'image_edit'; version = 23 }
 $directEditSkill = Set-WorkspaceSkill -Name '广告图片直接修改' -Description '基于用户自然语言和指定底图执行自由修改；正式交付按 expected_sizes 补 Prime 与独立 QC。' -Directory (Join-Path $skillTemplateRoot 'ad-creative-direct-edit') -Config @{ kind = 'creative_role'; capability = 'direct_image_edit'; version = 5 }
 $composeSkill = Set-WorkspaceSkill -Name 'Prime 完整贴图' -Description '按变体一次包装 expected_sizes，并把最终图和逐图机器证据写入领域资产。' -Directory (Join-Path $skillTemplateRoot 'ad-creative-prime-compose') -Config @{ kind = 'creative_role'; capability = 'prime_compose'; version = 16 }
-$qcSkill = Set-WorkspaceSkill -Name '广告成图验收' -Description '通过并发技术 QC 与视觉 QC 检查 expected_sizes 的四角、画质和内容一致性。' -Directory (Join-Path $skillTemplateRoot 'ad-creative-qc') -Config @{ kind = 'creative_role'; capability = 'quality_control'; version = 19 }
+$qcSkill = Set-WorkspaceSkill -Name '广告成图验收' -Description '通过并发技术 QC 与视觉 QC 检查 expected_sizes 的四角、画质和内容一致性。' -Directory (Join-Path $skillTemplateRoot 'ad-creative-qc') -Config @{ kind = 'creative_role'; capability = 'quality_control'; version = 20 }
 
 $agents = Get-Items (Invoke-MulticaApi -Method Get -Path '/api/agents') ''
 $leaderSeed = $agents | Where-Object name -eq '素材小队 Leader' | Select-Object -First 1
