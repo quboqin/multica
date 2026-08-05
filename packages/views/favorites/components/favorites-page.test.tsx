@@ -226,6 +226,10 @@ describe("FavoritesPage", () => {
     ];
     render(<FavoritesPage categoryId="category-1" />);
 
+    for (const name of ["All", "Tasks", "Projects", "MD", "HTML"]) {
+      expect(screen.getByRole("tab", { name })).toHaveClass("cursor-pointer");
+    }
+
     expect(screen.getByText("summary.md")).toBeInTheDocument();
     expect(screen.getByText("report.html")).toBeInTheDocument();
 

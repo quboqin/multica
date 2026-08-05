@@ -241,6 +241,7 @@ describe("favorite categories", () => {
     expect(screen.getByText("Research")).toBeInTheDocument();
     const trigger = document.querySelector(".lucide-star")?.closest("button");
     expect(trigger).not.toBeNull();
+    expect(trigger).toHaveClass("cursor-pointer");
 
     await user.click(trigger!);
     expect(screen.queryByText("Research")).not.toBeInTheDocument();
@@ -257,6 +258,7 @@ describe("favorite categories", () => {
       .querySelector(".lucide-star")
       ?.closest("button");
     expect(favoritesButton).not.toBeNull();
+    expect(favoritesButton).not.toHaveClass("cursor-pointer");
     expect(
       favoritesButton?.querySelector(".lucide-chevron-right"),
     ).toBeNull();

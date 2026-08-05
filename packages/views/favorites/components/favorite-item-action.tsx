@@ -88,7 +88,11 @@ export function FavoriteItemAction({
   return (
     <>
       {presentation === "menu" ? (
-        <DropdownMenuItem disabled={favorite.isPending} onClick={toggle}>
+        <DropdownMenuItem
+          className="cursor-pointer"
+          disabled={favorite.isPending}
+          onClick={toggle}
+        >
           <Star
             className="size-3.5"
             fill={favorite.isFavorite ? "currentColor" : "none"}
@@ -103,7 +107,7 @@ export function FavoriteItemAction({
                 variant="ghost"
                 size="icon-sm"
                 className={cn(
-                  "text-muted-foreground",
+                  "cursor-pointer text-muted-foreground",
                   favorite.isFavorite && "text-foreground",
                 )}
                 aria-pressed={favorite.isFavorite}

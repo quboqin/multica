@@ -152,6 +152,7 @@ describe("HtmlAttachmentPreview — toolbar actions", () => {
     await waitFor(() =>
       expect(screen.getByTitle("Add to favorites")).toBeTruthy(),
     );
+    expect(screen.getByTitle("Add to favorites")).toHaveClass("cursor-pointer");
     fireEvent.mouseDown(screen.getByTitle("Add to favorites"));
     expect(onToggleFavorite).toHaveBeenCalledTimes(1);
   });
@@ -181,6 +182,7 @@ describe("HtmlAttachmentPreview — toolbar actions", () => {
       "aria-pressed",
       "true",
     );
+    expect(screen.getByTitle("Change category")).toHaveClass("cursor-pointer");
     fireEvent.click(screen.getByTitle("Change category"));
     expect(onChangeFavoriteCategory).toHaveBeenCalledTimes(1);
   });

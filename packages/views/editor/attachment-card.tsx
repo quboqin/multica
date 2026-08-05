@@ -75,7 +75,7 @@ function AttachmentCardChrome({
       {!uploading && onToggleFavorite && (
         <button
           type="button"
-          className="shrink-0 rounded-md p-1 text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground disabled:pointer-events-none disabled:opacity-50"
+          className="shrink-0 cursor-pointer rounded-md p-1 text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground disabled:pointer-events-none disabled:opacity-50"
           title={t(($) => isFavorite ? $.attachment.unfavorite : $.attachment.favorite)}
           aria-label={t(($) => isFavorite ? $.attachment.unfavorite : $.attachment.favorite)}
           aria-pressed={isFavorite === true}
@@ -92,7 +92,7 @@ function AttachmentCardChrome({
       {!uploading && isFavorite && onChangeFavoriteCategory && (
         <button
           type="button"
-          className="shrink-0 rounded-md p-1 text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
+          className="shrink-0 cursor-pointer rounded-md p-1 text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
           title={t(($) => $.attachment.change_favorite_category)}
           aria-label={t(($) => $.attachment.change_favorite_category)}
           onClick={(e) => {

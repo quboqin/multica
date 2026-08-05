@@ -677,7 +677,7 @@ export function AppSidebar({ topSlot, searchSlot, headerClassName, headerStyle }
                             className={cn(
                               "text-muted-foreground hover:not-data-active:bg-sidebar-accent/70 data-active:bg-sidebar-accent data-active:text-sidebar-accent-foreground",
                               hasFavoriteCategories
-                                ? "group/favorite-trigger pr-14"
+                                ? "group/favorite-trigger cursor-pointer pr-14"
                                 : "pr-8",
                             )}
                           >

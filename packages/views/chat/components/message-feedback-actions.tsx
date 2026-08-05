@@ -227,8 +227,8 @@ function FeedbackButton({
             variant="ghost"
             size="icon-xs"
             className={active
-              ? "bg-muted text-foreground hover:bg-muted [&_svg]:fill-current"
-              : "text-muted-foreground/70 hover:text-foreground"}
+              ? "cursor-pointer bg-muted text-foreground hover:bg-muted [&_svg]:fill-current"
+              : "cursor-pointer text-muted-foreground/70 hover:text-foreground"}
             disabled={disabled}
             onClick={onClick}
             aria-label={label}

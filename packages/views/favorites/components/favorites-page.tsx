@@ -123,19 +123,19 @@ export function FavoritesPage({ categoryId }: { categoryId?: string }) {
               }}
             >
               <TabsList aria-label={t(($) => $.favorites.page.filter_label)}>
-                <TabsTrigger value="all">
+                <TabsTrigger value="all" className="cursor-pointer">
                   {t(($) => $.favorites.page.filter_all)}
                 </TabsTrigger>
-                <TabsTrigger value="issue">
+                <TabsTrigger value="issue" className="cursor-pointer">
                   {t(($) => $.favorites.page.filter_issue)}
                 </TabsTrigger>
-                <TabsTrigger value="project">
+                <TabsTrigger value="project" className="cursor-pointer">
                   {t(($) => $.favorites.page.filter_project)}
                 </TabsTrigger>
-                <TabsTrigger value="markdown">
+                <TabsTrigger value="markdown" className="cursor-pointer">
                   {t(($) => $.favorites.page.filter_markdown)}
                 </TabsTrigger>
-                <TabsTrigger value="html">
+                <TabsTrigger value="html" className="cursor-pointer">
                   {t(($) => $.favorites.page.filter_html)}
                 </TabsTrigger>
               </TabsList>

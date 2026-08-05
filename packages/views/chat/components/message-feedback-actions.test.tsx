@@ -41,6 +41,10 @@ describe("MessageFeedbackActions", () => {
     const user = userEvent.setup();
     renderActions();
 
+    for (const name of ["Good response", "Poor response", "Add comment"]) {
+      expect(screen.getByRole("button", { name })).toHaveClass("cursor-pointer");
+    }
+
     await user.click(screen.getByRole("button", { name: "Good response" }));
 
     await waitFor(() => {

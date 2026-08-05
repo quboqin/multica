@@ -155,6 +155,7 @@ describe("AttachmentCard — Eye / Download buttons", () => {
       />,
     );
 
+    expect(screen.getByTitle("Add to favorites")).toHaveClass("cursor-pointer");
     fireEvent.mouseDown(screen.getByTitle("Add to favorites"));
     expect(onToggleFavorite).toHaveBeenCalledTimes(1);
 
@@ -189,6 +190,7 @@ describe("AttachmentCard — Eye / Download buttons", () => {
       />,
     );
 
+    expect(screen.getByTitle("Change category")).toHaveClass("cursor-pointer");
     fireEvent.mouseDown(screen.getByTitle("Change category"));
     expect(onChangeFavoriteCategory).not.toHaveBeenCalled();
 

@@ -126,7 +126,7 @@ export function HtmlAttachmentPreview({
         {onToggleFavorite && (
           <button
             type="button"
-            className="flex h-6 w-6 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:pointer-events-none disabled:opacity-50"
+            className="flex h-6 w-6 cursor-pointer items-center justify-center rounded text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:pointer-events-none disabled:opacity-50"
             title={t(($) =>
               isFavorite ? $.attachment.unfavorite : $.attachment.favorite,
             )}
@@ -147,7 +147,7 @@ export function HtmlAttachmentPreview({
         {isFavorite && onChangeFavoriteCategory && (
           <button
             type="button"
-            className="flex h-6 w-6 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+            className="flex h-6 w-6 cursor-pointer items-center justify-center rounded text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
             title={t(($) => $.attachment.change_favorite_category)}
             aria-label={t(($) => $.attachment.change_favorite_category)}
             onClick={(e) => {
