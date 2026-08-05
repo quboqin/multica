@@ -2473,16 +2473,8 @@ func (s *TaskService) broadcastTaskDispatch(ctx context.Context, task db.AgentTa
 	if payload == nil {
 		payload = map[string]any{}
 	}
-	payload["task_id"] = util.UUIDToString(task.ID)
+	addTaskEventRouting(payload, task)
 	payload["runtime_id"] = util.UUIDToString(task.RuntimeID)
-	payload["issue_id"] = util.UUIDToString(task.IssueID)
-	payload["agent_id"] = util.UUIDToString(task.AgentID)
-	// chat_session_id is the routing key the chat window uses to writethrough
-	// `chatKeys.pendingTask` to status="running" the moment the daemon claims
-	// the task. Without it the pill stays stuck at "Queued" until completion.
-	if task.ChatSessionID.Valid {
-		payload["chat_session_id"] = util.UUIDToString(task.ChatSessionID)
-	}
 
 	workspaceID := s.ResolveTaskWorkspaceID(ctx, task)
 	if workspaceID == "" {
@@ -2502,15 +2494,8 @@ func (s *TaskService) broadcastTaskEvent(ctx context.Context, eventType string, 
 	if workspaceID == "" {
 		return
 	}
-	payload := map[string]any{
-		"task_id":  util.UUIDToString(task.ID),
-		"agent_id": util.UUIDToString(task.AgentID),
-		"issue_id": util.UUIDToString(task.IssueID),
-		"status":   task.Status,
-	}
-	if task.ChatSessionID.Valid {
-		payload["chat_session_id"] = util.UUIDToString(task.ChatSessionID)
-	}
+	payload := map[string]any{"status": task.Status}
+	addTaskEventRouting(payload, task)
 	s.Bus.Publish(events.Event{
 		Type:        eventType,
 		WorkspaceID: workspaceID,
@@ -2518,6 +2503,21 @@ func (s *TaskService) broadcastTaskEvent(ctx context.Context, eventType string, 
 		ActorID:     "",
 		Payload:     payload,
 	})
+}
+
+func addTaskEventRouting(payload map[string]any, task db.AgentTaskQueue) {
+	payload["task_id"] = util.UUIDToString(task.ID)
+	payload["agent_id"] = util.UUIDToString(task.AgentID)
+	payload["issue_id"] = util.UUIDToString(task.IssueID)
+	// chat_session_id is the routing key the chat window uses to writethrough
+	// `chatKeys.pendingTask` to status="running" the moment the daemon claims
+	// the task. Without it the pill stays stuck at "Queued" until completion.
+	if task.ChatSessionID.Valid {
+		payload["chat_session_id"] = util.UUIDToString(task.ChatSessionID)
+	}
+	if task.TriggerEvidenceKind.Valid {
+		payload["trigger_evidence_kind"] = task.TriggerEvidenceKind.String
+	}
 }
 
 // ResolveTaskWorkspaceID determines the workspace ID for a task.

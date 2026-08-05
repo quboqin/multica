@@ -18,8 +18,8 @@ multica creative library download <candidate-id> --output-file <reference-image>
 已生成的无品牌底图可作为同变体重排的第一输入。不得把带 Prime、二维码、Logo、条款、商店徽章或
 监管资产的最终图送入模型；不得爬取、重新分析竞品、重写获批文案、执行 Prime 或替代 QC。
 
-图像调用前，用本 Skill 的校验脚本逐个检查最终提示词中的金融数字是否来自订单冻结的
-`copy_snapshot`；校验不通过时不得调用模型，也不得回到文案库重选：
+图像调用前，用本 Skill 的校验脚本确认订单冻结的是带 recipe 来源证据的 schema-v2 `copy_snapshot`，
+并逐个检查最终提示词中的金融数字是否来自该快照；校验不通过时不得调用模型，也不得回到文案库重选：
 
 ```bash
 python <当前 Skill 目录>/references/validate_copy_snapshot.py \

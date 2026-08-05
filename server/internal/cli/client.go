@@ -7,7 +7,9 @@ import (
 	"fmt"
 	"io"
 	"mime/multipart"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -529,22 +531,26 @@ func (c *APIClient) UploadFileWithURL(ctx context.Context, fileData []byte, file
 // (a server-relative path like "/api/attachments/{id}/download" or
 // "/uploads/...") depending on how the
 // server is configured. Relative URLs are resolved against the client's
-// BaseURL and sent with the standard auth headers; absolute URLs are
-// used as-is so that their query-string signatures are not disturbed.
+// BaseURL and sent with the standard auth headers. Absolute URLs that point
+// back to the same API origin also receive auth; external absolute URLs are
+// treated as signed object-store links and used without auth headers.
 func (c *APIClient) DownloadFile(ctx context.Context, downloadURL string) ([]byte, error) {
 	isRelative := !strings.HasPrefix(downloadURL, "http://") && !strings.HasPrefix(downloadURL, "https://")
+	useAuth := isRelative
 	if isRelative {
 		if c.BaseURL == "" {
 			return nil, fmt.Errorf("download URL %q is relative but client has no BaseURL", downloadURL)
 		}
 		downloadURL = c.BaseURL + downloadURL
+	} else {
+		useAuth = downloadURLUsesAPIAuth(c.BaseURL, downloadURL)
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, downloadURL, nil)
 	if err != nil {
 		return nil, err
 	}
-	if isRelative {
+	if useAuth {
 		c.setHeaders(req)
 	}
 
@@ -561,6 +567,43 @@ func (c *APIClient) DownloadFile(ctx context.Context, downloadURL string) ([]byt
 
 	const maxDownloadSize = 100 << 20 // 100 MB
 	return io.ReadAll(io.LimitReader(resp.Body, maxDownloadSize))
+}
+
+func downloadURLUsesAPIAuth(baseURL, targetURL string) bool {
+	base, baseErr := url.Parse(baseURL)
+	target, targetErr := url.Parse(targetURL)
+	if baseErr != nil || targetErr != nil || base.Hostname() == "" || target.Hostname() == "" {
+		return false
+	}
+	if !strings.EqualFold(base.Scheme, target.Scheme) || effectiveURLPort(base) != effectiveURLPort(target) {
+		return false
+	}
+	if strings.EqualFold(base.Hostname(), target.Hostname()) {
+		return true
+	}
+	return isLoopbackHost(base.Hostname()) && isLoopbackHost(target.Hostname())
+}
+
+func effectiveURLPort(u *url.URL) string {
+	if port := u.Port(); port != "" {
+		return port
+	}
+	switch strings.ToLower(u.Scheme) {
+	case "http":
+		return "80"
+	case "https":
+		return "443"
+	default:
+		return ""
+	}
+}
+
+func isLoopbackHost(host string) bool {
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 // HealthCheck hits the /health endpoint and returns the response body.

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -273,6 +274,68 @@ func TestValidateCreativeTaskFanoutContextRequiresOrderTrace(t *testing.T) {
 }`, uuid.NewString(), uuid.NewString(), uuidToString(ref)))}}
 	if err := validateCreativeTaskFanoutContext("creative_order_item_production", ref, missingIssue); err == nil {
 		t.Fatal("production context without issue_id unexpectedly passed")
+	}
+}
+
+func TestValidateCreativeQCFanoutContextRequiresLaneAndCompleteTrace(t *testing.T) {
+	variantID := uuid.NewString()
+	orderID := uuid.NewString()
+	itemID := uuid.NewString()
+	issueID := uuid.NewString()
+	leaderID := uuid.NewString()
+	qcItem := func(workflow, itemKey string, expectedSizes any) service.DirectTaskFanoutItem {
+		contextValue, err := json.Marshal(map[string]any{
+			"type":                   "creative_domain_task",
+			"workflow":               workflow,
+			"issue_id":               issueID,
+			"leader_agent_id":         leaderID,
+			"creative_order_id":       orderID,
+			"creative_order_item_id":  itemID,
+			"variant_id":              variantID,
+			"revision":               2,
+			"expected_sizes":          expectedSizes,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return service.DirectTaskFanoutItem{ItemKey: itemKey, Context: contextValue}
+	}
+	valid := []service.DirectTaskFanoutItem{
+		qcItem("creative_qc_technical", variantID+":technical:r2", []string{"1080x1080", "1200x628", "800x1000"}),
+		qcItem("creative_qc_visual", variantID+":visual:r2", []string{"1080x1080", "1200x628", "800x1000"}),
+	}
+	if err := validateCreativeTaskFanoutContext("creative_order_variant_qc", parseUUID(variantID), valid); err != nil {
+		t.Fatalf("valid QC fanout context: %v", err)
+	}
+	if err := validateCreativeTaskFanoutContext("creative_order_variant_qc", parseUUID(variantID), []service.DirectTaskFanoutItem{
+		qcItem("creative_qc_technical", variantID+":technical:r2", []string{}),
+	}); err == nil {
+		t.Fatal("QC fanout without expected_sizes unexpectedly passed")
+	}
+	if err := validateCreativeTaskFanoutContext("creative_order_variant_qc", parseUUID(variantID), []service.DirectTaskFanoutItem{
+		qcItem("creative_qc", variantID+":technical:r2", []string{"1080x1080"}),
+	}); err == nil {
+		t.Fatal("QC fanout with invalid lane workflow unexpectedly passed")
+	}
+}
+
+func TestFanoutAgentTasksRejectsUnknownCreativeEvidenceKind(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	agentID := createHandlerTestAgent(t, "reject-unknown-creative-evidence", nil)
+	w := httptest.NewRecorder()
+	req := withURLParam(newRequest(http.MethodPost, "/api/agents/"+agentID+"/tasks/fanout", taskFanoutRequest{
+		TriggerEvidenceKind:  "creative_future_workflow",
+		TriggerEvidenceRefID: uuid.NewString(),
+		Items: []service.DirectTaskFanoutItem{{
+			ItemKey: "future",
+			Context: json.RawMessage(`{"type":"creative_domain_task"}`),
+		}},
+	}), "agentId", agentID)
+	testHandler.FanoutAgentTasks(w, req)
+	if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "unsupported creative trigger_evidence_kind") {
+		t.Fatalf("unknown creative evidence = %d %s", w.Code, w.Body.String())
 	}
 }
 

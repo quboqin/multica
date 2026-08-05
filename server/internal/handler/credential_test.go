@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -27,7 +28,7 @@ func (w *credentialTestWorker) StartLoginSession(_ context.Context, request brok
 }
 
 func (w *credentialTestWorker) RunCrawl(context.Context, broker.WorkerCrawlRequest) (broker.WorkerCrawlResponse, error) {
-	return broker.WorkerCrawlResponse{}, nil
+	return broker.WorkerCrawlResponse{Status: "completed"}, nil
 }
 
 func TestWriteCredentialBrokerErrorClassifiesWorkerFailures(t *testing.T) {
@@ -40,6 +41,7 @@ func TestWriteCredentialBrokerErrorClassifiesWorkerFailures(t *testing.T) {
 		{"busy", broker.ErrWorkerBusy, http.StatusTooManyRequests},
 		{"timeout", broker.ErrWorkerTimeout, http.StatusGatewayTimeout},
 		{"unavailable", broker.ErrWorkerUnavailable, http.StatusServiceUnavailable},
+		{"deployment binding race", broker.ErrDeploymentProfileBindingConflict, http.StatusConflict},
 	}
 
 	for _, tc := range cases {
@@ -134,7 +136,7 @@ func TestCredentialWorkspaceScopeAllowsMembersToViewButNotManage(t *testing.T) {
 	}
 }
 
-func TestCredentialProfileIsSharedPerWorkspaceConnector(t *testing.T) {
+func TestCredentialProfileIsSharedAcrossWorkspacesWithExplicitManagers(t *testing.T) {
 	if testHandler == nil {
 		t.Skip("database not available")
 	}
@@ -158,7 +160,12 @@ func TestCredentialProfileIsSharedPerWorkspaceConnector(t *testing.T) {
 	}
 
 	worker := &credentialTestWorker{}
-	service := broker.NewService(testHandler.Queries, worker)
+	connectorID := "appgrowing-test-shared"
+	registry, err := broker.RegistryWithJSON(`[{"id":"appgrowing-test-shared","display_name":"AppGrowing Test","login_url":"https://example.test/login","capabilities":["material_search"],"scope":"deployment"}]`)
+	if err != nil {
+		t.Fatalf("create test connector registry: %v", err)
+	}
+	service := broker.NewServiceWithRegistry(testHandler.Queries, worker, registry)
 	workspaceID := parseUUID(testWorkspaceID)
 	firstAdminID := parseUUID(testUserID)
 	secondAdminUUID := parseUUID(secondAdminID)
@@ -166,7 +173,7 @@ func TestCredentialProfileIsSharedPerWorkspaceConnector(t *testing.T) {
 	first, err := service.StartLoginSession(ctx, broker.StartLoginSessionInput{
 		WorkspaceID: workspaceID,
 		UserID:      firstAdminID,
-		ConnectorID: broker.ConnectorAppGrowing,
+		ConnectorID: connectorID,
 		Label:       "Shared AppGrowing",
 	})
 	if err != nil {
@@ -174,6 +181,12 @@ func TestCredentialProfileIsSharedPerWorkspaceConnector(t *testing.T) {
 	}
 	if len(worker.loginRequests) != 1 {
 		t.Fatalf("first login requests = %d, want 1", len(worker.loginRequests))
+	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM credential_profile WHERE id = $1`, first.Profile.ID)
+	})
+	if first.Profile.Scope != broker.ScopeDeployment {
+		t.Fatalf("profile scope = %q, want deployment", first.Profile.Scope)
 	}
 	if _, err := service.CompleteLoginSession(ctx, broker.CompleteLoginSessionInput{
 		SessionToken: worker.loginRequests[0].SessionToken,
@@ -183,14 +196,26 @@ func TestCredentialProfileIsSharedPerWorkspaceConnector(t *testing.T) {
 		t.Fatalf("complete first login session: %v", err)
 	}
 
+	_, err = service.StartLoginSession(ctx, broker.StartLoginSessionInput{
+		WorkspaceID: workspaceID,
+		UserID:      secondAdminUUID,
+		ConnectorID: connectorID,
+		Label:       "Ignored because the shared profile already exists",
+	})
+	if !errors.Is(err, broker.ErrProfileManageForbidden) {
+		t.Fatalf("unlisted workspace admin rebind error = %v, want manage forbidden", err)
+	}
+	if err := service.AddProfileManager(ctx, workspaceID, firstAdminID, first.Profile.ID, secondAdminUUID); err != nil {
+		t.Fatalf("grant explicit manager: %v", err)
+	}
 	second, err := service.StartLoginSession(ctx, broker.StartLoginSessionInput{
 		WorkspaceID: workspaceID,
 		UserID:      secondAdminUUID,
-		ConnectorID: broker.ConnectorAppGrowing,
+		ConnectorID: connectorID,
 		Label:       "Ignored because the shared profile already exists",
 	})
 	if err != nil {
-		t.Fatalf("start second login session: %v", err)
+		t.Fatalf("explicit manager starts second login session: %v", err)
 	}
 	if second.Profile.ID != first.Profile.ID {
 		t.Fatalf("second profile id = %s, want existing shared profile %s", uuidToString(second.Profile.ID), uuidToString(first.Profile.ID))
@@ -212,6 +237,49 @@ func TestCredentialProfileIsSharedPerWorkspaceConnector(t *testing.T) {
 	}
 	if uuidToString(profile.AuthorizedByID) != secondAdminID {
 		t.Fatalf("authorized_by_id = %q, want latest completing admin %q", uuidToString(profile.AuthorizedByID), secondAdminID)
+	}
+
+	otherWorkspaceSlug := "credential-shared-" + uuid.NewString()
+	var otherWorkspaceID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO workspace (name, slug, issue_prefix)
+		VALUES ('Credential Shared Other', $1, 'CSO')
+		RETURNING id
+	`, otherWorkspaceSlug).Scan(&otherWorkspaceID); err != nil {
+		t.Fatalf("create other workspace: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM workspace WHERE id = $1`, otherWorkspaceID)
+	})
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO member (workspace_id, user_id, role)
+		VALUES ($1, $2, 'member')
+	`, otherWorkspaceID, secondAdminID); err != nil {
+		t.Fatalf("add member to other workspace: %v", err)
+	}
+
+	result, err := service.RunCrawl(ctx, broker.RunCrawlInput{
+		WorkspaceID:      parseUUID(otherWorkspaceID),
+		RequestingUserID: secondAdminUUID,
+		ConnectorID:      connectorID,
+		Capability:       "material_search",
+		Params:           json.RawMessage(`{}`),
+	})
+	if err != nil {
+		t.Fatalf("other workspace resolves shared profile: %v", err)
+	}
+	if result.Status != "completed" {
+		t.Fatalf("other workspace crawl status = %q", result.Status)
+	}
+	var auditCount int
+	if err := testPool.QueryRow(ctx, `
+		SELECT count(*) FROM credential_usage_audit
+		WHERE profile_id = $1 AND workspace_id = $2 AND outcome = 'completed'
+	`, first.Profile.ID, otherWorkspaceID).Scan(&auditCount); err != nil {
+		t.Fatalf("read cross-workspace usage audit: %v", err)
+	}
+	if auditCount != 1 {
+		t.Fatalf("cross-workspace audit count = %d, want 1", auditCount)
 	}
 
 	responseJSON, err := json.Marshal(credentialProfileToResponse(profile))

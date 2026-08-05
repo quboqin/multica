@@ -1,6 +1,11 @@
 package broker
 
-import "testing"
+import (
+	"errors"
+	"testing"
+
+	"github.com/jackc/pgx/v5/pgconn"
+)
 
 func TestRegistryWithJSONAddsDeclarativeConnector(t *testing.T) {
 	registry, err := RegistryWithJSON(`[
@@ -27,5 +32,23 @@ func TestRegistryWithJSONRejectsBuiltInOverride(t *testing.T) {
 	_, err := RegistryWithJSON(`[{"id":"appgrowing","login_url":"https://example.com","capabilities":["profile_verify"]}]`)
 	if err == nil {
 		t.Fatal("expected built-in override to fail")
+	}
+}
+
+func TestDeploymentProfileUniqueViolationIsRecognizedPrecisely(t *testing.T) {
+	if !isDeploymentProfileUniqueViolation(&pgconn.PgError{
+		Code:           "23505",
+		ConstraintName: "credential_profile_deployment_connector_idx",
+	}) {
+		t.Fatal("expected deployment credential unique violation to be recognized")
+	}
+	if isDeploymentProfileUniqueViolation(&pgconn.PgError{
+		Code:           "23505",
+		ConstraintName: "credential_profile_workspace_connector_idx",
+	}) {
+		t.Fatal("workspace-scoped unique violation must not be treated as a deployment race")
+	}
+	if isDeploymentProfileUniqueViolation(errors.New("duplicate key")) {
+		t.Fatal("untyped error must not be treated as a deployment race")
 	}
 }

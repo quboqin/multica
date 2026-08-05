@@ -130,15 +130,20 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 		daemonHub = daemonws.NewHub()
 	}
 
-	// Initialize storage with S3 as primary, fallback to local
+	// Initialize storage with OSS as primary, then S3, then local disk.
 	var store storage.Storage
-	s3 := storage.NewS3StorageFromEnv()
-	if s3 != nil {
-		store = s3
+	ossStore := storage.NewOSSStorageFromEnv()
+	if ossStore != nil {
+		store = ossStore
 	} else {
-		local := storage.NewLocalStorageFromEnv()
-		if local != nil {
-			store = local
+		s3 := storage.NewS3StorageFromEnv()
+		if s3 != nil {
+			store = s3
+		} else {
+			local := storage.NewLocalStorageFromEnv()
+			if local != nil {
+				store = local
+			}
 		}
 	}
 
@@ -590,6 +595,10 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 		// because they are JSON-API consumers that always have
 		// workspace context.
 		r.Get("/api/attachments/{id}/download", h.DownloadAttachment)
+		// Candidate archives can live in a private object store without an
+		// attachment row. Resolve membership from the candidate itself and
+		// redirect to a short-lived signed URL.
+		r.Get("/api/creative/materials/{id}/archive", h.DownloadCreativeMaterialArchive)
 
 		r.Route("/api/workspaces", func(r chi.Router) {
 			r.Get("/", h.ListWorkspaces)
@@ -729,6 +738,8 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 				r.Use(handler.RequireHumanActor)
 				r.Get("/", h.ListCredentialProfiles)
 				r.Get("/{id}", h.GetCredentialProfile)
+				r.Post("/{id}/managers", h.AddCredentialProfileManager)
+				r.Delete("/{id}/managers/{userId}", h.DeleteCredentialProfileManager)
 				r.Delete("/{id}", h.DeleteCredentialProfile)
 			})
 			r.Post("/api/credential-crawl", h.RunCredentialCrawl)
@@ -738,6 +749,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 				r.Get("/materials", h.ListCreativeMaterialLibrary)
 				r.Get("/crawl-runs", h.ListCreativeCrawlRuns)
 				r.With(handler.RequireHumanActor).Post("/materials/import", h.ImportCreativeMaterialLibrary)
+				r.With(handler.RequireHumanActor).Post("/materials/{id}/analysis/retry", h.RetryCreativeMaterialReferenceAnalysis)
 				r.With(handler.RequireHumanActor).Post("/materials/archive/retry", h.RetryCreativeMaterialArchives)
 				r.Get("/source-analyses", h.ListCreativeSourceAnalyses)
 				r.Post("/source-analyses", h.CreateCreativeSourceAnalysis)
@@ -747,6 +759,11 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Post("/", h.CreateCreativeOrder)
 					r.Route("/{id}", func(r chi.Router) {
 						r.Get("/", h.GetCreativeOrder)
+						r.With(handler.RequireHumanActor).Post("/cancel", h.CancelCreativeOrder)
+						r.With(handler.RequireHumanActor).Post("/workflow-failures/{taskId}/retry", h.RetryCreativeOrderWorkflowFailure)
+						r.With(handler.RequireHumanActor).Post("/variants/{variantId}/prime-package-repair", h.RepairCreativeOrderVariantPrimePackage)
+						r.With(handler.RequireHumanActor).Post("/variants/{variantId}/qc/retry", h.RetryCreativeOrderVariantQC)
+						r.With(handler.RequireHumanActor).Post("/items/{itemId}/adoption", h.AdoptCreativeOrderItemVariant)
 						r.Put("/variants", h.UpsertCreativeOrderVariant)
 						r.Put("/assets", h.UpsertCreativeOrderAsset)
 						r.Put("/qc-reports", h.UpsertCreativeOrderQC)
@@ -757,6 +774,11 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 				r.With(handler.RequireHumanActor).Post("/resources", h.CreateCreativeResource)
 				r.Route("/resources/{id}", func(r chi.Router) {
 					r.Get("/files", h.ListCreativeResourceFiles)
+					r.Get("/component-extractions/latest", h.GetLatestCreativeMarketPackComponentExtraction)
+					r.Get("/component-extractions/{extractionId}", h.GetCreativeMarketPackComponentExtraction)
+					r.With(handler.RequireHumanActor).Post("/component-extractions", h.CreateCreativeMarketPackComponentExtraction)
+					r.Put("/component-extractions/{extractionId}", h.PutCreativeMarketPackComponentExtraction)
+					r.With(handler.RequireHumanActor).Post("/component-extractions/{extractionId}/apply", h.ApplyCreativeMarketPackComponentExtraction)
 					r.With(handler.RequireHumanActor).Post("/files", h.AddCreativeResourceFile)
 					r.With(handler.RequireHumanActor).Put("/files/{fileId}", h.UpdateCreativeResourceFile)
 					r.With(handler.RequireHumanActor).Delete("/files/{fileId}", h.RemoveCreativeResourceFile)

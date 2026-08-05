@@ -848,6 +848,61 @@ describe("IssueDetail (shared)", () => {
     expect(screen.getByText(/changed priority/i)).toBeInTheDocument();
   });
 
+  it("renders creative feedback as concise business activity without coalescing decisions", async () => {
+    mockApiObj.listTimeline.mockResolvedValue([
+      {
+        type: "activity",
+        id: "creative-1",
+        actor_type: "member",
+        actor_id: "user-1",
+        action: "creative_feedback_recorded",
+        details: { subject_type: "candidate", event_type: "decision", decision: "selected" },
+        created_at: "2026-01-18T00:00:00Z",
+      },
+      {
+        type: "activity",
+        id: "creative-2",
+        actor_type: "member",
+        actor_id: "user-1",
+        action: "creative_feedback_recorded",
+        details: {
+          subject_type: "recommended_copy",
+          event_type: "replacement",
+          decision: "replaced",
+          comment: "Use the approved alternative.",
+        },
+        created_at: "2026-01-18T00:01:00Z",
+      },
+      {
+        type: "activity",
+        id: "creative-3",
+        actor_type: "member",
+        actor_id: "user-1",
+        action: "creative_variant_adopted",
+        details: { variant_key: "V03" },
+        created_at: "2026-01-18T00:02:00Z",
+      },
+      {
+        type: "activity",
+        id: "creative-4",
+        actor_type: "member",
+        actor_id: "user-1",
+        action: "creative_feedback_undone",
+        details: { subject_type: "candidate", event_type: "decision", decision: "selected" },
+        created_at: "2026-01-18T00:03:00Z",
+      },
+    ] as TimelineEntry[]);
+
+    renderIssueDetail();
+
+    await waitFor(() => {
+      expect(screen.getByText("selected this source material")).toBeInTheDocument();
+    });
+    expect(screen.getByText("replaced the recommended copy: Use the approved alternative.")).toBeInTheDocument();
+    expect(screen.getByText("adopted variant V03")).toBeInTheDocument();
+    expect(screen.getByText("undid the previous creative decision")).toBeInTheDocument();
+  });
+
   it("truncates the trailing activity block to the most recent 8 entries with a show-more toggle", async () => {
     // 10 activities, all in the trailing block (no comment after them, so it's
     // the trailing block by definition). Alternating action types so the

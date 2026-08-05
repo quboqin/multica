@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
@@ -28,6 +29,7 @@ type creativeResourceResponse struct {
 	Version          int             `json:"version"`
 	PublishedVersion int             `json:"published_version"`
 	Config           json.RawMessage `json:"config"`
+	PublishedConfig  json.RawMessage `json:"published_config"`
 	CreatedBy        string          `json:"created_by"`
 	CreatedAt        string          `json:"created_at"`
 	UpdatedAt        string          `json:"updated_at"`
@@ -153,7 +155,9 @@ func (h *Handler) ListCreativeResources(w http.ResponseWriter, r *http.Request) 
 	}
 	rows, err := h.DB.Query(r.Context(), `
 SELECT id::text, workspace_id::text, kind, name, description, status, version,
-       COALESCE(published_version, 0), config::text, created_by::text,
+       COALESCE(published_version, 0), config::text,
+       COALESCE((SELECT revision.config::text FROM creative_resource_revision revision WHERE revision.resource_id = creative_resource.id AND revision.version = creative_resource.published_version), '{}'),
+       created_by::text,
        created_at::text, updated_at::text
 FROM creative_resource
 WHERE workspace_id = $1 AND status <> 'archived' AND ($2 = '' OR kind = $2)
@@ -166,7 +170,7 @@ ORDER BY kind, updated_at DESC
 	defer rows.Close()
 	resources := []creativeResourceResponse{}
 	for rows.Next() {
-		resource, scanErr := scanCreativeResource(rows)
+		resource, scanErr := scanCreativeResourceWithPublishedConfig(rows)
 		if scanErr != nil {
 			writeError(w, http.StatusInternalServerError, "failed to read creative resources")
 			return
@@ -217,6 +221,14 @@ LEFT JOIN LATERAL (
   SELECT rc.run_id, rc.is_new_in_run,
          CASE
            WHEN rc.analysis_status = 'completed' THEN rc.analysis_status
+           WHEN EXISTS(
+             SELECT 1
+             FROM agent_task_queue task
+             WHERE task.trigger_evidence_kind = 'creative_crawl_run_analysis'
+               AND task.trigger_evidence_ref_id = rc.run_id
+               AND task.status = 'running'
+               AND task.context->>'candidate_id' = rc.candidate_id::text
+           ) THEN 'running'
            WHEN EXISTS(
              SELECT 1
              FROM agent_task_queue task
@@ -303,6 +315,7 @@ LIMIT 500
 		if selectedAt != "" {
 			item.SelectedAt = &selectedAt
 		}
+		item.ArchivedURL = h.creativeMaterialArchiveResponseURL(item.ID, item.ArchivedURL)
 		candidates = append(candidates, item)
 	}
 	if err := rows.Err(); err != nil {
@@ -354,7 +367,7 @@ WHERE workspace_id = $1 AND archived_url = ''
 }
 
 func (h *Handler) ImportCreativeMaterialLibrary(w http.ResponseWriter, r *http.Request) {
-	workspaceID, _, ok := creativeWorkspaceUser(w, r, h)
+	workspaceID, userID, ok := creativeWorkspaceUser(w, r, h)
 	if !ok {
 		return
 	}
@@ -451,7 +464,38 @@ RETURNING id::text
 		writeError(w, http.StatusInternalServerError, "failed to import creative material")
 		return
 	}
-	writeJSON(w, http.StatusCreated, map[string]any{"id": candidateID})
+	analysis := h.enqueueManualReferenceAnalysis(r.Context(), workspaceID, userID, parseUUID(candidateID), connectorID)
+	writeJSON(w, http.StatusCreated, creativeMaterialLibraryImportResponse{ID: candidateID, Analysis: analysis})
+}
+
+// RetryCreativeMaterialReferenceAnalysis reuses the manual-import analysis path
+// for a historical candidate. It only creates/reuses analysis evidence and a
+// direct analysis task; it never starts an AppGrowing crawl.
+func (h *Handler) RetryCreativeMaterialReferenceAnalysis(w http.ResponseWriter, r *http.Request) {
+	workspaceID, userID, ok := creativeWorkspaceUser(w, r, h)
+	if !ok {
+		return
+	}
+	candidateID, ok := parseUUIDOrBadRequest(w, chi.URLParam(r, "id"), "candidate_id")
+	if !ok {
+		return
+	}
+	var connectorID string
+	err := h.DB.QueryRow(r.Context(), `
+SELECT connector_id
+FROM creative_material_candidate
+WHERE id = $1 AND workspace_id = $2
+`, candidateID, workspaceID).Scan(&connectorID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		writeError(w, http.StatusNotFound, "creative material not found")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to load creative material")
+		return
+	}
+	analysis := h.enqueueManualReferenceAnalysis(r.Context(), workspaceID, userID, candidateID, connectorID)
+	writeJSON(w, http.StatusOK, creativeMaterialLibraryImportResponse{ID: uuidToString(candidateID), Analysis: analysis})
 }
 
 func (h *Handler) CreateCreativeResource(w http.ResponseWriter, r *http.Request) {
@@ -500,6 +544,10 @@ RETURNING id::text, workspace_id::text, kind, name, description, status, version
 	}
 	if err := insertCreativeResourceRevision(r.Context(), tx, resource, userID); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to create creative resource revision")
+		return
+	}
+	if err := hydrateCreativeResourcePublishedConfig(r.Context(), tx, &resource); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to read published creative resource")
 		return
 	}
 	if err := tx.Commit(r.Context()); err != nil {
@@ -565,6 +613,10 @@ RETURNING id::text, workspace_id::text, kind, name, description, status, version
 		writeError(w, http.StatusInternalServerError, "failed to create creative resource revision")
 		return
 	}
+	if err := hydrateCreativeResourcePublishedConfig(r.Context(), tx, &resource); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to read published creative resource")
+		return
+	}
 	if err := tx.Commit(r.Context()); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to update creative resource")
 		return
@@ -604,7 +656,12 @@ FOR UPDATE
 		return
 	}
 	config := current.Config
-	if current.Kind == "market_pack" {
+	if current.Kind == "copy_library" {
+		if err := validateComposableCopyLibraryConfig(config); err != nil {
+			writeError(w, http.StatusBadRequest, "copy library cannot be published: "+err.Error())
+			return
+		}
+	} else if current.Kind == "market_pack" {
 		config, err = h.validateMarketPackQRConfig(r.Context(), workspaceID, resourceID, current.Config)
 		if err != nil {
 			writeError(w, http.StatusBadRequest, "market resource pack cannot be published: "+err.Error())
@@ -630,11 +687,159 @@ RETURNING id::text, workspace_id::text, kind, name, description, status, version
 		writeError(w, http.StatusInternalServerError, "failed to publish creative resource")
 		return
 	}
+	resource.PublishedConfig = resource.Config
 	if err := tx.Commit(r.Context()); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to publish creative resource")
 		return
 	}
 	writeJSON(w, http.StatusOK, resource)
+}
+
+var creativeCopyFactReferencePattern = regexp.MustCompile(`\{\{fact\.([a-z0-9_]+)\.(copy_text|value)\}\}`)
+
+type composableCopyLibraryConfig struct {
+	SchemaVersion int    `json:"schema_version"`
+	Locale        string `json:"locale"`
+	Fragments     []struct {
+		ID            string   `json:"id"`
+		Key           string   `json:"key"`
+		CreativeTypes []string `json:"creative_types"`
+		Role          string   `json:"role"`
+		Text          string   `json:"text"`
+		Status        string   `json:"status"`
+	} `json:"fragments"`
+	Recipes []struct {
+		ID           string              `json:"id"`
+		Key          string              `json:"key"`
+		CreativeType string              `json:"creative_type"`
+		FragmentIDs  map[string][]string `json:"fragment_ids"`
+		Status       string              `json:"status"`
+	} `json:"recipes"`
+	ProductFacts []struct {
+		ID       string `json:"id"`
+		Key      string `json:"key"`
+		Label    string `json:"label"`
+		Value    string `json:"value"`
+		CopyText string `json:"copy_text"`
+		Source   string `json:"source"`
+		Status   string `json:"status"`
+	} `json:"product_facts"`
+}
+
+func validateComposableCopyLibraryConfig(raw json.RawMessage) error {
+	var config composableCopyLibraryConfig
+	if err := json.Unmarshal(raw, &config); err != nil {
+		return errors.New("config must be valid JSON")
+	}
+	if config.SchemaVersion != 2 {
+		return errors.New("schema_version must be 2")
+	}
+	if strings.TrimSpace(config.Locale) != "id-ID" {
+		return errors.New("locale must be id-ID")
+	}
+	validType := func(value string) bool { return value == "num" || value == "repayment_plan" }
+	facts := make(map[string]bool, len(config.ProductFacts))
+	for index, fact := range config.ProductFacts {
+		key := strings.TrimSpace(fact.Key)
+		if fact.Status == "approved" {
+			if strings.TrimSpace(fact.ID) == "" || key == "" || strings.TrimSpace(fact.CopyText) == "" || strings.TrimSpace(fact.Source) == "" {
+				return fmt.Errorf("approved product fact %d requires id, key, copy_text, and source", index+1)
+			}
+			if facts[key] {
+				return fmt.Errorf("approved product fact key %q is duplicated", key)
+			}
+			facts[key] = true
+		}
+	}
+	type fragmentContract struct {
+		role  string
+		types map[string]bool
+	}
+	fragments := make(map[string]fragmentContract, len(config.Fragments))
+	for index, fragment := range config.Fragments {
+		id := strings.TrimSpace(fragment.ID)
+		if id == "" || strings.TrimSpace(fragment.Key) == "" {
+			return fmt.Errorf("fragment %d requires id and key", index+1)
+		}
+		if _, exists := fragments[id]; exists {
+			return fmt.Errorf("fragment id %q is duplicated", id)
+		}
+		types := map[string]bool{}
+		for _, creativeType := range fragment.CreativeTypes {
+			if !validType(creativeType) {
+				return fmt.Errorf("fragment %q has unsupported creative type %q", fragment.Key, creativeType)
+			}
+			types[creativeType] = true
+		}
+		if fragment.Status != "approved" {
+			continue
+		}
+		if !validCopyFragmentRole(fragment.Role) || len(types) == 0 || strings.TrimSpace(fragment.Text) == "" {
+			return fmt.Errorf("approved fragment %q requires role, creative type, and text", fragment.Key)
+		}
+		for _, match := range creativeCopyFactReferencePattern.FindAllStringSubmatch(fragment.Text, -1) {
+			if !facts[match[1]] {
+				return fmt.Errorf("approved fragment %q references missing or unapproved fact %q", fragment.Key, match[1])
+			}
+		}
+		fragments[id] = fragmentContract{role: fragment.Role, types: types}
+	}
+	approvedByType := map[string]int{"num": 0, "repayment_plan": 0}
+	approvedRecipeIDs := map[string]bool{}
+	for index, recipe := range config.Recipes {
+		if !validType(recipe.CreativeType) {
+			return fmt.Errorf("recipe %d has unsupported creative type %q", index+1, recipe.CreativeType)
+		}
+		if recipe.Status != "approved" {
+			continue
+		}
+		recipeID := strings.TrimSpace(recipe.ID)
+		if recipeID == "" || strings.TrimSpace(recipe.Key) == "" {
+			return fmt.Errorf("approved recipe %d requires id and key", index+1)
+		}
+		if approvedRecipeIDs[recipeID] {
+			return fmt.Errorf("approved recipe id %q is duplicated", recipeID)
+		}
+		approvedRecipeIDs[recipeID] = true
+		used := 0
+		for role, ids := range recipe.FragmentIDs {
+			if !validCopyFragmentRole(role) {
+				return fmt.Errorf("approved recipe %d has unsupported role %q", index+1, role)
+			}
+			for _, id := range ids {
+				fragment, exists := fragments[id]
+				if !exists {
+					return fmt.Errorf("approved recipe %d references missing or unapproved fragment %q", index+1, id)
+				}
+				if fragment.role != role {
+					return fmt.Errorf("approved recipe %d uses fragment %q in role %q instead of %q", index+1, id, role, fragment.role)
+				}
+				if !fragment.types[recipe.CreativeType] {
+					return fmt.Errorf("approved recipe %d uses fragment %q for incompatible creative type", index+1, id)
+				}
+				used++
+			}
+		}
+		if used == 0 {
+			return fmt.Errorf("approved recipe %d must use at least one fragment", index+1)
+		}
+		approvedByType[recipe.CreativeType]++
+	}
+	for _, creativeType := range []string{"num", "repayment_plan"} {
+		if approvedByType[creativeType] == 0 {
+			return fmt.Errorf("at least one approved %s recipe is required", creativeType)
+		}
+	}
+	return nil
+}
+
+func validCopyFragmentRole(value string) bool {
+	switch value {
+	case "headline", "subheadline", "benefit", "supporting", "cta", "legal":
+		return true
+	default:
+		return false
+	}
 }
 
 func (h *Handler) ArchiveCreativeResource(w http.ResponseWriter, r *http.Request) {
@@ -1528,7 +1733,7 @@ FROM creative_resource r
 JOIN creative_resource_revision rr
   ON rr.resource_id = r.id AND rr.version = r.published_version
 WHERE r.id = $1 AND r.workspace_id = $2 AND r.kind = $3
-  AND r.status = 'published' AND r.published_version IS NOT NULL
+  AND r.status <> 'archived' AND r.published_version IS NOT NULL
 `, resourceID, workspaceID, kind))
 }
 
@@ -1606,13 +1811,21 @@ RETURNING id::text, workspace_id::text, kind, name, description, status, version
 	if err := insertCreativeResourceRevision(ctx, tx, resource, userID); err != nil {
 		return creativeResourceResponse{}, err
 	}
+	if err := hydrateCreativeResourcePublishedConfig(ctx, tx, &resource); err != nil {
+		return creativeResourceResponse{}, err
+	}
 	return resource, nil
 }
 
 func bumpCreativeResourceRevision(ctx context.Context, tx pgx.Tx, workspaceID, resourceID, userID pgtype.UUID) (creativeResourceResponse, error) {
 	resource, err := scanCreativeResource(tx.QueryRow(ctx, `
 UPDATE creative_resource
-SET config = config - 'qr_validation', status = 'draft', version = version + 1, updated_at = now()
+SET config = CASE
+      WHEN config ? 'prime_composition'
+        THEN config - 'qr_validation' - 'prime_composition_validation' - 'prime_layout_contract'
+      ELSE config - 'qr_validation'
+    END,
+    status = 'draft', version = version + 1, updated_at = now()
 WHERE id = $1 AND workspace_id = $2 AND status <> 'archived'
 RETURNING id::text, workspace_id::text, kind, name, description, status, version,
           COALESCE(published_version, 0), config::text, created_by::text,
@@ -1622,6 +1835,9 @@ RETURNING id::text, workspace_id::text, kind, name, description, status, version
 		return creativeResourceResponse{}, err
 	}
 	if err := insertCreativeResourceRevision(ctx, tx, resource, userID); err != nil {
+		return creativeResourceResponse{}, err
+	}
+	if err := hydrateCreativeResourcePublishedConfig(ctx, tx, &resource); err != nil {
 		return creativeResourceResponse{}, err
 	}
 	return resource, nil
@@ -1644,7 +1860,42 @@ func scanCreativeResource(row rowScanner) (creativeResourceResponse, error) {
 		&item.CreatedAt, &item.UpdatedAt,
 	)
 	item.Config = json.RawMessage(config)
+	item.PublishedConfig = json.RawMessage("{}")
 	return item, err
+}
+
+func scanCreativeResourceWithPublishedConfig(row rowScanner) (creativeResourceResponse, error) {
+	var item creativeResourceResponse
+	var config, publishedConfig string
+	err := row.Scan(
+		&item.ID, &item.WorkspaceID, &item.Kind, &item.Name, &item.Description,
+		&item.Status, &item.Version, &item.PublishedVersion, &config, &publishedConfig, &item.CreatedBy,
+		&item.CreatedAt, &item.UpdatedAt,
+	)
+	item.Config = json.RawMessage(config)
+	item.PublishedConfig = json.RawMessage(publishedConfig)
+	return item, err
+}
+
+type creativeResourceConfigQuerier interface {
+	QueryRow(context.Context, string, ...any) pgx.Row
+}
+
+func hydrateCreativeResourcePublishedConfig(ctx context.Context, querier creativeResourceConfigQuerier, resource *creativeResourceResponse) error {
+	resource.PublishedConfig = json.RawMessage("{}")
+	if resource.PublishedVersion <= 0 {
+		return nil
+	}
+	var config string
+	if err := querier.QueryRow(ctx, `
+SELECT config::text
+FROM creative_resource_revision
+WHERE resource_id = $1::uuid AND version = $2
+`, resource.ID, resource.PublishedVersion).Scan(&config); err != nil {
+		return err
+	}
+	resource.PublishedConfig = json.RawMessage(config)
+	return nil
 }
 
 const creativeCopyEntrySelect = `

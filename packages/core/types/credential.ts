@@ -10,6 +10,14 @@ export interface CredentialConnector {
   display_name: string;
   login_url: string;
   capabilities: string[];
+  scope: "workspace" | "deployment" | string;
+}
+
+export interface CredentialProfileManager {
+  user_id: string;
+  name: string;
+  email: string;
+  created_at: string;
 }
 
 export interface CredentialProfile {
@@ -17,6 +25,9 @@ export interface CredentialProfile {
   connector_id: string;
   label: string;
   status: CredentialProfileStatus;
+  scope: "workspace" | "deployment" | string;
+  can_manage: boolean;
+  managers: CredentialProfileManager[];
   last_used_at?: string | null;
   expires_hint?: string | null;
   created_at: string;
@@ -50,6 +61,10 @@ export interface StartCredentialLoginSessionRequest {
 export interface StartCredentialLoginSessionResponse {
   profile: CredentialProfile;
   session: CredentialLoginSession;
+}
+
+export interface AddCredentialProfileManagerRequest {
+  user_id: string;
 }
 
 export interface RunCredentialCrawlRequest {

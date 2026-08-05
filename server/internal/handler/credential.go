@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"log/slog"
@@ -18,14 +19,24 @@ import (
 )
 
 type credentialProfileResponse struct {
-	ID          string  `json:"id"`
-	ConnectorID string  `json:"connector_id"`
-	Label       string  `json:"label"`
-	Status      string  `json:"status"`
-	LastUsedAt  *string `json:"last_used_at,omitempty"`
-	ExpiresHint *string `json:"expires_hint,omitempty"`
-	CreatedAt   string  `json:"created_at"`
-	UpdatedAt   string  `json:"updated_at"`
+	ID          string                             `json:"id"`
+	ConnectorID string                             `json:"connector_id"`
+	Label       string                             `json:"label"`
+	Status      string                             `json:"status"`
+	Scope       string                             `json:"scope"`
+	CanManage   bool                               `json:"can_manage"`
+	Managers    []credentialProfileManagerResponse `json:"managers"`
+	LastUsedAt  *string                            `json:"last_used_at,omitempty"`
+	ExpiresHint *string                            `json:"expires_hint,omitempty"`
+	CreatedAt   string                             `json:"created_at"`
+	UpdatedAt   string                             `json:"updated_at"`
+}
+
+type credentialProfileManagerResponse struct {
+	UserID    string `json:"user_id"`
+	Name      string `json:"name"`
+	Email     string `json:"email"`
+	CreatedAt string `json:"created_at"`
 }
 
 type credentialLoginSessionResponse struct {
@@ -47,7 +58,7 @@ func (h *Handler) ListCredentialConnectors(w http.ResponseWriter, r *http.Reques
 }
 
 func (h *Handler) ListCredentialProfiles(w http.ResponseWriter, r *http.Request) {
-	workspaceID, _, ok := h.credentialWorkspaceScope(w, r, false)
+	workspaceID, userID, ok := h.credentialWorkspaceScope(w, r, false)
 	if !ok {
 		return
 	}
@@ -58,13 +69,18 @@ func (h *Handler) ListCredentialProfiles(w http.ResponseWriter, r *http.Request)
 	}
 	out := make([]credentialProfileResponse, 0, len(profiles))
 	for _, profile := range profiles {
-		out = append(out, credentialProfileToResponse(profile))
+		response, err := h.credentialProfileResponseForUser(r.Context(), profile, userID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		out = append(out, response)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"profiles": out})
 }
 
 func (h *Handler) GetCredentialProfile(w http.ResponseWriter, r *http.Request) {
-	workspaceID, _, ok := h.credentialWorkspaceScope(w, r, false)
+	workspaceID, userID, ok := h.credentialWorkspaceScope(w, r, false)
 	if !ok {
 		return
 	}
@@ -81,11 +97,16 @@ func (h *Handler) GetCredentialProfile(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, credentialProfileToResponse(profile))
+	response, err := h.credentialProfileResponseForUser(r.Context(), profile, userID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, response)
 }
 
 func (h *Handler) DeleteCredentialProfile(w http.ResponseWriter, r *http.Request) {
-	workspaceID, _, ok := h.credentialWorkspaceScope(w, r, true)
+	workspaceID, userID, ok := h.credentialWorkspaceScope(w, r, false)
 	if !ok {
 		return
 	}
@@ -93,20 +114,16 @@ func (h *Handler) DeleteCredentialProfile(w http.ResponseWriter, r *http.Request
 	if !ok {
 		return
 	}
-	profile, err := h.CredentialBroker.RevokeProfile(r.Context(), workspaceID, profileID)
+	profile, err := h.CredentialBroker.RevokeProfile(r.Context(), workspaceID, userID, profileID)
 	if err != nil {
-		if isNotFound(err) {
-			writeError(w, http.StatusNotFound, "credential profile not found")
-			return
-		}
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeCredentialBrokerError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, credentialProfileToResponse(profile))
 }
 
 func (h *Handler) CreateCredentialLoginSession(w http.ResponseWriter, r *http.Request) {
-	workspaceID, userID, ok := h.credentialWorkspaceScope(w, r, true)
+	workspaceID, userID, ok := h.credentialWorkspaceScope(w, r, false)
 	if !ok {
 		return
 	}
@@ -127,6 +144,29 @@ func (h *Handler) CreateCredentialLoginSession(w http.ResponseWriter, r *http.Re
 			return
 		}
 	}
+	if !profileID.Valid {
+		profiles, err := h.CredentialBroker.ListProfiles(r.Context(), workspaceID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		hasConnectorProfile := false
+		for _, profile := range profiles {
+			if profile.ConnectorID == strings.TrimSpace(req.ConnectorID) {
+				hasConnectorProfile = true
+				break
+			}
+		}
+		if !hasConnectorProfile {
+			workspaceIDRaw := ctxWorkspaceID(r.Context())
+			if workspaceIDRaw == "" {
+				workspaceIDRaw = h.resolveWorkspaceID(r)
+			}
+			if _, ok := h.requireWorkspaceRole(w, r, workspaceIDRaw, "workspace not found", "owner", "admin"); !ok {
+				return
+			}
+		}
+	}
 	result, err := h.CredentialBroker.StartLoginSession(r.Context(), broker.StartLoginSessionInput{
 		WorkspaceID: workspaceID,
 		UserID:      userID,
@@ -142,6 +182,74 @@ func (h *Handler) CreateCredentialLoginSession(w http.ResponseWriter, r *http.Re
 		"profile": credentialProfileToResponse(result.Profile),
 		"session": credentialLoginSessionToResponse(result.Session),
 	})
+}
+
+func (h *Handler) AddCredentialProfileManager(w http.ResponseWriter, r *http.Request) {
+	workspaceID, actorID, ok := h.credentialWorkspaceScope(w, r, false)
+	if !ok {
+		return
+	}
+	profileID, ok := parseUUIDOrBadRequest(w, chi.URLParam(r, "id"), "profile_id")
+	if !ok {
+		return
+	}
+	var req struct {
+		UserID string `json:"user_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+	targetID, ok := parseUUIDOrBadRequest(w, req.UserID, "user_id")
+	if !ok {
+		return
+	}
+	if _, err := h.Queries.GetMemberByUserAndWorkspace(r.Context(), db.GetMemberByUserAndWorkspaceParams{
+		UserID:      targetID,
+		WorkspaceID: workspaceID,
+	}); err != nil {
+		if isNotFound(err) {
+			writeError(w, http.StatusUnprocessableEntity, "credential manager must be a member of the selected workspace")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if err := h.CredentialBroker.AddProfileManager(r.Context(), workspaceID, actorID, profileID, targetID); err != nil {
+		writeCredentialBrokerError(w, err)
+		return
+	}
+	profile, err := h.CredentialBroker.GetProfile(r.Context(), workspaceID, profileID)
+	if err != nil {
+		writeCredentialBrokerError(w, err)
+		return
+	}
+	response, err := h.credentialProfileResponseForUser(r.Context(), profile, actorID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, response)
+}
+
+func (h *Handler) DeleteCredentialProfileManager(w http.ResponseWriter, r *http.Request) {
+	workspaceID, actorID, ok := h.credentialWorkspaceScope(w, r, false)
+	if !ok {
+		return
+	}
+	profileID, ok := parseUUIDOrBadRequest(w, chi.URLParam(r, "id"), "profile_id")
+	if !ok {
+		return
+	}
+	targetID, ok := parseUUIDOrBadRequest(w, chi.URLParam(r, "userId"), "user_id")
+	if !ok {
+		return
+	}
+	if err := h.CredentialBroker.RemoveProfileManager(r.Context(), workspaceID, actorID, profileID, targetID); err != nil {
+		writeCredentialBrokerError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (h *Handler) CompleteCredentialLoginSession(w http.ResponseWriter, r *http.Request) {
@@ -290,11 +398,12 @@ func (h *Handler) RunCredentialCrawl(w http.ResponseWriter, r *http.Request) {
 	}
 
 	result, err := h.CredentialBroker.RunCrawl(r.Context(), broker.RunCrawlInput{
-		WorkspaceID: workspaceID,
-		ProfileID:   profileID,
-		ConnectorID: req.ConnectorID,
-		Capability:  req.Capability,
-		Params:      req.Params,
+		WorkspaceID:      workspaceID,
+		RequestingUserID: requestingUserID,
+		ProfileID:        profileID,
+		ConnectorID:      req.ConnectorID,
+		Capability:       req.Capability,
+		Params:           req.Params,
 	})
 	if err != nil {
 		failureStatus := "failed"
@@ -457,6 +566,12 @@ func credentialBrokerErrorStatus(err error) int {
 		return http.StatusBadRequest
 	case errors.Is(err, broker.ErrProfileNotActive):
 		return http.StatusConflict
+	case errors.Is(err, broker.ErrDeploymentProfileBindingConflict):
+		return http.StatusConflict
+	case errors.Is(err, broker.ErrProfileManageForbidden):
+		return http.StatusForbidden
+	case errors.Is(err, broker.ErrLastProfileManager):
+		return http.StatusConflict
 	case errors.Is(err, broker.ErrWorkerNotConfigured):
 		return http.StatusServiceUnavailable
 	case errors.Is(err, broker.ErrWorkerRequestInvalid):
@@ -480,11 +595,41 @@ func credentialProfileToResponse(profile db.CredentialProfile) credentialProfile
 		ConnectorID: profile.ConnectorID,
 		Label:       profile.Label,
 		Status:      profile.Status,
+		Scope:       profile.Scope,
+		Managers:    []credentialProfileManagerResponse{},
 		LastUsedAt:  timestampToPtr(profile.LastUsedAt),
 		ExpiresHint: timestampToPtr(profile.ExpiresHint),
 		CreatedAt:   timestampToString(profile.CreatedAt),
 		UpdatedAt:   timestampToString(profile.UpdatedAt),
 	}
+}
+
+func (h *Handler) credentialProfileResponseForUser(ctx context.Context, profile db.CredentialProfile, userID pgtype.UUID) (credentialProfileResponse, error) {
+	response := credentialProfileToResponse(profile)
+	canManage, err := h.CredentialBroker.CanManageProfile(ctx, profile.ID, userID)
+	if err != nil {
+		return credentialProfileResponse{}, err
+	}
+	response.CanManage = canManage
+	// Deployment-scoped profiles are visible in every workspace. Manager names
+	// and email addresses are cross-workspace identity data, so return them
+	// only to an explicit profile manager.
+	if !canManage {
+		return response, nil
+	}
+	managers, err := h.CredentialBroker.ListProfileManagers(ctx, profile.ID)
+	if err != nil {
+		return credentialProfileResponse{}, err
+	}
+	for _, manager := range managers {
+		response.Managers = append(response.Managers, credentialProfileManagerResponse{
+			UserID:    uuidToString(manager.UserID),
+			Name:      manager.Name,
+			Email:     manager.Email,
+			CreatedAt: timestampToString(manager.CreatedAt),
+		})
+	}
+	return response, nil
 }
 
 func credentialLoginSessionToResponse(session db.CredentialLoginSession) credentialLoginSessionResponse {

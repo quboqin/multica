@@ -145,6 +145,18 @@ func setupHandlerTestFixture(ctx context.Context, pool *pgxpool.Pool) (string, s
 }
 
 func cleanupHandlerTestFixture(ctx context.Context, pool *pgxpool.Pool) error {
+	if _, err := pool.Exec(ctx, `
+DELETE FROM creative_order
+WHERE workspace_id IN (SELECT id FROM workspace WHERE slug = $1)
+`, handlerTestWorkspaceSlug); err != nil {
+		return err
+	}
+	if _, err := pool.Exec(ctx, `
+DELETE FROM creative_material_candidate
+WHERE workspace_id IN (SELECT id FROM workspace WHERE slug = $1)
+`, handlerTestWorkspaceSlug); err != nil {
+		return err
+	}
 	if _, err := pool.Exec(ctx, `DELETE FROM workspace WHERE slug = $1`, handlerTestWorkspaceSlug); err != nil {
 		return err
 	}

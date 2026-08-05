@@ -19,7 +19,6 @@ type mention struct {
 	ID   string // user_id, agent_id, issue_id, or "all"
 }
 
-
 // statusLabels maps DB status values to human-readable labels for notifications.
 var statusLabels = map[string]string{
 	"backlog":     "Backlog",
@@ -78,19 +77,19 @@ var parentBubbleNotifTypes = map[string]bool{
 // notifTypeToGroup maps each InboxItemType to a user-configurable preference
 // group. Types not in this map are always delivered (not configurable).
 var notifTypeToGroup = map[string]string{
-	"issue_assigned":  "assignments",
-	"unassigned":      "assignments",
-	"assignee_changed": "assignments",
-	"status_changed":  "status_changes",
-	"new_comment":     "comments",
-	"mentioned":       "comments",
-	"priority_changed": "updates",
+	"issue_assigned":     "assignments",
+	"unassigned":         "assignments",
+	"assignee_changed":   "assignments",
+	"status_changed":     "status_changes",
+	"new_comment":        "comments",
+	"mentioned":          "comments",
+	"priority_changed":   "updates",
 	"start_date_changed": "updates",
-	"due_date_changed": "updates",
-	"task_completed":  "agent_activity",
-	"task_failed":     "agent_activity",
-	"agent_blocked":   "agent_activity",
-	"agent_completed": "agent_activity",
+	"due_date_changed":   "updates",
+	"task_completed":     "agent_activity",
+	"task_failed":        "agent_activity",
+	"agent_blocked":      "agent_activity",
+	"agent_completed":    "agent_activity",
 }
 
 // isNotifMuted returns true if the given notification type is muted for a user
@@ -424,6 +423,65 @@ func notifyDirect(
 	})
 }
 
+// notifyAssignee delivers an assignment notification to its actual inbox
+// recipients. Squads are routing targets rather than inbox recipients, so an
+// assignment to a squad expands only to its human members. Agent task routing
+// is handled by the assignment listeners and deliberately remains separate.
+// The returned IDs let callers avoid duplicate subscriber notifications.
+func notifyAssignee(
+	ctx context.Context,
+	queries *db.Queries,
+	bus *events.Bus,
+	assigneeType string,
+	assigneeID string,
+	workspaceID string,
+	e events.Event,
+	issueID string,
+	issueStatus string,
+	notifType string,
+	severity string,
+	title string,
+	body string,
+	details []byte,
+) map[string]bool {
+	recipientIDs := map[string]bool{}
+	if assigneeType != "squad" {
+		recipientIDs[assigneeID] = true
+		notifyDirect(ctx, queries, bus,
+			assigneeType, assigneeID,
+			workspaceID, e, issueID, issueStatus,
+			notifType, severity,
+			title, body, details,
+		)
+		return recipientIDs
+	}
+
+	squadID, err := util.ParseUUID(assigneeID)
+	if err != nil {
+		slog.Error("invalid squad assignee ID for notification", "squad_id", assigneeID, "error", err)
+		return recipientIDs
+	}
+	members, err := queries.ListSquadMembers(ctx, squadID)
+	if err != nil {
+		slog.Error("failed to list squad members for assignment notification", "squad_id", assigneeID, "error", err)
+		return recipientIDs
+	}
+	for _, member := range members {
+		if member.MemberType != "member" {
+			continue
+		}
+		memberID := util.UUIDToString(member.MemberID)
+		recipientIDs[memberID] = true
+		notifyDirect(ctx, queries, bus,
+			"member", memberID,
+			workspaceID, e, issueID, issueStatus,
+			notifType, severity,
+			title, body, details,
+		)
+	}
+	return recipientIDs
+}
+
 // notifyMentionedMembers creates inbox items for each @mentioned member,
 // excluding the actor and any IDs in the skip set. When an @all mention is
 // present, all workspace members are notified (excluding agents).
@@ -558,17 +616,19 @@ func registerNotificationListeners(bus *events.Bus, queries *db.Queries) {
 		// Track who already got notified to avoid duplicates
 		skip := map[string]bool{e.ActorID: true}
 
-		// Direct notification to assignee
+		// Direct notification to assignee. Squad assignments expand to human
+		// squad members because inbox_item cannot and should not target a squad.
 		if issue.AssigneeType != nil && issue.AssigneeID != nil {
-			skip[*issue.AssigneeID] = true
-			notifyDirect(ctx, queries, bus,
+			for recipientID := range notifyAssignee(ctx, queries, bus,
 				*issue.AssigneeType, *issue.AssigneeID,
 				issue.WorkspaceID, e, issue.ID, issue.Status,
 				"issue_assigned", "action_required",
 				issue.Title,
 				"",
 				emptyDetails,
-			)
+			) {
+				skip[recipientID] = true
+			}
 		}
 
 		// Notify @mentions in description
@@ -613,9 +673,11 @@ func registerNotificationListeners(bus *events.Bus, queries *db.Queries) {
 			}
 			assigneeDetails, _ := json.Marshal(detailsMap)
 
-			// Direct: notify new assignee about assignment
+			// Direct: notify new assignee about assignment. Squad assignments
+			// expand to the squad's human members.
+			newAssigneeRecipientIDs := map[string]bool{}
 			if issue.AssigneeType != nil && issue.AssigneeID != nil {
-				notifyDirect(ctx, queries, bus,
+				newAssigneeRecipientIDs = notifyAssignee(ctx, queries, bus,
 					*issue.AssigneeType, *issue.AssigneeID,
 					e.WorkspaceID, e, issue.ID, issue.Status,
 					"issue_assigned", "action_required",
@@ -643,8 +705,8 @@ func registerNotificationListeners(bus *events.Bus, queries *db.Queries) {
 			if prevAssigneeID != nil {
 				exclude[*prevAssigneeID] = true
 			}
-			if issue.AssigneeID != nil {
-				exclude[*issue.AssigneeID] = true
+			for recipientID := range newAssigneeRecipientIDs {
+				exclude[recipientID] = true
 			}
 			notifySubscribers(ctx, queries, bus, issue.ID, issue.Status, e.WorkspaceID, e,
 				exclude, "assignee_changed", "info",

@@ -99,7 +99,7 @@ export function CreativeCollectionPlans() {
       <div className="flex flex-wrap items-center justify-between gap-3 border-b px-4 py-3">
         <div className="min-w-0">
           <h3 className="text-sm font-semibold">采集计划</h3>
-          <p className="mt-0.5 text-xs text-muted-foreground">由 Multica 自动化执行，采集不会创建 issue。</p>
+          <p className="mt-0.5 text-xs text-muted-foreground">由 Multica 自动化执行，采集结果直接归档到素材库。</p>
         </div>
         <Button size="sm" variant="outline" onClick={openAutopilots}>
           <Settings2 className="h-4 w-4" />管理自动化

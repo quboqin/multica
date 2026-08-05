@@ -856,6 +856,15 @@ describe("creative feedback endpoint", () => {
     expect(fetchMock).toHaveBeenNthCalledWith(2, "https://api.example.test/api/creative-feedback-events/feedback-1/undo", expect.objectContaining({ method: "POST" }));
   });
 
+  it("loads aggregate creative feedback metrics and degrades malformed output", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ candidate_selected: 7, copy_replaced: null }), { status: 200, headers: { "Content-Type": "application/json" } }));
+    vi.stubGlobal("fetch", fetchMock);
+    const client = new ApiClient("https://api.example.test");
+
+    await expect(client.getCreativeFeedbackMetrics()).resolves.toEqual(expect.objectContaining({ candidate_selected: 0, copy_replaced: 0 }));
+    expect(fetchMock).toHaveBeenCalledWith("https://api.example.test/api/creative-feedback-events/metrics", expect.any(Object));
+  });
+
   it("finalizes QC through the atomic order endpoint and degrades malformed output", async () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ outcome: null }), { status: 200, headers: { "Content-Type": "application/json" } }));
     vi.stubGlobal("fetch", fetchMock);
@@ -865,6 +874,32 @@ describe("creative feedback endpoint", () => {
     expect(fetchMock).toHaveBeenCalledWith("https://api.example.test/api/creative/orders/order-1/qc-finalize", expect.objectContaining({
       method: "POST", body: JSON.stringify({ variant_id: "variant-1", revision: 2 }),
     }));
+  });
+
+  it("adopts one order item variant and fails closed on a malformed response", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ id: "item-1", adopted_variant_id: null }), { status: 200, headers: { "Content-Type": "application/json" } }));
+    vi.stubGlobal("fetch", fetchMock);
+    const client = new ApiClient("https://api.example.test");
+
+    await expect(client.adoptCreativeOrderVariant("order/1", "item 1", { variant_id: "variant-1" }))
+      .resolves.toEqual(expect.objectContaining({ id: "", adopted_variant_id: "", variants: [] }));
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://api.example.test/api/creative/orders/order%2F1/items/item%201/adoption",
+      expect.objectContaining({ method: "POST", body: JSON.stringify({ variant_id: "variant-1" }) }),
+    );
+  });
+
+  it("cancels an unfinished creative order and fails closed on a malformed response", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ id: "order-1", status: null }), { status: 200, headers: { "Content-Type": "application/json" } }));
+    vi.stubGlobal("fetch", fetchMock);
+    const client = new ApiClient("https://api.example.test");
+
+    await expect(client.cancelCreativeOrder("order/1"))
+      .resolves.toEqual(expect.objectContaining({ id: "", status: "cancelled", derived_status: "cancelled", items: [] }));
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://api.example.test/api/creative/orders/order%2F1/cancel",
+      expect.objectContaining({ method: "POST" }),
+    );
   });
 
   it("retries failed agent tasks using their exact source evidence", async () => {

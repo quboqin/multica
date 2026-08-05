@@ -7,10 +7,12 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/multica-ai/multica/server/internal/util"
@@ -38,11 +40,12 @@ type StartLoginSessionResult struct {
 }
 
 type RunCrawlInput struct {
-	WorkspaceID pgtype.UUID
-	ProfileID   pgtype.UUID
-	ConnectorID string
-	Capability  string
-	Params      json.RawMessage
+	WorkspaceID      pgtype.UUID
+	RequestingUserID pgtype.UUID
+	ProfileID        pgtype.UUID
+	ConnectorID      string
+	Capability       string
+	Params           json.RawMessage
 }
 
 type CompleteLoginSessionInput struct {
@@ -93,6 +96,17 @@ func (s *Service) GetProfile(ctx context.Context, workspaceID, profileID pgtype.
 		ID:          profileID,
 		WorkspaceID: workspaceID,
 	})
+}
+
+func (s *Service) CanManageProfile(ctx context.Context, profileID, userID pgtype.UUID) (bool, error) {
+	return s.queries.IsCredentialProfileManager(ctx, db.IsCredentialProfileManagerParams{
+		ProfileID: profileID,
+		UserID:    userID,
+	})
+}
+
+func (s *Service) ListProfileManagers(ctx context.Context, profileID pgtype.UUID) ([]db.ListCredentialProfileManagersRow, error) {
+	return s.queries.ListCredentialProfileManagers(ctx, profileID)
 }
 
 func (s *Service) StartLoginSession(ctx context.Context, in StartLoginSessionInput) (StartLoginSessionResult, error) {
@@ -152,6 +166,9 @@ func (s *Service) startLoginSessionProfile(ctx context.Context, in StartLoginSes
 		if profile.ConnectorID != connector.ID {
 			return db.CredentialProfile{}, ErrProfileConnectorMismatch
 		}
+		if err := s.requireProfileManager(ctx, profile.ID, in.UserID); err != nil {
+			return db.CredentialProfile{}, err
+		}
 		return profile, nil
 	}
 	label := strings.TrimSpace(in.Label)
@@ -163,18 +180,45 @@ func (s *Service) startLoginSessionProfile(ctx context.Context, in StartLoginSes
 		ConnectorID: connector.ID,
 	})
 	if err == nil {
+		if err := s.requireProfileManager(ctx, profile.ID, in.UserID); err != nil {
+			return db.CredentialProfile{}, err
+		}
 		return profile, nil
 	}
 	if err != pgx.ErrNoRows {
 		return db.CredentialProfile{}, err
 	}
-	return s.queries.CreateCredentialProfile(ctx, db.CreateCredentialProfileParams{
+	profile, err = s.queries.CreateCredentialProfile(ctx, db.CreateCredentialProfileParams{
 		WorkspaceID:    in.WorkspaceID,
 		AuthorizedByID: in.UserID,
 		ConnectorID:    connector.ID,
 		Label:          label,
 		Status:         StatusPending,
+		Scope:          connector.Scope,
 	})
+	if err != nil {
+		if connector.Scope == ScopeDeployment && isDeploymentProfileUniqueViolation(err) {
+			// The unique index is the serialization point for first-time global
+			// binding. Re-read the winner so a race never leaks a database error.
+			if _, lookupErr := s.queries.GetDeploymentCredentialProfileByConnector(ctx, connector.ID); lookupErr == nil {
+				return db.CredentialProfile{}, ErrDeploymentProfileBindingConflict
+			}
+		}
+		return db.CredentialProfile{}, err
+	}
+	if err := s.queries.AddCredentialProfileManager(ctx, db.AddCredentialProfileManagerParams{
+		ProfileID:   profile.ID,
+		UserID:      in.UserID,
+		GrantedByID: in.UserID,
+	}); err != nil {
+		return db.CredentialProfile{}, err
+	}
+	return profile, nil
+}
+
+func isDeploymentProfileUniqueViolation(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "23505" && pgErr.ConstraintName == "credential_profile_deployment_connector_idx"
 }
 
 func (s *Service) CompleteLoginSession(ctx context.Context, in CompleteLoginSessionInput) (CompleteLoginSessionResult, error) {
@@ -209,6 +253,13 @@ func (s *Service) CompleteLoginSession(ctx context.Context, in CompleteLoginSess
 	if err != nil {
 		return CompleteLoginSessionResult{}, err
 	}
+	if err := s.queries.AddCredentialProfileManager(ctx, db.AddCredentialProfileManagerParams{
+		ProfileID:   profile.ID,
+		UserID:      session.UserID,
+		GrantedByID: session.UserID,
+	}); err != nil {
+		return CompleteLoginSessionResult{}, err
+	}
 	session, err = s.queries.CompleteCredentialLoginSession(ctx, session.ID)
 	if err != nil {
 		return CompleteLoginSessionResult{}, err
@@ -216,7 +267,13 @@ func (s *Service) CompleteLoginSession(ctx context.Context, in CompleteLoginSess
 	return CompleteLoginSessionResult{Profile: profile, Session: session}, nil
 }
 
-func (s *Service) RevokeProfile(ctx context.Context, workspaceID, profileID pgtype.UUID) (db.CredentialProfile, error) {
+func (s *Service) RevokeProfile(ctx context.Context, workspaceID, userID, profileID pgtype.UUID) (db.CredentialProfile, error) {
+	if _, err := s.GetProfile(ctx, workspaceID, profileID); err != nil {
+		return db.CredentialProfile{}, err
+	}
+	if err := s.requireProfileManager(ctx, profileID, userID); err != nil {
+		return db.CredentialProfile{}, err
+	}
 	profile, err := s.queries.RevokeCredentialProfileForWorkspace(ctx, db.RevokeCredentialProfileForWorkspaceParams{
 		ID:          profileID,
 		WorkspaceID: workspaceID,
@@ -230,6 +287,58 @@ func (s *Service) RevokeProfile(ctx context.Context, workspaceID, profileID pgty
 	return profile, nil
 }
 
+func (s *Service) AddProfileManager(ctx context.Context, workspaceID, actorID, profileID, userID pgtype.UUID) error {
+	if _, err := s.GetProfile(ctx, workspaceID, profileID); err != nil {
+		return err
+	}
+	if err := s.requireProfileManager(ctx, profileID, actorID); err != nil {
+		return err
+	}
+	return s.queries.AddCredentialProfileManager(ctx, db.AddCredentialProfileManagerParams{
+		ProfileID:   profileID,
+		UserID:      userID,
+		GrantedByID: actorID,
+	})
+}
+
+func (s *Service) RemoveProfileManager(ctx context.Context, workspaceID, actorID, profileID, userID pgtype.UUID) error {
+	if _, err := s.GetProfile(ctx, workspaceID, profileID); err != nil {
+		return err
+	}
+	if err := s.requireProfileManager(ctx, profileID, actorID); err != nil {
+		return err
+	}
+	removed, err := s.queries.RemoveCredentialProfileManager(ctx, db.RemoveCredentialProfileManagerParams{
+		ProfileID: profileID,
+		UserID:    userID,
+	})
+	if err != nil {
+		return err
+	}
+	if removed == 0 {
+		count, err := s.queries.CountCredentialProfileManagers(ctx, profileID)
+		if err != nil {
+			return err
+		}
+		if count <= 1 {
+			return ErrLastProfileManager
+		}
+		return pgx.ErrNoRows
+	}
+	return nil
+}
+
+func (s *Service) requireProfileManager(ctx context.Context, profileID, userID pgtype.UUID) error {
+	canManage, err := s.CanManageProfile(ctx, profileID, userID)
+	if err != nil {
+		return err
+	}
+	if !canManage {
+		return ErrProfileManageForbidden
+	}
+	return nil
+}
+
 func (s *Service) RunCrawl(ctx context.Context, in RunCrawlInput) (WorkerCrawlResponse, error) {
 	if err := ValidateSafeJSON(in.Params); err != nil {
 		return WorkerCrawlResponse{}, err
@@ -239,9 +348,11 @@ func (s *Service) RunCrawl(ctx context.Context, in RunCrawlInput) (WorkerCrawlRe
 		return WorkerCrawlResponse{}, err
 	}
 	if profile.Status != StatusActive {
+		s.recordUsageAudit(ctx, in, profile, StatusNeedReauth)
 		return WorkerCrawlResponse{}, ErrProfileNotActive
 	}
 	if s.worker == nil || !s.worker.Configured() {
+		s.recordUsageAudit(ctx, in, profile, "failed")
 		return WorkerCrawlResponse{}, ErrWorkerNotConfigured
 	}
 	params := in.Params
@@ -255,18 +366,34 @@ func (s *Service) RunCrawl(ctx context.Context, in RunCrawlInput) (WorkerCrawlRe
 		Params:      params,
 	})
 	if err != nil {
+		s.recordUsageAudit(ctx, in, profile, "failed")
 		return WorkerCrawlResponse{}, err
 	}
 	switch resp.Status {
 	case StatusNeedReauth:
+		s.recordUsageAudit(ctx, in, profile, StatusNeedReauth)
 		_, _ = s.queries.UpdateCredentialProfileStatus(ctx, db.UpdateCredentialProfileStatusParams{
 			ID:     profile.ID,
 			Status: StatusNeedReauth,
 		})
 	case "completed", "ok", "success":
+		s.recordUsageAudit(ctx, in, profile, "completed")
 		_, _ = s.queries.TouchCredentialProfileLastUsed(ctx, profile.ID)
+	default:
+		s.recordUsageAudit(ctx, in, profile, "failed")
 	}
 	return resp, nil
+}
+
+func (s *Service) recordUsageAudit(ctx context.Context, in RunCrawlInput, profile db.CredentialProfile, outcome string) {
+	_ = s.queries.CreateCredentialUsageAudit(ctx, db.CreateCredentialUsageAuditParams{
+		ProfileID:     profile.ID,
+		WorkspaceID:   in.WorkspaceID,
+		RequestedByID: in.RequestingUserID,
+		ConnectorID:   profile.ConnectorID,
+		Capability:    strings.TrimSpace(in.Capability),
+		Outcome:       outcome,
+	})
 }
 
 func (s *Service) resolveCrawlProfile(ctx context.Context, in RunCrawlInput) (db.CredentialProfile, error) {

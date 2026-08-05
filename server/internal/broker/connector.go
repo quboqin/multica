@@ -11,6 +11,8 @@ import (
 
 const (
 	ConnectorAppGrowing = "appgrowing"
+	ScopeWorkspace      = "workspace"
+	ScopeDeployment     = "deployment"
 
 	StatusPending    = "pending"
 	StatusActive     = "active"
@@ -23,6 +25,7 @@ type Connector struct {
 	DisplayName  string   `json:"display_name"`
 	LoginURL     string   `json:"login_url"`
 	Capabilities []string `json:"capabilities"`
+	Scope        string   `json:"scope"`
 }
 
 type Registry struct {
@@ -37,6 +40,7 @@ func DefaultRegistry() Registry {
 			ID:          ConnectorAppGrowing,
 			DisplayName: "AppGrowing",
 			LoginURL:    "https://auth.youcloud.com/login?app_id=en_appgrowing&goto=https%3A%2F%2Fappgrowing-global.youcloud.com%2Fleaflet",
+			Scope:       ScopeDeployment,
 			Capabilities: []string{
 				"profile_verify",
 				"material_search",
@@ -63,6 +67,10 @@ func RegistryWithJSON(raw string) (Registry, error) {
 		connector.DisplayName = strings.TrimSpace(connector.DisplayName)
 		connector.LoginURL = strings.TrimSpace(connector.LoginURL)
 		connector.Capabilities = uniqueConnectorStrings(connector.Capabilities)
+		connector.Scope = strings.ToLower(strings.TrimSpace(connector.Scope))
+		if connector.Scope == "" {
+			connector.Scope = ScopeWorkspace
+		}
 		if !connectorIDPattern.MatchString(connector.ID) {
 			return Registry{}, fmt.Errorf("invalid connector id %q", connector.ID)
 		}
@@ -78,6 +86,9 @@ func RegistryWithJSON(raw string) (Registry, error) {
 		}
 		if len(connector.Capabilities) == 0 {
 			return Registry{}, fmt.Errorf("connector %q must declare capabilities", connector.ID)
+		}
+		if connector.Scope != ScopeWorkspace && connector.Scope != ScopeDeployment {
+			return Registry{}, fmt.Errorf("connector %q has invalid scope %q", connector.ID, connector.Scope)
 		}
 		registry.connectors[connector.ID] = connector
 	}

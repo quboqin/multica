@@ -680,6 +680,12 @@ func (h *Handler) resolveAttachmentDownloadMode(rawURL string) attachmentDownloa
 	if h.CFSigner != nil {
 		return attachmentDownloadModeCloudFront
 	}
+	// A storage backend without a configured public CDN/origin is private.
+	// Proxy it through Multica so native previews and fetch-based downloads do
+	// not depend on the bucket's CORS policy.
+	if h.Storage != nil && h.Storage.CdnDomain() == "" {
+		return attachmentDownloadModeProxy
+	}
 	if shouldProxyAttachmentURL(rawURL) {
 		return attachmentDownloadModeProxy
 	}
@@ -702,6 +708,11 @@ func shouldProxyAttachmentURL(rawURL string) bool {
 		return true
 	}
 	switch {
+	case strings.HasSuffix(host, ".aliyuncs.com"):
+		// Native Alibaba OSS object hosts may point at private buckets even
+		// when an operator configured their browser-visible base URL. Keep
+		// previews same-origin and let the server authenticate to OSS.
+		return true
 	case strings.HasSuffix(host, ".local"),
 		strings.HasSuffix(host, ".localdomain"),
 		strings.HasSuffix(host, ".internal"),

@@ -2,10 +2,10 @@ param(
     [string]$ApiUrl = 'http://127.0.0.1:8080',
     [string]$WorkspaceSlug = 'ad-creative-direct-pilot',
     [string]$Token = $env:MULTICA_BOOTSTRAP_TOKEN,
-    [string]$CatalogPath = 'C:\Users\zhangzhenyu\ad-creative-factory-lean\profiles\id-adakami\catalog\copy_catalog.json',
-    [string]$PrimeDirectory = 'C:\Users\zhangzhenyu\ad-creative-factory\refference\Prime Template - PNG file',
-    [string]$BrandGuidelinePath = 'C:\Users\zhangzhenyu\ad-creative-factory\docs\AdaKami成图规则.md',
-    [string[]]$AppUIReferencePaths = @('E:\Documents\WXWork\1688853548483782\Cache\Image\2026-07\首页-新客未戳额(1).jpg')
+    [string]$ImageApiKey = $env:MULTICA_IMAGE_API_KEY,
+    [string]$PrimeDirectory = 'E:\Documents\WXWork\1688853548483782\Cache\File\2026-07\Prime Template - PNG file',
+    [string[]]$AppUIReferencePaths = @('E:\Documents\WXWork\1688853548483782\Cache\Image\2026-07\首页-新客未戳额(1).jpg'),
+    [switch]$ResetBusinessConfig
 )
 
 $ErrorActionPreference = 'Stop'
@@ -137,6 +137,33 @@ function Set-AgentDefinition {
     return $agent
 }
 
+function Set-AgentImageCredential {
+    param(
+        [Parameter(Mandatory)][string]$AgentID,
+        [AllowEmptyString()][string]$ApiKey
+    )
+    if ([string]::IsNullOrWhiteSpace($ApiKey)) {
+        return $false
+    }
+
+    # The dedicated env endpoint replaces the map. Read it first so this
+    # bootstrap update preserves unrelated secrets while configuring the
+    # complete image-provider contract used by `multica image edit`.
+    $existing = Invoke-MulticaApi -Method Get -Path "/api/agents/$AgentID/env"
+    $customEnv = @{}
+    if ($existing -and $existing.PSObject.Properties.Name -contains 'custom_env' -and $existing.custom_env) {
+        foreach ($property in $existing.custom_env.PSObject.Properties) {
+            $customEnv[$property.Name] = [string]$property.Value
+        }
+    }
+    $customEnv['OPENAI_API_KEY'] = $ApiKey
+    $customEnv['OPENAI_BASE_URL'] = 'http://one-ai.adakamicorp.id'
+    $customEnv['OPENAI_IMAGE_EDIT_PATH'] = '/images/edits'
+    $customEnv['OPENAI_IMAGE_FILE_FIELD'] = 'image'
+    Invoke-MulticaApi -Method Put -Path "/api/agents/$AgentID/env" -Body @{ custom_env = $customEnv } | Out-Null
+    return $true
+}
+
 function Add-MarketFile {
     param(
         [Parameter(Mandatory)][object]$MarketPack,
@@ -209,11 +236,12 @@ foreach ($legacy in $existingSkills | Where-Object {
 
 $collectorSkill = Set-WorkspaceSkill -Name 'AppGrowing 素材采集' -Description '创建 Crawl Run，执行真实 AppGrowing 多页采集，并用原生 task fanout 自动预分析新增图片。' -Directory (Join-Path $skillTemplateRoot 'appgrowing-material-collector') -Config @{ kind = 'creative_role'; capability = 'material_collection'; version = 9 }
 $analysisSkill = Set-WorkspaceSkill -Name '广告参考分析' -Description '市场中立地读取真实图片，识别主题、金融利益点、原图语义锚点、App UI 类型和通用布局。' -Directory (Join-Path $skillTemplateRoot 'ad-creative-analysis') -Config @{ kind = 'creative_role'; capability = 'reference_analysis'; version = 11 }
-$planSkill = Set-WorkspaceSkill -Name '广告生成方案' -Description '消费已确认文案和冻结市场快照，选择品牌 UI 并规划 3 个同题创意变体。' -Directory (Join-Path $skillTemplateRoot 'ad-creative-plan') -Config @{ kind = 'creative_role'; capability = 'generation_plan'; version = 19 }
+$marketPackExtractionSkill = Set-WorkspaceSkill -Name '市场包组件识别' -Description '读取一张完整成图，发现数量不定的品牌、二维码、商店与合规组件并回写待确认候选。' -Directory (Join-Path $skillTemplateRoot 'ad-creative-market-pack-extraction') -Config @{ kind = 'creative_role'; capability = 'market_pack_component_extraction'; version = 1 }
+$planSkill = Set-WorkspaceSkill -Name '广告生成方案' -Description '消费已确认文案和冻结市场快照，选择品牌 UI 并规划 3 个同题创意变体。' -Directory (Join-Path $skillTemplateRoot 'ad-creative-plan') -Config @{ kind = 'creative_role'; capability = 'generation_plan'; version = 21 }
 $productionSkill = Set-WorkspaceSkill -Name '广告图像编辑' -Description '一个变体 task 内生成方形母版并发重排横竖版；三尺寸共享内容族和修订。' -Directory (Join-Path $skillTemplateRoot 'ad-creative-production') -Config @{ kind = 'creative_role'; capability = 'image_edit'; version = 23 }
 $directEditSkill = Set-WorkspaceSkill -Name '广告图片直接修改' -Description '基于用户自然语言和指定底图执行自由修改；正式交付按 expected_sizes 补 Prime 与独立 QC。' -Directory (Join-Path $skillTemplateRoot 'ad-creative-direct-edit') -Config @{ kind = 'creative_role'; capability = 'direct_image_edit'; version = 5 }
-$composeSkill = Set-WorkspaceSkill -Name 'Prime 完整贴图' -Description '按变体一次包装 expected_sizes，并把最终图和逐图机器证据写入领域资产。' -Directory (Join-Path $skillTemplateRoot 'ad-creative-prime-compose') -Config @{ kind = 'creative_role'; capability = 'prime_compose'; version = 16 }
-$qcSkill = Set-WorkspaceSkill -Name '广告成图验收' -Description '通过并发技术 QC 与视觉 QC 检查 expected_sizes 的四角、画质和内容一致性。' -Directory (Join-Path $skillTemplateRoot 'ad-creative-qc') -Config @{ kind = 'creative_role'; capability = 'quality_control'; version = 20 }
+$composeSkill = Set-WorkspaceSkill -Name 'Prime 完整贴图' -Description '按变体一次包装 expected_sizes，并把最终图和逐图机器证据写入领域资产。' -Directory (Join-Path $skillTemplateRoot 'ad-creative-prime-compose') -Config @{ kind = 'creative_role'; capability = 'prime_compose'; version = 19 }
+$qcSkill = Set-WorkspaceSkill -Name '广告成图验收' -Description '通过并发技术 QC 与视觉 QC 检查 expected_sizes 的四角、画质和内容一致性。' -Directory (Join-Path $skillTemplateRoot 'ad-creative-qc') -Config @{ kind = 'creative_role'; capability = 'quality_control'; version = 22 }
 
 $agents = Get-Items (Invoke-MulticaApi -Method Get -Path '/api/agents') ''
 $leaderSeed = $agents | Where-Object name -eq '素材小队 Leader' | Select-Object -First 1
@@ -221,13 +249,17 @@ if (-not $leaderSeed) { throw '素材小队 Leader does not exist' }
 $runtimeID = $leaderSeed.runtime_id
 
 $specialistHandoff = '只处理 task context 明确指定的领域对象、修订和作用域。结构化交付与证据写回 Creative Order、Variant、Asset、Source Analysis 或 QC Report；不要新建或修改 Issue，不要 @Leader，不要用评论代替领域数据。出现凭证、输入或工具问题时写入当前对象的 error_code/error_message 并让 task 失败；兄弟对象继续执行。'
-$analyst = Set-AgentDefinition -Name '广告参考分析智能体' -Description '逐图读取真实像素，市场中立地识别主题、利益点、原图锚点、App UI 类型和通用布局。' -Instructions "全程使用中文。只分析 task context 指定的 candidate_id 和 Crawl Run；候选可以尚未被用户选择。优先读取平台归档图片，归档尚未完成时读取采集保存的真实源图片，分别识别视觉主题、金融主利益点、业务语义、信息机制、视觉锚点、色系锚点、App UI 通用类型和布局约束，把结果写入 Source Analysis；标题、标签和媒体只能弱辅助。不得读取或选择品牌市场包、App UI 附件或 Prime 资产，不生成图片。$specialistHandoff" -SkillIDs @($analysisSkill.id) -RuntimeID $runtimeID -Model 'gpt-5.6-luna' -ThinkingLevel 'low' -MaxConcurrentTasks 6
+$analyst = Set-AgentDefinition -Name '广告参考分析智能体' -Description '读取真实图片；按任务类型执行竞品参考分析或市场包品牌组件发现。' -Instructions "全程使用中文，严格按 task context 的 workflow 选择一个 Skill。creative_reference_analysis 只分析指定 candidate_id 和 Crawl Run，市场中立地写入 Source Analysis，不得读取市场包；creative_market_pack_component_extraction 只分析指定完整成图，发现全部可复用品牌与合规组件并写回待确认候选，不得修改或发布市场包。两个流程不得混用输入或产物，不生成图片。$specialistHandoff" -SkillIDs @($analysisSkill.id, $marketPackExtractionSkill.id) -RuntimeID $runtimeID -Model 'gpt-5.6-luna' -ThinkingLevel 'low' -MaxConcurrentTasks 6
 $collector = Set-AgentDefinition -Name 'AppGrowing 素材采集智能体' -Description '运行 Crawl Run，导入真实素材并并发委派新增图片预分析。' -Instructions "全程使用中文。只执行 task context 指定的真实 AppGrowing 查询。广告参考分析智能体 ID 固定为 $($analyst.id)，必须作为 analysis_agent_id 写入 Crawl Run 参数并用于 fanout，不得按名称猜测。逐家核对普通竞品至少 3 页、优先竞品至少 5 页；过滤工作区历史重复后继续轮询翻页，直到凑足平台新素材、达到预算或没有更多结果。单家接口为空或失败时对该家启用 Playwright 补查。结果、逐页证据和失败原因写入 Crawl Run；采集入库后立即用原生 task fanout 委派本次新增图片，分析优先读取平台归档，归档未完成时回退到真实源图片。不得创建 Issue 或使用测试数据。" -SkillIDs @($collectorSkill.id) -RuntimeID $runtimeID -MaxConcurrentTasks 2
 $planner = Set-AgentDefinition -Name '生成方案智能体' -Description '消费已确认文案和冻结市场快照，把订单项转成 3 个同题创意变体。' -Instructions "全程使用中文。读取 task context 指定的 Order Item、Source Analysis、copy_snapshot 和冻结市场资源快照；不得重新推荐、选择、拼接或改写文案。需要替换 App UI 时，由本角色根据分析的通用 UI 类型从冻结市场附件中选择最匹配的品牌 UI。保持原图业务语义、信息机制、关键视觉和主色家族，写入 V01、V02、V03 三个版式与信息组织差异明确的 Variant 规格。三个变体就绪后放入同一个 manifest 一次 fanout 给图像编辑智能体，不得串行委派。只有用户明确放开时才能换场景或换色系。不生成图片。$specialistHandoff" -SkillIDs @($planSkill.id) -RuntimeID $runtimeID -Model 'gpt-5.6-terra' -ThinkingLevel 'medium' -MaxConcurrentTasks 3
 $producer = Set-AgentDefinition -Name '图像编辑智能体' -Description '执行标准变体三尺寸生产和精准返工。' -Instructions "全程使用中文。只执行广告图像编辑 Skill 的 creative_production task。初次生产时一个 task 负责一个 Variant：生成 1080x1080 方形母版后，立即把它作为第一参考并发原生重排 1200x628 和 800x1000；三张共享 asset_family_id、批准文案、业务语义、人物和产品。只恢复 missing_sizes，禁止重做已通过尺寸。底图硬区风险交给 Prime/QC 对最终图判断。普通返工使用上一版对应无品牌底图，replan 使用原候选图；不得把带 Prime 的最终图作为第一输入。不得处理 direct_edit，不得触发采集、参考分析或三变体规划。$specialistHandoff" -SkillIDs @($productionSkill.id) -RuntimeID $runtimeID -Model 'gpt-5.6-terra' -ThinkingLevel 'low' -MaxConcurrentTasks 3
 $directEditor = Set-AgentDefinition -Name '图片直接修改智能体' -Description '只按用户自然语言修改指定 expected_sizes 的固定来源底图。' -Instructions "全程使用中文。只执行广告图片直接修改 Skill 的 creative_direct_edit task。读取 task context 固定的 source_asset_id、source_attachment_id、user_request、target_size、expected_sizes、delivery_mode、prime_agent_id、reviewer_agent_id 和 source revision；源资产不可覆盖，输出必须写为 source revision + 1，并以 source asset 为 derived_from_asset_id。不得执行采集、参考分析、三变体规划或普通生产。preview 只写 generated asset；publish 才按同一 expected_sizes 委派 Prime，Prime 再委派两路 QC。$specialistHandoff" -SkillIDs @($directEditSkill.id) -RuntimeID $runtimeID -Model 'gpt-5.6-terra' -ThinkingLevel 'low' -MaxConcurrentTasks 2
 $composer = Set-AgentDefinition -Name 'Prime 包装智能体' -Description '按变体一次包装 expected_sizes 并写入逐图机器证据。' -Instructions "全程使用中文。每个 task 只处理 context 指定的 Variant、revision、expected_sizes 和对应 1-3 张无品牌底图；一次 batch 应用冻结市场快照中的版本化 Prime、条款、二维码和商店徽章。逐张写入来源 Asset、模板、manifest、最终附件、二维码解码和四角/底部校验证据。单项失败不得丢弃其他成功项，不创建 Issue。$specialistHandoff" -SkillIDs @($composeSkill.id) -RuntimeID $runtimeID -Model 'gpt-5.6-terra' -ThinkingLevel 'low' -MaxConcurrentTasks 3
 $reviewer = Set-AgentDefinition -Name '广告验收智能体' -Description '并发执行技术 QC 和视觉 QC，重点检查四角、画质和 expected_sizes 内容一致性。' -Instructions "全程使用中文。严格按 task context 的 workflow、revision 和 expected_sizes 执行技术 QC 或视觉 QC。技术 QC 检查尺寸、文件、四角/底部 Prime、二维码和真实硬区遮挡；视觉 QC 检查清晰度、伪影、批准文案、原图语义，并在多尺寸时检查同变体一致性。原图本来存在的人物或装饰不能仅因几何预测判失败。blocking_failures 非空时 status 必须为 failed。写入独立 QC Report 后必须调用 qc-finalize，由服务端事务化收口；失败只进入 action_required，不自动返工。只指出实际失败尺寸，不影响其他变体。$specialistHandoff" -SkillIDs @($qcSkill.id) -RuntimeID $runtimeID -Model 'gpt-5.6-terra' -ThinkingLevel 'medium' -MaxConcurrentTasks 6
+
+$producerImageCredentialConfigured = Set-AgentImageCredential -AgentID $producer.id -ApiKey $ImageApiKey
+$directEditorImageCredentialConfigured = Set-AgentImageCredential -AgentID $directEditor.id -ApiKey $ImageApiKey
+$imageCredentialConfigured = $producerImageCredentialConfigured -and $directEditorImageCredentialConfigured
 
 $squads = Get-Items (Invoke-MulticaApi -Method Get -Path '/api/squads') ''
 $squad = $squads | Where-Object name -eq 'AdaKami 素材小队' | Select-Object -First 1
@@ -266,113 +298,94 @@ foreach ($definition in $memberDefinitions) {
 }
 
 $leaderSkillDirectory = Join-Path $skillTemplateRoot 'ad-creative-leadership'
-$leaderSkill = Set-WorkspaceSkill -Name '创意素材协作' -Aliases @('素材小队 Leader 编排') -Description '使用原生 task fanout 串联标准三变体生产或独立直接改图、Prime、并发 QC 与增量发布。' -Directory $leaderSkillDirectory -Config @{ kind = 'creative_role'; capability = 'creative_leadership'; version = 44 }
+$leaderSkill = Set-WorkspaceSkill -Name '创意素材协作' -Aliases @('素材小队 Leader 编排') -Description '使用原生 task fanout 串联标准三变体生产或独立直接改图、Prime、并发 QC 与增量发布。' -Directory $leaderSkillDirectory -Config @{ kind = 'creative_role'; capability = 'creative_leadership'; version = 46 }
 $leader = Set-AgentDefinition -Name '素材小队 Leader' -Description '管理 Creative Order 的并发生产、独立直接改图和结构化结果发布。' -Instructions '全程使用中文。只负责判断、批量委派、状态收口和发布，不代替专业成员执行。严格遵循创意素材协作 Skill：一个订单只关联一个用户 Issue；所有机器阶段使用原生 task fanout，禁止创建分析、变体、Prime 或 QC 子 Issue。Leader 只发起方案并在人工重试或异常恢复时补齐任务；Planner、Production、Prime 各自只委派直接下一阶段。按 target agent + source + item_key 去重，不能因 source 下已有其他 item 就跳过。direct_edit 订单只能委派“图片直接修改”角色，绝不触发采集、参考分析、三变体规划或普通生产；preview 不进入正式交付，publish 才按 expected_sizes 继续 Prime 与双路 QC。每次唤醒读取订单领域状态和冻结 squad snapshot，一次创建所有已就绪任务后立即结束，不轮询、不重复委派。' -SkillIDs @($leaderSkill.id) -RuntimeID $runtimeID -Model 'gpt-5.6-terra' -ThinkingLevel 'medium' -MaxConcurrentTasks 2
 
 $resources = Get-Items (Invoke-MulticaApi -Method Get -Path '/api/creative/resources') 'resources'
 $copyLibrary = $resources | Where-Object { $_.kind -eq 'copy_library' -and $_.name -eq 'AdaKami Indonesia 文案库' } | Select-Object -First 1
+$copyLibraryIsNew = -not $copyLibrary
 if (-not $copyLibrary) {
     $copyLibrary = Invoke-MulticaApi -Method Post -Path '/api/creative/resources' -Body @{
         kind = 'copy_library'
         name = 'AdaKami Indonesia 文案库'
-        description = '来自 NEW SCRIPT DESIGN CONTENT - 2026.xlsx；平台内可筛选、编辑、审核和重新导入。'
-        config = @{ market = 'Indonesia'; locale = 'id-ID'; source_filename = 'NEW SCRIPT DESIGN CONTENT - 2026.xlsx' }
+        description = '可组合印尼语文案：业务维护片段、组合方案、产品事实和计算规则。'
+        config = @{ schema_version = 2; market = 'Indonesia'; locale = 'id-ID' }
     }
 }
 
-function Get-CopyPrimaryIntent {
-    param([string]$ContentKeyword, [string]$SuggestedType)
-
-    $keyword = $ContentKeyword.Trim().ToUpperInvariant()
-    switch -Regex ($keyword) {
-        '^REPAYMENT PLAN$' { return 'repayment_plan' }
-        '^RATE DOWN$' { return 'rate_down' }
-        'INTEREST FREE' { return 'interest_free' }
-        '^0% UANG MUKA$' { return 'fee_reduction' }
-        '^NUM(?: GROWTH)?$' { return 'limit_amount' }
-        '^EARLY REPAYMENT$' { return 'early_repayment' }
-        '^(PHONE TYPE|PHONE|APP STORE PAGES|PROGRESS BAR|USER INFORMATION|CALCULATOR|WHATSAPP|E-WALLET)$' { return 'app_interface' }
-        '^COMPARISON$' { return 'comparison' }
-        '^CONSUMPTION SCENARIOS$' { return 'lifestyle_scenario' }
+# The copy library is a versioned business configuration. Recipes assemble reusable
+# Indonesian fragments with approved product facts; production consumes only the
+# frozen order-item snapshot and never reads mutable library data.
+$copyLibraryConfig = @{
+    schema_version = 2
+    market = 'Indonesia'
+    locale = 'id-ID'
+    source = @{
+        name = '飞书图片案例 / 文案分组'
+        url = 'https://my.feishu.cn/wiki/YKUqwgHNEibzw0k5RVUcZsW2nJh?sheet=elM4tt'
+        sync_status = 'pending'
+        note = '飞书 MCP 当前无法读取 Sheet 子块；还款 Excel 公式尚未验证。当前仅使用已确认的 Prime 文案，未猜测任何公式。'
     }
-
-    $legacy = $SuggestedType.Trim().ToLowerInvariant()
-    switch ($legacy) {
-        'limit_or_amount' { return 'limit_amount' }
-        'user_interface' { return 'app_interface' }
-        default { return $legacy }
+    fragments = @(
+        @{ id = '10000000-0000-4000-8000-000000000001'; key = 'flexible-loan-headline'; name = '灵活借款主标题'; creative_types = @('num','repayment_plan'); role = 'headline'; text = 'Pinjaman Fleksibel Tanpa Ribet'; tags = @('pinjaman','fleksibel'); status = 'approved' }
+        @{ id = '10000000-0000-4000-8000-000000000002'; key = 'num-limit'; name = '额度信息'; creative_types = @('num'); role = 'benefit'; text = "Limit hingga`n{{fact.limit_max.copy_text}}"; tags = @('num','limit','额度'); status = 'approved' }
+        @{ id = '10000000-0000-4000-8000-000000000003'; key = 'repayment-plan'; name = '期限与利率'; creative_types = @('repayment_plan'); role = 'benefit'; text = "Pilihan Tenor`n{{fact.tenor_range.copy_text}}`nBunga mulai dari`n{{fact.interest_rate_from.copy_text}}"; tags = @('repayment_plan','tenor','bunga','分期'); status = 'approved' }
+        @{ id = '10000000-0000-4000-8000-000000000004'; key = 'apply-now'; name = '立即申请'; creative_types = @('num','repayment_plan'); role = 'cta'; text = 'AJUKAN SEKARANG'; tags = @('cta'); status = 'approved' }
+    )
+    recipes = @(
+        @{ id = '20000000-0000-4000-8000-000000000001'; key = 'num-standard'; name = 'NUM · 额度'; creative_type = 'num'; description = '突出可申请额度，用于数字利益点素材。'; fragment_ids = @{ headline = @('10000000-0000-4000-8000-000000000001'); benefit = @('10000000-0000-4000-8000-000000000002'); cta = @('10000000-0000-4000-8000-000000000004') }; match_tags = @('NUM','额度','limit','jumlah','Rp'); status = 'approved' }
+        @{ id = '20000000-0000-4000-8000-000000000002'; key = 'repayment-plan-standard'; name = '还款计划 · 期限与利率'; creative_type = 'repayment_plan'; description = '突出期限和起始利率，用于还款计划素材。'; fragment_ids = @{ headline = @('10000000-0000-4000-8000-000000000001'); benefit = @('10000000-0000-4000-8000-000000000003'); cta = @('10000000-0000-4000-8000-000000000004') }; match_tags = @('还款','分期','tenor','cicilan','angsuran','bunga'); status = 'approved' }
+    )
+    product_facts = @(
+        @{ id = '30000000-0000-4000-8000-000000000001'; key = 'limit_max'; label = '最高额度'; value = '80000000'; copy_text = 'Rp80.000.000'; source = 'Prime Template 11-01.png'; status = 'approved' }
+        @{ id = '30000000-0000-4000-8000-000000000002'; key = 'tenor_range'; label = '期限范围'; value = '3-12'; copy_text = '3-12 Bulan'; source = 'Prime Template 11-01.png'; status = 'approved' }
+        @{ id = '30000000-0000-4000-8000-000000000003'; key = 'interest_rate_from'; label = '起始利率'; value = '0.03%'; copy_text = '0,03%*'; source = 'Prime Template 11-01.png'; status = 'approved' }
+    )
+    calculation_rules = @()
+    recommendation_policy = @{ type_weight = 1000; tag_weight = 80; concise_weight = 1; default_creative_type = 'num' }
+}
+$seedCopyLibrary = $copyLibraryIsNew -or $ResetBusinessConfig -or ([int]$copyLibrary.published_version -lt 1)
+if ($seedCopyLibrary) {
+    $copyLibrary = Invoke-MulticaApi -Method Put -Path "/api/creative/resources/$($copyLibrary.id)" -Body @{
+        name = $copyLibrary.name
+        description = '可组合印尼语文案：业务维护片段、组合方案、产品事实和计算规则。'
+        config = $copyLibraryConfig
     }
+    $copyLibrary = Invoke-MulticaApi -Method Post -Path "/api/creative/resources/$($copyLibrary.id)/publish"
 }
-
-function Get-CopyThemeTags {
-    param([string]$ContentKeyword, [string]$CopyText)
-
-    $value = "$ContentKeyword $CopyText"
-    $themeTags = @()
-    if ($value -match '(?i)world cup|piala dunia|sepak bola|lapangan|\bbola\b|\bgol\b') { $themeTags += 'football' }
-    if ($value -match '(?i)ramadan|ramadhan|puasa') { $themeTags += 'ramadan' }
-    if ($value -match '(?i)lebaran|idul fitri|\beid\b') { $themeTags += 'eid' }
-    if ($value -match '(?i)payday|gajian|tanggal gajian') { $themeTags += 'payday' }
-    if ($value -match '(?i)sekolah|school|tahun ajaran') { $themeTags += 'school' }
-    if ($value -match '(?i)akhir tahun|year end') { $themeTags += 'year_end' }
-    return @($themeTags | Select-Object -Unique)
-}
-
-$catalog = Get-Content -Raw -LiteralPath $CatalogPath | ConvertFrom-Json -Depth 100
-$copyEntries = foreach ($record in @($catalog.records)) {
-    $lines = @([regex]::Split([string]$record.copy_text, '\r?\n') | ForEach-Object { $_.Trim() } | Where-Object { $_ })
-    $headline = if ($lines.Count) { $lines[0] } else { [string]$record.copy_text }
-    $benefit = if ($lines.Count -gt 1) { ($lines | Select-Object -Skip 1) -join "`n" } else { '' }
-    $approved = $record.eligible_for_static_image -and $record.selectable_for_generation -and $record.ready_without_inputs
-    $primaryIntent = Get-CopyPrimaryIntent -ContentKeyword ([string]$record.content_keyword) -SuggestedType ([string]$record.suggested_copy_type)
-    $themeTags = @(Get-CopyThemeTags -ContentKeyword ([string]$record.content_keyword) -CopyText ([string]$record.copy_text))
-    $tags = @($record.month, $record.content_keyword, $primaryIntent, $record.set_label) + $themeTags | Where-Object { $_ } | Select-Object -Unique
-    @{
-        external_key = [string]$record.record_id
-        headline = $headline
-        subheadline = ''
-        benefit = $benefit
-        cta = ''
-        legal_text = ''
-        copy_role = [string]$record.content_type
-        market = 'Indonesia'
-        locale = 'id-ID'
-        tags = @($tags)
-        status = if ($approved) { 'approved' } else { 'draft' }
-        metadata = @{
-            source = $record.source
-            original_copy = [string]$record.copy_text
-            content_keyword = [string]$record.content_keyword
-            primary_intent = $primaryIntent
-            theme_tags = $themeTags
-            suggested_copy_type = [string]$record.suggested_copy_type
-            required_inputs = @($record.required_inputs)
-            notes = $record.notes
-            references = @($record.references)
-            eligible_for_static_image = [bool]$record.eligible_for_static_image
-            selectable_for_generation = [bool]$record.selectable_for_generation
-            ready_without_inputs = [bool]$record.ready_without_inputs
-        }
-    }
-}
-$copyImport = Invoke-MulticaApi -Method Post -Path "/api/creative/copy-libraries/$($copyLibrary.id)/entries/import" -Body @{
-    mode = 'upsert'
-    source_filename = 'NEW SCRIPT DESIGN CONTENT - 2026.xlsx'
-    mapping = @{
-        adapter = 'profile_copy_catalog_v1'
-        records = @($copyEntries).Count
-        source_sha256 = [string]$catalog.source.sha256
-        source_path = [string]$catalog.source.file_path
-    }
-    entries = @($copyEntries)
-}
-$copyLibrary = Invoke-MulticaApi -Method Post -Path "/api/creative/resources/$($copyLibrary.id)/publish"
 
 $resources = Get-Items (Invoke-MulticaApi -Method Get -Path '/api/creative/resources') 'resources'
 $marketPack = $resources | Where-Object { $_.kind -eq 'market_pack' -and $_.name -eq 'AdaKami Indonesia 市场资源包' } | Select-Object -First 1
+$marketPackIsNew = -not $marketPack
+$seedMarketPack = $marketPackIsNew -or $ResetBusinessConfig -or ([int]$marketPack.published_version -lt 1)
+$primeComponentDirectory = Join-Path $PrimeDirectory '.multica-prime-components-v2'
+$primeExtractionManifestPath = Join-Path $primeComponentDirectory 'extract-manifest.json'
+$primeLogoPath = Join-Path $primeComponentDirectory 'adakami-prime-logo.png'
+$primeQRPath = Join-Path $primeComponentDirectory 'adakami-prime-qr.png'
+$primeStoreBadgesPath = Join-Path $primeComponentDirectory 'adakami-prime-store-badges.png'
+$primeAFPIPath = Join-Path $primeComponentDirectory 'adakami-prime-afpi.png'
+$primePindaiLegalPath = Join-Path $primeComponentDirectory 'adakami-prime-pindai-legal.png'
+$primeExtractionManifest = @{
+    source = Join-Path $PrimeDirectory '11-01.png'
+    authored_size = @(1080, 1080)
+    components = @(
+        @{ role = 'prime_logo'; source_rect = @(30, 28, 314, 100); output = $primeLogoPath; background = 'transparent' },
+        @{ role = 'prime_qr'; source_rect = @(983, 29, 1053, 99); output = $primeQRPath; background = 'opaque'; normalize_qr = $true; expected_payload = 'https://www.adakami.id/termsandconditions' },
+        @{ role = 'prime_store_badges'; source_rect = @(30, 1013, 284, 1051); output = $primeStoreBadgesPath; background = 'transparent' },
+        @{ role = 'prime_afpi'; source_rect = @(918, 1008, 982, 1050); output = $primeAFPIPath; background = 'transparent' },
+        @{ role = 'prime_pindai_legal'; source_rect = @(988, 984, 1054, 1057); output = $primePindaiLegalPath; background = 'transparent' }
+    )
+}
+if ($seedMarketPack) {
+    New-Item -ItemType Directory -Force -Path $primeComponentDirectory | Out-Null
+    $primeExtractionManifest | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $primeExtractionManifestPath -Encoding utf8
+    $primeExtractor = Join-Path $skillTemplateRoot 'ad-creative-prime-compose\references\extract_prime_components.py'
+    $primeExtractionResult = & python $primeExtractor --manifest $primeExtractionManifestPath
+    if ($LASTEXITCODE -ne 0) { throw "Prime component extraction failed: $primeExtractionResult" }
+}
 $marketConfig = @{
     contract_authority = 'published_market_pack_snapshot'
-    rule_precedence = @('structured_config','versioned_attachments','brand_guideline')
+    rule_precedence = @('structured_config','versioned_attachments')
     brand = 'AdaKami'
     market = 'Indonesia'
     locale = 'id-ID'
@@ -384,45 +397,55 @@ $marketConfig = @{
     qr_canonical_payload = 'https://www.adakami.id/termsandconditions'
     qr_allowed_domains = @('www.adakami.id')
     qr_approval_status = 'approved'
-    qr_approval_note = '三个原始 Prime 模板与旧 main 配置均机器解码为该条款地址。'
-    compliance_rules = '只能使用文案库已审核的金融事实；不得复制竞品品牌、金额、法律文字或二维码。完整 Prime 资产必须原样保留，最终二维码必须机器可解码。'
+    qr_approval_note = '独立静态二维码资源机器解码为该条款地址，并在三个尺寸中复用。'
+    compliance_rules = '只能使用文案库已审核的金融事实；不得复制竞品品牌、金额、法律文字或二维码。启用的 Prime 组件必须完整呈现，最终二维码必须机器可解码。'
     naming_rule = '{month}_{brand}_{market}_{candidate}_{variant}_{size}_v{revision}.png'
     output_sizes = @('1080x1080','1200x628','800x1000')
-    composition = 'full_prime_overlay'
-    prime_layout_contract = @{
-        guide_policy = 'hard_regions_only; top/bottom values are non-blocking context crops'
-        backdrop_rule = 'Prime 固定资产为绿色品牌文字和图标。仅各 hard_regions 真实矩形下方应保持浅色或中等明度、连续、低纹理背景；未与矩形相交的顶部中央、底部中央和侧边空间可正常承载关键内容。背景必须满版延伸，不能形成白条、卡片框或可见占位区。'
+    prime_composition = @{
+        schema_version = 2
+        qr_mode = 'static'
+        components = @(
+            @{ id = 'logo'; label = '品牌 Logo'; kind = 'image'; enabled = $true; source_role = 'prime_logo'; content = ''; backdrop_rule = 'none' },
+            @{ id = 'terms'; label = '条款文字'; kind = 'text'; enabled = $true; source_role = ''; content = "Syarat dan ketentuan berlaku`nScan QR untuk membaca`nsyarat & ketentuan"; backdrop_rule = 'quiet' },
+            @{ id = 'qr'; label = '二维码'; kind = 'qr'; enabled = $true; source_role = 'prime_qr'; content = ''; backdrop_rule = 'light' },
+            @{ id = 'store_badges'; label = '应用商店标识'; kind = 'image'; enabled = $true; source_role = 'prime_store_badges'; content = ''; backdrop_rule = 'quiet' },
+            @{ id = 'regulatory'; label = '监管说明'; kind = 'text'; enabled = $true; source_role = ''; content = 'AdaKami berizin dan diawasi oleh OJK  •  AdaKami merupakan anggota'; backdrop_rule = 'quiet' },
+            @{ id = 'afpi'; label = 'AFPI 标识'; kind = 'image'; enabled = $true; source_role = 'prime_afpi'; content = ''; backdrop_rule = 'none' },
+            @{ id = 'pindai_legal'; label = 'Pindai Legal'; kind = 'image'; enabled = $true; source_role = 'prime_pindai_legal'; content = ''; backdrop_rule = 'none' }
+        )
         layouts = @{
             '1080x1080' = @{
-                top_key_content_exclusion_end = 124
-                bottom_key_content_exclusion_start = 950
-                hard_regions = @(
-                    @{ id = 'logo'; x1 = 30; y1 = 28; x2 = 312; y2 = 99 },
-                    @{ id = 'terms_qr'; x1 = 777; y1 = 32; x2 = 1050; y2 = 95 },
-                    @{ id = 'store_badges'; x1 = 30; y1 = 1013; x2 = 284; y2 = 1051 },
-                    @{ id = 'regulatory'; x1 = 378; y1 = 988; x2 = 1050; y2 = 1053 }
-                )
+                components = @{
+                    logo = @{ destination_rect = @(30, 28, 314, 100) }
+                    terms = @{ destination_rect = @(777, 32, 982, 95) }
+                    qr = @{ destination_rect = @(983, 29, 1053, 99) }
+                    store_badges = @{ destination_rect = @(30, 1013, 284, 1051) }
+                    regulatory = @{ destination_rect = @(378, 1010, 913, 1053) }
+                    afpi = @{ destination_rect = @(918, 1008, 982, 1053) }
+                    pindai_legal = @{ destination_rect = @(988, 984, 1054, 1057) }
+                }
             }
             '1200x628' = @{
-                top_key_content_exclusion_end = 94
-                bottom_key_content_exclusion_start = 540
-                hard_regions = @(
-                    @{ id = 'logo'; x1 = 21; y1 = 22; x2 = 214; y2 = 70 },
-                    @{ id = 'terms_qr'; x1 = 989; y1 = 24; x2 = 1181; y2 = 68 },
-                    @{ id = 'store_badges'; x1 = 21; y1 = 582; x2 = 187; y2 = 607 },
-                    @{ id = 'regulatory'; x1 = 793; y1 = 566; x2 = 1181; y2 = 608 }
-                )
+                components = @{
+                    logo = @{ destination_rect = @(21, 22, 214, 70) }
+                    terms = @{ destination_rect = @(989, 24, 1130, 68) }
+                    qr = @{ destination_rect = @(1133, 20, 1185, 73) }
+                    store_badges = @{ destination_rect = @(21, 582, 187, 607) }
+                    regulatory = @{ destination_rect = @(793, 572, 1090, 608) }
+                    afpi = @{ destination_rect = @(1093, 565, 1138, 609) }
+                    pindai_legal = @{ destination_rect = @(1140, 552, 1182, 610) }
+                }
             }
             '800x1000' = @{
-                top_key_content_exclusion_end = 100
-                bottom_key_content_exclusion_start = 900
-                hard_regions = @(
-                    @{ id = 'logo'; x1 = 25; y1 = 23; x2 = 234; y2 = 76 },
-                    @{ id = 'terms_qr'; x1 = 573; y1 = 26; x2 = 775; y2 = 73 },
-                    @{ id = 'store_badges'; x1 = 25; y1 = 946; x2 = 230; y2 = 976 },
-                    @{ id = 'regulatory'; x1 = 281; y1 = 947; x2 = 710; y2 = 969 },
-                    @{ id = 'pindar'; x1 = 727; y1 = 922; x2 = 775; y2 = 976 }
-                )
+                components = @{
+                    logo = @{ destination_rect = @(25, 23, 234, 76) }
+                    terms = @{ destination_rect = @(573, 26, 724, 73) }
+                    qr = @{ destination_rect = @(724, 22, 779, 76) }
+                    store_badges = @{ destination_rect = @(25, 946, 230, 976) }
+                    regulatory = @{ destination_rect = @(281, 947, 630, 969) }
+                    afpi = @{ destination_rect = @(635, 940, 710, 976) }
+                    pindai_legal = @{ destination_rect = @(727, 922, 775, 976) }
+                }
             }
         }
     }
@@ -436,29 +459,32 @@ if (-not $marketPack) {
     }
 }
 
-Add-MarketFile -MarketPack $marketPack -Role 'prime_square' -Label 'Prime 1080x1080' -Path (Join-Path $PrimeDirectory '11-01.png')
-Add-MarketFile -MarketPack $marketPack -Role 'prime_landscape' -Label 'Prime 1200x628' -Path (Join-Path $PrimeDirectory '191-01.png')
-Add-MarketFile -MarketPack $marketPack -Role 'prime_portrait' -Label 'Prime 800x1000' -Path (Join-Path $PrimeDirectory '45-01.png')
-Add-MarketFile -MarketPack $marketPack -Role 'brand_guideline' -Label 'AdaKami 印尼成图规则' -Path $BrandGuidelinePath
-$marketFiles = Get-Items (Invoke-MulticaApi -Method Get -Path "/api/creative/resources/$($marketPack.id)/files") 'files'
-foreach ($obsoleteFile in @($marketFiles | Where-Object role -eq 'compose_script')) {
-    Invoke-MulticaApi -Method Delete -Path "/api/creative/resources/$($marketPack.id)/files/$($obsoleteFile.id)" | Out-Null
-}
-foreach ($appUIPath in $AppUIReferencePaths) {
-    Add-MarketFile -MarketPack $marketPack -Role 'app_ui_reference' -Label "AdaKami App UI - $([IO.Path]::GetFileNameWithoutExtension($appUIPath))" -Path $appUIPath -Multiple -Metadata @{
-        dimensions = '1080x2160'
-        market = 'Indonesia'
-        locale = 'id-ID'
-        tags = @('app-ui', 'homepage', 'new-customer', 'loan-limit')
-        description = '参考分析只识别通用 App UI 类型；Planner 根据订单冻结的市场快照从全部 App UI 参考图中选择最匹配的一张。图像编辑必须替换为 AdaKami 自有界面，不得保留或仿造竞品 UI。'
+if ($seedMarketPack) {
+    Add-MarketFile -MarketPack $marketPack -Role 'prime_logo' -Label 'Prime · AdaKami Logo' -Path $primeLogoPath -Metadata @{ source_type = 'standalone_component'; reused_across_sizes = $true }
+    Add-MarketFile -MarketPack $marketPack -Role 'prime_qr' -Label 'Prime · 条款二维码' -Path $primeQRPath -Metadata @{ source_type = 'standalone_component'; reused_across_sizes = $true }
+    Add-MarketFile -MarketPack $marketPack -Role 'prime_store_badges' -Label 'Prime · 应用商店标识' -Path $primeStoreBadgesPath -Metadata @{ source_type = 'standalone_component'; reused_across_sizes = $true }
+    Add-MarketFile -MarketPack $marketPack -Role 'prime_afpi' -Label 'Prime · AFPI 标识' -Path $primeAFPIPath -Metadata @{ source_type = 'standalone_component'; reused_across_sizes = $true }
+    Add-MarketFile -MarketPack $marketPack -Role 'prime_pindai_legal' -Label 'Prime · Pindai Legal' -Path $primePindaiLegalPath -Metadata @{ source_type = 'standalone_component'; reused_across_sizes = $true }
+    $marketFiles = Get-Items (Invoke-MulticaApi -Method Get -Path "/api/creative/resources/$($marketPack.id)/files") 'files'
+    foreach ($obsoleteFile in @($marketFiles | Where-Object { @('compose_script','prime_square','prime_landscape','prime_portrait','brand_guideline') -contains $_.role })) {
+        Invoke-MulticaApi -Method Delete -Path "/api/creative/resources/$($marketPack.id)/files/$($obsoleteFile.id)" | Out-Null
     }
+    foreach ($appUIPath in $AppUIReferencePaths) {
+        Add-MarketFile -MarketPack $marketPack -Role 'app_ui_reference' -Label "AdaKami App UI - $([IO.Path]::GetFileNameWithoutExtension($appUIPath))" -Path $appUIPath -Multiple -Metadata @{
+            dimensions = '1080x2160'
+            market = 'Indonesia'
+            locale = 'id-ID'
+            tags = @('app-ui', 'homepage', 'new-customer', 'loan-limit')
+            description = '参考分析只识别通用 App UI 类型；Planner 根据订单冻结的市场快照从全部 App UI 参考图中选择最匹配的一张。图像编辑必须替换为 AdaKami 自有界面，不得保留或仿造竞品 UI。'
+        }
+    }
+    $marketPack = Invoke-MulticaApi -Method Put -Path "/api/creative/resources/$($marketPack.id)" -Body @{
+        name = 'AdaKami Indonesia 市场资源包'
+        description = '印尼市场可编辑配置与版本化附件；新市场可在平台复制后替换文案库、规则和资源槽位。'
+        config = $marketConfig
+    }
+    $marketPack = Invoke-MulticaApi -Method Post -Path "/api/creative/resources/$($marketPack.id)/publish"
 }
-$marketPack = Invoke-MulticaApi -Method Put -Path "/api/creative/resources/$($marketPack.id)" -Body @{
-    name = 'AdaKami Indonesia 市场资源包'
-    description = '印尼市场可编辑配置与版本化附件；新市场可在平台复制后替换文案库、规则和资源槽位。'
-    config = $marketConfig
-}
-$marketPack = Invoke-MulticaApi -Method Post -Path "/api/creative/resources/$($marketPack.id)/publish"
 
 $autopilots = Get-Items (Invoke-MulticaApi -Method Get -Path '/api/autopilots') 'autopilots'
 $autopilot = $autopilots | Where-Object { $_.title -eq '印尼竞品素材周度采集' -or $_.title -eq '印尼与马来竞品素材周度采集' } | Select-Object -First 1
@@ -512,9 +538,11 @@ if (-not ($triggers | Where-Object kind -eq 'schedule')) {
 
 [pscustomobject]@{
     CopyLibraryID = $copyLibrary.id
-    CopyEntries = @($copyEntries).Count
+    CopyFragments = @($copyLibraryConfig.fragments).Count
+    CopyRecipes = @($copyLibraryConfig.recipes).Count
     MarketPackID = $marketPack.id
     SquadID = $squad.id
     LeaderSkillID = $leaderSkill.id
     AutopilotID = $autopilot.id
+    ImageCredentialConfigured = $imageCredentialConfigured
 }

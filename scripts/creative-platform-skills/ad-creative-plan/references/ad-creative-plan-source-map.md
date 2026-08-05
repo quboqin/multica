@@ -7,4 +7,4 @@
 | `multica task by-source list` returns all items for an Agent and evidence pair; callers compare item keys individually | `server/cmd/multica/cmd_task.go`, `server/internal/service/task.go:ListDirectTasksByEvidence` |
 | Native production fanout is idempotent for active work by target Agent, evidence pair, and variant/revision item key | `server/internal/service/task.go:EnqueueDirectTaskFanout`, `server/internal/service/task.go:directTaskItemKey` |
 
-Copy recommendation is a page-confirmation concern. This Skill's runtime source is only the order item's frozen `copy_snapshot`.
+Copy recommendation and fragment assembly are page-confirmation concerns. This Skill's runtime source is only the order item's frozen schema-v2 `copy_snapshot`; mutable copy-library resources are intentionally excluded.

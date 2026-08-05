@@ -192,7 +192,75 @@ func TestDownloadFile(t *testing.T) {
 		}
 	})
 
-	t.Run("absolute URL is used as-is without auth headers", func(t *testing.T) {
+	t.Run("absolute same-origin URL is sent with auth", func(t *testing.T) {
+		var gotAuth string
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			gotAuth = r.Header.Get("Authorization")
+			w.Write([]byte("api-payload"))
+		}))
+		defer srv.Close()
+
+		client := NewAPIClient(srv.URL, "", "test-token")
+		data, err := client.DownloadFile(context.Background(), srv.URL+"/api/attachments/one/download")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if string(data) != "api-payload" {
+			t.Errorf("unexpected body: %q", string(data))
+		}
+		if gotAuth != "Bearer test-token" {
+			t.Errorf("expected Authorization Bearer test-token, got %q", gotAuth)
+		}
+	})
+
+	t.Run("absolute loopback alias URL on the same port is sent with auth", func(t *testing.T) {
+		var gotAuth string
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			gotAuth = r.Header.Get("Authorization")
+			w.Write([]byte("loopback-payload"))
+		}))
+		defer srv.Close()
+
+		targetURL := strings.Replace(srv.URL, "127.0.0.1", "localhost", 1) + "/api/attachments/one/download"
+		if targetURL == srv.URL+"/api/attachments/one/download" {
+			t.Fatal("httptest server did not use a 127.0.0.1 address")
+		}
+		client := NewAPIClient(srv.URL, "", "test-token")
+		data, err := client.DownloadFile(context.Background(), targetURL)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if string(data) != "loopback-payload" {
+			t.Errorf("unexpected body: %q", string(data))
+		}
+		if gotAuth != "Bearer test-token" {
+			t.Errorf("expected Authorization Bearer test-token, got %q", gotAuth)
+		}
+	})
+
+	t.Run("absolute loopback alias URL on a different port is used without auth", func(t *testing.T) {
+		var gotAuth string
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			gotAuth = r.Header.Get("Authorization")
+			w.Write([]byte("loopback-signed-payload"))
+		}))
+		defer srv.Close()
+
+		targetURL := strings.Replace(srv.URL, "127.0.0.1", "localhost", 1) + "/signed?sig=abc"
+		client := NewAPIClient("http://127.0.0.1:1", "", "test-token")
+		data, err := client.DownloadFile(context.Background(), targetURL)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if string(data) != "loopback-signed-payload" {
+			t.Errorf("unexpected body: %q", string(data))
+		}
+		if gotAuth != "" {
+			t.Errorf("expected no Authorization header across ports, got %q", gotAuth)
+		}
+	})
+
+	t.Run("absolute external URL is used as-is without auth headers", func(t *testing.T) {
 		var gotAuth string
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			gotAuth = r.Header.Get("Authorization")

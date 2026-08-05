@@ -16,14 +16,28 @@ QC 不创建 Issue；task、QC Report、机器 evidence 和根订单 Issue 上�
 开始时校验 task context 的 `issue_id` 与订单 `issue_id` 一致，并保留 `leader_agent_id`。缺失或不一致
 属于委派契约错误，写失败 QC 报告后结束；不得按 Issue 标题、当前评论或 Agent 名称猜测。
 
-下载全部 `expected_sizes` Prime 成图、原始 manifest 与 `compose_result.json`。集合缺失、重复、revision
-不一致或夹带未声明尺寸时，本 lane 必须失败。使用返回的 attachment ID：
+下载全部 `expected_sizes` Prime 成图，以及这些 asset evidence 共同引用的原始 manifest 与
+`compose_result.json`。集合缺失、重复、revision 不一致、引用不同证据包或夹带未声明尺寸时，本 lane
+必须失败。Prime 成图、manifest 和 `compose_result.json` 必须逐个顺序下载；禁止后台执行、并发下载或
+并发重试。每一次下载都显式使用 2 分钟 HTTP 超时。Windows PowerShell 使用：
 
-```bash
-multica attachment download <attachment-id> --output-dir <inspection-dir>
+```powershell
+$env:MULTICA_HTTP_TIMEOUT='2m'; multica attachment download <attachment-id> --output-dir <inspection-dir>
 ```
 
-不得从其他来源重建 manifest，也不得临时编写 Pillow/OpenCV 校验脚本。先运行本 Skill 的工具：
+Bash 使用等价命令：
+
+```bash
+MULTICA_HTTP_TIMEOUT=2m multica attachment download <attachment-id> --output-dir <inspection-dir>
+```
+
+等待当前命令成功或失败后才能开始下一个附件。单个附件超时时，可按相同顺序重试同一条命令；不得缩短
+超时、删除超时前缀或并发发起多个重试。所有附件成功落盘后才运行批量 QC。
+
+不得从其他来源重建 manifest，也不得临时编写 Pillow/OpenCV 校验脚本。旧包只有在每个 compose item
+都能恢复尺寸、revision、成功状态和有效 `layout_contract` 时才兼容：尺寸可从 `V03-800x1000` 末尾恢复，
+合同可从 compose item 恢复。缺少这些机器证据时停止 QC，要求 Prime 使用同 revision generated 底图重做
+整包；不得调用图像模型。先运行本 Skill 的工具：
 
 ```bash
 python <当前 Skill 目录>/references/qc_batch.py \
@@ -35,7 +49,9 @@ python <当前 Skill 目录>/references/qc_batch.py \
   --hard-region-sheet <qc-hard-region-sheet.png>
 ```
 
-该脚本检查尺寸、命名、Prime 批次结果、QR 独立复解码、满版边缘和九宫格证据。原 Prime 模板可高于交付
+该脚本先校验 manifest/compose 是否能组成同一 variant/revision 的完整包，再检查尺寸、命名、Prime 批次
+结果、QR 独立复解码、满版边缘和九宫格证据。QR 复解码依次尝试全图、2 倍 nearest、QR hard region
+带 padding 裁片和裁片 2 倍 nearest；这一步独立于 Prime 的 `decoded` 结果。原 Prime 模板可高于交付
 分辨率，按目标画布缩放不是失败；`edge_white_ratio_needs_visual_review` 只是人工复核提示，浅色满版
 设计不得仅因边缘颜色判失败。
 
@@ -44,6 +60,13 @@ python <当前 Skill 目录>/references/qc_batch.py \
 文案、金融数值、主题、主体、业务语义、信息层级和图像质量。标准生产使用方形作为横竖版基线；direct
 edit 单尺寸检查与来源的保持，多尺寸只在 `expected_sizes` 内检查同内容族。二者都打开
 `qc-hard-region-sheet.png` 的原尺寸；只有 red-frame `hard_regions` 是空间硬区，顶部/底部切片是软引导。
+
+视觉 QC 以 `copy_snapshot` 为可见文字真值。brief 的 `mechanism_adaptation` 是参考机制到获批内容的验收
+合同，`omitted_unapproved_copy` 明确列出的竞品问题、选项、按钮或标签不得再作为必现文本或阻断项。
+检查结构关系、阅读路径和已批准利益层级是否按 adaptation 保留，不要求生成空选项，也不要求用批准利益
+字段重复冒充竞品选项。若旧 brief 同时要求某段参考文案必须出现又禁止添加该文案，记录
+`brief_copy_contract_conflict`，不得把模型未生成该未批准文字误判为图片质量失败；该冲突应由用户选择
+`replan`，只修订目标变体。
 
 真实 Prime 资产不可读，或实际压住标题、获批金融数字、人脸、按钮、表格、关键卡片或正文时是阻断。
 原始底图中的人物、手臂、模型、装饰或几何位置进入硬区本身不是阻断，不能在未看到合成图前误拦；

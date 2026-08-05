@@ -171,6 +171,7 @@ export interface CreativeResource {
   version: number;
   published_version: number;
   config: Record<string, unknown>;
+  published_config?: Record<string, unknown>;
   created_by: string;
   created_at: string;
   updated_at: string;
@@ -199,6 +200,44 @@ export interface CreativeResourceFileListResponse {
   files: CreativeResourceFile[];
 }
 
+export type CreativeMarketPackComponentKind = "image" | "qr" | "text";
+export type CreativeMarketPackExtractionStatus = "pending" | "running" | "completed" | "failed" | "applied";
+
+export interface CreativeMarketPackComponentCandidate {
+  id: string;
+  label: string;
+  kind: CreativeMarketPackComponentKind;
+  suggested_component_id: string;
+  suggested_role: string;
+  content: string;
+  rect: [number, number, number, number];
+  confidence: number;
+  evidence: string[];
+}
+
+export interface CreativeMarketPackComponentExtraction {
+  id: string;
+  resource_id: string;
+  source_attachment_id: string;
+  source_url: string;
+  source_filename: string;
+  source_width: number;
+  source_height: number;
+  status: CreativeMarketPackExtractionStatus;
+  result: { summary: string; candidates: CreativeMarketPackComponentCandidate[] };
+  error_message: string;
+  task_id: string;
+  agent_id: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CreateCreativeMarketPackComponentExtractionRequest {
+  attachment_id: string;
+  width: number;
+  height: number;
+}
+
 export interface CreateCreativeResourceRequest {
   kind: CreativeResourceKind;
   name: string;
@@ -213,6 +252,107 @@ export interface UpdateCreativeResourceRequest {
 }
 
 export type CreativeCopyStatus = "draft" | "approved" | "disabled";
+
+export type CreativeType = "num" | "repayment_plan";
+
+export type CreativeCopyFragmentRole =
+  | "headline"
+  | "subheadline"
+  | "benefit"
+  | "supporting"
+  | "cta"
+  | "legal";
+
+export interface CreativeCopyFragment {
+  id: string;
+  key: string;
+  name: string;
+  creative_types: CreativeType[];
+  role: CreativeCopyFragmentRole;
+  text: string;
+  tags: string[];
+  status: CreativeCopyStatus;
+}
+
+export interface CreativeCopyRecipe {
+  id: string;
+  key: string;
+  name: string;
+  creative_type: CreativeType;
+  description: string;
+  fragment_ids: Partial<Record<CreativeCopyFragmentRole, string[]>>;
+  match_tags: string[];
+  status: CreativeCopyStatus;
+}
+
+export interface CreativeProductFact {
+  id: string;
+  key: string;
+  label: string;
+  value: string;
+  copy_text: string;
+  source: string;
+  status: CreativeCopyStatus;
+}
+
+export interface CreativeCopyCalculationRule {
+  id: string;
+  key: string;
+  name: string;
+  expression: string;
+  input_fact_keys: string[];
+  output_fact_key: string;
+  source: string;
+  status: CreativeCopyStatus;
+}
+
+export interface CreativeCopyRecommendationPolicy {
+  type_weight: number;
+  tag_weight: number;
+  concise_weight: number;
+  default_creative_type: CreativeType;
+}
+
+export interface CreativeCopyLibraryConfig {
+  schema_version: 2;
+  market: string;
+  locale: string;
+  source: {
+    name: string;
+    url: string;
+    sync_status: "synced" | "pending" | "failed";
+    note: string;
+  };
+  fragments: CreativeCopyFragment[];
+  recipes: CreativeCopyRecipe[];
+  product_facts: CreativeProductFact[];
+  calculation_rules: CreativeCopyCalculationRule[];
+  recommendation_policy: CreativeCopyRecommendationPolicy;
+}
+
+export interface CreativeCopySnapshot {
+  schema_version: 2;
+  id: string;
+  library_id: string;
+  library_version: number;
+  recipe_id: string;
+  recipe_key: string;
+  creative_type: CreativeType;
+  headline: string;
+  subheadline: string;
+  benefit: string;
+  supporting: string;
+  cta: string;
+  legal_text: string;
+  fragments: Array<{ id: string; key: string; role: CreativeCopyFragmentRole; text: string }>;
+  product_facts: Array<{ key: string; label: string; value: string; copy_text: string; source: string }>;
+  recommendation: {
+    score: number;
+    reasons: string[];
+    matched_signals: string[];
+  };
+  status: "approved" | "user_custom";
+}
 
 export interface CreativeCopyEntry {
   id: string;
@@ -383,6 +523,20 @@ export interface CreativeFeedbackEventListResponse {
   events: CreateCreativeFeedbackResponse[];
 }
 
+export interface CreativeFeedbackMetrics {
+  candidate_selected: number;
+  candidate_rejected: number;
+  copy_accepted: number;
+  copy_replaced: number;
+  variant_accepted: number;
+  variant_needs_revision: number;
+  asset_accepted: number;
+  asset_reported: number;
+  qc_accepted: number;
+  qc_missed_issue: number;
+  qc_false_positive: number;
+}
+
 export interface CreativeOrder {
   id: string;
   workspace_id: string;
@@ -414,12 +568,22 @@ export interface CreativeOrderWorkflowFailure {
   retryable: boolean;
 }
 
+export interface CreativeOrderWorkflowRetryResponse { task_id: string; }
+export interface CreativeOrderQCRetryResponse {
+  variant_id: string;
+  revision: number;
+  technical_task_id: string;
+  visual_task_id: string;
+}
+
 export interface CreativeOrderListResponse { orders: CreativeOrder[]; }
 export interface CreateCreativeOrderRequest { issue_id: string; submission_key?: string; status: string; input_snapshot: Record<string, unknown>; trigger_evidence_kind: string; trigger_evidence_ref_id: string; items: { candidate_id: string; source_analysis_id: string; copy_snapshot: Record<string, unknown>; direction: string }[]; }
 export interface CreativeSourceAnalysis { id: string; candidate_id: string; analysis_version: number; status: string; summary: string; result: Record<string, unknown>; error_code: string; error_message: string; trigger_evidence_kind: string; trigger_evidence_ref_id: string; created_at: string; completed_at: string; }
 export interface CreativeSourceAnalysisListResponse { analyses: CreativeSourceAnalysis[]; }
-export interface CreativeOrderItem { id: string; order_id: string; candidate_id: string; source_analysis_id: string; copy_snapshot: Record<string, unknown>; direction: string; status: string; created_at: string; updated_at: string; variants: CreativeOrderVariant[]; }
-export interface CreativeOrderVariant { id: string; order_item_id: string; variant_key: string; brief: Record<string, unknown>; revision: number; status: string; qc_status: string; created_at: string; updated_at: string; assets: CreativeOrderAsset[]; qc_reports: CreativeOrderQCReport[]; }
+export interface CreativeOrderItem { id: string; order_id: string; candidate_id: string; source_analysis_id: string; copy_snapshot: Record<string, unknown>; direction: string; status: string; adopted_variant_id: string; adopted_at: string; adopted_by: string; created_at: string; updated_at: string; variants: CreativeOrderVariant[]; }
+export interface AdoptCreativeOrderVariantRequest { variant_id: string; }
+export interface CreativeOrderVariant { id: string; order_item_id: string; variant_key: string; brief: Record<string, unknown>; revision: number; status: string; qc_status: string; qc_recovery_used: boolean; qc_recovery_available: boolean; prime_repair_used: boolean; prime_repair_available: boolean; created_at: string; updated_at: string; assets: CreativeOrderAsset[]; qc_reports: CreativeOrderQCReport[]; }
+export interface CreativeOrderPrimePackageRepairResponse { task_id: string; }
 export interface CreativeOrderAsset { id: string; variant_id: string; asset_family_id: string; size_key: CreativeDeliverySize | string; revision: number; stage: "generated" | "primed" | "delivered" | string; attachment_id: string; derived_from_asset_id: string; metadata: Record<string, unknown>; evidence: Record<string, unknown>; status: string; created_at: string; updated_at: string; }
 export interface CreativeOrderQCReport { id: string; variant_id: string; lane: "technical" | "visual" | string; revision: number; status: string; findings: Record<string, unknown>; trigger_evidence_kind: string; trigger_evidence_ref_id: string; created_at: string; updated_at: string; }
 export interface CreativeOrderQCFinalizeResponse {
@@ -484,5 +648,20 @@ export interface ImportCreativeMaterialLibraryRequest {
   tags?: string[];
   note?: string;
 }
-export interface CreativeMaterialImportResult { id: string; }
+export type CreativeMaterialImportAnalysisAction =
+  | "queued"
+  | "already_queued"
+  | "already_completed"
+  | "unavailable"
+  | "enqueue_failed"
+  | string;
+export interface CreativeMaterialImportAnalysis {
+  action: CreativeMaterialImportAnalysisAction;
+  status: "pending" | "running" | "completed" | "failed" | string;
+  warning: string;
+  crawl_run_id: string;
+  analysis_agent_id: string;
+  task_id: string;
+}
+export interface CreativeMaterialImportResult { id: string; analysis: CreativeMaterialImportAnalysis; }
 export interface CreativeMaterialArchiveRetryResult { scheduled_count: number; }

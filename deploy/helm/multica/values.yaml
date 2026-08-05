@@ -26,6 +26,8 @@ images:
 #     --from-literal=POSTGRES_PASSWORD="$(openssl rand -hex 16)" \
 #     --from-literal=RESEND_API_KEY="" \
 #     --from-literal=GOOGLE_CLIENT_SECRET="" \
+#     --from-literal=OSS_ACCESS_KEY_ID="" \
+#     --from-literal=OSS_ACCESS_KEY_SECRET="" \
 #     --from-literal=CLOUDFRONT_PRIVATE_KEY="" \
 #     --from-literal=MULTICA_DEV_VERIFICATION_CODE=""
 #
@@ -106,6 +108,10 @@ backend:
     disableWorkspaceCreation: false
     googleClientId: ""
     googleRedirectUri: http://multica.dev.lan/auth/callback
+    ossEndpoint: ""
+    ossRegion: ""
+    ossBucket: ""
+    ossPublicBaseUrl: ""
     s3Bucket: ""
     s3Region: us-west-2
     cloudfrontDomain: ""

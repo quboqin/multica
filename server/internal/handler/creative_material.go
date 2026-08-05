@@ -137,6 +137,8 @@ type creativeMaterialInput struct {
 	AreaNames          []string        `json:"area_names"`
 	LanguageNames      []string        `json:"language_names"`
 	PlatformNames      []string        `json:"platform_names"`
+	Tags               []string        `json:"tags"`
+	Note               string          `json:"note"`
 	Raw                json.RawMessage `json:"raw"`
 }
 
@@ -430,11 +432,11 @@ WITH upsert AS (
     workspace_id, connector_id, external_id, dedupe_key, competitor, title,
     asset_type, preview_url, resource_url, poster_url, original_url,
     duration_days, impression_estimate, media_names, area_names,
-    language_names, platform_names, raw
+    language_names, platform_names, tags, note, raw
   ) VALUES (
     $1, $2, NULLIF($3, ''), $4, $5, $6,
     $7, $8, $9, $10, $11,
-    $12, $13, $14, $15, $16, $17, $18::jsonb
+    $12, $13, $14, $15, $16, $17, $18, $19, $20::jsonb
   )
   ON CONFLICT (workspace_id, connector_id, dedupe_key) DO UPDATE SET
     external_id = COALESCE(EXCLUDED.external_id, creative_material_candidate.external_id),
@@ -451,6 +453,8 @@ WITH upsert AS (
     area_names = CASE WHEN cardinality(EXCLUDED.area_names) > 0 THEN EXCLUDED.area_names ELSE creative_material_candidate.area_names END,
     language_names = CASE WHEN cardinality(EXCLUDED.language_names) > 0 THEN EXCLUDED.language_names ELSE creative_material_candidate.language_names END,
     platform_names = CASE WHEN cardinality(EXCLUDED.platform_names) > 0 THEN EXCLUDED.platform_names ELSE creative_material_candidate.platform_names END,
+    tags = CASE WHEN cardinality(EXCLUDED.tags) > 0 THEN EXCLUDED.tags ELSE creative_material_candidate.tags END,
+    note = COALESCE(NULLIF(EXCLUDED.note, ''), creative_material_candidate.note),
     raw = CASE WHEN EXCLUDED.raw <> '{}'::jsonb THEN EXCLUDED.raw ELSE creative_material_candidate.raw END,
     archive_status = CASE
       WHEN creative_material_candidate.archived_url = '' THEN 'pending'
@@ -476,7 +480,7 @@ SELECT id::text, inserted FROM upsert
 `, in.WorkspaceID, connectorID, material.ExternalID, dedupeKey, material.Competitor, material.Title,
 				material.AssetType, material.PreviewURL, material.ResourceURL, material.PosterURL, material.OriginalURL,
 				material.DurationDays, material.ImpressionEstimate, material.MediaNames, material.AreaNames,
-				material.LanguageNames, material.PlatformNames, raw).Scan(&candidateID, &inserted)
+				material.LanguageNames, material.PlatformNames, material.Tags, material.Note, raw).Scan(&candidateID, &inserted)
 			if err != nil {
 				return creativeImportSummary{}, err
 			}
@@ -666,6 +670,7 @@ ORDER BY
 		if selectedAt != "" {
 			item.SelectedAt = &selectedAt
 		}
+		item.ArchivedURL = h.creativeMaterialArchiveResponseURL(item.ID, item.ArchivedURL)
 		out = append(out, item)
 	}
 	return out, rows.Err()
@@ -698,6 +703,14 @@ WITH crawl_candidate_analysis AS (
   SELECT rc.run_id, rc.candidate_id, rc.workspace_id,
          CASE
            WHEN rc.analysis_status = 'completed' THEN rc.analysis_status
+           WHEN EXISTS(
+             SELECT 1
+             FROM agent_task_queue task
+             WHERE task.trigger_evidence_kind = 'creative_crawl_run_analysis'
+               AND task.trigger_evidence_ref_id = rc.run_id
+               AND task.status = 'running'
+               AND task.context->>'candidate_id' = rc.candidate_id::text
+           ) THEN 'running'
            WHEN EXISTS(
              SELECT 1
              FROM agent_task_queue task
@@ -814,6 +827,8 @@ func normalizeCreativeMaterialInput(in creativeMaterialInput) creativeMaterialIn
 	in.AreaNames = uniqueNonEmptyStrings(in.AreaNames)
 	in.LanguageNames = uniqueNonEmptyStrings(in.LanguageNames)
 	in.PlatformNames = uniqueNonEmptyStrings(in.PlatformNames)
+	in.Tags = uniqueNonEmptyStrings(in.Tags)
+	in.Note = strings.TrimSpace(in.Note)
 	return in
 }
 
@@ -1077,25 +1092,36 @@ func creativeMaterialInputFromAny(value any) (creativeMaterialInput, bool) {
 }
 
 func creativeMaterialInputFromMap(obj map[string]any) (creativeMaterialInput, bool) {
-	duration := optionalFloatFromAny(firstAnyAtKeys(obj, "duration_days", "duration"))
-	impression := optionalInt64FromAny(firstAnyAtKeys(obj, "impression_estimate", "impression", "impressions"))
+	duration := firstOptionalFloatAtKeys(obj,
+		"duration_days", "durationDays", "duration", "delivery_days", "deliveryDays",
+		"put_days", "putDays", "running_days", "runningDays", "online_days", "onlineDays",
+		"days_count", "daysCount",
+	)
+	impression := firstOptionalInt64AtKeys(obj,
+		"impression_estimate", "impressionEstimate", "impression_inc_2y", "impressionInc2y",
+		"impression", "impressions", "impression_count", "impressionCount", "impression_num",
+		"impressionNum", "show_count", "showCount", "exposure", "exposure_count", "exposureCount",
+		"estimated_impression", "estimatedImpression", "estimated_exposure", "estimatedExposure",
+	)
 	raw, _ := json.Marshal(obj)
 	input := creativeMaterialInput{
-		ExternalID:         stringFromAny(firstAnyAtKeys(obj, "material_id", "external_id", "id", "creative_id")),
-		DedupeKey:          stringFromAny(firstAnyAtKeys(obj, "dedupe_key")),
-		Competitor:         stringFromAny(firstAnyAtKeys(obj, "competitor", "brand", "app_name")),
-		Title:              stringFromAny(firstAnyAtKeys(obj, "title", "name", "description")),
-		AssetType:          normalizeCreativeAssetType(stringFromAny(firstAnyAtKeys(obj, "asset_type", "type"))),
-		PreviewURL:         stringFromAny(firstAnyAtKeys(obj, "preview_url", "preview", "image_url", "cover_url")),
-		ResourceURL:        stringFromAny(firstAnyAtKeys(obj, "resource_url", "url", "video_url", "image_url")),
-		PosterURL:          stringFromAny(firstAnyAtKeys(obj, "poster_url", "poster", "cover_url")),
-		OriginalURL:        stringFromAny(firstAnyAtKeys(obj, "original_url", "landing_url")),
+		ExternalID:         firstStringAtKeys(obj, "material_id", "materialId", "external_id", "externalId", "id", "creative_id", "creativeId", "ad_id", "adId"),
+		DedupeKey:          firstStringAtKeys(obj, "dedupe_key", "dedupeKey"),
+		Competitor:         firstStringAtKeys(obj, "competitor", "brand", "app_name", "appName", "brand_name", "brandName"),
+		Title:              firstStringAtKeys(obj, "title", "name", "description", "slogan"),
+		AssetType:          normalizeCreativeAssetType(firstStringAtKeys(obj, "asset_type", "assetType", "type")),
+		PreviewURL:         firstStringAtKeys(obj, "preview_url", "previewUrl", "preview", "image_url", "imageUrl", "cover_url", "coverUrl"),
+		ResourceURL:        firstStringAtKeys(obj, "resource_url", "resourceUrl", "url", "video_url", "videoUrl", "image_url", "imageUrl"),
+		PosterURL:          firstStringAtKeys(obj, "poster_url", "posterUrl", "poster", "cover_url", "coverUrl"),
+		OriginalURL:        firstStringAtKeys(obj, "original_url", "originalUrl", "landing_url", "landingUrl", "redirect_url", "redirectUrl", "target_url", "targetUrl"),
 		DurationDays:       duration,
 		ImpressionEstimate: impression,
-		MediaNames:         stringSliceFromAny(firstAnyAtKeys(obj, "media_names", "media")),
-		AreaNames:          stringSliceFromAny(firstAnyAtKeys(obj, "area_names", "areas")),
-		LanguageNames:      stringSliceFromAny(firstAnyAtKeys(obj, "language_names", "languages")),
-		PlatformNames:      stringSliceFromAny(firstAnyAtKeys(obj, "platform_names", "platforms")),
+		MediaNames:         firstStringSliceAtKeys(obj, "media_names", "mediaNames", "media", "media_ids", "mediaIds"),
+		AreaNames:          firstStringSliceAtKeys(obj, "area_names", "areaNames", "areas", "area", "area_codes", "areaCodes"),
+		LanguageNames:      firstStringSliceAtKeys(obj, "language_names", "languageNames", "languages", "language", "language_codes", "languageCodes"),
+		PlatformNames:      firstStringSliceAtKeys(obj, "platform_names", "platformNames", "platforms", "platform", "platform_ids", "platformIds"),
+		Tags:               firstStringSliceAtKeys(obj, "tags", "tag_names", "tagNames", "labels"),
+		Note:               firstStringAtKeys(obj, "note", "notes", "remark", "remarks"),
 		Raw:                json.RawMessage(raw),
 	}
 	input = normalizeCreativeMaterialInput(input)
@@ -1108,10 +1134,45 @@ func creativeMaterialInputFromMap(obj map[string]any) (creativeMaterialInput, bo
 	return input, true
 }
 
-func firstAnyAtKeys(obj map[string]any, keys ...string) any {
+func firstStringAtKeys(obj map[string]any, keys ...string) string {
 	for _, key := range keys {
 		if value, ok := obj[key]; ok {
-			return value
+			if text := stringFromAny(value); text != "" {
+				return text
+			}
+		}
+	}
+	return ""
+}
+
+func firstStringSliceAtKeys(obj map[string]any, keys ...string) []string {
+	for _, key := range keys {
+		if value, ok := obj[key]; ok {
+			if values := stringSliceFromAny(value); len(values) > 0 {
+				return values
+			}
+		}
+	}
+	return nil
+}
+
+func firstOptionalFloatAtKeys(obj map[string]any, keys ...string) *float64 {
+	for _, key := range keys {
+		if value, ok := obj[key]; ok {
+			if parsed := optionalFloatFromAny(value); parsed != nil {
+				return parsed
+			}
+		}
+	}
+	return nil
+}
+
+func firstOptionalInt64AtKeys(obj map[string]any, keys ...string) *int64 {
+	for _, key := range keys {
+		if value, ok := obj[key]; ok {
+			if parsed := optionalInt64FromAny(value); parsed != nil {
+				return parsed
+			}
 		}
 	}
 	return nil
@@ -1143,7 +1204,7 @@ func stringSliceFromAny(value any) []string {
 			if text := stringFromAny(item); text != "" {
 				out = append(out, text)
 			} else if obj, ok := item.(map[string]any); ok {
-				if name := stringFromAny(firstAnyAtKeys(obj, "name", "label", "title")); name != "" {
+				if name := firstStringAtKeys(obj, "name", "label", "title", "code", "id"); name != "" {
 					out = append(out, name)
 				}
 			}

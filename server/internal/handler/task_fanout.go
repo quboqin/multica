@@ -45,6 +45,10 @@ func (h *Handler) FanoutAgentTasks(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "trigger_evidence_kind is required")
 		return
 	}
+	if strings.HasPrefix(evidenceKind, "creative_") && !knownCreativeTaskEvidenceKind(evidenceKind) {
+		writeError(w, http.StatusBadRequest, "unsupported creative trigger_evidence_kind")
+		return
+	}
 	if err := validateCreativeTaskFanoutContext(evidenceKind, evidenceRefID, req.Items); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
@@ -102,6 +106,30 @@ func creativeTaskRequiredCapability(kind string) string {
 	}
 }
 
+// knownCreativeTaskEvidenceKind is intentionally limited to evidence kinds
+// that direct fanout can resolve and scope to a workspace.
+func knownCreativeTaskEvidenceKind(kind string) bool {
+	switch kind {
+	case "creative_candidate",
+		"creative_crawl_run",
+		"creative_crawl_run_analysis",
+		"creative_source_analysis",
+		"creative_order",
+		"creative_order_item",
+		"creative_order_item_plan",
+		"creative_order_item_production",
+		"creative_order_item_direct_edit",
+		"creative_variant",
+		"creative_order_variant_prime",
+		"creative_order_variant_qc",
+		"creative_asset",
+		"creative_qc_report":
+		return true
+	default:
+		return false
+	}
+}
+
 func (h *Handler) agentHasCreativeCapability(r *http.Request, agentID, workspaceID pgtype.UUID, capability string) (bool, error) {
 	var exists bool
 	err := h.DB.QueryRow(r.Context(), `
@@ -150,6 +178,9 @@ func validateCreativeTaskFanoutContext(kind string, evidenceRefID pgtype.UUID, i
 			if workflow != "creative_qc_technical" && workflow != "creative_qc_visual" {
 				return errors.New("creative QC task context has invalid workflow")
 			}
+			if err := validateCreativeQCTaskContext(context, item.ItemKey, expectedRef, workflow); err != nil {
+				return err
+			}
 		} else if workflow != expectedWorkflow {
 			return fmt.Errorf("creative task context workflow must be %s", expectedWorkflow)
 		}
@@ -164,6 +195,39 @@ func validateCreativeTaskFanoutContext(kind string, evidenceRefID pgtype.UUID, i
 				}
 			}
 		}
+	}
+	return nil
+}
+
+func validateCreativeQCTaskContext(context map[string]any, itemKey, variantID, workflow string) error {
+	itemID, _ := context["creative_order_item_id"].(string)
+	if _, err := uuid.Parse(strings.TrimSpace(itemID)); err != nil {
+		return errors.New("creative QC task context creative_order_item_id must be a UUID")
+	}
+	revision, ok := context["revision"].(float64)
+	if !ok || revision < 1 || revision != float64(int(revision)) {
+		return errors.New("creative QC task context revision must be a positive integer")
+	}
+	expectedSizes, ok := context["expected_sizes"].([]any)
+	if !ok || len(expectedSizes) == 0 {
+		return errors.New("creative QC task context expected_sizes must be a non-empty array")
+	}
+	seen := make(map[string]struct{}, len(expectedSizes))
+	for _, rawSize := range expectedSizes {
+		size, ok := rawSize.(string)
+		size = strings.TrimSpace(size)
+		if !ok || size == "" {
+			return errors.New("creative QC task context expected_sizes must contain non-empty strings")
+		}
+		if _, duplicate := seen[size]; duplicate {
+			return errors.New("creative QC task context expected_sizes must not contain duplicates")
+		}
+		seen[size] = struct{}{}
+	}
+	lane := strings.TrimPrefix(workflow, "creative_qc_")
+	wantItemKey := fmt.Sprintf("%s:%s:r%d", variantID, lane, int(revision))
+	if itemKey != wantItemKey {
+		return fmt.Errorf("creative QC task item_key must be %s", wantItemKey)
 	}
 	return nil
 }

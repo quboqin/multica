@@ -9,6 +9,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
 type creativeFeedbackEventInput struct {
@@ -55,6 +56,13 @@ type creativeFeedbackMetricsResponse struct {
 	QCAccepted        int `json:"qc_accepted"`
 	QCMissedIssue     int `json:"qc_missed_issue"`
 	QCFalsePositive   int `json:"qc_false_positive"`
+}
+
+type creativeFeedbackActivity struct {
+	ID        string
+	Action    string
+	Details   json.RawMessage
+	CreatedAt string
 }
 
 var creativeFeedbackReasonCodes = map[string]map[string]struct{}{
@@ -158,6 +166,11 @@ RETURNING id::text, idempotency_key, workspace_id::text, COALESCE(issue_id::text
 		writeError(w, http.StatusUnprocessableEntity, err.Error())
 		return
 	}
+	activity, err := insertCreativeFeedbackActivity(r, tx, workspaceID, issueID, actorType, actorUUID, input)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to record creative feedback activity")
+		return
+	}
 	if err := tx.Commit(r.Context()); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to create feedback event")
 		return
@@ -165,6 +178,7 @@ RETURNING id::text, idempotency_key, workspace_id::text, COALESCE(issue_id::text
 	h.publishCreativeDomainUpdated(r, workspaceID, userID, map[string]any{
 		"scope": "feedback", "subject_type": input.SubjectType, "subject_id": input.SubjectID,
 	})
+	h.publishCreativeFeedbackActivity(workspaceID, issueID, actorType, actorID, activity)
 	writeJSON(w, http.StatusCreated, response)
 }
 
@@ -234,6 +248,11 @@ RETURNING id::text, idempotency_key, workspace_id::text, COALESCE(issue_id::text
 		writeError(w, http.StatusUnprocessableEntity, err.Error())
 		return
 	}
+	activity, err := insertCreativeFeedbackUndoActivity(r, tx, workspaceID, actorType, actorUUID, original)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to record creative feedback undo activity")
+		return
+	}
 	if err := tx.Commit(r.Context()); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to undo feedback event")
 		return
@@ -241,7 +260,134 @@ RETURNING id::text, idempotency_key, workspace_id::text, COALESCE(issue_id::text
 	h.publishCreativeDomainUpdated(r, workspaceID, userID, map[string]any{
 		"scope": "feedback", "subject_type": original.SubjectType, "subject_id": original.SubjectID,
 	})
+	if original.IssueID != "" {
+		h.publishCreativeFeedbackActivity(workspaceID, parseUUID(original.IssueID), actorType, actorID, activity)
+	}
 	writeJSON(w, http.StatusCreated, response)
+}
+
+func insertCreativeFeedbackActivity(
+	r *http.Request,
+	tx pgx.Tx,
+	workspaceID, issueID pgtype.UUID,
+	actorType string,
+	actorID pgtype.UUID,
+	input creativeFeedbackEventInput,
+) (*creativeFeedbackActivity, error) {
+	if !issueID.Valid || !shouldProjectCreativeFeedback(input.SubjectType, input.EventType, input.Decision) {
+		return nil, nil
+	}
+	details, err := creativeFeedbackActivityDetails(
+		input.SubjectType,
+		input.EventType,
+		input.Decision,
+		input.ReasonCodes,
+		input.Comment,
+		input.ContextSnapshot,
+	)
+	if err != nil {
+		return nil, err
+	}
+	activity := &creativeFeedbackActivity{Action: "creative_feedback_recorded", Details: details}
+	var createdAt pgtype.Timestamptz
+	err = tx.QueryRow(r.Context(), `
+INSERT INTO activity_log (workspace_id, issue_id, actor_type, actor_id, action, details)
+VALUES ($1, $2, $3, $4, $5, $6::jsonb)
+RETURNING id::text, created_at
+`, workspaceID, issueID, actorType, actorID, activity.Action, details).Scan(&activity.ID, &createdAt)
+	if err != nil {
+		return nil, err
+	}
+	activity.CreatedAt = timestampToString(createdAt)
+	return activity, nil
+}
+
+func insertCreativeFeedbackUndoActivity(
+	r *http.Request,
+	tx pgx.Tx,
+	workspaceID pgtype.UUID,
+	actorType string,
+	actorID pgtype.UUID,
+	original creativeFeedbackEventResponse,
+) (*creativeFeedbackActivity, error) {
+	if original.IssueID == "" || !shouldProjectCreativeFeedback(original.SubjectType, original.EventType, original.Decision) {
+		return nil, nil
+	}
+	details, err := creativeFeedbackActivityDetails(
+		original.SubjectType,
+		original.EventType,
+		original.Decision,
+		original.ReasonCodes,
+		original.Comment,
+		original.ContextSnapshot,
+	)
+	if err != nil {
+		return nil, err
+	}
+	activity := &creativeFeedbackActivity{Action: "creative_feedback_undone", Details: details}
+	var createdAt pgtype.Timestamptz
+	err = tx.QueryRow(r.Context(), `
+INSERT INTO activity_log (workspace_id, issue_id, actor_type, actor_id, action, details)
+VALUES ($1, $2::uuid, $3, $4, $5, $6::jsonb)
+RETURNING id::text, created_at
+`, workspaceID, original.IssueID, actorType, actorID, activity.Action, details).Scan(&activity.ID, &createdAt)
+	if err != nil {
+		return nil, err
+	}
+	activity.CreatedAt = timestampToString(createdAt)
+	return activity, nil
+}
+
+func shouldProjectCreativeFeedback(subjectType, eventType, decision string) bool {
+	switch subjectType {
+	case "candidate":
+		return eventType == "decision" && (decision == "selected" || decision == "rejected")
+	case "recommended_copy":
+		return (eventType == "decision" || eventType == "replacement") && (decision == "accepted" || decision == "replaced")
+	default:
+		return false
+	}
+}
+
+func creativeFeedbackActivityDetails(
+	subjectType, eventType, decision string,
+	reasonCodes []string,
+	comment string,
+	contextSnapshot json.RawMessage,
+) (json.RawMessage, error) {
+	if reasonCodes == nil {
+		reasonCodes = []string{}
+	}
+	return json.Marshal(map[string]any{
+		"subject_type":     subjectType,
+		"event_type":       eventType,
+		"decision":         decision,
+		"reason_codes":     reasonCodes,
+		"comment":          comment,
+		"context_snapshot": contextSnapshot,
+	})
+}
+
+func (h *Handler) publishCreativeFeedbackActivity(
+	workspaceID, issueID pgtype.UUID,
+	actorType, actorID string,
+	activity *creativeFeedbackActivity,
+) {
+	if activity == nil {
+		return
+	}
+	h.publish(protocol.EventActivityCreated, uuidToString(workspaceID), actorType, actorID, map[string]any{
+		"issue_id": uuidToString(issueID),
+		"entry": map[string]any{
+			"type":       "activity",
+			"id":         activity.ID,
+			"actor_type": actorType,
+			"actor_id":   actorID,
+			"action":     activity.Action,
+			"details":    activity.Details,
+			"created_at": activity.CreatedAt,
+		},
+	})
 }
 
 func (h *Handler) ListCreativeFeedbackEvents(w http.ResponseWriter, r *http.Request) {
@@ -307,8 +453,14 @@ SELECT
   count(*) FILTER (WHERE subject_type = 'qc' AND decision = 'accepted'),
   count(*) FILTER (WHERE subject_type = 'qc' AND reason_codes @> ARRAY['missed_issue']::text[]),
   count(*) FILTER (WHERE subject_type = 'qc' AND reason_codes @> ARRAY['false_positive']::text[])
-FROM creative_feedback_event
-WHERE workspace_id = $1 AND event_type <> 'undo'
+FROM creative_feedback_event feedback
+WHERE feedback.workspace_id = $1
+  AND feedback.event_type <> 'undo'
+  AND NOT EXISTS (
+    SELECT 1
+    FROM creative_feedback_event undo
+    WHERE undo.undo_of_id = feedback.id
+  )
 `, workspaceID).Scan(
 		&metrics.CandidateSelected, &metrics.CandidateRejected, &metrics.CopyAccepted, &metrics.CopyReplaced,
 		&metrics.VariantAccepted, &metrics.VariantRevision, &metrics.AssetAccepted, &metrics.AssetReported,
@@ -463,7 +615,17 @@ func (h *Handler) creativeFeedbackSubjectExists(r *http.Request, workspaceID, is
 	case "candidate":
 		query = `SELECT EXISTS(SELECT 1 FROM creative_material_candidate WHERE id = $1 AND workspace_id = $2)`
 	case "recommended_copy":
-		query = `SELECT EXISTS(SELECT 1 FROM creative_copy_entry WHERE id = $1 AND workspace_id = $2)`
+		query = `SELECT
+  EXISTS(SELECT 1 FROM creative_copy_entry WHERE id = $1 AND workspace_id = $2)
+  OR EXISTS(
+    SELECT 1
+    FROM creative_resource resource
+    JOIN creative_resource_revision revision
+      ON revision.resource_id = resource.id AND revision.version = resource.published_version
+    WHERE resource.workspace_id = $2
+      AND resource.kind = 'copy_library'
+      AND revision.config->'recipes' @> jsonb_build_array(jsonb_build_object('id', $1::text))
+  )`
 	case "variant":
 		query = `SELECT EXISTS(SELECT 1 FROM creative_order_variant v JOIN creative_order_item i ON i.id = v.order_item_id JOIN creative_order o ON o.id = i.order_id WHERE v.id = $1 AND o.workspace_id = $2)`
 	case "asset":

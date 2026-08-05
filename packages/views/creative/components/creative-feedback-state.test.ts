@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { CreativeOrder, CreativeOrderAsset, CreativeOrderVariant, CreativeSourceAnalysis } from "@multica/core/types";
+import type { CreateCreativeFeedbackResponse, CreativeOrder, CreativeOrderAsset, CreativeOrderItem, CreativeOrderVariant, CreativeSourceAnalysis } from "@multica/core/types";
 import {
   canCreateDirectEdit,
   candidateDecisionFeedbackInput,
@@ -14,7 +14,9 @@ import {
   recommendedCopyDecisionFeedbackInput,
   recoveryForSubmissionKey,
 } from "./creative-material-library";
-import { creativeOrderAcceptanceStatus, creativeStudioPath, creativeVariantAcceptanceReadiness, latestVariantFeedback, selectCreativeReviewAssets } from "./creative-studio-page";
+import { creativeVariantAdoptionReadiness } from "./creative-order-delivery";
+import { creativeAdjustmentComment, creativeOrderAdoptionStatus, creativeStudioPath, selectCreativeReviewAssets } from "./creative-studio-page";
+import { creativeAdjustmentProgress, creativeAdjustmentTarget, creativeAdjustmentTimeline, latestOrderAdjustmentFeedback } from "../lib/creative-adjustment-progress";
 
 function readyVariant(id: string): CreativeOrderVariant {
   const sizes = ["1080x1080", "1200x628", "800x1000"];
@@ -28,12 +30,81 @@ function readyVariant(id: string): CreativeOrderVariant {
     ]),
     qc_reports: [
       { id: `${id}-technical`, variant_id: id, lane: "technical", revision: 2, status: "passed" },
-      { id: `${id}-visual`, variant_id: id, lane: "visual", revision: 2, status: "warning" },
+      { id: `${id}-visual`, variant_id: id, lane: "visual", revision: 2, status: "passed" },
     ],
   } as CreativeOrderVariant;
 }
 
 describe("creative feedback state", () => {
+  it("includes unambiguous domain identifiers in an adjustment comment", () => {
+    const comment = creativeAdjustmentComment({
+      request: "只重做这个变体",
+      orderId: "order-1",
+      itemId: "item-2",
+      variantId: "variant-3",
+      variantKey: "V01",
+      assetId: "asset-4",
+      attachmentId: "019fb932-3b59-77ab-841a-c57598f81097",
+      sizeKey: "1080x1080",
+      revision: 1,
+    });
+
+    expect(comment).toContain("creative_order_id: order-1");
+    expect(comment).toContain("creative_order_item_id: item-2");
+    expect(comment).toContain("variant_id: variant-3");
+    expect(comment).toContain("asset_id: asset-4");
+    expect(comment).toContain("**目标成图：** 订单 `order-1` · `V01` · 方形 `1080x1080` · `r1` · 成图 `asset-4`");
+    expect(comment).toContain("![目标成图：V01 方形 r1](/api/attachments/019fb932-3b59-77ab-841a-c57598f81097/download)");
+    expect(comment).toContain("<!-- creative-workflow-context");
+    expect(comment).toMatch(/^用户提出成图调整：/);
+  });
+
+  it("keeps the latest order adjustment visible and derives its progress from the variant revision", () => {
+    const older = { id: "f1", decision: "needs_revision", created_at: "2026-08-05T10:00:00Z", context_snapshot: { order_id: "order-1", revision: 1 } };
+    const latest = { id: "f2", decision: "needs_revision", created_at: "2026-08-05T10:01:00Z", context_snapshot: { order_id: "order-1", revision: 1 } };
+    const ignored = { id: "f3", decision: "needs_revision", created_at: "2026-08-05T10:02:00Z", context_snapshot: { order_id: "order-2", revision: 1 } };
+
+    expect(latestOrderAdjustmentFeedback([older, ignored, latest] as never, "order-1")?.id).toBe("f2");
+    expect(creativeAdjustmentProgress({ revision: 1, status: "action_required" } as CreativeOrderVariant, latest as never)).toBe("已提交，等待素材小队处理");
+    expect(creativeAdjustmentProgress({ revision: 2, status: "partial" } as CreativeOrderVariant, latest as never)).toBe("素材小队处理中 · r2");
+    expect(creativeAdjustmentProgress({ revision: 2, status: "completed" } as CreativeOrderVariant, latest as never)).toBe("调整已完成 · r2");
+  });
+
+  it("follows a replacement variant record to the latest revision of the same item and variant key", () => {
+    const event = { context_snapshot: { variant_id: "v01-r1", revision: 1 } } as unknown as CreateCreativeFeedbackResponse;
+    const items = [{
+      id: "item-1",
+      variants: [
+        { id: "v01-r1", variant_key: "V01", revision: 1, status: "completed" },
+        { id: "v01-r2", variant_key: "V01", revision: 2, status: "completed" },
+        { id: "v02-r1", variant_key: "V02", revision: 1, status: "completed" },
+      ],
+    }] as CreativeOrderItem[];
+
+    expect(creativeAdjustmentTarget(items, event)?.variant.id).toBe("v01-r2");
+  });
+
+  it("derives the user-facing adjustment steps from order assets and QC", () => {
+    const event = { context_snapshot: { revision: 1 } } as never;
+    const variant = {
+      revision: 2,
+      status: "partial",
+      assets: ["1080x1080", "1200x628", "800x1000"].flatMap((size) => [
+        { revision: 2, stage: "generated", status: "completed", size_key: size },
+        { revision: 2, stage: "primed", status: "completed", size_key: size },
+      ]),
+      qc_reports: [{ revision: 2, lane: "technical", status: "passed" }],
+    } as CreativeOrderVariant;
+    expect(creativeAdjustmentTimeline(variant, event).map((step) => [step.key, step.status])).toEqual([
+      ["submitted", "done"],
+      ["planned", "done"],
+      ["generated", "done"],
+      ["primed", "done"],
+      ["qc", "current"],
+      ["completed", "pending"],
+    ]);
+  });
+
   it("uses the newest non-undone candidate decision", () => {
     const decisions = latestCandidateFeedback([
       { id: "selected", subject_id: "candidate-1", event_type: "decision", decision: "selected", undo_of_id: "", created_at: "2026-08-04T10:00:00Z" },
@@ -66,42 +137,44 @@ describe("creative feedback state", () => {
       .toEqual({ ready: false, status: "running", error: "", version: 0 });
   });
 
-  it("marks an order accepted only after every variant has an accepted decision", () => {
+  it("marks an order adopted only after every item has one persisted variant selection", () => {
     const order = {
       id: "order-1",
-      items: [{ variants: [readyVariant("variant-1"), readyVariant("variant-2")] }],
+      items: [
+        { adopted_variant_id: "variant-1", variants: [readyVariant("variant-1"), readyVariant("variant-2")] },
+        { adopted_variant_id: "", variants: [readyVariant("variant-3"), readyVariant("variant-4")] },
+      ],
     } as unknown as CreativeOrder;
-    const decisions = latestVariantFeedback([
-      { id: "accept-1", subject_id: "variant-1", event_type: "decision", decision: "accepted", undo_of_id: "", created_at: "2026-08-04T10:00:00Z" },
-      { id: "abandon-2", subject_id: "variant-2", event_type: "decision", decision: "abandoned", undo_of_id: "", created_at: "2026-08-04T10:01:00Z" },
-    ]);
 
-    expect(creativeOrderAcceptanceStatus(order, decisions)).toBe("待验收");
-    decisions.set("variant-2", "accepted");
-    expect(creativeOrderAcceptanceStatus(order, decisions)).toBe("已验收");
+    expect(creativeOrderAdoptionStatus(order)).toBe("待选择");
+    order.items[1]!.adopted_variant_id = "variant-4";
+    expect(creativeOrderAdoptionStatus(order)).toBe("已采用");
   });
 
   it("only allows acceptance after all three Prime and delivered sizes pass both QC lanes", () => {
     const ready = readyVariant("variant-ready");
-    expect(creativeVariantAcceptanceReadiness(ready)).toEqual({
+    expect(creativeVariantAdoptionReadiness(ready)).toEqual({
       ready: true,
-      status: "三尺寸、Prime 与双路 QC 均已完成，可以验收",
+      status: "三尺寸、Prime 与双路 QC 均已完成，可以采用",
     });
 
     const missingPrime = { ...ready, assets: ready.assets.filter((asset) => !(asset.stage === "primed" && asset.size_key === "800x1000")) };
-    expect(creativeVariantAcceptanceReadiness(missingPrime)).toEqual({ ready: false, status: "等待 Prime：已完成 2/3 个尺寸" });
+    expect(creativeVariantAdoptionReadiness(missingPrime)).toEqual({ ready: false, status: "等待 Prime：已完成 2/3 个尺寸" });
 
     const failedQC = { ...ready, qc_reports: ready.qc_reports.map((report) => report.lane === "visual" ? { ...report, status: "failed" } : report) };
-    expect(creativeVariantAcceptanceReadiness(failedQC)).toEqual({ ready: false, status: "QC 未通过：technical 通过，visual 失败" });
+    expect(creativeVariantAdoptionReadiness(failedQC)).toEqual({ ready: false, status: "QC 未通过：technical 通过，visual 失败" });
+
+    const warnedQC = { ...ready, qc_reports: ready.qc_reports.map((report) => report.lane === "visual" ? { ...report, status: "warning" } : report) };
+    expect(creativeVariantAdoptionReadiness(warnedQC)).toEqual({ ready: true, status: "三尺寸、Prime 与双路 QC 均已完成，可以采用" });
 
     const missingDelivery = { ...ready, assets: ready.assets.filter((asset) => !(asset.stage === "delivered" && asset.size_key === "1200x628")) };
-    expect(creativeVariantAcceptanceReadiness(missingDelivery)).toEqual({ ready: false, status: "等待正式交付：已完成 2/3 个尺寸" });
+    expect(creativeVariantAdoptionReadiness(missingDelivery)).toEqual({ ready: false, status: "等待正式交付：已完成 2/3 个尺寸" });
   });
 
   it("keeps the selected order in the creative studio URL and preserves unrelated query state", () => {
     expect(creativeStudioPath("/acme/creative", new URLSearchParams("source=inbox&tab=copy"), "orders", "order-1"))
       .toBe("/acme/creative?source=inbox&tab=orders&order=order-1");
-    expect(creativeStudioPath("/acme/creative", new URLSearchParams("tab=orders&order=order-1"), "discovery"))
+    expect(creativeStudioPath("/acme/creative", new URLSearchParams("tab=orders&order=order-1"), "home"))
       .toBe("/acme/creative");
   });
 

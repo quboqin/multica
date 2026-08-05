@@ -138,9 +138,15 @@ import type {
 	CreateCreativeFeedbackRequest,
 	CreateCreativeFeedbackResponse,
 	CreativeFeedbackEventListResponse,
+	CreativeFeedbackMetrics,
 	CreativeOrderListResponse,
 	CreativeOrder,
+	CreativeOrderWorkflowRetryResponse,
+	CreativeOrderQCRetryResponse,
+	CreativeOrderPrimePackageRepairResponse,
+	CreativeOrderItem,
 	CreativeOrderQCFinalizeResponse,
+	AdoptCreativeOrderVariantRequest,
 	CreateCreativeOrderRequest,
 	CreateCreativeDirectEditRequest,
 	CreativeDirectEditResponse,
@@ -160,9 +166,13 @@ import type {
   CreativeResourceFileListResponse,
   CreativeResourceKind,
   CreativeResourceListResponse,
+  CreativeMarketPackComponentExtraction,
+  CreateCreativeMarketPackComponentExtractionRequest,
   CreateCreativeResourceRequest,
   ImportCreativeCopyEntriesRequest,
   CredentialCrawlResult,
+  CredentialProfile,
+  AddCredentialProfileManagerRequest,
   ImportCreativeMaterialsRequest,
   ImportCreativeMaterialLibraryRequest,
   ListCredentialConnectorsResponse,
@@ -270,6 +280,7 @@ import {
   EMPTY_CREATIVE_RESOURCE_FILE,
   EMPTY_CREATIVE_RESOURCE_FILE_LIST,
   EMPTY_CREATIVE_RESOURCE_LIST,
+  EMPTY_CREATIVE_MARKET_PACK_COMPONENT_EXTRACTION,
   EMPTY_CREDENTIAL_CRAWL_RESULT,
   EMPTY_LIST_CREDENTIAL_CONNECTORS_RESPONSE,
   EMPTY_LIST_CREDENTIAL_PROFILES_RESPONSE,
@@ -289,8 +300,15 @@ import {
 	EMPTY_CREATIVE_FEEDBACK_RESPONSE,
 	CreativeFeedbackEventListResponseSchema,
 	EMPTY_CREATIVE_FEEDBACK_EVENT_LIST_RESPONSE,
+	CreativeFeedbackMetricsSchema,
+	EMPTY_CREATIVE_FEEDBACK_METRICS,
 	CreativeOrderListResponseSchema,
 	CreativeOrderSchema,
+	CreativeOrderWorkflowRetryResponseSchema,
+	CreativeOrderQCRetryResponseSchema,
+	CreativeOrderPrimePackageRepairResponseSchema,
+	CreativeOrderItemSchema,
+	EMPTY_CREATIVE_ORDER_ITEM,
 	CreativeOrderQCFinalizeResponseSchema,
 	CreativeDirectEditResponseSchema,
 	EMPTY_CREATIVE_DIRECT_EDIT_RESPONSE,
@@ -306,6 +324,7 @@ import {
   CreativeResourceFileListSchema,
   CreativeResourceFileSchema,
   CreativeResourceSchema,
+  CreativeMarketPackComponentExtractionSchema,
   CredentialCrawlResultSchema,
   CredentialProfileSchema,
   ListCredentialConnectorsResponseSchema,
@@ -2584,6 +2603,36 @@ export class ApiClient {
     );
   }
 
+  async addCredentialProfileManager(
+    profileId: string,
+    data: AddCredentialProfileManagerRequest,
+  ): Promise<CredentialProfile> {
+    const raw = await this.fetch<unknown>(`/api/credential-profiles/${profileId}/managers`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+    return parseWithFallback(raw, CredentialProfileSchema, {
+      id: profileId,
+      connector_id: "",
+      label: "",
+      status: "pending",
+      scope: "workspace",
+      can_manage: false,
+      managers: [],
+      created_at: "",
+      updated_at: "",
+    }, {
+      endpoint: "POST /api/credential-profiles/:id/managers",
+    });
+  }
+
+  async deleteCredentialProfileManager(profileId: string, userId: string): Promise<void> {
+    await this.fetch<unknown>(
+      `/api/credential-profiles/${profileId}/managers/${userId}`,
+      { method: "DELETE" },
+    );
+  }
+
   async retryFailedAgentTasksBySource(
     agentId: string,
     triggerEvidenceKind: string,
@@ -2622,6 +2671,18 @@ export class ApiClient {
       CreativeMaterialImportResultSchema,
       EMPTY_CREATIVE_MATERIAL_IMPORT_RESULT,
       { endpoint: "POST /api/creative/materials/import" },
+    );
+  }
+
+  async retryCreativeMaterialReferenceAnalysis(id: string): Promise<CreativeMaterialImportResult> {
+    const raw = await this.fetch<unknown>(`/api/creative/materials/${encodeURIComponent(id)}/analysis/retry`, {
+      method: "POST",
+    });
+    return parseWithFallback(
+      raw,
+      CreativeMaterialImportResultSchema,
+      EMPTY_CREATIVE_MATERIAL_IMPORT_RESULT,
+      { endpoint: "POST /api/creative/materials/:id/analysis/retry" },
     );
   }
 
@@ -2676,6 +2737,31 @@ export class ApiClient {
     return parseWithFallback(raw, CreativeResourceFileListSchema, EMPTY_CREATIVE_RESOURCE_FILE_LIST, {
       endpoint: "GET /api/creative/resources/:id/files",
     });
+  }
+
+  async createCreativeMarketPackComponentExtraction(
+    id: string,
+    data: CreateCreativeMarketPackComponentExtractionRequest,
+  ): Promise<CreativeMarketPackComponentExtraction> {
+    const raw = await this.fetch<unknown>(`/api/creative/resources/${id}/component-extractions`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+    return parseWithFallback(raw, CreativeMarketPackComponentExtractionSchema, EMPTY_CREATIVE_MARKET_PACK_COMPONENT_EXTRACTION, {
+      endpoint: "POST /api/creative/resources/:id/component-extractions",
+    });
+  }
+
+  async getLatestCreativeMarketPackComponentExtraction(id: string): Promise<CreativeMarketPackComponentExtraction | null> {
+    const raw = await this.fetch<unknown | undefined>(`/api/creative/resources/${id}/component-extractions/latest`);
+    if (raw === undefined) return null;
+    return parseWithFallback(raw, CreativeMarketPackComponentExtractionSchema, EMPTY_CREATIVE_MARKET_PACK_COMPONENT_EXTRACTION, {
+      endpoint: "GET /api/creative/resources/:id/component-extractions/latest",
+    });
+  }
+
+  async applyCreativeMarketPackComponentExtraction(id: string, extractionId: string): Promise<void> {
+    await this.fetch<void>(`/api/creative/resources/${id}/component-extractions/${extractionId}/apply`, { method: "POST" });
   }
 
   async addCreativeResourceFile(
@@ -2807,6 +2893,13 @@ export class ApiClient {
     });
   }
 
+  async getCreativeFeedbackMetrics(): Promise<CreativeFeedbackMetrics> {
+    const raw = await this.fetch<unknown>("/api/creative-feedback-events/metrics");
+    return parseWithFallback(raw, CreativeFeedbackMetricsSchema, EMPTY_CREATIVE_FEEDBACK_METRICS, {
+      endpoint: "GET /api/creative-feedback-events/metrics",
+    });
+  }
+
   async undoCreativeFeedback(id: string): Promise<CreateCreativeFeedbackResponse> {
     const raw = await this.fetch<unknown>(`/api/creative-feedback-events/${id}/undo`, { method: "POST" });
     return parseWithFallback(raw, CreateCreativeFeedbackResponseSchema, EMPTY_CREATIVE_FEEDBACK_RESPONSE, {
@@ -2824,9 +2917,53 @@ export class ApiClient {
     return parseWithFallback(raw, CreativeOrderSchema, { id: "", workspace_id: "", issue_id: "", status: "draft", derived_status: "draft", input_snapshot: {}, trigger_evidence_kind: "", trigger_evidence_ref_id: "", created_by: "", created_at: "", updated_at: "", workflow_failures: [], items: [] }, { endpoint: "GET /api/creative/orders/:id" });
   }
 
+  async retryCreativeOrderWorkflowFailure(orderId: string, taskId: string): Promise<CreativeOrderWorkflowRetryResponse> {
+    const raw = await this.fetch<unknown>(`/api/creative/orders/${encodeURIComponent(orderId)}/workflow-failures/${encodeURIComponent(taskId)}/retry`, {
+      method: "POST",
+    });
+    return parseWithFallback(raw, CreativeOrderWorkflowRetryResponseSchema, { task_id: "" }, {
+      endpoint: "POST /api/creative/orders/:id/workflow-failures/:taskId/retry",
+    });
+  }
+
+  async retryCreativeOrderVariantQC(orderId: string, variantId: string): Promise<CreativeOrderQCRetryResponse> {
+    const raw = await this.fetch<unknown>(`/api/creative/orders/${encodeURIComponent(orderId)}/variants/${encodeURIComponent(variantId)}/qc/retry`, {
+      method: "POST",
+    });
+    return parseWithFallback(raw, CreativeOrderQCRetryResponseSchema, {
+      variant_id: "", revision: 1, technical_task_id: "", visual_task_id: "",
+    }, {
+      endpoint: "POST /api/creative/orders/:id/variants/:variantId/qc/retry",
+    });
+  }
+
+  async repairCreativeOrderVariantPrimePackage(orderId: string, variantId: string): Promise<CreativeOrderPrimePackageRepairResponse> {
+    const raw = await this.fetch<unknown>(`/api/creative/orders/${encodeURIComponent(orderId)}/variants/${encodeURIComponent(variantId)}/prime-package-repair`, {
+      method: "POST",
+    });
+    return parseWithFallback(raw, CreativeOrderPrimePackageRepairResponseSchema, { task_id: "" }, {
+      endpoint: "POST /api/creative/orders/:id/variants/:variantId/prime-package-repair",
+    });
+  }
+
+  async cancelCreativeOrder(id: string): Promise<CreativeOrder> {
+    const raw = await this.fetch<unknown>(`/api/creative/orders/${encodeURIComponent(id)}/cancel`, { method: "POST" });
+    return parseWithFallback(raw, CreativeOrderSchema, { id: "", workspace_id: "", issue_id: "", status: "cancelled", derived_status: "cancelled", input_snapshot: {}, trigger_evidence_kind: "", trigger_evidence_ref_id: "", created_by: "", created_at: "", updated_at: "", workflow_failures: [], items: [] }, { endpoint: "POST /api/creative/orders/:id/cancel" });
+  }
+
   async createCreativeOrder(data: CreateCreativeOrderRequest): Promise<CreativeOrder> {
     const raw = await this.fetch<unknown>("/api/creative/orders", { method: "POST", body: JSON.stringify(data) });
     return parseWithFallback(raw, CreativeOrderSchema, { id: "", workspace_id: "", issue_id: "", status: "draft", derived_status: "draft", input_snapshot: {}, trigger_evidence_kind: "", trigger_evidence_ref_id: "", created_by: "", created_at: "", updated_at: "", workflow_failures: [], items: [] }, { endpoint: "POST /api/creative/orders" });
+  }
+
+  async adoptCreativeOrderVariant(orderId: string, itemId: string, data: AdoptCreativeOrderVariantRequest): Promise<CreativeOrderItem> {
+    const raw = await this.fetch<unknown>(`/api/creative/orders/${encodeURIComponent(orderId)}/items/${encodeURIComponent(itemId)}/adoption`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+    return parseWithFallback(raw, CreativeOrderItemSchema, EMPTY_CREATIVE_ORDER_ITEM, {
+      endpoint: "POST /api/creative/orders/:orderId/items/:itemId/adoption",
+    });
   }
 
   async createCreativeDirectEdit(data: CreateCreativeDirectEditRequest): Promise<CreativeDirectEditResponse> {

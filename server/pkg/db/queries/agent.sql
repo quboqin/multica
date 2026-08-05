@@ -220,6 +220,35 @@ WHERE p.id = $1
   AND p.attempt < p.max_attempts
 RETURNING *;
 
+-- name: CreateActionRequiredRetryTask :one
+-- Clones a completed direct task when its domain result explicitly requires
+-- operator action (for example, a credential is missing). This preserves the
+-- original agent, evidence, context, and retry lineage without reclassifying
+-- the completed execution as an infrastructure failure. It starts a fresh
+-- session so stale local state cannot short-circuit the recovered run.
+INSERT INTO agent_task_queue (
+    agent_id, runtime_id, issue_id, chat_session_id, autopilot_run_id,
+    status, priority, trigger_comment_id, trigger_summary, context,
+    session_id, work_dir,
+    attempt, max_attempts, parent_task_id, force_fresh_session, is_leader_task,
+    requesting_user_id, originator_user_id, accountable_user_id,
+    originator_source, delegated_from_task_id, rule_version_id,
+    retry_of_task_id, trigger_evidence_kind, trigger_evidence_ref_id
+)
+SELECT
+    p.agent_id, p.runtime_id, p.issue_id, p.chat_session_id, p.autopilot_run_id,
+    'queued', p.priority, p.trigger_comment_id, p.trigger_summary, p.context,
+    NULL, NULL,
+    p.attempt + 1, p.max_attempts, p.id, TRUE, p.is_leader_task,
+    p.requesting_user_id, p.originator_user_id, p.accountable_user_id,
+    p.originator_source, p.delegated_from_task_id, p.rule_version_id,
+    p.id, p.trigger_evidence_kind, p.trigger_evidence_ref_id
+FROM agent_task_queue p
+WHERE p.id = $1
+  AND p.status = 'completed'
+  AND p.attempt < p.max_attempts
+RETURNING *;
+
 -- name: CancelAgentTasksByIssue :many
 -- Cancels every active task on the issue and returns the affected rows so the
 -- caller can reconcile each agent's status and broadcast task:cancelled events

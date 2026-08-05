@@ -131,6 +131,8 @@ test("creative material selection form is usable without writing business data",
   }, context.token);
 
   await page.goto(`/${context.workspaceSlug}/creative`, { waitUntil: "domcontentloaded" });
+  await expect(page.getByRole("heading", { name: "创意工作台" })).toBeVisible({ timeout: 60_000 });
+  await page.getByRole("tab", { name: "素材库" }).click();
   await expect(page.getByRole("heading", { name: "工作区素材库" })).toBeVisible({ timeout: 60_000 });
   const tile = page.locator(`[data-testid="creative-material-tile"][data-candidate-id="${candidate.id}"]`);
   await expect(tile).toBeVisible({ timeout: 60_000 });
@@ -143,8 +145,9 @@ test("creative material selection form is usable without writing business data",
   await selectButton.click();
   const draft = page.getByRole("region", { name: "配置创意订单" });
   await expect(draft).toBeVisible({ timeout: 30_000 });
-  await expect(draft.getByLabel("市场资源包")).toBeVisible();
-  await expect(draft.getByLabel("执行小队")).toBeVisible();
+  await expect(draft.getByLabel("市场规则")).toBeVisible();
+  await draft.getByText(/高级设置/).click();
+  await expect(draft.getByLabel("生成服务")).toBeVisible();
   const item = draft.locator("article").filter({ hasText: `素材 ID ${candidate.id.slice(0, 8)}` });
   await expect(item).toBeVisible();
   await expect(item.getByLabel("选用文案")).toBeVisible();
@@ -164,7 +167,7 @@ test("creative material selection form is usable without writing business data",
     completedAnalysisVersion: analysis.analysis_version,
     interceptedFeedbackPosts: simulation.interceptedPostCount(),
     persistedTargetFeedbackEvents: targetFeedbackAfter.length,
-    labelsVerified: ["市场资源包", "执行小队", "选用文案"],
+    labelsVerified: ["市场规则", "生成服务", "选用文案"],
     pageURL: page.url(),
   }));
 });

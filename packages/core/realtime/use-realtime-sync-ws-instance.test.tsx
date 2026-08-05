@@ -184,6 +184,68 @@ describe("useRealtimeSync — ws instance change", () => {
     }
   });
 
+  it("invalidates creative materials for every reference-analysis task lifecycle event", () => {
+    const { ws, emit } = createObservableMockWs();
+    renderHook(() => useRealtimeSync(ws, stores), {
+      wrapper: createWrapper(qc),
+    });
+    invalidateSpy.mockClear();
+
+    const lifecycleEvents = [
+      "task:queued",
+      "task:dispatch",
+      "task:running",
+      "task:waiting_local_directory",
+      "task:completed",
+      "task:failed",
+      "task:cancelled",
+    ] as const;
+
+    act(() => {
+      for (const type of lifecycleEvents) {
+        emit({
+          type,
+          payload: {
+            task_id: `task-${type}`,
+            agent_id: "agent-1",
+            issue_id: "",
+            runtime_id: "runtime-1",
+            status: type.slice("task:".length),
+            trigger_evidence_kind: "creative_crawl_run_analysis",
+          },
+        });
+      }
+    });
+
+    const creativeInvalidations = invalidateSpy.mock.calls.filter(
+      (call: [{ queryKey?: unknown }, ...unknown[]]) => JSON.stringify(call[0].queryKey) === JSON.stringify(["creative", "ws-1"]),
+    );
+    expect(creativeInvalidations).toHaveLength(lifecycleEvents.length);
+  });
+
+  it("does not invalidate creative materials for unrelated task events", () => {
+    const { ws, emit } = createObservableMockWs();
+    renderHook(() => useRealtimeSync(ws, stores), {
+      wrapper: createWrapper(qc),
+    });
+    invalidateSpy.mockClear();
+
+    act(() => {
+      emit({
+        type: "task:failed",
+        payload: {
+          task_id: "task-qc",
+          agent_id: "agent-1",
+          issue_id: "issue-1",
+          status: "failed",
+          trigger_evidence_kind: "creative_order_variant_qc",
+        },
+      });
+    });
+
+    expect(invalidateSpy).not.toHaveBeenCalledWith({ queryKey: ["creative", "ws-1"] });
+  });
+
   it("invalidates per-issue caches (no wsId in key) on ws instance change", () => {
     // These keys are not under the ["issues", wsId] prefix, so they need
     // their own invalidation on recovery — otherwise events missed while

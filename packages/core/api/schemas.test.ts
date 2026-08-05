@@ -5,13 +5,19 @@ import {
   CreativeBriefSchema,
   CreativeDirectEditResponseSchema,
   CreativeFeedbackEventListResponseSchema,
+  CreativeFeedbackMetricsSchema,
   CreativeOrderQCFinalizeResponseSchema,
+  CreativeOrderWorkflowRetryResponseSchema,
+	CreativeOrderQCRetryResponseSchema,
+	CreativeOrderPrimePackageRepairResponseSchema,
+  CreativeOrderItemSchema,
   CreativeOrderSchema,
   CreateCreativeFeedbackResponseSchema,
   CreativeIssueContextSchema,
   CreativeMaterialLibrarySchema,
   CreativeMaterialImportResultSchema,
   CreativeMaterialsResponseSchema,
+  CreativeMarketPackComponentExtractionSchema,
   CreativeResourceFileListSchema,
   CreativeResourceListSchema,
   DashboardAgentRunTimeListSchema,
@@ -109,6 +115,34 @@ describe("credential broker schemas", () => {
 
     expect(parsed.profiles[0]?.last_used_at).toBeUndefined();
     expect(parsed.profiles[0]?.status).toBe("active");
+    expect(parsed.profiles[0]?.scope).toBe("workspace");
+    expect(parsed.profiles[0]?.can_manage).toBe(false);
+    expect(parsed.profiles[0]?.managers).toEqual([]);
+  });
+
+  it("preserves deployment sharing and explicit manager permissions", () => {
+    const parsed = ListCredentialProfilesResponseSchema.parse({
+      profiles: [{
+        id: "profile-1",
+        connector_id: "appgrowing",
+        label: "Enterprise AppGrowing",
+        status: "active",
+        scope: "deployment",
+        can_manage: true,
+        managers: [{
+          user_id: "user-1",
+          name: "Owner",
+          email: "owner@example.test",
+          created_at: "2026-08-05T00:00:00Z",
+        }],
+        created_at: "2026-08-05T00:00:00Z",
+        updated_at: "2026-08-05T00:00:00Z",
+      }],
+    });
+
+    expect(parsed.profiles[0]?.scope).toBe("deployment");
+    expect(parsed.profiles[0]?.can_manage).toBe(true);
+    expect(parsed.profiles[0]?.managers[0]?.email).toBe("owner@example.test");
   });
 
   it("defaults crawl probe counters and preserves raw auth diagnostics", () => {
@@ -153,6 +187,23 @@ describe("creative material schemas", () => {
     expect(CreativeOrderSchema.safeParse({ id: "order-1", workflow_failures: null }).success).toBe(false);
   });
 
+  it("parses a workflow recovery response defensively", () => {
+    expect(CreativeOrderWorkflowRetryResponseSchema.parse({})).toEqual({ task_id: "" });
+    expect(CreativeOrderWorkflowRetryResponseSchema.safeParse(null).success).toBe(false);
+  });
+
+  it("parses a dual-lane QC recovery response defensively", () => {
+    expect(CreativeOrderQCRetryResponseSchema.parse({})).toEqual({
+      variant_id: "", revision: 1, technical_task_id: "", visual_task_id: "",
+    });
+    expect(CreativeOrderQCRetryResponseSchema.safeParse({ revision: "two" }).success).toBe(false);
+  });
+
+  it("parses a Prime package repair response defensively", () => {
+    expect(CreativeOrderPrimePackageRepairResponseSchema.parse({})).toEqual({ task_id: "" });
+    expect(CreativeOrderPrimePackageRepairResponseSchema.safeParse({ task_id: 1 }).success).toBe(false);
+  });
+
   it("fails closed for malformed unified feedback responses", () => {
     expect(CreateCreativeFeedbackResponseSchema.safeParse({ id: "feedback-1", annotation: { x: "not-a-number" } }).success).toBe(false);
   });
@@ -162,6 +213,21 @@ describe("creative material schemas", () => {
       created: false, finalized: false, outcome: "delivered", delivered_asset_count: 0,
     }));
     expect(CreativeOrderQCFinalizeResponseSchema.safeParse(null).success).toBe(false);
+  });
+
+  it("defaults adoption fields for older order items and rejects malformed adoption state", () => {
+    expect(CreativeOrderItemSchema.parse({ id: "item-1" })).toEqual(expect.objectContaining({
+      id: "item-1", adopted_variant_id: "", adopted_at: "", adopted_by: "", variants: [],
+    }));
+    expect(CreativeOrderItemSchema.safeParse({ id: "item-1", adopted_variant_id: null }).success).toBe(false);
+  });
+
+  it("defaults QC recovery availability for older order responses", () => {
+    const legacy = CreativeOrderItemSchema.parse({ id: "item-1", variants: [{ id: "variant-1" }] });
+    expect(legacy.variants[0]).toMatchObject({ qc_recovery_used: false, qc_recovery_available: false, prime_repair_used: false, prime_repair_available: false });
+    const current = CreativeOrderItemSchema.parse({ id: "item-1", variants: [{ id: "variant-1", qc_recovery_used: true, qc_recovery_available: false, prime_repair_used: true, prime_repair_available: false }] });
+    expect(current.variants[0]).toMatchObject({ qc_recovery_used: true, qc_recovery_available: false, prime_repair_used: true, prime_repair_available: false });
+    expect(CreativeOrderItemSchema.safeParse({ id: "item-1", variants: [{ id: "variant-1", qc_recovery_used: "yes" }] }).success).toBe(false);
   });
 
   it("parses direct image edit responses defensively", () => {
@@ -182,6 +248,16 @@ describe("creative material schemas", () => {
   it("defaults a missing feedback list but rejects a null list", () => {
     expect(CreativeFeedbackEventListResponseSchema.parse({})).toEqual({ events: [] });
     expect(CreativeFeedbackEventListResponseSchema.safeParse({ events: null }).success).toBe(false);
+  });
+
+  it("defaults missing creative feedback metrics and rejects invalid counts", () => {
+    expect(CreativeFeedbackMetricsSchema.parse({ candidate_selected: 3 })).toMatchObject({
+      candidate_selected: 3,
+      candidate_rejected: 0,
+      copy_accepted: 0,
+      qc_false_positive: 0,
+    });
+    expect(CreativeFeedbackMetricsSchema.safeParse({ candidate_selected: null }).success).toBe(false);
   });
   it("defaults structured App UI selections from an older creative brief", () => {
     const parsed = CreativeBriefSchema.parse({ status: "draft", source: "ai" });
@@ -258,6 +334,7 @@ describe("creative material schemas", () => {
 
     expect(resources.resources[0]?.status).toBe("draft");
     expect(resources.resources[0]?.config).toEqual({});
+    expect(resources.resources[0]?.published_config).toEqual({});
     expect(files.files[0]?.content_type).toBe("application/octet-stream");
     expect(files.files[0]?.metadata).toEqual({});
     expect(context.snapshot).toEqual({});
@@ -265,8 +342,55 @@ describe("creative material schemas", () => {
     expect(context).not.toHaveProperty("orchestration_skill_id");
   });
 
+  it("keeps current and published creative resource configs separate", () => {
+    const resources = CreativeResourceListSchema.parse({
+      resources: [{
+        id: "copy-1", kind: "copy_library", name: "Copy", status: "draft", version: 3, published_version: 2,
+        config: { marker: "v3-draft" }, published_config: { marker: "v2-published" },
+      }],
+    });
+    expect(resources.resources[0]?.config).toEqual({ marker: "v3-draft" });
+    expect(resources.resources[0]?.published_config).toEqual({ marker: "v2-published" });
+  });
+
   it("keeps a material import response usable when the id is omitted", () => {
-    expect(CreativeMaterialImportResultSchema.parse({})).toEqual({ id: "" });
+    expect(CreativeMaterialImportResultSchema.parse({})).toEqual({
+      id: "",
+      analysis: {
+        action: "",
+        status: "pending",
+        warning: "",
+        crawl_run_id: "",
+        analysis_agent_id: "",
+        task_id: "",
+      },
+    });
+    expect(CreativeMaterialImportResultSchema.parse({
+      id: "candidate-1",
+      analysis: { action: "queued", status: "pending", crawl_run_id: "run-1", task_id: "task-1" },
+    })).toMatchObject({
+      id: "candidate-1",
+      analysis: { action: "queued", status: "pending", crawl_run_id: "run-1", task_id: "task-1", warning: "" },
+    });
+  });
+
+  it("parses background market-pack component extraction candidates", () => {
+    const extraction = CreativeMarketPackComponentExtractionSchema.parse({
+      id: "extract-1",
+      status: "completed",
+      source_width: 1080,
+      source_height: 1080,
+      result: {
+        summary: "found variable components",
+        candidates: [
+          { id: "logo", label: "Logo", kind: "image", rect: [10, 20, 200, 100], confidence: 0.98 },
+          { id: "terms", label: "Terms", kind: "text", content: "Terms apply", rect: [300, 20, 600, 80] },
+        ],
+      },
+    });
+    expect(extraction.result.candidates).toHaveLength(2);
+    expect(extraction.result.candidates[1]?.content).toBe("Terms apply");
+    expect(extraction.result.candidates[1]?.confidence).toBe(0);
   });
 });
 

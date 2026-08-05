@@ -262,7 +262,19 @@ Changes take effect after restarting the backend / compose stack. The web UI rea
 
 ### File Storage (Optional)
 
-For file uploads and attachments, configure S3 and (optionally) CloudFront:
+All images, videos, documents, and creative assets use the same attachment backend. Storage priority is Alibaba Cloud OSS, then S3, then local disk.
+
+For Alibaba Cloud OSS, configure:
+
+| Variable | Description |
+|----------|-------------|
+| `OSS_BUCKET` | OSS bucket name; setting it gives OSS priority over S3 |
+| `OSS_REGION` | Public cloud region ID used by Signature V4, for example `ap-southeast-3` |
+| `OSS_ENDPOINT` | Optional regional service endpoint or custom endpoint |
+| `OSS_ACCESS_KEY_ID` / `OSS_ACCESS_KEY_SECRET` | RAM credentials; provide them through `.env` or the Helm `existingSecret` |
+| `OSS_PUBLIC_BASE_URL` | Optional public bucket/CDN origin; leave empty for a private bucket |
+
+For S3 and (optionally) CloudFront, configure:
 
 | Variable | Description |
 |----------|-------------|
@@ -273,6 +285,8 @@ For file uploads and attachments, configure S3 and (optionally) CloudFront:
 | `CLOUDFRONT_DOMAIN` | CloudFront distribution domain — when set, public URLs use this host instead of the S3 host |
 | `CLOUDFRONT_KEY_PAIR_ID` | CloudFront key pair ID for signed URLs |
 | `CLOUDFRONT_PRIVATE_KEY` | CloudFront private key (PEM format) |
+
+After switching an existing installation from local disk to OSS, run `./migrate_attachments_to_oss` inside the backend container first for a dry-run, then rerun it with `--execute`. The command is resumable and updates a row only after upload and readback verification succeed. It retains local files by default; a later `--execute --delete-local-after-verify` pass removes a source only after OSS size/SHA-256 verification and a successful database compare-and-swap update.
 
 ### Cookies
 

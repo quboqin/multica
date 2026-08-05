@@ -5,19 +5,20 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AlertTriangle, Check, Download, ExternalLink, ImageIcon, LoaderCircle, Plus, RefreshCw, RotateCcw, Search, Sparkles, Upload, X } from "lucide-react";
 import { api } from "@multica/core/api";
 import {
-  creativeCopyEntriesOptions,
   creativeFeedbackOptions,
   creativeKeys,
   creativeMaterialLibraryOptions,
+  recommendCreativeCopy,
   creativeResourceFilesOptions,
   creativeResourcesOptions,
   creativeSourceAnalysesOptions,
+  validateCustomCopyFinancialFacts,
 } from "@multica/core/creative";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { useFileUpload } from "@multica/core/hooks/use-file-upload";
 import { resolvePublicFileUrl } from "@multica/core/workspace/avatar-url";
 import { squadListOptions } from "@multica/core/workspace/queries";
-import type { CreateCreativeFeedbackRequest, CreateCreativeOrderRequest, CreativeCopyEntry, CreativeMaterialCandidate, CreativeSourceAnalysis, SquadMember } from "@multica/core/types";
+import type { CreateCreativeFeedbackRequest, CreateCreativeOrderRequest, CreativeCopySnapshot, CreativeMaterialCandidate, CreativeMaterialImportResult, CreativeSourceAnalysis, SquadMember } from "@multica/core/types";
 import { Badge } from "@multica/ui/components/ui/badge";
 import { Button, buttonVariants } from "@multica/ui/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@multica/ui/components/ui/dialog";
@@ -26,7 +27,7 @@ import { Label } from "@multica/ui/components/ui/label";
 import { NativeSelect, NativeSelectOption } from "@multica/ui/components/ui/native-select";
 import { Textarea } from "@multica/ui/components/ui/textarea";
 import { toast } from "sonner";
-import { recommendCopyEntries, type CopyRecommendationBrief } from "../lib/copy-recommendation";
+import type { CreativeCopyRecommendationBrief as CopyRecommendationBrief } from "@multica/core/creative";
 
 type ImportDraft = {
   mode: "file" | "url";
@@ -93,6 +94,16 @@ export function CreativeMaterialLibrary({ onOrderCreated }: { onOrderCreated?: (
       toast.success(`已重新安排 ${result.scheduled_count} 条素材归档`);
     },
     onError: (error) => toast.error(error instanceof Error ? error.message : "无法重新归档素材"),
+  });
+  const retryAnalysis = useMutation({
+    mutationFn: (candidateId: string) => api.retryCreativeMaterialReferenceAnalysis(candidateId),
+    onSuccess: (result) => {
+      queryClient.invalidateQueries({ queryKey: creativeKeys.materials(wsId) });
+      queryClient.invalidateQueries({ queryKey: creativeKeys.analyses(wsId) });
+      const notice = materialImportNotice(result);
+      notice.level === "warning" ? toast.warning(notice.message.replace("素材已导入，", "")) : toast.success(notice.message.replace("素材已导入，", ""));
+    },
+    onError: (error) => toast.error(error instanceof Error ? error.message : "无法重新排队参考分析"),
   });
   const decideCandidate = useMutation({
     mutationFn: ({ candidate, decision, reasonCodes, comment, idempotencyKey }: { candidate: CreativeMaterialCandidate; decision: "selected" | "rejected"; reasonCodes?: string[]; comment?: string; idempotencyKey?: string }) => api.createCreativeFeedback(
@@ -180,12 +191,13 @@ export function CreativeMaterialLibrary({ onOrderCreated }: { onOrderCreated?: (
             onReject={() => setRejecting(candidate)}
             onUndo={() => decision && undoDecision.mutate(decision.id)}
             onOpen={() => setPreview(candidate)}
-				onDirectEdit={() => setDirectEditCandidate(candidate)}
+			onDirectEdit={() => setDirectEditCandidate(candidate)}
+			onRetryAnalysis={() => retryAnalysis.mutate(candidate.id)}
           />;
         })}
       </div>
     )}
-		<MaterialPreview candidate={previewCandidate} analysis={previewAnalysis} onClose={() => setPreview(null)} onRetry={(candidateId) => retryArchives.mutate([candidateId])} retrying={retryArchives.isPending} />
+		<MaterialPreview candidate={previewCandidate} analysis={previewAnalysis} onClose={() => setPreview(null)} onRetry={(candidateId) => retryArchives.mutate([candidateId])} retrying={retryArchives.isPending} onRetryAnalysis={(candidateId) => retryAnalysis.mutate(candidateId)} retryingAnalysis={retryAnalysis.isPending} />
 		<DirectEditDialog candidate={directEditCandidate} onClose={() => setDirectEditCandidate(null)} onCreated={(orderId) => {
 			setDirectEditCandidate(null);
 			queryClient.invalidateQueries({ queryKey: creativeKeys.orders(wsId) });
@@ -198,14 +210,52 @@ export function CreativeMaterialLibrary({ onOrderCreated }: { onOrderCreated?: (
     <MaterialImportDialog open={importOpen} onClose={() => setImportOpen(false)} onImported={() => {
       setImportOpen(false);
       queryClient.invalidateQueries({ queryKey: creativeKeys.materials(wsId) });
+      queryClient.invalidateQueries({ queryKey: creativeKeys.analyses(wsId) });
     }} />
   </div>;
 }
 
 export type MaterialAnalysisState = { ready: boolean; status: string; error: string; version: number };
 
-export function MaterialTile({ candidate, analysisState, selected, decision, busy, onToggle, onReject, onUndo, onOpen, onDirectEdit }: { candidate: CreativeMaterialCandidate; analysisState: MaterialAnalysisState; selected: boolean; decision: string; busy: boolean; onToggle: () => void; onReject: () => void; onUndo: () => void; onOpen: () => void; onDirectEdit: () => void }) {
+export type MaterialCandidateDisplayDetails = {
+  duration: string;
+  impressions: string;
+  media: string;
+  market: string;
+  languages: string;
+  platforms: string;
+  tags: string;
+  note: string;
+};
+
+const MATERIAL_SOURCE_MISSING = "源数据未提供";
+
+export function materialCandidateDisplayDetails(candidate: CreativeMaterialCandidate): MaterialCandidateDisplayDetails {
+  const records = candidateSourceRecords(candidate);
+  const durationDays = candidate.duration_days ?? firstRecordNumber(records, ["duration_days", "duration"]);
+  const impressionEstimate = candidate.impression_estimate ?? firstRecordNumber(records, ["impression_estimate", "impressions", "impression"]);
+  const mediaNames = preferredCandidateValues(candidate.media_names, records, ["media_names", "media", "media_sources"]);
+  const platformNames = preferredCandidateValues(candidate.platform_names, records, ["platform_names", "platforms", "platform"]);
+
+  return {
+    duration: durationDays === null ? MATERIAL_SOURCE_MISSING : `${formatDecimal(durationDays)} 天`,
+    impressions: impressionEstimate === null ? MATERIAL_SOURCE_MISSING : formatCompactCount(impressionEstimate),
+    media: mediaNames.length > 0
+      ? mediaNames.join("、")
+      : platformNames.length > 0
+        ? `${platformNames.join("、")}（投放平台）`
+        : `${sourceLabel(candidate.connector_id)}（采集来源）`,
+    market: displayCandidateValues(preferredCandidateValues(candidate.area_names, records, ["area_names", "areas", "area", "market"])),
+    languages: displayCandidateValues(preferredCandidateValues(candidate.language_names, records, ["language_names", "languages", "language", "locale"])),
+    platforms: displayCandidateValues(platformNames),
+    tags: displayCandidateValues(preferredCandidateValues(candidate.tags, records, ["tags", "tag_names"])),
+    note: candidate.note?.trim() || firstRecordString(records, ["note", "remark", "remarks", "comment"]) || MATERIAL_SOURCE_MISSING,
+  };
+}
+
+export function MaterialTile({ candidate, analysisState, selected, decision, busy, onToggle, onReject, onUndo, onOpen, onDirectEdit, onRetryAnalysis }: { candidate: CreativeMaterialCandidate; analysisState: MaterialAnalysisState; selected: boolean; decision: string; busy: boolean; onToggle: () => void; onReject: () => void; onUndo: () => void; onOpen: () => void; onDirectEdit: () => void; onRetryAnalysis: () => void }) {
   const source = candidateSource(candidate);
+  const details = materialCandidateDisplayDetails(candidate);
   return <div className="relative min-w-0 bg-background text-left transition-colors hover:bg-muted/30" data-testid="creative-material-tile" data-candidate-id={candidate.id}><button type="button" onClick={onOpen} className="w-full">
     <div className="relative aspect-[4/3] bg-muted/40">
       {source ? <img src={source} alt={candidate.title || candidate.competitor} width={640} height={480} loading="lazy" className="h-full w-full object-contain" /> : <div className="flex h-full flex-col items-center justify-center gap-2 text-xs text-muted-foreground"><ImageIcon className="h-5 w-5" />{candidate.archive_status === "failed" ? "归档失败" : "正在归档"}</div>}
@@ -218,10 +268,15 @@ export function MaterialTile({ candidate, analysisState, selected, decision, bus
     <div className="space-y-1 border-t px-3 py-2.5">
       <p className="truncate text-sm font-medium">{candidate.title || "未命名素材"}</p>
       <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground"><span className="truncate">{candidate.competitor || sourceLabel(candidate.connector_id)}</span><span className="shrink-0">{candidate.area_names[0] ?? ""}</span></div>
+      <dl className="grid grid-cols-3 gap-2 border-t pt-2 text-left text-[10px]">
+        <MaterialMetric label="投放天数" value={details.duration} />
+        <MaterialMetric label="曝光估算" value={details.impressions} />
+        <MaterialMetric label="媒体来源" value={details.media} />
+      </dl>
       <p className="font-mono text-[10px] text-muted-foreground">素材 ID {candidate.id.slice(0, 8)}</p>
       {analysisState.status === "failed" && <p className="truncate text-[11px] text-destructive" title={analysisState.error}>{analysisState.error || "请重新发起分析"}</p>}
     </div>
-  </button><div className="absolute right-2 top-2 flex gap-1"><Button aria-label="直接改图" title={candidate.source_attachment_id ? "直接改图" : "等待稳定源文件后可直接改图"} size="icon-sm" variant="outline" disabled={!candidate.source_attachment_id} onClick={onDirectEdit}><Sparkles className="h-4 w-4" /></Button><Button aria-label={decision === "rejected" ? "撤销拒绝" : "拒绝素材"} title={decision === "rejected" ? "撤销拒绝" : "拒绝素材"} size="icon-sm" variant="outline" disabled={busy} onClick={decision === "rejected" ? onUndo : onReject}>{decision === "rejected" ? <RotateCcw className="h-4 w-4" /> : <X className="h-4 w-4" />}</Button><Button aria-label={selected ? "取消选择素材" : "选择素材"} title={selected ? "取消选择素材" : analysisState.ready ? "选择素材" : "等待参考分析完成后可选择素材"} size="icon-sm" variant={selected ? "default" : "outline"} disabled={busy || decision === "rejected" || (!selected && !analysisState.ready)} onClick={onToggle}>{selected ? <Check className="h-4 w-4" /> : <Plus className="h-4 w-4" />}</Button></div></div>;
+  </button><div className="absolute right-2 top-2 flex gap-1">{analysisState.status === "failed" && <Button aria-label="重新分析素材" title="重新分析素材" size="icon-sm" variant="outline" disabled={busy} onClick={onRetryAnalysis}><RefreshCw className="h-4 w-4" /></Button>}<Button aria-label="直接改图" title="直接改图" size="icon-sm" variant="outline" onClick={onDirectEdit}><Sparkles className="h-4 w-4" /></Button><Button aria-label={decision === "rejected" ? "撤销拒绝" : "拒绝素材"} title={decision === "rejected" ? "撤销拒绝" : "拒绝素材"} size="icon-sm" variant="outline" disabled={busy} onClick={decision === "rejected" ? onUndo : onReject}>{decision === "rejected" ? <RotateCcw className="h-4 w-4" /> : <X className="h-4 w-4" />}</Button><Button aria-label={selected ? "取消选择素材" : "选择素材"} title={selected ? "取消选择素材" : analysisState.ready ? "选择素材" : "等待参考分析完成后可选择素材"} size="icon-sm" variant={selected ? "default" : "outline"} disabled={busy || decision === "rejected" || (!selected && !analysisState.ready)} onClick={onToggle}>{selected ? <Check className="h-4 w-4" /> : <Plus className="h-4 w-4" />}</Button></div></div>;
 }
 
 export type OrderItemDraft = {
@@ -266,11 +321,14 @@ function CreativeOrderDraft({ candidates, analyses, onDone }: { candidates: Crea
   const [busy, setBusy] = useState(false);
   const [recoveryMessage, setRecoveryMessage] = useState("");
   const [recovery, setRecovery] = useState<SubmissionRecovery>(EMPTY_SUBMISSION_RECOVERY);
+  const [activeCandidateId, setActiveCandidateId] = useState(candidates[0]?.id ?? "");
+  const knownCandidateIds = useRef(new Set(candidates.map((candidate) => candidate.id)));
   const viewedCopyIds = useRef(new Set<string>());
-  const marketPacks = (resources.data?.resources ?? []).filter((resource) => resource.kind === "market_pack" && resource.status === "published");
+  const marketPacks = (resources.data?.resources ?? []).filter((resource) => resource.kind === "market_pack" && resource.published_version > 0);
   const marketPack = marketPacks.find((resource) => resource.id === marketPackId) ?? marketPacks[0];
-  const copyLibraryId = recordString(marketPack?.config, "copy_library_id");
-  const copyEntries = useQuery(creativeCopyEntriesOptions(wsId, copyLibraryId));
+  const marketPackConfig = marketPack?.published_config ?? {};
+  const copyLibraryId = recordString(marketPackConfig, "copy_library_id");
+  const copyLibrary = (resources.data?.resources ?? []).find((resource) => resource.id === copyLibraryId && resource.kind === "copy_library" && resource.published_version > 0);
   const marketFiles = useQuery(creativeResourceFilesOptions(wsId, marketPack?.id ?? ""));
   const selectedSquad = (squads.data ?? []).find((squad) => squad.id === squadId) ?? (squads.data ?? [])[0];
   const squadMembers = useQuery({
@@ -281,8 +339,8 @@ function CreativeOrderDraft({ candidates, analyses, onDone }: { candidates: Crea
   const completedAnalyses = useMemo(() => latestCompletedAnalyses(analyses), [analyses]);
   const recommendations = useMemo(() => new Map(candidates.map((candidate) => {
     const analysis = completedAnalyses.get(candidate.id);
-    return [candidate.id, recommendCopyEntries(candidate, copyEntries.data?.entries ?? [], analysisBrief(analysis))];
-  })), [candidates, completedAnalyses, copyEntries.data?.entries]);
+    return [candidate.id, copyLibrary ? recommendCreativeCopy(candidate, copyLibrary, analysisBrief(analysis)) : []];
+  })), [candidates, completedAnalyses, copyLibrary]);
 
   useEffect(() => {
     if (!marketPackId && marketPacks[0]) setMarketPackId(marketPacks[0].id);
@@ -297,7 +355,7 @@ function CreativeOrderDraft({ candidates, analyses, onDone }: { candidates: Crea
       let changed = false;
       const next = { ...current };
       for (const candidate of candidates) {
-        const draft = orderDraftWithRecommendation(next[candidate.id], recommendations.get(candidate.id)?.[0]?.entry.id ?? "");
+        const draft = orderDraftWithRecommendation(next[candidate.id], recommendations.get(candidate.id)?.[0]?.recipe.id ?? "");
         if (draft !== next[candidate.id]) {
           next[candidate.id] = draft;
           changed = true;
@@ -307,16 +365,22 @@ function CreativeOrderDraft({ candidates, analyses, onDone }: { candidates: Crea
     });
   }, [candidates, recommendations]);
   useEffect(() => {
+    const nextIds = new Set(candidates.map((candidate) => candidate.id));
+    const added = candidates.find((candidate) => !knownCandidateIds.current.has(candidate.id));
+    knownCandidateIds.current = nextIds;
+    setActiveCandidateId((current) => added?.id ?? (nextIds.has(current) ? current : candidates[0]?.id ?? ""));
+  }, [candidates]);
+  useEffect(() => {
     for (const candidate of candidates) {
       const analysis = completedAnalyses.get(candidate.id);
       for (const [rank, recommendation] of (recommendations.get(candidate.id) ?? []).slice(0, 3).entries()) {
-        const key = `${candidate.id}:${recommendation.entry.id}`;
+        const key = `${candidate.id}:${recommendation.recipe.id}`;
         if (viewedCopyIds.current.has(key)) continue;
         viewedCopyIds.current.add(key);
         void api.createCreativeFeedback({
           issue_id: "",
           subject_type: "recommended_copy",
-          subject_id: recommendation.entry.id,
+          subject_id: recommendation.recipe.id,
           event_type: "viewed",
           decision: "",
           context_snapshot: { candidate_id: candidate.id, source_analysis_id: analysis?.id ?? "", rank: rank + 1, recommendation_reasons: recommendation.reasons },
@@ -335,29 +399,48 @@ function CreativeOrderDraft({ candidates, analyses, onDone }: { candidates: Crea
     ...current,
     [candidateId]: { ...current[candidateId], ...patch } as OrderItemDraft,
   }));
+  const activeCandidate = candidates.find((candidate) => candidate.id === activeCandidateId) ?? candidates[0];
+  const activeAnalysis = activeCandidate ? completedAnalyses.get(activeCandidate.id) : undefined;
+  const activeRanked = activeCandidate ? recommendations.get(activeCandidate.id) ?? [] : [];
+  const activeDraft = activeCandidate ? drafts[activeCandidate.id] : undefined;
+  const activeSelectedCopy = activeRanked.find((item) => item.recipe.id === activeDraft?.copyEntryId);
+  const activeRecommended = activeRanked[0];
+  const activeSource = activeCandidate ? candidateSource(activeCandidate) : "";
+  const customCopyValidations = useMemo(() => new Map(candidates.flatMap((candidate) => {
+    const draft = drafts[candidate.id];
+    if (!draft || draft.copyEntryId !== "__custom__") return [];
+    const recommendation = recommendations.get(candidate.id)?.[0];
+    const snapshot = customCopySnapshot(draft, recommendation?.snapshot.creative_type, copyLibrary);
+    return [[candidate.id, validateCustomCopyFinancialFacts(snapshot, copyLibrary)]] as const;
+  })), [candidates, copyLibrary, drafts, recommendations]);
+  const customCopyIssueCount = [...customCopyValidations.values()].filter((validation) => !validation.allowed).length;
+  const activeCustomCopyValidation = activeCandidate ? customCopyValidations.get(activeCandidate.id) : undefined;
 
   const create = async () => {
-    if (!marketPack || !selectedSquad || incompleteCandidates.length > 0 || unconfiguredCandidates.length > 0) return;
+    if (!marketPack || !selectedSquad || incompleteCandidates.length > 0 || unconfiguredCandidates.length > 0 || customCopyIssueCount > 0) return;
     setBusy(true);
     setRecoveryMessage("");
-    const submissionKey = await creativeSubmissionKey({
-      mode: "creative_order",
-      candidates: candidates.map((candidate) => ({
-        id: candidate.id,
-        analysisId: completedAnalyses.get(candidate.id)?.id ?? "",
-        draft: drafts[candidate.id],
-      })).sort((left, right) => left.id.localeCompare(right.id)),
-      marketPackId: marketPack.id,
-      squadId: selectedSquad.id,
-    });
-    const matchingRecovery = recoveryForSubmissionKey(recovery, submissionKey);
-    let issueId = matchingRecovery.issueId;
-    let orderId = matchingRecovery.orderId;
+    let submissionKey = "";
+    let issueId = "";
+    let orderId = "";
     try {
+      submissionKey = await creativeSubmissionKey({
+        mode: "creative_order",
+        candidates: candidates.map((candidate) => ({
+          id: candidate.id,
+          analysisId: completedAnalyses.get(candidate.id)?.id ?? "",
+          draft: drafts[candidate.id],
+        })).sort((left, right) => left.id.localeCompare(right.id)),
+        marketPackId: marketPack.id,
+        squadId: selectedSquad.id,
+      });
+      const matchingRecovery = recoveryForSubmissionKey(recovery, submissionKey);
+      issueId = matchingRecovery.issueId;
+      orderId = matchingRecovery.orderId;
       if (!issueId) {
         const issue = await api.createIssue({
           title: `创意订单 · ${candidates.length} 张素材`,
-          description: "从创意工厂提交。Issue 用于业务协作、阻塞决策和最终验收；过程状态请在创意订单查看。",
+          description: "从创意工厂提交。这里记录关键业务决定、需要处理的问题和最终验收；生成进度与交付结果请在创意订单查看。",
           status: "todo",
           metadata: { workflow: "creative_order", creative_submission_key: submissionKey },
           allow_duplicate: true,
@@ -373,7 +456,7 @@ function CreativeOrderDraft({ candidates, analyses, onDone }: { candidates: Crea
           submission_key: submissionKey,
           status: "queued",
           input_snapshot: {
-            market_pack: { id: marketPack.id, version: marketPack.published_version, config: marketPack.config, files: marketFiles.data?.files ?? [] },
+            market_pack: { id: marketPack.id, version: marketPack.published_version, config: marketPack.published_config ?? {}, files: marketFiles.data?.files ?? [] },
             squad_snapshot: {
               squad_id: selectedSquad.id,
               squad_name: selectedSquad.name,
@@ -385,11 +468,13 @@ function CreativeOrderDraft({ candidates, analyses, onDone }: { candidates: Crea
           trigger_evidence_ref_id: runIds.length === 1 ? runIds[0]! : "",
           items: candidates.map((candidate) => {
             const draft = drafts[candidate.id]!;
-            const entry = (copyEntries.data?.entries ?? []).find((copy) => copy.id === draft.copyEntryId);
+            const recommendation = recommendations.get(candidate.id)?.find((item) => item.recipe.id === draft.copyEntryId);
             return creativeOrderItemInput(
               candidate.id,
               completedAnalyses.get(candidate.id)!.id,
-              entry ? copySnapshot(entry) : customCopySnapshot(draft),
+              recommendation
+                ? { ...recommendation.snapshot }
+                : customCopySnapshot(draft, recommendations.get(candidate.id)?.[0]?.snapshot.creative_type, copyLibrary),
               draft.direction,
             );
           }),
@@ -401,7 +486,7 @@ function CreativeOrderDraft({ candidates, analyses, onDone }: { candidates: Crea
       await api.setIssueMetadataKey(issueId, "creative_order_id", orderId);
       await Promise.all(candidates.map(async (candidate) => {
         const draft = drafts[candidate.id]!;
-        const recommended = recommendations.get(candidate.id)?.[0]?.entry;
+        const recommended = recommendations.get(candidate.id)?.[0]?.recipe;
         if (!recommended) return;
         await api.createCreativeFeedback(recommendedCopyDecisionFeedbackInput({
           submissionKey,
@@ -414,11 +499,11 @@ function CreativeOrderDraft({ candidates, analyses, onDone }: { candidates: Crea
         }));
       }));
       await api.updateIssue(issueId, { assignee_type: "squad", assignee_id: selectedSquad.id });
-      toast.success("创意订单已提交给素材小队");
+      toast.success("创意订单已提交，开始生成");
       setRecovery(EMPTY_SUBMISSION_RECOVERY);
       onDone(orderId);
     } catch (error) {
-      setRecovery({ issueId, orderId, submissionKey });
+      if (submissionKey) setRecovery({ issueId, orderId, submissionKey });
       setRecoveryMessage(error instanceof Error ? error.message : "订单创建未完成。可以在当前面板继续，不会重复创建已完成的步骤。");
     } finally {
       setBusy(false);
@@ -426,32 +511,34 @@ function CreativeOrderDraft({ candidates, analyses, onDone }: { candidates: Crea
   };
 
   return <section className="mt-4 border bg-background" aria-labelledby="creative-order-draft-title">
-    <div className="flex flex-wrap items-center justify-between gap-2 border-b px-4 py-3"><div><h3 id="creative-order-draft-title" className="text-sm font-semibold">配置创意订单</h3><p className="mt-1 text-xs text-muted-foreground">逐图确认分析、完整文案和补充方向，再一次提交给小队。</p></div><Badge>{candidates.length} 张素材</Badge></div>
-    <div className="grid gap-4 border-b p-4 sm:grid-cols-2">
-      <Field label="市场资源包"><NativeSelect value={marketPack?.id ?? ""} onChange={(event) => setMarketPackId(event.target.value)}><NativeSelectOption value="">选择已发布资源包</NativeSelectOption>{marketPacks.map((resource) => <NativeSelectOption key={resource.id} value={resource.id}>{resource.name} · v{resource.published_version}</NativeSelectOption>)}</NativeSelect></Field>
-      <Field label="执行小队"><NativeSelect value={selectedSquad?.id ?? ""} onChange={(event) => setSquadId(event.target.value)}><NativeSelectOption value="">选择小队</NativeSelectOption>{(squads.data ?? []).map((squad) => <NativeSelectOption key={squad.id} value={squad.id}>{squad.name}</NativeSelectOption>)}</NativeSelect></Field>
+    <div className="flex flex-wrap items-center justify-between gap-2 border-b px-4 py-3"><div><h3 id="creative-order-draft-title" className="text-sm font-semibold">配置创意订单</h3><p className="mt-1 text-xs text-muted-foreground">逐图确认参考分析、完整文案和补充方向</p></div><div className="flex items-center gap-2"><Badge variant="outline">已配置 {candidates.length - unconfiguredCandidates.length}/{candidates.length}</Badge><Badge>{candidates.length} 张素材</Badge></div></div>
+    <div className="grid gap-3 border-b p-4 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-end">
+      <Field label="市场规则"><NativeSelect value={marketPack?.id ?? ""} onChange={(event) => setMarketPackId(event.target.value)}><NativeSelectOption value="">选择已发布市场规则</NativeSelectOption>{marketPacks.map((resource) => <NativeSelectOption key={resource.id} value={resource.id}>{resource.name} · v{resource.published_version}</NativeSelectOption>)}</NativeSelect></Field>
+      <details className="min-w-52 border px-3 py-2"><summary className="cursor-pointer list-none text-xs font-medium marker:content-none">高级设置 · {selectedSquad?.name || "未配置"}</summary><div className="mt-3"><Field label="生成服务"><NativeSelect value={selectedSquad?.id ?? ""} onChange={(event) => setSquadId(event.target.value)}><NativeSelectOption value="">选择可用服务</NativeSelectOption>{(squads.data ?? []).map((squad) => <NativeSelectOption key={squad.id} value={squad.id}>{squad.name}</NativeSelectOption>)}</NativeSelect></Field></div></details>
     </div>
-    <div className="divide-y">{candidates.map((candidate) => {
-      const analysis = completedAnalyses.get(candidate.id);
-      const ranked = recommendations.get(candidate.id) ?? [];
-      const draft = drafts[candidate.id];
-      const selectedCopy = (copyEntries.data?.entries ?? []).find((entry) => entry.id === draft?.copyEntryId);
+    <nav className="flex gap-2 overflow-x-auto border-b bg-muted/10 p-3" aria-label="已选素材">{candidates.map((candidate, index) => {
+      const candidateDraft = drafts[candidate.id];
+      const configured = candidateDraft?.copyEntryId === "__custom__" ? Boolean(candidateDraft.customHeadline.trim()) : Boolean(candidateDraft?.copyEntryId);
+      const analyzed = completedAnalyses.has(candidate.id);
       const source = candidateSource(candidate);
-      const recommended = ranked[0];
-      return <article key={candidate.id} className="grid gap-4 p-4 lg:grid-cols-[180px_minmax(0,1fr)]">
-        <div><div className="aspect-[4/3] overflow-hidden bg-muted">{source ? <img src={source} alt={candidate.title || candidate.competitor} width={720} height={540} loading="lazy" className="h-full w-full object-contain" /> : <div className="flex h-full items-center justify-center"><ImageIcon className="h-6 w-6 text-muted-foreground" /></div>}</div><p className="mt-2 break-words text-xs font-medium">{candidate.title || candidate.competitor}</p><p className="mt-1 font-mono text-[10px] text-muted-foreground">素材 ID {candidate.id.slice(0, 8)}</p></div>
-        <div className="min-w-0 space-y-4">
-          <div className="border-l-2 border-emerald-600 pl-3"><div className="flex flex-wrap items-center gap-2"><Sparkles className="h-4 w-4 text-emerald-700" /><p className="text-sm font-medium">{analysis?.summary || "等待参考分析"}</p>{analysis && <Badge variant="outline">v{analysis.analysis_version}</Badge>}</div>{analysis && <AnalysisFacts analysis={analysis} />}{!analysis && <p className="mt-2 text-xs text-destructive">分析完成后才能提交该素材。</p>}</div>
-          <div className="grid gap-3 sm:grid-cols-2">
-            <Field label="选用文案"><NativeSelect value={draft?.copyEntryId ?? ""} onChange={(event) => setDraft(candidate.id, { copyEntryId: event.target.value })}><NativeSelectOption value="">选择已审核文案</NativeSelectOption>{ranked.slice(0, 20).map((item, index) => <NativeSelectOption key={item.entry.id} value={item.entry.id}>{index === 0 ? "推荐 · " : ""}{item.entry.external_key} · {item.entry.headline}</NativeSelectOption>)}<NativeSelectOption value="__custom__">自定义文案</NativeSelectOption></NativeSelect></Field>
-            {recommended && draft?.copyEntryId !== recommended.entry.id && <Field label="替换推荐原因"><NativeSelect value={draft?.replacementReason ?? "benefit_mismatch"} onChange={(event) => setDraft(candidate.id, { replacementReason: event.target.value })}>{COPY_REPLACEMENT_REASONS.map((reason) => <NativeSelectOption key={reason.value} value={reason.value}>{reason.label}</NativeSelectOption>)}</NativeSelect></Field>}
-          </div>
-          {draft?.copyEntryId === "__custom__" ? <div className="grid gap-3 border bg-muted/10 p-3 sm:grid-cols-2"><Field label="自定义主标题" wide><Input value={draft.customHeadline} onChange={(event) => setDraft(candidate.id, { customHeadline: event.target.value })} /></Field><Field label="自定义卖点" wide><Textarea rows={3} value={draft.customBenefit} onChange={(event) => setDraft(candidate.id, { customBenefit: event.target.value })} /></Field><Field label="自定义 CTA"><Input value={draft.customCta} onChange={(event) => setDraft(candidate.id, { customCta: event.target.value })} /></Field><p className="self-end text-xs text-muted-foreground">自定义内容会原样冻结在订单中。</p></div> : selectedCopy ? <CopyPreview entry={selectedCopy} recommendation={ranked.find((item) => item.entry.id === selectedCopy.id)} isPrimaryRecommendation={selectedCopy.id === recommended?.entry.id} /> : <p className="text-xs text-destructive">请选择完整文案。</p>}
-          <Field label="补充创意想法" wide><Textarea rows={3} value={draft?.direction ?? ""} onChange={(event) => setDraft(candidate.id, { direction: event.target.value })} placeholder="例如：保留绿色信息卡片，人物更生活化，CTA 更醒目。不要在这里补写未经审核的金融事实。" /></Field>
+      return <button key={candidate.id} type="button" aria-pressed={candidate.id === activeCandidate?.id} onClick={() => setActiveCandidateId(candidate.id)} className={`grid min-w-52 grid-cols-[56px_minmax(0,1fr)] gap-2 border bg-background p-2 text-left ${candidate.id === activeCandidate?.id ? "border-emerald-600 ring-1 ring-emerald-600/20" : ""}`}>
+        <span className="aspect-[4/3] overflow-hidden bg-muted">{source ? <img src={source} alt="" width={160} height={120} loading="lazy" className="h-full w-full object-contain" /> : <span className="flex h-full items-center justify-center"><ImageIcon className="h-4 w-4 text-muted-foreground" /></span>}</span>
+        <span className="min-w-0"><span className="block truncate text-xs font-medium">{index + 1}. {candidate.title || candidate.competitor}</span><span className="mt-1 block text-[11px] text-muted-foreground">{analyzed ? "已分析" : "等待分析"} · {configured ? "文案已定" : "待定文案"}</span><span className="mt-0.5 block font-mono text-[10px] text-muted-foreground">{candidate.id.slice(0, 8)}</span></span>
+      </button>;
+    })}</nav>
+    {activeCandidate && <article key={activeCandidate.id} className="grid gap-5 p-4 lg:grid-cols-[220px_minmax(0,1fr)]" data-testid="creative-order-active-editor" data-candidate-id={activeCandidate.id}>
+      <div><div className="aspect-[4/3] overflow-hidden bg-muted">{activeSource ? <img src={activeSource} alt={activeCandidate.title || activeCandidate.competitor} width={880} height={660} loading="lazy" className="h-full w-full object-contain" /> : <div className="flex h-full items-center justify-center"><ImageIcon className="h-6 w-6 text-muted-foreground" /></div>}</div><p className="mt-2 break-words text-xs font-medium">{activeCandidate.title || activeCandidate.competitor}</p><p className="mt-1 font-mono text-[10px] text-muted-foreground">素材 ID {activeCandidate.id.slice(0, 8)}</p></div>
+      <div className="min-w-0 space-y-4">
+        <div className="border-l-2 border-emerald-600 pl-3"><div className="flex flex-wrap items-center gap-2"><Sparkles className="h-4 w-4 text-emerald-700" /><p className="text-sm font-medium">{activeAnalysis?.summary || "等待参考分析"}</p>{activeAnalysis && <Badge variant="outline">v{activeAnalysis.analysis_version}</Badge>}</div>{activeAnalysis && <AnalysisFacts analysis={activeAnalysis} />}{!activeAnalysis && <p className="mt-2 text-xs text-destructive">分析完成后才能提交该素材。</p>}</div>
+        <div className="grid gap-3 sm:grid-cols-2">
+          <Field label="选用文案"><NativeSelect value={activeDraft?.copyEntryId ?? ""} onChange={(event) => setDraft(activeCandidate.id, { copyEntryId: event.target.value })}><NativeSelectOption value="">选择已发布组合方案</NativeSelectOption>{activeRanked.slice(0, 20).map((item, index) => <NativeSelectOption key={item.recipe.id} value={item.recipe.id}>{index === 0 ? "推荐 · " : ""}{item.recipe.name} · {item.snapshot.headline}</NativeSelectOption>)}<NativeSelectOption value="__custom__">自定义文案</NativeSelectOption></NativeSelect></Field>
+          {activeRecommended && activeDraft?.copyEntryId !== activeRecommended.recipe.id && <Field label="替换推荐原因"><NativeSelect value={activeDraft?.replacementReason ?? "benefit_mismatch"} onChange={(event) => setDraft(activeCandidate.id, { replacementReason: event.target.value })}>{COPY_REPLACEMENT_REASONS.map((reason) => <NativeSelectOption key={reason.value} value={reason.value}>{reason.label}</NativeSelectOption>)}</NativeSelect></Field>}
         </div>
-      </article>;
-    })}</div>
-    <div className="flex flex-wrap items-center justify-between gap-3 border-t bg-muted/10 px-4 py-3"><div className="text-xs text-muted-foreground">{recoveryMessage ? <span className="text-destructive">{recoveryMessage}</span> : incompleteCandidates.length > 0 ? `${incompleteCandidates.length} 张素材仍在等待分析` : unconfiguredCandidates.length > 0 ? `${unconfiguredCandidates.length} 张素材尚未选择文案` : "提交后才创建一个订单 issue，并由小队 Leader 开始委派。"}</div><Button disabled={busy || !marketPack || !selectedSquad || incompleteCandidates.length > 0 || unconfiguredCandidates.length > 0} onClick={() => void create()}>{busy ? "正在提交" : recovery.issueId ? "继续提交" : "开始生成"}</Button></div>
+        {activeDraft?.copyEntryId === "__custom__" ? <div className="grid gap-3 border bg-muted/10 p-3 sm:grid-cols-2"><Field label="自定义主标题" wide><Input value={activeDraft.customHeadline} onChange={(event) => setDraft(activeCandidate.id, { customHeadline: event.target.value })} /></Field><Field label="自定义卖点" wide><Textarea rows={3} value={activeDraft.customBenefit} onChange={(event) => setDraft(activeCandidate.id, { customBenefit: event.target.value })} /></Field><Field label="自定义 CTA"><Input value={activeDraft.customCta} onChange={(event) => setDraft(activeCandidate.id, { customCta: event.target.value })} /></Field><p className="self-end text-xs text-muted-foreground">创意语言可自由编辑；货币、利率、期限等金融事实必须与已审核产品事实一致。</p>{activeCustomCopyValidation && !activeCustomCopyValidation.allowed && <p role="alert" className="sm:col-span-2 border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs text-destructive">{activeCustomCopyValidation.message}</p>}</div> : activeSelectedCopy ? <CopyPreview recommendation={activeSelectedCopy} isPrimaryRecommendation={activeSelectedCopy.recipe.id === activeRecommended?.recipe.id} /> : <p className="text-xs text-destructive">请选择完整文案。</p>}
+        <Field label="补充创意想法" wide><Textarea rows={3} value={activeDraft?.direction ?? ""} onChange={(event) => setDraft(activeCandidate.id, { direction: event.target.value })} placeholder="例如：保留绿色信息卡片，人物更生活化，CTA 更醒目。不要在这里补写未经审核的金融事实。" /></Field>
+      </div>
+    </article>}
+    <div className="flex flex-wrap items-center justify-between gap-3 border-t bg-muted/10 px-4 py-3"><div className="text-xs text-muted-foreground">{recoveryMessage ? <span className="text-destructive">{recoveryMessage}</span> : incompleteCandidates.length > 0 ? `${incompleteCandidates.length} 张素材仍在等待分析` : unconfiguredCandidates.length > 0 ? `${unconfiguredCandidates.length} 张素材尚未选择文案` : customCopyIssueCount > 0 ? `${customCopyIssueCount} 张素材的自定义文案含未审核金融事实` : !selectedSquad ? "暂无可用生成服务" : "全部素材已配置，可以开始生成。"}</div><Button disabled={busy || !marketPack || !selectedSquad || incompleteCandidates.length > 0 || unconfiguredCandidates.length > 0 || customCopyIssueCount > 0} onClick={() => void create()}>{busy ? "正在提交" : recovery.issueId ? "继续提交" : "开始生成"}</Button></div>
   </section>;
 }
 
@@ -506,18 +593,21 @@ function DirectEditDialog({ candidate, onClose, onCreated }: { candidate: Creati
     if (!candidate || !candidate.source_attachment_id || !selectedSquad || !canCreateDirectEdit(candidate, instruction, selectedSquad.id)) return;
     setBusy(true);
     setError("");
-    const submissionKey = await creativeSubmissionKey({
-      mode: "creative_direct_edit",
-      candidateId: candidate.id,
-      instruction: instruction.trim(),
-      targetSize,
-      deliveryMode,
-      squadId: selectedSquad.id,
-    });
-    const matchingRecovery = recoveryForSubmissionKey(recovery, submissionKey);
-    let issueId = matchingRecovery.issueId;
-    let orderId = matchingRecovery.orderId;
+    let submissionKey = "";
+    let issueId = "";
+    let orderId = "";
     try {
+      submissionKey = await creativeSubmissionKey({
+        mode: "creative_direct_edit",
+        candidateId: candidate.id,
+        instruction: instruction.trim(),
+        targetSize,
+        deliveryMode,
+        squadId: selectedSquad.id,
+      });
+      const matchingRecovery = recoveryForSubmissionKey(recovery, submissionKey);
+      issueId = matchingRecovery.issueId;
+      orderId = matchingRecovery.orderId;
       if (!issueId) {
         const issue = await api.createIssue({
           title: `直接改图 · ${candidate.title || candidate.competitor || candidate.id.slice(0, 8)}`,
@@ -547,7 +637,7 @@ function DirectEditDialog({ candidate, onClose, onCreated }: { candidate: Creati
       toast.success(deliveryMode === "publish" ? "直接改图已提交，将进入 Prime 和 QC" : "直接改图预览已提交");
       onCreated(orderId);
     } catch (submitError) {
-      setRecovery({ issueId, orderId, submissionKey });
+      if (submissionKey) setRecovery({ issueId, orderId, submissionKey });
       setError(submitError instanceof Error ? submitError.message : "提交未完成。可继续提交，不会重复创建已完成的步骤。");
     } finally {
       setBusy(false);
@@ -560,11 +650,11 @@ function DirectEditDialog({ candidate, onClose, onCreated }: { candidate: Creati
         <Field label="目标尺寸"><NativeSelect disabled={Boolean(recovery.issueId)} value={targetSize} onChange={(event) => setTargetSize(event.target.value as typeof targetSize)}><NativeSelectOption value="1080x1080">1080 x 1080</NativeSelectOption><NativeSelectOption value="1200x628">1200 x 628</NativeSelectOption><NativeSelectOption value="800x1000">800 x 1000</NativeSelectOption></NativeSelect></Field>
         <Field label="交付方式"><NativeSelect disabled={Boolean(recovery.issueId)} value={deliveryMode} onChange={(event) => setDeliveryMode(event.target.value as typeof deliveryMode)}><NativeSelectOption value="preview">预览</NativeSelectOption><NativeSelectOption value="publish">作为正式投放素材</NativeSelectOption></NativeSelect></Field>
       </div>
-      <Field label="执行小队"><NativeSelect disabled={Boolean(recovery.issueId)} value={selectedSquad?.id ?? ""} onChange={(event) => setSquadId(event.target.value)}><NativeSelectOption value="">选择小队</NativeSelectOption>{(squads.data ?? []).map((squad) => <NativeSelectOption key={squad.id} value={squad.id}>{squad.name}</NativeSelectOption>)}</NativeSelect></Field>
+      <details className="border px-3 py-2"><summary className="cursor-pointer list-none text-xs font-medium marker:content-none">执行设置 · {selectedSquad?.name || "未配置"}</summary><div className="mt-3"><Field label="执行小队"><NativeSelect disabled={Boolean(recovery.issueId)} value={selectedSquad?.id ?? ""} onChange={(event) => setSquadId(event.target.value)}><NativeSelectOption value="">选择小队</NativeSelectOption>{(squads.data ?? []).map((squad) => <NativeSelectOption key={squad.id} value={squad.id}>{squad.name}</NativeSelectOption>)}</NativeSelect></Field></div></details>
       <Field label="修改要求" wide><Textarea disabled={Boolean(recovery.issueId)} rows={5} value={instruction} onChange={(event) => setInstruction(event.target.value)} placeholder="例如：保留人物和绿色信息卡片，将主标题改得更醒目，移除右上角竞品标识。" /></Field>
       {!candidate?.source_attachment_id && <p className="border border-destructive/30 bg-destructive/5 p-3 text-xs text-destructive">该素材尚无稳定源文件，暂时不能直接改图。</p>}
       {recovery.issueId && <p className="border bg-muted/20 p-3 text-xs text-muted-foreground">本次提交参数已冻结。继续提交会恢复同一任务；关闭窗口后可重新配置。</p>}
-      {error && <p className="border border-destructive/30 bg-destructive/5 p-3 text-xs text-destructive">{error}</p>}
+      {error && <p role="alert" className="border border-destructive/30 bg-destructive/5 p-3 text-xs text-destructive">{error}</p>}
     </div>
     <DialogFooter><Button variant="outline" onClick={onClose}>取消</Button><Button disabled={busy || !canCreateDirectEdit(candidate, instruction, selectedSquad?.id ?? "")} onClick={() => void submit()}>{busy ? "正在提交" : recovery.issueId ? "继续提交" : "提交改图"}</Button></DialogFooter>
   </DialogContent></Dialog>;
@@ -612,8 +702,9 @@ function AnalysisFact({ label, value, wide = false }: { label: string; value: st
   return <div className={wide ? "sm:col-span-2" : undefined}><dt className="text-muted-foreground">{label}</dt><dd className="mt-0.5 break-words text-foreground">{value}</dd></div>;
 }
 
-function CopyPreview({ entry, recommendation, isPrimaryRecommendation }: { entry: CreativeCopyEntry; recommendation?: ReturnType<typeof recommendCopyEntries>[number]; isPrimaryRecommendation: boolean }) {
-  return <div className="border bg-muted/10 p-3 text-xs"><div className="flex flex-wrap items-center gap-2"><Badge variant="outline">{isPrimaryRecommendation ? "推荐" : "已选"}</Badge><span className="font-mono text-muted-foreground">{entry.external_key} · v{entry.version}</span>{recommendation?.reasons.map((reason) => <Badge key={reason} variant="secondary">{reason}</Badge>)}</div><dl className="mt-3 grid gap-2 sm:grid-cols-[72px_minmax(0,1fr)]"><dt className="text-muted-foreground">主标题</dt><dd className="whitespace-pre-wrap break-words font-medium">{entry.headline || "-"}</dd><dt className="text-muted-foreground">副标题</dt><dd className="whitespace-pre-wrap break-words">{entry.subheadline || "-"}</dd><dt className="text-muted-foreground">卖点</dt><dd className="whitespace-pre-wrap break-words">{entry.benefit || "-"}</dd><dt className="text-muted-foreground">CTA</dt><dd className="whitespace-pre-wrap break-words">{entry.cta || "-"}</dd><dt className="text-muted-foreground">条款</dt><dd className="whitespace-pre-wrap break-words">{entry.legal_text || "-"}</dd></dl>{!recommendation?.exactPrimaryMatch && <p className="mt-3 border-t pt-2 text-muted-foreground">这是语义最接近的已审核文案。保留同类利益机制，不复用竞品图中的金额、期限或利率。</p>}</div>;
+function CopyPreview({ recommendation, isPrimaryRecommendation }: { recommendation: ReturnType<typeof recommendCreativeCopy>[number]; isPrimaryRecommendation: boolean }) {
+  const copy = recommendation.snapshot;
+  return <div className="border bg-muted/10 p-3 text-xs"><div className="flex flex-wrap items-center gap-2"><Badge variant="outline">{isPrimaryRecommendation ? "推荐" : "已选"}</Badge><span className="font-medium">{recommendation.recipe.name}</span><span className="font-mono text-muted-foreground">文案库 v{copy.library_version}</span>{recommendation.reasons.map((reason) => <Badge key={reason} variant="secondary">{reason}</Badge>)}</div><dl className="mt-3 grid gap-2 sm:grid-cols-[72px_minmax(0,1fr)]"><dt className="text-muted-foreground">主标题</dt><dd className="whitespace-pre-wrap break-words font-medium">{copy.headline || "-"}</dd><dt className="text-muted-foreground">副标题</dt><dd className="whitespace-pre-wrap break-words">{copy.subheadline || "-"}</dd><dt className="text-muted-foreground">利益点</dt><dd className="whitespace-pre-wrap break-words">{copy.benefit || "-"}</dd><dt className="text-muted-foreground">补充信息</dt><dd className="whitespace-pre-wrap break-words">{copy.supporting || "-"}</dd><dt className="text-muted-foreground">CTA</dt><dd className="whitespace-pre-wrap break-words">{copy.cta || "-"}</dd><dt className="text-muted-foreground">产品事实</dt><dd className="flex flex-wrap gap-1">{copy.product_facts.length > 0 ? copy.product_facts.map((fact) => <Badge key={fact.key} variant="outline">{fact.label}：{fact.copy_text}</Badge>) : "-"}</dd></dl>{!recommendation.exactTypeMatch && <p className="mt-3 border-t pt-2 text-muted-foreground">当前素材未识别出明确类型，按文案库默认策略排序。提交前可切换其他组合方案。</p>}</div>;
 }
 
 export function latestCandidateFeedback(events: { id: string; subject_id: string; event_type: string; decision: string; undo_of_id: string; created_at?: string }[]) {
@@ -671,12 +762,13 @@ function analysisBrief(analysis?: CreativeSourceAnalysis): CopyRecommendationBri
   };
 }
 
-function copySnapshot(entry: CreativeCopyEntry): Record<string, unknown> {
-  return { id: entry.id, library_id: entry.library_id, version: entry.version, external_key: entry.external_key, headline: entry.headline, subheadline: entry.subheadline, benefit: entry.benefit, cta: entry.cta, legal_text: entry.legal_text, copy_role: entry.copy_role, market: entry.market, locale: entry.locale, tags: entry.tags, status: entry.status, metadata: entry.metadata };
-}
-
-function customCopySnapshot(draft: OrderItemDraft): Record<string, unknown> {
-  return { id: "", version: 1, external_key: "user-custom", headline: draft.customHeadline.trim(), subheadline: "", benefit: draft.customBenefit.trim(), cta: draft.customCta.trim(), legal_text: "", copy_role: "user_custom", tags: [], status: "user_custom", metadata: { source: "creative_order_form" } };
+export function customCopySnapshot(
+  draft: OrderItemDraft,
+  creativeType: CreativeCopySnapshot["creative_type"] = "num",
+  library?: { id: string; published_version: number },
+): CreativeCopySnapshot {
+  const snapshot: CreativeCopySnapshot = { schema_version: 2, id: "", library_id: library?.id ?? "", library_version: library?.published_version ?? 0, recipe_id: "", recipe_key: "user-custom", creative_type: creativeType, headline: draft.customHeadline.trim(), subheadline: "", benefit: draft.customBenefit.trim(), supporting: "", cta: draft.customCta.trim(), legal_text: "", fragments: [], product_facts: [], recommendation: { score: 0, reasons: ["用户自定义"], matched_signals: [] }, status: "user_custom" };
+  return snapshot;
 }
 
 // This is an identity key, not a security primitive. Keeping it derived from
@@ -765,13 +857,13 @@ export function candidateDecisionFeedbackInput(
 export function creativeOrderItemInput(
   candidateId: string,
   sourceAnalysisId: string,
-  frozenCopy: Record<string, unknown>,
+  frozenCopy: Record<string, unknown> | CreativeCopySnapshot,
   direction: string,
 ): CreateCreativeOrderRequest["items"][number] {
   return {
     candidate_id: candidateId,
     source_analysis_id: sourceAnalysisId,
-    copy_snapshot: frozenCopy,
+    copy_snapshot: frozenCopy as unknown as Record<string, unknown>,
     direction: direction.trim(),
   };
 }
@@ -794,9 +886,10 @@ function recordStringArray(record: Record<string, unknown> | undefined, key: str
   return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
 }
 
-function MaterialPreview({ candidate, analysis, onClose, onRetry, retrying }: { candidate: CreativeMaterialCandidate | null; analysis?: CreativeSourceAnalysis; onClose: () => void; onRetry: (candidateId: string) => void; retrying: boolean }) {
+function MaterialPreview({ candidate, analysis, onClose, onRetry, retrying, onRetryAnalysis, retryingAnalysis }: { candidate: CreativeMaterialCandidate | null; analysis?: CreativeSourceAnalysis; onClose: () => void; onRetry: (candidateId: string) => void; retrying: boolean; onRetryAnalysis: (candidateId: string) => void; retryingAnalysis: boolean }) {
   const source = candidate ? candidateSource(candidate) : "";
   const original = candidate ? resolvePublicFileUrl(candidate.original_url) : "";
+  const details = candidate ? materialCandidateDisplayDetails(candidate) : null;
   return <Dialog open={candidate !== null} onOpenChange={(open) => !open && onClose()}><DialogContent className="max-h-[94vh] overflow-hidden p-0 sm:max-w-[min(94vw,1100px)]">
     <DialogHeader className="border-b px-4 py-3 pr-12"><DialogTitle className="truncate text-sm">{candidate?.title || "素材详情"}</DialogTitle><DialogDescription>{candidate?.competitor || sourceLabel(candidate?.connector_id ?? "")}</DialogDescription></DialogHeader>
     <div className="grid max-h-[82vh] overflow-y-auto md:grid-cols-[minmax(0,1fr)_300px]">
@@ -805,13 +898,19 @@ function MaterialPreview({ candidate, analysis, onClose, onRetry, retrying }: { 
         <section aria-labelledby="material-analysis-title" className="border-b pb-5">
           <div className="flex flex-wrap items-center gap-2"><Sparkles className="h-4 w-4" /><h3 id="material-analysis-title" className="font-medium">参考分析</h3>{analysis && <Badge variant="outline">已分析 v{analysis.analysis_version}</Badge>}</div>
           {analysis ? <><p className="mt-3 break-words text-sm">{analysis.summary || "分析已完成"}</p><AnalysisFacts analysis={analysis} /></> : <p className="mt-2 text-xs text-muted-foreground">该素材还没有完成参考分析。</p>}
+		  {candidate?.analysis_status === "failed" && <Button className="mt-3" size="sm" variant="outline" disabled={retryingAnalysis} onClick={() => onRetryAnalysis(candidate.id)}><RefreshCw className={retryingAnalysis ? "h-4 w-4 animate-spin" : "h-4 w-4"} />重新分析</Button>}
         </section>
-        <MetadataRow label="来源" value={sourceLabel(candidate?.connector_id ?? "")} />
-        <MetadataRow label="市场" value={candidate?.area_names.join("、") || "未填写"} />
-        <MetadataRow label="语言" value={candidate?.language_names.join("、") || "未填写"} />
-        <MetadataRow label="设备" value={candidate?.platform_names.join("、") || "未填写"} />
-        <MetadataRow label="标签" value={candidate?.tags.join("、") || "未填写"} />
-        <MetadataRow label="备注" value={candidate?.note || "未填写"} />
+        <div className="grid grid-cols-2 gap-4">
+          <MetadataRow label="投放天数" value={details?.duration ?? MATERIAL_SOURCE_MISSING} />
+          <MetadataRow label="曝光估算" value={details?.impressions ?? MATERIAL_SOURCE_MISSING} />
+        </div>
+        <MetadataRow label="媒体来源" value={details?.media ?? MATERIAL_SOURCE_MISSING} />
+        <MetadataRow label="采集来源" value={sourceLabel(candidate?.connector_id ?? "")} />
+        <MetadataRow label="市场" value={details?.market ?? MATERIAL_SOURCE_MISSING} />
+        <MetadataRow label="语言" value={details?.languages ?? MATERIAL_SOURCE_MISSING} />
+        <MetadataRow label="设备" value={details?.platforms ?? MATERIAL_SOURCE_MISSING} />
+        <MetadataRow label="标签" value={details?.tags ?? MATERIAL_SOURCE_MISSING} />
+        <MetadataRow label="备注" value={details?.note ?? MATERIAL_SOURCE_MISSING} />
         {candidate?.archive_status === "failed" && <div className="border border-destructive/30 bg-destructive/5 p-3"><p className="flex items-center gap-2 text-sm font-medium text-destructive"><AlertTriangle className="h-4 w-4" />稳定归档失败</p><p className="mt-2 break-words text-xs text-muted-foreground">{archiveErrorLabel(candidate.archive_error)}</p><Button className="mt-3" size="sm" variant="outline" disabled={retrying} onClick={() => onRetry(candidate.id)}><RefreshCw className={retrying ? "h-4 w-4 animate-spin" : "h-4 w-4"} />重新归档</Button></div>}
         <div className="flex flex-wrap gap-2 border-t pt-4">
           {source && <a href={source} download className={buttonVariants({ size: "sm", variant: "outline" })}><Download className="h-4 w-4" />下载归档文件</a>}
@@ -820,6 +919,23 @@ function MaterialPreview({ candidate, analysis, onClose, onRetry, retrying }: { 
       </div>
     </div>
   </DialogContent></Dialog>;
+}
+
+export function materialImportNotice(result: CreativeMaterialImportResult): { level: "success" | "warning"; message: string } {
+  switch (result.analysis.action) {
+    case "queued":
+      return { level: "success", message: "素材已导入，参考分析已排队" };
+    case "already_queued":
+      return { level: "success", message: result.analysis.status === "running" ? "素材已导入，参考分析正在进行" : "素材已导入，参考分析已在队列中" };
+    case "already_completed":
+      return { level: "success", message: "素材已导入，参考分析已完成" };
+    case "unavailable":
+      return { level: "warning", message: "素材已导入，但尚未配置参考分析智能体" };
+    case "enqueue_failed":
+      return { level: "warning", message: "素材已导入，但参考分析排队失败" };
+    default:
+      return { level: "success", message: "素材已导入工作区素材库" };
+  }
 }
 
 function MaterialImportDialog({ open, onClose, onImported }: { open: boolean; onClose: () => void; onImported: () => void }) {
@@ -850,11 +966,18 @@ function MaterialImportDialog({ open, onClose, onImported }: { open: boolean; on
         note: draft.note.trim(),
       });
     },
-    onSuccess: () => { setDraft(EMPTY_IMPORT); setFile(null); onImported(); toast.success("素材已导入工作区素材库"); },
+    onSuccess: (result) => {
+      setDraft(EMPTY_IMPORT);
+      setFile(null);
+      onImported();
+      const notice = materialImportNotice(result);
+      if (notice.level === "warning") toast.warning(notice.message);
+      else toast.success(notice.message);
+    },
     onError: (error) => toast.error(error instanceof Error ? error.message : "无法导入素材"),
   });
   const set = (field: keyof ImportDraft, value: string) => setDraft((current) => ({ ...current, [field]: value }));
-  return <Dialog open={open} onOpenChange={(next) => !next && onClose()}><DialogContent className="max-w-xl"><DialogHeader><DialogTitle>导入素材</DialogTitle><DialogDescription>导入后成为工作区素材，后续可以被创意 Issue 候选池引用。</DialogDescription></DialogHeader>
+  return <Dialog open={open} onOpenChange={(next) => !next && onClose()}><DialogContent className="max-w-xl"><DialogHeader><DialogTitle>导入素材</DialogTitle><DialogDescription>导入后会自动进入参考分析；分析完成后即可选择并开始生成。</DialogDescription></DialogHeader>
     <div className="flex w-fit border p-0.5"><Button size="sm" variant={draft.mode === "file" ? "secondary" : "ghost"} onClick={() => set("mode", "file")}>本地文件</Button><Button size="sm" variant={draft.mode === "url" ? "secondary" : "ghost"} onClick={() => set("mode", "url")}>素材 URL</Button></div>
     <div className="grid gap-4 sm:grid-cols-2">
       {draft.mode === "file" ? <div className="sm:col-span-2"><input ref={fileRef} type="file" accept="image/*,video/*" className="hidden" onChange={(event) => setFile(event.target.files?.[0] ?? null)} /><Button variant="outline" onClick={() => fileRef.current?.click()}><Upload className="h-4 w-4" />{file?.name || "选择图片或视频"}</Button></div> : <Field label="素材 URL" wide><Input value={draft.sourceUrl} onChange={(event) => set("sourceUrl", event.target.value)} placeholder="https://..." /></Field>}
@@ -877,6 +1000,10 @@ function MetadataRow({ label, value }: { label: string; value: string }) {
   return <div><p className="text-xs text-muted-foreground">{label}</p><p className="mt-1 break-words">{value}</p></div>;
 }
 
+function MaterialMetric({ label, value }: { label: string; value: string }) {
+  return <div className="min-w-0"><dt className="text-muted-foreground">{label}</dt><dd className="truncate font-medium text-foreground" title={value}>{value}</dd></div>;
+}
+
 function candidateSource(candidate: CreativeMaterialCandidate): string {
   return resolvePublicFileUrl(candidate.archived_url || candidate.poster_url || candidate.preview_url) ?? "";
 }
@@ -884,7 +1011,84 @@ function candidateSource(candidate: CreativeMaterialCandidate): string {
 function sourceLabel(connector: string): string {
   if (connector === "manual_upload") return "人工上传";
   if (connector === "manual_url") return "URL 导入";
+  if (connector.toLocaleLowerCase() === "appgrowing") return "AppGrowing";
   return connector || "未知来源";
+}
+
+function candidateSourceRecords(candidate: CreativeMaterialCandidate): Record<string, unknown>[] {
+  const candidateRecord = candidate as unknown as Record<string, unknown>;
+  return [candidateRecord, toRecord(candidateRecord.metadata), toRecord(candidateRecord.raw)].filter((record): record is Record<string, unknown> => record !== null);
+}
+
+function toRecord(value: unknown): Record<string, unknown> | null {
+  if (typeof value === "string") {
+    try {
+      const parsed: unknown = JSON.parse(value);
+      return toRecord(parsed);
+    } catch {
+      return null;
+    }
+  }
+  return value !== null && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null;
+}
+
+function preferredCandidateValues(current: string[] | undefined, records: Record<string, unknown>[], keys: string[]): string[] {
+  const direct = uniqueNonEmptyStrings(current ?? []);
+  if (direct.length > 0) return direct;
+  for (const record of records) {
+    for (const key of keys) {
+      const values = valueStrings(record[key]);
+      if (values.length > 0) return values;
+    }
+  }
+  return [];
+}
+
+function firstRecordString(records: Record<string, unknown>[], keys: string[]): string {
+  for (const record of records) {
+    for (const key of keys) {
+      const value = record[key];
+      if (typeof value === "string" && value.trim()) return value.trim();
+    }
+  }
+  return "";
+}
+
+function firstRecordNumber(records: Record<string, unknown>[], keys: string[]): number | null {
+  for (const record of records) {
+    for (const key of keys) {
+      const value = record[key];
+      if (typeof value === "number" && Number.isFinite(value)) return value;
+      if (typeof value === "string" && value.trim()) {
+        const parsed = Number(value);
+        if (Number.isFinite(parsed)) return parsed;
+      }
+    }
+  }
+  return null;
+}
+
+function valueStrings(value: unknown): string[] {
+  if (Array.isArray(value)) return uniqueNonEmptyStrings(value.filter((item): item is string => typeof item === "string"));
+  if (typeof value === "string") return uniqueNonEmptyStrings(value.split(/[,，]/));
+  return [];
+}
+
+function uniqueNonEmptyStrings(values: string[]): string[] {
+  return [...new Set(values.map((value) => value.trim()).filter(Boolean))];
+}
+
+function displayCandidateValues(values: string[]): string {
+  return values.length > 0 ? values.join("、") : MATERIAL_SOURCE_MISSING;
+}
+
+function formatDecimal(value: number): string {
+  return new Intl.NumberFormat("zh-CN", { maximumFractionDigits: 1 }).format(value);
+}
+
+function formatCompactCount(value: number): string {
+  if (Math.abs(value) >= 10_000) return `${formatDecimal(value / 10_000)} 万`;
+  return new Intl.NumberFormat("zh-CN", { maximumFractionDigits: 0 }).format(value);
 }
 
 function archiveErrorLabel(error: string): string {

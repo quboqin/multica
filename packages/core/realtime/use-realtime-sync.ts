@@ -88,6 +88,22 @@ import type {
   InvitationCreatedPayload,
 } from "../types";
 
+const creativeReferenceAnalysisTaskEvents = new Set([
+  "task:queued",
+  "task:dispatch",
+  "task:running",
+  "task:waiting_local_directory",
+  "task:completed",
+  "task:failed",
+  "task:cancelled",
+]);
+
+export function isCreativeReferenceAnalysisTaskEvent(message: { type: string; payload: unknown }): boolean {
+  if (!creativeReferenceAnalysisTaskEvents.has(message.type)) return false;
+  if (!message.payload || typeof message.payload !== "object") return false;
+  return (message.payload as { trigger_evidence_kind?: unknown }).trigger_evidence_kind === "creative_crawl_run_analysis";
+}
+
 const chatWsLogger = createLogger("chat.ws");
 
 const logger = createLogger("realtime-sync");
@@ -570,6 +586,10 @@ export function useRealtimeSync(
     ]);
 
     const unsubAny = ws.onAny((msg) => {
+      if (isCreativeReferenceAnalysisTaskEvent(msg)) {
+        const wsId = getCurrentWsId();
+        if (wsId) qc.invalidateQueries({ queryKey: creativeKeys.all(wsId) });
+      }
       if (specificEvents.has(msg.type)) return;
       const prefix = msg.type.split(":")[0] ?? "";
       const refresh = refreshMap[prefix];

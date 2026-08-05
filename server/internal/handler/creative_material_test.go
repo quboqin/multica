@@ -4,10 +4,65 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"testing"
 
 	"github.com/jackc/pgx/v5/pgtype"
 )
+
+func TestCreativeMaterialsFromCrawlRawPreservesAppGrowingBusinessMetadata(t *testing.T) {
+	materials := creativeMaterialsFromCrawlRaw(json.RawMessage(`{
+		"selected_materials": [{
+			"materialId": "material-metadata-1",
+			"brandName": "AdaKami",
+			"title": "Flexible loan",
+			"assetType": "image",
+			"resourceUrl": "https://cdn.example.com/material-metadata-1.jpg",
+			"duration_days": "",
+			"deliveryDays": "35.5",
+			"impressionEstimate": null,
+			"impression_inc_2y": "12,000,000",
+			"media_names": [],
+			"mediaIds": [4, 9],
+			"language_names": [],
+			"languageCodes": ["id"],
+			"platformNames": [],
+			"platform": [{"id": 2, "name": "Android"}],
+			"tags": [],
+			"tagNames": ["finance", "installment"],
+			"note": " ",
+			"remarks": "Keep the original disclaimer"
+		}]
+	}`))
+	if len(materials) != 1 {
+		t.Fatalf("materials = %d, want 1", len(materials))
+	}
+	material := materials[0]
+	if material.ExternalID != "material-metadata-1" || material.Competitor != "AdaKami" {
+		t.Fatalf("identity metadata = %#v", material)
+	}
+	if material.DurationDays == nil || *material.DurationDays != 35.5 {
+		t.Fatalf("duration_days = %v, want 35.5", material.DurationDays)
+	}
+	if material.ImpressionEstimate == nil || *material.ImpressionEstimate != 12_000_000 {
+		t.Fatalf("impression_estimate = %v, want 12000000", material.ImpressionEstimate)
+	}
+	if !reflect.DeepEqual(material.MediaNames, []string{"4", "9"}) {
+		t.Fatalf("media_names = %#v, want ID fallback", material.MediaNames)
+	}
+	if !reflect.DeepEqual(material.LanguageNames, []string{"id"}) {
+		t.Fatalf("language_names = %#v, want code fallback", material.LanguageNames)
+	}
+	if !reflect.DeepEqual(material.PlatformNames, []string{"Android"}) {
+		t.Fatalf("platform_names = %#v", material.PlatformNames)
+	}
+	if !reflect.DeepEqual(material.Tags, []string{"finance", "installment"}) {
+		t.Fatalf("tags = %#v", material.Tags)
+	}
+	if material.Note != "Keep the original disclaimer" {
+		t.Fatalf("note = %q", material.Note)
+	}
+}
 
 func TestCreativeMaterialDedupeUsesStableAssetURL(t *testing.T) {
 	first := creativeMaterialDedupeKey(creativeMaterialInput{
@@ -30,6 +85,44 @@ func TestCreativeMaterialDedupeUsesStableAssetURL(t *testing.T) {
 	}
 }
 
+func TestCreativeMaterialPrivateArchiveUsesAuthenticatedProxyRoute(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	store := &mockStorageNoCdn{}
+	store.put("creative-materials/private/source.png", []byte("image"))
+	handler := *testHandler
+	handler.Storage = store
+
+	var candidateID string
+	if err := testPool.QueryRow(t.Context(), `
+INSERT INTO creative_material_candidate (
+  workspace_id, connector_id, dedupe_key, title, asset_type, archived_url, archive_status, raw
+) VALUES ($1, 'test', $2, 'Private archive', 'image', $3, 'completed', '{}'::jsonb)
+RETURNING id::text
+`, testWorkspaceID, "private-archive-"+testWorkspaceID,
+		"https://cdn.example.com/creative-materials/private/source.png").Scan(&candidateID); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(t.Context(), `DELETE FROM creative_material_candidate WHERE id = $1`, candidateID)
+	})
+
+	proxyURL := handler.creativeMaterialArchiveResponseURL(candidateID, "https://cdn.example.com/creative-materials/private/source.png")
+	if proxyURL != "/api/creative/materials/"+candidateID+"/archive" {
+		t.Fatalf("private archive URL = %q", proxyURL)
+	}
+	w := httptest.NewRecorder()
+	req := withURLParam(newRequest(http.MethodGet, proxyURL, nil), "id", candidateID)
+	handler.DownloadCreativeMaterialArchive(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("private archive download = %d %s", w.Code, w.Body.String())
+	}
+	if body := w.Body.String(); body != "image" {
+		t.Fatalf("proxied archive body = %q", body)
+	}
+}
+
 func TestUniqueCreativeMaterialInputsCountsFinalAssets(t *testing.T) {
 	inputs := []creativeMaterialInput{
 		{ResourceURL: "https://cdn.example.com/a.jpg?auth_key=first", AssetType: "image"},
@@ -40,6 +133,75 @@ func TestUniqueCreativeMaterialInputsCountsFinalAssets(t *testing.T) {
 	materials, skipped := uniqueCreativeMaterialInputs(inputs)
 	if len(materials) != 2 || skipped != 2 {
 		t.Fatalf("unique inputs = %d skipped = %d, want 2 and 2", len(materials), skipped)
+	}
+}
+
+func TestImportCreativeMaterialsPersistsCapturedMetadata(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+	dedupeKey := "captured-metadata-" + testWorkspaceID
+	duration := 35.5
+	impression := int64(12_000_000)
+	input := creativeMaterialImportInput{
+		WorkspaceID:  parseUUID(testWorkspaceID),
+		ConnectorID:  "appgrowing",
+		QuerySummary: "captured metadata",
+		Materials: []creativeMaterialInput{{
+			DedupeKey:          dedupeKey,
+			Title:              "Captured metadata material",
+			AssetType:          "image",
+			PreviewURL:         "https://example.test/captured-metadata.png",
+			DurationDays:       &duration,
+			ImpressionEstimate: &impression,
+			MediaNames:         []string{"Google Ads"},
+			LanguageNames:      []string{"id"},
+			Tags:               []string{"finance", "installment"},
+			Note:               "Keep the original disclaimer",
+		}},
+		ActorType: "member",
+		ActorID:   testUserID,
+		UserID:    parseUUID(testUserID),
+	}
+	if _, err := testHandler.importCreativeMaterials(t.Context(), input); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(t.Context(), `DELETE FROM creative_material_candidate WHERE workspace_id = $1 AND connector_id = 'appgrowing' AND dedupe_key = $2`, testWorkspaceID, dedupeKey)
+	})
+
+	// A later page can omit metadata. The upsert must retain values captured earlier.
+	input.Materials[0].DurationDays = nil
+	input.Materials[0].ImpressionEstimate = nil
+	input.Materials[0].MediaNames = nil
+	input.Materials[0].LanguageNames = nil
+	input.Materials[0].Tags = nil
+	input.Materials[0].Note = ""
+	if _, err := testHandler.importCreativeMaterials(t.Context(), input); err != nil {
+		t.Fatal(err)
+	}
+
+	var storedDuration float64
+	var storedImpression int64
+	var storedMedia, storedLanguages, storedTags []string
+	var storedNote string
+	if err := testPool.QueryRow(t.Context(), `
+SELECT duration_days, impression_estimate, media_names, language_names, tags, note
+FROM creative_material_candidate
+WHERE workspace_id = $1 AND connector_id = 'appgrowing' AND dedupe_key = $2
+`, testWorkspaceID, dedupeKey).Scan(
+		&storedDuration, &storedImpression, &storedMedia, &storedLanguages, &storedTags, &storedNote,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if storedDuration != duration || storedImpression != impression {
+		t.Fatalf("numeric metadata = %v/%v, want %v/%v", storedDuration, storedImpression, duration, impression)
+	}
+	if !reflect.DeepEqual(storedMedia, []string{"Google Ads"}) || !reflect.DeepEqual(storedLanguages, []string{"id"}) {
+		t.Fatalf("source dimensions = media %#v language %#v", storedMedia, storedLanguages)
+	}
+	if !reflect.DeepEqual(storedTags, []string{"finance", "installment"}) || storedNote != "Keep the original disclaimer" {
+		t.Fatalf("user metadata = tags %#v note %q", storedTags, storedNote)
 	}
 }
 

@@ -27,12 +27,13 @@ export class TestApiClient {
   private createdIssueIds: string[] = [];
 
   async login(email: string, name: string) {
-    const client = new pg.Client(DATABASE_URL);
-    await client.connect();
+    const configuredDevCode = process.env.MULTICA_DEV_VERIFICATION_CODE?.trim();
+    const client = configuredDevCode ? null : new pg.Client(DATABASE_URL);
+    if (client) await client.connect();
     try {
       // Keep each E2E login isolated so previous test runs do not trip the
       // per-email send-code rate limit.
-      await client.query("DELETE FROM verification_code WHERE email = $1", [email]);
+      if (client) await client.query("DELETE FROM verification_code WHERE email = $1", [email]);
 
       // Step 1: Send verification code
       const sendRes = await fetch(`${API_BASE}/auth/send-code`, {
@@ -44,17 +45,20 @@ export class TestApiClient {
         throw new Error(`send-code failed: ${sendRes.status}`);
       }
 
-      // Step 2: Read code from database
-      const result = await client.query(
-        "SELECT code FROM verification_code WHERE email = $1 AND used = FALSE AND expires_at > now() ORDER BY created_at DESC LIMIT 1",
-        [email],
-      );
-      if (result.rows.length === 0) {
-        throw new Error(`No verification code found for ${email}`);
+      let code = configuredDevCode;
+      if (!code) {
+        // Step 2: Read code from the database when the backend does not expose
+        // a fixed development code. This keeps CI isolated while allowing a
+        // container-backed local server to use its configured login path.
+        const result = await client!.query(
+          "SELECT code FROM verification_code WHERE email = $1 AND used = FALSE AND expires_at > now() ORDER BY created_at DESC LIMIT 1",
+          [email],
+        );
+        if (result.rows.length === 0) {
+          throw new Error(`No verification code found for ${email}`);
+        }
+        code = result.rows[0].code;
       }
-
-      const configuredDevCode = process.env.MULTICA_DEV_VERIFICATION_CODE?.trim();
-      const code = configuredDevCode || result.rows[0].code;
 
       // Step 3: Verify code to get JWT
       const verifyRes = await fetch(`${API_BASE}/auth/verify-code`, {
@@ -78,11 +82,11 @@ export class TestApiClient {
         });
       }
 
-      await client.query("DELETE FROM verification_code WHERE email = $1", [email]);
+      if (client) await client.query("DELETE FROM verification_code WHERE email = $1", [email]);
 
       return data;
     } finally {
-      await client.end();
+      if (client) await client.end();
     }
   }
 
@@ -131,30 +135,23 @@ export class TestApiClient {
   }
 
   async markUserOnboarded() {
-    if (!this.email) {
-      throw new Error("Cannot mark E2E user onboarded before login");
-    }
-
-    const client = new pg.Client(DATABASE_URL);
-    await client.connect();
-    try {
-      const result = await client.query(
-        `
-          UPDATE "user"
-          SET
-            onboarded_at = COALESCE(onboarded_at, now()),
-            onboarding_questionnaire = COALESCE(onboarding_questionnaire, '{}'::jsonb)
-              || '{"source":["friends_colleagues"],"source_other":null,"source_skipped":false}'::jsonb
-          WHERE email = $1
-        `,
-        [this.email],
-      );
-      if (result.rowCount !== 1) {
-        throw new Error(`Failed to mark E2E user onboarded: ${this.email}`);
-      }
-    } finally {
-      await client.end();
-    }
+    if (!this.email) throw new Error("Cannot mark E2E user onboarded before login");
+    const questionnaire = await this.authedFetch("/api/me/onboarding", {
+      method: "PATCH",
+      body: JSON.stringify({
+        questionnaire: {
+          source: ["friends_colleagues"],
+          source_other: null,
+          source_skipped: false,
+        },
+      }),
+    });
+    if (!questionnaire.ok) throw new Error(`Failed to complete E2E questionnaire: ${questionnaire.status}`);
+    const response = await this.authedFetch("/api/me/onboarding/complete", {
+      method: "POST",
+      body: JSON.stringify({ completion_path: "skip_existing" }),
+    });
+    if (!response.ok) throw new Error(`Failed to mark E2E user onboarded: ${response.status}`);
   }
 
   async createIssue(title: string, opts?: Record<string, unknown>) {

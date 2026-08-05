@@ -25,14 +25,16 @@ if (typeof globalThis.localStorage?.clear !== "function") {
     configurable: true,
     value: storage,
   });
-  Object.defineProperty(window, "localStorage", {
-    configurable: true,
-    value: storage,
-  });
+  if (typeof window !== "undefined") {
+    Object.defineProperty(window, "localStorage", {
+      configurable: true,
+      value: storage,
+    });
+  }
 }
 
 // jsdom doesn't provide matchMedia; useIsMobile() relies on it.
-if (typeof window.matchMedia !== "function") {
+if (typeof window !== "undefined" && typeof window.matchMedia !== "function") {
   window.matchMedia = (query: string) =>
     ({
       matches: false,
@@ -57,6 +59,6 @@ if (typeof globalThis.ResizeObserver === "undefined") {
 }
 
 // jsdom doesn't implement elementFromPoint; input-otp uses it internally.
-if (typeof document.elementFromPoint !== "function") {
+if (typeof document !== "undefined" && typeof document.elementFromPoint !== "function") {
   document.elementFromPoint = () => null;
 }

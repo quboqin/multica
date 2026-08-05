@@ -7,8 +7,12 @@ export interface SpreadsheetData {
 }
 
 export async function readCopySpreadsheet(file: File): Promise<SpreadsheetData> {
+  return (await readSpreadsheetWorkbook(file))[0] ?? { headers: [], rows: [], sheetName: "Sheet 1" };
+}
+
+export async function readSpreadsheetWorkbook(file: File): Promise<SpreadsheetData[]> {
   if (file.name.toLowerCase().endsWith(".csv")) {
-    return rowsToSpreadsheet(parseCsv(await file.text()), "CSV");
+    return [rowsToSpreadsheet(parseCsv(await file.text()), "CSV")];
   }
   if (!file.name.toLowerCase().endsWith(".xlsx")) {
     throw new Error("Only .xlsx and .csv files are supported");
@@ -25,27 +29,30 @@ export async function readCopySpreadsheet(file: File): Promise<SpreadsheetData> 
   const files = unzipSync(bytes);
   const workbook = parseXml(readArchiveText(files, "xl/workbook.xml"));
   const relationships = parseXml(readArchiveText(files, "xl/_rels/workbook.xml.rels"));
-  const firstSheet = workbook.getElementsByTagName("sheet")[0];
-  if (!firstSheet) throw new Error("The workbook has no sheets");
-  const relationshipId = firstSheet.getAttribute("r:id") ?? "";
-  const relationship = Array.from(relationships.getElementsByTagName("Relationship"))
-    .find((item) => item.getAttribute("Id") === relationshipId);
-  const target = relationship?.getAttribute("Target") ?? "worksheets/sheet1.xml";
-  const worksheetPath = target.startsWith("/")
-    ? target.replace(/^\//, "")
-    : `xl/${target.replace(/^\.\//, "")}`;
   const sharedStrings = readSharedStrings(files);
-  const worksheet = parseXml(readArchiveText(files, worksheetPath));
-  const rows = Array.from(worksheet.getElementsByTagName("row")).map((row) => {
-    const values: string[] = [];
-    for (const cell of Array.from(row.getElementsByTagName("c"))) {
-      const reference = cell.getAttribute("r") ?? "A1";
-      const columnIndex = columnIndexFromReference(reference);
-      values[columnIndex] = readCellValue(cell, sharedStrings);
-    }
-    return values.map((value) => value ?? "");
+  const sheets = Array.from(workbook.getElementsByTagName("sheet"));
+  if (sheets.length === 0) throw new Error("The workbook has no sheets");
+  return sheets.map((sheet) => {
+    const relationshipId = sheet.getAttribute("r:id") ?? "";
+    const relationship = Array.from(relationships.getElementsByTagName("Relationship"))
+      .find((item) => item.getAttribute("Id") === relationshipId);
+    const target = relationship?.getAttribute("Target");
+    if (!target) throw new Error(`Missing workbook relationship for sheet: ${sheet.getAttribute("name") ?? "unknown"}`);
+    const worksheetPath = target.startsWith("/")
+      ? target.replace(/^\//, "")
+      : `xl/${target.replace(/^\.\//, "")}`;
+    const worksheet = parseXml(readArchiveText(files, worksheetPath));
+    const rows = Array.from(worksheet.getElementsByTagName("row")).map((row) => {
+      const values: string[] = [];
+      for (const cell of Array.from(row.getElementsByTagName("c"))) {
+        const reference = cell.getAttribute("r") ?? "A1";
+        const columnIndex = columnIndexFromReference(reference);
+        values[columnIndex] = readCellValue(cell, sharedStrings);
+      }
+      return values.map((value) => value ?? "");
+    });
+    return rowsToSpreadsheet(rows, sheet.getAttribute("name") ?? "Sheet 1");
   });
-  return rowsToSpreadsheet(rows, firstSheet.getAttribute("name") ?? "Sheet 1");
 }
 
 function readArchiveText(files: Record<string, Uint8Array>, path: string): string {

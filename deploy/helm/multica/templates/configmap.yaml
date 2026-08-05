@@ -19,6 +19,10 @@ data:
   DISABLE_WORKSPACE_CREATION: {{ .Values.backend.config.disableWorkspaceCreation | quote }}
   GOOGLE_CLIENT_ID: {{ .Values.backend.config.googleClientId | quote }}
   GOOGLE_REDIRECT_URI: {{ .Values.backend.config.googleRedirectUri | quote }}
+  OSS_ENDPOINT: {{ .Values.backend.config.ossEndpoint | quote }}
+  OSS_REGION: {{ .Values.backend.config.ossRegion | quote }}
+  OSS_BUCKET: {{ .Values.backend.config.ossBucket | quote }}
+  OSS_PUBLIC_BASE_URL: {{ .Values.backend.config.ossPublicBaseUrl | quote }}
   S3_BUCKET: {{ .Values.backend.config.s3Bucket | quote }}
   S3_REGION: {{ .Values.backend.config.s3Region | quote }}
   CLOUDFRONT_DOMAIN: {{ .Values.backend.config.cloudfrontDomain | quote }}

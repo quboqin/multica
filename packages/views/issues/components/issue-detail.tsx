@@ -273,6 +273,32 @@ function formatActivity(
           return t(($) => $.activity.squad_leader_evaluated);
       }
     }
+    case "creative_feedback_recorded": {
+      const comment = details.comment?.trim();
+      switch (`${details.subject_type}:${details.event_type}:${details.decision}`) {
+        case "candidate:decision:selected":
+          return t(($) => $.activity.creative_candidate_selected);
+        case "candidate:decision:rejected":
+          return comment
+            ? t(($) => $.activity.creative_candidate_rejected_comment, { comment })
+            : t(($) => $.activity.creative_candidate_rejected);
+        case "recommended_copy:decision:accepted":
+          return t(($) => $.activity.creative_copy_accepted);
+        case "recommended_copy:decision:replaced":
+        case "recommended_copy:replacement:replaced":
+          return comment
+            ? t(($) => $.activity.creative_copy_replaced_comment, { comment })
+            : t(($) => $.activity.creative_copy_replaced);
+        default:
+          return t(($) => $.activity.creative_feedback_recorded);
+      }
+    }
+    case "creative_feedback_undone":
+      return t(($) => $.activity.creative_feedback_undone);
+    case "creative_variant_adopted":
+      return details.variant_key
+        ? t(($) => $.activity.creative_variant_adopted_key, { variant: details.variant_key })
+        : t(($) => $.activity.creative_variant_adopted);
     default:
       return entry.action ?? "";
   }
@@ -946,10 +972,15 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
     // Coalesce consecutive activities from the same actor + action.
     // - task_completed / task_failed: no time limit (these repeat across runs)
     // - all other actions: within a 2-minute window
-    // - squad_leader_evaluated: never coalesce; outcome/reason are audit data
+    // - decision-bearing activities: never coalesce; their details are audit data
     const COALESCE_MS = 2 * 60 * 1000;
     const NO_TIME_LIMIT_ACTIONS = new Set(["task_completed", "task_failed"]);
-    const NEVER_COALESCE_ACTIONS = new Set(["squad_leader_evaluated"]);
+    const NEVER_COALESCE_ACTIONS = new Set([
+      "squad_leader_evaluated",
+      "creative_feedback_recorded",
+      "creative_feedback_undone",
+      "creative_variant_adopted",
+    ]);
     const coalesced: TimelineEntry[] = [];
     for (const entry of topLevel) {
       if (entry.type === "activity") {

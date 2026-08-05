@@ -1,0 +1,1 @@
+DROP TABLE IF EXISTS creative_market_pack_component_extraction;

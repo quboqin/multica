@@ -76,6 +76,40 @@ func newNotificationBus(t *testing.T, queries *db.Queries) *events.Bus {
 	return bus
 }
 
+func createTestNotificationSquad(t *testing.T, queries *db.Queries, name string) string {
+	t.Helper()
+	ctx := context.Background()
+	var leaderID string
+	if err := testPool.QueryRow(ctx, `SELECT id FROM agent WHERE workspace_id = $1 LIMIT 1`, testWorkspaceID).Scan(&leaderID); err != nil {
+		t.Fatalf("find squad leader agent: %v", err)
+	}
+
+	var squadID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO squad (workspace_id, name, description, leader_id, creator_id)
+		VALUES ($1, $2, '', $3, $4)
+		RETURNING id
+	`, testWorkspaceID, name, leaderID, testUserID).Scan(&squadID); err != nil {
+		t.Fatalf("create test squad: %v", err)
+	}
+	t.Cleanup(func() {
+		if _, err := testPool.Exec(context.Background(), `DELETE FROM squad WHERE id = $1`, squadID); err != nil {
+			t.Errorf("cleanup test squad: %v", err)
+		}
+	})
+	return squadID
+}
+
+func addTestSquadMember(t *testing.T, squadID, memberType, memberID string) {
+	t.Helper()
+	if _, err := testPool.Exec(context.Background(), `
+		INSERT INTO squad_member (squad_id, member_type, member_id, role)
+		VALUES ($1, $2, $3, '')
+	`, squadID, memberType, memberID); err != nil {
+		t.Fatalf("add test squad member: %v", err)
+	}
+}
+
 // TestNotification_IssueCreated_AssigneeNotified verifies that when an issue is
 // created with an assignee different from the creator, the assignee receives an
 // "issue_assigned" inbox notification and the creator receives nothing.
@@ -141,6 +175,96 @@ func TestNotification_IssueCreated_AssigneeNotified(t *testing.T) {
 	// At least one inbox:new event should have been published
 	if len(inboxEvents) < 1 {
 		t.Fatal("expected at least 1 inbox:new event")
+	}
+}
+
+// TestNotification_IssueCreated_SquadAssigneeNotifiesHumanMembers verifies
+// that a squad assignment expands to its human members. The actor is skipped,
+// user assignment preferences are honored, and agent squad members do not get
+// inbox rows because agent task dispatch follows its own path.
+func TestNotification_IssueCreated_SquadAssigneeNotifiesHumanMembers(t *testing.T) {
+	queries := db.New(testPool)
+	bus := newNotificationBus(t, queries)
+
+	humanEmail := "notif-squad-human@multica.ai"
+	humanID := createTestUser(t, humanEmail)
+	t.Cleanup(func() { cleanupTestUser(t, humanEmail) })
+
+	mutedEmail := "notif-squad-muted@multica.ai"
+	mutedID := createTestUser(t, mutedEmail)
+	t.Cleanup(func() { cleanupTestUser(t, mutedEmail) })
+	if _, err := testPool.Exec(context.Background(), `
+		INSERT INTO notification_preference (workspace_id, user_id, preferences)
+		VALUES ($1, $2, '{"assignments":"muted"}'::jsonb)
+	`, testWorkspaceID, mutedID); err != nil {
+		t.Fatalf("mute squad member assignments: %v", err)
+	}
+
+	var agentID string
+	if err := testPool.QueryRow(context.Background(), `SELECT id FROM agent WHERE workspace_id = $1 LIMIT 1`, testWorkspaceID).Scan(&agentID); err != nil {
+		t.Fatalf("find test agent: %v", err)
+	}
+	squadID := createTestNotificationSquad(t, queries, "Notification Squad")
+	addTestSquadMember(t, squadID, "member", testUserID)
+	addTestSquadMember(t, squadID, "member", humanID)
+	addTestSquadMember(t, squadID, "member", mutedID)
+	addTestSquadMember(t, squadID, "agent", agentID)
+
+	issueID := createTestIssue(t, testWorkspaceID, testUserID)
+	t.Cleanup(func() {
+		cleanupInboxForIssue(t, issueID)
+		cleanupTestIssue(t, issueID)
+	})
+
+	var inboxEvents []events.Event
+	bus.Subscribe(protocol.EventInboxNew, func(e events.Event) {
+		inboxEvents = append(inboxEvents, e)
+	})
+
+	assigneeType := "squad"
+	bus.Publish(events.Event{
+		Type:        protocol.EventIssueCreated,
+		WorkspaceID: testWorkspaceID,
+		ActorType:   "member",
+		ActorID:     testUserID,
+		Payload: map[string]any{
+			"issue": handler.IssueResponse{
+				ID:           issueID,
+				WorkspaceID:  testWorkspaceID,
+				Title:        "squad assignment issue",
+				Status:       "todo",
+				Priority:     "medium",
+				CreatorType:  "member",
+				CreatorID:    testUserID,
+				AssigneeType: &assigneeType,
+				AssigneeID:   &squadID,
+			},
+		},
+	})
+
+	humanItems := inboxItemsForRecipient(t, queries, humanID)
+	if len(humanItems) != 1 || humanItems[0].Type != "issue_assigned" {
+		t.Fatalf("expected one issue_assigned inbox item for human squad member, got %+v", humanItems)
+	}
+	if actorItems := inboxItemsForRecipient(t, queries, testUserID); len(actorItems) != 0 {
+		t.Fatalf("expected actor squad member to be skipped, got %d inbox items", len(actorItems))
+	}
+	if mutedItems := inboxItemsForRecipient(t, queries, mutedID); len(mutedItems) != 0 {
+		t.Fatalf("expected muted squad member to be skipped, got %d inbox items", len(mutedItems))
+	}
+
+	var agentInboxCount int
+	if err := testPool.QueryRow(context.Background(), `
+		SELECT count(*) FROM inbox_item
+		WHERE workspace_id = $1 AND recipient_type = 'agent' AND recipient_id = $2 AND issue_id = $3
+	`, testWorkspaceID, agentID, issueID).Scan(&agentInboxCount); err != nil {
+		t.Fatalf("count agent inbox rows: %v", err)
+	}
+	if agentInboxCount != 0 {
+		t.Fatalf("expected no agent inbox rows for squad assignment, got %d", agentInboxCount)
+	}
+	if len(inboxEvents) != 1 {
+		t.Fatalf("expected one inbox:new event for the human squad member, got %d", len(inboxEvents))
 	}
 }
 
@@ -538,8 +662,8 @@ func TestNotification_AssigneeChanged(t *testing.T) {
 				AssigneeType: &newAssigneeType,
 				AssigneeID:   &newAssigneeID,
 			},
-			"assignee_changed":  true,
-			"status_changed":    false,
+			"assignee_changed":   true,
+			"status_changed":     false,
 			"prev_assignee_type": &oldAssigneeType,
 			"prev_assignee_id":   &oldAssigneeID,
 		},

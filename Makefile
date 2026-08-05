@@ -268,6 +268,7 @@ build: ## Build the server, CLI, and migrate binaries into server/bin
 	cd server && go build -ldflags "-X main.version=$(VERSION) -X main.commit=$(COMMIT)" -o bin/server ./cmd/server
 	cd server && go build -ldflags "-X main.version=$(VERSION) -X main.commit=$(COMMIT) -X main.date=$(DATE)" -o bin/multica ./cmd/multica
 	cd server && go build -o bin/migrate ./cmd/migrate
+	cd server && go build -o bin/migrate_attachments_to_oss ./cmd/migrate_attachments_to_oss
 
 test: ## Run Go tests after ensuring the target DB exists and migrations are applied
 	$(REQUIRE_ENV)

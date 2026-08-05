@@ -49,6 +49,30 @@ var creativeSourceAnalysisListCmd = &cobra.Command{
 	RunE:  runCreativeSourceAnalysisList,
 }
 
+var creativeMarketPackCmd = &cobra.Command{
+	Use:   "market-pack",
+	Short: "Work with creative market packs",
+}
+
+var creativeMarketPackExtractionCmd = &cobra.Command{
+	Use:   "component-extraction",
+	Short: "Read and write market-pack component extraction results",
+}
+
+var creativeMarketPackExtractionGetCmd = &cobra.Command{
+	Use:   "get <resource-id> <extraction-id>",
+	Short: "Get one component extraction and its source attachment",
+	Args:  exactArgs(2),
+	RunE:  runCreativeMarketPackExtractionGet,
+}
+
+var creativeMarketPackExtractionPutCmd = &cobra.Command{
+	Use:   "put <resource-id> <extraction-id>",
+	Short: "Save one component extraction result from JSON",
+	Args:  exactArgs(2),
+	RunE:  runCreativeMarketPackExtractionPut,
+}
+
 var creativeOrderCmd = &cobra.Command{
 	Use:   "order",
 	Short: "Work with creative production orders",
@@ -115,6 +139,13 @@ func init() {
 	creativeSourceAnalysisPutCmd.Flags().String("output", "json", "Output format: json")
 	creativeSourceAnalysisListCmd.Flags().String("candidate-id", "", "Only return analyses for one candidate UUID")
 	creativeSourceAnalysisListCmd.Flags().String("output", "json", "Output format: json")
+
+	creativeCmd.AddCommand(creativeMarketPackCmd)
+	creativeMarketPackCmd.AddCommand(creativeMarketPackExtractionCmd)
+	creativeMarketPackExtractionCmd.AddCommand(creativeMarketPackExtractionGetCmd, creativeMarketPackExtractionPutCmd)
+	creativeMarketPackExtractionGetCmd.Flags().String("output", "json", "Output format: json")
+	creativeMarketPackExtractionPutCmd.Flags().String("input-file", "", "UTF-8 JSON extraction result (required)")
+	creativeMarketPackExtractionPutCmd.Flags().String("output", "json", "Output format: json")
 
 	creativeCmd.AddCommand(creativeOrderCmd)
 	creativeOrderCmd.AddCommand(
@@ -246,6 +277,14 @@ func runCreativeSourceAnalysisList(cmd *cobra.Command, _ []string) error {
 		path += "?candidate_id=" + url.QueryEscape(strings.TrimSpace(candidateID))
 	}
 	return getCreativeDomainJSON(cmd, path)
+}
+
+func runCreativeMarketPackExtractionGet(cmd *cobra.Command, args []string) error {
+	return getCreativeDomainJSON(cmd, "/api/creative/resources/"+url.PathEscape(args[0])+"/component-extractions/"+url.PathEscape(args[1]))
+}
+
+func runCreativeMarketPackExtractionPut(cmd *cobra.Command, args []string) error {
+	return putCreativeDomainJSON(cmd, "/api/creative/resources/"+url.PathEscape(args[0])+"/component-extractions/"+url.PathEscape(args[1]))
 }
 
 func runCreativeOrderCreate(cmd *cobra.Command, _ []string) error {

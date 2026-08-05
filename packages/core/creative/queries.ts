@@ -8,6 +8,8 @@ export const creativeKeys = {
     [...creativeKeys.all(wsId), "resources", kind ?? "all"] as const,
   resourceFiles: (wsId: string, resourceId: string) =>
     [...creativeKeys.all(wsId), "resource-files", resourceId] as const,
+  marketPackExtraction: (wsId: string, resourceId: string) =>
+    [...creativeKeys.all(wsId), "market-pack-component-extraction", resourceId] as const,
   materials: (wsId: string) => [...creativeKeys.all(wsId), "materials"] as const,
   copyEntries: (wsId: string, libraryId: string) =>
     [...creativeKeys.all(wsId), "copy-entries", libraryId] as const,
@@ -18,6 +20,7 @@ export const creativeKeys = {
   analyses: (wsId: string) => [...creativeKeys.all(wsId), "source-analyses"] as const,
   feedback: (wsId: string, subjectType = "", subjectId = "") =>
     [...creativeKeys.all(wsId), "feedback", subjectType, subjectId] as const,
+  feedbackMetrics: (wsId: string) => [...creativeKeys.all(wsId), "feedback-metrics"] as const,
 };
 
 export const creativeMaterialLibraryOptions = (wsId: string) =>
@@ -41,6 +44,17 @@ export const creativeResourceFilesOptions = (wsId: string, resourceId: string) =
     enabled: !!wsId && !!resourceId,
   });
 
+export const creativeMarketPackComponentExtractionOptions = (wsId: string, resourceId: string) =>
+  queryOptions({
+    queryKey: creativeKeys.marketPackExtraction(wsId, resourceId),
+    queryFn: () => api.getLatestCreativeMarketPackComponentExtraction(resourceId),
+    enabled: !!wsId && !!resourceId,
+    refetchInterval: (query) => {
+      const status = query.state.data?.status;
+      return status === "pending" || status === "running" ? 2000 : false;
+    },
+  });
+
 export const creativeCopyEntriesOptions = (wsId: string, libraryId: string) =>
   queryOptions({
     queryKey: creativeKeys.copyEntries(wsId, libraryId),
@@ -61,5 +75,10 @@ export const creativeSourceAnalysesOptions = (wsId: string) => queryOptions({ qu
 export const creativeFeedbackOptions = (wsId: string, subjectType = "", subjectId = "") => queryOptions({
   queryKey: creativeKeys.feedback(wsId, subjectType, subjectId),
   queryFn: () => api.listCreativeFeedback(subjectType, subjectId),
+  enabled: !!wsId,
+});
+export const creativeFeedbackMetricsOptions = (wsId: string) => queryOptions({
+  queryKey: creativeKeys.feedbackMetrics(wsId),
+  queryFn: () => api.getCreativeFeedbackMetrics(),
   enabled: !!wsId,
 });

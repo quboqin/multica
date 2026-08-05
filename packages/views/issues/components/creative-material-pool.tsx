@@ -168,7 +168,7 @@ export function CreativeMaterialPool({ issue }: { issue: Issue }) {
   );
   const selectedCandidates = candidates.filter((candidate) => candidate.status === "selected");
   const expectedDeliveryCount = selectedCandidates.length * 9;
-  const marketPacks = (resources.data?.resources ?? []).filter((resource) => resource.kind === "market_pack" && resource.status === "published");
+  const marketPacks = (resources.data?.resources ?? []).filter((resource) => resource.kind === "market_pack" && resource.published_version > 0);
   const currentContext = materials.data?.context;
   const defaultMarketPackId = marketPacks[0]?.id ?? "";
   const defaultSquadId = squads.data?.[0]?.id ?? "";
@@ -181,9 +181,10 @@ export function CreativeMaterialPool({ issue }: { issue: Issue }) {
   }, [currentContext?.market_pack_id, currentContext?.squad_id, defaultMarketPackId, defaultSquadId]);
 
   const activeMarketPack = marketPacks.find((resource) => resource.id === contextDraft.market_pack_id);
-  const copyLibraryId = stringConfig(activeMarketPack?.config, "copy_library_id");
-  const benefitOptions = stringArrayConfig(activeMarketPack?.config, "benefit_taxonomy");
-  const themeOptions = stringArrayConfig(activeMarketPack?.config, "theme_presets");
+  const activeMarketConfig = activeMarketPack?.published_config ?? {};
+  const copyLibraryId = stringConfig(activeMarketConfig, "copy_library_id");
+  const benefitOptions = stringArrayConfig(activeMarketConfig, "benefit_taxonomy");
+  const themeOptions = stringArrayConfig(activeMarketConfig, "theme_presets");
   const copyEntries = useQuery(creativeCopyEntriesOptions(wsId, copyLibraryId));
   const itemByCandidate = useMemo(() => new Map((materials.data?.items ?? []).map((item) => [item.candidate_id, item])), [materials.data?.items]);
   const creativeWorkIssueIds = useMemo(
@@ -339,7 +340,7 @@ export function CreativeMaterialPool({ issue }: { issue: Issue }) {
         mode: "upsert",
         source_filename: "Issue 在线编辑",
         mapping: {},
-        entries: [{ ...value, external_key: externalKey, copy_role: "issue_override", market: stringConfig(activeMarketPack?.config, "market"), locale: stringConfig(activeMarketPack?.config, "locale"), tags: ["issue-override"], status: "approved", metadata: { issue_id: issue.id, candidate_id: candidateId } }],
+        entries: [{ ...value, external_key: externalKey, copy_role: "issue_override", market: stringConfig(activeMarketConfig, "market"), locale: stringConfig(activeMarketConfig, "locale"), tags: ["issue-override"], status: "approved", metadata: { issue_id: issue.id, candidate_id: candidateId } }],
       });
       const latest = await api.listCreativeCopyEntries(copyLibraryId);
       const created = latest.entries.find((entry) => entry.external_key === externalKey);
@@ -584,11 +585,21 @@ function CreativeComparisonPreview({ issueId, assets, activeAsset, candidates, c
     if (decision === "downloaded") return;
     void api.createCreativeFeedback({ issue_id: issueId, subject_type: "asset", subject_id: current.id, event_type: "decision", decision: decision === "accepted" ? "accepted" : "needs_revision", reason_codes: decision === "abandoned" ? ["other"] : [], context_snapshot: { candidate_id: candidateId, variant: group?.variant ?? null, size: deliveryByAttachment.get(current.id)?.size ?? "" } }).catch(() => undefined);
   };
-  const annotate = (annotation: CreativeAnnotationDraft) => {
-    if (!issueId || !candidateId) return;
-    void api.createCreativeFeedback({ issue_id: issueId, subject_type: "asset", subject_id: current.id, event_type: "annotation", decision: "needs_revision", reason_codes: [annotation.issueType === "theme_drift" ? "theme_mismatch" : annotation.issueType === "artifact" ? "broken_image" : annotation.issueType], comment: annotation.comment, annotation: { id: crypto.randomUUID(), asset_id: current.id, kind: annotation.kind, issue_type: annotation.issueType, x: annotation.x, y: annotation.y, width: annotation.width, height: annotation.height, scope: annotation.scope, comment: annotation.comment }, context_snapshot: { candidate_id: candidateId, variant: group?.variant ?? null, size: deliveryByAttachment.get(current.id)?.size ?? "" } }).catch(() => undefined);
+  const annotate = async (annotations: CreativeAnnotationDraft[]) => {
+    if (!issueId || !candidateId) return false;
+    if (annotations.length === 0 || annotations.some((annotation) => !annotation.comment.trim())) return false;
+    const first = annotations[0]!;
+    const summary = annotations.map((annotation, index) => `标注 ${index + 1}：${annotation.comment.trim()}`).join("\n");
+    try {
+      await api.createCreativeFeedback({ issue_id: issueId, subject_type: "asset", subject_id: current.id, event_type: "annotation", decision: "needs_revision", reason_codes: [...new Set(annotations.map((annotation) => annotation.issueType === "theme_drift" ? "theme_mismatch" : annotation.issueType === "artifact" ? "broken_image" : annotation.issueType))], comment: summary, annotation: { id: crypto.randomUUID(), asset_id: current.id, kind: first.kind, issue_type: first.issueType, x: first.x, y: first.y, width: first.width, height: first.height, scope: first.scope, comment: first.comment }, context_snapshot: { candidate_id: candidateId, variant: group?.variant ?? null, size: deliveryByAttachment.get(current.id)?.size ?? "", annotations } });
+      toast.success(`${annotations.length} 处标注已保存`);
+      return true;
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "无法保存标注");
+      return false;
+    }
   };
-  return <CreativeComparisonWorkspace source={{ label: candidate?.title || candidate?.competitor || "竞品原图", url: sourceURL || current.url }} result={{ id: current.id, label: current.filename, finalUrl: current.download_url || current.url, baseUrl: "", thumbnailUrl: current.markdown_url || current.url, size: deliveryByAttachment.get(current.id)?.size, variant: group?.variant ? `V${String(group.variant).padStart(2, "0")}` : undefined }} assets={assets.map((asset) => { const assetGroup = groupCreativeDeliveries(assets, deliveryByAttachment).find((value) => value.assets.some((entry) => entry.id === asset.id)); return { id: asset.id, label: asset.filename, finalUrl: asset.download_url || asset.url, baseUrl: "", thumbnailUrl: asset.markdown_url || asset.url, size: deliveryByAttachment.get(asset.id)?.size, variant: assetGroup?.variant ? `V${String(assetGroup.variant).padStart(2, "0")}` : undefined }; })} onAssetChange={onAssetChange} onAdjust={() => onAdjust({ candidateId, asset: current, groupAssets: group?.assets ?? [current], delivery: deliveryByAttachment.get(current.id), groupDeliveries: (group?.assets ?? [current]).flatMap((asset) => { const delivery = deliveryByAttachment.get(asset.id); return delivery ? [delivery] : []; }), variant: group?.variant ?? null })} onDecision={record} onAnnotation={annotate} />;
+  return <CreativeComparisonWorkspace source={{ label: candidate?.title || candidate?.competitor || "竞品原图", url: sourceURL || current.url }} result={{ id: current.id, label: current.filename, finalUrl: current.download_url || current.url, baseUrl: "", thumbnailUrl: current.markdown_url || current.url, size: deliveryByAttachment.get(current.id)?.size, variant: group?.variant ? `V${String(group.variant).padStart(2, "0")}` : undefined }} assets={assets.map((asset) => { const assetGroup = groupCreativeDeliveries(assets, deliveryByAttachment).find((value) => value.assets.some((entry) => entry.id === asset.id)); return { id: asset.id, label: asset.filename, finalUrl: asset.download_url || asset.url, baseUrl: "", thumbnailUrl: asset.markdown_url || asset.url, size: deliveryByAttachment.get(asset.id)?.size, variant: assetGroup?.variant ? `V${String(assetGroup.variant).padStart(2, "0")}` : undefined }; })} onAssetChange={onAssetChange} onAdjust={() => onAdjust({ candidateId, asset: current, groupAssets: group?.assets ?? [current], delivery: deliveryByAttachment.get(current.id), groupDeliveries: (group?.assets ?? [current]).flatMap((asset) => { const delivery = deliveryByAttachment.get(asset.id); return delivery ? [delivery] : []; }), variant: group?.variant ?? null })} onDecision={record} onAnnotations={annotate} />;
 }
 
 function CandidateFilters({ candidates, filter, onChange }: { candidates: CreativeMaterialCandidate[]; filter: CandidateFilter; onChange: (filter: CandidateFilter) => void }) {

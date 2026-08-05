@@ -115,6 +115,10 @@ manifest 使用以下结构：
 `copy_snapshot`。Leader 和 Planner 只消费该快照；不得在设计阶段重新推荐、替换、拼接或根据竞品数字
 改写文案。快照缺少必要事实是输入错误，才进入 `action_required`。
 
+竞品信息机制只在 `copy_snapshot` 可表达的范围内转译。参考图中的问题、选项、按钮或标签没有已批准
+对应文本时，不得要求 Planner 把它们列为硬性必现内容，也不得因此回头阻塞用户；Planner 应把获批标题
+和利益点映射成兼容的结构关系，并明确记录被省略的未批准竞品文字。
+
 ## 阶段二：三变体生成
 
 三个 Variant 的 `creative_production` task 一次 fanout，允许并发。每个 task 内：
@@ -167,6 +171,14 @@ manifest、输出附件和机器校验证据；不得要求 direct edit 补造�
 - `variant_subset`：同一变体的一组尺寸；
 - `variant`：标准生产为同一变体三张，direct edit 为本次 `expected_sizes`；
 - `replan`：只重做指定变体方案，再生产该变体。
+
+当 QC 证据表明失败来自 brief 同时“要求出现某参考文字”又“禁止新增该文字”时，用户选择调整后必须
+使用 `replan`，由 Planner 先修订 `mechanism_adaptation`，不能把相同冲突提示词直接交给 Producer 重试。
+
+页面调整评论必须同时提供 `creative_order_id`、`creative_order_item_id`、`variant_id`、`asset_id`、
+`size_key` 和 `revision`。先用 `creative order get` 核对这些 ID 属于同一订单链路，再创建返工 task；任一
+字段缺失或不一致时停止并请求补全。`V01`/`V02`/`V03` 只用于展示，同一订单的不同 item 会重复，绝不能
+按 `variant_key`、评论顺序或第一个同名变体猜目标。
 
 普通返工以对应尺寸上一版无品牌底图为第一输入；`replan` 以原候选图为第一输入。不得重做无关变体
 和已接受尺寸。返工后的 Prime 与两类 QC 仍使用 task，revision 加一。第二轮仍失败时停止模型调用，

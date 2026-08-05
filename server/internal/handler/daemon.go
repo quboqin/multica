@@ -1990,6 +1990,46 @@ SELECT EXISTS(
 	return "", nil
 }
 
+func (h *Handler) marketPackComponentExtractionCompletionError(ctx context.Context, task db.AgentTaskQueue, workspaceID string) (string, error) {
+	if !task.TriggerEvidenceKind.Valid || task.TriggerEvidenceKind.String != marketPackComponentExtractionEvidenceKind {
+		return "", nil
+	}
+	if task.Status == "completed" || task.Status == "failed" || task.Status == "cancelled" {
+		return "", nil
+	}
+	var taskContext creativeMarketPackExtractionTaskContext
+	if err := json.Unmarshal(task.Context, &taskContext); err != nil || taskContext.Workflow != "creative_market_pack_component_extraction" {
+		return "market pack component extraction completed with invalid task context", nil
+	}
+	extractionID, extractionErr := util.ParseUUID(strings.TrimSpace(taskContext.ExtractionID))
+	resourceID, resourceErr := util.ParseUUID(strings.TrimSpace(taskContext.ResourceID))
+	attachmentID, attachmentErr := util.ParseUUID(strings.TrimSpace(taskContext.SourceAttachmentID))
+	resolvedWorkspaceID, workspaceErr := util.ParseUUID(strings.TrimSpace(workspaceID))
+	if extractionErr != nil || resourceErr != nil || attachmentErr != nil || workspaceErr != nil ||
+		taskContext.SourceWidth < 1 || taskContext.SourceHeight < 1 ||
+		!task.TriggerEvidenceRefID.Valid || task.TriggerEvidenceRefID != extractionID {
+		return "market pack component extraction completed with invalid artifact coordinates", nil
+	}
+	var exists bool
+	if err := h.DB.QueryRow(ctx, `
+SELECT EXISTS(
+  SELECT 1
+  FROM creative_market_pack_component_extraction extraction
+  WHERE extraction.id = $1 AND extraction.workspace_id = $2
+    AND extraction.resource_id = $3 AND extraction.source_attachment_id = $4
+    AND extraction.source_width = $5 AND extraction.source_height = $6
+    AND extraction.status IN ('completed', 'applied')
+)
+`, extractionID, resolvedWorkspaceID, resourceID, attachmentID, taskContext.SourceWidth, taskContext.SourceHeight).Scan(&exists); err != nil {
+		return "", err
+	}
+	if !exists {
+		h.failCreativeMarketPackExtraction(ctx, extractionID, "Component extraction task completed without a matching saved result.")
+		return "market pack component extraction completed without a matching saved result", nil
+	}
+	return "", nil
+}
+
 func (h *Handler) CompleteTask(w http.ResponseWriter, r *http.Request) {
 	taskID := chi.URLParam(r, "taskId")
 
@@ -2005,21 +2045,25 @@ func (h *Handler) CompleteTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if artifactError, err := h.referenceAnalysisCompletionError(r.Context(), existingTask, workspaceID); err != nil {
-		slog.Error("validate reference analysis task output failed", "task_id", taskID, "error", err)
+	artifactError, validationErr := h.referenceAnalysisCompletionError(r.Context(), existingTask, workspaceID)
+	if validationErr == nil && artifactError == "" {
+		artifactError, validationErr = h.marketPackComponentExtractionCompletionError(r.Context(), existingTask, workspaceID)
+	}
+	if validationErr != nil {
+		slog.Error("validate creative task output failed", "task_id", taskID, "error", validationErr)
 		writeError(w, http.StatusInternalServerError, "failed to validate task output")
 		return
 	} else if artifactError != "" {
 		task, failErr := h.TaskService.FailTask(r.Context(), existingTask.ID, artifactError, req.SessionID, req.WorkDir, "creative_output_missing")
 		if failErr != nil {
-			slog.Warn("fail reference analysis task without output", "task_id", taskID, "error", failErr)
+			slog.Warn("fail creative task without output", "task_id", taskID, "error", failErr)
 			writeError(w, http.StatusBadRequest, failErr.Error())
 			return
 		}
 		if err := h.Queries.DeleteTaskTokensByTask(r.Context(), task.ID); err != nil {
 			slog.Warn("complete task without output: failed to revoke task tokens", "task_id", uuidToString(task.ID), "error", err)
 		}
-		slog.Warn("reference analysis task failed closed", "task_id", taskID, "error", artifactError)
+		slog.Warn("creative task failed closed", "task_id", taskID, "error", artifactError)
 		writeJSON(w, http.StatusOK, h.hydratedTaskResponse(r.Context(), *task, workspaceID))
 		return
 	}

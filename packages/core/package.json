@@ -92,6 +92,7 @@
     "./github/queries": "./github/queries.ts",
     "./creative": "./creative/index.ts",
     "./creative/queries": "./creative/queries.ts",
+    "./creative/mutations": "./creative/mutations.ts",
     "./credential": "./credential/index.ts",
     "./credential/queries": "./credential/queries.ts",
     "./lark": "./lark/index.ts",
