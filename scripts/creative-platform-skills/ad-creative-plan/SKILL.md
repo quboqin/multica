@@ -107,6 +107,40 @@ multica task by-source list --agent <producer-agent-id> \
 把 V01-V03 中所有就绪项放入同一个 manifest，一次 fanout；不得按变体串行调用三次，也不得等待某个
 production task 完成后才提交兄弟变体。
 
+`production-manifest.json` 的外层来源必须固定引用当前真实 Order Item。不要生成随机 UUID，不要借用
+`creative_crawl_run`、`creative_crawl_run_analysis` 或订单自身的 trigger evidence；这些来源无法被后续
+生产失败恢复和幂等查询正确识别。manifest 结构如下，其中每个 Variant 仅通过 `item_key` 和 context
+区分：
+
+```json
+{
+  "trigger_evidence_kind": "creative_order_item_production",
+  "trigger_evidence_ref_id": "<order-item-id>",
+  "items": [
+    {
+      "item_key": "<variant-id>:r<revision>",
+      "context": {
+        "type": "creative_domain_task",
+        "workflow": "creative_production",
+        "issue_id": "<issue-id>",
+        "leader_agent_id": "<leader-agent-id>",
+        "creative_order_id": "<order-id>",
+        "creative_order_item_id": "<order-item-id>",
+        "variant_id": "<variant-id>",
+        "candidate_id": "<candidate-id>",
+        "revision": 1,
+        "expected_sizes": ["1080x1080", "1200x628", "800x1000"],
+        "prime_agent_id": "<prime-agent-id>",
+        "reviewer_agent_id": "<reviewer-agent-id>"
+      }
+    }
+  ]
+}
+```
+
+写文件后先用 JSON 解析器校验，再调用 fanout。CLI 拒绝时按返回的字段错误修正同一文件；只要没有返回
+已创建 task，就不把本轮描述为“已入队”。
+
 ```bash
 multica task fanout --agent <producer-agent-id> --input-file <production-manifest.json> --output json
 ```
