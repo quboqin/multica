@@ -1448,10 +1448,10 @@ func TestCodexFirstTurnNoProgressTimeout(t *testing.T) {
 		semantic time.Duration
 		want     time.Duration
 	}{
-		{name: "non-positive uses default", semantic: 0, want: 60 * time.Second},
+		{name: "non-positive uses default", semantic: 0, want: 10 * time.Minute},
 		{name: "below cap matches semantic", semantic: 30 * time.Second, want: 30 * time.Second},
-		{name: "at cap matches semantic", semantic: 60 * time.Second, want: 60 * time.Second},
-		{name: "above cap uses default", semantic: 61 * time.Second, want: 60 * time.Second},
+		{name: "at cap matches semantic", semantic: 10 * time.Minute, want: 10 * time.Minute},
+		{name: "above cap uses default", semantic: 10*time.Minute + time.Second, want: 10 * time.Minute},
 	}
 
 	for _, tt := range tests {

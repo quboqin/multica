@@ -36,7 +36,7 @@ var codexBlockedArgs = map[string]blockedArgMode{
 const (
 	codexStderrTailBytes                   = 2048
 	defaultCodexSemanticInactivityTimeout  = 10 * time.Minute
-	defaultCodexFirstTurnNoProgressTimeout = 60 * time.Second
+	defaultCodexFirstTurnNoProgressTimeout = 10 * time.Minute
 	codexVersionDiagnosticTimeout          = 2 * time.Second
 	// Successful Codex runs have already emitted the final turn output. Keep
 	// their shutdown grace short so user-visible chat completion is not held
