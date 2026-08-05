@@ -360,6 +360,7 @@ function CreativeOrderDraft({ candidates, analyses, onDone }: { candidates: Crea
           description: "从创意工厂提交。Issue 用于业务协作、阻塞决策和最终验收；过程状态请在创意订单查看。",
           status: "todo",
           metadata: { workflow: "creative_order", creative_submission_key: submissionKey },
+          allow_duplicate: true,
         });
         if (!issue.id) throw new Error("创意订单 Issue 初始化失败，请重试");
         issueId = issue.id;

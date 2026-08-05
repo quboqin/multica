@@ -17,6 +17,7 @@ export interface CreateIssueRequest {
   due_date?: string;
   attachment_ids?: string[];
 	metadata?: IssueMetadata;
+	allow_duplicate?: boolean;
 }
 
 export interface UpdateIssueRequest {
