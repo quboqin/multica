@@ -129,8 +129,11 @@ multica creative order asset-put <order-id> --input-file <generated-asset.json> 
 
 同样上传并登记 batch 原始结果与规范化 evidence；它们可使用对应尺寸的 `stage: "generated"` asset
 metadata/evidence 或领域 API 已返回的附件引用。附件上传能力不可用时，不要转用旧会话附件路径；只使用
-已返回的领域附件 ID 或请求平台提供 domain attachment API。三张 `generated` 资产和证据完整后，用
-`variant-put` 将该 variant 更新为 `partial`（等待 Prime/QC）或 `completed`（仅当当前状态机定义已完成）。
+已返回的领域附件 ID 或请求平台提供 domain attachment API。三张 `generated` 资产和证据完整后，可用
+`variant-put` 将该 variant 更新为 `partial`（等待 Prime/QC）。`variant-put` 是完整 upsert，不是 PATCH；
+输入必须从 `creative order get` 原样保留该 Variant 的 `order_item_id`、`variant_key` 和完整 `brief`，只修改
+`status`，不能只提交 `id`、`revision` 和 `status`。状态写回失败时记录错误，但不得因此跳过下一段 Prime
+幂等查询与 fanout；三张当前 revision 的 generated 资产齐备才是 Prime 的前置条件。
 
 随后从当前 task context 读取 `prime_agent_id` 和 `reviewer_agent_id`，先查询该 variant 的 Prime task：
 
@@ -146,6 +149,31 @@ Prime task，且当前 revision 尚未有完整 primed assets 时，fanout 一�
 `workflow: creative_prime`，并从当前 task 原样复制 `issue_id`、`leader_agent_id`，携带
 order/item/variant/revision、`expected_sizes`、reviewer agent ID 和三张 generated asset ID。
 提交后立即结束，不轮询 Prime：
+
+```json
+{
+  "trigger_evidence_kind": "creative_order_variant_prime",
+  "trigger_evidence_ref_id": "<variant-id>",
+  "items": [
+    {
+      "item_key": "<variant-id>:r<revision>",
+      "context": {
+        "type": "creative_domain_task",
+        "workflow": "creative_prime",
+        "issue_id": "<issue-id>",
+        "leader_agent_id": "<leader-agent-id>",
+        "creative_order_id": "<order-id>",
+        "creative_order_item_id": "<order-item-id>",
+        "variant_id": "<variant-id>",
+        "revision": 1,
+        "expected_sizes": ["1080x1080", "1200x628", "800x1000"],
+        "reviewer_agent_id": "<reviewer-agent-id>",
+        "generated_asset_ids": ["<square-asset-id>", "<landscape-asset-id>", "<portrait-asset-id>"]
+      }
+    }
+  ]
+}
+```
 
 ```bash
 multica task fanout --agent <prime-agent-id> --input-file <prime-manifest.json> --output json
