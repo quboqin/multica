@@ -63,6 +63,7 @@ import { toast } from "sonner";
 import { PageHeader } from "../../layout/page-header";
 import { useNavigation } from "../../navigation";
 import { readCopySpreadsheet, type SpreadsheetData } from "../lib/xlsx-copy-import";
+import { creativeAttachmentBrowserURL } from "../lib/creative-attachment-url";
 import { CreativeMaterialLibrary } from "./creative-material-library";
 import { CreativeCollectionPlans } from "./creative-collection-plans";
 import { CreativeComparisonWorkspace, type CreativeAnnotationDraft } from "./creative-comparison-workspace";
@@ -246,7 +247,8 @@ function CreativeOrderDetail({ orderId, onBack }: { orderId: string; onBack: () 
   const ids = [...new Set(assets.map((asset) => asset.attachment_id).filter(Boolean))];
   const attachments = useQuery({ queryKey: ["creative", wsId, "order-attachments", orderId, ids], queryFn: () => Promise.all(ids.map((id) => api.getAttachment(id))), enabled: ids.length > 0 });
   const byId = new Map((attachments.data ?? []).map((item) => [item.id, item]));
-  const reviewAssets = selectCreativeReviewAssets(assets);
+  const variantOrder = data?.items.flatMap((item) => item.variants.map((variant) => variant.id)) ?? [];
+  const reviewAssets = selectCreativeReviewAssets(assets, variantOrder);
   const [activeAssetId, setActiveAssetId] = useState("");
   const [adjustOpen, setAdjustOpen] = useState(false);
   const [adjustment, setAdjustment] = useState("");
@@ -264,7 +266,7 @@ function CreativeOrderDetail({ orderId, onBack }: { orderId: string; onBack: () 
   const generatedFor = (asset: CreativeOrderAsset) => assets.find((candidate) => candidate.status === "completed" && candidate.variant_id === asset.variant_id && candidate.size_key === asset.size_key && candidate.revision === asset.revision && candidate.stage === "generated");
   const attachmentURL = (asset?: CreativeOrderAsset) => {
     const attachment = asset ? byId.get(asset.attachment_id) : undefined;
-    return resolvePublicFileUrl(attachment?.download_url || attachment?.url) ?? "";
+    return creativeAttachmentBrowserURL(attachment);
   };
   const comparisonAssets = reviewAssets.filter((asset) => byId.has(asset.attachment_id)).map((asset) => ({ id: asset.id, label: `${asset.stage} · ${asset.size_key}`, finalUrl: attachmentURL(asset), baseUrl: attachmentURL(generatedFor(asset)), thumbnailUrl: byId.get(asset.attachment_id)?.url, size: asset.size_key, variant: variantById.get(asset.variant_id)?.variant.variant_key || "" }));
 
@@ -378,7 +380,7 @@ function creativeWorkflowLabel(workflow: string): string {
   return labels[workflow] || workflow || "未知步骤";
 }
 
-export function selectCreativeReviewAssets(assets: CreativeOrderAsset[]): CreativeOrderAsset[] {
+export function selectCreativeReviewAssets(assets: CreativeOrderAsset[], variantOrder: string[] = []): CreativeOrderAsset[] {
   const selected = new Map<string, CreativeOrderAsset>();
   for (const asset of assets) {
     if (asset.status !== "completed" || !asset.attachment_id) continue;
@@ -386,9 +388,16 @@ export function selectCreativeReviewAssets(assets: CreativeOrderAsset[]): Creati
     const current = selected.get(key);
     if (!current || compareCreativeAssets(asset, current) > 0) selected.set(key, asset);
   }
-  return [...selected.values()].sort((left, right) =>
-    left.variant_id.localeCompare(right.variant_id) || left.size_key.localeCompare(right.size_key),
-  );
+  const rank = new Map(variantOrder.map((variantId, index) => [variantId, index]));
+  return [...selected.values()].sort((left, right) => {
+    const leftRank = rank.get(left.variant_id);
+    const rightRank = rank.get(right.variant_id);
+    if (leftRank !== undefined || rightRank !== undefined) {
+      const difference = (leftRank ?? Number.MAX_SAFE_INTEGER) - (rightRank ?? Number.MAX_SAFE_INTEGER);
+      if (difference !== 0) return difference;
+    }
+    return left.variant_id.localeCompare(right.variant_id) || left.size_key.localeCompare(right.size_key);
+  });
 }
 
 function compareCreativeAssets(left: CreativeOrderAsset, right: CreativeOrderAsset): number {

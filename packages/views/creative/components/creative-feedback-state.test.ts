@@ -208,4 +208,18 @@ describe("creative feedback state", () => {
 
     expect(selectCreativeReviewAssets(assets).map((asset) => asset.id)).toEqual(["v1-new", "v1-wide", "v2-square"]);
   });
+
+  it("shows review assets in the business variant order instead of UUID order", () => {
+    const assets = [
+      { id: "asset-v03", variant_id: "aaa-v03", size_key: "1080x1080", revision: 1, stage: "primed", status: "completed", attachment_id: "a3", updated_at: "2026-08-01" },
+      { id: "asset-v01", variant_id: "zzz-v01", size_key: "1080x1080", revision: 1, stage: "primed", status: "completed", attachment_id: "a1", updated_at: "2026-08-01" },
+      { id: "asset-v02", variant_id: "mmm-v02", size_key: "1080x1080", revision: 1, stage: "primed", status: "completed", attachment_id: "a2", updated_at: "2026-08-01" },
+    ] as CreativeOrderAsset[];
+
+    expect(selectCreativeReviewAssets(assets, ["zzz-v01", "mmm-v02", "aaa-v03"]).map((asset) => asset.id)).toEqual([
+      "asset-v01",
+      "asset-v02",
+      "asset-v03",
+    ]);
+  });
 });
