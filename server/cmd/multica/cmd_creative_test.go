@@ -329,6 +329,24 @@ func TestExecuteImageEditBatchRunsDependentJobsTogether(t *testing.T) {
 	if maxInFlight.Load() != 2 {
 		t.Fatalf("max in-flight requests = %d, want 2", maxInFlight.Load())
 	}
+	wantPrompts := map[string]string{"square": "square", "landscape": "landscape", "portrait": "portrait"}
+	for _, result := range summary.Results {
+		wantPrompt := wantPrompts[result.ID]
+		if result.Prompt != wantPrompt || result.PromptSHA256 != imagePromptSHA256(wantPrompt) {
+			t.Fatalf("result prompt trace for %s = (%q, %q)", result.ID, result.Prompt, result.PromptSHA256)
+		}
+	}
+}
+
+func TestImagePromptSHA256PreservesExactPromptBytes(t *testing.T) {
+	left := "  Pertahankan teks ini.\n"
+	right := strings.TrimSpace(left)
+	if imagePromptSHA256(left) == imagePromptSHA256(right) {
+		t.Fatal("prompt hash ignored significant whitespace")
+	}
+	if got := imagePromptSHA256("Halo"); got != "4e86512d9a0af8a743d42a1a0f3eaee0945790ddb79c8db14309337c1235b2e4" {
+		t.Fatalf("imagePromptSHA256 = %q", got)
+	}
 }
 
 func TestGlobalImageSlotsBoundConcurrency(t *testing.T) {

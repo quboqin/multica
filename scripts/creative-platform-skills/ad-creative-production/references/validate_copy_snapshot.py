@@ -76,9 +76,13 @@ def validate_snapshot(snapshot: dict[str, Any], candidate_id: str) -> None:
     if status not in {"approved", "user_custom"}:
         raise ValueError(f"candidate {candidate_id} copy snapshot has invalid status")
     if status == "approved":
-        required = ("library_id", "library_version", "recipe_id", "recipe_key")
+        required = ("library_id", "library_version")
         if any(not snapshot.get(field) for field in required):
-            raise ValueError(f"candidate {candidate_id} approved copy snapshot has incomplete recipe provenance")
+            raise ValueError(f"candidate {candidate_id} approved copy snapshot has incomplete library provenance")
+        has_composition = bool(snapshot.get("composition_id") and snapshot.get("composition_key"))
+        has_legacy_recipe = bool(snapshot.get("recipe_id") and snapshot.get("recipe_key"))
+        if not has_composition and not has_legacy_recipe:
+            raise ValueError(f"candidate {candidate_id} approved copy snapshot has incomplete composition provenance")
         if not isinstance(snapshot.get("fragments"), list) or not isinstance(snapshot.get("product_facts"), list):
             raise ValueError(f"candidate {candidate_id} approved copy snapshot has invalid evidence")
 
@@ -123,7 +127,7 @@ def main() -> int:
 
     evidence = {
         "candidate_id": args.candidate_id,
-        "copy_snapshot_id": snapshot.get("id") or item.get("copy_entry_id"),
+        "copy_snapshot_id": snapshot.get("composition_id") or snapshot.get("id") or item.get("copy_entry_id"),
         "copy_snapshot_version": snapshot.get("library_version") or snapshot.get("version"),
         "approved_financial_tokens": sorted(approved),
         "prompt_checks": checks,

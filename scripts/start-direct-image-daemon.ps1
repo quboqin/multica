@@ -6,7 +6,7 @@ param(
     [int]$MaxConcurrentTasks = 10,
 
     [ValidateRange(1, 10)]
-    [int]$ImageMaxConcurrent = 9,
+    [int]$ImageMaxConcurrent = 10,
 
     [ValidateRange(30, 3600)]
     [int]$CodexSemanticInactivitySeconds = 600

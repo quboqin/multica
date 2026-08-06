@@ -12,6 +12,7 @@ import {
   latestCandidateFeedback,
   materialAnalysisState,
   recommendedCopyDecisionFeedbackInput,
+  recommendedCopyViewedFeedbackInput,
   recoveryForSubmissionKey,
 } from "./creative-material-library";
 import { creativeVariantAdoptionReadiness } from "./creative-order-delivery";
@@ -208,6 +209,54 @@ describe("creative feedback state", () => {
     expect(first).not.toBe(creativeFeedbackIdempotencyKey("submission-1", "recommended_copy", "copy-1", "replacement", "replaced", "candidate-1"));
   });
 
+  it("records each recommended-copy view once per analysis and library version", () => {
+    const copySnapshot = {
+      schema_version: 2 as const, id: "22000000-0000-4000-8000-000000000001", library_id: "library-1", library_version: 54,
+      composition_id: "22000000-0000-4000-8000-000000000001", composition_key: "dynamic-num", creative_type: "num" as const,
+      headline: "Headline", subheadline: "", benefit: "Benefit", supporting: "", cta: "", legal_text: "", fragments: [], product_facts: [],
+      recommendation: { score: 1, reasons: [], matched_signals: [] }, status: "approved" as const,
+    };
+    const input = recommendedCopyViewedFeedbackInput({
+      candidateId: "candidate-1",
+      sourceAnalysisId: "analysis-2",
+      compositionId: "22000000-0000-4000-8000-000000000001",
+      libraryId: "library-1",
+      libraryVersion: 54,
+      rank: 1,
+      recommendationReasons: ["创意类型：还款计划", "匹配信号：分期"],
+      copySnapshot,
+    });
+
+    expect(input).toEqual({
+      idempotency_key: "creative:feedback:recommended-copy-viewed:candidate-1:analysis-2:library-1:54:22000000-0000-4000-8000-000000000001",
+      issue_id: "",
+      subject_type: "recommended_copy",
+      subject_id: "22000000-0000-4000-8000-000000000001",
+      event_type: "viewed",
+      decision: "",
+      context_snapshot: {
+        candidate_id: "candidate-1",
+        source_analysis_id: "analysis-2",
+        copy_library_id: "library-1",
+        copy_library_version: 54,
+        composition_id: "22000000-0000-4000-8000-000000000001",
+        rank: 1,
+        recommendation_reasons: ["创意类型：还款计划", "匹配信号：分期"],
+        copy_snapshot: copySnapshot,
+      },
+    });
+    expect(input.idempotency_key).not.toBe(recommendedCopyViewedFeedbackInput({
+      candidateId: "candidate-1",
+      sourceAnalysisId: "analysis-3",
+      compositionId: "22000000-0000-4000-8000-000000000001",
+      libraryId: "library-1",
+      libraryVersion: 54,
+      rank: 1,
+      recommendationReasons: [],
+      copySnapshot,
+    }).idempotency_key);
+  });
+
   it("keeps squad roles as display data without interpreting localized role names", () => {
     expect(creativeSquadMemberSnapshot([
       { member_type: "agent", member_id: "agent-1", role: "任意业务称呼" },
@@ -249,24 +298,24 @@ describe("creative feedback state", () => {
     });
   });
 
-  it("records why the user did not adopt the recommended copy", () => {
+  it("records which dynamic Top 3 copy the user adopted", () => {
     expect(recommendedCopyDecisionFeedbackInput({
       submissionKey: "submission-1",
       issueId: "issue-1",
       orderId: "order-1",
       candidateId: "candidate-1",
-      recommendedCopyId: "copy-recommended",
       selectedCopyId: "copy-selected",
-      replacementReason: "facts_inapplicable",
+      selectedRank: 2,
+      libraryId: "library-1",
+      libraryVersion: 54,
     })).toEqual({
-      idempotency_key: creativeFeedbackIdempotencyKey("submission-1", "recommended_copy", "copy-recommended", "replacement", "replaced", "candidate-1"),
+      idempotency_key: creativeFeedbackIdempotencyKey("submission-1", "recommended_copy", "copy-selected", "decision", "accepted", "candidate-1"),
       issue_id: "issue-1",
       subject_type: "recommended_copy",
-      subject_id: "copy-recommended",
-      event_type: "replacement",
-      decision: "replaced",
-      reason_codes: ["facts_inapplicable"],
-      context_snapshot: { candidate_id: "candidate-1", order_id: "order-1", replacement_copy_id: "copy-selected" },
+      subject_id: "copy-selected",
+      event_type: "decision",
+      decision: "accepted",
+      context_snapshot: { candidate_id: "candidate-1", order_id: "order-1", selected_rank: 2, copy_library_id: "library-1", copy_library_version: 54 },
     });
   });
 

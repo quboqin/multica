@@ -4,7 +4,6 @@ import type {
   CreativeCopyFragment,
   CreativeCopyFragmentRole,
   CreativeCopyLibraryConfig,
-  CreativeCopyRecipe,
   CreativeCopyStatus,
   CreativeProductFact,
   CreativeType,
@@ -16,7 +15,6 @@ export const COPY_LIBRARY_WORKBOOK_VERSION = "2";
 
 const FACT_SHEET = "产品事实";
 const FRAGMENT_SHEET = "文案片段";
-const RECIPE_SHEET = "组合方案";
 const RULE_SHEET = "计算规则";
 const SETTINGS_SHEET = "库设置";
 const ROLES: CreativeCopyFragmentRole[] = ["headline", "subheadline", "benefit", "supporting", "cta", "legal"];
@@ -41,7 +39,6 @@ export function parseCopyLibraryWorkbook(sheets: SpreadsheetData[], sourceName =
   const byName = new Map(sheets.map((sheet) => [sheet.sheetName.trim(), sheet]));
   const facts = rowsFor(byName, FACT_SHEET, ["key", "label", "value", "copy_text", "source", "status"], errors);
   const fragments = rowsFor(byName, FRAGMENT_SHEET, ["key", "name", "creative_types", "role", "text", "tags", "status"], errors);
-  const recipes = rowsFor(byName, RECIPE_SHEET, ["key", "name", "creative_type", "description", "match_tags", "status"], errors);
   const rules = rowsFor(byName, RULE_SHEET, ["key", "name", "expression", "input_fact_keys", "output_fact_key", "source", "status"], errors);
   const settings = settingsFor(byName.get(SETTINGS_SHEET), warnings);
   if (settings.schema_version && settings.schema_version !== COPY_LIBRARY_WORKBOOK_VERSION) {
@@ -52,14 +49,11 @@ export function parseCopyLibraryWorkbook(sheets: SpreadsheetData[], sourceName =
 
   const productFacts = facts.map((row) => parseFact(row, errors, warnings)).filter((row): row is CreativeProductFact => row !== null);
   const copyFragments = fragments.map((row) => parseFragment(row, errors, warnings)).filter((row): row is CreativeCopyFragment => row !== null);
-  const copyRecipes = recipes.map((row) => parseRecipe(row, errors, warnings)).filter((row): row is CreativeCopyRecipe => row !== null);
   const calculationRules = rules.map((row) => parseRule(row, errors, warnings)).filter((row): row is CreativeCopyCalculationRule => row !== null);
 
   duplicateKeys(productFacts, "产品事实", errors);
   duplicateKeys(copyFragments, "文案片段", errors);
-  duplicateKeys(copyRecipes, "组合方案", errors);
   duplicateKeys(calculationRules, "计算规则", errors);
-  validateReferences(copyRecipes, copyFragments, errors);
   for (const fact of productFacts) {
     if (fact.status === "approved" && (!fact.copy_text || !fact.source)) {
       errors.push(`产品事实“${fact.key}”标记为已审核，但缺少印尼语展示或来源依据`);
@@ -78,7 +72,7 @@ export function parseCopyLibraryWorkbook(sheets: SpreadsheetData[], sourceName =
     },
     product_facts: productFacts,
     fragments: copyFragments,
-    recipes: copyRecipes,
+    recipes: [],
     calculation_rules: calculationRules,
     recommendation_policy: {
       type_weight: numberValue(settings.type_weight, 1000),
@@ -94,7 +88,7 @@ export function parseCopyLibraryWorkbook(sheets: SpreadsheetData[], sourceName =
     errors: unique(errors),
     warnings: unique(warnings),
     sourceName,
-    counts: { productFacts: productFacts.length, fragments: copyFragments.length, recipes: copyRecipes.length, calculationRules: calculationRules.length },
+    counts: { productFacts: productFacts.length, fragments: copyFragments.length, recipes: 0, calculationRules: calculationRules.length },
   };
 }
 
@@ -151,16 +145,8 @@ export function copyLibraryWorkbookSheets(config: CreativeCopyLibraryConfig): Wo
     },
     {
       name: FRAGMENT_SHEET,
-      headers: ["id", "key", "name", "creative_types", "role", "text", "tags", "status"],
-      rows: config.fragments.map((fragment) => [fragment.id, fragment.key, fragment.name, fragment.creative_types.join(","), fragment.role, fragment.text, fragment.tags.join(","), fragment.status]),
-    },
-    {
-      name: RECIPE_SHEET,
-      headers: ["id", "key", "name", "creative_type", "description", "match_tags", "status", ...ROLES.map((role) => `${role}_fragment_ids`)],
-      rows: config.recipes.map((recipe) => [
-        recipe.id, recipe.key, recipe.name, recipe.creative_type, recipe.description, recipe.match_tags.join(","), recipe.status,
-        ...ROLES.map((role) => (recipe.fragment_ids[role] ?? []).join(",")),
-      ]),
+      headers: ["id", "key", "name", "creative_types", "role", "usage", "semantic_group", "text", "tags", "status"],
+      rows: config.fragments.map((fragment) => [fragment.id, fragment.key, fragment.name, fragment.creative_types.join(","), fragment.role, fragment.usage, fragment.semantic_group ?? "", fragment.text, fragment.tags.join(","), fragment.status]),
     },
     {
       name: RULE_SHEET,
@@ -215,25 +201,9 @@ function parseFragment(row: Row, errors: string[], warnings: string[]): Creative
   }
   const types = splitList(row.get("creative_types")).map(creativeType).filter((value): value is CreativeType => value !== null);
   if (types.length === 0) errors.push(`文案片段“${key}”至少需要一个 creative_types（num 或 repayment_plan）`);
-  return { id: identifier(row, key, warnings), key, name: row.get("name"), creative_types: types, role, text: row.get("text"), tags: splitList(row.get("tags")), status: copyStatus(row, "文案片段", errors) };
-}
-
-function parseRecipe(row: Row, errors: string[], warnings: string[]): CreativeCopyRecipe | null {
-  const key = required(row, "key", "组合方案", errors);
-  const type = creativeType(row.get("creative_type"));
-  if (!key || !type) {
-    if (!type) errors.push(`组合方案第 ${row.index} 行的 creative_type 必须是 num 或 repayment_plan`);
-    return null;
-  }
-  const fragmentIds: Partial<Record<CreativeCopyFragmentRole, string[]>> = {};
-  for (const role of ROLES) {
-    const ids = splitList(row.get(`${role}_fragment_ids`));
-    if (ids.length > 0) fragmentIds[role] = ids;
-  }
-  return {
-    id: identifier(row, key, warnings), key, name: row.get("name"), creative_type: type, description: row.get("description"), match_tags: splitList(row.get("match_tags")), status: copyStatus(row, "组合方案", errors),
-    fragment_ids: fragmentIds,
-  };
+  const usage = row.get("usage");
+  const normalizedUsage = usage === "fallback" || usage === "通用兜底" ? "fallback" : usage === "required" || usage === "必须附带" ? "required" : "core";
+  return { id: identifier(row, key, warnings), key, name: row.get("name"), creative_types: types, role, usage: normalizedUsage, semantic_group: row.get("semantic_group") || undefined, text: row.get("text"), tags: splitList(row.get("tags")), status: copyStatus(row, "文案片段", errors) };
 }
 
 function parseRule(row: Row, errors: string[], warnings: string[]): CreativeCopyCalculationRule | null {
@@ -269,13 +239,6 @@ function duplicateKeys(values: Array<{ key: string }>, sheet: string, errors: st
   for (const value of values) {
     if (seen.has(value.key)) errors.push(`${sheet}存在重复 key：“${value.key}”`);
     seen.add(value.key);
-  }
-}
-
-function validateReferences(recipes: CreativeCopyRecipe[], fragments: CreativeCopyFragment[], errors: string[]): void {
-  const ids = new Set(fragments.map((fragment) => fragment.id));
-  for (const recipe of recipes) for (const [role, fragmentIds] of Object.entries(recipe.fragment_ids)) {
-    for (const id of fragmentIds ?? []) if (!ids.has(id)) errors.push(`组合方案“${recipe.key}”的 ${role} 引用了不存在的片段 id：“${id}”`);
   }
 }
 

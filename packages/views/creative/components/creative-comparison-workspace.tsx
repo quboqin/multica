@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useId, useMemo, useRef, useState } from "react";
-import { Check, Download, Expand, Minus, MousePointer2, PencilRuler, Plus, SquareDashedMousePointer, Trash2 } from "lucide-react";
+import { Check, Download, Expand, Info, Minus, MousePointer2, PencilRuler, Plus, SquareDashedMousePointer, Trash2 } from "lucide-react";
 import { Button } from "@multica/ui/components/ui/button";
 import { NativeSelect, NativeSelectOption } from "@multica/ui/components/ui/native-select";
 import { Textarea } from "@multica/ui/components/ui/textarea";
@@ -84,6 +84,7 @@ export function CreativeComparisonWorkspace({
   assets,
   onAssetChange,
   onAdjust,
+  onViewInfo,
   onDecision,
   onAnnotations,
   acceptance,
@@ -94,11 +95,13 @@ export function CreativeComparisonWorkspace({
   assets: CreativeComparisonAsset[];
   onAssetChange: (id: string) => void;
   onAdjust?: () => void;
+  onViewInfo?: () => void;
   onDecision?: (decision: "accepted" | "abandoned" | "downloaded") => void;
   onAnnotations?: (annotations: CreativeAnnotationDraft[]) => Promise<boolean>;
   acceptance?: { enabled: boolean; status: string };
   showDecisionActions?: boolean;
 }) {
+  const [selectedAssetId, setSelectedAssetId] = useState(result.id);
   const [pair, setPair] = useState<"source-final" | "base-prime">("source-final");
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState({ x: 0, y: 0 });
@@ -115,8 +118,9 @@ export function CreativeComparisonWorkspace({
   const annotationSurfaceRef = useRef<HTMLDivElement>(null);
   const annotationSequence = useRef(0);
   const acceptanceStatusId = useId();
-  const displayedSource = pair === "source-final" ? source : { label: "底图", url: result.baseUrl || "" };
-  const displayedResult = pair === "source-final" ? { ...result, url: result.finalUrl } : { ...result, label: "Prime 成图", url: result.finalUrl };
+  const selectedResult = assets.find((asset) => asset.id === selectedAssetId) ?? result;
+  const displayedSource = pair === "source-final" ? source : { label: "底图", url: selectedResult.baseUrl || "" };
+  const displayedResult = pair === "source-final" ? { ...selectedResult, url: selectedResult.finalUrl } : { ...selectedResult, label: "Prime 成图", url: selectedResult.finalUrl };
   const transform = `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`;
   const canAnnotate = Boolean(onAnnotations);
   const annotationImageBounds = transformedContainedImageBounds(annotationViewport, resultImageSize, zoom, pan);
@@ -146,6 +150,9 @@ export function CreativeComparisonWorkspace({
       : Math.max(8, Number(activeBox.top) - 172),
   } : undefined;
   useEffect(() => {
+    setSelectedAssetId(result.id);
+  }, [result.id]);
+  useEffect(() => {
     const element = annotationSurfaceRef.current;
     if (!element || typeof ResizeObserver === "undefined") return;
     const update = () => setAnnotationViewport({ width: element.clientWidth || 1, height: element.clientHeight || 1 });
@@ -153,14 +160,14 @@ export function CreativeComparisonWorkspace({
     const observer = new ResizeObserver(update);
     observer.observe(element);
     return () => observer.disconnect();
-  }, [pair, result.id]);
+  }, [pair, selectedResult.id]);
   useEffect(() => {
     setAnnotations([]);
     setActiveAnnotationId("");
     setAnnotationTool(null);
     setStart(null);
     setDrawingEnd(null);
-  }, [result.id]);
+  }, [selectedResult.id]);
   useEffect(() => {
     const element = stageRef.current;
     if (!element) return;
@@ -170,7 +177,7 @@ export function CreativeComparisonWorkspace({
     };
     element.addEventListener("wheel", handleWheel, { passive: false });
     return () => element.removeEventListener("wheel", handleWheel);
-  }, [result.id]);
+  }, [selectedResult.id]);
   const onPointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
     const bounds = event.currentTarget.getBoundingClientRect();
     const point = { x: event.clientX - bounds.left, y: event.clientY - bounds.top };
@@ -224,19 +231,23 @@ export function CreativeComparisonWorkspace({
   const variants = useMemo(() => [...new Set(assets.map((asset) => asset.variant).filter((value): value is string => Boolean(value)))], [assets]);
   const sizes = useMemo(() => [...new Set(assets.map((asset) => asset.size).filter((value): value is string => Boolean(value)))], [assets]);
   const chooseVariant = (variant: string) => {
-    const next = assets.find((asset) => asset.variant === variant && asset.size === result.size) ?? assets.find((asset) => asset.variant === variant);
-    if (next) onAssetChange(next.id);
+    const next = assets.find((asset) => asset.variant === variant && asset.size === selectedResult.size) ?? assets.find((asset) => asset.variant === variant);
+    if (!next) return;
+    setSelectedAssetId(next.id);
+    onAssetChange(next.id);
   };
   const chooseSize = (size: string) => {
-    const next = assets.find((asset) => asset.variant === result.variant && asset.size === size) ?? assets.find((asset) => asset.size === size);
-    if (next) onAssetChange(next.id);
+    const next = assets.find((asset) => asset.variant === selectedResult.variant && asset.size === size) ?? assets.find((asset) => asset.size === size);
+    if (!next) return;
+    setSelectedAssetId(next.id);
+    onAssetChange(next.id);
   };
   return <div className="grid h-full min-h-0 grid-rows-[auto_minmax(0,1fr)_auto] bg-background" data-testid="creative-comparison-workspace">
     <div className="flex min-w-0 flex-nowrap items-center gap-2 overflow-x-auto border-b px-3 py-2 pr-14" data-testid="creative-preview-toolbar">
       <span className="shrink-0 text-sm font-semibold">高清对比</span>
       <div className="inline-flex border"><button type="button" onClick={() => setPair("source-final")} className={cn("h-7 whitespace-nowrap px-2.5 text-[11px]", pair === "source-final" && "bg-foreground text-background")}>原图 / 成图</button><button type="button" onClick={() => setPair("base-prime")} className={cn("h-7 whitespace-nowrap border-l px-2.5 text-[11px]", pair === "base-prime" && "bg-foreground text-background")}>底图 / Prime</button></div>
-      <div className="inline-flex border" aria-label="创意变体">{variants.map((variant) => <button key={variant} type="button" onClick={() => chooseVariant(variant!)} className={cn("h-7 min-w-12 px-2.5 text-[11px]", variant === result.variant && "bg-foreground text-background")}>{variant}</button>)}</div>
-      <div className="inline-flex border" aria-label="成图尺寸">{sizes.map((assetSize) => <button key={assetSize} type="button" onClick={() => chooseSize(assetSize!)} className={cn("h-7 min-w-12 px-2.5 text-[11px]", assetSize === result.size && "bg-foreground text-background")}>{assetSize === "1080x1080" ? "方形" : assetSize === "1200x628" ? "横版" : assetSize === "800x1000" ? "竖版" : assetSize}</button>)}</div>
+      <div className="inline-flex border" role="group" aria-label="创意变体">{variants.map((variant) => <button key={variant} type="button" aria-pressed={variant === selectedResult.variant} onClick={() => chooseVariant(variant)} className={cn("h-7 min-w-12 px-2.5 text-[11px]", variant === selectedResult.variant && "bg-foreground text-background")}>{variant}</button>)}</div>
+      <div className="inline-flex border" role="group" aria-label="成图尺寸">{sizes.map((assetSize) => <button key={assetSize} type="button" aria-pressed={assetSize === selectedResult.size} onClick={() => chooseSize(assetSize)} className={cn("h-7 min-w-12 px-2.5 text-[11px]", assetSize === selectedResult.size && "bg-foreground text-background")}>{assetSize === "1080x1080" ? "方形" : assetSize === "1200x628" ? "横版" : assetSize === "800x1000" ? "竖版" : assetSize}</button>)}</div>
       <div className="ml-auto flex shrink-0 items-center gap-1">
         <Button size="icon-sm" variant="ghost" title="适应窗口" aria-label="适应窗口" disabled={zoom === 1 && pan.x === 0 && pan.y === 0} onClick={() => { setZoom(1); setPan({ x: 0, y: 0 }); }}><Expand className="h-4 w-4" /></Button>
         <Button size="icon-sm" variant="ghost" title="缩小" aria-label="缩小" onClick={() => scale(-0.2)}><Minus className="h-4 w-4" /></Button>
@@ -254,9 +265,10 @@ export function CreativeComparisonWorkspace({
       {annotationTool && <span className="text-xs font-medium text-amber-700" role="status">{annotationTool === "point" ? "在右侧成图上标记位置" : "在右侧成图上拖动圈选区域"}</span>}
       {annotations.length > 0 && <span className="text-xs font-medium text-rose-700">已标注 {annotations.length} 处</span>}
       {onAdjust && <Button size="sm" variant="outline" onClick={onAdjust}><PencilRuler className="h-4 w-4" />调整</Button>}
+      {onViewInfo && <Button size="sm" variant="outline" onClick={onViewInfo}><Info className="h-4 w-4" />生成信息</Button>}
       {showDecisionActions && <Button size="sm" variant="outline" onClick={() => onDecision?.("abandoned")}>放弃</Button>}
       {showDecisionActions && <Button size="sm" disabled={acceptance ? !acceptance.enabled : false} aria-describedby={acceptance ? acceptanceStatusId : undefined} onClick={() => onDecision?.("accepted")}><Check className="h-4 w-4" />接受</Button>}
-      <Button size="icon-sm" variant="outline" title="下载当前成图" aria-label="下载当前成图" onClick={() => { onDecision?.("downloaded"); window.open(result.finalUrl, "_blank", "noopener,noreferrer"); }}><Download className="h-4 w-4" /></Button>
+      <Button size="icon-sm" variant="outline" title="下载当前成图" aria-label="下载当前成图" onClick={() => { onDecision?.("downloaded"); window.open(selectedResult.finalUrl, "_blank", "noopener,noreferrer"); }}><Download className="h-4 w-4" /></Button>
       {acceptance && <span id={acceptanceStatusId} role="status" className={cn("text-xs", acceptance.enabled ? "text-emerald-700" : "text-muted-foreground")}>{acceptance.status}</span>}
       <span className="ml-auto text-xs text-muted-foreground">{variants.length} 个变体 · {sizes.length} 个尺寸</span>
       {annotations.length > 0 && <Button size="sm" disabled={annotationBusy || annotations.some((annotation) => !annotation.comment.trim())} onClick={() => { if (!onAnnotations) return; setAnnotationBusy(true); const drafts = annotations.map(({ localId: _, ...annotation }) => annotation); void onAnnotations(drafts).then((saved) => { if (saved) { setAnnotations([]); setActiveAnnotationId(""); } }).finally(() => setAnnotationBusy(false)); }}>{annotationBusy ? "正在提交" : `提交 ${annotations.length} 处调整`}</Button>}

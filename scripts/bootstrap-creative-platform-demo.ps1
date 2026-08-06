@@ -224,8 +224,7 @@ $skillTemplateRoot = Join-Path $repositoryRoot 'scripts\creative-platform-skills
 # Remove the previous demo's market-pack-as-Skill and fixed-stage role Skills.
 $legacySkillNames = @(
     'AdaKami Indonesia Market Pack',
-    '广告参考布局分析',
-    '广告成图验收'
+    '广告参考布局分析'
 )
 $existingSkills = Get-Items (Invoke-MulticaApi -Method Get -Path '/api/skills') ''
 foreach ($legacy in $existingSkills | Where-Object {
@@ -234,28 +233,28 @@ foreach ($legacy in $existingSkills | Where-Object {
     Invoke-MulticaApi -Method Delete -Path "/api/skills/$($legacy.id)" | Out-Null
 }
 
-$collectorSkill = Set-WorkspaceSkill -Name 'AppGrowing 素材采集' -Description '创建 Crawl Run，执行真实 AppGrowing 多页采集，并用原生 task fanout 自动预分析新增图片。' -Directory (Join-Path $skillTemplateRoot 'appgrowing-material-collector') -Config @{ kind = 'creative_role'; capability = 'material_collection'; version = 9 }
-$analysisSkill = Set-WorkspaceSkill -Name '广告参考分析' -Description '市场中立地读取真实图片，识别主题、金融利益点、原图语义锚点、App UI 类型和通用布局。' -Directory (Join-Path $skillTemplateRoot 'ad-creative-analysis') -Config @{ kind = 'creative_role'; capability = 'reference_analysis'; version = 11 }
-$marketPackExtractionSkill = Set-WorkspaceSkill -Name '市场包组件识别' -Description '读取一张完整成图，发现数量不定的品牌、二维码、商店与合规组件并回写待确认候选。' -Directory (Join-Path $skillTemplateRoot 'ad-creative-market-pack-extraction') -Config @{ kind = 'creative_role'; capability = 'market_pack_component_extraction'; version = 1 }
-$planSkill = Set-WorkspaceSkill -Name '广告生成方案' -Description '消费已确认文案和冻结市场快照，选择品牌 UI 并规划 3 个同题创意变体。' -Directory (Join-Path $skillTemplateRoot 'ad-creative-plan') -Config @{ kind = 'creative_role'; capability = 'generation_plan'; version = 21 }
-$productionSkill = Set-WorkspaceSkill -Name '广告图像编辑' -Description '一个变体 task 内生成方形母版并发重排横竖版；三尺寸共享内容族和修订。' -Directory (Join-Path $skillTemplateRoot 'ad-creative-production') -Config @{ kind = 'creative_role'; capability = 'image_edit'; version = 23 }
-$directEditSkill = Set-WorkspaceSkill -Name '广告图片直接修改' -Description '基于用户自然语言和指定底图执行自由修改；正式交付按 expected_sizes 补 Prime 与独立 QC。' -Directory (Join-Path $skillTemplateRoot 'ad-creative-direct-edit') -Config @{ kind = 'creative_role'; capability = 'direct_image_edit'; version = 5 }
-$composeSkill = Set-WorkspaceSkill -Name 'Prime 完整贴图' -Description '按变体一次包装 expected_sizes，并把最终图和逐图机器证据写入领域资产。' -Directory (Join-Path $skillTemplateRoot 'ad-creative-prime-compose') -Config @{ kind = 'creative_role'; capability = 'prime_compose'; version = 19 }
-$qcSkill = Set-WorkspaceSkill -Name '广告成图验收' -Description '通过并发技术 QC 与视觉 QC 检查 expected_sizes 的四角、画质和内容一致性。' -Directory (Join-Path $skillTemplateRoot 'ad-creative-qc') -Config @{ kind = 'creative_role'; capability = 'quality_control'; version = 22 }
+$collectorSkill = Set-WorkspaceSkill -Name 'AppGrowing 素材采集' -Description '创建 Crawl Run，执行真实 AppGrowing 采集，并用原生 task fanout 自动预分析新增图片。' -Directory (Join-Path $skillTemplateRoot 'appgrowing-material-collector') -Config @{ kind = 'creative_role'; capability = 'material_collection'; version = 10 }
+$analysisSkill = Set-WorkspaceSkill -Name '广告参考分析' -Description '市场中立地读取真实图片，识别主题、利益点、语义锚点、App UI 类型和布局约束。' -Directory (Join-Path $skillTemplateRoot 'ad-creative-analysis') -Config @{ kind = 'creative_role'; capability = 'reference_analysis'; version = 12 }
+$marketPackExtractionSkill = Set-WorkspaceSkill -Name '市场包组件识别' -Description '读取完整成图，发现数量不定的品牌与合规组件并写回待确认候选。' -Directory (Join-Path $skillTemplateRoot 'ad-creative-market-pack-extraction') -Config @{ kind = 'creative_role'; capability = 'market_pack_component_extraction'; version = 2 }
+$planSkill = Set-WorkspaceSkill -Name '广告生成方案' -Description '消费冻结分析、文案与市场快照，规划 3 个同题创意变体。' -Directory (Join-Path $skillTemplateRoot 'ad-creative-plan') -Config @{ kind = 'creative_role'; capability = 'generation_plan'; version = 22 }
+$productionSkill = Set-WorkspaceSkill -Name '广告图像编辑' -Description '为一个变体生成方形母版并并发原生重排横竖版，保存完整模型证据。' -Directory (Join-Path $skillTemplateRoot 'ad-creative-production') -Config @{ kind = 'creative_role'; capability = 'image_edit'; version = 24 }
+$directEditSkill = Set-WorkspaceSkill -Name '广告图片直接修改' -Description '按用户原话修改固定底图；正式发布按 expected_sizes 进入 Prime 与独立 QC。' -Directory (Join-Path $skillTemplateRoot 'ad-creative-direct-edit') -Config @{ kind = 'creative_role'; capability = 'direct_image_edit'; version = 6 }
+$composeSkill = Set-WorkspaceSkill -Name 'Prime 完整贴图' -Description '按冻结市场合同批量合成 expected_sizes，并保存逐图机器证据。' -Directory (Join-Path $skillTemplateRoot 'ad-creative-prime-compose') -Config @{ kind = 'creative_role'; capability = 'prime_compose'; version = 20 }
+$qcSkill = Set-WorkspaceSkill -Name '广告成图验收' -Description '独立执行 technical 或 visual QC，并通过事务 barrier 收口。' -Directory (Join-Path $skillTemplateRoot 'ad-creative-qc') -Config @{ kind = 'creative_role'; capability = 'quality_control'; version = 23 }
 
 $agents = Get-Items (Invoke-MulticaApi -Method Get -Path '/api/agents') ''
 $leaderSeed = $agents | Where-Object name -eq '素材小队 Leader' | Select-Object -First 1
 if (-not $leaderSeed) { throw '素材小队 Leader does not exist' }
 $runtimeID = $leaderSeed.runtime_id
 
-$specialistHandoff = '只处理 task context 明确指定的领域对象、修订和作用域。结构化交付与证据写回 Creative Order、Variant、Asset、Source Analysis 或 QC Report；不要新建或修改 Issue，不要 @Leader，不要用评论代替领域数据。出现凭证、输入或工具问题时写入当前对象的 error_code/error_message 并让 task 失败；兄弟对象继续执行。'
-$analyst = Set-AgentDefinition -Name '广告参考分析智能体' -Description '读取真实图片；按任务类型执行竞品参考分析或市场包品牌组件发现。' -Instructions "全程使用中文，严格按 task context 的 workflow 选择一个 Skill。creative_reference_analysis 只分析指定 candidate_id 和 Crawl Run，市场中立地写入 Source Analysis，不得读取市场包；creative_market_pack_component_extraction 只分析指定完整成图，发现全部可复用品牌与合规组件并写回待确认候选，不得修改或发布市场包。两个流程不得混用输入或产物，不生成图片。$specialistHandoff" -SkillIDs @($analysisSkill.id, $marketPackExtractionSkill.id) -RuntimeID $runtimeID -Model 'gpt-5.6-luna' -ThinkingLevel 'low' -MaxConcurrentTasks 6
-$collector = Set-AgentDefinition -Name 'AppGrowing 素材采集智能体' -Description '运行 Crawl Run，导入真实素材并并发委派新增图片预分析。' -Instructions "全程使用中文。只执行 task context 指定的真实 AppGrowing 查询。广告参考分析智能体 ID 固定为 $($analyst.id)，必须作为 analysis_agent_id 写入 Crawl Run 参数并用于 fanout，不得按名称猜测。逐家核对普通竞品至少 3 页、优先竞品至少 5 页；过滤工作区历史重复后继续轮询翻页，直到凑足平台新素材、达到预算或没有更多结果。单家接口为空或失败时对该家启用 Playwright 补查。结果、逐页证据和失败原因写入 Crawl Run；采集入库后立即用原生 task fanout 委派本次新增图片，分析优先读取平台归档，归档未完成时回退到真实源图片。不得创建 Issue 或使用测试数据。" -SkillIDs @($collectorSkill.id) -RuntimeID $runtimeID -MaxConcurrentTasks 2
-$planner = Set-AgentDefinition -Name '生成方案智能体' -Description '消费已确认文案和冻结市场快照，把订单项转成 3 个同题创意变体。' -Instructions "全程使用中文。读取 task context 指定的 Order Item、Source Analysis、copy_snapshot 和冻结市场资源快照；不得重新推荐、选择、拼接或改写文案。需要替换 App UI 时，由本角色根据分析的通用 UI 类型从冻结市场附件中选择最匹配的品牌 UI。保持原图业务语义、信息机制、关键视觉和主色家族，写入 V01、V02、V03 三个版式与信息组织差异明确的 Variant 规格。三个变体就绪后放入同一个 manifest 一次 fanout 给图像编辑智能体，不得串行委派。只有用户明确放开时才能换场景或换色系。不生成图片。$specialistHandoff" -SkillIDs @($planSkill.id) -RuntimeID $runtimeID -Model 'gpt-5.6-terra' -ThinkingLevel 'medium' -MaxConcurrentTasks 3
-$producer = Set-AgentDefinition -Name '图像编辑智能体' -Description '执行标准变体三尺寸生产和精准返工。' -Instructions "全程使用中文。只执行广告图像编辑 Skill 的 creative_production task。初次生产时一个 task 负责一个 Variant：生成 1080x1080 方形母版后，立即把它作为第一参考并发原生重排 1200x628 和 800x1000；三张共享 asset_family_id、批准文案、业务语义、人物和产品。只恢复 missing_sizes，禁止重做已通过尺寸。底图硬区风险交给 Prime/QC 对最终图判断。普通返工使用上一版对应无品牌底图，replan 使用原候选图；不得把带 Prime 的最终图作为第一输入。不得处理 direct_edit，不得触发采集、参考分析或三变体规划。$specialistHandoff" -SkillIDs @($productionSkill.id) -RuntimeID $runtimeID -Model 'gpt-5.6-terra' -ThinkingLevel 'low' -MaxConcurrentTasks 3
-$directEditor = Set-AgentDefinition -Name '图片直接修改智能体' -Description '只按用户自然语言修改指定 expected_sizes 的固定来源底图。' -Instructions "全程使用中文。只执行广告图片直接修改 Skill 的 creative_direct_edit task。读取 task context 固定的 source_asset_id、source_attachment_id、user_request、target_size、expected_sizes、delivery_mode、prime_agent_id、reviewer_agent_id 和 source revision；源资产不可覆盖，输出必须写为 source revision + 1，并以 source asset 为 derived_from_asset_id。不得执行采集、参考分析、三变体规划或普通生产。preview 只写 generated asset；publish 才按同一 expected_sizes 委派 Prime，Prime 再委派两路 QC。$specialistHandoff" -SkillIDs @($directEditSkill.id) -RuntimeID $runtimeID -Model 'gpt-5.6-terra' -ThinkingLevel 'low' -MaxConcurrentTasks 2
-$composer = Set-AgentDefinition -Name 'Prime 包装智能体' -Description '按变体一次包装 expected_sizes 并写入逐图机器证据。' -Instructions "全程使用中文。每个 task 只处理 context 指定的 Variant、revision、expected_sizes 和对应 1-3 张无品牌底图；一次 batch 应用冻结市场快照中的版本化 Prime、条款、二维码和商店徽章。逐张写入来源 Asset、模板、manifest、最终附件、二维码解码和四角/底部校验证据。单项失败不得丢弃其他成功项，不创建 Issue。$specialistHandoff" -SkillIDs @($composeSkill.id) -RuntimeID $runtimeID -Model 'gpt-5.6-terra' -ThinkingLevel 'low' -MaxConcurrentTasks 3
-$reviewer = Set-AgentDefinition -Name '广告验收智能体' -Description '并发执行技术 QC 和视觉 QC，重点检查四角、画质和 expected_sizes 内容一致性。' -Instructions "全程使用中文。严格按 task context 的 workflow、revision 和 expected_sizes 执行技术 QC 或视觉 QC。技术 QC 检查尺寸、文件、四角/底部 Prime、二维码和真实硬区遮挡；视觉 QC 检查清晰度、伪影、批准文案、原图语义，并在多尺寸时检查同变体一致性。原图本来存在的人物或装饰不能仅因几何预测判失败。blocking_failures 非空时 status 必须为 failed。写入独立 QC Report 后必须调用 qc-finalize，由服务端事务化收口；失败只进入 action_required，不自动返工。只指出实际失败尺寸，不影响其他变体。$specialistHandoff" -SkillIDs @($qcSkill.id) -RuntimeID $runtimeID -Model 'gpt-5.6-terra' -ThinkingLevel 'medium' -MaxConcurrentTasks 6
+$specialistHandoff = '只处理 task context 指定的对象、revision 和 scope；按绑定 Skill 写结构化领域结果和机器证据。不得创建或修改 Issue，不得用评论代替领域数据。输入、凭证、工具或写回失败时保留已成功对象，写真实 error_code/error_message 并让当前 task 失败；兄弟对象继续。'
+$analyst = Set-AgentDefinition -Name '广告参考分析智能体' -Description '按 task workflow 读取真实像素并写参考分析或市场包组件候选。' -Instructions "全程使用中文。creative_reference_analysis 只写指定 candidate/version 的市场中立 Source Analysis；creative_market_pack_component_extraction 只写指定 extraction 的待确认组件候选。两种输入和产物不得混用，不生成图片，不修改市场包。$specialistHandoff" -SkillIDs @($analysisSkill.id, $marketPackExtractionSkill.id) -RuntimeID $runtimeID -Model 'gpt-5.6-luna' -ThinkingLevel 'low' -MaxConcurrentTasks 6
+$collector = Set-AgentDefinition -Name 'AppGrowing 素材采集智能体' -Description '按 task 配置创建 Crawl Run、导入真实素材并委派新增图片分析。' -Instructions "全程使用中文。只执行 task context 和 AutoPilot 明确的 AppGrowing 查询；使用注入的 analysis_agent_id=$($analyst.id)，不得按名称猜测。筛选、分页、预算和 fallback 由 task/平台配置决定。结果、证据和失败写 Crawl Run；导入后用原生 fanout 委派本次新增图片，不创建 Issue，不使用测试数据。" -SkillIDs @($collectorSkill.id) -RuntimeID $runtimeID -MaxConcurrentTasks 6
+$planner = Set-AgentDefinition -Name '生成方案智能体' -Description '消费冻结分析、文案与市场快照，写 3 个同题 Variant 并委派生产。' -Instructions "全程使用中文。只执行 creative_plan。copy_snapshot 与 market snapshot 是唯一文案、事实和资源真值；不得重选或改写。写 V01-V03 结构化 brief，保留语义与主体，只改变表达；将缺失 production items 一次 fanout。需要输入时写 needs_input/action_required，不生成图片。$specialistHandoff" -SkillIDs @($planSkill.id) -RuntimeID $runtimeID -Model 'gpt-5.6-terra' -ThinkingLevel 'medium' -MaxConcurrentTasks 6
+$producer = Set-AgentDefinition -Name '图像编辑智能体' -Description '为标准 Variant 生成同内容族三尺寸底图并委派 Prime。' -Instructions "全程使用中文。只执行 creative_production；使用冻结 brief/copy_snapshot 和无品牌来源，写 generated assets、lineage 与 CLI 原始模型证据，只补当前 revision 的缺失尺寸。不得处理 direct_edit、Prime、QC、采集或分析；齐备后只委派该 Variant 的 Prime。$specialistHandoff" -SkillIDs @($productionSkill.id) -RuntimeID $runtimeID -Model 'gpt-5.6-terra' -ThinkingLevel 'low' -MaxConcurrentTasks 10
+$directEditor = Set-AgentDefinition -Name '图片直接修改智能体' -Description '按用户原话修改固定来源底图，并按 delivery mode 决定是否委派 Prime。' -Instructions "全程使用中文。只执行 creative_direct_edit；source asset 不可覆盖，输出 revision 加一并记录 lineage 和 CLI 原始模型证据。preview 到 generated 结束；publish 只按 context expected_sizes 委派 Prime。不得触发采集、分析、方案或标准生产。$specialistHandoff" -SkillIDs @($directEditSkill.id) -RuntimeID $runtimeID -Model 'gpt-5.6-terra' -ThinkingLevel 'low' -MaxConcurrentTasks 10
+$composer = Set-AgentDefinition -Name 'Prime 包装智能体' -Description '按冻结市场合同批量合成 Prime 包并委派独立双路 QC。' -Instructions "全程使用中文。只执行 creative_prime；对 context 的 Variant/revision/expected_sizes 使用冻结 market snapshot 确定性合成，写 primed assets、manifest、compose/QR 证据。不得写死组件、文字或坐标，不调用图像模型；整包齐备后一次 fanout 缺失 QC lanes。$specialistHandoff" -SkillIDs @($composeSkill.id) -RuntimeID $runtimeID -Model 'gpt-5.6-terra' -ThinkingLevel 'low' -MaxConcurrentTasks 6
+$reviewer = Set-AgentDefinition -Name '广告验收智能体' -Description '独立执行一个 technical 或 visual lane，并调用 QC barrier。' -Instructions "全程使用中文。只执行 context 指定 QC lane，读取同 Variant/revision/expected_sizes 的 Prime 包。technical 检查文件、尺寸、Prime、QR 与实际遮挡；visual 检查冻结文案、语义、一致性与画质。写独立 QC Report 后调用 qc-finalize；阻断必须 failed，不自动返工，不影响兄弟 Variant。$specialistHandoff" -SkillIDs @($qcSkill.id) -RuntimeID $runtimeID -Model 'gpt-5.6-terra' -ThinkingLevel 'medium' -MaxConcurrentTasks 6
 
 $producerImageCredentialConfigured = Set-AgentImageCredential -AgentID $producer.id -ApiKey $ImageApiKey
 $directEditorImageCredentialConfigured = Set-AgentImageCredential -AgentID $directEditor.id -ApiKey $ImageApiKey
@@ -298,8 +297,8 @@ foreach ($definition in $memberDefinitions) {
 }
 
 $leaderSkillDirectory = Join-Path $skillTemplateRoot 'ad-creative-leadership'
-$leaderSkill = Set-WorkspaceSkill -Name '创意素材协作' -Aliases @('素材小队 Leader 编排') -Description '使用原生 task fanout 串联标准三变体生产或独立直接改图、Prime、并发 QC 与增量发布。' -Directory $leaderSkillDirectory -Config @{ kind = 'creative_role'; capability = 'creative_leadership'; version = 46 }
-$leader = Set-AgentDefinition -Name '素材小队 Leader' -Description '管理 Creative Order 的并发生产、独立直接改图和结构化结果发布。' -Instructions '全程使用中文。只负责判断、批量委派、状态收口和发布，不代替专业成员执行。严格遵循创意素材协作 Skill：一个订单只关联一个用户 Issue；所有机器阶段使用原生 task fanout，禁止创建分析、变体、Prime 或 QC 子 Issue。Leader 只发起方案并在人工重试或异常恢复时补齐任务；Planner、Production、Prime 各自只委派直接下一阶段。按 target agent + source + item_key 去重，不能因 source 下已有其他 item 就跳过。direct_edit 订单只能委派“图片直接修改”角色，绝不触发采集、参考分析、三变体规划或普通生产；preview 不进入正式交付，publish 才按 expected_sizes 继续 Prime 与双路 QC。每次唤醒读取订单领域状态和冻结 squad snapshot，一次创建所有已就绪任务后立即结束，不轮询、不重复委派。' -SkillIDs @($leaderSkill.id) -RuntimeID $runtimeID -Model 'gpt-5.6-terra' -ThinkingLevel 'medium' -MaxConcurrentTasks 2
+$leaderSkill = Set-WorkspaceSkill -Name '创意素材协作' -Aliases @('素材小队 Leader 编排') -Description '使用原生 task fanout 启动并恢复标准生产或直接改图，汇总结构化结果。' -Directory $leaderSkillDirectory -Config @{ kind = 'creative_role'; capability = 'creative_leadership'; version = 47 }
+$leader = Set-AgentDefinition -Name '素材小队 Leader' -Description '按冻结能力映射启动和恢复 Creative Order，并负责用户汇总。' -Instructions '全程使用中文。只执行判断、原生 fanout、异常恢复和用户汇总，不代替专业角色。标准订单只创建方案 task；direct_edit 只创建直接修改 task；正常下游由各阶段唯一 owner 续链。每次唤醒回读订单、task 与冻结 squad snapshot，按 target/source/item_key 只补真正缺失项，一次提交后立即结束。不得按名称猜 Agent，不轮询，不创建阶段子 Issue；Issue 只记录人工决定、真实阻塞和最终验收。' -SkillIDs @($leaderSkill.id) -RuntimeID $runtimeID -Model 'gpt-5.6-terra' -ThinkingLevel 'medium' -MaxConcurrentTasks 6
 
 $resources = Get-Items (Invoke-MulticaApi -Method Get -Path '/api/creative/resources') 'resources'
 $copyLibrary = $resources | Where-Object { $_.kind -eq 'copy_library' -and $_.name -eq 'AdaKami Indonesia 文案库' } | Select-Object -First 1
@@ -313,9 +312,106 @@ if (-not $copyLibrary) {
     }
 }
 
-# The copy library is a versioned business configuration. Recipes assemble reusable
-# Indonesian fragments with approved product facts; production consumes only the
-# frozen order-item snapshot and never reads mutable library data.
+$numHeadlines = @(
+    'Selamat! Anda Berkesempatan Ajukan Pinjaman!',
+    'Cairinnya Sekarang, Bayarnya Nanti~',
+    'Pinjaman untuk Semua Kebutuhan',
+    'Butuh Pembiayaan Resmi?',
+    'Pendanaan dengan Proses Simple',
+    "Ubah rencana jadi nyata!`nDengan limit s.d. {{fact.limit_max.copy_text}}",
+    "Punya kebutuhan mendesak?`nTenang, cairin AdaKami aja!"
+)
+$numRecipeIntentTags = @(
+    @{ tags = @('机会','获批','成功','berkesempatan','approved') },
+    @{ tags = @('现在','稍后','bayar nanti') },
+    @{ tags = @('需求','生活场景','kebutuhan') },
+    @{ tags = @('正规','许可','resmi','ojk') },
+    @{ tags = @('简单','流程','simple','mudah') },
+    @{ tags = @('计划','愿望','额度','rencana') },
+    @{ tags = @('紧急','应急','需求','mendesak') }
+)
+$numCoreBenefits = @(
+    @{ key = 'limit'; group = 'limit'; name = '最高额度'; text = 'Limit hingga {{fact.limit_max.copy_text}}'; tags = @('limit','额度','jumlah','rp') },
+    @{ key = 'tenor'; group = 'tenor'; name = '灵活期限'; text = 'Pilihan Tenor {{fact.tenor_range.copy_text}}'; tags = @('tenor','期限','bulan') },
+    @{ key = 'rate'; group = 'interest_rate'; name = '起始利率'; text = 'Bunga mulai dari {{fact.interest_rate_from.copy_text}}'; tags = @('bunga','利率','interest') }
+)
+$numSupporting = @(
+    @{ key = 'no-collateral'; name = '无需抵押'; text = 'Tanpa Jaminan'; tags = @('无需抵押','jaminan','collateral') },
+    @{ key = 'ojk'; name = 'OJK 许可'; text = 'Berizin & Diawasi OJK'; tags = @('正规','许可','ojk','resmi') },
+    @{ key = 'flat-installment'; name = '固定分期'; text = 'Cicilan FLAT sepanjang Tenor'; tags = @('固定分期','cicilan','tenor') },
+    @{ key = 'no-upfront-fee'; name = '无前期费用'; text = 'Cairin Tanpa Biaya Awal'; tags = @('无前期费用','biaya awal') },
+    @{ key = 'no-initial-cost'; name = '无初始费用'; text = 'Tanpa Biaya Awal'; tags = @('无初始费用','biaya awal') },
+    @{ key = 'simple-process'; name = '流程简单'; text = 'Tanpa Proses Rumit'; tags = @('简单','流程','simple','mudah') }
+)
+$numCtas = @(
+    @{ text = 'Ajukan Sekarang'; tags = @('ajukan','apply','申请') },
+    @{ text = 'Ambil Sekarang'; tags = @('ambil','take','领取') },
+    @{ text = 'Download Sekarang!'; tags = @('download','下载') },
+    @{ text = 'Ajukan Segera!'; tags = @('ajukan','apply','申请') }
+)
+$repaymentHeadlines = @(
+    'Pembiayaan Fleksibel, Bunga mulai dari {{fact.interest_rate_from.copy_text}}',
+    'Cairin Sekarang, Bayar Nanti~',
+    'Bebas Cairin Sesuai Kebutuhan Anda',
+    "Bunga Ringan & Terjangkau mulai`ndari {{fact.interest_rate_from.copy_text}}",
+    'Cicil Buat Kebutuhan Rumah Tanpa Worry~',
+    'Nikmati Pinjaman Cicilan Ringan!'
+)
+$repaymentRows = @(
+    @{ key = '4m'; principal = '4000000'; principal_copy = 'Rp4.000.000'; month3 = '1369333'; month3_copy = 'Rp1.369.333'; month6 = '702667'; month6_copy = 'Rp702.667'; month12 = '369333'; month12_copy = 'Rp369.333' },
+    @{ key = '5m'; principal = '5000000'; principal_copy = 'Rp5.000.000'; month3 = '1711667'; month3_copy = 'Rp1.711.667'; month6 = '878333'; month6_copy = 'Rp878.333'; month12 = '461667'; month12_copy = 'Rp461.667' },
+    @{ key = '6m'; principal = '6000000'; principal_copy = 'Rp6.000.000'; month3 = '2054000'; month3_copy = 'Rp2.054.000'; month6 = '1054000'; month6_copy = 'Rp1.054.000'; month12 = '554000'; month12_copy = 'Rp554.000' },
+    @{ key = '7m'; principal = '7000000'; principal_copy = 'Rp7.000.000'; month3 = '2396333'; month3_copy = 'Rp2.396.333'; month6 = '1229667'; month6_copy = 'Rp1.229.667'; month12 = '646333'; month12_copy = 'Rp646.333' },
+    @{ key = '8m'; principal = '8000000'; principal_copy = 'Rp8.000.000'; month3 = '2738667'; month3_copy = 'Rp2.738.667'; month6 = '1405333'; month6_copy = 'Rp1.405.333'; month12 = '738667'; month12_copy = 'Rp738.667' },
+    @{ key = '9m'; principal = '9000000'; principal_copy = 'Rp9.000.000'; month3 = '3081000'; month3_copy = 'Rp3.081.000'; month6 = '1581000'; month6_copy = 'Rp1.581.000'; month12 = '831000'; month12_copy = 'Rp831.000' },
+    @{ key = '10m'; principal = '10000000'; principal_copy = 'Rp10.000.000'; month3 = '3423333'; month3_copy = 'Rp3.423.333'; month6 = '1756667'; month6_copy = 'Rp1.756.667'; month12 = '923333'; month12_copy = 'Rp923.333' }
+)
+
+$copyFragments = @()
+for ($index = 0; $index -lt $numHeadlines.Count; $index += 1) {
+    $copyFragments += @{ id = "fragment-num-headline-$($index + 1)"; key = "num-headline-$($index + 1)"; name = "NUM 标题 $($index + 1)"; creative_types = @('num'); role = 'headline'; usage = 'core'; text = $numHeadlines[$index]; tags = @('num','标题') + $numRecipeIntentTags[$index].tags; status = 'approved' }
+}
+foreach ($benefit in $numCoreBenefits) {
+    $copyFragments += @{ id = "fragment-num-benefit-$($benefit.key)"; key = "num-benefit-$($benefit.key)"; name = $benefit.name; creative_types = @('num','repayment_plan'); role = 'benefit'; semantic_group = $benefit.group; usage = 'core'; text = $benefit.text; tags = @('num','通用产品事实') + $benefit.tags; status = 'approved' }
+}
+foreach ($supporting in $numSupporting) {
+    $copyFragments += @{ id = "fragment-num-supporting-$($supporting.key)"; key = "num-supporting-$($supporting.key)"; name = $supporting.name; creative_types = @('num'); role = 'supporting'; usage = 'fallback'; text = $supporting.text; tags = @('num','其他卖点') + $supporting.tags; status = 'approved' }
+}
+for ($index = 0; $index -lt $numCtas.Count; $index += 1) {
+    $copyFragments += @{ id = "fragment-cta-$($index + 1)"; key = "cta-$($index + 1)"; name = "CTA $($index + 1)"; creative_types = @('num','repayment_plan'); role = 'cta'; usage = 'fallback'; text = $numCtas[$index].text; tags = @('cta','行动') + $numCtas[$index].tags; status = 'approved' }
+}
+for ($index = 0; $index -lt $repaymentHeadlines.Count; $index += 1) {
+    $copyFragments += @{ id = "fragment-plan-headline-$($index + 1)"; key = "plan-headline-$($index + 1)"; name = "还款计划标题 $($index + 1)"; creative_types = @('repayment_plan'); role = 'headline'; usage = 'core'; text = $repaymentHeadlines[$index]; tags = @('repayment_plan','还款','分期','cicilan','tenor'); status = 'approved' }
+}
+foreach ($row in $repaymentRows) {
+    $copyFragments += @{
+        id = "fragment-plan-payment-$($row.key)"
+        key = "plan-payment-$($row.key)"
+        name = "月供示例 $($row.principal_copy)"
+        creative_types = @('repayment_plan')
+        role = 'benefit'
+        semantic_group = 'repayment_example'
+        usage = 'core'
+        text = "Pinjaman {{fact.principal_$($row.key).copy_text}}`n3 bulan: {{fact.installment_$($row.key)_3m.copy_text}} / bulan`n6 bulan: {{fact.installment_$($row.key)_6m.copy_text}} / bulan`n12 bulan: {{fact.installment_$($row.key)_12m.copy_text}} / bulan"
+        tags = @('repayment_plan','cicilan','angsuran',$row.key,$row.principal_copy)
+        status = 'approved'
+    }
+}
+
+$copyRecipes = @()
+
+$copyFacts = @(
+    @{ id = 'fact-limit-max'; key = 'limit_max'; label = '最高额度'; value = '80000000'; copy_text = 'Rp80.000.000'; source = '0805-AdaKami文案库与图片示例.xlsx / 文案分组'; status = 'approved' },
+    @{ id = 'fact-tenor-range'; key = 'tenor_range'; label = '期限范围'; value = '3-12'; copy_text = '3-12 Bulan'; source = '0805-AdaKami文案库与图片示例.xlsx / 文案分组'; status = 'approved' },
+    @{ id = 'fact-interest-rate'; key = 'interest_rate_from'; label = '起始日利率'; value = '0.0003'; copy_text = '0,03%*'; source = 'AK interest Calculator .xlsx / Calculator（ID）'; status = 'approved' }
+)
+foreach ($row in $repaymentRows) {
+    $copyFacts += @{ id = "fact-principal-$($row.key)"; key = "principal_$($row.key)"; label = "借款本金 $($row.principal_copy)"; value = $row.principal; copy_text = $row.principal_copy; source = 'AK interest Calculator .xlsx / Calculator（ID）'; status = 'approved' }
+    foreach ($months in @(3, 6, 12)) {
+        $copyFacts += @{ id = "fact-installment-$($row.key)-$($months)m"; key = "installment_$($row.key)_$($months)m"; label = "$($row.principal_copy) · $months 个月月供"; value = $row["month$months"]; copy_text = $row["month$($months)_copy"]; source = 'AK interest Calculator .xlsx / Calculator（ID），结果取整到印尼盾'; status = 'approved' }
+    }
+}
+
 $copyLibraryConfig = @{
     schema_version = 2
     market = 'Indonesia'
@@ -323,32 +419,24 @@ $copyLibraryConfig = @{
     source = @{
         name = '飞书图片案例 / 文案分组'
         url = 'https://my.feishu.cn/wiki/YKUqwgHNEibzw0k5RVUcZsW2nJh?sheet=elM4tt'
-        sync_status = 'pending'
-        note = '飞书 MCP 当前无法读取 Sheet 子块；还款 Excel 公式尚未验证。当前仅使用已确认的 Prime 文案，未猜测任何公式。'
+        sync_status = 'synced'
+        note = '已核对图片案例、文案分组和印尼语计算器。重复的 Tanpa Jaminan 已合并；中文仅用于后台理解，不进入投放文案。'
     }
-    fragments = @(
-        @{ id = '10000000-0000-4000-8000-000000000001'; key = 'flexible-loan-headline'; name = '灵活借款主标题'; creative_types = @('num','repayment_plan'); role = 'headline'; text = 'Pinjaman Fleksibel Tanpa Ribet'; tags = @('pinjaman','fleksibel'); status = 'approved' }
-        @{ id = '10000000-0000-4000-8000-000000000002'; key = 'num-limit'; name = '额度信息'; creative_types = @('num'); role = 'benefit'; text = "Limit hingga`n{{fact.limit_max.copy_text}}"; tags = @('num','limit','额度'); status = 'approved' }
-        @{ id = '10000000-0000-4000-8000-000000000003'; key = 'repayment-plan'; name = '期限与利率'; creative_types = @('repayment_plan'); role = 'benefit'; text = "Pilihan Tenor`n{{fact.tenor_range.copy_text}}`nBunga mulai dari`n{{fact.interest_rate_from.copy_text}}"; tags = @('repayment_plan','tenor','bunga','分期'); status = 'approved' }
-        @{ id = '10000000-0000-4000-8000-000000000004'; key = 'apply-now'; name = '立即申请'; creative_types = @('num','repayment_plan'); role = 'cta'; text = 'AJUKAN SEKARANG'; tags = @('cta'); status = 'approved' }
+    fragments = $copyFragments
+    recipes = $copyRecipes
+    product_facts = $copyFacts
+    calculation_rules = @(
+        @{ id = 'rule-total-interest'; key = 'total-interest'; name = '总利息'; expression = 'principal * daily_rate * 30 * tenor_months'; input_fact_keys = @('principal','daily_rate','tenor_months'); output_fact_key = 'total_interest'; source = 'AK interest Calculator .xlsx / Calculator（ID）'; status = 'approved' },
+        @{ id = 'rule-total-repayment'; key = 'total-repayment'; name = '总还款'; expression = 'principal + principal * daily_rate * 30 * tenor_months'; input_fact_keys = @('principal','daily_rate','tenor_months'); output_fact_key = 'total_repayment'; source = 'AK interest Calculator .xlsx / Calculator（ID）'; status = 'approved' },
+        @{ id = 'rule-monthly-installment'; key = 'monthly-installment'; name = '月供'; expression = '(principal + principal * daily_rate * 30 * tenor_months) / tenor_months'; input_fact_keys = @('principal','daily_rate','tenor_months'); output_fact_key = 'monthly_installment'; source = 'AK interest Calculator .xlsx / Calculator（ID）'; status = 'approved' }
     )
-    recipes = @(
-        @{ id = '20000000-0000-4000-8000-000000000001'; key = 'num-standard'; name = 'NUM · 额度'; creative_type = 'num'; description = '突出可申请额度，用于数字利益点素材。'; fragment_ids = @{ headline = @('10000000-0000-4000-8000-000000000001'); benefit = @('10000000-0000-4000-8000-000000000002'); cta = @('10000000-0000-4000-8000-000000000004') }; match_tags = @('NUM','额度','limit','jumlah','Rp'); status = 'approved' }
-        @{ id = '20000000-0000-4000-8000-000000000002'; key = 'repayment-plan-standard'; name = '还款计划 · 期限与利率'; creative_type = 'repayment_plan'; description = '突出期限和起始利率，用于还款计划素材。'; fragment_ids = @{ headline = @('10000000-0000-4000-8000-000000000001'); benefit = @('10000000-0000-4000-8000-000000000003'); cta = @('10000000-0000-4000-8000-000000000004') }; match_tags = @('还款','分期','tenor','cicilan','angsuran','bunga'); status = 'approved' }
-    )
-    product_facts = @(
-        @{ id = '30000000-0000-4000-8000-000000000001'; key = 'limit_max'; label = '最高额度'; value = '80000000'; copy_text = 'Rp80.000.000'; source = 'Prime Template 11-01.png'; status = 'approved' }
-        @{ id = '30000000-0000-4000-8000-000000000002'; key = 'tenor_range'; label = '期限范围'; value = '3-12'; copy_text = '3-12 Bulan'; source = 'Prime Template 11-01.png'; status = 'approved' }
-        @{ id = '30000000-0000-4000-8000-000000000003'; key = 'interest_rate_from'; label = '起始利率'; value = '0.03%'; copy_text = '0,03%*'; source = 'Prime Template 11-01.png'; status = 'approved' }
-    )
-    calculation_rules = @()
     recommendation_policy = @{ type_weight = 1000; tag_weight = 80; concise_weight = 1; default_creative_type = 'num' }
 }
 $seedCopyLibrary = $copyLibraryIsNew -or $ResetBusinessConfig -or ([int]$copyLibrary.published_version -lt 1)
 if ($seedCopyLibrary) {
     $copyLibrary = Invoke-MulticaApi -Method Put -Path "/api/creative/resources/$($copyLibrary.id)" -Body @{
         name = $copyLibrary.name
-        description = '可组合印尼语文案：业务维护片段、组合方案、产品事实和计算规则。'
+        description = '原子化印尼语文案库：业务维护语义片段、通用兜底、产品事实和计算规则；系统按素材动态组合三套候选。'
         config = $copyLibraryConfig
     }
     $copyLibrary = Invoke-MulticaApi -Method Post -Path "/api/creative/resources/$($copyLibrary.id)/publish"
@@ -527,12 +615,28 @@ if (-not $autopilot) {
 }
 $autopilotDetail = Invoke-MulticaApi -Method Get -Path "/api/autopilots/$($autopilot.id)"
 $triggers = if ($autopilotDetail.PSObject.Properties.Name -contains 'triggers') { @($autopilotDetail.triggers) } else { @() }
-if (-not ($triggers | Where-Object kind -eq 'schedule')) {
+$scheduleTrigger = $triggers | Where-Object kind -eq 'schedule' | Select-Object -First 1
+$scheduleConfig = @{
+    cron_expression = '0 9 * * 1'
+    timezone = 'Asia/Shanghai'
+    label = '每周一 09:00'
+}
+if (-not $scheduleTrigger) {
     Invoke-MulticaApi -Method Post -Path "/api/autopilots/$($autopilot.id)/triggers" -Body @{
         kind = 'schedule'
-        cron_expression = '0 9 * * 1'
-        timezone = 'Asia/Shanghai'
-        label = '每周一 09:00'
+        cron_expression = $scheduleConfig.cron_expression
+        timezone = $scheduleConfig.timezone
+        label = $scheduleConfig.label
+    } | Out-Null
+} elseif (-not $scheduleTrigger.enabled -or
+    $scheduleTrigger.cron_expression -ne $scheduleConfig.cron_expression -or
+    $scheduleTrigger.timezone -ne $scheduleConfig.timezone -or
+    $scheduleTrigger.label -ne $scheduleConfig.label) {
+    Invoke-MulticaApi -Method Patch -Path "/api/autopilots/$($autopilot.id)/triggers/$($scheduleTrigger.id)" -Body @{
+        enabled = $true
+        cron_expression = $scheduleConfig.cron_expression
+        timezone = $scheduleConfig.timezone
+        label = $scheduleConfig.label
     } | Out-Null
 }
 

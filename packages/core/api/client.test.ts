@@ -889,6 +889,20 @@ describe("creative feedback endpoint", () => {
     );
   });
 
+  it("sends explicit QC risk acceptance through the existing adoption endpoint", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ id: "item-1", adopted_variant_id: "variant-1", variants: [] }), { status: 200, headers: { "Content-Type": "application/json" } }));
+    vi.stubGlobal("fetch", fetchMock);
+    const client = new ApiClient("https://api.example.test");
+    const request = { variant_id: "variant-1", qc_risk_acknowledged: true, qc_risk_reason: "Deadline accepted with known visual issue" };
+
+    await client.adoptCreativeOrderVariant("order-1", "item-1", request);
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://api.example.test/api/creative/orders/order-1/items/item-1/adoption",
+      expect.objectContaining({ method: "POST", body: JSON.stringify(request) }),
+    );
+  });
+
   it("cancels an unfinished creative order and fails closed on a malformed response", async () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ id: "order-1", status: null }), { status: 200, headers: { "Content-Type": "application/json" } }));
     vi.stubGlobal("fetch", fetchMock);

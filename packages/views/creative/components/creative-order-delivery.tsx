@@ -1,11 +1,22 @@
 "use client";
 
 import { useId, useState } from "react";
-import { Check, CheckCircle2, ChevronDown, Download, Image as ImageIcon, PackageCheck, RefreshCw } from "lucide-react";
+import { Check, CheckCircle2, ChevronDown, Download, Image as ImageIcon, Info, PackageCheck, RefreshCw } from "lucide-react";
 import { strToU8, zipSync } from "fflate";
 import type { Attachment, CreativeOrder, CreativeOrderAsset, CreativeOrderItem, CreativeOrderQCReport, CreativeOrderVariant } from "@multica/core/types";
 import { Badge } from "@multica/ui/components/ui/badge";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@multica/ui/components/ui/alert-dialog";
 import { Button } from "@multica/ui/components/ui/button";
+import { Textarea } from "@multica/ui/components/ui/textarea";
 import { cn } from "@multica/ui/lib/utils";
 import { toast } from "sonner";
 import { creativeAttachmentBrowserURL } from "../lib/creative-attachment-url";
@@ -45,6 +56,11 @@ const CREATIVE_DELIVERY_SIZE_LABELS: Record<(typeof CREATIVE_DELIVERY_SIZES)[num
 };
 
 type DeliveryAttachment = Pick<Attachment, "id" | "filename" | "url" | "download_url" | "markdown_url">;
+
+export type CreativeVariantAdoptionRisk = {
+  acknowledged: true;
+  reason: string;
+};
 
 export function adoptedCreativeOrderVariant(item: CreativeOrderItem): CreativeOrderVariant | undefined {
   const adoptedVariantId = item.adopted_variant_id;
@@ -178,6 +194,7 @@ export function CreativeOrderDeliveryCandidates({
   onRetryQC,
   onRepairPrime,
   onAssetSelect,
+  onAssetInfo,
   disabled = false,
 }: {
   orderId: string;
@@ -187,10 +204,11 @@ export function CreativeOrderDeliveryCandidates({
 	adoptingVariantId: string;
 	retryingQCVariantId?: string;
 	repairingPrimeVariantId?: string;
-  onAdopt: (variantId: string) => void;
+  onAdopt: (variantId: string, risk?: CreativeVariantAdoptionRisk) => void;
 	onRetryQC?: (variantId: string) => void;
-	onRepairPrime?: (variantId: string) => void;
+  onRepairPrime?: (variantId: string) => void;
   onAssetSelect: (assetId: string) => void;
+  onAssetInfo?: (assetId: string) => void;
   disabled?: boolean;
 }) {
   const adoptedVariant = adoptedCreativeOrderVariant(item);
@@ -213,6 +231,7 @@ export function CreativeOrderDeliveryCandidates({
         source={source}
         attachments={attachments}
         onAssetSelect={onAssetSelect}
+        onAssetInfo={onAssetInfo}
       />
       {otherVariants.length > 0 && <details className="group border-t bg-muted/10">
         <summary className="flex cursor-pointer list-none items-center gap-2 px-4 py-3 text-sm font-medium marker:content-none">
@@ -264,6 +283,7 @@ function AdoptedVariantDelivery({
   source,
   attachments,
   onAssetSelect,
+  onAssetInfo,
 }: {
   orderId: string;
   item: CreativeOrderItem;
@@ -271,6 +291,7 @@ function AdoptedVariantDelivery({
   source: { label: string; url: string };
   attachments: Map<string, DeliveryAttachment>;
   onAssetSelect: (assetId: string) => void;
+  onAssetInfo?: (assetId: string) => void;
 }) {
   const [archiveBusy, setArchiveBusy] = useState(false);
   const [archiveError, setArchiveError] = useState("");
@@ -305,7 +326,7 @@ function AdoptedVariantDelivery({
         {CREATIVE_DELIVERY_SIZES.map((size, index) => {
           const asset = delivered.find((candidate) => candidate.size_key === size);
           const attachment = asset ? attachments.get(asset.attachment_id) : undefined;
-          return <DeliveryAssetPane key={size} asset={asset} attachment={attachment} size={size} onAssetSelect={onAssetSelect} divided={index > 0} />;
+          return <DeliveryAssetPane key={size} asset={asset} attachment={attachment} size={size} onAssetSelect={onAssetSelect} onAssetInfo={onAssetInfo} divided={index > 0} />;
         })}
       </div>
     </div>
@@ -332,14 +353,17 @@ function VariantCandidate({
 	adoptingVariantId: string;
 	retryingQCVariantId: string;
 	repairingPrimeVariantId: string;
-  onAdopt: (variantId: string) => void;
+  onAdopt: (variantId: string, risk?: CreativeVariantAdoptionRisk) => void;
 	onRetryQC?: (variantId: string) => void;
 	onRepairPrime?: (variantId: string) => void;
   onAssetSelect: (assetId: string) => void;
   disabled?: boolean;
   subdued?: boolean;
 }) {
+  const [riskConfirmationOpen, setRiskConfirmationOpen] = useState(false);
+  const [riskReason, setRiskReason] = useState("");
   const readiness = creativeVariantAdoptionReadiness(variant);
+  const riskAdoption = creativeVariantRiskAdoptionReadiness(variant);
   const qcDetails = creativeVariantQCDetails(variant);
   const descriptionId = useId();
   const previews = creativeVariantPreviewAssets(variant);
@@ -353,10 +377,12 @@ function VariantCandidate({
   const qcRetryBusy = retryingQCVariantId === variant.id;
   const primeRepairExhausted = !disabled && variant.status === "action_required" && variant.prime_repair_used === true;
   const primeRepairBusy = repairingPrimeVariantId === variant.id;
+  const requiresRiskConfirmation = !readiness.ready && riskAdoption.allowed;
+  const adoptionDisabled = disabled || (!readiness.ready && !riskAdoption.allowed) || adopted || Boolean(adoptingVariantId);
   return <article className={cn("flex min-w-0 flex-col border bg-background", subdued && "opacity-75 transition-opacity hover:opacity-100")}>
     <div className="flex items-center justify-between gap-2 border-b px-3 py-2">
       <div className="flex items-center gap-2"><span className="text-sm font-semibold">{variant.variant_key || variant.id.slice(0, 8)}</span><Badge variant="outline">r{variant.revision}</Badge></div>
-      {readiness.ready ? <Badge variant="outline"><CheckCircle2 className="h-3 w-3" />QC 通过</Badge> : <Badge variant="secondary">尚未完成</Badge>}
+      {readiness.ready ? <Badge variant="outline"><CheckCircle2 className="h-3 w-3" />QC 通过</Badge> : riskAdoption.allowed ? <Badge variant="destructive">QC 未通过</Badge> : <Badge variant="secondary">尚未完成</Badge>}
     </div>
     <button type="button" disabled={!cover || !coverURL} onClick={() => cover && onAssetSelect(cover.id)} className="group flex min-h-72 w-full items-center justify-center border-b bg-muted/10 p-3 disabled:cursor-default">
       {coverURL ? <img src={coverURL} alt={`${variant.variant_key} 方形主预览`} width={720} height={720} loading="lazy" className="max-h-[420px] w-full object-contain transition-transform group-hover:scale-[1.01]" /> : <EmptyImage label="待成图" />}
@@ -375,11 +401,28 @@ function VariantCandidate({
         <RefreshCw className={cn("h-4 w-4", qcRetryBusy && "animate-spin")} />
         {qcRetryBusy ? "正在重新执行双路质检" : "重新执行双路质检"}
       </Button>}
-      <Button className="w-full" size="sm" variant={adopted ? "secondary" : "default"} disabled={disabled || !readiness.ready || adopted || Boolean(adoptingVariantId)} aria-describedby={descriptionId} onClick={() => onAdopt(variant.id)}>
+      <Button className="w-full" size="sm" variant={adopted ? "secondary" : requiresRiskConfirmation ? "destructive" : "default"} disabled={adoptionDisabled} aria-describedby={descriptionId} onClick={() => { if (requiresRiskConfirmation) setRiskConfirmationOpen(true); else onAdopt(variant.id); }}>
         {adopted ? <CheckCircle2 className="h-4 w-4" /> : <Check className="h-4 w-4" />}
-        {disabled ? "订单已结束" : busy ? "正在采用" : adopted ? "当前采用" : "采用此变体"}
+        {disabled ? "订单已结束" : busy ? "正在采用" : adopted ? "当前采用" : requiresRiskConfirmation ? "确认风险后采用" : "采用此变体"}
       </Button>
     </div>
+    <AlertDialog open={riskConfirmationOpen} onOpenChange={setRiskConfirmationOpen}>
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>确认带问题采用 {variant.variant_key || variant.id.slice(0, 8)}？</AlertDialogTitle>
+          <AlertDialogDescription>当前版本的双路 QC 未通过。确认后会把现有 Prime 三尺寸作为最终交付，并保留本次风险确认、采用原因和 QC 快照。</AlertDialogDescription>
+        </AlertDialogHeader>
+        <VariantQCDetails revision={variant.revision} details={qcDetails} />
+        <label className="grid gap-2 text-sm font-medium">
+          带问题采用原因
+          <Textarea aria-label="带问题采用原因" value={riskReason} onChange={(event) => setRiskReason(event.target.value)} rows={3} placeholder="说明为什么仍决定采用，以及已知风险如何处理" />
+        </label>
+        <AlertDialogFooter>
+          <AlertDialogCancel>返回继续处理</AlertDialogCancel>
+          <AlertDialogAction disabled={!riskReason.trim() || busy} onClick={() => { onAdopt(variant.id, { acknowledged: true, reason: riskReason.trim() }); setRiskConfirmationOpen(false); }}>确认风险并采用</AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
   </article>;
 }
 
@@ -443,19 +486,24 @@ function DeliveryAssetPane({
   attachment,
   size,
   onAssetSelect,
+  onAssetInfo,
   divided,
 }: {
   asset?: CreativeOrderAsset;
   attachment?: DeliveryAttachment;
   size: (typeof CREATIVE_DELIVERY_SIZES)[number];
   onAssetSelect: (assetId: string) => void;
+  onAssetInfo?: (assetId: string) => void;
   divided: boolean;
 }) {
   const url = creativeAttachmentBrowserURL(attachment);
   return <figure className={cn("min-w-0 bg-background", divided && "border-t md:border-l md:border-t-0")}>
     <figcaption className="flex items-center justify-between gap-2 border-b px-3 py-2">
       <span className="text-xs font-medium">{CREATIVE_DELIVERY_SIZE_LABELS[size]} · {size}</span>
-      {url && attachment && <Button size="icon-sm" variant="ghost" title={`下载 ${size}`} aria-label={`下载 ${size}`} onClick={() => void downloadCreativeAttachment(attachment, `${size}${fileExtension(attachment.filename) || ".png"}`).catch((error: unknown) => toast.error(error instanceof Error ? error.message : "无法下载交付图"))}><Download className="h-4 w-4" /></Button>}
+      <span className="flex items-center gap-1">
+        {asset && onAssetInfo && <Button size="icon-sm" variant="ghost" title={`查看 ${size} 生成信息`} aria-label={`查看 ${size} 生成信息`} onClick={() => onAssetInfo(asset.id)}><Info className="h-4 w-4" /></Button>}
+        {url && attachment && <Button size="icon-sm" variant="ghost" title={`下载 ${size}`} aria-label={`下载 ${size}`} onClick={() => void downloadCreativeAttachment(attachment, `${size}${fileExtension(attachment.filename) || ".png"}`).catch((error: unknown) => toast.error(error instanceof Error ? error.message : "无法下载交付图"))}><Download className="h-4 w-4" /></Button>}
+      </span>
     </figcaption>
     <button type="button" disabled={!asset || !url} onClick={() => asset && onAssetSelect(asset.id)} className="flex min-h-72 w-full items-center justify-center p-3 disabled:cursor-default">
       {url ? <img src={url} alt={`最终采用方案 ${size}`} width={1200} height={1200} loading="lazy" className="max-h-[480px] w-full object-contain" /> : <EmptyImage label={`${size} 尚未交付`} />}
@@ -482,6 +530,19 @@ export function creativeVariantAdoptionReadiness(variant: CreativeOrderVariant):
   if (delivered.length !== CREATIVE_DELIVERY_SIZES.length) return { ready: false, status: `等待正式交付：已完成 ${delivered.length}/${CREATIVE_DELIVERY_SIZES.length} 个尺寸` };
   if (variant.status !== "completed") return { ready: false, status: `等待变体完成：当前状态 ${variant.status}` };
   return { ready: true, status: "三尺寸、Prime 与双路 QC 均已完成，可以采用" };
+}
+
+export function creativeVariantRiskAdoptionReadiness(variant: CreativeOrderVariant): { allowed: boolean; status: string } {
+  const failed = creativeVariantQCDetails(variant).filter((detail) => detail.status === "failed");
+  if (failed.length === 0 || variant.status !== "action_required") return { allowed: false, status: "当前版本没有可确认采用的 QC 失败" };
+  const primedSizes = new Set(variant.assets
+    .filter((asset) => asset.revision === variant.revision && asset.stage === "primed" && asset.status === "completed" && asset.attachment_id)
+    .map((asset) => asset.size_key)
+    .filter((size) => CREATIVE_DELIVERY_SIZES.includes(size as (typeof CREATIVE_DELIVERY_SIZES)[number])));
+  if (primedSizes.size !== CREATIVE_DELIVERY_SIZES.length) {
+    return { allowed: false, status: `QC 未通过，且 Prime 仅完成 ${primedSizes.size}/${CREATIVE_DELIVERY_SIZES.length} 个尺寸` };
+  }
+  return { allowed: true, status: failed.map((detail) => `${detail.label}${qcStatusLabel(detail.status)}`).join("，") };
 }
 
 function qcStatusAllowsAdoption(status: string): boolean {

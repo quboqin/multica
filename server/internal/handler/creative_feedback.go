@@ -75,7 +75,7 @@ var creativeFeedbackReasonCodes = map[string]map[string]struct{}{
 		"too_long": {}, "compliance_risk": {}, "translation": {}, "other": {},
 	},
 	"variant": {
-		"visual_direction_mismatch": {}, "benefit_mismatch": {}, "layout_mismatch": {}, "brand_issue": {}, "other": {},
+		"visual_direction_mismatch": {}, "benefit_mismatch": {}, "layout_mismatch": {}, "brand_issue": {}, "qc_risk_accepted": {}, "other": {},
 	},
 	"asset": {
 		"copy_error": {}, "theme_mismatch": {}, "subject_mismatch": {}, "size_inconsistency": {},
@@ -111,7 +111,7 @@ func (h *Handler) CreateCreativeFeedbackEvent(w http.ResponseWriter, r *http.Req
 	if !ok {
 		return
 	}
-	if !h.creativeFeedbackSubjectExists(r, workspaceID, issueID, input.SubjectType, subjectID) {
+	if !h.creativeFeedbackSubjectExists(r, workspaceID, issueID, input.SubjectType, subjectID, input.EventType, input.ContextSnapshot) {
 		writeError(w, http.StatusUnprocessableEntity, "feedback subject does not belong to this workspace")
 		return
 	}
@@ -608,7 +608,7 @@ func validCreativeAnnotation(raw json.RawMessage) bool {
 	}
 }
 
-func (h *Handler) creativeFeedbackSubjectExists(r *http.Request, workspaceID, issueID pgtype.UUID, subjectType string, subjectID pgtype.UUID) bool {
+func (h *Handler) creativeFeedbackSubjectExists(r *http.Request, workspaceID, issueID pgtype.UUID, subjectType string, subjectID pgtype.UUID, eventType string, contextSnapshot json.RawMessage) bool {
 	var exists bool
 	query := ""
 	switch subjectType {
@@ -625,6 +625,13 @@ func (h *Handler) creativeFeedbackSubjectExists(r *http.Request, workspaceID, is
     WHERE resource.workspace_id = $2
       AND resource.kind = 'copy_library'
       AND revision.config->'recipes' @> jsonb_build_array(jsonb_build_object('id', $1::text))
+  )
+  OR EXISTS(
+    SELECT 1
+    FROM creative_order_item item
+    JOIN creative_order order_row ON order_row.id = item.order_id
+    WHERE order_row.workspace_id = $2
+      AND item.copy_snapshot->>'composition_id' = $1::text
   )`
 	case "variant":
 		query = `SELECT EXISTS(SELECT 1 FROM creative_order_variant v JOIN creative_order_item i ON i.id = v.order_item_id JOIN creative_order o ON o.id = i.order_id WHERE v.id = $1 AND o.workspace_id = $2)`
@@ -639,7 +646,13 @@ func (h *Handler) creativeFeedbackSubjectExists(r *http.Request, workspaceID, is
 	case "qc":
 		query = `SELECT EXISTS(SELECT 1 FROM creative_order_qc_report q JOIN creative_order_variant v ON v.id = q.variant_id JOIN creative_order_item i ON i.id = v.order_item_id JOIN creative_order o ON o.id = i.order_id WHERE q.id = $1 AND o.workspace_id = $2)`
 	}
-	if query == "" || h.DB.QueryRow(r.Context(), query, subjectID, workspaceID).Scan(&exists) != nil || !exists {
+	if query == "" || h.DB.QueryRow(r.Context(), query, subjectID, workspaceID).Scan(&exists) != nil {
+		return false
+	}
+	if !exists && subjectType == "recommended_copy" && eventType == "viewed" {
+		exists = h.dynamicCreativeCopyFeedbackSubjectExists(r, workspaceID, subjectID, contextSnapshot)
+	}
+	if !exists {
 		return false
 	}
 	if !issueID.Valid {
@@ -652,6 +665,40 @@ func (h *Handler) creativeFeedbackSubjectExists(r *http.Request, workspaceID, is
 		return h.DB.QueryRow(r.Context(), `SELECT EXISTS(SELECT 1 FROM creative_material_issue_candidate WHERE issue_id = $1 AND candidate_id = $2 AND workspace_id = $3)`, issueID, subjectID, workspaceID).Scan(&exists) == nil && exists
 	}
 	return true
+}
+
+func (h *Handler) dynamicCreativeCopyFeedbackSubjectExists(r *http.Request, workspaceID, subjectID pgtype.UUID, raw json.RawMessage) bool {
+	var context struct {
+		CandidateID        string `json:"candidate_id"`
+		CopyLibraryID      string `json:"copy_library_id"`
+		CopyLibraryVersion int    `json:"copy_library_version"`
+		CompositionID      string `json:"composition_id"`
+		CopySnapshot       struct {
+			CompositionID  string `json:"composition_id"`
+			LibraryID      string `json:"library_id"`
+			LibraryVersion int    `json:"library_version"`
+		} `json:"copy_snapshot"`
+	}
+	if json.Unmarshal(raw, &context) != nil || context.CompositionID != uuidToString(subjectID) ||
+		context.CopySnapshot.CompositionID != context.CompositionID || context.CopySnapshot.LibraryID != context.CopyLibraryID ||
+		context.CopySnapshot.LibraryVersion != context.CopyLibraryVersion {
+		return false
+	}
+	var candidateID, libraryID pgtype.UUID
+	if candidateID.Scan(context.CandidateID) != nil || libraryID.Scan(context.CopyLibraryID) != nil {
+		return false
+	}
+	var exists bool
+	return h.DB.QueryRow(r.Context(), `
+SELECT EXISTS(
+  SELECT 1
+  FROM creative_material_candidate candidate
+  JOIN creative_resource library ON library.id = $3
+  WHERE candidate.id = $1 AND candidate.workspace_id = $2
+    AND library.workspace_id = $2 AND library.kind = 'copy_library'
+    AND library.published_version = $4 AND library.status = 'published'
+)
+`, candidateID, workspaceID, libraryID, context.CopyLibraryVersion).Scan(&exists) == nil && exists
 }
 
 func (h *Handler) applyCreativeCandidateDecision(r *http.Request, tx pgx.Tx, workspaceID, issueID, userID pgtype.UUID, input creativeFeedbackEventInput, subjectID pgtype.UUID) error {

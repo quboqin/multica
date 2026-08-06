@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -435,12 +436,20 @@ func runImageEdit(cmd *cobra.Command, _ []string) error {
 		abs = outputFile
 	}
 	output, _ := cmd.Flags().GetString("output")
-	result := map[string]any{"model": model, "input_count": len(inputs), "size": size, "quality": quality, "path": abs, "bytes": len(image), "request_id": requestID, "attempts": attempts, "provider_slot_limit": providerSlotLimit}
+	result := map[string]any{
+		"model": model, "input_count": len(inputs), "size": size, "quality": quality,
+		"path": abs, "bytes": len(image), "request_id": requestID, "attempts": attempts,
+		"provider_slot_limit": providerSlotLimit, "prompt": prompt, "prompt_sha256": imagePromptSHA256(prompt),
+	}
 	if output == "table" {
 		cli.PrintTable(os.Stdout, []string{"MODEL", "INPUTS", "SIZE", "QUALITY", "BYTES", "REQUEST ID", "PATH"}, [][]string{{model, strconv.Itoa(len(inputs)), size, quality, strconv.Itoa(len(image)), requestID, abs}})
 		return nil
 	}
 	return cli.PrintJSON(os.Stdout, result)
+}
+
+func imagePromptSHA256(prompt string) string {
+	return fmt.Sprintf("%x", sha256.Sum256([]byte(prompt)))
 }
 
 func requestGPTImageEditWithRetry(ctx context.Context, client *http.Client, endpoint, apiKey, model, imageField string, inputs []string, mask, prompt, size, quality string, maxAttempts int) ([]byte, string, int, error) {

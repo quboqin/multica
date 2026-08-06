@@ -2,78 +2,34 @@
 
 ## 输入
 
-从当前 AutoPilot 描述和 task context 读取竞品、优先竞品、地区、语言、设备、媒体、时间范围、选材
-比例、最大数量、市场资源包 ID 和广告参考分析智能体 ID。缺少必要字段时将运行标为
-`action_required`，不要按名称或工作区唯一性猜测。
+仅接受当前 task context、AutoPilot 配置和平台注入的连接器上下文。业务筛选可以包含竞品、市场、语言、
+设备、媒体、日期、分页预算、数量、选材规则及市场资源引用；`analysis_agent_id` 必须是明确 UUID。缺少连接器
+要求的字段时写 `action_required`，不得用某个市场、媒体或 Agent 的默认值替代。
 
-当前市场识别 Indonesia/印尼/印度尼西亚/ID、Indonesian/印尼语/印度尼西亚语、Android 和 iOS。
-未来其他市场按 AutoPilot 绑定资源包的明确配置执行。
+`params-json` 保持业务配置的原始结构；只做连接器 API 明确要求的类型和枚举转换。不确定的筛选值保留在
+run 说明中，不猜枚举。连接器分页、去重和浏览器 fallback 使用 task 明确值或平台配置，不在 Skill 中写死。
 
-结构化参数示例：
+## Crawl Run
 
-```json
-{
-  "competitors": ["Easycash"],
-  "priority_competitors": ["Easycash"],
-  "area": ["ID"],
-  "language": ["id"],
-  "platform": [1, 2],
-  "date_range": "-29,0",
-  "pages_per_competitor": 3,
-  "priority_pages_per_competitor": 5,
-  "max_pages_per_competitor": 10,
-  "max_priority_pages_per_competitor": 15,
-  "novel_only": true,
-  "browser_capture_fallback": true,
-  "analysis_agent_id": "<广告参考分析智能体ID>",
-  "limit": 25,
-  "selection_rules": {
-    "new_materials": {"ratio": 0.4, "duration_days_lt": 7, "impression_gt": 1000},
-    "volume_materials": {"ratio": 0.6, "duration_days_gt": 30, "impression_gte": 10000000}
-  }
-}
-```
+`multica crawl run` 使用工作区可用的 AppGrowing 凭证，先创建稳定 Crawl Run，再调用 broker 并把候选关联到
+同一个 run。响应没有 `crawl_run_id` 属于服务契约错误。
 
-`selection_rules` 必须是对象。媒体只有在确认 AppGrowing 枚举 ID 时才下推；不确定时保留在运行摘要
-中，不猜枚举。
+以返回的 `selection_summary`、逐页 evidence、archive summary 和 errors 为真值。目标数量或比例不能反推为
+实际结果。单个查询失败不能覆盖其他查询的成功；run 可以是 `partial`。授权问题写业务可读的重新绑定入口，
+不得记录或输出凭证内容。
 
-## 执行
+## 参考分析 fanout
 
-在 PowerShell 中读取完整 JSON：
-
-```powershell
-$params = Get-Content -Raw -LiteralPath <JSON文件>
-multica crawl run --connector appgrowing --capability material_search --params-json $params \
-  --analysis-agent-id <广告参考分析智能体ID> --timeout 15m --output json
-```
-
-不得传 `--issue-id`。平台使用工作区已绑定的 AppGrowing 凭证，并创建或更新一个
-`creative_material_crawl_run`。响应必须包含稳定 `crawl_run_id`；若没有，视为服务契约错误。
-
-每家普通竞品至少核对 3 页，优先竞品至少 5 页。平台把工作区历史素材身份作为排除集；达到最低
-页数后如果仍未凑足 `limit` 条新素材，按竞品轮询继续到最大页数、时间预算或无更多结果。单家接口
-为空或失败时只对该竞品启用 Playwright 补查，其他竞品成功不能掩盖该失败。
-
-运行结果从顶层 `selection_summary` 读取实际新增、跑量素材、比例、缺口和是否达标，不用目标比例
-反推。逐竞品、逐页证据、归档统计和错误写入 Crawl Run 的结构化详情，不创建评论。
-
-## 预分析
-
-采集写入后立即按 `crawl_run_id` 列出本次候选。只选择：
+只处理本次 run 中满足以下条件的候选：
 
 - `is_new_in_run=true`；
-- `asset_type=image`；
-- 当前 analysis version 尚无 completed Source Analysis；
-- 目标分析 Agent、当前 Crawl Run source 和 `<candidate-id>:v<analysis-version>` item key 下没有
+- `asset_type=image` 且存在可下载归档或真实源；
+- 当前 analysis version 没有 completed Source Analysis；
+- 目标 Agent、`creative_crawl_run_analysis` source 和 `<candidate-id>:v<version>` item key 下没有
   active/succeeded task。
 
-为每张候选生成一个 fanout item。分析下载优先使用平台归档，归档尚未结束时使用本次采集保存的真实
-源 URL；不能因为异步归档仍为 pending 而永久漏掉分析。context 至少包含 `workflow=creative_reference_analysis`、
-`crawl_run_id`、`candidate_id` 和 `analysis_version`。参考分析必须市场中立，不向该 task 注入品牌、Prime
-或 App UI 资源。分析智能体必须先写入并回读 completed Source Analysis，再结束 task；平台会同时校验
-候选、版本、Crawl Run、工作区和 run-candidate 状态，缺少或错配产物时以 `creative_output_missing`
-失败关闭，不能显示为完成。fanout 部分失败时 Crawl Run 为
-`partial`，成功项继续；只有无任何可交付项时才为 `failed`。
+每个 item context 固定为 `type=creative_domain_task`、`workflow=creative_reference_analysis`，并携带
+`crawl_run_id`、`candidate_id` 和 `analysis_version`。不注入品牌市场包、Prime、App UI 或文案库。
 
-授权失效时只返回业务可读的重新绑定入口。不得向用户索要或输出账号、密码、验证码、Cookie、
-Token、Header、GraphQL 或浏览器调试信息。
+分析 task 必须写回并回读匹配的 Source Analysis。平台完成任务时再次校验候选、版本、run 和领域产物；
+缺失产物以 `creative_output_missing` 失败关闭。fanout 某项失败不取消兄弟项。

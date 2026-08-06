@@ -90,6 +90,7 @@ import { CreativeCollectionPlans } from "./creative-collection-plans";
 import { ComposableCopyLibraryEditor } from "./composable-copy-library-editor";
 import { CreativeComparisonWorkspace, type CreativeAnnotationDraft } from "./creative-comparison-workspace";
 import { adoptedCreativeOrderVariant, CreativeOrderDeliveryCandidates, creativeOrderStage } from "./creative-order-delivery";
+import { CreativeGenerationInfoDialog } from "./creative-generation-info-dialog";
 import { CreativeFeedbackDashboard } from "./creative-feedback-dashboard";
 import { CreativeWorkbench } from "./creative-workbench";
 import { MarketResourceFiles } from "./market-resource-files";
@@ -305,6 +306,7 @@ function CreativeOrderDetail({ orderId, onBack, onBrowseOrders, backLabel }: { o
   const variantOrder = data?.items.flatMap((item) => item.variants.map((variant) => variant.id)) ?? [];
   const reviewAssets = selectCreativeReviewAssets(assets, variantOrder);
   const [activeAssetId, setActiveAssetId] = useState("");
+  const [generationInfoAssetId, setGenerationInfoAssetId] = useState("");
   const [adjustOpen, setAdjustOpen] = useState(false);
   const [adjustment, setAdjustment] = useState("");
   const [adjustBusy, setAdjustBusy] = useState(false);
@@ -322,11 +324,13 @@ function CreativeOrderDetail({ orderId, onBack, onBrowseOrders, backLabel }: { o
     ?? reviewAssets.find((asset) => asset.status === "completed")
     ?? reviewAssets[0];
   const active = reviewAssets.find((asset) => asset.id === activeAssetId) ?? defaultAsset;
+  const generationInfoAsset = assets.find((asset) => asset.id === generationInfoAssetId);
   const variantById = new Map(data?.items.flatMap((item) => item.variants.map((variant) => [variant.id, { variant, item }] as const)) ?? []);
 	const qcRecoveryAvailableVariantIds = new Set(data?.items.flatMap((item) => item.variants
 		.filter((variant) => variant.status === "action_required" && variant.qc_recovery_available === true && variant.qc_recovery_used !== true)
 		.map((variant) => variant.id)) ?? []);
   const activeVariant = active ? variantById.get(active.variant_id) : undefined;
+  const generationInfoVariant = generationInfoAsset ? variantById.get(generationInfoAsset.variant_id) : undefined;
   const latestAdjustment = latestOrderAdjustmentFeedback(feedback.data?.events ?? [], orderId);
   const adjustedVariant = creativeAdjustmentTarget(data?.items ?? [], latestAdjustment)?.variant;
   const isDirectEdit = data?.trigger_evidence_kind === "creative_direct_edit";
@@ -470,10 +474,10 @@ function CreativeOrderDetail({ orderId, onBack, onBrowseOrders, backLabel }: { o
 		retryingQCVariantId={retryingQCVariantId}
 		repairingPrimeVariantId={repairingPrimeVariantId}
         disabled={isCancelled}
-        onAdopt={(variantId) => {
+        onAdopt={(variantId, risk) => {
           const selectedAsset = reviewAssets.find((asset) => asset.variant_id === variantId && asset.size_key === "1080x1080")
             ?? reviewAssets.find((asset) => asset.variant_id === variantId);
-          adoptVariant.mutate({ itemId: item.id, variantId }, {
+          adoptVariant.mutate({ itemId: item.id, variantId, qcRiskAcknowledged: risk?.acknowledged, qcRiskReason: risk?.reason }, {
             onSuccess: () => {
               if (selectedAsset) setActiveAssetId(selectedAsset.id);
               toast.success("最终采用方案已更新");
@@ -484,6 +488,7 @@ function CreativeOrderDetail({ orderId, onBack, onBrowseOrders, backLabel }: { o
 		onRetryQC={(variantId) => void retryVariantQC(variantId)}
 		onRepairPrime={(variantId) => void repairVariantPrimePackage(variantId)}
         onAssetSelect={selectReviewAsset}
+        onAssetInfo={setGenerationInfoAssetId}
       />;
     })}
     {latestAdjustment && data && <CreativeAdjustmentStatus event={latestAdjustment} variant={adjustedVariant} issueId={data.issue_id} />}
@@ -495,11 +500,20 @@ function CreativeOrderDetail({ orderId, onBack, onBrowseOrders, backLabel }: { o
         assets={comparisonAssets}
         onAssetChange={setActiveAssetId}
         onAdjust={isCancelled ? undefined : () => setAdjustOpen(true)}
+        onViewInfo={() => setGenerationInfoAssetId(active.id)}
         onDecision={(decision) => void event(active, decision)}
         onAnnotations={isCancelled ? undefined : (drafts) => annotation(active, drafts)}
         showDecisionActions={false}
       />
     </div>}
+    <CreativeGenerationInfoDialog
+      open={Boolean(generationInfoAsset && generationInfoVariant)}
+      onOpenChange={(open) => { if (!open) setGenerationInfoAssetId(""); }}
+      item={generationInfoVariant?.item}
+      variant={generationInfoVariant?.variant}
+      asset={generationInfoAsset}
+      imageUrl={attachmentURL(generationInfoAsset)}
+    />
     {data && !order.isLoading && reviewAssets.length === 0 && <div className="flex min-h-72 items-center justify-center border border-dashed px-6 text-center text-sm text-muted-foreground">{creativeOrderWaitingMessage(data.workflow_failures ?? [], isCancelled)}</div>}
     <Dialog open={adjustOpen} onOpenChange={setAdjustOpen}><DialogContent className="max-w-xl"><DialogHeader><DialogTitle>调整当前成图</DialogTitle><DialogDescription>{activeVariant?.variant.variant_key || "当前变体"} · {active?.size_key}。修改会保留在订单记录中，并按所选范围重新处理。</DialogDescription></DialogHeader><Textarea rows={5} value={adjustment} onChange={(event) => setAdjustment(event.target.value)} placeholder="说明需要改什么、必须保留什么，以及只影响当前尺寸还是整个变体..." /><DialogFooter><Button variant="outline" onClick={() => setAdjustOpen(false)}>取消</Button><Button disabled={adjustBusy || !adjustment.trim()} onClick={() => void submitAdjustment()}>{adjustBusy ? "正在提交" : "提交调整"}</Button></DialogFooter></DialogContent></Dialog>
     <AlertDialog open={cancelOpen} onOpenChange={(open) => { if (!cancelOrder.isPending) setCancelOpen(open); }}>

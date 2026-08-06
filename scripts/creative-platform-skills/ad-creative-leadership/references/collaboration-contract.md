@@ -1,124 +1,78 @@
 # 创意小队协作契约
 
-## 边界
+## 原生对象与留痕
 
-Multica 的原生智能体通过 `agent_task_queue` 执行工作。创意领域对象保存业务状态，Issue 保存需要
-人参与的目标和验收。两者不能互相冒充。
+- Crawl Run 保存一次采集；Source Analysis 保存逐图理解；Creative Order、Item、Variant、Asset、QC Report
+  保存生产状态；这些都不是 Issue。
+- `agent_task_queue` 是机器执行单位。task 详情用于排障和审计，不占业务看板。
+- 一个正式 Order 只关联一个用户 Issue；不新增 Task Batch、Work Unit 或阶段子 Issue。
+- Issue 只保存用户目标、人工决定、真实阻塞和最终验收。中间输入、模型证据、附件和检查写领域对象/task。
 
-- Crawl Run、Source Analysis、Order Item、Variant、Asset、QC Report 都不是 Issue。
-- 不新增 Task Batch 或 Work Unit。
-- 一个正式 Creative Order 最多一个用户可见 Issue。
-- 采集、逐图分析、方案、生成、Prime、QC 不创建子 Issue。
-- task 详情可供排障和审计，但默认不占用业务看板。
+## 能力和阶段所有权
 
-## 原生 task 来源
-
-每个 task 都必须有稳定来源：
-
-| 阶段 | `trigger_evidence_kind` | `trigger_evidence_ref_id` |
+| Capability | 唯一职责 | 唯一正常下一跳 |
 | --- | --- | --- |
-| 参考分析 | `creative_crawl_run_analysis` | Crawl Run UUID；候选在 `item_key` |
-| 方案 | `creative_order_item_plan` | Order Item UUID |
-| 生成 | `creative_order_item_production` | Order Item UUID；Variant 在 `item_key` |
-| Prime | `creative_order_variant_prime` | Variant UUID |
-| 技术与视觉 QC | `creative_order_variant_qc` | Variant UUID；lane 在 `item_key` |
-| 直接改图 | `creative_order_item_direct_edit` | Order Item UUID |
+| `material_collection` | 创建 Crawl Run、导入候选 | `reference_analysis` |
+| `reference_analysis` | 写 Source Analysis | 无 |
+| `market_pack_component_extraction` | 写待确认组件候选 | 无 |
+| `creative_leadership` | 首次委派、异常恢复、用户汇总 | plan 或 direct edit |
+| `generation_plan` | 写 V01-V03 brief | production |
+| `image_edit` | 写 generated assets | Prime |
+| `direct_image_edit` | 写下一 revision generated assets | publish 时 Prime |
+| `prime_compose` | 写 primed package | technical + visual QC |
+| `quality_control` | 写一个 lane report 并 finalize | 无 |
 
-上表是原生 task 的来源类型。Source Analysis 领域对象写回时使用
-`trigger_evidence_kind=crawl_run`，引用同一个 Crawl Run UUID；两类字段不可混用。
+成员不得越级创建其他阶段。下游 Agent ID 来自冻结 squad snapshot 或上游 context，不按名称猜测。
 
-委派幂等键是目标 Agent、source pair（`trigger_evidence_kind` + `trigger_evidence_ref_id`）与
-`item_key` 的组合。同一 source 可以包含多个并行 item；每次补任务都必须逐项比较 `item_key`，不能用
-“source 下已有 task”替代。重试失败项创建带 `retry_of_task_id` 的新 task，取消只作用于未完成 task。
-Agent 委派时复制 `delegated_from_task_id`、顶层人工 originator 和 accountable human；
-成员直接发起时按工作区权限写入本人归因。
+## task 来源与幂等
 
-所有订单阶段的 context 必须逐级原样携带根订单 `issue_id` 与冻结的 `leader_agent_id`。后端按 workflow
-校验这两个 UUID 及 source 对象；任何一层遗漏都拒绝整批 fanout，不创建部分任务。
+| 阶段 | `trigger_evidence_kind` | ref | item key |
+| --- | --- | --- | --- |
+| 参考分析 | `creative_crawl_run_analysis` | Crawl Run | candidate + analysis version |
+| 方案 | `creative_order_item_plan` | Order Item | item + revision |
+| 生产 | `creative_order_item_production` | Order Item | variant + revision |
+| Prime | `creative_order_variant_prime` | Variant | variant + revision |
+| QC | `creative_order_variant_qc` | Variant | variant + lane + revision |
+| 直接改图 | `creative_order_item_direct_edit` | Order Item | variant + size + source revision |
 
-方案、生产和 Prime 成员可以按订单冻结的 squad agent ID 委派下一阶段。它们不能改换负责人，也不能
-按名称猜 Agent。这些 A2A task 仍属于最初 Leader 的委派链；专业成员只创建契约中的下一阶段，不得
-越级创建其他业务。
+Source Analysis 写回的 `trigger_evidence_kind=crawl_run` 是领域来源，不是 task source kind。
 
-直接改图订单的 `input_snapshot.mode` 为 `direct_edit`，冻结 snapshot 必须包含
-`direct_edit_agent_id`、`prime_agent_id` 和 `reviewer_agent_id`。Leader 只能把
-`creative_order_item_direct_edit` 委派给 direct edit Agent；不得复用
-生产、方案、分析或采集角色。其 context 还必须携带 source asset/attachment、用户原话、目标尺寸、
-`expected_sizes=[target_size]`、delivery mode、Prime Agent ID 和 Reviewer Agent ID。context revision 表示
-source revision；source asset 不可覆盖，
-编辑输出使用 `output_revision=revision+1` 并以 source asset 写入
-`derived_from_asset_id`。preview 不进入 Prime/QC；publish 只进入对应尺寸的 Prime 与双路 QC。
+fanout 幂等键是 target Agent、source kind/ref 和 item key。同一 source 可包含多个并行 item；查询后逐项比较。
+active/succeeded item 或领域结果已到下一阶段时不再创建。重试引用失败 task，取消只作用于未完成 task。
+所有 Order context 原样透传根 `issue_id`、`leader_agent_id`、order/item/variant IDs、revision、scope 和输入快照
+identity；不得只传自然语言。
 
-## Fanout
+fanout 原子校验整个 manifest。任一 item 非法时不创建部分任务。成功提交后调用方结束；并发由 Agent、
+runtime 和 provider 限额控制。
 
-使用 `multica task fanout`，不要用 mention 或批量创建 Issue。manifest 示例：
+## 输入真值
 
-```json
-{
-  "trigger_evidence_kind": "creative_crawl_run_analysis",
-  "trigger_evidence_ref_id": "<run-id>",
-  "items": [
-    {
-      "item_key": "<candidate-id>:v1",
-      "context": {
-        "type": "creative_domain_task",
-        "workflow": "creative_reference_analysis",
-        "crawl_run_id": "<run-id>",
-        "candidate_id": "<candidate-id>",
-        "analysis_version": 1
-      }
-    }
-  ]
-}
-```
+- Source Analysis 只描述参考图，不提供可投放金融事实。
+- `copy_snapshot` 是批准文案与产品事实唯一真值；订单创建后不读取文案库最新版本替换。
+- order `input_snapshot` 的 market snapshot 是 Prime、QR、品牌文件、App UI、尺寸和合规规则唯一真值；运行时
+  不读取市场包最新版本或固定本机文件。
+- 业务用户通过页面维护并发布资源；Agent 消费冻结版本，不把任何市场的文案、坐标或组件写进指令。
 
-平台必须原子验证整个 manifest 的工作区、目标 Agent、调用权限、source 和 item key；某一项格式错误
-时不创建部分任务。合法任务可在 Agent 的 `max_concurrent_tasks` 与运行时总并发限制内并发认领。
-创意图片调用还受独立 provider image slot 限制，不能用提高 Agent task 并发绕过 429 保护。
+## 状态与隔离
 
-## 状态聚合
+状态从领域对象和关联 task 派生：queued/running、partial、completed、failed、action_required、cancelled。
+失败项不取消兄弟项；每个 Variant 独立推进并即时展示已交付结果。迟到 task 只能写声明 revision，服务端
+拒绝覆盖更高 revision。
 
-状态由领域对象和关联 task 派生，不由评论文字派生：
+标准 Variant 的 expected sizes 共享批准文案、业务语义、主体、信息层级和 `asset_family_id`；方形是横竖版
+重排基线。Prime 只按冻结 config 叠加组件。technical/visual QC 并发并写独立报告；`qc-finalize` 是 delivered
+assets、Variant resolution 和 Inbox 的唯一事务 barrier。
 
-- 任一 item queued/running 时，阶段为 running；
-- 成功和失败并存时为 partial；
-- 所有 item 成功时为 completed；
-- 所有可运行项失败时为 failed；
-- 需要凭证、配置或用户决定时为 action_required；
-- 用户取消时为 cancelled。
+direct edit 只处理 context 的 source asset 和 expected sizes；source 不可覆盖，输出 revision 加一并记录
+lineage。preview 不进入 Prime/QC，publish 才进入同 expected sizes 的 Prime 与双路 QC。
 
-失败项不阻塞同批其他对象。已完成的变体即时发布，订单可以长期保持 partial。迟到 task 只能写入
-自己声明的 revision；如果当前领域对象已有更高 revision，服务端拒绝旧结果覆盖。
+## 失败与人工反馈
 
-## 生产一致性
+凭证、输入、工具或写回失败保留 stage、error code/message、已成功对象和可执行下一步。内部失败留 task；
+只有需要用户决定时进入 Issue/Inbox。不得用评论文字派生领域状态。
 
-标准生产的每个 Variant 是一个内容族，`expected_sizes` 固定为 square、landscape、portrait 三个 Asset；
-direct edit 的 `expected_sizes` 固定为本次用户发布的受影响尺寸，可以只有一个：
+以下用户操作追加 feedback event：素材采用/拒绝，文案推荐曝光/采用/替换/编辑，Variant 接受/调整/放弃，
+成图接受/下载/报告问题/区域标注，QC 误判/漏检/接受风险。撤销写新事件，不删除历史。
 
-- square 是内容母版；横竖版保存 `derived_from_asset_id=square`；
-- 三张共享批准文案、业务语义、主要人物/产品、信息层级和 `asset_family_id`；
-- 尺寸变化通过原生重排完成，不得裁切、拉伸或引入不同场景；
-- Prime 只加入版本化四角/底部资产，不修改创意底图内容。
-
-Prime 和 QC 只要求当前 revision 的 `expected_sizes` 完整，不要求 direct edit 生成未受影响尺寸。技术 QC
-与视觉 QC 并发。技术 QC 重点检查四角、底部、二维码、尺寸和文件；视觉 QC 重点检查画质、文字、语义，
-并在 `expected_sizes` 多于一个时检查跨尺寸一致性。两份报告都无阻断才通过。
-
-## 人工反馈
-
-以下操作必须在发生时追加 feedback event：
-
-- 素材采用、拒绝、恢复、归档；
-- 文案推荐曝光、采用、替换、人工编辑及原因；
-- 变体接受、调整、放弃；
-- 成图接受、下载、报告问题、图片点位或矩形标注；
-- QC 漏检、误判和用户接受风险。
-
-事件保存 subject、decision、reason codes、自由说明、相对坐标标注、用户、时间、关联 Crawl Run/
-订单/分析/推荐/资源/Skill/修订快照。撤销通过新事件引用原事件，不物理删除历史。
-
-## 用户可见内容
-
-业务页面显示 Crawl Run 进度、候选分析、文案选择、订单状态、原图与成图高清对比、问题标注和下载。
-订单 Issue 只显示摘要和跳转。只有需要用户决策的阻塞才通知用户，内部 task 失败保留在执行详情中并
-允许按 source 重试。
+QC 不自动返工。用户看高清对比后选择接受风险、局部调整、重做或放弃；同 Variant 最多一轮模型返工，
+revision 加一。第二轮仍失败时停止调用并等待决定。

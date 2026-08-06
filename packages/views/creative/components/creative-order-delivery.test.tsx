@@ -15,6 +15,7 @@ import {
   creativeVariantCanRetryQC,
   creativeVariantDeliveryAssets,
   creativeVariantQCDetails,
+  creativeVariantRiskAdoptionReadiness,
 } from "./creative-order-delivery";
 
 vi.mock("@multica/core/api", () => ({ api: { getBaseUrl: () => "" } }));
@@ -144,7 +145,7 @@ describe("CreativeOrderDeliveryCandidates", () => {
     expect(screen.getAllByRole("button", { name: "订单已结束" }).every((button) => button.hasAttribute("disabled"))).toBe(true);
   });
 
-  it("shows the current adjustment revision QC reasons without leaking stale findings", () => {
+  it("requires an explicit reason before adopting the current failed QC revision", () => {
     const adjusted = variant("v01");
     adjusted.status = "action_required";
     adjusted.qc_status = "failed";
@@ -184,16 +185,28 @@ describe("CreativeOrderDeliveryCandidates", () => {
     const orderItem = item();
     orderItem.variants = [adjusted];
 
+    const onAdopt = vi.fn();
     const onRetryQC = vi.fn();
-    render(<CreativeOrderDeliveryCandidates orderId="order-1" item={orderItem} source={{ label: "竞品原图", url: "https://cdn.example/source.png" }} attachments={attachmentMap(orderItem)} adoptingVariantId="" onAdopt={vi.fn()} onRetryQC={onRetryQC} onAssetSelect={vi.fn()} />);
+    render(<CreativeOrderDeliveryCandidates orderId="order-1" item={orderItem} source={{ label: "竞品原图", url: "https://cdn.example/source.png" }} attachments={attachmentMap(orderItem)} adoptingVariantId="" onAdopt={onAdopt} onRetryQC={onRetryQC} onAssetSelect={vi.fn()} />);
 
     expect(screen.getByText("视觉质检未通过 · r2")).toBeInTheDocument();
     expect(screen.getByText("800x1000：右上角二维码遮挡标题")).toBeInTheDocument();
     expect(screen.getByText("人物边缘略有锯齿")).toBeInTheDocument();
     expect(screen.queryByText("r1 旧问题不应展示")).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "采用此变体" })).toBeDisabled();
+    expect(screen.getByText("QC 未通过")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "确认风险后采用" })).toBeEnabled();
     fireEvent.click(screen.getByRole("button", { name: "重新执行双路质检" }));
     expect(onRetryQC).toHaveBeenCalledWith(adjusted.id);
+
+    fireEvent.click(screen.getByRole("button", { name: "确认风险后采用" }));
+    expect(screen.getByRole("heading", { name: "确认带问题采用 V01？" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "确认风险并采用" })).toBeDisabled();
+    fireEvent.change(screen.getByRole("textbox", { name: "带问题采用原因" }), { target: { value: "投放档期已锁定，已确认二维码区域不影响当前渠道。" } });
+    fireEvent.click(screen.getByRole("button", { name: "确认风险并采用" }));
+    expect(onAdopt).toHaveBeenCalledWith(adjusted.id, {
+      acknowledged: true,
+      reason: "投放档期已锁定，已确认二维码区域不影响当前渠道。",
+    });
   });
 
   it("limits QC recovery to the current failed QC revision with all Prime sizes", () => {
@@ -217,6 +230,11 @@ describe("CreativeOrderDeliveryCandidates", () => {
     const exhausted = structuredClone(recoverable);
     exhausted.qc_recovery_used = true;
     expect(creativeVariantCanRetryQC(exhausted)).toBe(false);
+    expect(creativeVariantRiskAdoptionReadiness(exhausted).allowed).toBe(true);
+
+    const missingPrimeForAdoption = structuredClone(exhausted);
+    missingPrimeForAdoption.assets = missingPrimeForAdoption.assets.filter((asset) => !(asset.revision === 2 && asset.stage === "primed" && asset.size_key === "800x1000"));
+    expect(creativeVariantRiskAdoptionReadiness(missingPrimeForAdoption)).toMatchObject({ allowed: false, status: "QC 未通过，且 Prime 仅完成 2/3 个尺寸" });
   });
 
   it("shows an exhausted QC recovery as an explicit manual action", () => {
@@ -279,7 +297,8 @@ describe("CreativeOrderDeliveryCandidates", () => {
 
   it("promotes the adopted variant with the source and all three final sizes", () => {
     const orderItem = item("v01");
-    render(<CreativeOrderDeliveryCandidates orderId="order-1" item={orderItem} source={{ label: "竞品原图", url: "https://cdn.example/source.png" }} attachments={attachmentMap(orderItem)} adoptingVariantId="" onAdopt={vi.fn()} onAssetSelect={vi.fn()} />);
+    const onAssetInfo = vi.fn();
+    render(<CreativeOrderDeliveryCandidates orderId="order-1" item={orderItem} source={{ label: "竞品原图", url: "https://cdn.example/source.png" }} attachments={attachmentMap(orderItem)} adoptingVariantId="" onAdopt={vi.fn()} onAssetSelect={vi.fn()} onAssetInfo={onAssetInfo} />);
 
     expect(screen.getByTestId("creative-adopted-variant")).toHaveTextContent("最终采用方案");
     expect(screen.getByAltText("原图 竞品原图")).toBeInTheDocument();
@@ -287,6 +306,9 @@ describe("CreativeOrderDeliveryCandidates", () => {
     expect(screen.getByAltText("最终采用方案 1200x628")).toBeInTheDocument();
     expect(screen.getByAltText("最终采用方案 800x1000")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "下载交付包" })).toBeEnabled();
+    expect(screen.getAllByRole("button", { name: /查看 .* 生成信息/ })).toHaveLength(3);
+    fireEvent.click(screen.getByRole("button", { name: "查看 1200x628 生成信息" }));
+    expect(onAssetInfo).toHaveBeenCalledWith("v01-1200x628");
     expect(screen.getByText("查看其他候选")).toBeInTheDocument();
   });
 });

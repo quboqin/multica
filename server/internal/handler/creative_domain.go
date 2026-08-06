@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -231,7 +232,9 @@ type creativeOrderQCFinalizeResponse struct {
 }
 
 type creativeOrderItemAdoptionInput struct {
-	VariantID string `json:"variant_id"`
+	VariantID          string `json:"variant_id"`
+	QCRiskAcknowledged bool   `json:"qc_risk_acknowledged"`
+	QCRiskReason       string `json:"qc_risk_reason"`
 }
 
 var standardCreativeAssetSizes = []string{"1080x1080", "1200x628", "800x1000"}
@@ -686,6 +689,8 @@ type creativeOrderCopySnapshot struct {
 	ID             string                              `json:"id"`
 	LibraryID      string                              `json:"library_id"`
 	LibraryVersion int                                 `json:"library_version"`
+	CompositionID  string                              `json:"composition_id"`
+	CompositionKey string                              `json:"composition_key"`
 	RecipeID       string                              `json:"recipe_id"`
 	RecipeKey      string                              `json:"recipe_key"`
 	CreativeType   string                              `json:"creative_type"`
@@ -745,7 +750,7 @@ func (h *Handler) validateCustomCreativeOrderCopyFacts(ctx context.Context, work
 	for index, snapshot := range snapshots {
 		if snapshot.Status == "approved" {
 			if err := validateApprovedCreativeOrderCopySnapshot(snapshot, library, config); err != nil {
-				return fmt.Errorf("copy_snapshot %d is not the frozen published recipe: %w", index+1, err)
+				return fmt.Errorf("copy_snapshot %d is not a valid frozen published composition: %w", index+1, err)
 			}
 		}
 	}
@@ -762,6 +767,49 @@ func (h *Handler) validateCustomCreativeOrderCopyFacts(ctx context.Context, work
 		}
 		if creativeNumericFactValuePattern.MatchString(strings.TrimSpace(fact.Value)) {
 			allowed["financial_number:"+creativeDigitsPattern.ReplaceAllString(fact.Value, "")] = struct{}{}
+		}
+	}
+	approvedFacts := map[string]struct {
+		value    string
+		copyText string
+	}{}
+	for _, fact := range config.ProductFacts {
+		if fact.Status == "approved" {
+			approvedFacts[strings.TrimSpace(fact.Key)] = struct {
+				value    string
+				copyText string
+			}{value: strings.TrimSpace(fact.Value), copyText: strings.TrimSpace(fact.CopyText)}
+		}
+	}
+	for _, fragment := range config.Fragments {
+		if fragment.Status != "approved" {
+			continue
+		}
+		missingFact := false
+		resolved := creativeCopyFactReferencePattern.ReplaceAllStringFunc(fragment.Text, func(reference string) string {
+			match := creativeCopyFactReferencePattern.FindStringSubmatch(reference)
+			if len(match) != 3 {
+				missingFact = true
+				return ""
+			}
+			fact, exists := approvedFacts[match[1]]
+			if !exists {
+				missingFact = true
+				return ""
+			}
+			if match[2] == "value" {
+				return fact.value
+			}
+			return fact.copyText
+		})
+		if missingFact {
+			continue
+		}
+		for _, token := range creativeFinancialTokens(resolved) {
+			allowed[token.key] = struct{}{}
+			if strings.HasPrefix(token.key, "currency:") {
+				allowed["financial_number:"+strings.TrimPrefix(token.key, "currency:")] = struct{}{}
+			}
 		}
 	}
 	unapproved := []string{}
@@ -795,6 +843,9 @@ func creativeCopySnapshotVisibleText(snapshot creativeOrderCopySnapshot) string 
 func validateApprovedCreativeOrderCopySnapshot(snapshot creativeOrderCopySnapshot, library creativeResourceResponse, config composableCopyLibraryConfig) error {
 	if snapshot.LibraryID != library.ID || snapshot.LibraryVersion != library.PublishedVersion {
 		return errors.New("library id or published version does not match")
+	}
+	if strings.TrimSpace(snapshot.CompositionID) != "" {
+		return validateAtomicCreativeOrderCopySnapshot(snapshot, config)
 	}
 	recipeIndex := -1
 	for index := range config.Recipes {
@@ -896,6 +947,108 @@ func validateApprovedCreativeOrderCopySnapshot(snapshot creativeOrderCopySnapsho
 	return nil
 }
 
+func validateAtomicCreativeOrderCopySnapshot(snapshot creativeOrderCopySnapshot, config composableCopyLibraryConfig) error {
+	if snapshot.ID != strings.TrimSpace(snapshot.CompositionID) || strings.TrimSpace(snapshot.CompositionKey) == "" {
+		return errors.New("composition identity is incomplete")
+	}
+	type publishedFragment struct {
+		key   string
+		role  string
+		text  string
+		types map[string]bool
+	}
+	fragmentsByID := make(map[string]publishedFragment, len(config.Fragments))
+	for _, fragment := range config.Fragments {
+		if fragment.Status != "approved" {
+			continue
+		}
+		types := map[string]bool{}
+		for _, creativeType := range fragment.CreativeTypes {
+			types[creativeType] = true
+		}
+		fragmentsByID[strings.TrimSpace(fragment.ID)] = publishedFragment{
+			key: strings.TrimSpace(fragment.Key), role: fragment.Role, text: strings.TrimSpace(fragment.Text), types: types,
+		}
+	}
+	factsByKey := make(map[string]creativeOrderCopySnapshotFact, len(config.ProductFacts))
+	for _, fact := range config.ProductFacts {
+		if fact.Status != "approved" {
+			continue
+		}
+		key := strings.TrimSpace(fact.Key)
+		factsByKey[key] = creativeOrderCopySnapshotFact{
+			Key: key, Label: strings.TrimSpace(fact.Label), Value: strings.TrimSpace(fact.Value),
+			CopyText: strings.TrimSpace(fact.CopyText), Source: strings.TrimSpace(fact.Source),
+		}
+	}
+	roles := []string{"headline", "subheadline", "benefit", "supporting", "cta", "legal"}
+	linesByRole := map[string][]string{}
+	expectedFragments := make([]creativeOrderCopySnapshotFragment, 0, len(snapshot.Fragments))
+	expectedFacts := make([]creativeOrderCopySnapshotFact, 0)
+	seenFragments := map[string]bool{}
+	seenFacts := map[string]bool{}
+	for _, evidence := range snapshot.Fragments {
+		fragmentID := strings.TrimSpace(evidence.ID)
+		fragment, ok := fragmentsByID[fragmentID]
+		if !ok || seenFragments[fragmentID] {
+			return fmt.Errorf("composition fragment %q is unavailable or duplicated", fragmentID)
+		}
+		seenFragments[fragmentID] = true
+		if fragment.role != evidence.Role || fragment.key != evidence.Key || !fragment.types[snapshot.CreativeType] {
+			return fmt.Errorf("composition fragment %q role, key, or creative type does not match", fragmentID)
+		}
+		missingFact := ""
+		resolved := creativeCopyFactReferencePattern.ReplaceAllStringFunc(fragment.text, func(reference string) string {
+			match := creativeCopyFactReferencePattern.FindStringSubmatch(reference)
+			if len(match) != 3 {
+				return ""
+			}
+			fact, exists := factsByKey[match[1]]
+			if !exists {
+				missingFact = match[1]
+				return ""
+			}
+			if !seenFacts[fact.Key] {
+				seenFacts[fact.Key] = true
+				expectedFacts = append(expectedFacts, fact)
+			}
+			if match[2] == "value" {
+				return fact.Value
+			}
+			return fact.CopyText
+		})
+		if missingFact != "" {
+			return fmt.Errorf("composition references missing fact %q", missingFact)
+		}
+		if resolved != evidence.Text {
+			return fmt.Errorf("composition fragment %q resolved text was changed", fragmentID)
+		}
+		expectedFragments = append(expectedFragments, creativeOrderCopySnapshotFragment{ID: fragmentID, Key: fragment.key, Role: fragment.role, Text: resolved})
+		if resolved != "" {
+			linesByRole[fragment.role] = append(linesByRole[fragment.role], resolved)
+		}
+	}
+	if len(expectedFragments) == 0 {
+		return errors.New("composition must contain approved fragments")
+	}
+	expectedText := map[string]string{}
+	for _, role := range roles {
+		expectedText[role] = strings.Join(linesByRole[role], "\n")
+	}
+	if snapshot.Headline != expectedText["headline"] || snapshot.Subheadline != expectedText["subheadline"] ||
+		snapshot.Benefit != expectedText["benefit"] || snapshot.Supporting != expectedText["supporting"] ||
+		snapshot.CTA != expectedText["cta"] || snapshot.LegalText != expectedText["legal"] {
+		return errors.New("assembled visible copy does not match the published atoms")
+	}
+	if !equalCreativeCopySnapshotFragments(snapshot.Fragments, expectedFragments) {
+		return errors.New("fragment evidence does not match the published atoms")
+	}
+	if !equalCreativeCopySnapshotFacts(snapshot.ProductFacts, expectedFacts) {
+		return errors.New("product fact evidence does not match the published atoms")
+	}
+	return nil
+}
+
 func equalCreativeCopySnapshotFragments(left, right []creativeOrderCopySnapshotFragment) bool {
 	if len(left) != len(right) {
 		return false
@@ -944,24 +1097,43 @@ func creativeOrderCopyLibraryID(raw json.RawMessage) (pgtype.UUID, error) {
 
 func creativeFinancialTokens(value string) []creativeFinancialToken {
 	tokens := []creativeFinancialToken{}
+	type tokenRange struct{ start, end int }
+	protectedRanges := []tokenRange{}
 	add := func(kind, key, display string) {
 		if strings.TrimSpace(key) != "" {
 			tokens = append(tokens, creativeFinancialToken{key: kind + ":" + strings.TrimSpace(key), display: strings.TrimSpace(display)})
 		}
 	}
-	for _, match := range creativeFinancialCurrencyPattern.FindAllString(value, -1) {
+	for _, indexes := range creativeFinancialCurrencyPattern.FindAllStringIndex(value, -1) {
+		match := value[indexes[0]:indexes[1]]
 		add("currency", creativeDigitsPattern.ReplaceAllString(match, ""), match)
+		protectedRanges = append(protectedRanges, tokenRange{start: indexes[0], end: indexes[1]})
 	}
-	for _, match := range creativeFinancialPercentPattern.FindAllString(value, -1) {
+	for _, indexes := range creativeFinancialPercentPattern.FindAllStringIndex(value, -1) {
+		match := value[indexes[0]:indexes[1]]
 		add("percent", strings.ReplaceAll(strings.ReplaceAll(match, " ", ""), ",", "."), match)
+		protectedRanges = append(protectedRanges, tokenRange{start: indexes[0], end: indexes[1]})
 	}
-	for _, match := range creativeFinancialTermPattern.FindAllString(value, -1) {
+	for _, indexes := range creativeFinancialTermPattern.FindAllStringIndex(value, -1) {
+		match := value[indexes[0]:indexes[1]]
 		add("term", strings.ToLower(strings.ReplaceAll(match, " ", "")), match)
+		protectedRanges = append(protectedRanges, tokenRange{start: indexes[0], end: indexes[1]})
 	}
-	for _, matches := range creativeFinancialNumberPattern.FindAllStringSubmatch(value, -1) {
-		if len(matches) > 1 {
-			add("financial_number", creativeDigitsPattern.ReplaceAllString(matches[1], ""), matches[0])
+	for _, indexes := range creativeFinancialNumberPattern.FindAllStringSubmatchIndex(value, -1) {
+		if len(indexes) < 4 || indexes[2] < 0 || indexes[3] < 0 {
+			continue
 		}
+		overlapsProtected := false
+		for _, protected := range protectedRanges {
+			if indexes[0] < protected.end && protected.start < indexes[1] {
+				overlapsProtected = true
+				break
+			}
+		}
+		if overlapsProtected {
+			continue
+		}
+		add("financial_number", creativeDigitsPattern.ReplaceAllString(value[indexes[2]:indexes[3]], ""), value[indexes[0]:indexes[1]])
 	}
 	return tokens
 }
@@ -1968,6 +2140,15 @@ func (h *Handler) AdoptCreativeOrderItemVariant(w http.ResponseWriter, r *http.R
 		return
 	}
 	input.VariantID = strings.TrimSpace(input.VariantID)
+	input.QCRiskReason = strings.TrimSpace(input.QCRiskReason)
+	if len(input.QCRiskReason) > 1000 {
+		writeError(w, http.StatusBadRequest, "QC risk adoption reason is too long")
+		return
+	}
+	if input.QCRiskAcknowledged != (input.QCRiskReason != "") {
+		writeError(w, http.StatusBadRequest, "QC risk acknowledgement and reason must be provided together")
+		return
+	}
 	variantID, ok := parseUUIDOrBadRequest(w, input.VariantID, "variant_id")
 	if !ok {
 		return
@@ -2009,11 +2190,6 @@ FOR UPDATE
 		writeError(w, http.StatusInternalServerError, "failed to load creative order variant")
 		return
 	}
-	if variantStatus != "completed" {
-		writeError(w, http.StatusConflict, "creative variant is not completed")
-		return
-	}
-
 	var technicalStatus, visualStatus, qcOutcome string
 	if err := tx.QueryRow(r.Context(), `
 SELECT
@@ -2024,12 +2200,46 @@ SELECT
 		writeError(w, http.StatusInternalServerError, "failed to load creative variant QC state")
 		return
 	}
-	if !creativeQCStatusAllowsAdoption(technicalStatus) || !creativeQCStatusAllowsAdoption(visualStatus) {
-		writeError(w, http.StatusConflict, "creative variant must pass technical and visual QC")
+	standardAdoption := creativeQCStatusAllowsAdoption(technicalStatus) && creativeQCStatusAllowsAdoption(visualStatus) && qcOutcome == "delivered"
+	riskAdoption := (technicalStatus == "failed" || visualStatus == "failed") && qcOutcome == "action_required"
+	if standardAdoption {
+		if input.QCRiskAcknowledged {
+			writeError(w, http.StatusBadRequest, "QC risk acknowledgement is only valid for a failed QC result")
+			return
+		}
+		if variantStatus != "completed" {
+			writeError(w, http.StatusConflict, "creative variant is not completed")
+			return
+		}
+	} else if riskAdoption {
+		if !input.QCRiskAcknowledged {
+			writeError(w, http.StatusConflict, "failed creative QC requires explicit risk acknowledgement and an adoption reason")
+			return
+		}
+		if variantStatus != "action_required" {
+			writeError(w, http.StatusConflict, "failed creative variant is not awaiting manual action")
+			return
+		}
+	} else {
+		writeError(w, http.StatusConflict, "creative variant QC is not finalized for adoption")
 		return
 	}
-	if qcOutcome != "delivered" {
-		writeError(w, http.StatusConflict, "creative variant QC has not been finalized as delivered")
+
+	var qcReportsJSON, qcResolutionJSON string
+	if err := tx.QueryRow(r.Context(), `
+SELECT
+  COALESCE(jsonb_agg(jsonb_build_object(
+    'id', id::text, 'lane', lane, 'revision', revision, 'status', status, 'findings', findings,
+    'created_at', created_at, 'updated_at', updated_at
+  ) ORDER BY lane), '[]'::jsonb)::text,
+  COALESCE((SELECT jsonb_build_object(
+    'outcome', outcome, 'failure_summary', failure_summary,
+    'finalized_by_task_id', COALESCE(finalized_by_task_id::text, '')
+  ) FROM creative_order_variant_qc_resolution WHERE variant_id = $1 AND revision = $2), '{}'::jsonb)::text
+FROM creative_order_qc_report
+WHERE variant_id = $1 AND revision = $2
+`, variantID, revision).Scan(&qcReportsJSON, &qcResolutionJSON); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to snapshot creative variant QC state")
 		return
 	}
 
@@ -2059,8 +2269,14 @@ LEFT JOIN LATERAL (
 		return
 	}
 
-	var missingSizes []string
-	if err := tx.QueryRow(r.Context(), `
+	if riskAdoption {
+		if _, err := copyCreativePrimedAssetsToDelivered(r.Context(), tx, variantID, revision, standardCreativeAssetSizes); err != nil {
+			writeError(w, http.StatusConflict, err.Error())
+			return
+		}
+	} else {
+		var missingSizes []string
+		if err := tx.QueryRow(r.Context(), `
 SELECT COALESCE(array_agg(required.size_key ORDER BY required.ordinality)
   FILTER (WHERE final_asset.id IS NULL), '{}'::text[])
 FROM unnest($3::text[]) WITH ORDINALITY AS required(size_key, ordinality)
@@ -2077,12 +2293,13 @@ LEFT JOIN LATERAL (
 	  LIMIT 1
 ) final_asset ON true
 `, variantID, revision, standardCreativeAssetSizes).Scan(&missingSizes); err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to load creative variant delivery package")
-		return
-	}
-	if len(missingSizes) > 0 {
-		writeError(w, http.StatusConflict, "creative variant delivery package is incomplete; missing final assets for: "+strings.Join(missingSizes, ", "))
-		return
+			writeError(w, http.StatusInternalServerError, "failed to load creative variant delivery package")
+			return
+		}
+		if len(missingSizes) > 0 {
+			writeError(w, http.StatusConflict, "creative variant delivery package is incomplete; missing final assets for: "+strings.Join(missingSizes, ", "))
+			return
+		}
 	}
 	if _, err := tx.Exec(r.Context(), `UPDATE creative_order SET updated_at = now() WHERE id = $1`, orderID); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to update creative order adoption time")
@@ -2111,6 +2328,14 @@ WHERE id = $1
 		writeError(w, http.StatusInternalServerError, "failed to adopt creative variant")
 		return
 	}
+	adoptionMode := "standard"
+	reasonCodes := []string{}
+	feedbackComment := ""
+	if riskAdoption {
+		adoptionMode = "qc_risk_accepted"
+		reasonCodes = []string{"qc_risk_accepted"}
+		feedbackComment = input.QCRiskReason
+	}
 	contextSnapshot, err := json.Marshal(map[string]any{
 		"creative_order_id":           uuidToString(orderID),
 		"creative_order_item_id":      uuidToString(itemID),
@@ -2119,6 +2344,16 @@ WHERE id = $1
 		"revision":                    revision,
 		"previous_adopted_variant_id": uuidToString(previousVariantID),
 		"delivery_package_sizes":      standardCreativeAssetSizes,
+		"adoption_mode":               adoptionMode,
+		"qc_risk_acknowledged":        riskAdoption,
+		"qc_risk_reason":              feedbackComment,
+		"qc_snapshot": map[string]any{
+			"technical_status": technicalStatus,
+			"visual_status":    visualStatus,
+			"outcome":          qcOutcome,
+			"reports":          json.RawMessage(qcReportsJSON),
+			"resolution":       json.RawMessage(qcResolutionJSON),
+		},
 	})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to record creative variant adoption")
@@ -2127,9 +2362,9 @@ WHERE id = $1
 	if _, err := tx.Exec(r.Context(), `
 INSERT INTO creative_feedback_event (
   workspace_id, issue_id, actor_type, actor_id, subject_type, subject_id,
-  event_type, decision, context_snapshot
-) VALUES ($1, $2, 'member', $3, 'variant', $4, 'decision', 'accepted', $5::jsonb)
-`, workspaceID, issueID, userID, variantID, contextSnapshot); err != nil {
+  event_type, decision, reason_codes, comment, context_snapshot
+) VALUES ($1, $2, 'member', $3, 'variant', $4, 'decision', 'accepted', $5, $6, $7::jsonb)
+`, workspaceID, issueID, userID, variantID, reasonCodes, feedbackComment, contextSnapshot); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to record creative variant feedback")
 		return
 	}
@@ -2333,12 +2568,28 @@ WHERE v.id = $1
 	asset, err := scanCreativeOrderAsset(h.DB.QueryRow(r.Context(), `
 INSERT INTO creative_order_asset (variant_id, asset_family_id, size_key, revision, stage, attachment_id, derived_from_asset_id, metadata, evidence, status)
 VALUES ($1,COALESCE($2::uuid, gen_random_uuid()),$3,$4,$5,$6,$7,$8::jsonb,$9::jsonb,$10)
-ON CONFLICT (variant_id, size_key, revision, stage) DO UPDATE SET asset_family_id = EXCLUDED.asset_family_id,
+ON CONFLICT (variant_id, size_key, revision, stage) DO UPDATE SET asset_family_id = CASE
+    WHEN creative_order_asset.stage = 'generated' AND creative_order_asset.status = 'completed'
+      THEN creative_order_asset.asset_family_id
+    ELSE EXCLUDED.asset_family_id
+  END,
   attachment_id = EXCLUDED.attachment_id, derived_from_asset_id = EXCLUDED.derived_from_asset_id,
   metadata = EXCLUDED.metadata, evidence = EXCLUDED.evidence, status = EXCLUDED.status, updated_at = now()
+WHERE creative_order_asset.stage <> 'generated'
+   OR creative_order_asset.status <> 'completed'
+   OR (
+     creative_order_asset.attachment_id IS NOT DISTINCT FROM EXCLUDED.attachment_id
+     AND creative_order_asset.derived_from_asset_id IS NOT DISTINCT FROM EXCLUDED.derived_from_asset_id
+     AND creative_order_asset.metadata = EXCLUDED.metadata
+     AND creative_order_asset.evidence = EXCLUDED.evidence
+   )
 RETURNING id::text, variant_id::text, asset_family_id::text, size_key, revision, stage, COALESCE(attachment_id::text, ''),
   COALESCE(derived_from_asset_id::text, ''), metadata::text, evidence::text, status, created_at::text, updated_at::text
 `, variantID, assetFamilyID, input.SizeKey, input.Revision, input.Stage, attachmentID, derivedFromAssetID, input.Metadata, input.Evidence, input.Status))
+	if errors.Is(err, pgx.ErrNoRows) {
+		writeError(w, http.StatusConflict, "completed generated asset trace is immutable")
+		return
+	}
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to save creative order asset")
 		return
@@ -2896,7 +3147,51 @@ func normalizeCreativeOrderAsset(input creativeOrderAssetInput) (creativeOrderAs
 	if err != nil {
 		return input, errors.New("evidence must be an object")
 	}
+	if input.Stage == "generated" && input.Status == "completed" {
+		if err := validateCompletedGeneratedAssetTrace(input.Metadata, input.Evidence); err != nil {
+			return input, err
+		}
+	}
 	return input, nil
+}
+
+func validateCompletedGeneratedAssetTrace(metadata, evidence json.RawMessage) error {
+	var metadataTrace struct {
+		Prompt string `json:"prompt"`
+		Model  string `json:"model"`
+	}
+	if err := json.Unmarshal(metadata, &metadataTrace); err != nil {
+		return errors.New("generated asset metadata is invalid")
+	}
+	if strings.TrimSpace(metadataTrace.Prompt) == "" {
+		return errors.New("completed generated asset metadata.prompt is required")
+	}
+	if strings.TrimSpace(metadataTrace.Model) != "gpt-image-2" {
+		return errors.New("completed generated asset metadata.model must be gpt-image-2")
+	}
+	var evidenceTrace struct {
+		RequestID    string `json:"request_id"`
+		Attempts     int    `json:"attempts"`
+		PromptSHA256 string `json:"prompt_sha256"`
+	}
+	if err := json.Unmarshal(evidence, &evidenceTrace); err != nil {
+		return errors.New("generated asset evidence is invalid")
+	}
+	if strings.TrimSpace(evidenceTrace.RequestID) == "" {
+		return errors.New("completed generated asset evidence.request_id is required")
+	}
+	if evidenceTrace.Attempts < 1 {
+		return errors.New("completed generated asset evidence.attempts must be a positive integer")
+	}
+	wantHash := creativePromptSHA256(metadataTrace.Prompt)
+	if evidenceTrace.PromptSHA256 != wantHash {
+		return errors.New("completed generated asset evidence.prompt_sha256 does not match metadata.prompt")
+	}
+	return nil
+}
+
+func creativePromptSHA256(prompt string) string {
+	return fmt.Sprintf("%x", sha256.Sum256([]byte(prompt)))
 }
 
 func normalizeCreativeOrderQC(input creativeOrderQCInput) (creativeOrderQCInput, error) {

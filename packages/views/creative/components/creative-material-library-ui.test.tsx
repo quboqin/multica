@@ -3,7 +3,7 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import type { CreativeMaterialCandidate } from "@multica/core/types";
-import { customCopySnapshot, Field, MaterialTile, materialCandidateDisplayDetails, materialImportNotice, orderDraftWithRecommendation } from "./creative-material-library";
+import { manualCopySnapshot, Field, MaterialTile, materialCandidateDisplayDetails, materialImportNotice, orderDraftWithRecommendation } from "./creative-material-library";
 
 vi.mock("@multica/core/api", () => ({ api: { getBaseUrl: () => "" } }));
 
@@ -124,24 +124,26 @@ describe("CreativeMaterialLibrary UI", () => {
     expect(screen.getByText("市场资源包")).toHaveAttribute("for", control.id);
   });
 
-  it("fills the recommendation when copy entries arrive after the order draft", () => {
+  it("does not choose a dynamic recommendation on the user's behalf", () => {
     const initial = orderDraftWithRecommendation(undefined, "");
     const filled = orderDraftWithRecommendation(initial, "copy-recommended");
-    const preserved = orderDraftWithRecommendation({ ...filled, copyEntryId: "copy-user-selected" }, "copy-recommended");
+    const preserved = orderDraftWithRecommendation({ ...filled, selectedRecommendationId: "copy-user-selected" }, "copy-recommended");
 
-    expect(initial.copyEntryId).toBe("");
-    expect(filled.copyEntryId).toBe("copy-recommended");
-    expect(preserved.copyEntryId).toBe("copy-user-selected");
+    expect(initial.selectedRecommendationId).toBe("");
+    expect(filled.selectedRecommendationId).toBe("");
+    expect(preserved.selectedRecommendationId).toBe("copy-user-selected");
   });
 
-  it("keeps the inferred creative type when the user writes custom copy", () => {
-    const snapshot = customCopySnapshot({
-      copyEntryId: "__custom__",
+  it("keeps the inferred creative type when the user manually adjusts copy", () => {
+    const snapshot = manualCopySnapshot({
+      mode: "manual",
+      selectedRecommendationId: "",
       direction: "",
-      replacementReason: "benefit_mismatch",
-      customHeadline: "Pilih tenor",
-      customBenefit: "Cicilan sesuai kebutuhan",
-      customCta: "Ajukan sekarang",
+      manualHeadline: "Pilih tenor",
+      manualSubheadline: "",
+      manualBenefit: "Cicilan sesuai kebutuhan",
+      manualSupporting: "",
+      manualCta: "Ajukan sekarang",
     }, "repayment_plan");
 
     expect(snapshot).toMatchObject({ creative_type: "repayment_plan", status: "user_custom" });

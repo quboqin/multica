@@ -263,14 +263,19 @@ export type CreativeCopyFragmentRole =
   | "cta"
   | "legal";
 
+export type CreativeCopyFragmentUsage = "core" | "fallback" | "required";
+
 export interface CreativeCopyFragment {
   id: string;
   key: string;
   name: string;
   creative_types: CreativeType[];
   role: CreativeCopyFragmentRole;
+  /** Business meaning used to keep one fact from each relevant information group. */
+  semantic_group?: string;
   text: string;
   tags: string[];
+  usage: CreativeCopyFragmentUsage;
   status: CreativeCopyStatus;
 }
 
@@ -335,8 +340,11 @@ export interface CreativeCopySnapshot {
   id: string;
   library_id: string;
   library_version: number;
-  recipe_id: string;
-  recipe_key: string;
+  composition_id?: string;
+  composition_key?: string;
+  composition_engine_version?: string;
+  recipe_id?: string;
+  recipe_key?: string;
   creative_type: CreativeType;
   headline: string;
   subheadline: string;
@@ -581,7 +589,11 @@ export interface CreateCreativeOrderRequest { issue_id: string; submission_key?:
 export interface CreativeSourceAnalysis { id: string; candidate_id: string; analysis_version: number; status: string; summary: string; result: Record<string, unknown>; error_code: string; error_message: string; trigger_evidence_kind: string; trigger_evidence_ref_id: string; created_at: string; completed_at: string; }
 export interface CreativeSourceAnalysisListResponse { analyses: CreativeSourceAnalysis[]; }
 export interface CreativeOrderItem { id: string; order_id: string; candidate_id: string; source_analysis_id: string; copy_snapshot: Record<string, unknown>; direction: string; status: string; adopted_variant_id: string; adopted_at: string; adopted_by: string; created_at: string; updated_at: string; variants: CreativeOrderVariant[]; }
-export interface AdoptCreativeOrderVariantRequest { variant_id: string; }
+export interface AdoptCreativeOrderVariantRequest {
+  variant_id: string;
+  qc_risk_acknowledged?: boolean;
+  qc_risk_reason?: string;
+}
 export interface CreativeOrderVariant { id: string; order_item_id: string; variant_key: string; brief: Record<string, unknown>; revision: number; status: string; qc_status: string; qc_recovery_used: boolean; qc_recovery_available: boolean; prime_repair_used: boolean; prime_repair_available: boolean; created_at: string; updated_at: string; assets: CreativeOrderAsset[]; qc_reports: CreativeOrderQCReport[]; }
 export interface CreativeOrderPrimePackageRepairResponse { task_id: string; }
 export interface CreativeOrderAsset { id: string; variant_id: string; asset_family_id: string; size_key: CreativeDeliverySize | string; revision: number; stage: "generated" | "primed" | "delivered" | string; attachment_id: string; derived_from_asset_id: string; metadata: Record<string, unknown>; evidence: Record<string, unknown>; status: string; created_at: string; updated_at: string; }

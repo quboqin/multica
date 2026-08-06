@@ -18,9 +18,10 @@ import { useWorkspaceId } from "@multica/core/hooks";
 import { useFileUpload } from "@multica/core/hooks/use-file-upload";
 import { resolvePublicFileUrl } from "@multica/core/workspace/avatar-url";
 import { squadListOptions } from "@multica/core/workspace/queries";
-import type { CreateCreativeFeedbackRequest, CreateCreativeOrderRequest, CreativeCopySnapshot, CreativeMaterialCandidate, CreativeMaterialImportResult, CreativeSourceAnalysis, SquadMember } from "@multica/core/types";
+import type { CreateCreativeFeedbackRequest, CreateCreativeOrderRequest, CreativeCopyFragmentRole, CreativeCopySnapshot, CreativeMaterialCandidate, CreativeMaterialImportResult, CreativeSourceAnalysis, SquadMember } from "@multica/core/types";
 import { Badge } from "@multica/ui/components/ui/badge";
 import { Button, buttonVariants } from "@multica/ui/components/ui/button";
+import { Checkbox } from "@multica/ui/components/ui/checkbox";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@multica/ui/components/ui/dialog";
 import { Input } from "@multica/ui/components/ui/input";
 import { Label } from "@multica/ui/components/ui/label";
@@ -152,7 +153,7 @@ export function CreativeMaterialLibrary({ onOrderCreated }: { onOrderCreated?: (
     </div>
     <div className="mb-4 flex flex-wrap gap-2 border-y bg-muted/10 py-3">
       <div className="relative min-w-56 flex-1 md:max-w-md"><Search className="pointer-events-none absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" /><Input className="pl-8" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索标题、竞品或标签" /></div>
-      <select className="h-9 min-w-40 border bg-background px-3 text-sm" value={competitor} onChange={(event) => setCompetitor(event.target.value)} aria-label="按竞品筛选">
+      <select id="creative-material-competitor-filter" name="competitor" className="h-9 min-w-40 border bg-background px-3 text-sm" value={competitor} onChange={(event) => setCompetitor(event.target.value)} aria-label="按竞品筛选">
         <option value="">全部竞品</option>
         {competitors.map((name) => <option key={name} value={name}>{name}</option>)}
       </select>
@@ -280,12 +281,14 @@ export function MaterialTile({ candidate, analysisState, selected, decision, bus
 }
 
 export type OrderItemDraft = {
-  copyEntryId: string;
+  mode: "recommendation" | "manual";
+  selectedRecommendationId: string;
   direction: string;
-  replacementReason: string;
-  customHeadline: string;
-  customBenefit: string;
-  customCta: string;
+  manualHeadline: string;
+  manualSubheadline: string;
+  manualBenefit: string;
+  manualSupporting: string;
+  manualCta: string;
 };
 
 type SubmissionRecovery = { issueId: string; orderId: string; submissionKey: string };
@@ -293,18 +296,8 @@ type SubmissionRecovery = { issueId: string; orderId: string; submissionKey: str
 const EMPTY_SUBMISSION_RECOVERY: SubmissionRecovery = { issueId: "", orderId: "", submissionKey: "" };
 
 export function orderDraftWithRecommendation(current: OrderItemDraft | undefined, recommendedCopyEntryId: string): OrderItemDraft {
-  if (!current) {
-    return {
-      copyEntryId: recommendedCopyEntryId,
-      direction: "",
-      replacementReason: "benefit_mismatch",
-      customHeadline: "",
-      customBenefit: "",
-      customCta: "",
-    };
-  }
-  if (!current.copyEntryId && recommendedCopyEntryId) return { ...current, copyEntryId: recommendedCopyEntryId };
-  return current;
+  void recommendedCopyEntryId;
+  return current ?? { mode: "recommendation", selectedRecommendationId: "", direction: "", manualHeadline: "", manualSubheadline: "", manualBenefit: "", manualSupporting: "", manualCta: "" };
 }
 
 export function recoveryForSubmissionKey(recovery: SubmissionRecovery, submissionKey: string): SubmissionRecovery {
@@ -318,6 +311,7 @@ function CreativeOrderDraft({ candidates, analyses, onDone }: { candidates: Crea
   const [marketPackId, setMarketPackId] = useState("");
   const [squadId, setSquadId] = useState("");
   const [drafts, setDrafts] = useState<Record<string, OrderItemDraft>>({});
+  const [manualFactSelections, setManualFactSelections] = useState<Record<string, string[]>>({});
   const [busy, setBusy] = useState(false);
   const [recoveryMessage, setRecoveryMessage] = useState("");
   const [recovery, setRecovery] = useState<SubmissionRecovery>(EMPTY_SUBMISSION_RECOVERY);
@@ -355,7 +349,7 @@ function CreativeOrderDraft({ candidates, analyses, onDone }: { candidates: Crea
       let changed = false;
       const next = { ...current };
       for (const candidate of candidates) {
-        const draft = orderDraftWithRecommendation(next[candidate.id], recommendations.get(candidate.id)?.[0]?.recipe.id ?? "");
+        const draft = orderDraftWithRecommendation(next[candidate.id], "");
         if (draft !== next[candidate.id]) {
           next[candidate.id] = draft;
           changed = true;
@@ -371,28 +365,33 @@ function CreativeOrderDraft({ candidates, analyses, onDone }: { candidates: Crea
     setActiveCandidateId((current) => added?.id ?? (nextIds.has(current) ? current : candidates[0]?.id ?? ""));
   }, [candidates]);
   useEffect(() => {
-    for (const candidate of candidates) {
+    for (const candidate of candidates.filter((item) => item.id === activeCandidateId)) {
       const analysis = completedAnalyses.get(candidate.id);
       for (const [rank, recommendation] of (recommendations.get(candidate.id) ?? []).slice(0, 3).entries()) {
-        const key = `${candidate.id}:${recommendation.recipe.id}`;
+        const feedback = recommendedCopyViewedFeedbackInput({
+          candidateId: candidate.id,
+          sourceAnalysisId: analysis?.id ?? "",
+          compositionId: recommendation.composition.id,
+          libraryId: recommendation.snapshot.library_id,
+          libraryVersion: recommendation.snapshot.library_version,
+          rank: rank + 1,
+          recommendationReasons: recommendation.reasons,
+          copySnapshot: recommendation.snapshot,
+        });
+        const key = feedback.idempotency_key ?? `${candidate.id}:${recommendation.composition.id}`;
         if (viewedCopyIds.current.has(key)) continue;
         viewedCopyIds.current.add(key);
-        void api.createCreativeFeedback({
-          issue_id: "",
-          subject_type: "recommended_copy",
-          subject_id: recommendation.recipe.id,
-          event_type: "viewed",
-          decision: "",
-          context_snapshot: { candidate_id: candidate.id, source_analysis_id: analysis?.id ?? "", rank: rank + 1, recommendation_reasons: recommendation.reasons },
-        }).catch(() => viewedCopyIds.current.delete(key));
+        void api.createCreativeFeedback(feedback).catch(() => undefined);
       }
     }
-  }, [candidates, completedAnalyses, recommendations]);
+  }, [activeCandidateId, candidates, completedAnalyses, recommendations]);
 
   const incompleteCandidates = candidates.filter((candidate) => !completedAnalyses.has(candidate.id));
   const unconfiguredCandidates = candidates.filter((candidate) => {
     const draft = drafts[candidate.id];
-    return !draft || (draft.copyEntryId === "__custom__" ? !draft.customHeadline.trim() : !draft.copyEntryId);
+    if (!draft) return true;
+    if (draft.mode === "manual") return ![draft.manualHeadline, draft.manualSubheadline, draft.manualBenefit, draft.manualSupporting, draft.manualCta].some((value) => value.trim());
+    return !draft.selectedRecommendationId;
   });
 
   const setDraft = (candidateId: string, patch: Partial<OrderItemDraft>) => setDrafts((current) => ({
@@ -403,18 +402,60 @@ function CreativeOrderDraft({ candidates, analyses, onDone }: { candidates: Crea
   const activeAnalysis = activeCandidate ? completedAnalyses.get(activeCandidate.id) : undefined;
   const activeRanked = activeCandidate ? recommendations.get(activeCandidate.id) ?? [] : [];
   const activeDraft = activeCandidate ? drafts[activeCandidate.id] : undefined;
-  const activeSelectedCopy = activeRanked.find((item) => item.recipe.id === activeDraft?.copyEntryId);
-  const activeRecommended = activeRanked[0];
+  const activeSelectedCopy = activeRanked.find((item) => item.composition.id === activeDraft?.selectedRecommendationId);
   const activeSource = activeCandidate ? candidateSource(activeCandidate) : "";
   const customCopyValidations = useMemo(() => new Map(candidates.flatMap((candidate) => {
     const draft = drafts[candidate.id];
-    if (!draft || draft.copyEntryId !== "__custom__") return [];
-    const recommendation = recommendations.get(candidate.id)?.[0];
-    const snapshot = customCopySnapshot(draft, recommendation?.snapshot.creative_type, copyLibrary);
+    if (!draft || draft.mode !== "manual") return [];
+    const snapshot = manualCopySnapshot(draft, recommendations.get(candidate.id)?.[0]?.snapshot.creative_type, copyLibrary);
     return [[candidate.id, validateCustomCopyFinancialFacts(snapshot, copyLibrary)]] as const;
   })), [candidates, copyLibrary, drafts, recommendations]);
   const customCopyIssueCount = [...customCopyValidations.values()].filter((validation) => !validation.allowed).length;
   const activeCustomCopyValidation = activeCandidate ? customCopyValidations.get(activeCandidate.id) : undefined;
+  const addManualFacts = useMutation({
+    mutationFn: async ({ candidateId, normalizedFacts }: { candidateId: string; normalizedFacts: string[] }) => {
+      if (!copyLibrary) throw new Error("当前市场没有已发布文案库");
+      const validation = customCopyValidations.get(candidateId);
+      const selected = validation?.unapprovedFacts.filter((fact) => normalizedFacts.includes(fact.normalized)) ?? [];
+      if (selected.length === 0) throw new Error("请先勾选需要加入文案库的事实");
+      const currentConfig = copyLibrary.published_config ?? {};
+      const currentFacts = Array.isArray(currentConfig.product_facts) ? currentConfig.product_facts : [];
+      const timestamp = new Date().toISOString();
+      const appendedFacts = selected.map((fact) => ({
+        id: crypto.randomUUID(),
+        key: `user_confirmed_${crypto.randomUUID().replaceAll("-", "")}`,
+        label: `用户确认 · ${fact.display}`,
+        value: fact.value,
+        copy_text: fact.display,
+        source: `创意订单手动文案 · 素材 ${candidateId.slice(0, 8)} · ${timestamp}`,
+        status: "approved",
+      }));
+      const saved = await api.updateCreativeResource(copyLibrary.id, {
+        name: copyLibrary.name,
+        description: copyLibrary.description,
+        config: { ...currentConfig, product_facts: [...currentFacts, ...appendedFacts] },
+      });
+      return api.publishCreativeResource(saved.id);
+    },
+    onSuccess: (_resource, variables) => {
+      setManualFactSelections((current) => ({ ...current, [variables.candidateId]: [] }));
+      queryClient.invalidateQueries({ queryKey: creativeKeys.resources(wsId) });
+      toast.success("已将确认的金融事实加入并发布到当前文案库");
+    },
+    onError: (error) => toast.error(error instanceof Error ? error.message : "无法加入文案库"),
+  });
+  const startManualCopy = () => {
+    if (!activeCandidate) return;
+    const baseline = activeSelectedCopy?.snapshot ?? activeRanked[0]?.snapshot;
+    setDraft(activeCandidate.id, {
+      mode: "manual",
+      manualHeadline: activeDraft?.manualHeadline || baseline?.headline || "",
+      manualSubheadline: activeDraft?.manualSubheadline || baseline?.subheadline || "",
+      manualBenefit: activeDraft?.manualBenefit || baseline?.benefit || "",
+      manualSupporting: activeDraft?.manualSupporting || baseline?.supporting || "",
+      manualCta: activeDraft?.manualCta || baseline?.cta || "",
+    });
+  };
 
   const create = async () => {
     if (!marketPack || !selectedSquad || incompleteCandidates.length > 0 || unconfiguredCandidates.length > 0 || customCopyIssueCount > 0) return;
@@ -468,13 +509,12 @@ function CreativeOrderDraft({ candidates, analyses, onDone }: { candidates: Crea
           trigger_evidence_ref_id: runIds.length === 1 ? runIds[0]! : "",
           items: candidates.map((candidate) => {
             const draft = drafts[candidate.id]!;
-            const recommendation = recommendations.get(candidate.id)?.find((item) => item.recipe.id === draft.copyEntryId);
+            const recommendation = recommendations.get(candidate.id)?.find((item) => item.composition.id === draft.selectedRecommendationId);
+            if (draft.mode !== "manual" && !recommendation) throw new Error(`素材 ${candidate.id.slice(0, 8)} 尚未选择推荐文案`);
             return creativeOrderItemInput(
               candidate.id,
               completedAnalyses.get(candidate.id)!.id,
-              recommendation
-                ? { ...recommendation.snapshot }
-                : customCopySnapshot(draft, recommendations.get(candidate.id)?.[0]?.snapshot.creative_type, copyLibrary),
+              draft.mode === "manual" ? manualCopySnapshot(draft, recommendations.get(candidate.id)?.[0]?.snapshot.creative_type, copyLibrary) as unknown as Record<string, unknown> : { ...recommendation!.snapshot },
               draft.direction,
             );
           }),
@@ -484,20 +524,22 @@ function CreativeOrderDraft({ candidates, analyses, onDone }: { candidates: Crea
         setRecovery({ issueId, orderId, submissionKey });
       }
       await api.setIssueMetadataKey(issueId, "creative_order_id", orderId);
-      await Promise.all(candidates.map(async (candidate) => {
+      for (const candidate of candidates) {
         const draft = drafts[candidate.id]!;
-        const recommended = recommendations.get(candidate.id)?.[0]?.recipe;
-        if (!recommended) return;
-        await api.createCreativeFeedback(recommendedCopyDecisionFeedbackInput({
+        if (draft.mode === "manual") continue;
+        const selected = recommendations.get(candidate.id)?.find((item) => item.composition.id === draft.selectedRecommendationId);
+        if (!selected) continue;
+        void api.createCreativeFeedback(recommendedCopyDecisionFeedbackInput({
           submissionKey,
           issueId,
           orderId,
           candidateId: candidate.id,
-          recommendedCopyId: recommended.id,
-          selectedCopyId: draft.copyEntryId,
-          replacementReason: draft.replacementReason,
-        }));
-      }));
+          selectedCopyId: selected.composition.id,
+          selectedRank: (recommendations.get(candidate.id) ?? []).findIndex((item) => item.composition.id === selected.composition.id) + 1,
+          libraryId: selected.snapshot.library_id,
+          libraryVersion: selected.snapshot.library_version,
+        })).catch(() => undefined);
+      }
       await api.updateIssue(issueId, { assignee_type: "squad", assignee_id: selectedSquad.id });
       toast.success("创意订单已提交，开始生成");
       setRecovery(EMPTY_SUBMISSION_RECOVERY);
@@ -518,7 +560,9 @@ function CreativeOrderDraft({ candidates, analyses, onDone }: { candidates: Crea
     </div>
     <nav className="flex gap-2 overflow-x-auto border-b bg-muted/10 p-3" aria-label="已选素材">{candidates.map((candidate, index) => {
       const candidateDraft = drafts[candidate.id];
-      const configured = candidateDraft?.copyEntryId === "__custom__" ? Boolean(candidateDraft.customHeadline.trim()) : Boolean(candidateDraft?.copyEntryId);
+      const configured = candidateDraft?.mode === "manual"
+        ? [candidateDraft.manualHeadline, candidateDraft.manualSubheadline, candidateDraft.manualBenefit, candidateDraft.manualSupporting, candidateDraft.manualCta].some((value) => value.trim())
+        : Boolean(candidateDraft?.selectedRecommendationId);
       const analyzed = completedAnalyses.has(candidate.id);
       const source = candidateSource(candidate);
       return <button key={candidate.id} type="button" aria-pressed={candidate.id === activeCandidate?.id} onClick={() => setActiveCandidateId(candidate.id)} className={`grid min-w-52 grid-cols-[56px_minmax(0,1fr)] gap-2 border bg-background p-2 text-left ${candidate.id === activeCandidate?.id ? "border-emerald-600 ring-1 ring-emerald-600/20" : ""}`}>
@@ -526,19 +570,23 @@ function CreativeOrderDraft({ candidates, analyses, onDone }: { candidates: Crea
         <span className="min-w-0"><span className="block truncate text-xs font-medium">{index + 1}. {candidate.title || candidate.competitor}</span><span className="mt-1 block text-[11px] text-muted-foreground">{analyzed ? "已分析" : "等待分析"} · {configured ? "文案已定" : "待定文案"}</span><span className="mt-0.5 block font-mono text-[10px] text-muted-foreground">{candidate.id.slice(0, 8)}</span></span>
       </button>;
     })}</nav>
-    {activeCandidate && <article key={activeCandidate.id} className="grid gap-5 p-4 lg:grid-cols-[220px_minmax(0,1fr)]" data-testid="creative-order-active-editor" data-candidate-id={activeCandidate.id}>
+    {activeCandidate && <article key={activeCandidate.id} className="space-y-4 p-4" data-testid="creative-order-active-editor" data-candidate-id={activeCandidate.id}>
+      <div className="grid gap-4 border-b pb-4 lg:grid-cols-[220px_minmax(0,1fr)]">
       <div><div className="aspect-[4/3] overflow-hidden bg-muted">{activeSource ? <img src={activeSource} alt={activeCandidate.title || activeCandidate.competitor} width={880} height={660} loading="lazy" className="h-full w-full object-contain" /> : <div className="flex h-full items-center justify-center"><ImageIcon className="h-6 w-6 text-muted-foreground" /></div>}</div><p className="mt-2 break-words text-xs font-medium">{activeCandidate.title || activeCandidate.competitor}</p><p className="mt-1 font-mono text-[10px] text-muted-foreground">素材 ID {activeCandidate.id.slice(0, 8)}</p></div>
+        <div className="border-l-2 border-emerald-600 pl-3"><div className="flex flex-wrap items-center gap-2"><Sparkles className="h-4 w-4 text-emerald-700" /><p className="text-sm font-medium">{activeAnalysis?.summary || "等待参考分析"}</p>{activeAnalysis && <Badge variant="outline">v{activeAnalysis.analysis_version}</Badge>}</div>{activeAnalysis && <AnalysisFacts analysis={activeAnalysis} adaptedCopy={activeRanked[0]?.snapshot} />}{!activeAnalysis && <p className="mt-2 text-xs text-destructive">分析完成后才能提交该素材。</p>}</div>
+      </div>
       <div className="min-w-0 space-y-4">
-        <div className="border-l-2 border-emerald-600 pl-3"><div className="flex flex-wrap items-center gap-2"><Sparkles className="h-4 w-4 text-emerald-700" /><p className="text-sm font-medium">{activeAnalysis?.summary || "等待参考分析"}</p>{activeAnalysis && <Badge variant="outline">v{activeAnalysis.analysis_version}</Badge>}</div>{activeAnalysis && <AnalysisFacts analysis={activeAnalysis} />}{!activeAnalysis && <p className="mt-2 text-xs text-destructive">分析完成后才能提交该素材。</p>}</div>
-        <div className="grid gap-3 sm:grid-cols-2">
-          <Field label="选用文案"><NativeSelect value={activeDraft?.copyEntryId ?? ""} onChange={(event) => setDraft(activeCandidate.id, { copyEntryId: event.target.value })}><NativeSelectOption value="">选择已发布组合方案</NativeSelectOption>{activeRanked.slice(0, 20).map((item, index) => <NativeSelectOption key={item.recipe.id} value={item.recipe.id}>{index === 0 ? "推荐 · " : ""}{item.recipe.name} · {item.snapshot.headline}</NativeSelectOption>)}<NativeSelectOption value="__custom__">自定义文案</NativeSelectOption></NativeSelect></Field>
-          {activeRecommended && activeDraft?.copyEntryId !== activeRecommended.recipe.id && <Field label="替换推荐原因"><NativeSelect value={activeDraft?.replacementReason ?? "benefit_mismatch"} onChange={(event) => setDraft(activeCandidate.id, { replacementReason: event.target.value })}>{COPY_REPLACEMENT_REASONS.map((reason) => <NativeSelectOption key={reason.value} value={reason.value}>{reason.label}</NativeSelectOption>)}</NativeSelect></Field>}
-        </div>
-        {activeDraft?.copyEntryId === "__custom__" ? <div className="grid gap-3 border bg-muted/10 p-3 sm:grid-cols-2"><Field label="自定义主标题" wide><Input value={activeDraft.customHeadline} onChange={(event) => setDraft(activeCandidate.id, { customHeadline: event.target.value })} /></Field><Field label="自定义卖点" wide><Textarea rows={3} value={activeDraft.customBenefit} onChange={(event) => setDraft(activeCandidate.id, { customBenefit: event.target.value })} /></Field><Field label="自定义 CTA"><Input value={activeDraft.customCta} onChange={(event) => setDraft(activeCandidate.id, { customCta: event.target.value })} /></Field><p className="self-end text-xs text-muted-foreground">创意语言可自由编辑；货币、利率、期限等金融事实必须与已审核产品事实一致。</p>{activeCustomCopyValidation && !activeCustomCopyValidation.allowed && <p role="alert" className="sm:col-span-2 border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs text-destructive">{activeCustomCopyValidation.message}</p>}</div> : activeSelectedCopy ? <CopyPreview recommendation={activeSelectedCopy} isPrimaryRecommendation={activeSelectedCopy.recipe.id === activeRecommended?.recipe.id} /> : <p className="text-xs text-destructive">请选择完整文案。</p>}
+        <fieldset className="min-w-0" aria-describedby={`copy-help-${activeCandidate.id}`}>
+          <div className="flex flex-wrap items-center justify-between gap-2"><legend className="text-sm font-semibold">选择一套完整文案</legend><span id={`copy-help-${activeCandidate.id}`} className="text-xs text-muted-foreground">根据原图语义动态组合，仅使用当前市场已审核事实</span></div>
+          {activeRanked.length > 0 ? <div className="mt-3 grid gap-3 xl:grid-cols-3">{activeRanked.slice(0, 3).map((recommendation, index) => <CopyRecommendationCard key={recommendation.composition.id} recommendation={recommendation} rank={index + 1} selected={activeDraft?.mode === "recommendation" && activeDraft.selectedRecommendationId === recommendation.composition.id} onSelect={() => setDraft(activeCandidate.id, { mode: "recommendation", selectedRecommendationId: recommendation.composition.id })} />)}</div> : <p role="alert" className="mt-3 border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs text-destructive">当前文案库没有足够的已审核原子，无法生成安全候选。</p>}
+          {activeRanked.length > 0 && activeRanked.length < 3 && <p className="mt-2 text-xs text-amber-700">当前只能安全组合出 {activeRanked.length} 套文案，请在文案库补充同类型原子。</p>}
+        </fieldset>
+        <div className="flex items-center gap-2"><Button type="button" size="sm" variant="outline" onClick={startManualCopy}>三套都不合适，手动调整</Button>{activeDraft?.mode === "manual" && <Button type="button" size="sm" variant="ghost" onClick={() => setDraft(activeCandidate.id, { mode: "recommendation" })}>返回推荐</Button>}</div>
+        {activeDraft?.mode === "manual" ? <div className="grid gap-3 border bg-muted/10 p-3 sm:grid-cols-2"><Field label="主标题" wide><Input value={activeDraft.manualHeadline} onChange={(event) => setDraft(activeCandidate.id, { manualHeadline: event.target.value })} /></Field><Field label="副标题" wide><Input value={activeDraft.manualSubheadline} onChange={(event) => setDraft(activeCandidate.id, { manualSubheadline: event.target.value })} /></Field><Field label="利益点" wide><Textarea rows={5} value={activeDraft.manualBenefit} onChange={(event) => setDraft(activeCandidate.id, { manualBenefit: event.target.value })} /></Field><Field label="补充卖点"><Textarea rows={3} value={activeDraft.manualSupporting} onChange={(event) => setDraft(activeCandidate.id, { manualSupporting: event.target.value })} /></Field><Field label="行动文案"><Input value={activeDraft.manualCta} onChange={(event) => setDraft(activeCandidate.id, { manualCta: event.target.value })} /></Field><p className="self-end text-xs text-muted-foreground">可以调整表达和删减信息层级；已有金融事实会自动校验，新事实需要你明确确认后加入文案库。</p>{activeCustomCopyValidation && !activeCustomCopyValidation.allowed && activeCustomCopyValidation.unapprovedFacts.length > 0 && <div className="space-y-3 border border-amber-300 bg-amber-50/50 p-3 text-xs sm:col-span-2"><div><p className="font-medium text-foreground">检测到文案库中还没有的金融事实</p><p className="mt-1 text-muted-foreground">勾选即表示你确认内容准确；系统会记录来源并发布到当前市场文案库。</p></div><div className="grid gap-2 sm:grid-cols-2">{activeCustomCopyValidation.unapprovedFacts.map((fact) => { const checked = (manualFactSelections[activeCandidate.id] ?? []).includes(fact.normalized); return <label key={fact.normalized} className="flex items-start gap-2 border bg-background p-2"><Checkbox checked={checked} onCheckedChange={(value) => setManualFactSelections((current) => { const selected = new Set(current[activeCandidate.id] ?? []); value === true ? selected.add(fact.normalized) : selected.delete(fact.normalized); return { ...current, [activeCandidate.id]: [...selected] }; })} /><span className="break-words">{fact.display}</span></label>; })}</div><Button type="button" size="sm" disabled={addManualFacts.isPending || (manualFactSelections[activeCandidate.id] ?? []).length === 0} onClick={() => addManualFacts.mutate({ candidateId: activeCandidate.id, normalizedFacts: manualFactSelections[activeCandidate.id] ?? [] })}>{addManualFacts.isPending ? "正在加入" : "确认并加入文案库"}</Button></div>}{activeCustomCopyValidation && !activeCustomCopyValidation.allowed && activeCustomCopyValidation.unapprovedFacts.length === 0 && <p role="alert" className="sm:col-span-2 border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs text-destructive">{activeCustomCopyValidation.message}</p>}</div> : !activeSelectedCopy && activeRanked.length > 0 && <p className="text-xs text-destructive">请选择三套候选中的一套。</p>}
         <Field label="补充创意想法" wide><Textarea rows={3} value={activeDraft?.direction ?? ""} onChange={(event) => setDraft(activeCandidate.id, { direction: event.target.value })} placeholder="例如：保留绿色信息卡片，人物更生活化，CTA 更醒目。不要在这里补写未经审核的金融事实。" /></Field>
       </div>
     </article>}
-    <div className="flex flex-wrap items-center justify-between gap-3 border-t bg-muted/10 px-4 py-3"><div className="text-xs text-muted-foreground">{recoveryMessage ? <span className="text-destructive">{recoveryMessage}</span> : incompleteCandidates.length > 0 ? `${incompleteCandidates.length} 张素材仍在等待分析` : unconfiguredCandidates.length > 0 ? `${unconfiguredCandidates.length} 张素材尚未选择文案` : customCopyIssueCount > 0 ? `${customCopyIssueCount} 张素材的自定义文案含未审核金融事实` : !selectedSquad ? "暂无可用生成服务" : "全部素材已配置，可以开始生成。"}</div><Button disabled={busy || !marketPack || !selectedSquad || incompleteCandidates.length > 0 || unconfiguredCandidates.length > 0 || customCopyIssueCount > 0} onClick={() => void create()}>{busy ? "正在提交" : recovery.issueId ? "继续提交" : "开始生成"}</Button></div>
+    <div className="flex flex-wrap items-center justify-between gap-3 border-t bg-muted/10 px-4 py-3"><div className="text-xs text-muted-foreground">{recoveryMessage ? <span className="text-destructive">{recoveryMessage}</span> : incompleteCandidates.length > 0 ? `${incompleteCandidates.length} 张素材仍在等待分析` : unconfiguredCandidates.length > 0 ? `${unconfiguredCandidates.length} 张素材尚未选择文案` : customCopyIssueCount > 0 ? `${customCopyIssueCount} 张素材的手动文案包含未审核金融事实` : !selectedSquad ? "暂无可用生成服务" : "全部素材已配置，可以开始生成。"}</div><Button disabled={busy || !marketPack || !selectedSquad || incompleteCandidates.length > 0 || unconfiguredCandidates.length > 0 || customCopyIssueCount > 0} onClick={() => void create()}>{busy ? "正在提交" : recovery.issueId ? "继续提交" : "开始生成"}</Button></div>
   </section>;
 }
 
@@ -550,17 +598,6 @@ const CANDIDATE_REJECTION_REASONS = [
   { value: "competitor_hard_to_replace", label: "竞品元素难以替换" },
   { value: "app_ui_unsuitable", label: "App 界面不适合" },
   { value: "duplicate", label: "重复素材" },
-  { value: "other", label: "其他" },
-];
-
-const COPY_REPLACEMENT_REASONS = [
-  { value: "benefit_mismatch", label: "利益点不匹配" },
-  { value: "facts_inapplicable", label: "事实不适用" },
-  { value: "unnatural", label: "表达不自然" },
-  { value: "tone_mismatch", label: "语气不合适" },
-  { value: "too_long", label: "文案过长" },
-  { value: "compliance_risk", label: "存在合规风险" },
-  { value: "translation", label: "翻译问题" },
   { value: "other", label: "其他" },
 ];
 
@@ -668,7 +705,7 @@ function CandidateRejectDialog({ candidate, busy, onClose, onConfirm }: { candid
   return <Dialog open={candidate !== null} onOpenChange={(open) => !open && onClose()}><DialogContent className="max-w-lg"><DialogHeader><DialogTitle>不采用这张素材</DialogTitle><DialogDescription>{candidate?.title || candidate?.competitor || "选择一个原因，帮助后续优化采集与推荐。"}</DialogDescription></DialogHeader><div className="space-y-4"><Field label="原因" wide><NativeSelect value={reasonCode} onChange={(event) => setReasonCode(event.target.value)}>{CANDIDATE_REJECTION_REASONS.map((reason) => <NativeSelectOption key={reason.value} value={reason.value}>{reason.label}</NativeSelectOption>)}</NativeSelect></Field><Field label="补充说明" wide><Textarea rows={3} value={comment} onChange={(event) => setComment(event.target.value)} placeholder="可选" /></Field></div><DialogFooter><Button variant="outline" onClick={onClose}>取消</Button><Button variant="destructive" disabled={busy || !actionId} onClick={() => candidate && onConfirm(reasonCode, comment.trim(), candidateFeedbackIdempotencyKey(candidate.id, "rejected", actionId))}>{busy ? "正在记录" : "确认不采用"}</Button></DialogFooter></DialogContent></Dialog>;
 }
 
-function AnalysisFacts({ analysis }: { analysis: CreativeSourceAnalysis }) {
+function AnalysisFacts({ analysis, adaptedCopy }: { analysis: CreativeSourceAnalysis; adaptedCopy?: CreativeCopySnapshot }) {
   const result = analysis.result ?? {};
   const theme = recordString(result, "theme");
   const themeElements = recordStringArray(result, "theme_elements");
@@ -682,12 +719,14 @@ function AnalysisFacts({ analysis }: { analysis: CreativeSourceAnalysis }) {
   const paletteAnchors = recordStringArray(result, "palette_anchors");
   const mustPreserve = recordStringArray(result, "must_preserve");
   const allowedVariations = recordStringArray(result, "allowed_variations");
+  const adaptedFacts = uniqueDisplayFacts(adaptedCopy?.product_facts ?? []);
   return <dl className="mt-3 grid gap-x-4 gap-y-2 text-xs sm:grid-cols-2">
     <AnalysisFact label="主题" value={theme || "未识别"} />
     <AnalysisFact label="主利益点" value={benefit || "未识别"} />
     {themeElements.length > 0 && <AnalysisFact label="主题元素" value={themeElements.join("、")} />}
     {secondaryBenefits.length > 0 && <AnalysisFact label="次要利益点" value={secondaryBenefits.join("、")} />}
     {value && <AnalysisFact label="竞品观察" value={`${value}，只作结构参考`} wide />}
+    {adaptedFacts.length > 0 && <AnalysisFact label="我方适配信息" value={adaptedFacts.slice(0, 6).map((fact) => `${fact.label}：${fact.copy_text}`).join("；")} wide />}
     {semantics && <AnalysisFact label="业务语义" value={semantics} wide />}
     {mechanism && <AnalysisFact label="信息机制" value={mechanism} wide />}
     {visualType && <AnalysisFact label="视觉类型" value={visualType} />}
@@ -702,9 +741,25 @@ function AnalysisFact({ label, value, wide = false }: { label: string; value: st
   return <div className={wide ? "sm:col-span-2" : undefined}><dt className="text-muted-foreground">{label}</dt><dd className="mt-0.5 break-words text-foreground">{value}</dd></div>;
 }
 
-function CopyPreview({ recommendation, isPrimaryRecommendation }: { recommendation: ReturnType<typeof recommendCreativeCopy>[number]; isPrimaryRecommendation: boolean }) {
+function uniqueDisplayFacts(facts: CreativeCopySnapshot["product_facts"]): CreativeCopySnapshot["product_facts"] {
+  const seen = new Set<string>();
+  const uniqueFacts = facts.filter((fact) => {
+    const identity = `${fact.label}:${fact.copy_text}`;
+    if (seen.has(identity)) return false;
+    seen.add(identity);
+    return true;
+  });
+  const priority = (key: string) => key === "limit_max" ? 0 : key === "tenor_range" ? 1 : key === "interest_rate_from" ? 2 : 10;
+  return uniqueFacts.sort((left, right) => priority(left.key) - priority(right.key));
+}
+
+function CopyRecommendationCard({ recommendation, rank, selected, onSelect }: { recommendation: ReturnType<typeof recommendCreativeCopy>[number]; rank: number; selected: boolean; onSelect: () => void }) {
   const copy = recommendation.snapshot;
-  return <div className="border bg-muted/10 p-3 text-xs"><div className="flex flex-wrap items-center gap-2"><Badge variant="outline">{isPrimaryRecommendation ? "推荐" : "已选"}</Badge><span className="font-medium">{recommendation.recipe.name}</span><span className="font-mono text-muted-foreground">文案库 v{copy.library_version}</span>{recommendation.reasons.map((reason) => <Badge key={reason} variant="secondary">{reason}</Badge>)}</div><dl className="mt-3 grid gap-2 sm:grid-cols-[72px_minmax(0,1fr)]"><dt className="text-muted-foreground">主标题</dt><dd className="whitespace-pre-wrap break-words font-medium">{copy.headline || "-"}</dd><dt className="text-muted-foreground">副标题</dt><dd className="whitespace-pre-wrap break-words">{copy.subheadline || "-"}</dd><dt className="text-muted-foreground">利益点</dt><dd className="whitespace-pre-wrap break-words">{copy.benefit || "-"}</dd><dt className="text-muted-foreground">补充信息</dt><dd className="whitespace-pre-wrap break-words">{copy.supporting || "-"}</dd><dt className="text-muted-foreground">CTA</dt><dd className="whitespace-pre-wrap break-words">{copy.cta || "-"}</dd><dt className="text-muted-foreground">产品事实</dt><dd className="flex flex-wrap gap-1">{copy.product_facts.length > 0 ? copy.product_facts.map((fact) => <Badge key={fact.key} variant="outline">{fact.label}：{fact.copy_text}</Badge>) : "-"}</dd></dl>{!recommendation.exactTypeMatch && <p className="mt-3 border-t pt-2 text-muted-foreground">当前素材未识别出明确类型，按文案库默认策略排序。提交前可切换其他组合方案。</p>}</div>;
+  return <label className={`block min-w-0 cursor-pointer border p-3 text-xs transition-colors ${selected ? "border-emerald-600 bg-emerald-50/40 ring-1 ring-emerald-600/20" : "bg-background hover:border-foreground/40"}`}>
+    <span className="flex items-start gap-2"><input type="radio" name="creative-copy-recommendation" value={recommendation.composition.id} checked={selected} onChange={onSelect} className="mt-0.5 h-4 w-4 accent-emerald-700" /><span className="min-w-0 flex-1"><span className="flex flex-wrap items-center gap-2"><Badge variant={rank === 1 ? "default" : "outline"}>{rank === 1 ? "最匹配" : `候选 ${rank}`}</Badge><span className="text-muted-foreground">{recommendation.reasons[0] || "根据原图语义组合"}</span></span></span></span>
+    <dl className="mt-3 grid gap-2 border-t pt-3"><div><dt className="text-muted-foreground">主标题</dt><dd className="mt-0.5 whitespace-pre-wrap break-words text-sm font-semibold">{copy.headline || "-"}</dd></div>{copy.subheadline && <div><dt className="text-muted-foreground">副标题</dt><dd className="mt-0.5 whitespace-pre-wrap break-words">{copy.subheadline}</dd></div>}<div><dt className="text-muted-foreground">利益点</dt><dd className="mt-0.5 whitespace-pre-wrap break-words leading-5">{copy.benefit || "-"}</dd></div>{copy.supporting && <div><dt className="text-muted-foreground">补充卖点</dt><dd className="mt-0.5 whitespace-pre-wrap break-words">{copy.supporting}</dd></div>}<div><dt className="text-muted-foreground">行动文案</dt><dd className="mt-0.5 whitespace-pre-wrap break-words font-medium">{copy.cta || "-"}</dd></div></dl>
+    <span className="mt-3 flex items-center gap-1 border-t pt-2 text-[11px] text-emerald-700"><Check className="h-3.5 w-3.5" />金融事实已按当前市场规则校验</span>
+  </label>;
 }
 
 export function latestCandidateFeedback(events: { id: string; subject_id: string; event_type: string; decision: string; undo_of_id: string; created_at?: string }[]) {
@@ -753,22 +808,48 @@ function compareNewest(left: { id: string; created_at?: string; completed_at?: s
 
 function analysisBrief(analysis?: CreativeSourceAnalysis): CopyRecommendationBrief {
   const result = analysis?.result ?? {};
+  const typeHint = recordString(result, "creative_type_hint");
   return {
+    creative_type_hint: typeHint === "num" || typeHint === "repayment_plan" ? typeHint : undefined,
+    copy_slots: recordStringArray(result, "copy_slots").filter(isCreativeCopySlot),
     theme: recordString(result, "theme"),
     theme_elements: recordStringArray(result, "theme_elements"),
     primary_benefit: recordString(result, "primary_benefit"),
     secondary_benefits: recordStringArray(result, "secondary_benefits"),
     benefit_value: recordString(result, "benefit_value"),
+    source_semantics: recordString(result, "source_semantics"),
+    information_mechanism: recordString(result, "information_mechanism"),
+    has_repayment_table: typeof result.has_repayment_table === "boolean" ? result.has_repayment_table : undefined,
+    detected_text: recordString(result, "detected_text"),
   };
 }
 
-export function customCopySnapshot(
+function isCreativeCopySlot(value: string): value is CreativeCopyFragmentRole {
+  return value === "headline" || value === "subheadline" || value === "benefit" || value === "supporting" || value === "cta" || value === "legal";
+}
+
+export function manualCopySnapshot(
   draft: OrderItemDraft,
   creativeType: CreativeCopySnapshot["creative_type"] = "num",
   library?: { id: string; published_version: number },
 ): CreativeCopySnapshot {
-  const snapshot: CreativeCopySnapshot = { schema_version: 2, id: "", library_id: library?.id ?? "", library_version: library?.published_version ?? 0, recipe_id: "", recipe_key: "user-custom", creative_type: creativeType, headline: draft.customHeadline.trim(), subheadline: "", benefit: draft.customBenefit.trim(), supporting: "", cta: draft.customCta.trim(), legal_text: "", fragments: [], product_facts: [], recommendation: { score: 0, reasons: ["用户自定义"], matched_signals: [] }, status: "user_custom" };
-  return snapshot;
+  return {
+    schema_version: 2,
+    id: "",
+    library_id: library?.id ?? "",
+    library_version: library?.published_version ?? 0,
+    creative_type: creativeType,
+    headline: draft.manualHeadline.trim(),
+    subheadline: draft.manualSubheadline.trim(),
+    benefit: draft.manualBenefit.trim(),
+    supporting: draft.manualSupporting.trim(),
+    cta: draft.manualCta.trim(),
+    legal_text: "",
+    fragments: [],
+    product_facts: [],
+    recommendation: { score: 0, reasons: ["用户基于动态推荐手动调整"], matched_signals: [] },
+    status: "user_custom",
+  };
 }
 
 // This is an identity key, not a security primitive. Keeping it derived from
@@ -798,38 +879,80 @@ export function candidateFeedbackIdempotencyKey(candidateId: string, decision: s
   return `creative:feedback:candidate:${encodeURIComponent(candidateId)}:${encodeURIComponent(decision)}:${encodeURIComponent(actionId)}`;
 }
 
+export function recommendedCopyViewedFeedbackInput({
+  candidateId,
+  sourceAnalysisId,
+  libraryId,
+  libraryVersion,
+  compositionId,
+  rank,
+  recommendationReasons,
+  copySnapshot,
+}: {
+  candidateId: string;
+  sourceAnalysisId: string;
+  libraryId: string;
+  libraryVersion: number;
+  compositionId: string;
+  rank: number;
+  recommendationReasons: string[];
+  copySnapshot: CreativeCopySnapshot;
+}): CreateCreativeFeedbackRequest {
+  const identity = [candidateId, sourceAnalysisId || "none", libraryId, String(libraryVersion), compositionId]
+    .map((part) => encodeURIComponent(part))
+    .join(":");
+  return {
+    idempotency_key: `creative:feedback:recommended-copy-viewed:${identity}`,
+    issue_id: "",
+    subject_type: "recommended_copy",
+    subject_id: compositionId,
+    event_type: "viewed",
+    decision: "",
+    context_snapshot: {
+      candidate_id: candidateId,
+      source_analysis_id: sourceAnalysisId,
+      copy_library_id: libraryId,
+      copy_library_version: libraryVersion,
+      composition_id: compositionId,
+      rank,
+      recommendation_reasons: recommendationReasons,
+      copy_snapshot: copySnapshot,
+    },
+  };
+}
+
 export function recommendedCopyDecisionFeedbackInput({
   submissionKey,
   issueId,
   orderId,
   candidateId,
-  recommendedCopyId,
   selectedCopyId,
-  replacementReason,
+  selectedRank,
+  libraryId,
+  libraryVersion,
 }: {
   submissionKey: string;
   issueId: string;
   orderId: string;
   candidateId: string;
-  recommendedCopyId: string;
   selectedCopyId: string;
-  replacementReason: string;
+  selectedRank: number;
+  libraryId: string;
+  libraryVersion: number;
 }): CreateCreativeFeedbackRequest {
-  const accepted = selectedCopyId === recommendedCopyId;
-  const eventType = accepted ? "decision" : "replacement";
-  const decision = accepted ? "accepted" : "replaced";
   return {
-    idempotency_key: creativeFeedbackIdempotencyKey(submissionKey, "recommended_copy", recommendedCopyId, eventType, decision, candidateId),
+    idempotency_key: creativeFeedbackIdempotencyKey(submissionKey, "recommended_copy", selectedCopyId, "decision", "accepted", candidateId),
     issue_id: issueId,
     subject_type: "recommended_copy",
-    subject_id: recommendedCopyId,
-    event_type: eventType,
-    decision,
-    reason_codes: accepted ? undefined : [replacementReason],
+    subject_id: selectedCopyId,
+    event_type: "decision",
+    decision: "accepted",
     context_snapshot: {
       candidate_id: candidateId,
       order_id: orderId,
-      ...(accepted ? {} : { replacement_copy_id: selectedCopyId }),
+      selected_rank: selectedRank,
+      copy_library_id: libraryId,
+      copy_library_version: libraryVersion,
     },
   };
 }

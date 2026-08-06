@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { CreativeComparisonWorkspace, containedImageBounds, normalizeCreativeAnnotation, normalizeCreativeAnnotationInImage, transformedContainedImageBounds } from "./creative-comparison-workspace";
 
@@ -10,29 +10,62 @@ describe("CreativeComparisonWorkspace", () => {
     result: { id: "final-1", label: "正式成图", finalUrl: "https://cdn.example/final.png", baseUrl: "https://cdn.example/base.png", size: "1080x1080", variant: "V01" },
     assets: [
       { id: "final-1", label: "正式成图", finalUrl: "https://cdn.example/final.png", baseUrl: "https://cdn.example/base.png", size: "1080x1080", variant: "V01" },
-      { id: "final-2", label: "正式成图", finalUrl: "https://cdn.example/final-2.png", size: "1200x628", variant: "V02" },
+      { id: "final-2", label: "V01 横版", finalUrl: "https://cdn.example/final-2.png", size: "1200x628", variant: "V01" },
+      { id: "final-3", label: "V01 竖版", finalUrl: "https://cdn.example/final-3.png", size: "800x1000", variant: "V01" },
+      { id: "final-4", label: "V02 方形", finalUrl: "https://cdn.example/final-4.png", size: "1080x1080", variant: "V02" },
+      { id: "final-5", label: "V02 横版", finalUrl: "https://cdn.example/final-5.png", size: "1200x628", variant: "V02" },
+      { id: "final-6", label: "V02 竖版", finalUrl: "https://cdn.example/final-6.png", size: "800x1000", variant: "V02" },
+      { id: "final-7", label: "V03 方形", finalUrl: "https://cdn.example/final-7.png", size: "1080x1080", variant: "V03" },
+      { id: "final-8", label: "V03 横版", finalUrl: "https://cdn.example/final-8.png", size: "1200x628", variant: "V03" },
+      { id: "final-9", label: "V03 竖版", finalUrl: "https://cdn.example/final-9.png", size: "800x1000", variant: "V03" },
     ],
     onAssetChange: vi.fn(),
     onAdjust: vi.fn(),
     onAnnotations: vi.fn().mockResolvedValue(true),
   };
 
-  it("keeps one side-by-side comparison and switches variants and sizes", () => {
+  it("keeps one side-by-side comparison and switches variants and sizes immediately", () => {
     render(<CreativeComparisonWorkspace {...props} />);
     expect(screen.getByTestId("creative-preview-toolbar")).toHaveClass("flex-nowrap", "overflow-x-auto");
     expect(screen.getByText("原图 / 成图")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "滑杆" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "叠加" })).not.toBeInTheDocument();
-    fireEvent.click(screen.getByText("V02"));
-    expect(props.onAssetChange).toHaveBeenCalledWith("final-2");
-    fireEvent.click(screen.getByText("横版"));
-    expect(props.onAssetChange).toHaveBeenCalledWith("final-2");
+    const variants = screen.getByRole("group", { name: "创意变体" });
+    const sizes = screen.getByRole("group", { name: "成图尺寸" });
+    fireEvent.click(within(variants).getByRole("button", { name: "V02" }));
+    expect(props.onAssetChange).toHaveBeenLastCalledWith("final-4");
+    expect(within(variants).getByRole("button", { name: "V02" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByAltText("V02 方形")).toHaveAttribute("src", "https://cdn.example/final-4.png");
+
+    fireEvent.click(within(sizes).getByRole("button", { name: "横版" }));
+    expect(props.onAssetChange).toHaveBeenLastCalledWith("final-5");
+    expect(within(sizes).getByRole("button", { name: "横版" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByAltText("V02 横版")).toHaveAttribute("src", "https://cdn.example/final-5.png");
+
+    fireEvent.click(within(variants).getByRole("button", { name: "V03" }));
+    expect(props.onAssetChange).toHaveBeenLastCalledWith("final-8");
+    expect(screen.getByAltText("V03 横版")).toHaveAttribute("src", "https://cdn.example/final-8.png");
+
+    fireEvent.click(within(sizes).getByRole("button", { name: "竖版" }));
+    expect(props.onAssetChange).toHaveBeenLastCalledWith("final-9");
+    fireEvent.click(within(variants).getByRole("button", { name: "V01" }));
+    expect(props.onAssetChange).toHaveBeenLastCalledWith("final-3");
+    fireEvent.click(within(sizes).getByRole("button", { name: "方形" }));
+    expect(props.onAssetChange).toHaveBeenLastCalledWith("final-1");
+    expect(screen.getByAltText("正式成图")).toHaveAttribute("src", "https://cdn.example/final.png");
   });
 
   it("disables acceptance and explains which final delivery condition is pending", () => {
     render(<CreativeComparisonWorkspace {...props} acceptance={{ enabled: false, status: "等待双路 QC：technical 通过，visual 待完成" }} />);
     expect(screen.getByRole("button", { name: "接受" })).toBeDisabled();
     expect(screen.getByRole("status")).toHaveTextContent("等待双路 QC：technical 通过，visual 待完成");
+  });
+
+  it("opens generation information for the current result", () => {
+    const onViewInfo = vi.fn();
+    render(<CreativeComparisonWorkspace {...props} onViewInfo={onViewInfo} />);
+    fireEvent.click(screen.getByRole("button", { name: "生成信息" }));
+    expect(onViewInfo).toHaveBeenCalledTimes(1);
   });
 
   it("keeps multiple numbered annotations and submits them as one adjustment", async () => {

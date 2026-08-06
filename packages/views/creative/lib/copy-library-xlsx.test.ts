@@ -40,7 +40,8 @@ describe("copy library XLSX v2", () => {
       sheet("计算规则", []),
     ]);
 
-    expect(preview.errors).toContain("组合方案“num-limit”的 headline 引用了不存在的片段 id：“missing-fragment”");
+    expect(preview.config.recipes).toEqual([]);
+    expect(preview.errors.join("\n")).not.toContain("组合方案");
     expect(preview.warnings.join("\n")).toContain("未提供“库设置”工作表");
   });
 
@@ -49,20 +50,20 @@ describe("copy library XLSX v2", () => {
       schema_version: 2, market: "Indonesia", locale: "id-ID",
       source: { name: "Business source", url: "https://example.test", sync_status: "synced", note: "Reviewed" },
       product_facts: [{ id: "fact-limit", key: "limit", label: "Limit", value: "80000000", copy_text: "Rp80.000.000", source: "approved", status: "approved" }],
-      fragments: [{ id: "fragment-headline", key: "headline-limit", name: "Headline", creative_types: ["num"], role: "headline", text: "Limit", tags: ["limit"], status: "approved" }],
+      fragments: [{ id: "fragment-headline", key: "headline-limit", name: "Headline", creative_types: ["num"], role: "headline", usage: "core", text: "Limit", tags: ["limit"], status: "approved" }],
       recipes: [{ id: "recipe-num", key: "num-limit", name: "NUM", creative_type: "num", description: "", fragment_ids: { headline: ["fragment-headline"] }, match_tags: ["limit"], status: "approved" }],
       calculation_rules: [{ id: "rule-interest", key: "interest", name: "Interest", expression: "principal * rate", input_fact_keys: ["limit"], output_fact_key: "monthly_interest", source: "calculator", status: "draft" }],
       recommendation_policy: { type_weight: 1000, tag_weight: 80, concise_weight: 1, default_creative_type: "num" },
     };
     const sheets = copyLibraryWorkbookSheets(config);
-    expect(sheets.map((sheet) => sheet.name)).toEqual(["库设置", "产品事实", "文案片段", "组合方案", "计算规则"]);
-    expect(sheets.find((sheet) => sheet.name === "组合方案")?.headers).toContain("headline_fragment_ids");
+    expect(sheets.map((sheet) => sheet.name)).toEqual(["库设置", "产品事实", "文案片段", "计算规则"]);
+    expect(sheets.find((sheet) => sheet.name === "文案片段")?.headers).toContain("usage");
 
     const workbook = createCopyLibraryWorkbook(config);
     expect([...workbook.slice(0, 2)]).toEqual([0x50, 0x4b]);
     const archive = unzipSync(workbook);
     expect(Object.keys(archive)).toContain("xl/workbook.xml");
     expect(strFromU8(archive["xl/workbook.xml"]!)).toContain("计算规则");
-    expect(strFromU8(archive["xl/worksheets/sheet5.xml"]!)).toContain("monthly_interest");
+    expect(strFromU8(archive["xl/worksheets/sheet4.xml"]!)).toContain("monthly_interest");
   });
 });

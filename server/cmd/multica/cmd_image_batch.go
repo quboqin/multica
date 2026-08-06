@@ -71,6 +71,8 @@ type imageEditBatchResult struct {
 	Status          string  `json:"status"`
 	Model           string  `json:"model"`
 	Size            string  `json:"size"`
+	Prompt          string  `json:"prompt"`
+	PromptSHA256    string  `json:"prompt_sha256"`
 	Path            string  `json:"path,omitempty"`
 	Bytes           int     `json:"bytes,omitempty"`
 	RequestID       string  `json:"request_id,omitempty"`
@@ -318,22 +320,29 @@ func executeImageEditBatch(ctx context.Context, client *http.Client, endpoint, a
 		go func() {
 			defer wait.Done()
 			defer close(done[job.ID])
+			result := imageEditBatchResult{
+				ID: job.ID, Model: job.Model, Size: job.Size,
+				Prompt: job.Prompt, PromptSHA256: imagePromptSHA256(job.Prompt),
+			}
 			for _, dependency := range job.DependsOn {
 				select {
 				case <-ctx.Done():
-					results[index] = imageEditBatchResult{ID: job.ID, Status: "skipped", Model: job.Model, Size: job.Size, Error: ctx.Err().Error()}
+					result.Status, result.Error = "skipped", ctx.Err().Error()
+					results[index] = result
 					return
 				case <-done[dependency]:
 				}
 				dependencyResult := results[indexes[dependency]]
 				if dependencyResult.Status != "succeeded" {
-					results[index] = imageEditBatchResult{ID: job.ID, Status: "skipped", Model: job.Model, Size: job.Size, Error: fmt.Sprintf("dependency %s did not succeed", dependency)}
+					result.Status, result.Error = "skipped", fmt.Sprintf("dependency %s did not succeed", dependency)
+					results[index] = result
 					return
 				}
 			}
 			select {
 			case <-ctx.Done():
-				results[index] = imageEditBatchResult{ID: job.ID, Status: "skipped", Model: job.Model, Size: job.Size, Error: ctx.Err().Error()}
+				result.Status, result.Error = "skipped", ctx.Err().Error()
+				results[index] = result
 				return
 			case semaphore <- struct{}{}:
 			}
@@ -350,24 +359,29 @@ func executeImageEditBatch(ctx context.Context, client *http.Client, endpoint, a
 			image, requestID, attempts, err := requestGPTImageEditWithRetryAndSlots(ctx, client, endpoint, apiKey, job.Model, imageField, inputs, job.Mask, job.Prompt, job.Size, job.Quality, job.MaxAttempts)
 			duration := time.Since(jobStartedAt).Seconds()
 			if err != nil {
-				results[index] = imageEditBatchResult{ID: job.ID, Status: "failed", Model: job.Model, Size: job.Size, RequestID: requestID, Attempts: attempts, DurationSeconds: duration, Error: err.Error()}
+				result.Status, result.RequestID, result.Attempts, result.DurationSeconds, result.Error = "failed", requestID, attempts, duration, err.Error()
+				results[index] = result
 				return
 			}
 			if directory := filepath.Dir(job.OutputFile); directory != "." {
 				if err := os.MkdirAll(directory, 0o755); err != nil {
-					results[index] = imageEditBatchResult{ID: job.ID, Status: "failed", Model: job.Model, Size: job.Size, RequestID: requestID, Attempts: attempts, DurationSeconds: duration, Error: fmt.Sprintf("create output directory: %v", err)}
+					result.Status, result.RequestID, result.Attempts, result.DurationSeconds, result.Error = "failed", requestID, attempts, duration, fmt.Sprintf("create output directory: %v", err)
+					results[index] = result
 					return
 				}
 			}
 			if err := os.WriteFile(job.OutputFile, image, 0o644); err != nil {
-				results[index] = imageEditBatchResult{ID: job.ID, Status: "failed", Model: job.Model, Size: job.Size, RequestID: requestID, Attempts: attempts, DurationSeconds: duration, Error: fmt.Sprintf("write image output: %v", err)}
+				result.Status, result.RequestID, result.Attempts, result.DurationSeconds, result.Error = "failed", requestID, attempts, duration, fmt.Sprintf("write image output: %v", err)
+				results[index] = result
 				return
 			}
 			abs, err := filepath.Abs(job.OutputFile)
 			if err != nil {
 				abs = job.OutputFile
 			}
-			results[index] = imageEditBatchResult{ID: job.ID, Status: "succeeded", Model: job.Model, Size: job.Size, Path: abs, Bytes: len(image), RequestID: requestID, Attempts: attempts, DurationSeconds: duration}
+			result.Status, result.Path, result.Bytes = "succeeded", abs, len(image)
+			result.RequestID, result.Attempts, result.DurationSeconds = requestID, attempts, duration
+			results[index] = result
 		}()
 	}
 	wait.Wait()

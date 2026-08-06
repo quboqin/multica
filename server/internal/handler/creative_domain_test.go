@@ -341,11 +341,17 @@ VALUES ($1, $2, '{}'::jsonb, 'completed') RETURNING id::text
 	}
 	var variantIDs []string
 	createEligibleVariant := func(key, technicalStatus, visualStatus string) string {
+		variantStatus := "completed"
+		qcOutcome := "delivered"
+		if technicalStatus == "failed" || visualStatus == "failed" {
+			variantStatus = "action_required"
+			qcOutcome = "action_required"
+		}
 		var variantID string
 		if err := testPool.QueryRow(t.Context(), `
 INSERT INTO creative_order_variant (order_item_id, variant_key, revision, status)
-VALUES ($1, $2, 1, 'completed') RETURNING id::text
-`, itemID, key).Scan(&variantID); err != nil {
+VALUES ($1, $2, 1, $3) RETURNING id::text
+`, itemID, key, variantStatus).Scan(&variantID); err != nil {
 			t.Fatal(err)
 		}
 		variantIDs = append(variantIDs, variantID)
@@ -359,10 +365,17 @@ VALUES ($1, $2, 'member', $3, $4, $5, 'image/png', 1024) RETURNING id::text
 			}
 			if _, err := testPool.Exec(t.Context(), `
 INSERT INTO creative_order_asset (variant_id, size_key, revision, stage, attachment_id, status)
-VALUES ($1, $2, 1, 'primed', $3, 'completed'),
-       ($1, $2, 1, 'delivered', $3, 'completed')
+VALUES ($1, $2, 1, 'primed', $3, 'completed')
 `, variantID, size, attachmentID); err != nil {
 				t.Fatal(err)
+			}
+			if qcOutcome == "delivered" {
+				if _, err := testPool.Exec(t.Context(), `
+INSERT INTO creative_order_asset (variant_id, size_key, revision, stage, attachment_id, status)
+VALUES ($1, $2, 1, 'delivered', $3, 'completed')
+`, variantID, size, attachmentID); err != nil {
+					t.Fatal(err)
+				}
 			}
 		}
 		if _, err := testPool.Exec(t.Context(), `
@@ -374,14 +387,15 @@ VALUES ($1, 'technical', 1, $2, '{}'::jsonb),
 		}
 		if _, err := testPool.Exec(t.Context(), `
 INSERT INTO creative_order_variant_qc_resolution (variant_id, revision, outcome, issue_id)
-VALUES ($1, 1, 'delivered', $2)
-`, variantID, issueID); err != nil {
+VALUES ($1, 1, $2, $3)
+`, variantID, qcOutcome, issueID); err != nil {
 			t.Fatal(err)
 		}
 		return variantID
 	}
 	firstVariantID := createEligibleVariant("adopt-v01", "passed", "passed")
 	secondVariantID := createEligibleVariant("adopt-v02", "warning", "passed")
+	riskVariantID := createEligibleVariant("adopt-v03", "passed", "failed")
 	if status, err := testHandler.derivedCreativeOrderStatus(newRequest(http.MethodGet, "/", nil), parseUUID(orderID)); err != nil || status != "awaiting_adoption" {
 		t.Fatalf("status before adoption = %q, %v; want awaiting_adoption", status, err)
 	}
@@ -433,6 +447,59 @@ VALUES ($1, 1, 'delivered', $2)
 	}
 	_ = adopt(secondVariantID)
 
+	w := httptest.NewRecorder()
+	req := newRequest(http.MethodPost, "/api/creative/orders/"+orderID+"/items/"+itemID+"/adoption", creativeOrderItemAdoptionInput{VariantID: riskVariantID})
+	req = withURLParams(req, "id", orderID, "itemId", itemID)
+	testHandler.AdoptCreativeOrderItemVariant(w, req)
+	if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), "explicit risk acknowledgement") {
+		t.Fatalf("risk adoption without acknowledgement = %d %s", w.Code, w.Body.String())
+	}
+
+	riskReason := "Launch deadline accepted with a known visual QC issue"
+	w = httptest.NewRecorder()
+	req = newRequest(http.MethodPost, "/api/creative/orders/"+orderID+"/items/"+itemID+"/adoption", creativeOrderItemAdoptionInput{
+		VariantID: riskVariantID, QCRiskAcknowledged: true, QCRiskReason: riskReason,
+	})
+	req = withURLParams(req, "id", orderID, "itemId", itemID)
+	testHandler.AdoptCreativeOrderItemVariant(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("risk adoption = %d %s", w.Code, w.Body.String())
+	}
+	var riskItem creativeOrderItemResponse
+	if err := json.NewDecoder(w.Body).Decode(&riskItem); err != nil {
+		t.Fatal(err)
+	}
+	if riskItem.AdoptedVariantID != riskVariantID {
+		t.Fatalf("risk adoption item = %#v", riskItem)
+	}
+	var deliveredCount int
+	if err := testPool.QueryRow(t.Context(), `
+SELECT count(*) FROM creative_order_asset
+WHERE variant_id = $1 AND revision = 1 AND stage = 'delivered' AND status = 'completed'
+`, riskVariantID).Scan(&deliveredCount); err != nil {
+		t.Fatal(err)
+	}
+	if deliveredCount != len(standardCreativeAssetSizes) {
+		t.Fatalf("risk adoption delivered assets = %d, want %d", deliveredCount, len(standardCreativeAssetSizes))
+	}
+
+	var reasonCodes []string
+	var feedbackComment, contextSnapshot string
+	if err := testPool.QueryRow(t.Context(), `
+SELECT reason_codes, comment, context_snapshot::text
+FROM creative_feedback_event
+WHERE workspace_id = $1 AND subject_type = 'variant' AND subject_id = $2 AND decision = 'accepted'
+ORDER BY created_at DESC LIMIT 1
+`, testWorkspaceID, riskVariantID).Scan(&reasonCodes, &feedbackComment, &contextSnapshot); err != nil {
+		t.Fatal(err)
+	}
+	if len(reasonCodes) != 1 || reasonCodes[0] != "qc_risk_accepted" || feedbackComment != riskReason ||
+		!strings.Contains(contextSnapshot, `"adoption_mode": "qc_risk_accepted"`) ||
+		!strings.Contains(contextSnapshot, `"visual_status": "failed"`) ||
+		!strings.Contains(contextSnapshot, `"failure_summary"`) {
+		t.Fatalf("risk adoption feedback = reasons %#v comment %q context %s", reasonCodes, feedbackComment, contextSnapshot)
+	}
+
 	var feedbackCount, activityCount int
 	if err := testPool.QueryRow(t.Context(), `
 SELECT count(*) FROM creative_feedback_event
@@ -446,8 +513,8 @@ SELECT count(*) FROM activity_log WHERE issue_id = $1 AND action = 'creative_var
 `, issueID).Scan(&activityCount); err != nil {
 		t.Fatal(err)
 	}
-	if feedbackCount != 2 || activityCount != 2 {
-		t.Fatalf("audit counts = feedback %d activity %d, want 2 each", feedbackCount, activityCount)
+	if feedbackCount != 3 || activityCount != 3 {
+		t.Fatalf("audit counts = feedback %d activity %d, want 3 each", feedbackCount, activityCount)
 	}
 }
 
@@ -1332,8 +1399,10 @@ VALUES ($1, $2, '{}'::jsonb) RETURNING id::text`, orderID, candidateID).Scan(&it
 		t.Fatalf("stale variant revision: %d %s", w.Code, w.Body.String())
 	}
 	w = httptest.NewRecorder()
+	metadata, evidence := completedGeneratedAssetTrace("stale prompt", "req-stale", 1)
 	req = newRequest(http.MethodPut, "/api/creative/orders/"+orderID+"/assets", creativeOrderAssetInput{
 		VariantID: variant.ID, SizeKey: "1080x1080", Revision: 1, Stage: "generated", Status: "completed",
+		Metadata: metadata, Evidence: evidence,
 	})
 	req = withURLParam(req, "id", orderID)
 	testHandler.UpsertCreativeOrderAsset(w, req)
@@ -1348,6 +1417,94 @@ VALUES ($1, $2, '{}'::jsonb) RETURNING id::text`, orderID, candidateID).Scan(&it
 	testHandler.UpsertCreativeOrderQC(w, req)
 	if w.Code != http.StatusForbidden {
 		t.Fatalf("unscoped stale QC revision: %d %s", w.Code, w.Body.String())
+	}
+}
+
+func completedGeneratedAssetTrace(prompt, requestID string, attempts int) (json.RawMessage, json.RawMessage) {
+	metadata, _ := json.Marshal(map[string]any{"prompt": prompt, "model": "gpt-image-2"})
+	evidence, _ := json.Marshal(map[string]any{
+		"request_id": requestID, "attempts": attempts, "prompt_sha256": creativePromptSHA256(prompt),
+	})
+	return metadata, evidence
+}
+
+func TestCreativeOrderGeneratedAssetRequiresAndFreezesPromptTrace(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	_, candidateID := createCreativeFeedbackCandidate(t, "generated prompt trace")
+	var orderID, itemID, variantID string
+	if err := testPool.QueryRow(t.Context(), `
+INSERT INTO creative_order (workspace_id, status, input_snapshot, created_by)
+VALUES ($1, 'running', '{}'::jsonb, $2) RETURNING id::text`, testWorkspaceID, testUserID).Scan(&orderID); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _, _ = testPool.Exec(t.Context(), `DELETE FROM creative_order WHERE id = $1`, orderID) })
+	if err := testPool.QueryRow(t.Context(), `
+INSERT INTO creative_order_item (order_id, candidate_id, copy_snapshot)
+VALUES ($1, $2, '{}'::jsonb) RETURNING id::text`, orderID, candidateID).Scan(&itemID); err != nil {
+		t.Fatal(err)
+	}
+	if err := testPool.QueryRow(t.Context(), `
+INSERT INTO creative_order_variant (order_item_id, variant_key, revision, status)
+VALUES ($1, 'V01', 1, 'running') RETURNING id::text`, itemID).Scan(&variantID); err != nil {
+		t.Fatal(err)
+	}
+
+	put := func(size string, metadata, evidence json.RawMessage) *httptest.ResponseRecorder {
+		t.Helper()
+		w := httptest.NewRecorder()
+		req := newRequest(http.MethodPut, "/api/creative/orders/"+orderID+"/assets", creativeOrderAssetInput{
+			VariantID: variantID, SizeKey: size, Revision: 1, Stage: "generated", Status: "completed",
+			Metadata: metadata, Evidence: evidence,
+		})
+		req = withURLParam(req, "id", orderID)
+		testHandler.UpsertCreativeOrderAsset(w, req)
+		return w
+	}
+
+	metadata, evidence := completedGeneratedAssetTrace("exact final prompt", "req-prompt-1", 2)
+	first := put("1080x1080", metadata, evidence)
+	if first.Code != http.StatusOK {
+		t.Fatalf("first generated asset = %d %s", first.Code, first.Body.String())
+	}
+	var firstAsset creativeOrderAssetResponse
+	if err := json.NewDecoder(first.Body).Decode(&firstAsset); err != nil {
+		t.Fatal(err)
+	}
+	replayed := put("1080x1080", metadata, evidence)
+	if replayed.Code != http.StatusOK {
+		t.Fatalf("idempotent generated asset = %d %s", replayed.Code, replayed.Body.String())
+	}
+	var replayedAsset creativeOrderAssetResponse
+	if err := json.NewDecoder(replayed.Body).Decode(&replayedAsset); err != nil {
+		t.Fatal(err)
+	}
+	if replayedAsset.ID != firstAsset.ID || replayedAsset.AssetFamilyID != firstAsset.AssetFamilyID {
+		t.Fatalf("idempotent replay changed asset identity: first=%#v replay=%#v", firstAsset, replayedAsset)
+	}
+
+	differentMetadata, differentEvidence := completedGeneratedAssetTrace("different prompt", "req-prompt-2", 1)
+	changed := put("1080x1080", differentMetadata, differentEvidence)
+	if changed.Code != http.StatusConflict || !strings.Contains(changed.Body.String(), "trace is immutable") {
+		t.Fatalf("different completed trace = %d %s", changed.Code, changed.Body.String())
+	}
+	missing := put("1200x628", json.RawMessage(`{"prompt":"missing hash","model":"gpt-image-2"}`), json.RawMessage(`{"request_id":"req-missing","attempts":1}`))
+	if missing.Code != http.StatusBadRequest || !strings.Contains(missing.Body.String(), "prompt_sha256") {
+		t.Fatalf("missing prompt hash = %d %s", missing.Code, missing.Body.String())
+	}
+
+	if _, err := testPool.Exec(t.Context(), `
+INSERT INTO creative_order_asset (variant_id, size_key, revision, stage, metadata, evidence, status)
+VALUES ($1, '800x1000', 1, 'generated', '{}'::jsonb, '{}'::jsonb, 'completed')`, variantID); err != nil {
+		t.Fatal(err)
+	}
+	w := httptest.NewRecorder()
+	req := newRequest(http.MethodGet, "/api/creative/orders/"+orderID, nil)
+	req = withURLParam(req, "id", orderID)
+	testHandler.GetCreativeOrder(w, req)
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"size_key":"800x1000"`) {
+		t.Fatalf("historical generated asset read = %d %s", w.Code, w.Body.String())
 	}
 }
 

@@ -44,7 +44,10 @@ multica creative order asset-put <order-id> --input-file <edited-asset.json> --o
 
 `edited-asset.json` 必须保留原 `asset_family_id`，写入 `variant_id`、`size_key`、`revision: source_revision + 1`、
 `derived_from_asset_id: source_asset_id`、`status: "completed"`，并在 metadata/evidence 记录输入附件 ID、用户原话、完整
-提示词、模型、request ID、attempts、provider slot limit、尺寸和目检结论。附件上传能力不存在时，仅可
+提示词、模型、request ID、attempts、provider slot limit、尺寸和目检结论。完整提示词必须原样取自
+`multica image edit --output json` 或 `image edit-batch` 对应 job 返回的 `prompt`，并把同一结果的
+`prompt_sha256` 写入 evidence；不得根据用户原话或本地文件二次重建。CLI 原始 JSON 作为本次生成 evidence
+保留。附件上传能力不存在时，仅可
 使用平台已返回的附件 ID 或请求领域 attachment API，不得走旧交付渠道。
 
 `delivery_mode: preview` 只保留 generated asset，不创建 Prime/QC。`delivery_mode: publish` 从当前 task

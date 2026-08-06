@@ -705,6 +705,7 @@ type composableCopyLibraryConfig struct {
 		Key           string   `json:"key"`
 		CreativeTypes []string `json:"creative_types"`
 		Role          string   `json:"role"`
+		Usage         string   `json:"usage"`
 		Text          string   `json:"text"`
 		Status        string   `json:"status"`
 	} `json:"fragments"`
@@ -734,8 +735,9 @@ func validateComposableCopyLibraryConfig(raw json.RawMessage) error {
 	if config.SchemaVersion != 2 {
 		return errors.New("schema_version must be 2")
 	}
-	if strings.TrimSpace(config.Locale) != "id-ID" {
-		return errors.New("locale must be id-ID")
+	locale := strings.TrimSpace(config.Locale)
+	if matched, _ := regexp.MatchString(`^[a-z]{2,3}-[A-Z]{2}$`, locale); !matched {
+		return errors.New("locale must be a language-region code such as id-ID or ms-MY")
 	}
 	validType := func(value string) bool { return value == "num" || value == "repayment_plan" }
 	facts := make(map[string]bool, len(config.ProductFacts))
@@ -756,6 +758,8 @@ func validateComposableCopyLibraryConfig(raw json.RawMessage) error {
 		types map[string]bool
 	}
 	fragments := make(map[string]fragmentContract, len(config.Fragments))
+	approvedHeadlineByType := map[string]int{"num": 0, "repayment_plan": 0}
+	approvedBenefitByType := map[string]int{"num": 0, "repayment_plan": 0}
 	for index, fragment := range config.Fragments {
 		id := strings.TrimSpace(fragment.ID)
 		if id == "" || strings.TrimSpace(fragment.Key) == "" {
@@ -777,14 +781,24 @@ func validateComposableCopyLibraryConfig(raw json.RawMessage) error {
 		if !validCopyFragmentRole(fragment.Role) || len(types) == 0 || strings.TrimSpace(fragment.Text) == "" {
 			return fmt.Errorf("approved fragment %q requires role, creative type, and text", fragment.Key)
 		}
+		if fragment.Usage != "" && fragment.Usage != "core" && fragment.Usage != "fallback" && fragment.Usage != "required" {
+			return fmt.Errorf("approved fragment %q has unsupported usage %q", fragment.Key, fragment.Usage)
+		}
 		for _, match := range creativeCopyFactReferencePattern.FindAllStringSubmatch(fragment.Text, -1) {
 			if !facts[match[1]] {
 				return fmt.Errorf("approved fragment %q references missing or unapproved fact %q", fragment.Key, match[1])
 			}
 		}
 		fragments[id] = fragmentContract{role: fragment.Role, types: types}
+		for creativeType := range types {
+			if fragment.Role == "headline" {
+				approvedHeadlineByType[creativeType]++
+			}
+			if fragment.Role == "benefit" {
+				approvedBenefitByType[creativeType]++
+			}
+		}
 	}
-	approvedByType := map[string]int{"num": 0, "repayment_plan": 0}
 	approvedRecipeIDs := map[string]bool{}
 	for index, recipe := range config.Recipes {
 		if !validType(recipe.CreativeType) {
@@ -823,11 +837,10 @@ func validateComposableCopyLibraryConfig(raw json.RawMessage) error {
 		if used == 0 {
 			return fmt.Errorf("approved recipe %d must use at least one fragment", index+1)
 		}
-		approvedByType[recipe.CreativeType]++
 	}
 	for _, creativeType := range []string{"num", "repayment_plan"} {
-		if approvedByType[creativeType] == 0 {
-			return fmt.Errorf("at least one approved %s recipe is required", creativeType)
+		if approvedHeadlineByType[creativeType] == 0 || approvedBenefitByType[creativeType] == 0 {
+			return fmt.Errorf("approved %s headline and benefit fragments are required", creativeType)
 		}
 	}
 	return nil

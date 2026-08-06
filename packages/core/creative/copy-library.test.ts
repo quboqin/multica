@@ -14,6 +14,7 @@ const resource: CreativeResource = {
       { id: "fragment-num-headline", key: "num-headline", name: "Headline", creative_types: ["num"], role: "headline", text: "Pinjaman Fleksibel Tanpa Ribet", tags: [], status: "approved" },
       { id: "fragment-num-benefit", key: "num-benefit", name: "Benefit", creative_types: ["num"], role: "benefit", text: "Limit hingga {{fact.limit.copy_text}}", tags: [], status: "approved" },
       { id: "fragment-plan-headline", key: "plan-headline", name: "Plan", creative_types: ["repayment_plan"], role: "headline", text: "Pilih Tenor Sesuai Kebutuhan", tags: [], status: "approved" },
+      { id: "fragment-plan-benefit", key: "plan-benefit", name: "Plan benefit", creative_types: ["repayment_plan"], role: "benefit", text: "Cicilan sesuai tenor", tags: ["cicilan"], status: "approved" },
     ],
     recipes: [
       { id: "recipe-num", key: "num", name: "NUM", creative_type: "num", description: "", fragment_ids: { headline: ["fragment-num-headline"], benefit: ["fragment-num-benefit"] }, match_tags: ["额度", "limit"], status: "approved" },
@@ -38,7 +39,7 @@ describe("composable copy library", () => {
     const ranked = recommendCreativeCopy(candidate, resource, {
       theme: "", theme_elements: [], primary_benefit: "额度", secondary_benefits: [], benefit_value: "",
     });
-    expect(ranked[0]?.recipe.id).toBe("recipe-num");
+    expect(ranked[0]?.composition.id).toMatch(/^[0-9a-f-]{36}$/);
     expect(ranked[0]?.snapshot).toMatchObject({
       schema_version: 2,
       library_id: "library-1",
@@ -52,16 +53,58 @@ describe("composable copy library", () => {
         { id: "fragment-num-benefit", role: "benefit", text: "Limit hingga Rp80.000.000" },
       ],
     });
-    expect(ranked[0]?.reasons).toContain("创意类型：NUM 数字利益点");
+    expect(ranked[0]?.reasons).toContain("未识别月供表，按数字利益点推荐");
   });
 
   it("keeps NUM and repayment-plan recipes as explicit recommendation types", () => {
     const ranked = recommendCreativeCopy(candidate, resource, {
-      theme: "", theme_elements: [], primary_benefit: "Pilihan tenor dan cicilan", secondary_benefits: [], benefit_value: "",
+      theme: "", theme_elements: [], primary_benefit: "Tabel cicilan per bulan", secondary_benefits: [], benefit_value: "",
+      information_mechanism: "Simulasi cicilan per bulan untuk beberapa tenor", has_repayment_table: true,
     });
 
-    expect(ranked[0]?.recipe.id).toBe("recipe-plan");
+    expect(ranked[0]?.snapshot.headline).toBe("Pilih Tenor Sesuai Kebutuhan");
     expect(ranked[0]?.snapshot.creative_type).toBe("repayment_plan");
+    expect(ranked[0]?.reasons).toContain("识别到月供表或还款明细结构");
+  });
+
+  it("keeps first-month interest, amount, and tenor signals in NUM without a repayment table", () => {
+    const ranked = recommendCreativeCopy(candidate, resource, {
+      theme: "贷款获批", theme_elements: [], primary_benefit: "首月 0% 利息与贷款额度", secondary_benefits: ["期限 12 bulan"],
+      benefit_value: "0% bulan pertama; Rp50.000.000; tenor 12 bulan",
+      information_mechanism: "凭证字段依次展示利息、额度和期限", has_repayment_table: false,
+    });
+
+    expect(ranked[0]?.snapshot.headline).toBe("Pinjaman Fleksibel Tanpa Ribet");
+    expect(ranked[0]?.snapshot.creative_type).toBe("num");
+    expect(ranked[0]?.reasons).toContain("未识别月供表，按数字利益点推荐");
+    expect(ranked[0]?.snapshot.product_facts).toEqual([{ key: "limit", label: "Limit", value: "80000000", copy_text: "Rp80.000.000", source: "approved" }]);
+  });
+
+  it("chooses the closest approved principal for a repayment table", () => {
+    const changed = structuredClone(resource);
+    changed.published_config!.product_facts = [
+      ...(changed.published_config!.product_facts as Array<Record<string, unknown>>),
+      { id: "fact-principal-5m", key: "principal_5m", label: "Rp5m", value: "5000000", copy_text: "Rp5.000.000", source: "approved", status: "approved" },
+      { id: "fact-principal-10m", key: "principal_10m", label: "Rp10m", value: "10000000", copy_text: "Rp10.000.000", source: "approved", status: "approved" },
+    ];
+    changed.published_config!.fragments = [
+      ...(changed.published_config!.fragments as Array<Record<string, unknown>>).filter((fragment) => fragment.id !== "fragment-plan-headline"),
+      { id: "fragment-plan-5m", key: "plan-5m", name: "Plan 5m", creative_types: ["repayment_plan"], role: "benefit", text: "{{fact.principal_5m.copy_text}}", tags: [], status: "approved" },
+      { id: "fragment-plan-10m", key: "plan-10m", name: "Plan 10m", creative_types: ["repayment_plan"], role: "benefit", text: "Pinjaman {{fact.principal_10m.copy_text}}", tags: [], status: "approved" },
+    ];
+    changed.published_config!.recipes = [
+      ...(changed.published_config!.recipes as Array<Record<string, unknown>>).filter((recipe) => recipe.creative_type === "num"),
+      { id: "recipe-plan-5m", key: "plan-5m", name: "Plan 5m", creative_type: "repayment_plan", description: "", fragment_ids: { benefit: ["fragment-plan-5m"] }, match_tags: ["月供"], status: "approved" },
+      { id: "recipe-plan-10m", key: "plan-10m", name: "Plan 10m", creative_type: "repayment_plan", description: "", fragment_ids: { benefit: ["fragment-plan-10m"] }, match_tags: ["月供"], status: "approved" },
+    ];
+
+    const ranked = recommendCreativeCopy(candidate, changed, {
+      theme: "", theme_elements: [], primary_benefit: "月供对照表", secondary_benefits: [], benefit_value: "最高额度 Rp100.000.000",
+      information_mechanism: "按借款金额展示 3、6、12 个月月供", has_repayment_table: true,
+    });
+
+    expect(ranked[0]?.snapshot.benefit.split("\n")[0]).toContain("Rp10.000.000");
+    expect(ranked[0]?.snapshot.benefit).toContain("Rp5.000.000");
   });
 
   it("skips a recipe that cannot resolve an approved fact without blocking a fact-free recipe", () => {
@@ -72,7 +115,7 @@ describe("composable copy library", () => {
       theme: "", theme_elements: [], primary_benefit: "额度", secondary_benefits: [], benefit_value: "",
     });
 
-    expect(ranked.map((item) => item.recipe.id)).toEqual(["recipe-plan"]);
+    expect(ranked[0]?.snapshot.headline).toBe("Pinjaman Fleksibel Tanpa Ribet");
     expect(JSON.stringify(ranked)).not.toContain("缺少产品事实");
   });
 
