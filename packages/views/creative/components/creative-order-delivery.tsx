@@ -1,22 +1,11 @@
 "use client";
 
 import { useId, useState } from "react";
-import { Check, CheckCircle2, ChevronDown, Download, Image as ImageIcon, Info, PackageCheck, RefreshCw } from "lucide-react";
+import { AlertTriangle, Check, CheckCircle2, ChevronDown, Download, Eye, Image as ImageIcon, Info, PackageCheck } from "lucide-react";
 import { strToU8, zipSync } from "fflate";
-import type { Attachment, CreativeOrder, CreativeOrderAsset, CreativeOrderItem, CreativeOrderQCReport, CreativeOrderVariant } from "@multica/core/types";
+import type { Attachment, CreativeOrder, CreativeOrderAsset, CreativeOrderDiagnosticAsset, CreativeOrderItem, CreativeOrderQCReport, CreativeOrderVariant, CreativeOrderWorkflowFailure } from "@multica/core/types";
 import { Badge } from "@multica/ui/components/ui/badge";
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@multica/ui/components/ui/alert-dialog";
 import { Button } from "@multica/ui/components/ui/button";
-import { Textarea } from "@multica/ui/components/ui/textarea";
 import { cn } from "@multica/ui/lib/utils";
 import { toast } from "sonner";
 import { creativeAttachmentBrowserURL } from "../lib/creative-attachment-url";
@@ -40,10 +29,10 @@ export function creativeOrderStatusLabel(status: string | undefined): string {
     case "queued": return "排队中";
     case "running": return "生成中";
     case "partial": return "生成中";
-    case "action_required": return "需要处理";
-    case "failed": return "失败";
-    case "awaiting_adoption": return "待采用";
-    case "completed": return "已完成";
+    case "action_required": return "待验收";
+    case "failed": return "待验收";
+    case "awaiting_adoption": return "待验收";
+    case "completed": return "已采用";
     case "cancelled": return "已结束";
     default: return status ? "处理中" : "加载中";
   }
@@ -68,11 +57,26 @@ export function adoptedCreativeOrderVariant(item: CreativeOrderItem): CreativeOr
   return item.variants.find((variant) => variant.id === adoptedVariantId);
 }
 
+export function creativeOrderActionableWorkflowFailures(order: CreativeOrder | undefined): CreativeOrderWorkflowFailure[] {
+  if (!order) return [];
+  const variantsById = new Map(order.items.flatMap((item) => item.variants.map((variant) => [variant.id, variant] as const)));
+  return (order.workflow_failures ?? []).filter((failure) => {
+    const variant = variantsById.get(failure.subject_id);
+    if (!variant) return true;
+    if (!creativeVariantNeedsManualAction(variant)) return false;
+    if (creativeVariantHasQCFailure(variant)) return creativeOrderWorkflowFailureIsQC(failure.workflow);
+    return true;
+  });
+}
+
 export function creativeOrderStage(order: CreativeOrder | undefined): CreativeOrderStage {
   const items = order?.items ?? [];
   const variants = items.flatMap((item) => item.variants);
   const readyVariants = variants.filter((variant) => creativeVariantAdoptionReadiness(variant).ready).length;
+  const blockedVariants = variants.filter(creativeVariantNeedsManualAction).length;
+  const productionStoppedVariants = variants.filter(creativeVariantHasProductionStop).length;
   const adoptedItems = items.filter((item) => Boolean(adoptedCreativeOrderVariant(item))).length;
+  const actionableFailures = creativeOrderActionableWorkflowFailures(order);
   const base = { readyVariants, totalVariants: variants.length, adoptedItems, totalItems: items.length };
   const status = order?.derived_status || order?.status || "";
 
@@ -80,7 +84,7 @@ export function creativeOrderStage(order: CreativeOrder | undefined): CreativeOr
     return { ...base, key: "cancelled", label: "已结束", detail: "订单已结束，结果与记录仍保留", action: "查看记录" };
   }
   if (status === "completed" || (items.length > 0 && adoptedItems === items.length)) {
-    return { ...base, key: "delivered", label: "已交付", detail: items.length > 0 ? `${adoptedItems}/${items.length} 个素材已采用` : "交付已完成", action: "查看并下载" };
+    return { ...base, key: "delivered", label: "已采用", detail: items.length > 0 ? `${adoptedItems}/${items.length} 个素材已采用，可查看和下载` : "已采用最终方案", action: "查看并下载" };
   }
   if (readyVariants > adoptedItems) {
     return { ...base, key: "review", label: "待验收", detail: `${readyVariants} 个变体可以比较`, action: "选择最终方案" };
@@ -88,9 +92,15 @@ export function creativeOrderStage(order: CreativeOrder | undefined): CreativeOr
   if (status === "awaiting_adoption") {
     return { ...base, key: "review", label: "待验收", detail: "已有可采用方案，等待选择", action: "选择最终方案" };
   }
-  if ((order?.workflow_failures?.length ?? 0) > 0 || status === "action_required" || status === "failed") {
-    const failureCount = order?.workflow_failures?.length ?? 0;
-    return { ...base, key: "attention", label: "需要处理", detail: failureCount > 0 ? `${failureCount} 个步骤失败` : "自动流程已停止，等待人工决定", action: "处理订单" };
+  if (actionableFailures.length > 0 || status === "failed" || blockedVariants > 0 || (status === "action_required" && variants.length === 0)) {
+    const failureCount = actionableFailures.length;
+    const detail = [
+      productionStoppedVariants > 0 ? `${productionStoppedVariants} 个变体生成未完成` : "",
+      blockedVariants - productionStoppedVariants > 0 ? `${blockedVariants - productionStoppedVariants} 个变体有系统提醒` : "",
+      readyVariants > 0 ? `${readyVariants} 个变体可验收` : "",
+      failureCount > 0 ? `${failureCount} 条系统提醒` : "",
+    ].filter(Boolean).join("，");
+    return { ...base, key: "attention", label: "待验收", detail: detail || "等待人工验收，系统提醒仅作为参考", action: "查看结果" };
   }
   if (variants.length > 0 || ["queued", "running", "partial"].includes(status)) {
     const completedSizes = variants.reduce((count, variant) => count + creativeVariantPreviewAssets(variant).length, 0);
@@ -126,6 +136,18 @@ export function creativeVariantPreviewAssets(variant: CreativeOrderVariant): Cre
     const asset = selected.get(size);
     return asset ? [asset] : [];
   });
+}
+
+export function creativeVariantDiagnosticAssets(variant: CreativeOrderVariant): CreativeOrderDiagnosticAsset[] {
+  const selected = new Map<string, CreativeOrderDiagnosticAsset[]>();
+  for (const asset of variant.diagnostic_assets ?? []) {
+    if (asset.revision !== variant.revision || !asset.url) continue;
+    if (!CREATIVE_DELIVERY_SIZES.includes(asset.size_key as (typeof CREATIVE_DELIVERY_SIZES)[number])) continue;
+    const bucket = selected.get(asset.size_key) ?? [];
+    bucket.push(asset);
+    selected.set(asset.size_key, bucket);
+  }
+  return CREATIVE_DELIVERY_SIZES.flatMap((size) => selected.get(size) ?? []);
 }
 
 export function creativeVariantArchiveEntries(
@@ -188,99 +210,162 @@ export function CreativeOrderDeliveryCandidates({
   source,
   attachments,
   adoptingVariantId,
-  retryingQCVariantId = "",
-  repairingPrimeVariantId = "",
   onAdopt,
-  onRetryQC,
-  onRepairPrime,
   onAssetSelect,
   onAssetInfo,
   disabled = false,
+  showDirectionDetails = true,
+  defaultOpen = true,
 }: {
   orderId: string;
   item: CreativeOrderItem;
   source: { label: string; url: string };
   attachments: Map<string, DeliveryAttachment>;
-	adoptingVariantId: string;
-	retryingQCVariantId?: string;
-	repairingPrimeVariantId?: string;
+  adoptingVariantId: string;
   onAdopt: (variantId: string, risk?: CreativeVariantAdoptionRisk) => void;
-	onRetryQC?: (variantId: string) => void;
-  onRepairPrime?: (variantId: string) => void;
   onAssetSelect: (assetId: string) => void;
   onAssetInfo?: (assetId: string) => void;
   disabled?: boolean;
+  showDirectionDetails?: boolean;
+  defaultOpen?: boolean;
 }) {
   const adoptedVariant = adoptedCreativeOrderVariant(item);
   const otherVariants = adoptedVariant ? item.variants.filter((variant) => variant.id !== adoptedVariant.id) : [];
+  const title = source.label || `素材 ${item.candidate_id.slice(0, 8)}`;
+  const direction = item.direction.trim();
+  const progress = creativeOrderItemProgress(item);
+  const [packageOpen, setPackageOpen] = useState(defaultOpen);
 
-  return <section className="border bg-background" data-testid={`creative-order-item-${item.id}`}>
-    <div className="flex flex-wrap items-start justify-between gap-3 border-b px-4 py-3">
-      <div className="min-w-0">
-        <p className="break-words text-sm font-semibold">{item.direction || `素材 ${item.candidate_id.slice(0, 8)}`}</p>
-        <p className="mt-1 text-xs text-muted-foreground">每个素材条目只能采用一个变体，重新采用会替换当前方案。</p>
+  return <details className="group border bg-background" open={packageOpen} onToggle={(event) => setPackageOpen(event.currentTarget.open)} data-testid={`creative-order-item-${item.id}`}>
+    <summary className="flex cursor-pointer list-none flex-wrap items-start justify-between gap-3 px-4 py-3 marker:content-none">
+      <div className="flex min-w-0 flex-1 items-start gap-2">
+        <ChevronDown className="mt-0.5 h-4 w-4 shrink-0 transition-transform group-open:rotate-180" />
+        <div className="min-w-0">
+          <p className="break-words text-sm font-semibold">{title}</p>
+          <p className="mt-1 text-xs text-muted-foreground">{progress.detail}</p>
+        </div>
       </div>
-      <Badge variant={adoptedVariant ? "default" : "secondary"}>{adoptedVariant ? `已采用 ${adoptedVariant.variant_key}` : "待选择"}</Badge>
-    </div>
+      <div className="flex flex-wrap items-center gap-2">
+        <Badge variant={progress.tone}>{progress.label}</Badge>
+        <Badge variant={adoptedVariant ? "default" : "secondary"}>{adoptedVariant ? `已采用 ${adoptedVariant.variant_key}` : "待选择"}</Badge>
+      </div>
+    </summary>
+    <div className="border-t">
+      {showDirectionDetails && direction && <details className="border-b px-4 py-3 text-xs text-muted-foreground">
+          <summary className="w-fit cursor-pointer select-none">生成指令详情</summary>
+          <pre className="mt-2 max-h-48 overflow-auto whitespace-pre-wrap break-words border bg-muted/20 p-3 font-sans text-xs leading-5">{direction}</pre>
+        </details>}
+      <CreativeOrderSourceAndPrompt source={source} prompt={direction} progress={progress} />
 
-    {adoptedVariant ? <>
-      <AdoptedVariantDelivery
-        orderId={orderId}
-        item={item}
-        variant={adoptedVariant}
-        source={source}
-        attachments={attachments}
-        onAssetSelect={onAssetSelect}
-        onAssetInfo={onAssetInfo}
-      />
-      {otherVariants.length > 0 && <details className="group border-t bg-muted/10">
-        <summary className="flex cursor-pointer list-none items-center gap-2 px-4 py-3 text-sm font-medium marker:content-none">
-          <ChevronDown className="h-4 w-4 transition-transform group-open:rotate-180" />
-          查看其他候选
-          <Badge variant="outline">{otherVariants.length}</Badge>
-        </summary>
-        <div className="grid gap-3 border-t p-4 lg:grid-cols-3">
-          {otherVariants.map((variant) => <VariantCandidate
+      {adoptedVariant ? <>
+        <AdoptedVariantDelivery
+          orderId={orderId}
+          item={item}
+          variant={adoptedVariant}
+          attachments={attachments}
+          onAssetSelect={onAssetSelect}
+          onAssetInfo={onAssetInfo}
+        />
+        {otherVariants.length > 0 && <details className="group/other border-t bg-muted/10">
+          <summary className="flex cursor-pointer list-none items-center gap-2 px-4 py-3 text-sm font-medium marker:content-none">
+            <ChevronDown className="h-4 w-4 transition-transform group-open/other:rotate-180" />
+            查看其他候选
+            <Badge variant="outline">{otherVariants.length}</Badge>
+          </summary>
+          <div className="grid gap-3 border-t p-4 lg:grid-cols-3">
+            {otherVariants.map((variant) => <VariantCandidate
+              key={variant.id}
+              variant={variant}
+              attachments={attachments}
+              adoptedVariantId={adoptedVariant.id}
+              adoptingVariantId={adoptingVariantId}
+              onAdopt={onAdopt}
+              onAssetSelect={onAssetSelect}
+              disabled={disabled}
+              subdued
+            />)}
+          </div>
+        </details>}
+      </> : item.variants.length > 0 ? <div className="grid gap-3 p-4 lg:grid-cols-3">
+          {item.variants.map((variant) => <VariantCandidate
             key={variant.id}
             variant={variant}
             attachments={attachments}
-            adoptedVariantId={adoptedVariant.id}
+            adoptedVariantId=""
             adoptingVariantId={adoptingVariantId}
-            retryingQCVariantId={retryingQCVariantId}
-            repairingPrimeVariantId={repairingPrimeVariantId}
             onAdopt={onAdopt}
-            onRetryQC={onRetryQC}
-            onRepairPrime={onRepairPrime}
             onAssetSelect={onAssetSelect}
             disabled={disabled}
-            subdued
           />)}
-        </div>
-      </details>}
-    </> : <div className="grid gap-3 p-4 lg:grid-cols-3">
-      {item.variants.map((variant) => <VariantCandidate
-        key={variant.id}
-        variant={variant}
-        attachments={attachments}
-        adoptedVariantId=""
-        adoptingVariantId={adoptingVariantId}
-        retryingQCVariantId={retryingQCVariantId}
-        repairingPrimeVariantId={repairingPrimeVariantId}
-        onAdopt={onAdopt}
-        onRetryQC={onRetryQC}
-        onRepairPrime={onRepairPrime}
-        onAssetSelect={onAssetSelect}
-        disabled={disabled}
-      />)}
-    </div>}
-  </section>;
+        </div> : <div className="grid gap-3 p-4 lg:grid-cols-3"><CreativeOrderVariantPlaceholder /></div>}
+    </div>
+  </details>;
+}
+
+type CreativeOrderItemProgress = {
+  label: string;
+  detail: string;
+  tone: "default" | "secondary" | "destructive" | "outline";
+  variants: number;
+  previewAssets: number;
+  expectedAssets: number;
+  runningVariants: number;
+  productionStoppedVariants: number;
+  blockedVariants: number;
+  readyVariants: number;
+};
+
+function creativeOrderItemProgress(item: CreativeOrderItem): CreativeOrderItemProgress {
+  const variants = item.variants;
+  const previewAssets = variants.reduce((count, variant) => count + creativeVariantPreviewAssets(variant).length, 0);
+  const expectedAssets = variants.length * CREATIVE_DELIVERY_SIZES.length;
+  const runningVariants = variants.filter(creativeVariantIsInProgress).length;
+  const productionStoppedVariants = variants.filter(creativeVariantHasProductionStop).length;
+  const blockedVariants = variants.filter(creativeVariantNeedsManualAction).length;
+  const readyVariants = variants.filter((variant) => creativeVariantAdoptionReadiness(variant).ready).length;
+  if (item.adopted_variant_id) return { label: "已采用", detail: "已选择最终方案，可查看交付包。", tone: "default", variants: variants.length, previewAssets, expectedAssets, runningVariants, productionStoppedVariants, blockedVariants, readyVariants };
+  if (readyVariants > 0) return { label: "可验收", detail: `${readyVariants}/${variants.length} 个变体可验收，先比较成图再采用。`, tone: "default", variants: variants.length, previewAssets, expectedAssets, runningVariants, productionStoppedVariants, blockedVariants, readyVariants };
+  if (productionStoppedVariants > 0) return { label: "生成未完成", detail: `${productionStoppedVariants} 个变体生成未完成，诊断图仅用于排查。`, tone: "secondary", variants: variants.length, previewAssets, expectedAssets, runningVariants, productionStoppedVariants, blockedVariants, readyVariants };
+  if (blockedVariants > 0) return { label: "待验收", detail: `${blockedVariants} 个变体有系统提醒，先查看现有结果再决定。`, tone: "secondary", variants: variants.length, previewAssets, expectedAssets, runningVariants, productionStoppedVariants, blockedVariants, readyVariants };
+  if (runningVariants > 0 || variants.length > 0) return { label: "生成中", detail: `${previewAssets}/${Math.max(expectedAssets, 1)} 张过程图已就绪，页面会自动刷新。`, tone: "outline", variants: variants.length, previewAssets, expectedAssets, runningVariants, productionStoppedVariants, blockedVariants, readyVariants };
+  return { label: "准备中", detail: "等待后台创建生成任务。", tone: "secondary", variants: 0, previewAssets: 0, expectedAssets: 0, runningVariants: 0, productionStoppedVariants: 0, blockedVariants: 0, readyVariants: 0 };
+}
+
+function CreativeOrderSourceAndPrompt({ source, prompt, progress }: { source: { label: string; url: string }; prompt: string; progress: CreativeOrderItemProgress }) {
+  return <div className="grid border-b bg-muted/10 lg:grid-cols-[minmax(240px,0.72fr)_minmax(0,1.28fr)]">
+    <figure className="min-w-0 border-b bg-background lg:border-b-0 lg:border-r">
+      <figcaption className="border-b px-3 py-2 text-xs font-medium">原图 · {source.label}</figcaption>
+      <div className="flex min-h-64 items-center justify-center p-3">
+        {source.url ? <img src={source.url} alt={`原图 ${source.label}`} width={1200} height={1200} loading="lazy" className="max-h-[360px] w-full object-contain" /> : <EmptyImage label="原图不可用" />}
+      </div>
+    </figure>
+    <div className="min-w-0 space-y-3 px-4 py-3">
+      <div className="flex flex-wrap gap-2 text-xs">
+        <Badge variant="outline">{progress.variants} 个变体</Badge>
+        <Badge variant="outline">{progress.expectedAssets > 0 ? `${progress.previewAssets}/${progress.expectedAssets} 张过程图` : "等待任务"}</Badge>
+        {progress.runningVariants > 0 && <Badge variant="outline">{progress.runningVariants} 个生成中</Badge>}
+        {progress.productionStoppedVariants > 0 && <Badge variant="secondary">{progress.productionStoppedVariants} 个生成未完成</Badge>}
+        {progress.blockedVariants - progress.productionStoppedVariants > 0 && <Badge variant="secondary">{progress.blockedVariants - progress.productionStoppedVariants} 条系统提醒</Badge>}
+        {progress.readyVariants > 0 && <Badge>{progress.readyVariants} 个可验收</Badge>}
+      </div>
+      <div>
+        <p className="text-xs font-medium text-muted-foreground">最终出图提示词</p>
+        <pre className="mt-2 max-h-52 overflow-auto whitespace-pre-wrap break-words border bg-background px-3 py-2 font-sans text-xs leading-5">{prompt || "本素材尚未记录最终出图提示词。"}</pre>
+      </div>
+    </div>
+  </div>;
+}
+
+function CreativeOrderVariantPlaceholder() {
+  return <div className="flex min-h-48 items-center justify-center border border-dashed bg-muted/10 px-6 text-center text-sm text-muted-foreground lg:col-span-3">
+    等待后台创建生成任务，完成后这里会出现过程图和验收入口。
+  </div>;
 }
 
 function AdoptedVariantDelivery({
   orderId,
   item,
   variant,
-  source,
   attachments,
   onAssetSelect,
   onAssetInfo,
@@ -288,7 +373,6 @@ function AdoptedVariantDelivery({
   orderId: string;
   item: CreativeOrderItem;
   variant: CreativeOrderVariant;
-  source: { label: string; url: string };
   attachments: Map<string, DeliveryAttachment>;
   onAssetSelect: (assetId: string) => void;
   onAssetInfo?: (assetId: string) => void;
@@ -315,20 +399,12 @@ function AdoptedVariantDelivery({
       <Button size="sm" variant="outline" disabled={archiveBusy || entries.length !== CREATIVE_DELIVERY_SIZES.length} onClick={() => void downloadArchive()}><Download className="h-4 w-4" />{archiveBusy ? "正在打包" : "下载交付包"}</Button>
     </div>
     {archiveError && <p role="alert" className="border-y border-destructive/20 bg-destructive/5 px-4 py-2 text-xs text-destructive">{archiveError}</p>}
-    <div className="grid border-t xl:grid-cols-[minmax(260px,0.8fr)_minmax(0,2.2fr)]">
-      <figure className="min-w-0 border-b bg-background xl:border-b-0 xl:border-r">
-        <figcaption className="border-b px-3 py-2 text-xs font-medium">原图 · {source.label}</figcaption>
-        <div className="flex min-h-72 items-center justify-center p-3">
-          {source.url ? <img src={source.url} alt={`原图 ${source.label}`} width={1200} height={1200} loading="lazy" className="max-h-[480px] w-full object-contain" /> : <EmptyImage label="原图不可用" />}
-        </div>
-      </figure>
-      <div className="grid min-w-0 md:grid-cols-3">
-        {CREATIVE_DELIVERY_SIZES.map((size, index) => {
-          const asset = delivered.find((candidate) => candidate.size_key === size);
-          const attachment = asset ? attachments.get(asset.attachment_id) : undefined;
-          return <DeliveryAssetPane key={size} asset={asset} attachment={attachment} size={size} onAssetSelect={onAssetSelect} onAssetInfo={onAssetInfo} divided={index > 0} />;
-        })}
-      </div>
+    <div className="grid min-w-0 border-t md:grid-cols-3">
+      {CREATIVE_DELIVERY_SIZES.map((size, index) => {
+        const asset = delivered.find((candidate) => candidate.size_key === size);
+        const attachment = asset ? attachments.get(asset.attachment_id) : undefined;
+        return <DeliveryAssetPane key={size} asset={asset} attachment={attachment} size={size} onAssetSelect={onAssetSelect} onAssetInfo={onAssetInfo} divided={index > 0} />;
+      })}
     </div>
   </div>;
 }
@@ -338,11 +414,7 @@ function VariantCandidate({
   attachments,
   adoptedVariantId,
   adoptingVariantId,
-  retryingQCVariantId,
-  repairingPrimeVariantId,
   onAdopt,
-  onRetryQC,
-  onRepairPrime,
   onAssetSelect,
   disabled = false,
   subdued = false,
@@ -350,80 +422,102 @@ function VariantCandidate({
   variant: CreativeOrderVariant;
   attachments: Map<string, DeliveryAttachment>;
   adoptedVariantId: string;
-	adoptingVariantId: string;
-	retryingQCVariantId: string;
-	repairingPrimeVariantId: string;
+  adoptingVariantId: string;
   onAdopt: (variantId: string, risk?: CreativeVariantAdoptionRisk) => void;
-	onRetryQC?: (variantId: string) => void;
-	onRepairPrime?: (variantId: string) => void;
   onAssetSelect: (assetId: string) => void;
   disabled?: boolean;
   subdued?: boolean;
 }) {
-  const [riskConfirmationOpen, setRiskConfirmationOpen] = useState(false);
-  const [riskReason, setRiskReason] = useState("");
   const readiness = creativeVariantAdoptionReadiness(variant);
   const riskAdoption = creativeVariantRiskAdoptionReadiness(variant);
   const qcDetails = creativeVariantQCDetails(variant);
   const descriptionId = useId();
   const previews = creativeVariantPreviewAssets(variant);
+  const diagnostics = creativeVariantDiagnosticAssets(variant);
   const cover = previews.find((asset) => asset.size_key === "1080x1080") ?? previews[0];
   const coverURL = cover ? creativeAttachmentBrowserURL(attachments.get(cover.attachment_id)) : "";
+  const coverDiagnostic = coverURL ? undefined : diagnostics.find((asset) => asset.size_key === "1080x1080") ?? diagnostics[0];
   const adopted = adoptedVariantId === variant.id;
   const busy = adoptingVariantId === variant.id;
-  const canRepairPrime = Boolean(onRepairPrime) && !disabled && creativeVariantCanRepairPrime(variant);
-  const canRetryQC = Boolean(onRetryQC) && !disabled && !canRepairPrime && creativeVariantCanRetryQC(variant);
-  const qcRecoveryExhausted = !canRepairPrime && !disabled && variant.status === "action_required" && variant.qc_recovery_used === true;
-  const qcRetryBusy = retryingQCVariantId === variant.id;
-  const primeRepairExhausted = !disabled && variant.status === "action_required" && variant.prime_repair_used === true;
-  const primeRepairBusy = repairingPrimeVariantId === variant.id;
-  const requiresRiskConfirmation = !readiness.ready && riskAdoption.allowed;
-  const adoptionDisabled = disabled || (!readiness.ready && !riskAdoption.allowed) || adopted || Boolean(adoptingVariantId);
+  const blocked = creativeVariantNeedsManualAction(variant);
+  const productionStopped = creativeVariantHasProductionStop(variant);
+  const backgroundRunning = creativeVariantHasBackgroundWorkInProgress(variant);
+  const requiresRiskAcknowledgement = riskAdoption.allowed;
+  const adoptionDisabled = disabled || !readiness.ready || adopted || Boolean(adoptingVariantId);
+  const statusTone = blocked
+    ? "text-amber-700 dark:text-amber-300"
+    : requiresRiskAcknowledgement
+      ? "text-amber-700 dark:text-amber-300"
+      : readiness.ready
+        ? "text-emerald-700 dark:text-emerald-400"
+        : "text-muted-foreground";
+  const adoptVariant = () => {
+    if (requiresRiskAcknowledgement) {
+      onAdopt(variant.id, { acknowledged: true, reason: "用户确认忽略系统提醒并采用" });
+      return;
+    }
+    onAdopt(variant.id);
+  };
   return <article className={cn("flex min-w-0 flex-col border bg-background", subdued && "opacity-75 transition-opacity hover:opacity-100")}>
     <div className="flex items-center justify-between gap-2 border-b px-3 py-2">
       <div className="flex items-center gap-2"><span className="text-sm font-semibold">{variant.variant_key || variant.id.slice(0, 8)}</span><Badge variant="outline">r{variant.revision}</Badge></div>
-      {readiness.ready ? <Badge variant="outline"><CheckCircle2 className="h-3 w-3" />QC 通过</Badge> : riskAdoption.allowed ? <Badge variant="destructive">QC 未通过</Badge> : <Badge variant="secondary">尚未完成</Badge>}
+      {adopted ? <Badge variant="default"><CheckCircle2 className="h-3 w-3" />已采用</Badge> : blocked ? <Badge variant="secondary">{productionStopped ? "生成未完成" : "有系统提醒"}</Badge> : requiresRiskAcknowledgement ? <Badge variant="secondary">有系统提醒</Badge> : readiness.ready ? <Badge variant="outline"><CheckCircle2 className="h-3 w-3" />待验收</Badge> : backgroundRunning ? <Badge variant="outline">处理中</Badge> : <Badge variant="secondary">尚未完成</Badge>}
     </div>
-    <button type="button" disabled={!cover || !coverURL} onClick={() => cover && onAssetSelect(cover.id)} className="group flex min-h-72 w-full items-center justify-center border-b bg-muted/10 p-3 disabled:cursor-default">
-      {coverURL ? <img src={coverURL} alt={`${variant.variant_key} 方形主预览`} width={720} height={720} loading="lazy" className="max-h-[420px] w-full object-contain transition-transform group-hover:scale-[1.01]" /> : <EmptyImage label="待成图" />}
+    <button type="button" disabled={(!cover || !coverURL) && !coverDiagnostic} onClick={() => { if (cover && coverURL) onAssetSelect(cover.id); else if (coverDiagnostic) openCreativeDiagnosticAsset(coverDiagnostic); }} className="group relative flex min-h-72 w-full items-center justify-center border-b bg-muted/10 p-3 disabled:cursor-default">
+      {coverURL ? <img src={coverURL} alt={`${variant.variant_key} 方形主预览`} width={720} height={720} loading="lazy" className="max-h-[420px] w-full object-contain transition-transform group-hover:scale-[1.01]" /> : coverDiagnostic ? <>
+        <img src={coverDiagnostic.url} alt={`${variant.variant_key} 诊断图 ${coverDiagnostic.label}`} width={720} height={720} loading="lazy" className="max-h-[420px] w-full object-contain opacity-90 transition-transform group-hover:scale-[1.01]" />
+        <span className="absolute left-3 top-3 rounded-full border border-amber-300 bg-amber-50 px-2 py-1 text-[11px] font-medium text-amber-900 shadow-sm dark:border-amber-800 dark:bg-amber-950 dark:text-amber-200">未登记诊断图</span>
+      </> : <EmptyImage label="待成图" />}
     </button>
     <div className="mt-auto space-y-2 p-3">
-      <div className="grid grid-cols-3 divide-x border text-center text-[11px] text-muted-foreground">{CREATIVE_DELIVERY_SIZES.map((size) => <button key={size} type="button" disabled={!previews.some((asset) => asset.size_key === size)} onClick={() => { const asset = previews.find((candidate) => candidate.size_key === size); if (asset) onAssetSelect(asset.id); }} className="px-2 py-2 disabled:opacity-50"><span className="block font-medium text-foreground">{CREATIVE_DELIVERY_SIZE_LABELS[size]}</span><span>{previews.some((asset) => asset.size_key === size) ? "可查看" : "待生成"}</span></button>)}</div>
-      <p id={descriptionId} className={cn("min-h-8 text-xs", readiness.ready ? "text-emerald-700 dark:text-emerald-400" : "text-muted-foreground")}>{readiness.status}</p>
-      <VariantQCDetails revision={variant.revision} details={qcDetails} />
-      {primeRepairExhausted && <p role="status" className="border border-amber-300 bg-amber-50 px-2 py-1.5 text-xs text-amber-900 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-200">Prime 包已修复一次，需人工处理</p>}
-      {canRepairPrime && <Button className="w-full" size="sm" variant="outline" disabled={primeRepairBusy || Boolean(repairingPrimeVariantId) || Boolean(retryingQCVariantId)} onClick={() => onRepairPrime?.(variant.id)}>
-        <RefreshCw className={cn("h-4 w-4", primeRepairBusy && "animate-spin")} />
-        {primeRepairBusy ? "正在修复 Prime 包" : "修复 Prime 包并重新质检"}
-      </Button>}
-      {qcRecoveryExhausted && <p role="status" className="border border-amber-300 bg-amber-50 px-2 py-1.5 text-xs text-amber-900 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-200">双路 QC 恢复不可用，需修复 Prime 包或人工处理</p>}
-      {canRetryQC && <Button className="w-full" size="sm" variant="outline" disabled={qcRetryBusy || Boolean(retryingQCVariantId)} onClick={() => onRetryQC?.(variant.id)}>
-        <RefreshCw className={cn("h-4 w-4", qcRetryBusy && "animate-spin")} />
-        {qcRetryBusy ? "正在重新执行双路质检" : "重新执行双路质检"}
-      </Button>}
-      <Button className="w-full" size="sm" variant={adopted ? "secondary" : requiresRiskConfirmation ? "destructive" : "default"} disabled={adoptionDisabled} aria-describedby={descriptionId} onClick={() => { if (requiresRiskConfirmation) setRiskConfirmationOpen(true); else onAdopt(variant.id); }}>
+      <div className="grid grid-cols-3 divide-x border text-center text-[11px] text-muted-foreground">{CREATIVE_DELIVERY_SIZES.map((size) => {
+        const asset = previews.find((candidate) => candidate.size_key === size);
+        const diagnostic = diagnostics.find((candidate) => candidate.size_key === size);
+        return <button key={size} type="button" disabled={!asset && !diagnostic} onClick={() => { if (asset) onAssetSelect(asset.id); else if (diagnostic) openCreativeDiagnosticAsset(diagnostic); }} className="px-2 py-2 disabled:opacity-50"><span className="block font-medium text-foreground">{CREATIVE_DELIVERY_SIZE_LABELS[size]}</span><span>{asset ? "可查看" : diagnostic ? "诊断图" : "待生成"}</span></button>;
+      })}</div>
+      {diagnostics.length > 0 && previews.length === 0 && <p className="text-xs text-amber-700 dark:text-amber-300">已保留 {diagnostics.length} 张未登记模型输出，仅用于判断停止原因，不参与采用或交付。</p>}
+      <p id={descriptionId} className={cn("min-h-8 text-xs", statusTone)}>{readiness.status}</p>
+      <VariantActionRequiredNotice variant={variant} disabled={disabled} />
+      <VariantQCDetails details={qcDetails} />
+      <Button className="w-full" size="sm" variant="outline" disabled={!cover || !coverURL} onClick={() => { if (cover && coverURL) onAssetSelect(cover.id); }}>
+        <Eye className="h-4 w-4" />
+        {cover && coverURL ? "查看并标注" : "暂无可标注成图"}
+      </Button>
+      <Button className={cn("w-full", requiresRiskAcknowledgement && !adopted && "border-amber-300 text-amber-800 hover:bg-amber-50 dark:border-amber-800 dark:text-amber-200 dark:hover:bg-amber-950/40")} size="sm" variant={adopted ? "secondary" : requiresRiskAcknowledgement ? "outline" : "default"} disabled={adoptionDisabled} aria-describedby={descriptionId} onClick={adoptVariant}>
         {adopted ? <CheckCircle2 className="h-4 w-4" /> : <Check className="h-4 w-4" />}
-        {disabled ? "订单已结束" : busy ? "正在采用" : adopted ? "当前采用" : requiresRiskConfirmation ? "确认风险后采用" : "采用此变体"}
+        {disabled ? "订单已结束" : busy ? "正在采用" : adopted ? "当前采用" : requiresRiskAcknowledgement ? "忽略提醒并采用" : readiness.ready ? "采用此变体" : "尚不可采用"}
       </Button>
     </div>
-    <AlertDialog open={riskConfirmationOpen} onOpenChange={setRiskConfirmationOpen}>
-      <AlertDialogContent>
-        <AlertDialogHeader>
-          <AlertDialogTitle>确认带问题采用 {variant.variant_key || variant.id.slice(0, 8)}？</AlertDialogTitle>
-          <AlertDialogDescription>当前版本的双路 QC 未通过。确认后会把现有 Prime 三尺寸作为最终交付，并保留本次风险确认、采用原因和 QC 快照。</AlertDialogDescription>
-        </AlertDialogHeader>
-        <VariantQCDetails revision={variant.revision} details={qcDetails} />
-        <label className="grid gap-2 text-sm font-medium">
-          带问题采用原因
-          <Textarea aria-label="带问题采用原因" value={riskReason} onChange={(event) => setRiskReason(event.target.value)} rows={3} placeholder="说明为什么仍决定采用，以及已知风险如何处理" />
-        </label>
-        <AlertDialogFooter>
-          <AlertDialogCancel>返回继续处理</AlertDialogCancel>
-          <AlertDialogAction disabled={!riskReason.trim() || busy} onClick={() => { onAdopt(variant.id, { acknowledged: true, reason: riskReason.trim() }); setRiskConfirmationOpen(false); }}>确认风险并采用</AlertDialogAction>
-        </AlertDialogFooter>
-      </AlertDialogContent>
-    </AlertDialog>
   </article>;
+}
+
+function VariantActionRequiredNotice({ variant, disabled = false }: { variant: CreativeOrderVariant; disabled?: boolean }) {
+  if (!creativeVariantNeedsManualAction(variant)) return null;
+  if (creativeVariantHasQCFailure(variant)) return null;
+  const blocker = variant.action_required;
+  const detail = blocker?.detail ? businessActionRequiredDetail(blocker.workflow, blocker.detail) : "该变体需要人工确认，但任务未返回可读原因。";
+  return <div role="status" className="space-y-1 border border-amber-300 bg-amber-50 px-2 py-2 text-xs text-amber-900 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-200" data-testid="creative-variant-action-required">
+    <p className="flex items-center gap-1.5 font-medium"><AlertTriangle className="h-3.5 w-3.5" />{creativeVariantBlockerTitle(blocker?.workflow, creativeVariantHasProductionStop(variant))}</p>
+    <p className="break-words">{detail}</p>
+    <p className="text-amber-800/80 dark:text-amber-200/80">{disabled ? "订单已结束，过程记录保留。" : "后台已记录该步骤未补齐；不用手动重试，可查看其他候选、标注调整或重新发起。"}</p>
+  </div>;
+}
+
+function creativeVariantBlockerTitle(workflow: string | undefined, productionStopped = false): string {
+  if (productionStopped) return "成图生成未完成";
+  const label = creativeVariantWorkflowLabel(workflow || "");
+  return label ? `${label}提醒` : "系统提醒";
+}
+
+function creativeVariantWorkflowLabel(workflow: string): string {
+  return ({
+    creative_plan: "创意方案",
+    creative_production: "成图生成",
+    creative_prime: "品牌贴片",
+    creative_qc_technical: "技术质检",
+    creative_qc_visual: "视觉质检",
+    creative_direct_edit: "图片调整",
+  } as Record<string, string>)[workflow] || "";
 }
 
 export type CreativeVariantQCDetail = {
@@ -439,7 +533,7 @@ export function creativeVariantQCDetails(variant: CreativeOrderVariant): Creativ
   return (["technical", "visual"] as const).flatMap((lane) => {
     const report = reports.get(lane);
     if (!report) return [];
-    const blockingFailures = qcFindingMessages(report.findings?.blocking_failures);
+    const blockingFailures = creativeVariantQCBlockingFailures(variant, lane, report);
     return [{
       lane,
       label: lane === "technical" ? "技术质检" : "视觉质检",
@@ -450,7 +544,7 @@ export function creativeVariantQCDetails(variant: CreativeOrderVariant): Creativ
   });
 }
 
-function VariantQCDetails({ revision, details }: { revision: number; details: CreativeVariantQCDetail[] }) {
+function VariantQCDetails({ details }: { details: CreativeVariantQCDetail[] }) {
   const visible = details.filter((detail) =>
     detail.status === "failed" || detail.blockingFailures.length > 0 || detail.qualityWarnings.length > 0,
   );
@@ -458,15 +552,15 @@ function VariantQCDetails({ revision, details }: { revision: number; details: Cr
   const hasFailure = visible.some((detail) => detail.status === "failed");
 
   return <div
-    className={cn("space-y-3 border-l-2 pl-3 text-xs", hasFailure ? "border-destructive" : "border-border")}
-    role={hasFailure ? "alert" : "status"}
+    className={cn("space-y-3 border-l-2 pl-3 text-xs", hasFailure ? "border-amber-300 bg-amber-50/50 py-2 pr-2 dark:border-amber-800 dark:bg-amber-950/20" : "border-border")}
+    role="status"
     data-testid="creative-variant-qc-details"
   >
     {visible.map((detail) => <div key={detail.lane} className="space-y-1.5">
-      <p className={cn("font-medium", detail.status === "failed" && "text-destructive")}>
-        {detail.status === "failed" ? `${detail.label}未通过 · r${revision}` : `${detail.label}提醒 · r${revision}`}
+      <p className={cn("font-medium", detail.status === "failed" && "text-amber-800 dark:text-amber-200")}>
+        {detail.status === "failed" ? `${detail.label}未通过` : `${detail.label}提醒`}
       </p>
-      {detail.blockingFailures.length > 0 ? <QCMessageList label="阻断原因" messages={detail.blockingFailures} /> : detail.status === "failed" ? <p className="text-muted-foreground">报告未提供具体失败原因</p> : null}
+      {detail.blockingFailures.length > 0 ? <QCMessageList label="阻断原因" messages={detail.blockingFailures} /> : null}
       {detail.qualityWarnings.length > 0 && <QCMessageList label="质量提醒" messages={detail.qualityWarnings} />}
     </div>)}
   </div>;
@@ -515,34 +609,166 @@ function EmptyImage({ label }: { label: string }) {
   return <span className="flex min-h-40 w-full flex-col items-center justify-center gap-2 text-xs text-muted-foreground"><ImageIcon className="h-5 w-5" />{label}</span>;
 }
 
+function openCreativeDiagnosticAsset(asset: CreativeOrderDiagnosticAsset) {
+  window.open(asset.url, "_blank", "noopener,noreferrer");
+}
+
 export function creativeVariantAdoptionReadiness(variant: CreativeOrderVariant): { ready: boolean; status: string } {
   const delivered = creativeVariantDeliveryAssets(variant);
-  const primedSizes = new Set(variant.assets
-    .filter((asset) => asset.revision === variant.revision && asset.stage === "primed" && asset.status === "completed" && asset.attachment_id)
-    .map((asset) => asset.size_key)
-    .filter((size) => CREATIVE_DELIVERY_SIZES.includes(size as (typeof CREATIVE_DELIVERY_SIZES)[number])));
+  const primedSizes = currentCreativeVariantSizeSet(variant, "primed");
   const reportByLane = new Map(creativeVariantQCDetails(variant).map((detail) => [detail.lane, detail.status]));
   const technical = reportByLane.get("technical") ?? "pending";
   const visual = reportByLane.get("visual") ?? "pending";
-  if (technical === "failed" || visual === "failed") return { ready: false, status: `QC 未通过：technical ${qcStatusLabel(technical)}，visual ${qcStatusLabel(visual)}` };
-  if (!qcStatusAllowsAdoption(technical) || !qcStatusAllowsAdoption(visual)) return { ready: false, status: `等待双路 QC：technical ${qcStatusLabel(technical)}，visual ${qcStatusLabel(visual)}` };
-  if (primedSizes.size !== CREATIVE_DELIVERY_SIZES.length) return { ready: false, status: `等待 Prime：已完成 ${primedSizes.size}/${CREATIVE_DELIVERY_SIZES.length} 个尺寸` };
+  const failedQC = creativeVariantFailedQCLabels(variant);
+  if (failedQC.length > 0) {
+    const risk = creativeVariantRiskAdoptionReadiness(variant);
+    if (risk.allowed) return { ready: true, status: `系统提醒：${failedQC.join("、")}未通过，仍可查看、标注或忽略提醒采用` };
+    return { ready: false, status: risk.status };
+  }
+  if (delivered.length === CREATIVE_DELIVERY_SIZES.length && primedSizes.size === CREATIVE_DELIVERY_SIZES.length && qcStatusAllowsAdoption(technical) && qcStatusAllowsAdoption(visual)) {
+    return { ready: true, status: "三尺寸、贴片与质检均已完成，可以采用" };
+  }
+  const productionStopDetail = creativeVariantProductionStopDetail(variant);
+  if (productionStopDetail) return { ready: false, status: `生成未完成：${productionStopDetail}` };
+  if (creativeVariantHasBackgroundWorkInProgress(variant)) {
+    if (primedSizes.size !== CREATIVE_DELIVERY_SIZES.length) return { ready: false, status: `成图已完成，正在贴片：已完成 ${primedSizes.size}/${CREATIVE_DELIVERY_SIZES.length} 个尺寸` };
+    if (!qcStatusAllowsAdoption(technical) || !qcStatusAllowsAdoption(visual)) return { ready: false, status: `贴片已完成，等待质检：${creativeVariantPendingQCLabels(technical, visual).join("、")}` };
+  }
+  if (!qcStatusAllowsAdoption(technical) || !qcStatusAllowsAdoption(visual)) return { ready: false, status: `等待质检：${creativeVariantPendingQCLabels(technical, visual).join("、")}` };
+  if (primedSizes.size !== CREATIVE_DELIVERY_SIZES.length) return { ready: false, status: `等待贴片：已完成 ${primedSizes.size}/${CREATIVE_DELIVERY_SIZES.length} 个尺寸` };
   if (delivered.length !== CREATIVE_DELIVERY_SIZES.length) return { ready: false, status: `等待正式交付：已完成 ${delivered.length}/${CREATIVE_DELIVERY_SIZES.length} 个尺寸` };
-  if (variant.status !== "completed") return { ready: false, status: `等待变体完成：当前状态 ${variant.status}` };
-  return { ready: true, status: "三尺寸、Prime 与双路 QC 均已完成，可以采用" };
+  if (variant.action_required?.detail) return { ready: false, status: `系统提醒：${variant.action_required.detail}` };
+  return { ready: false, status: `等待变体完成：当前状态 ${variant.status}` };
+}
+
+export function creativeVariantIsInProgress(variant: CreativeOrderVariant): boolean {
+  return variant.status === "queued" || variant.status === "running" || variant.status === "partial" || creativeVariantHasBackgroundWorkInProgress(variant);
+}
+
+export function creativeVariantNeedsManualAction(variant: CreativeOrderVariant): boolean {
+  if (creativeVariantHasCompletePassingDelivery(variant)) return false;
+  if (creativeVariantHasQCFailure(variant)) return !creativeVariantRiskAdoptionReadiness(variant).allowed;
+  if (creativeVariantHasBackgroundWorkInProgress(variant)) return false;
+  return variant.status === "action_required" || variant.status === "failed" || Boolean(variant.action_required);
+}
+
+function creativeVariantHasProductionStop(variant: CreativeOrderVariant): boolean {
+  return Boolean(creativeVariantProductionStopDetail(variant));
+}
+
+function creativeVariantProductionStopDetail(variant: CreativeOrderVariant): string {
+  const blocker = variant.action_required;
+  if (!blocker || blocker.workflow !== "creative_production") return "";
+  if (creativeVariantHasProductionHandoff(variant)) return "";
+  return businessActionRequiredDetail(blocker.workflow, blocker.detail);
+}
+
+function creativeOrderWorkflowFailureIsQC(workflow: string): boolean {
+  return workflow === "creative_qc" || workflow === "creative_qc_technical" || workflow === "creative_qc_visual";
+}
+
+function creativeVariantHasBackgroundWorkInProgress(variant: CreativeOrderVariant): boolean {
+  if (creativeVariantHasQCFailure(variant)) return false;
+  if (creativeVariantHasCompletePassingDelivery(variant)) return false;
+  if (!creativeVariantHasProductionHandoff(variant) && !creativeVariantHasPrimeHandoff(variant) && !creativeVariantHasPendingQCFinalize(variant)) return false;
+  const deliveredSizes = new Set(creativeVariantDeliveryAssets(variant).map((asset) => asset.size_key));
+  if (deliveredSizes.size === CREATIVE_DELIVERY_SIZES.length) return false;
+  return true;
+}
+
+function creativeVariantHasCompletePassingDelivery(variant: CreativeOrderVariant): boolean {
+  const delivered = creativeVariantDeliveryAssets(variant);
+  const primedSizes = currentCreativeVariantSizeSet(variant, "primed");
+  const reportByLane = new Map(creativeVariantQCDetails(variant).map((detail) => [detail.lane, detail.status]));
+  const technical = reportByLane.get("technical") ?? "pending";
+  const visual = reportByLane.get("visual") ?? "pending";
+  return delivered.length === CREATIVE_DELIVERY_SIZES.length
+    && primedSizes.size === CREATIVE_DELIVERY_SIZES.length
+    && qcStatusAllowsAdoption(technical)
+    && qcStatusAllowsAdoption(visual);
+}
+
+function creativeVariantHasProductionHandoff(variant: CreativeOrderVariant): boolean {
+  const blocker = variant.action_required;
+  if (!blocker || blocker.workflow !== "creative_production") return false;
+  const detail = blocker.detail.toLowerCase();
+  const productionDelegatedPrime = detail.includes("prime")
+    && (
+      detail.includes("已委派")
+      || detail.includes("delegat")
+      || detail.includes("prime 状态")
+      || detail.includes("prime status")
+      || detail.includes("queued")
+      || detail.includes("dispatched")
+      || detail.includes("running")
+    );
+  return productionDelegatedPrime && !detail.includes("未注册") && !detail.includes("未完成") && !detail.includes("failed") && !detail.includes("action_required");
+}
+
+function creativeVariantHasPrimeHandoff(variant: CreativeOrderVariant): boolean {
+  const blocker = variant.action_required;
+  if (!blocker || blocker.workflow !== "creative_prime") return false;
+  const detail = blocker.detail.toLowerCase();
+  if (detail.includes("未注册") || detail.includes("失败") || detail.includes("failed") || detail.includes("error")) return false;
+  const primedSizes = currentCreativeVariantSizeSet(variant, "primed");
+  const detailSaysPrimeCompleted = detail.includes("prime") && (
+    detail.includes("已完成")
+    || detail.includes("合成")
+    || detail.includes("登记")
+    || detail.includes("completed")
+    || detail.includes("registered")
+  );
+  return detailSaysPrimeCompleted || primedSizes.size === CREATIVE_DELIVERY_SIZES.length;
+}
+
+function creativeVariantHasPendingQCFinalize(variant: CreativeOrderVariant): boolean {
+  const blocker = variant.action_required;
+  if (!blocker || !creativeOrderWorkflowFailureIsQC(blocker.workflow)) return false;
+  const detail = blocker.detail.toLowerCase();
+  if (detail.includes("质检未通过") || detail.includes("blocking") || detail.includes("failed")) return false;
+  return detail.includes("pending")
+    || detail.includes("等待")
+    || detail.includes("尚未完成")
+    || detail.includes("未完成")
+    || detail.includes("not complete")
+    || detail.includes("not completed");
+}
+
+function creativeVariantHasQCFailure(variant: CreativeOrderVariant): boolean {
+  return creativeVariantFailedQCLabels(variant).length > 0;
+}
+
+function creativeVariantFailedQCLabels(variant: CreativeOrderVariant): string[] {
+  return creativeVariantQCDetails(variant)
+    .filter((detail) => detail.status === "failed")
+    .map((detail) => detail.label);
+}
+
+function creativeVariantPendingQCLabels(technical: string, visual: string): string[] {
+  const labels: string[] = [];
+  if (!qcStatusAllowsAdoption(technical)) labels.push(`技术质检${qcStatusLabel(technical)}`);
+  if (!qcStatusAllowsAdoption(visual)) labels.push(`视觉质检${qcStatusLabel(visual)}`);
+  return labels.length > 0 ? labels : ["质检结果同步中"];
+}
+
+function currentCreativeVariantSizeSet(variant: CreativeOrderVariant, stage: string): Set<string> {
+  return new Set(variant.assets
+    .filter((asset) => asset.revision === variant.revision && asset.stage === stage && asset.status === "completed" && asset.attachment_id)
+    .map((asset) => asset.size_key)
+    .filter((size) => CREATIVE_DELIVERY_SIZES.includes(size as (typeof CREATIVE_DELIVERY_SIZES)[number])));
 }
 
 export function creativeVariantRiskAdoptionReadiness(variant: CreativeOrderVariant): { allowed: boolean; status: string } {
   const failed = creativeVariantQCDetails(variant).filter((detail) => detail.status === "failed");
-  if (failed.length === 0 || variant.status !== "action_required") return { allowed: false, status: "当前版本没有可确认采用的 QC 失败" };
+  if (failed.length === 0) return { allowed: false, status: "当前版本没有需要忽略的系统提醒" };
   const primedSizes = new Set(variant.assets
     .filter((asset) => asset.revision === variant.revision && asset.stage === "primed" && asset.status === "completed" && asset.attachment_id)
     .map((asset) => asset.size_key)
     .filter((size) => CREATIVE_DELIVERY_SIZES.includes(size as (typeof CREATIVE_DELIVERY_SIZES)[number])));
   if (primedSizes.size !== CREATIVE_DELIVERY_SIZES.length) {
-    return { allowed: false, status: `QC 未通过，且 Prime 仅完成 ${primedSizes.size}/${CREATIVE_DELIVERY_SIZES.length} 个尺寸` };
+    return { allowed: false, status: `系统提醒：贴片仅完成 ${primedSizes.size}/${CREATIVE_DELIVERY_SIZES.length} 个尺寸，暂不可采用` };
   }
-  return { allowed: true, status: failed.map((detail) => `${detail.label}${qcStatusLabel(detail.status)}`).join("，") };
+  return { allowed: true, status: `系统提醒：${failed.map((detail) => detail.label).join("、")}未通过` };
 }
 
 function qcStatusAllowsAdoption(status: string): boolean {
@@ -560,6 +786,7 @@ export function creativeVariantCanRetryQC(variant: CreativeOrderVariant): boolea
 }
 
 export function creativeVariantCanRepairPrime(variant: CreativeOrderVariant): boolean {
+  if (creativeVariantHasBackgroundWorkInProgress(variant)) return false;
   if (variant.prime_repair_available !== true || variant.prime_repair_used === true || variant.status !== "action_required") return false;
   const generatedSizes = new Set(variant.assets
     .filter((asset) => asset.revision === variant.revision && asset.stage === "generated" && asset.status === "completed")
@@ -584,9 +811,30 @@ function compareQCReports(left: CreativeOrderQCReport, right: CreativeOrderQCRep
     || left.id.localeCompare(right.id);
 }
 
+function creativeVariantQCBlockingFailures(variant: CreativeOrderVariant, lane: "technical" | "visual", report: CreativeOrderQCReport): string[] {
+  const blockingFailures = qcFindingMessages(report.findings?.blocking_failures);
+  if (blockingFailures.length > 0 || report.status !== "failed") return blockingFailures;
+
+  const findingFields = ["failures", "failure", "errors", "error", "issues", "issue", "reason", "message", "summary", "detail", "description"];
+  const fromFindings = uniqueMessages(findingFields.flatMap((key) => qcFindingMessages(report.findings?.[key])))
+    .filter((message) => !isPendingQCSyncMessage(message));
+  if (fromFindings.length > 0) return fromFindings;
+
+  const blocker = variant.action_required;
+  if (blocker && (blocker.workflow === "creative_qc" || blocker.workflow === `creative_qc_${lane}`)) {
+    const blockerDetail = businessQCMessage(blocker.detail);
+    if (blockerDetail && !isPendingQCSyncMessage(blockerDetail)) return [blockerDetail];
+  }
+
+  return [lane === "technical"
+    ? "技术质检没有同步具体失败明细；请人工复核文件完整性、贴片、二维码和渠道要求。"
+    : "视觉质检没有同步具体失败明细；请人工复核文字可读性、遮挡、数值一致性和整体画面质量。"];
+}
+
 function qcFindingMessages(value: unknown): string[] {
-  if (!Array.isArray(value)) return [];
-  return [...new Set(value.map(qcFindingMessage).filter((message): message is string => Boolean(message)))];
+  if (value === undefined || value === null) return [];
+  const values = Array.isArray(value) ? value : [value];
+  return uniqueMessages(values.map(qcFindingMessage).map(businessQCMessage).filter((message): message is string => Boolean(message)));
 }
 
 function qcFindingMessage(value: unknown): string {
@@ -608,6 +856,40 @@ function firstString(value: Record<string, unknown>, keys: string[]): string {
     if (typeof candidate === "string" && candidate.trim()) return candidate.trim();
   }
   return "";
+}
+
+function uniqueMessages(messages: string[]): string[] {
+  return [...new Set(messages.map((message) => message.trim()).filter(Boolean))];
+}
+
+function businessQCMessage(message: string): string {
+  const text = message.trim();
+  if (!text) return "";
+  const mappedCode = businessQCCodeMessage(text);
+  if (mappedCode) return mappedCode;
+  if (/qc-finalize|technical lane|visual lane/i.test(text) && /pending|尚未完成|未完成|not complete|not completed/i.test(text) && !/failed|失败|质检未通过/i.test(text)) return "质检仍在同步中，等待另一条质检完成";
+  if (/qc-finalize|technical lane|visual lane|action_required|failed/i.test(text)) return "质检未通过，需要人工确认当前成图是否可用";
+  return text;
+}
+
+function businessQCCodeMessage(text: string): string {
+  const normalized = text.toLowerCase();
+  if (normalized.includes("qr_independent_redecode_failed")) return "二维码无法独立识别，可能影响渠道验收。";
+  if (normalized.includes("attachment_download_primed_asset_failed")) return "贴片后的成图文件无法读取或下载，系统恢复后仍需人工确认可用性。";
+  if (normalized.includes("manifest_layout_contract_missing")) return "成图缺少布局清单，无法确认三尺寸交付是否完整。";
+  if (normalized.includes("visual_quality_failure")) return "视觉质检判断画面质量未达标，需要人工复核。";
+  if (normalized.includes("corner_overlap")) return "四角品牌、商店或二维码区域疑似被画面内容遮挡。";
+  if (normalized.includes("delegation_contract_missing_issue_id")) return "质检任务缺少订单关联信息，系统恢复后仍未同步完整结果。";
+  return "";
+}
+
+function isPendingQCSyncMessage(message: string): boolean {
+  return message === "质检仍在同步中，等待另一条质检完成";
+}
+
+function businessActionRequiredDetail(workflow: string | undefined, detail: string): string {
+  if (workflow && creativeOrderWorkflowFailureIsQC(workflow)) return businessQCMessage(detail);
+  return detail;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

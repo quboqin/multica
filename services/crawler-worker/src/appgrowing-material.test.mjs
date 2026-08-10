@@ -22,6 +22,7 @@ import {
   connectorAuthVerificationError,
   extractAppGrowingMaterials,
   isBrowserPageCrashError,
+  isAppGrowingImageMaterial,
   selectAppGrowingMaterials,
   shouldBlockAppGrowingCrawlResource,
   shouldUseAppGrowingBrowserFallback,
@@ -64,6 +65,12 @@ test("filters previously seen assets before filling the requested material limit
     "https://cdn.example.com/new.jpg",
     "https://cdn.example.com/volume.jpg",
   ]);
+});
+
+test("keeps only image assets in the AppGrowing image-collection path", () => {
+  assert.equal(isAppGrowingImageMaterial({ asset_type: "image" }), true);
+  assert.equal(isAppGrowingImageMaterial({ asset_type: "video" }), false);
+  assert.equal(isAppGrowingImageMaterial({ asset_type: "" }), false);
 });
 
 test("reports the actual selected material mix instead of the configured target", () => {

@@ -61,6 +61,123 @@ class PrimeV2CompositionTest(unittest.TestCase):
             self.assertEqual(image.getpixel((50, 30)), (210, 40, 40))
             self.assertEqual(image.getpixel((50, 60)), (0, 120, 70))
 
+    def test_none_backdrop_does_not_add_logo_sticker_block(self) -> None:
+        logo = self.root / "logo-backdrop.png"
+        output = self.root / "image-backdrop.png"
+        Image.new("RGBA", (200, 100), (0, 120, 70, 255)).save(logo)
+        config = composition(
+            "none",
+            [{
+                "id": "logo",
+                "label": "Logo",
+                "kind": "image",
+                "enabled": True,
+                "source_role": "prime_logo",
+                "backdrop_rule": "none",
+            }],
+            {"1080x1080": {"components": {"logo": {"destination_rect": [20, 20, 120, 120]}}}},
+        )
+
+        result = compose_v2(self.body, output, config, {"prime_logo": logo}, "")
+
+        component = result["components"][0]
+        self.assertEqual(component["rendered_rect"], [20, 45, 120, 95])
+        self.assertNotIn("fixed_backdrop", component)
+        with Image.open(output) as image:
+            self.assertEqual(image.getpixel((50, 30)), (210, 40, 40))
+            self.assertEqual(image.getpixel((50, 60)), (0, 120, 70))
+
+    def test_quiet_backdrop_quiets_declared_slot_without_moving_component(self) -> None:
+        strip = self.root / "quiet-strip.png"
+        output = self.root / "quiet-backdrop.png"
+        Image.new("RGBA", (200, 100), (0, 120, 70, 255)).save(strip)
+        config = composition(
+            "none",
+            [{
+                "id": "store",
+                "label": "Store badges",
+                "kind": "image",
+                "enabled": True,
+                "source_role": "prime_store",
+                "backdrop_rule": "quiet",
+            }],
+            {"1080x1080": {"components": {"store": {"destination_rect": [20, 20, 120, 120]}}}},
+        )
+
+        result = compose_v2(self.body, output, config, {"prime_store": strip}, "")
+
+        component = result["components"][0]
+        self.assertEqual(component["fixed_backdrop"]["rect"], [20, 20, 120, 120])
+        self.assertEqual(component["fixed_backdrop"]["mode"], "fixed_quiet_backdrop")
+        with Image.open(output) as image:
+            self.assertNotEqual(image.getpixel((50, 30)), (210, 40, 40))
+
+    def test_image_component_edge_background_becomes_transparent(self) -> None:
+        strip = self.root / "strip.png"
+        output = self.root / "image-alpha-key.png"
+        source = Image.new("RGBA", (200, 80), (245, 247, 250, 255))
+        draw = ImageDraw.Draw(source)
+        draw.rectangle((58, 20, 142, 60), fill=(0, 120, 70, 255))
+        source.save(strip)
+        config = composition(
+            "none",
+            [{"id": "strip", "label": "Prime strip", "kind": "image", "enabled": True, "source_role": "prime_strip"}],
+            {"1080x1080": {"components": {"strip": {"destination_rect": [20, 20, 220, 100]}}}},
+        )
+
+        result = compose_v2(self.body, output, config, {"prime_strip": strip}, "")
+
+        component = result["components"][0]
+        self.assertEqual(component["rendered_rect"], [20, 20, 220, 100])
+        self.assertEqual(component["alpha_key"]["mode"], "edge_background_to_alpha")
+        with Image.open(output) as image:
+            self.assertEqual(image.getpixel((30, 30)), (210, 40, 40))
+            self.assertEqual(image.getpixel((100, 60)), (0, 120, 70))
+
+    def test_existing_transparent_logo_is_not_alpha_keyed_again(self) -> None:
+        logo = self.root / "transparent-logo.png"
+        output = self.root / "transparent-logo-output.png"
+        source = Image.new("RGBA", (120, 60), (0, 0, 0, 0))
+        draw = ImageDraw.Draw(source)
+        draw.rounded_rectangle((0, 0, 44, 44), radius=8, fill=(0, 145, 70, 255))
+        draw.text((52, 10), "AdaKami", fill=(0, 145, 70, 255))
+        source.save(logo)
+        config = composition(
+            "none",
+            [{"id": "logo", "label": "Logo", "kind": "image", "enabled": True, "source_role": "prime_logo"}],
+            {"1080x1080": {"components": {"logo": {"destination_rect": [20, 20, 220, 100]}}}},
+        )
+
+        result = compose_v2(self.body, output, config, {"prime_logo": logo}, "")
+
+        component = result["components"][0]
+        self.assertNotIn("alpha_key", component)
+        with Image.open(output) as image:
+            self.assertEqual(image.getpixel((40, 40)), (0, 145, 70))
+
+    def test_prime_compose_warns_but_overlays_busy_content_under_fixed_slot(self) -> None:
+        busy_body = self.root / "busy-body.png"
+        logo = self.root / "logo-busy.png"
+        output = self.root / "busy-output.png"
+        body = Image.new("RGBA", (1080, 1080), (238, 248, 240, 255))
+        draw = ImageDraw.Draw(body)
+        draw.rounded_rectangle((32, 30, 300, 92), radius=8, fill=(0, 95, 42, 255))
+        draw.text((48, 48), "BUSY CTA", fill=(255, 255, 255, 255))
+        body.save(busy_body)
+        Image.new("RGBA", (200, 60), (0, 120, 70, 255)).save(logo)
+        config = composition(
+            "none",
+            [{"id": "logo", "label": "Logo", "kind": "image", "enabled": True, "source_role": "prime_logo", "backdrop_rule": "none"}],
+            {"1080x1080": {"components": {"logo": {"destination_rect": [20, 20, 320, 100]}}}},
+        )
+
+        result = compose_v2(busy_body, output, config, {"prime_logo": logo}, "")
+
+        self.assertTrue(result["passed"])
+        self.assertEqual(result["components"][0]["body_clearance"]["status"], "warning")
+        with Image.open(output) as image:
+            self.assertEqual(image.getpixel((60, 60)), (0, 120, 70))
+
     def test_text_component_renders_content_with_default_style(self) -> None:
         output = self.root / "text.png"
         config = composition(

@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
@@ -195,7 +196,72 @@ func (h *Handler) ListCreativeMaterialLibrary(w http.ResponseWriter, r *http.Req
 		}
 		filterRun = true
 	}
+	limit := 500
+	if rawLimit := strings.TrimSpace(r.URL.Query().Get("limit")); rawLimit != "" {
+		parsed, err := strconv.Atoi(rawLimit)
+		if err != nil || parsed < 1 {
+			writeError(w, http.StatusBadRequest, "limit must be a positive integer")
+			return
+		}
+		limit = min(parsed, 100)
+	}
+	offset := 0
+	if rawOffset := strings.TrimSpace(r.URL.Query().Get("offset")); rawOffset != "" {
+		parsed, err := strconv.Atoi(rawOffset)
+		if err != nil || parsed < 0 {
+			writeError(w, http.StatusBadRequest, "offset must be a non-negative integer")
+			return
+		}
+		offset = parsed
+	}
+	query := strings.TrimSpace(r.URL.Query().Get("query"))
+	competitor := strings.TrimSpace(r.URL.Query().Get("competitor"))
+	area := strings.TrimSpace(r.URL.Query().Get("area"))
+	language := strings.TrimSpace(r.URL.Query().Get("language"))
+	media := strings.TrimSpace(r.URL.Query().Get("media"))
+	assetType := strings.TrimSpace(r.URL.Query().Get("asset_type"))
+	if assetType != "" && assetType != "image" && assetType != "video" && assetType != "unknown" {
+		writeError(w, http.StatusBadRequest, "asset_type must be image, video, or unknown")
+		return
+	}
+	sort := strings.TrimSpace(r.URL.Query().Get("sort"))
+	if sort == "" {
+		sort = "recent"
+	}
+	if sort != "recent" && sort != "impressions" && sort != "duration" {
+		writeError(w, http.StatusBadRequest, "sort must be recent, impressions, or duration")
+		return
+	}
+	view := strings.TrimSpace(r.URL.Query().Get("view"))
+	if view == "" {
+		view = "all"
+	}
+	if view != "available" && view != "analyze" && view != "generated" && view != "rejected" && view != "selected" && view != "all" {
+		writeError(w, http.StatusBadRequest, "view must be available, analyze, generated, rejected, selected, or all")
+		return
+	}
 	rows, err := h.DB.Query(r.Context(), `
+WITH default_market_pack AS (
+  SELECT r.id::text AS market_pack_id, revision.version AS market_pack_version, revision.config->>'copy_library_id' AS copy_library_id
+  FROM creative_resource r
+  JOIN creative_resource_revision revision ON revision.resource_id = r.id AND revision.version = r.published_version
+  WHERE r.workspace_id = $1
+    AND r.kind = 'market_pack'
+    AND r.status <> 'archived'
+    AND r.published_version IS NOT NULL
+    AND COALESCE(revision.config->>'pre_adaptation_default', 'false') = 'true'
+),
+default_pre_adaptation_resource AS (
+  SELECT market.market_pack_id, market.market_pack_version, library.id::text AS copy_library_id, library_revision.version AS copy_library_version
+  FROM default_market_pack market
+  JOIN creative_resource library ON library.id::text = market.copy_library_id
+    AND library.workspace_id = $1
+    AND library.kind = 'copy_library'
+    AND library.status <> 'archived'
+    AND library.published_version IS NOT NULL
+  JOIN creative_resource_revision library_revision ON library_revision.resource_id = library.id AND library_revision.version = library.published_version
+  WHERE (SELECT count(*) FROM default_market_pack) = 1
+)
 SELECT
   c.id::text, c.workspace_id::text, c.connector_id, COALESCE(c.external_id, ''),
   c.dedupe_key, c.competitor, c.title, c.asset_type,
@@ -217,6 +283,53 @@ LEFT JOIN LATERAL (
   ORDER BY ic.updated_at DESC
   LIMIT 1
 ) latest ON true
+LEFT JOIN LATERAL (
+  SELECT feedback.decision
+  FROM creative_feedback_event feedback
+  WHERE feedback.workspace_id = c.workspace_id
+    AND feedback.subject_type = 'candidate'
+    AND feedback.subject_id = c.id
+    AND feedback.event_type = 'decision'
+    AND NOT EXISTS (
+      SELECT 1 FROM creative_feedback_event undo WHERE undo.undo_of_id = feedback.id
+    )
+  ORDER BY feedback.created_at DESC, feedback.id DESC
+  LIMIT 1
+) decision ON true
+LEFT JOIN LATERAL (
+  SELECT analysis.id, analysis.status, analysis.result, analysis.analysis_version
+  FROM creative_source_analysis analysis
+  WHERE analysis.workspace_id = c.workspace_id AND analysis.candidate_id = c.id
+  ORDER BY analysis.analysis_version DESC, COALESCE(analysis.completed_at, analysis.created_at) DESC, analysis.id DESC
+  LIMIT 1
+) latest_analysis ON true
+LEFT JOIN LATERAL (
+  SELECT (
+    c.asset_type = 'image'
+    AND c.archived_url <> ''
+    AND COALESCE(decision.decision, '') <> 'rejected'
+    AND COALESCE(latest.status, 'new') <> 'rejected'
+    AND NOT EXISTS (SELECT 1 FROM creative_order_item item WHERE item.candidate_id = c.id)
+    AND latest_analysis.status = 'completed'
+    AND NOT (
+      jsonb_array_length(CASE WHEN jsonb_typeof(latest_analysis.result->'text_blocks') = 'array' THEN latest_analysis.result->'text_blocks' ELSE '[]'::jsonb END) > 0
+      AND jsonb_array_length(CASE WHEN jsonb_typeof(latest_analysis.result->'visual_regions') = 'array' THEN latest_analysis.result->'visual_regions' ELSE '[]'::jsonb END) = 0
+    )
+    AND EXISTS (
+      SELECT 1
+      FROM default_pre_adaptation_resource resource
+      WHERE latest_analysis.result->'adaptation'->>'status' = 'completed'
+        AND latest_analysis.result->'adaptation'->'result'->>'market_pack_id' = resource.market_pack_id
+        AND latest_analysis.result->'adaptation'->'result'->>'market_pack_version' = resource.market_pack_version::text
+        AND latest_analysis.result->'adaptation'->'result'->>'copy_library_id' = resource.copy_library_id
+        AND latest_analysis.result->'adaptation'->'result'->>'copy_library_version' = resource.copy_library_version::text
+        AND (
+          jsonb_array_length(CASE WHEN jsonb_typeof(latest_analysis.result->'adaptation'->'result'->'text_replacements') = 'array' THEN latest_analysis.result->'adaptation'->'result'->'text_replacements' ELSE '[]'::jsonb END) > 0
+          OR jsonb_array_length(CASE WHEN jsonb_typeof(latest_analysis.result->'adaptation'->'result'->'numeric_layouts') = 'array' THEN latest_analysis.result->'adaptation'->'result'->'numeric_layouts' ELSE '[]'::jsonb END) > 0
+        )
+    )
+  ) AS is_available
+) availability ON true
 LEFT JOIN LATERAL (
   SELECT rc.run_id, rc.is_new_in_run,
          CASE
@@ -281,10 +394,37 @@ LEFT JOIN LATERAL (
   ORDER BY cr.created_at DESC, rc.created_at DESC
   LIMIT 1
 ) run ON true
-WHERE c.workspace_id = $1 AND (NOT $2::boolean OR run.run_id IS NOT NULL)
-ORDER BY c.last_seen_at DESC
-LIMIT 500
-`, workspaceID, filterRun, nullableUUID(runID, filterRun))
+ WHERE c.workspace_id = $1
+   AND (NOT $2::boolean OR run.run_id IS NOT NULL)
+   AND ($4 = '' OR c.title ILIKE '%' || $4 || '%' OR c.competitor ILIKE '%' || $4 || '%'
+     OR c.connector_id ILIKE '%' || $4 || '%' OR EXISTS (
+       SELECT 1 FROM unnest(c.tags || COALESCE(latest.tags, '{}'::text[])) tag WHERE tag ILIKE '%' || $4 || '%'
+     ))
+   AND ($5 = '' OR c.competitor = $5)
+   AND ($6 = '' OR $6 = ANY(c.area_names))
+   AND ($7 = '' OR $7 = ANY(c.language_names))
+   AND ($8 = '' OR $8 = ANY(c.media_names))
+   AND ($9 = '' OR c.asset_type = $9)
+   AND (
+     $10 = 'all'
+     OR ($10 = 'available' AND COALESCE(availability.is_available, false))
+     OR ($10 = 'analyze'
+       AND c.asset_type = 'image'
+       AND COALESCE(decision.decision, '') <> 'rejected'
+       AND COALESCE(latest.status, 'new') <> 'rejected'
+       AND NOT EXISTS (SELECT 1 FROM creative_order_item item WHERE item.candidate_id = c.id)
+       AND NOT COALESCE(availability.is_available, false)
+     )
+     OR ($10 = 'generated' AND EXISTS (SELECT 1 FROM creative_order_item item WHERE item.candidate_id = c.id))
+     OR ($10 = 'rejected' AND (COALESCE(decision.decision, '') = 'rejected' OR COALESCE(latest.status, '') = 'rejected'))
+     OR ($10 = 'selected' AND (COALESCE(decision.decision, '') = 'selected' OR COALESCE(latest.status, '') = 'selected'))
+   )
+ ORDER BY
+   CASE WHEN $11 = 'impressions' THEN c.impression_estimate END DESC NULLS LAST,
+   CASE WHEN $11 = 'duration' THEN c.duration_days END DESC NULLS LAST,
+   c.last_seen_at DESC
+ LIMIT $12 OFFSET $13
+`, workspaceID, filterRun, nullableUUID(runID, filterRun), query, competitor, area, language, media, assetType, view, sort, limit, offset)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list creative material library")
 		return
@@ -323,12 +463,128 @@ LIMIT 500
 		return
 	}
 	rows.Close()
+	var totalCount int
+	err = h.DB.QueryRow(r.Context(), `
+WITH default_market_pack AS (
+  SELECT r.id::text AS market_pack_id, revision.version AS market_pack_version, revision.config->>'copy_library_id' AS copy_library_id
+  FROM creative_resource r
+  JOIN creative_resource_revision revision ON revision.resource_id = r.id AND revision.version = r.published_version
+  WHERE r.workspace_id = $1
+    AND r.kind = 'market_pack'
+    AND r.status <> 'archived'
+    AND r.published_version IS NOT NULL
+    AND COALESCE(revision.config->>'pre_adaptation_default', 'false') = 'true'
+),
+default_pre_adaptation_resource AS (
+  SELECT market.market_pack_id, market.market_pack_version, library.id::text AS copy_library_id, library_revision.version AS copy_library_version
+  FROM default_market_pack market
+  JOIN creative_resource library ON library.id::text = market.copy_library_id
+    AND library.workspace_id = $1
+    AND library.kind = 'copy_library'
+    AND library.status <> 'archived'
+    AND library.published_version IS NOT NULL
+  JOIN creative_resource_revision library_revision ON library_revision.resource_id = library.id AND library_revision.version = library.published_version
+  WHERE (SELECT count(*) FROM default_market_pack) = 1
+)
+SELECT count(*)
+FROM creative_material_candidate c
+LEFT JOIN LATERAL (
+  SELECT ic.issue_id, ic.status, ic.tags, ic.note, ic.selected_at
+  FROM creative_material_issue_candidate ic
+  WHERE ic.workspace_id = c.workspace_id AND ic.candidate_id = c.id
+  ORDER BY ic.updated_at DESC
+  LIMIT 1
+) latest ON true
+LEFT JOIN LATERAL (
+  SELECT feedback.decision
+  FROM creative_feedback_event feedback
+  WHERE feedback.workspace_id = c.workspace_id
+    AND feedback.subject_type = 'candidate'
+    AND feedback.subject_id = c.id
+    AND feedback.event_type = 'decision'
+    AND NOT EXISTS (
+      SELECT 1 FROM creative_feedback_event undo WHERE undo.undo_of_id = feedback.id
+    )
+  ORDER BY feedback.created_at DESC, feedback.id DESC
+  LIMIT 1
+) decision ON true
+LEFT JOIN LATERAL (
+  SELECT analysis.id, analysis.status, analysis.result, analysis.analysis_version
+  FROM creative_source_analysis analysis
+  WHERE analysis.workspace_id = c.workspace_id AND analysis.candidate_id = c.id
+  ORDER BY analysis.analysis_version DESC, COALESCE(analysis.completed_at, analysis.created_at) DESC, analysis.id DESC
+  LIMIT 1
+) latest_analysis ON true
+LEFT JOIN LATERAL (
+  SELECT (
+    c.asset_type = 'image'
+    AND c.archived_url <> ''
+    AND COALESCE(decision.decision, '') <> 'rejected'
+    AND COALESCE(latest.status, 'new') <> 'rejected'
+    AND NOT EXISTS (SELECT 1 FROM creative_order_item item WHERE item.candidate_id = c.id)
+    AND latest_analysis.status = 'completed'
+    AND NOT (
+      jsonb_array_length(CASE WHEN jsonb_typeof(latest_analysis.result->'text_blocks') = 'array' THEN latest_analysis.result->'text_blocks' ELSE '[]'::jsonb END) > 0
+      AND jsonb_array_length(CASE WHEN jsonb_typeof(latest_analysis.result->'visual_regions') = 'array' THEN latest_analysis.result->'visual_regions' ELSE '[]'::jsonb END) = 0
+    )
+    AND EXISTS (
+      SELECT 1
+      FROM default_pre_adaptation_resource resource
+      WHERE latest_analysis.result->'adaptation'->>'status' = 'completed'
+        AND latest_analysis.result->'adaptation'->'result'->>'market_pack_id' = resource.market_pack_id
+        AND latest_analysis.result->'adaptation'->'result'->>'market_pack_version' = resource.market_pack_version::text
+        AND latest_analysis.result->'adaptation'->'result'->>'copy_library_id' = resource.copy_library_id
+        AND latest_analysis.result->'adaptation'->'result'->>'copy_library_version' = resource.copy_library_version::text
+        AND (
+          jsonb_array_length(CASE WHEN jsonb_typeof(latest_analysis.result->'adaptation'->'result'->'text_replacements') = 'array' THEN latest_analysis.result->'adaptation'->'result'->'text_replacements' ELSE '[]'::jsonb END) > 0
+          OR jsonb_array_length(CASE WHEN jsonb_typeof(latest_analysis.result->'adaptation'->'result'->'numeric_layouts') = 'array' THEN latest_analysis.result->'adaptation'->'result'->'numeric_layouts' ELSE '[]'::jsonb END) > 0
+        )
+    )
+  ) AS is_available
+) availability ON true
+WHERE c.workspace_id = $1
+  AND (NOT $2::boolean OR EXISTS (
+    SELECT 1 FROM creative_material_crawl_run_candidate rc
+    WHERE rc.workspace_id = c.workspace_id AND rc.candidate_id = c.id AND rc.run_id = $3
+  ))
+  AND ($4 = '' OR c.title ILIKE '%' || $4 || '%' OR c.competitor ILIKE '%' || $4 || '%'
+    OR c.connector_id ILIKE '%' || $4 || '%' OR EXISTS (
+      SELECT 1 FROM unnest(c.tags || COALESCE(latest.tags, '{}'::text[])) tag WHERE tag ILIKE '%' || $4 || '%'
+    ))
+  AND ($5 = '' OR c.competitor = $5)
+  AND ($6 = '' OR $6 = ANY(c.area_names))
+  AND ($7 = '' OR $7 = ANY(c.language_names))
+  AND ($8 = '' OR $8 = ANY(c.media_names))
+  AND ($9 = '' OR c.asset_type = $9)
+  AND (
+    $10 = 'all'
+    OR ($10 = 'available' AND COALESCE(availability.is_available, false))
+    OR ($10 = 'analyze'
+      AND c.asset_type = 'image'
+      AND COALESCE(decision.decision, '') <> 'rejected'
+      AND COALESCE(latest.status, 'new') <> 'rejected'
+      AND NOT EXISTS (SELECT 1 FROM creative_order_item item WHERE item.candidate_id = c.id)
+      AND NOT COALESCE(availability.is_available, false)
+    )
+    OR ($10 = 'generated' AND EXISTS (SELECT 1 FROM creative_order_item item WHERE item.candidate_id = c.id))
+    OR ($10 = 'rejected' AND (COALESCE(decision.decision, '') = 'rejected' OR COALESCE(latest.status, '') = 'rejected'))
+    OR ($10 = 'selected' AND (COALESCE(decision.decision, '') = 'selected' OR COALESCE(latest.status, '') = 'selected'))
+  )
+`, workspaceID, filterRun, nullableUUID(runID, filterRun), query, competitor, area, language, media, assetType, view).Scan(&totalCount)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to count creative material library")
+		return
+	}
 	runs, err := h.listCreativeCrawlRunsForWorkspace(r.Context(), workspaceID, pgtype.UUID{}, false)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list creative crawl runs")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"candidates": candidates, "crawl_runs": runs})
+	var nextOffset any
+	if offset+len(candidates) < totalCount {
+		nextOffset = offset + len(candidates)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"candidates": candidates, "total_count": totalCount, "next_offset": nextOffset, "crawl_runs": runs})
 }
 
 func (h *Handler) RetryCreativeMaterialArchives(w http.ResponseWriter, r *http.Request) {
@@ -464,7 +720,7 @@ RETURNING id::text
 		writeError(w, http.StatusInternalServerError, "failed to import creative material")
 		return
 	}
-	analysis := h.enqueueManualReferenceAnalysis(r.Context(), workspaceID, userID, parseUUID(candidateID), connectorID)
+	analysis := h.enqueueManualReferenceAnalysis(r.Context(), workspaceID, userID, parseUUID(candidateID), connectorID, false)
 	writeJSON(w, http.StatusCreated, creativeMaterialLibraryImportResponse{ID: candidateID, Analysis: analysis})
 }
 
@@ -494,7 +750,7 @@ WHERE id = $1 AND workspace_id = $2
 		writeError(w, http.StatusInternalServerError, "failed to load creative material")
 		return
 	}
-	analysis := h.enqueueManualReferenceAnalysis(r.Context(), workspaceID, userID, candidateID, connectorID)
+	analysis := h.enqueueManualReferenceAnalysis(r.Context(), workspaceID, userID, candidateID, connectorID, true)
 	writeJSON(w, http.StatusOK, creativeMaterialLibraryImportResponse{ID: uuidToString(candidateID), Analysis: analysis})
 }
 
@@ -667,6 +923,26 @@ FOR UPDATE
 			writeError(w, http.StatusBadRequest, "market resource pack cannot be published: "+err.Error())
 			return
 		}
+		var marketConfig map[string]any
+		if json.Unmarshal(config, &marketConfig) == nil && marketConfig["pre_adaptation_default"] == true {
+			var anotherDefault bool
+			if err := tx.QueryRow(r.Context(), `
+SELECT EXISTS(
+  SELECT 1 FROM creative_resource resource
+  JOIN creative_resource_revision revision ON revision.resource_id = resource.id AND revision.version = resource.published_version
+  WHERE resource.workspace_id = $1 AND resource.kind = 'market_pack' AND resource.id <> $2
+    AND resource.status <> 'archived' AND resource.published_version IS NOT NULL
+    AND COALESCE(revision.config->>'pre_adaptation_default', 'false') = 'true'
+)
+`, workspaceID, resourceID).Scan(&anotherDefault); err != nil {
+				writeError(w, http.StatusInternalServerError, "failed to validate pre-adaptation market pack")
+				return
+			}
+			if anotherDefault {
+				writeError(w, http.StatusUnprocessableEntity, "another published market pack is already the pre-adaptation default")
+				return
+			}
+		}
 		if _, err := tx.Exec(r.Context(), `
 UPDATE creative_resource_revision SET config = $3::jsonb
 WHERE resource_id = $1 AND version = $2
@@ -695,6 +971,33 @@ RETURNING id::text, workspace_id::text, kind, name, description, status, version
 	writeJSON(w, http.StatusOK, resource)
 }
 
+type composableCopyLibraryRepaymentPlanLabels struct {
+	Principal          string `json:"principal"`
+	Tenor              string `json:"tenor"`
+	MonthlyInstallment string `json:"monthly_installment"`
+	TotalInterest      string `json:"total_interest"`
+	TotalRepayment     string `json:"total_repayment"`
+}
+
+type composableCopyLibraryRepaymentPlanEntry struct {
+	ID                 string `json:"id"`
+	Key                string `json:"key"`
+	Principal          int64  `json:"principal"`
+	TenorMonths        int    `json:"tenor_months"`
+	MonthlyInstallment int64  `json:"monthly_installment"`
+	TotalInterest      int64  `json:"total_interest"`
+	TotalRepayment     int64  `json:"total_repayment"`
+	Source             string `json:"source"`
+	Status             string `json:"status"`
+}
+
+type composableCopyLibraryRepaymentPlan struct {
+	Labels  composableCopyLibraryRepaymentPlanLabels  `json:"labels"`
+	Entries []composableCopyLibraryRepaymentPlanEntry `json:"entries"`
+}
+
+// Kept only to read historical frozen snapshots during the schema transition.
+// New v4 libraries neither expose nor validate product facts.
 var creativeCopyFactReferencePattern = regexp.MustCompile(`\{\{fact\.([a-z0-9_]+)\.(copy_text|value)\}\}`)
 
 type composableCopyLibraryConfig struct {
@@ -705,11 +1008,13 @@ type composableCopyLibraryConfig struct {
 		Key           string   `json:"key"`
 		CreativeTypes []string `json:"creative_types"`
 		Role          string   `json:"role"`
+		SemanticGroup string   `json:"semantic_group"`
 		Usage         string   `json:"usage"`
 		Text          string   `json:"text"`
 		Status        string   `json:"status"`
 	} `json:"fragments"`
-	Recipes []struct {
+	RepaymentPlan composableCopyLibraryRepaymentPlan `json:"repayment_plan"`
+	Recipes       []struct {
 		ID           string              `json:"id"`
 		Key          string              `json:"key"`
 		CreativeType string              `json:"creative_type"`
@@ -732,34 +1037,22 @@ func validateComposableCopyLibraryConfig(raw json.RawMessage) error {
 	if err := json.Unmarshal(raw, &config); err != nil {
 		return errors.New("config must be valid JSON")
 	}
-	if config.SchemaVersion != 2 {
-		return errors.New("schema_version must be 2")
+	if config.SchemaVersion != 4 {
+		return errors.New("schema_version must be 4")
 	}
 	locale := strings.TrimSpace(config.Locale)
 	if matched, _ := regexp.MatchString(`^[a-z]{2,3}-[A-Z]{2}$`, locale); !matched {
 		return errors.New("locale must be a language-region code such as id-ID or ms-MY")
 	}
 	validType := func(value string) bool { return value == "num" || value == "repayment_plan" }
-	facts := make(map[string]bool, len(config.ProductFacts))
-	for index, fact := range config.ProductFacts {
-		key := strings.TrimSpace(fact.Key)
-		if fact.Status == "approved" {
-			if strings.TrimSpace(fact.ID) == "" || key == "" || strings.TrimSpace(fact.CopyText) == "" || strings.TrimSpace(fact.Source) == "" {
-				return fmt.Errorf("approved product fact %d requires id, key, copy_text, and source", index+1)
-			}
-			if facts[key] {
-				return fmt.Errorf("approved product fact key %q is duplicated", key)
-			}
-			facts[key] = true
-		}
-	}
 	type fragmentContract struct {
 		role  string
 		types map[string]bool
+		text  string
 	}
 	fragments := make(map[string]fragmentContract, len(config.Fragments))
-	approvedHeadlineByType := map[string]int{"num": 0, "repayment_plan": 0}
-	approvedBenefitByType := map[string]int{"num": 0, "repayment_plan": 0}
+	approvedHeadlines := 0
+	approvedBenefits := 0
 	for index, fragment := range config.Fragments {
 		id := strings.TrimSpace(fragment.ID)
 		if id == "" || strings.TrimSpace(fragment.Key) == "" {
@@ -778,26 +1071,53 @@ func validateComposableCopyLibraryConfig(raw json.RawMessage) error {
 		if fragment.Status != "approved" {
 			continue
 		}
-		if !validCopyFragmentRole(fragment.Role) || len(types) == 0 || strings.TrimSpace(fragment.Text) == "" {
-			return fmt.Errorf("approved fragment %q requires role, creative type, and text", fragment.Key)
+		if !validCopyFragmentRole(fragment.Role) || strings.TrimSpace(fragment.Text) == "" {
+			return fmt.Errorf("approved fragment %q requires role and text", fragment.Key)
 		}
 		if fragment.Usage != "" && fragment.Usage != "core" && fragment.Usage != "fallback" && fragment.Usage != "required" {
 			return fmt.Errorf("approved fragment %q has unsupported usage %q", fragment.Key, fragment.Usage)
 		}
-		for _, match := range creativeCopyFactReferencePattern.FindAllStringSubmatch(fragment.Text, -1) {
-			if !facts[match[1]] {
-				return fmt.Errorf("approved fragment %q references missing or unapproved fact %q", fragment.Key, match[1])
-			}
+		if strings.Contains(fragment.Text, "{{") || strings.Contains(fragment.Text, "}}") {
+			return fmt.Errorf("approved fragment %q must contain final copy, not template variables", fragment.Key)
 		}
-		fragments[id] = fragmentContract{role: fragment.Role, types: types}
-		for creativeType := range types {
-			if fragment.Role == "headline" {
-				approvedHeadlineByType[creativeType]++
-			}
-			if fragment.Role == "benefit" {
-				approvedBenefitByType[creativeType]++
-			}
+		fragments[id] = fragmentContract{role: fragment.Role, types: types, text: fragment.Text}
+		if fragment.Role == "headline" {
+			approvedHeadlines++
 		}
+		if fragment.Role == "benefit" {
+			approvedBenefits++
+		}
+	}
+	labels := []string{config.RepaymentPlan.Labels.Principal, config.RepaymentPlan.Labels.Tenor, config.RepaymentPlan.Labels.MonthlyInstallment, config.RepaymentPlan.Labels.TotalInterest, config.RepaymentPlan.Labels.TotalRepayment}
+	for _, label := range labels {
+		if strings.TrimSpace(label) == "" {
+			return errors.New("repayment plan requires all table labels")
+		}
+	}
+	planKeys := map[string]bool{}
+	planPairs := map[string]bool{}
+	approvedPlans := 0
+	for index, entry := range config.RepaymentPlan.Entries {
+		if entry.Status != "approved" {
+			continue
+		}
+		key := strings.TrimSpace(entry.Key)
+		if strings.TrimSpace(entry.ID) == "" || key == "" || strings.TrimSpace(entry.Source) == "" || entry.Principal <= 0 || entry.TenorMonths <= 0 || entry.MonthlyInstallment <= 0 || entry.TotalInterest < 0 || entry.TotalRepayment <= 0 {
+			return fmt.Errorf("approved repayment plan row %d requires identity, source, and valid amounts", index+1)
+		}
+		if planKeys[key] {
+			return fmt.Errorf("approved repayment plan key %q is duplicated", key)
+		}
+		pair := fmt.Sprintf("%d:%d", entry.Principal, entry.TenorMonths)
+		if planPairs[pair] {
+			return fmt.Errorf("approved repayment plan amount/term %q is duplicated", pair)
+		}
+		planKeys[key] = true
+		planPairs[pair] = true
+		approvedPlans++
+	}
+	if approvedPlans == 0 {
+		return errors.New("at least one approved repayment plan row is required")
 	}
 	approvedRecipeIDs := map[string]bool{}
 	for index, recipe := range config.Recipes {
@@ -838,10 +1158,8 @@ func validateComposableCopyLibraryConfig(raw json.RawMessage) error {
 			return fmt.Errorf("approved recipe %d must use at least one fragment", index+1)
 		}
 	}
-	for _, creativeType := range []string{"num", "repayment_plan"} {
-		if approvedHeadlineByType[creativeType] == 0 || approvedBenefitByType[creativeType] == 0 {
-			return fmt.Errorf("approved %s headline and benefit fragments are required", creativeType)
-		}
+	if approvedHeadlines == 0 || approvedBenefits == 0 {
+		return errors.New("approved headline and benefit fragments are required")
 	}
 	return nil
 }

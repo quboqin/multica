@@ -833,6 +833,47 @@ describe("ApiClient", () => {
   });
 });
 
+describe("creative material library endpoint", () => {
+  it("keeps the default route and sends material-library search and pagination parameters", async () => {
+    const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(
+      new Response(JSON.stringify({ candidates: [], crawl_runs: [] }), { status: 200, headers: { "Content-Type": "application/json" } }),
+    ));
+    vi.stubGlobal("fetch", fetchMock);
+    const client = new ApiClient("https://api.example.test");
+
+    await client.listCreativeMaterialLibrary();
+    await client.listCreativeMaterialLibrary({ runId: "crawl run/1" });
+    await client.listCreativeMaterialLibrary({
+      limit: 60,
+      offset: 120,
+      query: "cash advance",
+      competitor: "Easycash",
+      area: "Indonesia",
+      language: "Indonesian",
+      media: "Meta",
+      assetType: "image",
+      view: "available",
+      sort: "impressions",
+    });
+
+    expect(fetchMock).toHaveBeenNthCalledWith(1, "https://api.example.test/api/creative/materials", expect.any(Object));
+    expect(fetchMock).toHaveBeenNthCalledWith(2, "https://api.example.test/api/creative/materials?run_id=crawl+run%2F1", expect.any(Object));
+    expect(fetchMock).toHaveBeenNthCalledWith(3, "https://api.example.test/api/creative/materials?limit=60&offset=120&query=cash+advance&competitor=Easycash&area=Indonesia&language=Indonesian&media=Meta&asset_type=image&view=available&sort=impressions", expect.any(Object));
+  });
+
+  it("falls back when a paginated material response has an invalid total", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({ candidates: [], total_count: "sixty", next_offset: "later", crawl_runs: [] }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    })));
+    const client = new ApiClient("https://api.example.test");
+
+    await expect(client.listCreativeMaterialLibrary({ limit: 60, offset: 0 })).resolves.toEqual({
+      candidates: [], total_count: 0, next_offset: null, crawl_runs: [],
+    });
+  });
+});
+
 describe("creative feedback endpoint", () => {
   it("posts the unified event contract and degrades malformed responses", async () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ event: { annotation: { x: "broken" } } }), { status: 200, headers: { "Content-Type": "application/json" } }));

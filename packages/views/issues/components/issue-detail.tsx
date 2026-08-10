@@ -1099,6 +1099,7 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
     ...childIssuesOptions(wsId, id),
     enabled: !!issue,
   });
+  const creativeIssueSurface = issue ? getCreativeIssueSurface(issue) : null;
   const orderedChildIssues = useMemo(() => sortWorkflowChildren(childIssues), [childIssues]);
   // Parent's children — used to render the "x/y" progress next to the
   // "Sub-issue of …" breadcrumb under the title.
@@ -2062,9 +2063,8 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
           })()}
 
           {(() => {
-            const creativeSurface = getCreativeIssueSurface(issue);
-            if (creativeSurface?.kind === "order") return <CreativeOrderSummary orderId={creativeSurface.orderId} />;
-            if (creativeSurface?.kind === "migration") return <CreativeMaterialMigrationNotice />;
+            if (creativeIssueSurface?.kind === "order") return <CreativeOrderSummary orderId={creativeIssueSurface.orderId} />;
+            if (creativeIssueSurface?.kind === "migration") return <CreativeMaterialMigrationNotice />;
             return null;
           })()}
 
@@ -2074,7 +2074,7 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
           <div>
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-3">
-                <h2 className="text-base font-semibold">{t(($) => $.detail.activity_section)}</h2>
+                <div><h2 className="text-base font-semibold">{creativeIssueSurface?.kind === "order" ? "协作动态" : t(($) => $.detail.activity_section)}</h2>{creativeIssueSurface?.kind === "order" && <p className="mt-1 text-xs text-muted-foreground">在这里讨论需求、补充调整、确认异常处理；生成阶段和交付状态在上方协作工作台同步。</p>}</div>
               </div>
               <div className="flex items-center gap-2">
                 <button

@@ -14,13 +14,13 @@ export {
 } from "./queries";
 export { useAdoptCreativeOrderVariant, useCancelCreativeOrder } from "./mutations";
 export {
+  creativeCopyContentGroupForFragment,
+  creativeCopyContentGroupLabel,
+  selectCreativeRepaymentPlan,
   creativeTypeLabel,
   parseCreativeCopyLibraryConfig,
-  recommendCreativeCopy,
   validateCustomCopyFinancialFacts,
 } from "./copy-library";
 export type {
   CustomCopyFinancialFactValidation,
-  CreativeCopyRecommendation,
-  CreativeCopyRecommendationBrief,
 } from "./copy-library";

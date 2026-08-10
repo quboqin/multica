@@ -4,9 +4,11 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"reflect"
 	"testing"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
@@ -498,6 +500,203 @@ func TestCreativeMaterialLibraryRunFilterPreservesHistoricalRelation(t *testing.
 	}
 	if len(library.Candidates) != 1 || library.Candidates[0].SourceRunID != first.RunID || !library.Candidates[0].IsNewInRun {
 		t.Fatalf("historical run candidates = %#v", library.Candidates)
+	}
+}
+
+func TestCreativeMaterialLibraryPaginationAndFilter(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+	competitor := "pagination-filter-" + uuid.NewString()
+	summary, err := testHandler.importCreativeMaterials(t.Context(), creativeMaterialImportInput{
+		WorkspaceID: parseUUID(testWorkspaceID), ConnectorID: "test", QuerySummary: "pagination filter",
+		Materials: []creativeMaterialInput{
+			{DedupeKey: "pagination-first-" + competitor, Title: "First pagination candidate", Competitor: competitor, AssetType: "image", PreviewURL: "https://example.test/pagination-first.png"},
+			{DedupeKey: "pagination-second-" + competitor, Title: "Second pagination candidate", Competitor: competitor, AssetType: "image", PreviewURL: "https://example.test/pagination-second.png"},
+		},
+		ActorType: "member", ActorID: testUserID, UserID: parseUUID(testUserID),
+	})
+	if err != nil || summary.ImportedCount != 2 {
+		t.Fatalf("import pagination candidates: summary=%#v err=%v", summary, err)
+	}
+
+	request := newRequest(http.MethodGet, "/api/creative/materials?competitor="+url.QueryEscape(competitor)+"&limit=1&offset=0", nil)
+	w := httptest.NewRecorder()
+	testHandler.ListCreativeMaterialLibrary(w, request)
+	if w.Code != http.StatusOK {
+		t.Fatalf("ListCreativeMaterialLibrary page 1: %d %s", w.Code, w.Body.String())
+	}
+	var firstPage struct {
+		Candidates []creativeMaterialCandidateResponse `json:"candidates"`
+		TotalCount int                                 `json:"total_count"`
+		NextOffset *int                                `json:"next_offset"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&firstPage); err != nil {
+		t.Fatal(err)
+	}
+	if len(firstPage.Candidates) != 1 || firstPage.TotalCount != 2 || firstPage.NextOffset == nil || *firstPage.NextOffset != 1 {
+		t.Fatalf("first page = %#v", firstPage)
+	}
+
+	w = httptest.NewRecorder()
+	testHandler.ListCreativeMaterialLibrary(w, newRequest(http.MethodGet, "/api/creative/materials?competitor="+url.QueryEscape(competitor)+"&limit=1&offset=1", nil))
+	if w.Code != http.StatusOK {
+		t.Fatalf("ListCreativeMaterialLibrary page 2: %d %s", w.Code, w.Body.String())
+	}
+	var secondPage struct {
+		Candidates []creativeMaterialCandidateResponse `json:"candidates"`
+		TotalCount int                                 `json:"total_count"`
+		NextOffset *int                                `json:"next_offset"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&secondPage); err != nil {
+		t.Fatal(err)
+	}
+	if len(secondPage.Candidates) != 1 || secondPage.TotalCount != 2 || secondPage.NextOffset != nil {
+		t.Fatalf("second page = %#v", secondPage)
+	}
+
+	w = httptest.NewRecorder()
+	testHandler.ListCreativeMaterialLibrary(w, newRequest(http.MethodGet, "/api/creative/materials?sort=unrecognized", nil))
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("invalid sort status = %d %s", w.Code, w.Body.String())
+	}
+}
+
+func TestCreativeMaterialLibraryAvailableViewRequiresCurrentPreAdaptation(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	workspaceID := uuid.NewString()
+	if _, err := testPool.Exec(t.Context(), `
+INSERT INTO workspace (id, name, slug, description, issue_prefix)
+VALUES ($1, 'Available material filter', $2, '', 'AMF')
+`, workspaceID, "available-material-filter-"+workspaceID[:8]); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := testPool.Exec(t.Context(), `
+INSERT INTO member (workspace_id, user_id, role)
+VALUES ($1, $2, 'owner')
+`, workspaceID, testUserID); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _, _ = testPool.Exec(t.Context(), `DELETE FROM workspace WHERE id = $1`, workspaceID) })
+
+	copyLibraryID := uuid.NewString()
+	marketPackID := uuid.NewString()
+	marketConfig, err := json.Marshal(map[string]any{
+		"pre_adaptation_default": true,
+		"copy_library_id":        copyLibraryID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := testPool.Exec(t.Context(), `
+INSERT INTO creative_resource (id, workspace_id, kind, name, description, status, version, published_version, config, created_by)
+VALUES ($1, $2, 'copy_library', 'Available copy library', '', 'published', 1, 1, $3::jsonb, $4)
+`, copyLibraryID, workspaceID, validComposableCopyLibraryJSON, testUserID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := testPool.Exec(t.Context(), `
+INSERT INTO creative_resource_revision (resource_id, version, name, description, config, created_by)
+VALUES ($1, 1, 'Available copy library', '', $2::jsonb, $3)
+`, copyLibraryID, validComposableCopyLibraryJSON, testUserID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := testPool.Exec(t.Context(), `
+INSERT INTO creative_resource (id, workspace_id, kind, name, description, status, version, published_version, config, created_by)
+VALUES ($1, $2, 'market_pack', 'Available market pack', '', 'published', 1, 1, $3::jsonb, $4)
+`, marketPackID, workspaceID, marketConfig, testUserID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := testPool.Exec(t.Context(), `
+INSERT INTO creative_resource_revision (resource_id, version, name, description, config, created_by)
+VALUES ($1, 1, 'Available market pack', '', $2::jsonb, $3)
+`, marketPackID, marketConfig, testUserID); err != nil {
+		t.Fatal(err)
+	}
+
+	availableCandidateID := uuid.NewString()
+	analyzingCandidateID := uuid.NewString()
+	if _, err := testPool.Exec(t.Context(), `
+INSERT INTO creative_material_candidate (id, workspace_id, connector_id, dedupe_key, title, asset_type, archived_url, archive_status, raw)
+VALUES
+  ($1, $3, 'test', $4, 'Ready material', 'image', '/uploads/ready.png', 'completed', '{}'::jsonb),
+  ($2, $3, 'test', $5, 'Missing copy material', 'image', '/uploads/missing.png', 'completed', '{}'::jsonb)
+`, availableCandidateID, analyzingCandidateID, workspaceID, "ready-"+availableCandidateID, "missing-"+analyzingCandidateID); err != nil {
+		t.Fatal(err)
+	}
+	availableAnalysis, err := json.Marshal(map[string]any{
+		"text_blocks": []map[string]any{{
+			"id": "headline", "location": "Top", "role": "headline", "source_text": "Old",
+			"visual_bounds": map[string]any{"x": 10, "y": 10, "width": 100, "height": 40},
+		}},
+		"visual_regions": []map[string]any{{
+			"id": "headline-region", "location": "Top", "kind": "copy", "source_block_ids": []string{"headline"},
+			"visual_bounds": map[string]any{"x": 10, "y": 10, "width": 100, "height": 40},
+		}},
+		"adaptation": map[string]any{
+			"status":  "completed",
+			"summary": "ready",
+			"result": map[string]any{
+				"market_pack_id":       marketPackID,
+				"market_pack_version":  1,
+				"copy_library_id":      copyLibraryID,
+				"copy_library_version": 1,
+				"text_replacements": []map[string]any{{
+					"block_id": "headline", "location": "Top", "replacement_text": "Pinjaman Fleksibel", "status": "ready",
+				}},
+				"numeric_layouts": []map[string]any{},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	incompleteAnalysis := json.RawMessage(`{"text_blocks":[]}`)
+	if _, err := testPool.Exec(t.Context(), `
+INSERT INTO creative_source_analysis (workspace_id, candidate_id, analysis_version, status, summary, result, completed_at)
+VALUES
+  ($1, $2, 1, 'completed', 'ready', $4::jsonb, now()),
+  ($1, $3, 1, 'completed', 'missing adaptation', $5::jsonb, now())
+`, workspaceID, availableCandidateID, analyzingCandidateID, availableAnalysis, incompleteAnalysis); err != nil {
+		t.Fatal(err)
+	}
+
+	request := newRequest(http.MethodGet, "/api/creative/materials?view=available&limit=1", nil)
+	request.Header.Set("X-Workspace-ID", workspaceID)
+	w := httptest.NewRecorder()
+	testHandler.ListCreativeMaterialLibrary(w, request)
+	if w.Code != http.StatusOK {
+		t.Fatalf("ListCreativeMaterialLibrary available: %d %s", w.Code, w.Body.String())
+	}
+	var availablePage struct {
+		Candidates []creativeMaterialCandidateResponse `json:"candidates"`
+		TotalCount int                                 `json:"total_count"`
+		NextOffset *int                                `json:"next_offset"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&availablePage); err != nil {
+		t.Fatal(err)
+	}
+	if len(availablePage.Candidates) != 1 || availablePage.Candidates[0].ID != availableCandidateID || availablePage.TotalCount != 1 || availablePage.NextOffset != nil {
+		t.Fatalf("available page = %#v", availablePage)
+	}
+
+	request = newRequest(http.MethodGet, "/api/creative/materials?view=analyze&limit=2", nil)
+	request.Header.Set("X-Workspace-ID", workspaceID)
+	w = httptest.NewRecorder()
+	testHandler.ListCreativeMaterialLibrary(w, request)
+	if w.Code != http.StatusOK {
+		t.Fatalf("ListCreativeMaterialLibrary analyze: %d %s", w.Code, w.Body.String())
+	}
+	var analyzePage struct {
+		Candidates []creativeMaterialCandidateResponse `json:"candidates"`
+		TotalCount int                                 `json:"total_count"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&analyzePage); err != nil {
+		t.Fatal(err)
+	}
+	if len(analyzePage.Candidates) != 1 || analyzePage.Candidates[0].ID != analyzingCandidateID || analyzePage.TotalCount != 1 {
+		t.Fatalf("analyze page = %#v", analyzePage)
 	}
 }
 

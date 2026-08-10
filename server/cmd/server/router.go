@@ -599,6 +599,10 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 		// attachment row. Resolve membership from the candidate itself and
 		// redirect to a short-lived signed URL.
 		r.Get("/api/creative/materials/{id}/archive", h.DownloadCreativeMaterialArchive)
+		// Diagnostic assets are rendered as native <img> sources. Browser image
+		// requests cannot attach workspace headers, so the handler resolves the
+		// workspace from the order/variant relation and enforces membership there.
+		r.Get("/api/creative/orders/{id}/variants/{variantId}/diagnostic-assets/{diagnosticId}", h.DownloadCreativeOrderVariantDiagnosticAsset)
 
 		r.Route("/api/workspaces", func(r chi.Router) {
 			r.Get("/", h.ListWorkspaces)
@@ -753,6 +757,9 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 				r.With(handler.RequireHumanActor).Post("/materials/archive/retry", h.RetryCreativeMaterialArchives)
 				r.Get("/source-analyses", h.ListCreativeSourceAnalyses)
 				r.Post("/source-analyses", h.CreateCreativeSourceAnalysis)
+				r.Get("/source-analyses/{id}/pre-adaptation-context", h.GetCreativePreAdaptationContext)
+				r.Put("/source-analyses/{id}/pre-adaptation", h.PutCreativePreAdaptation)
+				r.With(handler.RequireHumanActor).Post("/source-analyses/{id}/pre-adaptation/retry", h.RetryCreativePreAdaptation)
 				r.With(handler.RequireHumanActor).Post("/direct-edits", h.CreateCreativeDirectEdit)
 				r.Route("/orders", func(r chi.Router) {
 					r.Get("/", h.ListCreativeOrders)

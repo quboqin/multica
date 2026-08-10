@@ -1,6 +1,6 @@
 import { queryOptions } from "@tanstack/react-query";
 import { api } from "../api";
-import type { CreativeResourceKind } from "../types";
+import type { CreativeMaterialLibraryQuery, CreativeResourceKind } from "../types";
 
 export const creativeKeys = {
   all: (wsId: string) => ["creative", wsId] as const,
@@ -23,10 +23,10 @@ export const creativeKeys = {
   feedbackMetrics: (wsId: string) => [...creativeKeys.all(wsId), "feedback-metrics"] as const,
 };
 
-export const creativeMaterialLibraryOptions = (wsId: string) =>
+export const creativeMaterialLibraryOptions = (wsId: string, params?: CreativeMaterialLibraryQuery) =>
   queryOptions({
-    queryKey: creativeKeys.materials(wsId),
-    queryFn: () => api.listCreativeMaterialLibrary(),
+    queryKey: params ? [...creativeKeys.materials(wsId), params] : creativeKeys.materials(wsId),
+    queryFn: () => api.listCreativeMaterialLibrary(params),
     enabled: !!wsId,
   });
 

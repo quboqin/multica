@@ -32,7 +32,7 @@ function fixture() {
   const generated = asset({
     id: "generated-1",
     stage: "generated",
-    metadata: { model: "gpt-image-2", provider: "OpenAI", prompt: "完整提示词：保留蓝绿色信息卡片，并使用已审核文案。" },
+    metadata: { model: "gpt-image-2", provider: "OpenAI", prompt: "完整提示词：保留蓝绿色信息卡片，并使用已审核文案。\nApproved repayment rows: Jumlah Pinjaman Rp80.000.000" },
     evidence: { request_id: "request-1234567890", attempts: 2, prompt_sha256: "cli-returned-prompt-hash" },
   });
   const primed = asset({
@@ -58,7 +58,7 @@ function fixture() {
       headline: "Pinjaman Fleksibel Tanpa Ribet",
       benefit: "Limit hingga Rp80.000.000",
       cta: "AJUKAN SEKARANG",
-      product_facts: [{ key: "limit", label: "额度", value: "80000000", copy_text: "Rp80.000.000" }],
+      pre_adaptation: { repayment_plan_selections: [{ values: { principal: "Rp80.000.000", tenor: "6 Bulan", monthly_installment: "Rp14.000.000" } }] },
     },
     variants: [variant],
   } as unknown as CreativeOrderItem;
@@ -81,7 +81,7 @@ describe("creative generation information", () => {
       attempts: "2",
     });
     expect(info.copyLines).toContainEqual({ label: "主标题", value: "Pinjaman Fleksibel Tanpa Ribet" });
-    expect(info.facts).toEqual([{ label: "额度", value: "Rp80.000.000" }]);
+    expect(info.repaymentPlans).toEqual([{ label: "Rp80.000.000 / 6 Bulan", value: "Rp14.000.000" }]);
   });
 
   it("stops cyclic lineage and tolerates malformed metadata and evidence", () => {
@@ -90,11 +90,11 @@ describe("creative generation information", () => {
     primed.derived_from_asset_id = delivered.id;
     delivered.metadata = "invalid" as unknown as Record<string, unknown>;
     primed.evidence = null as unknown as Record<string, unknown>;
-    item.copy_snapshot = { product_facts: [null, { label: 4, copy_text: [] }] };
+    item.copy_snapshot = { pre_adaptation: { repayment_plan_selections: [null, { values: [] }] } };
 
     expect(creativeAssetLineage(variant, delivered).map((entry) => entry.id)).toEqual([primed.id, delivered.id]);
     expect(() => creativeGenerationInfo(item, variant, delivered)).not.toThrow();
-    expect(creativeGenerationInfo(item, variant, delivered).facts).toEqual([]);
+    expect(creativeGenerationInfo(item, variant, delivered).repaymentPlans).toEqual([]);
   });
 
   it("does not present a task summary as the exact model prompt without CLI trace evidence", () => {
@@ -122,6 +122,7 @@ describe("creative generation information", () => {
     expect(screen.getByText("AdaKami Indonesia · v12")).toBeInTheDocument();
     expect(screen.getByText("Prime 布局合同 v2 · 1 个保护区 · 背景规则 quiet")).toBeInTheDocument();
     expect(screen.getByText("完整提示词：保留蓝绿色信息卡片，并使用已审核文案。")).toHaveClass("whitespace-pre-wrap", "break-words");
+    expect(screen.queryByText(/Approved repayment rows/)).not.toBeInTheDocument();
     expect(screen.getByAltText("V01 方形 · 1080x1080 成图")).toBeInTheDocument();
   });
 });

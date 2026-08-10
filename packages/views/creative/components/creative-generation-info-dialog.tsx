@@ -4,6 +4,7 @@ import { Clock3, FileText, Image as ImageIcon, Layers3, Sparkles } from "lucide-
 import type { CreativeOrderAsset, CreativeOrderItem, CreativeOrderVariant } from "@multica/core/types";
 import { Badge } from "@multica/ui/components/ui/badge";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@multica/ui/components/ui/dialog";
+import { userFacingProductionPrompt } from "../lib/creative-production-prompt";
 import { formatCreativeDateTime, creativeTimeZoneLabel } from "../lib/creative-time";
 
 type GenerationFact = { label: string; value: string };
@@ -16,7 +17,7 @@ export type CreativeGenerationInfo = {
   revision: number;
   direction: string;
   copyLines: GenerationCopyLine[];
-  facts: GenerationFact[];
+  repaymentPlans: GenerationFact[];
   model: string;
   provider: string;
   marketRule: string;
@@ -71,14 +72,14 @@ export function creativeGenerationInfo(
       { label: "行动文案", value: stringValue(snapshot.cta) },
       { label: "合规文案", value: stringValue(snapshot.legal_text) },
     ].filter((entry) => Boolean(entry.value)),
-    facts: parseProductFacts(snapshot.product_facts),
+    repaymentPlans: parseRepaymentPlanSelections(record(snapshot.pre_adaptation).repayment_plan_selections),
     model: firstString(promptSources, ["model", "model_name", "generation_model"]),
     provider: firstString(promptSources, ["provider", "image_provider", "generation_provider"]),
     marketRule: explicitRule || layoutSummary || (marketName ? "已绑定市场资源包" : ""),
     marketVersion: [marketName, marketVersion ? `v${marketVersion}` : ""].filter(Boolean).join(" · "),
     createdAt: asset.updated_at || asset.created_at || generated?.updated_at || generated?.created_at || "",
     prompt: firstString([generatedEvidence], ["prompt_sha256"])
-      ? firstString([generatedMetadata], ["prompt"])
+      ? userFacingProductionPrompt(firstString([generatedMetadata], ["prompt"]))
       : "",
     requestId: firstString(evidenceSources, ["request_id", "model_request_id", "generation_request_id"]),
     attempts: firstScalar(evidenceSources, ["attempts", "attempt", "generation_attempts"]),
@@ -151,11 +152,11 @@ export function CreativeGenerationInfoDialog({
           <InfoSection icon={<Sparkles aria-hidden="true" className="h-4 w-4" />} title="创意方向">
             <p className="whitespace-pre-wrap break-words text-sm leading-6">{info.direction || "未记录创意方向"}</p>
           </InfoSection>
-          <InfoSection icon={<FileText aria-hidden="true" className="h-4 w-4" />} title="成图文案与事实">
+          <InfoSection icon={<FileText aria-hidden="true" className="h-4 w-4" />} title="成图文案">
             {info.copyLines.length > 0 ? <dl className="space-y-2">
               {info.copyLines.map((line) => <div key={line.label} className="grid gap-1 sm:grid-cols-[88px_minmax(0,1fr)]"><dt className="text-xs text-muted-foreground">{line.label}</dt><dd className="whitespace-pre-wrap break-words text-sm">{line.value}</dd></div>)}
             </dl> : <p className="text-sm text-muted-foreground">未记录冻结文案</p>}
-            {info.facts.length > 0 && <div className="mt-4 border-t pt-3"><p className="mb-2 text-xs font-medium text-muted-foreground">已审核产品事实</p><div className="flex flex-wrap gap-2">{info.facts.map((fact) => <Badge key={`${fact.label}-${fact.value}`} variant="outline" className="max-w-full whitespace-normal text-left"><span className="text-muted-foreground">{fact.label}</span><span className="mx-1">·</span><span className="break-words">{fact.value}</span></Badge>)}</div></div>}
+            {info.repaymentPlans.length > 0 && <div className="mt-4 border-t pt-3"><p className="mb-2 text-xs font-medium text-muted-foreground">已选还款计划</p><div className="flex flex-wrap gap-2">{info.repaymentPlans.map((plan, index) => <Badge key={`repayment-plan-${index}-${plan.label}-${plan.value}`} variant="outline" className="max-w-full whitespace-normal text-left"><span className="text-muted-foreground">{plan.label}</span><span className="mx-1">·</span><span className="break-words">{plan.value}</span></Badge>)}</div></div>}
           </InfoSection>
           <InfoSection icon={<Layers3 aria-hidden="true" className="h-4 w-4" />} title="生成与市场规则">
             <dl className="grid gap-x-5 gap-y-3 sm:grid-cols-2">
@@ -195,12 +196,16 @@ function InfoValue({ label, value, wide = false }: { label: string; value: strin
   return <div className={wide ? "sm:col-span-2" : undefined}><dt className="text-xs text-muted-foreground">{label}</dt><dd className="mt-1 whitespace-pre-wrap break-words text-sm">{value || "未记录"}</dd></div>;
 }
 
-function parseProductFacts(value: unknown): GenerationFact[] {
+function parseRepaymentPlanSelections(value: unknown): GenerationFact[] {
   return array(value).flatMap((entry) => {
-    const fact = record(entry);
-    const label = stringValue(fact.label) || stringValue(fact.key);
-    const factValue = stringValue(fact.copy_text) || stringValue(fact.value);
-    return label && factValue ? [{ label, value: factValue }] : [];
+    const selection = record(entry);
+    const values = record(selection.values);
+    const principal = stringValue(values.principal);
+    const tenor = stringValue(values.tenor);
+    const monthlyInstallment = stringValue(values.monthly_installment);
+    return principal && tenor && monthlyInstallment
+      ? [{ label: `${principal} / ${tenor}`, value: monthlyInstallment }]
+      : [];
   });
 }
 

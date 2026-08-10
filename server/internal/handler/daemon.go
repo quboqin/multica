@@ -1990,6 +1990,114 @@ SELECT EXISTS(
 	return "", nil
 }
 
+func (h *Handler) preAdaptationCompletionError(ctx context.Context, task db.AgentTaskQueue, workspaceID string) (string, error) {
+	if !task.TriggerEvidenceKind.Valid || task.TriggerEvidenceKind.String != creativePreAdaptationEvidenceKind {
+		return "", nil
+	}
+	if task.Status == "completed" || task.Status == "failed" || task.Status == "cancelled" {
+		return "", nil
+	}
+	var taskContext creativePreAdaptationTaskContext
+	if err := json.Unmarshal(task.Context, &taskContext); err != nil || taskContext.Workflow != "creative_pre_adaptation" {
+		return "pre-adaptation task completed with invalid task context", nil
+	}
+	analysisID, analysisErr := util.ParseUUID(strings.TrimSpace(taskContext.SourceAnalysisID))
+	workspaceUUID, workspaceErr := util.ParseUUID(strings.TrimSpace(workspaceID))
+	if analysisErr != nil || workspaceErr != nil || !task.TriggerEvidenceRefID.Valid || task.TriggerEvidenceRefID != analysisID ||
+		taskContext.MarketPackVersion < 1 || taskContext.CopyLibraryVersion < 1 {
+		return "pre-adaptation task completed with invalid artifact coordinates", nil
+	}
+	var completed bool
+	err := h.DB.QueryRow(ctx, `
+SELECT COALESCE(
+  result->'adaptation'->>'status' IN ('completed', 'unavailable')
+  AND result->'adaptation'->'result'->>'market_pack_id' = $3
+  AND result->'adaptation'->'result'->>'market_pack_version' = $4
+  AND result->'adaptation'->'result'->>'copy_library_id' = $5
+  AND result->'adaptation'->'result'->>'copy_library_version' = $6,
+  false
+)
+FROM creative_source_analysis WHERE id = $1 AND workspace_id = $2
+`, analysisID, workspaceUUID, taskContext.MarketPackID, strconv.Itoa(taskContext.MarketPackVersion), taskContext.CopyLibraryID, strconv.Itoa(taskContext.CopyLibraryVersion)).Scan(&completed)
+	if err != nil {
+		return "", err
+	}
+	if !completed {
+		priorFailures, err := h.countCreativePreAdaptationOutputFailures(ctx, workspaceUUID, analysisID, taskContext)
+		if err != nil {
+			return "", err
+		}
+		if priorFailures >= 1 {
+			if err := h.markCreativePreAdaptationManualRequired(ctx, workspaceUUID, analysisID, taskContext, "pre-adaptation task still did not produce a matching frozen adaptation result after one retry"); err != nil {
+				return "", err
+			}
+			return "", nil
+		}
+		return "pre-adaptation task completed without a matching frozen adaptation result", nil
+	}
+	return "", nil
+}
+
+func (h *Handler) countCreativePreAdaptationOutputFailures(ctx context.Context, workspaceID, analysisID pgtype.UUID, taskContext creativePreAdaptationTaskContext) (int, error) {
+	var count int
+	err := h.DB.QueryRow(ctx, `
+SELECT COUNT(*)
+FROM agent_task_queue task
+JOIN agent ON agent.id = task.agent_id
+WHERE agent.workspace_id = $1
+  AND task.trigger_evidence_kind = $2
+  AND task.trigger_evidence_ref_id = $3
+  AND task.status = 'failed'
+  AND COALESCE(task.failure_reason, '') = 'creative_output_missing'
+  AND task.context->>'workflow' = 'creative_pre_adaptation'
+  AND task.context->>'source_analysis_id' = $4
+  AND task.context->>'market_pack_id' = $5
+  AND task.context->>'market_pack_version' = $6
+  AND task.context->>'copy_library_id' = $7
+  AND task.context->>'copy_library_version' = $8
+`, workspaceID, creativePreAdaptationEvidenceKind, analysisID, taskContext.SourceAnalysisID, taskContext.MarketPackID, strconv.Itoa(taskContext.MarketPackVersion), taskContext.CopyLibraryID, strconv.Itoa(taskContext.CopyLibraryVersion)).Scan(&count)
+	return count, err
+}
+
+func (h *Handler) markCreativePreAdaptationManualRequired(ctx context.Context, workspaceID, analysisID pgtype.UUID, taskContext creativePreAdaptationTaskContext, reason string) error {
+	const summary = "预适配已重试一次仍未通过，需人工确认文案与数值映射。"
+	if strings.TrimSpace(reason) == "" {
+		reason = summary
+	}
+	adaptation := map[string]any{
+		"status":        "unavailable",
+		"summary":       summary,
+		"error_code":    "manual_confirmation_required",
+		"error_message": reason,
+		"result": map[string]any{
+			"market_pack_id":            taskContext.MarketPackID,
+			"market_pack_version":       taskContext.MarketPackVersion,
+			"copy_library_id":           taskContext.CopyLibraryID,
+			"copy_library_version":      taskContext.CopyLibraryVersion,
+			"gaps":                      []string{summary},
+			"analysis_highlights":       []string{},
+			"text_replacements":         []any{},
+			"repayment_plan_selections": []any{},
+			"numeric_layouts":           []any{},
+			"production_prompt":         "",
+		},
+	}
+	encoded, _ := json.Marshal(adaptation)
+	result, err := h.DB.Exec(ctx, `
+UPDATE creative_source_analysis
+SET result = jsonb_set(result, '{adaptation}', $3::jsonb, true)
+WHERE id = $1 AND workspace_id = $2
+`, analysisID, workspaceID, encoded)
+	if err != nil {
+		return err
+	}
+	if result.RowsAffected() == 0 {
+		return errors.New("pre-adaptation source analysis not found")
+	}
+	h.publishCreativeMaterialsUpdated(workspaceID, pgtype.UUID{}, "system", "")
+	return nil
+}
+
 func (h *Handler) marketPackComponentExtractionCompletionError(ctx context.Context, task db.AgentTaskQueue, workspaceID string) (string, error) {
 	if !task.TriggerEvidenceKind.Valid || task.TriggerEvidenceKind.String != marketPackComponentExtractionEvidenceKind {
 		return "", nil
@@ -2047,6 +2155,9 @@ func (h *Handler) CompleteTask(w http.ResponseWriter, r *http.Request) {
 
 	artifactError, validationErr := h.referenceAnalysisCompletionError(r.Context(), existingTask, workspaceID)
 	if validationErr == nil && artifactError == "" {
+		artifactError, validationErr = h.preAdaptationCompletionError(r.Context(), existingTask, workspaceID)
+	}
+	if validationErr == nil && artifactError == "" {
 		artifactError, validationErr = h.marketPackComponentExtractionCompletionError(r.Context(), existingTask, workspaceID)
 	}
 	if validationErr != nil {
@@ -2077,6 +2188,7 @@ func (h *Handler) CompleteTask(w http.ResponseWriter, r *http.Request) {
 	}
 
 	h.emitIssueExecutedOnFirstCompletion(r, task)
+	h.enqueueCreativePreAdaptation(r.Context(), *task, workspaceID)
 
 	// Best-effort revoke of any agent task token minted at claim time.
 	// The token would naturally expire at the 24h watermark and is also

@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -47,6 +48,20 @@ var creativeSourceAnalysisListCmd = &cobra.Command{
 	Use:   "list",
 	Short: "List source analyses",
 	RunE:  runCreativeSourceAnalysisList,
+}
+
+var creativeSourceAnalysisPreAdaptationContextCmd = &cobra.Command{
+	Use:   "pre-adaptation-context <source-analysis-id>",
+	Short: "Read frozen source-analysis, market-pack, and copy-library inputs",
+	Args:  exactArgs(1),
+	RunE:  runCreativeSourceAnalysisPreAdaptationContext,
+}
+
+var creativeSourceAnalysisPreAdaptationPutCmd = &cobra.Command{
+	Use:   "pre-adaptation-put <source-analysis-id>",
+	Short: "Save one market-specific pre-adaptation result",
+	Args:  exactArgs(1),
+	RunE:  runCreativeSourceAnalysisPreAdaptationPut,
 }
 
 var creativeMarketPackCmd = &cobra.Command{
@@ -125,6 +140,13 @@ var creativeOrderQCFinalizeCmd = &cobra.Command{
 	RunE:  runCreativeOrderQCFinalize,
 }
 
+var creativeOrderAdoptCmd = &cobra.Command{
+	Use:   "adopt <order-id> <item-id>",
+	Short: "Adopt one finalized creative order variant for delivery",
+	Args:  exactArgs(2),
+	RunE:  runCreativeOrderAdopt,
+}
+
 func init() {
 	creativeCmd.AddCommand(creativeLibraryCmd)
 	creativeLibraryCmd.AddCommand(creativeLibraryListCmd, creativeLibraryDownloadCmd)
@@ -134,11 +156,18 @@ func init() {
 	creativeLibraryDownloadCmd.Flags().String("output", "json", "Output format: json")
 
 	creativeCmd.AddCommand(creativeSourceAnalysisCmd)
-	creativeSourceAnalysisCmd.AddCommand(creativeSourceAnalysisPutCmd, creativeSourceAnalysisListCmd)
+	creativeSourceAnalysisCmd.AddCommand(creativeSourceAnalysisPutCmd, creativeSourceAnalysisListCmd, creativeSourceAnalysisPreAdaptationContextCmd, creativeSourceAnalysisPreAdaptationPutCmd)
 	creativeSourceAnalysisPutCmd.Flags().String("input-file", "", "UTF-8 JSON analysis envelope (required)")
 	creativeSourceAnalysisPutCmd.Flags().String("output", "json", "Output format: json")
 	creativeSourceAnalysisListCmd.Flags().String("candidate-id", "", "Only return analyses for one candidate UUID")
 	creativeSourceAnalysisListCmd.Flags().String("output", "json", "Output format: json")
+	creativeSourceAnalysisPreAdaptationContextCmd.Flags().String("market-pack-id", "", "Frozen market pack UUID (required)")
+	creativeSourceAnalysisPreAdaptationContextCmd.Flags().Int("market-pack-version", 0, "Frozen market pack version (required)")
+	creativeSourceAnalysisPreAdaptationContextCmd.Flags().String("copy-library-id", "", "Frozen copy library UUID (required)")
+	creativeSourceAnalysisPreAdaptationContextCmd.Flags().Int("copy-library-version", 0, "Frozen copy library version (required)")
+	creativeSourceAnalysisPreAdaptationContextCmd.Flags().String("output", "json", "Output format: json")
+	creativeSourceAnalysisPreAdaptationPutCmd.Flags().String("input-file", "", "UTF-8 JSON pre-adaptation envelope (required)")
+	creativeSourceAnalysisPreAdaptationPutCmd.Flags().String("output", "json", "Output format: json")
 
 	creativeCmd.AddCommand(creativeMarketPackCmd)
 	creativeMarketPackCmd.AddCommand(creativeMarketPackExtractionCmd)
@@ -156,6 +185,7 @@ func init() {
 		creativeOrderAssetPutCmd,
 		creativeOrderQCPutCmd,
 		creativeOrderQCFinalizeCmd,
+		creativeOrderAdoptCmd,
 	)
 	for _, command := range []*cobra.Command{
 		creativeOrderCreateCmd,
@@ -171,6 +201,10 @@ func init() {
 	creativeOrderQCFinalizeCmd.Flags().String("variant", "", "Creative Order Variant UUID (required)")
 	creativeOrderQCFinalizeCmd.Flags().Int("revision", 1, "Variant revision to finalize")
 	creativeOrderQCFinalizeCmd.Flags().String("output", "json", "Output format: json")
+	creativeOrderAdoptCmd.Flags().String("variant", "", "Creative Order Variant UUID (required)")
+	creativeOrderAdoptCmd.Flags().Bool("qc-risk-acknowledged", false, "Explicitly accept a failed QC result for adoption")
+	creativeOrderAdoptCmd.Flags().String("qc-risk-reason", "", "Reason for accepting a failed QC result")
+	creativeOrderAdoptCmd.Flags().String("output", "json", "Output format: json")
 }
 
 func runCreativeLibrary(cmd *cobra.Command, _ []string) error {
@@ -279,6 +313,26 @@ func runCreativeSourceAnalysisList(cmd *cobra.Command, _ []string) error {
 	return getCreativeDomainJSON(cmd, path)
 }
 
+func runCreativeSourceAnalysisPreAdaptationContext(cmd *cobra.Command, args []string) error {
+	marketPackID, _ := cmd.Flags().GetString("market-pack-id")
+	marketPackVersion, _ := cmd.Flags().GetInt("market-pack-version")
+	copyLibraryID, _ := cmd.Flags().GetString("copy-library-id")
+	copyLibraryVersion, _ := cmd.Flags().GetInt("copy-library-version")
+	if strings.TrimSpace(marketPackID) == "" || marketPackVersion < 1 || strings.TrimSpace(copyLibraryID) == "" || copyLibraryVersion < 1 {
+		return fmt.Errorf("--market-pack-id, --market-pack-version, --copy-library-id, and --copy-library-version are required")
+	}
+	query := url.Values{}
+	query.Set("market_pack_id", strings.TrimSpace(marketPackID))
+	query.Set("market_pack_version", strconv.Itoa(marketPackVersion))
+	query.Set("copy_library_id", strings.TrimSpace(copyLibraryID))
+	query.Set("copy_library_version", strconv.Itoa(copyLibraryVersion))
+	return getCreativeDomainJSON(cmd, "/api/creative/source-analyses/"+url.PathEscape(args[0])+"/pre-adaptation-context?"+query.Encode())
+}
+
+func runCreativeSourceAnalysisPreAdaptationPut(cmd *cobra.Command, args []string) error {
+	return putCreativeDomainJSON(cmd, "/api/creative/source-analyses/"+url.PathEscape(args[0])+"/pre-adaptation")
+}
+
 func runCreativeMarketPackExtractionGet(cmd *cobra.Command, args []string) error {
 	return getCreativeDomainJSON(cmd, "/api/creative/resources/"+url.PathEscape(args[0])+"/component-extractions/"+url.PathEscape(args[1]))
 }
@@ -328,6 +382,35 @@ func runCreativeOrderQCFinalize(cmd *cobra.Command, args []string) error {
 		"variant_id": strings.TrimSpace(variantID),
 		"revision":   revision,
 	}, &result); err != nil {
+		return err
+	}
+	return cli.PrintJSON(os.Stdout, result)
+}
+
+func runCreativeOrderAdopt(cmd *cobra.Command, args []string) error {
+	variantID, _ := cmd.Flags().GetString("variant")
+	if strings.TrimSpace(variantID) == "" {
+		return fmt.Errorf("--variant is required")
+	}
+	qcRiskAcknowledged, _ := cmd.Flags().GetBool("qc-risk-acknowledged")
+	qcRiskReason, _ := cmd.Flags().GetString("qc-risk-reason")
+	qcRiskReason = strings.TrimSpace(qcRiskReason)
+	if qcRiskAcknowledged != (qcRiskReason != "") {
+		return fmt.Errorf("--qc-risk-acknowledged and --qc-risk-reason must be provided together")
+	}
+	payload := map[string]any{"variant_id": strings.TrimSpace(variantID)}
+	if qcRiskAcknowledged {
+		payload["qc_risk_acknowledged"] = true
+		payload["qc_risk_reason"] = qcRiskReason
+	}
+	client, err := newAPIClient(cmd)
+	if err != nil {
+		return err
+	}
+	ctx, cancel := cli.APIContext(context.Background())
+	defer cancel()
+	var result any
+	if err := client.PostJSON(ctx, "/api/creative/orders/"+url.PathEscape(args[0])+"/items/"+url.PathEscape(args[1])+"/adoption", payload, &result); err != nil {
 		return err
 	}
 	return cli.PrintJSON(os.Stdout, result)

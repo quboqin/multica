@@ -12,7 +12,7 @@ from typing import Any
 import cv2
 import numpy as np
 import qrcode
-from PIL import Image, ImageColor, ImageDraw, ImageFont
+from PIL import Image, ImageColor, ImageDraw, ImageFilter, ImageFont
 
 
 SUPPORTED_KINDS = {"image", "text", "qr"}
@@ -214,6 +214,152 @@ def compile_layout_contract(
     }
 
 
+def component_backdrop_rule(component: dict[str, Any], placement: dict[str, Any]) -> str:
+    return str(placement.get("backdrop_rule") or component.get("backdrop_rule") or "").strip().lower()
+
+
+def component_declares_backdrop(component: dict[str, Any], placement: dict[str, Any]) -> bool:
+    return component_backdrop_rule(component, placement) not in {"", "none", "transparent"}
+
+
+def prepare_fixed_prime_backdrop(
+    canvas: Image.Image, destination: list[int], kind: str, rule: str
+) -> dict[str, Any] | None:
+    """Quiet the fixed Prime footprint before compositing the frozen component.
+
+    The coordinates still come only from the market pack. This step prevents
+    model-generated text, logos or busy texture inside a fixed Prime slot from
+    bleeding through transparent logo/store/terms assets.
+    """
+    left, top, right, bottom = destination
+    width = right - left
+    height = bottom - top
+    if width < 1 or height < 1:
+        return None
+
+    normalized_rule = rule or "none"
+    if normalized_rule in {"none", "transparent"}:
+        return None
+    crop = canvas.crop((left, top, right, bottom)).convert("RGBA")
+    blur_radius = max(2, min(width, height) // 8)
+    softened = crop.filter(ImageFilter.GaussianBlur(radius=blur_radius))
+
+    if kind == "qr" or "light" in normalized_rule:
+        overlay_alpha = 238 if kind == "qr" else 196
+        mode = "fixed_light_backdrop"
+    elif kind == "text" or "quiet" in normalized_rule or "low_texture" in normalized_rule:
+        overlay_alpha = 174
+        mode = "fixed_quiet_backdrop"
+    else:
+        overlay_alpha = 108
+        mode = "fixed_soft_backdrop"
+
+    repaired = Image.alpha_composite(softened, Image.new("RGBA", (width, height), (255, 255, 255, overlay_alpha)))
+    canvas.paste(repaired, (left, top))
+    return {
+        "mode": mode,
+        "rule": normalized_rule,
+        "rect": destination,
+        "blur_radius": blur_radius,
+        "overlay": {"color": "#ffffff", "alpha": overlay_alpha},
+    }
+
+
+def prime_slot_clearance(image: Image.Image, destination: list[int]) -> dict[str, Any]:
+    """Record whether the generated base leaves a fixed Prime slot visually quiet."""
+    left, top, right, bottom = destination
+    crop = image.crop((left, top, right, bottom)).convert("RGB")
+    array = np.asarray(crop)
+    if array.size == 0 or crop.width < 8 or crop.height < 8:
+        return {"status": "passed", "edge_density": 0.0, "threshold": 0.055}
+    gray = cv2.cvtColor(array, cv2.COLOR_RGB2GRAY)
+    blurred = cv2.GaussianBlur(gray, (3, 3), 0)
+    edges = cv2.Canny(blurred, 56, 144)
+    edge_density = float(np.count_nonzero(edges) / edges.size)
+    rgb_std = float(np.mean(np.std(array.astype(np.float32), axis=(0, 1))))
+    edge = max(1, min(6, crop.width // 20, crop.height // 20))
+    edge_pixels = np.concatenate((
+        array[:edge, :, :].reshape(-1, 3),
+        array[-edge:, :, :].reshape(-1, 3),
+        array[:, :edge, :].reshape(-1, 3),
+        array[:, -edge:, :].reshape(-1, 3),
+    ))
+    background_rgb = np.median(edge_pixels, axis=0)
+    distance = np.linalg.norm(array.astype(np.float32) - background_rgb.astype(np.float32), axis=2)
+    foreground_ratio = float(np.count_nonzero(distance > 72.0) / distance.size)
+    edge_threshold = 0.055
+    foreground_threshold = 0.075
+    passed = edge_density <= edge_threshold and foreground_ratio <= foreground_threshold
+    return {
+        "status": "passed" if passed else "warning",
+        "edge_density": round(edge_density, 6),
+        "rgb_std": round(rgb_std, 3),
+        "foreground_ratio": round(foreground_ratio, 6),
+        "background_rgb": [int(round(value)) for value in background_rgb.tolist()],
+        "edge_threshold": edge_threshold,
+        "foreground_threshold": foreground_threshold,
+    }
+
+
+def transparentize_edge_background(source: Image.Image) -> tuple[Image.Image, dict[str, Any] | None]:
+    """Remove a flat component background that is connected to the source edge.
+
+    Market-pack components sometimes arrive as logo/footer/terms strips with an
+    opaque rectangular background. The layout rectangle remains fixed; this
+    only converts edge-connected background pixels to alpha so the normalized
+    Prime backdrop shows through instead of a visible sticker block.
+    """
+    rgba = source.convert("RGBA")
+    array = np.asarray(rgba).copy()
+    height, width = array.shape[:2]
+    if width < 4 or height < 4:
+        return rgba, None
+
+    alpha = array[:, :, 3]
+    visible = alpha > 0
+    if not np.any(visible):
+        return rgba, None
+    transparent_ratio = float(np.count_nonzero(alpha == 0) / alpha.size)
+    if transparent_ratio > 0.02:
+        return rgba, None
+
+    edge = max(1, min(8, width // 20, height // 20))
+    edge_mask = np.zeros((height, width), dtype=bool)
+    edge_mask[:edge, :] = True
+    edge_mask[-edge:, :] = True
+    edge_mask[:, :edge] = True
+    edge_mask[:, -edge:] = True
+    edge_pixels = array[:, :, :3][edge_mask & visible]
+    if len(edge_pixels) < 8:
+        return rgba, None
+
+    background_rgb = np.median(edge_pixels, axis=0)
+    distance = np.linalg.norm(array[:, :, :3].astype(np.float32) - background_rgb.astype(np.float32), axis=2)
+    threshold = 52.0
+    similar = (distance <= threshold) & visible
+    component_count, labels = cv2.connectedComponents(similar.astype(np.uint8), 8)
+    if component_count <= 1:
+        return rgba, None
+
+    border_labels = np.unique(labels[edge_mask])
+    border_labels = border_labels[border_labels != 0]
+    if len(border_labels) == 0:
+        return rgba, None
+
+    removable = np.isin(labels, border_labels)
+    removable_ratio = float(np.count_nonzero(removable) / np.count_nonzero(visible))
+    if removable_ratio < 0.04 or removable_ratio > 0.985:
+        return rgba, None
+
+    array[:, :, 3] = np.where(removable, 0, alpha)
+    return Image.fromarray(array, "RGBA"), {
+        "mode": "edge_background_to_alpha",
+        "background_rgb": [int(round(value)) for value in background_rgb.tolist()],
+        "threshold": threshold,
+        "transparent_pixel_ratio": round(removable_ratio, 4),
+    }
+
+
 def contain_layer(source: Image.Image, width: int, height: int, *, qr: bool = False) -> tuple[Image.Image, list[int]]:
     if source.width < 1 or source.height < 1:
         raise ValueError("component source image is empty")
@@ -391,6 +537,13 @@ def compose_v2(
                 "kind": kind,
                 "destination_rect": destination,
             }
+            clearance = prime_slot_clearance(body, destination)
+            evidence["body_clearance"] = clearance
+            backdrop_rule = component_backdrop_rule(component, placement)
+            if component_declares_backdrop(component, placement):
+                backdrop = prepare_fixed_prime_backdrop(canvas, destination, kind, backdrop_rule)
+                if backdrop is not None:
+                    evidence["fixed_backdrop"] = backdrop
 
             if kind == "text":
                 content = str(component.get("content") or "")
@@ -435,7 +588,11 @@ def compose_v2(
                 opened_sources[source_role] = Image.open(source_path).convert("RGBA")
             source_image = opened_sources[source_role]
             is_static_qr = kind == "qr" and qr_mode == "static"
-            layer, local_rect = contain_layer(source_image, width, height, qr=is_static_qr)
+            component_source = source_image
+            alpha_key_evidence = None
+            if not is_static_qr:
+                component_source, alpha_key_evidence = transparentize_edge_background(source_image)
+            layer, local_rect = contain_layer(component_source, width, height, qr=is_static_qr)
             rendered_rect = [
                 destination[0] + local_rect[0],
                 destination[1] + local_rect[1],
@@ -449,6 +606,8 @@ def compose_v2(
                 "fit": "contain",
                 "rendered_rect": rendered_rect,
             })
+            if alpha_key_evidence is not None:
+                evidence["alpha_key"] = alpha_key_evidence
             component_evidence.append(evidence)
             if is_static_qr:
                 qr_box = rendered_rect

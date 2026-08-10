@@ -88,7 +88,7 @@ import type {
   InvitationCreatedPayload,
 } from "../types";
 
-const creativeReferenceAnalysisTaskEvents = new Set([
+const creativeMaterialWorkflowTaskEvents = new Set([
   "task:queued",
   "task:dispatch",
   "task:running",
@@ -98,10 +98,15 @@ const creativeReferenceAnalysisTaskEvents = new Set([
   "task:cancelled",
 ]);
 
-export function isCreativeReferenceAnalysisTaskEvent(message: { type: string; payload: unknown }): boolean {
-  if (!creativeReferenceAnalysisTaskEvents.has(message.type)) return false;
+const creativeMaterialWorkflowEvidenceKinds = new Set([
+  "creative_crawl_run_analysis",
+  "creative_source_analysis",
+]);
+
+export function isCreativeMaterialWorkflowTaskEvent(message: { type: string; payload: unknown }): boolean {
+  if (!creativeMaterialWorkflowTaskEvents.has(message.type)) return false;
   if (!message.payload || typeof message.payload !== "object") return false;
-  return (message.payload as { trigger_evidence_kind?: unknown }).trigger_evidence_kind === "creative_crawl_run_analysis";
+  return creativeMaterialWorkflowEvidenceKinds.has(String((message.payload as { trigger_evidence_kind?: unknown }).trigger_evidence_kind ?? ""));
 }
 
 const chatWsLogger = createLogger("chat.ws");
@@ -586,7 +591,7 @@ export function useRealtimeSync(
     ]);
 
     const unsubAny = ws.onAny((msg) => {
-      if (isCreativeReferenceAnalysisTaskEvent(msg)) {
+      if (isCreativeMaterialWorkflowTaskEvent(msg)) {
         const wsId = getCurrentWsId();
         if (wsId) qc.invalidateQueries({ queryKey: creativeKeys.all(wsId) });
       }

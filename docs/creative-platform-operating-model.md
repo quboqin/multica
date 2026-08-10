@@ -120,6 +120,20 @@ flowchart LR
 
 没有新素材时，只结束本次采集运行，不创建 issue，也不发送普通提醒。凭证失效时，运行进入 `action_required`，收件箱链接到同一套凭证验证页面。
 
+#### 本次运行可见性与分析状态
+
+素材库必须保留一次 Crawl Run 的边界：用户点击“立即运行”后自动展开本次新增素材，关闭后可再次打开；
+该视图以 `run_id` 和 `is_new_in_run=true` 查询，不能混入历史复用素材。图片和非图片分别计数，只有图片
+参与参考分析分母。
+
+图片状态从关联分析 task 派生为“分析排队中”“分析中”“已完成分析”或“分析失败”。已完成的图片可在
+本次运行视图直接选择，写入与完整素材库相同的候选决定事件，并自动定位到订单草稿的逐块文案配置；
+分析未完成或非图片素材不能进入选择。失败项保留在本次运行视图中，并可单项重试。
+
+Collector 在提交分析 fanout 前必须验证当前运行时 CLI 支持 `multica task fanout`。旧 CLI 只要无法提交
+fanout，就必须把采集 task 标记为明确失败，不能把已入库的素材误报为“预分析已完成”。具体业务操作见
+[投放素材协作使用说明](./creative-material-workflow-guide.md)。
+
 采集计划映射到 Multica 原生 Autopilot。Autopilot 是触发器，创建原生 Autopilot Run，并且必须配置
 `assignee_type=agent` 和采集智能体 `assignee_id`。当前 bootstrap 使用 `run_only`，把“印尼竞品素材周度采集”
 绑定到 AppGrowing 素材采集智能体。未绑定 agent 的 Autopilot 不能作为采集计划发布。采集智能体负责创建

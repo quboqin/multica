@@ -17,6 +17,10 @@ import (
 const (
 	manualReferenceAnalysisEvidenceKind = "creative_crawl_run_analysis"
 	manualReferenceAnalysisSource       = "manual_library_import"
+	// Version two requires source-owned visual regions. Keeping every retry as a
+	// new version prevents an old analysis from being silently overwritten while
+	// a user is preparing an order.
+	currentManualReferenceAnalysisVersion int32 = 2
 )
 
 type creativeMaterialLibraryImportResponse struct {
@@ -44,6 +48,7 @@ func (h *Handler) enqueueManualReferenceAnalysis(
 	ctx context.Context,
 	workspaceID, userID, candidateID pgtype.UUID,
 	connectorID string,
+	force bool,
 ) creativeMaterialImportAnalysisResponse {
 	result := creativeMaterialImportAnalysisResponse{Action: "enqueue_failed", Status: "failed"}
 	resolvedAgent, resolveErr := h.resolveReferenceAnalysisAgent(ctx, workspaceID, pgtype.UUID{})
@@ -58,13 +63,19 @@ func (h *Handler) enqueueManualReferenceAnalysis(
 	}
 	result.CrawlRunID = uuidToString(evidence.RunID)
 	result.AnalysisAgentID = uuidToString(evidence.AnalysisAgentID)
-	if evidence.Status == "completed" {
+	if evidence.Status == "completed" && !force {
 		result.Action = "already_completed"
 		result.Status = "completed"
 		return result
 	}
 
-	existingTaskID, existingTaskStatus, existingAgentID, err := h.latestManualReferenceAnalysisTask(ctx, evidence.RunID, candidateID)
+	analysisVersion, err := h.nextManualReferenceAnalysisVersion(ctx, workspaceID, candidateID, force)
+	if err != nil {
+		result.Warning = "The material was saved, but its next reference analysis version could not be prepared."
+		return result
+	}
+
+	existingTaskID, existingTaskStatus, existingAgentID, err := h.latestManualReferenceAnalysisTask(ctx, evidence.RunID, candidateID, analysisVersion)
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		result.Warning = "The material was saved, but the existing reference analysis task could not be checked."
 		return result
@@ -107,13 +118,18 @@ WHERE run_id = $1 AND candidate_id = $2 AND workspace_id = $3
 		return result
 	}
 
-	itemKey := uuidToString(candidateID) + ":v1"
+	if err := h.createPendingManualReferenceAnalysis(ctx, workspaceID, candidateID, analysisVersion, evidence.RunID); err != nil {
+		result.Warning = "The material was saved, but its reference analysis state could not be prepared."
+		return result
+	}
+
+	itemKey := fmt.Sprintf("%s:v%d", uuidToString(candidateID), analysisVersion)
 	taskContext, _ := json.Marshal(map[string]any{
 		"type":             "creative_domain_task",
 		"workflow":         "creative_reference_analysis",
 		"crawl_run_id":     result.CrawlRunID,
 		"candidate_id":     uuidToString(candidateID),
-		"analysis_version": 1,
+		"analysis_version": analysisVersion,
 	})
 	if h.TaskService == nil {
 		warning := "Reference analysis task service is unavailable."
@@ -138,6 +154,7 @@ WHERE run_id = $1 AND candidate_id = $2 AND workspace_id = $3
 			warning = fmt.Sprintf("Reference analysis could not be queued: %s", err)
 		}
 		h.markManualReferenceAnalysisFailed(ctx, workspaceID, evidence.RunID, candidateID, warning)
+		h.markManualReferenceAnalysisVersionFailed(ctx, workspaceID, candidateID, analysisVersion, warning)
 		result.Warning = warning
 		return result
 	}
@@ -145,6 +162,38 @@ WHERE run_id = $1 AND candidate_id = $2 AND workspace_id = $3
 	result.Status = creativeAnalysisStatusFromTask(tasks[0].Status)
 	result.TaskID = uuidToString(tasks[0].ID)
 	return result
+}
+
+func (h *Handler) nextManualReferenceAnalysisVersion(ctx context.Context, workspaceID, candidateID pgtype.UUID, force bool) (int32, error) {
+	if !force {
+		return currentManualReferenceAnalysisVersion, nil
+	}
+	var latest int32
+	if err := h.DB.QueryRow(ctx, `
+SELECT COALESCE(MAX(analysis_version), 0)
+FROM creative_source_analysis
+WHERE workspace_id = $1 AND candidate_id = $2
+`, workspaceID, candidateID).Scan(&latest); err != nil {
+		return 0, err
+	}
+	if latest < currentManualReferenceAnalysisVersion {
+		return currentManualReferenceAnalysisVersion, nil
+	}
+	return latest + 1, nil
+}
+
+func (h *Handler) createPendingManualReferenceAnalysis(ctx context.Context, workspaceID, candidateID pgtype.UUID, analysisVersion int32, runID pgtype.UUID) error {
+	_, err := h.DB.Exec(ctx, `
+INSERT INTO creative_source_analysis (
+  workspace_id, candidate_id, analysis_version, status, summary, result,
+  error_code, error_message, trigger_evidence_kind, trigger_evidence_ref_id
+) VALUES ($1, $2, $3, 'pending', '', '{}'::jsonb, '', '', 'crawl_run', $4)
+ON CONFLICT (candidate_id, analysis_version) DO UPDATE SET
+  status = 'pending', summary = '', result = '{}'::jsonb,
+  error_code = '', error_message = '', trigger_evidence_kind = 'crawl_run',
+  trigger_evidence_ref_id = EXCLUDED.trigger_evidence_ref_id, completed_at = NULL
+`, workspaceID, candidateID, analysisVersion, runID)
+	return err
 }
 
 func (h *Handler) ensureManualReferenceAnalysisEvidence(
@@ -167,6 +216,59 @@ func (h *Handler) ensureManualReferenceAnalysisEvidence(
 	}
 
 	var evidence manualReferenceAnalysisEvidence
+	err = tx.QueryRow(ctx, `
+SELECT rc.run_id, NULLIF(cr.params->>'analysis_agent_id', '')::uuid,
+       rc.analysis_status, rc.analysis_error
+FROM creative_material_crawl_run_candidate rc
+JOIN creative_material_crawl_run cr ON cr.id = rc.run_id AND cr.workspace_id = rc.workspace_id
+WHERE rc.workspace_id = $1 AND rc.candidate_id = $2
+  AND rc.analysis_status = 'completed'
+ORDER BY cr.created_at DESC, rc.created_at DESC
+LIMIT 1
+`, workspaceID, candidateID).Scan(
+		&evidence.RunID,
+		&evidence.AnalysisAgentID,
+		&evidence.Status,
+		&evidence.Error,
+	)
+	if err == nil {
+		if commitErr := tx.Commit(ctx); commitErr != nil {
+			return manualReferenceAnalysisEvidence{}, commitErr
+		}
+		return evidence, nil
+	}
+	if !errors.Is(err, pgx.ErrNoRows) {
+		return manualReferenceAnalysisEvidence{}, err
+	}
+
+	err = tx.QueryRow(ctx, `
+SELECT task.trigger_evidence_ref_id, task.agent_id,
+       CASE WHEN task.status = 'running' THEN 'running' ELSE 'pending' END,
+       ''
+FROM agent_task_queue task
+JOIN creative_material_crawl_run cr ON cr.id = task.trigger_evidence_ref_id
+WHERE cr.workspace_id = $1
+  AND task.trigger_evidence_kind = $2
+  AND task.context->>'candidate_id' = $3
+  AND task.status IN ('queued', 'dispatched', 'running', 'waiting_local_directory')
+ORDER BY task.created_at DESC
+LIMIT 1
+`, workspaceID, manualReferenceAnalysisEvidenceKind, uuidToString(candidateID)).Scan(
+		&evidence.RunID,
+		&evidence.AnalysisAgentID,
+		&evidence.Status,
+		&evidence.Error,
+	)
+	if err == nil {
+		if commitErr := tx.Commit(ctx); commitErr != nil {
+			return manualReferenceAnalysisEvidence{}, commitErr
+		}
+		return evidence, nil
+	}
+	if !errors.Is(err, pgx.ErrNoRows) {
+		return manualReferenceAnalysisEvidence{}, err
+	}
+
 	err = tx.QueryRow(ctx, `
 SELECT cr.id, NULLIF(cr.params->>'analysis_agent_id', '')::uuid,
        rc.analysis_status, rc.analysis_error
@@ -253,7 +355,7 @@ LIMIT 1
 	return h.Queries.GetAgentInWorkspace(ctx, db.GetAgentInWorkspaceParams{ID: agentID, WorkspaceID: workspaceID})
 }
 
-func (h *Handler) latestManualReferenceAnalysisTask(ctx context.Context, runID, candidateID pgtype.UUID) (pgtype.UUID, string, pgtype.UUID, error) {
+func (h *Handler) latestManualReferenceAnalysisTask(ctx context.Context, runID, candidateID pgtype.UUID, analysisVersion int32) (pgtype.UUID, string, pgtype.UUID, error) {
 	var taskID, agentID pgtype.UUID
 	var status string
 	err := h.DB.QueryRow(ctx, `
@@ -262,10 +364,11 @@ FROM agent_task_queue
 WHERE trigger_evidence_kind = $1
   AND trigger_evidence_ref_id = $2
   AND context->>'candidate_id' = $3
+  AND COALESCE((context->>'analysis_version')::int, 1) = $4
 ORDER BY CASE WHEN status IN ('queued', 'dispatched', 'running', 'waiting_local_directory') THEN 0 ELSE 1 END,
          created_at DESC
 LIMIT 1
-`, manualReferenceAnalysisEvidenceKind, runID, uuidToString(candidateID)).Scan(&taskID, &status, &agentID)
+`, manualReferenceAnalysisEvidenceKind, runID, uuidToString(candidateID), analysisVersion).Scan(&taskID, &status, &agentID)
 	return taskID, status, agentID, err
 }
 
@@ -275,6 +378,14 @@ UPDATE creative_material_crawl_run_candidate
 SET analysis_status = 'failed', analysis_error = $4, analyzed_at = now(), updated_at = now()
 WHERE run_id = $1 AND candidate_id = $2 AND workspace_id = $3
 `, runID, candidateID, workspaceID, strings.TrimSpace(message))
+}
+
+func (h *Handler) markManualReferenceAnalysisVersionFailed(ctx context.Context, workspaceID, candidateID pgtype.UUID, analysisVersion int32, message string) {
+	_, _ = h.DB.Exec(ctx, `
+UPDATE creative_source_analysis
+SET status = 'failed', error_code = 'REFERENCE_ANALYSIS_QUEUE_FAILED', error_message = $4, completed_at = now()
+WHERE workspace_id = $1 AND candidate_id = $2 AND analysis_version = $3 AND status = 'pending'
+`, workspaceID, candidateID, analysisVersion, strings.TrimSpace(message))
 }
 
 func isActiveDirectTaskStatus(status string) bool {

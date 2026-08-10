@@ -20,7 +20,107 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--evidence")
     parser.add_argument("--max-crop-fraction", type=float, default=0.03)
     parser.add_argument("--max-extension-fraction", type=float, default=0.0)
+    parser.add_argument("--prime-layout-file")
+    parser.add_argument("--prime-safe-audit", action="store_true")
+    parser.add_argument("--prime-safe-fit", action="store_true")
+    parser.add_argument("--prime-safe-margin", type=int)
+    parser.add_argument("--prime-safe-x-margin", type=int)
+    parser.add_argument("--prime-safe-y-margin", type=int)
     return parser.parse_args()
+
+
+def prime_safe_margins(args: argparse.Namespace, layout: dict[str, object], width: int, height: int) -> tuple[int, int]:
+    x_margin = args.prime_safe_x_margin
+    y_margin = args.prime_safe_y_margin
+    shared_margin = args.prime_safe_margin
+    if x_margin is None and y_margin is None and shared_margin is None:
+        top = layout.get("top_key_content_exclusion_end", 0)
+        bottom = layout.get("bottom_key_content_exclusion_start", height)
+        if not isinstance(top, int) or isinstance(top, bool):
+            top = 0
+        if not isinstance(bottom, int) or isinstance(bottom, bool):
+            bottom = height
+        vertical_reserve = round(max(top, height - bottom) / 2)
+        horizontal_reserve = round(vertical_reserve * width / max(1, height) * 2 / 3)
+        return (horizontal_reserve, vertical_reserve)
+    if x_margin is None:
+        x_margin = shared_margin if shared_margin is not None else 0
+    if y_margin is None:
+        y_margin = shared_margin if shared_margin is not None else 0
+    return (x_margin, y_margin)
+
+
+def contract_safe_frame(layout: dict[str, object]) -> tuple[int, int, int, int] | None:
+    for key in ("safe_content_frame", "content_safe_frame"):
+        frame = layout.get(key)
+        if not isinstance(frame, dict):
+            continue
+        values = [frame.get(name) for name in ("x1", "y1", "x2", "y2")]
+        if all(isinstance(value, int) and not isinstance(value, bool) for value in values):
+            x1, y1, x2, y2 = values
+            if x2 > x1 and y2 > y1:
+                return (x1, y1, x2, y2)
+    return None
+
+
+def load_prime_layout(path: str | None, width: int, height: int) -> dict[str, object] | None:
+    if not path:
+        return None
+    payload = json.loads(Path(path).read_text(encoding="utf-8"))
+    if "layouts" in payload:
+        layout = payload["layouts"].get(f"{width}x{height}")
+    else:
+        layout = payload
+    if not isinstance(layout, dict):
+        raise SystemExit("prime layout file must contain the target layout")
+    return layout
+
+
+def load_prime_safe_rect(
+    path: str | None,
+    width: int,
+    height: int,
+    args: argparse.Namespace,
+) -> tuple[tuple[int, int, int, int] | None, tuple[int, int], str]:
+    layout = load_prime_layout(path, width, height)
+    if layout is None:
+        return (None, (0, 0), "none")
+    contract_frame = contract_safe_frame(layout)
+    if contract_frame is not None and args.prime_safe_margin is None and args.prime_safe_x_margin is None and args.prime_safe_y_margin is None:
+        top = layout.get("top_key_content_exclusion_end", 0)
+        if not isinstance(top, int) or isinstance(top, bool):
+            top = 0
+        return (contract_frame, (contract_frame[0], max(0, contract_frame[1] - top)), "contract_safe_content_frame")
+    x_margin, y_margin = prime_safe_margins(args, layout, width, height)
+    top = layout.get("top_key_content_exclusion_end", 0)
+    bottom = layout.get("bottom_key_content_exclusion_start", height)
+    if not isinstance(top, int) or isinstance(top, bool):
+        top = 0
+    if not isinstance(bottom, int) or isinstance(bottom, bool):
+        bottom = height
+    x1 = x_margin
+    y1 = min(height - 1, max(0, top + y_margin))
+    x2 = max(x1 + 1, width - x_margin)
+    y2 = max(y1 + 1, min(height, bottom - y_margin))
+    if y2 - y1 < max(16, height // 4):
+        raise SystemExit("prime safe content area is too small")
+    if x2 - x1 < max(16, width // 4):
+        raise SystemExit("prime safe content width is too small")
+    return ((x1, y1, x2, y2), (x_margin, y_margin), "derived_from_prime_layout_contract")
+
+
+def prime_safe_audit(
+    rect: tuple[int, int, int, int],
+    margins: tuple[int, int],
+) -> dict[str, object]:
+    x1, y1, x2, y2 = rect
+    return {
+        "prime_safe_audit": True,
+        "prime_safe_fit": False,
+        "edge_to_edge_canvas_preserved": True,
+        "safe_content_margin": {"x": margins[0], "y": margins[1]},
+        "safe_content_rect": {"x1": x1, "y1": y1, "x2": x2, "y2": y2},
+    }
 
 
 def main() -> int:
@@ -118,6 +218,15 @@ def main() -> int:
             normalized = backdrop.resize((args.width, args.height), Image.Resampling.LANCZOS)
             method = "contain-edge-fade-extension-lanczos"
         output_path.parent.mkdir(parents=True, exist_ok=True)
+        safe_fit_evidence: dict[str, object] = {"prime_safe_audit": False, "prime_safe_fit": False}
+        if args.prime_safe_audit or args.prime_safe_fit:
+            safe_rect, safe_margins, safe_rect_source = load_prime_safe_rect(args.prime_layout_file, args.width, args.height, args)
+            if safe_rect is None:
+                raise SystemExit("prime safe audit requires --prime-layout-file")
+            if safe_margins[0] < 0 or safe_margins[1] < 0:
+                raise SystemExit("prime safe margins must be non-negative")
+            safe_fit_evidence = prime_safe_audit(safe_rect, safe_margins)
+            safe_fit_evidence["safe_content_rect_source"] = safe_rect_source
         normalized.save(output_path, format="PNG", optimize=True)
 
     evidence = {
@@ -130,6 +239,7 @@ def main() -> int:
         "extension_fraction": round(extension_fraction, 6),
         "max_extension_fraction": args.max_extension_fraction,
         "method": method,
+        **safe_fit_evidence,
     }
     if args.evidence:
         evidence_path = Path(args.evidence).resolve()

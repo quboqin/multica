@@ -5,6 +5,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import shutil
 import subprocess
 import tempfile
 from pathlib import Path
@@ -17,10 +19,46 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--assignee-id", required=True)
     parser.add_argument("--analysis-version", type=int, default=1)
     parser.add_argument("--profile", default="")
+    parser.add_argument(
+        "--cli",
+        default="",
+        help="Absolute task-runtime multica executable; defaults to MULTICA_CLI or multica on PATH.",
+    )
     parser.add_argument("--materials-file")
     parser.add_argument("--output-dir", default="")
     parser.add_argument("--dry-run", action="store_true")
     return parser.parse_args()
+
+
+def resolve_cli(explicit_cli: str) -> str:
+    if explicit_cli.strip():
+        return explicit_cli.strip()
+    if task_runtime_cli := os.environ.get("MULTICA_CLI", "").strip():
+        return task_runtime_cli
+    # Windows CreateProcess can prefer a stale multica.exe while PowerShell and
+    # the daemon launch the current multica.com shim in the same directory.
+    if os.name == "nt" and (windows_cli := shutil.which("multica.com")):
+        return windows_cli
+    return "multica"
+
+
+def ensure_task_fanout_available(cli: list[str]) -> None:
+    try:
+        completed = subprocess.run(
+            [*cli, "task", "fanout", "--help"],
+            check=False,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+        )
+    except OSError as error:
+        raise RuntimeError(
+            f"multica task fanout unavailable; upgrade CLI ({error})"
+        ) from error
+    if completed.returncode == 0:
+        return
+    detail = (completed.stderr.strip() or completed.stdout.strip() or "command unavailable")
+    raise RuntimeError(f"multica task fanout unavailable; upgrade CLI ({detail})")
 
 
 def run_cli(base: list[str], args: list[str]) -> dict[str, Any]:
@@ -88,9 +126,14 @@ def main() -> int:
     if args.analysis_version < 1:
         raise SystemExit("--analysis-version must be positive")
 
-    cli = ["multica"]
+    cli = [resolve_cli(args.cli)]
     if args.profile:
         cli.extend(["--profile", args.profile])
+
+    # Do this before the library read so an outdated task-runtime CLI cannot
+    # make a successful crawl look complete when it cannot enqueue analysis.
+    if not args.dry_run:
+        ensure_task_fanout_available(cli)
 
     materials = (
         load_json(args.materials_file)

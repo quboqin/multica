@@ -7,6 +7,7 @@ import {
   CreativeFeedbackEventListResponseSchema,
   CreativeFeedbackMetricsSchema,
   CreativeOrderQCFinalizeResponseSchema,
+  CreativePreAdaptationRetryResponseSchema,
   CreativeOrderWorkflowRetryResponseSchema,
 	CreativeOrderQCRetryResponseSchema,
 	CreativeOrderPrimePackageRepairResponseSchema,
@@ -225,9 +226,12 @@ describe("creative material schemas", () => {
   it("defaults QC recovery availability for older order responses", () => {
     const legacy = CreativeOrderItemSchema.parse({ id: "item-1", variants: [{ id: "variant-1" }] });
     expect(legacy.variants[0]).toMatchObject({ qc_recovery_used: false, qc_recovery_available: false, prime_repair_used: false, prime_repair_available: false });
-    const current = CreativeOrderItemSchema.parse({ id: "item-1", variants: [{ id: "variant-1", qc_recovery_used: true, qc_recovery_available: false, prime_repair_used: true, prime_repair_available: false }] });
+    expect(legacy.variants[0]?.action_required).toBeUndefined();
+    const current = CreativeOrderItemSchema.parse({ id: "item-1", variants: [{ id: "variant-1", qc_recovery_used: true, qc_recovery_available: false, prime_repair_used: true, prime_repair_available: false, action_required: { task_id: "task-1", workflow: "creative_production", detail: "Prime 安全区被占用", retryable: true } }] });
     expect(current.variants[0]).toMatchObject({ qc_recovery_used: true, qc_recovery_available: false, prime_repair_used: true, prime_repair_available: false });
+    expect(current.variants[0]?.action_required).toMatchObject({ task_id: "task-1", workflow: "creative_production", detail: "Prime 安全区被占用", retryable: true });
     expect(CreativeOrderItemSchema.safeParse({ id: "item-1", variants: [{ id: "variant-1", qc_recovery_used: "yes" }] }).success).toBe(false);
+    expect(CreativeOrderItemSchema.safeParse({ id: "item-1", variants: [{ id: "variant-1", action_required: { retryable: "yes" } }] }).success).toBe(false);
   });
 
   it("parses direct image edit responses defensively", () => {
@@ -237,6 +241,11 @@ describe("creative material schemas", () => {
       source_asset: expect.objectContaining({ id: "" }),
     }));
     expect(CreativeDirectEditResponseSchema.safeParse(null).success).toBe(false);
+  });
+
+  it("keeps the pre-adaptation retry response renderable when fields are missing", () => {
+    expect(CreativePreAdaptationRetryResponseSchema.parse({})).toEqual({ task_id: "", status: "pending" });
+    expect(CreativePreAdaptationRetryResponseSchema.safeParse(null).success).toBe(false);
   });
 
   it("accepts the backend empty annotation object without inventing a point", () => {
@@ -290,13 +299,13 @@ describe("creative material schemas", () => {
   });
 
   it("keeps an unrun material library renderable and falls back on malformed Crawl Runs", () => {
-    expect(CreativeMaterialLibrarySchema.parse({ candidates: [] })).toEqual({ candidates: [], crawl_runs: [] });
+    expect(CreativeMaterialLibrarySchema.parse({ candidates: [] })).toEqual({ candidates: [], total_count: 0, next_offset: null, crawl_runs: [] });
     expect(parseWithFallback(
       { candidates: [], crawl_runs: null },
       CreativeMaterialLibrarySchema,
-      { candidates: [], crawl_runs: [] },
+      { candidates: [], total_count: 0, next_offset: null, crawl_runs: [] },
       { endpoint: "GET /api/creative/materials" },
-    )).toEqual({ candidates: [], crawl_runs: [] });
+    )).toEqual({ candidates: [], total_count: 0, next_offset: null, crawl_runs: [] });
   });
 
   it("preserves structured deliveries and adjustment requests", () => {

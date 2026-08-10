@@ -11,16 +11,18 @@ import (
 )
 
 const validComposableCopyLibraryJSON = `{
-  "schema_version":2,
+  "schema_version":4,
   "locale":"id-ID",
-  "product_facts":[{"id":"fact-limit","key":"limit","label":"Limit","value":"80000000","copy_text":"Rp80.000.000","source":"approved sheet","status":"approved"}],
   "fragments":[
-    {"id":"fragment-num","key":"num","creative_types":["num"],"role":"benefit","text":"Limit hingga {{fact.limit.copy_text}}","status":"approved"},
-    {"id":"fragment-plan","key":"plan","creative_types":["repayment_plan"],"role":"benefit","text":"Pilihan Tenor","status":"approved"}
+    {"id":"fragment-headline","key":"headline","creative_types":["num","repayment_plan"],"role":"headline","text":"Pinjaman Fleksibel","status":"approved"},
+    {"id":"fragment-benefit","key":"benefit","creative_types":["num","repayment_plan"],"role":"benefit","text":"Limit hingga Rp80.000.000","status":"approved"}
   ],
+  "repayment_plan":{"labels":{"principal":"Jumlah Pinjaman","tenor":"Periode Cicilan","monthly_installment":"Cicilan per Bulan","total_interest":"Total Bunga","total_repayment":"Total Pembayaran"},"entries":[
+    {"id":"plan-30m-3","key":"30m-3","principal":30000000,"tenor_months":3,"monthly_installment":10270000,"total_interest":810000,"total_repayment":30810000,"source":"approved sheet","status":"approved"}
+  ]},
   "recipes":[
-    {"id":"recipe-num","key":"num","creative_type":"num","fragment_ids":{"benefit":["fragment-num"]},"status":"approved"},
-    {"id":"recipe-plan","key":"plan","creative_type":"repayment_plan","fragment_ids":{"benefit":["fragment-plan"]},"status":"approved"}
+    {"id":"recipe-num","key":"num","creative_type":"num","fragment_ids":{"headline":["fragment-headline"],"benefit":["fragment-benefit"]},"status":"approved"},
+    {"id":"recipe-plan","key":"plan","creative_type":"repayment_plan","fragment_ids":{"headline":["fragment-headline"],"benefit":["fragment-benefit"]},"status":"approved"}
   ]
 }`
 
@@ -93,12 +95,11 @@ func TestValidateComposableCopyLibraryConfig(t *testing.T) {
 		replaceTo   string
 		want        string
 	}{
-		{name: "fact source", replaceFrom: `"source":"approved sheet"`, replaceTo: `"source":""`, want: "requires id, key, copy_text, and source"},
-		{name: "fact reference", replaceFrom: `fact.limit.copy_text`, replaceTo: `fact.unknown.copy_text`, want: `references missing or unapproved fact "unknown"`},
-		{name: "duplicate fact key", replaceFrom: `"product_facts":[`, replaceTo: `"product_facts":[{"id":"fact-limit-duplicate","key":"limit","copy_text":"Duplicate","source":"approved sheet","status":"approved"},`, want: `fact key "limit" is duplicated`},
-		{name: "fragment role", replaceFrom: `"benefit":["fragment-num"]`, replaceTo: `"headline":["fragment-num"]`, want: `instead of "benefit"`},
+		{name: "template variable", replaceFrom: `Limit hingga Rp80.000.000`, replaceTo: `Limit hingga {{fact.limit.copy_text}}`, want: "must contain final copy, not template variables"},
+		{name: "fragment role", replaceFrom: `"benefit":["fragment-benefit"]`, replaceTo: `"headline":["fragment-benefit"]`, want: `instead of "benefit"`},
 		{name: "duplicate recipe id", replaceFrom: `"id":"recipe-plan"`, replaceTo: `"id":"recipe-num"`, want: `recipe id "recipe-num" is duplicated`},
-		{name: "missing repayment recipe", replaceFrom: `"id":"recipe-plan","key":"plan","creative_type":"repayment_plan","fragment_ids":{"benefit":["fragment-plan"]},"status":"approved"`, replaceTo: `"id":"recipe-plan","key":"plan","creative_type":"repayment_plan","fragment_ids":{"benefit":["fragment-plan"]},"status":"draft"`, want: "approved repayment_plan recipe"},
+		{name: "plan labels", replaceFrom: `"principal":"Jumlah Pinjaman"`, replaceTo: `"principal":""`, want: "repayment plan requires all table labels"},
+		{name: "duplicate plan key", replaceFrom: `"entries":[`, replaceTo: `"entries":[{"id":"duplicate","key":"30m-3","principal":40000000,"tenor_months":3,"monthly_installment":12000000,"total_interest":1000000,"total_repayment":41000000,"source":"approved sheet","status":"approved"},`, want: `repayment plan key "30m-3" is duplicated`},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			raw := []byte(validComposableCopyLibraryJSON)

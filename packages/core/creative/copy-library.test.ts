@@ -1,192 +1,49 @@
 import { describe, expect, it } from "vitest";
-import type { CreativeMaterialCandidate, CreativeResource } from "../types/creative";
-import { parseCreativeCopyLibraryConfig, recommendCreativeCopy, validateCustomCopyFinancialFacts } from "./copy-library";
+import type { CreativeResource } from "../types/creative";
+import { parseCreativeCopyLibraryConfig, selectCreativeRepaymentPlan, validateCustomCopyFinancialFacts } from "./copy-library";
 
 const resource: CreativeResource = {
   id: "library-1", workspace_id: "workspace-1", kind: "copy_library", name: "Library", description: "", status: "published",
-  version: 4, published_version: 3, created_by: "user-1", created_at: "", updated_at: "",
-  config: {},
+  version: 4, published_version: 3, created_by: "user-1", created_at: "", updated_at: "", config: {},
   published_config: {
-    schema_version: 2, market: "Indonesia", locale: "id-ID",
+    schema_version: 4, market: "Indonesia", locale: "id-ID",
     source: { name: "Feishu", url: "https://example.test", sync_status: "pending", note: "" },
-    product_facts: [{ id: "fact-1", key: "limit", label: "Limit", value: "80000000", copy_text: "Rp80.000.000", source: "approved", status: "approved" }],
     fragments: [
-      { id: "fragment-num-headline", key: "num-headline", name: "Headline", creative_types: ["num"], role: "headline", text: "Pinjaman Fleksibel Tanpa Ribet", tags: [], status: "approved" },
-      { id: "fragment-num-benefit", key: "num-benefit", name: "Benefit", creative_types: ["num"], role: "benefit", text: "Limit hingga {{fact.limit.copy_text}}", tags: [], status: "approved" },
-      { id: "fragment-plan-headline", key: "plan-headline", name: "Plan", creative_types: ["repayment_plan"], role: "headline", text: "Pilih Tenor Sesuai Kebutuhan", tags: [], status: "approved" },
-      { id: "fragment-plan-benefit", key: "plan-benefit", name: "Plan benefit", creative_types: ["repayment_plan"], role: "benefit", text: "Cicilan sesuai tenor", tags: ["cicilan"], status: "approved" },
+      { id: "fragment-num-headline", key: "num-headline", name: "Headline", creative_types: ["num", "repayment_plan"], role: "headline", text: "Pinjaman Fleksibel Tanpa Ribet", tags: [], usage: "core", status: "approved" },
+      { id: "fragment-num-benefit", key: "num-benefit", name: "Benefit", creative_types: ["num", "repayment_plan"], role: "benefit", text: "Limit hingga Rp80.000.000", tags: ["limit"], usage: "core", status: "approved" },
+      { id: "fragment-plan-headline", key: "plan-headline", name: "Plan", content_group: "repayment_headline", creative_types: ["repayment_plan"], role: "headline", text: "Pilih Tenor Sesuai Kebutuhan", tags: ["cicilan"], usage: "core", status: "approved" },
     ],
-    recipes: [
-      { id: "recipe-num", key: "num", name: "NUM", creative_type: "num", description: "", fragment_ids: { headline: ["fragment-num-headline"], benefit: ["fragment-num-benefit"] }, match_tags: ["额度", "limit"], status: "approved" },
-      { id: "recipe-plan", key: "plan", name: "Plan", creative_type: "repayment_plan", description: "", fragment_ids: { headline: ["fragment-plan-headline"] }, match_tags: ["分期", "tenor"], status: "approved" },
-    ],
-    calculation_rules: [], recommendation_policy: { type_weight: 1000, tag_weight: 80, concise_weight: 1, default_creative_type: "num" },
+    recipes: [],
+    repayment_plan: {
+      labels: { principal: "Jumlah Pinjaman", tenor: "Periode Cicilan", monthly_installment: "Cicilan per Bulan", total_interest: "Total Bunga", total_repayment: "Total Pembayaran" },
+      entries: [
+        { id: "plan-5m-3", key: "plan-5000000-3", principal: 5_000_000, tenor_months: 3, monthly_installment: 1_711_667, total_interest: 135_001, total_repayment: 5_135_001, source: "approved table", status: "approved" },
+        { id: "plan-5m-6", key: "plan-5000000-6", principal: 5_000_000, tenor_months: 6, monthly_installment: 878_333, total_interest: 269_998, total_repayment: 5_269_998, source: "approved table", status: "approved" },
+        { id: "plan-10m-12", key: "plan-10000000-12", principal: 10_000_000, tenor_months: 12, monthly_installment: 923_333, total_interest: 1_079_996, total_repayment: 11_079_996, source: "approved table", status: "approved" },
+      ],
+    },
   },
 };
 
-const candidate = {
-  id: "candidate-1", title: "Limit pinjaman", tags: [], media_names: [],
-} as unknown as CreativeMaterialCandidate;
-
 describe("composable copy library", () => {
   it("parses malformed config without throwing", () => {
-    expect(parseCreativeCopyLibraryConfig({ fragments: null, recipes: "bad" })).toMatchObject({
-      schema_version: 2, fragments: [], recipes: [], product_facts: [], locale: "id-ID",
-    });
+    expect(parseCreativeCopyLibraryConfig({ fragments: null, repayment_plan: null })).toMatchObject({ schema_version: 4, fragments: [], locale: "id-ID", repayment_plan: { entries: [] } });
   });
 
-  it("ranks by inferred creative type and freezes assembled facts", () => {
-    const ranked = recommendCreativeCopy(candidate, resource, {
-      theme: "", theme_elements: [], primary_benefit: "额度", secondary_benefits: [], benefit_value: "",
-    });
-    expect(ranked[0]?.composition.id).toMatch(/^[0-9a-f-]{36}$/);
-    expect(ranked[0]?.snapshot).toMatchObject({
-      schema_version: 2,
-      library_id: "library-1",
-      library_version: 3,
-      creative_type: "num",
-      headline: "Pinjaman Fleksibel Tanpa Ribet",
-      benefit: "Limit hingga Rp80.000.000",
-      product_facts: [{ key: "limit", copy_text: "Rp80.000.000" }],
-      fragments: [
-        { id: "fragment-num-headline", role: "headline", text: "Pinjaman Fleksibel Tanpa Ribet" },
-        { id: "fragment-num-benefit", role: "benefit", text: "Limit hingga Rp80.000.000" },
-      ],
-    });
-    expect(ranked[0]?.reasons).toContain("未识别月供表，按数字利益点推荐");
+  it("looks up only an approved amount and tenor pair", () => {
+    const config = parseCreativeCopyLibraryConfig(resource.published_config!);
+    expect(selectCreativeRepaymentPlan(config, { principal: 5_000_000, tenorMonths: 6 })?.display).toMatchObject({ principal: "Rp5.000.000", tenor: "6 Bulan", monthlyInstallment: "Rp878.333" });
+    expect(selectCreativeRepaymentPlan(config, { principal: 20_000_000, tenorMonths: 6 })).toBeNull();
+    expect(selectCreativeRepaymentPlan(config, { principal: 5_000_000, tenorMonths: 9 })).toBeNull();
   });
 
-  it("keeps NUM and repayment-plan recipes as explicit recommendation types", () => {
-    const ranked = recommendCreativeCopy(candidate, resource, {
-      theme: "", theme_elements: [], primary_benefit: "Tabel cicilan per bulan", secondary_benefits: [], benefit_value: "",
-      information_mechanism: "Simulasi cicilan per bulan untuk beberapa tenor", has_repayment_table: true,
-    });
-
-    expect(ranked[0]?.snapshot.headline).toBe("Pilih Tenor Sesuai Kebutuhan");
-    expect(ranked[0]?.snapshot.creative_type).toBe("repayment_plan");
-    expect(ranked[0]?.reasons).toContain("识别到月供表或还款明细结构");
-  });
-
-  it("keeps first-month interest, amount, and tenor signals in NUM without a repayment table", () => {
-    const ranked = recommendCreativeCopy(candidate, resource, {
-      theme: "贷款获批", theme_elements: [], primary_benefit: "首月 0% 利息与贷款额度", secondary_benefits: ["期限 12 bulan"],
-      benefit_value: "0% bulan pertama; Rp50.000.000; tenor 12 bulan",
-      information_mechanism: "凭证字段依次展示利息、额度和期限", has_repayment_table: false,
-    });
-
-    expect(ranked[0]?.snapshot.headline).toBe("Pinjaman Fleksibel Tanpa Ribet");
-    expect(ranked[0]?.snapshot.creative_type).toBe("num");
-    expect(ranked[0]?.reasons).toContain("未识别月供表，按数字利益点推荐");
-    expect(ranked[0]?.snapshot.product_facts).toEqual([{ key: "limit", label: "Limit", value: "80000000", copy_text: "Rp80.000.000", source: "approved" }]);
-  });
-
-  it("chooses the closest approved principal for a repayment table", () => {
-    const changed = structuredClone(resource);
-    changed.published_config!.product_facts = [
-      ...(changed.published_config!.product_facts as Array<Record<string, unknown>>),
-      { id: "fact-principal-5m", key: "principal_5m", label: "Rp5m", value: "5000000", copy_text: "Rp5.000.000", source: "approved", status: "approved" },
-      { id: "fact-principal-10m", key: "principal_10m", label: "Rp10m", value: "10000000", copy_text: "Rp10.000.000", source: "approved", status: "approved" },
-    ];
-    changed.published_config!.fragments = [
-      ...(changed.published_config!.fragments as Array<Record<string, unknown>>).filter((fragment) => fragment.id !== "fragment-plan-headline"),
-      { id: "fragment-plan-5m", key: "plan-5m", name: "Plan 5m", creative_types: ["repayment_plan"], role: "benefit", text: "{{fact.principal_5m.copy_text}}", tags: [], status: "approved" },
-      { id: "fragment-plan-10m", key: "plan-10m", name: "Plan 10m", creative_types: ["repayment_plan"], role: "benefit", text: "Pinjaman {{fact.principal_10m.copy_text}}", tags: [], status: "approved" },
-    ];
-    changed.published_config!.recipes = [
-      ...(changed.published_config!.recipes as Array<Record<string, unknown>>).filter((recipe) => recipe.creative_type === "num"),
-      { id: "recipe-plan-5m", key: "plan-5m", name: "Plan 5m", creative_type: "repayment_plan", description: "", fragment_ids: { benefit: ["fragment-plan-5m"] }, match_tags: ["月供"], status: "approved" },
-      { id: "recipe-plan-10m", key: "plan-10m", name: "Plan 10m", creative_type: "repayment_plan", description: "", fragment_ids: { benefit: ["fragment-plan-10m"] }, match_tags: ["月供"], status: "approved" },
-    ];
-
-    const ranked = recommendCreativeCopy(candidate, changed, {
-      theme: "", theme_elements: [], primary_benefit: "月供对照表", secondary_benefits: [], benefit_value: "最高额度 Rp100.000.000",
-      information_mechanism: "按借款金额展示 3、6、12 个月月供", has_repayment_table: true,
-    });
-
-    expect(ranked[0]?.snapshot.benefit.split("\n")[0]).toContain("Rp10.000.000");
-    expect(ranked[0]?.snapshot.benefit).toContain("Rp5.000.000");
-  });
-
-  it("skips a recipe that cannot resolve an approved fact without blocking a fact-free recipe", () => {
-    const changed = structuredClone(resource);
-    changed.published_config!.product_facts = [];
-
-    const ranked = recommendCreativeCopy(candidate, changed, {
-      theme: "", theme_elements: [], primary_benefit: "额度", secondary_benefits: [], benefit_value: "",
-    });
-
-    expect(ranked[0]?.snapshot.headline).toBe("Pinjaman Fleksibel Tanpa Ribet");
-    expect(JSON.stringify(ranked)).not.toContain("缺少产品事实");
-  });
-
-  it("does not execute unaudited calculation expressions", () => {
-    const changed = structuredClone(resource);
-    changed.published_config!.calculation_rules = [{ id: "rule", key: "danger", name: "Do not run", expression: "1 / 0", input_fact_keys: [], output_fact_key: "broken", source: "unknown", status: "approved" }];
-    expect(recommendCreativeCopy(candidate, changed, { theme: "", theme_elements: [], primary_benefit: "额度", secondary_benefits: [], benefit_value: "" })[0]?.snapshot.product_facts)
-      .toEqual([{ key: "limit", label: "Limit", value: "80000000", copy_text: "Rp80.000.000", source: "approved" }]);
-  });
-
-  it("allows only approved financial facts in custom copy", () => {
-    const approved = validateCustomCopyFinancialFacts({
-      headline: "Pinjaman fleksibel",
-      subheadline: "",
-      benefit: "Limit hingga Rp 80.000.000",
-      supporting: "",
-      cta: "Ajukan sekarang",
-      legal_text: "",
-    }, resource);
-    const unapproved = validateCustomCopyFinancialFacts({
-      headline: "Pinjaman fleksibel",
-      subheadline: "",
-      benefit: "Limit hingga Rp99.000.000 dengan bunga 1%",
-      supporting: "",
-      cta: "Ajukan sekarang",
-      legal_text: "",
-    }, resource);
-
-    expect(approved).toMatchObject({ allowed: true, unapproved: [] });
-    expect(unapproved.allowed).toBe(false);
-    expect(unapproved.unapproved).toEqual(expect.arrayContaining(["Rp99.000.000", "1%"]));
-  });
-
-  it("allows fact-free custom copy without a published library but blocks invented facts", () => {
-    const factFree = validateCustomCopyFinancialFacts({
-      headline: "Pinjaman fleksibel",
-      subheadline: "",
-      benefit: "Sesuaikan dengan kebutuhanmu",
-      supporting: "",
-      cta: "Ajukan sekarang",
-      legal_text: "",
-    }, undefined);
-    const invented = validateCustomCopyFinancialFacts({
-      headline: "Pinjaman fleksibel",
-      subheadline: "",
-      benefit: "Limit hingga Rp99.000.000",
-      supporting: "",
-      cta: "Ajukan sekarang",
-      legal_text: "",
-    }, undefined);
-
-    expect(factFree).toEqual({ allowed: true, unapproved: [], message: "" });
+  it("allows financial text only when it appears in approved copy or the repayment table", () => {
+    const approved = validateCustomCopyFinancialFacts({ headline: "", subheadline: "", benefit: "Limit hingga Rp80.000.000", supporting: "", cta: "", legal_text: "" }, resource);
+    const planned = validateCustomCopyFinancialFacts({ headline: "", subheadline: "", benefit: "Cicilan Rp878.333 untuk 6 Bulan", supporting: "", cta: "", legal_text: "" }, resource);
+    const invented = validateCustomCopyFinancialFacts({ headline: "", subheadline: "", benefit: "Limit hingga Rp99.000.000", supporting: "", cta: "", legal_text: "" }, resource);
+    expect(approved.allowed).toBe(true);
+    expect(planned.allowed).toBe(true);
     expect(invented.allowed).toBe(false);
   });
 
-  it("keeps using the published revision while a newer draft exists", () => {
-    const withDraft = structuredClone(resource);
-    withDraft.version = 5;
-    withDraft.status = "draft";
-    withDraft.config = { fragments: [{ text: "UNPUBLISHED" }] };
-    const first = recommendCreativeCopy(candidate, withDraft, { theme: "", theme_elements: [], primary_benefit: "额度", secondary_benefits: [], benefit_value: "" })[0]!.snapshot;
-    expect(first.library_version).toBe(3);
-    expect(first.headline).toBe("Pinjaman Fleksibel Tanpa Ribet");
-
-    withDraft.published_version = 5;
-    withDraft.published_config = structuredClone(resource.published_config);
-    const published = withDraft.published_config!.fragments as Array<Record<string, unknown>>;
-    published[0] = { ...published[0], text: "Headline v5" };
-    const second = recommendCreativeCopy(candidate, withDraft, { theme: "", theme_elements: [], primary_benefit: "额度", secondary_benefits: [], benefit_value: "" })[0]!.snapshot;
-    expect(second.library_version).toBe(5);
-    expect(second.headline).toBe("Headline v5");
-    expect(first.headline).toBe("Pinjaman Fleksibel Tanpa Ribet");
-  });
 });

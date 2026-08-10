@@ -259,21 +259,165 @@ WHERE id = $1`, childID); err != nil {
 
 func TestValidateCreativeTaskFanoutContextRequiresOrderTrace(t *testing.T) {
 	ref := parseUUID(uuid.NewString())
-	valid := []service.DirectTaskFanoutItem{{ItemKey: "v01:r1", Context: json.RawMessage(fmt.Sprintf(`{
+	variantID := uuid.NewString()
+	valid := []service.DirectTaskFanoutItem{{
+		ItemKey: variantID + ":r1",
+		Context: json.RawMessage(fmt.Sprintf(`{
   "type":"creative_domain_task","workflow":"creative_production",
   "creative_order_id":"%s","issue_id":"%s","leader_agent_id":"%s",
-  "creative_order_item_id":"%s","variant_id":"%s"
-}`, uuid.NewString(), uuid.NewString(), uuid.NewString(), uuidToString(ref), uuid.NewString()))}}
+  "creative_order_item_id":"%s","variant_id":"%s","revision":1,
+  "expected_sizes":["1080x1080","1200x628","800x1000"]
+}`, uuid.NewString(), uuid.NewString(), uuid.NewString(), uuidToString(ref), variantID)),
+	}}
 	if err := validateCreativeTaskFanoutContext("creative_order_item_production", ref, valid); err != nil {
 		t.Fatalf("valid production context: %v", err)
 	}
-	missingIssue := []service.DirectTaskFanoutItem{{ItemKey: "v01:r1", Context: json.RawMessage(fmt.Sprintf(`{
+	missingIssueVariantID := uuid.NewString()
+	missingIssue := []service.DirectTaskFanoutItem{{
+		ItemKey: missingIssueVariantID + ":r1",
+		Context: json.RawMessage(fmt.Sprintf(`{
   "type":"creative_domain_task","workflow":"creative_production",
   "creative_order_id":"%s","leader_agent_id":"%s",
-  "creative_order_item_id":"%s"
-}`, uuid.NewString(), uuid.NewString(), uuidToString(ref)))}}
+  "creative_order_item_id":"%s","variant_id":"%s","revision":1,
+  "expected_sizes":["1080x1080"]
+}`, uuid.NewString(), uuid.NewString(), uuidToString(ref), missingIssueVariantID)),
+	}}
 	if err := validateCreativeTaskFanoutContext("creative_order_item_production", ref, missingIssue); err == nil {
 		t.Fatal("production context without issue_id unexpectedly passed")
+	}
+	staleRevision := []service.DirectTaskFanoutItem{{
+		ItemKey: variantID + ":r0",
+		Context: json.RawMessage(fmt.Sprintf(`{
+  "type":"creative_domain_task","workflow":"creative_production",
+  "creative_order_id":"%s","issue_id":"%s","leader_agent_id":"%s",
+  "creative_order_item_id":"%s","variant_id":"%s","revision":0,
+  "expected_sizes":["1080x1080"]
+}`, uuid.NewString(), uuid.NewString(), uuid.NewString(), uuidToString(ref), variantID)),
+	}}
+	if err := validateCreativeTaskFanoutContext("creative_order_item_production", ref, staleRevision); err == nil {
+		t.Fatal("production context with revision 0 unexpectedly passed")
+	}
+}
+
+func TestNormalizeCreativeProductionFanoutUsesCurrentVariantRevision(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	_, candidateID := createCreativeFeedbackCandidate(t, "production fanout canonical revision")
+	var orderID, itemID, variantID string
+	if err := testPool.QueryRow(t.Context(), `
+INSERT INTO creative_order (workspace_id, status, input_snapshot, created_by)
+VALUES ($1, 'running', '{}'::jsonb, $2) RETURNING id::text
+`, testWorkspaceID, testUserID).Scan(&orderID); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM creative_order WHERE id = $1`, orderID)
+	})
+	if err := testPool.QueryRow(t.Context(), `
+INSERT INTO creative_order_item (order_id, candidate_id, copy_snapshot)
+VALUES ($1, $2, '{}'::jsonb) RETURNING id::text
+`, orderID, candidateID).Scan(&itemID); err != nil {
+		t.Fatal(err)
+	}
+	if err := testPool.QueryRow(t.Context(), `
+INSERT INTO creative_order_variant (order_item_id, variant_key, revision, status)
+VALUES ($1, 'V01', 1, 'queued') RETURNING id::text
+`, itemID).Scan(&variantID); err != nil {
+		t.Fatal(err)
+	}
+	rawContext, err := json.Marshal(map[string]any{
+		"type":                   "creative_domain_task",
+		"workflow":               "creative_production",
+		"creative_order_id":      orderID,
+		"issue_id":               uuid.NewString(),
+		"leader_agent_id":        uuid.NewString(),
+		"creative_order_item_id": itemID,
+		"variant_id":             variantID,
+		"revision":               0,
+		"item_key":               variantID + ":r0",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	items, err := normalizeCreativeProductionFanoutItems(t.Context(), testPool, parseUUID(testWorkspaceID), parseUUID(itemID), []service.DirectTaskFanoutItem{{
+		ItemKey: variantID + ":r0",
+		Context: rawContext,
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 1 || items[0].ItemKey != variantID+":r1" {
+		t.Fatalf("normalized item key = %#v", items)
+	}
+	var normalized map[string]any
+	if err := json.Unmarshal(items[0].Context, &normalized); err != nil {
+		t.Fatal(err)
+	}
+	if normalized["revision"] != float64(1) || normalized["item_key"] != variantID+":r1" {
+		t.Fatalf("normalized context = %#v", normalized)
+	}
+	expectedSizes, _ := normalized["expected_sizes"].([]any)
+	if len(expectedSizes) != len(standardCreativeAssetSizes) {
+		t.Fatalf("expected sizes = %#v", expectedSizes)
+	}
+}
+
+func TestNormalizeManualCreativeProductionFanoutAddsOrderTrace(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	_, candidateID := createCreativeFeedbackCandidate(t, "manual production fanout trace")
+	var orderID, itemID, variantID string
+	if err := testPool.QueryRow(t.Context(), `
+INSERT INTO creative_order (workspace_id, status, input_snapshot, created_by)
+VALUES ($1, 'running', '{}'::jsonb, $2) RETURNING id::text
+`, testWorkspaceID, testUserID).Scan(&orderID); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM creative_order WHERE id = $1`, orderID)
+	})
+	if err := testPool.QueryRow(t.Context(), `
+INSERT INTO creative_order_item (order_id, candidate_id, copy_snapshot)
+VALUES ($1, $2, '{}'::jsonb) RETURNING id::text
+`, orderID, candidateID).Scan(&itemID); err != nil {
+		t.Fatal(err)
+	}
+	if err := testPool.QueryRow(t.Context(), `
+INSERT INTO creative_order_variant (order_item_id, variant_key, revision, status)
+VALUES ($1, 'V01', 2, 'queued') RETURNING id::text
+`, itemID).Scan(&variantID); err != nil {
+		t.Fatal(err)
+	}
+	rawContext, err := json.Marshal(map[string]any{
+		"type":            "creative_domain_task",
+		"workflow":        "creative_production",
+		"issue_id":        uuid.NewString(),
+		"leader_agent_id": uuid.NewString(),
+		"variant_id":      variantID,
+		"revision":        0,
+		"item_key":        variantID + ":r0",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	items, err := normalizeManualCreativeProductionFanoutItems(t.Context(), testPool, parseUUID(testWorkspaceID), parseUUID(orderID), []service.DirectTaskFanoutItem{{
+		ItemKey: variantID + ":r0",
+		Context: rawContext,
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 1 || items[0].ItemKey != variantID+":r2" {
+		t.Fatalf("normalized manual item = %#v", items)
+	}
+	var normalized map[string]any
+	if err := json.Unmarshal(items[0].Context, &normalized); err != nil {
+		t.Fatal(err)
+	}
+	if normalized["creative_order_id"] != orderID || normalized["creative_order_item_id"] != itemID || normalized["revision"] != float64(2) || normalized["item_key"] != variantID+":r2" {
+		t.Fatalf("normalized manual context = %#v", normalized)
 	}
 }
 
@@ -288,12 +432,12 @@ func TestValidateCreativeQCFanoutContextRequiresLaneAndCompleteTrace(t *testing.
 			"type":                   "creative_domain_task",
 			"workflow":               workflow,
 			"issue_id":               issueID,
-			"leader_agent_id":         leaderID,
-			"creative_order_id":       orderID,
-			"creative_order_item_id":  itemID,
-			"variant_id":              variantID,
+			"leader_agent_id":        leaderID,
+			"creative_order_id":      orderID,
+			"creative_order_item_id": itemID,
+			"variant_id":             variantID,
 			"revision":               2,
-			"expected_sizes":          expectedSizes,
+			"expected_sizes":         expectedSizes,
 		})
 		if err != nil {
 			t.Fatal(err)

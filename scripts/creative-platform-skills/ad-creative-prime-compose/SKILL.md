@@ -23,12 +23,23 @@ revision 错配或夹带其他尺寸时进入 `action_required`，不得补造�
 
 按 config 中 `enabled=true` 的组件和数组顺序合成：
 
+- 标准 AdaKami 组件 `logo/terms/store_badges/regulatory/afpi/pindai_legal` 必须是官方 `image` 附件；
 - `image`：下载 `source_role` 对应的独立附件，保持比例 contain 到当前尺寸 `destination_rect`；
-- `text`：逐字渲染 config 的 `content`，style 缺省时使用脚本默认值；
+- `text`：仅允许 `custom_*` 非品牌组件；不得用于 Logo、条款、商店标、监管说明或合规标识；
 - `qr`：`none` 跳过，`static` 使用冻结 `prime_qr` 附件，`dynamic` 生成已批准 payload。
 
 组件数量、启停、文案、附件、QR mode 和每个尺寸坐标都来自冻结 config。Skill 不写死品牌组件、业务文字、
 坐标或 payload。
+
+Prime 位置只有一个来源：冻结市场包的 `prime_composition.layouts[<size>].components[*].destination_rect`
+以及由它编译出的 `prime_layout_contract.layouts[<size>]`。不得根据生成图临时移动 Logo、QR、条款、商店标识或
+底部合规组件；如果底图在固定区域内含文字、按钮、卡片、人物、原品牌或高纹理背景，合成脚本只记录
+`body_clearance` warning，仍按冻结坐标合成并交给 QC/用户判断，不能挪组件，也不能把底图质量问题变成
+Prime 阻断。
+
+非 QR 的 `image` 组件如果源图带整块边缘背景色，合成脚本可把与边缘连通的背景色转成 alpha，但
+`backdrop_rule=none` 不得额外加白底；Logo、条款、商店标识和底部合规条必须保持官方贴片观感。
+QR 组件不做透明化，必须保留可解码证据。
 
 ## 批量合成
 
@@ -46,7 +57,9 @@ python <当前 Skill 目录>/references/image_prime_compose.py \
 ```
 
 保留脚本原始结果。不得删除或改写 package identity、job status/size/revision、canvas、components、
-layout contract、QR decoded/passed。任一 job 失败时整包不送检，但成功 job 和失败 evidence 都保留。
+layout contract、body_clearance warning、固定背景净化/alpha key evidence、QR decoded/passed。只有组件资源缺失、
+尺寸合同错误、合成写入失败或 QR 无法解码这类 Prime 执行问题才让 job 失败；底图槽位不干净只作为 warning。
+任一 job 失败时整包不送检，但成功 job 和失败 evidence 都保留。
 
 ## 资产登记
 

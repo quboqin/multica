@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -9,6 +10,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/attribution"
 	"github.com/multica-ai/multica/server/internal/service"
@@ -49,6 +51,12 @@ func (h *Handler) FanoutAgentTasks(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "unsupported creative trigger_evidence_kind")
 		return
 	}
+	normalizedItems, err := h.normalizeCreativeTaskFanoutItems(r.Context(), agent.WorkspaceID, evidenceKind, evidenceRefID, req.Items)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	req.Items = normalizedItems
 	if err := validateCreativeTaskFanoutContext(evidenceKind, evidenceRefID, req.Items); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
@@ -85,6 +93,193 @@ func (h *Handler) FanoutAgentTasks(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusCreated, taskFanoutResponse{Tasks: h.directTaskResponses(r, tasks, uuidToString(agent.WorkspaceID))})
+}
+
+type creativeTaskFanoutQuerier interface {
+	QueryRow(context.Context, string, ...any) pgx.Row
+}
+
+func (h *Handler) normalizeCreativeTaskFanoutItems(ctx context.Context, workspaceID pgtype.UUID, kind string, evidenceRefID pgtype.UUID, items []service.DirectTaskFanoutItem) ([]service.DirectTaskFanoutItem, error) {
+	switch kind {
+	case "creative_order_item_production":
+		return normalizeCreativeProductionFanoutItems(ctx, h.DB, workspaceID, evidenceRefID, items)
+	case "manual":
+		return normalizeManualCreativeProductionFanoutItems(ctx, h.DB, workspaceID, evidenceRefID, items)
+	default:
+		return items, nil
+	}
+}
+
+func normalizeCreativeProductionFanoutItems(ctx context.Context, q creativeTaskFanoutQuerier, workspaceID, orderItemID pgtype.UUID, items []service.DirectTaskFanoutItem) ([]service.DirectTaskFanoutItem, error) {
+	normalized := make([]service.DirectTaskFanoutItem, 0, len(items))
+	for _, item := range items {
+		next, err := normalizeCreativeProductionFanoutItem(ctx, q, workspaceID, orderItemID, item)
+		if err != nil {
+			return nil, err
+		}
+		normalized = append(normalized, next)
+	}
+	return normalized, nil
+}
+
+func normalizeCreativeProductionFanoutItem(ctx context.Context, q creativeTaskFanoutQuerier, workspaceID, orderItemID pgtype.UUID, item service.DirectTaskFanoutItem) (service.DirectTaskFanoutItem, error) {
+	var taskContext map[string]json.RawMessage
+	if len(item.Context) == 0 || json.Unmarshal(item.Context, &taskContext) != nil || taskContext == nil {
+		return item, errors.New("creative production task context must be a JSON object")
+	}
+	var variantIDText string
+	if raw := taskContext["variant_id"]; raw == nil || json.Unmarshal(raw, &variantIDText) != nil || strings.TrimSpace(variantIDText) == "" {
+		return item, errors.New("creative production task context variant_id must be a UUID")
+	}
+	variantUUID, err := uuid.Parse(strings.TrimSpace(variantIDText))
+	if err != nil {
+		return item, errors.New("creative production task context variant_id must be a UUID")
+	}
+	variantID := parseUUID(variantUUID.String())
+	var revision int
+	var canonicalOrderItemID, canonicalOrderID, canonicalIssueID string
+	err = q.QueryRow(ctx, `
+SELECT variant.revision, item.id::text, order_row.id::text, COALESCE(order_row.issue_id::text, '')
+FROM creative_order_variant variant
+JOIN creative_order_item item ON item.id = variant.order_item_id
+JOIN creative_order order_row ON order_row.id = item.order_id
+WHERE variant.id = $1
+  AND item.id = $2
+  AND order_row.workspace_id = $3
+`, variantID, orderItemID, workspaceID).Scan(&revision, &canonicalOrderItemID, &canonicalOrderID, &canonicalIssueID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return item, errors.New("creative production task variant must belong to the trigger order item")
+	}
+	if err != nil {
+		return item, errors.New("failed to validate creative production task variant")
+	}
+	suppliedRevision, hasRevision, err := jsonPositiveInt(taskContext["revision"])
+	if err != nil {
+		return item, errors.New("creative production task context revision must be a positive integer")
+	}
+	if hasRevision && suppliedRevision != 0 && suppliedRevision != revision {
+		return item, errors.New("creative production task context revision must match the current creative order variant revision")
+	}
+	canonicalVariantID := uuidToString(variantID)
+	canonicalItemKey := fmt.Sprintf("%s:r%d", canonicalVariantID, revision)
+	taskContext["variant_id"], _ = json.Marshal(canonicalVariantID)
+	taskContext["creative_order_id"], _ = json.Marshal(canonicalOrderID)
+	taskContext["creative_order_item_id"], _ = json.Marshal(canonicalOrderItemID)
+	if canonicalIssueID != "" {
+		taskContext["issue_id"], _ = json.Marshal(canonicalIssueID)
+	}
+	taskContext["revision"], _ = json.Marshal(revision)
+	taskContext["item_key"], _ = json.Marshal(canonicalItemKey)
+	if _, ok := taskContext["expected_sizes"]; !ok || jsonArrayLength(taskContext["expected_sizes"]) == 0 {
+		taskContext["expected_sizes"], _ = json.Marshal(standardCreativeAssetSizes)
+	}
+	taskContext["scope"], _ = json.Marshal("variant")
+	taskContext["subject_id"], _ = json.Marshal(canonicalVariantID)
+	encoded, err := json.Marshal(taskContext)
+	if err != nil {
+		return item, errors.New("failed to normalize creative production task context")
+	}
+	return service.DirectTaskFanoutItem{ItemKey: canonicalItemKey, Context: encoded}, nil
+}
+
+func normalizeManualCreativeProductionFanoutItems(ctx context.Context, q creativeTaskFanoutQuerier, workspaceID, orderID pgtype.UUID, items []service.DirectTaskFanoutItem) ([]service.DirectTaskFanoutItem, error) {
+	normalized := make([]service.DirectTaskFanoutItem, 0, len(items))
+	for _, item := range items {
+		next, err := normalizeManualCreativeProductionFanoutItem(ctx, q, workspaceID, orderID, item)
+		if err != nil {
+			return nil, err
+		}
+		normalized = append(normalized, next)
+	}
+	return normalized, nil
+}
+
+func normalizeManualCreativeProductionFanoutItem(ctx context.Context, q creativeTaskFanoutQuerier, workspaceID, orderID pgtype.UUID, item service.DirectTaskFanoutItem) (service.DirectTaskFanoutItem, error) {
+	var taskContext map[string]json.RawMessage
+	if len(item.Context) == 0 || json.Unmarshal(item.Context, &taskContext) != nil || taskContext == nil {
+		return item, nil
+	}
+	var taskType, workflow string
+	_ = json.Unmarshal(taskContext["type"], &taskType)
+	_ = json.Unmarshal(taskContext["workflow"], &workflow)
+	if taskType != "creative_domain_task" || workflow != "creative_production" {
+		return item, nil
+	}
+	var variantIDText string
+	if raw := taskContext["variant_id"]; raw == nil || json.Unmarshal(raw, &variantIDText) != nil || strings.TrimSpace(variantIDText) == "" {
+		return item, errors.New("manual creative production task context variant_id must be a UUID")
+	}
+	variantUUID, err := uuid.Parse(strings.TrimSpace(variantIDText))
+	if err != nil {
+		return item, errors.New("manual creative production task context variant_id must be a UUID")
+	}
+	variantID := parseUUID(variantUUID.String())
+	var revision int
+	var canonicalOrderItemID, canonicalOrderID, canonicalIssueID string
+	err = q.QueryRow(ctx, `
+SELECT variant.revision, item.id::text, order_row.id::text, COALESCE(order_row.issue_id::text, '')
+FROM creative_order_variant variant
+JOIN creative_order_item item ON item.id = variant.order_item_id
+JOIN creative_order order_row ON order_row.id = item.order_id
+WHERE variant.id = $1
+  AND order_row.id = $2
+  AND order_row.workspace_id = $3
+`, variantID, orderID, workspaceID).Scan(&revision, &canonicalOrderItemID, &canonicalOrderID, &canonicalIssueID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return item, errors.New("manual creative production task variant must belong to the trigger order")
+	}
+	if err != nil {
+		return item, errors.New("failed to validate manual creative production task variant")
+	}
+	suppliedRevision, hasRevision, err := jsonPositiveInt(taskContext["revision"])
+	if err != nil {
+		return item, errors.New("manual creative production task context revision must be a positive integer")
+	}
+	if hasRevision && suppliedRevision != 0 && suppliedRevision != revision {
+		return item, errors.New("manual creative production task context revision must match the current creative order variant revision")
+	}
+	canonicalVariantID := uuidToString(variantID)
+	canonicalItemKey := fmt.Sprintf("%s:r%d", canonicalVariantID, revision)
+	taskContext["variant_id"], _ = json.Marshal(canonicalVariantID)
+	taskContext["creative_order_id"], _ = json.Marshal(canonicalOrderID)
+	taskContext["creative_order_item_id"], _ = json.Marshal(canonicalOrderItemID)
+	if canonicalIssueID != "" {
+		taskContext["issue_id"], _ = json.Marshal(canonicalIssueID)
+	}
+	taskContext["revision"], _ = json.Marshal(revision)
+	taskContext["item_key"], _ = json.Marshal(canonicalItemKey)
+	if _, ok := taskContext["expected_sizes"]; !ok || jsonArrayLength(taskContext["expected_sizes"]) == 0 {
+		taskContext["expected_sizes"], _ = json.Marshal(standardCreativeAssetSizes)
+	}
+	taskContext["scope"], _ = json.Marshal("variant")
+	taskContext["subject_id"], _ = json.Marshal(canonicalVariantID)
+	encoded, err := json.Marshal(taskContext)
+	if err != nil {
+		return item, errors.New("failed to normalize manual creative production task context")
+	}
+	return service.DirectTaskFanoutItem{ItemKey: canonicalItemKey, Context: encoded}, nil
+}
+
+func jsonPositiveInt(raw json.RawMessage) (int, bool, error) {
+	if len(raw) == 0 || string(raw) == "null" {
+		return 0, false, nil
+	}
+	var value float64
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return 0, true, err
+	}
+	if value < 0 || value != float64(int(value)) {
+		return 0, true, errors.New("not a positive integer")
+	}
+	return int(value), true, nil
+}
+
+func jsonArrayLength(raw json.RawMessage) int {
+	var values []json.RawMessage
+	if len(raw) == 0 || json.Unmarshal(raw, &values) != nil {
+		return 0
+	}
+	return len(values)
 }
 
 func creativeTaskRequiredCapability(kind string) string {
@@ -184,6 +379,11 @@ func validateCreativeTaskFanoutContext(kind string, evidenceRefID pgtype.UUID, i
 		} else if workflow != expectedWorkflow {
 			return fmt.Errorf("creative task context workflow must be %s", expectedWorkflow)
 		}
+		if kind == "creative_order_item_production" {
+			if err := validateCreativeProductionTaskContext(context, item.ItemKey); err != nil {
+				return err
+			}
+		}
 		if reference, _ := context[referenceField].(string); reference != expectedRef {
 			return fmt.Errorf("creative task context %s must match trigger evidence", referenceField)
 		}
@@ -195,6 +395,38 @@ func validateCreativeTaskFanoutContext(kind string, evidenceRefID pgtype.UUID, i
 				}
 			}
 		}
+	}
+	return nil
+}
+
+func validateCreativeProductionTaskContext(context map[string]any, itemKey string) error {
+	variantID, _ := context["variant_id"].(string)
+	if _, err := uuid.Parse(strings.TrimSpace(variantID)); err != nil {
+		return errors.New("creative production task context variant_id must be a UUID")
+	}
+	revision, ok := context["revision"].(float64)
+	if !ok || revision < 1 || revision != float64(int(revision)) {
+		return errors.New("creative production task context revision must be a positive integer")
+	}
+	expectedSizes, ok := context["expected_sizes"].([]any)
+	if !ok || len(expectedSizes) == 0 {
+		return errors.New("creative production task context expected_sizes must be a non-empty array")
+	}
+	seen := make(map[string]struct{}, len(expectedSizes))
+	for _, rawSize := range expectedSizes {
+		size, ok := rawSize.(string)
+		size = strings.TrimSpace(size)
+		if !ok || !validCreativeAssetSize(size) {
+			return errors.New("creative production task context expected_sizes contains an invalid size")
+		}
+		if _, duplicate := seen[size]; duplicate {
+			return errors.New("creative production task context expected_sizes must not contain duplicates")
+		}
+		seen[size] = struct{}{}
+	}
+	wantItemKey := fmt.Sprintf("%s:r%d", strings.TrimSpace(variantID), int(revision))
+	if itemKey != wantItemKey {
+		return fmt.Errorf("creative production task item_key must be %s", wantItemKey)
 	}
 	return nil
 }

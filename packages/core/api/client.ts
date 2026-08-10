@@ -159,6 +159,7 @@ import type {
   CreativeIssueContext,
   CreativeIssueItem,
   CreativeMaterialLibraryResponse,
+  CreativeMaterialLibraryQuery,
   CreativeMaterialImportResult,
   CreativeMaterialsResponse,
   CreativeResource,
@@ -315,6 +316,8 @@ import {
 	EMPTY_CREATIVE_ORDER_QC_FINALIZE_RESPONSE,
 	CreativeSourceAnalysisListResponseSchema,
 	EMPTY_CREATIVE_SOURCE_ANALYSIS_LIST_RESPONSE,
+	CreativePreAdaptationRetryResponseSchema,
+	EMPTY_CREATIVE_PRE_ADAPTATION_RETRY_RESPONSE,
 	EMPTY_CREATIVE_ORDER_LIST_RESPONSE,
 	RegisterCreativeDeliveriesResponseSchema,
   CreativeMaterialLibrarySchema,
@@ -2652,8 +2655,21 @@ export class ApiClient {
   }
 
   // Creative Studio resources
-  async listCreativeMaterialLibrary(): Promise<CreativeMaterialLibraryResponse> {
-    const raw = await this.fetch<unknown>("/api/creative/materials");
+  async listCreativeMaterialLibrary(params?: CreativeMaterialLibraryQuery): Promise<CreativeMaterialLibraryResponse> {
+    const search = new URLSearchParams();
+    if (params?.runId) search.set("run_id", params.runId);
+    if (params?.limit !== undefined) search.set("limit", String(params.limit));
+    if (params?.offset !== undefined) search.set("offset", String(params.offset));
+    if (params?.query) search.set("query", params.query);
+    if (params?.competitor) search.set("competitor", params.competitor);
+    if (params?.area) search.set("area", params.area);
+    if (params?.language) search.set("language", params.language);
+    if (params?.media) search.set("media", params.media);
+    if (params?.assetType) search.set("asset_type", params.assetType);
+    if (params?.view && params.view !== "all") search.set("view", params.view);
+    if (params?.sort && params.sort !== "recent") search.set("sort", params.sort);
+    const query = search.toString();
+    const raw = await this.fetch<unknown>(`/api/creative/materials${query ? `?${query}` : ""}`);
     return parseWithFallback(raw, CreativeMaterialLibrarySchema, EMPTY_CREATIVE_MATERIAL_LIBRARY, {
       endpoint: "GET /api/creative/materials",
     });
@@ -2987,6 +3003,16 @@ export class ApiClient {
     const query = candidateId ? `?candidate_id=${encodeURIComponent(candidateId)}` : "";
     const raw = await this.fetch<unknown>(`/api/creative/source-analyses${query}`);
     return parseWithFallback(raw, CreativeSourceAnalysisListResponseSchema, EMPTY_CREATIVE_SOURCE_ANALYSIS_LIST_RESPONSE, { endpoint: "GET /api/creative/source-analyses" });
+  }
+
+  async retryCreativePreAdaptation(sourceAnalysisId: string, marketPackId: string): Promise<{ task_id: string; status: string }> {
+    const raw = await this.fetch<unknown>(`/api/creative/source-analyses/${encodeURIComponent(sourceAnalysisId)}/pre-adaptation/retry`, {
+      method: "POST",
+      body: JSON.stringify({ market_pack_id: marketPackId }),
+    });
+    return parseWithFallback(raw, CreativePreAdaptationRetryResponseSchema, EMPTY_CREATIVE_PRE_ADAPTATION_RETRY_RESPONSE, {
+      endpoint: "POST /api/creative/source-analyses/:id/pre-adaptation/retry",
+    });
   }
 
   async putCreativeIssueContext(

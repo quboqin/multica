@@ -1,40 +1,71 @@
 "use client";
 
-import { cloneElement, useEffect, useId, useMemo, useRef, useState } from "react";
+import { cloneElement, useDeferredValue, useEffect, useId, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, Check, Download, ExternalLink, ImageIcon, LoaderCircle, Plus, RefreshCw, RotateCcw, Search, Sparkles, Upload, X } from "lucide-react";
+import { AlertTriangle, ArrowLeft, BookOpenText, Check, Download, ExternalLink, ImageIcon, LoaderCircle, Plus, RefreshCw, RotateCcw, Search, Sparkles, Upload, X } from "lucide-react";
 import { api } from "@multica/core/api";
 import {
   creativeFeedbackOptions,
   creativeKeys,
   creativeMaterialLibraryOptions,
-  recommendCreativeCopy,
+  creativeOrdersOptions,
   creativeResourceFilesOptions,
   creativeResourcesOptions,
   creativeSourceAnalysesOptions,
+  parseCreativeCopyLibraryConfig,
   validateCustomCopyFinancialFacts,
 } from "@multica/core/creative";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { useFileUpload } from "@multica/core/hooks/use-file-upload";
 import { resolvePublicFileUrl } from "@multica/core/workspace/avatar-url";
 import { squadListOptions } from "@multica/core/workspace/queries";
-import type { CreateCreativeFeedbackRequest, CreateCreativeOrderRequest, CreativeCopyFragmentRole, CreativeCopySnapshot, CreativeMaterialCandidate, CreativeMaterialImportResult, CreativeSourceAnalysis, SquadMember } from "@multica/core/types";
+import type { CreateCreativeFeedbackRequest, CreateCreativeOrderRequest, CreativeCopySnapshot, CreativeMaterialCandidate, CreativeMaterialCrawlRun, CreativeMaterialImportResult, CreativeMaterialLibraryQuery, CreativeRepaymentPlanEntry, CreativeResource, CreativeSourceAnalysis, SquadMember } from "@multica/core/types";
 import { Badge } from "@multica/ui/components/ui/badge";
 import { Button, buttonVariants } from "@multica/ui/components/ui/button";
-import { Checkbox } from "@multica/ui/components/ui/checkbox";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@multica/ui/components/ui/dialog";
 import { Input } from "@multica/ui/components/ui/input";
 import { Label } from "@multica/ui/components/ui/label";
 import { NativeSelect, NativeSelectOption } from "@multica/ui/components/ui/native-select";
 import { Textarea } from "@multica/ui/components/ui/textarea";
 import { toast } from "sonner";
-import type { CreativeCopyRecommendationBrief as CopyRecommendationBrief } from "@multica/core/creative";
+import { candidateDecisionFeedbackInput, latestCandidateFeedback } from "../lib/creative-candidate-feedback";
+import { normalizedProductionPromptText, productionPromptLines, userFacingProductionPrompt } from "../lib/creative-production-prompt";
+import { formatCreativeDateTime } from "../lib/creative-time";
+import {
+  creativeMaterialMatchesFilter,
+  creativeMaterialProductionState,
+  latestCompletedAnalyses,
+  materialAnalysisState,
+  type CreativeMaterialAnalysisReadiness,
+  type CreativeMaterialProductionState,
+  type MaterialAnalysisState,
+  type MaterialLibraryFilter,
+} from "../lib/creative-material-state";
+
+export { candidateDecisionFeedbackInput, latestCandidateFeedback } from "../lib/creative-candidate-feedback";
+export {
+  creativeMaterialMatchesFilter,
+  creativeMaterialProductionState,
+  effectiveMaterialCandidateStatus,
+  latestAnalyses,
+  latestCompletedAnalyses,
+  materialAnalysisState,
+  materialReferenceAnalysisBadgeLabel,
+} from "../lib/creative-material-state";
+export type {
+  CreativeMaterialAnalysisReadiness,
+  CreativeMaterialProductionState,
+  MaterialAnalysisState,
+  MaterialLibraryFilter,
+} from "../lib/creative-material-state";
 
 type ImportDraft = {
   mode: "file" | "url";
   sourceUrl: string;
   title: string;
   competitor: string;
+  area: string;
+  language: string;
   tags: string;
   note: string;
 };
@@ -44,89 +75,200 @@ const EMPTY_IMPORT: ImportDraft = {
   sourceUrl: "",
   title: "",
   competitor: "",
+  area: "",
+  language: "",
   tags: "",
   note: "",
 };
 
-export function CreativeMaterialLibrary({ onOrderCreated }: { onOrderCreated?: (orderId: string) => void } = {}) {
+const MATERIAL_FILTER_LABELS: Record<MaterialLibraryFilter, string> = {
+  available: "可用素材",
+  analyze: "分析中",
+  generated: "已生成",
+  rejected: "已拒绝",
+  all: "全部历史",
+};
+
+const MATERIAL_PAGE_SIZE = 60;
+
+const MATERIAL_SORT_LABELS = {
+  recent: "最近采集",
+  impressions: "曝光估算",
+  duration: "投放天数",
+} as const;
+
+export function CreativeMaterialLibrary({
+  onOrderCreated,
+  onOpenCopyLibrary,
+  filter = "available",
+  onFilterChange,
+  onRunChange,
+  runId = "",
+}: {
+  onOrderCreated?: (orderId: string) => void;
+  onOpenCopyLibrary?: () => void;
+  filter?: MaterialLibraryFilter;
+  onFilterChange?: (filter: MaterialLibraryFilter) => void;
+  onRunChange?: (runId: string) => void;
+  runId?: string;
+} = {}) {
   const wsId = useWorkspaceId();
   const queryClient = useQueryClient();
-  const materials = useQuery(creativeMaterialLibraryOptions(wsId));
   const [query, setQuery] = useState("");
   const [competitor, setCompetitor] = useState("");
+  const [area, setArea] = useState("");
+  const [language, setLanguage] = useState("");
+  const [media, setMedia] = useState("");
+  const [assetType, setAssetType] = useState<"" | "image" | "video" | "unknown">("");
+  const [sort, setSort] = useState<keyof typeof MATERIAL_SORT_LABELS>("recent");
+  const [offset, setOffset] = useState(0);
   const [preview, setPreview] = useState<CreativeMaterialCandidate | null>(null);
   const [directEditCandidate, setDirectEditCandidate] = useState<CreativeMaterialCandidate | null>(null);
   const [importOpen, setImportOpen] = useState(false);
-  const [dismissedSelectionEventIds, setDismissedSelectionEventIds] = useState<Set<string>>(() => new Set());
+  const [orderDraftOpen, setOrderDraftOpen] = useState(false);
   const [rejecting, setRejecting] = useState<CreativeMaterialCandidate | null>(null);
-  const orderDraftRef = useRef<HTMLDivElement>(null);
-  const pendingOrderDraftCandidateId = useRef("");
-  const analyses = useQuery(creativeSourceAnalysesOptions(wsId));
+  const [selectedCandidatesById, setSelectedCandidatesById] = useState<Record<string, CreativeMaterialCandidate>>({});
+  const deferredQuery = useDeferredValue(query);
+  const materialQuery = useMemo<CreativeMaterialLibraryQuery>(() => ({
+    limit: MATERIAL_PAGE_SIZE,
+    offset,
+    query: deferredQuery.trim(),
+    competitor,
+    area,
+    language,
+    media,
+    assetType: assetType || undefined,
+    sort,
+    view: filter,
+  }), [area, assetType, competitor, deferredQuery, filter, language, media, offset, sort]);
+  const scopedMaterialQuery = useMemo<CreativeMaterialLibraryQuery>(() => ({
+    ...materialQuery,
+    runId: runId || undefined,
+  }), [materialQuery, runId]);
+  const materials = useQuery(creativeMaterialLibraryOptions(wsId, scopedMaterialQuery));
+  const analyses = useQuery({
+    ...creativeSourceAnalysesOptions(wsId),
+    refetchInterval: orderDraftOpen ? 2500 : false,
+  });
   const feedback = useQuery(creativeFeedbackOptions(wsId, "candidate"));
+  const orders = useQuery(creativeOrdersOptions(wsId));
+  const resources = useQuery(creativeResourcesOptions(wsId));
   const candidates = useMemo(() => materials.data?.candidates ?? [], [materials.data?.candidates]);
+  const { marketPack, copyLibrary } = useMemo(
+    () => defaultPreAdaptationResources(resources.data?.resources ?? []),
+    [resources.data?.resources],
+  );
   const completedAnalyses = useMemo(() => latestCompletedAnalyses(analyses.data?.analyses ?? []), [analyses.data?.analyses]);
   const latestDecisions = useMemo(() => latestCandidateFeedback(feedback.data?.events ?? []), [feedback.data?.events]);
-  const selectedCandidateIds = useMemo(
-    () => new Set([...latestDecisions.entries()].filter(([, decision]) => decision.decision === "selected").map(([candidateId]) => candidateId)),
-    [latestDecisions],
+  const generatedCandidateIds = useMemo(
+    () => new Set((orders.data?.orders ?? []).flatMap((order) => order.items.map((item) => item.candidate_id))),
+    [orders.data?.orders],
   );
-  const draftCandidateIds = useMemo(
-    () => new Set([...latestDecisions.entries()].filter(([, decision]) => decision.decision === "selected" && !dismissedSelectionEventIds.has(decision.id)).map(([candidateId]) => candidateId)),
-    [dismissedSelectionEventIds, latestDecisions],
+  const displayedCandidates = candidates;
+  const analysisStateByCandidateId = useMemo(
+    () => new Map(displayedCandidates.map((candidate) => [candidate.id, materialAnalysisState(candidate, analyses.data?.analyses ?? [])])),
+    [analyses.data?.analyses, displayedCandidates],
   );
-  useEffect(() => {
-    const activeSelectionEvents = new Set([...latestDecisions.values()].filter((decision) => decision.decision === "selected").map((decision) => decision.id));
-    setDismissedSelectionEventIds((current) => {
-      const next = new Set([...current].filter((id) => activeSelectionEvents.has(id)));
-      return next.size === current.size && [...next].every((id) => current.has(id)) ? current : next;
-    });
-  }, [latestDecisions]);
-  useEffect(() => {
-    const pendingCandidateId = pendingOrderDraftCandidateId.current;
-    if (!pendingCandidateId || !draftCandidateIds.has(pendingCandidateId)) return;
-    pendingOrderDraftCandidateId.current = "";
-    orderDraftRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
-  }, [draftCandidateIds]);
-  const failed = candidates.filter((item) => !item.archived_url && item.archive_status === "failed");
-  const retryArchives = useMutation({
-    mutationFn: (candidateIds: string[]) => api.retryCreativeMaterialArchives(candidateIds),
-    onSuccess: (result) => {
-      queryClient.invalidateQueries({ queryKey: creativeKeys.materials(wsId) });
-      toast.success(`已重新安排 ${result.scheduled_count} 条素材归档`);
+  const productionStateByCandidateId = useMemo(
+    () => new Map(displayedCandidates.map((candidate) => {
+      const analysisState = analysisStateByCandidateId.get(candidate.id) ?? materialAnalysisState(candidate, analyses.data?.analyses ?? []);
+      const analysis = completedAnalyses.get(candidate.id);
+      const analysisReadiness = creativeMaterialAnalysisReadiness(analysis, analysisState, marketPack, copyLibrary);
+      const decision = latestDecisions.get(candidate.id)?.decision;
+      return [candidate.id, creativeMaterialProductionState(candidate, analysisState, decision, generatedCandidateIds.has(candidate.id), analysisReadiness)];
+    })),
+    [analyses.data?.analyses, analysisStateByCandidateId, completedAnalyses, copyLibrary, displayedCandidates, generatedCandidateIds, latestDecisions, marketPack],
+  );
+  const continueAnalysis = useMutation({
+    mutationFn: async ({ sourceAnalysisId, marketPackId }: { sourceAnalysisId: string; marketPackId: string }) => (
+      api.retryCreativePreAdaptation(sourceAnalysisId, marketPackId)
+    ),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: creativeKeys.analyses(wsId) });
+      void queryClient.invalidateQueries({ queryKey: creativeKeys.materials(wsId) });
     },
-    onError: (error) => toast.error(error instanceof Error ? error.message : "无法重新归档素材"),
   });
+  const continuedAnalysisAttempts = useRef(new Set<string>());
+  useEffect(() => {
+    if (!marketPack || !copyLibrary) return;
+    for (const candidate of displayedCandidates) {
+      const analysis = completedAnalyses.get(candidate.id);
+      if (!analysis || sourceAnalysisNeedsVisualUpgrade(analysis) || sourceAnalysisAdaptationStatus(analysis)) continue;
+      const attemptKey = `${analysis.id}:${marketPack.id}:v${marketPack.published_version}:${copyLibrary.id}:v${copyLibrary.published_version}`;
+      if (continuedAnalysisAttempts.current.has(attemptKey)) continue;
+      continuedAnalysisAttempts.current.add(attemptKey);
+      continueAnalysis.mutate({ sourceAnalysisId: analysis.id, marketPackId: marketPack.id });
+    }
+  }, [completedAnalyses, copyLibrary, continueAnalysis, displayedCandidates, marketPack]);
+  const selectedCandidates = useMemo(
+    () => Object.values(selectedCandidatesById).filter((candidate) => !generatedCandidateIds.has(candidate.id)),
+    [generatedCandidateIds, selectedCandidatesById],
+  );
+  useEffect(() => {
+    if (selectedCandidates.length === 0) setOrderDraftOpen(false);
+  }, [selectedCandidates.length]);
   const retryAnalysis = useMutation({
     mutationFn: (candidateId: string) => api.retryCreativeMaterialReferenceAnalysis(candidateId),
     onSuccess: (result) => {
       queryClient.invalidateQueries({ queryKey: creativeKeys.materials(wsId) });
       queryClient.invalidateQueries({ queryKey: creativeKeys.analyses(wsId) });
       const notice = materialImportNotice(result);
-      notice.level === "warning" ? toast.warning(notice.message.replace("素材已导入，", "")) : toast.success(notice.message.replace("素材已导入，", ""));
+      const message = notice.message.replace("素材已导入，", "");
+      if (notice.level === "warning") {
+        toast.warning(message);
+      } else {
+        toast.success(message);
+      }
     },
     onError: (error) => toast.error(error instanceof Error ? error.message : "无法重新排队参考分析"),
   });
   const decideCandidate = useMutation({
-    mutationFn: ({ candidate, decision, reasonCodes, comment, idempotencyKey }: { candidate: CreativeMaterialCandidate; decision: "selected" | "rejected"; reasonCodes?: string[]; comment?: string; idempotencyKey?: string }) => api.createCreativeFeedback(
-      candidateDecisionFeedbackInput(candidate, decision, reasonCodes, comment, idempotencyKey),
+    mutationFn: ({ candidate, reasonCodes, comment, idempotencyKey }: { candidate: CreativeMaterialCandidate; reasonCodes?: string[]; comment?: string; idempotencyKey?: string }) => api.createCreativeFeedback(
+      candidateDecisionFeedbackInput(candidate, "rejected", reasonCodes, comment, idempotencyKey),
     ),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: creativeKeys.feedback(wsId, "candidate", "") });
+      queryClient.invalidateQueries({ queryKey: creativeKeys.materials(wsId) });
     },
     onError: (error) => toast.error(error instanceof Error ? error.message : "无法记录素材决定"),
   });
   const undoDecision = useMutation({
-    mutationFn: (eventId: string) => api.undoCreativeFeedback(eventId),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: creativeKeys.feedback(wsId, "candidate", "") }),
+    mutationFn: async (candidate: CreativeMaterialCandidate) => {
+      const feedback = await api.listCreativeFeedback("candidate", candidate.id);
+      const decision = latestCandidateFeedback(feedback.events).get(candidate.id);
+      if (decision?.decision !== "selected" && decision?.decision !== "rejected") {
+        if (candidate.source_issue_id && candidate.status === "selected") {
+          return api.updateCreativeMaterialCandidate(candidate.source_issue_id, candidate.id, {
+            status: "new",
+            note: candidate.note,
+          });
+        }
+        throw new Error("未找到可撤销的素材选择记录");
+      }
+      return api.undoCreativeFeedback(decision.id);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: creativeKeys.feedback(wsId, "candidate", "") });
+      queryClient.invalidateQueries({ queryKey: creativeKeys.materials(wsId) });
+    },
     onError: (error) => toast.error(error instanceof Error ? error.message : "无法撤销素材决定"),
   });
   const competitors = useMemo(
-    () => Array.from(new Set(candidates.map((item) => item.competitor).filter(Boolean))).sort(),
+    () => materialFacetValues(candidates, (candidate) => candidate.competitor),
     [candidates],
   );
+  const areas = useMemo(() => materialFacetValues(candidates, (candidate) => candidate.area_names), [candidates]);
+  const languages = useMemo(() => materialFacetValues(candidates, (candidate) => candidate.language_names), [candidates]);
+  const mediaNames = useMemo(() => materialFacetValues(candidates, (candidate) => candidate.media_names), [candidates]);
+  const scopedCandidates = useMemo(() => {
+    return displayedCandidates.filter((candidate) => {
+      const state = productionStateByCandidateId.get(candidate.id);
+      return state ? creativeMaterialMatchesFilter(state, filter) : filter === "all";
+    });
+  }, [displayedCandidates, filter, productionStateByCandidateId]);
   const visible = useMemo(() => {
-    const needle = query.trim().toLocaleLowerCase();
-    return candidates.filter((item) => {
+    const needle = deferredQuery.trim().toLocaleLowerCase();
+    return scopedCandidates.filter((item) => {
       if (competitor && item.competitor !== competitor) return false;
       if (!needle) return true;
       return [item.title, item.competitor, item.connector_id, ...item.tags]
@@ -134,71 +276,117 @@ export function CreativeMaterialLibrary({ onOrderCreated }: { onOrderCreated?: (
         .toLocaleLowerCase()
         .includes(needle);
     });
-  }, [candidates, competitor, query]);
-  const previewCandidate = candidates.find((item) => item.id === preview?.id) ?? preview;
+  }, [competitor, deferredQuery, scopedCandidates]);
+  const previewCandidate = displayedCandidates.find((item) => item.id === preview?.id) ?? preview;
   const previewAnalysis = previewCandidate ? completedAnalyses.get(previewCandidate.id) : undefined;
+  const totalCount = materials.data?.total_count || scopedCandidates.length;
+  const nextOffset = materials.data?.next_offset ?? null;
+  const crawlRuns = useMemo(
+    () => [...(materials.data?.crawl_runs ?? [])].sort(compareMaterialCrawlRuns),
+    [materials.data?.crawl_runs],
+  );
+  const activeCrawlRun = crawlRuns.find((run) => run.id === runId);
+  const toggleSelection = (candidate: CreativeMaterialCandidate) => {
+    setSelectedCandidatesById((current) => {
+      if (current[candidate.id]) {
+        const { [candidate.id]: _removed, ...remaining } = current;
+        return remaining;
+      }
+      return { ...current, [candidate.id]: candidate };
+    });
+  };
+  const clearSelection = () => setSelectedCandidatesById({});
+  const selectRun = (nextRunId: string) => {
+    setOffset(0);
+    onRunChange?.(nextRunId);
+  };
 
-  return <div className="mx-auto max-w-[1440px]">
+  return <div className="mx-auto w-full min-w-0 max-w-[1440px]">
     <div className="mb-4 flex flex-wrap items-end justify-between gap-4">
       <div>
-        <h2 className="text-base font-semibold">工作区素材库</h2>
-        <p className="mt-1 text-sm text-muted-foreground">AppGrowing 采集和人工导入的素材统一归档，候选池从这里引用稳定文件。</p>
+        <h2 className="text-base font-semibold">素材库</h2>
+        <p className="mt-1 text-sm text-muted-foreground">从已分析素材中选出需要出图的一批，再统一确认文案。</p>
       </div>
       <div className="flex items-center gap-2">
-        <Badge variant="outline">{visible.length} / {candidates.length} 条</Badge>
-        {selectedCandidateIds.size > 0 && <Badge>{selectedCandidateIds.size} 已选</Badge>}
-        {failed.length > 0 && <Button size="sm" variant="outline" disabled={retryArchives.isPending} onClick={() => retryArchives.mutate(failed.map((item) => item.id))}><RefreshCw className={retryArchives.isPending ? "h-4 w-4 animate-spin" : "h-4 w-4"} />重试归档 ({failed.length})</Button>}
+        <Badge variant="outline">{totalCount} 条</Badge>
+        {selectedCandidates.length > 0 && <Badge>{selectedCandidates.length} 已选</Badge>}
         <Button size="sm" onClick={() => setImportOpen(true)}><Plus className="h-4 w-4" />导入素材</Button>
       </div>
     </div>
-    <div className="mb-4 flex flex-wrap gap-2 border-y bg-muted/10 py-3">
-      <div className="relative min-w-56 flex-1 md:max-w-md"><Search className="pointer-events-none absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" /><Input className="pl-8" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索标题、竞品或标签" /></div>
-      <select id="creative-material-competitor-filter" name="competitor" className="h-9 min-w-40 border bg-background px-3 text-sm" value={competitor} onChange={(event) => setCompetitor(event.target.value)} aria-label="按竞品筛选">
-        <option value="">全部竞品</option>
-        {competitors.map((name) => <option key={name} value={name}>{name}</option>)}
-      </select>
-    </div>
-    {draftCandidateIds.size > 0 && <div ref={orderDraftRef} className="scroll-mt-4"><CreativeOrderDraft candidates={candidates.filter((candidate) => draftCandidateIds.has(candidate.id))} analyses={analyses.data?.analyses ?? []} onDone={(orderId) => {
-      setDismissedSelectionEventIds(new Set([...latestDecisions.values()].filter((decision) => decision.decision === "selected").map((decision) => decision.id)));
-      onOrderCreated?.(orderId);
-    }} /></div>}
-    {materials.isLoading ? <div className="py-16 text-center text-sm text-muted-foreground">正在加载素材库...</div> : visible.length === 0 ? (
-      <div className="flex min-h-64 flex-col items-center justify-center border border-dashed text-sm text-muted-foreground"><ImageIcon className="mb-3 h-6 w-6" /><p>没有符合条件的素材</p><Button className="mt-4" size="sm" variant="outline" onClick={() => setImportOpen(true)}>导入第一条素材</Button></div>
-    ) : (
-      <div className="grid grid-cols-2 gap-px overflow-hidden border bg-border sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
-        {visible.map((candidate) => {
-          const decision = latestDecisions.get(candidate.id);
-          const selected = selectedCandidateIds.has(candidate.id);
-          const analysisState = materialAnalysisState(candidate, analyses.data?.analyses ?? []);
-          return <MaterialTile
-            key={candidate.id}
-            candidate={candidate}
-            analysisState={analysisState}
-            selected={selected}
-            decision={decision?.decision ?? ""}
-            busy={decideCandidate.isPending || undoDecision.isPending}
-            onToggle={() => {
-              if (selected) {
-                const selectedEvent = latestDecisions.get(candidate.id);
-                if (selectedEvent?.decision === "selected") undoDecision.mutate(selectedEvent.id);
-                return;
-              }
-              pendingOrderDraftCandidateId.current = candidate.id;
-              decideCandidate.mutate(
-                { candidate, decision: "selected" },
-                { onError: () => { pendingOrderDraftCandidateId.current = ""; } },
+    <div className="grid min-w-0 gap-4 lg:grid-cols-[260px_minmax(0,1fr)]">
+      <MaterialBatchSidebar runs={crawlRuns} activeRunId={runId} onSelect={selectRun} />
+      <div className="min-w-0">
+        <div className="mb-4 flex flex-wrap gap-2 border-y bg-muted/10 py-3">
+          <div className="relative min-w-56 flex-1 md:max-w-md"><Search className="pointer-events-none absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" /><Input className="pl-8" value={query} onChange={(event) => { setQuery(event.target.value); setOffset(0); }} placeholder="搜索标题、竞品或标签" /></div>
+          <select id="creative-material-status-filter" name="status" className="h-9 min-w-36 border bg-background px-3 text-sm" value={filter} onChange={(event) => { setOffset(0); onFilterChange?.(event.target.value as MaterialLibraryFilter); }} aria-label="按素材状态筛选">
+            {(Object.keys(MATERIAL_FILTER_LABELS) as MaterialLibraryFilter[]).map((key) => <option key={key} value={key}>{runId && key === "all" ? "本次全部" : MATERIAL_FILTER_LABELS[key]}</option>)}
+          </select>
+          <select id="creative-material-competitor-filter" name="competitor" className="h-9 min-w-40 border bg-background px-3 text-sm" value={competitor} onChange={(event) => { setCompetitor(event.target.value); setOffset(0); }} aria-label="按竞品筛选">
+            <option value="">全部竞品</option>
+            {competitors.map((name) => <option key={name} value={name}>{name}</option>)}
+          </select>
+          <select className="h-9 min-w-32 border bg-background px-3 text-sm" value={area} onChange={(event) => { setArea(event.target.value); setOffset(0); }} aria-label="按市场筛选"><option value="">全部市场</option>{areas.map((name) => <option key={name} value={name}>{name}</option>)}</select>
+          <select className="h-9 min-w-32 border bg-background px-3 text-sm" value={language} onChange={(event) => { setLanguage(event.target.value); setOffset(0); }} aria-label="按语言筛选"><option value="">全部语言</option>{languages.map((name) => <option key={name} value={name}>{name}</option>)}</select>
+          <select className="h-9 min-w-32 border bg-background px-3 text-sm" value={media} onChange={(event) => { setMedia(event.target.value); setOffset(0); }} aria-label="按渠道筛选"><option value="">全部渠道</option>{mediaNames.map((name) => <option key={name} value={name}>{name}</option>)}</select>
+          <select className="h-9 min-w-28 border bg-background px-3 text-sm" value={assetType} onChange={(event) => { setAssetType(event.target.value as typeof assetType); setOffset(0); }} aria-label="按素材类型筛选"><option value="">全部类型</option><option value="image">图片</option><option value="video">视频</option><option value="unknown">未知</option></select>
+          <select className="h-9 min-w-32 border bg-background px-3 text-sm" value={sort} onChange={(event) => { setSort(event.target.value as keyof typeof MATERIAL_SORT_LABELS); setOffset(0); }} aria-label="排序方式">{Object.entries(MATERIAL_SORT_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select>
+          {runId && <Badge variant="outline" className="h-9 px-3 text-sm">{activeCrawlRun ? materialBatchShortTitle(activeCrawlRun) : "本次采集"}</Badge>}
+          {runId && <Button size="sm" variant="ghost" onClick={() => selectRun("")}>全部批次</Button>}
+        </div>
+        {selectedCandidates.length > 0 && <MaterialBatchSelectionBar candidates={selectedCandidates} onClear={clearSelection} onConfirm={() => setOrderDraftOpen(true)} />}
+        {orderDraftOpen && <Dialog open onOpenChange={(open) => !open && setOrderDraftOpen(false)}><DialogContent className="!h-[100dvh] !w-[100vw] !max-w-none !gap-0 !overflow-y-auto !rounded-none !p-0"><DialogHeader className="sr-only"><DialogTitle>批量确认文案</DialogTitle><DialogDescription>逐图确认文案后，统一提交出图。</DialogDescription></DialogHeader><CreativeOrderDraft candidates={selectedCandidates} analyses={analyses.data?.analyses ?? []} deselecting={false} onOpenCopyLibrary={onOpenCopyLibrary} onRetrySourceAnalysis={(candidateId) => retryAnalysis.mutate(candidateId)} retryingSourceAnalysis={retryAnalysis.isPending} onDeselect={(candidateId) => setSelectedCandidatesById((current) => {
+          const { [candidateId]: _removed, ...remaining } = current;
+          return remaining;
+        })} onClose={() => setOrderDraftOpen(false)} onDone={(orderId) => {
+          clearSelection();
+          setOrderDraftOpen(false);
+          queryClient.invalidateQueries({ queryKey: creativeKeys.orders(wsId) });
+          onOrderCreated?.(orderId);
+        }} /></DialogContent></Dialog>}
+        {materials.isLoading ? <div className="py-16 text-center text-sm text-muted-foreground">正在加载素材库...</div> : visible.length === 0 ? (
+          <div className="flex min-h-64 flex-col items-center justify-center border border-dashed text-sm text-muted-foreground"><ImageIcon className="mb-3 h-6 w-6" /><p>没有符合条件的素材</p><div className="mt-4 flex gap-2"><Button size="sm" variant="outline" onClick={() => { setQuery(""); setCompetitor(""); setArea(""); setLanguage(""); setMedia(""); setAssetType(""); setSort("recent"); setOffset(0); onFilterChange?.(runId ? "all" : "available"); }}>清除筛选</Button><Button size="sm" variant="outline" onClick={() => setImportOpen(true)}>导入素材</Button></div></div>
+        ) : (
+          <div className="grid grid-cols-1 gap-px overflow-hidden border bg-border sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
+            {visible.map((candidate) => {
+              const decision = latestDecisions.get(candidate.id);
+              const selected = Boolean(selectedCandidatesById[candidate.id]);
+              const analysisState = analysisStateByCandidateId.get(candidate.id) ?? materialAnalysisState(candidate, analyses.data?.analyses ?? []);
+              const productionState = productionStateByCandidateId.get(candidate.id) ?? creativeMaterialProductionState(
+                candidate,
+                analysisState,
+                decision?.decision,
+                generatedCandidateIds.has(candidate.id),
+                creativeMaterialAnalysisReadiness(completedAnalyses.get(candidate.id), analysisState, marketPack, copyLibrary),
               );
-            }}
-            onReject={() => setRejecting(candidate)}
-            onUndo={() => decision && undoDecision.mutate(decision.id)}
-            onOpen={() => setPreview(candidate)}
-			onDirectEdit={() => setDirectEditCandidate(candidate)}
-			onRetryAnalysis={() => retryAnalysis.mutate(candidate.id)}
-          />;
-        })}
+              return <MaterialTile
+                key={candidate.id}
+                candidate={candidate}
+                analysisState={analysisState}
+                productionState={productionState}
+                selected={selected}
+                decision={decision?.decision ?? ""}
+                busy={decideCandidate.isPending || undoDecision.isPending}
+                analysisSummary={completedAnalyses.get(candidate.id)?.summary ?? ""}
+                showProductionState={filter !== "available" || productionState.status !== "available"}
+                onToggle={() => {
+                  toggleSelection(candidate);
+                }}
+                onReject={() => setRejecting(candidate)}
+                onUndo={() => undoDecision.mutate(candidate)}
+                onOpen={() => setPreview(candidate)}
+                onRetryAnalysis={() => retryAnalysis.mutate(candidate.id)}
+              />;
+            })}
+          </div>
+        )}
+
+        {visible.length > 0 && totalCount > MATERIAL_PAGE_SIZE && <div className="mt-4 flex items-center justify-between border-y py-3 text-sm">
+          <span className="text-muted-foreground">显示 {offset + 1}-{Math.min(offset + visible.length, totalCount)} / {totalCount} 条</span>
+          <div className="flex items-center gap-2"><Button size="sm" variant="outline" disabled={offset === 0 || materials.isFetching} onClick={() => setOffset(Math.max(0, offset - MATERIAL_PAGE_SIZE))}>上一页</Button><Button size="sm" variant="outline" disabled={nextOffset === null || materials.isFetching} onClick={() => nextOffset !== null && setOffset(nextOffset)}>下一页</Button></div>
+        </div>}
       </div>
-    )}
-		<MaterialPreview candidate={previewCandidate} analysis={previewAnalysis} onClose={() => setPreview(null)} onRetry={(candidateId) => retryArchives.mutate([candidateId])} retrying={retryArchives.isPending} onRetryAnalysis={(candidateId) => retryAnalysis.mutate(candidateId)} retryingAnalysis={retryAnalysis.isPending} />
+    </div>
+		<MaterialPreview candidate={previewCandidate} analysis={previewAnalysis} onClose={() => setPreview(null)} onDirectEdit={() => previewCandidate && setDirectEditCandidate(previewCandidate)} onRetryAnalysis={(candidateId) => retryAnalysis.mutate(candidateId)} retryingAnalysis={retryAnalysis.isPending} />
 		<DirectEditDialog candidate={directEditCandidate} onClose={() => setDirectEditCandidate(null)} onCreated={(orderId) => {
 			setDirectEditCandidate(null);
 			queryClient.invalidateQueries({ queryKey: creativeKeys.orders(wsId) });
@@ -206,7 +394,7 @@ export function CreativeMaterialLibrary({ onOrderCreated }: { onOrderCreated?: (
 		}} />
     <CandidateRejectDialog candidate={rejecting} busy={decideCandidate.isPending} onClose={() => setRejecting(null)} onConfirm={(reasonCode, comment, idempotencyKey) => {
       if (!rejecting) return;
-      decideCandidate.mutate({ candidate: rejecting, decision: "rejected", reasonCodes: [reasonCode], comment, idempotencyKey }, { onSuccess: () => setRejecting(null) });
+      decideCandidate.mutate({ candidate: rejecting, reasonCodes: [reasonCode], comment, idempotencyKey }, { onSuccess: () => setRejecting(null) });
     }} />
     <MaterialImportDialog open={importOpen} onClose={() => setImportOpen(false)} onImported={() => {
       setImportOpen(false);
@@ -215,8 +403,6 @@ export function CreativeMaterialLibrary({ onOrderCreated }: { onOrderCreated?: (
     }} />
   </div>;
 }
-
-export type MaterialAnalysisState = { ready: boolean; status: string; error: string; version: number };
 
 export type MaterialCandidateDisplayDetails = {
   duration: string;
@@ -241,11 +427,7 @@ export function materialCandidateDisplayDetails(candidate: CreativeMaterialCandi
   return {
     duration: durationDays === null ? MATERIAL_SOURCE_MISSING : `${formatDecimal(durationDays)} 天`,
     impressions: impressionEstimate === null ? MATERIAL_SOURCE_MISSING : formatCompactCount(impressionEstimate),
-    media: mediaNames.length > 0
-      ? mediaNames.join("、")
-      : platformNames.length > 0
-        ? `${platformNames.join("、")}（投放平台）`
-        : `${sourceLabel(candidate.connector_id)}（采集来源）`,
+    media: mediaNames.length > 0 ? mediaNames.join("、") : MATERIAL_SOURCE_MISSING,
     market: displayCandidateValues(preferredCandidateValues(candidate.area_names, records, ["area_names", "areas", "area", "market"])),
     languages: displayCandidateValues(preferredCandidateValues(candidate.language_names, records, ["language_names", "languages", "language", "locale"])),
     platforms: displayCandidateValues(platformNames),
@@ -254,36 +436,179 @@ export function materialCandidateDisplayDetails(candidate: CreativeMaterialCandi
   };
 }
 
-export function MaterialTile({ candidate, analysisState, selected, decision, busy, onToggle, onReject, onUndo, onOpen, onDirectEdit, onRetryAnalysis }: { candidate: CreativeMaterialCandidate; analysisState: MaterialAnalysisState; selected: boolean; decision: string; busy: boolean; onToggle: () => void; onReject: () => void; onUndo: () => void; onOpen: () => void; onDirectEdit: () => void; onRetryAnalysis: () => void }) {
+export function MaterialTile({ candidate, analysisState, productionState, selected, decision, busy, analysisSummary, showProductionState = true, onToggle, onReject, onUndo, onOpen, onRetryAnalysis }: { candidate: CreativeMaterialCandidate; analysisState: MaterialAnalysisState; productionState: CreativeMaterialProductionState; selected: boolean; decision: string; busy: boolean; analysisSummary?: string; showProductionState?: boolean; onToggle: () => void; onReject: () => void; onUndo: () => void; onOpen: () => void; onRetryAnalysis: () => void }) {
   const source = candidateSource(candidate);
   const details = materialCandidateDisplayDetails(candidate);
-  return <div className="relative min-w-0 bg-background text-left transition-colors hover:bg-muted/30" data-testid="creative-material-tile" data-candidate-id={candidate.id}><button type="button" onClick={onOpen} className="w-full">
+  const isImage = candidate.asset_type === "image";
+  const canStartAnalysis = productionState.status === "failed" || (!analysisState.ready && analysisState.status !== "running");
+  const canSelect = productionState.selectable;
+  const analysisActionLabel = productionState.status === "failed" ? "重新分析" : "开始分析";
+  const statusReason = productionState.status === "failed" || productionState.status === "manual_required" ? productionState.reason || (analysisState.status === "failed" ? analysisState.error : "") : "";
+  const statusBadgeVariant = productionState.status === "failed" || productionState.status === "rejected"
+    ? "destructive"
+    : productionState.status === "available"
+      ? "default"
+      : "outline";
+  return <div className={selected ? "group min-w-0 overflow-hidden border border-emerald-600 bg-emerald-50/30 text-left ring-1 ring-emerald-600/20 transition-colors hover:bg-emerald-50/50 focus-within:ring-2 focus-within:ring-ring focus-within:ring-offset-2" : "group min-w-0 overflow-hidden border bg-background text-left transition-colors hover:bg-muted/30 focus-within:ring-2 focus-within:ring-ring focus-within:ring-offset-2"} data-testid="creative-material-tile" data-candidate-id={candidate.id}><button type="button" onClick={onOpen} className="w-full focus-visible:outline-none">
     <div className="relative aspect-[4/3] bg-muted/40">
-      {source ? <img src={source} alt={candidate.title || candidate.competitor} width={640} height={480} loading="lazy" className="h-full w-full object-contain" /> : <div className="flex h-full flex-col items-center justify-center gap-2 text-xs text-muted-foreground"><ImageIcon className="h-5 w-5" />{candidate.archive_status === "failed" ? "归档失败" : "正在归档"}</div>}
+      {isImage && source ? <MaterialPreviewImage source={source} alt={candidate.title || candidate.competitor} /> : <div className="flex h-full flex-col items-center justify-center gap-2 px-4 text-center text-xs text-muted-foreground"><ImageIcon className="h-5 w-5" />{isImage ? candidate.archive_status === "failed" ? "归档失败" : "正在归档" : "非图片素材"}</div>}
       {candidate.archive_status === "failed" && <Badge variant="destructive" className="absolute left-2 top-2"><AlertTriangle className="h-3 w-3" />归档失败</Badge>}
       {(candidate.archive_status === "pending" || candidate.archive_status === "running") && <Badge variant="secondary" className="absolute left-2 top-2 bg-background/90"><LoaderCircle className="h-3 w-3 animate-spin" />归档中</Badge>}
-      {analysisState.ready && <Badge variant="outline" className="absolute bottom-2 left-2 bg-background/90"><Sparkles className="h-3 w-3" />已分析{analysisState.version > 0 ? ` v${analysisState.version}` : ""}</Badge>}
-      {analysisState.status && analysisState.status !== "completed" && <Badge variant="outline" className="absolute bottom-2 left-2 bg-background/90">{analysisState.status === "failed" ? "分析失败" : analysisState.status === "running" ? "分析中" : "等待分析"}</Badge>}
       {decision === "rejected" && <Badge variant="destructive" className="absolute bottom-2 right-2">已拒绝</Badge>}
+      {selected && <Badge className="absolute right-2 top-2 border border-emerald-700 bg-emerald-700 text-white"><Check className="h-3 w-3" />已选</Badge>}
     </div>
     <div className="space-y-1 border-t px-3 py-2.5">
       <p className="truncate text-sm font-medium">{candidate.title || "未命名素材"}</p>
-      <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground"><span className="truncate">{candidate.competitor || sourceLabel(candidate.connector_id)}</span><span className="shrink-0">{candidate.area_names[0] ?? ""}</span></div>
+      {showProductionState && <Badge variant={statusBadgeVariant} className="w-fit text-[10px]"><Sparkles className="h-3 w-3" />{productionState.label}</Badge>}
+      <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground"><span className="truncate">{candidate.competitor || sourceLabel(candidate.connector_id)}</span><span className="shrink-0 truncate" title={details.media}>{details.media}</span></div>
       <dl className="grid grid-cols-3 gap-2 border-t pt-2 text-left text-[10px]">
         <MaterialMetric label="投放天数" value={details.duration} />
         <MaterialMetric label="曝光估算" value={details.impressions} />
         <MaterialMetric label="媒体来源" value={details.media} />
       </dl>
+      {analysisSummary && <p className="line-clamp-2 border-t pt-2 text-xs text-foreground" title={analysisSummary}>{analysisSummary}</p>}
+      <p className="truncate text-[11px] text-muted-foreground" title={`${details.market} · ${details.languages}`}>{details.market} · {details.languages}</p>
       <p className="font-mono text-[10px] text-muted-foreground">素材 ID {candidate.id.slice(0, 8)}</p>
-      {analysisState.status === "failed" && <p className="truncate text-[11px] text-destructive" title={analysisState.error}>{analysisState.error || "请重新发起分析"}</p>}
+      {statusReason && <p className={`truncate text-[11px] ${productionState.status === "manual_required" ? "text-amber-700" : "text-destructive"}`} title={statusReason}>{statusReason}</p>}
     </div>
-  </button><div className="absolute right-2 top-2 flex gap-1">{analysisState.status === "failed" && <Button aria-label="重新分析素材" title="重新分析素材" size="icon-sm" variant="outline" disabled={busy} onClick={onRetryAnalysis}><RefreshCw className="h-4 w-4" /></Button>}<Button aria-label="直接改图" title="直接改图" size="icon-sm" variant="outline" onClick={onDirectEdit}><Sparkles className="h-4 w-4" /></Button><Button aria-label={decision === "rejected" ? "撤销拒绝" : "拒绝素材"} title={decision === "rejected" ? "撤销拒绝" : "拒绝素材"} size="icon-sm" variant="outline" disabled={busy} onClick={decision === "rejected" ? onUndo : onReject}>{decision === "rejected" ? <RotateCcw className="h-4 w-4" /> : <X className="h-4 w-4" />}</Button><Button aria-label={selected ? "取消选择素材" : "选择素材"} title={selected ? "取消选择素材" : analysisState.ready ? "选择素材" : "等待参考分析完成后可选择素材"} size="icon-sm" variant={selected ? "default" : "outline"} disabled={busy || decision === "rejected" || (!selected && !analysisState.ready)} onClick={onToggle}>{selected ? <Check className="h-4 w-4" /> : <Plus className="h-4 w-4" />}</Button></div></div>;
+  </button><div className="flex items-center justify-between gap-2 border-t px-3 py-2">
+    <Button size="sm" variant={selected ? "secondary" : "outline"} disabled={busy || decision === "rejected" || (!selected && !canSelect)} onClick={onToggle}>{selected ? <Check className="h-4 w-4" /> : <Plus className="h-4 w-4" />}{selected ? "取消选择" : canSelect ? "选择出图素材" : productionState.status === "failed" || productionState.status === "manual_required" ? productionState.label : "等待分析完成"}</Button>
+    <div className="flex items-center gap-1">
+      {canStartAnalysis && <Button aria-label={`${analysisActionLabel}素材`} title={`${analysisActionLabel}素材`} size="icon-sm" variant="ghost" disabled={busy} onClick={onRetryAnalysis}><RefreshCw className="h-4 w-4" /></Button>}
+      <Button aria-label={decision === "rejected" ? "撤销拒绝" : "拒绝素材"} title={decision === "rejected" ? "撤销拒绝" : "拒绝素材"} size="icon-sm" variant="ghost" disabled={busy} onClick={decision === "rejected" ? onUndo : onReject}>{decision === "rejected" ? <RotateCcw className="h-4 w-4" /> : <X className="h-4 w-4" />}</Button>
+    </div>
+  </div></div>;
+}
+
+function MaterialPreviewImage({ source, alt }: { source: string; alt: string }) {
+  const [failed, setFailed] = useState(false);
+  useEffect(() => setFailed(false), [source]);
+  if (failed) return <div className="flex h-full flex-col items-center justify-center gap-2 px-4 text-center text-xs text-muted-foreground"><ImageIcon className="h-5 w-5" />图片暂时无法加载</div>;
+  return <img src={source} alt={alt} width={640} height={480} loading="lazy" className="h-full w-full object-contain" onError={() => setFailed(true)} />;
+}
+
+export function MaterialBatchSidebar({
+  runs,
+  activeRunId,
+  onSelect,
+}: {
+  runs: CreativeMaterialCrawlRun[];
+  activeRunId: string;
+  onSelect: (runId: string) => void;
+}) {
+  return <aside className="min-w-0 border bg-muted/10 lg:sticky lg:top-4 lg:max-h-[calc(100vh-9rem)] lg:overflow-y-auto" aria-label="采集批次">
+    <div className="border-b bg-background px-3 py-2.5">
+      <p className="text-sm font-semibold">采集批次</p>
+      <p className="mt-0.5 text-xs text-muted-foreground">选择批次后，右侧继续用状态和搜索筛选。</p>
+    </div>
+    <div className="max-h-80 overflow-y-auto lg:max-h-none">
+      <MaterialBatchButton
+        active={!activeRunId}
+        title="全部素材"
+        description="不按采集批次过滤"
+        meta=""
+        onClick={() => onSelect("")}
+      />
+      {runs.map((run) => (
+        <MaterialBatchButton
+          key={run.id}
+          active={run.id === activeRunId}
+          title={materialBatchShortTitle(run)}
+          description={materialBatchDescription(run)}
+          meta={materialBatchMeta(run)}
+          onClick={() => onSelect(run.id)}
+        />
+      ))}
+      {runs.length === 0 && <div className="px-3 py-5 text-sm text-muted-foreground">还没有采集批次。</div>}
+    </div>
+  </aside>;
+}
+
+function MaterialBatchButton({
+  active,
+  title,
+  description,
+  meta,
+  onClick,
+}: {
+  active: boolean;
+  title: string;
+  description: string;
+  meta: string;
+  onClick: () => void;
+}) {
+  return <button
+    type="button"
+    aria-pressed={active}
+    className={active
+      ? "block w-full border-b bg-background px-3 py-3 text-left shadow-[inset_2px_0_0_hsl(var(--primary))]"
+      : "block w-full border-b px-3 py-3 text-left hover:bg-background/70"}
+    onClick={onClick}
+  >
+    <div className="flex min-w-0 items-center justify-between gap-2">
+      <span className="truncate text-sm font-medium">{title}</span>
+      {active && <Badge variant="outline" className="shrink-0 text-[10px]">当前</Badge>}
+    </div>
+    <p className="mt-1 line-clamp-2 text-xs text-muted-foreground">{description}</p>
+    {meta && <p className="mt-2 text-[11px] text-muted-foreground">{meta}</p>}
+  </button>;
+}
+
+function compareMaterialCrawlRuns(left: CreativeMaterialCrawlRun, right: CreativeMaterialCrawlRun): number {
+  return materialBatchTimestamp(right) - materialBatchTimestamp(left) || right.id.localeCompare(left.id);
+}
+
+function materialBatchTimestamp(run: CreativeMaterialCrawlRun): number {
+  const parsed = new Date(run.created_at || run.started_at || run.finished_at || "").getTime();
+  return Number.isNaN(parsed) ? 0 : parsed;
+}
+
+function materialBatchShortTitle(run: CreativeMaterialCrawlRun): string {
+  const query = run.query_summary?.trim();
+  if (query) return query.length > 18 ? `${query.slice(0, 18)}...` : query;
+  const time = run.created_at || run.started_at ? formatCreativeDateTime(run.created_at || run.started_at) : "";
+  return time ? `${sourceLabel(run.connector_id)} ${time}` : sourceLabel(run.connector_id);
+}
+
+function materialBatchDescription(run: CreativeMaterialCrawlRun): string {
+  const source = sourceLabel(run.connector_id);
+  const time = run.created_at || run.started_at ? formatCreativeDateTime(run.created_at || run.started_at) : "时间未知";
+  return `${source} · ${time}`;
+}
+
+function materialBatchMeta(run: CreativeMaterialCrawlRun): string {
+  const imported = Math.max(run.imported_count ?? 0, 0);
+  const total = Math.max(run.total_count ?? 0, 0);
+  const selected = Math.max(run.candidate_metrics?.selected ?? 0, 0);
+  const base = total > 0 && total !== imported ? `命中 ${total} 张 · 入库 ${imported} 张` : `入库 ${imported} 张`;
+  return selected > 0 ? `${base} · 已选 ${selected} 张` : base;
+}
+
+export function MaterialBatchSelectionBar({
+  candidates,
+  onClear,
+  onConfirm,
+}: {
+  candidates: CreativeMaterialCandidate[];
+  onClear: () => void;
+  onConfirm: () => void;
+}) {
+  return <section className="sticky bottom-4 z-20 mb-4 border bg-background shadow-lg" aria-label="已选出图素材">
+    <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3">
+      <div className="min-w-0"><p className="text-sm font-semibold">已选 {candidates.length} 张素材</p><p className="mt-1 text-xs text-muted-foreground">已在素材卡片中标记，可继续筛选和比较。</p></div>
+      <div className="flex items-center gap-2"><Button size="sm" variant="ghost" onClick={onClear}>清空选择</Button><Button size="sm" onClick={onConfirm}><Sparkles className="h-4 w-4" />下一步：确认文案</Button></div>
+    </div>
+  </section>;
 }
 
 export type OrderItemDraft = {
-  mode: "recommendation" | "manual";
-  selectedRecommendationId: string;
+  mode: "pre_adaptation" | "manual";
   direction: string;
+  productionPrompt?: string;
+  textOverrides: Record<string, string>;
+  replacementSources?: Record<string, ReplacementSourceChoice>;
+  repaymentPlanOverrides?: Record<string, RepaymentPlanChoice>;
+  numericLayoutDrafts?: Record<string, NumericLayoutDraft>;
   manualHeadline: string;
   manualSubheadline: string;
   manualBenefit: string;
@@ -291,65 +616,194 @@ export type OrderItemDraft = {
   manualCta: string;
 };
 
+export type RepaymentPlanChoice = {
+  planKey: string;
+  principal: number;
+  tenorMonths: number;
+  values: PreparedRepaymentPlanSelection["values"];
+};
+
+export type NumericLayoutDraft = {
+  removedScenarioIds?: string[];
+  addedScenarios?: Record<string, RepaymentPlanChoice>;
+};
+
+export type ReplacementSourceChoice = {
+  kind: "library" | "manual" | "recommendation" | "calculation";
+  sourceKey?: string;
+};
+
+export type SelectedMaterialReadinessStatus = "ready" | "analyzing" | "failed" | "manual_required";
+
 type SubmissionRecovery = { issueId: string; orderId: string; submissionKey: string };
 
 const EMPTY_SUBMISSION_RECOVERY: SubmissionRecovery = { issueId: "", orderId: "", submissionKey: "" };
+const MATERIAL_ANALYSIS_RUNNING_MESSAGE = "素材仍在分析中，完成后会自动刷新。";
+const MATERIAL_ANALYSIS_RUNNING_DETAIL = "无需逐张处理；当前选择会保留。";
 
-export function orderDraftWithRecommendation(current: OrderItemDraft | undefined, recommendedCopyEntryId: string): OrderItemDraft {
-  void recommendedCopyEntryId;
-  return current ?? { mode: "recommendation", selectedRecommendationId: "", direction: "", manualHeadline: "", manualSubheadline: "", manualBenefit: "", manualSupporting: "", manualCta: "" };
+export function orderDraftWithPreAdaptation(current: OrderItemDraft | undefined, adaptationOrPrompt: PreparedPreAdaptation | string | null = ""): OrderItemDraft {
+  const adaptation = typeof adaptationOrPrompt === "string" ? null : adaptationOrPrompt;
+  const prompt = typeof adaptationOrPrompt === "string"
+    ? userFacingProductionPrompt(adaptationOrPrompt)
+    : adaptation ? overallProductionRequirement(adaptation) : "";
+  if (current) {
+    const normalized = {
+      ...current,
+      replacementSources: current.replacementSources ?? {},
+      repaymentPlanOverrides: current.repaymentPlanOverrides ?? {},
+      numericLayoutDrafts: current.numericLayoutDrafts ?? {},
+    };
+    const currentPrompt = normalized.productionPrompt === undefined
+      ? prompt
+      : adaptation ? overallProductionRequirementFromPrompt(normalized.productionPrompt, adaptation) : userFacingProductionPrompt(normalized.productionPrompt);
+    return normalized.productionPrompt === undefined || normalized.productionPrompt !== currentPrompt || current.replacementSources === undefined || current.repaymentPlanOverrides === undefined || current.numericLayoutDrafts === undefined
+      ? { ...normalized, productionPrompt: currentPrompt }
+      : normalized;
+  }
+  return { mode: "pre_adaptation", direction: "", productionPrompt: prompt, textOverrides: {}, replacementSources: {}, repaymentPlanOverrides: {}, numericLayoutDrafts: {}, manualHeadline: "", manualSubheadline: "", manualBenefit: "", manualSupporting: "", manualCta: "" };
 }
 
 export function recoveryForSubmissionKey(recovery: SubmissionRecovery, submissionKey: string): SubmissionRecovery {
   return recovery.submissionKey === submissionKey ? recovery : EMPTY_SUBMISSION_RECOVERY;
 }
 
-function CreativeOrderDraft({ candidates, analyses, onDone }: { candidates: CreativeMaterialCandidate[]; analyses: CreativeSourceAnalysis[]; onDone: (orderId: string) => void }) {
+export function defaultPreAdaptationResources(resources: CreativeResource[]): { marketPack?: CreativeResource; copyLibrary?: CreativeResource } {
+  const marketPacks = resources.filter((resource) => (
+    resource.kind === "market_pack"
+    && resource.published_version > 0
+    && record(resource.published_config).pre_adaptation_default === true
+  ));
+  const marketPack = marketPacks.length === 1 ? marketPacks[0] : undefined;
+  const copyLibraryId = recordString(record(marketPack?.published_config), "copy_library_id");
+  const copyLibrary = resources.find((resource) => (
+    resource.id === copyLibraryId
+    && resource.kind === "copy_library"
+    && resource.published_version > 0
+  ));
+  return { marketPack, copyLibrary };
+}
+
+export function approvedRepaymentPlanOptions(copyLibrary: CreativeResource | undefined): RepaymentPlanChoice[] {
+  if (!copyLibrary) return [];
+  const config = parseCreativeCopyLibraryConfig(copyLibrary.published_config ?? {});
+  return config.repayment_plan.entries
+    .filter(approvedRepaymentPlanEntry)
+    .sort((left, right) => left.principal - right.principal || left.tenor_months - right.tenor_months || left.key.localeCompare(right.key))
+    .map(repaymentPlanChoiceFromEntry);
+}
+
+function approvedRepaymentPlanEntry(entry: CreativeRepaymentPlanEntry): boolean {
+  return entry.status === "approved"
+    && entry.key.trim() !== ""
+    && entry.source.trim() !== ""
+    && Number.isInteger(entry.principal) && entry.principal > 0
+    && Number.isInteger(entry.tenor_months) && entry.tenor_months > 0
+    && Number.isInteger(entry.monthly_installment) && entry.monthly_installment > 0
+    && Number.isInteger(entry.total_interest) && entry.total_interest >= 0
+    && Number.isInteger(entry.total_repayment) && entry.total_repayment > 0;
+}
+
+function repaymentPlanChoiceFromEntry(entry: CreativeRepaymentPlanEntry): RepaymentPlanChoice {
+  return {
+    planKey: entry.key,
+    principal: entry.principal,
+    tenorMonths: entry.tenor_months,
+    values: {
+      principal: formatIDR(entry.principal),
+      tenor: `${entry.tenor_months} Bulan`,
+      totalInterest: formatIDR(entry.total_interest),
+      totalRepayment: formatIDR(entry.total_repayment),
+      monthlyInstallment: formatIDR(entry.monthly_installment),
+    },
+  };
+}
+
+function repaymentPlanChoiceFromSelection(selection: PreparedRepaymentPlanSelection): RepaymentPlanChoice {
+  return {
+    planKey: selection.planKey,
+    principal: selection.principal,
+    tenorMonths: selection.tenorMonths,
+    values: selection.values,
+  };
+}
+
+function nextAddedRepaymentPlanScenarioId(layoutId: string, planKey: string, existingIds: ReadonlySet<string>): string {
+  const base = `added-${layoutId}-${planKey}`.replace(/[^a-zA-Z0-9_-]+/g, "-").replace(/-+/g, "-").replace(/^-|-$/g, "") || "added-plan";
+  let candidate = base;
+  let index = 2;
+  while (existingIds.has(candidate)) {
+    candidate = `${base}-${index}`;
+    index += 1;
+  }
+  return candidate;
+}
+
+function formatIDR(value: number): string {
+  return `Rp${Math.round(value).toLocaleString("id-ID")}`;
+}
+
+export function creativeMaterialAnalysisReadiness(
+  analysis: CreativeSourceAnalysis | undefined,
+  analysisState: MaterialAnalysisState,
+  marketPack: Pick<CreativeResource, "id" | "published_version"> | undefined,
+  copyLibrary: Pick<CreativeResource, "id" | "published_version"> | undefined,
+): CreativeMaterialAnalysisReadiness {
+  if (!analysisState.ready) {
+    return { ready: false, active: analysisState.status !== "failed", failed: analysisState.status === "failed", reason: analysisState.error };
+  }
+  if (!analysis || !marketPack || !copyLibrary || sourceAnalysisNeedsVisualUpgrade(analysis)) {
+    return { ready: false, active: false, failed: true };
+  }
+  const adaptation = preparedPreAdaptation(analysis, marketPack, copyLibrary);
+  if (adaptation?.status === "completed") {
+    return { ready: true, active: false, failed: false };
+  }
+  const adaptationStatus = sourceAnalysisAdaptationStatus(analysis);
+  const adaptationEnvelope = record(record(analysis.result).adaptation);
+  const adaptationFailureReason = recordString(adaptationEnvelope, "error_message") || recordString(adaptationEnvelope, "summary");
+  const manualRequired = adaptationStatus === "unavailable" && recordString(adaptationEnvelope, "error_code") === "manual_confirmation_required";
+  return {
+    ready: false,
+    active: adaptationStatus === "",
+    failed: adaptationStatus !== "" && !manualRequired,
+    manualRequired,
+    reason: adaptationStatus !== "" ? adaptationFailureReason : "",
+  };
+}
+
+function CreativeOrderDraft({ candidates, analyses, deselecting, onDeselect, onClose, onDone, onOpenCopyLibrary, onRetrySourceAnalysis, retryingSourceAnalysis = false }: { candidates: CreativeMaterialCandidate[]; analyses: CreativeSourceAnalysis[]; deselecting: boolean; onDeselect: (candidateId: string) => void; onClose: () => void; onDone: (orderId: string) => void; onOpenCopyLibrary?: () => void; onRetrySourceAnalysis: (candidateId: string) => void; retryingSourceAnalysis?: boolean }) {
   const wsId = useWorkspaceId();
+  const queryClient = useQueryClient();
   const resources = useQuery(creativeResourcesOptions(wsId));
   const squads = useQuery(squadListOptions(wsId));
-  const [marketPackId, setMarketPackId] = useState("");
-  const [squadId, setSquadId] = useState("");
   const [drafts, setDrafts] = useState<Record<string, OrderItemDraft>>({});
-  const [manualFactSelections, setManualFactSelections] = useState<Record<string, string[]>>({});
   const [busy, setBusy] = useState(false);
   const [recoveryMessage, setRecoveryMessage] = useState("");
   const [recovery, setRecovery] = useState<SubmissionRecovery>(EMPTY_SUBMISSION_RECOVERY);
   const [activeCandidateId, setActiveCandidateId] = useState(candidates[0]?.id ?? "");
   const knownCandidateIds = useRef(new Set(candidates.map((candidate) => candidate.id)));
-  const viewedCopyIds = useRef(new Set<string>());
-  const marketPacks = (resources.data?.resources ?? []).filter((resource) => resource.kind === "market_pack" && resource.published_version > 0);
-  const marketPack = marketPacks.find((resource) => resource.id === marketPackId) ?? marketPacks[0];
-  const marketPackConfig = marketPack?.published_config ?? {};
-  const copyLibraryId = recordString(marketPackConfig, "copy_library_id");
-  const copyLibrary = (resources.data?.resources ?? []).find((resource) => resource.id === copyLibraryId && resource.kind === "copy_library" && resource.published_version > 0);
+  const { marketPack, copyLibrary } = useMemo(
+    () => defaultPreAdaptationResources(resources.data?.resources ?? []),
+    [resources.data?.resources],
+  );
+  const repaymentPlanOptions = useMemo(() => approvedRepaymentPlanOptions(copyLibrary), [copyLibrary]);
   const marketFiles = useQuery(creativeResourceFilesOptions(wsId, marketPack?.id ?? ""));
-  const selectedSquad = (squads.data ?? []).find((squad) => squad.id === squadId) ?? (squads.data ?? [])[0];
+  const availableSquads = squads.data ?? [];
+  const selectedSquad = availableSquads.length === 1 ? availableSquads[0] : undefined;
   const squadMembers = useQuery({
     queryKey: ["workspaces", wsId, "squads", selectedSquad?.id ?? "", "members"],
     queryFn: () => api.listSquadMembers(selectedSquad!.id),
     enabled: !!wsId && !!selectedSquad?.id,
   });
   const completedAnalyses = useMemo(() => latestCompletedAnalyses(analyses), [analyses]);
-  const recommendations = useMemo(() => new Map(candidates.map((candidate) => {
-    const analysis = completedAnalyses.get(candidate.id);
-    return [candidate.id, copyLibrary ? recommendCreativeCopy(candidate, copyLibrary, analysisBrief(analysis)) : []];
-  })), [candidates, completedAnalyses, copyLibrary]);
-
-  useEffect(() => {
-    if (!marketPackId && marketPacks[0]) setMarketPackId(marketPacks[0].id);
-  }, [marketPackId, marketPacks]);
-  useEffect(() => {
-    if (squadId || !squads.data?.length) return;
-    const preferred = squads.data.find((squad) => squad.name.includes("素材小队")) ?? squads.data[0];
-    if (preferred) setSquadId(preferred.id);
-  }, [squadId, squads.data]);
   useEffect(() => {
     setDrafts((current) => {
       let changed = false;
       const next = { ...current };
       for (const candidate of candidates) {
-        const draft = orderDraftWithRecommendation(next[candidate.id], "");
+        const analysis = completedAnalyses.get(candidate.id);
+        const adaptation = preparedPreAdaptation(analysis, marketPack, copyLibrary);
+        const draft = orderDraftWithPreAdaptation(next[candidate.id], adaptation);
         if (draft !== next[candidate.id]) {
           next[candidate.id] = draft;
           changed = true;
@@ -357,108 +811,174 @@ function CreativeOrderDraft({ candidates, analyses, onDone }: { candidates: Crea
       }
       return changed ? next : current;
     });
-  }, [candidates, recommendations]);
+  }, [candidates, completedAnalyses, copyLibrary, marketPack]);
   useEffect(() => {
     const nextIds = new Set(candidates.map((candidate) => candidate.id));
     const added = candidates.find((candidate) => !knownCandidateIds.current.has(candidate.id));
     knownCandidateIds.current = nextIds;
     setActiveCandidateId((current) => added?.id ?? (nextIds.has(current) ? current : candidates[0]?.id ?? ""));
   }, [candidates]);
-  useEffect(() => {
-    for (const candidate of candidates.filter((item) => item.id === activeCandidateId)) {
-      const analysis = completedAnalyses.get(candidate.id);
-      for (const [rank, recommendation] of (recommendations.get(candidate.id) ?? []).slice(0, 3).entries()) {
-        const feedback = recommendedCopyViewedFeedbackInput({
-          candidateId: candidate.id,
-          sourceAnalysisId: analysis?.id ?? "",
-          compositionId: recommendation.composition.id,
-          libraryId: recommendation.snapshot.library_id,
-          libraryVersion: recommendation.snapshot.library_version,
-          rank: rank + 1,
-          recommendationReasons: recommendation.reasons,
-          copySnapshot: recommendation.snapshot,
-        });
-        const key = feedback.idempotency_key ?? `${candidate.id}:${recommendation.composition.id}`;
-        if (viewedCopyIds.current.has(key)) continue;
-        viewedCopyIds.current.add(key);
-        void api.createCreativeFeedback(feedback).catch(() => undefined);
-      }
-    }
-  }, [activeCandidateId, candidates, completedAnalyses, recommendations]);
-
   const incompleteCandidates = candidates.filter((candidate) => !completedAnalyses.has(candidate.id));
+  const sourceAnalysisUpgradeCount = candidates.filter((candidate) => sourceAnalysisNeedsVisualUpgrade(completedAnalyses.get(candidate.id))).length;
   const unconfiguredCandidates = candidates.filter((candidate) => {
     const draft = drafts[candidate.id];
-    if (!draft) return true;
-    if (draft.mode === "manual") return ![draft.manualHeadline, draft.manualSubheadline, draft.manualBenefit, draft.manualSupporting, draft.manualCta].some((value) => value.trim());
-    return !draft.selectedRecommendationId;
+    const analysis = completedAnalyses.get(candidate.id);
+    const adaptation = preparedPreAdaptation(analysis, marketPack, copyLibrary);
+    if (sourceAnalysisNeedsVisualUpgrade(analysis)) return true;
+    return !draft
+      || adaptation?.status !== "completed";
   });
+  const readinessByCandidateId = useMemo(
+    () => new Map(candidates.map((candidate) => {
+      const analysis = completedAnalyses.get(candidate.id);
+      const adaptation = preparedPreAdaptation(analysis, marketPack, copyLibrary);
+      const draft = drafts[candidate.id];
+      if (draft && adaptation?.status === "completed") return [candidate.id, "ready" as const];
+      if (analysis && marketPack && copyLibrary && !sourceAnalysisNeedsVisualUpgrade(analysis) && !sourceAnalysisAdaptationStatus(analysis)) {
+        return [candidate.id, "analyzing" as const];
+      }
+      if (sourceAnalysisAdaptationErrorCode(analysis) === "manual_confirmation_required") {
+        return [candidate.id, "manual_required" as const];
+      }
+      return [candidate.id, "failed" as const];
+    })),
+    [candidates, completedAnalyses, copyLibrary, drafts, marketPack],
+  );
+  const analysisRunningCount = [...readinessByCandidateId.values()].filter((status) => status === "analyzing").length;
+  const manualRequiredCount = [...readinessByCandidateId.values()].filter((status) => status === "manual_required").length;
+  const omittedTextBlockCount = candidates.reduce((count, candidate) => {
+    const draft = drafts[candidate.id];
+    const adaptation = preparedPreAdaptation(completedAnalyses.get(candidate.id), marketPack, copyLibrary);
+    if (!draft || !adaptation || adaptation.status !== "completed") return count;
+    return count + adaptation.textReplacements.filter((replacement) => !replacementText(replacement, draft.textOverrides).trim()).length;
+  }, 0);
+  const pendingRecommendationCount = candidates.reduce((count, candidate) => {
+    const draft = drafts[candidate.id];
+    const adaptation = preparedPreAdaptation(completedAnalyses.get(candidate.id), marketPack, copyLibrary);
+    if (!draft || !adaptation || adaptation.status !== "completed") return count;
+    return count + adaptation.textReplacements.filter((replacement) => hasPendingReplacementConfirmation(replacement, draft.textOverrides, draft.replacementSources ?? {})).length;
+  }, 0);
 
   const setDraft = (candidateId: string, patch: Partial<OrderItemDraft>) => setDrafts((current) => ({
     ...current,
     [candidateId]: { ...current[candidateId], ...patch } as OrderItemDraft,
   }));
+  const setReplacementChoice = (candidateId: string, blockId: string, text: string, source: ReplacementSourceChoice) => setDrafts((current) => {
+    const draft = current[candidateId];
+    if (!draft) return current;
+    return {
+      ...current,
+      [candidateId]: {
+        ...draft,
+        textOverrides: { ...draft.textOverrides, [blockId]: text },
+        replacementSources: { ...(draft.replacementSources ?? {}), [blockId]: source },
+      },
+    };
+  });
+  const setRepaymentPlanChoice = (candidateId: string, scenarioId: string, plan: RepaymentPlanChoice, original: PreparedRepaymentPlanSelection) => setDrafts((current) => {
+    const draft = current[candidateId];
+    if (!draft) return current;
+    const repaymentPlanOverrides = { ...(draft.repaymentPlanOverrides ?? {}) };
+    const numericLayoutDrafts = { ...(draft.numericLayoutDrafts ?? {}) };
+    let updatedAddedScenario = false;
+    for (const [layoutId, layoutDraft] of Object.entries(numericLayoutDrafts)) {
+      if (!layoutDraft.addedScenarios?.[scenarioId]) continue;
+      numericLayoutDrafts[layoutId] = {
+        ...layoutDraft,
+        addedScenarios: { ...layoutDraft.addedScenarios, [scenarioId]: plan },
+      };
+      delete repaymentPlanOverrides[scenarioId];
+      updatedAddedScenario = true;
+      break;
+    }
+    if (sameRepaymentPlanChoice(plan, original)) {
+      delete repaymentPlanOverrides[scenarioId];
+    } else if (!updatedAddedScenario) {
+      repaymentPlanOverrides[scenarioId] = plan;
+    }
+    return {
+      ...current,
+      [candidateId]: {
+        ...draft,
+        repaymentPlanOverrides,
+        numericLayoutDrafts,
+      },
+    };
+  });
+  const addRepaymentPlanRow = (candidateId: string, layoutId: string, plan: RepaymentPlanChoice) => setDrafts((current) => {
+    const draft = current[candidateId];
+    if (!draft) return current;
+    const numericLayoutDrafts = { ...(draft.numericLayoutDrafts ?? {}) };
+    const layoutDraft = numericLayoutDrafts[layoutId] ?? {};
+    const addedScenarios = { ...(layoutDraft.addedScenarios ?? {}) };
+    const scenarioId = nextAddedRepaymentPlanScenarioId(layoutId, plan.planKey, new Set([...Object.keys(addedScenarios), ...(layoutDraft.removedScenarioIds ?? [])]));
+    numericLayoutDrafts[layoutId] = {
+      ...layoutDraft,
+      addedScenarios: { ...addedScenarios, [scenarioId]: plan },
+    };
+    return { ...current, [candidateId]: { ...draft, numericLayoutDrafts } };
+  });
+  const removeRepaymentPlanRow = (candidateId: string, layoutId: string, scenarioId: string) => setDrafts((current) => {
+    const draft = current[candidateId];
+    if (!draft) return current;
+    const repaymentPlanOverrides = { ...(draft.repaymentPlanOverrides ?? {}) };
+    const numericLayoutDrafts = { ...(draft.numericLayoutDrafts ?? {}) };
+    const layoutDraft = numericLayoutDrafts[layoutId] ?? {};
+    const addedScenarios = { ...(layoutDraft.addedScenarios ?? {}) };
+    const removedScenarioIds = new Set(layoutDraft.removedScenarioIds ?? []);
+    if (addedScenarios[scenarioId]) {
+      delete addedScenarios[scenarioId];
+    } else {
+      removedScenarioIds.add(scenarioId);
+    }
+    delete repaymentPlanOverrides[scenarioId];
+    numericLayoutDrafts[layoutId] = {
+      ...layoutDraft,
+      removedScenarioIds: [...removedScenarioIds],
+      addedScenarios,
+    };
+    return { ...current, [candidateId]: { ...draft, repaymentPlanOverrides, numericLayoutDrafts } };
+  });
   const activeCandidate = candidates.find((candidate) => candidate.id === activeCandidateId) ?? candidates[0];
   const activeAnalysis = activeCandidate ? completedAnalyses.get(activeCandidate.id) : undefined;
-  const activeRanked = activeCandidate ? recommendations.get(activeCandidate.id) ?? [] : [];
+  const activeAnalysisNeedsVisualUpgrade = sourceAnalysisNeedsVisualUpgrade(activeAnalysis);
+  const activePreAdaptation = preparedPreAdaptation(activeAnalysis, marketPack, copyLibrary);
   const activeDraft = activeCandidate ? drafts[activeCandidate.id] : undefined;
-  const activeSelectedCopy = activeRanked.find((item) => item.composition.id === activeDraft?.selectedRecommendationId);
   const activeSource = activeCandidate ? candidateSource(activeCandidate) : "";
+  const activeReadiness = activeCandidate ? readinessByCandidateId.get(activeCandidate.id) ?? "failed" : "failed";
+  const preparePreAdaptation = useMutation({
+    mutationFn: async ({ sourceAnalysisId, marketPackId }: { sourceAnalysisId: string; marketPackId: string }) => (
+      api.retryCreativePreAdaptation(sourceAnalysisId, marketPackId)
+    ),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: creativeKeys.analyses(wsId) });
+      toast.success("已继续分析，完成后会自动刷新。");
+    },
+    onError: (error) => toast.error(error instanceof Error ? error.message : "分析未能继续排队"),
+  });
+  const autoPreAdaptationAttempts = useRef(new Set<string>());
+  useEffect(() => {
+    if (!marketPack || !copyLibrary) return;
+    for (const candidate of candidates) {
+      const analysis = completedAnalyses.get(candidate.id);
+      if (!analysis || sourceAnalysisNeedsVisualUpgrade(analysis) || sourceAnalysisAdaptationStatus(analysis)) continue;
+      const attemptKey = `${analysis.id}:${marketPack.id}:v${marketPack.published_version}:${copyLibrary.id}:v${copyLibrary.published_version}`;
+      if (autoPreAdaptationAttempts.current.has(attemptKey)) continue;
+      autoPreAdaptationAttempts.current.add(attemptKey);
+      preparePreAdaptation.mutate({ sourceAnalysisId: analysis.id, marketPackId: marketPack.id });
+    }
+  }, [candidates, completedAnalyses, copyLibrary, marketPack, preparePreAdaptation]);
   const customCopyValidations = useMemo(() => new Map(candidates.flatMap((candidate) => {
     const draft = drafts[candidate.id];
-    if (!draft || draft.mode !== "manual") return [];
-    const snapshot = manualCopySnapshot(draft, recommendations.get(candidate.id)?.[0]?.snapshot.creative_type, copyLibrary);
+    const adaptation = preparedPreAdaptation(completedAnalyses.get(candidate.id), marketPack, copyLibrary);
+    if (!draft || !adaptation || !copyLibrary) return [];
+    const snapshot = preAdaptedCopySnapshot(copyLibrary, adaptation, draft, completedAnalyses.get(candidate.id)?.id ?? "");
     return [[candidate.id, validateCustomCopyFinancialFacts(snapshot, copyLibrary)]] as const;
-  })), [candidates, copyLibrary, drafts, recommendations]);
+  })), [candidates, completedAnalyses, copyLibrary, drafts, marketPack]);
   const customCopyIssueCount = [...customCopyValidations.values()].filter((validation) => !validation.allowed).length;
   const activeCustomCopyValidation = activeCandidate ? customCopyValidations.get(activeCandidate.id) : undefined;
-  const addManualFacts = useMutation({
-    mutationFn: async ({ candidateId, normalizedFacts }: { candidateId: string; normalizedFacts: string[] }) => {
-      if (!copyLibrary) throw new Error("当前市场没有已发布文案库");
-      const validation = customCopyValidations.get(candidateId);
-      const selected = validation?.unapprovedFacts.filter((fact) => normalizedFacts.includes(fact.normalized)) ?? [];
-      if (selected.length === 0) throw new Error("请先勾选需要加入文案库的事实");
-      const currentConfig = copyLibrary.published_config ?? {};
-      const currentFacts = Array.isArray(currentConfig.product_facts) ? currentConfig.product_facts : [];
-      const timestamp = new Date().toISOString();
-      const appendedFacts = selected.map((fact) => ({
-        id: crypto.randomUUID(),
-        key: `user_confirmed_${crypto.randomUUID().replaceAll("-", "")}`,
-        label: `用户确认 · ${fact.display}`,
-        value: fact.value,
-        copy_text: fact.display,
-        source: `创意订单手动文案 · 素材 ${candidateId.slice(0, 8)} · ${timestamp}`,
-        status: "approved",
-      }));
-      const saved = await api.updateCreativeResource(copyLibrary.id, {
-        name: copyLibrary.name,
-        description: copyLibrary.description,
-        config: { ...currentConfig, product_facts: [...currentFacts, ...appendedFacts] },
-      });
-      return api.publishCreativeResource(saved.id);
-    },
-    onSuccess: (_resource, variables) => {
-      setManualFactSelections((current) => ({ ...current, [variables.candidateId]: [] }));
-      queryClient.invalidateQueries({ queryKey: creativeKeys.resources(wsId) });
-      toast.success("已将确认的金融事实加入并发布到当前文案库");
-    },
-    onError: (error) => toast.error(error instanceof Error ? error.message : "无法加入文案库"),
-  });
-  const startManualCopy = () => {
-    if (!activeCandidate) return;
-    const baseline = activeSelectedCopy?.snapshot ?? activeRanked[0]?.snapshot;
-    setDraft(activeCandidate.id, {
-      mode: "manual",
-      manualHeadline: activeDraft?.manualHeadline || baseline?.headline || "",
-      manualSubheadline: activeDraft?.manualSubheadline || baseline?.subheadline || "",
-      manualBenefit: activeDraft?.manualBenefit || baseline?.benefit || "",
-      manualSupporting: activeDraft?.manualSupporting || baseline?.supporting || "",
-      manualCta: activeDraft?.manualCta || baseline?.cta || "",
-    });
-  };
-
   const create = async () => {
-    if (!marketPack || !selectedSquad || incompleteCandidates.length > 0 || unconfiguredCandidates.length > 0 || customCopyIssueCount > 0) return;
+    if (!marketPack || !selectedSquad || incompleteCandidates.length > 0 || unconfiguredCandidates.length > 0 || pendingRecommendationCount > 0) return;
     setBusy(true);
     setRecoveryMessage("");
     let submissionKey = "";
@@ -509,13 +1029,13 @@ function CreativeOrderDraft({ candidates, analyses, onDone }: { candidates: Crea
           trigger_evidence_ref_id: runIds.length === 1 ? runIds[0]! : "",
           items: candidates.map((candidate) => {
             const draft = drafts[candidate.id]!;
-            const recommendation = recommendations.get(candidate.id)?.find((item) => item.composition.id === draft.selectedRecommendationId);
-            if (draft.mode !== "manual" && !recommendation) throw new Error(`素材 ${candidate.id.slice(0, 8)} 尚未选择推荐文案`);
+            const adaptation = preparedPreAdaptation(completedAnalyses.get(candidate.id), marketPack, copyLibrary);
+            if (!copyLibrary || !adaptation || adaptation.status !== "completed") throw new Error(`素材 ${candidate.id.slice(0, 8)} 尚未完成逐块文字填充`);
             return creativeOrderItemInput(
               candidate.id,
               completedAnalyses.get(candidate.id)!.id,
-              draft.mode === "manual" ? manualCopySnapshot(draft, recommendations.get(candidate.id)?.[0]?.snapshot.creative_type, copyLibrary) as unknown as Record<string, unknown> : { ...recommendation!.snapshot },
-              draft.direction,
+              preAdaptedCopySnapshot(copyLibrary, adaptation, draft, completedAnalyses.get(candidate.id)!.id) as unknown as Record<string, unknown>,
+              compiledProductionPrompt(adaptation, draft.textOverrides, draft.productionPrompt, draft.repaymentPlanOverrides, draft.numericLayoutDrafts),
             );
           }),
         });
@@ -523,71 +1043,76 @@ function CreativeOrderDraft({ candidates, analyses, onDone }: { candidates: Crea
         orderId = order.id;
         setRecovery({ issueId, orderId, submissionKey });
       }
+      await Promise.all(candidates.map((candidate) => api.createCreativeFeedback(
+        candidateDecisionFeedbackInput(candidate, "selected", undefined, undefined, `creative-order:${submissionKey}:${candidate.id}`),
+      )));
       await api.setIssueMetadataKey(issueId, "creative_order_id", orderId);
-      for (const candidate of candidates) {
-        const draft = drafts[candidate.id]!;
-        if (draft.mode === "manual") continue;
-        const selected = recommendations.get(candidate.id)?.find((item) => item.composition.id === draft.selectedRecommendationId);
-        if (!selected) continue;
-        void api.createCreativeFeedback(recommendedCopyDecisionFeedbackInput({
-          submissionKey,
-          issueId,
-          orderId,
-          candidateId: candidate.id,
-          selectedCopyId: selected.composition.id,
-          selectedRank: (recommendations.get(candidate.id) ?? []).findIndex((item) => item.composition.id === selected.composition.id) + 1,
-          libraryId: selected.snapshot.library_id,
-          libraryVersion: selected.snapshot.library_version,
-        })).catch(() => undefined);
-      }
       await api.updateIssue(issueId, { assignee_type: "squad", assignee_id: selectedSquad.id });
-      toast.success("创意订单已提交，开始生成");
+      queryClient.invalidateQueries({ queryKey: creativeKeys.feedback(wsId, "candidate", "") });
+      queryClient.invalidateQueries({ queryKey: creativeKeys.materials(wsId) });
+      toast.success(`已提交 ${candidates.length} 组图片，正在开始出图`);
       setRecovery(EMPTY_SUBMISSION_RECOVERY);
       onDone(orderId);
     } catch (error) {
       if (submissionKey) setRecovery({ issueId, orderId, submissionKey });
-      setRecoveryMessage(error instanceof Error ? error.message : "订单创建未完成。可以在当前面板继续，不会重复创建已完成的步骤。");
+      const message = error instanceof Error ? error.message : "订单创建未完成。可以在当前面板继续，不会重复创建已完成的步骤。";
+      setRecoveryMessage(message);
+      toast.error(message);
     } finally {
       setBusy(false);
     }
   };
 
-  return <section className="mt-4 border bg-background" aria-labelledby="creative-order-draft-title">
-    <div className="flex flex-wrap items-center justify-between gap-2 border-b px-4 py-3"><div><h3 id="creative-order-draft-title" className="text-sm font-semibold">配置创意订单</h3><p className="mt-1 text-xs text-muted-foreground">逐图确认参考分析、完整文案和补充方向</p></div><div className="flex items-center gap-2"><Badge variant="outline">已配置 {candidates.length - unconfiguredCandidates.length}/{candidates.length}</Badge><Badge>{candidates.length} 张素材</Badge></div></div>
-    <div className="grid gap-3 border-b p-4 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-end">
-      <Field label="市场规则"><NativeSelect value={marketPack?.id ?? ""} onChange={(event) => setMarketPackId(event.target.value)}><NativeSelectOption value="">选择已发布市场规则</NativeSelectOption>{marketPacks.map((resource) => <NativeSelectOption key={resource.id} value={resource.id}>{resource.name} · v{resource.published_version}</NativeSelectOption>)}</NativeSelect></Field>
-      <details className="min-w-52 border px-3 py-2"><summary className="cursor-pointer list-none text-xs font-medium marker:content-none">高级设置 · {selectedSquad?.name || "未配置"}</summary><div className="mt-3"><Field label="生成服务"><NativeSelect value={selectedSquad?.id ?? ""} onChange={(event) => setSquadId(event.target.value)}><NativeSelectOption value="">选择可用服务</NativeSelectOption>{(squads.data ?? []).map((squad) => <NativeSelectOption key={squad.id} value={squad.id}>{squad.name}</NativeSelectOption>)}</NativeSelect></Field></div></details>
+  return <section className="min-w-0 border bg-background" aria-labelledby="creative-order-draft-title">
+    <div className="flex flex-wrap items-center justify-between gap-2 border-b px-4 py-3">
+      <div className="min-w-0"><h3 id="creative-order-draft-title" className="text-sm font-semibold">批量确认文案</h3><p className="mt-1 text-xs text-muted-foreground">确认画面文案后，会一次提交这批素材出图。</p></div>
+      <div className="flex min-w-0 flex-wrap items-center justify-end gap-2"><Badge variant="outline" className="max-w-full truncate">{marketPack ? `${marketPack.name} · v${marketPack.published_version}` : "市场规则未配置"}</Badge>{selectedSquad && <Badge variant="outline" className="max-w-full truncate">{selectedSquad.name}</Badge>}<Badge variant="outline">可提交 {candidates.length - unconfiguredCandidates.length}/{candidates.length}</Badge><Badge>{candidates.length} 张素材</Badge><Button size="sm" variant="outline" onClick={onClose}><ArrowLeft className="h-4 w-4" />返回素材库</Button></div>
     </div>
-    <nav className="flex gap-2 overflow-x-auto border-b bg-muted/10 p-3" aria-label="已选素材">{candidates.map((candidate, index) => {
-      const candidateDraft = drafts[candidate.id];
-      const configured = candidateDraft?.mode === "manual"
-        ? [candidateDraft.manualHeadline, candidateDraft.manualSubheadline, candidateDraft.manualBenefit, candidateDraft.manualSupporting, candidateDraft.manualCta].some((value) => value.trim())
-        : Boolean(candidateDraft?.selectedRecommendationId);
-      const analyzed = completedAnalyses.has(candidate.id);
-      const source = candidateSource(candidate);
-      return <button key={candidate.id} type="button" aria-pressed={candidate.id === activeCandidate?.id} onClick={() => setActiveCandidateId(candidate.id)} className={`grid min-w-52 grid-cols-[56px_minmax(0,1fr)] gap-2 border bg-background p-2 text-left ${candidate.id === activeCandidate?.id ? "border-emerald-600 ring-1 ring-emerald-600/20" : ""}`}>
-        <span className="aspect-[4/3] overflow-hidden bg-muted">{source ? <img src={source} alt="" width={160} height={120} loading="lazy" className="h-full w-full object-contain" /> : <span className="flex h-full items-center justify-center"><ImageIcon className="h-4 w-4 text-muted-foreground" /></span>}</span>
-        <span className="min-w-0"><span className="block truncate text-xs font-medium">{index + 1}. {candidate.title || candidate.competitor}</span><span className="mt-1 block text-[11px] text-muted-foreground">{analyzed ? "已分析" : "等待分析"} · {configured ? "文案已定" : "待定文案"}</span><span className="mt-0.5 block font-mono text-[10px] text-muted-foreground">{candidate.id.slice(0, 8)}</span></span>
-      </button>;
-    })}</nav>
-    {activeCandidate && <article key={activeCandidate.id} className="space-y-4 p-4" data-testid="creative-order-active-editor" data-candidate-id={activeCandidate.id}>
-      <div className="grid gap-4 border-b pb-4 lg:grid-cols-[220px_minmax(0,1fr)]">
-      <div><div className="aspect-[4/3] overflow-hidden bg-muted">{activeSource ? <img src={activeSource} alt={activeCandidate.title || activeCandidate.competitor} width={880} height={660} loading="lazy" className="h-full w-full object-contain" /> : <div className="flex h-full items-center justify-center"><ImageIcon className="h-6 w-6 text-muted-foreground" /></div>}</div><p className="mt-2 break-words text-xs font-medium">{activeCandidate.title || activeCandidate.competitor}</p><p className="mt-1 font-mono text-[10px] text-muted-foreground">素材 ID {activeCandidate.id.slice(0, 8)}</p></div>
-        <div className="border-l-2 border-emerald-600 pl-3"><div className="flex flex-wrap items-center gap-2"><Sparkles className="h-4 w-4 text-emerald-700" /><p className="text-sm font-medium">{activeAnalysis?.summary || "等待参考分析"}</p>{activeAnalysis && <Badge variant="outline">v{activeAnalysis.analysis_version}</Badge>}</div>{activeAnalysis && <AnalysisFacts analysis={activeAnalysis} adaptedCopy={activeRanked[0]?.snapshot} />}{!activeAnalysis && <p className="mt-2 text-xs text-destructive">分析完成后才能提交该素材。</p>}</div>
-      </div>
+    <SelectedMaterialStrip candidates={candidates} activeCandidateId={activeCandidate?.id ?? ""} readinessByCandidateId={readinessByCandidateId} deselecting={deselecting} onSelect={setActiveCandidateId} onDeselect={onDeselect} />
+    {activeCandidate && <article key={activeCandidate.id} className="min-w-0 space-y-4 p-4" data-testid="creative-order-active-editor" data-candidate-id={activeCandidate.id}>
+      <div className="min-w-0 border-b border-l-2 border-emerald-600 pb-4 pl-3"><div className="flex flex-wrap items-center gap-2"><Sparkles className="h-4 w-4 text-emerald-700" /><p className="break-words text-sm font-medium">{activeAnalysis?.summary || "素材分析中"}</p><span className="font-mono text-[10px] text-muted-foreground">素材 ID {activeCandidate.id.slice(0, 8)}</span></div>{activeAnalysis && <AnalysisHighlights analysis={activeAnalysis} adaptation={activePreAdaptation} />}{activePreAdaptation ? <PreAdaptationSummary adaptation={activePreAdaptation} /> : activeReadiness === "analyzing" ? <p className="mt-2 text-xs text-amber-700">{MATERIAL_ANALYSIS_RUNNING_MESSAGE}</p> : <p className="mt-2 text-xs text-destructive">素材分析未完成，暂时不能提交出图。</p>}</div>
       <div className="min-w-0 space-y-4">
-        <fieldset className="min-w-0" aria-describedby={`copy-help-${activeCandidate.id}`}>
-          <div className="flex flex-wrap items-center justify-between gap-2"><legend className="text-sm font-semibold">选择一套完整文案</legend><span id={`copy-help-${activeCandidate.id}`} className="text-xs text-muted-foreground">根据原图语义动态组合，仅使用当前市场已审核事实</span></div>
-          {activeRanked.length > 0 ? <div className="mt-3 grid gap-3 xl:grid-cols-3">{activeRanked.slice(0, 3).map((recommendation, index) => <CopyRecommendationCard key={recommendation.composition.id} recommendation={recommendation} rank={index + 1} selected={activeDraft?.mode === "recommendation" && activeDraft.selectedRecommendationId === recommendation.composition.id} onSelect={() => setDraft(activeCandidate.id, { mode: "recommendation", selectedRecommendationId: recommendation.composition.id })} />)}</div> : <p role="alert" className="mt-3 border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs text-destructive">当前文案库没有足够的已审核原子，无法生成安全候选。</p>}
-          {activeRanked.length > 0 && activeRanked.length < 3 && <p className="mt-2 text-xs text-amber-700">当前只能安全组合出 {activeRanked.length} 套文案，请在文案库补充同类型原子。</p>}
-        </fieldset>
-        <div className="flex items-center gap-2"><Button type="button" size="sm" variant="outline" onClick={startManualCopy}>三套都不合适，手动调整</Button>{activeDraft?.mode === "manual" && <Button type="button" size="sm" variant="ghost" onClick={() => setDraft(activeCandidate.id, { mode: "recommendation" })}>返回推荐</Button>}</div>
-        {activeDraft?.mode === "manual" ? <div className="grid gap-3 border bg-muted/10 p-3 sm:grid-cols-2"><Field label="主标题" wide><Input value={activeDraft.manualHeadline} onChange={(event) => setDraft(activeCandidate.id, { manualHeadline: event.target.value })} /></Field><Field label="副标题" wide><Input value={activeDraft.manualSubheadline} onChange={(event) => setDraft(activeCandidate.id, { manualSubheadline: event.target.value })} /></Field><Field label="利益点" wide><Textarea rows={5} value={activeDraft.manualBenefit} onChange={(event) => setDraft(activeCandidate.id, { manualBenefit: event.target.value })} /></Field><Field label="补充卖点"><Textarea rows={3} value={activeDraft.manualSupporting} onChange={(event) => setDraft(activeCandidate.id, { manualSupporting: event.target.value })} /></Field><Field label="行动文案"><Input value={activeDraft.manualCta} onChange={(event) => setDraft(activeCandidate.id, { manualCta: event.target.value })} /></Field><p className="self-end text-xs text-muted-foreground">可以调整表达和删减信息层级；已有金融事实会自动校验，新事实需要你明确确认后加入文案库。</p>{activeCustomCopyValidation && !activeCustomCopyValidation.allowed && activeCustomCopyValidation.unapprovedFacts.length > 0 && <div className="space-y-3 border border-amber-300 bg-amber-50/50 p-3 text-xs sm:col-span-2"><div><p className="font-medium text-foreground">检测到文案库中还没有的金融事实</p><p className="mt-1 text-muted-foreground">勾选即表示你确认内容准确；系统会记录来源并发布到当前市场文案库。</p></div><div className="grid gap-2 sm:grid-cols-2">{activeCustomCopyValidation.unapprovedFacts.map((fact) => { const checked = (manualFactSelections[activeCandidate.id] ?? []).includes(fact.normalized); return <label key={fact.normalized} className="flex items-start gap-2 border bg-background p-2"><Checkbox checked={checked} onCheckedChange={(value) => setManualFactSelections((current) => { const selected = new Set(current[activeCandidate.id] ?? []); value === true ? selected.add(fact.normalized) : selected.delete(fact.normalized); return { ...current, [activeCandidate.id]: [...selected] }; })} /><span className="break-words">{fact.display}</span></label>; })}</div><Button type="button" size="sm" disabled={addManualFacts.isPending || (manualFactSelections[activeCandidate.id] ?? []).length === 0} onClick={() => addManualFacts.mutate({ candidateId: activeCandidate.id, normalizedFacts: manualFactSelections[activeCandidate.id] ?? [] })}>{addManualFacts.isPending ? "正在加入" : "确认并加入文案库"}</Button></div>}{activeCustomCopyValidation && !activeCustomCopyValidation.allowed && activeCustomCopyValidation.unapprovedFacts.length === 0 && <p role="alert" className="sm:col-span-2 border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs text-destructive">{activeCustomCopyValidation.message}</p>}</div> : !activeSelectedCopy && activeRanked.length > 0 && <p className="text-xs text-destructive">请选择三套候选中的一套。</p>}
-        <Field label="补充创意想法" wide><Textarea rows={3} value={activeDraft?.direction ?? ""} onChange={(event) => setDraft(activeCandidate.id, { direction: event.target.value })} placeholder="例如：保留绿色信息卡片，人物更生活化，CTA 更醒目。不要在这里补写未经审核的金融事实。" /></Field>
+        {activeAnalysisNeedsVisualUpgrade ? <div role="alert" className="space-y-3 border border-amber-300 bg-amber-50/50 px-3 py-3 text-xs text-amber-900"><p className="font-medium">这张素材需要重新分析后才能提交。</p><p>重新分析会刷新画面文字区域、业务信息和出图文案配置。</p><Button size="sm" disabled={retryingSourceAnalysis} onClick={() => onRetrySourceAnalysis(activeCandidate.id)}><RefreshCw className={`h-4 w-4 ${retryingSourceAnalysis ? "animate-spin" : ""}`} />{retryingSourceAnalysis ? "正在重新分析" : "重新分析"}</Button></div> : activePreAdaptation?.status === "completed" && activeDraft ? <TextReplacementPlan sourceImage={activeSource} sourceImageAlt={activeCandidate.title || activeCandidate.competitor} adaptation={activePreAdaptation} copyLibrary={copyLibrary} overrides={activeDraft.textOverrides} replacementSources={activeDraft.replacementSources ?? {}} repaymentPlanOverrides={activeDraft.repaymentPlanOverrides ?? {}} numericLayoutDrafts={activeDraft.numericLayoutDrafts ?? {}} repaymentPlanOptions={repaymentPlanOptions} productionPrompt={activeDraft.productionPrompt ?? overallProductionRequirement(activePreAdaptation)} onOpenCopyLibrary={onOpenCopyLibrary} onRetrySourceAnalysis={() => onRetrySourceAnalysis(activeCandidate.id)} retryingSourceAnalysis={retryingSourceAnalysis} onChooseReplacement={(blockId, value, source) => setReplacementChoice(activeCandidate.id, blockId, value, source)} onChooseRepaymentPlan={(scenarioId, plan, original) => setRepaymentPlanChoice(activeCandidate.id, scenarioId, plan, original)} onAddRepaymentPlan={(layoutId, plan) => addRepaymentPlanRow(activeCandidate.id, layoutId, plan)} onRemoveRepaymentPlan={(layoutId, scenarioId) => removeRepaymentPlanRow(activeCandidate.id, layoutId, scenarioId)} onProductionPromptChange={(value) => setDraft(activeCandidate.id, { productionPrompt: value })} /> : activeReadiness === "analyzing" ? <div role="status" className="flex items-start gap-2 border border-amber-300 bg-amber-50/50 px-3 py-3 text-xs text-amber-900"><LoaderCircle className="mt-0.5 h-4 w-4 shrink-0 animate-spin" /><div><p className="font-medium">{MATERIAL_ANALYSIS_RUNNING_MESSAGE}</p><p className="mt-1 text-amber-800">{MATERIAL_ANALYSIS_RUNNING_DETAIL}</p></div></div> : activeReadiness === "manual_required" ? <div role="alert" className="space-y-2 border border-amber-300 bg-amber-50/50 px-3 py-3 text-xs text-amber-900"><p className="font-medium">预适配已重试一次仍未通过，需人工确认文案与数值映射。</p><p className="text-amber-800">这张素材不会进入可用素材，也不会继续自动重试。</p></div> : <div role="alert" className="space-y-3 border border-amber-300 bg-amber-50/50 px-3 py-3 text-xs text-amber-800"><p>{!marketPack ? "当前工作区尚未发布唯一市场配置，素材分析暂不可用。" : !copyLibrary ? "当前市场配置没有绑定已发布文案库，素材分析暂不可用。" : "本图尚未按当前市场配置完成分析，不会替换为泛文案。"}</p>{activeAnalysis && <Button size="sm" variant="outline" disabled={retryingSourceAnalysis} onClick={() => onRetrySourceAnalysis(activeCandidate.id)}><RefreshCw className={`h-4 w-4 ${retryingSourceAnalysis ? "animate-spin" : ""}`} />{retryingSourceAnalysis ? "正在重新分析" : "重新分析"}</Button>}</div>}
+        {activeCustomCopyValidation && !activeCustomCopyValidation.allowed && <p className="border border-amber-300 bg-amber-50/50 px-3 py-2 text-xs text-amber-900">{activeCustomCopyValidation.message} 这是本次人工改写的提示，不会阻止提交；请确认该数字已获业务确认。</p>}
       </div>
     </article>}
-    <div className="flex flex-wrap items-center justify-between gap-3 border-t bg-muted/10 px-4 py-3"><div className="text-xs text-muted-foreground">{recoveryMessage ? <span className="text-destructive">{recoveryMessage}</span> : incompleteCandidates.length > 0 ? `${incompleteCandidates.length} 张素材仍在等待分析` : unconfiguredCandidates.length > 0 ? `${unconfiguredCandidates.length} 张素材尚未选择文案` : customCopyIssueCount > 0 ? `${customCopyIssueCount} 张素材的手动文案包含未审核金融事实` : !selectedSquad ? "暂无可用生成服务" : "全部素材已配置，可以开始生成。"}</div><Button disabled={busy || !marketPack || !selectedSquad || incompleteCandidates.length > 0 || unconfiguredCandidates.length > 0 || customCopyIssueCount > 0} onClick={() => void create()}>{busy ? "正在提交" : recovery.issueId ? "继续提交" : "开始生成"}</Button></div>
+    <div className="flex flex-wrap items-center justify-between gap-3 border-t bg-muted/10 px-4 py-3"><div className="text-xs text-muted-foreground">{recoveryMessage ? <span className="text-destructive">{recoveryMessage}</span> : !marketPack ? "当前工作区尚未发布唯一市场配置" : !selectedSquad ? "当前工作区尚未配置执行服务" : incompleteCandidates.length > 0 ? `${incompleteCandidates.length} 张素材仍在分析中` : sourceAnalysisUpgradeCount > 0 ? `${sourceAnalysisUpgradeCount} 张素材需要重新分析` : analysisRunningCount > 0 ? `${analysisRunningCount} 张素材仍在分析中，完成后会自动刷新` : manualRequiredCount > 0 ? `${manualRequiredCount} 张素材需人工确认文案与数值映射` : unconfiguredCandidates.length > 0 ? `${unconfiguredCandidates.length} 张素材当前分析不可用；请返回素材库重新分析或检查市场配置` : pendingRecommendationCount > 0 ? `${pendingRecommendationCount} 项系统推荐待确认` : customCopyIssueCount > 0 ? `${customCopyIssueCount} 张素材含人工确认的金融数值，请确认来源后提交` : omittedTextBlockCount > 0 ? `${omittedTextBlockCount} 个文字区块未填，生成时会移除原竞品文字；可在上方补充。` : "全部素材已配置，可以提交出图。"}</div><Button disabled={busy || !marketPack || !selectedSquad || incompleteCandidates.length > 0 || unconfiguredCandidates.length > 0 || pendingRecommendationCount > 0} onClick={() => void create()}>{busy ? "正在提交" : recovery.issueId ? "继续提交" : `提交 ${candidates.length} 组出图`}</Button></div>
   </section>;
+}
+
+export function SelectedMaterialStrip({
+  candidates,
+  activeCandidateId,
+  readinessByCandidateId,
+  deselecting,
+  onSelect,
+  onDeselect,
+}: {
+  candidates: CreativeMaterialCandidate[];
+  activeCandidateId: string;
+  readinessByCandidateId: ReadonlyMap<string, SelectedMaterialReadinessStatus>;
+  deselecting: boolean;
+  onSelect: (candidateId: string) => void;
+  onDeselect: (candidateId: string) => void;
+}) {
+  return <nav className="flex gap-2 overflow-x-auto border-b bg-muted/10 p-3" aria-label="已选素材">{candidates.map((candidate, index) => {
+    const source = candidateSource(candidate);
+    const active = candidate.id === activeCandidateId;
+    return <div key={candidate.id} className={`relative min-w-52 border bg-background ${active ? "border-emerald-600 ring-1 ring-emerald-600/20" : ""}`}>
+      <button type="button" aria-pressed={active} onClick={() => onSelect(candidate.id)} className="grid w-full grid-cols-[56px_minmax(0,1fr)] gap-2 p-2 pr-9 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2">
+        <span className="aspect-[4/3] overflow-hidden bg-muted">{source ? <img src={source} alt="" width={160} height={120} loading="lazy" className="h-full w-full object-contain" /> : <span className="flex h-full items-center justify-center"><ImageIcon className="h-4 w-4 text-muted-foreground" /></span>}</span>
+        <span className="min-w-0"><span className="block truncate text-xs font-medium">{index + 1}. {candidate.title || candidate.competitor}</span><span className="mt-1 block text-[11px] text-muted-foreground">{selectedMaterialReadinessLabel(readinessByCandidateId.get(candidate.id) ?? "failed")}</span><span className="mt-0.5 block font-mono text-[10px] text-muted-foreground">{candidate.id.slice(0, 8)}</span></span>
+      </button>
+      <Button aria-label="取消选择素材" title="取消选择素材" size="icon-sm" variant="outline" className="absolute right-1.5 top-1.5 bg-background hover:border-destructive hover:text-destructive" disabled={deselecting} onClick={() => onDeselect(candidate.id)}><X className="h-4 w-4" /></Button>
+    </div>;
+  })}</nav>;
+}
+
+export function selectedMaterialReadinessLabel(status: SelectedMaterialReadinessStatus): string {
+  if (status === "ready") return "可用";
+  if (status === "analyzing") return "分析中";
+  if (status === "manual_required") return "待人工确认";
+  return "处理失败";
 }
 
 const CANDIDATE_REJECTION_REASONS = [
@@ -611,17 +1136,16 @@ function DirectEditDialog({ candidate, onClose, onCreated }: { candidate: Creati
   const [instruction, setInstruction] = useState("");
   const [targetSize, setTargetSize] = useState<"1080x1080" | "1200x628" | "800x1000">("1080x1080");
   const [deliveryMode, setDeliveryMode] = useState<"preview" | "publish">("preview");
-  const [squadId, setSquadId] = useState("");
   const [recovery, setRecovery] = useState<SubmissionRecovery>(EMPTY_SUBMISSION_RECOVERY);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
-  const selectedSquad = (squads.data ?? []).find((squad) => squad.id === squadId) ?? (squads.data ?? []).find((squad) => squad.name.includes("素材小队")) ?? (squads.data ?? [])[0];
+  const availableSquads = squads.data ?? [];
+  const selectedSquad = availableSquads.length === 1 ? availableSquads[0] : undefined;
 
   useEffect(() => {
     setInstruction("");
     setTargetSize("1080x1080");
     setDeliveryMode("preview");
-    setSquadId("");
     setRecovery(EMPTY_SUBMISSION_RECOVERY);
     setError("");
   }, [candidate?.id]);
@@ -687,7 +1211,6 @@ function DirectEditDialog({ candidate, onClose, onCreated }: { candidate: Creati
         <Field label="目标尺寸"><NativeSelect disabled={Boolean(recovery.issueId)} value={targetSize} onChange={(event) => setTargetSize(event.target.value as typeof targetSize)}><NativeSelectOption value="1080x1080">1080 x 1080</NativeSelectOption><NativeSelectOption value="1200x628">1200 x 628</NativeSelectOption><NativeSelectOption value="800x1000">800 x 1000</NativeSelectOption></NativeSelect></Field>
         <Field label="交付方式"><NativeSelect disabled={Boolean(recovery.issueId)} value={deliveryMode} onChange={(event) => setDeliveryMode(event.target.value as typeof deliveryMode)}><NativeSelectOption value="preview">预览</NativeSelectOption><NativeSelectOption value="publish">作为正式投放素材</NativeSelectOption></NativeSelect></Field>
       </div>
-      <details className="border px-3 py-2"><summary className="cursor-pointer list-none text-xs font-medium marker:content-none">执行设置 · {selectedSquad?.name || "未配置"}</summary><div className="mt-3"><Field label="执行小队"><NativeSelect disabled={Boolean(recovery.issueId)} value={selectedSquad?.id ?? ""} onChange={(event) => setSquadId(event.target.value)}><NativeSelectOption value="">选择小队</NativeSelectOption>{(squads.data ?? []).map((squad) => <NativeSelectOption key={squad.id} value={squad.id}>{squad.name}</NativeSelectOption>)}</NativeSelect></Field></div></details>
       <Field label="修改要求" wide><Textarea disabled={Boolean(recovery.issueId)} rows={5} value={instruction} onChange={(event) => setInstruction(event.target.value)} placeholder="例如：保留人物和绿色信息卡片，将主标题改得更醒目，移除右上角竞品标识。" /></Field>
       {!candidate?.source_attachment_id && <p className="border border-destructive/30 bg-destructive/5 p-3 text-xs text-destructive">该素材尚无稳定源文件，暂时不能直接改图。</p>}
       {recovery.issueId && <p className="border bg-muted/20 p-3 text-xs text-muted-foreground">本次提交参数已冻结。继续提交会恢复同一任务；关闭窗口后可重新配置。</p>}
@@ -719,14 +1242,14 @@ function AnalysisFacts({ analysis, adaptedCopy }: { analysis: CreativeSourceAnal
   const paletteAnchors = recordStringArray(result, "palette_anchors");
   const mustPreserve = recordStringArray(result, "must_preserve");
   const allowedVariations = recordStringArray(result, "allowed_variations");
-  const adaptedFacts = uniqueDisplayFacts(adaptedCopy?.product_facts ?? []);
+  const selectedRepaymentPlans = adaptedCopy?.pre_adaptation?.repayment_plan_selections ?? [];
   return <dl className="mt-3 grid gap-x-4 gap-y-2 text-xs sm:grid-cols-2">
     <AnalysisFact label="主题" value={theme || "未识别"} />
     <AnalysisFact label="主利益点" value={benefit || "未识别"} />
     {themeElements.length > 0 && <AnalysisFact label="主题元素" value={themeElements.join("、")} />}
     {secondaryBenefits.length > 0 && <AnalysisFact label="次要利益点" value={secondaryBenefits.join("、")} />}
     {value && <AnalysisFact label="竞品观察" value={`${value}，只作结构参考`} wide />}
-    {adaptedFacts.length > 0 && <AnalysisFact label="我方适配信息" value={adaptedFacts.slice(0, 6).map((fact) => `${fact.label}：${fact.copy_text}`).join("；")} wide />}
+    {selectedRepaymentPlans.length > 0 && <AnalysisFact label="已选我方还款计划" value={selectedRepaymentPlans.slice(0, 4).map((plan) => `${plan.values.principal} / ${plan.values.tenor} / ${plan.values.monthly_installment}`).join("；")} wide />}
     {semantics && <AnalysisFact label="业务语义" value={semantics} wide />}
     {mechanism && <AnalysisFact label="信息机制" value={mechanism} wide />}
     {visualType && <AnalysisFact label="视觉类型" value={visualType} />}
@@ -737,95 +1260,932 @@ function AnalysisFacts({ analysis, adaptedCopy }: { analysis: CreativeSourceAnal
   </dl>;
 }
 
+function AnalysisHighlights({ analysis, adaptation }: { analysis: CreativeSourceAnalysis; adaptation: PreparedPreAdaptation | null }) {
+  const result = analysis.result ?? {};
+  const highlights = adaptation?.analysisHighlights.length
+    ? adaptation.analysisHighlights
+    : [
+      recordString(result, "information_mechanism"),
+      recordString(result, "primary_benefit"),
+      ...recordStringArray(result, "must_preserve").slice(0, 2),
+      ...recordStringArray(result, "allowed_variations").slice(0, 1),
+    ].filter(Boolean).slice(0, 5);
+  return highlights.length > 0 ? <ul className="mt-3 grid gap-1.5 text-xs text-muted-foreground">{highlights.map((highlight, index) => <li key={`${index}:${highlight}`} className="border-l-2 border-muted-foreground/30 pl-2">{highlight}</li>)}</ul> : null;
+}
+
 function AnalysisFact({ label, value, wide = false }: { label: string; value: string; wide?: boolean }) {
   return <div className={wide ? "sm:col-span-2" : undefined}><dt className="text-muted-foreground">{label}</dt><dd className="mt-0.5 break-words text-foreground">{value}</dd></div>;
 }
 
-function uniqueDisplayFacts(facts: CreativeCopySnapshot["product_facts"]): CreativeCopySnapshot["product_facts"] {
-  const seen = new Set<string>();
-  const uniqueFacts = facts.filter((fact) => {
-    const identity = `${fact.label}:${fact.copy_text}`;
-    if (seen.has(identity)) return false;
-    seen.add(identity);
-    return true;
-  });
-  const priority = (key: string) => key === "limit_max" ? 0 : key === "tenor_range" ? 1 : key === "interest_rate_from" ? 2 : 10;
-  return uniqueFacts.sort((left, right) => priority(left.key) - priority(right.key));
-}
+export type PreparedTextReplacement = {
+  blockId: string;
+  visualRegionId?: string;
+  location: string;
+  role: string;
+  semanticKind?: string;
+  sourceText: string;
+  visualBounds?: NormalizedVisualBounds;
+  replacementText: string;
+  sourceKeys: string[];
+  status: "ready" | "recommended" | "calculated" | "missing";
+  note: string;
+  recommendationBasis?: string[];
+  calculation?: { formula: string; inputs: string[]; result: string };
+};
 
-function CopyRecommendationCard({ recommendation, rank, selected, onSelect }: { recommendation: ReturnType<typeof recommendCreativeCopy>[number]; rank: number; selected: boolean; onSelect: () => void }) {
-  const copy = recommendation.snapshot;
-  return <label className={`block min-w-0 cursor-pointer border p-3 text-xs transition-colors ${selected ? "border-emerald-600 bg-emerald-50/40 ring-1 ring-emerald-600/20" : "bg-background hover:border-foreground/40"}`}>
-    <span className="flex items-start gap-2"><input type="radio" name="creative-copy-recommendation" value={recommendation.composition.id} checked={selected} onChange={onSelect} className="mt-0.5 h-4 w-4 accent-emerald-700" /><span className="min-w-0 flex-1"><span className="flex flex-wrap items-center gap-2"><Badge variant={rank === 1 ? "default" : "outline"}>{rank === 1 ? "最匹配" : `候选 ${rank}`}</Badge><span className="text-muted-foreground">{recommendation.reasons[0] || "根据原图语义组合"}</span></span></span></span>
-    <dl className="mt-3 grid gap-2 border-t pt-3"><div><dt className="text-muted-foreground">主标题</dt><dd className="mt-0.5 whitespace-pre-wrap break-words text-sm font-semibold">{copy.headline || "-"}</dd></div>{copy.subheadline && <div><dt className="text-muted-foreground">副标题</dt><dd className="mt-0.5 whitespace-pre-wrap break-words">{copy.subheadline}</dd></div>}<div><dt className="text-muted-foreground">利益点</dt><dd className="mt-0.5 whitespace-pre-wrap break-words leading-5">{copy.benefit || "-"}</dd></div>{copy.supporting && <div><dt className="text-muted-foreground">补充卖点</dt><dd className="mt-0.5 whitespace-pre-wrap break-words">{copy.supporting}</dd></div>}<div><dt className="text-muted-foreground">行动文案</dt><dd className="mt-0.5 whitespace-pre-wrap break-words font-medium">{copy.cta || "-"}</dd></div></dl>
-    <span className="mt-3 flex items-center gap-1 border-t pt-2 text-[11px] text-emerald-700"><Check className="h-3.5 w-3.5" />金融事实已按当前市场规则校验</span>
-  </label>;
-}
+export type NormalizedVisualBounds = {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+};
 
-export function latestCandidateFeedback(events: { id: string; subject_id: string; event_type: string; decision: string; undo_of_id: string; created_at?: string }[]) {
-  const undone = new Set(events.filter((event) => event.event_type === "undo" && event.undo_of_id).map((event) => event.undo_of_id));
-  const latest = new Map<string, { id: string; decision: string; created_at: string }>();
-  for (const event of events.filter((event) => event.event_type === "decision" && !undone.has(event.id))) {
-    const current = latest.get(event.subject_id);
-    if (!current || compareNewest(event, current) > 0) {
-      latest.set(event.subject_id, { id: event.id, decision: event.decision, created_at: event.created_at ?? "" });
-    }
-  }
-  return latest;
-}
+export type PreparedRepaymentPlanSelection = {
+  id: string;
+  planKey: string;
+  principal: number;
+  tenorMonths: number;
+  values: {
+    principal: string;
+    tenor: string;
+    totalInterest: string;
+    totalRepayment: string;
+    monthlyInstallment: string;
+  };
+};
 
-export function latestCompletedAnalyses(analyses: CreativeSourceAnalysis[]): Map<string, CreativeSourceAnalysis> {
-  const latest = new Map<string, CreativeSourceAnalysis>();
-  for (const analysis of analyses) {
-    if (analysis.status !== "completed") continue;
-    const current = latest.get(analysis.candidate_id);
-    if (!current || analysis.analysis_version > current.analysis_version || (analysis.analysis_version === current.analysis_version && compareNewest(analysis, current) > 0)) {
-      latest.set(analysis.candidate_id, analysis);
-    }
-  }
-  return latest;
-}
+export type PreparedNumericLayout = {
+  id: string;
+  visualRegionId?: string;
+  sourceBlockIds: string[];
+  location: string;
+  visualBounds?: NormalizedVisualBounds;
+  layoutKind: "table" | "card_grid" | "comparison" | "single_card" | "single_value" | "option_buttons" | "table_row";
+  scenarioIds: string[];
+  targetColumns: Array<"principal" | "tenor" | "monthly_installment" | "total_interest" | "total_repayment">;
+  renderInstruction: string;
+};
 
-export function materialAnalysisState(candidate: Pick<CreativeMaterialCandidate, "id" | "analysis_status" | "analysis_error">, analyses: CreativeSourceAnalysis[]): MaterialAnalysisState {
-  const completed = latestCompletedAnalyses(analyses).get(candidate.id);
-  if (completed) return { ready: true, status: "completed", error: "", version: completed.analysis_version };
+export type PreparedVisualRegion = {
+  id: string;
+  location: string;
+  kind: "copy" | "numeric";
+  sourceBlockIds: string[];
+  visualBounds?: NormalizedVisualBounds;
+};
 
-  const latest = analyses
-    .filter((analysis) => analysis.candidate_id === candidate.id)
-    .reduce<CreativeSourceAnalysis | undefined>((current, analysis) => !current || compareNewest(analysis, current) > 0 ? analysis : current, undefined);
-  if (latest) return { ready: false, status: latest.status || "pending", error: latest.error_message || "", version: latest.analysis_version };
+export type PreparedVisualReviewRegion = PreparedVisualRegion & {
+  textReplacements: PreparedTextReplacement[];
+  numericLayouts: PreparedNumericLayout[];
+};
 
-  const fallbackStatus = candidate.analysis_status || "pending";
-  return { ready: fallbackStatus === "completed", status: fallbackStatus, error: candidate.analysis_error || "", version: 0 };
-}
+export type PreparedPreAdaptation = {
+  status: "completed" | "unavailable";
+  summary: string;
+  errorCode?: string;
+  errorMessage?: string;
+  decision: string;
+  preferredFragmentKeys: string[];
+  reasons: string[];
+  gaps: string[];
+  analysisHighlights: string[];
+  visualRegions?: PreparedVisualRegion[];
+  textReplacements: PreparedTextReplacement[];
+  repaymentPlanSelections: PreparedRepaymentPlanSelection[];
+  numericLayouts: PreparedNumericLayout[];
+  productionPrompt: string;
+};
 
-function compareNewest(left: { id: string; created_at?: string; completed_at?: string }, right: { id: string; created_at?: string; completed_at?: string }): number {
-  const leftTime = Date.parse(left.completed_at || left.created_at || "") || 0;
-  const rightTime = Date.parse(right.completed_at || right.created_at || "") || 0;
-  if (leftTime !== rightTime) return leftTime - rightTime;
-  return left.id.localeCompare(right.id);
-}
-
-function analysisBrief(analysis?: CreativeSourceAnalysis): CopyRecommendationBrief {
-  const result = analysis?.result ?? {};
-  const typeHint = recordString(result, "creative_type_hint");
+export function preparedPreAdaptation(analysis: CreativeSourceAnalysis | undefined, marketPack: { id: string; published_version: number } | undefined, copyLibrary: { id: string; published_version: number } | undefined): PreparedPreAdaptation | null {
+  if (!analysis || !marketPack || !copyLibrary) return null;
+  const adaptation = record(analysis.result).adaptation;
+  const envelope = record(adaptation);
+  const result = record(envelope.result);
+  const status = recordString(envelope, "status");
+  if ((status !== "completed" && status !== "unavailable")
+    || recordString(result, "market_pack_id") !== marketPack.id
+    || Number(result.market_pack_version) !== marketPack.published_version
+    || recordString(result, "copy_library_id") !== copyLibrary.id
+    || Number(result.copy_library_version) !== copyLibrary.published_version) return null;
+  const sourceResult = record(analysis.result);
+  const visualBoundsByBlockId = sourceTextBlockVisualBounds(sourceResult);
+  const semanticKindsByBlockId = sourceTextBlockSemanticKinds(sourceResult);
+  const visualRegions = sourceVisualRegions(sourceResult);
+  const visualRegionByID = new Map(visualRegions.map((region) => [region.id, region]));
+  const textReplacements = Array.isArray(result.text_replacements)
+    ? result.text_replacements.map((item) => preparedTextReplacement(item, visualBoundsByBlockId, semanticKindsByBlockId)).filter((item): item is PreparedTextReplacement => item !== null)
+    : [];
+  const repaymentPlanSelections = Array.isArray(result.repayment_plan_selections)
+    ? result.repayment_plan_selections.map(preparedRepaymentPlanSelection).filter((item): item is PreparedRepaymentPlanSelection => item !== null)
+    : [];
+  const numericLayouts = Array.isArray(result.numeric_layouts)
+    ? result.numeric_layouts.map((item) => preparedNumericLayout(item, visualBoundsByBlockId, visualRegionByID)).filter((item): item is PreparedNumericLayout => item !== null)
+    : [];
+  // A legacy completed adaptation only carried a generic recommendation. It is
+  // not safe to treat that as a completed image-specific text replacement plan.
+  if (status === "completed" && textReplacements.length === 0 && numericLayouts.length === 0) return null;
   return {
-    creative_type_hint: typeHint === "num" || typeHint === "repayment_plan" ? typeHint : undefined,
-    copy_slots: recordStringArray(result, "copy_slots").filter(isCreativeCopySlot),
-    theme: recordString(result, "theme"),
-    theme_elements: recordStringArray(result, "theme_elements"),
-    primary_benefit: recordString(result, "primary_benefit"),
-    secondary_benefits: recordStringArray(result, "secondary_benefits"),
-    benefit_value: recordString(result, "benefit_value"),
-    source_semantics: recordString(result, "source_semantics"),
-    information_mechanism: recordString(result, "information_mechanism"),
-    has_repayment_table: typeof result.has_repayment_table === "boolean" ? result.has_repayment_table : undefined,
-    detected_text: recordString(result, "detected_text"),
+    status,
+    summary: recordString(envelope, "summary"),
+    errorCode: recordString(envelope, "error_code"),
+    errorMessage: recordString(envelope, "error_message"),
+    decision: recordString(result, "decision"),
+    preferredFragmentKeys: recordStringArray(result, "preferred_fragment_keys"),
+    reasons: recordStringArray(result, "reasons"),
+    gaps: recordStringArray(result, "gaps"),
+    analysisHighlights: recordStringArray(result, "analysis_highlights").slice(0, 5),
+    visualRegions,
+    textReplacements,
+    repaymentPlanSelections,
+    numericLayouts,
+    productionPrompt: recordString(result, "production_prompt"),
   };
 }
 
-function isCreativeCopySlot(value: string): value is CreativeCopyFragmentRole {
-  return value === "headline" || value === "subheadline" || value === "benefit" || value === "supporting" || value === "cta" || value === "legal";
+export function sourceAnalysisAdaptationStatus(analysis: CreativeSourceAnalysis | undefined): string {
+  if (!analysis) return "";
+  return recordString(record(record(analysis.result).adaptation), "status");
+}
+
+export function sourceAnalysisAdaptationErrorCode(analysis: CreativeSourceAnalysis | undefined): string {
+  if (!analysis) return "";
+  return recordString(record(record(analysis.result).adaptation), "error_code");
+}
+
+function preparedTextReplacement(value: unknown, visualBoundsByBlockId: ReadonlyMap<string, NormalizedVisualBounds>, semanticKindsByBlockId: ReadonlyMap<string, string>): PreparedTextReplacement | null {
+  const item = record(value);
+  const blockId = recordString(item, "block_id");
+  const location = recordString(item, "location");
+  if (!blockId || !location) return null;
+  const status = recordString(item, "status");
+  const calculation = record(item.calculation);
+  const calculationFormula = recordString(calculation, "formula");
+  const calculationResult = recordString(calculation, "result");
+  const calculationInputs = recordStringArray(calculation, "inputs");
+  return {
+    blockId,
+    visualRegionId: recordString(item, "visual_region_id"),
+    location,
+    role: recordString(item, "role") || "supporting",
+    semanticKind: semanticKindsByBlockId.get(blockId) ?? "",
+    sourceText: recordString(item, "source_text"),
+    visualBounds: visualBoundsByBlockId.get(blockId),
+    replacementText: recordString(item, "replacement_text"),
+    sourceKeys: recordStringArray(item, "source_keys"),
+    status: status === "ready" || status === "recommended" || status === "calculated" ? status : "missing",
+    note: recordString(item, "note"),
+    recommendationBasis: recordStringArray(item, "recommendation_basis"),
+    ...(calculationFormula && calculationResult && calculationInputs.length > 0 ? { calculation: { formula: calculationFormula, inputs: calculationInputs, result: calculationResult } } : {}),
+  };
+}
+
+export function sourceVisualRegions(result: Record<string, unknown>): PreparedVisualRegion[] {
+  const regions = Array.isArray(result.visual_regions) ? result.visual_regions : [];
+  const seen = new Set<string>();
+  return regions.flatMap((value) => {
+    const region = record(value);
+    const id = recordString(region, "id");
+    const location = recordString(region, "location");
+    const kind = recordString(region, "kind");
+    const sourceBlockIds = recordStringArray(region, "source_block_ids");
+    if (!id || !location || (kind !== "copy" && kind !== "numeric") || sourceBlockIds.length === 0 || seen.has(id)) return [];
+    seen.add(id);
+    const visualBounds = normalizedVisualBounds(region.visual_bounds);
+    return [{ id, location, kind, sourceBlockIds, ...(visualBounds ? { visualBounds } : {}) }];
+  });
+}
+
+export function sourceAnalysisNeedsVisualUpgrade(analysis: CreativeSourceAnalysis | undefined): boolean {
+	if (!analysis || analysis.status !== "completed") return false;
+	const result = record(analysis.result);
+	const textBlocks = Array.isArray(result.text_blocks) ? result.text_blocks : [];
+	return textBlocks.length > 0 && sourceVisualRegions(result).length === 0;
+}
+
+export function sourceTextBlockVisualBounds(result: Record<string, unknown>): Map<string, NormalizedVisualBounds> {
+  const bounds = new Map<string, NormalizedVisualBounds>();
+  const textBlocks = Array.isArray(result.text_blocks) ? result.text_blocks : [];
+  for (const textBlock of textBlocks) {
+    const block = record(textBlock);
+    const blockId = recordString(block, "id");
+    const visualBounds = normalizedVisualBounds(block.visual_bounds);
+    if (blockId && visualBounds) bounds.set(blockId, visualBounds);
+  }
+  return bounds;
+}
+
+export function sourceTextBlockSemanticKinds(result: Record<string, unknown>): Map<string, string> {
+  const kinds = new Map<string, string>();
+  const textBlocks = Array.isArray(result.text_blocks) ? result.text_blocks : [];
+  for (const textBlock of textBlocks) {
+    const block = record(textBlock);
+    const blockId = recordString(block, "id");
+    const semanticKind = recordString(block, "semantic_kind");
+    if (blockId) kinds.set(blockId, semanticKind);
+  }
+  return kinds;
+}
+
+export function normalizedVisualBounds(value: unknown): NormalizedVisualBounds | null {
+  const bounds = record(value);
+  const x = typeof bounds.x === "number" ? bounds.x : NaN;
+  const y = typeof bounds.y === "number" ? bounds.y : NaN;
+  const width = typeof bounds.width === "number" ? bounds.width : NaN;
+  const height = typeof bounds.height === "number" ? bounds.height : NaN;
+  if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(width) || !Number.isFinite(height)
+    || x < 0 || y < 0 || width <= 0 || height <= 0 || x + width > 1000 || y + height > 1000) return null;
+  return { x, y, width, height };
+}
+
+function preparedRepaymentPlanSelection(value: unknown): PreparedRepaymentPlanSelection | null {
+  const item = record(value);
+  const values = record(item.values);
+  const id = recordString(item, "id");
+  const planKey = recordString(item, "plan_key");
+  const principal = typeof item.principal === "number" ? item.principal : NaN;
+  const tenorMonths = typeof item.tenor_months === "number" ? item.tenor_months : NaN;
+  if (!id || !planKey || !Number.isFinite(principal) || !Number.isFinite(tenorMonths)) return null;
+  const principalText = recordString(values, "principal");
+  const tenor = recordString(values, "tenor");
+  const totalInterest = recordString(values, "total_interest");
+  const totalRepayment = recordString(values, "total_repayment");
+  const monthlyInstallment = recordString(values, "monthly_installment");
+  if (!principalText || !tenor || !totalInterest || !totalRepayment || !monthlyInstallment) return null;
+  return { id, planKey, principal, tenorMonths, values: { principal: principalText, tenor, totalInterest, totalRepayment, monthlyInstallment } };
+}
+
+function preparedNumericLayout(value: unknown, visualBoundsByBlockId: ReadonlyMap<string, NormalizedVisualBounds>, visualRegionByID: ReadonlyMap<string, PreparedVisualRegion>): PreparedNumericLayout | null {
+  const item = record(value);
+  const allowedColumns = ["principal", "tenor", "monthly_installment", "total_interest", "total_repayment"] as const;
+  const targetColumns = recordStringArray(item, "target_columns").filter((column): column is typeof allowedColumns[number] => allowedColumns.includes(column as typeof allowedColumns[number]));
+  const id = recordString(item, "id");
+  const visualRegionId = recordString(item, "visual_region_id");
+  const location = recordString(item, "location");
+  const renderInstruction = recordString(item, "render_instruction");
+  const sourceBlockIds = recordStringArray(item, "source_block_ids");
+  const scenarioIds = recordStringArray(item, "scenario_ids");
+  const layoutKind = preparedNumericLayoutKind(recordString(item, "layout_kind"), sourceBlockIds, scenarioIds, targetColumns);
+  if (!id || !location || !renderInstruction || sourceBlockIds.length === 0 || scenarioIds.length === 0 || targetColumns.length === 0) return null;
+  const visualBounds = visualRegionByID.get(visualRegionId)?.visualBounds ?? unionVisualBounds(sourceBlockIds.map((blockId) => visualBoundsByBlockId.get(blockId)));
+  return { id, visualRegionId, location, visualBounds, layoutKind, sourceBlockIds, scenarioIds, targetColumns, renderInstruction };
+}
+
+function preparedNumericLayoutKind(raw: string, sourceBlockIds: string[], scenarioIds: string[], targetColumns: PreparedNumericLayout["targetColumns"]): PreparedNumericLayout["layoutKind"] {
+  const kind = raw.trim().toLowerCase().replace(/[-\s]+/g, "_").replace(/_+/g, "_").replace(/^_|_$/g, "");
+  const canonical = ["table", "card_grid", "comparison", "single_card", "single_value", "option_buttons", "table_row"] as const;
+  if (canonical.includes(kind as typeof canonical[number])) return kind as PreparedNumericLayout["layoutKind"];
+  if (targetColumns.length === 1 && targetColumns[0] === "tenor" && (scenarioIds.length > 1 || sourceBlockIds.length > 1)) return "option_buttons";
+  if (["tenor", "term", "duration", "tenor_button", "tenor_buttons", "period_option", "period_options"].includes(kind)) return "option_buttons";
+  if (["repayment_table", "repayment_summary", "loan_summary", "installment_table", "summary_table"].includes(kind)) return "table";
+  if (["principal", "amount", "amount_box", "loan_amount", "principal_amount", "credit_limit", "limit"].includes(kind)) return "single_value";
+  if (targetColumns.length === 1 && scenarioIds.length <= 1) return "single_value";
+  if (targetColumns.length === 1) return "card_grid";
+  if (scenarioIds.length === 1 && targetColumns.length <= 2 && sourceBlockIds.length <= 2) return "table_row";
+  return "table";
+}
+
+export function unionVisualBounds(bounds: Array<NormalizedVisualBounds | undefined>): NormalizedVisualBounds | undefined {
+  const valid = bounds.filter((item): item is NormalizedVisualBounds => Boolean(item));
+  if (valid.length === 0) return undefined;
+  const left = Math.min(...valid.map((item) => item.x));
+  const top = Math.min(...valid.map((item) => item.y));
+  const right = Math.max(...valid.map((item) => item.x + item.width));
+  const bottom = Math.max(...valid.map((item) => item.y + item.height));
+  return { x: left, y: top, width: right - left, height: bottom - top };
+}
+
+export function visualReviewRegions(adaptation: PreparedPreAdaptation, numericLayouts: PreparedNumericLayout[] = adaptation.numericLayouts): PreparedVisualReviewRegion[] {
+  const explicitRegions = adaptation.visualRegions ?? [];
+  const claimedBlocks = new Set<string>();
+  const claimedLayouts = new Set<string>();
+  const regions = explicitRegions.map((region) => {
+    const textReplacements = adaptation.textReplacements.filter((replacement) => replacement.visualRegionId === region.id);
+    const regionNumericLayouts = numericLayouts.filter((layout) => layout.visualRegionId === region.id);
+    textReplacements.forEach((replacement) => claimedBlocks.add(replacement.blockId));
+    regionNumericLayouts.forEach((layout) => claimedLayouts.add(layout.id));
+    return { ...region, textReplacements, numericLayouts: regionNumericLayouts };
+  });
+  const legacyTextGroups = groupTextReplacementsByLocation(adaptation.textReplacements.filter((replacement) => !claimedBlocks.has(replacement.blockId)));
+  for (const { location, replacements } of legacyTextGroups) {
+    regions.push({ id: `copy:${location}`, location, kind: "copy", sourceBlockIds: replacements.map((replacement) => replacement.blockId), visualBounds: unionVisualBounds(replacements.map((replacement) => replacement.visualBounds)), textReplacements: replacements, numericLayouts: [] });
+  }
+  for (const layout of numericLayouts.filter((item) => !claimedLayouts.has(item.id))) {
+    regions.push({ id: `numeric:${layout.id}`, location: layout.location, kind: "numeric", sourceBlockIds: layout.sourceBlockIds, visualBounds: layout.visualBounds, textReplacements: [], numericLayouts: [layout] });
+  }
+  return regions.filter((region) => region.textReplacements.length > 0 || region.numericLayouts.length > 0);
+}
+
+export function hasCompleteTextReplacements(replacements: PreparedTextReplacement[], overrides: Record<string, string> = {}): boolean {
+  return replacements.every((replacement) => (
+    replacementText(replacement, overrides).trim().length > 0
+    && (replacement.status === "ready" || Boolean(overrides[replacement.blockId]?.trim()))
+  ));
+}
+
+function replacementText(replacement: PreparedTextReplacement, overrides: Record<string, string>): string {
+  return overrides[replacement.blockId] ?? replacement.replacementText;
+}
+
+export function hasPendingReplacementConfirmation(replacement: PreparedTextReplacement, overrides: Record<string, string> = {}, sources: Record<string, ReplacementSourceChoice> = {}): boolean {
+  if (replacement.status !== "recommended" && replacement.status !== "calculated") return false;
+  if (!replacementText(replacement, overrides).trim()) return false;
+  const source = sources[replacement.blockId];
+  return source === undefined;
+}
+
+function replacementSource(replacement: PreparedTextReplacement, sources: Record<string, ReplacementSourceChoice>): ReplacementSourceChoice {
+  return sources[replacement.blockId]
+    ?? { kind: replacement.status === "calculated" ? "calculation" : replacement.status === "recommended" ? "recommendation" : "library" };
+}
+
+function promptNumericMarkers(value: string): string[] {
+  return Array.from(new Set(value.match(/(?:Rp\.?\s*)?\d[\d.,]*(?:\s*(?:Bulan|bulan|Hari|hari|%))?/g)?.map((marker) => normalizedProductionPromptText(marker)) ?? []))
+    .filter((marker) => /\d/.test(marker));
+}
+
+function promptAlreadyCovers(basePrompt: string, instruction: string, mode: "text" | "numeric"): boolean {
+  const base = normalizedProductionPromptText(basePrompt);
+  const normalizedInstruction = normalizedProductionPromptText(userFacingProductionPrompt(instruction));
+  if (!normalizedInstruction || base.includes(normalizedInstruction)) return true;
+  if (mode === "text") return false;
+  const markers = promptNumericMarkers(instruction);
+  return markers.length > 0 && markers.every((marker) => base.includes(marker));
+}
+
+function replacementRoleLabel(role: string): string {
+  switch (role.trim()) {
+    case "headline": return "标题";
+    case "subheadline": return "副标题";
+    case "benefit": return "卖点";
+    case "supporting": return "辅助说明";
+    case "cta": return "行动按钮";
+    case "plan_field": return "金额/期限";
+    case "legal": return "合规说明";
+    default: return role.trim();
+  }
+}
+
+function compactInstruction(value: string): string {
+  return userFacingProductionPrompt(value).split(/\n+/).map((line) => line.trim()).filter(Boolean).join("；");
+}
+
+function productionPromptClauses(value: string): string[] {
+  const clauses: string[] = [];
+  for (const line of userFacingProductionPrompt(value).split(/\n+/)) {
+    let clause = "";
+    for (let index = 0; index < line.length; index += 1) {
+      const char = line[index] ?? "";
+      clause += char;
+      const prev = line[index - 1] ?? "";
+      const next = line[index + 1] ?? "";
+      const numericPunctuation = (char === "." || char === ",") && /\d/.test(prev) && /\d/.test(next);
+      if (!numericPunctuation && "。；;.!?！？，,".includes(char)) {
+        const trimmed = clause.trim();
+        if (trimmed) clauses.push(trimmed);
+        clause = "";
+      }
+    }
+    const trimmed = clause.trim();
+    if (trimmed) clauses.push(trimmed);
+  }
+  return clauses;
+}
+
+function promptClauseMatchesGeneratedDetail(clause: string, adaptation: PreparedPreAdaptation): boolean {
+  const normalized = normalizedProductionPromptText(clause);
+  if (!normalized) return false;
+  if (/^(最终画面文字|留空移除原文|数值与还款版式)[:：]/.test(clause.trim())) return true;
+  if (/(^|[，,。；;\s])(?:表头|表为|本金|月供|期限|利率|金额|还款|移除|不保留|不翻译|按本金行展示|使用已审核利率和卖点)/i.test(clause)) return true;
+  const replacementTokens = adaptation.textReplacements
+    .flatMap((replacement) => [replacement.sourceText, replacement.replacementText])
+    .map((value) => value.trim())
+    .filter((value) => value.length >= 3)
+    .map(normalizedProductionPromptText);
+  if (replacementTokens.some((token) => normalized.includes(token))) return true;
+  const repaymentTokens = adaptation.repaymentPlanSelections
+    .flatMap((scenario) => [
+      scenario.values.principal,
+      scenario.values.tenor,
+      scenario.values.monthlyInstallment,
+      scenario.values.totalInterest,
+      scenario.values.totalRepayment,
+    ])
+    .map(normalizedProductionPromptText);
+  if (repaymentTokens.some((token) => token && normalized.includes(token))) return true;
+  if (promptNumericMarkers(clause).length > 0) return true;
+  return adaptation.numericLayouts.some((layout) => promptAlreadyCovers(clause, layout.renderInstruction, "numeric"));
+}
+
+export function overallProductionRequirementFromPrompt(productionPrompt: string, adaptation: PreparedPreAdaptation): string {
+  return productionPromptLines(
+    productionPromptClauses(productionPrompt).filter((clause) => !promptClauseMatchesGeneratedDetail(clause, adaptation)),
+  ).join("\n");
+}
+
+export function overallProductionRequirement(adaptation: PreparedPreAdaptation): string {
+  return overallProductionRequirementFromPrompt(adaptation.productionPrompt, adaptation);
+}
+
+function sameRepaymentPlanChoice(choice: RepaymentPlanChoice, selection: PreparedRepaymentPlanSelection): boolean {
+  return choice.planKey === selection.planKey
+    && choice.principal === selection.principal
+    && choice.tenorMonths === selection.tenorMonths
+    && choice.values.principal === selection.values.principal
+    && choice.values.tenor === selection.values.tenor
+    && choice.values.totalInterest === selection.values.totalInterest
+    && choice.values.totalRepayment === selection.values.totalRepayment
+    && choice.values.monthlyInstallment === selection.values.monthlyInstallment;
+}
+
+export function effectiveRepaymentPlanSelections(
+  adaptation: PreparedPreAdaptation,
+  repaymentPlanOverrides: Record<string, RepaymentPlanChoice> = {},
+  numericLayoutDrafts: Record<string, NumericLayoutDraft> = {},
+): PreparedRepaymentPlanSelection[] {
+  const layouts = effectiveNumericLayouts(adaptation, numericLayoutDrafts);
+  const usedScenarioIds = new Set(layouts.flatMap((layout) => layout.scenarioIds));
+  const keepAll = adaptation.numericLayouts.length === 0;
+  const selections = adaptation.repaymentPlanSelections
+    .filter((selection) => keepAll || usedScenarioIds.has(selection.id))
+    .map((selection) => repaymentPlanSelectionWithChoice(selection, repaymentPlanOverrides[selection.id]));
+  for (const draft of Object.values(numericLayoutDrafts)) {
+    for (const [scenarioId, choice] of Object.entries(draft.addedScenarios ?? {})) {
+      if (!keepAll && !usedScenarioIds.has(scenarioId)) continue;
+      selections.push(repaymentPlanSelectionWithChoice(repaymentPlanSelectionFromChoice(scenarioId, choice), repaymentPlanOverrides[scenarioId]));
+    }
+  }
+  const seen = new Set<string>();
+  return selections.filter((selection) => {
+    if (seen.has(selection.id)) return false;
+    seen.add(selection.id);
+    return true;
+  });
+}
+
+export function effectiveNumericLayouts(
+  adaptation: PreparedPreAdaptation,
+  numericLayoutDrafts: Record<string, NumericLayoutDraft> = {},
+): PreparedNumericLayout[] {
+  return adaptation.numericLayouts.map((layout) => {
+    const draft = numericLayoutDrafts[layout.id] ?? {};
+    const removed = new Set((draft.removedScenarioIds ?? []).map((scenarioId) => scenarioId.trim()).filter(Boolean));
+    const addedScenarioIds = Object.keys(draft.addedScenarios ?? {}).filter((scenarioId) => !removed.has(scenarioId));
+    const scenarioIds = Array.from(new Set([
+      ...layout.scenarioIds.filter((scenarioId) => !removed.has(scenarioId)),
+      ...addedScenarioIds,
+    ]));
+    return { ...layout, scenarioIds };
+  });
+}
+
+function repaymentPlanSelectionWithChoice(selection: PreparedRepaymentPlanSelection, choice: RepaymentPlanChoice | undefined): PreparedRepaymentPlanSelection {
+  return choice
+    ? { ...selection, planKey: choice.planKey, principal: choice.principal, tenorMonths: choice.tenorMonths, values: choice.values }
+    : selection;
+}
+
+function repaymentPlanSelectionFromChoice(id: string, choice: RepaymentPlanChoice): PreparedRepaymentPlanSelection {
+  return {
+    id,
+    planKey: choice.planKey,
+    principal: choice.principal,
+    tenorMonths: choice.tenorMonths,
+    values: choice.values,
+  };
+}
+
+function scenarioByID(scenarios: PreparedRepaymentPlanSelection[]): Map<string, PreparedRepaymentPlanSelection> {
+  return new Map(scenarios.map((scenario) => [scenario.id, scenario]));
+}
+
+function numericLayoutByID(layouts: PreparedNumericLayout[]): Map<string, PreparedNumericLayout> {
+  return new Map(layouts.map((layout) => [layout.id, layout]));
+}
+
+function numericColumnLabel(column: PreparedNumericLayout["targetColumns"][number]): string {
+  switch (column) {
+    case "principal": return "借款金额";
+    case "tenor": return "期限";
+    case "monthly_installment": return "每月还款";
+    case "total_interest": return "总利息";
+    case "total_repayment": return "总还款";
+  }
+}
+
+function numericColumnValue(scenario: PreparedRepaymentPlanSelection, column: PreparedNumericLayout["targetColumns"][number]): string {
+  switch (column) {
+    case "principal": return scenario.values.principal;
+    case "tenor": return scenario.values.tenor;
+    case "monthly_installment": return scenario.values.monthlyInstallment;
+    case "total_interest": return scenario.values.totalInterest;
+    case "total_repayment": return scenario.values.totalRepayment;
+  }
+}
+
+function generatedNumericLayoutInstruction(layout: PreparedNumericLayout, scenarios: ReadonlyMap<string, PreparedRepaymentPlanSelection>): string {
+  const rows = layout.scenarioIds
+    .map((scenarioID) => scenarios.get(scenarioID))
+    .filter((scenario): scenario is PreparedRepaymentPlanSelection => Boolean(scenario))
+    .map((scenario) => layout.targetColumns.map((column) => `${numericColumnLabel(column)} ${numericColumnValue(scenario, column)}`).join("，"));
+  return rows.length > 0
+    ? `按当前已审核还款方案保持原版式展示：${rows.join("；")}。保持原图对应区域的对齐、字号层级和细分隔线。`
+    : "";
+}
+
+function numericLayoutInstruction(
+  layout: PreparedNumericLayout,
+  scenarios: ReadonlyMap<string, PreparedRepaymentPlanSelection>,
+  repaymentPlanOverrides: Record<string, RepaymentPlanChoice> = {},
+  originalLayout?: PreparedNumericLayout,
+): string {
+  const needsGeneratedInstruction = layout.scenarioIds.some((scenarioID) => repaymentPlanOverrides[scenarioID])
+    || (originalLayout !== undefined && !sameStringArray(layout.scenarioIds, originalLayout.scenarioIds));
+  if (!needsGeneratedInstruction) return compactInstruction(layout.renderInstruction);
+  return generatedNumericLayoutInstruction(layout, scenarios) || compactInstruction(layout.renderInstruction);
+}
+
+function sameStringArray(left: string[], right: string[]): boolean {
+  return left.length === right.length && left.every((value, index) => value === right[index]);
+}
+
+export function compiledProductionPrompt(
+  adaptation: PreparedPreAdaptation,
+  overrides: Record<string, string>,
+  productionPrompt = overallProductionRequirement(adaptation),
+  repaymentPlanOverrides: Record<string, RepaymentPlanChoice> = {},
+  numericLayoutDrafts: Record<string, NumericLayoutDraft> = {},
+): string {
+  const basePrompt = userFacingProductionPrompt(productionPrompt);
+  const numericLayouts = effectiveNumericLayouts(adaptation, numericLayoutDrafts);
+  const scenarios = scenarioByID(effectiveRepaymentPlanSelections(adaptation, repaymentPlanOverrides, numericLayoutDrafts));
+  const originalLayoutsById = numericLayoutByID(adaptation.numericLayouts);
+  const replacementInstructions = adaptation.textReplacements
+    .map((replacement) => ({ replacement, text: replacementText(replacement, overrides).trim() }))
+    .filter(({ text }) => Boolean(text) && !promptAlreadyCovers(basePrompt, text, "text"))
+    .map(({ replacement, text }) => {
+      const role = replacementRoleLabel(replacement.role);
+      return `${replacement.location}${role ? `（${role}）` : ""}：${text}`;
+    });
+  const missingInstructions = adaptation.textReplacements
+    .filter((replacement) => !replacementText(replacement, overrides).trim())
+    .map((replacement) => {
+      const role = replacementRoleLabel(replacement.role);
+      return `${replacement.location}${role ? `（${role}）` : ""}：留空并移除原文，不翻译、不保留竞品条款、不补写新的金融承诺。`;
+    });
+  const numericInstructions = numericLayouts
+    .map((layout) => ({ layout, instruction: numericLayoutInstruction(layout, scenarios, repaymentPlanOverrides, originalLayoutsById.get(layout.id)) }))
+    .filter(({ instruction }) => instruction && !promptAlreadyCovers(basePrompt, instruction, "numeric"))
+    .map(({ layout, instruction }) => `${layout.location}：${instruction}`);
+  return productionPromptLines([
+    basePrompt,
+    replacementInstructions.length > 0 ? "最终画面文字：" : "",
+    ...replacementInstructions,
+    missingInstructions.length > 0 ? "留空移除原文：" : "",
+    ...missingInstructions,
+    numericInstructions.length > 0 ? "数值与还款版式：" : "",
+    ...numericInstructions,
+  ]).join("\n");
+}
+
+export function frozenCopySnapshot(
+  copy: CreativeCopySnapshot,
+  adaptation: PreparedPreAdaptation,
+  draft: OrderItemDraft,
+  sourceAnalysisID: string,
+): CreativeCopySnapshot {
+  const repaymentPlanOverrides = draft.repaymentPlanOverrides ?? {};
+  const numericLayoutDrafts = draft.numericLayoutDrafts ?? {};
+  const repaymentPlanSelections = effectiveRepaymentPlanSelections(adaptation, repaymentPlanOverrides, numericLayoutDrafts);
+  const repaymentPlanSelectionsByID = scenarioByID(repaymentPlanSelections);
+  const numericLayouts = effectiveNumericLayouts(adaptation, numericLayoutDrafts).filter((layout) => layout.scenarioIds.length > 0);
+  const originalLayoutsByID = numericLayoutByID(adaptation.numericLayouts);
+  return {
+    ...copy,
+    pre_adaptation: {
+      schema_version: 1,
+      source_analysis_id: sourceAnalysisID,
+      summary: adaptation.summary,
+      analysis_highlights: adaptation.analysisHighlights,
+      text_replacements: adaptation.textReplacements.map((replacement) => {
+        const replacementTextValue = replacementText(replacement, draft.textOverrides);
+        const source = replacementSource(replacement, draft.replacementSources ?? {});
+        const ready = replacementTextValue.trim().length > 0;
+        return {
+        block_id: replacement.blockId,
+        location: replacement.location,
+        role: replacement.role,
+        semantic_kind: replacement.semanticKind ?? "",
+        source_text: replacement.sourceText,
+        replacement_text: replacementTextValue,
+        source_kind: source.kind,
+        source_keys: source.kind === "library" ? (source.sourceKey ? [source.sourceKey] : replacement.sourceKeys) : [],
+        status: ready ? "ready" : "missing",
+        note: replacement.note,
+        recommendation_basis: replacement.recommendationBasis ?? [],
+        calculation: replacement.calculation,
+        };
+      }),
+      repayment_plan_selections: repaymentPlanSelections.map((scenario) => ({
+        id: scenario.id,
+        plan_key: scenario.planKey,
+        principal: scenario.principal,
+        tenor_months: scenario.tenorMonths,
+        values: {
+          principal: scenario.values.principal,
+          tenor: scenario.values.tenor,
+          total_interest: scenario.values.totalInterest,
+          total_repayment: scenario.values.totalRepayment,
+          monthly_installment: scenario.values.monthlyInstallment,
+        },
+      })),
+      numeric_layouts: numericLayouts.map((layout) => ({
+        id: layout.id,
+        source_block_ids: layout.sourceBlockIds,
+        location: layout.location,
+        layout_kind: layout.layoutKind,
+        scenario_ids: layout.scenarioIds,
+        target_columns: layout.targetColumns,
+        render_instruction: numericLayoutInstruction(layout, repaymentPlanSelectionsByID, repaymentPlanOverrides, originalLayoutsByID.get(layout.id)),
+      })),
+      production_prompt: compiledProductionPrompt(adaptation, draft.textOverrides, draft.productionPrompt, repaymentPlanOverrides, numericLayoutDrafts),
+    },
+  };
+}
+
+export function preAdaptedCopySnapshot(
+  library: { id: string; published_version: number },
+  adaptation: PreparedPreAdaptation,
+  draft: OrderItemDraft,
+  sourceAnalysisID: string,
+): CreativeCopySnapshot {
+  const textForRole = (role: string) => adaptation.textReplacements
+    .filter((replacement) => replacement.role === role)
+    .map((replacement) => replacementText(replacement, draft.textOverrides))
+    .filter(Boolean)
+    .join("\n");
+  const hasPlan = effectiveRepaymentPlanSelections(adaptation, draft.repaymentPlanOverrides ?? {}, draft.numericLayoutDrafts ?? {}).length > 0;
+  const snapshot: CreativeCopySnapshot = {
+    schema_version: 3,
+    id: "model-pre-adaptation",
+    library_id: library.id,
+    library_version: library.published_version,
+    composition_id: "model-pre-adaptation",
+    composition_key: "model-pre-adaptation",
+    creative_type: hasPlan ? "repayment_plan" : "num",
+    headline: textForRole("headline"),
+    subheadline: textForRole("subheadline"),
+    benefit: textForRole("benefit"),
+    supporting: textForRole("supporting"),
+    cta: textForRole("cta"),
+    legal_text: textForRole("legal"),
+    fragments: [],
+    repayment_plan_entries: [],
+    recommendation: { score: 0, reasons: ["模型基于原图逐块填充"], matched_signals: [] },
+    status: "model_pre_adapted",
+  };
+  return frozenCopySnapshot(snapshot, adaptation, draft, sourceAnalysisID);
+}
+
+function PreAdaptationSummary({ adaptation }: { adaptation: PreparedPreAdaptation }) {
+  if (adaptation.status === "unavailable" && adaptation.errorCode === "manual_confirmation_required") return <p className="mt-2 text-xs text-amber-700">待人工确认：{adaptation.errorMessage || adaptation.summary}</p>;
+  if (adaptation.status === "unavailable") return <p className="mt-2 text-xs text-amber-700">文案库缺少同机制已审核文案：{adaptation.gaps.join("、") || adaptation.summary}</p>;
+  return <p className="mt-2 text-xs text-emerald-800">已完成逐块文字填充：{adaptation.summary || adaptation.reasons[0] || "按原图机制匹配"}</p>;
+}
+
+export function groupTextReplacementsByLocation(replacements: PreparedTextReplacement[]): { location: string; replacements: PreparedTextReplacement[] }[] {
+  const groups = new Map<string, PreparedTextReplacement[]>();
+  for (const replacement of replacements) {
+    const location = replacement.location.trim();
+    const group = groups.get(location);
+    if (group) group.push(replacement);
+    else groups.set(location, [replacement]);
+  }
+  return [...groups.entries()].map(([location, groupedReplacements]) => ({ location, replacements: groupedReplacements }));
+}
+
+function TextReplacementPlan({ sourceImage, sourceImageAlt, adaptation, copyLibrary, overrides, replacementSources, repaymentPlanOverrides, numericLayoutDrafts, repaymentPlanOptions, productionPrompt, onChooseReplacement, onChooseRepaymentPlan, onAddRepaymentPlan, onRemoveRepaymentPlan, onProductionPromptChange, onOpenCopyLibrary, onRetrySourceAnalysis, retryingSourceAnalysis = false }: { sourceImage: string; sourceImageAlt: string; adaptation: PreparedPreAdaptation; copyLibrary?: CreativeResource; overrides: Record<string, string>; replacementSources: Record<string, ReplacementSourceChoice>; repaymentPlanOverrides: Record<string, RepaymentPlanChoice>; numericLayoutDrafts: Record<string, NumericLayoutDraft>; repaymentPlanOptions: RepaymentPlanChoice[]; productionPrompt: string; onChooseReplacement: (blockId: string, value: string, source: ReplacementSourceChoice) => void; onChooseRepaymentPlan: (scenarioId: string, plan: RepaymentPlanChoice, original: PreparedRepaymentPlanSelection) => void; onAddRepaymentPlan: (layoutId: string, plan: RepaymentPlanChoice) => void; onRemoveRepaymentPlan: (layoutId: string, scenarioId: string) => void; onProductionPromptChange: (value: string) => void; onOpenCopyLibrary?: () => void; onRetrySourceAnalysis?: () => void; retryingSourceAnalysis?: boolean }) {
+  const productionPromptId = useId();
+  const editableProductionPrompt = userFacingProductionPrompt(productionPrompt);
+  const effectiveLayouts = effectiveNumericLayouts(adaptation, numericLayoutDrafts);
+  const finalPromptPreview = compiledProductionPrompt(adaptation, overrides, editableProductionPrompt, repaymentPlanOverrides, numericLayoutDrafts);
+  const effectiveScenarios = effectiveRepaymentPlanSelections(adaptation, repaymentPlanOverrides, numericLayoutDrafts);
+  const missingReplacements = adaptation.textReplacements.filter((replacement) => !replacementText(replacement, overrides).trim());
+  const pendingConfirmationCount = adaptation.textReplacements.filter((replacement) => hasPendingReplacementConfirmation(replacement, overrides, replacementSources)).length;
+  const reviewRegions = useMemo(() => visualReviewRegions(adaptation, effectiveLayouts), [adaptation, effectiveLayouts]);
+  const positionedRegions = useMemo(() => reviewRegions.filter((region): region is PreparedVisualReviewRegion & { visualBounds: NormalizedVisualBounds } => Boolean(region.visualBounds)), [reviewRegions]);
+  const [activeRegionId, setActiveRegionId] = useState(positionedRegions[0]?.id ?? reviewRegions[0]?.id ?? "");
+  const [selectorBlockId, setSelectorBlockId] = useState("");
+  const selectorReplacement = adaptation.textReplacements.find((replacement) => replacement.blockId === selectorBlockId) ?? null;
+  useEffect(() => {
+    if (reviewRegions.some((region) => region.id === activeRegionId)) return;
+    setActiveRegionId(positionedRegions[0]?.id ?? reviewRegions[0]?.id ?? "");
+  }, [activeRegionId, positionedRegions, reviewRegions]);
+  const selectRegion = (regionId: string, shouldScroll = false) => {
+    setActiveRegionId(regionId);
+    if (shouldScroll) document.getElementById(`visual-review-region-${regionId}`)?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  };
+  const visualIndexByRegionId = new Map(positionedRegions.map((region, index) => [region.id, index + 1]));
+  return <section aria-labelledby="text-replacement-title" className="min-w-0 border">
+    <div className="flex flex-wrap items-center justify-between gap-2 border-b px-3 py-2"><div><h4 id="text-replacement-title" className="text-sm font-semibold">画面内容核对</h4><p className="mt-0.5 text-[11px] text-muted-foreground">每个画面区域只选择一种最终来源：已审核文案、公式计算、本次推荐或人工改写。</p></div><div className="flex flex-wrap items-center gap-2">{pendingConfirmationCount > 0 && <Badge variant="outline" className="border-amber-400 bg-amber-50 text-amber-900">{pendingConfirmationCount} 项推荐待确认</Badge>}<Badge variant={missingReplacements.length === 0 ? "default" : "outline"}>{missingReplacements.length === 0 ? `${reviewRegions.length} 个区域已处理` : `${missingReplacements.length} 个文字可留空移除`}</Badge></div></div>
+    {pendingConfirmationCount > 0 && <div role="alert" className="flex items-start gap-2 border-b bg-amber-50/70 px-3 py-3 text-xs text-amber-950"><AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-700" /><div><p className="font-medium">系统已补出建议，但尚未作为本次订单的最终选择。</p><p className="mt-1 text-amber-800">请在对应区域采用推荐、选择已审核文案，或直接改写后再提交。</p></div></div>}
+    <div className="grid min-w-0 xl:grid-cols-[minmax(360px,0.9fr)_minmax(0,1.1fr)] xl:items-start"><SourceTextVisualReview sourceImage={sourceImage} sourceImageAlt={sourceImageAlt} regions={positionedRegions} activeRegionId={activeRegionId} onSelect={(regionId) => selectRegion(regionId, true)} onRetrySourceAnalysis={onRetrySourceAnalysis} retryingSourceAnalysis={retryingSourceAnalysis} />
+      <div className="min-w-0 border-t xl:border-l xl:border-t-0"><div className="space-y-3 p-3">{reviewRegions.map((region) => <VisualReviewRegionCard key={region.id} region={region} visualIndex={visualIndexByRegionId.get(region.id)} active={activeRegionId === region.id} overrides={overrides} replacementSources={replacementSources} scenarios={effectiveScenarios} originalScenarios={adaptation.repaymentPlanSelections} originalNumericLayouts={adaptation.numericLayouts} repaymentPlanOverrides={repaymentPlanOverrides} repaymentPlanOptions={repaymentPlanOptions} onSelect={() => selectRegion(region.id)} onOpenSelector={setSelectorBlockId} onChooseReplacement={onChooseReplacement} onChooseRepaymentPlan={onChooseRepaymentPlan} onAddRepaymentPlan={onAddRepaymentPlan} onRemoveRepaymentPlan={onRemoveRepaymentPlan} />)}</div></div>
+    </div>
+    <div className="grid gap-3 border-t px-3 py-3 lg:grid-cols-[minmax(0,0.85fr)_minmax(0,1.15fr)]">
+      <div className="min-w-0 space-y-1.5"><Label htmlFor={productionPromptId} className="text-xs text-muted-foreground">可编辑全局要求</Label><Textarea id={productionPromptId} rows={4} value={editableProductionPrompt} onChange={(event) => onProductionPromptChange(event.target.value)} placeholder="输入生成时必须遵守的风格、主题、构图或画面要求..." /><p className="text-xs text-muted-foreground">只写风格、主题和构图；逐块文字和数值由上方当前选择自动合成。</p></div>
+      <div className="min-w-0 space-y-1.5"><p className="text-xs font-medium text-muted-foreground">最终出图提示词预览</p><pre className="max-h-56 overflow-auto whitespace-pre-wrap break-words border bg-muted/20 px-3 py-2 font-sans text-xs leading-5">{finalPromptPreview || "上方确认后会生成本次出图提示词。"}</pre><p className="text-xs text-muted-foreground">提交时会冻结这份预览内容。</p></div>
+    </div>
+    <ReplacementSourceDialog open={selectorReplacement !== null} replacement={selectorReplacement} currentValue={selectorReplacement ? replacementText(selectorReplacement, overrides) : ""} copyLibrary={copyLibrary} onOpenChange={(open) => !open && setSelectorBlockId("")} onChoose={(value, source) => { if (selectorReplacement) onChooseReplacement(selectorReplacement.blockId, value, source); setSelectorBlockId(""); }} onOpenCopyLibrary={onOpenCopyLibrary} />
+  </section>;
+}
+
+function VisualReviewRegionCard({ region, visualIndex, active, overrides, replacementSources, scenarios, originalScenarios, originalNumericLayouts, repaymentPlanOverrides, repaymentPlanOptions, onSelect, onOpenSelector, onChooseReplacement, onChooseRepaymentPlan, onAddRepaymentPlan, onRemoveRepaymentPlan }: { region: PreparedVisualReviewRegion; visualIndex?: number; active: boolean; overrides: Record<string, string>; replacementSources: Record<string, ReplacementSourceChoice>; scenarios: PreparedRepaymentPlanSelection[]; originalScenarios: PreparedRepaymentPlanSelection[]; originalNumericLayouts: PreparedNumericLayout[]; repaymentPlanOverrides: Record<string, RepaymentPlanChoice>; repaymentPlanOptions: RepaymentPlanChoice[]; onSelect: () => void; onOpenSelector: (blockId: string) => void; onChooseReplacement: (blockId: string, value: string, source: ReplacementSourceChoice) => void; onChooseRepaymentPlan: (scenarioId: string, plan: RepaymentPlanChoice, original: PreparedRepaymentPlanSelection) => void; onAddRepaymentPlan: (layoutId: string, plan: RepaymentPlanChoice) => void; onRemoveRepaymentPlan: (layoutId: string, scenarioId: string) => void }) {
+  return <section id={`visual-review-region-${region.id}`} className={`min-w-0 border transition-colors ${active ? "border-foreground bg-muted/20" : ""}`} onClick={onSelect}>
+    <div className="flex flex-wrap items-center justify-between gap-2 border-b bg-muted/20 px-3 py-2"><div className="flex min-w-0 items-center gap-2"><span className="break-words text-xs font-medium">{region.location}</span>{visualIndex && <span className="inline-flex size-5 items-center justify-center rounded-full bg-foreground font-mono text-[10px] font-semibold text-background">{visualIndex}</span>}</div><Badge variant="outline">{region.kind === "numeric" ? "数值组件" : "文案区域"}</Badge></div>
+    {region.textReplacements.map((replacement) => {
+      const source = replacementSource(replacement, replacementSources);
+      const value = replacementText(replacement, overrides);
+      const pending = hasPendingReplacementConfirmation(replacement, overrides, replacementSources);
+      const unavailable = replacement.status === "missing" && replacementSources[replacement.blockId] === undefined && !value.trim();
+      const sourceLabel = unavailable ? "暂无可用内容" : source.kind === "library" ? "已审核文案库" : source.kind === "calculation" ? pending ? "公式计算待确认" : "已确认公式计算" : source.kind === "recommendation" ? pending ? "系统推荐待确认" : "已采用系统推荐" : "本次人工改写";
+      const sourceTone = unavailable || pending ? "border-amber-300 bg-amber-50 text-amber-900" : source.kind === "calculation" ? "border-cyan-300 bg-cyan-50 text-cyan-900" : source.kind === "manual" ? "border-slate-300 bg-slate-50 text-slate-800" : "border-emerald-300 bg-emerald-50 text-emerald-900";
+      const detail = replacement.status === "calculated" && replacement.calculation ? `${replacement.calculation.formula}；${replacement.calculation.inputs.join("；")}` : (replacement.recommendationBasis ?? []).join("；") || replacement.note || (replacement.status === "missing" ? "没有可自动采用的内容。" : "来自当前冻结文案库。");
+      return <div key={replacement.blockId} className="grid min-w-0 gap-4 border-b p-3 last:border-b-0 xl:grid-cols-[minmax(180px,0.8fr)_minmax(0,1.2fr)] xl:items-start"><div className="min-w-0 xl:border-r xl:pr-4"><p className="text-[11px] font-medium text-muted-foreground">原图文字</p><p className="mt-1 whitespace-pre-wrap break-words text-sm leading-6 text-foreground">{replacement.sourceText || "未识别清晰文字"}</p>{replacement.semanticKind && <p className="mt-2 font-mono text-[10px] text-muted-foreground">{replacement.semanticKind}</p>}</div><div className="min-w-0"><div className="flex flex-wrap items-center justify-between gap-2"><p className="text-[11px] font-medium text-muted-foreground">最终替换文字</p><Badge variant="outline" className={sourceTone}>{sourceLabel}</Badge></div><Textarea rows={2} value={value} onFocus={onSelect} onChange={(event) => onChooseReplacement(replacement.blockId, event.target.value, { kind: "manual" })} placeholder="留空则移除原文" className="mt-1 min-h-12 resize-y text-sm leading-6" /><div className="mt-2 flex flex-wrap items-center gap-2"><Button size="sm" variant="outline" onClick={(event) => { event.stopPropagation(); onOpenSelector(replacement.blockId); }}><BookOpenText className="h-4 w-4" />选择来源</Button>{pending && <Button size="sm" onClick={(event) => { event.stopPropagation(); onChooseReplacement(replacement.blockId, replacement.replacementText, { kind: replacement.status === "calculated" ? "calculation" : "recommendation" }); }}><Check className="h-4 w-4" />采用推荐</Button>}</div><p className={`mt-2 break-words border-l-2 pl-2 text-[11px] leading-4 ${pending || replacement.status === "missing" ? "border-amber-300 text-amber-800" : "border-muted-foreground/30 text-muted-foreground"}`}>{detail}</p></div></div>;
+    })}
+    {region.numericLayouts.length > 0 && <div className="p-3"><p className="mb-2 text-[11px] font-medium text-muted-foreground">我方数值版式</p><NumericLayoutCards layouts={region.numericLayouts} scenarios={scenarios} originalScenarios={originalScenarios} originalNumericLayouts={originalNumericLayouts} repaymentPlanOverrides={repaymentPlanOverrides} repaymentPlanOptions={repaymentPlanOptions} onChooseRepaymentPlan={onChooseRepaymentPlan} onAddRepaymentPlan={onAddRepaymentPlan} onRemoveRepaymentPlan={onRemoveRepaymentPlan} /></div>}
+  </section>;
+}
+
+function ReplacementSourceDialog({ open, replacement, currentValue, copyLibrary, onOpenChange, onChoose, onOpenCopyLibrary }: { open: boolean; replacement: PreparedTextReplacement | null; currentValue: string; copyLibrary?: CreativeResource; onOpenChange: (open: boolean) => void; onChoose: (value: string, source: ReplacementSourceChoice) => void; onOpenCopyLibrary?: () => void }) {
+  const [query, setQuery] = useState("");
+  const [mode, setMode] = useState<"library" | "manual">("library");
+  const [manualValue, setManualValue] = useState("");
+  useEffect(() => { setQuery(""); setMode("library"); setManualValue(currentValue); }, [replacement?.blockId, currentValue]);
+  const fragments = useMemo(() => copyLibrary ? parseCreativeCopyLibraryConfig(copyLibrary.published_config ?? {}).fragments.filter((fragment) => fragment.status === "approved") : [], [copyLibrary]);
+  const compatible = useMemo(() => fragments.filter((fragment) => replacement ? fragmentSupportsReplacement(fragment, replacement) : false), [fragments, replacement]);
+  const normalizedQuery = query.trim().toLocaleLowerCase();
+  const visible = compatible.filter((fragment) => !normalizedQuery || [fragment.text, fragment.name, fragment.key].join(" ").toLocaleLowerCase().includes(normalizedQuery));
+  const recommendation = replacement?.status === "recommended" || replacement?.status === "calculated" ? replacement : null;
+  return <Dialog open={open} onOpenChange={onOpenChange}><DialogContent className="max-h-[90vh] overflow-y-auto p-0 sm:max-w-[min(94vw,820px)]"><DialogHeader className="border-b px-5 py-4 pr-12"><DialogTitle className="text-base">选择替换内容</DialogTitle><DialogDescription>{replacement ? `${replacement.location} · 原图：${replacement.sourceText || "未识别文字"}` : ""}</DialogDescription></DialogHeader><div className="space-y-4 px-5 py-4">{recommendation && <div className={`border p-3 ${replacement?.status === "calculated" ? "border-cyan-300 bg-cyan-50/70" : "border-amber-300 bg-amber-50/70"}`}><div className="flex flex-wrap items-center justify-between gap-2"><div><p className="text-sm font-medium">{replacement?.status === "calculated" ? "公式计算建议" : "系统推荐"}</p><p className="mt-1 text-xs text-muted-foreground">{replacement?.status === "calculated" ? replacement?.calculation?.formula : (recommendation.recommendationBasis ?? []).join("；")}</p></div><Button size="sm" onClick={() => onChoose(recommendation.replacementText, { kind: replacement?.status === "calculated" ? "calculation" : "recommendation" })}><Check className="h-4 w-4" />采用本次建议</Button></div><p className="mt-3 break-words text-sm font-medium">{recommendation.replacementText}</p>{replacement?.calculation && <p className="mt-1 text-xs text-muted-foreground">{replacement.calculation.inputs.join("；")}</p>}</div>}<div className="flex w-fit border p-0.5"><Button size="sm" variant={mode === "library" ? "secondary" : "ghost"} onClick={() => setMode("library")}>已审核文案</Button><Button size="sm" variant={mode === "manual" ? "secondary" : "ghost"} onClick={() => setMode("manual")}>本次改写</Button></div>{mode === "library" ? <div className="space-y-3"><div className="flex flex-wrap items-end justify-between gap-2"><div><p className="text-sm font-medium">匹配当前语义的已审核文案</p><p className="mt-1 text-xs text-muted-foreground">只展示与当前文字区域兼容的文案，避免将利率、金额和期限混用。</p></div><Badge variant="outline">{compatible.length} 条可用</Badge></div><Input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索文案库" aria-label="搜索可用文案" />{visible.length > 0 ? <div className="divide-y border">{visible.map((fragment) => <button key={fragment.id} type="button" className="grid w-full grid-cols-[minmax(0,1fr)_auto] gap-3 p-3 text-left hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" onClick={() => onChoose(fragment.text, { kind: "library", sourceKey: fragment.key })}><div className="min-w-0"><p className="break-words text-sm font-medium">{fragment.text}</p><p className="mt-1 text-xs text-muted-foreground">{fragment.name || fragment.key}{fragment.semantic_group ? ` · ${fragment.semantic_group}` : ""}</p></div><Check className="mt-0.5 h-4 w-4 text-muted-foreground" /></button>)}</div> : <div className="border border-dashed px-4 py-7 text-center"><p className="text-sm font-medium">没有可用的已审核文案</p><p className="mt-1 text-xs text-muted-foreground">可采用系统建议，或仅为本次订单人工改写。</p>{onOpenCopyLibrary && <Button size="sm" variant="outline" className="mt-3" onClick={onOpenCopyLibrary}>前往文案库</Button>}</div>}</div> : <div className="space-y-3"><div><p className="text-sm font-medium">仅用于本次订单</p><p className="mt-1 text-xs text-muted-foreground">这不会自动写入文案库；需要复用时再到文案库创建草稿并发布。</p></div><Textarea rows={4} value={manualValue} onChange={(event) => setManualValue(event.target.value)} placeholder="输入本次要使用的文字；留空则移除原文" /><div className="flex justify-end"><Button disabled={!manualValue.trim()} onClick={() => onChoose(manualValue, { kind: "manual" })}>采用本次改写</Button></div></div>}</div><DialogFooter><Button variant="outline" onClick={() => onOpenChange(false)}>取消</Button></DialogFooter></DialogContent></Dialog>;
+}
+
+function fragmentSupportsReplacement(fragment: ReturnType<typeof parseCreativeCopyLibraryConfig>["fragments"][number], replacement: PreparedTextReplacement): boolean {
+  const semanticKind = replacement.semanticKind ?? "";
+  if (!semanticKind || semanticKind === "copy" || semanticKind === "daily_interest_label") return fragment.role === replacement.role || fragment.role === "supporting";
+  if (semanticKind === "principal") return fragment.semantic_group === "principal" || fragment.semantic_group === "limit";
+  return fragment.semantic_group === semanticKind;
+}
+
+function SourceTextVisualReview({ sourceImage, sourceImageAlt, regions, activeRegionId, onSelect, onRetrySourceAnalysis, retryingSourceAnalysis = false }: { sourceImage: string; sourceImageAlt: string; regions: Array<PreparedVisualReviewRegion & { visualBounds: NormalizedVisualBounds }>; activeRegionId: string; onSelect: (regionId: string) => void; onRetrySourceAnalysis?: () => void; retryingSourceAnalysis?: boolean }) {
+  return <aside aria-label="原图内容定位" className="min-w-0 bg-muted/10 xl:sticky xl:top-3">
+    <div className="flex items-center justify-between gap-2 border-b px-3 py-2">
+      <div>
+        <p className="text-sm font-medium">原图内容定位</p>
+        <p className="mt-0.5 text-[11px] text-muted-foreground">选中区域使用暖金描边；编号置于区域外侧。</p>
+      </div>
+      <Badge variant="outline">{regions.length} 个区域</Badge>
+    </div>
+    {sourceImage && regions.length > 0 ? <div className="p-3">
+      <div className="relative mx-auto w-full max-w-[720px] p-7">
+        <div className="relative">
+          <img src={sourceImage} alt={sourceImageAlt} width={1200} height={900} className="block h-auto w-full" />
+          <div className="absolute inset-0">
+            {regions.map((region, index) => {
+              const active = region.id === activeRegionId;
+              const bounds = region.visualBounds;
+              return <button
+                key={region.id}
+                type="button"
+                aria-label={`定位内容区域 ${index + 1}：${region.location}`}
+                aria-pressed={active}
+                title={region.location}
+                onClick={() => onSelect(region.id)}
+                style={{ left: `${bounds.x / 10}%`, top: `${bounds.y / 10}%`, width: `${bounds.width / 10}%`, height: `${bounds.height / 10}%` }}
+                className={`absolute border-2 text-left outline-none transition-[background-color,border-color,box-shadow,transform] focus-visible:ring-4 focus-visible:ring-amber-300/70 focus-visible:ring-offset-2 ${active ? "z-20 scale-[1.01] border-[#d6a84f] bg-[#d6a84f]/20 shadow-[0_0_0_2px_#ffffff,0_0_0_5px_#111827,0_0_0_8px_#d6a84f]" : "border-white bg-transparent shadow-[0_0_0_1px_#111827,0_0_0_3px_#ffffff] hover:border-[#e2c47a] hover:bg-[#e2c47a]/15 hover:shadow-[0_0_0_2px_#111827,0_0_0_5px_#e2c47a]"}`}
+              >
+                <span className={`pointer-events-none absolute -left-1 -top-1 grid -translate-x-full -translate-y-full place-items-center rounded-full border-2 font-mono font-semibold ${active ? "size-7 border-[#d6a84f] bg-[#111827] text-xs text-[#f7d98a] shadow-[0_0_0_2px_#ffffff,0_0_0_5px_#d6a84f]" : "size-5 border-[#111827] bg-white text-[10px] text-[#111827] shadow-[0_0_0_2px_#ffffff,0_0_0_4px_#111827]"}`}>
+                  {index + 1}
+                </span>
+              </button>;
+            })}
+          </div>
+        </div>
+      </div>
+    </div> : <div className="flex min-h-48 flex-col items-center justify-center gap-2 px-6 py-8 text-center">
+      <ImageIcon className="h-5 w-5 text-muted-foreground" />
+      <p className="text-sm font-medium">本次分析没有可用的画面区域坐标</p>
+      <p className="max-w-sm text-xs leading-5 text-muted-foreground">仍可在右侧逐项编辑；重新分析该素材后，系统会记录区域归属和位置。</p>
+      {onRetrySourceAnalysis && <Button size="sm" variant="outline" disabled={retryingSourceAnalysis} onClick={onRetrySourceAnalysis}><RefreshCw className={`h-4 w-4 ${retryingSourceAnalysis ? "animate-spin" : ""}`} />{retryingSourceAnalysis ? "正在重新分析" : "重新分析"}</Button>}
+    </div>}
+  </aside>;
+}
+
+function NumericLayoutCards({
+  layouts,
+  scenarios,
+  originalScenarios,
+  originalNumericLayouts,
+  repaymentPlanOverrides,
+  repaymentPlanOptions,
+  onChooseRepaymentPlan,
+  onAddRepaymentPlan,
+  onRemoveRepaymentPlan,
+}: {
+  layouts: PreparedNumericLayout[];
+  scenarios: PreparedRepaymentPlanSelection[];
+  originalScenarios: PreparedRepaymentPlanSelection[];
+  originalNumericLayouts: PreparedNumericLayout[];
+  repaymentPlanOverrides: Record<string, RepaymentPlanChoice>;
+  repaymentPlanOptions: RepaymentPlanChoice[];
+  onChooseRepaymentPlan: (scenarioId: string, plan: RepaymentPlanChoice, original: PreparedRepaymentPlanSelection) => void;
+  onAddRepaymentPlan: (layoutId: string, plan: RepaymentPlanChoice) => void;
+  onRemoveRepaymentPlan: (layoutId: string, scenarioId: string) => void;
+}) {
+  const scenariosByID = scenarioByID(scenarios);
+  const originalScenariosByID = scenarioByID(originalScenarios);
+  const originalLayoutsByID = numericLayoutByID(originalNumericLayouts);
+  const planByKey = new Map(repaymentPlanOptions.map((plan) => [plan.planKey, plan]));
+  return <div className="grid gap-3">{layouts.map((layout) => {
+    const instruction = numericLayoutInstruction(layout, scenariosByID, repaymentPlanOverrides, originalLayoutsByID.get(layout.id));
+    const nextPlan = nextRepaymentPlanOptionForLayout(layout, scenariosByID, repaymentPlanOptions);
+    return <div key={layout.id} className="min-w-0 border bg-muted/20">
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b px-3 py-2">
+        <span className="break-words text-xs font-medium">{layout.location}</span>
+        <Badge variant="outline">{numericLayoutKindLabel(layout.layoutKind)}</Badge>
+      </div>
+      <div className="overflow-x-auto">
+        <table className="w-full min-w-[720px] text-xs">
+          <thead className="border-b text-left text-muted-foreground">
+            <tr>
+              <th className="w-[300px] px-2 py-2 font-medium">已审核方案</th>
+              {layout.targetColumns.map((column) => <th key={column} className="break-words px-2 py-2 font-medium">{numericColumnLabel(column)}</th>)}
+              <th className="w-12 px-2 py-2 font-medium"><span className="sr-only">操作</span></th>
+            </tr>
+          </thead>
+          <tbody>
+            {layout.scenarioIds.map((scenarioID) => {
+              const scenario = scenariosByID.get(scenarioID);
+              if (!scenario) return null;
+              const originalScenario = originalScenariosByID.get(scenarioID) ?? scenario;
+              const current = repaymentPlanOverrides[scenarioID] ?? repaymentPlanChoiceFromSelection(scenario);
+              return <tr key={scenarioID} className="border-b last:border-b-0">
+                <td className="px-2 py-2 align-top">
+                  {repaymentPlanOptions.length > 0 ? <NativeSelect
+                    size="sm"
+                    className="w-full"
+                    aria-label={`选择${layout.location}还款方案`}
+                    value={current.planKey}
+                    onChange={(event) => {
+                      const plan = planByKey.get(event.target.value);
+                      if (plan) onChooseRepaymentPlan(scenarioID, plan, originalScenario);
+                    }}
+                  >
+                    {!planByKey.has(current.planKey) && <NativeSelectOption value={current.planKey}>{repaymentPlanOptionLabel(current)}</NativeSelectOption>}
+                    {repaymentPlanOptions.map((plan) => <NativeSelectOption key={plan.planKey} value={plan.planKey}>{repaymentPlanOptionLabel(plan)}</NativeSelectOption>)}
+                  </NativeSelect> : <span className="text-muted-foreground">{repaymentPlanOptionLabel(current)}</span>}
+                </td>
+                {layout.targetColumns.map((column) => <td key={column} className="break-words px-2 py-2 align-top text-foreground">{numericColumnValue(scenario, column)}</td>)}
+                <td className="px-2 py-2 align-top">
+                  <Button type="button" size="icon" variant="ghost" aria-label={`删除${layout.location}中的一行`} onClick={() => onRemoveRepaymentPlan(layout.id, scenarioID)}>
+                    <X className="h-4 w-4" />
+                  </Button>
+                </td>
+              </tr>;
+            })}
+            {layout.scenarioIds.length === 0 && <tr><td colSpan={layout.targetColumns.length + 2} className="px-2 py-5 text-center text-muted-foreground">这个数值区域已清空，可继续加一行。</td></tr>}
+          </tbody>
+        </table>
+      </div>
+      <div className="flex flex-wrap items-center justify-between gap-2 border-t px-3 py-2">
+        <p className="min-w-0 flex-1 whitespace-pre-wrap break-words text-xs leading-5 text-muted-foreground">{userFacingProductionPrompt(instruction) || "已按当前选择更新数值区域。"}</p>
+        {nextPlan && <Button type="button" size="sm" variant="outline" onClick={() => onAddRepaymentPlan(layout.id, nextPlan)}>
+          <Plus className="h-4 w-4" />
+          加一行
+        </Button>}
+      </div>
+    </div>;
+  })}</div>;
+}
+
+function nextRepaymentPlanOptionForLayout(layout: PreparedNumericLayout, scenarios: ReadonlyMap<string, PreparedRepaymentPlanSelection>, options: RepaymentPlanChoice[]): RepaymentPlanChoice | undefined {
+  const usedPlanKeys = new Set(layout.scenarioIds.map((scenarioId) => scenarios.get(scenarioId)?.planKey).filter((planKey): planKey is string => Boolean(planKey)));
+  return options.find((option) => !usedPlanKeys.has(option.planKey)) ?? options[0];
+}
+
+function repaymentPlanOptionLabel(plan: RepaymentPlanChoice): string {
+  return `${plan.values.principal} / ${plan.values.tenor} / 月还 ${plan.values.monthlyInstallment}`;
+}
+
+function numericLayoutKindLabel(kind: PreparedNumericLayout["layoutKind"]): string {
+  switch (kind) {
+    case "table": return "表格";
+    case "card_grid": return "卡片网格";
+    case "comparison": return "对照区";
+    case "single_card": return "单卡";
+    case "single_value": return "单值";
+    case "option_buttons": return "选项按钮";
+    case "table_row": return "表格行";
+  }
 }
 
 export function manualCopySnapshot(
@@ -834,7 +2194,7 @@ export function manualCopySnapshot(
   library?: { id: string; published_version: number },
 ): CreativeCopySnapshot {
   return {
-    schema_version: 2,
+    schema_version: 3,
     id: "",
     library_id: library?.id ?? "",
     library_version: library?.published_version ?? 0,
@@ -846,8 +2206,8 @@ export function manualCopySnapshot(
     cta: draft.manualCta.trim(),
     legal_text: "",
     fragments: [],
-    product_facts: [],
-    recommendation: { score: 0, reasons: ["用户基于动态推荐手动调整"], matched_signals: [] },
+    repayment_plan_entries: [],
+    recommendation: { score: 0, reasons: ["用户手动调整"], matched_signals: [] },
     status: "user_custom",
   };
 }
@@ -957,26 +2317,6 @@ export function recommendedCopyDecisionFeedbackInput({
   };
 }
 
-export function candidateDecisionFeedbackInput(
-  candidate: Pick<CreativeMaterialCandidate, "id" | "source_run_id" | "analysis_status">,
-  decision: "selected" | "rejected",
-  reasonCodes?: string[],
-  comment?: string,
-  idempotencyKey?: string,
-): CreateCreativeFeedbackRequest {
-  return {
-    idempotency_key: idempotencyKey,
-    issue_id: "",
-    subject_type: "candidate",
-    subject_id: candidate.id,
-    event_type: "decision",
-    decision,
-    reason_codes: reasonCodes,
-    comment,
-    context_snapshot: { crawl_run_id: candidate.source_run_id, analysis_status: candidate.analysis_status },
-  };
-}
-
 export function creativeOrderItemInput(
   candidateId: string,
   sourceAnalysisId: string,
@@ -1004,20 +2344,30 @@ function recordString(record: Record<string, unknown> | undefined, key: string):
   return typeof value === "string" ? value : "";
 }
 
+function record(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
+}
+
 function recordStringArray(record: Record<string, unknown> | undefined, key: string): string[] {
   const value = record?.[key];
   return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
 }
 
-function MaterialPreview({ candidate, analysis, onClose, onRetry, retrying, onRetryAnalysis, retryingAnalysis }: { candidate: CreativeMaterialCandidate | null; analysis?: CreativeSourceAnalysis; onClose: () => void; onRetry: (candidateId: string) => void; retrying: boolean; onRetryAnalysis: (candidateId: string) => void; retryingAnalysis: boolean }) {
+function MaterialPreview({ candidate, analysis, onClose, onDirectEdit, onRetryAnalysis, retryingAnalysis }: { candidate: CreativeMaterialCandidate | null; analysis?: CreativeSourceAnalysis; onClose: () => void; onDirectEdit: () => void; onRetryAnalysis: (candidateId: string) => void; retryingAnalysis: boolean }) {
   const source = candidate ? candidateSource(candidate) : "";
   const original = candidate ? resolvePublicFileUrl(candidate.original_url) : "";
   const details = candidate ? materialCandidateDisplayDetails(candidate) : null;
+  const previewPaneRef = useRef<HTMLDivElement>(null);
+  const detailPaneRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    previewPaneRef.current?.scrollTo({ top: 0 });
+    detailPaneRef.current?.scrollTo({ top: 0 });
+  }, [candidate?.id]);
   return <Dialog open={candidate !== null} onOpenChange={(open) => !open && onClose()}><DialogContent className="max-h-[94vh] overflow-hidden p-0 sm:max-w-[min(94vw,1100px)]">
     <DialogHeader className="border-b px-4 py-3 pr-12"><DialogTitle className="truncate text-sm">{candidate?.title || "素材详情"}</DialogTitle><DialogDescription>{candidate?.competitor || sourceLabel(candidate?.connector_id ?? "")}</DialogDescription></DialogHeader>
-    <div className="grid max-h-[82vh] overflow-y-auto md:grid-cols-[minmax(0,1fr)_300px]">
-      <div className="flex min-h-80 items-center justify-center bg-black p-3">{source ? <img src={source} alt={candidate?.title || "素材"} width={1600} height={1200} className="max-h-[72vh] w-full object-contain" /> : <ImageIcon className="h-8 w-8 text-white/50" />}</div>
-      <div className="space-y-5 p-4 text-sm">
+    <div className="grid h-[min(82vh,760px)] min-h-0 overflow-hidden md:grid-cols-[minmax(0,1fr)_340px]">
+      <div ref={previewPaneRef} className="flex min-h-0 items-start justify-center overflow-auto bg-transparent p-3">{source ? <img src={source} alt={candidate?.title || "素材"} width={1600} height={1200} className="my-auto max-h-full w-full object-contain" /> : <ImageIcon className="my-auto h-8 w-8 text-muted-foreground" />}</div>
+      <div ref={detailPaneRef} className="min-h-0 space-y-5 overflow-y-auto border-t p-4 text-sm md:border-l md:border-t-0">
         <section aria-labelledby="material-analysis-title" className="border-b pb-5">
           <div className="flex flex-wrap items-center gap-2"><Sparkles className="h-4 w-4" /><h3 id="material-analysis-title" className="font-medium">参考分析</h3>{analysis && <Badge variant="outline">已分析 v{analysis.analysis_version}</Badge>}</div>
           {analysis ? <><p className="mt-3 break-words text-sm">{analysis.summary || "分析已完成"}</p><AnalysisFacts analysis={analysis} /></> : <p className="mt-2 text-xs text-muted-foreground">该素材还没有完成参考分析。</p>}
@@ -1032,10 +2382,11 @@ function MaterialPreview({ candidate, analysis, onClose, onRetry, retrying, onRe
         <MetadataRow label="市场" value={details?.market ?? MATERIAL_SOURCE_MISSING} />
         <MetadataRow label="语言" value={details?.languages ?? MATERIAL_SOURCE_MISSING} />
         <MetadataRow label="设备" value={details?.platforms ?? MATERIAL_SOURCE_MISSING} />
-        <MetadataRow label="标签" value={details?.tags ?? MATERIAL_SOURCE_MISSING} />
-        <MetadataRow label="备注" value={details?.note ?? MATERIAL_SOURCE_MISSING} />
-        {candidate?.archive_status === "failed" && <div className="border border-destructive/30 bg-destructive/5 p-3"><p className="flex items-center gap-2 text-sm font-medium text-destructive"><AlertTriangle className="h-4 w-4" />稳定归档失败</p><p className="mt-2 break-words text-xs text-muted-foreground">{archiveErrorLabel(candidate.archive_error)}</p><Button className="mt-3" size="sm" variant="outline" disabled={retrying} onClick={() => onRetry(candidate.id)}><RefreshCw className={retrying ? "h-4 w-4 animate-spin" : "h-4 w-4"} />重新归档</Button></div>}
+        {details?.tags && details.tags !== MATERIAL_SOURCE_MISSING && <MetadataRow label="标签" value={details.tags} />}
+        {details?.note && details.note !== MATERIAL_SOURCE_MISSING && <MetadataRow label="备注" value={details.note} />}
+        {candidate?.archive_status === "failed" && <div className="border border-destructive/30 bg-destructive/5 p-3"><p className="flex items-center gap-2 text-sm font-medium text-destructive"><AlertTriangle className="h-4 w-4" />稳定归档失败</p><p className="mt-2 break-words text-xs text-muted-foreground">{archiveErrorLabel(candidate.archive_error)}</p><p className="mt-2 text-xs text-muted-foreground">请在工作台的采集计划中处理归档修复。</p></div>}
         <div className="flex flex-wrap gap-2 border-t pt-4">
+          {candidate?.source_attachment_id && <Button size="sm" variant="outline" onClick={onDirectEdit}><Sparkles className="h-4 w-4" />直接改图</Button>}
           {source && <a href={source} download className={buttonVariants({ size: "sm", variant: "outline" })}><Download className="h-4 w-4" />下载归档文件</a>}
           {original && <a href={original} target="_blank" rel="noreferrer" className={buttonVariants({ size: "sm", variant: "outline" })}><ExternalLink className="h-4 w-4" />查看来源</a>}
         </div>
@@ -1083,8 +2434,8 @@ function MaterialImportDialog({ open, onClose, onImported }: { open: boolean; on
         title: draft.title.trim() || file?.name,
         competitor: draft.competitor.trim(),
         asset_type: file?.type.startsWith("video/") ? "video" : "image",
-        area_names: ["Indonesia"],
-        language_names: ["Indonesian"],
+        area_names: splitTags(draft.area),
+        language_names: splitTags(draft.language),
         tags: splitTags(draft.tags),
         note: draft.note.trim(),
       });
@@ -1106,6 +2457,8 @@ function MaterialImportDialog({ open, onClose, onImported }: { open: boolean; on
       {draft.mode === "file" ? <div className="sm:col-span-2"><input ref={fileRef} type="file" accept="image/*,video/*" className="hidden" onChange={(event) => setFile(event.target.files?.[0] ?? null)} /><Button variant="outline" onClick={() => fileRef.current?.click()}><Upload className="h-4 w-4" />{file?.name || "选择图片或视频"}</Button></div> : <Field label="素材 URL" wide><Input value={draft.sourceUrl} onChange={(event) => set("sourceUrl", event.target.value)} placeholder="https://..." /></Field>}
       <Field label="标题"><Input value={draft.title} onChange={(event) => set("title", event.target.value)} placeholder="素材名称" /></Field>
       <Field label="竞品 / 来源"><Input value={draft.competitor} onChange={(event) => set("competitor", event.target.value)} placeholder="例如 Easycash" /></Field>
+      <Field label="市场"><Input value={draft.area} onChange={(event) => set("area", event.target.value)} placeholder="例如 Indonesia，Malaysia" /></Field>
+      <Field label="语言"><Input value={draft.language} onChange={(event) => set("language", event.target.value)} placeholder="例如 Indonesian，English" /></Field>
       <Field label="标签" wide><Input value={draft.tags} onChange={(event) => set("tags", event.target.value)} placeholder="跑量, 首页, 利率" /></Field>
       <Field label="备注" wide><Textarea rows={4} value={draft.note} onChange={(event) => set("note", event.target.value)} placeholder="记录用途、选材原因或后续注意事项" /></Field>
     </div>
@@ -1136,6 +2489,16 @@ function sourceLabel(connector: string): string {
   if (connector === "manual_url") return "URL 导入";
   if (connector.toLocaleLowerCase() === "appgrowing") return "AppGrowing";
   return connector || "未知来源";
+}
+
+function materialFacetValues(
+  candidates: CreativeMaterialCandidate[],
+  read: (candidate: CreativeMaterialCandidate) => string | readonly string[] | undefined,
+): string[] {
+  return [...new Set(candidates.flatMap((candidate) => {
+    const value = read(candidate);
+    return Array.isArray(value) ? value : [value ?? ""];
+  }).map((value) => value.trim()).filter(Boolean))].sort((left, right) => left.localeCompare(right));
 }
 
 function candidateSourceRecords(candidate: CreativeMaterialCandidate): Record<string, unknown>[] {

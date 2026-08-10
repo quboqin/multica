@@ -68,6 +68,7 @@ describe("creative feedback state", () => {
     expect(latestOrderAdjustmentFeedback([older, ignored, latest] as never, "order-1")?.id).toBe("f2");
     expect(creativeAdjustmentProgress({ revision: 1, status: "action_required" } as CreativeOrderVariant, latest as never)).toBe("已提交，等待素材小队处理");
     expect(creativeAdjustmentProgress({ revision: 2, status: "partial" } as CreativeOrderVariant, latest as never)).toBe("素材小队处理中 · r2");
+    expect(creativeAdjustmentProgress({ revision: 2, status: "action_required" } as CreativeOrderVariant, latest as never)).toBe("调整结果待验收 · r2");
     expect(creativeAdjustmentProgress({ revision: 2, status: "completed" } as CreativeOrderVariant, latest as never)).toBe("调整已完成 · r2");
   });
 
@@ -126,14 +127,14 @@ describe("creative feedback state", () => {
     expect(latestCompletedAnalyses(analyses).get("candidate-1")?.id).toBe("v3");
   });
 
-  it("prefers a matching completed analysis over a newer crawl-run pending status", () => {
+  it("treats a newer source-analysis rerun as the current material analysis state", () => {
     const candidate = { id: "candidate-1", analysis_status: "pending", analysis_error: "" };
     const analyses = [
       { id: "completed-v1", candidate_id: "candidate-1", analysis_version: 1, status: "completed", completed_at: "2026-08-04T10:00:00Z", created_at: "2026-08-04T09:59:00Z" },
       { id: "running-v2", candidate_id: "candidate-1", analysis_version: 2, status: "running", completed_at: "", created_at: "2026-08-04T10:01:00Z" },
     ] as CreativeSourceAnalysis[];
 
-    expect(materialAnalysisState(candidate, analyses)).toEqual({ ready: true, status: "completed", error: "", version: 1 });
+    expect(materialAnalysisState(candidate, analyses)).toEqual({ ready: false, status: "running", error: "", version: 2 });
     expect(materialAnalysisState({ ...candidate, id: "candidate-without-analysis", analysis_status: "running" }, analyses))
       .toEqual({ ready: false, status: "running", error: "", version: 0 });
   });
@@ -152,21 +153,21 @@ describe("creative feedback state", () => {
     expect(creativeOrderAdoptionStatus(order)).toBe("已采用");
   });
 
-  it("only allows acceptance after all three Prime and delivered sizes pass both QC lanes", () => {
+  it("allows acceptance after three sizes are ready and treats failed QC as a user reminder", () => {
     const ready = readyVariant("variant-ready");
     expect(creativeVariantAdoptionReadiness(ready)).toEqual({
       ready: true,
-      status: "三尺寸、Prime 与双路 QC 均已完成，可以采用",
+      status: "三尺寸、贴片与质检均已完成，可以采用",
     });
 
     const missingPrime = { ...ready, assets: ready.assets.filter((asset) => !(asset.stage === "primed" && asset.size_key === "800x1000")) };
-    expect(creativeVariantAdoptionReadiness(missingPrime)).toEqual({ ready: false, status: "等待 Prime：已完成 2/3 个尺寸" });
+    expect(creativeVariantAdoptionReadiness(missingPrime)).toEqual({ ready: false, status: "等待贴片：已完成 2/3 个尺寸" });
 
     const failedQC = { ...ready, qc_reports: ready.qc_reports.map((report) => report.lane === "visual" ? { ...report, status: "failed" } : report) };
-    expect(creativeVariantAdoptionReadiness(failedQC)).toEqual({ ready: false, status: "QC 未通过：technical 通过，visual 失败" });
+    expect(creativeVariantAdoptionReadiness(failedQC)).toEqual({ ready: true, status: "系统提醒：视觉质检未通过，仍可查看、标注或忽略提醒采用" });
 
     const warnedQC = { ...ready, qc_reports: ready.qc_reports.map((report) => report.lane === "visual" ? { ...report, status: "warning" } : report) };
-    expect(creativeVariantAdoptionReadiness(warnedQC)).toEqual({ ready: true, status: "三尺寸、Prime 与双路 QC 均已完成，可以采用" });
+    expect(creativeVariantAdoptionReadiness(warnedQC)).toEqual({ ready: true, status: "三尺寸、贴片与质检均已完成，可以采用" });
 
     const missingDelivery = { ...ready, assets: ready.assets.filter((asset) => !(asset.stage === "delivered" && asset.size_key === "1200x628")) };
     expect(creativeVariantAdoptionReadiness(missingDelivery)).toEqual({ ready: false, status: "等待正式交付：已完成 2/3 个尺寸" });
@@ -177,6 +178,10 @@ describe("creative feedback state", () => {
       .toBe("/acme/creative?source=inbox&tab=orders&order=order-1");
     expect(creativeStudioPath("/acme/creative", new URLSearchParams("tab=orders&order=order-1"), "home"))
       .toBe("/acme/creative");
+    expect(creativeStudioPath("/acme/creative", new URLSearchParams("source=workbench"), "materials", "", "available", "crawl-run-1"))
+      .toBe("/acme/creative?source=workbench&tab=materials&run=crawl-run-1");
+    expect(creativeStudioPath("/acme/creative", new URLSearchParams("source=workbench&tab=materials"), "resources", "", "available", "", "copy"))
+      .toBe("/acme/creative?source=workbench&tab=resources&resource=copy");
   });
 
   it("requires a stable source, a request, and a squad before direct edit submits", () => {
@@ -211,9 +216,9 @@ describe("creative feedback state", () => {
 
   it("records each recommended-copy view once per analysis and library version", () => {
     const copySnapshot = {
-      schema_version: 2 as const, id: "22000000-0000-4000-8000-000000000001", library_id: "library-1", library_version: 54,
+      schema_version: 3 as const, id: "22000000-0000-4000-8000-000000000001", library_id: "library-1", library_version: 54,
       composition_id: "22000000-0000-4000-8000-000000000001", composition_key: "dynamic-num", creative_type: "num" as const,
-      headline: "Headline", subheadline: "", benefit: "Benefit", supporting: "", cta: "", legal_text: "", fragments: [], product_facts: [],
+      headline: "Headline", subheadline: "", benefit: "Benefit", supporting: "", cta: "", legal_text: "", fragments: [], repayment_plan_entries: [],
       recommendation: { score: 1, reasons: [], matched_signals: [] }, status: "approved" as const,
     };
     const input = recommendedCopyViewedFeedbackInput({

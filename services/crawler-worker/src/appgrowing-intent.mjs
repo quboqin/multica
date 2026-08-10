@@ -6,17 +6,35 @@ export class ConnectorInputError extends Error {
   }
 }
 
+// Legacy AutoPilots predate structured selection_rules. Keep the established
+// weekly split at the connector boundary so they remain executable, while new
+// callers receive the same explicit structure in their normalized params.
+export const DEFAULT_MATERIAL_SELECTION_RULES = Object.freeze({
+  new_materials: Object.freeze({
+    ratio: 0.4,
+    duration_days_lt: 7,
+    impression_gt: 1_000,
+  }),
+  volume_materials: Object.freeze({
+    ratio: 0.6,
+    duration_days_gt: 30,
+    impression_gte: 10_000_000,
+  }),
+});
+
 export function normalizeAppGrowingMaterialSearchParams(params = {}) {
   if (!params || typeof params !== "object" || Array.isArray(params)) {
     return {};
   }
   const intent = typeof params.intent === "string" ? params.intent.trim() : "";
   if (!intent) {
-    return { ...params };
+    return normalizeStructuredMaterialSearchFilters(withDefaultMaterialSelectionRules({ ...params }));
   }
   const explicit = { ...params };
   delete explicit.intent;
-  return mergeMaterialSearchParams(parseAppGrowingMaterialSearchIntent(intent), explicit);
+  return normalizeStructuredMaterialSearchFilters(
+    withDefaultMaterialSelectionRules(mergeMaterialSearchParams(parseAppGrowingMaterialSearchIntent(intent), explicit)),
+  );
 }
 
 export function parseAppGrowingMaterialSearchIntent(intent) {
@@ -78,11 +96,14 @@ export function parseAppGrowingMaterialSearchIntent(intent) {
 }
 
 export function normalizeMaterialRules(value) {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
+  if (value === undefined) {
+    value = defaultMaterialSelectionRules();
+  }
+  if (typeof value !== "object" || Array.isArray(value)) {
     throw new ConnectorInputError("material_search params.selection_rules is required");
   }
-  const newRules = value.new_materials || {};
-  const volumeRules = value.volume_materials || {};
+  const newRules = normalizeMaterialRuleAliases(value.new_materials, "new_materials");
+  const volumeRules = normalizeMaterialRuleAliases(value.volume_materials, "volume_materials");
   const rules = {
     new_materials: {
       ratio: finiteNumberParam(newRules.ratio, NaN, 0, 1),
@@ -105,11 +126,187 @@ export function normalizeMaterialRules(value) {
     || !Number.isFinite(rules.volume_materials.ratio)
     || !hasLowerBound(rules.volume_materials, "duration_days")
     || !hasLowerBound(rules.volume_materials, "impression")) {
+    const missing = missingMaterialRuleFields(rules);
     throw new ConnectorInputError(
-      "material_search selection_rules must include ratios, duration thresholds, and impression thresholds",
+      `material_search selection_rules is incomplete: ${missing.join(", ")}`,
     );
   }
   return rules;
+}
+
+function withDefaultMaterialSelectionRules(params) {
+  if (Object.prototype.hasOwnProperty.call(params, "selection_rules")
+    || Object.prototype.hasOwnProperty.call(params, "rules")) {
+    return params;
+  }
+  return {
+    ...params,
+    selection_rules: defaultMaterialSelectionRules(),
+  };
+}
+
+function defaultMaterialSelectionRules() {
+  return {
+    new_materials: { ...DEFAULT_MATERIAL_SELECTION_RULES.new_materials },
+    volume_materials: { ...DEFAULT_MATERIAL_SELECTION_RULES.volume_materials },
+  };
+}
+
+function normalizeStructuredMaterialSearchFilters(params) {
+  const out = { ...params };
+  if (out.limit === undefined && out.max_results !== undefined) {
+    out.limit = out.max_results;
+  }
+  if (typeof out.daterange !== "string" || !out.daterange.trim()) {
+    const days = recentDaysFromDateRange(out.date_range);
+    if (days !== null) {
+      out.daterange = `-${Math.max(0, days - 1)},0`;
+    }
+  }
+
+  const areas = normalizeAreaFilters(structuredFilterValues(
+    firstDefined(out.area, out.areas, out.regions, out.region),
+  ));
+  if (areas.length > 0) {
+    out.area = areas;
+  }
+  const languages = normalizeLanguageFilters(structuredFilterValues(
+    firstDefined(out.language, out.languages),
+  ));
+  if (languages.length > 0) {
+    out.language = languages;
+  }
+  const platforms = normalizePlatformFilters(structuredFilterValues(
+    firstDefined(out.platform, out.platforms, out.device, out.devices),
+  ));
+  if (platforms.length > 0) {
+    out.platform = platforms;
+  }
+  return out;
+}
+
+function recentDaysFromDateRange(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+  const type = String(value.type || "").trim().toLowerCase();
+  const days = Number(value.days);
+  if (type !== "recent_days" || !Number.isInteger(days) || days < 1 || days > 3650) {
+    return null;
+  }
+  return days;
+}
+
+function structuredFilterValues(value) {
+  if (Array.isArray(value)) {
+    return value.flatMap(structuredFilterValues);
+  }
+  return typeof value === "string" ? value.split(/[、,，;；]/) : [value];
+}
+
+function missingMaterialRuleFields(rules) {
+  const missing = [];
+  if (!Number.isFinite(rules.new_materials.ratio)) {
+    missing.push("new_materials.ratio");
+  }
+  if (!hasUpperBound(rules.new_materials, "duration_days")) {
+    missing.push("new_materials.duration_days_lt|duration_days_lte");
+  }
+  if (!hasLowerBound(rules.new_materials, "impression")) {
+    missing.push("new_materials.impression_gt|impression_gte");
+  }
+  if (!Number.isFinite(rules.volume_materials.ratio)) {
+    missing.push("volume_materials.ratio");
+  }
+  if (!hasLowerBound(rules.volume_materials, "duration_days")) {
+    missing.push("volume_materials.duration_days_gt|duration_days_gte");
+  }
+  if (!hasLowerBound(rules.volume_materials, "impression")) {
+    missing.push("volume_materials.impression_gt|impression_gte");
+  }
+  return missing;
+}
+
+function normalizeMaterialRuleAliases(value, segment) {
+  const source = objectOrEmpty(value);
+  const out = { ...source };
+  const isNewMaterials = segment === "new_materials";
+
+  setIfMissing(out, "ratio", normalizedRatio(firstDefined(
+    source.ratio,
+    source.allocation_ratio,
+    source.ratio_pct,
+    source.share_pct,
+    source.ratio_percent,
+    source.percentage,
+    source.share,
+  ), ratioAliasUsesPercent(source)));
+
+  if (isNewMaterials && !hasUpperBound(out, "duration_days")) {
+    setIfMissing(out, "duration_days_lt", firstDefined(
+      source.duration_lt_days,
+      source.duration_max_days,
+      source.max_duration_days,
+      objectValue(source.duration_days, "lt", "max"),
+      objectValue(source.ad_days, "lt", "max"),
+    ));
+  } else if (!isNewMaterials && !hasLowerBound(out, "duration_days")) {
+    setIfMissing(out, "duration_days_gt", firstDefined(
+      source.duration_gt_days,
+      source.duration_min_days,
+      source.min_duration_days,
+      objectValue(source.duration_days, "gt", "min"),
+      objectValue(source.ad_days, "gt", "min"),
+    ));
+  }
+
+  const impression = firstDefined(
+    source.impressions_gt,
+    source.impressions_gte,
+    source.estimated_impressions_gt,
+    source.estimated_impressions_gte,
+    source.impressions_min,
+    source.min_estimated_impressions,
+    objectValue(source.estimated_impressions, "gt", "gte", "min"),
+    objectValue(source.impression_threshold, "gt", "gte", "min"),
+  );
+  if (isNewMaterials && !hasLowerBound(out, "impression")) {
+    setIfMissing(out, "impression_gt", impression);
+  } else if (!isNewMaterials && !hasLowerBound(out, "impression")) {
+    setIfMissing(out, "impression_gte", impression);
+  }
+  return out;
+}
+
+function firstDefined(...values) {
+  return values.find((value) => value !== undefined && value !== null);
+}
+
+function objectValue(value, ...keys) {
+  const source = objectOrEmpty(value);
+  return firstDefined(...keys.map((key) => source[key]));
+}
+
+function setIfMissing(target, key, value) {
+  if (target[key] === undefined && value !== undefined) {
+    target[key] = value;
+  }
+}
+
+function ratioAliasUsesPercent(source) {
+  return source.ratio_pct !== undefined
+    || source.share_pct !== undefined
+    || source.ratio_percent !== undefined
+    || source.percentage !== undefined
+    || (source.share !== undefined && Number(source.share) > 1);
+}
+
+function normalizedRatio(value, isPercent) {
+  if (!isPercent || value === undefined || value === null) {
+    return value;
+  }
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? numeric / 100 : value;
 }
 
 function mergeMaterialSearchParams(parsed, explicit) {

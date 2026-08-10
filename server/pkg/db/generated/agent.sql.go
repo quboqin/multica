@@ -1284,14 +1284,28 @@ SELECT
     p.agent_id, p.runtime_id, p.issue_id, p.chat_session_id, p.autopilot_run_id,
     'queued', p.priority, p.trigger_comment_id, p.trigger_summary, p.context,
     NULL, NULL,
-    p.attempt + 1, p.max_attempts, p.id, TRUE, p.is_leader_task,
+    p.attempt + 1,
+    CASE
+      WHEN p.trigger_evidence_kind = 'creative_order_item_production'
+        AND p.context->>'workflow' = 'creative_production'
+        AND p.max_attempts < 3 THEN 3
+      ELSE p.max_attempts
+    END,
+    p.id, TRUE, p.is_leader_task,
     p.requesting_user_id, p.originator_user_id, p.accountable_user_id,
     p.originator_source, p.delegated_from_task_id, p.rule_version_id,
     p.id, p.trigger_evidence_kind, p.trigger_evidence_ref_id
 FROM agent_task_queue p
 WHERE p.id = $1
   AND p.status = 'completed'
-  AND p.attempt < p.max_attempts
+  AND (
+    p.attempt < p.max_attempts
+    OR (
+      p.trigger_evidence_kind = 'creative_order_item_production'
+      AND p.context->>'workflow' = 'creative_production'
+      AND p.attempt < 3
+    )
+  )
 RETURNING id, agent_id, issue_id, status, priority, dispatched_at, started_at, completed_at, result, error, created_at, context, runtime_id, session_id, work_dir, trigger_comment_id, chat_session_id, autopilot_run_id, attempt, max_attempts, parent_task_id, failure_reason, trigger_summary, force_fresh_session, is_leader_task, wait_reason, initiator_user_id, handoff_note, prepare_lease_expires_at, squad_id, runtime_mcp_overlay, escalation_for_task_id, fire_at, originator_user_id, runtime_connected_apps, coalesced_comment_ids, delivered_comment_ids, chat_input_task_id, chat_finalize_deferred_at, originator_source, delegated_from_task_id, retry_of_task_id, rerun_of_task_id, rule_version_id, trigger_evidence_kind, trigger_evidence_ref_id, accountable_user_id, requesting_user_id
 `
 

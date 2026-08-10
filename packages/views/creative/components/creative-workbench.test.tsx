@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
 
-import { fireEvent, render, screen, within } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import "@testing-library/jest-dom/vitest";
+import { cleanup, render, screen } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   CreativeMaterialCandidate,
   CreativeOrder,
@@ -9,6 +10,8 @@ import type {
   CreativeOrderVariant,
 } from "@multica/core/types";
 import { CreativeWorkbench } from "./creative-workbench";
+
+afterEach(() => cleanup());
 
 function candidate(id: string, status: string, title: string): CreativeMaterialCandidate {
   return {
@@ -64,6 +67,7 @@ function variant(id: string, status = "completed"): CreativeOrderVariant {
     created_at: "2026-08-01T02:00:00Z",
     updated_at: "2026-08-01T02:00:00Z",
     assets: [],
+    diagnostic_assets: [],
     qc_reports: [],
   };
 }
@@ -142,8 +146,6 @@ function order({
 
 describe("CreativeWorkbench", () => {
   it("shows only business-facing work that needs a decision", () => {
-    const onOpenMaterialLibrary = vi.fn();
-    const onOpenOrder = vi.fn();
     const candidates = [
       candidate("candidate-new", "new", "Dana cepat"),
       candidate("candidate-viewed", "viewed", "Pinjaman ringan"),
@@ -170,49 +172,39 @@ describe("CreativeWorkbench", () => {
     render(<CreativeWorkbench
       candidates={candidates}
       orders={[generating, awaitingReview, needsAttention]}
-      onOpenMaterialLibrary={onOpenMaterialLibrary}
-      onOpenOrder={onOpenOrder}
+      excludedCandidateIds={["candidate-selected", "candidate-rejected"]}
+      onOpenMaterialLibrary={vi.fn()}
+      onOpenOrder={vi.fn()}
     />);
 
-    expect(screen.getByTestId("creative-workbench-pending-materials")).toHaveTextContent("2");
-    expect(screen.getByTestId("creative-workbench-pending-orders")).toHaveTextContent("2");
+    expect(screen.getByTestId("creative-workbench-materials")).toHaveTextContent("2");
+    expect(screen.getByTestId("creative-workbench-running")).toHaveTextContent("1");
+    expect(screen.getByTestId("creative-workbench-reviews")).toHaveTextContent("2");
     expect(screen.getByTestId("creative-workbench-deliveries")).toHaveTextContent("0");
-
-    const queue = screen.getByRole("region", { name: "现在需要处理" });
-    expect(within(queue).getByText("Dana cepat")).toBeInTheDocument();
-    expect(within(queue).getByText("Pinjaman ringan")).toBeInTheDocument();
-    expect(within(queue).queryByText("Sudah dipilih")).not.toBeInTheDocument();
-
-    fireEvent.click(within(queue).getByRole("button", { name: "筛选 2 条素材" }));
-    fireEvent.click(within(queue).getByRole("button", { name: "处理问题" }));
-    fireEvent.click(within(queue).getByRole("button", { name: "验收成图" }));
-    expect(onOpenMaterialLibrary).toHaveBeenCalledOnce();
-    expect(onOpenOrder).toHaveBeenNthCalledWith(1, "order-attention");
-    expect(onOpenOrder).toHaveBeenNthCalledWith(2, "order-review");
+    expect(screen.getByRole("region", { name: "工作台概览" })).toBeInTheDocument();
+    expect(screen.getByText("查看素材、生成、验收和交付的当前总览。")).toBeInTheDocument();
+    expect(screen.queryByText("Dana cepat")).not.toBeInTheDocument();
+    expect(screen.queryByText("Pinjaman ringan")).not.toBeInTheDocument();
+    expect(screen.queryByText("Sudah dipilih")).not.toBeInTheDocument();
   });
 
-  it("lists adopted orders as recent deliveries with a direct download action", () => {
-    const onOpenOrder = vi.fn();
+  it("counts this week's deliveries without expanding order history", () => {
     const delivered = order({
       id: "order-delivered",
       status: "completed",
       orderItems: [item({ id: "item-delivered", candidateId: "candidate-delivered", adopted: true })],
+      updatedAt: new Date().toISOString(),
     });
 
     render(<CreativeWorkbench
       candidates={[candidate("candidate-delivered", "selected", "Tawaran Lebaran")]}
       orders={[delivered]}
       onOpenMaterialLibrary={vi.fn()}
-      onOpenOrder={onOpenOrder}
+      onOpenOrder={vi.fn()}
     />);
 
     expect(screen.getByTestId("creative-workbench-deliveries")).toHaveTextContent("1");
-    const deliveries = screen.getByRole("region", { name: "最近交付" });
-    expect(within(deliveries).getByText("Tawaran Lebaran")).toBeInTheDocument();
-    expect(within(deliveries).getByText(/1 个素材已采用/)).toBeInTheDocument();
-
-    fireEvent.click(within(deliveries).getByRole("button", { name: "查看并下载" }));
-    expect(onOpenOrder).toHaveBeenCalledWith("order-delivered");
+    expect(screen.queryByText("Tawaran Lebaran")).not.toBeInTheDocument();
   });
 
   it("does not keep cancelled order history in the action queue", () => {
@@ -226,8 +218,8 @@ describe("CreativeWorkbench", () => {
 
     render(<CreativeWorkbench candidates={[]} orders={[cancelled]} onOpenMaterialLibrary={vi.fn()} onOpenOrder={vi.fn()} />);
 
-    expect(screen.getByTestId("creative-workbench-pending-orders")).toHaveTextContent("0");
-    expect(screen.getByRole("region", { name: "现在需要处理" })).toHaveTextContent("当前没有需要你处理的事项");
+    expect(screen.getByTestId("creative-workbench-running")).toHaveTextContent("0");
+    expect(screen.queryByText(/需要你处理/)).not.toBeInTheDocument();
   });
 
   it("keeps completed results reviewable when another step failed", () => {
@@ -241,8 +233,9 @@ describe("CreativeWorkbench", () => {
 
     render(<CreativeWorkbench candidates={[candidate("candidate-partial", "selected", "可验收素材")]} orders={[partial]} onOpenMaterialLibrary={vi.fn()} onOpenOrder={onOpenOrder} />);
 
-    expect(screen.getByRole("button", { name: "验收成图" })).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "处理问题" })).not.toBeInTheDocument();
+    expect(screen.getByTestId("creative-workbench-reviews")).toHaveTextContent("1");
+    expect(screen.queryByRole("button", { name: /确认/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /处理/ })).not.toBeInTheDocument();
   });
 
   it("keeps empty states calm and does not expose implementation concepts", () => {
@@ -253,8 +246,7 @@ describe("CreativeWorkbench", () => {
       onOpenOrder={vi.fn()}
     />);
 
-    expect(screen.getByText("当前没有需要你处理的事项")).toBeInTheDocument();
-    expect(screen.getByText("完成采用后，交付会出现在这里")).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "工作台概览" })).toBeInTheDocument();
     expect(screen.queryByText(/WorkUnit|Task Batch|Agent/)).not.toBeInTheDocument();
   });
 });

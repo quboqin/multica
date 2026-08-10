@@ -20,7 +20,8 @@ asset 时，将 variant 写为 `action_required` 并请求对应底图；不得�
 revision。task context 的 `revision` 是 `source_revision`；本次 `output_revision=source_revision+1`。source base
 永远不可覆盖：输出必须把 variant 推进到 `output_revision`，并以 source asset ID 写入
 `derived_from_asset_id`。使用 `multica attachment download <base-attachment-id> --output-dir <work-dir>` 下载底图，将用户原话
-原样转为局部编辑提示词，明确要改、保留的主体、文本和布局。只调用 `multica image edit`；用户明确列出
+原样转为短的局部编辑提示词，明确要改、保留的主体、文本和布局；每条事实只写一次，不粘贴订单审计说明。
+只调用 `multica image edit`；用户明确列出
 多个尺寸时，以独立 jobs 使用一次 `multica image edit-batch`。同一变体多尺寸必须保持同一修改意图和
 内容族。订单冻结的 `copy_snapshot` 仍是金融事实唯一真值；用户请求若包含新的金额、利率或期限，先进入
 `action_required` 让用户在页面更新文案快照，不得由图片修改角色直接写入。

@@ -5,7 +5,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"reflect"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -26,6 +27,42 @@ func TestCreativeOrderQCAgentSnapshotRequiresFrozenLeaderAndReviewer(t *testing.
 	}
 	if _, _, err := creativeOrderQCAgentSnapshot(json.RawMessage(`not-json`)); err == nil {
 		t.Fatal("malformed snapshot must not be accepted")
+	}
+}
+
+func TestNormalizeCreativeOrderAllowsComplexProductionPrompt(t *testing.T) {
+	base := creativeOrderInput{
+		Status:        "queued",
+		InputSnapshot: json.RawMessage(`{}`),
+		Items: []creativeOrderItemInput{{
+			CandidateID:  "candidate-1",
+			CopySnapshot: json.RawMessage(`{}`),
+			Direction:    strings.Repeat("x", 4252),
+		}},
+	}
+	if _, err := normalizeCreativeOrder(base); err != nil {
+		t.Fatalf("complex production prompt was rejected: %v", err)
+	}
+	base.Items[0].Direction = strings.Repeat("x", maxCreativeOrderDirectionLength+1)
+	if _, err := normalizeCreativeOrder(base); err == nil {
+		t.Fatal("oversized production prompt was accepted")
+	}
+}
+
+func TestSummarizeCreativeOrderVariantBlockerKeepsModelFailureCause(t *testing.T) {
+	raw := strings.Join([]string{
+		"方形模型已成功返回完整原始 JSON。",
+		"首次模型输出实际为 `916x1716`，无法规范化为方形。",
+		"定向重生等待 `600472 ms` 后超时，未返回完整 JSON。",
+		"Variant `bac5daf4-e83a-40d9-939f-fb5ca7d81b1c` 已标记为 `action_required`。",
+	}, "\n")
+
+	got := summarizeCreativeOrderVariantBlocker(raw)
+	if !strings.Contains(got, "916x1716") || !strings.Contains(got, "600472 ms") {
+		t.Fatalf("summary = %q, want model dimensions and timeout", got)
+	}
+	if strings.Contains(got, "action_required") {
+		t.Fatalf("summary = %q, must not prefer bookkeeping status", got)
 	}
 }
 
@@ -166,6 +203,67 @@ VALUES ($1, 'technical', 1, 'passed', '{"checks":["dimensions"]}'::jsonb),
 		t.Fatalf("asset lineage metadata/evidence missing: %#v", completed.Assets[0])
 	}
 	_ = failedVariantID
+}
+
+func TestDownloadCreativeOrderVariantDiagnosticAssetDoesNotRequireWorkspaceHeader(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	issueID, candidateID := createCreativeFeedbackCandidate(t, "diagnostic asset download")
+	var orderID, itemID, variantID string
+	if err := testPool.QueryRow(t.Context(), `
+INSERT INTO creative_order (workspace_id, issue_id, status, input_snapshot, created_by)
+VALUES ($1, $2, 'running', '{}'::jsonb, $3) RETURNING id::text
+`, testWorkspaceID, issueID, testUserID).Scan(&orderID); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _, _ = testPool.Exec(t.Context(), `DELETE FROM creative_order WHERE id = $1`, orderID) })
+	if err := testPool.QueryRow(t.Context(), `
+INSERT INTO creative_order_item (order_id, candidate_id, copy_snapshot)
+VALUES ($1, $2, '{}'::jsonb) RETURNING id::text
+`, orderID, candidateID).Scan(&itemID); err != nil {
+		t.Fatal(err)
+	}
+	if err := testPool.QueryRow(t.Context(), `
+INSERT INTO creative_order_variant (order_item_id, variant_key, revision, status)
+VALUES ($1, 'V01', 1, 'action_required') RETURNING id::text
+`, itemID).Scan(&variantID); err != nil {
+		t.Fatal(err)
+	}
+	workDir := t.TempDir()
+	filename := "square-model-output.png"
+	if err := os.WriteFile(filepath.Join(workDir, filename), []byte("diagnostic-png"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	agentID := createHandlerTestAgent(t, "diagnostic-download-"+uuid.NewString(), nil)
+	taskContext, err := json.Marshal(map[string]any{
+		"type": "creative_domain_task", "workflow": "creative_production",
+		"creative_order_id": orderID, "variant_id": variantID, "revision": 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var taskID string
+	if err := testPool.QueryRow(t.Context(), `
+INSERT INTO agent_task_queue (agent_id, runtime_id, issue_id, status, context, work_dir, completed_at)
+VALUES ($1, $2, $3, 'failed', $4::jsonb, $5, now()) RETURNING id::text
+`, agentID, handlerTestRuntimeID(t), issueID, taskContext, workDir).Scan(&taskID); err != nil {
+		t.Fatal(err)
+	}
+	diagnosticID := creativeOrderDiagnosticAssetID(taskID, filename)
+	req := httptest.NewRequest(http.MethodGet, "/api/creative/orders/"+orderID+"/variants/"+variantID+"/diagnostic-assets/"+diagnosticID, nil)
+	req.Header.Set("X-User-ID", testUserID)
+	req = withURLParams(req, "id", orderID, "variantId", variantID, "diagnosticId", diagnosticID)
+	w := httptest.NewRecorder()
+
+	testHandler.DownloadCreativeOrderVariantDiagnosticAsset(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("DownloadCreativeOrderVariantDiagnosticAsset = %d %s", w.Code, w.Body.String())
+	}
+	if got := w.Body.String(); got != "diagnostic-png" {
+		t.Fatalf("diagnostic body = %q", got)
+	}
 }
 
 func TestCreativeOrderDerivedStatusSeparatesReviewFromActiveGeneration(t *testing.T) {
@@ -827,14 +925,27 @@ VALUES ($1, 1, 'text', 'initial diagnostic'),
 	if failure.TaskID != taskID || failure.FailureReason != "agent_reported_action_required" || failure.Error != "OPENAI_API_KEY is required for image generation" || !failure.Retryable {
 		t.Fatalf("reported action-required failure = %#v", failure)
 	}
+	if len(order.Items) != 1 || len(order.Items[0].Variants) != 1 || order.Items[0].Variants[0].ActionRequired == nil {
+		t.Fatalf("reported action-required variant did not expose blocker detail: %#v", order.Items)
+	}
+	blocker := order.Items[0].Variants[0].ActionRequired
+	if blocker.TaskID != taskID || blocker.Workflow != "creative_production" || blocker.Detail != "OPENAI_API_KEY is required for image generation" || !blocker.Retryable {
+		t.Fatalf("variant blocker = %#v, want task-level production diagnostic", blocker)
+	}
 
 	if _, err := testPool.Exec(t.Context(), `UPDATE agent_task_queue SET attempt = max_attempts WHERE id = $1`, taskID); err != nil {
 		t.Fatal(err)
 	}
-	if failure := getOrder().WorkflowFailures[0]; failure.Retryable {
-		t.Fatalf("exhausted reported action-required failure is retryable: %#v", failure)
+	if failure := getOrder().WorkflowFailures[0]; !failure.Retryable {
+		t.Fatalf("second production action-required failure should keep one manual retry after a platform fix: %#v", failure)
 	}
-	if _, err := testPool.Exec(t.Context(), `UPDATE agent_task_queue SET attempt = 1 WHERE id = $1`, taskID); err != nil {
+	if _, err := testPool.Exec(t.Context(), `UPDATE agent_task_queue SET attempt = 3, max_attempts = 3 WHERE id = $1`, taskID); err != nil {
+		t.Fatal(err)
+	}
+	if failure := getOrder().WorkflowFailures[0]; failure.Retryable {
+		t.Fatalf("third production action-required failure is retryable: %#v", failure)
+	}
+	if _, err := testPool.Exec(t.Context(), `UPDATE agent_task_queue SET attempt = 1, max_attempts = 2 WHERE id = $1`, taskID); err != nil {
 		t.Fatal(err)
 	}
 	retry := httptest.NewRecorder()
@@ -877,8 +988,16 @@ FROM agent_task_queue WHERE id = $1
 	if err := json.Unmarshal(contextValue, &parentContext); err != nil {
 		t.Fatal(err)
 	}
-	if child.AgentID != agentID || child.Status != "queued" || child.Attempt != 2 || child.RetryOfTaskID != taskID || child.SessionID != "" || child.WorkDir != "" || !child.FreshSession || !reflect.DeepEqual(childContext, parentContext) {
-		t.Fatalf("recovery child = %#v, want same direct task context with retry lineage", child)
+	if child.AgentID != agentID || child.Status != "queued" || child.Attempt != 2 || child.RetryOfTaskID != taskID || child.SessionID != "" || child.WorkDir != "" || !child.FreshSession {
+		t.Fatalf("recovery child lineage = %#v, want queued retry with clean execution state", child)
+	}
+	for _, key := range []string{"type", "workflow", "creative_order_id", "creative_order_item_id", "variant_id", "expected_sizes"} {
+		if fmt.Sprint(childContext[key]) != fmt.Sprint(parentContext[key]) {
+			t.Fatalf("recovery child context[%s]=%#v, want %#v in %#v", key, childContext[key], parentContext[key], childContext)
+		}
+	}
+	if childContext["scope"] != "variant" || childContext["subject_id"] != variantID || childContext["revision"] != float64(1) || childContext["item_key"] != variantID+":r1" {
+		t.Fatalf("recovery child context was not normalized to current production identity: %#v", childContext)
 	}
 	var variantStatus, variantBrief string
 	if err := testPool.QueryRow(t.Context(), `SELECT status, brief::text FROM creative_order_variant WHERE id = $1`, variantID).Scan(&variantStatus, &variantBrief); err != nil {
@@ -899,6 +1018,180 @@ FROM agent_task_queue WHERE id = $1
 	}
 	if failures := getOrder().WorkflowFailures; len(failures) != 0 {
 		t.Fatalf("completed variant retained reported failure: %#v", failures)
+	}
+}
+
+func TestCreativeOrderWorkflowFailuresLinkManualCreativeTaskByVariant(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	_, candidateID := createCreativeFeedbackCandidate(t, "manual creative production trace")
+	var orderID, itemID, variantID, taskID string
+	if err := testPool.QueryRow(t.Context(), `
+INSERT INTO creative_order (workspace_id, status, input_snapshot, created_by)
+VALUES ($1, 'running', '{}'::jsonb, $2) RETURNING id::text
+`, testWorkspaceID, testUserID).Scan(&orderID); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _, _ = testPool.Exec(t.Context(), `DELETE FROM creative_order WHERE id = $1`, orderID) })
+	if err := testPool.QueryRow(t.Context(), `
+INSERT INTO creative_order_item (order_id, candidate_id, copy_snapshot)
+VALUES ($1, $2, '{}'::jsonb) RETURNING id::text
+`, orderID, candidateID).Scan(&itemID); err != nil {
+		t.Fatal(err)
+	}
+	if err := testPool.QueryRow(t.Context(), `
+INSERT INTO creative_order_variant (order_item_id, variant_key, revision, status)
+VALUES ($1, 'V01', 1, 'queued') RETURNING id::text
+`, itemID).Scan(&variantID); err != nil {
+		t.Fatal(err)
+	}
+	contextValue, err := json.Marshal(map[string]any{
+		"type": "creative_domain_task", "workflow": "creative_production",
+		"variant_id": variantID, "revision": 1, "item_key": variantID + ":r1",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	agentID := createHandlerTestAgent(t, "manual-creative-trace-"+uuid.NewString(), nil)
+	if err := testPool.QueryRow(t.Context(), `
+INSERT INTO agent_task_queue (
+  agent_id, runtime_id, status, context, trigger_evidence_kind, trigger_evidence_ref_id,
+  completed_at, attempt, max_attempts
+)
+VALUES ($1, $2, 'completed', $3::jsonb, 'manual', $4, now(), 1, 2)
+RETURNING id::text
+`, agentID, handlerTestRuntimeID(t), contextValue, orderID).Scan(&taskID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := testPool.Exec(t.Context(), `
+INSERT INTO task_message (task_id, seq, type, content)
+VALUES ($1, 1, 'text', 'manual production task did not register generated assets')
+`, taskID); err != nil {
+		t.Fatal(err)
+	}
+
+	w := httptest.NewRecorder()
+	req := withURLParam(newRequest(http.MethodGet, "/api/creative/orders/"+orderID, nil), "id", orderID)
+	testHandler.GetCreativeOrder(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("GetCreativeOrder: %d %s", w.Code, w.Body.String())
+	}
+	var order creativeOrderResponse
+	if err := json.NewDecoder(w.Body).Decode(&order); err != nil {
+		t.Fatal(err)
+	}
+	if order.DerivedStatus != "action_required" || len(order.WorkflowFailures) != 1 {
+		t.Fatalf("manual creative task not linked to order: %#v", order)
+	}
+	if order.WorkflowFailures[0].TaskID != taskID || order.WorkflowFailures[0].TriggerEvidenceKind != "manual" {
+		t.Fatalf("manual creative failure = %#v", order.WorkflowFailures[0])
+	}
+	if len(order.Items) != 1 || len(order.Items[0].Variants) != 1 || order.Items[0].Variants[0].ActionRequired == nil {
+		t.Fatalf("manual creative variant blocker missing: %#v", order.Items)
+	}
+}
+
+func TestCreativeOrderWorkflowFailuresExposeCompletedProductionWithoutArtifacts(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	_, candidateID := createCreativeFeedbackCandidate(t, "completed production without artifacts")
+	var orderID, itemID, variantID, taskID string
+	if err := testPool.QueryRow(t.Context(), `
+INSERT INTO creative_order (workspace_id, status, input_snapshot, created_by)
+VALUES ($1, 'running', '{}'::jsonb, $2) RETURNING id::text
+`, testWorkspaceID, testUserID).Scan(&orderID); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _, _ = testPool.Exec(t.Context(), `DELETE FROM creative_order WHERE id = $1`, orderID) })
+	if err := testPool.QueryRow(t.Context(), `
+INSERT INTO creative_order_item (order_id, candidate_id, copy_snapshot)
+VALUES ($1, $2, '{}'::jsonb) RETURNING id::text
+`, orderID, candidateID).Scan(&itemID); err != nil {
+		t.Fatal(err)
+	}
+	if err := testPool.QueryRow(t.Context(), `
+INSERT INTO creative_order_variant (order_item_id, variant_key, revision, status)
+VALUES ($1, 'V01', 1, 'queued') RETURNING id::text
+`, itemID).Scan(&variantID); err != nil {
+		t.Fatal(err)
+	}
+	contextValue, err := json.Marshal(map[string]any{
+		"type": "creative_domain_task", "workflow": "creative_production", "creative_order_id": orderID,
+		"creative_order_item_id": itemID, "variant_id": variantID, "scope": "variant", "item_key": variantID + ":r0",
+		"revision": 0,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	agentID := createHandlerTestAgent(t, "creative-completed-no-artifacts-"+uuid.NewString(), nil)
+	if err := testPool.QueryRow(t.Context(), `
+INSERT INTO agent_task_queue (
+  agent_id, runtime_id, status, context, trigger_evidence_kind, trigger_evidence_ref_id,
+  completed_at, attempt, max_attempts
+)
+VALUES ($1, $2, 'completed', $3::jsonb, 'creative_order_item_production', $4, now(), 1, 2)
+RETURNING id::text
+`, agentID, handlerTestRuntimeID(t), contextValue, itemID).Scan(&taskID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := testPool.Exec(t.Context(), `
+INSERT INTO task_message (task_id, seq, type, content)
+VALUES ($1, 1, 'text', 'Production task ended without registering generated assets')
+`, taskID); err != nil {
+		t.Fatal(err)
+	}
+
+	getOrder := func() creativeOrderResponse {
+		t.Helper()
+		w := httptest.NewRecorder()
+		req := withURLParam(newRequest(http.MethodGet, "/api/creative/orders/"+orderID, nil), "id", orderID)
+		testHandler.GetCreativeOrder(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("GetCreativeOrder: %d %s", w.Code, w.Body.String())
+		}
+		var order creativeOrderResponse
+		if err := json.NewDecoder(w.Body).Decode(&order); err != nil {
+			t.Fatal(err)
+		}
+		return order
+	}
+	order := getOrder()
+	if order.DerivedStatus != "action_required" || len(order.WorkflowFailures) != 1 {
+		t.Fatalf("stalled order = %#v, want action_required with one failure", order)
+	}
+	failure := order.WorkflowFailures[0]
+	if failure.TaskID != taskID || failure.FailureReason != "agent_reported_action_required" || !failure.Retryable {
+		t.Fatalf("stalled failure = %#v", failure)
+	}
+
+	retry := httptest.NewRecorder()
+	retryRequest := withURLParams(
+		newRequest(http.MethodPost, "/api/creative/orders/"+orderID+"/workflow-failures/"+taskID+"/retry", nil),
+		"id", orderID, "taskId", taskID,
+	)
+	testHandler.RetryCreativeOrderWorkflowFailure(retry, retryRequest)
+	if retry.Code != http.StatusOK {
+		t.Fatalf("RetryCreativeOrderWorkflowFailure: %d %s", retry.Code, retry.Body.String())
+	}
+	var retried creativeOrderWorkflowRetryResponse
+	if err := json.NewDecoder(retry.Body).Decode(&retried); err != nil {
+		t.Fatal(err)
+	}
+	var childContext map[string]any
+	var childStatus, variantStatus string
+	if err := testPool.QueryRow(t.Context(), `SELECT status, context FROM agent_task_queue WHERE id = $1`, retried.TaskID).Scan(&childStatus, &contextValue); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(contextValue, &childContext); err != nil {
+		t.Fatal(err)
+	}
+	if err := testPool.QueryRow(t.Context(), `SELECT status FROM creative_order_variant WHERE id = $1`, variantID).Scan(&variantStatus); err != nil {
+		t.Fatal(err)
+	}
+	if childStatus != "queued" || variantStatus != "running" || childContext["revision"] != float64(1) || childContext["item_key"] != variantID+":r1" {
+		t.Fatalf("retry child status=%q variant=%q context=%#v", childStatus, variantStatus, childContext)
 	}
 }
 
@@ -1006,7 +1299,7 @@ VALUES ($1, 'v01', 2, 'action_required') RETURNING id::text
 	productionContext, err := json.Marshal(map[string]any{
 		"type": "creative_domain_task", "workflow": "creative_production", "creative_order_id": orderID,
 		"creative_order_item_id": itemID, "variant_id": variantID, "scope": "variant", "item_key": variantID + ":r2",
-		"expected_sizes": expectedSizes,
+		"revision": 2, "expected_sizes": expectedSizes,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -1065,6 +1358,19 @@ WHERE variant_id = $1 AND revision = 2 AND stage = 'generated' AND size_key = '8
 	}
 	if failures := getOrder().WorkflowFailures; len(failures) != 1 || failures[0].TaskID != productionTaskID || failures[0].FailureReason != "agent_reported_action_required" {
 		t.Fatalf("incomplete production assets did not retain the reported failure: %#v", failures)
+	}
+	if _, err := testPool.Exec(t.Context(), `
+UPDATE creative_order_variant SET revision = 3, status = 'running' WHERE id = $1
+`, variantID); err != nil {
+		t.Fatal(err)
+	}
+	if failures := getOrder().WorkflowFailures; len(failures) != 0 {
+		t.Fatalf("stale revision production failure leaked into current order: %#v", failures)
+	}
+	if _, err := testPool.Exec(t.Context(), `
+UPDATE creative_order_variant SET revision = 2, status = 'action_required' WHERE id = $1
+`, variantID); err != nil {
+		t.Fatal(err)
 	}
 	if _, err := testPool.Exec(t.Context(), `
 INSERT INTO creative_order_asset (variant_id, size_key, revision, stage, metadata, evidence, status)
@@ -1508,6 +1814,67 @@ VALUES ($1, '800x1000', 1, 'generated', '{}'::jsonb, '{}'::jsonb, 'completed')`,
 	}
 }
 
+func TestCreativeOrderAssetPutAcceptsAgentEnvelopeAliases(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	_, candidateID := createCreativeFeedbackCandidate(t, "asset envelope alias")
+	var orderID, itemID, variantID string
+	if err := testPool.QueryRow(t.Context(), `
+INSERT INTO creative_order (workspace_id, status, input_snapshot, created_by)
+VALUES ($1, 'running', '{}'::jsonb, $2) RETURNING id::text`, testWorkspaceID, testUserID).Scan(&orderID); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _, _ = testPool.Exec(t.Context(), `DELETE FROM creative_order WHERE id = $1`, orderID) })
+	if err := testPool.QueryRow(t.Context(), `
+INSERT INTO creative_order_item (order_id, candidate_id, copy_snapshot)
+VALUES ($1, $2, '{}'::jsonb) RETURNING id::text`, orderID, candidateID).Scan(&itemID); err != nil {
+		t.Fatal(err)
+	}
+	if err := testPool.QueryRow(t.Context(), `
+INSERT INTO creative_order_variant (order_item_id, variant_key, revision, status)
+VALUES ($1, 'V01', 1, 'running') RETURNING id::text`, itemID).Scan(&variantID); err != nil {
+		t.Fatal(err)
+	}
+
+	assetPayload := func(size, prompt, requestID string) map[string]any {
+		return map[string]any{
+			"variant_id": variantID,
+			"size":       size,
+			"revision":   1,
+			"stage":      "generated",
+			"status":     "completed",
+			"metadata": map[string]any{
+				"prompt": prompt,
+				"model":  "gpt-image-2",
+			},
+			"evidence": map[string]any{
+				"request_id":    requestID,
+				"attempts":      1,
+				"prompt_sha256": creativePromptSHA256(prompt),
+			},
+		}
+	}
+	cases := []struct {
+		name string
+		body any
+	}{
+		{name: "size alias", body: assetPayload("1080x1080", "alias prompt", "req-alias")},
+		{name: "asset wrapper", body: map[string]any{"asset": assetPayload("1200x628", "wrapped prompt", "req-wrapper")}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			w := httptest.NewRecorder()
+			req := newRequest(http.MethodPut, "/api/creative/orders/"+orderID+"/assets", tc.body)
+			req = withURLParam(req, "id", orderID)
+			testHandler.UpsertCreativeOrderAsset(w, req)
+			if w.Code != http.StatusOK {
+				t.Fatalf("asset put = %d %s", w.Code, w.Body.String())
+			}
+		})
+	}
+}
+
 func TestCreativeQCWriteRejectsHumanAndTerminalTaskTokens(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
@@ -1898,6 +2265,37 @@ FROM agent_task_queue WHERE id = $1
 	variant = after.Items[0].Variants[0]
 	if !variant.PrimeRepairUsed || variant.PrimeRepairAvailable {
 		t.Fatalf("Prime repair flags after repair = used:%t available:%t", variant.PrimeRepairUsed, variant.PrimeRepairAvailable)
+	}
+}
+
+func TestCreativeOrderPrimePackageRepairAvailableForIncompletePackage(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	fixture := createPrimePackageRepairFixture(t, "prime package repair incomplete")
+	if _, err := testPool.Exec(t.Context(), `UPDATE creative_order_variant SET status = 'queued' WHERE id = $1`, fixture.variantID); err != nil {
+		t.Fatal(err)
+	}
+
+	w := httptest.NewRecorder()
+	testHandler.GetCreativeOrder(w, withURLParam(newRequest(http.MethodGet, "/api/creative/orders/"+fixture.orderID, nil), "id", fixture.orderID))
+	if w.Code != http.StatusOK {
+		t.Fatalf("GetCreativeOrder: %d %s", w.Code, w.Body.String())
+	}
+	var order creativeOrderResponse
+	if err := json.NewDecoder(w.Body).Decode(&order); err != nil {
+		t.Fatal(err)
+	}
+	variant := order.Items[0].Variants[0]
+	if variant.PrimeRepairUsed || !variant.PrimeRepairAvailable {
+		t.Fatalf("incomplete Prime package repair flags = used:%t available:%t", variant.PrimeRepairUsed, variant.PrimeRepairAvailable)
+	}
+
+	req := withURLParams(newRequest(http.MethodPost, "/api/creative/orders/"+fixture.orderID+"/variants/"+fixture.variantID+"/prime-package-repair", nil), "id", fixture.orderID, "variantId", fixture.variantID)
+	w = httptest.NewRecorder()
+	testHandler.RepairCreativeOrderVariantPrimePackage(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("RepairCreativeOrderVariantPrimePackage: %d %s", w.Code, w.Body.String())
 	}
 }
 
@@ -2368,36 +2766,45 @@ VALUES ($1, $2, '{}'::jsonb) RETURNING id::text`, orderID, candidateID).Scan(&it
 		t.Cleanup(func() { _, _ = testPool.Exec(t.Context(), `DELETE FROM creative_order WHERE id = $1`, orderID) })
 		return orderID, itemID
 	}
-	upsert := func(orderID, itemID string, revision int) int {
+	upsert := func(orderID, itemID string, revision int, status string) int {
 		w := httptest.NewRecorder()
-		req := newRequest(http.MethodPut, "/api/creative/orders/"+orderID+"/variants", creativeOrderVariantInput{OrderItemID: itemID, VariantKey: "v01", Brief: json.RawMessage(`{}`), Revision: revision, Status: "running"})
+		req := newRequest(http.MethodPut, "/api/creative/orders/"+orderID+"/variants", creativeOrderVariantInput{OrderItemID: itemID, VariantKey: "v01", Brief: json.RawMessage(`{}`), Revision: revision, Status: status})
 		req = withURLParam(req, "id", orderID)
 		testHandler.UpsertCreativeOrderVariant(w, req)
 		return w.Code
 	}
 
 	standardOrderID, standardItemID := create("manual")
-	if code := upsert(standardOrderID, standardItemID, 1); code != http.StatusOK {
+	if code := upsert(standardOrderID, standardItemID, 1, "running"); code != http.StatusOK {
 		t.Fatalf("standard r1 = %d", code)
 	}
-	if code := upsert(standardOrderID, standardItemID, 2); code != http.StatusOK {
+	if code := upsert(standardOrderID, standardItemID, 2, "running"); code != http.StatusOK {
 		t.Fatalf("standard r2 = %d", code)
 	}
-	if code := upsert(standardOrderID, standardItemID, 3); code != http.StatusConflict {
+	if code := upsert(standardOrderID, standardItemID, 3, "running"); code != http.StatusConflict {
 		t.Fatalf("standard r3 = %d, want 409", code)
+	}
+	if code := upsert(standardOrderID, standardItemID, 2, "action_required"); code != http.StatusOK {
+		t.Fatalf("standard r2 action_required = %d", code)
+	}
+	if code := upsert(standardOrderID, standardItemID, 3, "running"); code != http.StatusOK {
+		t.Fatalf("standard failed r3 = %d", code)
+	}
+	if code := upsert(standardOrderID, standardItemID, 4, "running"); code != http.StatusConflict {
+		t.Fatalf("standard r4 = %d, want 409", code)
 	}
 
 	directOrderID, directItemID := create("creative_direct_edit")
-	if code := upsert(directOrderID, directItemID, 1); code != http.StatusOK {
+	if code := upsert(directOrderID, directItemID, 1, "running"); code != http.StatusOK {
 		t.Fatalf("direct r1 = %d", code)
 	}
-	if code := upsert(directOrderID, directItemID, 2); code != http.StatusOK {
+	if code := upsert(directOrderID, directItemID, 2, "running"); code != http.StatusOK {
 		t.Fatalf("direct r2 = %d", code)
 	}
-	if code := upsert(directOrderID, directItemID, 3); code != http.StatusOK {
+	if code := upsert(directOrderID, directItemID, 3, "running"); code != http.StatusOK {
 		t.Fatalf("direct r3 = %d", code)
 	}
-	if code := upsert(directOrderID, directItemID, 4); code != http.StatusConflict {
+	if code := upsert(directOrderID, directItemID, 4, "running"); code != http.StatusConflict {
 		t.Fatalf("direct r4 = %d, want 409", code)
 	}
 }
@@ -2660,7 +3067,7 @@ func TestCreateCreativeOrderFreezesSquadAgentsByCapability(t *testing.T) {
 	w := httptest.NewRecorder()
 	req := newRequest(http.MethodPost, "/api/creative/orders", creativeOrderInput{
 		Status: "queued", InputSnapshot: inputSnapshot, TriggerEvidenceKind: "manual",
-		Items: []creativeOrderItemInput{{CandidateID: candidateID, CopySnapshot: json.RawMessage(`{"schema_version":2,"status":"user_custom","creative_type":"num","headline":"Pinjaman fleksibel"}`), Direction: "freeze agents"}},
+		Items: []creativeOrderItemInput{{CandidateID: candidateID, CopySnapshot: json.RawMessage(`{"schema_version":3,"status":"user_custom","creative_type":"num","headline":"Pinjaman fleksibel"}`), Direction: "freeze agents"}},
 	})
 	testHandler.CreateCreativeOrder(w, req)
 	if w.Code != http.StatusCreated {
@@ -2707,7 +3114,7 @@ func TestCreativeFinancialTokensRecognizeUnseparatedCurrency(t *testing.T) {
 	}
 }
 
-func TestCreateCreativeOrderValidatesCustomCopyAgainstPublishedFacts(t *testing.T) {
+func TestCreateCreativeOrderAllowsManualFinancialCopyAndPersistsIt(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
 	}
@@ -2736,29 +3143,25 @@ VALUES ($1, 1, 'Approved custom copy facts', '', $2::jsonb, $3)
 	if err != nil {
 		t.Fatal(err)
 	}
-	requestOrder := func(benefit string) *httptest.ResponseRecorder {
+	requestOrder := func(snapshot map[string]any, direction string) *httptest.ResponseRecorder {
 		t.Helper()
-		copySnapshot, marshalErr := json.Marshal(map[string]any{
-			"schema_version": 2,
-			"status":         "user_custom",
-			"creative_type":  "num",
-			"headline":       "Pinjaman fleksibel",
-			"benefit":        benefit,
-			"cta":            "Ajukan sekarang",
-		})
+		copySnapshot, marshalErr := json.Marshal(snapshot)
 		if marshalErr != nil {
 			t.Fatal(marshalErr)
 		}
 		w := httptest.NewRecorder()
 		req := newRequest(http.MethodPost, "/api/creative/orders", creativeOrderInput{
 			Status: "queued", InputSnapshot: inputSnapshot, TriggerEvidenceKind: "manual",
-			Items: []creativeOrderItemInput{{CandidateID: candidateID, CopySnapshot: copySnapshot}},
+			Items: []creativeOrderItemInput{{CandidateID: candidateID, CopySnapshot: copySnapshot, Direction: direction}},
 		})
 		testHandler.CreateCreativeOrder(w, req)
 		return w
 	}
 
-	approved := requestOrder("Limit hingga Rp80.000.000")
+	approved := requestOrder(map[string]any{
+		"schema_version": 3, "status": "user_custom", "creative_type": "num",
+		"headline": "Pinjaman fleksibel", "benefit": "Limit hingga Rp80.000.000", "cta": "Ajukan sekarang",
+	}, "Benefit: Limit hingga Rp80.000.000")
 	if approved.Code != http.StatusCreated {
 		t.Fatalf("approved custom fact = %d %s", approved.Code, approved.Body.String())
 	}
@@ -2768,44 +3171,46 @@ VALUES ($1, 1, 'Approved custom copy facts', '', $2::jsonb, $3)
 	}
 	t.Cleanup(func() { _, _ = testPool.Exec(t.Context(), `DELETE FROM creative_order WHERE id = $1`, created.ID) })
 
-	rejected := requestOrder("Limit hingga Rp99.000.000 dengan bunga 1%")
-	if rejected.Code != http.StatusUnprocessableEntity || !strings.Contains(rejected.Body.String(), "unapproved financial facts") {
-		t.Fatalf("unapproved custom fact = %d %s", rejected.Code, rejected.Body.String())
+	manualValue := "Limit hingga Rp99.000.000 dengan bunga 1%"
+	manualDirection := "中心金额区 (benefit): " + manualValue
+	manual := requestOrder(map[string]any{
+		"schema_version": 3, "status": "model_pre_adapted", "creative_type": "num",
+		"library_id": libraryID, "library_version": 1,
+		"headline": "Pinjaman fleksibel", "benefit": manualValue, "cta": "Ajukan sekarang",
+		"pre_adaptation": map[string]any{
+			"schema_version": 1,
+			"text_replacements": []map[string]any{{
+				"block_id": "center-benefit", "replacement_text": manualValue, "source_kind": "manual", "status": "ready",
+			}},
+		},
+	}, manualDirection)
+	if manual.Code != http.StatusCreated {
+		t.Fatalf("manual financial copy = %d %s", manual.Code, manual.Body.String())
 	}
-
-	requestApprovedSnapshot := func(benefit string) *httptest.ResponseRecorder {
-		t.Helper()
-		copySnapshot, marshalErr := json.Marshal(map[string]any{
-			"schema_version": 2, "status": "approved", "id": "recipe-num",
-			"library_id": libraryID, "library_version": 1, "recipe_id": "recipe-num", "recipe_key": "num", "creative_type": "num",
-			"headline": "", "subheadline": "", "benefit": benefit, "supporting": "", "cta": "", "legal_text": "",
-			"fragments":     []map[string]any{{"id": "fragment-num", "key": "num", "role": "benefit", "text": benefit}},
-			"product_facts": []map[string]any{{"key": "limit", "label": "Limit", "value": "80000000", "copy_text": "Rp80.000.000", "source": "approved sheet"}},
-		})
-		if marshalErr != nil {
-			t.Fatal(marshalErr)
-		}
-		w := httptest.NewRecorder()
-		testHandler.CreateCreativeOrder(w, newRequest(http.MethodPost, "/api/creative/orders", creativeOrderInput{
-			Status: "queued", InputSnapshot: inputSnapshot, TriggerEvidenceKind: "manual",
-			Items: []creativeOrderItemInput{{CandidateID: candidateID, CopySnapshot: copySnapshot}},
-		}))
-		return w
-	}
-
-	frozen := requestApprovedSnapshot("Limit hingga Rp80.000.000")
-	if frozen.Code != http.StatusCreated {
-		t.Fatalf("frozen approved recipe = %d %s", frozen.Code, frozen.Body.String())
-	}
-	var frozenOrder creativeOrderResponse
-	if err := json.NewDecoder(frozen.Body).Decode(&frozenOrder); err != nil {
+	var manualOrder creativeOrderResponse
+	if err := json.NewDecoder(manual.Body).Decode(&manualOrder); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _, _ = testPool.Exec(t.Context(), `DELETE FROM creative_order WHERE id = $1`, frozenOrder.ID) })
-
-	tampered := requestApprovedSnapshot("Limit hingga Rp99.000.000")
-	if tampered.Code != http.StatusUnprocessableEntity || !strings.Contains(tampered.Body.String(), "frozen published recipe") {
-		t.Fatalf("tampered approved recipe = %d %s", tampered.Code, tampered.Body.String())
+	t.Cleanup(func() { _, _ = testPool.Exec(t.Context(), `DELETE FROM creative_order WHERE id = $1`, manualOrder.ID) })
+	var persistedSnapshot json.RawMessage
+	var persistedDirection string
+	if err := testPool.QueryRow(t.Context(), `SELECT copy_snapshot::text, direction FROM creative_order_item WHERE order_id = $1`, manualOrder.ID).Scan(&persistedSnapshot, &persistedDirection); err != nil {
+		t.Fatal(err)
+	}
+	var persisted struct {
+		Benefit       string `json:"benefit"`
+		PreAdaptation struct {
+			TextReplacements []struct {
+				ReplacementText string `json:"replacement_text"`
+				SourceKind      string `json:"source_kind"`
+			} `json:"text_replacements"`
+		} `json:"pre_adaptation"`
+	}
+	if err := json.Unmarshal(persistedSnapshot, &persisted); err != nil {
+		t.Fatal(err)
+	}
+	if persisted.Benefit != manualValue || len(persisted.PreAdaptation.TextReplacements) != 1 || persisted.PreAdaptation.TextReplacements[0].ReplacementText != manualValue || persisted.PreAdaptation.TextReplacements[0].SourceKind != "manual" || persistedDirection != manualDirection {
+		t.Fatalf("manual copy was not frozen for production: snapshot=%s direction=%q", persistedSnapshot, persistedDirection)
 	}
 }
 
@@ -2885,7 +3290,7 @@ func TestCreativeSubmissionKeyRecoversIssueAndConcurrentOrder(t *testing.T) {
 		w := httptest.NewRecorder()
 		req := newRequest(http.MethodPost, "/api/creative/orders", creativeOrderInput{
 			IssueID: issue.ID, SubmissionKey: key, Status: "queued", InputSnapshot: inputSnapshot, TriggerEvidenceKind: "manual",
-			Items: []creativeOrderItemInput{{CandidateID: candidateID, CopySnapshot: json.RawMessage(`{"schema_version":2,"status":"user_custom","creative_type":"num","headline":"Pinjaman fleksibel"}`), Direction: "recover submission"}},
+			Items: []creativeOrderItemInput{{CandidateID: candidateID, CopySnapshot: json.RawMessage(`{"schema_version":3,"status":"user_custom","creative_type":"num","headline":"Pinjaman fleksibel"}`), Direction: "recover submission"}},
 		})
 		testHandler.CreateCreativeOrder(w, req)
 		var order creativeOrderResponse

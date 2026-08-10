@@ -31,7 +31,7 @@ export function creativeAdjustmentProgress(variant: CreativeOrderVariant | undef
   const sourceRevision = adjustmentSourceRevision(event);
   if (!variant || variant.revision <= sourceRevision) return "已提交，等待素材小队处理";
   if (variant.status === "completed") return `调整已完成 · r${variant.revision}`;
-  if (variant.status === "action_required" || variant.status === "failed") return `调整结果需要处理 · r${variant.revision}`;
+  if (variant.status === "action_required" || variant.status === "failed") return `调整结果待验收 · r${variant.revision}`;
   return `素材小队处理中 · r${variant.revision}`;
 }
 

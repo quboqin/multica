@@ -85,6 +85,7 @@ type creativeMaterialCrawlRunResponse struct {
 	Status           string                             `json:"status"`
 	ErrorCode        string                             `json:"error_code"`
 	ErrorMessage     string                             `json:"error_message"`
+	Diagnostics      json.RawMessage                    `json:"diagnostics"`
 	ImportedCount    int                                `json:"imported_count"`
 	ExistingCount    int                                `json:"existing_count"`
 	TotalCount       int                                `json:"total_count"`
@@ -344,6 +345,58 @@ WHERE id = $1::uuid AND workspace_id = $2
 `, runID, workspaceID, status, strings.TrimSpace(errorCode), strings.TrimSpace(errorMessage)); err != nil {
 		slog.Warn("mark creative crawl run failed", "crawl_run_id", runID, "error", err)
 	}
+}
+
+func (h *Handler) recordCreativeMaterialCrawlDiagnostics(ctx context.Context, workspaceID pgtype.UUID, runID string, raw json.RawMessage) {
+	if strings.TrimSpace(runID) == "" {
+		return
+	}
+	diagnostics := creativeMaterialCrawlDiagnostics(raw)
+	if _, err := h.DB.Exec(ctx, `
+UPDATE creative_material_crawl_run
+SET diagnostics = $3::jsonb
+WHERE id = $1::uuid AND workspace_id = $2
+`, runID, workspaceID, diagnostics); err != nil {
+		slog.Warn("record creative crawl diagnostics failed", "crawl_run_id", runID, "error", err)
+	}
+}
+
+func creativeMaterialCrawlDiagnostics(raw json.RawMessage) []byte {
+	var root map[string]json.RawMessage
+	if len(raw) == 0 || json.Unmarshal(raw, &root) != nil {
+		return []byte(`{}`)
+	}
+	diagnostics := map[string]json.RawMessage{}
+	for _, key := range []string{"diagnosis", "strategy", "totals", "competitor_diagnostics", "auto_adjustments"} {
+		if value, ok := root[key]; ok && json.Valid(value) {
+			diagnostics[key] = value
+		}
+	}
+	if len(diagnostics) == 0 {
+		return []byte(`{}`)
+	}
+	encoded, err := json.Marshal(diagnostics)
+	if err != nil {
+		return []byte(`{}`)
+	}
+	return encoded
+}
+
+func creativeCrawlFailureFromDiagnostics(raw json.RawMessage, fallback string) (string, string) {
+	var payload struct {
+		Diagnosis struct {
+			Classification string `json:"classification"`
+			Summary        string `json:"summary"`
+		} `json:"diagnosis"`
+	}
+	if json.Unmarshal(raw, &payload) == nil {
+		code := strings.TrimSpace(payload.Diagnosis.Classification)
+		message := strings.TrimSpace(payload.Diagnosis.Summary)
+		if code != "" && message != "" {
+			return code, message
+		}
+	}
+	return "creative_material_crawl_failed", firstNonEmpty(strings.TrimSpace(fallback), "material collection failed")
 }
 
 func (h *Handler) importCreativeMaterialsForIssue(ctx context.Context, in creativeMaterialImportInput) (creativeImportSummary, error) {
@@ -733,7 +786,7 @@ WITH crawl_candidate_analysis AS (
 SELECT cr.id::text, cr.workspace_id::text, COALESCE(cr.issue_id::text, ''),
        COALESCE(cr.autopilot_run_id::text, ''), COALESCE(cr.rerun_of_id::text, ''),
        cr.connector_id, cr.query_summary, COALESCE(cr.params->>'analysis_agent_id', ''),
-       cr.status, cr.error_code, cr.error_message,
+       cr.status, cr.error_code, cr.error_message, cr.diagnostics,
        cr.imported_count, cr.existing_count, cr.total_count,
        count(rc.candidate_id)::int,
        count(*) FILTER (WHERE rc.analysis_status = 'completed')::int,
@@ -759,7 +812,7 @@ LIMIT 20
 		if err := rows.Scan(
 			&item.ID, &item.WorkspaceID, &item.IssueID, &item.AutopilotRunID, &item.RerunOfID,
 			&item.ConnectorID, &item.QuerySummary, &item.AnalysisAgentID,
-			&item.Status, &item.ErrorCode, &item.ErrorMessage,
+			&item.Status, &item.ErrorCode, &item.ErrorMessage, &item.Diagnostics,
 			&item.ImportedCount, &item.ExistingCount, &item.TotalCount,
 			&item.CandidateMetrics.Total, &item.CandidateMetrics.Analyzed, &item.CandidateMetrics.AnalysisFailed,
 			&item.CandidateMetrics.Selected, &item.CandidateMetrics.Rejected,

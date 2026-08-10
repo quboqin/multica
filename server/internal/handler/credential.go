@@ -348,6 +348,7 @@ func (h *Handler) RunCredentialCrawl(w http.ResponseWriter, r *http.Request) {
 	}
 	var issue db.Issue
 	hasIssue := false
+	strategyProjectID := pgtype.UUID{}
 	if strings.TrimSpace(req.IssueID) != "" {
 		var ok bool
 		issue, ok = h.loadIssueForUser(w, r, req.IssueID)
@@ -359,14 +360,16 @@ func (h *Handler) RunCredentialCrawl(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		hasIssue = true
-		req.Params = h.materialSearchParamsWithStrategyMemory(r.Context(), issue, req.ConnectorID, req.Capability, req.Params)
-		var noveltyErr error
-		req.Params, noveltyErr = h.materialSearchParamsWithNovelty(r.Context(), issue.WorkspaceID, req.ConnectorID, req.Capability, req.Params)
-		if noveltyErr != nil {
-			slog.Warn("load creative material novelty exclusions failed", append(logger.RequestAttrs(r), "error", noveltyErr, "issue_id", req.IssueID)...)
-			writeError(w, http.StatusInternalServerError, "failed to prepare material novelty filter")
-			return
-		}
+		workspaceID = issue.WorkspaceID
+		strategyProjectID = issue.ProjectID
+	}
+	req.Params = h.materialSearchParamsWithStrategyMemory(r.Context(), workspaceID, strategyProjectID, req.ConnectorID, req.Capability, req.Params)
+	var noveltyErr error
+	req.Params, noveltyErr = h.materialSearchParamsWithNovelty(r.Context(), workspaceID, req.ConnectorID, req.Capability, req.Params)
+	if noveltyErr != nil {
+		slog.Warn("load creative material novelty exclusions failed", append(logger.RequestAttrs(r), "error", noveltyErr, "issue_id", req.IssueID)...)
+		writeError(w, http.StatusInternalServerError, "failed to prepare material novelty filter")
+		return
 	}
 	importInput := creativeMaterialImportInput{
 		WorkspaceID:    workspaceID,
@@ -424,6 +427,23 @@ func (h *Handler) RunCredentialCrawl(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
+	h.recordCreativeMaterialCrawlDiagnostics(r.Context(), workspaceID, crawlRunID, result.Raw)
+	if result.Status != "completed" && result.Status != "ok" && result.Status != "success" {
+		diagnosis := creativeMaterialCrawlDiagnostics(result.Raw)
+		failureCode, failureMessage := creativeCrawlFailureFromDiagnostics(diagnosis, result.Message)
+		h.failCreativeMaterialCrawlRun(r.Context(), workspaceID, crawlRunID, "failed", failureCode, failureMessage)
+		diagnosisTaskID := h.enqueueCreativeCrawlDiagnosis(
+			r.Context(), workspaceID, requestingUserID, crawlRunID, req.ConnectorID, diagnosis,
+		)
+		writeJSON(w, http.StatusUnprocessableEntity, map[string]any{
+			"status":       result.Status,
+			"message":      failureMessage,
+			"crawl_run_id": crawlRunID,
+			"diagnostics":  json.RawMessage(diagnosis),
+			"diagnosis_task_id": diagnosisTaskID,
+		})
+		return
+	}
 	materials := creativeMaterialsFromCrawlRaw(result.Raw)
 	importInput.Materials = materials
 	importSummary, err := h.importCreativeMaterials(r.Context(), importInput)
@@ -436,10 +456,8 @@ func (h *Handler) RunCredentialCrawl(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	if hasIssue {
-		if err := h.recordCreativeMaterialCrawlStrategyMemory(r.Context(), issue, req.ConnectorID, req.Capability, result.Raw, importSummary.RunID); err != nil {
-			slog.Warn("credential crawl strategy memory update failed", append(logger.RequestAttrs(r), "error", err, "issue_id", req.IssueID)...)
-		}
+	if err := h.recordCreativeMaterialCrawlStrategyMemory(r.Context(), workspaceID, strategyProjectID, req.ConnectorID, req.Capability, result.Raw, importSummary.RunID); err != nil {
+		slog.Warn("credential crawl strategy memory update failed", append(logger.RequestAttrs(r), "error", err, "issue_id", req.IssueID)...)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"status":             result.Status,

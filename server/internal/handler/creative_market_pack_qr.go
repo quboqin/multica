@@ -21,7 +21,10 @@ import (
 	"github.com/makiuchi-d/gozxing/qrcode"
 )
 
-const maxMarketPackTemplateBytes = 64 << 20
+const (
+	maxMarketPackTemplateBytes = 64 << 20
+	minPrimeQRSlotPixels       = 64
+)
 
 var primeCanvasSizes = map[string][2]int{
 	"1080x1080": {1080, 1080},
@@ -38,6 +41,15 @@ var allowedPrimeComponentKinds = []string{"image", "text", "qr"}
 var allowedPrimeQRModes = []string{"none", "static", "dynamic"}
 
 var customPrimeComponentIDPattern = regexp.MustCompile(`^custom_[a-z0-9_]{1,48}$`)
+
+var standardPrimeImageSourceRoles = map[string]string{
+	"logo":         "prime_logo",
+	"terms":        "prime_terms",
+	"store_badges": "prime_store_badges",
+	"regulatory":   "prime_regulatory",
+	"afpi":         "prime_afpi",
+	"pindai_legal": "prime_pindai_legal",
+}
 
 type primeCompositionConfig struct {
 	SchemaVersion int                               `json:"schema_version"`
@@ -143,6 +155,14 @@ func parsePrimeCompositionConfig(config json.RawMessage) (*primeCompositionConfi
 		if component.Kind == "qr" && component.ID != "qr" {
 			return nil, fmt.Errorf("market pack prime component %q cannot use kind qr", component.ID)
 		}
+		if role, standardImage := standardPrimeImageSourceRoles[component.ID]; standardImage && component.Enabled {
+			if component.Kind != "image" {
+				return nil, fmt.Errorf("market pack standard prime component %q must use an image source, not %s", component.ID, component.Kind)
+			}
+			if component.SourceRole != role {
+				return nil, fmt.Errorf("market pack standard prime component %q source_role must be %s", component.ID, role)
+			}
+		}
 		if component.Enabled && component.Kind == "image" && component.SourceRole == "" {
 			return nil, fmt.Errorf("market pack prime image component %q source_role is required", component.ID)
 		}
@@ -174,6 +194,11 @@ func parsePrimeCompositionConfig(config json.RawMessage) (*primeCompositionConfi
 			if err := validatePrimeRect(placement.DestinationRect, canvas, "destination_rect"); err != nil {
 				return nil, fmt.Errorf("market pack %s component %q: %w", size, component.ID, err)
 			}
+			if component.ID == "qr" && composition.QRMode != "none" {
+				if err := validatePrimeQRSlot(placement.DestinationRect); err != nil {
+					return nil, fmt.Errorf("market pack %s component %q: %w", size, component.ID, err)
+				}
+			}
 		}
 	}
 	return &composition, nil
@@ -195,6 +220,15 @@ func validatePrimeRect(rect []int, canvas [2]int, field string) error {
 	}
 	if rect[2] > canvas[0] || rect[3] > canvas[1] {
 		return fmt.Errorf("%s must be a non-empty rectangle inside %dx%d", field, canvas[0], canvas[1])
+	}
+	return nil
+}
+
+func validatePrimeQRSlot(rect []int) error {
+	width := rect[2] - rect[0]
+	height := rect[3] - rect[1]
+	if width < minPrimeQRSlotPixels || height < minPrimeQRSlotPixels {
+		return fmt.Errorf("destination_rect short side must be at least %d px for reliable QR decoding", minPrimeQRSlotPixels)
 	}
 	return nil
 }

@@ -61,6 +61,21 @@ export interface CreativeMaterialCrawlRun {
   status: string;
   error_code: string;
   error_message: string;
+  diagnostics: {
+    diagnosis?: {
+      state?: string;
+      classification?: string;
+      summary?: string;
+      automated_actions?: string[];
+      requires_agent?: boolean;
+      requires_user_action?: boolean;
+      matched_total?: number | null;
+    };
+    strategy?: Record<string, unknown>;
+    totals?: Record<string, unknown>;
+    agent_diagnosis_state?: string;
+    agent_diagnosis_task_id?: string;
+  };
   imported_count: number;
   existing_count: number;
   total_count: number;
@@ -79,6 +94,22 @@ export interface CreativeMaterialCrawlRun {
 export interface CreativeMaterialLibraryResponse {
   candidates: CreativeMaterialCandidate[];
   crawl_runs?: CreativeMaterialCrawlRun[];
+  total_count?: number;
+  next_offset?: number | null;
+}
+
+export interface CreativeMaterialLibraryQuery {
+  runId?: string;
+  limit?: number;
+  offset?: number;
+  query?: string;
+  competitor?: string;
+  area?: string;
+  language?: string;
+  media?: string;
+  assetType?: CreativeMaterialAssetType;
+  view?: "available" | "analyze" | "generated" | "rejected" | "selected" | "all";
+  sort?: "recent" | "impressions" | "duration";
 }
 
 export interface CreativeMaterialsResponse {
@@ -265,12 +296,22 @@ export type CreativeCopyFragmentRole =
 
 export type CreativeCopyFragmentUsage = "core" | "fallback" | "required";
 
+/** Human-facing business grouping from the maintained copy workbook. */
+export type CreativeCopyContentGroup =
+  | "standard_headline"
+  | "core_benefit"
+  | "other_benefit"
+  | "call_to_action"
+  | "repayment_headline";
+
 export interface CreativeCopyFragment {
   id: string;
   key: string;
   name: string;
   creative_types: CreativeType[];
   role: CreativeCopyFragmentRole;
+  /** Business grouping shown to copy operators; recommendation metadata stays separate. */
+  content_group?: CreativeCopyContentGroup;
   /** Business meaning used to keep one fact from each relevant information group. */
   semantic_group?: string;
   text: string;
@@ -290,36 +331,32 @@ export interface CreativeCopyRecipe {
   status: CreativeCopyStatus;
 }
 
-export interface CreativeProductFact {
+/** One approved amount-and-tenor outcome from the business repayment table. */
+export interface CreativeRepaymentPlanEntry {
   id: string;
   key: string;
-  label: string;
-  value: string;
-  copy_text: string;
+  principal: number;
+  tenor_months: number;
+  monthly_installment: number;
+  total_interest: number;
+  total_repayment: number;
   source: string;
   status: CreativeCopyStatus;
 }
 
-export interface CreativeCopyCalculationRule {
-  id: string;
-  key: string;
-  name: string;
-  expression: string;
-  input_fact_keys: string[];
-  output_fact_key: string;
-  source: string;
-  status: CreativeCopyStatus;
-}
-
-export interface CreativeCopyRecommendationPolicy {
-  type_weight: number;
-  tag_weight: number;
-  concise_weight: number;
-  default_creative_type: CreativeType;
+export interface CreativeRepaymentPlan {
+  labels: {
+    principal: string;
+    tenor: string;
+    monthly_installment: string;
+    total_interest: string;
+    total_repayment: string;
+  };
+  entries: CreativeRepaymentPlanEntry[];
 }
 
 export interface CreativeCopyLibraryConfig {
-  schema_version: 2;
+  schema_version: 4;
   market: string;
   locale: string;
   source: {
@@ -330,13 +367,11 @@ export interface CreativeCopyLibraryConfig {
   };
   fragments: CreativeCopyFragment[];
   recipes: CreativeCopyRecipe[];
-  product_facts: CreativeProductFact[];
-  calculation_rules: CreativeCopyCalculationRule[];
-  recommendation_policy: CreativeCopyRecommendationPolicy;
+  repayment_plan: CreativeRepaymentPlan;
 }
 
 export interface CreativeCopySnapshot {
-  schema_version: 2;
+  schema_version: 3;
   id: string;
   library_id: string;
   library_version: number;
@@ -353,13 +388,70 @@ export interface CreativeCopySnapshot {
   cta: string;
   legal_text: string;
   fragments: Array<{ id: string; key: string; role: CreativeCopyFragmentRole; text: string }>;
-  product_facts: Array<{ key: string; label: string; value: string; copy_text: string; source: string }>;
+  repayment_plan_entries: Array<{
+    key: string;
+    principal: number;
+    tenor_months: number;
+    monthly_installment: number;
+    total_interest: number;
+    total_repayment: number;
+    source: string;
+  }>;
   recommendation: {
     score: number;
     reasons: string[];
     matched_signals: string[];
   };
-  status: "approved" | "user_custom";
+  status: "approved" | "model_pre_adapted" | "user_custom";
+  pre_adaptation?: {
+    schema_version: 1;
+    source_analysis_id: string;
+    summary: string;
+    analysis_highlights: string[];
+    text_replacements: Array<{
+      block_id: string;
+      location: string;
+      role: string;
+      semantic_kind?: string;
+      source_text: string;
+      replacement_text: string;
+      source_kind: "library" | "manual" | "recommendation" | "calculation";
+      source_keys: string[];
+      status: "ready" | "missing";
+      note: string;
+      recommendation_basis?: string[];
+      calculation?: {
+        rule_key?: string;
+        formula: string;
+        inputs: string[];
+        result: string;
+      };
+    }>;
+    repayment_plan_selections: Array<{
+      id: string;
+      plan_key: string;
+      principal: number;
+      tenor_months: number;
+      values: {
+        principal: string;
+        tenor: string;
+        total_interest: string;
+        total_repayment: string;
+        monthly_installment: string;
+      };
+    }>;
+    numeric_layouts: Array<{
+      id: string;
+      /** Only the source blocks that render approved repayment labels or values. */
+      source_block_ids: string[];
+      location: string;
+      layout_kind: "table" | "card_grid" | "comparison" | "single_card" | "single_value" | "option_buttons" | "table_row" | "principal" | "tenor" | "repayment_table";
+      scenario_ids: string[];
+      target_columns: Array<"principal" | "tenor" | "monthly_installment" | "total_interest" | "total_repayment">;
+      render_instruction: string;
+    }>;
+    production_prompt: string;
+  };
 }
 
 export interface CreativeCopyEntry {
@@ -594,7 +686,9 @@ export interface AdoptCreativeOrderVariantRequest {
   qc_risk_acknowledged?: boolean;
   qc_risk_reason?: string;
 }
-export interface CreativeOrderVariant { id: string; order_item_id: string; variant_key: string; brief: Record<string, unknown>; revision: number; status: string; qc_status: string; qc_recovery_used: boolean; qc_recovery_available: boolean; prime_repair_used: boolean; prime_repair_available: boolean; created_at: string; updated_at: string; assets: CreativeOrderAsset[]; qc_reports: CreativeOrderQCReport[]; }
+export interface CreativeOrderVariantBlocker { task_id: string; workflow: string; failure_reason: string; detail: string; failed_at: string; retryable: boolean; }
+export interface CreativeOrderDiagnosticAsset { id: string; variant_id: string; task_id: string; size_key: CreativeDeliverySize | string; revision: number; label: string; filename: string; url: string; created_at: string; }
+export interface CreativeOrderVariant { id: string; order_item_id: string; variant_key: string; brief: Record<string, unknown>; revision: number; status: string; qc_status: string; qc_recovery_used: boolean; qc_recovery_available: boolean; prime_repair_used: boolean; prime_repair_available: boolean; action_required?: CreativeOrderVariantBlocker; created_at: string; updated_at: string; assets: CreativeOrderAsset[]; diagnostic_assets: CreativeOrderDiagnosticAsset[]; qc_reports: CreativeOrderQCReport[]; }
 export interface CreativeOrderPrimePackageRepairResponse { task_id: string; }
 export interface CreativeOrderAsset { id: string; variant_id: string; asset_family_id: string; size_key: CreativeDeliverySize | string; revision: number; stage: "generated" | "primed" | "delivered" | string; attachment_id: string; derived_from_asset_id: string; metadata: Record<string, unknown>; evidence: Record<string, unknown>; status: string; created_at: string; updated_at: string; }
 export interface CreativeOrderQCReport { id: string; variant_id: string; lane: "technical" | "visual" | string; revision: number; status: string; findings: Record<string, unknown>; trigger_evidence_kind: string; trigger_evidence_ref_id: string; created_at: string; updated_at: string; }

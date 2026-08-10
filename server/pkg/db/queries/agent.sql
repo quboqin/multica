@@ -239,14 +239,28 @@ SELECT
     p.agent_id, p.runtime_id, p.issue_id, p.chat_session_id, p.autopilot_run_id,
     'queued', p.priority, p.trigger_comment_id, p.trigger_summary, p.context,
     NULL, NULL,
-    p.attempt + 1, p.max_attempts, p.id, TRUE, p.is_leader_task,
+    p.attempt + 1,
+    CASE
+      WHEN p.trigger_evidence_kind = 'creative_order_item_production'
+        AND p.context->>'workflow' = 'creative_production'
+        AND p.max_attempts < 3 THEN 3
+      ELSE p.max_attempts
+    END,
+    p.id, TRUE, p.is_leader_task,
     p.requesting_user_id, p.originator_user_id, p.accountable_user_id,
     p.originator_source, p.delegated_from_task_id, p.rule_version_id,
     p.id, p.trigger_evidence_kind, p.trigger_evidence_ref_id
 FROM agent_task_queue p
 WHERE p.id = $1
   AND p.status = 'completed'
-  AND p.attempt < p.max_attempts
+  AND (
+    p.attempt < p.max_attempts
+    OR (
+      p.trigger_evidence_kind = 'creative_order_item_production'
+      AND p.context->>'workflow' = 'creative_production'
+      AND p.attempt < 3
+    )
+  )
 RETURNING *;
 
 -- name: CancelAgentTasksByIssue :many

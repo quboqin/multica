@@ -1,6 +1,7 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api";
 import { autopilotKeys } from "./queries";
+import { creativeKeys } from "../creative/queries";
 import { useWorkspaceId } from "../hooks";
 import type {
   CreateAutopilotRequest,
@@ -89,6 +90,7 @@ export function useTriggerAutopilot() {
     onSettled: (_data, _err, id) => {
       qc.invalidateQueries({ queryKey: autopilotKeys.runs(wsId, id) });
       qc.invalidateQueries({ queryKey: autopilotKeys.detail(wsId, id) });
+      qc.invalidateQueries({ queryKey: creativeKeys.materials(wsId) });
     },
   });
 }

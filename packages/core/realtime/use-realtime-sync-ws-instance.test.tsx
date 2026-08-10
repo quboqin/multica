@@ -184,7 +184,7 @@ describe("useRealtimeSync — ws instance change", () => {
     }
   });
 
-  it("invalidates creative materials for every reference-analysis task lifecycle event", () => {
+  it("invalidates creative materials for material-analysis and pre-adaptation task lifecycle events", () => {
     const { ws, emit } = createObservableMockWs();
     renderHook(() => useRealtimeSync(ws, stores), {
       wrapper: createWrapper(qc),
@@ -202,25 +202,27 @@ describe("useRealtimeSync — ws instance change", () => {
     ] as const;
 
     act(() => {
-      for (const type of lifecycleEvents) {
-        emit({
-          type,
-          payload: {
-            task_id: `task-${type}`,
-            agent_id: "agent-1",
-            issue_id: "",
-            runtime_id: "runtime-1",
-            status: type.slice("task:".length),
-            trigger_evidence_kind: "creative_crawl_run_analysis",
-          },
-        });
+      for (const triggerEvidenceKind of ["creative_crawl_run_analysis", "creative_source_analysis"]) {
+        for (const type of lifecycleEvents) {
+          emit({
+            type,
+            payload: {
+              task_id: `task-${triggerEvidenceKind}-${type}`,
+              agent_id: "agent-1",
+              issue_id: "",
+              runtime_id: "runtime-1",
+              status: type.slice("task:".length),
+              trigger_evidence_kind: triggerEvidenceKind,
+            },
+          });
+        }
       }
     });
 
     const creativeInvalidations = invalidateSpy.mock.calls.filter(
       (call: [{ queryKey?: unknown }, ...unknown[]]) => JSON.stringify(call[0].queryKey) === JSON.stringify(["creative", "ws-1"]),
     );
-    expect(creativeInvalidations).toHaveLength(lifecycleEvents.length);
+    expect(creativeInvalidations).toHaveLength(lifecycleEvents.length * 2);
   });
 
   it("does not invalidate creative materials for unrelated task events", () => {

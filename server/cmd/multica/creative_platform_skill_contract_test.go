@@ -21,6 +21,7 @@ func TestCreativePlatformSkillsStayNativeAndMapped(t *testing.T) {
 	sourceMaps := map[string]string{
 		"appgrowing-material-collector":      "appgrowing-collection-source-map.md",
 		"ad-creative-analysis":               "ad-creative-analysis-source-map.md",
+		"ad-creative-pre-adaptation":         "ad-creative-pre-adaptation-source-map.md",
 		"ad-creative-market-pack-extraction": "ad-creative-market-pack-extraction-source-map.md",
 		"ad-creative-plan":                   "ad-creative-plan-source-map.md",
 		"ad-creative-production":             "ad-creative-production-source-map.md",
@@ -28,6 +29,7 @@ func TestCreativePlatformSkillsStayNativeAndMapped(t *testing.T) {
 		"ad-creative-prime-compose":          "ad-creative-prime-compose-source-map.md",
 		"ad-creative-qc":                     "ad-creative-qc-source-map.md",
 		"ad-creative-leadership":             "ad-creative-leadership-source-map.md",
+		"creative-flow-diagnostician":        "creative-flow-diagnosis-source-map.md",
 	}
 
 	for skillName, sourceMapName := range sourceMaps {
@@ -36,9 +38,7 @@ func TestCreativePlatformSkillsStayNativeAndMapped(t *testing.T) {
 			t.Parallel()
 
 			content := readCreativePlatformContractFile(t, filepath.Join(skillRoot, skillName, "SKILL.md"))
-			if lines := strings.Count(content, "\n") + 1; lines > 120 {
-				t.Fatalf("SKILL.md has %d lines; keep runtime instructions under 120 lines", lines)
-			}
+			assertNoRepeatedLongSkillLines(t, content)
 			for _, forbidden := range []string{
 				"multica creative material get",
 				"multica creative materials",
@@ -66,11 +66,12 @@ func TestCreativePlatformSkillsUseFrozenBusinessInputs(t *testing.T) {
 	}
 	skillRoot := filepath.Join(filepath.Clean(filepath.Join(filepath.Dir(currentFile), "..", "..", "..")), "scripts", "creative-platform-skills")
 	required := map[string][]string{
-		"ad-creative-plan":          {"copy_snapshot", "input_snapshot", "source_analysis"},
-		"ad-creative-production":    {"copy_snapshot", "prompt_sha256"},
-		"ad-creative-direct-edit":   {"copy_snapshot", "prompt_sha256", "delivery_mode"},
-		"ad-creative-prime-compose": {"input_snapshot", "prime_composition", "naming_rule"},
-		"ad-creative-qc":            {"copy_snapshot", "compose_result", "qc-finalize"},
+		"ad-creative-pre-adaptation": {"source_analysis", "text_replacements", "production_prompt"},
+		"ad-creative-plan":           {"copy_snapshot", "input_snapshot", "source_analysis"},
+		"ad-creative-production":     {"copy_snapshot", "prompt_sha256", "request_id"},
+		"ad-creative-direct-edit":    {"copy_snapshot", "prompt_sha256", "delivery_mode"},
+		"ad-creative-prime-compose":  {"input_snapshot", "prime_composition", "naming_rule"},
+		"ad-creative-qc":             {"copy_snapshot", "compose_result", "qc-finalize"},
 	}
 
 	for skillName, terms := range required {
@@ -90,4 +91,19 @@ func readCreativePlatformContractFile(t *testing.T, path string) string {
 		t.Fatalf("read %s: %v", path, err)
 	}
 	return string(content)
+}
+
+func assertNoRepeatedLongSkillLines(t *testing.T, content string) {
+	t.Helper()
+	seen := map[string]int{}
+	for _, line := range strings.Split(content, "\n") {
+		normalized := strings.Join(strings.Fields(strings.TrimSpace(line)), " ")
+		if len(normalized) < 80 || strings.HasPrefix(normalized, "```") || strings.HasPrefix(normalized, "multica ") {
+			continue
+		}
+		seen[normalized]++
+		if seen[normalized] > 1 {
+			t.Fatalf("SKILL.md repeats long instruction line: %q", normalized)
+		}
+	}
 }

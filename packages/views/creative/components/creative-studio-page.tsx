@@ -3,15 +3,15 @@
 import { cloneElement, useEffect, useId, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  AlertTriangle,
+	AlertTriangle,
   ArrowLeft,
+  ArrowRight,
   Archive,
   BarChart3,
   BookOpenText,
   Check,
 	CheckCircle2,
   CircleStop,
-  FileSpreadsheet,
   Globe2,
   Images,
   LayoutDashboard,
@@ -20,19 +20,17 @@ import {
   QrCode,
   RefreshCw,
   Save,
-  Search,
   Settings2,
-  Upload,
 } from "lucide-react";
 import { api } from "@multica/core/api";
 import {
-  creativeCopyEntriesOptions,
   creativeFeedbackOptions,
   creativeKeys,
   creativeOrderOptions,
   creativeOrdersOptions,
   creativeMaterialLibraryOptions,
   creativeResourcesOptions,
+  creativeSourceAnalysesOptions,
   useAdoptCreativeOrderVariant,
   useCancelCreativeOrder,
 } from "@multica/core/creative";
@@ -41,12 +39,12 @@ import { useWorkspacePaths } from "@multica/core/paths";
 import { attachmentDownloadPath } from "@multica/core/types";
 import { resolvePublicFileUrl } from "@multica/core/workspace/avatar-url";
 import type {
-  CreativeCopyEntry,
-  CreativeCopyEntryInput,
   CreativeOrder,
   CreativeOrderAsset,
+  CreativeOrderItem,
   CreativeOrderVariant,
   CreativeOrderWorkflowFailure,
+  CreativeMaterialCandidate,
   CreativeResource,
   CreativeResourceKind,
   CreateCreativeFeedbackResponse,
@@ -80,41 +78,20 @@ import { cn } from "@multica/ui/lib/utils";
 import { toast } from "sonner";
 import { PageHeader } from "../../layout/page-header";
 import { useNavigation } from "../../navigation";
-import { readCopySpreadsheet, type SpreadsheetData } from "../lib/xlsx-copy-import";
 import { creativeAttachmentBrowserURL } from "../lib/creative-attachment-url";
 import { creativeAdjustmentProgress, creativeAdjustmentTarget, latestOrderAdjustmentFeedback } from "../lib/creative-adjustment-progress";
 import { dynamicQRPolicy, withDynamicQRPayload } from "../lib/market-pack-qr";
 import { creativeTimeZoneLabel, formatCreativeDateTime } from "../lib/creative-time";
-import { CreativeMaterialLibrary } from "./creative-material-library";
+import { CreativeMaterialLibrary, creativeMaterialAnalysisReadiness, creativeMaterialProductionState, defaultPreAdaptationResources, latestCandidateFeedback, latestCompletedAnalyses, materialAnalysisState, type MaterialLibraryFilter } from "./creative-material-library";
 import { CreativeCollectionPlans } from "./creative-collection-plans";
 import { ComposableCopyLibraryEditor } from "./composable-copy-library-editor";
 import { CreativeComparisonWorkspace, type CreativeAnnotationDraft } from "./creative-comparison-workspace";
-import { adoptedCreativeOrderVariant, CreativeOrderDeliveryCandidates, creativeOrderStage } from "./creative-order-delivery";
+import { adoptedCreativeOrderVariant, CREATIVE_DELIVERY_SIZES, CreativeOrderDeliveryCandidates, creativeOrderActionableWorkflowFailures, creativeOrderStage, creativeVariantIsInProgress, creativeVariantNeedsManualAction, type CreativeOrderStage } from "./creative-order-delivery";
 import { CreativeGenerationInfoDialog } from "./creative-generation-info-dialog";
 import { CreativeFeedbackDashboard } from "./creative-feedback-dashboard";
 import { CreativeWorkbench } from "./creative-workbench";
 import { MarketResourceFiles } from "./market-resource-files";
 import { createDefaultPrimeComposition, PrimeCompositionEditor, readPrimeComposition } from "./prime-composition-editor";
-
-type CopyField = keyof Pick<
-  CreativeCopyEntryInput,
-  "external_key" | "headline" | "subheadline" | "benefit" | "cta" | "legal_text" |
-  "copy_role" | "market" | "locale" | "tags" | "status"
->;
-
-const COPY_FIELDS: { key: CopyField; label: string; required?: boolean }[] = [
-  { key: "external_key", label: "文案编号" },
-  { key: "headline", label: "主标题", required: true },
-  { key: "subheadline", label: "副标题" },
-  { key: "benefit", label: "卖点" },
-  { key: "cta", label: "CTA" },
-  { key: "legal_text", label: "条款" },
-  { key: "copy_role", label: "文案职责" },
-  { key: "market", label: "市场" },
-  { key: "locale", label: "语言" },
-  { key: "tags", label: "标签" },
-  { key: "status", label: "状态" },
-];
 
 const PRIME_ROLE_LABELS: Record<string, string> = {
   prime_logo: "品牌 Logo",
@@ -122,21 +99,6 @@ const PRIME_ROLE_LABELS: Record<string, string> = {
   prime_qr: "静态二维码",
   prime_afpi: "AFPI 标识",
   prime_pindai_legal: "Pindai Legal",
-};
-
-const EMPTY_COPY: CreativeCopyEntryInput = {
-  external_key: "",
-  headline: "",
-  subheadline: "",
-  benefit: "",
-  cta: "",
-  legal_text: "",
-  copy_role: "",
-  market: "",
-  locale: "",
-  tags: [],
-  status: "draft",
-  metadata: {},
 };
 
 type CreativeStudioTab = "home" | "materials" | "orders" | "resources" | "feedback";
@@ -150,17 +112,37 @@ function creativeStudioTab(searchParams: URLSearchParams): CreativeStudioTab {
   return "home";
 }
 
+function creativeMaterialLibraryFilter(searchParams: URLSearchParams): MaterialLibraryFilter {
+  const filter = searchParams.get("materialFilter");
+  return filter === "analyze" || filter === "generated" || filter === "rejected" || filter === "all"
+    ? filter
+    : "available";
+}
+
+function creativeResourceSection(searchParams: URLSearchParams): "market" | "copy" {
+  return searchParams.get("resource") === "copy" || searchParams.get("tab") === "copy" ? "copy" : "market";
+}
+
 export function creativeStudioPath(
   pathname: string,
   searchParams: URLSearchParams,
   tab: CreativeStudioTab,
   orderId = "",
+  materialFilter: MaterialLibraryFilter = "available",
+  materialRunId = "",
+  resourceSection: "market" | "copy" = "market",
 ): string {
   const next = new URLSearchParams(searchParams);
   next.delete("tab");
   next.delete("order");
+  next.delete("materialFilter");
+  next.delete("run");
+  next.delete("resource");
   if (tab !== "home") next.set("tab", tab);
   if (tab === "orders" && orderId) next.set("order", orderId);
+  if (tab === "materials" && materialFilter !== "available") next.set("materialFilter", materialFilter);
+  if (tab === "materials" && materialRunId) next.set("run", materialRunId);
+  if (tab === "resources" && resourceSection === "copy") next.set("resource", "copy");
   const query = next.toString();
   return query ? `${pathname}?${query}` : pathname;
 }
@@ -171,15 +153,40 @@ export function CreativeStudioPage() {
   const navigation = useNavigation();
   const workspacePaths = useWorkspacePaths();
   const routeOrderId = navigation.searchParams.get("order") ?? "";
+  const routeMaterialRunId = navigation.searchParams.get("run") ?? "";
   const returnIssueId = navigation.searchParams.get("fromIssue") ?? "";
   const routeTab = creativeStudioTab(navigation.searchParams);
+  const resourceSection = creativeResourceSection(navigation.searchParams);
+  const materialFilter = creativeMaterialLibraryFilter(navigation.searchParams);
   const [tab, setTab] = useState<CreativeStudioTab>(routeTab);
   const [selectedOrderId, setSelectedOrderId] = useState(routeOrderId);
+  const [trackedCollectionAutopilotRunId, setTrackedCollectionAutopilotRunId] = useState("");
   const [createKind, setCreateKind] = useState<CreativeResourceKind | null>(null);
   const resources = useQuery(creativeResourcesOptions(wsId));
   const orders = useQuery(creativeOrdersOptions(wsId));
   const materials = useQuery(creativeMaterialLibraryOptions(wsId));
-  const allResources = resources.data?.resources ?? [];
+  const materialAnalyses = useQuery(creativeSourceAnalysesOptions(wsId));
+  const candidateFeedback = useQuery(creativeFeedbackOptions(wsId, "candidate"));
+  const allResources = useMemo(() => resources.data?.resources ?? [], [resources.data?.resources]);
+  const { marketPack, copyLibrary } = useMemo(
+    () => defaultPreAdaptationResources(allResources),
+    [allResources],
+  );
+  const materialProductionStateById = useMemo(() => {
+    const decisions = latestCandidateFeedback(candidateFeedback.data?.events ?? []);
+    const generatedCandidateIds = new Set((orders.data?.orders ?? []).flatMap((order) => order.items.map((item) => item.candidate_id)));
+    const completedAnalyses = latestCompletedAnalyses(materialAnalyses.data?.analyses ?? []);
+    return new Map((materials.data?.candidates ?? []).map((candidate) => {
+      const analysisState = materialAnalysisState(candidate, materialAnalyses.data?.analyses ?? []);
+      const analysisReadiness = creativeMaterialAnalysisReadiness(completedAnalyses.get(candidate.id), analysisState, marketPack, copyLibrary);
+      return [candidate.id, creativeMaterialProductionState(candidate, analysisState, decisions.get(candidate.id)?.decision, generatedCandidateIds.has(candidate.id), analysisReadiness)];
+    }));
+  }, [candidateFeedback.data?.events, copyLibrary, marketPack, materialAnalyses.data?.analyses, materials.data?.candidates, orders.data?.orders]);
+  const workbenchExcludedCandidateIds = useMemo(() => {
+    return (materials.data?.candidates ?? [])
+      .filter((candidate) => materialProductionStateById.get(candidate.id)?.status !== "available")
+      .map((candidate) => candidate.id);
+  }, [materialProductionStateById, materials.data?.candidates]);
   const attentionCount = (orders.data?.orders ?? []).filter((order) => {
     const stage = creativeOrderStage(order);
     return stage.key === "review" || stage.key === "attention";
@@ -190,10 +197,10 @@ export function CreativeStudioPage() {
     setSelectedOrderId(routeOrderId);
   }, [routeOrderId, routeTab]);
 
-  const navigateStudio = (nextTab: CreativeStudioTab, orderId = "", mode: "push" | "replace" = "replace") => {
+  const navigateStudio = (nextTab: CreativeStudioTab, orderId = "", mode: "push" | "replace" = "replace", nextMaterialFilter: MaterialLibraryFilter = "available", nextMaterialRunId = "", nextResourceSection: "market" | "copy" = "market") => {
     setTab(nextTab);
     setSelectedOrderId(nextTab === "orders" ? orderId : "");
-    const path = creativeStudioPath(navigation.pathname, navigation.searchParams, nextTab, orderId);
+    const path = creativeStudioPath(navigation.pathname, navigation.searchParams, nextTab, orderId, nextMaterialFilter, nextMaterialRunId, nextResourceSection);
     if (mode === "push") navigation.push(path);
     else navigation.replace(path);
   };
@@ -217,38 +224,52 @@ export function CreativeStudioPage() {
   });
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col">
-      <PageHeader className="justify-between px-5">
+    <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+      <PageHeader className="min-w-0 justify-between px-5">
         <div className="flex min-w-0 items-center gap-2">
           <Settings2 className="h-4 w-4 text-emerald-700" />
           <h1 className="text-sm font-medium">创意工厂</h1>
           <span className="hidden text-xs text-muted-foreground md:inline">选素材、验收成图、维护市场规则</span>
         </div>
-        <Badge variant={attentionCount > 0 ? "default" : "outline"}>{attentionCount > 0 ? `${attentionCount} 个待处理` : "暂无待处理"}</Badge>
+        <Badge variant={attentionCount > 0 ? "default" : "outline"}>{attentionCount > 0 ? `${attentionCount} 个待验收` : "暂无待验收"}</Badge>
       </PageHeader>
 
-      <Tabs value={tab} onValueChange={changeTab} className="flex min-h-0 flex-1 flex-col">
-        <div className="border-b px-5 py-2">
-          <TabsList className="h-8 overflow-x-auto">
-            <TabsTrigger value="home"><LayoutDashboard className="h-3.5 w-3.5" />工作台</TabsTrigger>
-            <TabsTrigger value="materials"><Images className="h-3.5 w-3.5" />素材库</TabsTrigger>
-            <TabsTrigger value="orders"><Layers3 className="h-3.5 w-3.5" />创意订单</TabsTrigger>
-            <TabsTrigger value="resources"><Globe2 className="h-3.5 w-3.5" />品牌与市场规则</TabsTrigger>
-            <TabsTrigger value="feedback"><BarChart3 className="h-3.5 w-3.5" />数据反馈</TabsTrigger>
+      <Tabs value={tab} onValueChange={changeTab} className="flex min-h-0 min-w-0 flex-1 flex-col">
+        <div className="min-w-0 border-b px-5 py-2">
+          <TabsList className="h-auto min-h-8 w-full max-w-full min-w-0 flex-wrap justify-start gap-1 overflow-visible">
+            <TabsTrigger className="flex-none" value="home"><LayoutDashboard className="h-3.5 w-3.5" />工作台</TabsTrigger>
+            <TabsTrigger className="flex-none" value="materials"><Images className="h-3.5 w-3.5" />素材库</TabsTrigger>
+            <TabsTrigger className="flex-none" value="orders"><Layers3 className="h-3.5 w-3.5" />创意订单</TabsTrigger>
+            <TabsTrigger className="flex-none" value="resources"><Globe2 className="h-3.5 w-3.5" />品牌与市场规则</TabsTrigger>
+            <TabsTrigger className="flex-none" value="feedback"><BarChart3 className="h-3.5 w-3.5" />数据反馈</TabsTrigger>
           </TabsList>
         </div>
 
-        <TabsContent value="home" className="min-h-0 flex-1 overflow-y-auto p-5">
-          <CreativeWorkbench candidates={materials.data?.candidates ?? []} orders={orders.data?.orders ?? []} onOpenMaterialLibrary={() => navigateStudio("materials")} onOpenOrder={openOrder} />
+        <TabsContent value="home" className="min-h-0 min-w-0 flex-1 overflow-y-auto p-4">
+          <div className="min-w-0 space-y-4">
+            <CreativeWorkbench candidates={materials.data?.candidates ?? []} orders={orders.data?.orders ?? []} excludedCandidateIds={workbenchExcludedCandidateIds} onOpenMaterialLibrary={(filter = "available") => navigateStudio("materials", "", "push", filter)} onOpenOrder={openOrder} />
+            <div className="mx-auto w-full min-w-0 max-w-[1440px]"><CreativeCollectionPlans
+              trackedAutopilotRunId={trackedCollectionAutopilotRunId}
+              onTrackedAutopilotRunIdChange={setTrackedCollectionAutopilotRunId}
+              onOpenMaterialLibrary={(crawlRunId) => navigateStudio("materials", "", "push", "all", crawlRunId)}
+            /></div>
+          </div>
         </TabsContent>
-        <TabsContent value="materials" className="min-h-0 flex-1 overflow-y-auto p-5">
-          <CreativeDiscoveryWorkspace onOrderCreated={openOrder} />
+        <TabsContent value="materials" className="min-h-0 min-w-0 flex-1 overflow-y-auto p-5">
+          <CreativeDiscoveryWorkspace
+            filter={materialFilter}
+            runId={routeMaterialRunId}
+            onFilterChange={(nextFilter) => navigateStudio("materials", "", "replace", nextFilter, routeMaterialRunId)}
+            onRunChange={(nextRunId) => navigateStudio("materials", "", "replace", nextRunId ? "all" : "available", nextRunId)}
+            onOpenCopyLibrary={() => navigateStudio("resources", "", "push", "available", "", "copy")}
+            onOrderCreated={openOrder}
+          />
         </TabsContent>
-        <TabsContent value="orders" className="min-h-0 flex-1 overflow-y-auto p-5"><CreativeOrdersWorkspace selectedOrderId={selectedOrderId} onSelectOrder={openOrder} onBack={closeOrder} backLabel={returnIssueId ? "返回 issue" : "返回订单列表"} /></TabsContent>
-        <TabsContent value="resources" className="min-h-0 flex-1 overflow-hidden p-5">
-          <CreativeResourcesWorkspace resources={allResources} onCreate={setCreateKind} onArchive={(id) => archiveResource.mutate(id)} />
+        <TabsContent value="orders" className="min-h-0 min-w-0 flex-1 overflow-y-auto p-5"><CreativeOrdersWorkspace selectedOrderId={selectedOrderId} onSelectOrder={openOrder} onBack={closeOrder} backLabel={returnIssueId ? "返回 issue" : "返回订单列表"} /></TabsContent>
+        <TabsContent value="resources" className="min-h-0 min-w-0 flex-1 overflow-hidden p-5">
+          <CreativeResourcesWorkspace initialSection={resourceSection} resources={allResources} onCreate={setCreateKind} onArchive={(id) => archiveResource.mutate(id)} />
         </TabsContent>
-        <TabsContent value="feedback" className="min-h-0 flex-1 overflow-y-auto p-5">
+        <TabsContent value="feedback" className="min-h-0 min-w-0 flex-1 overflow-y-auto p-5">
           <CreativeFeedbackDashboard />
         </TabsContent>
       </Tabs>
@@ -261,8 +282,8 @@ export function CreativeStudioPage() {
   );
 }
 
-function CreativeDiscoveryWorkspace({ onOrderCreated }: { onOrderCreated: (orderId: string) => void }) {
-  return <div className="mx-auto max-w-[1440px] space-y-4"><div className="flex flex-wrap items-end justify-between gap-3 border-b pb-3"><div><h2 className="text-base font-semibold">素材库</h2><p className="mt-1 text-sm text-muted-foreground">查看采集结果，筛选参考素材并发起创意订单</p></div><Badge variant="outline">稳定原图优先</Badge></div><CreativeCollectionPlans /><CreativeMaterialLibrary onOrderCreated={onOrderCreated} /></div>;
+function CreativeDiscoveryWorkspace({ filter, runId, onFilterChange, onRunChange, onOrderCreated, onOpenCopyLibrary }: { filter: MaterialLibraryFilter; runId: string; onFilterChange: (filter: MaterialLibraryFilter) => void; onRunChange: (runId: string) => void; onOrderCreated: (orderId: string) => void; onOpenCopyLibrary: () => void }) {
+  return <div className="mx-auto w-full min-w-0 max-w-[1440px]"><CreativeMaterialLibrary filter={filter} runId={runId} onFilterChange={onFilterChange} onRunChange={onRunChange} onOpenCopyLibrary={onOpenCopyLibrary} onOrderCreated={onOrderCreated} /></div>;
 }
 
 function CreativeOrdersWorkspace({ selectedOrderId, onSelectOrder, onBack, backLabel }: { selectedOrderId: string; onSelectOrder: (orderId: string) => void; onBack: () => void; backLabel: string }) {
@@ -270,21 +291,94 @@ function CreativeOrdersWorkspace({ selectedOrderId, onSelectOrder, onBack, backL
   const navigation = useNavigation();
   const workspacePaths = useWorkspacePaths();
   const orders = useQuery(creativeOrdersOptions(wsId));
+  const materials = useQuery(creativeMaterialLibraryOptions(wsId));
   const creativeOrders = orders.data?.orders ?? [];
   if (selectedOrderId) return <CreativeOrderDetail orderId={selectedOrderId} onBack={onBack} onBrowseOrders={() => onSelectOrder("")} backLabel={backLabel} />;
   const stages = creativeOrders.map((order) => creativeOrderStage(order));
   const pendingCount = stages.filter((stage) => stage.key === "review" || stage.key === "attention").length;
-  return <div className="mx-auto max-w-[1440px] space-y-4">
-    <div className="flex flex-wrap items-end justify-between gap-3 border-b pb-3"><div><h2 className="text-base font-semibold">创意订单</h2><p className="mt-1 text-sm text-muted-foreground">从生成到验收、采用和下载都在订单内完成</p></div><div className="flex gap-2"><Badge variant="outline">{creativeOrders.length} 个订单</Badge>{pendingCount > 0 && <Badge>{pendingCount} 个待处理</Badge>}</div></div>
+  const candidatesById = new Map((materials.data?.candidates ?? []).map((candidate) => [candidate.id, candidate]));
+  return <div className="mx-auto w-full min-w-0 max-w-[1440px] space-y-4">
+    <div className="flex flex-wrap items-end justify-between gap-3 border-b pb-3"><div><h2 className="text-base font-semibold">创意订单</h2><p className="mt-1 text-sm text-muted-foreground">从生成到验收、采用和下载都在订单内完成</p></div><div className="flex gap-2"><Badge variant="outline">{creativeOrders.length} 个订单</Badge>{pendingCount > 0 && <Badge>{pendingCount} 个待验收</Badge>}</div></div>
     <div className="divide-y border-y">{creativeOrders.map((creativeOrder) => {
       const stage = creativeOrderStage(creativeOrder);
-      return <div key={creativeOrder.id} className="grid min-h-20 gap-3 bg-background px-4 py-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center">
-        <button type="button" className="min-w-0 text-left" onClick={() => onSelectOrder(creativeOrder.id)}><span className="block truncate text-sm font-semibold">订单 {creativeOrder.id.slice(0, 8)}</span><span className="mt-1 block text-xs text-muted-foreground">{stage.detail} · 更新于 {formatCreativeDateTime(creativeOrder.updated_at)}（{creativeTimeZoneLabel()}）</span></button>
-        <div className="flex flex-wrap items-center gap-2"><Badge variant={stage.key === "attention" ? "destructive" : stage.key === "review" ? "default" : "outline"}>{stage.label}</Badge>{creativeOrder.issue_id && <Button size="sm" variant="ghost" onClick={() => navigation.push(workspacePaths.issueDetail(creativeOrder.issue_id))}>协作记录</Button>}<Button size="sm" variant="outline" onClick={() => onSelectOrder(creativeOrder.id)}>{stage.action}</Button></div>
+      const listState = creativeOrderListState(creativeOrder, stage);
+      const sources = creativeOrderSourceSummaries(creativeOrder, candidatesById);
+      return <div key={creativeOrder.id} className="grid min-h-24 gap-3 bg-background px-4 py-3 transition-colors hover:bg-muted/20 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-center">
+        <button type="button" className="grid min-w-0 grid-cols-[auto_minmax(0,1fr)] items-center gap-3 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" onClick={() => onSelectOrder(creativeOrder.id)}>
+          <CreativeOrderSourceThumbs sources={sources} />
+          <span className="min-w-0">
+            <span className="block truncate text-sm font-semibold">{creativeOrderSourceTitle(sources, creativeOrder)}</span>
+            <span className="mt-1 block truncate text-xs text-muted-foreground">订单 {creativeOrder.id.slice(0, 8)} · {listState.detail} · 更新于 {formatCreativeDateTime(creativeOrder.updated_at)}（{creativeTimeZoneLabel()}）</span>
+            <span className="mt-1 flex flex-wrap gap-1.5">
+              <Badge variant="outline">{creativeOrder.items.length} 张来源素材</Badge>
+              {listState.reminderCount > 0 && <Badge variant="secondary">{listState.reminderCount} 条系统提醒</Badge>}
+            </span>
+          </span>
+        </button>
+        <div className="flex flex-wrap items-center gap-2 lg:justify-end"><Badge variant={listState.badgeVariant}>{listState.label}</Badge>{creativeOrder.issue_id && <Button size="sm" variant="ghost" onClick={() => navigation.push(workspacePaths.issueDetail(creativeOrder.issue_id))}>协作记录</Button>}<Button size="sm" onClick={() => onSelectOrder(creativeOrder.id)}>进入订单<ArrowRight className="h-4 w-4" /></Button></div>
       </div>;
     })}</div>
     {!orders.isLoading && creativeOrders.length === 0 && <div className="flex min-h-64 items-center justify-center border border-dashed text-sm text-muted-foreground">暂无创意订单。请先在素材库选择素材并开始生成。</div>}
   </div>;
+}
+
+type CreativeOrderListState = {
+  label: "生成中" | "待验收" | "已采用" | "已结束";
+  detail: string;
+  badgeVariant: "default" | "secondary" | "outline";
+  reminderCount: number;
+};
+
+function creativeOrderListState(order: CreativeOrder, stage: CreativeOrderStage): CreativeOrderListState {
+  const reminderCount = creativeOrderActionableWorkflowFailures(order).length;
+  if (stage.key === "cancelled") return { label: "已结束", detail: "订单已结束，结果与记录仍保留", badgeVariant: "outline", reminderCount };
+  if (stage.key === "delivered") return { label: "已采用", detail: stage.totalItems > 0 ? `${stage.adoptedItems}/${stage.totalItems} 张素材已采用` : "已采用最终方案", badgeVariant: "default", reminderCount };
+  if (stage.key === "generating" || stage.key === "preparing") return { label: "生成中", detail: stage.detail, badgeVariant: "outline", reminderCount };
+  const base = stage.readyVariants > 0 ? `${stage.readyVariants} 套候选待验收` : "等待人工验收";
+  const detail = reminderCount > 0 ? `${base}，${reminderCount} 条系统提醒` : base;
+  return { label: "待验收", detail, badgeVariant: "default", reminderCount };
+}
+
+type CreativeOrderSourceSummary = {
+  id: string;
+  label: string;
+  url: string;
+};
+
+function creativeOrderSourceSummaries(order: CreativeOrder, candidatesById: Map<string, CreativeMaterialCandidate>): CreativeOrderSourceSummary[] {
+  return order.items.map((item, index) => {
+    const candidate = candidatesById.get(item.candidate_id);
+    return {
+      id: item.candidate_id || item.id || String(index),
+      label: creativeOrderSourceLabel(candidate, item, index),
+      url: resolvePublicFileUrl(candidate?.archived_url || candidate?.poster_url || candidate?.preview_url || "") ?? "",
+    };
+  });
+}
+
+function creativeOrderSourceLabel(candidate: CreativeMaterialCandidate | undefined, item: CreativeOrderItem, index: number): string {
+  return candidate?.title || candidate?.competitor || item.candidate_id?.slice(0, 8) || `素材 ${index + 1}`;
+}
+
+function creativeOrderSourceTitle(sources: CreativeOrderSourceSummary[], order: CreativeOrder): string {
+  if (sources.length === 0) return `订单 ${order.id.slice(0, 8)}`;
+  const labels = [...new Set(sources.map((source) => source.label).filter(Boolean))];
+  const visible = labels.slice(0, 3).join(" / ");
+  if (labels.length <= 3) return visible;
+  return `${visible} 等 ${labels.length} 张素材`;
+}
+
+function CreativeOrderSourceThumbs({ sources }: { sources: CreativeOrderSourceSummary[] }) {
+  const visible = sources.slice(0, 3);
+  if (visible.length === 0) {
+    return <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-md border bg-muted/30 text-muted-foreground"><Images className="h-4 w-4" /></span>;
+  }
+  return <span className="flex shrink-0 items-center gap-1">
+    {visible.map((source) => <span key={source.id} className="flex h-12 w-12 overflow-hidden rounded-md border bg-muted/20">
+      {source.url ? <img src={source.url} alt={`来源素材 ${source.label}`} width={96} height={96} loading="lazy" className="h-full w-full object-cover" /> : <span className="flex h-full w-full items-center justify-center text-muted-foreground"><Images className="h-4 w-4" /></span>}
+    </span>)}
+    {sources.length > visible.length && <span className="flex h-12 min-w-12 items-center justify-center rounded-md border bg-muted/30 px-2 text-xs font-medium text-muted-foreground">+{sources.length - visible.length}</span>}
+  </span>;
 }
 
 function CreativeOrderDetail({ orderId, onBack, onBrowseOrders, backLabel }: { orderId: string; onBack: () => void; onBrowseOrders: () => void; backLabel: string }) {
@@ -310,11 +404,11 @@ function CreativeOrderDetail({ orderId, onBack, onBrowseOrders, backLabel }: { o
   const [adjustOpen, setAdjustOpen] = useState(false);
   const [adjustment, setAdjustment] = useState("");
   const [adjustBusy, setAdjustBusy] = useState(false);
-  const [retryingTaskId, setRetryingTaskId] = useState("");
-	const [retryingQCVariantId, setRetryingQCVariantId] = useState("");
-	const [repairingPrimeVariantId, setRepairingPrimeVariantId] = useState("");
   const [cancelOpen, setCancelOpen] = useState(false);
+  const failureRef = useRef<HTMLDivElement>(null);
+  const reviewRef = useRef<HTMLDivElement>(null);
   const comparisonRef = useRef<HTMLDivElement>(null);
+  const confirmedContentRef = useRef<HTMLDivElement>(null);
   const adoptedVariantIds = new Set(data?.items.flatMap((item) => {
     const variant = adoptedCreativeOrderVariant(item);
     return variant ? [variant.id] : [];
@@ -326,9 +420,7 @@ function CreativeOrderDetail({ orderId, onBack, onBrowseOrders, backLabel }: { o
   const active = reviewAssets.find((asset) => asset.id === activeAssetId) ?? defaultAsset;
   const generationInfoAsset = assets.find((asset) => asset.id === generationInfoAssetId);
   const variantById = new Map(data?.items.flatMap((item) => item.variants.map((variant) => [variant.id, { variant, item }] as const)) ?? []);
-	const qcRecoveryAvailableVariantIds = new Set(data?.items.flatMap((item) => item.variants
-		.filter((variant) => variant.status === "action_required" && variant.qc_recovery_available === true && variant.qc_recovery_used !== true)
-		.map((variant) => variant.id)) ?? []);
+  const actionableFailures = creativeOrderActionableWorkflowFailures(data);
   const activeVariant = active ? variantById.get(active.variant_id) : undefined;
   const generationInfoVariant = generationInfoAsset ? variantById.get(generationInfoAsset.variant_id) : undefined;
   const latestAdjustment = latestOrderAdjustmentFeedback(feedback.data?.events ?? [], orderId);
@@ -338,6 +430,7 @@ function CreativeOrderDetail({ orderId, onBack, onBrowseOrders, backLabel }: { o
   const stage = creativeOrderStage(data);
   const isCancelled = stage.key === "cancelled";
   const source = library.data?.candidates.find((candidate) => candidate.id === activeVariant?.item.candidate_id);
+  const candidateLabels = new Map((library.data?.candidates ?? []).map((candidate) => [candidate.id, candidate.title || candidate.competitor || candidate.id.slice(0, 8)]));
   const generatedFor = (asset: CreativeOrderAsset) => assets.find((candidate) => candidate.status === "completed" && candidate.variant_id === asset.variant_id && candidate.size_key === asset.size_key && candidate.revision === asset.revision && candidate.stage === "generated");
   const attachmentURL = (asset?: CreativeOrderAsset) => {
     const attachment = asset ? byId.get(asset.attachment_id) : undefined;
@@ -391,106 +484,50 @@ function CreativeOrderDetail({ orderId, onBack, onBrowseOrders, backLabel }: { o
     finally { setAdjustBusy(false); }
   };
 
-  const retryVariantQC = async (variantId: string) => {
-    if (!variantId || retryingQCVariantId) return;
-    setRetryingQCVariantId(variantId);
-    try {
-      await api.retryCreativeOrderVariantQC(orderId, variantId);
-      await Promise.all([
-        order.refetch(),
-        queryClient.invalidateQueries({ queryKey: creativeKeys.orders(wsId) }),
-      ]);
-      toast.success("技术与视觉质检已重新排队，正在复用现有成图");
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : "无法重新执行双路质检");
-    } finally {
-      setRetryingQCVariantId("");
-    }
-  };
-
-  const repairVariantPrimePackage = async (variantId: string) => {
-    if (!variantId || repairingPrimeVariantId) return;
-    setRepairingPrimeVariantId(variantId);
-    try {
-      await api.repairCreativeOrderVariantPrimePackage(orderId, variantId);
-      await Promise.all([
-        order.refetch(),
-        queryClient.invalidateQueries({ queryKey: creativeKeys.orders(wsId) }),
-      ]);
-      toast.success("Prime 包修复已排队，完成后会重新进入双路质检");
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : "无法修复 Prime 包");
-    } finally {
-      setRepairingPrimeVariantId("");
-    }
-  };
-
-  const retryFailure = async (failure: CreativeOrderWorkflowFailure) => {
-    const retryMode = workflowFailureRetryMode(failure);
-    if (!retryMode) return;
-	if (retryMode === "qc_recovery") {
-		await retryVariantQC(failure.subject_id);
-		return;
-	}
-	setRetryingTaskId(failure.task_id);
-    try {
-      if (retryMode === "creative_recovery") {
-        await api.retryCreativeOrderWorkflowFailure(orderId, failure.task_id);
-      } else {
-        await api.retryFailedAgentTasksBySource(
-          failure.agent_id,
-          failure.trigger_evidence_kind,
-          failure.trigger_evidence_ref_id,
-        );
-      }
-      await Promise.all([
-        order.refetch(),
-        queryClient.invalidateQueries({ queryKey: creativeKeys.orders(wsId) }),
-      ]);
-		toast.success("失败步骤已重新排队");
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : "无法重试失败步骤");
-    } finally {
-		setRetryingTaskId("");
-    }
-  };
-
   return <div className="mx-auto max-w-[1440px] space-y-4">
     <div className="flex flex-wrap items-end justify-between gap-3 border-b pb-3">
       <div><div className="flex items-center gap-1"><Button size="sm" variant="ghost" onClick={onBack}><ArrowLeft className="h-4 w-4" />{backLabel}</Button>{backLabel === "返回 issue" && <Button size="sm" variant="ghost" onClick={onBrowseOrders}>全部订单</Button>}</div><h2 className="mt-2 text-base font-semibold">订单 {orderId.slice(0, 8)}</h2><p className="mt-1 text-xs text-muted-foreground">{stage.detail} · 更新于 {formatCreativeDateTime(data?.updated_at || "")}（{creativeTimeZoneLabel()}）</p></div>
-      <div className="flex items-center gap-2"><Badge variant={stage.key === "attention" ? "destructive" : stage.key === "review" || stage.key === "delivered" ? "default" : "outline"}>{stage.label}</Badge>{!isDirectEdit && <Badge variant={adoptionStatus === "已采用" ? "default" : "secondary"}>{adoptionStatus}</Badge>}{data && !["delivered", "cancelled"].includes(stage.key) && <Button size="sm" variant="outline" onClick={() => setCancelOpen(true)}><CircleStop className="h-4 w-4" />结束订单</Button>}</div>
+      <div className="flex items-center gap-2"><Badge variant={stage.key === "review" || stage.key === "attention" || stage.key === "delivered" ? "default" : "outline"}>{stage.label}</Badge>{!isDirectEdit && <Badge variant={adoptionStatus === "已采用" ? "default" : "secondary"}>{adoptionStatus}</Badge>}{data && !["delivered", "cancelled"].includes(stage.key) && <Button size="sm" variant="outline" onClick={() => setCancelOpen(true)}><CircleStop className="h-4 w-4" />结束订单</Button>}</div>
     </div>
+    {data && <CreativeOrderStatusPanel
+      order={data}
+      stage={stage}
+      onShowReview={() => reviewRef.current?.scrollIntoView({ behavior: "smooth", block: "start" })}
+      onShowFailures={() => failureRef.current?.scrollIntoView({ behavior: "smooth", block: "start" })}
+    />}
     <CreativeOrderJourney stageKey={stage.key} />
-		{data && <CreativeOrderFailureNotice failures={data.workflow_failures ?? []} qcRecoveryAvailableVariantIds={qcRecoveryAvailableVariantIds} retryingTaskId={retryingTaskId} retryingQCVariantId={retryingQCVariantId} onRetry={(failure) => void retryFailure(failure)} compact={reviewAssets.length > 0} closed={isCancelled} />}
-    {!isDirectEdit && data?.items.map((item) => {
-      const itemSource = library.data?.candidates.find((candidate) => candidate.id === item.candidate_id);
-      return <CreativeOrderDeliveryCandidates
-        key={item.id}
-        orderId={orderId}
-        item={item}
-        source={{ label: itemSource?.title || itemSource?.competitor || "原始素材", url: resolvePublicFileUrl(itemSource?.archived_url || itemSource?.preview_url) ?? "" }}
-        attachments={byId}
-        adoptingVariantId={adoptVariant.isPending ? adoptVariant.variables?.variantId ?? "" : ""}
-		retryingQCVariantId={retryingQCVariantId}
-		repairingPrimeVariantId={repairingPrimeVariantId}
-        disabled={isCancelled}
-        onAdopt={(variantId, risk) => {
-          const selectedAsset = reviewAssets.find((asset) => asset.variant_id === variantId && asset.size_key === "1080x1080")
-            ?? reviewAssets.find((asset) => asset.variant_id === variantId);
-          adoptVariant.mutate({ itemId: item.id, variantId, qcRiskAcknowledged: risk?.acknowledged, qcRiskReason: risk?.reason }, {
-            onSuccess: () => {
-              if (selectedAsset) setActiveAssetId(selectedAsset.id);
-              toast.success("最终采用方案已更新");
-            },
-            onError: (error) => toast.error(error instanceof Error ? error.message : "无法采用此变体"),
-          });
-        }}
-		onRetryQC={(variantId) => void retryVariantQC(variantId)}
-		onRepairPrime={(variantId) => void repairVariantPrimePackage(variantId)}
-        onAssetSelect={selectReviewAsset}
-        onAssetInfo={setGenerationInfoAssetId}
-      />;
-    })}
+    <div ref={failureRef} className="scroll-mt-4">
+      {data && <CreativeOrderFailureNotice failures={actionableFailures} compact={reviewAssets.length > 0} closed={isCancelled} />}
+    </div>
+    <div ref={reviewRef} className="scroll-mt-4 space-y-4">
+      {!isDirectEdit && data?.items.map((item, index) => {
+        const itemSource = library.data?.candidates.find((candidate) => candidate.id === item.candidate_id);
+        return <CreativeOrderDeliveryCandidates
+          key={item.id}
+          orderId={orderId}
+          item={item}
+          source={{ label: itemSource?.title || itemSource?.competitor || "原始素材", url: resolvePublicFileUrl(itemSource?.archived_url || itemSource?.preview_url) ?? "" }}
+          attachments={byId}
+          adoptingVariantId={adoptVariant.isPending ? adoptVariant.variables?.variantId ?? "" : ""}
+          disabled={isCancelled}
+          defaultOpen={index === 0}
+          showDirectionDetails={false}
+          onAdopt={(variantId, risk) => {
+            const selectedAsset = reviewAssets.find((asset) => asset.variant_id === variantId && asset.size_key === "1080x1080")
+              ?? reviewAssets.find((asset) => asset.variant_id === variantId);
+            adoptVariant.mutate({ itemId: item.id, variantId, qcRiskAcknowledged: risk?.acknowledged, qcRiskReason: risk?.reason }, {
+              onSuccess: () => {
+                if (selectedAsset) setActiveAssetId(selectedAsset.id);
+                toast.success("最终采用方案已更新");
+              },
+              onError: (error) => toast.error(error instanceof Error ? error.message : "无法采用此变体"),
+            });
+          }}
+          onAssetSelect={selectReviewAsset}
+          onAssetInfo={setGenerationInfoAssetId}
+        />;
+      })}
+    </div>
     {latestAdjustment && data && <CreativeAdjustmentStatus event={latestAdjustment} variant={adjustedVariant} issueId={data.issue_id} />}
     {active && attachmentURL(active) && <div ref={comparisonRef} className={cn("h-[min(78vh,860px)] min-h-[620px] scroll-mt-4 overflow-hidden border", isDirectEdit && "grid grid-rows-[auto_minmax(0,1fr)]")}>
       {isDirectEdit && <div className="flex items-center gap-2 border-b px-4 py-3"><span className="text-sm font-semibold">交付包</span><Badge variant="outline">直接改图</Badge></div>}
@@ -506,6 +543,9 @@ function CreativeOrderDetail({ orderId, onBack, onBrowseOrders, backLabel }: { o
         showDecisionActions={false}
       />
     </div>}
+    <div ref={confirmedContentRef} className="scroll-mt-4">
+      {data && !isDirectEdit && <CreativeOrderConfirmedContent order={data} candidateLabels={candidateLabels} />}
+    </div>
     <CreativeGenerationInfoDialog
       open={Boolean(generationInfoAsset && generationInfoVariant)}
       onOpenChange={(open) => { if (!open) setGenerationInfoAssetId(""); }}
@@ -514,11 +554,11 @@ function CreativeOrderDetail({ orderId, onBack, onBrowseOrders, backLabel }: { o
       asset={generationInfoAsset}
       imageUrl={attachmentURL(generationInfoAsset)}
     />
-    {data && !order.isLoading && reviewAssets.length === 0 && <div className="flex min-h-72 items-center justify-center border border-dashed px-6 text-center text-sm text-muted-foreground">{creativeOrderWaitingMessage(data.workflow_failures ?? [], isCancelled)}</div>}
+    {data && !order.isLoading && reviewAssets.length === 0 && <div className="flex min-h-72 items-center justify-center border border-dashed px-6 text-center text-sm text-muted-foreground">{creativeOrderWaitingMessage(actionableFailures, isCancelled)}</div>}
     <Dialog open={adjustOpen} onOpenChange={setAdjustOpen}><DialogContent className="max-w-xl"><DialogHeader><DialogTitle>调整当前成图</DialogTitle><DialogDescription>{activeVariant?.variant.variant_key || "当前变体"} · {active?.size_key}。修改会保留在订单记录中，并按所选范围重新处理。</DialogDescription></DialogHeader><Textarea rows={5} value={adjustment} onChange={(event) => setAdjustment(event.target.value)} placeholder="说明需要改什么、必须保留什么，以及只影响当前尺寸还是整个变体..." /><DialogFooter><Button variant="outline" onClick={() => setAdjustOpen(false)}>取消</Button><Button disabled={adjustBusy || !adjustment.trim()} onClick={() => void submitAdjustment()}>{adjustBusy ? "正在提交" : "提交调整"}</Button></DialogFooter></DialogContent></Dialog>
     <AlertDialog open={cancelOpen} onOpenChange={(open) => { if (!cancelOrder.isPending) setCancelOpen(open); }}>
       <AlertDialogContent>
-        <AlertDialogHeader><AlertDialogTitle>结束这个创意订单？</AlertDialogTitle><AlertDialogDescription>仍在运行的生成任务会停止。已有成图、失败原因和协作记录会保留，但订单不再占用工作台待处理列表，也不能继续采用或调整。</AlertDialogDescription></AlertDialogHeader>
+        <AlertDialogHeader><AlertDialogTitle>结束这个创意订单？</AlertDialogTitle><AlertDialogDescription>仍在运行的生成任务会停止。已有成图、失败原因和协作记录会保留，但订单不再占用工作台待验收列表，也不能继续采用或调整。</AlertDialogDescription></AlertDialogHeader>
         <AlertDialogFooter><AlertDialogCancel disabled={cancelOrder.isPending}>继续保留</AlertDialogCancel><AlertDialogAction className="bg-destructive text-white hover:bg-destructive/90" disabled={cancelOrder.isPending} onClick={() => cancelOrder.mutate(undefined, { onSuccess: () => { setCancelOpen(false); toast.success("订单已结束"); }, onError: (error) => toast.error(error instanceof Error ? error.message : "无法结束订单") })}>{cancelOrder.isPending ? "正在结束" : "结束订单"}</AlertDialogAction></AlertDialogFooter>
       </AlertDialogContent>
     </AlertDialog>
@@ -554,6 +594,352 @@ function CreativeOrderJourney({ stageKey }: { stageKey: ReturnType<typeof creati
   </ol>;
 }
 
+function CreativeOrderStatusPanel({
+  order,
+  stage,
+  onShowReview,
+  onShowFailures,
+}: {
+  order: CreativeOrder;
+  stage: CreativeOrderStage;
+  onShowReview: () => void;
+  onShowFailures: () => void;
+}) {
+  const stats = creativeOrderRuntimeStats(order);
+  const actionableFailures = creativeOrderActionableWorkflowFailures(order);
+  const hasFailures = actionableFailures.length > 0;
+  const canReview = stage.readyVariants > stage.adoptedItems;
+  const hasActions = canReview || hasFailures;
+  const title = creativeOrderStatusTitle(stage, stats, hasFailures);
+  const detail = creativeOrderStatusDetail(stage, stats, hasFailures);
+
+  return <section className="border bg-background" aria-label="订单现状">
+    <div className="grid gap-0 md:grid-cols-[minmax(0,1fr)_auto]">
+      <div className="min-w-0 px-4 py-3">
+        <div className="flex flex-wrap items-center gap-2">
+          <Badge variant={stage.key === "review" || stage.key === "attention" || stage.key === "delivered" ? "default" : "outline"}>{stage.label}</Badge>
+          <h3 className="min-w-0 truncate text-sm font-semibold">{title}</h3>
+        </div>
+        <p className="mt-1 text-sm text-muted-foreground">{detail}</p>
+      </div>
+      <div className="grid grid-cols-2 border-t text-xs md:w-[420px] md:grid-cols-4 md:border-l md:border-t-0">
+        <OrderStat label="素材" value={`${stage.totalItems}`} />
+        <OrderStat label="可验收" value={`${stage.readyVariants}`} />
+        <OrderStat label="运行中" value={`${stats.runningVariants}`} />
+        <OrderStat label="提醒" value={`${stats.blockedVariants + actionableFailures.length}`} />
+      </div>
+    </div>
+    {hasActions && <div className="flex flex-wrap items-center gap-2 border-t px-4 py-3">
+      {canReview && <Button size="sm" onClick={onShowReview}><CheckCircle2 className="h-4 w-4" />验收可用方案</Button>}
+      {hasFailures && <Button size="sm" variant={canReview ? "outline" : "default"} onClick={onShowFailures}><AlertTriangle className="h-4 w-4" />查看提醒</Button>}
+    </div>}
+  </section>;
+}
+
+function OrderStat({ label, value }: { label: string; value: string }) {
+  return <div className="min-w-0 border-l px-3 py-3 first:border-l-0 md:first:border-l">
+    <span className="block text-base font-semibold tabular-nums">{value}</span>
+    <span className="mt-0.5 block text-muted-foreground">{label}</span>
+  </div>;
+}
+
+function creativeOrderRuntimeStats(order: CreativeOrder): { runningVariants: number; blockedVariants: number; previewAssets: number; expectedPreviewAssets: number } {
+  const variants = order.items.flatMap((item) => item.variants);
+  return {
+    runningVariants: variants.filter(creativeVariantIsInProgress).length,
+    blockedVariants: variants.filter(creativeVariantNeedsManualAction).length,
+    previewAssets: variants.reduce((count, variant) => count + variant.assets.filter((asset) => asset.status === "completed" && asset.attachment_id).length, 0),
+    expectedPreviewAssets: variants.length * CREATIVE_DELIVERY_SIZES.length,
+  };
+}
+
+function creativeOrderStatusTitle(stage: CreativeOrderStage, stats: ReturnType<typeof creativeOrderRuntimeStats>, hasFailures: boolean): string {
+  if (stage.key === "delivered") return "交付完成，可以下载最终采用方案";
+  if (stage.key === "cancelled") return "订单已结束，过程记录仍保留";
+  if (stage.key === "review" && hasFailures) return "已有可验收方案，另有系统提醒";
+  if (stage.key === "review") return "已有方案可验收";
+  if (stage.key === "attention") return "等待人工验收，系统提醒仅作参考";
+  if (stage.key === "generating") return "后台正在生成方案";
+  if (stats.expectedPreviewAssets > 0) return "订单已创建，等待首批成图";
+  return "订单正在准备";
+}
+
+function creativeOrderStatusDetail(stage: CreativeOrderStage, stats: ReturnType<typeof creativeOrderRuntimeStats>, hasFailures: boolean): string {
+  if (stage.key === "review" && hasFailures) return "可以先验收已完成方案；系统提醒只说明后台还有步骤未补齐。";
+  if (stage.key === "review") return "先比较可用方案，采用后会生成交付包。";
+  if (stage.key === "attention") return "不用手动重试流程；可查看可用图、标注调整或结束订单。";
+  if (stage.key === "generating") return `${stats.previewAssets}/${Math.max(stats.expectedPreviewAssets, 1)} 张过程图已就绪，页面会自动刷新。`;
+  return stage.detail;
+}
+
+type ConfirmedReplacement = {
+  id: string;
+  location: string;
+  role: string;
+  sourceText: string;
+  finalText: string;
+  sourceKind: string;
+  status: string;
+  note: string;
+};
+
+type ConfirmedNumericLayout = {
+  id: string;
+  location: string;
+  instruction: string;
+};
+
+type ConfirmedOrderSummary = {
+  headline: string;
+  rate: string;
+  amount: string;
+  cta: string;
+  numeric: string;
+};
+
+type ConfirmedOrderItem = {
+  id: string;
+  label: string;
+  replacements: ConfirmedReplacement[];
+  numericLayouts: ConfirmedNumericLayout[];
+  repaymentPlans: { label: string; value: string }[];
+  summary: ConfirmedOrderSummary;
+  prompt: string;
+};
+
+function CreativeOrderConfirmedContent({ order, candidateLabels }: { order: CreativeOrder; candidateLabels: Map<string, string> }) {
+  const items = order.items.map((item, index) => confirmedOrderItem(item, index, candidateLabels.get(item.candidate_id)));
+  if (items.length === 0) return null;
+  const replacementCount = items.reduce((count, item) => count + item.replacements.length, 0);
+  const numericCount = items.reduce((count, item) => count + item.numericLayouts.length + item.repaymentPlans.length, 0);
+  const manualCount = items.reduce((count, item) => count + item.replacements.filter((entry) => entry.sourceKind === "manual").length, 0);
+  const calculationCount = items.reduce((count, item) => count + item.replacements.filter((entry) => entry.sourceKind === "calculation").length, 0);
+
+  return <details className="group border bg-background" aria-label="冻结明细">
+    <summary className="flex cursor-pointer list-none flex-wrap items-start justify-between gap-3 px-4 py-3 marker:content-none">
+      <div className="min-w-0">
+        <div className="flex items-center gap-2"><BookOpenText className="h-4 w-4 text-emerald-700" /><h3 className="text-sm font-semibold">冻结明细</h3></div>
+        <p className="mt-1 text-xs text-muted-foreground">逐区文案、数值口径和完整生成指令；排查问题时展开查看。</p>
+      </div>
+      <div className="flex flex-wrap gap-2">
+        <Badge variant="outline">{items.length} 张素材</Badge>
+        <Badge variant="outline">{replacementCount} 个文案</Badge>
+        {numericCount > 0 && <Badge variant="outline">{numericCount} 个数值</Badge>}
+        {manualCount > 0 && <Badge variant="secondary">{manualCount} 个人工改写</Badge>}
+        {calculationCount > 0 && <Badge variant="secondary">{calculationCount} 个公式计算</Badge>}
+      </div>
+    </summary>
+    <div className="grid gap-3 border-t p-4">
+      {items.map((item, index) => <section key={item.id} className="border bg-muted/10">
+        <div className="flex flex-wrap items-center justify-between gap-2 px-3 py-3">
+          <h4 className="min-w-0 truncate text-sm font-semibold">素材 {index + 1} · {item.label}</h4>
+          <div className="flex flex-wrap gap-1.5 text-xs">
+            <Badge variant="outline">{item.replacements.length} 个文案</Badge>
+            {item.numericLayouts.length + item.repaymentPlans.length > 0 && <Badge variant="outline">{item.numericLayouts.length + item.repaymentPlans.length} 个数值</Badge>}
+          </div>
+        </div>
+        <div className="grid gap-3 border-t bg-background px-3 py-3 md:grid-cols-2 xl:grid-cols-4">
+          <ConfirmedSummaryValue label="主标题" value={item.summary.headline} />
+          <ConfirmedSummaryValue label="利率/金额" value={[item.summary.rate, item.summary.amount].filter(Boolean).join("；")} />
+          <ConfirmedSummaryValue label="CTA" value={item.summary.cta} />
+          <ConfirmedSummaryValue label="数值口径" value={item.summary.numeric} />
+        </div>
+        <details className="group border-t bg-background text-sm">
+          <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-3 py-2.5 text-xs font-medium text-muted-foreground marker:content-none">
+            <span>查看逐区明细和生成指令</span>
+            <span>{item.replacements.length} 个文案，{item.numericLayouts.length + item.repaymentPlans.length} 个数值</span>
+          </summary>
+          {item.replacements.length > 0 ? <div className="divide-y border-t">
+            {item.replacements.map((entry, entryIndex) => <div key={entry.id || `${item.id}-${entryIndex}`} className="grid gap-3 px-3 py-3 lg:grid-cols-[minmax(150px,0.72fr)_minmax(180px,0.9fr)_minmax(220px,1.35fr)_auto] lg:items-start">
+              <div className="min-w-0"><p className="truncate text-xs text-muted-foreground">区域</p><p className="mt-1 break-words font-medium">{friendlyCopyLocation(entry.location, entryIndex)}</p></div>
+              <div className="min-w-0"><p className="text-xs text-muted-foreground">原图文字</p><p className="mt-1 whitespace-pre-wrap break-words">{entry.sourceText || "未识别清晰文字"}</p></div>
+              <div className="min-w-0"><p className="text-xs text-muted-foreground">最终替换文字</p><p className="mt-1 whitespace-pre-wrap break-words font-medium">{entry.finalText || "留空，移除原文"}</p>{entry.note && <p className="mt-1 whitespace-pre-wrap break-words text-xs text-muted-foreground">{entry.note}</p>}</div>
+              <ConfirmedSourceBadge entry={entry} />
+            </div>)}
+          </div> : <p className="border-t px-3 py-4 text-sm text-muted-foreground">这张素材没有记录逐区替换文案。</p>}
+          {(item.numericLayouts.length > 0 || item.repaymentPlans.length > 0) && <div className="border-t bg-muted/10 px-3 py-3">
+            <p className="text-xs font-medium text-muted-foreground">数值版式</p>
+            <div className="mt-2 space-y-2 text-sm">
+              {item.numericLayouts.map((layout) => <div key={layout.id} className="grid gap-1 sm:grid-cols-[180px_minmax(0,1fr)]"><span className="text-muted-foreground">{friendlyCopyLocation(layout.location, 0)}</span><span className="whitespace-pre-wrap break-words">{layout.instruction || "沿用冻结版式"}</span></div>)}
+              {item.repaymentPlans.map((plan, planIndex) => <div key={`${item.id}-repayment-${planIndex}-${plan.label}`} className="grid gap-1 sm:grid-cols-[180px_minmax(0,1fr)]"><span className="text-muted-foreground">{plan.label}</span><span className="whitespace-pre-wrap break-words">{plan.value}</span></div>)}
+            </div>
+          </div>}
+          {item.prompt && <details className="border-t px-3 py-2.5 text-xs text-muted-foreground">
+            <summary className="w-fit cursor-pointer select-none">生成指令详情</summary>
+            <pre className="mt-2 max-h-56 overflow-auto whitespace-pre-wrap break-words border bg-muted/20 p-3 font-sans text-xs leading-5">{item.prompt}</pre>
+          </details>}
+        </details>
+      </section>)}
+    </div>
+  </details>;
+}
+
+function ConfirmedSummaryValue({ label, value }: { label: string; value: string }) {
+  return <div className="min-w-0">
+    <p className="text-xs text-muted-foreground">{label}</p>
+    <p className={cn("mt-1 line-clamp-2 break-words text-sm", value ? "font-medium" : "text-muted-foreground")}>{value || "未单独记录"}</p>
+  </div>;
+}
+
+function ConfirmedSourceBadge({ entry }: { entry: ConfirmedReplacement }) {
+  const empty = entry.status === "missing" || !entry.finalText;
+  return <div className="flex lg:justify-end">
+    <Badge variant={empty ? "outline" : entry.sourceKind === "manual" || entry.sourceKind === "calculation" ? "secondary" : "outline"}>
+      {empty ? "留空" : confirmedSourceKindLabel(entry.sourceKind)}
+    </Badge>
+  </div>;
+}
+
+function confirmedOrderItem(item: CreativeOrderItem, index: number, label?: string): ConfirmedOrderItem {
+  const snapshot = recordValue(item.copy_snapshot);
+  const preAdaptation = recordValue(snapshot.pre_adaptation);
+  const replacements = arrayValue(preAdaptation.text_replacements).map(confirmedReplacement).filter((entry): entry is ConfirmedReplacement => entry !== null);
+  const numericLayouts = arrayValue(preAdaptation.numeric_layouts).map(confirmedNumericLayout).filter((entry): entry is ConfirmedNumericLayout => entry !== null);
+  const repaymentPlans = confirmedRepaymentPlans(preAdaptation.repayment_plan_selections);
+  return {
+    id: item.id || item.candidate_id || String(index),
+    label: label || item.candidate_id.slice(0, 8) || `素材 ${index + 1}`,
+    replacements: replacements.length > 0 ? replacements : fallbackSnapshotReplacements(snapshot),
+    numericLayouts,
+    repaymentPlans,
+    summary: confirmedOrderSummary(replacements.length > 0 ? replacements : fallbackSnapshotReplacements(snapshot), numericLayouts, repaymentPlans),
+    prompt: trimmedStringValue(preAdaptation.production_prompt) || item.direction.trim(),
+  };
+}
+
+function confirmedReplacement(value: unknown): ConfirmedReplacement | null {
+  const entry = recordValue(value);
+  const id = trimmedStringValue(entry.block_id);
+  const location = trimmedStringValue(entry.location);
+  const role = trimmedStringValue(entry.role);
+  const sourceText = trimmedStringValue(entry.source_text);
+  const finalText = trimmedStringValue(entry.replacement_text);
+  if (!id && !location && !sourceText && !finalText) return null;
+  return {
+    id,
+    location,
+    role,
+    sourceText,
+    finalText,
+    sourceKind: trimmedStringValue(entry.source_kind),
+    status: trimmedStringValue(entry.status),
+    note: trimmedStringValue(entry.note),
+  };
+}
+
+function confirmedNumericLayout(value: unknown): ConfirmedNumericLayout | null {
+  const entry = recordValue(value);
+  const id = trimmedStringValue(entry.id);
+  const location = trimmedStringValue(entry.location);
+  const instruction = trimmedStringValue(entry.render_instruction);
+  if (!id && !location && !instruction) return null;
+  return { id, location, instruction };
+}
+
+function confirmedRepaymentPlans(value: unknown): { label: string; value: string }[] {
+  return arrayValue(value).flatMap((entry) => {
+    const selection = recordValue(entry);
+    const values = recordValue(selection.values);
+    const principal = trimmedStringValue(values.principal);
+    const tenor = trimmedStringValue(values.tenor);
+    const monthlyInstallment = trimmedStringValue(values.monthly_installment);
+    const totalInterest = trimmedStringValue(values.total_interest);
+    const totalRepayment = trimmedStringValue(values.total_repayment);
+    const label = [principal, tenor].filter(Boolean).join(" / ");
+    const facts = [
+      monthlyInstallment ? `月还 ${monthlyInstallment}` : "",
+      totalInterest ? `总利息 ${totalInterest}` : "",
+      totalRepayment ? `总还款 ${totalRepayment}` : "",
+    ].filter(Boolean).join("；");
+    return label && facts ? [{ label, value: facts }] : [];
+  });
+}
+
+function confirmedOrderSummary(
+  replacements: ConfirmedReplacement[],
+  numericLayouts: ConfirmedNumericLayout[],
+  repaymentPlans: { label: string; value: string }[],
+): ConfirmedOrderSummary {
+  const headlineEntry = replacements.find((entry) => entry.finalText && /(headline|title|top center|main|主标题|标题)/i.test(`${entry.role} ${entry.location}`));
+  const headline = headlineEntry?.finalText ?? "";
+  const rate = firstReplacementText(replacements, (entry) => entry !== headlineEntry && entry.finalText.includes("%"))
+    || firstReplacementText(replacements, (entry) => entry !== headlineEntry && /rate|interest|利率/.test(`${entry.location} ${entry.sourceText} ${entry.finalText}`.toLowerCase()));
+  const amount = firstReplacementText(replacements, (entry) => entry !== headlineEntry && /rp|amount|principal|repayment|pinjaman|pembayaran|金额|还款/.test(`${entry.location} ${entry.sourceText} ${entry.finalText}`.toLowerCase()))
+    || confirmedAmountFromNumeric(numericLayouts, repaymentPlans);
+  const cta = firstReplacementText(replacements, (entry) => /(cta|button|action|按钮|行动)/i.test(`${entry.role} ${entry.location}`));
+  const numeric = [
+    numericLayouts.length > 0 ? `${numericLayouts.length} 个数值区域已冻结` : "",
+    repaymentPlans.length > 0 ? `${repaymentPlans.length} 条还款计划已冻结` : "",
+  ].filter(Boolean).join("；");
+  return { headline, rate, amount, cta, numeric };
+}
+
+function firstReplacementText(replacements: ConfirmedReplacement[], predicate: (entry: ConfirmedReplacement) => boolean): string {
+  return replacements.find((entry) => entry.finalText && predicate(entry))?.finalText ?? "";
+}
+
+function confirmedAmountFromNumeric(numericLayouts: ConfirmedNumericLayout[], repaymentPlans: { label: string; value: string }[]): string {
+  const instructions = numericLayouts.map((layout) => layout.instruction).join(" ");
+  const totalRepayment = instructions.match(/(?:total[-\s]?repayment|total pembayaran)[^R]*(Rp[\d.]+)/i)?.[1];
+  if (totalRepayment) return `总还款 ${totalRepayment}`;
+  const firstRepaymentTotal = repaymentPlans.map((plan) => plan.value.match(/总还款\s+(Rp[\d.]+)/)?.[1]).find(Boolean);
+  if (firstRepaymentTotal) return `总还款 ${firstRepaymentTotal}`;
+  const firstAmount = instructions.match(/Rp[\d.]+/)?.[0];
+  return firstAmount ?? "";
+}
+
+function fallbackSnapshotReplacements(snapshot: Record<string, unknown>): ConfirmedReplacement[] {
+  const fields = [
+    ["headline", "主标题"],
+    ["subheadline", "副标题"],
+    ["benefit", "利益点"],
+    ["supporting", "补充信息"],
+    ["cta", "行动文案"],
+    ["legal_text", "合规文案"],
+  ] as const;
+  return fields.flatMap(([key, label]) => {
+    const value = trimmedStringValue(snapshot[key]);
+    return value ? [{ id: key, location: label, role: key, sourceText: "", finalText: value, sourceKind: "snapshot", status: "ready", note: "" }] : [];
+  });
+}
+
+function friendlyCopyLocation(location: string, index: number): string {
+  const lower = location.toLowerCase();
+  if (/top center|headline|主标题/.test(lower)) return "顶部主标题";
+  if (/upper-right.*rate.*below|rate card below|利率.*数值/.test(lower)) return "右上利率卡数值";
+  if (/upper-right.*rate|rate card|利率卡/.test(lower)) return "右上利率卡";
+  if (/bottom.*benefit.*left/.test(lower)) return "底部利益点左侧";
+  if (/bottom.*benefit.*center/.test(lower)) return "底部利益点中部";
+  if (/bottom.*benefit.*right/.test(lower)) return "底部利益点右侧";
+  if (/bottom.*button|green button|cta|行动/.test(lower)) return "底部 CTA 按钮";
+  if (/donut|total|pembayaran|总还款/.test(lower)) return "中部总还款卡";
+  if (/repayment summary|right-side|还款摘要/.test(lower)) return "右侧还款摘要";
+  if (/table|four-column|还款表/.test(lower)) return "下方还款表";
+  if (/principal|pinjaman|本金/.test(lower)) return "借款金额";
+  if (/tenor|periode|期限/.test(lower)) return "期限";
+  return location || `文案区域 ${index + 1}`;
+}
+
+function confirmedSourceKindLabel(kind: string): string {
+  if (kind === "manual") return "人工改写";
+  if (kind === "recommendation") return "本次推荐";
+  if (kind === "calculation") return "公式计算";
+  if (kind === "snapshot") return "已冻结";
+  return "已审核文案";
+}
+
+function recordValue(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
+}
+
+function arrayValue(value: unknown): unknown[] {
+  return Array.isArray(value) ? value : [];
+}
+
+function trimmedStringValue(value: unknown): string {
+  return typeof value === "string" ? value.trim() : "";
+}
+
 export function creativeAdjustmentComment(input: {
   request: string;
   orderId: string;
@@ -572,65 +958,44 @@ export function creativeAdjustmentComment(input: {
   return `用户提出成图调整：\n\n**目标成图：** ${target}${preview}\n\n${input.request.trim()}\n\n<!-- creative-workflow-context\ncreative_order_id: ${input.orderId}\ncreative_order_item_id: ${input.itemId}\nvariant_id: ${input.variantId}\nvariant_key: ${input.variantKey}\nasset_id: ${input.assetId}\nsize_key: ${input.sizeKey}\nrevision: ${input.revision}\ninstruction: Process only the requested scope and preserve other approved assets.\n-->`;
 }
 
-export function CreativeOrderFailureNotice({ failures, qcRecoveryAvailableVariantIds = EMPTY_QC_RECOVERY_VARIANT_IDS, retryingTaskId, retryingQCVariantId = "", onRetry, compact = false, closed = false }: {
+export function CreativeOrderFailureNotice({ failures, compact = false, closed = false }: {
   failures: CreativeOrderWorkflowFailure[];
-	qcRecoveryAvailableVariantIds?: ReadonlySet<string>;
-  retryingTaskId: string;
-	retryingQCVariantId?: string;
-  onRetry: (failure: CreativeOrderWorkflowFailure) => void;
   compact?: boolean;
   closed?: boolean;
 }) {
   if (failures.length === 0) return null;
-	const coveredQCVariants = new Set<string>();
-	const failuresList = <div className="divide-y divide-destructive/20">{failures.map((failure) => {
-		const retryMode = workflowFailureRetryMode(failure);
-		const qcRecoveryAvailable = retryMode !== "qc_recovery" || qcRecoveryAvailableVariantIds.has(failure.subject_id);
-      const retryable = Boolean(retryMode) && qcRecoveryAvailable;
-		const duplicateQCRecovery = retryMode === "qc_recovery" && (coveredQCVariants.has(failure.subject_id) || !failure.subject_id);
-		if (retryMode === "qc_recovery" && failure.subject_id) coveredQCVariants.add(failure.subject_id);
-      const busy = retryMode === "qc_recovery" ? retryingQCVariantId === failure.subject_id : retryingTaskId === failure.task_id;
+  const failuresList = <div className="divide-y divide-amber-200/70 dark:divide-amber-900/60">{failures.map((failure) => {
       const message = workflowFailureMessage(failure);
       const technicalDetails = workflowFailureTechnicalDetails(failure, message);
       return <div key={failure.task_id || `${failure.workflow}:${failure.subject_id}:${failure.failed_at}`} className="px-4 py-3">
-        <div className="min-w-0"><div className="flex flex-wrap items-center gap-2"><span className="text-sm font-medium">失败步骤：{creativeWorkflowLabel(failure.workflow)}</span>{failure.item_key && <Badge variant="outline" title={failure.item_key}>对象 {failure.item_key.slice(0, 8)}</Badge>}</div><p className="mt-1 break-words text-sm text-destructive">{message}</p><p className="mt-1 break-words text-xs text-muted-foreground">范围：{failure.scope || "未提供"}{failure.failure_reason && failure.error !== failure.failure_reason ? ` · 分类：${failure.failure_reason}` : ""}</p>{technicalDetails && <details className="mt-2 text-xs text-muted-foreground"><summary className="w-fit cursor-pointer select-none">技术详情</summary><pre className="mt-2 max-h-40 overflow-auto whitespace-pre-wrap border bg-background p-3 font-mono text-[11px] leading-5">{technicalDetails}</pre></details>}</div>
-		<div className="mt-3">{closed ? <span className="text-xs text-muted-foreground">订单已结束，不再继续处理</span> : retryMode === "qc_recovery" && !qcRecoveryAvailable ? <span className="text-xs text-muted-foreground">双路 QC 恢复不可用，需修复 Prime 包或人工处理</span> : retryable && !duplicateQCRecovery ? <Button size="sm" variant="outline" disabled={busy || Boolean(retryingTaskId) || Boolean(retryingQCVariantId)} onClick={() => onRetry(failure)}><RefreshCw className={cn("h-4 w-4", busy && "animate-spin")} />{busy ? retryMode === "qc_recovery" ? "正在重新执行双路质检" : "正在重试失败步骤" : retryMode === "qc_recovery" ? "重新执行双路质检" : "重试失败步骤"}</Button> : duplicateQCRecovery ? <span className="text-xs text-muted-foreground">此变体的双路质检可由上方恢复操作统一重跑</span> : <span className="text-xs text-muted-foreground">该步骤已无重试次数，请结束订单后重新发起</span>}</div>
+        <div className="min-w-0"><div className="flex flex-wrap items-center gap-2"><span className="text-sm font-medium">过程步骤：{creativeWorkflowLabel(failure.workflow)}</span>{failure.item_key && <Badge variant="outline" title={failure.item_key}>对象 {failure.item_key.slice(0, 8)}</Badge>}</div><p className="mt-1 break-words text-sm text-amber-900 dark:text-amber-200">{message}</p><p className="mt-1 break-words text-xs text-muted-foreground">范围：{failure.scope || "未提供"}{failure.failure_reason && failure.error !== failure.failure_reason ? ` · 分类：${failure.failure_reason}` : ""}</p>{technicalDetails && <details className="mt-2 text-xs text-muted-foreground"><summary className="w-fit cursor-pointer select-none">技术详情</summary><pre className="mt-2 max-h-40 overflow-auto whitespace-pre-wrap border bg-background p-3 font-mono text-[11px] leading-5">{technicalDetails}</pre></details>}</div>
+        <p className="mt-3 text-xs text-muted-foreground">{closed ? "订单已结束，过程记录保留。" : "后台已记录该步骤未补齐；不用手动重试，请查看其他候选、标注调整或结束订单后重新发起。"}</p>
       </div>;
     })}</div>;
-  if (compact) return <details className="border border-destructive/30 bg-destructive/5" role="alert">
-    <summary className="flex cursor-pointer list-none items-center gap-2 px-4 py-3 text-sm marker:content-none"><AlertTriangle className="h-4 w-4 shrink-0 text-destructive" /><span className="font-medium">{failures.length} 个局部步骤需要处理</span><span className="text-xs text-muted-foreground">其他已完成成图不受影响</span></summary>
-    <div className="border-t border-destructive/20">{failuresList}</div>
+  if (compact) return <details className="border border-amber-300 bg-amber-50/50 dark:border-amber-900 dark:bg-amber-950/20" role="status">
+    <summary className="flex cursor-pointer list-none items-center gap-2 px-4 py-3 text-sm marker:content-none"><AlertTriangle className="h-4 w-4 shrink-0 text-amber-700 dark:text-amber-300" /><span className="font-medium">{failures.length} 条系统提醒</span><span className="text-xs text-muted-foreground">可用成图不受影响</span></summary>
+    <div className="border-t border-amber-200 dark:border-amber-900">{failuresList}</div>
   </details>;
-  return <section className="border border-destructive/40 bg-destructive/5" role="alert" aria-label="创意流程失败">
-    <div className="flex gap-3 border-b border-destructive/30 px-4 py-3"><AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-destructive" /><div><h3 className="text-sm font-semibold">创意流程需要处理</h3><p className="mt-1 text-xs text-muted-foreground">失败步骤会单独显示，可重试步骤会从原失败位置继续。</p></div></div>
+  return <section className="border border-amber-300 bg-amber-50/50 dark:border-amber-900 dark:bg-amber-950/20" role="status" aria-label="创意过程提醒">
+    <div className="flex gap-3 border-b border-amber-200 px-4 py-3 dark:border-amber-900"><AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-700 dark:text-amber-300" /><div><h3 className="text-sm font-semibold">系统提醒</h3><p className="mt-1 text-xs text-muted-foreground">后台未补齐的步骤只作为过程记录，是否采用以你的验收为准。</p></div></div>
     {failuresList}
   </section>;
 }
 
 export function creativeOrderWaitingMessage(failures: CreativeOrderWorkflowFailure[], closed = false): string {
-  if (closed) return "订单已结束，没有生成可验收的成图。失败记录仍保留在上方。";
+  if (closed) return "订单已结束，没有生成可验收的成图。过程记录仍保留在上方。";
   return failures.length > 0
-    ? "失败步骤恢复后，首批成图会自动出现在这里。"
+    ? "目前没有可验收成图；可结束订单后重新发起。"
     : "正在等待首批成图。各变体完成后会立即出现在这里。";
-}
-
-export function workflowFailureRetryMode(failure: CreativeOrderWorkflowFailure): "creative_recovery" | "qc_recovery" | "by_source" | null {
-	if (isCreativeQCWorkflow(failure.workflow)) return failure.subject_id ? "qc_recovery" : null;
-  if (!failure.retryable) return null;
-  if (failure.failure_reason === "agent_reported_action_required") {
-    return failure.task_id ? "creative_recovery" : null;
-  }
-  return failure.agent_id && failure.trigger_evidence_kind && failure.trigger_evidence_ref_id ? "by_source" : null;
-}
-
-const EMPTY_QC_RECOVERY_VARIANT_IDS: ReadonlySet<string> = new Set();
-
-function isCreativeQCWorkflow(workflow: string): boolean {
-	return workflow === "creative_qc" || workflow === "creative_qc_technical" || workflow === "creative_qc_visual";
 }
 
 function workflowFailureMessage(failure: CreativeOrderWorkflowFailure): string {
   if (failure.failure_reason === "provider_rate_limited") return "生成服务暂时繁忙，当前步骤未完成。";
+  if (failure.failure_reason === "agent_reported_action_required" && /without registering generated assets|generated assets|artifact|asset/i.test(failure.error)) {
+    if (failure.workflow === "creative_prime") return "贴片包没有完整生成，可能是缺少某个尺寸、QR 解码失败或合成证据不完整。";
+    if (failure.workflow === "creative_production") return "底图没有完整生成，可能是某个尺寸缺失或模型返回不可用。";
+    return "智能体结束了，但没有登记完整成图。";
+  }
   if (failure.failure_reason === "codex_semantic_inactivity") {
     if (/unknown flag|exit code/i.test(failure.error)) return "智能体运行在生成开始前异常退出，当前步骤未完成。";
     return "智能体在等待时间内没有返回有效进展，当前步骤未完成。";
@@ -698,16 +1063,18 @@ function assetFeedbackReason(issueType: string): string {
   return "other";
 }
 
-function CreativeResourcesWorkspace({ resources, onCreate, onArchive }: {
+function CreativeResourcesWorkspace({ resources, onCreate, onArchive, initialSection }: {
   resources: CreativeResource[];
   onCreate: (kind: CreativeResourceKind) => void;
   onArchive: (id: string) => void;
+  initialSection: "market" | "copy";
 }) {
-  const [section, setSection] = useState<"market" | "copy">("market");
+  const [section, setSection] = useState<"market" | "copy">(initialSection);
+  useEffect(() => { setSection(initialSection); }, [initialSection]);
   const marketPacks = resources.filter((resource) => resource.kind === "market_pack");
   const copyLibraries = resources.filter((resource) => resource.kind === "copy_library");
 
-  return <div className="mx-auto flex h-full max-w-[1440px] min-h-0 flex-col">
+  return <div className="mx-auto flex h-full w-full max-w-[1440px] min-h-0 min-w-0 flex-col">
     <div className="flex flex-wrap items-end justify-between gap-3 border-b pb-3">
       <div><h2 className="text-base font-semibold">品牌与市场规则</h2><p className="mt-1 text-sm text-muted-foreground">按市场维护品牌组件、合规内容和可用文案</p></div>
       <div className="inline-flex border" aria-label="资源类型">
@@ -715,154 +1082,10 @@ function CreativeResourcesWorkspace({ resources, onCreate, onArchive }: {
         <button type="button" onClick={() => setSection("copy")} className={cn("inline-flex h-8 items-center gap-1.5 border-l px-3 text-xs", section === "copy" && "bg-foreground text-background")}><BookOpenText className="h-3.5 w-3.5" />文案库</button>
       </div>
     </div>
-    <div className="mt-4 min-h-0 flex-1">
+    <div className="mt-4 min-h-0 min-w-0 flex-1">
       {section === "market" ? <ResourceEditor resources={marketPacks} copyLibraries={copyLibraries} onCreate={() => onCreate("market_pack")} onArchive={onArchive} /> : <ComposableCopyLibraryEditor resources={copyLibraries} onCreate={() => onCreate("copy_library")} onArchive={onArchive} />}
     </div>
   </div>;
-}
-
-export function CopyLibraries({ resources, onCreate, onArchive }: {
-  resources: CreativeResource[];
-  onCreate: () => void;
-  onArchive: (id: string) => void;
-}) {
-  const wsId = useWorkspaceId();
-  const queryClient = useQueryClient();
-  const [activeId, setActiveId] = useState(resources[0]?.id ?? "");
-  const [spreadsheet, setSpreadsheet] = useState<{ data: SpreadsheetData; filename: string } | null>(null);
-  const [mapping, setMapping] = useState<Record<CopyField, string>>(emptyCopyMapping());
-  const [editing, setEditing] = useState<CreativeCopyEntry | "new" | null>(null);
-  const [query, setQuery] = useState("");
-  const fileRef = useRef<HTMLInputElement>(null);
-  const active = resources.find((resource) => resource.id === activeId) ?? resources[0];
-  const entries = useQuery(creativeCopyEntriesOptions(wsId, active?.id ?? ""));
-  const visibleEntries = useMemo(() => {
-    const needle = query.trim().toLocaleLowerCase();
-    if (!needle) return entries.data?.entries ?? [];
-    return (entries.data?.entries ?? []).filter((entry) => [
-      entry.external_key,
-      entry.headline,
-      entry.subheadline,
-      entry.benefit,
-      entry.cta,
-      entry.legal_text,
-      entry.copy_role,
-      entry.market,
-      entry.locale,
-      ...entry.tags,
-    ].join(" ").toLocaleLowerCase().includes(needle));
-  }, [entries.data?.entries, query]);
-
-  const importRows = useMutation({
-    mutationFn: async () => {
-      if (!active || !spreadsheet) throw new Error("请选择文案库和文件");
-      const parsed = spreadsheet.data.rows.map((row, index) => spreadsheetRowToCopy(row, spreadsheet.data.headers, mapping, index));
-      return api.importCreativeCopyEntries(active.id, {
-        mode: "upsert",
-        source_filename: spreadsheet.filename,
-        mapping,
-        entries: parsed,
-      });
-    },
-    onSuccess: (result) => {
-      queryClient.invalidateQueries({ queryKey: creativeKeys.copyEntries(wsId, active?.id ?? "") });
-      queryClient.invalidateQueries({ queryKey: creativeKeys.resources(wsId) });
-      setSpreadsheet(null);
-      toast.success(`导入完成：新增 ${result.created}，更新 ${result.updated}，跳过 ${result.skipped}`);
-    },
-    onError: (error) => toast.error(error instanceof Error ? error.message : "无法导入文案"),
-  });
-
-  const saveEntry = useMutation({
-    mutationFn: async (input: CreativeCopyEntryInput) => {
-      if (!active) throw new Error("请选择文案库");
-      if (editing === "new") {
-        await api.importCreativeCopyEntries(active.id, {
-          mode: "upsert", source_filename: "在线编辑", mapping: {}, entries: [input],
-        });
-        return;
-      }
-      if (editing) await api.updateCreativeCopyEntry(editing.id, input);
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: creativeKeys.copyEntries(wsId, active?.id ?? "") });
-      queryClient.invalidateQueries({ queryKey: creativeKeys.resources(wsId) });
-      setEditing(null);
-      toast.success("文案已保存为草稿版本");
-    },
-    onError: () => toast.error("无法保存文案"),
-  });
-
-  const handleFile = async (file?: File) => {
-    if (!file) return;
-    try {
-      const data = await readCopySpreadsheet(file);
-      setMapping(inferCopyMapping(data.headers));
-      setSpreadsheet({ data, filename: file.name });
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : "无法读取表格");
-    }
-  };
-
-  return (
-    <div className="grid h-full min-h-0 grid-cols-1 overflow-hidden border md:grid-cols-[260px_minmax(0,1fr)]">
-      <ResourceList title="文案库" resources={resources} activeId={active?.id ?? ""} onSelect={setActiveId} onCreate={onCreate} />
-      <div className="min-w-0 overflow-y-auto bg-background">
-        {!active ? <EmptyResource title="还没有文案库" action="创建文案库" onAction={onCreate} /> : (
-          <>
-            <div className="sticky top-0 z-10 border-b bg-background px-4 py-3">
-              <div className="flex flex-wrap items-center justify-between gap-3">
-                <ResourceTitle resource={active} />
-                <div className="flex items-center gap-2">
-                <input ref={fileRef} type="file" accept=".xlsx,.csv" className="hidden" onChange={(event) => handleFile(event.target.files?.[0])} />
-                <Button size="sm" variant="outline" onClick={() => fileRef.current?.click()}><Upload className="h-4 w-4" />导入 Excel</Button>
-                <Button size="sm" variant="outline" onClick={() => setEditing("new")}><Plus className="h-4 w-4" />添加文案</Button>
-                <PublishButton resource={active} />
-                <Button size="icon-sm" variant="ghost" title="归档文案库" aria-label="归档文案库" onClick={() => onArchive(active.id)}><Archive className="h-4 w-4" /></Button>
-                </div>
-              </div>
-              <div className="mt-3 flex items-center gap-3">
-                <div className="relative max-w-xl flex-1"><Search className="pointer-events-none absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" /><Input className="pl-8" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索编号、标题、卖点、职责或标签" /></div>
-                <span className="shrink-0 text-xs text-muted-foreground">{visibleEntries.length} / {entries.data?.entries.length ?? 0} 条</span>
-              </div>
-            </div>
-            <div className="min-w-[920px]">
-              <div className="grid grid-cols-[120px_minmax(180px,1fr)_minmax(160px,1fr)_140px_100px_72px_56px] gap-3 border-b bg-muted/30 px-4 py-2 text-xs font-medium text-muted-foreground">
-                <span>编号</span><span>主标题</span><span>副标题 / 卖点</span><span>职责</span><span>市场</span><span>状态</span><span />
-              </div>
-              {visibleEntries.map((entry) => (
-                <div key={entry.id} className="grid min-h-14 grid-cols-[120px_minmax(180px,1fr)_minmax(160px,1fr)_140px_100px_72px_56px] items-center gap-3 border-b px-4 py-2 text-sm hover:bg-muted/20">
-                  <span className="truncate font-mono text-xs text-muted-foreground">{entry.external_key}</span>
-                  <span className="truncate font-medium">{entry.headline || "未填写"}</span>
-                  <span className="truncate text-muted-foreground">{entry.subheadline || entry.benefit || "-"}</span>
-                  <span className="truncate">{entry.copy_role || "通用"}</span>
-                  <span className="truncate">{entry.market || "-"}</span>
-                  <Badge variant="outline" className="w-fit text-[10px]">{copyStatusLabel(entry.status)}</Badge>
-                  <Button size="icon-sm" variant="ghost" title="编辑文案" aria-label="编辑文案" onClick={() => setEditing(entry)}><Settings2 className="h-4 w-4" /></Button>
-                </div>
-              ))}
-              {!entries.isLoading && (entries.data?.entries.length ?? 0) === 0 && <div className="py-20 text-center text-sm text-muted-foreground">导入 Excel 或在线添加第一条文案。</div>}
-              {!entries.isLoading && (entries.data?.entries.length ?? 0) > 0 && visibleEntries.length === 0 && <div className="py-20 text-center text-sm text-muted-foreground">没有匹配的文案。</div>}
-            </div>
-          </>
-        )}
-      </div>
-      <SpreadsheetImportDialog
-        value={spreadsheet}
-        mapping={mapping}
-        onMapping={setMapping}
-        onClose={() => setSpreadsheet(null)}
-        onImport={() => importRows.mutate()}
-        busy={importRows.isPending}
-      />
-      <CopyEntryDialog
-        entry={editing}
-        onClose={() => setEditing(null)}
-        onSave={(input) => saveEntry.mutate(input)}
-        busy={saveEntry.isPending}
-      />
-    </div>
-  );
 }
 
 function ResourceEditor({ resources, copyLibraries, onCreate, onArchive }: {
@@ -893,9 +1116,9 @@ function ResourceEditor({ resources, copyLibraries, onCreate, onArchive }: {
   });
   return (
     <div className="grid h-full min-h-0 grid-cols-1 overflow-hidden border md:grid-cols-[260px_minmax(0,1fr)]">
-      <ResourceList title="市场资源包" resources={resources} activeId={active?.id ?? ""} onSelect={setActiveId} onCreate={onCreate} />
+      <ResourceList title="市场配置" resources={resources} activeId={active?.id ?? ""} onSelect={setActiveId} onCreate={resources.length === 0 ? onCreate : undefined} />
       <div className="min-w-0 overflow-y-auto bg-background">
-        {!active ? <EmptyResource title="还没有市场资源包" action="创建资源包" onAction={onCreate} /> : (
+        {!active ? <EmptyResource title="还没有市场配置" action="创建市场配置" onAction={onCreate} /> : (
           <>
             <div className="sticky top-0 z-10 flex flex-wrap items-center justify-between gap-3 border-b bg-background px-5 py-3">
               <ResourceTitle resource={active} />
@@ -991,13 +1214,13 @@ function ResourceList({ title, resources, activeId, onSelect, onCreate }: {
   resources: CreativeResource[];
   activeId: string;
   onSelect: (id: string) => void;
-  onCreate: () => void;
+  onCreate?: () => void;
 }) {
   return (
     <aside className="min-h-0 overflow-y-auto border-r bg-muted/15">
       <div className="sticky top-0 flex items-center justify-between border-b bg-background px-3 py-2.5">
         <span className="text-sm font-semibold">{title}</span>
-        <Button size="icon-sm" variant="ghost" title={`创建${title}`} aria-label={`创建${title}`} onClick={onCreate}><Plus className="h-4 w-4" /></Button>
+        {onCreate && <Button size="icon-sm" variant="ghost" title={`创建${title}`} aria-label={`创建${title}`} onClick={onCreate}><Plus className="h-4 w-4" /></Button>}
       </div>
       {resources.map((resource) => (
         <button key={resource.id} type="button" onClick={() => onSelect(resource.id)} className={cn("block w-full border-b px-3 py-3 text-left hover:bg-muted/40", resource.id === activeId && "bg-background shadow-[inset_2px_0_0_hsl(var(--primary))]") }>
@@ -1042,33 +1265,6 @@ function CreateResourceDialog({ kind, onClose, onCreated }: { kind: CreativeReso
   );
 }
 
-function SpreadsheetImportDialog({ value, mapping, onMapping, onClose, onImport, busy }: {
-  value: { data: SpreadsheetData; filename: string } | null;
-  mapping: Record<CopyField, string>;
-  onMapping: (value: Record<CopyField, string>) => void;
-  onClose: () => void;
-  onImport: () => void;
-  busy: boolean;
-}) {
-  return <Dialog open={value !== null} onOpenChange={(open) => !open && onClose()}><DialogContent className="max-w-4xl"><DialogHeader><DialogTitle>映射 Excel 文案字段</DialogTitle><DialogDescription>{value ? `${value.filename} · ${value.data.sheetName} · ${value.data.rows.length} 行` : ""}</DialogDescription></DialogHeader>
-    {value && <div className="grid max-h-[55vh] grid-cols-2 gap-4 overflow-y-auto pr-1 md:grid-cols-3">{COPY_FIELDS.map((field) => <Field key={field.key} label={`${field.label}${field.required ? " *" : ""}`} wide><NativeSelect value={mapping[field.key]} onChange={(event) => onMapping({ ...mapping, [field.key]: event.target.value })}><NativeSelectOption value="">不导入</NativeSelectOption>{value.data.headers.map((header) => <NativeSelectOption key={header} value={header}>{header}</NativeSelectOption>)}</NativeSelect></Field>)}</div>}
-    <DialogFooter><Button variant="outline" onClick={onClose}>取消</Button><Button onClick={onImport} disabled={busy || !mapping.headline}>{busy ? "正在导入" : "确认导入"}</Button></DialogFooter></DialogContent></Dialog>;
-}
-
-function CopyEntryDialog({ entry, onClose, onSave, busy }: { entry: CreativeCopyEntry | "new" | null; onClose: () => void; onSave: (value: CreativeCopyEntryInput) => void; busy: boolean }) {
-  const source = entry && entry !== "new" ? copyEntryToInput(entry) : EMPTY_COPY;
-  const key = entry && entry !== "new" ? `${entry.id}:${entry.version}` : String(entry);
-  const [loadedKey, setLoadedKey] = useState(key);
-  const [draft, setDraft] = useState(source);
-  if (key !== loadedKey) { setLoadedKey(key); setDraft(source); }
-  const set = <K extends keyof CreativeCopyEntryInput>(field: K, value: CreativeCopyEntryInput[K]) => setDraft({ ...draft, [field]: value });
-  return <Dialog open={entry !== null} onOpenChange={(open) => !open && onClose()}><DialogContent className="max-w-3xl"><DialogHeader><DialogTitle>{entry === "new" ? "添加文案" : "编辑文案"}</DialogTitle><DialogDescription>保存会创建可追溯的新版本，不影响已经开始生成的订单。</DialogDescription></DialogHeader>
-    <div className="grid max-h-[60vh] grid-cols-1 gap-4 overflow-y-auto pr-1 sm:grid-cols-2">
-      <Field label="文案编号"><Input value={draft.external_key} onChange={(event) => set("external_key", event.target.value)} /></Field><Field label="状态"><NativeSelect value={draft.status} onChange={(event) => set("status", event.target.value as CreativeCopyEntryInput["status"])}><NativeSelectOption value="draft">草稿</NativeSelectOption><NativeSelectOption value="approved">已审核</NativeSelectOption><NativeSelectOption value="disabled">停用</NativeSelectOption></NativeSelect></Field>
-      <Field label="主标题" wide><Input value={draft.headline} onChange={(event) => set("headline", event.target.value)} /></Field><Field label="副标题" wide><Input value={draft.subheadline} onChange={(event) => set("subheadline", event.target.value)} /></Field><Field label="卖点" wide><Textarea rows={3} value={draft.benefit} onChange={(event) => set("benefit", event.target.value)} /></Field><Field label="CTA"><Input value={draft.cta} onChange={(event) => set("cta", event.target.value)} /></Field><Field label="文案职责"><Input value={draft.copy_role} onChange={(event) => set("copy_role", event.target.value)} /></Field><Field label="市场"><Input value={draft.market} onChange={(event) => set("market", event.target.value)} /></Field><Field label="语言"><Input value={draft.locale} onChange={(event) => set("locale", event.target.value)} /></Field><Field label="条款" wide><Textarea rows={3} value={draft.legal_text} onChange={(event) => set("legal_text", event.target.value)} /></Field><Field label="标签" wide><Input value={draft.tags.join(", ")} onChange={(event) => set("tags", event.target.value.split(",").map((item) => item.trim()).filter(Boolean))} /></Field>
-    </div><DialogFooter><Button variant="outline" onClick={onClose}>取消</Button><Button disabled={busy || !draft.headline.trim()} onClick={() => onSave(draft)}>保存</Button></DialogFooter></DialogContent></Dialog>;
-}
-
 function FormSection({ title, description, children }: { title: string; description: string; children: React.ReactNode }) {
   return <section><div className="mb-3"><h3 className="text-sm font-semibold">{title}</h3><p className="mt-1 text-xs text-muted-foreground">{description}</p></div><div className="grid grid-cols-1 gap-4 border-t pt-4 sm:grid-cols-2">{children}</div></section>;
 }
@@ -1080,41 +1276,39 @@ function Field({ label, children, wide = false }: { label: string; children: Rea
 }
 
 function EmptyResource({ title, action, onAction }: { title: string; action: string; onAction: () => void }) {
-  return <div className="flex min-h-80 flex-col items-center justify-center gap-3 text-sm text-muted-foreground"><FileSpreadsheet className="h-6 w-6" /><span>{title}</span><Button size="sm" onClick={onAction}>{action}</Button></div>;
+  return <div className="flex min-h-80 flex-col items-center justify-center gap-3 text-sm text-muted-foreground"><span>{title}</span><Button size="sm" onClick={onAction}>{action}</Button></div>;
 }
 
 function initialResourceConfig(kind: CreativeResourceKind): Record<string, unknown> {
   if (kind === "copy_library") return {
-    schema_version: 2,
+    schema_version: 4,
     market: "Indonesia",
     locale: "id-ID",
     source: { name: "", url: "", sync_status: "pending", note: "" },
     fragments: [],
     recipes: [],
-    product_facts: [],
-    calculation_rules: [],
-    recommendation_policy: { type_weight: 1000, tag_weight: 80, concise_weight: 1, default_creative_type: "num" },
+    repayment_plan: {
+      labels: {
+        principal: "Jumlah Pinjaman",
+        tenor: "Periode Cicilan",
+        monthly_installment: "Cicilan per Bulan",
+        total_interest: "Total Bunga",
+        total_repayment: "Total Pembayaran",
+      },
+      entries: [],
+    },
   };
-  return { brand: "", market: "", locale: "", currency: "", copy_library_id: "", benefit_taxonomy: [], theme_presets: [], prime_composition: null, qr_payload: "", qr_canonical_payload: "", qr_allowed_domains: [], qr_approval_status: "pending", qr_approval_note: "", compliance_rules: "", naming_rule: "" };
+  return { brand: "", market: "", locale: "", currency: "", copy_library_id: "", pre_adaptation_default: true, benefit_taxonomy: [], theme_presets: [], prime_composition: null, qr_payload: "", qr_canonical_payload: "", qr_allowed_domains: [], qr_approval_status: "pending", qr_approval_note: "", compliance_rules: "", naming_rule: "" };
 }
 
 function kindLabel(kind: CreativeResourceKind | null): string {
   if (kind === "copy_library") return "文案库";
-  return "市场资源包";
+  return "市场配置";
 }
 
 function stringValue(value: unknown): string { return typeof value === "string" ? value : ""; }
 function stringListMultilineValue(value: unknown): string { return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string").join("\n") : ""; }
 function splitList(value: string): string[] { return [...new Set(value.split(/[\n,，;；]+/).map((item) => item.trim()).filter(Boolean))]; }
-function copyStatusLabel(status: string): string { return status === "approved" ? "已审核" : status === "disabled" ? "停用" : "草稿"; }
-
-function copyEntryToInput(entry: CreativeCopyEntry): CreativeCopyEntryInput {
-  return { external_key: entry.external_key, headline: entry.headline, subheadline: entry.subheadline, benefit: entry.benefit, cta: entry.cta, legal_text: entry.legal_text, copy_role: entry.copy_role, market: entry.market, locale: entry.locale, tags: entry.tags, status: entry.status, metadata: entry.metadata };
-}
-
-function emptyCopyMapping(): Record<CopyField, string> {
-  return { external_key: "", headline: "", subheadline: "", benefit: "", cta: "", legal_text: "", copy_role: "", market: "", locale: "", tags: "", status: "" };
-}
 
 type QRValidation = {
   mode: "none" | "static" | "dynamic" | "legacy";
@@ -1147,33 +1341,4 @@ function formatValidationTime(value: string): string {
 
 function resourceSlotLabel(role: string): string {
   return PRIME_ROLE_LABELS[role] ?? role;
-}
-
-function inferCopyMapping(headers: string[]): Record<CopyField, string> {
-  const synonyms: Record<CopyField, string[]> = {
-    external_key: ["id", "code", "key", "编号", "文案编号"], headline: ["headline", "title", "judul", "主标题", "标题"],
-    subheadline: ["subheadline", "subtitle", "副标题"], benefit: ["benefit", "selling point", "manfaat", "卖点", "利益点"],
-    cta: ["cta", "button", "action", "按钮"], legal_text: ["legal", "terms", "syarat", "条款", "合规"],
-    copy_role: ["role", "type", "职责", "文案类型"], market: ["market", "country", "市场", "国家"],
-    locale: ["locale", "language", "语言"], tags: ["tags", "tag", "标签"], status: ["status", "状态"],
-  };
-  const mapping = emptyCopyMapping();
-  for (const field of COPY_FIELDS) {
-    const match = headers.find((header) => synonyms[field.key].some((synonym) => header.trim().toLowerCase() === synonym.toLowerCase()));
-    mapping[field.key] = match ?? "";
-  }
-  if (!mapping.headline && headers[0]) mapping.headline = headers[0];
-  return mapping;
-}
-
-function spreadsheetRowToCopy(row: string[], headers: string[], mapping: Record<CopyField, string>, index: number): CreativeCopyEntryInput {
-  const read = (field: CopyField) => { const column = headers.indexOf(mapping[field]); return column >= 0 ? row[column] ?? "" : ""; };
-  const status = read("status").toLowerCase();
-  return {
-    external_key: read("external_key") || `row-${index + 2}`,
-    headline: read("headline"), subheadline: read("subheadline"), benefit: read("benefit"), cta: read("cta"), legal_text: read("legal_text"), copy_role: read("copy_role"), market: read("market"), locale: read("locale"),
-    tags: read("tags").split(/[,;|]/).map((item) => item.trim()).filter(Boolean),
-    status: /approved|active|已审核|确认/.test(status) ? "approved" : /disabled|停用/.test(status) ? "disabled" : "draft",
-    metadata: { spreadsheet_row: index + 2 },
-  };
 }

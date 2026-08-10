@@ -3701,6 +3701,94 @@ VALUES ($1, $2, 'running', 0, $3, 'creative_crawl_run_analysis', $4, now()) RETU
 	}
 }
 
+func TestCompletePreAdaptationTaskMovesSecondMissingOutputToManualRequired(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+	ctx := t.Context()
+	_, candidateID := createCreativeFeedbackCandidate(t, "pre-adaptation manual handoff")
+	var analysisID string
+	if err := testPool.QueryRow(ctx, `
+INSERT INTO creative_source_analysis (
+  workspace_id, candidate_id, analysis_version, status, summary, result, trigger_evidence_kind, completed_at
+)
+VALUES ($1, $2, 1, 'completed', 'source analysis ready', '{"text_blocks":[]}'::jsonb, 'manual', now())
+RETURNING id::text
+`, testWorkspaceID, candidateID).Scan(&analysisID); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(t.Context(), `DELETE FROM creative_source_analysis WHERE id = $1`, analysisID)
+	})
+
+	var agentID, runtimeID string
+	if err := testPool.QueryRow(ctx, `
+SELECT a.id, a.runtime_id FROM agent a WHERE a.workspace_id = $1 LIMIT 1
+`, testWorkspaceID).Scan(&agentID, &runtimeID); err != nil {
+		t.Fatal(err)
+	}
+	marketPackID := "11111111-1111-1111-1111-111111111111"
+	copyLibraryID := "22222222-2222-2222-2222-222222222222"
+	contextJSON, _ := json.Marshal(map[string]any{
+		"type":                 "creative_domain_task",
+		"workflow":             "creative_pre_adaptation",
+		"source_analysis_id":   analysisID,
+		"candidate_id":         candidateID,
+		"market_pack_id":       marketPackID,
+		"market_pack_version":  2,
+		"copy_library_id":      copyLibraryID,
+		"copy_library_version": 3,
+	})
+	if _, err := testPool.Exec(ctx, `
+INSERT INTO agent_task_queue (
+  agent_id, runtime_id, status, priority, context, trigger_evidence_kind, trigger_evidence_ref_id,
+  failure_reason, error, completed_at
+)
+VALUES ($1, $2, 'failed', 0, $3, 'creative_source_analysis', $4, 'creative_output_missing', 'first failed output', now())
+`, agentID, runtimeID, contextJSON, analysisID); err != nil {
+		t.Fatal(err)
+	}
+	var taskID string
+	if err := testPool.QueryRow(ctx, `
+INSERT INTO agent_task_queue (
+  agent_id, runtime_id, status, priority, context, trigger_evidence_kind, trigger_evidence_ref_id, started_at
+)
+VALUES ($1, $2, 'running', 0, $3, 'creative_source_analysis', $4, now()) RETURNING id::text
+`, agentID, runtimeID, contextJSON, analysisID).Scan(&taskID); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(t.Context(), `DELETE FROM agent_task_queue WHERE trigger_evidence_ref_id = $1`, analysisID)
+	})
+
+	w := httptest.NewRecorder()
+	req := newDaemonTokenRequest(http.MethodPost, "/api/daemon/tasks/"+taskID+"/complete", TaskCompleteRequest{Output: "done"}, testWorkspaceID, "direct-daemon")
+	req = withURLParam(req, "taskId", taskID)
+	testHandler.CompleteTask(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("complete pre-adaptation task: %d %s", w.Code, w.Body.String())
+	}
+	var taskStatus string
+	if err := testPool.QueryRow(ctx, `SELECT status FROM agent_task_queue WHERE id = $1`, taskID).Scan(&taskStatus); err != nil {
+		t.Fatal(err)
+	}
+	if taskStatus != "completed" {
+		t.Fatalf("task status = %q, want completed", taskStatus)
+	}
+	var adaptationStatus, errorCode, savedMarketPack string
+	if err := testPool.QueryRow(ctx, `
+SELECT result->'adaptation'->>'status',
+       result->'adaptation'->>'error_code',
+       result->'adaptation'->'result'->>'market_pack_id'
+FROM creative_source_analysis WHERE id = $1
+`, analysisID).Scan(&adaptationStatus, &errorCode, &savedMarketPack); err != nil {
+		t.Fatal(err)
+	}
+	if adaptationStatus != "unavailable" || errorCode != "manual_confirmation_required" || savedMarketPack != marketPackID {
+		t.Fatalf("adaptation = (%q, %q, %q), want unavailable/manual_confirmation_required/%s", adaptationStatus, errorCode, savedMarketPack, marketPackID)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Membership Cache Integration Tests
 //

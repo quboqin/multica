@@ -29,8 +29,8 @@ func componentizedPrimeConfig(qrMode string, qrEnabled bool) json.RawMessage {
 			],
 			"layouts":{
 				"1080x1080":{"components":{"logo":{"destination_rect":[30,28,312,99]},"qr":{"destination_rect":[983,29,1053,99]}}},
-				"1200x628":{"components":{"logo":{"destination_rect":[21,22,214,70]},"qr":{"destination_rect":[1133,20,1185,73]}}},
-				"800x1000":{"components":{"logo":{"destination_rect":[25,23,234,76]},"qr":{"destination_rect":[724,22,779,76]}}}
+				"1200x628":{"components":{"logo":{"destination_rect":[21,22,214,70]},"terms":{"destination_rect":[946,22,1116,80]},"qr":{"destination_rect":[1120,16,1192,88]}}},
+				"800x1000":{"components":{"logo":{"destination_rect":[25,23,234,76]},"terms":{"destination_rect":[540,24,718,82]},"qr":{"destination_rect":[722,18,790,86]}}}
 			}
 		},
 		"qr_payload":%q,
@@ -52,17 +52,17 @@ func TestParsePrimeCompositionRequiresVersion2AndComposition(t *testing.T) {
 
 func TestParsePrimeCompositionValidatesImageAndTextSources(t *testing.T) {
 	missingImageRole := bytes.Replace(componentizedPrimeConfig("none", false), []byte(`"source_role":"prime_logo"`), []byte(`"source_role":""`), 1)
-	if _, err := parsePrimeCompositionConfig(missingImageRole); err == nil || !strings.Contains(err.Error(), "source_role is required") {
+	if _, err := parsePrimeCompositionConfig(missingImageRole); err == nil || !strings.Contains(err.Error(), "source_role must be prime_logo") {
 		t.Fatalf("missing image source role error = %v", err)
 	}
 
 	withText := bytes.Replace(
 		componentizedPrimeConfig("none", false),
 		[]byte(`{"id":"qr","label":"QR","kind":"qr","enabled":false,"source_role":"prime_qr","backdrop_rule":"light"}`),
-		[]byte(`{"id":"terms","label":"Terms","kind":"text","enabled":true,"content":"Representative terms","backdrop_rule":"light"}`),
+		[]byte(`{"id":"custom_terms","label":"Terms","kind":"text","enabled":true,"content":"Representative terms","backdrop_rule":"light"}`),
 		1,
 	)
-	withText = bytes.ReplaceAll(withText, []byte(`"qr":{"destination_rect"`), []byte(`"terms":{"destination_rect"`))
+	withText = bytes.ReplaceAll(withText, []byte(`"qr":{"destination_rect"`), []byte(`"custom_terms":{"destination_rect"`))
 	composition, err := parsePrimeCompositionConfig(withText)
 	if err != nil {
 		t.Fatalf("parse text component: %v", err)
@@ -74,6 +74,17 @@ func TestParsePrimeCompositionValidatesImageAndTextSources(t *testing.T) {
 	missingContent := bytes.Replace(withText, []byte(`"content":"Representative terms"`), []byte(`"content":"  "`), 1)
 	if _, err := parsePrimeCompositionConfig(missingContent); err == nil || !strings.Contains(err.Error(), "content is required") {
 		t.Fatalf("missing text content error = %v", err)
+	}
+
+	standardTermsText := bytes.Replace(
+		componentizedPrimeConfig("none", false),
+		[]byte(`{"id":"qr","label":"QR","kind":"qr","enabled":false,"source_role":"prime_qr","backdrop_rule":"light"}`),
+		[]byte(`{"id":"terms","label":"Terms","kind":"text","enabled":true,"content":"Representative terms"}`),
+		1,
+	)
+	standardTermsText = bytes.ReplaceAll(standardTermsText, []byte(`"qr":{"destination_rect"`), []byte(`"terms":{"destination_rect"`))
+	if _, err := parsePrimeCompositionConfig(standardTermsText); err == nil || !strings.Contains(err.Error(), "must use an image source") {
+		t.Fatalf("standard text component error = %v", err)
 	}
 }
 
