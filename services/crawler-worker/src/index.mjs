@@ -28,6 +28,9 @@ const streamFrameIntervalMS = Math.max(
   100,
   Math.min(1000, positiveIntegerEnv("CRAWLER_WORKER_STREAM_FRAME_MS", 180)),
 );
+const appGrowingMaterialSearchBudgetMS = positiveIntegerEnv("APPGROWING_MATERIAL_SEARCH_BUDGET_MS", 240_000);
+const appGrowingGraphQLTimeoutMS = positiveIntegerEnv("APPGROWING_GRAPHQL_TIMEOUT_MS", 12_000);
+const appGrowingBrowserFallbackMinBudgetMS = positiveIntegerEnv("APPGROWING_BROWSER_FALLBACK_MIN_BUDGET_MS", 75_000);
 
 const builtInConnectors = {
   appgrowing: {
@@ -1150,7 +1153,7 @@ function connectorGraphQLHeaders(connector, operationName = "") {
     headers["x-operation-name"] = operationName;
   }
   if (connector.id === "appgrowing") {
-    headers["accept-language"] = "en-US,en;q=0.9";
+    headers["accept-language"] = "en";
     headers.origin = "https://appgrowing-global.youcloud.com";
     headers.referer = "https://appgrowing-global.youcloud.com/";
     headers["user-agent"] = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121 Safari/537.36";
@@ -2035,21 +2038,59 @@ async function runAppGrowingMaterialSearch(page, context, connector, params = {}
   const pageLimit = positiveIntegerParam(params.pages_per_competitor, 1, 1, 5);
   const priorityPageLimit = positiveIntegerParam(params.priority_pages_per_competitor, Math.max(2, pageLimit), 1, 8);
   const captureTimeoutMS = positiveIntegerParam(params.capture_timeout_ms, 12_000, 3_000, 60_000);
+  const graphQLTimeoutMS = positiveIntegerParam(params.graphql_timeout_ms, appGrowingGraphQLTimeoutMS, 3_000, 30_000);
+  const searchBudgetMS = positiveIntegerParam(
+    params.material_search_budget_ms ?? params.crawl_budget_ms,
+    appGrowingMaterialSearchBudgetMS,
+    30_000,
+    14 * 60_000,
+  );
+  const startedAt = Date.now();
+  const deadline = startedAt + searchBudgetMS;
+  const plannedPages = appGrowingPlannedMaterialPages(competitors, priorityCompetitors, pageLimit, priorityPageLimit);
+  const browserFallbackEnabled = shouldUseAppGrowingBrowserFallback(params, plannedPages);
+  const adaptiveMode = params.adaptive_mode !== false && params.adaptive_material_search !== false;
+  const adaptiveMemory = appGrowingAdaptiveStrategyMemory(params);
   const rules = normalizeMaterialRules(params.selection_rules || params.rules);
 
   const captured = [];
   const materials = [];
+  const autoAdjustments = [];
+  const learnedStrategies = [];
+  const learnedStrategyKeys = new Set();
+  let timeBudgetExhausted = false;
+  const markBudgetExhausted = (source, competitor = "", priority = false, pageNumber = null) => {
+    timeBudgetExhausted = true;
+    captured.push({
+      competitor,
+      priority,
+      page: pageNumber,
+      source,
+      skipped: true,
+      error: "material_search_time_budget_exhausted",
+      remaining_budget_ms: appGrowingRemainingBudgetMS(deadline),
+      materials_found: 0,
+    });
+  };
+
   if (params.graphql_material_search !== false) {
     const brandCache = new Map();
+    graphqlSearch:
     for (const competitor of competitors) {
       const priority = priorityCompetitors.has(normalizeCompetitorKey(competitor));
       const pages = priority ? priorityPageLimit : pageLimit;
       for (let pageNumber = 1; pageNumber <= pages; pageNumber += 1) {
+        if (!appGrowingHasBudget(deadline, Math.min(5_000, graphQLTimeoutMS))) {
+          markBudgetExhausted("graphql_api", competitor, priority, pageNumber);
+          break graphqlSearch;
+        }
         const capture = await captureAppGrowingMaterialPageViaGraphQL(context, connector, {
           competitor,
           pageNumber,
           params,
           brandCache,
+          deadline,
+          graphQLTimeoutMS,
         });
         captured.push({
           competitor,
@@ -2059,6 +2100,7 @@ async function runAppGrowingMaterialSearch(page, context, connector, params = {}
           url: capture.url,
           app_brand_id: capture.appBrandID,
           app_brand_name: capture.appBrandName,
+          app_brand_source: capture.appBrandSource,
           graphQL_operations: capture.operations,
           graphQL_responses: capture.responses,
           total: capture.total,
@@ -2066,6 +2108,12 @@ async function runAppGrowingMaterialSearch(page, context, connector, params = {}
           error: capture.error,
           materials_found: capture.materials.length,
         });
+        if (capture.appBrandSource === "strategy_memory") {
+          appGrowingAddAutoAdjustment(autoAdjustments, `used learned AppGrowing brand id for ${competitor}`);
+        }
+        if (capture.materials.length > 0) {
+          appGrowingAddLearnedBrandStrategy(learnedStrategies, learnedStrategyKeys, competitor, capture, "graphql_api");
+        }
         for (const material of capture.materials) {
           materials.push({
             ...material,
@@ -2077,51 +2125,119 @@ async function runAppGrowingMaterialSearch(page, context, connector, params = {}
     }
   }
 
-  if (materials.length === 0 && params.browser_capture_fallback !== false) {
-    for (const competitor of competitors) {
-      const priority = priorityCompetitors.has(normalizeCompetitorKey(competitor));
-      const pages = priority ? priorityPageLimit : pageLimit;
-      for (let pageNumber = 1; pageNumber <= pages; pageNumber += 1) {
-        const capture = await captureAppGrowingMaterialPage(page, connector, {
-          competitor,
-          pageNumber,
-          params,
-          captureTimeoutMS,
-        });
-        captured.push({
-          competitor,
-          priority,
-          page: pageNumber,
-          source: "browser_network",
-          url: capture.url,
-          graphQL_operations: capture.operations,
-          graphQL_responses: capture.responses,
-          page_snapshot: capture.snapshot,
-          needs_reauth: capture.needsReauth,
-          materials_found: capture.materials.length,
-        });
-        for (const material of capture.materials) {
-          materials.push({
-            ...material,
+  const adaptiveBrowserFallbackEnabled = adaptiveMode
+    && !browserFallbackEnabled
+    && appGrowingShouldUseAdaptiveBrowserFallback(captured, adaptiveMemory);
+  if (adaptiveBrowserFallbackEnabled) {
+    appGrowingAddAutoAdjustment(autoAdjustments, "enabled browser fallback after AppGrowing API path failed or prior memory preferred it");
+  }
+
+  if (materials.length === 0 && (browserFallbackEnabled || adaptiveBrowserFallbackEnabled)) {
+    if (!appGrowingHasBudget(deadline, appGrowingBrowserFallbackMinBudgetMS)) {
+      markBudgetExhausted("browser_network");
+    } else {
+      let browserCapturePage = page;
+      let browserFallbackStopped = false;
+      browserFallback:
+      for (const competitor of competitors) {
+        if (browserFallbackStopped) {
+          break;
+        }
+        const priority = priorityCompetitors.has(normalizeCompetitorKey(competitor));
+        const pages = priority ? priorityPageLimit : pageLimit;
+        for (let pageNumber = 1; pageNumber <= pages; pageNumber += 1) {
+          if (!appGrowingHasBudget(deadline, appGrowingBrowserFallbackMinBudgetMS)) {
+            markBudgetExhausted("browser_network", competitor, priority, pageNumber);
+            break browserFallback;
+          }
+          const capture = await captureAppGrowingMaterialPage(browserCapturePage, connector, {
+            competitor,
+            pageNumber,
+            params,
+            captureTimeoutMS,
+            pageTimeoutMS: appGrowingRequestTimeoutMS(deadline, 60_000),
+          });
+          captured.push({
             competitor,
             priority,
+            page: pageNumber,
+            source: "browser_network",
+            url: capture.url,
+            graphQL_operations: capture.operations,
+            graphQL_responses: capture.responses,
+            page_snapshot: capture.snapshot,
+            needs_reauth: capture.needsReauth,
+            error: capture.error,
+            page_crashed: capture.pageCrashed,
+            materials_found: capture.materials.length,
           });
+          if (capture.materials.length > 0) {
+            appGrowingAddLearnedSourceStrategy(learnedStrategies, learnedStrategyKeys, competitor, "browser_network", capture.materials.length);
+          }
+          for (const material of capture.materials) {
+            materials.push({
+              ...material,
+              competitor,
+              priority,
+            });
+          }
+          if (capture.pageCrashed) {
+            const replacementPage = await recreateAppGrowingCapturePage(context, browserCapturePage)
+              .catch(() => null);
+            if (!replacementPage) {
+              browserFallbackStopped = true;
+              break;
+            }
+            browserCapturePage = replacementPage;
+          }
         }
       }
     }
+  } else if (materials.length === 0 && params.browser_capture_fallback !== false) {
+    captured.push({
+      source: "browser_network",
+      skipped: true,
+      error: "browser_fallback_disabled_for_bulk_material_search",
+      planned_pages: plannedPages,
+      materials_found: 0,
+    });
   }
 
-  const selection = selectAppGrowingMaterials(materials, rules, totalLimit, {
-    fallbackToTopMaterials: params.fallback_to_top_materials === true,
+  const strictSelection = selectAppGrowingMaterials(materials, rules, totalLimit, {
+    fallbackToTopMaterials: false,
   });
+  let selection = strictSelection;
+  let supplementCount = 0;
+  const explicitTopFallback = params.fallback_to_top_materials === true;
+  if (explicitTopFallback || (adaptiveMode && strictSelection.selected.length === 0 && strictSelection.unique.length > 0)) {
+    const fallbackSelection = selectAppGrowingMaterials(materials, rules, totalLimit, {
+      fallbackToTopMaterials: true,
+    });
+    if (fallbackSelection.selected.length > strictSelection.selected.length) {
+      selection = fallbackSelection;
+      supplementCount = fallbackSelection.selected.length - strictSelection.selected.length;
+      if (!explicitTopFallback) {
+        appGrowingAddAutoAdjustment(autoAdjustments, "strict rules selected no material; added top materials as supplemental candidates");
+      }
+    }
+  }
+  const strictMaterialKeys = new Set(strictSelection.selected.map(appGrowingMaterialIdentityKey));
+  const selectedMaterials = selection.selected.map((material) => ({
+    ...material,
+    selection_match: strictMaterialKeys.has(appGrowingMaterialIdentityKey(material)) ? "strict" : "supplement",
+  }));
   const needsReauth = captured.some((capture) => capture.needs_reauth === true);
+  const blockingError = appGrowingMaterialSearchBlockingError(captured, materials);
+  const budgetNote = timeBudgetExhausted ? "; stopped early because the material_search time budget was exhausted" : "";
   return {
-    status: needsReauth ? "need_reauth" : "completed",
+    status: needsReauth ? "need_reauth" : blockingError ? "failed" : "completed",
     downloaded: 0,
     output_prefix: `local://credential-broker/${params.profile_id || "appgrowing"}/materials`,
     message: needsReauth
       ? "AppGrowing reported that the account was logged out; re-authentication is required"
-      : `selected ${selection.selected.length} AppGrowing materials from ${competitors.length} competitors; asset download storage is not configured`,
+      : blockingError
+        ? `AppGrowing material_search failed before reading material data: ${blockingError}`
+        : `selected ${selection.selected.length} AppGrowing materials from ${competitors.length} competitors; asset download storage is not configured${budgetNote}`,
     raw: {
       connector_id: connector.id,
       capability: "material_search",
@@ -2135,22 +2251,208 @@ async function runAppGrowingMaterialSearch(page, context, connector, params = {}
         total_limit: totalLimit,
         pages_per_competitor: pageLimit,
         priority_pages_per_competitor: priorityPageLimit,
+        planned_pages: plannedPages,
+        graphql_timeout_ms: graphQLTimeoutMS,
+        time_budget_ms: searchBudgetMS,
+        elapsed_ms: Date.now() - startedAt,
+        remaining_budget_ms: appGrowingRemainingBudgetMS(deadline),
+        time_budget_exhausted: timeBudgetExhausted,
+        browser_capture_fallback: browserFallbackEnabled,
+        adaptive_mode: adaptiveMode,
+        adaptive_browser_fallback: adaptiveBrowserFallbackEnabled,
+        adaptive_memory_scopes: Object.keys(adaptiveMemory.memories || {}).sort(),
         fallback_to_top_materials: params.fallback_to_top_materials === true,
       },
       captured,
+      auto_adjustments: autoAdjustments,
+      learned_strategies: learnedStrategies,
       totals: {
         materials_seen: materials.length,
         unique_materials: selection.unique.length,
         new_candidates: selection.newCandidates.length,
         volume_candidates: selection.volumeCandidates.length,
+        strict_count: strictSelection.selected.length,
+        supplement_count: supplementCount,
         selected: selection.selected.length,
         missing_duration_days: selection.unique.filter((item) => !Number.isFinite(Number(item.duration_days))).length,
         missing_impression_estimate: selection.unique.filter((item) => !Number.isFinite(Number(item.impression_estimate))).length,
       },
       material_samples: summarizeMaterialSamples(selection.unique),
-      selected_materials: selection.selected,
+      selected_materials: selectedMaterials,
     },
   };
+}
+
+function appGrowingMaterialSearchBlockingError(captured, materials) {
+  if (materials.length > 0) {
+    return "";
+  }
+  const attempts = captured.filter((capture) => capture && !capture.skipped);
+  if (attempts.length === 0) {
+    return "";
+  }
+  const successfulAttempts = attempts.filter((capture) => !capture.error);
+  if (successfulAttempts.length > 0) {
+    return "";
+  }
+  const blockingErrors = attempts
+    .map((capture) => String(capture.error || "").trim())
+    .filter((error) => error && !appGrowingMaterialSearchNonBlockingError(error));
+  if (blockingErrors.length === 0) {
+    return "";
+  }
+  const counts = new Map();
+  for (const error of blockingErrors) {
+    counts.set(error, (counts.get(error) || 0) + 1);
+  }
+  const [primary] = Array.from(counts.entries()).sort((a, b) => b[1] - a[1])[0] || [];
+  return `${primary || blockingErrors[0]} (${blockingErrors.length} capture attempts failed)`;
+}
+
+function appGrowingMaterialSearchNonBlockingError(error) {
+  return error === "app_brand_not_found" || error === "browser_fallback_disabled_for_bulk_material_search";
+}
+
+function appGrowingAdaptiveStrategyMemory(params = {}) {
+  const raw = params?._adaptive_strategy_memory;
+  if (!raw || typeof raw !== "object" || raw.enabled === false) {
+    return { enabled: false, memories: {} };
+  }
+  const memories = raw.memories && typeof raw.memories === "object" ? raw.memories : {};
+  return { enabled: true, memories };
+}
+
+function appGrowingStrategyMemoryForCompetitor(params = {}, competitor = "") {
+  const memory = appGrowingAdaptiveStrategyMemory(params).memories || {};
+  const key = normalizeCompetitorKey(competitor);
+  const entry = memory[key];
+  return entry && typeof entry === "object" ? entry : null;
+}
+
+function appGrowingBrandFromStrategyMemory(params, competitor) {
+  const memory = appGrowingStrategyMemoryForCompetitor(params, competitor);
+  const brandID = stringParam(memory?.brand_id);
+  if (!brandID) {
+    return null;
+  }
+  return {
+    id: brandID,
+    name: stringParam(memory.brand_name) || competitor,
+    source: "strategy_memory",
+  };
+}
+
+function appGrowingAliasesFromStrategyMemory(params, competitor) {
+  const memory = appGrowingStrategyMemoryForCompetitor(params, competitor);
+  if (!Array.isArray(memory?.aliases)) {
+    return [];
+  }
+  return uniqueNonEmptyValues(memory.aliases);
+}
+
+function appGrowingShouldUseAdaptiveBrowserFallback(captured, adaptiveMemory) {
+  const memories = adaptiveMemory?.memories || {};
+  const prefersBrowser = Object.values(memories).some((memory) => memory?.preferred_source === "browser_network");
+  if (prefersBrowser) {
+    return true;
+  }
+  const attempts = captured.filter((capture) => capture?.source === "graphql_api" && !capture.skipped);
+  return attempts.length > 0 && attempts.every((capture) => String(capture.error || "").trim() !== "");
+}
+
+function appGrowingAddAutoAdjustment(adjustments, message) {
+  const text = String(message || "").trim();
+  if (!text || adjustments.includes(text)) {
+    return;
+  }
+  adjustments.push(text);
+}
+
+function appGrowingAddLearnedBrandStrategy(out, seen, competitor, capture, preferredSource) {
+  const brandID = stringParam(capture.appBrandID);
+  if (!brandID || capture.materials.length === 0) {
+    return;
+  }
+  const scopeKey = normalizeCompetitorKey(competitor);
+  const key = `appgrowing_brand:${scopeKey}:${brandID}:${preferredSource}`;
+  if (seen.has(key)) {
+    return;
+  }
+  seen.add(key);
+  out.push({
+    strategy_type: "appgrowing_brand",
+    scope_key: scopeKey,
+    competitor,
+    value: {
+      brand_id: brandID,
+      brand_name: stringParam(capture.appBrandName) || competitor,
+      source: stringParam(capture.appBrandSource) || "unknown",
+      preferred_source: preferredSource,
+      materials_found: capture.materials.length,
+    },
+  });
+}
+
+function appGrowingAddLearnedSourceStrategy(out, seen, competitor, preferredSource, materialsFound) {
+  const scopeKey = normalizeCompetitorKey(competitor);
+  const key = `appgrowing_source:${scopeKey}:${preferredSource}`;
+  if (!scopeKey || seen.has(key)) {
+    return;
+  }
+  seen.add(key);
+  out.push({
+    strategy_type: "appgrowing_source",
+    scope_key: scopeKey,
+    competitor,
+    value: {
+      preferred_source: preferredSource,
+      materials_found: materialsFound,
+    },
+  });
+}
+
+function appGrowingMaterialIdentityKey(material) {
+  return String(material?.resource_url || material?.preview_url || material?.poster_url || material?.material_id || material?.title || JSON.stringify(material || {}));
+}
+
+function appGrowingPlannedMaterialPages(competitors, priorityCompetitors, pageLimit, priorityPageLimit) {
+  return competitors.reduce((total, competitor) => {
+    const priority = priorityCompetitors.has(normalizeCompetitorKey(competitor));
+    return total + (priority ? priorityPageLimit : pageLimit);
+  }, 0);
+}
+
+function shouldUseAppGrowingBrowserFallback(params = {}, plannedPages = 1) {
+  if (params.browser_capture_fallback === true) {
+    return true;
+  }
+  if (params.browser_capture_fallback === false) {
+    return false;
+  }
+  return plannedPages <= 1;
+}
+
+function appGrowingRemainingBudgetMS(deadline) {
+  if (!Number.isFinite(deadline)) {
+    return Number.POSITIVE_INFINITY;
+  }
+  return Math.max(0, deadline - Date.now());
+}
+
+function appGrowingHasBudget(deadline, minBudgetMS = 1) {
+  return appGrowingRemainingBudgetMS(deadline) >= minBudgetMS;
+}
+
+function appGrowingRequestTimeoutMS(deadline, desiredTimeoutMS) {
+  const desired = positiveIntegerParam(desiredTimeoutMS, appGrowingGraphQLTimeoutMS, 1_000, 60_000);
+  const remaining = appGrowingRemainingBudgetMS(deadline);
+  if (!Number.isFinite(remaining)) {
+    return desired;
+  }
+  if (remaining <= 0) {
+    return 1;
+  }
+  return Math.max(1, Math.min(desired, Math.max(1, remaining - 500)));
 }
 
 async function captureAppGrowingMaterialPageViaGraphQL(context, connector, options) {
@@ -2164,6 +2466,7 @@ async function captureAppGrowingMaterialPageViaGraphQL(context, connector, optio
       responses,
       appBrandID: "",
       appBrandName: brand.name || "",
+      appBrandSource: brand.source || "",
       total: null,
       limit: null,
       error: brand.error || "app_brand_not_found",
@@ -2174,8 +2477,15 @@ async function captureAppGrowingMaterialPageViaGraphQL(context, connector, optio
   let lastError = "";
   for (const order of appGrowingGraphQLMaterialOrders(options.params)) {
     const variables = appGrowingAppMaterialListVariables(options.params, brand.id, options.pageNumber, new Date(), order);
-    const result = await appGrowingGraphQLRequest(context, connector, "appMaterialList", APPGROWING_APP_MATERIAL_LIST_QUERY, variables)
-      .catch((error) => ({ error: error instanceof Error ? error.message : String(error), status: null, body: null }));
+    const result = await appGrowingGraphQLRequest(
+      context,
+      connector,
+      "appMaterialList",
+      APPGROWING_APP_MATERIAL_LIST_QUERY,
+      variables,
+      options.graphQLTimeoutMS,
+      options.deadline,
+    ).catch((error) => ({ error: error instanceof Error ? error.message : String(error), status: null, body: null }));
     operations.add("appMaterialList");
     responses.push(appGrowingGraphQLResponseSummary("appMaterialList", result));
     if (result.error) {
@@ -2194,6 +2504,7 @@ async function captureAppGrowingMaterialPageViaGraphQL(context, connector, optio
       responses,
       appBrandID: brand.id,
       appBrandName: brand.name || "",
+      appBrandSource: brand.source || "",
       total: parseNumericValue(valueAtPath(result.body, ["data", "materialList", "total"])),
       limit: parseNumericValue(valueAtPath(result.body, ["data", "materialList", "limit"])),
       error: "",
@@ -2207,6 +2518,7 @@ async function captureAppGrowingMaterialPageViaGraphQL(context, connector, optio
     responses,
     appBrandID: brand.id,
     appBrandName: brand.name || "",
+    appBrandSource: brand.source || "",
     total: null,
     limit: null,
     error: lastError || "app_material_list_failed",
@@ -2227,32 +2539,62 @@ async function resolveAppGrowingBrand(context, connector, options, responses, op
     return brand;
   }
 
-  const variables = appGrowingSearchAppVariables(competitor, options.params);
-  const result = await appGrowingGraphQLRequest(context, connector, "searchApp", APPGROWING_SEARCH_APP_QUERY, variables)
-    .catch((error) => ({ error: error instanceof Error ? error.message : String(error), status: null, body: null }));
-  operations.add("searchApp");
-  responses.push(appGrowingGraphQLResponseSummary("searchApp", result));
-  if (result.error) {
-    const brand = { id: "", name: competitor, source: "searchApp", error: result.error };
-    options.brandCache?.set(key, brand);
-    return brand;
+  const memoryBrand = appGrowingBrandFromStrategyMemory(options.params, competitor);
+  if (memoryBrand) {
+    options.brandCache?.set(key, memoryBrand);
+    return memoryBrand;
   }
-  const error = appGrowingGraphQLErrorMessage(result.body);
-  if (error) {
-    const brand = { id: "", name: competitor, source: "searchApp", error };
-    options.brandCache?.set(key, brand);
-    return brand;
+
+  let lastError = "";
+  const keywords = uniqueNonEmptyValues([
+    competitor,
+    ...appGrowingAliasesFromStrategyMemory(options.params, competitor),
+  ]);
+  for (const keyword of keywords) {
+    const variables = appGrowingSearchAppVariables(keyword, options.params);
+    const result = await appGrowingGraphQLRequest(
+      context,
+      connector,
+      "searchApp",
+      APPGROWING_SEARCH_APP_QUERY,
+      variables,
+      options.graphQLTimeoutMS,
+      options.deadline,
+    ).catch((error) => ({ error: error instanceof Error ? error.message : String(error), status: null, body: null }));
+    operations.add("searchApp");
+    responses.push(appGrowingGraphQLResponseSummary("searchApp", result));
+    if (result.error) {
+      lastError = result.error;
+      continue;
+    }
+    const error = appGrowingGraphQLErrorMessage(result.body);
+    if (error) {
+      lastError = error;
+      continue;
+    }
+    const rows = valueAtPath(result.body, ["data", "searchAppBrand", "data"]);
+    const brand = appGrowingBrandFromSearchRows(rows, keyword);
+    if (brand?.id) {
+      const resolved = {
+        ...brand,
+        name: brand.name || competitor,
+        source: keyword === competitor ? "searchApp" : "alias",
+        keyword,
+      };
+      options.brandCache?.set(key, resolved);
+      return resolved;
+    }
   }
-  const rows = valueAtPath(result.body, ["data", "searchAppBrand", "data"]);
-  const brand = appGrowingBrandFromSearchRows(rows, competitor) || { id: "", name: competitor, source: "searchApp" };
+  const brand = { id: "", name: competitor, source: "searchApp", error: lastError };
   options.brandCache?.set(key, brand);
   return brand;
 }
 
-function appGrowingGraphQLRequest(context, connector, operationName, query, variables) {
+function appGrowingGraphQLRequest(context, connector, operationName, query, variables, timeoutMS = appGrowingGraphQLTimeoutMS, deadline = NaN) {
   if (!context?.request || !connector.graphQLURL) {
     throw new Error("AppGrowing GraphQL request context is unavailable");
   }
+  const timeout = appGrowingRequestTimeoutMS(deadline, timeoutMS);
   return context.request.post(connector.graphQLURL, {
     data: {
       operationName,
@@ -2260,19 +2602,43 @@ function appGrowingGraphQLRequest(context, connector, operationName, query, vari
       variables,
     },
     headers: connectorGraphQLHeaders(connector, operationName),
-    timeout: 30_000,
+    timeout,
   }).then(async (response) => {
+    const status = response.status();
+    let text = "";
+    try {
+      text = await response.text();
+    } catch {
+      text = "";
+    }
     let body = null;
     try {
-      body = await response.json();
+      body = text ? JSON.parse(text) : null;
     } catch {
       body = null;
     }
-    return {
-      status: response.status(),
+    const result = {
+      status,
       body,
     };
+    if (status < 200 || status >= 300) {
+      result.error = appGrowingGraphQLHTTPErrorMessage(status, body, text);
+    }
+    return result;
   });
+}
+
+function appGrowingGraphQLHTTPErrorMessage(status, body, text) {
+  const bodyError = appGrowingGraphQLErrorMessage(body) || appGrowingCompactResponseText(text);
+  return [`appgrowing_graphql_http_${status}`, bodyError].filter(Boolean).join(": ");
+}
+
+function appGrowingCompactResponseText(text) {
+  if (typeof text !== "string") {
+    return "";
+  }
+  const compact = text.replace(/\s+/g, " ").trim();
+  return compact.length > 180 ? `${compact.slice(0, 177)}...` : compact;
 }
 
 function appGrowingGraphQLResponseSummary(operationName, result) {
@@ -2460,6 +2826,8 @@ async function captureAppGrowingMaterialPage(page, connector, options) {
   const captured = [];
   const operations = new Set();
   const responses = [];
+  let captureError = "";
+  let pageCrashed = false;
 
   const onResponse = async (response) => {
     if (!response.url().startsWith(connector.graphQLURL)) {
@@ -2492,27 +2860,85 @@ async function captureAppGrowingMaterialPage(page, connector, options) {
     }
   };
 
+  const routeHandler = appGrowingCrawlRouteHandler();
+  if (routeHandler) {
+    await page.route("**/*", routeHandler).catch(() => {});
+  }
   page.on("response", onResponse);
   try {
-    await page.goto(url, { waitUntil: "domcontentloaded", timeout: 60_000 });
+    await page.goto(url, { waitUntil: "domcontentloaded", timeout: positiveIntegerParam(options.pageTimeoutMS, 60_000, 1_000, 60_000) });
     await Promise.race([
       page.waitForLoadState("networkidle", { timeout: options.captureTimeoutMS }).catch(() => null),
       sleep(options.captureTimeoutMS),
     ]);
     await stimulateAppGrowingMaterialList(page, options.captureTimeoutMS);
+  } catch (error) {
+    captureError = errorMessage(error);
+    pageCrashed = isBrowserPageCrashError(error);
   } finally {
     page.off("response", onResponse);
+    if (routeHandler) {
+      await page.unroute("**/*", routeHandler).catch(() => {});
+    }
   }
 
-  const snapshot = await appGrowingPageSnapshot(page);
+  const snapshot = await appGrowingPageSnapshot(page).catch((error) => ({
+    url: safePageURL(page),
+    title: "",
+    text: "",
+    error: errorMessage(error),
+  }));
   return {
     url,
     operations: Array.from(operations).sort(),
     responses,
     snapshot,
     needsReauth: pageSnapshotHasAnonymousText(snapshot, connector),
+    error: captureError,
+    pageCrashed,
     materials: captured,
   };
+}
+
+function appGrowingCrawlRouteHandler() {
+  return async (route) => {
+    const request = route.request();
+    if (shouldBlockAppGrowingCrawlResource(request)) {
+      await route.abort().catch(() => {});
+      return;
+    }
+    await route.continue().catch(() => {});
+  };
+}
+
+function shouldBlockAppGrowingCrawlResource(request) {
+  const resourceType = request.resourceType?.() || "";
+  if (["font", "image", "media"].includes(resourceType)) {
+    return true;
+  }
+  const url = request.url?.() || "";
+  return /(?:google-analytics|googletagmanager|doubleclick|hotjar|sentry|clarity|facebook|tiktok|analytics|collect|beacon)/i.test(url);
+}
+
+function isBrowserPageCrashError(error) {
+  return /page crashed|target page, context or browser has been closed|browser has been closed/i.test(errorMessage(error));
+}
+
+function errorMessage(error) {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function safePageURL(page) {
+  try {
+    return page.url();
+  } catch {
+    return "";
+  }
+}
+
+async function recreateAppGrowingCapturePage(context, page) {
+  await page?.close?.().catch(() => {});
+  return context.newPage();
 }
 
 async function appGrowingPageSnapshot(page) {
@@ -3605,14 +4031,22 @@ const server = http.createServer(async (req, res) => {
 
 export {
   appGrowingAppMaterialListVariables,
+  appGrowingBrandFromStrategyMemory,
   appGrowingGraphQLDateWindow,
+  appGrowingGraphQLRequest,
   appGrowingMaterialURL,
   appGrowingSearchAppVariables,
+  appGrowingShouldUseAdaptiveBrowserFallback,
+  captureAppGrowingMaterialPage,
+  connectorGraphQLHeaders,
   connectorForID,
   connectorTargetURL,
   extractAppGrowingMaterials,
+  isBrowserPageCrashError,
   normalizeDeclarativeConnector,
   normalizeAppGrowingMaterial,
+  shouldBlockAppGrowingCrawlResource,
+  shouldUseAppGrowingBrowserFallback,
 };
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

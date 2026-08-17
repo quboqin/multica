@@ -28,6 +28,28 @@
     "copy_action": "Copy",
     "copied_toast": "Copied",
     "copy_failed_toast": "Copy failed",
+    "positive_feedback_action": "Good response",
+    "negative_feedback_action": "Poor response",
+    "feedback_dialog": {
+      "comment_action": "Add comment",
+      "edit_comment_action": "Edit comment",
+      "comment_title": "Add a comment",
+      "edit_comment_title": "Edit comment",
+      "comment_description": "Save a note independently from your rating.",
+      "negative_title": "What could be improved?",
+      "negative_description": "Tell us what was wrong with this response.",
+      "comment_optional": "Comment (optional)",
+      "comment_required": "Comment (required)",
+      "comment_placeholder": "Enter your comment...",
+      "cancel": "Cancel",
+      "submit": "Submit feedback",
+      "submitting": "Submitting...",
+      "success_toast": "Feedback submitted",
+      "error_toast": "Couldn't submit feedback",
+      "remove_action": "Remove feedback",
+      "removed_toast": "Feedback removed",
+      "remove_error_toast": "Couldn't remove feedback"
+    },
     "loading_older": "Loading older messages…"
   },
   "session_history": {

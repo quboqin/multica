@@ -49,6 +49,8 @@ import type {
   RuntimeUsageByHour,
   DashboardUsageDaily,
   DashboardUsageByAgent,
+  DashboardUsageByUser,
+  DashboardUsageByUserDaily,
   DashboardAgentRunTime,
   DashboardRunTimeDaily,
   RuntimeUpdate,
@@ -60,6 +62,9 @@ import type {
   AssigneeFrequencyEntry,
   TaskMessagePayload,
   Attachment,
+  Favorite,
+  FavoriteCategory,
+  FavoriteType,
   ChatSession,
   ChatMessage,
   ChatMessagesPage,
@@ -68,14 +73,14 @@ import type {
   SendChatMessageResponse,
   CancelTaskResponse,
   Project,
-    Milestone,
-    CreateMilestoneRequest,
-    UpdateMilestoneRequest,
-    ListMilestonesResponse,
-    KpiMetric,
-    CreateKpiMetricRequest,
-    UpdateKpiMetricRequest,
-    ListKpiMetricsResponse,
+  Milestone,
+  CreateMilestoneRequest,
+  UpdateMilestoneRequest,
+  ListMilestonesResponse,
+  KpiMetric,
+  CreateKpiMetricRequest,
+  UpdateKpiMetricRequest,
+  ListKpiMetricsResponse,
   CreateProjectRequest,
   UpdateProjectRequest,
   ListProjectsResponse,
@@ -84,11 +89,13 @@ import type {
   UpdateProjectResourceRequest,
   ListProjectResourcesResponse,
   Label,
+  LabelResourceType,
   CreateLabelRequest,
   UpdateLabelRequest,
-    ListLabelsResponse,
-    IssueLabelsResponse,
-    ProjectLabelsResponse,
+  ListLabelsResponse,
+  IssueLabelsResponse,
+  ProjectLabelsResponse,
+  AgentLabelsResponse,
   PinnedItem,
   CreatePinRequest,
   PinnedItemType,
@@ -160,8 +167,14 @@ import { parseWithFallback } from "./schema";
 import {
   AgentTemplateSchema,
   AgentTemplateSummaryListSchema,
+  FavoriteCategoryListSchema,
+  FavoriteCategoryResponseSchema,
   AttachmentResponseSchema,
+  FavoriteListSchema,
+  FavoriteResponseSchema,
   CancelTaskResponseSchema,
+  ChatMessageListSchema,
+  ChatMessagesPageSchema,
   ChildIssuesResponseSchema,
   CommentsListSchema,
   CommentTriggerPreviewSchema,
@@ -171,11 +184,17 @@ import {
   DashboardAgentRunTimeListSchema,
   DashboardRunTimeDailyListSchema,
   DashboardUsageByAgentListSchema,
+  DashboardUsageByUserListSchema,
+  DashboardUsageByUserDailyListSchema,
   DashboardUsageDailyListSchema,
   EMPTY_AGENT_TEMPLATE_DETAIL,
   EMPTY_AGENT_TEMPLATE_SUMMARY_LIST,
   EMPTY_APP_CONFIG,
   EMPTY_ATTACHMENT,
+  EMPTY_FAVORITE,
+  EMPTY_FAVORITE_CATEGORIES,
+  EMPTY_FAVORITE_CATEGORY,
+  EMPTY_FAVORITES,
   EMPTY_CLOUD_RUNTIME_NODE,
   EMPTY_CLOUD_RUNTIME_NODE_LIST,
   EMPTY_CREATE_AGENT_FROM_TEMPLATE_RESPONSE,
@@ -223,6 +242,8 @@ import {
   EMPTY_BILLING_CHECKOUT_SESSION_STATUS,
   EMPTY_CREATE_BILLING_PORTAL_SESSION_RESPONSE,
   EMPTY_CANCEL_TASK_RESPONSE,
+  EMPTY_CHAT_MESSAGE_LIST,
+  EMPTY_CHAT_MESSAGES_PAGE,
   EMPTY_CREATIVE_IMPORT_SUMMARY,
   EMPTY_CREATIVE_MATERIALS_RESPONSE,
   EMPTY_CREDENTIAL_CRAWL_RESULT,
@@ -1386,6 +1407,70 @@ export class ApiClient {
     );
   }
 
+  async getDashboardUsageByUser(
+    params: { days?: number; project_id?: string | null; tz?: string },
+  ): Promise<DashboardUsageByUser[]> {
+    const search = new URLSearchParams();
+    if (params.days) search.set("days", String(params.days));
+    if (params.project_id) search.set("project_id", params.project_id);
+    if (params.tz) search.set("tz", params.tz);
+    const raw = await this.fetch<unknown>(`/api/dashboard/usage/by-user?${search}`);
+    return parseWithFallback<DashboardUsageByUser[]>(
+      raw,
+      DashboardUsageByUserListSchema,
+      [],
+      { endpoint: "GET /api/dashboard/usage/by-user" },
+    );
+  }
+
+  async getDashboardUsageMe(
+    params: { days?: number; project_id?: string | null; tz?: string },
+  ): Promise<DashboardUsageByUser[]> {
+    const search = new URLSearchParams();
+    if (params.days) search.set("days", String(params.days));
+    if (params.project_id) search.set("project_id", params.project_id);
+    if (params.tz) search.set("tz", params.tz);
+    const raw = await this.fetch<unknown>(`/api/dashboard/usage/me?${search}`);
+    return parseWithFallback<DashboardUsageByUser[]>(
+      raw,
+      DashboardUsageByUserListSchema,
+      [],
+      { endpoint: "GET /api/dashboard/usage/me" },
+    );
+  }
+
+  async getDashboardUsageByUserDaily(
+    params: { days?: number; project_id?: string | null; tz?: string },
+  ): Promise<DashboardUsageByUserDaily[]> {
+    const search = new URLSearchParams();
+    if (params.days) search.set("days", String(params.days));
+    if (params.project_id) search.set("project_id", params.project_id);
+    if (params.tz) search.set("tz", params.tz);
+    const raw = await this.fetch<unknown>(`/api/dashboard/usage/by-user/daily?${search}`);
+    return parseWithFallback<DashboardUsageByUserDaily[]>(
+      raw,
+      DashboardUsageByUserDailyListSchema,
+      [],
+      { endpoint: "GET /api/dashboard/usage/by-user/daily" },
+    );
+  }
+
+  async getDashboardUsageMeDaily(
+    params: { days?: number; project_id?: string | null; tz?: string },
+  ): Promise<DashboardUsageByUserDaily[]> {
+    const search = new URLSearchParams();
+    if (params.days) search.set("days", String(params.days));
+    if (params.project_id) search.set("project_id", params.project_id);
+    if (params.tz) search.set("tz", params.tz);
+    const raw = await this.fetch<unknown>(`/api/dashboard/usage/me/daily?${search}`);
+    return parseWithFallback<DashboardUsageByUserDaily[]>(
+      raw,
+      DashboardUsageByUserDailyListSchema,
+      [],
+      { endpoint: "GET /api/dashboard/usage/me/daily" },
+    );
+  }
+
   async getDashboardAgentRunTime(
     params: { days?: number; project_id?: string | null; tz?: string },
   ): Promise<DashboardAgentRunTime[]> {
@@ -1825,7 +1910,10 @@ export class ApiClient {
   }
 
   async listChatMessages(sessionId: string): Promise<ChatMessage[]> {
-    return this.fetch(`/api/chat/sessions/${sessionId}/messages`);
+    const raw = await this.fetch<unknown>(`/api/chat/sessions/${sessionId}/messages`);
+    return parseWithFallback(raw, ChatMessageListSchema, EMPTY_CHAT_MESSAGE_LIST, {
+      endpoint: "GET /api/chat/sessions/:sessionId/messages",
+    });
   }
 
   async listChatMessagesPage(
@@ -1839,8 +1927,14 @@ export class ApiClient {
       query.set("before_id", params.before.id);
     }
     try {
-      return await this.fetch(
+      const raw = await this.fetch<unknown>(
         `/api/chat/sessions/${sessionId}/messages/page?${query.toString()}`,
+      );
+      return parseWithFallback(
+        raw,
+        ChatMessagesPageSchema,
+        { ...EMPTY_CHAT_MESSAGES_PAGE, limit },
+        { endpoint: "GET /api/chat/sessions/:sessionId/messages/page" },
       );
     } catch (err) {
       // Deployment-order compatibility: a backend deployed before this endpoint
@@ -1874,6 +1968,20 @@ export class ApiClient {
     });
   }
 
+  async upsertChatMessageFeedback(
+    sessionId: string,
+    messageId: string,
+    data: { sentiment: "positive" | "negative" | null; comment: string },
+  ): Promise<void> {
+    await this.fetch(
+      `/api/chat/sessions/${sessionId}/messages/${messageId}/feedback`,
+      {
+        method: "PUT",
+        body: JSON.stringify(data),
+      },
+    );
+  }
+
   async getPendingChatTask(sessionId: string): Promise<ChatPendingTask> {
     return this.fetch(`/api/chat/sessions/${sessionId}/pending-task`);
   }
@@ -1905,6 +2013,94 @@ export class ApiClient {
     const raw = await this.fetch<unknown>(`/api/attachments/${id}`);
     return parseWithFallback(raw, AttachmentResponseSchema, EMPTY_ATTACHMENT, {
       endpoint: "GET /api/attachments/{id}",
+    });
+  }
+
+  async listFavoriteCategories(): Promise<FavoriteCategory[]> {
+    const raw = await this.fetch<unknown>("/api/favorite-categories");
+    return parseWithFallback(
+      raw,
+      FavoriteCategoryListSchema,
+      EMPTY_FAVORITE_CATEGORIES,
+      { endpoint: "GET /api/favorite-categories" },
+    );
+  }
+
+  async createFavoriteCategory(name: string): Promise<FavoriteCategory> {
+    const raw = await this.fetch<unknown>("/api/favorite-categories", {
+      method: "POST",
+      body: JSON.stringify({ name }),
+    });
+    return parseWithFallback(
+      raw,
+      FavoriteCategoryResponseSchema,
+      EMPTY_FAVORITE_CATEGORY,
+      { endpoint: "POST /api/favorite-categories" },
+    );
+  }
+
+  async updateFavoriteCategory(
+    id: string,
+    name: string,
+  ): Promise<FavoriteCategory> {
+    const raw = await this.fetch<unknown>(`/api/favorite-categories/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify({ name }),
+    });
+    return parseWithFallback(
+      raw,
+      FavoriteCategoryResponseSchema,
+      EMPTY_FAVORITE_CATEGORY,
+      { endpoint: "PATCH /api/favorite-categories/{id}" },
+    );
+  }
+
+  async deleteFavoriteCategory(id: string): Promise<void> {
+    await this.fetch(`/api/favorite-categories/${id}`, {
+      method: "DELETE",
+    });
+  }
+
+  async listFavorites(): Promise<Favorite[]> {
+    const raw = await this.fetch<unknown>("/api/favorites");
+    return parseWithFallback(raw, FavoriteListSchema, EMPTY_FAVORITES, {
+      endpoint: "GET /api/favorites",
+    });
+  }
+
+  async putFavorite(
+    itemType: FavoriteType,
+    itemId: string,
+  ): Promise<Favorite> {
+    const raw = await this.fetch<unknown>(
+      `/api/favorites/${itemType}/${itemId}`,
+      { method: "PUT" },
+    );
+    return parseWithFallback(raw, FavoriteResponseSchema, EMPTY_FAVORITE, {
+      endpoint: "PUT /api/favorites/{itemType}/{itemId}",
+    });
+  }
+
+  async moveFavorite(
+    itemType: FavoriteType,
+    itemId: string,
+    categoryId: string,
+  ): Promise<Favorite> {
+    const raw = await this.fetch<unknown>(
+      `/api/favorites/${itemType}/${itemId}`,
+      { method: "PATCH", body: JSON.stringify({ category_id: categoryId }) },
+    );
+    return parseWithFallback(raw, FavoriteResponseSchema, EMPTY_FAVORITE, {
+      endpoint: "PATCH /api/favorites/{itemType}/{itemId}",
+    });
+  }
+
+  async deleteFavorite(
+    itemType: FavoriteType,
+    itemId: string,
+  ): Promise<void> {
+    await this.fetch(`/api/favorites/${itemType}/${itemId}`, {
+      method: "DELETE",
     });
   }
 
@@ -2067,8 +2263,11 @@ export class ApiClient {
   }
 
   // Labels
-  async listLabels(): Promise<ListLabelsResponse> {
-    return this.fetch(`/api/labels`);
+  async listLabels(params?: { resource_type?: LabelResourceType }): Promise<ListLabelsResponse> {
+    const search = new URLSearchParams();
+    if (params?.resource_type) search.set("resource_type", params.resource_type);
+    const qs = search.toString();
+    return this.fetch(`/api/labels${qs ? `?${qs}` : ""}`);
   }
 
   async getLabel(id: string): Promise<Label> {
@@ -2123,6 +2322,23 @@ export class ApiClient {
 
   async detachProjectLabel(projectId: string, labelId: string): Promise<ProjectLabelsResponse> {
     return this.fetch(`/api/projects/${projectId}/labels/${labelId}`, {
+      method: "DELETE",
+    });
+  }
+
+  async listLabelsForAgent(agentId: string): Promise<AgentLabelsResponse> {
+    return this.fetch(`/api/agents/${agentId}/labels`);
+  }
+
+  async attachAgentLabel(agentId: string, labelId: string): Promise<AgentLabelsResponse> {
+    return this.fetch(`/api/agents/${agentId}/labels`, {
+      method: "POST",
+      body: JSON.stringify({ label_id: labelId }),
+    });
+  }
+
+  async detachAgentLabel(agentId: string, labelId: string): Promise<AgentLabelsResponse> {
+    return this.fetch(`/api/agents/${agentId}/labels/${labelId}`, {
       method: "DELETE",
     });
   }

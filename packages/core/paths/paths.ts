@@ -19,6 +19,8 @@ function workspaceScoped(slug: string) {
   return {
     root: () => `${ws}/issues`,
     usage: () => `${ws}/usage`,
+    usageMe: () => `${ws}/usage/me`,
+    usageUsers: () => `${ws}/usage/users`,
     issues: () => `${ws}/issues`,
     issueDetail: (id: string) => `${ws}/issues/${encode(id)}`,
     plans: () => `${ws}/plans`,
@@ -36,6 +38,8 @@ function workspaceScoped(slug: string) {
     squadDetail: (id: string) => `${ws}/squads/${encode(id)}`,
     inbox: () => `${ws}/inbox`,
     myIssues: () => `${ws}/my-issues`,
+    favorites: () => `${ws}/favorites`,
+    favoriteCategory: (id: string) => `${ws}/favorites/${encode(id)}`,
     runtimes: () => `${ws}/runtimes`,
     runtimeDetail: (id: string) => `${ws}/runtimes/${encode(id)}`,
     skills: () => `${ws}/skills`,

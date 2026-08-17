@@ -4,8 +4,9 @@
  * HtmlAttachmentPreview — inline HTML attachment renderer.
  *
  * Visual model mirrors the image renderer: the iframe body is the card, and a
- * floating right-top toolbar reveals on hover with Preview (full-screen modal)
- * / Open-in-new-tab / Download. No file-card chrome (icon + filename row).
+ * floating right-top toolbar reveals on hover with Favorite / Preview
+ * (full-screen modal) / Open-in-new-tab / Download. No file-card chrome
+ * (icon + filename row).
  *
  * No "Copy code" button: this is a FILE, not an inline source snippet. The
  * inline ```html``` fenced block (HtmlBlockPreview) is the surface for reading
@@ -26,7 +27,15 @@
  * 80px placeholder and the toolbar pins itself open with all actions enabled.
  */
 
-import { Download, ExternalLink, Maximize2, Trash2 } from "lucide-react";
+import type { ReactNode } from "react";
+import {
+  Download,
+  ExternalLink,
+  FolderInput,
+  Maximize2,
+  Star,
+  Trash2,
+} from "lucide-react";
 import { cn } from "@multica/ui/lib/utils";
 import { paths, useWorkspaceSlug } from "@multica/core/paths";
 import { useT } from "../i18n";
@@ -43,6 +52,11 @@ interface HtmlAttachmentPreviewProps {
   onPreview: () => void;
   onDownload: () => void;
   onDelete?: () => void;
+  isFavorite?: boolean;
+  favoritePending?: boolean;
+  onToggleFavorite?: () => void;
+  onChangeFavoriteCategory?: () => void;
+  trailingAction?: ReactNode;
 }
 
 export function HtmlAttachmentPreview({
@@ -51,6 +65,11 @@ export function HtmlAttachmentPreview({
   onPreview,
   onDownload,
   onDelete,
+  isFavorite,
+  favoritePending,
+  onToggleFavorite,
+  onChangeFavoriteCategory,
+  trailingAction,
 }: HtmlAttachmentPreviewProps) {
   const { t } = useT("editor");
   // Subscribe to the same React Query cache key the body consumes so the
@@ -104,6 +123,42 @@ export function HtmlAttachmentPreview({
             : "opacity-0 group-hover/html-preview:opacity-100",
         )}
       >
+        {onToggleFavorite && (
+          <button
+            type="button"
+            className="flex h-6 w-6 cursor-pointer items-center justify-center rounded text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:pointer-events-none disabled:opacity-50"
+            title={t(($) =>
+              isFavorite ? $.attachment.unfavorite : $.attachment.favorite,
+            )}
+            aria-label={t(($) =>
+              isFavorite ? $.attachment.unfavorite : $.attachment.favorite,
+            )}
+            aria-pressed={isFavorite === true}
+            disabled={favoritePending}
+            onMouseDown={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              onToggleFavorite();
+            }}
+          >
+            <Star className="h-3.5 w-3.5" fill={isFavorite ? "currentColor" : "none"} />
+          </button>
+        )}
+        {isFavorite && onChangeFavoriteCategory && (
+          <button
+            type="button"
+            className="flex h-6 w-6 cursor-pointer items-center justify-center rounded text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+            title={t(($) => $.attachment.change_favorite_category)}
+            aria-label={t(($) => $.attachment.change_favorite_category)}
+            onClick={(e) => {
+              e.stopPropagation();
+              onChangeFavoriteCategory();
+            }}
+          >
+            <FolderInput className="h-3.5 w-3.5" />
+          </button>
+        )}
+        {trailingAction}
         <button
           type="button"
           className="flex h-6 w-6 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"

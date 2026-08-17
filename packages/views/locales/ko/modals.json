@@ -111,6 +111,8 @@
     "repos_add": "추가",
     "repos_selected": "선택됨",
     "no_plan": "플랜 없음",
+    "start_date": "시작",
+    "due_date": "마감",
     "source_pill_local": "로컬 디렉터리",
     "source_tab_repos": "GitHub 저장소",
     "source_tab_local": "로컬 디렉터리",

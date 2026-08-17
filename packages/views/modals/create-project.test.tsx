@@ -10,6 +10,9 @@ const apiRepoUrl = "https://github.com/multica-ai/api";
 const webRepoUrl = "https://github.com/multica-ai/web";
 
 vi.mock("@tanstack/react-query", () => ({
+  queryOptions: <TOptions extends { queryKey?: readonly unknown[] }>(
+    options: TOptions,
+  ) => options,
   useQuery: () => ({ data: [] }),
 }));
 

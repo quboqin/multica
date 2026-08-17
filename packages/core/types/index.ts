@@ -5,6 +5,7 @@ export type {
   AgentRuntimeMode,
   AgentVisibility,
   AgentTask,
+  TaskAttribution,
   AgentActivityBucket,
   AgentRunCount,
   TaskFailureReason,
@@ -33,6 +34,8 @@ export type {
   RuntimeUsageByHour,
   DashboardUsageDaily,
   DashboardUsageByAgent,
+  DashboardUsageByUser,
+  DashboardUsageByUserDaily,
   DashboardAgentRunTime,
   DashboardRunTimeDaily,
   RuntimeUpdate,
@@ -58,7 +61,7 @@ export type { Workspace, WorkspaceRepo, Member, MemberRole, User, IntegrationTok
 export type { InboxItem, InboxSeverity, InboxItemType } from "./inbox";
 export type { NotificationGroupKey, NotificationGroupValue, NotificationPreferences, NotificationPreferenceResponse } from "./notification-preference";
 export type { Comment, CommentType, CommentAuthorType, CommentTriggerPreview, CommentTriggerPreviewAgent, CommentTriggerSource, Reaction } from "./comment";
-export type { Label, CreateLabelRequest, UpdateLabelRequest, ListLabelsResponse, IssueLabelsResponse, ProjectLabelsResponse } from "./label";
+export type { Label, LabelResourceType, CreateLabelRequest, UpdateLabelRequest, ListLabelsResponse, IssueLabelsResponse, ProjectLabelsResponse, AgentLabelsResponse } from "./label";
 export type {
   TimelineEntry,
   AssigneeFrequencyEntry,
@@ -74,10 +77,20 @@ export type {
   PreviewSessionStatus,
   CreatePreviewSessionRequest,
 } from "./preview-session";
+export type { FavoriteCategory } from "./favorite-category";
+export type {
+  AttachmentFavorite,
+  Favorite,
+  FavoriteItem,
+  FavoriteItemType,
+  FavoriteType,
+} from "./favorite";
 export { attachmentDownloadPath, attachmentIdFromDownloadURL, contentReferencesAttachment } from "./attachment-url";
 export type {
   ChatSession,
   ChatMessage,
+  ChatMessageFeedback,
+  ChatMessageFeedbackSentiment,
   ChatMessagesPage,
   ChatPendingTask,
   PendingChatTaskItem,

@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -128,7 +130,10 @@ func (c *HTTPWorkerClient) post(ctx context.Context, client *http.Client, path s
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := client.Do(req)
 	if err != nil {
-		return err
+		if isWorkerTimeoutError(err) {
+			return fmt.Errorf("%w: %v", ErrWorkerTimeout, err)
+		}
+		return fmt.Errorf("%w: %v", ErrWorkerUnavailable, err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
@@ -139,10 +144,36 @@ func (c *HTTPWorkerClient) post(ctx context.Context, client *http.Client, path s
 		if body.Error == "" {
 			body.Error = resp.Status
 		}
-		return fmt.Errorf("credential worker: %s", body.Error)
+		return workerStatusError(resp.StatusCode, body.Error)
 	}
 	if out == nil {
 		return nil
 	}
 	return json.NewDecoder(resp.Body).Decode(out)
+}
+
+func isWorkerTimeoutError(err error) bool {
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	var netErr net.Error
+	return errors.As(err, &netErr) && netErr.Timeout()
+}
+
+func workerStatusError(statusCode int, message string) error {
+	if strings.TrimSpace(message) == "" {
+		message = http.StatusText(statusCode)
+	}
+	switch {
+	case statusCode == http.StatusBadRequest || statusCode == http.StatusUnprocessableEntity:
+		return fmt.Errorf("%w: %s", ErrWorkerRequestInvalid, message)
+	case statusCode == http.StatusTooManyRequests:
+		return fmt.Errorf("%w: %s", ErrWorkerBusy, message)
+	case statusCode == http.StatusRequestTimeout || statusCode == http.StatusGatewayTimeout:
+		return fmt.Errorf("%w: %s", ErrWorkerTimeout, message)
+	case statusCode >= 500:
+		return fmt.Errorf("%w: %s", ErrWorkerUnavailable, message)
+	default:
+		return fmt.Errorf("credential worker: %s", message)
+	}
 }

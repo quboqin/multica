@@ -111,6 +111,8 @@
     "repos_add": "Add",
     "repos_selected": "Selected",
     "no_plan": "No plan",
+    "start_date": "Start",
+    "due_date": "Due",
     "source_pill_local": "Local directory",
     "source_tab_repos": "GitHub repos",
     "source_tab_local": "Local directory",

@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/storage"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
@@ -145,17 +147,17 @@ func attachmentDownloadPath(id string) string {
 //
 //  1. Persist `a.Url` only when the deployment has signaled the storage
 //     backend serves URLs publicly without per-request auth:
-//       - `Storage.CdnDomain()` is non-empty (operator configured a
-//         public-facing base URL — `S3_CDN_DOMAIN` for the S3 backend or
-//         `LOCAL_UPLOAD_BASE_URL` for LocalStorage), AND
-//       - `h.CFSigner` is nil (no per-request CloudFront signing — when
-//         signing is on, the same CDN domain serves PRIVATE content via
-//         time-bounded signed URLs and the raw `a.Url` is unauth-deny),
-//         AND
-//       - `a.Url` is itself an absolute http(s) URL with no signature
-//         query — defends against legacy rows backfilled while baseURL
-//         was unset, and against a freshly-signed `download_url` ever
-//         leaking into `a.Url` (the original MUL-3130 bug).
+//     - `Storage.CdnDomain()` is non-empty (operator configured a
+//     public-facing base URL — `S3_CDN_DOMAIN` for the S3 backend or
+//     `LOCAL_UPLOAD_BASE_URL` for LocalStorage), AND
+//     - `h.CFSigner` is nil (no per-request CloudFront signing — when
+//     signing is on, the same CDN domain serves PRIVATE content via
+//     time-bounded signed URLs and the raw `a.Url` is unauth-deny),
+//     AND
+//     - `a.Url` is itself an absolute http(s) URL with no signature
+//     query — defends against legacy rows backfilled while baseURL
+//     was unset, and against a freshly-signed `download_url` ever
+//     leaking into `a.Url` (the original MUL-3130 bug).
 //
 //  2. Every other shape — CloudFront-signed mode, S3 presign /proxy
 //     against a private bucket without a CDN domain, raw S3 / R2 /
@@ -446,6 +448,15 @@ func (h *Handler) UploadFile(w http.ResponseWriter, r *http.Request) {
 
 		att, err := h.Queries.CreateAttachment(r.Context(), params)
 		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) && (params.IssueID.Valid || params.CommentID.Valid) {
+				h.deleteS3Object(r.Context(), link)
+				message := "issue is no longer available"
+				if params.CommentID.Valid {
+					message = "comment is no longer available"
+				}
+				writeError(w, http.StatusConflict, message)
+				return
+			}
 			slog.Error("failed to create attachment record", "error", err)
 			// S3 upload succeeded but DB record failed — still return the link
 			// so the file is usable. Log the error for investigation.

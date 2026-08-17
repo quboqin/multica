@@ -25,6 +25,9 @@
     "status": "ステータス",
     "progress": "進捗",
     "lead": "リード",
+    "start_date": "Start",
+    "due_date": "Due",
+    "updated": "Updated",
     "created": "作成日",
     "issues": "Issue 数",
     "labels": "Labels",
@@ -79,6 +82,18 @@
     "toast_project_deleted": "プロジェクトを削除しました",
     "toast_move_issue_failed": "イシューを移動できませんでした",
     "no_plan": "プランなし"
+  },
+  "preview": {
+    "open": "詳細を表示",
+    "description": "View project properties and description",
+    "no_description": "No description",
+    "resources": "Resources",
+    "edit": "編集",
+    "save": "保存",
+    "cancel": "キャンセル",
+    "title_required": "プロジェクトのタイトルは必須です",
+    "toast_saved": "プロジェクトを更新しました",
+    "toast_failed": "プロジェクトを更新できませんでした"
   },
   "resources": {
     "section_header": "リソース",

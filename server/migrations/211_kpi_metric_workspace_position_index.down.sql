@@ -1,0 +1,1 @@
+DROP INDEX CONCURRENTLY IF EXISTS kpi_metric_workspace_position_idx;

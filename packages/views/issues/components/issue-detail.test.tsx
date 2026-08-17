@@ -10,6 +10,9 @@ import enIssues from "../../locales/en/issues.json";
 const TEST_RESOURCES = { en: { common: enCommon, issues: enIssues } };
 
 const mockViewport = vi.hoisted(() => ({ isMobile: false }));
+const mockNavigation = vi.hoisted(() => ({
+  searchParams: new URLSearchParams(),
+}));
 
 vi.mock("@multica/ui/hooks/use-mobile", () => ({
   useIsMobile: () => mockViewport.isMobile,
@@ -104,6 +107,7 @@ vi.mock("../../navigation", () => ({
   useNavigation: () => ({
     push: vi.fn(),
     pathname: "/issues/issue-1",
+    searchParams: mockNavigation.searchParams,
     getShareableUrl: (p: string) => `https://app.multica.com${p}`,
   }),
   NavigationProvider: ({ children }: { children: React.ReactNode }) => children,
@@ -498,6 +502,7 @@ describe("IssueDetail (shared)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockViewport.isMobile = false;
+    mockNavigation.searchParams = new URLSearchParams();
     // Default: issue loads successfully
     mockApiObj.getIssue.mockResolvedValue(mockIssue);
     // /timeline returns the entries flat in chronological order (oldest first).
@@ -584,6 +589,9 @@ describe("IssueDetail (shared)", () => {
       priority: "none",
       lead_type: null,
       lead_id: null,
+      milestone_id: null,
+      start_date: null,
+      due_date: null,
       created_at: "2026-01-01T00:00:00Z",
       updated_at: "2026-01-01T00:00:00Z",
       issue_count: 0,
@@ -980,6 +988,18 @@ describe("IssueDetail (shared)", () => {
   });
 
   describe("highlightCommentId scroll-to-comment", () => {
+    it("reads the target comment from the route query", async () => {
+      mockNavigation.searchParams = new URLSearchParams("comment=comment-2");
+
+      renderIssueDetail();
+
+      await waitFor(() => {
+        expect(
+          document.getElementById("comment-comment-2")?.querySelector(".ring-2"),
+        ).not.toBeNull();
+      });
+    });
+
     it("scrolls to the highlighted comment after both issue and timeline finish loading", async () => {
       renderIssueDetailWithHighlight("comment-2");
 

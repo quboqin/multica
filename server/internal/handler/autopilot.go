@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -456,7 +457,15 @@ func (h *Handler) CreateAutopilot(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	autopilot, err := h.Queries.CreateAutopilot(r.Context(), db.CreateAutopilotParams{
+	tx, err := h.TxStarter.Begin(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to create autopilot")
+		return
+	}
+	defer tx.Rollback(r.Context())
+	qtx := h.Queries.WithTx(tx)
+
+	autopilot, err := qtx.CreateAutopilot(r.Context(), db.CreateAutopilotParams{
 		WorkspaceID:        wsUUID,
 		Title:              req.Title,
 		AssigneeType:       assigneeType,
@@ -470,6 +479,14 @@ func (h *Handler) CreateAutopilot(w http.ResponseWriter, r *http.Request) {
 		ProjectID:          projectID,
 	})
 	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to create autopilot")
+		return
+	}
+	if err := h.recordAutopilotRuleVersion(r.Context(), qtx, autopilot, "member", parseUUID(userID)); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to create autopilot")
+		return
+	}
+	if err := tx.Commit(r.Context()); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to create autopilot")
 		return
 	}
@@ -594,8 +611,34 @@ func (h *Handler) UpdateAutopilot(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	autopilot, err := h.Queries.UpdateAutopilot(r.Context(), params)
+	tx, err := h.TxStarter.Begin(r.Context())
 	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to update autopilot")
+		return
+	}
+	defer tx.Rollback(r.Context())
+	qtx := h.Queries.WithTx(tx)
+
+	autopilot, err := qtx.UpdateAutopilot(r.Context(), params)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to update autopilot")
+		return
+	}
+	if autopilotRuleSubstantiveChange(prev, autopilot) {
+		if err := h.recordAutopilotRuleVersion(r.Context(), qtx, autopilot, "member", parseUUID(userID)); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to update autopilot")
+			return
+		}
+		if err := qtx.SetAutopilotTriggerPublishersByAutopilot(r.Context(), db.SetAutopilotTriggerPublishersByAutopilotParams{
+			AutopilotID:     autopilot.ID,
+			PublishedByType: pgtype.Text{String: "member", Valid: true},
+			PublishedByID:   parseUUID(userID),
+		}); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to update autopilot")
+			return
+		}
+	}
+	if err := tx.Commit(r.Context()); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to update autopilot")
 		return
 	}
@@ -603,6 +646,19 @@ func (h *Handler) UpdateAutopilot(w http.ResponseWriter, r *http.Request) {
 	resp := autopilotToResponse(autopilot)
 	h.publish(protocol.EventAutopilotUpdated, workspaceID, "member", userID, map[string]any{"autopilot": resp})
 	writeJSON(w, http.StatusOK, resp)
+}
+
+func autopilotRuleSubstantiveChange(prev, next db.Autopilot) bool {
+	return prev.AssigneeType != next.AssigneeType ||
+		prev.AssigneeID != next.AssigneeID ||
+		prev.Status != next.Status ||
+		prev.ExecutionMode != next.ExecutionMode ||
+		prev.Description != next.Description ||
+		prev.IssueTitleTemplate != next.IssueTitleTemplate
+}
+
+func (h *Handler) recordAutopilotRuleVersion(ctx context.Context, q *db.Queries, ap db.Autopilot, publishedByType string, publishedByID pgtype.UUID) error {
+	return service.RecordAutopilotRuleVersion(ctx, q, ap, publishedByType, publishedByID)
 }
 
 func (h *Handler) parseAutopilotProjectID(
@@ -713,6 +769,11 @@ func (h *Handler) CreateAutopilotTrigger(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	userID, ok := requireUserID(w, r)
+	if !ok {
+		return
+	}
+	publisherID := parseUUID(userID)
 	// Provider only applies to webhook triggers and the value space is
 	// closed — reject unknowns early so a typo on create doesn't quietly
 	// degrade into a "generic" trigger that bypasses provider-specific
@@ -771,13 +832,12 @@ func (h *Handler) CreateAutopilotTrigger(w http.ResponseWriter, r *http.Request)
 			writeError(w, http.StatusInternalServerError, "failed to encode event_filters")
 			return
 		}
-		trigger, err := h.createWebhookTriggerWithMintedToken(r, ap.ID, ptrToText(req.Label), provider, eventFiltersBytes)
+		trigger, err := h.createWebhookTriggerWithMintedToken(r, ap.ID, ptrToText(req.Label), provider, eventFiltersBytes, publisherID)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to create trigger")
 			return
 		}
 		resp := h.triggerToResponse(trigger)
-		userID, _ := requireUserID(w, r)
 		h.publish(protocol.EventAutopilotUpdated, workspaceID, "member", userID, map[string]any{
 			"autopilot_id": uuidToString(ap.ID),
 			"trigger":      resp,
@@ -787,14 +847,16 @@ func (h *Handler) CreateAutopilotTrigger(w http.ResponseWriter, r *http.Request)
 	}
 
 	trigger, err := h.Queries.CreateAutopilotTrigger(r.Context(), db.CreateAutopilotTriggerParams{
-		AutopilotID:    ap.ID,
-		Kind:           req.Kind,
-		Enabled:        true,
-		CronExpression: cronText,
-		Timezone:       tzText,
-		NextRunAt:      nextRunAt,
-		Label:          ptrToText(req.Label),
-		WebhookToken:   webhookToken,
+		AutopilotID:     ap.ID,
+		Kind:            req.Kind,
+		Enabled:         true,
+		CronExpression:  cronText,
+		Timezone:        tzText,
+		NextRunAt:       nextRunAt,
+		Label:           ptrToText(req.Label),
+		WebhookToken:    webhookToken,
+		PublishedByType: pgtype.Text{String: "member", Valid: true},
+		PublishedByID:   publisherID,
 	})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to create trigger")
@@ -802,7 +864,6 @@ func (h *Handler) CreateAutopilotTrigger(w http.ResponseWriter, r *http.Request)
 	}
 
 	resp := h.triggerToResponse(trigger)
-	userID, _ := requireUserID(w, r)
 	h.publish(protocol.EventAutopilotUpdated, workspaceID, "member", userID, map[string]any{
 		"autopilot_id": uuidToString(ap.ID),
 		"trigger":      resp,
@@ -824,6 +885,7 @@ func (h *Handler) createWebhookTriggerWithMintedToken(
 	label pgtype.Text,
 	provider string,
 	eventFilters []byte,
+	publisherID pgtype.UUID,
 ) (db.AutopilotTrigger, error) {
 	for attempt := 0; attempt < 3; attempt++ {
 		token, err := generateWebhookToken()
@@ -831,13 +893,15 @@ func (h *Handler) createWebhookTriggerWithMintedToken(
 			return db.AutopilotTrigger{}, err
 		}
 		trigger, err := h.Queries.CreateAutopilotTrigger(r.Context(), db.CreateAutopilotTriggerParams{
-			AutopilotID:  autopilotID,
-			Kind:         "webhook",
-			Enabled:      true,
-			Label:        label,
-			WebhookToken: pgtype.Text{String: token, Valid: true},
-			Provider:     pgtype.Text{String: provider, Valid: provider != ""},
-			EventFilters: eventFilters,
+			AutopilotID:     autopilotID,
+			Kind:            "webhook",
+			Enabled:         true,
+			Label:           label,
+			WebhookToken:    pgtype.Text{String: token, Valid: true},
+			Provider:        pgtype.Text{String: provider, Valid: provider != ""},
+			EventFilters:    eventFilters,
+			PublishedByType: pgtype.Text{String: "member", Valid: publisherID.Valid},
+			PublishedByID:   publisherID,
 		})
 		if err == nil {
 			return trigger, nil
@@ -1041,14 +1105,37 @@ func (h *Handler) UpdateAutopilotTrigger(w http.ResponseWriter, r *http.Request)
 		params.NextRunAt = pgtype.Timestamptz{Time: t, Valid: true}
 	}
 
-	trigger, err := h.Queries.UpdateAutopilotTrigger(r.Context(), params)
+	userID, ok := requireUserID(w, r)
+	if !ok {
+		return
+	}
+	tx, err := h.TxStarter.Begin(r.Context())
 	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to update trigger")
+		return
+	}
+	defer tx.Rollback(r.Context())
+	qtx := h.Queries.WithTx(tx)
+
+	trigger, err := qtx.UpdateAutopilotTrigger(r.Context(), params)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to update trigger")
+		return
+	}
+	if err := qtx.SetAutopilotTriggerPublisher(r.Context(), db.SetAutopilotTriggerPublisherParams{
+		ID:              trigger.ID,
+		PublishedByType: pgtype.Text{String: "member", Valid: true},
+		PublishedByID:   parseUUID(userID),
+	}); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to update trigger")
+		return
+	}
+	if err := tx.Commit(r.Context()); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to update trigger")
 		return
 	}
 
 	resp := h.triggerToResponse(trigger)
-	userID, _ := requireUserID(w, r)
 	h.publish(protocol.EventAutopilotUpdated, workspaceID, "member", userID, map[string]any{
 		"autopilot_id": uuidToString(ap.ID),
 		"trigger":      resp,
@@ -1332,7 +1419,7 @@ func (h *Handler) TriggerAutopilot(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	run, err := h.AutopilotService.DispatchAutopilot(r.Context(), autopilot, pgtype.UUID{}, "manual", nil)
+	run, err := h.AutopilotService.DispatchAutopilot(r.Context(), autopilot, pgtype.UUID{}, "manual", nil, parseUUID(requestUserID(r)))
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to trigger autopilot: "+err.Error())
 		return

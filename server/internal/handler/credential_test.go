@@ -30,6 +30,29 @@ func (w *credentialTestWorker) RunCrawl(context.Context, broker.WorkerCrawlReque
 	return broker.WorkerCrawlResponse{}, nil
 }
 
+func TestWriteCredentialBrokerErrorClassifiesWorkerFailures(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+		want int
+	}{
+		{"invalid", broker.ErrWorkerRequestInvalid, http.StatusBadRequest},
+		{"busy", broker.ErrWorkerBusy, http.StatusTooManyRequests},
+		{"timeout", broker.ErrWorkerTimeout, http.StatusGatewayTimeout},
+		{"unavailable", broker.ErrWorkerUnavailable, http.StatusServiceUnavailable},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			recorder := httptest.NewRecorder()
+			writeCredentialBrokerError(recorder, tc.err)
+			if recorder.Code != tc.want {
+				t.Fatalf("status = %d, want %d; body=%s", recorder.Code, tc.want, recorder.Body.String())
+			}
+		})
+	}
+}
+
 func TestCredentialWorkspaceScopeAllowsMembersToViewButNotManage(t *testing.T) {
 	if testHandler == nil {
 		t.Skip("database not available")

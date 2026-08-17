@@ -23,6 +23,7 @@
  * hints (selected, editable, onDelete).
  */
 
+import { useState, type ReactNode } from "react";
 import {
   Download,
   Link as LinkIcon,
@@ -30,10 +31,12 @@ import {
   Trash2,
 } from "lucide-react";
 import { toast } from "sonner";
+import { CENTERED_TOASTER_ID } from "@multica/ui/components/ui/sonner";
 import { cn } from "@multica/ui/lib/utils";
 import { copyText } from "@multica/ui/lib/clipboard";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@multica/core/api";
+import { useAttachmentFavorite } from "@multica/core/favorites";
 import { useConfigStore } from "@multica/core/config";
 import type { Attachment as AttachmentRecord } from "@multica/core/types";
 import { attachmentIdFromDownloadURL } from "@multica/core/types/attachment-url";
@@ -44,6 +47,7 @@ import { useDownloadAttachment } from "./use-download-attachment";
 import { AttachmentCard } from "./attachment-card";
 import { HtmlAttachmentPreview } from "./html-attachment-preview";
 import { getPreviewKind, type PreviewKind } from "./utils/preview";
+import { FavoriteCategoryDialog } from "../favorites/components/favorite-category-dialog";
 import "./styles/attachment.css";
 
 // ---------------------------------------------------------------------------
@@ -93,6 +97,8 @@ export interface AttachmentProps {
   /** Editor hint — wired to Tiptap deleteNode(). */
   onDelete?: () => void;
   className?: string;
+  /** Optional action rendered with file-card toolbar controls. */
+  trailingAction?: ReactNode;
 }
 
 interface Normalized {
@@ -361,14 +367,21 @@ export function Attachment({
   selected,
   onDelete,
   className,
+  trailingAction,
 }: AttachmentProps) {
+  const { t } = useT("editor");
   const { resolveAttachment, openByUrl } = useAttachmentDownloadResolver();
   const cdnDomain = useConfigStore((s) => s.cdnDomain);
   const cdnSigned = useConfigStore((s) => s.cdnSigned);
   const download = useDownloadAttachment();
   const preview = useAttachmentPreview();
+  const [categoryDialogOpen, setCategoryDialogOpen] = useState(false);
 
   const state = normalize(attachment, resolveAttachment, cdnDomain, cdnSigned);
+  const favorite = useAttachmentFavorite(
+    state.record?.workspace_id ?? "",
+    state.record,
+  );
   // The picked URL may still be the auth-gated API endpoint (reopened drafts
   // whose persisted record has no signed download_url). Upgrade it to a
   // freshly signed URL on clients that can't load the endpoint natively.
@@ -409,6 +422,50 @@ export function Attachment({
     if (mediaUrl) openByUrl(mediaUrl);
   };
 
+  const handleToggleFavorite = () => {
+    const removing = favorite.isFavorite;
+    void favorite
+      .toggle()
+      .then((result) => {
+        if (!result?.favorite || !result.entry) return;
+        const category =
+          result.entry.category.isDefault &&
+          result.entry.category.name === "Default"
+          ? t(($) => $.attachment.favorite_default_category)
+          : result.entry.category.name;
+        toast.success(
+          t(($) => $.attachment.favorite_saved_to, { category }),
+          {
+            toasterId: CENTERED_TOASTER_ID,
+            action: {
+              label: t(($) => $.attachment.change_favorite_category),
+              onClick: () => setCategoryDialogOpen(true),
+            },
+          },
+        );
+      })
+      .catch(() => {
+        toast.error(
+          t(($) =>
+            removing
+              ? $.attachment.unfavorite_failed
+              : $.attachment.favorite_failed,
+          ),
+        );
+      });
+  };
+
+  const categoryDialog = state.record && categoryDialogOpen ? (
+    <FavoriteCategoryDialog
+      open={categoryDialogOpen}
+      onOpenChange={setCategoryDialogOpen}
+      itemType="attachment"
+      itemId={state.record.id}
+      itemLabel={state.record.filename}
+      currentCategoryId={favorite.favoriteEntry?.category.id ?? ""}
+    />
+  ) : null;
+
   if (kind === "image") {
     return (
       <>
@@ -439,8 +496,18 @@ export function Attachment({
           onPreview={openPreview}
           onDownload={handleDownload}
           onDelete={editable ? onDelete : undefined}
+          isFavorite={favorite.isFavorite}
+          favoritePending={favorite.isPending}
+          onToggleFavorite={
+            favorite.canFavorite ? handleToggleFavorite : undefined
+          }
+          onChangeFavoriteCategory={
+            favorite.isFavorite ? () => setCategoryDialogOpen(true) : undefined
+          }
+          trailingAction={trailingAction}
         />
         {preview.modal}
+        {categoryDialog}
       </>
     );
   }
@@ -456,8 +523,17 @@ export function Attachment({
         onPreview={openPreview}
         onDownload={handleDownload}
         onDelete={editable ? onDelete : undefined}
+        isFavorite={favorite.isFavorite}
+        favoritePending={favorite.isPending}
+        onToggleFavorite={favorite.canFavorite ? handleToggleFavorite : undefined}
+        onChangeFavoriteCategory={
+          favorite.isFavorite ? () => setCategoryDialogOpen(true) : undefined
+        }
+        trailingAction={trailingAction}
+        className={className}
       />
       {preview.modal}
+      {categoryDialog}
     </>
   );
 }

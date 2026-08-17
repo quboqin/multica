@@ -136,6 +136,8 @@ func (b *claudeBackend) Execute(ctx context.Context, prompt string, opts ExecOpt
 		finalStatus := "completed"
 		var finalError string
 		usage := make(map[string]TokenUsage)
+		sawAssistant := false
+		sawEmptyZeroTurnResult := false
 
 		// Close stdout when the context is cancelled so scanner.Scan() unblocks.
 		go func() {
@@ -160,6 +162,7 @@ func (b *claudeBackend) Execute(ctx context.Context, prompt string, opts ExecOpt
 
 			switch msg.Type {
 			case "assistant":
+				sawAssistant = true
 				b.handleAssistant(msg, msgCh, &output, usage)
 			case "user":
 				b.handleUser(msg, msgCh)
@@ -177,6 +180,7 @@ func (b *claudeBackend) Execute(ctx context.Context, prompt string, opts ExecOpt
 				if resultUsage := claudeResultUsage(msg, opts.Model); len(resultUsage) > 0 {
 					usage = resultUsage
 				}
+				sawEmptyZeroTurnResult = isClaudeEmptyZeroTurnResult(msg, output.String(), usage, sawAssistant)
 				if msg.IsError {
 					finalStatus = "failed"
 					finalError = msg.ResultText
@@ -228,6 +232,11 @@ func (b *claudeBackend) Execute(ctx context.Context, prompt string, opts ExecOpt
 		// stderrBuf.Tail() is safe to sample now. Attach the tail to any
 		// non-empty failure message; callers upstream surface this as the
 		// task's error field, which is the only place users see it.
+		if finalStatus == "completed" && sawEmptyZeroTurnResult {
+			finalStatus = "failed"
+			finalError = "claude completed without running a model turn; check Claude Code authentication or CLI configuration"
+		}
+
 		if finalError != "" {
 			finalError = withAgentStderr(finalError, "claude", stderrBuf.Tail())
 		}
@@ -450,6 +459,26 @@ func claudeResultUsage(msg claudeSDKMessage, fallbackModel string) map[string]To
 
 func claudeUsageHasTokens(input, output, cacheRead, cacheWrite int64) bool {
 	return input > 0 || output > 0 || cacheRead > 0 || cacheWrite > 0
+}
+
+func isClaudeEmptyZeroTurnResult(msg claudeSDKMessage, output string, usage map[string]TokenUsage, sawAssistant bool) bool {
+	if msg.Type != "result" || msg.IsError || msg.NumTurns != 0 || sawAssistant || strings.TrimSpace(output) != "" {
+		return false
+	}
+	if msg.Usage != nil && claudeUsageHasTokens(
+		msg.Usage.InputTokens,
+		msg.Usage.OutputTokens,
+		msg.Usage.CacheReadInputTokens,
+		msg.Usage.CacheCreationInputTokens,
+	) {
+		return false
+	}
+	for _, u := range usage {
+		if claudeUsageHasTokens(u.InputTokens, u.OutputTokens, u.CacheReadTokens, u.CacheWriteTokens) {
+			return false
+		}
+	}
+	return true
 }
 
 type claudeContentBlock struct {

@@ -53,6 +53,7 @@
     "runtime_filtered": "\"{{machine}}\" 上にエージェントがありません。"
   },
   "columns": {
+    "tags": "タグ",
     "agent": "エージェント",
     "status": "ステータス",
     "workload": "作業量",
@@ -134,6 +135,8 @@
     "section_properties": "プロパティ",
     "section_details": "詳細",
     "section_skills": "スキル",
+    "section_tags": "タグ",
+    "edit_tags_aria": "タグを編集",
     "section_integrations": "連携",
     "prop_runtime": "ランタイム",
     "prop_model": "モデル",
@@ -152,6 +155,7 @@
     "rename_required": "名前は必須です",
     "edit_description_title": "説明を編集",
     "description_placeholder": "このエージェントは何をしますか？",
+    "save_tags_failed_toast": "タグの保存に失敗しました",
     "save": "保存",
     "cancel": "キャンセル"
   },
@@ -234,6 +238,7 @@
     "cancel": "キャンセル",
     "create_failed_toast": "エージェントを作成できませんでした",
     "skill_attach_failed_toast": "エージェントは作成されましたが、スキルを追加できませんでした: {{error}}",
+    "tag_attach_failed_toast": "エージェントは作成されましたが、タグを追加できませんでした: {{error}}",
     "squad_join_failed_toast": "エージェント \"{{name}}\" は作成されましたが、スクワッドに参加できませんでした: {{error}}。メンバーから手動で追加できます。",
     "instructions": {
       "label": "指示",
@@ -252,6 +257,15 @@
       "list_empty_default": "利用可能なスキルがありません。",
       "list_no_match": "一致するスキルがありません。",
       "search_placeholder": "スキルを検索..."
+    },
+    "tags_section": {
+      "label": "タグ",
+      "search_placeholder": "タグを検索または作成",
+      "loading": "タグを読み込み中...",
+      "empty": "タグはまだありません",
+      "selected": "選択中",
+      "create_action": "作成",
+      "create_failed_toast": "タグを作成できませんでした"
     },
     "avatar": {
       "change_aria": "アバターを変更",
@@ -311,6 +325,14 @@
       "clear_action": "クリア",
       "invalid_json": "無効な JSON: {{error}}",
       "invalid_not_object": "MCP config は JSON object である必要があります（例: {\"mcpServers\": …}）。",
+      "workspace_refs_title": "Workspace MCP",
+      "workspace_refs_hint": "有効な workspace MCP connection を参照し、custom runtime MCP server と一緒にこのエージェントへ公開します。",
+      "workspace_select_label": "Connection",
+      "workspace_none": "Workspace MCP なし",
+      "workspace_loading": "Connection を読み込み中...",
+      "workspace_empty": "有効な workspace MCP connection はありません",
+      "workspace_invalid_json_hint": "Workspace MCP reference を変更する前に JSON を修正してください。",
+      "workspace_selected_summary": "{{capability}} 由来の runtime server {{serverName}}",
       "saved_toast": "MCP config を保存しました",
       "save_failed_toast": "MCP config を保存できませんでした",
       "redacted_title": "設定済み — 現在の表示では非表示",
@@ -470,6 +492,7 @@
     "none": "30 日間アクティビティなし"
   },
   "toolbar": {
+    "section_tags": "タグ",
     "result_count_title": "該当エージェント / スコープ内全体",
     "filter_label": "フィルター",
     "filter_active_count_one": "{{count}} 件のフィルター",

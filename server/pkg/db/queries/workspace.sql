@@ -1,7 +1,5 @@
 -- name: ListWorkspaces :many
-SELECT w.id, w.name, w.slug, w.description, w.settings,
-       w.created_at, w.updated_at, w.context, w.repos,
-       w.issue_prefix, w.issue_counter, w.avatar_url
+SELECT w.*
 FROM member m
 JOIN workspace w ON w.id = m.workspace_id
 WHERE m.user_id = $1
@@ -14,6 +12,10 @@ WHERE id = $1;
 -- name: GetWorkspaceBySlug :one
 SELECT * FROM workspace
 WHERE slug = $1;
+
+-- name: GetWorkspaceAttributionFailClosed :one
+SELECT attribution_fail_closed FROM workspace
+WHERE id = $1;
 
 -- name: CreateWorkspace :one
 INSERT INTO workspace (name, slug, description, context, issue_prefix)

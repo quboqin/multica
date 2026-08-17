@@ -17,7 +17,7 @@ type queryRower interface {
 func NextTopPosition(ctx context.Context, q queryRower, workspaceID pgtype.UUID, status string) (float64, error) {
 	var minPos float64
 	if err := q.QueryRow(ctx,
-		`SELECT COALESCE(MIN(position), 0) FROM issue WHERE workspace_id = $1 AND status = $2`,
+		`SELECT COALESCE(MIN(position), 0) FROM issue WHERE workspace_id = $1 AND status = $2 AND is_active = TRUE`,
 		workspaceID, status,
 	).Scan(&minPos); err != nil {
 		return 0, fmt.Errorf("query min issue position: %w", err)

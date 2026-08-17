@@ -77,6 +77,22 @@ WHERE id = $1;
 -- Autopilot Trigger CRUD
 -- =====================
 
+-- name: CreateAutopilotRuleVersion :one
+INSERT INTO autopilot_rule_version (
+    autopilot_id, workspace_id, published_by_type, published_by_id, config_summary
+)
+VALUES (
+    @autopilot_id, @workspace_id, @published_by_type, sqlc.narg(published_by_id),
+    COALESCE(sqlc.narg(config_summary), '{}'::jsonb)
+)
+RETURNING *;
+
+-- name: GetActiveAutopilotRuleVersion :one
+SELECT * FROM autopilot_rule_version
+WHERE workspace_id = $1 AND autopilot_id = $2
+ORDER BY created_at DESC
+LIMIT 1;
+
 -- name: ListAutopilotTriggers :many
 SELECT * FROM autopilot_trigger
 WHERE autopilot_id = $1
@@ -89,13 +105,25 @@ WHERE id = $1;
 -- name: CreateAutopilotTrigger :one
 INSERT INTO autopilot_trigger (
     autopilot_id, kind, enabled, cron_expression, timezone,
-    next_run_at, webhook_token, label, provider, event_filters
+    next_run_at, webhook_token, label, provider, event_filters,
+    published_by_type, published_by_id
 ) VALUES (
     $1, $2, $3, sqlc.narg('cron_expression'), sqlc.narg('timezone'),
     sqlc.narg('next_run_at'), sqlc.narg('webhook_token'), sqlc.narg('label'),
     COALESCE(sqlc.narg('provider')::text, 'generic'),
-    sqlc.narg('event_filters')
+    sqlc.narg('event_filters'),
+    sqlc.narg('published_by_type'), sqlc.narg('published_by_id')
 ) RETURNING *;
+
+-- name: SetAutopilotTriggerPublisher :exec
+UPDATE autopilot_trigger
+SET published_by_type = $2, published_by_id = $3, updated_at = now()
+WHERE id = $1;
+
+-- name: SetAutopilotTriggerPublishersByAutopilot :exec
+UPDATE autopilot_trigger
+SET published_by_type = $2, published_by_id = $3, updated_at = now()
+WHERE autopilot_id = $1;
 
 -- name: UpdateAutopilotTrigger :one
 UPDATE autopilot_trigger SET
@@ -271,8 +299,22 @@ RETURNING t.*, a.workspace_id AS autopilot_workspace_id;
 -- =====================
 
 -- name: CreateAutopilotTask :one
-INSERT INTO agent_task_queue (agent_id, runtime_id, issue_id, status, priority, autopilot_run_id, trigger_summary, requesting_user_id)
-VALUES ($1, $2, NULL, 'queued', $3, $4, sqlc.narg(trigger_summary), sqlc.narg('requesting_user_id'))
+INSERT INTO agent_task_queue (
+    agent_id, runtime_id, issue_id, status, priority, autopilot_run_id,
+    trigger_summary, requesting_user_id,
+    originator_user_id, accountable_user_id, rule_version_id,
+    originator_source, trigger_evidence_kind, trigger_evidence_ref_id
+)
+VALUES (
+    $1, $2, NULL, 'queued', $3, $4,
+    sqlc.narg(trigger_summary), sqlc.narg('requesting_user_id'),
+    sqlc.narg('originator_user_id'),
+    sqlc.narg('accountable_user_id'),
+    sqlc.narg('rule_version_id'),
+    sqlc.narg('originator_source'),
+    sqlc.narg('trigger_evidence_kind'),
+    sqlc.narg('trigger_evidence_ref_id')
+)
 RETURNING *;
 
 -- =====================

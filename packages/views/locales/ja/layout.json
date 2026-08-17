@@ -2,6 +2,7 @@
   "nav": {
     "inbox": "インボックス",
     "my_issues": "マイイシュー",
+    "my_favorites": "お気に入り",
     "issues": "イシュー",
     "plans": "Plans",
     "projects": "プロジェクト",
@@ -9,6 +10,8 @@
     "agents": "エージェント",
     "squads": "スクワッド",
     "usage": "使用量",
+    "my_usage": "自分の使用量",
+    "user_usage": "使用量統計",
     "runtimes": "ランタイム",
     "skills": "スキル",
     "settings": "設定",
@@ -23,6 +26,83 @@
   "workspace_loader": {
     "loading_workspace": "ワークスペースを読み込み中…",
     "loading_named_prefix": "読み込み中"
+  },
+  "favorites": {
+    "page": {
+      "title": "お気に入り",
+      "new_category": "新しいカテゴリ",
+      "empty_categories_title": "お気に入りカテゴリはまだありません",
+      "empty_categories_description": "初めてお気に入りに追加するとデフォルトカテゴリが作成されます。今すぐ作成することもできます。",
+      "category_empty_title": "このカテゴリにお気に入りはありません",
+      "category_empty_description": "お気に入りをここに移動して整理できます。",
+      "category_not_found": "お気に入りカテゴリが見つかりません。",
+      "back_to_categories": "お気に入りカテゴリに戻る",
+      "documents": "{{count}} 件のお気に入り",
+      "load_failed": "お気に入りを読み込めませんでした。",
+      "retry": "再試行",
+      "open_source_conversation": "元のタスク会話に移動",
+      "filter_label": "お気に入りの種類",
+      "filter_all": "すべて",
+      "filter_issue": "タスク",
+      "filter_project": "プロジェクト",
+      "filter_markdown": "MD",
+      "filter_html": "HTML",
+      "filter_empty_title": "この種類のお気に入りはありません"
+    },
+    "item": {
+      "add": "お気に入りに追加",
+      "remove": "お気に入りから削除",
+      "saved_to": "「{{category}}」に保存しました。",
+      "removed": "お気に入りから削除しました。",
+      "change_category": "カテゴリを変更",
+      "save_failed": "お気に入りに追加できませんでした。",
+      "remove_failed": "お気に入りから削除できませんでした。",
+      "unavailable": "利用できないお気に入り"
+    },
+    "category": {
+      "default_name": "デフォルト",
+      "new_tooltip": "お気に入りカテゴリを作成",
+      "actions_tooltip": "お気に入りカテゴリを管理"
+    },
+    "create_dialog": {
+      "title": "お気に入りカテゴリを作成",
+      "description": "お気に入りはカテゴリ内に保存されます。",
+      "name_label": "カテゴリ名",
+      "name_placeholder": "例：調査資料",
+      "cancel": "キャンセル",
+      "create": "作成",
+      "creating": "作成中...",
+      "created": "お気に入りカテゴリを作成しました。",
+      "failed": "お気に入りカテゴリを作成できませんでした。"
+    },
+    "move_dialog": {
+      "title": "お気に入りカテゴリを変更",
+      "description": "「{{filename}}」の保存先を選択してください。",
+      "new_category": "新しいカテゴリ",
+      "moved": "「{{category}}」に移動しました。",
+      "failed": "お気に入りカテゴリを変更できませんでした。"
+    },
+    "rename_dialog": {
+      "action": "名前を変更",
+      "title": "カテゴリ名を変更",
+      "description": "お気に入りカテゴリの名前を変更します。",
+      "name_label": "カテゴリ名",
+      "cancel": "キャンセル",
+      "save": "保存",
+      "saving": "保存中...",
+      "renamed": "カテゴリ名を変更しました。",
+      "failed": "お気に入りカテゴリの名前を変更できませんでした。"
+    },
+    "delete_dialog": {
+      "action": "削除",
+      "title": "お気に入りカテゴリを削除",
+      "description": "「{{name}}」を削除しますか？含まれる {{count}} 件のお気に入りも削除されます。この操作は元に戻せません。",
+      "cancel": "キャンセル",
+      "delete": "削除",
+      "deleting": "削除中...",
+      "deleted": "カテゴリと含まれるお気に入りを削除しました。",
+      "failed": "お気に入りカテゴリを削除できませんでした。"
+    }
   },
   "sidebar": {
     "unpin_tooltip": "ピン留めを解除",

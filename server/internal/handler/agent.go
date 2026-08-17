@@ -17,9 +17,11 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/analytics"
+	"github.com/multica-ai/multica/server/internal/attribution"
 	"github.com/multica-ai/multica/server/internal/logger"
 	obsmetrics "github.com/multica-ai/multica/server/internal/metrics"
 	"github.com/multica-ai/multica/server/internal/service"
+	"github.com/multica-ai/multica/server/internal/util"
 	"github.com/multica-ai/multica/server/pkg/agent"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/protocol"
@@ -63,6 +65,7 @@ type AgentResponse struct {
 	ThinkingLevel string              `json:"thinking_level"`
 	OwnerID       *string             `json:"owner_id"`
 	Skills        []AgentSkillSummary `json:"skills"`
+	Labels        []LabelResponse     `json:"labels"`
 	CreatedAt     string              `json:"created_at"`
 	UpdatedAt     string              `json:"updated_at"`
 	ArchivedAt    *string             `json:"archived_at"`
@@ -138,6 +141,7 @@ func agentToResponse(a db.Agent) AgentResponse {
 		ThinkingLevel:      a.ThinkingLevel.String,
 		OwnerID:            uuidToPtr(a.OwnerID),
 		Skills:             []AgentSkillSummary{},
+		Labels:             []LabelResponse{},
 		CreatedAt:          timestampToString(a.CreatedAt),
 		UpdatedAt:          timestampToString(a.UpdatedAt),
 		ArchivedAt:         timestampToPtr(a.ArchivedAt),
@@ -223,12 +227,13 @@ type ProjectResourceData struct {
 }
 
 type AgentTaskResponse struct {
-	ID               string `json:"id"`
-	AgentID          string `json:"agent_id"`
-	RuntimeID        string `json:"runtime_id"`
-	IssueID          string `json:"issue_id"`
-	WorkspaceID      string `json:"workspace_id"`
-	RequestingUserID string `json:"requesting_user_id,omitempty"`
+	ID               string           `json:"id"`
+	AgentID          string           `json:"agent_id"`
+	RuntimeID        string           `json:"runtime_id"`
+	IssueID          string           `json:"issue_id"`
+	WorkspaceID      string           `json:"workspace_id"`
+	RequestingUserID string           `json:"requesting_user_id,omitempty"`
+	Attribution      *TaskAttribution `json:"attribution,omitempty"`
 	// WorkspaceContext is the workspace-level system prompt set in workspace
 	// settings (`workspace.context` DB column). Injected into the agent brief
 	// as `## Workspace Context` so every agent running in this workspace —
@@ -329,6 +334,30 @@ type AgentTaskResponse struct {
 	AuthToken string `json:"auth_token,omitempty"`
 }
 
+type TaskAttribution struct {
+	Source              string           `json:"source"`
+	Precise             bool             `json:"precise"`
+	Initiator           *AttributionUser `json:"initiator,omitempty"`
+	Originator          *AttributionUser `json:"originator,omitempty"`
+	Evidence            *TaskEvidence    `json:"evidence,omitempty"`
+	RuleVersionID       string           `json:"rule_version_id,omitempty"`
+	DelegatedFromTaskID string           `json:"delegated_from_task_id,omitempty"`
+	RetryOfTaskID       string           `json:"retry_of_task_id,omitempty"`
+	RerunOfTaskID       string           `json:"rerun_of_task_id,omitempty"`
+}
+
+type AttributionUser struct {
+	ID        string `json:"id"`
+	Name      string `json:"name,omitempty"`
+	Email     string `json:"email,omitempty"`
+	AvatarURL string `json:"avatar_url,omitempty"`
+}
+
+type TaskEvidence struct {
+	Kind  string `json:"kind"`
+	RefID string `json:"ref_id"`
+}
+
 type TaskIntegrationTokens struct {
 	GitToken       string            `json:"git_token,omitempty"`
 	FeishuMCPToken string            `json:"feishu_mcp_token,omitempty"`
@@ -407,6 +436,7 @@ func taskToResponse(t db.AgentTaskQueue, workspaceID string) AgentTaskResponse {
 		IssueID:          uuidToString(t.IssueID),
 		WorkspaceID:      workspaceID,
 		RequestingUserID: uuidToString(t.RequestingUserID),
+		Attribution:      taskAttributionBase(t),
 		Status:           t.Status,
 		Priority:         t.Priority,
 		DispatchedAt:     timestampToPtr(t.DispatchedAt),
@@ -430,6 +460,98 @@ func taskToResponse(t db.AgentTaskQueue, workspaceID string) AgentTaskResponse {
 		AutopilotRunID: uuidToString(t.AutopilotRunID),
 		Kind:           computeTaskKind(t),
 	}
+}
+
+func taskAttributionBase(t db.AgentTaskQueue) *TaskAttribution {
+	src := attribution.Source(t.OriginatorSource.String)
+	attr := &TaskAttribution{
+		Source:              src.String(),
+		Precise:             src.Precise(),
+		RuleVersionID:       uuidToString(t.RuleVersionID),
+		DelegatedFromTaskID: uuidToString(t.DelegatedFromTaskID),
+		RetryOfTaskID:       uuidToString(t.RetryOfTaskID),
+		RerunOfTaskID:       uuidToString(t.RerunOfTaskID),
+	}
+	if t.AccountableUserID.Valid {
+		attr.Initiator = &AttributionUser{ID: uuidToString(t.AccountableUserID)}
+	}
+	if t.OriginatorUserID.Valid {
+		attr.Originator = &AttributionUser{ID: uuidToString(t.OriginatorUserID)}
+	}
+	if t.TriggerEvidenceKind.Valid && t.TriggerEvidenceKind.String != "" {
+		attr.Evidence = &TaskEvidence{Kind: t.TriggerEvidenceKind.String, RefID: uuidToString(t.TriggerEvidenceRefID)}
+	}
+	return attr
+}
+
+func (h *Handler) hydrateTaskAttributions(ctx context.Context, attrs []*TaskAttribution) {
+	seen := make(map[string]struct{})
+	var ids []pgtype.UUID
+	add := func(ref *AttributionUser) {
+		if ref == nil || ref.ID == "" {
+			return
+		}
+		if _, ok := seen[ref.ID]; ok {
+			return
+		}
+		if u, err := util.ParseUUID(ref.ID); err == nil {
+			seen[ref.ID] = struct{}{}
+			ids = append(ids, u)
+		}
+	}
+	for _, a := range attrs {
+		if a == nil {
+			continue
+		}
+		add(a.Initiator)
+		add(a.Originator)
+	}
+	if len(ids) == 0 {
+		return
+	}
+	users, err := h.Queries.GetUsersByIDs(ctx, ids)
+	if err != nil {
+		return
+	}
+	byID := make(map[string]db.GetUsersByIDsRow, len(users))
+	for _, u := range users {
+		byID[uuidToString(u.ID)] = u
+	}
+	fill := func(ref *AttributionUser) {
+		if ref == nil {
+			return
+		}
+		if u, ok := byID[ref.ID]; ok {
+			ref.Name = u.Name
+			ref.Email = u.Email
+			if u.AvatarUrl.Valid {
+				ref.AvatarURL = u.AvatarUrl.String
+			}
+		}
+	}
+	for _, a := range attrs {
+		if a == nil {
+			continue
+		}
+		fill(a.Initiator)
+		fill(a.Originator)
+	}
+}
+
+func attributionsOf(resps []AgentTaskResponse) []*TaskAttribution {
+	out := make([]*TaskAttribution, 0, len(resps))
+	for i := range resps {
+		if resps[i].Attribution != nil {
+			out = append(out, resps[i].Attribution)
+		}
+	}
+	return out
+}
+
+func (h *Handler) hydratedTaskResponse(ctx context.Context, t db.AgentTaskQueue, workspaceID string) AgentTaskResponse {
+	resp := taskToResponse(t, workspaceID)
+	h.hydrateTaskAttributions(ctx, []*TaskAttribution{resp.Attribution})
+	return resp
 }
 
 // relativeWorkDir produces a privacy-safe display form of the daemon-reported
@@ -589,6 +711,26 @@ func (h *Handler) ListAgents(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
+	agentIDs := make([]pgtype.UUID, 0, len(agents))
+	for _, a := range agents {
+		agentIDs = append(agentIDs, a.ID)
+	}
+	labelMap := map[string][]LabelResponse{}
+	if len(agentIDs) > 0 {
+		labelRows, err := h.Queries.ListLabelsForAgents(r.Context(), db.ListLabelsForAgentsParams{
+			AgentIds:    agentIDs,
+			WorkspaceID: parseUUID(workspaceID),
+		})
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to load agent labels")
+			return
+		}
+		for _, row := range labelRows {
+			agentID := uuidToString(row.AgentID)
+			labelMap[agentID] = append(labelMap[agentID], labelToResponse(row.IssueLabel))
+		}
+	}
+
 	// mcp_config still uses the workspace-level always-redact setting and
 	// the per-row owner/admin gate — secrets in MCP server configs follow
 	// the same exposure rules as custom_env used to. custom_env itself is
@@ -616,6 +758,9 @@ func (h *Handler) ListAgents(w http.ResponseWriter, r *http.Request) {
 		resp := agentToResponse(a)
 		if skills, ok := skillMap[resp.ID]; ok {
 			resp.Skills = skills
+		}
+		if labels, ok := labelMap[resp.ID]; ok {
+			resp.Labels = labels
 		}
 		// Agent actors NEVER see mcp_config secrets, even when their host's
 		// PAT would normally satisfy the owner/admin role gate. Otherwise an
@@ -656,6 +801,15 @@ func (h *Handler) GetAgent(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to load agent skills")
 		return
 	}
+	labels, err := h.Queries.ListLabelsByAgent(r.Context(), db.ListLabelsByAgentParams{
+		AgentID:     agent.ID,
+		WorkspaceID: agent.WorkspaceID,
+	})
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to load agent labels")
+		return
+	}
+	resp.Labels = labelsToResponse(labels)
 
 	// mcp_config redaction (custom_env was removed from this response shape
 	// in MUL-2600; secrets are now fetched via GET /api/agents/{id}/env).
@@ -824,6 +978,19 @@ func (h *Handler) CreateAgent(w http.ResponseWriter, r *http.Request) {
 	var mc []byte
 	if rawMcpConfig, ok := rawFields["mcp_config"]; ok && !bytes.Equal(bytes.TrimSpace(rawMcpConfig), []byte("null")) {
 		mc = append([]byte(nil), rawMcpConfig...)
+	}
+	usesWorkspaceMCPRefs, err := agentMCPConfigUsesWorkspaceRefs(mc)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if usesWorkspaceMCPRefs && !roleAllowed(member.Role, "owner", "admin") {
+		writeError(w, http.StatusForbidden, "only workspace owners or admins can reference workspace MCP connections")
+		return
+	}
+	if err := h.validateAgentWorkspaceMCPRefs(r.Context(), workspaceID, mc); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
 	}
 
 	created, err := h.Queries.CreateAgent(r.Context(), db.CreateAgentParams{
@@ -1076,6 +1243,20 @@ func (h *Handler) UpdateAgent(w http.ResponseWriter, r *http.Request) {
 	shouldClearMcpConfig := hasMcpConfig && bytes.Equal(bytes.TrimSpace(rawMcpConfig), []byte("null"))
 	if hasMcpConfig && !shouldClearMcpConfig {
 		params.McpConfig = append([]byte(nil), rawMcpConfig...)
+		usesWorkspaceMCPRefs, err := agentMCPConfigUsesWorkspaceRefs(params.McpConfig)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		if usesWorkspaceMCPRefs {
+			if _, ok := h.requireWorkspaceRole(w, r, uuidToString(existing.WorkspaceID), "agent not found", "owner", "admin"); !ok {
+				return
+			}
+		}
+		if err := h.validateAgentWorkspaceMCPRefs(r.Context(), uuidToString(existing.WorkspaceID), params.McpConfig); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
 	}
 
 	// Resolve the runtime that will be in force after this update so the
@@ -1411,6 +1592,7 @@ func (h *Handler) ListAgentTasks(w http.ResponseWriter, r *http.Request) {
 	for i, t := range tasks {
 		resp[i] = taskToResponse(t, workspaceID)
 	}
+	h.hydrateTaskAttributions(r.Context(), attributionsOf(resp))
 
 	writeJSON(w, http.StatusOK, resp)
 }
@@ -1548,6 +1730,7 @@ func (h *Handler) ListWorkspaceAgentTaskSnapshot(w http.ResponseWriter, r *http.
 		}
 		resp = append(resp, taskToResponse(t, workspaceID))
 	}
+	h.hydrateTaskAttributions(r.Context(), attributionsOf(resp))
 
 	writeJSON(w, http.StatusOK, resp)
 }

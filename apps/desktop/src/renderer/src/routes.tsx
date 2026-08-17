@@ -4,6 +4,7 @@ import {
   Navigate,
   Outlet,
   useMatches,
+  useParams,
 } from "react-router-dom";
 import type { RouteObject } from "react-router-dom";
 import { IssueDetailPage } from "./pages/issue-detail-page";
@@ -17,9 +18,10 @@ import { AttachmentPreviewRoute } from "./pages/attachment-preview-page";
 import { IssuesPage } from "@multica/views/issues/components";
 import { ProjectsPage } from "@multica/views/projects/components";
 import { PlansPage } from "@multica/views/plans";
-import { DashboardPage } from "@multica/views/dashboard";
+import { DashboardPage, UserUsagePage } from "@multica/views/dashboard";
 import { AutopilotsPage } from "@multica/views/autopilots/components";
 import { MyIssuesPage } from "@multica/views/my-issues";
+import { FavoritesPage } from "@multica/views/favorites";
 import { SkillsPage } from "@multica/views/skills";
 import { DesktopRuntimesPage } from "./components/desktop-runtimes-page";
 import { DesktopAgentsPage } from "./components/desktop-agents-page";
@@ -58,6 +60,11 @@ function DesktopSettingsRoute() {
       ]}
     />
   );
+}
+
+function DesktopFavoriteCategoryRoute() {
+  const { categoryId } = useParams<{ categoryId: string }>();
+  return <FavoritesPage categoryId={categoryId} />;
 }
 
 /**
@@ -159,6 +166,16 @@ export const appRoutes: RouteObject[] = [
             handle: { title: "My Issues" },
           },
           {
+            path: "favorites",
+            element: <FavoritesPage />,
+            handle: { title: "My Favorites" },
+          },
+          {
+            path: "favorites/:categoryId",
+            element: <DesktopFavoriteCategoryRoute />,
+            handle: { title: "My Favorites" },
+          },
+          {
             path: "runtimes",
             element: <DesktopRuntimesPage />,
             handle: { title: "Runtimes" },
@@ -201,6 +218,16 @@ export const appRoutes: RouteObject[] = [
             path: "usage",
             element: <DashboardPage />,
             handle: { title: "Usage" },
+          },
+          {
+            path: "usage/me",
+            element: <UserUsagePage scope="me" />,
+            handle: { title: "My Usage" },
+          },
+          {
+            path: "usage/users",
+            element: <UserUsagePage scope="users" />,
+            handle: { title: "User Usage" },
           },
           {
             path: "settings",

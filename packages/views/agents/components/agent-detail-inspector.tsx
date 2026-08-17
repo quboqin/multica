@@ -2,15 +2,18 @@
 
 import {
   useEffect,
+  useMemo,
   useRef,
   useState,
   type ReactNode,
 } from "react";
-import { Camera, Loader2, Pencil } from "lucide-react";
+import { Camera, Loader2, Pencil, Plus, Tag } from "lucide-react";
 import { toast } from "sonner";
+import { useQuery } from "@tanstack/react-query";
 import type {
   Agent,
   AgentRuntime,
+  Label as ResourceLabel,
   MemberWithUser,
 } from "@multica/core/types";
 import {
@@ -18,6 +21,13 @@ import {
   type AgentPresenceDetail,
 } from "@multica/core/agents";
 import { api } from "@multica/core/api";
+import {
+  labelListOptions,
+  useAttachAgentLabel,
+  useCreateLabel,
+  useDetachAgentLabel,
+} from "@multica/core/labels";
+import { useWorkspaceId } from "@multica/core/hooks";
 import { useFileUpload } from "@multica/core/hooks/use-file-upload";
 import { isImeComposing } from "@multica/core/utils";
 import { useTimeAgo } from "../../i18n";
@@ -47,6 +57,31 @@ import { SkillAttach } from "./inspector/skill-attach";
 import { ThinkingPropRow } from "./inspector/thinking-prop-row";
 import { VisibilityPicker } from "./inspector/visibility-picker";
 import { LarkAgentBindButton } from "../../settings/components/lark-tab";
+import { LabelChip } from "../../labels/label-chip";
+
+const INLINE_LABEL_COLORS = [
+  "#ef4444",
+  "#f97316",
+  "#eab308",
+  "#22c55e",
+  "#14b8a6",
+  "#3b82f6",
+  "#6366f1",
+  "#a855f7",
+  "#ec4899",
+  "#64748b",
+] as const;
+
+function pickInlineLabelColor(name: string): string {
+  let hash = 0;
+  for (let i = 0; i < name.length; i++) {
+    hash = (hash * 31 + name.charCodeAt(i)) >>> 0;
+  }
+  return (
+    INLINE_LABEL_COLORS[hash % INLINE_LABEL_COLORS.length] ??
+    INLINE_LABEL_COLORS[0]!
+  );
+}
 
 interface InspectorProps {
   agent: Agent;
@@ -191,6 +226,8 @@ export function AgentDetailInspector({
         </PropRow>
       </Section>
 
+      <AgentTagsSection agent={agent} canEdit={canEdit} />
+
       {/* Skills */}
       <div className="flex flex-col border-b px-5 py-4">
         <div className="mb-2 flex items-center gap-2">
@@ -239,6 +276,265 @@ export function AgentDetailInspector({
         </div>
       )}
     </aside>
+  );
+}
+
+function AgentTagsSection({
+  agent,
+  canEdit,
+}: {
+  agent: Agent;
+  canEdit: boolean;
+}) {
+  const { t } = useT("agents");
+  const labels = agent.labels ?? [];
+
+  if (labels.length === 0 && !canEdit) return null;
+
+  return (
+    <div className="flex flex-col border-b px-5 py-4">
+      <div className="mb-2 flex items-center gap-2">
+        <span className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+          {t(($) => $.inspector.section_tags)}
+        </span>
+        <span className="font-mono text-[10px] tabular-nums text-muted-foreground/70">
+          {labels.length}
+        </span>
+        {canEdit && <AgentTagEditor agent={agent} />}
+      </div>
+      {labels.length > 0 ? (
+        <div className="flex flex-wrap gap-1">
+          {labels.map((label) => (
+            <LabelChip key={label.id} label={label} />
+          ))}
+        </div>
+      ) : (
+        <span className="text-xs text-muted-foreground">
+          {t(($) => $.create_dialog.tags_section.empty)}
+        </span>
+      )}
+    </div>
+  );
+}
+
+function AgentTagEditor({ agent }: { agent: Agent }) {
+  const { t } = useT("agents");
+  const wsId = useWorkspaceId();
+  const [open, setOpen] = useState(false);
+  const [filter, setFilter] = useState("");
+  const creatingRef = useRef(false);
+
+  const { data: allLabels = [], isLoading } = useQuery(
+    labelListOptions(wsId, "agent"),
+  );
+  const attach = useAttachAgentLabel(agent.id);
+  const detach = useDetachAgentLabel(agent.id);
+  const create = useCreateLabel("agent");
+
+  const currentIds = useMemo(
+    () => new Set((agent.labels ?? []).map((label) => label.id)),
+    [agent.labels],
+  );
+  const [draftIds, setDraftIds] = useState<Set<string>>(() => new Set());
+  const query = filter.trim();
+  const queryLower = query.toLowerCase();
+  const filteredLabels = allLabels.filter((label) =>
+    label.name.toLowerCase().includes(queryLower),
+  );
+  const exactMatch = allLabels.some(
+    (label) => label.name.toLowerCase() === queryLower,
+  );
+  const isSaving = attach.isPending || detach.isPending;
+  const isBusy = isSaving || create.isPending;
+  const canCreate = query.length > 0 && !exactMatch && !isBusy;
+  const hasChanges =
+    draftIds.size !== currentIds.size ||
+    [...draftIds].some((labelId) => !currentIds.has(labelId));
+
+  useEffect(() => {
+    if (!open) setDraftIds(new Set(currentIds));
+  }, [currentIds, open]);
+
+  const toggle = (labelId: string) => {
+    setDraftIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(labelId)) next.delete(labelId);
+      else next.add(labelId);
+      return next;
+    });
+  };
+
+  const createAndSelect = () => {
+    if (!canCreate || creatingRef.current) return;
+    creatingRef.current = true;
+    const name = query;
+    create.mutate(
+      { name, color: pickInlineLabelColor(name) },
+      {
+        onSuccess: (label) => {
+          setDraftIds((prev) => new Set(prev).add(label.id));
+          setFilter("");
+        },
+        onError: (err: unknown) => {
+          toast.error(
+            err instanceof Error
+              ? err.message
+              : t(($) => $.create_dialog.tags_section.create_failed_toast),
+          );
+        },
+        onSettled: () => {
+          creatingRef.current = false;
+        },
+      },
+    );
+  };
+
+  const saveChanges = async () => {
+    if (!hasChanges) {
+      setOpen(false);
+      setFilter("");
+      return;
+    }
+    const toAttach = [...draftIds].filter((labelId) => !currentIds.has(labelId));
+    const toDetach = [...currentIds].filter((labelId) => !draftIds.has(labelId));
+    try {
+      for (const labelId of toDetach) {
+        await detach.mutateAsync(labelId);
+      }
+      for (const labelId of toAttach) {
+        await attach.mutateAsync(labelId);
+      }
+      setOpen(false);
+      setFilter("");
+    } catch (err) {
+      toast.error(
+        err instanceof Error
+          ? err.message
+          : t(($) => $.inspector.save_tags_failed_toast),
+      );
+    }
+  };
+
+  return (
+    <Popover
+      open={open}
+      onOpenChange={(nextOpen) => {
+        if (nextOpen) setDraftIds(new Set(currentIds));
+        setOpen(nextOpen);
+        if (!nextOpen) setFilter("");
+      }}
+    >
+      <PopoverTrigger
+        render={
+          <button
+            type="button"
+            className="ml-auto inline-flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+            aria-label={t(($) => $.inspector.edit_tags_aria)}
+          >
+            <Pencil className="h-3.5 w-3.5" />
+          </button>
+        }
+      />
+      <PopoverContent align="start" className="w-80 p-3">
+        <div className="space-y-2">
+          <div className="relative">
+            <Tag className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+            <Input
+              value={filter}
+              onChange={(event) => setFilter(event.target.value)}
+              onKeyDown={(event) => {
+                if (isImeComposing(event)) return;
+                if (event.key === "Enter") {
+                  event.preventDefault();
+                  createAndSelect();
+                }
+              }}
+              placeholder={t(
+                ($) => $.create_dialog.tags_section.search_placeholder,
+              )}
+              className="h-8 pl-8 text-sm"
+              maxLength={32}
+            />
+          </div>
+          <div className="max-h-52 overflow-y-auto rounded-md border bg-background p-1">
+            {isLoading && (
+              <div className="px-2 py-1.5 text-sm text-muted-foreground">
+                {t(($) => $.create_dialog.tags_section.loading)}
+              </div>
+            )}
+            {!isLoading && filteredLabels.length === 0 && !canCreate && (
+              <div className="px-2 py-1.5 text-sm text-muted-foreground">
+                {t(($) => $.create_dialog.tags_section.empty)}
+              </div>
+            )}
+            {filteredLabels.map((label: ResourceLabel) => {
+              const selected = draftIds.has(label.id);
+              return (
+                <button
+                  key={label.id}
+                  type="button"
+                  onClick={() => toggle(label.id)}
+                  disabled={isBusy}
+                  className={`flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-sm transition-colors disabled:opacity-60 ${
+                    selected ? "bg-accent" : "hover:bg-accent/70"
+                  }`}
+                >
+                  <span
+                    className="h-3 w-3 shrink-0 rounded-full"
+                    style={{ backgroundColor: label.color }}
+                    aria-hidden
+                  />
+                  <span className="min-w-0 flex-1 truncate">{label.name}</span>
+                  {selected && (
+                    <span className="text-xs text-muted-foreground">
+                      {t(($) => $.create_dialog.tags_section.selected)}
+                    </span>
+                  )}
+                </button>
+              );
+            })}
+            {canCreate && (
+              <button
+                type="button"
+                onClick={createAndSelect}
+                className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-sm hover:bg-accent/70"
+              >
+                <Plus className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                <span className="min-w-0 flex-1 truncate">
+                  {t(($) => $.create_dialog.tags_section.create_action)}{" "}
+                  <span className="font-medium">&ldquo;{query}&rdquo;</span>
+                </span>
+                <span
+                  className="h-3 w-3 shrink-0 rounded-full"
+                  style={{ backgroundColor: pickInlineLabelColor(query) }}
+                  aria-hidden
+                />
+              </button>
+            )}
+          </div>
+          <div className="flex items-center justify-end gap-2 pt-1">
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={() => setOpen(false)}
+              disabled={isBusy}
+            >
+              {t(($) => $.inspector.cancel)}
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              onClick={saveChanges}
+              disabled={!hasChanges || isBusy}
+            >
+              {isSaving && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+              {t(($) => $.inspector.save)}
+            </Button>
+          </div>
+        </div>
+      </PopoverContent>
+    </Popover>
   );
 }
 

@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -11,6 +12,7 @@ import (
 	"unicode"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/logger"
 	"github.com/multica-ai/multica/server/internal/mention"
@@ -802,9 +804,10 @@ const (
 )
 
 type commentAgentTrigger struct {
-	Agent  db.Agent
-	Source commentAgentTriggerSource
-	Squad  *db.Squad
+	Agent          db.Agent
+	Source         commentAgentTriggerSource
+	Squad          *db.Squad
+	AlreadyPending bool
 }
 
 type commentTriggerComputeOptions struct {
@@ -1038,6 +1041,10 @@ func (h *Handler) CreateComment(w http.ResponseWriter, r *http.Request) {
 		ParentID:    parentID,
 	})
 	if err != nil {
+		if parentID.Valid && errors.Is(err, pgx.ErrNoRows) {
+			writeError(w, http.StatusConflict, "parent comment is no longer available")
+			return
+		}
 		slog.Warn("create comment failed", append(logger.RequestAttrs(r), "error", err, "issue_id", issueID)...)
 		writeError(w, http.StatusInternalServerError, "failed to create comment: "+err.Error())
 		return
@@ -1123,6 +1130,19 @@ func filterSuppressedCommentAgentTriggers(triggers []commentAgentTrigger, suppre
 
 func (h *Handler) enqueueCommentAgentTriggers(ctx context.Context, issue db.Issue, triggerCommentID pgtype.UUID, triggers []commentAgentTrigger, requestingUserID pgtype.UUID) {
 	for _, trigger := range triggers {
+		if trigger.AlreadyPending {
+			switch h.mergeCommentIntoPendingTask(ctx, issue, trigger, triggerCommentID) {
+			case commentMergeSucceeded:
+				continue
+			case commentMergeNoPendingTask:
+				active, err := h.hasActiveTaskForIssueAndAgent(ctx, issue.ID, trigger.Agent.ID)
+				if err != nil || active {
+					continue
+				}
+			case commentMergeAttributionBlocked, commentMergeError:
+				continue
+			}
+		}
 		switch trigger.Source {
 		case commentTriggerSourceIssueAssignee:
 			if trigger.Squad != nil {
@@ -1172,14 +1192,21 @@ func (h *Handler) computeCommentAgentTriggers(ctx context.Context, issue db.Issu
 		triggers = append(triggers, trigger)
 	}
 
-	if actorType == "member" && h.shouldEnqueueOnComment(ctx, issue, actorType, actorID, opts) &&
+	if actorType == "member" &&
 		!h.commentMentionsOthersButNotAssignee(content, issue) &&
 		!h.isReplyToMemberThread(ctx, parentComment, content, issue) {
-		if agent, err := h.Queries.GetAgentInWorkspace(ctx, db.GetAgentInWorkspaceParams{
-			ID:          issue.AssigneeID,
-			WorkspaceID: issue.WorkspaceID,
-		}); err == nil {
-			add(commentAgentTrigger{Agent: agent, Source: commentTriggerSourceIssueAssignee})
+		if issue.AssigneeType.Valid && issue.AssigneeType.String == "agent" && issue.AssigneeID.Valid {
+			agent, err := h.Queries.GetAgentInWorkspace(ctx, db.GetAgentInWorkspaceParams{
+				ID:          issue.AssigneeID,
+				WorkspaceID: issue.WorkspaceID,
+			})
+			if err == nil && agent.RuntimeID.Valid && !agent.ArchivedAt.Valid &&
+				h.canAccessPrivateAgent(ctx, agent, actorType, actorID, uuidToString(issue.WorkspaceID)) {
+				hasPending, err := h.hasPendingTaskForIssueAndAgent(ctx, issue.ID, issue.AssigneeID, opts)
+				if err == nil {
+					add(commentAgentTrigger{Agent: agent, Source: commentTriggerSourceIssueAssignee, AlreadyPending: hasPending})
+				}
+			}
 		}
 	}
 
@@ -1223,10 +1250,10 @@ func (h *Handler) computeAssignedSquadLeaderCommentTrigger(ctx context.Context, 
 		return commentAgentTrigger{}, false
 	}
 	hasPending, err := h.hasPendingTaskForIssueAndAgent(ctx, issue.ID, squad.LeaderID, opts)
-	if err != nil || hasPending {
+	if err != nil {
 		return commentAgentTrigger{}, false
 	}
-	return commentAgentTrigger{Agent: agent, Source: commentTriggerSourceIssueAssignee, Squad: &squad}, true
+	return commentAgentTrigger{Agent: agent, Source: commentTriggerSourceIssueAssignee, Squad: &squad, AlreadyPending: hasPending}, true
 }
 
 func (h *Handler) hasPendingTaskForIssueAndAgent(ctx context.Context, issueID, agentID pgtype.UUID, opts commentTriggerComputeOptions) (bool, error) {
@@ -1241,6 +1268,77 @@ func (h *Handler) hasPendingTaskForIssueAndAgent(ctx context.Context, issueID, a
 		IssueID: issueID,
 		AgentID: agentID,
 	})
+}
+
+func (h *Handler) hasActiveTaskForIssueAndAgent(ctx context.Context, issueID, agentID pgtype.UUID) (bool, error) {
+	active, err := h.Queries.HasActiveTaskForIssueAndAgent(ctx, db.HasActiveTaskForIssueAndAgentParams{
+		IssueID: issueID,
+		AgentID: agentID,
+	})
+	if err != nil {
+		slog.Warn("has active task for issue and agent failed",
+			"issue_id", uuidToString(issueID),
+			"agent_id", uuidToString(agentID),
+			"error", err)
+		return false, err
+	}
+	return active, nil
+}
+
+type commentMergeResult int
+
+const (
+	commentMergeSucceeded commentMergeResult = iota
+	commentMergeNoPendingTask
+	commentMergeAttributionBlocked
+	commentMergeError
+)
+
+func (h *Handler) mergeCommentIntoPendingTask(ctx context.Context, issue db.Issue, trigger commentAgentTrigger, newTriggerCommentID pgtype.UUID) commentMergeResult {
+	isMention := trigger.Source != commentTriggerSourceIssueAssignee
+	attr, err := h.TaskService.AttributionForMergedComment(ctx, issue.WorkspaceID, newTriggerCommentID, isMention, trigger.Agent)
+	if err != nil {
+		slog.Warn("refused comment merge: attribution failed",
+			"issue_id", uuidToString(issue.ID),
+			"agent_id", uuidToString(trigger.Agent.ID),
+			"new_trigger_comment_id", uuidToString(newTriggerCommentID),
+			"error", err)
+		if errors.Is(err, service.ErrAttributionFailClosed) {
+			return commentMergeAttributionBlocked
+		}
+		return commentMergeError
+	}
+
+	row, err := h.Queries.MergeCommentIntoPendingTask(ctx, db.MergeCommentIntoPendingTaskParams{
+		IssueID:                 issue.ID,
+		AgentID:                 trigger.Agent.ID,
+		NewTriggerCommentID:     newTriggerCommentID,
+		NewOriginatorUserID:     attr.UserID,
+		NewAccountableUserID:    attr.AccountableUserID,
+		NewOriginatorSource:     pgtype.Text{String: attr.Source.String(), Valid: true},
+		NewDelegatedFromTaskID:  attr.DelegatedFromTaskID,
+		NewRuleVersionID:        attr.RuleVersionID,
+		NewTriggerEvidenceKind:  pgtype.Text{String: string(attr.EvidenceKind), Valid: attr.EvidenceKind != ""},
+		NewTriggerEvidenceRefID: attr.EvidenceRefID,
+		NewTriggerSummary:       h.TaskService.BuildCommentTriggerSummary(ctx, newTriggerCommentID),
+	})
+	if err != nil {
+		if isNotFound(err) {
+			return commentMergeNoPendingTask
+		}
+		slog.Warn("merge comment into pending task failed",
+			"issue_id", uuidToString(issue.ID),
+			"agent_id", uuidToString(trigger.Agent.ID),
+			"error", err)
+		return commentMergeError
+	}
+	slog.Info("merged comment into pending task",
+		"task_id", uuidToString(row.ID),
+		"issue_id", uuidToString(issue.ID),
+		"agent_id", uuidToString(trigger.Agent.ID),
+		"new_trigger_comment_id", uuidToString(newTriggerCommentID),
+		"coalesced_count", len(row.CoalescedCommentIds))
+	return commentMergeSucceeded
 }
 
 // commentMentionsOthersButNotAssignee returns true if the comment @mentions
@@ -1428,10 +1526,10 @@ func (h *Handler) computeMentionedAgentCommentTriggers(ctx context.Context, issu
 			}
 			// Dedup: skip if leader already has a pending task for this issue.
 			hasPending, err := h.hasPendingTaskForIssueAndAgent(ctx, issue.ID, leaderID, opts)
-			if err != nil || hasPending {
+			if err != nil {
 				continue
 			}
-			add(commentAgentTrigger{Agent: agent, Source: commentTriggerSourceMentionSquadLeader, Squad: &squad})
+			add(commentAgentTrigger{Agent: agent, Source: commentTriggerSourceMentionSquadLeader, Squad: &squad, AlreadyPending: hasPending})
 			continue
 		}
 		if m.Type != "agent" {
@@ -1458,10 +1556,10 @@ func (h *Handler) computeMentionedAgentCommentTriggers(ctx context.Context, issu
 		}
 		// Dedup: skip if this agent already has a pending task for this issue.
 		hasPending, err := h.hasPendingTaskForIssueAndAgent(ctx, issue.ID, agentUUID, opts)
-		if err != nil || hasPending {
+		if err != nil {
 			continue
 		}
-		add(commentAgentTrigger{Agent: agent, Source: commentTriggerSourceMentionAgent})
+		add(commentAgentTrigger{Agent: agent, Source: commentTriggerSourceMentionAgent, AlreadyPending: hasPending})
 	}
 	return triggers
 }
@@ -1639,18 +1737,45 @@ func (h *Handler) DeleteComment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Collect attachment URLs before CASCADE delete removes them.
-	attachmentURLs, _ := h.Queries.ListAttachmentURLsByCommentID(r.Context(), comment.ID)
+	tx, err := h.TxStarter.Begin(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to start transaction")
+		return
+	}
+	defer tx.Rollback(r.Context())
+	qtx := h.Queries.WithTx(tx)
 
-	// Cancel any active tasks triggered by this comment so the agent does not
-	// run with the now-deleted content already embedded in its prompt. Must
-	// run before DeleteComment because the FK ON DELETE SET NULL would
-	// otherwise nullify trigger_comment_id and orphan those tasks in queued.
-	if err := h.TaskService.CancelTasksByTriggerComment(r.Context(), comment.ID); err != nil {
-		slog.Warn("cancel tasks for deleted trigger comment failed", append(logger.RequestAttrs(r), "error", err, "comment_id", commentId)...)
+	if err := qtx.LockCommentIssueForDelete(r.Context(), comment.IssueID); err != nil {
+		slog.Warn("lock comment issue failed", append(logger.RequestAttrs(r), "error", err, "comment_id", commentId)...)
+		writeError(w, http.StatusInternalServerError, "failed to delete comment")
+		return
 	}
 
-	if err := h.Queries.DeleteComment(r.Context(), db.DeleteCommentParams{
+	// Lock the complete active subtree. CreateComment takes a conflicting KEY
+	// SHARE lock on its parent, so no reply can be appended between task
+	// cancellation and deactivation.
+	commentIDs, err := qtx.LockCommentSubtreeForDelete(r.Context(), db.LockCommentSubtreeForDeleteParams{
+		CommentID:   comment.ID,
+		WorkspaceID: comment.WorkspaceID,
+	})
+	if err != nil {
+		slog.Warn("lock comment subtree failed", append(logger.RequestAttrs(r), "error", err, "comment_id", commentId)...)
+		writeError(w, http.StatusInternalServerError, "failed to delete comment")
+		return
+	}
+	if len(commentIDs) == 0 {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+
+	cancelled, err := qtx.CancelAgentTasksByTriggerComments(r.Context(), commentIDs)
+	if err != nil {
+		slog.Warn("cancel tasks for deleted comments failed", append(logger.RequestAttrs(r), "error", err, "comment_id", commentId)...)
+		writeError(w, http.StatusInternalServerError, "failed to delete comment")
+		return
+	}
+
+	if err := qtx.DeleteComment(r.Context(), db.DeleteCommentParams{
 		ID:          comment.ID,
 		WorkspaceID: comment.WorkspaceID,
 	}); err != nil {
@@ -1659,7 +1784,13 @@ func (h *Handler) DeleteComment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	h.deleteS3Objects(r.Context(), attachmentURLs)
+	if err := tx.Commit(r.Context()); err != nil {
+		slog.Warn("commit comment delete failed", append(logger.RequestAttrs(r), "error", err, "comment_id", commentId)...)
+		writeError(w, http.StatusInternalServerError, "failed to delete comment")
+		return
+	}
+
+	h.TaskService.BroadcastCancelledTasks(r.Context(), cancelled)
 	slog.Info("comment deleted", append(logger.RequestAttrs(r), "comment_id", commentId, "issue_id", uuidToString(comment.IssueID))...)
 	h.publish(protocol.EventCommentDeleted, workspaceID, actorType, actorID, map[string]any{
 		"comment_id": uuidToString(comment.ID),

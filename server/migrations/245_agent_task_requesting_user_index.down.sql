@@ -1,0 +1,1 @@
+DROP INDEX CONCURRENTLY IF EXISTS agent_task_queue_requesting_user_id_idx;

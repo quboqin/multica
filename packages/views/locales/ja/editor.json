@@ -44,7 +44,14 @@
     "preview_unsupported": "このファイル形式はプレビューできません。",
     "close": "閉じる",
     "open_in_new_tab": "新しいタブで開く",
-    "remove": "添付ファイルを削除"
+    "remove": "添付ファイルを削除",
+    "favorite": "お気に入りに追加",
+    "unfavorite": "お気に入りから削除",
+    "favorite_default_category": "デフォルト",
+    "favorite_saved_to": "「{{category}}」に追加しました。",
+    "change_favorite_category": "カテゴリを変更",
+    "favorite_failed": "ドキュメントをお気に入りに追加できませんでした。",
+    "unfavorite_failed": "ドキュメントをお気に入りから削除できませんでした。"
   },
   "link_hover": {
     "copy_link": "リンクをコピー",

@@ -146,6 +146,8 @@ export function CreateProjectModal({
   const [priority, setPriority] = useState<ProjectPriority>(draft.priority);
   const [leadType, setLeadType] = useState<"member" | "agent" | undefined>(draft.leadType);
   const [leadId, setLeadId] = useState<string | undefined>(draft.leadId);
+  const [startDate, setStartDate] = useState<string>(draft.startDate ?? "");
+  const [dueDate, setDueDate] = useState<string>(draft.dueDate ?? "");
   const initialMilestoneId =
     typeof (data as CreateProjectModalData | null)?.milestone_id === "string"
       ? ((data as CreateProjectModalData).milestone_id as string)
@@ -229,6 +231,14 @@ export function CreateProjectModal({
     setLeadType(type); setLeadId(id);
     setDraft({ leadType: type, leadId: id });
   };
+  const updateStartDate = (v: string) => {
+    setStartDate(v);
+    setDraft({ startDate: v || undefined });
+  };
+  const updateDueDate = (v: string) => {
+    setDueDate(v);
+    setDraft({ dueDate: v || undefined });
+  };
   const updateIcon = (v: string | undefined) => { setIcon(v); setDraft({ icon: v }); };
 
   const [leadOpen, setLeadOpen] = useState(false);
@@ -286,6 +296,8 @@ export function CreateProjectModal({
         lead_type: leadType,
         lead_id: leadId,
         milestone_id: milestoneId,
+        start_date: startDate || null,
+        due_date: dueDate || null,
         // Server attaches these in the same transaction as the project.
         resources,
       });
@@ -498,6 +510,28 @@ export function CreateProjectModal({
               ))}
             </DropdownMenuContent>
           </DropdownMenu>
+
+          <label className="inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs transition-colors hover:bg-accent/60">
+            <CalendarRange className="size-3 text-muted-foreground" />
+            <span className="text-muted-foreground">{t(($) => $.create_project.start_date)}</span>
+            <input
+              type="date"
+              value={startDate}
+              onChange={(event) => updateStartDate(event.target.value)}
+              className="h-4 w-[9.25rem] max-w-full bg-transparent text-xs tabular-nums outline-none"
+            />
+          </label>
+
+          <label className="inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs transition-colors hover:bg-accent/60">
+            <CalendarRange className="size-3 text-muted-foreground" />
+            <span className="text-muted-foreground">{t(($) => $.create_project.due_date)}</span>
+            <input
+              type="date"
+              value={dueDate}
+              onChange={(event) => updateDueDate(event.target.value)}
+              className="h-4 w-[9.25rem] max-w-full bg-transparent text-xs tabular-nums outline-none"
+            />
+          </label>
 
           <Popover
             open={leadOpen}

@@ -273,6 +273,52 @@ func TestCreativeMaterialsFromCrawlRawSkipsExplicitMaterialsWithoutUsableAsset(t
 	}
 }
 
+func TestCrawlStrategyMemoryFromLearnedBrandWhitelistsFields(t *testing.T) {
+	scopeKey, memory, ok := crawlStrategyMemoryFromLearnedStrategy(map[string]any{
+		"strategy_type": "appgrowing_brand",
+		"scope_key":     " Easycash ",
+		"competitor":    "Easycash",
+		"headers":       "should-not-be-stored",
+		"cookie":        "should-not-be-stored",
+		"value": map[string]any{
+			"brand_id":         "brand-123",
+			"brand_name":       "Easycash",
+			"source":           "searchApp",
+			"preferred_source": "graphql_api",
+			"materials_found":  float64(3),
+			"token":            "should-not-be-stored",
+		},
+	})
+	if !ok {
+		t.Fatalf("strategy was not accepted")
+	}
+	if scopeKey != "easycash" {
+		t.Fatalf("scopeKey = %q", scopeKey)
+	}
+	if memory["brand_id"] != "brand-123" || memory["brand_name"] != "Easycash" || memory["preferred_source"] != "graphql_api" {
+		t.Fatalf("memory = %#v", memory)
+	}
+	if _, exists := memory["headers"]; exists {
+		t.Fatalf("headers leaked into memory: %#v", memory)
+	}
+	if _, exists := memory["token"]; exists {
+		t.Fatalf("token leaked into memory: %#v", memory)
+	}
+}
+
+func TestCrawlStrategyMemoryRejectsUnknownStrategyTypes(t *testing.T) {
+	_, _, ok := crawlStrategyMemoryFromLearnedStrategy(map[string]any{
+		"strategy_type": "raw_headers",
+		"scope_key":     "easycash",
+		"value": map[string]any{
+			"brand_id": "brand-123",
+		},
+	})
+	if ok {
+		t.Fatalf("unknown strategy type should not be persisted")
+	}
+}
+
 func TestCreativeMaterialsFromCrawlRawUsesExplicitSelectedMaterials(t *testing.T) {
 	raw := json.RawMessage(`{
 		"connector_id": "appgrowing",

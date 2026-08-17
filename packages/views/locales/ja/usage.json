@@ -52,6 +52,33 @@
     "title": "まだ使用量はありません",
     "body": "ここでエージェントがタスクを実行し始めると、トークンの消費と実行時間がこの画面に表示されます。"
   },
+  "user_usage": {
+    "range_today": "今日",
+    "range_days": "{{days}}日",
+    "title_me": "自分の使用量",
+    "title_users": "使用量",
+    "subtitle_me": "タスクの accountable user として自分に帰属したトークン消費です。",
+    "subtitle_users": "各タスクの accountable user ごとにトークン消費を集計します。",
+    "kpi_cost": "コスト · {{range}}",
+    "kpi_tokens": "トークン · {{range}}",
+    "kpi_tasks": "帰属タスク · {{range}}",
+    "table_title_me": "自分に帰属した使用量",
+    "table_title_agents": "エージェント使用量ランキング",
+    "table_title_users": "ユーザー使用量ランキング",
+    "trend_title": "直近 7 日の推移",
+    "trend_subtitle_me": "あなたに帰属した使用量を日別に表示します。",
+    "trend_subtitle_users": "責任ユーザー別に帰属した使用量を日別に表示します。",
+    "caption": "{{count}} ユーザー",
+    "header_user": "ユーザー",
+    "header_input": "入力",
+    "header_output": "出力",
+    "pagination_prev": "前へ",
+    "pagination_next": "次へ",
+    "pagination_status": "{{page}} / {{total}} ページ",
+    "current_user": "(自分)",
+    "empty_title": "帰属済み使用量はありません",
+    "empty_body": "この期間には、ユーザーに帰属したタスク使用量がまだありません。"
+  },
   "duration": {
     "less_than_minute": "1分未満"
   }

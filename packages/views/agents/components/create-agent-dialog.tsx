@@ -1,8 +1,8 @@
 "use client";
 
-import { useState } from "react";
-import { Globe, Lock } from "lucide-react";
-import { useQueryClient } from "@tanstack/react-query";
+import { useMemo, useRef, useState } from "react";
+import { Globe, Lock, Plus, Tag } from "lucide-react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { ModelDropdown } from "./model-dropdown";
 import { RuntimePicker, isRuntimeUsableForUser } from "./runtime-picker";
 import { InstructionsEditor } from "./instructions-editor";
@@ -10,6 +10,7 @@ import { SkillMultiSelect } from "./skill-multi-select";
 import { AvatarPicker } from "./avatar-picker";
 import { api } from "@multica/core/api";
 import { useWorkspaceId } from "@multica/core/hooks";
+import { labelListOptions, useCreateLabel } from "@multica/core/labels";
 import { workspaceKeys } from "@multica/core/workspace/queries";
 import type {
   Agent,
@@ -17,6 +18,7 @@ import type {
   RuntimeDevice,
   MemberWithUser,
   CreateAgentRequest,
+  Label as ResourceLabel,
 } from "@multica/core/types";
 import { isImeComposing } from "@multica/core/utils";
 import {
@@ -37,6 +39,20 @@ import {
 } from "@multica/core/agents";
 import { CharCounter } from "./char-counter";
 import { useT } from "../../i18n";
+import { LabelChip } from "../../labels/label-chip";
+
+const INLINE_LABEL_COLORS = [
+  "#ef4444", "#f97316", "#eab308", "#22c55e", "#14b8a6",
+  "#3b82f6", "#6366f1", "#a855f7", "#ec4899", "#64748b",
+] as const;
+
+function pickInlineLabelColor(name: string): string {
+  let hash = 0;
+  for (let i = 0; i < name.length; i++) {
+    hash = (hash * 31 + name.charCodeAt(i)) >>> 0;
+  }
+  return INLINE_LABEL_COLORS[hash % INLINE_LABEL_COLORS.length] ?? INLINE_LABEL_COLORS[0]!;
+}
 
 export function CreateAgentDialog({
   runtimes,
@@ -91,6 +107,9 @@ export function CreateAgentDialog({
   const [avatarUrl, setAvatarUrl] = useState<string | null>(template?.avatar_url ?? null);
   const [selectedSkillIds, setSelectedSkillIds] = useState<Set<string>>(
     () => new Set(template?.skills.map((s) => s.id) ?? []),
+  );
+  const [selectedLabelIds, setSelectedLabelIds] = useState<Set<string>>(
+    () => new Set(template?.labels?.map((label) => label.id) ?? []),
   );
   const [creating, setCreating] = useState(false);
 
@@ -198,6 +217,24 @@ export function CreateAgentDialog({
             t(($) => $.create_dialog.skill_attach_failed_toast, {
               error:
                 skillErr instanceof Error ? skillErr.message : "unknown error",
+            }),
+          );
+        }
+      }
+      if (createdAgent && selectedLabelIds.size > 0) {
+        try {
+          await Promise.all(
+            [...selectedLabelIds].map((labelId) =>
+              api.attachAgentLabel(createdAgent.id, labelId),
+            ),
+          );
+          if (wsId) {
+            queryClient.invalidateQueries({ queryKey: workspaceKeys.agents(wsId) });
+          }
+        } catch (labelErr) {
+          toast.warning(
+            t(($) => $.create_dialog.tag_attach_failed_toast, {
+              error: labelErr instanceof Error ? labelErr.message : "unknown error",
             }),
           );
         }
@@ -359,6 +396,11 @@ export function CreateAgentDialog({
               selectedIds={selectedSkillIds}
               onChange={setSelectedSkillIds}
             />
+
+            <AgentLabelMultiSelect
+              selectedIds={selectedLabelIds}
+              onChange={setSelectedLabelIds}
+            />
           </div>
         </div>
 
@@ -388,5 +430,153 @@ export function CreateAgentDialog({
         </div>
       </DialogContent>
     </Dialog>
+  );
+}
+
+function AgentLabelMultiSelect({
+  selectedIds,
+  onChange,
+}: {
+  selectedIds: Set<string>;
+  onChange: (next: Set<string>) => void;
+}) {
+  const { t } = useT("agents");
+  const wsId = useWorkspaceId();
+  const { data: labels = [], isLoading } = useQuery(labelListOptions(wsId, "agent"));
+  const create = useCreateLabel("agent");
+  const creatingRef = useRef(false);
+  const [filter, setFilter] = useState("");
+
+  const selectedLabels = useMemo(
+    () => labels.filter((label) => selectedIds.has(label.id)),
+    [labels, selectedIds],
+  );
+  const query = filter.trim();
+  const queryLower = query.toLowerCase();
+  const filtered = labels.filter((label) => label.name.toLowerCase().includes(queryLower));
+  const exactMatch = labels.some((label) => label.name.toLowerCase() === queryLower);
+  const canCreate = query.length > 0 && !exactMatch && !create.isPending;
+
+  const toggle = (labelId: string) => {
+    const next = new Set(selectedIds);
+    if (next.has(labelId)) next.delete(labelId);
+    else next.add(labelId);
+    onChange(next);
+  };
+
+  const createAndSelect = async () => {
+    if (!canCreate || creatingRef.current) return;
+    creatingRef.current = true;
+    try {
+      const label = await create.mutateAsync({
+        name: query,
+        color: pickInlineLabelColor(query),
+      });
+      const next = new Set(selectedIds);
+      next.add(label.id);
+      onChange(next);
+      setFilter("");
+    } catch (err) {
+      toast.error(
+        err instanceof Error
+          ? err.message
+          : t(($) => $.create_dialog.tags_section.create_failed_toast),
+      );
+    } finally {
+      creatingRef.current = false;
+    }
+  };
+
+  return (
+    <div>
+      <Label className="text-xs text-muted-foreground">
+        {t(($) => $.create_dialog.tags_section.label)}
+      </Label>
+      <div className="mt-1.5 rounded-lg border bg-card/40 p-3">
+        {selectedLabels.length > 0 && (
+          <div className="mb-2 flex flex-wrap gap-1.5">
+            {selectedLabels.map((label: ResourceLabel) => (
+              <LabelChip
+                key={label.id}
+                label={label}
+                onRemove={() => toggle(label.id)}
+              />
+            ))}
+          </div>
+        )}
+        <div className="relative">
+          <Tag className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+          <Input
+            value={filter}
+            onChange={(e) => setFilter(e.target.value)}
+            onKeyDown={(e) => {
+              if (isImeComposing(e)) return;
+              if (e.key === "Enter") {
+                e.preventDefault();
+                createAndSelect();
+              }
+            }}
+            placeholder={t(($) => $.create_dialog.tags_section.search_placeholder)}
+            className="h-8 pl-8 text-sm"
+            maxLength={32}
+          />
+        </div>
+        <div className="mt-2 max-h-36 overflow-y-auto rounded-md border bg-background p-1">
+          {isLoading && (
+            <div className="px-2 py-1.5 text-sm text-muted-foreground">
+              {t(($) => $.create_dialog.tags_section.loading)}
+            </div>
+          )}
+          {!isLoading && filtered.length === 0 && !canCreate && (
+            <div className="px-2 py-1.5 text-sm text-muted-foreground">
+              {t(($) => $.create_dialog.tags_section.empty)}
+            </div>
+          )}
+          {filtered.map((label) => {
+            const selected = selectedIds.has(label.id);
+            return (
+              <button
+                key={label.id}
+                type="button"
+                onClick={() => toggle(label.id)}
+                className={`flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-sm transition-colors ${
+                  selected ? "bg-accent" : "hover:bg-accent/70"
+                }`}
+              >
+                <span
+                  className="h-3 w-3 shrink-0 rounded-full"
+                  style={{ backgroundColor: label.color }}
+                  aria-hidden
+                />
+                <span className="min-w-0 flex-1 truncate">{label.name}</span>
+                {selected && (
+                  <span className="text-xs text-muted-foreground">
+                    {t(($) => $.create_dialog.tags_section.selected)}
+                  </span>
+                )}
+              </button>
+            );
+          })}
+          {canCreate && (
+            <button
+              type="button"
+              onClick={createAndSelect}
+              className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-sm hover:bg-accent/70"
+            >
+              <Plus className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+              <span className="min-w-0 flex-1 truncate">
+                {t(($) => $.create_dialog.tags_section.create_action)}{" "}
+                <span className="font-medium">&ldquo;{query}&rdquo;</span>
+              </span>
+              <span
+                className="h-3 w-3 shrink-0 rounded-full"
+                style={{ backgroundColor: pickInlineLabelColor(query) }}
+                aria-hidden
+              />
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
   );
 }

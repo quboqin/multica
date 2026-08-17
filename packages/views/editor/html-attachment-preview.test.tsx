@@ -23,6 +23,9 @@ vi.mock("../i18n", () => ({
           preview_loading: "Loading preview…",
           preview_failed: "Couldn't load preview",
           open_in_new_tab: "Open in new tab",
+          favorite: "Add to favorites",
+          unfavorite: "Remove from favorites",
+          change_favorite_category: "Change category",
         },
       }),
   }),
@@ -130,6 +133,60 @@ describe("HtmlAttachmentPreview — visual shell (does not use file-card chrome)
 });
 
 describe("HtmlAttachmentPreview — toolbar actions", () => {
+  it("invokes the favorite action", async () => {
+    getAttachmentTextContentMock.mockResolvedValueOnce({
+      text: "<p>ok</p>",
+      originalContentType: "text/html",
+    });
+    const onToggleFavorite = vi.fn();
+    renderWithQuery(
+      <HtmlAttachmentPreview
+        attachmentId="att-1"
+        filename="report.html"
+        onPreview={() => {}}
+        onDownload={() => {}}
+        onToggleFavorite={onToggleFavorite}
+      />,
+    );
+
+    await waitFor(() =>
+      expect(screen.getByTitle("Add to favorites")).toBeTruthy(),
+    );
+    expect(screen.getByTitle("Add to favorites")).toHaveClass("cursor-pointer");
+    fireEvent.mouseDown(screen.getByTitle("Add to favorites"));
+    expect(onToggleFavorite).toHaveBeenCalledTimes(1);
+  });
+
+  it("opens the category picker for an existing favorite", async () => {
+    getAttachmentTextContentMock.mockResolvedValueOnce({
+      text: "<p>ok</p>",
+      originalContentType: "text/html",
+    });
+    const onChangeFavoriteCategory = vi.fn();
+    renderWithQuery(
+      <HtmlAttachmentPreview
+        attachmentId="att-1"
+        filename="report.html"
+        onPreview={() => {}}
+        onDownload={() => {}}
+        isFavorite
+        onToggleFavorite={() => {}}
+        onChangeFavoriteCategory={onChangeFavoriteCategory}
+      />,
+    );
+
+    await waitFor(() =>
+      expect(screen.getByTitle("Change category")).toBeTruthy(),
+    );
+    expect(screen.getByTitle("Remove from favorites")).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    expect(screen.getByTitle("Change category")).toHaveClass("cursor-pointer");
+    fireEvent.click(screen.getByTitle("Change category"));
+    expect(onChangeFavoriteCategory).toHaveBeenCalledTimes(1);
+  });
+
   it("invokes onPreview when Maximize is clicked", async () => {
     getAttachmentTextContentMock.mockResolvedValueOnce({
       text: "<p>ok</p>",

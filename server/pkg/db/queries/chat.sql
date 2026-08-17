@@ -9,7 +9,7 @@ WHERE id = $1;
 
 -- name: GetChatSessionInWorkspace :one
 SELECT * FROM chat_session
-WHERE id = $1 AND workspace_id = $2;
+WHERE id = $1 AND workspace_id = $2 AND is_active = TRUE;
 
 -- name: ListChatSessionsByCreator :many
 -- Returns active sessions with a boolean unread flag. Unread is strictly
@@ -18,19 +18,19 @@ WHERE id = $1 AND workspace_id = $2;
 SELECT cs.*,
        (cs.unread_since IS NOT NULL)::bool AS has_unread
 FROM chat_session cs
-WHERE cs.workspace_id = $1 AND cs.creator_id = $2 AND cs.status = 'active'
+WHERE cs.workspace_id = $1 AND cs.creator_id = $2 AND cs.is_active = TRUE AND cs.status = 'active'
 ORDER BY cs.updated_at DESC;
 
 -- name: ListAllChatSessionsByCreator :many
 SELECT cs.*,
        (cs.unread_since IS NOT NULL)::bool AS has_unread
 FROM chat_session cs
-WHERE cs.workspace_id = $1 AND cs.creator_id = $2
+WHERE cs.workspace_id = $1 AND cs.creator_id = $2 AND cs.is_active = TRUE
 ORDER BY cs.updated_at DESC;
 
 -- name: UpdateChatSessionTitle :one
 UPDATE chat_session SET title = $2, updated_at = now()
-WHERE id = $1
+WHERE id = $1 AND is_active = TRUE
 RETURNING *;
 
 -- name: UpdateChatSessionSession :exec
@@ -44,38 +44,44 @@ SET session_id = COALESCE(sqlc.narg('session_id'), session_id),
     work_dir = COALESCE(sqlc.narg('work_dir'), work_dir),
     runtime_id = COALESCE(sqlc.narg('runtime_id'), runtime_id),
     updated_at = now()
-WHERE id = sqlc.arg('id');
+WHERE id = sqlc.arg('id') AND is_active = TRUE;
 
 -- name: LockChatSessionForDelete :one
 -- Acquires an exclusive (FOR UPDATE) row lock on chat_session(id). Used by
 -- the delete path so that a concurrent SendChatMessage cannot enqueue a new
 -- agent_task_queue row referencing this session between our cancel and
--- delete steps. The FK from agent_task_queue.chat_session_id takes a
--- KEY SHARE lock on the parent row during INSERT validation, which
--- conflicts with FOR UPDATE — concurrent inserts block here and then fail
--- their FK check after we commit the delete.
+-- deactivate steps. CreateChatMessage and CreateChatTask also take a
+-- KEY SHARE lock while checking is_active, which conflicts with FOR UPDATE:
+-- concurrent inserts block here and then observe is_active = FALSE after
+-- commit.
 SELECT id FROM chat_session
 WHERE id = $1
 FOR UPDATE;
 
--- name: DeleteChatSession :exec
--- Hard delete. chat_message rows cascade via FK ON DELETE CASCADE; the
--- chat_session_id on agent_task_queue is set NULL by FK so completed/failed
--- task history survives the session being removed. Callers MUST run inside
+-- name: DeleteChatSession :execrows
+-- Logical delete. chat_message rows are preserved for audit/debugging, while
+-- app queries hide sessions with is_active = FALSE. Callers MUST run inside
 -- the same transaction that holds LockChatSessionForDelete and that has
 -- already cancelled any in-flight tasks (see CancelAgentTasksByChatSession)
--- so the daemon does not keep running work whose result has nowhere to
--- land. workspace_id in the WHERE clause is a SQL-layer tenant guard; see
--- DeleteIssue.
-DELETE FROM chat_session WHERE id = $1 AND workspace_id = $2;
+-- so the daemon does not keep running work for a hidden session. workspace_id
+-- in the WHERE clause is a SQL-layer tenant guard; see DeleteIssue.
+UPDATE chat_session
+SET is_active = FALSE,
+    updated_at = now()
+WHERE id = $1 AND workspace_id = $2 AND is_active = TRUE;
 
 -- name: TouchChatSession :exec
 UPDATE chat_session SET updated_at = now()
-WHERE id = $1;
+WHERE id = $1 AND is_active = TRUE;
 
 -- name: CreateChatMessage :one
 INSERT INTO chat_message (chat_session_id, role, content, task_id, failure_reason, elapsed_ms)
-VALUES ($1, $2, $3, sqlc.narg(task_id), sqlc.narg(failure_reason), sqlc.narg(elapsed_ms))
+SELECT $1, $2, $3, sqlc.narg(task_id), sqlc.narg(failure_reason), sqlc.narg(elapsed_ms)
+WHERE EXISTS (
+    SELECT 1 FROM chat_session
+    WHERE id = $1 AND is_active = TRUE
+    FOR KEY SHARE
+)
 RETURNING *;
 
 -- name: LinkChatMessageToTask :exec
@@ -108,8 +114,25 @@ SELECT * FROM chat_message
 WHERE id = $1;
 
 -- name: CreateChatTask :one
-INSERT INTO agent_task_queue (agent_id, runtime_id, issue_id, status, priority, chat_session_id, initiator_user_id, requesting_user_id)
-VALUES ($1, $2, NULL, 'queued', $3, $4, $5, $6)
+INSERT INTO agent_task_queue (
+    agent_id, runtime_id, issue_id, status, priority, chat_session_id,
+    initiator_user_id, requesting_user_id,
+    originator_user_id, accountable_user_id, originator_source,
+    trigger_evidence_kind, trigger_evidence_ref_id
+)
+SELECT
+    $1, $2, NULL, 'queued', $3, $4,
+    $5, $6,
+    sqlc.narg('originator_user_id'),
+    sqlc.narg('accountable_user_id'),
+    sqlc.narg('originator_source'),
+    sqlc.narg('trigger_evidence_kind'),
+    sqlc.narg('trigger_evidence_ref_id')
+WHERE EXISTS (
+    SELECT 1 FROM chat_session
+    WHERE id = $4 AND is_active = TRUE
+    FOR KEY SHARE
+)
 RETURNING *;
 
 -- name: GetLastChatTaskSession :one
@@ -154,20 +177,21 @@ FROM agent_task_queue atq
 JOIN chat_session cs ON cs.id = atq.chat_session_id
 WHERE cs.workspace_id = $1
   AND cs.creator_id = $2
+  AND cs.is_active = TRUE
   AND atq.status IN ('queued', 'dispatched', 'running', 'waiting_local_directory')
 ORDER BY atq.created_at DESC;
 
 -- name: MarkChatSessionRead :exec
 -- Clears unread_since, dropping the session's unread count to 0.
 UPDATE chat_session SET unread_since = NULL
-WHERE id = $1;
+WHERE id = $1 AND is_active = TRUE;
 
 -- name: SetUnreadSinceIfNull :exec
 -- Atomically stamps the first unread assistant message's arrival time.
 -- No-op if the session is already in "has unread" state — keeps the earliest
 -- unread boundary stable across multiple incoming replies.
 UPDATE chat_session SET unread_since = now()
-WHERE id = $1 AND unread_since IS NULL;
+WHERE id = $1 AND is_active = TRUE AND unread_since IS NULL;
 
 -- name: GetMostRecentUserChatMessage :one
 -- Returns the most recent role='user' message in a session. Used by the

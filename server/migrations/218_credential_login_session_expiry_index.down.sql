@@ -1,0 +1,1 @@
+DROP INDEX CONCURRENTLY IF EXISTS credential_login_session_expiry_idx;

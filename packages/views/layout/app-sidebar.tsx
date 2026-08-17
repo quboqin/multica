@@ -36,6 +36,8 @@ import {
   X,
   Zap,
   Users,
+  Star,
+  Folder,
 } from "lucide-react";
 import { WorkspaceAvatar } from "../workspace/workspace-avatar";
 import { ActorAvatar } from "@multica/ui/components/common/actor-avatar";
@@ -55,6 +57,9 @@ import {
   SidebarMenu,
   SidebarMenuButton,
   SidebarMenuItem,
+  SidebarMenuSub,
+  SidebarMenuSubButton,
+  SidebarMenuSubItem,
   SidebarRail,
 } from "@multica/ui/components/ui/sidebar";
 import {
@@ -77,6 +82,7 @@ import { useModalStore } from "@multica/core/modals";
 import { useConfigStore } from "@multica/core/config";
 import { useMyRuntimesNeedUpdate } from "@multica/core/runtimes/hooks";
 import { pinListOptions } from "@multica/core/pins/queries";
+import { favoriteCategoryListOptions } from "@multica/core/favorites";
 import { useDeletePin, useReorderPins } from "@multica/core/pins/mutations";
 import { issueDetailOptions } from "@multica/core/issues/queries";
 import { projectDetailOptions } from "@multica/core/projects/queries";
@@ -84,6 +90,9 @@ import type { PinnedItem } from "@multica/core/types";
 import { useLogout } from "../auth";
 import { ProjectIcon } from "../projects/components/project-icon";
 import { useT } from "../i18n";
+import { FavoriteCategoryActions } from "../favorites/components/favorite-category-actions";
+import { CreateFavoriteCategoryDialog } from "../favorites/components/favorite-category-dialog";
+import { favoriteCategoryDisplayName } from "../favorites/components/favorite-category-name";
 
 // Top-level nav items stay active when the user is on a child route
 // (e.g. "Projects" stays lit on /:slug/projects/:id). Pinned items keep
@@ -102,6 +111,9 @@ const EMPTY_PINS: PinnedItem[] = [];
 const EMPTY_WORKSPACES: Awaited<ReturnType<typeof api.listWorkspaces>> = [];
 const EMPTY_INVITATIONS: Awaited<ReturnType<typeof api.listMyInvitations>> = [];
 const EMPTY_INBOX: Awaited<ReturnType<typeof api.listInbox>> = [];
+const EMPTY_FAVORITE_CATEGORIES: Awaited<
+  ReturnType<typeof api.listFavoriteCategories>
+> = [];
 
 // Nav items reference WorkspacePaths method names so they can be resolved
 // against the current workspace slug at render time (see AppSidebar body).
@@ -109,6 +121,7 @@ const EMPTY_INBOX: Awaited<ReturnType<typeof api.listInbox>> = [];
 type NavKey =
   | "inbox"
   | "myIssues"
+  | "favorites"
   | "issues"
   | "plans"
   | "kpi"
@@ -117,6 +130,8 @@ type NavKey =
   | "agents"
   | "squads"
   | "usage"
+  | "usageMe"
+  | "usageUsers"
   | "runtimes"
   | "skills"
   | "settings";
@@ -125,6 +140,7 @@ type NavKey =
 type NavLabelKey =
   | "inbox"
   | "my_issues"
+  | "my_favorites"
   | "issues"
   | "plans"
   | "kpi"
@@ -133,6 +149,8 @@ type NavLabelKey =
   | "agents"
   | "squads"
   | "usage"
+  | "my_usage"
+  | "user_usage"
   | "runtimes"
   | "skills"
   | "settings";
@@ -140,6 +158,7 @@ type NavLabelKey =
 const personalNav: { key: NavKey; labelKey: NavLabelKey; icon: typeof Inbox }[] = [
   { key: "inbox", labelKey: "inbox", icon: Inbox },
   { key: "myIssues", labelKey: "my_issues", icon: CircleUser },
+  { key: "favorites", labelKey: "my_favorites", icon: Star },
 ];
 
 const workspaceNav: { key: NavKey; labelKey: NavLabelKey; icon: typeof Inbox }[] = [
@@ -151,6 +170,11 @@ const workspaceNav: { key: NavKey; labelKey: NavLabelKey; icon: typeof Inbox }[]
   { key: "agents", labelKey: "agents", icon: Bot },
   { key: "squads", labelKey: "squads", icon: Users },
   { key: "usage", labelKey: "usage", icon: BarChart3 },
+];
+
+const usageSubNav: { key: NavKey; labelKey: NavLabelKey }[] = [
+  { key: "usageMe", labelKey: "my_usage" },
+  { key: "usageUsers", labelKey: "user_usage" },
 ];
 
 const configureNav: { key: NavKey; labelKey: NavLabelKey; icon: typeof Inbox }[] = [
@@ -362,6 +386,12 @@ export function AppSidebar({ topSlot, searchSlot, headerClassName, headerStyle }
   const workspaceCreationDisabled = useConfigStore((s) => s.workspaceCreationDisabled);
 
   const wsId = workspace?.id;
+  const [favoriteCategoryDialogOpen, setFavoriteCategoryDialogOpen] = useState(false);
+  const [favoriteCategoriesOpen, setFavoriteCategoriesOpen] = useState(true);
+  const { data: favoriteCategories = EMPTY_FAVORITE_CATEGORIES } = useQuery(
+    favoriteCategoryListOptions(wsId ?? ""),
+  );
+  const hasFavoriteCategories = favoriteCategories.length > 0;
   const { data: inboxItems = EMPTY_INBOX } = useQuery({
     queryKey: wsId ? inboxKeys.list(wsId) : ["inbox", "disabled"],
     queryFn: () => api.listInbox(),
@@ -388,6 +418,7 @@ export function AppSidebar({ topSlot, searchSlot, headerClassName, headerStyle }
   // DOM under dnd-kit while its drop animation is still interpolating.
   const [localPinned, setLocalPinned] = useState<PinnedItem[]>(pinnedItems);
   const [localPinnedWsId, setLocalPinnedWsId] = useState<string | null>(wsId ?? null);
+  const [usageMenuOpen, setUsageMenuOpen] = useState(false);
   const isDraggingRef = useRef(false);
   useEffect(() => {
     if (!isDraggingRef.current) {
@@ -396,6 +427,7 @@ export function AppSidebar({ topSlot, searchSlot, headerClassName, headerStyle }
   }, [pinnedItems]);
   useEffect(() => {
     setLocalPinnedWsId(wsId ?? null);
+    setUsageMenuOpen(false);
   }, [wsId]);
   const visiblePinned = localPinnedWsId === (wsId ?? null) ? localPinned : EMPTY_PINS;
 
@@ -476,6 +508,7 @@ export function AppSidebar({ topSlot, searchSlot, headerClassName, headerStyle }
   }, [pathname]);
 
   return (
+    <>
       <Sidebar variant="inset">
         {topSlot}
         {/* Workspace Switcher */}
@@ -630,6 +663,96 @@ export function AppSidebar({ topSlot, searchSlot, headerClassName, headerStyle }
                 {personalNav.map((item) => {
                   const href = p[item.key]();
                   const isActive = isNavActive(pathname, href);
+                  if (item.key === "favorites") {
+                    return (
+                      <Collapsible
+                        key={item.key}
+                        open={favoriteCategoriesOpen}
+                        onOpenChange={setFavoriteCategoriesOpen}
+                      >
+                        <SidebarMenuItem className="group/favorites">
+                          <SidebarMenuButton
+                            isActive={isActive}
+                            render={hasFavoriteCategories ? <CollapsibleTrigger /> : undefined}
+                            className={cn(
+                              "text-muted-foreground hover:not-data-active:bg-sidebar-accent/70 data-active:bg-sidebar-accent data-active:text-sidebar-accent-foreground",
+                              hasFavoriteCategories
+                                ? "group/favorite-trigger cursor-pointer pr-14"
+                                : "pr-8",
+                            )}
+                          >
+                            <item.icon />
+                            <span>{t(($) => $.nav[item.labelKey])}</span>
+                            {hasFavoriteCategories && (
+                              <ChevronRight className="ml-auto size-3.5 transition-transform duration-200 group-data-[panel-open]/favorite-trigger:rotate-90" />
+                            )}
+                          </SidebarMenuButton>
+                          <Tooltip>
+                            <TooltipTrigger
+                              render={<button type="button" />}
+                              className="absolute right-1 top-1 flex size-6 items-center justify-center rounded-md text-muted-foreground opacity-0 hover:bg-sidebar-accent hover:text-foreground group-hover/favorites:opacity-100 focus-visible:opacity-100"
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                setFavoriteCategoryDialogOpen(true);
+                              }}
+                            >
+                              <Plus className="size-3.5" />
+                            </TooltipTrigger>
+                            <TooltipContent side="right">
+                              {t(($) => $.favorites.category.new_tooltip)}
+                            </TooltipContent>
+                          </Tooltip>
+                          {hasFavoriteCategories && (
+                            <CollapsibleContent>
+                              <SidebarMenuSub>
+                                {favoriteCategories.map((category) => {
+                                  const categoryHref = p.favoriteCategory(category.id);
+                                  return (
+                                    <SidebarMenuSubItem
+                                      key={category.id}
+                                      className="group/category relative"
+                                    >
+                                      <SidebarMenuSubButton
+                                        isActive={pathname === categoryHref}
+                                        render={<AppLink href={categoryHref} />}
+                                        className={category.isDefault ? "pr-2" : "pr-9"}
+                                      >
+                                        <Folder />
+                                        <span>
+                                          {favoriteCategoryDisplayName(
+                                            category,
+                                            t(($) => $.favorites.category.default_name),
+                                          )}
+                                        </span>
+                                        <span
+                                          className={cn(
+                                            "ml-auto text-[10px] tabular-nums text-muted-foreground",
+                                            !category.isDefault &&
+                                              "transition-opacity group-hover/category:opacity-0 group-focus-within/category:opacity-0",
+                                          )}
+                                        >
+                                          {category.favoriteCount}
+                                        </span>
+                                      </SidebarMenuSubButton>
+                                      {!category.isDefault && (
+                                        <FavoriteCategoryActions
+                                          category={category}
+                                          className="absolute right-0 top-0 opacity-0 transition-opacity group-hover/category:opacity-100 group-focus-within/category:opacity-100"
+                                          onDeleted={() => {
+                                            if (pathname === categoryHref) push(p.favorites());
+                                          }}
+                                        />
+                                      )}
+                                    </SidebarMenuSubItem>
+                                  );
+                                })}
+                              </SidebarMenuSub>
+                            </CollapsibleContent>
+                          )}
+                        </SidebarMenuItem>
+                      </Collapsible>
+                    );
+                  }
                   return (
                     <SidebarMenuItem key={item.key}>
                       <SidebarMenuButton
@@ -694,6 +817,49 @@ export function AppSidebar({ topSlot, searchSlot, headerClassName, headerStyle }
                 {workspaceNav.map((item) => {
                   const href = p[item.key]();
                   const isActive = isNavActive(pathname, href);
+                  if (item.key === "usage") {
+                    return (
+                      <SidebarMenuItem key={item.key}>
+                        <SidebarMenuButton
+                          isActive={isActive}
+                          aria-expanded={usageMenuOpen}
+                          onClick={() => {
+                            setUsageMenuOpen((open) => !open);
+                            push(href);
+                          }}
+                          className="text-muted-foreground hover:not-data-active:bg-sidebar-accent/70 data-active:bg-sidebar-accent data-active:text-sidebar-accent-foreground"
+                        >
+                          <item.icon />
+                          <span>{t(($) => $.nav[item.labelKey])}</span>
+                          <ChevronRight
+                            className={cn(
+                              "ml-auto size-3 transition-transform",
+                              usageMenuOpen && "rotate-90",
+                            )}
+                          />
+                        </SidebarMenuButton>
+                        {usageMenuOpen && (
+                          <SidebarMenuSub>
+                            {usageSubNav.map((subItem) => {
+                              const subHref = p[subItem.key]();
+                              return (
+                                <SidebarMenuSubItem key={subItem.key}>
+                                  <SidebarMenuSubButton
+                                    size="sm"
+                                    isActive={pathname === subHref}
+                                    render={<AppLink href={subHref} />}
+                                    className="text-muted-foreground hover:not-data-active:bg-sidebar-accent/70 data-active:bg-sidebar-accent data-active:text-sidebar-accent-foreground"
+                                  >
+                                    <span>{t(($) => $.nav[subItem.labelKey])}</span>
+                                  </SidebarMenuSubButton>
+                                </SidebarMenuSubItem>
+                              );
+                            })}
+                          </SidebarMenuSub>
+                        )}
+                      </SidebarMenuItem>
+                    );
+                  }
                   return (
                     <SidebarMenuItem key={item.key}>
                       <SidebarMenuButton
@@ -746,5 +912,10 @@ export function AppSidebar({ topSlot, searchSlot, headerClassName, headerStyle }
         </SidebarFooter>
         <SidebarRail />
       </Sidebar>
+      <CreateFavoriteCategoryDialog
+        open={favoriteCategoryDialogOpen}
+        onOpenChange={setFavoriteCategoryDialogOpen}
+      />
+    </>
   );
 }

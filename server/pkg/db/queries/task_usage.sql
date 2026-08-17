@@ -87,6 +87,55 @@ WHERE workspace_id = $1
 GROUP BY agent_id, model
 ORDER BY agent_id, model;
 
+-- name: ListDashboardUsageByUser :many
+-- Per-(accountable_user_id, model) token aggregates from raw task usage.
+-- User attribution currently lives on agent_task_queue, not task_usage_hourly,
+-- so this intentionally reads the source table until a user-dimension rollup
+-- exists. Rows without accountable_user_id are excluded from user statistics.
+SELECT
+    atq.accountable_user_id AS user_id,
+    tu.model,
+    SUM(tu.input_tokens)::bigint       AS input_tokens,
+    SUM(tu.output_tokens)::bigint      AS output_tokens,
+    SUM(tu.cache_read_tokens)::bigint  AS cache_read_tokens,
+    SUM(tu.cache_write_tokens)::bigint AS cache_write_tokens,
+    COUNT(DISTINCT tu.task_id)::int    AS task_count
+FROM task_usage tu
+JOIN agent_task_queue atq ON atq.id = tu.task_id
+JOIN agent a ON a.id = atq.agent_id
+LEFT JOIN issue i ON i.id = atq.issue_id
+WHERE a.workspace_id = $1
+  AND atq.accountable_user_id IS NOT NULL
+  AND tu.created_at >= @since::timestamptz
+  AND (sqlc.narg('project_id')::uuid IS NULL OR i.project_id = sqlc.narg('project_id'))
+  AND (sqlc.narg('user_id')::uuid IS NULL OR atq.accountable_user_id = sqlc.narg('user_id'))
+GROUP BY atq.accountable_user_id, tu.model
+ORDER BY atq.accountable_user_id, tu.model;
+
+-- name: ListDashboardUsageByUserDaily :many
+-- Daily per-(accountable_user_id, date, model) token aggregates from raw task usage.
+-- Used for user-attributed trend charts where the user dimension is required.
+SELECT
+    atq.accountable_user_id AS user_id,
+    DATE(tu.created_at AT TIME ZONE sqlc.arg('tz')::text) AS date,
+    tu.model,
+    SUM(tu.input_tokens)::bigint       AS input_tokens,
+    SUM(tu.output_tokens)::bigint      AS output_tokens,
+    SUM(tu.cache_read_tokens)::bigint  AS cache_read_tokens,
+    SUM(tu.cache_write_tokens)::bigint AS cache_write_tokens,
+    COUNT(DISTINCT tu.task_id)::int    AS task_count
+FROM task_usage tu
+JOIN agent_task_queue atq ON atq.id = tu.task_id
+JOIN agent a ON a.id = atq.agent_id
+LEFT JOIN issue i ON i.id = atq.issue_id
+WHERE a.workspace_id = $1
+  AND atq.accountable_user_id IS NOT NULL
+  AND tu.created_at >= @since::timestamptz
+  AND (sqlc.narg('project_id')::uuid IS NULL OR i.project_id = sqlc.narg('project_id'))
+  AND (sqlc.narg('user_id')::uuid IS NULL OR atq.accountable_user_id = sqlc.narg('user_id'))
+GROUP BY atq.accountable_user_id, DATE(tu.created_at AT TIME ZONE sqlc.arg('tz')::text), tu.model
+ORDER BY DATE(tu.created_at AT TIME ZONE sqlc.arg('tz')::text) DESC, atq.accountable_user_id, tu.model;
+
 -- name: ListDashboardRunTimeDaily :many
 -- Daily per-date run time + task counts for the workspace, optionally
 -- scoped to a single project. Powers the workspace dashboard's "Time"

@@ -136,14 +136,25 @@ ORDER BY created_at DESC;
 -- name: CreateAgentTask :one
 INSERT INTO agent_task_queue (
     agent_id, runtime_id, issue_id, status, priority, trigger_comment_id,
-    trigger_summary, force_fresh_session, is_leader_task, requesting_user_id
+    trigger_summary, force_fresh_session, is_leader_task, requesting_user_id,
+    originator_user_id, accountable_user_id, originator_source,
+    delegated_from_task_id, rule_version_id, rerun_of_task_id,
+    trigger_evidence_kind, trigger_evidence_ref_id
 )
 VALUES (
     $1, $2, $3, 'queued', $4, sqlc.narg(trigger_comment_id),
     sqlc.narg(trigger_summary),
     COALESCE(sqlc.narg('force_fresh_session')::boolean, FALSE),
     COALESCE(sqlc.narg('is_leader_task')::boolean, FALSE),
-    sqlc.narg('requesting_user_id')
+    sqlc.narg('requesting_user_id'),
+    sqlc.narg('originator_user_id'),
+    sqlc.narg('accountable_user_id'),
+    sqlc.narg('originator_source'),
+    sqlc.narg('delegated_from_task_id'),
+    sqlc.narg('rule_version_id'),
+    sqlc.narg('rerun_of_task_id'),
+    sqlc.narg('trigger_evidence_kind'),
+    sqlc.narg('trigger_evidence_ref_id')
 )
 RETURNING *;
 
@@ -151,8 +162,19 @@ RETURNING *;
 -- Quick-create tasks have no issue / chat / autopilot link; the entire job
 -- description (prompt, requester, workspace) lives in context JSONB. The
 -- daemon detects this variant via context.type == "quick_create".
-INSERT INTO agent_task_queue (agent_id, runtime_id, issue_id, status, priority, context, requesting_user_id)
-VALUES ($1, $2, NULL, 'queued', $3, $4, $5)
+INSERT INTO agent_task_queue (
+    agent_id, runtime_id, issue_id, status, priority, context, requesting_user_id,
+    originator_user_id, accountable_user_id, originator_source,
+    trigger_evidence_kind, trigger_evidence_ref_id
+)
+VALUES (
+    $1, $2, NULL, 'queued', $3, $4, $5,
+    sqlc.narg('originator_user_id'),
+    sqlc.narg('accountable_user_id'),
+    sqlc.narg('originator_source'),
+    sqlc.narg('trigger_evidence_kind'),
+    sqlc.narg('trigger_evidence_ref_id')
+)
 RETURNING *;
 
 -- name: LinkTaskToIssue :exec
@@ -181,7 +203,9 @@ INSERT INTO agent_task_queue (
     status, priority, trigger_comment_id, trigger_summary, context,
     session_id, work_dir,
     attempt, max_attempts, parent_task_id, force_fresh_session, is_leader_task,
-    requesting_user_id
+    requesting_user_id, originator_user_id, accountable_user_id,
+    originator_source, delegated_from_task_id, rule_version_id,
+    retry_of_task_id, trigger_evidence_kind, trigger_evidence_ref_id
 )
 SELECT
     p.agent_id, p.runtime_id, p.issue_id, p.chat_session_id, p.autopilot_run_id,
@@ -191,7 +215,9 @@ SELECT
     p.attempt + 1, p.max_attempts, p.id,
     p.failure_reason IS NOT DISTINCT FROM 'codex_semantic_inactivity',
     p.is_leader_task,
-    p.requesting_user_id
+    p.requesting_user_id, p.originator_user_id, p.accountable_user_id,
+    p.originator_source, p.delegated_from_task_id, p.rule_version_id,
+    p.id, p.trigger_evidence_kind, p.trigger_evidence_ref_id
 FROM agent_task_queue p
 WHERE p.id = $1
 RETURNING *;
@@ -228,15 +254,13 @@ SET status = 'cancelled', completed_at = now()
 WHERE agent_id = $1 AND status IN ('queued', 'dispatched', 'running', 'waiting_local_directory')
 RETURNING *;
 
--- name: CancelAgentTasksByTriggerComment :many
--- Cancels active tasks whose trigger is the given comment. Called when a
--- comment is deleted so the agent does not run with the now-deleted content
--- already embedded in its prompt. Must run BEFORE the comment row is deleted
--- because the FK ON DELETE SET NULL would otherwise nullify trigger_comment_id
--- and we'd lose the ability to find the affected tasks.
+-- name: CancelAgentTasksByTriggerComments :many
+-- Cancels active tasks triggered by any comment in a logically deleted reply
+-- subtree. The comment rows and trigger pointers remain available for audit.
 UPDATE agent_task_queue
 SET status = 'cancelled', completed_at = now()
-WHERE trigger_comment_id = $1 AND status IN ('queued', 'dispatched', 'running', 'waiting_local_directory')
+WHERE trigger_comment_id = ANY(@comment_ids::uuid[])
+  AND status IN ('queued', 'dispatched', 'running', 'waiting_local_directory')
 RETURNING *;
 
 -- name: CancelAgentTasksByChatSession :many
@@ -559,6 +583,38 @@ WHERE issue_id = @issue_id
   AND agent_id = @agent_id
   AND status IN ('queued', 'dispatched')
   AND trigger_comment_id IS DISTINCT FROM @exclude_trigger_comment_id::uuid;
+
+-- name: MergeCommentIntoPendingTask :one
+UPDATE agent_task_queue
+SET coalesced_comment_ids = (
+        SELECT COALESCE(array_agg(DISTINCT e), '{}')
+        FROM unnest(array_append(coalesced_comment_ids, trigger_comment_id)) AS e
+        WHERE e IS NOT NULL AND e <> @new_trigger_comment_id::uuid
+    ),
+    trigger_comment_id = @new_trigger_comment_id::uuid,
+    trigger_summary = COALESCE(sqlc.narg('new_trigger_summary'), trigger_summary),
+    originator_user_id = sqlc.narg('new_originator_user_id')::uuid,
+    accountable_user_id = sqlc.narg('new_accountable_user_id')::uuid,
+    originator_source = sqlc.narg('new_originator_source'),
+    delegated_from_task_id = sqlc.narg('new_delegated_from_task_id')::uuid,
+    rule_version_id = sqlc.narg('new_rule_version_id')::uuid,
+    trigger_evidence_kind = sqlc.narg('new_trigger_evidence_kind'),
+    trigger_evidence_ref_id = sqlc.narg('new_trigger_evidence_ref_id')::uuid
+WHERE id = (
+    SELECT t.id FROM agent_task_queue t
+    WHERE t.issue_id = @issue_id
+      AND t.agent_id = @agent_id
+      AND t.status = 'queued'
+    ORDER BY t.created_at DESC
+    LIMIT 1
+)
+RETURNING id, coalesced_comment_ids;
+
+-- name: HasActiveTaskForIssueAndAgent :one
+SELECT count(*) > 0 AS has_active FROM agent_task_queue
+WHERE issue_id = $1
+  AND agent_id = $2
+  AND status IN ('queued', 'dispatched', 'running', 'waiting_local_directory');
 
 -- name: GetLatestTaskIsLeaderForIssueAndAgent :one
 -- Returns the is_leader_task flag of the agent's most recent task on this

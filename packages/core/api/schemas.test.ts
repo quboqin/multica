@@ -6,6 +6,7 @@ import {
   DashboardAgentRunTimeListSchema,
   DashboardUsageByAgentListSchema,
   DashboardUsageDailyListSchema,
+  DashboardUsageByUserDailyListSchema,
   DuplicateIssueErrorBodySchema,
   EMPTY_USER,
   ListCredentialProfilesResponseSchema,
@@ -464,6 +465,14 @@ describe("dashboard + runtime usage schema drift", () => {
       { model: "claude-opus-4-7", input_tokens: 7 },
     ]);
     expect(parsed[0]?.agent_id).toBe("");
+  });
+
+  it("coerces missing user daily fields for attributed usage charts", () => {
+    const parsed = DashboardUsageByUserDailyListSchema.parse([
+      { user_id: "u-1", model: "claude-opus-4-7", input_tokens: 7 },
+    ]);
+    expect(parsed[0]?.date).toBe("");
+    expect(parsed[0]?.output_tokens).toBe(0);
   });
 
   it("coerces missing fields on every runtime usage schema", () => {

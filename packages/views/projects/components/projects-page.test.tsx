@@ -34,6 +34,9 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("@tanstack/react-query", () => ({
+  queryOptions: <TOptions extends { queryKey?: readonly unknown[] }>(
+    options: TOptions,
+  ) => options,
   useQuery: (options: { queryKey?: readonly unknown[] }) => {
     const key = options.queryKey?.[0];
     if (key === "projects") {
@@ -54,7 +57,7 @@ vi.mock("@tanstack/react-query", () => ({
 
 vi.mock("@multica/core/projects", () => ({
   projectListOptions: () => ({ queryKey: ["projects"] }),
-  useUpdateProject: () => ({ mutate: mocks.updateProject }),
+  useUpdateProject: () => ({ mutate: mocks.updateProject, isPending: false }),
   useDeleteProject: () => ({ mutate: mocks.deleteProject }),
   useProjectViewStore: (selector: (state: unknown) => unknown) =>
     selector(mocks.projectViewState),
@@ -66,11 +69,18 @@ vi.mock("@multica/core/pins", () => ({
   useDeletePin: () => ({ mutate: mocks.deletePin }),
 }));
 
+vi.mock("../../favorites/components/favorite-item-action", () => ({
+  FavoriteItemAction: ({ itemLabel }: { itemLabel: string }) => (
+    <button type="button">Favorite {itemLabel}</button>
+  ),
+}));
+
 vi.mock("@multica/core/hooks", () => ({
   useWorkspaceId: () => "workspace-1",
 }));
 
 vi.mock("@multica/core/paths", () => ({
+  useWorkspaceSlug: () => "test-workspace",
   useWorkspacePaths: () => ({
     projectDetail: (id: string) => `/test-workspace/projects/${id}`,
     memberDetail: (id: string) => `/test-workspace/members/${id}`,
@@ -187,6 +197,8 @@ const PROJECT: Project = {
   lead_type: null,
   lead_id: null,
   milestone_id: null,
+  start_date: null,
+  due_date: null,
   created_at: "2026-06-01T00:00:00Z",
   updated_at: "2026-06-01T00:00:00Z",
   issue_count: 3,
@@ -223,6 +235,25 @@ function projectRow() {
   return row as HTMLElement;
 }
 
+function projectCard() {
+  const card = screen
+    .getByRole("link", { name: PROJECT.title })
+    .closest('[class~="group/card"]');
+  if (!card) throw new Error("project card not found");
+  return card as HTMLElement;
+}
+
+function dateInput(label: string) {
+  const input = screen
+    .getAllByLabelText(label)
+    .find(
+      (element): element is HTMLInputElement =>
+        element instanceof HTMLInputElement && element.type === "date",
+    );
+  if (!input) throw new Error(`${label} date input not found`);
+  return input;
+}
+
 beforeEach(() => {
   mocks.projects = [PROJECT];
   mocks.members = [
@@ -230,7 +261,15 @@ beforeEach(() => {
   ];
   mocks.agents = [];
   mocks.pins = [];
-  mocks.updateProject.mockClear();
+  mocks.updateProject.mockReset();
+  mocks.updateProject.mockImplementation(
+    (
+      vars: { id: string } & Partial<Project>,
+      options?: { onSuccess?: (project: Project) => void },
+    ) => {
+      options?.onSuccess?.({ ...PROJECT, ...vars });
+    },
+  );
   mocks.deleteProject.mockClear();
   mocks.createPin.mockClear();
   mocks.deletePin.mockClear();
@@ -243,28 +282,56 @@ beforeEach(() => {
 });
 
 describe("ProjectsPage compact row navigation", () => {
-  it("renders the project name as text, not a title link", () => {
+  it("renders the project name as the title link", () => {
     renderProjects();
 
     const row = projectRow();
-    expect(within(row).getByText(PROJECT.title).tagName).toBe("SPAN");
     expect(
-      within(row).queryByRole("link", { name: PROJECT.title }),
-    ).not.toBeInTheDocument();
+      within(row).getByRole("link", { name: PROJECT.title }),
+    ).toHaveAttribute("href", "/test-workspace/projects/project-1");
   });
 
-  it("navigates from the row surface", async () => {
+  it("navigates from the title link", async () => {
     const user = userEvent.setup();
     const push = vi.fn();
     renderProjects(makeAdapter({ push }));
 
-    await user.click(projectRow());
+    await user.click(within(projectRow()).getByRole("link", { name: PROJECT.title }));
 
     expect(push).toHaveBeenCalledWith("/test-workspace/projects/project-1");
     expect(push).toHaveBeenCalledTimes(1);
+    expect(screen.queryByLabelText("Project title")).not.toBeInTheDocument();
   });
 
-  it("does not navigate when inline controls are clicked", async () => {
+  it("opens the project preview from the title cell surface outside the link", async () => {
+    const user = userEvent.setup();
+    const push = vi.fn();
+    renderProjects(makeAdapter({ push }));
+    const row = projectRow();
+    const titleSurface = within(row).getByRole("link", { name: PROJECT.title })
+      .parentElement;
+
+    if (!titleSurface) throw new Error("project title surface not found");
+
+    await user.click(titleSurface);
+
+    expect(screen.getByLabelText("Project title")).toHaveValue(PROJECT.title);
+    expect(push).not.toHaveBeenCalled();
+  });
+
+  it("opens the project preview from a kanban card surface outside controls", async () => {
+    const user = userEvent.setup();
+    const push = vi.fn();
+    mocks.projectViewState.viewMode = "comfortable";
+    renderProjects(makeAdapter({ push }));
+
+    await user.click(projectCard());
+
+    expect(screen.getByLabelText("Project title")).toHaveValue(PROJECT.title);
+    expect(push).not.toHaveBeenCalled();
+  });
+
+  it("does not open the preview or navigate when inline controls are clicked", async () => {
     const user = userEvent.setup();
     const push = vi.fn();
     renderProjects(makeAdapter({ push }));
@@ -273,53 +340,50 @@ describe("ProjectsPage compact row navigation", () => {
     await user.click(within(row).getByRole("button", { pressed: false }));
     await user.click(within(row).getByRole("button", { name: "Project actions" }));
     await user.click(within(row).getAllByRole("button", { name: "In Progress" })[0]!);
-    await user.click(within(row).getAllByRole("button", { name: "High" })[0]!);
     await user.click(within(row).getByRole("button", { name: "—" }));
 
     expect(push).not.toHaveBeenCalled();
+    expect(screen.queryByLabelText("Project title")).not.toBeInTheDocument();
   });
 
-  it("uses the rowLink modifier and middle-click paths when openInNewTab is available", () => {
-    const push = vi.fn();
-    const openInNewTab = vi.fn();
-    renderProjects(makeAdapter({ push, openInNewTab }));
+  it("saves edits from the project preview", async () => {
+    const user = userEvent.setup();
+    renderProjects();
     const row = projectRow();
+    const titleSurface = within(row).getByRole("link", { name: PROJECT.title })
+      .parentElement;
 
-    fireEvent.click(row, { metaKey: true });
-    fireEvent.click(row, { ctrlKey: true });
-    const middleClick = new MouseEvent("auxclick", {
-      bubbles: true,
-      button: 1,
-      cancelable: true,
+    if (!titleSurface) throw new Error("project title surface not found");
+
+    await user.click(titleSurface);
+    await user.clear(screen.getByLabelText("Project title"));
+    await user.type(screen.getByLabelText("Project title"), "Updated Plan");
+    await user.type(screen.getByLabelText("Description"), "Updated description");
+    fireEvent.change(dateInput("Start"), {
+      target: { value: "2026-07-28" },
     });
-    row.dispatchEvent(middleClick);
-
-    expect(middleClick.defaultPrevented).toBe(true);
-    expect(openInNewTab).toHaveBeenCalledTimes(3);
-    expect(openInNewTab).toHaveBeenNthCalledWith(1, "/test-workspace/projects/project-1");
-    expect(openInNewTab).toHaveBeenNthCalledWith(2, "/test-workspace/projects/project-1");
-    expect(openInNewTab).toHaveBeenNthCalledWith(3, "/test-workspace/projects/project-1");
-    expect(push).not.toHaveBeenCalled();
-  });
-
-  it("has a single rowLink path for modifier and middle clicks without openInNewTab", () => {
-    const push = vi.fn();
-    renderProjects(makeAdapter({ push }));
-    const row = projectRow();
-
-    fireEvent.click(row, { metaKey: true });
-    fireEvent.click(row, { ctrlKey: true });
-    const middleClick = new MouseEvent("auxclick", {
-      bubbles: true,
-      button: 1,
-      cancelable: true,
+    fireEvent.change(dateInput("Due"), {
+      target: { value: "2026-08-01" },
     });
-    row.dispatchEvent(middleClick);
+    await user.click(screen.getByRole("button", { name: "Save" }));
 
-    expect(middleClick.defaultPrevented).toBe(true);
-    expect(push).toHaveBeenCalledTimes(3);
-    expect(push).toHaveBeenNthCalledWith(1, "/test-workspace/projects/project-1");
-    expect(push).toHaveBeenNthCalledWith(2, "/test-workspace/projects/project-1");
-    expect(push).toHaveBeenNthCalledWith(3, "/test-workspace/projects/project-1");
+    expect(mocks.updateProject).toHaveBeenLastCalledWith(
+      {
+        id: PROJECT.id,
+        title: "Updated Plan",
+        description: "Updated description",
+        status: PROJECT.status,
+        priority: PROJECT.priority,
+        lead_type: null,
+        lead_id: null,
+        milestone_id: null,
+        start_date: "2026-07-28",
+        due_date: "2026-08-01",
+      },
+      expect.objectContaining({
+        onSuccess: expect.any(Function),
+        onError: expect.any(Function),
+      }),
+    );
   });
 });

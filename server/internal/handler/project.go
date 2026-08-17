@@ -13,6 +13,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/logger"
+	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
@@ -28,6 +29,8 @@ type ProjectResponse struct {
 	LeadType    *string          `json:"lead_type"`
 	LeadID      *string          `json:"lead_id"`
 	MilestoneID *string          `json:"milestone_id"`
+	StartDate   *string          `json:"start_date"`
+	DueDate     *string          `json:"due_date"`
 	CreatedAt   string           `json:"created_at"`
 	UpdatedAt   string           `json:"updated_at"`
 	IssueCount  int64            `json:"issue_count"`
@@ -52,6 +55,8 @@ func projectToResponse(p db.Project) ProjectResponse {
 		LeadType:    textToPtr(p.LeadType),
 		LeadID:      uuidToPtr(p.LeadID),
 		MilestoneID: uuidToPtr(p.MilestoneID),
+		StartDate:   dateToPtr(p.StartDate),
+		DueDate:     dateToPtr(p.DueDate),
 		CreatedAt:   timestampToString(p.CreatedAt),
 		UpdatedAt:   timestampToString(p.UpdatedAt),
 	}
@@ -110,6 +115,8 @@ type CreateProjectRequest struct {
 	LeadType    *string                               `json:"lead_type"`
 	LeadID      *string                               `json:"lead_id"`
 	MilestoneID *string                               `json:"milestone_id"`
+	StartDate   *string                               `json:"start_date"`
+	DueDate     *string                               `json:"due_date"`
 	Resources   []CreateProjectResourceRequestPayload `json:"resources,omitempty"`
 }
 
@@ -132,6 +139,8 @@ type UpdateProjectRequest struct {
 	LeadType    *string `json:"lead_type"`
 	LeadID      *string `json:"lead_id"`
 	MilestoneID *string `json:"milestone_id"`
+	StartDate   *string `json:"start_date"`
+	DueDate     *string `json:"due_date"`
 }
 
 func (h *Handler) ListProjects(w http.ResponseWriter, r *http.Request) {
@@ -321,6 +330,24 @@ func (h *Handler) CreateProject(w http.ResponseWriter, r *http.Request) {
 		}
 		milestoneID = id
 	}
+	var startDate pgtype.Date
+	if req.StartDate != nil && *req.StartDate != "" {
+		d, err := util.ParseCalendarDate(*req.StartDate)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "invalid start_date format, expected YYYY-MM-DD")
+			return
+		}
+		startDate = d
+	}
+	var dueDate pgtype.Date
+	if req.DueDate != nil && *req.DueDate != "" {
+		d, err := util.ParseCalendarDate(*req.DueDate)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "invalid due_date format, expected YYYY-MM-DD")
+			return
+		}
+		dueDate = d
+	}
 	wsUUID, ok := parseUUIDOrBadRequest(w, workspaceID, "workspace_id")
 	if !ok {
 		return
@@ -372,6 +399,8 @@ func (h *Handler) CreateProject(w http.ResponseWriter, r *http.Request) {
 		LeadID:      leadID,
 		Priority:    priority,
 		MilestoneID: milestoneID,
+		StartDate:   startDate,
+		DueDate:     dueDate,
 	}
 
 	// Without resources, keep the simple non-tx path.
@@ -504,6 +533,8 @@ func (h *Handler) UpdateProject(w http.ResponseWriter, r *http.Request) {
 		LeadType:    prevProject.LeadType,
 		LeadID:      prevProject.LeadID,
 		MilestoneID: prevProject.MilestoneID,
+		StartDate:   prevProject.StartDate,
+		DueDate:     prevProject.DueDate,
 	}
 	if req.Title != nil {
 		params.Title = pgtype.Text{String: *req.Title, Valid: true}
@@ -561,6 +592,30 @@ func (h *Handler) UpdateProject(w http.ResponseWriter, r *http.Request) {
 			params.MilestoneID = milestoneUUID
 		} else {
 			params.MilestoneID = pgtype.UUID{Valid: false}
+		}
+	}
+	if _, ok := rawFields["start_date"]; ok {
+		if req.StartDate != nil && *req.StartDate != "" {
+			d, err := util.ParseCalendarDate(*req.StartDate)
+			if err != nil {
+				writeError(w, http.StatusBadRequest, "invalid start_date format, expected YYYY-MM-DD")
+				return
+			}
+			params.StartDate = d
+		} else {
+			params.StartDate = pgtype.Date{Valid: false}
+		}
+	}
+	if _, ok := rawFields["due_date"]; ok {
+		if req.DueDate != nil && *req.DueDate != "" {
+			d, err := util.ParseCalendarDate(*req.DueDate)
+			if err != nil {
+				writeError(w, http.StatusBadRequest, "invalid due_date format, expected YYYY-MM-DD")
+				return
+			}
+			params.DueDate = d
+		} else {
+			params.DueDate = pgtype.Date{Valid: false}
 		}
 	}
 	project, err := h.Queries.UpdateProject(r.Context(), params)

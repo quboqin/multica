@@ -51,6 +51,8 @@ export interface AgentListFilters {
   owners: string[];
   /** Runtime-native model identifiers (e.g. claude / codex / gpt-…). */
   models: string[];
+  /** Label ids attached to agents. */
+  labels: string[];
 }
 
 export const EMPTY_AGENT_FILTERS: AgentListFilters = {
@@ -58,6 +60,7 @@ export const EMPTY_AGENT_FILTERS: AgentListFilters = {
   runtimes: [],
   owners: [],
   models: [],
+  labels: [],
 };
 
 // User-hideable columns. Name and the structural columns (checkbox, kebab)
@@ -69,6 +72,7 @@ export type AgentColumnKey =
   | "lastActive"
   | "runs"
   | "model"
+  | "tags"
   | "created";
 
 /** Model and created are opt-in: hidden until the user enables them. Owner

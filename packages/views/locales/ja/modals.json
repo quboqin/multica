@@ -109,6 +109,8 @@
     "repos_add": "追加",
     "repos_selected": "選択済み",
     "no_plan": "プランなし",
+    "start_date": "開始",
+    "due_date": "期限",
     "source_pill_local": "ローカルディレクトリ",
     "source_tab_repos": "GitHub リポジトリ",
     "source_tab_local": "ローカルディレクトリ",

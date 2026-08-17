@@ -102,9 +102,16 @@ func (q *Queries) GetMaxPinnedItemPosition(ctx context.Context, arg GetMaxPinned
 }
 
 const listPinnedItems = `-- name: ListPinnedItems :many
-SELECT id, workspace_id, user_id, item_type, item_id, position, created_at FROM pinned_item
-WHERE workspace_id = $1 AND user_id = $2
-ORDER BY position ASC, created_at ASC
+SELECT p.id, p.workspace_id, p.user_id, p.item_type, p.item_id, p.position, p.created_at FROM pinned_item p
+WHERE p.workspace_id = $1 AND p.user_id = $2
+  AND (
+    p.item_type <> 'issue'
+    OR EXISTS (
+      SELECT 1 FROM issue i
+      WHERE i.id = p.item_id AND i.is_active = TRUE
+    )
+  )
+ORDER BY p.position ASC, p.created_at ASC
 `
 
 type ListPinnedItemsParams struct {

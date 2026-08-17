@@ -14,6 +14,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/analytics"
+	"github.com/multica-ai/multica/server/internal/attribution"
 	"github.com/multica-ai/multica/server/internal/events"
 	"github.com/multica-ai/multica/server/internal/mention"
 	obsmetrics "github.com/multica-ai/multica/server/internal/metrics"
@@ -88,6 +89,8 @@ const (
 	claimResponseRecoveryWindow = 90 * time.Second
 )
 
+var ErrAttributionFailClosed = errors.New("attribution: no precise accountable human and enqueue refused (fail-closed policy, policy read failed, or no agent owner)")
+
 // buildCommentTriggerSummary fetches the comment content and truncates
 // it for storage on the task row. Returns an invalid pgtype.Text when
 // the comment is missing (deleted / wrong workspace / etc) so the column
@@ -105,6 +108,97 @@ func (s *TaskService) buildCommentTriggerSummary(ctx context.Context, commentID 
 		return pgtype.Text{}
 	}
 	return pgtype.Text{String: summary, Valid: true}
+}
+
+func (s *TaskService) attributionFromTriggerComment(ctx context.Context, workspaceID, commentID pgtype.UUID, agentAuthoredSource attribution.Source) attribution.Result {
+	if s == nil || s.Queries == nil || !commentID.Valid {
+		return attribution.Result{Source: attribution.SourceUnattributed}
+	}
+	comment, err := s.Queries.GetCommentInWorkspace(ctx, db.GetCommentInWorkspaceParams{
+		ID:          commentID,
+		WorkspaceID: workspaceID,
+	})
+	if err != nil {
+		return attribution.Result{Source: attribution.SourceUnattributed}
+	}
+	facts := attribution.CommentFacts{
+		CommentID:  comment.ID,
+		AuthorType: comment.AuthorType,
+		AuthorID:   comment.AuthorID,
+	}
+	if comment.AuthorType == "agent" && comment.SourceTaskID.Valid {
+		facts.SourceTaskID = comment.SourceTaskID
+		if parent, err := s.Queries.GetAgentTask(ctx, comment.SourceTaskID); err == nil {
+			facts.ParentOriginator = parent.OriginatorUserID
+			facts.ParentAccountable = parent.AccountableUserID
+		}
+	}
+	return attribution.ClassifyComment(facts, agentAuthoredSource)
+}
+
+func (s *TaskService) attributionForIssueTask(ctx context.Context, issue db.Issue, triggerCommentID pgtype.UUID, agentAuthoredSource attribution.Source, actorUserID pgtype.UUID) attribution.Result {
+	if triggerCommentID.Valid {
+		return s.attributionFromTriggerComment(ctx, issue.WorkspaceID, triggerCommentID, agentAuthoredSource)
+	}
+	facts := attribution.DirectFacts{
+		IssueID:     issue.ID,
+		CreatorType: issue.CreatorType,
+		CreatorID:   issue.CreatorID,
+		ActorUserID: actorUserID,
+	}
+	if !facts.ActorUserID.Valid && !(issue.CreatorType == "member" && issue.CreatorID.Valid) &&
+		s != nil && s.Queries != nil && issue.OriginType.Valid && issue.OriginID.Valid &&
+		(issue.OriginType.String == "quick_create" || issue.OriginType.String == "agent_create") {
+		facts.OriginType = issue.OriginType.String
+		facts.OriginTaskID = issue.OriginID
+		if task, err := s.Queries.GetAgentTask(ctx, issue.OriginID); err == nil {
+			facts.OriginOriginator = task.OriginatorUserID
+			facts.OriginAccountable = task.AccountableUserID
+		}
+	}
+	return attribution.ClassifyDirect(facts)
+}
+
+func (s *TaskService) AttributionForMergedComment(ctx context.Context, workspaceID, commentID pgtype.UUID, isMention bool, agent db.Agent) (attribution.Result, error) {
+	agentAuthoredSource := attribution.SourceCommentSource
+	if isMention {
+		agentAuthoredSource = attribution.SourceDelegation
+	}
+	attr := s.attributionFromTriggerComment(ctx, workspaceID, commentID, agentAuthoredSource)
+	return s.applyAttributionFallback(ctx, attr, agent)
+}
+
+func (s *TaskService) BuildCommentTriggerSummary(ctx context.Context, commentID pgtype.UUID) pgtype.Text {
+	return s.buildCommentTriggerSummary(ctx, commentID)
+}
+
+func (s *TaskService) applyAttributionFallback(ctx context.Context, attr attribution.Result, agent db.Agent) (attribution.Result, error) {
+	if attr.Source != attribution.SourceUnattributed {
+		return attr, nil
+	}
+	if s == nil || s.Queries == nil {
+		return attr, fmt.Errorf("%w: workspace policy unavailable", ErrAttributionFailClosed)
+	}
+	failClosed, err := s.Queries.GetWorkspaceAttributionFailClosed(ctx, agent.WorkspaceID)
+	if err != nil {
+		return attr, fmt.Errorf("%w: policy read failed: %v", ErrAttributionFailClosed, err)
+	}
+	if failClosed {
+		return attr, ErrAttributionFailClosed
+	}
+	fallback := attribution.OwnerFallback(attr, agent.OwnerID)
+	if fallback.Source == attribution.SourceUnattributed {
+		return attr, fmt.Errorf("%w: no agent owner to attribute", ErrAttributionFailClosed)
+	}
+	return fallback, nil
+}
+
+func attributionText(src attribution.Source) pgtype.Text {
+	return pgtype.Text{String: src.String(), Valid: true}
+}
+
+func evidenceText(kind attribution.EvidenceKind) pgtype.Text {
+	return pgtype.Text{String: string(kind), Valid: kind != ""}
 }
 
 func NewTaskService(q *db.Queries, tx TxStarter, hub *realtime.Hub, bus *events.Bus, wakeups ...TaskWakeupNotifier) *TaskService {
@@ -439,7 +533,7 @@ func (s *TaskService) EnqueueTaskForIssueByUser(ctx context.Context, issue db.Is
 	if len(triggerCommentID) > 0 {
 		commentID = triggerCommentID[0]
 	}
-	return s.enqueueIssueTask(ctx, issue, commentID, false, requestingUserID)
+	return s.enqueueIssueTask(ctx, issue, commentID, false, requestingUserID, requestingUserID, attribution.Result{})
 }
 
 // enqueueIssueTask is the shared implementation behind EnqueueTaskForIssue
@@ -447,7 +541,7 @@ func (s *TaskService) EnqueueTaskForIssueByUser(ctx context.Context, issue db.Is
 // daemon claim handler skips the (agent_id, issue_id) resume lookup — the
 // user already judged the prior output bad, a fresh agent session is the
 // expected behavior.
-func (s *TaskService) enqueueIssueTask(ctx context.Context, issue db.Issue, triggerCommentID pgtype.UUID, forceFreshSession bool, requestingUserID pgtype.UUID) (db.AgentTaskQueue, error) {
+func (s *TaskService) enqueueIssueTask(ctx context.Context, issue db.Issue, triggerCommentID pgtype.UUID, forceFreshSession bool, requestingUserID pgtype.UUID, actorUserID pgtype.UUID, attrOverride attribution.Result) (db.AgentTaskQueue, error) {
 	if !issue.AssigneeID.Valid {
 		slog.Error("task enqueue failed", "issue_id", util.UUIDToString(issue.ID), "error", "issue has no assignee")
 		return db.AgentTaskQueue{}, fmt.Errorf("issue has no assignee")
@@ -467,15 +561,33 @@ func (s *TaskService) enqueueIssueTask(ctx context.Context, issue db.Issue, trig
 		return db.AgentTaskQueue{}, fmt.Errorf("agent has no runtime")
 	}
 
+	attr := attrOverride
+	if attr.Source == "" {
+		attr = s.attributionForIssueTask(ctx, issue, triggerCommentID, attribution.SourceCommentSource, actorUserID)
+	}
+	attr, err = s.applyAttributionFallback(ctx, attr, agent)
+	if err != nil {
+		slog.Error("task enqueue failed: attribution unresolved", "issue_id", util.UUIDToString(issue.ID), "error", err)
+		return db.AgentTaskQueue{}, err
+	}
+
 	task, err := s.Queries.CreateAgentTask(ctx, db.CreateAgentTaskParams{
-		AgentID:           issue.AssigneeID,
-		RuntimeID:         agent.RuntimeID,
-		IssueID:           issue.ID,
-		Priority:          priorityToInt(issue.Priority),
-		TriggerCommentID:  triggerCommentID,
-		TriggerSummary:    s.buildCommentTriggerSummary(ctx, triggerCommentID),
-		ForceFreshSession: pgtype.Bool{Bool: forceFreshSession, Valid: forceFreshSession},
-		RequestingUserID:  requestingUserID,
+		AgentID:              issue.AssigneeID,
+		RuntimeID:            agent.RuntimeID,
+		IssueID:              issue.ID,
+		Priority:             priorityToInt(issue.Priority),
+		TriggerCommentID:     triggerCommentID,
+		TriggerSummary:       s.buildCommentTriggerSummary(ctx, triggerCommentID),
+		ForceFreshSession:    pgtype.Bool{Bool: forceFreshSession, Valid: forceFreshSession},
+		RequestingUserID:     requestingUserID,
+		OriginatorUserID:     attr.UserID,
+		AccountableUserID:    attr.AccountableUserID,
+		OriginatorSource:     attributionText(attr.Source),
+		DelegatedFromTaskID:  attr.DelegatedFromTaskID,
+		RuleVersionID:        attr.RuleVersionID,
+		RerunOfTaskID:        attr.RerunOfTaskID,
+		TriggerEvidenceKind:  evidenceText(attr.EvidenceKind),
+		TriggerEvidenceRefID: attr.EvidenceRefID,
 	})
 	if err != nil {
 		slog.Error("task enqueue failed", "issue_id", util.UUIDToString(issue.ID), "error", err)
@@ -508,7 +620,7 @@ func (s *TaskService) EnqueueTaskForMention(ctx context.Context, issue db.Issue,
 }
 
 func (s *TaskService) EnqueueTaskForMentionByUser(ctx context.Context, issue db.Issue, agentID pgtype.UUID, triggerCommentID pgtype.UUID, requestingUserID pgtype.UUID) (db.AgentTaskQueue, error) {
-	return s.enqueueMentionTask(ctx, issue, agentID, triggerCommentID, false, false, requestingUserID)
+	return s.enqueueMentionTask(ctx, issue, agentID, triggerCommentID, false, false, requestingUserID, requestingUserID, attribution.Result{})
 }
 
 // EnqueueTaskForSquadLeader is the leader-role variant of EnqueueTaskForMention.
@@ -522,10 +634,10 @@ func (s *TaskService) EnqueueTaskForSquadLeader(ctx context.Context, issue db.Is
 }
 
 func (s *TaskService) EnqueueTaskForSquadLeaderByUser(ctx context.Context, issue db.Issue, leaderID pgtype.UUID, triggerCommentID pgtype.UUID, requestingUserID pgtype.UUID) (db.AgentTaskQueue, error) {
-	return s.enqueueMentionTask(ctx, issue, leaderID, triggerCommentID, true, false, requestingUserID)
+	return s.enqueueMentionTask(ctx, issue, leaderID, triggerCommentID, true, false, requestingUserID, requestingUserID, attribution.Result{})
 }
 
-func (s *TaskService) enqueueMentionTask(ctx context.Context, issue db.Issue, agentID pgtype.UUID, triggerCommentID pgtype.UUID, isLeader bool, forceFreshSession bool, requestingUserID pgtype.UUID) (db.AgentTaskQueue, error) {
+func (s *TaskService) enqueueMentionTask(ctx context.Context, issue db.Issue, agentID pgtype.UUID, triggerCommentID pgtype.UUID, isLeader bool, forceFreshSession bool, requestingUserID pgtype.UUID, actorUserID pgtype.UUID, attrOverride attribution.Result) (db.AgentTaskQueue, error) {
 	agent, err := s.Queries.GetAgent(ctx, agentID)
 	if err != nil {
 		slog.Error("mention task enqueue failed: agent not found", "issue_id", util.UUIDToString(issue.ID), "agent_id", util.UUIDToString(agentID), "error", err)
@@ -540,16 +652,34 @@ func (s *TaskService) enqueueMentionTask(ctx context.Context, issue db.Issue, ag
 		return db.AgentTaskQueue{}, fmt.Errorf("agent has no runtime")
 	}
 
+	attr := attrOverride
+	if attr.Source == "" {
+		attr = s.attributionForIssueTask(ctx, issue, triggerCommentID, attribution.SourceDelegation, actorUserID)
+	}
+	attr, err = s.applyAttributionFallback(ctx, attr, agent)
+	if err != nil {
+		slog.Error("mention task enqueue failed: attribution unresolved", "issue_id", util.UUIDToString(issue.ID), "agent_id", util.UUIDToString(agentID), "error", err)
+		return db.AgentTaskQueue{}, err
+	}
+
 	task, err := s.Queries.CreateAgentTask(ctx, db.CreateAgentTaskParams{
-		AgentID:           agentID,
-		RuntimeID:         agent.RuntimeID,
-		IssueID:           issue.ID,
-		Priority:          priorityToInt(issue.Priority),
-		TriggerCommentID:  triggerCommentID,
-		TriggerSummary:    s.buildCommentTriggerSummary(ctx, triggerCommentID),
-		IsLeaderTask:      pgtype.Bool{Bool: isLeader, Valid: isLeader},
-		ForceFreshSession: pgtype.Bool{Bool: forceFreshSession, Valid: forceFreshSession},
-		RequestingUserID:  requestingUserID,
+		AgentID:              agentID,
+		RuntimeID:            agent.RuntimeID,
+		IssueID:              issue.ID,
+		Priority:             priorityToInt(issue.Priority),
+		TriggerCommentID:     triggerCommentID,
+		TriggerSummary:       s.buildCommentTriggerSummary(ctx, triggerCommentID),
+		IsLeaderTask:         pgtype.Bool{Bool: isLeader, Valid: isLeader},
+		ForceFreshSession:    pgtype.Bool{Bool: forceFreshSession, Valid: forceFreshSession},
+		RequestingUserID:     requestingUserID,
+		OriginatorUserID:     attr.UserID,
+		AccountableUserID:    attr.AccountableUserID,
+		OriginatorSource:     attributionText(attr.Source),
+		DelegatedFromTaskID:  attr.DelegatedFromTaskID,
+		RuleVersionID:        attr.RuleVersionID,
+		RerunOfTaskID:        attr.RerunOfTaskID,
+		TriggerEvidenceKind:  evidenceText(attr.EvidenceKind),
+		TriggerEvidenceRefID: attr.EvidenceRefID,
 	})
 	if err != nil {
 		slog.Error("mention task enqueue failed", "issue_id", util.UUIDToString(issue.ID), "agent_id", util.UUIDToString(agentID), "error", err)
@@ -658,12 +788,23 @@ func (s *TaskService) EnqueueQuickCreateTask(ctx context.Context, workspaceID, r
 		return db.AgentTaskQueue{}, fmt.Errorf("marshal quick-create context: %w", err)
 	}
 
+	attr := attribution.DirectHumanRun(requesterID, "", pgtype.UUID{})
+	attr, err = s.applyAttributionFallback(ctx, attr, agent)
+	if err != nil {
+		return db.AgentTaskQueue{}, err
+	}
+
 	task, err := s.Queries.CreateQuickCreateTask(ctx, db.CreateQuickCreateTaskParams{
-		AgentID:          agentID,
-		RuntimeID:        agent.RuntimeID,
-		Priority:         priorityToInt("high"),
-		Context:          contextJSON,
-		RequestingUserID: requesterID,
+		AgentID:              agentID,
+		RuntimeID:            agent.RuntimeID,
+		Priority:             priorityToInt("high"),
+		Context:              contextJSON,
+		RequestingUserID:     requesterID,
+		OriginatorUserID:     attr.UserID,
+		AccountableUserID:    attr.AccountableUserID,
+		OriginatorSource:     attributionText(attr.Source),
+		TriggerEvidenceKind:  evidenceText(attr.EvidenceKind),
+		TriggerEvidenceRefID: attr.EvidenceRefID,
 	})
 	if err != nil {
 		return db.AgentTaskQueue{}, fmt.Errorf("create quick-create task: %w", err)
@@ -737,13 +878,25 @@ func (s *TaskService) EnqueueChatTask(ctx context.Context, chatSession db.ChatSe
 		return db.AgentTaskQueue{}, ErrChatTaskAgentNoRuntime
 	}
 
+	attr := attribution.DirectHumanRun(initiatorUserID, attribution.EvidenceChat, chatSession.ID)
+	attr, err = s.applyAttributionFallback(ctx, attr, agent)
+	if err != nil {
+		slog.Error("chat task enqueue failed: attribution unresolved", "chat_session_id", util.UUIDToString(chatSession.ID), "error", err)
+		return db.AgentTaskQueue{}, err
+	}
+
 	task, err := s.Queries.CreateChatTask(ctx, db.CreateChatTaskParams{
-		AgentID:          chatSession.AgentID,
-		RuntimeID:        agent.RuntimeID,
-		Priority:         2, // medium priority for chat
-		ChatSessionID:    chatSession.ID,
-		InitiatorUserID:  initiatorUserID,
-		RequestingUserID: chatSession.CreatorID,
+		AgentID:              chatSession.AgentID,
+		RuntimeID:            agent.RuntimeID,
+		Priority:             2, // medium priority for chat
+		ChatSessionID:        chatSession.ID,
+		InitiatorUserID:      initiatorUserID,
+		RequestingUserID:     chatSession.CreatorID,
+		OriginatorUserID:     attr.UserID,
+		AccountableUserID:    attr.AccountableUserID,
+		OriginatorSource:     attributionText(attr.Source),
+		TriggerEvidenceKind:  evidenceText(attr.EvidenceKind),
+		TriggerEvidenceRefID: attr.EvidenceRefID,
 	})
 	if err != nil {
 		slog.Error("chat task enqueue failed", "chat_session_id", util.UUIDToString(chatSession.ID), "error", err)
@@ -801,14 +954,11 @@ func (s *TaskService) CancelTasksForAgent(ctx context.Context, agentID pgtype.UU
 	return cancelled, nil
 }
 
-// CancelTasksByTriggerComment cancels active tasks whose trigger is the given
-// comment. Called from DeleteComment so an agent does not run with the
-// now-deleted content already embedded in its prompt. Must be invoked BEFORE
-// the comment row is deleted because the FK ON DELETE SET NULL would
-// otherwise nullify trigger_comment_id and we'd lose the ability to find
-// the affected tasks.
+// CancelTasksByTriggerComment cancels active tasks triggered by one comment.
+// Comment edits use this path so an agent cannot continue with stale content.
+// Subtree deletion calls the plural query directly inside its delete tx.
 func (s *TaskService) CancelTasksByTriggerComment(ctx context.Context, commentID pgtype.UUID) error {
-	cancelled, err := s.Queries.CancelAgentTasksByTriggerComment(ctx, commentID)
+	cancelled, err := s.Queries.CancelAgentTasksByTriggerComments(ctx, []pgtype.UUID{commentID})
 	if err != nil {
 		return err
 	}
@@ -1684,7 +1834,7 @@ func (s *TaskService) RerunIssue(ctx context.Context, issueID pgtype.UUID, sourc
 		s.broadcastTaskEvent(ctx, protocol.EventTaskCancelled, t)
 	}
 
-	task, err := s.enqueueRerunTask(ctx, issue, agentID, triggerCommentID, isLeader, requestingUserID)
+	task, err := s.enqueueRerunTask(ctx, issue, agentID, sourceTaskID, triggerCommentID, isLeader, requestingUserID)
 	if err != nil {
 		return nil, err
 	}
@@ -1705,12 +1855,17 @@ func (s *TaskService) RerunIssue(ctx context.Context, issueID pgtype.UUID, sourc
 // stays in sync; otherwise (squad member, prior assignee that has since been
 // reassigned, mention agent) we use the mention path with the same
 // force_fresh_session=true contract.
-func (s *TaskService) enqueueRerunTask(ctx context.Context, issue db.Issue, agentID pgtype.UUID, triggerCommentID pgtype.UUID, isLeader bool, requestingUserID pgtype.UUID) (db.AgentTaskQueue, error) {
+func (s *TaskService) enqueueRerunTask(ctx context.Context, issue db.Issue, agentID pgtype.UUID, sourceTaskID pgtype.UUID, triggerCommentID pgtype.UUID, isLeader bool, requestingUserID pgtype.UUID) (db.AgentTaskQueue, error) {
+	attr := attribution.DirectHumanRun(requestingUserID, attribution.EvidenceRerun, issue.ID)
+	if sourceTaskID.Valid {
+		attr.RerunOfTaskID = sourceTaskID
+		attr.EvidenceRefID = sourceTaskID
+	}
 	if issue.AssigneeType.String == "agent" && issue.AssigneeID.Valid &&
 		util.UUIDToString(issue.AssigneeID) == util.UUIDToString(agentID) {
-		return s.enqueueIssueTask(ctx, issue, triggerCommentID, true, requestingUserID)
+		return s.enqueueIssueTask(ctx, issue, triggerCommentID, true, requestingUserID, requestingUserID, attr)
 	}
-	return s.enqueueMentionTask(ctx, issue, agentID, triggerCommentID, isLeader, true, requestingUserID)
+	return s.enqueueMentionTask(ctx, issue, agentID, triggerCommentID, isLeader, true, requestingUserID, requestingUserID, attr)
 }
 
 // HandleFailedTasks runs the post-failure side effects for a batch of

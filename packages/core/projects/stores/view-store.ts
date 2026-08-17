@@ -12,7 +12,14 @@ import { defaultStorage } from "../../platform/storage";
 // lifecycle better expressed as a filter). Search stays session-local.
 export type ProjectViewMode = "compact" | "comfortable";
 
-export type ProjectSortField = "name" | "priority" | "status" | "progress" | "created";
+export type ProjectSortField =
+  | "name"
+  | "priority"
+  | "status"
+  | "progress"
+  | "due_date"
+  | "updated"
+  | "created";
 
 export type ProjectSortDirection = "asc" | "desc";
 
@@ -24,6 +31,8 @@ export const PROJECT_SORT_DEFAULT_DIRECTION: Record<
   priority: "desc",
   status: "asc",
   progress: "desc",
+  due_date: "asc",
+  updated: "desc",
   created: "desc",
 };
 
@@ -45,11 +54,21 @@ export const EMPTY_PROJECT_FILTERS: ProjectListFilters = {
 
 // Hideable table columns. Name + status are the always-visible core (status
 // is the project's defining lifecycle field), so they're not in this set.
-export type ProjectColumnKey = "priority" | "progress" | "lead" | "issues" | "created";
+export type ProjectColumnKey =
+  | "progress"
+  | "lead"
+  | "plan"
+  | "due_date"
+  | "updated"
+  | "issues"
+  | "created";
 
-/** Issues count is opt-in; the rest show by default (matching the prior
- *  compact table). */
-export const PROJECT_DEFAULT_HIDDEN_COLUMNS: ProjectColumnKey[] = ["issues"];
+/** Keep secondary bookkeeping opt-in; the day-to-day demand board defaults to
+ *  lifecycle, ownership, delivery plan, due date, and latest activity. */
+export const PROJECT_DEFAULT_HIDDEN_COLUMNS: ProjectColumnKey[] = [
+  "issues",
+  "created",
+];
 
 export interface ProjectViewState {
   viewMode: ProjectViewMode;
@@ -68,11 +87,44 @@ export interface ProjectViewState {
 
 const DEFAULTS = {
   viewMode: "compact" as ProjectViewMode,
-  sortField: "created" as ProjectSortField,
-  sortDirection: PROJECT_SORT_DEFAULT_DIRECTION.created,
+  sortField: "updated" as ProjectSortField,
+  sortDirection: PROJECT_SORT_DEFAULT_DIRECTION.updated,
   hiddenColumns: PROJECT_DEFAULT_HIDDEN_COLUMNS,
   filters: EMPTY_PROJECT_FILTERS,
 };
+
+const PROJECT_COLUMN_KEYS = new Set<ProjectColumnKey>([
+  "progress",
+  "lead",
+  "plan",
+  "due_date",
+  "updated",
+  "issues",
+  "created",
+]);
+
+const PROJECT_SORT_FIELDS = new Set<ProjectSortField>([
+  "name",
+  "priority",
+  "status",
+  "progress",
+  "due_date",
+  "updated",
+  "created",
+]);
+
+function normalizeHiddenColumns(value: unknown): ProjectColumnKey[] {
+  if (!Array.isArray(value)) return PROJECT_DEFAULT_HIDDEN_COLUMNS;
+  return value.filter((key): key is ProjectColumnKey =>
+    PROJECT_COLUMN_KEYS.has(key as ProjectColumnKey),
+  );
+}
+
+function normalizeSortField(value: unknown): ProjectSortField {
+  return PROJECT_SORT_FIELDS.has(value as ProjectSortField)
+    ? (value as ProjectSortField)
+    : DEFAULTS.sortField;
+}
 
 export const useProjectViewStore = create<ProjectViewState>()(
   persist(
@@ -133,6 +185,12 @@ export const useProjectViewStore = create<ProjectViewState>()(
         return {
           ...current,
           ...p,
+          sortField: normalizeSortField(p.sortField),
+          sortDirection:
+            p.sortDirection === "asc" || p.sortDirection === "desc"
+              ? p.sortDirection
+              : PROJECT_SORT_DEFAULT_DIRECTION[normalizeSortField(p.sortField)],
+          hiddenColumns: normalizeHiddenColumns(p.hiddenColumns),
           filters: { ...EMPTY_PROJECT_FILTERS, ...(p.filters ?? {}) },
         };
       },

@@ -25,6 +25,9 @@
     "status": "상태",
     "progress": "진행률",
     "lead": "리드",
+    "start_date": "Start",
+    "due_date": "Due",
+    "updated": "Updated",
     "created": "생성일",
     "issues": "이슈 수",
     "labels": "Labels",
@@ -79,6 +82,18 @@
     "toast_project_deleted": "프로젝트를 삭제했습니다",
     "toast_move_issue_failed": "이슈를 이동하지 못했습니다",
     "no_plan": "플랜 없음"
+  },
+  "preview": {
+    "open": "세부 정보 보기",
+    "description": "View project properties and description",
+    "no_description": "No description",
+    "resources": "Resources",
+    "edit": "편집",
+    "save": "저장",
+    "cancel": "취소",
+    "title_required": "프로젝트 제목이 필요합니다",
+    "toast_saved": "프로젝트를 업데이트했습니다",
+    "toast_failed": "프로젝트를 업데이트하지 못했습니다"
   },
   "resources": {
     "section_header": "리소스",

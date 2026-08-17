@@ -1,0 +1,1 @@
+DROP INDEX CONCURRENTLY IF EXISTS creative_material_issue_candidate_issue_idx;

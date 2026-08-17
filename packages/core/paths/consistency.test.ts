@@ -18,6 +18,8 @@ describe("paths.workspace() shape", () => {
       new Set([
         "root",
         "usage",
+        "usageMe",
+        "usageUsers",
         "issues",
         "plans",
         "plansCharts",
@@ -29,6 +31,7 @@ describe("paths.workspace() shape", () => {
         "squads",
         "inbox",
         "myIssues",
+        "favorites",
         "runtimes",
         "skills",
         "squads",
@@ -43,6 +46,8 @@ describe("paths.workspace() shape", () => {
     // and that their second URL segment matches the method name's kebab-case.
     const expectedSegments: Array<[string, string]> = [
       ["usage", "usage"],
+      ["usageMe", "usage/me"],
+      ["usageUsers", "usage/users"],
       ["issues", "issues"],
       ["plans", "plans"],
       ["plansCharts", "plans/charts"],
@@ -54,6 +59,7 @@ describe("paths.workspace() shape", () => {
       ["squads", "squads"],
       ["inbox", "inbox"],
       ["myIssues", "my-issues"],
+      ["favorites", "favorites"],
       ["runtimes", "runtimes"],
       ["skills", "skills"],
       ["squads", "squads"],

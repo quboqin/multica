@@ -70,6 +70,7 @@
     "runs": "Runs",
     "last_active": "Last active",
     "model": "Model",
+    "tags": "Tags",
     "created": "Created",
     "owner": "Owner"
   },
@@ -147,6 +148,8 @@
     "section_properties": "Properties",
     "section_details": "Details",
     "section_skills": "Skills",
+    "section_tags": "Tags",
+    "edit_tags_aria": "Edit tags",
     "section_integrations": "Integrations",
     "prop_runtime": "Runtime",
     "prop_model": "Model",
@@ -165,6 +168,7 @@
     "rename_required": "Name is required",
     "edit_description_title": "Edit description",
     "description_placeholder": "What does this agent do?",
+    "save_tags_failed_toast": "Failed to save tags",
     "save": "Save",
     "cancel": "Cancel"
   },
@@ -247,6 +251,7 @@
     "cancel": "Cancel",
     "create_failed_toast": "Failed to create agent",
     "skill_attach_failed_toast": "Agent created, but failed to attach skills: {{error}}",
+    "tag_attach_failed_toast": "Agent created, but failed to attach tags: {{error}}",
     "squad_join_failed_toast": "Agent \"{{name}}\" was created but couldn't join the squad: {{error}}. You can add it manually from Members.",
     "instructions": {
       "label": "Instructions",
@@ -266,6 +271,15 @@
       "list_empty_default": "No skills available.",
       "list_no_match": "No skills match.",
       "search_placeholder": "Search skills…"
+    },
+    "tags_section": {
+      "label": "Tags",
+      "search_placeholder": "Search or create tags",
+      "loading": "Loading tags...",
+      "empty": "No tags yet",
+      "selected": "Selected",
+      "create_action": "Create",
+      "create_failed_toast": "Failed to create tag"
     },
     "avatar": {
       "change_aria": "Change avatar",
@@ -326,6 +340,14 @@
       "clear_action": "Clear",
       "invalid_json": "Invalid JSON: {{error}}",
       "invalid_not_object": "MCP config must be a JSON object (e.g. {\"mcpServers\": …}).",
+      "workspace_refs_title": "Workspace MCP",
+      "workspace_refs_hint": "Reference an active workspace MCP connection and expose it to this agent alongside custom runtime MCP servers.",
+      "workspace_select_label": "Connection",
+      "workspace_none": "No workspace MCP",
+      "workspace_loading": "Loading connections...",
+      "workspace_empty": "No active workspace MCP connections",
+      "workspace_invalid_json_hint": "Fix the JSON before changing the workspace MCP reference.",
+      "workspace_selected_summary": "Runtime server {{serverName}} from {{capability}}",
       "saved_toast": "MCP config saved",
       "save_failed_toast": "Failed to save MCP config",
       "redacted_title": "Configured — hidden from your view",
@@ -495,7 +517,8 @@
     "direction_desc": "Descending",
     "section_columns": "Columns",
     "section_owner": "Owner",
-    "section_model": "Model"
+    "section_model": "Model",
+    "section_tags": "Tags"
   },
   "actions": {
     "selected_one": "{{count}} selected",

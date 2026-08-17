@@ -22,11 +22,11 @@ describe("resolveRemoteApiUrl", () => {
     ).toBe("http://localhost:19000");
   });
 
-  it("derives localhost backend URL from PORT when no API URL is set", () => {
-    expect(resolveRemoteApiUrl({ PORT: "19080" })).toBe("http://localhost:19080");
+  it("does not treat Next.js PORT as the backend port", () => {
+    expect(resolveRemoteApiUrl({ PORT: "3000" })).toBe("http://localhost:8080");
   });
 
-  it("supports explicit backend port aliases before PORT", () => {
+  it("supports explicit backend port aliases", () => {
     expect(resolveRemoteApiUrl({ BACKEND_PORT: "28080", PORT: "19080" })).toBe(
       "http://localhost:28080",
     );
@@ -71,7 +71,7 @@ describe("resolveRemoteApiUrl", () => {
         SERVER_PORT: "  ",
         PORT: "19080",
       }),
-    ).toBe("http://localhost:19080");
+    ).toBe("http://localhost:8080");
 
     expect(resolveRemoteApiUrl({ PORT: "  " })).toBe("http://localhost:8080");
   });

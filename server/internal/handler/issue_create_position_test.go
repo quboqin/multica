@@ -147,7 +147,7 @@ func TestAutopilotCreateIssuePositionBelowCurrentMinimum(t *testing.T) {
 
 	var minBefore float64
 	if err := testPool.QueryRow(ctx,
-		`SELECT MIN(position) FROM issue WHERE workspace_id = $1 AND status = 'todo'`,
+		`SELECT MIN(position) FROM issue WHERE workspace_id = $1 AND status = 'todo' AND is_active = TRUE`,
 		testWorkspaceID,
 	).Scan(&minBefore); err != nil {
 		t.Fatalf("load min position: %v", err)

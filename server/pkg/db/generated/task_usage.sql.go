@@ -301,6 +301,161 @@ func (q *Queries) ListDashboardUsageByAgent(ctx context.Context, arg ListDashboa
 	return items, nil
 }
 
+const listDashboardUsageByUser = `-- name: ListDashboardUsageByUser :many
+SELECT
+    atq.accountable_user_id AS user_id,
+    tu.model,
+    SUM(tu.input_tokens)::bigint       AS input_tokens,
+    SUM(tu.output_tokens)::bigint      AS output_tokens,
+    SUM(tu.cache_read_tokens)::bigint  AS cache_read_tokens,
+    SUM(tu.cache_write_tokens)::bigint AS cache_write_tokens,
+    COUNT(DISTINCT tu.task_id)::int    AS task_count
+FROM task_usage tu
+JOIN agent_task_queue atq ON atq.id = tu.task_id
+JOIN agent a ON a.id = atq.agent_id
+LEFT JOIN issue i ON i.id = atq.issue_id
+WHERE a.workspace_id = $1
+  AND atq.accountable_user_id IS NOT NULL
+  AND tu.created_at >= $2::timestamptz
+  AND ($3::uuid IS NULL OR i.project_id = $3)
+  AND ($4::uuid IS NULL OR atq.accountable_user_id = $4)
+GROUP BY atq.accountable_user_id, tu.model
+ORDER BY atq.accountable_user_id, tu.model
+`
+
+type ListDashboardUsageByUserParams struct {
+	WorkspaceID pgtype.UUID        `json:"workspace_id"`
+	Since       pgtype.Timestamptz `json:"since"`
+	ProjectID   pgtype.UUID        `json:"project_id"`
+	UserID      pgtype.UUID        `json:"user_id"`
+}
+
+type ListDashboardUsageByUserRow struct {
+	UserID           pgtype.UUID `json:"user_id"`
+	Model            string      `json:"model"`
+	InputTokens      int64       `json:"input_tokens"`
+	OutputTokens     int64       `json:"output_tokens"`
+	CacheReadTokens  int64       `json:"cache_read_tokens"`
+	CacheWriteTokens int64       `json:"cache_write_tokens"`
+	TaskCount        int32       `json:"task_count"`
+}
+
+// Per-(accountable_user_id, model) token aggregates from raw task usage.
+// User attribution currently lives on agent_task_queue, not task_usage_hourly,
+// so this intentionally reads the source table until a user-dimension rollup
+// exists. Rows without accountable_user_id are excluded from user statistics.
+func (q *Queries) ListDashboardUsageByUser(ctx context.Context, arg ListDashboardUsageByUserParams) ([]ListDashboardUsageByUserRow, error) {
+	rows, err := q.db.Query(ctx, listDashboardUsageByUser,
+		arg.WorkspaceID,
+		arg.Since,
+		arg.ProjectID,
+		arg.UserID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListDashboardUsageByUserRow{}
+	for rows.Next() {
+		var i ListDashboardUsageByUserRow
+		if err := rows.Scan(
+			&i.UserID,
+			&i.Model,
+			&i.InputTokens,
+			&i.OutputTokens,
+			&i.CacheReadTokens,
+			&i.CacheWriteTokens,
+			&i.TaskCount,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listDashboardUsageByUserDaily = `-- name: ListDashboardUsageByUserDaily :many
+SELECT
+    atq.accountable_user_id AS user_id,
+    DATE(tu.created_at AT TIME ZONE $2::text) AS date,
+    tu.model,
+    SUM(tu.input_tokens)::bigint       AS input_tokens,
+    SUM(tu.output_tokens)::bigint      AS output_tokens,
+    SUM(tu.cache_read_tokens)::bigint  AS cache_read_tokens,
+    SUM(tu.cache_write_tokens)::bigint AS cache_write_tokens,
+    COUNT(DISTINCT tu.task_id)::int    AS task_count
+FROM task_usage tu
+JOIN agent_task_queue atq ON atq.id = tu.task_id
+JOIN agent a ON a.id = atq.agent_id
+LEFT JOIN issue i ON i.id = atq.issue_id
+WHERE a.workspace_id = $1
+  AND atq.accountable_user_id IS NOT NULL
+  AND tu.created_at >= $3::timestamptz
+  AND ($4::uuid IS NULL OR i.project_id = $4)
+  AND ($5::uuid IS NULL OR atq.accountable_user_id = $5)
+GROUP BY atq.accountable_user_id, DATE(tu.created_at AT TIME ZONE $2::text), tu.model
+ORDER BY DATE(tu.created_at AT TIME ZONE $2::text) DESC, atq.accountable_user_id, tu.model
+`
+
+type ListDashboardUsageByUserDailyParams struct {
+	WorkspaceID pgtype.UUID        `json:"workspace_id"`
+	Tz          string             `json:"tz"`
+	Since       pgtype.Timestamptz `json:"since"`
+	ProjectID   pgtype.UUID        `json:"project_id"`
+	UserID      pgtype.UUID        `json:"user_id"`
+}
+
+type ListDashboardUsageByUserDailyRow struct {
+	UserID           pgtype.UUID `json:"user_id"`
+	Date             pgtype.Date `json:"date"`
+	Model            string      `json:"model"`
+	InputTokens      int64       `json:"input_tokens"`
+	OutputTokens     int64       `json:"output_tokens"`
+	CacheReadTokens  int64       `json:"cache_read_tokens"`
+	CacheWriteTokens int64       `json:"cache_write_tokens"`
+	TaskCount        int32       `json:"task_count"`
+}
+
+// Daily per-(accountable_user_id, date, model) token aggregates from raw task usage.
+// Used for user-attributed trend charts where the user dimension is required.
+func (q *Queries) ListDashboardUsageByUserDaily(ctx context.Context, arg ListDashboardUsageByUserDailyParams) ([]ListDashboardUsageByUserDailyRow, error) {
+	rows, err := q.db.Query(ctx, listDashboardUsageByUserDaily,
+		arg.WorkspaceID,
+		arg.Tz,
+		arg.Since,
+		arg.ProjectID,
+		arg.UserID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListDashboardUsageByUserDailyRow{}
+	for rows.Next() {
+		var i ListDashboardUsageByUserDailyRow
+		if err := rows.Scan(
+			&i.UserID,
+			&i.Date,
+			&i.Model,
+			&i.InputTokens,
+			&i.OutputTokens,
+			&i.CacheReadTokens,
+			&i.CacheWriteTokens,
+			&i.TaskCount,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listDashboardUsageDaily = `-- name: ListDashboardUsageDaily :many
 SELECT
     DATE(bucket_hour AT TIME ZONE $2::text) AS date,

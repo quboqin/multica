@@ -44,7 +44,14 @@
     "preview_unsupported": "该文件类型暂不支持预览。",
     "close": "关闭",
     "open_in_new_tab": "在新标签页打开",
-    "remove": "移除附件"
+    "remove": "移除附件",
+    "favorite": "收藏文档",
+    "unfavorite": "取消收藏",
+    "favorite_default_category": "默认分类",
+    "favorite_saved_to": "已收藏到“{{category}}”。",
+    "change_favorite_category": "修改分类",
+    "favorite_failed": "无法收藏文档。",
+    "unfavorite_failed": "无法取消收藏。"
   },
   "link_hover": {
     "copy_link": "复制链接",

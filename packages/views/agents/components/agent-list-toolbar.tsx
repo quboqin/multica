@@ -51,6 +51,7 @@ const COLUMN_KEYS: AgentColumnKey[] = [
   "status",
   "owner",
   "runtime",
+  "tags",
   "lastActive",
   "runs",
   "model",
@@ -78,6 +79,7 @@ export function countActiveFilterDimensions(
   if (filters.runtimes.length > 0) count++;
   if (filters.owners.length > 0) count++;
   if (filters.models.length > 0) count++;
+  if (filters.labels.length > 0) count++;
   return count;
 }
 
@@ -146,11 +148,25 @@ export function AgentListToolbar({
   const memberById = new Map(members.map((m) => [m.user_id, m]));
   const ownerCounts = new Map<string, number>();
   const modelCounts = new Map<string, number>();
+  const labelCounts = new Map<
+    string,
+    { name: string; color: string; count: number }
+  >();
   for (const row of allRows) {
     const oid = row.agent.owner_id;
     if (oid) ownerCounts.set(oid, (ownerCounts.get(oid) ?? 0) + 1);
     const model = row.agent.model;
     if (model) modelCounts.set(model, (modelCounts.get(model) ?? 0) + 1);
+    for (const label of row.agent.labels ?? []) {
+      const entry = labelCounts.get(label.id);
+      if (entry) entry.count += 1;
+      else
+        labelCounts.set(label.id, {
+          name: label.name,
+          color: label.color,
+          count: 1,
+        });
+    }
   }
 
   const SCOPE_LABELS: Record<AgentsScope, string> = {
@@ -173,6 +189,7 @@ export function AgentListToolbar({
     lastActive: t(($) => $.columns.last_active),
     runs: t(($) => $.columns.runs),
     model: t(($) => $.columns.model),
+    tags: t(($) => $.columns.tags),
     created: t(($) => $.columns.created),
   };
   const sortLabel = SORT_LABELS[sortField];
@@ -365,6 +382,40 @@ export function AgentListToolbar({
                 ))}
               </DropdownMenuSubContent>
             </DropdownMenuSub>
+
+            {/* Tags */}
+            {labelCounts.size > 0 && (
+              <DropdownMenuSub>
+                <DropdownMenuSubTrigger>
+                  <span className="flex-1">
+                    {t(($) => $.toolbar.section_tags)}
+                  </span>
+                  {filters.labels.length > 0 && (
+                    <span className="text-xs font-medium text-primary">
+                      {filters.labels.length}
+                    </span>
+                  )}
+                </DropdownMenuSubTrigger>
+                <DropdownMenuSubContent className="max-h-72 w-auto min-w-48 overflow-y-auto">
+                  {[...labelCounts.entries()].map(([id, label]) => (
+                    <DropdownMenuCheckboxItem
+                      key={id}
+                      checked={filters.labels.includes(id)}
+                      onCheckedChange={() => onToggleFilter("labels", id)}
+                      className={FILTER_ITEM_CLASS}
+                    >
+                      <HoverCheck checked={filters.labels.includes(id)} />
+                      <span
+                        className="size-2 shrink-0 rounded-full"
+                        style={{ backgroundColor: label.color }}
+                      />
+                      <span className="min-w-0 truncate">{label.name}</span>
+                      {countBadge(label.count)}
+                    </DropdownMenuCheckboxItem>
+                  ))}
+                </DropdownMenuSubContent>
+              </DropdownMenuSub>
+            )}
 
             {/* Owner — the same person-axis as the Mine scope. Picking an
                 owner here leaves the clean "mine" view for "all" (store

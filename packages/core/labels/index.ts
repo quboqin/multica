@@ -1,4 +1,4 @@
-export { labelKeys, labelListOptions, issueLabelsOptions, projectLabelsOptions } from "./queries";
+export { labelKeys, labelListOptions, issueLabelsOptions, projectLabelsOptions, agentLabelsOptions } from "./queries";
 export {
   useCreateLabel,
   useUpdateLabel,
@@ -7,4 +7,6 @@ export {
   useDetachLabel,
   useAttachProjectLabel,
   useDetachProjectLabel,
+  useAttachAgentLabel,
+  useDetachAgentLabel,
 } from "./mutations";

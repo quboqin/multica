@@ -1,3 +1,5 @@
+import type { Label } from "./label";
+
 export type AgentStatus = "idle" | "working" | "blocked" | "error" | "offline";
 
 export type AgentRuntimeMode = "local" | "cloud";
@@ -60,6 +62,30 @@ export interface AgentActivityBucket {
 export interface AgentRunCount {
   agent_id: string;
   run_count: number;
+}
+
+export interface AttributionUser {
+  id: string;
+  name?: string;
+  email?: string;
+  avatar_url?: string;
+}
+
+export interface TaskEvidence {
+  kind: string;
+  ref_id: string;
+}
+
+export interface TaskAttribution {
+  source: string;
+  precise: boolean;
+  initiator?: AttributionUser;
+  originator?: AttributionUser;
+  evidence?: TaskEvidence;
+  rule_version_id?: string;
+  delegated_from_task_id?: string;
+  retry_of_task_id?: string;
+  rerun_of_task_id?: string;
 }
 
 export interface AgentTask {
@@ -138,6 +164,8 @@ export interface AgentTask {
    * shares and screenshots also stay safe).
    */
   relative_work_dir?: string;
+  /** Accountable-human provenance for this run. Omitted by older backends. */
+  attribution?: TaskAttribution;
 }
 
 export interface Agent {
@@ -208,6 +236,7 @@ export interface Agent {
   thinking_level?: string;
   owner_id: string | null;
   skills: AgentSkillSummary[];
+  labels?: Label[];
   created_at: string;
   updated_at: string;
   archived_at: string | null;
@@ -510,6 +539,24 @@ export interface DashboardUsageByAgent {
   cache_read_tokens: number;
   cache_write_tokens: number;
   task_count: number;
+}
+
+// Per-(accountable user, model) token totals for the workspace dashboard.
+// The server filters out unattributed tasks, so every row has a user_id.
+export interface DashboardUsageByUser {
+  user_id: string;
+  model: string;
+  input_tokens: number;
+  output_tokens: number;
+  cache_read_tokens: number;
+  cache_write_tokens: number;
+  task_count: number;
+}
+
+// Per-(accountable user, date, model) token totals for user-attributed daily
+// trend charts. Same token shape as DashboardUsageDaily plus user_id.
+export interface DashboardUsageByUserDaily extends DashboardUsageDaily {
+  user_id: string;
 }
 
 // Per-agent total terminal-task run-time + counts. Powers the workspace

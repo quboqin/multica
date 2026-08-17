@@ -3,10 +3,19 @@ import assert from "node:assert/strict";
 
 import {
   appGrowingAppMaterialListVariables,
+  appGrowingBrandFromStrategyMemory,
   appGrowingGraphQLDateWindow,
+  appGrowingGraphQLRequest,
   appGrowingMaterialURL,
   appGrowingSearchAppVariables,
+  appGrowingShouldUseAdaptiveBrowserFallback,
+  captureAppGrowingMaterialPage,
+  connectorForID,
+  connectorGraphQLHeaders,
   extractAppGrowingMaterials,
+  isBrowserPageCrashError,
+  shouldBlockAppGrowingCrawlResource,
+  shouldUseAppGrowingBrowserFallback,
 } from "./index.mjs";
 
 test("extracts AppGrowing material resources from nested GraphQL list rows", () => {
@@ -134,6 +143,86 @@ test("applies material-search filters on competitor URLs", () => {
 });
 
 
+test("classifies AppGrowing browser page crashes", () => {
+  assert.equal(isBrowserPageCrashError(new Error("page.goto: Page crashed")), true);
+  assert.equal(isBrowserPageCrashError(new Error("Target page, context or browser has been closed")), true);
+  assert.equal(isBrowserPageCrashError(new Error("net::ERR_ABORTED")), false);
+});
+
+test("blocks heavyweight AppGrowing fallback resources", () => {
+  const request = (resourceType, url) => ({
+    resourceType: () => resourceType,
+    url: () => url,
+  });
+
+  assert.equal(shouldBlockAppGrowingCrawlResource(request("image", "https://cdn.example.com/ad.jpg")), true);
+  assert.equal(shouldBlockAppGrowingCrawlResource(request("media", "https://cdn.example.com/ad.mp4")), true);
+  assert.equal(shouldBlockAppGrowingCrawlResource(request("script", "https://www.googletagmanager.com/gtm.js")), true);
+  assert.equal(shouldBlockAppGrowingCrawlResource(request("xhr", "https://api-appgrowing-global.youcloud.com/graphql")), false);
+});
+
+test("disables AppGrowing browser fallback by default for bulk material searches", () => {
+  assert.equal(shouldUseAppGrowingBrowserFallback({}, 1), true);
+  assert.equal(shouldUseAppGrowingBrowserFallback({}, 2), false);
+  assert.equal(shouldUseAppGrowingBrowserFallback({ browser_capture_fallback: true }, 10), true);
+  assert.equal(shouldUseAppGrowingBrowserFallback({ browser_capture_fallback: false }, 1), false);
+});
+
+test("captures AppGrowing browser page crashes as page-level errors", async () => {
+  const handlers = new Map();
+  let routeRegistered = false;
+  let routeRemoved = false;
+  const page = {
+    route: async () => {
+      routeRegistered = true;
+    },
+    unroute: async () => {
+      routeRemoved = true;
+    },
+    on: (event, handler) => {
+      handlers.set(event, handler);
+    },
+    off: (event, handler) => {
+      if (handlers.get(event) === handler) {
+        handlers.delete(event);
+      }
+    },
+    goto: async () => {
+      throw new Error("page.goto: Page crashed");
+    },
+    waitForLoadState: async () => null,
+    mouse: { wheel: async () => null },
+    keyboard: { press: async () => null },
+    locator: () => ({ innerText: async () => "" }),
+    title: async () => "",
+    url: () => "about:blank",
+  };
+
+  const capture = await captureAppGrowingMaterialPage(
+    page,
+    {
+      graphQLURL: "https://api-appgrowing-global.youcloud.com/graphql",
+      probeURL: "https://appgrowing-global.youcloud.com/leaflet",
+      anonymousTextPatterns: [],
+    },
+    {
+      competitor: "Easycash",
+      pageNumber: 2,
+      params: { date_range: "-29,0" },
+      captureTimeoutMS: 3000,
+    },
+  );
+
+  assert.equal(routeRegistered, true);
+  assert.equal(routeRemoved, true);
+  assert.equal(handlers.has("response"), false);
+  assert.equal(capture.pageCrashed, true);
+  assert.match(capture.error, /Page crashed/);
+  assert.equal(capture.materials.length, 0);
+  assert.equal(capture.url.includes("page=2"), true);
+});
+
+
 test("builds AppGrowing GraphQL material-list variables from relative date ranges", () => {
   const now = new Date("2026-07-22T12:34:56Z");
 
@@ -169,6 +258,71 @@ test("builds AppGrowing searchApp variables for competitor brand lookup", () => 
     page: 1,
     hadAdvert: 1,
   });
+});
+
+test("uses AppGrowing accepted GraphQL language header", () => {
+  const headers = connectorGraphQLHeaders(connectorForID("appgrowing"), "searchApp");
+
+  assert.equal(headers["accept-language"], "en");
+});
+
+test("classifies AppGrowing GraphQL HTTP rejections as capture errors", async () => {
+  const connector = connectorForID("appgrowing");
+  const context = {
+    request: {
+      async post(url, options) {
+        assert.equal(url, connector.graphQLURL);
+        assert.equal(options.headers["accept-language"], "en");
+        return {
+          status: () => 406,
+          async text() {
+            return "The Language: [en-US,en;q=0.9] is no acceptable";
+          },
+        };
+      },
+    },
+  };
+
+  const result = await appGrowingGraphQLRequest(context, connector, "searchApp", "query SearchApp { searchAppBrand { data } }", {});
+
+  assert.equal(result.status, 406);
+  assert.match(result.error, /^appgrowing_graphql_http_406/);
+  assert.match(result.error, /Language/);
+});
+
+test("uses learned AppGrowing brand ids from adaptive strategy memory", () => {
+  const brand = appGrowingBrandFromStrategyMemory({
+    _adaptive_strategy_memory: {
+      enabled: true,
+      memories: {
+        easycash: {
+          brand_id: "brand-memory-1",
+          brand_name: "Easycash",
+        },
+      },
+    },
+  }, "Easycash");
+
+  assert.deepEqual(brand, {
+    id: "brand-memory-1",
+    name: "Easycash",
+    source: "strategy_memory",
+  });
+});
+
+test("enables adaptive browser fallback after GraphQL path failures", () => {
+  assert.equal(appGrowingShouldUseAdaptiveBrowserFallback([
+    { source: "graphql_api", error: "appgrowing_graphql_http_406" },
+    { source: "graphql_api", error: "app_brand_not_found" },
+  ], { memories: {} }), true);
+
+  assert.equal(appGrowingShouldUseAdaptiveBrowserFallback([
+    { source: "graphql_api", error: "" },
+  ], { memories: {} }), false);
+
+  assert.equal(appGrowingShouldUseAdaptiveBrowserFallback([], {
+    memories: { easycash: { preferred_source: "browser_network" } },
+  }), true);
 });
 
 test("extracts AppGrowing materials from detailed appMaterialList GraphQL results", () => {

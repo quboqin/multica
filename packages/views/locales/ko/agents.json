@@ -62,6 +62,7 @@
     "empty": "아직 기기가 없습니다"
   },
   "columns": {
+    "tags": "태그",
     "agent": "에이전트",
     "status": "상태",
     "workload": "작업량",
@@ -147,6 +148,8 @@
     "section_properties": "속성",
     "section_details": "세부 정보",
     "section_skills": "스킬",
+    "section_tags": "태그",
+    "edit_tags_aria": "태그 편집",
     "section_integrations": "연동",
     "prop_runtime": "런타임",
     "prop_model": "모델",
@@ -165,6 +168,7 @@
     "rename_required": "이름은 필수입니다",
     "edit_description_title": "설명 수정",
     "description_placeholder": "이 에이전트는 무엇을 하나요?",
+    "save_tags_failed_toast": "태그 저장에 실패했습니다",
     "save": "저장",
     "cancel": "취소"
   },
@@ -247,6 +251,7 @@
     "cancel": "취소",
     "create_failed_toast": "에이전트를 만들지 못했습니다",
     "skill_attach_failed_toast": "에이전트는 만들었지만 스킬을 연결하지 못했습니다: {{error}}",
+    "tag_attach_failed_toast": "에이전트는 만들었지만 태그를 연결하지 못했습니다: {{error}}",
     "squad_join_failed_toast": "에이전트 \"{{name}}\"은(는) 만들었지만 스쿼드에 참가하지 못했습니다: {{error}}. 멤버에서 직접 추가할 수 있습니다.",
     "instructions": {
       "label": "지침",
@@ -266,6 +271,15 @@
       "list_empty_default": "사용 가능한 스킬이 없습니다.",
       "list_no_match": "일치하는 스킬이 없습니다.",
       "search_placeholder": "스킬 검색..."
+    },
+    "tags_section": {
+      "label": "태그",
+      "search_placeholder": "태그 검색 또는 만들기",
+      "loading": "태그 불러오는 중...",
+      "empty": "아직 태그가 없습니다",
+      "selected": "선택됨",
+      "create_action": "만들기",
+      "create_failed_toast": "태그를 만들지 못했습니다"
     },
     "avatar": {
       "change_aria": "아바타 변경",
@@ -326,6 +340,14 @@
       "clear_action": "지우기",
       "invalid_json": "잘못된 JSON: {{error}}",
       "invalid_not_object": "MCP config는 JSON object여야 합니다(예: {\"mcpServers\": …}).",
+      "workspace_refs_title": "Workspace MCP",
+      "workspace_refs_hint": "활성 workspace MCP connection을 참조하고 custom runtime MCP server와 함께 이 에이전트에 노출합니다.",
+      "workspace_select_label": "Connection",
+      "workspace_none": "Workspace MCP 없음",
+      "workspace_loading": "Connection을 불러오는 중...",
+      "workspace_empty": "활성 workspace MCP connection이 없습니다",
+      "workspace_invalid_json_hint": "Workspace MCP reference를 변경하기 전에 JSON을 수정하세요.",
+      "workspace_selected_summary": "{{capability}}에서 가져온 runtime server {{serverName}}",
       "saved_toast": "MCP config를 저장했습니다",
       "save_failed_toast": "MCP config를 저장하지 못했습니다",
       "redacted_title": "설정됨 - 현재 보기에서는 숨김",
@@ -482,6 +504,7 @@
     "none": "30일간 활동 없음"
   },
   "toolbar": {
+    "section_tags": "태그",
     "result_count_title": "일치하는 에이전트 / 범위 내 전체",
     "filter_label": "필터",
     "filter_active_count_one": "필터 {{count}}개",
