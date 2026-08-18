@@ -34,8 +34,6 @@ function variant(id: string, complete = true): CreativeOrderVariant {
     qc_status: complete ? "passed" : "pending",
     qc_recovery_used: false,
     qc_recovery_available: false,
-    prime_repair_used: false,
-    prime_repair_available: false,
     assets: sizes.flatMap((size) => [
       { id: `${id}-${size}-old`, variant_id: id, size_key: size, revision: 1, stage: "delivered", status: "completed", attachment_id: `${id}-${size}-old`, updated_at: "2026-08-01T00:00:00Z" },
       { id: `${id}-${size}-prime`, variant_id: id, size_key: size, revision: 2, stage: "primed", status: "completed", attachment_id: `${id}-${size}-prime`, updated_at: "2026-08-02T00:00:00Z" },
@@ -110,9 +108,9 @@ describe("creative order stage", () => {
     });
   });
 
-  it("treats delegated Prime handoff as running instead of a manual action", () => {
+  it("treats background brand composition as running instead of a manual action", () => {
     const handoff = variant("v01", false);
-    handoff.status = "action_required";
+    handoff.status = "running";
     handoff.assets = sizes.map((size) => ({
       id: `${handoff.id}-${size}-generated`,
       variant_id: handoff.id,
@@ -123,49 +121,61 @@ describe("creative order stage", () => {
       attachment_id: `${handoff.id}-${size}-generated`,
       updated_at: "2026-08-05T00:00:00Z",
     })) as CreativeOrderVariant["assets"];
-    handoff.action_required = {
-      task_id: "production-task",
-      workflow: "creative_production",
-      failure_reason: "agent_reported_action_required",
-      detail: "已委派唯一 Prime 任务：prime-task；Prime 状态：queued。",
-      failed_at: "2026-08-09T10:00:00Z",
-      retryable: true,
-    };
     const orderItem = item();
     orderItem.variants = [handoff];
     const order = {
       status: "partial",
-      derived_status: "action_required",
-      workflow_failures: [{
-        task_id: "production-task",
-        workflow: "creative_production",
-        subject_id: handoff.id,
-        failure_reason: "agent_reported_action_required",
-        error: "已委派唯一 Prime 任务：prime-task；Prime 状态：queued。",
-        retryable: true,
-      }],
+      derived_status: "running",
+      workflow_failures: [],
       items: [orderItem],
-    } as CreativeOrder;
+    } as unknown as CreativeOrder;
 
     expect(creativeVariantNeedsManualAction(handoff)).toBe(false);
     expect(creativeVariantIsInProgress(handoff)).toBe(true);
-    expect(creativeVariantAdoptionReadiness(handoff)).toEqual({ ready: false, status: "成图已完成，正在贴片：已完成 0/3 个尺寸" });
+    expect(creativeVariantAdoptionReadiness(handoff)).toEqual({ ready: false, status: "成图已完成，正在合成品牌组件：已完成 0/3 个尺寸" });
     expect(creativeOrderActionableWorkflowFailures(order)).toEqual([]);
     expect(creativeOrderStage(order)).toMatchObject({ key: "generating", label: "生成中" });
   });
 
-  it("treats completed Prime registration as waiting for QC instead of a repairable failure", () => {
-    const handoff = variant("v01", false);
-    handoff.status = "action_required";
-    handoff.assets = handoff.assets.filter((asset) => asset.stage === "primed" || asset.stage === "generated");
-    handoff.action_required = {
-      task_id: "prime-task",
-      workflow: "creative_prime",
+  it("keeps an active production continuation out of the failure state", () => {
+    const continuing = variant("v01", false);
+    continuing.status = "running";
+    continuing.assets = [{
+      id: "v01-generated",
+      variant_id: continuing.id,
+      size_key: "1080x1080",
+      revision: continuing.revision,
+      stage: "generated",
+      status: "completed",
+      attachment_id: "v01-generated",
+      updated_at: "2026-08-05T00:00:00Z",
+    }] as CreativeOrderVariant["assets"];
+    continuing.action_required = {
+      task_id: "production-parent",
+      workflow: "creative_production",
       failure_reason: "agent_reported_action_required",
-      detail: "已完成 `87848071:v01:r1` 的 Prime 合成与登记。",
+      detail: "父任务已完成，缺少横版与竖版，续跑任务正在执行。",
       failed_at: "2026-08-09T10:00:00Z",
       retryable: true,
     };
+
+    expect(creativeVariantNeedsManualAction(continuing)).toBe(false);
+    expect(creativeVariantIsInProgress(continuing)).toBe(true);
+    expect(creativeVariantAdoptionReadiness(continuing)).toEqual({ ready: false, status: "成图生成中：已完成 1/3 个尺寸" });
+
+    const orderItem = item();
+    orderItem.variants = [continuing];
+    render(<CreativeOrderDeliveryCandidates orderId="order-1" item={orderItem} source={{ label: "竞品原图", url: "https://cdn.example/source.png" }} attachments={new Map()} adoptingVariantId="" onAdopt={vi.fn()} onAssetSelect={vi.fn()} />);
+
+    expect(screen.getByText("成图生成中：已完成 1/3 个尺寸")).toBeInTheDocument();
+    expect(screen.queryByText("生成失败")).not.toBeInTheDocument();
+    expect(screen.queryByText("成图生成失败")).not.toBeInTheDocument();
+  });
+
+  it("treats completed brand composition as waiting for QC instead of a repairable failure", () => {
+    const handoff = variant("v01", false);
+    handoff.status = "running";
+    handoff.assets = handoff.assets.filter((asset) => asset.stage === "primed" || asset.stage === "generated");
     const orderItem = item();
     orderItem.variants = [handoff];
 
@@ -174,9 +184,9 @@ describe("creative order stage", () => {
     expect(creativeVariantNeedsManualAction(handoff)).toBe(false);
     expect(creativeVariantIsInProgress(handoff)).toBe(true);
     expect(screen.getByText("处理中")).toBeInTheDocument();
-    expect(screen.getByText("贴片已完成，等待质检：技术质检待完成、视觉质检待完成")).toBeInTheDocument();
+    expect(screen.getByText("品牌组件已完成，等待质检：技术质检待完成、视觉质检待完成")).toBeInTheDocument();
     expect(screen.queryByText("需要处理")).not.toBeInTheDocument();
-    expect(screen.queryByText("品牌贴片提醒")).not.toBeInTheDocument();
+    expect(screen.queryByText("品牌组件提醒")).not.toBeInTheDocument();
   });
 
   it("treats qc-finalize pending on the other lane as QC progress", () => {
@@ -199,7 +209,7 @@ describe("creative order stage", () => {
     expect(creativeVariantNeedsManualAction(pending)).toBe(false);
     expect(creativeVariantIsInProgress(pending)).toBe(true);
     expect(screen.getByText("处理中")).toBeInTheDocument();
-    expect(screen.getByText("贴片已完成，等待质检：技术质检待完成、视觉质检待完成")).toBeInTheDocument();
+    expect(screen.getByText("品牌组件已完成，等待质检：技术质检待完成、视觉质检待完成")).toBeInTheDocument();
     expect(screen.queryByText("需要处理")).not.toBeInTheDocument();
     expect(screen.queryByText("视觉质检异常")).not.toBeInTheDocument();
   });
@@ -211,7 +221,7 @@ describe("creative order stage", () => {
       task_id: "production-task",
       workflow: "creative_production",
       failure_reason: "agent_reported_action_required",
-      detail: "已委派唯一 Prime 任务：prime-task；Prime 状态：queued。",
+      detail: "已完成无品牌底图，正在后台合成品牌组件。",
       failed_at: "2026-08-09T10:00:00Z",
       retryable: true,
     };
@@ -232,7 +242,7 @@ describe("creative order stage", () => {
     } as CreativeOrder;
 
     expect(creativeVariantNeedsManualAction(stale)).toBe(false);
-    expect(creativeVariantAdoptionReadiness(stale)).toEqual({ ready: true, status: "三尺寸、贴片与质检均已完成，可以采用" });
+    expect(creativeVariantAdoptionReadiness(stale)).toEqual({ ready: true, status: "三尺寸、品牌组件与质检均已完成，可以采用" });
     expect(creativeOrderActionableWorkflowFailures(order)).toEqual([]);
     expect(creativeOrderStage(order)).toMatchObject({ key: "review", label: "待验收", readyVariants: 1 });
   });
@@ -249,7 +259,7 @@ function attachmentMap(orderItem: CreativeOrderItem): Map<string, Attachment> {
 }
 
 describe("CreativeOrderDeliveryCandidates", () => {
-  it("shows the source image and final prompt while the backend has not created variants", () => {
+  it("shows the source image and explains where image-specific prompts are available before variants exist", () => {
     const orderItem = item();
     orderItem.variants = [];
     orderItem.direction = "保留白底和红色还款表；最终画面文字使用已审核文案。";
@@ -257,10 +267,9 @@ describe("CreativeOrderDeliveryCandidates", () => {
     render(<CreativeOrderDeliveryCandidates orderId="order-1" item={orderItem} source={{ label: "竞品原图", url: "https://cdn.example/source.png" }} attachments={new Map()} adoptingVariantId="" onAdopt={vi.fn()} onAssetSelect={vi.fn()} showDirectionDetails={false} />);
 
     expect(screen.getByAltText("原图 竞品原图")).toHaveAttribute("src", "https://cdn.example/source.png");
-    expect(screen.getByText("最终出图提示词")).toBeInTheDocument();
-    expect(screen.getByText("保留白底和红色还款表；最终画面文字使用已审核文案。")).toBeInTheDocument();
+    expect(screen.getByText("每张成图旁都可查看完整模型提示词、冻结文案、生成记录和版本溯源。")).toBeInTheDocument();
     expect(screen.getByText("等待任务")).toBeInTheDocument();
-    expect(screen.getByText("等待后台创建生成任务，完成后这里会出现过程图和验收入口。")).toBeInTheDocument();
+    expect(screen.getByText("等待后台创建生成任务，完成后这里会出现成图和验收入口。")).toBeInTheDocument();
   });
 
   it("collapses the whole material package when requested", () => {
@@ -275,16 +284,21 @@ describe("CreativeOrderDeliveryCandidates", () => {
   it("offers review actions and disables adoption for incomplete variants", () => {
     const orderItem = item();
     const onAdopt = vi.fn();
-    render(<CreativeOrderDeliveryCandidates orderId="order-1" item={orderItem} source={{ label: "竞品原图", url: "https://cdn.example/source.png" }} attachments={attachmentMap(orderItem)} adoptingVariantId="" onAdopt={onAdopt} onAssetSelect={vi.fn()} />);
+    const onAssetSelect = vi.fn();
+    const onAssetInfo = vi.fn();
+    render(<CreativeOrderDeliveryCandidates orderId="order-1" item={orderItem} source={{ label: "竞品原图", url: "https://cdn.example/source.png" }} attachments={attachmentMap(orderItem)} adoptingVariantId="" onAdopt={onAdopt} onAssetSelect={onAssetSelect} onAssetInfo={onAssetInfo} />);
 
     const actions = screen.getAllByRole("button", { name: "采用此变体" });
     expect(actions).toHaveLength(2);
     expect(actions[0]).toBeEnabled();
     expect(screen.getByRole("button", { name: "尚不可采用" })).toBeDisabled();
     expect(screen.getAllByRole("button", { name: "查看并标注" })).toHaveLength(3);
-    expect(screen.getByText("等待质检：技术质检待完成、视觉质检待完成")).toBeInTheDocument();
+    expect(screen.getByText("品牌组件已完成，等待质检：技术质检待完成、视觉质检待完成")).toBeInTheDocument();
     expect(screen.getAllByAltText(/方形主预览/)).toHaveLength(3);
     expect(screen.queryAllByAltText(/横版主预览|竖版主预览/)).toHaveLength(0);
+    fireEvent.click(screen.getAllByRole("button", { name: "查看方形成图详情" })[0]!);
+    expect(onAssetSelect).not.toHaveBeenCalled();
+    expect(onAssetInfo).toHaveBeenCalledWith("v01-1080x1080");
 
     fireEvent.click(actions[1]!);
     expect(onAdopt).toHaveBeenCalledWith("v03");
@@ -315,8 +329,8 @@ describe("CreativeOrderDeliveryCandidates", () => {
 
     render(<CreativeOrderDeliveryCandidates orderId="order-1" item={orderItem} source={{ label: "竞品原图", url: "https://cdn.example/source.png" }} attachments={attachmentMap(orderItem)} adoptingVariantId="" onAdopt={vi.fn()} onAssetSelect={vi.fn()} />);
 
-    expect(screen.getAllByText("生成未完成").length).toBeGreaterThan(0);
-    expect(screen.getByText("成图生成未完成")).toBeInTheDocument();
+    expect(screen.getAllByText("生成失败").length).toBeGreaterThan(0);
+    expect(screen.getByText("成图生成失败")).toBeInTheDocument();
     expect(screen.getByText("底部 Prime 固定贴片区域被模型内容占用，未注册三尺寸成图。")).toBeInTheDocument();
     expect(screen.getByText("后台已记录该步骤未补齐；不用手动重试，可查看其他候选、标注调整或重新发起。")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "重试失败步骤" })).not.toBeInTheDocument();
@@ -352,11 +366,14 @@ describe("CreativeOrderDeliveryCandidates", () => {
       id: "diagnostic-1",
       variant_id: blocked.id,
       task_id: "task-1",
+      attachment_id: "attachment-1",
       size_key: "1080x1080",
       revision: blocked.revision,
+      workflow: "creative_production",
       label: "返工输出",
       filename: "square-model-rework.png",
-      url: "/api/creative/orders/order-1/variants/v01/diagnostic-assets/diagnostic-1",
+      metadata: {},
+      url: "/api/attachments/attachment-1/download",
       created_at: "2026-08-09T10:00:00Z",
     }];
     blocked.action_required = {
@@ -372,12 +389,42 @@ describe("CreativeOrderDeliveryCandidates", () => {
 
     render(<CreativeOrderDeliveryCandidates orderId="order-1" item={orderItem} source={{ label: "竞品原图", url: "https://cdn.example/source.png" }} attachments={new Map()} adoptingVariantId="" onAdopt={vi.fn()} onAssetSelect={vi.fn()} />);
 
-    expect(screen.getByAltText("V01 诊断图 返工输出")).toBeInTheDocument();
-    expect(screen.getByText("未登记诊断图")).toBeInTheDocument();
-    expect(screen.getByText("已保留 1 张未登记模型输出，仅用于判断停止原因，不参与采用或交付。")).toBeInTheDocument();
-    expect(screen.getByText("生成未完成：方形图两次模型输出均将 CTA 放入底部 Prime 固定排除区。")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /方形诊断图/ })).toBeEnabled();
+    expect(screen.getByAltText("V01 过程图片 返工输出")).toBeInTheDocument();
+    expect(screen.getByText("过程图片")).toBeInTheDocument();
+    expect(screen.queryByText(/已保留 1 张过程图片/)).not.toBeInTheDocument();
+    expect(screen.getByText("生成失败：方形图两次模型输出均将 CTA 放入底部 Prime 固定排除区。")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /方形过程图/ })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /方形待成图/ })).toBeDisabled();
     expect(screen.getByRole("button", { name: "尚不可采用" })).toBeDisabled();
+  });
+
+  it("opens process images even when the variant already has preview assets", () => {
+    const ready = variant("v01");
+    ready.diagnostic_assets = [{
+      id: "diagnostic-1",
+      variant_id: ready.id,
+      task_id: "task-1",
+      attachment_id: "attachment-1",
+      size_key: "1080x1080",
+      revision: ready.revision,
+      workflow: "creative_production",
+      label: "贴片预览检查",
+      filename: "prime-collision-preview-1080x1080.png",
+      metadata: {},
+      url: "/api/attachments/attachment-1/download",
+      created_at: "2026-08-09T10:00:00Z",
+    }];
+    const orderItem = item();
+    orderItem.variants = [ready];
+
+    render(<CreativeOrderDeliveryCandidates orderId="order-1" item={orderItem} source={{ label: "竞品原图", url: "https://cdn.example/source.png" }} attachments={attachmentMap(orderItem)} adoptingVariantId="" onAdopt={vi.fn()} onAssetSelect={vi.fn()} />);
+
+    fireEvent.click(screen.getByRole("button", { name: /查看过程图片/ }));
+
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+    expect(screen.getByText("V01 · 过程图片")).toBeInTheDocument();
+    expect(screen.getByText("方形 · 贴片预览检查")).toBeInTheDocument();
+    expect(screen.getByText("prime-collision-preview-1080x1080.png")).toBeInTheDocument();
   });
 
   it("lets users ignore a QC reminder and adopt the current revision", () => {
@@ -410,7 +457,7 @@ describe("CreativeOrderDeliveryCandidates", () => {
         lane: "visual",
         status: "failed",
         findings: {
-          blocking_failures: [{ size_key: "800x1000", reason: "右上角二维码遮挡标题" }],
+          blocking_failures: [{ size_key: "800x1000", reason: "右上角品牌组件遮挡标题" }],
           quality_warnings: ["人物边缘略有锯齿"],
         },
         updated_at: "2026-08-05T00:00:00Z",
@@ -424,7 +471,7 @@ describe("CreativeOrderDeliveryCandidates", () => {
     render(<CreativeOrderDeliveryCandidates orderId="order-1" item={orderItem} source={{ label: "竞品原图", url: "https://cdn.example/source.png" }} attachments={attachmentMap(orderItem)} adoptingVariantId="" onAdopt={onAdopt} onAssetSelect={vi.fn()} />);
 
     expect(screen.getByText("视觉质检未通过")).toBeInTheDocument();
-    expect(screen.getByText("800x1000：右上角二维码遮挡标题")).toBeInTheDocument();
+    expect(screen.getByText("800x1000：右上角品牌组件遮挡标题")).toBeInTheDocument();
     expect(screen.getByText("人物边缘略有锯齿")).toBeInTheDocument();
     expect(screen.queryByText("r1 旧问题不应展示")).not.toBeInTheDocument();
     expect(screen.getByText("有系统提醒")).toBeInTheDocument();
@@ -503,7 +550,7 @@ describe("CreativeOrderDeliveryCandidates", () => {
 
     render(<CreativeOrderDeliveryCandidates orderId="order-1" item={orderItem} source={{ label: "竞品原图", url: "https://cdn.example/source.png" }} attachments={attachmentMap(orderItem)} adoptingVariantId="" onAdopt={vi.fn()} onAssetSelect={vi.fn()} />);
 
-    expect(screen.getByText("技术质检没有同步具体失败明细；请人工复核文件完整性、贴片、二维码和渠道要求。")).toBeInTheDocument();
+    expect(screen.getByText("技术质检没有同步具体失败明细；请人工复核文件完整性、品牌组件和渠道要求。")).toBeInTheDocument();
     expect(screen.getByText("视觉质检没有同步具体失败明细；请人工复核文字可读性、遮挡、数值一致性和整体画面质量。")).toBeInTheDocument();
     expect(screen.queryByText("报告未提供具体失败原因")).not.toBeInTheDocument();
   });
@@ -518,7 +565,7 @@ describe("CreativeOrderDeliveryCandidates", () => {
         revision: 2,
         lane: "technical",
         status: "failed",
-        findings: { blocking_failures: [{ code: "qr_independent_redecode_failed" }] },
+        findings: { blocking_failures: [{ code: "corner_overlap" }] },
         updated_at: "2026-08-05T00:00:00Z",
       }),
     ];
@@ -527,11 +574,11 @@ describe("CreativeOrderDeliveryCandidates", () => {
 
     render(<CreativeOrderDeliveryCandidates orderId="order-1" item={orderItem} source={{ label: "竞品原图", url: "https://cdn.example/source.png" }} attachments={attachmentMap(orderItem)} adoptingVariantId="" onAdopt={vi.fn()} onAssetSelect={vi.fn()} />);
 
-    expect(screen.getByText("二维码无法独立识别，可能影响渠道验收。")).toBeInTheDocument();
-    expect(screen.queryByText("qr_independent_redecode_failed")).not.toBeInTheDocument();
+    expect(screen.getByText("四角品牌或商店区域疑似被画面内容遮挡。")).toBeInTheDocument();
+    expect(screen.queryByText("corner_overlap")).not.toBeInTheDocument();
   });
 
-  it("allows risk adoption only when the current failed QC revision has all Prime sizes", () => {
+  it("allows risk adoption only when the current failed QC revision has all brand component sizes", () => {
     const recoverable = variant("v01");
     recoverable.status = "action_required";
     recoverable.qc_reports = [
@@ -541,9 +588,9 @@ describe("CreativeOrderDeliveryCandidates", () => {
     recoverable.qc_recovery_available = true;
     expect(creativeVariantRiskAdoptionReadiness(recoverable).allowed).toBe(true);
 
-    const missingPrime = structuredClone(recoverable);
-    missingPrime.assets = missingPrime.assets.filter((asset) => !(asset.revision === 2 && asset.stage === "primed" && asset.size_key === "800x1000"));
-    expect(creativeVariantRiskAdoptionReadiness(missingPrime)).toMatchObject({ allowed: false, status: "系统提醒：贴片仅完成 2/3 个尺寸，暂不可采用" });
+    const missingBrandComponents = structuredClone(recoverable);
+    missingBrandComponents.assets = missingBrandComponents.assets.filter((asset) => !(asset.revision === 2 && asset.stage === "primed" && asset.size_key === "800x1000"));
+    expect(creativeVariantRiskAdoptionReadiness(missingBrandComponents)).toMatchObject({ allowed: false, status: "系统提醒：品牌组件仅完成 2/3 个尺寸，暂不可采用" });
 
     const previousFailure = structuredClone(recoverable);
     previousFailure.qc_reports = [qcReport({ id: "visual-r1", variant_id: previousFailure.id, revision: 1, lane: "visual", status: "failed", findings: {}, updated_at: "2026-08-04T00:00:00Z" })];
@@ -571,41 +618,6 @@ describe("CreativeOrderDeliveryCandidates", () => {
     expect(screen.queryByRole("button", { name: "重新质检" })).not.toBeInTheDocument();
   });
 
-  it("does not expose Prime repair actions to business users", () => {
-    const repairable = variant("v01");
-    repairable.status = "action_required";
-    repairable.prime_repair_available = true;
-    repairable.qc_recovery_available = true;
-    repairable.qc_reports[1]!.status = "failed";
-    const primed = repairable.assets.filter((asset) => asset.revision === repairable.revision && asset.stage === "primed");
-    repairable.assets = [...primed, ...primed.map((asset) => ({
-      ...asset,
-      id: `${asset.id}-generated`,
-      stage: "generated" as const,
-      attachment_id: `${asset.attachment_id}-generated`,
-    }))];
-    const orderItem = item();
-    orderItem.variants = [repairable];
-    render(<CreativeOrderDeliveryCandidates orderId="order-1" item={orderItem} source={{ label: "竞品原图", url: "https://cdn.example/source.png" }} attachments={attachmentMap(orderItem)} adoptingVariantId="" onAdopt={vi.fn()} onAssetSelect={vi.fn()} />);
-
-    expect(screen.getByText("有系统提醒")).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "修复贴片并重新质检" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "重新质检" })).not.toBeInTheDocument();
-  });
-
-  it("keeps Prime repair exhaustion as a process exception without a repair button", () => {
-    const exhausted = variant("v01", false);
-    exhausted.status = "action_required";
-    exhausted.prime_repair_used = true;
-    exhausted.qc_reports = [];
-    const orderItem = item();
-    orderItem.variants = [exhausted];
-    render(<CreativeOrderDeliveryCandidates orderId="order-1" item={orderItem} source={{ label: "竞品原图", url: "https://cdn.example/source.png" }} attachments={attachmentMap(orderItem)} adoptingVariantId="" onAdopt={vi.fn()} onAssetSelect={vi.fn()} />);
-
-    expect(screen.getAllByText("有系统提醒").length).toBeGreaterThan(0);
-    expect(screen.queryByRole("button", { name: "修复贴片并重新质检" })).not.toBeInTheDocument();
-  });
-
   it("promotes the adopted variant with the source and all three final sizes", () => {
     const orderItem = item("v01");
     const onAssetInfo = vi.fn();
@@ -617,8 +629,8 @@ describe("CreativeOrderDeliveryCandidates", () => {
     expect(screen.getByAltText("最终采用方案 1200x628")).toBeInTheDocument();
     expect(screen.getByAltText("最终采用方案 800x1000")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "下载交付包" })).toBeEnabled();
-    expect(screen.getAllByRole("button", { name: /查看 .* 生成信息/ })).toHaveLength(3);
-    fireEvent.click(screen.getByRole("button", { name: "查看 1200x628 生成信息" }));
+    expect(screen.getAllByRole("button", { name: /查看.*成图详情/ })).toHaveLength(9);
+    fireEvent.click(screen.getAllByRole("button", { name: "查看横版成图详情" })[0]!);
     expect(onAssetInfo).toHaveBeenCalledWith("v01-1200x628");
     expect(screen.getByText("查看其他候选")).toBeInTheDocument();
   });
@@ -657,12 +669,12 @@ describe("creative order delivery selection", () => {
     expect(creativeVariantAdoptionReadiness(candidate)).toEqual({ ready: false, status: "等待正式交付：已完成 2/3 个尺寸" });
   });
 
-  it("requires an independent current-revision Prime package before adoption", () => {
+  it("requires a complete current-revision brand component package before adoption", () => {
     const candidate = variant("v01");
     candidate.assets = candidate.assets.filter((asset) => !(asset.revision === 2 && asset.stage === "primed" && asset.size_key === "800x1000"));
 
     expect(creativeVariantDeliveryAssets(candidate)).toHaveLength(3);
-    expect(creativeVariantAdoptionReadiness(candidate)).toEqual({ ready: false, status: "等待贴片：已完成 2/3 个尺寸" });
+    expect(creativeVariantAdoptionReadiness(candidate)).toEqual({ ready: false, status: "等待品牌组件合成：已完成 2/3 个尺寸" });
   });
 
   it("accepts warning QC, lets failed QC be adopted with a reminder, and keeps pending lanes blocked", () => {

@@ -906,6 +906,19 @@ describe("creative feedback endpoint", () => {
     expect(fetchMock).toHaveBeenCalledWith("https://api.example.test/api/creative-feedback-events/metrics", expect.any(Object));
   });
 
+  it("loads the feedback dashboard and degrades malformed nested output", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      workflow: { first_delivery_count: 3, first_delivery_total: null },
+    }), { status: 200, headers: { "Content-Type": "application/json" } }));
+    vi.stubGlobal("fetch", fetchMock);
+    const client = new ApiClient("https://api.example.test");
+
+    await expect(client.getCreativeFeedbackDashboard()).resolves.toEqual(expect.objectContaining({
+      workflow: expect.objectContaining({ first_delivery_count: 0, feedback_reasons: [] }),
+    }));
+    expect(fetchMock).toHaveBeenCalledWith("https://api.example.test/api/creative-feedback-events/dashboard", expect.any(Object));
+  });
+
   it("finalizes QC through the atomic order endpoint and degrades malformed output", async () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ outcome: null }), { status: 200, headers: { "Content-Type": "application/json" } }));
     vi.stubGlobal("fetch", fetchMock);

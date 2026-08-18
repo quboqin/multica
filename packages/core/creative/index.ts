@@ -1,6 +1,7 @@
 export {
-  creativeCopyEntriesOptions,
   creativeFeedbackOptions,
+
+  creativeFeedbackDashboardOptions,
   creativeFeedbackMetricsOptions,
   creativeKeys,
   creativeMaterialLibraryOptions,
@@ -9,7 +10,6 @@ export {
   creativeOrderOptions,
   creativeSourceAnalysesOptions,
   creativeResourceFilesOptions,
-  creativeMarketPackComponentExtractionOptions,
   creativeResourcesOptions,
 } from "./queries";
 export { useAdoptCreativeOrderVariant, useCancelCreativeOrder } from "./mutations";

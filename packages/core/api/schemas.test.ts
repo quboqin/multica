@@ -5,12 +5,14 @@ import {
   CreativeBriefSchema,
   CreativeDirectEditResponseSchema,
   CreativeFeedbackEventListResponseSchema,
+
+  CreativeFeedbackDashboardSchema,
   CreativeFeedbackMetricsSchema,
   CreativeOrderQCFinalizeResponseSchema,
   CreativePreAdaptationRetryResponseSchema,
   CreativeOrderWorkflowRetryResponseSchema,
+  QueueCreativeOrderAdjustmentResponseSchema,
 	CreativeOrderQCRetryResponseSchema,
-	CreativeOrderPrimePackageRepairResponseSchema,
   CreativeOrderItemSchema,
   CreativeOrderSchema,
   CreateCreativeFeedbackResponseSchema,
@@ -18,7 +20,6 @@ import {
   CreativeMaterialLibrarySchema,
   CreativeMaterialImportResultSchema,
   CreativeMaterialsResponseSchema,
-  CreativeMarketPackComponentExtractionSchema,
   CreativeResourceFileListSchema,
   CreativeResourceListSchema,
   DashboardAgentRunTimeListSchema,
@@ -191,6 +192,8 @@ describe("creative material schemas", () => {
   it("parses a workflow recovery response defensively", () => {
     expect(CreativeOrderWorkflowRetryResponseSchema.parse({})).toEqual({ task_id: "" });
     expect(CreativeOrderWorkflowRetryResponseSchema.safeParse(null).success).toBe(false);
+    expect(QueueCreativeOrderAdjustmentResponseSchema.parse({})).toEqual({ task_id: "", revision: 1 });
+    expect(QueueCreativeOrderAdjustmentResponseSchema.safeParse(null).success).toBe(false);
   });
 
   it("parses a dual-lane QC recovery response defensively", () => {
@@ -198,11 +201,6 @@ describe("creative material schemas", () => {
       variant_id: "", revision: 1, technical_task_id: "", visual_task_id: "",
     });
     expect(CreativeOrderQCRetryResponseSchema.safeParse({ revision: "two" }).success).toBe(false);
-  });
-
-  it("parses a Prime package repair response defensively", () => {
-    expect(CreativeOrderPrimePackageRepairResponseSchema.parse({})).toEqual({ task_id: "" });
-    expect(CreativeOrderPrimePackageRepairResponseSchema.safeParse({ task_id: 1 }).success).toBe(false);
   });
 
   it("fails closed for malformed unified feedback responses", () => {
@@ -223,13 +221,13 @@ describe("creative material schemas", () => {
     expect(CreativeOrderItemSchema.safeParse({ id: "item-1", adopted_variant_id: null }).success).toBe(false);
   });
 
-  it("defaults QC recovery availability for older order responses", () => {
+  it("parses QC recovery and backend composition blockers", () => {
     const legacy = CreativeOrderItemSchema.parse({ id: "item-1", variants: [{ id: "variant-1" }] });
-    expect(legacy.variants[0]).toMatchObject({ qc_recovery_used: false, qc_recovery_available: false, prime_repair_used: false, prime_repair_available: false });
+    expect(legacy.variants[0]).toMatchObject({ qc_recovery_used: false, qc_recovery_available: false });
     expect(legacy.variants[0]?.action_required).toBeUndefined();
-    const current = CreativeOrderItemSchema.parse({ id: "item-1", variants: [{ id: "variant-1", qc_recovery_used: true, qc_recovery_available: false, prime_repair_used: true, prime_repair_available: false, action_required: { task_id: "task-1", workflow: "creative_production", detail: "Prime 安全区被占用", retryable: true } }] });
-    expect(current.variants[0]).toMatchObject({ qc_recovery_used: true, qc_recovery_available: false, prime_repair_used: true, prime_repair_available: false });
-    expect(current.variants[0]?.action_required).toMatchObject({ task_id: "task-1", workflow: "creative_production", detail: "Prime 安全区被占用", retryable: true });
+    const current = CreativeOrderItemSchema.parse({ id: "item-1", variants: [{ id: "variant-1", qc_recovery_used: true, qc_recovery_available: false, action_required: { task_id: "", workflow: "brand_components", detail: "模板尺寸不匹配", retryable: true } }] });
+    expect(current.variants[0]).toMatchObject({ qc_recovery_used: true, qc_recovery_available: false });
+    expect(current.variants[0]?.action_required).toMatchObject({ workflow: "brand_components", detail: "模板尺寸不匹配", retryable: true });
     expect(CreativeOrderItemSchema.safeParse({ id: "item-1", variants: [{ id: "variant-1", qc_recovery_used: "yes" }] }).success).toBe(false);
     expect(CreativeOrderItemSchema.safeParse({ id: "item-1", variants: [{ id: "variant-1", action_required: { retryable: "yes" } }] }).success).toBe(false);
   });
@@ -267,6 +265,13 @@ describe("creative material schemas", () => {
       qc_false_positive: 0,
     });
     expect(CreativeFeedbackMetricsSchema.safeParse({ candidate_selected: null }).success).toBe(false);
+  });
+
+  it("defaults an absent workflow dashboard and rejects a malformed workflow", () => {
+    expect(CreativeFeedbackDashboardSchema.parse({})).toMatchObject({
+      workflow: { first_delivery_count: 0, feedback_reasons: [] },
+    });
+    expect(CreativeFeedbackDashboardSchema.safeParse({ workflow: null }).success).toBe(false);
   });
   it("defaults structured App UI selections from an older creative brief", () => {
     const parsed = CreativeBriefSchema.parse({ status: "draft", source: "ai" });
@@ -383,24 +388,6 @@ describe("creative material schemas", () => {
     });
   });
 
-  it("parses background market-pack component extraction candidates", () => {
-    const extraction = CreativeMarketPackComponentExtractionSchema.parse({
-      id: "extract-1",
-      status: "completed",
-      source_width: 1080,
-      source_height: 1080,
-      result: {
-        summary: "found variable components",
-        candidates: [
-          { id: "logo", label: "Logo", kind: "image", rect: [10, 20, 200, 100], confidence: 0.98 },
-          { id: "terms", label: "Terms", kind: "text", content: "Terms apply", rect: [300, 20, 600, 80] },
-        ],
-      },
-    });
-    expect(extraction.result.candidates).toHaveLength(2);
-    expect(extraction.result.candidates[1]?.content).toBe("Terms apply");
-    expect(extraction.result.candidates[1]?.confidence).toBe(0);
-  });
 });
 
 describe("PreviewSessionListResponseSchema", () => {

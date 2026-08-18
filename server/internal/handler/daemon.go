@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/analytics"
 	"github.com/multica-ai/multica/server/internal/auth"
@@ -1092,6 +1093,10 @@ func (h *Handler) ClaimTaskByRuntime(w http.ResponseWriter, r *http.Request) {
 	}
 	runtimeWorkspaceID := uuidToString(runtime.WorkspaceID)
 	authMs = time.Since(start).Milliseconds()
+	// A deployment or transient API restart can leave a recoverable
+	// pre-adaptation result behind. Run the workspace-scoped repair scan while
+	// the daemon is already polling; order creation remains a user action.
+	h.recoverCreativeFactoryPreAdaptations(r.Context(), runtime.WorkspaceID)
 
 	claimStart := time.Now()
 	task, err := h.TaskService.ClaimTaskForRuntime(r.Context(), parseUUID(runtimeID))
@@ -2007,9 +2012,12 @@ func (h *Handler) preAdaptationCompletionError(ctx context.Context, task db.Agen
 		taskContext.MarketPackVersion < 1 || taskContext.CopyLibraryVersion < 1 {
 		return "pre-adaptation task completed with invalid artifact coordinates", nil
 	}
-	var completed bool
+	var adaptationStatus, adaptationErrorCode string
+	var frozenResourcesMatch bool
 	err := h.DB.QueryRow(ctx, `
-SELECT COALESCE(
+SELECT COALESCE(result->'adaptation'->>'status', ''),
+       COALESCE(result->'adaptation'->>'error_code', ''),
+       COALESCE(
   result->'adaptation'->>'status' IN ('completed', 'unavailable')
   AND result->'adaptation'->'result'->>'market_pack_id' = $3
   AND result->'adaptation'->'result'->>'market_pack_version' = $4
@@ -2018,16 +2026,33 @@ SELECT COALESCE(
   false
 )
 FROM creative_source_analysis WHERE id = $1 AND workspace_id = $2
-`, analysisID, workspaceUUID, taskContext.MarketPackID, strconv.Itoa(taskContext.MarketPackVersion), taskContext.CopyLibraryID, strconv.Itoa(taskContext.CopyLibraryVersion)).Scan(&completed)
+	`, analysisID, workspaceUUID, taskContext.MarketPackID, strconv.Itoa(taskContext.MarketPackVersion), taskContext.CopyLibraryID, strconv.Itoa(taskContext.CopyLibraryVersion)).Scan(&adaptationStatus, &adaptationErrorCode, &frozenResourcesMatch)
 	if err != nil {
 		return "", err
 	}
-	if !completed {
+	if !creativePreAdaptationArtifactAccepted(adaptationStatus, adaptationErrorCode, frozenResourcesMatch) {
+		if adaptationStatus == "unavailable" {
+			noEditableCopy, copyErr := h.creativePreAdaptationHasNoEditableCopy(ctx, workspaceUUID, analysisID)
+			if copyErr != nil {
+				return "", copyErr
+			}
+			if noEditableCopy {
+				// A static/logo-only source is a truthful terminal result for
+				// pre-adaptation. It must not enter the retry loop or block its
+				// sibling candidate from continuing.
+				return "", nil
+			}
+		}
 		priorFailures, err := h.countCreativePreAdaptationOutputFailures(ctx, workspaceUUID, analysisID, taskContext)
 		if err != nil {
 			return "", err
 		}
 		if priorFailures >= 1 {
+			if repaired, repairErr := h.repairCreativePreAdaptationAutomatically(ctx, workspaceUUID, analysisID, taskContext); repairErr != nil {
+				slog.Warn("automatic pre-adaptation numeric repair failed", "source_analysis_id", uuidToString(analysisID), "error", repairErr)
+			} else if repaired {
+				return "", nil
+			}
 			if err := h.markCreativePreAdaptationManualRequired(ctx, workspaceUUID, analysisID, taskContext, "pre-adaptation task still did not produce a matching frozen adaptation result after one retry"); err != nil {
 				return "", err
 			}
@@ -2036,6 +2061,21 @@ FROM creative_source_analysis WHERE id = $1 AND workspace_id = $2
 		return "pre-adaptation task completed without a matching frozen adaptation result", nil
 	}
 	return "", nil
+}
+
+func (h *Handler) creativePreAdaptationHasNoEditableCopy(ctx context.Context, workspaceID, analysisID pgtype.UUID) (bool, error) {
+	var textBlockCount int
+	err := h.DB.QueryRow(ctx, `
+SELECT COALESCE(jsonb_array_length(
+    CASE WHEN jsonb_typeof(result->'text_blocks') = 'array' THEN result->'text_blocks' ELSE '[]'::jsonb END
+), 0)
+FROM creative_source_analysis
+WHERE id = $1 AND workspace_id = $2
+`, analysisID, workspaceID).Scan(&textBlockCount)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, nil
+	}
+	return textBlockCount == 0, err
 }
 
 func (h *Handler) countCreativePreAdaptationOutputFailures(ctx context.Context, workspaceID, analysisID pgtype.UUID, taskContext creativePreAdaptationTaskContext) (int, error) {
@@ -2079,7 +2119,6 @@ func (h *Handler) markCreativePreAdaptationManualRequired(ctx context.Context, w
 			"text_replacements":         []any{},
 			"repayment_plan_selections": []any{},
 			"numeric_layouts":           []any{},
-			"production_prompt":         "",
 		},
 	}
 	encoded, _ := json.Marshal(adaptation)
@@ -2096,46 +2135,6 @@ WHERE id = $1 AND workspace_id = $2
 	}
 	h.publishCreativeMaterialsUpdated(workspaceID, pgtype.UUID{}, "system", "")
 	return nil
-}
-
-func (h *Handler) marketPackComponentExtractionCompletionError(ctx context.Context, task db.AgentTaskQueue, workspaceID string) (string, error) {
-	if !task.TriggerEvidenceKind.Valid || task.TriggerEvidenceKind.String != marketPackComponentExtractionEvidenceKind {
-		return "", nil
-	}
-	if task.Status == "completed" || task.Status == "failed" || task.Status == "cancelled" {
-		return "", nil
-	}
-	var taskContext creativeMarketPackExtractionTaskContext
-	if err := json.Unmarshal(task.Context, &taskContext); err != nil || taskContext.Workflow != "creative_market_pack_component_extraction" {
-		return "market pack component extraction completed with invalid task context", nil
-	}
-	extractionID, extractionErr := util.ParseUUID(strings.TrimSpace(taskContext.ExtractionID))
-	resourceID, resourceErr := util.ParseUUID(strings.TrimSpace(taskContext.ResourceID))
-	attachmentID, attachmentErr := util.ParseUUID(strings.TrimSpace(taskContext.SourceAttachmentID))
-	resolvedWorkspaceID, workspaceErr := util.ParseUUID(strings.TrimSpace(workspaceID))
-	if extractionErr != nil || resourceErr != nil || attachmentErr != nil || workspaceErr != nil ||
-		taskContext.SourceWidth < 1 || taskContext.SourceHeight < 1 ||
-		!task.TriggerEvidenceRefID.Valid || task.TriggerEvidenceRefID != extractionID {
-		return "market pack component extraction completed with invalid artifact coordinates", nil
-	}
-	var exists bool
-	if err := h.DB.QueryRow(ctx, `
-SELECT EXISTS(
-  SELECT 1
-  FROM creative_market_pack_component_extraction extraction
-  WHERE extraction.id = $1 AND extraction.workspace_id = $2
-    AND extraction.resource_id = $3 AND extraction.source_attachment_id = $4
-    AND extraction.source_width = $5 AND extraction.source_height = $6
-    AND extraction.status IN ('completed', 'applied')
-)
-`, extractionID, resolvedWorkspaceID, resourceID, attachmentID, taskContext.SourceWidth, taskContext.SourceHeight).Scan(&exists); err != nil {
-		return "", err
-	}
-	if !exists {
-		h.failCreativeMarketPackExtraction(ctx, extractionID, "Component extraction task completed without a matching saved result.")
-		return "market pack component extraction completed without a matching saved result", nil
-	}
-	return "", nil
 }
 
 func (h *Handler) CompleteTask(w http.ResponseWriter, r *http.Request) {
@@ -2157,9 +2156,6 @@ func (h *Handler) CompleteTask(w http.ResponseWriter, r *http.Request) {
 	if validationErr == nil && artifactError == "" {
 		artifactError, validationErr = h.preAdaptationCompletionError(r.Context(), existingTask, workspaceID)
 	}
-	if validationErr == nil && artifactError == "" {
-		artifactError, validationErr = h.marketPackComponentExtractionCompletionError(r.Context(), existingTask, workspaceID)
-	}
 	if validationErr != nil {
 		slog.Error("validate creative task output failed", "task_id", taskID, "error", validationErr)
 		writeError(w, http.StatusInternalServerError, "failed to validate task output")
@@ -2173,6 +2169,17 @@ func (h *Handler) CompleteTask(w http.ResponseWriter, r *http.Request) {
 		}
 		if err := h.Queries.DeleteTaskTokensByTask(r.Context(), task.ID); err != nil {
 			slog.Warn("complete task without output: failed to revoke task tokens", "task_id", uuidToString(task.ID), "error", err)
+		}
+		if strings.HasPrefix(artifactError, creativePreAdaptationOutputMismatchError) {
+			if recoveryTaskID, retryErr := h.retryCreativePreAdaptationOutput(r.Context(), *task); retryErr != nil {
+				slog.Warn("queue automatic pre-adaptation recovery failed", "task_id", uuidToString(task.ID), "error", retryErr)
+			} else if recoveryTaskID != "" {
+				h.publishCreativeMaterialsUpdated(parseUUID(workspaceID), pgtype.UUID{}, "system", "")
+				slog.Info("automatic pre-adaptation recovery queued", "task_id", uuidToString(task.ID), "recovery_task_id", recoveryTaskID)
+			}
+		}
+		if err := h.settleCreativeProductionVariantTask(r.Context(), *task); err != nil {
+			slog.Error("close incomplete creative production variant after rejected completion", "task_id", taskID, "error", err)
 		}
 		slog.Warn("creative task failed closed", "task_id", taskID, "error", artifactError)
 		writeJSON(w, http.StatusOK, h.hydratedTaskResponse(r.Context(), *task, workspaceID))
@@ -2188,7 +2195,14 @@ func (h *Handler) CompleteTask(w http.ResponseWriter, r *http.Request) {
 	}
 
 	h.emitIssueExecutedOnFirstCompletion(r, task)
-	h.enqueueCreativePreAdaptation(r.Context(), *task, workspaceID)
+	if err := h.enqueueCreativePreAdaptation(r.Context(), *task, workspaceID); err != nil {
+		// The source analysis is already durably completed. Keep that result
+		// truthful while exposing the handoff failure for the next recovery pass.
+		slog.Warn("automatic creative pre-adaptation handoff failed", "task_id", taskID, "error", err)
+	}
+	if err := h.settleCreativeProductionVariantTask(r.Context(), *task); err != nil {
+		slog.Error("close incomplete creative production variant after completion", "task_id", taskID, "error", err)
+	}
 
 	// Best-effort revoke of any agent task token minted at claim time.
 	// The token would naturally expire at the 24h watermark and is also
@@ -2343,6 +2357,15 @@ func (h *Handler) FailTask(w http.ResponseWriter, r *http.Request) {
 	// terminal window. The 24h expiry / cascade are the durable guards.
 	if err := h.Queries.DeleteTaskTokensByTask(r.Context(), task.ID); err != nil {
 		slog.Warn("fail task: failed to revoke task tokens", "task_id", uuidToString(task.ID), "error", err)
+	}
+	if recoveryTaskID, recoveryErr := h.recoverFailedCreativePreAdaptationTask(r.Context(), *task, workspaceID, req.Error); recoveryErr != nil {
+		slog.Warn("recover failed pre-adaptation task failed", "task_id", taskID, "error", recoveryErr)
+	} else if recoveryTaskID != "" {
+		h.publishCreativeMaterialsUpdated(parseUUID(workspaceID), pgtype.UUID{}, "system", "")
+		slog.Info("automatic pre-adaptation recovery queued", "task_id", taskID, "recovery_task_id", recoveryTaskID)
+	}
+	if err := h.settleCreativeProductionVariantTask(r.Context(), *task); err != nil {
+		slog.Error("close incomplete creative production variant after failure", "task_id", taskID, "error", err)
 	}
 
 	slog.Info("task failed", "task_id", taskID, "agent_id", uuidToString(task.AgentID), "task_error", req.Error, "failure_reason", req.FailureReason)

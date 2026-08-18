@@ -363,6 +363,14 @@ func (h *Handler) RunCredentialCrawl(w http.ResponseWriter, r *http.Request) {
 		workspaceID = issue.WorkspaceID
 		strategyProjectID = issue.ProjectID
 	}
+	if normalizedCrawlConnectorID(req.ConnectorID) == "appgrowing" && normalizedCrawlCapability(req.Capability) == "material_search" {
+		preparedParams, prepareErr := h.prepareCreativeFactoryCollectionParams(r.Context(), workspaceID, req.ConnectorID, req.Capability, req.Params)
+		if prepareErr != nil {
+			writeError(w, http.StatusUnprocessableEntity, prepareErr.Error())
+			return
+		}
+		req.Params = preparedParams
+	}
 	req.Params = h.materialSearchParamsWithStrategyMemory(r.Context(), workspaceID, strategyProjectID, req.ConnectorID, req.Capability, req.Params)
 	var noveltyErr error
 	req.Params, noveltyErr = h.materialSearchParamsWithNovelty(r.Context(), workspaceID, req.ConnectorID, req.Capability, req.Params)
@@ -436,15 +444,15 @@ func (h *Handler) RunCredentialCrawl(w http.ResponseWriter, r *http.Request) {
 			r.Context(), workspaceID, requestingUserID, crawlRunID, req.ConnectorID, diagnosis,
 		)
 		writeJSON(w, http.StatusUnprocessableEntity, map[string]any{
-			"status":       result.Status,
-			"message":      failureMessage,
-			"crawl_run_id": crawlRunID,
-			"diagnostics":  json.RawMessage(diagnosis),
+			"status":            result.Status,
+			"message":           failureMessage,
+			"crawl_run_id":      crawlRunID,
+			"diagnostics":       json.RawMessage(diagnosis),
 			"diagnosis_task_id": diagnosisTaskID,
 		})
 		return
 	}
-	materials := creativeMaterialsFromCrawlRaw(result.Raw)
+	materials := capCreativeFactoryMaterials(creativeMaterialsFromCrawlRaw(result.Raw))
 	importInput.Materials = materials
 	importSummary, err := h.importCreativeMaterials(r.Context(), importInput)
 	if err != nil {

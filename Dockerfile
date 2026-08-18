@@ -39,6 +39,7 @@ COPY --from=builder /src/server/bin/migrate .
 COPY --from=builder /src/server/bin/migrate_attachments_to_oss .
 COPY --from=builder /src/server/bin/backfill_task_usage_hourly .
 COPY server/migrations/ ./migrations/
+COPY scripts/creative-platform-skills/ ./creative-platform-skills/
 COPY docker/entrypoint.sh .
 RUN sed -i 's/\r$//' entrypoint.sh && chmod +x entrypoint.sh
 

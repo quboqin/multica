@@ -69,25 +69,6 @@ var creativeMarketPackCmd = &cobra.Command{
 	Short: "Work with creative market packs",
 }
 
-var creativeMarketPackExtractionCmd = &cobra.Command{
-	Use:   "component-extraction",
-	Short: "Read and write market-pack component extraction results",
-}
-
-var creativeMarketPackExtractionGetCmd = &cobra.Command{
-	Use:   "get <resource-id> <extraction-id>",
-	Short: "Get one component extraction and its source attachment",
-	Args:  exactArgs(2),
-	RunE:  runCreativeMarketPackExtractionGet,
-}
-
-var creativeMarketPackExtractionPutCmd = &cobra.Command{
-	Use:   "put <resource-id> <extraction-id>",
-	Short: "Save one component extraction result from JSON",
-	Args:  exactArgs(2),
-	RunE:  runCreativeMarketPackExtractionPut,
-}
-
 var creativeOrderCmd = &cobra.Command{
 	Use:   "order",
 	Short: "Work with creative production orders",
@@ -124,6 +105,13 @@ var creativeOrderAssetPutCmd = &cobra.Command{
 	Short: "Create or update one generated, Prime, or delivered asset from JSON",
 	Args:  exactArgs(1),
 	RunE:  runCreativeOrderAssetPut,
+}
+
+var creativeOrderDiagnosticAssetPutCmd = &cobra.Command{
+	Use:   "diagnostic-asset-put <order-id>",
+	Short: "Create or update one process image from an uploaded attachment",
+	Args:  exactArgs(1),
+	RunE:  runCreativeOrderDiagnosticAssetPut,
 }
 
 var creativeOrderQCPutCmd = &cobra.Command{
@@ -170,11 +158,6 @@ func init() {
 	creativeSourceAnalysisPreAdaptationPutCmd.Flags().String("output", "json", "Output format: json")
 
 	creativeCmd.AddCommand(creativeMarketPackCmd)
-	creativeMarketPackCmd.AddCommand(creativeMarketPackExtractionCmd)
-	creativeMarketPackExtractionCmd.AddCommand(creativeMarketPackExtractionGetCmd, creativeMarketPackExtractionPutCmd)
-	creativeMarketPackExtractionGetCmd.Flags().String("output", "json", "Output format: json")
-	creativeMarketPackExtractionPutCmd.Flags().String("input-file", "", "UTF-8 JSON extraction result (required)")
-	creativeMarketPackExtractionPutCmd.Flags().String("output", "json", "Output format: json")
 
 	creativeCmd.AddCommand(creativeOrderCmd)
 	creativeOrderCmd.AddCommand(
@@ -183,6 +166,7 @@ func init() {
 		creativeOrderGetCmd,
 		creativeOrderVariantPutCmd,
 		creativeOrderAssetPutCmd,
+		creativeOrderDiagnosticAssetPutCmd,
 		creativeOrderQCPutCmd,
 		creativeOrderQCFinalizeCmd,
 		creativeOrderAdoptCmd,
@@ -191,11 +175,17 @@ func init() {
 		creativeOrderCreateCmd,
 		creativeOrderVariantPutCmd,
 		creativeOrderAssetPutCmd,
+		creativeOrderDiagnosticAssetPutCmd,
 		creativeOrderQCPutCmd,
 	} {
 		command.Flags().String("input-file", "", "UTF-8 JSON envelope (required)")
 		command.Flags().String("output", "json", "Output format: json")
 	}
+	creativeOrderAssetPutCmd.Flags().String("model-result-file", "", "UTF-8 JSON result from multica image edit or image edit-batch")
+	creativeOrderAssetPutCmd.Flags().String("model-result-id", "", "Result ID when --model-result-file is an image edit-batch response")
+	creativeOrderAssetPutCmd.Flags().String("prompt-contract-file", "", "UTF-8 JSON prompt compiler evidence")
+	creativeOrderAssetPutCmd.Flags().String("copy-validation-file", "", "UTF-8 JSON copy validation evidence")
+	creativeOrderAssetPutCmd.Flags().String("normalization-evidence-file", "", "UTF-8 JSON normalized delivery evidence")
 	creativeOrderListCmd.Flags().String("output", "json", "Output format: json")
 	creativeOrderGetCmd.Flags().String("output", "json", "Output format: json")
 	creativeOrderQCFinalizeCmd.Flags().String("variant", "", "Creative Order Variant UUID (required)")
@@ -333,14 +323,6 @@ func runCreativeSourceAnalysisPreAdaptationPut(cmd *cobra.Command, args []string
 	return putCreativeDomainJSON(cmd, "/api/creative/source-analyses/"+url.PathEscape(args[0])+"/pre-adaptation")
 }
 
-func runCreativeMarketPackExtractionGet(cmd *cobra.Command, args []string) error {
-	return getCreativeDomainJSON(cmd, "/api/creative/resources/"+url.PathEscape(args[0])+"/component-extractions/"+url.PathEscape(args[1]))
-}
-
-func runCreativeMarketPackExtractionPut(cmd *cobra.Command, args []string) error {
-	return putCreativeDomainJSON(cmd, "/api/creative/resources/"+url.PathEscape(args[0])+"/component-extractions/"+url.PathEscape(args[1]))
-}
-
 func runCreativeOrderCreate(cmd *cobra.Command, _ []string) error {
 	return postCreativeDomainJSON(cmd, "/api/creative/orders")
 }
@@ -358,7 +340,15 @@ func runCreativeOrderVariantPut(cmd *cobra.Command, args []string) error {
 }
 
 func runCreativeOrderAssetPut(cmd *cobra.Command, args []string) error {
-	return putCreativeDomainJSON(cmd, "/api/creative/orders/"+url.PathEscape(args[0])+"/assets")
+	payload, err := creativeOrderAssetPayload(cmd)
+	if err != nil {
+		return err
+	}
+	return writeCreativeDomainPayload(cmd, "/api/creative/orders/"+url.PathEscape(args[0])+"/assets", "PUT", payload)
+}
+
+func runCreativeOrderDiagnosticAssetPut(cmd *cobra.Command, args []string) error {
+	return putCreativeDomainJSON(cmd, "/api/creative/orders/"+url.PathEscape(args[0])+"/diagnostic-assets")
 }
 
 func runCreativeOrderQCPut(cmd *cobra.Command, args []string) error {
@@ -443,6 +433,10 @@ func writeCreativeDomainJSON(cmd *cobra.Command, path, method string) error {
 	if err != nil {
 		return err
 	}
+	return writeCreativeDomainPayload(cmd, path, method, payload)
+}
+
+func writeCreativeDomainPayload(cmd *cobra.Command, path, method string, payload json.RawMessage) error {
 	client, err := newAPIClient(cmd)
 	if err != nil {
 		return err
@@ -476,6 +470,205 @@ func creativeDomainPayload(cmd *cobra.Command) (json.RawMessage, error) {
 	var object map[string]json.RawMessage
 	if err := json.Unmarshal(raw, &object); err != nil || object == nil {
 		return nil, fmt.Errorf("creative domain input must be a JSON object")
+	}
+	return json.RawMessage(raw), nil
+}
+
+func creativeOrderAssetPayload(cmd *cobra.Command) (json.RawMessage, error) {
+	payload, err := creativeDomainPayload(cmd)
+	if err != nil {
+		return nil, err
+	}
+	modelResultFile, _ := cmd.Flags().GetString("model-result-file")
+	promptContractFile, _ := cmd.Flags().GetString("prompt-contract-file")
+	copyValidationFile, _ := cmd.Flags().GetString("copy-validation-file")
+	normalizationFile, _ := cmd.Flags().GetString("normalization-evidence-file")
+	resultID, _ := cmd.Flags().GetString("model-result-id")
+	evidenceFiles := []string{modelResultFile, promptContractFile, copyValidationFile, normalizationFile}
+	provided := 0
+	for _, file := range evidenceFiles {
+		if strings.TrimSpace(file) != "" {
+			provided++
+		}
+	}
+	if provided == 0 {
+		if strings.TrimSpace(resultID) != "" {
+			return nil, fmt.Errorf("--model-result-id requires --model-result-file")
+		}
+		return payload, nil
+	}
+	if provided != len(evidenceFiles) {
+		return nil, fmt.Errorf("--model-result-file, --prompt-contract-file, --copy-validation-file, and --normalization-evidence-file must be provided together")
+	}
+
+	var envelope map[string]json.RawMessage
+	if err := json.Unmarshal(payload, &envelope); err != nil || envelope == nil {
+		return nil, fmt.Errorf("creative order asset input must be a JSON object")
+	}
+	asset := envelope
+	if nested, ok := envelope["asset"]; ok {
+		if err := json.Unmarshal(nested, &asset); err != nil || asset == nil {
+			return nil, fmt.Errorf("creative order asset must be a JSON object")
+		}
+	}
+	if _, exists := asset["metadata"]; exists {
+		return nil, fmt.Errorf("asset metadata is generated from the evidence files")
+	}
+	if _, exists := asset["evidence"]; exists {
+		return nil, fmt.Errorf("asset evidence is generated from the evidence files")
+	}
+
+	modelResult, err := creativeAssetModelResult(modelResultFile, resultID)
+	if err != nil {
+		return nil, err
+	}
+	promptContract, err := creativeAssetEvidenceFile(promptContractFile, "prompt contract")
+	if err != nil {
+		return nil, err
+	}
+	copyValidation, err := creativeAssetEvidenceFile(copyValidationFile, "copy validation")
+	if err != nil {
+		return nil, err
+	}
+	normalization, err := creativeAssetEvidenceFile(normalizationFile, "normalization evidence")
+	if err != nil {
+		return nil, err
+	}
+
+	var trace struct {
+		Model             string  `json:"model"`
+		Prompt            string  `json:"prompt"`
+		PromptSHA256      string  `json:"prompt_sha256"`
+		RequestID         string  `json:"request_id"`
+		Attempts          int     `json:"attempts"`
+		ActualWidth       int     `json:"actual_width"`
+		ActualHeight      int     `json:"actual_height"`
+		ActualAspectRatio float64 `json:"actual_aspect_ratio"`
+		ProviderSlotLimit int     `json:"provider_slot_limit"`
+	}
+	if err := json.Unmarshal(modelResult, &trace); err != nil {
+		return nil, fmt.Errorf("decode model result: %w", err)
+	}
+	if strings.TrimSpace(trace.Model) != "gpt-image-2" || strings.TrimSpace(trace.Prompt) == "" || strings.TrimSpace(trace.RequestID) == "" || trace.Attempts < 1 || trace.ActualWidth < 1 || trace.ActualHeight < 1 || trace.ActualAspectRatio <= 0 {
+		return nil, fmt.Errorf("model result is missing the completed generated asset trace")
+	}
+	if trace.PromptSHA256 != imagePromptSHA256(trace.Prompt) {
+		return nil, fmt.Errorf("model result prompt_sha256 does not match prompt")
+	}
+	var contract struct {
+		PromptSHA256 string `json:"prompt_sha256"`
+	}
+	if err := json.Unmarshal(promptContract, &contract); err != nil || contract.PromptSHA256 != trace.PromptSHA256 {
+		return nil, fmt.Errorf("prompt contract prompt_sha256 does not match model result")
+	}
+	var validation struct {
+		Passed bool `json:"passed"`
+	}
+	if err := json.Unmarshal(copyValidation, &validation); err != nil || !validation.Passed {
+		return nil, fmt.Errorf("copy validation must be a passed JSON evidence object")
+	}
+	var normalized struct {
+		TargetSize map[string]json.RawMessage `json:"target_size"`
+	}
+	if err := json.Unmarshal(normalization, &normalized); err != nil || len(normalized.TargetSize) == 0 {
+		return nil, fmt.Errorf("normalization evidence must contain target_size")
+	}
+
+	metadata, err := json.Marshal(map[string]any{
+		"model": trace.Model, "prompt": trace.Prompt,
+		"actual_width": trace.ActualWidth, "actual_height": trace.ActualHeight,
+		"actual_aspect_ratio": trace.ActualAspectRatio,
+	})
+	if err != nil {
+		return nil, err
+	}
+	evidence := map[string]any{
+		"request_id": trace.RequestID, "attempts": trace.Attempts, "prompt_sha256": trace.PromptSHA256,
+		"model_result": json.RawMessage(modelResult), "prompt_contract": json.RawMessage(promptContract),
+		"copy_validation": json.RawMessage(copyValidation), "normalization": json.RawMessage(normalization),
+		"prime_status": "pending",
+	}
+	if trace.ProviderSlotLimit > 0 {
+		evidence["provider_slot_limit"] = trace.ProviderSlotLimit
+	}
+	encodedEvidence, err := json.Marshal(evidence)
+	if err != nil {
+		return nil, err
+	}
+	asset["metadata"] = metadata
+	asset["evidence"] = encodedEvidence
+	return marshalCreativeAssetJSONObject(asset)
+}
+
+func creativeAssetModelResult(path, resultID string) (json.RawMessage, error) {
+	modelResult, err := creativeAssetEvidenceFile(path, "model result")
+	if err != nil {
+		return nil, err
+	}
+	var batch struct {
+		Results []json.RawMessage `json:"results"`
+	}
+	if err := json.Unmarshal(modelResult, &batch); err != nil || batch.Results == nil {
+		if strings.TrimSpace(resultID) != "" {
+			return nil, fmt.Errorf("--model-result-id is only valid for an image edit-batch result")
+		}
+		return stripCreativeAssetLocalPath(modelResult)
+	}
+	if strings.TrimSpace(resultID) == "" {
+		return nil, fmt.Errorf("--model-result-id is required for an image edit-batch result")
+	}
+	for _, result := range batch.Results {
+		var item struct {
+			ID string `json:"id"`
+		}
+		if err := json.Unmarshal(result, &item); err == nil && item.ID == resultID {
+			return stripCreativeAssetLocalPath(result)
+		}
+	}
+	return nil, fmt.Errorf("model result %q was not found", resultID)
+}
+
+func creativeAssetEvidenceFile(path, label string) (json.RawMessage, error) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("read %s: %w", label, err)
+	}
+	var object map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &object); err != nil || object == nil {
+		return nil, fmt.Errorf("%s must be a JSON object", label)
+	}
+	return json.RawMessage(raw), nil
+}
+
+func stripCreativeAssetLocalPath(raw json.RawMessage) (json.RawMessage, error) {
+	var object map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &object); err != nil || object == nil {
+		return nil, fmt.Errorf("model result must be a JSON object")
+	}
+	delete(object, "path")
+	for _, key := range []string{"generated_asset", "completed_generated_asset"} {
+		nested, ok := object[key]
+		if !ok {
+			continue
+		}
+		var nestedObject map[string]json.RawMessage
+		if err := json.Unmarshal(nested, &nestedObject); err != nil || nestedObject == nil {
+			continue
+		}
+		delete(nestedObject, "path")
+		encoded, err := json.Marshal(nestedObject)
+		if err != nil {
+			return nil, err
+		}
+		object[key] = encoded
+	}
+	return marshalCreativeAssetJSONObject(object)
+}
+
+func marshalCreativeAssetJSONObject(value any) (json.RawMessage, error) {
+	raw, err := json.Marshal(value)
+	if err != nil {
+		return nil, err
 	}
 	return json.RawMessage(raw), nil
 }

@@ -1,11 +1,12 @@
 "use client";
 
 import { useId, useState } from "react";
-import { AlertTriangle, Check, CheckCircle2, ChevronDown, Download, Eye, Image as ImageIcon, Info, PackageCheck } from "lucide-react";
+import { AlertTriangle, Check, CheckCircle2, ChevronDown, Download, ExternalLink, Eye, Image as ImageIcon, Info, PackageCheck } from "lucide-react";
 import { strToU8, zipSync } from "fflate";
 import type { Attachment, CreativeOrder, CreativeOrderAsset, CreativeOrderDiagnosticAsset, CreativeOrderItem, CreativeOrderQCReport, CreativeOrderVariant, CreativeOrderWorkflowFailure } from "@multica/core/types";
 import { Badge } from "@multica/ui/components/ui/badge";
 import { Button } from "@multica/ui/components/ui/button";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@multica/ui/components/ui/dialog";
 import { cn } from "@multica/ui/lib/utils";
 import { toast } from "sonner";
 import { creativeAttachmentBrowserURL } from "../lib/creative-attachment-url";
@@ -95,7 +96,7 @@ export function creativeOrderStage(order: CreativeOrder | undefined): CreativeOr
   if (actionableFailures.length > 0 || status === "failed" || blockedVariants > 0 || (status === "action_required" && variants.length === 0)) {
     const failureCount = actionableFailures.length;
     const detail = [
-      productionStoppedVariants > 0 ? `${productionStoppedVariants} 个变体生成未完成` : "",
+      productionStoppedVariants > 0 ? `${productionStoppedVariants} 个变体生成失败` : "",
       blockedVariants - productionStoppedVariants > 0 ? `${blockedVariants - productionStoppedVariants} 个变体有系统提醒` : "",
       readyVariants > 0 ? `${readyVariants} 个变体可验收` : "",
       failureCount > 0 ? `${failureCount} 条系统提醒` : "",
@@ -216,6 +217,7 @@ export function CreativeOrderDeliveryCandidates({
   disabled = false,
   showDirectionDetails = true,
   defaultOpen = true,
+  adjustment,
 }: {
   orderId: string;
   item: CreativeOrderItem;
@@ -228,11 +230,11 @@ export function CreativeOrderDeliveryCandidates({
   disabled?: boolean;
   showDirectionDetails?: boolean;
   defaultOpen?: boolean;
+  adjustment?: { variantId: string; sizeKey: string; status: string };
 }) {
   const adoptedVariant = adoptedCreativeOrderVariant(item);
   const otherVariants = adoptedVariant ? item.variants.filter((variant) => variant.id !== adoptedVariant.id) : [];
   const title = source.label || `素材 ${item.candidate_id.slice(0, 8)}`;
-  const direction = item.direction.trim();
   const progress = creativeOrderItemProgress(item);
   const [packageOpen, setPackageOpen] = useState(defaultOpen);
 
@@ -251,11 +253,11 @@ export function CreativeOrderDeliveryCandidates({
       </div>
     </summary>
     <div className="border-t">
-      {showDirectionDetails && direction && <details className="border-b px-4 py-3 text-xs text-muted-foreground">
-          <summary className="w-fit cursor-pointer select-none">生成指令详情</summary>
-          <pre className="mt-2 max-h-48 overflow-auto whitespace-pre-wrap break-words border bg-muted/20 p-3 font-sans text-xs leading-5">{direction}</pre>
+      {showDirectionDetails && item.direction.trim() && <details className="border-b px-4 py-3 text-xs text-muted-foreground">
+          <summary className="w-fit cursor-pointer select-none">生成方向详情</summary>
+          <pre className="mt-2 max-h-48 overflow-auto whitespace-pre-wrap break-words border bg-muted/20 p-3 font-sans text-xs leading-5">{item.direction.trim()}</pre>
         </details>}
-      <CreativeOrderSourceAndPrompt source={source} prompt={direction} progress={progress} />
+      <CreativeOrderSourceAndPrompt source={source} progress={progress} />
 
       {adoptedVariant ? <>
         <AdoptedVariantDelivery
@@ -281,8 +283,10 @@ export function CreativeOrderDeliveryCandidates({
               adoptingVariantId={adoptingVariantId}
               onAdopt={onAdopt}
               onAssetSelect={onAssetSelect}
+              onAssetInfo={onAssetInfo}
               disabled={disabled}
               subdued
+              adjustment={adjustment}
             />)}
           </div>
         </details>}
@@ -295,7 +299,9 @@ export function CreativeOrderDeliveryCandidates({
             adoptingVariantId={adoptingVariantId}
             onAdopt={onAdopt}
             onAssetSelect={onAssetSelect}
+            onAssetInfo={onAssetInfo}
             disabled={disabled}
+            adjustment={adjustment}
           />)}
         </div> : <div className="grid gap-3 p-4 lg:grid-cols-3"><CreativeOrderVariantPlaceholder /></div>}
     </div>
@@ -325,13 +331,13 @@ function creativeOrderItemProgress(item: CreativeOrderItem): CreativeOrderItemPr
   const readyVariants = variants.filter((variant) => creativeVariantAdoptionReadiness(variant).ready).length;
   if (item.adopted_variant_id) return { label: "已采用", detail: "已选择最终方案，可查看交付包。", tone: "default", variants: variants.length, previewAssets, expectedAssets, runningVariants, productionStoppedVariants, blockedVariants, readyVariants };
   if (readyVariants > 0) return { label: "可验收", detail: `${readyVariants}/${variants.length} 个变体可验收，先比较成图再采用。`, tone: "default", variants: variants.length, previewAssets, expectedAssets, runningVariants, productionStoppedVariants, blockedVariants, readyVariants };
-  if (productionStoppedVariants > 0) return { label: "生成未完成", detail: `${productionStoppedVariants} 个变体生成未完成，诊断图仅用于排查。`, tone: "secondary", variants: variants.length, previewAssets, expectedAssets, runningVariants, productionStoppedVariants, blockedVariants, readyVariants };
+  if (productionStoppedVariants > 0) return { label: "生成失败", detail: `${productionStoppedVariants} 个变体生成失败，过程图片仅用于排查。`, tone: "secondary", variants: variants.length, previewAssets, expectedAssets, runningVariants, productionStoppedVariants, blockedVariants, readyVariants };
   if (blockedVariants > 0) return { label: "待验收", detail: `${blockedVariants} 个变体有系统提醒，先查看现有结果再决定。`, tone: "secondary", variants: variants.length, previewAssets, expectedAssets, runningVariants, productionStoppedVariants, blockedVariants, readyVariants };
-  if (runningVariants > 0 || variants.length > 0) return { label: "生成中", detail: `${previewAssets}/${Math.max(expectedAssets, 1)} 张过程图已就绪，页面会自动刷新。`, tone: "outline", variants: variants.length, previewAssets, expectedAssets, runningVariants, productionStoppedVariants, blockedVariants, readyVariants };
+  if (runningVariants > 0 || variants.length > 0) return { label: "生成中", detail: `${previewAssets}/${Math.max(expectedAssets, 1)} 张成图已就绪，页面会自动刷新。`, tone: "outline", variants: variants.length, previewAssets, expectedAssets, runningVariants, productionStoppedVariants, blockedVariants, readyVariants };
   return { label: "准备中", detail: "等待后台创建生成任务。", tone: "secondary", variants: 0, previewAssets: 0, expectedAssets: 0, runningVariants: 0, productionStoppedVariants: 0, blockedVariants: 0, readyVariants: 0 };
 }
 
-function CreativeOrderSourceAndPrompt({ source, prompt, progress }: { source: { label: string; url: string }; prompt: string; progress: CreativeOrderItemProgress }) {
+function CreativeOrderSourceAndPrompt({ source, progress }: { source: { label: string; url: string }; progress: CreativeOrderItemProgress }) {
   return <div className="grid border-b bg-muted/10 lg:grid-cols-[minmax(240px,0.72fr)_minmax(0,1.28fr)]">
     <figure className="min-w-0 border-b bg-background lg:border-b-0 lg:border-r">
       <figcaption className="border-b px-3 py-2 text-xs font-medium">原图 · {source.label}</figcaption>
@@ -342,23 +348,20 @@ function CreativeOrderSourceAndPrompt({ source, prompt, progress }: { source: { 
     <div className="min-w-0 space-y-3 px-4 py-3">
       <div className="flex flex-wrap gap-2 text-xs">
         <Badge variant="outline">{progress.variants} 个变体</Badge>
-        <Badge variant="outline">{progress.expectedAssets > 0 ? `${progress.previewAssets}/${progress.expectedAssets} 张过程图` : "等待任务"}</Badge>
+        <Badge variant="outline">{progress.expectedAssets > 0 ? `${progress.previewAssets}/${progress.expectedAssets} 张成图` : "等待任务"}</Badge>
         {progress.runningVariants > 0 && <Badge variant="outline">{progress.runningVariants} 个生成中</Badge>}
-        {progress.productionStoppedVariants > 0 && <Badge variant="secondary">{progress.productionStoppedVariants} 个生成未完成</Badge>}
+        {progress.productionStoppedVariants > 0 && <Badge variant="secondary">{progress.productionStoppedVariants} 个生成失败</Badge>}
         {progress.blockedVariants - progress.productionStoppedVariants > 0 && <Badge variant="secondary">{progress.blockedVariants - progress.productionStoppedVariants} 条系统提醒</Badge>}
         {progress.readyVariants > 0 && <Badge>{progress.readyVariants} 个可验收</Badge>}
       </div>
-      <div>
-        <p className="text-xs font-medium text-muted-foreground">最终出图提示词</p>
-        <pre className="mt-2 max-h-52 overflow-auto whitespace-pre-wrap break-words border bg-background px-3 py-2 font-sans text-xs leading-5">{prompt || "本素材尚未记录最终出图提示词。"}</pre>
-      </div>
+      <p className="text-xs leading-5 text-muted-foreground">每张成图旁都可查看完整模型提示词、冻结文案、生成记录和版本溯源。</p>
     </div>
   </div>;
 }
 
 function CreativeOrderVariantPlaceholder() {
   return <div className="flex min-h-48 items-center justify-center border border-dashed bg-muted/10 px-6 text-center text-sm text-muted-foreground lg:col-span-3">
-    等待后台创建生成任务，完成后这里会出现过程图和验收入口。
+    等待后台创建生成任务，完成后这里会出现成图和验收入口。
   </div>;
 }
 
@@ -416,8 +419,10 @@ function VariantCandidate({
   adoptingVariantId,
   onAdopt,
   onAssetSelect,
+  onAssetInfo,
   disabled = false,
   subdued = false,
+  adjustment,
 }: {
   variant: CreativeOrderVariant;
   attachments: Map<string, DeliveryAttachment>;
@@ -425,8 +430,10 @@ function VariantCandidate({
   adoptingVariantId: string;
   onAdopt: (variantId: string, risk?: CreativeVariantAdoptionRisk) => void;
   onAssetSelect: (assetId: string) => void;
+  onAssetInfo?: (assetId: string) => void;
   disabled?: boolean;
   subdued?: boolean;
+  adjustment?: { variantId: string; sizeKey: string; status: string };
 }) {
   const readiness = creativeVariantAdoptionReadiness(variant);
   const riskAdoption = creativeVariantRiskAdoptionReadiness(variant);
@@ -434,6 +441,7 @@ function VariantCandidate({
   const descriptionId = useId();
   const previews = creativeVariantPreviewAssets(variant);
   const diagnostics = creativeVariantDiagnosticAssets(variant);
+  const [processOpen, setProcessOpen] = useState(false);
   const cover = previews.find((asset) => asset.size_key === "1080x1080") ?? previews[0];
   const coverURL = cover ? creativeAttachmentBrowserURL(attachments.get(cover.attachment_id)) : "";
   const coverDiagnostic = coverURL ? undefined : diagnostics.find((asset) => asset.size_key === "1080x1080") ?? diagnostics[0];
@@ -443,6 +451,14 @@ function VariantCandidate({
   const productionStopped = creativeVariantHasProductionStop(variant);
   const backgroundRunning = creativeVariantHasBackgroundWorkInProgress(variant);
   const requiresRiskAcknowledgement = riskAdoption.allowed;
+  const currentSizeAdjustment = adjustment?.variantId === variant.id ? adjustment : undefined;
+  const adjustmentBadge = currentSizeAdjustment?.status.includes("已完成")
+    ? "已完成"
+    : currentSizeAdjustment?.status.includes("未启动")
+      ? "未启动"
+      : currentSizeAdjustment?.status.includes("需要处理")
+        ? "待处理"
+        : "调整中";
   const adoptionDisabled = disabled || !readiness.ready || adopted || Boolean(adoptingVariantId);
   const statusTone = blocked
     ? "text-amber-700 dark:text-amber-300"
@@ -460,22 +476,28 @@ function VariantCandidate({
   };
   return <article className={cn("flex min-w-0 flex-col border bg-background", subdued && "opacity-75 transition-opacity hover:opacity-100")}>
     <div className="flex items-center justify-between gap-2 border-b px-3 py-2">
-      <div className="flex items-center gap-2"><span className="text-sm font-semibold">{variant.variant_key || variant.id.slice(0, 8)}</span><Badge variant="outline">r{variant.revision}</Badge></div>
-      {adopted ? <Badge variant="default"><CheckCircle2 className="h-3 w-3" />已采用</Badge> : blocked ? <Badge variant="secondary">{productionStopped ? "生成未完成" : "有系统提醒"}</Badge> : requiresRiskAcknowledgement ? <Badge variant="secondary">有系统提醒</Badge> : readiness.ready ? <Badge variant="outline"><CheckCircle2 className="h-3 w-3" />待验收</Badge> : backgroundRunning ? <Badge variant="outline">处理中</Badge> : <Badge variant="secondary">尚未完成</Badge>}
+      <div className="flex min-w-0 items-center gap-2"><span className="text-sm font-semibold">{variant.variant_key || variant.id.slice(0, 8)}</span><Badge variant="outline">r{variant.revision}</Badge>{currentSizeAdjustment && <span className="truncate text-xs text-amber-800 dark:text-amber-200">{CREATIVE_DELIVERY_SIZE_LABELS[currentSizeAdjustment.sizeKey as (typeof CREATIVE_DELIVERY_SIZES)[number]] ?? currentSizeAdjustment.sizeKey} {currentSizeAdjustment.status}</span>}</div>
+      {adopted ? <Badge variant="default"><CheckCircle2 className="h-3 w-3" />已采用</Badge> : currentSizeAdjustment ? <Badge variant="outline">{adjustmentBadge}</Badge> : blocked ? <Badge variant="secondary">{productionStopped ? "生成失败" : "有系统提醒"}</Badge> : requiresRiskAcknowledgement ? <Badge variant="secondary">有系统提醒</Badge> : readiness.ready ? <Badge variant="outline"><CheckCircle2 className="h-3 w-3" />待验收</Badge> : backgroundRunning ? <Badge variant="outline">处理中</Badge> : <Badge variant="secondary">尚未完成</Badge>}
     </div>
     <button type="button" disabled={(!cover || !coverURL) && !coverDiagnostic} onClick={() => { if (cover && coverURL) onAssetSelect(cover.id); else if (coverDiagnostic) openCreativeDiagnosticAsset(coverDiagnostic); }} className="group relative flex min-h-72 w-full items-center justify-center border-b bg-muted/10 p-3 disabled:cursor-default">
       {coverURL ? <img src={coverURL} alt={`${variant.variant_key} 方形主预览`} width={720} height={720} loading="lazy" className="max-h-[420px] w-full object-contain transition-transform group-hover:scale-[1.01]" /> : coverDiagnostic ? <>
-        <img src={coverDiagnostic.url} alt={`${variant.variant_key} 诊断图 ${coverDiagnostic.label}`} width={720} height={720} loading="lazy" className="max-h-[420px] w-full object-contain opacity-90 transition-transform group-hover:scale-[1.01]" />
-        <span className="absolute left-3 top-3 rounded-full border border-amber-300 bg-amber-50 px-2 py-1 text-[11px] font-medium text-amber-900 shadow-sm dark:border-amber-800 dark:bg-amber-950 dark:text-amber-200">未登记诊断图</span>
+        <img src={coverDiagnostic.url} alt={`${variant.variant_key} 过程图片 ${coverDiagnostic.label}`} width={720} height={720} loading="lazy" className="max-h-[420px] w-full object-contain opacity-90 transition-transform group-hover:scale-[1.01]" />
+        <span className="absolute left-3 top-3 rounded-full border border-amber-300 bg-amber-50 px-2 py-1 text-[11px] font-medium text-amber-900 shadow-sm dark:border-amber-800 dark:bg-amber-950 dark:text-amber-200">过程图片</span>
       </> : <EmptyImage label="待成图" />}
     </button>
     <div className="mt-auto space-y-2 p-3">
       <div className="grid grid-cols-3 divide-x border text-center text-[11px] text-muted-foreground">{CREATIVE_DELIVERY_SIZES.map((size) => {
         const asset = previews.find((candidate) => candidate.size_key === size);
-        const diagnostic = diagnostics.find((candidate) => candidate.size_key === size);
-        return <button key={size} type="button" disabled={!asset && !diagnostic} onClick={() => { if (asset) onAssetSelect(asset.id); else if (diagnostic) openCreativeDiagnosticAsset(diagnostic); }} className="px-2 py-2 disabled:opacity-50"><span className="block font-medium text-foreground">{CREATIVE_DELIVERY_SIZE_LABELS[size]}</span><span>{asset ? "可查看" : diagnostic ? "诊断图" : "待生成"}</span></button>;
+        return <div key={size} className="relative min-w-0">
+          <button type="button" disabled={!asset} onClick={() => { if (asset) onAssetSelect(asset.id); }} className="w-full px-2 py-2 pr-7 disabled:opacity-50"><span className="block font-medium text-foreground">{CREATIVE_DELIVERY_SIZE_LABELS[size]}</span><span>{asset ? "可查看" : "待成图"}</span></button>
+          {asset && onAssetInfo && <Button size="icon-sm" variant="ghost" className="absolute right-0.5 top-1/2 -translate-y-1/2" title={`查看${CREATIVE_DELIVERY_SIZE_LABELS[size]}成图详情`} aria-label={`查看${CREATIVE_DELIVERY_SIZE_LABELS[size]}成图详情`} onClick={() => onAssetInfo(asset.id)}><Info className="h-3.5 w-3.5" /></Button>}
+        </div>;
       })}</div>
-      {diagnostics.length > 0 && previews.length === 0 && <p className="text-xs text-amber-700 dark:text-amber-300">已保留 {diagnostics.length} 张未登记模型输出，仅用于判断停止原因，不参与采用或交付。</p>}
+      {diagnostics.length > 0 && <Button className="w-full" size="sm" variant="outline" onClick={() => setProcessOpen(true)}>
+        <ImageIcon className="h-4 w-4" />
+        查看过程图片
+        <Badge variant="secondary">{diagnostics.length}</Badge>
+      </Button>}
       <p id={descriptionId} className={cn("min-h-8 text-xs", statusTone)}>{readiness.status}</p>
       <VariantActionRequiredNotice variant={variant} disabled={disabled} />
       <VariantQCDetails details={qcDetails} />
@@ -488,7 +510,45 @@ function VariantCandidate({
         {disabled ? "订单已结束" : busy ? "正在采用" : adopted ? "当前采用" : requiresRiskAcknowledgement ? "忽略提醒并采用" : readiness.ready ? "采用此变体" : "尚不可采用"}
       </Button>
     </div>
+    <CreativeProcessImageDialog open={processOpen} onOpenChange={setProcessOpen} variant={variant} assets={diagnostics} />
   </article>;
+}
+
+function CreativeProcessImageDialog({
+  open,
+  onOpenChange,
+  variant,
+  assets,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  variant: CreativeOrderVariant;
+  assets: CreativeOrderDiagnosticAsset[];
+}) {
+  return <Dialog open={open} onOpenChange={onOpenChange}>
+    <DialogContent className="grid max-h-[94vh] grid-rows-[auto_minmax(0,1fr)] gap-0 overflow-hidden p-0 sm:max-w-[min(96vw,1280px)]">
+      <DialogHeader className="border-b px-5 py-4 pr-14">
+        <DialogTitle className="text-base">{variant.variant_key || "当前方案"} · 过程图片</DialogTitle>
+        <DialogDescription>展示本次自动流程留下的中间图片；只能查看，不能作为最终采用图。</DialogDescription>
+      </DialogHeader>
+      <div className="min-h-0 overflow-y-auto p-4">
+        {assets.length > 0 ? <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+          {assets.map((asset) => <figure key={asset.id} className="min-w-0 overflow-hidden border bg-background">
+            <figcaption className="flex items-center justify-between gap-2 border-b px-3 py-2">
+              <div className="min-w-0">
+                <p className="truncate text-xs font-medium">{CREATIVE_DELIVERY_SIZE_LABELS[asset.size_key as (typeof CREATIVE_DELIVERY_SIZES)[number]] ?? asset.size_key} · {asset.label}</p>
+                <p className="mt-0.5 truncate text-[11px] text-muted-foreground">{asset.filename}</p>
+              </div>
+              <Button size="icon-sm" variant="ghost" title="打开原图" aria-label={`打开过程图片 ${asset.filename}`} onClick={() => openCreativeDiagnosticAsset(asset)}><ExternalLink className="h-4 w-4" /></Button>
+            </figcaption>
+            <button type="button" className="flex min-h-72 w-full items-center justify-center bg-muted/10 p-3" onClick={() => openCreativeDiagnosticAsset(asset)}>
+              <img src={asset.url} alt={`${variant.variant_key} ${asset.label} ${asset.size_key}`} width={1200} height={1200} loading="lazy" className="max-h-[520px] w-full object-contain" />
+            </button>
+          </figure>)}
+        </div> : <EmptyImage label="暂无过程图片" />}
+      </div>
+    </DialogContent>
+  </Dialog>;
 }
 
 function VariantActionRequiredNotice({ variant, disabled = false }: { variant: CreativeOrderVariant; disabled?: boolean }) {
@@ -504,7 +564,7 @@ function VariantActionRequiredNotice({ variant, disabled = false }: { variant: C
 }
 
 function creativeVariantBlockerTitle(workflow: string | undefined, productionStopped = false): string {
-  if (productionStopped) return "成图生成未完成";
+  if (productionStopped) return "成图生成失败";
   const label = creativeVariantWorkflowLabel(workflow || "");
   return label ? `${label}提醒` : "系统提醒";
 }
@@ -513,7 +573,7 @@ function creativeVariantWorkflowLabel(workflow: string): string {
   return ({
     creative_plan: "创意方案",
     creative_production: "成图生成",
-    creative_prime: "品牌贴片",
+    brand_components: "品牌组件合成",
     creative_qc_technical: "技术质检",
     creative_qc_visual: "视觉质检",
     creative_direct_edit: "图片调整",
@@ -595,7 +655,7 @@ function DeliveryAssetPane({
     <figcaption className="flex items-center justify-between gap-2 border-b px-3 py-2">
       <span className="text-xs font-medium">{CREATIVE_DELIVERY_SIZE_LABELS[size]} · {size}</span>
       <span className="flex items-center gap-1">
-        {asset && onAssetInfo && <Button size="icon-sm" variant="ghost" title={`查看 ${size} 生成信息`} aria-label={`查看 ${size} 生成信息`} onClick={() => onAssetInfo(asset.id)}><Info className="h-4 w-4" /></Button>}
+        {asset && onAssetInfo && <Button size="icon-sm" variant="ghost" title={`查看${CREATIVE_DELIVERY_SIZE_LABELS[size]}成图详情`} aria-label={`查看${CREATIVE_DELIVERY_SIZE_LABELS[size]}成图详情`} onClick={() => onAssetInfo(asset.id)}><Info className="h-4 w-4" /></Button>}
         {url && attachment && <Button size="icon-sm" variant="ghost" title={`下载 ${size}`} aria-label={`下载 ${size}`} onClick={() => void downloadCreativeAttachment(attachment, `${size}${fileExtension(attachment.filename) || ".png"}`).catch((error: unknown) => toast.error(error instanceof Error ? error.message : "无法下载交付图"))}><Download className="h-4 w-4" /></Button>}
       </span>
     </figcaption>
@@ -620,22 +680,26 @@ export function creativeVariantAdoptionReadiness(variant: CreativeOrderVariant):
   const technical = reportByLane.get("technical") ?? "pending";
   const visual = reportByLane.get("visual") ?? "pending";
   const failedQC = creativeVariantFailedQCLabels(variant);
+  if (creativeVariantHasProductionContinuation(variant)) {
+    const generatedSizes = currentCreativeVariantSizeSet(variant, "generated");
+    return { ready: false, status: `成图生成中：已完成 ${generatedSizes.size}/${CREATIVE_DELIVERY_SIZES.length} 个尺寸` };
+  }
   if (failedQC.length > 0) {
     const risk = creativeVariantRiskAdoptionReadiness(variant);
     if (risk.allowed) return { ready: true, status: `系统提醒：${failedQC.join("、")}未通过，仍可查看、标注或忽略提醒采用` };
     return { ready: false, status: risk.status };
   }
   if (delivered.length === CREATIVE_DELIVERY_SIZES.length && primedSizes.size === CREATIVE_DELIVERY_SIZES.length && qcStatusAllowsAdoption(technical) && qcStatusAllowsAdoption(visual)) {
-    return { ready: true, status: "三尺寸、贴片与质检均已完成，可以采用" };
+    return { ready: true, status: "三尺寸、品牌组件与质检均已完成，可以采用" };
   }
   const productionStopDetail = creativeVariantProductionStopDetail(variant);
-  if (productionStopDetail) return { ready: false, status: `生成未完成：${productionStopDetail}` };
+  if (productionStopDetail) return { ready: false, status: `生成失败：${productionStopDetail}` };
   if (creativeVariantHasBackgroundWorkInProgress(variant)) {
-    if (primedSizes.size !== CREATIVE_DELIVERY_SIZES.length) return { ready: false, status: `成图已完成，正在贴片：已完成 ${primedSizes.size}/${CREATIVE_DELIVERY_SIZES.length} 个尺寸` };
-    if (!qcStatusAllowsAdoption(technical) || !qcStatusAllowsAdoption(visual)) return { ready: false, status: `贴片已完成，等待质检：${creativeVariantPendingQCLabels(technical, visual).join("、")}` };
+    if (primedSizes.size !== CREATIVE_DELIVERY_SIZES.length) return { ready: false, status: `成图已完成，正在合成品牌组件：已完成 ${primedSizes.size}/${CREATIVE_DELIVERY_SIZES.length} 个尺寸` };
+    if (!qcStatusAllowsAdoption(technical) || !qcStatusAllowsAdoption(visual)) return { ready: false, status: `品牌组件已完成，等待质检：${creativeVariantPendingQCLabels(technical, visual).join("、")}` };
   }
   if (!qcStatusAllowsAdoption(technical) || !qcStatusAllowsAdoption(visual)) return { ready: false, status: `等待质检：${creativeVariantPendingQCLabels(technical, visual).join("、")}` };
-  if (primedSizes.size !== CREATIVE_DELIVERY_SIZES.length) return { ready: false, status: `等待贴片：已完成 ${primedSizes.size}/${CREATIVE_DELIVERY_SIZES.length} 个尺寸` };
+  if (primedSizes.size !== CREATIVE_DELIVERY_SIZES.length) return { ready: false, status: `等待品牌组件合成：已完成 ${primedSizes.size}/${CREATIVE_DELIVERY_SIZES.length} 个尺寸` };
   if (delivered.length !== CREATIVE_DELIVERY_SIZES.length) return { ready: false, status: `等待正式交付：已完成 ${delivered.length}/${CREATIVE_DELIVERY_SIZES.length} 个尺寸` };
   if (variant.action_required?.detail) return { ready: false, status: `系统提醒：${variant.action_required.detail}` };
   return { ready: false, status: `等待变体完成：当前状态 ${variant.status}` };
@@ -647,6 +711,7 @@ export function creativeVariantIsInProgress(variant: CreativeOrderVariant): bool
 
 export function creativeVariantNeedsManualAction(variant: CreativeOrderVariant): boolean {
   if (creativeVariantHasCompletePassingDelivery(variant)) return false;
+  if (creativeVariantHasProductionContinuation(variant)) return false;
   if (creativeVariantHasQCFailure(variant)) return !creativeVariantRiskAdoptionReadiness(variant).allowed;
   if (creativeVariantHasBackgroundWorkInProgress(variant)) return false;
   return variant.status === "action_required" || variant.status === "failed" || Boolean(variant.action_required);
@@ -659,8 +724,14 @@ function creativeVariantHasProductionStop(variant: CreativeOrderVariant): boolea
 function creativeVariantProductionStopDetail(variant: CreativeOrderVariant): string {
   const blocker = variant.action_required;
   if (!blocker || blocker.workflow !== "creative_production") return "";
-  if (creativeVariantHasProductionHandoff(variant)) return "";
+  if (variant.status !== "action_required" && variant.status !== "failed") return "";
   return businessActionRequiredDetail(blocker.workflow, blocker.detail);
+}
+
+function creativeVariantHasProductionContinuation(variant: CreativeOrderVariant): boolean {
+  const blocker = variant.action_required;
+  if (!blocker || blocker.workflow !== "creative_production") return false;
+  return variant.status === "queued" || variant.status === "running" || variant.status === "partial";
 }
 
 function creativeOrderWorkflowFailureIsQC(workflow: string): boolean {
@@ -670,7 +741,16 @@ function creativeOrderWorkflowFailureIsQC(workflow: string): boolean {
 function creativeVariantHasBackgroundWorkInProgress(variant: CreativeOrderVariant): boolean {
   if (creativeVariantHasQCFailure(variant)) return false;
   if (creativeVariantHasCompletePassingDelivery(variant)) return false;
-  if (!creativeVariantHasProductionHandoff(variant) && !creativeVariantHasPrimeHandoff(variant) && !creativeVariantHasPendingQCFinalize(variant)) return false;
+  const pendingQCFinalize = creativeVariantHasPendingQCFinalize(variant);
+  if (variant.status !== "queued" && variant.status !== "running" && variant.status !== "partial" && !pendingQCFinalize) return false;
+  const generatedSizes = currentCreativeVariantSizeSet(variant, "generated");
+  const primedSizes = currentCreativeVariantSizeSet(variant, "primed");
+  if (generatedSizes.size === CREATIVE_DELIVERY_SIZES.length && primedSizes.size !== CREATIVE_DELIVERY_SIZES.length) return true;
+  const reportByLane = new Map(creativeVariantQCDetails(variant).map((detail) => [detail.lane, detail.status]));
+  const technical = reportByLane.get("technical") ?? "pending";
+  const visual = reportByLane.get("visual") ?? "pending";
+  if (primedSizes.size === CREATIVE_DELIVERY_SIZES.length && (!qcStatusAllowsAdoption(technical) || !qcStatusAllowsAdoption(visual))) return true;
+  if (!pendingQCFinalize) return false;
   const deliveredSizes = new Set(creativeVariantDeliveryAssets(variant).map((asset) => asset.size_key));
   if (deliveredSizes.size === CREATIVE_DELIVERY_SIZES.length) return false;
   return true;
@@ -686,39 +766,6 @@ function creativeVariantHasCompletePassingDelivery(variant: CreativeOrderVariant
     && primedSizes.size === CREATIVE_DELIVERY_SIZES.length
     && qcStatusAllowsAdoption(technical)
     && qcStatusAllowsAdoption(visual);
-}
-
-function creativeVariantHasProductionHandoff(variant: CreativeOrderVariant): boolean {
-  const blocker = variant.action_required;
-  if (!blocker || blocker.workflow !== "creative_production") return false;
-  const detail = blocker.detail.toLowerCase();
-  const productionDelegatedPrime = detail.includes("prime")
-    && (
-      detail.includes("已委派")
-      || detail.includes("delegat")
-      || detail.includes("prime 状态")
-      || detail.includes("prime status")
-      || detail.includes("queued")
-      || detail.includes("dispatched")
-      || detail.includes("running")
-    );
-  return productionDelegatedPrime && !detail.includes("未注册") && !detail.includes("未完成") && !detail.includes("failed") && !detail.includes("action_required");
-}
-
-function creativeVariantHasPrimeHandoff(variant: CreativeOrderVariant): boolean {
-  const blocker = variant.action_required;
-  if (!blocker || blocker.workflow !== "creative_prime") return false;
-  const detail = blocker.detail.toLowerCase();
-  if (detail.includes("未注册") || detail.includes("失败") || detail.includes("failed") || detail.includes("error")) return false;
-  const primedSizes = currentCreativeVariantSizeSet(variant, "primed");
-  const detailSaysPrimeCompleted = detail.includes("prime") && (
-    detail.includes("已完成")
-    || detail.includes("合成")
-    || detail.includes("登记")
-    || detail.includes("completed")
-    || detail.includes("registered")
-  );
-  return detailSaysPrimeCompleted || primedSizes.size === CREATIVE_DELIVERY_SIZES.length;
 }
 
 function creativeVariantHasPendingQCFinalize(variant: CreativeOrderVariant): boolean {
@@ -766,7 +813,7 @@ export function creativeVariantRiskAdoptionReadiness(variant: CreativeOrderVaria
     .map((asset) => asset.size_key)
     .filter((size) => CREATIVE_DELIVERY_SIZES.includes(size as (typeof CREATIVE_DELIVERY_SIZES)[number])));
   if (primedSizes.size !== CREATIVE_DELIVERY_SIZES.length) {
-    return { allowed: false, status: `系统提醒：贴片仅完成 ${primedSizes.size}/${CREATIVE_DELIVERY_SIZES.length} 个尺寸，暂不可采用` };
+    return { allowed: false, status: `系统提醒：品牌组件仅完成 ${primedSizes.size}/${CREATIVE_DELIVERY_SIZES.length} 个尺寸，暂不可采用` };
   }
   return { allowed: true, status: `系统提醒：${failed.map((detail) => detail.label).join("、")}未通过` };
 }
@@ -783,16 +830,6 @@ export function creativeVariantCanRetryQC(variant: CreativeOrderVariant): boolea
     .filter((size) => CREATIVE_DELIVERY_SIZES.includes(size as (typeof CREATIVE_DELIVERY_SIZES)[number])));
   if (primedSizes.size !== CREATIVE_DELIVERY_SIZES.length) return false;
   return creativeVariantQCDetails(variant).some((detail) => detail.status === "failed");
-}
-
-export function creativeVariantCanRepairPrime(variant: CreativeOrderVariant): boolean {
-  if (creativeVariantHasBackgroundWorkInProgress(variant)) return false;
-  if (variant.prime_repair_available !== true || variant.prime_repair_used === true || variant.status !== "action_required") return false;
-  const generatedSizes = new Set(variant.assets
-    .filter((asset) => asset.revision === variant.revision && asset.stage === "generated" && asset.status === "completed")
-    .map((asset) => asset.size_key)
-    .filter((size) => CREATIVE_DELIVERY_SIZES.includes(size as (typeof CREATIVE_DELIVERY_SIZES)[number])));
-  return generatedSizes.size === CREATIVE_DELIVERY_SIZES.length;
 }
 
 function currentCreativeVariantQCReports(variant: CreativeOrderVariant): Map<"technical" | "visual", CreativeOrderQCReport> {
@@ -827,7 +864,7 @@ function creativeVariantQCBlockingFailures(variant: CreativeOrderVariant, lane: 
   }
 
   return [lane === "technical"
-    ? "技术质检没有同步具体失败明细；请人工复核文件完整性、贴片、二维码和渠道要求。"
+    ? "技术质检没有同步具体失败明细；请人工复核文件完整性、品牌组件和渠道要求。"
     : "视觉质检没有同步具体失败明细；请人工复核文字可读性、遮挡、数值一致性和整体画面质量。"];
 }
 
@@ -874,11 +911,10 @@ function businessQCMessage(message: string): string {
 
 function businessQCCodeMessage(text: string): string {
   const normalized = text.toLowerCase();
-  if (normalized.includes("qr_independent_redecode_failed")) return "二维码无法独立识别，可能影响渠道验收。";
-  if (normalized.includes("attachment_download_primed_asset_failed")) return "贴片后的成图文件无法读取或下载，系统恢复后仍需人工确认可用性。";
+  if (normalized.includes("attachment_download_primed_asset_failed")) return "品牌组件合成后的成图文件无法读取或下载，系统恢复后仍需人工确认可用性。";
   if (normalized.includes("manifest_layout_contract_missing")) return "成图缺少布局清单，无法确认三尺寸交付是否完整。";
   if (normalized.includes("visual_quality_failure")) return "视觉质检判断画面质量未达标，需要人工复核。";
-  if (normalized.includes("corner_overlap")) return "四角品牌、商店或二维码区域疑似被画面内容遮挡。";
+  if (normalized.includes("corner_overlap")) return "四角品牌或商店区域疑似被画面内容遮挡。";
   if (normalized.includes("delegation_contract_missing_issue_id")) return "质检任务缺少订单关联信息，系统恢复后仍未同步完整结果。";
   return "";
 }

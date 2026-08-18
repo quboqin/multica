@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -56,6 +57,37 @@ type creativeFeedbackMetricsResponse struct {
 	QCAccepted        int `json:"qc_accepted"`
 	QCMissedIssue     int `json:"qc_missed_issue"`
 	QCFalsePositive   int `json:"qc_false_positive"`
+}
+
+type creativeFeedbackDashboardResponse struct {
+	Workflow creativeFeedbackWorkflowDashboard `json:"workflow"`
+}
+
+type creativeFeedbackWorkflowDashboard struct {
+	CandidateSelected          int                             `json:"candidate_selected"`
+	CandidateRejected          int                             `json:"candidate_rejected"`
+	CopyAccepted               int                             `json:"copy_accepted"`
+	CopyReplaced               int                             `json:"copy_replaced"`
+	AssetReported              int                             `json:"asset_reported"`
+	QCAccepted                 int                             `json:"qc_accepted"`
+	QCMissedIssue              int                             `json:"qc_missed_issue"`
+	QCFalsePositive            int                             `json:"qc_false_positive"`
+	ImageGenerationSuccess     int                             `json:"image_generation_success"`
+	ImageGenerationTotal       int                             `json:"image_generation_total"`
+	ImageGenerationFailed      int                             `json:"image_generation_failed"`
+	ImageGenerationInProgress  int                             `json:"image_generation_in_progress"`
+	ThreeSizeQCSuccess         int                             `json:"three_size_qc_success"`
+	ThreeSizeQCTotal           int                             `json:"three_size_qc_total"`
+	FirstDeliveryCount         int                             `json:"first_delivery_count"`
+	FirstDeliveryTotal         int                             `json:"first_delivery_total"`
+	ProductionAdopted          int                             `json:"production_adopted"`
+	ProductionAdoptionEligible int                             `json:"production_adoption_eligible"`
+	FeedbackReasons            []creativeFeedbackReasonSummary `json:"feedback_reasons"`
+}
+
+type creativeFeedbackReasonSummary struct {
+	Code  string `json:"code"`
+	Count int    `json:"count"`
 }
 
 type creativeFeedbackActivity struct {
@@ -439,8 +471,30 @@ func (h *Handler) GetCreativeFeedbackMetrics(w http.ResponseWriter, r *http.Requ
 	if !ok {
 		return
 	}
+	metrics, err := h.creativeFeedbackMetrics(r.Context(), workspaceID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to aggregate feedback metrics")
+		return
+	}
+	writeJSON(w, http.StatusOK, metrics)
+}
+
+func (h *Handler) GetCreativeFeedbackDashboard(w http.ResponseWriter, r *http.Request) {
+	workspaceID, _, ok := h.creativeFeedbackWorkspaceUser(w, r)
+	if !ok {
+		return
+	}
+	workflow, err := h.creativeFeedbackWorkflowDashboard(r.Context(), workspaceID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to aggregate workflow feedback dashboard")
+		return
+	}
+	writeJSON(w, http.StatusOK, creativeFeedbackDashboardResponse{Workflow: workflow})
+}
+
+func (h *Handler) creativeFeedbackMetrics(ctx context.Context, workspaceID pgtype.UUID) (creativeFeedbackMetricsResponse, error) {
 	var metrics creativeFeedbackMetricsResponse
-	err := h.DB.QueryRow(r.Context(), `
+	err := h.DB.QueryRow(ctx, `
 SELECT
   count(*) FILTER (WHERE subject_type = 'candidate' AND decision = 'selected'),
   count(*) FILTER (WHERE subject_type = 'candidate' AND decision = 'rejected'),
@@ -466,11 +520,248 @@ WHERE feedback.workspace_id = $1
 		&metrics.VariantAccepted, &metrics.VariantRevision, &metrics.AssetAccepted, &metrics.AssetReported,
 		&metrics.QCAccepted, &metrics.QCMissedIssue, &metrics.QCFalsePositive,
 	)
+	return metrics, err
+}
+
+func (h *Handler) creativeFeedbackWorkflowDashboard(ctx context.Context, workspaceID pgtype.UUID) (creativeFeedbackWorkflowDashboard, error) {
+	metrics, err := h.creativeFeedbackMetrics(ctx, workspaceID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to aggregate feedback metrics")
-		return
+		return creativeFeedbackWorkflowDashboard{}, err
 	}
-	writeJSON(w, http.StatusOK, metrics)
+	dashboard := creativeFeedbackWorkflowDashboard{
+		CandidateSelected: metrics.CandidateSelected,
+		CandidateRejected: metrics.CandidateRejected,
+		CopyAccepted:      metrics.CopyAccepted,
+		CopyReplaced:      metrics.CopyReplaced,
+		AssetReported:     metrics.AssetReported,
+		QCAccepted:        metrics.QCAccepted,
+		QCMissedIssue:     metrics.QCMissedIssue,
+		QCFalsePositive:   metrics.QCFalsePositive,
+		FeedbackReasons:   []creativeFeedbackReasonSummary{},
+	}
+	if err := h.DB.QueryRow(ctx, `
+SELECT
+  count(*) FILTER (WHERE item.adopted_variant_id IS NOT NULL AND variant.revision = 1),
+  count(*) FILTER (WHERE item.adopted_variant_id IS NOT NULL)
+FROM creative_order_item item
+JOIN creative_order order_row ON order_row.id = item.order_id
+LEFT JOIN creative_order_variant variant ON variant.id = item.adopted_variant_id
+WHERE order_row.workspace_id = $1
+`, workspaceID).Scan(&dashboard.FirstDeliveryCount, &dashboard.FirstDeliveryTotal); err != nil {
+		return creativeFeedbackWorkflowDashboard{}, err
+	}
+	if err := h.DB.QueryRow(ctx, `
+WITH order_scopes AS (
+  SELECT
+    order_row.id,
+    CASE
+      WHEN jsonb_typeof(order_row.input_snapshot->'expected_sizes') = 'array'
+        AND jsonb_array_length(order_row.input_snapshot->'expected_sizes') > 0
+      THEN order_row.input_snapshot->'expected_sizes'
+      WHEN jsonb_typeof(order_row.input_snapshot->'delivery_scope'->'expected_sizes') = 'array'
+        AND jsonb_array_length(order_row.input_snapshot->'delivery_scope'->'expected_sizes') > 0
+      THEN order_row.input_snapshot->'delivery_scope'->'expected_sizes'
+      ELSE to_jsonb(ARRAY['1080x1080', '1200x628', '800x1000']::text[])
+    END AS expected_sizes
+  FROM creative_order order_row
+  WHERE order_row.workspace_id = $1
+    AND order_row.status <> 'cancelled'
+), item_readiness AS (
+  SELECT
+    item.adopted_variant_id,
+    EXISTS (
+      SELECT 1
+      FROM creative_order_variant variant
+      LEFT JOIN creative_order_variant_qc_resolution resolution
+        ON resolution.variant_id = variant.id
+       AND resolution.revision = variant.revision
+      WHERE variant.order_item_id = item.id
+        AND (
+          (
+            variant.status = 'completed'
+            AND resolution.outcome = 'delivered'
+            AND NOT EXISTS (
+              SELECT 1
+              FROM jsonb_array_elements_text(scope.expected_sizes) AS required(size_key)
+              WHERE NOT EXISTS (
+                SELECT 1
+                FROM creative_order_asset asset
+                WHERE asset.variant_id = variant.id
+                  AND asset.revision = variant.revision
+                  AND asset.size_key = required.size_key
+                  AND asset.stage = 'delivered'
+                  AND asset.status = 'completed'
+                  AND asset.attachment_id IS NOT NULL
+              )
+            )
+          )
+          OR (
+            variant.status = 'action_required'
+            AND resolution.outcome = 'action_required'
+            AND NOT EXISTS (
+              SELECT 1
+              FROM jsonb_array_elements_text(scope.expected_sizes) AS required(size_key)
+              WHERE NOT EXISTS (
+                SELECT 1
+                FROM creative_order_asset asset
+                WHERE asset.variant_id = variant.id
+                  AND asset.revision = variant.revision
+                  AND asset.size_key = required.size_key
+                  AND asset.stage = 'primed'
+                  AND asset.status = 'completed'
+                  AND asset.attachment_id IS NOT NULL
+              )
+            )
+          )
+        )
+    ) AS has_adoption_ready_variant
+  FROM creative_order_item item
+  JOIN order_scopes scope ON scope.id = item.order_id
+)
+SELECT
+  count(*) FILTER (WHERE adopted_variant_id IS NOT NULL),
+  count(*) FILTER (WHERE has_adoption_ready_variant OR adopted_variant_id IS NOT NULL)
+FROM item_readiness
+`, workspaceID).Scan(&dashboard.ProductionAdopted, &dashboard.ProductionAdoptionEligible); err != nil {
+		return creativeFeedbackWorkflowDashboard{}, err
+	}
+	if err := h.DB.QueryRow(ctx, `
+WITH current_variants AS (
+  SELECT variant.id, variant.revision
+  FROM creative_order_variant variant
+  JOIN creative_order_item item ON item.id = variant.order_item_id
+  JOIN creative_order order_row ON order_row.id = item.order_id
+  WHERE order_row.workspace_id = $1
+), production_progress AS (
+  SELECT
+    variant.id,
+    count(DISTINCT asset.size_key) FILTER (
+      WHERE asset.stage = 'generated'
+        AND asset.status = 'completed'
+        AND asset.attachment_id IS NOT NULL
+    ) AS completed_size_count,
+    COALESCE(bool_or(task.id IS NOT NULL AND task.completed_at IS NULL), false) AS has_active_task,
+    COALESCE(bool_or(task.id IS NOT NULL AND task.completed_at IS NOT NULL), false) AS has_terminal_task
+  FROM current_variants variant
+  LEFT JOIN creative_order_asset asset
+    ON asset.variant_id = variant.id
+   AND asset.revision = variant.revision
+  LEFT JOIN agent_task_queue task
+    ON task.context->>'workflow' = 'creative_production'
+   AND task.context->>'variant_id' = variant.id::text
+   AND task.context->>'revision' = variant.revision::text
+  GROUP BY variant.id
+)
+SELECT
+  count(*) FILTER (WHERE has_terminal_task AND NOT has_active_task AND completed_size_count = 3),
+  count(*) FILTER (WHERE has_terminal_task AND NOT has_active_task),
+  count(*) FILTER (WHERE has_terminal_task AND NOT has_active_task AND completed_size_count < 3),
+  count(*) FILTER (WHERE has_active_task)
+FROM production_progress
+`, workspaceID).Scan(
+		&dashboard.ImageGenerationSuccess,
+		&dashboard.ImageGenerationTotal,
+		&dashboard.ImageGenerationFailed,
+		&dashboard.ImageGenerationInProgress,
+	); err != nil {
+		return creativeFeedbackWorkflowDashboard{}, err
+	}
+	dashboard.ThreeSizeQCSuccess, dashboard.ThreeSizeQCTotal, err = h.creativeThreeSizeQCMetrics(ctx, workspaceID)
+	if err != nil {
+		return creativeFeedbackWorkflowDashboard{}, err
+	}
+	rows, err := h.DB.Query(ctx, `
+SELECT reason.code, count(*)
+FROM creative_feedback_event feedback
+CROSS JOIN LATERAL unnest(feedback.reason_codes) AS reason(code)
+WHERE feedback.workspace_id = $1
+  AND feedback.event_type <> 'undo'
+  AND reason.code <> 'qc_risk_accepted'
+  AND NOT EXISTS (
+    SELECT 1 FROM creative_feedback_event undo WHERE undo.undo_of_id = feedback.id
+  )
+GROUP BY reason.code
+ORDER BY count(*) DESC, reason.code
+LIMIT 6
+`, workspaceID)
+	if err != nil {
+		return creativeFeedbackWorkflowDashboard{}, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var reason creativeFeedbackReasonSummary
+		if err := rows.Scan(&reason.Code, &reason.Count); err != nil {
+			return creativeFeedbackWorkflowDashboard{}, err
+		}
+		dashboard.FeedbackReasons = append(dashboard.FeedbackReasons, reason)
+	}
+	if err := rows.Err(); err != nil {
+		return creativeFeedbackWorkflowDashboard{}, err
+	}
+	return dashboard, nil
+}
+
+// creativeThreeSizeQCMetrics counts variants whose frozen delivery scope is
+// exactly the standard three-size package and whose current revision reached
+// a final visual and technical QC verdict. Generated-count metrics are kept
+// separate so an incomplete or blocked package cannot look successful.
+func (h *Handler) creativeThreeSizeQCMetrics(ctx context.Context, workspaceID pgtype.UUID) (int, int, error) {
+	rows, err := h.DB.Query(ctx, `
+SELECT variant.id, variant.revision, variant.status,
+       order_row.trigger_evidence_kind, order_row.input_snapshot::text, variant.brief::text
+FROM creative_order_variant variant
+JOIN creative_order_item item ON item.id = variant.order_item_id
+JOIN creative_order order_row ON order_row.id = item.order_id
+WHERE order_row.workspace_id = $1
+`, workspaceID)
+	if err != nil {
+		return 0, 0, err
+	}
+	defer rows.Close()
+	success, total := 0, 0
+	for rows.Next() {
+		var variantID pgtype.UUID
+		var revision int
+		var status, triggerKind, inputSnapshot, brief string
+		if err := rows.Scan(&variantID, &revision, &status, &triggerKind, &inputSnapshot, &brief); err != nil {
+			return 0, 0, err
+		}
+		expected, expectedErr := expectedCreativeVariantSizes(triggerKind, json.RawMessage(inputSnapshot), json.RawMessage(brief))
+		if expectedErr != nil || !creativeSizesMatchExpected(map[string]struct{}{
+			"1080x1080": {}, "1200x628": {}, "800x1000": {},
+		}, expected) {
+			continue
+		}
+		var deliveredCount, activityCount, reportCount int
+		var technicalStatus, visualStatus string
+		if err := h.DB.QueryRow(ctx, `
+SELECT
+  count(DISTINCT asset.size_key) FILTER (
+    WHERE asset.stage = 'delivered' AND asset.status = 'completed' AND asset.attachment_id IS NOT NULL
+  ),
+  count(asset.id),
+  count(report.id),
+  COALESCE(max(report.status) FILTER (WHERE report.lane = 'technical'), ''),
+  COALESCE(max(report.status) FILTER (WHERE report.lane = 'visual'), '')
+FROM creative_order_asset asset
+LEFT JOIN creative_order_qc_report report
+  ON report.variant_id = asset.variant_id AND report.revision = asset.revision
+WHERE asset.variant_id = $1 AND asset.revision = $2
+`, variantID, revision).Scan(&deliveredCount, &activityCount, &reportCount, &technicalStatus, &visualStatus); err != nil {
+			return 0, 0, err
+		}
+		if status == "queued" && activityCount == 0 && reportCount == 0 {
+			continue
+		}
+		total++
+		if deliveredCount == len(standardCreativeAssetSizes) && creativeQCStatusAllowsAdoption(technicalStatus) && creativeQCStatusAllowsAdoption(visualStatus) {
+			success++
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return 0, 0, err
+	}
+	return success, total, nil
 }
 
 func (h *Handler) creativeFeedbackWorkspaceUser(w http.ResponseWriter, r *http.Request) (pgtype.UUID, pgtype.UUID, bool) {
@@ -616,8 +907,7 @@ func (h *Handler) creativeFeedbackSubjectExists(r *http.Request, workspaceID, is
 		query = `SELECT EXISTS(SELECT 1 FROM creative_material_candidate WHERE id = $1 AND workspace_id = $2)`
 	case "recommended_copy":
 		query = `SELECT
-  EXISTS(SELECT 1 FROM creative_copy_entry WHERE id = $1 AND workspace_id = $2)
-  OR EXISTS(
+  EXISTS(
     SELECT 1
     FROM creative_resource resource
     JOIN creative_resource_revision revision

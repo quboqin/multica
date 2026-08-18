@@ -295,6 +295,10 @@ function formatActivity(
     }
     case "creative_feedback_undone":
       return t(($) => $.activity.creative_feedback_undone);
+    case "creative_order_adjustment_queued":
+      return t(($) => $.activity.creative_order_adjustment_queued, {
+        size: creativeOrderSizeLabel(details.size_key),
+      });
     case "creative_variant_adopted":
       return details.variant_key
         ? t(($) => $.activity.creative_variant_adopted_key, { variant: details.variant_key })
@@ -302,6 +306,13 @@ function formatActivity(
     default:
       return entry.action ?? "";
   }
+}
+
+function creativeOrderSizeLabel(size: string | undefined): string {
+  if (size === "1080x1080") return "方形";
+  if (size === "1200x628") return "横版";
+  if (size === "800x1000") return "竖版";
+  return "当前尺寸";
 }
 
 

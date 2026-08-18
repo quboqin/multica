@@ -19,7 +19,7 @@ import { useWorkspaceId } from "@multica/core/hooks";
 import { useFileUpload } from "@multica/core/hooks/use-file-upload";
 import { resolvePublicFileUrl } from "@multica/core/workspace/avatar-url";
 import { squadListOptions } from "@multica/core/workspace/queries";
-import type { CreateCreativeFeedbackRequest, CreateCreativeOrderRequest, CreativeCopySnapshot, CreativeMaterialCandidate, CreativeMaterialCrawlRun, CreativeMaterialImportResult, CreativeMaterialLibraryQuery, CreativeRepaymentPlanEntry, CreativeResource, CreativeSourceAnalysis, SquadMember } from "@multica/core/types";
+import type { CreateCreativeFeedbackRequest, CreateCreativeOrderRequest, CreativeCopySnapshot, CreativeMaterialCandidate, CreativeMaterialCrawlRun, CreativeMaterialImportResult, CreativeMaterialLibraryQuery, CreativeRepaymentPlanEntry, CreativeResource, CreativeSourceAnalysis, SquadMember, CreativeVisualDirection } from "@multica/core/types";
 import { Badge } from "@multica/ui/components/ui/badge";
 import { Button, buttonVariants } from "@multica/ui/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@multica/ui/components/ui/dialog";
@@ -29,11 +29,12 @@ import { NativeSelect, NativeSelectOption } from "@multica/ui/components/ui/nati
 import { Textarea } from "@multica/ui/components/ui/textarea";
 import { toast } from "sonner";
 import { candidateDecisionFeedbackInput, latestCandidateFeedback } from "../lib/creative-candidate-feedback";
-import { normalizedProductionPromptText, productionPromptLines, userFacingProductionPrompt } from "../lib/creative-production-prompt";
 import { formatCreativeDateTime } from "../lib/creative-time";
 import {
   creativeMaterialMatchesFilter,
   creativeMaterialProductionState,
+  creativeMaterialSelectionActionLabel,
+  canRetryMaterialAnalysis,
   latestCompletedAnalyses,
   materialAnalysisState,
   type CreativeMaterialAnalysisReadiness,
@@ -46,7 +47,9 @@ export { candidateDecisionFeedbackInput, latestCandidateFeedback } from "../lib/
 export {
   creativeMaterialMatchesFilter,
   creativeMaterialProductionState,
+  creativeMaterialSelectionActionLabel,
   effectiveMaterialCandidateStatus,
+  canRetryMaterialAnalysis,
   latestAnalyses,
   latestCompletedAnalyses,
   materialAnalysisState,
@@ -179,30 +182,9 @@ export function CreativeMaterialLibrary({
     })),
     [analyses.data?.analyses, analysisStateByCandidateId, completedAnalyses, copyLibrary, displayedCandidates, generatedCandidateIds, latestDecisions, marketPack],
   );
-  const continueAnalysis = useMutation({
-    mutationFn: async ({ sourceAnalysisId, marketPackId }: { sourceAnalysisId: string; marketPackId: string }) => (
-      api.retryCreativePreAdaptation(sourceAnalysisId, marketPackId)
-    ),
-    onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: creativeKeys.analyses(wsId) });
-      void queryClient.invalidateQueries({ queryKey: creativeKeys.materials(wsId) });
-    },
-  });
-  const continuedAnalysisAttempts = useRef(new Set<string>());
-  useEffect(() => {
-    if (!marketPack || !copyLibrary) return;
-    for (const candidate of displayedCandidates) {
-      const analysis = completedAnalyses.get(candidate.id);
-      if (!analysis || sourceAnalysisNeedsVisualUpgrade(analysis) || sourceAnalysisAdaptationStatus(analysis)) continue;
-      const attemptKey = `${analysis.id}:${marketPack.id}:v${marketPack.published_version}:${copyLibrary.id}:v${copyLibrary.published_version}`;
-      if (continuedAnalysisAttempts.current.has(attemptKey)) continue;
-      continuedAnalysisAttempts.current.add(attemptKey);
-      continueAnalysis.mutate({ sourceAnalysisId: analysis.id, marketPackId: marketPack.id });
-    }
-  }, [completedAnalyses, copyLibrary, continueAnalysis, displayedCandidates, marketPack]);
   const selectedCandidates = useMemo(
-    () => Object.values(selectedCandidatesById).filter((candidate) => !generatedCandidateIds.has(candidate.id)),
-    [generatedCandidateIds, selectedCandidatesById],
+    () => Object.values(selectedCandidatesById),
+    [selectedCandidatesById],
   );
   useEffect(() => {
     if (selectedCandidates.length === 0) setOrderDraftOpen(false);
@@ -279,6 +261,9 @@ export function CreativeMaterialLibrary({
   }, [competitor, deferredQuery, scopedCandidates]);
   const previewCandidate = displayedCandidates.find((item) => item.id === preview?.id) ?? preview;
   const previewAnalysis = previewCandidate ? completedAnalyses.get(previewCandidate.id) : undefined;
+  const previewCanRetryAnalysis = previewCandidate
+    ? canRetryMaterialAnalysis(previewCandidate, productionStateByCandidateId.get(previewCandidate.id) ?? { status: "generated" })
+    : false;
   const totalCount = materials.data?.total_count || scopedCandidates.length;
   const nextOffset = materials.data?.next_offset ?? null;
   const crawlRuns = useMemo(
@@ -366,6 +351,7 @@ export function CreativeMaterialLibrary({
                 selected={selected}
                 decision={decision?.decision ?? ""}
                 busy={decideCandidate.isPending || undoDecision.isPending}
+                retryingAnalysis={retryAnalysis.isPending}
                 analysisSummary={completedAnalyses.get(candidate.id)?.summary ?? ""}
                 showProductionState={filter !== "available" || productionState.status !== "available"}
                 onToggle={() => {
@@ -386,7 +372,7 @@ export function CreativeMaterialLibrary({
         </div>}
       </div>
     </div>
-		<MaterialPreview candidate={previewCandidate} analysis={previewAnalysis} onClose={() => setPreview(null)} onDirectEdit={() => previewCandidate && setDirectEditCandidate(previewCandidate)} onRetryAnalysis={(candidateId) => retryAnalysis.mutate(candidateId)} retryingAnalysis={retryAnalysis.isPending} />
+		<MaterialPreview candidate={previewCandidate} analysis={previewAnalysis} canRetryAnalysis={previewCanRetryAnalysis} onClose={() => setPreview(null)} onDirectEdit={() => previewCandidate && setDirectEditCandidate(previewCandidate)} onRetryAnalysis={(candidateId) => retryAnalysis.mutate(candidateId)} retryingAnalysis={retryAnalysis.isPending} />
 		<DirectEditDialog candidate={directEditCandidate} onClose={() => setDirectEditCandidate(null)} onCreated={(orderId) => {
 			setDirectEditCandidate(null);
 			queryClient.invalidateQueries({ queryKey: creativeKeys.orders(wsId) });
@@ -436,14 +422,14 @@ export function materialCandidateDisplayDetails(candidate: CreativeMaterialCandi
   };
 }
 
-export function MaterialTile({ candidate, analysisState, productionState, selected, decision, busy, analysisSummary, showProductionState = true, onToggle, onReject, onUndo, onOpen, onRetryAnalysis }: { candidate: CreativeMaterialCandidate; analysisState: MaterialAnalysisState; productionState: CreativeMaterialProductionState; selected: boolean; decision: string; busy: boolean; analysisSummary?: string; showProductionState?: boolean; onToggle: () => void; onReject: () => void; onUndo: () => void; onOpen: () => void; onRetryAnalysis: () => void }) {
+export function MaterialTile({ candidate, analysisState, productionState, selected, decision, busy, retryingAnalysis, analysisSummary, showProductionState = true, onToggle, onReject, onUndo, onOpen, onRetryAnalysis }: { candidate: CreativeMaterialCandidate; analysisState: MaterialAnalysisState; productionState: CreativeMaterialProductionState; selected: boolean; decision: string; busy: boolean; retryingAnalysis: boolean; analysisSummary?: string; showProductionState?: boolean; onToggle: () => void; onReject: () => void; onUndo: () => void; onOpen: () => void; onRetryAnalysis: () => void }) {
   const source = candidateSource(candidate);
   const details = materialCandidateDisplayDetails(candidate);
   const isImage = candidate.asset_type === "image";
-  const canStartAnalysis = productionState.status === "failed" || (!analysisState.ready && analysisState.status !== "running");
-  const canSelect = productionState.selectable;
-  const analysisActionLabel = productionState.status === "failed" ? "重新分析" : "开始分析";
-  const statusReason = productionState.status === "failed" || productionState.status === "manual_required" ? productionState.reason || (analysisState.status === "failed" ? analysisState.error : "") : "";
+  const canRetryAnalysis = canRetryMaterialAnalysis(candidate, productionState);
+  const selectionActionLabel = creativeMaterialSelectionActionLabel(selected, productionState);
+  const analysisActionLabel = "重新分析";
+  const statusReason = productionState.status === "failed" || productionState.status === "manual_required" || productionState.status === "unsupported" ? productionState.reason || (analysisState.status === "failed" ? analysisState.error : "") : "";
   const statusBadgeVariant = productionState.status === "failed" || productionState.status === "rejected"
     ? "destructive"
     : productionState.status === "available"
@@ -472,9 +458,9 @@ export function MaterialTile({ candidate, analysisState, productionState, select
       {statusReason && <p className={`truncate text-[11px] ${productionState.status === "manual_required" ? "text-amber-700" : "text-destructive"}`} title={statusReason}>{statusReason}</p>}
     </div>
   </button><div className="flex items-center justify-between gap-2 border-t px-3 py-2">
-    <Button size="sm" variant={selected ? "secondary" : "outline"} disabled={busy || decision === "rejected" || (!selected && !canSelect)} onClick={onToggle}>{selected ? <Check className="h-4 w-4" /> : <Plus className="h-4 w-4" />}{selected ? "取消选择" : canSelect ? "选择出图素材" : productionState.status === "failed" || productionState.status === "manual_required" ? productionState.label : "等待分析完成"}</Button>
+    <Button size="sm" variant={selected ? "secondary" : "outline"} disabled={busy || decision === "rejected" || (!selected && !productionState.selectable)} onClick={onToggle}>{selected ? <Check className="h-4 w-4" /> : <Plus className="h-4 w-4" />}{selectionActionLabel}</Button>
     <div className="flex items-center gap-1">
-      {canStartAnalysis && <Button aria-label={`${analysisActionLabel}素材`} title={`${analysisActionLabel}素材`} size="icon-sm" variant="ghost" disabled={busy} onClick={onRetryAnalysis}><RefreshCw className="h-4 w-4" /></Button>}
+      {canRetryAnalysis && <Button aria-label={`${analysisActionLabel}素材`} title={`${analysisActionLabel}素材`} size="icon-sm" variant="ghost" disabled={busy || retryingAnalysis} onClick={onRetryAnalysis}><RefreshCw className={`h-4 w-4 ${retryingAnalysis ? "animate-spin" : ""}`} /></Button>}
       <Button aria-label={decision === "rejected" ? "撤销拒绝" : "拒绝素材"} title={decision === "rejected" ? "撤销拒绝" : "拒绝素材"} size="icon-sm" variant="ghost" disabled={busy} onClick={decision === "rejected" ? onUndo : onReject}>{decision === "rejected" ? <RotateCcw className="h-4 w-4" /> : <X className="h-4 w-4" />}</Button>
     </div>
   </div></div>;
@@ -603,8 +589,7 @@ export function MaterialBatchSelectionBar({
 
 export type OrderItemDraft = {
   mode: "pre_adaptation" | "manual";
-  direction: string;
-  productionPrompt?: string;
+  visualDirection: CreativeVisualDirection;
   textOverrides: Record<string, string>;
   replacementSources?: Record<string, ReplacementSourceChoice>;
   repaymentPlanOverrides?: Record<string, RepaymentPlanChoice>;
@@ -633,7 +618,15 @@ export type ReplacementSourceChoice = {
   sourceKey?: string;
 };
 
-export type SelectedMaterialReadinessStatus = "ready" | "analyzing" | "failed" | "manual_required";
+export type SelectedMaterialReadinessStatus = "ready" | "analyzing" | "failed" | "manual_required" | "unavailable";
+
+const EMPTY_VISUAL_DIRECTION: CreativeVisualDirection = {
+  schema_version: 1,
+  theme: "",
+  style_tags: [],
+  must_preserve: [],
+  avoid: [],
+};
 
 type SubmissionRecovery = { issueId: string; orderId: string; submissionKey: string };
 
@@ -641,30 +634,47 @@ const EMPTY_SUBMISSION_RECOVERY: SubmissionRecovery = { issueId: "", orderId: ""
 const MATERIAL_ANALYSIS_RUNNING_MESSAGE = "素材仍在分析中，完成后会自动刷新。";
 const MATERIAL_ANALYSIS_RUNNING_DETAIL = "无需逐张处理；当前选择会保留。";
 
-export function orderDraftWithPreAdaptation(current: OrderItemDraft | undefined, adaptationOrPrompt: PreparedPreAdaptation | string | null = ""): OrderItemDraft {
-  const adaptation = typeof adaptationOrPrompt === "string" ? null : adaptationOrPrompt;
-  const prompt = typeof adaptationOrPrompt === "string"
-    ? userFacingProductionPrompt(adaptationOrPrompt)
-    : adaptation ? overallProductionRequirement(adaptation) : "";
+export function orderDraftWithPreAdaptation(current: OrderItemDraft | undefined, adaptation: PreparedPreAdaptation | null = null): OrderItemDraft {
+  const visualDirection = adaptation ? visualDirectionFromAnalysis(adaptation.analysisResult) : EMPTY_VISUAL_DIRECTION;
   if (current) {
     const normalized = {
       ...current,
+      visualDirection: current.visualDirection ?? visualDirection,
       replacementSources: current.replacementSources ?? {},
       repaymentPlanOverrides: current.repaymentPlanOverrides ?? {},
       numericLayoutDrafts: current.numericLayoutDrafts ?? {},
     };
-    const currentPrompt = normalized.productionPrompt === undefined
-      ? prompt
-      : adaptation ? overallProductionRequirementFromPrompt(normalized.productionPrompt, adaptation) : userFacingProductionPrompt(normalized.productionPrompt);
-    return normalized.productionPrompt === undefined || normalized.productionPrompt !== currentPrompt || current.replacementSources === undefined || current.repaymentPlanOverrides === undefined || current.numericLayoutDrafts === undefined
-      ? { ...normalized, productionPrompt: currentPrompt }
+    return current.visualDirection === undefined || current.replacementSources === undefined || current.repaymentPlanOverrides === undefined || current.numericLayoutDrafts === undefined
+      ? normalized
       : normalized;
   }
-  return { mode: "pre_adaptation", direction: "", productionPrompt: prompt, textOverrides: {}, replacementSources: {}, repaymentPlanOverrides: {}, numericLayoutDrafts: {}, manualHeadline: "", manualSubheadline: "", manualBenefit: "", manualSupporting: "", manualCta: "" };
+  return { mode: "pre_adaptation", visualDirection, textOverrides: {}, replacementSources: {}, repaymentPlanOverrides: {}, numericLayoutDrafts: {}, manualHeadline: "", manualSubheadline: "", manualBenefit: "", manualSupporting: "", manualCta: "" };
 }
 
 export function recoveryForSubmissionKey(recovery: SubmissionRecovery, submissionKey: string): SubmissionRecovery {
   return recovery.submissionKey === submissionKey ? recovery : EMPTY_SUBMISSION_RECOVERY;
+}
+
+export function visualDirectionFromAnalysis(result: Record<string, unknown>): CreativeVisualDirection {
+  const theme = recordString(result, "theme");
+  const visualType = recordString(result, "visual_type");
+  const styleTags = uniqueDirectionValues([
+    visualType,
+    ...recordStringArray(result, "palette_anchors").slice(0, 3),
+  ]);
+  const mustPreserve = uniqueDirectionValues([
+    ...recordStringArray(result, "must_preserve").slice(0, 4),
+    ...recordStringArray(result, "visual_anchors").slice(0, 3),
+  ]);
+  const avoid = uniqueDirectionValues([
+    ...recordStringArray(result, "avoid").slice(0, 3),
+    ...recordStringArray(result, "forbidden_elements").slice(0, 3),
+  ]);
+  return { schema_version: 1, theme, style_tags: styleTags, must_preserve: mustPreserve, avoid };
+}
+
+function uniqueDirectionValues(values: string[]): string[] {
+  return [...new Set(values.map((value) => value.trim()).filter(Boolean))];
 }
 
 export function defaultPreAdaptationResources(resources: CreativeResource[]): { marketPack?: CreativeResource; copyLibrary?: CreativeResource } {
@@ -761,11 +771,13 @@ export function creativeMaterialAnalysisReadiness(
   const adaptationStatus = sourceAnalysisAdaptationStatus(analysis);
   const adaptationEnvelope = record(record(analysis.result).adaptation);
   const adaptationFailureReason = recordString(adaptationEnvelope, "error_message") || recordString(adaptationEnvelope, "summary");
+  const unavailable = adaptationStatus === "unavailable" && sourceAnalysisHasNoEditableCopy(analysis);
   const manualRequired = adaptationStatus === "unavailable" && recordString(adaptationEnvelope, "error_code") === "manual_confirmation_required";
   return {
     ready: false,
     active: adaptationStatus === "",
-    failed: adaptationStatus !== "" && !manualRequired,
+    failed: adaptationStatus !== "" && !manualRequired && !unavailable,
+    unavailable,
     manualRequired,
     reason: adaptationStatus !== "" ? adaptationFailureReason : "",
   };
@@ -825,20 +837,28 @@ function CreativeOrderDraft({ candidates, analyses, deselecting, onDeselect, onC
     const analysis = completedAnalyses.get(candidate.id);
     const adaptation = preparedPreAdaptation(analysis, marketPack, copyLibrary);
     if (sourceAnalysisNeedsVisualUpgrade(analysis)) return true;
+    const pendingRecommendation = Boolean(draft && adaptation?.status === "completed" && adaptation.textReplacements.some((replacement) => hasPendingReplacementConfirmation(replacement, draft.textOverrides, draft.replacementSources ?? {})));
     return !draft
-      || adaptation?.status !== "completed";
+      || adaptation?.status !== "completed"
+      || pendingRecommendation;
   });
   const readinessByCandidateId = useMemo(
     () => new Map(candidates.map((candidate) => {
       const analysis = completedAnalyses.get(candidate.id);
       const adaptation = preparedPreAdaptation(analysis, marketPack, copyLibrary);
       const draft = drafts[candidate.id];
-      if (draft && adaptation?.status === "completed") return [candidate.id, "ready" as const];
+      if (draft && adaptation?.status === "completed") {
+        const pendingRecommendation = adaptation.textReplacements.some((replacement) => hasPendingReplacementConfirmation(replacement, draft.textOverrides, draft.replacementSources ?? {}));
+        return [candidate.id, pendingRecommendation ? "manual_required" as const : "ready" as const];
+      }
       if (analysis && marketPack && copyLibrary && !sourceAnalysisNeedsVisualUpgrade(analysis) && !sourceAnalysisAdaptationStatus(analysis)) {
         return [candidate.id, "analyzing" as const];
       }
       if (sourceAnalysisAdaptationErrorCode(analysis) === "manual_confirmation_required") {
         return [candidate.id, "manual_required" as const];
+      }
+      if (sourceAnalysisAdaptationStatus(analysis) === "unavailable" && sourceAnalysisHasNoEditableCopy(analysis)) {
+        return [candidate.id, "unavailable" as const];
       }
       return [candidate.id, "failed" as const];
     })),
@@ -850,15 +870,9 @@ function CreativeOrderDraft({ candidates, analyses, deselecting, onDeselect, onC
     const draft = drafts[candidate.id];
     const adaptation = preparedPreAdaptation(completedAnalyses.get(candidate.id), marketPack, copyLibrary);
     if (!draft || !adaptation || adaptation.status !== "completed") return count;
-    return count + adaptation.textReplacements.filter((replacement) => !replacementText(replacement, draft.textOverrides).trim()).length;
+    const numericBlockIDs = new Set(effectiveNumericLayouts(adaptation, draft.numericLayoutDrafts ?? {}).flatMap((layout) => layout.sourceBlockIds));
+    return count + adaptation.textReplacements.filter((replacement) => !numericBlockIDs.has(replacement.blockId) && !replacementText(replacement, draft.textOverrides).trim()).length;
   }, 0);
-  const pendingRecommendationCount = candidates.reduce((count, candidate) => {
-    const draft = drafts[candidate.id];
-    const adaptation = preparedPreAdaptation(completedAnalyses.get(candidate.id), marketPack, copyLibrary);
-    if (!draft || !adaptation || adaptation.status !== "completed") return count;
-    return count + adaptation.textReplacements.filter((replacement) => hasPendingReplacementConfirmation(replacement, draft.textOverrides, draft.replacementSources ?? {})).length;
-  }, 0);
-
   const setDraft = (candidateId: string, patch: Partial<OrderItemDraft>) => setDrafts((current) => ({
     ...current,
     [candidateId]: { ...current[candidateId], ...patch } as OrderItemDraft,
@@ -978,7 +992,7 @@ function CreativeOrderDraft({ candidates, analyses, deselecting, onDeselect, onC
   const customCopyIssueCount = [...customCopyValidations.values()].filter((validation) => !validation.allowed).length;
   const activeCustomCopyValidation = activeCandidate ? customCopyValidations.get(activeCandidate.id) : undefined;
   const create = async () => {
-    if (!marketPack || !selectedSquad || incompleteCandidates.length > 0 || unconfiguredCandidates.length > 0 || pendingRecommendationCount > 0) return;
+    if (!marketPack || !selectedSquad || incompleteCandidates.length > 0 || unconfiguredCandidates.length > 0) return;
     setBusy(true);
     setRecoveryMessage("");
     let submissionKey = "";
@@ -1010,6 +1024,10 @@ function CreativeOrderDraft({ candidates, analyses, deselecting, onDeselect, onC
         issueId = issue.id;
         setRecovery({ issueId, orderId: "", submissionKey });
       }
+      await Promise.all(candidates.map((candidate) => api.updateCreativeMaterialCandidate(issueId, candidate.id, {
+        status: "selected",
+        note: candidate.note,
+      })));
       if (!orderId) {
         const runIds = [...new Set(candidates.map((candidate) => candidate.source_run_id).filter(Boolean))];
         const order = await api.createCreativeOrder({
@@ -1035,7 +1053,7 @@ function CreativeOrderDraft({ candidates, analyses, deselecting, onDeselect, onC
               candidate.id,
               completedAnalyses.get(candidate.id)!.id,
               preAdaptedCopySnapshot(copyLibrary, adaptation, draft, completedAnalyses.get(candidate.id)!.id) as unknown as Record<string, unknown>,
-              compiledProductionPrompt(adaptation, draft.textOverrides, draft.productionPrompt, draft.repaymentPlanOverrides, draft.numericLayoutDrafts),
+              visualDirectionSummary(draft.visualDirection),
             );
           }),
         });
@@ -1072,11 +1090,11 @@ function CreativeOrderDraft({ candidates, analyses, deselecting, onDeselect, onC
     {activeCandidate && <article key={activeCandidate.id} className="min-w-0 space-y-4 p-4" data-testid="creative-order-active-editor" data-candidate-id={activeCandidate.id}>
       <div className="min-w-0 border-b border-l-2 border-emerald-600 pb-4 pl-3"><div className="flex flex-wrap items-center gap-2"><Sparkles className="h-4 w-4 text-emerald-700" /><p className="break-words text-sm font-medium">{activeAnalysis?.summary || "素材分析中"}</p><span className="font-mono text-[10px] text-muted-foreground">素材 ID {activeCandidate.id.slice(0, 8)}</span></div>{activeAnalysis && <AnalysisHighlights analysis={activeAnalysis} adaptation={activePreAdaptation} />}{activePreAdaptation ? <PreAdaptationSummary adaptation={activePreAdaptation} /> : activeReadiness === "analyzing" ? <p className="mt-2 text-xs text-amber-700">{MATERIAL_ANALYSIS_RUNNING_MESSAGE}</p> : <p className="mt-2 text-xs text-destructive">素材分析未完成，暂时不能提交出图。</p>}</div>
       <div className="min-w-0 space-y-4">
-        {activeAnalysisNeedsVisualUpgrade ? <div role="alert" className="space-y-3 border border-amber-300 bg-amber-50/50 px-3 py-3 text-xs text-amber-900"><p className="font-medium">这张素材需要重新分析后才能提交。</p><p>重新分析会刷新画面文字区域、业务信息和出图文案配置。</p><Button size="sm" disabled={retryingSourceAnalysis} onClick={() => onRetrySourceAnalysis(activeCandidate.id)}><RefreshCw className={`h-4 w-4 ${retryingSourceAnalysis ? "animate-spin" : ""}`} />{retryingSourceAnalysis ? "正在重新分析" : "重新分析"}</Button></div> : activePreAdaptation?.status === "completed" && activeDraft ? <TextReplacementPlan sourceImage={activeSource} sourceImageAlt={activeCandidate.title || activeCandidate.competitor} adaptation={activePreAdaptation} copyLibrary={copyLibrary} overrides={activeDraft.textOverrides} replacementSources={activeDraft.replacementSources ?? {}} repaymentPlanOverrides={activeDraft.repaymentPlanOverrides ?? {}} numericLayoutDrafts={activeDraft.numericLayoutDrafts ?? {}} repaymentPlanOptions={repaymentPlanOptions} productionPrompt={activeDraft.productionPrompt ?? overallProductionRequirement(activePreAdaptation)} onOpenCopyLibrary={onOpenCopyLibrary} onRetrySourceAnalysis={() => onRetrySourceAnalysis(activeCandidate.id)} retryingSourceAnalysis={retryingSourceAnalysis} onChooseReplacement={(blockId, value, source) => setReplacementChoice(activeCandidate.id, blockId, value, source)} onChooseRepaymentPlan={(scenarioId, plan, original) => setRepaymentPlanChoice(activeCandidate.id, scenarioId, plan, original)} onAddRepaymentPlan={(layoutId, plan) => addRepaymentPlanRow(activeCandidate.id, layoutId, plan)} onRemoveRepaymentPlan={(layoutId, scenarioId) => removeRepaymentPlanRow(activeCandidate.id, layoutId, scenarioId)} onProductionPromptChange={(value) => setDraft(activeCandidate.id, { productionPrompt: value })} /> : activeReadiness === "analyzing" ? <div role="status" className="flex items-start gap-2 border border-amber-300 bg-amber-50/50 px-3 py-3 text-xs text-amber-900"><LoaderCircle className="mt-0.5 h-4 w-4 shrink-0 animate-spin" /><div><p className="font-medium">{MATERIAL_ANALYSIS_RUNNING_MESSAGE}</p><p className="mt-1 text-amber-800">{MATERIAL_ANALYSIS_RUNNING_DETAIL}</p></div></div> : activeReadiness === "manual_required" ? <div role="alert" className="space-y-2 border border-amber-300 bg-amber-50/50 px-3 py-3 text-xs text-amber-900"><p className="font-medium">预适配已重试一次仍未通过，需人工确认文案与数值映射。</p><p className="text-amber-800">这张素材不会进入可用素材，也不会继续自动重试。</p></div> : <div role="alert" className="space-y-3 border border-amber-300 bg-amber-50/50 px-3 py-3 text-xs text-amber-800"><p>{!marketPack ? "当前工作区尚未发布唯一市场配置，素材分析暂不可用。" : !copyLibrary ? "当前市场配置没有绑定已发布文案库，素材分析暂不可用。" : "本图尚未按当前市场配置完成分析，不会替换为泛文案。"}</p>{activeAnalysis && <Button size="sm" variant="outline" disabled={retryingSourceAnalysis} onClick={() => onRetrySourceAnalysis(activeCandidate.id)}><RefreshCw className={`h-4 w-4 ${retryingSourceAnalysis ? "animate-spin" : ""}`} />{retryingSourceAnalysis ? "正在重新分析" : "重新分析"}</Button>}</div>}
+         {activeAnalysisNeedsVisualUpgrade ? <div role="alert" className="space-y-3 border border-amber-300 bg-amber-50/50 px-3 py-3 text-xs text-amber-900"><p className="font-medium">这张素材需要重新分析后才能提交。</p><p>重新分析会刷新画面文字区域、业务信息和出图配置。</p><Button size="sm" disabled={retryingSourceAnalysis} onClick={() => onRetrySourceAnalysis(activeCandidate.id)}><RefreshCw className={`h-4 w-4 ${retryingSourceAnalysis ? "animate-spin" : ""}`} />{retryingSourceAnalysis ? "正在重新分析" : "重新分析"}</Button></div> : activePreAdaptation?.status === "completed" && activeDraft ? <TextReplacementPlan sourceImage={activeSource} sourceImageAlt={activeCandidate.title || activeCandidate.competitor} adaptation={activePreAdaptation} copyLibrary={copyLibrary} overrides={activeDraft.textOverrides} replacementSources={activeDraft.replacementSources ?? {}} repaymentPlanOverrides={activeDraft.repaymentPlanOverrides ?? {}} numericLayoutDrafts={activeDraft.numericLayoutDrafts ?? {}} repaymentPlanOptions={repaymentPlanOptions} visualDirection={activeDraft.visualDirection} onVisualDirectionChange={(value) => setDraft(activeCandidate.id, { visualDirection: value })} onOpenCopyLibrary={onOpenCopyLibrary} onRetrySourceAnalysis={() => onRetrySourceAnalysis(activeCandidate.id)} retryingSourceAnalysis={retryingSourceAnalysis} onChooseReplacement={(blockId, value, source) => setReplacementChoice(activeCandidate.id, blockId, value, source)} onChooseRepaymentPlan={(scenarioId, plan, original) => setRepaymentPlanChoice(activeCandidate.id, scenarioId, plan, original)} onAddRepaymentPlan={(layoutId, plan) => addRepaymentPlanRow(activeCandidate.id, layoutId, plan)} onRemoveRepaymentPlan={(layoutId, scenarioId) => removeRepaymentPlanRow(activeCandidate.id, layoutId, scenarioId)} /> : activeReadiness === "unavailable" ? <div role="status" className="space-y-2 border border-slate-300 bg-slate-50 px-3 py-3 text-xs text-slate-700"><p className="font-medium">这张素材没有可配置的原图文案。</p><p>平台已保留分析结果，不会继续重试，也不会把它加入出图配置；可选择其他有可编辑文案的素材。</p></div> : activeReadiness === "analyzing" ? <div role="status" className="flex items-start gap-2 border border-amber-300 bg-amber-50/50 px-3 py-3 text-xs text-amber-900"><LoaderCircle className="mt-0.5 h-4 w-4 shrink-0 animate-spin" /><div className="min-w-0 flex-1"><p className="font-medium">{MATERIAL_ANALYSIS_RUNNING_MESSAGE}</p><p className="mt-1 text-amber-800">{MATERIAL_ANALYSIS_RUNNING_DETAIL}</p></div><Button size="sm" variant="outline" disabled={retryingSourceAnalysis} onClick={() => onRetrySourceAnalysis(activeCandidate.id)}><RefreshCw className={`h-4 w-4 ${retryingSourceAnalysis ? "animate-spin" : ""}`} />{retryingSourceAnalysis ? "正在重新分析" : "重新分析"}</Button></div> : activeReadiness === "manual_required" ? <div role="alert" className="space-y-2 border border-amber-300 bg-amber-50/50 px-3 py-3 text-xs text-amber-900"><p className="font-medium">预适配已重试一次仍未通过，需人工确认文案与数值映射。</p><p className="text-amber-800">这张素材不会进入可用素材，也不会继续自动重试。</p></div> : <div role="alert" className="space-y-3 border border-amber-300 bg-amber-50/50 px-3 py-3 text-xs text-amber-800"><p>{!marketPack ? "当前工作区尚未发布唯一市场配置，素材分析暂不可用。" : !copyLibrary ? "当前市场配置没有绑定已发布文案库，素材分析暂不可用。" : "本图尚未按当前市场配置完成分析，不会替换为泛文案。"}</p>{activeAnalysis && <Button size="sm" variant="outline" disabled={retryingSourceAnalysis} onClick={() => onRetrySourceAnalysis(activeCandidate.id)}><RefreshCw className={`h-4 w-4 ${retryingSourceAnalysis ? "animate-spin" : ""}`} />{retryingSourceAnalysis ? "正在重新分析" : "重新分析"}</Button>}</div>}
         {activeCustomCopyValidation && !activeCustomCopyValidation.allowed && <p className="border border-amber-300 bg-amber-50/50 px-3 py-2 text-xs text-amber-900">{activeCustomCopyValidation.message} 这是本次人工改写的提示，不会阻止提交；请确认该数字已获业务确认。</p>}
       </div>
     </article>}
-    <div className="flex flex-wrap items-center justify-between gap-3 border-t bg-muted/10 px-4 py-3"><div className="text-xs text-muted-foreground">{recoveryMessage ? <span className="text-destructive">{recoveryMessage}</span> : !marketPack ? "当前工作区尚未发布唯一市场配置" : !selectedSquad ? "当前工作区尚未配置执行服务" : incompleteCandidates.length > 0 ? `${incompleteCandidates.length} 张素材仍在分析中` : sourceAnalysisUpgradeCount > 0 ? `${sourceAnalysisUpgradeCount} 张素材需要重新分析` : analysisRunningCount > 0 ? `${analysisRunningCount} 张素材仍在分析中，完成后会自动刷新` : manualRequiredCount > 0 ? `${manualRequiredCount} 张素材需人工确认文案与数值映射` : unconfiguredCandidates.length > 0 ? `${unconfiguredCandidates.length} 张素材当前分析不可用；请返回素材库重新分析或检查市场配置` : pendingRecommendationCount > 0 ? `${pendingRecommendationCount} 项系统推荐待确认` : customCopyIssueCount > 0 ? `${customCopyIssueCount} 张素材含人工确认的金融数值，请确认来源后提交` : omittedTextBlockCount > 0 ? `${omittedTextBlockCount} 个文字区块未填，生成时会移除原竞品文字；可在上方补充。` : "全部素材已配置，可以提交出图。"}</div><Button disabled={busy || !marketPack || !selectedSquad || incompleteCandidates.length > 0 || unconfiguredCandidates.length > 0 || pendingRecommendationCount > 0} onClick={() => void create()}>{busy ? "正在提交" : recovery.issueId ? "继续提交" : `提交 ${candidates.length} 组出图`}</Button></div>
+    <div className="flex flex-wrap items-center justify-between gap-3 border-t bg-muted/10 px-4 py-3"><div className="text-xs text-muted-foreground">{recoveryMessage ? <span className="text-destructive">{recoveryMessage}</span> : !marketPack ? "当前工作区尚未发布唯一市场配置" : !selectedSquad ? "当前工作区尚未配置执行服务" : incompleteCandidates.length > 0 ? `${incompleteCandidates.length} 张素材仍在分析中` : sourceAnalysisUpgradeCount > 0 ? `${sourceAnalysisUpgradeCount} 张素材需要重新分析` : analysisRunningCount > 0 ? `${analysisRunningCount} 张素材仍在分析中，完成后会自动刷新` : manualRequiredCount > 0 ? `${manualRequiredCount} 张素材需人工确认文案与数值映射` : unconfiguredCandidates.length > 0 ? `${unconfiguredCandidates.length} 张素材当前分析不可用；请返回素材库重新分析或检查市场配置` : customCopyIssueCount > 0 ? `${customCopyIssueCount} 张素材含人工确认的金融数值，请确认来源后提交` : omittedTextBlockCount > 0 ? `${omittedTextBlockCount} 个文字区块未填，生成时会移除原竞品文字；可在上方补充。` : "全部素材已配置，可以提交出图。"}</div><Button disabled={busy || !marketPack || !selectedSquad || incompleteCandidates.length > 0 || unconfiguredCandidates.length > 0} onClick={() => void create()}>{busy ? "正在提交" : recovery.issueId ? "继续提交" : `提交 ${candidates.length} 组出图`}</Button></div>
   </section>;
 }
 
@@ -1112,6 +1130,7 @@ export function selectedMaterialReadinessLabel(status: SelectedMaterialReadiness
   if (status === "ready") return "可用";
   if (status === "analyzing") return "分析中";
   if (status === "manual_required") return "待人工确认";
+  if (status === "unavailable") return "无可配置文案";
   return "处理失败";
 }
 
@@ -1195,7 +1214,7 @@ function DirectEditDialog({ candidate, onClose, onCreated }: { candidate: Creati
       if (!orderId) throw new Error("直接改图订单初始化失败，请重试");
       await api.setIssueMetadataKey(issueId, "creative_order_id", orderId);
       await api.updateIssue(issueId, { assignee_type: "squad", assignee_id: selectedSquad.id });
-      toast.success(deliveryMode === "publish" ? "直接改图已提交，将进入 Prime 和 QC" : "直接改图预览已提交");
+      toast.success(deliveryMode === "publish" ? "直接改图已提交，将自动合成品牌组件并进入质检" : "直接改图预览已提交");
       onCreated(orderId);
     } catch (submitError) {
       if (submissionKey) setRecovery({ issueId, orderId, submissionKey });
@@ -1205,7 +1224,7 @@ function DirectEditDialog({ candidate, onClose, onCreated }: { candidate: Creati
     }
   };
 
-  return <Dialog open={candidate !== null} onOpenChange={(open) => !open && onClose()}><DialogContent className="max-w-xl"><DialogHeader><DialogTitle>直接改图</DialogTitle><DialogDescription>原图会固定为本次修改的来源。预览只生成底图；正式投放会继续进入 Prime 和双路 QC。</DialogDescription></DialogHeader>
+  return <Dialog open={candidate !== null} onOpenChange={(open) => !open && onClose()}><DialogContent className="max-w-xl"><DialogHeader><DialogTitle>直接改图</DialogTitle><DialogDescription>原图会固定为本次修改的来源。预览只生成底图；正式投放会自动合成品牌组件并进入双路质检。</DialogDescription></DialogHeader>
     <div className="space-y-4">
       <div className="grid gap-3 sm:grid-cols-2">
         <Field label="目标尺寸"><NativeSelect disabled={Boolean(recovery.issueId)} value={targetSize} onChange={(event) => setTargetSize(event.target.value as typeof targetSize)}><NativeSelectOption value="1080x1080">1080 x 1080</NativeSelectOption><NativeSelectOption value="1200x628">1200 x 628</NativeSelectOption><NativeSelectOption value="800x1000">800 x 1000</NativeSelectOption></NativeSelect></Field>
@@ -1349,11 +1368,11 @@ export type PreparedPreAdaptation = {
   reasons: string[];
   gaps: string[];
   analysisHighlights: string[];
+  analysisResult: Record<string, unknown>;
   visualRegions?: PreparedVisualRegion[];
   textReplacements: PreparedTextReplacement[];
   repaymentPlanSelections: PreparedRepaymentPlanSelection[];
   numericLayouts: PreparedNumericLayout[];
-  productionPrompt: string;
 };
 
 export function preparedPreAdaptation(analysis: CreativeSourceAnalysis | undefined, marketPack: { id: string; published_version: number } | undefined, copyLibrary: { id: string; published_version: number } | undefined): PreparedPreAdaptation | null {
@@ -1394,11 +1413,11 @@ export function preparedPreAdaptation(analysis: CreativeSourceAnalysis | undefin
     reasons: recordStringArray(result, "reasons"),
     gaps: recordStringArray(result, "gaps"),
     analysisHighlights: recordStringArray(result, "analysis_highlights").slice(0, 5),
+    analysisResult: sourceResult,
     visualRegions,
     textReplacements,
     repaymentPlanSelections,
     numericLayouts,
-    productionPrompt: recordString(result, "production_prompt"),
   };
 }
 
@@ -1455,11 +1474,60 @@ export function sourceVisualRegions(result: Record<string, unknown>): PreparedVi
   });
 }
 
+const repaymentPlanColumns = ["principal", "tenor", "monthly_installment", "total_interest", "total_repayment"] as const;
+
+function numericLayoutColumn(semanticKind: string): PreparedNumericLayout["targetColumns"][number] | undefined {
+  return repaymentPlanColumns.includes(semanticKind as typeof repaymentPlanColumns[number])
+    ? semanticKind as PreparedNumericLayout["targetColumns"][number]
+    : undefined;
+}
+
+export function pendingNumericLayouts(adaptation: PreparedPreAdaptation): PreparedNumericLayout[] {
+  const visualRegions = adaptation.visualRegions ?? [];
+  if (visualRegions.length === 0) return [];
+  const coveredBlockIDs = new Set(adaptation.numericLayouts.flatMap((layout) => layout.sourceBlockIds));
+  const replacementsByBlockID = new Map(adaptation.textReplacements.map((replacement) => [replacement.blockId, replacement]));
+  return visualRegions.flatMap((region) => {
+    if (region.kind !== "numeric") return [];
+    const sourceBlockIDs = region.sourceBlockIds.filter((blockID) => {
+      if (coveredBlockIDs.has(blockID)) return false;
+      const replacement = replacementsByBlockID.get(blockID);
+      return replacement?.status === "missing" && numericLayoutColumn(replacement.semanticKind ?? "") !== undefined;
+    });
+    if (sourceBlockIDs.length === 0) return [];
+    const targetColumns = repaymentPlanColumns.filter((column) => sourceBlockIDs.some((blockID) => (
+      numericLayoutColumn(replacementsByBlockID.get(blockID)?.semanticKind ?? "") === column
+    )));
+    if (targetColumns.length === 0) return [];
+    return [{
+      id: `pending-numeric:${region.id}`,
+      visualRegionId: region.id,
+      sourceBlockIds: sourceBlockIDs,
+      location: region.location,
+      visualBounds: region.visualBounds,
+      layoutKind: sourceBlockIDs.length === 1 ? "single_value" : "table",
+      scenarioIds: [],
+      targetColumns: [...targetColumns],
+      renderInstruction: "未匹配到冻结还款方案；请选择已审核方案，或留空移除该数值区域。",
+    }];
+  });
+}
+
+function isPendingNumericLayout(layout: PreparedNumericLayout): boolean {
+  return layout.id.startsWith("pending-numeric:");
+}
+
 export function sourceAnalysisNeedsVisualUpgrade(analysis: CreativeSourceAnalysis | undefined): boolean {
 	if (!analysis || analysis.status !== "completed") return false;
 	const result = record(analysis.result);
 	const textBlocks = Array.isArray(result.text_blocks) ? result.text_blocks : [];
 	return textBlocks.length > 0 && sourceVisualRegions(result).length === 0;
+}
+
+export function sourceAnalysisHasNoEditableCopy(analysis: CreativeSourceAnalysis | undefined): boolean {
+  if (!analysis || analysis.status !== "completed") return false;
+  const result = record(analysis.result);
+  return !Array.isArray(result.text_blocks) || result.text_blocks.length === 0;
 }
 
 export function sourceTextBlockVisualBounds(result: Record<string, unknown>): Map<string, NormalizedVisualBounds> {
@@ -1556,10 +1624,10 @@ export function unionVisualBounds(bounds: Array<NormalizedVisualBounds | undefin
 
 export function visualReviewRegions(adaptation: PreparedPreAdaptation, numericLayouts: PreparedNumericLayout[] = adaptation.numericLayouts): PreparedVisualReviewRegion[] {
   const explicitRegions = adaptation.visualRegions ?? [];
-  const claimedBlocks = new Set<string>();
+  const claimedBlocks = new Set(numericLayouts.flatMap((layout) => layout.sourceBlockIds));
   const claimedLayouts = new Set<string>();
   const regions = explicitRegions.map((region) => {
-    const textReplacements = adaptation.textReplacements.filter((replacement) => replacement.visualRegionId === region.id);
+    const textReplacements = adaptation.textReplacements.filter((replacement) => replacement.visualRegionId === region.id && !claimedBlocks.has(replacement.blockId));
     const regionNumericLayouts = numericLayouts.filter((layout) => layout.visualRegionId === region.id);
     textReplacements.forEach((replacement) => claimedBlocks.add(replacement.blockId));
     regionNumericLayouts.forEach((layout) => claimedLayouts.add(layout.id));
@@ -1598,92 +1666,8 @@ function replacementSource(replacement: PreparedTextReplacement, sources: Record
     ?? { kind: replacement.status === "calculated" ? "calculation" : replacement.status === "recommended" ? "recommendation" : "library" };
 }
 
-function promptNumericMarkers(value: string): string[] {
-  return Array.from(new Set(value.match(/(?:Rp\.?\s*)?\d[\d.,]*(?:\s*(?:Bulan|bulan|Hari|hari|%))?/g)?.map((marker) => normalizedProductionPromptText(marker)) ?? []))
-    .filter((marker) => /\d/.test(marker));
-}
-
-function promptAlreadyCovers(basePrompt: string, instruction: string, mode: "text" | "numeric"): boolean {
-  const base = normalizedProductionPromptText(basePrompt);
-  const normalizedInstruction = normalizedProductionPromptText(userFacingProductionPrompt(instruction));
-  if (!normalizedInstruction || base.includes(normalizedInstruction)) return true;
-  if (mode === "text") return false;
-  const markers = promptNumericMarkers(instruction);
-  return markers.length > 0 && markers.every((marker) => base.includes(marker));
-}
-
-function replacementRoleLabel(role: string): string {
-  switch (role.trim()) {
-    case "headline": return "标题";
-    case "subheadline": return "副标题";
-    case "benefit": return "卖点";
-    case "supporting": return "辅助说明";
-    case "cta": return "行动按钮";
-    case "plan_field": return "金额/期限";
-    case "legal": return "合规说明";
-    default: return role.trim();
-  }
-}
-
 function compactInstruction(value: string): string {
-  return userFacingProductionPrompt(value).split(/\n+/).map((line) => line.trim()).filter(Boolean).join("；");
-}
-
-function productionPromptClauses(value: string): string[] {
-  const clauses: string[] = [];
-  for (const line of userFacingProductionPrompt(value).split(/\n+/)) {
-    let clause = "";
-    for (let index = 0; index < line.length; index += 1) {
-      const char = line[index] ?? "";
-      clause += char;
-      const prev = line[index - 1] ?? "";
-      const next = line[index + 1] ?? "";
-      const numericPunctuation = (char === "." || char === ",") && /\d/.test(prev) && /\d/.test(next);
-      if (!numericPunctuation && "。；;.!?！？，,".includes(char)) {
-        const trimmed = clause.trim();
-        if (trimmed) clauses.push(trimmed);
-        clause = "";
-      }
-    }
-    const trimmed = clause.trim();
-    if (trimmed) clauses.push(trimmed);
-  }
-  return clauses;
-}
-
-function promptClauseMatchesGeneratedDetail(clause: string, adaptation: PreparedPreAdaptation): boolean {
-  const normalized = normalizedProductionPromptText(clause);
-  if (!normalized) return false;
-  if (/^(最终画面文字|留空移除原文|数值与还款版式)[:：]/.test(clause.trim())) return true;
-  if (/(^|[，,。；;\s])(?:表头|表为|本金|月供|期限|利率|金额|还款|移除|不保留|不翻译|按本金行展示|使用已审核利率和卖点)/i.test(clause)) return true;
-  const replacementTokens = adaptation.textReplacements
-    .flatMap((replacement) => [replacement.sourceText, replacement.replacementText])
-    .map((value) => value.trim())
-    .filter((value) => value.length >= 3)
-    .map(normalizedProductionPromptText);
-  if (replacementTokens.some((token) => normalized.includes(token))) return true;
-  const repaymentTokens = adaptation.repaymentPlanSelections
-    .flatMap((scenario) => [
-      scenario.values.principal,
-      scenario.values.tenor,
-      scenario.values.monthlyInstallment,
-      scenario.values.totalInterest,
-      scenario.values.totalRepayment,
-    ])
-    .map(normalizedProductionPromptText);
-  if (repaymentTokens.some((token) => token && normalized.includes(token))) return true;
-  if (promptNumericMarkers(clause).length > 0) return true;
-  return adaptation.numericLayouts.some((layout) => promptAlreadyCovers(clause, layout.renderInstruction, "numeric"));
-}
-
-export function overallProductionRequirementFromPrompt(productionPrompt: string, adaptation: PreparedPreAdaptation): string {
-  return productionPromptLines(
-    productionPromptClauses(productionPrompt).filter((clause) => !promptClauseMatchesGeneratedDetail(clause, adaptation)),
-  ).join("\n");
-}
-
-export function overallProductionRequirement(adaptation: PreparedPreAdaptation): string {
-  return overallProductionRequirementFromPrompt(adaptation.productionPrompt, adaptation);
+  return value.split(/\n+/).map((line) => line.trim()).filter(Boolean).join("；");
 }
 
 function sameRepaymentPlanChoice(choice: RepaymentPlanChoice, selection: PreparedRepaymentPlanSelection): boolean {
@@ -1704,7 +1688,7 @@ export function effectiveRepaymentPlanSelections(
 ): PreparedRepaymentPlanSelection[] {
   const layouts = effectiveNumericLayouts(adaptation, numericLayoutDrafts);
   const usedScenarioIds = new Set(layouts.flatMap((layout) => layout.scenarioIds));
-  const keepAll = adaptation.numericLayouts.length === 0;
+  const keepAll = layouts.length === 0;
   const selections = adaptation.repaymentPlanSelections
     .filter((selection) => keepAll || usedScenarioIds.has(selection.id))
     .map((selection) => repaymentPlanSelectionWithChoice(selection, repaymentPlanOverrides[selection.id]));
@@ -1726,7 +1710,7 @@ export function effectiveNumericLayouts(
   adaptation: PreparedPreAdaptation,
   numericLayoutDrafts: Record<string, NumericLayoutDraft> = {},
 ): PreparedNumericLayout[] {
-  return adaptation.numericLayouts.map((layout) => {
+  return [...adaptation.numericLayouts, ...pendingNumericLayouts(adaptation)].map((layout) => {
     const draft = numericLayoutDrafts[layout.id] ?? {};
     const removed = new Set((draft.removedScenarioIds ?? []).map((scenarioId) => scenarioId.trim()).filter(Boolean));
     const addedScenarioIds = Object.keys(draft.addedScenarios ?? {}).filter((scenarioId) => !removed.has(scenarioId));
@@ -1799,6 +1783,7 @@ function numericLayoutInstruction(
   originalLayout?: PreparedNumericLayout,
 ): string {
   const needsGeneratedInstruction = layout.scenarioIds.some((scenarioID) => repaymentPlanOverrides[scenarioID])
+    || (originalLayout === undefined && layout.scenarioIds.length > 0)
     || (originalLayout !== undefined && !sameStringArray(layout.scenarioIds, originalLayout.scenarioIds));
   if (!needsGeneratedInstruction) return compactInstruction(layout.renderInstruction);
   return generatedNumericLayoutInstruction(layout, scenarios) || compactInstruction(layout.renderInstruction);
@@ -1806,45 +1791,6 @@ function numericLayoutInstruction(
 
 function sameStringArray(left: string[], right: string[]): boolean {
   return left.length === right.length && left.every((value, index) => value === right[index]);
-}
-
-export function compiledProductionPrompt(
-  adaptation: PreparedPreAdaptation,
-  overrides: Record<string, string>,
-  productionPrompt = overallProductionRequirement(adaptation),
-  repaymentPlanOverrides: Record<string, RepaymentPlanChoice> = {},
-  numericLayoutDrafts: Record<string, NumericLayoutDraft> = {},
-): string {
-  const basePrompt = userFacingProductionPrompt(productionPrompt);
-  const numericLayouts = effectiveNumericLayouts(adaptation, numericLayoutDrafts);
-  const scenarios = scenarioByID(effectiveRepaymentPlanSelections(adaptation, repaymentPlanOverrides, numericLayoutDrafts));
-  const originalLayoutsById = numericLayoutByID(adaptation.numericLayouts);
-  const replacementInstructions = adaptation.textReplacements
-    .map((replacement) => ({ replacement, text: replacementText(replacement, overrides).trim() }))
-    .filter(({ text }) => Boolean(text) && !promptAlreadyCovers(basePrompt, text, "text"))
-    .map(({ replacement, text }) => {
-      const role = replacementRoleLabel(replacement.role);
-      return `${replacement.location}${role ? `（${role}）` : ""}：${text}`;
-    });
-  const missingInstructions = adaptation.textReplacements
-    .filter((replacement) => !replacementText(replacement, overrides).trim())
-    .map((replacement) => {
-      const role = replacementRoleLabel(replacement.role);
-      return `${replacement.location}${role ? `（${role}）` : ""}：留空并移除原文，不翻译、不保留竞品条款、不补写新的金融承诺。`;
-    });
-  const numericInstructions = numericLayouts
-    .map((layout) => ({ layout, instruction: numericLayoutInstruction(layout, scenarios, repaymentPlanOverrides, originalLayoutsById.get(layout.id)) }))
-    .filter(({ instruction }) => instruction && !promptAlreadyCovers(basePrompt, instruction, "numeric"))
-    .map(({ layout, instruction }) => `${layout.location}：${instruction}`);
-  return productionPromptLines([
-    basePrompt,
-    replacementInstructions.length > 0 ? "最终画面文字：" : "",
-    ...replacementInstructions,
-    missingInstructions.length > 0 ? "留空移除原文：" : "",
-    ...missingInstructions,
-    numericInstructions.length > 0 ? "数值与还款版式：" : "",
-    ...numericInstructions,
-  ]).join("\n");
 }
 
 export function frozenCopySnapshot(
@@ -1858,15 +1804,17 @@ export function frozenCopySnapshot(
   const repaymentPlanSelections = effectiveRepaymentPlanSelections(adaptation, repaymentPlanOverrides, numericLayoutDrafts);
   const repaymentPlanSelectionsByID = scenarioByID(repaymentPlanSelections);
   const numericLayouts = effectiveNumericLayouts(adaptation, numericLayoutDrafts).filter((layout) => layout.scenarioIds.length > 0);
+  const numericLayoutBlockIDs = new Set(numericLayouts.flatMap((layout) => layout.sourceBlockIds));
   const originalLayoutsByID = numericLayoutByID(adaptation.numericLayouts);
   return {
     ...copy,
+    visual_direction: draft.visualDirection,
     pre_adaptation: {
       schema_version: 1,
       source_analysis_id: sourceAnalysisID,
       summary: adaptation.summary,
       analysis_highlights: adaptation.analysisHighlights,
-      text_replacements: adaptation.textReplacements.map((replacement) => {
+      text_replacements: adaptation.textReplacements.filter((replacement) => !numericLayoutBlockIDs.has(replacement.blockId)).map((replacement) => {
         const replacementTextValue = replacementText(replacement, draft.textOverrides);
         const source = replacementSource(replacement, draft.replacementSources ?? {});
         const ready = replacementTextValue.trim().length > 0;
@@ -1907,7 +1855,6 @@ export function frozenCopySnapshot(
         target_columns: layout.targetColumns,
         render_instruction: numericLayoutInstruction(layout, repaymentPlanSelectionsByID, repaymentPlanOverrides, originalLayoutsByID.get(layout.id)),
       })),
-      production_prompt: compiledProductionPrompt(adaptation, draft.textOverrides, draft.productionPrompt, repaymentPlanOverrides, numericLayoutDrafts),
     },
   };
 }
@@ -1942,6 +1889,7 @@ export function preAdaptedCopySnapshot(
     repayment_plan_entries: [],
     recommendation: { score: 0, reasons: ["模型基于原图逐块填充"], matched_signals: [] },
     status: "model_pre_adapted",
+    visual_direction: draft.visualDirection,
   };
   return frozenCopySnapshot(snapshot, adaptation, draft, sourceAnalysisID);
 }
@@ -1949,6 +1897,10 @@ export function preAdaptedCopySnapshot(
 function PreAdaptationSummary({ adaptation }: { adaptation: PreparedPreAdaptation }) {
   if (adaptation.status === "unavailable" && adaptation.errorCode === "manual_confirmation_required") return <p className="mt-2 text-xs text-amber-700">待人工确认：{adaptation.errorMessage || adaptation.summary}</p>;
   if (adaptation.status === "unavailable") return <p className="mt-2 text-xs text-amber-700">文案库缺少同机制已审核文案：{adaptation.gaps.join("、") || adaptation.summary}</p>;
+  const pendingRecommendations = adaptation.textReplacements.filter((replacement) => replacement.status === "recommended" || replacement.status === "calculated").length;
+  if (pendingRecommendations > 0) return <p className="mt-2 text-xs text-amber-800">已完成逐块适配，其中 {pendingRecommendations} 个系统候选待确认后才能提交。</p>;
+  const pendingPlans = pendingNumericLayouts(adaptation).length;
+  if (pendingPlans > 0) return <p className="mt-2 text-xs text-amber-800">已识别还款计划区域，其中 {pendingPlans} 个区域未匹配到冻结方案，可在确认页选择已审核方案或留空移除。</p>;
   return <p className="mt-2 text-xs text-emerald-800">已完成逐块文字填充：{adaptation.summary || adaptation.reasons[0] || "按原图机制匹配"}</p>;
 }
 
@@ -1963,15 +1915,28 @@ export function groupTextReplacementsByLocation(replacements: PreparedTextReplac
   return [...groups.entries()].map(([location, groupedReplacements]) => ({ location, replacements: groupedReplacements }));
 }
 
-function TextReplacementPlan({ sourceImage, sourceImageAlt, adaptation, copyLibrary, overrides, replacementSources, repaymentPlanOverrides, numericLayoutDrafts, repaymentPlanOptions, productionPrompt, onChooseReplacement, onChooseRepaymentPlan, onAddRepaymentPlan, onRemoveRepaymentPlan, onProductionPromptChange, onOpenCopyLibrary, onRetrySourceAnalysis, retryingSourceAnalysis = false }: { sourceImage: string; sourceImageAlt: string; adaptation: PreparedPreAdaptation; copyLibrary?: CreativeResource; overrides: Record<string, string>; replacementSources: Record<string, ReplacementSourceChoice>; repaymentPlanOverrides: Record<string, RepaymentPlanChoice>; numericLayoutDrafts: Record<string, NumericLayoutDraft>; repaymentPlanOptions: RepaymentPlanChoice[]; productionPrompt: string; onChooseReplacement: (blockId: string, value: string, source: ReplacementSourceChoice) => void; onChooseRepaymentPlan: (scenarioId: string, plan: RepaymentPlanChoice, original: PreparedRepaymentPlanSelection) => void; onAddRepaymentPlan: (layoutId: string, plan: RepaymentPlanChoice) => void; onRemoveRepaymentPlan: (layoutId: string, scenarioId: string) => void; onProductionPromptChange: (value: string) => void; onOpenCopyLibrary?: () => void; onRetrySourceAnalysis?: () => void; retryingSourceAnalysis?: boolean }) {
-  const productionPromptId = useId();
-  const editableProductionPrompt = userFacingProductionPrompt(productionPrompt);
+function VisualDirectionEditor({ value, onChange }: { value: CreativeVisualDirection; onChange: (value: CreativeVisualDirection) => void }) {
+  const updateList = (key: "style_tags" | "must_preserve" | "avoid", raw: string) => {
+    onChange({ ...value, [key]: raw.split(/[\n,，、]/).map((item) => item.trim()).filter(Boolean) });
+  };
+  return <section className="border-t px-3 py-3" aria-labelledby="visual-direction-title">
+    <div className="mb-3"><h4 id="visual-direction-title" className="text-sm font-semibold">主题与风格约束</h4><p className="mt-0.5 text-[11px] text-muted-foreground">只描述希望保留的视觉方向；最终提示词由出图智能体根据原图继承和目标尺寸自行组织。</p></div>
+    <div className="grid gap-3 lg:grid-cols-2">
+      <div className="min-w-0 space-y-1.5 lg:col-span-2"><Label htmlFor="creative-visual-theme" className="text-xs text-muted-foreground">主题</Label><Input id="creative-visual-theme" value={value.theme} onChange={(event) => onChange({ ...value, theme: event.target.value })} placeholder="例如：灵活融资、轻量可信、适合移动端阅读" /></div>
+      <div className="min-w-0 space-y-1.5"><Label htmlFor="creative-visual-style-tags" className="text-xs text-muted-foreground">风格标签</Label><Input id="creative-visual-style-tags" value={value.style_tags.join("、")} onChange={(event) => updateList("style_tags", event.target.value)} placeholder="例如：红黑高对比、信息型、现代" /></div>
+      <div className="min-w-0 space-y-1.5"><Label htmlFor="creative-visual-preserve" className="text-xs text-muted-foreground">必须保留</Label><Input id="creative-visual-preserve" value={value.must_preserve.join("、")} onChange={(event) => updateList("must_preserve", event.target.value)} placeholder="例如：原图阅读顺序、主体层次、关键图形" /></div>
+      <div className="min-w-0 space-y-1.5 lg:col-span-2"><Label htmlFor="creative-visual-avoid" className="text-xs text-muted-foreground">避免</Label><Input id="creative-visual-avoid" value={value.avoid.join("、")} onChange={(event) => updateList("avoid", event.target.value)} placeholder="例如：拥挤底部、遮挡图标、竞品品牌识别" /></div>
+    </div>
+  </section>;
+}
+
+function TextReplacementPlan({ sourceImage, sourceImageAlt, adaptation, copyLibrary, overrides, replacementSources, repaymentPlanOverrides, numericLayoutDrafts, repaymentPlanOptions, visualDirection, onVisualDirectionChange, onChooseReplacement, onChooseRepaymentPlan, onAddRepaymentPlan, onRemoveRepaymentPlan, onOpenCopyLibrary, onRetrySourceAnalysis, retryingSourceAnalysis = false }: { sourceImage: string; sourceImageAlt: string; adaptation: PreparedPreAdaptation; copyLibrary?: CreativeResource; overrides: Record<string, string>; replacementSources: Record<string, ReplacementSourceChoice>; repaymentPlanOverrides: Record<string, RepaymentPlanChoice>; numericLayoutDrafts: Record<string, NumericLayoutDraft>; repaymentPlanOptions: RepaymentPlanChoice[]; visualDirection: CreativeVisualDirection; onVisualDirectionChange: (value: CreativeVisualDirection) => void; onChooseReplacement: (blockId: string, value: string, source: ReplacementSourceChoice) => void; onChooseRepaymentPlan: (scenarioId: string, plan: RepaymentPlanChoice, original: PreparedRepaymentPlanSelection) => void; onAddRepaymentPlan: (layoutId: string, plan: RepaymentPlanChoice) => void; onRemoveRepaymentPlan: (layoutId: string, scenarioId: string) => void; onOpenCopyLibrary?: () => void; onRetrySourceAnalysis?: () => void; retryingSourceAnalysis?: boolean }) {
   const effectiveLayouts = effectiveNumericLayouts(adaptation, numericLayoutDrafts);
-  const finalPromptPreview = compiledProductionPrompt(adaptation, overrides, editableProductionPrompt, repaymentPlanOverrides, numericLayoutDrafts);
   const effectiveScenarios = effectiveRepaymentPlanSelections(adaptation, repaymentPlanOverrides, numericLayoutDrafts);
-  const missingReplacements = adaptation.textReplacements.filter((replacement) => !replacementText(replacement, overrides).trim());
-  const pendingConfirmationCount = adaptation.textReplacements.filter((replacement) => hasPendingReplacementConfirmation(replacement, overrides, replacementSources)).length;
+  const pendingNumericPlanLayouts = effectiveLayouts.filter((layout) => isPendingNumericLayout(layout) && layout.scenarioIds.length === 0);
+  const pendingRecommendations = adaptation.textReplacements.filter((replacement) => hasPendingReplacementConfirmation(replacement, overrides, replacementSources));
   const reviewRegions = useMemo(() => visualReviewRegions(adaptation, effectiveLayouts), [adaptation, effectiveLayouts]);
+  const missingReplacements = reviewRegions.flatMap((region) => region.textReplacements).filter((replacement) => !replacementText(replacement, overrides).trim());
   const positionedRegions = useMemo(() => reviewRegions.filter((region): region is PreparedVisualReviewRegion & { visualBounds: NormalizedVisualBounds } => Boolean(region.visualBounds)), [reviewRegions]);
   const [activeRegionId, setActiveRegionId] = useState(positionedRegions[0]?.id ?? reviewRegions[0]?.id ?? "");
   const [selectorBlockId, setSelectorBlockId] = useState("");
@@ -1986,15 +1951,11 @@ function TextReplacementPlan({ sourceImage, sourceImageAlt, adaptation, copyLibr
   };
   const visualIndexByRegionId = new Map(positionedRegions.map((region, index) => [region.id, index + 1]));
   return <section aria-labelledby="text-replacement-title" className="min-w-0 border">
-    <div className="flex flex-wrap items-center justify-between gap-2 border-b px-3 py-2"><div><h4 id="text-replacement-title" className="text-sm font-semibold">画面内容核对</h4><p className="mt-0.5 text-[11px] text-muted-foreground">每个画面区域只选择一种最终来源：已审核文案、公式计算、本次推荐或人工改写。</p></div><div className="flex flex-wrap items-center gap-2">{pendingConfirmationCount > 0 && <Badge variant="outline" className="border-amber-400 bg-amber-50 text-amber-900">{pendingConfirmationCount} 项推荐待确认</Badge>}<Badge variant={missingReplacements.length === 0 ? "default" : "outline"}>{missingReplacements.length === 0 ? `${reviewRegions.length} 个区域已处理` : `${missingReplacements.length} 个文字可留空移除`}</Badge></div></div>
-    {pendingConfirmationCount > 0 && <div role="alert" className="flex items-start gap-2 border-b bg-amber-50/70 px-3 py-3 text-xs text-amber-950"><AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-700" /><div><p className="font-medium">系统已补出建议，但尚未作为本次订单的最终选择。</p><p className="mt-1 text-amber-800">请在对应区域采用推荐、选择已审核文案，或直接改写后再提交。</p></div></div>}
+    <div className="flex flex-wrap items-center justify-between gap-2 border-b px-3 py-2"><div><h4 id="text-replacement-title" className="text-sm font-semibold">画面内容核对</h4><p className="mt-0.5 text-[11px] text-muted-foreground">对着原图逐区确认文案和数值；系统生成的候选会先标记待确认。</p></div><div className="flex flex-wrap items-center gap-2">{pendingRecommendations.length > 0 && <Badge variant="outline" className="border-amber-300 bg-amber-50 text-amber-900">{pendingRecommendations.length} 个推荐待确认</Badge>}{pendingNumericPlanLayouts.length > 0 && <Badge variant="outline" className="border-amber-300 bg-amber-50 text-amber-900">{pendingNumericPlanLayouts.length} 个数值区域待选择</Badge>}<Badge variant={missingReplacements.length === 0 && pendingRecommendations.length === 0 && pendingNumericPlanLayouts.length === 0 ? "default" : "outline"}>{missingReplacements.length > 0 ? `${missingReplacements.length} 个文字可留空移除` : pendingRecommendations.length > 0 ? "推荐确认后可提交" : pendingNumericPlanLayouts.length > 0 ? "请选择还款方案或留空移除" : `${reviewRegions.length} 个区域已处理`}</Badge></div></div>
     <div className="grid min-w-0 xl:grid-cols-[minmax(360px,0.9fr)_minmax(0,1.1fr)] xl:items-start"><SourceTextVisualReview sourceImage={sourceImage} sourceImageAlt={sourceImageAlt} regions={positionedRegions} activeRegionId={activeRegionId} onSelect={(regionId) => selectRegion(regionId, true)} onRetrySourceAnalysis={onRetrySourceAnalysis} retryingSourceAnalysis={retryingSourceAnalysis} />
       <div className="min-w-0 border-t xl:border-l xl:border-t-0"><div className="space-y-3 p-3">{reviewRegions.map((region) => <VisualReviewRegionCard key={region.id} region={region} visualIndex={visualIndexByRegionId.get(region.id)} active={activeRegionId === region.id} overrides={overrides} replacementSources={replacementSources} scenarios={effectiveScenarios} originalScenarios={adaptation.repaymentPlanSelections} originalNumericLayouts={adaptation.numericLayouts} repaymentPlanOverrides={repaymentPlanOverrides} repaymentPlanOptions={repaymentPlanOptions} onSelect={() => selectRegion(region.id)} onOpenSelector={setSelectorBlockId} onChooseReplacement={onChooseReplacement} onChooseRepaymentPlan={onChooseRepaymentPlan} onAddRepaymentPlan={onAddRepaymentPlan} onRemoveRepaymentPlan={onRemoveRepaymentPlan} />)}</div></div>
     </div>
-    <div className="grid gap-3 border-t px-3 py-3 lg:grid-cols-[minmax(0,0.85fr)_minmax(0,1.15fr)]">
-      <div className="min-w-0 space-y-1.5"><Label htmlFor={productionPromptId} className="text-xs text-muted-foreground">可编辑全局要求</Label><Textarea id={productionPromptId} rows={4} value={editableProductionPrompt} onChange={(event) => onProductionPromptChange(event.target.value)} placeholder="输入生成时必须遵守的风格、主题、构图或画面要求..." /><p className="text-xs text-muted-foreground">只写风格、主题和构图；逐块文字和数值由上方当前选择自动合成。</p></div>
-      <div className="min-w-0 space-y-1.5"><p className="text-xs font-medium text-muted-foreground">最终出图提示词预览</p><pre className="max-h-56 overflow-auto whitespace-pre-wrap break-words border bg-muted/20 px-3 py-2 font-sans text-xs leading-5">{finalPromptPreview || "上方确认后会生成本次出图提示词。"}</pre><p className="text-xs text-muted-foreground">提交时会冻结这份预览内容。</p></div>
-    </div>
+    <VisualDirectionEditor value={visualDirection} onChange={onVisualDirectionChange} />
     <ReplacementSourceDialog open={selectorReplacement !== null} replacement={selectorReplacement} currentValue={selectorReplacement ? replacementText(selectorReplacement, overrides) : ""} copyLibrary={copyLibrary} onOpenChange={(open) => !open && setSelectorBlockId("")} onChoose={(value, source) => { if (selectorReplacement) onChooseReplacement(selectorReplacement.blockId, value, source); setSelectorBlockId(""); }} onOpenCopyLibrary={onOpenCopyLibrary} />
   </section>;
 }
@@ -2005,12 +1966,12 @@ function VisualReviewRegionCard({ region, visualIndex, active, overrides, replac
     {region.textReplacements.map((replacement) => {
       const source = replacementSource(replacement, replacementSources);
       const value = replacementText(replacement, overrides);
-      const pending = hasPendingReplacementConfirmation(replacement, overrides, replacementSources);
+      const pendingConfirmation = hasPendingReplacementConfirmation(replacement, overrides, replacementSources);
       const unavailable = replacement.status === "missing" && replacementSources[replacement.blockId] === undefined && !value.trim();
-      const sourceLabel = unavailable ? "暂无可用内容" : source.kind === "library" ? "已审核文案库" : source.kind === "calculation" ? pending ? "公式计算待确认" : "已确认公式计算" : source.kind === "recommendation" ? pending ? "系统推荐待确认" : "已采用系统推荐" : "本次人工改写";
-      const sourceTone = unavailable || pending ? "border-amber-300 bg-amber-50 text-amber-900" : source.kind === "calculation" ? "border-cyan-300 bg-cyan-50 text-cyan-900" : source.kind === "manual" ? "border-slate-300 bg-slate-50 text-slate-800" : "border-emerald-300 bg-emerald-50 text-emerald-900";
-      const detail = replacement.status === "calculated" && replacement.calculation ? `${replacement.calculation.formula}；${replacement.calculation.inputs.join("；")}` : (replacement.recommendationBasis ?? []).join("；") || replacement.note || (replacement.status === "missing" ? "没有可自动采用的内容。" : "来自当前冻结文案库。");
-      return <div key={replacement.blockId} className="grid min-w-0 gap-4 border-b p-3 last:border-b-0 xl:grid-cols-[minmax(180px,0.8fr)_minmax(0,1.2fr)] xl:items-start"><div className="min-w-0 xl:border-r xl:pr-4"><p className="text-[11px] font-medium text-muted-foreground">原图文字</p><p className="mt-1 whitespace-pre-wrap break-words text-sm leading-6 text-foreground">{replacement.sourceText || "未识别清晰文字"}</p>{replacement.semanticKind && <p className="mt-2 font-mono text-[10px] text-muted-foreground">{replacement.semanticKind}</p>}</div><div className="min-w-0"><div className="flex flex-wrap items-center justify-between gap-2"><p className="text-[11px] font-medium text-muted-foreground">最终替换文字</p><Badge variant="outline" className={sourceTone}>{sourceLabel}</Badge></div><Textarea rows={2} value={value} onFocus={onSelect} onChange={(event) => onChooseReplacement(replacement.blockId, event.target.value, { kind: "manual" })} placeholder="留空则移除原文" className="mt-1 min-h-12 resize-y text-sm leading-6" /><div className="mt-2 flex flex-wrap items-center gap-2"><Button size="sm" variant="outline" onClick={(event) => { event.stopPropagation(); onOpenSelector(replacement.blockId); }}><BookOpenText className="h-4 w-4" />选择来源</Button>{pending && <Button size="sm" onClick={(event) => { event.stopPropagation(); onChooseReplacement(replacement.blockId, replacement.replacementText, { kind: replacement.status === "calculated" ? "calculation" : "recommendation" }); }}><Check className="h-4 w-4" />采用推荐</Button>}</div><p className={`mt-2 break-words border-l-2 pl-2 text-[11px] leading-4 ${pending || replacement.status === "missing" ? "border-amber-300 text-amber-800" : "border-muted-foreground/30 text-muted-foreground"}`}>{detail}</p></div></div>;
+      const sourceLabel = unavailable ? "暂无可用内容" : pendingConfirmation ? "待确认推荐" : source.kind === "library" ? "已审核文案库" : source.kind === "calculation" ? "公式计算" : source.kind === "recommendation" ? "已采用系统推荐" : "本次人工改写";
+      const sourceTone = unavailable || pendingConfirmation ? "border-amber-300 bg-amber-50 text-amber-900" : source.kind === "calculation" ? "border-cyan-300 bg-cyan-50 text-cyan-900" : source.kind === "manual" ? "border-slate-300 bg-slate-50 text-slate-800" : "border-emerald-300 bg-emerald-50 text-emerald-900";
+      const detail = replacement.status === "calculated" && replacement.calculation ? `${replacement.calculation.formula}；${replacement.calculation.inputs.join("；")}` : (replacement.recommendationBasis ?? []).join("；") || replacement.note || (replacement.status === "missing" ? (region.kind === "numeric" ? "未匹配到冻结方案，可选择已审核方案或留空移除。" : "没有可自动采用的内容。") : "来自当前冻结文案库。");
+      return <div key={replacement.blockId} className="grid min-w-0 gap-4 border-b p-3 last:border-b-0 xl:grid-cols-[minmax(180px,0.8fr)_minmax(0,1.2fr)] xl:items-start"><div className="min-w-0 xl:border-r xl:pr-4"><p className="text-[11px] font-medium text-muted-foreground">原图文字</p><p className="mt-1 whitespace-pre-wrap break-words text-sm leading-6 text-foreground">{replacement.sourceText || "未识别清晰文字"}</p>{replacement.semanticKind && <p className="mt-2 font-mono text-[10px] text-muted-foreground">{replacement.semanticKind}</p>}</div><div className="min-w-0"><div className="flex flex-wrap items-center justify-between gap-2"><p className="text-[11px] font-medium text-muted-foreground">最终替换文字</p><Badge variant="outline" className={sourceTone}>{sourceLabel}</Badge></div><Textarea rows={2} value={value} onFocus={onSelect} onChange={(event) => onChooseReplacement(replacement.blockId, event.target.value, { kind: "manual" })} placeholder="留空则移除原文" className="mt-1 min-h-12 resize-y text-sm leading-6" /><div className="mt-2 flex flex-wrap items-center gap-2"><Button size="sm" variant="outline" onClick={(event) => { event.stopPropagation(); onOpenSelector(replacement.blockId); }}><BookOpenText className="h-4 w-4" />选择来源</Button></div><p className={`mt-2 break-words border-l-2 pl-2 text-[11px] leading-4 ${replacement.status === "missing" ? "border-amber-300 text-amber-800" : "border-muted-foreground/30 text-muted-foreground"}`}>{detail}</p></div></div>;
     })}
     {region.numericLayouts.length > 0 && <div className="p-3"><p className="mb-2 text-[11px] font-medium text-muted-foreground">我方数值版式</p><NumericLayoutCards layouts={region.numericLayouts} scenarios={scenarios} originalScenarios={originalScenarios} originalNumericLayouts={originalNumericLayouts} repaymentPlanOverrides={repaymentPlanOverrides} repaymentPlanOptions={repaymentPlanOptions} onChooseRepaymentPlan={onChooseRepaymentPlan} onAddRepaymentPlan={onAddRepaymentPlan} onRemoveRepaymentPlan={onRemoveRepaymentPlan} /></div>}
   </section>;
@@ -2108,6 +2069,7 @@ function NumericLayoutCards({
   return <div className="grid gap-3">{layouts.map((layout) => {
     const instruction = numericLayoutInstruction(layout, scenariosByID, repaymentPlanOverrides, originalLayoutsByID.get(layout.id));
     const nextPlan = nextRepaymentPlanOptionForLayout(layout, scenariosByID, repaymentPlanOptions);
+    const pendingSelection = isPendingNumericLayout(layout) && layout.scenarioIds.length === 0;
     return <div key={layout.id} className="min-w-0 border bg-muted/20">
       <div className="flex flex-wrap items-center justify-between gap-2 border-b px-3 py-2">
         <span className="break-words text-xs font-medium">{layout.location}</span>
@@ -2157,8 +2119,20 @@ function NumericLayoutCards({
         </table>
       </div>
       <div className="flex flex-wrap items-center justify-between gap-2 border-t px-3 py-2">
-        <p className="min-w-0 flex-1 whitespace-pre-wrap break-words text-xs leading-5 text-muted-foreground">{userFacingProductionPrompt(instruction) || "已按当前选择更新数值区域。"}</p>
-        {nextPlan && <Button type="button" size="sm" variant="outline" onClick={() => onAddRepaymentPlan(layout.id, nextPlan)}>
+        <p className="min-w-0 flex-1 whitespace-pre-wrap break-words text-xs leading-5 text-muted-foreground">{pendingSelection ? "未匹配到冻结还款方案；请选择已审核方案，或留空移除该数值区域。" : instruction || "已按当前选择更新数值区域。"}</p>
+        {pendingSelection && repaymentPlanOptions.length > 0 ? <NativeSelect
+          size="sm"
+          className="min-w-64"
+          aria-label={`选择${layout.location}还款方案`}
+          value=""
+          onChange={(event) => {
+            const plan = planByKey.get(event.target.value);
+            if (plan) onAddRepaymentPlan(layout.id, plan);
+          }}
+        >
+          <NativeSelectOption value="">选择已审核还款方案</NativeSelectOption>
+          {repaymentPlanOptions.map((plan) => <NativeSelectOption key={plan.planKey} value={plan.planKey}>{repaymentPlanOptionLabel(plan)}</NativeSelectOption>)}
+        </NativeSelect> : nextPlan && <Button type="button" size="sm" variant="outline" onClick={() => onAddRepaymentPlan(layout.id, nextPlan)}>
           <Plus className="h-4 w-4" />
           加一行
         </Button>}
@@ -2209,7 +2183,18 @@ export function manualCopySnapshot(
     repayment_plan_entries: [],
     recommendation: { score: 0, reasons: ["用户手动调整"], matched_signals: [] },
     status: "user_custom",
+    visual_direction: draft.visualDirection,
   };
+}
+
+export function visualDirectionSummary(direction: CreativeVisualDirection): string {
+  const parts = [
+    direction.theme.trim() ? `主题：${direction.theme.trim()}` : "",
+    direction.style_tags.length > 0 ? `风格：${direction.style_tags.join("、")}` : "",
+    direction.must_preserve.length > 0 ? `保留：${direction.must_preserve.join("、")}` : "",
+    direction.avoid.length > 0 ? `避免：${direction.avoid.join("、")}` : "",
+  ].filter(Boolean);
+  return parts.join("\n");
 }
 
 // This is an identity key, not a security primitive. Keeping it derived from
@@ -2353,7 +2338,7 @@ function recordStringArray(record: Record<string, unknown> | undefined, key: str
   return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
 }
 
-function MaterialPreview({ candidate, analysis, onClose, onDirectEdit, onRetryAnalysis, retryingAnalysis }: { candidate: CreativeMaterialCandidate | null; analysis?: CreativeSourceAnalysis; onClose: () => void; onDirectEdit: () => void; onRetryAnalysis: (candidateId: string) => void; retryingAnalysis: boolean }) {
+function MaterialPreview({ candidate, analysis, canRetryAnalysis, onClose, onDirectEdit, onRetryAnalysis, retryingAnalysis }: { candidate: CreativeMaterialCandidate | null; analysis?: CreativeSourceAnalysis; canRetryAnalysis: boolean; onClose: () => void; onDirectEdit: () => void; onRetryAnalysis: (candidateId: string) => void; retryingAnalysis: boolean }) {
   const source = candidate ? candidateSource(candidate) : "";
   const original = candidate ? resolvePublicFileUrl(candidate.original_url) : "";
   const details = candidate ? materialCandidateDisplayDetails(candidate) : null;
@@ -2371,7 +2356,7 @@ function MaterialPreview({ candidate, analysis, onClose, onDirectEdit, onRetryAn
         <section aria-labelledby="material-analysis-title" className="border-b pb-5">
           <div className="flex flex-wrap items-center gap-2"><Sparkles className="h-4 w-4" /><h3 id="material-analysis-title" className="font-medium">参考分析</h3>{analysis && <Badge variant="outline">已分析 v{analysis.analysis_version}</Badge>}</div>
           {analysis ? <><p className="mt-3 break-words text-sm">{analysis.summary || "分析已完成"}</p><AnalysisFacts analysis={analysis} /></> : <p className="mt-2 text-xs text-muted-foreground">该素材还没有完成参考分析。</p>}
-		  {candidate?.analysis_status === "failed" && <Button className="mt-3" size="sm" variant="outline" disabled={retryingAnalysis} onClick={() => onRetryAnalysis(candidate.id)}><RefreshCw className={retryingAnalysis ? "h-4 w-4 animate-spin" : "h-4 w-4"} />重新分析</Button>}
+		  {canRetryAnalysis && <Button className="mt-3" size="sm" variant="outline" disabled={retryingAnalysis} onClick={() => candidate && onRetryAnalysis(candidate.id)}><RefreshCw className={retryingAnalysis ? "h-4 w-4 animate-spin" : "h-4 w-4"} />{retryingAnalysis ? "正在重新分析" : "重新分析"}</Button>}
         </section>
         <div className="grid grid-cols-2 gap-4">
           <MetadataRow label="投放天数" value={details?.duration ?? MATERIAL_SOURCE_MISSING} />

@@ -19,17 +19,15 @@ func TestCreativePlatformSkillsStayNativeAndMapped(t *testing.T) {
 	skillRoot := filepath.Join(repoRoot, "scripts", "creative-platform-skills")
 
 	sourceMaps := map[string]string{
-		"appgrowing-material-collector":      "appgrowing-collection-source-map.md",
-		"ad-creative-analysis":               "ad-creative-analysis-source-map.md",
-		"ad-creative-pre-adaptation":         "ad-creative-pre-adaptation-source-map.md",
-		"ad-creative-market-pack-extraction": "ad-creative-market-pack-extraction-source-map.md",
-		"ad-creative-plan":                   "ad-creative-plan-source-map.md",
-		"ad-creative-production":             "ad-creative-production-source-map.md",
-		"ad-creative-direct-edit":            "ad-creative-direct-edit-source-map.md",
-		"ad-creative-prime-compose":          "ad-creative-prime-compose-source-map.md",
-		"ad-creative-qc":                     "ad-creative-qc-source-map.md",
-		"ad-creative-leadership":             "ad-creative-leadership-source-map.md",
-		"creative-flow-diagnostician":        "creative-flow-diagnosis-source-map.md",
+		"appgrowing-material-collector": "appgrowing-collection-source-map.md",
+		"ad-creative-analysis":          "ad-creative-analysis-source-map.md",
+		"ad-creative-pre-adaptation":    "ad-creative-pre-adaptation-source-map.md",
+		"ad-creative-plan":              "ad-creative-plan-source-map.md",
+		"ad-creative-production":        "ad-creative-production-source-map.md",
+		"ad-creative-direct-edit":       "ad-creative-direct-edit-source-map.md",
+		"ad-creative-qc":                "ad-creative-qc-source-map.md",
+		"ad-creative-leadership":        "ad-creative-leadership-source-map.md",
+		"creative-flow-diagnostician":   "creative-flow-diagnosis-source-map.md",
 	}
 
 	for skillName, sourceMapName := range sourceMaps {
@@ -66,11 +64,10 @@ func TestCreativePlatformSkillsUseFrozenBusinessInputs(t *testing.T) {
 	}
 	skillRoot := filepath.Join(filepath.Clean(filepath.Join(filepath.Dir(currentFile), "..", "..", "..")), "scripts", "creative-platform-skills")
 	required := map[string][]string{
-		"ad-creative-pre-adaptation": {"source_analysis", "text_replacements", "production_prompt"},
+		"ad-creative-pre-adaptation": {"source_analysis", "text_replacements", "visual_direction", "recommendation_basis", "repayment_plan_selections", "numeric_layouts", "render_instruction", "完整展示字符串", "pre-adaptation-put", "min(", "我方优先、数量取小"},
 		"ad-creative-plan":           {"copy_snapshot", "input_snapshot", "source_analysis"},
 		"ad-creative-production":     {"copy_snapshot", "prompt_sha256", "request_id"},
 		"ad-creative-direct-edit":    {"copy_snapshot", "prompt_sha256", "delivery_mode"},
-		"ad-creative-prime-compose":  {"input_snapshot", "prime_composition", "naming_rule"},
 		"ad-creative-qc":             {"copy_snapshot", "compose_result", "qc-finalize"},
 	}
 
@@ -80,6 +77,29 @@ func TestCreativePlatformSkillsUseFrozenBusinessInputs(t *testing.T) {
 			if !strings.Contains(content, term) {
 				t.Errorf("%s/SKILL.md must reference frozen/runtime contract %q", skillName, term)
 			}
+		}
+	}
+}
+
+func TestCreativeProductionPromptTemplateDefinesInputRolesAndVerticalCompression(t *testing.T) {
+	_, currentFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("resolve current test file")
+	}
+	root := filepath.Clean(filepath.Join(filepath.Dir(currentFile), "..", "..", ".."))
+	content := readCreativePlatformContractFile(t, filepath.Join(root, "scripts", "creative-platform-skills", "ad-creative-production", "SKILL.md"))
+	for _, required := range []string{
+		"COMPOSITION GATE",
+		"Input 2 is the current-size official Prime visual context",
+		"Do not swap input roles",
+		"Input 1 is the downloaded candidate reference",
+		"Input 1 is the approved square base from this Variant",
+		"failed",
+		"unbranded base for this size",
+		"compress vertically along the Y axis",
+	} {
+		if !strings.Contains(content, required) {
+			t.Errorf("production prompt template must contain %q", required)
 		}
 	}
 }

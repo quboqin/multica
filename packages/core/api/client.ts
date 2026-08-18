@@ -33,6 +33,8 @@ import type {
   IssueReaction,
   Workspace,
   WorkspaceRepo,
+  WorkspaceCapability,
+  WorkspaceCapabilitiesResponse,
   MemberWithUser,
   User,
   Skill,
@@ -137,13 +139,15 @@ import type {
 	CreateCreativeAdjustmentRequest,
 	CreateCreativeFeedbackRequest,
 	CreateCreativeFeedbackResponse,
+	QueueCreativeOrderAdjustmentRequest,
+	QueueCreativeOrderAdjustmentResponse,
 	CreativeFeedbackEventListResponse,
+	CreativeFeedbackDashboard,
 	CreativeFeedbackMetrics,
 	CreativeOrderListResponse,
 	CreativeOrder,
 	CreativeOrderWorkflowRetryResponse,
 	CreativeOrderQCRetryResponse,
-	CreativeOrderPrimePackageRepairResponse,
 	CreativeOrderItem,
 	CreativeOrderQCFinalizeResponse,
 	AdoptCreativeOrderVariantRequest,
@@ -152,10 +156,6 @@ import type {
 	CreativeDirectEditResponse,
 	RegisterCreativeDeliveriesRequest,
 	RegisterCreativeDeliveriesResponse,
-  CreativeCopyEntry,
-  CreativeCopyEntryInput,
-  CreativeCopyEntryListResponse,
-  CreativeCopyImportResult,
   CreativeIssueContext,
   CreativeIssueItem,
   CreativeMaterialLibraryResponse,
@@ -167,10 +167,7 @@ import type {
   CreativeResourceFileListResponse,
   CreativeResourceKind,
   CreativeResourceListResponse,
-  CreativeMarketPackComponentExtraction,
-  CreateCreativeMarketPackComponentExtractionRequest,
   CreateCreativeResourceRequest,
-  ImportCreativeCopyEntriesRequest,
   CredentialCrawlResult,
   CredentialProfile,
   AddCredentialProfileManagerRequest,
@@ -220,6 +217,8 @@ import {
   EMPTY_AGENT_TASK_FANOUT_RESPONSE,
   EMPTY_AGENT_TEMPLATE_SUMMARY_LIST,
   EMPTY_APP_CONFIG,
+  EMPTY_WORKSPACE_CAPABILITIES,
+  EMPTY_WORKSPACE_CAPABILITY,
   EMPTY_ATTACHMENT,
   EMPTY_CLOUD_RUNTIME_NODE,
   EMPTY_CLOUD_RUNTIME_NODE_LIST,
@@ -234,6 +233,8 @@ import {
   EMPTY_LIST_WEBHOOK_DELIVERIES_RESPONSE,
   EMPTY_WEBHOOK_DELIVERY,
   AppConfigSchema,
+  WorkspaceCapabilitiesSchema,
+  WorkspaceCapabilitySchema,
   type AppConfigResponse,
   GroupedIssuesResponseSchema,
   ListAutopilotsResponseSchema,
@@ -269,9 +270,6 @@ import {
   EMPTY_CREATE_BILLING_PORTAL_SESSION_RESPONSE,
   EMPTY_CANCEL_TASK_RESPONSE,
   EMPTY_CREATIVE_IMPORT_SUMMARY,
-  EMPTY_CREATIVE_COPY_ENTRY,
-  EMPTY_CREATIVE_COPY_ENTRY_LIST,
-  EMPTY_CREATIVE_COPY_IMPORT_RESULT,
   EMPTY_CREATIVE_ISSUE_CONTEXT,
   EMPTY_CREATIVE_ISSUE_ITEM,
   EMPTY_CREATIVE_MATERIAL_LIBRARY,
@@ -281,7 +279,6 @@ import {
   EMPTY_CREATIVE_RESOURCE_FILE,
   EMPTY_CREATIVE_RESOURCE_FILE_LIST,
   EMPTY_CREATIVE_RESOURCE_LIST,
-  EMPTY_CREATIVE_MARKET_PACK_COMPONENT_EXTRACTION,
   EMPTY_CREDENTIAL_CRAWL_RESULT,
   EMPTY_LIST_CREDENTIAL_CONNECTORS_RESPONSE,
   EMPTY_LIST_CREDENTIAL_PROFILES_RESPONSE,
@@ -290,24 +287,23 @@ import {
   EMPTY_LARK_LOGIN_STATE_RESPONSE,
   EMPTY_LOGIN_RESPONSE,
   CreativeImportSummarySchema,
-  CreativeCopyEntryListSchema,
-  CreativeCopyEntrySchema,
-  CreativeCopyImportResultSchema,
   CreativeIssueContextSchema,
   CreativeIssueItemSchema,
 	CreativeAdjustmentRequestSchema,
 	EMPTY_CREATIVE_ADJUSTMENT_REQUEST,
 	CreateCreativeFeedbackResponseSchema,
+	QueueCreativeOrderAdjustmentResponseSchema,
 	EMPTY_CREATIVE_FEEDBACK_RESPONSE,
 	CreativeFeedbackEventListResponseSchema,
 	EMPTY_CREATIVE_FEEDBACK_EVENT_LIST_RESPONSE,
 	CreativeFeedbackMetricsSchema,
 	EMPTY_CREATIVE_FEEDBACK_METRICS,
+	CreativeFeedbackDashboardSchema,
+	EMPTY_CREATIVE_FEEDBACK_DASHBOARD,
 	CreativeOrderListResponseSchema,
 	CreativeOrderSchema,
 	CreativeOrderWorkflowRetryResponseSchema,
 	CreativeOrderQCRetryResponseSchema,
-	CreativeOrderPrimePackageRepairResponseSchema,
 	CreativeOrderItemSchema,
 	EMPTY_CREATIVE_ORDER_ITEM,
 	CreativeOrderQCFinalizeResponseSchema,
@@ -327,7 +323,6 @@ import {
   CreativeResourceFileListSchema,
   CreativeResourceFileSchema,
   CreativeResourceSchema,
-  CreativeMarketPackComponentExtractionSchema,
   CredentialCrawlResultSchema,
   CredentialProfileSchema,
   ListCredentialConnectorsResponseSchema,
@@ -2606,6 +2601,23 @@ export class ApiClient {
     );
   }
 
+  async getWorkspaceCapabilities(workspaceId: string): Promise<WorkspaceCapabilitiesResponse> {
+    const raw = await this.fetch<unknown>(`/api/workspaces/${workspaceId}/capabilities`);
+    return parseWithFallback(raw, WorkspaceCapabilitiesSchema, EMPTY_WORKSPACE_CAPABILITIES, {
+      endpoint: `GET /api/workspaces/${workspaceId}/capabilities`,
+    });
+  }
+
+  async updateWorkspaceCapability(workspaceId: string, key: string, enabled: boolean): Promise<WorkspaceCapability> {
+    const raw = await this.fetch<unknown>(`/api/workspaces/${workspaceId}/capabilities/${encodeURIComponent(key)}`, {
+      method: "PATCH",
+      body: JSON.stringify({ enabled }),
+    });
+    return parseWithFallback(raw, WorkspaceCapabilitySchema, EMPTY_WORKSPACE_CAPABILITY, {
+      endpoint: `PATCH /api/workspaces/${workspaceId}/capabilities/${key}`,
+    });
+  }
+
   async addCredentialProfileManager(
     profileId: string,
     data: AddCredentialProfileManagerRequest,
@@ -2755,31 +2767,6 @@ export class ApiClient {
     });
   }
 
-  async createCreativeMarketPackComponentExtraction(
-    id: string,
-    data: CreateCreativeMarketPackComponentExtractionRequest,
-  ): Promise<CreativeMarketPackComponentExtraction> {
-    const raw = await this.fetch<unknown>(`/api/creative/resources/${id}/component-extractions`, {
-      method: "POST",
-      body: JSON.stringify(data),
-    });
-    return parseWithFallback(raw, CreativeMarketPackComponentExtractionSchema, EMPTY_CREATIVE_MARKET_PACK_COMPONENT_EXTRACTION, {
-      endpoint: "POST /api/creative/resources/:id/component-extractions",
-    });
-  }
-
-  async getLatestCreativeMarketPackComponentExtraction(id: string): Promise<CreativeMarketPackComponentExtraction | null> {
-    const raw = await this.fetch<unknown | undefined>(`/api/creative/resources/${id}/component-extractions/latest`);
-    if (raw === undefined) return null;
-    return parseWithFallback(raw, CreativeMarketPackComponentExtractionSchema, EMPTY_CREATIVE_MARKET_PACK_COMPONENT_EXTRACTION, {
-      endpoint: "GET /api/creative/resources/:id/component-extractions/latest",
-    });
-  }
-
-  async applyCreativeMarketPackComponentExtraction(id: string, extractionId: string): Promise<void> {
-    await this.fetch<void>(`/api/creative/resources/${id}/component-extractions/${extractionId}/apply`, { method: "POST" });
-  }
-
   async addCreativeResourceFile(
     id: string,
     data: { attachment_id: string; role: string; label?: string; metadata?: Record<string, unknown> },
@@ -2808,36 +2795,6 @@ export class ApiClient {
     });
     return parseWithFallback(raw, CreativeResourceFileSchema, EMPTY_CREATIVE_RESOURCE_FILE, {
       endpoint: "PUT /api/creative/resources/:id/files/:fileId",
-    });
-  }
-
-  async listCreativeCopyEntries(libraryId: string): Promise<CreativeCopyEntryListResponse> {
-    const raw = await this.fetch<unknown>(`/api/creative/copy-libraries/${libraryId}/entries`);
-    return parseWithFallback(raw, CreativeCopyEntryListSchema, EMPTY_CREATIVE_COPY_ENTRY_LIST, {
-      endpoint: "GET /api/creative/copy-libraries/:id/entries",
-    });
-  }
-
-  async importCreativeCopyEntries(
-    libraryId: string,
-    data: ImportCreativeCopyEntriesRequest,
-  ): Promise<CreativeCopyImportResult> {
-    const raw = await this.fetch<unknown>(`/api/creative/copy-libraries/${libraryId}/entries/import`, {
-      method: "POST",
-      body: JSON.stringify(data),
-    });
-    return parseWithFallback(raw, CreativeCopyImportResultSchema, EMPTY_CREATIVE_COPY_IMPORT_RESULT, {
-      endpoint: "POST /api/creative/copy-libraries/:id/entries/import",
-    });
-  }
-
-  async updateCreativeCopyEntry(id: string, data: CreativeCopyEntryInput): Promise<CreativeCopyEntry> {
-    const raw = await this.fetch<unknown>(`/api/creative/copy-entries/${id}`, {
-      method: "PUT",
-      body: JSON.stringify(data),
-    });
-    return parseWithFallback(raw, CreativeCopyEntrySchema, EMPTY_CREATIVE_COPY_ENTRY, {
-      endpoint: "PUT /api/creative/copy-entries/:id",
     });
   }
 
@@ -2916,6 +2873,13 @@ export class ApiClient {
     });
   }
 
+  async getCreativeFeedbackDashboard(): Promise<CreativeFeedbackDashboard> {
+    const raw = await this.fetch<unknown>("/api/creative-feedback-events/dashboard");
+    return parseWithFallback(raw, CreativeFeedbackDashboardSchema, EMPTY_CREATIVE_FEEDBACK_DASHBOARD, {
+      endpoint: "GET /api/creative-feedback-events/dashboard",
+    });
+  }
+
   async undoCreativeFeedback(id: string): Promise<CreateCreativeFeedbackResponse> {
     const raw = await this.fetch<unknown>(`/api/creative-feedback-events/${id}/undo`, { method: "POST" });
     return parseWithFallback(raw, CreateCreativeFeedbackResponseSchema, EMPTY_CREATIVE_FEEDBACK_RESPONSE, {
@@ -2942,6 +2906,16 @@ export class ApiClient {
     });
   }
 
+  async queueCreativeOrderAdjustment(orderId: string, data: QueueCreativeOrderAdjustmentRequest): Promise<QueueCreativeOrderAdjustmentResponse> {
+    const raw = await this.fetch<unknown>(`/api/creative/orders/${encodeURIComponent(orderId)}/adjustments`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+    return parseWithFallback(raw, QueueCreativeOrderAdjustmentResponseSchema, { task_id: "", revision: 1 }, {
+      endpoint: "POST /api/creative/orders/:id/adjustments",
+    });
+  }
+
   async retryCreativeOrderVariantQC(orderId: string, variantId: string): Promise<CreativeOrderQCRetryResponse> {
     const raw = await this.fetch<unknown>(`/api/creative/orders/${encodeURIComponent(orderId)}/variants/${encodeURIComponent(variantId)}/qc/retry`, {
       method: "POST",
@@ -2950,15 +2924,6 @@ export class ApiClient {
       variant_id: "", revision: 1, technical_task_id: "", visual_task_id: "",
     }, {
       endpoint: "POST /api/creative/orders/:id/variants/:variantId/qc/retry",
-    });
-  }
-
-  async repairCreativeOrderVariantPrimePackage(orderId: string, variantId: string): Promise<CreativeOrderPrimePackageRepairResponse> {
-    const raw = await this.fetch<unknown>(`/api/creative/orders/${encodeURIComponent(orderId)}/variants/${encodeURIComponent(variantId)}/prime-package-repair`, {
-      method: "POST",
-    });
-    return parseWithFallback(raw, CreativeOrderPrimePackageRepairResponseSchema, { task_id: "" }, {
-      endpoint: "POST /api/creative/orders/:id/variants/:variantId/prime-package-repair",
     });
   }
 
@@ -3025,16 +2990,6 @@ export class ApiClient {
     });
     return parseWithFallback(raw, CreativeIssueContextSchema, EMPTY_CREATIVE_ISSUE_CONTEXT, {
       endpoint: "PUT /api/issues/:id/creative-context",
-    });
-  }
-
-  async putCreativeItemCopy(issueId: string, candidateId: string, copyEntryId: string): Promise<CreativeIssueItem> {
-    const raw = await this.fetch<unknown>(`/api/issues/${issueId}/creative-materials/${candidateId}/copy`, {
-      method: "PUT",
-      body: JSON.stringify({ copy_entry_id: copyEntryId }),
-    });
-    return parseWithFallback(raw, CreativeIssueItemSchema, EMPTY_CREATIVE_ISSUE_ITEM, {
-      endpoint: "PUT /api/issues/:id/creative-materials/:candidateId/copy",
     });
   }
 

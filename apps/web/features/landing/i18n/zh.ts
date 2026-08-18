@@ -293,7 +293,18 @@ export function createZhDict(allowSignup: boolean): LandingDict {
     },
     entries: [
       {
-        version: "0.3.22",
+        version: "0.3.23",
+        date: "2026-08-16",
+        title: "工作区创意能力开关与更清晰的更新提醒",
+        changes: [],
+        features: [
+          "创意工厂现在可以在每个工作区独立开启或关闭。",
+          "服务端 API 也会执行能力校验，因此直达链接和后台请求都遵循同一个工作区开关。",
+          "帮助菜单现在只保留一份由 Multica 自己维护的更新日志，新版本会只提醒一次本次改动。",
+        ],
+      },
+        {
+          version: "0.3.22",
         date: "2026-06-15",
         title: "更快的列表体验、更顺手的运行配置和更安全的 Issue 编辑",
         changes: [],

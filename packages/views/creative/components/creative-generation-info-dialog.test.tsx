@@ -77,7 +77,7 @@ describe("creative generation information", () => {
       provider: "OpenAI",
       marketVersion: "AdaKami Indonesia · v12",
       marketRule: "Prime 布局合同 v2 · 1 个保护区 · 背景规则 quiet",
-      prompt: "完整提示词：保留蓝绿色信息卡片，并使用已审核文案。",
+      prompt: "完整提示词：保留蓝绿色信息卡片，并使用已审核文案。\nApproved repayment rows: Jumlah Pinjaman Rp80.000.000",
       attempts: "2",
     });
     expect(info.copyLines).toContainEqual({ label: "主标题", value: "Pinjaman Fleksibel Tanpa Ribet" });
@@ -97,7 +97,7 @@ describe("creative generation information", () => {
     expect(creativeGenerationInfo(item, variant, delivered).repaymentPlans).toEqual([]);
   });
 
-  it("does not present a task summary as the exact model prompt without CLI trace evidence", () => {
+  it("reads the exact model prompt from the generated asset trace without requiring a separate hash", () => {
     const { generated, delivered, variant, item } = fixture();
     generated.metadata = { model: "gpt-image-2", prompt: "Create an unbranded V02 concept from the approved plan." };
     generated.evidence = { request_id: "request-legacy", attempts: 1 };
@@ -105,24 +105,23 @@ describe("creative generation information", () => {
 
     const info = creativeGenerationInfo(item, variant, delivered);
 
-    expect(info.prompt).toBe("");
+    expect(info.prompt).toBe("Create an unbranded V02 concept from the approved plan.");
     render(<CreativeGenerationInfoDialog open onOpenChange={vi.fn()} item={item} variant={variant} asset={delivered} imageUrl="https://cdn.example/delivered.png" />);
-    expect(screen.getByText("未记录完整提示词")).toBeInTheDocument();
-    expect(screen.queryByText("Create an unbranded V02 concept from the approved plan.")).not.toBeInTheDocument();
+    expect(screen.getByText("Create an unbranded V02 concept from the approved plan.")).toBeInTheDocument();
     expect(screen.queryByText("Planner summary copied onto the delivery asset")).not.toBeInTheDocument();
   });
 
-  it("renders the parsed summary and keeps the complete prompt in advanced information", () => {
+  it("renders the complete trace-verified prompt directly in the image detail", () => {
     const { delivered, variant, item } = fixture();
     render(<CreativeGenerationInfoDialog open onOpenChange={vi.fn()} item={item} variant={variant} asset={delivered} imageUrl="https://cdn.example/delivered.png" />);
 
-    expect(screen.getByRole("heading", { name: "生成信息" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "成图详情" })).toBeInTheDocument();
     expect(screen.getByText("保留原图信息机制，突出额度利益点")).toBeInTheDocument();
     expect(screen.getByText("Pinjaman Fleksibel Tanpa Ribet")).toBeInTheDocument();
     expect(screen.getByText("AdaKami Indonesia · v12")).toBeInTheDocument();
     expect(screen.getByText("Prime 布局合同 v2 · 1 个保护区 · 背景规则 quiet")).toBeInTheDocument();
-    expect(screen.getByText("完整提示词：保留蓝绿色信息卡片，并使用已审核文案。")).toHaveClass("whitespace-pre-wrap", "break-words");
-    expect(screen.queryByText(/Approved repayment rows/)).not.toBeInTheDocument();
+    expect(screen.getByText("完整模型提示词")).toBeInTheDocument();
+    expect(screen.getByText(/Approved repayment rows/)).toHaveClass("whitespace-pre-wrap", "break-words");
     expect(screen.getByAltText("V01 方形 · 1080x1080 成图")).toBeInTheDocument();
   });
 });

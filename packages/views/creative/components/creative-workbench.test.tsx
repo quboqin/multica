@@ -62,8 +62,6 @@ function variant(id: string, status = "completed"): CreativeOrderVariant {
     qc_status: status === "completed" ? "passed" : "pending",
     qc_recovery_used: false,
     qc_recovery_available: false,
-    prime_repair_used: false,
-    prime_repair_available: false,
     created_at: "2026-08-01T02:00:00Z",
     updated_at: "2026-08-01T02:00:00Z",
     assets: [],
@@ -179,31 +177,40 @@ describe("CreativeWorkbench", () => {
 
     expect(screen.getByTestId("creative-workbench-materials")).toHaveTextContent("2");
     expect(screen.getByTestId("creative-workbench-running")).toHaveTextContent("1");
-    expect(screen.getByTestId("creative-workbench-reviews")).toHaveTextContent("2");
+    expect(screen.getByTestId("creative-workbench-reviews")).toHaveTextContent("1");
     expect(screen.getByTestId("creative-workbench-deliveries")).toHaveTextContent("0");
     expect(screen.getByRole("region", { name: "工作台概览" })).toBeInTheDocument();
-    expect(screen.getByText("查看素材、生成、验收和交付的当前总览。")).toBeInTheDocument();
+    expect(screen.getByText("查看素材、生成、验收和本周交付的当前总览。")).toBeInTheDocument();
+    expect(screen.queryByText("需处理异常")).not.toBeInTheDocument();
     expect(screen.queryByText("Dana cepat")).not.toBeInTheDocument();
     expect(screen.queryByText("Pinjaman ringan")).not.toBeInTheDocument();
     expect(screen.queryByText("Sudah dipilih")).not.toBeInTheDocument();
   });
 
-  it("counts this week's deliveries without expanding order history", () => {
+  it("does not count adopted results as pending adoption", () => {
     const delivered = order({
       id: "order-delivered",
       status: "completed",
       orderItems: [item({ id: "item-delivered", candidateId: "candidate-delivered", adopted: true })],
       updatedAt: new Date().toISOString(),
     });
+    const deliveredLastWeek = order({
+      id: "order-delivered-last-week",
+      status: "completed",
+      orderItems: [item({ id: "item-delivered-last-week", candidateId: "candidate-delivered-last-week", adopted: true })],
+      updatedAt: new Date(Date.now() - 8 * 24 * 60 * 60 * 1000).toISOString(),
+    });
 
     render(<CreativeWorkbench
       candidates={[candidate("candidate-delivered", "selected", "Tawaran Lebaran")]}
-      orders={[delivered]}
+      orders={[delivered, deliveredLastWeek]}
       onOpenMaterialLibrary={vi.fn()}
       onOpenOrder={vi.fn()}
     />);
 
+    expect(screen.getByTestId("creative-workbench-reviews")).toHaveTextContent("0");
     expect(screen.getByTestId("creative-workbench-deliveries")).toHaveTextContent("1");
+    expect(screen.getByTestId("creative-workbench-running")).toHaveTextContent("0");
     expect(screen.queryByText("Tawaran Lebaran")).not.toBeInTheDocument();
   });
 
@@ -222,6 +229,20 @@ describe("CreativeWorkbench", () => {
     expect(screen.queryByText(/需要你处理/)).not.toBeInTheDocument();
   });
 
+  it("does not count a stale queued order as active generation", () => {
+    const stalled = order({
+      id: "order-stalled",
+      status: "queued",
+      orderItems: [item({ id: "item-stalled", candidateId: "candidate-stalled", withCompletedVariant: false })],
+    });
+    stalled.derived_status = "action_required";
+
+    render(<CreativeWorkbench candidates={[]} orders={[stalled]} onOpenMaterialLibrary={vi.fn()} onOpenOrder={vi.fn()} />);
+
+    expect(screen.getByTestId("creative-workbench-running")).toHaveTextContent("0");
+    expect(screen.getByTestId("creative-workbench-deliveries")).toHaveTextContent("0");
+  });
+
   it("keeps completed results reviewable when another step failed", () => {
     const onOpenOrder = vi.fn();
     const partial = order({
@@ -234,6 +255,7 @@ describe("CreativeWorkbench", () => {
     render(<CreativeWorkbench candidates={[candidate("candidate-partial", "selected", "可验收素材")]} orders={[partial]} onOpenMaterialLibrary={vi.fn()} onOpenOrder={onOpenOrder} />);
 
     expect(screen.getByTestId("creative-workbench-reviews")).toHaveTextContent("1");
+    expect(screen.getByTestId("creative-workbench-deliveries")).toHaveTextContent("0");
     expect(screen.queryByRole("button", { name: /确认/ })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /处理/ })).not.toBeInTheDocument();
   });

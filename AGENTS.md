@@ -243,3 +243,86 @@ runtime update or a daemon configuration change.
   preanalysis delegation for that exact Crawl Run.
 
 See CLAUDE.md for the complete command reference.
+
+### Platform Change Log
+
+Every code change or key product update must add a dated entry here. User-facing
+changes must also update the platform-owned changelog under
+`packages/views/locales/*/changelog.json`; keep the version and release id in
+`packages/views/changelog/releases.ts` as the single source of truth.
+
+- **2026-08-18 / 0.3.41** — 移除 Prime 流程对二维码的强制验证：发布、确定性合成和 QC 不再要求读取、解码或校验二维码；若上传模板或最终成图含二维码，则记录可解码内容作为非阻断证据，完整透明贴片按上传文件原样叠加；无二维码市场可直接上传并发布，文件、尺寸、布局和合成完整性校验保留。创意工厂初始化、默认资源快照和现有工作区 bootstrap 同步到 Prime 合同 v6。
+
+- **2026-08-18 / 0.3.40** — 预适配数值改为以我方冻结还款方案为准：实际渲染行数取原图可渲染行数与我方兼容已审核方案数的较小值，原图多出的数值区块作为默认移除项保留追踪；我方没有某一期限方案时不借用其他期限金额。预适配 Skill、分析 Agent、创意工厂初始化和现有工作区 bootstrap 同步到同一版本契约；数值 layout 的渲染说明必须逐字列出冻结展示值，服务二进制内置 IANA 时区数据，确保 Windows 部署可创建计划触发器。
+
+- **2026-08-18 / 0.3.39** — 修复还款计划未匹配时确认页退化为普通空文案的问题：保留原始数字区块，恢复已审核还款方案选择；用户选择后只冻结我方方案和数值版式，不自动复制或猜测竞品金额。
+
+- **2026-08-18 / 0.3.38** — 拆分出图产物状态与原素材参考分析状态：已有出图订单的已归档图片仍可重新分析，已生成素材仍可再次选入新的出图确认；已拒绝和无可配置文案素材不重复排队，重新分析不会自动复制已有订单。
+
+- **2026-08-18 / 0.3.37** — 素材卡片、预览和确认页统一保留分析中的“重新分析”入口，并复用幂等排队动作；普通文案没有兼容的已审核片段时，服务端将 `missing` 兜底为带依据、无文案库来源的 `recommended` 候选，金融数值、利率、法律文字、二维码和品牌事实仍必须使用审核来源或冻结计算。
+
+- **2026-08-18 / 0.3.35** — 文案库没有兼容已审核片段时，普通文案由模型或平台恢复路径生成 `recommended` 候选，`source_keys` 保持为空并写入推荐依据；金融数值、利率、法律文字、二维码和品牌事实仍必须有审核来源或冻结计算。确认页显示“待确认推荐”，用户采用或改写后才允许提交订单；创意工厂初始化 Skill 版本升至 23，分析 Agent 同步新契约。
+
+- **2026-08-18 / 0.3.36** — 已归档的图片素材始终保留“重新分析”入口，包括“等待分析完成”和“可用”状态；用户可手动重新排队当前工作区的参考分析，用于恢复未真正执行的 Agent 或验证新的分析逻辑，已生成和已拒绝素材不重复排队。
+
+- **2026-08-17 / 0.3.34** — 预适配改为按可渲染数值行做部分映射：已匹配行继续使用冻结方案，容量外或无法匹配的区块保留原始身份并交给确认页选择或留空移除；模型提示词补齐后端字段、容量和冻结值校验，金融语义字段没有真实命中审核文案时不会套用通用标题兜底，失败修正最多一次。素材库的自动继续入口已收敛为一个，避免同一分析重复排队。本版本已部署，并通过平台入口重跑 `test-creative5` 的两张素材。
+
+- **2026-08-17 / 0.3.33** — 修正创意工厂订单边界：采集和预适配自动运行，但仅用户选图并确认文案后创建订单；daemon 恢复只修复预适配，不再自动选中素材或补建后台订单。
+
+- **2026-08-17 / 0.3.29** — 创意工作台第四项改为本周交付，保留异常、状态、采用和时间明细供后续统计；残留的无活动任务队列不再冒充进行中。流程反馈按完整交付包计算产线采用率，平台自有更新日志改为显示可读的多语言内容。
+
+- **2026-08-17 / 0.3.30** — 修复创意工厂首次开启后资源已写入但平台列表不可见的问题：初始化会创建或复用工作区级“创意工厂自动化”，已有安装可在再次开启时补齐自动化元数据，前端同步刷新智能体、Skills、小队和自动化缓存；不覆盖用户已编辑的工作区资源。
+
+- **2026-08-17 / 0.3.31** — 修正创意工厂初始化的自动化职责：采集计划现在创建长 Prompt 的“印尼竞品素材周度采集”，绑定当前工作区的“素材_采集” Agent，并保留 2 张图片、图片过滤、分析 fanout 和凭证恢复契约；仅迁移之前误建的默认短描述小队记录，用户编辑过的自动化不覆盖。
+
+- **2026-08-17 / 0.3.32** — 对齐当前 Ad Creative 的创意工厂 Agent、Skill 和提示词模板；初始化种子资源直接可用于预适配，同时保留 Prime 配置待完善状态。无可编辑文字的静态素材不再进入失败重试，分析到预适配的交接错误进入可恢复日志，采集 Agent 的分析绑定按工作区动态注入，用户编辑资源不覆盖。
+
+- **2026-08-17 / 0.3.32** — 修复旧版市场资源包发布时缺少 `prime_template_set` 的兼容问题：已有完整六个 Prime 标准附件会在发布校验阶段补齐标准模板契约；附件缺失、尺寸或二维码不合规仍会阻止发布。
+
+- **2026-08-17 / runtime** — daemon 注册 runtime 时读取工作区 `settings.runtime_providers` 白名单；未配置的工作区保持全量 provider，`test_creative4` 明确只注册 Codex，避免删除其他 runtime 后被 daemon 自动恢复。
+
+- **2026-08-17 / creative-resources** — 创意工厂首次启用时，从随服务发布的 Ad Creative 默认资源快照复制完整文案库、市场规则、Prime 附件与工作区专属资源记录；不依赖任何已有工作区，已有资源及用户编辑不覆盖。
+
+- **2026-08-17 / 0.3.28** — Fixed stale Creative Production blockers while a
+  same-Variant continuation is queued or running, so incomplete parent tasks
+  remain visibly in progress instead of showing as generation failures. The
+  production Skill and workspace producer now register Prime context, model
+  originals, and normalized process evidence as each size is produced, and
+  require evidence and canonical assets before task completion.
+
+- **2026-08-16 / 0.3.27** — Fixed numeric pre-adaptation failures caused by
+  harmless currency whitespace differences and added deterministic repair from
+  frozen repayment plans after the bounded model retry. Recent manual-required
+  adaptations are recovered automatically after worker or API restarts; manual
+  confirmation remains only when the source regions or frozen bindings are not
+  safe to infer.
+
+- **2026-08-16 / 0.3.23** — Added workspace-scoped Creative Factory capability
+  controls with API, navigation, and direct-page enforcement; replaced the
+  help menu with the platform-owned internal changelog and added the
+  once-per-version release announcement.
+- **2026-08-16 / 0.3.23** — Added persisted label filtering to the requirements
+  (Projects) table. Multiple labels use OR semantics and the filter is
+  available in all supported locales. Workflow-created sub-issues now render
+  in stable execution order by workflow stage, variant, revision, and issue
+  identifier.
+- **2026-08-16 / 0.3.23** — Fixed the Creative Orders list 500 by using a
+  lightweight list projection for items, variants, and assets; full QC and
+  diagnostic data remains available on the order detail endpoint.
+- **2026-08-16 / 0.3.24** — Expanded the pre-adaptation Skill with the exact
+  frozen-resource JSON contract and made failed direct tasks retry with their
+  original context before falling back to manual confirmation.
+- **2026-08-16 / 0.3.25** — Added workspace-owned Creative Factory initialization
+  and automatic handoff from a successful pre-adaptation into order creation,
+  planning, production, and QC. Collection requests are clamped to two images,
+  and the handoff uses the workspace installation's Agent, Skill, prompt,
+  binding, resource, and squad snapshots without hard-coded IDs or overwrites.
+- **2026-08-16 / 0.3.26** — Made the automatic handoff recover completed
+  pre-adaptation tasks after worker restarts, bounded production recovery to
+  reuse completed sizes and generate only missing sizes, and aligned the
+  persisted production Skill validator with the current semantic prompt
+  contract. The collector now resolves the task-runtime CLI by default instead
+  of guessing a stale absolute path. The tested path now completes collection,
+  analysis, order, planning, production, and QC without a user click. The
+  release resource contract now verifies the current version exists in every
+  supported locale.

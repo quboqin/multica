@@ -44,12 +44,15 @@ export interface ProjectListFilters {
   priorities: string[];
   /** Composite "type:id" lead refs (member or agent). */
   leads: string[];
+  /** Label ids. Multiple selected labels use OR semantics. */
+  labels: string[];
 }
 
 export const EMPTY_PROJECT_FILTERS: ProjectListFilters = {
   statuses: [],
   priorities: [],
   leads: [],
+  labels: [],
 };
 
 // Hideable table columns. Name + status are the always-visible core (status

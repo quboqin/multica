@@ -311,6 +311,7 @@
     "creative_copy_replaced_comment": "おすすめのコピーを差し替えました: {{comment}}",
     "creative_feedback_recorded": "クリエイティブのフィードバックを記録しました",
     "creative_feedback_undone": "直前のクリエイティブ判断を取り消しました",
+    "creative_order_adjustment_queued": "{{size}}の精密調整を開始しました",
     "creative_variant_adopted": "クリエイティブ案を採用しました",
     "creative_variant_adopted_key": "案 {{variant}} を採用しました",
     "coalesced_badge": "×{{count}}",

@@ -7,6 +7,7 @@ export const workspaceKeys = {
   list: () => ["workspaces", "list"] as const,
   members: (wsId: string) => ["workspaces", wsId, "members"] as const,
   invitations: (wsId: string) => ["workspaces", wsId, "invitations"] as const,
+  capabilities: (wsId: string) => ["workspaces", wsId, "capabilities"] as const,
   myInvitations: () => ["invitations", "mine"] as const,
   agents: (wsId: string) => ["workspaces", wsId, "agents"] as const,
   squads: (wsId: string) => ["workspaces", wsId, "squads"] as const,
@@ -38,6 +39,19 @@ export function memberListOptions(wsId: string) {
   return queryOptions({
     queryKey: workspaceKeys.members(wsId),
     queryFn: () => api.listMembers(wsId),
+  });
+}
+
+export const workspaceCapabilityKeys = {
+  creativeFactory: "creative_factory",
+} as const;
+
+export function workspaceCapabilitiesOptions(wsId: string) {
+  return queryOptions({
+    queryKey: workspaceKeys.capabilities(wsId),
+    queryFn: () => api.getWorkspaceCapabilities(wsId),
+    enabled: !!wsId,
+    staleTime: 30_000,
   });
 }
 

@@ -8,12 +8,12 @@ allowed-tools: Bash(multica *), Bash(python *)
 
 这是 Creative Order 的快速修改路径，不执行素材爬取、参考分析、三套新创意或模板绘制。任务 context 必须
 给出 `<order-id>`、`<variant-id>`、`revision`、`expected_sizes`、`user_request`、`delivery_mode`、
-`prime_agent_id`、`reviewer_agent_id` 和可编辑的无品牌 base asset ID。没有这些字段，或只有带
-Prime/二维码/Logo/条款/商店徽章的最终图而无法追溯 base
+`reviewer_agent_id` 和可编辑的无品牌 base asset ID。没有这些字段，或只有带
+品牌组件/二维码/Logo/条款/商店徽章的最终图而无法追溯 base
 asset 时，将 variant 写为 `action_required` 并请求对应底图；不得把最终图作为模型输入。
 
 `expected_sizes` 是本次直接修改和正式发布的完整尺寸集合，当前单图入口为 `[target_size]`，以后批量入口
-可以是 1-3 个已声明尺寸。它必须逐级原样传给 Prime、两路 QC 和 finalize；不得为了满足标准生产的三尺寸
+可以是 1-3 个已声明尺寸。它必须逐级原样传给后端品牌组件、两路 QC 和 finalize；不得为了满足标准生产的三尺寸
 规则补造未修改的尺寸。
 
 先执行 `multica creative order get <order-id> --output json` 确认 source base asset 属于该 variant、尺寸和当前
@@ -26,8 +26,8 @@ revision。task context 的 `revision` 是 `source_revision`；本次 `output_re
 内容族。订单冻结的 `copy_snapshot` 仍是金融事实唯一真值；用户请求若包含新的金额、利率或期限，先进入
 `action_required` 让用户在页面更新文案快照，不得由图片修改角色直接写入。
 
-只检查底图自身：修改落实、要求保留内容仍在、错字、竞品品牌、生成二维码/Logo 与明显破图。实际 Prime
-硬区风险只记录为 `pending_prime_qc`；不得因原图人物、手臂、模型、装饰或几何位置进入矩形而阻断。每个
+只检查底图自身：修改落实、要求保留内容仍在、错字、竞品品牌、生成二维码/Logo 与明显破图。实际品牌组件
+可读性风险只记录为 `pending_brand_component_qc`；不得因原图人物、手臂、模型、装饰或几何位置进入矩形而阻断。每个
 尺寸最多一次有明确原因的定向返工，`--max-attempts` 的传输重试不计入这一轮。
 
 上传修改后的无品牌底图和 evidence：
@@ -51,25 +51,7 @@ multica creative order asset-put <order-id> --input-file <edited-asset.json> --o
 保留。附件上传能力不存在时，仅可
 使用平台已返回的附件 ID 或请求领域 attachment API，不得走旧交付渠道。
 
-`delivery_mode: preview` 只保留 generated asset，不创建 Prime/QC。`delivery_mode: publish` 从当前 task
-context 读取 `prime_agent_id`、`reviewer_agent_id`、`issue_id` 和 `leader_agent_id`，查询：
-
-```bash
-multica task by-source list --agent <prime-agent-id> \
-  --kind creative_order_variant_prime --ref <variant-id> --output json
-```
-
-按 `source + item_key=<variant-id>:r<output_revision>` 检查；仅当该 item 没有 active/succeeded task 且
-`expected_sizes` 尚无完整 primed assets 时，fanout 一个 Prime task。manifest 的 evidence kind 为
-`creative_order_variant_prime`、ref 为 variant ID；context 使用 `type: creative_domain_task`、
-`workflow: creative_prime`，原样携带 `creative_order_id`、`issue_id`、`leader_agent_id`、order item/variant ID、
-`revision: output_revision`、`expected_sizes`、`reviewer_agent_id` 和本次 generated asset ID：
-
-```bash
-multica task fanout --agent <prime-agent-id> --input-file <prime-manifest.json> --output json
-```
-
-提交后立即结束，不轮询。Prime 完成后由 Prime Skill 为同一 variant/revision 并发委派 technical 与 visual
-两个 native QC task。所有 task context 都携带完全相同的 `expected_sizes`。本流程只创建原生 task 和领域
-记录，不得创建或修改分析、变体、Prime、QC 子 Issue。
-Prime、二维码和合规资产永远由确定性 Prime 流程生成，不由图像模型重绘。
+`delivery_mode: preview` 只保留 generated asset，不创建品牌组件或 QC。`delivery_mode: publish` 的最后一个
+expected size 登记后，由后端读取冻结市场包，自动选择完整官方模板、原样 alpha 合成并创建 technical 与 visual QC。
+不得创建贴图 task、不得上传或登记 `stage=primed` asset，也不得让图像模型重绘品牌、二维码或合规资产。提交后立即结束，
+不轮询，不创建或修改分析、变体、品牌组件、QC 子 Issue。

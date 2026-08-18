@@ -10,6 +10,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/multica-ai/multica/server/internal/capability"
 	"github.com/multica-ai/multica/server/internal/storage"
 )
 
@@ -53,6 +54,15 @@ WHERE id = $1 AND archived_url <> ''
 			return
 		}
 		h.MembershipCache.Set(r.Context(), userID, workspaceIDText)
+	}
+	enabled, err := capability.Enabled(r.Context(), h.DB, workspaceIDText, capability.CreativeFactory)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to load workspace capability")
+		return
+	}
+	if !enabled {
+		writeError(w, http.StatusForbidden, "workspace capability disabled")
+		return
 	}
 	if h.Storage == nil {
 		writeError(w, http.StatusServiceUnavailable, "storage not configured")

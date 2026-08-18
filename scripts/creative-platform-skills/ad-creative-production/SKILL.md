@@ -1,205 +1,199 @@
 ---
 name: multica-ad-creative-production
-description: "当 creative_production task 指定一个 Creative Order Variant，需要生成同内容族无品牌三尺寸底图、登记完整模型证据并委派 Prime 时使用。"
+description: "当 creative_production task 指定一个 Creative Order Variant，需要生成同内容族的方形母版、横版和竖版底图并登记完整模型证据时使用。"
 allowed-tools: Bash(multica *), Bash(python *)
 ---
 
 # 广告底图生产
 
-只处理 context 指定的 Order、Variant、revision 和 `expected_sizes`；direct edit 不进入本 Skill。
+只处理 task context 指定的 Order、Order Item、Variant、revision 和 `expected_sizes`；direct edit 不进入本 Skill。
+先执行 `multica creative order get <order-id> --output json`，按 `creative_order_item_id` 与 `variant_id` 精确定位当前
+订单项和变体。当前订单项的 `copy_snapshot`、Variant brief、冻结 market snapshot、候选素材和 Prime context 是唯一输入。
+不得读取最新文案库、历史工作目录、同 candidate 的其他订单项，也不得重新分析竞品素材。
 
-```text
-multica creative order get <order-id> --output json
-multica creative library download <candidate-id> --output-file <reference-image> --output json
-```
+## 冻结输入
 
-每次先读取当前订单 JSON，并按 task context 的 `creative_order_item_id` 与 `variant_id` 精确定位同一个
-Order Item/Variant。当前订单返回的 item `copy_snapshot` 是唯一文案快照真值；task 摘要、Issue 材料列表、
-同一 `candidate_id` 的其他 item 以及历史工作目录都不得作为缺失判断依据。只使用 Variant brief、冻结
-`copy_snapshot`、market snapshot 指定附件和无品牌资产。不得读取当前文案库或市场包，不爬取/重分析素材，
-不执行 Prime/QC，也不得把 primed/delivered 图作为模型输入。
+- `copy_snapshot` 是文案、金融事实、还款计划和用户视觉方向的唯一真值。顶层非空文案字段（`headline`、`subheadline`、`benefit`、`supporting`、`cta`、`legal_text`）逐字优先于
+  `pre_adaptation.text_replacements`；后者只提供区块映射和版式，不得覆盖顶层非空字段。`pre_adaptation` 不提供最终模型提示词。
+- `item.direction` 是由 `copy_snapshot.visual_direction` 派生的可追踪摘要，仅用于合同校验；不要把它当成可直接发送给模型的长提示词。
+- 竞品图的全部非空业务结构默认继承：标题区、金额区、期限卡、表格行列、辅助信息区和阅读顺序都必须保留。继承的是结构和我方冻结文案，不是竞品品牌、Logo、二维码、官方模板文字或原金融事实。
+- 用户把一个文案槽位清空时才删除对应文字；一行的必需槽位全部为空才删除该行；整个模块没有剩余可见内容才删除模块。不能为了适配横版主动删掉表格、卡片、底部图标或金融事实。
+- Prime context 必须来自当前尺寸的官方 Prime 组件预览或合成上下文，包含真实色彩、材质、光照和组件节奏。透明中性轮廓只能作为结构审计证据，不能作为模型的唯一视觉输入。
 
-## 文案与提示词证据
+参考图的权威入口是任务上下文中的 `candidate_id`。订单响应没有展开 `reference_assets` 时，使用
+`multica creative material download <issue-id> <candidate-id> --output-file <source-reference.png> --output json`
+受控下载当前候选；下载失败才算缺少参考图，不能把 `reference_assets` 为空本身当作失败。不得使用同 candidate 的其他订单、历史工作目录或摘要替代该下载。
 
-调用模型前验证 schema-v3 copy snapshot 和最终提示词中的金融 token。存在 `pre_adaptation` 时，必须逐项使用
-其 `text_replacements`、`numeric_layouts`、`repayment_plan_selections` 和 `production_prompt`；`text_replacements` 中
-`status=missing` 的区块必须移除竞品原文，不得翻译、保留或杜撰占位文案。不得从通用
-headline/benefit 重新发明、遗漏或替换画面文字与数值。竞品数字只参考版式，实际金额、期限、月供以冻结
-数值版式为准。
+Prime context 必须以当前任务的 `revision` 登记在当前 Variant 下，并且每个目标尺寸各有一份；旧 revision 的同名附件不能代替当前 revision。
+如果受控候选下载失败、当前尺寸的 Prime context 无法生成、冻结文案缺失或 Variant execution 缺失，才停止并写 `action_required`，不要凭摘要补齐。
 
-每个尺寸先把 Variant brief 的 `prime_layout_contract.layouts[<size>]` 写成独立 `layout-<size>.json`，再渲染
-一张不可读的 Prime 避让参考图：
+从订单 `input_snapshot.market_pack.files` 下载与当前尺寸匹配的官方模板，再生成低透明度的实际视觉上下文（只保留 Prime 保护区的组件内容）：
 
 ```text
 python <当前 Skill 目录>/references/render_prime_guide.py \
-  --layout-file <layout-<size>.json> --width <model-width> --height <model-height> \
-  --output <prime-guide-<size>.jpg> --evidence <prime-guide-<size>.json>
+  --layout-file <layout-<size>.json> --template-image <official-prime-template.png> \
+  --width <model-width> --height <model-height> --output <prime-context-<size>.png> \
+  --evidence <prime-context-<size>.json>
 ```
 
-`prime-guide` 只作为模型第二输入的避让图，不是素材，不得登记为 Asset。模型最终输出仍是无品牌底图；真实
-Prime 组件只由后续 deterministic Prime Compose 合成。
+`prime-context` 的证据必须是 `render_style=official_prime_visual_context`；如果只能生成
+`transparent_neutral_outlines`，不能把它作为唯一模型输入，应停止当前尺寸并写 `action_required`。
 
-模型提示词不得原样使用或整段粘贴 `pre_adaptation.production_prompt`。最终 prompt 必须短、分段、可执行：
-每条文案、还款行和版式规则只出现一次，不写推理、审计、重复表格或来源流水。每个尺寸使用这个结构：
+## 最终提示词由出图智能体负责
+
+出图智能体根据冻结输入，为每个尺寸和每次实际调用独立写出 `prompt-<size>.txt`。前端不提供提示词编辑器，预适配也不生成
+`production_prompt`；模型提示词的质量、长度和尺寸适配由本 Skill 负责。
+
+提示词应保持 1800-2800 个字符，硬上限 3200。只保留能改变画面的信息，禁止粘贴审计日志、JSON、哈希、QC 结论、坐标、矩形框、
+像素值、重复的金融事实或同一句文案的多种写法。提示词必须按下面的固定模板写，先给构图闸门，再声明两张输入图的角色：
 
 ```text
-TASK:
-Create one unbranded AdaKami base image. Prime will be added later by deterministic post-processing.
-
-INPUTS:
-Input 1 is reference structure/hierarchy only.
-Input 2 is the Prime reserved-area guide for avoidance only; do not draw input 2, copy input 2, render guide blocks, or create placeholders.
-
-PRIME RESERVED AREAS:
-No readable text, CTA, table, amount, icon with meaning, face, hand, business card, logo, QR, footer, legal mark, store badge, OJK, AFPI, or Pindai inside the guide/reserved areas.
-Reserved areas may contain only continuous background, lighting, texture, or non-critical decoration.
-Also list current hard region coordinates and top/bottom exclusion boundaries from layout-<size>.json.
-
-CONTENT LAYOUT:
-safe_content_frame=(x1,y1)-(x2,y2) from prime-guide-<size>.json. CONTENT_RECT=(x1,y1)-(x2,y2). These control only readable/business content; background and decoration stay full-bleed.
-HEADLINE_BOX=(...). MAIN_VALUE_BOX=(...). TABLE_BOX=(...). BENEFIT_BOX=(...). CTA_BOX=(...).
-All approved text must stay inside its assigned box. CTA_BOX bottom edge must be <= CONTENT_RECT.y2 and leave readable visible clearance before bottom_prime_band_start=<y>.
-If crowded, reduce decoration, spacing, and font scale; never move text, cards, CTA, benefits, or icons outside the boxes.
-
-APPROVED TEXT:
-List each approved visible text once.
-
-TABLE:
-List approved rows once, or state No table.
-
-STYLE:
-Use frozen `pre_adaptation.production_prompt` only as a compact style/layout summary. Reference is structure only; remove source identity and apply brief `visual_identity_strategy`/`anti_copy_changes`.
-
-FORBIDDEN:
-No extra readable text, numbers, claims, people, app UI, source brand, Prime components, centered inset poster, border, blurred sidebars, crop, stretch, or guide artifacts.
-
-FINAL:
-Full-bleed clean base only, all business content readable and outside Prime reserved areas.
+COMPOSITION GATE
+INPUTS
+TASK
+VISUAL INHERITANCE
+APPROVED COPY AND TABLE
+VARIANT DIRECTION
+PRIME INTEGRATION
+FINAL CHECK
 ```
 
-`safe_content_frame` 必须逐字使用 `prime-guide-<size>.json` evidence 内的 `safe_content_frame`，它由当前
-layout contract 和当前画布尺寸推导；不要用 `CONTENT_RECT`、手写边距或旧方形尺寸反推。`CONTENT_RECT` 必须落在
-`safe_content_frame` 内，可更紧但不能越界；`HEADLINE_BOX`、`TABLE_BOX`、`BENEFIT_BOX`、`CTA_BOX` 在 `CONTENT_RECT`
-内按当前尺寸与信息密度分配。底部区域的验收口径是最终 Prime 图中文字、金额、表格和按钮清晰可读且不被实际 Prime
-组件遮挡；不要把一般几何贴近、浅色边缘、背景纹理或视觉平衡当成阻断。横版按 `1200x628` 原生铺开，竖版按
-`800x1000` 原生铺开，不得把方形图缩小居中后补边。
-
-如果 prompt 缺少上面的 Prime-safe 护栏，或者护栏未覆盖当前尺寸的 layout contract，必须写 `action_required`，不得调用 `multica image edit`。调用验证脚本时必须带上最终 prompt 和当前尺寸 layout：
+模板中的花括号占位符必须由出图智能体替换，不能原样发送给模型：
 
 ```text
-python <当前 Skill 目录>/references/validate_copy_snapshot.py \
-  --materials-json <order.json> --candidate-id <candidate-id> \
-  --order-item-id <item-id> --variant-id <variant-id> \
-  --prompt-file <prompt.txt> --prime-layout-file <layout-<size>.json> \
-  --require-prime-guard --require-redesign-guard --require-concise-prompt --evidence <copy-validation.json>
+COMPOSITION GATE
+Create an unbranded base layer for deterministic official Prime composition, not a standalone branded ad.
+Keep every non-empty approved_copy field and every non-empty source structure exactly once. Do not delete a title, benefit,
+product label, amount, tenor option, table row, icon, or supporting module to make the layout fit.
+Keep all business content in the middle content area between the protected Prime bands. The protected top and bottom bands are
+reserved for the later official overlay and must stay free of business copy, tables, buttons, icons, decorative marks, and shadows.
+If the middle business area feels crowded, compress vertically along the Y axis: reduce vertical whitespace, module gaps, and line
+spacing before reducing type. Preserve every module and keep it out of the protected bands. Never crop, delete, or push content into them.
+
+INPUTS
+{input_one_role}. Input 2 is the current-size official Prime visual context. Do not swap input roles.
+Use Input 2 to understand official color, material, lighting, edge rhythm, and the quiet background needed below the overlay.
+Do not copy any Prime logo, QR, store badge, legal text, template wording, or component geometry from Input 2.
+
+TASK
+{task_for_this_size}
+
+VISUAL INHERITANCE
+{shared_visual_identity_and_native_reflow_direction}
+
+APPROVED COPY AND TABLE
+Render every non-empty approved_copy field and frozen repayment row exactly once: {approved_copy_and_table}
+
+VARIANT DIRECTION
+{size_specific_layout_direction}. For landscape, keep the headline and benefit below the protected top band and the complete table
+above the protected bottom band; use native horizontal reflow, not a scaled or cropped square.
+
+PRIME INTEGRATION
+Input 2 is visual context only. Continue a calm, low-detail background through the protected bands so the official overlay remains
+readable. Never draw Prime or any placeholder for it.
+
+FINAL CHECK
+All required copy, amount, tenor options, table rows, and source structures are present and legible. No business content enters the
+protected bands. No brand element, QR, store badge, legal text, invented CTA, crop, or duplicate copy is present.
 ```
 
-失败时写 Variant `action_required`，不得重选文案或调用模型。
+`{input_one_role}` 必须按调用阶段明确写成以下之一：方形母版使用“Input 1 is the downloaded candidate reference; use it only for business structure,
+reading order, and visual anchors”；横版或竖版使用“Input 1 is the approved square base from this Variant”；视觉返工使用“Input 1 is the failed
+unbranded base for this size”。三种场景的 Input 2 都必须是当前尺寸、当前 revision 的官方 Prime context。`APPROVED COPY AND TABLE` 必须逐字列出
+Variant brief `approved_copy` 中每一个非空字段（包括 `product_category`、supporting、borrowing prompt、term prompt、所有按钮、summary labels
+和表格数值）以及冻结还款行，每项只出现一次；不能因为顶层 snapshot 没有单独字段就漏掉 brief 中仍然非空且属于原图结构的文案。`VARIANT DIRECTION`
+只描述视觉主线、主体关系、材质、色彩和当前尺寸的重排意图。不要在提示词中写 `x/y`、`safe_content_frame`、`hard region` 或其他坐标语法；空间关系用
+“上方保护带下方、主体中部、下方官方组件上方的连续背景”等自然语言表达。
 
-`multica image edit --output json` 以及 batch 每个 result 返回实际 provider `prompt` 与 `prompt_sha256`。
-保存 CLI 原始 JSON；登记 Asset 时逐尺寸原样使用对应 prompt/hash，不得从 brief、文件或兄弟尺寸重建。
+## 视觉继承和三尺寸顺序
 
-图像 CLI 常超过默认 Bash 工具等待窗口。所有 `multica image edit` 与 `multica image edit-batch`
-调用都必须在 Bash 工具上显式设置至少 15 分钟的长超时（`timeout_ms >= 900000`），等待 CLI 返回完整 JSON 后再解析。不得因默认工具超时而假定服务端仍在运行、
-不得在缺少 CLI 原始 JSON/provider request ID/prompt hash 时登记资产；若长超时后仍失败，写真实错误并让
-当前 task 失败。
+三尺寸共享同一内容族、业务事实、色彩系统和 `asset_family_id`，但不是同一张图缩放：
 
-## 三尺寸生成
+1. **方形母版（1080x1080）**：Input 1 为竞品参考结构，Input 2 为当前方形 Prime context。创建新的无品牌广告底图，继承信息机制、阅读顺序和可识别视觉锚点，重新设计背景、主体和装饰。
+2. **横版重排（1200x628）**：Input 1 为已批准的方形母版，Input 2 为当前横版 Prime context。横版优先处理，原生铺满画布；保留主体、标题、卖点、数值表和图标的内容关系，重新分配宽度和间距，不把方形图缩小居中、不裁切、不加边。
+3. **竖版重排（800x1000）**：Input 1 为已批准的方形母版，Input 2 为当前竖版 Prime context。按移动端阅读顺序原生重排，保持与方形母版相同的视觉身份和冻结文案。
 
-初次生产先用 `multica image edit` 在 `1088x1088` 模型画布生成方形，再规范化为 `1080x1080`。方形底图
-输入必须包含参考图和 `prime-guide-1080x1080.jpg`；底图必须是新的 AdaKami 广告，不是原图换文案。若有人物，
-只保留角色/位置关系，换成新的可信成人与场景细节。可用后，立即以方形底图为第一输入、对应尺寸
-`prime-guide` 为第二输入，用一次 `multica image edit-batch` 并发生成横竖原生重排：
+横版拥挤时必须执行垂直方向的 Y 轴压缩：先减少装饰和上下留白，再压缩模块间距、行距和标题/金额/期限/表格之间的垂直节奏，最后才小幅降低字号；
+不得删除冻结文案、金融事实、底部图标或表格列。横版标题和利益点整体必须位于官方顶部 Logo/条款组件下方；金额、期限按钮和完整四行表格必须位于官方底部组件上方，
+中间内容区要留出连续背景缓冲，不能让任何正文进入上下组件带。底部图标和数值表必须完整出现在官方 Prime 组件上方，不能被组件遮挡。
 
-```json
-{
-  "max_concurrency": 2,
-  "jobs": [
-    {"id":"landscape","inputs":[{"path":"square.png"},{"path":"prime-guide-1200x628.jpg"}],"prompt_file":"landscape.txt","model":"gpt-image-2","size":"1200x624","max_attempts":3,"output_file":"landscape-model.png"},
-    {"id":"portrait","inputs":[{"path":"square.png"},{"path":"prime-guide-800x1000.jpg"}],"prompt_file":"portrait.txt","model":"gpt-image-2","size":"800x1008","max_attempts":3,"output_file":"portrait-model.png"}
-  ]
-}
-```
+## Prime 参与构图
 
-相对路径以 manifest 目录为准。规范化横版到 `1200x628`、竖版到 `800x1000`。横竖版不等待 Prime、QC 或兄弟
-Variant。三张共享批准文案、业务语义、信息层级、色系和 `asset_family_id`；必须按尺寸原生 edge-to-edge 重排，
-背景、色块、阴影和装饰必须撑满完整画布，关键可读内容避开 `safe_content_frame` 与 hard region；
-不得嵌入旧画布、缩小居中、加边、模糊边栏、裁切、拉伸或重新发明业务内容。
+Prime context 是当前尺寸的真实视觉输入，不是黑白遮罩或可复制的模板。它用于让模型理解官方组件的真实色系、材质、光照方向和边缘节奏，并让整张底图在组件下方保持连续背景。模型输出仍然是无品牌底图：
+不得绘制 Prime Logo、QR、官方模板文字、商店徽章、OJK/AFPI/Pindai、占位卡片、白块、横条或灰色引导线。官方 Prime 由后续 deterministic compose
+原样叠加；模型只负责让业务内容和背景为组件留出自然、可读的空间。
 
-`max_attempts=3` 只重试传输层 408/429/5xx/网络错误，不是创意返工。每个尺寸最多一轮有证据的定向返工；
-若返工清空/破坏批准业务内容，丢弃该坏图，允许一次更强 Prime 护栏的完整重生；仍失败才写 `action_required`。
-进程仍运行时不重复提交。恢复只补当前 revision 的 missing sizes，复用输入指纹一致的成功输出。
+## 调用和证据
 
-每个模型输出确定性规范化并保存 evidence：
+每次模型调用都保存实际发送的 prompt、`prompt_sha256`、`request_id`、attempts、实际画布尺寸和输入资产指纹。
+调用 `multica image edit` 或 `image edit-batch` 时使用显式长超时；传输层 408/429/5xx/网络失败最多重试两次。必须把 CLI 返回的完整 JSON 原样保存，不能手工只保留 request ID、hash 或 `generated_asset` 摘要；后续 `asset-put` 使用同一份原始 JSON。
+模型调用画布必须遵守 GPT Image 2 的 16px 边长约束，交付尺寸与模型画布分开记录：`1080x1080` 使用 `1088x1088`，`1200x628` 使用 `1200x624`，`800x1000` 使用 `800x992`。CLI 接受 canonical 交付尺寸并自动映射到上述 provider canvas；完整模型 JSON 必须同时保留请求尺寸和实际 provider canvas。模型输出必须经过规范化到 `1080x1080`、`1200x628`、`800x1000`。比例在允许范围内直接缩放；模型连续返回错误比例时，CLI 会保留最后一张完整原图，规范化脚本用一次无边框 `aspect-compress` 兜底并在 evidence 中标记，不能因没有精确比例而丢弃该尺寸。不要把 `1080x1080`、`1200x628` 或 `800x1000` 直接作为 provider 的 `--size` 值传入旧版 CLI。
 
 ```text
 python <当前 Skill 目录>/references/normalize_image.py \
-  --input <model.png> --output <delivery.png> --width <w> --height <h> \
-  --prime-layout-file <layout-<size>.json> --prime-safe-audit \
-  --evidence <normalize-evidence.json>
+  --input <model.png> --output <normalized.png> --width <w> --height <h> \
+  --model-size <requested-model-size> --allow-aspect-fallback \
+  --aspect-fallback-mode compress --evidence <normalization.json>
 ```
 
-优先有界 cover-resize；连续 provider 比例失败后才允许脚本记录的 full-content edge-fade。随后必须执行
-`prime-safe-audit`：记录由当前 `prime_layout_contract` 动态推导的 `safe_content_frame`，但不得缩放、
-平移或重绘整张模型图以适配该框。若模型输出把关键文字、CTA、金额、表格或主体卡片放入 Prime 固定区，
-必须定向返工或完整重生；不得用本地脚本把整图缩小居中、添加边框、淡化补边或改写业务内容。
-以规范化后的满版 delivery 图作为登记和 Prime 输入。
-hard region 状态记录为 `prime_clearance_status=pending_fixed_prime_compose`。若规范化后的固定 Prime 区域仍残留
-竞品品牌、模型生成品牌/QR、可读文字、按钮或关键业务内容，才定向返工或写 `action_required`；Prime Compose 只能
-在同一固定坐标内净化背景，不能移动组件。
+三尺寸底图完成后登记 generated assets，再由后端合成官方 Prime 并进入 QC。最终 QC 只以真实 Prime 合成图为准：实际遮挡、文字不可读、
+底部图标被盖住才算失败；靠近边界、背景纹理或预估覆盖不是失败。
 
-## Asset 与下一跳
-上传 delivery 图、CLI 原始结果和规范化证据，再登记 completed `stage=generated` Asset：
+## 过程证据登记
+
+过程图片不是工作目录里的私有日志，而是订单可追溯证据。每个尺寸的 `Prime context`、模型原图和规范化底图一生成并确认文件存在，
+就必须通过仓库内的登记助手上传并写回当前订单、Variant、revision 和 task：
 
 ```text
-multica attachment upload <file> --output json
-multica creative order asset-put <order-id> --input-file <asset.json> --output json
+python <当前 Skill 目录>/references/register_process_assets.py \
+  --order-id <order-id> --variant-id <variant-id> --revision <revision> --task-id <task-id> \
+  --cli multica --profile direct-image2 \
+  --image 1080x1080 "Prime context" <prime-context-1080x1080.png> \
+  --image 1080x1080 "模型原图" <model-1080x1080.png> \
+  --image 1080x1080 "规范化底图" <normalized-1080x1080.png>
 ```
 
-Asset 必须包含 variant、family、size、revision、attachment、generated lineage；metadata 保存 CLI 原样 prompt/
-model，evidence 保存 request ID、attempts、prompt SHA-256、provider slot、copy/normalize evidence 和 pending Prime
-状态。`asset.json` 必须是顶层 Asset 对象，尺寸字段写 `size_key`；不得包成 `{"asset": ...}`，不得写成
-`size`。登记前检查：`metadata.prompt` 等于该尺寸 CLI 原始实际 prompt，`metadata.model=gpt-image-2`；
-`evidence.request_id` 字段名精确，`evidence.attempts` 为正整数，`evidence.prompt_sha256=sha256(metadata.prompt)`；
-provider hash 只能交叉核对，不能覆盖不一致值。方形响应的 family ID 原样传给横竖版。
-`variant-put` 如更新状态，必须保留 item/key/brief 完整 upsert。
+按文件实际生成情况重复调用，三个尺寸和三个过程阶段都要登记；不要等 task 结束才批量登记。命令必须返回 JSON，且 `registered` 数量与本次输入一致，
+再用 `multica creative order get <order-id> --output json` 回读确认归属。后端会在确定性合成时登记 `Prime 合成成图`，出图智能体不要伪造该阶段。
+任何登记失败都要保留真实错误并让当前 task 失败，以便平台创建有界续跑；在当前 revision 的所有 expected size 都有 canonical generated asset、完整过程证据并回读成功前，禁止调用
+`multica task complete`。
 
-全部 expected sizes 齐备后，查询 `creative_order_variant_prime` source。只跳过 active task 或三个 expected size
-的 completed primed assets 都存在的 item；不得因旧 Prime task succeeded 但包不完整而跳过。Prime fanout 的
-`trigger_evidence_kind` 固定为 `creative_order_variant_prime`，`trigger_evidence_ref_id` 固定为当前 Variant ID。
-item_key 固定 `<variant-id>:r<revision>`；context 固定 `type=creative_domain_task`、`workflow=creative_prime`，
-并原样携带 issue/leader/order/item/variant IDs、revision、expected sizes、reviewer ID 和 generated asset IDs。
+文案校验必须与本 Skill 的当前提示词合同一致：当前合同使用自然语言描述 Prime 保护带，禁止把坐标、矩形框或审计重复写进模型提示词。
+`--require-prime-guard` 应校验无品牌底图、Input 1/Input 2 角色、官方 Prime 视觉上下文、保护带避让和确定性叠加语义；旧版坐标合同只适用于仍明确使用坐标语法的历史提示词。
+期限数值带 `bulan`、`hari` 或 `tahun` 时由期限 token 校验，不得再拆成未批准的裸金融数字。
 
-```text
-multica task by-source list --agent <prime-agent-id> \
-  --kind creative_order_variant_prime --ref <variant-id> --output json
-multica task fanout --agent <prime-agent-id> --input-file <manifest.json> --output json
-```
+每个 `prompt-contract-<size>.json` 除 `prompt_sha256` 外必须写入当前 Variant brief
+`creative_contract.parent_direction_sha256`，并保留 `size_key`、`revision`、`variant_id`、`input_roles` 和
+`active_content_groups`。该父方向哈希是 visual QC 校验三尺寸视觉继承的唯一证据；不能省略、伪造或从旧 revision 复制。
 
-`manifest.json` 结构必须是：
+生产 task 只有在当前 revision 的每个 `expected_sizes` 都存在完整、可验证的 `generated/completed` canonical asset 后才允许调用
+`multica task complete`。只生成方形或只生成部分尺寸时不能提前 complete，也不能把缺失尺寸写成成功；应在同一个 task 中继续补齐，或把真实错误交给
+`multica task fail`。若 task 因模型、网络或 daemon 中断而先结束，平台会在服务端自动创建有上限的 fresh continuation，并保持 Variant 为 running，直到尺寸齐全或达到上限。
+
+### generated asset 写回格式
+
+每个尺寸都必须用同一 Variant、当前 revision 和已上传附件写回一个完整的 canonical JSON 对象，再调用
+`multica creative order asset-put <order-id> --input-file <asset.json> --model-result-file <model.json> --prompt-contract-file <prompt-contract.json> --copy-validation-file <copy-validation.json> --normalization-evidence-file <normalization.json>`：
 
 ```json
 {
-  "trigger_evidence_kind": "creative_order_variant_prime",
-  "trigger_evidence_ref_id": "<variant-id>",
-  "items": [{
-    "item_key": "<variant-id>:r<revision>",
-    "context": {
-      "type": "creative_domain_task",
-      "workflow": "creative_prime",
-      "creative_order_id": "<order-id>",
-      "creative_order_item_id": "<item-id>",
-      "variant_id": "<variant-id>",
-      "revision": 1,
-      "expected_sizes": ["1080x1080", "1200x628", "800x1000"],
-      "issue_id": "<issue-id>",
-      "leader_agent_id": "<leader-agent-id>",
-      "reviewer_agent_id": "<reviewer-agent-id>",
-      "generated_asset_ids": ["<asset-id>"]
-    }
-  }]
+  "variant_id": "<variant-id>",
+  "size_key": "1200x628",
+  "revision": 1,
+  "stage": "generated",
+  "status": "completed",
+  "attachment_id": "<normalized-attachment-id>"
 }
 ```
 
-提交后立即结束。生成、上传、登记或 fanout 失败时保留已成功尺寸，写真实 error code/message 并让 task
-失败；不得创建或修改 Issue。
+`model-result-file` 必须是该尺寸模型调用返回的完整 JSON，不能只摘录 prompt 或 request ID；四份证据文件必须逐尺寸对应。
+不要使用 `kind`、`asset_type` 代替 `stage`，也不要省略 `status`、`revision` 或 `attachment_id`。平台会兼容旧别名，但新任务必须按上面的 canonical
+格式写回，避免生成成功却没有进入订单资产链路。
+
+## 有界返工
+
+如果视觉 QC 指出 `actual_prime_obstruction` 或 `official_prime_text_unreadable`，当前 Variant 每个尺寸最多执行一次有证据的定向返工。
+返工仍由出图智能体重新写当前尺寸的短提示词，输入为失败底图和同尺寸 Prime context；只描述实际遮挡和需要压缩/移动的内容，不改文案、金额、期限、表格、
+视觉身份或 Prime 规则。一次返工后仍失败就写 `action_required`；不要把过程图转成候选或要求用户选择技术实现。
+
+过程图片只用于排查，固定登记 `Prime context`、`模型原图`、`规范化底图` 和 `Prime 合成成图`。不得把过程图当作最终交付或采用图。

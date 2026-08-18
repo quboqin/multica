@@ -2,6 +2,7 @@ import { createStore } from "zustand/vanilla";
 import { useStore } from "zustand";
 
 interface ConfigState {
+  appVersion: string;
   cdnDomain: string;
   // True when cdnDomain serves private content via time-bounded signed URLs
   // (CloudFront signing enabled server-side). Renderers must not treat a raw
@@ -20,6 +21,7 @@ interface ConfigState {
     allowSignup: boolean;
     googleClientId?: string;
     workspaceCreationDisabled?: boolean;
+    appVersion?: string;
   }) => void;
   setDaemonConfig: (config: {
     daemonServerUrl?: string;
@@ -28,6 +30,7 @@ interface ConfigState {
 }
 
 export const configStore = createStore<ConfigState>((set) => ({
+  appVersion: "",
   cdnDomain: "",
   cdnSigned: false,
   allowSignup: true,
@@ -36,8 +39,8 @@ export const configStore = createStore<ConfigState>((set) => ({
   daemonAppUrl: "",
   workspaceCreationDisabled: false,
   setCdnConfig: ({ cdnDomain, cdnSigned = false }) => set({ cdnDomain, cdnSigned }),
-  setAuthConfig: ({ allowSignup, googleClientId = "", workspaceCreationDisabled = false }) =>
-    set({ allowSignup, googleClientId, workspaceCreationDisabled }),
+  setAuthConfig: ({ allowSignup, googleClientId = "", workspaceCreationDisabled = false, appVersion = "" }) =>
+    set({ allowSignup, googleClientId, workspaceCreationDisabled, appVersion }),
   setDaemonConfig: ({ daemonServerUrl = "", daemonAppUrl = "" }) =>
     set({ daemonServerUrl, daemonAppUrl }),
 }));

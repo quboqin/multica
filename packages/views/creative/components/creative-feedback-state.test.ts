@@ -16,8 +16,17 @@ import {
   recoveryForSubmissionKey,
 } from "./creative-material-library";
 import { creativeVariantAdoptionReadiness } from "./creative-order-delivery";
-import { creativeAdjustmentComment, creativeOrderAdoptionStatus, creativeStudioPath, selectCreativeReviewAssets } from "./creative-studio-page";
-import { creativeAdjustmentProgress, creativeAdjustmentTarget, creativeAdjustmentTimeline, latestOrderAdjustmentFeedback } from "../lib/creative-adjustment-progress";
+import {
+  creativeAnnotationAdjustmentSummary,
+  creativeOrderAdjustmentIssueDescription,
+  creativeOrderAdjustmentIssueMetadata,
+  creativeOrderAdjustmentIssueTitle,
+  creativeOrderAdoptionStatus,
+  creativeOrderSquadId,
+  creativeStudioPath,
+  selectCreativeReviewAssets,
+} from "./creative-studio-page";
+import { creativeAdjustmentCanRetry, creativeAdjustmentProgress, creativeAdjustmentTarget, creativeAdjustmentTimeline, latestOrderAdjustmentFeedback } from "../lib/creative-adjustment-progress";
 
 function readyVariant(id: string): CreativeOrderVariant {
   const sizes = ["1080x1080", "1200x628", "800x1000"];
@@ -37,9 +46,9 @@ function readyVariant(id: string): CreativeOrderVariant {
 }
 
 describe("creative feedback state", () => {
-  it("includes unambiguous domain identifiers in an adjustment comment", () => {
-    const comment = creativeAdjustmentComment({
-      request: "只重做这个变体",
+  it("builds one structured order adjustment issue from the canvas target", () => {
+    const input = {
+      request: "标题上移，保留整体样式",
       orderId: "order-1",
       itemId: "item-2",
       variantId: "variant-3",
@@ -47,17 +56,36 @@ describe("creative feedback state", () => {
       assetId: "asset-4",
       attachmentId: "019fb932-3b59-77ab-841a-c57598f81097",
       sizeKey: "1080x1080",
-      revision: 1,
-    });
+      sourceRevision: 1,
+    } as const;
+    const description = creativeOrderAdjustmentIssueDescription(input);
+    const metadata = creativeOrderAdjustmentIssueMetadata(input);
 
-    expect(comment).toContain("creative_order_id: order-1");
-    expect(comment).toContain("creative_order_item_id: item-2");
-    expect(comment).toContain("variant_id: variant-3");
-    expect(comment).toContain("asset_id: asset-4");
-    expect(comment).toContain("**目标成图：** 订单 `order-1` · `V01` · 方形 `1080x1080` · `r1` · 成图 `asset-4`");
-    expect(comment).toContain("![目标成图：V01 方形 r1](/api/attachments/019fb932-3b59-77ab-841a-c57598f81097/download)");
-    expect(comment).toContain("<!-- creative-workflow-context");
-    expect(comment).toMatch(/^用户提出成图调整：/);
+    expect(creativeOrderAdjustmentIssueTitle(input)).toBe("V01 / 方形 精准调整 · R2");
+    expect(description).toContain("creative_order_id: order-1");
+    expect(description).toContain("creative_order_item_id: item-2");
+    expect(description).toContain("variant_id: variant-3");
+    expect(description).toContain("asset_id: asset-4");
+    expect(description).toContain("attachment_id: 019fb932-3b59-77ab-841a-c57598f81097");
+    expect(description).toContain("**目标成图：** 订单 `order-1` · `V01` · 方形 `1080x1080` · `r1` · 成图 `asset-4`");
+    expect(description).toContain("![目标成图：V01 方形 r1](/api/attachments/019fb932-3b59-77ab-841a-c57598f81097/download)");
+    expect(description).toContain("Process only this size");
+    expect(metadata).toMatchObject({
+      workflow: "creative_adjustment",
+      creative_adjustment_source: "creative_order",
+      creative_scope: "size",
+      creative_source_revision: 1,
+      creative_revision: 2,
+    });
+  });
+
+  it("keeps order adjustment scope on the current canvas size", () => {
+    expect(creativeAnnotationAdjustmentSummary([
+      { kind: "rect", x: 0, y: 0, width: 0.1, height: 0.1, issueType: "other", scope: "order", comment: "标题上移" },
+      { kind: "point", x: 0.2, y: 0.3, width: 0, height: 0, issueType: "artifact", scope: "variant", comment: "按钮提亮" },
+    ])).toBe("标注 1（当前尺寸）：标题上移\n标注 2（当前尺寸）：按钮提亮");
+
+    expect(creativeOrderSquadId({ input_snapshot: { squad_snapshot: { squad_id: "squad-1" } } })).toBe("squad-1");
   });
 
   it("keeps the latest order adjustment visible and derives its progress from the variant revision", () => {
@@ -66,9 +94,10 @@ describe("creative feedback state", () => {
     const ignored = { id: "f3", decision: "needs_revision", created_at: "2026-08-05T10:02:00Z", context_snapshot: { order_id: "order-2", revision: 1 } };
 
     expect(latestOrderAdjustmentFeedback([older, ignored, latest] as never, "order-1")?.id).toBe("f2");
-    expect(creativeAdjustmentProgress({ revision: 1, status: "action_required" } as CreativeOrderVariant, latest as never)).toBe("已提交，等待素材小队处理");
-    expect(creativeAdjustmentProgress({ revision: 2, status: "partial" } as CreativeOrderVariant, latest as never)).toBe("素材小队处理中 · r2");
-    expect(creativeAdjustmentProgress({ revision: 2, status: "action_required" } as CreativeOrderVariant, latest as never)).toBe("调整结果待验收 · r2");
+    expect(creativeAdjustmentProgress({ revision: 1, status: "action_required" } as CreativeOrderVariant, latest as never)).toBe("调整未启动");
+    expect(creativeAdjustmentCanRetry({ revision: 1, status: "action_required" } as CreativeOrderVariant, latest as never)).toBe(true);
+    expect(creativeAdjustmentProgress({ revision: 2, status: "partial" } as CreativeOrderVariant, latest as never)).toBe("当前尺寸调整中 · r2");
+    expect(creativeAdjustmentProgress({ revision: 2, status: "action_required" } as CreativeOrderVariant, latest as never)).toBe("调整需要处理 · r2");
     expect(creativeAdjustmentProgress({ revision: 2, status: "completed" } as CreativeOrderVariant, latest as never)).toBe("调整已完成 · r2");
   });
 
@@ -104,6 +133,28 @@ describe("creative feedback state", () => {
       ["primed", "done"],
       ["qc", "current"],
       ["completed", "pending"],
+    ]);
+  });
+
+  it("tracks precise single-size adjustment progress without waiting for three sizes", () => {
+    const event = { context_snapshot: { revision: 1, scope: "size", size_key: "1080x1080" } } as never;
+    const variant = {
+      revision: 2,
+      status: "partial",
+      assets: [
+        { revision: 2, stage: "generated", status: "completed", size_key: "1080x1080" },
+        { revision: 2, stage: "primed", status: "completed", size_key: "1080x1080" },
+      ],
+      qc_reports: [{ revision: 2, lane: "technical", status: "passed" }],
+    } as CreativeOrderVariant;
+
+    expect(creativeAdjustmentTimeline(variant, event).map((step) => [step.label, step.status])).toEqual([
+      ["已提交", "done"],
+      ["精准调整", "done"],
+      ["当前尺寸生成", "done"],
+      ["品牌组件合成", "done"],
+      ["双路 QC", "current"],
+      ["完成", "pending"],
     ]);
   });
 
@@ -157,17 +208,17 @@ describe("creative feedback state", () => {
     const ready = readyVariant("variant-ready");
     expect(creativeVariantAdoptionReadiness(ready)).toEqual({
       ready: true,
-      status: "三尺寸、贴片与质检均已完成，可以采用",
+      status: "三尺寸、品牌组件与质检均已完成，可以采用",
     });
 
-    const missingPrime = { ...ready, assets: ready.assets.filter((asset) => !(asset.stage === "primed" && asset.size_key === "800x1000")) };
-    expect(creativeVariantAdoptionReadiness(missingPrime)).toEqual({ ready: false, status: "等待贴片：已完成 2/3 个尺寸" });
+    const missingBrandComponents = { ...ready, assets: ready.assets.filter((asset) => !(asset.stage === "primed" && asset.size_key === "800x1000")) };
+    expect(creativeVariantAdoptionReadiness(missingBrandComponents)).toEqual({ ready: false, status: "等待品牌组件合成：已完成 2/3 个尺寸" });
 
     const failedQC = { ...ready, qc_reports: ready.qc_reports.map((report) => report.lane === "visual" ? { ...report, status: "failed" } : report) };
     expect(creativeVariantAdoptionReadiness(failedQC)).toEqual({ ready: true, status: "系统提醒：视觉质检未通过，仍可查看、标注或忽略提醒采用" });
 
     const warnedQC = { ...ready, qc_reports: ready.qc_reports.map((report) => report.lane === "visual" ? { ...report, status: "warning" } : report) };
-    expect(creativeVariantAdoptionReadiness(warnedQC)).toEqual({ ready: true, status: "三尺寸、贴片与质检均已完成，可以采用" });
+    expect(creativeVariantAdoptionReadiness(warnedQC)).toEqual({ ready: true, status: "三尺寸、品牌组件与质检均已完成，可以采用" });
 
     const missingDelivery = { ...ready, assets: ready.assets.filter((asset) => !(asset.stage === "delivered" && asset.size_key === "1200x628")) };
     expect(creativeVariantAdoptionReadiness(missingDelivery)).toEqual({ ready: false, status: "等待正式交付：已完成 2/3 个尺寸" });

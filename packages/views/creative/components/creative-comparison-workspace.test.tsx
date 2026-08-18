@@ -104,12 +104,16 @@ describe("CreativeComparisonWorkspace", () => {
     expect(screen.getByTestId("creative-drawing-annotation")).toBeInTheDocument();
   });
 
-  it("captures the wheel inside the canvas and zooms without scrolling the page", async () => {
+  it("zooms only when the wheel is over the generated image pane", async () => {
     render(<CreativeComparisonWorkspace {...props} />);
-    const stage = screen.getByTestId("creative-comparison-stage");
-    const wheel = new WheelEvent("wheel", { bubbles: true, cancelable: true, deltaY: -100 });
-    act(() => stage.dispatchEvent(wheel));
-    expect(wheel.defaultPrevented).toBe(true);
+    const sourceWheel = new WheelEvent("wheel", { bubbles: true, cancelable: true, deltaY: -100 });
+    act(() => screen.getByTestId("creative-comparison-source-pane").dispatchEvent(sourceWheel));
+    expect(sourceWheel.defaultPrevented).toBe(false);
+    expect(screen.getByText("100%")).toBeInTheDocument();
+
+    const resultWheel = new WheelEvent("wheel", { bubbles: true, cancelable: true, deltaY: -100 });
+    act(() => screen.getByTestId("creative-comparison-result-pane").dispatchEvent(resultWheel));
+    expect(resultWheel.defaultPrevented).toBe(true);
     await waitFor(() => expect(screen.getByText("115%")).toBeInTheDocument());
   });
 

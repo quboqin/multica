@@ -316,6 +316,7 @@
     "creative_copy_replaced_comment": "replaced the recommended copy: {{comment}}",
     "creative_feedback_recorded": "recorded creative feedback",
     "creative_feedback_undone": "undid the previous creative decision",
+    "creative_order_adjustment_queued": "started a precise {{size}} adjustment",
     "creative_variant_adopted": "adopted a creative variant",
     "creative_variant_adopted_key": "adopted variant {{variant}}",
     "coalesced_badge": "×{{count}}",

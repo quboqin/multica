@@ -8,7 +8,7 @@ import {
   Settings,
   Users,
   FolderGit2,
-  FlaskConical,
+  Blocks,
   Bell,
   Plug,
 } from "lucide-react";
@@ -24,7 +24,7 @@ import { MembersTab } from "./members-tab";
 import { RepositoriesTab } from "./repositories-tab";
 import { GitHubTab } from "./github-tab";
 import { IntegrationsTab } from "./integrations-tab";
-import { LabsTab } from "./labs-tab";
+import { FeaturesTab } from "./features-tab";
 import { NotificationsTab } from "./notifications-tab";
 import { useT } from "../../i18n";
 
@@ -41,7 +41,7 @@ const WORKSPACE_TAB_KEYS = [
   "repositories",
   "github",
   "integrations",
-  "labs",
+  "features",
   "members",
 ] as const;
 const WORKSPACE_TAB_VALUES = {
@@ -49,7 +49,7 @@ const WORKSPACE_TAB_VALUES = {
   repositories: "repositories",
   github: "github",
   integrations: "integrations",
-  labs: "labs",
+  features: "features",
   members: "members",
 } as const;
 const WORKSPACE_TAB_ICONS = {
@@ -57,7 +57,7 @@ const WORKSPACE_TAB_ICONS = {
   repositories: FolderGit2,
   github: GitHubMark,
   integrations: Plug,
-  labs: FlaskConical,
+  features: Blocks,
   members: Users,
 } as const;
 
@@ -70,6 +70,7 @@ const TAB_QUERY_KEY = "tab";
 // tab; it now lives inside Integrations.
 const LEGACY_WORKSPACE_TAB_REDIRECTS: Record<string, string> = {
   lark: "integrations",
+  labs: "features",
 };
 
 export interface ExtraSettingsTab {
@@ -175,7 +176,7 @@ export function SettingsPage({ extraAccountTabs }: SettingsPageProps = {}) {
           <TabsContent value="repositories"><RepositoriesTab /></TabsContent>
           <TabsContent value="github"><GitHubTab /></TabsContent>
           <TabsContent value="integrations"><IntegrationsTab /></TabsContent>
-          <TabsContent value="labs"><LabsTab /></TabsContent>
+          <TabsContent value="features"><FeaturesTab /></TabsContent>
           <TabsContent value="members"><MembersTab /></TabsContent>
           {extraAccountTabs?.map((tab) => (
             <TabsContent key={tab.value} value={tab.value}>{tab.content}</TabsContent>

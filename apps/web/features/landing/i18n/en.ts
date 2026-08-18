@@ -293,7 +293,18 @@ export function createEnDict(allowSignup: boolean): LandingDict {
     },
     entries: [
       {
-        version: "0.3.22",
+        version: "0.3.23",
+        date: "2026-08-16",
+        title: "Workspace Creative Access and Clearer Updates",
+        changes: [],
+        features: [
+          "Creative Studio can now be enabled or disabled independently for each workspace.",
+          "The capability is enforced by the API, so direct links and background requests follow the same workspace setting.",
+          "The help menu now keeps one maintained Multica changelog, and new versions announce their changes once.",
+        ],
+      },
+        {
+          version: "0.3.22",
         date: "2026-06-15",
         title: "Faster Lists, Easier Runtime Setup, and Safer Issue Editing",
         changes: [],

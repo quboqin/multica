@@ -19,9 +19,12 @@
   },
   "help": {
     "trigger": "帮助",
-    "docs": "文档",
-    "changelog": "更新日志",
-    "feedback": "反馈"
+    "changelog": "更新日志"
+  },
+  "release_announcement": {
+    "title": "Multica {{version}} 已更新",
+    "view_changelog": "查看更新日志",
+    "later": "稍后"
   },
   "workspace_loader": {
     "loading_workspace": "正在加载工作区...",

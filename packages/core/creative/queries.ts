@@ -8,11 +8,7 @@ export const creativeKeys = {
     [...creativeKeys.all(wsId), "resources", kind ?? "all"] as const,
   resourceFiles: (wsId: string, resourceId: string) =>
     [...creativeKeys.all(wsId), "resource-files", resourceId] as const,
-  marketPackExtraction: (wsId: string, resourceId: string) =>
-    [...creativeKeys.all(wsId), "market-pack-component-extraction", resourceId] as const,
   materials: (wsId: string) => [...creativeKeys.all(wsId), "materials"] as const,
-  copyEntries: (wsId: string, libraryId: string) =>
-    [...creativeKeys.all(wsId), "copy-entries", libraryId] as const,
   issue: (wsId: string, issueId: string) =>
     [...creativeKeys.all(wsId), "issue", issueId] as const,
   orders: (wsId: string) => [...creativeKeys.all(wsId), "orders"] as const,
@@ -21,6 +17,7 @@ export const creativeKeys = {
   feedback: (wsId: string, subjectType = "", subjectId = "") =>
     [...creativeKeys.all(wsId), "feedback", subjectType, subjectId] as const,
   feedbackMetrics: (wsId: string) => [...creativeKeys.all(wsId), "feedback-metrics"] as const,
+  feedbackDashboard: (wsId: string) => [...creativeKeys.all(wsId), "feedback-dashboard"] as const,
 };
 
 export const creativeMaterialLibraryOptions = (wsId: string, params?: CreativeMaterialLibraryQuery) =>
@@ -44,24 +41,6 @@ export const creativeResourceFilesOptions = (wsId: string, resourceId: string) =
     enabled: !!wsId && !!resourceId,
   });
 
-export const creativeMarketPackComponentExtractionOptions = (wsId: string, resourceId: string) =>
-  queryOptions({
-    queryKey: creativeKeys.marketPackExtraction(wsId, resourceId),
-    queryFn: () => api.getLatestCreativeMarketPackComponentExtraction(resourceId),
-    enabled: !!wsId && !!resourceId,
-    refetchInterval: (query) => {
-      const status = query.state.data?.status;
-      return status === "pending" || status === "running" ? 2000 : false;
-    },
-  });
-
-export const creativeCopyEntriesOptions = (wsId: string, libraryId: string) =>
-  queryOptions({
-    queryKey: creativeKeys.copyEntries(wsId, libraryId),
-    queryFn: () => api.listCreativeCopyEntries(libraryId),
-    enabled: !!wsId && !!libraryId,
-  });
-
 export const creativeMaterialsOptions = (wsId: string, issueId: string) =>
   queryOptions({
     queryKey: creativeKeys.issue(wsId, issueId),
@@ -80,5 +59,10 @@ export const creativeFeedbackOptions = (wsId: string, subjectType = "", subjectI
 export const creativeFeedbackMetricsOptions = (wsId: string) => queryOptions({
   queryKey: creativeKeys.feedbackMetrics(wsId),
   queryFn: () => api.getCreativeFeedbackMetrics(),
+  enabled: !!wsId,
+});
+export const creativeFeedbackDashboardOptions = (wsId: string) => queryOptions({
+  queryKey: creativeKeys.feedbackDashboard(wsId),
+  queryFn: () => api.getCreativeFeedbackDashboard(),
   enabled: !!wsId,
 });

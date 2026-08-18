@@ -452,28 +452,6 @@ type CreativeAdjustmentRequest struct {
 	UpdatedAt           pgtype.Timestamptz `json:"updated_at"`
 }
 
-type CreativeCopyEntry struct {
-	ID          pgtype.UUID        `json:"id"`
-	WorkspaceID pgtype.UUID        `json:"workspace_id"`
-	LibraryID   pgtype.UUID        `json:"library_id"`
-	ExternalKey string             `json:"external_key"`
-	Headline    string             `json:"headline"`
-	Subheadline string             `json:"subheadline"`
-	Benefit     string             `json:"benefit"`
-	Cta         string             `json:"cta"`
-	LegalText   string             `json:"legal_text"`
-	CopyRole    string             `json:"copy_role"`
-	Market      string             `json:"market"`
-	Locale      string             `json:"locale"`
-	Tags        []string           `json:"tags"`
-	Status      string             `json:"status"`
-	Version     int32              `json:"version"`
-	Metadata    []byte             `json:"metadata"`
-	CreatedBy   pgtype.UUID        `json:"created_by"`
-	CreatedAt   pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
-}
-
 type CreativeDelivery struct {
 	ID                        pgtype.UUID        `json:"id"`
 	WorkspaceID               pgtype.UUID        `json:"workspace_id"`
@@ -526,8 +504,6 @@ type CreativeIssueItem struct {
 	IssueID       pgtype.UUID        `json:"issue_id"`
 	CandidateID   pgtype.UUID        `json:"candidate_id"`
 	WorkspaceID   pgtype.UUID        `json:"workspace_id"`
-	CopyEntryID   pgtype.UUID        `json:"copy_entry_id"`
-	CopySnapshot  []byte             `json:"copy_snapshot"`
 	WorkIssueID   pgtype.UUID        `json:"work_issue_id"`
 	Revision      int32              `json:"revision"`
 	Status        string             `json:"status"`
@@ -535,23 +511,6 @@ type CreativeIssueItem struct {
 	CreatedAt     pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt     pgtype.Timestamptz `json:"updated_at"`
 	CreativeBrief []byte             `json:"creative_brief"`
-}
-
-type CreativeMarketPackComponentExtraction struct {
-	ID                 pgtype.UUID        `json:"id"`
-	WorkspaceID        pgtype.UUID        `json:"workspace_id"`
-	ResourceID         pgtype.UUID        `json:"resource_id"`
-	SourceAttachmentID pgtype.UUID        `json:"source_attachment_id"`
-	SourceWidth        int32              `json:"source_width"`
-	SourceHeight       int32              `json:"source_height"`
-	Status             string             `json:"status"`
-	Result             []byte             `json:"result"`
-	ErrorMessage       string             `json:"error_message"`
-	CreatedBy          pgtype.UUID        `json:"created_by"`
-	CreatedAt          pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt          pgtype.Timestamptz `json:"updated_at"`
-	CompletedAt        pgtype.Timestamptz `json:"completed_at"`
-	AppliedAt          pgtype.Timestamptz `json:"applied_at"`
 }
 
 type CreativeMaterialCandidate struct {

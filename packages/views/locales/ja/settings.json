@@ -34,7 +34,7 @@
       "repositories": "リポジトリ",
       "github": "GitHub",
       "integrations": "連携",
-      "labs": "ラボ",
+      "features": "機能",
       "members": "メンバー"
     }
   },
@@ -192,10 +192,18 @@
     "confirm": "ワークスペースを削除",
     "deleting": "削除中..."
   },
-  "labs": {
-    "section_placeholder_title": "まだ実験機能はありません",
-    "section_placeholder_description": "実験的な設定はリリースされ次第ここに表示されます。現在このタブは意図的に空にしてあります。",
-    "toast_failed": "設定を更新できませんでした"
+  "features": {
+    "page_description": "このワークスペースで任意の機能を有効にします。新しい機能もワークスペース設定モデルを変えずにここへ追加できます。",
+    "creative_factory_title": "Creative Studio",
+    "creative_factory_description": "素材探索、クリエイティブ注文、制作ワークフロー、納品レビューです。",
+    "creative_factory_enabled": "このワークスペースではCreative Studioを利用できます。",
+    "creative_factory_disabled": "Creative Studioはオフです。既存データは保持され、後から再び有効にできます。",
+    "creative_factory_disabled_title": "Creative Studioは無効です",
+    "creative_factory_disabled_description": "ownerまたはadminが設定 → 機能からCreative Studioを有効にできます。",
+    "manage_hint": "ワークスペース機能を変更できるのはownerとadminだけです。",
+    "load_failed": "ワークスペース機能を読み込めませんでした。",
+    "toast_failed": "ワークスペース機能を更新できませんでした",
+    "toast_enabled": "Creative Studioを有効にしました。エージェント、Skills、チーム、自動化を初期化しました。"
   },
   "github": {
     "page_description": "GitHub App を接続し、Pull request が Multica 内でどう表示されるかを制御し、エージェントがコミット履歴に残す情報を設定します。",

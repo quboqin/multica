@@ -4,9 +4,188 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+
+	"github.com/jackc/pgx/v5/pgtype"
+	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
-func TestNormalizeCreativePreAdaptationSourceAnchorsUsesBlockIDAsIdentity(t *testing.T) {
+func TestCreativePreAdaptationInstructionContainsApprovedValueIgnoresWhitespace(t *testing.T) {
+	if !creativePreAdaptationInstructionContainsValue("展示 Jumlah Pinjaman Rp 4.000.000。", "Rp4.000.000") {
+		t.Fatal("currency whitespace should not make an approved value disappear from the render instruction")
+	}
+	if creativePreAdaptationInstructionContainsValue("展示 Rp40.000.000。", "Rp4.000.000") {
+		t.Fatal("a different numeric value must not match by whitespace normalization")
+	}
+}
+
+func TestBuildAutomaticCreativePreAdaptationResultUsesFrozenPlanValues(t *testing.T) {
+	source := json.RawMessage(`{"text_blocks":[
+  {"id":"headline","location":"顶部标题","role":"headline","source_text":"Pinjaman Cepat","semantic_kind":"copy"},
+  {"id":"amount","location":"左侧金额卡","role":"plan_field","source_text":"Rp 15.000.000","semantic_kind":"principal"},
+  {"id":"monthly","location":"左侧金额卡","role":"plan_field","source_text":"Rp 1.385.000","semantic_kind":"monthly_installment"}
+],"visual_regions":[
+  {"id":"headline-region","location":"顶部标题","kind":"copy","source_block_ids":["headline"],"visual_bounds":{"x":40,"y":40,"width":800,"height":100}},
+  {"id":"loan-card","location":"左侧金额卡","kind":"numeric","source_block_ids":["amount","monthly"],"visual_bounds":{"x":40,"y":220,"width":400,"height":180}}
+]}`)
+	copyLibrary := json.RawMessage(`{"fragments":[
+  {"id":"headline","key":"plan-headline-1","role":"headline","text":"Pembiayaan Fleksibel","creative_types":["repayment_plan"],"status":"approved"}
+],"repayment_plan":{"labels":{"principal":"Jumlah Pinjaman","tenor":"Periode Cicilan","monthly_installment":"Cicilan per Bulan","total_interest":"Total Bunga","total_repayment":"Total Pembayaran"},"entries":[
+  {"id":"plan-4000000-3","key":"plan-4000000-3","principal":4000000,"tenor_months":3,"monthly_installment":1369333,"total_interest":107999,"total_repayment":4107999,"status":"approved"}
+]}}`)
+	taskContext := creativePreAdaptationTaskContext{MarketPackID: "market-1", MarketPackVersion: 2, CopyLibraryID: "library-1", CopyLibraryVersion: 3}
+	result, err := buildAutomaticCreativePreAdaptationResult(source, taskContext, copyLibrary)
+	if err != nil {
+		t.Fatalf("automatic repair result: %v", err)
+	}
+	if len(result.RepaymentPlanSelections) != 1 || len(result.NumericLayouts) != 1 {
+		t.Fatalf("automatic repair did not create one frozen plan/card: %#v", result)
+	}
+	if result.RepaymentPlanSelections[0].Values.Principal != "Rp4.000.000" {
+		t.Fatalf("principal was not formatted from the frozen plan: %#v", result.RepaymentPlanSelections[0])
+	}
+	if result.TextReplacements[0].Status != "ready" || result.TextReplacements[0].SourceKeys[0] != "plan-headline-1" {
+		t.Fatalf("ordinary copy was not bound to the frozen library: %#v", result.TextReplacements)
+	}
+}
+
+func TestBuildAutomaticCreativePreAdaptationResultKeepsUnmatchedRowsEditable(t *testing.T) {
+	source := json.RawMessage(`{"text_blocks":[
+  {"id":"principal-1","location":"还款表第1行","role":"plan_field","source_text":"Rp5.000.000","semantic_kind":"principal"},
+  {"id":"tenor-1","location":"还款表第1行","role":"plan_field","source_text":"12 Bulan","semantic_kind":"tenor"},
+  {"id":"monthly-1","location":"还款表第1行","role":"plan_field","source_text":"Rp500.000","semantic_kind":"monthly_installment"},
+  {"id":"principal-2","location":"还款表第2行","role":"plan_field","source_text":"Rp10.000.000","semantic_kind":"principal"},
+  {"id":"tenor-2","location":"还款表第2行","role":"plan_field","source_text":"12 Bulan","semantic_kind":"tenor"},
+  {"id":"monthly-2","location":"还款表第2行","role":"plan_field","source_text":"Rp1.000.000","semantic_kind":"monthly_installment"},
+  {"id":"principal-3","location":"还款表第3行","role":"plan_field","source_text":"Rp20.000.000","semantic_kind":"principal"},
+  {"id":"tenor-3","location":"还款表第3行","role":"plan_field","source_text":"12 Bulan","semantic_kind":"tenor"},
+  {"id":"monthly-3","location":"还款表第3行","role":"plan_field","source_text":"Rp2.000.000","semantic_kind":"monthly_installment"}
+],"visual_regions":[
+  {"id":"repayment-table","location":"还款表","kind":"numeric","source_block_ids":["principal-1","tenor-1","monthly-1","principal-2","tenor-2","monthly-2","principal-3","tenor-3","monthly-3"],"visual_bounds":{"x":40,"y":200,"width":800,"height":400}}
+]}`)
+	copyLibrary := json.RawMessage(`{"repayment_plan":{"labels":{"principal":"Jumlah Pinjaman","tenor":"Periode Cicilan","monthly_installment":"Cicilan per Bulan","total_interest":"Total Bunga","total_repayment":"Total Pembayaran"},"entries":[
+  {"id":"plan-a","key":"plan-a","principal":4000000,"tenor_months":3,"monthly_installment":1369333,"total_interest":107999,"total_repayment":4107999,"status":"approved"},
+  {"id":"plan-b","key":"plan-b","principal":8000000,"tenor_months":6,"monthly_installment":1405333,"total_interest":432000,"total_repayment":8431998,"status":"approved"}
+]}}`)
+	taskContext := creativePreAdaptationTaskContext{MarketPackID: "market-1", MarketPackVersion: 2, CopyLibraryID: "library-1", CopyLibraryVersion: 3}
+	result, err := buildAutomaticCreativePreAdaptationResult(source, taskContext, copyLibrary)
+	if err != nil {
+		t.Fatalf("partial automatic recovery result: %v", err)
+	}
+	if len(result.NumericLayouts) != 2 || len(result.RepaymentPlanSelections) != 2 {
+		t.Fatalf("recovery should render the two available rows: %#v", result)
+	}
+	missing := 0
+	for _, replacement := range result.TextReplacements {
+		if replacement.Status == "missing" {
+			missing++
+		}
+	}
+	if missing != 3 {
+		t.Fatalf("unmatched row should remain editable, missing = %d, replacements = %#v", missing, result.TextReplacements)
+	}
+	encoded, marshalErr := json.Marshal(result)
+	if marshalErr != nil {
+		t.Fatal(marshalErr)
+	}
+	if err := validateCompletedCreativePreAdaptation(source, encoded); err != nil {
+		t.Fatalf("partial numeric result was rejected: %v", err)
+	}
+	if err := validateCreativePreAdaptationCopyBindings(source, encoded, copyLibrary); err != nil {
+		t.Fatalf("partial numeric result failed frozen-resource validation: %v", err)
+	}
+}
+
+func TestBuildAutomaticCreativePreAdaptationResultDoesNotGuessNumericHeadlineCopy(t *testing.T) {
+	source := json.RawMessage(`{"text_blocks":[
+  {"id":"rate","location":"顶部利率","role":"headline","source_text":"0,01%","semantic_kind":"interest_rate"}
+],"visual_regions":[
+  {"id":"rate-region","location":"顶部利率","kind":"copy","source_block_ids":["rate"],"visual_bounds":{"x":40,"y":40,"width":800,"height":100}}
+]}`)
+	copyLibrary := json.RawMessage(`{"fragments":[
+  {"id":"headline","key":"plan-headline-1","role":"headline","text":"Pembiayaan Fleksibel","creative_types":["repayment_plan"],"status":"approved"}
+],"repayment_plan":{"labels":{"principal":"Jumlah Pinjaman","tenor":"Periode Cicilan","monthly_installment":"Cicilan per Bulan","total_interest":"Total Bunga","total_repayment":"Total Pembayaran"},"entries":[]}}`)
+	result, err := buildAutomaticCreativePreAdaptationResult(source, creativePreAdaptationTaskContext{
+		MarketPackID: "market-1", MarketPackVersion: 1, CopyLibraryID: "library-1", CopyLibraryVersion: 1,
+	}, copyLibrary)
+	if err != nil {
+		t.Fatalf("numeric headline should remain editable: %v", err)
+	}
+	if len(result.TextReplacements) != 1 || result.TextReplacements[0].Status != "missing" {
+		t.Fatalf("numeric headline was guessed from generic copy: %#v", result.TextReplacements)
+	}
+}
+
+func TestBuildAutomaticCreativePreAdaptationGeneratesPendingRecommendationForOrdinaryCopy(t *testing.T) {
+	source := json.RawMessage(`{"text_blocks":[
+  {"id":"headline","location":"顶部标题","role":"headline","source_text":"Pinjaman Cepat","semantic_kind":"copy"}
+],"visual_regions":[
+  {"id":"headline-region","location":"顶部标题","kind":"copy","source_block_ids":["headline"],"visual_bounds":{"x":40,"y":40,"width":800,"height":100}}
+]}`)
+	copyLibrary := json.RawMessage(`{"locale":"id-ID","fragments":[],"repayment_plan":{"entries":[]}}`)
+	result, err := buildAutomaticCreativePreAdaptationResult(source, creativePreAdaptationTaskContext{
+		MarketPackID: "market-1", MarketPackVersion: 1, CopyLibraryID: "library-1", CopyLibraryVersion: 1,
+	}, copyLibrary)
+	if err != nil {
+		t.Fatalf("ordinary copy recommendation should be recoverable: %v", err)
+	}
+	if len(result.TextReplacements) != 1 {
+		t.Fatalf("expected one text replacement, got %#v", result.TextReplacements)
+	}
+	replacement := result.TextReplacements[0]
+	if replacement.Status != "recommended" || replacement.ReplacementText == "" || len(replacement.SourceKeys) != 0 || len(replacement.RecommendationBasis) == 0 {
+		t.Fatalf("ordinary copy did not become a traceable pending recommendation: %#v", replacement)
+	}
+	encoded, marshalErr := json.Marshal(result)
+	if marshalErr != nil {
+		t.Fatal(marshalErr)
+	}
+	if err := validateCompletedCreativePreAdaptation(source, encoded); err != nil {
+		t.Fatalf("pending recommendation failed structural validation: %v", err)
+	}
+	if err := validateCreativePreAdaptationCopyBindings(source, encoded, copyLibrary); err != nil {
+		t.Fatalf("pending recommendation failed frozen-resource validation: %v", err)
+	}
+}
+
+func TestPromoteCreativePreAdaptationRecommendationsNormalizesMissingOrdinaryCopy(t *testing.T) {
+	source := json.RawMessage(`{"text_blocks":[
+  {"id":"headline","location":"顶部标题","role":"headline","source_text":"Pinjaman Cepat","semantic_kind":"copy"}
+],"visual_regions":[
+  {"id":"headline-region","location":"顶部标题","kind":"copy","source_block_ids":["headline"],"visual_bounds":{"x":40,"y":40,"width":800,"height":100}}
+]}`)
+	adaptation := json.RawMessage(`{
+  "market_pack_id":"market-1","market_pack_version":1,
+  "copy_library_id":"library-1","copy_library_version":1,
+  "analysis_highlights":["素材包含一个标题区块","标题没有匹配到冻结文案","候选需要用户确认"],
+  "text_replacements":[{"block_id":"headline","visual_region_id":"headline-region","location":"顶部标题","role":"headline","source_text":"Pinjaman Cepat","replacement_text":"","source_keys":[],"status":"missing"}],
+  "repayment_plan_selections":[],
+  "numeric_layouts":[]
+}`)
+	copyLibrary := json.RawMessage(`{"locale":"id-ID","fragments":[],"repayment_plan":{"entries":[]}}`)
+	normalized, changed, err := promoteCreativePreAdaptationRecommendations(source, adaptation, copyLibrary)
+	if err != nil {
+		t.Fatalf("missing ordinary copy should be normalized: %v", err)
+	}
+	if !changed {
+		t.Fatal("missing ordinary copy should produce a changed result")
+	}
+	var result creativePreAdaptationCompletedResult
+	if err := json.Unmarshal(normalized, &result); err != nil {
+		t.Fatal(err)
+	}
+	replacement := result.TextReplacements[0]
+	if replacement.Status != "recommended" || replacement.ReplacementText == "" || len(replacement.SourceKeys) != 0 || len(replacement.RecommendationBasis) == 0 {
+		t.Fatalf("missing ordinary copy did not become a pending recommendation: %#v", replacement)
+	}
+	if err := validateCompletedCreativePreAdaptation(source, normalized); err != nil {
+		t.Fatalf("normalized recommendation failed structural validation: %v", err)
+	}
+	if err := validateCreativePreAdaptationCopyBindings(source, normalized, copyLibrary); err != nil {
+		t.Fatalf("normalized recommendation failed frozen-resource validation: %v", err)
+	}
+}
+
+func TestValidateCompletedCreativePreAdaptationRejectsSourceAnchorMismatch(t *testing.T) {
 	source := json.RawMessage(`{"text_blocks":[
   {"id":"benefit-principal-1","location":"中左气泡","role":"benefit","source_text":"Pinjaman hingga Rp100Juta","semantic_kind":"principal"}
 ],"visual_regions":[
@@ -18,33 +197,14 @@ func TestNormalizeCreativePreAdaptationSourceAnchorsUsesBlockIDAsIdentity(t *tes
   "analysis_highlights":["中部气泡承载额度利益点","住宅场景保持不变","额度文案来自文案库"],
   "text_replacements":[{"block_id":"benefit-principal-1","visual_region_id":"copy-benefit-principal","location":"中左额度气泡","role":"benefit","source_text":"Pinjaman hingga Rp100Juta","replacement_text":"Limit hingga Rp80.000.000","source_keys":["limit"],"status":"ready"}],
   "repayment_plan_selections":[],
-  "numeric_layouts":[],
-  "production_prompt":"中左气泡使用 Limit hingga Rp80.000.000。"
+  "numeric_layouts":[]
 }`)
 	if err := validateCompletedCreativePreAdaptation(source, result); err == nil || !strings.Contains(err.Error(), "text replacement does not match source analysis") {
-		t.Fatalf("location mismatch should fail before source-anchor normalization, got %v", err)
-	}
-	var completed creativePreAdaptationCompletedResult
-	if err := json.Unmarshal(result, &completed); err != nil {
-		t.Fatal(err)
-	}
-	if err := normalizeCreativePreAdaptationSourceAnchors(&completed, source); err != nil {
-		t.Fatalf("normalize source anchors: %v", err)
-	}
-	if got, want := completed.TextReplacements[0].Location, "中左气泡"; got != want {
-		t.Fatalf("normalized location = %q, want %q", got, want)
-	}
-	normalized, _ := json.Marshal(completed)
-	if err := validateCompletedCreativePreAdaptation(source, normalized); err != nil {
-		t.Fatalf("normalized source anchors were rejected: %v", err)
-	}
-	copyLibrary := json.RawMessage(`{"fragments":[{"id":"limit","key":"limit","text":"Limit hingga Rp80.000.000","semantic_group":"limit","status":"approved"}]}`)
-	if err := validateCreativePreAdaptationCopyBindings(source, normalized, copyLibrary); err != nil {
-		t.Fatalf("normalized source anchors failed copy binding: %v", err)
+		t.Fatalf("location mismatch should be rejected without a server rewrite, got %v", err)
 	}
 }
 
-func TestNormalizeCreativePreAdaptationDerivedFieldsUsesFrozenKeys(t *testing.T) {
+func TestValidateCreativePreAdaptationCopyBindingsRejectsUnapprovedModelCopy(t *testing.T) {
 	source := json.RawMessage(`{"text_blocks":[
   {"id":"headline","location":"顶部标题","role":"headline","source_text":"Pinjaman Cepat","semantic_kind":"copy"},
   {"id":"limit-copy","location":"中部卖点","role":"benefit","source_text":"Pinjaman hingga Rp100Juta","semantic_kind":"principal"},
@@ -67,7 +227,6 @@ func TestNormalizeCreativePreAdaptationDerivedFieldsUsesFrozenKeys(t *testing.T)
     {"id":"plan-row","key":"plan-8000000-6","principal":8000000,"tenor_months":6,"monthly_installment":1405333,"total_interest":432000,"total_repayment":8431998,"source":"approved sheet","status":"approved"}
   ]}
 }`)
-	marketPack := json.RawMessage(`{"calculation_rules":[]}`)
 	result := json.RawMessage(`{
   "market_pack_id":"market-1","market_pack_version":2,
   "copy_library_id":"library-1","copy_library_version":5,
@@ -79,101 +238,10 @@ func TestNormalizeCreativePreAdaptationDerivedFieldsUsesFrozenKeys(t *testing.T)
     {"block_id":"amount","visual_region_id":"loan-region","location":"金额框","role":"plan_field","source_text":"Rp15.000.000","replacement_text":"Limit hingga Rp80.000.000","source_keys":["limit_80m"],"status":"ready"}
   ],
   "repayment_plan_selections":[{"id":"row-six","plan_key":"plan-8000000-6","principal":1,"tenor_months":99,"values":{"principal":"stale","tenor":"stale","total_interest":"stale","total_repayment":"stale","monthly_installment":"stale"}}],
-  "numeric_layouts":[{"id":"loan-values","visual_region_id":"wrong","source_block_ids":["amount","tenor","monthly"],"location":"","layout_kind":"loan_summary","scenario_ids":["plan-8000000-6"],"target_columns":["principal","tenor","monthly_installment","unknown"],"render_instruction":"WRONG"}],
-  "production_prompt":""
+  "numeric_layouts":[{"id":"loan-values","visual_region_id":"wrong","source_block_ids":["amount","tenor","monthly"],"location":"","layout_kind":"loan_summary","scenario_ids":["plan-8000000-6"],"target_columns":["principal","tenor","monthly_installment","unknown"],"render_instruction":"WRONG"}]
 }`)
-
-	var completed creativePreAdaptationCompletedResult
-	if err := json.Unmarshal(result, &completed); err != nil {
-		t.Fatal(err)
-	}
-	if err := normalizeCreativePreAdaptationDerivedFields(&completed, source, marketPack, copyLibrary); err != nil {
-		t.Fatalf("normalize derived fields: %v", err)
-	}
-	normalized, _ := json.Marshal(completed)
-	if err := validateCompletedCreativePreAdaptation(source, normalized); err != nil {
-		t.Fatalf("normalized result was rejected: %v", err)
-	}
-	if err := validateCreativePreAdaptationCalculationRules(source, normalized, marketPack); err != nil {
-		t.Fatalf("normalized calculation trace was rejected: %v", err)
-	}
-	if err := validateCreativePreAdaptationCopyBindings(source, normalized, copyLibrary); err != nil {
-		t.Fatalf("normalized copy bindings were rejected: %v", err)
-	}
-
-	replacements := creativePreAdaptationTestReplacementsByBlock(completed.TextReplacements)
-	if got, want := replacements["headline"].ReplacementText, "Pembiayaan Fleksibel"; got != want {
-		t.Fatalf("headline replacement = %q, want %q", got, want)
-	}
-	if got, want := replacements["limit-copy"].ReplacementText, "Limit hingga Rp80.000.000"; got != want {
-		t.Fatalf("limit replacement = %q, want %q", got, want)
-	}
-	if got := replacements["rate-copy"].Status; got != "missing" {
-		t.Fatalf("unknown copy key status = %q, want missing", got)
-	}
-	if _, exists := replacements["amount"]; exists {
-		t.Fatal("numeric source block should be handled by numeric_layouts, not text_replacements")
-	}
-	if got, want := completed.RepaymentPlanSelections[0].Values.MonthlyInstallment, "Rp1.405.333"; got != want {
-		t.Fatalf("monthly installment = %q, want %q", got, want)
-	}
-	if got, want := completed.NumericLayouts[0].VisualRegionID, "loan-region"; got != want {
-		t.Fatalf("numeric visual region = %q, want %q", got, want)
-	}
-	if got, want := completed.NumericLayouts[0].ScenarioIDs[0], "row-six"; got != want {
-		t.Fatalf("scenario id = %q, want %q", got, want)
-	}
-	if !strings.Contains(completed.NumericLayouts[0].RenderInstruction, "Rp8.000.000") || !strings.Contains(completed.NumericLayouts[0].RenderInstruction, "Rp1.405.333") {
-		t.Fatalf("render instruction did not use approved plan values: %q", completed.NumericLayouts[0].RenderInstruction)
-	}
-}
-
-func TestNormalizeCreativePreAdaptationDerivedFieldsDowngradesInvalidNumericPlan(t *testing.T) {
-	source := json.RawMessage(`{"text_blocks":[
-  {"id":"amount","location":"金额框","role":"plan_field","source_text":"Rp15.000.000","semantic_kind":"principal"}
-],"visual_regions":[
-  {"id":"amount-region","location":"金额框","kind":"numeric","source_block_ids":["amount"],"visual_bounds":{"x":60,"y":240,"width":820,"height":160}}
-]}`)
-	copyLibrary := json.RawMessage(`{
-  "fragments":[],
-  "repayment_plan":{"labels":{"principal":"Jumlah Pinjaman","tenor":"Periode Cicilan","monthly_installment":"Cicilan per Bulan","total_interest":"Total Bunga","total_repayment":"Total Pembayaran"},"entries":[
-    {"id":"plan-row","key":"plan-8000000-6","principal":8000000,"tenor_months":6,"monthly_installment":1405333,"total_interest":432000,"total_repayment":8431998,"source":"approved sheet","status":"approved"}
-  ]}
-}`)
-	marketPack := json.RawMessage(`{"calculation_rules":[]}`)
-	result := json.RawMessage(`{
-  "market_pack_id":"market-1","market_pack_version":2,
-  "copy_library_id":"library-1","copy_library_version":5,
-  "analysis_highlights":["金额框需要替换"],
-  "text_replacements":[],
-  "repayment_plan_selections":[{"id":"bad-row","plan_key":"plan-not-found","principal":15000000,"tenor_months":6,"values":{"principal":"Rp15.000.000","tenor":"6 Bulan","total_interest":"","total_repayment":"","monthly_installment":"Rp8.345.000"}}],
-  "numeric_layouts":[{"id":"amount-layout","visual_region_id":"amount-region","source_block_ids":["amount"],"location":"金额框","layout_kind":"single_value","scenario_ids":["bad-row"],"target_columns":["principal"],"render_instruction":"在金额框展示 Rp15.000.000。"}],
-  "production_prompt":""
-}`)
-
-	var completed creativePreAdaptationCompletedResult
-	if err := json.Unmarshal(result, &completed); err != nil {
-		t.Fatal(err)
-	}
-	if err := normalizeCreativePreAdaptationDerivedFields(&completed, source, marketPack, copyLibrary); err != nil {
-		t.Fatalf("normalize derived fields: %v", err)
-	}
-	if len(completed.RepaymentPlanSelections) != 0 || len(completed.NumericLayouts) != 0 {
-		t.Fatalf("invalid plan should be dropped, got selections=%d layouts=%d", len(completed.RepaymentPlanSelections), len(completed.NumericLayouts))
-	}
-	replacements := creativePreAdaptationTestReplacementsByBlock(completed.TextReplacements)
-	if got := replacements["amount"].Status; got != "missing" {
-		t.Fatalf("invalid numeric plan status = %q, want missing", got)
-	}
-	if got, want := replacements["amount"].VisualRegionID, "amount-region"; got != want {
-		t.Fatalf("missing numeric visual region = %q, want %q", got, want)
-	}
-	normalized, _ := json.Marshal(completed)
-	if err := validateCompletedCreativePreAdaptation(source, normalized); err != nil {
-		t.Fatalf("missing numeric fallback was rejected: %v", err)
-	}
-	if err := validateCreativePreAdaptationCopyBindings(source, normalized, copyLibrary); err != nil {
-		t.Fatalf("missing numeric fallback failed copy binding: %v", err)
+	if err := validateCreativePreAdaptationCopyBindings(source, result, copyLibrary); err == nil {
+		t.Fatal("unapproved model copy should be rejected instead of being replaced by the server")
 	}
 }
 
@@ -188,8 +256,7 @@ func TestValidateCompletedCreativePreAdaptationGroupsSourcePlanFieldsIntoApprove
     {"id":"target-30m-3","plan_key":"30m-3","principal":30000000,"tenor_months":3,"values":{"principal":"Rp30.000.000","tenor":"3 Bulan","total_interest":"Rp810.000","total_repayment":"Rp30.810.000","monthly_installment":"Rp10.270.000"}},
     {"id":"target-60m-6","plan_key":"60m-6","principal":60000000,"tenor_months":6,"values":{"principal":"Rp60.000.000","tenor":"6 Bulan","total_interest":"Rp3.240.000","total_repayment":"Rp63.240.000","monthly_installment":"Rp10.540.000"}}
   ],
-  "numeric_layouts":[{"id":"top-table","source_block_ids":["top-amount","top-tenor","top-monthly"],"location":"上方还款表","layout_kind":"table","scenario_ids":["target-30m-3","target-60m-6"],"target_columns":["principal","tenor","monthly_installment"],"render_instruction":"` + instruction + `"}],
-  "production_prompt":"中部横幅使用 Cicilan FLAT sepanjang Tenor。` + instruction + `"
+  "numeric_layouts":[{"id":"top-table","source_block_ids":["top-amount","top-tenor","top-monthly"],"location":"上方还款表","layout_kind":"table","scenario_ids":["target-30m-3","target-60m-6"],"target_columns":["principal","tenor","monthly_installment"],"render_instruction":"` + instruction + `"}]
 }`)
 
 	if err := validateCompletedCreativePreAdaptation(source, valid); err != nil {
@@ -205,14 +272,6 @@ func TestValidateCompletedCreativePreAdaptationGroupsSourcePlanFieldsIntoApprove
 	}
 }
 
-func creativePreAdaptationTestReplacementsByBlock(replacements []creativePreAdaptationTextReplacement) map[string]creativePreAdaptationTextReplacement {
-	byBlock := make(map[string]creativePreAdaptationTextReplacement, len(replacements))
-	for _, replacement := range replacements {
-		byBlock[replacement.BlockID] = replacement
-	}
-	return byBlock
-}
-
 func TestCreativePreAdaptationManualRequiredMatchesFrozenResources(t *testing.T) {
 	source := json.RawMessage(`{"adaptation":{"status":"unavailable","error_code":"manual_confirmation_required","result":{"market_pack_id":"market-1","market_pack_version":2,"copy_library_id":"library-1","copy_library_version":3}}}`)
 	marketPack := creativeResourceResponse{ID: "market-1", PublishedVersion: 2}
@@ -222,6 +281,54 @@ func TestCreativePreAdaptationManualRequiredMatchesFrozenResources(t *testing.T)
 	}
 	if creativePreAdaptationManualRequiredForResources(source, marketPack, creativeResourceResponse{ID: "library-1", PublishedVersion: 4}) {
 		t.Fatal("manual-required adaptation from another frozen copy library version matched")
+	}
+}
+
+func TestCreativePreAdaptationArtifactAcceptanceRequiresCompletedOrExplicitManualState(t *testing.T) {
+	tests := []struct {
+		name       string
+		status     string
+		errorCode  string
+		frozen     bool
+		wantAccept bool
+	}{
+		{name: "completed", status: "completed", frozen: true, wantAccept: true},
+		{name: "completed with another resource", status: "completed", frozen: false},
+		{name: "manual confirmation", status: "unavailable", errorCode: "manual_confirmation_required", frozen: true, wantAccept: true},
+		{name: "source recovery queued", status: "unavailable", errorCode: "SOURCE_ANALYSIS_MIXED_NUMERIC_REGION", frozen: true, wantAccept: true},
+		{name: "recoverable unavailable", status: "unavailable", errorCode: "source_analysis_invalid", frozen: true},
+		{name: "failed", status: "failed", errorCode: "agent_error", frozen: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := creativePreAdaptationArtifactAccepted(test.status, test.errorCode, test.frozen); got != test.wantAccept {
+				t.Fatalf("accepted = %v, want %v", got, test.wantAccept)
+			}
+		})
+	}
+}
+
+func TestCreativePreAdaptationTaskRetryableHonorsCancellationAndAttemptBudget(t *testing.T) {
+	task := db.AgentTaskQueue{
+		Status:               "failed",
+		Attempt:              1,
+		MaxAttempts:          2,
+		TriggerEvidenceKind:  pgtype.Text{String: creativePreAdaptationEvidenceKind, Valid: true},
+		TriggerEvidenceRefID: pgtype.UUID{Bytes: [16]byte{1}, Valid: true},
+	}
+	if !creativePreAdaptationTaskRetryable(task) {
+		t.Fatal("a failed pre-adaptation task with budget should be retryable")
+	}
+	for _, reason := range []string{"cancelled", "user_cancelled", "manual"} {
+		task.FailureReason = pgtype.Text{String: reason, Valid: true}
+		if creativePreAdaptationTaskRetryable(task) {
+			t.Fatalf("failure reason %q should not be retried", reason)
+		}
+	}
+	task.FailureReason = pgtype.Text{}
+	task.Attempt = 2
+	if creativePreAdaptationTaskRetryable(task) {
+		t.Fatal("an exhausted pre-adaptation task should not be retried")
 	}
 }
 
@@ -240,8 +347,7 @@ func TestValidateCompletedCreativePreAdaptationRequiresOneVisualRegionPerSourceB
   "analysis_highlights":["顶部是标题","左侧是金额卡","金额来自同一还款行"],
   "text_replacements":[{"block_id":"headline","visual_region_id":"headline-region","location":"顶部标题","role":"headline","source_text":"Flexible","replacement_text":"Cicilan FLAT sepanjang Tenor","source_keys":["benefit_flat"],"status":"ready"}],
   "repayment_plan_selections":[{"id":"row-1","plan_key":"30m-3","principal":30000000,"tenor_months":3,"values":{"principal":"Rp30.000.000","tenor":"3 Bulan","total_interest":"Rp810.000","total_repayment":"Rp30.810.000","monthly_installment":"Rp10.270.000"}}],
-  "numeric_layouts":[{"id":"amount-card","visual_region_id":"amount-region","source_block_ids":["amount-label","amount"],"location":"左侧金额卡","layout_kind":"single_card","scenario_ids":["row-1"],"target_columns":["principal"],"render_instruction":"` + instruction + `"}],
-  "production_prompt":"Cicilan FLAT sepanjang Tenor。` + instruction + `"
+  "numeric_layouts":[{"id":"amount-card","visual_region_id":"amount-region","source_block_ids":["amount-label","amount"],"location":"左侧金额卡","layout_kind":"single_card","scenario_ids":["row-1"],"target_columns":["principal"],"render_instruction":"` + instruction + `"}]
 }`)
 	if err := validateCompletedCreativePreAdaptation(source, valid); err != nil {
 		t.Fatalf("visual-region plan was rejected: %v", err)
@@ -281,8 +387,7 @@ func TestValidateCompletedCreativePreAdaptationAcceptsFineGrainedNumericLayouts(
     {"id":"amount-layout","visual_region_id":"amount-region","source_block_ids":["amount"],"location":"中上金额框","layout_kind":"single_value","scenario_ids":["row-6"],"target_columns":["principal"],"render_instruction":"` + amountInstruction + `"},
     {"id":"tenor-layout","visual_region_id":"tenor-region","source_block_ids":["tenor-3","tenor-6"],"location":"期限按钮组","layout_kind":"option_buttons","scenario_ids":["row-3","row-6"],"target_columns":["tenor"],"render_instruction":"` + tenorInstruction + `"},
     {"id":"row-layout","visual_region_id":"row-region","source_block_ids":["row-value"],"location":"还款表右侧","layout_kind":"table_row","scenario_ids":["row-6"],"target_columns":["monthly_installment"],"render_instruction":"` + rowInstruction + `"}
-  ],
-  "production_prompt":"顶部标题使用 Pembiayaan Fleksibel。` + amountInstruction + ` ` + tenorInstruction + ` ` + rowInstruction + `"
+  ]
 }`)
 	if err := validateCompletedCreativePreAdaptation(source, result); err != nil {
 		t.Fatalf("fine-grained numeric layouts were rejected: %v", err)
@@ -296,39 +401,6 @@ func TestValidateCompletedCreativePreAdaptationAcceptsFineGrainedNumericLayouts(
 }`)
 	if err := validateCreativePreAdaptationCopyBindings(source, result, copyLibrary); err != nil {
 		t.Fatalf("fine-grained numeric layouts failed frozen copy binding: %v", err)
-	}
-}
-
-func TestNormalizeCreativePreAdaptationPlanDisplayDoesNotAppendAuditRows(t *testing.T) {
-	result := json.RawMessage(`{
-  "market_pack_id":"market-1","market_pack_version":2,
-  "copy_library_id":"library-1","copy_library_version":3,
-  "analysis_highlights":["顶部保留主标题","金额框为单值区域","金额来自已审核还款计划"],
-  "text_replacements":[{"block_id":"headline","location":"顶部标题","role":"headline","source_text":"Pinjaman Cepat","replacement_text":"Pembiayaan Fleksibel","source_keys":["headline"],"status":"ready"}],
-  "repayment_plan_selections":[{"id":"row-6","plan_key":"8m-6","principal":8000000,"tenor_months":6,"values":{"principal":"stale","tenor":"stale","total_interest":"stale","total_repayment":"stale","monthly_installment":"stale"}}],
-  "numeric_layouts":[{"id":"amount-layout","source_block_ids":["amount"],"location":"中上金额框","layout_kind":"single_value","scenario_ids":["8m-6"],"target_columns":["principal"],"render_instruction":"在中上金额框展示 Rp8.000.000。"}],
-  "production_prompt":"顶部标题使用 Pembiayaan Fleksibel。在中上金额框展示 Rp8.000.000。"
-}`)
-	copyLibrary := json.RawMessage(`{
-  "repayment_plan":{"labels":{"principal":"Jumlah Pinjaman","tenor":"Periode Cicilan","monthly_installment":"Cicilan per Bulan","total_interest":"Total Bunga","total_repayment":"Total Pembayaran"},"entries":[
-    {"id":"plan-8m-6","key":"8m-6","principal":8000000,"tenor_months":6,"monthly_installment":1405333,"total_interest":432000,"total_repayment":8432000,"source":"approved sheet","status":"approved"}
-  ]}
-}`)
-	var completed creativePreAdaptationCompletedResult
-	if err := json.Unmarshal(result, &completed); err != nil {
-		t.Fatal(err)
-	}
-	if err := normalizeCreativePreAdaptationPlanDisplay(&completed, copyLibrary); err != nil {
-		t.Fatalf("normalize plan display: %v", err)
-	}
-	if strings.Contains(completed.ProductionPrompt, "Approved repayment rows") || strings.Contains(completed.NumericLayouts[0].RenderInstruction, "Approved repayment rows") {
-		t.Fatal("normalization must not append audit-only repayment rows to prompts")
-	}
-	if completed.RepaymentPlanSelections[0].Values.MonthlyInstallment != "Rp1.405.333" {
-		t.Fatalf("monthly installment = %q, want formatted approved value", completed.RepaymentPlanSelections[0].Values.MonthlyInstallment)
-	}
-	if completed.NumericLayouts[0].ScenarioIDs[0] != "row-6" {
-		t.Fatalf("scenario id = %q, want normalized selection id", completed.NumericLayouts[0].ScenarioIDs[0])
 	}
 }
 
@@ -360,21 +432,11 @@ func TestValidateCompletedCreativePreAdaptationAcceptsLoanSemanticNumericLayouts
     {"id":"row-6","plan_key":"8m-6","principal":8000000,"tenor_months":6,"values":{"principal":"Rp8.000.000","tenor":"6 Bulan","total_interest":"Rp431.998","total_repayment":"Rp8.431.998","monthly_installment":"Rp1.405.333"}}
   ],
   "numeric_layouts":[
-    {"id":"amount-layout","visual_region_id":"amount-region","source_block_ids":["amount"],"location":"中部本金卡","layout_kind":"agent_new_amount_panel","scenario_ids":["row-6"],"target_columns":["principal"],"render_instruction":"` + amountInstruction + `"},
-    {"id":"tenor-layout","visual_region_id":"tenor-region","source_block_ids":["tenor-3","tenor-6"],"location":"期限按钮组","layout_kind":"tenor","scenario_ids":["row-3","row-6"],"target_columns":["tenor"],"render_instruction":"` + tenorInstruction + `"},
-    {"id":"summary-layout","visual_region_id":"summary-region","source_block_ids":["summary-principal","summary-tenor","summary-total"],"location":"摘要表右列","layout_kind":"repayment_table","scenario_ids":["row-6"],"target_columns":["principal","tenor","total_repayment"],"render_instruction":"` + summaryInstruction + `"}
-  ],
-  "production_prompt":"顶部标题使用 Pembiayaan Fleksibel。` + amountInstruction + ` ` + tenorInstruction + ` ` + summaryInstruction + `"
+    {"id":"amount-layout","visual_region_id":"amount-region","source_block_ids":["amount"],"location":"中部本金卡","layout_kind":"single_value","scenario_ids":["row-6"],"target_columns":["principal"],"render_instruction":"` + amountInstruction + `"},
+    {"id":"tenor-layout","visual_region_id":"tenor-region","source_block_ids":["tenor-3","tenor-6"],"location":"期限按钮组","layout_kind":"option_buttons","scenario_ids":["row-3","row-6"],"target_columns":["tenor"],"render_instruction":"` + tenorInstruction + `"},
+    {"id":"summary-layout","visual_region_id":"summary-region","source_block_ids":["summary-principal","summary-tenor","summary-total"],"location":"摘要表右列","layout_kind":"table","scenario_ids":["row-6"],"target_columns":["principal","tenor","total_repayment"],"render_instruction":"` + summaryInstruction + `"}
+  ]
 }`)
-	var completed creativePreAdaptationCompletedResult
-	if err := json.Unmarshal(result, &completed); err != nil {
-		t.Fatal(err)
-	}
-	normalizeCreativePreAdaptationNumericLayoutKinds(&completed)
-	if got, want := strings.Join([]string{completed.NumericLayouts[0].LayoutKind, completed.NumericLayouts[1].LayoutKind, completed.NumericLayouts[2].LayoutKind}, ","), "single_value,option_buttons,table"; got != want {
-		t.Fatalf("normalized layout kinds = %q, want %q", got, want)
-	}
-	result, _ = json.Marshal(completed)
 	if err := validateCompletedCreativePreAdaptation(source, result); err != nil {
 		t.Fatalf("loan-semantic numeric layouts were rejected: %v", err)
 	}
@@ -410,8 +472,7 @@ func TestValidateCompletedCreativePreAdaptationRequiresNonRepaymentPlanFieldsToB
     {"block_id":"name-value","location":"中部右上","role":"plan_field","source_text":"Nabila","replacement_text":"Cicilan FLAT sepanjang Tenor","source_keys":["flat"],"status":"ready"}
   ],
   "repayment_plan_selections":[{"id":"row-1","plan_key":"30m-3","principal":30000000,"tenor_months":3,"values":{"principal":"Rp30.000.000","tenor":"3 Bulan","total_interest":"Rp810.000","total_repayment":"Rp30.810.000","monthly_installment":"Rp10.270.000"}}],
-  "numeric_layouts":[{"id":"loan-summary","source_block_ids":["amount-label","amount-value","tenor-label","tenor-value","monthly-label","monthly-value"],"location":"中部借款摘要","layout_kind":"table","scenario_ids":["row-1"],"target_columns":["principal","tenor","monthly_installment"],"render_instruction":"` + instruction + `"}],
-  "production_prompt":"Tanpa Jaminan; Cicilan FLAT sepanjang Tenor; ` + instruction + `"
+  "numeric_layouts":[{"id":"loan-summary","source_block_ids":["amount-label","amount-value","tenor-label","tenor-value","monthly-label","monthly-value"],"location":"中部借款摘要","layout_kind":"table","scenario_ids":["row-1"],"target_columns":["principal","tenor","monthly_installment"],"render_instruction":"` + instruction + `"}]
 }`)
 	if err := validateCompletedCreativePreAdaptation(source, valid); err != nil {
 		t.Fatalf("approved replacements for non-repayment plan fields were rejected: %v", err)
@@ -497,8 +558,7 @@ func TestValidateCreativePreAdaptationAllowsTraceableRecommendationsAndCalculati
     {"block_id":"daily-amount","location":"中心金额区","role":"benefit","source_text":"Rp10.000","replacement_text":"Rp1.500 per hari","source_keys":[],"status":"calculated","calculation":{"rule_key":"id_simple_daily_interest_v1","formula":"本金 × 日利率","inputs":["本金 Rp5.000.000","日利率 0,03%"],"result":"Rp1.500 per hari"}},
     {"block_id":"headline","location":"顶部标题","role":"headline","source_text":"Dana cepat","replacement_text":"Dana fleksibel untuk kebutuhanmu","source_keys":[],"status":"recommended","recommendation_basis":["当前订单的已发布通用利益点","原图标题区域不承载金融数值"]}
   ],
-  "repayment_plan_selections":[],"numeric_layouts":[],
-  "production_prompt":"中心金额区使用 Rp1.500 per hari。顶部标题使用 Dana fleksibel untuk kebutuhanmu。"
+  "repayment_plan_selections":[],"numeric_layouts":[]
 }`)
 	if err := validateCompletedCreativePreAdaptation(source, result); err != nil {
 		t.Fatalf("traceable calculated and recommended replacements were rejected: %v", err)

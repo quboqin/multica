@@ -1,5 +1,7 @@
 import type { CreateCreativeFeedbackResponse, CreativeOrderItem, CreativeOrderVariant } from "@multica/core/types";
 
+const CREATIVE_ADJUSTMENT_ALL_SIZES = ["1080x1080", "1200x628", "800x1000"];
+
 export type CreativeAdjustmentStep = {
   key: "submitted" | "planned" | "generated" | "primed" | "qc" | "completed";
   label: string;
@@ -29,10 +31,14 @@ export function creativeAdjustmentTarget(
 
 export function creativeAdjustmentProgress(variant: CreativeOrderVariant | undefined, event: CreateCreativeFeedbackResponse): string {
   const sourceRevision = adjustmentSourceRevision(event);
-  if (!variant || variant.revision <= sourceRevision) return "已提交，等待素材小队处理";
+  if (!variant || variant.revision <= sourceRevision) return "调整未启动";
   if (variant.status === "completed") return `调整已完成 · r${variant.revision}`;
-  if (variant.status === "action_required" || variant.status === "failed") return `调整结果待验收 · r${variant.revision}`;
-  return `素材小队处理中 · r${variant.revision}`;
+  if (variant.status === "action_required" || variant.status === "failed") return `调整需要处理 · r${variant.revision}`;
+  return `当前尺寸调整中 · r${variant.revision}`;
+}
+
+export function creativeAdjustmentCanRetry(variant: CreativeOrderVariant | undefined, event: CreateCreativeFeedbackResponse): boolean {
+  return Boolean(variant && variant.revision <= adjustmentSourceRevision(event));
 }
 
 export function creativeAdjustmentTimeline(variant: CreativeOrderVariant | undefined, event: CreateCreativeFeedbackResponse): CreativeAdjustmentStep[] {
@@ -40,14 +46,15 @@ export function creativeAdjustmentTimeline(variant: CreativeOrderVariant | undef
   const revisionStarted = Boolean(variant && variant.revision > sourceRevision);
   const failed = Boolean(variant && revisionStarted && (variant.status === "action_required" || variant.status === "failed"));
   const currentRevision = variant?.revision ?? sourceRevision;
-  const generated = new Set(variant?.assets.filter((asset) => asset.revision === currentRevision && asset.stage === "generated" && asset.status === "completed").map((asset) => asset.size_key) ?? []).size;
-  const primed = new Set(variant?.assets.filter((asset) => asset.revision === currentRevision && ["primed", "delivered"].includes(asset.stage) && asset.status === "completed").map((asset) => asset.size_key) ?? []).size;
+  const expectedSizes = adjustmentExpectedSizes(event);
+  const generated = new Set(variant?.assets.filter((asset) => asset.revision === currentRevision && asset.stage === "generated" && asset.status === "completed" && expectedSizes.includes(asset.size_key)).map((asset) => asset.size_key) ?? []).size;
+  const primed = new Set(variant?.assets.filter((asset) => asset.revision === currentRevision && ["primed", "delivered"].includes(asset.stage) && asset.status === "completed" && expectedSizes.includes(asset.size_key)).map((asset) => asset.size_key) ?? []).size;
   const qcReports = variant?.qc_reports.filter((report) => report.revision === currentRevision && ["technical", "visual"].includes(report.lane)) ?? [];
   const qcDone = ["technical", "visual"].every((lane) => qcReports.some((report) => report.lane === lane && ["passed", "warning"].includes(report.status)));
   const completed = variant?.status === "completed";
-  const done = { submitted: true, planned: revisionStarted, generated: generated >= 3, primed: primed >= 3, qc: qcDone, completed };
+  const done = { submitted: true, planned: revisionStarted, generated: generated >= expectedSizes.length, primed: primed >= expectedSizes.length, qc: qcDone, completed };
   const order: CreativeAdjustmentStep["key"][] = ["submitted", "planned", "generated", "primed", "qc", "completed"];
-  const labels: Record<CreativeAdjustmentStep["key"], string> = { submitted: "已提交", planned: "创意调整", generated: "三尺寸生成", primed: "Prime", qc: "双路 QC", completed: "完成" };
+  const labels: Record<CreativeAdjustmentStep["key"], string> = { submitted: "已提交", planned: "精准调整", generated: expectedSizes.length === 1 ? "当前尺寸生成" : "三尺寸生成", primed: "品牌组件合成", qc: "双路 QC", completed: "完成" };
   const firstPending = order.find((key) => !done[key]);
   return order.map((key) => ({
     key,
@@ -58,4 +65,10 @@ export function creativeAdjustmentTimeline(variant: CreativeOrderVariant | undef
 
 function adjustmentSourceRevision(event: CreateCreativeFeedbackResponse): number {
   return typeof event.context_snapshot.revision === "number" ? event.context_snapshot.revision : 0;
+}
+
+function adjustmentExpectedSizes(event: CreateCreativeFeedbackResponse): string[] {
+  const scope = typeof event.context_snapshot.scope === "string" ? event.context_snapshot.scope : "";
+  const size = typeof event.context_snapshot.size_key === "string" ? event.context_snapshot.size_key : "";
+  return scope === "size" && size ? [size] : CREATIVE_ADJUSTMENT_ALL_SIZES;
 }

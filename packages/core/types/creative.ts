@@ -231,44 +231,6 @@ export interface CreativeResourceFileListResponse {
   files: CreativeResourceFile[];
 }
 
-export type CreativeMarketPackComponentKind = "image" | "qr" | "text";
-export type CreativeMarketPackExtractionStatus = "pending" | "running" | "completed" | "failed" | "applied";
-
-export interface CreativeMarketPackComponentCandidate {
-  id: string;
-  label: string;
-  kind: CreativeMarketPackComponentKind;
-  suggested_component_id: string;
-  suggested_role: string;
-  content: string;
-  rect: [number, number, number, number];
-  confidence: number;
-  evidence: string[];
-}
-
-export interface CreativeMarketPackComponentExtraction {
-  id: string;
-  resource_id: string;
-  source_attachment_id: string;
-  source_url: string;
-  source_filename: string;
-  source_width: number;
-  source_height: number;
-  status: CreativeMarketPackExtractionStatus;
-  result: { summary: string; candidates: CreativeMarketPackComponentCandidate[] };
-  error_message: string;
-  task_id: string;
-  agent_id: string;
-  created_at: string;
-  updated_at: string;
-}
-
-export interface CreateCreativeMarketPackComponentExtractionRequest {
-  attachment_id: string;
-  width: number;
-  height: number;
-}
-
 export interface CreateCreativeResourceRequest {
   kind: CreativeResourceKind;
   name: string;
@@ -403,6 +365,7 @@ export interface CreativeCopySnapshot {
     matched_signals: string[];
   };
   status: "approved" | "model_pre_adapted" | "user_custom";
+  visual_direction?: CreativeVisualDirection;
   pre_adaptation?: {
     schema_version: 1;
     source_analysis_id: string;
@@ -450,52 +413,15 @@ export interface CreativeCopySnapshot {
       target_columns: Array<"principal" | "tenor" | "monthly_installment" | "total_interest" | "total_repayment">;
       render_instruction: string;
     }>;
-    production_prompt: string;
   };
 }
 
-export interface CreativeCopyEntry {
-  id: string;
-  workspace_id: string;
-  library_id: string;
-  external_key: string;
-  headline: string;
-  subheadline: string;
-  benefit: string;
-  cta: string;
-  legal_text: string;
-  copy_role: string;
-  market: string;
-  locale: string;
-  tags: string[];
-  status: CreativeCopyStatus;
-  version: number;
-  metadata: Record<string, unknown>;
-  created_by: string;
-  created_at: string;
-  updated_at: string;
-}
-
-export interface CreativeCopyEntryListResponse {
-  entries: CreativeCopyEntry[];
-}
-
-export type CreativeCopyEntryInput = Omit<CreativeCopyEntry,
-  "id" | "workspace_id" | "library_id" | "version" | "created_by" | "created_at" | "updated_at"
->;
-
-export interface ImportCreativeCopyEntriesRequest {
-  mode: "append" | "upsert" | "replace";
-  source_filename: string;
-  mapping: Record<string, string>;
-  entries: CreativeCopyEntryInput[];
-}
-
-export interface CreativeCopyImportResult {
-  created: number;
-  updated: number;
-  skipped: number;
-  resource: CreativeResource;
+export interface CreativeVisualDirection {
+  schema_version: 1;
+  theme: string;
+  style_tags: string[];
+  must_preserve: string[];
+  avoid: string[];
 }
 
 export interface CreativeIssueContext {
@@ -510,8 +436,6 @@ export interface CreativeIssueContext {
 export interface CreativeIssueItem {
   issue_id: string;
   candidate_id: string;
-  copy_entry_id: string;
-  copy_snapshot: Record<string, unknown>;
   creative_brief: CreativeBrief;
   work_issue_id: string;
   revision: number;
@@ -637,6 +561,35 @@ export interface CreativeFeedbackMetrics {
   qc_false_positive: number;
 }
 
+export interface CreativeFeedbackReasonSummary {
+  code: string;
+  count: number;
+}
+
+export interface CreativeFeedbackDashboard {
+  workflow: {
+    candidate_selected: number;
+    candidate_rejected: number;
+    copy_accepted: number;
+    copy_replaced: number;
+    asset_reported: number;
+    qc_accepted: number;
+    qc_missed_issue: number;
+    qc_false_positive: number;
+    image_generation_success: number;
+    image_generation_total: number;
+    image_generation_failed: number;
+    image_generation_in_progress: number;
+    three_size_qc_success: number;
+    three_size_qc_total: number;
+    first_delivery_count: number;
+    first_delivery_total: number;
+    production_adopted: number;
+    production_adoption_eligible: number;
+    feedback_reasons: CreativeFeedbackReasonSummary[];
+  };
+}
+
 export interface CreativeOrder {
   id: string;
   workspace_id: string;
@@ -669,6 +622,18 @@ export interface CreativeOrderWorkflowFailure {
 }
 
 export interface CreativeOrderWorkflowRetryResponse { task_id: string; }
+export interface QueueCreativeOrderAdjustmentRequest {
+  adjustment_issue_id: string;
+  asset_id: string;
+  size_key: CreativeDeliverySize;
+  source_revision: number;
+  comment: string;
+  event_type: "annotation" | "decision";
+  reason_codes: string[];
+  annotation?: CreativeFeedbackAnnotation;
+  context_snapshot?: Record<string, unknown>;
+}
+export interface QueueCreativeOrderAdjustmentResponse { task_id: string; revision: number; }
 export interface CreativeOrderQCRetryResponse {
   variant_id: string;
   revision: number;
@@ -687,9 +652,8 @@ export interface AdoptCreativeOrderVariantRequest {
   qc_risk_reason?: string;
 }
 export interface CreativeOrderVariantBlocker { task_id: string; workflow: string; failure_reason: string; detail: string; failed_at: string; retryable: boolean; }
-export interface CreativeOrderDiagnosticAsset { id: string; variant_id: string; task_id: string; size_key: CreativeDeliverySize | string; revision: number; label: string; filename: string; url: string; created_at: string; }
-export interface CreativeOrderVariant { id: string; order_item_id: string; variant_key: string; brief: Record<string, unknown>; revision: number; status: string; qc_status: string; qc_recovery_used: boolean; qc_recovery_available: boolean; prime_repair_used: boolean; prime_repair_available: boolean; action_required?: CreativeOrderVariantBlocker; created_at: string; updated_at: string; assets: CreativeOrderAsset[]; diagnostic_assets: CreativeOrderDiagnosticAsset[]; qc_reports: CreativeOrderQCReport[]; }
-export interface CreativeOrderPrimePackageRepairResponse { task_id: string; }
+export interface CreativeOrderDiagnosticAsset { id: string; variant_id: string; task_id: string; attachment_id: string; size_key: CreativeDeliverySize | string; revision: number; workflow: string; label: string; filename: string; metadata: Record<string, unknown>; url: string; created_at: string; }
+export interface CreativeOrderVariant { id: string; order_item_id: string; variant_key: string; brief: Record<string, unknown>; revision: number; status: string; qc_status: string; qc_recovery_used: boolean; qc_recovery_available: boolean; action_required?: CreativeOrderVariantBlocker; created_at: string; updated_at: string; assets: CreativeOrderAsset[]; diagnostic_assets: CreativeOrderDiagnosticAsset[]; qc_reports: CreativeOrderQCReport[]; }
 export interface CreativeOrderAsset { id: string; variant_id: string; asset_family_id: string; size_key: CreativeDeliverySize | string; revision: number; stage: "generated" | "primed" | "delivered" | string; attachment_id: string; derived_from_asset_id: string; metadata: Record<string, unknown>; evidence: Record<string, unknown>; status: string; created_at: string; updated_at: string; }
 export interface CreativeOrderQCReport { id: string; variant_id: string; lane: "technical" | "visual" | string; revision: number; status: string; findings: Record<string, unknown>; trigger_evidence_kind: string; trigger_evidence_ref_id: string; created_at: string; updated_at: string; }
 export interface CreativeOrderQCFinalizeResponse {
@@ -703,6 +667,8 @@ export interface CreativeOrderQCFinalizeResponse {
   delivered_asset_count: number;
   order_aggregate_status: string;
   inbox_item_id?: string;
+  rework_task_id?: string;
+  rework_revision?: number;
 }
 
 export type CreativeDirectEditDeliveryMode = "preview" | "publish";

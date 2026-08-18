@@ -3789,6 +3789,74 @@ FROM creative_source_analysis WHERE id = $1
 	}
 }
 
+func TestFailPreAdaptationTaskQueuesAutomaticRecovery(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+	ctx := t.Context()
+	var agentID, runtimeID string
+	if err := testPool.QueryRow(ctx, `
+SELECT a.id, a.runtime_id FROM agent a WHERE a.workspace_id = $1 LIMIT 1
+`, testWorkspaceID).Scan(&agentID, &runtimeID); err != nil {
+		t.Fatal(err)
+	}
+	analysisID := uuid.NewString()
+	contextJSON, _ := json.Marshal(map[string]any{
+		"type":                 "creative_domain_task",
+		"workflow":             "creative_pre_adaptation",
+		"item_key":             analysisID + ":market:v1:copy:v1",
+		"source_analysis_id":   analysisID,
+		"candidate_id":         uuid.NewString(),
+		"market_pack_id":       "11111111-1111-1111-1111-111111111111",
+		"market_pack_version":  1,
+		"copy_library_id":      "22222222-2222-2222-2222-222222222222",
+		"copy_library_version": 1,
+	})
+	var taskID string
+	if err := testPool.QueryRow(ctx, `
+INSERT INTO agent_task_queue (
+  agent_id, runtime_id, status, priority, context, trigger_evidence_kind, trigger_evidence_ref_id,
+  attempt, max_attempts, started_at
+)
+VALUES ($1, $2, 'running', 0, $3, 'creative_source_analysis', $4, 1, 2, now())
+RETURNING id::text
+`, agentID, runtimeID, contextJSON, analysisID).Scan(&taskID); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(t.Context(), `DELETE FROM agent_task_queue WHERE trigger_evidence_ref_id = $1`, analysisID)
+	})
+
+	w := httptest.NewRecorder()
+	req := newDaemonTokenRequest(http.MethodPost, "/api/daemon/tasks/"+taskID+"/fail", TaskFailRequest{
+		Error:         "temporary pre-adaptation execution failure",
+		FailureReason: "agent_error.unknown",
+	}, testWorkspaceID, "direct-daemon")
+	req = withURLParam(req, "taskId", taskID)
+	testHandler.FailTask(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("fail pre-adaptation task: %d %s", w.Code, w.Body.String())
+	}
+
+	var taskStatus string
+	if err := testPool.QueryRow(ctx, `SELECT status FROM agent_task_queue WHERE id = $1`, taskID).Scan(&taskStatus); err != nil {
+		t.Fatal(err)
+	}
+	if taskStatus != "failed" {
+		t.Fatalf("parent task status = %q, want failed", taskStatus)
+	}
+	var recoveryCount int
+	if err := testPool.QueryRow(ctx, `
+SELECT COUNT(*) FROM agent_task_queue
+WHERE parent_task_id = $1 AND status = 'queued'
+`, taskID).Scan(&recoveryCount); err != nil {
+		t.Fatal(err)
+	}
+	if recoveryCount != 1 {
+		t.Fatalf("queued recovery count = %d, want 1", recoveryCount)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Membership Cache Integration Tests
 //

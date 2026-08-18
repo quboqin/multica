@@ -323,8 +323,9 @@ func (c *Client) ReportLocalSkillImportResult(ctx context.Context, runtimeID, re
 
 // WorkspaceInfo holds minimal workspace metadata returned by the API.
 type WorkspaceInfo struct {
-	ID   string `json:"id"`
-	Name string `json:"name"`
+	ID       string          `json:"id"`
+	Name     string          `json:"name"`
+	Settings json.RawMessage `json:"settings,omitempty"`
 }
 
 // RenewTokenResponse mirrors handler.RenewPATResponse — kept loose (string +

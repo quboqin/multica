@@ -14,13 +14,11 @@
 | --- | --- | --- |
 | `material_collection` | 创建 Crawl Run、导入候选 | `reference_analysis` |
 | `reference_analysis` | 写 Source Analysis | 无 |
-| `market_pack_component_extraction` | 写待确认组件候选 | 无 |
 | `creative_leadership` | 首次委派、异常恢复、用户汇总 | plan 或 direct edit |
 | `generation_plan` | 写 V01-V03 brief | production |
-| `image_edit` | 写 generated assets | Prime |
-| `direct_image_edit` | 写下一 revision generated assets | publish 时 Prime |
-| `prime_compose` | 写 primed package | technical + visual QC |
-| `quality_control` | 写一个 lane report 并 finalize | 无 |
+| `image_edit` | 写 generated assets | 后端品牌组件合成 |
+| `direct_image_edit` | 写下一 revision generated assets | publish 时后端品牌组件合成 |
+| `quality_control` | 写一个 lane 检测报告 | 无 |
 
 成员不得越级创建其他阶段。下游 Agent ID 来自冻结 squad snapshot 或上游 context，不按名称猜测。
 
@@ -31,7 +29,6 @@
 | 参考分析 | `creative_crawl_run_analysis` | Crawl Run | candidate + analysis version |
 | 方案 | `creative_order_item_plan` | Order Item | item + revision |
 | 生产 | `creative_order_item_production` | Order Item | variant + revision |
-| Prime | `creative_order_variant_prime` | Variant | variant + revision |
 | QC | `creative_order_variant_qc` | Variant | variant + lane + revision |
 | 直接改图 | `creative_order_item_direct_edit` | Order Item | variant + size + source revision |
 
@@ -42,6 +39,10 @@ active/succeeded item 或领域结果已到下一阶段时不再创建。重试�
 所有 Order context 原样透传根 `issue_id`、`leader_agent_id`、order/item/variant IDs、revision、scope 和输入快照
 identity；不得只传自然语言。
 
+方案阶段的 source ref 是单个 Order Item，故每个 item 单独提交一个 manifest。context 的 `creative_order_item_id`
+必须与 ref 相同，并固定 `type=creative_domain_task`、`workflow=creative_plan`、`revision=1`、`scope=item`，同时携带
+candidate/source-analysis 及下游 Agent IDs；Planner 以这些 ID 回读冻结订单输入，不从 context 复制可变数据。
+
 fanout 原子校验整个 manifest。任一 item 非法时不创建部分任务。成功提交后调用方结束；并发由 Agent、
 runtime 和 provider 限额控制。
 
@@ -49,8 +50,8 @@ runtime 和 provider 限额控制。
 
 - Source Analysis 只描述参考图，不提供可投放金融事实。
 - `copy_snapshot` 是批准文案与产品事实唯一真值；订单创建后不读取文案库最新版本替换。
-- order `input_snapshot` 的 market snapshot 是 Prime、QR、品牌文件、App UI、尺寸和合规规则唯一真值；运行时
-  不读取市场包最新版本或固定本机文件。
+- order `input_snapshot` 是冻结输入唯一真值：其中 `market_pack` 决定 Prime、QR、品牌文件、App UI、尺寸和合规规则，
+  `squad_snapshot` 决定 capability Agent IDs。运行时不读取市场包最新版本或固定本机文件。
 - 业务用户通过页面维护并发布资源；Agent 消费冻结版本，不把任何市场的文案、坐标或组件写进指令。
 
 ## 状态与隔离
@@ -60,11 +61,11 @@ runtime 和 provider 限额控制。
 拒绝覆盖更高 revision。
 
 标准 Variant 的 expected sizes 共享批准文案、业务语义、主体、信息层级和 `asset_family_id`；方形是横竖版
-重排基线。Prime 只按冻结 config 叠加组件。technical/visual QC 并发并写独立报告；`qc-finalize` 是 delivered
-assets、Variant resolution 和 Inbox 的唯一事务 barrier。
+重排基线。后端只按冻结 config 原样叠加完整品牌模板。technical/visual QC 并发并写独立报告；`qc-finalize` 在两份报告归档后
+登记 delivered assets、Variant completion 和 Inbox，但检测发现只作为建议，不影响这些状态。
 
 direct edit 只处理 context 的 source asset 和 expected sizes；source 不可覆盖，输出 revision 加一并记录
-lineage。preview 不进入 Prime/QC，publish 才进入同 expected sizes 的 Prime 与双路 QC。
+lineage。preview 不进入品牌组件/QC，publish 才进入同 expected sizes 的后端品牌组件合成与双路 QC。
 
 ## 失败与人工反馈
 
@@ -74,5 +75,4 @@ lineage。preview 不进入 Prime/QC，publish 才进入同 expected sizes 的 P
 以下用户操作追加 feedback event：素材采用/拒绝，文案推荐曝光/采用/替换/编辑，Variant 接受/调整/放弃，
 成图接受/下载/报告问题/区域标注，QC 误判/漏检/接受风险。撤销写新事件，不删除历史。
 
-QC 不自动返工。用户看高清对比后选择接受风险、局部调整、重做或放弃；同 Variant 最多一轮模型返工，
-revision 加一。第二轮仍失败时停止调用并等待决定。
+QC 对真实 Prime 遮挡、官方文字不可读和关键内容缺失最多自动返工当前 Variant 一轮；其他建议由用户在高清对比中决定局部调整、重做或放弃。

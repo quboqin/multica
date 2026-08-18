@@ -16,17 +16,7 @@ from PIL import Image, ImageDraw, ImageFont, ImageOps
 
 
 SIZE_PATTERN = re.compile(r"(?:^|[-_])([1-9]\d*x[1-9]\d*)$", re.IGNORECASE)
-
-
-def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--manifest", required=True)
-    parser.add_argument("--compose-result", required=True)
-    parser.add_argument("--images-dir", required=True)
-    parser.add_argument("--output", required=True)
-    parser.add_argument("--contact-sheet", required=True)
-    parser.add_argument("--hard-region-sheet", required=True)
-    return parser.parse_args()
+PACKAGE_CONTRACT_VERSION = 6
 
 
 def decode_qr_image(image: np.ndarray, scale: int = 1) -> str:
@@ -36,47 +26,47 @@ def decode_qr_image(image: np.ndarray, scale: int = 1) -> str:
     return decoded or ""
 
 
-def qr_hard_region(layout: dict | None) -> list[int] | None:
-    if layout is None:
-        return None
-    for region in layout.get("hard_regions", []):
-        if region.get("kind") == "qr":
-            return [int(region[key]) for key in ("x1", "y1", "x2", "y2")]
-    return None
-
-
-def decode_qr_evidence(path: Path, layout: dict | None = None, expected_payload: str = "") -> dict[str, Any]:
+def decode_qr_evidence(path: Path, layout: dict | None = None) -> dict[str, Any]:
+    del layout
     image = cv2.imread(str(path), cv2.IMREAD_COLOR)
     if image is None:
-        return {"decoded": "", "successful_attempt": None, "attempts": {}}
-    attempts = {
-        "full_frame_1x": decode_qr_image(image),
-        "full_frame_2x_nearest": decode_qr_image(image, scale=2),
+        return {"detected": False, "decoded": "", "successful_attempt": None, "attempts": {}}
+    height, width = image.shape[:2]
+    regions = {
+        "full_frame": (0, 0, width, height),
+        "top_right": (width * 55 // 100, 0, width, height * 45 // 100),
+        "top_left": (0, 0, width * 45 // 100, height * 45 // 100),
+        "bottom_right": (width * 55 // 100, height * 55 // 100, width, height),
+        "bottom_left": (0, height * 55 // 100, width * 45 // 100, height),
     }
-    region = qr_hard_region(layout)
-    if region is not None:
-        left, top, right, bottom = region
-        margin = 12
-        crop = image[
-            max(0, top - margin) : min(image.shape[0], bottom + margin),
-            max(0, left - margin) : min(image.shape[1], right + margin),
-        ]
-        if crop.size:
-            attempts["hard_region_crop_1x"] = decode_qr_image(crop)
-            attempts["hard_region_crop_2x_nearest"] = decode_qr_image(crop, scale=2)
-    successful_attempt = next(
-        (name for name, decoded in attempts.items() if decoded and (not expected_payload or decoded == expected_payload)),
-        None,
-    )
+    attempts: dict[str, str] = {}
+    for region_name, (left, top, right, bottom) in regions.items():
+        crop = image[top:bottom, left:right]
+        if crop.size == 0:
+            continue
+        attempts[f"{region_name}_1x"] = decode_qr_image(crop)
+        attempts[f"{region_name}_2x_nearest"] = decode_qr_image(crop, scale=2)
+    successful_attempt = next((name for name, decoded in attempts.items() if decoded), None)
     return {
+        "detected": successful_attempt is not None,
         "decoded": attempts.get(successful_attempt, "") if successful_attempt else "",
         "successful_attempt": successful_attempt,
         "attempts": attempts,
     }
 
 
-def decode_qr(path: Path, layout: dict | None = None, expected_payload: str = "") -> str:
-    return str(decode_qr_evidence(path, layout, expected_payload)["decoded"])
+def decode_qr(path: Path, layout: dict | None = None) -> str:
+    return str(decode_qr_evidence(path, layout)["decoded"])
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--manifest", required=True)
+    parser.add_argument("--compose-result", required=True)
+    parser.add_argument("--images-dir", required=True)
+    parser.add_argument("--output", required=True)
+    parser.add_argument("--contact-sheet", required=True)
+    return parser.parse_args()
 
 
 def edge_white_ratio(image: Image.Image) -> float:
@@ -141,131 +131,49 @@ def valid_layout_contract(layout: object, size: str = "") -> dict | None:
     return layout
 
 
-def layout_contract_candidates(manifest: dict, job: dict, compose_item: dict, size: str) -> list[dict]:
-    candidates = []
-    for candidate in (compose_item.get("layout_contract"), job.get("layout_contract"), job.get("layout")):
-        if candidate is not None and valid_layout_contract(candidate, size) is None:
-            return []
-        layout = valid_layout_contract(candidate, size)
-        if layout is not None:
-            candidates.append(layout)
-    contract = manifest.get("prime_layout_contract") or manifest.get("layout_contract") or {}
-    layouts = contract.get("layouts") if isinstance(contract, dict) else None
-    raw_published = layouts.get(size) if isinstance(layouts, dict) else None
-    if raw_published is not None and valid_layout_contract(raw_published, size) is None:
-        return []
-    published = valid_layout_contract(raw_published, size)
-    if published is not None:
-        candidates.append(published)
-    return candidates
-
-
 def resolve_layout_contract(manifest: dict, job: dict, compose_item: dict, size: str) -> dict | None:
-    candidates = layout_contract_candidates(manifest, job, compose_item, size)
-    if not candidates or any(candidate != candidates[0] for candidate in candidates[1:]):
+    contract = manifest.get("prime_layout_contract")
+    if not isinstance(contract, dict):
         return None
-    return candidates[0]
-
-
-def make_hard_region_sheet(images: list[tuple[str, Path, dict]], output: Path) -> None:
-    row_width, row_height, gap = 1500, 430, 18
-    sheet = Image.new("RGB", (row_width, gap + len(images) * (row_height + gap)), "white")
-    draw = ImageDraw.Draw(sheet)
-    font = ImageFont.load_default()
-    for index, (label, path, layout) in enumerate(images):
-        y = gap + index * (row_height + gap)
-        with Image.open(path) as source:
-            image = source.convert("RGB")
-        annotated = image.copy()
-        overlay = ImageDraw.Draw(annotated)
-        for region in layout.get("hard_regions", []):
-            box = tuple(int(region[key]) for key in ("x1", "y1", "x2", "y2"))
-            overlay.rectangle(box, outline=(220, 38, 38), width=max(2, image.width // 400))
-        full = ImageOps.contain(annotated, (360, 360), Image.Resampling.LANCZOS)
-        sheet.paste(full, (12 + (360 - full.width) // 2, y + 44 + (360 - full.height) // 2))
-        top_end = max(1, min(image.height, int(layout["top_key_content_exclusion_end"])))
-        bottom_start = max(0, min(image.height - 1, int(layout["bottom_key_content_exclusion_start"])))
-        strips = [
-            ("TOP CONTEXT (SOFT GUIDE, NON-BLOCKING)", image.crop((0, 0, image.width, top_end))),
-            ("BOTTOM CONTEXT (SOFT GUIDE, NON-BLOCKING)", image.crop((0, bottom_start, image.width, image.height))),
-        ]
-        for strip_index, (strip_label, crop) in enumerate(strips):
-            target_y = y + 44 + strip_index * 190
-            preview = ImageOps.contain(crop, (1080, 150), Image.Resampling.LANCZOS)
-            sheet.paste(preview, (400, target_y + 24 + (150 - preview.height) // 2))
-            draw.text((400, target_y), strip_label, fill="black", font=font)
-        draw.text((12, y + 12), label, fill="black", font=font)
-    output.parent.mkdir(parents=True, exist_ok=True)
-    sheet.save(output, format="PNG", optimize=True)
+    layouts = contract.get("layouts")
+    if not isinstance(layouts, dict):
+        return None
+    return valid_layout_contract(layouts.get(size), size)
 
 
 def resolve_job_contract(job: dict, compose_item: dict, manifest: dict, images_dir: Path) -> dict:
-    output_value = job.get("output_file") or job.get("output") or compose_item.get("output") or ""
+    output_value = str(job.get("output") or "")
     output_name = Path(output_value).name
     image_path = images_dir / output_name
-    if not image_path.is_file() and output_value:
-        nested = images_dir / output_value
-        if nested.is_file():
-            image_path = nested
-
-    job_id = str(job.get("id") or "")
-    variant = str(
-        job.get("variant_key")
-        or job.get("variant")
-        or compose_item.get("variant_key")
-        or manifest.get("variant_key")
-        or job_id.split("-", 1)[0]
-    ).upper()
-    canvas = compose_item.get("canvas") or {}
-    size = str(job.get("size") or compose_item.get("size") or "")
-    match = SIZE_PATTERN.search(job_id)
-    if not size and match:
-        size = match.group(1)
-    if not size and canvas.get("width") and canvas.get("height"):
-        size = f"{canvas['width']}x{canvas['height']}"
-
-    revision = job.get("revision") or compose_item.get("revision") or manifest.get("revision")
-    if revision in (None, ""):
-        match = re.search(r"_r(\d+)(?:\.[^.]+)?$", output_name, flags=re.IGNORECASE)
-        revision = int(match.group(1)) if match else None
-
-    approved_payload = (
-        manifest.get("qr_validation", {}).get("approved_payload")
-        or manifest.get("approved_payload")
-        or job.get("qr_payload")
-        or compose_item.get("qr_payload")
-        or ""
-    )
-    composition = job.get("prime_composition") or manifest.get("prime_composition") or {}
-    qr_validation = manifest.get("qr_validation") or {}
-    qr_mode = str(composition.get("qr_mode") or qr_validation.get("mode") or ("dynamic" if approved_payload else "none"))
+    variant = str(manifest.get("variant_key") or "").upper()
+    size = str(job.get("size") or "")
+    revision = manifest.get("revision")
     return {
         "image_path": image_path,
         "expected_output_name": output_name,
         "variant": variant,
         "size": size,
         "revision": revision,
-        "approved_payload": approved_payload,
-        "qr_mode": qr_mode,
     }
 
 
 def index_compose_results(compose: dict) -> dict[str, dict]:
     return {
-        str(item.get("id") or item.get("size_key")): item
+        str(item.get("id") or ""): item
         for item in compose.get("results", [])
-        if isinstance(item, dict) and (item.get("id") or item.get("size_key"))
+        if isinstance(item, dict) and item.get("id")
     }
 
 
 def compose_item_succeeded(compose: dict, item: dict) -> bool:
-    return item.get("status") == "succeeded" and item.get("passed") is True
-
-
-def qr_check_passed(qr_mode: str, approved_payload: str, decoded: str, compose_item: dict) -> bool:
-    if qr_mode == "none":
-        return not approved_payload and not decoded
-    return bool(approved_payload) and decoded == approved_payload and compose_item.get("decoded") == approved_payload
+    compose_evidence = item.get("compose")
+    return (
+        bool(item.get("id"))
+        and isinstance(item.get("template_selection"), dict)
+        and isinstance(compose_evidence, dict)
+        and compose_evidence.get("mode") == "full_transparent_template"
+        and compose_evidence.get("template_application") == "unchanged_full_canvas_alpha_composite"
+    )
 
 
 def package_contract_failures(manifest: dict, compose: dict, images_dir: Path) -> list[str]:
@@ -277,7 +185,7 @@ def package_contract_failures(manifest: dict, compose: dict, images_dir: Path) -
     if not isinstance(compose_results, list) or not compose_results:
         return ["compose_results_missing"]
 
-    compose_ids = [str(item.get("id") or item.get("size_key") or "") for item in compose_results if isinstance(item, dict)]
+    compose_ids = [str(item.get("id") or "") for item in compose_results if isinstance(item, dict)]
     if len(compose_ids) != len(compose_results) or any(not value for value in compose_ids):
         failures.append("compose_result_id_missing")
     if len(set(compose_ids)) != len(compose_ids):
@@ -346,14 +254,52 @@ def package_contract_failures(manifest: dict, compose: dict, images_dir: Path) -
         failures.append("mixed_variants")
     if compose.get("failed") != 0 or compose.get("succeeded") != len(jobs):
         failures.append("compose_summary_not_passed")
-    if manifest.get("package_contract_version") is not None:
-        if manifest.get("package_contract_version") != 1 or compose.get("package_contract_version") != 1:
-            failures.append("package_contract_version_mismatch")
-        for field in ("variant_id", "variant_key", "revision", "expected_sizes"):
-            if manifest.get(field) != compose.get(field):
-                failures.append(f"package_{field}_mismatch")
-        if compose.get("package_contract_valid") is not True:
-            failures.append("compose_package_contract_invalid")
+    if manifest.get("package_contract_version") != PACKAGE_CONTRACT_VERSION or compose.get("package_contract_version") != PACKAGE_CONTRACT_VERSION:
+        failures.append("package_contract_version_mismatch")
+    for field in ("variant_id", "variant_key", "revision", "expected_sizes"):
+        if manifest.get(field) != compose.get(field):
+            failures.append(f"package_{field}_mismatch")
+    if compose.get("package_contract_valid") is not True:
+        failures.append("compose_package_contract_invalid")
+    for item in compose_results:
+        if not isinstance(item, dict):
+            continue
+        selection = item.get("template_selection")
+        if not isinstance(selection, dict) or selection.get("selection_mode") != "automatic_family_contrast":
+            failures.append(f"{item.get('id') or 'unknown'}:template_selection_missing_or_manual")
+            continue
+        size = str(item.get("size") or "")
+        template_set = manifest.get("prime_template_set")
+        families = template_set.get("families") if isinstance(template_set, dict) else None
+        if not isinstance(families, list) or not families:
+            failures.append(f"{item.get('id') or 'unknown'}:template_set_invalid")
+            continue
+        expected_families: dict[str, str] = {}
+        for family in families:
+            if not isinstance(family, dict):
+                continue
+            family_id = str(family.get("id") or "")
+            templates = family.get("templates")
+            template = templates.get(size) if isinstance(templates, dict) else None
+            source_role = str(template.get("source_role") or "") if isinstance(template, dict) else ""
+            if family_id and source_role:
+                expected_families[family_id] = source_role
+        candidates = selection.get("candidates")
+        actual_families: dict[str, str] = {}
+        if isinstance(candidates, list):
+            for candidate in candidates:
+                if not isinstance(candidate, dict):
+                    continue
+                family_id = str(candidate.get("family_id") or "")
+                sizes = candidate.get("sizes")
+                size_evidence = sizes.get(size) if isinstance(sizes, dict) else None
+                source_role = str(size_evidence.get("source_role") or "") if isinstance(size_evidence, dict) else ""
+                if family_id and source_role:
+                    actual_families[family_id] = source_role
+        selected_family = str(selection.get("selected_family_id") or "")
+        selected_source_role = str(selection.get("selected_source_role") or "")
+        if actual_families != expected_families or expected_families.get(selected_family) != selected_source_role:
+            failures.append(f"{item.get('id') or 'unknown'}:template_selection_invalid")
     return list(dict.fromkeys(failures))
 
 
@@ -365,7 +311,6 @@ def main() -> int:
     contract_failures = package_contract_failures(manifest, compose, images_dir)
     if contract_failures:
         make_contact_sheet([], Path(args.contact_sheet).resolve())
-        make_hard_region_sheet([], Path(args.hard_region_sheet).resolve())
         evidence = {
             "candidate_id": manifest.get("candidate_id"),
             "revision": manifest.get("revision"),
@@ -384,7 +329,6 @@ def main() -> int:
 
     results = []
     contact_images: list[tuple[str, Path]] = []
-    hard_region_images: list[tuple[str, Path, dict]] = []
     for job in manifest.get("jobs", []):
         compose_item = compose_by_id.get(job.get("id"), {})
         contract = resolve_job_contract(job, compose_item, manifest, images_dir)
@@ -393,8 +337,6 @@ def main() -> int:
         variant = contract["variant"]
         size = contract["size"]
         revision = contract["revision"]
-        approved_payload = contract["approved_payload"]
-        qr_mode = contract["qr_mode"]
         expected_width, expected_height = (int(value) for value in size.lower().split("x", 1))
         layout = resolve_layout_contract(manifest, job, compose_item, size)
         exists = image_path.is_file()
@@ -405,24 +347,24 @@ def main() -> int:
                 actual_size = list(image.size)
                 white_ratio = edge_white_ratio(image)
             contact_images.append((f"{variant} {size}", image_path))
-            if layout is not None:
-                hard_region_images.append((f"{variant} {size}", image_path, layout))
-        qr_evidence = decode_qr_evidence(image_path, layout, approved_payload) if exists else {
+        qr_evidence = decode_qr_evidence(image_path, layout) if exists else {
+            "detected": False,
             "decoded": "",
             "successful_attempt": None,
             "attempts": {},
         }
-        decoded = str(qr_evidence["decoded"])
+        visibility_audit = compose_item.get("visibility_audit") if isinstance(compose_item.get("visibility_audit"), dict) else {}
+        visibility_blocking = bool(visibility_audit.get("blocking"))
         checks = {
             "exists": exists,
             "dimensions": actual_size == [expected_width, expected_height],
             "filename": bool(expected_output_name) and image_path.name == expected_output_name,
             "compose": compose_item_succeeded(compose, compose_item),
-            "qr": qr_check_passed(qr_mode, approved_payload, decoded, compose_item),
             "full_bleed": white_ratio is not None and white_ratio < 0.5,
             "layout_contract": layout is not None,
+            "prime_visibility_audit": not visibility_blocking,
         }
-        blocking_check_names = ("exists", "dimensions", "filename", "compose", "qr", "layout_contract")
+        blocking_check_names = ("exists", "dimensions", "filename", "compose", "layout_contract")
         blocking_checks_passed = all(checks[name] for name in blocking_check_names)
         results.append({
             "id": job["id"],
@@ -431,32 +373,23 @@ def main() -> int:
             "revision": revision,
             "file": str(image_path),
             "actual_size": actual_size,
-            "decoded_qr": decoded,
-            "independent_qr_decode": qr_evidence,
-            "approved_payload": approved_payload,
             "edge_white_ratio": round(white_ratio, 6) if white_ratio is not None else None,
-            "hard_region_review": {
-                "top_key_content_exclusion_end": layout.get("top_key_content_exclusion_end") if layout else None,
-                "bottom_key_content_exclusion_start": layout.get("bottom_key_content_exclusion_start") if layout else None,
-                "soft_guides_non_blocking": True,
-                "regions": layout.get("hard_regions", []) if layout else [],
-                "semantic_review_required": True,
-            },
+            "decoded_qr": qr_evidence["decoded"],
+            "optional_qr_decode": qr_evidence,
             "checks": checks,
-            "machine_warnings": [] if checks["full_bleed"] else ["edge_white_ratio_needs_visual_review"],
+            "prime_visibility_audit": visibility_audit,
+            "machine_warnings": (["edge_white_ratio_needs_visual_review"] if not checks["full_bleed"] else []) + (["prime_visibility_needs_visual_confirmation"] if visibility_blocking else []),
             "passed": blocking_checks_passed,
         })
 
     make_contact_sheet(contact_images, Path(args.contact_sheet).resolve())
-    make_hard_region_sheet(hard_region_images, Path(args.hard_region_sheet).resolve())
     evidence = {
         "candidate_id": manifest.get("candidate_id"),
         "revision": manifest.get("revision"),
         "market_pack": manifest.get("market_pack"),
         "copy_snapshot": manifest.get("copy_snapshot"),
-        "approved_payloads": sorted({item["approved_payload"] for item in results if item["approved_payload"]}),
         "compose_summary": {"succeeded": compose.get("succeeded"), "failed": compose.get("failed")},
-        "hard_region_sheet": str(Path(args.hard_region_sheet).resolve()),
+        "contact_sheet": str(Path(args.contact_sheet).resolve()),
         "passed": bool(results) and all(item["passed"] for item in results),
         "results": results,
     }

@@ -165,7 +165,13 @@ WHERE variant.id = $1
 	taskContext["variant_id"], _ = json.Marshal(canonicalVariantID)
 	taskContext["creative_order_id"], _ = json.Marshal(canonicalOrderID)
 	taskContext["creative_order_item_id"], _ = json.Marshal(canonicalOrderItemID)
-	if canonicalIssueID != "" {
+	var suppliedIssueID string
+	_ = json.Unmarshal(taskContext["issue_id"], &suppliedIssueID)
+	if strings.TrimSpace(suppliedIssueID) != "" {
+		if _, err := uuid.Parse(strings.TrimSpace(suppliedIssueID)); err != nil {
+			return item, errors.New("creative production task context issue_id must be a UUID")
+		}
+	} else if canonicalIssueID != "" {
 		taskContext["issue_id"], _ = json.Marshal(canonicalIssueID)
 	}
 	taskContext["revision"], _ = json.Marshal(revision)
@@ -173,7 +179,26 @@ WHERE variant.id = $1
 	if _, ok := taskContext["expected_sizes"]; !ok || jsonArrayLength(taskContext["expected_sizes"]) == 0 {
 		taskContext["expected_sizes"], _ = json.Marshal(standardCreativeAssetSizes)
 	}
-	taskContext["scope"], _ = json.Marshal("variant")
+	if _, adjustment := taskContext["order_adjustment"]; adjustment {
+		var orderAdjustment struct {
+			AdjustmentIssueID string `json:"adjustment_issue_id"`
+			SourceRevision    int    `json:"source_revision"`
+			TargetSize        string `json:"target_size"`
+			SourceAssetID     string `json:"source_asset_id"`
+			SourceAttachment  string `json:"source_attachment_id"`
+			Request           string `json:"request"`
+		}
+		if json.Unmarshal(taskContext["order_adjustment"], &orderAdjustment) != nil ||
+			strings.TrimSpace(orderAdjustment.AdjustmentIssueID) == "" || strings.TrimSpace(orderAdjustment.SourceAssetID) == "" ||
+			strings.TrimSpace(orderAdjustment.SourceAttachment) == "" || strings.TrimSpace(orderAdjustment.Request) == "" ||
+			orderAdjustment.SourceRevision != revision-1 || !validCreativeAssetSize(strings.TrimSpace(orderAdjustment.TargetSize)) ||
+			strings.TrimSpace(suppliedIssueID) != strings.TrimSpace(orderAdjustment.AdjustmentIssueID) {
+			return item, errors.New("creative production order adjustment context is invalid")
+		}
+		taskContext["scope"], _ = json.Marshal("size")
+	} else {
+		taskContext["scope"], _ = json.Marshal("variant")
+	}
 	taskContext["subject_id"], _ = json.Marshal(canonicalVariantID)
 	encoded, err := json.Marshal(taskContext)
 	if err != nil {
@@ -243,7 +268,13 @@ WHERE variant.id = $1
 	taskContext["variant_id"], _ = json.Marshal(canonicalVariantID)
 	taskContext["creative_order_id"], _ = json.Marshal(canonicalOrderID)
 	taskContext["creative_order_item_id"], _ = json.Marshal(canonicalOrderItemID)
-	if canonicalIssueID != "" {
+	var suppliedIssueID string
+	_ = json.Unmarshal(taskContext["issue_id"], &suppliedIssueID)
+	if strings.TrimSpace(suppliedIssueID) != "" {
+		if _, err := uuid.Parse(strings.TrimSpace(suppliedIssueID)); err != nil {
+			return item, errors.New("manual creative production task context issue_id must be a UUID")
+		}
+	} else if canonicalIssueID != "" {
 		taskContext["issue_id"], _ = json.Marshal(canonicalIssueID)
 	}
 	taskContext["revision"], _ = json.Marshal(revision)
@@ -251,7 +282,26 @@ WHERE variant.id = $1
 	if _, ok := taskContext["expected_sizes"]; !ok || jsonArrayLength(taskContext["expected_sizes"]) == 0 {
 		taskContext["expected_sizes"], _ = json.Marshal(standardCreativeAssetSizes)
 	}
-	taskContext["scope"], _ = json.Marshal("variant")
+	if _, adjustment := taskContext["order_adjustment"]; adjustment {
+		var orderAdjustment struct {
+			AdjustmentIssueID string `json:"adjustment_issue_id"`
+			SourceRevision    int    `json:"source_revision"`
+			TargetSize        string `json:"target_size"`
+			SourceAssetID     string `json:"source_asset_id"`
+			SourceAttachment  string `json:"source_attachment_id"`
+			Request           string `json:"request"`
+		}
+		if json.Unmarshal(taskContext["order_adjustment"], &orderAdjustment) != nil ||
+			strings.TrimSpace(orderAdjustment.AdjustmentIssueID) == "" || strings.TrimSpace(orderAdjustment.SourceAssetID) == "" ||
+			strings.TrimSpace(orderAdjustment.SourceAttachment) == "" || strings.TrimSpace(orderAdjustment.Request) == "" ||
+			orderAdjustment.SourceRevision != revision-1 || !validCreativeAssetSize(strings.TrimSpace(orderAdjustment.TargetSize)) ||
+			strings.TrimSpace(suppliedIssueID) != strings.TrimSpace(orderAdjustment.AdjustmentIssueID) {
+			return item, errors.New("manual creative production order adjustment context is invalid")
+		}
+		taskContext["scope"], _ = json.Marshal("size")
+	} else {
+		taskContext["scope"], _ = json.Marshal("variant")
+	}
 	taskContext["subject_id"], _ = json.Marshal(canonicalVariantID)
 	encoded, err := json.Marshal(taskContext)
 	if err != nil {
@@ -290,8 +340,6 @@ func creativeTaskRequiredCapability(kind string) string {
 		return "generation_plan"
 	case "creative_order_item_production":
 		return "image_edit"
-	case "creative_order_variant_prime":
-		return "prime_compose"
 	case "creative_order_variant_qc":
 		return "quality_control"
 	case "creative_order_item_direct_edit":
@@ -315,7 +363,6 @@ func knownCreativeTaskEvidenceKind(kind string) bool {
 		"creative_order_item_production",
 		"creative_order_item_direct_edit",
 		"creative_variant",
-		"creative_order_variant_prime",
 		"creative_order_variant_qc",
 		"creative_asset",
 		"creative_qc_report":
@@ -353,8 +400,6 @@ func validateCreativeTaskFanoutContext(kind string, evidenceRefID pgtype.UUID, i
 		expectedWorkflow, referenceField, requireOrderTrace = "creative_plan", "creative_order_item_id", true
 	case "creative_order_item_production":
 		expectedWorkflow, referenceField, requireOrderTrace = "creative_production", "creative_order_item_id", true
-	case "creative_order_variant_prime":
-		expectedWorkflow, referenceField, requireOrderTrace = "creative_prime", "variant_id", true
 	case "creative_order_variant_qc":
 		referenceField, requireOrderTrace = "variant_id", true
 	case "creative_order_item_direct_edit":
@@ -428,6 +473,34 @@ func validateCreativeProductionTaskContext(context map[string]any, itemKey strin
 	if itemKey != wantItemKey {
 		return fmt.Errorf("creative production task item_key must be %s", wantItemKey)
 	}
+	if rawAdjustment, ok := context["order_adjustment"]; ok {
+		adjustment, ok := rawAdjustment.(map[string]any)
+		if !ok {
+			return errors.New("creative production task context order_adjustment must be an object")
+		}
+		adjustmentIssueID, _ := adjustment["adjustment_issue_id"].(string)
+		sourceAssetID, _ := adjustment["source_asset_id"].(string)
+		sourceAttachmentID, _ := adjustment["source_attachment_id"].(string)
+		targetSize, _ := adjustment["target_size"].(string)
+		request, _ := adjustment["request"].(string)
+		sourceRevision, sourceRevisionOK := adjustment["source_revision"].(float64)
+		issueID, _ := context["issue_id"].(string)
+		scope, _ := context["scope"].(string)
+		if _, err := uuid.Parse(strings.TrimSpace(adjustmentIssueID)); err != nil {
+			return errors.New("creative production task context order_adjustment is invalid")
+		}
+		if _, err := uuid.Parse(strings.TrimSpace(sourceAssetID)); err != nil {
+			return errors.New("creative production task context order_adjustment is invalid")
+		}
+		if _, err := uuid.Parse(strings.TrimSpace(sourceAttachmentID)); err != nil {
+			return errors.New("creative production task context order_adjustment is invalid")
+		}
+		if !validCreativeAssetSize(strings.TrimSpace(targetSize)) || strings.TrimSpace(request) == "" ||
+			!sourceRevisionOK || int(sourceRevision) != int(revision)-1 ||
+			issueID != adjustmentIssueID || scope != "size" {
+			return errors.New("creative production task context order_adjustment is invalid")
+		}
+	}
 	return nil
 }
 
@@ -479,7 +552,7 @@ func (h *Handler) directTaskEvidenceInWorkspace(w http.ResponseWriter, r *http.R
 		query = `SELECT EXISTS(SELECT 1 FROM creative_order WHERE id = $1 AND workspace_id = $2)`
 	case "creative_order_item", "creative_order_item_plan", "creative_order_item_production", "creative_order_item_direct_edit":
 		query = `SELECT EXISTS(SELECT 1 FROM creative_order_item i JOIN creative_order o ON o.id = i.order_id WHERE i.id = $1 AND o.workspace_id = $2)`
-	case "creative_variant", "creative_order_variant_prime", "creative_order_variant_qc":
+	case "creative_variant", "creative_order_variant_qc":
 		query = `SELECT EXISTS(SELECT 1 FROM creative_order_variant v JOIN creative_order_item i ON i.id = v.order_item_id JOIN creative_order o ON o.id = i.order_id WHERE v.id = $1 AND o.workspace_id = $2)`
 	case "creative_asset":
 		query = `SELECT EXISTS(SELECT 1 FROM creative_order_asset a JOIN creative_order_variant v ON v.id = a.variant_id JOIN creative_order_item i ON i.id = v.order_item_id JOIN creative_order o ON o.id = i.order_id WHERE a.id = $1 AND o.workspace_id = $2)`

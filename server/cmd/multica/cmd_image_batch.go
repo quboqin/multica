@@ -54,31 +54,50 @@ type preparedImageEditBatch struct {
 }
 
 type preparedImageEditJob struct {
-	ID          string
-	Inputs      []imageEditBatchInput
-	Mask        string
-	Prompt      string
-	Model       string
-	Size        string
-	Quality     string
-	MaxAttempts int
-	OutputFile  string
-	DependsOn   []string
+	ID           string
+	Inputs       []imageEditBatchInput
+	Mask         string
+	Prompt       string
+	Model        string
+	Size         string
+	ProviderSize string
+	Quality      string
+	MaxAttempts  int
+	OutputFile   string
+	DependsOn    []string
+}
+
+type imageEditGeneratedAsset struct {
+	Completed      bool   `json:"completed"`
+	Path           string `json:"path"`
+	Size           string `json:"size"`
+	Width          int    `json:"width"`
+	Height         int    `json:"height"`
+	AspectFallback bool   `json:"aspect_fallback"`
 }
 
 type imageEditBatchResult struct {
-	ID              string  `json:"id"`
-	Status          string  `json:"status"`
-	Model           string  `json:"model"`
-	Size            string  `json:"size"`
-	Prompt          string  `json:"prompt"`
-	PromptSHA256    string  `json:"prompt_sha256"`
-	Path            string  `json:"path,omitempty"`
-	Bytes           int     `json:"bytes,omitempty"`
-	RequestID       string  `json:"request_id,omitempty"`
-	Attempts        int     `json:"attempts,omitempty"`
-	DurationSeconds float64 `json:"duration_seconds"`
-	Error           string  `json:"error,omitempty"`
+	ID                     string                   `json:"id"`
+	Status                 string                   `json:"status"`
+	Model                  string                   `json:"model"`
+	Size                   string                   `json:"size"`
+	Prompt                 string                   `json:"prompt"`
+	PromptSHA256           string                   `json:"prompt_sha256"`
+	Path                   string                   `json:"path,omitempty"`
+	Bytes                  int                      `json:"bytes,omitempty"`
+	ActualWidth            int                      `json:"actual_width,omitempty"`
+	ActualHeight           int                      `json:"actual_height,omitempty"`
+	ActualAspect           float64                  `json:"actual_aspect_ratio,omitempty"`
+	RequestID              string                   `json:"request_id,omitempty"`
+	Attempts               int                      `json:"attempts,omitempty"`
+	AspectRetries          int                      `json:"aspect_retries,omitempty"`
+	AspectFallback         bool                     `json:"aspect_fallback,omitempty"`
+	DurationSeconds        float64                  `json:"duration_seconds"`
+	QueueWaitSeconds       float64                  `json:"queue_wait_seconds"`
+	ProviderElapsedSeconds float64                  `json:"provider_elapsed_seconds"`
+	TimeoutStage           string                   `json:"timeout_stage,omitempty"`
+	Error                  string                   `json:"error,omitempty"`
+	GeneratedAsset         *imageEditGeneratedAsset `json:"generated_asset,omitempty"`
 }
 
 type imageEditBatchSummary struct {
@@ -124,7 +143,7 @@ func runImageEditBatch(cmd *cobra.Command, _ []string) error {
 	if err != nil {
 		return err
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), cli.AtLeastAPITimeout(35*time.Minute))
+	ctx, cancel := context.WithTimeout(context.Background(), cli.AtLeastAPITimeout(65*time.Minute))
 	defer cancel()
 	summary := executeImageEditBatch(ctx, http.DefaultClient, endpoint, apiKey, imageField, batch)
 	summary.ProviderSlotLimit = providerSlotLimit
@@ -207,7 +226,8 @@ func loadImageEditBatchManifest(path string) (preparedImageEditBatch, error) {
 		if size == "" {
 			size = "auto"
 		}
-		if err := validateGPTImageSize(size); err != nil {
+		providerSize, err := providerGPTImageSize(size)
+		if err != nil {
 			return preparedImageEditBatch{}, fmt.Errorf("job %q: %w", job.ID, err)
 		}
 		quality := strings.ToLower(strings.TrimSpace(job.Quality))
@@ -251,7 +271,7 @@ func loadImageEditBatchManifest(path string) (preparedImageEditBatch, error) {
 		}
 		prepared.Jobs = append(prepared.Jobs, preparedImageEditJob{
 			ID: job.ID, Inputs: inputs, Mask: resolvePath(strings.TrimSpace(job.Mask)), Prompt: prompt,
-			Model: model, Size: size, Quality: quality, MaxAttempts: maxAttempts,
+			Model: model, Size: size, ProviderSize: providerSize, Quality: quality, MaxAttempts: maxAttempts,
 			OutputFile: outputFile, DependsOn: uniqueCLIStrings(dependencies),
 		})
 	}
@@ -356,10 +376,10 @@ func executeImageEditBatch(ctx context.Context, client *http.Client, endpoint, a
 					inputs = append(inputs, batch.Jobs[indexes[input.Job]].OutputFile)
 				}
 			}
-			image, requestID, attempts, err := requestGPTImageEditWithRetryAndSlots(ctx, client, endpoint, apiKey, job.Model, imageField, inputs, job.Mask, job.Prompt, job.Size, job.Quality, job.MaxAttempts)
+			image, requestID, attempts, aspectRetries, dimensions, aspectFallback, timing, err := requestGPTImageEditWithValidAspect(ctx, client, endpoint, apiKey, job.Model, imageField, inputs, job.Mask, job.Prompt, job.ProviderSize, job.Quality, job.MaxAttempts, acquireGlobalImageSlot)
 			duration := time.Since(jobStartedAt).Seconds()
 			if err != nil {
-				result.Status, result.RequestID, result.Attempts, result.DurationSeconds, result.Error = "failed", requestID, attempts, duration, err.Error()
+				result.Status, result.RequestID, result.Attempts, result.AspectRetries, result.DurationSeconds, result.QueueWaitSeconds, result.ProviderElapsedSeconds, result.TimeoutStage, result.Error = "failed", requestID, attempts, aspectRetries, duration, timing.QueueWait.Seconds(), timing.ProviderElapsed.Seconds(), timing.TimeoutStage, err.Error()
 				results[index] = result
 				return
 			}
@@ -380,7 +400,13 @@ func executeImageEditBatch(ctx context.Context, client *http.Client, endpoint, a
 				abs = job.OutputFile
 			}
 			result.Status, result.Path, result.Bytes = "succeeded", abs, len(image)
-			result.RequestID, result.Attempts, result.DurationSeconds = requestID, attempts, duration
+			result.ActualWidth, result.ActualHeight, result.ActualAspect = dimensions.Width, dimensions.Height, dimensions.AspectRatio
+			result.RequestID, result.Attempts, result.AspectRetries, result.AspectFallback, result.DurationSeconds = requestID, attempts, aspectRetries, aspectFallback, duration
+			result.QueueWaitSeconds, result.ProviderElapsedSeconds, result.TimeoutStage = timing.QueueWait.Seconds(), timing.ProviderElapsed.Seconds(), timing.TimeoutStage
+			result.GeneratedAsset = &imageEditGeneratedAsset{
+				Completed: true, Path: abs, Size: job.Size, Width: dimensions.Width,
+				Height: dimensions.Height, AspectFallback: aspectFallback,
+			}
 			results[index] = result
 		}()
 	}

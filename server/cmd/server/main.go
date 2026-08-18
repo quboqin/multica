@@ -10,6 +10,7 @@ import (
 	"strings"
 	"syscall"
 	"time"
+	_ "time/tzdata"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/multica-ai/multica/server/internal/analytics"
@@ -314,6 +315,7 @@ func main() {
 	heartbeatScheduler := handler.NewBatchedHeartbeatScheduler(queries, handler.DefaultHeartbeatBatchInterval)
 
 	r, h := NewRouterWithOptions(pool, hub, bus, analyticsClient, storeRedis, RouterOptions{
+		Version:            version,
 		HTTPMetrics:        httpMetrics,
 		BusinessMetrics:    businessMetrics,
 		DaemonHub:          daemonHub,

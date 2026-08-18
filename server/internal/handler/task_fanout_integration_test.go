@@ -15,6 +15,34 @@ import (
 	"github.com/multica-ai/multica/server/internal/service"
 )
 
+func TestValidateCreativeProductionTaskContextAcceptsCurrentSizeAdjustment(t *testing.T) {
+	variantID := uuid.NewString()
+	adjustmentIssueID := uuid.NewString()
+	context := map[string]any{
+		"variant_id":     variantID,
+		"revision":       float64(2),
+		"expected_sizes": []any{"1080x1080", "1200x628", "800x1000"},
+		"issue_id":       adjustmentIssueID,
+		"scope":          "size",
+		"order_adjustment": map[string]any{
+			"adjustment_issue_id":  adjustmentIssueID,
+			"source_revision":      float64(1),
+			"target_size":          "1080x1080",
+			"source_asset_id":      uuid.NewString(),
+			"source_attachment_id": uuid.NewString(),
+			"request":              "和主标题避让，调整布局",
+		},
+	}
+
+	if err := validateCreativeProductionTaskContext(context, variantID+":r2"); err != nil {
+		t.Fatalf("current-size adjustment context rejected: %v", err)
+	}
+	context["scope"] = "variant"
+	if err := validateCreativeProductionTaskContext(context, variantID+":r2"); err == nil {
+		t.Fatal("current-size adjustment without size scope was accepted")
+	}
+}
+
 func TestClaimAgentTask_DirectFanoutParallelButQuickCreateSerial(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
@@ -488,7 +516,6 @@ func TestCreativeTaskRequiredCapability(t *testing.T) {
 		"creative_crawl_run_analysis":     "reference_analysis",
 		"creative_order_item_plan":        "generation_plan",
 		"creative_order_item_production":  "image_edit",
-		"creative_order_variant_prime":    "prime_compose",
 		"creative_order_variant_qc":       "quality_control",
 		"creative_order_item_direct_edit": "direct_image_edit",
 		"generic_test_evidence":           "",

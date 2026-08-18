@@ -3,21 +3,18 @@
 import { cloneElement, useEffect, useId, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-	AlertTriangle,
   ArrowLeft,
   ArrowRight,
   Archive,
   BarChart3,
   BookOpenText,
   Check,
-	CheckCircle2,
   CircleStop,
   Globe2,
   Images,
   LayoutDashboard,
   Layers3,
   Plus,
-  QrCode,
   RefreshCw,
   Save,
   Settings2,
@@ -36,6 +33,10 @@ import {
 } from "@multica/core/creative";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { useWorkspacePaths } from "@multica/core/paths";
+import {
+  workspaceCapabilitiesOptions,
+  workspaceCapabilityKeys,
+} from "@multica/core/workspace/queries";
 import { attachmentDownloadPath } from "@multica/core/types";
 import { resolvePublicFileUrl } from "@multica/core/workspace/avatar-url";
 import type {
@@ -44,10 +45,12 @@ import type {
   CreativeOrderItem,
   CreativeOrderVariant,
   CreativeOrderWorkflowFailure,
+  CreativeDeliverySize,
   CreativeMaterialCandidate,
   CreativeResource,
   CreativeResourceKind,
   CreateCreativeFeedbackResponse,
+  IssueMetadata,
 } from "@multica/core/types";
 import { Badge } from "@multica/ui/components/ui/badge";
 import { Button } from "@multica/ui/components/ui/button";
@@ -78,9 +81,10 @@ import { cn } from "@multica/ui/lib/utils";
 import { toast } from "sonner";
 import { PageHeader } from "../../layout/page-header";
 import { useNavigation } from "../../navigation";
+import { useT } from "../../i18n";
 import { creativeAttachmentBrowserURL } from "../lib/creative-attachment-url";
-import { creativeAdjustmentProgress, creativeAdjustmentTarget, latestOrderAdjustmentFeedback } from "../lib/creative-adjustment-progress";
-import { dynamicQRPolicy, withDynamicQRPayload } from "../lib/market-pack-qr";
+import { creativeAdjustmentCanRetry, creativeAdjustmentProgress, creativeAdjustmentTarget, latestOrderAdjustmentFeedback } from "../lib/creative-adjustment-progress";
+import { createDefaultPrimeTemplateSet, withDefaultPrimeTemplateSet } from "../lib/prime-template-set";
 import { creativeTimeZoneLabel, formatCreativeDateTime } from "../lib/creative-time";
 import { CreativeMaterialLibrary, creativeMaterialAnalysisReadiness, creativeMaterialProductionState, defaultPreAdaptationResources, latestCandidateFeedback, latestCompletedAnalyses, materialAnalysisState, type MaterialLibraryFilter } from "./creative-material-library";
 import { CreativeCollectionPlans } from "./creative-collection-plans";
@@ -91,15 +95,6 @@ import { CreativeGenerationInfoDialog } from "./creative-generation-info-dialog"
 import { CreativeFeedbackDashboard } from "./creative-feedback-dashboard";
 import { CreativeWorkbench } from "./creative-workbench";
 import { MarketResourceFiles } from "./market-resource-files";
-import { createDefaultPrimeComposition, PrimeCompositionEditor, readPrimeComposition } from "./prime-composition-editor";
-
-const PRIME_ROLE_LABELS: Record<string, string> = {
-  prime_logo: "品牌 Logo",
-  prime_store_badges: "应用商店标识",
-  prime_qr: "静态二维码",
-  prime_afpi: "AFPI 标识",
-  prime_pindai_legal: "Pindai Legal",
-};
 
 type CreativeStudioTab = "home" | "materials" | "orders" | "resources" | "feedback";
 
@@ -149,6 +144,38 @@ export function creativeStudioPath(
 
 export function CreativeStudioPage() {
   const wsId = useWorkspaceId();
+  const { t } = useT("settings");
+  const capabilities = useQuery(workspaceCapabilitiesOptions(wsId));
+  const enabled = capabilities.data?.items.some(
+    (item) => item.key === workspaceCapabilityKeys.creativeFactory && item.enabled,
+  ) === true;
+
+  if (capabilities.isPending) {
+    return <div className="flex min-h-0 flex-1 items-center justify-center text-sm text-muted-foreground" />;
+  }
+  if (!enabled) {
+    return (
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+        <PageHeader className="min-w-0 px-5">
+          <div className="flex items-center gap-2">
+            <Settings2 className="h-4 w-4 text-muted-foreground" />
+            <h1 className="text-sm font-medium">{t(($) => $.features.creative_factory_title)}</h1>
+          </div>
+        </PageHeader>
+        <div className="flex flex-1 items-center justify-center p-6">
+          <div className="max-w-sm space-y-2 text-center">
+            <h2 className="text-sm font-semibold">{t(($) => $.features.creative_factory_disabled_title)}</h2>
+            <p className="text-sm text-muted-foreground">{t(($) => $.features.creative_factory_disabled_description)}</p>
+          </div>
+        </div>
+      </div>
+    );
+  }
+  return <CreativeStudioContent />;
+}
+
+function CreativeStudioContent() {
+  const wsId = useWorkspaceId();
   const queryClient = useQueryClient();
   const navigation = useNavigation();
   const workspacePaths = useWorkspacePaths();
@@ -187,10 +214,6 @@ export function CreativeStudioPage() {
       .filter((candidate) => materialProductionStateById.get(candidate.id)?.status !== "available")
       .map((candidate) => candidate.id);
   }, [materialProductionStateById, materials.data?.candidates]);
-  const attentionCount = (orders.data?.orders ?? []).filter((order) => {
-    const stage = creativeOrderStage(order);
-    return stage.key === "review" || stage.key === "attention";
-  }).length;
 
   useEffect(() => {
     setTab(routeTab);
@@ -231,7 +254,6 @@ export function CreativeStudioPage() {
           <h1 className="text-sm font-medium">创意工厂</h1>
           <span className="hidden text-xs text-muted-foreground md:inline">选素材、验收成图、维护市场规则</span>
         </div>
-        <Badge variant={attentionCount > 0 ? "default" : "outline"}>{attentionCount > 0 ? `${attentionCount} 个待验收` : "暂无待验收"}</Badge>
       </PageHeader>
 
       <Tabs value={tab} onValueChange={changeTab} className="flex min-h-0 min-w-0 flex-1 flex-col">
@@ -288,34 +310,27 @@ function CreativeDiscoveryWorkspace({ filter, runId, onFilterChange, onRunChange
 
 function CreativeOrdersWorkspace({ selectedOrderId, onSelectOrder, onBack, backLabel }: { selectedOrderId: string; onSelectOrder: (orderId: string) => void; onBack: () => void; backLabel: string }) {
   const wsId = useWorkspaceId();
-  const navigation = useNavigation();
-  const workspacePaths = useWorkspacePaths();
   const orders = useQuery(creativeOrdersOptions(wsId));
   const materials = useQuery(creativeMaterialLibraryOptions(wsId));
   const creativeOrders = orders.data?.orders ?? [];
   if (selectedOrderId) return <CreativeOrderDetail orderId={selectedOrderId} onBack={onBack} onBrowseOrders={() => onSelectOrder("")} backLabel={backLabel} />;
-  const stages = creativeOrders.map((order) => creativeOrderStage(order));
-  const pendingCount = stages.filter((stage) => stage.key === "review" || stage.key === "attention").length;
   const candidatesById = new Map((materials.data?.candidates ?? []).map((candidate) => [candidate.id, candidate]));
   return <div className="mx-auto w-full min-w-0 max-w-[1440px] space-y-4">
-    <div className="flex flex-wrap items-end justify-between gap-3 border-b pb-3"><div><h2 className="text-base font-semibold">创意订单</h2><p className="mt-1 text-sm text-muted-foreground">从生成到验收、采用和下载都在订单内完成</p></div><div className="flex gap-2"><Badge variant="outline">{creativeOrders.length} 个订单</Badge>{pendingCount > 0 && <Badge>{pendingCount} 个待验收</Badge>}</div></div>
+    <div className="flex flex-wrap items-end justify-between gap-3 border-b pb-3"><div><h2 className="text-base font-semibold">创意订单</h2><p className="mt-1 text-sm text-muted-foreground">从生成到验收、采用和下载都在订单内完成</p></div><Badge variant="outline">{creativeOrders.length} 个订单</Badge></div>
     <div className="divide-y border-y">{creativeOrders.map((creativeOrder) => {
       const stage = creativeOrderStage(creativeOrder);
-      const listState = creativeOrderListState(creativeOrder, stage);
+      const listState = creativeOrderListState(stage);
+      const summary = creativeOrderListSummary(creativeOrder);
       const sources = creativeOrderSourceSummaries(creativeOrder, candidatesById);
       return <div key={creativeOrder.id} className="grid min-h-24 gap-3 bg-background px-4 py-3 transition-colors hover:bg-muted/20 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-center">
         <button type="button" className="grid min-w-0 grid-cols-[auto_minmax(0,1fr)] items-center gap-3 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" onClick={() => onSelectOrder(creativeOrder.id)}>
           <CreativeOrderSourceThumbs sources={sources} />
           <span className="min-w-0">
             <span className="block truncate text-sm font-semibold">{creativeOrderSourceTitle(sources, creativeOrder)}</span>
-            <span className="mt-1 block truncate text-xs text-muted-foreground">订单 {creativeOrder.id.slice(0, 8)} · {listState.detail} · 更新于 {formatCreativeDateTime(creativeOrder.updated_at)}（{creativeTimeZoneLabel()}）</span>
-            <span className="mt-1 flex flex-wrap gap-1.5">
-              <Badge variant="outline">{creativeOrder.items.length} 张来源素材</Badge>
-              {listState.reminderCount > 0 && <Badge variant="secondary">{listState.reminderCount} 条系统提醒</Badge>}
-            </span>
+            <span className="mt-1 block truncate text-xs text-muted-foreground">{summary} · 更新于 {formatCreativeDateTime(creativeOrder.updated_at)}（{creativeTimeZoneLabel()}）</span>
           </span>
         </button>
-        <div className="flex flex-wrap items-center gap-2 lg:justify-end"><Badge variant={listState.badgeVariant}>{listState.label}</Badge>{creativeOrder.issue_id && <Button size="sm" variant="ghost" onClick={() => navigation.push(workspacePaths.issueDetail(creativeOrder.issue_id))}>协作记录</Button>}<Button size="sm" onClick={() => onSelectOrder(creativeOrder.id)}>进入订单<ArrowRight className="h-4 w-4" /></Button></div>
+        <div className="flex flex-wrap items-center gap-2 lg:justify-end"><Badge variant={listState.badgeVariant}>{listState.label}</Badge><Button size="sm" onClick={() => onSelectOrder(creativeOrder.id)}>{listState.action}<ArrowRight className="h-4 w-4" /></Button></div>
       </div>;
     })}</div>
     {!orders.isLoading && creativeOrders.length === 0 && <div className="flex min-h-64 items-center justify-center border border-dashed text-sm text-muted-foreground">暂无创意订单。请先在素材库选择素材并开始生成。</div>}
@@ -324,19 +339,22 @@ function CreativeOrdersWorkspace({ selectedOrderId, onSelectOrder, onBack, backL
 
 type CreativeOrderListState = {
   label: "生成中" | "待验收" | "已采用" | "已结束";
-  detail: string;
+  action: "查看进度" | "去验收" | "查看交付" | "查看记录";
   badgeVariant: "default" | "secondary" | "outline";
-  reminderCount: number;
 };
 
-function creativeOrderListState(order: CreativeOrder, stage: CreativeOrderStage): CreativeOrderListState {
-  const reminderCount = creativeOrderActionableWorkflowFailures(order).length;
-  if (stage.key === "cancelled") return { label: "已结束", detail: "订单已结束，结果与记录仍保留", badgeVariant: "outline", reminderCount };
-  if (stage.key === "delivered") return { label: "已采用", detail: stage.totalItems > 0 ? `${stage.adoptedItems}/${stage.totalItems} 张素材已采用` : "已采用最终方案", badgeVariant: "default", reminderCount };
-  if (stage.key === "generating" || stage.key === "preparing") return { label: "生成中", detail: stage.detail, badgeVariant: "outline", reminderCount };
-  const base = stage.readyVariants > 0 ? `${stage.readyVariants} 套候选待验收` : "等待人工验收";
-  const detail = reminderCount > 0 ? `${base}，${reminderCount} 条系统提醒` : base;
-  return { label: "待验收", detail, badgeVariant: "default", reminderCount };
+function creativeOrderListState(stage: CreativeOrderStage): CreativeOrderListState {
+  if (stage.key === "cancelled") return { label: "已结束", action: "查看记录", badgeVariant: "outline" };
+  if (stage.key === "delivered") return { label: "已采用", action: "查看交付", badgeVariant: "default" };
+  if (stage.key === "generating" || stage.key === "preparing") return { label: "生成中", action: "查看进度", badgeVariant: "outline" };
+  return { label: "待验收", action: "去验收", badgeVariant: "default" };
+}
+
+function creativeOrderListSummary(order: CreativeOrder): string {
+  const variants = order.items.flatMap((item) => item.variants);
+  const generated = variants.reduce((count, variant) => count + variant.assets.filter((asset) => asset.revision === variant.revision && asset.stage === "generated" && asset.status === "completed" && Boolean(asset.attachment_id)).length, 0);
+  const expected = variants.length * CREATIVE_DELIVERY_SIZES.length;
+  return `已选 ${order.items.length} 张素材 · 已生成 ${generated}/${expected} 张成图`;
 }
 
 type CreativeOrderSourceSummary = {
@@ -405,8 +423,6 @@ function CreativeOrderDetail({ orderId, onBack, onBrowseOrders, backLabel }: { o
   const [adjustment, setAdjustment] = useState("");
   const [adjustBusy, setAdjustBusy] = useState(false);
   const [cancelOpen, setCancelOpen] = useState(false);
-  const failureRef = useRef<HTMLDivElement>(null);
-  const reviewRef = useRef<HTMLDivElement>(null);
   const comparisonRef = useRef<HTMLDivElement>(null);
   const confirmedContentRef = useRef<HTMLDivElement>(null);
   const adoptedVariantIds = new Set(data?.items.flatMap((item) => {
@@ -425,6 +441,9 @@ function CreativeOrderDetail({ orderId, onBack, onBrowseOrders, backLabel }: { o
   const generationInfoVariant = generationInfoAsset ? variantById.get(generationInfoAsset.variant_id) : undefined;
   const latestAdjustment = latestOrderAdjustmentFeedback(feedback.data?.events ?? [], orderId);
   const adjustedVariant = creativeAdjustmentTarget(data?.items ?? [], latestAdjustment)?.variant;
+  const adjustmentVariantId = typeof latestAdjustment?.context_snapshot.variant_id === "string" ? latestAdjustment.context_snapshot.variant_id : "";
+  const adjustmentSizeKey = typeof latestAdjustment?.context_snapshot.size_key === "string" ? latestAdjustment.context_snapshot.size_key : "";
+  const adjustmentState = latestAdjustment ? creativeAdjustmentProgress(adjustedVariant, latestAdjustment).replace(/ · r\d+$/, "") : "";
   const isDirectEdit = data?.trigger_evidence_kind === "creative_direct_edit";
   const adoptionStatus = creativeOrderAdoptionStatus(data);
   const stage = creativeOrderStage(data);
@@ -450,36 +469,64 @@ function CreativeOrderDetail({ orderId, onBack, onBrowseOrders, backLabel }: { o
       await api.createCreativeFeedback({ issue_id: data?.issue_id ?? "", subject_type: "asset", subject_id: asset.id, event_type: "viewed", decision: "", context_snapshot: { action: "download", order_id: orderId, variant_id: asset.variant_id, size_key: asset.size_key, revision: asset.revision } });
     } catch (error) { toast.error(error instanceof Error ? error.message : "无法记录下载行为"); }
   };
+  const createOrderAdjustmentIssue = async (asset: CreativeOrderAsset, request: string) => {
+    if (!data?.issue_id) throw new Error("该订单缺少协作记录，无法创建精准调整");
+    const target = variantById.get(asset.variant_id);
+    if (!target) throw new Error("当前成图缺少变体上下文");
+    const squadId = creativeOrderSquadId(data);
+    if (!squadId) throw new Error("该订单缺少素材小队，无法创建精准调整");
+    const sizeKey = creativeOrderAdjustmentSize(asset);
+    if (!sizeKey) throw new Error("当前成图尺寸不支持精准调整");
+    const issueInput = {
+      orderId,
+      itemId: target.item.id,
+      variantId: asset.variant_id,
+      variantKey: target.variant.variant_key,
+      assetId: asset.id,
+      attachmentId: asset.attachment_id,
+      sizeKey,
+      sourceRevision: asset.revision,
+      request,
+    };
+    const issue = await api.createIssue({
+      title: creativeOrderAdjustmentIssueTitle(issueInput),
+      description: creativeOrderAdjustmentIssueDescription(issueInput),
+      parent_issue_id: data.issue_id,
+      assignee_type: "squad",
+      assignee_id: squadId,
+      // The order endpoint owns production routing. Keeping the record in the
+      // backlog prevents the generic issue path from inventing a direct-edit task.
+      status: "backlog",
+      metadata: creativeOrderAdjustmentIssueMetadata(issueInput),
+    });
+    if (!issue.id) throw new Error("调整协作记录创建失败，请重试");
+    return { issue, sizeKey };
+  };
   const annotation = async (asset: CreativeOrderAsset, drafts: CreativeAnnotationDraft[]) => {
-    if (!data?.issue_id || !activeVariant || drafts.length === 0 || drafts.some((draft) => !draft.comment.trim())) return false;
-    const summary = drafts.map((draft, index) => `标注 ${index + 1}（${draft.scope === "size" ? "当前尺寸" : draft.scope === "variant" ? "当前变体三个尺寸" : "整个订单"}）：${draft.comment.trim()}`).join("\n");
+    if (!data?.issue_id || drafts.length === 0 || drafts.some((draft) => !draft.comment.trim())) return false;
+    const summary = creativeAnnotationAdjustmentSummary(drafts);
     const first = drafts[0]!;
     try {
-      await api.createCreativeFeedback({ issue_id: data.issue_id, subject_type: "asset", subject_id: asset.id, event_type: "annotation", decision: "needs_revision", reason_codes: [...new Set(drafts.map((draft) => assetFeedbackReason(draft.issueType)))], comment: summary, annotation: { id: crypto.randomUUID(), asset_id: asset.id, kind: first.kind, issue_type: first.issueType, x: first.x, y: first.y, width: first.width, height: first.height, scope: first.scope, comment: first.comment }, context_snapshot: { order_id: orderId, variant_id: asset.variant_id, size_key: asset.size_key, revision: asset.revision, annotations: drafts } });
-      await api.createComment(data.issue_id, creativeAdjustmentComment({ request: summary, orderId, itemId: activeVariant.item.id, variantId: asset.variant_id, variantKey: activeVariant.variant.variant_key, assetId: asset.id, attachmentId: asset.attachment_id, sizeKey: asset.size_key, revision: asset.revision }));
+      const adjustment = await createOrderAdjustmentIssue(asset, summary);
+      await api.queueCreativeOrderAdjustment(orderId, { adjustment_issue_id: adjustment.issue.id, asset_id: asset.id, size_key: adjustment.sizeKey, source_revision: asset.revision, comment: summary, event_type: "annotation", reason_codes: [...new Set(drafts.map((draft) => assetFeedbackReason(draft.issueType)))], annotation: { id: crypto.randomUUID(), asset_id: asset.id, kind: first.kind, issue_type: first.issueType, x: first.x, y: first.y, width: first.width, height: first.height, scope: "size", comment: first.comment }, context_snapshot: { annotations: drafts.map((draft) => ({ ...draft, scope: "size" })) } });
       await queryClient.invalidateQueries({ queryKey: creativeKeys.feedback(wsId, "asset", "") });
-      toast.success("标注与调整请求已提交");
+      await queryClient.invalidateQueries({ queryKey: creativeKeys.order(wsId, orderId) });
+      await queryClient.invalidateQueries({ queryKey: creativeKeys.orders(wsId) });
+      toast.success("精准调整请求已创建");
       return true;
     } catch (error) { toast.error(error instanceof Error ? error.message : "无法提交标注调整"); return false; }
   };
   const submitAdjustment = async () => {
-    if (!active || !activeVariant || !data?.issue_id || !adjustment.trim()) return;
+    if (!active || !data?.issue_id || !adjustment.trim()) return;
     setAdjustBusy(true);
     try {
-      await api.createCreativeFeedback({ issue_id: data.issue_id, subject_type: "asset", subject_id: active.id, event_type: "decision", decision: "needs_revision", reason_codes: ["other"], comment: adjustment.trim(), context_snapshot: { order_id: orderId, variant_id: active.variant_id, size_key: active.size_key, revision: active.revision } });
-      await api.createComment(data.issue_id, creativeAdjustmentComment({
-        request: adjustment,
-        orderId,
-        itemId: activeVariant.item.id,
-        variantId: active.variant_id,
-        variantKey: activeVariant.variant.variant_key,
-        assetId: active.id,
-        attachmentId: active.attachment_id,
-        sizeKey: active.size_key,
-        revision: active.revision,
-      }));
+      const request = adjustment.trim();
+      const created = await createOrderAdjustmentIssue(active, request);
+      await api.queueCreativeOrderAdjustment(orderId, { adjustment_issue_id: created.issue.id, asset_id: active.id, size_key: created.sizeKey, source_revision: active.revision, comment: request, event_type: "decision", reason_codes: ["other"] });
       await queryClient.invalidateQueries({ queryKey: creativeKeys.feedback(wsId, "asset", "") });
-      setAdjustment(""); setAdjustOpen(false); toast.success("调整请求已提交");
+      await queryClient.invalidateQueries({ queryKey: creativeKeys.order(wsId, orderId) });
+      await queryClient.invalidateQueries({ queryKey: creativeKeys.orders(wsId) });
+      setAdjustment(""); setAdjustOpen(false); toast.success("精准调整请求已创建");
     } catch (error) { toast.error(error instanceof Error ? error.message : "无法提交调整请求"); }
     finally { setAdjustBusy(false); }
   };
@@ -489,17 +536,9 @@ function CreativeOrderDetail({ orderId, onBack, onBrowseOrders, backLabel }: { o
       <div><div className="flex items-center gap-1"><Button size="sm" variant="ghost" onClick={onBack}><ArrowLeft className="h-4 w-4" />{backLabel}</Button>{backLabel === "返回 issue" && <Button size="sm" variant="ghost" onClick={onBrowseOrders}>全部订单</Button>}</div><h2 className="mt-2 text-base font-semibold">订单 {orderId.slice(0, 8)}</h2><p className="mt-1 text-xs text-muted-foreground">{stage.detail} · 更新于 {formatCreativeDateTime(data?.updated_at || "")}（{creativeTimeZoneLabel()}）</p></div>
       <div className="flex items-center gap-2"><Badge variant={stage.key === "review" || stage.key === "attention" || stage.key === "delivered" ? "default" : "outline"}>{stage.label}</Badge>{!isDirectEdit && <Badge variant={adoptionStatus === "已采用" ? "default" : "secondary"}>{adoptionStatus}</Badge>}{data && !["delivered", "cancelled"].includes(stage.key) && <Button size="sm" variant="outline" onClick={() => setCancelOpen(true)}><CircleStop className="h-4 w-4" />结束订单</Button>}</div>
     </div>
-    {data && <CreativeOrderStatusPanel
-      order={data}
-      stage={stage}
-      onShowReview={() => reviewRef.current?.scrollIntoView({ behavior: "smooth", block: "start" })}
-      onShowFailures={() => failureRef.current?.scrollIntoView({ behavior: "smooth", block: "start" })}
-    />}
+    {data && <CreativeOrderStatusPanel order={data} stage={stage} />}
     <CreativeOrderJourney stageKey={stage.key} />
-    <div ref={failureRef} className="scroll-mt-4">
-      {data && <CreativeOrderFailureNotice failures={actionableFailures} compact={reviewAssets.length > 0} closed={isCancelled} />}
-    </div>
-    <div ref={reviewRef} className="scroll-mt-4 space-y-4">
+    <div className="space-y-4">
       {!isDirectEdit && data?.items.map((item, index) => {
         const itemSource = library.data?.candidates.find((candidate) => candidate.id === item.candidate_id);
         return <CreativeOrderDeliveryCandidates
@@ -512,6 +551,7 @@ function CreativeOrderDetail({ orderId, onBack, onBrowseOrders, backLabel }: { o
           disabled={isCancelled}
           defaultOpen={index === 0}
           showDirectionDetails={false}
+          adjustment={adjustmentVariantId && adjustmentSizeKey ? { variantId: adjustmentVariantId, sizeKey: adjustmentSizeKey, status: adjustmentState } : undefined}
           onAdopt={(variantId, risk) => {
             const selectedAsset = reviewAssets.find((asset) => asset.variant_id === variantId && asset.size_key === "1080x1080")
               ?? reviewAssets.find((asset) => asset.variant_id === variantId);
@@ -528,7 +568,29 @@ function CreativeOrderDetail({ orderId, onBack, onBrowseOrders, backLabel }: { o
         />;
       })}
     </div>
-    {latestAdjustment && data && <CreativeAdjustmentStatus event={latestAdjustment} variant={adjustedVariant} issueId={data.issue_id} />}
+    {latestAdjustment && data && <CreativeAdjustmentStatus event={latestAdjustment} variant={adjustedVariant} issueId={data.issue_id} retrying={adjustBusy} onRetry={async () => {
+      const asset = assets.find((candidate) => candidate.id === latestAdjustment.subject_id);
+      const adjustmentIssueId = typeof latestAdjustment.context_snapshot.adjustment_issue_id === "string" ? latestAdjustment.context_snapshot.adjustment_issue_id : "";
+      const sizeKey = typeof latestAdjustment.context_snapshot.size_key === "string" ? latestAdjustment.context_snapshot.size_key : "";
+      const sourceRevision = typeof latestAdjustment.context_snapshot.revision === "number" ? latestAdjustment.context_snapshot.revision : 0;
+      const targetSize = creativeOrderAdjustmentSize({ size_key: sizeKey });
+      if (!asset || !adjustmentIssueId || !targetSize || sourceRevision < 1) {
+        toast.error("当前调整记录缺少可重启的目标信息");
+        return;
+      }
+      setAdjustBusy(true);
+      try {
+        await api.queueCreativeOrderAdjustment(orderId, { adjustment_issue_id: adjustmentIssueId, asset_id: asset.id, size_key: targetSize, source_revision: sourceRevision, comment: latestAdjustment.comment, event_type: latestAdjustment.event_type === "annotation" ? "annotation" : "decision", reason_codes: latestAdjustment.reason_codes, annotation: latestAdjustment.annotation, context_snapshot: latestAdjustment.context_snapshot });
+        await queryClient.invalidateQueries({ queryKey: creativeKeys.feedback(wsId, "asset", "") });
+        await queryClient.invalidateQueries({ queryKey: creativeKeys.order(wsId, orderId) });
+        await queryClient.invalidateQueries({ queryKey: creativeKeys.orders(wsId) });
+        toast.success("已重新启动当前尺寸调整");
+      } catch (error) {
+        toast.error(error instanceof Error ? error.message : "无法重新启动调整");
+      } finally {
+        setAdjustBusy(false);
+      }
+    }} />}
     {active && attachmentURL(active) && <div ref={comparisonRef} className={cn("h-[min(78vh,860px)] min-h-[620px] scroll-mt-4 overflow-hidden border", isDirectEdit && "grid grid-rows-[auto_minmax(0,1fr)]")}>
       {isDirectEdit && <div className="flex items-center gap-2 border-b px-4 py-3"><span className="text-sm font-semibold">交付包</span><Badge variant="outline">直接改图</Badge></div>}
       <CreativeComparisonWorkspace
@@ -540,6 +602,7 @@ function CreativeOrderDetail({ orderId, onBack, onBrowseOrders, backLabel }: { o
         onViewInfo={() => setGenerationInfoAssetId(active.id)}
         onDecision={(decision) => void event(active, decision)}
         onAnnotations={isCancelled ? undefined : (drafts) => annotation(active, drafts)}
+        annotationScopes={["size"]}
         showDecisionActions={false}
       />
     </div>}
@@ -555,7 +618,7 @@ function CreativeOrderDetail({ orderId, onBack, onBrowseOrders, backLabel }: { o
       imageUrl={attachmentURL(generationInfoAsset)}
     />
     {data && !order.isLoading && reviewAssets.length === 0 && <div className="flex min-h-72 items-center justify-center border border-dashed px-6 text-center text-sm text-muted-foreground">{creativeOrderWaitingMessage(actionableFailures, isCancelled)}</div>}
-    <Dialog open={adjustOpen} onOpenChange={setAdjustOpen}><DialogContent className="max-w-xl"><DialogHeader><DialogTitle>调整当前成图</DialogTitle><DialogDescription>{activeVariant?.variant.variant_key || "当前变体"} · {active?.size_key}。修改会保留在订单记录中，并按所选范围重新处理。</DialogDescription></DialogHeader><Textarea rows={5} value={adjustment} onChange={(event) => setAdjustment(event.target.value)} placeholder="说明需要改什么、必须保留什么，以及只影响当前尺寸还是整个变体..." /><DialogFooter><Button variant="outline" onClick={() => setAdjustOpen(false)}>取消</Button><Button disabled={adjustBusy || !adjustment.trim()} onClick={() => void submitAdjustment()}>{adjustBusy ? "正在提交" : "提交调整"}</Button></DialogFooter></DialogContent></Dialog>
+    <Dialog open={adjustOpen} onOpenChange={setAdjustOpen}><DialogContent className="max-w-xl"><DialogHeader><DialogTitle>精准调整当前成图</DialogTitle><DialogDescription>{activeVariant?.variant.variant_key || "当前变体"} · {active?.size_key}。本次只处理当前尺寸，协作记录会单独保存。</DialogDescription></DialogHeader><Textarea rows={5} value={adjustment} onChange={(event) => setAdjustment(event.target.value)} placeholder="说明当前成图需要改什么，以及必须保留的视觉风格、文案和布局..." /><DialogFooter><Button variant="outline" onClick={() => setAdjustOpen(false)}>取消</Button><Button disabled={adjustBusy || !adjustment.trim()} onClick={() => void submitAdjustment()}>{adjustBusy ? "正在提交" : "提交精准调整"}</Button></DialogFooter></DialogContent></Dialog>
     <AlertDialog open={cancelOpen} onOpenChange={(open) => { if (!cancelOrder.isPending) setCancelOpen(open); }}>
       <AlertDialogContent>
         <AlertDialogHeader><AlertDialogTitle>结束这个创意订单？</AlertDialogTitle><AlertDialogDescription>仍在运行的生成任务会停止。已有成图、失败原因和协作记录会保留，但订单不再占用工作台待验收列表，也不能继续采用或调整。</AlertDialogDescription></AlertDialogHeader>
@@ -565,15 +628,19 @@ function CreativeOrderDetail({ orderId, onBack, onBrowseOrders, backLabel }: { o
   </div>;
 }
 
-function CreativeAdjustmentStatus({ event, variant, issueId }: { event: CreateCreativeFeedbackResponse; variant?: CreativeOrderVariant; issueId: string }) {
+function CreativeAdjustmentStatus({ event, variant, issueId, onRetry, retrying = false }: { event: CreateCreativeFeedbackResponse; variant?: CreativeOrderVariant; issueId: string; onRetry: () => Promise<void>; retrying?: boolean }) {
   const navigation = useNavigation();
   const paths = useWorkspacePaths();
   const variantKey = variant?.variant_key || String(event.context_snapshot.variant_id || "").slice(0, 8);
   const sizeKey = typeof event.context_snapshot.size_key === "string" ? event.context_snapshot.size_key : "";
+  const adjustmentIssueId = typeof event.context_snapshot.adjustment_issue_id === "string" ? event.context_snapshot.adjustment_issue_id : "";
+  const collaborationIssueId = adjustmentIssueId || issueId;
+  const canRetry = creativeAdjustmentCanRetry(variant, event);
   return <section className="flex flex-wrap items-center gap-3 border-y bg-amber-50/60 px-4 py-3 dark:bg-amber-950/10" role="status" data-testid="creative-adjustment-status">
     <RefreshCw className={cn("h-4 w-4 text-amber-700", variant && !["completed", "action_required", "failed"].includes(variant.status) && "animate-spin")} />
     <div className="min-w-0 flex-1"><p className="text-sm font-medium">{creativeAdjustmentProgress(variant, event)}</p><p className="mt-0.5 truncate text-xs text-muted-foreground">{variantKey}{sizeKey ? ` · ${sizeKey}` : ""} · {event.comment || "已记录调整要求"}</p></div>
-    <Button size="sm" variant="outline" onClick={() => navigation.push(paths.issueDetail(issueId))}>查看协作记录</Button>
+    {canRetry && <Button size="sm" disabled={retrying} onClick={() => void onRetry()}>{retrying ? "正在启动" : "重新启动调整"}</Button>}
+    <Button size="sm" variant="outline" disabled={!collaborationIssueId} onClick={() => navigation.push(paths.issueDetail(collaborationIssueId))}>查看协作记录</Button>
   </section>;
 }
 
@@ -597,19 +664,13 @@ function CreativeOrderJourney({ stageKey }: { stageKey: ReturnType<typeof creati
 function CreativeOrderStatusPanel({
   order,
   stage,
-  onShowReview,
-  onShowFailures,
 }: {
   order: CreativeOrder;
   stage: CreativeOrderStage;
-  onShowReview: () => void;
-  onShowFailures: () => void;
 }) {
   const stats = creativeOrderRuntimeStats(order);
   const actionableFailures = creativeOrderActionableWorkflowFailures(order);
   const hasFailures = actionableFailures.length > 0;
-  const canReview = stage.readyVariants > stage.adoptedItems;
-  const hasActions = canReview || hasFailures;
   const title = creativeOrderStatusTitle(stage, stats, hasFailures);
   const detail = creativeOrderStatusDetail(stage, stats, hasFailures);
 
@@ -629,10 +690,6 @@ function CreativeOrderStatusPanel({
         <OrderStat label="提醒" value={`${stats.blockedVariants + actionableFailures.length}`} />
       </div>
     </div>
-    {hasActions && <div className="flex flex-wrap items-center gap-2 border-t px-4 py-3">
-      {canReview && <Button size="sm" onClick={onShowReview}><CheckCircle2 className="h-4 w-4" />验收可用方案</Button>}
-      {hasFailures && <Button size="sm" variant={canReview ? "outline" : "default"} onClick={onShowFailures}><AlertTriangle className="h-4 w-4" />查看提醒</Button>}
-    </div>}
   </section>;
 }
 
@@ -765,7 +822,7 @@ function CreativeOrderConfirmedContent({ order, candidateLabels }: { order: Crea
             </div>
           </div>}
           {item.prompt && <details className="border-t px-3 py-2.5 text-xs text-muted-foreground">
-            <summary className="w-fit cursor-pointer select-none">生成指令详情</summary>
+            <summary className="w-fit cursor-pointer select-none">生成方向详情</summary>
             <pre className="mt-2 max-h-56 overflow-auto whitespace-pre-wrap break-words border bg-muted/20 p-3 font-sans text-xs leading-5">{item.prompt}</pre>
           </details>}
         </details>
@@ -793,6 +850,7 @@ function ConfirmedSourceBadge({ entry }: { entry: ConfirmedReplacement }) {
 function confirmedOrderItem(item: CreativeOrderItem, index: number, label?: string): ConfirmedOrderItem {
   const snapshot = recordValue(item.copy_snapshot);
   const preAdaptation = recordValue(snapshot.pre_adaptation);
+  const visualDirection = recordValue(snapshot.visual_direction);
   const replacements = arrayValue(preAdaptation.text_replacements).map(confirmedReplacement).filter((entry): entry is ConfirmedReplacement => entry !== null);
   const numericLayouts = arrayValue(preAdaptation.numeric_layouts).map(confirmedNumericLayout).filter((entry): entry is ConfirmedNumericLayout => entry !== null);
   const repaymentPlans = confirmedRepaymentPlans(preAdaptation.repayment_plan_selections);
@@ -803,7 +861,12 @@ function confirmedOrderItem(item: CreativeOrderItem, index: number, label?: stri
     numericLayouts,
     repaymentPlans,
     summary: confirmedOrderSummary(replacements.length > 0 ? replacements : fallbackSnapshotReplacements(snapshot), numericLayouts, repaymentPlans),
-    prompt: trimmedStringValue(preAdaptation.production_prompt) || item.direction.trim(),
+    prompt: [
+      trimmedStringValue(visualDirection.theme) ? `主题：${trimmedStringValue(visualDirection.theme)}` : "",
+      stringArrayValue(visualDirection.style_tags).length > 0 ? `风格：${stringArrayValue(visualDirection.style_tags).join("、")}` : "",
+      stringArrayValue(visualDirection.must_preserve).length > 0 ? `保留：${stringArrayValue(visualDirection.must_preserve).join("、")}` : "",
+      stringArrayValue(visualDirection.avoid).length > 0 ? `避免：${stringArrayValue(visualDirection.avoid).join("、")}` : "",
+    ].filter(Boolean).join("\n") || item.direction.trim(),
   };
 }
 
@@ -936,50 +999,70 @@ function arrayValue(value: unknown): unknown[] {
   return Array.isArray(value) ? value : [];
 }
 
+function stringArrayValue(value: unknown): string[] {
+  return arrayValue(value).filter((entry): entry is string => typeof entry === "string" && Boolean(entry.trim())).map((entry) => entry.trim());
+}
+
 function trimmedStringValue(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
 }
 
-export function creativeAdjustmentComment(input: {
-  request: string;
+type CreativeOrderAdjustmentIssueInput = {
   orderId: string;
   itemId: string;
   variantId: string;
   variantKey: string;
   assetId: string;
-  attachmentId?: string;
-  sizeKey: string;
-  revision: number;
-}): string {
-  const sizeLabel = input.sizeKey === "1080x1080" ? "方形" : input.sizeKey === "1200x628" ? "横版" : input.sizeKey === "800x1000" ? "竖版" : input.sizeKey;
-  const target = `订单 \`${input.orderId.slice(0, 8)}\` · \`${input.variantKey}\` · ${sizeLabel} \`${input.sizeKey}\` · \`r${input.revision}\` · 成图 \`${input.assetId.slice(0, 8)}\``;
-  const imageURL = input.attachmentId ? attachmentDownloadPath(input.attachmentId) : "";
-  const preview = imageURL ? `\n\n[![目标成图：${input.variantKey} ${sizeLabel} r${input.revision}](${imageURL})](${imageURL})` : "";
-  return `用户提出成图调整：\n\n**目标成图：** ${target}${preview}\n\n${input.request.trim()}\n\n<!-- creative-workflow-context\ncreative_order_id: ${input.orderId}\ncreative_order_item_id: ${input.itemId}\nvariant_id: ${input.variantId}\nvariant_key: ${input.variantKey}\nasset_id: ${input.assetId}\nsize_key: ${input.sizeKey}\nrevision: ${input.revision}\ninstruction: Process only the requested scope and preserve other approved assets.\n-->`;
+  attachmentId: string;
+  sizeKey: CreativeDeliverySize;
+  sourceRevision: number;
+  request: string;
+};
+
+export function creativeOrderSquadId(order: Pick<CreativeOrder, "input_snapshot">): string {
+  const squadSnapshot = recordValue(recordValue(order.input_snapshot).squad_snapshot);
+  return trimmedStringValue(squadSnapshot.squad_id);
 }
 
-export function CreativeOrderFailureNotice({ failures, compact = false, closed = false }: {
-  failures: CreativeOrderWorkflowFailure[];
-  compact?: boolean;
-  closed?: boolean;
-}) {
-  if (failures.length === 0) return null;
-  const failuresList = <div className="divide-y divide-amber-200/70 dark:divide-amber-900/60">{failures.map((failure) => {
-      const message = workflowFailureMessage(failure);
-      const technicalDetails = workflowFailureTechnicalDetails(failure, message);
-      return <div key={failure.task_id || `${failure.workflow}:${failure.subject_id}:${failure.failed_at}`} className="px-4 py-3">
-        <div className="min-w-0"><div className="flex flex-wrap items-center gap-2"><span className="text-sm font-medium">过程步骤：{creativeWorkflowLabel(failure.workflow)}</span>{failure.item_key && <Badge variant="outline" title={failure.item_key}>对象 {failure.item_key.slice(0, 8)}</Badge>}</div><p className="mt-1 break-words text-sm text-amber-900 dark:text-amber-200">{message}</p><p className="mt-1 break-words text-xs text-muted-foreground">范围：{failure.scope || "未提供"}{failure.failure_reason && failure.error !== failure.failure_reason ? ` · 分类：${failure.failure_reason}` : ""}</p>{technicalDetails && <details className="mt-2 text-xs text-muted-foreground"><summary className="w-fit cursor-pointer select-none">技术详情</summary><pre className="mt-2 max-h-40 overflow-auto whitespace-pre-wrap border bg-background p-3 font-mono text-[11px] leading-5">{technicalDetails}</pre></details>}</div>
-        <p className="mt-3 text-xs text-muted-foreground">{closed ? "订单已结束，过程记录保留。" : "后台已记录该步骤未补齐；不用手动重试，请查看其他候选、标注调整或结束订单后重新发起。"}</p>
-      </div>;
-    })}</div>;
-  if (compact) return <details className="border border-amber-300 bg-amber-50/50 dark:border-amber-900 dark:bg-amber-950/20" role="status">
-    <summary className="flex cursor-pointer list-none items-center gap-2 px-4 py-3 text-sm marker:content-none"><AlertTriangle className="h-4 w-4 shrink-0 text-amber-700 dark:text-amber-300" /><span className="font-medium">{failures.length} 条系统提醒</span><span className="text-xs text-muted-foreground">可用成图不受影响</span></summary>
-    <div className="border-t border-amber-200 dark:border-amber-900">{failuresList}</div>
-  </details>;
-  return <section className="border border-amber-300 bg-amber-50/50 dark:border-amber-900 dark:bg-amber-950/20" role="status" aria-label="创意过程提醒">
-    <div className="flex gap-3 border-b border-amber-200 px-4 py-3 dark:border-amber-900"><AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-700 dark:text-amber-300" /><div><h3 className="text-sm font-semibold">系统提醒</h3><p className="mt-1 text-xs text-muted-foreground">后台未补齐的步骤只作为过程记录，是否采用以你的验收为准。</p></div></div>
-    {failuresList}
-  </section>;
+export function creativeOrderAdjustmentSize(asset: Pick<CreativeOrderAsset, "size_key">): CreativeDeliverySize | "" {
+  return CREATIVE_DELIVERY_SIZES.includes(asset.size_key as CreativeDeliverySize) ? asset.size_key as CreativeDeliverySize : "";
+}
+
+export function creativeAnnotationAdjustmentSummary(drafts: CreativeAnnotationDraft[]): string {
+  return drafts.map((draft, index) => `标注 ${index + 1}（当前尺寸）：${draft.comment.trim()}`).join("\n");
+}
+
+export function creativeOrderAdjustmentIssueTitle(input: Pick<CreativeOrderAdjustmentIssueInput, "variantKey" | "sizeKey" | "sourceRevision">): string {
+  return `${input.variantKey || "当前方案"} / ${creativeOrderSizeLabel(input.sizeKey)} 精准调整 · R${input.sourceRevision + 1}`;
+}
+
+export function creativeOrderAdjustmentIssueMetadata(input: CreativeOrderAdjustmentIssueInput): IssueMetadata {
+  return {
+    workflow: "creative_adjustment",
+    creative_adjustment_source: "creative_order",
+    creative_order_id: input.orderId,
+    creative_order_item_id: input.itemId,
+    creative_variant_id: input.variantId,
+    creative_variant_key: input.variantKey,
+    creative_asset_id: input.assetId,
+    creative_attachment_id: input.attachmentId,
+    creative_scope: "size",
+    creative_size: input.sizeKey,
+    creative_source_revision: input.sourceRevision,
+    creative_revision: input.sourceRevision + 1,
+  };
+}
+
+export function creativeOrderAdjustmentIssueDescription(input: CreativeOrderAdjustmentIssueInput): string {
+  const sizeLabel = creativeOrderSizeLabel(input.sizeKey);
+  const target = `订单 \`${input.orderId.slice(0, 8)}\` · \`${input.variantKey || "当前方案"}\` · ${sizeLabel} \`${input.sizeKey}\` · \`r${input.sourceRevision}\` · 成图 \`${input.assetId.slice(0, 8)}\``;
+  const imageURL = input.attachmentId ? attachmentDownloadPath(input.attachmentId) : "";
+  const preview = imageURL ? `\n\n[![目标成图：${input.variantKey} ${sizeLabel} r${input.sourceRevision}](${imageURL})](${imageURL})` : "";
+  return `订单画布提交精准调整。\n\n**目标成图：** ${target}${preview}\n\n${input.request.trim()}\n\n<!-- creative-workflow-context\ncreative_order_id: ${input.orderId}\ncreative_order_item_id: ${input.itemId}\nvariant_id: ${input.variantId}\nvariant_key: ${input.variantKey}\nasset_id: ${input.assetId}\nattachment_id: ${input.attachmentId}\nsize_key: ${input.sizeKey}\nsource_revision: ${input.sourceRevision}\ntarget_revision: ${input.sourceRevision + 1}\ninstruction: Process only this size from the current approved image context. Preserve the approved style, layout family, business facts, and other assets unless the user explicitly marked them in this adjustment issue.\n-->`;
+}
+
+function creativeOrderSizeLabel(sizeKey: string): string {
+  return sizeKey === "1080x1080" ? "方形" : sizeKey === "1200x628" ? "横版" : sizeKey === "800x1000" ? "竖版" : sizeKey;
 }
 
 export function creativeOrderWaitingMessage(failures: CreativeOrderWorkflowFailure[], closed = false): string {
@@ -987,38 +1070,6 @@ export function creativeOrderWaitingMessage(failures: CreativeOrderWorkflowFailu
   return failures.length > 0
     ? "目前没有可验收成图；可结束订单后重新发起。"
     : "正在等待首批成图。各变体完成后会立即出现在这里。";
-}
-
-function workflowFailureMessage(failure: CreativeOrderWorkflowFailure): string {
-  if (failure.failure_reason === "provider_rate_limited") return "生成服务暂时繁忙，当前步骤未完成。";
-  if (failure.failure_reason === "agent_reported_action_required" && /without registering generated assets|generated assets|artifact|asset/i.test(failure.error)) {
-    if (failure.workflow === "creative_prime") return "贴片包没有完整生成，可能是缺少某个尺寸、QR 解码失败或合成证据不完整。";
-    if (failure.workflow === "creative_production") return "底图没有完整生成，可能是某个尺寸缺失或模型返回不可用。";
-    return "智能体结束了，但没有登记完整成图。";
-  }
-  if (failure.failure_reason === "codex_semantic_inactivity") {
-    if (/unknown flag|exit code/i.test(failure.error)) return "智能体运行在生成开始前异常退出，当前步骤未完成。";
-    return "智能体在等待时间内没有返回有效进展，当前步骤未完成。";
-  }
-  return failure.error || failure.failure_reason || "任务执行失败，未返回详细原因";
-}
-
-function workflowFailureTechnicalDetails(failure: CreativeOrderWorkflowFailure, message: string): string {
-  const details = failure.error?.trim();
-  return details && details !== message ? details : "";
-}
-
-function creativeWorkflowLabel(workflow: string): string {
-  const labels: Record<string, string> = {
-    creative_reference_analysis: "参考分析",
-    creative_plan: "创意方案",
-    creative_production: "底图生成",
-    creative_prime: "四角贴片",
-    creative_qc_technical: "技术质检",
-    creative_qc_visual: "视觉质检",
-    creative_direct_edit: "直接改图",
-  };
-  return labels[workflow] || workflow || "未知步骤";
 }
 
 export function selectCreativeReviewAssets(assets: CreativeOrderAsset[], variantOrder: string[] = []): CreativeOrderAsset[] {
@@ -1098,10 +1149,10 @@ function ResourceEditor({ resources, copyLibraries, onCreate, onArchive }: {
   const queryClient = useQueryClient();
   const [activeId, setActiveId] = useState(resources[0]?.id ?? "");
   const active = resources.find((resource) => resource.id === activeId) ?? resources[0];
-  const [draft, setDraft] = useState<Record<string, unknown>>(active?.config ?? {});
+  const [draft, setDraft] = useState<Record<string, unknown>>(() => withDefaultPrimeTemplateSet(active?.config ?? {}));
   const draftKey = active ? `${active.id}:${active.version}` : "";
   useEffect(() => {
-    setDraft(active?.config ?? {});
+    setDraft(withDefaultPrimeTemplateSet(active?.config ?? {}));
   }, [draftKey, active]);
   const save = useMutation({
     mutationFn: () => {
@@ -1143,15 +1194,12 @@ function MarketPackForm({ resource, value, onChange, copyLibraries }: {
   copyLibraries: CreativeResource[];
 }) {
   const set = (key: string, next: unknown) => onChange({ ...value, [key]: next });
-  const qrValidation = readQRValidation(resource.config.qr_validation);
-  const primeComposition = readPrimeComposition(value.prime_composition);
-  const displayedQRValidation = qrValidation && (!primeComposition || qrValidation.mode === primeComposition.qr_mode) ? qrValidation : null;
+  const templateValidation = readPrimeTemplateValidation(resource.config.prime_template_set_validation);
   return (
     <div className="mx-auto max-w-6xl px-5 py-6">
       <Tabs defaultValue="identity" className="space-y-7">
         <TabsList className="h-9 w-full justify-start overflow-x-auto border bg-muted/20 p-0.5">
           <TabsTrigger value="identity">基础信息</TabsTrigger>
-          <TabsTrigger value="creative">创意规则</TabsTrigger>
           <TabsTrigger value="brand">品牌与 Prime</TabsTrigger>
           <TabsTrigger value="delivery">交付规则</TabsTrigger>
         </TabsList>
@@ -1164,49 +1212,22 @@ function MarketPackForm({ resource, value, onChange, copyLibraries }: {
             <Field label="绑定文案库" wide><NativeSelect value={stringValue(value.copy_library_id)} onChange={(event) => set("copy_library_id", event.target.value)}><NativeSelectOption value="">选择已发布文案库</NativeSelectOption>{copyLibraries.filter((library) => library.published_version > 0).map((library) => <NativeSelectOption key={library.id} value={library.id}>{library.name} · v{library.published_version}</NativeSelectOption>)}</NativeSelect></Field>
           </FormSection>
         </TabsContent>
-        <TabsContent value="creative" className="mt-0 space-y-8">
-          <FormSection title="创意理解" description="候选图按这里的市场词表识别主题与利益点；用户仍可逐图输入词表外的新值。">
-            <Field label="利益点词表" wide><Textarea rows={6} value={stringListMultilineValue(value.benefit_taxonomy)} placeholder={"额度\n低利率\n费用减免\n快速放款"} onChange={(event) => set("benefit_taxonomy", splitList(event.target.value))} /></Field>
-            <Field label="主题预设" wide><Textarea rows={6} value={stringListMultilineValue(value.theme_presets)} placeholder={"世界杯 / 足球赛事\n斋月\n开斋节\n发薪日"} onChange={(event) => set("theme_presets", splitList(event.target.value))} /></Field>
-          </FormSection>
-        </TabsContent>
         <TabsContent value="brand" className="mt-0 space-y-8">
-          <MarketResourceFiles resource={resource} value={value} composition={primeComposition} onChange={onChange} />
-          <PrimeCompositionEditor resource={resource} value={value.prime_composition ?? createDefaultPrimeComposition()} qrPayload={stringValue(value.qr_payload)} onQRPayloadChange={(payload) => onChange(withDynamicQRPayload(value, payload))} onChange={(composition) => set("prime_composition", composition)} />
+          <MarketResourceFiles resource={resource} value={value} />
         </TabsContent>
         <TabsContent value="delivery" className="mt-0 space-y-8">
           <FormSection title="交付规则" description="控制成图合规要求和交付文件名称。">
             <Field label="合规规则" wide><Textarea rows={7} value={stringValue(value.compliance_rules)} onChange={(event) => set("compliance_rules", event.target.value)} /></Field>
             <Field label="文件命名" wide><Input value={stringValue(value.naming_rule)} placeholder="Month_P_Brand_Country_Date_Type_Designer_Size.png" onChange={(event) => set("naming_rule", event.target.value)} /></Field>
           </FormSection>
-          <QRCodeAudit value={value} mode={primeComposition?.qr_mode ?? "legacy"} />
           <section>
-            <div className="mb-3 flex items-center gap-2"><QrCode className="h-4 w-4" /><h3 className="text-sm font-semibold">发布校验</h3></div>
-            {displayedQRValidation ? <div className="border-y"><div className="flex flex-wrap items-center justify-between gap-3 border-b bg-emerald-50/50 px-4 py-3 dark:bg-emerald-950/15"><div className="flex min-w-0 items-center gap-2"><CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-600" /><div className="min-w-0"><p className="text-sm font-medium">Prime 组件校验通过</p><p className="truncate text-xs text-muted-foreground">{displayedQRValidation.mode === "none" ? "不使用二维码" : displayedQRValidation.mode === "static" ? "二维码图片解码通过" : displayedQRValidation.approved_payload}</p></div></div><span className="text-xs text-muted-foreground">{formatValidationTime(displayedQRValidation.validated_at)}</span></div><div className="divide-y">{displayedQRValidation.templates.map((template) => <div key={template.role} className="grid gap-1 px-4 py-3 text-xs sm:grid-cols-[150px_minmax(0,1fr)_auto] sm:items-center"><span className="font-medium">{resourceSlotLabel(template.role)}</span><span className="truncate font-mono text-muted-foreground">{template.filename}</span><span className="text-emerald-700 dark:text-emerald-400">解码通过</span></div>)}</div></div> : <div className="flex gap-3 border-y bg-amber-50/50 px-4 py-3 dark:bg-amber-950/15"><AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" /><div><p className="text-sm font-medium">当前草稿尚未完成发布校验</p><p className="mt-1 text-xs text-muted-foreground">保存并发布时，服务端会统一检查组件来源、位置和二维码。</p></div></div>}
+            <div className="mb-3"><h3 className="text-sm font-semibold">发布校验</h3></div>
+            {templateValidation ? <div className="border-y">{Object.entries(templateValidation.templates).flatMap(([size, templates]) => templates.map((template) => <div key={`${size}-${template.source_role}`} className="grid gap-1 border-b px-4 py-3 text-xs last:border-b-0 sm:grid-cols-[116px_minmax(0,1fr)_auto] sm:items-center"><span className="font-medium">{size}</span><span className="truncate text-muted-foreground">{template.filename}</span><span className="text-emerald-700 dark:text-emerald-400">模板已验证</span></div>))}</div> : <div className="border-y px-4 py-3 text-sm text-muted-foreground">保存并发布后，系统会验证每张完整模板的文件、尺寸和布局映射。</div>}
           </section>
         </TabsContent>
       </Tabs>
     </div>
   );
-}
-
-function QRCodeAudit({ value, mode }: { value: Record<string, unknown>; mode: string }) {
-  const policy = dynamicQRPolicy(stringValue(value.qr_payload));
-  const label = mode === "none" ? "不使用二维码" : mode === "static" ? "使用二维码图片" : "生成新二维码";
-  const description = mode === "none"
-    ? "生成和 QC 都不会要求二维码。"
-    : mode === "static"
-      ? "发布时读取一次二维码图片并验证，三个尺寸共用。"
-      : mode === "dynamic"
-        ? policy.valid ? `${policy.hostname} · 发布时生成并验证` : "请在品牌与 Prime 中填写有效的 HTTPS 地址。"
-        : "请完成二维码配置。";
-  return <section>
-    <div className="mb-3 flex items-center gap-2"><QrCode className="h-4 w-4" /><h3 className="text-sm font-semibold">二维码</h3></div>
-    <div className="border-y">
-      <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3"><div><p className="text-sm font-medium">{label}</p><p className={cn("mt-1 text-xs", mode === "dynamic" && !policy.valid ? "text-amber-700" : "text-muted-foreground")}>{description}</p></div><Badge variant="outline">{mode === "dynamic" && !policy.valid ? "待完善" : "随发布校验"}</Badge></div>
-      <details className="border-t bg-muted/10"><summary className="cursor-pointer px-4 py-3 text-xs font-medium">技术审计信息</summary><dl className="grid gap-3 border-t px-4 py-3 text-xs sm:grid-cols-2"><div><dt className="text-muted-foreground">工作模式</dt><dd className="mt-1 font-mono">{mode}</dd></div><div><dt className="text-muted-foreground">批准状态</dt><dd className="mt-1">{stringValue(value.qr_approval_status) || (mode === "none" || mode === "static" ? "无需人工批准" : "待发布")}</dd></div>{mode === "dynamic" && <><div className="sm:col-span-2"><dt className="text-muted-foreground">目标与标准地址</dt><dd className="mt-1 break-all font-mono">{policy.payload || "未填写"}</dd></div><div><dt className="text-muted-foreground">允许域名</dt><dd className="mt-1 font-mono">{policy.hostname || "未生成"}</dd></div><div><dt className="text-muted-foreground">批准记录</dt><dd className="mt-1">{stringValue(value.qr_approval_note) || "发布资源包时记录"}</dd></div></>}</dl></details>
-    </div>
-  </section>;
 }
 
 function ResourceList({ title, resources, activeId, onSelect, onCreate }: {
@@ -1298,7 +1319,7 @@ function initialResourceConfig(kind: CreativeResourceKind): Record<string, unkno
       entries: [],
     },
   };
-  return { brand: "", market: "", locale: "", currency: "", copy_library_id: "", pre_adaptation_default: true, benefit_taxonomy: [], theme_presets: [], prime_composition: null, qr_payload: "", qr_canonical_payload: "", qr_allowed_domains: [], qr_approval_status: "pending", qr_approval_note: "", compliance_rules: "", naming_rule: "" };
+  return { brand: "", market: "", locale: "", currency: "", copy_library_id: "", pre_adaptation_default: true, prime_template_set: createDefaultPrimeTemplateSet(), compliance_rules: "", naming_rule: "" };
 }
 
 function kindLabel(kind: CreativeResourceKind | null): string {
@@ -1307,38 +1328,22 @@ function kindLabel(kind: CreativeResourceKind | null): string {
 }
 
 function stringValue(value: unknown): string { return typeof value === "string" ? value : ""; }
-function stringListMultilineValue(value: unknown): string { return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string").join("\n") : ""; }
-function splitList(value: string): string[] { return [...new Set(value.split(/[\n,，;；]+/).map((item) => item.trim()).filter(Boolean))]; }
 
-type QRValidation = {
-  mode: "none" | "static" | "dynamic" | "legacy";
-  approved_payload: string;
-  validated_at: string;
-  templates: { role: string; filename: string; decoded_payload: string }[];
-};
+type PrimeTemplateValidation = { filename: string; source_role: string };
 
-function readQRValidation(value: unknown): QRValidation | null {
+function readPrimeTemplateValidation(value: unknown): { templates: Record<string, PrimeTemplateValidation[]> } | null {
   if (!value || typeof value !== "object") return null;
   const record = value as Record<string, unknown>;
-  if (record.status !== "passed" || typeof record.approved_payload !== "string" || !Array.isArray(record.templates)) return null;
-  const templates = record.templates.flatMap((item) => {
-    if (!item || typeof item !== "object") return [];
-    const template = item as Record<string, unknown>;
-    if (typeof template.role !== "string" || typeof template.filename !== "string" || typeof template.decoded_payload !== "string") return [];
-    return [{ role: template.role, filename: template.filename, decoded_payload: template.decoded_payload }];
-  });
-  const mode = ["none", "static", "dynamic"].includes(String(record.mode)) ? record.mode as QRValidation["mode"] : null;
-  if (!mode) return null;
-  if (mode === "static" && templates.length !== 1) return null;
-  if (mode !== "static" && templates.length !== 0) return null;
-  return { mode, approved_payload: record.approved_payload, validated_at: stringValue(record.validated_at), templates };
-}
-
-function formatValidationTime(value: string): string {
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? "已由服务端验证" : `验证于 ${formatCreativeDateTime(value)}（${creativeTimeZoneLabel()}）`;
-}
-
-function resourceSlotLabel(role: string): string {
-  return PRIME_ROLE_LABELS[role] ?? role;
+  if (record.status !== "passed" || !record.templates || typeof record.templates !== "object") return null;
+  const templates: Record<string, PrimeTemplateValidation[]> = {};
+  for (const [size, items] of Object.entries(record.templates as Record<string, unknown>)) {
+    if (!Array.isArray(items)) continue;
+    const parsed: PrimeTemplateValidation[] = items.flatMap((item) => {
+      if (!item || typeof item !== "object") return [];
+      const template = item as Record<string, unknown>;
+      return typeof template.filename === "string" && typeof template.source_role === "string" ? [{ filename: template.filename, source_role: template.source_role }] : [];
+    });
+    if (parsed.length) templates[size] = parsed;
+  }
+  return Object.keys(templates).length ? { templates } : null;
 }

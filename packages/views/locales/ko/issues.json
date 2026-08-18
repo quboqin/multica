@@ -316,6 +316,7 @@
     "creative_copy_replaced_comment": "추천 문구를 교체했습니다: {{comment}}",
     "creative_feedback_recorded": "크리에이티브 피드백을 기록했습니다",
     "creative_feedback_undone": "이전 크리에이티브 결정을 취소했습니다",
+    "creative_order_adjustment_queued": "{{size}} 정밀 조정을 시작했습니다",
     "creative_variant_adopted": "크리에이티브 변형을 채택했습니다",
     "creative_variant_adopted_key": "변형 {{variant}}을(를) 채택했습니다",
     "coalesced_badge": "×{{count}}",

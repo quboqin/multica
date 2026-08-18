@@ -72,7 +72,13 @@ import {
 } from "@multica/ui/components/ui/dropdown-menu";
 import { useAuthStore } from "@multica/core/auth";
 import { useCurrentWorkspace, useWorkspacePaths, paths } from "@multica/core/paths";
-import { workspaceListOptions, myInvitationListOptions, workspaceKeys } from "@multica/core/workspace/queries";
+import {
+  workspaceListOptions,
+  myInvitationListOptions,
+  workspaceKeys,
+  workspaceCapabilityKeys,
+  workspaceCapabilitiesOptions,
+} from "@multica/core/workspace/queries";
 import { resolvePublicFileUrl } from "@multica/core/workspace/avatar-url";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { inboxKeys, deduplicateInboxItems } from "@multica/core/inbox/queries";
@@ -378,6 +384,16 @@ export function AppSidebar({ topSlot, searchSlot, headerClassName, headerStyle }
   const workspaceCreationDisabled = useConfigStore((s) => s.workspaceCreationDisabled);
 
   const wsId = workspace?.id;
+  const { data: workspaceCapabilities } = useQuery(
+    workspaceCapabilitiesOptions(wsId ?? ""),
+  );
+  const creativeFactoryKey = workspaceCapabilityKeys.creativeFactory;
+  const creativeFactoryEnabled = workspaceCapabilities?.items?.some(
+    (item) => item.key === creativeFactoryKey && item.enabled,
+  ) === true;
+  const visibleWorkspaceNav = workspaceNav.filter(
+    (item) => item.key !== "creative" || creativeFactoryEnabled,
+  );
   const { data: inboxItems = EMPTY_INBOX } = useQuery({
     queryKey: wsId ? inboxKeys.list(wsId) : ["inbox", "disabled"],
     queryFn: () => api.listInbox(),
@@ -709,7 +725,7 @@ export function AppSidebar({ topSlot, searchSlot, headerClassName, headerStyle }
             <SidebarGroupLabel>{t(($) => $.sidebar.workspace_group)}</SidebarGroupLabel>
             <SidebarGroupContent>
               <SidebarMenu className="gap-0.5">
-                {workspaceNav.map((item) => {
+                {visibleWorkspaceNav.map((item) => {
                   const href = p[item.key]();
                   const isActive = isNavActive(pathname, href);
                   if (item.key === "usage") {

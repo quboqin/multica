@@ -54,22 +54,6 @@ LIMIT 1
 	}
 }
 
-func TestCreativeFeedbackRecommendedCopyReplacement(t *testing.T) {
-	if testHandler == nil {
-		t.Skip("database not available")
-	}
-	copyID := createCreativeFeedbackCopyEntry(t)
-	w := httptest.NewRecorder()
-	req := newRequest(http.MethodPost, "/api/creative-feedback-events", creativeFeedbackEventInput{
-		SubjectType: "recommended_copy", SubjectID: copyID, EventType: "replacement",
-		Decision: "replaced", ReasonCodes: []string{"tone_mismatch"}, Comment: "Use the approved alternative.",
-	})
-	testHandler.CreateCreativeFeedbackEvent(w, req)
-	if w.Code != http.StatusCreated {
-		t.Fatalf("CreateCreativeFeedbackEvent: %d %s", w.Code, w.Body.String())
-	}
-}
-
 func TestCreativeFeedbackAcceptsPublishedComposableCopyRecipe(t *testing.T) {
 	if testHandler == nil {
 		t.Skip("database not available")
@@ -328,7 +312,7 @@ func TestCreativeFeedbackMetricsAggregateExplicitDecisions(t *testing.T) {
 	issueID, candidateID := createCreativeFeedbackCandidate(t, "metrics")
 	for _, input := range []creativeFeedbackEventInput{
 		{IssueID: issueID, SubjectType: "candidate", SubjectID: candidateID, EventType: "decision", Decision: "rejected", ReasonCodes: []string{"duplicate"}},
-		{SubjectType: "recommended_copy", SubjectID: createCreativeFeedbackCopyEntry(t), EventType: "decision", Decision: "accepted"},
+		{SubjectType: "recommended_copy", SubjectID: createCreativeFeedbackCopyRecipe(t), EventType: "decision", Decision: "accepted"},
 	} {
 		w := httptest.NewRecorder()
 		req := newRequest(http.MethodPost, "/api/creative-feedback-events", input)
@@ -402,6 +386,144 @@ func TestCreativeFeedbackMetricsExcludeUndoneEvents(t *testing.T) {
 	}
 }
 
+func TestCreativeFeedbackDashboardContainsWorkflowMetricsOnly(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+	readDashboard := func() (creativeFeedbackDashboardResponse, map[string]json.RawMessage) {
+		t.Helper()
+		w := httptest.NewRecorder()
+		testHandler.GetCreativeFeedbackDashboard(w, newRequest(http.MethodGet, "/api/creative-feedback-events/dashboard", nil))
+		if w.Code != http.StatusOK {
+			t.Fatalf("GetCreativeFeedbackDashboard: %d %s", w.Code, w.Body.String())
+		}
+		body := w.Body.Bytes()
+		var dashboard creativeFeedbackDashboardResponse
+		if err := json.Unmarshal(body, &dashboard); err != nil {
+			t.Fatal(err)
+		}
+		var raw map[string]json.RawMessage
+		if err := json.Unmarshal(body, &raw); err != nil {
+			t.Fatal(err)
+		}
+		return dashboard, raw
+	}
+
+	dashboard, raw := readDashboard()
+	if dashboard.Workflow.FeedbackReasons == nil {
+		t.Fatal("workflow feedback reasons must be an empty array, not nil")
+	}
+	if len(raw) != 1 || raw["workflow"] == nil {
+		t.Fatalf("dashboard response keys = %#v, want workflow only", raw)
+	}
+}
+
+func TestCreativeFeedbackDashboardTracksCompleteImageGenerationAttempts(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+	before, err := testHandler.creativeFeedbackWorkflowDashboard(t.Context(), parseUUID(testWorkspaceID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, candidateID := createCreativeFeedbackCandidate(t, "image generation dashboard")
+	attachmentID := createCreativeFeedbackAsset(t)
+	var orderID, itemID string
+	if err := testPool.QueryRow(t.Context(), `
+INSERT INTO creative_order (workspace_id, status, input_snapshot, created_by)
+VALUES ($1, 'running', '{}'::jsonb, $2)
+RETURNING id::text
+`, testWorkspaceID, testUserID).Scan(&orderID); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _, _ = testPool.Exec(t.Context(), `DELETE FROM creative_order WHERE id = $1`, orderID) })
+	if err := testPool.QueryRow(t.Context(), `
+INSERT INTO creative_order_item (order_id, candidate_id, copy_snapshot)
+VALUES ($1, $2, '{}'::jsonb)
+RETURNING id::text
+`, orderID, candidateID).Scan(&itemID); err != nil {
+		t.Fatal(err)
+	}
+
+	productionAgentID := createHandlerTestAgent(t, "creative-feedback-image-generation-"+uuid.NewString(), nil)
+	variantID := func(key string) string {
+		t.Helper()
+		var id string
+		if err := testPool.QueryRow(t.Context(), `
+INSERT INTO creative_order_variant (order_item_id, variant_key, revision, status)
+VALUES ($1, $2, 1, 'running')
+RETURNING id::text
+`, itemID, key).Scan(&id); err != nil {
+			t.Fatal(err)
+		}
+		return id
+	}
+	completedVariantID := variantID("v01")
+	failedVariantID := variantID("v02")
+	runningVariantID := variantID("v03")
+
+	insertProductionTask := func(variantID, status string) string {
+		t.Helper()
+		contextValue, err := json.Marshal(map[string]any{
+			"type": "creative_domain_task", "workflow": "creative_production", "creative_order_id": orderID,
+			"creative_order_item_id": itemID, "variant_id": variantID, "revision": 1,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var taskID string
+		if err := testPool.QueryRow(t.Context(), `
+INSERT INTO agent_task_queue (agent_id, runtime_id, status, context, completed_at)
+VALUES ($1, $2, $3, $4::jsonb, CASE WHEN $3 = 'running' THEN NULL ELSE now() END)
+RETURNING id::text
+`, productionAgentID, handlerTestRuntimeID(t), status, contextValue).Scan(&taskID); err != nil {
+			t.Fatal(err)
+		}
+		return taskID
+	}
+	taskIDs := []string{
+		insertProductionTask(completedVariantID, "completed"),
+		insertProductionTask(failedVariantID, "completed"),
+		insertProductionTask(runningVariantID, "running"),
+	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(t.Context(), `DELETE FROM agent_task_queue WHERE id = ANY($1::uuid[])`, taskIDs)
+	})
+
+	insertAsset := func(variantID, size string) {
+		t.Helper()
+		if _, err := testPool.Exec(t.Context(), `
+INSERT INTO creative_order_asset (variant_id, size_key, revision, stage, attachment_id, status)
+VALUES ($1, $2, 1, 'generated', $3, 'completed')
+`, variantID, size, attachmentID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, size := range standardCreativeAssetSizes {
+		insertAsset(completedVariantID, size)
+	}
+	insertAsset(failedVariantID, "1080x1080")
+	insertAsset(runningVariantID, "1080x1080")
+	insertAsset(runningVariantID, "1200x628")
+
+	after, err := testHandler.creativeFeedbackWorkflowDashboard(t.Context(), parseUUID(testWorkspaceID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.ImageGenerationSuccess != before.ImageGenerationSuccess+1 {
+		t.Fatalf("image generation success = %d, want %d", after.ImageGenerationSuccess, before.ImageGenerationSuccess+1)
+	}
+	if after.ImageGenerationTotal != before.ImageGenerationTotal+2 {
+		t.Fatalf("image generation total = %d, want %d", after.ImageGenerationTotal, before.ImageGenerationTotal+2)
+	}
+	if after.ImageGenerationFailed != before.ImageGenerationFailed+1 {
+		t.Fatalf("image generation failed = %d, want %d", after.ImageGenerationFailed, before.ImageGenerationFailed+1)
+	}
+	if after.ImageGenerationInProgress != before.ImageGenerationInProgress+1 {
+		t.Fatalf("image generation in progress = %d, want %d", after.ImageGenerationInProgress, before.ImageGenerationInProgress+1)
+	}
+}
+
 func createCreativeFeedbackCandidate(t *testing.T, title string) (string, string) {
 	t.Helper()
 	issueID := createCreativeDeliveryTestIssue(t, title, "")
@@ -421,21 +543,22 @@ RETURNING id::text`, testWorkspaceID, "feedback-"+uuid.NewString(), title).Scan(
 	return issueID, candidateID
 }
 
-func createCreativeFeedbackCopyEntry(t *testing.T) string {
+func createCreativeFeedbackCopyRecipe(t *testing.T) string {
 	t.Helper()
-	var libraryID, copyID string
+	var libraryID, recipeID string
 	if err := testPool.QueryRow(t.Context(), `
-INSERT INTO creative_resource (workspace_id, kind, name, created_by)
-VALUES ($1, 'copy_library', $2, $3) RETURNING id::text`, testWorkspaceID, "Feedback copy library "+uuid.NewString(), testUserID).Scan(&libraryID); err != nil {
+INSERT INTO creative_resource (workspace_id, kind, name, status, version, published_version, config, created_by)
+VALUES ($1, 'copy_library', $2, 'published', 1, 1, '{}'::jsonb, $3) RETURNING id::text`, testWorkspaceID, "Feedback copy library "+uuid.NewString(), testUserID).Scan(&libraryID); err != nil {
 		t.Fatal(err)
 	}
 	if err := testPool.QueryRow(t.Context(), `
-INSERT INTO creative_copy_entry (workspace_id, library_id, external_key, headline, created_by)
-VALUES ($1, $2, $3, 'Feedback headline', $4) RETURNING id::text`, testWorkspaceID, libraryID, uuid.NewString(), testUserID).Scan(&copyID); err != nil {
+INSERT INTO creative_resource_revision (resource_id, version, name, config, created_by)
+VALUES ($1, 1, 'Feedback copy library', jsonb_build_object('recipes', jsonb_build_array(jsonb_build_object('id', $2::text))), $3)
+RETURNING $2::text`, libraryID, uuid.NewString(), testUserID).Scan(&recipeID); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _, _ = testPool.Exec(t.Context(), `DELETE FROM creative_resource WHERE id = $1`, libraryID) })
-	return copyID
+	return recipeID
 }
 
 func createCreativeFeedbackAsset(t *testing.T) string {

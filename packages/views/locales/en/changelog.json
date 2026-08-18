@@ -1,0 +1,197 @@
+{
+  "title": "Change log",
+  "subtitle": "Release notes maintained inside this Multica platform.",
+  "current_version": "Current platform version: {{version}}",
+  "releases": {
+    "v0_3_41": {
+      "version": "0.3.41",
+      "date": "2026-08-18",
+      "title": "Let the uploaded template decide the overlay",
+      "summary": "Prime no longer requires a QR code in the overlay; the platform applies the uploaded full transparent template unchanged, records decodable QR evidence when present, and continues to validate files, dimensions, layout, and compose evidence.",
+      "change_1": "Publishing and composition no longer require QR configuration or successful decoding; when an image contains a QR code, its decoded payload is recorded as non-blocking evidence.",
+      "change_2": "Markets without QR codes can upload and publish their full PNG templates directly; existing QR pixels remain part of any template that includes them.",
+      "change_3": "QC now checks template files, target dimensions, layout contracts, and full-template composition evidence.",
+      "change_4": "Creative Factory initialization, the default resource snapshot, and workspace bootstrap now use Prime contract v6."
+    },
+    "v0_3_40": {
+      "version": "0.3.40",
+      "date": "2026-08-18",
+      "title": "Use approved repayment rows first",
+      "summary": "Pre-adaptation now renders the smaller of source rows and compatible approved first-party plans, removing excess source values instead of treating the whole region as unmatched.",
+      "change_1": "The pre-adaptation Skill and analysis Agent now use approved first-party plans as the numeric source of truth.",
+      "change_2": "A source table with more rows than our library renders only the rows we actually have approved, with every frozen display value recorded in the layout instruction.",
+      "change_3": "Unsupported tenors such as 9 months are not filled with another tenor's amount; those source blocks remain removable.",
+      "change_4": "Creative Factory initialization, workspace bootstrap, and template versions now use the same matching contract."
+    },
+    "v0_3_39": {
+      "version": "0.3.39",
+      "date": "2026-08-18",
+      "title": "Restore repayment plan selection",
+      "summary": "When source repayment values do not directly match a frozen plan, confirmation now restores approved-plan selection instead of showing numeric blocks as ordinary empty copy.",
+      "change_1": "Source Analysis numeric blocks remain traceable and expose a first-party repayment-plan entry by region.",
+      "change_2": "The confirmation page can select an approved plan and freeze its numeric layout for the order.",
+      "change_3": "Leaving the plan unselected still removes the source region without copying competitor amounts.",
+      "change_4": "Order snapshots record only confirmed first-party plans and layouts; financial facts are never guessed silently."
+    },
+    "v0_3_38": {
+      "version": "0.3.38",
+      "date": "2026-08-18",
+      "title": "Separate generated output from source reanalysis",
+      "summary": "Generated materials now show their real production state while remaining available for a new confirmed order; archived images can still reanalyze their reference source independently.",
+      "change_1": "Generated materials show the real generated state and can be selected again for a new creative confirmation.",
+      "change_2": "Archived images keep a reanalysis action even when an output order already exists; rejected and non-configurable materials remain excluded.",
+      "change_3": "Reanalysis refreshes source analysis, while selecting again requires a new user confirmation and never copies the old order automatically.",
+      "change_4": "Only a real analysis-in-progress state shows the waiting-for-analysis label."
+    },
+    "v0_3_37": {
+      "version": "0.3.37",
+      "date": "2026-08-18",
+      "title": "Reanalysis entry and recommendation fallback",
+      "summary": "Archived images keep one reanalysis action across the material card, preview, and confirmation panel; unmatched ordinary copy is persisted as a user-confirmable recommendation.",
+      "change_1": "Archived images shown as analyzing expose Reanalyze in the card, preview, and confirmation panel; generated and rejected materials are excluded.",
+      "change_2": "The action uses one idempotent queue and shows a busy state while the request is being accepted.",
+      "change_3": "When no compatible approved copy exists, ordinary copy is stored as a recommended candidate with its basis and no library source.",
+      "change_4": "Financial values, rates, legal text, QR codes, and brand facts still require an approved source or frozen calculation before submission."
+    },
+    "v0_3_36": {
+      "version": "0.3.36",
+      "date": "2026-08-18",
+      "title": "Requeue analysis while waiting",
+      "summary": "Archived images keep a reanalysis action while waiting or already available, so users can recover an analysis Agent that did not run and verify new analysis logic.",
+      "change_1": "Waiting materials can be requeued for reference analysis without collecting them again.",
+      "change_2": "Available materials also expose reanalysis, which creates a new analysis version.",
+      "change_3": "Generated and rejected materials are not queued again, and the action is locked while the request is pending.",
+      "change_4": "The current workspace selection and material data stay intact while the page refreshes when analysis completes."
+    },
+    "v0_3_35": {
+      "version": "0.3.35",
+      "date": "2026-08-18",
+      "title": "Pending recommendations for unmatched copy",
+      "summary": "When the copy library has no compatible approved fragment, the platform now creates a safe candidate and clearly marks it for confirmation instead of treating the empty match as complete.",
+      "change_1": "Unmatched ordinary headlines, benefits, supporting copy, and CTAs receive a recommendation with no fabricated library source.",
+      "change_2": "Rates, amounts, tenors, legal text, QR codes, and brand facts still require an approved source or frozen calculation.",
+      "change_3": "The confirmation page labels candidates as pending and allows submission only after the user accepts or rewrites them.",
+      "change_4": "Creative Factory initialization now includes the updated copy-adaptation Skill and analysis-Agent contract."
+    },
+    "v0_3_34": {
+      "version": "0.3.34",
+      "date": "2026-08-17",
+      "title": "Partial pre-adaptation mapping",
+      "summary": "When numeric blocks cannot all be matched, the platform keeps safe mappings and sends unmatched blocks to confirmation instead of repeatedly failing the whole asset.",
+      "change_1": "Numeric blocks are split into renderable rows, and matched rows continue to use frozen plans.",
+      "change_2": "Blocks beyond plan capacity or without a match keep their source identity and remain selectable or removable on confirmation.",
+      "change_3": "The model now receives the same field, capacity, and frozen-value contract enforced by the backend, with one bounded correction only.",
+      "change_4": "Automatic continuation now has one entry point, preventing duplicate queues for the same analysis; this fix is deployed and has been rerun on both materials without creating an order automatically."
+    },
+    "v0_3_33": {
+      "version": "0.3.33",
+      "date": "2026-08-17",
+      "title": "User-confirmed creative orders",
+      "summary": "Collection and analysis remain automatic, but the platform no longer selects a material and creates an order after pre-adaptation completes.",
+      "change_1": "Completed analysis stays available for material selection and configurable copy while the user decides.",
+      "change_2": "A creative order is created only after the user selects materials, confirms copy, and submits.",
+      "change_3": "Runtime recovery repairs pre-adaptation results without creating hidden background orders.",
+      "change_4": "Existing orders and submitted tasks are unchanged; new collections follow the user-confirmation flow."
+    },
+    "v0_3_32": {
+      "version": "0.3.32",
+      "date": "2026-08-17",
+      "title": "Pre-adaptation stability and template parity",
+      "summary": "New workspaces now initialize the same Creative Factory Agents, Skills, and prompts as the current Ad Creative workspace, and collection handoff no longer stalls on unpublished seed resources.",
+      "change_1": "The seed copy library and default market pack are published for pre-adaptation; legacy packs with all six Prime attachments now receive the standard template contract during publish, while incomplete, incorrectly sized, or invalid-QR attachments remain blocked.",
+      "change_2": "Static assets without editable source copy are shown as No configurable copy, rather than as adaptation failures that keep retrying.",
+      "change_3": "A failed analysis-to-pre-adaptation handoff is recorded for recovery instead of being silently discarded.",
+      "change_4": "The collection Agent receives the reference-analysis binding from the current workspace, while user-edited Agents, Skills, and automations remain untouched."
+    },
+    "v0_3_31": {
+      "version": "0.3.31",
+      "date": "2026-08-17",
+      "title": "Collection automation prompt and binding",
+      "summary": "Creative Factory initialization now creates a real collection plan with the full prompt, image cap, and analysis handoff bound to the current workspace.",
+      "change_1": "The collection automation is assigned to the workspace's own 素材_采集 agent instead of the orchestration squad.",
+      "change_2": "The prompt includes competitors, market, selection rules, image-only filtering, the two-image cap, and analysis fanout.",
+      "change_3": "No fixed UUIDs are stored in the automation prompt; runtime values come from the workspace installation.",
+      "change_4": "Only the previous installer-created short default record is migrated; user-edited automations are preserved."
+    },
+    "v0_3_30": {
+      "version": "0.3.30",
+      "date": "2026-08-17",
+      "title": "Workspace Creative Factory initialization",
+      "summary": "Enabling Creative Factory now makes its workspace-owned agents, Skills, squad, and automation visible in the platform.",
+      "change_1": "Each workspace initializes its own creative agents, Skills, prompts, bindings, squad, and automation record.",
+      "change_2": "The standard automation list now includes Creative Factory automation with its workspace squad assignment.",
+      "change_3": "Re-enabling an existing installation repairs missing automation metadata without overwriting user-edited resources.",
+      "change_4": "Settings refreshes the Agents, Skills, Squads, and Automation lists after the capability is enabled."
+    },
+    "v0_3_29": {
+      "version": "0.3.29",
+      "date": "2026-08-17",
+      "title": "Workbench metrics and weekly delivery",
+      "summary": "The workbench now shows materials, generation, adoption, and weekly delivery work, while workflow details remain available for future reporting.",
+      "change_1": "The fourth workbench metric is now Weekly delivery, counting orders completed through adoption since the start of this week.",
+      "change_2": "Real image generation counts only orders with active tasks, while adoption-ready results remain separate for business decisions.",
+      "change_3": "Production adoption counts only order items with a complete delivery package; unfinished output is excluded from the denominator.",
+      "change_4": "Release notes now use platform-owned Chinese, English, Japanese, and Korean content instead of internal translation keys."
+    },
+    "v0_3_28": {
+      "version": "0.3.28",
+      "date": "2026-08-17",
+      "title": "Production continuation and evidence checks",
+      "summary": "Creative production continuations no longer look like failures while queued or running, and each size now records the Prime, model original, and process evidence needed for completion.",
+      "change_1": "A parent production task stays in progress while a same-variant continuation is queued or running.",
+      "change_2": "The production Skill and workspace producer register Prime context, model originals, and normalized process evidence for every size.",
+      "change_3": "Completion now validates the required evidence and canonical assets to reduce stranded steps and missing outputs.",
+      "change_4": "After a restart, continuation tasks can resume missing sizes without losing the automatic recovery path."
+    },
+    "v0_3_27": {
+      "version": "0.3.27",
+      "date": "2026-08-16",
+      "title": "Automatic numeric pre-adaptation repair",
+      "summary": "Creative Factory now completes numeric mapping from the frozen repayment plans when harmless amount formatting differs, instead of stopping for a manual retry.",
+      "change_1": "Render instructions tolerate safe whitespace differences while the underlying repayment values remain strictly frozen and validated.",
+      "change_2": "After the single model retry still fails, the platform builds a valid card mapping from the Source Analysis numeric regions.",
+      "change_3": "The restart recovery scan also resumes recent manual-required states and continues them into orders, plans, and production.",
+      "change_4": "Manual confirmation remains only when numeric regions or frozen bindings cannot be determined safely; normal collection needs no retry click."
+    },
+    "v0_3_26": {
+      "version": "0.3.26",
+      "date": "2026-08-16",
+      "title": "Automatic recovery and production continuation",
+      "summary": "Creative Factory now resumes completed handoffs after a restart and reuses completed sizes when production is missing an output.",
+      "change_1": "Pre-adaptation validation now matches the current semantic prompt contract persisted by the workspace Skill.",
+      "change_2": "Production recovery reuses completed sizes and generates only missing sizes, avoiding duplicate work and token waste.",
+      "change_3": "After a service restart, stranded pre-adaptation results are scanned and continued into the order, plan, production, and QC flow.",
+      "change_4": "The accepted path completed from two collected images through three output sizes with no blocking QC failures."
+    },
+    "v0_3_25": {
+      "version": "0.3.25",
+      "date": "2026-08-16",
+      "title": "Creative Factory automatic handoff",
+      "summary": "Enabling Creative Factory initializes workspace-owned resources and automatically continues from two collected images through planning, generation, and QC.",
+      "change_1": "Each workspace now owns its Agents, Skills, prompts, bindings, and squad configuration without repeated overwrites.",
+      "change_2": "Collection is capped at two images, while analysis and pre-adaptation use the workspace's frozen resource versions.",
+      "change_3": "After pre-adaptation succeeds, the platform automatically selects a producible candidate, freezes copy, creates the order, and queues planning.",
+      "change_4": "Planning, image generation, and QC continue automatically with recovery paths preserved when a task fails."
+    },
+    "v0_3_24": {
+      "version": "0.3.24",
+      "date": "2026-08-16",
+      "title": "Pre-adaptation contracts and recovery",
+      "summary": "Pre-adaptation now validates frozen resources strictly, retries failed tasks by default, and falls back to human confirmation when recovery is exhausted.",
+      "change_1": "Field types and source constraints for copy, repayment plans, and numeric layouts are now explicit.",
+      "change_2": "Failed pre-adaptation tasks retry with the original task context without recollecting materials or changing resource versions.",
+      "change_3": "Exhausted recovery is saved as a human-confirmation state and can continue from the existing re-analysis entry.",
+      "change_4": "User-cancelled tasks are never restarted automatically."
+    },
+    "v0_3_23": {
+      "version": "0.3.23",
+      "date": "2026-08-16",
+      "title": "Workspace capabilities and platform updates",
+      "summary": "Creative Studio access is now controlled per workspace, with release notes kept inside the platform.",
+      "change_1": "Creative Studio can be enabled or disabled independently for each workspace.",
+      "change_2": "The capability is enforced by the API, navigation, and direct page access.",
+      "change_3": "The help menu and new-version announcement now open this internal change log.",
+      "change_4": "The requirements table now supports persisted label filters, with multiple labels using OR semantics. Workflow-created sub-issues are shown in stable execution order by workflow stage, variant, revision, and issue identifier."
+    }
+  }
+}

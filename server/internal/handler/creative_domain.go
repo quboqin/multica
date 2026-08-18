@@ -6,12 +6,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"mime"
+	"log/slog"
 	"net/http"
-	"os"
-	"path/filepath"
 	"regexp"
-	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -72,9 +69,8 @@ type creativeOrderInput struct {
 	Items                    []creativeOrderItemInput `json:"items"`
 }
 
-// A production prompt now carries the frozen visual layout plus every
-// first-party text and numeric instruction. Complex multi-region ads exceed
-// the legacy 4k limit even though they remain one bounded order item.
+// Direction is a compact user-facing summary. The production agent authors
+// the full per-size model prompt from the frozen copy and visual direction.
 const maxCreativeOrderDirectionLength = 16_000
 
 type creativeOrderResponse struct {
@@ -112,12 +108,6 @@ type creativeOrderWorkflowRetryResponse struct {
 	TaskID string `json:"task_id"`
 }
 
-// creativeOrderPrimePackageRepairResponse describes a fresh Prime composition
-// run that reuses the existing generated assets for the current revision.
-type creativeOrderPrimePackageRepairResponse struct {
-	TaskID string `json:"task_id"`
-}
-
 // creativeOrderQCRetryResponse describes a recovery run that deliberately
 // reuses the already completed Prime assets. These are two independent tasks,
 // not a creative-generation retry.
@@ -145,23 +135,21 @@ type creativeOrderItemResponse struct {
 }
 
 type creativeOrderVariantResponse struct {
-	ID                   string                          `json:"id"`
-	OrderItemID          string                          `json:"order_item_id"`
-	VariantKey           string                          `json:"variant_key"`
-	Brief                json.RawMessage                 `json:"brief"`
-	Revision             int                             `json:"revision"`
-	Status               string                          `json:"status"`
-	QCStatus             string                          `json:"qc_status"`
-	QCRecoveryUsed       bool                            `json:"qc_recovery_used"`
-	QCRecoveryAvailable  bool                            `json:"qc_recovery_available"`
-	PrimeRepairUsed      bool                            `json:"prime_repair_used"`
-	PrimeRepairAvailable bool                            `json:"prime_repair_available"`
-	ActionRequired       *creativeOrderVariantBlocker    `json:"action_required,omitempty"`
-	Assets               []creativeOrderAssetResponse    `json:"assets,omitempty"`
-	DiagnosticAssets     []creativeOrderDiagnosticAsset  `json:"diagnostic_assets,omitempty"`
-	QCReports            []creativeOrderQCReportResponse `json:"qc_reports,omitempty"`
-	CreatedAt            string                          `json:"created_at"`
-	UpdatedAt            string                          `json:"updated_at"`
+	ID                  string                          `json:"id"`
+	OrderItemID         string                          `json:"order_item_id"`
+	VariantKey          string                          `json:"variant_key"`
+	Brief               json.RawMessage                 `json:"brief"`
+	Revision            int                             `json:"revision"`
+	Status              string                          `json:"status"`
+	QCStatus            string                          `json:"qc_status"`
+	QCRecoveryUsed      bool                            `json:"qc_recovery_used"`
+	QCRecoveryAvailable bool                            `json:"qc_recovery_available"`
+	ActionRequired      *creativeOrderVariantBlocker    `json:"action_required,omitempty"`
+	Assets              []creativeOrderAssetResponse    `json:"assets,omitempty"`
+	DiagnosticAssets    []creativeOrderDiagnosticAsset  `json:"diagnostic_assets,omitempty"`
+	QCReports           []creativeOrderQCReportResponse `json:"qc_reports,omitempty"`
+	CreatedAt           string                          `json:"created_at"`
+	UpdatedAt           string                          `json:"updated_at"`
 }
 
 type creativeOrderVariantBlocker struct {
@@ -174,31 +162,27 @@ type creativeOrderVariantBlocker struct {
 }
 
 type creativeOrderDiagnosticAsset struct {
-	ID        string `json:"id"`
-	VariantID string `json:"variant_id"`
-	TaskID    string `json:"task_id"`
-	SizeKey   string `json:"size_key"`
-	Revision  int    `json:"revision"`
-	Label     string `json:"label"`
-	Filename  string `json:"filename"`
-	URL       string `json:"url"`
-	CreatedAt string `json:"created_at"`
+	ID           string          `json:"id"`
+	VariantID    string          `json:"variant_id"`
+	TaskID       string          `json:"task_id"`
+	AttachmentID string          `json:"attachment_id"`
+	SizeKey      string          `json:"size_key"`
+	Revision     int             `json:"revision"`
+	Workflow     string          `json:"workflow"`
+	Label        string          `json:"label"`
+	Filename     string          `json:"filename"`
+	Metadata     json.RawMessage `json:"metadata"`
+	URL          string          `json:"url"`
+	CreatedAt    string          `json:"created_at"`
 }
 
-type creativeOrderDiagnosticAssetFile struct {
-	creativeOrderDiagnosticAsset
-	Path    string
-	ModTime time.Time
-}
-
-type creativeOrderDiagnosticTask struct {
-	OrderID   string
-	VariantID string
-	Revision  int
-	TaskID    string
-	Workflow  string
-	WorkDir   string
-	CreatedAt string
+type creativeOrderDiagnosticPromotionResponse struct {
+	Candidate          creativeOrderDiagnosticAsset `json:"candidate"`
+	Generated          creativeOrderAssetResponse   `json:"generated"`
+	VariantID          string                       `json:"variant_id"`
+	Revision           int                          `json:"revision"`
+	SelectedMethod     string                       `json:"selected_method"`
+	CompositionStarted bool                         `json:"composition_started"`
 }
 
 type creativeOrderAssetResponse struct {
@@ -237,6 +221,23 @@ type creativeOrderAssetInput struct {
 	Metadata           json.RawMessage `json:"metadata"`
 	Evidence           json.RawMessage `json:"evidence"`
 	Status             string          `json:"status"`
+	// These flags are only used while accepting older agent envelopes. They
+	// allow the handler to resolve omitted revision/stage/status fields without
+	// weakening validation for canonical payloads.
+	revisionDefaulted bool
+}
+
+type creativeOrderDiagnosticAssetInput struct {
+	VariantID    string          `json:"variant_id"`
+	TaskID       string          `json:"task_id"`
+	AttachmentID string          `json:"attachment_id"`
+	SizeKey      string          `json:"size_key"`
+	Size         string          `json:"size"`
+	Revision     int             `json:"revision"`
+	Workflow     string          `json:"workflow"`
+	Label        string          `json:"label"`
+	Filename     string          `json:"filename"`
+	Metadata     json.RawMessage `json:"metadata"`
 }
 
 type creativeOrderQCReportResponse struct {
@@ -278,6 +279,14 @@ type creativeOrderQCFinalizeResponse struct {
 	DeliveredAssetCount  int    `json:"delivered_asset_count"`
 	OrderAggregateStatus string `json:"order_aggregate_status"`
 	InboxItemID          string `json:"inbox_item_id,omitempty"`
+	ReworkTaskID         string `json:"rework_task_id,omitempty"`
+	ReworkRevision       int    `json:"rework_revision,omitempty"`
+}
+
+type creativeVisualModelReworkFinding struct {
+	Code      string `json:"code"`
+	SizeKey   string `json:"size_key"`
+	Diagnosis string `json:"diagnosis"`
 }
 
 type creativeOrderItemAdoptionInput struct {
@@ -301,7 +310,6 @@ type creativeOrderCapabilityBinding struct {
 var creativeOrderCapabilityBindings = []creativeOrderCapabilityBinding{
 	{Capability: "generation_plan", SnapshotField: "planner_agent_id"},
 	{Capability: "image_edit", SnapshotField: "producer_agent_id"},
-	{Capability: "prime_compose", SnapshotField: "prime_agent_id"},
 	{Capability: "quality_control", SnapshotField: "reviewer_agent_id"},
 }
 
@@ -510,8 +518,7 @@ FROM creative_order WHERE id = $1`, parseUUID(existingID)))
 			}
 			writeJSON(w, http.StatusOK, existing)
 			return
-		}
-		if !errors.Is(err, pgx.ErrNoRows) {
+		} else if !errors.Is(err, pgx.ErrNoRows) {
 			writeError(w, http.StatusInternalServerError, "failed to recover creative order")
 			return
 		}
@@ -565,6 +572,21 @@ SELECT EXISTS(SELECT 1 FROM creative_material_candidate WHERE id = $1 AND worksp
 `, candidateID, workspaceID, analysisID).Scan(&referencesValid); err != nil || !referencesValid {
 			writeError(w, http.StatusUnprocessableEntity, "order item references do not belong to this workspace")
 			return
+		}
+		if issueID.Valid {
+			if _, err := tx.Exec(r.Context(), `
+INSERT INTO creative_material_issue_candidate (
+  issue_id, candidate_id, workspace_id, status, selected_by, selected_at
+) VALUES ($1, $2, $3, 'selected', $4, now())
+ON CONFLICT (issue_id, candidate_id) DO UPDATE SET
+  status = 'selected',
+  selected_by = EXCLUDED.selected_by,
+  selected_at = EXCLUDED.selected_at,
+  updated_at = now()
+`, issueID, candidateID, workspaceID, userID); err != nil {
+				writeError(w, http.StatusInternalServerError, "failed to link creative material candidate to issue")
+				return
+			}
 		}
 		if _, err := tx.Exec(r.Context(), `
 INSERT INTO creative_order_item (order_id, candidate_id, source_analysis_id, copy_snapshot, direction)
@@ -1151,6 +1173,11 @@ FROM creative_order WHERE workspace_id = $1 ORDER BY updated_at DESC LIMIT 100
 			writeError(w, http.StatusInternalServerError, "failed to derive creative order status")
 			return
 		}
+		order.Items, err = h.listCreativeOrderListItems(r, parseUUID(order.ID))
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to load creative order list summary")
+			return
+		}
 		orders = append(orders, order)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"orders": orders})
@@ -1359,289 +1386,6 @@ func creativeWorkflowRequiresAtomicQCRecovery(workflow string) bool {
 	}
 }
 
-// RepairCreativeOrderVariantPrimePackage re-runs only the Prime composition
-// for a stopped variant. It deliberately reuses the completed generated
-// assets from the current revision and leaves creative generation untouched.
-func (h *Handler) RepairCreativeOrderVariantPrimePackage(w http.ResponseWriter, r *http.Request) {
-	workspaceID, userID, ok := h.creativeFeedbackWorkspaceUser(w, r)
-	if !ok {
-		return
-	}
-	orderID, ok := parseUUIDOrBadRequest(w, chi.URLParam(r, "id"), "order_id")
-	if !ok {
-		return
-	}
-	variantID, ok := parseUUIDOrBadRequest(w, chi.URLParam(r, "variantId"), "variant_id")
-	if !ok {
-		return
-	}
-	if !h.requireCreativeOrderWritable(w, r, orderID, workspaceID) {
-		return
-	}
-	if h.TaskService == nil {
-		writeError(w, http.StatusServiceUnavailable, "creative Prime task service is unavailable")
-		return
-	}
-
-	tx, err := h.TxStarter.Begin(r.Context())
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to start Prime package repair")
-		return
-	}
-	defer tx.Rollback(r.Context())
-
-	var itemID, triggerKind, inputSnapshot, brief, orderStatus, variantStatus string
-	var revision int
-	var issueID pgtype.UUID
-	err = tx.QueryRow(r.Context(), `
-SELECT item.id::text, variant.revision, order_row.issue_id, order_row.status, variant.status,
-       order_row.trigger_evidence_kind, order_row.input_snapshot::text, variant.brief::text
-FROM creative_order_variant variant
-JOIN creative_order_item item ON item.id = variant.order_item_id
-JOIN creative_order order_row ON order_row.id = item.order_id
-WHERE variant.id = $1 AND item.order_id = $2 AND order_row.workspace_id = $3
-FOR UPDATE OF variant, order_row
-`, variantID, orderID, workspaceID).Scan(&itemID, &revision, &issueID, &orderStatus, &variantStatus, &triggerKind, &inputSnapshot, &brief)
-	if errors.Is(err, pgx.ErrNoRows) {
-		writeError(w, http.StatusUnprocessableEntity, "variant does not belong to this creative order")
-		return
-	}
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to load Prime package repair target")
-		return
-	}
-	if orderStatus == "cancelled" {
-		writeError(w, http.StatusConflict, "creative order is cancelled")
-		return
-	}
-	if !issueID.Valid {
-		writeError(w, http.StatusConflict, "Prime package repair requires an order issue")
-		return
-	}
-
-	expectedSizes, err := expectedCreativeVariantSizes(triggerKind, json.RawMessage(inputSnapshot), json.RawMessage(brief))
-	if err != nil {
-		writeError(w, http.StatusConflict, err.Error())
-		return
-	}
-	if len(expectedSizes) != len(standardCreativeAssetSizes) {
-		writeError(w, http.StatusConflict, "Prime package repair requires the three standard delivery sizes")
-		return
-	}
-	generatedSizes := map[string]struct{}{}
-	rows, err := tx.Query(r.Context(), `
-SELECT size_key
-FROM creative_order_asset
-WHERE variant_id = $1 AND revision = $2 AND stage = 'generated' AND status = 'completed'
-FOR UPDATE
-`, variantID, revision)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to load completed generated assets")
-		return
-	}
-	for rows.Next() {
-		var size string
-		if err := rows.Scan(&size); err != nil {
-			rows.Close()
-			writeError(w, http.StatusInternalServerError, "failed to read completed generated assets")
-			return
-		}
-		generatedSizes[size] = struct{}{}
-	}
-	if err := rows.Err(); err != nil {
-		rows.Close()
-		writeError(w, http.StatusInternalServerError, "failed to read completed generated assets")
-		return
-	}
-	rows.Close()
-	if !creativeSizesMatchExpected(generatedSizes, expectedSizes) {
-		writeError(w, http.StatusConflict, "all three completed generated assets are required before repairing Prime")
-		return
-	}
-	primedSizes := map[string]struct{}{}
-	rows, err = tx.Query(r.Context(), `
-SELECT size_key
-FROM creative_order_asset
-WHERE variant_id = $1 AND revision = $2 AND stage = 'primed' AND status = 'completed'
-FOR UPDATE
-`, variantID, revision)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to load completed Prime assets")
-		return
-	}
-	for rows.Next() {
-		var size string
-		if err := rows.Scan(&size); err != nil {
-			rows.Close()
-			writeError(w, http.StatusInternalServerError, "failed to read completed Prime assets")
-			return
-		}
-		primedSizes[size] = struct{}{}
-	}
-	if err := rows.Err(); err != nil {
-		rows.Close()
-		writeError(w, http.StatusInternalServerError, "failed to read completed Prime assets")
-		return
-	}
-	rows.Close()
-	if variantStatus != "action_required" && creativeSizesMatchExpected(primedSizes, expectedSizes) {
-		writeError(w, http.StatusConflict, "Prime package repair requires an incomplete Prime package or a variant awaiting action")
-		return
-	}
-
-	var repairAlreadyUsed bool
-	if err := tx.QueryRow(r.Context(), `
-SELECT EXISTS(
-  SELECT 1 FROM activity_log
-  WHERE issue_id = $1 AND action = 'creative_prime_package_repair_queued'
-    AND details->>'variant_id' = $2::text
-    AND details->>'revision' = $3::text
-)
-`, issueID, variantID, strconv.Itoa(revision)).Scan(&repairAlreadyUsed); err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to check Prime package repair limit")
-		return
-	}
-	if repairAlreadyUsed {
-		writeError(w, http.StatusConflict, "Prime package repair has already been used for this revision")
-		return
-	}
-
-	var activeTask bool
-	if err := tx.QueryRow(r.Context(), `
-SELECT EXISTS(
-  SELECT 1 FROM agent_task_queue
-  WHERE context->>'creative_order_id' = $1::text
-    AND context->>'variant_id' = $2::text
-    AND status IN ('queued', 'dispatched', 'running', 'waiting_local_directory')
-)
-`, orderID, variantID).Scan(&activeTask); err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to check active creative tasks")
-		return
-	}
-	if activeTask {
-		writeError(w, http.StatusConflict, "Prime package repair requires no active task for this variant")
-		return
-	}
-
-	var sourceTaskID, primeAgentID, primeRuntimeID pgtype.UUID
-	var sourceContext json.RawMessage
-	err = tx.QueryRow(r.Context(), `
-SELECT task.id, task.agent_id, task.runtime_id, task.context
-FROM agent_task_queue task
-JOIN agent assigned_agent ON assigned_agent.id = task.agent_id
-WHERE assigned_agent.workspace_id = $1
-  AND assigned_agent.archived_at IS NULL
-  AND task.context->>'type' = 'creative_domain_task'
-  AND task.context->>'workflow' = 'creative_prime'
-  AND task.context->>'creative_order_id' = $2::text
-  AND task.context->>'variant_id' = $3::text
-  AND COALESCE(NULLIF(task.context->>'revision', '')::int, 1) = $4
-ORDER BY task.created_at DESC, task.id DESC
-LIMIT 1
-`, workspaceID, orderID, variantID, revision).Scan(&sourceTaskID, &primeAgentID, &primeRuntimeID, &sourceContext)
-	if errors.Is(err, pgx.ErrNoRows) {
-		writeError(w, http.StatusConflict, "Prime package repair requires a prior Prime task for this revision")
-		return
-	}
-	if err != nil || !primeRuntimeID.Valid {
-		writeError(w, http.StatusConflict, "the prior Prime task can no longer be reused")
-		return
-	}
-
-	var context map[string]any
-	if err := json.Unmarshal(sourceContext, &context); err != nil || context == nil {
-		writeError(w, http.StatusConflict, "the prior Prime task has an invalid context")
-		return
-	}
-	context["type"] = "creative_domain_task"
-	context["workflow"] = "creative_prime"
-	context["scope"] = "variant"
-	context["subject_id"] = uuidToString(variantID)
-	context["item_key"] = fmt.Sprintf("%s:prime-package-repair:r%d", uuidToString(variantID), revision)
-	context["creative_order_id"] = uuidToString(orderID)
-	context["creative_order_item_id"] = itemID
-	context["variant_id"] = uuidToString(variantID)
-	context["revision"] = revision
-	context["expected_sizes"] = expectedSizes
-	context["issue_id"] = uuidToString(issueID)
-	context["prime_package_repair"] = true
-	context["repair_of_task_id"] = uuidToString(sourceTaskID)
-	context["prime_repair_asset_invariant"] = "reuse_completed_generated_assets_only"
-	repairContext, err := json.Marshal(context)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to prepare Prime package repair")
-		return
-	}
-	if err := validateCreativeTaskFanoutContext("creative_order_variant_prime", variantID, []service.DirectTaskFanoutItem{{
-		ItemKey: fmt.Sprintf("%s:prime-package-repair:r%d", uuidToString(variantID), revision), Context: repairContext,
-	}}); err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to prepare canonical Prime package repair context")
-		return
-	}
-
-	attr := attribution.DirectHumanRun(userID, attribution.EvidenceKind("creative_order_variant_prime"), variantID)
-	task, err := h.Queries.WithTx(tx).CreateAgentTask(r.Context(), db.CreateAgentTaskParams{
-		AgentID:              primeAgentID,
-		RuntimeID:            primeRuntimeID,
-		Priority:             0,
-		ForceFreshSession:    pgtype.Bool{Bool: true, Valid: true},
-		RequestingUserID:     userID,
-		OriginatorUserID:     attr.UserID,
-		AccountableUserID:    attr.AccountableUserID,
-		OriginatorSource:     pgtype.Text{String: attr.Source.String(), Valid: true},
-		TriggerEvidenceKind:  pgtype.Text{String: "creative_order_variant_prime", Valid: true},
-		TriggerEvidenceRefID: variantID,
-		Context:              repairContext,
-	})
-	if err != nil {
-		writeError(w, http.StatusConflict, "Prime package repair could not be queued")
-		return
-	}
-
-	details, err := json.Marshal(map[string]any{
-		"creative_order_id": uuidToString(orderID),
-		"variant_id":        uuidToString(variantID),
-		"revision":          revision,
-		"repair_of_task_id": uuidToString(sourceTaskID),
-		"prime_task_id":     uuidToString(task.ID),
-		"asset_invariant":   "reused_completed_generated_assets_only",
-		"cleared_qc_state":  true,
-	})
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to record Prime package repair")
-		return
-	}
-	if _, err := tx.Exec(r.Context(), `
-INSERT INTO activity_log (workspace_id, issue_id, actor_type, actor_id, action, details)
-VALUES ($1, $2, 'member', $3, 'creative_prime_package_repair_queued', $4::jsonb)
-`, workspaceID, issueID, userID, details); err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to record Prime package repair")
-		return
-	}
-	if _, err := tx.Exec(r.Context(), `DELETE FROM creative_order_qc_report WHERE variant_id = $1 AND revision = $2`, variantID, revision); err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to reset previous creative QC reports")
-		return
-	}
-	if _, err := tx.Exec(r.Context(), `DELETE FROM creative_order_variant_qc_resolution WHERE variant_id = $1 AND revision = $2`, variantID, revision); err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to reset previous creative QC resolution")
-		return
-	}
-	if _, err := tx.Exec(r.Context(), `UPDATE creative_order_variant SET status = 'running', updated_at = now() WHERE id = $1`, variantID); err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to resume Prime package repair")
-		return
-	}
-	if err := tx.Commit(r.Context()); err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to queue Prime package repair")
-		return
-	}
-	h.TaskService.NotifyTaskEnqueued(r.Context(), task)
-	h.publishCreativeDomainUpdated(r, workspaceID, userID, map[string]any{
-		"scope": "order", "order_id": uuidToString(orderID), "variant_id": uuidToString(variantID), "revision": revision,
-		"recovery": "creative_prime_package",
-	})
-	writeJSON(w, http.StatusOK, creativeOrderPrimePackageRepairResponse{TaskID: uuidToString(task.ID)})
-}
-
 // RetryCreativeOrderVariantQC recovers only the two independent QC lanes for a
 // completed Prime package. It is intentionally not a creative rework: no
 // generated or primed asset is changed or recreated.
@@ -1704,8 +1448,8 @@ FOR UPDATE OF variant, order_row
 		writeError(w, http.StatusConflict, err.Error())
 		return
 	}
-	if len(expectedSizes) != len(standardCreativeAssetSizes) {
-		writeError(w, http.StatusConflict, "creative QC recovery requires the three standard delivery sizes")
+	if len(expectedSizes) == 0 {
+		writeError(w, http.StatusConflict, "creative QC recovery requires at least one delivery size")
 		return
 	}
 	primedSizes := map[string]struct{}{}
@@ -1735,7 +1479,7 @@ FOR UPDATE
 	}
 	rows.Close()
 	if !creativeSizesMatchExpected(primedSizes, expectedSizes) {
-		writeError(w, http.StatusConflict, "all three completed Prime assets are required before retrying QC")
+		writeError(w, http.StatusConflict, "all expected completed Prime assets are required before retrying QC")
 		return
 	}
 	var recoveryAlreadyUsed bool
@@ -1745,14 +1489,6 @@ SELECT EXISTS(
   WHERE issue_id = $1 AND action = 'creative_qc_recovery_queued'
     AND details->>'variant_id' = $2::text
     AND details->>'revision' = $3::text
-    AND created_at > COALESCE((
-      SELECT max(repair.created_at)
-      FROM activity_log repair
-      WHERE repair.issue_id = $1
-        AND repair.action = 'creative_prime_package_repair_queued'
-        AND repair.details->>'variant_id' = $2::text
-        AND repair.details->>'revision' = $3::text
-    ), '-infinity'::timestamptz)
 )
 `, issueID, variantID, strconv.Itoa(revision)).Scan(&recoveryAlreadyUsed); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to check creative QC recovery limit")
@@ -1960,25 +1696,260 @@ VALUES ($1, $2, 'member', $3, 'creative_qc_recovery_queued', $4::jsonb)
 	})
 }
 
+// queueCreativeQCAutomaticRecovery reuses a complete Prime package after a
+// QC delegation/contract failure. It deliberately shares the same two-lane
+// recovery shape as the user-facing recovery endpoint, but is called from the
+// QC barrier so a transient evidence failure never becomes a manual step.
+func (h *Handler) queueCreativeQCAutomaticRecovery(
+	ctx context.Context,
+	tx pgx.Tx,
+	workspaceID, userID pgtype.UUID,
+	orderID, itemID, variantID, issueID pgtype.UUID,
+	revision int,
+	inputSnapshot json.RawMessage,
+	expectedSizes []string,
+	failedTaskIDs []string,
+) (map[string]db.AgentTaskQueue, error) {
+	if h.TaskService == nil {
+		return nil, errors.New("creative QC task service is unavailable")
+	}
+	leaderID, reviewerID, err := creativeOrderQCAgentSnapshot(inputSnapshot)
+	if err != nil {
+		return nil, err
+	}
+	reviewer, err := h.Queries.WithTx(tx).GetAgentInWorkspace(ctx, db.GetAgentInWorkspaceParams{ID: reviewerID, WorkspaceID: workspaceID})
+	if errors.Is(err, pgx.ErrNoRows) || reviewer.ArchivedAt.Valid {
+		return nil, errors.New("the frozen creative QC reviewer is unavailable")
+	}
+	if err != nil {
+		return nil, errors.New("failed to load the frozen creative QC reviewer")
+	}
+	var reviewerCapable bool
+	if err := tx.QueryRow(ctx, `
+SELECT EXISTS(
+  SELECT 1
+  FROM agent_skill binding
+  JOIN skill skill_row ON skill_row.id = binding.skill_id
+  WHERE binding.agent_id = $1 AND binding.enabled
+    AND skill_row.workspace_id = $2
+    AND skill_row.config->>'kind' = 'creative_role'
+    AND skill_row.config->>'capability' = 'quality_control'
+)
+`, reviewer.ID, workspaceID).Scan(&reviewerCapable); err != nil {
+		return nil, errors.New("failed to validate the frozen creative QC reviewer")
+	}
+	if !reviewerCapable {
+		return nil, errors.New("the frozen creative QC reviewer no longer provides quality_control")
+	}
+
+	contexts := make(map[string]json.RawMessage, 2)
+	items := make([]struct {
+		lane string
+		key  string
+	}, 0, 2)
+	for _, lane := range []string{"technical", "visual"} {
+		itemKey := fmt.Sprintf("%s:%s:r%d", uuidToString(variantID), lane, revision)
+		contextValue, err := json.Marshal(map[string]any{
+			"type":                        "creative_domain_task",
+			"workflow":                    "creative_qc_" + lane,
+			"scope":                       "variant",
+			"subject_id":                  uuidToString(variantID),
+			"item_key":                    itemKey,
+			"creative_order_id":           uuidToString(orderID),
+			"creative_order_item_id":      uuidToString(itemID),
+			"variant_id":                  uuidToString(variantID),
+			"revision":                    revision,
+			"expected_sizes":              expectedSizes,
+			"issue_id":                    uuidToString(issueID),
+			"leader_agent_id":             uuidToString(leaderID),
+			"qc_recovery_of_task_ids":     failedTaskIDs,
+			"qc_recovery_kind":            "automatic_contract_recovery",
+			"qc_recovery_asset_invariant": "reuse_completed_primed_assets_only",
+		})
+		if err != nil {
+			return nil, errors.New("failed to prepare automatic creative QC recovery")
+		}
+		contexts[lane] = contextValue
+		items = append(items, struct {
+			lane string
+			key  string
+		}{lane: lane, key: itemKey})
+	}
+	validationItems := make([]service.DirectTaskFanoutItem, 0, len(items))
+	for _, item := range items {
+		validationItems = append(validationItems, service.DirectTaskFanoutItem{ItemKey: item.key, Context: contexts[item.lane]})
+	}
+	if err := validateCreativeTaskFanoutContext("creative_order_variant_qc", variantID, validationItems); err != nil {
+		return nil, errors.New("failed to prepare canonical automatic creative QC recovery context")
+	}
+
+	attr := attribution.DirectHumanRun(userID, attribution.EvidenceKind("creative_order_variant_qc"), variantID)
+	created := make(map[string]db.AgentTaskQueue, 2)
+	for _, item := range items {
+		task, err := h.Queries.WithTx(tx).CreateAgentTask(ctx, db.CreateAgentTaskParams{
+			AgentID:              reviewer.ID,
+			RuntimeID:            reviewer.RuntimeID,
+			Priority:             0,
+			ForceFreshSession:    pgtype.Bool{Bool: true, Valid: true},
+			RequestingUserID:     userID,
+			OriginatorUserID:     attr.UserID,
+			AccountableUserID:    attr.AccountableUserID,
+			OriginatorSource:     pgtype.Text{String: attr.Source.String(), Valid: true},
+			TriggerEvidenceKind:  pgtype.Text{String: "creative_order_variant_qc", Valid: true},
+			TriggerEvidenceRefID: variantID,
+			Context:              contexts[item.lane],
+		})
+		if err != nil {
+			return nil, errors.New("automatic creative QC recovery could not be queued")
+		}
+		created[item.lane] = task
+	}
+	details, err := json.Marshal(map[string]any{
+		"creative_order_id":    uuidToString(orderID),
+		"variant_id":           uuidToString(variantID),
+		"revision":             revision,
+		"recovery_of_task_ids": failedTaskIDs,
+		"technical_task_id":    uuidToString(created["technical"].ID),
+		"visual_task_id":       uuidToString(created["visual"].ID),
+		"asset_invariant":      "reused_completed_primed_assets_only",
+		"automatic":            true,
+	})
+	if err != nil {
+		return nil, errors.New("failed to record automatic creative QC recovery")
+	}
+	if _, err := tx.Exec(ctx, `
+INSERT INTO activity_log (workspace_id, issue_id, actor_type, actor_id, action, details)
+VALUES ($1, $2, 'member', $3, 'creative_qc_recovery_queued', $4::jsonb)
+`, workspaceID, issueID, userID, details); err != nil {
+		return nil, errors.New("failed to record automatic creative QC recovery")
+	}
+	if _, err := tx.Exec(ctx, `
+DELETE FROM creative_order_qc_report WHERE variant_id = $1 AND revision = $2
+`, variantID, revision); err != nil {
+		return nil, errors.New("failed to reset previous creative QC reports")
+	}
+	if _, err := tx.Exec(ctx, `
+DELETE FROM creative_order_variant_qc_resolution WHERE variant_id = $1 AND revision = $2
+`, variantID, revision); err != nil {
+		return nil, errors.New("failed to reset previous creative QC resolution")
+	}
+	if _, err := tx.Exec(ctx, `
+UPDATE creative_order_variant SET status = 'running', updated_at = now() WHERE id = $1
+`, variantID); err != nil {
+		return nil, errors.New("failed to resume creative QC")
+	}
+	return created, nil
+}
+
 func creativeOrderQCAgentSnapshot(raw json.RawMessage) (pgtype.UUID, pgtype.UUID, error) {
+	leaderID, _, reviewerID, err := creativeOrderProductionAgentSnapshot(raw)
+	return leaderID, reviewerID, err
+}
+
+func creativeOrderProductionAgentSnapshot(raw json.RawMessage) (pgtype.UUID, pgtype.UUID, pgtype.UUID, error) {
 	var snapshot struct {
 		SquadSnapshot struct {
 			LeaderAgentID   string `json:"leader_agent_id"`
+			ProducerAgentID string `json:"producer_agent_id"`
 			ReviewerAgentID string `json:"reviewer_agent_id"`
 		} `json:"squad_snapshot"`
 	}
 	if err := json.Unmarshal(raw, &snapshot); err != nil {
-		return pgtype.UUID{}, pgtype.UUID{}, errors.New("creative order has an invalid frozen squad snapshot")
+		return pgtype.UUID{}, pgtype.UUID{}, pgtype.UUID{}, errors.New("creative order has an invalid frozen squad snapshot")
 	}
-	leaderID, err := uuid.Parse(strings.TrimSpace(snapshot.SquadSnapshot.LeaderAgentID))
+	parseSnapshotAgent := func(rawID, role string) (pgtype.UUID, error) {
+		id, err := uuid.Parse(strings.TrimSpace(rawID))
+		if err != nil {
+			return pgtype.UUID{}, fmt.Errorf("creative order is missing a frozen %s agent", role)
+		}
+		return pgtype.UUID{Bytes: id, Valid: true}, nil
+	}
+	leaderID, err := parseSnapshotAgent(snapshot.SquadSnapshot.LeaderAgentID, "leader")
 	if err != nil {
-		return pgtype.UUID{}, pgtype.UUID{}, errors.New("creative order is missing a frozen leader agent")
+		return pgtype.UUID{}, pgtype.UUID{}, pgtype.UUID{}, err
 	}
-	reviewerID, err := uuid.Parse(strings.TrimSpace(snapshot.SquadSnapshot.ReviewerAgentID))
+	producerID, err := parseSnapshotAgent(snapshot.SquadSnapshot.ProducerAgentID, "production")
 	if err != nil {
-		return pgtype.UUID{}, pgtype.UUID{}, errors.New("creative order is missing a frozen QC reviewer")
+		return pgtype.UUID{}, pgtype.UUID{}, pgtype.UUID{}, err
 	}
-	return pgtype.UUID{Bytes: leaderID, Valid: true}, pgtype.UUID{Bytes: reviewerID, Valid: true}, nil
+	reviewerID, err := parseSnapshotAgent(snapshot.SquadSnapshot.ReviewerAgentID, "QC reviewer")
+	if err != nil {
+		return pgtype.UUID{}, pgtype.UUID{}, pgtype.UUID{}, err
+	}
+	return leaderID, producerID, reviewerID, nil
+}
+
+func creativeVisualModelReworkFindings(findings json.RawMessage, expectedSizes []string) ([]creativeVisualModelReworkFinding, error) {
+	var report struct {
+		BlockingFailures []creativeVisualModelReworkFinding `json:"blocking_failures"`
+	}
+	if err := json.Unmarshal(findings, &report); err != nil {
+		return nil, errors.New("visual QC findings must be an object")
+	}
+	if len(report.BlockingFailures) == 0 {
+		return nil, errors.New("visual QC has no model-rework findings")
+	}
+	expected := make(map[string]struct{}, len(expectedSizes))
+	for _, size := range expectedSizes {
+		expected[size] = struct{}{}
+	}
+	seen := make(map[string]struct{}, len(report.BlockingFailures))
+	for index := range report.BlockingFailures {
+		finding := &report.BlockingFailures[index]
+		finding.Code = strings.TrimSpace(finding.Code)
+		finding.SizeKey = strings.TrimSpace(finding.SizeKey)
+		finding.Diagnosis = strings.TrimSpace(finding.Diagnosis)
+		if finding.Code != "actual_prime_obstruction" && finding.Code != "predicted_prime_obstruction" && finding.Code != "official_prime_text_unreadable" && finding.Code != "generated_content_missing" {
+			return nil, errors.New("visual QC finding is not eligible for model rework")
+		}
+		if _, ok := expected[finding.SizeKey]; !ok {
+			return nil, errors.New("visual QC model-rework finding has an unexpected size")
+		}
+		if _, duplicate := seen[finding.SizeKey]; duplicate {
+			return nil, errors.New("visual QC model-rework findings must have one finding per size")
+		}
+		seen[finding.SizeKey] = struct{}{}
+		if !validCreativeVisualModelReworkDiagnosis(finding.Code, finding.SizeKey, finding.Diagnosis) {
+			return nil, errors.New("visual QC model-rework finding has an invalid diagnosis")
+		}
+	}
+	return report.BlockingFailures, nil
+}
+
+func validCreativeVisualModelReworkDiagnosis(code, sizeKey, diagnosis string) bool {
+	if len([]rune(diagnosis)) > 500 || diagnosis == "" ||
+		!(strings.HasPrefix(diagnosis, sizeKey+"：") || strings.HasPrefix(diagnosis, sizeKey+":")) {
+		return false
+	}
+	if code == "actual_prime_obstruction" || code == "predicted_prime_obstruction" {
+		return strings.Contains(diagnosis, "期望移动到") &&
+			(strings.Contains(diagnosis, "safe_content_frame") || strings.Contains(diagnosis, " y")) &&
+			(strings.Contains(diagnosis, "冲突") || strings.Contains(diagnosis, "重叠") || strings.Contains(diagnosis, "叠压") || strings.Contains(diagnosis, "遮挡") || strings.Contains(diagnosis, "进入顶部 Prime 禁区") || strings.Contains(diagnosis, "进入底部 Prime 禁区"))
+	}
+	if code == "generated_content_missing" {
+		return strings.Contains(diagnosis, "期望补齐") &&
+			(strings.Contains(diagnosis, "冻结文案") || strings.Contains(diagnosis, "copy_snapshot")) &&
+			(strings.Contains(diagnosis, "缺失") || strings.Contains(diagnosis, "未出现") || strings.Contains(diagnosis, "没有"))
+	}
+	return strings.Contains(diagnosis, "期望调整为") &&
+		(strings.Contains(diagnosis, "背景") || strings.Contains(strings.ToLower(diagnosis), "background")) &&
+		(strings.Contains(diagnosis, "冲突") || strings.Contains(diagnosis, "重叠") || strings.Contains(diagnosis, "遮挡") || strings.Contains(diagnosis, "进入"))
+}
+
+func creativeVisualModelReworkAlreadyQueued(ctx context.Context, tx pgx.Tx, variantID pgtype.UUID) (bool, error) {
+	var exists bool
+	err := tx.QueryRow(ctx, `
+SELECT EXISTS(
+  SELECT 1
+  FROM agent_task_queue
+  WHERE trigger_evidence_kind = 'creative_order_item_production'
+    AND context->>'type' = 'creative_domain_task'
+    AND context->>'workflow' = 'creative_production'
+    AND context->>'variant_id' = $1::text
+    AND context ? 'qc_visual_rework'
+)
+`, variantID).Scan(&exists)
+	return exists, err
 }
 
 func creativeRecoverableQCTaskIDs(ctx context.Context, tx pgx.Tx, orderID, variantID pgtype.UUID, revision int) ([]string, error) {
@@ -2027,7 +1998,13 @@ WHERE (
               OR finding->>'code' LIKE 'qc_batch_%'
               OR finding->>'code' LIKE 'attachment_download_%'
           )
-      )
+          OR report.findings->>'failure_code' LIKE 'delegation_contract_%'
+          OR report.findings->>'failure_code' LIKE 'prompt_contract_%'
+          OR report.findings->>'failure_code' LIKE 'manifest_%'
+          OR report.findings->>'failure_code' LIKE 'prime_layout_contract_%'
+          OR report.findings->>'failure_code' LIKE 'qc_batch_%'
+          OR report.findings->>'failure_code' LIKE 'attachment_download_%'
+        )
     )
   )
 ORDER BY created_at, id
@@ -2048,6 +2025,43 @@ ORDER BY created_at, id
 		ids = append(ids, id)
 	}
 	return ids, rows.Err()
+}
+
+func creativeQCFindingsNeedAutomaticRecovery(findings json.RawMessage) bool {
+	var report struct {
+		BlockingFailures []struct {
+			Code string `json:"code"`
+		} `json:"blocking_failures"`
+	}
+	if err := json.Unmarshal(findings, &report); err != nil {
+		return false
+	}
+	for _, finding := range report.BlockingFailures {
+		code := strings.ToLower(strings.TrimSpace(finding.Code))
+		if strings.HasPrefix(code, "delegation_contract_") ||
+			strings.HasPrefix(code, "prompt_contract_") ||
+			strings.HasPrefix(code, "manifest_") ||
+			strings.HasPrefix(code, "prime_layout_contract_") ||
+			strings.HasPrefix(code, "qc_batch_") ||
+			strings.HasPrefix(code, "attachment_download_") {
+			return true
+		}
+	}
+	var failureReport struct {
+		FailureCode string `json:"failure_code"`
+	}
+	if err := json.Unmarshal(findings, &failureReport); err == nil {
+		code := strings.ToLower(strings.TrimSpace(failureReport.FailureCode))
+		if strings.HasPrefix(code, "delegation_contract_") ||
+			strings.HasPrefix(code, "prompt_contract_") ||
+			strings.HasPrefix(code, "manifest_") ||
+			strings.HasPrefix(code, "prime_layout_contract_") ||
+			strings.HasPrefix(code, "qc_batch_") ||
+			strings.HasPrefix(code, "attachment_download_") {
+			return true
+		}
+	}
+	return false
 }
 
 // CancelCreativeOrder closes an unfinished order while preserving its assets,
@@ -2071,17 +2085,18 @@ func (h *Handler) CancelCreativeOrder(w http.ResponseWriter, r *http.Request) {
 	defer tx.Rollback(r.Context())
 
 	var issueID pgtype.UUID
-	var status string
+	var status, submissionKey string
 	var allItemsAdopted bool
 	if err := tx.QueryRow(r.Context(), `
 SELECT o.issue_id,
   o.status,
+	  o.submission_key,
   COALESCE((SELECT count(*) > 0 AND bool_and(i.adopted_variant_id IS NOT NULL)
     FROM creative_order_item i WHERE i.order_id = o.id), false)
 FROM creative_order o
 WHERE o.id = $1 AND o.workspace_id = $2
 FOR UPDATE
-`, orderID, workspaceID).Scan(&issueID, &status, &allItemsAdopted); errors.Is(err, pgx.ErrNoRows) {
+`, orderID, workspaceID).Scan(&issueID, &status, &submissionKey, &allItemsAdopted); errors.Is(err, pgx.ErrNoRows) {
 		writeError(w, http.StatusNotFound, "creative order not found")
 		return
 	} else if err != nil {
@@ -2093,14 +2108,37 @@ FOR UPDATE
 		return
 	}
 
-	if status != "cancelled" {
+	if status != "cancelled" || submissionKey != "" {
 		if _, err := tx.Exec(r.Context(), `
-UPDATE creative_order SET status = 'cancelled', updated_at = now()
+UPDATE creative_order SET status = 'cancelled', submission_key = '', updated_at = now()
 WHERE id = $1 AND workspace_id = $2
 `, orderID, workspaceID); err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to cancel creative order")
 			return
 		}
+		if submissionKey != "" && issueID.Valid {
+			if _, err := tx.Exec(r.Context(), `
+UPDATE issue
+SET metadata = jsonb_set(
+  COALESCE(metadata, '{}'::jsonb) - 'creative_submission_key',
+  '{creative_submission_history}',
+  COALESCE(metadata->'creative_submission_history', '[]'::jsonb) || jsonb_build_array(jsonb_build_object(
+    'submission_key', $3,
+    'creative_order_id', $4::text,
+    'terminal_status', 'cancelled',
+    'retired_at', now()
+  ))
+)
+WHERE id = $1
+  AND workspace_id = $2
+  AND metadata->>'creative_submission_key' = $3
+`, issueID, workspaceID, submissionKey, orderID); err != nil {
+				writeError(w, http.StatusInternalServerError, "failed to retire creative order submission")
+				return
+			}
+		}
+	}
+	if status != "cancelled" {
 		details, err := json.Marshal(map[string]any{
 			"creative_order_id": uuidToString(orderID),
 			"previous_status":   status,
@@ -2261,6 +2299,22 @@ FOR UPDATE
 		writeError(w, http.StatusInternalServerError, "failed to load creative order variant")
 		return
 	}
+	var triggerKind, inputSnapshot, variantBrief string
+	if err := tx.QueryRow(r.Context(), `
+SELECT order_row.trigger_evidence_kind, order_row.input_snapshot::text, variant.brief::text
+FROM creative_order_variant variant
+JOIN creative_order_item item ON item.id = variant.order_item_id
+JOIN creative_order order_row ON order_row.id = item.order_id
+WHERE variant.id = $1 AND item.id = $2 AND order_row.id = $3
+`, variantID, itemID, orderID).Scan(&triggerKind, &inputSnapshot, &variantBrief); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to load creative delivery scope")
+		return
+	}
+	expectedSizes, err := expectedCreativeVariantSizes(triggerKind, json.RawMessage(inputSnapshot), json.RawMessage(variantBrief))
+	if err != nil {
+		writeError(w, http.StatusConflict, err.Error())
+		return
+	}
 	var technicalStatus, visualStatus, qcOutcome string
 	if err := tx.QueryRow(r.Context(), `
 SELECT
@@ -2331,7 +2385,7 @@ LEFT JOIN LATERAL (
 	  ORDER BY asset.updated_at DESC
 	  LIMIT 1
 ) prime_asset ON true
-`, variantID, revision, standardCreativeAssetSizes).Scan(&missingPrimeSizes); err != nil {
+`, variantID, revision, expectedSizes).Scan(&missingPrimeSizes); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to load creative variant Prime package")
 		return
 	}
@@ -2341,7 +2395,7 @@ LEFT JOIN LATERAL (
 	}
 
 	if riskAdoption {
-		if _, err := copyCreativePrimedAssetsToDelivered(r.Context(), tx, variantID, revision, standardCreativeAssetSizes); err != nil {
+		if _, err := copyCreativePrimedAssetsToDelivered(r.Context(), tx, variantID, revision, expectedSizes); err != nil {
 			writeError(w, http.StatusConflict, err.Error())
 			return
 		}
@@ -2363,7 +2417,7 @@ LEFT JOIN LATERAL (
 	  ORDER BY asset.updated_at DESC
 	  LIMIT 1
 ) final_asset ON true
-`, variantID, revision, standardCreativeAssetSizes).Scan(&missingSizes); err != nil {
+`, variantID, revision, expectedSizes).Scan(&missingSizes); err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to load creative variant delivery package")
 			return
 		}
@@ -2414,7 +2468,7 @@ WHERE id = $1
 		"variant_key":                 variantKey,
 		"revision":                    revision,
 		"previous_adopted_variant_id": uuidToString(previousVariantID),
-		"delivery_package_sizes":      standardCreativeAssetSizes,
+		"delivery_package_sizes":      expectedSizes,
 		"adoption_mode":               adoptionMode,
 		"qc_risk_acknowledged":        riskAdoption,
 		"qc_risk_reason":              feedbackComment,
@@ -2493,22 +2547,37 @@ func (h *Handler) UpsertCreativeOrderVariant(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	var itemExists bool
+	var itemDirection string
+	var inputSnapshot string
 	var currentRevision int
 	var currentStatus string
 	var triggerKind string
 	if err := h.DB.QueryRow(r.Context(), `
 SELECT EXISTS(SELECT 1 FROM creative_order_item i JOIN creative_order o ON o.id = i.order_id WHERE i.id = $1 AND i.order_id = $2 AND o.workspace_id = $3),
+  COALESCE((SELECT i.direction FROM creative_order_item i JOIN creative_order o ON o.id = i.order_id WHERE i.id = $1 AND i.order_id = $2 AND o.workspace_id = $3), ''),
+	  COALESCE((SELECT o.input_snapshot::text FROM creative_order_item i JOIN creative_order o ON o.id = i.order_id WHERE i.id = $1 AND i.order_id = $2 AND o.workspace_id = $3), '{}'),
   COALESCE((SELECT v.revision FROM creative_order_variant v WHERE v.order_item_id = $1 AND v.variant_key = $4), 0),
   COALESCE((SELECT v.status FROM creative_order_variant v WHERE v.order_item_id = $1 AND v.variant_key = $4), ''),
   COALESCE((SELECT o.trigger_evidence_kind FROM creative_order_item i JOIN creative_order o ON o.id = i.order_id WHERE i.id = $1), '')
-`, itemID, orderID, workspaceID, input.VariantKey).Scan(&itemExists, &currentRevision, &currentStatus, &triggerKind); err != nil || !itemExists {
+`, itemID, orderID, workspaceID, input.VariantKey).Scan(&itemExists, &itemDirection, &inputSnapshot, &currentRevision, &currentStatus, &triggerKind); err != nil || !itemExists {
 		writeError(w, http.StatusUnprocessableEntity, "order item does not belong to this creative order")
 		return
 	}
-	maxRevision := creativeOrderVariantMaxRevision(triggerKind, currentRevision, currentStatus)
-	if input.Revision > maxRevision || (currentRevision == 0 && input.Revision != 1) || (currentRevision > 0 && input.Revision > currentRevision+1) {
+	input.Brief, err = bindCreativeOrderVariantFrozenContract(input.Brief, itemDirection, json.RawMessage(inputSnapshot))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if currentRevision == 0 && input.Revision != 1 {
 		writeError(w, http.StatusConflict, "creative order variant rework limit exceeded")
 		return
+	}
+	if currentRevision > 0 && input.Revision > currentRevision {
+		maxRevision := creativeOrderVariantMaxRevision(triggerKind, currentRevision, currentStatus)
+		if input.Revision > maxRevision || input.Revision > currentRevision+1 {
+			writeError(w, http.StatusConflict, "creative order variant rework limit exceeded")
+			return
+		}
 	}
 	variant, err := scanCreativeOrderVariant(h.DB.QueryRow(r.Context(), `
 INSERT INTO creative_order_variant (order_item_id, variant_key, brief, revision, status)
@@ -2541,8 +2610,6 @@ RETURNING id::text, order_item_id::text, variant_key, brief::text, revision, sta
       AND recovery.details->>'revision' = creative_order_variant.revision::text
   ),
   false,
-	false,
-	false,
   created_at::text, updated_at::text
 `, itemID, input.VariantKey, input.Brief, input.Revision, input.Status))
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -2632,6 +2699,9 @@ WHERE v.id = $1
 		writeError(w, http.StatusInternalServerError, "failed to load creative order variant")
 		return
 	}
+	if input.Revision == 0 && input.revisionDefaulted {
+		input.Revision = variantRevision
+	}
 	if input.Revision != variantRevision {
 		writeError(w, http.StatusConflict, "creative order asset revision is stale")
 		return
@@ -2674,8 +2744,361 @@ RETURNING id::text, variant_id::text, asset_family_id::text, size_key, revision,
 		writeError(w, http.StatusInternalServerError, "failed to save creative order asset")
 		return
 	}
+	if input.Stage == "generated" && input.Status == "completed" {
+		// Composition can wait behind other completed variants. Keep that
+		// server-side work alive after the client gives up on this asset write.
+		composeContext, cancelCompose := context.WithTimeout(context.WithoutCancel(r.Context()), 10*time.Minute)
+		defer cancelCompose()
+		if _, composeErr := h.composeCreativeOrderVariantPrime(composeContext, workspaceID, orderID, variantID, userID); composeErr != nil {
+			var qcHandoffErr *creativeQCHandoffError
+			if errors.As(composeErr, &qcHandoffErr) {
+				h.markCreativeQCHandoffFailed(composeContext, variantID, qcHandoffErr)
+			} else {
+				h.markCreativePrimeCompositionFailed(composeContext, variantID, composeErr)
+			}
+		}
+	}
 	h.publishCreativeDomainUpdated(r, workspaceID, userID, map[string]any{"scope": "order", "order_id": chi.URLParam(r, "id")})
 	writeJSON(w, http.StatusOK, asset)
+}
+
+func (h *Handler) UpsertCreativeOrderDiagnosticAsset(w http.ResponseWriter, r *http.Request) {
+	workspaceID, userID, ok := h.creativeFeedbackWorkspaceUser(w, r)
+	if !ok {
+		return
+	}
+	orderID, ok := parseUUIDOrBadRequest(w, chi.URLParam(r, "id"), "order_id")
+	if !ok {
+		return
+	}
+	if !h.requireCreativeOrderWritable(w, r, orderID, workspaceID) {
+		return
+	}
+	var input creativeOrderDiagnosticAssetInput
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid creative order diagnostic asset")
+		return
+	}
+	input, err := normalizeCreativeOrderDiagnosticAsset(input)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	variantID, ok := parseUUIDOrBadRequest(w, input.VariantID, "variant_id")
+	if !ok {
+		return
+	}
+	attachmentID, ok := parseUUIDOrBadRequest(w, input.AttachmentID, "attachment_id")
+	if !ok {
+		return
+	}
+	taskID, ok := optionalUUIDOrBadRequest(w, input.TaskID, "task_id")
+	if !ok {
+		return
+	}
+	var variantRevision int
+	var issueID string
+	if err := h.DB.QueryRow(r.Context(), `
+SELECT variant.revision, COALESCE(order_row.issue_id::text, '')
+FROM creative_order_variant variant
+JOIN creative_order_item item ON item.id = variant.order_item_id
+JOIN creative_order order_row ON order_row.id = item.order_id
+WHERE order_row.id = $1 AND variant.id = $2 AND order_row.workspace_id = $3
+`, orderID, variantID, workspaceID).Scan(&variantRevision, &issueID); err != nil {
+		writeError(w, http.StatusUnprocessableEntity, "variant does not belong to this creative order")
+		return
+	}
+	if input.Revision != variantRevision {
+		writeError(w, http.StatusConflict, "creative order diagnostic asset revision is stale")
+		return
+	}
+	var attachmentFilename string
+	if err := h.DB.QueryRow(r.Context(), `
+SELECT filename
+FROM attachment
+WHERE id = $1 AND workspace_id = $2
+`, attachmentID, workspaceID).Scan(&attachmentFilename); err != nil {
+		writeError(w, http.StatusUnprocessableEntity, "attachment does not belong to this workspace")
+		return
+	}
+	if input.Filename == "" {
+		input.Filename = attachmentFilename
+	}
+	if taskID.Valid {
+		var taskExists bool
+		if err := h.DB.QueryRow(r.Context(), `
+SELECT EXISTS(
+  SELECT 1
+  FROM agent_task_queue task
+  JOIN agent assigned_agent ON assigned_agent.id = task.agent_id
+  WHERE task.id = $1
+    AND assigned_agent.workspace_id = $2
+    AND (task.issue_id IS NULL OR task.issue_id::text = $3)
+    AND task.context->>'type' = 'creative_domain_task'
+    AND task.context->>'creative_order_id' = $4
+    AND task.context->>'variant_id' = $5
+    AND COALESCE(NULLIF(task.context->>'revision', '')::int, $6) = $6
+)
+`, taskID, workspaceID, issueID, uuidToString(orderID), input.VariantID, input.Revision).Scan(&taskExists); err != nil || !taskExists {
+			writeError(w, http.StatusUnprocessableEntity, "task does not belong to this creative order variant")
+			return
+		}
+	}
+	asset, err := scanCreativeOrderDiagnosticAsset(h.DB.QueryRow(r.Context(), `
+INSERT INTO creative_order_diagnostic_asset (
+  variant_id, task_id, attachment_id, size_key, revision, workflow, label, filename, metadata
+)
+VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb)
+ON CONFLICT (variant_id, revision, workflow, size_key, label, filename) DO UPDATE SET
+  task_id = EXCLUDED.task_id,
+  attachment_id = EXCLUDED.attachment_id,
+  metadata = EXCLUDED.metadata,
+  updated_at = now()
+RETURNING id::text, variant_id::text, COALESCE(task_id::text, ''), attachment_id::text,
+  size_key, revision, workflow, label, filename, metadata::text, created_at::text
+`, variantID, taskID, attachmentID, input.SizeKey, input.Revision, input.Workflow, input.Label, input.Filename, input.Metadata))
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to save creative diagnostic asset")
+		return
+	}
+	h.publishCreativeDomainUpdated(r, workspaceID, userID, map[string]any{"scope": "order", "order_id": chi.URLParam(r, "id")})
+	writeJSON(w, http.StatusOK, asset)
+}
+
+// Legacy diagnostic promotion is retained only for decoding old records. New
+// production never creates selectable repair candidates and the route is no
+// longer registered.
+func (h *Handler) PromoteCreativeOrderDiagnosticAsset(w http.ResponseWriter, r *http.Request) {
+	workspaceID, userID, ok := h.creativeFeedbackWorkspaceUser(w, r)
+	if !ok {
+		return
+	}
+	orderID, ok := parseUUIDOrBadRequest(w, chi.URLParam(r, "id"), "order_id")
+	if !ok {
+		return
+	}
+	if !h.requireCreativeOrderWritable(w, r, orderID, workspaceID) {
+		return
+	}
+	diagnosticAssetID, ok := parseUUIDOrBadRequest(w, chi.URLParam(r, "assetId"), "diagnostic_asset_id")
+	if !ok {
+		return
+	}
+
+	tx, err := h.TxStarter.Begin(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to start diagnostic candidate promotion")
+		return
+	}
+	defer tx.Rollback(r.Context())
+
+	var candidate creativeOrderDiagnosticAsset
+	var metadata string
+	var variantID pgtype.UUID
+	var variantRevision int
+	var variantStatus, triggerKind, inputSnapshot, brief string
+	var issueID pgtype.UUID
+	if err := tx.QueryRow(r.Context(), `
+SELECT diagnostic.id, diagnostic.variant_id, COALESCE(diagnostic.task_id::text, ''),
+       diagnostic.attachment_id::text, diagnostic.size_key, diagnostic.revision,
+       diagnostic.workflow, diagnostic.label, diagnostic.filename, diagnostic.metadata::text,
+       diagnostic.created_at::text, variant.revision, variant.status,
+       order_row.trigger_evidence_kind, order_row.input_snapshot::text, variant.brief::text,
+       order_row.issue_id
+FROM creative_order_diagnostic_asset diagnostic
+JOIN creative_order_variant variant ON variant.id = diagnostic.variant_id
+JOIN creative_order_item item ON item.id = variant.order_item_id
+JOIN creative_order order_row ON order_row.id = item.order_id
+WHERE diagnostic.id = $1
+  AND order_row.id = $2
+  AND order_row.workspace_id = $3
+FOR UPDATE OF diagnostic, variant
+`, diagnosticAssetID, orderID, workspaceID).Scan(
+		&candidate.ID, &candidate.VariantID, &candidate.TaskID, &candidate.AttachmentID,
+		&candidate.SizeKey, &candidate.Revision, &candidate.Workflow, &candidate.Label,
+		&candidate.Filename, &metadata, &candidate.CreatedAt, &variantRevision,
+		&variantStatus, &triggerKind, &inputSnapshot, &brief, &issueID,
+	); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			writeError(w, http.StatusNotFound, "creative repair candidate not found")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "failed to load creative repair candidate")
+		return
+	}
+	variantID = parseUUID(candidate.VariantID)
+	candidate.Metadata = json.RawMessage(metadata)
+	candidate.URL = attachmentDownloadPath(candidate.AttachmentID)
+	if candidate.Workflow != "qc_visual_rework" || candidate.Label != "Image2重排" {
+		writeError(w, http.StatusConflict, "only the bounded Image2 reflow record can be promoted")
+		return
+	}
+	var candidateState struct {
+		Selected bool `json:"selected"`
+	}
+	_ = json.Unmarshal(candidate.Metadata, &candidateState)
+	if (variantStatus != "action_required" && !(variantStatus == "running" && candidateState.Selected)) || candidate.Revision != variantRevision {
+		writeError(w, http.StatusConflict, "creative repair candidate is not awaiting a selection")
+		return
+	}
+	expectedSizes, err := expectedCreativeVariantSizes(triggerKind, json.RawMessage(inputSnapshot), json.RawMessage(brief))
+	if err != nil {
+		writeError(w, http.StatusConflict, err.Error())
+		return
+	}
+	if !creativeSizeIsExpected(candidate.SizeKey, expectedSizes) {
+		writeError(w, http.StatusUnprocessableEntity, "repair candidate size is outside this creative variant's delivery scope")
+		return
+	}
+	// A candidate is selected after an action-required QC resolution. Reopen
+	// the same revision so the replacement gets fresh technical and visual QC.
+	if _, err := tx.Exec(r.Context(), `
+UPDATE agent_task_queue
+SET context = COALESCE(context, '{}'::jsonb) || '{"superseded_by_candidate":true}'::jsonb
+WHERE trigger_evidence_kind = 'creative_order_variant_qc'
+  AND trigger_evidence_ref_id = $1
+  AND COALESCE(NULLIF(context->>'revision', '')::int, 1) = $2
+`, variantID, candidate.Revision); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to supersede previous creative QC tasks")
+		return
+	}
+	if _, err := tx.Exec(r.Context(), `
+DELETE FROM creative_order_qc_report
+WHERE variant_id = $1 AND revision = $2
+`, variantID, candidate.Revision); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to reset previous creative QC reports")
+		return
+	}
+	if _, err := tx.Exec(r.Context(), `
+DELETE FROM creative_order_variant_qc_resolution
+WHERE variant_id = $1 AND revision = $2
+`, variantID, candidate.Revision); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to reset previous creative QC resolution")
+		return
+	}
+	if _, err := tx.Exec(r.Context(), `
+DELETE FROM creative_order_asset
+WHERE variant_id = $1 AND revision = $2 AND stage = 'primed' AND size_key = $3
+`, variantID, candidate.Revision, candidate.SizeKey); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to invalidate previous Prime asset")
+		return
+	}
+
+	var sourceAssetID, assetFamilyID pgtype.UUID
+	var sourceRevision int
+	if err := tx.QueryRow(r.Context(), `
+SELECT id, asset_family_id, revision
+FROM creative_order_asset
+WHERE variant_id = $1
+  AND size_key = $2
+  AND stage = 'generated'
+  AND status = 'completed'
+  AND revision < $3
+ORDER BY revision DESC
+LIMIT 1
+`, variantID, candidate.SizeKey, candidate.Revision).Scan(&sourceAssetID, &assetFamilyID, &sourceRevision); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			writeError(w, http.StatusConflict, "repair candidate has no generated source asset")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "failed to load repair candidate source asset")
+		return
+	}
+	var generated creativeOrderAssetResponse
+	var generatedMetadata, generatedEvidence string
+	err = tx.QueryRow(r.Context(), `
+INSERT INTO creative_order_asset (
+  variant_id, asset_family_id, size_key, revision, stage, attachment_id,
+  derived_from_asset_id, metadata, evidence, status
+)
+VALUES ($1,$2,$3,$4,'generated',$5,$6,$7::jsonb,$8::jsonb,'completed')
+ON CONFLICT (variant_id, size_key, revision, stage) DO UPDATE SET
+  asset_family_id = EXCLUDED.asset_family_id,
+  attachment_id = EXCLUDED.attachment_id,
+  derived_from_asset_id = EXCLUDED.derived_from_asset_id,
+  metadata = EXCLUDED.metadata,
+  evidence = EXCLUDED.evidence,
+  status = EXCLUDED.status,
+  updated_at = now()
+RETURNING id::text, variant_id::text, asset_family_id::text, size_key, revision,
+  stage, COALESCE(attachment_id::text, ''), COALESCE(derived_from_asset_id::text, ''),
+  metadata::text, evidence::text, status, created_at::text, updated_at::text
+`, variantID, assetFamilyID, candidate.SizeKey, candidate.Revision, parseUUID(candidate.AttachmentID), sourceAssetID,
+		json.RawMessage(fmt.Sprintf(`{"repair_candidate":{"method":%q,"diagnostic_asset_id":%q,"source_revision":%d}}`,
+			creativeRepairCandidateMethod(candidate.Label), uuidToString(diagnosticAssetID), sourceRevision)),
+		json.RawMessage(fmt.Sprintf(`{"repair_comparison":{"selected_method":%q,"diagnostic_asset_id":%q,"source_asset_id":%q}}`,
+			creativeRepairCandidateMethod(candidate.Label), uuidToString(diagnosticAssetID), uuidToString(sourceAssetID))),
+	).Scan(&generated.ID, &generated.VariantID, &generated.AssetFamilyID, &generated.SizeKey, &generated.Revision,
+		&generated.Stage, &generated.AttachmentID, &generated.DerivedFromAssetID, &generatedMetadata,
+		&generatedEvidence, &generated.Status, &generated.CreatedAt, &generated.UpdatedAt)
+	if err != nil {
+		if isUniqueViolation(err) {
+			writeError(w, http.StatusConflict, "a repair candidate has already been promoted for this size")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "failed to promote repair candidate")
+		return
+	}
+	generated.Metadata = json.RawMessage(generatedMetadata)
+	generated.Evidence = json.RawMessage(generatedEvidence)
+	selectedMethod := creativeRepairCandidateMethod(candidate.Label)
+	if _, err := tx.Exec(r.Context(), `
+UPDATE creative_order_diagnostic_asset
+SET metadata = jsonb_set(metadata, '{selected}', 'false'::jsonb, true), updated_at = now()
+WHERE variant_id = $1 AND revision = $2 AND size_key = $3
+`, variantID, candidate.Revision, candidate.SizeKey); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to mark repair comparison candidates")
+		return
+	}
+	selectedMetadata := json.RawMessage(fmt.Sprintf(`{"candidate_method":%q,"selected":true,"source_revision":%d,"source_asset_id":%q}`, selectedMethod, sourceRevision, uuidToString(sourceAssetID)))
+	if _, err := tx.Exec(r.Context(), `
+UPDATE creative_order_diagnostic_asset
+SET metadata = metadata || $2::jsonb, updated_at = now()
+WHERE id = $1
+`, diagnosticAssetID, selectedMetadata); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to record selected repair candidate")
+		return
+	}
+	if _, err := tx.Exec(r.Context(), `
+UPDATE creative_order_variant
+SET status = 'running', updated_at = now()
+WHERE id = $1 AND revision = $2
+`, variantID, candidate.Revision); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to resume creative variant")
+		return
+	}
+	if _, err := tx.Exec(r.Context(), `UPDATE creative_order SET updated_at = now() WHERE id = $1`, orderID); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to update creative order after candidate promotion")
+		return
+	}
+	if err := tx.Commit(r.Context()); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to commit repair candidate promotion")
+		return
+	}
+
+	compositionStarted := false
+	composeContext, cancelCompose := context.WithTimeout(context.WithoutCancel(r.Context()), 10*time.Minute)
+	defer cancelCompose()
+	if _, composeErr := h.composeCreativeOrderVariantPrime(composeContext, workspaceID, orderID, variantID, userID); composeErr != nil {
+		var qcHandoffErr *creativeQCHandoffError
+		if errors.As(composeErr, &qcHandoffErr) {
+			h.markCreativeQCHandoffFailed(composeContext, variantID, qcHandoffErr)
+		} else {
+			h.markCreativePrimeCompositionFailed(composeContext, variantID, composeErr)
+		}
+	} else {
+		compositionStarted = true
+	}
+	candidate.Metadata = selectedMetadata
+	h.publishCreativeDomainUpdated(r, workspaceID, userID, map[string]any{"scope": "order", "order_id": chi.URLParam(r, "id")})
+	writeJSON(w, http.StatusOK, creativeOrderDiagnosticPromotionResponse{
+		Candidate: candidate, Generated: generated, VariantID: uuidToString(variantID),
+		Revision: candidate.Revision, SelectedMethod: selectedMethod, CompositionStarted: compositionStarted,
+	})
+}
+
+func creativeRepairCandidateMethod(label string) string {
+	return "image2_reflow"
 }
 
 func (h *Handler) UpsertCreativeOrderQC(w http.ResponseWriter, r *http.Request) {
@@ -2690,12 +3113,17 @@ func (h *Handler) UpsertCreativeOrderQC(w http.ResponseWriter, r *http.Request) 
 	if !h.requireCreativeOrderWritable(w, r, orderID, workspaceID) {
 		return
 	}
-	var input creativeOrderQCInput
-	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+	var raw json.RawMessage
+	if err := json.NewDecoder(r.Body).Decode(&raw); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid creative order QC report")
 		return
 	}
-	input, err := normalizeCreativeOrderQC(input)
+	input, err := decodeCreativeOrderQCInput(raw)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	input, err = normalizeCreativeOrderQC(input)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
@@ -2768,6 +3196,29 @@ RETURNING id::text
 	writeJSON(w, http.StatusOK, map[string]any{"id": qcID, "variant_id": input.VariantID, "lane": input.Lane, "revision": input.Revision, "status": input.Status})
 }
 
+// decodeCreativeOrderQCInput accepts both the API envelope and the direct
+// qc-report.json shape emitted by the QC skill. The latter keeps the report's
+// blocking_failures at the top level, so treating the whole report as findings
+// preserves the structured rework contract instead of silently storing {}.
+func decodeCreativeOrderQCInput(raw json.RawMessage) (creativeOrderQCInput, error) {
+	var envelope map[string]json.RawMessage
+	if len(raw) == 0 || json.Unmarshal(raw, &envelope) != nil || envelope == nil {
+		return creativeOrderQCInput{}, errors.New("invalid creative order QC report")
+	}
+	encoded, err := json.Marshal(envelope)
+	if err != nil {
+		return creativeOrderQCInput{}, errors.New("invalid creative order QC report")
+	}
+	var input creativeOrderQCInput
+	if err := json.Unmarshal(encoded, &input); err != nil {
+		return creativeOrderQCInput{}, errors.New("invalid creative order QC report")
+	}
+	if _, hasFindings := envelope["findings"]; !hasFindings {
+		input.Findings = encoded
+	}
+	return input, nil
+}
+
 // FinalizeCreativeOrderQC is the only barrier between independently-run QC
 // lanes and an externally visible delivery. It locks the variant row, so two
 // lanes may race to call it but only one can create the resolution and inbox
@@ -2815,16 +3266,17 @@ func (h *Handler) FinalizeCreativeOrderQC(w http.ResponseWriter, r *http.Request
 
 	var variantRevision int
 	var variantKey, triggerKind, inputSnapshot, brief string
+	var itemID, candidateID pgtype.UUID
 	var issueID pgtype.UUID
 	var createdBy pgtype.UUID
 	if err := tx.QueryRow(r.Context(), `
-SELECT v.revision, v.variant_key, o.issue_id, o.created_by, o.trigger_evidence_kind, o.input_snapshot::text, v.brief::text
+SELECT v.revision, v.variant_key, i.id, i.candidate_id, o.issue_id, o.created_by, o.trigger_evidence_kind, o.input_snapshot::text, v.brief::text
 FROM creative_order_variant v
 JOIN creative_order_item i ON i.id = v.order_item_id
 JOIN creative_order o ON o.id = i.order_id
 WHERE v.id = $1 AND o.id = $2 AND o.workspace_id = $3
 FOR UPDATE OF v
-`, variantID, orderID, workspaceID).Scan(&variantRevision, &variantKey, &issueID, &createdBy, &triggerKind, &inputSnapshot, &brief); err != nil {
+`, variantID, orderID, workspaceID).Scan(&variantRevision, &variantKey, &itemID, &candidateID, &issueID, &createdBy, &triggerKind, &inputSnapshot, &brief); err != nil {
 		writeError(w, http.StatusUnprocessableEntity, "variant does not belong to this creative order")
 		return
 	}
@@ -2840,6 +3292,8 @@ FOR UPDATE OF v
 
 	reportStatuses := map[string]string{}
 	failureSummary := map[string]json.RawMessage{}
+	technicalHasBlockingFailure := false
+	visualHasBlockingFailure := false
 	rows, err := tx.Query(r.Context(), `
 SELECT lane, status, findings::text
 FROM creative_order_qc_report
@@ -2857,12 +3311,20 @@ FOR UPDATE
 			writeError(w, http.StatusInternalServerError, "failed to read creative QC reports")
 			return
 		}
-		blockingFailures, findingsErr := creativeQCFindingsHaveBlockingFailures(json.RawMessage(findings))
-		if findingsErr != nil || blockingFailures {
-			status = "failed"
+		hasBlockingFailure, findingsErr := creativeQCFindingsHaveBlockingFailures(json.RawMessage(findings))
+		if findingsErr != nil {
+			rows.Close()
+			writeError(w, http.StatusBadRequest, findingsErr.Error())
+			return
 		}
 		reportStatuses[lane] = status
 		failureSummary[lane] = json.RawMessage(findings)
+		if lane == "technical" && (hasBlockingFailure || status == "failed") {
+			technicalHasBlockingFailure = true
+		}
+		if lane == "visual" && (hasBlockingFailure || status == "failed") {
+			visualHasBlockingFailure = true
+		}
 	}
 	if err := rows.Err(); err != nil {
 		rows.Close()
@@ -2889,8 +3351,85 @@ FOR UPDATE
 	}
 
 	outcome := "delivered"
-	if reportStatuses["technical"] == "failed" || reportStatuses["visual"] == "failed" {
+	if technicalHasBlockingFailure || visualHasBlockingFailure {
 		outcome = "action_required"
+	}
+	var visualReworkFindings []creativeVisualModelReworkFinding
+	if outcome == "action_required" && !technicalHasBlockingFailure && reportStatuses["visual"] == "failed" {
+		alreadyQueued, queuedErr := creativeVisualModelReworkAlreadyQueued(r.Context(), tx, variantID)
+		if queuedErr != nil {
+			writeError(w, http.StatusInternalServerError, "failed to check creative visual rework limit")
+			return
+		}
+		if !alreadyQueued {
+			visualReworkFindings, _ = creativeVisualModelReworkFindings(failureSummary["visual"], expectedSizes)
+		}
+	}
+	if outcome == "action_required" && len(visualReworkFindings) == 0 {
+		recoverableTaskIDs, recoveryErr := creativeRecoverableQCTaskIDs(r.Context(), tx, orderID, variantID, input.Revision)
+		if recoveryErr != nil {
+			writeError(w, http.StatusInternalServerError, "failed to check automatic creative QC recovery")
+			return
+		}
+		automaticRecovery := len(recoverableTaskIDs) > 0 ||
+			creativeQCFindingsNeedAutomaticRecovery(failureSummary["technical"]) ||
+			creativeQCFindingsNeedAutomaticRecovery(failureSummary["visual"])
+		if automaticRecovery {
+			currentTaskID := uuidToString(task.ID)
+			seenTaskIDs := make(map[string]struct{}, len(recoverableTaskIDs)+1)
+			for _, taskID := range recoverableTaskIDs {
+				seenTaskIDs[taskID] = struct{}{}
+			}
+			if currentTaskID != "" {
+				if _, seen := seenTaskIDs[currentTaskID]; !seen {
+					recoverableTaskIDs = append(recoverableTaskIDs, currentTaskID)
+				}
+			}
+			var recoveryAlreadyUsed bool
+			if err := tx.QueryRow(r.Context(), `
+SELECT EXISTS(
+  SELECT 1 FROM activity_log
+  WHERE issue_id = $1 AND action = 'creative_qc_recovery_queued'
+    AND details->>'variant_id' = $2::text
+    AND details->>'revision' = $3::text
+)
+`, issueID, variantID, strconv.Itoa(input.Revision)).Scan(&recoveryAlreadyUsed); err != nil {
+				writeError(w, http.StatusInternalServerError, "failed to check automatic creative QC recovery limit")
+				return
+			}
+			if !recoveryAlreadyUsed && len(recoverableTaskIDs) > 0 {
+				created, recoveryErr := h.queueCreativeQCAutomaticRecovery(
+					r.Context(), tx, workspaceID, userID, orderID, itemID, variantID, issueID,
+					input.Revision, json.RawMessage(inputSnapshot), expectedSizes, recoverableTaskIDs,
+				)
+				if recoveryErr != nil {
+					writeError(w, http.StatusInternalServerError, recoveryErr.Error())
+					return
+				}
+				if _, err := tx.Exec(r.Context(), `UPDATE creative_order SET updated_at = now() WHERE id = $1`, orderID); err != nil {
+					writeError(w, http.StatusInternalServerError, "failed to update creative order after automatic QC recovery")
+					return
+				}
+				if err := tx.Commit(r.Context()); err != nil {
+					writeError(w, http.StatusInternalServerError, "failed to commit automatic creative QC recovery")
+					return
+				}
+				for _, recoveryTask := range created {
+					h.TaskService.NotifyTaskEnqueued(r.Context(), recoveryTask)
+				}
+				response.TechnicalStatus = "pending"
+				response.VisualStatus = "pending"
+				response.Outcome = "pending"
+				response.Finalized = false
+				response.OrderAggregateStatus, _ = h.derivedCreativeOrderStatus(r, orderID)
+				h.publishCreativeDomainUpdated(r, workspaceID, userID, map[string]any{
+					"scope": "order", "order_id": chi.URLParam(r, "id"), "variant_id": input.VariantID,
+					"revision": input.Revision, "recovery": "creative_qc_automatic",
+				})
+				writeJSON(w, http.StatusOK, response)
+				return
+			}
+		}
 	}
 	failureSummaryJSON, err := json.Marshal(failureSummary)
 	if err != nil {
@@ -2930,6 +3469,9 @@ SELECT outcome FROM creative_order_variant_qc_resolution WHERE variant_id = $1 A
 	response.Created = true
 	response.Finalized = true
 	response.Outcome = outcome
+	var inbox db.InboxItem
+	var shouldPublishInbox bool
+	var reworkTask db.AgentTaskQueue
 	if outcome == "delivered" {
 		count, err := copyCreativePrimedAssetsToDelivered(r.Context(), tx, variantID, input.Revision, expectedSizes)
 		if err != nil {
@@ -2941,43 +3483,60 @@ SELECT outcome FROM creative_order_variant_qc_resolution WHERE variant_id = $1 A
 			writeError(w, http.StatusInternalServerError, "failed to complete creative variant")
 			return
 		}
-	} else if _, err := tx.Exec(r.Context(), `UPDATE creative_order_variant SET status = 'action_required', updated_at = now() WHERE id = $1`, variantID); err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to require creative QC action")
-		return
+		shouldPublishInbox = true
+	} else if len(visualReworkFindings) > 0 {
+		reworkTask, err = h.queueCreativeVisualModelRework(
+			r.Context(), tx, workspaceID, orderID, itemID, candidateID, variantID, issueID,
+			json.RawMessage(inputSnapshot), input.Revision, expectedSizes, task, visualReworkFindings,
+		)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		response.ReworkTaskID = uuidToString(reworkTask.ID)
+		response.ReworkRevision = input.Revision + 1
+	} else {
+		if _, err := tx.Exec(r.Context(), `UPDATE creative_order_variant SET status = 'action_required', updated_at = now() WHERE id = $1`, variantID); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to require creative QC action")
+			return
+		}
+		shouldPublishInbox = true
 	}
 	if _, err := tx.Exec(r.Context(), `UPDATE creative_order SET updated_at = now() WHERE id = $1`, orderID); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to update creative order after QC")
 		return
 	}
 
-	inboxDetails, _ := json.Marshal(map[string]any{
-		"creative_order_id": uuidToString(orderID), "variant_id": input.VariantID,
-		"revision": input.Revision, "outcome": outcome,
-	})
-	inbox, err := h.Queries.WithTx(tx).CreateInboxItem(r.Context(), db.CreateInboxItemParams{
-		WorkspaceID:   workspaceID,
-		RecipientType: "member",
-		RecipientID:   createdBy,
-		Type:          "creative_qc_" + outcome,
-		Severity:      creativeQCInboxSeverity(outcome),
-		IssueID:       issueID,
-		Title:         creativeQCInboxTitle(variantKey, outcome),
-		Body:          pgtype.Text{String: creativeQCInboxBody(variantKey, outcome, len(expectedSizes)), Valid: true},
-		ActorType:     pgtype.Text{String: "agent", Valid: true},
-		ActorID:       task.AgentID,
-		Details:       inboxDetails,
-	})
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to notify creative order owner")
-		return
-	}
-	response.InboxItemID = uuidToString(inbox.ID)
-	if _, err := tx.Exec(r.Context(), `
+	if shouldPublishInbox {
+		inboxDetails, _ := json.Marshal(map[string]any{
+			"creative_order_id": uuidToString(orderID), "variant_id": input.VariantID,
+			"revision": input.Revision, "outcome": outcome,
+		})
+		inbox, err = h.Queries.WithTx(tx).CreateInboxItem(r.Context(), db.CreateInboxItemParams{
+			WorkspaceID:   workspaceID,
+			RecipientType: "member",
+			RecipientID:   createdBy,
+			Type:          "creative_qc_" + outcome,
+			Severity:      creativeQCInboxSeverity(outcome),
+			IssueID:       issueID,
+			Title:         creativeQCInboxTitle(variantKey, outcome),
+			Body:          pgtype.Text{String: creativeQCInboxBody(variantKey, outcome, len(expectedSizes)), Valid: true},
+			ActorType:     pgtype.Text{String: "agent", Valid: true},
+			ActorID:       task.AgentID,
+			Details:       inboxDetails,
+		})
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to notify creative order owner")
+			return
+		}
+		response.InboxItemID = uuidToString(inbox.ID)
+		if _, err := tx.Exec(r.Context(), `
 UPDATE creative_order_variant_qc_resolution SET inbox_item_id = $3
 WHERE variant_id = $1 AND revision = $2
 `, variantID, input.Revision, inbox.ID); err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to record creative QC notification")
-		return
+			writeError(w, http.StatusInternalServerError, "failed to record creative QC notification")
+			return
+		}
 	}
 	if err := tx.Commit(r.Context()); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to finalize creative QC")
@@ -2986,7 +3545,12 @@ WHERE variant_id = $1 AND revision = $2
 
 	response.OrderAggregateStatus, _ = h.derivedCreativeOrderStatus(r, orderID)
 	h.publishCreativeDomainUpdated(r, workspaceID, userID, map[string]any{"scope": "order", "order_id": chi.URLParam(r, "id")})
-	h.publishCreativeQCInbox(workspaceID, task.AgentID, inbox, response.OrderAggregateStatus)
+	if reworkTask.ID.Valid && h.TaskService != nil {
+		h.TaskService.NotifyTaskEnqueued(r.Context(), reworkTask)
+	}
+	if shouldPublishInbox {
+		h.publishCreativeQCInbox(workspaceID, task.AgentID, inbox, response.OrderAggregateStatus)
+	}
 	writeJSON(w, http.StatusOK, response)
 }
 
@@ -3086,6 +3650,185 @@ ON CONFLICT (variant_id, size_key, revision, stage) DO UPDATE SET
 	return int(tag.RowsAffected()), nil
 }
 
+func (h *Handler) queueCreativeVisualModelRework(
+	ctx context.Context,
+	tx pgx.Tx,
+	workspaceID, orderID, itemID, candidateID, variantID, issueID pgtype.UUID,
+	inputSnapshot json.RawMessage,
+	sourceRevision int,
+	expectedSizes []string,
+	parentTask db.AgentTaskQueue,
+	findings []creativeVisualModelReworkFinding,
+) (db.AgentTaskQueue, error) {
+	if h.TaskService == nil {
+		return db.AgentTaskQueue{}, errors.New("creative production runtime is unavailable")
+	}
+	if !issueID.Valid {
+		return db.AgentTaskQueue{}, errors.New("creative order is missing its root issue")
+	}
+	leaderID, producerID, reviewerID, err := creativeOrderProductionAgentSnapshot(inputSnapshot)
+	if err != nil {
+		return db.AgentTaskQueue{}, err
+	}
+	producer, err := h.Queries.WithTx(tx).GetAgentInWorkspace(ctx, db.GetAgentInWorkspaceParams{ID: producerID, WorkspaceID: workspaceID})
+	if errors.Is(err, pgx.ErrNoRows) || producer.ArchivedAt.Valid || !producer.RuntimeID.Valid {
+		return db.AgentTaskQueue{}, errors.New("the frozen creative production agent is unavailable")
+	}
+	if err != nil {
+		return db.AgentTaskQueue{}, err
+	}
+	var producerCapable bool
+	if err := tx.QueryRow(ctx, `
+SELECT EXISTS(
+  SELECT 1
+  FROM agent_skill binding
+  JOIN skill bound_skill ON bound_skill.id = binding.skill_id
+  WHERE binding.agent_id = $1
+    AND binding.enabled
+    AND bound_skill.workspace_id = $2
+    AND bound_skill.config->>'kind' = 'creative_role'
+    AND bound_skill.config->>'capability' = 'image_edit'
+)
+`, producerID, workspaceID).Scan(&producerCapable); err != nil {
+		return db.AgentTaskQueue{}, err
+	}
+	if !producerCapable {
+		return db.AgentTaskQueue{}, errors.New("the frozen creative production agent lacks image_edit capability")
+	}
+
+	targetSizes := make([]string, 0, len(findings))
+	for _, finding := range findings {
+		targetSizes = append(targetSizes, finding.SizeKey)
+	}
+	rows, err := tx.Query(ctx, `
+SELECT id, size_key
+FROM creative_order_asset
+WHERE variant_id = $1
+  AND revision = $2
+  AND stage = 'generated'
+  AND status = 'completed'
+  AND attachment_id IS NOT NULL
+  AND size_key = ANY($3::text[])
+FOR UPDATE
+`, variantID, sourceRevision, expectedSizes)
+	if err != nil {
+		return db.AgentTaskQueue{}, errors.New("failed to load generated assets for visual rework")
+	}
+	defer rows.Close()
+	generatedSizes := map[string]struct{}{}
+	for rows.Next() {
+		var assetID, sizeKey string
+		if err := rows.Scan(&assetID, &sizeKey); err != nil {
+			return db.AgentTaskQueue{}, errors.New("failed to read generated assets for visual rework")
+		}
+		generatedSizes[sizeKey] = struct{}{}
+	}
+	if err := rows.Err(); err != nil {
+		return db.AgentTaskQueue{}, errors.New("failed to read generated assets for visual rework")
+	}
+	if !creativeSizesMatchExpected(generatedSizes, expectedSizes) {
+		return db.AgentTaskQueue{}, errors.New("visual rework requires a complete generated base package")
+	}
+
+	newRevision := sourceRevision + 1
+	if _, err := tx.Exec(ctx, `
+INSERT INTO creative_order_asset (
+  variant_id, asset_family_id, size_key, revision, stage, attachment_id, derived_from_asset_id, metadata, evidence, status
+)
+SELECT variant_id, asset_family_id, size_key, $3, 'generated', attachment_id, id,
+  metadata,
+  evidence || jsonb_build_object('qc_visual_rework', jsonb_build_object('source_revision', $2::integer, 'reused_generated_base', true)),
+  'completed'
+FROM creative_order_asset
+WHERE variant_id = $1
+  AND revision = $2
+  AND stage = 'generated'
+  AND status = 'completed'
+  AND attachment_id IS NOT NULL
+  AND size_key = ANY($4::text[])
+  AND NOT (size_key = ANY($5::text[]))
+ON CONFLICT (variant_id, size_key, revision, stage) DO NOTHING
+	`, variantID, sourceRevision, newRevision, expectedSizes, targetSizes); err != nil {
+		return db.AgentTaskQueue{}, fmt.Errorf("preserve passed generated assets for visual rework: %w", err)
+	}
+
+	if _, err := tx.Exec(ctx, `
+UPDATE creative_order_variant
+SET revision = $2, status = 'running', updated_at = now()
+WHERE id = $1
+`, variantID, newRevision); err != nil {
+		return db.AgentTaskQueue{}, errors.New("failed to begin creative visual rework")
+	}
+
+	context, err := json.Marshal(map[string]any{
+		"type":                   "creative_domain_task",
+		"workflow":               "creative_production",
+		"scope":                  "variant",
+		"subject_id":             uuidToString(variantID),
+		"item_key":               fmt.Sprintf("%s:r%d", uuidToString(variantID), newRevision),
+		"creative_order_id":      uuidToString(orderID),
+		"creative_order_item_id": uuidToString(itemID),
+		"candidate_id":           uuidToString(candidateID),
+		"variant_id":             uuidToString(variantID),
+		"revision":               newRevision,
+		"expected_sizes":         expectedSizes,
+		"issue_id":               uuidToString(issueID),
+		"leader_agent_id":        uuidToString(leaderID),
+		"reviewer_agent_id":      uuidToString(reviewerID),
+		"qc_visual_rework": map[string]any{
+			"source_revision": sourceRevision,
+			"target_sizes":    targetSizes,
+			"failures":        findings,
+			"reflow_strategy": "image2_reflow",
+		},
+	})
+	if err != nil {
+		return db.AgentTaskQueue{}, errors.New("failed to encode creative visual rework task")
+	}
+	if err := validateCreativeTaskFanoutContext("creative_order_item_production", itemID, []service.DirectTaskFanoutItem{{
+		ItemKey: fmt.Sprintf("%s:r%d", uuidToString(variantID), newRevision), Context: context,
+	}}); err != nil {
+		return db.AgentTaskQueue{}, err
+	}
+	task, err := h.Queries.WithTx(tx).CreateAgentTask(ctx, db.CreateAgentTaskParams{
+		AgentID:              producer.ID,
+		RuntimeID:            producer.RuntimeID,
+		IssueID:              issueID,
+		Priority:             0,
+		ForceFreshSession:    pgtype.Bool{Bool: true, Valid: true},
+		RequestingUserID:     parentTask.RequestingUserID,
+		OriginatorUserID:     parentTask.OriginatorUserID,
+		AccountableUserID:    parentTask.AccountableUserID,
+		OriginatorSource:     parentTask.OriginatorSource,
+		DelegatedFromTaskID:  parentTask.ID,
+		TriggerEvidenceKind:  pgtype.Text{String: "creative_order_item_production", Valid: true},
+		TriggerEvidenceRefID: itemID,
+		Context:              context,
+	})
+	if err != nil {
+		return db.AgentTaskQueue{}, errors.New("failed to queue creative visual rework")
+	}
+	details, err := json.Marshal(map[string]any{
+		"creative_order_id": uuidToString(orderID),
+		"variant_id":        uuidToString(variantID),
+		"source_revision":   sourceRevision,
+		"revision":          newRevision,
+		"task_id":           uuidToString(task.ID),
+		"target_sizes":      targetSizes,
+		"failures":          findings,
+	})
+	if err != nil {
+		return db.AgentTaskQueue{}, errors.New("failed to record creative visual rework")
+	}
+	if _, err := tx.Exec(ctx, `
+INSERT INTO activity_log (workspace_id, issue_id, actor_type, actor_id, action, details)
+VALUES ($1, $2, 'agent', $3, 'creative_visual_rework_queued', $4::jsonb)
+`, workspaceID, issueID, parentTask.AgentID, details); err != nil {
+		return db.AgentTaskQueue{}, errors.New("failed to record creative visual rework")
+	}
+	return task, nil
+}
+
 func creativeQCInboxSeverity(outcome string) string {
 	if outcome == "action_required" {
 		return "action_required"
@@ -3168,6 +3911,14 @@ func normalizeCreativeOrder(input creativeOrderInput) (creativeOrderInput, error
 	if err != nil {
 		return input, errors.New("input_snapshot must be an object")
 	}
+	if _, found, err := creativeOrderSnapshotExpectedSizes(input.InputSnapshot); err != nil {
+		return input, err
+	} else if found {
+		input.InputSnapshot, err = setCreativeOrderSnapshotExpectedSizes(input.InputSnapshot)
+		if err != nil {
+			return input, err
+		}
+	}
 	seen := map[string]struct{}{}
 	for index := range input.Items {
 		item := &input.Items[index]
@@ -3178,7 +3929,7 @@ func normalizeCreativeOrder(input creativeOrderInput) (creativeOrderInput, error
 			return input, errors.New("invalid creative order item")
 		}
 		if len(item.Direction) > maxCreativeOrderDirectionLength {
-			return input, errors.New("production prompt exceeds the maximum supported length")
+			return input, errors.New("visual direction exceeds the maximum supported length")
 		}
 		if _, exists := seen[item.CandidateID]; exists {
 			return input, errors.New("duplicate candidate_id")
@@ -3210,6 +3961,81 @@ func normalizeCreativeOrderVariant(input creativeOrderVariantInput) (creativeOrd
 	return input, nil
 }
 
+func bindCreativeOrderVariantFrozenContract(rawBrief json.RawMessage, direction string, rawInputSnapshot json.RawMessage) (json.RawMessage, error) {
+	var brief map[string]json.RawMessage
+	if err := json.Unmarshal(rawBrief, &brief); err != nil || brief == nil {
+		return nil, errors.New("brief must be an object")
+	}
+	contract := map[string]any{}
+	if rawContract, ok := brief["creative_contract"]; ok && len(rawContract) > 0 && string(rawContract) != "null" {
+		if err := json.Unmarshal(rawContract, &contract); err != nil || contract == nil {
+			return nil, errors.New("brief creative_contract must be an object")
+		}
+	}
+	direction = strings.TrimSpace(direction)
+	contract["version"] = 1
+	contract["parent_direction"] = direction
+	contract["parent_direction_sha256"] = fmt.Sprintf("%x", sha256.Sum256([]byte(direction)))
+	encodedContract, err := json.Marshal(contract)
+	if err != nil {
+		return nil, fmt.Errorf("encode brief creative_contract: %w", err)
+	}
+	brief["creative_contract"] = encodedContract
+	primeLayout, found, err := frozenCreativePrimeLayoutContract(rawInputSnapshot)
+	if err != nil {
+		return nil, err
+	}
+	if found {
+		brief["prime_layout_contract"] = primeLayout
+	}
+	encodedBrief, err := json.Marshal(brief)
+	if err != nil {
+		return nil, fmt.Errorf("encode brief: %w", err)
+	}
+	return encodedBrief, nil
+}
+
+// frozenCreativePrimeLayoutContract returns the immutable per-size Prime layout
+// from the order snapshot. Variant planning may choose visual execution, but it
+// cannot decide where the fixed brand and compliance components are placed.
+func frozenCreativePrimeLayoutContract(rawInputSnapshot json.RawMessage) (json.RawMessage, bool, error) {
+	if len(rawInputSnapshot) == 0 || string(rawInputSnapshot) == "null" {
+		return nil, false, nil
+	}
+	var snapshot map[string]json.RawMessage
+	if err := json.Unmarshal(rawInputSnapshot, &snapshot); err != nil || snapshot == nil {
+		return nil, false, errors.New("creative order input snapshot must be an object")
+	}
+	marketPack, ok := snapshot["market_pack"]
+	if !ok || len(marketPack) == 0 || string(marketPack) == "null" {
+		return nil, false, nil
+	}
+	var marketPackValue map[string]json.RawMessage
+	if err := json.Unmarshal(marketPack, &marketPackValue); err != nil || marketPackValue == nil {
+		return nil, false, errors.New("creative order market pack snapshot must be an object")
+	}
+	config, ok := marketPackValue["config"]
+	if !ok || len(config) == 0 || string(config) == "null" {
+		return nil, false, errors.New("creative order market pack snapshot is missing config")
+	}
+	var configValue map[string]json.RawMessage
+	if err := json.Unmarshal(config, &configValue); err != nil || configValue == nil {
+		return nil, false, errors.New("creative order market pack config must be an object")
+	}
+	primeLayout, ok := configValue["prime_layout_contract"]
+	if !ok || len(primeLayout) == 0 || string(primeLayout) == "null" {
+		return nil, false, errors.New("creative order market pack config is missing prime_layout_contract")
+	}
+	var primeLayoutValue map[string]json.RawMessage
+	if err := json.Unmarshal(primeLayout, &primeLayoutValue); err != nil || primeLayoutValue == nil {
+		return nil, false, errors.New("creative order prime_layout_contract must be an object")
+	}
+	if _, ok := primeLayoutValue["layouts"]; !ok {
+		return nil, false, errors.New("creative order prime_layout_contract is missing layouts")
+	}
+	return primeLayout, true, nil
+}
+
 func decodeCreativeOrderAssetInput(r *http.Request) (creativeOrderAssetInput, error) {
 	var envelope map[string]json.RawMessage
 	if err := json.NewDecoder(r.Body).Decode(&envelope); err != nil || envelope == nil {
@@ -3233,6 +4059,37 @@ func decodeCreativeOrderAssetInput(r *http.Request) (creativeOrderAssetInput, er
 	if err := json.Unmarshal(payload, &input); err != nil {
 		return creativeOrderAssetInput{}, err
 	}
+	var object map[string]json.RawMessage
+	if err := json.Unmarshal(payload, &object); err != nil || object == nil {
+		return creativeOrderAssetInput{}, errors.New("invalid creative order asset")
+	}
+	if _, present := object["revision"]; !present {
+		input.revisionDefaulted = true
+	}
+	// Some production runs were emitted with the semantic alias `kind` or
+	// `asset_type` instead of the storage field `stage`. Accept those aliases
+	// at the boundary, while all persisted responses remain canonical.
+	if strings.TrimSpace(input.Stage) == "" {
+		for _, key := range []string{"asset_type", "kind"} {
+			raw, present := object[key]
+			if !present {
+				continue
+			}
+			var alias string
+			if err := json.Unmarshal(raw, &alias); err == nil {
+				input.Stage = strings.TrimSpace(alias)
+				if input.Stage != "" {
+					break
+				}
+			}
+		}
+	}
+	// Generated attachments are terminal by definition. Older agents omitted
+	// the status field after uploading the file; infer it only for that
+	// compatibility shape, never for an explicit status value.
+	if strings.TrimSpace(input.Status) == "" && strings.TrimSpace(input.Stage) == "generated" && strings.TrimSpace(input.AttachmentID) != "" {
+		input.Status = "completed"
+	}
 	return input, nil
 }
 
@@ -3248,7 +4105,7 @@ func normalizeCreativeOrderAsset(input creativeOrderAssetInput) (creativeOrderAs
 	input.AttachmentID = strings.TrimSpace(input.AttachmentID)
 	input.DerivedFromAssetID = strings.TrimSpace(input.DerivedFromAssetID)
 	input.Status = strings.TrimSpace(input.Status)
-	if input.VariantID == "" || input.Revision < 1 || !validCreativeAssetSize(input.SizeKey) || !validCreativeAssetStage(input.Stage) || !validCreativeAssetStatus(input.Status) {
+	if input.VariantID == "" || (input.Revision < 1 && !input.revisionDefaulted) || !validCreativeAssetSize(input.SizeKey) || !validCreativeAssetStage(input.Stage) || !validCreativeAssetStatus(input.Status) {
 		return input, errors.New("invalid creative order asset")
 	}
 	var err error
@@ -3260,6 +4117,9 @@ func normalizeCreativeOrderAsset(input creativeOrderAssetInput) (creativeOrderAs
 	if err != nil {
 		return input, errors.New("evidence must be an object")
 	}
+	if input.Status == "completed" && input.AttachmentID == "" {
+		return input, errors.New("completed creative order asset attachment_id is required")
+	}
 	if input.Stage == "generated" && input.Status == "completed" {
 		if err := validateCompletedGeneratedAssetTrace(input.Metadata, input.Evidence); err != nil {
 			return input, err
@@ -3268,10 +4128,39 @@ func normalizeCreativeOrderAsset(input creativeOrderAssetInput) (creativeOrderAs
 	return input, nil
 }
 
+func normalizeCreativeOrderDiagnosticAsset(input creativeOrderDiagnosticAssetInput) (creativeOrderDiagnosticAssetInput, error) {
+	input.VariantID = strings.TrimSpace(input.VariantID)
+	input.TaskID = strings.TrimSpace(input.TaskID)
+	input.AttachmentID = strings.TrimSpace(input.AttachmentID)
+	input.SizeKey = strings.TrimSpace(input.SizeKey)
+	input.Size = strings.TrimSpace(input.Size)
+	if input.SizeKey == "" {
+		input.SizeKey = input.Size
+	}
+	input.Workflow = strings.TrimSpace(input.Workflow)
+	input.Label = strings.TrimSpace(input.Label)
+	input.Filename = strings.TrimSpace(input.Filename)
+	if input.Revision == 0 {
+		input.Revision = 1
+	}
+	if input.VariantID == "" || input.AttachmentID == "" || input.Revision < 1 || !validCreativeAssetSize(input.SizeKey) || input.Workflow == "" || len(input.Workflow) > 80 || input.Label == "" || len(input.Label) > 120 {
+		return input, errors.New("invalid creative order diagnostic asset")
+	}
+	var err error
+	input.Metadata, err = normalizedOptionalJSONObject(input.Metadata)
+	if err != nil {
+		return input, errors.New("metadata must be an object")
+	}
+	return input, nil
+}
+
 func validateCompletedGeneratedAssetTrace(metadata, evidence json.RawMessage) error {
 	var metadataTrace struct {
-		Prompt string `json:"prompt"`
-		Model  string `json:"model"`
+		Prompt            string  `json:"prompt"`
+		Model             string  `json:"model"`
+		ActualWidth       int     `json:"actual_width"`
+		ActualHeight      int     `json:"actual_height"`
+		ActualAspectRatio float64 `json:"actual_aspect_ratio"`
 	}
 	if err := json.Unmarshal(metadata, &metadataTrace); err != nil {
 		return errors.New("generated asset metadata is invalid")
@@ -3282,10 +4171,17 @@ func validateCompletedGeneratedAssetTrace(metadata, evidence json.RawMessage) er
 	if strings.TrimSpace(metadataTrace.Model) != "gpt-image-2" {
 		return errors.New("completed generated asset metadata.model must be gpt-image-2")
 	}
+	if metadataTrace.ActualWidth < 1 || metadataTrace.ActualHeight < 1 || metadataTrace.ActualAspectRatio <= 0 {
+		return errors.New("completed generated asset metadata actual canvas is required")
+	}
 	var evidenceTrace struct {
-		RequestID    string `json:"request_id"`
-		Attempts     int    `json:"attempts"`
-		PromptSHA256 string `json:"prompt_sha256"`
+		RequestID      string          `json:"request_id"`
+		Attempts       int             `json:"attempts"`
+		PromptSHA256   string          `json:"prompt_sha256"`
+		ModelResult    json.RawMessage `json:"model_result"`
+		PromptContract json.RawMessage `json:"prompt_contract"`
+		CopyValidation json.RawMessage `json:"copy_validation"`
+		Normalization  json.RawMessage `json:"normalization"`
 	}
 	if err := json.Unmarshal(evidence, &evidenceTrace); err != nil {
 		return errors.New("generated asset evidence is invalid")
@@ -3299,6 +4195,47 @@ func validateCompletedGeneratedAssetTrace(metadata, evidence json.RawMessage) er
 	wantHash := creativePromptSHA256(metadataTrace.Prompt)
 	if evidenceTrace.PromptSHA256 != wantHash {
 		return errors.New("completed generated asset evidence.prompt_sha256 does not match metadata.prompt")
+	}
+	var modelResult struct {
+		Model             string  `json:"model"`
+		Prompt            string  `json:"prompt"`
+		PromptSHA256      string  `json:"prompt_sha256"`
+		RequestID         string  `json:"request_id"`
+		Attempts          int     `json:"attempts"`
+		ActualWidth       int     `json:"actual_width"`
+		ActualHeight      int     `json:"actual_height"`
+		ActualAspectRatio float64 `json:"actual_aspect_ratio"`
+	}
+	if err := json.Unmarshal(evidenceTrace.ModelResult, &modelResult); err != nil {
+		return errors.New("completed generated asset evidence.model_result is required")
+	}
+	var modelResultObject map[string]json.RawMessage
+	if err := json.Unmarshal(evidenceTrace.ModelResult, &modelResultObject); err != nil || modelResultObject == nil {
+		return errors.New("completed generated asset evidence.model_result is required")
+	}
+	if _, exists := modelResultObject["path"]; exists {
+		return errors.New("completed generated asset evidence.model_result must not contain a local path")
+	}
+	if modelResult.Model != metadataTrace.Model || modelResult.Prompt != metadataTrace.Prompt || modelResult.PromptSHA256 != evidenceTrace.PromptSHA256 || modelResult.RequestID != evidenceTrace.RequestID || modelResult.Attempts != evidenceTrace.Attempts || modelResult.ActualWidth != metadataTrace.ActualWidth || modelResult.ActualHeight != metadataTrace.ActualHeight || modelResult.ActualAspectRatio != metadataTrace.ActualAspectRatio {
+		return errors.New("completed generated asset model result does not match metadata and evidence")
+	}
+	var promptContract struct {
+		PromptSHA256 string `json:"prompt_sha256"`
+	}
+	if err := json.Unmarshal(evidenceTrace.PromptContract, &promptContract); err != nil || promptContract.PromptSHA256 != evidenceTrace.PromptSHA256 {
+		return errors.New("completed generated asset evidence.prompt_contract does not match prompt_sha256")
+	}
+	var copyValidation struct {
+		Passed bool `json:"passed"`
+	}
+	if err := json.Unmarshal(evidenceTrace.CopyValidation, &copyValidation); err != nil || !copyValidation.Passed {
+		return errors.New("completed generated asset evidence.copy_validation must be passed")
+	}
+	var normalization struct {
+		TargetSize map[string]json.RawMessage `json:"target_size"`
+	}
+	if err := json.Unmarshal(evidenceTrace.Normalization, &normalization); err != nil || len(normalization.TargetSize) == 0 {
+		return errors.New("completed generated asset evidence.normalization.target_size is required")
 	}
 	return nil
 }
@@ -3324,11 +4261,11 @@ func normalizeCreativeOrderQC(input creativeOrderQCInput) (creativeOrderQCInput,
 	if err != nil {
 		return input, errors.New("findings must be an object")
 	}
-	blockingFailures, err := creativeQCFindingsHaveBlockingFailures(input.Findings)
+	blocking, err := creativeQCFindingsHaveBlockingFailures(input.Findings)
 	if err != nil {
 		return input, err
 	}
-	if blockingFailures {
+	if blocking {
 		input.Status = "failed"
 	}
 	return input, nil
@@ -3352,6 +4289,11 @@ func creativeQCFindingsHaveBlockingFailures(findings json.RawMessage) (bool, err
 
 func expectedCreativeVariantSizes(triggerKind string, inputSnapshot, brief json.RawMessage) ([]string, error) {
 	if triggerKind != "creative_direct_edit" {
+		if sizes, found, err := creativeOrderSnapshotExpectedSizes(inputSnapshot); err != nil {
+			return nil, err
+		} else if found {
+			return sizes, nil
+		}
 		return append([]string(nil), standardCreativeAssetSizes...), nil
 	}
 	for _, raw := range []json.RawMessage{inputSnapshot, brief} {
@@ -3367,6 +4309,54 @@ func expectedCreativeVariantSizes(triggerKind string, inputSnapshot, brief json.
 		}
 	}
 	return nil, errors.New("creative direct-edit delivery scope is missing")
+}
+
+func creativeOrderSnapshotExpectedSizes(raw json.RawMessage) ([]string, bool, error) {
+	var snapshot struct {
+		ExpectedSizes []string `json:"expected_sizes"`
+		DeliveryScope struct {
+			ExpectedSizes []string `json:"expected_sizes"`
+		} `json:"delivery_scope"`
+	}
+	if len(raw) == 0 || string(raw) == "null" {
+		return nil, false, nil
+	}
+	if err := json.Unmarshal(raw, &snapshot); err != nil {
+		return nil, false, errors.New("creative order expected_sizes must be an array")
+	}
+	sizes := snapshot.ExpectedSizes
+	if len(sizes) == 0 {
+		sizes = snapshot.DeliveryScope.ExpectedSizes
+	}
+	if len(sizes) == 0 {
+		return nil, false, nil
+	}
+	normalized, err := normalizeCreativeExpectedSizes(sizes)
+	if err != nil {
+		return nil, false, err
+	}
+	return normalized, true, nil
+}
+
+func setCreativeOrderSnapshotExpectedSizes(raw json.RawMessage) (json.RawMessage, error) {
+	var snapshot map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &snapshot); err != nil || snapshot == nil {
+		return nil, errors.New("input_snapshot must be an object")
+	}
+	sizes, found, err := creativeOrderSnapshotExpectedSizes(raw)
+	if err != nil || !found {
+		return raw, err
+	}
+	encoded, err := json.Marshal(sizes)
+	if err != nil {
+		return nil, errors.New("failed to encode creative order expected_sizes")
+	}
+	snapshot["expected_sizes"] = encoded
+	result, err := json.Marshal(snapshot)
+	if err != nil {
+		return nil, errors.New("failed to encode input_snapshot")
+	}
+	return result, nil
 }
 
 func normalizeCreativeExpectedSizes(sizes []string) ([]string, error) {
@@ -3454,6 +4444,221 @@ func validCreativeAssetStatus(status string) bool {
 	return status == "queued" || status == "running" || status == "completed" || status == "failed" || status == "cancelled"
 }
 
+// settleCreativeProductionVariantTask is the single terminal-state bridge for
+// creative production tasks. A production task is allowed to stop after a
+// partial model run, but the user-facing Variant must remain running while the
+// bounded server-side continuation creates the next attempt. Only an exhausted
+// continuation budget becomes action_required; no page click is needed for a
+// transient model/daemon failure or a missing size.
+func (h *Handler) settleCreativeProductionVariantTask(ctx context.Context, task db.AgentTaskQueue) error {
+	var taskContext struct {
+		Type          string   `json:"type"`
+		Workflow      string   `json:"workflow"`
+		VariantID     string   `json:"variant_id"`
+		Revision      int      `json:"revision"`
+		ExpectedSizes []string `json:"expected_sizes"`
+		ItemKey       string   `json:"item_key"`
+	}
+	if json.Unmarshal(task.Context, &taskContext) != nil || taskContext.Type != "creative_domain_task" || taskContext.Workflow != "creative_production" {
+		return nil
+	}
+	variantID, err := uuid.Parse(strings.TrimSpace(taskContext.VariantID))
+	if err != nil || taskContext.Revision < 1 {
+		return nil
+	}
+	expectedSizes := taskContext.ExpectedSizes
+	if len(expectedSizes) == 0 {
+		expectedSizes = []string{"1080x1080", "1200x628", "800x1000"}
+	}
+	seen := make(map[string]struct{}, len(expectedSizes))
+	for _, size := range expectedSizes {
+		if !validCreativeAssetSize(size) {
+			return nil
+		}
+		if _, duplicate := seen[size]; duplicate {
+			return nil
+		}
+		seen[size] = struct{}{}
+	}
+	if h.TxStarter == nil || h.Queries == nil {
+		return nil
+	}
+	tx, err := h.TxStarter.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin creative production settlement: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	variantUUID := pgtype.UUID{Bytes: variantID, Valid: true}
+	var variantStatus string
+	err = tx.QueryRow(ctx, `
+SELECT status
+FROM creative_order_variant
+WHERE id = $1 AND revision = $2
+FOR UPDATE
+`, variantUUID, taskContext.Revision).Scan(&variantStatus)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("lock creative production variant: %w", err)
+	}
+	if variantStatus == "cancelled" {
+		if err := tx.Commit(ctx); err != nil {
+			return fmt.Errorf("commit cancelled creative production variant: %w", err)
+		}
+		return nil
+	}
+
+	var completedCount int
+	if err := tx.QueryRow(ctx, `
+SELECT count(DISTINCT asset.size_key)
+FROM creative_order_asset asset
+WHERE asset.variant_id = $1
+  AND asset.revision = $2
+  AND asset.stage = 'generated'
+  AND asset.status = 'completed'
+  AND asset.size_key = ANY($3::text[])
+`, variantUUID, taskContext.Revision, expectedSizes).Scan(&completedCount); err != nil {
+		return fmt.Errorf("count creative production assets: %w", err)
+	}
+	if completedCount >= len(expectedSizes) {
+		if err := tx.Commit(ctx); err != nil {
+			return fmt.Errorf("commit complete creative production variant: %w", err)
+		}
+		return nil
+	}
+
+	var workspaceID, orderID, orderItemID pgtype.UUID
+	if err := tx.QueryRow(ctx, `
+SELECT order_row.workspace_id, order_row.id, item.id
+FROM creative_order_variant variant
+JOIN creative_order_item item ON item.id = variant.order_item_id
+JOIN creative_order order_row ON order_row.id = item.order_id
+WHERE variant.id = $1 AND variant.revision = $2
+`, variantUUID, taskContext.Revision).Scan(&workspaceID, &orderID, &orderItemID); err != nil {
+		return fmt.Errorf("resolve creative production ownership: %w", err)
+	}
+
+	itemKey := strings.TrimSpace(taskContext.ItemKey)
+	if itemKey == "" {
+		itemKey = fmt.Sprintf("%s:r%d", variantID.String(), taskContext.Revision)
+	}
+	var active bool
+	if err := tx.QueryRow(ctx, `
+SELECT EXISTS (
+  SELECT 1
+  FROM agent_task_queue active
+  WHERE active.id <> $1
+    AND active.status IN ('queued', 'dispatched', 'running', 'waiting_local_directory')
+    AND active.context->>'type' = 'creative_domain_task'
+    AND active.context->>'workflow' = 'creative_production'
+    AND active.context->>'variant_id' = $2
+    AND active.context->>'revision' = $3
+    AND active.context->>'item_key' = $4
+)
+`, task.ID, uuidToString(variantUUID), strconv.Itoa(taskContext.Revision), itemKey).Scan(&active); err != nil {
+		return fmt.Errorf("check creative production continuation: %w", err)
+	}
+	if active {
+		if _, err := tx.Exec(ctx, `
+UPDATE creative_order_variant
+SET status = 'running', brief = brief - 'error_code' - 'error_message', updated_at = now()
+WHERE id = $1 AND revision = $2 AND status <> 'cancelled'
+`, variantUUID, taskContext.Revision); err != nil {
+			return fmt.Errorf("keep creative production variant running: %w", err)
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return fmt.Errorf("commit active creative production continuation: %w", err)
+		}
+		return nil
+	}
+
+	var normalized service.DirectTaskFanoutItem
+	if task.TriggerEvidenceKind.Valid && task.TriggerEvidenceKind.String == "creative_order_item_production" && task.TriggerEvidenceRefID.Valid {
+		normalized, err = normalizeCreativeProductionFanoutItem(ctx, tx, workspaceID, task.TriggerEvidenceRefID, service.DirectTaskFanoutItem{ItemKey: itemKey, Context: task.Context})
+	} else {
+		normalized, err = normalizeManualCreativeProductionFanoutItem(ctx, tx, workspaceID, orderID, service.DirectTaskFanoutItem{ItemKey: itemKey, Context: task.Context})
+	}
+	if err != nil {
+		return fmt.Errorf("normalize creative production continuation: %w", err)
+	}
+
+	// Both a completed partial run and a failed direct run use a fresh session.
+	// The production context contains the frozen brief, revision, and source
+	// lineage, so resuming the old conversation is less reliable than asking
+	// the producer to complete the missing sizes from the canonical context.
+	var childID pgtype.UUID
+	err = tx.QueryRow(ctx, `
+INSERT INTO agent_task_queue (
+    agent_id, runtime_id, issue_id, chat_session_id, autopilot_run_id,
+    status, priority, trigger_comment_id, trigger_summary, context,
+    session_id, work_dir,
+    attempt, max_attempts, parent_task_id, force_fresh_session, is_leader_task,
+    requesting_user_id, originator_user_id, accountable_user_id,
+    originator_source, delegated_from_task_id, rule_version_id,
+    retry_of_task_id, trigger_evidence_kind, trigger_evidence_ref_id
+)
+SELECT
+    p.agent_id, p.runtime_id, p.issue_id, p.chat_session_id, p.autopilot_run_id,
+    'queued', p.priority, p.trigger_comment_id, p.trigger_summary, $2::jsonb,
+    NULL, NULL,
+    p.attempt + 1, GREATEST(p.max_attempts, 3), p.id, TRUE, p.is_leader_task,
+    p.requesting_user_id, p.originator_user_id, p.accountable_user_id,
+    p.originator_source, p.delegated_from_task_id, p.rule_version_id,
+    p.id, p.trigger_evidence_kind, p.trigger_evidence_ref_id
+FROM agent_task_queue p
+WHERE p.id = $1
+  AND p.status IN ('completed', 'failed')
+  AND p.attempt < GREATEST(p.max_attempts, 3)
+RETURNING id
+`, task.ID, normalized.Context).Scan(&childID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		if _, updateErr := tx.Exec(ctx, `
+UPDATE creative_order_variant
+SET status = 'action_required', updated_at = now()
+WHERE id = $1 AND revision = $2 AND status IN ('queued', 'running', 'partial', 'failed', 'action_required')
+`, variantUUID, taskContext.Revision); updateErr != nil {
+			return fmt.Errorf("mark exhausted creative production variant: %w", updateErr)
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return fmt.Errorf("commit exhausted creative production variant: %w", err)
+		}
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("queue creative production continuation: %w", err)
+	}
+	child, err := h.Queries.WithTx(tx).GetAgentTask(ctx, childID)
+	if err != nil {
+		return fmt.Errorf("load creative production continuation: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `
+UPDATE creative_order_variant
+SET status = 'running', brief = brief - 'error_code' - 'error_message', updated_at = now()
+WHERE id = $1 AND revision = $2 AND status <> 'cancelled'
+`, variantUUID, taskContext.Revision); err != nil {
+		return fmt.Errorf("mark creative production continuation running: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit creative production continuation: %w", err)
+	}
+	if h.TaskService != nil {
+		h.TaskService.NotifyTaskEnqueued(ctx, child)
+	}
+	slog.Info("creative production continuation enqueued",
+		"parent_task_id", uuidToString(task.ID),
+		"child_task_id", uuidToString(child.ID),
+		"variant_id", uuidToString(variantUUID),
+		"revision", taskContext.Revision,
+		"completed_sizes", completedCount,
+		"expected_sizes", len(expectedSizes),
+		"attempt", child.Attempt,
+		"max_attempts", child.MaxAttempts,
+	)
+	return nil
+}
+
 func validCreativeQCStatus(status string) bool {
 	return status == "pending" || status == "passed" || status == "warning" || status == "failed"
 }
@@ -3480,7 +4685,7 @@ func scanCreativeOrder(row rowScanner) (creativeOrderResponse, error) {
 func scanCreativeOrderVariant(row rowScanner) (creativeOrderVariantResponse, error) {
 	var variant creativeOrderVariantResponse
 	var brief string
-	err := row.Scan(&variant.ID, &variant.OrderItemID, &variant.VariantKey, &brief, &variant.Revision, &variant.Status, &variant.QCRecoveryUsed, &variant.QCRecoveryAvailable, &variant.PrimeRepairUsed, &variant.PrimeRepairAvailable, &variant.CreatedAt, &variant.UpdatedAt)
+	err := row.Scan(&variant.ID, &variant.OrderItemID, &variant.VariantKey, &brief, &variant.Revision, &variant.Status, &variant.QCRecoveryUsed, &variant.QCRecoveryAvailable, &variant.CreatedAt, &variant.UpdatedAt)
 	variant.Brief = json.RawMessage(brief)
 	return variant, err
 }
@@ -3491,6 +4696,15 @@ func scanCreativeOrderAsset(row rowScanner) (creativeOrderAssetResponse, error) 
 	err := row.Scan(&asset.ID, &asset.VariantID, &asset.AssetFamilyID, &asset.SizeKey, &asset.Revision, &asset.Stage, &asset.AttachmentID, &asset.DerivedFromAssetID, &metadata, &evidence, &asset.Status, &asset.CreatedAt, &asset.UpdatedAt)
 	asset.Metadata = json.RawMessage(metadata)
 	asset.Evidence = json.RawMessage(evidence)
+	return asset, err
+}
+
+func scanCreativeOrderDiagnosticAsset(row rowScanner) (creativeOrderDiagnosticAsset, error) {
+	var asset creativeOrderDiagnosticAsset
+	var metadata string
+	err := row.Scan(&asset.ID, &asset.VariantID, &asset.TaskID, &asset.AttachmentID, &asset.SizeKey, &asset.Revision, &asset.Workflow, &asset.Label, &asset.Filename, &metadata, &asset.CreatedAt)
+	asset.Metadata = json.RawMessage(metadata)
+	asset.URL = attachmentDownloadPath(asset.AttachmentID)
 	return asset, err
 }
 
@@ -3632,21 +4846,35 @@ AND (
         AND item.order_id = $1
         AND variant.status NOT IN ('completed', 'cancelled')
         AND (
-          COALESCE(context->>'workflow', '') NOT IN ('creative_production', 'creative_prime')
+          (
+            COALESCE(context->>'workflow', '') = 'creative_production'
+            AND (
+              SELECT count(DISTINCT asset.size_key)
+              FROM creative_order_asset asset
+              WHERE asset.variant_id = variant.id
+                AND asset.revision = variant.revision
+                AND asset.stage = 'generated'
+                AND asset.status = 'completed'
+                AND asset.size_key IN (
+                  SELECT jsonb_array_elements_text(workflow_expected_sizes)
+                )
+            ) < jsonb_array_length(workflow_expected_sizes)
+          )
           OR (
-            SELECT count(DISTINCT asset.size_key)
-            FROM creative_order_asset asset
-            WHERE asset.variant_id = variant.id
-              AND asset.revision = variant.revision
-              AND asset.stage = CASE COALESCE(context->>'workflow', '')
-                WHEN 'creative_production' THEN 'generated'
-                WHEN 'creative_prime' THEN 'primed'
-              END
-              AND asset.status = 'completed'
-              AND asset.size_key IN (
-                SELECT jsonb_array_elements_text(workflow_expected_sizes)
-              )
-          ) < jsonb_array_length(workflow_expected_sizes)
+            COALESCE(context->>'workflow', '') IN ('creative_qc', 'creative_qc_technical', 'creative_qc_visual')
+            AND EXISTS (
+              SELECT 1
+              FROM creative_order_qc_report report
+              WHERE report.variant_id = variant.id
+                AND report.revision = variant.revision
+                AND report.lane = CASE
+                  WHEN context->>'workflow' = 'creative_qc_technical' THEN 'technical'
+                  WHEN context->>'workflow' = 'creative_qc_visual' THEN 'visual'
+                  ELSE COALESCE(NULLIF(context->>'lane', ''), '')
+                END
+                AND report.status = 'failed'
+            )
+          )
         )
     )
   )
@@ -3748,12 +4976,13 @@ WITH aggregate AS (
       WHEN active_tasks > 0 AND (completed > 0 OR action_required > 0 OR failed > 0 OR partial > 0) THEN 'partial'
       WHEN active_tasks > 0 AND started_tasks > 0 THEN 'running'
       WHEN active_tasks > 0 THEN 'queued'
-      WHEN action_required > 0 OR failed > 0 OR partial > 0 OR completed > 0 OR running > 0 THEN 'action_required'
-      WHEN total > 0 AND cancelled = total THEN 'cancelled'
-      WHEN total = 0 AND order_status IN ('failed', 'action_required') THEN 'action_required'
-      WHEN total = 0 AND order_status = 'draft' THEN 'draft'
-      ELSE 'queued'
-    END AS status
+		WHEN action_required > 0 OR failed > 0 OR partial > 0 OR completed > 0 OR running > 0 THEN 'action_required'
+		WHEN total > 0 AND cancelled = total THEN 'cancelled'
+		WHEN total = 0 AND order_status IN ('failed', 'action_required') THEN 'action_required'
+		WHEN total = 0 AND order_status = 'draft' THEN 'draft'
+		WHEN total > 0 THEN 'action_required'
+		ELSE 'queued'
+	END AS status
   FROM aggregate
 )
 SELECT CASE
@@ -3790,6 +5019,108 @@ FROM creative_order_item WHERE order_id = $1 ORDER BY created_at
 		items = append(items, item)
 	}
 	return items, rows.Err()
+}
+
+// List responses only need enough item, variant, and asset data to render the
+// order list. Full QC, diagnostic, and blocker data remains on GetCreativeOrder.
+// Keeping this projection separate prevents the list page from issuing the
+// detail endpoint's per-variant N+1 query tree for every order.
+func (h *Handler) listCreativeOrderListItems(r *http.Request, orderID pgtype.UUID) ([]creativeOrderItemResponse, error) {
+	rows, err := h.DB.Query(r.Context(), `
+SELECT i.id::text, i.order_id::text, i.candidate_id::text,
+  COALESCE(i.source_analysis_id::text, ''), i.copy_snapshot::text, i.direction, i.status,
+  COALESCE(i.adopted_variant_id::text, ''), COALESCE(i.adopted_at::text, ''),
+  COALESCE(i.adopted_by::text, ''), i.created_at::text, i.updated_at::text,
+  COALESCE(v.id::text, ''), COALESCE(v.order_item_id::text, ''), COALESCE(v.variant_key, ''),
+  COALESCE(v.brief::text, '{}'), COALESCE(v.revision, 0), COALESCE(v.status, ''),
+  COALESCE(v.created_at::text, ''), COALESCE(v.updated_at::text, ''),
+  COALESCE(a.id::text, ''), COALESCE(a.variant_id::text, ''), COALESCE(a.asset_family_id::text, ''),
+  COALESCE(a.size_key, ''), COALESCE(a.revision, 0), COALESCE(a.stage, ''),
+  COALESCE(a.attachment_id::text, ''), COALESCE(a.derived_from_asset_id::text, ''),
+  COALESCE(a.metadata::text, '{}'), COALESCE(a.evidence::text, '{}'), COALESCE(a.status, ''),
+  COALESCE(a.created_at::text, ''), COALESCE(a.updated_at::text, '')
+FROM creative_order_item i
+LEFT JOIN creative_order_variant v ON v.order_item_id = i.id
+LEFT JOIN creative_order_asset a ON a.variant_id = v.id
+WHERE i.order_id = $1
+ORDER BY i.created_at, v.variant_key, a.revision, a.size_key, a.stage
+`, orderID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	type listItem struct {
+		item     creativeOrderItemResponse
+		variants []*creativeOrderVariantResponse
+		byID     map[string]*creativeOrderVariantResponse
+	}
+	items := make([]*listItem, 0)
+	byItemID := make(map[string]*listItem)
+	for rows.Next() {
+		var item creativeOrderItemResponse
+		var itemSnapshot string
+		var variantID, variantItemID, variantKey, variantBrief, variantStatus, variantCreatedAt, variantUpdatedAt string
+		var variantRevision int
+		var assetID, assetVariantID, assetFamilyID, assetSizeKey, assetStage, assetAttachmentID string
+		var assetDerivedFromID, assetMetadata, assetEvidence, assetStatus, assetCreatedAt, assetUpdatedAt string
+		var assetRevision int
+		if err := rows.Scan(
+			&item.ID, &item.OrderID, &item.CandidateID, &item.SourceAnalysisID, &itemSnapshot,
+			&item.Direction, &item.Status, &item.AdoptedVariantID, &item.AdoptedAt, &item.AdoptedBy,
+			&item.CreatedAt, &item.UpdatedAt,
+			&variantID, &variantItemID, &variantKey, &variantBrief, &variantRevision, &variantStatus,
+			&variantCreatedAt, &variantUpdatedAt,
+			&assetID, &assetVariantID, &assetFamilyID, &assetSizeKey, &assetRevision, &assetStage,
+			&assetAttachmentID, &assetDerivedFromID, &assetMetadata, &assetEvidence, &assetStatus,
+			&assetCreatedAt, &assetUpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		item.CopySnapshot = json.RawMessage(itemSnapshot)
+		entry := byItemID[item.ID]
+		if entry == nil {
+			entry = &listItem{item: item, byID: make(map[string]*creativeOrderVariantResponse)}
+			byItemID[item.ID] = entry
+			items = append(items, entry)
+		}
+		if variantID == "" {
+			continue
+		}
+		variant := entry.byID[variantID]
+		if variant == nil {
+			variant = &creativeOrderVariantResponse{
+				ID: variantID, OrderItemID: variantItemID, VariantKey: variantKey,
+				Brief: json.RawMessage(variantBrief), Revision: variantRevision, Status: variantStatus,
+				QCStatus: "pending", Assets: []creativeOrderAssetResponse{},
+				DiagnosticAssets: []creativeOrderDiagnosticAsset{}, QCReports: []creativeOrderQCReportResponse{},
+				CreatedAt: variantCreatedAt, UpdatedAt: variantUpdatedAt,
+			}
+			entry.byID[variantID] = variant
+			entry.variants = append(entry.variants, variant)
+		}
+		if assetID != "" {
+			variant.Assets = append(variant.Assets, creativeOrderAssetResponse{
+				ID: assetID, VariantID: assetVariantID, AssetFamilyID: assetFamilyID,
+				SizeKey: assetSizeKey, Revision: assetRevision, Stage: assetStage,
+				AttachmentID: assetAttachmentID, DerivedFromAssetID: assetDerivedFromID,
+				Metadata: json.RawMessage(assetMetadata), Evidence: json.RawMessage(assetEvidence),
+				Status: assetStatus, CreatedAt: assetCreatedAt, UpdatedAt: assetUpdatedAt,
+			})
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	result := make([]creativeOrderItemResponse, 0, len(items))
+	for _, entry := range items {
+		entry.item.Variants = make([]creativeOrderVariantResponse, 0, len(entry.variants))
+		for _, variant := range entry.variants {
+			entry.item.Variants = append(entry.item.Variants, *variant)
+		}
+		result = append(result, entry.item)
+	}
+	return result, nil
 }
 
 func scanCreativeOrderItemWithAdoption(row rowScanner) (creativeOrderItemResponse, error) {
@@ -3829,15 +5160,6 @@ SELECT variant.id::text, variant.order_item_id::text, variant.variant_key, varia
       AND recovery.action = 'creative_qc_recovery_queued'
       AND recovery.details->>'variant_id' = variant.id::text
       AND recovery.details->>'revision' = variant.revision::text
-      AND recovery.created_at > COALESCE((
-        SELECT max(repair.created_at)
-        FROM activity_log repair
-        WHERE repair.workspace_id = recovery_order.workspace_id
-          AND repair.issue_id = recovery_order.issue_id
-          AND repair.action = 'creative_prime_package_repair_queued'
-          AND repair.details->>'variant_id' = variant.id::text
-          AND repair.details->>'revision' = variant.revision::text
-      ), '-infinity'::timestamptz)
   ) AS qc_recovery_used,
   (
     variant.status = 'action_required'
@@ -3849,15 +5171,6 @@ SELECT variant.id::text, variant.order_item_id::text, variant.variant_key, varia
         AND recovery.action = 'creative_qc_recovery_queued'
         AND recovery.details->>'variant_id' = variant.id::text
         AND recovery.details->>'revision' = variant.revision::text
-        AND recovery.created_at > COALESCE((
-          SELECT max(repair.created_at)
-          FROM activity_log repair
-          WHERE repair.workspace_id = recovery_order.workspace_id
-            AND repair.issue_id = recovery_order.issue_id
-            AND repair.action = 'creative_prime_package_repair_queued'
-            AND repair.details->>'variant_id' = variant.id::text
-            AND repair.details->>'revision' = variant.revision::text
-        ), '-infinity'::timestamptz)
     )
     AND (
       SELECT count(DISTINCT asset.size_key)
@@ -3866,8 +5179,10 @@ SELECT variant.id::text, variant.order_item_id::text, variant.variant_key, varia
         AND asset.revision = variant.revision
         AND asset.stage = 'primed'
         AND asset.status = 'completed'
-        AND asset.size_key IN ('1080x1080', '1200x628', '800x1000')
-    ) = 3
+        AND asset.size_key IN (
+          SELECT jsonb_array_elements_text(expected_scope.expected_sizes)
+        )
+    ) = jsonb_array_length(expected_scope.expected_sizes)
     AND NOT EXISTS (
       SELECT 1 FROM agent_task_queue task
       WHERE task.context->>'creative_order_id' = recovery_order.id::text
@@ -3908,83 +5223,41 @@ SELECT variant.id::text, variant.order_item_id::text, variant.variant_key, varia
                     CASE WHEN jsonb_typeof(report.findings->'blocking_failures') = 'array'
                       THEN report.findings->'blocking_failures' ELSE '[]'::jsonb END
                   ) finding
-                  WHERE finding->>'code' LIKE 'delegation_contract_%'
-                    OR finding->>'code' LIKE 'manifest_%'
-                    OR finding->>'code' LIKE 'prime_layout_contract_%'
-                    OR finding->>'code' LIKE 'qc_batch_%'
-                    OR finding->>'code' LIKE 'attachment_download_%'
-                )
-            )
+                   WHERE finding->>'code' LIKE 'delegation_contract_%'
+                     OR finding->>'code' LIKE 'manifest_%'
+                     OR finding->>'code' LIKE 'prime_layout_contract_%'
+                     OR finding->>'code' LIKE 'qc_batch_%'
+                     OR finding->>'code' LIKE 'attachment_download_%'
+                 )
+                 OR report.findings->>'failure_code' LIKE 'delegation_contract_%'
+                 OR report.findings->>'failure_code' LIKE 'prompt_contract_%'
+                 OR report.findings->>'failure_code' LIKE 'manifest_%'
+                 OR report.findings->>'failure_code' LIKE 'prime_layout_contract_%'
+                 OR report.findings->>'failure_code' LIKE 'qc_batch_%'
+                 OR report.findings->>'failure_code' LIKE 'attachment_download_%'
+               )
           )
         )
         AND task.context->>'creative_order_id' = recovery_order.id::text
         AND task.context->>'variant_id' = variant.id::text
         AND COALESCE(NULLIF(task.context->>'revision', '')::int, 1) = variant.revision
     )
-  ) AS qc_recovery_available,
-  EXISTS (
-    SELECT 1 FROM activity_log repair
-    WHERE repair.workspace_id = recovery_order.workspace_id
-      AND repair.issue_id = recovery_order.issue_id
-      AND repair.action = 'creative_prime_package_repair_queued'
-      AND repair.details->>'variant_id' = variant.id::text
-      AND repair.details->>'revision' = variant.revision::text
-  ) AS prime_repair_used,
-  (
-    recovery_order.issue_id IS NOT NULL
-    AND (
-      variant.status = 'action_required'
-      OR (
-        SELECT count(DISTINCT asset.size_key)
-        FROM creative_order_asset asset
-        WHERE asset.variant_id = variant.id
-          AND asset.revision = variant.revision
-          AND asset.stage = 'primed'
-          AND asset.status = 'completed'
-          AND asset.size_key IN ('1080x1080', '1200x628', '800x1000')
-      ) < 3
-    )
-    AND NOT EXISTS (
-      SELECT 1 FROM activity_log repair
-      WHERE repair.workspace_id = recovery_order.workspace_id
-        AND repair.issue_id = recovery_order.issue_id
-        AND repair.action = 'creative_prime_package_repair_queued'
-        AND repair.details->>'variant_id' = variant.id::text
-        AND repair.details->>'revision' = variant.revision::text
-    )
-    AND (
-      SELECT count(DISTINCT asset.size_key)
-      FROM creative_order_asset asset
-      WHERE asset.variant_id = variant.id
-        AND asset.revision = variant.revision
-        AND asset.stage = 'generated'
-        AND asset.status = 'completed'
-        AND asset.size_key IN ('1080x1080', '1200x628', '800x1000')
-    ) = 3
-    AND NOT EXISTS (
-      SELECT 1 FROM agent_task_queue task
-      WHERE task.context->>'type' = 'creative_domain_task'
-        AND task.context->>'creative_order_id' = recovery_order.id::text
-        AND task.context->>'variant_id' = variant.id::text
-        AND task.status IN ('queued', 'dispatched', 'running', 'waiting_local_directory')
-    )
-    AND EXISTS (
-      SELECT 1 FROM agent_task_queue task
-      JOIN agent assigned_agent ON assigned_agent.id = task.agent_id
-      WHERE assigned_agent.workspace_id = recovery_order.workspace_id
-        AND assigned_agent.archived_at IS NULL
-        AND task.context->>'type' = 'creative_domain_task'
-        AND task.context->>'workflow' = 'creative_prime'
-        AND task.context->>'creative_order_id' = recovery_order.id::text
-        AND task.context->>'variant_id' = variant.id::text
-        AND COALESCE(NULLIF(task.context->>'revision', '')::int, 1) = variant.revision
-        AND task.runtime_id IS NOT NULL
-    )
-  ) AS prime_repair_available,
+	) AS qc_recovery_available,
   variant.created_at::text, variant.updated_at::text
 FROM creative_order_variant variant
 JOIN creative_order_item recovery_item ON recovery_item.id = variant.order_item_id
 JOIN creative_order recovery_order ON recovery_order.id = recovery_item.order_id
+CROSS JOIN LATERAL (
+  SELECT CASE
+    WHEN jsonb_typeof(recovery_order.input_snapshot->'expected_sizes') = 'array'
+      AND jsonb_array_length(recovery_order.input_snapshot->'expected_sizes') > 0
+    THEN recovery_order.input_snapshot->'expected_sizes'
+    WHEN jsonb_typeof(recovery_order.input_snapshot->'delivery_scope'->'expected_sizes') = 'array'
+      AND jsonb_array_length(recovery_order.input_snapshot->'delivery_scope'->'expected_sizes') > 0
+    THEN recovery_order.input_snapshot->'delivery_scope'->'expected_sizes'
+    ELSE '["1080x1080","1200x628","800x1000"]'::jsonb
+  END AS expected_sizes
+) expected_scope
 WHERE variant.order_item_id = $1 ORDER BY variant.variant_key
 `, itemID)
 	if err != nil {
@@ -4009,11 +5282,13 @@ WHERE variant.order_item_id = $1 ORDER BY variant.variant_key
 		if err != nil {
 			return nil, err
 		}
-		if variant.Status != "completed" && variant.Status != "cancelled" {
+		if variant.Status != "cancelled" {
 			variant.DiagnosticAssets, err = h.listCreativeOrderVariantDiagnosticAssets(r, parseUUID(variant.ID))
 			if err != nil {
 				return nil, err
 			}
+		}
+		if variant.Status != "completed" && variant.Status != "cancelled" {
 			variant.ActionRequired, err = h.loadCreativeOrderVariantBlocker(r, parseUUID(variant.ID))
 			if err != nil {
 				return nil, err
@@ -4025,9 +5300,55 @@ WHERE variant.order_item_id = $1 ORDER BY variant.variant_key
 }
 
 func (h *Handler) loadCreativeOrderVariantBlocker(r *http.Request, variantID pgtype.UUID) (*creativeOrderVariantBlocker, error) {
+	var qcHandoffError struct {
+		Message   string `json:"message"`
+		UpdatedAt string `json:"updated_at"`
+	}
+	var rawQCHandoffError string
+	err := h.DB.QueryRow(r.Context(), `
+SELECT COALESCE(brief->>'creative_qc_handoff_error', '')
+FROM creative_order_variant
+WHERE id = $1
+`, variantID).Scan(&rawQCHandoffError)
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return nil, err
+	}
+	if json.Unmarshal([]byte(rawQCHandoffError), &qcHandoffError) == nil && strings.TrimSpace(qcHandoffError.Message) != "" {
+		return &creativeOrderVariantBlocker{
+			Workflow:      "quality_control",
+			FailureReason: "quality_control_queue_failed",
+			Detail:        summarizeCreativeOrderVariantBlocker(qcHandoffError.Message),
+			FailedAt:      qcHandoffError.UpdatedAt,
+			Retryable:     true,
+		}, nil
+	}
+
+	var compositionError struct {
+		Message   string `json:"message"`
+		UpdatedAt string `json:"updated_at"`
+	}
+	var rawCompositionError string
+	err = h.DB.QueryRow(r.Context(), `
+SELECT COALESCE(brief->>'brand_composition_error', '')
+FROM creative_order_variant
+WHERE id = $1
+`, variantID).Scan(&rawCompositionError)
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return nil, err
+	}
+	if json.Unmarshal([]byte(rawCompositionError), &compositionError) == nil && strings.TrimSpace(compositionError.Message) != "" {
+		return &creativeOrderVariantBlocker{
+			Workflow:      "brand_components",
+			FailureReason: "brand_composition_failed",
+			Detail:        summarizeCreativeOrderVariantBlocker(compositionError.Message),
+			FailedAt:      compositionError.UpdatedAt,
+			Retryable:     true,
+		}, nil
+	}
+
 	var blocker creativeOrderVariantBlocker
 	var rawDetail string
-	err := h.DB.QueryRow(r.Context(), `
+	err = h.DB.QueryRow(r.Context(), `
 WITH latest AS (
   SELECT q.id,
     COALESCE(q.context->>'workflow', '') AS workflow,
@@ -4052,6 +5373,67 @@ WITH latest AS (
     AND q.context->>'variant_id' = variant.id::text
     AND COALESCE(NULLIF(q.context->>'revision', '')::int, variant.revision) = variant.revision
     AND q.status IN ('failed', 'completed')
+    AND NOT EXISTS (
+      SELECT 1
+      FROM agent_task_queue active
+      WHERE active.id <> q.id
+        AND active.status IN ('queued', 'dispatched', 'running', 'waiting_local_directory')
+        AND active.context->>'type' = 'creative_domain_task'
+        AND active.context->>'workflow' = q.context->>'workflow'
+        AND active.context->>'variant_id' = variant.id::text
+        AND COALESCE(NULLIF(active.context->>'revision', '')::int, variant.revision) = variant.revision
+    )
+    AND (
+      q.status = 'failed'
+      OR (
+        q.status = 'completed'
+        AND (
+          (
+            q.context->>'workflow' = 'creative_production'
+            AND (
+              SELECT count(DISTINCT asset.size_key)
+              FROM creative_order_asset asset
+              WHERE asset.variant_id = variant.id
+                AND asset.revision = variant.revision
+                AND asset.stage = 'generated'
+                AND asset.status = 'completed'
+                AND asset.size_key IN (
+                  SELECT jsonb_array_elements_text(
+                    CASE
+                      WHEN jsonb_typeof(q.context->'expected_sizes') = 'array'
+                        AND jsonb_array_length(q.context->'expected_sizes') > 0
+                      THEN q.context->'expected_sizes'
+                      ELSE '["1080x1080","1200x628","800x1000"]'::jsonb
+                    END
+                  )
+                )
+            ) < jsonb_array_length(
+              CASE
+                WHEN jsonb_typeof(q.context->'expected_sizes') = 'array'
+                  AND jsonb_array_length(q.context->'expected_sizes') > 0
+                THEN q.context->'expected_sizes'
+                ELSE '["1080x1080","1200x628","800x1000"]'::jsonb
+              END
+            )
+          )
+          OR (
+            q.context->>'workflow' IN ('creative_qc', 'creative_qc_technical', 'creative_qc_visual')
+            AND EXISTS (
+              SELECT 1
+              FROM creative_order_qc_report report
+              WHERE report.variant_id = variant.id
+                AND report.revision = variant.revision
+                AND report.lane = CASE
+                  WHEN q.context->>'workflow' = 'creative_qc_technical' THEN 'technical'
+                  WHEN q.context->>'workflow' = 'creative_qc_visual' THEN 'visual'
+                  ELSE COALESCE(NULLIF(q.context->>'lane', ''), '')
+                END
+                AND report.status = 'failed'
+            )
+          )
+        )
+      )
+    )
   ORDER BY COALESCE(q.completed_at, q.created_at) DESC, q.id DESC
   LIMIT 1
 ), latest_message AS (
@@ -4182,281 +5564,27 @@ func truncateCreativeOrderBlockerDetail(value string, limit int) string {
 	return string(runes[:limit-1]) + "…"
 }
 
-func (h *Handler) DownloadCreativeOrderVariantDiagnosticAsset(w http.ResponseWriter, r *http.Request) {
-	orderID, ok := parseUUIDOrBadRequest(w, chi.URLParam(r, "id"), "order_id")
-	if !ok {
-		return
-	}
-	variantID, ok := parseUUIDOrBadRequest(w, chi.URLParam(r, "variantId"), "variant_id")
-	if !ok {
-		return
-	}
-	diagnosticID := strings.TrimSpace(chi.URLParam(r, "diagnosticId"))
-	if diagnosticID == "" {
-		writeError(w, http.StatusBadRequest, "diagnostic_id is required")
-		return
-	}
-	workspaceID, found, err := h.loadCreativeOrderVariantWorkspaceID(r, orderID, variantID)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to load creative diagnostic asset")
-		return
-	}
-	if !found {
-		writeError(w, http.StatusNotFound, "creative diagnostic asset not found")
-		return
-	}
-	if _, ok := h.requireWorkspaceMember(w, r, uuidToString(workspaceID), "creative diagnostic asset not found"); !ok {
-		return
-	}
-	files, err := h.loadCreativeOrderVariantDiagnosticAssetFilesForOrder(r, orderID, variantID, workspaceID)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to load creative diagnostic assets")
-		return
-	}
-	var selected *creativeOrderDiagnosticAssetFile
-	for index := range files {
-		if files[index].ID == diagnosticID {
-			selected = &files[index]
-			break
-		}
-	}
-	if selected == nil {
-		writeError(w, http.StatusNotFound, "creative diagnostic asset not found")
-		return
-	}
-	file, err := os.Open(selected.Path)
-	if err != nil {
-		writeError(w, http.StatusNotFound, "creative diagnostic asset not found")
-		return
-	}
-	defer file.Close()
-	if contentType := mime.TypeByExtension(strings.ToLower(filepath.Ext(selected.Filename))); contentType != "" {
-		w.Header().Set("Content-Type", contentType)
-	}
-	w.Header().Set("Cache-Control", "no-store")
-	w.Header().Set("Content-Disposition", mime.FormatMediaType("inline", map[string]string{"filename": selected.Filename}))
-	http.ServeContent(w, r, selected.Filename, selected.ModTime, file)
-}
-
-func (h *Handler) loadCreativeOrderVariantWorkspaceID(r *http.Request, orderID, variantID pgtype.UUID) (pgtype.UUID, bool, error) {
-	var workspaceID pgtype.UUID
-	err := h.DB.QueryRow(r.Context(), `
-SELECT order_row.workspace_id
-FROM creative_order_variant variant
-JOIN creative_order_item item ON item.id = variant.order_item_id
-JOIN creative_order order_row ON order_row.id = item.order_id
-WHERE order_row.id = $1 AND variant.id = $2
-`, orderID, variantID).Scan(&workspaceID)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return pgtype.UUID{}, false, nil
-	}
-	return workspaceID, err == nil, err
-}
-
 func (h *Handler) listCreativeOrderVariantDiagnosticAssets(r *http.Request, variantID pgtype.UUID) ([]creativeOrderDiagnosticAsset, error) {
-	files, err := h.loadCreativeOrderVariantDiagnosticAssetFiles(r, variantID)
+	rows, err := h.DB.Query(r.Context(), `
+SELECT id::text, variant_id::text, COALESCE(task_id::text, ''), attachment_id::text,
+  size_key, revision, workflow, label, filename, metadata::text, created_at::text
+FROM creative_order_diagnostic_asset
+WHERE variant_id = $1
+ORDER BY revision, size_key, updated_at DESC, id
+`, variantID)
 	if err != nil {
 		return nil, err
 	}
-	assets := make([]creativeOrderDiagnosticAsset, 0, len(files))
-	for _, file := range files {
-		file.Path = ""
-		file.ModTime = time.Time{}
-		assets = append(assets, file.creativeOrderDiagnosticAsset)
-	}
-	return assets, nil
-}
-
-func (h *Handler) loadCreativeOrderVariantDiagnosticAssetFiles(r *http.Request, variantID pgtype.UUID) ([]creativeOrderDiagnosticAssetFile, error) {
-	task, ok, err := h.loadCreativeOrderVariantDiagnosticTask(r, variantID)
-	if !ok || err != nil {
-		return nil, err
-	}
-	return creativeOrderDiagnosticAssetFiles(task), nil
-}
-
-func (h *Handler) loadCreativeOrderVariantDiagnosticAssetFilesForOrder(r *http.Request, orderID, variantID, workspaceID pgtype.UUID) ([]creativeOrderDiagnosticAssetFile, error) {
-	task, ok, err := h.loadCreativeOrderVariantDiagnosticTaskForOrder(r, orderID, variantID, workspaceID)
-	if !ok || err != nil {
-		return nil, err
-	}
-	return creativeOrderDiagnosticAssetFiles(task), nil
-}
-
-func (h *Handler) loadCreativeOrderVariantDiagnosticTask(r *http.Request, variantID pgtype.UUID) (creativeOrderDiagnosticTask, bool, error) {
-	var task creativeOrderDiagnosticTask
-	err := h.DB.QueryRow(r.Context(), `
-SELECT order_row.id::text, variant.id::text, variant.revision,
-  latest.id::text, latest.workflow, latest.work_dir, latest.created_at
-FROM creative_order_variant variant
-JOIN creative_order_item item ON item.id = variant.order_item_id
-JOIN creative_order order_row ON order_row.id = item.order_id
-JOIN LATERAL (
-  SELECT q.id,
-    COALESCE(q.context->>'workflow', '') AS workflow,
-    COALESCE(q.work_dir, '') AS work_dir,
-    COALESCE(q.completed_at, q.created_at)::text AS created_at
-  FROM agent_task_queue q
-  WHERE q.context->>'type' = 'creative_domain_task'
-    AND q.context->>'variant_id' = variant.id::text
-    AND COALESCE(NULLIF(q.context->>'revision', '')::int, variant.revision) = variant.revision
-    AND q.status IN ('failed', 'completed')
-    AND COALESCE(q.context->>'workflow', '') IN ('creative_production', 'creative_prime')
-    AND COALESCE(q.work_dir, '') <> ''
-  ORDER BY COALESCE(q.completed_at, q.created_at) DESC, q.id DESC
-  LIMIT 1
-) latest ON true
-WHERE variant.id = $1
-`, variantID).Scan(&task.OrderID, &task.VariantID, &task.Revision, &task.TaskID, &task.Workflow, &task.WorkDir, &task.CreatedAt)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return creativeOrderDiagnosticTask{}, false, nil
-	}
-	return task, err == nil, err
-}
-
-func (h *Handler) loadCreativeOrderVariantDiagnosticTaskForOrder(r *http.Request, orderID, variantID, workspaceID pgtype.UUID) (creativeOrderDiagnosticTask, bool, error) {
-	var task creativeOrderDiagnosticTask
-	err := h.DB.QueryRow(r.Context(), `
-SELECT order_row.id::text, variant.id::text, variant.revision,
-  latest.id::text, latest.workflow, latest.work_dir, latest.created_at
-FROM creative_order_variant variant
-JOIN creative_order_item item ON item.id = variant.order_item_id
-JOIN creative_order order_row ON order_row.id = item.order_id
-JOIN LATERAL (
-  SELECT q.id,
-    COALESCE(q.context->>'workflow', '') AS workflow,
-    COALESCE(q.work_dir, '') AS work_dir,
-    COALESCE(q.completed_at, q.created_at)::text AS created_at
-  FROM agent_task_queue q
-  WHERE q.context->>'type' = 'creative_domain_task'
-    AND q.context->>'variant_id' = variant.id::text
-    AND COALESCE(NULLIF(q.context->>'revision', '')::int, variant.revision) = variant.revision
-    AND q.status IN ('failed', 'completed')
-    AND COALESCE(q.context->>'workflow', '') IN ('creative_production', 'creative_prime')
-    AND COALESCE(q.work_dir, '') <> ''
-  ORDER BY COALESCE(q.completed_at, q.created_at) DESC, q.id DESC
-  LIMIT 1
-) latest ON true
-WHERE order_row.id = $1 AND variant.id = $2 AND order_row.workspace_id = $3
-`, orderID, variantID, workspaceID).Scan(&task.OrderID, &task.VariantID, &task.Revision, &task.TaskID, &task.Workflow, &task.WorkDir, &task.CreatedAt)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return creativeOrderDiagnosticTask{}, false, nil
-	}
-	return task, err == nil, err
-}
-
-func creativeOrderDiagnosticAssetFiles(task creativeOrderDiagnosticTask) []creativeOrderDiagnosticAssetFile {
-	root := filepath.Clean(strings.TrimSpace(task.WorkDir))
-	if root == "." || root == "" {
-		return nil
-	}
-	info, err := os.Stat(root)
-	if err != nil || !info.IsDir() {
-		return nil
-	}
-	files := []creativeOrderDiagnosticAssetFile{}
-	const maxDiagnosticScanFiles = 300
-	seenFiles := 0
-	_ = filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return nil
-		}
-		if path == root {
-			return nil
-		}
-		rel, err := filepath.Rel(root, path)
+	defer rows.Close()
+	assets := []creativeOrderDiagnosticAsset{}
+	for rows.Next() {
+		asset, err := scanCreativeOrderDiagnosticAsset(rows)
 		if err != nil {
-			return nil
+			return nil, err
 		}
-		if entry.IsDir() {
-			if strings.HasPrefix(entry.Name(), ".") || strings.Count(rel, string(filepath.Separator)) >= 2 {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		seenFiles++
-		if seenFiles > maxDiagnosticScanFiles {
-			return filepath.SkipAll
-		}
-		sizeKey, label, keep := classifyCreativeOrderDiagnosticFile(rel, task.Workflow)
-		if !keep {
-			return nil
-		}
-		fileInfo, err := entry.Info()
-		if err != nil {
-			return nil
-		}
-		id := creativeOrderDiagnosticAssetID(task.TaskID, rel)
-		files = append(files, creativeOrderDiagnosticAssetFile{
-			creativeOrderDiagnosticAsset: creativeOrderDiagnosticAsset{
-				ID:        id,
-				VariantID: task.VariantID,
-				TaskID:    task.TaskID,
-				SizeKey:   sizeKey,
-				Revision:  task.Revision,
-				Label:     label,
-				Filename:  filepath.Base(path),
-				URL:       fmt.Sprintf("/api/creative/orders/%s/variants/%s/diagnostic-assets/%s", task.OrderID, task.VariantID, id),
-				CreatedAt: task.CreatedAt,
-			},
-			Path:    path,
-			ModTime: fileInfo.ModTime(),
-		})
-		return nil
-	})
-	sort.SliceStable(files, func(i, j int) bool {
-		leftSize, rightSize := creativeAssetSizeOrder(files[i].SizeKey), creativeAssetSizeOrder(files[j].SizeKey)
-		if leftSize != rightSize {
-			return leftSize < rightSize
-		}
-		return files[i].ModTime.After(files[j].ModTime)
-	})
-	if len(files) > 9 {
-		return files[:9]
+		assets = append(assets, asset)
 	}
-	return files
-}
-
-func classifyCreativeOrderDiagnosticFile(relPath string, workflow string) (string, string, bool) {
-	normalized := filepath.ToSlash(strings.ToLower(relPath))
-	extension := strings.ToLower(filepath.Ext(normalized))
-	if extension != ".png" && extension != ".jpg" && extension != ".jpeg" && extension != ".webp" {
-		return "", "", false
-	}
-	name := filepath.Base(normalized)
-	if strings.Contains(name, "reference") || strings.Contains(name, "source") || strings.Contains(name, "contact") || strings.Contains(name, "hard-zone") {
-		return "", "", false
-	}
-	if !strings.Contains(name, "model") && !strings.Contains(name, "delivery") && !strings.Contains(name, "normal") && !strings.Contains(name, "prime") && !strings.Contains(name, "compose") {
-		return "", "", false
-	}
-	sizeKey := ""
-	switch {
-	case strings.Contains(name, "1080") || strings.Contains(name, "square"):
-		sizeKey = "1080x1080"
-	case strings.Contains(name, "1200") || strings.Contains(name, "landscape"):
-		sizeKey = "1200x628"
-	case strings.Contains(name, "800") || strings.Contains(name, "portrait"):
-		sizeKey = "800x1000"
-	default:
-		return "", "", false
-	}
-	stage := "模型输出"
-	if strings.Contains(name, "rework") || strings.Contains(name, "retry") || strings.Contains(name, "repair") {
-		stage = "返工输出"
-	}
-	if strings.Contains(name, "delivery") || strings.Contains(name, "normal") {
-		stage = "规范化输出"
-	}
-	if workflow == "creative_prime" {
-		stage = "Prime 合成输出"
-	}
-	return sizeKey, stage, true
-}
-
-func creativeOrderDiagnosticAssetID(taskID, relPath string) string {
-	sum := sha256.Sum256([]byte(taskID + "\n" + filepath.ToSlash(relPath)))
-	return fmt.Sprintf("%x", sum[:12])
+	return assets, rows.Err()
 }
 
 func creativeAssetSizeOrder(size string) int {

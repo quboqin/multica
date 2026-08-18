@@ -34,7 +34,7 @@
       "repositories": "Repositories",
       "github": "GitHub",
       "integrations": "Integrations",
-      "labs": "Labs",
+      "features": "Features",
       "members": "Members"
     }
   },
@@ -192,10 +192,18 @@
     "confirm": "Delete workspace",
     "deleting": "Deleting..."
   },
-  "labs": {
-    "section_placeholder_title": "No experiments yet",
-    "section_placeholder_description": "Experimental settings will land here as they ship. Today this tab is intentionally empty.",
-    "toast_failed": "Failed to update setting"
+  "features": {
+    "page_description": "Enable optional capabilities for this workspace. New capabilities can be added here without changing the workspace settings model.",
+    "creative_factory_title": "Creative Studio",
+    "creative_factory_description": "Material discovery, creative orders, production workflows, and delivery review.",
+    "creative_factory_enabled": "Creative Studio is available to this workspace.",
+    "creative_factory_disabled": "Creative Studio is off. Existing data is kept and can be enabled again later.",
+    "creative_factory_disabled_title": "Creative Studio is disabled",
+    "creative_factory_disabled_description": "An owner or admin can enable Creative Studio from Settings → Features.",
+    "manage_hint": "Only owners and admins can change workspace capabilities.",
+    "load_failed": "Workspace capabilities could not be loaded.",
+    "toast_failed": "Failed to update workspace capability",
+    "toast_enabled": "Creative Studio is enabled. Agents, Skills, squad, and automation are initialized."
   },
   "github": {
     "page_description": "Connect a GitHub App, control how Pull Requests show up inside Multica, and decide what your agents leave behind in commit history.",

@@ -34,7 +34,7 @@
       "repositories": "代码仓库",
       "github": "GitHub",
       "integrations": "集成",
-      "labs": "实验室",
+      "features": "功能",
       "members": "成员"
     }
   },
@@ -192,10 +192,18 @@
     "confirm": "删除工作区",
     "deleting": "删除中..."
   },
-  "labs": {
-    "section_placeholder_title": "暂无实验",
-    "section_placeholder_description": "实验性功能上线后会出现在这里。当前实验室页面是空的。",
-    "toast_failed": "更新设置失败"
+  "features": {
+    "page_description": "为当前工作区开启可选能力。后续新增能力可以直接扩展这里，不需要改变工作区设置模型。",
+    "creative_factory_title": "创意工厂",
+    "creative_factory_description": "素材发现、创意订单、生产流程和交付验收。",
+    "creative_factory_enabled": "当前工作区已开启创意工厂。",
+    "creative_factory_disabled": "创意工厂已关闭。已有数据会保留，之后可以再次开启。",
+    "creative_factory_disabled_title": "创意工厂未开启",
+    "creative_factory_disabled_description": "所有者或管理员可以在“设置 → 功能”中开启创意工厂。",
+    "manage_hint": "只有所有者和管理员可以修改工作区能力。",
+    "load_failed": "工作区能力加载失败。",
+    "toast_failed": "更新工作区能力失败",
+    "toast_enabled": "创意工厂已开启，智能体、Skills、小队和自动化已初始化。"
   },
   "github": {
     "page_description": "连接 GitHub App、控制 Pull Request 如何出现在 Multica 中，并决定智能体在 commit 记录里留下哪些痕迹。",

@@ -19,6 +19,7 @@ import (
 	"github.com/multica-ai/multica/server/internal/analytics"
 	"github.com/multica-ai/multica/server/internal/auth"
 	"github.com/multica-ai/multica/server/internal/broker"
+	"github.com/multica-ai/multica/server/internal/capability"
 	"github.com/multica-ai/multica/server/internal/cloudruntime"
 	"github.com/multica-ai/multica/server/internal/creative"
 	"github.com/multica-ai/multica/server/internal/daemonws"
@@ -104,6 +105,7 @@ func NewRouter(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus, analytics
 }
 
 type RouterOptions struct {
+	Version         string
 	HTTPMetrics     *obsmetrics.HTTPMetrics
 	BusinessMetrics *obsmetrics.BusinessMetrics
 	DaemonHub       *daemonws.Hub
@@ -150,6 +152,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 	cfSigner := auth.NewCloudFrontSignerFromEnv()
 
 	signupConfig := handler.Config{
+		Version:                    opts.Version,
 		AllowSignup:                os.Getenv("ALLOW_SIGNUP") != "false",
 		AllowedEmails:              splitAndTrim(os.Getenv("ALLOWED_EMAILS")),
 		AllowedEmailDomains:        splitAndTrim(os.Getenv("ALLOWED_EMAIL_DOMAINS")),
@@ -599,11 +602,6 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 		// attachment row. Resolve membership from the candidate itself and
 		// redirect to a short-lived signed URL.
 		r.Get("/api/creative/materials/{id}/archive", h.DownloadCreativeMaterialArchive)
-		// Diagnostic assets are rendered as native <img> sources. Browser image
-		// requests cannot attach workspace headers, so the handler resolves the
-		// workspace from the order/variant relation and enforces membership there.
-		r.Get("/api/creative/orders/{id}/variants/{variantId}/diagnostic-assets/{diagnosticId}", h.DownloadCreativeOrderVariantDiagnosticAsset)
-
 		r.Route("/api/workspaces", func(r chi.Router) {
 			r.Get("/", h.ListWorkspaces)
 			r.Post("/", h.CreateWorkspace)
@@ -615,6 +613,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Get("/members", h.ListMembersWithUser)
 					r.Post("/leave", h.LeaveWorkspace)
 					r.Get("/invitations", h.ListWorkspaceInvitations)
+					r.Get("/capabilities", h.ListWorkspaceCapabilities)
 					// Listing GitHub installations is member-visible so the
 					// integrations tab no longer renders blank for non-admins;
 					// the handler strips the management handle and adds a
@@ -632,6 +631,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 						r.Delete("/", h.DeleteMember)
 					})
 					r.Delete("/invitations/{invitationId}", h.RevokeInvitation)
+					r.With(handler.RequireHumanActor).Patch("/capabilities/{key}", h.UpdateWorkspaceCapability)
 				})
 				// Owner-only access
 				r.With(middleware.RequireWorkspaceRoleFromURL(queries, "id", "owner")).Delete("/", h.DeleteWorkspace)
@@ -730,6 +730,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 		// --- Workspace-scoped routes (all require workspace membership) ---
 		r.Group(func(r chi.Router) {
 			r.Use(middleware.RequireWorkspaceMember(queries))
+			creativeCapability := middleware.RequireWorkspaceCapability(pool, capability.CreativeFactory)
 
 			// Assignee frequency
 			r.Get("/api/assignee-frequency", h.GetAssigneeFrequency)
@@ -750,6 +751,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 
 			// Creative Studio resources are workspace-scoped configuration.
 			r.Route("/api/creative", func(r chi.Router) {
+				r.Use(creativeCapability)
 				r.Get("/materials", h.ListCreativeMaterialLibrary)
 				r.Get("/crawl-runs", h.ListCreativeCrawlRuns)
 				r.With(handler.RequireHumanActor).Post("/materials/import", h.ImportCreativeMaterialLibrary)
@@ -766,13 +768,14 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Post("/", h.CreateCreativeOrder)
 					r.Route("/{id}", func(r chi.Router) {
 						r.Get("/", h.GetCreativeOrder)
+						r.With(handler.RequireHumanActor).Post("/adjustments", h.QueueCreativeOrderAdjustment)
 						r.With(handler.RequireHumanActor).Post("/cancel", h.CancelCreativeOrder)
 						r.With(handler.RequireHumanActor).Post("/workflow-failures/{taskId}/retry", h.RetryCreativeOrderWorkflowFailure)
-						r.With(handler.RequireHumanActor).Post("/variants/{variantId}/prime-package-repair", h.RepairCreativeOrderVariantPrimePackage)
 						r.With(handler.RequireHumanActor).Post("/variants/{variantId}/qc/retry", h.RetryCreativeOrderVariantQC)
 						r.With(handler.RequireHumanActor).Post("/items/{itemId}/adoption", h.AdoptCreativeOrderItemVariant)
 						r.Put("/variants", h.UpsertCreativeOrderVariant)
 						r.Put("/assets", h.UpsertCreativeOrderAsset)
+						r.Put("/diagnostic-assets", h.UpsertCreativeOrderDiagnosticAsset)
 						r.Put("/qc-reports", h.UpsertCreativeOrderQC)
 						r.Post("/qc-finalize", h.FinalizeCreativeOrderQC)
 					})
@@ -781,11 +784,6 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 				r.With(handler.RequireHumanActor).Post("/resources", h.CreateCreativeResource)
 				r.Route("/resources/{id}", func(r chi.Router) {
 					r.Get("/files", h.ListCreativeResourceFiles)
-					r.Get("/component-extractions/latest", h.GetLatestCreativeMarketPackComponentExtraction)
-					r.Get("/component-extractions/{extractionId}", h.GetCreativeMarketPackComponentExtraction)
-					r.With(handler.RequireHumanActor).Post("/component-extractions", h.CreateCreativeMarketPackComponentExtraction)
-					r.Put("/component-extractions/{extractionId}", h.PutCreativeMarketPackComponentExtraction)
-					r.With(handler.RequireHumanActor).Post("/component-extractions/{extractionId}/apply", h.ApplyCreativeMarketPackComponentExtraction)
 					r.With(handler.RequireHumanActor).Post("/files", h.AddCreativeResourceFile)
 					r.With(handler.RequireHumanActor).Put("/files/{fileId}", h.UpdateCreativeResourceFile)
 					r.With(handler.RequireHumanActor).Delete("/files/{fileId}", h.RemoveCreativeResourceFile)
@@ -793,14 +791,12 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.With(handler.RequireHumanActor).Post("/publish", h.PublishCreativeResource)
 					r.With(handler.RequireHumanActor).Delete("/", h.ArchiveCreativeResource)
 				})
-				r.Get("/copy-libraries/{id}/entries", h.ListCreativeCopyEntries)
-				r.With(handler.RequireHumanActor).Post("/copy-libraries/{id}/entries/import", h.ImportCreativeCopyEntries)
-				r.With(handler.RequireHumanActor).Put("/copy-entries/{entryId}", h.UpdateCreativeCopyEntry)
 			})
-			r.Get("/api/creative-feedback-events", h.ListCreativeFeedbackEvents)
-			r.Get("/api/creative-feedback-events/metrics", h.GetCreativeFeedbackMetrics)
-			r.With(handler.RequireHumanActor).Post("/api/creative-feedback-events", h.CreateCreativeFeedbackEvent)
-			r.With(handler.RequireHumanActor).Post("/api/creative-feedback-events/{id}/undo", h.UndoCreativeFeedbackEvent)
+			r.With(creativeCapability).Get("/api/creative-feedback-events", h.ListCreativeFeedbackEvents)
+			r.With(creativeCapability).Get("/api/creative-feedback-events/metrics", h.GetCreativeFeedbackMetrics)
+			r.With(creativeCapability).Get("/api/creative-feedback-events/dashboard", h.GetCreativeFeedbackDashboard)
+			r.With(creativeCapability).With(handler.RequireHumanActor).Post("/api/creative-feedback-events", h.CreateCreativeFeedbackEvent)
+			r.With(creativeCapability).With(handler.RequireHumanActor).Post("/api/creative-feedback-events/{id}/undo", h.UndoCreativeFeedbackEvent)
 
 			// Issues
 			r.Route("/api/issues", func(r chi.Router) {
@@ -835,16 +831,15 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Delete("/reactions", h.RemoveIssueReaction)
 					r.Get("/attachments", h.ListAttachments)
 					r.Get("/children", h.ListChildIssues)
-					r.Get("/creative-materials", h.GetCreativeMaterials)
-					r.Post("/creative-materials/import", h.ImportCreativeMaterials)
-					r.Patch("/creative-materials/{candidateId}", h.UpdateCreativeMaterialCandidate)
-					r.Post("/creative-deliveries/register", h.RegisterCreativeDeliveries)
-					r.With(handler.RequireHumanActor).Post("/creative-materials/{candidateId}/adjustments", h.CreateCreativeAdjustment)
-					r.With(handler.RequireHumanActor).Put("/creative-materials/{candidateId}/adjustments/{adjustmentId}/issue", h.BindCreativeAdjustmentIssue)
-					r.Put("/creative-context", h.PutCreativeIssueContext)
-					r.With(handler.RequireHumanActor).Put("/creative-materials/{candidateId}/copy", h.PutCreativeItemCopy)
-					r.Put("/creative-materials/{candidateId}/brief", h.PutCreativeItemBrief)
-					r.With(handler.RequireHumanActor).Put("/creative-materials/{candidateId}/work-issue", h.PutCreativeItemWorkIssue)
+					r.With(creativeCapability).Get("/creative-materials", h.GetCreativeMaterials)
+					r.With(creativeCapability).Post("/creative-materials/import", h.ImportCreativeMaterials)
+					r.With(creativeCapability).Patch("/creative-materials/{candidateId}", h.UpdateCreativeMaterialCandidate)
+					r.With(creativeCapability).Post("/creative-deliveries/register", h.RegisterCreativeDeliveries)
+					r.With(creativeCapability).With(handler.RequireHumanActor).Post("/creative-materials/{candidateId}/adjustments", h.CreateCreativeAdjustment)
+					r.With(creativeCapability).With(handler.RequireHumanActor).Put("/creative-materials/{candidateId}/adjustments/{adjustmentId}/issue", h.BindCreativeAdjustmentIssue)
+					r.With(creativeCapability).Put("/creative-context", h.PutCreativeIssueContext)
+					r.With(creativeCapability).Put("/creative-materials/{candidateId}/brief", h.PutCreativeItemBrief)
+					r.With(creativeCapability).With(handler.RequireHumanActor).Put("/creative-materials/{candidateId}/work-issue", h.PutCreativeItemWorkIssue)
 					r.Get("/labels", h.ListLabelsForIssue)
 					r.Post("/labels", h.AttachLabel)
 					r.Delete("/labels/{labelId}", h.DetachLabel)

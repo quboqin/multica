@@ -549,7 +549,11 @@ type DirectTaskFanoutItem struct {
 // persisted batch identity: the evidence pair and each item key are the
 // caller-owned aggregation and idempotency handles.
 type DirectTaskFanout struct {
-	Agent                db.Agent
+	Agent db.Agent
+	// IssueID scopes domain tasks that require an issue trace. Direct tasks
+	// such as collection and analysis may leave it unset; creative planning,
+	// production and QC carry the frozen order issue through this field.
+	IssueID              pgtype.UUID
 	RequestingUserID     pgtype.UUID
 	Attribution          attribution.Result
 	TriggerEvidenceKind  string
@@ -606,6 +610,7 @@ func (s *TaskService) EnqueueDirectTaskFanout(ctx context.Context, fanout Direct
 		task, err := itemQueries.CreateAgentTask(ctx, db.CreateAgentTaskParams{
 			AgentID:              fanout.Agent.ID,
 			RuntimeID:            fanout.Agent.RuntimeID,
+			IssueID:              fanout.IssueID,
 			Priority:             0,
 			RequestingUserID:     fanout.RequestingUserID,
 			OriginatorUserID:     fanout.Attribution.UserID,
@@ -2336,7 +2341,7 @@ func (s *TaskService) LoadAgentSkillsForIssue(ctx context.Context, agentID, issu
 		result = append(result, AgentSkillData{
 			ID:          "creative-issue-resources",
 			Name:        "creative-issue-resources",
-			Description: "当前创意 Issue 固定的市场资源、素材槽位与逐图文案快照",
+			Description: "当前创意 Issue 固定的市场资源、素材槽位与逐图创意简报",
 			Content:     creativeIssueResourceSkillContent(),
 			Files:       []AgentSkillFileData{{Path: "references/issue-resources.json", Content: string(resourceContext)}},
 		})
@@ -2346,7 +2351,7 @@ func (s *TaskService) LoadAgentSkillsForIssue(ctx context.Context, agentID, issu
 
 func creativeIssueResourceSkillContent() string {
 	return "# 当前创意 Issue 资源\n\n" +
-		"执行前读取本 Skill 目录内的 `references/issue-resources.json`。先定位刚刚读取的 `creative-issue-resources/SKILL.md`，再以它所在目录为基准解析 `references/issue-resources.json`；该文件不在任务工作目录，禁止用工作目录相对路径判断它缺失。其中 `pinned_resources` 是父 Issue 固定的版本快照，`selected_item` 是当前创意图和文案；不得改用工作区其他版本。\n\n" +
+		"执行前读取本 Skill 目录内的 `references/issue-resources.json`。先定位刚刚读取的 `creative-issue-resources/SKILL.md`，再以它所在目录为基准解析 `references/issue-resources.json`；该文件不在任务工作目录，禁止用工作目录相对路径判断它缺失。其中 `pinned_resources` 是父 Issue 固定的版本快照，`selected_item` 是当前创意图和简报；不得改用工作区其他版本。\n\n" +
 		"市场文件通过 `pinned_resources.market_pack.files` 按 role 获取。角色 Skill 决定如何使用这些资源；缺少必需槽位时向 Leader 报告，不得虚构或静默替代。"
 }
 
@@ -2455,10 +2460,11 @@ func (s *TaskService) notifyTaskAvailable(task db.AgentTaskQueue) {
 	// Use a background context: the cache bump / wakeup must outlive
 	// the request that created the task, otherwise an early client
 	// disconnect could leave the empty verdict in place and stall the
-	// just-queued task until the TTL expires. The cache itself bounds
-	// every Redis call with a short timeout so a wedged Redis cannot
-	// block enqueue.
-	s.EmptyClaim.Bump(context.Background(), runtimeKey)
+	// just-queued task until the TTL expires. The cache is optional in
+	// tests and lightweight local runtimes.
+	if s.EmptyClaim != nil {
+		s.EmptyClaim.Bump(context.Background(), runtimeKey)
+	}
 	if s.Wakeup == nil {
 		return
 	}

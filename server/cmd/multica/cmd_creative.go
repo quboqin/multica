@@ -8,7 +8,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"image"
+	_ "image/png"
 	"io"
+	"math"
 	"mime"
 	"mime/multipart"
 	"net/http"
@@ -105,6 +108,35 @@ type imageEditHTTPError struct {
 	Body       string
 }
 
+const maxProviderImageAspectDeviation = 0.05
+const maxProviderImageAspectRetries = 1
+
+type imageOutputDimensions struct {
+	Width       int
+	Height      int
+	AspectRatio float64
+}
+
+type providerImageAspectDeviationError struct {
+	actualWidth      int
+	actualHeight     int
+	expectedWidth    int
+	expectedHeight   int
+	actualAspect     float64
+	expectedAspect   float64
+	aspectDeviation  float64
+	maximumDeviation float64
+}
+
+func (e *providerImageAspectDeviationError) Error() string {
+	return fmt.Sprintf(
+		"provider returned %dx%d (aspect %.5f) for requested %dx%d (aspect %.5f); aspect deviation %.2f%% exceeds %.2f%%",
+		e.actualWidth, e.actualHeight, e.actualAspect,
+		e.expectedWidth, e.expectedHeight, e.expectedAspect,
+		e.aspectDeviation*100, e.maximumDeviation*100,
+	)
+}
+
 func (e *imageEditHTTPError) Error() string {
 	if e.RetryAfter != "" {
 		return fmt.Sprintf("GPT Image edit failed with status %d (request_id=%s, retry_after=%s): %s", e.StatusCode, e.RequestID, e.RetryAfter, e.Body)
@@ -160,8 +192,6 @@ type creativeDeliveryCLI struct {
 
 type creativeIssueItemCLI struct {
 	CandidateID   string          `json:"candidate_id"`
-	CopyEntryID   string          `json:"copy_entry_id"`
-	CopySnapshot  json.RawMessage `json:"copy_snapshot"`
 	CreativeBrief json.RawMessage `json:"creative_brief"`
 	WorkIssueID   string          `json:"work_issue_id"`
 	Revision      int             `json:"revision"`
@@ -390,7 +420,9 @@ func runImageEdit(cmd *cobra.Command, _ []string) error {
 		return fmt.Errorf("only gpt-image-2 is supported by this direct image-edit capability")
 	}
 	size, _ := cmd.Flags().GetString("size")
-	if err := validateGPTImageSize(size); err != nil {
+	size = strings.TrimSpace(size)
+	providerSize, err := providerGPTImageSize(size)
+	if err != nil {
 		return err
 	}
 	quality, _ := cmd.Flags().GetString("quality")
@@ -419,9 +451,9 @@ func runImageEdit(cmd *cobra.Command, _ []string) error {
 	if maxAttempts < 1 || maxAttempts > 5 {
 		return fmt.Errorf("--max-attempts must be between 1 and 5")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), cli.AtLeastAPITimeout(10*time.Minute))
+	ctx, cancel := context.WithTimeout(context.Background(), cli.AtLeastAPITimeout(50*time.Minute))
 	defer cancel()
-	image, requestID, attempts, err := requestGPTImageEditWithRetryAndSlots(ctx, http.DefaultClient, endpoint, apiKey, model, imageField, inputs, mask, prompt, size, quality, maxAttempts)
+	image, requestID, attempts, aspectRetries, dimensions, aspectFallback, timing, err := requestGPTImageEditWithValidAspect(ctx, http.DefaultClient, endpoint, apiKey, model, imageField, inputs, mask, prompt, providerSize, quality, maxAttempts, acquireGlobalImageSlot)
 	if err != nil {
 		return err
 	}
@@ -437,15 +469,43 @@ func runImageEdit(cmd *cobra.Command, _ []string) error {
 	}
 	output, _ := cmd.Flags().GetString("output")
 	result := map[string]any{
-		"model": model, "input_count": len(inputs), "size": size, "quality": quality,
-		"path": abs, "bytes": len(image), "request_id": requestID, "attempts": attempts,
+		"model": model, "input_count": len(inputs), "size": size, "provider_size": providerSize, "quality": quality,
+		"path": abs, "bytes": len(image), "request_id": requestID, "attempts": attempts, "aspect_retries": aspectRetries, "aspect_fallback": aspectFallback,
+		"actual_width": dimensions.Width, "actual_height": dimensions.Height, "actual_aspect_ratio": dimensions.AspectRatio,
 		"provider_slot_limit": providerSlotLimit, "prompt": prompt, "prompt_sha256": imagePromptSHA256(prompt),
+		"queue_wait_seconds": timing.QueueWait.Seconds(), "provider_elapsed_seconds": timing.ProviderElapsed.Seconds(), "timeout_stage": timing.TimeoutStage,
+		"generated_asset": map[string]any{
+			"completed": true, "path": abs, "size": size, "width": dimensions.Width,
+			"height": dimensions.Height, "aspect_fallback": aspectFallback,
+		},
 	}
 	if output == "table" {
 		cli.PrintTable(os.Stdout, []string{"MODEL", "INPUTS", "SIZE", "QUALITY", "BYTES", "REQUEST ID", "PATH"}, [][]string{{model, strconv.Itoa(len(inputs)), size, quality, strconv.Itoa(len(image)), requestID, abs}})
 		return nil
 	}
 	return cli.PrintJSON(os.Stdout, result)
+}
+
+// providerGPTImageSize keeps the public delivery contract independent from the
+// provider's 16px canvas constraint. The normalized asset is still written at
+// the requested delivery size and the original request remains in the trace.
+func providerGPTImageSize(requested string) (string, error) {
+	requested = strings.TrimSpace(requested)
+	if err := validateGPTImageSize(requested); err == nil {
+		return requested, nil
+	} else {
+		canonical := strings.ToLower(requested)
+		switch canonical {
+		case "1080x1080":
+			return "1088x1088", nil
+		case "1200x628":
+			return "1200x624", nil
+		case "800x1000":
+			return "800x992", nil
+		default:
+			return "", err
+		}
+	}
 }
 
 func imagePromptSHA256(prompt string) string {
@@ -462,28 +522,52 @@ func requestGPTImageEditWithRetryAndSlots(ctx context.Context, client *http.Clie
 
 type imageSlotAcquirer func(context.Context, string, string) (func() error, error)
 
+type imageEditTiming struct {
+	QueueWait       time.Duration
+	ProviderElapsed time.Duration
+	TimeoutStage    string
+}
+
 func requestGPTImageEditWithRetryUsingSlots(ctx context.Context, client *http.Client, endpoint, apiKey, model, imageField string, inputs []string, mask, prompt, size, quality string, maxAttempts int, acquire imageSlotAcquirer) ([]byte, string, int, error) {
+	image, requestID, attempts, _, err := requestGPTImageEditWithRetryUsingSlotsTimed(ctx, client, endpoint, apiKey, model, imageField, inputs, mask, prompt, size, quality, maxAttempts, acquire)
+	return image, requestID, attempts, err
+}
+
+func requestGPTImageEditWithRetryUsingSlotsTimed(ctx context.Context, client *http.Client, endpoint, apiKey, model, imageField string, inputs []string, mask, prompt, size, quality string, maxAttempts int, acquire imageSlotAcquirer) ([]byte, string, int, imageEditTiming, error) {
 	var lastRequestID string
 	var lastErr error
+	var timing imageEditTiming
 	usedAttempts := 0
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
 		usedAttempts = attempt
 		var release func() error
 		if acquire != nil {
+			queuedAt := time.Now()
 			var err error
 			release, err = acquire(ctx, endpoint, apiKey)
+			timing.QueueWait += time.Since(queuedAt)
 			if err != nil {
-				return nil, lastRequestID, attempt, fmt.Errorf("acquire image concurrency slot: %w", err)
+				if errors.Is(err, context.DeadlineExceeded) || errors.Is(ctx.Err(), context.DeadlineExceeded) {
+					timing.TimeoutStage = "queue"
+				}
+				return nil, lastRequestID, attempt, timing, fmt.Errorf("acquire image concurrency slot: %w", err)
 			}
 		}
-		image, requestID, err := requestGPTImageEdit(ctx, client, endpoint, apiKey, model, imageField, inputs, mask, prompt, size, quality)
+		providerCtx, cancelProvider := context.WithTimeout(context.WithoutCancel(ctx), cli.AtLeastAPITimeout(20*time.Minute))
+		providerStartedAt := time.Now()
+		image, requestID, err := requestGPTImageEdit(providerCtx, client, endpoint, apiKey, model, imageField, inputs, mask, prompt, size, quality)
+		timing.ProviderElapsed += time.Since(providerStartedAt)
+		if errors.Is(providerCtx.Err(), context.DeadlineExceeded) {
+			timing.TimeoutStage = "provider"
+		}
+		cancelProvider()
 		if release != nil {
 			if releaseErr := release(); err == nil && releaseErr != nil {
 				err = fmt.Errorf("release image concurrency slot: %w", releaseErr)
 			}
 		}
 		if err == nil {
-			return image, requestID, attempt, nil
+			return image, requestID, attempt, timing, nil
 		}
 		lastRequestID, lastErr = requestID, err
 		delay, retry := imageEditRetryDelay(err, attempt)
@@ -494,11 +578,14 @@ func requestGPTImageEditWithRetryUsingSlots(ctx context.Context, client *http.Cl
 		select {
 		case <-ctx.Done():
 			timer.Stop()
-			return nil, lastRequestID, attempt, ctx.Err()
+			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+				timing.TimeoutStage = "queue"
+			}
+			return nil, lastRequestID, attempt, timing, ctx.Err()
 		case <-timer.C:
 		}
 	}
-	return nil, lastRequestID, usedAttempts, fmt.Errorf("GPT Image edit failed after %d attempt(s): %w", usedAttempts, lastErr)
+	return nil, lastRequestID, usedAttempts, timing, fmt.Errorf("GPT Image edit failed after %d attempt(s): %w", usedAttempts, lastErr)
 }
 
 func imageEditRetryDelay(err error, attempt int) (time.Duration, bool) {
@@ -545,20 +632,112 @@ func normalizedOpenAIImageBaseURL(raw string) (string, error) {
 }
 
 func validateGPTImageSize(size string) error {
-	size = strings.ToLower(strings.TrimSpace(size))
-	if size == "auto" {
+	if strings.EqualFold(strings.TrimSpace(size), "auto") {
 		return nil
 	}
-	parts := strings.Split(size, "x")
-	if len(parts) != 2 {
-		return fmt.Errorf("--size must be auto or WIDTHxHEIGHT")
+	width, height, err := parseGPTImageSize(size)
+	if err != nil {
+		return err
 	}
-	width, widthErr := strconv.Atoi(parts[0])
-	height, heightErr := strconv.Atoi(parts[1])
-	if widthErr != nil || heightErr != nil || width <= 0 || height <= 0 || width > 3840 || height > 3840 || width%16 != 0 || height%16 != 0 || width*height < 655360 || width*height > 8294400 || maxInt(width, height) > 3*minInt(width, height) {
+	if width <= 0 || height <= 0 || width > 3840 || height > 3840 || width%16 != 0 || height%16 != 0 || width*height < 655360 || width*height > 8294400 || maxInt(width, height) > 3*minInt(width, height) {
 		return fmt.Errorf("--size must use 16px multiples, 655360-8294400 pixels, maximum edge 3840px, and at most 3:1 ratio")
 	}
 	return nil
+}
+
+func parseGPTImageSize(size string) (int, int, error) {
+	size = strings.ToLower(strings.TrimSpace(size))
+	parts := strings.Split(size, "x")
+	if len(parts) != 2 {
+		return 0, 0, fmt.Errorf("--size must be auto or WIDTHxHEIGHT")
+	}
+	width, widthErr := strconv.Atoi(parts[0])
+	height, heightErr := strconv.Atoi(parts[1])
+	if widthErr != nil || heightErr != nil || width <= 0 || height <= 0 {
+		return 0, 0, fmt.Errorf("--size must be auto or WIDTHxHEIGHT")
+	}
+	return width, height, nil
+}
+
+func validateProviderImageOutput(data []byte, requestedSize string) (imageOutputDimensions, error) {
+	dimensions, err := decodeImageDimensions(data)
+	if err != nil {
+		return imageOutputDimensions{}, err
+	}
+	if strings.EqualFold(strings.TrimSpace(requestedSize), "auto") {
+		return dimensions, nil
+	}
+	expectedWidth, expectedHeight, err := parseGPTImageSize(requestedSize)
+	if err != nil {
+		return imageOutputDimensions{}, err
+	}
+	expectedAspectRatio := float64(expectedWidth) / float64(expectedHeight)
+	deviation := math.Abs(dimensions.AspectRatio/expectedAspectRatio - 1)
+	if deviation > maxProviderImageAspectDeviation {
+		return imageOutputDimensions{}, &providerImageAspectDeviationError{
+			actualWidth: dimensions.Width, actualHeight: dimensions.Height, expectedWidth: expectedWidth, expectedHeight: expectedHeight,
+			actualAspect: dimensions.AspectRatio, expectedAspect: expectedAspectRatio,
+			aspectDeviation: deviation, maximumDeviation: maxProviderImageAspectDeviation,
+		}
+	}
+	return dimensions, nil
+}
+
+func decodeImageDimensions(data []byte) (imageOutputDimensions, error) {
+	config, _, err := image.DecodeConfig(bytes.NewReader(data))
+	if err != nil || config.Width <= 0 || config.Height <= 0 {
+		return imageOutputDimensions{}, fmt.Errorf("provider returned an unreadable image: %w", err)
+	}
+	return imageOutputDimensions{
+		Width:       config.Width,
+		Height:      config.Height,
+		AspectRatio: float64(config.Width) / float64(config.Height),
+	}, nil
+}
+
+func requestGPTImageEditWithValidAspect(
+	ctx context.Context,
+	client *http.Client,
+	endpoint, apiKey, model, imageField string,
+	inputs []string,
+	mask, prompt, size, quality string,
+	maxAttempts int,
+	acquire imageSlotAcquirer,
+) ([]byte, string, int, int, imageOutputDimensions, bool, imageEditTiming, error) {
+	totalAttempts := 0
+	lastRequestID := ""
+	var totalTiming imageEditTiming
+	for aspectAttempt := 0; aspectAttempt <= maxProviderImageAspectRetries; aspectAttempt++ {
+		image, requestID, attempts, timing, err := requestGPTImageEditWithRetryUsingSlotsTimed(ctx, client, endpoint, apiKey, model, imageField, inputs, mask, prompt, size, quality, maxAttempts, acquire)
+		totalAttempts += attempts
+		totalTiming.QueueWait += timing.QueueWait
+		totalTiming.ProviderElapsed += timing.ProviderElapsed
+		if timing.TimeoutStage != "" {
+			totalTiming.TimeoutStage = timing.TimeoutStage
+		}
+		if requestID != "" {
+			lastRequestID = requestID
+		}
+		if err != nil {
+			return nil, lastRequestID, totalAttempts, aspectAttempt, imageOutputDimensions{}, false, totalTiming, err
+		}
+		dimensions, err := validateProviderImageOutput(image, size)
+		if err == nil {
+			return image, lastRequestID, totalAttempts, aspectAttempt, dimensions, false, totalTiming, nil
+		}
+		var aspectErr *providerImageAspectDeviationError
+		if !errors.As(err, &aspectErr) {
+			return nil, lastRequestID, totalAttempts, aspectAttempt, imageOutputDimensions{}, false, totalTiming, err
+		}
+		if aspectAttempt == maxProviderImageAspectRetries {
+			fallbackDimensions, dimensionErr := decodeImageDimensions(image)
+			if dimensionErr != nil {
+				return nil, lastRequestID, totalAttempts, aspectAttempt, imageOutputDimensions{}, false, totalTiming, dimensionErr
+			}
+			return image, lastRequestID, totalAttempts, aspectAttempt, fallbackDimensions, true, totalTiming, nil
+		}
+	}
+	panic("unreachable image aspect retry state")
 }
 
 func requestGPTImageEdit(ctx context.Context, client *http.Client, endpoint, apiKey, model, imageField string, inputs []string, mask, prompt, size, quality string) ([]byte, string, error) {

@@ -1,14 +1,13 @@
 #!/usr/bin/env python3
-"""Normalize a provider image to an exact delivery canvas without stretching content."""
+"""Normalize a provider image to an exact delivery canvas with recorded aspect handling."""
 
 from __future__ import annotations
 
 import argparse
 import json
-import math
 from pathlib import Path
 
-from PIL import Image, ImageChops, ImageDraw, ImageOps
+from PIL import Image, ImageFilter
 
 
 def parse_args() -> argparse.Namespace:
@@ -17,9 +16,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output", required=True)
     parser.add_argument("--width", required=True, type=int)
     parser.add_argument("--height", required=True, type=int)
+    parser.add_argument("--model-size")
     parser.add_argument("--evidence")
-    parser.add_argument("--max-crop-fraction", type=float, default=0.03)
-    parser.add_argument("--max-extension-fraction", type=float, default=0.0)
+    parser.add_argument("--max-aspect-deviation", type=float, default=0.05)
+    parser.add_argument("--allow-aspect-fallback", action="store_true")
+    parser.add_argument(
+        "--aspect-fallback-mode",
+        choices=("compress", "contain-edge-extend"),
+        default="compress",
+    )
     parser.add_argument("--prime-layout-file")
     parser.add_argument("--prime-safe-audit", action="store_true")
     parser.add_argument("--prime-safe-fit", action="store_true")
@@ -61,6 +66,19 @@ def contract_safe_frame(layout: dict[str, object]) -> tuple[int, int, int, int] 
             if x2 > x1 and y2 > y1:
                 return (x1, y1, x2, y2)
     return None
+
+
+def parse_canvas(value: str, field: str) -> tuple[int, int]:
+    parts = value.strip().lower().split("x")
+    if len(parts) != 2:
+        raise SystemExit(f"{field} must be WIDTHxHEIGHT")
+    try:
+        width, height = (int(part) for part in parts)
+    except ValueError as exc:
+        raise SystemExit(f"{field} must be WIDTHxHEIGHT") from exc
+    if width < 1 or height < 1:
+        raise SystemExit(f"{field} must be WIDTHxHEIGHT")
+    return width, height
 
 
 def load_prime_layout(path: str | None, width: int, height: int) -> dict[str, object] | None:
@@ -109,6 +127,41 @@ def load_prime_safe_rect(
     return ((x1, y1, x2, y2), (x_margin, y_margin), "derived_from_prime_layout_contract")
 
 
+def contain_with_edge_extension(source: Image.Image, width: int, height: int) -> tuple[Image.Image, tuple[int, int, int, int]]:
+    scale = min(width / source.width, height / source.height)
+    fitted_width = max(1, round(source.width * scale))
+    fitted_height = max(1, round(source.height * scale))
+    fitted = source.resize((fitted_width, fitted_height), Image.Resampling.LANCZOS)
+    canvas = Image.new("RGB", (width, height), fitted.getpixel((fitted.width // 2, fitted.height // 2)))
+    x1 = (width - fitted_width) // 2
+    y1 = (height - fitted_height) // 2
+    x2 = x1 + fitted_width
+    y2 = y1 + fitted_height
+    canvas.paste(fitted, (x1, y1))
+    blur_radius = max(2, min(width, height) // 80)
+
+    if x1 > 0:
+        strip_width = min(fitted.width, max(2, fitted.width // 24))
+        left = fitted.crop((0, 0, strip_width, fitted.height)).resize((x1, height), Image.Resampling.BICUBIC)
+        canvas.paste(left.filter(ImageFilter.GaussianBlur(blur_radius)), (0, 0))
+        if width > x2:
+            right = fitted.crop((fitted.width - strip_width, 0, fitted.width, fitted.height)).resize((width - x2, height), Image.Resampling.BICUBIC)
+            canvas.paste(right.filter(ImageFilter.GaussianBlur(blur_radius)), (x2, 0))
+    if y1 > 0:
+        strip_height = min(fitted.height, max(2, fitted.height // 24))
+        top = fitted.crop((0, 0, fitted.width, strip_height)).resize((width, y1), Image.Resampling.BICUBIC)
+        canvas.paste(top.filter(ImageFilter.GaussianBlur(blur_radius)), (0, 0))
+        if height > y2:
+            bottom = fitted.crop((0, fitted.height - strip_height, fitted.width, fitted.height)).resize((width, height - y2), Image.Resampling.BICUBIC)
+            canvas.paste(bottom.filter(ImageFilter.GaussianBlur(blur_radius)), (0, y2))
+    canvas.paste(fitted, (x1, y1))
+    return canvas, (x1, y1, x2, y2)
+
+
+def compress_to_canvas(source: Image.Image, width: int, height: int) -> tuple[Image.Image, tuple[int, int, int, int]]:
+    return source.resize((width, height), Image.Resampling.LANCZOS), (0, 0, width, height)
+
+
 def prime_safe_audit(
     rect: tuple[int, int, int, int],
     margins: tuple[int, int],
@@ -127,10 +180,8 @@ def main() -> int:
     args = parse_args()
     if args.width < 1 or args.height < 1:
         raise SystemExit("width and height must be positive")
-    if not 0 <= args.max_crop_fraction <= 0.25:
-        raise SystemExit("max-crop-fraction must be between 0 and 0.25")
-    if not 0 <= args.max_extension_fraction <= 0.5:
-        raise SystemExit("max-extension-fraction must be between 0 and 0.5")
+    if not 0 <= args.max_aspect_deviation <= 0.25:
+        raise SystemExit("max-aspect-deviation must be between 0 and 0.25")
 
     source_path = Path(args.input).resolve()
     output_path = Path(args.output).resolve()
@@ -139,84 +190,26 @@ def main() -> int:
         source_width, source_height = source.size
         source_ratio = source_width / source_height
         target_ratio = args.width / args.height
-        if source_ratio >= target_ratio:
-            crop_fraction = 1 - (target_ratio / source_ratio)
-        else:
-            crop_fraction = 1 - (source_ratio / target_ratio)
-        source_rgb = source.convert("RGB")
-        extension_fraction = 0.0
-        if crop_fraction <= args.max_crop_fraction:
-            normalized = ImageOps.fit(
-                source_rgb,
-                (args.width, args.height),
-                method=Image.Resampling.LANCZOS,
-                centering=(0.5, 0.5),
+        model_width, model_height = parse_canvas(args.model_size or f"{args.width}x{args.height}", "model-size")
+        model_ratio = model_width / model_height
+        source_aspect_deviation = abs(source_ratio / model_ratio - 1)
+        aspect_fallback_used = source_aspect_deviation > args.max_aspect_deviation
+        if aspect_fallback_used and not args.allow_aspect_fallback:
+            raise SystemExit(
+                f"source aspect ratio deviates {source_aspect_deviation:.2%} from model canvas {model_width}x{model_height}; regenerate this size"
             )
-            method = "cover-center-crop-lanczos"
+        source_rgb = source.convert("RGB")
+        content_rect = (0, 0, args.width, args.height)
+        if aspect_fallback_used:
+            if args.aspect_fallback_mode == "contain-edge-extend":
+                normalized, content_rect = contain_with_edge_extension(source_rgb, args.width, args.height)
+                method = "contain-edge-extend"
+            else:
+                normalized, content_rect = compress_to_canvas(source_rgb, args.width, args.height)
+                method = "aspect-compress"
         else:
-            if source_ratio < target_ratio:
-                canvas_size = (math.ceil(source_height * target_ratio), source_height)
-                extension_fraction = 1 - (source_width / canvas_size[0])
-            else:
-                canvas_size = (source_width, math.ceil(source_width / target_ratio))
-                extension_fraction = 1 - (source_height / canvas_size[1])
-            if extension_fraction > args.max_extension_fraction:
-                raise SystemExit(
-                    f"source aspect ratio requires {crop_fraction:.2%} crop or "
-                    f"{extension_fraction:.2%} background extension; regenerate this size"
-                )
-
-            backdrop = Image.new("RGB", canvas_size)
-            offset = ((canvas_size[0] - source_width) // 2, (canvas_size[1] - source_height) // 2)
-            if canvas_size[0] > source_width:
-                left_pad = offset[0]
-                right_pad = canvas_size[0] - source_width - left_pad
-                left_edge = source_rgb.crop((0, 0, 1, source_height))
-                right_edge = source_rgb.crop((source_width - 1, 0, source_width, source_height))
-                if left_pad:
-                    left = left_edge.resize((left_pad, source_height))
-                    background = ImageChops.lighter(left, right_edge.resize((left_pad, source_height)))
-                    ramp = Image.new("L", (left_pad, source_height))
-                    ramp_draw = ImageDraw.Draw(ramp)
-                    for x in range(left_pad):
-                        ramp_draw.line((x, 0, x, source_height), fill=round(255 * x / max(1, left_pad - 1)))
-                    left = Image.composite(left, background, ramp)
-                    backdrop.paste(left, (0, 0))
-                if right_pad:
-                    right = right_edge.resize((right_pad, source_height))
-                    background = ImageChops.lighter(left_edge.resize((right_pad, source_height)), right)
-                    ramp = Image.new("L", (right_pad, source_height))
-                    ramp_draw = ImageDraw.Draw(ramp)
-                    for x in range(right_pad):
-                        ramp_draw.line((x, 0, x, source_height), fill=round(255 * x / max(1, right_pad - 1)))
-                    right = Image.composite(background, right, ramp)
-                    backdrop.paste(right, (left_pad + source_width, 0))
-            else:
-                top_pad = offset[1]
-                bottom_pad = canvas_size[1] - source_height - top_pad
-                top_edge = source_rgb.crop((0, 0, source_width, 1))
-                bottom_edge = source_rgb.crop((0, source_height - 1, source_width, source_height))
-                if top_pad:
-                    top = top_edge.resize((source_width, top_pad))
-                    background = ImageChops.lighter(top, bottom_edge.resize((source_width, top_pad)))
-                    ramp = Image.new("L", (source_width, top_pad))
-                    ramp_draw = ImageDraw.Draw(ramp)
-                    for y in range(top_pad):
-                        ramp_draw.line((0, y, source_width, y), fill=round(255 * y / max(1, top_pad - 1)))
-                    top = Image.composite(top, background, ramp)
-                    backdrop.paste(top, (0, 0))
-                if bottom_pad:
-                    bottom = bottom_edge.resize((source_width, bottom_pad))
-                    background = ImageChops.lighter(top_edge.resize((source_width, bottom_pad)), bottom)
-                    ramp = Image.new("L", (source_width, bottom_pad))
-                    ramp_draw = ImageDraw.Draw(ramp)
-                    for y in range(bottom_pad):
-                        ramp_draw.line((0, y, source_width, y), fill=round(255 * y / max(1, bottom_pad - 1)))
-                    bottom = Image.composite(background, bottom, ramp)
-                    backdrop.paste(bottom, (0, top_pad + source_height))
-            backdrop.paste(source_rgb, offset)
-            normalized = backdrop.resize((args.width, args.height), Image.Resampling.LANCZOS)
-            method = "contain-edge-fade-extension-lanczos"
+            normalized = source_rgb.resize((args.width, args.height), Image.Resampling.LANCZOS)
+            method = "direct-resize-lanczos"
         output_path.parent.mkdir(parents=True, exist_ok=True)
         safe_fit_evidence: dict[str, object] = {"prime_safe_audit": False, "prime_safe_fit": False}
         if args.prime_safe_audit or args.prime_safe_fit:
@@ -234,10 +227,14 @@ def main() -> int:
         "source_size": {"width": source_width, "height": source_height},
         "target": str(output_path),
         "target_size": {"width": args.width, "height": args.height},
-        "crop_fraction": round(crop_fraction, 6),
-        "max_crop_fraction": args.max_crop_fraction,
-        "extension_fraction": round(extension_fraction, 6),
-        "max_extension_fraction": args.max_extension_fraction,
+        "model_canvas": {"width": model_width, "height": model_height},
+        "source_aspect_deviation": round(source_aspect_deviation, 6),
+        "max_aspect_deviation": args.max_aspect_deviation,
+        "delivery_aspect_deformation": round(abs(source_ratio / target_ratio - 1), 6),
+        "crop_fraction": 0.0,
+        "extension_fraction": round(1 - ((content_rect[2] - content_rect[0]) * (content_rect[3] - content_rect[1])) / (args.width * args.height), 6),
+        "aspect_fallback_used": aspect_fallback_used,
+        "content_rect": {"x1": content_rect[0], "y1": content_rect[1], "x2": content_rect[2], "y2": content_rect[3]},
         "method": method,
         **safe_fit_evidence,
     }

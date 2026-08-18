@@ -182,7 +182,7 @@ function variantCollaborationTitle(variant: CreativeOrderVariant): string {
   if (variant.qc_status === "warning") return "可采用，存在质检提醒";
   if (delivered === CREATIVE_DELIVERY_SIZES.length) return "三尺寸已交付";
   if (variant.assets.some((asset) => asset.stage === "primed" && asset.status === "completed")) return "正在质检";
-  if (variant.assets.some((asset) => asset.status === "completed")) return "正在贴片";
+  if (variant.assets.some((asset) => asset.status === "completed")) return "正在合成品牌组件";
   return variant.status === "completed" ? "等待交付收口" : "正在生成";
 }
 
@@ -196,7 +196,7 @@ function variantCollaborationDetail(variant: CreativeOrderVariant): string {
 }
 
 function workflowLabel(workflow: string): string {
-  return ({ creative_plan: "创意方案", creative_production: "成图生成", creative_prime: "品牌贴片", creative_qc_technical: "技术质检", creative_qc_visual: "视觉质检", creative_direct_edit: "图片调整" } as Record<string, string>)[workflow] || "自动流程";
+  return ({ creative_plan: "创意方案", creative_production: "成图生成", brand_components: "品牌组件合成", creative_qc_technical: "技术质检", creative_qc_visual: "视觉质检", creative_direct_edit: "图片调整" } as Record<string, string>)[workflow] || "自动流程";
 }
 
 function CreativeAdjustmentTrace({ event, variant, item }: { event: CreateCreativeFeedbackResponse; variant?: CreativeOrderVariant; item?: CreativeOrderItem }) {

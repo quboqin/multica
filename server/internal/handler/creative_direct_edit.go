@@ -32,7 +32,6 @@ type creativeDirectEditResponse struct {
 
 var creativeDirectEditCapabilityBindings = []creativeOrderCapabilityBinding{
 	{Capability: "direct_image_edit", SnapshotField: "direct_edit_agent_id"},
-	{Capability: "prime_compose", SnapshotField: "prime_agent_id"},
 	{Capability: "quality_control", SnapshotField: "reviewer_agent_id"},
 }
 
@@ -144,7 +143,7 @@ FOR UPDATE
 		return
 	}
 
-	snapshot, _ := json.Marshal(map[string]any{
+	snapshotValue := map[string]any{
 		"mode":                 "direct_edit",
 		"candidate_id":         input.CandidateID,
 		"source_attachment_id": uuidToString(sourceAttachmentID),
@@ -155,7 +154,32 @@ FOR UPDATE
 			"squad_id":         input.SquadID,
 			"direct_edit_role": "图片直接修改智能体",
 		},
-	})
+	}
+	if input.DeliveryMode == "publish" {
+		var issueSnapshot string
+		if err := tx.QueryRow(r.Context(), `
+SELECT snapshot::text
+FROM creative_issue_context
+WHERE issue_id = $1 AND workspace_id = $2
+`, issueID, workspaceID).Scan(&issueSnapshot); err != nil {
+			writeError(w, http.StatusConflict, "published direct image edit requires a frozen market pack")
+			return
+		}
+		var issueContext struct {
+			MarketPack json.RawMessage `json:"market_pack"`
+		}
+		if json.Unmarshal([]byte(issueSnapshot), &issueContext) != nil || len(issueContext.MarketPack) == 0 || string(issueContext.MarketPack) == "null" {
+			writeError(w, http.StatusConflict, "published direct image edit requires a frozen market pack")
+			return
+		}
+		var marketPack any
+		if json.Unmarshal(issueContext.MarketPack, &marketPack) != nil {
+			writeError(w, http.StatusConflict, "published direct image edit has an invalid frozen market pack")
+			return
+		}
+		snapshotValue["market_pack"] = marketPack
+	}
+	snapshot, _ := json.Marshal(snapshotValue)
 	snapshot, err = freezeCreativeOrderSquadSnapshot(r.Context(), tx, workspaceID, squadID, snapshot, creativeDirectEditCapabilityBindings)
 	if err != nil {
 		var validationErr *creativeOrderSquadValidationError
@@ -195,7 +219,7 @@ RETURNING id::text, order_id::text, candidate_id::text, COALESCE(source_analysis
 	variant, err := scanCreativeOrderVariant(tx.QueryRow(r.Context(), `
 INSERT INTO creative_order_variant (order_item_id, variant_key, brief, revision, status)
 VALUES ($1,'direct_edit',$2::jsonb,1,'queued')
-RETURNING id::text, order_item_id::text, variant_key, brief::text, revision, status, created_at::text, updated_at::text
+RETURNING id::text, order_item_id::text, variant_key, brief::text, revision, status, false, false, created_at::text, updated_at::text
 `, item.ID, brief))
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to create direct image edit variant")
@@ -258,7 +282,7 @@ FROM creative_order_item WHERE order_id = $1 ORDER BY created_at LIMIT 1
 		return creativeDirectEditResponse{}, err
 	}
 	variant, err := scanCreativeOrderVariant(tx.QueryRow(r.Context(), `
-SELECT id::text, order_item_id::text, variant_key, brief::text, revision, status, created_at::text, updated_at::text
+SELECT id::text, order_item_id::text, variant_key, brief::text, revision, status, false, false, created_at::text, updated_at::text
 FROM creative_order_variant WHERE order_item_id = $1 AND variant_key = 'direct_edit'
 `, parseUUID(item.ID)))
 	if err != nil {

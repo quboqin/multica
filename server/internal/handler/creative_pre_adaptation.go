@@ -5,8 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
-	"sort"
 	"strconv"
 	"strings"
 
@@ -19,6 +19,17 @@ import (
 )
 
 const creativePreAdaptationEvidenceKind = "creative_source_analysis"
+
+const creativePreAdaptationOutputMismatchError = "pre-adaptation task completed without a matching frozen adaptation result"
+
+func creativePreAdaptationFragmentSupportsType(types []string, creativeType string) bool {
+	for _, value := range types {
+		if strings.TrimSpace(value) == creativeType {
+			return true
+		}
+	}
+	return false
+}
 
 type creativePreAdaptationTaskContext struct {
 	Type               string `json:"type"`
@@ -131,27 +142,26 @@ type creativePreAdaptationCompletedResult struct {
 	RepaymentPlanSelections []creativePreAdaptationRepaymentPlanSelection `json:"repayment_plan_selections"`
 	NumericLayouts          []creativePreAdaptationNumericLayout          `json:"numeric_layouts"`
 	AnalysisHighlights      []string                                      `json:"analysis_highlights"`
-	ProductionPrompt        string                                        `json:"production_prompt"`
 }
 
 // enqueueCreativePreAdaptation intentionally runs after the source analysis
 // completes. The latter is market-neutral; this task freezes one explicit
 // market pack and its bound copy library before making any recommendation.
-func (h *Handler) enqueueCreativePreAdaptation(ctx context.Context, sourceTask db.AgentTaskQueue, workspaceRaw string) {
+func (h *Handler) enqueueCreativePreAdaptation(ctx context.Context, sourceTask db.AgentTaskQueue, workspaceRaw string) error {
 	if h.TaskService == nil || !sourceTask.TriggerEvidenceKind.Valid || sourceTask.TriggerEvidenceKind.String != "creative_crawl_run_analysis" {
-		return
+		return nil
 	}
 	var sourceContext creativeReferenceAnalysisTaskContext
 	if json.Unmarshal(sourceTask.Context, &sourceContext) != nil || sourceContext.Workflow != "creative_reference_analysis" {
-		return
+		return nil
 	}
 	workspaceID, err := parseUUIDString(strings.TrimSpace(workspaceRaw))
 	if err != nil {
-		return
+		return fmt.Errorf("parse creative pre-adaptation workspace: %w", err)
 	}
 	candidateID, err := parseUUIDString(strings.TrimSpace(sourceContext.CandidateID))
 	if err != nil {
-		return
+		return fmt.Errorf("parse creative pre-adaptation candidate: %w", err)
 	}
 	var analysisID pgtype.UUID
 	err = h.DB.QueryRow(ctx, `
@@ -160,19 +170,28 @@ WHERE workspace_id = $1 AND candidate_id = $2 AND analysis_version = $3 AND stat
 ORDER BY completed_at DESC LIMIT 1
 `, workspaceID, candidateID, sourceContext.AnalysisVersion).Scan(&analysisID)
 	if err != nil {
-		return
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil
+		}
+		return fmt.Errorf("read completed source analysis for pre-adaptation: %w", err)
 	}
 	marketPack, copyLibrary, err := h.defaultCreativePreAdaptationResources(ctx, workspaceID)
 	if err != nil {
 		// An explicit default is a prerequisite, not a reason to fail the
 		// already-valid source analysis.
-		return
+		return fmt.Errorf("resolve default pre-adaptation resources: %w", err)
 	}
 	agent, err := h.Queries.GetAgentInWorkspace(ctx, db.GetAgentInWorkspaceParams{ID: sourceTask.AgentID, WorkspaceID: workspaceID})
-	if err != nil || agent.ArchivedAt.Valid {
-		return
+	if err != nil {
+		return fmt.Errorf("resolve reference-analysis agent for pre-adaptation: %w", err)
 	}
-	_, _ = h.enqueueCreativePreAdaptationTask(ctx, agent, sourceTask.RequestingUserID, analysisID, candidateID, marketPack, copyLibrary)
+	if agent.ArchivedAt.Valid {
+		return errors.New("reference-analysis agent for pre-adaptation is archived")
+	}
+	if _, err := h.enqueueCreativePreAdaptationTask(ctx, agent, sourceTask.RequestingUserID, analysisID, candidateID, marketPack, copyLibrary); err != nil {
+		return fmt.Errorf("enqueue creative pre-adaptation task: %w", err)
+	}
+	return nil
 }
 
 // enqueueCreativePreAdaptationTask is used both by the automatic handoff after
@@ -206,6 +225,573 @@ func (h *Handler) enqueueCreativePreAdaptationTask(
 		return db.AgentTaskQueue{}, errors.New("pre-adaptation task was not queued")
 	}
 	return tasks[0], nil
+}
+
+// retryCreativePreAdaptationOutput creates one bounded child attempt after the
+// daemon's completed output cannot be matched back to the frozen source
+// analysis. The failed task is already terminal when this helper runs, so the
+// direct-task retry service can safely clone it without exposing a manual
+// recovery step to the order user.
+func (h *Handler) retryCreativePreAdaptationOutput(ctx context.Context, task db.AgentTaskQueue) (string, error) {
+	if h.TaskService == nil || !creativePreAdaptationTaskRetryable(task) {
+		return "", nil
+	}
+	retried, err := h.TaskService.RetryFailedDirectTasksByEvidence(ctx, task.AgentID, creativePreAdaptationEvidenceKind, task.TriggerEvidenceRefID)
+	if err != nil {
+		return "", err
+	}
+	if len(retried) == 0 {
+		return "", nil
+	}
+	return uuidToString(retried[0].ID), nil
+}
+
+func creativePreAdaptationTaskRetryable(task db.AgentTaskQueue) bool {
+	if task.Status != "failed" || task.Attempt < 1 ||
+		(task.MaxAttempts > 0 && task.Attempt >= task.MaxAttempts) ||
+		!task.TriggerEvidenceKind.Valid || task.TriggerEvidenceKind.String != creativePreAdaptationEvidenceKind ||
+		!task.TriggerEvidenceRefID.Valid {
+		return false
+	}
+	if task.FailureReason.Valid {
+		switch strings.TrimSpace(task.FailureReason.String) {
+		case "cancelled", "user_cancelled", "manual":
+			return false
+		}
+	}
+	return true
+}
+
+func creativePreAdaptationArtifactAccepted(status, errorCode string, frozenResourcesMatch bool) bool {
+	if !frozenResourcesMatch {
+		return false
+	}
+	switch strings.TrimSpace(status) {
+	case "completed":
+		return true
+	case "unavailable":
+		return strings.TrimSpace(errorCode) == "manual_confirmation_required" || creativePreAdaptationSourceStructureRecoverable(errorCode)
+	default:
+		return false
+	}
+}
+
+// compactCreativePreAdaptationValue makes the human-readable render
+// instruction tolerant of harmless whitespace differences such as `Rp 4.000.000`
+// versus the frozen value `Rp4.000.000`. The underlying repayment values remain
+// exact; only the descriptive instruction is normalized for containment checks.
+func compactCreativePreAdaptationValue(value string) string {
+	return strings.Join(strings.Fields(strings.TrimSpace(value)), "")
+}
+
+func creativePreAdaptationInstructionContainsValue(instruction, value string) bool {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return false
+	}
+	if strings.Contains(instruction, value) {
+		return true
+	}
+	return strings.Contains(compactCreativePreAdaptationValue(instruction), compactCreativePreAdaptationValue(value))
+}
+
+func creativePreAdaptationSafeCopyFallback(config composableCopyLibraryConfig, role, sourceText, semanticKind string, used map[string]bool, creativeType string) (struct{ key, text string }, bool) {
+	keywords := strings.Fields(strings.ToLower(strings.NewReplacer(".", " ", ",", " ", "?", " ", "!", " ", "-", " ", "_", " ").Replace(sourceText)))
+	best := struct {
+		key, text string
+		score     int
+	}{}
+	for _, fragment := range config.Fragments {
+		key := strings.TrimSpace(fragment.Key)
+		if fragment.Status != "approved" || key == "" || used[key] || strings.TrimSpace(fragment.Role) != strings.TrimSpace(role) || !creativePreAdaptationFragmentSupportsType(fragment.CreativeTypes, creativeType) {
+			continue
+		}
+		candidateText := strings.ToLower(fragment.Text)
+		matched := 0
+		for _, keyword := range keywords {
+			if len(keyword) >= 3 && strings.Contains(candidateText, keyword) {
+				matched++
+			}
+		}
+		if role != "headline" && len(keywords) > 1 && matched < len(keywords) {
+			continue
+		}
+		// A generic headline fallback is only safe for an unclassified copy
+		// block. Numeric or financial semantic kinds must remain missing unless
+		// the approved fragment is actually supported by the source text.
+		if matched == 0 && (role != "headline" || (semanticKind != "" && semanticKind != "copy")) {
+			continue
+		}
+		score := matched * 3
+		if role == "headline" {
+			score++
+		}
+		if score == 0 {
+			continue
+		}
+		if best.key == "" || score > best.score {
+			best = struct {
+				key, text string
+				score     int
+			}{key: key, text: strings.TrimSpace(fragment.Text), score: score}
+		}
+	}
+	if best.key == "" || best.text == "" {
+		return struct{ key, text string }{}, false
+	}
+	return struct{ key, text string }{key: best.key, text: best.text}, true
+}
+
+func creativePreAdaptationGeneratedRecommendation(config composableCopyLibraryConfig, role, semanticKind string) (string, []string, bool) {
+	if semanticKind != "" && semanticKind != "copy" {
+		return "", nil, false
+	}
+	var text string
+	switch {
+	case strings.HasPrefix(strings.ToLower(strings.TrimSpace(config.Locale)), "id"):
+		switch role {
+		case "headline":
+			text = "Solusi finansial untuk kebutuhanmu"
+		case "subheadline":
+			text = "Ajukan dengan proses yang mudah"
+		case "benefit":
+			text = "Bantu wujudkan kebutuhanmu"
+		case "supporting":
+			text = "Pilih sesuai kebutuhanmu"
+		case "cta":
+			text = "Ajukan Sekarang"
+		}
+	case strings.HasPrefix(strings.ToLower(strings.TrimSpace(config.Locale)), "ms"):
+		switch role {
+		case "headline":
+			text = "Penyelesaian kewangan untuk keperluan anda"
+		case "subheadline":
+			text = "Mohon dengan proses yang mudah"
+		case "benefit":
+			text = "Bantu realisasikan keperluan anda"
+		case "supporting":
+			text = "Pilih mengikut keperluan anda"
+		case "cta":
+			text = "Mohon Sekarang"
+		}
+	case strings.HasPrefix(strings.ToLower(strings.TrimSpace(config.Locale)), "zh"):
+		switch role {
+		case "headline":
+			text = "满足你的资金需求"
+		case "subheadline":
+			text = "申请流程简单便捷"
+		case "benefit":
+			text = "灵活应对日常需求"
+		case "supporting":
+			text = "按你的需求选择"
+		case "cta":
+			text = "立即申请"
+		}
+	default:
+		switch role {
+		case "headline":
+			text = "A financial solution for your needs"
+		case "subheadline":
+			text = "Apply with a simple process"
+		case "benefit":
+			text = "Support your everyday needs"
+		case "supporting":
+			text = "Choose what fits your needs"
+		case "cta":
+			text = "Apply Now"
+		}
+	}
+	if strings.TrimSpace(text) == "" {
+		return "", nil, false
+	}
+	return text, []string{
+		"当前冻结文案库没有兼容的已审核片段",
+		"根据当前市场语言和区块职责生成安全候选",
+		"候选不包含竞品品牌、金融数值、法律文字或二维码，需用户确认",
+	}, true
+}
+
+// promoteCreativePreAdaptationRecommendations closes the contract at the
+// persistence boundary. A model may correctly report that an ordinary copy
+// block has no approved match without constructing the pending recommendation
+// itself; the stored result must still expose the same user-confirmable state.
+func promoteCreativePreAdaptationRecommendations(sourceRaw, adaptationRaw, copyLibraryRaw json.RawMessage) (json.RawMessage, bool, error) {
+	var source struct {
+		TextBlocks    []creativePreAdaptationSourceTextBlock    `json:"text_blocks"`
+		VisualRegions []creativePreAdaptationSourceVisualRegion `json:"visual_regions"`
+	}
+	if err := json.Unmarshal(sourceRaw, &source); err != nil {
+		return nil, false, errors.New("source analysis result is invalid")
+	}
+	blocks := make(map[string]creativePreAdaptationSourceTextBlock, len(source.TextBlocks))
+	for _, block := range source.TextBlocks {
+		block.ID = strings.TrimSpace(block.ID)
+		if block.ID == "" {
+			return nil, false, errors.New("source analysis contains an empty text block id")
+		}
+		blocks[block.ID] = block
+	}
+	regionsByBlockID, hasVisualRegions, err := validatedCreativePreAdaptationVisualRegions(source.VisualRegions, blocks)
+	if err != nil {
+		return nil, false, err
+	}
+
+	var library composableCopyLibraryConfig
+	if err := json.Unmarshal(copyLibraryRaw, &library); err != nil {
+		return nil, false, errors.New("frozen copy library config is invalid")
+	}
+	var adaptation creativePreAdaptationCompletedResult
+	if err := json.Unmarshal(adaptationRaw, &adaptation); err != nil {
+		return nil, false, fmt.Errorf("completed pre-adaptation result is invalid: %w", err)
+	}
+
+	numericBlockIDs := make(map[string]bool)
+	for id, block := range blocks {
+		if block.Role == "plan_field" {
+			numericBlockIDs[id] = true
+		}
+		if hasVisualRegions {
+			if region, exists := regionsByBlockID[id]; exists && region.Kind == "numeric" {
+				numericBlockIDs[id] = true
+			}
+		}
+	}
+
+	changed := false
+	for index := range adaptation.TextReplacements {
+		replacement := &adaptation.TextReplacements[index]
+		if normalizedCreativePreAdaptationReplacementStatus(*replacement) != "missing" || strings.TrimSpace(replacement.ReplacementText) != "" || len(replacement.SourceKeys) != 0 {
+			continue
+		}
+		block, exists := blocks[strings.TrimSpace(replacement.BlockID)]
+		if !exists || numericBlockIDs[block.ID] {
+			continue
+		}
+		semanticKind := creativeSourceTextBlockSemanticKind(block)
+		text, basis, ok := creativePreAdaptationGeneratedRecommendation(library, block.Role, semanticKind)
+		if !ok {
+			continue
+		}
+		replacement.ReplacementText = text
+		replacement.Status = "recommended"
+		replacement.SourceKeys = nil
+		replacement.RecommendationBasis = basis
+		replacement.Note = "冻结文案库没有兼容的已审核片段，平台生成候选供用户确认。"
+		changed = true
+	}
+	if !changed {
+		return adaptationRaw, false, nil
+	}
+	encoded, err := json.Marshal(adaptation)
+	if err != nil {
+		return nil, false, err
+	}
+	return encoded, true, nil
+}
+
+// buildAutomaticCreativePreAdaptationResult is a bounded last-mile recovery
+// for a model result that could not satisfy the numeric contract after its
+// retry. It emits frozen values, preserves model recommendations, and creates
+// a clearly pending recommendation for an ordinary copy block with no
+// compatible approved fragment. A numeric region is split into renderable
+// rows; blocks that cannot be assigned to an approved row remain explicit
+// missing replacements for the confirmation page.
+func buildAutomaticCreativePreAdaptationResult(sourceRaw json.RawMessage, taskContext creativePreAdaptationTaskContext, copyLibraryRaw json.RawMessage) (creativePreAdaptationCompletedResult, error) {
+	var source struct {
+		TextBlocks    []creativePreAdaptationSourceTextBlock    `json:"text_blocks"`
+		VisualRegions []creativePreAdaptationSourceVisualRegion `json:"visual_regions"`
+	}
+	if err := json.Unmarshal(sourceRaw, &source); err != nil {
+		return creativePreAdaptationCompletedResult{}, errors.New("source analysis result is invalid")
+	}
+	if len(source.TextBlocks) == 0 {
+		return creativePreAdaptationCompletedResult{}, errors.New("automatic pre-adaptation recovery requires source text blocks")
+	}
+	blocks := make(map[string]creativePreAdaptationSourceTextBlock, len(source.TextBlocks))
+	for _, block := range source.TextBlocks {
+		block.ID = strings.TrimSpace(block.ID)
+		if block.ID == "" {
+			return creativePreAdaptationCompletedResult{}, errors.New("source analysis contains an empty text block id")
+		}
+		blocks[block.ID] = block
+	}
+	regionsByBlockID, hasVisualRegions, err := validatedCreativePreAdaptationVisualRegions(source.VisualRegions, blocks)
+	if err != nil {
+		return creativePreAdaptationCompletedResult{}, err
+	}
+
+	var library composableCopyLibraryConfig
+	if err := json.Unmarshal(copyLibraryRaw, &library); err != nil {
+		return creativePreAdaptationCompletedResult{}, errors.New("frozen copy library config is invalid")
+	}
+	approvedEntries := make([]composableCopyLibraryRepaymentPlanEntry, 0, len(library.RepaymentPlan.Entries))
+	for _, entry := range library.RepaymentPlan.Entries {
+		if strings.TrimSpace(entry.Key) != "" && entry.Status == "approved" {
+			approvedEntries = append(approvedEntries, entry)
+		}
+	}
+	result := creativePreAdaptationCompletedResult{
+		MarketPackID:            taskContext.MarketPackID,
+		MarketPackVersion:       taskContext.MarketPackVersion,
+		CopyLibraryID:           taskContext.CopyLibraryID,
+		CopyLibraryVersion:      taskContext.CopyLibraryVersion,
+		TextReplacements:        make([]creativePreAdaptationTextReplacement, 0, len(source.TextBlocks)),
+		RepaymentPlanSelections: make([]creativePreAdaptationRepaymentPlanSelection, 0, len(source.VisualRegions)),
+		NumericLayouts:          make([]creativePreAdaptationNumericLayout, 0, len(source.VisualRegions)),
+		AnalysisHighlights: []string{
+			"平台按 Source Analysis 的视觉区域拆分可渲染的数值行。",
+			"已映射的本金、期限和月供均来自当前冻结文案库的已审核还款计划。",
+			"未匹配的区块保留为可编辑项，不引入竞品金额或临时计算值。",
+		},
+	}
+	coveredBlocks := map[string]bool{}
+	usedPlanKeys := map[string]bool{}
+	planIndex := 0
+	type automaticNumericGroup struct {
+		sourceBlockIDs []string
+		columns        []string
+		seenColumns    map[string]bool
+	}
+	for _, region := range source.VisualRegions {
+		if strings.TrimSpace(region.Kind) != "numeric" {
+			continue
+		}
+		groups := make([]automaticNumericGroup, 0, len(region.SourceBlockIDs))
+		current := automaticNumericGroup{seenColumns: map[string]bool{}}
+		flushCurrent := func() {
+			if len(current.sourceBlockIDs) > 0 && len(current.columns) > 0 {
+				groups = append(groups, current)
+			}
+			current = automaticNumericGroup{seenColumns: map[string]bool{}}
+		}
+		for _, rawBlockID := range region.SourceBlockIDs {
+			blockID := strings.TrimSpace(rawBlockID)
+			block, exists := blocks[blockID]
+			if !exists {
+				return creativePreAdaptationCompletedResult{}, fmt.Errorf("numeric visual region %q references an unknown source block", region.ID)
+			}
+			semanticKind := creativeSourceTextBlockSemanticKind(block)
+			if validCreativeNumericColumn(semanticKind) {
+				if current.seenColumns[semanticKind] {
+					flushCurrent()
+				}
+				current.sourceBlockIDs = append(current.sourceBlockIDs, blockID)
+				current.columns = append(current.columns, semanticKind)
+				current.seenColumns[semanticKind] = true
+				continue
+			}
+			if block.Role == "supporting" {
+				if len(current.sourceBlockIDs) == 0 && len(groups) > 0 {
+					groups[len(groups)-1].sourceBlockIDs = append(groups[len(groups)-1].sourceBlockIDs, blockID)
+				} else {
+					current.sourceBlockIDs = append(current.sourceBlockIDs, blockID)
+				}
+			}
+		}
+		flushCurrent()
+		for groupIndex, group := range groups {
+			// A layout can carry at most one source label and one source value
+			// per selected column. Extra labels stay editable instead of making
+			// the entire region invalid.
+			maxSourceBlocks := len(group.columns) * 2
+			if len(group.sourceBlockIDs) > maxSourceBlocks {
+				for _, blockID := range group.sourceBlockIDs[maxSourceBlocks:] {
+					coveredBlocks[blockID] = false
+				}
+				group.sourceBlockIDs = group.sourceBlockIDs[:maxSourceBlocks]
+			}
+			for planIndex < len(approvedEntries) && usedPlanKeys[strings.TrimSpace(approvedEntries[planIndex].Key)] {
+				planIndex++
+			}
+			if planIndex >= len(approvedEntries) {
+				continue
+			}
+			entry := approvedEntries[planIndex]
+			planIndex++
+			selectionID := fmt.Sprintf("automatic-plan-%d", len(result.RepaymentPlanSelections)+1)
+			selection := creativePreAdaptationRepaymentPlanSelection{
+				ID: selectionID, PlanKey: strings.TrimSpace(entry.Key), Principal: entry.Principal, TenorMonths: entry.TenorMonths,
+				Values: creativePreAdaptationRepaymentPlanValues{
+					Principal: creativeFormatRupiah(entry.Principal), Tenor: fmt.Sprintf("%d Bulan", entry.TenorMonths),
+					TotalInterest: creativeFormatRupiah(entry.TotalInterest), TotalRepayment: creativeFormatRupiah(entry.TotalRepayment),
+					MonthlyInstallment: creativeFormatRupiah(entry.MonthlyInstallment),
+				},
+			}
+			result.RepaymentPlanSelections = append(result.RepaymentPlanSelections, selection)
+			usedPlanKeys[selection.PlanKey] = true
+			instructionParts := make([]string, 0, len(group.columns))
+			for _, column := range group.columns {
+				label := ""
+				value := ""
+				switch column {
+				case "principal":
+					label, value = library.RepaymentPlan.Labels.Principal, selection.Values.Principal
+				case "tenor":
+					label, value = library.RepaymentPlan.Labels.Tenor, selection.Values.Tenor
+				case "monthly_installment":
+					label, value = library.RepaymentPlan.Labels.MonthlyInstallment, selection.Values.MonthlyInstallment
+				case "total_interest":
+					label, value = library.RepaymentPlan.Labels.TotalInterest, selection.Values.TotalInterest
+				case "total_repayment":
+					label, value = library.RepaymentPlan.Labels.TotalRepayment, selection.Values.TotalRepayment
+				}
+				instructionParts = append(instructionParts, strings.TrimSpace(label+" "+value))
+			}
+			for _, blockID := range group.sourceBlockIDs {
+				coveredBlocks[blockID] = true
+			}
+			result.NumericLayouts = append(result.NumericLayouts, creativePreAdaptationNumericLayout{
+				ID: fmt.Sprintf("automatic-%s-%d", strings.TrimSpace(region.ID), groupIndex+1), VisualRegionID: strings.TrimSpace(region.ID), SourceBlockIDs: append([]string(nil), group.sourceBlockIDs...),
+				Location: strings.TrimSpace(region.Location), LayoutKind: "single_card", ScenarioIDs: []string{selectionID}, TargetColumns: append([]string(nil), group.columns...),
+				RenderInstruction: strings.Join(instructionParts, "；"),
+			})
+		}
+	}
+
+	usedCopyKeys := map[string]bool{}
+	for _, block := range source.TextBlocks {
+		if coveredBlocks[block.ID] {
+			continue
+		}
+		region, exists := regionsByBlockID[block.ID]
+		if !exists {
+			return creativePreAdaptationCompletedResult{}, fmt.Errorf("source block %q is not covered by a visual region", block.ID)
+		}
+		replacement := creativePreAdaptationTextReplacement{
+			BlockID: block.ID, VisualRegionID: region.ID, Location: block.Location, Role: block.Role, SourceText: block.SourceText,
+			Status: "missing", Note: "该区块未匹配到可渲染的冻结方案，确认页可选择内容或留空移除。",
+		}
+		if (!hasVisualRegions || region.Kind == "copy") && block.Role != "plan_field" {
+			semanticKind := creativeSourceTextBlockSemanticKind(block)
+			if fragment, ok := creativePreAdaptationSafeCopyFallback(library, block.Role, block.SourceText, semanticKind, usedCopyKeys, "repayment_plan"); ok {
+				usedCopyKeys[fragment.key] = true
+				replacement.ReplacementText = fragment.text
+				replacement.SourceKeys = []string{fragment.key}
+				replacement.Status = "ready"
+				replacement.Note = "平台按冻结文案库自动完成普通文案映射。"
+			} else if text, basis, ok := creativePreAdaptationGeneratedRecommendation(library, block.Role, semanticKind); ok {
+				replacement.ReplacementText = text
+				replacement.RecommendationBasis = basis
+				replacement.Status = "recommended"
+				replacement.Note = "冻结文案库没有兼容的已审核片段，平台生成候选供用户确认。"
+			}
+		}
+		result.TextReplacements = append(result.TextReplacements, replacement)
+	}
+
+	encoded, err := json.Marshal(result)
+	if err != nil {
+		return creativePreAdaptationCompletedResult{}, err
+	}
+	if err := validateCompletedCreativePreAdaptation(sourceRaw, encoded); err != nil {
+		return creativePreAdaptationCompletedResult{}, err
+	}
+	if err := validateCreativePreAdaptationCopyBindings(sourceRaw, encoded, copyLibraryRaw); err != nil {
+		return creativePreAdaptationCompletedResult{}, err
+	}
+	return result, nil
+}
+
+func (h *Handler) repairCreativePreAdaptationAutomatically(ctx context.Context, workspaceID, analysisID pgtype.UUID, taskContext creativePreAdaptationTaskContext) (bool, error) {
+	analysis, err := h.loadCreativeSourceAnalysisByID(ctx, workspaceID, analysisID)
+	if err != nil {
+		return false, err
+	}
+	marketPackID, err := parseUUIDString(strings.TrimSpace(taskContext.MarketPackID))
+	if err != nil {
+		return false, err
+	}
+	copyLibraryID, err := parseUUIDString(strings.TrimSpace(taskContext.CopyLibraryID))
+	if err != nil {
+		return false, err
+	}
+	marketPack, err := h.loadCreativeResourceVersion(ctx, workspaceID, marketPackID, "market_pack", taskContext.MarketPackVersion)
+	if err != nil {
+		return false, err
+	}
+	copyLibrary, err := h.loadCreativeResourceVersion(ctx, workspaceID, copyLibraryID, "copy_library", taskContext.CopyLibraryVersion)
+	if err != nil {
+		return false, err
+	}
+	result, err := buildAutomaticCreativePreAdaptationResult(analysis.Result, taskContext, copyLibrary.Config)
+	if err != nil {
+		return false, err
+	}
+	encodedResult, err := json.Marshal(result)
+	if err != nil {
+		return false, err
+	}
+	encodedAdaptation, err := json.Marshal(map[string]any{
+		"status": "completed", "summary": "平台已完成可渲染的部分映射，未匹配区块保留给确认页选择。", "result": json.RawMessage(encodedResult),
+		"error_code": "", "error_message": "",
+	})
+	if err != nil {
+		return false, err
+	}
+	updated, err := h.DB.Exec(ctx, `
+UPDATE creative_source_analysis
+SET result = jsonb_set(result, '{adaptation}', $3::jsonb, true)
+WHERE id = $1 AND workspace_id = $2
+  AND COALESCE(result->'adaptation'->>'status', '') <> 'completed'
+`, analysisID, workspaceID, encodedAdaptation)
+	if err != nil {
+		return false, err
+	}
+	if updated.RowsAffected() == 0 {
+		return false, nil
+	}
+	h.publishCreativeMaterialsUpdated(workspaceID, pgtype.UUID{}, "system", "")
+	slog.Info("automatic pre-adaptation numeric repair completed", "workspace_id", uuidToString(workspaceID), "source_analysis_id", uuidToString(analysisID), "market_pack_version", marketPack.PublishedVersion, "copy_library_version", copyLibrary.PublishedVersion)
+	return true, nil
+}
+
+func (h *Handler) markCreativePreAdaptationAutomaticRepairAttempted(ctx context.Context, workspaceID, analysisID pgtype.UUID) error {
+	_, err := h.DB.Exec(ctx, `
+UPDATE creative_source_analysis
+SET result = jsonb_set(result, '{adaptation,automatic_repair_attempted}', 'true'::jsonb, true)
+WHERE id = $1 AND workspace_id = $2
+  AND result->'adaptation'->>'status' = 'unavailable'
+`, analysisID, workspaceID)
+	return err
+}
+
+func (h *Handler) recoverFailedCreativePreAdaptationTask(ctx context.Context, task db.AgentTaskQueue, workspaceRaw, errorMessage string) (string, error) {
+	if !task.TriggerEvidenceKind.Valid || task.TriggerEvidenceKind.String != creativePreAdaptationEvidenceKind ||
+		task.Status != "failed" {
+		return "", nil
+	}
+	if task.FailureReason.Valid {
+		switch strings.TrimSpace(task.FailureReason.String) {
+		case "cancelled", "user_cancelled", "manual":
+			return "", nil
+		}
+	}
+	if task.Attempt < 1 {
+		return "", nil
+	}
+	recoveryTaskID, err := h.retryCreativePreAdaptationOutput(ctx, task)
+	if err != nil || recoveryTaskID != "" {
+		return recoveryTaskID, err
+	}
+	if task.MaxAttempts < 1 || task.Attempt < task.MaxAttempts {
+		return "", nil
+	}
+	var taskContext creativePreAdaptationTaskContext
+	if err := json.Unmarshal(task.Context, &taskContext); err != nil || taskContext.Workflow != "creative_pre_adaptation" {
+		return "", nil
+	}
+	analysisID, err := parseUUIDString(strings.TrimSpace(taskContext.SourceAnalysisID))
+	if err != nil {
+		return "", err
+	}
+	workspaceID, err := parseUUIDString(strings.TrimSpace(workspaceRaw))
+	if err != nil {
+		return "", err
+	}
+	if strings.TrimSpace(errorMessage) == "" {
+		errorMessage = "预适配任务在自动恢复后仍未产出可校验结果。"
+	}
+	return "", h.markCreativePreAdaptationManualRequired(ctx, workspaceID, analysisID, taskContext, errorMessage)
 }
 
 func (h *Handler) defaultCreativePreAdaptationResources(ctx context.Context, workspaceID pgtype.UUID) (creativeResourceResponse, creativeResourceResponse, error) {
@@ -332,6 +918,43 @@ func (h *Handler) RetryCreativePreAdaptation(w http.ResponseWriter, r *http.Requ
 	}
 	if analysis.Status != "completed" {
 		writeError(w, http.StatusConflict, "reference analysis must complete before pre-adaptation")
+		return
+	}
+	var adaptationEnvelope struct {
+		Status string `json:"status"`
+	}
+	var analysisEnvelope struct {
+		Adaptation *json.RawMessage `json:"adaptation"`
+	}
+	if err := json.Unmarshal(analysis.Result, &analysisEnvelope); err != nil {
+		writeError(w, http.StatusConflict, "source analysis adaptation state is invalid")
+		return
+	}
+	adaptationStatus := ""
+	if analysisEnvelope.Adaptation != nil && json.Unmarshal(*analysisEnvelope.Adaptation, &adaptationEnvelope) == nil {
+		adaptationStatus = strings.TrimSpace(adaptationEnvelope.Status)
+	}
+	if adaptationStatus == "completed" {
+		writeJSON(w, http.StatusOK, map[string]string{"task_id": "", "status": "completed"})
+		return
+	}
+	var activeTaskID pgtype.UUID
+	var activeTaskStatus string
+	if err := h.DB.QueryRow(r.Context(), `
+SELECT id, status
+FROM agent_task_queue
+WHERE trigger_evidence_kind = $2
+  AND trigger_evidence_ref_id = $1
+  AND context->>'workflow' = 'creative_pre_adaptation'
+  AND context->>'market_pack_id' = $3
+  AND status IN ('pending', 'claimed', 'running')
+ORDER BY created_at DESC
+LIMIT 1
+`, analysisID, creativePreAdaptationEvidenceKind, uuidToString(marketPackID)).Scan(&activeTaskID, &activeTaskStatus); err == nil {
+		writeJSON(w, http.StatusOK, map[string]string{"task_id": uuidToString(activeTaskID), "status": activeTaskStatus})
+		return
+	} else if !errors.Is(err, pgx.ErrNoRows) {
+		writeError(w, http.StatusInternalServerError, "failed to check existing pre-adaptation task")
 		return
 	}
 	if !creativePreAdaptationSourceHasVisualRegions(analysis.Result) {
@@ -461,11 +1084,16 @@ func (h *Handler) PutCreativePreAdaptation(w http.ResponseWriter, r *http.Reques
 			writeError(w, http.StatusInternalServerError, "failed to load source analysis")
 			return
 		}
-		if err := normalizeCreativePreAdaptationDerivedFields(&completed, analysis.Result, marketPack.Config, copyLibrary.Config); err != nil {
+		if err := validateCompletedCreativePreAdaptation(analysis.Result, input.Result); err != nil {
 			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
-		input.Result, _ = json.Marshal(completed)
+		normalizedResult, _, normalizeErr := promoteCreativePreAdaptationRecommendations(analysis.Result, input.Result, copyLibrary.Config)
+		if normalizeErr != nil {
+			writeError(w, http.StatusBadRequest, "completed pre-adaptation recommendation is invalid: "+normalizeErr.Error())
+			return
+		}
+		input.Result = normalizedResult
 		if err := validateCompletedCreativePreAdaptation(analysis.Result, input.Result); err != nil {
 			writeError(w, http.StatusBadRequest, err.Error())
 			return
@@ -494,691 +1122,74 @@ WHERE id = $1 AND workspace_id = $2
 		writeError(w, http.StatusNotFound, "source analysis not found")
 		return
 	}
+	response := map[string]any{"status": "ok"}
+	if input.Status != "completed" && creativePreAdaptationSourceStructureRecoverable(input.ErrorCode) {
+		if taskID, queued, recoverErr := h.queueCreativePreAdaptationSourceRecovery(r, workspaceID, userID, analysisID); recoverErr != nil {
+			response["auto_recovery_error"] = recoverErr.Error()
+		} else if queued {
+			response["auto_recovery_task_id"] = taskID
+		}
+	}
 	h.publishCreativeDomainUpdated(r, workspaceID, userID, map[string]any{"scope": "pre_adaptation", "source_analysis_id": uuidToString(analysisID)})
-	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+	writeJSON(w, http.StatusOK, response)
 }
 
-// The model chooses an approved plan key, amount, and tenor. Once those match
-// one row exactly, the server owns display formatting so a harmless separator
-// typo cannot turn an otherwise valid plan choice into a failed creative task.
-func normalizeCreativePreAdaptationPlanDisplay(adaptation *creativePreAdaptationCompletedResult, copyLibraryRaw json.RawMessage) error {
-	var library composableCopyLibraryConfig
-	if err := json.Unmarshal(copyLibraryRaw, &library); err != nil {
-		return errors.New("frozen copy library config is invalid")
-	}
-	approvedByKey := map[string]composableCopyLibraryRepaymentPlanEntry{}
-	for _, entry := range library.RepaymentPlan.Entries {
-		if entry.Status == "approved" {
-			approvedByKey[strings.TrimSpace(entry.Key)] = entry
-		}
-	}
-	for index := range adaptation.RepaymentPlanSelections {
-		selection := &adaptation.RepaymentPlanSelections[index]
-		entry, exists := approvedByKey[strings.TrimSpace(selection.PlanKey)]
-		if !exists || selection.Principal != entry.Principal || selection.TenorMonths != entry.TenorMonths {
-			return fmt.Errorf("repayment plan selection %q does not match the approved amount and tenor", strings.TrimSpace(selection.ID))
-		}
-		selection.Values = creativePreAdaptationRepaymentPlanValues{
-			Principal: creativeFormatRupiah(entry.Principal), Tenor: fmt.Sprintf("%d Bulan", entry.TenorMonths), TotalInterest: creativeFormatRupiah(entry.TotalInterest),
-			TotalRepayment: creativeFormatRupiah(entry.TotalRepayment), MonthlyInstallment: creativeFormatRupiah(entry.MonthlyInstallment),
-		}
-	}
-	selectionIDByPlanKey := map[string]string{}
-	for _, selection := range adaptation.RepaymentPlanSelections {
-		selectionIDByPlanKey[strings.TrimSpace(selection.PlanKey)] = strings.TrimSpace(selection.ID)
-	}
-	for layoutIndex := range adaptation.NumericLayouts {
-		layout := &adaptation.NumericLayouts[layoutIndex]
-		for scenarioIndex, reference := range layout.ScenarioIDs {
-			if selectionIDByPlanKey[reference] != "" {
-				layout.ScenarioIDs[scenarioIndex] = selectionIDByPlanKey[reference]
-			}
-		}
-	}
-	return nil
-}
-
-func normalizeCreativePreAdaptationDerivedFields(adaptation *creativePreAdaptationCompletedResult, sourceRaw, marketPackRaw, copyLibraryRaw json.RawMessage) error {
-	sourceBlocks, regionsByBlockID, hasVisualRegions, err := creativePreAdaptationSourceIndex(sourceRaw)
-	if err != nil {
-		return err
-	}
-	copyLibrary, fragmentsByKey, err := creativePreAdaptationApprovedFragments(copyLibraryRaw)
-	if err != nil {
-		return err
-	}
-	calculationRules, err := creativePreAdaptationCalculationRules(marketPackRaw)
-	if err != nil {
-		return err
-	}
-
-	normalizeCreativePreAdaptationCopyChoices(adaptation, sourceBlocks, regionsByBlockID, hasVisualRegions, fragmentsByKey, calculationRules)
-	normalizeCreativePreAdaptationPlanChoices(adaptation, copyLibrary.RepaymentPlan, sourceBlocks, regionsByBlockID, hasVisualRegions)
-	ensureCreativePreAdaptationPromptDefaults(adaptation)
-	return nil
-}
-
-func creativePreAdaptationSourceIndex(sourceRaw json.RawMessage) (map[string]creativePreAdaptationSourceTextBlock, map[string]creativePreAdaptationSourceVisualRegion, bool, error) {
-	var source struct {
-		TextBlocks    []creativePreAdaptationSourceTextBlock    `json:"text_blocks"`
-		VisualRegions []creativePreAdaptationSourceVisualRegion `json:"visual_regions"`
-	}
-	if err := json.Unmarshal(sourceRaw, &source); err != nil {
-		return nil, nil, false, errors.New("source analysis result is invalid")
-	}
-	if len(source.TextBlocks) == 0 {
-		return nil, nil, false, errors.New("completed pre-adaptation requires source analysis text_blocks")
-	}
-	blocks := make(map[string]creativePreAdaptationSourceTextBlock, len(source.TextBlocks))
-	for _, block := range source.TextBlocks {
-		block.ID = strings.TrimSpace(block.ID)
-		block.Location = strings.TrimSpace(block.Location)
-		block.Role = strings.TrimSpace(block.Role)
-		block.Purpose = strings.TrimSpace(block.Purpose)
-		block.SemanticKind = strings.TrimSpace(block.SemanticKind)
-		if block.ID == "" || block.Location == "" || block.Role == "" || !validCreativeTextRole(block.Role) {
-			return nil, nil, false, errors.New("source analysis contains an invalid text block")
-		}
-		if _, exists := blocks[block.ID]; exists {
-			return nil, nil, false, errors.New("source analysis contains duplicate text blocks")
-		}
-		blocks[block.ID] = block
-	}
-	regionsByBlockID, hasVisualRegions, err := validatedCreativePreAdaptationVisualRegions(source.VisualRegions, blocks)
-	if err != nil {
-		return nil, nil, false, err
-	}
-	return blocks, regionsByBlockID, hasVisualRegions, nil
-}
-
-type creativePreAdaptationApprovedFragment struct {
-	text          string
-	semanticGroup string
-}
-
-func creativePreAdaptationApprovedFragments(copyLibraryRaw json.RawMessage) (composableCopyLibraryConfig, map[string]creativePreAdaptationApprovedFragment, error) {
-	var library composableCopyLibraryConfig
-	if err := json.Unmarshal(copyLibraryRaw, &library); err != nil {
-		return library, nil, errors.New("frozen copy library config is invalid")
-	}
-	fragmentsByKey := map[string]creativePreAdaptationApprovedFragment{}
-	for _, fragment := range library.Fragments {
-		if fragment.Status != "approved" || strings.TrimSpace(fragment.ID) == "" || strings.TrimSpace(fragment.Key) == "" {
-			continue
-		}
-		fragmentsByKey[strings.TrimSpace(fragment.Key)] = creativePreAdaptationApprovedFragment{
-			text: strings.TrimSpace(fragment.Text), semanticGroup: strings.TrimSpace(fragment.SemanticGroup),
-		}
-	}
-	return library, fragmentsByKey, nil
-}
-
-func creativePreAdaptationCalculationRules(marketPackRaw json.RawMessage) (map[string]creativePreAdaptationCalculationRule, error) {
-	var marketPack struct {
-		CalculationRules []creativePreAdaptationCalculationRule `json:"calculation_rules"`
-	}
-	if err := json.Unmarshal(marketPackRaw, &marketPack); err != nil {
-		return nil, errors.New("frozen market pack config is invalid")
-	}
-	rulesByKey := make(map[string]creativePreAdaptationCalculationRule, len(marketPack.CalculationRules))
-	for _, rule := range marketPack.CalculationRules {
-		rule.Key = strings.TrimSpace(rule.Key)
-		if rule.Key != "" {
-			rulesByKey[rule.Key] = rule
-		}
-	}
-	return rulesByKey, nil
-}
-
-func normalizeCreativePreAdaptationCopyChoices(
-	adaptation *creativePreAdaptationCompletedResult,
-	blocks map[string]creativePreAdaptationSourceTextBlock,
-	regionsByBlockID map[string]creativePreAdaptationSourceVisualRegion,
-	hasVisualRegions bool,
-	fragmentsByKey map[string]creativePreAdaptationApprovedFragment,
-	calculationRules map[string]creativePreAdaptationCalculationRule,
-) {
-	replacements := make([]creativePreAdaptationTextReplacement, 0, len(adaptation.TextReplacements))
-	seenBlocks := map[string]bool{}
-	usedSourceKeys := map[string]bool{}
-	for _, replacement := range adaptation.TextReplacements {
-		blockID := strings.TrimSpace(replacement.BlockID)
-		block, exists := blocks[blockID]
-		if !exists || seenBlocks[blockID] {
-			continue
-		}
-		seenBlocks[blockID] = true
-		replacement = anchoredCreativePreAdaptationReplacement(replacement, block, regionsByBlockID, hasVisualRegions)
-		replacement.Status = normalizedCreativePreAdaptationReplacementStatus(replacement)
-		switch replacement.Status {
-		case "ready":
-			normalizeReadyCreativePreAdaptationReplacement(&replacement, block, fragmentsByKey, usedSourceKeys)
-		case "calculated":
-			normalizeCalculatedCreativePreAdaptationReplacement(&replacement, block, calculationRules)
-		case "recommended":
-			normalizeRecommendedCreativePreAdaptationReplacement(&replacement)
-		default:
-			markCreativePreAdaptationReplacementMissing(&replacement, "没有可自动采用的内容，可由用户选择文案或手动填写。")
-		}
-		replacements = append(replacements, replacement)
-	}
-	adaptation.TextReplacements = replacements
-}
-
-func anchoredCreativePreAdaptationReplacement(
-	replacement creativePreAdaptationTextReplacement,
-	block creativePreAdaptationSourceTextBlock,
-	regionsByBlockID map[string]creativePreAdaptationSourceVisualRegion,
-	hasVisualRegions bool,
-) creativePreAdaptationTextReplacement {
-	replacement.BlockID = strings.TrimSpace(block.ID)
-	replacement.Location = strings.TrimSpace(block.Location)
-	replacement.Role = strings.TrimSpace(block.Role)
-	replacement.SourceText = block.SourceText
-	replacement.Note = strings.TrimSpace(replacement.Note)
-	replacement.ReplacementText = strings.TrimSpace(replacement.ReplacementText)
-	replacement.RecommendationBasis = trimCreativePreAdaptationStrings(replacement.RecommendationBasis)
-	replacement.SourceKeys = trimCreativePreAdaptationStrings(replacement.SourceKeys)
-	replacement.VisualRegionID = strings.TrimSpace(replacement.VisualRegionID)
-	if hasVisualRegions {
-		replacement.VisualRegionID = strings.TrimSpace(regionsByBlockID[replacement.BlockID].ID)
-	}
-	return replacement
-}
-
-func normalizeReadyCreativePreAdaptationReplacement(
-	replacement *creativePreAdaptationTextReplacement,
-	block creativePreAdaptationSourceTextBlock,
-	fragmentsByKey map[string]creativePreAdaptationApprovedFragment,
-	usedSourceKeys map[string]bool,
-) {
-	if len(replacement.SourceKeys) != 1 {
-		markCreativePreAdaptationReplacementMissing(replacement, "没有绑定唯一已审核文案，可由用户选择文案或手动填写。")
-		return
-	}
-	sourceKey := strings.TrimSpace(replacement.SourceKeys[0])
-	fragment, exists := fragmentsByKey[sourceKey]
-	if !exists {
-		markCreativePreAdaptationReplacementMissing(replacement, "文案库中没有找到可用来源，可由用户选择文案或手动填写。")
-		return
-	}
-	if usedSourceKeys[sourceKey] {
-		markCreativePreAdaptationReplacementMissing(replacement, "同一条已审核文案已用于其他区域，可由用户重新选择。")
-		return
-	}
-	if !creativeFragmentSupportsSourceSemanticKind(fragment.semanticGroup, creativeSourceTextBlockSemanticKind(block)) {
-		markCreativePreAdaptationReplacementMissing(replacement, "已审核文案与当前文字语义不匹配，可由用户重新选择。")
-		return
-	}
-	usedSourceKeys[sourceKey] = true
-	replacement.Status = "ready"
-	replacement.SourceKeys = []string{sourceKey}
-	replacement.ReplacementText = fragment.text
-	replacement.RecommendationBasis = nil
-	replacement.Calculation = nil
-	if replacement.Note == "" {
-		replacement.Note = "来自冻结文案库。"
-	}
-}
-
-func normalizeCalculatedCreativePreAdaptationReplacement(replacement *creativePreAdaptationTextReplacement, block creativePreAdaptationSourceTextBlock, calculationRules map[string]creativePreAdaptationCalculationRule) {
-	if replacement.Calculation == nil {
-		markCreativePreAdaptationReplacementMissing(replacement, "没有可验证的计算结果，可由用户选择文案或手动填写。")
-		return
-	}
-	calculation := replacement.Calculation
-	calculation.RuleKey = strings.TrimSpace(calculation.RuleKey)
-	calculation.Formula = strings.TrimSpace(calculation.Formula)
-	calculation.Result = strings.TrimSpace(calculation.Result)
-	calculation.Inputs = trimCreativePreAdaptationStrings(calculation.Inputs)
-	rule, exists := calculationRules[calculation.RuleKey]
-	semanticKind := creativeSourceTextBlockSemanticKind(block)
-	expectedFormula := strings.TrimSpace(rule.Formulas[semanticKind])
-	if !exists || expectedFormula == "" || calculation.Formula != expectedFormula || calculation.Result == "" || len(calculation.Inputs) == 0 {
-		markCreativePreAdaptationReplacementMissing(replacement, "没有可验证的计算结果，可由用户选择文案或手动填写。")
-		return
-	}
-	replacement.Status = "calculated"
-	replacement.SourceKeys = nil
-	replacement.ReplacementText = calculation.Result
-	replacement.RecommendationBasis = nil
-}
-
-func normalizeRecommendedCreativePreAdaptationReplacement(replacement *creativePreAdaptationTextReplacement) {
-	if strings.TrimSpace(replacement.ReplacementText) == "" || len(replacement.RecommendationBasis) == 0 {
-		markCreativePreAdaptationReplacementMissing(replacement, "没有安全推荐，可由用户选择文案或手动填写。")
-		return
-	}
-	replacement.Status = "recommended"
-	replacement.SourceKeys = nil
-	replacement.Calculation = nil
-}
-
-func markCreativePreAdaptationReplacementMissing(replacement *creativePreAdaptationTextReplacement, note string) {
-	replacement.Status = "missing"
-	replacement.ReplacementText = ""
-	replacement.SourceKeys = nil
-	replacement.RecommendationBasis = nil
-	replacement.Calculation = nil
-	replacement.Note = note
-}
-
-func normalizeCreativePreAdaptationNumericLayoutKinds(adaptation *creativePreAdaptationCompletedResult) {
-	for index := range adaptation.NumericLayouts {
-		layout := &adaptation.NumericLayouts[index]
-		layout.LayoutKind = inferredCreativePreAdaptationNumericLayoutKind(*layout)
-	}
-}
-
-func normalizeCreativePreAdaptationPlanChoices(
-	adaptation *creativePreAdaptationCompletedResult,
-	plan composableCopyLibraryRepaymentPlan,
-	blocks map[string]creativePreAdaptationSourceTextBlock,
-	regionsByBlockID map[string]creativePreAdaptationSourceVisualRegion,
-	hasVisualRegions bool,
-) {
-	selections, selectionIDByPlanKey, selectionsByID := normalizedCreativePreAdaptationPlanSelections(plan, adaptation.RepaymentPlanSelections)
-	numericBlocks := creativePreAdaptationNumericBlocks(blocks, regionsByBlockID)
-	layouts := make([]creativePreAdaptationNumericLayout, 0, len(adaptation.NumericLayouts))
-	coveredNumericBlocks := map[string]bool{}
-	usedSelectionIDs := map[string]bool{}
-	for _, layout := range adaptation.NumericLayouts {
-		normalized, ok := normalizedCreativePreAdaptationNumericLayout(layout, selectionsByID, selectionIDByPlanKey, numericBlocks, regionsByBlockID, hasVisualRegions, coveredNumericBlocks)
-		if !ok {
-			continue
-		}
-		for _, scenarioID := range normalized.ScenarioIDs {
-			usedSelectionIDs[scenarioID] = true
-		}
-		layouts = append(layouts, normalized)
-	}
-	filteredSelections := make([]creativePreAdaptationRepaymentPlanSelection, 0, len(selections))
-	for _, selection := range selections {
-		if usedSelectionIDs[selection.ID] {
-			filteredSelections = append(filteredSelections, selection)
-		}
-	}
-	adaptation.RepaymentPlanSelections = filteredSelections
-	adaptation.NumericLayouts = layouts
-	adaptation.TextReplacements = creativePreAdaptationCopyTextReplacements(adaptation.TextReplacements, regionsByBlockID, hasVisualRegions, coveredNumericBlocks)
-	ensureCreativePreAdaptationMissingReplacements(adaptation, blocks, regionsByBlockID, hasVisualRegions, coveredNumericBlocks)
-}
-
-func normalizedCreativePreAdaptationPlanSelections(
-	plan composableCopyLibraryRepaymentPlan,
-	selections []creativePreAdaptationRepaymentPlanSelection,
-) ([]creativePreAdaptationRepaymentPlanSelection, map[string]string, map[string]creativePreAdaptationRepaymentPlanSelection) {
-	approvedByKey := map[string]composableCopyLibraryRepaymentPlanEntry{}
-	for _, entry := range plan.Entries {
-		if entry.Status == "approved" {
-			approvedByKey[strings.TrimSpace(entry.Key)] = entry
-		}
-	}
-	normalized := make([]creativePreAdaptationRepaymentPlanSelection, 0, len(selections))
-	selectionIDByPlanKey := map[string]string{}
-	selectionsByID := map[string]creativePreAdaptationRepaymentPlanSelection{}
-	for _, selection := range selections {
-		planKey := strings.TrimSpace(selection.PlanKey)
-		entry, exists := approvedByKey[planKey]
-		if !exists {
-			continue
-		}
-		selection.ID = strings.TrimSpace(selection.ID)
-		if selection.ID == "" {
-			selection.ID = planKey
-		}
-		if selectionsByID[selection.ID].ID != "" {
-			continue
-		}
-		selection.PlanKey = planKey
-		selection.Principal = entry.Principal
-		selection.TenorMonths = entry.TenorMonths
-		selection.Values = creativePreAdaptationRepaymentPlanValues{
-			Principal:          creativeFormatRupiah(entry.Principal),
-			Tenor:              fmt.Sprintf("%d Bulan", entry.TenorMonths),
-			TotalInterest:      creativeFormatRupiah(entry.TotalInterest),
-			TotalRepayment:     creativeFormatRupiah(entry.TotalRepayment),
-			MonthlyInstallment: creativeFormatRupiah(entry.MonthlyInstallment),
-		}
-		normalized = append(normalized, selection)
-		selectionIDByPlanKey[planKey] = selection.ID
-		selectionsByID[selection.ID] = selection
-	}
-	return normalized, selectionIDByPlanKey, selectionsByID
-}
-
-func creativePreAdaptationNumericBlocks(
-	blocks map[string]creativePreAdaptationSourceTextBlock,
-	regionsByBlockID map[string]creativePreAdaptationSourceVisualRegion,
-) map[string]creativePreAdaptationSourceTextBlock {
-	numericBlocks := map[string]creativePreAdaptationSourceTextBlock{}
-	for id, block := range blocks {
-		region, hasRegion := regionsByBlockID[id]
-		if block.Role == "plan_field" || (hasRegion && region.Kind == "numeric" && block.Role == "supporting") {
-			numericBlocks[id] = block
-		}
-	}
-	return numericBlocks
-}
-
-func normalizedCreativePreAdaptationNumericLayout(
-	layout creativePreAdaptationNumericLayout,
-	selectionsByID map[string]creativePreAdaptationRepaymentPlanSelection,
-	selectionIDByPlanKey map[string]string,
-	numericBlocks map[string]creativePreAdaptationSourceTextBlock,
-	regionsByBlockID map[string]creativePreAdaptationSourceVisualRegion,
-	hasVisualRegions bool,
-	coveredNumericBlocks map[string]bool,
-) (creativePreAdaptationNumericLayout, bool) {
-	layout.ID = strings.TrimSpace(layout.ID)
-	if layout.ID == "" {
-		return layout, false
-	}
-	layout.Location = strings.TrimSpace(layout.Location)
-	layout.LayoutKind = inferredCreativePreAdaptationNumericLayoutKind(layout)
-	layout.SourceBlockIDs = trimCreativePreAdaptationStrings(layout.SourceBlockIDs)
-	layout.ScenarioIDs = normalizedCreativePreAdaptationScenarioIDs(layout.ScenarioIDs, selectionsByID, selectionIDByPlanKey)
-	layout.TargetColumns = normalizedCreativePreAdaptationTargetColumns(layout.TargetColumns)
-	if len(layout.SourceBlockIDs) == 0 || len(layout.ScenarioIDs) == 0 || len(layout.TargetColumns) == 0 {
-		return layout, false
-	}
-	layoutRegionID := ""
-	for _, blockID := range layout.SourceBlockIDs {
-		if _, exists := numericBlocks[blockID]; !exists || coveredNumericBlocks[blockID] {
-			return layout, false
-		}
-		if hasVisualRegions {
-			region, exists := regionsByBlockID[blockID]
-			if !exists || region.Kind != "numeric" || (layoutRegionID != "" && layoutRegionID != region.ID) {
-				return layout, false
-			}
-			layoutRegionID = region.ID
-		}
-	}
-	if hasVisualRegions {
-		layout.VisualRegionID = layoutRegionID
-		if layout.Location == "" {
-			layout.Location = strings.TrimSpace(regionsByBlockID[layout.SourceBlockIDs[0]].Location)
-		}
-	}
-	if layout.Location == "" {
-		layout.Location = "数值区域"
-	}
-	layout.RenderInstruction = creativePreAdaptationNumericRenderInstruction(layout, selectionsByID)
-	for _, blockID := range layout.SourceBlockIDs {
-		coveredNumericBlocks[blockID] = true
-	}
-	return layout, true
-}
-
-func normalizedCreativePreAdaptationScenarioIDs(
-	raw []string,
-	selectionsByID map[string]creativePreAdaptationRepaymentPlanSelection,
-	selectionIDByPlanKey map[string]string,
-) []string {
-	seen := map[string]bool{}
-	normalized := make([]string, 0, len(raw))
-	for _, value := range raw {
-		value = strings.TrimSpace(value)
-		if selectionIDByPlanKey[value] != "" {
-			value = selectionIDByPlanKey[value]
-		}
-		if selectionsByID[value].ID == "" || seen[value] {
-			continue
-		}
-		seen[value] = true
-		normalized = append(normalized, value)
-	}
-	return normalized
-}
-
-func normalizedCreativePreAdaptationTargetColumns(raw []string) []string {
-	seen := map[string]bool{}
-	normalized := make([]string, 0, len(raw))
-	for _, column := range raw {
-		column = strings.TrimSpace(column)
-		if !validCreativeNumericColumn(column) || seen[column] {
-			continue
-		}
-		seen[column] = true
-		normalized = append(normalized, column)
-	}
-	return normalized
-}
-
-func creativePreAdaptationNumericRenderInstruction(layout creativePreAdaptationNumericLayout, selectionsByID map[string]creativePreAdaptationRepaymentPlanSelection) string {
-	rows := make([]string, 0, len(layout.ScenarioIDs))
-	for _, scenarioID := range layout.ScenarioIDs {
-		selection := selectionsByID[scenarioID]
-		values := make([]string, 0, len(layout.TargetColumns))
-		for _, column := range layout.TargetColumns {
-			if value := creativePreAdaptationPlanColumnValue(selection, column); value != "" {
-				values = append(values, creativePreAdaptationPlanColumnLabel(column)+" "+value)
-			}
-		}
-		if len(values) > 0 {
-			rows = append(rows, strings.Join(values, " / "))
-		}
-	}
-	if len(rows) == 0 {
-		return ""
-	}
-	return "按已审核还款计划展示：" + strings.Join(rows, "；") + "。"
-}
-
-func creativePreAdaptationPlanColumnLabel(column string) string {
-	switch column {
-	case "principal":
-		return "本金"
-	case "tenor":
-		return "期限"
-	case "monthly_installment":
-		return "月还"
-	case "total_interest":
-		return "总利息"
-	case "total_repayment":
-		return "总还款"
-	default:
-		return column
-	}
-}
-
-func creativePreAdaptationPlanColumnValue(selection creativePreAdaptationRepaymentPlanSelection, column string) string {
-	switch column {
-	case "principal":
-		return selection.Values.Principal
-	case "tenor":
-		return selection.Values.Tenor
-	case "monthly_installment":
-		return selection.Values.MonthlyInstallment
-	case "total_interest":
-		return selection.Values.TotalInterest
-	case "total_repayment":
-		return selection.Values.TotalRepayment
-	default:
-		return ""
-	}
-}
-
-func creativePreAdaptationCopyTextReplacements(
-	replacements []creativePreAdaptationTextReplacement,
-	regionsByBlockID map[string]creativePreAdaptationSourceVisualRegion,
-	hasVisualRegions bool,
-	coveredNumericBlocks map[string]bool,
-) []creativePreAdaptationTextReplacement {
-	filtered := make([]creativePreAdaptationTextReplacement, 0, len(replacements))
-	for _, replacement := range replacements {
-		blockID := strings.TrimSpace(replacement.BlockID)
-		if coveredNumericBlocks[blockID] {
-			continue
-		}
-		if hasVisualRegions && regionsByBlockID[blockID].Kind == "numeric" {
-			continue
-		}
-		filtered = append(filtered, replacement)
-	}
-	return filtered
-}
-
-func ensureCreativePreAdaptationMissingReplacements(
-	adaptation *creativePreAdaptationCompletedResult,
-	blocks map[string]creativePreAdaptationSourceTextBlock,
-	regionsByBlockID map[string]creativePreAdaptationSourceVisualRegion,
-	hasVisualRegions bool,
-	coveredNumericBlocks map[string]bool,
-) {
-	replacementsByBlockID := map[string]bool{}
-	for _, replacement := range adaptation.TextReplacements {
-		replacementsByBlockID[strings.TrimSpace(replacement.BlockID)] = true
-	}
-	blockIDs := make([]string, 0, len(blocks))
-	for blockID := range blocks {
-		blockIDs = append(blockIDs, blockID)
-	}
-	sort.Strings(blockIDs)
-	for _, blockID := range blockIDs {
-		if replacementsByBlockID[blockID] || coveredNumericBlocks[blockID] {
-			continue
-		}
-		replacement := anchoredCreativePreAdaptationReplacement(creativePreAdaptationTextReplacement{
-			BlockID: blockID,
-			Status:  "missing",
-		}, blocks[blockID], regionsByBlockID, hasVisualRegions)
-		markCreativePreAdaptationReplacementMissing(&replacement, "没有可自动采用的内容，可由用户选择文案或手动填写。")
-		adaptation.TextReplacements = append(adaptation.TextReplacements, replacement)
-	}
-}
-
-func ensureCreativePreAdaptationPromptDefaults(adaptation *creativePreAdaptationCompletedResult) {
-	highlights := trimCreativePreAdaptationStrings(adaptation.AnalysisHighlights)
-	for len(highlights) < 3 {
-		highlights = append(highlights, "待用户确认画面文字与数值后进入生产。")
-	}
-	if len(highlights) > 5 {
-		highlights = highlights[:5]
-	}
-	adaptation.AnalysisHighlights = highlights
-	basePrompt := strings.TrimSpace(adaptation.ProductionPrompt)
-	if basePrompt == "" {
-		basePrompt = "保留原图主体视觉和版式层级；按本页逐块确认结果替换、留空或重排文字与数值。"
-	}
-	lines := []string{basePrompt}
-	for _, replacement := range adaptation.TextReplacements {
-		text := strings.TrimSpace(replacement.ReplacementText)
-		if text != "" && !strings.Contains(basePrompt, text) {
-			lines = append(lines, fmt.Sprintf("%s：%s", replacement.Location, text))
-		}
-	}
-	for _, layout := range adaptation.NumericLayouts {
-		instruction := strings.TrimSpace(layout.RenderInstruction)
-		if instruction != "" && !strings.Contains(strings.Join(lines, "\n"), instruction) {
-			lines = append(lines, fmt.Sprintf("%s：%s", layout.Location, instruction))
-		}
-	}
-	adaptation.ProductionPrompt = strings.Join(lines, "\n")
-}
-
-func normalizeCreativePreAdaptationSourceAnchors(adaptation *creativePreAdaptationCompletedResult, sourceRaw json.RawMessage) error {
-	var source struct {
-		TextBlocks []creativePreAdaptationSourceTextBlock `json:"text_blocks"`
-	}
-	if err := json.Unmarshal(sourceRaw, &source); err != nil {
-		return errors.New("source analysis result is invalid")
-	}
-	blocks := make(map[string]creativePreAdaptationSourceTextBlock, len(source.TextBlocks))
-	for _, block := range source.TextBlocks {
-		block.ID = strings.TrimSpace(block.ID)
-		if block.ID != "" {
-			blocks[block.ID] = block
-		}
-	}
-	for index := range adaptation.TextReplacements {
-		replacement := &adaptation.TextReplacements[index]
-		blockID := strings.TrimSpace(replacement.BlockID)
-		block, exists := blocks[blockID]
-		if !exists {
-			replacement.BlockID = blockID
-			continue
-		}
-		replacement.BlockID = blockID
-		replacement.Location = strings.TrimSpace(block.Location)
-		replacement.Role = strings.TrimSpace(block.Role)
-		replacement.SourceText = block.SourceText
-	}
-	return nil
-}
-
-func inferredCreativePreAdaptationNumericLayoutKind(layout creativePreAdaptationNumericLayout) string {
-	kind := normalizedCreativeNumericLayoutKind(layout.LayoutKind)
-	if validCreativeCanonicalNumericLayoutKind(kind) {
-		return kind
-	}
-	if allCreativeNumericColumns(layout.TargetColumns, "tenor") && (nonEmptyStringCount(layout.ScenarioIDs) > 1 || nonEmptyStringCount(layout.SourceBlockIDs) > 1) {
-		return "option_buttons"
-	}
-	switch kind {
-	case "tenor", "term", "duration", "tenor_button", "tenor_buttons", "period_option", "period_options":
-		return "option_buttons"
-	case "repayment_table", "repayment_summary", "loan_summary", "installment_table", "summary_table":
-		return "table"
-	case "principal", "amount", "amount_box", "loan_amount", "principal_amount", "credit_limit", "limit":
-		return "single_value"
-	}
-	columnCount := nonEmptyStringCount(layout.TargetColumns)
-	scenarioCount := nonEmptyStringCount(layout.ScenarioIDs)
-	sourceBlockCount := nonEmptyStringCount(layout.SourceBlockIDs)
-	if columnCount == 1 && scenarioCount <= 1 {
-		return "single_value"
-	}
-	if columnCount == 1 {
-		return "card_grid"
-	}
-	if scenarioCount == 1 && columnCount <= 2 && sourceBlockCount <= 2 {
-		return "table_row"
-	}
-	return "table"
-}
-
-func normalizedCreativeNumericLayoutKind(value string) string {
-	value = strings.ToLower(strings.TrimSpace(value))
-	value = strings.NewReplacer("-", "_", " ", "_").Replace(value)
-	for strings.Contains(value, "__") {
-		value = strings.ReplaceAll(value, "__", "_")
-	}
-	return strings.Trim(value, "_")
-}
-
-func validCreativeCanonicalNumericLayoutKind(value string) bool {
-	switch value {
-	case "table", "card_grid", "comparison", "single_card", "single_value", "option_buttons", "table_row":
+// Structural source-analysis errors are recoverable by producing a fresh
+// market-neutral analysis. The pre-adaptation result remains persisted as
+// evidence, while this bounded handoff prevents a user from having to click
+// "重新分析" after a model misclassified visual regions.
+func creativePreAdaptationSourceStructureRecoverable(errorCode string) bool {
+	switch strings.TrimSpace(errorCode) {
+	case "SOURCE_ANALYSIS_MIXED_NUMERIC_REGION", "SOURCE_ANALYSIS_REGION_CONTRACT_CONFLICT", "SOURCE_ANALYSIS_VISUAL_REGION_INVALID":
 		return true
 	default:
 		return false
 	}
 }
 
-func allCreativeNumericColumns(columns []string, column string) bool {
-	hasColumn := false
-	for _, value := range columns {
-		if strings.TrimSpace(value) == "" {
-			continue
+func (h *Handler) queueCreativePreAdaptationSourceRecovery(r *http.Request, workspaceID, userID, analysisID pgtype.UUID) (string, bool, error) {
+	ctx := r.Context()
+	var candidateID pgtype.UUID
+	var connectorID string
+	if err := h.DB.QueryRow(ctx, `
+SELECT analysis.candidate_id, candidate.connector_id
+FROM creative_source_analysis analysis
+JOIN creative_material_candidate candidate
+  ON candidate.id = analysis.candidate_id AND candidate.workspace_id = analysis.workspace_id
+WHERE analysis.id = $1 AND analysis.workspace_id = $2
+`, analysisID, workspaceID).Scan(&candidateID, &connectorID); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return "", false, nil
 		}
-		if strings.TrimSpace(value) != column {
-			return false
-		}
-		hasColumn = true
+		return "", false, err
 	}
-	return hasColumn
-}
-
-func nonEmptyStringCount(values []string) int {
-	count := 0
-	for _, value := range values {
-		if strings.TrimSpace(value) != "" {
-			count++
-		}
+	var previousRecoveries int
+	if err := h.DB.QueryRow(ctx, `
+SELECT COUNT(*)
+FROM creative_source_analysis
+WHERE workspace_id = $1
+  AND candidate_id = $2
+  AND result->'adaptation'->>'error_code' IN ('SOURCE_ANALYSIS_MIXED_NUMERIC_REGION', 'SOURCE_ANALYSIS_REGION_CONTRACT_CONFLICT', 'SOURCE_ANALYSIS_VISUAL_REGION_INVALID')
+`, workspaceID, candidateID).Scan(&previousRecoveries); err != nil {
+		return "", false, err
 	}
-	return count
+	if previousRecoveries > 1 {
+		return "", false, nil
+	}
+	queued := h.enqueueManualReferenceAnalysis(ctx, workspaceID, userID, candidateID, connectorID, true)
+	if queued.TaskID == "" {
+		if queued.Warning != "" {
+			return "", false, errors.New(queued.Warning)
+		}
+		return "", false, errors.New("reference analysis recovery was not queued")
+	}
+	h.publishCreativeDomainUpdated(r, workspaceID, userID, map[string]any{
+		"scope":              "pre_adaptation_auto_recovery_queued",
+		"source_analysis_id": uuidToString(analysisID),
+		"candidate_id":       uuidToString(candidateID),
+		"task_id":            queued.TaskID,
+	})
+	return queued.TaskID, true, nil
 }
 
 func (h *Handler) loadCreativeSourceAnalysisByID(ctx context.Context, workspaceID, analysisID pgtype.UUID) (creativeSourceAnalysisResponse, error) {
@@ -1278,7 +1289,7 @@ func validateCompletedCreativePreAdaptation(sourceRaw, adaptationRaw json.RawMes
 
 	var adaptation creativePreAdaptationCompletedResult
 	if err := json.Unmarshal(adaptationRaw, &adaptation); err != nil {
-		return errors.New("completed pre-adaptation result is invalid")
+		return fmt.Errorf("completed pre-adaptation result is invalid: %w", err)
 	}
 	if len(adaptation.AnalysisHighlights) < 3 || len(adaptation.AnalysisHighlights) > 5 {
 		return errors.New("completed pre-adaptation requires 3-5 analysis highlights")
@@ -1287,9 +1298,6 @@ func validateCompletedCreativePreAdaptation(sourceRaw, adaptationRaw json.RawMes
 		if strings.TrimSpace(highlight) == "" {
 			return errors.New("completed pre-adaptation contains an empty analysis highlight")
 		}
-	}
-	if strings.TrimSpace(adaptation.ProductionPrompt) == "" {
-		return errors.New("completed pre-adaptation requires a filled production prompt")
 	}
 	if strings.TrimSpace(adaptation.MarketPackID) == "" || adaptation.MarketPackVersion < 1 {
 		return errors.New("completed pre-adaptation requires frozen market pack identity")
@@ -1340,9 +1348,6 @@ func validateCompletedCreativePreAdaptation(sourceRaw, adaptationRaw json.RawMes
 				return errors.New("completed pre-adaptation text replacement does not match its visual region")
 			}
 		}
-		if replacement.Status != "missing" && !strings.Contains(adaptation.ProductionPrompt, replacement.ReplacementText) {
-			return errors.New("completed pre-adaptation production prompt omits a replacement text")
-		}
 		replacements[replacement.BlockID] = replacement
 	}
 	coveredNumericBlocks := map[string]bool{}
@@ -1391,9 +1396,6 @@ func validateCompletedCreativePreAdaptation(sourceRaw, adaptationRaw json.RawMes
 				return errors.New("completed pre-adaptation numeric layout has invalid target columns")
 			}
 			seenColumns[column] = true
-		}
-		if !strings.Contains(adaptation.ProductionPrompt, layout.RenderInstruction) {
-			return errors.New("completed pre-adaptation production prompt omits a numeric layout instruction")
 		}
 	}
 	for blockID := range blocks {
@@ -1556,7 +1558,7 @@ func validateCreativePreAdaptationCalculationRules(sourceRaw, adaptationRaw, mar
 	}
 	var adaptation creativePreAdaptationCompletedResult
 	if err := json.Unmarshal(adaptationRaw, &adaptation); err != nil {
-		return errors.New("completed pre-adaptation result is invalid")
+		return fmt.Errorf("completed pre-adaptation result is invalid: %w", err)
 	}
 	for _, replacement := range adaptation.TextReplacements {
 		if normalizedCreativePreAdaptationReplacementStatus(replacement) != "calculated" || replacement.Calculation == nil {
@@ -1590,7 +1592,7 @@ func validateCreativePreAdaptationCopyBindings(sourceRaw, adaptationRaw, copyLib
 
 	var adaptation creativePreAdaptationCompletedResult
 	if err := json.Unmarshal(adaptationRaw, &adaptation); err != nil {
-		return errors.New("completed pre-adaptation result is invalid")
+		return fmt.Errorf("completed pre-adaptation result is invalid: %w", err)
 	}
 	if strings.TrimSpace(adaptation.CopyLibraryID) == "" || adaptation.CopyLibraryVersion < 1 {
 		return errors.New("completed pre-adaptation requires frozen copy library identity")
@@ -1749,7 +1751,7 @@ func validateCreativePreAdaptationNumericLayouts(layouts []creativePreAdaptation
 				column = strings.TrimSpace(column)
 				valueKey := "plan:" + selectionID + ":" + column
 				value, valueExists := values[valueKey]
-				if !valueExists || !strings.Contains(layout.RenderInstruction, value) {
+				if !valueExists || !creativePreAdaptationInstructionContainsValue(layout.RenderInstruction, value) {
 					return fmt.Errorf("pre-adaptation numeric layout %q does not contain approved %s values", layout.ID, column)
 				}
 			}
@@ -1820,6 +1822,15 @@ func creativeFormatRupiah(value int64) string {
 func validCreativeTextRole(role string) bool {
 	switch role {
 	case "headline", "subheadline", "benefit", "supporting", "cta", "legal", "plan_field":
+		return true
+	default:
+		return false
+	}
+}
+
+func validCreativeCanonicalNumericLayoutKind(value string) bool {
+	switch value {
+	case "table", "card_grid", "comparison", "single_card", "single_value", "option_buttons", "table_row":
 		return true
 	default:
 		return false

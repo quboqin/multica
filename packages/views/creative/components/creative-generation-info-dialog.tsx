@@ -4,7 +4,6 @@ import { Clock3, FileText, Image as ImageIcon, Layers3, Sparkles } from "lucide-
 import type { CreativeOrderAsset, CreativeOrderItem, CreativeOrderVariant } from "@multica/core/types";
 import { Badge } from "@multica/ui/components/ui/badge";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@multica/ui/components/ui/dialog";
-import { userFacingProductionPrompt } from "../lib/creative-production-prompt";
 import { formatCreativeDateTime, creativeTimeZoneLabel } from "../lib/creative-time";
 
 type GenerationFact = { label: string; value: string };
@@ -24,6 +23,7 @@ export type CreativeGenerationInfo = {
   marketVersion: string;
   createdAt: string;
   prompt: string;
+  promptSha256: string;
   requestId: string;
   attempts: string;
   lineage: CreativeOrderAsset[];
@@ -41,8 +41,8 @@ export function creativeGenerationInfo(
   const brief = record(variant.brief);
   const generatedMetadata = record(generated?.metadata);
   const generatedEvidence = record(generated?.evidence);
-  const promptSources = [record(generated?.metadata), record(asset.metadata), record(primed?.metadata)];
-  const evidenceSources = [record(generated?.evidence), record(asset.evidence), record(primed?.evidence)];
+  const promptSources = [generatedMetadata, generatedEvidence, record(asset.metadata), record(asset.evidence), record(primed?.metadata), record(primed?.evidence)];
+  const evidenceSources = [generatedEvidence, record(asset.evidence), record(primed?.evidence), generatedMetadata, record(asset.metadata), record(primed?.metadata)];
   const marketSources = [record(primed?.metadata), record(primed?.evidence), record(asset.metadata), record(asset.evidence), brief];
   const layoutContract = record(brief.prime_layout_contract);
   const hardRegions = array(layoutContract.hard_regions);
@@ -78,9 +78,8 @@ export function creativeGenerationInfo(
     marketRule: explicitRule || layoutSummary || (marketName ? "已绑定市场资源包" : ""),
     marketVersion: [marketName, marketVersion ? `v${marketVersion}` : ""].filter(Boolean).join(" · "),
     createdAt: asset.updated_at || asset.created_at || generated?.updated_at || generated?.created_at || "",
-    prompt: firstString([generatedEvidence], ["prompt_sha256"])
-      ? userFacingProductionPrompt(firstString([generatedMetadata], ["prompt"]))
-      : "",
+    prompt: firstString(promptSources, ["prompt", "model_prompt", "final_prompt", "provider_prompt"]),
+    promptSha256: firstString(evidenceSources, ["prompt_sha256", "model_prompt_sha256", "final_prompt_sha256"]),
     requestId: firstString(evidenceSources, ["request_id", "model_request_id", "generation_request_id"]),
     attempts: firstScalar(evidenceSources, ["attempts", "attempt", "generation_attempts"]),
     lineage,
@@ -133,7 +132,7 @@ export function CreativeGenerationInfoDialog({
     <DialogContent className="grid max-h-[94vh] grid-rows-[auto_minmax(0,1fr)] gap-0 overflow-hidden p-0 sm:max-w-[min(94vw,1120px)]">
       <DialogHeader className="border-b px-5 py-4 pr-14">
         <div className="flex flex-wrap items-center gap-2">
-          <DialogTitle className="text-base">生成信息</DialogTitle>
+          <DialogTitle className="text-base">成图详情</DialogTitle>
           {info && <><Badge variant="outline">{info.variantLabel}</Badge><Badge variant="outline">{info.sizeLabel}</Badge><Badge variant="secondary">r{info.revision}</Badge></>}
         </div>
         <DialogDescription>查看这张成图采用的创意方向、冻结文案、市场规则与生成记录。</DialogDescription>
@@ -171,13 +170,16 @@ export function CreativeGenerationInfoDialog({
               <InfoValue label="最后更新" value={info.createdAt ? `${formatCreativeDateTime(info.createdAt)}（${creativeTimeZoneLabel()}）` : ""} />
             </dl>
           </InfoSection>
+          <InfoSection icon={<FileText aria-hidden="true" className="h-4 w-4" />} title="完整模型提示词">
+            <pre className="max-h-80 overflow-auto overscroll-contain whitespace-pre-wrap break-words border bg-muted/20 p-3 font-sans text-xs leading-5">{info.prompt || "未记录完整模型提示词"}</pre>
+          </InfoSection>
           <details className="group px-5 py-4">
             <summary className="cursor-pointer text-sm font-medium marker:text-muted-foreground">高级信息</summary>
             <div className="mt-4 space-y-4">
-              <div><p className="text-xs font-medium text-muted-foreground">完整生成提示词</p><pre className="mt-2 max-h-72 overflow-auto overscroll-contain whitespace-pre-wrap break-words border bg-muted/20 p-3 font-sans text-xs leading-5">{info.prompt || "未记录完整提示词"}</pre></div>
               <dl className="grid gap-x-5 gap-y-3 sm:grid-cols-2">
                 <InfoValue label="模型请求" value={info.requestId ? compactId(info.requestId, 20) : ""} />
                 <InfoValue label="调用次数" value={info.attempts} />
+                <InfoValue label="提示词 SHA-256" value={info.promptSha256 ? compactId(info.promptSha256, 20) : ""} />
               </dl>
               <div><p className="text-xs font-medium text-muted-foreground">资产溯源</p><ol className="mt-2 space-y-2">{info.lineage.map((entry) => <li key={entry.id} className="flex flex-wrap items-center gap-2 text-xs"><Badge variant="outline">{stageLabel(entry.stage)}</Badge><span>{entry.size_key}</span><span className="text-muted-foreground" translate="no">{compactId(entry.id, 18)}</span></li>)}</ol></div>
             </div>

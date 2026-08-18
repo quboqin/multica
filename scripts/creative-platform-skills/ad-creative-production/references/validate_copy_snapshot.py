@@ -24,6 +24,7 @@ PRIME_GUARD_TERMS = {
     "unbranded_base": ("unbranded", "brand-free", "no brand", "no brands", "no competitor material", "无品牌"),
     "prime_overlay": ("prime", "overlay", "贴片", "合成"),
     "prime_guide": ("input 2", "reserved-area guide", "layout guide", "avoidance guide", "占位参考"),
+    "neutral_guide": ("neutral monochrome", "neutral gray", "neutral grey", "geometry map", "中性灰"),
     "guide_no_draw": ("do not draw input 2", "do not copy input 2", "do not render the guide", "no guide blocks", "不渲染占位"),
     "no_logo": ("logo", "标识"),
     "no_qr": ("qr", "二维码"),
@@ -31,9 +32,55 @@ PRIME_GUARD_TERMS = {
     "hard_region": ("hard region", "hard_regions", "overlay region", "fixed region", "硬区", "避让"),
     "natural_background": ("background", "low-detail", "low texture", "低纹理", "自然背景"),
 }
-BOTTOM_CTA_TERMS = ("cta", "button", "call-to-action", "按钮", "行动区")
+SEMANTIC_PRIME_GUARD_TERMS = {
+    "unbranded_base": ("unbranded base", "unbranded visual base", "unbranded"),
+    "prime_overlay": ("deterministic official prime composition", "official overlay", "official prime overlay"),
+    "prime_guide": ("input 2 is the current-size official prime visual context",),
+    "guide_no_draw": (
+        "never draw prime",
+        "do not copy any prime",
+        "prime is visual context only",
+        "official overlay remains readable",
+    ),
+    "no_logo": ("logo", "标识"),
+    "no_qr": ("qr", "二维码"),
+    "no_footer": ("footer", "legal text", "regulatory", "法律", "监管"),
+    "protected_bands": ("protected prime bands", "protected top and bottom bands", "protected bands"),
+    "business_avoidance": (
+        "all business content in the middle content area between the protected prime bands",
+        "no business content enters the protected bands",
+        "keep every module and keep it out of the protected bands",
+    ),
+    "natural_background": ("background", "continuous background", "low-detail"),
+}
+SEMANTIC_REDESIGN_GUARD_TERMS = {
+    "reference_structure_only": (
+        "use it only for business structure",
+        "use it only for structure",
+        "reference structure",
+        "visual anchors",
+    ),
+    "remove_source_identity": (
+        "do not copy any reference",
+        "do not copy any prime",
+        "competitor mark",
+        "competitor wording",
+        "no competitor",
+        "source identity",
+    ),
+    "change_high_salience_identity": (
+        "reimagine",
+        "original",
+        "new visual identity",
+        "redesign",
+        "modern wedding planning table",
+    ),
+}
+BOTTOM_BUSINESS_TERMS = ("active business", "business group", "business content", "approved business", "正文内容", "业务内容", "内容组")
 BOTTOM_AVOID_TERMS = ("above", "outside", "safe", "clear", "上方", "之外", "安全区", "避让", "不进入")
 BOTTOM_GROUP_TERMS = (
+    "business group",
+    "active business group",
     "lower business group",
     "bottom business group",
     "bottom content group",
@@ -51,16 +98,13 @@ BOTTOM_GROUP_TERMS = (
     "卖点条",
 )
 BOTTOM_PRIME_BAND_TERMS = (
-    "bottom prime band",
-    "prime bottom band",
-    "bottom fixed zone",
-    "bottom exclusion zone",
-    "footer exclusion zone",
-    "bottom prime",
-    "底部 prime",
-    "底部固定区",
-    "底部排除区",
-    "页脚排除区",
+    "bottom template boundary",
+    "bottom template",
+    "bottom overlay boundary",
+    "bottom fixed coordinate",
+    "底部模板边界",
+    "底部覆盖边界",
+    "底部固定坐标",
 )
 BOTTOM_CLEARANCE_TERMS = ("clearance", "gap", "buffer", "visible", "fully visible", "留白", "缓冲", "间距", "可见", "完整可见")
 SAFE_CONTENT_FRAME_TERMS = ("safe content frame", "content safe frame", "safe_content_frame", "内容安全框", "安全内容框")
@@ -107,12 +151,28 @@ REQUIRED_PROMPT_SECTIONS = (
     "FINAL",
 )
 REQUIRED_PROMPT_TERMS = {
-    "content_rect": ("content_rect", "content rect"),
-    "cta_box": ("cta_box", "cta box"),
+    "business_canvas": ("business_canvas", "business canvas"),
+    "body_coordinate_semantics": ("coordinate grammar", "坐标语义"),
+}
+SEMANTIC_REQUIRED_PROMPT_SECTIONS = (
+    "COMPOSITION GATE",
+    "INPUTS",
+    "TASK",
+    "VISUAL INHERITANCE",
+    "APPROVED COPY AND TABLE",
+    "VARIANT DIRECTION",
+    "PRIME INTEGRATION",
+    "FINAL CHECK",
+)
+SEMANTIC_REQUIRED_PROMPT_TERMS = {
+    "input_roles": ("input 1", "input 2"),
+    "protected_bands": ("protected prime bands", "protected top and bottom bands"),
+    "approved_copy": ("approved copy and table", "approved_copy"),
+    "prime_context": ("official prime visual context", "official overlay"),
 }
 PROMPT_SEGMENT_PATTERN = re.compile(r"[\n.;。]+")
 SIZE_PATTERN = re.compile(r"(?P<width>[1-9]\d*)x(?P<height>[1-9]\d*)", re.IGNORECASE)
-MAX_PROMPT_CHARS = 3600
+MAX_PROMPT_CHARS = 6400
 
 
 def digits(value: str) -> str:
@@ -131,10 +191,22 @@ def financial_tokens(value: str) -> set[str]:
         tokens.add(f"term:{term}{match.group(2).lower()}")
     for match in FINANCIAL_NUMBER_PATTERN.finditer(value):
         suffix = value[match.end(1):match.end(1) + 8]
-        if re.match(r"(?:\s*%|[.,]\d+\s*%)", suffix):
+        if re.match(r"(?:\s*(?:%|bulan|hari|tahun)\b|[.,]\d+\s*%)", suffix, re.IGNORECASE):
             continue
         tokens.add(f"financial_number:{digits(match.group(1))}")
     return tokens
+
+
+def visible_prompt_financial_tokens(prompt: str) -> set[str]:
+    """Extract financial facts only from sections the model may render."""
+    sections = re.findall(
+        r"(?:^|\n)(APPROVED TEXT|TABLE):\n(.*?)(?=\n[A-Z][A-Z _-]+:\n|\Z)",
+        prompt,
+        flags=re.DOTALL,
+    )
+    if not sections:
+        return financial_tokens(prompt)
+    return financial_tokens("\n".join(body for _, body in sections))
 
 
 def read_json(path: str) -> dict[str, Any]:
@@ -297,12 +369,15 @@ def layout_safe_content_frame(layout: dict[str, Any]) -> dict[str, int] | None:
     return {"x1": x1, "y1": y1, "x2": x2, "y2": y2}
 
 
-def prompt_mentions_cta_limit(prompt: str, y2: int) -> bool:
-    patterns = (
-        rf"(?:cta|button|call-to-action|按钮|行动区)[^.;\n。]{{0,120}}(?:bottom|edge|底边|下沿|y\s*<=|y<=|不超过|不得超过)[^0-9]{{0,24}}{y2}",
-        rf"(?:cta|button|call-to-action|按钮|行动区)[^.;\n。]{{0,120}}(?:safe content frame|safe_content_frame|内容安全框|安全内容框)",
+def prompt_mentions_business_canvas_grammar(prompt: str, y1: int, y2: int) -> bool:
+    normalized = prompt.casefold().replace("_", " ")
+    return (
+        "business canvas" in normalized
+        and str(y1) in prompt
+        and str(y2) in prompt
+        and "physical canvas" in normalized
+        and "headline zone" in normalized
     )
-    return any(re.search(pattern, prompt, re.IGNORECASE) for pattern in patterns)
 
 
 def prompt_mentions_bottom_group_clearance(prompt: str, y2: int, bottom_start: int) -> bool:
@@ -320,6 +395,9 @@ def prompt_mentions_bottom_group_clearance(prompt: str, y2: int, bottom_start: i
 def validate_prime_prompt_guard(prompt: str, layouts: list[dict[str, Any]]) -> list[str]:
     """Return missing Prime-safe guard requirements for a final image prompt."""
 
+    if uses_coordinate_free_prime_contract(prompt):
+        return validate_semantic_prime_prompt_guard(prompt, layouts)
+
     missing: list[str] = []
     for key, terms in PRIME_GUARD_TERMS.items():
         if not text_has_any(prompt, terms):
@@ -328,7 +406,7 @@ def validate_prime_prompt_guard(prompt: str, layouts: list[dict[str, Any]]) -> l
     normalized_prompt = prompt.casefold().replace("_", " ")
     required_region_ids: set[str] = set()
     required_regions: list[dict[str, Any]] = []
-    top_bottom_values: set[str] = set()
+    bottom_values: set[str] = set()
     for layout in layouts:
         hard_regions = layout.get("hard_regions")
         if not isinstance(hard_regions, list):
@@ -348,10 +426,9 @@ def validate_prime_prompt_guard(prompt: str, layouts: list[dict[str, Any]]) -> l
                 if isinstance(bottom, int) and not isinstance(bottom, bool):
                     region_with_bounds["bottom_key_content_exclusion_start"] = bottom
                 required_regions.append({"id": region_id, "coordinates": ",".join(coordinates), **region_with_bounds})
-        for key in ("top_key_content_exclusion_end", "bottom_key_content_exclusion_start"):
-            value = layout.get(key)
-            if isinstance(value, int) and not isinstance(value, bool):
-                top_bottom_values.add(str(value))
+        bottom_value = layout.get("bottom_key_content_exclusion_start")
+        if isinstance(bottom_value, int) and not isinstance(bottom_value, bool):
+            bottom_values.add(str(bottom_value))
 
     for region_id in sorted(required_region_ids):
         if not prompt_has_region_id(prompt, region_id):
@@ -360,11 +437,11 @@ def validate_prime_prompt_guard(prompt: str, layouts: list[dict[str, Any]]) -> l
         coordinates = str(region["coordinates"])
         if not prompt_covers_rect(prompt, coordinates, region):
             missing.append(f"region_rect:{coordinates}")
-    for value in sorted(top_bottom_values, key=int):
+    for value in sorted(bottom_values, key=int):
         if value not in prompt:
             missing.append(f"exclusion_boundary:{value}")
-    if top_bottom_values and (not text_has_any(prompt, BOTTOM_CTA_TERMS) or not text_has_any(prompt, BOTTOM_AVOID_TERMS)):
-        missing.append("bottom_cta_avoidance")
+    if bottom_values and (not text_has_any(prompt, BOTTOM_BUSINESS_TERMS) or not text_has_any(prompt, BOTTOM_AVOID_TERMS)):
+        missing.append("bottom_business_avoidance")
     for layout in layouts:
         frame = layout_safe_content_frame(layout)
         if frame is None:
@@ -380,8 +457,8 @@ def validate_prime_prompt_guard(prompt: str, layouts: list[dict[str, Any]]) -> l
         coordinates = f"{frame['x1']},{frame['y1']},{frame['x2']},{frame['y2']}"
         if not prompt_covers_rect(prompt, coordinates, frame_region):
             missing.append(f"safe_content_frame_rect:{coordinates}")
-        if not prompt_mentions_cta_limit(prompt, frame["y2"]):
-            missing.append(f"cta_bottom_limit:{frame['y2']}")
+        if not prompt_mentions_business_canvas_grammar(prompt, frame["y1"], frame["y2"]):
+            missing.append(f"business_canvas_grammar:{frame['y1']}:{frame['y2']}")
         bottom_start = layout.get("bottom_key_content_exclusion_start")
         if isinstance(bottom_start, int) and not isinstance(bottom_start, bool):
             if not prompt_mentions_bottom_group_clearance(prompt, frame["y2"], bottom_start):
@@ -389,7 +466,36 @@ def validate_prime_prompt_guard(prompt: str, layouts: list[dict[str, Any]]) -> l
     return missing
 
 
+def uses_coordinate_free_prime_contract(prompt: str) -> bool:
+    normalized = re.sub(r"\s+", " ", prompt.casefold())
+    return (
+        "composition gate" in normalized
+        and "input 2 is the current-size official prime visual context" in normalized
+        and "protected prime bands" in normalized
+    )
+
+
+def validate_semantic_prime_prompt_guard(prompt: str, layouts: list[dict[str, Any]]) -> list[str]:
+    """Validate the current coordinate-free Prime prompt contract.
+
+    The model prompt intentionally describes protected bands in natural language;
+    exact geometry remains in the layout evidence and deterministic composer.
+    """
+
+    missing = [key for key, terms in SEMANTIC_PRIME_GUARD_TERMS.items() if not text_has_any(prompt, terms)]
+    for layout in layouts:
+        if not isinstance(layout.get("hard_regions"), list):
+            missing.append("layout.hard_regions")
+        if not isinstance(layout.get("top_key_content_exclusion_end"), int):
+            missing.append("layout.top_key_content_exclusion_end")
+        if not isinstance(layout.get("bottom_key_content_exclusion_start"), int):
+            missing.append("layout.bottom_key_content_exclusion_start")
+    return missing
+
+
 def validate_redesign_prompt_guard(prompt: str) -> list[str]:
+    if uses_coordinate_free_prime_contract(prompt):
+        return [key for key, terms in SEMANTIC_REDESIGN_GUARD_TERMS.items() if not text_has_any(prompt, terms)]
     return [key for key, terms in REDESIGN_GUARD_TERMS.items() if not text_has_any(prompt, terms)]
 
 
@@ -397,10 +503,18 @@ def validate_concise_prompt(prompt: str) -> list[str]:
     debt: list[str] = []
     if len(prompt) > MAX_PROMPT_CHARS:
         debt.append(f"prompt_too_long:{len(prompt)}>{MAX_PROMPT_CHARS}")
-    for section in REQUIRED_PROMPT_SECTIONS:
-        if not re.search(rf"(?im)^\s*{re.escape(section)}\s*:", prompt):
+    required_sections = (
+        SEMANTIC_REQUIRED_PROMPT_SECTIONS if uses_coordinate_free_prime_contract(prompt) else REQUIRED_PROMPT_SECTIONS
+    )
+    required_terms = (
+        SEMANTIC_REQUIRED_PROMPT_TERMS if uses_coordinate_free_prime_contract(prompt) else REQUIRED_PROMPT_TERMS
+    )
+    semantic_sections = uses_coordinate_free_prime_contract(prompt)
+    for section in required_sections:
+        suffix = r":?\s*$" if semantic_sections else r":"
+        if not re.search(rf"(?im)^\s*{re.escape(section)}\s*{suffix}", prompt):
             debt.append(f"missing_section:{section}")
-    for key, terms in REQUIRED_PROMPT_TERMS.items():
+    for key, terms in required_terms.items():
         if not text_has_any(prompt, terms):
             debt.append(f"missing_term:{key}")
 
@@ -542,7 +656,7 @@ def main() -> int:
     checks = []
     passed = True
     for source, prompt in prompts:
-        observed = financial_tokens(prompt)
+        observed = visible_prompt_financial_tokens(prompt)
         unapproved = sorted(observed - approved)
         missing_prime_guard = validate_prime_prompt_guard(prompt, layouts) if args.require_prime_guard else []
         missing_redesign_guard = validate_redesign_prompt_guard(prompt) if args.require_redesign_guard else []
@@ -564,7 +678,7 @@ def main() -> int:
         "candidate_id": args.candidate_id,
         "order_item_id": item.get("id") or args.order_item_id,
         "variant_id": args.variant_id,
-        "copy_snapshot_id": snapshot.get("composition_id") or snapshot.get("id") or item.get("copy_entry_id"),
+        "copy_snapshot_id": snapshot.get("composition_id") or snapshot.get("id"),
         "copy_snapshot_version": snapshot.get("library_version") or snapshot.get("version"),
         "approved_financial_tokens": sorted(approved),
         "prompt_checks": checks,

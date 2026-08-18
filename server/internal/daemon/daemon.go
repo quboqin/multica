@@ -464,7 +464,17 @@ func (d *Daemon) workspaceNeedsRuntimeRecovery(workspaceID string) bool {
 // The workspaceState pointer is NEVER replaced (see syncWorkspacesFromAPI's
 // invariant about repoRefreshMu). Only fields are mutated.
 func (d *Daemon) reregisterWorkspaceAfterRuntimeGone(ctx context.Context, workspaceID string) error {
-	resp, err := d.registerRuntimesForWorkspace(ctx, workspaceID)
+	d.mu.Lock()
+	ws, tracked := d.workspaces[workspaceID]
+	var settings json.RawMessage
+	if tracked {
+		settings = append(json.RawMessage(nil), ws.settings...)
+	}
+	d.mu.Unlock()
+	if !tracked {
+		return fmt.Errorf("workspace %s no longer tracked", workspaceID)
+	}
+	resp, err := d.registerRuntimesForWorkspace(ctx, workspaceID, settings)
 	if err != nil {
 		return fmt.Errorf("register runtimes: %w", err)
 	}
@@ -766,10 +776,16 @@ func (d *Daemon) findRuntime(id string) *Runtime {
 	return nil
 }
 
-func (d *Daemon) registerRuntimesForWorkspace(ctx context.Context, workspaceID string) (*RegisterResponse, error) {
+func (d *Daemon) registerRuntimesForWorkspace(ctx context.Context, workspaceID string, settings json.RawMessage) (*RegisterResponse, error) {
 	d.logger.Debug("registering runtimes for workspace", "workspace_id", workspaceID, "agent_count", len(d.cfg.Agents))
+	allowedProviders := workspaceRuntimeProviders(settings)
 	var runtimes []map[string]any
 	for name, entry := range d.cfg.Agents {
+		if len(allowedProviders) > 0 {
+			if _, allowed := allowedProviders[name]; !allowed {
+				continue
+			}
+		}
 		version, err := detectAgentVersion(ctx, entry.Path)
 		if err != nil {
 			d.logger.Warn("skip registering runtime", "name", name, "error", err)
@@ -1276,8 +1292,10 @@ func (d *Daemon) syncWorkspacesFromAPI(ctx context.Context) error {
 	d.logger.Debug("workspace sync: fetched workspaces", "count", len(workspaces))
 
 	apiIDs := make(map[string]string, len(workspaces)) // id -> name
+	apiSettings := make(map[string]json.RawMessage, len(workspaces))
 	for _, ws := range workspaces {
 		apiIDs[ws.ID] = ws.Name
+		apiSettings[ws.ID] = ws.Settings
 	}
 
 	d.mu.Lock()
@@ -1315,7 +1333,7 @@ func (d *Daemon) syncWorkspacesFromAPI(ctx context.Context) error {
 			registered++
 			continue
 		}
-		resp, err := d.registerRuntimesForWorkspace(ctx, id)
+		resp, err := d.registerRuntimesForWorkspace(ctx, id, apiSettings[id])
 		if err != nil {
 			d.logger.Error("failed to register runtimes", "workspace_id", id, "name", name, "error", err)
 			continue

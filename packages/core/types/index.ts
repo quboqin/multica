@@ -59,6 +59,7 @@ export type {
   IssueUsageSummary,
 } from "./agent";
 export type { Workspace, WorkspaceRepo, Member, MemberRole, User, IntegrationTokens, MemberWithUser, Invitation } from "./workspace";
+export type { WorkspaceCapability, WorkspaceCapabilitiesResponse } from "./capability";
 export type { InboxItem, InboxSeverity, InboxItemType } from "./inbox";
 export type { NotificationGroupKey, NotificationGroupValue, NotificationPreferences, NotificationPreferenceResponse } from "./notification-preference";
 export type { Comment, CommentType, CommentAuthorType, CommentTriggerPreview, CommentTriggerPreviewAgent, CommentTriggerSource, Reaction } from "./comment";
@@ -154,10 +155,6 @@ export type {
 } from "./credential";
 export type {
   CreateCreativeResourceRequest,
-  CreativeCopyEntry,
-  CreativeCopyEntryInput,
-  CreativeCopyEntryListResponse,
-  CreativeCopyImportResult,
   CreativeCopyStatus,
   CreativeType,
   CreativeCopyFragmentRole,
@@ -168,18 +165,20 @@ export type {
   CreativeRepaymentPlan,
   CreativeCopyLibraryConfig,
   CreativeCopySnapshot,
+  CreativeVisualDirection,
 	CreativeFeedbackAnnotation,
 	CreativeFeedbackDecision,
 	CreativeFeedbackEvent,
 	CreativeFeedbackEventListResponse,
+	CreativeFeedbackDashboard,
 	CreativeFeedbackMetrics,
+	CreativeFeedbackReasonSummary,
 	CreativeFeedbackScope,
 	CreativeFeedbackSubjectType,
 	CreativeOrder,
 	CreativeOrderWorkflowFailure,
 	CreativeOrderWorkflowRetryResponse,
 	CreativeOrderQCRetryResponse,
-	CreativeOrderPrimePackageRepairResponse,
 	CreativeOrderListResponse,
 	CreativeOrderItem,
 	AdoptCreativeOrderVariantRequest,
@@ -202,6 +201,8 @@ export type {
 	CreateCreativeAdjustmentRequest,
 	CreateCreativeFeedbackRequest,
 	CreateCreativeFeedbackResponse,
+	QueueCreativeOrderAdjustmentRequest,
+	QueueCreativeOrderAdjustmentResponse,
 	CreativeDelivery,
 	CreativeDeliverySize,
   CreativeImportSummary,
@@ -226,12 +227,6 @@ export type {
   CreativeResourceFileListResponse,
   CreativeResourceListResponse,
   CreativeResourceStatus,
-  CreativeMarketPackComponentCandidate,
-  CreativeMarketPackComponentExtraction,
-  CreativeMarketPackComponentKind,
-  CreativeMarketPackExtractionStatus,
-  CreateCreativeMarketPackComponentExtractionRequest,
-  ImportCreativeCopyEntriesRequest,
   ImportCreativeMaterialsRequest,
   ImportCreativeMaterialLibraryRequest,
   PutCreativeIssueContextRequest,

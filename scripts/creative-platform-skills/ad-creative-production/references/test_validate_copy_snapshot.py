@@ -4,7 +4,16 @@ from pathlib import Path
 
 import pytest
 
-from validate_copy_snapshot import approved_text, financial_tokens, find_item, main, validate_concise_prompt, validate_prime_prompt_guard, validate_snapshot
+from validate_copy_snapshot import (
+    MAX_PROMPT_CHARS,
+    approved_text,
+    financial_tokens,
+    find_item,
+    main,
+    validate_concise_prompt,
+    validate_prime_prompt_guard,
+    validate_snapshot,
+)
 
 
 def approved_snapshot() -> dict:
@@ -162,6 +171,80 @@ def test_editing_the_production_prompt_cannot_self_approve_a_new_financial_value
     assert main() == 2
 
 
+def test_forbidden_direction_financial_token_is_not_treated_as_visible_copy(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    materials = tmp_path / "materials.json"
+    materials.write_text(json.dumps({"items": [{"candidate_id": "candidate-1", "copy_snapshot": approved_snapshot()}]}), encoding="utf-8")
+    prompt = """IMMUTABLE USER DIRECTION:
+Do not retain the source 9 Bulan term.
+
+APPROVED TEXT:
+Pinjaman fleksibel
+Limit hingga Rp80.000.000
+
+TABLE:
+No table.
+
+FORBIDDEN:
+No unapproved readable number.
+"""
+    monkeypatch.setattr(sys, "argv", [
+        "validate_copy_snapshot.py",
+        "--materials-json", str(materials),
+        "--candidate-id", "candidate-1",
+        "--prompt-text", prompt,
+    ])
+
+    assert main() == 0
+
+
+def test_forbidden_source_text_section_is_not_treated_as_visible_copy(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    materials = tmp_path / "materials.json"
+    materials.write_text(json.dumps({"items": [{"candidate_id": "candidate-1", "copy_snapshot": approved_snapshot()}]}), encoding="utf-8")
+    prompt = """APPROVED TEXT:
+Pinjaman fleksibel
+Limit hingga Rp80.000.000
+
+FORBIDDEN SOURCE TEXT:
+Rp1.000.000 sampai Rp25.000.000, 14%, 91-120 hari
+
+TABLE:
+No table.
+
+FORBIDDEN:
+No unapproved readable number.
+"""
+    monkeypatch.setattr(sys, "argv", [
+        "validate_copy_snapshot.py",
+        "--materials-json", str(materials),
+        "--candidate-id", "candidate-1",
+        "--prompt-text", prompt,
+    ])
+
+    assert main() == 0
+
+
+def test_visible_prompt_financial_token_remains_blocked(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    materials = tmp_path / "materials.json"
+    materials.write_text(json.dumps({"items": [{"candidate_id": "candidate-1", "copy_snapshot": approved_snapshot()}]}), encoding="utf-8")
+    prompt = """IMMUTABLE USER DIRECTION:
+Do not retain the source 9 Bulan term.
+
+APPROVED TEXT:
+Pinjaman fleksibel 9 Bulan
+
+TABLE:
+No table.
+"""
+    monkeypatch.setattr(sys, "argv", [
+        "validate_copy_snapshot.py",
+        "--materials-json", str(materials),
+        "--candidate-id", "candidate-1",
+        "--prompt-text", prompt,
+    ])
+
+    assert main() == 2
+
+
 def test_find_item_uses_order_item_or_variant_before_candidate_fallback() -> None:
     first_snapshot = approved_snapshot()
     second_snapshot = approved_snapshot()
@@ -217,7 +300,7 @@ def prime_layout() -> dict:
 def structured_prime_prompt(
     *,
     include_safe_frame: bool = True,
-    include_cta_limit: bool = True,
+    include_business_canvas_grammar: bool = True,
     include_bottom_clearance: bool = True,
     include_redesign: bool = True,
     whole_image_inset: bool = False,
@@ -226,9 +309,9 @@ def structured_prime_prompt(
         "safe_content_frame=(50,100)-(1030,934). CONTENT_RECT=(50,100)-(1030,934). The safe content frame controls only readable content, key business content, text and CTA. "
         if include_safe_frame else ""
     )
-    cta_limit = "CTA_BOX=(690,820)-(1000,934); CTA_BOX bottom edge y<=934 and stays outside the footer exclusion zone. " if include_cta_limit else ""
+    business_canvas_grammar = "COORDINATE GRAMMAR: BUSINESS_CANVAS=(50,100)-(1030,934). Top, upper, headline zone, header, bottom, lower, and footer mean BUSINESS_CANVAS, never the physical canvas. Prime coordinates are no-draw constraints, never visible bands or panels. " if include_business_canvas_grammar else ""
     bottom_clearance = (
-        "BENEFIT_BOX and CTA_BOX form the CTA group, max y<=934, with visible readable clearance before the bottom Prime band starting at y=984. "
+        "Active business groups remain above the bottom template boundary y=984 with fully visible clearance. "
         if include_bottom_clearance else ""
     )
     redesign = "Reference is structure only; remove all source identity and change high-salience visual identity through redesign." if include_redesign else ""
@@ -237,13 +320,13 @@ def structured_prime_prompt(
 TASK:
 Create an unbranded base image only. Prime overlay assets will be composited later.
 INPUTS:
-Input 1 is reference structure only. Input 2 is a reserved-area guide for avoidance only; do not draw input 2, do not copy input 2, and do not render guide blocks.
+Input 1 is reference structure only. Input 2 is a neutral monochrome geometry map for avoidance only; do not draw input 2, do not copy its neutral gray marks, and do not render guide blocks.
 PRIME RESERVED AREAS:
 Do not render any logo, QR, legal footer, regulatory text, app store badge, OJK, AFPI, or Pindai mark.
 Treat every hard region as natural low-detail background only: logo [30,28,314,100]; terms [777,32,982,95]; qr [983,29,1053,99]; regulatory [378,1010,913,1053].
-Top exclusion boundary y<=100 and bottom exclusion boundary y>=984 must stay as continuous low texture background.
+Bottom exclusion boundary y>=984 must stay as continuous low texture background.
 CONTENT LAYOUT:
-{safe_frame}HEADLINE_BOX=(80,170)-(1000,270). TABLE_BOX=(80,420)-(1000,760). BENEFIT_BOX=(90,770)-(650,910). {cta_limit}{bottom_clearance}Keep background, color fields, shadows and decorative surfaces full-bleed edge-to-edge across the full canvas with no inset and no border. {inset}
+{business_canvas_grammar}{safe_frame}Active business groups stay inside BUSINESS_CANVAS. {bottom_clearance}Keep background, color fields, shadows and decorative surfaces full-bleed edge-to-edge across the full canvas with no inset and no border. {inset}
 APPROVED TEXT:
 Pinjaman fleksibel. Limit hingga Rp80.000.000.
 TABLE:
@@ -251,7 +334,7 @@ No table.
 STYLE:
 New Indonesian financial ad base. {redesign}
 FORBIDDEN:
-No extra claims, no extra numbers, no source brand, no Prime components.
+No extra claims, no extra numbers, no source brand, no official Prime template content.
 FINAL:
 Clean base only, all business content readable and outside Prime reserved areas.
 """
@@ -273,7 +356,7 @@ def test_prime_guard_accepts_unbranded_prompt_with_exact_hard_region_contract() 
     assert validate_prime_prompt_guard(prompt, [{"__canvas_width": 1080, "__canvas_height": 1080, **prime_layout()}]) == []
 
 
-def test_prime_guard_requires_bottom_cta_avoidance_when_bottom_boundary_exists() -> None:
+def test_prime_guard_requires_bottom_business_avoidance_when_bottom_boundary_exists() -> None:
     prompt = """
     Create an unbranded base image only. Prime overlay assets will be composited later.
     Input 2 is a reserved-area guide for avoidance only; do not draw input 2.
@@ -283,17 +366,17 @@ def test_prime_guard_requires_bottom_cta_avoidance_when_bottom_boundary_exists()
     Top exclusion boundary y<=100 and bottom exclusion boundary y>=984 must stay as continuous low texture background.
     """
 
-    assert "bottom_cta_avoidance" in validate_prime_prompt_guard(prompt, [prime_layout()])
+    assert "bottom_business_avoidance" in validate_prime_prompt_guard(prompt, [prime_layout()])
 
 
 def test_prime_guard_requires_safe_content_frame_from_layout_contract() -> None:
-    prompt = structured_prime_prompt(include_safe_frame=False, include_cta_limit=False, include_bottom_clearance=False)
+    prompt = structured_prime_prompt(include_safe_frame=False, include_business_canvas_grammar=False, include_bottom_clearance=False)
 
     missing = validate_prime_prompt_guard(prompt, [{"__canvas_width": 1080, "__canvas_height": 1080, **prime_layout()}])
 
     assert "safe_content_frame_label" in missing
     assert "safe_content_frame_rect:50,100,1030,934" in missing
-    assert "cta_bottom_limit:934" in missing
+    assert "business_canvas_grammar:100:934" in missing
     assert "bottom_group_prime_clearance:934:984" in missing
 
 
@@ -356,6 +439,11 @@ def test_concise_prompt_blocks_repeated_long_instruction() -> None:
     debt = validate_concise_prompt(prompt)
 
     assert any(item.startswith("duplicate_segment:") for item in debt)
+
+
+def test_concise_prompt_enforces_6400_character_hard_limit() -> None:
+    assert not any(item.startswith("prompt_too_long:") for item in validate_concise_prompt("x" * MAX_PROMPT_CHARS))
+    assert f"prompt_too_long:{MAX_PROMPT_CHARS + 1}>{MAX_PROMPT_CHARS}" in validate_concise_prompt("x" * (MAX_PROMPT_CHARS + 1))
 
 
 def test_main_requires_concise_prompt_when_requested(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

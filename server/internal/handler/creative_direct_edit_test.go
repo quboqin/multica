@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -50,34 +49,13 @@ func TestCreateCreativeDirectEditAtomicallyInitializesSourceLineage(t *testing.T
 	}
 	wantAgents := map[string]string{
 		"leader_agent_id": squad.LeaderAgentID, "direct_edit_agent_id": squad.DirectEditorAgentID,
-		"prime_agent_id": squad.PrimeAgentID, "reviewer_agent_id": squad.ReviewerAgentID,
+		"reviewer_agent_id": squad.ReviewerAgentID,
 	}
 	for field, want := range wantAgents {
 		if snapshot.Squad[field] != want {
 			t.Errorf("squad snapshot %s = %q, want %q", field, snapshot.Squad[field], want)
 		}
 	}
-}
-
-func TestCreateCreativeDirectEditRejectsMissingDeliveryCapability(t *testing.T) {
-	if testHandler == nil {
-		t.Skip("database not available")
-	}
-	issueID := createCreativeDeliveryTestIssue(t, "Direct edit missing Prime", "")
-	candidateID, _ := createDirectEditCandidate(t, testWorkspaceID, testUserID)
-	squad := createDirectEditSquadFixture(t)
-	if _, err := testPool.Exec(t.Context(), `DELETE FROM agent_skill WHERE agent_id = $1`, squad.PrimeAgentID); err != nil {
-		t.Fatal(err)
-	}
-	w := httptest.NewRecorder()
-	req := newRequest(http.MethodPost, "/api/creative/direct-edits", creativeDirectEditInput{
-		IssueID: issueID, CandidateID: candidateID, UserRequest: "正式交付", TargetSize: "1080x1080", DeliveryMode: "publish", SquadID: squad.SquadID,
-	})
-	testHandler.CreateCreativeDirectEdit(w, req)
-	if w.Code != http.StatusUnprocessableEntity || !strings.Contains(w.Body.String(), "prime_compose") {
-		t.Fatalf("CreateCreativeDirectEdit = %d %s, want missing prime_compose", w.Code, w.Body.String())
-	}
-	assertNoDirectEditOrder(t, issueID)
 }
 
 func TestCreateCreativeDirectEditRejectsMissingOrCrossWorkspaceSourceWithoutOrder(t *testing.T) {
@@ -147,7 +125,6 @@ type directEditSquadFixture struct {
 	SquadID             string
 	LeaderAgentID       string
 	DirectEditorAgentID string
-	PrimeAgentID        string
 	ReviewerAgentID     string
 }
 
@@ -161,10 +138,9 @@ func createDirectEditSquadFixture(t *testing.T) directEditSquadFixture {
 	fixture := directEditSquadFixture{
 		LeaderAgentID:       createHandlerTestAgent(t, "direct-edit-leader-"+uuid.NewString(), nil),
 		DirectEditorAgentID: createHandlerTestAgent(t, "direct-edit-editor-"+uuid.NewString(), nil),
-		PrimeAgentID:        createHandlerTestAgent(t, "direct-edit-prime-"+uuid.NewString(), nil),
 		ReviewerAgentID:     createHandlerTestAgent(t, "direct-edit-reviewer-"+uuid.NewString(), nil),
 	}
-	skillIDs := make([]string, 0, 4)
+	skillIDs := make([]string, 0, 3)
 	bindCapability := func(agentID, capability string) {
 		var skillID string
 		if err := testPool.QueryRow(t.Context(), `
@@ -181,7 +157,6 @@ RETURNING id::text
 	}
 	bindCapability(fixture.LeaderAgentID, "creative_leadership")
 	bindCapability(fixture.DirectEditorAgentID, "direct_image_edit")
-	bindCapability(fixture.PrimeAgentID, "prime_compose")
 	bindCapability(fixture.ReviewerAgentID, "quality_control")
 	if err := testPool.QueryRow(t.Context(), `
 INSERT INTO squad (workspace_id, name, leader_id, creator_id)
@@ -190,7 +165,7 @@ RETURNING id::text
 `, testWorkspaceID, "Direct edit squad "+uuid.NewString(), fixture.LeaderAgentID, testUserID).Scan(&fixture.SquadID); err != nil {
 		t.Fatal(err)
 	}
-	for _, agentID := range []string{fixture.LeaderAgentID, fixture.DirectEditorAgentID, fixture.PrimeAgentID, fixture.ReviewerAgentID} {
+	for _, agentID := range []string{fixture.LeaderAgentID, fixture.DirectEditorAgentID, fixture.ReviewerAgentID} {
 		if _, err := testPool.Exec(t.Context(), `
 INSERT INTO squad_member (squad_id, member_type, member_id, role)
 		VALUES ($1, 'agent', $2, '')

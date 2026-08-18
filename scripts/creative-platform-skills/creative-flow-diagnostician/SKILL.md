@@ -62,8 +62,10 @@ allowed-tools: Bash(multica *), Bash(powershell *)
 - fanout 空或停住类：fanout accepted 不等于完成。要同时看 direct task 队列、daemon active_task_count、
   Agent runtime_id、source kind/ref 和 item_key；不要把“当前 Prime fanout 任务为空”当成整单无工作。
 - Prime/QC 类：generated、primed、delivered asset 必须匹配同一 variant/revision/expected_sizes。
-  旧 revision 或未登记诊断图不能当成当前交付资产。QC 阻断不自动返工，除非用户明确授权。
-- 诊断图类：未登记模型输出只能用于解释停止原因，不能登记为资产、不能进入 Prime、不能交付。
+  旧 revision 或过程图片不能当成当前交付资产。真实 Prime 遮挡、官方文字不可读或关键内容缺失可自动定向返工一次；
+  其他 QC 失败仍需人工决定。
+- 过程图片类：只读取订单返回的 diagnostic assets；它们来自 attachment 存储并已登记归属，只能用于解释停止原因，
+  不能登记为资产、不能进入 Prime、不能交付。未登记的本地模型输出不再是平台可见数据。
 
 ## AppGrowing 采集诊断
 

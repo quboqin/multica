@@ -36,28 +36,6 @@ type creativeResourceResponse struct {
 	UpdatedAt        string          `json:"updated_at"`
 }
 
-type creativeCopyEntryResponse struct {
-	ID          string          `json:"id"`
-	WorkspaceID string          `json:"workspace_id"`
-	LibraryID   string          `json:"library_id"`
-	ExternalKey string          `json:"external_key"`
-	Headline    string          `json:"headline"`
-	Subheadline string          `json:"subheadline"`
-	Benefit     string          `json:"benefit"`
-	CTA         string          `json:"cta"`
-	LegalText   string          `json:"legal_text"`
-	CopyRole    string          `json:"copy_role"`
-	Market      string          `json:"market"`
-	Locale      string          `json:"locale"`
-	Tags        []string        `json:"tags"`
-	Status      string          `json:"status"`
-	Version     int             `json:"version"`
-	Metadata    json.RawMessage `json:"metadata"`
-	CreatedBy   string          `json:"created_by"`
-	CreatedAt   string          `json:"created_at"`
-	UpdatedAt   string          `json:"updated_at"`
-}
-
 type creativeIssueContextResponse struct {
 	IssueID      string          `json:"issue_id"`
 	WorkspaceID  string          `json:"workspace_id"`
@@ -85,8 +63,6 @@ type creativeResourceFileResponse struct {
 type creativeIssueItemResponse struct {
 	IssueID       string          `json:"issue_id"`
 	CandidateID   string          `json:"candidate_id"`
-	CopyEntryID   string          `json:"copy_entry_id"`
-	CopySnapshot  json.RawMessage `json:"copy_snapshot"`
 	CreativeBrief json.RawMessage `json:"creative_brief"`
 	WorkIssueID   string          `json:"work_issue_id"`
 	Revision      int             `json:"revision"`
@@ -123,21 +99,6 @@ type creativeBriefAppUIReferenceInput struct {
 	ResourceFileID string `json:"resource_file_id"`
 	AttachmentID   string `json:"attachment_id"`
 	Reason         string `json:"reason"`
-}
-
-type creativeCopyEntryInput struct {
-	ExternalKey string          `json:"external_key"`
-	Headline    string          `json:"headline"`
-	Subheadline string          `json:"subheadline"`
-	Benefit     string          `json:"benefit"`
-	CTA         string          `json:"cta"`
-	LegalText   string          `json:"legal_text"`
-	CopyRole    string          `json:"copy_role"`
-	Market      string          `json:"market"`
-	Locale      string          `json:"locale"`
-	Tags        []string        `json:"tags"`
-	Status      string          `json:"status"`
-	Metadata    json.RawMessage `json:"metadata"`
 }
 
 type rowScanner interface {
@@ -918,7 +879,7 @@ FOR UPDATE
 			return
 		}
 	} else if current.Kind == "market_pack" {
-		config, err = h.validateMarketPackQRConfig(r.Context(), workspaceID, resourceID, current.Config)
+		config, err = h.validateMarketPackPrimeTemplates(r.Context(), workspaceID, resourceID, current.Config)
 		if err != nil {
 			writeError(w, http.StatusBadRequest, "market resource pack cannot be published: "+err.Error())
 			return
@@ -1456,196 +1417,6 @@ RETURNING id::text
 	writeError(w, http.StatusInternalServerError, "market resource file was not persisted")
 }
 
-func (h *Handler) ListCreativeCopyEntries(w http.ResponseWriter, r *http.Request) {
-	workspaceID, ok := parseUUIDOrBadRequest(w, h.resolveWorkspaceID(r), "workspace_id")
-	if !ok {
-		return
-	}
-	libraryID, ok := parseUUIDOrBadRequest(w, chi.URLParam(r, "id"), "library_id")
-	if !ok {
-		return
-	}
-	if _, err := h.requireCreativeResource(r.Context(), workspaceID, libraryID, "copy_library"); err != nil {
-		writeError(w, http.StatusNotFound, "copy library not found")
-		return
-	}
-	rows, err := h.DB.Query(r.Context(), creativeCopyEntrySelect+`
-WHERE workspace_id = $1 AND library_id = $2
-ORDER BY CASE status WHEN 'approved' THEN 0 WHEN 'draft' THEN 1 ELSE 2 END, updated_at DESC
-`, workspaceID, libraryID)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to list copy entries")
-		return
-	}
-	defer rows.Close()
-	entries := []creativeCopyEntryResponse{}
-	for rows.Next() {
-		entry, scanErr := scanCreativeCopyEntry(rows)
-		if scanErr != nil {
-			writeError(w, http.StatusInternalServerError, "failed to read copy entries")
-			return
-		}
-		entries = append(entries, entry)
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"entries": entries})
-}
-
-func (h *Handler) ImportCreativeCopyEntries(w http.ResponseWriter, r *http.Request) {
-	workspaceID, userID, ok := creativeWorkspaceUser(w, r, h)
-	if !ok {
-		return
-	}
-	libraryID, ok := parseUUIDOrBadRequest(w, chi.URLParam(r, "id"), "library_id")
-	if !ok {
-		return
-	}
-	var req struct {
-		Mode           string                   `json:"mode"`
-		SourceFilename string                   `json:"source_filename"`
-		Mapping        json.RawMessage          `json:"mapping"`
-		Entries        []creativeCopyEntryInput `json:"entries"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid JSON body")
-		return
-	}
-	if req.Mode == "" {
-		req.Mode = "upsert"
-	}
-	if req.Mode != "append" && req.Mode != "upsert" && req.Mode != "replace" {
-		writeError(w, http.StatusBadRequest, "mode must be append, upsert, or replace")
-		return
-	}
-	if len(req.Entries) == 0 || len(req.Entries) > 5000 {
-		writeError(w, http.StatusBadRequest, "entries must contain between 1 and 5000 rows")
-		return
-	}
-	mapping, err := normalizedJSONObject(req.Mapping)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "mapping must be a JSON object")
-		return
-	}
-	tx, err := h.TxStarter.Begin(r.Context())
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to import copy entries")
-		return
-	}
-	defer tx.Rollback(r.Context())
-	if _, err := requireCreativeResourceTx(r.Context(), tx, workspaceID, libraryID, "copy_library"); err != nil {
-		writeError(w, http.StatusNotFound, "copy library not found")
-		return
-	}
-	if req.Mode == "replace" {
-		if _, err := tx.Exec(r.Context(), `UPDATE creative_copy_entry SET status = 'disabled', updated_at = now() WHERE workspace_id = $1 AND library_id = $2`, workspaceID, libraryID); err != nil {
-			writeError(w, http.StatusInternalServerError, "failed to prepare copy import")
-			return
-		}
-	}
-	created, updated, skipped := 0, 0, 0
-	for index, input := range req.Entries {
-		input = normalizeCreativeCopyEntry(input, index)
-		if input.Headline == "" && input.Subheadline == "" && input.Benefit == "" && input.CTA == "" {
-			skipped++
-			continue
-		}
-		if req.Mode == "append" {
-			var exists bool
-			if err := tx.QueryRow(r.Context(), `SELECT EXISTS(SELECT 1 FROM creative_copy_entry WHERE library_id = $1 AND external_key = $2)`, libraryID, input.ExternalKey).Scan(&exists); err != nil {
-				writeError(w, http.StatusInternalServerError, "failed to inspect copy import")
-				return
-			}
-			if exists {
-				skipped++
-				continue
-			}
-		}
-		var inserted bool
-		if err := tx.QueryRow(r.Context(), creativeCopyEntryUpsertSQL,
-			workspaceID, libraryID, input.ExternalKey, input.Headline, input.Subheadline,
-			input.Benefit, input.CTA, input.LegalText, input.CopyRole, input.Market,
-			input.Locale, input.Tags, input.Status, string(input.Metadata), userID,
-		).Scan(&inserted); err != nil {
-			writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to import copy row %d", index+1))
-			return
-		}
-		if inserted {
-			created++
-		} else {
-			updated++
-		}
-	}
-	resource, err := bumpCreativeLibraryRevision(r.Context(), tx, workspaceID, libraryID, userID, req.SourceFilename, mapping)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to version copy library")
-		return
-	}
-	if err := tx.Commit(r.Context()); err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to import copy entries")
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{
-		"created": created, "updated": updated, "skipped": skipped, "resource": resource,
-	})
-}
-
-func (h *Handler) UpdateCreativeCopyEntry(w http.ResponseWriter, r *http.Request) {
-	workspaceID, userID, ok := creativeWorkspaceUser(w, r, h)
-	if !ok {
-		return
-	}
-	entryID, ok := parseUUIDOrBadRequest(w, chi.URLParam(r, "entryId"), "entry_id")
-	if !ok {
-		return
-	}
-	var input creativeCopyEntryInput
-	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid JSON body")
-		return
-	}
-	input = normalizeCreativeCopyEntry(input, 0)
-	tx, err := h.TxStarter.Begin(r.Context())
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to update copy entry")
-		return
-	}
-	defer tx.Rollback(r.Context())
-	entry, err := scanCreativeCopyEntry(tx.QueryRow(r.Context(), `
-UPDATE creative_copy_entry
-SET external_key = $3, headline = $4, subheadline = $5, benefit = $6,
-    cta = $7, legal_text = $8, copy_role = $9, market = $10, locale = $11,
-    tags = $12, status = $13, metadata = $14::jsonb, version = version + 1,
-    updated_at = now()
-WHERE id = $1 AND workspace_id = $2
-RETURNING id::text, workspace_id::text, library_id::text, external_key, headline,
-          subheadline, benefit, cta, legal_text, copy_role, market, locale, tags,
-          status, version, metadata::text, created_by::text, created_at::text, updated_at::text
-	`, entryID, workspaceID, input.ExternalKey, input.Headline, input.Subheadline, input.Benefit,
-		input.CTA, input.LegalText, input.CopyRole, input.Market, input.Locale, input.Tags,
-		input.Status, string(input.Metadata)))
-	if errors.Is(err, pgx.ErrNoRows) {
-		writeError(w, http.StatusNotFound, "copy entry not found")
-		return
-	}
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to update copy entry")
-		return
-	}
-	libraryID, err := parseUUIDString(entry.LibraryID)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "copy entry has invalid library")
-		return
-	}
-	if _, err := bumpCreativeResourceRevision(r.Context(), tx, workspaceID, libraryID, userID); err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to version copy library")
-		return
-	}
-	if err := tx.Commit(r.Context()); err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to update copy entry")
-		return
-	}
-	writeJSON(w, http.StatusOK, entry)
-}
-
 func (h *Handler) PutCreativeIssueContext(w http.ResponseWriter, r *http.Request) {
 	issue, ok := h.loadIssueForUser(w, r, chi.URLParam(r, "id"))
 	if !ok {
@@ -1723,77 +1494,6 @@ func creativeContextAgentCanBind(issue db.Issue, requestedSquadID pgtype.UUID, a
 		squad.WorkspaceID == issue.WorkspaceID && uuidToString(squad.LeaderID) == actorID
 }
 
-func (h *Handler) PutCreativeItemCopy(w http.ResponseWriter, r *http.Request) {
-	issue, ok := h.loadIssueForUser(w, r, chi.URLParam(r, "id"))
-	if !ok {
-		return
-	}
-	candidateID, ok := parseUUIDOrBadRequest(w, chi.URLParam(r, "candidateId"), "candidate_id")
-	if !ok {
-		return
-	}
-	userID, ok := requireUserID(w, r)
-	if !ok {
-		return
-	}
-	var req struct {
-		CopyEntryID string `json:"copy_entry_id"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid JSON body")
-		return
-	}
-	copyEntryID, ok := parseUUIDOrBadRequest(w, req.CopyEntryID, "copy_entry_id")
-	if !ok {
-		return
-	}
-	entry, err := scanCreativeCopyEntry(h.DB.QueryRow(r.Context(), creativeCopyEntrySelect+`
-WHERE id = $1 AND workspace_id = $2 AND status <> 'disabled'
-`, copyEntryID, issue.WorkspaceID))
-	if errors.Is(err, pgx.ErrNoRows) {
-		writeError(w, http.StatusNotFound, "copy entry not found")
-		return
-	}
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to load copy entry")
-		return
-	}
-	var candidateExists bool
-	if err := h.DB.QueryRow(r.Context(), `
-SELECT EXISTS(
-  SELECT 1 FROM creative_material_issue_candidate
-  WHERE issue_id = $1 AND workspace_id = $2 AND candidate_id = $3 AND status = 'selected'
-)
-`, issue.ID, issue.WorkspaceID, candidateID).Scan(&candidateExists); err != nil || !candidateExists {
-		writeError(w, http.StatusUnprocessableEntity, "candidate must be selected before assigning copy")
-		return
-	}
-	snapshot, _ := json.Marshal(entry)
-	actorType, actorID := h.resolveActor(r, userID, uuidToString(issue.WorkspaceID))
-	requestingUserID := h.requestingUserIDFromRequest(r, actorType, actorID)
-	item, err := scanCreativeIssueItem(h.DB.QueryRow(r.Context(), `
-INSERT INTO creative_issue_item (
-  issue_id, candidate_id, workspace_id, copy_entry_id, copy_snapshot, updated_by
-) VALUES ($1, $2, $3, $4, $5::jsonb, $6)
-ON CONFLICT (issue_id, candidate_id) DO UPDATE SET
-  copy_entry_id = EXCLUDED.copy_entry_id,
-  copy_snapshot = EXCLUDED.copy_snapshot,
-  work_issue_id = NULL,
-  revision = creative_issue_item.revision + 1,
-  status = 'ready',
-  updated_by = EXCLUDED.updated_by,
-  updated_at = now()
-RETURNING issue_id::text, candidate_id::text, COALESCE(copy_entry_id::text, ''),
-          copy_snapshot::text, creative_brief::text, COALESCE(work_issue_id::text, ''), revision, status, updated_at::text
-`, issue.ID, candidateID, issue.WorkspaceID, copyEntryID, string(snapshot), requestingUserID))
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to assign copy")
-		return
-	}
-	h.publishCreativeMaterialsUpdated(issue.WorkspaceID, issue.ID, actorType, actorID)
-	writeJSON(w, http.StatusOK, item)
-}
-
 func (h *Handler) PutCreativeItemBrief(w http.ResponseWriter, r *http.Request) {
 	issue, ok := h.loadIssueForUser(w, r, chi.URLParam(r, "id"))
 	if !ok {
@@ -1849,8 +1549,8 @@ ON CONFLICT (issue_id, candidate_id) DO UPDATE SET
   status = 'ready',
   updated_by = EXCLUDED.updated_by,
   updated_at = now()
-RETURNING issue_id::text, candidate_id::text, COALESCE(copy_entry_id::text, ''),
-          copy_snapshot::text, creative_brief::text, COALESCE(work_issue_id::text, ''), revision, status, updated_at::text
+RETURNING issue_id::text, candidate_id::text, creative_brief::text,
+          COALESCE(work_issue_id::text, ''), revision, status, updated_at::text
 `, issue.ID, candidateID, issue.WorkspaceID, string(encoded), requestingUserID))
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to save creative brief")
@@ -1899,11 +1599,11 @@ SELECT EXISTS(
 UPDATE creative_issue_item
 SET work_issue_id = $4, status = 'running', updated_by = $5, updated_at = now()
 WHERE issue_id = $1 AND candidate_id = $2 AND workspace_id = $3
-RETURNING issue_id::text, candidate_id::text, COALESCE(copy_entry_id::text, ''),
-          copy_snapshot::text, creative_brief::text, COALESCE(work_issue_id::text, ''), revision, status, updated_at::text
+RETURNING issue_id::text, candidate_id::text, creative_brief::text,
+          COALESCE(work_issue_id::text, ''), revision, status, updated_at::text
 `, issue.ID, candidateID, issue.WorkspaceID, workIssueID, requestingUserID))
 	if errors.Is(err, pgx.ErrNoRows) {
-		writeError(w, http.StatusUnprocessableEntity, "assign copy before starting creative work")
+		writeError(w, http.StatusUnprocessableEntity, "save a creative brief before starting creative work")
 		return
 	}
 	if err != nil {
@@ -1928,8 +1628,8 @@ WHERE issue_id = $1 AND workspace_id = $2
 		return nil, nil, err
 	}
 	rows, err := h.DB.Query(ctx, `
-SELECT issue_id::text, candidate_id::text, COALESCE(copy_entry_id::text, ''),
-       copy_snapshot::text, creative_brief::text, COALESCE(work_issue_id::text, ''), revision, status, updated_at::text
+SELECT issue_id::text, candidate_id::text, creative_brief::text,
+       COALESCE(work_issue_id::text, ''), revision, status, updated_at::text
 FROM creative_issue_item
 WHERE issue_id = $1 AND workspace_id = $2
 ORDER BY created_at
@@ -2123,39 +1823,10 @@ func requireCreativeResourceTx(ctx context.Context, tx pgx.Tx, workspaceID, reso
 	return name, err
 }
 
-func bumpCreativeLibraryRevision(ctx context.Context, tx pgx.Tx, workspaceID, libraryID, userID pgtype.UUID, sourceFilename string, mapping json.RawMessage) (creativeResourceResponse, error) {
-	resource, err := scanCreativeResource(tx.QueryRow(ctx, `
-UPDATE creative_resource
-SET config = config || jsonb_build_object(
-      'source_filename', $3::text,
-      'import_mapping', $4::jsonb
-    ),
-    status = 'draft', version = version + 1, updated_at = now()
-WHERE id = $1 AND workspace_id = $2 AND kind = 'copy_library'
-RETURNING id::text, workspace_id::text, kind, name, description, status, version,
-          COALESCE(published_version, 0), config::text, created_by::text,
-          created_at::text, updated_at::text
-`, libraryID, workspaceID, strings.TrimSpace(sourceFilename), string(mapping)))
-	if err != nil {
-		return creativeResourceResponse{}, err
-	}
-	if err := insertCreativeResourceRevision(ctx, tx, resource, userID); err != nil {
-		return creativeResourceResponse{}, err
-	}
-	if err := hydrateCreativeResourcePublishedConfig(ctx, tx, &resource); err != nil {
-		return creativeResourceResponse{}, err
-	}
-	return resource, nil
-}
-
 func bumpCreativeResourceRevision(ctx context.Context, tx pgx.Tx, workspaceID, resourceID, userID pgtype.UUID) (creativeResourceResponse, error) {
 	resource, err := scanCreativeResource(tx.QueryRow(ctx, `
 UPDATE creative_resource
-SET config = CASE
-      WHEN config ? 'prime_composition'
-        THEN config - 'qr_validation' - 'prime_composition_validation' - 'prime_layout_contract'
-      ELSE config - 'qr_validation'
-    END,
+SET config = config - 'prime_template_set_validation' - 'prime_layout_contract',
     status = 'draft', version = version + 1, updated_at = now()
 WHERE id = $1 AND workspace_id = $2 AND status <> 'archived'
 RETURNING id::text, workspace_id::text, kind, name, description, status, version,
@@ -2229,51 +1900,6 @@ WHERE resource_id = $1::uuid AND version = $2
 	return nil
 }
 
-const creativeCopyEntrySelect = `
-SELECT id::text, workspace_id::text, library_id::text, external_key, headline,
-       subheadline, benefit, cta, legal_text, copy_role, market, locale, tags,
-       status, version, metadata::text, created_by::text, created_at::text, updated_at::text
-FROM creative_copy_entry
-`
-
-const creativeCopyEntryUpsertSQL = `
-WITH upsert AS (
-  INSERT INTO creative_copy_entry (
-    workspace_id, library_id, external_key, headline, subheadline, benefit,
-    cta, legal_text, copy_role, market, locale, tags, status, metadata, created_by
-  ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14::jsonb, $15)
-  ON CONFLICT (library_id, external_key) DO UPDATE SET
-    headline = EXCLUDED.headline,
-    subheadline = EXCLUDED.subheadline,
-    benefit = EXCLUDED.benefit,
-    cta = EXCLUDED.cta,
-    legal_text = EXCLUDED.legal_text,
-    copy_role = EXCLUDED.copy_role,
-    market = EXCLUDED.market,
-    locale = EXCLUDED.locale,
-    tags = EXCLUDED.tags,
-    status = EXCLUDED.status,
-    metadata = EXCLUDED.metadata,
-    version = creative_copy_entry.version + 1,
-    updated_at = now()
-  RETURNING xmax = 0 AS inserted
-)
-SELECT inserted FROM upsert
-`
-
-func scanCreativeCopyEntry(row rowScanner) (creativeCopyEntryResponse, error) {
-	var item creativeCopyEntryResponse
-	var metadata string
-	err := row.Scan(
-		&item.ID, &item.WorkspaceID, &item.LibraryID, &item.ExternalKey, &item.Headline,
-		&item.Subheadline, &item.Benefit, &item.CTA, &item.LegalText, &item.CopyRole,
-		&item.Market, &item.Locale, &item.Tags, &item.Status, &item.Version, &metadata,
-		&item.CreatedBy, &item.CreatedAt, &item.UpdatedAt,
-	)
-	item.Metadata = json.RawMessage(metadata)
-	return item, err
-}
-
 func scanCreativeIssueContext(row rowScanner) (creativeIssueContextResponse, error) {
 	var item creativeIssueContextResponse
 	var snapshot string
@@ -2284,9 +1910,8 @@ func scanCreativeIssueContext(row rowScanner) (creativeIssueContextResponse, err
 
 func scanCreativeIssueItem(row rowScanner) (creativeIssueItemResponse, error) {
 	var item creativeIssueItemResponse
-	var snapshot, brief string
-	err := row.Scan(&item.IssueID, &item.CandidateID, &item.CopyEntryID, &snapshot, &brief, &item.WorkIssueID, &item.Revision, &item.Status, &item.UpdatedAt)
-	item.CopySnapshot = json.RawMessage(snapshot)
+	var brief string
+	err := row.Scan(&item.IssueID, &item.CandidateID, &brief, &item.WorkIssueID, &item.Revision, &item.Status, &item.UpdatedAt)
 	item.CreativeBrief = json.RawMessage(brief)
 	return item, err
 }
@@ -2425,32 +2050,6 @@ func normalizedJSONObject(raw json.RawMessage) (json.RawMessage, error) {
 		return nil, errors.New("not an object")
 	}
 	return json.Marshal(value)
-}
-
-func normalizeCreativeCopyEntry(input creativeCopyEntryInput, index int) creativeCopyEntryInput {
-	input.ExternalKey = strings.TrimSpace(input.ExternalKey)
-	input.Headline = strings.TrimSpace(input.Headline)
-	input.Subheadline = strings.TrimSpace(input.Subheadline)
-	input.Benefit = strings.TrimSpace(input.Benefit)
-	input.CTA = strings.TrimSpace(input.CTA)
-	input.LegalText = strings.TrimSpace(input.LegalText)
-	input.CopyRole = strings.TrimSpace(input.CopyRole)
-	input.Market = strings.TrimSpace(input.Market)
-	input.Locale = strings.TrimSpace(input.Locale)
-	input.Tags = uniqueNonEmptyStrings(input.Tags)
-	if input.Status != "approved" && input.Status != "disabled" {
-		input.Status = "draft"
-	}
-	metadata, err := normalizedJSONObject(input.Metadata)
-	if err != nil {
-		metadata = json.RawMessage(`{}`)
-	}
-	input.Metadata = metadata
-	if input.ExternalKey == "" {
-		sum := sha256.Sum256([]byte(fmt.Sprintf("%d|%s|%s|%s|%s", index, input.Headline, input.Subheadline, input.Benefit, input.CTA)))
-		input.ExternalKey = "copy:" + hex.EncodeToString(sum[:8])
-	}
-	return input
 }
 
 func parseUUIDString(value string) (pgtype.UUID, error) {

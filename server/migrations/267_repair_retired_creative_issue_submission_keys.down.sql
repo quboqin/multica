@@ -1,0 +1,1 @@
+-- Retired submission keys deliberately remain retired when rolling back code.

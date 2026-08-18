@@ -10,7 +10,7 @@ import {
   useSidebar,
 } from "@multica/ui/components/ui/sidebar";
 import { ModalRegistry } from "@multica/views/modals/registry";
-import { AppSidebar } from "@multica/views/layout";
+import { AppSidebar, ReleaseAnnouncement } from "@multica/views/layout";
 import { SearchCommand, SearchTrigger } from "@multica/views/search";
 import { ChatFab, ChatWindow } from "@multica/views/chat";
 import { WorkspaceSlugProvider, paths, useCurrentWorkspace } from "@multica/core/paths";
@@ -198,6 +198,7 @@ export function DesktopShell() {
         </div>
         {slug && <ModalRegistry />}
         {slug && <SearchCommand />}
+        {slug && <ReleaseAnnouncement />}
         <WindowOverlay />
       </WorkspaceSlugProvider>
     </DesktopNavigationProvider>

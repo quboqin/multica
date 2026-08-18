@@ -6,7 +6,7 @@ param(
     [string]$CliPath = $env:MULTICA_CLI,
     [string]$CliProfile = $env:MULTICA_BOOTSTRAP_PROFILE,
     [string]$ImageApiKey = $env:MULTICA_IMAGE_API_KEY,
-    [string]$PrimeDirectory = 'E:\Documents\WXWork\1688853548483782\Cache\File\2026-07\Prime Template - PNG file',
+    [string]$PrimeDirectory = 'C:\Users\zhangzhenyu\market-ad-samples\Prime Template - PNG file\Prime Template - PNG file',
     [string[]]$AppUIReferencePaths = @('E:\Documents\WXWork\1688853548483782\Cache\Image\2026-07\首页-新客未戳额(1).jpg'),
     [switch]$ResetBusinessConfig
 )
@@ -20,11 +20,11 @@ function Get-MulticaCliProfileArgs {
 }
 
 function Get-MulticaConfigPath {
-    $home = [Environment]::GetFolderPath('UserProfile')
-    if ([string]::IsNullOrWhiteSpace($home)) { $home = $env:USERPROFILE }
-    if ([string]::IsNullOrWhiteSpace($home)) { return $null }
+    $userHome = [Environment]::GetFolderPath('UserProfile')
+    if ([string]::IsNullOrWhiteSpace($userHome)) { $userHome = $env:USERPROFILE }
+    if ([string]::IsNullOrWhiteSpace($userHome)) { return $null }
 
-    $base = Join-Path $home '.multica'
+    $base = Join-Path $userHome '.multica'
     if ([string]::IsNullOrWhiteSpace($CliProfile)) {
         return Join-Path $base 'config.json'
     }
@@ -339,7 +339,10 @@ $skillTemplateRoot = Join-Path $repositoryRoot 'scripts\creative-platform-skills
 # Remove the previous demo's market-pack-as-Skill and fixed-stage role Skills.
 $legacySkillNames = @(
     'AdaKami Indonesia Market Pack',
-    '广告参考布局分析'
+    '广告参考布局分析',
+    '素材_技能_组件识别',
+    '市场包组件识别',
+    '素材_技能_贴片'
 )
 $existingSkills = Get-Items (Invoke-MulticaApi -Method Get -Path '/api/skills') ''
 foreach ($legacy in $existingSkills | Where-Object {
@@ -348,31 +351,34 @@ foreach ($legacy in $existingSkills | Where-Object {
     Invoke-MulticaApi -Method Delete -Path "/api/skills/$($legacy.id)" | Out-Null
 }
 
-$collectorSkill = Set-WorkspaceSkill -Name '素材_技能_采集' -Aliases @('AppGrowing 素材采集') -Description '创建 Crawl Run，只采集真实图片广告，并用原生 task fanout 自动预分析新增图片。' -Directory (Join-Path $skillTemplateRoot 'appgrowing-material-collector') -Config @{ kind = 'creative_role'; capability = 'material_collection'; version = 13 }
-$diagnosisSkill = Set-WorkspaceSkill -Name '素材_技能_诊断' -Aliases @('创意流程诊断', '出图诊断', 'AppGrowing 采集诊断') -Description '读取创意采集、出图、Prime、QC、订单和 daemon/runtime 证据，在允许范围内恢复或给出明确动作。' -Directory (Join-Path $skillTemplateRoot 'creative-flow-diagnostician') -Config @{ kind = 'creative_role'; capability = 'crawl_diagnosis'; version = 3 }
-$analysisSkill = Set-WorkspaceSkill -Name '素材_技能_分析' -Aliases @('广告参考分析') -Description '市场中立地读取真实图片，识别可变视觉区域、原图文字及坐标、主题、利益点、语义锚点、App UI 类型和布局约束。' -Directory (Join-Path $skillTemplateRoot 'ad-creative-analysis') -Config @{ kind = 'creative_role'; capability = 'reference_analysis'; version = 16 }
-$preAdaptationSkill = Set-WorkspaceSkill -Name '素材_技能_文案适配' -Aliases @('广告预适配') -Description '由模型按原图视觉区域选择已审核文案 key 和还款计划 key，服务端按冻结版本派生最终文字与数值。' -Directory (Join-Path $skillTemplateRoot 'ad-creative-pre-adaptation') -Config @{ kind = 'creative_role'; capability = 'pre_adaptation'; version = 18 }
-$marketPackExtractionSkill = Set-WorkspaceSkill -Name '素材_技能_组件识别' -Aliases @('市场包组件识别') -Description '读取完整成图，发现数量不定的品牌与合规组件并写回待确认候选。' -Directory (Join-Path $skillTemplateRoot 'ad-creative-market-pack-extraction') -Config @{ kind = 'creative_role'; capability = 'market_pack_component_extraction'; version = 2 }
-$planSkill = Set-WorkspaceSkill -Name '素材_技能_方案' -Aliases @('广告生成方案') -Description '消费冻结分析、逐块文案与市场快照，规划 3 个同题创意变体。' -Directory (Join-Path $skillTemplateRoot 'ad-creative-plan') -Config @{ kind = 'creative_role'; capability = 'generation_plan'; version = 28 }
-$productionSkill = Set-WorkspaceSkill -Name '素材_技能_出图' -Aliases @('广告图像编辑') -Description '使用冻结的逐块文字替换和 Prime 安全区护栏生成无品牌底图，保存完整模型证据。' -Directory (Join-Path $skillTemplateRoot 'ad-creative-production') -Config @{ kind = 'creative_role'; capability = 'image_edit'; version = 47 }
-$directEditSkill = Set-WorkspaceSkill -Name '素材_技能_改图' -Aliases @('广告图片直接修改') -Description '按用户原话修改固定底图；正式发布按 expected_sizes 进入 Prime 与独立 QC。' -Directory (Join-Path $skillTemplateRoot 'ad-creative-direct-edit') -Config @{ kind = 'creative_role'; capability = 'direct_image_edit'; version = 7 }
-$composeSkill = Set-WorkspaceSkill -Name '素材_技能_贴片' -Aliases @('Prime 完整贴图') -Description '按冻结市场合同固定坐标合成 expected_sizes，净化贴片背景并保存逐图机器证据。' -Directory (Join-Path $skillTemplateRoot 'ad-creative-prime-compose') -Config @{ kind = 'creative_role'; capability = 'prime_compose'; version = 24 }
-$qcSkill = Set-WorkspaceSkill -Name '素材_技能_质检' -Aliases @('广告成图验收') -Description '独立执行 technical 或 visual QC，并通过事务 barrier 收口。' -Directory (Join-Path $skillTemplateRoot 'ad-creative-qc') -Config @{ kind = 'creative_role'; capability = 'quality_control'; version = 23 }
+$collectorSkill = Set-WorkspaceSkill -Name '素材_技能_采集' -Aliases @('AppGrowing 素材采集') -Description '创建 Crawl Run，只采集真实图片广告，平台最多采集 2 张，并用原生 task fanout 自动预分析新增图片。' -Directory (Join-Path $skillTemplateRoot 'appgrowing-material-collector') -Config @{ kind = 'creative_role'; capability = 'material_collection'; version = 15 }
+$diagnosisSkill = Set-WorkspaceSkill -Name '素材_技能_诊断' -Aliases @('创意流程诊断', '出图诊断', 'AppGrowing 采集诊断') -Description '读取创意采集、出图、品牌组件、QC、订单和 daemon/runtime 证据，在允许范围内恢复或给出明确动作。' -Directory (Join-Path $skillTemplateRoot 'creative-flow-diagnostician') -Config @{ kind = 'creative_role'; capability = 'crawl_diagnosis'; version = 5 }
+$analysisSkill = Set-WorkspaceSkill -Name '素材_技能_分析' -Aliases @('广告参考分析') -Description '市场中立地读取真实图片，识别可变视觉区域、原图文字及坐标、主题、利益点、语义锚点、App UI 类型和布局约束；numeric 区域只包含可重排还款字段，混合区域必须拆分。' -Directory (Join-Path $skillTemplateRoot 'ad-creative-analysis') -Config @{ kind = 'creative_role'; capability = 'reference_analysis'; version = 17 }
+$preAdaptationSkill = Set-WorkspaceSkill -Name '素材_技能_文案适配' -Aliases @('广告预适配') -Description '按冻结资源完成可生产文案与数值适配；我方已审核还款方案优先，按我方可用数量落表，超出的原图数值默认移除，不借用其他期限金额；数值布局说明必须列出每个冻结展示值。' -Directory (Join-Path $skillTemplateRoot 'ad-creative-pre-adaptation') -Config @{ kind = 'creative_role'; capability = 'pre_adaptation'; version = 25 }
+$planSkill = Set-WorkspaceSkill -Name '素材_技能_方案' -Aliases @('广告生成方案') -Description '消费冻结分析、逐块文案与市场快照，严格继承顶层非空文案字段，规划 3 个同题变体及品牌组件视觉关系。' -Directory (Join-Path $skillTemplateRoot 'ad-creative-plan') -Config @{ kind = 'creative_role'; capability = 'generation_plan'; version = 34 }
+$productionSkill = Set-WorkspaceSkill -Name '素材_技能_出图' -Aliases @('广告图像编辑') -Description '使用 GPT Image 2 提示词模板和冻结业务结构生成无品牌三尺寸底图，严格继承所有非空 approved copy，明确 Input 1/Input 2 角色，候选图通过 candidate_id 受控下载，Prime context 按当前 revision 绑定，横版用 Y 轴压缩避开上下 Prime 组件带，provider 画布使用 16px 合法尺寸再归一化为交付尺寸，使用 canonical generated asset 写回并保存完整 trace 与 parent_direction_sha256；每个尺寸同步登记 Prime context、模型原图和规范化底图，比例异常保留一次压缩归一化，视觉遮挡最多执行一次定向 Image2 重排；缺尺寸不提前 complete，由平台自动续跑。' -Directory (Join-Path $skillTemplateRoot 'ad-creative-production') -Config @{ kind = 'creative_role'; capability = 'image_edit'; version = 86 }
+$directEditSkill = Set-WorkspaceSkill -Name '素材_技能_改图' -Aliases @('广告图片直接修改') -Description '按用户原话修改固定底图；正式发布按 expected_sizes 由后端合成品牌组件并独立 QC。' -Directory (Join-Path $skillTemplateRoot 'ad-creative-direct-edit') -Config @{ kind = 'creative_role'; capability = 'direct_image_edit'; version = 8 }
+$qcSkill = Set-WorkspaceSkill -Name '素材_技能_质检' -Aliases @('广告成图验收') -Description '独立执行 technical 或 visual QC，只记录成图检测与调整建议；证据契约失败由平台自动复用 Prime 资产重跑双 QC。' -Directory (Join-Path $skillTemplateRoot 'ad-creative-qc') -Config @{ kind = 'creative_role'; capability = 'quality_control'; version = 30 }
 
 $agents = Get-Items (Invoke-MulticaApi -Method Get -Path '/api/agents') ''
+foreach ($legacyPrimeAgent in @($agents | Where-Object {
+    ($_.name -eq '素材_贴片' -or $_.name -eq '广告贴片智能体') -and
+    -not $_.archived_at
+})) {
+    Invoke-MulticaApi -Method Post -Path "/api/agents/$($legacyPrimeAgent.id)/archive" | Out-Null
+}
 $leaderSeed = $agents | Where-Object { $_.name -eq '素材_流程' -or $_.name -eq '素材_统筹' -or $_.name -eq '素材小队 Leader' } | Select-Object -First 1
 if (-not $leaderSeed) { throw '素材_流程 does not exist' }
 $runtimeID = $leaderSeed.runtime_id
 
 $specialistHandoff = '只处理 task context 指定的对象、revision 和 scope；按绑定 Skill 写结构化领域结果和机器证据。不得创建或修改 Issue，不得用评论代替领域数据。输入、凭证、工具或写回失败时保留已成功对象，写真实 error_code/error_message 并让当前 task 失败；兄弟对象继续。'
-$analyst = Set-AgentDefinition -Name '素材_分析' -Aliases @('广告参考分析智能体') -Description '按 task workflow 读取真实像素、识别可变视觉区域、写市场中立分析，并在后台完成可确认的文案与数值预适配。' -Instructions "全程使用中文。creative_reference_analysis 只写指定 candidate/version 的市场中立 Source Analysis；每个可变原图文字区块必须归入唯一 copy 或 numeric 视觉区域，不能把同一画面组件拆入两条处理路径。creative_pre_adaptation 只消费指定的冻结市场包和文案库，逐区域优先绑定已审核内容；无可用项时先给出有依据的公式计算或系统推荐并标为待确认，不能伪装成已绑定，也不能改写原图事实或虚构金融文案；creative_market_pack_component_extraction 只写指定 extraction 的待确认组件候选。三种输入和产物不得混用，不生成图片，不修改市场包或文案库。$specialistHandoff" -SkillIDs @($analysisSkill.id, $preAdaptationSkill.id, $marketPackExtractionSkill.id) -RuntimeID $runtimeID -Model 'gpt-5.6-terra' -ThinkingLevel 'medium' -MaxConcurrentTasks 6
-$collector = Set-AgentDefinition -Name '素材_采集' -Aliases @('AppGrowing 素材采集智能体') -Description '按 task 配置创建 Crawl Run，只导入真实图片广告并委派新增图片分析。' -Instructions "全程使用中文。只执行 task context 和 AutoPilot 明确的 AppGrowing 查询；只导入 asset_type=image，视频、非图片和未知类型不占用采集配额。使用注入的 analysis_agent_id=$($analyst.id)，不得按名称猜测。筛选、分页、预算和 fallback 由 task/平台配置决定。结果、证据和失败写 Crawl Run；导入后用原生 fanout 委派本次新增图片，不创建 Issue，不使用测试数据。" -SkillIDs @($collectorSkill.id) -RuntimeID $runtimeID -MaxConcurrentTasks 6
-$diagnostician = Set-AgentDefinition -Name '素材_诊断' -Aliases @('创意流程诊断智能体', '出图诊断智能体', 'AppGrowing 采集诊断智能体') -Description '诊断创意采集、出图、Prime、QC、订单状态和 daemon/runtime 异常，并通过平台入口执行受控恢复。' -Instructions '全程使用中文。处理 creative_crawl_diagnosis、订单短 ID、Variant 标签、页面卡片文案、报错文本和用户明确指向的创意流程诊断。先定位当前订单、order item、Variant、revision、task、daemon/runtime 与 Skill 快照证据，再给结论；需要恢复时只通过 multica CLI 或平台 API 重试、取消、fanout、推进明确授权的 Variant revision 或调用现有修复入口。不得直接写 DB、修改凭证、业务筛选、市场包、文案库或生产代码，不得把诊断图当成交付资产；修改前说明对象和原因，修改后回读验证。' -SkillIDs @($diagnosisSkill.id) -RuntimeID $runtimeID -Model 'gpt-5.6-luna' -ThinkingLevel 'medium' -MaxConcurrentTasks 2
+$analyst = Set-AgentDefinition -Name '素材_分析' -Aliases @('广告参考分析智能体') -Description '按 task workflow 读取真实像素、识别可变视觉区域、写市场中立分析，并在后台完成可确认的文案与数值预适配。' -Instructions "全程使用中文。creative_reference_analysis 只写指定 candidate/version 的市场中立 Source Analysis；每个可变原图文字区块必须归入唯一 copy 或 numeric 视觉区域，不能把同一画面组件拆入两条处理路径。creative_pre_adaptation 只消费指定的冻结市场包和文案库，逐区域优先绑定已审核内容；没有兼容已审核片段的普通 headline、subheadline、benefit、supporting 或 cta 区块，必须按市场语言、区块职责、原图语义和可读长度生成一个新的 recommended 文案，source_keys 必须为空数组，recommendation_basis 必须说明依据，页面会标记待用户确认；不得引用不存在的 fragment key。本金、期限、月供、总利息、总还款、利率、法律文字和品牌事实没有审核来源或冻结计算时不得凭空生成，逐项写 missing replacement。多行数值表不要求原图行数与我方方案数量相等：按表格语义和期限从冻结 approved repayment plan 取我方兼容方案，实际渲染行数取原图可渲染行数与我方可用方案数的较小值；每个实际渲染行写 numeric_layouts，且每个 layout 的 render_instruction 必须逐字列出其 scenario_ids 对应 selection.values 中每个 target_columns 的完整冻结展示值，不能只写按行展示；源图多出的数值块逐项写空 missing 作为默认移除项。没有我方某一期限方案时不得借用其他期限金额；整体重构为我方支持的期限列，或让该列源块留空移除。不能把整表硬塞进一个 layout，也不能伪装成已绑定或改写原图事实。输入和产物不得混用，不生成图片，不修改市场包或文案库。$specialistHandoff" -SkillIDs @($analysisSkill.id, $preAdaptationSkill.id) -RuntimeID $runtimeID -Model 'gpt-5.6-terra' -ThinkingLevel 'medium' -MaxConcurrentTasks 6
+$collector = Set-AgentDefinition -Name '素材_采集' -Aliases @('AppGrowing 素材采集智能体') -Description '按 task 配置创建 Crawl Run，只导入真实图片广告并委派新增图片分析。' -Instructions "全程使用中文。只执行 task context 和 AutoPilot 明确的 AppGrowing 查询；只导入 asset_type=image，视频、非图片和未知类型不占用采集配额。analysis_agent_id、工作区资源和数量限制由平台按当前 workspace installation 注入，不从名称、评论或历史说明猜测。筛选、分页、预算和 fallback 由 task/平台配置决定。结果、证据和失败写 Crawl Run；导入后用原生 fanout 委派本次新增图片，不创建 Issue，不使用测试数据。" -SkillIDs @($collectorSkill.id) -RuntimeID $runtimeID -MaxConcurrentTasks 6
+$diagnostician = Set-AgentDefinition -Name '素材_诊断' -Aliases @('创意流程诊断智能体', '出图诊断智能体', 'AppGrowing 采集诊断智能体') -Description '诊断创意采集、出图、品牌组件、QC、订单状态和 daemon/runtime 异常，并通过平台入口执行受控恢复。' -Instructions '全程使用中文。处理 creative_crawl_diagnosis、订单短 ID、Variant 标签、页面卡片文案、报错文本和用户明确指向的创意流程诊断。先定位当前订单、order item、Variant、revision、task、daemon/runtime 与 Skill 快照证据，再给结论；需要恢复时只通过 multica CLI 或平台 API 重试、取消、fanout、推进明确授权的 Variant revision 或调用现有修复入口。不得直接写 DB、修改凭证、业务筛选、市场包、文案库或生产代码，不得把诊断图当成交付资产；修改前说明对象和原因，修改后回读验证。' -SkillIDs @($diagnosisSkill.id) -RuntimeID $runtimeID -Model 'gpt-5.6-luna' -ThinkingLevel 'medium' -MaxConcurrentTasks 2
 $planner = Set-AgentDefinition -Name '素材_方案' -Aliases @('生成方案智能体') -Description '消费冻结分析、文案与市场快照，写 3 个同题 Variant 并委派生产。' -Instructions "全程使用中文。只执行 creative_plan。copy_snapshot 与 market snapshot 是唯一文案、事实和资源真值；不得重选或改写。写 V01-V03 结构化 brief，保留语义与主体，只改变表达；将缺失 production items 一次 fanout。需要输入时写 needs_input/action_required，不生成图片。$specialistHandoff" -SkillIDs @($planSkill.id) -RuntimeID $runtimeID -Model 'gpt-5.6-terra' -ThinkingLevel 'medium' -MaxConcurrentTasks 6
-$producer = Set-AgentDefinition -Name '素材_出图' -Aliases @('图像编辑智能体') -Description '为标准 Variant 生成同内容族三尺寸底图并委派 Prime。' -Instructions "全程使用中文。只执行 creative_production；使用冻结 brief/copy_snapshot 和无品牌来源，写 generated assets、lineage 与 CLI 原始模型证据，只补当前 revision 的缺失尺寸。调用 multica image edit/edit-batch 时必须给 Bash 工具设置 timeout_ms 至少 900000（15 分钟），等待 CLI 返回完整 JSON 后再登记资产。不得处理 direct_edit、Prime、QC、采集或分析；齐备后只委派该 Variant 的 Prime。$specialistHandoff" -SkillIDs @($productionSkill.id) -RuntimeID $runtimeID -Model 'gpt-5.6-terra' -ThinkingLevel 'low' -MaxConcurrentTasks 10
-$directEditor = Set-AgentDefinition -Name '素材_改图' -Aliases @('图片直接修改智能体') -Description '按用户原话修改固定来源底图，并按 delivery mode 决定是否委派 Prime。' -Instructions "全程使用中文。只执行 creative_direct_edit；source asset 不可覆盖，输出 revision 加一并记录 lineage 和 CLI 原始模型证据。preview 到 generated 结束；publish 只按 context expected_sizes 委派 Prime。不得触发采集、分析、方案或标准生产。$specialistHandoff" -SkillIDs @($directEditSkill.id) -RuntimeID $runtimeID -Model 'gpt-5.6-terra' -ThinkingLevel 'low' -MaxConcurrentTasks 10
-$composer = Set-AgentDefinition -Name '素材_贴片' -Aliases @('Prime 包装智能体') -Description '按冻结市场合同批量合成 Prime 包并委派独立双路 QC。' -Instructions "全程使用中文。只执行 creative_prime；对 context 的 Variant/revision/expected_sizes 使用冻结 market snapshot 的固定坐标确定性合成，写 primed assets、manifest、固定背景净化和 QR 证据。不得写死组件、文字或坐标，不得动态移动 Prime 组件，不调用图像模型；整包齐备后一次 fanout 缺失 QC lanes。$specialistHandoff" -SkillIDs @($composeSkill.id) -RuntimeID $runtimeID -Model 'gpt-5.6-terra' -ThinkingLevel 'low' -MaxConcurrentTasks 6
-$reviewer = Set-AgentDefinition -Name '素材_质检' -Aliases @('广告验收智能体') -Description '独立执行一个 technical 或 visual lane，并调用 QC barrier。' -Instructions "全程使用中文。只执行 context 指定 QC lane，读取同 Variant/revision/expected_sizes 的 Prime 包。technical 检查文件、尺寸、Prime、QR 与实际遮挡；visual 检查冻结文案、语义、一致性与画质。写独立 QC Report 后调用 qc-finalize；阻断必须 failed，不自动返工，不影响兄弟 Variant。$specialistHandoff" -SkillIDs @($qcSkill.id) -RuntimeID $runtimeID -Model 'gpt-5.6-terra' -ThinkingLevel 'medium' -MaxConcurrentTasks 6
+$producer = Set-AgentDefinition -Name '素材_出图' -Aliases @('图像编辑智能体') -Description '按 GPT Image 2 提示词模板为标准 Variant 生成同内容族三尺寸无品牌底图，并在真实 Prime 遮挡时执行一次定向 Image2 重排。' -Instructions "全程使用中文。只执行 creative_production；使用冻结 brief/copy_snapshot、实际 Prime context 和无品牌来源，严格按生产 Skill 的 GPT Image 2 模板写每个尺寸的 prompt：先写 COMPOSITION GATE，再写明确的 Input 1/Input 2 角色；横版拥挤时沿 Y 轴压缩留白、模块间距和行距，不删 approved copy 或表格结构。写 generated assets、lineage 与 CLI 原始模型证据，只补当前 revision 的缺失尺寸。保持 prompt 1800-2800 字符、无坐标、无审计重复，并记录 prompt/hash；prompt-contract 必须带当前 brief 的 parent_direction_sha256。调用 multica image edit/edit-batch 时必须给 Bash 工具设置 timeout_ms 至少 1500000（25 分钟），等待 CLI 返回完整 JSON 后，立即按生产 Skill 调用 register_process_assets.py 登记当前尺寸的 Prime context、模型原图和规范化底图，并回读订单确认 registered 数量和归属。遇到 qc_visual_rework 时只对失败尺寸执行一次 Image2 重排，仍失败就写 action_required。比例重试仍失败时保留最后回图并按 Skill 的 aspect fallback 规则归一，不得丢弃尺寸。不得处理 direct_edit、品牌组件、QC、采集或分析；只有当前 revision 的全部 expected_sizes 写回 generated/completed 且过程证据登记回读成功后才调用 task complete，缺尺寸不能提前完成，平台会自动创建有上限的 fresh continuation。最后一个 expected size 登记后由后端自动合成品牌组件并创建 QC。$specialistHandoff" -SkillIDs @($productionSkill.id) -RuntimeID $runtimeID -Model 'gpt-5.6-terra' -ThinkingLevel 'low' -MaxConcurrentTasks 10
+$directEditor = Set-AgentDefinition -Name '素材_改图' -Aliases @('图片直接修改智能体') -Description '按用户原话修改固定来源底图。' -Instructions "全程使用中文。只执行 creative_direct_edit；source asset 不可覆盖，输出 revision 加一并记录 lineage 和 CLI 原始模型证据。preview 到 generated 结束；publish 的最后一个 expected size 登记后由后端自动合成品牌组件并创建 QC。不得触发采集、分析、方案或标准生产。$specialistHandoff" -SkillIDs @($directEditSkill.id) -RuntimeID $runtimeID -Model 'gpt-5.6-terra' -ThinkingLevel 'low' -MaxConcurrentTasks 10
+$reviewer = Set-AgentDefinition -Name '素材_质检' -Aliases @('广告验收智能体') -Description '独立执行一个 technical 或 visual lane，按三道闸门验收成图并输出尺寸级阻断或建议；证据契约错误由平台自动恢复双 QC。' -Instructions "全程使用中文。只执行 context 指定 QC lane，读取同 Variant/revision/expected_sizes 的完整品牌组件包。technical 检查文件、尺寸、品牌组件、模板布局和机器可见性证据；visual 必须逐张检查冻结文案和关键组件是否完整、顶部和底部 Prime 是否遮挡正文、Logo/条款是否可读，以及中部是否出现空框或内容缺失，并核对 generated evidence 的 parent_direction_sha256 与当前 brief 一致。写独立 QC Report 后调用 qc-finalize 完成归档。对 actual_prime_obstruction、predicted_prime_obstruction、official_prime_text_unreadable、generated_content_missing 写 failed 和每个失败尺寸一个 blocking_failure；证据缺失、manifest/compose 不匹配等 delegation/contract 错误也要写结构化 blocking_failure，平台会自动复用已完成 Prime 资产重跑 technical 和 visual 一次。其他发现写 warning。服务端对视觉结构失败最多为当前 Variant 自动返工一轮，不能改 Prime，不能影响兄弟 Variant。$specialistHandoff" -SkillIDs @($qcSkill.id) -RuntimeID $runtimeID -Model 'gpt-5.6-terra' -ThinkingLevel 'medium' -MaxConcurrentTasks 6
 
 $producerImageCredentialConfigured = Set-AgentImageCredential -AgentID $producer.id -ApiKey $ImageApiKey
 $directEditorImageCredentialConfigured = Set-AgentImageCredential -AgentID $directEditor.id -ApiKey $ImageApiKey
@@ -389,7 +395,7 @@ if (-not $squad) {
 }
 Invoke-MulticaApi -Method Put -Path "/api/squads/$($squad.id)" -Body @{
     name = '素材流程小队'
-    instructions = 'Leader 读取 Creative Order 领域状态以及名册中每个智能体的职责和平台 Skill，动态选择成员。一个订单只关联一个用户可见 Issue；分析、方案、变体生成、Prime 和 QC 通过原生 task fanout 委派，不创建子 Issue。领域对象保存过程与证据，Issue 只保留用户目标、决定、真实阻塞和最终验收。'
+    instructions = 'Leader 读取 Creative Order 领域状态以及名册中每个智能体的职责和平台 Skill，动态选择成员。一个订单只关联一个用户可见 Issue；分析、方案、变体生成和 QC 通过原生 task fanout 委派，品牌组件由后端确定性合成，不创建子 Issue。领域对象保存过程与证据，Issue 只保留用户目标、决定、真实阻塞和最终验收。'
 } | Out-Null
 
 $memberDefinitions = @(
@@ -399,10 +405,14 @@ $memberDefinitions = @(
     @{ agent = $planner; role = '生成方案' },
     @{ agent = $producer; role = '图像编辑' },
     @{ agent = $directEditor; role = '图片直接修改' },
-    @{ agent = $composer; role = '完整贴图' },
     @{ agent = $reviewer; role = '质量验收' }
 )
 $members = Get-Items (Invoke-MulticaApi -Method Get -Path "/api/squads/$($squad.id)/members") ''
+foreach ($legacyMember in @($members | Where-Object { $_.member_type -eq 'agent' -and $_.role -eq '完整贴图' })) {
+    Invoke-MulticaApi -Method Delete -Path "/api/squads/$($squad.id)/members" -Body @{
+        member_type = 'agent'; member_id = $legacyMember.member_id
+    } | Out-Null
+}
 foreach ($definition in $memberDefinitions) {
     $existing = $members | Where-Object { $_.member_type -eq 'agent' -and $_.member_id -eq $definition.agent.id } | Select-Object -First 1
     if (-not $existing) {
@@ -417,7 +427,7 @@ foreach ($definition in $memberDefinitions) {
 }
 
 $leaderSkillDirectory = Join-Path $skillTemplateRoot 'ad-creative-leadership'
-$leaderSkill = Set-WorkspaceSkill -Name '素材_技能_流程' -Aliases @('素材_技能_统筹', '创意素材协作', '素材小队 Leader 编排') -Description '使用原生 task fanout 启动并恢复标准生产或直接改图，汇总结构化结果。' -Directory $leaderSkillDirectory -Config @{ kind = 'creative_role'; capability = 'creative_leadership'; version = 47 }
+$leaderSkill = Set-WorkspaceSkill -Name '素材_技能_流程' -Aliases @('素材_技能_统筹', '创意素材协作', '素材小队 Leader 编排') -Description '使用原生 task fanout 启动并恢复标准生产或直接改图，汇总结构化结果。' -Directory $leaderSkillDirectory -Config @{ kind = 'creative_role'; capability = 'creative_leadership'; version = 49 }
 $leader = Set-AgentDefinition -Name '素材_流程' -Aliases @('素材_统筹', '素材小队 Leader') -Description '按冻结能力映射启动和恢复 Creative Order，并负责用户汇总。' -Instructions '全程使用中文。只执行判断、原生 fanout、异常恢复和用户汇总，不代替专业角色。标准订单只创建方案 task；direct_edit 只创建直接修改 task；正常下游由各阶段唯一 owner 续链。每次唤醒回读订单、task 与冻结 squad snapshot，按 target/source/item_key 只补真正缺失项，一次提交后立即结束。不得按名称猜 Agent，不轮询，不创建阶段子 Issue；Issue 只记录人工决定、真实阻塞和最终验收。' -SkillIDs @($leaderSkill.id) -RuntimeID $runtimeID -Model 'gpt-5.6-terra' -ThinkingLevel 'medium' -MaxConcurrentTasks 6
 
 $resources = Get-Items (Invoke-MulticaApi -Method Get -Path '/api/creative/resources') 'resources'
@@ -549,36 +559,37 @@ $marketPackHasCalculationRules = $false
 if ($marketPack -and $marketPack.config -and $marketPack.config.PSObject.Properties.Name -contains 'calculation_rules') {
     $marketPackHasCalculationRules = @($marketPack.config.calculation_rules).Count -gt 0
 }
-$seedMarketPack = $marketPackIsNew -or $ResetBusinessConfig -or ([int]$marketPack.published_version -lt 1) -or -not $marketPackHasPreAdaptationDefault -or -not $marketPackHasCalculationRules
-$primeComponentDirectory = Join-Path $PrimeDirectory '.multica-prime-components-v2'
-$primeExtractionManifestPath = Join-Path $primeComponentDirectory 'extract-manifest.json'
-$primeLogoPath = Join-Path $primeComponentDirectory 'adakami-prime-logo.png'
-$primeTermsPath = Join-Path $primeComponentDirectory 'adakami-prime-terms.png'
-$primeQRPath = Join-Path $primeComponentDirectory 'adakami-prime-qr.png'
-$primeStoreBadgesPath = Join-Path $primeComponentDirectory 'adakami-prime-store-badges.png'
-$primeRegulatoryPath = Join-Path $primeComponentDirectory 'adakami-prime-regulatory.png'
-$primeAFPIPath = Join-Path $primeComponentDirectory 'adakami-prime-afpi.png'
-$primePindaiLegalPath = Join-Path $primeComponentDirectory 'adakami-prime-pindai-legal.png'
-$primeExtractionManifest = @{
-    source = Join-Path $PrimeDirectory '11-01.png'
-    authored_size = @(1080, 1080)
-    components = @(
-        @{ role = 'prime_logo'; source_rect = @(30, 28, 314, 100); output = $primeLogoPath; background = 'transparent' },
-        @{ role = 'prime_terms'; source_rect = @(777, 32, 982, 95); output = $primeTermsPath; background = 'transparent' },
-        @{ role = 'prime_qr'; source_rect = @(983, 29, 1053, 99); output = $primeQRPath; background = 'opaque'; normalize_qr = $true; expected_payload = 'https://www.adakami.id/termsandconditions' },
-        @{ role = 'prime_store_badges'; source_rect = @(30, 1013, 284, 1051); output = $primeStoreBadgesPath; background = 'transparent' },
-        @{ role = 'prime_regulatory'; source_rect = @(378, 1010, 913, 1053); output = $primeRegulatoryPath; background = 'transparent' },
-        @{ role = 'prime_afpi'; source_rect = @(918, 1008, 982, 1050); output = $primeAFPIPath; background = 'transparent' },
-        @{ role = 'prime_pindai_legal'; source_rect = @(988, 984, 1054, 1057); output = $primePindaiLegalPath; background = 'transparent' }
-    )
+$legacyPrimeQRConfigFields = @('qr_payload', 'qr_canonical_payload', 'qr_allowed_domains', 'qr_approval_status', 'qr_approval_note')
+$marketPackHasLegacyQRConfig = $false
+if ($marketPack -and $marketPack.config) {
+    $marketPackHasLegacyQRConfig = @($legacyPrimeQRConfigFields | Where-Object { $marketPack.config.PSObject.Properties.Name -contains $_ }).Count -gt 0
 }
-if ($seedMarketPack) {
-    New-Item -ItemType Directory -Force -Path $primeComponentDirectory | Out-Null
-    $primeExtractionManifest | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $primeExtractionManifestPath -Encoding utf8
-    $primeExtractor = Join-Path $skillTemplateRoot 'ad-creative-prime-compose\references\extract_prime_components.py'
-    $primeExtractionResult = & python $primeExtractor --manifest $primeExtractionManifestPath
-    if ($LASTEXITCODE -ne 0) { throw "Prime component extraction failed: $primeExtractionResult" }
+$primeTemplates = @(
+    @{ role = 'prime_light_square'; label = '明亮底图方案 · 方形 · 11-01.png'; path = (Join-Path $PrimeDirectory '11-01.png'); size = '1080x1080'; family = 'light_background' },
+    @{ role = 'prime_light_landscape'; label = '明亮底图方案 · 横版 · 191-01.png'; path = (Join-Path $PrimeDirectory '191-01.png'); size = '1200x628'; family = 'light_background' },
+    @{ role = 'prime_light_portrait'; label = '明亮底图方案 · 竖版 · 45-01.png'; path = (Join-Path $PrimeDirectory '45-01.png'); size = '800x1000'; family = 'light_background' },
+    @{ role = 'prime_dark_square'; label = '深色底图方案 · 方形 · 11-02.png'; path = (Join-Path $PrimeDirectory '11-02.png'); size = '1080x1080'; family = 'dark_background' },
+    @{ role = 'prime_dark_landscape'; label = '深色底图方案 · 横版 · 191-03.png'; path = (Join-Path $PrimeDirectory '191-03.png'); size = '1200x628'; family = 'dark_background' },
+    @{ role = 'prime_dark_portrait'; label = '深色底图方案 · 竖版 · 45-03.png'; path = (Join-Path $PrimeDirectory '45-03.png'); size = '800x1000'; family = 'dark_background' }
+)
+$requiredPrimeTemplateRoles = @($primeTemplates | ForEach-Object { $_.role })
+$marketPackHasPrimeTemplateSet = $false
+if ($marketPack -and $marketPack.config -and $marketPack.config.PSObject.Properties.Name -contains 'prime_template_set') {
+    $templateSet = $marketPack.config.prime_template_set
+    if ($templateSet -and $templateSet.PSObject.Properties.Name -contains 'families') {
+        $configuredRoles = @($templateSet.families | ForEach-Object { $_.templates.PSObject.Properties | ForEach-Object { $_.Value.source_role } })
+        $marketPackHasPrimeTemplateSet = $templateSet.schema_version -eq 2 -and $templateSet.selection_mode -eq 'automatic_family_contrast' -and @($templateSet.families).Count -eq 2 -and $configuredRoles.Count -eq $requiredPrimeTemplateRoles.Count -and @($configuredRoles | Where-Object { $_ -notin $requiredPrimeTemplateRoles }).Count -eq 0
+    }
 }
+$marketPackHasExactPrimeFiles = $false
+if ($marketPack) {
+    $marketFiles = Get-Items (Invoke-MulticaApi -Method Get -Path "/api/creative/resources/$($marketPack.id)/files") 'files'
+    $primeFiles = @($marketFiles | Where-Object { $_.role -like 'prime_*' })
+    $primeRoles = @($primeFiles | ForEach-Object { $_.role } | Select-Object -Unique)
+    $marketPackHasExactPrimeFiles = $primeFiles.Count -eq $requiredPrimeTemplateRoles.Count -and $primeRoles.Count -eq $requiredPrimeTemplateRoles.Count -and @($primeRoles | Where-Object { $_ -notin $requiredPrimeTemplateRoles }).Count -eq 0
+}
+$marketPackIsCurrentPublished = $marketPack -and ([int]$marketPack.version -eq [int]$marketPack.published_version) -and $marketPack.config.prime_template_set_validation.status -eq 'passed'
+$seedMarketPack = $marketPackIsNew -or $ResetBusinessConfig -or $marketPackHasLegacyQRConfig -or -not $marketPackIsCurrentPublished -or -not $marketPackHasPreAdaptationDefault -or -not $marketPackHasCalculationRules -or -not $marketPackHasPrimeTemplateSet -or -not $marketPackHasExactPrimeFiles
 $marketConfig = @{
     contract_authority = 'published_market_pack_snapshot'
     rule_precedence = @('structured_config','versioned_attachments')
@@ -608,63 +619,16 @@ $marketConfig = @{
             display = @{ currency = 'IDR'; currency_prefix = 'Rp'; group_separator = '.'; monthly_rounding = 'nearest_integer' }
         }
     )
-    benefit_taxonomy = @('额度','低利率','费用减免','免息','灵活期限','快速放款','低门槛','还款优惠')
-    theme_presets = @('世界杯 / 足球赛事','斋月','开斋节','发薪日','开学季','年末','日常生活')
-    qr_payload = 'https://www.adakami.id/termsandconditions'
-    qr_canonical_payload = 'https://www.adakami.id/termsandconditions'
-    qr_allowed_domains = @('www.adakami.id')
-    qr_approval_status = 'approved'
-    qr_approval_note = '独立静态二维码资源机器解码为该条款地址，并在三个尺寸中复用。'
-    compliance_rules = '只能使用文案库已审核的金融事实；不得复制竞品品牌、金额、法律文字或二维码。启用的 Prime 组件必须完整呈现，最终二维码必须机器可解码。'
+    compliance_rules = '只能使用文案库已审核的金融事实；不得复制竞品品牌、金额、法律文字或二维码。完整 Prime 模板按上传文件原样叠加，平台不生成或修改品牌与合规贴片。'
     naming_rule = '{month}_{brand}_{market}_{candidate}_{variant}_{size}_v{revision}.png'
     output_sizes = @('1080x1080','1200x628','800x1000')
-    prime_composition = @{
+    prime_template_set = @{
         schema_version = 2
-        qr_mode = 'static'
-        components = @(
-            @{ id = 'logo'; label = '品牌 Logo'; kind = 'image'; enabled = $true; source_role = 'prime_logo'; content = ''; backdrop_rule = 'none' },
-            @{ id = 'terms'; label = '条款文字'; kind = 'image'; enabled = $true; source_role = 'prime_terms'; content = ''; backdrop_rule = 'none' },
-            @{ id = 'qr'; label = '二维码'; kind = 'qr'; enabled = $true; source_role = 'prime_qr'; content = ''; backdrop_rule = 'light' },
-            @{ id = 'store_badges'; label = '应用商店标识'; kind = 'image'; enabled = $true; source_role = 'prime_store_badges'; content = ''; backdrop_rule = 'none' },
-            @{ id = 'regulatory'; label = '监管说明'; kind = 'image'; enabled = $true; source_role = 'prime_regulatory'; content = ''; backdrop_rule = 'none' },
-            @{ id = 'afpi'; label = 'AFPI 标识'; kind = 'image'; enabled = $true; source_role = 'prime_afpi'; content = ''; backdrop_rule = 'none' },
-            @{ id = 'pindai_legal'; label = 'Pindai Legal'; kind = 'image'; enabled = $true; source_role = 'prime_pindai_legal'; content = ''; backdrop_rule = 'none' }
+        selection_mode = 'automatic_family_contrast'
+        families = @(
+            @{ id = 'light_background'; label = '明亮底图方案'; description = '绿色 AdaKami 标识，适合浅色或明亮的画面。'; templates = @{ '1080x1080' = @{ source_role = 'prime_light_square' }; '1200x628' = @{ source_role = 'prime_light_landscape' }; '800x1000' = @{ source_role = 'prime_light_portrait' } } },
+            @{ id = 'dark_background'; label = '深色底图方案'; description = '白色 AdaKami 标识，适合深色或低明度的画面。'; templates = @{ '1080x1080' = @{ source_role = 'prime_dark_square' }; '1200x628' = @{ source_role = 'prime_dark_landscape' }; '800x1000' = @{ source_role = 'prime_dark_portrait' } } }
         )
-        layouts = @{
-            '1080x1080' = @{
-                components = @{
-                    logo = @{ destination_rect = @(30, 28, 314, 100) }
-                    terms = @{ destination_rect = @(777, 32, 982, 95) }
-                    qr = @{ destination_rect = @(983, 29, 1053, 99) }
-                    store_badges = @{ destination_rect = @(30, 1013, 284, 1051) }
-                    regulatory = @{ destination_rect = @(378, 1010, 913, 1053) }
-                    afpi = @{ destination_rect = @(918, 1008, 982, 1053) }
-                    pindai_legal = @{ destination_rect = @(988, 984, 1054, 1057) }
-                }
-            }
-            '1200x628' = @{
-                components = @{
-                    logo = @{ destination_rect = @(21, 22, 214, 70) }
-                    terms = @{ destination_rect = @(946, 22, 1116, 80) }
-                    qr = @{ destination_rect = @(1120, 16, 1192, 88) }
-                    store_badges = @{ destination_rect = @(21, 582, 187, 607) }
-                    regulatory = @{ destination_rect = @(793, 572, 1090, 608) }
-                    afpi = @{ destination_rect = @(1093, 565, 1138, 609) }
-                    pindai_legal = @{ destination_rect = @(1140, 552, 1182, 610) }
-                }
-            }
-            '800x1000' = @{
-                components = @{
-                    logo = @{ destination_rect = @(25, 23, 234, 76) }
-                    terms = @{ destination_rect = @(540, 24, 718, 82) }
-                    qr = @{ destination_rect = @(722, 18, 790, 86) }
-                    store_badges = @{ destination_rect = @(25, 946, 230, 976) }
-                    regulatory = @{ destination_rect = @(281, 947, 630, 969) }
-                    afpi = @{ destination_rect = @(635, 940, 710, 976) }
-                    pindai_legal = @{ destination_rect = @(727, 922, 775, 976) }
-                }
-            }
-        }
     }
 }
 if (-not $marketPack) {
@@ -677,15 +641,11 @@ if (-not $marketPack) {
 }
 
 if ($seedMarketPack) {
-    Add-MarketFile -MarketPack $marketPack -Role 'prime_logo' -Label 'Prime · AdaKami Logo' -Path $primeLogoPath -Metadata @{ source_type = 'standalone_component'; reused_across_sizes = $true }
-    Add-MarketFile -MarketPack $marketPack -Role 'prime_terms' -Label 'Prime · 条款文字贴片' -Path $primeTermsPath -Metadata @{ source_type = 'standalone_component'; reused_across_sizes = $true }
-    Add-MarketFile -MarketPack $marketPack -Role 'prime_qr' -Label 'Prime · 条款二维码' -Path $primeQRPath -Metadata @{ source_type = 'standalone_component'; reused_across_sizes = $true }
-    Add-MarketFile -MarketPack $marketPack -Role 'prime_store_badges' -Label 'Prime · 应用商店标识' -Path $primeStoreBadgesPath -Metadata @{ source_type = 'standalone_component'; reused_across_sizes = $true }
-    Add-MarketFile -MarketPack $marketPack -Role 'prime_regulatory' -Label 'Prime · 监管说明贴片' -Path $primeRegulatoryPath -Metadata @{ source_type = 'standalone_component'; reused_across_sizes = $true }
-    Add-MarketFile -MarketPack $marketPack -Role 'prime_afpi' -Label 'Prime · AFPI 标识' -Path $primeAFPIPath -Metadata @{ source_type = 'standalone_component'; reused_across_sizes = $true }
-    Add-MarketFile -MarketPack $marketPack -Role 'prime_pindai_legal' -Label 'Prime · Pindai Legal' -Path $primePindaiLegalPath -Metadata @{ source_type = 'standalone_component'; reused_across_sizes = $true }
+    foreach ($template in $primeTemplates) {
+        Add-MarketFile -MarketPack $marketPack -Role $template.role -Label $template.label -Path $template.path -Metadata @{ source_type = 'full_transparent_prime_template'; output_size = $template.size; family = $template.family }
+    }
     $marketFiles = Get-Items (Invoke-MulticaApi -Method Get -Path "/api/creative/resources/$($marketPack.id)/files") 'files'
-    foreach ($obsoleteFile in @($marketFiles | Where-Object { @('compose_script','prime_square','prime_landscape','prime_portrait','brand_guideline') -contains $_.role })) {
+    foreach ($obsoleteFile in @($marketFiles | Where-Object { $_.role -like 'prime_*' -and $_.role -notin $requiredPrimeTemplateRoles })) {
         Invoke-MulticaApi -Method Delete -Path "/api/creative/resources/$($marketPack.id)/files/$($obsoleteFile.id)" | Out-Null
     }
     foreach ($appUIPath in $AppUIReferencePaths) {
@@ -710,9 +670,7 @@ $autopilot = $autopilots | Where-Object { $_.title -eq '印尼竞品素材周度
 $autopilotDescription = @"
 每周抓取 AppGrowing 印度尼西亚的现金贷/金融竞品素材，并创建一个可追踪的 Crawl Run。
 
-市场资源包 ID：$($marketPack.id)
-执行小队 ID：$($squad.id)
-参考分析智能体 ID：$($analyst.id)
+工作区创意工厂安装记录负责解析市场资源包、执行小队和参考分析智能体；不要在 AutoPilot 说明中保存 UUID。
 
 竞品：Easycash、Kredit Pintar、Adapundi、BantuSaku、Rupiah Cepat、UATAS、JULO
 优先竞品：Easycash、Kredit Pintar、Adapundi
@@ -722,8 +680,8 @@ $autopilotDescription = @"
 媒体：未限定
 时间范围：最近 30 天
 选材：新素材 40%，投放少于 7 天且曝光估算大于 1K；跑量素材 60%，投放超过 30 天且曝光估算不低于 10M
-素材类型：仅图片广告（asset_type=image）。视频、非图片和无法识别类型必须在选材前排除，不占用 25 条配额，也不进入 Crawl Run 或素材库。
-最多输出：25 张图片
+素材类型：仅图片广告（asset_type=image）。视频、非图片和无法识别类型必须在选材前排除，不占用 2 条配额，也不进入 Crawl Run 或素材库。
+最多输出：2 张图片
 
 执行真实 AppGrowing 多页图片采集，结果进入创意工厂素材库并关联当前 Crawl Run；图片入库后立即用原生 task fanout 对本次新增图片并发执行逐图创意分析，归档未完成时允许分析读取真实源图片。分析完成后在创意工厂提醒用户选图、确认主题与文案。整个采集与预分析阶段不创建 Issue。授权失效时将 Crawl Run 标为 action_required，并提示用户前往“设置 - 集成”重新绑定，不能用测试数据替代。
 "@

@@ -17,6 +17,7 @@ export type CreativeMaterialAnalysisReadiness = {
   ready: boolean;
   active: boolean;
   failed: boolean;
+  unavailable?: boolean;
   manualRequired?: boolean;
   reason?: string;
 };
@@ -66,8 +67,8 @@ export function creativeMaterialProductionState(
   analysisReadiness: CreativeMaterialAnalysisReadiness,
 ): CreativeMaterialProductionState {
   const effectiveStatus = effectiveMaterialCandidateStatus(candidate, decision);
-  if (generated) return { status: "generated", label: "已生成", selectable: false, active: false };
   if (effectiveStatus === "rejected") return { status: "rejected", label: "已拒绝", selectable: false, active: false };
+  if (generated) return { status: "generated", label: "已生成", selectable: true, active: false };
   if (candidate.asset_type !== "image") return { status: "unsupported", label: "非图片素材", selectable: false, active: false };
   if (!candidate.archived_url) {
     return candidate.archive_status === "failed"
@@ -75,6 +76,15 @@ export function creativeMaterialProductionState(
       : { status: "analyzing", label: "分析中", selectable: false, active: true };
   }
   if (!analysisReadiness.ready) {
+    if (analysisReadiness.unavailable) {
+      return {
+        status: "unsupported",
+        label: "无可配置文案",
+        selectable: false,
+        active: false,
+        reason: analysisReadiness.reason,
+      };
+    }
     if (analysisReadiness.manualRequired) {
       return {
         status: "manual_required",
@@ -96,6 +106,25 @@ export function creativeMaterialProductionState(
     return { status: "analyzing", label: "分析中", selectable: false, active: true };
   }
   return { status: "available", label: "可用", selectable: true, active: false };
+}
+
+export function canRetryMaterialAnalysis(
+  candidate: Pick<CreativeMaterialCandidate, "asset_type" | "archived_url">,
+  state: Pick<CreativeMaterialProductionState, "status">,
+): boolean {
+  return candidate.asset_type === "image"
+    && candidate.archived_url.trim() !== ""
+    && state.status !== "rejected"
+    && state.status !== "unsupported";
+}
+
+export function creativeMaterialSelectionActionLabel(
+  selected: boolean,
+  state: Pick<CreativeMaterialProductionState, "label" | "selectable" | "status">,
+): string {
+  if (selected) return "取消选择";
+  if (state.selectable) return "选择出图素材";
+  return state.status === "analyzing" ? "等待分析完成" : state.label;
 }
 
 export function creativeMaterialMatchesFilter(state: CreativeMaterialProductionState, filter: MaterialLibraryFilter): boolean {

@@ -314,6 +314,7 @@
     "creative_copy_replaced_comment": "替换了推荐文案：{{comment}}",
     "creative_feedback_recorded": "记录了创意反馈",
     "creative_feedback_undone": "撤销了上一项创意决定",
+    "creative_order_adjustment_queued": "已启动{{size}}精准调整",
     "creative_variant_adopted": "采用了一个创意变体",
     "creative_variant_adopted_key": "采用了变体 {{variant}}",
     "coalesced_badge": "×{{count}}",

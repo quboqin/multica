@@ -1,4 +1,4 @@
-import type { CreateCreativeFeedbackResponse, CreativeFeedbackMetrics } from "@multica/core/types";
+import type { CreativeFeedbackDashboard } from "@multica/core/types";
 
 export type CreativeFeedbackInsight = {
   key: string;
@@ -8,31 +8,13 @@ export type CreativeFeedbackInsight = {
   rate: number | null;
 };
 
-export type CreativeFeedbackReasonSummary = {
-  code: string;
-  count: number;
-};
-
-export function creativeFeedbackInsights(metrics: CreativeFeedbackMetrics): CreativeFeedbackInsight[] {
+export function creativeWorkflowInsights(workflow: CreativeFeedbackDashboard["workflow"]): CreativeFeedbackInsight[] {
   return [
-    ratioInsight("candidate", "素材采用率", metrics.candidate_selected, metrics.candidate_selected + metrics.candidate_rejected),
-    ratioInsight("copy", "推荐文案采用率", metrics.copy_accepted, metrics.copy_accepted + metrics.copy_replaced),
-    ratioInsight("variant", "一次通过率", metrics.variant_accepted, metrics.variant_accepted + metrics.variant_needs_revision),
-    ratioInsight("qc", "QC 反馈通过率", metrics.qc_accepted, metrics.qc_accepted + metrics.qc_missed_issue + metrics.qc_false_positive),
+    ratioInsight("image-generation", "图片生成成功率", workflow.image_generation_success, workflow.image_generation_total),
+    ratioInsight("candidate", "素材采用率", workflow.candidate_selected, workflow.candidate_selected + workflow.candidate_rejected),
+    ratioInsight("copy", "推荐文案采用率", workflow.copy_accepted, workflow.copy_accepted + workflow.copy_replaced),
+    ratioInsight("production-adoption", "产线采用率", workflow.production_adopted, workflow.production_adoption_eligible),
   ];
-}
-
-export function creativeFeedbackReasonSummary(events: CreateCreativeFeedbackResponse[], limit = 6): CreativeFeedbackReasonSummary[] {
-  const undone = new Set(events.filter((event) => event.event_type === "undo" && event.undo_of_id).map((event) => event.undo_of_id));
-  const counts = new Map<string, number>();
-  for (const event of events) {
-    if (event.event_type === "undo" || undone.has(event.id)) continue;
-    for (const code of event.reason_codes) counts.set(code, (counts.get(code) ?? 0) + 1);
-  }
-  return [...counts.entries()]
-    .map(([code, count]) => ({ code, count }))
-    .sort((left, right) => right.count - left.count || left.code.localeCompare(right.code))
-    .slice(0, limit);
 }
 
 function ratioInsight(key: string, label: string, value: number, total: number): CreativeFeedbackInsight {

@@ -57,6 +57,9 @@ const nextConfig: NextConfig = {
   ...(process.env.STANDALONE === "true" ? { output: "standalone" as const } : {}),
   outputFileTracingRoot: resolve(__dirname, "../.."),
   transpilePackages: ["@multica/core", "@multica/ui", "@multica/views"],
+  experimental: {
+    proxyClientMaxBodySize: "110mb",
+  },
   ...(allowedDevOrigins && allowedDevOrigins.length > 0
     ? { allowedDevOrigins }
     : {}),

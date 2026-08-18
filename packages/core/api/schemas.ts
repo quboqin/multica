@@ -14,9 +14,6 @@ import type {
   CreateAgentFromTemplateResponse,
   CreateBillingCheckoutSessionResponse,
   CreateBillingPortalSessionResponse,
-  CreativeCopyEntry,
-  CreativeCopyEntryListResponse,
-  CreativeCopyImportResult,
 	CreativeAdjustmentRequest,
 	CreativeDelivery,
   CreativeImportSummary,
@@ -28,7 +25,6 @@ import type {
   CreativeResourceFile,
   CreativeResourceFileListResponse,
   CreativeResourceListResponse,
-  CreativeMarketPackComponentExtraction,
   CredentialCrawlResult,
   GroupedIssuesResponse,
   ListCredentialConnectorsResponse,
@@ -42,10 +38,13 @@ import type {
   TimelineEntry,
   User,
   WebhookDelivery,
+  WorkspaceCapabilitiesResponse,
+  WorkspaceCapability,
 } from "../types";
 import type { CloudRuntimeNode } from "../runtimes/cloud-runtime";
 
 export interface AppConfigResponse {
+  app_version?: string;
   cdn_domain: string;
   // True when the CDN domain serves private content via time-bounded signed
   // URLs (CloudFront signing) — raw storage URLs on that domain are NOT
@@ -188,7 +187,29 @@ const BooleanWithDefaultSchema = (fallback: boolean) =>
     z.boolean().default(fallback),
   );
 
+export const WorkspaceCapabilitySchema = z.object({
+  key: z.string(),
+  enabled: BooleanWithDefaultSchema(false),
+  updated_at: OptionalStringSchema,
+}).loose();
+
+export const WorkspaceCapabilitiesSchema = z.object({
+  items: z.array(WorkspaceCapabilitySchema).default([]),
+  can_manage: BooleanWithDefaultSchema(false),
+}).loose();
+
+export const EMPTY_WORKSPACE_CAPABILITIES: WorkspaceCapabilitiesResponse = {
+  items: [],
+  can_manage: false,
+};
+
+export const EMPTY_WORKSPACE_CAPABILITY: WorkspaceCapability = {
+  key: "",
+  enabled: false,
+};
+
 export const AppConfigSchema = z.object({
+  app_version: OptionalStringSchema,
   cdn_domain: z.string().default(""),
   cdn_signed: BooleanWithDefaultSchema(false),
   allow_signup: BooleanWithDefaultSchema(true),
@@ -202,6 +223,7 @@ export const AppConfigSchema = z.object({
 }).loose();
 
 export const EMPTY_APP_CONFIG: AppConfigResponse = {
+  app_version: "",
   cdn_domain: "",
   cdn_signed: false,
   allow_signup: true,
@@ -516,6 +538,55 @@ export const CreativeFeedbackMetricsSchema = z.object({
   qc_false_positive: z.number().default(0),
 }).loose();
 
+const CreativeFeedbackReasonSummarySchema = z.object({
+  code: z.string().default(""),
+  count: z.number().default(0),
+}).loose();
+
+export const CreativeFeedbackDashboardSchema = z.object({
+  workflow: z.object({
+    candidate_selected: z.number().default(0),
+    candidate_rejected: z.number().default(0),
+    copy_accepted: z.number().default(0),
+    copy_replaced: z.number().default(0),
+    asset_reported: z.number().default(0),
+    qc_accepted: z.number().default(0),
+    qc_missed_issue: z.number().default(0),
+    qc_false_positive: z.number().default(0),
+    image_generation_success: z.number().default(0),
+    image_generation_total: z.number().default(0),
+    image_generation_failed: z.number().default(0),
+    image_generation_in_progress: z.number().default(0),
+    three_size_qc_success: z.number().default(0),
+    three_size_qc_total: z.number().default(0),
+    first_delivery_count: z.number().default(0),
+    first_delivery_total: z.number().default(0),
+    production_adopted: z.number().default(0),
+    production_adoption_eligible: z.number().default(0),
+    feedback_reasons: z.array(CreativeFeedbackReasonSummarySchema).default([]),
+  }).default({
+    candidate_selected: 0,
+    candidate_rejected: 0,
+    copy_accepted: 0,
+    copy_replaced: 0,
+    asset_reported: 0,
+    qc_accepted: 0,
+    qc_missed_issue: 0,
+    qc_false_positive: 0,
+    image_generation_success: 0,
+    image_generation_total: 0,
+    image_generation_failed: 0,
+    image_generation_in_progress: 0,
+    three_size_qc_success: 0,
+    three_size_qc_total: 0,
+    first_delivery_count: 0,
+    first_delivery_total: 0,
+    production_adopted: 0,
+    production_adoption_eligible: 0,
+    feedback_reasons: [],
+  }),
+}).loose();
+
 export const EMPTY_CREATIVE_FEEDBACK_RESPONSE = { id: "", idempotency_key: "", workspace_id: "", issue_id: "", actor_type: "", actor_id: "", subject_type: "", subject_id: "", event_type: "", decision: "", reason_codes: [], comment: "", context_snapshot: {}, undo_of_id: "", created_at: "" };
 export const EMPTY_CREATIVE_FEEDBACK_EVENT_LIST_RESPONSE = { events: [] };
 export const EMPTY_CREATIVE_FEEDBACK_METRICS = {
@@ -531,12 +602,35 @@ export const EMPTY_CREATIVE_FEEDBACK_METRICS = {
   qc_missed_issue: 0,
   qc_false_positive: 0,
 };
+export const EMPTY_CREATIVE_FEEDBACK_DASHBOARD = {
+  workflow: {
+    candidate_selected: 0,
+    candidate_rejected: 0,
+    copy_accepted: 0,
+    copy_replaced: 0,
+    asset_reported: 0,
+    qc_accepted: 0,
+    qc_missed_issue: 0,
+    qc_false_positive: 0,
+    image_generation_success: 0,
+    image_generation_total: 0,
+    image_generation_failed: 0,
+    image_generation_in_progress: 0,
+    three_size_qc_success: 0,
+    three_size_qc_total: 0,
+    first_delivery_count: 0,
+    first_delivery_total: 0,
+    production_adopted: 0,
+    production_adoption_eligible: 0,
+    feedback_reasons: [],
+  },
+};
 
 const CreativeOrderAssetSchema = z.object({ id: z.string().default(""), variant_id: z.string().default(""), asset_family_id: z.string().default(""), size_key: z.string().default(""), revision: z.number().default(1), stage: z.string().default("generated"), attachment_id: z.string().default(""), derived_from_asset_id: z.string().default(""), metadata: z.record(z.string(), z.unknown()).default({}), evidence: z.record(z.string(), z.unknown()).default({}), status: z.string().default("queued"), created_at: z.string().default(""), updated_at: z.string().default("") }).loose();
 const CreativeOrderQCReportSchema = z.object({ id: z.string().default(""), variant_id: z.string().default(""), lane: z.string().default(""), revision: z.number().default(1), status: z.string().default("pending"), findings: z.record(z.string(), z.unknown()).default({}), trigger_evidence_kind: z.string().default(""), trigger_evidence_ref_id: z.string().default(""), created_at: z.string().default(""), updated_at: z.string().default("") }).loose();
-const CreativeOrderDiagnosticAssetSchema = z.object({ id: z.string().default(""), variant_id: z.string().default(""), task_id: z.string().default(""), size_key: z.string().default(""), revision: z.number().default(1), label: z.string().default(""), filename: z.string().default(""), url: z.string().default(""), created_at: z.string().default("") }).loose();
+const CreativeOrderDiagnosticAssetSchema = z.object({ id: z.string().default(""), variant_id: z.string().default(""), task_id: z.string().default(""), attachment_id: z.string().default(""), size_key: z.string().default(""), revision: z.number().default(1), workflow: z.string().default(""), label: z.string().default(""), filename: z.string().default(""), metadata: z.record(z.string(), z.unknown()).default({}), url: z.string().default(""), created_at: z.string().default("") }).loose();
 const CreativeOrderVariantBlockerSchema = z.object({ task_id: z.string().default(""), workflow: z.string().default(""), failure_reason: z.string().default(""), detail: z.string().default(""), failed_at: z.string().default(""), retryable: z.boolean().default(false) }).loose();
-const CreativeOrderVariantSchema = z.object({ id: z.string().default(""), order_item_id: z.string().default(""), variant_key: z.string().default(""), brief: z.record(z.string(), z.unknown()).default({}), revision: z.number().default(1), status: z.string().default("queued"), qc_status: z.string().default("pending"), qc_recovery_used: z.boolean().default(false), qc_recovery_available: z.boolean().default(false), prime_repair_used: z.boolean().default(false), prime_repair_available: z.boolean().default(false), action_required: CreativeOrderVariantBlockerSchema.optional(), assets: z.array(CreativeOrderAssetSchema).default([]), diagnostic_assets: z.array(CreativeOrderDiagnosticAssetSchema).default([]), qc_reports: z.array(CreativeOrderQCReportSchema).default([]), created_at: z.string().default(""), updated_at: z.string().default("") }).loose();
+const CreativeOrderVariantSchema = z.object({ id: z.string().default(""), order_item_id: z.string().default(""), variant_key: z.string().default(""), brief: z.record(z.string(), z.unknown()).default({}), revision: z.number().default(1), status: z.string().default("queued"), qc_status: z.string().default("pending"), qc_recovery_used: z.boolean().default(false), qc_recovery_available: z.boolean().default(false), action_required: CreativeOrderVariantBlockerSchema.optional(), assets: z.array(CreativeOrderAssetSchema).default([]), diagnostic_assets: z.array(CreativeOrderDiagnosticAssetSchema).default([]), qc_reports: z.array(CreativeOrderQCReportSchema).default([]), created_at: z.string().default(""), updated_at: z.string().default("") }).loose();
 export const CreativeOrderItemSchema = z.object({ id: z.string().default(""), order_id: z.string().default(""), candidate_id: z.string().default(""), source_analysis_id: z.string().default(""), copy_snapshot: z.record(z.string(), z.unknown()).default({}), direction: z.string().default(""), status: z.string().default(""), adopted_variant_id: z.string().default(""), adopted_at: z.string().default(""), adopted_by: z.string().default(""), variants: z.array(CreativeOrderVariantSchema).default([]), created_at: z.string().default(""), updated_at: z.string().default("") }).loose();
 export const EMPTY_CREATIVE_ORDER_ITEM = { id: "", order_id: "", candidate_id: "", source_analysis_id: "", copy_snapshot: {}, direction: "", status: "", adopted_variant_id: "", adopted_at: "", adopted_by: "", variants: [], created_at: "", updated_at: "" };
 export const CreativeOrderWorkflowFailureSchema = z.object({
@@ -547,13 +641,13 @@ export const CreativeOrderWorkflowFailureSchema = z.object({
   retryable: z.boolean().default(false),
 }).loose();
 export const CreativeOrderWorkflowRetryResponseSchema = z.object({ task_id: z.string().default("") }).loose();
+export const QueueCreativeOrderAdjustmentResponseSchema = z.object({ task_id: z.string().default(""), revision: z.number().int().positive().default(1) }).loose();
 export const CreativeOrderQCRetryResponseSchema = z.object({
   variant_id: z.string().default(""),
   revision: z.number().int().positive().default(1),
   technical_task_id: z.string().default(""),
   visual_task_id: z.string().default(""),
 }).loose();
-export const CreativeOrderPrimePackageRepairResponseSchema = z.object({ task_id: z.string().default("") }).loose();
 export const CreativeOrderSchema = z.object({ id: z.string().default(""), workspace_id: z.string().default(""), issue_id: z.string().default(""), status: z.string().default("draft"), derived_status: z.string().default("draft"), input_snapshot: z.record(z.string(), z.unknown()).default({}), trigger_evidence_kind: z.string().default(""), trigger_evidence_ref_id: z.string().default(""), created_by: z.string().default(""), created_at: z.string().default(""), updated_at: z.string().default(""), workflow_failures: z.array(CreativeOrderWorkflowFailureSchema).default([]), items: z.array(CreativeOrderItemSchema).default([]) }).loose();
 export const CreativeOrderListResponseSchema = z.object({ orders: z.array(CreativeOrderSchema).default([]) }).loose();
 export const EMPTY_CREATIVE_ORDER_LIST_RESPONSE = { orders: [] };
@@ -566,7 +660,7 @@ export const CreativeDirectEditResponseSchema = z.object({
 export const EMPTY_CREATIVE_DIRECT_EDIT_RESPONSE = {
   order: { id: "", workspace_id: "", issue_id: "", status: "draft", derived_status: "draft", input_snapshot: {}, trigger_evidence_kind: "", trigger_evidence_ref_id: "", created_by: "", created_at: "", updated_at: "", workflow_failures: [], items: [] },
   item: EMPTY_CREATIVE_ORDER_ITEM,
-  variant: { id: "", order_item_id: "", variant_key: "", brief: {}, revision: 1, status: "queued", qc_status: "pending", qc_recovery_used: false, qc_recovery_available: false, prime_repair_used: false, prime_repair_available: false, assets: [], diagnostic_assets: [], qc_reports: [], created_at: "", updated_at: "" },
+  variant: { id: "", order_item_id: "", variant_key: "", brief: {}, revision: 1, status: "queued", qc_status: "pending", qc_recovery_used: false, qc_recovery_available: false, assets: [], diagnostic_assets: [], qc_reports: [], created_at: "", updated_at: "" },
   source_asset: { id: "", variant_id: "", asset_family_id: "", size_key: "", revision: 1, stage: "generated", attachment_id: "", derived_from_asset_id: "", metadata: {}, evidence: {}, status: "queued", created_at: "", updated_at: "" },
 };
 export const CreativeOrderQCFinalizeResponseSchema = z.object({
@@ -574,8 +668,10 @@ export const CreativeOrderQCFinalizeResponseSchema = z.object({
   variant_id: z.string().default(""), revision: z.number().default(1), technical_status: z.string().default(""),
   visual_status: z.string().default(""), delivered_asset_count: z.number().default(0),
   order_aggregate_status: z.string().default("queued"), inbox_item_id: z.string().default(""),
+  rework_task_id: z.string().default(""), rework_revision: z.number().default(0),
 }).loose();
-export const EMPTY_CREATIVE_ORDER_QC_FINALIZE_RESPONSE = { created: false, finalized: false, outcome: "pending", variant_id: "", revision: 1, technical_status: "", visual_status: "", delivered_asset_count: 0, order_aggregate_status: "queued", inbox_item_id: "" };
+export const EMPTY_CREATIVE_ORDER_QC_FINALIZE_RESPONSE = { created: false, finalized: false, outcome: "pending", variant_id: "", revision: 1, technical_status: "", visual_status: "", delivered_asset_count: 0, order_aggregate_status: "queued", inbox_item_id: "", rework_task_id: "", rework_revision: 0 };
+export const EMPTY_CREATIVE_ORDER_DIAGNOSTIC_PROMOTION_RESPONSE = { candidate: { id: "", variant_id: "", task_id: "", attachment_id: "", size_key: "", revision: 1, workflow: "", label: "", filename: "", metadata: {}, url: "", created_at: "" }, generated: { id: "", variant_id: "", asset_family_id: "", size_key: "", revision: 1, stage: "generated", attachment_id: "", derived_from_asset_id: "", metadata: {}, evidence: {}, status: "completed", created_at: "", updated_at: "" }, variant_id: "", revision: 1, selected_method: "", composition_started: false };
 export const CreativeSourceAnalysisSchema = z.object({ id: z.string().default(""), candidate_id: z.string().default(""), analysis_version: z.number().default(0), status: z.string().default("pending"), summary: z.string().default(""), result: z.record(z.string(), z.unknown()).default({}), error_code: z.string().default(""), error_message: z.string().default(""), trigger_evidence_kind: z.string().default(""), trigger_evidence_ref_id: z.string().default(""), created_at: z.string().default(""), completed_at: z.string().default("") }).loose();
 export const CreativeSourceAnalysisListResponseSchema = z.object({ analyses: z.array(CreativeSourceAnalysisSchema).default([]) }).loose();
 export const EMPTY_CREATIVE_SOURCE_ANALYSIS_LIST_RESPONSE = { analyses: [] };
@@ -661,8 +757,6 @@ export const CreativeBriefSchema = z.object({
 export const CreativeIssueItemSchema = z.object({
   issue_id: z.string().default(""),
   candidate_id: z.string().default(""),
-  copy_entry_id: z.string().default(""),
-  copy_snapshot: z.record(z.string(), z.unknown()).default({}),
   creative_brief: CreativeBriefSchema.default({
     theme: "", theme_elements: [], primary_benefit: "", secondary_benefits: [],
     benefit_value: "", source_semantics: "", information_mechanism: "",
@@ -807,71 +901,6 @@ export const CreativeResourceFileListSchema = z.object({
   files: z.array(CreativeResourceFileSchema).default([]),
 }).loose();
 
-export const CreativeMarketPackComponentCandidateSchema = z.object({
-  id: z.string().default(""),
-  label: z.string().default(""),
-  kind: z.enum(["image", "qr", "text"]).default("image"),
-  suggested_component_id: z.string().default(""),
-  suggested_role: z.string().default(""),
-  content: z.string().default(""),
-  rect: z.tuple([z.number(), z.number(), z.number(), z.number()]).default([0, 0, 1, 1]),
-  confidence: z.number().min(0).max(1).default(0),
-  evidence: z.array(z.string()).default([]),
-}).loose();
-
-export const CreativeMarketPackComponentExtractionSchema = z.object({
-  id: z.string().default(""),
-  resource_id: z.string().default(""),
-  source_attachment_id: z.string().default(""),
-  source_url: z.string().default(""),
-  source_filename: z.string().default(""),
-  source_width: z.number().default(0),
-  source_height: z.number().default(0),
-  status: z.enum(["pending", "running", "completed", "failed", "applied"]).default("pending"),
-  result: z.object({
-    summary: z.string().default(""),
-    candidates: z.array(CreativeMarketPackComponentCandidateSchema).default([]),
-  }).default({ summary: "", candidates: [] }),
-  error_message: z.string().default(""),
-  task_id: z.string().default(""),
-  agent_id: z.string().default(""),
-  created_at: z.string().default(""),
-  updated_at: z.string().default(""),
-}).loose();
-
-export const CreativeCopyEntrySchema = z.object({
-  id: z.string().default(""),
-  workspace_id: z.string().default(""),
-  library_id: z.string().default(""),
-  external_key: z.string().default(""),
-  headline: z.string().default(""),
-  subheadline: z.string().default(""),
-  benefit: z.string().default(""),
-  cta: z.string().default(""),
-  legal_text: z.string().default(""),
-  copy_role: z.string().default(""),
-  market: z.string().default(""),
-  locale: z.string().default(""),
-  tags: z.array(z.string()).default([]),
-  status: z.enum(["draft", "approved", "disabled"]).default("draft"),
-  version: z.number().default(1),
-  metadata: z.record(z.string(), z.unknown()).default({}),
-  created_by: z.string().default(""),
-  created_at: z.string().default(""),
-  updated_at: z.string().default(""),
-}).loose();
-
-export const CreativeCopyEntryListSchema = z.object({
-  entries: z.array(CreativeCopyEntrySchema).default([]),
-}).loose();
-
-export const CreativeCopyImportResultSchema = z.object({
-  created: z.number().default(0),
-  updated: z.number().default(0),
-  skipped: z.number().default(0),
-  resource: CreativeResourceSchema,
-}).loose();
-
 export const EMPTY_CREATIVE_RESOURCE: CreativeResource = {
   id: "", workspace_id: "", kind: "copy_library", name: "", description: "",
   status: "draft", version: 1, published_version: 0, config: {}, published_config: {}, created_by: "",
@@ -885,27 +914,12 @@ export const EMPTY_CREATIVE_RESOURCE_FILE: CreativeResourceFile = {
   created_version: 1, created_at: "",
 };
 export const EMPTY_CREATIVE_RESOURCE_FILE_LIST: CreativeResourceFileListResponse = { files: [] };
-export const EMPTY_CREATIVE_MARKET_PACK_COMPONENT_EXTRACTION: CreativeMarketPackComponentExtraction = {
-  id: "", resource_id: "", source_attachment_id: "", source_url: "", source_filename: "",
-  source_width: 0, source_height: 0, status: "pending", result: { summary: "", candidates: [] },
-  error_message: "", task_id: "", agent_id: "", created_at: "", updated_at: "",
-};
-export const EMPTY_CREATIVE_COPY_ENTRY: CreativeCopyEntry = {
-  id: "", workspace_id: "", library_id: "", external_key: "", headline: "",
-  subheadline: "", benefit: "", cta: "", legal_text: "", copy_role: "",
-  market: "", locale: "", tags: [], status: "draft", version: 1, metadata: {},
-  created_by: "", created_at: "", updated_at: "",
-};
-export const EMPTY_CREATIVE_COPY_ENTRY_LIST: CreativeCopyEntryListResponse = { entries: [] };
-export const EMPTY_CREATIVE_COPY_IMPORT_RESULT: CreativeCopyImportResult = {
-  created: 0, updated: 0, skipped: 0, resource: EMPTY_CREATIVE_RESOURCE,
-};
 export const EMPTY_CREATIVE_ISSUE_CONTEXT: CreativeIssueContext = {
   issue_id: "", workspace_id: "", market_pack_id: "",
   squad_id: "", snapshot: {}, updated_at: "",
 };
 export const EMPTY_CREATIVE_ISSUE_ITEM: CreativeIssueItem = {
-  issue_id: "", candidate_id: "", copy_entry_id: "", copy_snapshot: {},
+  issue_id: "", candidate_id: "",
   creative_brief: {
     theme: "", theme_elements: [], primary_benefit: "", secondary_benefits: [],
     benefit_value: "", source_semantics: "", information_mechanism: "",

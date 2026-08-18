@@ -10,11 +10,11 @@ export interface CreativeWorkbenchProps {
   onOpenOrder: (orderId: string) => void;
 }
 
-type WorkbenchOrderState = "review" | "running" | "delivered" | "inactive";
+type WorkbenchOrderState = "review" | "running" | "attention" | "delivered" | "inactive";
 
 const WORKBENCH_COPY = {
   title: "创意工作台",
-  subtitle: "查看素材、生成、验收和交付的当前总览。",
+  subtitle: "查看素材、生成、验收和本周交付的当前总览。",
 } as const;
 
 export function CreativeWorkbench({
@@ -24,14 +24,12 @@ export function CreativeWorkbench({
 }: CreativeWorkbenchProps) {
   const excludedCandidateIdSet = new Set(excludedCandidateIds);
   const pendingMaterials = candidates.filter((candidate) => !excludedCandidateIdSet.has(candidate.id));
-  const classifiedOrders = orders.map((order) => ({ order, state: creativeWorkbenchOrderState(order) }));
-  const reviewOrders = classifiedOrders.filter((entry) => entry.state === "review").sort(compareActionOrders);
-  const runningOrders = classifiedOrders.filter((entry) => entry.state === "running").sort(compareActionOrders);
-  const deliveredOrders = classifiedOrders
-    .filter((entry) => entry.state === "delivered")
-    .map((entry) => entry.order)
-    .sort((left, right) => timestamp(right.updated_at) - timestamp(left.updated_at));
-  const deliveredThisWeek = deliveredOrders.filter((order) => timestamp(order.updated_at) >= startOfLocalWeekTimestamp());
+  const reviewOrders = orders.filter(isAdoptionReadyOrder).sort(compareActionOrders);
+  const runningOrders = orders.filter(isRunningOrder).sort(compareActionOrders);
+  const deliveredThisWeek = orders
+    .filter(isDeliveredOrder)
+    .sort(compareActionOrders)
+    .filter((order) => timestamp(order.updated_at) >= startOfLocalWeekTimestamp());
 
   return (
     <div className="mx-auto w-full min-w-0 max-w-[1440px] space-y-4" data-testid="creative-workbench">
@@ -43,9 +41,9 @@ export function CreativeWorkbench({
       </header>
 
       <section aria-label="工作台概览" className="grid min-w-0 grid-cols-2 divide-x divide-y border bg-background sm:grid-cols-4 sm:divide-y-0">
-        <WorkbenchMetric testId="creative-workbench-materials" value={pendingMaterials.length} label="素材待筛" />
-        <WorkbenchMetric testId="creative-workbench-running" value={runningOrders.length} label="出图中" />
-        <WorkbenchMetric testId="creative-workbench-reviews" value={reviewOrders.length} label="待确认成图" />
+        <WorkbenchMetric testId="creative-workbench-materials" value={pendingMaterials.length} label="待选素材" />
+        <WorkbenchMetric testId="creative-workbench-running" value={runningOrders.length} label="真实出图中" />
+        <WorkbenchMetric testId="creative-workbench-reviews" value={reviewOrders.length} label="待采用成图" />
         <WorkbenchMetric testId="creative-workbench-deliveries" value={deliveredThisWeek.length} label="本周交付" />
       </section>
     </div>
@@ -53,25 +51,45 @@ export function CreativeWorkbench({
 }
 
 export function creativeWorkbenchOrderState(order: CreativeOrder): WorkbenchOrderState {
+  if (isCancelledOrder(order)) return "inactive";
+  if (isDeliveredOrder(order)) return "delivered";
+  if (isAdoptionReadyOrder(order)) return "review";
+  if (isRunningOrder(order)) return "running";
+  if (isAttentionRequiredOrder(order)) return "attention";
+  return "inactive";
+}
+
+function isCancelledOrder(order: CreativeOrder): boolean {
+  return order.status === "cancelled" || (order.derived_status || order.status) === "cancelled";
+}
+
+function isDeliveredOrder(order: CreativeOrder): boolean {
   const status = order.derived_status || order.status;
-  if (status === "cancelled" || order.status === "cancelled") return "inactive";
-  if (status === "completed" || (order.items.length > 0 && order.items.every((item) => Boolean(item.adopted_variant_id)))) return "delivered";
-  if (status === "awaiting_adoption") return "review";
-  const hasReviewableResult = order.items.some((item) => item.variants.some((variant) =>
+  return status === "completed" || (order.items.length > 0 && order.items.every((item) => Boolean(item.adopted_variant_id)));
+}
+
+function isAdoptionReadyOrder(order: CreativeOrder): boolean {
+  if (isCancelledOrder(order) || isDeliveredOrder(order)) return false;
+  const status = order.derived_status || order.status;
+  if (status === "awaiting_adoption") return true;
+  return order.items.some((item) => !item.adopted_variant_id && item.variants.some((variant) =>
     variant.status === "completed"
     || variant.qc_status === "passed"
     || variant.assets.some((asset) => asset.status === "completed" && asset.stage === "delivered"),
   ));
-  if (hasReviewableResult) return "review";
+}
 
-  if ((order.workflow_failures?.length ?? 0) > 0 || status === "action_required" || status === "failed") {
-    return "review";
-  }
-  if (status === "queued" || status === "running" || status === "partial" || order.items.some((item) => item.variants.some((variant) => variant.status === "queued" || variant.status === "running" || variant.status === "partial"))) {
-    return "running";
-  }
+function isRunningOrder(order: CreativeOrder): boolean {
+  if (isCancelledOrder(order)) return false;
+  const status = order.derived_status || order.status;
+  return status === "queued" || status === "running" || status === "partial";
+}
 
-  return "inactive";
+function isAttentionRequiredOrder(order: CreativeOrder): boolean {
+  if (isCancelledOrder(order)) return false;
+  const status = order.derived_status || order.status;
+  if (isRunningOrder(order)) return false;
+  return status === "action_required" || status === "failed" || (order.workflow_failures?.length ?? 0) > 0;
 }
 
 function WorkbenchMetric({ testId, value, label }: { testId: string; value: number; label: string }) {
@@ -83,11 +101,8 @@ function WorkbenchMetric({ testId, value, label }: { testId: string; value: numb
   );
 }
 
-function compareActionOrders(
-  left: { order: CreativeOrder; state: WorkbenchOrderState },
-  right: { order: CreativeOrder; state: WorkbenchOrderState },
-): number {
-  return timestamp(right.order.updated_at) - timestamp(left.order.updated_at);
+function compareActionOrders(left: CreativeOrder, right: CreativeOrder): number {
+  return timestamp(right.updated_at) - timestamp(left.updated_at);
 }
 
 function timestamp(value: string): number {
@@ -98,8 +113,8 @@ function timestamp(value: string): number {
 function startOfLocalWeekTimestamp(date = new Date()): number {
   const start = new Date(date);
   const day = start.getDay();
-  const diff = day === 0 ? 6 : day - 1;
+  const daysSinceMonday = day === 0 ? 6 : day - 1;
   start.setHours(0, 0, 0, 0);
-  start.setDate(start.getDate() - diff);
+  start.setDate(start.getDate() - daysSinceMonday);
   return start.getTime();
 }

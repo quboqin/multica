@@ -335,6 +335,9 @@ INSERT INTO creative_material_crawl_run_candidate (
 }
 
 func (h *Handler) resolveReferenceAnalysisAgent(ctx context.Context, workspaceID, preferredAgentID pgtype.UUID) (db.Agent, error) {
+	if installed, installErr := h.creativeFactoryAgentByRole(ctx, workspaceID, "reference_analysis"); installErr == nil {
+		return installed, nil
+	}
 	var agentID pgtype.UUID
 	err := h.DB.QueryRow(ctx, `
 SELECT agent.id

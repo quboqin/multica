@@ -5,7 +5,6 @@ const WORKFLOW_STAGE_ORDER: Record<string, number> = {
   creative_direct_edit: 15,
   creative_production: 20,
   creative_production_continuation: 20,
-  creative_prime_compose: 30,
   creative_qc: 40,
   creative_delivery: 50,
 };

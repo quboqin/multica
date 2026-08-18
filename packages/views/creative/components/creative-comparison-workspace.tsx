@@ -22,6 +22,12 @@ type PendingCreativeAnnotation = CreativeAnnotationDraft & { localId: string };
 
 export type CreativeComparisonAsset = { id: string; label: string; finalUrl: string; baseUrl?: string; thumbnailUrl?: string; size?: string; variant?: string };
 
+const ANNOTATION_SCOPE_LABELS: Record<CreativeAnnotationDraft["scope"], string> = {
+  size: "当前尺寸",
+  variant: "当前变体三尺寸",
+  order: "全部变体",
+};
+
 export function normalizeCreativeAnnotation(
   start: { x: number; y: number },
   end: { x: number; y: number },
@@ -87,6 +93,7 @@ export function CreativeComparisonWorkspace({
   onViewInfo,
   onDecision,
   onAnnotations,
+  annotationScopes = ["size", "variant", "order"],
   acceptance,
   showDecisionActions = true,
 }: {
@@ -98,6 +105,7 @@ export function CreativeComparisonWorkspace({
   onViewInfo?: () => void;
   onDecision?: (decision: "accepted" | "abandoned" | "downloaded") => void;
   onAnnotations?: (annotations: CreativeAnnotationDraft[]) => Promise<boolean>;
+  annotationScopes?: CreativeAnnotationDraft["scope"][];
   acceptance?: { enabled: boolean; status: string };
   showDecisionActions?: boolean;
 }) {
@@ -115,6 +123,7 @@ export function CreativeComparisonWorkspace({
   const [resultImageSize, setResultImageSize] = useState({ width: 1, height: 1 });
   const [annotationViewport, setAnnotationViewport] = useState({ width: 1, height: 1 });
   const stageRef = useRef<HTMLDivElement>(null);
+  const resultPaneRef = useRef<HTMLElement>(null);
   const annotationSurfaceRef = useRef<HTMLDivElement>(null);
   const annotationSequence = useRef(0);
   const acceptanceStatusId = useId();
@@ -123,10 +132,11 @@ export function CreativeComparisonWorkspace({
   const displayedResult = pair === "source-final" ? { ...selectedResult, url: selectedResult.finalUrl } : { ...selectedResult, label: "Prime 成图", url: selectedResult.finalUrl };
   const transform = `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`;
   const canAnnotate = Boolean(onAnnotations);
+  const defaultAnnotationScope = annotationScopes[0] ?? "size";
   const annotationImageBounds = transformedContainedImageBounds(annotationViewport, resultImageSize, zoom, pan);
   const activeAnnotation = annotations.find((annotation) => annotation.localId === activeAnnotationId);
   const drawingAnnotation = annotationTool && start && drawingEnd
-    ? { ...normalizeCreativeAnnotationInImage(start, drawingEnd, annotationViewport, resultImageSize, annotationTool), localId: "drawing", issueType: "other", scope: "size" as const, comment: "" }
+    ? { ...normalizeCreativeAnnotationInImage(start, drawingEnd, annotationViewport, resultImageSize, annotationTool), localId: "drawing", issueType: "other", scope: defaultAnnotationScope, comment: "" }
     : null;
   const updateAnnotation = (id: string, patch: Partial<CreativeAnnotationDraft>) => setAnnotations((current) => current.map((annotation) => annotation.localId === id ? { ...annotation, ...patch } : annotation));
   const removeAnnotation = (id: string) => {
@@ -169,7 +179,7 @@ export function CreativeComparisonWorkspace({
     setDrawingEnd(null);
   }, [selectedResult.id]);
   useEffect(() => {
-    const element = stageRef.current;
+    const element = resultPaneRef.current;
     if (!element) return;
     const handleWheel = (event: WheelEvent) => {
       event.preventDefault();
@@ -213,7 +223,7 @@ export function CreativeComparisonWorkspace({
     const next = normalizeCreativeAnnotationInImage(start, { x: event.clientX - bounds.left, y: event.clientY - bounds.top }, bounds, resultImageSize, annotationTool);
     annotationSequence.current += 1;
     const localId = `annotation-${annotationSequence.current}`;
-    setAnnotations((current) => [...current, { ...next, localId, issueType: "other", scope: "size", comment: "" }]);
+    setAnnotations((current) => [...current, { ...next, localId, issueType: "other", scope: defaultAnnotationScope, comment: "" }]);
     setActiveAnnotationId(localId);
     setAnnotationTool(null);
     setStart(null);
@@ -226,7 +236,7 @@ export function CreativeComparisonWorkspace({
     <div data-testid="creative-annotation-surface" className={cn("absolute inset-0", annotationTool && "pointer-events-auto cursor-crosshair")} onPointerDown={onAnnotationPointerDown} onPointerMove={onAnnotationPointerMove} onPointerUp={onAnnotationPointerUp} onPointerCancel={() => { setStart(null); setDrawingEnd(null); }} />
     {drawingAnnotation && <div data-testid="creative-drawing-annotation" className={cn("absolute border-2 border-rose-500 bg-rose-500/10", drawingAnnotation.kind === "point" && "rounded-full bg-rose-500/25")} style={annotationBoxStyle(drawingAnnotation)} />}
     {annotations.map((annotation, index) => <button key={annotation.localId} type="button" aria-label={`选择标注 ${index + 1}`} onPointerDown={(event) => event.stopPropagation()} onClick={() => setActiveAnnotationId(annotation.localId)} className={cn("pointer-events-auto absolute border-2 border-rose-500 bg-rose-500/5", annotation.kind === "point" && "rounded-full bg-rose-500/20", annotation.localId === activeAnnotationId && "ring-2 ring-white ring-offset-1 ring-offset-rose-500")} style={annotationBoxStyle(annotation)}><span className="absolute -left-3 -top-3 flex h-6 min-w-6 items-center justify-center rounded-full bg-rose-600 px-1 text-[11px] font-semibold text-white shadow-sm">{index + 1}</span>{annotation.comment && <span className="absolute left-0 top-full mt-1 max-w-56 truncate border bg-background/95 px-2 py-1 text-left text-[11px] text-foreground shadow-sm">{annotation.comment}</span>}</button>)}
-    {activeAnnotation && !annotationTool && <div className="pointer-events-auto absolute z-30 w-80 border bg-background p-2 shadow-lg" style={calloutStyle} onPointerDown={(event) => event.stopPropagation()}><div className="mb-2 flex items-center justify-between gap-2"><span className="text-xs font-semibold">标注 {annotations.findIndex((annotation) => annotation.localId === activeAnnotation.localId) + 1}</span><Button size="icon-sm" variant="ghost" title="删除标注" aria-label="删除标注" onClick={() => removeAnnotation(activeAnnotation.localId)}><Trash2 className="h-4 w-4" /></Button></div><div className="mb-2 grid grid-cols-2 gap-2"><NativeSelect size="sm" aria-label="标注问题类型" value={activeAnnotation.issueType} onChange={(event) => updateAnnotation(activeAnnotation.localId, { issueType: event.target.value })}><NativeSelectOption value="copy_error">文案错误</NativeSelectOption><NativeSelectOption value="theme_drift">主题偏离</NativeSelectOption><NativeSelectOption value="brand_prime">品牌或 Prime</NativeSelectOption><NativeSelectOption value="artifact">破图</NativeSelectOption><NativeSelectOption value="other">其他</NativeSelectOption></NativeSelect><NativeSelect size="sm" aria-label="调整作用范围" value={activeAnnotation.scope} onChange={(event) => updateAnnotation(activeAnnotation.localId, { scope: event.target.value as CreativeAnnotationDraft["scope"] })}><NativeSelectOption value="size">当前尺寸</NativeSelectOption><NativeSelectOption value="variant">当前变体三尺寸</NativeSelectOption><NativeSelectOption value="order">全部变体</NativeSelectOption></NativeSelect></div><Textarea autoFocus aria-label={`标注 ${annotations.findIndex((annotation) => annotation.localId === activeAnnotation.localId) + 1} 调整说明`} value={activeAnnotation.comment} onChange={(event) => updateAnnotation(activeAnnotation.localId, { comment: event.target.value })} rows={2} placeholder="写下这个区域需要怎么调整" /><div className="mt-2 flex justify-end"><Button size="sm" variant="outline" disabled={!activeAnnotation.comment.trim()} onClick={() => setActiveAnnotationId("")}>完成标注</Button></div></div>}
+    {activeAnnotation && !annotationTool && <div className="pointer-events-auto absolute z-30 w-80 border bg-background p-2 shadow-lg" style={calloutStyle} onPointerDown={(event) => event.stopPropagation()}><div className="mb-2 flex items-center justify-between gap-2"><span className="text-xs font-semibold">标注 {annotations.findIndex((annotation) => annotation.localId === activeAnnotation.localId) + 1}</span><Button size="icon-sm" variant="ghost" title="删除标注" aria-label="删除标注" onClick={() => removeAnnotation(activeAnnotation.localId)}><Trash2 className="h-4 w-4" /></Button></div><div className={cn("mb-2 grid gap-2", annotationScopes.length > 1 ? "grid-cols-2" : "grid-cols-1")}><NativeSelect size="sm" aria-label="标注问题类型" value={activeAnnotation.issueType} onChange={(event) => updateAnnotation(activeAnnotation.localId, { issueType: event.target.value })}><NativeSelectOption value="copy_error">文案错误</NativeSelectOption><NativeSelectOption value="theme_drift">主题偏离</NativeSelectOption><NativeSelectOption value="brand_prime">品牌或 Prime</NativeSelectOption><NativeSelectOption value="artifact">破图</NativeSelectOption><NativeSelectOption value="other">其他</NativeSelectOption></NativeSelect>{annotationScopes.length > 1 && <NativeSelect size="sm" aria-label="调整作用范围" value={activeAnnotation.scope} onChange={(event) => updateAnnotation(activeAnnotation.localId, { scope: event.target.value as CreativeAnnotationDraft["scope"] })}>{annotationScopes.map((scope) => <NativeSelectOption key={scope} value={scope}>{ANNOTATION_SCOPE_LABELS[scope]}</NativeSelectOption>)}</NativeSelect>}</div><Textarea autoFocus aria-label={`标注 ${annotations.findIndex((annotation) => annotation.localId === activeAnnotation.localId) + 1} 调整说明`} value={activeAnnotation.comment} onChange={(event) => updateAnnotation(activeAnnotation.localId, { comment: event.target.value })} rows={2} placeholder="写下这个区域需要怎么调整" /><div className="mt-2 flex justify-end"><Button size="sm" variant="outline" disabled={!activeAnnotation.comment.trim()} onClick={() => setActiveAnnotationId("")}>完成标注</Button></div></div>}
   </div>;
   const variants = useMemo(() => [...new Set(assets.map((asset) => asset.variant).filter((value): value is string => Boolean(value)))], [assets]);
   const sizes = useMemo(() => [...new Set(assets.map((asset) => asset.size).filter((value): value is string => Boolean(value)))], [assets]);
@@ -257,7 +267,7 @@ export function CreativeComparisonWorkspace({
     </div>
     <div className="min-h-0 bg-muted/20 p-2">
       <div ref={stageRef} data-testid="creative-comparison-stage" className={cn("relative h-full min-h-[480px] overflow-hidden border bg-background", annotationTool ? "cursor-crosshair" : "cursor-grab active:cursor-grabbing")} onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp} onPointerCancel={() => setDrag(null)}>
-        <div className="grid h-full grid-cols-1 divide-y md:grid-cols-[minmax(160px,0.3fr)_minmax(0,1fr)] md:divide-x md:divide-y-0"><ComparisonPane title="查看竞品原图" label={displayedSource.label} muted>{displayedSource.url ? <img draggable={false} src={displayedSource.url} alt={displayedSource.label} width={800} height={800} loading="lazy" className="pointer-events-none h-full w-full select-none object-contain" /> : <div className="flex h-full items-center justify-center text-xs text-muted-foreground">底图尚未登记</div>}</ComparisonPane><ComparisonPane title="查看修图结果大图" label={displayedResult.label} overlay={annotationOverlay}>{image(displayedResult, true)}</ComparisonPane></div>
+        <div className="grid h-full grid-cols-1 divide-y md:grid-cols-[minmax(160px,0.3fr)_minmax(0,1fr)] md:divide-x md:divide-y-0"><ComparisonPane title="查看竞品原图" label={displayedSource.label} muted testId="creative-comparison-source-pane">{displayedSource.url ? <img draggable={false} src={displayedSource.url} alt={displayedSource.label} width={800} height={800} loading="lazy" className="pointer-events-none h-full w-full select-none object-contain" /> : <div className="flex h-full items-center justify-center text-xs text-muted-foreground">底图尚未登记</div>}</ComparisonPane><ComparisonPane title="查看修图结果大图" label={displayedResult.label} overlay={annotationOverlay} containerRef={resultPaneRef} testId="creative-comparison-result-pane">{image(displayedResult, true)}</ComparisonPane></div>
       </div>
     </div>
     <div className="flex flex-wrap items-center gap-2 border-t px-4 py-2">
@@ -276,6 +286,6 @@ export function CreativeComparisonWorkspace({
   </div>;
 }
 
-function ComparisonPane({ label, title, children, overlay, muted = false }: { label: string; title?: string; children: React.ReactNode; overlay?: React.ReactNode; muted?: boolean }) {
-  return <section title={title} className={cn("relative h-full min-h-0 overflow-hidden", muted ? "bg-muted/40" : "bg-background")}><span className="absolute left-3 top-3 z-10 max-w-[calc(100%-1.5rem)] truncate border bg-background/90 px-2 py-1 text-[11px] font-medium text-foreground shadow-sm">{label}</span>{children}{overlay}</section>;
+function ComparisonPane({ label, title, children, overlay, muted = false, containerRef, testId }: { label: string; title?: string; children: React.ReactNode; overlay?: React.ReactNode; muted?: boolean; containerRef?: React.Ref<HTMLElement>; testId?: string }) {
+  return <section ref={containerRef} title={title} data-testid={testId} className={cn("relative h-full min-h-0 overflow-hidden", muted ? "bg-muted/40" : "bg-background")}><span className="absolute left-3 top-3 z-10 max-w-[calc(100%-1.5rem)] truncate border bg-background/90 px-2 py-1 text-[11px] font-medium text-foreground shadow-sm">{label}</span>{children}{overlay}</section>;
 }

@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/netip"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -52,6 +53,7 @@ type dbExecutor interface {
 }
 
 type Config struct {
+	Version             string
 	AllowSignup         bool
 	AllowedEmails       []string
 	AllowedEmailDomains []string
@@ -137,6 +139,7 @@ type Handler struct {
 	CloudRuntime            cloudRuntimeProxy
 	CredentialBroker        *broker.Service
 	CreativeAssetDownloader *creative.Downloader
+	creativePrimeMu         sync.Mutex
 	// Lark integration. All three are nil when the Lark master key
 	// (MULTICA_LARK_SECRET_KEY) is unset; the corresponding HTTP
 	// handlers return 503 in that case so a misconfigured self-host

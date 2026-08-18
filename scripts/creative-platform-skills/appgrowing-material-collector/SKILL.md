@@ -7,7 +7,8 @@ allowed-tools: Bash(multica *), Bash(powershell *), Bash(python *)
 # AppGrowing 素材采集
 
 读取 `references/appgrowing-collection-contract.md`。只处理当前 task context 和 AutoPilot 已明确的筛选条件、
-预算及 `analysis_agent_id`；不得从 Agent 名称、Issue 评论或本机配置猜输入。
+预算及 `analysis_agent_id`；不得从 Agent 名称、Issue 评论或本机配置猜输入。平台会把当前工作区的图片采集上限
+注入为 2，Skill 不得提高该上限。
 
 采集范围固定为图片广告：只导入 `asset_type=image` 的真实素材。视频、非图片资源和无法判定类型的资源不进入 Crawl Run
 候选，不占用数量配额，也不参与预分析。
@@ -28,14 +29,15 @@ allowed-tools: Bash(multica *), Bash(powershell *), Bash(python *)
 
    ```text
    python <当前 Skill 目录>/references/delegate_preanalysis.py \
-     --crawl-run-id <run-id> --assignee-id <analysis-agent-id> \
-     [--cli <任务运行时的 multica 可执行文件绝对路径>]
+     --crawl-run-id <run-id> --assignee-id <analysis-agent-id>
    ```
 
    脚本只为本次新增、可读、尚无 completed Source Analysis 且无 active/succeeded 同 item task 的图片创建
    `creative_crawl_run_analysis` fanout。脚本优先使用 `--cli`，其次是任务运行时注入的 `MULTICA_CLI`，否则在 Windows 使用
-   `PATH` 中的 `multica.com`（其他系统使用 `multica`）；提交前必须确认该 CLI 支持 `multica task fanout`。不支持时任务必须以
-   `multica task fanout unavailable; upgrade CLI` 失败，不能把采集结果报告为预分析完成。并发由 Agent、runtime 和 provider 限额控制。
+   `PATH` 中的 `multica.com`（其他系统使用 `multica`）；默认调用不得猜测或硬编码本机绝对路径。
+   只有任务运行时已经验证可用的可执行文件才允许通过 `--cli` 显式传入。提交前必须确认该 CLI 支持
+   `multica task fanout`；不支持时任务必须以 `multica task fanout unavailable; upgrade CLI` 失败，不能把采集结果报告为预分析完成。
+   并发由 Agent、runtime 和 provider 限额控制。
 4. fanout 返回后立即结束，不轮询分析任务。Crawl Run 页面从候选、Source Analysis 和 task 派生进度。
 
 凭证失效时把 Crawl Run 标为 `action_required` 并保留平台重新绑定入口。连接器、导入或 fanout 失败时写入

@@ -7,7 +7,7 @@ import (
 )
 
 // GetCreativeTaskResourceContext resolves the nearest pinned creative context
-// and the selected per-image copy for any descendant task issue.
+// and the per-image creative brief for any descendant task issue.
 func (q *Queries) GetCreativeTaskResourceContext(ctx context.Context, issueID pgtype.UUID) ([]byte, error) {
 	var raw string
 	err := q.db.QueryRow(ctx, `
@@ -39,8 +39,7 @@ SELECT jsonb_build_object(
   'selected_item', COALESCE((
     SELECT jsonb_build_object(
       'candidate_id', candidate_id::text,
-      'copy_entry_id', copy_entry_id::text,
-      'copy', copy_snapshot,
+      'creative_brief', creative_brief,
       'work_issue_id', work_issue_id::text,
       'revision', revision,
       'status', status

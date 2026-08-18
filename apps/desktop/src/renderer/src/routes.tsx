@@ -27,6 +27,7 @@ import { DesktopAgentsPage } from "./components/desktop-agents-page";
 import { SquadsPage, SquadDetailPage as SquadDetailPageView } from "@multica/views/squads/components";
 import { InboxPage } from "@multica/views/inbox";
 import { SettingsPage } from "@multica/views/settings";
+import { ChangelogPage } from "@multica/views/changelog";
 import { useT } from "@multica/views/i18n";
 import { Download, Server } from "lucide-react";
 import { DaemonSettingsTab } from "./components/daemon-settings-tab";
@@ -218,6 +219,11 @@ export const appRoutes: RouteObject[] = [
             path: "settings",
             element: <DesktopSettingsRoute />,
             handle: { title: "Settings" },
+          },
+          {
+            path: "changelog",
+            element: <ChangelogPage />,
+            handle: { title: "Change log" },
           },
         ],
       },

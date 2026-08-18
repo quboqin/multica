@@ -25,6 +25,7 @@ import enUi from "./en/ui.json";
 import enSquads from "./en/squads.json";
 import enBilling from "./en/billing.json";
 import enPlans from "./en/plans.json";
+import enChangelog from "./en/changelog.json";
 import zhHansCommon from "./zh-Hans/common.json";
 import zhHansAuth from "./zh-Hans/auth.json";
 import zhHansSettings from "./zh-Hans/settings.json";
@@ -51,6 +52,7 @@ import zhHansUi from "./zh-Hans/ui.json";
 import zhHansSquads from "./zh-Hans/squads.json";
 import zhHansBilling from "./zh-Hans/billing.json";
 import zhHansPlans from "./zh-Hans/plans.json";
+import zhHansChangelog from "./zh-Hans/changelog.json";
 import koCommon from "./ko/common.json";
 import koAuth from "./ko/auth.json";
 import koSettings from "./ko/settings.json";
@@ -77,6 +79,7 @@ import koUi from "./ko/ui.json";
 import koSquads from "./ko/squads.json";
 import koBilling from "./ko/billing.json";
 import koPlans from "./ko/plans.json";
+import koChangelog from "./ko/changelog.json";
 import jaCommon from "./ja/common.json";
 import jaAuth from "./ja/auth.json";
 import jaSettings from "./ja/settings.json";
@@ -103,6 +106,7 @@ import jaUi from "./ja/ui.json";
 import jaSquads from "./ja/squads.json";
 import jaBilling from "./ja/billing.json";
 import jaPlans from "./ja/plans.json";
+import jaChangelog from "./ja/changelog.json";
 
 // Single source of truth for the resource bundle. Both apps (web layout +
 // desktop App.tsx) import from here so adding a locale or namespace happens
@@ -135,6 +139,7 @@ export const RESOURCES: Record<SupportedLocale, LocaleResources> = {
     squads: enSquads,
     billing: enBilling,
     plans: enPlans,
+    changelog: enChangelog,
   },
   "zh-Hans": {
     common: zhHansCommon,
@@ -163,6 +168,7 @@ export const RESOURCES: Record<SupportedLocale, LocaleResources> = {
     squads: zhHansSquads,
     billing: zhHansBilling,
     plans: zhHansPlans,
+    changelog: zhHansChangelog,
   },
   ko: {
     common: koCommon,
@@ -191,6 +197,7 @@ export const RESOURCES: Record<SupportedLocale, LocaleResources> = {
     squads: koSquads,
     billing: koBilling,
     plans: koPlans,
+    changelog: koChangelog,
   },
   ja: {
     common: jaCommon,
@@ -219,5 +226,6 @@ export const RESOURCES: Record<SupportedLocale, LocaleResources> = {
     squads: jaSquads,
     billing: jaBilling,
     plans: jaPlans,
+    changelog: jaChangelog,
   },
 };

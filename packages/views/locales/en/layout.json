@@ -19,9 +19,12 @@
   },
   "help": {
     "trigger": "Help",
-    "docs": "Docs",
-    "changelog": "Change log",
-    "feedback": "Feedback"
+    "changelog": "Change log"
+  },
+  "release_announcement": {
+    "title": "Multica {{version}} is here",
+    "view_changelog": "View changelog",
+    "later": "Later"
   },
   "workspace_loader": {
     "loading_workspace": "Loading workspace…",

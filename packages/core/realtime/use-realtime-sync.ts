@@ -442,6 +442,8 @@ export function useRealtimeSync(
       // events without dedicated handlers.
       workspace: () => {
         qc.invalidateQueries({ queryKey: workspaceKeys.list() });
+        const wsId = getCurrentWsId();
+        if (wsId) qc.invalidateQueries({ queryKey: workspaceKeys.capabilities(wsId) });
       },
       skill: () => {
         const wsId = getCurrentWsId();

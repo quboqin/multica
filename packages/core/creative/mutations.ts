@@ -21,6 +21,7 @@ export function useAdoptCreativeOrderVariant(wsId: string, orderId: string) {
     onSettled: () => {
       queryClient.invalidateQueries({ queryKey: creativeKeys.order(wsId, orderId) });
       queryClient.invalidateQueries({ queryKey: creativeKeys.orders(wsId) });
+      queryClient.invalidateQueries({ queryKey: creativeKeys.feedbackDashboard(wsId) });
     },
   });
 }
@@ -33,6 +34,7 @@ export function useCancelCreativeOrder(wsId: string, orderId: string) {
     onSettled: () => {
       queryClient.invalidateQueries({ queryKey: creativeKeys.order(wsId, orderId) });
       queryClient.invalidateQueries({ queryKey: creativeKeys.orders(wsId) });
+      queryClient.invalidateQueries({ queryKey: creativeKeys.feedbackDashboard(wsId) });
     },
   });
 }

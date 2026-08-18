@@ -1,10 +1,13 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"image"
+	"image/png"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -15,7 +18,17 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/spf13/cobra"
 )
+
+func pngImageBytes(width, height int) []byte {
+	var output bytes.Buffer
+	if err := png.Encode(&output, image.NewRGBA(image.Rect(0, 0, width, height))); err != nil {
+		panic(err)
+	}
+	return output.Bytes()
+}
 
 func TestFirstCreativeCandidateSourcePrefersArchivedAsset(t *testing.T) {
 	candidate := creativeMaterialCandidateCLI{
@@ -56,6 +69,36 @@ func TestValidateGPTImageSize(t *testing.T) {
 		if err := validateGPTImageSize(size); err == nil {
 			t.Fatalf("validateGPTImageSize(%q) unexpectedly passed", size)
 		}
+	}
+}
+
+func TestProviderGPTImageSizeMapsDeliveryCanvases(t *testing.T) {
+	cases := map[string]string{
+		"1080x1080": "1088x1088",
+		"1200x628":  "1200x624",
+		"800x1000":  "800x992",
+	}
+	for requested, want := range cases {
+		got, err := providerGPTImageSize(requested)
+		if err != nil || got != want {
+			t.Fatalf("providerGPTImageSize(%q) = %q, %v; want %q", requested, got, err, want)
+		}
+	}
+	if _, err := providerGPTImageSize("1080x1350"); err == nil {
+		t.Fatal("providerGPTImageSize accepted an unsupported non-canonical canvas")
+	}
+}
+
+func TestValidateProviderImageOutput(t *testing.T) {
+	dimensions, err := validateProviderImageOutput(pngImageBytes(1200, 624), "1200x624")
+	if err != nil || dimensions.Width != 1200 || dimensions.Height != 624 {
+		t.Fatalf("validateProviderImageOutput(valid) = %#v, %v", dimensions, err)
+	}
+	if _, err := validateProviderImageOutput(pngImageBytes(1200, 650), "1200x624"); err != nil {
+		t.Fatalf("validateProviderImageOutput(within five percent) = %v", err)
+	}
+	if _, err := validateProviderImageOutput(pngImageBytes(1536, 1024), "1200x624"); err == nil || !strings.Contains(err.Error(), "aspect deviation") {
+		t.Fatalf("validateProviderImageOutput(wrong aspect) = %v", err)
 	}
 }
 
@@ -168,6 +211,105 @@ func TestTruncateCLIError(t *testing.T) {
 	}
 	if got := truncateCLIError([]byte(strings.Repeat("x", 10)), 4); got != "xxxx..." {
 		t.Fatalf("truncateCLIError = %q", got)
+	}
+}
+
+func TestCreativeOrderAssetPayloadEmbedsJSONEvidenceWithoutLocalPath(t *testing.T) {
+	directory := t.TempDir()
+	prompt := "Use the approved copy on a new full-bleed layout."
+	promptSHA256 := imagePromptSHA256(prompt)
+	writeJSON := func(name string, value any) string {
+		t.Helper()
+		path := filepath.Join(directory, name)
+		body, err := json.Marshal(value)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, body, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return path
+	}
+	inputFile := writeJSON("asset.json", map[string]any{
+		"variant_id": "variant-1", "size_key": "1080x1080", "revision": 1,
+		"stage": "generated", "status": "completed", "attachment_id": "attachment-1",
+	})
+	modelResultFile := writeJSON("image-edit.raw.json", map[string]any{
+		"model": "gpt-image-2", "prompt": prompt, "prompt_sha256": promptSHA256,
+		"request_id": "req-1", "attempts": 2, "actual_width": 1088, "actual_height": 1088,
+		"actual_aspect_ratio": 1.0, "provider_slot_limit": 3, "path": `C:\\workdir\\square-model.png`,
+		"generated_asset": map[string]any{"completed": true, "path": `C:\\workdir\\square-model.png`, "width": 1088, "height": 1088},
+	})
+	promptContractFile := writeJSON("prompt-contract.json", map[string]any{"prompt_sha256": promptSHA256})
+	copyValidationFile := writeJSON("copy-validation.json", map[string]any{"passed": true})
+	normalizationFile := writeJSON("normalize-evidence.json", map[string]any{"target_size": map[string]int{"width": 1080, "height": 1080}})
+
+	command := &cobra.Command{}
+	command.Flags().String("input-file", "", "")
+	command.Flags().String("model-result-file", "", "")
+	command.Flags().String("model-result-id", "", "")
+	command.Flags().String("prompt-contract-file", "", "")
+	command.Flags().String("copy-validation-file", "", "")
+	command.Flags().String("normalization-evidence-file", "", "")
+	for name, value := range map[string]string{
+		"input-file":                  inputFile,
+		"model-result-file":           modelResultFile,
+		"prompt-contract-file":        promptContractFile,
+		"copy-validation-file":        copyValidationFile,
+		"normalization-evidence-file": normalizationFile,
+	} {
+		if err := command.Flags().Set(name, value); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	payload, err := creativeOrderAssetPayload(command)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var asset struct {
+		Metadata struct {
+			Prompt string `json:"prompt"`
+			Model  string `json:"model"`
+		} `json:"metadata"`
+		Evidence struct {
+			RequestID      string          `json:"request_id"`
+			PromptSHA256   string          `json:"prompt_sha256"`
+			ModelResult    json.RawMessage `json:"model_result"`
+			PromptContract json.RawMessage `json:"prompt_contract"`
+			CopyValidation json.RawMessage `json:"copy_validation"`
+			Normalization  json.RawMessage `json:"normalization"`
+		} `json:"evidence"`
+	}
+	if err := json.Unmarshal(payload, &asset); err != nil {
+		t.Fatal(err)
+	}
+	if asset.Metadata.Prompt != prompt || asset.Metadata.Model != "gpt-image-2" || asset.Evidence.RequestID != "req-1" || asset.Evidence.PromptSHA256 != promptSHA256 {
+		t.Fatalf("asset trace = %#v", asset)
+	}
+	var modelResult map[string]any
+	if err := json.Unmarshal(asset.Evidence.ModelResult, &modelResult); err != nil {
+		t.Fatal(err)
+	}
+	if _, exists := modelResult["path"]; exists {
+		t.Fatalf("model result leaked local path: %#v", modelResult)
+	}
+	generatedAsset, ok := modelResult["generated_asset"].(map[string]any)
+	if !ok {
+		t.Fatalf("generated asset = %#v", modelResult["generated_asset"])
+	}
+	if _, exists := generatedAsset["path"]; exists {
+		t.Fatalf("generated asset leaked local path: %#v", generatedAsset)
+	}
+	for label, raw := range map[string]json.RawMessage{
+		"prompt contract": asset.Evidence.PromptContract,
+		"copy validation": asset.Evidence.CopyValidation,
+		"normalization":   asset.Evidence.Normalization,
+	} {
+		var object map[string]any
+		if err := json.Unmarshal(raw, &object); err != nil || len(object) == 0 {
+			t.Fatalf("%s = %#v, %v", label, object, err)
+		}
 	}
 }
 
@@ -295,8 +437,10 @@ func TestExecuteImageEditBatchRunsDependentJobsTogether(t *testing.T) {
 			} else {
 				body, readErr := io.ReadAll(opened)
 				_ = opened.Close()
-				if readErr != nil || string(body) != "square" {
-					t.Errorf("derivative source = %q, %v", body, readErr)
+				if readErr != nil {
+					t.Errorf("read derivative source: %v", readErr)
+				} else if _, _, decodeErr := image.DecodeConfig(bytes.NewReader(body)); decodeErr != nil {
+					t.Errorf("derivative source must be an image: %v", decodeErr)
 				}
 			}
 			payload = size
@@ -310,7 +454,13 @@ func TestExecuteImageEditBatchRunsDependentJobsTogether(t *testing.T) {
 			}
 		}
 		w.Header().Set("x-request-id", "req-"+size)
-		_, _ = fmt.Fprintf(w, `{"data":[{"b64_json":"%s"}]}`, base64.StdEncoding.EncodeToString([]byte(payload)))
+		width, height, parseErr := parseGPTImageSize(size)
+		if parseErr != nil {
+			t.Errorf("parse test image size %q: %v", size, parseErr)
+			return
+		}
+		_ = payload
+		_, _ = fmt.Fprintf(w, `{"data":[{"b64_json":"%s"}]}`, base64.StdEncoding.EncodeToString(pngImageBytes(width, height)))
 	}))
 	defer server.Close()
 
@@ -335,6 +485,81 @@ func TestExecuteImageEditBatchRunsDependentJobsTogether(t *testing.T) {
 		if result.Prompt != wantPrompt || result.PromptSHA256 != imagePromptSHA256(wantPrompt) {
 			t.Fatalf("result prompt trace for %s = (%q, %q)", result.ID, result.Prompt, result.PromptSHA256)
 		}
+		if result.ActualWidth == 0 || result.ActualHeight == 0 || result.ActualAspect == 0 {
+			t.Fatalf("result dimensions for %s = %#v", result.ID, result)
+		}
+		if result.GeneratedAsset == nil || !result.GeneratedAsset.Completed || result.GeneratedAsset.Path == "" || result.GeneratedAsset.Width != result.ActualWidth || result.GeneratedAsset.Height != result.ActualHeight {
+			t.Fatalf("generated asset trace for %s = %#v", result.ID, result.GeneratedAsset)
+		}
+	}
+}
+
+func TestExecuteImageEditBatchKeepsWrongProviderAspectForNormalization(t *testing.T) {
+	t.Setenv("MULTICA_IMAGE_SLOT_DIR", t.TempDir())
+	t.Setenv("MULTICA_IMAGE_MAX_CONCURRENT", "1")
+	workDir := t.TempDir()
+	reference := filepath.Join(workDir, "reference.png")
+	if err := os.WriteFile(reference, []byte("reference"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requests.Add(1)
+		w.Header().Set("x-request-id", "req-wrong-aspect")
+		_, _ = fmt.Fprintf(w, `{"data":[{"b64_json":"%s"}]}`, base64.StdEncoding.EncodeToString(pngImageBytes(1536, 1024)))
+	}))
+	defer server.Close()
+
+	output := filepath.Join(workDir, "landscape.png")
+	summary := executeImageEditBatch(context.Background(), server.Client(), server.URL, "test-key", "image", preparedImageEditBatch{
+		MaxConcurrency: 1,
+		Jobs: []preparedImageEditJob{{
+			ID: "landscape", Inputs: []imageEditBatchInput{{Path: reference}}, Prompt: "landscape",
+			Model: "gpt-image-2", Size: "1200x624", MaxAttempts: 1, OutputFile: output,
+		}},
+	})
+	if summary.Succeeded != 1 || summary.Results[0].Status != "succeeded" || !summary.Results[0].AspectFallback {
+		t.Fatalf("summary = %#v", summary)
+	}
+	if _, err := os.Stat(output); err != nil {
+		t.Fatalf("wrong-aspect provider output was not written: %v", err)
+	}
+	if requests.Load() != 2 || summary.Results[0].Attempts != 2 || summary.Results[0].AspectRetries != 1 {
+		t.Fatalf("aspect retry evidence = %+v, requests=%d", summary.Results[0], requests.Load())
+	}
+}
+
+func TestExecuteImageEditBatchRetriesOneWrongProviderAspect(t *testing.T) {
+	t.Setenv("MULTICA_IMAGE_SLOT_DIR", t.TempDir())
+	t.Setenv("MULTICA_IMAGE_MAX_CONCURRENT", "1")
+	workDir := t.TempDir()
+	reference := filepath.Join(workDir, "reference.png")
+	if err := os.WriteFile(reference, []byte("reference"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if requests.Add(1) == 1 {
+			_, _ = fmt.Fprintf(w, `{"data":[{"b64_json":"%s"}]}`, base64.StdEncoding.EncodeToString(pngImageBytes(1536, 1024)))
+			return
+		}
+		_, _ = fmt.Fprintf(w, `{"data":[{"b64_json":"%s"}]}`, base64.StdEncoding.EncodeToString(pngImageBytes(1200, 624)))
+	}))
+	defer server.Close()
+
+	output := filepath.Join(workDir, "landscape.png")
+	summary := executeImageEditBatch(context.Background(), server.Client(), server.URL, "test-key", "image", preparedImageEditBatch{
+		MaxConcurrency: 1,
+		Jobs: []preparedImageEditJob{{
+			ID: "landscape", Inputs: []imageEditBatchInput{{Path: reference}}, Prompt: "landscape",
+			Model: "gpt-image-2", Size: "1200x624", MaxAttempts: 1, OutputFile: output,
+		}},
+	})
+	if summary.Succeeded != 1 || summary.Results[0].AspectRetries != 1 || summary.Results[0].Attempts != 2 || requests.Load() != 2 {
+		t.Fatalf("summary = %#v, requests=%d", summary, requests.Load())
+	}
+	if _, err := os.Stat(output); err != nil {
+		t.Fatalf("retried output was not written: %v", err)
 	}
 }
 
