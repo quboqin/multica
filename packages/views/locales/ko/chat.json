@@ -28,6 +28,28 @@
     "copy_action": "복사",
     "copied_toast": "복사했습니다",
     "copy_failed_toast": "복사 실패",
+    "positive_feedback_action": "좋은 답변",
+    "negative_feedback_action": "개선 필요",
+    "feedback_dialog": {
+      "comment_action": "의견 추가",
+      "edit_comment_action": "의견 수정",
+      "comment_title": "의견 추가",
+      "edit_comment_title": "의견 수정",
+      "comment_description": "평가와 별도로 의견을 저장할 수 있습니다.",
+      "negative_title": "어떤 점을 개선할 수 있나요?",
+      "negative_description": "이 답변의 문제점을 입력해 주세요.",
+      "comment_optional": "의견 (선택)",
+      "comment_required": "의견 (필수)",
+      "comment_placeholder": "의견 입력...",
+      "cancel": "취소",
+      "submit": "피드백 제출",
+      "submitting": "제출 중...",
+      "success_toast": "피드백을 제출했습니다",
+      "error_toast": "피드백을 제출하지 못했습니다",
+      "remove_action": "피드백 취소",
+      "removed_toast": "피드백을 취소했습니다",
+      "remove_error_toast": "피드백을 취소하지 못했습니다"
+    },
     "loading_older": "이전 메시지를 불러오는 중…"
   },
   "session_history": {

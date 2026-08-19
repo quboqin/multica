@@ -10,6 +10,7 @@ SELECT i.id, i.workspace_id, i.title, i.description, i.status, i.priority,
        i.parent_issue_id, i.position, i.start_date, i.due_date, i.created_at, i.updated_at, i.number, i.project_id, i.metadata
 FROM issue i
 WHERE i.workspace_id = $1
+  AND i.is_active = TRUE
   AND (sqlc.narg('status')::text IS NULL OR i.status = sqlc.narg('status'))
   AND (sqlc.narg('priority')::text IS NULL OR i.priority = sqlc.narg('priority'))
   AND (sqlc.narg('assignee_id')::uuid IS NULL OR i.assignee_id = sqlc.narg('assignee_id'))
@@ -63,11 +64,11 @@ LIMIT $2 OFFSET $3;
 
 -- name: GetIssue :one
 SELECT * FROM issue
-WHERE id = $1;
+WHERE id = $1 AND is_active = TRUE;
 
 -- name: GetIssueInWorkspace :one
 SELECT * FROM issue
-WHERE id = $1 AND workspace_id = $2;
+WHERE id = $1 AND workspace_id = $2 AND is_active = TRUE;
 
 -- name: CreateIssue :one
 INSERT INTO issue (
@@ -80,7 +81,7 @@ INSERT INTO issue (
 
 -- name: GetIssueByNumber :one
 SELECT * FROM issue
-WHERE workspace_id = $1 AND number = $2;
+WHERE workspace_id = $1 AND number = $2 AND is_active = TRUE;
 
 -- name: UpdateIssue :one
 UPDATE issue SET
@@ -96,7 +97,7 @@ UPDATE issue SET
     parent_issue_id = sqlc.narg('parent_issue_id'),
     project_id = sqlc.narg('project_id'),
     updated_at = now()
-WHERE id = $1
+WHERE id = $1 AND is_active = TRUE
 RETURNING *;
 
 -- name: UpdateIssueStatus :one
@@ -104,7 +105,7 @@ RETURNING *;
 UPDATE issue SET
     status = $2,
     updated_at = now()
-WHERE id = $1 AND workspace_id = $3
+WHERE id = $1 AND workspace_id = $3 AND is_active = TRUE
 RETURNING *;
 
 -- name: CreateIssueWithOrigin :one
@@ -124,6 +125,7 @@ SELECT pg_advisory_xact_lock(hashtextextended($1::text, 0));
 -- name: FindActiveDuplicateIssue :one
 SELECT * FROM issue
 WHERE workspace_id = $1
+  AND is_active = TRUE
   AND status NOT IN ('done', 'cancelled')
   AND project_id IS NOT DISTINCT FROM sqlc.arg('project_id')::uuid
   AND parent_issue_id IS NOT DISTINCT FROM sqlc.arg('parent_issue_id')::uuid
@@ -132,12 +134,32 @@ ORDER BY created_at ASC
 LIMIT 1;
 
 -- name: DeleteIssue :exec
--- Defense-in-depth: the workspace_id predicate makes the tenant invariant a
--- SQL-layer guarantee rather than a handler-layer one. Handler loaders
--- (loadIssueForUser / GetIssueInWorkspace) already enforce membership today,
--- but a future loader bypass or a new caller skipping the loader would be
--- silently catastrophic without this guard. See incident #1661.
-DELETE FROM issue WHERE id = $1 AND workspace_id = $2;
+-- Keep the issue and its history for audit. Comments are hidden with the issue,
+-- child issues remain active but are detached, and stale inbox notifications
+-- are archived. The workspace predicate remains the SQL-layer tenant guard.
+WITH deleted_issue AS (
+  UPDATE issue AS target
+  SET is_active = FALSE,
+      updated_at = now()
+  WHERE target.id = $1 AND target.workspace_id = $2 AND target.is_active = TRUE
+  RETURNING target.id
+), hidden_comments AS (
+  UPDATE comment AS target
+  SET is_active = FALSE,
+      updated_at = now()
+  WHERE target.issue_id IN (SELECT deleted_issue.id FROM deleted_issue)
+    AND target.is_active = TRUE
+), archived_inbox AS (
+  UPDATE inbox_item AS target
+  SET archived = TRUE
+  WHERE target.issue_id IN (SELECT deleted_issue.id FROM deleted_issue)
+    AND target.archived = FALSE
+)
+UPDATE issue AS child
+SET parent_issue_id = NULL,
+    updated_at = now()
+WHERE child.parent_issue_id IN (SELECT deleted_issue.id FROM deleted_issue)
+  AND child.is_active = TRUE;
 
 -- name: ListOpenIssues :many
 -- See ListIssues for the semantics of involves_user_id (mirrors the 4-branch
@@ -147,6 +169,7 @@ SELECT i.id, i.workspace_id, i.title, i.description, i.status, i.priority,
        i.parent_issue_id, i.position, i.start_date, i.due_date, i.created_at, i.updated_at, i.number, i.project_id, i.metadata
 FROM issue i
 WHERE i.workspace_id = $1
+  AND i.is_active = TRUE
   AND i.status NOT IN ('done', 'cancelled')
   AND (sqlc.narg('priority')::text IS NULL OR i.priority = sqlc.narg('priority'))
   AND (sqlc.narg('assignee_id')::uuid IS NULL OR i.assignee_id = sqlc.narg('assignee_id'))
@@ -192,6 +215,7 @@ ORDER BY i.position ASC, i.created_at DESC;
 -- See ListIssues for the semantics of involves_user_id.
 SELECT count(*) FROM issue i
 WHERE i.workspace_id = $1
+  AND i.is_active = TRUE
   AND (sqlc.narg('status')::text IS NULL OR i.status = sqlc.narg('status'))
   AND (sqlc.narg('priority')::text IS NULL OR i.priority = sqlc.narg('priority'))
   AND (sqlc.narg('assignee_id')::uuid IS NULL OR i.assignee_id = sqlc.narg('assignee_id'))
@@ -236,6 +260,7 @@ WHERE i.workspace_id = $1
 -- name: ListChildIssues :many
 SELECT * FROM issue
 WHERE parent_issue_id = $1
+  AND is_active = TRUE
 ORDER BY position ASC, created_at DESC;
 
 -- name: ListChildrenByParents :many
@@ -246,6 +271,7 @@ ORDER BY position ASC, created_at DESC;
 -- enumerate children of parents in workspaces they don't belong to.
 SELECT * FROM issue
 WHERE workspace_id = sqlc.arg('workspace_id')
+  AND is_active = TRUE
   AND parent_issue_id = ANY(sqlc.arg('parent_ids')::uuid[])
 ORDER BY parent_issue_id, position ASC, created_at DESC;
 
@@ -257,6 +283,7 @@ ORDER BY parent_issue_id, position ASC, created_at DESC;
 -- running with max_concurrent_tasks > 1).
 SELECT * FROM issue
 WHERE workspace_id = $1
+  AND is_active = TRUE
   AND origin_type = $2
   AND origin_id = $3
 LIMIT 1;
@@ -269,6 +296,7 @@ SELECT
   COUNT(*)::bigint as frequency
 FROM issue
 WHERE workspace_id = $1
+  AND is_active = TRUE
   AND creator_id = $2
   AND creator_type = 'member'
   AND assignee_type IS NOT NULL
@@ -281,6 +309,7 @@ SELECT parent_issue_id,
        COUNT(*) FILTER (WHERE status IN ('done', 'cancelled'))::bigint AS done
 FROM issue
 WHERE workspace_id = $1
+  AND is_active = TRUE
   AND parent_issue_id IS NOT NULL
 GROUP BY parent_issue_id;
 
@@ -293,7 +322,7 @@ GROUP BY parent_issue_id;
 UPDATE issue SET
     metadata = jsonb_set(metadata, ARRAY[sqlc.arg('key')::text], sqlc.arg('value')::jsonb),
     updated_at = now()
-WHERE id = sqlc.arg('id') AND workspace_id = sqlc.arg('workspace_id')
+WHERE id = sqlc.arg('id') AND workspace_id = sqlc.arg('workspace_id') AND is_active = TRUE
 RETURNING *;
 
 -- name: DeleteIssueMetadataKey :one
@@ -302,7 +331,7 @@ RETURNING *;
 UPDATE issue SET
     metadata = metadata - sqlc.arg('key')::text,
     updated_at = now()
-WHERE id = sqlc.arg('id') AND workspace_id = sqlc.arg('workspace_id')
+WHERE id = sqlc.arg('id') AND workspace_id = sqlc.arg('workspace_id') AND is_active = TRUE
 RETURNING *;
 
 -- name: MarkIssueFirstExecuted :one
@@ -312,5 +341,5 @@ RETURNING *;
 -- retries and re-assignments hit the WHERE clause and no-op.
 UPDATE issue
 SET first_executed_at = now()
-WHERE id = $1 AND first_executed_at IS NULL
+WHERE id = $1 AND is_active = TRUE AND first_executed_at IS NULL
 RETURNING id, workspace_id, creator_type, creator_id, first_executed_at;

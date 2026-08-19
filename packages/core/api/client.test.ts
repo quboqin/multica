@@ -549,6 +549,256 @@ describe("ApiClient", () => {
     });
   });
 
+  describe("favorites", () => {
+    it("uses the expected category, favorite, move, and unfavorite contracts", async () => {
+      const attachment = {
+        id: "att-1",
+        workspace_id: "ws-1",
+        issue_id: "issue-1",
+        comment_id: "comment-1",
+        chat_session_id: null,
+        chat_message_id: null,
+        uploader_type: "agent",
+        uploader_id: "agent-1",
+        filename: "report.md",
+        url: "/uploads/report.md",
+        download_url: "/api/attachments/att-1/download",
+        markdown_url: "/api/attachments/att-1/download",
+        content_type: "text/markdown",
+        size_bytes: 123,
+        created_at: "2026-07-20T00:00:00Z",
+      };
+      const category = {
+        id: "cat-1",
+        workspace_id: "ws-1",
+        user_id: "user-1",
+        name: "Default",
+        is_default: true,
+        favorite_count: 1,
+        created_at: "2026-07-21T00:00:00Z",
+        updated_at: "2026-07-21T00:00:00Z",
+      };
+      const favorite = {
+        id: "favorite-1",
+        workspace_id: "ws-1",
+        user_id: "user-1",
+        item_type: "attachment",
+        item_id: "att-1",
+        attachment,
+        category,
+        created_at: "2026-07-21T00:00:00Z",
+      };
+      const fetchMock = vi
+        .fn()
+        .mockResolvedValueOnce(
+          new Response(JSON.stringify([category]), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }),
+        )
+        .mockResolvedValueOnce(
+          new Response(JSON.stringify(category), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }),
+        )
+        .mockResolvedValueOnce(
+          new Response(JSON.stringify({ ...category, name: "Sources" }), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }),
+        )
+        .mockResolvedValueOnce(new Response(null, { status: 204 }))
+        .mockResolvedValueOnce(
+          new Response(JSON.stringify([favorite]), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }),
+        )
+        .mockResolvedValueOnce(
+          new Response(JSON.stringify(favorite), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }),
+        )
+        .mockResolvedValueOnce(
+          new Response(JSON.stringify({
+            ...favorite,
+            category: { ...category, id: "cat-2", name: "Research", is_default: false },
+          }), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }),
+        )
+        .mockResolvedValueOnce(new Response(null, { status: 204 }));
+      vi.stubGlobal("fetch", fetchMock);
+
+      const client = new ApiClient("https://api.example.test");
+      expect((await client.listFavoriteCategories())[0]?.isDefault).toBe(true);
+      expect((await client.createFavoriteCategory("Default"))?.workspaceId).toBe("ws-1");
+      expect((await client.updateFavoriteCategory("cat-1", "Sources")).name).toBe("Sources");
+      await client.deleteFavoriteCategory("cat-1");
+      expect(await client.listFavorites()).toHaveLength(1);
+      const created = await client.putFavorite("attachment", "att-1");
+      expect(created.itemType === "attachment" && created.attachment.id).toBe("att-1");
+      expect((await client.moveFavorite("attachment", "att-1", "cat-2")).category.name).toBe("Research");
+      await client.deleteFavorite("attachment", "att-1");
+
+      expect(fetchMock.mock.calls.map(([url, init]) => ({
+        url,
+        method: init?.method ?? "GET",
+        body: init?.body,
+      }))).toEqual([
+        { url: "https://api.example.test/api/favorite-categories", method: "GET", body: undefined },
+        { url: "https://api.example.test/api/favorite-categories", method: "POST", body: JSON.stringify({ name: "Default" }) },
+        { url: "https://api.example.test/api/favorite-categories/cat-1", method: "PATCH", body: JSON.stringify({ name: "Sources" }) },
+        { url: "https://api.example.test/api/favorite-categories/cat-1", method: "DELETE", body: undefined },
+        { url: "https://api.example.test/api/favorites", method: "GET", body: undefined },
+        { url: "https://api.example.test/api/favorites/attachment/att-1", method: "PUT", body: undefined },
+        { url: "https://api.example.test/api/favorites/attachment/att-1", method: "PATCH", body: JSON.stringify({ category_id: "cat-2" }) },
+        { url: "https://api.example.test/api/favorites/attachment/att-1", method: "DELETE", body: undefined },
+      ]);
+    });
+
+    it("falls back safely for malformed category and favorite lists", async () => {
+      const fetchMock = vi
+        .fn()
+        .mockResolvedValueOnce(
+          new Response(JSON.stringify({ categories: null }), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }),
+        )
+        .mockResolvedValueOnce(
+          new Response(JSON.stringify({ attachments: null }), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }),
+        );
+      vi.stubGlobal("fetch", fetchMock);
+
+      const client = new ApiClient("https://api.example.test");
+      expect(await client.listFavoriteCategories()).toEqual([]);
+      expect(await client.listFavorites()).toEqual([]);
+    });
+
+    it("falls back safely for a malformed updated category", async () => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn().mockResolvedValue(
+          new Response(JSON.stringify({ id: null, name: "Broken" }), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }),
+        ),
+      );
+
+      const client = new ApiClient("https://api.example.test");
+      expect((await client.updateFavoriteCategory("cat-1", "Broken")).id).toBe("");
+    });
+  });
+
+  describe("issue and project favorites", () => {
+    const category = {
+      id: "cat-1",
+      workspace_id: "ws-1",
+      user_id: "user-1",
+      name: "Default",
+      is_default: true,
+      favorite_count: 1,
+      created_at: "2026-07-21T00:00:00Z",
+      updated_at: "2026-07-21T00:00:00Z",
+    };
+    const favorite = {
+      id: "favorite-1",
+      workspace_id: "ws-1",
+      user_id: "user-1",
+      item_type: "issue",
+      item_id: "issue-1",
+      category,
+      created_at: "2026-07-21T00:00:00Z",
+    };
+
+    it("uses the expected list, create, move, and delete contracts", async () => {
+      const fetchMock = vi
+        .fn()
+        .mockResolvedValueOnce(
+          new Response(JSON.stringify([favorite]), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }),
+        )
+        .mockResolvedValueOnce(
+          new Response(JSON.stringify(favorite), {
+            status: 201,
+            headers: { "Content-Type": "application/json" },
+          }),
+        )
+        .mockResolvedValueOnce(
+          new Response(
+            JSON.stringify({
+              ...favorite,
+              category: { ...category, id: "cat-2", name: "Research" },
+            }),
+            {
+              status: 200,
+              headers: { "Content-Type": "application/json" },
+            },
+          ),
+        )
+        .mockResolvedValueOnce(new Response(null, { status: 204 }));
+      vi.stubGlobal("fetch", fetchMock);
+
+      const client = new ApiClient("https://api.example.test");
+      expect((await client.listFavorites())[0]?.itemType).toBe("issue");
+      expect(
+        (await client.putFavorite("issue", "issue-1")).category.isDefault,
+      ).toBe(true);
+      expect(
+        (await client.moveFavorite("issue", "issue-1", "cat-2")).category.name,
+      ).toBe("Research");
+      await client.deleteFavorite("issue", "issue-1");
+
+      expect(fetchMock.mock.calls.map(([url, init]) => ({
+        url,
+        method: init?.method ?? "GET",
+        body: init?.body,
+      }))).toEqual([
+        { url: "https://api.example.test/api/favorites", method: "GET", body: undefined },
+        {
+          url: "https://api.example.test/api/favorites/issue/issue-1",
+          method: "PUT",
+          body: undefined,
+        },
+        {
+          url: "https://api.example.test/api/favorites/issue/issue-1",
+          method: "PATCH",
+          body: JSON.stringify({ category_id: "cat-2" }),
+        },
+        {
+          url: "https://api.example.test/api/favorites/issue/issue-1",
+          method: "DELETE",
+          body: undefined,
+        },
+      ]);
+    });
+
+    it("falls back safely for a malformed favorite list", async () => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn().mockResolvedValue(
+          new Response(JSON.stringify({ favorites: null }), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }),
+        ),
+      );
+
+      const client = new ApiClient("https://api.example.test");
+      expect(await client.listFavorites()).toEqual([]);
+    });
+  });
+
   describe("getAttachmentTextContent", () => {
     it("returns body text and the original content type from the X-* header", async () => {
       vi.stubGlobal(
@@ -613,8 +863,22 @@ describe("ApiClient", () => {
 
     it("falls back to the legacy full-list endpoint when the paged route 404s", async () => {
       const legacy = [
-        { id: "m1", role: "user", content: "hi", created_at: "2026-06-01T00:00:00Z" },
-        { id: "m2", role: "assistant", content: "yo", created_at: "2026-06-01T00:00:01Z" },
+        {
+          id: "m1",
+          chat_session_id: "session-1",
+          role: "user",
+          content: "hi",
+          task_id: null,
+          created_at: "2026-06-01T00:00:00Z",
+        },
+        {
+          id: "m2",
+          chat_session_id: "session-1",
+          role: "assistant",
+          content: "yo",
+          task_id: null,
+          created_at: "2026-06-01T00:00:01Z",
+        },
       ];
       const fetchMock = vi
         .fn()
@@ -663,6 +927,71 @@ describe("ApiClient", () => {
       });
       expect(fetchMock).toHaveBeenCalledTimes(1);
     });
+
+    it("falls back safely when the paged response is malformed", async () => {
+      const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ messages: null }, 200));
+      vi.stubGlobal("fetch", fetchMock);
+
+      const client = new ApiClient("https://api.example.test");
+      await expect(client.listChatMessagesPage("session-1", { limit: 25 })).resolves.toEqual({
+        messages: [],
+        limit: 50,
+        has_more: false,
+      });
+    });
+  });
+
+  describe("chat message feedback", () => {
+    it("parses current feedback and ignores unknown sentiment values", async () => {
+      const fetchMock = vi.fn().mockResolvedValue(
+        new Response(JSON.stringify([
+          {
+            id: "message-1",
+            chat_session_id: "session-1",
+            role: "assistant",
+            content: "Answer",
+            task_id: null,
+            created_at: "2026-07-23T00:00:00Z",
+            feedback: { sentiment: "future-value", comment: null },
+          },
+        ]), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+      vi.stubGlobal("fetch", fetchMock);
+
+      const client = new ApiClient("https://api.example.test");
+      const messages = await client.listChatMessages("session-1");
+
+      expect(messages).toHaveLength(1);
+      expect(messages[0]?.feedback).toEqual({ sentiment: null, comment: "" });
+    });
+
+    it("submits sentiment and comment for one assistant message", async () => {
+      const fetchMock = vi.fn().mockResolvedValue(
+        new Response(null, { status: 204 }),
+      );
+      vi.stubGlobal("fetch", fetchMock);
+
+      const client = new ApiClient("https://api.example.test");
+      await client.upsertChatMessageFeedback("session-1", "message-1", {
+        sentiment: "negative",
+        comment: "The answer missed the requested format.",
+      });
+
+      expect(fetchMock).toHaveBeenCalledWith(
+        "https://api.example.test/api/chat/sessions/session-1/messages/message-1/feedback",
+        expect.objectContaining({
+          method: "PUT",
+          body: JSON.stringify({
+            sentiment: "negative",
+            comment: "The answer missed the requested format.",
+          }),
+        }),
+      );
+    });
+
   });
 
   describe("cancelTaskById response parsing", () => {

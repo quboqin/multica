@@ -3357,18 +3357,25 @@ func TestGetChatSessionGCCheck(t *testing.T) {
 		t.Fatal("expected updated_at to be set")
 	}
 
-	// Hard-deleted session: 404 — exactly what the daemon needs to reclaim
-	// the workdir on the next GC pass after a user runs DeleteChatSession.
-	if _, err := testPool.Exec(ctx, `DELETE FROM chat_session WHERE id = $1`, sessionID); err != nil {
-		t.Fatalf("delete chat session: %v", err)
+	// Logically deleted session: status=deleted — exactly what the daemon
+	// needs to reclaim the workdir on the next GC pass after a user deletes
+	// the session.
+	if _, err := testPool.Exec(ctx, `UPDATE chat_session SET is_active = FALSE WHERE id = $1`, sessionID); err != nil {
+		t.Fatalf("deactivate chat session: %v", err)
 	}
 	w = httptest.NewRecorder()
 	req = newDaemonTokenRequest("GET", "/api/daemon/chat-sessions/"+sessionID+"/gc-check", nil,
 		testWorkspaceID, "legit-daemon")
 	req = withURLParam(req, "sessionId", sessionID)
 	testHandler.GetChatSessionGCCheck(w, req)
-	if w.Code != http.StatusNotFound {
-		t.Fatalf("hard-deleted session: expected 404, got %d: %s", w.Code, w.Body.String())
+	if w.Code != http.StatusOK {
+		t.Fatalf("logically deleted session: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode logically deleted response: %v", err)
+	}
+	if resp.Status != "deleted" {
+		t.Fatalf("expected status %q, got %q", "deleted", resp.Status)
 	}
 }
 

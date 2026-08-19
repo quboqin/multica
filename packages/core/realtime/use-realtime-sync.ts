@@ -45,6 +45,7 @@ import {
 import type { Workspace } from "../types/workspace";
 import { chatKeys } from "../chat/queries";
 import { creativeKeys } from "../creative/queries";
+import { favoriteKeys } from "../favorites/queries";
 import { useChatStore } from "../chat";
 import { resolvePostAuthDestination, useHasOnboarded } from "../paths";
 import type {
@@ -644,6 +645,7 @@ export function useRealtimeSync(
       if (wsId) {
         onIssueDeleted(qc, wsId, issue_id);
         onInboxIssueDeleted(qc, wsId, issue_id);
+        qc.invalidateQueries({ queryKey: favoriteKeys.all(wsId) });
       }
     });
 
@@ -703,6 +705,10 @@ export function useRealtimeSync(
     const unsubCommentDeleted = ws.on("comment:deleted", (p) => {
       const { issue_id } = p as CommentDeletedPayload;
       if (issue_id) invalidateTimeline(issue_id);
+      const wsId = getCurrentWsId();
+      if (wsId) {
+        qc.invalidateQueries({ queryKey: favoriteKeys.all(wsId) });
+      }
     });
 
     const unsubCommentResolved = ws.on("comment:resolved", (p) => {
@@ -1086,7 +1092,7 @@ export function useRealtimeSync(
       qc.setQueryData(chatKeys.sessions(id), patch);
     });
 
-    // chat:session_deleted fires after a hard delete. The originating tab has
+    // chat:session_deleted fires after a delete. The originating tab has
     // already optimistically dropped the row via useDeleteChatSession; this
     // handler keeps OTHER tabs/devices in sync and also clears the active
     // session pointer so a deleted session doesn't keep the chat window

@@ -29,8 +29,14 @@ function createMockWs(): WSClient {
 
 function createObservableMockWs() {
   let anyHandler: ((message: WSMessage) => void) | null = null;
+  const eventHandlers = new Map<string, (payload: unknown) => void>();
   const ws = {
-    on: vi.fn(() => () => {}),
+    on: vi.fn((event: string, handler: (payload: unknown) => void) => {
+      eventHandlers.set(event, handler);
+      return () => {
+        if (eventHandlers.get(event) === handler) eventHandlers.delete(event);
+      };
+    }),
     onAny: vi.fn((handler: (message: WSMessage) => void) => {
       anyHandler = handler;
       return () => {};
@@ -43,6 +49,11 @@ function createObservableMockWs() {
     emit(message: WSMessage) {
       if (!anyHandler) throw new Error("onAny handler was not registered");
       anyHandler(message);
+    },
+    emitEvent(event: string, payload: unknown) {
+      const handler = eventHandlers.get(event);
+      if (!handler) throw new Error(`handler for ${event} was not registered`);
+      handler(payload);
     },
   };
 }
@@ -246,6 +257,41 @@ describe("useRealtimeSync — ws instance change", () => {
     });
 
     expect(invalidateSpy).not.toHaveBeenCalledWith({ queryKey: ["creative", "ws-1"] });
+  });
+
+  it("invalidates favorites when a comment is deleted", () => {
+    const { ws, emitEvent } = createObservableMockWs();
+    renderHook(() => useRealtimeSync(ws, stores), {
+      wrapper: createWrapper(qc),
+    });
+    invalidateSpy.mockClear();
+
+    act(() => {
+      emitEvent("comment:deleted", {
+        comment_id: "comment-1",
+        issue_id: "issue-1",
+      });
+    });
+
+    expect(invalidateSpy).toHaveBeenCalledWith({
+      queryKey: ["favorites", "ws-1"],
+    });
+  });
+
+  it("invalidates favorites when an issue is deleted", () => {
+    const { ws, emitEvent } = createObservableMockWs();
+    renderHook(() => useRealtimeSync(ws, stores), {
+      wrapper: createWrapper(qc),
+    });
+    invalidateSpy.mockClear();
+
+    act(() => {
+      emitEvent("issue:deleted", { issue_id: "issue-1" });
+    });
+
+    expect(invalidateSpy).toHaveBeenCalledWith({
+      queryKey: ["favorites", "ws-1"],
+    });
   });
 
   it("invalidates per-issue caches (no wsId in key) on ws instance change", () => {

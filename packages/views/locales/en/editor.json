@@ -44,7 +44,14 @@
     "preview_unsupported": "This file type can't be previewed.",
     "close": "Close",
     "open_in_new_tab": "Open in new tab",
-    "remove": "Remove attachment"
+    "remove": "Remove attachment",
+    "favorite": "Add to favorites",
+    "unfavorite": "Remove from favorites",
+    "favorite_default_category": "Default",
+    "favorite_saved_to": "Added to \"{{category}}\".",
+    "change_favorite_category": "Change category",
+    "favorite_failed": "Couldn't add this document to favorites.",
+    "unfavorite_failed": "Couldn't remove this document from favorites."
   },
   "link_hover": {
     "copy_link": "Copy link",

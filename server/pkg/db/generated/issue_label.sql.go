@@ -18,6 +18,7 @@ WHERE EXISTS (
     SELECT 1 FROM issue i
     WHERE i.id = $1::uuid
       AND i.workspace_id = $3::uuid
+      AND i.is_active = TRUE
 )
 AND EXISTS (
     SELECT 1 FROM issue_label l

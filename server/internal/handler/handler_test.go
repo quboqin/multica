@@ -407,6 +407,9 @@ func TestIssueCRUD(t *testing.T) {
 		t.Fatalf("CreateIssue: expected status 'todo', got '%s'", created.Status)
 	}
 	issueID := created.ID
+	t.Cleanup(func() {
+		testPool.Exec(context.Background(), `DELETE FROM issue WHERE id = $1`, issueID)
+	})
 
 	// Get
 	w = httptest.NewRecorder()
@@ -482,10 +485,10 @@ func TestIssueCRUD(t *testing.T) {
 }
 
 // TestDeleteIssueByIdentifier guards against #1661 — DELETE /api/issues/{id}
-// must actually delete the row when the path segment is a human-readable
+// must actually hide the row when the path segment is a human-readable
 // identifier ("HAN-42") rather than a UUID. Before the PR #1680 + MUL-1410
 // refactor, parseUUID(rawString) silently produced a zero UUID, the SQL
-// DELETE matched nothing, and the handler still returned 204.
+// delete matched nothing, and the handler still returned 204.
 //
 // Also asserts the issue:deleted WS event payload carries the resolved UUID,
 // not the raw identifier — frontend caches key by UUID and would otherwise
@@ -506,6 +509,9 @@ func TestDeleteIssueByIdentifier(t *testing.T) {
 	if created.Identifier == "" {
 		t.Fatalf("CreateIssue: expected identifier to be populated, got empty")
 	}
+	t.Cleanup(func() {
+		testPool.Exec(context.Background(), `DELETE FROM issue WHERE id = $1`, created.ID)
+	})
 
 	// Capture the issue:deleted event payload via the bus.
 	gotPayload := make(chan map[string]any, 1)
@@ -527,16 +533,16 @@ func TestDeleteIssueByIdentifier(t *testing.T) {
 		t.Fatalf("DeleteIssue by identifier: expected 204, got %d: %s", w.Code, w.Body.String())
 	}
 
-	// Verify the row is actually gone — the silent-data-loss bug would have
-	// returned 204 here too, but the row would still exist.
-	var count int
+	// Verify the row still exists for audit but is no longer active. The old
+	// identifier bug would have returned 204 without changing this value.
+	var isActive bool
 	if err := testPool.QueryRow(context.Background(),
-		`SELECT COUNT(*) FROM issue WHERE id = $1`, created.ID,
-	).Scan(&count); err != nil {
-		t.Fatalf("count query: %v", err)
+		`SELECT is_active FROM issue WHERE id = $1`, created.ID,
+	).Scan(&isActive); err != nil {
+		t.Fatalf("is_active query: %v", err)
 	}
-	if count != 0 {
-		t.Fatalf("DeleteIssue by identifier returned 204 but row still exists (count=%d) — silent-data-loss regression", count)
+	if isActive {
+		t.Fatal("DeleteIssue by identifier returned 204 but issue is still active")
 	}
 
 	// Event payload must carry the resolved UUID, not the identifier string.

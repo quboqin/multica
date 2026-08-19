@@ -79,10 +79,20 @@ export type {
   PreviewSessionStatus,
   CreatePreviewSessionRequest,
 } from "./preview-session";
+export type { FavoriteCategory } from "./favorite-category";
+export type {
+  AttachmentFavorite,
+  Favorite,
+  FavoriteItem,
+  FavoriteItemType,
+  FavoriteType,
+} from "./favorite";
 export { attachmentDownloadPath, attachmentIdFromDownloadURL, attachmentSameOriginDownloadPath, contentReferencesAttachment } from "./attachment-url";
 export type {
   ChatSession,
   ChatMessage,
+  ChatMessageFeedback,
+  ChatMessageFeedbackSentiment,
   ChatMessagesPage,
   ChatPendingTask,
   PendingChatTaskItem,

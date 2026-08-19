@@ -23,6 +23,13 @@ export interface PendingChatTasksResponse {
   tasks: PendingChatTaskItem[];
 }
 
+export type ChatMessageFeedbackSentiment = "positive" | "negative";
+
+export interface ChatMessageFeedback {
+  sentiment: ChatMessageFeedbackSentiment | null;
+  comment: string;
+}
+
 export interface ChatMessage {
   id: string;
   chat_session_id: string;
@@ -55,6 +62,8 @@ export interface ChatMessage {
    * and on legacy assistant messages predating migration 063.
    */
   elapsed_ms?: number | null;
+  /** Feedback submitted by the current user for this assistant message. */
+  feedback?: ChatMessageFeedback | null;
 }
 
 export interface ChatMessagesCursor {

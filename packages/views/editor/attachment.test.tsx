@@ -9,8 +9,10 @@ const {
   getAttachmentMock,
   getBaseUrlMock,
   downloadMock,
+  favoriteToggleMock,
   openExternalMock,
   openByUrlMock,
+  toastSuccessMock,
 } = vi.hoisted(() => ({
   getAttachmentTextContentMock: vi.fn(),
   getAttachmentMock: vi.fn(),
@@ -20,8 +22,10 @@ const {
   // mobile webview, where the renderer's origin does NOT proxy /api.
   getBaseUrlMock: vi.fn(() => ""),
   downloadMock: vi.fn(),
+  favoriteToggleMock: vi.fn(),
   openExternalMock: vi.fn(),
   openByUrlMock: vi.fn(),
+  toastSuccessMock: vi.fn(),
 }));
 
 vi.mock("@multica/core/api", () => ({
@@ -36,6 +40,20 @@ vi.mock("@multica/core/api", () => ({
 
 vi.mock("./use-download-attachment", () => ({
   useDownloadAttachment: () => downloadMock,
+}));
+
+vi.mock("@multica/core/favorites", () => ({
+  useAttachmentFavorite: () => ({
+    canFavorite: true,
+    favoriteEntry: undefined,
+    isFavorite: false,
+    isPending: false,
+    toggle: favoriteToggleMock,
+  }),
+}));
+
+vi.mock("sonner", () => ({
+  toast: { success: toastSuccessMock, error: vi.fn() },
 }));
 
 vi.mock("../platform", () => ({
@@ -62,6 +80,13 @@ vi.mock("../i18n", () => ({
           preview_too_large: "File is too large to preview.",
           open_in_new_tab: "Open in new tab",
           close: "Close",
+          favorite: "Add to favorites",
+          unfavorite: "Remove from favorites",
+          favorite_default_category: "Default",
+          favorite_saved_to: "Saved to {{category}}",
+          change_favorite_category: "Change category",
+          favorite_failed: "Couldn't add favorite",
+          unfavorite_failed: "Couldn't remove favorite",
         },
         file_card: { uploading: "Uploading {{filename}}" },
       }),
@@ -162,6 +187,7 @@ beforeEach(() => {
   // the web app's same-origin proxy. Tests that simulate Desktop / mobile
   // webview override per-case via getBaseUrlMock.mockReturnValue(...).
   getBaseUrlMock.mockReturnValue("");
+  favoriteToggleMock.mockResolvedValue(undefined);
 });
 
 afterEach(() => {
@@ -527,11 +553,26 @@ describe("Attachment — html dispatch", () => {
       content_type: "text/html",
       url: "https://cdn.example.test/report.html",
     });
-    renderWithQuery(<Attachment attachment={{ kind: "record", attachment: att }} />);
+    renderWithQuery(
+      <Attachment
+        attachment={{ kind: "record", attachment: att }}
+        trailingAction={
+          <a href="/acme/issues/issue-1?comment=comment-1">Open source</a>
+        }
+      />,
+    );
     // HtmlAttachmentPreview hides the filename row.
     expect(screen.queryByText("report.html")).toBeNull();
+    expect(screen.getByTitle("Add to favorites")).toBeTruthy();
     expect(screen.getByTitle("Preview")).toBeTruthy();
     expect(screen.getByTitle("Download")).toBeTruthy();
+    expect(screen.getByRole("link", { name: "Open source" })).toHaveAttribute(
+      "href",
+      "/acme/issues/issue-1?comment=comment-1",
+    );
+
+    fireEvent.mouseDown(screen.getByTitle("Add to favorites"));
+    expect(favoriteToggleMock).toHaveBeenCalledTimes(1);
   });
 
   it("url-only html (no resolver match) falls back to AttachmentCard chrome", () => {
@@ -562,6 +603,40 @@ describe("Attachment — file-card dispatch", () => {
     expect(screen.getByText("manual.pdf")).toBeTruthy();
     expect(document.querySelector("iframe")).toBeNull();
     expect(document.querySelector("img")).toBeNull();
+  });
+
+  it("shows the favorite confirmation in the viewport center", async () => {
+    const att = makeRecord({
+      filename: "summary.md",
+      content_type: "text/markdown",
+    });
+    favoriteToggleMock.mockResolvedValue({
+      favorite: true,
+      entry: {
+        attachment: att,
+        category: {
+          id: "category-1",
+          workspaceId: "ws-1",
+          userId: "u-1",
+          name: "Default",
+          isDefault: true,
+          favoriteCount: 1,
+          createdAt: "2026-07-21T00:00:00Z",
+          updatedAt: "2026-07-21T00:00:00Z",
+        },
+        createdAt: "2026-07-21T00:00:00Z",
+      },
+    });
+
+    renderWithQuery(<Attachment attachment={{ kind: "record", attachment: att }} />);
+    fireEvent.mouseDown(screen.getByTitle("Add to favorites"));
+
+    await waitFor(() =>
+      expect(toastSuccessMock).toHaveBeenCalledWith(
+        "Saved to {{category}}",
+        expect.objectContaining({ toasterId: "viewport-center" }),
+      ),
+    );
   });
 
   it("url-only stable attachment download file-card resolves to record and downloads by id", () => {

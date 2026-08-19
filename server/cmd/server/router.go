@@ -970,6 +970,20 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 				r.Delete("/{itemType}/{itemId}", h.DeletePin)
 			})
 
+			// Favorites
+			r.Route("/api/favorite-categories", func(r chi.Router) {
+				r.Get("/", h.ListFavoriteCategories)
+				r.Post("/", h.CreateFavoriteCategory)
+				r.Patch("/{id}", h.UpdateFavoriteCategory)
+				r.Delete("/{id}", h.DeleteFavoriteCategory)
+			})
+			r.Route("/api/favorites", func(r chi.Router) {
+				r.Get("/", h.ListFavorites)
+				r.Put("/{itemType}/{itemId}", h.PutFavorite)
+				r.Patch("/{itemType}/{itemId}", h.MoveFavorite)
+				r.Delete("/{itemType}/{itemId}", h.DeleteFavorite)
+			})
+
 			// Attachments
 			r.Get("/api/attachments/{id}", h.GetAttachmentByID)
 			// /api/attachments/{id}/download is registered in the
@@ -1128,6 +1142,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Post("/messages", h.SendChatMessage)
 					r.Get("/messages", h.ListChatMessages)
 					r.Get("/messages/page", h.ListChatMessagesPage)
+					r.Put("/messages/{messageId}/feedback", h.UpsertChatMessageFeedback)
 					r.Get("/pending-task", h.GetPendingChatTask)
 					r.Post("/read", h.MarkChatSessionRead)
 				})

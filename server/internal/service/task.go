@@ -1234,14 +1234,11 @@ func (s *TaskService) CancelTasksForAgent(ctx context.Context, agentID pgtype.UU
 	return cancelled, nil
 }
 
-// CancelTasksByTriggerComment cancels active tasks whose trigger is the given
-// comment. Called from DeleteComment so an agent does not run with the
-// now-deleted content already embedded in its prompt. Must be invoked BEFORE
-// the comment row is deleted because the FK ON DELETE SET NULL would
-// otherwise nullify trigger_comment_id and we'd lose the ability to find
-// the affected tasks.
+// CancelTasksByTriggerComment cancels active tasks triggered by one comment.
+// Comment edits use this path so an agent cannot continue with stale content.
+// Subtree deletion calls the plural query directly inside its delete tx.
 func (s *TaskService) CancelTasksByTriggerComment(ctx context.Context, commentID pgtype.UUID) error {
-	cancelled, err := s.Queries.CancelAgentTasksByTriggerComment(ctx, commentID)
+	cancelled, err := s.Queries.CancelAgentTasksByTriggerComments(ctx, []pgtype.UUID{commentID})
 	if err != nil {
 		return err
 	}

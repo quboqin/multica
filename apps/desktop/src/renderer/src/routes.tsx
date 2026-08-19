@@ -4,6 +4,7 @@ import {
   Navigate,
   Outlet,
   useMatches,
+  useParams,
 } from "react-router-dom";
 import type { RouteObject } from "react-router-dom";
 import { IssueDetailPage } from "./pages/issue-detail-page";
@@ -20,6 +21,7 @@ import { PlansPage } from "@multica/views/plans";
 import { DashboardPage, UserUsagePage } from "@multica/views/dashboard";
 import { AutopilotsPage } from "@multica/views/autopilots/components";
 import { MyIssuesPage } from "@multica/views/my-issues";
+import { FavoritesPage } from "@multica/views/favorites";
 import { SkillsPage } from "@multica/views/skills";
 import { CreativeStudioPage } from "@multica/views/creative";
 import { DesktopRuntimesPage } from "./components/desktop-runtimes-page";
@@ -60,6 +62,11 @@ function DesktopSettingsRoute() {
       ]}
     />
   );
+}
+
+function DesktopFavoriteCategoryRoute() {
+  const { categoryId } = useParams<{ categoryId: string }>();
+  return <FavoritesPage categoryId={categoryId} />;
 }
 
 /**
@@ -159,6 +166,16 @@ export const appRoutes: RouteObject[] = [
             path: "my-issues",
             element: <MyIssuesPage />,
             handle: { title: "My Issues" },
+          },
+          {
+            path: "favorites",
+            element: <FavoritesPage />,
+            handle: { title: "My Favorites" },
+          },
+          {
+            path: "favorites/:categoryId",
+            element: <DesktopFavoriteCategoryRoute />,
+            handle: { title: "My Favorites" },
           },
           {
             path: "runtimes",

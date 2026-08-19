@@ -40,6 +40,8 @@ function workspaceScoped(slug: string) {
     creativeOrder: (id: string) => `${ws}/creative?tab=orders&order=${encode(id)}`,
     inbox: () => `${ws}/inbox`,
     myIssues: () => `${ws}/my-issues`,
+    favorites: () => `${ws}/favorites`,
+    favoriteCategory: (id: string) => `${ws}/favorites/${encode(id)}`,
     runtimes: () => `${ws}/runtimes`,
     runtimeDetail: (id: string) => `${ws}/runtimes/${encode(id)}`,
     skills: () => `${ws}/skills`,

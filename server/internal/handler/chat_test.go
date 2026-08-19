@@ -179,6 +179,100 @@ func TestUpdateChatSession_RejectsBlank(t *testing.T) {
 	}
 }
 
+func TestDeleteChatSession_LogicalDeletePreservesMessages(t *testing.T) {
+	agentID := createHandlerTestAgent(t, "ChatLogicalDeleteAgent", []byte("[]"))
+	sessionID := createHandlerTestChatSession(t, agentID)
+
+	if _, err := testPool.Exec(
+		context.Background(),
+		`INSERT INTO chat_message (chat_session_id, role, content) VALUES ($1, 'user', 'keep me')`,
+		sessionID,
+	); err != nil {
+		t.Fatalf("insert chat message fixture: %v", err)
+	}
+
+	req := newRequest("DELETE", "/api/chat/sessions/"+sessionID, nil)
+	req = withURLParam(req, "sessionId", sessionID)
+	req = withChatTestWorkspaceCtx(t, req)
+	w := httptest.NewRecorder()
+	testHandler.DeleteChatSession(w, req)
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("DeleteChatSession: expected 204, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var isActive bool
+	if err := testPool.QueryRow(
+		context.Background(),
+		`SELECT is_active FROM chat_session WHERE id = $1`,
+		sessionID,
+	).Scan(&isActive); err != nil {
+		t.Fatalf("query chat_session is_active: %v", err)
+	}
+	if isActive {
+		t.Fatal("expected chat_session.is_active to be false after delete")
+	}
+
+	var messageCount int
+	if err := testPool.QueryRow(
+		context.Background(),
+		`SELECT count(*) FROM chat_message WHERE chat_session_id = $1`,
+		sessionID,
+	).Scan(&messageCount); err != nil {
+		t.Fatalf("count preserved chat messages: %v", err)
+	}
+	if messageCount != 1 {
+		t.Fatalf("expected deleted chat session to preserve 1 message, got %d", messageCount)
+	}
+
+	listReq := newRequest("GET", "/api/chat/sessions?status=all", nil)
+	listReq = withChatTestWorkspaceCtx(t, listReq)
+	listW := httptest.NewRecorder()
+	testHandler.ListChatSessions(listW, listReq)
+	if listW.Code != http.StatusOK {
+		t.Fatalf("ListChatSessions: expected 200, got %d: %s", listW.Code, listW.Body.String())
+	}
+	var sessions []ChatSessionResponse
+	if err := json.Unmarshal(listW.Body.Bytes(), &sessions); err != nil {
+		t.Fatalf("decode sessions: %v", err)
+	}
+	for _, session := range sessions {
+		if session.ID == sessionID {
+			t.Fatalf("deleted chat session %s was returned by list endpoint", sessionID)
+		}
+	}
+
+	getReq := newRequest("GET", "/api/chat/sessions/"+sessionID, nil)
+	getReq = withURLParam(getReq, "sessionId", sessionID)
+	getReq = withChatTestWorkspaceCtx(t, getReq)
+	getW := httptest.NewRecorder()
+	testHandler.GetChatSession(getW, getReq)
+	if getW.Code != http.StatusNotFound {
+		t.Fatalf("GetChatSession after delete: expected 404, got %d: %s", getW.Code, getW.Body.String())
+	}
+
+	sendReq := newRequest("POST", "/api/chat-sessions/"+sessionID+"/messages", map[string]any{
+		"content": "should not append",
+	})
+	sendReq = withURLParam(sendReq, "sessionId", sessionID)
+	sendReq = withChatTestWorkspaceCtx(t, sendReq)
+	sendW := httptest.NewRecorder()
+	testHandler.SendChatMessage(sendW, sendReq)
+	if sendW.Code != http.StatusNotFound {
+		t.Fatalf("SendChatMessage after delete: expected 404, got %d: %s", sendW.Code, sendW.Body.String())
+	}
+
+	if err := testPool.QueryRow(
+		context.Background(),
+		`SELECT count(*) FROM chat_message WHERE chat_session_id = $1`,
+		sessionID,
+	).Scan(&messageCount); err != nil {
+		t.Fatalf("count chat messages after rejected send: %v", err)
+	}
+	if messageCount != 1 {
+		t.Fatalf("expected rejected send to preserve exactly 1 historical message, got %d", messageCount)
+	}
+}
+
 // TestSendChatMessage_InvalidAttachmentIDs rejects malformed UUIDs in
 // attachment_ids with 400 before any side effects (no message row created).
 func TestSendChatMessage_InvalidAttachmentIDs(t *testing.T) {

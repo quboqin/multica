@@ -3,7 +3,7 @@
 -- net). Issue p99 is ~30 comments, max ever observed in prod is ~1.1k, so
 -- the handler-side cap of 2000 is purely defensive.
 SELECT * FROM comment
-WHERE issue_id = $1 AND workspace_id = $2
+WHERE issue_id = $1 AND workspace_id = $2 AND is_active = TRUE
 ORDER BY created_at ASC, id ASC
 LIMIT $3;
 
@@ -11,7 +11,7 @@ LIMIT $3;
 -- Comments created strictly after $3 in chronological order, capped at $4.
 -- Powers the CLI's `--since` agent-polling flow.
 SELECT * FROM comment
-WHERE issue_id = $1 AND workspace_id = $2 AND created_at > $3
+WHERE issue_id = $1 AND workspace_id = $2 AND is_active = TRUE AND created_at > $3
 ORDER BY created_at ASC, id ASC
 LIMIT $4;
 
@@ -35,6 +35,7 @@ WITH RECURSIVE selected_roots AS (
     FROM comment c
     WHERE c.issue_id = @issue_id
       AND c.workspace_id = @workspace_id
+      AND c.is_active = TRUE
       AND c.parent_id IS NULL
     ORDER BY c.created_at ASC, c.id ASC
     LIMIT @row_limit
@@ -48,6 +49,7 @@ membership(id, root_id, comment_created_at) AS (
     JOIN membership m ON c.parent_id = m.id
     WHERE c.issue_id = @issue_id
       AND c.workspace_id = @workspace_id
+      AND c.is_active = TRUE
 ),
 thread_stats AS (
     SELECT root_id,
@@ -79,6 +81,7 @@ WITH RECURSIVE selected_roots AS (
     FROM comment c
     WHERE c.issue_id = @issue_id
       AND c.workspace_id = @workspace_id
+      AND c.is_active = TRUE
       AND c.parent_id IS NULL
       AND c.created_at > @since
     ORDER BY c.created_at ASC, c.id ASC
@@ -93,6 +96,7 @@ membership(id, root_id, comment_created_at) AS (
     JOIN membership m ON c.parent_id = m.id
     WHERE c.issue_id = @issue_id
       AND c.workspace_id = @workspace_id
+      AND c.is_active = TRUE
 ),
 thread_stats AS (
     SELECT root_id,
@@ -120,11 +124,12 @@ WITH RECURSIVE root_of AS (
     -- Walk up from the anchor until parent_id IS NULL.
     SELECT c.id, c.parent_id
     FROM comment c
-    WHERE c.id = @anchor_id AND c.issue_id = @issue_id AND c.workspace_id = @workspace_id
+    WHERE c.id = @anchor_id AND c.issue_id = @issue_id AND c.workspace_id = @workspace_id AND c.is_active = TRUE
     UNION ALL
     SELECT p.id, p.parent_id
     FROM comment p
     JOIN root_of r ON p.id = r.parent_id
+    WHERE p.is_active = TRUE
 ),
 thread_root AS (
     SELECT id FROM root_of WHERE parent_id IS NULL LIMIT 1
@@ -138,13 +143,14 @@ descendants AS (
            c.resolved_at, c.resolved_by_type, c.resolved_by_id
     FROM comment c
     JOIN thread_root tr ON c.id = tr.id
+    WHERE c.is_active = TRUE
     UNION
     SELECT c.id, c.issue_id, c.author_type, c.author_id, c.content, c.type,
            c.created_at, c.updated_at, c.parent_id, c.workspace_id,
            c.resolved_at, c.resolved_by_type, c.resolved_by_id
     FROM comment c
     JOIN descendants d ON c.parent_id = d.id
-    WHERE c.issue_id = @issue_id AND c.workspace_id = @workspace_id
+    WHERE c.issue_id = @issue_id AND c.workspace_id = @workspace_id AND c.is_active = TRUE
 )
 SELECT id, issue_id, author_type, author_id, content, type,
        created_at, updated_at, parent_id, workspace_id,
@@ -172,11 +178,12 @@ LIMIT @row_limit;
 WITH RECURSIVE root_of AS (
     SELECT c.id, c.parent_id
     FROM comment c
-    WHERE c.id = @anchor_id AND c.issue_id = @issue_id AND c.workspace_id = @workspace_id
+    WHERE c.id = @anchor_id AND c.issue_id = @issue_id AND c.workspace_id = @workspace_id AND c.is_active = TRUE
     UNION ALL
     SELECT p.id, p.parent_id
     FROM comment p
     JOIN root_of r ON p.id = r.parent_id
+    WHERE p.is_active = TRUE
 ),
 thread_root AS (
     SELECT id FROM root_of WHERE parent_id IS NULL LIMIT 1
@@ -187,13 +194,14 @@ descendants AS (
            c.resolved_at, c.resolved_by_type, c.resolved_by_id
     FROM comment c
     JOIN thread_root tr ON c.id = tr.id
+    WHERE c.is_active = TRUE
     UNION
     SELECT c.id, c.issue_id, c.author_type, c.author_id, c.content, c.type,
            c.created_at, c.updated_at, c.parent_id, c.workspace_id,
            c.resolved_at, c.resolved_by_type, c.resolved_by_id
     FROM comment c
     JOIN descendants d ON c.parent_id = d.id
-    WHERE c.issue_id = @issue_id AND c.workspace_id = @workspace_id
+    WHERE c.issue_id = @issue_id AND c.workspace_id = @workspace_id AND c.is_active = TRUE
 ),
 reply_page AS (
     SELECT d.id, d.issue_id, d.author_type, d.author_id, d.content, d.type,
@@ -258,6 +266,7 @@ WITH RECURSIVE membership(id, root_id, comment_created_at) AS (
     FROM comment c
     WHERE c.issue_id = @issue_id
       AND c.workspace_id = @workspace_id
+      AND c.is_active = TRUE
       AND c.parent_id IS NULL
     UNION ALL
     -- Each descendant inherits its parent's root_id.
@@ -266,6 +275,7 @@ WITH RECURSIVE membership(id, root_id, comment_created_at) AS (
     JOIN membership m ON c.parent_id = m.id
     WHERE c.issue_id = @issue_id
       AND c.workspace_id = @workspace_id
+      AND c.is_active = TRUE
 ),
 thread_stats AS (
     SELECT root_id, MAX(comment_created_at)::timestamptz AS last_activity_at
@@ -294,7 +304,7 @@ ORDER BY p.last_activity_at ASC, p.root_id ASC, c.created_at ASC, c.id ASC;
 
 -- name: CountComments :one
 SELECT count(*) FROM comment
-WHERE issue_id = $1 AND workspace_id = $2;
+WHERE issue_id = $1 AND workspace_id = $2 AND is_active = TRUE;
 
 -- name: CountNewCommentsSince :one
 -- Counts comments on an issue created strictly after @since, ACROSS THE WHOLE
@@ -308,17 +318,18 @@ WHERE issue_id = $1 AND workspace_id = $2;
 SELECT count(*) FROM comment
 WHERE issue_id = @issue_id
   AND workspace_id = @workspace_id
+  AND is_active = TRUE
   AND created_at > @since
   AND id <> @anchor_id
   AND NOT (author_type = 'agent' AND author_id = @author_id);
 
 -- name: GetComment :one
 SELECT * FROM comment
-WHERE id = $1;
+WHERE id = $1 AND is_active = TRUE;
 
 -- name: GetCommentInWorkspace :one
 SELECT * FROM comment
-WHERE id = $1 AND workspace_id = $2;
+WHERE id = $1 AND workspace_id = $2 AND is_active = TRUE;
 
 -- name: GetThreadRoot :one
 -- Returns the thread-root comment for @comment_id by walking parent_id up to
@@ -329,31 +340,50 @@ WHERE id = $1 AND workspace_id = $2;
 WITH RECURSIVE root_of AS (
     SELECT c.id, c.parent_id
     FROM comment c
-    WHERE c.id = @comment_id AND c.workspace_id = @workspace_id
+    WHERE c.id = @comment_id AND c.workspace_id = @workspace_id AND c.is_active = TRUE
     UNION ALL
     SELECT p.id, p.parent_id
     FROM comment p
     JOIN root_of r ON p.id = r.parent_id
+    WHERE p.is_active = TRUE
 )
 SELECT c.* FROM comment c
-WHERE c.id = (SELECT id FROM root_of WHERE parent_id IS NULL LIMIT 1);
+WHERE c.id = (SELECT id FROM root_of WHERE parent_id IS NULL LIMIT 1)
+  AND c.is_active = TRUE;
 
 -- name: CreateComment :one
+WITH issue_lock AS MATERIALIZED (
+    SELECT pg_advisory_xact_lock(hashtextextended($1::uuid::text, 0))
+),
+active_parent AS (
+    SELECT c.id
+    FROM comment c
+    CROSS JOIN issue_lock
+    WHERE c.id = sqlc.narg(parent_id)::uuid
+      AND c.issue_id = $1
+      AND c.workspace_id = $2
+      AND c.is_active = TRUE
+    FOR KEY SHARE OF c
+)
 INSERT INTO comment (issue_id, workspace_id, author_type, author_id, content, type, parent_id)
-VALUES ($1, $2, $3, $4, $5, $6, sqlc.narg(parent_id))
+SELECT $1, $2, $3, $4, $5, $6, sqlc.narg(parent_id)::uuid
+FROM issue_lock
+WHERE sqlc.narg(parent_id)::uuid IS NULL
+   OR EXISTS (SELECT 1 FROM active_parent)
 RETURNING *;
 
 -- name: UpdateComment :one
 UPDATE comment SET
     content = $2,
     updated_at = now()
-WHERE id = $1
+WHERE id = $1 AND is_active = TRUE
 RETURNING *;
 
 -- name: HasAgentCommentedSince :one
 SELECT EXISTS (
     SELECT 1 FROM comment
     WHERE issue_id = @issue_id
+      AND is_active = TRUE
       AND author_type = 'agent'
       AND author_id = @author_id
       AND created_at >= @since
@@ -364,11 +394,62 @@ SELECT EXISTS (
 -- the specified parent comment. Used to detect agent participation in a
 -- member-started thread so that follow-up member replies still trigger the agent.
 SELECT count(*) > 0 AS has_replied FROM comment
-WHERE parent_id = @parent_id AND author_type = 'agent' AND author_id = @agent_id;
+WHERE parent_id = @parent_id
+  AND is_active = TRUE
+  AND author_type = 'agent'
+  AND author_id = @agent_id;
+
+-- name: LockCommentIssueForDelete :exec
+-- Serialize comment creation and subtree deletion within one issue. This
+-- closes the phantom-reply window that row-locking an initial recursive
+-- snapshot alone cannot cover.
+SELECT pg_advisory_xact_lock(hashtextextended($1::uuid::text, 0));
+
+-- name: LockCommentSubtreeForDelete :many
+-- Lock every currently active row in the target subtree. CreateComment takes a
+-- KEY SHARE lock on its active parent, so it cannot append a reply while this
+-- delete transaction holds these UPDATE locks.
+WITH RECURSIVE subtree AS (
+    SELECT target.id
+    FROM comment target
+    WHERE target.id = @comment_id
+      AND target.workspace_id = @workspace_id
+      AND target.is_active = TRUE
+    UNION ALL
+    SELECT c.id
+    FROM comment c
+    JOIN subtree s ON c.parent_id = s.id
+    WHERE c.workspace_id = @workspace_id
+      AND c.is_active = TRUE
+)
+SELECT c.id
+FROM comment c
+JOIN subtree s ON s.id = c.id
+ORDER BY c.id
+FOR UPDATE OF c;
 
 -- name: DeleteComment :exec
--- Defense-in-depth: workspace_id is a SQL-layer tenant guard. See DeleteIssue.
-DELETE FROM comment WHERE id = $1 AND workspace_id = $2;
+-- Logical cascade delete. Keeping the rows preserves task attribution,
+-- reactions, and attachment metadata while normal application reads hide the
+-- whole reply subtree. The handler locks the same subtree before this query.
+WITH RECURSIVE subtree AS (
+    SELECT target.id
+    FROM comment target
+    WHERE target.id = $1
+      AND target.workspace_id = $2
+      AND target.is_active = TRUE
+    UNION ALL
+    SELECT c.id
+    FROM comment c
+    JOIN subtree s ON c.parent_id = s.id
+    WHERE c.workspace_id = $2
+      AND c.is_active = TRUE
+)
+UPDATE comment AS target
+SET is_active = FALSE,
+    updated_at = now()
+WHERE target.id IN (SELECT id FROM subtree)
+  AND target.workspace_id = $2;
 
 -- name: ResolveComment :one
 -- Idempotent: re-resolving keeps the original resolved_at + resolver. Always
@@ -378,7 +459,7 @@ UPDATE comment SET
     resolved_by_type = COALESCE(resolved_by_type, $2),
     resolved_by_id = COALESCE(resolved_by_id, $3),
     updated_at = CASE WHEN resolved_at IS NULL THEN now() ELSE updated_at END
-WHERE id = $1
+WHERE id = $1 AND is_active = TRUE
 RETURNING *;
 
 -- name: ClearOtherThreadResolutions :many
@@ -396,11 +477,15 @@ WITH RECURSIVE root_of AS (
     -- Walk up from the target to its thread root.
     SELECT c.id, c.parent_id
     FROM comment c
-    WHERE c.id = @target_id AND c.issue_id = @issue_id AND c.workspace_id = @workspace_id
+    WHERE c.id = @target_id
+      AND c.issue_id = @issue_id
+      AND c.workspace_id = @workspace_id
+      AND c.is_active = TRUE
     UNION ALL
     SELECT p.id, p.parent_id
     FROM comment p
     JOIN root_of r ON p.id = r.parent_id
+    WHERE p.is_active = TRUE
 ),
 thread_root AS (
     SELECT id FROM root_of WHERE parent_id IS NULL LIMIT 1
@@ -411,11 +496,14 @@ descendants AS (
     SELECT c.id
     FROM comment c
     JOIN thread_root tr ON c.id = tr.id
+    WHERE c.is_active = TRUE
     UNION
     SELECT c.id
     FROM comment c
     JOIN descendants d ON c.parent_id = d.id
-    WHERE c.issue_id = @issue_id AND c.workspace_id = @workspace_id
+    WHERE c.issue_id = @issue_id
+      AND c.workspace_id = @workspace_id
+      AND c.is_active = TRUE
 )
 UPDATE comment SET
     resolved_at = NULL,
@@ -424,6 +512,7 @@ UPDATE comment SET
     updated_at = now()
 WHERE comment.id IN (SELECT id FROM descendants)
   AND comment.id <> @target_id
+  AND comment.is_active = TRUE
   AND comment.resolved_at IS NOT NULL
 RETURNING *;
 
@@ -434,5 +523,5 @@ UPDATE comment SET
     resolved_by_type = NULL,
     resolved_by_id = NULL,
     updated_at = CASE WHEN resolved_at IS NOT NULL THEN now() ELSE updated_at END
-WHERE id = $1
+WHERE id = $1 AND is_active = TRUE
 RETURNING *;

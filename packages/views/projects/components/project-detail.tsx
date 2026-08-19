@@ -40,6 +40,7 @@ import { getProjectIssueMetrics } from "./project-issue-metrics";
 import { filterRunningAssigneeGroups } from "./project-issue-filters";
 import { ActorAvatar } from "../../common/actor-avatar";
 import { useNavigation } from "../../navigation";
+import { FavoriteItemAction } from "../../favorites/components/favorite-item-action";
 import { TitleEditor, ContentEditor, type ContentEditorRef } from "../../editor";
 import { PriorityIcon } from "../../issues/components/priority-icon";
 import { ProjectResourcesSection } from "./project-resources-section";
@@ -839,6 +840,11 @@ export function ProjectDetail({ projectId }: { projectId: string }) {
               >
                 {isPinned ? <PinOff /> : <Pin />}
               </Button>
+              <FavoriteItemAction
+                itemType="project"
+                itemId={project.id}
+                itemLabel={project.title}
+              />
               <DropdownMenu>
                 <DropdownMenuTrigger
                   render={

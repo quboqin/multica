@@ -13,7 +13,7 @@ import (
 
 const countIssuesByProject = `-- name: CountIssuesByProject :one
 SELECT count(*) FROM issue
-WHERE project_id = $1
+WHERE project_id = $1 AND is_active = TRUE
 `
 
 func (q *Queries) CountIssuesByProject(ctx context.Context, projectID pgtype.UUID) (int64, error) {
@@ -160,6 +160,7 @@ SELECT project_id,
        count(*) FILTER (WHERE status IN ('done', 'cancelled'))::bigint AS done_count
 FROM issue
 WHERE project_id = ANY($1::uuid[])
+  AND is_active = TRUE
 GROUP BY project_id
 `
 

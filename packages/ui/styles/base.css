@@ -227,6 +227,11 @@
   margin-top: 2.5px;
 }
 
+/* Dedicated channel for confirmations that must sit in the viewport center. */
+[data-sonner-toaster].toaster-viewport-center {
+  margin-top: calc(var(--front-toast-height) / -2);
+}
+
 @layer base {
   * {
     @apply border-border outline-ring/50;

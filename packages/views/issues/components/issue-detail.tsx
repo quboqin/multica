@@ -5,6 +5,7 @@ import { Virtuoso } from "react-virtuoso";
 import { useDefaultLayout, usePanelRef } from "react-resizable-panels";
 import { AppLink } from "../../navigation";
 import { useNavigation } from "../../navigation";
+import { FavoriteItemAction } from "../../favorites/components/favorite-item-action";
 import {
   Archive,
   Calendar,
@@ -711,6 +712,9 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
   const timeAgo = useTimeAgo();
   const id = issueId;
   const router = useNavigation();
+  const targetCommentId =
+    highlightCommentId ??
+    (router.searchParams.get("comment")?.trim() || undefined);
   const user = useAuthStore((s) => s.user);
   const paths = useWorkspacePaths();
 
@@ -1065,13 +1069,13 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
   // Deep-link target index in the flat items array. For root comments this is
   // a direct findIndex hit; for reply ids we look up the enclosing root.
   const targetIdx = useMemo(() => {
-    if (!highlightCommentId) return -1;
-    const direct = items.findIndex((it) => it.id === highlightCommentId);
+    if (!targetCommentId) return -1;
+    const direct = items.findIndex((it) => it.id === targetCommentId);
     if (direct >= 0) return direct;
-    const rootId = replyToRoot.get(highlightCommentId);
+    const rootId = replyToRoot.get(targetCommentId);
     if (!rootId) return -1;
     return items.findIndex((it) => it.id === rootId);
-  }, [items, highlightCommentId, replyToRoot]);
+  }, [items, targetCommentId, replyToRoot]);
 
   const {
     reactions: issueReactions,
@@ -1148,7 +1152,7 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
 
   // Deep-link landing. Semantically equivalent to navigating to
   // `#comment-${id}`: find the element with that id, scrollIntoView it.
-  // When `highlightCommentId` is set the timeline below renders flat (no
+  // When a target comment is set the timeline below renders flat (no
   // virtualization), so every comment id is in the DOM by the time this
   // effect runs after commit.
   //
@@ -1161,11 +1165,11 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
   // ref populates only on the post-loading render, so it's the signal that
   // the timeline (and the deep-link target id) has actually rendered.
   useEffect(() => {
-    if (!highlightCommentId || items.length === 0) return;
-    if (didHighlightRef.current === highlightCommentId) return;
+    if (!targetCommentId || items.length === 0) return;
+    if (didHighlightRef.current === targetCommentId) return;
 
-    const rootId = replyToRoot.get(highlightCommentId);
-    if (rootId && rootId !== highlightCommentId) {
+    const rootId = replyToRoot.get(targetCommentId);
+    if (rootId && rootId !== targetCommentId) {
       // Root resolved → the whole thread is a folded bar.
       if (items[targetIdx]?.kind === "resolved-bar") {
         toggleResolvedExpand(rootId, true);
@@ -1179,18 +1183,18 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
           rootItem.entry,
           timelineView.threadReplies.get(rootId) ?? EMPTY_REPLIES,
         );
-        if (resolution.kind === "reply" && resolution.resolutionId !== highlightCommentId) {
+        if (resolution.kind === "reply" && resolution.resolutionId !== targetCommentId) {
           toggleResolvedExpand(rootId, true);
           return;
         }
       }
     }
 
-    const el = document.getElementById(`comment-${highlightCommentId}`);
+    const el = document.getElementById(`comment-${targetCommentId}`);
     const container = scrollContainerEl;
     if (!el || !container) return;
 
-    didHighlightRef.current = highlightCommentId;
+    didHighlightRef.current = targetCommentId;
 
     // Center the target comment WITHIN its own scroll container by driving the
     // container's scrollTop directly — never native scrollIntoView. Native
@@ -1223,13 +1227,13 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
     };
     rafId = requestAnimationFrame(center);
 
-    setHighlightedId(highlightCommentId);
+    setHighlightedId(targetCommentId);
     const fade = window.setTimeout(() => setHighlightedId(null), 2500);
     return () => {
       cancelAnimationFrame(rafId);
       clearTimeout(fade);
     };
-  }, [highlightCommentId, items, targetIdx, scrollContainerEl, replyToRoot, expandedResolved, timelineView, toggleResolvedExpand]);
+  }, [targetCommentId, items, targetIdx, scrollContainerEl, replyToRoot, expandedResolved, timelineView, toggleResolvedExpand]);
 
   // Cmd-F / Ctrl-F on a virtualized timeline only searches what's mounted in
   // the viewport — off-screen comments are invisible to browser find-in-page.
@@ -1367,7 +1371,7 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
     restoreKey: `${wsId}:${id}`,
     scrollContainerEl,
     ready: !!issue && !loading && !timelineLoading,
-    disabled: !!highlightCommentId,
+    disabled: !!targetCommentId,
   });
 
   if (loading) {
@@ -1860,6 +1864,11 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
               />
               <TooltipContent side="bottom">{actions.isPinned ? t(($) => $.detail.unpin_tooltip) : t(($) => $.detail.pin_tooltip)}</TooltipContent>
             </Tooltip>
+            <FavoriteItemAction
+              itemType="issue"
+              itemId={issue.id}
+              itemLabel={`${issue.identifier} ${issue.title}`}
+            />
             <IssueActionsDropdown
               issue={issue}
               align="end"
@@ -2153,7 +2162,7 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
               <TimelineSkeleton />
             ) : (
               // Two render modes:
-              //   - `highlightCommentId` set (came from inbox deep-link) →
+              //   - target comment set (came from a deep link) →
               //     render flat. Every comment mounts, every height is real,
               //     the target id is in the DOM the instant the useEffect
               //     above runs `scrollIntoView`. No virtualization estimate
@@ -2168,7 +2177,7 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
               // on a target" have fundamentally opposed contracts (estimated
               // heights vs real heights). Trying to satisfy both in one
               // path is what produced the bug history this PR closes.
-              !highlightCommentId ? (
+              !targetCommentId ? (
                 !scrollContainerEl ? (
                   // Skeleton while the callback ref populates so the gap
                   // between IssueDetail mount and Virtuoso mount doesn't

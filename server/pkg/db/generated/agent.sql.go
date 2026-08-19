@@ -574,20 +574,18 @@ func (q *Queries) CancelAgentTasksByIssueAndAgent(ctx context.Context, arg Cance
 	return items, nil
 }
 
-const cancelAgentTasksByTriggerComment = `-- name: CancelAgentTasksByTriggerComment :many
+const cancelAgentTasksByTriggerComments = `-- name: CancelAgentTasksByTriggerComments :many
 UPDATE agent_task_queue
 SET status = 'cancelled', completed_at = now()
-WHERE trigger_comment_id = $1 AND status IN ('queued', 'dispatched', 'running', 'waiting_local_directory')
+WHERE trigger_comment_id = ANY($1::uuid[])
+  AND status IN ('queued', 'dispatched', 'running', 'waiting_local_directory')
 RETURNING id, agent_id, issue_id, status, priority, dispatched_at, started_at, completed_at, result, error, created_at, context, runtime_id, session_id, work_dir, trigger_comment_id, chat_session_id, autopilot_run_id, attempt, max_attempts, parent_task_id, failure_reason, trigger_summary, force_fresh_session, is_leader_task, wait_reason, initiator_user_id, handoff_note, prepare_lease_expires_at, squad_id, runtime_mcp_overlay, escalation_for_task_id, fire_at, originator_user_id, runtime_connected_apps, coalesced_comment_ids, delivered_comment_ids, chat_input_task_id, chat_finalize_deferred_at, originator_source, delegated_from_task_id, retry_of_task_id, rerun_of_task_id, rule_version_id, trigger_evidence_kind, trigger_evidence_ref_id, accountable_user_id, requesting_user_id
 `
 
-// Cancels active tasks whose trigger is the given comment. Called when a
-// comment is deleted so the agent does not run with the now-deleted content
-// already embedded in its prompt. Must run BEFORE the comment row is deleted
-// because the FK ON DELETE SET NULL would otherwise nullify trigger_comment_id
-// and we'd lose the ability to find the affected tasks.
-func (q *Queries) CancelAgentTasksByTriggerComment(ctx context.Context, triggerCommentID pgtype.UUID) ([]AgentTaskQueue, error) {
-	rows, err := q.db.Query(ctx, cancelAgentTasksByTriggerComment, triggerCommentID)
+// Cancels active tasks triggered by any comment in a logically deleted reply
+// subtree. The comment rows and trigger pointers remain available for audit.
+func (q *Queries) CancelAgentTasksByTriggerComments(ctx context.Context, commentIds []pgtype.UUID) ([]AgentTaskQueue, error) {
+	rows, err := q.db.Query(ctx, cancelAgentTasksByTriggerComments, commentIds)
 	if err != nil {
 		return nil, err
 	}

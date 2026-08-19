@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/storage"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
@@ -446,6 +448,15 @@ func (h *Handler) UploadFile(w http.ResponseWriter, r *http.Request) {
 
 		att, err := h.Queries.CreateAttachment(r.Context(), params)
 		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) && (params.IssueID.Valid || params.CommentID.Valid) {
+				h.deleteS3Object(r.Context(), link)
+				message := "issue is no longer available"
+				if params.CommentID.Valid {
+					message = "comment is no longer available"
+				}
+				writeError(w, http.StatusConflict, message)
+				return
+			}
 			slog.Error("failed to create attachment record", "error", err)
 			// S3 upload succeeded but DB record failed — still return the link
 			// so the file is usable. Log the error for investigation.

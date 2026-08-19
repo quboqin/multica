@@ -1,42 +1,103 @@
 -- name: CreateAttachment :one
+WITH active_issue AS (
+  SELECT i.id
+  FROM issue i
+  WHERE i.id = sqlc.narg(issue_id)::uuid
+    AND i.workspace_id = $2
+    AND i.is_active = TRUE
+  FOR KEY SHARE
+), active_comment AS (
+  SELECT c.id
+  FROM comment c
+  WHERE c.id = sqlc.narg(comment_id)::uuid
+    AND c.workspace_id = $2
+    AND c.is_active = TRUE
+  FOR KEY SHARE
+)
 INSERT INTO attachment (
   id, workspace_id, issue_id, comment_id, chat_session_id,
   uploader_type, uploader_id, filename, url, content_type, size_bytes
 )
-VALUES (
+SELECT
   $1, $2, sqlc.narg(issue_id), sqlc.narg(comment_id), sqlc.narg(chat_session_id),
   $3, $4, $5, $6, $7, $8
-)
+WHERE (sqlc.narg(issue_id)::uuid IS NULL OR EXISTS (SELECT 1 FROM active_issue))
+  AND (sqlc.narg(comment_id)::uuid IS NULL OR EXISTS (SELECT 1 FROM active_comment))
 RETURNING *;
 
 -- name: ListAttachmentsByIssue :many
-SELECT * FROM attachment
-WHERE issue_id = $1 AND workspace_id = $2
-ORDER BY created_at ASC;
+SELECT a.* FROM attachment a
+WHERE a.issue_id = $1
+  AND a.workspace_id = $2
+  AND EXISTS (
+    SELECT 1 FROM issue i
+    WHERE i.id = a.issue_id AND i.is_active = TRUE
+  )
+  AND (
+    a.comment_id IS NULL
+    OR EXISTS (
+      SELECT 1 FROM comment c
+      WHERE c.id = a.comment_id AND c.is_active = TRUE
+    )
+  )
+ORDER BY a.created_at ASC;
 
 -- name: ListAttachmentsByComment :many
-SELECT * FROM attachment
-WHERE comment_id = $1 AND workspace_id = $2
-ORDER BY created_at ASC;
+SELECT a.* FROM attachment a
+JOIN comment c ON c.id = a.comment_id AND c.is_active = TRUE
+JOIN issue i ON i.id = c.issue_id AND i.is_active = TRUE
+WHERE a.comment_id = $1 AND a.workspace_id = $2
+ORDER BY a.created_at ASC;
 
 -- name: GetAttachment :one
-SELECT * FROM attachment
-WHERE id = $1 AND workspace_id = $2;
+SELECT a.* FROM attachment a
+WHERE a.id = $1
+  AND a.workspace_id = $2
+  AND (
+    a.issue_id IS NULL
+    OR EXISTS (
+      SELECT 1 FROM issue i
+      WHERE i.id = a.issue_id AND i.is_active = TRUE
+    )
+  )
+  AND (
+    a.comment_id IS NULL
+    OR EXISTS (
+      SELECT 1 FROM comment c
+      WHERE c.id = a.comment_id AND c.is_active = TRUE
+    )
+  );
 
 -- name: GetAttachmentByIDOnly :one
 -- Used by the download endpoint, which derives workspace context from the
 -- attachment row itself rather than from request headers/query params. The
 -- caller still has to verify the requester is a member of the returned
--- workspace_id before serving the bytes — this query is access-neutral on
--- purpose so a self-contained URL like /api/attachments/{id}/download can
--- work as a native <img>/<video> resource load (no header attachment).
-SELECT * FROM attachment
-WHERE id = $1;
+-- workspace_id before serving the bytes. Attachments belonging to logically
+-- deleted comments are hidden, while the underlying row and object remain
+-- available for audit or a future restore flow.
+SELECT a.* FROM attachment a
+WHERE a.id = $1
+  AND (
+    a.issue_id IS NULL
+    OR EXISTS (
+      SELECT 1 FROM issue i
+      WHERE i.id = a.issue_id AND i.is_active = TRUE
+    )
+  )
+  AND (
+    a.comment_id IS NULL
+    OR EXISTS (
+      SELECT 1 FROM comment c
+      WHERE c.id = a.comment_id AND c.is_active = TRUE
+    )
+  );
 
 -- name: ListAttachmentsByCommentIDs :many
-SELECT * FROM attachment
-WHERE comment_id = ANY($1::uuid[]) AND workspace_id = $2
-ORDER BY created_at ASC;
+SELECT a.* FROM attachment a
+JOIN comment c ON c.id = a.comment_id AND c.is_active = TRUE
+JOIN issue i ON i.id = c.issue_id AND i.is_active = TRUE
+WHERE a.comment_id = ANY($1::uuid[]) AND a.workspace_id = $2
+ORDER BY a.created_at ASC;
 
 -- name: ListAttachmentURLsByIssueOrComments :many
 SELECT a.url FROM attachment a

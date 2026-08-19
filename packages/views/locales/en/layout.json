@@ -2,6 +2,7 @@
   "nav": {
     "inbox": "Inbox",
     "my_issues": "My Issues",
+    "my_favorites": "My Favorites",
     "issues": "Issues",
     "plans": "Plans",
     "projects": "Projects",
@@ -29,6 +30,83 @@
   "workspace_loader": {
     "loading_workspace": "Loading workspace…",
     "loading_named_prefix": "Loading"
+  },
+  "favorites": {
+    "page": {
+      "title": "My Favorites",
+      "new_category": "New category",
+      "empty_categories_title": "No favorite categories yet",
+      "empty_categories_description": "Adding a favorite creates the default category, or you can create one now.",
+      "category_empty_title": "No favorites in this category",
+      "category_empty_description": "Move favorites here to organize them.",
+      "category_not_found": "This favorite category wasn't found.",
+      "back_to_categories": "Back to favorite categories",
+      "documents": "{{count}} favorites",
+      "load_failed": "Couldn't load your favorites.",
+      "retry": "Try again",
+      "open_source_conversation": "Open the source task conversation",
+      "filter_label": "Favorite type",
+      "filter_all": "All",
+      "filter_issue": "Tasks",
+      "filter_project": "Projects",
+      "filter_markdown": "MD",
+      "filter_html": "HTML",
+      "filter_empty_title": "No favorites of this type"
+    },
+    "item": {
+      "add": "Add to favorites",
+      "remove": "Remove from favorites",
+      "saved_to": "Saved to {{category}}.",
+      "removed": "Removed from favorites.",
+      "change_category": "Change category",
+      "save_failed": "Couldn't add this favorite.",
+      "remove_failed": "Couldn't remove this favorite.",
+      "unavailable": "Unavailable favorite"
+    },
+    "category": {
+      "default_name": "Default",
+      "new_tooltip": "Create favorite category",
+      "actions_tooltip": "Manage favorite category"
+    },
+    "create_dialog": {
+      "title": "New favorite category",
+      "description": "Every favorite must be kept in a category.",
+      "name_label": "Category name",
+      "name_placeholder": "e.g. Research",
+      "cancel": "Cancel",
+      "create": "Create",
+      "creating": "Creating...",
+      "created": "Favorite category created.",
+      "failed": "Couldn't create the favorite category."
+    },
+    "move_dialog": {
+      "title": "Change favorite category",
+      "description": "Choose where to keep \"{{filename}}\".",
+      "new_category": "New category",
+      "moved": "Moved to \"{{category}}\".",
+      "failed": "Couldn't change the favorite category."
+    },
+    "rename_dialog": {
+      "action": "Rename",
+      "title": "Rename category",
+      "description": "Change the name of this favorite category.",
+      "name_label": "Category name",
+      "cancel": "Cancel",
+      "save": "Save",
+      "saving": "Saving...",
+      "renamed": "Category renamed.",
+      "failed": "Couldn't rename the favorite category."
+    },
+    "delete_dialog": {
+      "action": "Delete",
+      "title": "Delete favorite category",
+      "description": "Delete \"{{name}}\"? Its {{count}} items will also be removed from your favorites. This can't be undone.",
+      "cancel": "Cancel",
+      "delete": "Delete",
+      "deleting": "Deleting...",
+      "deleted": "Category deleted and its items removed from your favorites.",
+      "failed": "Couldn't delete the favorite category."
+    }
   },
   "sidebar": {
     "unpin_tooltip": "Unpin",

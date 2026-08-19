@@ -583,6 +583,96 @@ func TestDeleteCommentCancelsTriggeredTasks(t *testing.T) {
 	})
 }
 
+func TestDeleteCommentLogicallyDeletesSubtree(t *testing.T) {
+	agentID := getAgentID(t)
+	issueID := createIssueAssignedToAgent(t, "Logical comment delete test", agentID)
+	t.Cleanup(func() {
+		clearTasks(t, issueID)
+		resp := authRequest(t, "DELETE", "/api/issues/"+issueID, nil)
+		resp.Body.Close()
+	})
+
+	clearTasks(t, issueID)
+	rootID := postComment(t, issueID, "Thread root", nil)
+	clearTasks(t, issueID)
+	replyContent := fmt.Sprintf("[@Agent](mention://agent/%s) handle this reply", agentID)
+	replyID := postComment(t, issueID, replyContent, strPtr(rootID))
+	if n := countPendingTasks(t, issueID); n != 1 {
+		t.Fatalf("expected one task triggered by the reply, got %d", n)
+	}
+
+	ctx := context.Background()
+	if _, err := testPool.Exec(ctx, `
+		INSERT INTO comment_reaction (comment_id, workspace_id, actor_type, actor_id, emoji)
+		VALUES ($1, $2, 'member', $3, 'thumbs_up')
+	`, rootID, testWorkspaceID, testUserID); err != nil {
+		t.Fatalf("insert comment reaction: %v", err)
+	}
+
+	var attachmentID string
+	if err := testPool.QueryRow(ctx, `
+		INSERT INTO attachment (
+			workspace_id, issue_id, comment_id, uploader_type, uploader_id,
+			filename, url, content_type, size_bytes
+		)
+		VALUES ($1, $2, $3, 'member', $4, 'deleted-comment.md',
+			'/uploads/deleted-comment.md', 'text/markdown', 10)
+		RETURNING id::text
+	`, testWorkspaceID, issueID, rootID, testUserID).Scan(&attachmentID); err != nil {
+		t.Fatalf("insert comment attachment: %v", err)
+	}
+
+	resp := authRequest(t, "DELETE", "/api/comments/"+rootID, nil)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("DeleteComment: expected 204, got %d", resp.StatusCode)
+	}
+
+	if n := countPendingTasks(t, issueID); n != 0 {
+		t.Errorf("expected reply-triggered task to be cancelled, got %d active tasks", n)
+	}
+
+	var total, active int
+	if err := testPool.QueryRow(ctx, `
+		SELECT count(*), count(*) FILTER (WHERE is_active)
+		FROM comment
+		WHERE id IN ($1, $2)
+	`, rootID, replyID).Scan(&total, &active); err != nil {
+		t.Fatalf("query deleted comment subtree: %v", err)
+	}
+	if total != 2 || active != 0 {
+		t.Errorf("comment subtree state = total %d, active %d; want total 2, active 0", total, active)
+	}
+
+	var reactionCount, attachmentCount int
+	if err := testPool.QueryRow(ctx,
+		`SELECT count(*) FROM comment_reaction WHERE comment_id = $1`, rootID,
+	).Scan(&reactionCount); err != nil {
+		t.Fatalf("count preserved reactions: %v", err)
+	}
+	if err := testPool.QueryRow(ctx,
+		`SELECT count(*) FROM attachment WHERE id = $1`, attachmentID,
+	).Scan(&attachmentCount); err != nil {
+		t.Fatalf("count preserved attachments: %v", err)
+	}
+	if reactionCount != 1 || attachmentCount != 1 {
+		t.Errorf("preserved related rows = reactions %d, attachments %d; want 1 and 1", reactionCount, attachmentCount)
+	}
+
+	resp = authRequest(t, "GET", "/api/issues/"+issueID+"/comments", nil)
+	var comments []map[string]any
+	readJSON(t, resp, &comments)
+	if len(comments) != 0 {
+		t.Errorf("listed %d comments after logical subtree delete, want 0", len(comments))
+	}
+
+	resp = authRequest(t, "GET", "/api/attachments/"+attachmentID+"/download", nil)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Errorf("deleted comment attachment download status = %d, want 404", resp.StatusCode)
+	}
+}
+
 // TestCommentTriggerCoalescing verifies that rapid-fire comments don't create
 // duplicate tasks (coalescing dedup).
 func TestCommentTriggerCoalescing(t *testing.T) {
