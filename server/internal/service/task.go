@@ -2310,15 +2310,20 @@ func (s *TaskService) publishAgentStatus(agent db.Agent) {
 	})
 }
 
-// LoadAgentSkillsForIssue loads normal role skills and adds an immutable,
-// task-scoped reference skill for the creative context pinned on this issue or
-// an ancestor. Uploaded market assets remain platform resources; agents receive
-// their versioned URLs and per-image copy without duplicating them into prompts.
-func (s *TaskService) LoadAgentSkillsForIssue(ctx context.Context, agentID, issueID pgtype.UUID) []AgentSkillData {
+// LoadAgentSkillsForTask loads the skills relevant to the claimed task and
+// adds an immutable, task-scoped reference skill for the creative context
+// pinned on this issue or an ancestor. Uploaded market assets remain platform
+// resources; agents receive their versioned URLs and per-image copy without
+// duplicating them into prompts.
+func (s *TaskService) LoadAgentSkillsForTask(ctx context.Context, agentID, issueID pgtype.UUID, taskContext []byte) []AgentSkillData {
 	skills, err := s.Queries.ListAgentSkills(ctx, agentID)
 	result := make([]AgentSkillData, 0, len(skills))
+	allowedCapabilities := creativeTaskSkillCapabilities(taskContext)
 	if err == nil {
 		for _, sk := range skills {
+			if !creativeTaskSkillAllowed(sk, allowedCapabilities) {
+				continue
+			}
 			data := AgentSkillData{
 				ID:          util.UUIDToString(sk.ID),
 				Name:        sk.Name,
@@ -2347,6 +2352,51 @@ func (s *TaskService) LoadAgentSkillsForIssue(ctx context.Context, agentID, issu
 		})
 	}
 	return result
+}
+
+func creativeTaskSkillCapabilities(taskContext []byte) map[string]struct{} {
+	var context struct {
+		Type     string `json:"type"`
+		Workflow string `json:"workflow"`
+	}
+	if json.Unmarshal(taskContext, &context) != nil || context.Type != "creative_domain_task" {
+		return nil
+	}
+
+	capabilities := map[string][]string{
+		"creative_reference_analysis": {"reference_analysis"},
+		"creative_pre_adaptation":     {"pre_adaptation"},
+		"creative_plan":               {"generation_plan"},
+		"creative_production":         {"image_edit", "prime_compose"},
+		"creative_direct_edit":        {"direct_image_edit", "prime_compose"},
+		"creative_qc_technical":       {"quality_control"},
+		"creative_qc_visual":          {"quality_control"},
+		"creative_crawl_diagnosis":    {"crawl_diagnosis"},
+	}
+	roles, ok := capabilities[context.Workflow]
+	if !ok {
+		return nil
+	}
+	allowed := make(map[string]struct{}, len(roles))
+	for _, role := range roles {
+		allowed[role] = struct{}{}
+	}
+	return allowed
+}
+
+func creativeTaskSkillAllowed(skill db.Skill, allowedCapabilities map[string]struct{}) bool {
+	if len(allowedCapabilities) == 0 {
+		return true
+	}
+	var config struct {
+		Kind       string `json:"kind"`
+		Capability string `json:"capability"`
+	}
+	if json.Unmarshal(skill.Config, &config) != nil || config.Kind != "creative_role" {
+		return true
+	}
+	_, ok := allowedCapabilities[config.Capability]
+	return ok
 }
 
 func creativeIssueResourceSkillContent() string {

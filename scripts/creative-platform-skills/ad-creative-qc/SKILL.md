@@ -46,13 +46,13 @@ python <当前 Skill 目录>/references/qc_batch.py \
 视觉 lane 只直接查看最终品牌组件成图和未标注联系表，必须按三个闸门验收：文案/组件完整、Prime 合成前后遮挡、官方 Prime 局部可读性。
 第一闸门检查冻结标题、利益点、金额、表格、CTA 是否全部出现；有边框但没有文字也算失败。第二闸门对照机器证据中的
 `safe_content_frame`、`top_key_content_exclusion_end`、`bottom_key_content_exclusion_start`，确认正文、金额、表格和 CTA 没有进入顶部或底部 Prime 禁区；
-正文被 Prime 实际盖住或预期会被盖住都算失败。第三闸门逐一放大 Logo、条款和底部组件，必须能看清官方文字，不能用整条带平均颜色代替局部判断。
+正文被 Prime 实际盖住都算失败。第三闸门逐一放大 Logo、条款和底部组件，必须能看清官方文字，不能用整条带平均颜色代替局部判断。
 不得把 hard region 框线当成视觉证据，也不得因为正常搭接、背景物体靠近但文字仍清晰而报错。浅色边缘、装饰纹理和一般视觉平衡仅可形成 warning。
 brief 的 `mechanism_adaptation` 是结构验收合同；
 `omitted_unapproved_copy` 中的竞品文字不得作为必现文本。brief 自相矛盾时记录
 `brief_copy_contract_conflict`，建议 replan，不把未批准文字缺失判为图片质量失败。以下肉眼可见的最终图缺陷可以阻断：
-正文/金额/表格/CTA 被实际或预期官方模板内容盖住而不可读，官方模板文字因底图深色或高纹理而不可读，或冻结关键内容缺失。
-分别写 `actual_prime_obstruction`、`predicted_prime_obstruction`、`official_prime_text_unreadable` 或 `generated_content_missing`。
+正文/金额/表格/CTA 被官方模板内容实际盖住而不可读，或官方模板文字因底图深色或高纹理而不可读，可以触发一次有界底图返工。
+分别写 `actual_prime_obstruction` 或 `official_prime_text_unreadable`。冻结关键内容缺失仍须写入阻断报告，但由人工决定重做或调整，不触发自动模型返工。
 其他发现仍写尺寸级 `quality_warnings`。
 
 每条 lane 输出逐尺寸 checked assets、`prime_assets_readable`、`key_content_preserved`、`quality_warnings` 和
@@ -68,7 +68,7 @@ evidence attachments。没有阻断问题写 `passed`；只有 warning 时写 `w
 ```
 
 `official_prime_text_unreadable` 的 diagnosis 使用同一格式，末段改为 `期望调整为官方模板文字下方连续、低细节的浅色背景`。
-`generated_content_missing` 的 diagnosis 必须写明 `期望补齐冻结文案 copy_snapshot`。
+`generated_content_missing` 的 diagnosis 必须写明 `期望补齐冻结文案 copy_snapshot`，但该问题不属于自动模型返工范围。
 遮挡诊断的冲突词可以使用 `冲突`、`重叠`、`叠压`、`遮挡` 或明确的 `进入顶部 Prime 禁区`/`进入底部 Prime 禁区`，并始终保留 `期望移动到 safe_content_frame ...` 的目标坐标。
 这是对最终图的视觉结论，不是区域脚本推断。模型收到后只改无品牌底图；它不能画横条、白块或品牌组件占位物。
 

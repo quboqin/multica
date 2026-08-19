@@ -55,6 +55,15 @@ describe("CreativeComparisonWorkspace", () => {
     expect(screen.getByAltText("正式成图")).toHaveAttribute("src", "https://cdn.example/final.png");
   });
 
+  it("shows the previous revision as the before image for a precise adjustment", () => {
+    render(<CreativeComparisonWorkspace {...props} comparisonMode="adjustment" source={{ label: "调整前 · r1", url: "https://cdn.example/before.png" }} />);
+    expect(screen.getByText("调整前 / 调整后")).toBeInTheDocument();
+    expect(screen.getByTestId("creative-comparison-source-pane")).toHaveAttribute("title", "查看调整前成图");
+    expect(screen.getByTestId("creative-comparison-result-pane")).toHaveAttribute("title", "查看调整后成图");
+    expect(screen.getByAltText("调整前 · r1")).toHaveAttribute("src", "https://cdn.example/before.png");
+    expect(screen.getByText("调整后 · 正式成图")).toBeInTheDocument();
+  });
+
   it("disables acceptance and explains which final delivery condition is pending", () => {
     render(<CreativeComparisonWorkspace {...props} acceptance={{ enabled: false, status: "等待双路 QC：technical 通过，visual 待完成" }} />);
     expect(screen.getByRole("button", { name: "接受" })).toBeDisabled();

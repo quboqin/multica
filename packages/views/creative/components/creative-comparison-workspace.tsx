@@ -96,6 +96,7 @@ export function CreativeComparisonWorkspace({
   annotationScopes = ["size", "variant", "order"],
   acceptance,
   showDecisionActions = true,
+  comparisonMode = "source",
 }: {
   source: { label: string; url: string };
   result: CreativeComparisonAsset;
@@ -108,6 +109,7 @@ export function CreativeComparisonWorkspace({
   annotationScopes?: CreativeAnnotationDraft["scope"][];
   acceptance?: { enabled: boolean; status: string };
   showDecisionActions?: boolean;
+  comparisonMode?: "source" | "adjustment";
 }) {
   const [selectedAssetId, setSelectedAssetId] = useState(result.id);
   const [pair, setPair] = useState<"source-final" | "base-prime">("source-final");
@@ -128,8 +130,11 @@ export function CreativeComparisonWorkspace({
   const annotationSequence = useRef(0);
   const acceptanceStatusId = useId();
   const selectedResult = assets.find((asset) => asset.id === selectedAssetId) ?? result;
+  const isAdjustmentComparison = comparisonMode === "adjustment";
   const displayedSource = pair === "source-final" ? source : { label: "底图", url: selectedResult.baseUrl || "" };
-  const displayedResult = pair === "source-final" ? { ...selectedResult, url: selectedResult.finalUrl } : { ...selectedResult, label: "Prime 成图", url: selectedResult.finalUrl };
+  const displayedResult = pair === "source-final"
+    ? { ...selectedResult, label: isAdjustmentComparison ? `调整后 · ${selectedResult.label}` : selectedResult.label, url: selectedResult.finalUrl }
+    : { ...selectedResult, label: "Prime 成图", url: selectedResult.finalUrl };
   const transform = `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`;
   const canAnnotate = Boolean(onAnnotations);
   const defaultAnnotationScope = annotationScopes[0] ?? "size";
@@ -255,7 +260,7 @@ export function CreativeComparisonWorkspace({
   return <div className="grid h-full min-h-0 grid-rows-[auto_minmax(0,1fr)_auto] bg-background" data-testid="creative-comparison-workspace">
     <div className="flex min-w-0 flex-nowrap items-center gap-2 overflow-x-auto border-b px-3 py-2 pr-14" data-testid="creative-preview-toolbar">
       <span className="shrink-0 text-sm font-semibold">高清对比</span>
-      <div className="inline-flex border"><button type="button" onClick={() => setPair("source-final")} className={cn("h-7 whitespace-nowrap px-2.5 text-[11px]", pair === "source-final" && "bg-foreground text-background")}>原图 / 成图</button><button type="button" onClick={() => setPair("base-prime")} className={cn("h-7 whitespace-nowrap border-l px-2.5 text-[11px]", pair === "base-prime" && "bg-foreground text-background")}>底图 / Prime</button></div>
+      <div className="inline-flex border"><button type="button" onClick={() => setPair("source-final")} className={cn("h-7 whitespace-nowrap px-2.5 text-[11px]", pair === "source-final" && "bg-foreground text-background")}>{isAdjustmentComparison ? "调整前 / 调整后" : "原图 / 成图"}</button><button type="button" onClick={() => setPair("base-prime")} className={cn("h-7 whitespace-nowrap border-l px-2.5 text-[11px]", pair === "base-prime" && "bg-foreground text-background")}>底图 / Prime</button></div>
       <div className="inline-flex border" role="group" aria-label="创意变体">{variants.map((variant) => <button key={variant} type="button" aria-pressed={variant === selectedResult.variant} onClick={() => chooseVariant(variant)} className={cn("h-7 min-w-12 px-2.5 text-[11px]", variant === selectedResult.variant && "bg-foreground text-background")}>{variant}</button>)}</div>
       <div className="inline-flex border" role="group" aria-label="成图尺寸">{sizes.map((assetSize) => <button key={assetSize} type="button" aria-pressed={assetSize === selectedResult.size} onClick={() => chooseSize(assetSize)} className={cn("h-7 min-w-12 px-2.5 text-[11px]", assetSize === selectedResult.size && "bg-foreground text-background")}>{assetSize === "1080x1080" ? "方形" : assetSize === "1200x628" ? "横版" : assetSize === "800x1000" ? "竖版" : assetSize}</button>)}</div>
       <div className="ml-auto flex shrink-0 items-center gap-1">
@@ -267,7 +272,7 @@ export function CreativeComparisonWorkspace({
     </div>
     <div className="min-h-0 bg-muted/20 p-2">
       <div ref={stageRef} data-testid="creative-comparison-stage" className={cn("relative h-full min-h-[480px] overflow-hidden border bg-background", annotationTool ? "cursor-crosshair" : "cursor-grab active:cursor-grabbing")} onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp} onPointerCancel={() => setDrag(null)}>
-        <div className="grid h-full grid-cols-1 divide-y md:grid-cols-[minmax(160px,0.3fr)_minmax(0,1fr)] md:divide-x md:divide-y-0"><ComparisonPane title="查看竞品原图" label={displayedSource.label} muted testId="creative-comparison-source-pane">{displayedSource.url ? <img draggable={false} src={displayedSource.url} alt={displayedSource.label} width={800} height={800} loading="lazy" className="pointer-events-none h-full w-full select-none object-contain" /> : <div className="flex h-full items-center justify-center text-xs text-muted-foreground">底图尚未登记</div>}</ComparisonPane><ComparisonPane title="查看修图结果大图" label={displayedResult.label} overlay={annotationOverlay} containerRef={resultPaneRef} testId="creative-comparison-result-pane">{image(displayedResult, true)}</ComparisonPane></div>
+        <div className="grid h-full grid-cols-1 divide-y md:grid-cols-[minmax(160px,0.3fr)_minmax(0,1fr)] md:divide-x md:divide-y-0"><ComparisonPane title={isAdjustmentComparison ? "查看调整前成图" : "查看竞品原图"} label={displayedSource.label} muted testId="creative-comparison-source-pane">{displayedSource.url ? <img draggable={false} src={displayedSource.url} alt={displayedSource.label} width={800} height={800} loading="lazy" className="pointer-events-none h-full w-full select-none object-contain" /> : <div className="flex h-full items-center justify-center text-xs text-muted-foreground">底图尚未登记</div>}</ComparisonPane><ComparisonPane title={isAdjustmentComparison ? "查看调整后成图" : "查看修图结果大图"} label={displayedResult.label} overlay={annotationOverlay} containerRef={resultPaneRef} testId="creative-comparison-result-pane">{image(displayedResult, true)}</ComparisonPane></div>
       </div>
     </div>
     <div className="flex flex-wrap items-center gap-2 border-t px-4 py-2">

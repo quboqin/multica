@@ -27,7 +27,7 @@ allowed-tools: Bash(multica *)
 4. 按 target/source 分组，使用 `multica task fanout` 一次提交全部就绪项。提交后立即结束，不轮询、休眠或
    创建等待 Issue。
 
-正常主链所有权固定：Leader 创建方案或 direct-edit task；Planner 创建 production；Production 的最后一次资产登记由后端合成品牌组件并创建 technical/visual QC；QC 写检测报告并调用 `qc-finalize` 完成归档，真实遮挡、官方文字不可读和关键内容缺失会阻断当前尺寸并触发最多一轮定向返工。Leader 只在人工重试或异常恢复时补真正缺失的下一步，
+正常主链所有权固定：Leader 创建方案或 direct-edit task；Planner 创建 production；Production 的最后一次资产登记由后端合成品牌组件并创建 technical/visual QC；QC 写检测报告并调用 `qc-finalize` 完成归档，真实遮挡或官方文字不可读会阻断当前尺寸并触发最多一轮定向返工，关键内容缺失仍然阻断并转人工确认。Leader 只在人工重试或异常恢复时补真正缺失的下一步，
 不得与下游重复委派。
 
 ## 标准订单
@@ -35,7 +35,7 @@ allowed-tools: Bash(multica *)
 每个就绪 Order Item 单独提交一个 `creative_order_item_plan` fanout；一个 manifest 的 source ref 必须是该 item ID，
 不能把不同 item 放入同一个 manifest。item key 固定为 `<item-id>:r1`，context 固定
 `type=creative_domain_task`、`workflow=creative_plan`，并携带 issue/leader/order/item/candidate/source-analysis IDs、
-`revision: 1`、`scope: item` 及 planner/producer/prime/reviewer IDs。
+`revision: 1`、`scope: item` 及 planner/producer/reviewer IDs。
 
 ```text
 multica task by-source list --agent <planner-agent-id> \
@@ -80,8 +80,8 @@ multica task fanout --agent <planner-agent-id> --input-file <manifest.json> --ou
 
 `input_snapshot.mode=direct_edit` 时只创建 `creative_order_item_direct_edit` task。snapshot 必须含
 `direct_edit_agent_id`、`reviewer_agent_id`；context 携带固定 source asset/attachment、
-用户原话、target/expected sizes、delivery mode 和 source revision。preview 到 generated 结束；publish 才继续
-后端品牌组件合成与双路 QC。不得触发采集、参考分析、三变体方案或标准生产。
+用户原话、target/expected sizes、delivery mode 和 source revision。preview 到 generated 结束；publish 由后端直接
+重新执行确定性品牌组件合成并登记 delivered，不创建 QC task。不得触发采集、参考分析、三变体方案或标准生产。
 
 ## 恢复与用户留痕
 

@@ -1124,7 +1124,7 @@ func (h *Handler) ClaimTaskByRuntime(w http.ResponseWriter, r *http.Request) {
 		// Workspace-bound skills first, then platform built-in skills. Built-in
 		// names carry a "multica-" prefix so their on-disk slugs never collide
 		// with a user-authored workspace skill (see writeSkillFiles).
-		skills := h.TaskService.LoadAgentSkillsForIssue(r.Context(), task.AgentID, task.IssueID)
+		skills := h.TaskService.LoadAgentSkillsForTask(r.Context(), task.AgentID, task.IssueID, task.Context)
 		skills = append(skills, h.TaskService.BuiltinSkills()...)
 		var customEnv map[string]string
 		if agent.CustomEnv != nil {
@@ -2181,6 +2181,9 @@ func (h *Handler) CompleteTask(w http.ResponseWriter, r *http.Request) {
 		if err := h.settleCreativeProductionVariantTask(r.Context(), *task); err != nil {
 			slog.Error("close incomplete creative production variant after rejected completion", "task_id", taskID, "error", err)
 		}
+		if err := h.settleCreativeDirectEditTask(r.Context(), *task); err != nil {
+			slog.Error("close incomplete creative direct edit after rejected completion", "task_id", taskID, "error", err)
+		}
 		slog.Warn("creative task failed closed", "task_id", taskID, "error", artifactError)
 		writeJSON(w, http.StatusOK, h.hydratedTaskResponse(r.Context(), *task, workspaceID))
 		return
@@ -2202,6 +2205,9 @@ func (h *Handler) CompleteTask(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := h.settleCreativeProductionVariantTask(r.Context(), *task); err != nil {
 		slog.Error("close incomplete creative production variant after completion", "task_id", taskID, "error", err)
+	}
+	if err := h.settleCreativeDirectEditTask(r.Context(), *task); err != nil {
+		slog.Error("close incomplete creative direct edit after completion", "task_id", taskID, "error", err)
 	}
 
 	// Best-effort revoke of any agent task token minted at claim time.
@@ -2366,6 +2372,9 @@ func (h *Handler) FailTask(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := h.settleCreativeProductionVariantTask(r.Context(), *task); err != nil {
 		slog.Error("close incomplete creative production variant after failure", "task_id", taskID, "error", err)
+	}
+	if err := h.settleCreativeDirectEditTask(r.Context(), *task); err != nil {
+		slog.Error("close incomplete creative direct edit after failure", "task_id", taskID, "error", err)
 	}
 
 	slog.Info("task failed", "task_id", taskID, "agent_id", uuidToString(task.AgentID), "task_error", req.Error, "failure_reason", req.FailureReason)

@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -1452,11 +1453,28 @@ FOR UPDATE OF variant, order_row
 		writeError(w, http.StatusConflict, "creative QC recovery requires at least one delivery size")
 		return
 	}
+	var recoveryAlreadyUsed bool
+	if err := tx.QueryRow(r.Context(), `
+SELECT EXISTS(
+  SELECT 1 FROM activity_log
+  WHERE issue_id = $1 AND action = 'creative_qc_recovery_queued'
+    AND details->>'variant_id' = $2::text
+    AND details->>'revision' = $3::text
+)
+`, issueID, variantID, strconv.Itoa(revision)).Scan(&recoveryAlreadyUsed); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to check creative QC recovery limit")
+		return
+	}
+	if recoveryAlreadyUsed {
+		writeError(w, http.StatusConflict, "creative QC recovery has already been used for this revision")
+		return
+	}
 	primedSizes := map[string]struct{}{}
 	rows, err := tx.Query(r.Context(), `
 SELECT size_key
 FROM creative_order_asset
 WHERE variant_id = $1 AND revision = $2 AND stage = 'primed' AND status = 'completed'
+  AND attachment_id IS NOT NULL
 FOR UPDATE
 `, variantID, revision)
 	if err != nil {
@@ -1482,23 +1500,6 @@ FOR UPDATE
 		writeError(w, http.StatusConflict, "all expected completed Prime assets are required before retrying QC")
 		return
 	}
-	var recoveryAlreadyUsed bool
-	if err := tx.QueryRow(r.Context(), `
-SELECT EXISTS(
-  SELECT 1 FROM activity_log
-  WHERE issue_id = $1 AND action = 'creative_qc_recovery_queued'
-    AND details->>'variant_id' = $2::text
-    AND details->>'revision' = $3::text
-)
-`, issueID, variantID, strconv.Itoa(revision)).Scan(&recoveryAlreadyUsed); err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to check creative QC recovery limit")
-		return
-	}
-	if recoveryAlreadyUsed {
-		writeError(w, http.StatusConflict, "creative QC recovery has already been used for this revision")
-		return
-	}
-
 	var activeQC bool
 	if err := tx.QueryRow(r.Context(), `
 SELECT EXISTS(
@@ -1879,6 +1880,22 @@ func creativeOrderProductionAgentSnapshot(raw json.RawMessage) (pgtype.UUID, pgt
 	return leaderID, producerID, reviewerID, nil
 }
 
+func creativeOrderDirectEditAgentSnapshot(raw json.RawMessage) (pgtype.UUID, error) {
+	var snapshot struct {
+		SquadSnapshot struct {
+			DirectEditAgentID string `json:"direct_edit_agent_id"`
+		} `json:"squad_snapshot"`
+	}
+	if err := json.Unmarshal(raw, &snapshot); err != nil {
+		return pgtype.UUID{}, errors.New("creative order has an invalid frozen squad snapshot")
+	}
+	id, err := uuid.Parse(strings.TrimSpace(snapshot.SquadSnapshot.DirectEditAgentID))
+	if err != nil {
+		return pgtype.UUID{}, errors.New("creative order is missing a frozen direct image edit agent")
+	}
+	return pgtype.UUID{Bytes: id, Valid: true}, nil
+}
+
 func creativeVisualModelReworkFindings(findings json.RawMessage, expectedSizes []string) ([]creativeVisualModelReworkFinding, error) {
 	var report struct {
 		BlockingFailures []creativeVisualModelReworkFinding `json:"blocking_failures"`
@@ -1899,7 +1916,7 @@ func creativeVisualModelReworkFindings(findings json.RawMessage, expectedSizes [
 		finding.Code = strings.TrimSpace(finding.Code)
 		finding.SizeKey = strings.TrimSpace(finding.SizeKey)
 		finding.Diagnosis = strings.TrimSpace(finding.Diagnosis)
-		if finding.Code != "actual_prime_obstruction" && finding.Code != "predicted_prime_obstruction" && finding.Code != "official_prime_text_unreadable" && finding.Code != "generated_content_missing" {
+		if finding.Code != "actual_prime_obstruction" && finding.Code != "official_prime_text_unreadable" {
 			return nil, errors.New("visual QC finding is not eligible for model rework")
 		}
 		if _, ok := expected[finding.SizeKey]; !ok {
@@ -1921,15 +1938,10 @@ func validCreativeVisualModelReworkDiagnosis(code, sizeKey, diagnosis string) bo
 		!(strings.HasPrefix(diagnosis, sizeKey+"：") || strings.HasPrefix(diagnosis, sizeKey+":")) {
 		return false
 	}
-	if code == "actual_prime_obstruction" || code == "predicted_prime_obstruction" {
+	if code == "actual_prime_obstruction" {
 		return strings.Contains(diagnosis, "期望移动到") &&
 			(strings.Contains(diagnosis, "safe_content_frame") || strings.Contains(diagnosis, " y")) &&
 			(strings.Contains(diagnosis, "冲突") || strings.Contains(diagnosis, "重叠") || strings.Contains(diagnosis, "叠压") || strings.Contains(diagnosis, "遮挡") || strings.Contains(diagnosis, "进入顶部 Prime 禁区") || strings.Contains(diagnosis, "进入底部 Prime 禁区"))
-	}
-	if code == "generated_content_missing" {
-		return strings.Contains(diagnosis, "期望补齐") &&
-			(strings.Contains(diagnosis, "冻结文案") || strings.Contains(diagnosis, "copy_snapshot")) &&
-			(strings.Contains(diagnosis, "缺失") || strings.Contains(diagnosis, "未出现") || strings.Contains(diagnosis, "没有"))
 	}
 	return strings.Contains(diagnosis, "期望调整为") &&
 		(strings.Contains(diagnosis, "背景") || strings.Contains(strings.ToLower(diagnosis), "background")) &&
@@ -2325,7 +2337,9 @@ SELECT
 		writeError(w, http.StatusInternalServerError, "failed to load creative variant QC state")
 		return
 	}
-	standardAdoption := creativeQCStatusAllowsAdoption(technicalStatus) && creativeQCStatusAllowsAdoption(visualStatus) && qcOutcome == "delivered"
+	directEditNoQC := triggerKind == "creative_direct_edit" || creativeDirectEditSkipsQC(json.RawMessage(variantBrief))
+	standardAdoption := (directEditNoQC && variantStatus == "completed" && technicalStatus == "" && visualStatus == "" && qcOutcome == "") ||
+		(creativeQCStatusAllowsAdoption(technicalStatus) && creativeQCStatusAllowsAdoption(visualStatus) && qcOutcome == "delivered")
 	riskAdoption := (technicalStatus == "failed" || visualStatus == "failed") && qcOutcome == "action_required"
 	if standardAdoption {
 		if input.QCRiskAcknowledged {
@@ -2456,6 +2470,9 @@ WHERE id = $1
 	adoptionMode := "standard"
 	reasonCodes := []string{}
 	feedbackComment := ""
+	if directEditNoQC {
+		adoptionMode = "direct_edit_no_qc"
+	}
 	if riskAdoption {
 		adoptionMode = "qc_risk_accepted"
 		reasonCodes = []string{"qc_risk_accepted"}
@@ -2744,20 +2761,6 @@ RETURNING id::text, variant_id::text, asset_family_id::text, size_key, revision,
 		writeError(w, http.StatusInternalServerError, "failed to save creative order asset")
 		return
 	}
-	if input.Stage == "generated" && input.Status == "completed" {
-		// Composition can wait behind other completed variants. Keep that
-		// server-side work alive after the client gives up on this asset write.
-		composeContext, cancelCompose := context.WithTimeout(context.WithoutCancel(r.Context()), 10*time.Minute)
-		defer cancelCompose()
-		if _, composeErr := h.composeCreativeOrderVariantPrime(composeContext, workspaceID, orderID, variantID, userID); composeErr != nil {
-			var qcHandoffErr *creativeQCHandoffError
-			if errors.As(composeErr, &qcHandoffErr) {
-				h.markCreativeQCHandoffFailed(composeContext, variantID, qcHandoffErr)
-			} else {
-				h.markCreativePrimeCompositionFailed(composeContext, variantID, composeErr)
-			}
-		}
-	}
 	h.publishCreativeDomainUpdated(r, workspaceID, userID, map[string]any{"scope": "order", "order_id": chi.URLParam(r, "id")})
 	writeJSON(w, http.StatusOK, asset)
 }
@@ -2794,6 +2797,10 @@ func (h *Handler) UpsertCreativeOrderDiagnosticAsset(w http.ResponseWriter, r *h
 	}
 	taskID, ok := optionalUUIDOrBadRequest(w, input.TaskID, "task_id")
 	if !ok {
+		return
+	}
+	if input.Workflow == "creative_production" && !taskID.Valid {
+		writeError(w, http.StatusUnprocessableEntity, "creative production process evidence requires task_id")
 		return
 	}
 	var variantRevision int
@@ -3608,6 +3615,7 @@ func copyCreativePrimedAssetsToDelivered(ctx context.Context, tx pgx.Tx, variant
 SELECT id, size_key
 FROM creative_order_asset
 WHERE variant_id = $1 AND revision = $2 AND stage = 'primed' AND status = 'completed'
+  AND attachment_id IS NOT NULL
 FOR UPDATE
 `, variantID, revision)
 	if err != nil {
@@ -3635,6 +3643,7 @@ INSERT INTO creative_order_asset (
 SELECT variant_id, asset_family_id, size_key, revision, 'delivered', attachment_id, id, metadata, evidence, 'completed'
 FROM creative_order_asset
 WHERE variant_id = $1 AND revision = $2 AND stage = 'primed' AND status = 'completed'
+  AND attachment_id IS NOT NULL
 ON CONFLICT (variant_id, size_key, revision, stage) DO UPDATE SET
   asset_family_id = EXCLUDED.asset_family_id,
   attachment_id = EXCLUDED.attachment_id,
@@ -3807,6 +3816,30 @@ WHERE id = $1
 	})
 	if err != nil {
 		return db.AgentTaskQueue{}, errors.New("failed to queue creative visual rework")
+	}
+	if _, err := tx.Exec(ctx, `
+INSERT INTO creative_order_diagnostic_asset (
+  variant_id, task_id, attachment_id, size_key, revision, workflow, label, filename, metadata
+)
+SELECT variant_id, $6, attachment_id, size_key, $3, workflow, label, filename,
+  metadata || jsonb_build_object(
+    'reused_from_revision', $2::integer,
+    'reused_for_qc_visual_rework', true
+  )
+FROM creative_order_diagnostic_asset
+WHERE variant_id = $1
+  AND revision = $2
+  AND workflow = 'creative_production'
+  AND size_key = ANY($4::text[])
+  AND NOT (size_key = ANY($5::text[]))
+  AND label = ANY(ARRAY['Prime context', '模型原图', '规范化底图']::text[])
+ON CONFLICT (variant_id, revision, workflow, size_key, label, filename) DO UPDATE SET
+  task_id = EXCLUDED.task_id,
+  attachment_id = EXCLUDED.attachment_id,
+  metadata = EXCLUDED.metadata,
+  updated_at = now()
+`, variantID, sourceRevision, newRevision, expectedSizes, targetSizes, task.ID); err != nil {
+		return db.AgentTaskQueue{}, errors.New("preserve creative visual rework process evidence")
 	}
 	details, err := json.Marshal(map[string]any{
 		"creative_order_id": uuidToString(orderID),
@@ -4146,6 +4179,12 @@ func normalizeCreativeOrderDiagnosticAsset(input creativeOrderDiagnosticAssetInp
 	if input.VariantID == "" || input.AttachmentID == "" || input.Revision < 1 || !validCreativeAssetSize(input.SizeKey) || input.Workflow == "" || len(input.Workflow) > 80 || input.Label == "" || len(input.Label) > 120 {
 		return input, errors.New("invalid creative order diagnostic asset")
 	}
+	if input.Workflow == "creative_production" && !slices.Contains(creativeProductionProcessLabels, input.Label) {
+		return input, errors.New("creative production process label is not supported")
+	}
+	if input.Workflow == "brand_components" && input.Label != "Prime 合成成图" {
+		return input, errors.New("brand component process label is not supported")
+	}
 	var err error
 	input.Metadata, err = normalizedOptionalJSONObject(input.Metadata)
 	if err != nil {
@@ -4309,6 +4348,15 @@ func expectedCreativeVariantSizes(triggerKind string, inputSnapshot, brief json.
 		}
 	}
 	return nil, errors.New("creative direct-edit delivery scope is missing")
+}
+
+func creativeDirectEditSkipsQC(brief json.RawMessage) bool {
+	var contract struct {
+		Delivery struct {
+			SkipQC bool `json:"skip_qc"`
+		} `json:"creative_direct_edit_delivery"`
+	}
+	return json.Unmarshal(brief, &contract) == nil && contract.Delivery.SkipQC
 }
 
 func creativeOrderSnapshotExpectedSizes(raw json.RawMessage) ([]string, bool, error) {
@@ -4523,6 +4571,34 @@ WHERE asset.variant_id = $1
 		return fmt.Errorf("count creative production assets: %w", err)
 	}
 	if completedCount >= len(expectedSizes) {
+		missingProcess, err := h.creativeProcessEvidenceMissing(ctx, variantUUID, taskContext.Revision, expectedSizes, "creative_production", creativeProductionProcessLabels)
+		if err != nil {
+			return err
+		}
+		if len(missingProcess) > 0 {
+			message := "creative production process evidence is incomplete: " + strings.Join(missingProcess, ", ")
+			missingJSON, err := json.Marshal(missingProcess)
+			if err != nil {
+				return fmt.Errorf("encode missing creative process evidence: %w", err)
+			}
+			if _, err := tx.Exec(ctx, `
+UPDATE creative_order_variant
+SET status = 'action_required',
+    brief = brief || jsonb_build_object(
+      'error_code', 'process_evidence_missing',
+      'error_message', $2::text,
+      'process_evidence_missing', $3::jsonb
+    ),
+    updated_at = now()
+WHERE id = $1 AND revision = $4
+`, variantUUID, message, missingJSON, taskContext.Revision); err != nil {
+				return fmt.Errorf("mark missing creative process evidence: %w", err)
+			}
+			if err := tx.Commit(ctx); err != nil {
+				return fmt.Errorf("commit missing creative process evidence: %w", err)
+			}
+			return nil
+		}
 		if err := tx.Commit(ctx); err != nil {
 			return fmt.Errorf("commit complete creative production variant: %w", err)
 		}
@@ -4657,6 +4733,87 @@ WHERE id = $1 AND revision = $2 AND status <> 'cancelled'
 		"max_attempts", child.MaxAttempts,
 	)
 	return nil
+}
+
+func (h *Handler) settleCreativeDirectEditTask(ctx context.Context, task db.AgentTaskQueue) error {
+	var taskContext struct {
+		Type       string `json:"type"`
+		Workflow   string `json:"workflow"`
+		VariantID  string `json:"variant_id"`
+		Revision   int    `json:"revision"`
+		TargetSize string `json:"target_size"`
+	}
+	if json.Unmarshal(task.Context, &taskContext) != nil || taskContext.Type != "creative_domain_task" || taskContext.Workflow != "creative_direct_edit" {
+		return nil
+	}
+	variantID, err := uuid.Parse(strings.TrimSpace(taskContext.VariantID))
+	if err != nil || taskContext.Revision < 1 || !validCreativeAssetSize(strings.TrimSpace(taskContext.TargetSize)) {
+		return nil
+	}
+	if h.TxStarter == nil {
+		return nil
+	}
+	tx, err := h.TxStarter.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin direct image edit settlement: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	variantUUID := pgtype.UUID{Bytes: variantID, Valid: true}
+	var variantStatus string
+	if err := tx.QueryRow(ctx, `
+SELECT status
+FROM creative_order_variant
+WHERE id = $1 AND revision = $2
+FOR UPDATE
+`, variantUUID, taskContext.Revision).Scan(&variantStatus); errors.Is(err, pgx.ErrNoRows) {
+		return nil
+	} else if err != nil {
+		return fmt.Errorf("lock direct image edit variant: %w", err)
+	}
+	if variantStatus == "cancelled" {
+		return tx.Commit(ctx)
+	}
+
+	var generated bool
+	if err := tx.QueryRow(ctx, `
+SELECT EXISTS(
+  SELECT 1
+  FROM creative_order_asset
+  WHERE variant_id = $1 AND revision = $2 AND size_key = $3
+    AND stage = 'generated' AND status = 'completed' AND attachment_id IS NOT NULL
+)
+`, variantUUID, taskContext.Revision, taskContext.TargetSize).Scan(&generated); err != nil {
+		return fmt.Errorf("check direct image edit output: %w", err)
+	}
+	if generated {
+		return tx.Commit(ctx)
+	}
+
+	detail := "direct image edit did not register a completed target base"
+	if task.Error.Valid && strings.TrimSpace(task.Error.String) != "" {
+		detail = strings.TrimSpace(task.Error.String)
+	} else if task.FailureReason.Valid && strings.TrimSpace(task.FailureReason.String) != "" {
+		detail = strings.TrimSpace(task.FailureReason.String)
+	}
+	if len(detail) > 1200 {
+		detail = detail[:1200]
+	}
+	if _, err := tx.Exec(ctx, `
+UPDATE creative_order_variant
+SET status = 'action_required',
+    brief = jsonb_set(
+      brief,
+      '{creative_direct_edit_error}',
+      jsonb_build_object('message', $2::text, 'retryable', true, 'updated_at', now()::text),
+      true
+    ),
+    updated_at = now()
+WHERE id = $1 AND revision = $3
+`, variantUUID, detail, taskContext.Revision); err != nil {
+		return fmt.Errorf("mark direct image edit action required: %w", err)
+	}
+	return tx.Commit(ctx)
 }
 
 func validCreativeQCStatus(status string) bool {
@@ -5300,6 +5457,28 @@ WHERE variant.order_item_id = $1 ORDER BY variant.variant_key
 }
 
 func (h *Handler) loadCreativeOrderVariantBlocker(r *http.Request, variantID pgtype.UUID) (*creativeOrderVariantBlocker, error) {
+	var directEditError struct {
+		Message   string `json:"message"`
+		UpdatedAt string `json:"updated_at"`
+	}
+	var rawDirectEditError string
+	if err := h.DB.QueryRow(r.Context(), `
+SELECT COALESCE(brief->>'creative_direct_edit_error', '')
+FROM creative_order_variant
+WHERE id = $1
+`, variantID).Scan(&rawDirectEditError); err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return nil, err
+	}
+	if json.Unmarshal([]byte(rawDirectEditError), &directEditError) == nil && strings.TrimSpace(directEditError.Message) != "" {
+		return &creativeOrderVariantBlocker{
+			Workflow:      "creative_direct_edit",
+			FailureReason: "direct_image_edit_failed",
+			Detail:        summarizeCreativeOrderVariantBlocker(directEditError.Message),
+			FailedAt:      directEditError.UpdatedAt,
+			Retryable:     true,
+		}, nil
+	}
+
 	var qcHandoffError struct {
 		Message   string `json:"message"`
 		UpdatedAt string `json:"updated_at"`

@@ -107,6 +107,13 @@ var creativeOrderAssetPutCmd = &cobra.Command{
 	RunE:  runCreativeOrderAssetPut,
 }
 
+var creativeOrderPrimeComposeCmd = &cobra.Command{
+	Use:   "prime-compose <order-id>",
+	Short: "Run the backend-owned deterministic Prime composition for one variant",
+	Args:  exactArgs(1),
+	RunE:  runCreativeOrderPrimeCompose,
+}
+
 var creativeOrderDiagnosticAssetPutCmd = &cobra.Command{
 	Use:   "diagnostic-asset-put <order-id>",
 	Short: "Create or update one process image from an uploaded attachment",
@@ -166,6 +173,7 @@ func init() {
 		creativeOrderGetCmd,
 		creativeOrderVariantPutCmd,
 		creativeOrderAssetPutCmd,
+		creativeOrderPrimeComposeCmd,
 		creativeOrderDiagnosticAssetPutCmd,
 		creativeOrderQCPutCmd,
 		creativeOrderQCFinalizeCmd,
@@ -188,6 +196,8 @@ func init() {
 	creativeOrderAssetPutCmd.Flags().String("normalization-evidence-file", "", "UTF-8 JSON normalized delivery evidence")
 	creativeOrderListCmd.Flags().String("output", "json", "Output format: json")
 	creativeOrderGetCmd.Flags().String("output", "json", "Output format: json")
+	creativeOrderPrimeComposeCmd.Flags().String("variant", "", "Creative Order Variant UUID (required)")
+	creativeOrderPrimeComposeCmd.Flags().String("output", "json", "Output format: json")
 	creativeOrderQCFinalizeCmd.Flags().String("variant", "", "Creative Order Variant UUID (required)")
 	creativeOrderQCFinalizeCmd.Flags().Int("revision", 1, "Variant revision to finalize")
 	creativeOrderQCFinalizeCmd.Flags().String("output", "json", "Output format: json")
@@ -345,6 +355,18 @@ func runCreativeOrderAssetPut(cmd *cobra.Command, args []string) error {
 		return err
 	}
 	return writeCreativeDomainPayload(cmd, "/api/creative/orders/"+url.PathEscape(args[0])+"/assets", "PUT", payload)
+}
+
+func runCreativeOrderPrimeCompose(cmd *cobra.Command, args []string) error {
+	variantID, _ := cmd.Flags().GetString("variant")
+	if strings.TrimSpace(variantID) == "" {
+		return fmt.Errorf("--variant is required")
+	}
+	payload, err := json.Marshal(map[string]string{"variant_id": strings.TrimSpace(variantID)})
+	if err != nil {
+		return fmt.Errorf("encode prime composition request: %w", err)
+	}
+	return writeCreativeDomainPayload(cmd, "/api/creative/orders/"+url.PathEscape(args[0])+"/prime-compose", "POST", payload)
 }
 
 func runCreativeOrderDiagnosticAssetPut(cmd *cobra.Command, args []string) error {

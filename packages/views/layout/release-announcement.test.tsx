@@ -18,7 +18,7 @@ describe("ReleaseAnnouncement", () => {
     window.localStorage.clear();
   });
 
-  it("renders the current release body when the runtime changelog snapshot is stale", async () => {
+  it("shows the first release announcement when no version has been seen", async () => {
     render(
       <I18nProvider
         locale="zh-Hans"
@@ -42,10 +42,10 @@ describe("ReleaseAnnouncement", () => {
     await waitFor(() => {
       expect(
         screen.getByText(
-          "Prime 不再要求贴片包含二维码；平台按上传的完整透明模板原样叠加，若存在二维码则记录可解码证据，并继续校验文件、尺寸、布局和合成完整性。",
+          "创意工厂可以在每个工作区独立开启或关闭。",
         ),
       ).toBeInTheDocument();
     });
-    expect(screen.queryByText("releases.v0_3_36.summary")).not.toBeInTheDocument();
+    expect(window.localStorage.getItem("multica:last-seen-platform-version")).toBe("0.3.23");
   });
 });

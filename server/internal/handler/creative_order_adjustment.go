@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 
@@ -17,15 +18,16 @@ import (
 )
 
 type creativeOrderAdjustmentInput struct {
-	AdjustmentIssueID string          `json:"adjustment_issue_id"`
-	AssetID           string          `json:"asset_id"`
-	SizeKey           string          `json:"size_key"`
-	SourceRevision    int             `json:"source_revision"`
-	Comment           string          `json:"comment"`
-	EventType         string          `json:"event_type"`
-	ReasonCodes       []string        `json:"reason_codes"`
-	Annotation        json.RawMessage `json:"annotation"`
-	ContextSnapshot   json.RawMessage `json:"context_snapshot"`
+	AdjustmentIssueID           string          `json:"adjustment_issue_id"`
+	AssetID                     string          `json:"asset_id"`
+	SizeKey                     string          `json:"size_key"`
+	SourceRevision              int             `json:"source_revision"`
+	AnnotationGuideAttachmentID string          `json:"annotation_guide_attachment_id"`
+	Comment                     string          `json:"comment"`
+	EventType                   string          `json:"event_type"`
+	ReasonCodes                 []string        `json:"reason_codes"`
+	Annotation                  json.RawMessage `json:"annotation"`
+	ContextSnapshot             json.RawMessage `json:"context_snapshot"`
 }
 
 type creativeOrderAdjustmentResponse struct {
@@ -48,9 +50,9 @@ type creativeOrderAdjustmentIssueContext struct {
 }
 
 // QueueCreativeOrderAdjustment starts an annotated size revision with the
-// production agent frozen on the order. The child Issue remains the business
-// collaboration record, but it is never sent through the generic direct-edit
-// route.
+// direct image-edit agent frozen from the order squad. The selected final
+// asset remains the collaboration reference, while the edit agent receives
+// the matching unbranded generated base and any rasterized annotation guide.
 func (h *Handler) QueueCreativeOrderAdjustment(w http.ResponseWriter, r *http.Request) {
 	workspaceID, userID, ok := h.creativeFeedbackWorkspaceUser(w, r)
 	if !ok {
@@ -149,14 +151,22 @@ FOR UPDATE
 		return
 	}
 
-	var itemID, candidateID, variantID, assetAttachmentID string
+	var itemID, candidateID, variantID, assetAttachmentID, sourceAssetID, sourceAttachmentID, variantStatus string
 	var currentRevision int
 	err = tx.QueryRow(r.Context(), `
-SELECT item.id::text, item.candidate_id::text, variant.id::text, variant.revision,
-  COALESCE(asset.attachment_id::text, '')
+SELECT item.id::text, item.candidate_id::text, variant.id::text, variant.revision, variant.status,
+  COALESCE(asset.attachment_id::text, ''),
+  COALESCE(source_asset.id::text, ''), COALESCE(source_asset.attachment_id::text, '')
 FROM creative_order_item item
 JOIN creative_order_variant variant ON variant.order_item_id = item.id
 JOIN creative_order_asset asset ON asset.variant_id = variant.id
+LEFT JOIN creative_order_asset source_asset
+  ON source_asset.variant_id = variant.id
+  AND source_asset.size_key = asset.size_key
+  AND source_asset.revision = $4
+  AND source_asset.stage = 'generated'
+  AND source_asset.status = 'completed'
+  AND source_asset.attachment_id IS NOT NULL
 WHERE item.order_id = $1
   AND variant.id::text = $2
   AND asset.id = $3
@@ -165,8 +175,8 @@ WHERE item.order_id = $1
   AND asset.status = 'completed'
   AND asset.attachment_id IS NOT NULL
 FOR UPDATE OF item, variant, asset
-`, orderID, issueContext.VariantID, assetID, input.SourceRevision, input.SizeKey).Scan(
-		&itemID, &candidateID, &variantID, &currentRevision, &assetAttachmentID,
+	`, orderID, issueContext.VariantID, assetID, input.SourceRevision, input.SizeKey).Scan(
+		&itemID, &candidateID, &variantID, &currentRevision, &variantStatus, &assetAttachmentID, &sourceAssetID, &sourceAttachmentID,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		writeError(w, http.StatusConflict, "adjustment target is no longer the current completed image")
@@ -176,7 +186,7 @@ FOR UPDATE OF item, variant, asset
 		writeError(w, http.StatusInternalServerError, "failed to validate adjustment target")
 		return
 	}
-	if issueContext.ItemID != itemID || issueContext.VariantID != variantID || issueContext.AttachmentID != assetAttachmentID || currentRevision != input.SourceRevision {
+	if issueContext.ItemID != itemID || issueContext.VariantID != variantID || issueContext.AttachmentID != assetAttachmentID {
 		writeError(w, http.StatusConflict, "adjustment target has already changed")
 		return
 	}
@@ -199,38 +209,87 @@ SELECT EXISTS(
 		return
 	}
 
-	leaderID, producerID, reviewerID, err := creativeOrderProductionAgentSnapshot(json.RawMessage(inputSnapshot))
+	var retryingRevision bool
+	if currentRevision == input.SourceRevision+1 && currentRevision > input.SourceRevision {
+		var targetGenerated bool
+		if err := tx.QueryRow(r.Context(), `
+SELECT EXISTS(
+  SELECT 1
+  FROM creative_order_asset
+  WHERE variant_id = $1 AND revision = $2 AND size_key = $3
+    AND stage = 'generated' AND status = 'completed' AND attachment_id IS NOT NULL
+)
+`, parseUUID(variantID), currentRevision, input.SizeKey).Scan(&targetGenerated); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to check previous adjustment output")
+			return
+		}
+		retryingRevision = !targetGenerated && currentRevision == input.SourceRevision+1 &&
+			(currentRevision > input.SourceRevision) &&
+			(variantStatus == "running" || variantStatus == "action_required" || variantStatus == "failed")
+	}
+	if currentRevision != input.SourceRevision && !retryingRevision {
+		writeError(w, http.StatusConflict, "adjustment target has already changed")
+		return
+	}
+
+	leaderID, reviewerID, err := creativeOrderQCAgentSnapshot(json.RawMessage(inputSnapshot))
 	if err != nil {
 		writeError(w, http.StatusConflict, err.Error())
 		return
 	}
-	producer, err := h.Queries.WithTx(tx).GetAgentInWorkspace(r.Context(), db.GetAgentInWorkspaceParams{ID: producerID, WorkspaceID: workspaceID})
-	if errors.Is(err, pgx.ErrNoRows) || producer.ArchivedAt.Valid || !producer.RuntimeID.Valid {
-		writeError(w, http.StatusConflict, "the frozen creative production agent is unavailable")
+	squadIDText, err := creativeOrderSnapshotSquadID(json.RawMessage(inputSnapshot))
+	if err != nil {
+		writeError(w, http.StatusConflict, err.Error())
+		return
+	}
+	squadUUID, err := uuid.Parse(strings.TrimSpace(squadIDText))
+	if err != nil {
+		writeError(w, http.StatusConflict, "creative order has an invalid frozen squad")
+		return
+	}
+	squadID := pgtype.UUID{Bytes: squadUUID, Valid: true}
+	frozenSnapshot, err := freezeCreativeOrderSquadSnapshot(r.Context(), tx, workspaceID, squadID, json.RawMessage(inputSnapshot), []creativeOrderCapabilityBinding{
+		{Capability: "direct_image_edit", SnapshotField: "direct_edit_agent_id"},
+	})
+	if err != nil {
+		var validationErr *creativeOrderSquadValidationError
+		if errors.As(err, &validationErr) {
+			writeError(w, http.StatusConflict, validationErr.Error())
+		} else {
+			writeError(w, http.StatusInternalServerError, "failed to resolve direct image edit agent")
+		}
+		return
+	}
+	directEditAgentID, err := creativeOrderDirectEditAgentSnapshot(frozenSnapshot)
+	if err != nil {
+		writeError(w, http.StatusConflict, err.Error())
+		return
+	}
+	directEditor, err := h.Queries.WithTx(tx).GetAgentInWorkspace(r.Context(), db.GetAgentInWorkspaceParams{ID: directEditAgentID, WorkspaceID: workspaceID})
+	if errors.Is(err, pgx.ErrNoRows) || directEditor.ArchivedAt.Valid || !directEditor.RuntimeID.Valid {
+		writeError(w, http.StatusConflict, "the frozen direct image edit agent is unavailable")
 		return
 	}
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to load creative production agent")
+		writeError(w, http.StatusInternalServerError, "failed to load direct image edit agent")
 		return
 	}
-	var producerCapable bool
-	if err := tx.QueryRow(r.Context(), `
-SELECT EXISTS(
-  SELECT 1
-  FROM agent_skill binding
-  JOIN skill bound_skill ON bound_skill.id = binding.skill_id
-  WHERE binding.agent_id = $1
-    AND binding.enabled
-    AND bound_skill.workspace_id = $2
-    AND bound_skill.config->>'kind' = 'creative_role'
-    AND bound_skill.config->>'capability' = 'image_edit'
-)
-`, producerID, workspaceID).Scan(&producerCapable); err != nil || !producerCapable {
-		writeError(w, http.StatusConflict, "the frozen creative production agent cannot process this adjustment")
+	expectedSizes, foundExpectedSizes, err := creativeOrderSnapshotExpectedSizes(json.RawMessage(inputSnapshot))
+	if err != nil {
+		writeError(w, http.StatusConflict, err.Error())
 		return
 	}
-
-	expectedSizes := []string{"1080x1080", "1200x628", "800x1000"}
+	if !foundExpectedSizes {
+		expectedSizes = append([]string(nil), standardCreativeAssetSizes...)
+	}
+	if !creativeSizeIsExpected(input.SizeKey, expectedSizes) {
+		writeError(w, http.StatusConflict, "adjustment size is not part of the order delivery package")
+		return
+	}
+	if sourceAssetID == "" || sourceAttachmentID == "" {
+		writeError(w, http.StatusConflict, "adjustment requires an unbranded generated base asset")
+		return
+	}
 	rows, err := tx.Query(r.Context(), `
 SELECT size_key
 FROM creative_order_asset
@@ -267,14 +326,59 @@ FOR UPDATE
 		return
 	}
 
+	var feedbackContext map[string]any
+	if json.Unmarshal(feedback.ContextSnapshot, &feedbackContext) != nil || feedbackContext == nil {
+		writeError(w, http.StatusBadRequest, "adjustment context must be an object")
+		return
+	}
+	annotationGuideAttachmentID := strings.TrimSpace(input.AnnotationGuideAttachmentID)
+	if annotationGuideAttachmentID == "" {
+		annotationGuideAttachmentID, _ = feedbackContext["annotation_guide_attachment_id"].(string)
+		annotationGuideAttachmentID = strings.TrimSpace(annotationGuideAttachmentID)
+	}
+	annotations, _ := feedbackContext["annotations"].([]any)
+	if len(annotations) > 0 && annotationGuideAttachmentID == "" {
+		writeError(w, http.StatusBadRequest, "annotated adjustment requires an annotation guide attachment")
+		return
+	}
+	if annotationGuideAttachmentID != "" {
+		annotationGuideID, parseErr := uuid.Parse(annotationGuideAttachmentID)
+		if parseErr != nil {
+			writeError(w, http.StatusBadRequest, "annotation guide attachment must be a UUID")
+			return
+		}
+		var guideExists bool
+		if err := tx.QueryRow(r.Context(), `
+SELECT EXISTS(
+  SELECT 1 FROM attachment
+  WHERE id = $1 AND workspace_id = $2 AND issue_id = $3
+)
+`, pgtype.UUID{Bytes: annotationGuideID, Valid: true}, workspaceID, adjustmentIssueID).Scan(&guideExists); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to validate annotation guide attachment")
+			return
+		}
+		if !guideExists {
+			writeError(w, http.StatusUnprocessableEntity, "annotation guide attachment does not belong to the adjustment")
+			return
+		}
+	}
+
 	newRevision := input.SourceRevision + 1
+	if _, err := tx.Exec(r.Context(), `
+UPDATE creative_order
+SET input_snapshot = $2::jsonb, updated_at = now()
+WHERE id = $1 AND workspace_id = $3
+`, orderID, frozenSnapshot, workspaceID); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to freeze direct image edit agent")
+		return
+	}
 	if _, err := tx.Exec(r.Context(), `
 INSERT INTO creative_order_asset (
   variant_id, asset_family_id, size_key, revision, stage, attachment_id, derived_from_asset_id, metadata, evidence, status
 )
 SELECT variant_id, asset_family_id, size_key, $3, 'generated', attachment_id, id,
-  metadata,
-  evidence || jsonb_build_object('order_adjustment', jsonb_build_object('source_revision', $2::integer, 'target_size', $5::text, 'reused_generated_base', true)),
+  metadata || jsonb_build_object('order_adjustment', jsonb_build_object('source_revision', $2::integer, 'target_size', $5::text, 'reused_generated_base', true, 'source_asset_id', id::text)),
+  evidence || jsonb_build_object('order_adjustment', jsonb_build_object('source_revision', $2::integer, 'target_size', $5::text, 'reused_generated_base', true, 'source_asset_id', id::text)),
   'completed'
 FROM creative_order_asset
 WHERE variant_id = $1
@@ -290,10 +394,31 @@ ON CONFLICT (variant_id, size_key, revision, stage) DO NOTHING
 		return
 	}
 	if _, err := tx.Exec(r.Context(), `
+INSERT INTO creative_order_diagnostic_asset (
+  variant_id, task_id, attachment_id, size_key, revision, workflow, label, filename, metadata
+)
+SELECT variant_id, task_id, attachment_id, size_key, $3, workflow, label, filename,
+  metadata || jsonb_build_object('order_adjustment', jsonb_build_object('source_revision', $2::integer, 'reused_for_adjustment', true))
+FROM creative_order_diagnostic_asset
+WHERE variant_id = $1 AND revision = $2
+ON CONFLICT (variant_id, revision, workflow, size_key, label, filename) DO NOTHING
+`, parseUUID(variantID), input.SourceRevision, newRevision); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to preserve adjustment process evidence")
+		return
+	}
+	if _, err := tx.Exec(r.Context(), `
 UPDATE creative_order_variant
-SET revision = $2, status = 'running', updated_at = now()
+SET revision = $2,
+    status = 'running',
+    brief = jsonb_set(
+      brief - 'creative_direct_edit_error',
+      '{creative_direct_edit_delivery}',
+      jsonb_build_object('skip_qc', true, 'source_revision', $3::integer, 'target_size', $4::text),
+      true
+    ),
+    updated_at = now()
 WHERE id = $1
-`, parseUUID(variantID), newRevision); err != nil {
+`, parseUUID(variantID), newRevision, input.SourceRevision, input.SizeKey); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to begin image adjustment")
 		return
 	}
@@ -310,66 +435,76 @@ WHERE id = $1 AND adopted_variant_id = $2
 		return
 	}
 
-	var feedbackContext map[string]any
-	if json.Unmarshal(feedback.ContextSnapshot, &feedbackContext) != nil || feedbackContext == nil {
-		writeError(w, http.StatusBadRequest, "adjustment context must be an object")
-		return
-	}
 	feedbackContext["order_id"] = uuidToString(orderID)
 	feedbackContext["adjustment_issue_id"] = uuidToString(adjustmentIssueID)
 	feedbackContext["variant_id"] = variantID
 	feedbackContext["size_key"] = input.SizeKey
 	feedbackContext["revision"] = input.SourceRevision
 	feedbackContext["scope"] = "size"
+	if annotationGuideAttachmentID != "" {
+		feedbackContext["annotation_guide_attachment_id"] = annotationGuideAttachmentID
+	}
 	feedback.ContextSnapshot, _ = json.Marshal(feedbackContext)
 
 	taskContext, err := json.Marshal(map[string]any{
-		"type":                   "creative_domain_task",
-		"workflow":               "creative_production",
-		"scope":                  "size",
-		"subject_id":             variantID,
-		"item_key":               fmt.Sprintf("%s:r%d", variantID, newRevision),
-		"creative_order_id":      uuidToString(orderID),
-		"creative_order_item_id": itemID,
-		"candidate_id":           candidateID,
-		"variant_id":             variantID,
-		"revision":               newRevision,
-		"expected_sizes":         expectedSizes,
-		"issue_id":               uuidToString(adjustmentIssueID),
-		"leader_agent_id":        uuidToString(leaderID),
-		"reviewer_agent_id":      uuidToString(reviewerID),
-		"order_adjustment": map[string]any{
-			"adjustment_issue_id":  uuidToString(adjustmentIssueID),
-			"source_revision":      input.SourceRevision,
-			"target_size":          input.SizeKey,
-			"source_asset_id":      uuidToString(assetID),
-			"source_attachment_id": assetAttachmentID,
-			"request":              feedback.Comment,
-			"annotations":          feedbackContext["annotations"],
+		"type":                           "creative_domain_task",
+		"workflow":                       "creative_direct_edit",
+		"scope":                          "size",
+		"subject_id":                     variantID,
+		"item_key":                       fmt.Sprintf("%s:r%d", variantID, newRevision),
+		"creative_order_id":              uuidToString(orderID),
+		"creative_order_item_id":         itemID,
+		"candidate_id":                   candidateID,
+		"variant_id":                     variantID,
+		"revision":                       newRevision,
+		"expected_sizes":                 expectedSizes,
+		"issue_id":                       uuidToString(adjustmentIssueID),
+		"leader_agent_id":                uuidToString(leaderID),
+		"reviewer_agent_id":              uuidToString(reviewerID),
+		"user_request":                   feedback.Comment,
+		"delivery_mode":                  "publish",
+		"target_size":                    input.SizeKey,
+		"source_revision":                input.SourceRevision,
+		"source_asset_id":                sourceAssetID,
+		"source_attachment_id":           sourceAttachmentID,
+		"reference_asset_id":             uuidToString(assetID),
+		"reference_attachment_id":        assetAttachmentID,
+		"annotation_guide_attachment_id": annotationGuideAttachmentID,
+		"direct_edit": map[string]any{
+			"adjustment_issue_id":            uuidToString(adjustmentIssueID),
+			"source_revision":                input.SourceRevision,
+			"target_size":                    input.SizeKey,
+			"source_asset_id":                sourceAssetID,
+			"source_attachment_id":           sourceAttachmentID,
+			"reference_asset_id":             uuidToString(assetID),
+			"reference_attachment_id":        assetAttachmentID,
+			"annotation_guide_attachment_id": annotationGuideAttachmentID,
+			"request":                        feedback.Comment,
+			"annotations":                    feedbackContext["annotations"],
 		},
 	})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to prepare image adjustment")
 		return
 	}
-	if err := validateCreativeTaskFanoutContext("creative_order_item_production", parseUUID(itemID), []service.DirectTaskFanoutItem{{
+	if err := validateCreativeTaskFanoutContext("creative_order_item_direct_edit", parseUUID(itemID), []service.DirectTaskFanoutItem{{
 		ItemKey: fmt.Sprintf("%s:r%d", variantID, newRevision), Context: taskContext,
 	}}); err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to validate image adjustment task")
+		writeError(w, http.StatusInternalServerError, "failed to validate direct image adjustment task")
 		return
 	}
-	attr := attribution.DirectHumanRun(userID, attribution.EvidenceKind("creative_order_item_production"), parseUUID(itemID))
+	attr := attribution.DirectHumanRun(userID, attribution.EvidenceKind("creative_order_item_direct_edit"), parseUUID(itemID))
 	task, err := h.Queries.WithTx(tx).CreateAgentTask(r.Context(), db.CreateAgentTaskParams{
-		AgentID:              producer.ID,
-		RuntimeID:            producer.RuntimeID,
+		AgentID:              directEditor.ID,
+		RuntimeID:            directEditor.RuntimeID,
 		IssueID:              adjustmentIssueID,
-		Priority:             0,
+		Priority:             3,
 		ForceFreshSession:    pgtype.Bool{Bool: true, Valid: true},
 		RequestingUserID:     userID,
 		OriginatorUserID:     attr.UserID,
 		AccountableUserID:    attr.AccountableUserID,
 		OriginatorSource:     pgtype.Text{String: attr.Source.String(), Valid: true},
-		TriggerEvidenceKind:  pgtype.Text{String: "creative_order_item_production", Valid: true},
+		TriggerEvidenceKind:  pgtype.Text{String: "creative_order_item_direct_edit", Valid: true},
 		TriggerEvidenceRefID: parseUUID(itemID),
 		Context:              taskContext,
 	})

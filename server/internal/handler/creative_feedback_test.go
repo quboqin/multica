@@ -524,6 +524,67 @@ VALUES ($1, $2, 1, 'generated', $3, 'completed')
 	}
 }
 
+func TestCreativeFeedbackDashboardTracksCompletePackageDuration(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+	before, err := testHandler.creativeFeedbackWorkflowDashboard(t.Context(), parseUUID(testWorkspaceID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, candidateID := createCreativeFeedbackCandidate(t, "complete package duration")
+	_, secondCandidateID := createCreativeFeedbackCandidate(t, "complete package duration second item")
+	attachmentID := createCreativeFeedbackAsset(t)
+	var orderID string
+	if err := testPool.QueryRow(t.Context(), `
+INSERT INTO creative_order (workspace_id, status, input_snapshot, created_by, created_at)
+VALUES ($1, 'completed', '{}'::jsonb, $2, now() - interval '2 minutes')
+RETURNING id::text
+`, testWorkspaceID, testUserID).Scan(&orderID); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _, _ = testPool.Exec(t.Context(), `DELETE FROM creative_order WHERE id = $1`, orderID) })
+	for _, itemCandidateID := range []string{candidateID, secondCandidateID} {
+		var itemID string
+		if err := testPool.QueryRow(t.Context(), `
+INSERT INTO creative_order_item (order_id, candidate_id, copy_snapshot)
+VALUES ($1, $2, '{}'::jsonb)
+RETURNING id::text
+`, orderID, itemCandidateID).Scan(&itemID); err != nil {
+			t.Fatal(err)
+		}
+		for _, variantKey := range []string{"V01", "V02", "V03"} {
+			var variantID string
+			if err := testPool.QueryRow(t.Context(), `
+INSERT INTO creative_order_variant (order_item_id, variant_key, revision, status, updated_at)
+VALUES ($1, $2, 1, 'completed', now() - interval '30 seconds')
+RETURNING id::text
+`, itemID, variantKey).Scan(&variantID); err != nil {
+				t.Fatal(err)
+			}
+			for _, size := range standardCreativeAssetSizes {
+				if _, err := testPool.Exec(t.Context(), `
+INSERT INTO creative_order_asset (variant_id, size_key, revision, stage, attachment_id, status)
+VALUES ($1, $2, 1, 'delivered', $3, 'completed')
+`, variantID, size, attachmentID); err != nil {
+					t.Fatal(err)
+				}
+			}
+		}
+	}
+
+	after, err := testHandler.creativeFeedbackWorkflowDashboard(t.Context(), parseUUID(testWorkspaceID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.ImageGenerationDurationPackageCount != before.ImageGenerationDurationPackageCount+2 {
+		t.Fatalf("complete package count = %d, want %d", after.ImageGenerationDurationPackageCount, before.ImageGenerationDurationPackageCount+2)
+	}
+	if after.ImageGenerationDurationSeconds == nil || *after.ImageGenerationDurationSeconds < 60 {
+		t.Fatalf("complete package duration = %v, want at least 60 seconds", after.ImageGenerationDurationSeconds)
+	}
+}
+
 func createCreativeFeedbackCandidate(t *testing.T, title string) (string, string) {
 	t.Helper()
 	issueID := createCreativeDeliveryTestIssue(t, title, "")

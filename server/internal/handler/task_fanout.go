@@ -61,6 +61,10 @@ func (h *Handler) FanoutAgentTasks(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	if err := h.validateCreativeTaskFanoutExpectedSizes(r.Context(), agent.WorkspaceID, evidenceKind, evidenceRefID, req.Items); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	if !h.directTaskEvidenceInWorkspace(w, r, agent.WorkspaceID, evidenceKind, evidenceRefID) {
 		return
 	}
@@ -108,6 +112,107 @@ func (h *Handler) normalizeCreativeTaskFanoutItems(ctx context.Context, workspac
 	default:
 		return items, nil
 	}
+}
+
+func (h *Handler) validateCreativeTaskFanoutExpectedSizes(ctx context.Context, workspaceID pgtype.UUID, kind string, evidenceRefID pgtype.UUID, items []service.DirectTaskFanoutItem) error {
+	if kind != "creative_order_item_production" && kind != "creative_order_variant_qc" && kind != "manual" {
+		return nil
+	}
+
+	for _, item := range items {
+		var taskContext map[string]any
+		if err := json.Unmarshal(item.Context, &taskContext); err != nil || taskContext == nil {
+			return errors.New("creative task context must be a JSON object")
+		}
+		if kind == "manual" {
+			taskType, _ := taskContext["type"].(string)
+			workflow, _ := taskContext["workflow"].(string)
+			if taskType != "creative_domain_task" || workflow != "creative_production" {
+				continue
+			}
+		}
+		variantID := evidenceRefID
+		if kind != "creative_order_variant_qc" {
+			variantIDText, _ := taskContext["variant_id"].(string)
+			parsedVariantID, err := uuid.Parse(strings.TrimSpace(variantIDText))
+			if err != nil {
+				return errors.New("creative task context variant_id must be a UUID")
+			}
+			variantID = parseUUID(parsedVariantID.String())
+		}
+		expectedSizes, err := creativeFanoutVariantExpectedSizes(ctx, h.DB, workspaceID, kind, evidenceRefID, variantID)
+		if err != nil {
+			return err
+		}
+		if !creativeFanoutExpectedSizesMatch(taskContext["expected_sizes"], expectedSizes) {
+			if kind == "creative_order_variant_qc" {
+				return errors.New("creative QC task context expected_sizes must match the current creative variant delivery sizes")
+			}
+			return errors.New("creative production task context expected_sizes must match the current creative variant delivery sizes")
+		}
+	}
+	return nil
+}
+
+func creativeFanoutVariantExpectedSizes(ctx context.Context, q creativeTaskFanoutQuerier, workspaceID pgtype.UUID, kind string, evidenceRefID, variantID pgtype.UUID) ([]string, error) {
+	var triggerKind, inputSnapshot, brief string
+	var err error
+	if kind == "creative_order_item_production" || kind == "manual" {
+		err = q.QueryRow(ctx, `
+SELECT order_row.trigger_evidence_kind, order_row.input_snapshot::text, variant.brief::text
+FROM creative_order_variant variant
+JOIN creative_order_item item ON item.id = variant.order_item_id
+JOIN creative_order order_row ON order_row.id = item.order_id
+WHERE variant.id = $1
+  AND item.id = $2
+  AND order_row.workspace_id = $3
+`, variantID, evidenceRefID, workspaceID).Scan(&triggerKind, &inputSnapshot, &brief)
+	} else {
+		err = q.QueryRow(ctx, `
+SELECT order_row.trigger_evidence_kind, order_row.input_snapshot::text, variant.brief::text
+FROM creative_order_variant variant
+JOIN creative_order_item item ON item.id = variant.order_item_id
+JOIN creative_order order_row ON order_row.id = item.order_id
+WHERE variant.id = $1
+  AND order_row.workspace_id = $2
+`, variantID, workspaceID).Scan(&triggerKind, &inputSnapshot, &brief)
+	}
+	if errors.Is(err, pgx.ErrNoRows) {
+		if kind == "creative_order_variant_qc" {
+			return nil, errors.New("creative QC task variant must belong to the trigger workspace")
+		}
+		return nil, errors.New("creative production task variant must belong to the trigger order item")
+	}
+	if err != nil {
+		if kind == "creative_order_variant_qc" {
+			return nil, errors.New("failed to validate creative QC task variant")
+		}
+		return nil, errors.New("failed to validate creative production task variant")
+	}
+	expectedSizes, err := expectedCreativeVariantSizes(triggerKind, json.RawMessage(inputSnapshot), json.RawMessage(brief))
+	if err != nil {
+		return nil, err
+	}
+	return expectedSizes, nil
+}
+
+func creativeFanoutExpectedSizesMatch(raw any, expected []string) bool {
+	sizes, ok := raw.([]any)
+	if !ok || len(sizes) != len(expected) {
+		return false
+	}
+	seen := make(map[string]struct{}, len(sizes))
+	for _, rawSize := range sizes {
+		size, ok := rawSize.(string)
+		if !ok {
+			return false
+		}
+		if _, duplicate := seen[size]; duplicate || !creativeSizeIsExpected(size, expected) {
+			return false
+		}
+		seen[size] = struct{}{}
+	}
+	return len(seen) == len(expected)
 }
 
 func normalizeCreativeProductionFanoutItems(ctx context.Context, q creativeTaskFanoutQuerier, workspaceID, orderItemID pgtype.UUID, items []service.DirectTaskFanoutItem) ([]service.DirectTaskFanoutItem, error) {
@@ -429,6 +534,11 @@ func validateCreativeTaskFanoutContext(kind string, evidenceRefID pgtype.UUID, i
 				return err
 			}
 		}
+		if kind == "creative_order_item_direct_edit" {
+			if err := validateCreativeDirectEditTaskContext(context, item.ItemKey); err != nil {
+				return err
+			}
+		}
 		if reference, _ := context[referenceField].(string); reference != expectedRef {
 			return fmt.Errorf("creative task context %s must match trigger evidence", referenceField)
 		}
@@ -499,6 +609,98 @@ func validateCreativeProductionTaskContext(context map[string]any, itemKey strin
 			!sourceRevisionOK || int(sourceRevision) != int(revision)-1 ||
 			issueID != adjustmentIssueID || scope != "size" {
 			return errors.New("creative production task context order_adjustment is invalid")
+		}
+	}
+	return nil
+}
+
+func validateCreativeDirectEditTaskContext(context map[string]any, itemKey string) error {
+	variantID, _ := context["variant_id"].(string)
+	if _, err := uuid.Parse(strings.TrimSpace(variantID)); err != nil {
+		return errors.New("creative direct-edit task context variant_id must be a UUID")
+	}
+	revision, ok := context["revision"].(float64)
+	if !ok || revision < 1 || revision != float64(int(revision)) {
+		return errors.New("creative direct-edit task context revision must be a positive integer")
+	}
+	expectedSizes, ok := context["expected_sizes"].([]any)
+	if !ok || len(expectedSizes) == 0 {
+		return errors.New("creative direct-edit task context expected_sizes must be a non-empty array")
+	}
+	seen := make(map[string]struct{}, len(expectedSizes))
+	for _, rawSize := range expectedSizes {
+		size, ok := rawSize.(string)
+		size = strings.TrimSpace(size)
+		if !ok || !validCreativeAssetSize(size) {
+			return errors.New("creative direct-edit task context expected_sizes contains an invalid size")
+		}
+		if _, duplicate := seen[size]; duplicate {
+			return errors.New("creative direct-edit task context expected_sizes must not contain duplicates")
+		}
+		seen[size] = struct{}{}
+	}
+	wantItemKey := fmt.Sprintf("%s:r%d", strings.TrimSpace(variantID), int(revision))
+	if itemKey != wantItemKey {
+		return fmt.Errorf("creative direct-edit task item_key must be %s", wantItemKey)
+	}
+	targetSize, _ := context["target_size"].(string)
+	targetSize = strings.TrimSpace(targetSize)
+	if !validCreativeAssetSize(targetSize) {
+		return errors.New("creative direct-edit task context target_size is invalid")
+	}
+	if _, ok := seen[targetSize]; !ok {
+		return errors.New("creative direct-edit task context target_size is not expected")
+	}
+	request, _ := context["user_request"].(string)
+	if strings.TrimSpace(request) == "" {
+		return errors.New("creative direct-edit task context user_request is required")
+	}
+	deliveryMode, _ := context["delivery_mode"].(string)
+	if deliveryMode != "preview" && deliveryMode != "publish" {
+		return errors.New("creative direct-edit task context delivery_mode is invalid")
+	}
+	sourceRevision, ok := context["source_revision"].(float64)
+	if !ok || sourceRevision < 1 || sourceRevision != float64(int(sourceRevision)) || int(sourceRevision) != int(revision)-1 {
+		return errors.New("creative direct-edit task context source_revision is invalid")
+	}
+	for _, field := range []string{"source_asset_id", "source_attachment_id", "reviewer_agent_id"} {
+		value, _ := context[field].(string)
+		if _, err := uuid.Parse(strings.TrimSpace(value)); err != nil {
+			return fmt.Errorf("creative direct-edit task context %s must be a UUID", field)
+		}
+	}
+	if value, ok := context["reference_asset_id"].(string); ok && strings.TrimSpace(value) != "" {
+		if _, err := uuid.Parse(strings.TrimSpace(value)); err != nil {
+			return errors.New("creative direct-edit task context reference_asset_id must be a UUID")
+		}
+	}
+	if value, ok := context["reference_attachment_id"].(string); ok && strings.TrimSpace(value) != "" {
+		if _, err := uuid.Parse(strings.TrimSpace(value)); err != nil {
+			return errors.New("creative direct-edit task context reference_attachment_id must be a UUID")
+		}
+	}
+	annotationGuideAttachmentID, _ := context["annotation_guide_attachment_id"].(string)
+	if strings.TrimSpace(annotationGuideAttachmentID) != "" {
+		if _, err := uuid.Parse(strings.TrimSpace(annotationGuideAttachmentID)); err != nil {
+			return errors.New("creative direct-edit task context annotation_guide_attachment_id must be a UUID")
+		}
+	}
+	if rawDirectEdit, ok := context["direct_edit"]; ok {
+		directEdit, ok := rawDirectEdit.(map[string]any)
+		if !ok {
+			return errors.New("creative direct-edit task context direct_edit must be an object")
+		}
+		if issueID, _ := directEdit["adjustment_issue_id"].(string); strings.TrimSpace(issueID) != "" {
+			contextIssueID, _ := context["issue_id"].(string)
+			if _, err := uuid.Parse(strings.TrimSpace(issueID)); err != nil || strings.TrimSpace(issueID) != strings.TrimSpace(contextIssueID) {
+				return errors.New("creative direct-edit task context direct_edit adjustment_issue_id is invalid")
+			}
+		}
+		if guideID, _ := directEdit["annotation_guide_attachment_id"].(string); strings.TrimSpace(guideID) != "" && strings.TrimSpace(guideID) != strings.TrimSpace(annotationGuideAttachmentID) {
+			return errors.New("creative direct-edit task context annotation guide does not match direct_edit")
+		}
+		if rawAnnotations, ok := directEdit["annotations"].([]any); ok && len(rawAnnotations) > 0 && strings.TrimSpace(annotationGuideAttachmentID) == "" {
+			return errors.New("creative direct-edit task context annotations require annotation_guide_attachment_id")
 		}
 	}
 	return nil

@@ -353,8 +353,8 @@ VALUES ($1, $2, 'failed', $3::jsonb, $4, now()) RETURNING id::text
 		SizeKey:      "1080x1080",
 		Revision:     1,
 		Workflow:     "creative_production",
-		Label:        "贴片预览检查",
-		Filename:     "prime-collision-preview-1080x1080.png",
+		Label:        "Prime context",
+		Filename:     "prime-context-1080x1080.png",
 		Metadata:     json.RawMessage(`{"source":"preprime_collision"}`),
 	})
 	req = withURLParam(req, "id", orderID)
@@ -2487,10 +2487,9 @@ func TestCreativeVisualModelReworkFindingsAcceptsOnlyFinalVisualDefects(t *testi
   "blocking_failures": [
     {"code":"actual_prime_obstruction","size_key":"1200x628","diagnosis":"1200x628：还款表格 与 bottom official Prime template content 冲突；期望移动到 safe_content_frame 内 y<=430"},
     {"code":"official_prime_text_unreadable","size_key":"800x1000","diagnosis":"800x1000：条款下方深色背景 与 top Prime terms 冲突；期望调整为该组件下方连续、低细节的浅色背景"}
-    ,{"code":"generated_content_missing","size_key":"1080x1080","diagnosis":"1080x1080：利益点组件 与 冻结文案缺失 冲突；期望补齐冻结文案 copy_snapshot"}
   ]
 }`), expectedSizes)
-	if err != nil || len(findings) != 3 {
+	if err != nil || len(findings) != 2 {
 		t.Fatalf("valid visual findings = %#v, %v", findings, err)
 	}
 	if _, err := creativeVisualModelReworkFindings(json.RawMessage(`{
@@ -2509,6 +2508,8 @@ func TestCreativeVisualModelReworkFindingsAcceptsOnlyFinalVisualDefects(t *testi
 	}
 	for _, invalid := range []json.RawMessage{
 		json.RawMessage(`{"blocking_failures":["normal visual overlap"]}`),
+		json.RawMessage(`{"blocking_failures":[{"code":"predicted_prime_obstruction","size_key":"1200x628","diagnosis":"1200x628：标题 与 bottom Prime 冲突；期望移动到 safe_content_frame 内 y<=430"}]}`),
+		json.RawMessage(`{"blocking_failures":[{"code":"generated_content_missing","size_key":"1080x1080","diagnosis":"1080x1080：利益点组件 与 冻结文案缺失；期望补齐冻结文案 copy_snapshot"}]}`),
 		json.RawMessage(`{"blocking_failures":[{"code":"actual_prime_obstruction","size_key":"1200x628","diagnosis":"1200x628：标题 与 top official Prime template content 冲突；期望移动到 safe_content_frame 内 y<=430"},{"code":"actual_prime_obstruction","size_key":"1200x628","diagnosis":"1200x628：表格 与 bottom official Prime template content 冲突；期望移动到 safe_content_frame 内 y<=430"}]}`),
 	} {
 		if _, err := creativeVisualModelReworkFindings(invalid, expectedSizes); err == nil {
@@ -2678,12 +2679,13 @@ INSERT INTO creative_order_variant (order_item_id, variant_key, revision, status
 VALUES ($1, 'v01', 1, 'running') RETURNING id::text`, itemID).Scan(&variantID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := testPool.Exec(t.Context(), `
-INSERT INTO creative_order_asset (variant_id, size_key, revision, stage, metadata, evidence, status)
-VALUES ($1, '1080x1080', 1, 'primed', '{}'::jsonb, '{}'::jsonb, 'completed'),
-       ($1, '1200x628', 1, 'primed', '{}'::jsonb, '{}'::jsonb, 'completed'),
-       ($1, '800x1000', 1, 'primed', '{}'::jsonb, '{}'::jsonb, 'completed')`, variantID); err != nil {
-		t.Fatal(err)
+	for _, size := range standardCreativeAssetSizes {
+		attachmentID := createCreativeOrderAssetAttachment(t, "qc-prime-"+strings.ReplaceAll(size, "x", "-")+".png")
+		if _, err := testPool.Exec(t.Context(), `
+INSERT INTO creative_order_asset (variant_id, size_key, revision, stage, attachment_id, metadata, evidence, status)
+VALUES ($1, $2, 1, 'primed', $3, '{}'::jsonb, '{}'::jsonb, 'completed')`, variantID, size, attachmentID); err != nil {
+			t.Fatal(err)
+		}
 	}
 	if _, err := testPool.Exec(t.Context(), `
 INSERT INTO creative_order_qc_report (variant_id, lane, revision, status, findings)
@@ -2973,8 +2975,8 @@ func TestExpectedCreativeVariantSizesDependOnOrderMode(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(standard) != 3 {
-		t.Fatalf("standard sizes = %#v, want all three", standard)
+	if len(standard) != 1 || standard[0] != "1080x1080" {
+		t.Fatalf("standard frozen sizes = %#v, want the snapshot scope", standard)
 	}
 
 	direct, err := expectedCreativeVariantSizes("creative_direct_edit", json.RawMessage(`{"target_size":"1200x628"}`), json.RawMessage(`{}`))
@@ -2994,108 +2996,12 @@ func TestExpectedCreativeVariantSizesDependOnOrderMode(t *testing.T) {
 	}
 }
 
-func TestFinalizeCreativeDirectEditQCUsesScopedSizesAndFindings(t *testing.T) {
-	if testHandler == nil || testPool == nil {
-		t.Skip("database not available")
+func TestCreativeDirectEditDeliverySkipsQC(t *testing.T) {
+	if !creativeDirectEditSkipsQC(json.RawMessage(`{"creative_direct_edit_delivery":{"skip_qc":true}}`)) {
+		t.Fatal("direct-edit publish contract must skip QC")
 	}
-	_, candidateID := createCreativeFeedbackCandidate(t, "direct edit QC scope")
-	var orderID, itemID string
-	if err := testPool.QueryRow(t.Context(), `
-INSERT INTO creative_order (workspace_id, status, input_snapshot, trigger_evidence_kind, created_by)
-VALUES ($1, 'running', '{"target_size":"1200x628"}'::jsonb, 'creative_direct_edit', $2)
-RETURNING id::text`, testWorkspaceID, testUserID).Scan(&orderID); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		_, _ = testPool.Exec(t.Context(), `DELETE FROM inbox_item WHERE details->>'creative_order_id' = $1`, orderID)
-		_, _ = testPool.Exec(t.Context(), `DELETE FROM creative_order WHERE id = $1`, orderID)
-	})
-	if err := testPool.QueryRow(t.Context(), `
-INSERT INTO creative_order_item (order_id, candidate_id, copy_snapshot)
-VALUES ($1, $2, '{}'::jsonb) RETURNING id::text`, orderID, candidateID).Scan(&itemID); err != nil {
-		t.Fatal(err)
-	}
-	agentID := createHandlerTestAgent(t, "creative-direct-qc-finalize", []byte(`{}`))
-
-	type variantFixture struct {
-		variantID string
-		taskID    string
-	}
-	createVariant := func(key string, technicalFindings string) variantFixture {
-		var fixture variantFixture
-		if err := testPool.QueryRow(t.Context(), `
-INSERT INTO creative_order_variant (order_item_id, variant_key, brief, revision, status)
-VALUES ($1, $2, '{"target_size":"1200x628"}'::jsonb, 1, 'running') RETURNING id::text`, itemID, key).Scan(&fixture.variantID); err != nil {
-			t.Fatal(err)
-		}
-		if _, err := testPool.Exec(t.Context(), `
-INSERT INTO creative_order_asset (variant_id, size_key, revision, stage, metadata, evidence, status)
-VALUES ($1, '1200x628', 1, 'primed', '{}'::jsonb, '{}'::jsonb, 'completed')`, fixture.variantID); err != nil {
-			t.Fatal(err)
-		}
-		if _, err := testPool.Exec(t.Context(), `
-INSERT INTO creative_order_qc_report (variant_id, lane, revision, status, findings)
-VALUES ($1, 'technical', 1, 'passed', $2::jsonb),
-       ($1, 'visual', 1, 'passed', '{}'::jsonb)`, fixture.variantID, technicalFindings); err != nil {
-			t.Fatal(err)
-		}
-		if err := testPool.QueryRow(t.Context(), `
-INSERT INTO agent_task_queue (agent_id, runtime_id, status, priority, trigger_evidence_kind, trigger_evidence_ref_id, context)
-VALUES ($1, (SELECT runtime_id FROM agent WHERE id = $1), 'running', 0, 'creative_order_variant_qc', $2, $3::jsonb)
-RETURNING id::text`, agentID, fixture.variantID, creativeQCTaskContextForTest(t, orderID, fixture.variantID, "technical")).Scan(&fixture.taskID); err != nil {
-			t.Fatal(err)
-		}
-		t.Cleanup(func() {
-			_, _ = testPool.Exec(t.Context(), `DELETE FROM agent_task_queue WHERE id = $1`, fixture.taskID)
-		})
-		return fixture
-	}
-	finalize := func(fixture variantFixture) creativeOrderQCFinalizeResponse {
-		w := httptest.NewRecorder()
-		req := newRequest(http.MethodPost, "/api/creative/orders/"+orderID+"/qc-finalize", creativeOrderQCFinalizeInput{VariantID: fixture.variantID, Revision: 1})
-		req = withURLParam(req, "id", orderID)
-		req.Header.Set("X-Actor-Source", "task_token")
-		req.Header.Set("X-Agent-ID", agentID)
-		req.Header.Set("X-Task-ID", fixture.taskID)
-		testHandler.FinalizeCreativeOrderQC(w, req)
-		var response creativeOrderQCFinalizeResponse
-		if w.Code != http.StatusOK {
-			t.Fatalf("finalize = %d %s", w.Code, w.Body.String())
-		}
-		if err := json.NewDecoder(w.Body).Decode(&response); err != nil {
-			t.Fatal(err)
-		}
-		return response
-	}
-
-	blocked := finalize(createVariant("direct-blocked", `{"blocking_failures":["qr"]}`))
-	if blocked.Outcome != "action_required" || blocked.DeliveredAssetCount != 0 || blocked.TechnicalStatus != "passed" {
-		t.Fatalf("scoped QC finding must require action = %#v", blocked)
-	}
-
-	deliveredFixture := createVariant("direct-delivered", `{}`)
-	w := httptest.NewRecorder()
-	req := newRequest(http.MethodPut, "/api/creative/orders/"+orderID+"/assets", creativeOrderAssetInput{
-		VariantID: deliveredFixture.variantID, SizeKey: "1080x1080", Revision: 1, Stage: "primed", Status: "completed",
-		AttachmentID: createCreativeOrderAssetAttachment(t, "direct-primed.png"),
-	})
-	req = withURLParam(req, "id", orderID)
-	testHandler.UpsertCreativeOrderAsset(w, req)
-	if w.Code != http.StatusUnprocessableEntity {
-		t.Fatalf("out-of-scope direct asset = %d %s", w.Code, w.Body.String())
-	}
-	delivered := finalize(deliveredFixture)
-	if delivered.Outcome != "delivered" || delivered.DeliveredAssetCount != 1 {
-		t.Fatalf("single-size direct finalization = %#v", delivered)
-	}
-	var deliveredCount int
-	if err := testPool.QueryRow(t.Context(), `
-SELECT count(*) FROM creative_order_asset
-WHERE variant_id = $1 AND revision = 1 AND stage = 'delivered'`, deliveredFixture.variantID).Scan(&deliveredCount); err != nil {
-		t.Fatal(err)
-	}
-	if deliveredCount != 1 {
-		t.Fatalf("delivered asset count = %d, want 1", deliveredCount)
+	if creativeDirectEditSkipsQC(json.RawMessage(`{"creative_direct_edit_delivery":{"skip_qc":false}}`)) {
+		t.Fatal("direct-edit preview contract must not skip QC implicitly")
 	}
 }
 

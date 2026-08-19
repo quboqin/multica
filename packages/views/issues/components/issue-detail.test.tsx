@@ -124,6 +124,8 @@ vi.mock("../../editor", () => ({
     tryOpen: () => false,
     modal: null,
   }),
+  Attachment: ({ attachment }: any) => <img alt={attachment.attachment.filename} src="/attachment-preview.png" />,
+  AttachmentDownloadProvider: ({ children }: { children: React.ReactNode }) => children,
   isPreviewable: () => false,
   ReadonlyContent: ({ content }: { content: string }) => (
     <div data-testid="readonly-content">{content}</div>
@@ -504,6 +506,7 @@ describe("IssueDetail (shared)", () => {
     mockApiObj.listTimeline.mockResolvedValue(mockTimeline);
     mockApiObj.listIssueReactions.mockResolvedValue([]);
     mockApiObj.listIssueSubscribers.mockResolvedValue([]);
+    mockApiObj.listAttachments.mockResolvedValue([]);
     mockApiObj.listChildIssues.mockResolvedValue({ issues: [] });
     mockApiObj.listIssues.mockResolvedValue({ issues: [], total: 0 });
     mockApiObj.getActiveTasksForIssue.mockResolvedValue({ tasks: [] });
@@ -535,6 +538,22 @@ describe("IssueDetail (shared)", () => {
     });
 
     expect(screen.getByDisplayValue("Add JWT auth to the backend")).toBeInTheDocument();
+  });
+
+  it("renders standalone issue attachments below the description", async () => {
+    mockApiObj.listAttachments.mockResolvedValue([{
+      id: "annotation-guide-1",
+      url: "/uploads/annotation-guide.png",
+      download_url: "/api/attachments/annotation-guide-1/download",
+      markdown_url: "/api/attachments/annotation-guide-1/download",
+      filename: "annotation-guide-1080x1080-r1.png",
+      content_type: "image/png",
+      size_bytes: 1024,
+    }]);
+
+    renderIssueDetail();
+
+    expect(await screen.findByAltText("annotation-guide-1080x1080-r1.png")).toBeInTheDocument();
   });
 
   it("opts the description editor into the unmount flush", async () => {

@@ -17,6 +17,18 @@ export function creativeWorkflowInsights(workflow: CreativeFeedbackDashboard["wo
   ];
 }
 
+export function formatCreativeDuration(seconds: number | null | undefined): string {
+  if (seconds == null || !Number.isFinite(seconds) || seconds < 0) return "-";
+  const roundedSeconds = Math.round(seconds);
+  if (roundedSeconds < 60) return `${roundedSeconds} 秒`;
+  const minutes = Math.floor(roundedSeconds / 60);
+  const remainingSeconds = roundedSeconds % 60;
+  if (minutes < 60) return remainingSeconds > 0 ? `${minutes} 分 ${remainingSeconds} 秒` : `${minutes} 分`;
+  const hours = Math.floor(minutes / 60);
+  const remainingMinutes = minutes % 60;
+  return remainingMinutes > 0 ? `${hours} 小时 ${remainingMinutes} 分` : `${hours} 小时`;
+}
+
 function ratioInsight(key: string, label: string, value: number, total: number): CreativeFeedbackInsight {
   return { key, label, value, total, rate: total > 0 ? Math.round((value / total) * 100) : null };
 }

@@ -43,6 +43,37 @@ func TestValidateCreativeProductionTaskContextAcceptsCurrentSizeAdjustment(t *te
 	}
 }
 
+func TestValidateCreativeDirectEditTaskContextRequiresUnbrandedBaseAndTargetScope(t *testing.T) {
+	variantID := uuid.NewString()
+	issueID := uuid.NewString()
+	context := map[string]any{
+		"variant_id":              variantID,
+		"revision":                float64(2),
+		"source_revision":         float64(1),
+		"expected_sizes":          []any{"1080x1080", "1200x628", "800x1000"},
+		"target_size":             "1080x1080",
+		"user_request":            "保留人物，移除右侧竞品标识",
+		"delivery_mode":           "publish",
+		"source_asset_id":         uuid.NewString(),
+		"source_attachment_id":    uuid.NewString(),
+		"reference_asset_id":      uuid.NewString(),
+		"reference_attachment_id": uuid.NewString(),
+		"reviewer_agent_id":       uuid.NewString(),
+		"issue_id":                issueID,
+		"direct_edit": map[string]any{
+			"adjustment_issue_id": issueID,
+		},
+	}
+
+	if err := validateCreativeDirectEditTaskContext(context, variantID+":r2"); err != nil {
+		t.Fatalf("direct edit context rejected: %v", err)
+	}
+	context["source_asset_id"] = ""
+	if err := validateCreativeDirectEditTaskContext(context, variantID+":r2"); err == nil {
+		t.Fatal("direct edit context without unbranded source was accepted")
+	}
+}
+
 func TestClaimAgentTask_DirectFanoutParallelButQuickCreateSerial(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
@@ -391,6 +422,46 @@ VALUES ($1, 'V01', 1, 'queued') RETURNING id::text
 	}
 }
 
+func TestValidateCreativeProductionFanoutExpectedSizesMatchFrozenVariant(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	_, candidateID := createCreativeFeedbackCandidate(t, "production fanout frozen delivery sizes")
+	var orderID, itemID, variantID string
+	if err := testPool.QueryRow(t.Context(), `
+INSERT INTO creative_order (workspace_id, status, input_snapshot, created_by)
+VALUES ($1, 'running', '{"expected_sizes":["1200x628"]}'::jsonb, $2) RETURNING id::text
+`, testWorkspaceID, testUserID).Scan(&orderID); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM creative_order WHERE id = $1`, orderID)
+	})
+	if err := testPool.QueryRow(t.Context(), `
+INSERT INTO creative_order_item (order_id, candidate_id, copy_snapshot)
+VALUES ($1, $2, '{}'::jsonb) RETURNING id::text
+`, orderID, candidateID).Scan(&itemID); err != nil {
+		t.Fatal(err)
+	}
+	if err := testPool.QueryRow(t.Context(), `
+INSERT INTO creative_order_variant (order_item_id, variant_key, revision, status)
+VALUES ($1, 'V01', 1, 'queued') RETURNING id::text
+`, itemID).Scan(&variantID); err != nil {
+		t.Fatal(err)
+	}
+	contextValue, err := json.Marshal(map[string]any{
+		"variant_id":     variantID,
+		"expected_sizes": standardCreativeAssetSizes,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = testHandler.validateCreativeTaskFanoutExpectedSizes(t.Context(), parseUUID(testWorkspaceID), "creative_order_item_production", parseUUID(itemID), []service.DirectTaskFanoutItem{{Context: contextValue}})
+	if err == nil || err.Error() != "creative production task context expected_sizes must match the current creative variant delivery sizes" {
+		t.Fatalf("production frozen-size validation error = %v", err)
+	}
+}
+
 func TestNormalizeManualCreativeProductionFanoutAddsOrderTrace(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
@@ -488,6 +559,56 @@ func TestValidateCreativeQCFanoutContextRequiresLaneAndCompleteTrace(t *testing.
 		qcItem("creative_qc", variantID+":technical:r2", []string{"1080x1080"}),
 	}); err == nil {
 		t.Fatal("QC fanout with invalid lane workflow unexpectedly passed")
+	}
+}
+
+func TestValidateCreativeQCFanoutExpectedSizesMatchFrozenVariant(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	_, candidateID := createCreativeFeedbackCandidate(t, "QC fanout frozen delivery sizes")
+	var orderID, itemID, variantID string
+	if err := testPool.QueryRow(t.Context(), `
+INSERT INTO creative_order (workspace_id, status, input_snapshot, created_by)
+VALUES ($1, 'running', '{}'::jsonb, $2) RETURNING id::text
+`, testWorkspaceID, testUserID).Scan(&orderID); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM creative_order WHERE id = $1`, orderID)
+	})
+	if err := testPool.QueryRow(t.Context(), `
+INSERT INTO creative_order_item (order_id, candidate_id, copy_snapshot)
+VALUES ($1, $2, '{}'::jsonb) RETURNING id::text
+`, orderID, candidateID).Scan(&itemID); err != nil {
+		t.Fatal(err)
+	}
+	if err := testPool.QueryRow(t.Context(), `
+INSERT INTO creative_order_variant (order_item_id, variant_key, revision, status)
+VALUES ($1, 'V01', 1, 'queued') RETURNING id::text
+`, itemID).Scan(&variantID); err != nil {
+		t.Fatal(err)
+	}
+	makeItem := func(expectedSizes []string, targetSizes []string) service.DirectTaskFanoutItem {
+		contextValue, err := json.Marshal(map[string]any{
+			"expected_sizes": expectedSizes,
+			"qc_visual_rework": map[string]any{
+				"target_sizes": targetSizes,
+			},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return service.DirectTaskFanoutItem{Context: contextValue}
+	}
+	partialExpected := makeItem([]string{"1080x1080"}, []string{"1080x1080"})
+	err := testHandler.validateCreativeTaskFanoutExpectedSizes(t.Context(), parseUUID(testWorkspaceID), "creative_order_variant_qc", parseUUID(variantID), []service.DirectTaskFanoutItem{partialExpected})
+	if err == nil || err.Error() != "creative QC task context expected_sizes must match the current creative variant delivery sizes" {
+		t.Fatalf("QC frozen-size validation error = %v", err)
+	}
+	fullExpected := makeItem(standardCreativeAssetSizes, []string{"1080x1080"})
+	if err := testHandler.validateCreativeTaskFanoutExpectedSizes(t.Context(), parseUUID(testWorkspaceID), "creative_order_variant_qc", parseUUID(variantID), []service.DirectTaskFanoutItem{fullExpected}); err != nil {
+		t.Fatalf("QC visual rework target subset was rejected: %v", err)
 	}
 }
 

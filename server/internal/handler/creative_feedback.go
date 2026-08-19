@@ -64,25 +64,27 @@ type creativeFeedbackDashboardResponse struct {
 }
 
 type creativeFeedbackWorkflowDashboard struct {
-	CandidateSelected          int                             `json:"candidate_selected"`
-	CandidateRejected          int                             `json:"candidate_rejected"`
-	CopyAccepted               int                             `json:"copy_accepted"`
-	CopyReplaced               int                             `json:"copy_replaced"`
-	AssetReported              int                             `json:"asset_reported"`
-	QCAccepted                 int                             `json:"qc_accepted"`
-	QCMissedIssue              int                             `json:"qc_missed_issue"`
-	QCFalsePositive            int                             `json:"qc_false_positive"`
-	ImageGenerationSuccess     int                             `json:"image_generation_success"`
-	ImageGenerationTotal       int                             `json:"image_generation_total"`
-	ImageGenerationFailed      int                             `json:"image_generation_failed"`
-	ImageGenerationInProgress  int                             `json:"image_generation_in_progress"`
-	ThreeSizeQCSuccess         int                             `json:"three_size_qc_success"`
-	ThreeSizeQCTotal           int                             `json:"three_size_qc_total"`
-	FirstDeliveryCount         int                             `json:"first_delivery_count"`
-	FirstDeliveryTotal         int                             `json:"first_delivery_total"`
-	ProductionAdopted          int                             `json:"production_adopted"`
-	ProductionAdoptionEligible int                             `json:"production_adoption_eligible"`
-	FeedbackReasons            []creativeFeedbackReasonSummary `json:"feedback_reasons"`
+	CandidateSelected                   int                             `json:"candidate_selected"`
+	CandidateRejected                   int                             `json:"candidate_rejected"`
+	CopyAccepted                        int                             `json:"copy_accepted"`
+	CopyReplaced                        int                             `json:"copy_replaced"`
+	AssetReported                       int                             `json:"asset_reported"`
+	QCAccepted                          int                             `json:"qc_accepted"`
+	QCMissedIssue                       int                             `json:"qc_missed_issue"`
+	QCFalsePositive                     int                             `json:"qc_false_positive"`
+	ImageGenerationSuccess              int                             `json:"image_generation_success"`
+	ImageGenerationTotal                int                             `json:"image_generation_total"`
+	ImageGenerationFailed               int                             `json:"image_generation_failed"`
+	ImageGenerationInProgress           int                             `json:"image_generation_in_progress"`
+	ImageGenerationDurationSeconds      *int64                          `json:"image_generation_duration_seconds"`
+	ImageGenerationDurationPackageCount int                             `json:"image_generation_duration_package_count"`
+	ThreeSizeQCSuccess                  int                             `json:"three_size_qc_success"`
+	ThreeSizeQCTotal                    int                             `json:"three_size_qc_total"`
+	FirstDeliveryCount                  int                             `json:"first_delivery_count"`
+	FirstDeliveryTotal                  int                             `json:"first_delivery_total"`
+	ProductionAdopted                   int                             `json:"production_adopted"`
+	ProductionAdoptionEligible          int                             `json:"production_adoption_eligible"`
+	FeedbackReasons                     []creativeFeedbackReasonSummary `json:"feedback_reasons"`
 }
 
 type creativeFeedbackReasonSummary struct {
@@ -666,6 +668,10 @@ FROM production_progress
 	); err != nil {
 		return creativeFeedbackWorkflowDashboard{}, err
 	}
+	dashboard.ImageGenerationDurationSeconds, dashboard.ImageGenerationDurationPackageCount, err = h.creativeFullPackageDuration(ctx, workspaceID)
+	if err != nil {
+		return creativeFeedbackWorkflowDashboard{}, err
+	}
 	dashboard.ThreeSizeQCSuccess, dashboard.ThreeSizeQCTotal, err = h.creativeThreeSizeQCMetrics(ctx, workspaceID)
 	if err != nil {
 		return creativeFeedbackWorkflowDashboard{}, err
@@ -699,6 +705,45 @@ LIMIT 6
 		return creativeFeedbackWorkflowDashboard{}, err
 	}
 	return dashboard, nil
+}
+
+func (h *Handler) creativeFullPackageDuration(ctx context.Context, workspaceID pgtype.UUID) (*int64, int, error) {
+	var durationSeconds pgtype.Int8
+	var packageCount int64
+	err := h.DB.QueryRow(ctx, `
+WITH complete_packages AS (
+  SELECT item.id,
+         order_row.created_at AS submitted_at,
+         max(variant.updated_at) AS completed_at
+  FROM creative_order order_row
+  JOIN creative_order_item item ON item.order_id = order_row.id
+  JOIN creative_order_variant variant ON variant.order_item_id = item.id
+  LEFT JOIN creative_order_asset asset
+    ON asset.variant_id = variant.id
+   AND asset.revision = variant.revision
+   AND asset.stage = 'delivered'
+   AND asset.status = 'completed'
+   AND asset.attachment_id IS NOT NULL
+   AND asset.size_key IN ('1080x1080', '1200x628', '800x1000')
+  WHERE order_row.workspace_id = $1
+    AND order_row.status <> 'cancelled'
+    AND order_row.trigger_evidence_kind <> 'creative_direct_edit'
+  GROUP BY item.id, order_row.created_at
+  HAVING count(DISTINCT variant.id) = 3
+     AND count(DISTINCT variant.id) FILTER (WHERE variant.status = 'completed') = 3
+     AND count(DISTINCT (variant.id, asset.size_key)) FILTER (WHERE asset.id IS NOT NULL) = 9
+)
+SELECT ROUND(AVG(EXTRACT(EPOCH FROM (completed_at - submitted_at))))::bigint,
+       count(*)
+FROM complete_packages
+`, workspaceID).Scan(&durationSeconds, &packageCount)
+	if err != nil {
+		return nil, int(packageCount), err
+	}
+	if !durationSeconds.Valid {
+		return nil, int(packageCount), nil
+	}
+	return &durationSeconds.Int64, int(packageCount), nil
 }
 
 // creativeThreeSizeQCMetrics counts variants whose frozen delivery scope is

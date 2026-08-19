@@ -16,8 +16,8 @@
 | `reference_analysis` | 写 Source Analysis | 无 |
 | `creative_leadership` | 首次委派、异常恢复、用户汇总 | plan 或 direct edit |
 | `generation_plan` | 写 V01-V03 brief | production |
-| `image_edit` | 写 generated assets | 后端品牌组件合成 |
-| `direct_image_edit` | 写下一 revision generated assets | publish 时后端品牌组件合成 |
+| `image_edit` | 写 generated assets 和底图过程证据 | 调用 `prime_compose` Skill，由后端品牌组件合成 |
+| `direct_image_edit` | 写下一 revision generated assets 和底图过程证据 | publish 调用 `prime_compose` Skill，由后端直接登记 delivered，不进 QC |
 | `quality_control` | 写一个 lane 检测报告 | 无 |
 
 成员不得越级创建其他阶段。下游 Agent ID 来自冻结 squad snapshot 或上游 context，不按名称猜测。
@@ -30,7 +30,7 @@
 | 方案 | `creative_order_item_plan` | Order Item | item + revision |
 | 生产 | `creative_order_item_production` | Order Item | variant + revision |
 | QC | `creative_order_variant_qc` | Variant | variant + lane + revision |
-| 直接改图 | `creative_order_item_direct_edit` | Order Item | variant + size + source revision |
+| 直接改图 | `creative_order_item_direct_edit` | Order Item | variant + size + source revision; unbranded base -> deterministic Prime compose -> delivered, no QC |
 
 Source Analysis 写回的 `trigger_evidence_kind=crawl_run` 是领域来源，不是 task source kind。
 
@@ -61,11 +61,11 @@ runtime 和 provider 限额控制。
 拒绝覆盖更高 revision。
 
 标准 Variant 的 expected sizes 共享批准文案、业务语义、主体、信息层级和 `asset_family_id`；方形是横竖版
-重排基线。后端只按冻结 config 原样叠加完整品牌模板。technical/visual QC 并发并写独立报告；`qc-finalize` 在两份报告归档后
+重排基线。后端只按冻结 config 原样叠加完整品牌模板。`prime_compose` Skill 只调用后端确定性合成；technical/visual QC 并发并写独立报告；`qc-finalize` 在两份报告归档后
 登记 delivered assets、Variant completion 和 Inbox，但检测发现只作为建议，不影响这些状态。
 
 direct edit 只处理 context 的 source asset 和 expected sizes；source 不可覆盖，输出 revision 加一并记录
-lineage。preview 不进入品牌组件/QC，publish 才进入同 expected sizes 的后端品牌组件合成与双路 QC。
+lineage。preview 不进入品牌组件/QC，publish 才调用 `prime_compose` Skill；后端合成后直接登记 delivered，不创建 QC。
 
 ## 失败与人工反馈
 
@@ -75,4 +75,4 @@ lineage。preview 不进入品牌组件/QC，publish 才进入同 expected sizes
 以下用户操作追加 feedback event：素材采用/拒绝，文案推荐曝光/采用/替换/编辑，Variant 接受/调整/放弃，
 成图接受/下载/报告问题/区域标注，QC 误判/漏检/接受风险。撤销写新事件，不删除历史。
 
-QC 对真实 Prime 遮挡、官方文字不可读和关键内容缺失最多自动返工当前 Variant 一轮；其他建议由用户在高清对比中决定局部调整、重做或放弃。
+QC 对真实 Prime 遮挡或官方文字不可读最多自动返工当前 Variant 一轮；预测遮挡、关键内容缺失和其他建议由用户在高清对比中决定局部调整、重做或放弃。

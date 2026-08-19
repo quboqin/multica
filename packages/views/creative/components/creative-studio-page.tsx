@@ -429,8 +429,14 @@ function CreativeOrderDetail({ orderId, onBack, onBrowseOrders, backLabel }: { o
     const variant = adoptedCreativeOrderVariant(item);
     return variant ? [variant.id] : [];
   }) ?? []);
+  const latestAdjustment = latestOrderAdjustmentFeedback(feedback.data?.events ?? [], orderId);
+  const adjustedVariant = creativeAdjustmentTarget(data?.items ?? [], latestAdjustment)?.variant;
+  const adjustmentVariantId = typeof latestAdjustment?.context_snapshot.variant_id === "string" ? latestAdjustment.context_snapshot.variant_id : "";
+  const adjustmentSizeKey = typeof latestAdjustment?.context_snapshot.size_key === "string" ? latestAdjustment.context_snapshot.size_key : "";
+  const adjustmentState = latestAdjustment ? creativeAdjustmentProgress(adjustedVariant, latestAdjustment).replace(/ · r\d+$/, "") : "";
   const defaultAsset = reviewAssets.find((asset) => adoptedVariantIds.has(asset.variant_id) && asset.size_key === "1080x1080")
     ?? reviewAssets.find((asset) => adoptedVariantIds.has(asset.variant_id))
+    ?? reviewAssets.find((asset) => asset.variant_id === adjustmentVariantId && asset.size_key === adjustmentSizeKey)
     ?? reviewAssets.find((asset) => asset.status === "completed")
     ?? reviewAssets[0];
   const active = reviewAssets.find((asset) => asset.id === activeAssetId) ?? defaultAsset;
@@ -439,11 +445,6 @@ function CreativeOrderDetail({ orderId, onBack, onBrowseOrders, backLabel }: { o
   const actionableFailures = creativeOrderActionableWorkflowFailures(data);
   const activeVariant = active ? variantById.get(active.variant_id) : undefined;
   const generationInfoVariant = generationInfoAsset ? variantById.get(generationInfoAsset.variant_id) : undefined;
-  const latestAdjustment = latestOrderAdjustmentFeedback(feedback.data?.events ?? [], orderId);
-  const adjustedVariant = creativeAdjustmentTarget(data?.items ?? [], latestAdjustment)?.variant;
-  const adjustmentVariantId = typeof latestAdjustment?.context_snapshot.variant_id === "string" ? latestAdjustment.context_snapshot.variant_id : "";
-  const adjustmentSizeKey = typeof latestAdjustment?.context_snapshot.size_key === "string" ? latestAdjustment.context_snapshot.size_key : "";
-  const adjustmentState = latestAdjustment ? creativeAdjustmentProgress(adjustedVariant, latestAdjustment).replace(/ · r\d+$/, "") : "";
   const isDirectEdit = data?.trigger_evidence_kind === "creative_direct_edit";
   const adoptionStatus = creativeOrderAdoptionStatus(data);
   const stage = creativeOrderStage(data);
@@ -455,6 +456,15 @@ function CreativeOrderDetail({ orderId, onBack, onBrowseOrders, backLabel }: { o
     const attachment = asset ? byId.get(asset.attachment_id) : undefined;
     return creativeAttachmentBrowserURL(attachment);
   };
+  const adjustmentBefore = active && active.revision > 1
+    ? assets.find((candidate) => candidate.variant_id === active.variant_id && candidate.size_key === active.size_key && candidate.revision === active.revision - 1 && candidate.stage === "delivered" && candidate.status === "completed" && Boolean(candidate.attachment_id))
+      ?? assets.find((candidate) => candidate.variant_id === active.variant_id && candidate.size_key === active.size_key && candidate.revision === active.revision - 1 && candidate.stage === "primed" && candidate.status === "completed" && Boolean(candidate.attachment_id))
+      ?? assets.find((candidate) => candidate.variant_id === active.variant_id && candidate.size_key === active.size_key && candidate.revision === active.revision - 1 && candidate.stage === "generated" && candidate.status === "completed" && Boolean(candidate.attachment_id))
+    : undefined;
+  const adjustmentBeforeURL = attachmentURL(adjustmentBefore);
+  const comparisonSource = adjustmentBefore && adjustmentBeforeURL
+    ? { label: `调整前 · r${adjustmentBefore.revision}`, url: adjustmentBeforeURL }
+    : { label: source?.title || "原始素材", url: resolvePublicFileUrl(source?.archived_url || source?.preview_url) ?? "" };
   const comparisonAssets = reviewAssets
     .filter((asset) => byId.has(asset.attachment_id) && (!activeVariant || variantById.get(asset.variant_id)?.item.id === activeVariant.item.id))
     .map((asset) => ({ id: asset.id, label: `${asset.stage} · ${asset.size_key}`, finalUrl: attachmentURL(asset), baseUrl: attachmentURL(generatedFor(asset)), thumbnailUrl: attachmentURL(asset), size: asset.size_key, variant: variantById.get(asset.variant_id)?.variant.variant_key || "" }));
@@ -508,7 +518,12 @@ function CreativeOrderDetail({ orderId, onBack, onBrowseOrders, backLabel }: { o
     const first = drafts[0]!;
     try {
       const adjustment = await createOrderAdjustmentIssue(asset, summary);
-      await api.queueCreativeOrderAdjustment(orderId, { adjustment_issue_id: adjustment.issue.id, asset_id: asset.id, size_key: adjustment.sizeKey, source_revision: asset.revision, comment: summary, event_type: "annotation", reason_codes: [...new Set(drafts.map((draft) => assetFeedbackReason(draft.issueType)))], annotation: { id: crypto.randomUUID(), asset_id: asset.id, kind: first.kind, issue_type: first.issueType, x: first.x, y: first.y, width: first.width, height: first.height, scope: "size", comment: first.comment }, context_snapshot: { annotations: drafts.map((draft) => ({ ...draft, scope: "size" })) } });
+      const sourceBase = generatedFor(asset);
+      const sourceBaseURL = attachmentURL(sourceBase);
+      if (!sourceBaseURL) throw new Error("当前调整缺少贴片前的无品牌底图");
+      const annotationGuide = await createAnnotationGuideAttachment(sourceBaseURL, adjustment.issue.id, asset.size_key as CreativeDeliverySize, asset.revision, drafts);
+      const annotations = drafts.map((draft) => ({ ...draft, scope: "size" }));
+      await api.queueCreativeOrderAdjustment(orderId, { adjustment_issue_id: adjustment.issue.id, asset_id: asset.id, size_key: adjustment.sizeKey, source_revision: asset.revision, annotation_guide_attachment_id: annotationGuide.id, comment: summary, event_type: "annotation", reason_codes: [...new Set(drafts.map((draft) => assetFeedbackReason(draft.issueType)))], annotation: { id: crypto.randomUUID(), asset_id: asset.id, kind: first.kind, issue_type: first.issueType, x: first.x, y: first.y, width: first.width, height: first.height, scope: "size", comment: first.comment }, context_snapshot: { annotations, annotation_guide_attachment_id: annotationGuide.id } });
       await queryClient.invalidateQueries({ queryKey: creativeKeys.feedback(wsId, "asset", "") });
       await queryClient.invalidateQueries({ queryKey: creativeKeys.order(wsId, orderId) });
       await queryClient.invalidateQueries({ queryKey: creativeKeys.orders(wsId) });
@@ -545,6 +560,7 @@ function CreativeOrderDetail({ orderId, onBack, onBrowseOrders, backLabel }: { o
           key={item.id}
           orderId={orderId}
           item={item}
+          order={data}
           source={{ label: itemSource?.title || itemSource?.competitor || "原始素材", url: resolvePublicFileUrl(itemSource?.archived_url || itemSource?.preview_url) ?? "" }}
           attachments={byId}
           adoptingVariantId={adoptVariant.isPending ? adoptVariant.variables?.variantId ?? "" : ""}
@@ -574,13 +590,14 @@ function CreativeOrderDetail({ orderId, onBack, onBrowseOrders, backLabel }: { o
       const sizeKey = typeof latestAdjustment.context_snapshot.size_key === "string" ? latestAdjustment.context_snapshot.size_key : "";
       const sourceRevision = typeof latestAdjustment.context_snapshot.revision === "number" ? latestAdjustment.context_snapshot.revision : 0;
       const targetSize = creativeOrderAdjustmentSize({ size_key: sizeKey });
+      const annotationGuideAttachmentID = typeof latestAdjustment.context_snapshot.annotation_guide_attachment_id === "string" ? latestAdjustment.context_snapshot.annotation_guide_attachment_id : "";
       if (!asset || !adjustmentIssueId || !targetSize || sourceRevision < 1) {
         toast.error("当前调整记录缺少可重启的目标信息");
         return;
       }
       setAdjustBusy(true);
       try {
-        await api.queueCreativeOrderAdjustment(orderId, { adjustment_issue_id: adjustmentIssueId, asset_id: asset.id, size_key: targetSize, source_revision: sourceRevision, comment: latestAdjustment.comment, event_type: latestAdjustment.event_type === "annotation" ? "annotation" : "decision", reason_codes: latestAdjustment.reason_codes, annotation: latestAdjustment.annotation, context_snapshot: latestAdjustment.context_snapshot });
+        await api.queueCreativeOrderAdjustment(orderId, { adjustment_issue_id: adjustmentIssueId, asset_id: asset.id, size_key: targetSize, source_revision: sourceRevision, annotation_guide_attachment_id: annotationGuideAttachmentID || undefined, comment: latestAdjustment.comment, event_type: latestAdjustment.event_type === "annotation" ? "annotation" : "decision", reason_codes: latestAdjustment.reason_codes, annotation: latestAdjustment.annotation, context_snapshot: latestAdjustment.context_snapshot });
         await queryClient.invalidateQueries({ queryKey: creativeKeys.feedback(wsId, "asset", "") });
         await queryClient.invalidateQueries({ queryKey: creativeKeys.order(wsId, orderId) });
         await queryClient.invalidateQueries({ queryKey: creativeKeys.orders(wsId) });
@@ -594,7 +611,7 @@ function CreativeOrderDetail({ orderId, onBack, onBrowseOrders, backLabel }: { o
     {active && attachmentURL(active) && <div ref={comparisonRef} className={cn("h-[min(78vh,860px)] min-h-[620px] scroll-mt-4 overflow-hidden border", isDirectEdit && "grid grid-rows-[auto_minmax(0,1fr)]")}>
       {isDirectEdit && <div className="flex items-center gap-2 border-b px-4 py-3"><span className="text-sm font-semibold">交付包</span><Badge variant="outline">直接改图</Badge></div>}
       <CreativeComparisonWorkspace
-        source={{ label: source?.title || "原始素材", url: resolvePublicFileUrl(source?.archived_url || source?.preview_url) ?? "" }}
+        source={comparisonSource}
         result={{ id: active.id, label: `${activeVariant?.variant.variant_key || "结果"} · ${active.size_key}`, finalUrl: attachmentURL(active), baseUrl: attachmentURL(generatedFor(active)), size: active.size_key, variant: activeVariant?.variant.variant_key }}
         assets={comparisonAssets}
         onAssetChange={setActiveAssetId}
@@ -604,6 +621,7 @@ function CreativeOrderDetail({ orderId, onBack, onBrowseOrders, backLabel }: { o
         onAnnotations={isCancelled ? undefined : (drafts) => annotation(active, drafts)}
         annotationScopes={["size"]}
         showDecisionActions={false}
+        comparisonMode={adjustmentBefore && adjustmentBeforeURL ? "adjustment" : "source"}
       />
     </div>}
     <div ref={confirmedContentRef} className="scroll-mt-4">
@@ -1005,6 +1023,81 @@ function stringArrayValue(value: unknown): string[] {
 
 function trimmedStringValue(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
+}
+
+async function createAnnotationGuideAttachment(
+  sourceURL: string,
+  issueId: string,
+  sizeKey: CreativeDeliverySize,
+  sourceRevision: number,
+  drafts: CreativeAnnotationDraft[],
+): Promise<{ id: string }> {
+  const response = await fetch(sourceURL, { credentials: "include" });
+  if (!response.ok) throw new Error(`无法读取贴片前底图：${response.status}`);
+  const sourceBlob = await response.blob();
+  const objectURL = URL.createObjectURL(sourceBlob);
+  try {
+    const image = await loadGuideImage(objectURL);
+    const canvas = document.createElement("canvas");
+    canvas.width = image.naturalWidth;
+    canvas.height = image.naturalHeight;
+    const context = canvas.getContext("2d");
+    if (!context || canvas.width < 1 || canvas.height < 1) throw new Error("无法创建标注引导图画布");
+    context.drawImage(image, 0, 0);
+    const lineWidth = Math.max(4, Math.round(Math.min(canvas.width, canvas.height) * 0.004));
+    const labelRadius = Math.max(14, Math.round(Math.min(canvas.width, canvas.height) * 0.018));
+    context.lineWidth = lineWidth;
+    context.font = `700 ${Math.max(18, labelRadius)}px sans-serif`;
+    context.textAlign = "center";
+    context.textBaseline = "middle";
+    drafts.forEach((draft, index) => {
+      const x = clampNormalized(draft.x) * canvas.width;
+      const y = clampNormalized(draft.y) * canvas.height;
+      const width = clampNormalized(draft.width) * canvas.width;
+      const height = clampNormalized(draft.height) * canvas.height;
+      context.strokeStyle = "#e11d48";
+      context.fillStyle = "#e11d48";
+      if (draft.kind === "rect" && width > 0 && height > 0) {
+        context.strokeRect(x, y, width, height);
+      } else {
+        context.beginPath();
+        context.arc(x, y, labelRadius * 0.8, 0, Math.PI * 2);
+        context.stroke();
+      }
+      const labelX = Math.min(Math.max(labelRadius, x), canvas.width - labelRadius);
+      const labelY = Math.min(Math.max(labelRadius, y), canvas.height - labelRadius);
+      context.beginPath();
+      context.arc(labelX, labelY, labelRadius, 0, Math.PI * 2);
+      context.fill();
+      context.fillStyle = "#ffffff";
+      context.fillText(String(index + 1), labelX, labelY + 1);
+    });
+    const guideBlob = await canvasBlob(canvas);
+    const guide = await api.uploadFile(new File([guideBlob], `annotation-guide-${sizeKey}-r${sourceRevision}.png`, { type: "image/png" }), { issueId });
+    if (!guide.id) throw new Error("标注引导图上传没有返回附件");
+    return guide;
+  } finally {
+    URL.revokeObjectURL(objectURL);
+  }
+}
+
+function loadGuideImage(sourceURL: string): Promise<HTMLImageElement> {
+  return new Promise((resolve, reject) => {
+    const image = new Image();
+    image.onload = () => resolve(image);
+    image.onerror = () => reject(new Error("无法读取贴片前底图像素"));
+    image.src = sourceURL;
+  });
+}
+
+function canvasBlob(canvas: HTMLCanvasElement): Promise<Blob> {
+  return new Promise((resolve, reject) => {
+    canvas.toBlob((blob) => blob ? resolve(blob) : reject(new Error("无法生成标注引导图")), "image/png");
+  });
+}
+
+function clampNormalized(value: number): number {
+  return Math.min(1, Math.max(0, Number.isFinite(value) ? value : 0));
 }
 
 type CreativeOrderAdjustmentIssueInput = {

@@ -246,10 +246,22 @@ See CLAUDE.md for the complete command reference.
 
 ### Platform Change Log
 
-Every code change or key product update must add a dated entry here. User-facing
-changes must also update the platform-owned changelog under
-`packages/views/locales/*/changelog.json`; keep the version and release id in
-`packages/views/changelog/releases.ts` as the single source of truth.
+Bug fixes, internal refactors, and implementation-only changes do not require a
+changelog entry. Add a dated entry here for a major feature or an important
+user-visible behavior change. User-facing entries must also update the
+platform-owned changelog under `packages/views/locales/*/changelog.json`; keep
+the version and release id in `packages/views/changelog/releases.ts` as the
+single source of truth. The first platform release is `0.3.23`; when there is
+no previously seen release, the release announcement opens by default.
+
+- **2026-08-18 / 0.3.42** — 精准调整改为基于同尺寸无品牌 generated 底图交给素材_改图 direct_image_edit 智能体；未改尺寸复用上一 revision 的底图和过程证据，调整前后成图在对比区直接并列，直接改图结果单独登记过程资产。
+
+- **2026-08-18 / 0.3.43** — 精准调整改为只修改贴片前的无品牌底图：有标注时上传同尺寸编号红框引导图作为第二模型输入，模型回图无论采用与否先登记过程资产；采用的底图由平台确定性重新贴片并直接登记 delivered，不创建 QC task，失败 revision 可从同一 source revision 重试。
+
+- **2026-08-18 / 0.3.44** — 移除独立贴片 Agent，改为绑定到素材_出图和素材_改图的贴片 Skill；模型原图、规范化底图、后端 Prime 合成成图按尺寸登记过程证据，标准出图合成后进入 QC，直接改图合成后直接交付；视觉自动返工仅限真实 Prime 遮挡或官方 Prime 文字不可读且最多一次。已有 ready 工作区按现有 bootstrap 路径刷新 Skill 快照、Agent 绑定并归档旧贴片 Agent，不覆盖用户自定义资源。
+- **2026-08-19 / 0.3.45** — 创意工厂支持按工作区启用，并串联素材采集、分析、预适配、素材与文案确认、生图和交付；子 issue 按工作流阶段、变体、版本和 issue 编号稳定排序；需求支持按标签筛选，多选标签按 OR 语义匹配；平台统一更新日志入口并支持中文、英文、日文和韩文，同时优化任务恢复、状态同步和过程结果展示，减少流程中断、重复执行和状态误判。
+
+- **2026-08-19 / 0.3.46** — 交付图片按 MM_P_AK_MY_YYYYMMDD_类型_活动_机型_制作方_尺寸缩写、视频按 MM_V_AK_MY_YYYYMMDD_类型_活动_机型_制作方_尺寸缩写_时长命名，尺寸缩写固定为 11、169、191、916、45；精准改图只使用运行时 task ID，asset-put 的 metadata/evidence 由四份证据交给 CLI 生成，已有回图的协议错误复用同一结果修复，Prime 回填完成后必须回读订单确认所有尺寸和过程图后才能 complete；隔离底图对位 demo 支持 84%–108% 自由缩放与满版覆盖切换，透明边缘不做拉伸补纹理。
 
 - **2026-08-18 / 0.3.41** — 移除 Prime 流程对二维码的强制验证：发布、确定性合成和 QC 不再要求读取、解码或校验二维码；若上传模板或最终成图含二维码，则记录可解码内容作为非阻断证据，完整透明贴片按上传文件原样叠加；无二维码市场可直接上传并发布，文件、尺寸、布局和合成完整性校验保留。创意工厂初始化、默认资源快照和现有工作区 bootstrap 同步到 Prime 合同 v6。
 

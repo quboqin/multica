@@ -580,6 +580,8 @@ export interface CreativeFeedbackDashboard {
     image_generation_total: number;
     image_generation_failed: number;
     image_generation_in_progress: number;
+    image_generation_duration_seconds: number | null;
+    image_generation_duration_package_count: number;
     three_size_qc_success: number;
     three_size_qc_total: number;
     first_delivery_count: number;
@@ -627,6 +629,7 @@ export interface QueueCreativeOrderAdjustmentRequest {
   asset_id: string;
   size_key: CreativeDeliverySize;
   source_revision: number;
+  annotation_guide_attachment_id?: string;
   comment: string;
   event_type: "annotation" | "decision";
   reason_codes: string[];

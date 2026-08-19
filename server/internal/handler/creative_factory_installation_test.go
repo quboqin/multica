@@ -67,6 +67,16 @@ func TestCreativeFactoryResourceDefaultsAreEmbedded(t *testing.T) {
 			t.Fatalf("embedded market pack is missing %q", key)
 		}
 	}
+	if marketConfig["naming_rule"] != "{month}_P_AK_MY_{date}_{type}_{theme}_{device}_{designer}_{size}" {
+		t.Fatalf("embedded market pack has unexpected image naming rule: %#v", marketConfig["naming_rule"])
+	}
+	if marketConfig["video_naming_rule"] != "{month}_V_AK_MY_{date}_{type}_{theme}_{device}_{designer}_{size}_{duration}" {
+		t.Fatalf("embedded market pack has unexpected video naming rule: %#v", marketConfig["video_naming_rule"])
+	}
+	sizeAliases, ok := marketConfig["naming_size_abbreviations"].(map[string]any)
+	if !ok || sizeAliases["1200x628"] != "191" {
+		t.Fatalf("embedded market pack has unexpected size aliases: %#v", marketConfig["naming_size_abbreviations"])
+	}
 	encodedMarketConfig, err := json.Marshal(marketConfig)
 	if err != nil {
 		t.Fatalf("encode embedded market pack: %v", err)
@@ -105,6 +115,62 @@ func TestCreativeFactoryPreAdaptationTemplateUsesFirstPartyRowCapacity(t *testin
 	for _, required := range []string{"我方可用方案数的较小值", "源图多出的数值块", "不得借用其他期限金额", "render_instruction", "完整冻结展示值"} {
 		if !strings.Contains(agent.Instructions, required) {
 			t.Fatalf("reference-analysis Agent instructions missing %q", required)
+		}
+	}
+}
+
+func TestCreativeFactoryImageEditingUsesOneAgentWithWorkflowSkills(t *testing.T) {
+	var imageEditor *creativeFactoryAgentSpec
+	var directEditSkill creativeFactorySkillSpec
+	var directEditors int
+	for index := range creativeFactorySkillSpecs {
+		if creativeFactorySkillSpecs[index].Role == "direct_image_edit" {
+			directEditSkill = creativeFactorySkillSpecs[index]
+			break
+		}
+	}
+	if directEditSkill.Version != 12 {
+		t.Fatalf("direct-edit Skill version = %d, want 12", directEditSkill.Version)
+	}
+	for index := range creativeFactoryAgentSpecs {
+		spec := &creativeFactoryAgentSpecs[index]
+		switch spec.Role {
+		case "image_edit":
+			imageEditor = spec
+		case "direct_image_edit":
+			directEditors++
+		}
+	}
+	if imageEditor == nil {
+		t.Fatal("creative factory must define an image-edit Agent")
+	}
+	if directEditors != 0 {
+		t.Fatalf("creative factory must not define a separate direct-edit Agent; found %d", directEditors)
+	}
+
+	wantSkills := map[string]bool{
+		"image_edit":        false,
+		"direct_image_edit": false,
+		"prime_compose":     false,
+	}
+	for _, role := range imageEditor.SkillRoles {
+		if _, ok := wantSkills[role]; ok {
+			wantSkills[role] = true
+		}
+	}
+	for role, found := range wantSkills {
+		if !found {
+			t.Errorf("merged image-edit Agent is missing %q Skill", role)
+		}
+	}
+	for _, workflow := range []string{"creative_production", "creative_direct_edit"} {
+		if !strings.Contains(imageEditor.Instructions, workflow) {
+			t.Errorf("merged image-edit Agent instructions missing %q branch", workflow)
+		}
+	}
+	for _, required := range []string{"MULTICA_TASK_ID", "diagnostic-asset-put", "asset-put", "task complete"} {
+		if !strings.Contains(imageEditor.Instructions, required) {
+			t.Errorf("merged image-edit Agent instructions missing %q", required)
 		}
 	}
 }

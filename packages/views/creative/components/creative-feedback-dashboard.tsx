@@ -4,7 +4,7 @@ import { useQuery } from "@tanstack/react-query";
 import { BarChart3, ImageIcon, MessageSquareWarning } from "lucide-react";
 import { creativeFeedbackDashboardOptions } from "@multica/core/creative";
 import { useWorkspaceId } from "@multica/core/hooks";
-import { creativeWorkflowInsights } from "../lib/creative-feedback-insights";
+import { creativeWorkflowInsights, formatCreativeDuration } from "../lib/creative-feedback-insights";
 
 const REASON_LABELS: Record<string, string> = {
   duplicate: "重复素材",
@@ -74,13 +74,15 @@ export function CreativeFeedbackDashboard() {
             <MetricRow label="出图失败" value={workflow?.image_generation_failed ?? 0} />
             <MetricRow label="仍在生成" value={workflow?.image_generation_in_progress ?? 0} />
             <MetricRow label="成图问题反馈" value={workflow?.asset_reported ?? 0} />
+            <MetricRow label="整套出图平均耗时" value={formatCreativeDuration(workflow?.image_generation_duration_seconds)} />
           </dl>
+          {(workflow?.image_generation_duration_package_count ?? 0) > 0 && <p className="mt-2 text-[11px] text-muted-foreground">基于 {workflow?.image_generation_duration_package_count} 套完整素材</p>}
         </div>
       </section>
     </>}
   </div>;
 }
 
-function MetricRow({ label, value }: { label: string; value: number }) {
+function MetricRow({ label, value }: { label: string; value: number | string }) {
   return <div className="flex items-center justify-between gap-3 py-3"><dt className="text-muted-foreground">{label}</dt><dd className="font-medium tabular-nums">{value}</dd></div>;
 }

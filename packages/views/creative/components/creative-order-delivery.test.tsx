@@ -51,12 +51,13 @@ function item(adoptedVariantId = ""): CreativeOrderItem {
   return {
     id: "item-1",
     candidate_id: "candidate-1",
+    copy_snapshot: { creative_type: "num", visual_direction: { theme: "RATE DOWN" } },
     direction: "突出免息利益点",
     adopted_variant_id: adoptedVariantId,
     adopted_at: adoptedVariantId ? "2026-08-05T10:00:00Z" : "",
     adopted_by: adoptedVariantId ? "user-1" : "",
     variants: [variant("v01"), variant("v02", false), variant("v03")],
-  } as CreativeOrderItem;
+  } as unknown as CreativeOrderItem;
 }
 
 function qcReport(input: Pick<CreativeOrderQCReport, "id" | "variant_id" | "revision" | "lane" | "status" | "findings" | "updated_at">): CreativeOrderQCReport {
@@ -70,7 +71,7 @@ describe("creative order stage", () => {
       derived_status: "action_required",
       workflow_failures: [{ task_id: "failed-task" }],
       items: [item()],
-    } as CreativeOrder;
+    } as unknown as CreativeOrder;
 
     expect(creativeOrderStage(order)).toMatchObject({
       key: "review",
@@ -698,11 +699,49 @@ describe("creative order delivery selection", () => {
   it("builds a three-file archive manifest with stable size names", () => {
     const orderItem = item("v01");
     const selected = adoptedCreativeOrderVariant(orderItem)!;
-    expect(creativeVariantArchiveEntries(selected, attachmentMap(orderItem)).map((entry) => entry.filename)).toEqual([
-      "V01_1080x1080.png",
-      "V01_1200x628.png",
-      "V01_800x1000.png",
+    expect(creativeVariantArchiveEntries(selected, attachmentMap(orderItem), undefined, orderItem).map((entry) => entry.filename)).toEqual([
+      "08_P_AK_MY_20260802_NUM_RATE DOWN_SX_AI_11.png",
+      "08_P_AK_MY_20260802_NUM_RATE DOWN_SX_AI_191.png",
+      "08_P_AK_MY_20260802_NUM_RATE DOWN_SX_AI_45.png",
     ]);
+  });
+
+  it("uses the frozen order naming rule for delivery files", () => {
+    const orderItem = item("v01");
+    const selected = adoptedCreativeOrderVariant(orderItem)!;
+    const order = {
+      created_at: "2026-08-19T01:02:03Z",
+      input_snapshot: {
+        market_pack: {
+          config: {
+            brand: "AdaKami",
+            market: "Indonesia",
+            naming_rule: "{month}_P_AK_MY_{date}_{type}_{theme}_{device}_{designer}_{size}",
+            naming_size_abbreviations: { "1080x1080": "11", "1200x628": "191", "800x1000": "45" },
+          },
+        },
+      },
+    } as unknown as CreativeOrder;
+
+    expect(creativeVariantArchiveEntries(selected, attachmentMap(orderItem), order, orderItem).map((entry) => entry.filename)).toEqual([
+      "08_P_AK_MY_20260802_NUM_RATE DOWN_SX_AI_11.png",
+      "08_P_AK_MY_20260802_NUM_RATE DOWN_SX_AI_191.png",
+      "08_P_AK_MY_20260802_NUM_RATE DOWN_SX_AI_45.png",
+    ]);
+  });
+
+  it("uses the video rule, size abbreviation, and duration without adding image placeholders", () => {
+    const orderItem = item("v01");
+    const selected = adoptedCreativeOrderVariant(orderItem)!;
+    const asset = selected.assets.find((candidate) => candidate.revision === selected.revision && candidate.stage === "delivered" && candidate.size_key === "1080x1080")!;
+    asset.metadata = { duration_seconds: 6 };
+    const attachments = attachmentMap(orderItem);
+    const attachment = attachments.get(asset.attachment_id)!;
+    attachments.set(asset.attachment_id, { ...attachment, filename: "source.mp4", content_type: "video/mp4" });
+
+    expect(creativeVariantArchiveEntries(selected, attachments, undefined, orderItem).find((entry) => entry.asset.id === asset.id)?.filename).toBe(
+      "08_V_AK_MY_20260802_NUM_RATE DOWN_SX_AI_11_6.mp4",
+    );
   });
 
   it("selects one deterministic report per lane for the active revision", () => {

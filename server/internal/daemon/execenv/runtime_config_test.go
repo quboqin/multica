@@ -54,7 +54,6 @@ func TestCreativeDomainBriefDefersToDomainContractAndBoundSkills(t *testing.T) {
 	}
 	for _, banned := range []string{
 		"You are a coding agent",
-		"### Image processing",
 		"attach the result to the Issue",
 		"post every material decision",
 		"## Comment Formatting",
@@ -73,6 +72,17 @@ func TestCreativeDomainBriefDefersToDomainContractAndBoundSkills(t *testing.T) {
 	} {
 		if strings.Contains(out, banned) {
 			t.Errorf("creative-domain runtime brief must not contain generic Issue/Squad protocol %q\n--- brief ---\n%s", banned, out)
+		}
+	}
+	for _, want := range []string{
+		"### Image processing",
+		"`multica image edit",
+		"`multica image edit-batch",
+		"OPENAI_IMAGE_EDIT_PATH",
+		"the bound Skill defines its inputs",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("creative-domain runtime brief missing shared image-edit capability %q\n--- brief ---\n%s", want, out)
 		}
 	}
 }

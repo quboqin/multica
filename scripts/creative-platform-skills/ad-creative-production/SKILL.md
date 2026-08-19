@@ -136,7 +136,7 @@ python <当前 Skill 目录>/references/normalize_image.py \
   --aspect-fallback-mode compress --evidence <normalization.json>
 ```
 
-三尺寸底图完成后登记 generated assets，再由后端合成官方 Prime 并进入 QC。最终 QC 只以真实 Prime 合成图为准：实际遮挡、文字不可读、
+三尺寸底图完成后登记 generated assets，再调用绑定的贴片 Skill，由后端合成官方 Prime 并进入 QC。最终 QC 只以真实 Prime 合成图为准：实际遮挡、文字不可读、
 底部图标被盖住才算失败；靠近边界、背景纹理或预估覆盖不是失败。
 
 ## 过程证据登记
@@ -154,8 +154,8 @@ python <当前 Skill 目录>/references/register_process_assets.py \
 ```
 
 按文件实际生成情况重复调用，三个尺寸和三个过程阶段都要登记；不要等 task 结束才批量登记。命令必须返回 JSON，且 `registered` 数量与本次输入一致，
-再用 `multica creative order get <order-id> --output json` 回读确认归属。后端会在确定性合成时登记 `Prime 合成成图`，出图智能体不要伪造该阶段。
-任何登记失败都要保留真实错误并让当前 task 失败，以便平台创建有界续跑；在当前 revision 的所有 expected size 都有 canonical generated asset、完整过程证据并回读成功前，禁止调用
+再用 `multica creative order get <order-id> --output json` 回读确认归属。底图与过程证据齐全后调用绑定的贴片 Skill；后端会在确定性合成时登记 `Prime 合成成图`，出图智能体不要伪造该阶段。
+任何登记失败都要保留真实错误并让当前 task 失败，以便平台创建有界续跑；在当前 revision 的所有 expected size 都有 canonical generated asset、完整过程证据并且贴片 Skill 返回后端合成成功前，禁止调用
 `multica task complete`。
 
 文案校验必须与本 Skill 的当前提示词合同一致：当前合同使用自然语言描述 Prime 保护带，禁止把坐标、矩形框或审计重复写进模型提示词。

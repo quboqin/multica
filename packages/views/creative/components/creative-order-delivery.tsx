@@ -45,7 +45,9 @@ const CREATIVE_DELIVERY_SIZE_LABELS: Record<(typeof CREATIVE_DELIVERY_SIZES)[num
   "800x1000": "竖版",
 };
 
-type DeliveryAttachment = Pick<Attachment, "id" | "filename" | "url" | "download_url" | "markdown_url">;
+type DeliveryAttachment = Pick<Attachment, "id" | "filename" | "url" | "download_url" | "markdown_url" | "content_type">;
+
+export type CreativeDeliveryNamingContext = Pick<CreativeOrder, "created_at" | "input_snapshot">;
 
 export type CreativeVariantAdoptionRisk = {
   acknowledged: true;
@@ -151,18 +153,25 @@ export function creativeVariantDiagnosticAssets(variant: CreativeOrderVariant): 
   return CREATIVE_DELIVERY_SIZES.flatMap((size) => selected.get(size) ?? []);
 }
 
+function creativeVariantUsesDirectEditNoQC(variant: CreativeOrderVariant): boolean {
+  const contract = variant.brief?.creative_direct_edit_delivery;
+  return Boolean(contract && typeof contract === "object" && !Array.isArray(contract) && (contract as { skip_qc?: unknown }).skip_qc === true);
+}
+
 export function creativeVariantArchiveEntries(
   variant: CreativeOrderVariant,
   attachments: Map<string, DeliveryAttachment>,
+  order?: CreativeDeliveryNamingContext,
+  item?: Pick<CreativeOrderItem, "candidate_id" | "copy_snapshot">,
 ): { asset: CreativeOrderAsset; attachment: DeliveryAttachment; filename: string }[] {
+  const usedNames = new Set<string>();
   return creativeVariantDeliveryAssets(variant).flatMap((asset) => {
     const attachment = attachments.get(asset.attachment_id);
     if (!attachment || !creativeAttachmentBrowserURL(attachment)) return [];
-    const extension = fileExtension(attachment.filename) || ".png";
     return [{
       asset,
       attachment,
-      filename: `${safeArchiveName(variant.variant_key || variant.id)}_${safeArchiveName(asset.size_key)}${extension}`,
+      filename: creativeDeliveryFilename({ order, item, asset, attachment, usedNames }),
     }];
   });
 }
@@ -172,21 +181,25 @@ export async function downloadCreativeVariantArchive({
   item,
   variant,
   attachments,
+  order,
 }: {
   orderId: string;
   item: CreativeOrderItem;
   variant: CreativeOrderVariant;
   attachments: Map<string, DeliveryAttachment>;
+  order?: CreativeDeliveryNamingContext;
 }): Promise<void> {
-  const entries = creativeVariantArchiveEntries(variant, attachments);
+  const entries = creativeVariantArchiveEntries(variant, attachments, order, item);
   if (entries.length !== CREATIVE_DELIVERY_SIZES.length) throw new Error("交付包的三张图片尚未齐备");
   const files: Record<string, Uint8Array> = {};
   const downloaded = await Promise.all(entries.map(async ({ attachment, filename }) => {
     const response = await fetch(creativeAttachmentBrowserURL(attachment), { credentials: "include" });
     if (!response.ok) throw new Error(`无法下载 ${filename}`);
-    return { filename, bytes: new Uint8Array(await response.arrayBuffer()) };
+    const bytes = new Uint8Array(await response.arrayBuffer());
+    return { filename: filenameForResponse(filename, response.headers.get("content-type"), bytes), bytes };
   }));
-  for (const { filename, bytes } of downloaded) files[filename] = bytes;
+  const usedNames = new Set<string>();
+  for (const { filename, bytes } of downloaded) files[uniqueArchiveFilename(filename, usedNames)] = bytes;
   files["说明.txt"] = strToU8([
     "最终采用方案交付包",
     `订单：${orderId}`,
@@ -208,6 +221,7 @@ export async function downloadCreativeVariantArchive({
 export function CreativeOrderDeliveryCandidates({
   orderId,
   item,
+  order,
   source,
   attachments,
   adoptingVariantId,
@@ -221,6 +235,7 @@ export function CreativeOrderDeliveryCandidates({
 }: {
   orderId: string;
   item: CreativeOrderItem;
+  order?: CreativeDeliveryNamingContext;
   source: { label: string; url: string };
   attachments: Map<string, DeliveryAttachment>;
   adoptingVariantId: string;
@@ -263,6 +278,7 @@ export function CreativeOrderDeliveryCandidates({
         <AdoptedVariantDelivery
           orderId={orderId}
           item={item}
+          order={order}
           variant={adoptedVariant}
           attachments={attachments}
           onAssetSelect={onAssetSelect}
@@ -368,6 +384,7 @@ function CreativeOrderVariantPlaceholder() {
 function AdoptedVariantDelivery({
   orderId,
   item,
+  order,
   variant,
   attachments,
   onAssetSelect,
@@ -375,6 +392,7 @@ function AdoptedVariantDelivery({
 }: {
   orderId: string;
   item: CreativeOrderItem;
+  order?: CreativeDeliveryNamingContext;
   variant: CreativeOrderVariant;
   attachments: Map<string, DeliveryAttachment>;
   onAssetSelect: (assetId: string) => void;
@@ -383,12 +401,12 @@ function AdoptedVariantDelivery({
   const [archiveBusy, setArchiveBusy] = useState(false);
   const [archiveError, setArchiveError] = useState("");
   const delivered = creativeVariantDeliveryAssets(variant);
-  const entries = creativeVariantArchiveEntries(variant, attachments);
+  const entries = creativeVariantArchiveEntries(variant, attachments, order, item);
   const downloadArchive = async () => {
     setArchiveBusy(true);
     setArchiveError("");
     try {
-      await downloadCreativeVariantArchive({ orderId, item, variant, attachments });
+      await downloadCreativeVariantArchive({ orderId, item, variant, attachments, order });
     } catch (error) {
       setArchiveError(error instanceof Error ? error.message : "无法打包下载交付包");
     } finally {
@@ -406,7 +424,8 @@ function AdoptedVariantDelivery({
       {CREATIVE_DELIVERY_SIZES.map((size, index) => {
         const asset = delivered.find((candidate) => candidate.size_key === size);
         const attachment = asset ? attachments.get(asset.attachment_id) : undefined;
-        return <DeliveryAssetPane key={size} asset={asset} attachment={attachment} size={size} onAssetSelect={onAssetSelect} onAssetInfo={onAssetInfo} divided={index > 0} />;
+        const entry = asset ? entries.find((candidate) => candidate.asset.id === asset.id) : undefined;
+        return <DeliveryAssetPane key={size} asset={asset} attachment={attachment} size={size} downloadFilename={entry?.filename} onAssetSelect={onAssetSelect} onAssetInfo={onAssetInfo} divided={index > 0} />;
       })}
     </div>
   </div>;
@@ -536,7 +555,7 @@ function CreativeProcessImageDialog({
           {assets.map((asset) => <figure key={asset.id} className="min-w-0 overflow-hidden border bg-background">
             <figcaption className="flex items-center justify-between gap-2 border-b px-3 py-2">
               <div className="min-w-0">
-                <p className="truncate text-xs font-medium">{CREATIVE_DELIVERY_SIZE_LABELS[asset.size_key as (typeof CREATIVE_DELIVERY_SIZES)[number]] ?? asset.size_key} · {asset.label}</p>
+                <p className="truncate text-xs font-medium">{CREATIVE_DELIVERY_SIZE_LABELS[asset.size_key as (typeof CREATIVE_DELIVERY_SIZES)[number]] ?? asset.size_key} · {creativeDiagnosticAssetLabel(asset)}</p>
                 <p className="mt-0.5 truncate text-[11px] text-muted-foreground">{asset.filename}</p>
               </div>
               <Button size="icon-sm" variant="ghost" title="打开原图" aria-label={`打开过程图片 ${asset.filename}`} onClick={() => openCreativeDiagnosticAsset(asset)}><ExternalLink className="h-4 w-4" /></Button>
@@ -578,6 +597,12 @@ function creativeVariantWorkflowLabel(workflow: string): string {
     creative_qc_visual: "视觉质检",
     creative_direct_edit: "图片调整",
   } as Record<string, string>)[workflow] || "";
+}
+
+function creativeDiagnosticAssetLabel(asset: CreativeOrderDiagnosticAsset): string {
+  const adjustment = isRecord(asset.metadata?.order_adjustment) ? asset.metadata.order_adjustment : undefined;
+  const sourceRevision = adjustment && typeof adjustment.source_revision === "number" ? adjustment.source_revision : undefined;
+  return sourceRevision ? `${asset.label} · 沿用 r${sourceRevision}` : asset.label;
 }
 
 export type CreativeVariantQCDetail = {
@@ -639,6 +664,7 @@ function DeliveryAssetPane({
   asset,
   attachment,
   size,
+  downloadFilename,
   onAssetSelect,
   onAssetInfo,
   divided,
@@ -646,6 +672,7 @@ function DeliveryAssetPane({
   asset?: CreativeOrderAsset;
   attachment?: DeliveryAttachment;
   size: (typeof CREATIVE_DELIVERY_SIZES)[number];
+  downloadFilename?: string;
   onAssetSelect: (assetId: string) => void;
   onAssetInfo?: (assetId: string) => void;
   divided: boolean;
@@ -656,7 +683,7 @@ function DeliveryAssetPane({
       <span className="text-xs font-medium">{CREATIVE_DELIVERY_SIZE_LABELS[size]} · {size}</span>
       <span className="flex items-center gap-1">
         {asset && onAssetInfo && <Button size="icon-sm" variant="ghost" title={`查看${CREATIVE_DELIVERY_SIZE_LABELS[size]}成图详情`} aria-label={`查看${CREATIVE_DELIVERY_SIZE_LABELS[size]}成图详情`} onClick={() => onAssetInfo(asset.id)}><Info className="h-4 w-4" /></Button>}
-        {url && attachment && <Button size="icon-sm" variant="ghost" title={`下载 ${size}`} aria-label={`下载 ${size}`} onClick={() => void downloadCreativeAttachment(attachment, `${size}${fileExtension(attachment.filename) || ".png"}`).catch((error: unknown) => toast.error(error instanceof Error ? error.message : "无法下载交付图"))}><Download className="h-4 w-4" /></Button>}
+        {url && attachment && <Button size="icon-sm" variant="ghost" title={`下载 ${size}`} aria-label={`下载 ${size}`} onClick={() => void downloadCreativeAttachment(attachment, downloadFilename || `${size}${attachmentExtension(attachment)}`).catch((error: unknown) => toast.error(error instanceof Error ? error.message : "无法下载交付图"))}><Download className="h-4 w-4" /></Button>}
       </span>
     </figcaption>
     <button type="button" disabled={!asset || !url} onClick={() => asset && onAssetSelect(asset.id)} className="flex min-h-72 w-full items-center justify-center p-3 disabled:cursor-default">
@@ -680,6 +707,9 @@ export function creativeVariantAdoptionReadiness(variant: CreativeOrderVariant):
   const technical = reportByLane.get("technical") ?? "pending";
   const visual = reportByLane.get("visual") ?? "pending";
   const failedQC = creativeVariantFailedQCLabels(variant);
+  if (creativeVariantUsesDirectEditNoQC(variant) && variant.status === "completed" && delivered.length === CREATIVE_DELIVERY_SIZES.length) {
+    return { ready: true, status: "精准调整已完成，品牌贴片已重新合成，可以采用" };
+  }
   if (creativeVariantHasProductionContinuation(variant)) {
     const generatedSizes = currentCreativeVariantSizeSet(variant, "generated");
     return { ready: false, status: `成图生成中：已完成 ${generatedSizes.size}/${CREATIVE_DELIVERY_SIZES.length} 个尺寸` };
@@ -762,6 +792,9 @@ function creativeVariantHasCompletePassingDelivery(variant: CreativeOrderVariant
   const reportByLane = new Map(creativeVariantQCDetails(variant).map((detail) => [detail.lane, detail.status]));
   const technical = reportByLane.get("technical") ?? "pending";
   const visual = reportByLane.get("visual") ?? "pending";
+  if (creativeVariantUsesDirectEditNoQC(variant)) {
+    return delivered.length === CREATIVE_DELIVERY_SIZES.length && variant.status === "completed";
+  }
   return delivered.length === CREATIVE_DELIVERY_SIZES.length
     && primedSizes.size === CREATIVE_DELIVERY_SIZES.length
     && qcStatusAllowsAdoption(technical)
@@ -957,7 +990,8 @@ function comparePreviewAssets(left: CreativeOrderAsset, right: CreativeOrderAsse
 async function downloadCreativeAttachment(attachment: DeliveryAttachment, filename: string): Promise<void> {
   const response = await fetch(creativeAttachmentBrowserURL(attachment), { credentials: "include" });
   if (!response.ok) throw new Error(`无法下载 ${filename}`);
-  triggerBrowserDownload(URL.createObjectURL(await response.blob()), filename, true);
+  const bytes = new Uint8Array(await response.arrayBuffer());
+  triggerBrowserDownload(URL.createObjectURL(new Blob([bytes], { type: response.headers.get("content-type") || attachment.content_type || "application/octet-stream" })), filenameForResponse(filename, response.headers.get("content-type"), bytes), true);
 }
 
 function triggerBrowserDownload(href: string, filename: string, revoke: boolean): void {
@@ -973,6 +1007,217 @@ function triggerBrowserDownload(href: string, filename: string, revoke: boolean)
 function fileExtension(filename: string): string {
   const match = filename.match(/(\.[a-z0-9]{1,8})$/i);
   return match?.[1]?.toLowerCase() ?? "";
+}
+
+const CREATIVE_NAMING_TOKENS = new Set(["month", "kind", "brand", "market", "date", "type", "theme", "device", "designer", "size", "duration"]);
+const ADAKAMI_IMAGE_NAMING_RULE = "{month}_P_AK_MY_{date}_{type}_{theme}_{device}_{designer}_{size}";
+const ADAKAMI_VIDEO_NAMING_RULE = "{month}_V_AK_MY_{date}_{type}_{theme}_{device}_{designer}_{size}_{duration}";
+const CREATIVE_SIZE_ABBREVIATIONS: Record<string, string> = {
+  "1080x1080": "11",
+  "1920x1080": "169",
+  "1200x628": "191",
+  "1080x1920": "916",
+  "800x1000": "45",
+};
+
+function creativeDeliveryFilename({
+  order,
+  item,
+  asset,
+  attachment,
+  usedNames,
+}: {
+  order?: CreativeDeliveryNamingContext;
+  item?: Pick<CreativeOrderItem, "candidate_id" | "copy_snapshot">;
+  asset: CreativeOrderAsset;
+  attachment: DeliveryAttachment;
+  usedNames: Set<string>;
+}): string {
+  const config = creativeOrderNamingConfig(order);
+  const defaults = isRecord(config.naming_defaults) ? config.naming_defaults : {};
+  const copySnapshot = isRecord(item?.copy_snapshot) ? item.copy_snapshot : {};
+  const visualDirection = isRecord(copySnapshot.visual_direction) ? copySnapshot.visual_direction : {};
+  const video = creativeAttachmentIsVideo(attachment);
+  const generatedAt = asset.created_at || asset.updated_at || order?.created_at;
+  const generatedDate = creativeNamingDate(generatedAt);
+  const values: Record<string, string> = {
+    month: generatedDate.month,
+    kind: video ? "V" : "P",
+    brand: creativeNamingAbbreviation(
+      firstString(config, ["brand_abbreviation", "brand_code"]) || firstString(defaults, ["brand_abbreviation", "brand"]),
+      firstString(config, ["brand"]) || "AdaKami",
+      "AK",
+    ),
+    market: creativeNamingAbbreviation(
+      firstString(config, ["market_abbreviation", "market_code"]) || firstString(defaults, ["market_abbreviation", "market"]),
+      firstString(config, ["market"]) || "",
+      "MY",
+    ),
+    date: generatedDate.date,
+    type: creativeNamingType(copySnapshot),
+    theme: firstString(visualDirection, ["theme", "campaign", "activity"]) || firstString(copySnapshot, ["theme", "campaign", "activity"]),
+    device: firstString(config, ["naming_device", "device", "model", "machine"])
+      || firstString(defaults, ["device", "model", "machine"])
+      || "SX",
+    designer: firstString(config, ["naming_designer", "designer", "creator"])
+      || firstString(defaults, ["designer", "creator"])
+      || "AI",
+    size: creativeNamingSize(asset.size_key, config),
+    duration: creativeNamingDuration(asset, video),
+  };
+  const rule = creativeOrderNamingRule(order, video);
+  const rendered = renderCreativeNamingRule(rule, values);
+  const filename = safeArchiveName(rendered) + attachmentExtension(attachment);
+  return uniqueArchiveFilename(filename, usedNames, asset);
+}
+
+function creativeOrderNamingConfig(order?: CreativeDeliveryNamingContext): Record<string, unknown> {
+  const snapshot = order?.input_snapshot;
+  if (!isRecord(snapshot) || !isRecord(snapshot.market_pack) || !isRecord(snapshot.market_pack.config)) return {};
+  return snapshot.market_pack.config;
+}
+
+function creativeOrderNamingRule(order: CreativeDeliveryNamingContext | undefined, video: boolean): string {
+  const config = creativeOrderNamingConfig(order);
+  const configured = video
+    ? firstString(config, ["video_naming_rule", "naming_video_rule"])
+    : firstString(config, ["image_naming_rule", "naming_rule"]);
+  if (creativeNamingRuleIsValid(configured, video)) return configured;
+  return video ? ADAKAMI_VIDEO_NAMING_RULE : ADAKAMI_IMAGE_NAMING_RULE;
+}
+
+function creativeNamingRuleIsValid(rule: string, video: boolean): boolean {
+  const tokens = Array.from(rule.matchAll(/\{([^{}]+)\}/g), (match) => match[1]).filter((token): token is string => Boolean(token));
+  const requiredTokens = video ? ["date", "type", "size", "duration"] : ["date", "type", "size"];
+  return Boolean(rule && tokens.length > 0 && requiredTokens.every((token) => tokens.includes(token)) && tokens.every((token) => CREATIVE_NAMING_TOKENS.has(token)));
+}
+
+function creativeNamingDate(createdAt: string | undefined): { month: string; date: string } {
+  const date = new Date(createdAt || "");
+  if (Number.isNaN(date.getTime())) return { month: "", date: "" };
+  const month = String(date.getUTCMonth() + 1).padStart(2, "0");
+  const day = String(date.getUTCFullYear()) + month + String(date.getUTCDate()).padStart(2, "0");
+  return { month, date: day };
+}
+
+function creativeNamingType(copySnapshot: Record<string, unknown>): string {
+  const raw = firstString(copySnapshot, ["naming_type", "type", "creative_type"]);
+  if (!raw) return "";
+  const normalized = raw.replace(/[\s-]+/g, "_").toUpperCase();
+  return normalized === "REPAYMENT_PLAN" ? "NUM" : normalized;
+}
+
+function creativeNamingSize(size: string, config: Record<string, unknown>): string {
+  const configured = [config.naming_size_abbreviations, config.size_abbreviations, config.size_aliases]
+    .map((value) => isRecord(value) ? value[size] : undefined)
+    .find((value): value is string => typeof value === "string" && Boolean(value.trim()));
+  return configured?.trim() || CREATIVE_SIZE_ABBREVIATIONS[size] || size;
+}
+
+function creativeNamingDuration(asset: CreativeOrderAsset, video: boolean): string {
+  if (!video) return "";
+  const sources = [asset.metadata, asset.evidence].filter(isRecord);
+  for (const source of sources) {
+    const value = firstNamingScalar(source, ["duration_seconds", "video_duration_seconds", "duration"]);
+    if (value) return value;
+    const nested = ["video", "media", "model_result"].map((key) => source[key]).filter(isRecord);
+    for (const record of nested) {
+      const nestedValue = firstNamingScalar(record, ["duration_seconds", "video_duration_seconds", "duration"]);
+      if (nestedValue) return nestedValue;
+    }
+  }
+  return "";
+}
+
+function firstNamingScalar(record: Record<string, unknown>, keys: string[]): string {
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === "number" && Number.isFinite(value)) return String(Number(value.toFixed(3)));
+    if (typeof value === "string" && value.trim()) {
+      const match = value.trim().match(/^(?:(\d+):)?(\d+(?:\.\d+)?)$/);
+      if (match) return match[1] ? String(Number(match[1]) * 60 + Number(match[2])) : match[2]!;
+      return value.trim();
+    }
+  }
+  return "";
+}
+
+function creativeNamingAbbreviation(explicit: string, source: string, fallback: string): string {
+  const value = explicit.trim() || source.trim();
+  if (!value) return fallback;
+  const normalized = value.toUpperCase().replace(/[^A-Z0-9]+/g, " ").trim();
+  if (normalized === "ADAKAMI") return "AK";
+  if (normalized === "MALAYSIA") return "MY";
+  if (/^[A-Z0-9]{2,4}$/.test(normalized)) return normalized;
+  const initials = normalized.split(/\s+/).map((part) => part[0]).join("");
+  return initials.slice(0, 4) || fallback;
+}
+
+function renderCreativeNamingRule(rule: string, values: Record<string, string>): string {
+  const baseRule = rule.replace(/\.[a-z0-9]{1,8}$/i, "");
+  return baseRule
+    .replace(/\{([^{}]+)\}/g, (_, token: string) => values[token] || "")
+    .split("_")
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .join("_");
+}
+
+function contentTypeExtension(contentType: string | undefined): string {
+  const normalized = ((contentType || "").split(";", 1)[0] || "").trim().toLowerCase();
+  return ({
+    "image/png": ".png",
+    "image/jpeg": ".jpg",
+    "image/jpg": ".jpg",
+    "image/webp": ".webp",
+    "image/gif": ".gif",
+    "image/avif": ".avif",
+    "image/svg+xml": ".svg",
+    "video/mp4": ".mp4",
+    "application/mp4": ".mp4",
+    "video/quicktime": ".mov",
+    "video/webm": ".webm",
+  } as Record<string, string>)[normalized] || "";
+}
+
+function attachmentExtension(attachment: DeliveryAttachment): string {
+  return contentTypeExtension(attachment.content_type) || fileExtension(attachment.filename) || ".bin";
+}
+
+function creativeAttachmentIsVideo(attachment: DeliveryAttachment): boolean {
+  return (attachment.content_type || "").trim().toLowerCase().startsWith("video/")
+    || [".mp4", ".mov", ".webm", ".avi"].includes(fileExtension(attachment.filename));
+}
+
+function binaryExtension(bytes: Uint8Array): string {
+  if (bytes.length >= 8 && bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47 && bytes[4] === 0x0d && bytes[5] === 0x0a && bytes[6] === 0x1a && bytes[7] === 0x0a) return ".png";
+  if (bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return ".jpg";
+  if (bytes.length >= 6 && String.fromCharCode(...bytes.slice(0, 6)) === "GIF89a") return ".gif";
+  if (bytes.length >= 12 && String.fromCharCode(...bytes.slice(0, 4)) === "RIFF" && String.fromCharCode(...bytes.slice(8, 12)) === "WEBP") return ".webp";
+  if (bytes.length >= 12 && String.fromCharCode(...bytes.slice(4, 8)) === "ftyp") return ".mp4";
+  return "";
+}
+
+function replaceFileExtension(filename: string, extension: string): string {
+  return fileExtension(filename) ? filename.slice(0, -fileExtension(filename).length) + extension : `${filename}${extension}`;
+}
+
+function filenameForResponse(filename: string, contentType: string | null, bytes: Uint8Array): string {
+  return replaceFileExtension(filename, binaryExtension(bytes) || contentTypeExtension(contentType || undefined) || fileExtension(filename) || ".bin");
+}
+
+function uniqueArchiveFilename(filename: string, usedNames: Set<string>, asset?: CreativeOrderAsset): string {
+  if (!usedNames.has(filename)) {
+    usedNames.add(filename);
+    return filename;
+  }
+  const extension = fileExtension(filename);
+  const stem = extension ? filename.slice(0, -extension.length) : filename;
+  const suffix = safeArchiveName(asset?.size_key || "asset");
+  let candidate = `${stem}_${suffix}${extension}`;
+  if (usedNames.has(candidate)) candidate = `${stem}_${safeArchiveName(asset?.id.slice(0, 8) || "asset")}${extension}`;
+  usedNames.add(candidate);
+  return candidate;
 }
 
 function safeArchiveName(value: string): string {

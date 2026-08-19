@@ -25,6 +25,14 @@ import (
 
 const maxCreativePrimeInputBytes = 64 << 20
 
+var creativeProductionProcessLabels = []string{
+	"Prime context",
+	"模型原图",
+	"规范化底图",
+}
+
+var creativePrimeCompositionProcessLabels = []string{"Prime 合成成图"}
+
 type creativePrimeGeneratedAsset struct {
 	ID            pgtype.UUID
 	AssetFamilyID pgtype.UUID
@@ -69,8 +77,8 @@ func (err *creativeQCHandoffError) Unwrap() error {
 
 // composeCreativeOrderVariantPrime owns the fixed full-template composition
 // boundary. Image agents provide only generated bases; the API loads the
-// frozen order contract, applies an unmodified transparent template, and then
-// starts independent QC.
+// frozen order contract and applies an unmodified transparent template. A
+// direct adjustment ends at this boundary because it deliberately skips QC.
 func (h *Handler) composeCreativeOrderVariantPrime(
 	ctx context.Context,
 	workspaceID, orderID, variantID, requestedBy pgtype.UUID,
@@ -78,10 +86,6 @@ func (h *Handler) composeCreativeOrderVariantPrime(
 	if h.Storage == nil {
 		return false, errors.New("brand component storage is unavailable")
 	}
-	if h.TaskService == nil {
-		return false, errors.New("creative QC task service is unavailable")
-	}
-
 	h.creativePrimeMu.Lock()
 	defer h.creativePrimeMu.Unlock()
 
@@ -101,6 +105,7 @@ WHERE variant.id = $1 AND order_row.id = $2 AND order_row.workspace_id = $3
 		}
 		return false, fmt.Errorf("load brand component input: %w", err)
 	}
+	skipQC := triggerKind == "creative_direct_edit" || creativeDirectEditSkipsQC(json.RawMessage(brief))
 
 	if triggerKind == "creative_direct_edit" {
 		var directBrief struct {
@@ -129,6 +134,36 @@ WHERE variant.id = $1 AND order_row.id = $2 AND order_row.workspace_id = $3
 		return false, err
 	}
 	if primedComplete {
+		missingProcess, processErr := h.creativePrimeProcessEvidenceMissing(ctx, variantID, revision, expectedSizes)
+		if processErr != nil {
+			return false, processErr
+		}
+		if len(missingProcess) > 0 {
+			return false, fmt.Errorf("creative Prime process evidence is incomplete: %s", strings.Join(missingProcess, ", "))
+		}
+		if skipQC {
+			tx, txErr := h.TxStarter.Begin(ctx)
+			if txErr != nil {
+				return false, fmt.Errorf("start direct adjustment delivery: %w", txErr)
+			}
+			defer tx.Rollback(ctx)
+			if _, txErr := copyCreativePrimedAssetsToDelivered(ctx, tx, variantID, revision, expectedSizes); txErr != nil {
+				return false, fmt.Errorf("register direct adjustment delivery: %w", txErr)
+			}
+			if _, txErr := tx.Exec(ctx, `
+UPDATE creative_order_variant
+SET status = 'completed',
+    brief = brief - 'brand_composition_error' - 'creative_qc_handoff_error',
+    updated_at = now()
+WHERE id = $1
+`, variantID); txErr != nil {
+				return false, fmt.Errorf("complete direct adjustment variant: %w", txErr)
+			}
+			if txErr := tx.Commit(ctx); txErr != nil {
+				return false, fmt.Errorf("save direct adjustment delivery: %w", txErr)
+			}
+			return len(primed) > 0, nil
+		}
 		if err := h.enqueueCreativeVariantQC(ctx, workspaceID, orderID, variantID, requestedBy); err != nil {
 			return false, &creativeQCHandoffError{cause: err}
 		}
@@ -354,7 +389,20 @@ ON CONFLICT (variant_id, revision, workflow, size_key, label, filename) DO UPDAT
 			return false, fmt.Errorf("register composed %s process image: %w", asset.Generated.SizeKey, err)
 		}
 	}
-	if _, err := tx.Exec(ctx, `
+	if skipQC {
+		if _, err := copyCreativePrimedAssetsToDelivered(ctx, tx, variantID, revision, expectedSizes); err != nil {
+			return false, fmt.Errorf("register direct adjustment delivery: %w", err)
+		}
+		if _, err := tx.Exec(ctx, `
+UPDATE creative_order_variant
+SET status = 'completed',
+    brief = brief - 'brand_composition_error' - 'creative_qc_handoff_error',
+    updated_at = now()
+WHERE id = $1
+`, variantID); err != nil {
+			return false, fmt.Errorf("complete direct adjustment variant: %w", err)
+		}
+	} else if _, err := tx.Exec(ctx, `
 UPDATE creative_order_variant
 SET status = 'running',
     brief = brief - 'brand_composition_error' - 'creative_qc_handoff_error',
@@ -365,6 +413,9 @@ WHERE id = $1
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return false, fmt.Errorf("save composed creative assets: %w", err)
+	}
+	if skipQC {
+		return true, nil
 	}
 	if err := h.enqueueCreativeVariantQC(ctx, workspaceID, orderID, variantID, requestedBy); err != nil {
 		return true, &creativeQCHandoffError{cause: err}
@@ -484,6 +535,55 @@ WHERE variant_id = $1 AND revision = $2 AND stage = 'primed' AND status = 'compl
 	return attachments, creativeSizesMatchExpected(sizes, expectedSizes), nil
 }
 
+func (h *Handler) creativeProcessEvidenceMissing(ctx context.Context, variantID pgtype.UUID, revision int, expectedSizes []string, workflow string, requiredLabels []string) ([]string, error) {
+	rows, err := h.DB.Query(ctx, `
+SELECT size_key, label
+FROM creative_order_diagnostic_asset
+WHERE variant_id = $1
+  AND revision = $2
+  AND workflow = $3
+  AND attachment_id IS NOT NULL
+  AND size_key = ANY($4::text[])
+  AND label = ANY($5::text[])
+`, variantID, revision, workflow, expectedSizes, requiredLabels)
+	if err != nil {
+		return nil, fmt.Errorf("load creative process evidence: %w", err)
+	}
+	defer rows.Close()
+	present := make(map[string]struct{}, len(expectedSizes)*len(requiredLabels))
+	for rows.Next() {
+		var size, label string
+		if err := rows.Scan(&size, &label); err != nil {
+			return nil, fmt.Errorf("read creative process evidence: %w", err)
+		}
+		present[size+"\x00"+label] = struct{}{}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("read creative process evidence: %w", err)
+	}
+	missing := make([]string, 0)
+	for _, size := range expectedSizes {
+		for _, label := range requiredLabels {
+			if _, ok := present[size+"\x00"+label]; !ok {
+				missing = append(missing, size+"/"+label)
+			}
+		}
+	}
+	return missing, nil
+}
+
+func (h *Handler) creativePrimeProcessEvidenceMissing(ctx context.Context, variantID pgtype.UUID, revision int, expectedSizes []string) ([]string, error) {
+	productionMissing, err := h.creativeProcessEvidenceMissing(ctx, variantID, revision, expectedSizes, "creative_production", creativeProductionProcessLabels)
+	if err != nil {
+		return nil, err
+	}
+	compositionMissing, err := h.creativeProcessEvidenceMissing(ctx, variantID, revision, expectedSizes, "brand_components", creativePrimeCompositionProcessLabels)
+	if err != nil {
+		return nil, err
+	}
+	return append(productionMissing, compositionMissing...), nil
+}
+
 func (h *Handler) readCreativePrimeAttachment(ctx context.Context, workspaceID, attachmentID pgtype.UUID) ([]byte, error) {
 	attachment, err := h.Queries.GetAttachmentByIDOnly(ctx, attachmentID)
 	if err != nil || attachment.WorkspaceID != workspaceID {
@@ -546,6 +646,9 @@ func (h *Handler) storeCreativePrimeAttachment(
 }
 
 func (h *Handler) enqueueCreativeVariantQC(ctx context.Context, workspaceID, orderID, variantID, requestedBy pgtype.UUID) error {
+	if h.TaskService == nil {
+		return errors.New("creative QC task service is unavailable")
+	}
 	tx, err := h.TxStarter.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("start creative QC handoff: %w", err)
@@ -577,7 +680,6 @@ FOR UPDATE OF variant
 	if !complete {
 		return errors.New("brand component package is incomplete")
 	}
-
 	var alreadyResolved bool
 	if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM creative_order_variant_qc_resolution WHERE variant_id = $1 AND revision = $2)`, variantID, revision).Scan(&alreadyResolved); err != nil {
 		return fmt.Errorf("check creative QC resolution: %w", err)
@@ -585,6 +687,14 @@ FOR UPDATE OF variant
 	if alreadyResolved {
 		return nil
 	}
+	missingProcess, err := h.creativePrimeProcessEvidenceMissing(ctx, variantID, revision, expectedSizes)
+	if err != nil {
+		return err
+	}
+	if len(missingProcess) > 0 {
+		return fmt.Errorf("creative Prime process evidence is incomplete: %s", strings.Join(missingProcess, ", "))
+	}
+
 	var existingTasks bool
 	if err := tx.QueryRow(ctx, `
 SELECT EXISTS(

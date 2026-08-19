@@ -24,6 +24,7 @@ func TestCreativePlatformSkillsStayNativeAndMapped(t *testing.T) {
 		"ad-creative-pre-adaptation":    "ad-creative-pre-adaptation-source-map.md",
 		"ad-creative-plan":              "ad-creative-plan-source-map.md",
 		"ad-creative-production":        "ad-creative-production-source-map.md",
+		"ad-creative-prime-compose":     "source-map.md",
 		"ad-creative-direct-edit":       "ad-creative-direct-edit-source-map.md",
 		"ad-creative-qc":                "ad-creative-qc-source-map.md",
 		"ad-creative-leadership":        "ad-creative-leadership-source-map.md",
@@ -69,6 +70,7 @@ func TestCreativePlatformSkillsUseFrozenBusinessInputs(t *testing.T) {
 		"ad-creative-production":     {"copy_snapshot", "prompt_sha256", "request_id"},
 		"ad-creative-direct-edit":    {"copy_snapshot", "prompt_sha256", "delivery_mode"},
 		"ad-creative-qc":             {"copy_snapshot", "compose_result", "qc-finalize"},
+		"ad-creative-prime-compose":  {"prime-compose", "creative_prime_backend.go", "does not edit model prompts"},
 	}
 
 	for skillName, terms := range required {
