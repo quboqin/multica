@@ -184,7 +184,13 @@ type DaemonRegisterRequest struct {
 		Status           string `json:"status"`
 		Label            string `json:"label,omitempty"`
 		DeviceRuntimeURL string `json:"device_runtime_url,omitempty"`
+		ProfileID        string `json:"profile_id,omitempty"`
 	} `json:"runtimes"`
+	FailedProfiles []struct {
+		ProfileID   string `json:"profile_id"`
+		CommandName string `json:"command_name"`
+		Reason      string `json:"reason"`
+	} `json:"failed_profiles"`
 }
 
 type daemonWorkspaceReposResponse struct {
@@ -272,8 +278,8 @@ func (h *Handler) DaemonRegister(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "workspace_id is required")
 		return
 	}
-	if len(req.Runtimes) == 0 {
-		writeError(w, http.StatusBadRequest, "at least one runtime is required")
+	if len(req.Runtimes) == 0 && len(req.FailedProfiles) == 0 {
+		writeError(w, http.StatusBadRequest, "at least one runtime or failed profile is required")
 		return
 	}
 	wsUUID, ok := parseUUIDOrBadRequest(w, req.WorkspaceID, "workspace_id")
@@ -338,51 +344,63 @@ func (h *Handler) DaemonRegister(w http.ResponseWriter, r *http.Request) {
 			"device_runtime_url": strings.TrimRight(strings.TrimSpace(runtime.DeviceRuntimeURL), "/"),
 		})
 
-		row, err := h.Queries.UpsertAgentRuntime(r.Context(), db.UpsertAgentRuntimeParams{
-			WorkspaceID: wsUUID,
-			DaemonID:    strToText(req.DaemonID),
-			Name:        name,
-			RuntimeMode: "local",
-			Provider:    provider,
-			Status:      status,
-			DeviceInfo:  deviceInfo,
-			Metadata:    metadata,
-			OwnerID:     ownerID,
-		})
-		if err != nil {
-			obsmetrics.RecordEvent(h.Analytics, h.Metrics, analytics.RuntimeFailed(
-				uuidToString(ownerID),
-				req.WorkspaceID,
-				req.DaemonID,
-				provider,
-				"registration_failed",
-				"db_error",
-				true,
-			))
-			writeError(w, http.StatusInternalServerError, "failed to register runtime: "+err.Error())
-			return
-		}
-
-		registered := db.AgentRuntime{
-			ID:             row.ID,
-			WorkspaceID:    row.WorkspaceID,
-			DaemonID:       row.DaemonID,
-			Name:           row.Name,
-			RuntimeMode:    row.RuntimeMode,
-			Provider:       row.Provider,
-			Status:         row.Status,
-			DeviceInfo:     row.DeviceInfo,
-			Metadata:       row.Metadata,
-			LastSeenAt:     row.LastSeenAt,
-			CreatedAt:      row.CreatedAt,
-			UpdatedAt:      row.UpdatedAt,
-			OwnerID:        row.OwnerID,
-			LegacyDaemonID: row.LegacyDaemonID,
+		var registered db.AgentRuntime
+		var inserted bool
+		profileID := strings.TrimSpace(runtime.ProfileID)
+		if profileID != "" {
+			profileUUID, profileOK := parseUUIDOrBadRequest(w, profileID, "profile_id")
+			if !profileOK {
+				return
+			}
+			profile, err := h.Queries.GetRuntimeProfileForWorkspace(r.Context(), db.GetRuntimeProfileForWorkspaceParams{ID: profileUUID, WorkspaceID: wsUUID})
+			if err != nil {
+				writeError(w, http.StatusBadRequest, "unknown runtime profile: "+profileID)
+				return
+			}
+			if !profile.Enabled {
+				writeError(w, http.StatusConflict, "runtime profile is disabled: "+profileID)
+				return
+			}
+			provider = profile.ProtocolFamily
+			row, err := h.Queries.UpsertAgentRuntimeWithProfile(r.Context(), db.UpsertAgentRuntimeWithProfileParams{
+				WorkspaceID: wsUUID, DaemonID: strToText(req.DaemonID), Name: name, RuntimeMode: "local", Provider: provider,
+				Status: status, DeviceInfo: deviceInfo, Metadata: metadata, OwnerID: ownerID, ProfileID: profileUUID,
+			})
+			if err == nil {
+				inserted = row.Inserted
+				registered = db.AgentRuntime{ID: row.ID, WorkspaceID: row.WorkspaceID, DaemonID: row.DaemonID, Name: row.Name, RuntimeMode: row.RuntimeMode, Provider: row.Provider, Status: row.Status, DeviceInfo: row.DeviceInfo, Metadata: row.Metadata, LastSeenAt: row.LastSeenAt, CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt, OwnerID: row.OwnerID, LegacyDaemonID: row.LegacyDaemonID, Visibility: row.Visibility, ProfileID: row.ProfileID, CustomName: row.CustomName}
+			}
+			if err != nil {
+				writeError(w, http.StatusInternalServerError, "failed to register runtime: "+err.Error())
+				return
+			}
+		} else {
+			row, err := h.Queries.UpsertAgentRuntime(r.Context(), db.UpsertAgentRuntimeParams{
+				WorkspaceID: wsUUID, DaemonID: strToText(req.DaemonID), Name: name, RuntimeMode: "local", Provider: provider,
+				Status: status, DeviceInfo: deviceInfo, Metadata: metadata, OwnerID: ownerID,
+			})
+			if err == nil {
+				inserted = row.Inserted
+				registered = db.AgentRuntime{ID: row.ID, WorkspaceID: row.WorkspaceID, DaemonID: row.DaemonID, Name: row.Name, RuntimeMode: row.RuntimeMode, Provider: row.Provider, Status: row.Status, DeviceInfo: row.DeviceInfo, Metadata: row.Metadata, LastSeenAt: row.LastSeenAt, CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt, OwnerID: row.OwnerID, LegacyDaemonID: row.LegacyDaemonID, Visibility: row.Visibility, ProfileID: row.ProfileID, CustomName: row.CustomName}
+			}
+			if err != nil {
+				obsmetrics.RecordEvent(h.Analytics, h.Metrics, analytics.RuntimeFailed(
+					uuidToString(ownerID),
+					req.WorkspaceID,
+					req.DaemonID,
+					provider,
+					"registration_failed",
+					"db_error",
+					true,
+				))
+				writeError(w, http.StatusInternalServerError, "failed to register runtime: "+err.Error())
+				return
+			}
 		}
 
 		// Inserted is false for normal daemon reconnects/upserts, so
 		// runtime_ready is a first-ready-per-runtime-row signal.
-		if row.Inserted {
+		if inserted {
 			obsmetrics.RecordEvent(h.Analytics, h.Metrics, analytics.RuntimeRegistered(
 				uuidToString(ownerID),
 				req.WorkspaceID,
@@ -1138,6 +1156,15 @@ func (h *Handler) ClaimTaskByRuntime(w http.ResponseWriter, r *http.Request) {
 				slog.Warn("failed to unmarshal agent custom_args", "agent_id", uuidToString(agent.ID), "error", err)
 			}
 		}
+		var mcpConfig json.RawMessage
+		if agent.McpConfig != nil {
+			mcpConfig = json.RawMessage(agent.McpConfig)
+		}
+		if merged, err := mergeMCPOverlay(mcpConfig, json.RawMessage(task.RuntimeMcpOverlay)); err != nil {
+			slog.Warn("failed to merge task MCP overlay", "agent_id", uuidToString(agent.ID), "task_id", uuidToString(task.ID), "error", err)
+		} else {
+			mcpConfig = merged
+		}
 		// runtime_config is stored as JSONB and may legitimately be the
 		// empty object `{}` for agents that haven't opted into any
 		// provider-specific tuning. Forward only non-empty payloads so the
@@ -1153,6 +1180,7 @@ func (h *Handler) ClaimTaskByRuntime(w http.ResponseWriter, r *http.Request) {
 			Skills:        skills,
 			CustomEnv:     customEnv,
 			CustomArgs:    customArgs,
+			McpConfig:     mcpConfig,
 			Model:         agent.Model.String,
 			ThinkingLevel: agent.ThinkingLevel.String,
 			RuntimeConfig: runtimeConfig,
@@ -1848,6 +1876,33 @@ func (h *Handler) ListPendingTasksByRuntime(w http.ResponseWriter, r *http.Reque
 // ---------------------------------------------------------------------------
 // Task Lifecycle (called by daemon)
 // ---------------------------------------------------------------------------
+
+// ExtendTaskPrepareLease keeps a claimed task recoverable while the daemon is
+// still preparing its execution environment and has not called StartTask.
+func (h *Handler) ExtendTaskPrepareLease(w http.ResponseWriter, r *http.Request) {
+	runtimeID := chi.URLParam(r, "runtimeId")
+	taskID := chi.URLParam(r, "taskId")
+	runtime, ok := h.requireDaemonRuntimeAccess(w, r, runtimeID)
+	if !ok {
+		return
+	}
+	task, taskWorkspaceID, ok := h.requireDaemonTaskAccessWithWorkspace(w, r, taskID)
+	if !ok {
+		return
+	}
+	if taskWorkspaceID != uuidToString(runtime.WorkspaceID) || uuidToString(task.RuntimeID) != runtimeID {
+		writeError(w, http.StatusNotFound, "task not found")
+		return
+	}
+
+	updated, err := h.TaskService.ExtendTaskPrepareLease(r.Context(), parseUUID(taskID), parseUUID(runtimeID))
+	if err != nil {
+		slog.Warn("extend task prepare lease failed", "task_id", taskID, "runtime_id", runtimeID, "error", err)
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, h.hydratedTaskResponse(r.Context(), *updated, taskWorkspaceID))
+}
 
 // StartTask marks a dispatched task as running.
 func (h *Handler) StartTask(w http.ResponseWriter, r *http.Request) {

@@ -7,6 +7,7 @@ import {
   FileText,
   KeyRound,
   ListTodo,
+  Plug,
   Router,
   Terminal,
   Webhook,
@@ -15,6 +16,7 @@ import { useQuery } from "@tanstack/react-query";
 import type { Agent, AgentRuntime } from "@multica/core/types";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { larkInstallationsOptions } from "@multica/core/lark";
+import { providerSupportsMcpConfig } from "@multica/core/agents";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -32,6 +34,7 @@ import { EnvTab } from "./tabs/env-tab";
 import { CustomArgsTab } from "./tabs/custom-args-tab";
 import { IntegrationsTab } from "./tabs/integrations-tab";
 import { RuntimeConfigTab } from "./tabs/runtime-config-tab";
+import { McpConfigTab } from "./tabs/mcp-config-tab";
 import { ActorIssuesPanel } from "../../common/actor-issues-panel";
 import { useT } from "../../i18n";
 
@@ -42,16 +45,18 @@ export type DetailTab =
   | "skills"
   | "env"
   | "custom_args"
+  | "mcp_config"
   | "integrations"
   | "runtime_config";
 
-const TAB_LABEL_KEY: Record<DetailTab, "activity" | "tasks" | "instructions" | "skills" | "environment" | "custom_args" | "integrations" | "runtime_config"> = {
+const TAB_LABEL_KEY: Record<DetailTab, "activity" | "tasks" | "instructions" | "skills" | "environment" | "custom_args" | "mcp_config" | "integrations" | "runtime_config"> = {
   activity: "activity",
   tasks: "tasks",
   instructions: "instructions",
   skills: "skills",
   env: "environment",
   custom_args: "custom_args",
+  mcp_config: "mcp_config",
   integrations: "integrations",
   runtime_config: "runtime_config",
 };
@@ -66,6 +71,7 @@ const detailTabs: {
   { id: "skills", icon: BookOpenText },
   { id: "env", icon: KeyRound },
   { id: "custom_args", icon: Terminal },
+  { id: "mcp_config", icon: Plug },
   { id: "integrations", icon: Webhook },
   { id: "runtime_config", icon: Router },
 ];
@@ -146,8 +152,10 @@ export function AgentOverviewPane({
   // backend currently reads, so surfacing the tab would let users save values
   // their runtime ignores — same anti-footgun rationale as the MCP gate.
   const visibleTabs = useMemo(() => {
+    const showMcp = runtime ? providerSupportsMcpConfig(runtime.provider) : true;
     const showRuntimeConfig = runtime ? runtime.provider === "openclaw" : false;
     return detailTabs.filter((tab) => {
+      if (tab.id === "mcp_config") return showMcp;
       if (tab.id === "integrations") return larkConfigured;
       if (tab.id === "runtime_config") return showRuntimeConfig;
       return true;
@@ -250,6 +258,15 @@ export function AgentOverviewPane({
             <CustomArgsTab
               agent={agent}
               runtimeDevice={runtime ?? undefined}
+              onSave={(updates) => onUpdate(agent.id, updates)}
+              onDirtyChange={setActiveDirty}
+            />
+          </TabContent>
+        )}
+        {effectiveTab === "mcp_config" && (
+          <TabContent>
+            <McpConfigTab
+              agent={agent}
               onSave={(updates) => onUpdate(agent.id, updates)}
               onDirtyChange={setActiveDirty}
             />

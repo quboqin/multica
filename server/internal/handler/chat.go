@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"log/slog"
@@ -23,6 +24,22 @@ import (
 // chatSessionTitleMaxLen caps the rename input. Long enough to fit a
 // meaningful summary, short enough to keep the dropdown row scannable.
 const chatSessionTitleMaxLen = 200
+
+func pruneRuntimeAgentChatDraftRestores(ctx context.Context, q *db.Queries, runtimeID pgtype.UUID, includeSystemAgents bool) error {
+	if _, err := q.LockChatSessionsByArchivedRuntimeAgents(ctx, runtimeID); err != nil {
+		return err
+	}
+	if err := q.DeleteChatDraftRestoresByArchivedRuntimeAgents(ctx, runtimeID); err != nil {
+		return err
+	}
+	if !includeSystemAgents {
+		return nil
+	}
+	if _, err := q.LockChatSessionsBySystemRuntimeAgents(ctx, runtimeID); err != nil {
+		return err
+	}
+	return q.DeleteChatDraftRestoresBySystemRuntimeAgents(ctx, runtimeID)
+}
 
 // ---------------------------------------------------------------------------
 // Chat Sessions

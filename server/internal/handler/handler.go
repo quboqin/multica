@@ -24,6 +24,7 @@ import (
 	"github.com/multica-ai/multica/server/internal/creative"
 	"github.com/multica-ai/multica/server/internal/daemonws"
 	"github.com/multica-ai/multica/server/internal/events"
+	composio "github.com/multica-ai/multica/server/internal/integrations/composio"
 	"github.com/multica-ai/multica/server/internal/integrations/lark"
 	obsmetrics "github.com/multica-ai/multica/server/internal/metrics"
 	"github.com/multica-ai/multica/server/internal/middleware"
@@ -32,6 +33,7 @@ import (
 	"github.com/multica-ai/multica/server/internal/storage"
 	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
+	"github.com/multica-ai/multica/server/pkg/featureflag"
 )
 
 // randomID returns a random 16-byte hex string used as a request ID for
@@ -106,12 +108,19 @@ type cloudRuntimeProxy interface {
 	Do(ctx context.Context, req cloudruntime.Request) (*cloudruntime.Response, error)
 }
 
+// RuntimeProfileRefreshNotifier asks connected daemons to refresh the custom
+// runtime profiles for a workspace after an administrator changes them.
+type RuntimeProfileRefreshNotifier interface {
+	NotifyRuntimeProfilesChanged(workspaceID, profileID string)
+}
+
 type Handler struct {
 	Queries               *db.Queries
 	DB                    dbExecutor
 	TxStarter             txStarter
 	Hub                   *realtime.Hub
 	DaemonHub             *daemonws.Hub
+	DaemonProfileRefresh  RuntimeProfileRefreshNotifier
 	Bus                   *events.Bus
 	TaskService           *service.TaskService
 	IssueService          *service.IssueService
@@ -122,6 +131,7 @@ type Handler struct {
 	LocalSkillListStore   LocalSkillListStore
 	LocalSkillImportStore LocalSkillImportStore
 	LivenessStore         LivenessStore
+	FeatureFlags          *featureflag.Service
 	HeartbeatScheduler    HeartbeatScheduler
 	Storage               storage.Storage
 	CFSigner              *auth.CloudFrontSigner
@@ -139,7 +149,10 @@ type Handler struct {
 	CloudRuntime            cloudRuntimeProxy
 	CredentialBroker        *broker.Service
 	CreativeAssetDownloader *creative.Downloader
-	creativePrimeMu         sync.Mutex
+	// Composio is nil unless an operator enables the optional integration.
+	// Ordinary agent MCP configuration remains independent of this service.
+	Composio        *composio.Service
+	creativePrimeMu sync.Mutex
 	// Lark integration. All three are nil when the Lark master key
 	// (MULTICA_LARK_SECRET_KEY) is unset; the corresponding HTTP
 	// handlers return 503 in that case so a misconfigured self-host

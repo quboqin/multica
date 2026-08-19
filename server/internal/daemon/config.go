@@ -104,6 +104,10 @@ type Config struct {
 	ClaudeArgs                     []string
 	CodexArgs                      []string
 	CodebuddyArgs                  []string
+	// ProfileCommandOverrides maps a workspace runtime profile to the absolute
+	// executable path chosen for this machine. Runtime profiles are shared, but
+	// executable installation paths are host-local.
+	ProfileCommandOverrides map[string]string
 }
 
 // Overrides allows CLI flags to override environment variables and defaults.
@@ -168,11 +172,22 @@ func LoadConfig(overrides Overrides) (Config, error) {
 	// file should not prevent daemon startup, since the daemon can still run
 	// purely from env-var configuration. We log a warning and proceed with
 	// no overrides.
+	var profileCommandOverrides map[string]string
 	if cliCfg, err := cli.LoadCLIConfigForProfile(overrides.Profile); err != nil {
 		slog.Warn("could not load CLI config for backend overrides; proceeding without",
 			"profile", overrides.Profile, "err", err)
-	} else if oc := openclawOverrideFrom(cliCfg); oc != nil {
-		applyOpenclawOverride(oc)
+	} else {
+		if oc := openclawOverrideFrom(cliCfg); oc != nil {
+			applyOpenclawOverride(oc)
+		}
+		if len(cliCfg.ProfileCommandOverrides) > 0 {
+			profileCommandOverrides = make(map[string]string, len(cliCfg.ProfileCommandOverrides))
+			for id, path := range cliCfg.ProfileCommandOverrides {
+				if strings.TrimSpace(id) != "" && strings.TrimSpace(path) != "" {
+					profileCommandOverrides[id] = path
+				}
+			}
+		}
 	}
 
 	// Probe available agent CLIs. exec.LookPath is the primary path, but on
@@ -524,6 +539,7 @@ func LoadConfig(overrides Overrides) (Config, error) {
 		ClaudeArgs:                     claudeArgs,
 		CodexArgs:                      codexArgs,
 		CodebuddyArgs:                  codebuddyArgs,
+		ProfileCommandOverrides:        profileCommandOverrides,
 	}, nil
 }
 

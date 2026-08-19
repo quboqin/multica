@@ -8,3 +8,4 @@ export * from "./constants";
 export * from "./visibility-label";
 export * from "./use-workspace-agent-availability";
 export * from "./openclaw-runtime-config";
+export * from "./mcp-support";

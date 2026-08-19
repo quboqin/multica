@@ -13,6 +13,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/multica-ai/multica/server/internal/service"
+	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
 func TestValidateCreativeProductionTaskContextAcceptsCurrentSizeAdjustment(t *testing.T) {
@@ -106,7 +107,10 @@ func TestClaimAgentTask_DirectFanoutParallelButQuickCreateSerial(t *testing.T) {
 	})
 
 	for i := 0; i < 2; i++ {
-		task, err := testHandler.Queries.ClaimAgentTask(ctx, parseUUID(agentID))
+		task, err := testHandler.Queries.ClaimAgentTask(ctx, db.ClaimAgentTaskParams{
+			AgentID:          parseUUID(agentID),
+			PrepareLeaseSecs: 45,
+		})
 		if err != nil {
 			t.Fatalf("claim direct task %d: %v", i, err)
 		}
@@ -115,14 +119,20 @@ func TestClaimAgentTask_DirectFanoutParallelButQuickCreateSerial(t *testing.T) {
 		}
 	}
 
-	quick, err := testHandler.Queries.ClaimAgentTask(ctx, parseUUID(agentID))
+	quick, err := testHandler.Queries.ClaimAgentTask(ctx, db.ClaimAgentTaskParams{
+		AgentID:          parseUUID(agentID),
+		PrepareLeaseSecs: 45,
+	})
 	if err != nil {
 		t.Fatalf("quick-create must claim while direct tasks run: %v", err)
 	}
 	if _, err := testHandler.Queries.StartAgentTask(ctx, quick.ID); err != nil {
 		t.Fatalf("start quick-create: %v", err)
 	}
-	if _, err := testHandler.Queries.ClaimAgentTask(ctx, parseUUID(agentID)); !errors.Is(err, pgx.ErrNoRows) {
+	if _, err := testHandler.Queries.ClaimAgentTask(ctx, db.ClaimAgentTaskParams{
+		AgentID:          parseUUID(agentID),
+		PrepareLeaseSecs: 45,
+	}); !errors.Is(err, pgx.ErrNoRows) {
 		t.Fatalf("second quick-create claim error = %v, want no rows", err)
 	}
 }

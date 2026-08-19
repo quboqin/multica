@@ -121,3 +121,7 @@ JOIN project_to_label pl ON pl.label_id = l.id
 WHERE pl.project_id = ANY(sqlc.arg('project_ids')::uuid[])
   AND l.workspace_id = sqlc.arg('workspace_id')::uuid
 ORDER BY pl.project_id, LOWER(l.name) ASC;
+
+-- name: DeleteAgentLabelAssignmentsByRuntime :exec
+DELETE FROM agent_to_label
+WHERE agent_id IN (SELECT id FROM agent WHERE runtime_id = $1);

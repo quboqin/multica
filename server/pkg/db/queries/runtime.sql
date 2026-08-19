@@ -57,6 +57,24 @@ DO UPDATE SET
     updated_at = now()
 RETURNING *, (xmax = 0) AS inserted;
 
+-- name: UpsertAgentRuntimeWithProfile :one
+INSERT INTO agent_runtime (
+    workspace_id, daemon_id, name, runtime_mode, provider, status,
+    device_info, metadata, owner_id, profile_id, last_seen_at
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, now())
+ON CONFLICT (workspace_id, daemon_id, profile_id) WHERE profile_id IS NOT NULL
+DO UPDATE SET
+    name = EXCLUDED.name,
+    runtime_mode = EXCLUDED.runtime_mode,
+    provider = EXCLUDED.provider,
+    status = EXCLUDED.status,
+    device_info = EXCLUDED.device_info,
+    metadata = EXCLUDED.metadata,
+    owner_id = COALESCE(EXCLUDED.owner_id, agent_runtime.owner_id),
+    last_seen_at = now(),
+    updated_at = now()
+RETURNING *, (xmax = 0) AS inserted;
+
 -- name: UpdateAgentRuntimeVisibility :one
 -- Toggles a runtime between 'private' (only owner can bind agents) and
 -- 'public' (any workspace member can). Default for new rows is 'private'

@@ -102,7 +102,8 @@ INSERT INTO agent_task_queue (
     agent_id, runtime_id, issue_id, status, priority, chat_session_id,
     initiator_user_id, requesting_user_id,
     originator_user_id, accountable_user_id, originator_source,
-    trigger_evidence_kind, trigger_evidence_ref_id
+    trigger_evidence_kind, trigger_evidence_ref_id,
+    runtime_mcp_overlay, runtime_connected_apps
 )
 SELECT
     $1, $2, NULL, 'queued', $3, $4,
@@ -111,7 +112,9 @@ SELECT
     $8,
     $9,
     $10,
-    $11
+    $11,
+    $12,
+    $13
 WHERE EXISTS (
     SELECT 1 FROM chat_session
     WHERE id = $4 AND is_active = TRUE
@@ -132,6 +135,8 @@ type CreateChatTaskParams struct {
 	OriginatorSource     pgtype.Text `json:"originator_source"`
 	TriggerEvidenceKind  pgtype.Text `json:"trigger_evidence_kind"`
 	TriggerEvidenceRefID pgtype.UUID `json:"trigger_evidence_ref_id"`
+	RuntimeMcpOverlay    []byte      `json:"runtime_mcp_overlay"`
+	RuntimeConnectedApps []byte      `json:"runtime_connected_apps"`
 }
 
 func (q *Queries) CreateChatTask(ctx context.Context, arg CreateChatTaskParams) (AgentTaskQueue, error) {
@@ -147,6 +152,8 @@ func (q *Queries) CreateChatTask(ctx context.Context, arg CreateChatTaskParams) 
 		arg.OriginatorSource,
 		arg.TriggerEvidenceKind,
 		arg.TriggerEvidenceRefID,
+		arg.RuntimeMcpOverlay,
+		arg.RuntimeConnectedApps,
 	)
 	var i AgentTaskQueue
 	err := row.Scan(
@@ -200,6 +207,34 @@ func (q *Queries) CreateChatTask(ctx context.Context, arg CreateChatTaskParams) 
 		&i.RequestingUserID,
 	)
 	return i, err
+}
+
+const deleteChatDraftRestoresByArchivedRuntimeAgents = `-- name: DeleteChatDraftRestoresByArchivedRuntimeAgents :exec
+DELETE FROM chat_draft_restore
+WHERE chat_session_id IN (
+    SELECT cs.id FROM chat_session cs
+    JOIN agent a ON a.id = cs.agent_id
+    WHERE a.runtime_id = $1 AND a.archived_at IS NOT NULL
+)
+`
+
+func (q *Queries) DeleteChatDraftRestoresByArchivedRuntimeAgents(ctx context.Context, runtimeID pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, deleteChatDraftRestoresByArchivedRuntimeAgents, runtimeID)
+	return err
+}
+
+const deleteChatDraftRestoresBySystemRuntimeAgents = `-- name: DeleteChatDraftRestoresBySystemRuntimeAgents :exec
+DELETE FROM chat_draft_restore
+WHERE chat_session_id IN (
+    SELECT cs.id FROM chat_session cs
+    JOIN agent a ON a.id = cs.agent_id
+    WHERE a.runtime_id = $1 AND a.kind = 'system'
+)
+`
+
+func (q *Queries) DeleteChatDraftRestoresBySystemRuntimeAgents(ctx context.Context, runtimeID pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, deleteChatDraftRestoresBySystemRuntimeAgents, runtimeID)
+	return err
 }
 
 const deleteChatSession = `-- name: DeleteChatSession :execrows
@@ -745,6 +780,62 @@ func (q *Queries) LockChatSessionForDelete(ctx context.Context, id pgtype.UUID) 
 	var id_2 pgtype.UUID
 	err := row.Scan(&id_2)
 	return id_2, err
+}
+
+const lockChatSessionsByArchivedRuntimeAgents = `-- name: LockChatSessionsByArchivedRuntimeAgents :many
+SELECT cs.id FROM chat_session cs
+JOIN agent a ON a.id = cs.agent_id
+WHERE a.runtime_id = $1 AND a.archived_at IS NOT NULL
+ORDER BY cs.id
+FOR UPDATE OF cs
+`
+
+func (q *Queries) LockChatSessionsByArchivedRuntimeAgents(ctx context.Context, runtimeID pgtype.UUID) ([]pgtype.UUID, error) {
+	rows, err := q.db.Query(ctx, lockChatSessionsByArchivedRuntimeAgents, runtimeID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []pgtype.UUID{}
+	for rows.Next() {
+		var id pgtype.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const lockChatSessionsBySystemRuntimeAgents = `-- name: LockChatSessionsBySystemRuntimeAgents :many
+SELECT cs.id FROM chat_session cs
+JOIN agent a ON a.id = cs.agent_id
+WHERE a.runtime_id = $1 AND a.kind = 'system'
+ORDER BY cs.id
+FOR UPDATE OF cs
+`
+
+func (q *Queries) LockChatSessionsBySystemRuntimeAgents(ctx context.Context, runtimeID pgtype.UUID) ([]pgtype.UUID, error) {
+	rows, err := q.db.Query(ctx, lockChatSessionsBySystemRuntimeAgents, runtimeID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []pgtype.UUID{}
+	for rows.Next() {
+		var id pgtype.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const markChatSessionRead = `-- name: MarkChatSessionRead :exec

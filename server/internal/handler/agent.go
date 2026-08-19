@@ -33,16 +33,18 @@ import (
 const maxAgentDescriptionLength = 255
 
 type AgentResponse struct {
-	ID            string   `json:"id"`
-	WorkspaceID   string   `json:"workspace_id"`
-	RuntimeID     string   `json:"runtime_id"`
-	Name          string   `json:"name"`
-	Description   string   `json:"description"`
-	Instructions  string   `json:"instructions"`
-	AvatarURL     *string  `json:"avatar_url"`
-	RuntimeMode   string   `json:"runtime_mode"`
-	RuntimeConfig any      `json:"runtime_config"`
-	CustomArgs    []string `json:"custom_args"`
+	ID                string          `json:"id"`
+	WorkspaceID       string          `json:"workspace_id"`
+	RuntimeID         string          `json:"runtime_id"`
+	Name              string          `json:"name"`
+	Description       string          `json:"description"`
+	Instructions      string          `json:"instructions"`
+	AvatarURL         *string         `json:"avatar_url"`
+	RuntimeMode       string          `json:"runtime_mode"`
+	RuntimeConfig     any             `json:"runtime_config"`
+	CustomArgs        []string        `json:"custom_args"`
+	McpConfig         json.RawMessage `json:"mcp_config,omitempty"`
+	McpConfigRedacted bool            `json:"mcp_config_redacted,omitempty"`
 	// custom_env is intentionally NOT serialized on agent resources. The
 	// agent_list/get/create/update/archive/restore responses and WS events
 	// only expose coarse metadata (has_custom_env, custom_env_key_count) so
@@ -59,14 +61,16 @@ type AgentResponse struct {
 	// ThinkingLevel is the runtime-native reasoning/effort token persisted
 	// for this agent (empty = use runtime default). The picker is per-runtime
 	// per-model; the API never normalizes across providers. See MUL-2339.
-	ThinkingLevel string              `json:"thinking_level"`
-	OwnerID       *string             `json:"owner_id"`
-	Skills        []AgentSkillSummary `json:"skills"`
-	Labels        []LabelResponse     `json:"labels"`
-	CreatedAt     string              `json:"created_at"`
-	UpdatedAt     string              `json:"updated_at"`
-	ArchivedAt    *string             `json:"archived_at"`
-	ArchivedBy    *string             `json:"archived_by"`
+	ThinkingLevel                    string              `json:"thinking_level"`
+	ComposioToolkitAllowlist         []string            `json:"composio_toolkit_allowlist,omitempty"`
+	ComposioToolkitAllowlistRedacted bool                `json:"composio_toolkit_allowlist_redacted,omitempty"`
+	OwnerID                          *string             `json:"owner_id"`
+	Skills                           []AgentSkillSummary `json:"skills"`
+	Labels                           []LabelResponse     `json:"labels"`
+	CreatedAt                        string              `json:"created_at"`
+	UpdatedAt                        string              `json:"updated_at"`
+	ArchivedAt                       *string             `json:"archived_at"`
+	ArchivedBy                       *string             `json:"archived_by"`
 }
 
 // runtimeConfigGatewayTokenMask is the placeholder the API substitutes for
@@ -112,31 +116,38 @@ func agentToResponse(a db.Agent) AgentResponse {
 		customArgs = []string{}
 	}
 
+	var mcpConfig json.RawMessage
+	if a.McpConfig != nil {
+		mcpConfig = json.RawMessage(a.McpConfig)
+	}
+
 	return AgentResponse{
-		ID:                 uuidToString(a.ID),
-		WorkspaceID:        uuidToString(a.WorkspaceID),
-		RuntimeID:          uuidToString(a.RuntimeID),
-		Name:               a.Name,
-		Description:        a.Description,
-		Instructions:       a.Instructions,
-		AvatarURL:          textToPtr(a.AvatarUrl),
-		RuntimeMode:        a.RuntimeMode,
-		RuntimeConfig:      rc,
-		CustomArgs:         customArgs,
-		HasCustomEnv:       envKeyCount > 0,
-		CustomEnvKeyCount:  envKeyCount,
-		Visibility:         a.Visibility,
-		Status:             a.Status,
-		MaxConcurrentTasks: a.MaxConcurrentTasks,
-		Model:              a.Model.String,
-		ThinkingLevel:      a.ThinkingLevel.String,
-		OwnerID:            uuidToPtr(a.OwnerID),
-		Skills:             []AgentSkillSummary{},
-		Labels:             []LabelResponse{},
-		CreatedAt:          timestampToString(a.CreatedAt),
-		UpdatedAt:          timestampToString(a.UpdatedAt),
-		ArchivedAt:         timestampToPtr(a.ArchivedAt),
-		ArchivedBy:         uuidToPtr(a.ArchivedBy),
+		ID:                       uuidToString(a.ID),
+		WorkspaceID:              uuidToString(a.WorkspaceID),
+		RuntimeID:                uuidToString(a.RuntimeID),
+		Name:                     a.Name,
+		Description:              a.Description,
+		Instructions:             a.Instructions,
+		AvatarURL:                textToPtr(a.AvatarUrl),
+		RuntimeMode:              a.RuntimeMode,
+		RuntimeConfig:            rc,
+		CustomArgs:               customArgs,
+		McpConfig:                mcpConfig,
+		HasCustomEnv:             envKeyCount > 0,
+		CustomEnvKeyCount:        envKeyCount,
+		Visibility:               a.Visibility,
+		Status:                   a.Status,
+		MaxConcurrentTasks:       a.MaxConcurrentTasks,
+		Model:                    a.Model.String,
+		ThinkingLevel:            a.ThinkingLevel.String,
+		ComposioToolkitAllowlist: a.ComposioToolkitAllowlist,
+		OwnerID:                  uuidToPtr(a.OwnerID),
+		Skills:                   []AgentSkillSummary{},
+		Labels:                   []LabelResponse{},
+		CreatedAt:                timestampToString(a.CreatedAt),
+		UpdatedAt:                timestampToString(a.UpdatedAt),
+		ArchivedAt:               timestampToPtr(a.ArchivedAt),
+		ArchivedBy:               uuidToPtr(a.ArchivedBy),
 	}
 }
 
@@ -743,6 +754,16 @@ func (h *Handler) ListAgents(w http.ResponseWriter, r *http.Request) {
 		if labels, ok := labelMap[resp.ID]; ok {
 			resp.Labels = labels
 		}
+		if actorType == "agent" || uuidToString(a.OwnerID) != userID {
+			redactMcpConfig(&resp)
+			if h.composioMCPAppsEnabled(r.Context()) {
+				redactComposioToolkitAllowlist(&resp)
+			} else {
+				suppressComposioToolkitAllowlist(&resp)
+			}
+		} else if !h.composioMCPAppsEnabled(r.Context()) {
+			suppressComposioToolkitAllowlist(&resp)
+		}
 		visible = append(visible, resp)
 	}
 
@@ -783,23 +804,35 @@ func (h *Handler) GetAgent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	resp.Labels = labelsToResponse(labels)
+	if actorType == "agent" || uuidToString(agent.OwnerID) != requestUserID(r) {
+		redactMcpConfig(&resp)
+		if h.composioMCPAppsEnabled(r.Context()) {
+			redactComposioToolkitAllowlist(&resp)
+		} else {
+			suppressComposioToolkitAllowlist(&resp)
+		}
+	} else if !h.composioMCPAppsEnabled(r.Context()) {
+		suppressComposioToolkitAllowlist(&resp)
+	}
 
 	writeJSON(w, http.StatusOK, resp)
 }
 
 type CreateAgentRequest struct {
-	Name               string            `json:"name"`
-	Description        string            `json:"description"`
-	Instructions       string            `json:"instructions"`
-	AvatarURL          *string           `json:"avatar_url"`
-	RuntimeID          string            `json:"runtime_id"`
-	RuntimeConfig      any               `json:"runtime_config"`
-	CustomEnv          map[string]string `json:"custom_env"`
-	CustomArgs         []string          `json:"custom_args"`
-	Visibility         string            `json:"visibility"`
-	MaxConcurrentTasks int32             `json:"max_concurrent_tasks"`
-	Model              string            `json:"model"`
-	ThinkingLevel      string            `json:"thinking_level"`
+	Name                     string            `json:"name"`
+	Description              string            `json:"description"`
+	Instructions             string            `json:"instructions"`
+	AvatarURL                *string           `json:"avatar_url"`
+	RuntimeID                string            `json:"runtime_id"`
+	RuntimeConfig            any               `json:"runtime_config"`
+	CustomEnv                map[string]string `json:"custom_env"`
+	CustomArgs               []string          `json:"custom_args"`
+	McpConfig                json.RawMessage   `json:"mcp_config"`
+	ComposioToolkitAllowlist []string          `json:"composio_toolkit_allowlist"`
+	Visibility               string            `json:"visibility"`
+	MaxConcurrentTasks       int32             `json:"max_concurrent_tasks"`
+	Model                    string            `json:"model"`
+	ThinkingLevel            string            `json:"thinking_level"`
 	// Template records which template slug was used to seed this agent
 	// (e.g. "coding" / "planning" / "writing" / "assistant"). Empty when
 	// the caller didn't come from a template picker — the `agent_created`
@@ -927,23 +960,29 @@ func (h *Handler) CreateAgent(w http.ResponseWriter, r *http.Request) {
 	if req.CustomArgs == nil {
 		ca = []byte("[]")
 	}
+	allowlist := normaliseComposioToolkitAllowlist(req.ComposioToolkitAllowlist)
+	if !h.composioMCPAppsEnabled(r.Context()) {
+		allowlist = nil
+	}
 
 	created, err := h.Queries.CreateAgent(r.Context(), db.CreateAgentParams{
-		WorkspaceID:        wsUUID,
-		Name:               req.Name,
-		Description:        req.Description,
-		Instructions:       req.Instructions,
-		AvatarUrl:          ptrToText(req.AvatarURL),
-		RuntimeMode:        runtime.RuntimeMode,
-		RuntimeConfig:      rc,
-		RuntimeID:          runtime.ID,
-		Visibility:         req.Visibility,
-		MaxConcurrentTasks: req.MaxConcurrentTasks,
-		OwnerID:            parseUUID(ownerID),
-		CustomEnv:          ce,
-		CustomArgs:         ca,
-		Model:              pgtype.Text{String: req.Model, Valid: req.Model != ""},
-		ThinkingLevel:      pgtype.Text{String: req.ThinkingLevel, Valid: req.ThinkingLevel != ""},
+		WorkspaceID:              wsUUID,
+		Name:                     req.Name,
+		Description:              req.Description,
+		Instructions:             req.Instructions,
+		AvatarUrl:                ptrToText(req.AvatarURL),
+		RuntimeMode:              runtime.RuntimeMode,
+		RuntimeConfig:            rc,
+		RuntimeID:                runtime.ID,
+		Visibility:               req.Visibility,
+		MaxConcurrentTasks:       req.MaxConcurrentTasks,
+		OwnerID:                  parseUUID(ownerID),
+		CustomEnv:                ce,
+		CustomArgs:               ca,
+		McpConfig:                req.McpConfig,
+		Model:                    pgtype.Text{String: req.Model, Valid: req.Model != ""},
+		ThinkingLevel:            pgtype.Text{String: req.ThinkingLevel, Valid: req.ThinkingLevel != ""},
+		ComposioToolkitAllowlist: allowlist,
 	})
 	if err != nil {
 		// Unique constraint on (workspace_id, name) — return a clear conflict error
@@ -979,6 +1018,9 @@ func (h *Handler) CreateAgent(w http.ResponseWriter, r *http.Request) {
 	))
 
 	redactAgentResponseForActor(&resp, actorType)
+	if !h.composioMCPAppsEnabled(r.Context()) {
+		suppressComposioToolkitAllowlist(&resp)
+	}
 	writeJSON(w, http.StatusCreated, resp)
 }
 
@@ -998,11 +1040,13 @@ type UpdateAgentRequest struct {
 	// actually unchanged, and so a client that round-tripped a
 	// previously-returned masked map cannot silently overwrite real
 	// secret values with literal `****`. See MUL-2600.
-	CustomArgs         *[]string `json:"custom_args"`
-	Visibility         *string   `json:"visibility"`
-	Status             *string   `json:"status"`
-	MaxConcurrentTasks *int32    `json:"max_concurrent_tasks"`
-	Model              *string   `json:"model"`
+	CustomArgs               *[]string        `json:"custom_args"`
+	McpConfig                *json.RawMessage `json:"mcp_config"`
+	ComposioToolkitAllowlist *[]string        `json:"composio_toolkit_allowlist"`
+	Visibility               *string          `json:"visibility"`
+	Status                   *string          `json:"status"`
+	MaxConcurrentTasks       *int32           `json:"max_concurrent_tasks"`
+	Model                    *string          `json:"model"`
 	// ThinkingLevel is treated as a tri-state per-MUL-2339:
 	//   - field omitted → no change (leave existing value alone)
 	//   - field present with "" → explicit clear (use runtime default)
@@ -1014,6 +1058,8 @@ type UpdateAgentRequest struct {
 
 func broadcastAgentResponse(resp AgentResponse) AgentResponse {
 	out := resp
+	redactMcpConfig(&out)
+	redactComposioToolkitAllowlist(&out)
 	// Belt-and-suspenders: agentToResponse already masks gateway.token on
 	// every read, so by the time a response reaches this broadcast helper
 	// the field is already "***". Re-mask anyway so a future refactor that
@@ -1025,6 +1071,49 @@ func broadcastAgentResponse(resp AgentResponse) AgentResponse {
 }
 
 func redactAgentResponseForActor(resp *AgentResponse, actorType string) {
+	if actorType == "agent" {
+		redactMcpConfig(resp)
+		redactComposioToolkitAllowlist(resp)
+	}
+}
+
+func redactMcpConfig(resp *AgentResponse) {
+	if resp.McpConfig != nil {
+		resp.McpConfig = nil
+		resp.McpConfigRedacted = true
+	}
+}
+
+func redactComposioToolkitAllowlist(resp *AgentResponse) {
+	if resp.ComposioToolkitAllowlist != nil {
+		resp.ComposioToolkitAllowlist = nil
+		resp.ComposioToolkitAllowlistRedacted = true
+	}
+}
+
+func suppressComposioToolkitAllowlist(resp *AgentResponse) {
+	resp.ComposioToolkitAllowlist = nil
+	resp.ComposioToolkitAllowlistRedacted = false
+}
+
+func normaliseComposioToolkitAllowlist(in []string) []string {
+	if in == nil {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(in))
+	out := make([]string, 0, len(in))
+	for _, raw := range in {
+		value := strings.ToLower(strings.TrimSpace(raw))
+		if value == "" {
+			continue
+		}
+		if _, exists := seen[value]; exists {
+			continue
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
+	}
+	return out
 }
 
 // canManageAgent checks whether the current user can update or archive an agent.
@@ -1105,6 +1194,22 @@ func (h *Handler) UpdateAgent(w http.ResponseWriter, r *http.Request) {
 	if req.CustomArgs != nil {
 		ca, _ := json.Marshal(*req.CustomArgs)
 		params.CustomArgs = ca
+	}
+	shouldClearMcpConfig := false
+	if _, present := rawFields["mcp_config"]; present {
+		if req.McpConfig == nil {
+			shouldClearMcpConfig = true
+		} else {
+			params.McpConfig = *req.McpConfig
+		}
+	}
+	shouldClearComposioAllowlist := false
+	if _, present := rawFields["composio_toolkit_allowlist"]; present && h.composioMCPAppsEnabled(r.Context()) && uuidToString(existing.OwnerID) == requestUserID(r) {
+		if req.ComposioToolkitAllowlist == nil {
+			shouldClearComposioAllowlist = true
+		} else {
+			params.ComposioToolkitAllowlist = normaliseComposioToolkitAllowlist(*req.ComposioToolkitAllowlist)
+		}
 	}
 	// Resolve the runtime that will be in force after this update so the
 	// thinking_level validation hits the right provider enum. When the
@@ -1222,6 +1327,22 @@ func (h *Handler) UpdateAgent(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	if shouldClearMcpConfig {
+		updated, err = h.Queries.ClearAgentMcpConfig(r.Context(), updated.ID)
+		if err != nil {
+			slog.Warn("clear agent mcp config failed", append(logger.RequestAttrs(r), "error", err, "agent_id", id)...)
+			writeError(w, http.StatusInternalServerError, "failed to clear agent MCP config")
+			return
+		}
+	}
+	if shouldClearComposioAllowlist {
+		updated, err = h.Queries.ClearAgentComposioToolkitAllowlist(r.Context(), updated.ID)
+		if err != nil {
+			slog.Warn("clear agent composio allowlist failed", append(logger.RequestAttrs(r), "error", err, "agent_id", id)...)
+			writeError(w, http.StatusInternalServerError, "failed to clear composio toolkit allowlist")
+			return
+		}
+	}
 
 	resp := agentToResponse(updated)
 	// agentToResponse always initialises Skills as []; junction-table rows
@@ -1239,6 +1360,11 @@ func (h *Handler) UpdateAgent(w http.ResponseWriter, r *http.Request) {
 	actorType, actorID := h.resolveActor(r, userID, uuidToString(updated.WorkspaceID))
 	h.publish(protocol.EventAgentStatus, uuidToString(updated.WorkspaceID), actorType, actorID, map[string]any{"agent": broadcastAgentResponse(resp)})
 	redactAgentResponseForActor(&resp, actorType)
+	if !h.composioMCPAppsEnabled(r.Context()) {
+		suppressComposioToolkitAllowlist(&resp)
+	} else if uuidToString(updated.OwnerID) != userID {
+		redactComposioToolkitAllowlist(&resp)
+	}
 	writeJSON(w, http.StatusOK, resp)
 }
 

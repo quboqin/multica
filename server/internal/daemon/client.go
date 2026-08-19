@@ -167,6 +167,12 @@ func (c *Client) StartTask(ctx context.Context, taskID string) error {
 	return c.postJSON(ctx, fmt.Sprintf("/api/daemon/tasks/%s/start", taskID), map[string]any{}, nil)
 }
 
+// ExtendTaskPrepareLease keeps a claimed task recoverable while the daemon is
+// still preparing its execution environment and has not called StartTask.
+func (c *Client) ExtendTaskPrepareLease(ctx context.Context, runtimeID, taskID string) error {
+	return c.postJSON(ctx, fmt.Sprintf("/api/daemon/runtimes/%s/tasks/%s/prepare-lease", runtimeID, taskID), map[string]any{}, nil)
+}
+
 // MarkTaskWaitingLocalDirectory parks a freshly-dispatched task in the
 // waiting_local_directory state on the server. The daemon calls this after
 // it has claimed a task whose project carries a local_directory resource
@@ -454,9 +460,37 @@ type WorkspaceReposResponse struct {
 	Settings     json.RawMessage `json:"settings,omitempty"`
 }
 
+// RuntimeProfile is a workspace-defined runtime command. ProtocolFamily
+// selects an existing agent adapter while CommandName is resolved locally by
+// the daemon that hosts the profile.
+type RuntimeProfile struct {
+	ID             string   `json:"id"`
+	WorkspaceID    string   `json:"workspace_id"`
+	DisplayName    string   `json:"display_name"`
+	ProtocolFamily string   `json:"protocol_family"`
+	CommandName    string   `json:"command_name"`
+	Description    *string  `json:"description"`
+	FixedArgs      []string `json:"fixed_args"`
+	Visibility     string   `json:"visibility"`
+	Enabled        bool     `json:"enabled"`
+}
+
+type RuntimeProfilesResponse struct {
+	WorkspaceID     string           `json:"workspace_id"`
+	RuntimeProfiles []RuntimeProfile `json:"runtime_profiles"`
+}
+
 func (c *Client) GetWorkspaceRepos(ctx context.Context, workspaceID string) (*WorkspaceReposResponse, error) {
 	var resp WorkspaceReposResponse
 	if err := c.getJSON(ctx, fmt.Sprintf("/api/daemon/workspaces/%s/repos", workspaceID), &resp); err != nil {
+		return nil, err
+	}
+	return &resp, nil
+}
+
+func (c *Client) GetRuntimeProfiles(ctx context.Context, workspaceID string) (*RuntimeProfilesResponse, error) {
+	var resp RuntimeProfilesResponse
+	if err := c.getJSON(ctx, fmt.Sprintf("/api/daemon/workspaces/%s/runtime-profiles", workspaceID), &resp); err != nil {
 		return nil, err
 	}
 	return &resp, nil

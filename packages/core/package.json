@@ -51,6 +51,8 @@
     "./chat/queries": "./chat/queries.ts",
     "./chat/mutations": "./chat/mutations.ts",
     "./runtimes": "./runtimes/index.ts",
+    "./composio": "./composio/index.ts",
+    "./composio/queries": "./composio/queries.ts",
     "./runtimes/queries": "./runtimes/queries.ts",
     "./runtimes/mutations": "./runtimes/mutations.ts",
     "./runtimes/hooks": "./runtimes/hooks.ts",

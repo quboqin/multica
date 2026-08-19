@@ -99,6 +99,16 @@ func (q *Queries) CreateLabel(ctx context.Context, arg CreateLabelParams) (Issue
 	return i, err
 }
 
+const deleteAgentLabelAssignmentsByRuntime = `-- name: DeleteAgentLabelAssignmentsByRuntime :exec
+DELETE FROM agent_to_label
+WHERE agent_id IN (SELECT id FROM agent WHERE runtime_id = $1)
+`
+
+func (q *Queries) DeleteAgentLabelAssignmentsByRuntime(ctx context.Context, runtimeID pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, deleteAgentLabelAssignmentsByRuntime, runtimeID)
+	return err
+}
+
 const deleteLabel = `-- name: DeleteLabel :one
 DELETE FROM issue_label
 WHERE id = $1 AND workspace_id = $2

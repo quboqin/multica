@@ -49,6 +49,7 @@ type Agent struct {
 	PermissionMode string      `json:"permission_mode"`
 	Kind           string      `json:"kind"`
 	SystemKey      pgtype.Text `json:"system_key"`
+	McpConfig      []byte      `json:"mcp_config"`
 }
 
 // Allow-list of who may invoke a public_to agent (MUL-3963). One row per (agent, target_type, target); targets stack and canInvokeAgent OR-matches. workspace rows store the agent workspace_id in target_id; member rows store the user id; team rows are reserved and inert in V1. Rows only matter when agent.permission_mode = public_to. No DB foreign keys: agent_id / created_by / member target_id relationships are maintained in the application layer (see migration comment).
@@ -483,6 +484,26 @@ type CreativeDelivery struct {
 	UpdatedAt                 pgtype.Timestamptz `json:"updated_at"`
 }
 
+type CreativeFactoryInstallation struct {
+	WorkspaceID          pgtype.UUID        `json:"workspace_id"`
+	Status               string             `json:"status"`
+	SchemaVersion        int32              `json:"schema_version"`
+	TemplateVersion      int32              `json:"template_version"`
+	RuntimeID            pgtype.UUID        `json:"runtime_id"`
+	MarketPackID         pgtype.UUID        `json:"market_pack_id"`
+	CopyLibraryID        pgtype.UUID        `json:"copy_library_id"`
+	SquadID              pgtype.UUID        `json:"squad_id"`
+	OrchestrationSkillID pgtype.UUID        `json:"orchestration_skill_id"`
+	RoleAgents           []byte             `json:"role_agents"`
+	RoleSkills           []byte             `json:"role_skills"`
+	Config               []byte             `json:"config"`
+	InitializedBy        pgtype.UUID        `json:"initialized_by"`
+	InitializedAt        pgtype.Timestamptz `json:"initialized_at"`
+	LastError            string             `json:"last_error"`
+	CreatedAt            pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt            pgtype.Timestamptz `json:"updated_at"`
+}
+
 type CreativeFeedbackEvent struct {
 	ID              pgtype.UUID        `json:"id"`
 	WorkspaceID     pgtype.UUID        `json:"workspace_id"`
@@ -581,6 +602,7 @@ type CreativeMaterialCrawlRun struct {
 	FinishedAt     pgtype.Timestamptz `json:"finished_at"`
 	ErrorCode      string             `json:"error_code"`
 	ErrorMessage   string             `json:"error_message"`
+	Diagnostics    []byte             `json:"diagnostics"`
 }
 
 type CreativeMaterialCrawlRunCandidate struct {
@@ -657,6 +679,21 @@ type CreativeOrderAsset struct {
 	Status             string             `json:"status"`
 	CreatedAt          pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt          pgtype.Timestamptz `json:"updated_at"`
+}
+
+type CreativeOrderDiagnosticAsset struct {
+	ID           pgtype.UUID        `json:"id"`
+	VariantID    pgtype.UUID        `json:"variant_id"`
+	TaskID       pgtype.UUID        `json:"task_id"`
+	AttachmentID pgtype.UUID        `json:"attachment_id"`
+	SizeKey      string             `json:"size_key"`
+	Revision     int32              `json:"revision"`
+	Workflow     string             `json:"workflow"`
+	Label        string             `json:"label"`
+	Filename     string             `json:"filename"`
+	Metadata     []byte             `json:"metadata"`
+	CreatedAt    pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt    pgtype.Timestamptz `json:"updated_at"`
 }
 
 type CreativeOrderItem struct {
@@ -1524,6 +1561,15 @@ type Workspace struct {
 	AvatarUrl    pgtype.Text        `json:"avatar_url"`
 	// When TRUE, an agent run that resolves to no precise accountable human (would be owner_fallback) is refused at enqueue instead of degrading to the agent owner (MUL-4302 §3.5). Default FALSE = owner_fallback. Never affects authorization (originator_user_id).
 	AttributionFailClosed bool `json:"attribution_fail_closed"`
+}
+
+type WorkspaceCapability struct {
+	WorkspaceID   pgtype.UUID        `json:"workspace_id"`
+	CapabilityKey string             `json:"capability_key"`
+	Enabled       bool               `json:"enabled"`
+	UpdatedBy     pgtype.UUID        `json:"updated_by"`
+	CreatedAt     pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt     pgtype.Timestamptz `json:"updated_at"`
 }
 
 type WorkspaceInvitation struct {

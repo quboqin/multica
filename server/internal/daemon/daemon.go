@@ -20,6 +20,7 @@ import (
 	"github.com/multica-ai/multica/server/internal/daemon/execenv"
 	"github.com/multica-ai/multica/server/internal/daemon/repocache"
 	"github.com/multica-ai/multica/server/internal/previewruntime"
+	"github.com/multica-ai/multica/server/internal/selfexec"
 	"github.com/multica-ai/multica/server/pkg/agent"
 	"github.com/multica-ai/multica/server/pkg/taskfailure"
 )
@@ -35,9 +36,23 @@ var ErrRepoNotConfigured = errors.New("repo is not configured for this workspace
 // back to the machine owner's SSH key or credential helper.
 var ErrGitTokenRequired = repocache.ErrGitTokenRequired
 
+// errTaskPrepareTimeout distinguishes the daemon's dispatched -> running
+// startup deadline from provider execution timeouts. handleTask maps it to the
+// platform-side timeout failure reason so the server's existing retry path can
+// recover the task on a fresh attempt.
+var errTaskPrepareTimeout = errors.New("task preparation timed out")
+
 const (
 	taskSlotWaitTimeout     = 2 * time.Second
 	taskSlotCapacityBackoff = 5 * time.Second
+	// defaultTaskPrepareTimeout bounds everything after claim and before
+	// StartTask succeeds. It is separate from provider execution timeouts.
+	defaultTaskPrepareTimeout = 5 * time.Minute
+)
+
+var (
+	taskPrepareLeaseRefresh = 15 * time.Second
+	taskPrepareLeaseTimeout = 10 * time.Second
 )
 
 func taskScopedAuthToken(task Task) (string, error) {
@@ -65,10 +80,21 @@ func (f taskRunnerFunc) run(ctx context.Context, task Task, provider string, slo
 	return f(ctx, task, provider, slot, log)
 }
 
+type executionEnvironmentCommand func() ([]string, error)
+
+func defaultExecutionEnvironmentCommand() ([]string, error) {
+	executable, err := resolveSelfExecutable()
+	if err != nil {
+		return nil, fmt.Errorf("resolve execution-environment helper: %w", err)
+	}
+	return []string{executable, execenv.PreparationHelperArg}, nil
+}
+
 var (
-	isBrewInstall        = cli.IsBrewInstall
-	getBrewPrefix        = cli.GetBrewPrefix
-	matchKnownBrewPrefix = cli.MatchKnownBrewPrefix
+	isBrewInstall         = cli.IsBrewInstall
+	getBrewPrefix         = cli.GetBrewPrefix
+	matchKnownBrewPrefix  = cli.MatchKnownBrewPrefix
+	resolveSelfExecutable = selfexec.Resolve
 
 	// detectAgentVersion / checkAgentMinVersion are indirections over the
 	// real agent helpers so tests can run the registration path without
@@ -88,6 +114,7 @@ var (
 type workspaceState struct {
 	workspaceID     string
 	runtimeIDs      []string
+	profileSetSig   string
 	reposVersion    string // stored for future use: skip refresh when version unchanged
 	allowedRepoURLs map[string]struct{}
 	taskRepoURLs    map[string]struct{}
@@ -110,11 +137,12 @@ type Daemon struct {
 	repoCache repoCacheBackend
 	logger    *slog.Logger
 
-	mu           sync.Mutex
-	workspaces   map[string]*workspaceState
-	runtimeIndex map[string]Runtime // runtimeID -> Runtime for provider lookups
-	reloading    sync.Mutex         // prevents concurrent workspace syncs
-	runtimeSet   *runtimeSetWatcher // multi-subscriber pub/sub for runtime-set changes
+	mu                 sync.Mutex
+	workspaces         map[string]*workspaceState
+	runtimeIndex       map[string]Runtime // runtimeID -> Runtime for provider lookups
+	profileLaunchSpecs map[string]profileLaunchSpec
+	reloading          sync.Mutex         // prevents concurrent workspace syncs
+	runtimeSet         *runtimeSetWatcher // multi-subscriber pub/sub for runtime-set changes
 
 	versionsMu    sync.RWMutex      // guards agentVersions
 	agentVersions map[string]string // provider -> detected CLI version (set during registration)
@@ -180,8 +208,10 @@ type Daemon struct {
 	taskGitContextsMu sync.Mutex
 	taskGitContexts   map[string]taskGitContext
 
-	runner             taskRunner    // executes agent tasks; set to d.runTask by New(), overridable in tests
-	cancelPollInterval time.Duration // how often handleTask polls for server-side cancellation; overridable in tests
+	runner                      taskRunner    // executes agent tasks; set to d.runTask by New(), overridable in tests
+	cancelPollInterval          time.Duration // how often handleTask polls for server-side cancellation; overridable in tests
+	executionEnvironmentCommand executionEnvironmentCommand
+	taskPrepareTimeout          time.Duration
 	// runUpdateFn executes the brew-or-download upgrade. Set to d.runUpdate by
 	// New() and overridable in tests so the auto-update poller can be exercised
 	// without touching the real network or the brew CLI.
@@ -202,6 +232,7 @@ func New(cfg Config, logger *slog.Logger) *Daemon {
 		logger:                    logger,
 		workspaces:                make(map[string]*workspaceState),
 		runtimeIndex:              make(map[string]Runtime),
+		profileLaunchSpecs:        make(map[string]profileLaunchSpec),
 		runtimeSet:                newRuntimeSetWatcher(),
 		agentVersions:             make(map[string]string),
 		wsHBLastAck:               make(map[string]time.Time),
@@ -212,7 +243,9 @@ func New(cfg Config, logger *slog.Logger) *Daemon {
 		reregisterLastCompletedAt: make(map[string]time.Time),
 		taskGitContexts:           make(map[string]taskGitContext),
 		cancelPollInterval:        5 * time.Second,
+		taskPrepareTimeout:        defaultTaskPrepareTimeout,
 	}
+	d.executionEnvironmentCommand = defaultExecutionEnvironmentCommand
 	d.runner = taskRunnerFunc(d.runTask)
 	d.runUpdateFn = d.runUpdate
 	return d
@@ -474,7 +507,7 @@ func (d *Daemon) reregisterWorkspaceAfterRuntimeGone(ctx context.Context, worksp
 	if !tracked {
 		return fmt.Errorf("workspace %s no longer tracked", workspaceID)
 	}
-	resp, err := d.registerRuntimesForWorkspace(ctx, workspaceID, settings)
+	resp, profileSig, err := d.registerRuntimesForWorkspace(ctx, workspaceID, settings)
 	if err != nil {
 		return fmt.Errorf("register runtimes: %w", err)
 	}
@@ -508,6 +541,9 @@ func (d *Daemon) reregisterWorkspaceAfterRuntimeGone(ctx context.Context, worksp
 	// for a surviving provider (e.g. schema change); the daemon converges on
 	// what the server says without leaving stale heartbeat goroutines.
 	ws.runtimeIDs = newIDs
+	if profileSig != "" {
+		ws.profileSetSig = profileSig
+	}
 	if resp.ReposVersion != "" {
 		ws.reposVersion = resp.ReposVersion
 		ws.allowedRepoURLs = repoAllowlist(resp.Repos)
@@ -776,10 +812,11 @@ func (d *Daemon) findRuntime(id string) *Runtime {
 	return nil
 }
 
-func (d *Daemon) registerRuntimesForWorkspace(ctx context.Context, workspaceID string, settings json.RawMessage) (*RegisterResponse, error) {
+func (d *Daemon) registerRuntimesForWorkspace(ctx context.Context, workspaceID string, settings json.RawMessage) (*RegisterResponse, string, error) {
 	d.logger.Debug("registering runtimes for workspace", "workspace_id", workspaceID, "agent_count", len(d.cfg.Agents))
 	allowedProviders := workspaceRuntimeProviders(settings)
 	var runtimes []map[string]any
+	var failedProfiles []map[string]any
 	for name, entry := range d.cfg.Agents {
 		if len(allowedProviders) > 0 {
 			if _, allowed := allowedProviders[name]; !allowed {
@@ -813,8 +850,9 @@ func (d *Daemon) registerRuntimesForWorkspace(ctx context.Context, workspaceID s
 		}
 		runtimes = append(runtimes, runtime)
 	}
-	if len(runtimes) == 0 {
-		return nil, fmt.Errorf("no agent runtimes could be registered")
+	profileSig := d.appendProfileRuntimes(ctx, workspaceID, allowedProviders, &runtimes, &failedProfiles)
+	if len(runtimes) == 0 && len(failedProfiles) == 0 {
+		return nil, profileSig, ErrNoRuntimesToRegister
 	}
 
 	req := map[string]any{
@@ -825,17 +863,18 @@ func (d *Daemon) registerRuntimesForWorkspace(ctx context.Context, workspaceID s
 		"cli_version":       d.cfg.CLIVersion,
 		"launched_by":       d.cfg.LaunchedBy,
 		"runtimes":          runtimes,
+		"failed_profiles":   failedProfiles,
 	}
 
 	resp, err := d.client.Register(ctx, req)
 	if err != nil {
-		return nil, fmt.Errorf("register runtimes: %w", err)
+		return nil, "", fmt.Errorf("register runtimes: %w", err)
 	}
-	if len(resp.Runtimes) == 0 {
-		return nil, fmt.Errorf("register runtimes: empty response")
+	if len(resp.Runtimes) == 0 && len(failedProfiles) == 0 {
+		return nil, "", fmt.Errorf("register runtimes: empty response")
 	}
 	d.logger.Debug("register response", "workspace_id", workspaceID, "runtimes", len(resp.Runtimes), "repos", len(resp.Repos), "repos_version", resp.ReposVersion)
-	return resp, nil
+	return resp, profileSig, nil
 }
 
 func newWorkspaceState(workspaceID string, runtimeIDs []string, reposVersion string, repos []RepoData, settings json.RawMessage) *workspaceState {
@@ -1333,7 +1372,7 @@ func (d *Daemon) syncWorkspacesFromAPI(ctx context.Context) error {
 			registered++
 			continue
 		}
-		resp, err := d.registerRuntimesForWorkspace(ctx, id, apiSettings[id])
+		resp, profileSig, err := d.registerRuntimesForWorkspace(ctx, id, apiSettings[id])
 		if err != nil {
 			d.logger.Error("failed to register runtimes", "workspace_id", id, "name", name, "error", err)
 			continue
@@ -1344,7 +1383,9 @@ func (d *Daemon) syncWorkspacesFromAPI(ctx context.Context) error {
 			d.logger.Info("registered runtime", "workspace_id", id, "runtime_id", rt.ID, "provider", rt.Provider)
 		}
 		d.mu.Lock()
-		d.workspaces[id] = newWorkspaceState(id, runtimeIDs, resp.ReposVersion, resp.Repos, resp.Settings)
+		ws := newWorkspaceState(id, runtimeIDs, resp.ReposVersion, resp.Repos, resp.Settings)
+		ws.profileSetSig = profileSig
+		d.workspaces[id] = ws
 		for _, rt := range resp.Runtimes {
 			d.runtimeIndex[rt.ID] = rt
 		}
@@ -2442,7 +2483,7 @@ func (d *Daemon) handleTask(ctx context.Context, task Task, slot int) {
 		// classifier so the failure_reason column reflects the actual
 		// shape of the failure (provider 5xx, network, process crash,
 		// …) rather than the coarse legacy "agent_error" bucket.
-		if failErr := d.client.FailTask(ctx, task.ID, err.Error(), "", "", taskfailure.Classify(err.Error()).String()); failErr != nil {
+		if failErr := d.client.FailTask(ctx, task.ID, err.Error(), "", "", taskRunFailureReason(err)); failErr != nil {
 			taskLog.Error("fail task callback failed", "error", failErr)
 		}
 		return
@@ -2482,6 +2523,13 @@ func (d *Daemon) handleTask(ctx context.Context, task Task, slot int) {
 			}
 		}
 	}
+}
+
+func taskRunFailureReason(err error) string {
+	if errors.Is(err, errTaskPrepareTimeout) {
+		return taskfailure.ReasonTimeout.String()
+	}
+	return taskfailure.Classify(err.Error()).String()
 }
 
 // acquireLocalDirectoryLockIfNeeded inspects the task's project resources for
@@ -2539,9 +2587,13 @@ func (d *Daemon) acquireLocalDirectoryLockIfNeeded(ctx context.Context, task Tas
 		pollInterval = 5 * time.Second
 	}
 	var (
-		watcherOnce     sync.Once
-		cancelledByPoll <-chan struct{}
+		watcherOnce      sync.Once
+		cancelledByPoll  <-chan struct{}
+		prepareLeaseOnce sync.Once
+		stopPrepareLease func()
 	)
+	stopPrepareLease = func() {}
+	defer func() { stopPrepareLease() }()
 
 	onWait := func(holder string) {
 		reason := fmt.Sprintf("local_directory %s", assignment.AbsPath)
@@ -2555,6 +2607,9 @@ func (d *Daemon) acquireLocalDirectoryLockIfNeeded(ctx context.Context, task Tas
 			// The UI just won't see the explicit "waiting" badge.
 			taskLog.Warn("local_directory: mark waiting status failed", "error", waitErr)
 		}
+		prepareLeaseOnce.Do(func() {
+			stopPrepareLease = d.startTaskPrepareLeaseExtender(waitCtx, task, taskLog)
+		})
 		// Start polling once we actually park. shouldInterruptAgent inside
 		// watchTaskCancellation already handles both server-side terminal
 		// states (completed/failed/cancelled) and the row-deleted
@@ -2738,7 +2793,81 @@ func gateResumeToReusedWorkdir(task *Task, taskCtx *execenv.TaskContextForEnv, e
 	return reused
 }
 
-func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot int, taskLog *slog.Logger) (TaskResult, error) {
+func (d *Daemon) startTaskPrepareLeaseExtender(ctx context.Context, task Task, taskLog *slog.Logger) func() {
+	leaseCtx, cancel := context.WithCancel(ctx)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		ticker := time.NewTicker(taskPrepareLeaseRefresh)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-leaseCtx.Done():
+				return
+			case <-ticker.C:
+				reqCtx, reqCancel := context.WithTimeout(leaseCtx, taskPrepareLeaseTimeout)
+				err := d.client.ExtendTaskPrepareLease(reqCtx, task.RuntimeID, task.ID)
+				reqCancel()
+				if err != nil {
+					taskLog.Warn("extend task prepare lease failed", "error", err)
+				}
+			}
+		}
+	}()
+
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			cancel()
+			<-done
+		})
+	}
+}
+
+func (d *Daemon) prepareExecutionEnvironment(ctx context.Context, params execenv.PrepareParams) (*execenv.Environment, error) {
+	if d.executionEnvironmentCommand == nil {
+		// Focused runTask tests can construct a zero-valued Daemon and keep setup
+		// in-process. Production Daemons created by New always use isolation.
+		return execenv.Prepare(params, d.logger)
+	}
+	command, err := d.executionEnvironmentCommand()
+	if err != nil {
+		return nil, err
+	}
+	return execenv.PrepareIsolated(ctx, command, params, d.logger)
+}
+
+func (d *Daemon) reuseExecutionEnvironment(ctx context.Context, params execenv.ReuseParams) (*execenv.Environment, error) {
+	if d.executionEnvironmentCommand == nil {
+		return execenv.Reuse(params, d.logger), nil
+	}
+	command, err := d.executionEnvironmentCommand()
+	if err != nil {
+		return nil, err
+	}
+	return execenv.ReuseIsolated(ctx, command, params, d.logger)
+}
+
+func (d *Daemon) effectiveTaskPrepareTimeout() time.Duration {
+	if d.taskPrepareTimeout > 0 {
+		return d.taskPrepareTimeout
+	}
+	return defaultTaskPrepareTimeout
+}
+
+func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot int, taskLog *slog.Logger) (taskResult TaskResult, returnErr error) {
+	prepareTimeout := d.effectiveTaskPrepareTimeout()
+	prepareCtx, cancelPrepare := context.WithTimeoutCause(ctx, prepareTimeout, errTaskPrepareTimeout)
+	prepareComplete := false
+	defer func() {
+		cancelPrepare()
+		if prepareComplete || returnErr == nil || !errors.Is(context.Cause(prepareCtx), errTaskPrepareTimeout) {
+			return
+		}
+		taskResult = TaskResult{}
+		returnErr = fmt.Errorf("%w after %s", errTaskPrepareTimeout, prepareTimeout)
+	}()
+
 	// Refuse to spawn an agent without a workspace. An empty workspace_id
 	// here would make MULTICA_WORKSPACE_ID empty in the agent env, and the
 	// CLI would otherwise silently fall back to the user-global config — a
@@ -2767,9 +2896,19 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	d.registerTaskRepos(task.WorkspaceID, task.Repos, gitCred)
 
 	entry, ok := d.cfg.Agents[provider]
+	var profileFixedArgs []string
+	var profileVersion string
+	if profile, custom := d.customProfileLaunchForRuntime(task.RuntimeID); custom {
+		entry = AgentEntry{Path: profile.path}
+		profileFixedArgs = profile.fixedArgs
+		profileVersion = profile.version
+		ok = true
+	}
 	if !ok {
 		return TaskResult{}, fmt.Errorf("no agent configured for provider %q", provider)
 	}
+	stopPrepareLease := d.startTaskPrepareLeaseExtender(prepareCtx, task, taskLog)
+	defer stopPrepareLease()
 
 	agentName := "agent"
 	var agentID string
@@ -2839,6 +2978,9 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	// Try to reuse the workdir from a previous task on the same (agent, issue) pair.
 	var env *execenv.Environment
 	codexVersion := d.agentVersion("codex")
+	if provider == "codex" && profileVersion != "" {
+		codexVersion = profileVersion
+	}
 	openclawBin := ""
 	if provider == "openclaw" {
 		openclawBin = entry.Path
@@ -2855,6 +2997,35 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	if task.Agent != nil {
 		agentMcpConfig = materializeIntegrationMcpConfig(task.Agent.McpConfig, task.IntegrationTokens)
 	}
+	var hermesSourceHome string
+	var hermesSourceMustExist bool
+	var hermesEnv map[string]string
+	if provider == "hermes" {
+		customEnv := map[string]string{}
+		var hermesArgs []string
+		if task.Agent != nil {
+			hermesArgs = task.Agent.CustomArgs
+			for key, value := range task.Agent.CustomEnv {
+				if !isBlockedEnvKey(key) {
+					customEnv[key] = value
+				}
+			}
+		}
+		selection := agent.ParseHermesProfileArgs(hermesArgs)
+		resolution := execenv.ResolveHermesProfile(
+			customEnv["HERMES_HOME"],
+			selection.Name,
+			selection.Found,
+			selection.Inline,
+		)
+		if resolution.Err != nil {
+			return TaskResult{}, fmt.Errorf("resolve hermes profile: %w", resolution.Err)
+		}
+		hermesSourceHome = resolution.SourceHome
+		hermesSourceMustExist = resolution.MustExist
+		hermesEnv = customEnv
+		hermesEnv["HERMES_HOME"] = hermesSourceHome
+	}
 	// Decode openclaw-specific runtime_config knobs once so reuse / prepare /
 	// ExecOptions all see the same mode + gateway pin (issue #3260). Parse
 	// failures fail soft to local mode — a broken JSON blob must never block
@@ -2864,38 +3035,47 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	if task.Agent != nil && provider == "openclaw" {
 		openclawMode, openclawGateway = decodeOpenclawRuntimeConfig(task.Agent.RuntimeConfig, d.logger)
 	}
+	var err error
 	if task.PriorWorkDir != "" && localAssignment == nil {
-		env = execenv.Reuse(execenv.ReuseParams{
-			WorkspacesRoot:  d.cfg.WorkspacesRoot,
-			WorkspaceID:     task.WorkspaceID,
-			TaskID:          task.ID,
-			WorkDir:         task.PriorWorkDir,
-			Provider:        provider,
-			CodexVersion:    codexVersion,
-			OpenclawBin:     openclawBin,
-			McpConfig:       agentMcpConfig,
-			OpenclawGateway: openclawGateway,
-			Task:            taskCtx,
-		}, d.logger)
+		env, err = d.reuseExecutionEnvironment(prepareCtx, execenv.ReuseParams{
+			WorkspacesRoot:        d.cfg.WorkspacesRoot,
+			WorkspaceID:           task.WorkspaceID,
+			TaskID:                task.ID,
+			WorkDir:               task.PriorWorkDir,
+			Provider:              provider,
+			CodexVersion:          codexVersion,
+			OpenclawBin:           openclawBin,
+			McpConfig:             agentMcpConfig,
+			OpenclawGateway:       openclawGateway,
+			HermesSourceHome:      hermesSourceHome,
+			HermesSourceMustExist: hermesSourceMustExist,
+			HermesEnv:             hermesEnv,
+			Task:                  taskCtx,
+		})
+		if err != nil {
+			return TaskResult{}, fmt.Errorf("reuse execution environment: %w", err)
+		}
 	}
 	if env == nil {
-		var err error
 		prepParams := execenv.PrepareParams{
-			WorkspacesRoot:  d.cfg.WorkspacesRoot,
-			WorkspaceID:     task.WorkspaceID,
-			TaskID:          task.ID,
-			AgentName:       agentName,
-			Provider:        provider,
-			CodexVersion:    codexVersion,
-			OpenclawBin:     openclawBin,
-			McpConfig:       agentMcpConfig,
-			OpenclawGateway: openclawGateway,
-			Task:            taskCtx,
+			WorkspacesRoot:        d.cfg.WorkspacesRoot,
+			WorkspaceID:           task.WorkspaceID,
+			TaskID:                task.ID,
+			AgentName:             agentName,
+			Provider:              provider,
+			CodexVersion:          codexVersion,
+			OpenclawBin:           openclawBin,
+			McpConfig:             agentMcpConfig,
+			OpenclawGateway:       openclawGateway,
+			HermesSourceHome:      hermesSourceHome,
+			HermesSourceMustExist: hermesSourceMustExist,
+			HermesEnv:             hermesEnv,
+			Task:                  taskCtx,
 		}
 		if localAssignment != nil {
 			prepParams.LocalWorkDir = localAssignment.AbsPath
 		}
-		env, err = execenv.Prepare(prepParams, d.logger)
+		env, err = d.prepareExecutionEnvironment(prepareCtx, prepParams)
 		if err != nil {
 			return TaskResult{}, fmt.Errorf("prepare execution environment: %w", err)
 		}
@@ -2918,9 +3098,11 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	// taskfailure.Classify path records the failure with the same
 	// "start task failed: <…>" string and the same failure_reason
 	// taxonomy as before — see MUL-2946 for the classifier contract.
-	if err := d.client.StartTask(ctx, task.ID); err != nil {
+	if err := d.client.StartTask(prepareCtx, task.ID); err != nil {
 		return TaskResult{}, fmt.Errorf("start task failed: %w", err)
 	}
+	prepareComplete = true
+	cancelPrepare()
 	_ = d.client.ReportProgress(ctx, task.ID, fmt.Sprintf("Launching %s", provider), 1, 2)
 
 	reused := gateResumeToReusedWorkdir(&task, &taskCtx, env.WorkDir, taskLog)
@@ -3019,6 +3201,11 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 	if env.CodexHome != "" {
 		agentEnv["CODEX_HOME"] = env.CodexHome
 	}
+	if env.TaskHome != "" {
+		for key, value := range execenv.TaskHomeEnv(env.TaskHome) {
+			agentEnv[key] = value
+		}
+	}
 	// Point Cursor at per-task project state when managed MCP is present.
 	// The workdir .cursor/mcp.json carries the managed server list, while
 	// CURSOR_DATA_DIR isolates the matching project approvals from the user's
@@ -3056,6 +3243,9 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 			agentEnv[k] = v
 		}
 	}
+	if env.HermesHome != "" {
+		agentEnv["HERMES_HOME"] = env.HermesHome
+	}
 	applyUserIntegrationEnv(agentEnv, task)
 	agentConfig := agent.Config{
 		ExecutablePath: entry.Path,
@@ -3089,10 +3279,16 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 
 	var customArgs []string
 	extraArgs := defaultArgsForProvider(d.cfg, provider)
+	if len(profileFixedArgs) > 0 {
+		extraArgs = append(append([]string(nil), profileFixedArgs...), extraArgs...)
+	}
 	var mcpConfig json.RawMessage
 	if task.Agent != nil {
 		customArgs = task.Agent.CustomArgs
 		mcpConfig = agentMcpConfig
+	}
+	if provider == "hermes" && env.HermesHome != "" {
+		customArgs = agent.StripHermesProfileArgs(customArgs, agent.ParseHermesProfileArgs(customArgs))
 	}
 	// Two-tier model resolution: an explicit agent.model wins,
 	// then the daemon-wide MULTICA_<PROVIDER>_MODEL env var. If

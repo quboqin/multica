@@ -17,24 +17,29 @@ import (
 	"github.com/multica-ai/multica/server/internal/analytics"
 	"github.com/multica-ai/multica/server/internal/attribution"
 	"github.com/multica-ai/multica/server/internal/events"
+	"github.com/multica-ai/multica/server/internal/featureflags"
 	"github.com/multica-ai/multica/server/internal/mention"
 	obsmetrics "github.com/multica-ai/multica/server/internal/metrics"
 	"github.com/multica-ai/multica/server/internal/realtime"
+	"github.com/multica-ai/multica/server/internal/runtimeapps"
 	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
+	"github.com/multica-ai/multica/server/pkg/featureflag"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 	"github.com/multica-ai/multica/server/pkg/redact"
 	"github.com/multica-ai/multica/server/pkg/taskfailure"
 )
 
 type TaskService struct {
-	Queries   *db.Queries
-	TxStarter TxStarter
-	Hub       *realtime.Hub
-	Bus       *events.Bus
-	Analytics analytics.Client
-	Metrics   *obsmetrics.BusinessMetrics
-	Wakeup    TaskWakeupNotifier
+	Queries      *db.Queries
+	TxStarter    TxStarter
+	Hub          *realtime.Hub
+	Bus          *events.Bus
+	Analytics    analytics.Client
+	Metrics      *obsmetrics.BusinessMetrics
+	Wakeup       TaskWakeupNotifier
+	FeatureFlags *featureflag.Service
+	Composio     ComposioOverlayBuilder
 	// EmptyClaim caches "this runtime has no queued task" so the daemon
 	// poll path can skip a Postgres scan on the steady-state empty case.
 	// Optional — a nil cache disables the fast path and every claim
@@ -45,6 +50,35 @@ type TaskService struct {
 	analyticsContextMu    sync.Mutex
 	analyticsContextCache map[string]analytics.TaskContext
 	analyticsContextOrder []string
+}
+
+type ComposioOverlayBuilder interface {
+	BuildTaskOverlay(ctx context.Context, originatorUserID pgtype.UUID, agent db.Agent) (runtimeapps.MCPOverlayResult, error)
+}
+
+type runtimeMCPOverlayData struct {
+	Overlay       json.RawMessage
+	ConnectedApps json.RawMessage
+}
+
+func (s *TaskService) buildRuntimeMCPOverlay(ctx context.Context, originatorUserID pgtype.UUID, agent db.Agent) runtimeMCPOverlayData {
+	if s == nil || s.Composio == nil || !featureflags.ComposioMCPAppsEnabled(ctx, s.FeatureFlags) {
+		return runtimeMCPOverlayData{}
+	}
+	result, err := s.Composio.BuildTaskOverlay(ctx, originatorUserID, agent)
+	if err != nil || len(result.MCPOverlay) == 0 {
+		if err != nil {
+			slog.Warn("build runtime MCP overlay failed", "agent_id", util.UUIDToString(agent.ID), "error", err)
+		}
+		return runtimeMCPOverlayData{}
+	}
+	data := runtimeMCPOverlayData{Overlay: result.MCPOverlay}
+	if len(result.ConnectedApps) > 0 {
+		if raw, err := json.Marshal(result.ConnectedApps); err == nil {
+			data.ConnectedApps = raw
+		}
+	}
+	return data
 }
 
 type TaskWakeupNotifier interface {
@@ -88,6 +122,7 @@ const (
 	// /tasks/claim (30s) plus /tasks/{id}/start (30s) plus scheduling slack, so
 	// an in-flight StartTask cannot be reclaimed and double-dispatched.
 	claimResponseRecoveryWindow = 90 * time.Second
+	prepareLeaseDuration        = 45 * time.Second
 )
 
 var ErrAttributionFailClosed = errors.New("attribution: no precise accountable human and enqueue refused (fail-closed policy, policy read failed, or no agent owner)")
@@ -571,6 +606,7 @@ func (s *TaskService) EnqueueDirectTaskFanout(ctx context.Context, fanout Direct
 	if len(fanout.Items) == 0 || len(fanout.Items) > 100 {
 		return nil, fmt.Errorf("fanout must contain between 1 and 100 items")
 	}
+	overlay := s.buildRuntimeMCPOverlay(ctx, fanout.Attribution.UserID, fanout.Agent)
 
 	contexts := make([][]byte, len(fanout.Items))
 	seen := make(map[string]struct{}, len(fanout.Items))
@@ -619,6 +655,8 @@ func (s *TaskService) EnqueueDirectTaskFanout(ctx context.Context, fanout Direct
 			DelegatedFromTaskID:  fanout.Attribution.DelegatedFromTaskID,
 			TriggerEvidenceKind:  pgtype.Text{String: fanout.TriggerEvidenceKind, Valid: true},
 			TriggerEvidenceRefID: fanout.TriggerEvidenceRefID,
+			RuntimeMcpOverlay:    overlay.Overlay,
+			RuntimeConnectedApps: overlay.ConnectedApps,
 			Context:              contexts[i],
 		})
 		if err != nil && isUniqueTaskFanoutViolation(err) {
@@ -847,6 +885,7 @@ func (s *TaskService) enqueueIssueTaskWithContextUsingQueries(ctx context.Contex
 		return db.AgentTaskQueue{}, err
 	}
 
+	overlay := s.buildRuntimeMCPOverlay(ctx, attr.UserID, agent)
 	task, err := queries.CreateAgentTask(ctx, db.CreateAgentTaskParams{
 		AgentID:              issue.AssigneeID,
 		RuntimeID:            agent.RuntimeID,
@@ -864,6 +903,8 @@ func (s *TaskService) enqueueIssueTaskWithContextUsingQueries(ctx context.Contex
 		RerunOfTaskID:        attr.RerunOfTaskID,
 		TriggerEvidenceKind:  evidenceText(attr.EvidenceKind),
 		TriggerEvidenceRefID: attr.EvidenceRefID,
+		RuntimeMcpOverlay:    overlay.Overlay,
+		RuntimeConnectedApps: overlay.ConnectedApps,
 		Context:              taskContext,
 	})
 	if err != nil {
@@ -942,6 +983,7 @@ func (s *TaskService) enqueueMentionTask(ctx context.Context, issue db.Issue, ag
 		return db.AgentTaskQueue{}, err
 	}
 
+	overlay := s.buildRuntimeMCPOverlay(ctx, attr.UserID, agent)
 	task, err := s.Queries.CreateAgentTask(ctx, db.CreateAgentTaskParams{
 		AgentID:              agentID,
 		RuntimeID:            agent.RuntimeID,
@@ -960,6 +1002,8 @@ func (s *TaskService) enqueueMentionTask(ctx context.Context, issue db.Issue, ag
 		RerunOfTaskID:        attr.RerunOfTaskID,
 		TriggerEvidenceKind:  evidenceText(attr.EvidenceKind),
 		TriggerEvidenceRefID: attr.EvidenceRefID,
+		RuntimeMcpOverlay:    overlay.Overlay,
+		RuntimeConnectedApps: overlay.ConnectedApps,
 	})
 	if err != nil {
 		slog.Error("mention task enqueue failed", "issue_id", util.UUIDToString(issue.ID), "agent_id", util.UUIDToString(agentID), "error", err)
@@ -1074,6 +1118,7 @@ func (s *TaskService) EnqueueQuickCreateTask(ctx context.Context, workspaceID, r
 		return db.AgentTaskQueue{}, err
 	}
 
+	overlay := s.buildRuntimeMCPOverlay(ctx, attr.UserID, agent)
 	task, err := s.Queries.CreateQuickCreateTask(ctx, db.CreateQuickCreateTaskParams{
 		AgentID:              agentID,
 		RuntimeID:            agent.RuntimeID,
@@ -1085,6 +1130,8 @@ func (s *TaskService) EnqueueQuickCreateTask(ctx context.Context, workspaceID, r
 		OriginatorSource:     attributionText(attr.Source),
 		TriggerEvidenceKind:  evidenceText(attr.EvidenceKind),
 		TriggerEvidenceRefID: attr.EvidenceRefID,
+		RuntimeMcpOverlay:    overlay.Overlay,
+		RuntimeConnectedApps: overlay.ConnectedApps,
 	})
 	if err != nil {
 		return db.AgentTaskQueue{}, fmt.Errorf("create quick-create task: %w", err)
@@ -1165,6 +1212,7 @@ func (s *TaskService) EnqueueChatTask(ctx context.Context, chatSession db.ChatSe
 		return db.AgentTaskQueue{}, err
 	}
 
+	overlay := s.buildRuntimeMCPOverlay(ctx, attr.UserID, agent)
 	task, err := s.Queries.CreateChatTask(ctx, db.CreateChatTaskParams{
 		AgentID:              chatSession.AgentID,
 		RuntimeID:            agent.RuntimeID,
@@ -1177,6 +1225,8 @@ func (s *TaskService) EnqueueChatTask(ctx context.Context, chatSession db.ChatSe
 		OriginatorSource:     attributionText(attr.Source),
 		TriggerEvidenceKind:  evidenceText(attr.EvidenceKind),
 		TriggerEvidenceRefID: attr.EvidenceRefID,
+		RuntimeMcpOverlay:    overlay.Overlay,
+		RuntimeConnectedApps: overlay.ConnectedApps,
 	})
 	if err != nil {
 		slog.Error("chat task enqueue failed", "chat_session_id", util.UUIDToString(chatSession.ID), "error", err)
@@ -1402,7 +1452,10 @@ func (s *TaskService) ClaimTask(ctx context.Context, agentID pgtype.UUID) (*db.A
 	}
 
 	t0 = time.Now()
-	task, err := s.Queries.ClaimAgentTask(ctx, agentID)
+	task, err := s.Queries.ClaimAgentTask(ctx, db.ClaimAgentTaskParams{
+		AgentID:          agentID,
+		PrepareLeaseSecs: prepareLeaseDuration.Seconds(),
+	})
 	claimAgentMs = time.Since(t0).Milliseconds()
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -1473,6 +1526,7 @@ func (s *TaskService) ClaimTaskForRuntime(ctx context.Context, runtimeID pgtype.
 	stale, err := s.Queries.ReclaimStaleDispatchedTaskForRuntime(ctx, db.ReclaimStaleDispatchedTaskForRuntimeParams{
 		RuntimeID:         runtimeID,
 		ClaimRecoverySecs: claimResponseRecoveryWindow.Seconds(),
+		PrepareLeaseSecs:  prepareLeaseDuration.Seconds(),
 	})
 	if err == nil {
 		outcome = "reclaimed_dispatched"
@@ -1590,6 +1644,20 @@ func (s *TaskService) StartTask(ctx context.Context, taskID pgtype.UUID) (*db.Ag
 	return &task, nil
 }
 
+// ExtendTaskPrepareLease refreshes the preparation lease while a daemon is
+// blocked in filesystem setup before StartTask.
+func (s *TaskService) ExtendTaskPrepareLease(ctx context.Context, taskID, runtimeID pgtype.UUID) (*db.AgentTaskQueue, error) {
+	task, err := s.Queries.ExtendAgentTaskPrepareLease(ctx, db.ExtendAgentTaskPrepareLeaseParams{
+		ID:        taskID,
+		RuntimeID: runtimeID,
+		LeaseSecs: prepareLeaseDuration.Seconds(),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("extend task prepare lease: %w", err)
+	}
+	return &task, nil
+}
+
 // MarkTaskWaitingLocalDirectory parks a dispatched task in the
 // waiting_local_directory state while the daemon waits for another in-flight
 // task to release the project_resource path lock. reason carries a short
@@ -1599,8 +1667,9 @@ func (s *TaskService) StartTask(ctx context.Context, taskID pgtype.UUID) (*db.Ag
 func (s *TaskService) MarkTaskWaitingLocalDirectory(ctx context.Context, taskID pgtype.UUID, reason string) (*db.AgentTaskQueue, error) {
 	reason = strings.TrimSpace(reason)
 	task, err := s.Queries.MarkAgentTaskWaitingLocalDirectory(ctx, db.MarkAgentTaskWaitingLocalDirectoryParams{
-		ID:         taskID,
-		WaitReason: pgtype.Text{String: reason, Valid: reason != ""},
+		ID:               taskID,
+		WaitReason:       pgtype.Text{String: reason, Valid: reason != ""},
+		PrepareLeaseSecs: prepareLeaseDuration.Seconds(),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("mark task waiting_local_directory: %w", err)

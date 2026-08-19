@@ -12,6 +12,11 @@ export type {
   TaskFailureReason,
   AgentRuntime,
   RuntimeDevice,
+  RuntimeProfile,
+  RuntimeProtocolFamily,
+  RuntimeProfileVisibility,
+  CreateRuntimeProfileRequest,
+  UpdateRuntimeProfileRequest,
   CreateAgentRequest,
   AgentTemplate,
   AgentTemplateSummary,
@@ -58,6 +63,7 @@ export type {
   RuntimeLocalSkillImportResult,
   IssueUsageSummary,
 } from "./agent";
+export { RUNTIME_PROFILE_PROTOCOL_FAMILIES } from "./agent";
 export type { Workspace, WorkspaceRepo, Member, MemberRole, User, IntegrationTokens, MemberWithUser, Invitation } from "./workspace";
 export type { WorkspaceCapability, WorkspaceCapabilitiesResponse } from "./capability";
 export type { InboxItem, InboxSeverity, InboxItemType } from "./inbox";
@@ -149,6 +155,11 @@ export type {
   LarkInstallStatusResponse,
   RedeemLarkBindingTokenResponse,
 } from "./lark";
+export type {
+  ComposioToolkit,
+  ComposioConnection,
+  ComposioConnectInitResponse,
+} from "./composio";
 export type {
   CredentialConnector,
   CredentialProfile,

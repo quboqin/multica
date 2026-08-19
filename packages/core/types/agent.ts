@@ -35,6 +35,65 @@ export interface RuntimeDevice {
 
 export type AgentRuntime = RuntimeDevice;
 
+export const RUNTIME_PROFILE_PROTOCOL_FAMILIES = [
+  "claude",
+  "codebuddy",
+  "codex",
+  "copilot",
+  "opencode",
+  "deveco",
+  "openclaw",
+  "hermes",
+  "pi",
+  "cursor",
+  "kimi",
+  "kiro",
+  "antigravity",
+  "qoder",
+  "traecli",
+  "grok",
+  "qwen",
+] as const;
+
+export type RuntimeProtocolFamily =
+  (typeof RUNTIME_PROFILE_PROTOCOL_FAMILIES)[number];
+
+export type RuntimeProfileVisibility = "workspace" | "private";
+
+export interface RuntimeProfile {
+  id: string;
+  workspace_id: string;
+  display_name: string;
+  protocol_family: RuntimeProtocolFamily;
+  command_name: string;
+  description: string | null;
+  fixed_args: string[];
+  visibility: RuntimeProfileVisibility;
+  created_by: string | null;
+  enabled: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CreateRuntimeProfileRequest {
+  display_name: string;
+  protocol_family: RuntimeProtocolFamily;
+  command_name: string;
+  description?: string;
+  fixed_args?: string[];
+  visibility?: RuntimeProfileVisibility;
+  enabled?: boolean;
+}
+
+export interface UpdateRuntimeProfileRequest {
+  display_name?: string;
+  command_name?: string;
+  description?: string | null;
+  fixed_args?: string[];
+  visibility?: RuntimeProfileVisibility;
+  enabled?: boolean;
+}
+
 // Coarse classifier set by the backend when a task transitions to "failed".
 // Mirrors the migration-055 enum in agent_task_queue.failure_reason. Used by
 // the agent presence derivation and the UI failure-message lookup.
@@ -183,6 +242,8 @@ export interface Agent {
   runtime_mode: AgentRuntimeMode;
   runtime_config: Record<string, unknown>;
   custom_args: string[];
+  mcp_config?: unknown | null;
+  mcp_config_redacted?: boolean;
   /**
    * Coarse metadata signalling whether the agent has any custom env
    * vars configured, without exposing the keys or values. Reads of
@@ -246,6 +307,7 @@ export interface CreateAgentRequest {
   runtime_config?: Record<string, unknown>;
   custom_env?: Record<string, string>;
   custom_args?: string[];
+  mcp_config?: unknown | null;
   visibility?: AgentVisibility;
   max_concurrent_tasks?: number;
   model?: string;
@@ -331,6 +393,7 @@ export interface UpdateAgentRequest {
   description?: string;
   instructions?: string;
   avatar_url?: string;
+  mcp_config?: unknown | null;
   runtime_id?: string;
   runtime_config?: Record<string, unknown>;
   /**

@@ -23,6 +23,11 @@ type CLIConfig struct {
 	// machine). Empty / absent means "discover from PATH and use vendor
 	// defaults" — the historical behavior. See issue #3875.
 	Backends *BackendOverrides `json:"backends,omitempty"`
+
+	// ProfileCommandOverrides maps a workspace runtime profile to the absolute
+	// executable path chosen for this machine. Runtime profiles are shared, but
+	// executable installation paths are host-local.
+	ProfileCommandOverrides map[string]string `json:"profile_command_overrides,omitempty"`
 }
 
 // BackendOverrides holds per-backend configuration overrides. Each field is
