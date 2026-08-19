@@ -5,7 +5,7 @@ import { Buffer } from "node:buffer";
 import { pathToFileURL } from "node:url";
 import { chromium } from "playwright";
 import pg from "pg";
-import { createBrowserCapacity } from "./browser-capacity.mjs";
+import { createBrowserCapacity, createBrowserLeaseRegistry } from "./browser-capacity.mjs";
 import {
   normalizeAppGrowingMaterialSearchParams,
   normalizeMaterialRules,
@@ -348,17 +348,20 @@ const crawlerBrowserTimeoutMS = positiveIntegerEnv(
   "CRAWLER_WORKER_CRAWL_BROWSER_TIMEOUT_MS",
   15 * 60 * 1000,
 );
+const crawlerBrowserLeases = createBrowserLeaseRegistry(crawlerBrowserCapacity, {
+  timeoutMS: crawlerBrowserTimeoutMS,
+});
 const streamScreenshotTimeoutMS = positiveIntegerEnv(
   "CRAWLER_WORKER_STREAM_SCREENSHOT_TIMEOUT_MS",
   15_000,
 );
 
-function acquireCrawlerBrowserSlot() {
-  const release = crawlerBrowserCapacity.tryAcquire();
-  if (!release) {
+async function acquireCrawlerBrowserLease(metadata = {}) {
+  const lease = await crawlerBrowserLeases.acquire(metadata);
+  if (!lease) {
     throw userError("crawler worker is busy; wait for the active browser task to finish", 429);
   }
-  return release;
+  return lease;
 }
 
 function acquireLoginBrowserSlot() {
@@ -4595,14 +4598,14 @@ async function runCrawl(body) {
   }
   const credentialState = summarizeCredentialState(storageState, connector, sessionStorageState);
   let authCheck = { authenticated: false, method: "not_checked" };
-  const releaseBrowserSlot = acquireCrawlerBrowserSlot();
+  const crawlerBrowserLease = await acquireCrawlerBrowserLease({
+    connectorID: connector.id,
+    capability,
+  });
   let browser;
-  let crawlerBrowserTimeout;
   try {
     browser = await chromium.launch(chromiumLaunchOptions(crawlerHeadless(connector)));
-    crawlerBrowserTimeout = setTimeout(() => {
-      void browser.close().catch(() => {});
-    }, crawlerBrowserTimeoutMS);
+    crawlerBrowserLeases.attachBrowser(crawlerBrowserLease, browser);
     const context = await browser.newContext({
       storageState,
       ...(connector.id === "appgrowing" ? { locale: "en" } : {}),
@@ -4689,9 +4692,7 @@ async function runCrawl(body) {
       },
     };
   } finally {
-    clearTimeout(crawlerBrowserTimeout);
-    await browser?.close().catch(() => {});
-    releaseBrowserSlot();
+    await crawlerBrowserLeases.retire(crawlerBrowserLease);
   }
 }
 

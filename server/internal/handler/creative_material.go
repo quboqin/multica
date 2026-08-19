@@ -13,6 +13,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -338,13 +339,22 @@ func (h *Handler) failCreativeMaterialCrawlRun(ctx context.Context, workspaceID 
 	if status != "action_required" {
 		status = "failed"
 	}
-	if _, err := h.DB.Exec(ctx, `
+	updateCtx, cancel := crawlRunLifecycleContext(ctx)
+	defer cancel()
+	if _, err := h.DB.Exec(updateCtx, `
 UPDATE creative_material_crawl_run
 SET status = $3, error_code = $4, error_message = $5, finished_at = now()
 WHERE id = $1::uuid AND workspace_id = $2
 `, runID, workspaceID, status, strings.TrimSpace(errorCode), strings.TrimSpace(errorMessage)); err != nil {
 		slog.Warn("mark creative crawl run failed", "crawl_run_id", runID, "error", err)
 	}
+}
+
+func crawlRunLifecycleContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	if ctx != nil && ctx.Err() == nil {
+		return ctx, func() {}
+	}
+	return context.WithTimeout(context.Background(), 5*time.Second)
 }
 
 func (h *Handler) recordCreativeMaterialCrawlDiagnostics(ctx context.Context, workspaceID pgtype.UUID, runID string, raw json.RawMessage) {

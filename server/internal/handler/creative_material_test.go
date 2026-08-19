@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -369,6 +370,39 @@ VALUES ($1, $2, $3, true, 'completed')`, runID, candidateID, testWorkspaceID); e
 	}
 	if run.CandidateMetrics.Total != 1 || run.CandidateMetrics.Analyzed != 1 || run.CandidateMetrics.Selected != 1 || run.CandidateMetrics.Rejected != 0 {
 		t.Fatalf("candidate metrics = %#v", run.CandidateMetrics)
+	}
+}
+
+func TestFailCreativeMaterialCrawlRunSurvivesCanceledRequestContext(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	var runID string
+	if err := testPool.QueryRow(t.Context(), `
+INSERT INTO creative_material_crawl_run (
+  workspace_id, connector_id, status, started_at, created_by_type, created_by_id
+) VALUES ($1, 'appgrowing', 'running', now(), 'member', $2)
+RETURNING id::text`, testWorkspaceID, testUserID).Scan(&runID); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM creative_material_crawl_run WHERE id = $1`, runID)
+	})
+
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	testHandler.failCreativeMaterialCrawlRun(ctx, parseUUID(testWorkspaceID), runID, "failed", "worker_timeout", "client disconnected")
+
+	var status, errorCode string
+	var finishedAtValid bool
+	if err := testPool.QueryRow(t.Context(), `
+SELECT status, error_code, finished_at IS NOT NULL
+FROM creative_material_crawl_run
+WHERE id = $1`, runID).Scan(&status, &errorCode, &finishedAtValid); err != nil {
+		t.Fatal(err)
+	}
+	if status != "failed" || errorCode != "worker_timeout" || !finishedAtValid {
+		t.Fatalf("crawl run lifecycle = status %q code %q finished %v", status, errorCode, finishedAtValid)
 	}
 }
 
