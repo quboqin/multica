@@ -6,12 +6,12 @@
     "v0_3_23": {
       "version": "0.3.23",
       "date": "2026-08-16",
-      "title": "Workspace capabilities and platform updates",
-      "summary": "Creative Studio access is now controlled per workspace, with release notes kept inside the platform.",
-      "change_1": "Creative Studio can be enabled or disabled independently for each workspace.",
-      "change_2": "The capability is enforced by the API, navigation, and direct page access.",
-      "change_3": "The help menu and new-version announcement now open this internal change log.",
-      "change_4": "The requirements table now supports persisted label filters, with multiple labels using OR semantics. Workflow-created sub-issues are shown in stable execution order by workflow stage, variant, revision, and issue identifier."
+      "title": "Creative Factory, model configuration, and platform updates",
+      "summary": "This release connects the Creative Factory workflow from material collection to image generation and delivery, adds workspace-level capability controls, introduces GPT-5.6 model choices with per-model thinking levels, and improves requirement filters, child issue ordering, and the platform update log.",
+      "change_1": "Creative Factory can be enabled independently per workspace and connects material collection, analysis, preparation, material and copy confirmation, image generation, and delivery. The API, navigation, and direct page access enforce the same capability control.",
+      "change_2": "Codex agents can select GPT-5.6 Sol, GPT-5.6 Terra, or GPT-5.6 Luna, with the thinking levels available for each model. Every agent can configure its model and thinking level independently.",
+      "change_3": "Requirements support persisted label filters, with multiple labels using OR semantics. Workflow-created child issues now sort consistently by workflow stage, variant, revision, and issue identifier.",
+      "change_4": "The help menu and new-version announcement open the same internal update log, which brings version features and improvements together in Chinese, English, Japanese, and Korean."
     }
   }
 }

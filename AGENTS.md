@@ -310,17 +310,13 @@ no previously seen release, the release announcement opens by default.
   safe to infer.
 
 - **2026-08-16 / 0.3.23** — Added workspace-scoped Creative Factory capability
-  controls with API, navigation, and direct-page enforcement; replaced the
-  help menu with the platform-owned internal changelog and added the
-  once-per-version release announcement.
-- **2026-08-16 / 0.3.23** — Added persisted label filtering to the requirements
-  (Projects) table. Multiple labels use OR semantics and the filter is
-  available in all supported locales. Workflow-created sub-issues now render
-  in stable execution order by workflow stage, variant, revision, and issue
-  identifier.
-- **2026-08-16 / 0.3.23** — Fixed the Creative Orders list 500 by using a
-  lightweight list projection for items, variants, and assets; full QC and
-  diagnostic data remains available on the order detail endpoint.
+  controls with API, navigation, and direct-page enforcement, connecting the
+  workflow from material collection through image generation and delivery.
+  Codex agents can select GPT-5.6 Sol, GPT-5.6 Terra, or GPT-5.6 Luna with the
+  thinking levels available for each model. The platform also added the
+  internal update log, persisted requirement label filters with OR semantics,
+  and stable workflow child-issue ordering by stage, variant, revision, and
+  issue identifier.
 - **2026-08-16 / 0.3.24** — Expanded the pre-adaptation Skill with the exact
   frozen-resource JSON contract and made failed direct tasks retry with their
   original context before falling back to manual confirmation.
