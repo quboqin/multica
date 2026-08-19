@@ -348,6 +348,10 @@ const crawlerBrowserTimeoutMS = positiveIntegerEnv(
   "CRAWLER_WORKER_CRAWL_BROWSER_TIMEOUT_MS",
   15 * 60 * 1000,
 );
+const streamScreenshotTimeoutMS = positiveIntegerEnv(
+  "CRAWLER_WORKER_STREAM_SCREENSHOT_TIMEOUT_MS",
+  15_000,
+);
 
 function acquireCrawlerBrowserSlot() {
   const release = crawlerBrowserCapacity.tryAcquire();
@@ -532,6 +536,7 @@ function publicSession(session) {
     scroll: session.scrollState || null,
     auto_completing: Boolean(session.autoCompleting),
     auto_complete_reason: session.autoCompleteReason || "",
+    stream_error: session.status === "completed" ? "" : session.streamError || "",
     error: session.status === "completed" ? "" : session.error || "",
     expires_at: new Date(session.expiresAt).toISOString(),
   };
@@ -719,6 +724,7 @@ async function closeRemoteBrowser(session) {
   if (!["completed", "expired", "superseded"].includes(session.status)) {
     session.status = "pending";
     session.error = "";
+    session.streamError = "";
     session.autoCompleting = false;
     session.autoCompleteReason = "";
   }
@@ -778,6 +784,7 @@ async function openControlledBrowser(session, token) {
   const headless = sessionBrowserHeadless(connector);
   session.status = "opening";
   session.error = "";
+  session.streamError = "";
   let releaseBrowserSlot;
   let browser;
   try {
@@ -876,8 +883,9 @@ async function streamSession(session, req, res) {
         type: "jpeg",
         quality: 68,
         fullPage: false,
-        timeout: 8_000,
+        timeout: streamScreenshotTimeoutMS,
       });
+      session.streamError = "";
       if (closed) {
         break;
       }
@@ -890,7 +898,7 @@ async function streamSession(session, req, res) {
       if (session.status === "completed" || !session.page) {
         break;
       }
-      session.error = err instanceof Error ? err.message : String(err);
+      session.streamError = err instanceof Error ? err.message : String(err);
       await sleep(Math.max(streamFrameIntervalMS, 500));
     }
     await sleep(streamFrameIntervalMS);
@@ -1027,6 +1035,7 @@ async function completeSession(session, token) {
   }
   assertSessionNotExpired(session);
   session.error = "";
+  session.streamError = "";
   if (!session.context) {
     throw userError("open the controlled browser and finish login before completing");
   }
@@ -4848,6 +4857,7 @@ const server = http.createServer(async (req, res) => {
         page: null,
         viewport: sessionViewport,
         error: "",
+        streamError: "",
       });
       scheduleSessionExpiry(body.session_token, expiresAt);
       writeJSON(res, 200, {
