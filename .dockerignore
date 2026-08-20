@@ -11,6 +11,7 @@ server/tmp
 server/data
 tmp
 **/__pycache__
+*.pyc
 .gami
 
 # Git
