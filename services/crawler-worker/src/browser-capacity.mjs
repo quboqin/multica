@@ -26,11 +26,33 @@ export function createBrowserCapacity(maxOpenBrowsers) {
 
 export function createBrowserLeaseRegistry(capacity, options = {}) {
   const timeoutMS = Number(options.timeoutMS);
+  const browserCloseTimeoutMS = positiveNumber(options.browserCloseTimeoutMS, 5_000);
   const now = options.now || (() => Date.now());
   const setTimeoutFn = options.setTimeoutFn || setTimeout;
   const clearTimeoutFn = options.clearTimeoutFn || clearTimeout;
   const leases = new Set();
   let nextID = 1;
+
+  async function closeBrowser(browser) {
+    if (!browser?.close) {
+      return;
+    }
+    const closePromise = Promise.resolve()
+      .then(() => browser.close())
+      .catch(() => {});
+    if (!Number.isFinite(browserCloseTimeoutMS) || browserCloseTimeoutMS <= 0) {
+      await closePromise;
+      return;
+    }
+    let timeoutHandle;
+    const timeoutPromise = new Promise((resolve) => {
+      timeoutHandle = setTimeoutFn(resolve, browserCloseTimeoutMS);
+    });
+    await Promise.race([closePromise, timeoutPromise]);
+    if (timeoutHandle) {
+      clearTimeoutFn(timeoutHandle);
+    }
+  }
 
   async function retire(lease, reason = "released") {
     if (!lease) {
@@ -47,15 +69,14 @@ export function createBrowserLeaseRegistry(capacity, options = {}) {
       }
       const browser = lease.browser;
       lease.browser = null;
+      lease.releaseBrowserSlot?.();
+      lease.releaseBrowserSlot = null;
+      lease.closedAt = now();
+      lease.closeReason = reason;
       try {
-        await browser?.close?.();
+        await closeBrowser(browser);
       } catch {
-        // Browser cleanup is best effort; the slot must still be released.
-      } finally {
-        lease.releaseBrowserSlot?.();
-        lease.releaseBrowserSlot = null;
-        lease.closedAt = now();
-        lease.closeReason = reason;
+        // Browser cleanup is best effort; the slot was already released.
       }
     })();
     return lease.retirePromise;
@@ -111,4 +132,9 @@ export function createBrowserLeaseRegistry(capacity, options = {}) {
       return leases.size;
     },
   };
+}
+
+function positiveNumber(value, fallback) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }

@@ -348,8 +348,10 @@ const crawlerBrowserTimeoutMS = positiveIntegerEnv(
   "CRAWLER_WORKER_CRAWL_BROWSER_TIMEOUT_MS",
   15 * 60 * 1000,
 );
+const browserCloseTimeoutMS = positiveIntegerEnv("CRAWLER_WORKER_BROWSER_CLOSE_TIMEOUT_MS", 5_000);
 const crawlerBrowserLeases = createBrowserLeaseRegistry(crawlerBrowserCapacity, {
   timeoutMS: crawlerBrowserTimeoutMS,
+  browserCloseTimeoutMS,
 });
 const streamScreenshotTimeoutMS = positiveIntegerEnv(
   "CRAWLER_WORKER_STREAM_SCREENSHOT_TIMEOUT_MS",
@@ -471,6 +473,32 @@ function writeJSON(res, status, body) {
     "cache-control": "no-store",
   });
   res.end(JSON.stringify(body));
+}
+
+async function handleCrawlRequest(req, res) {
+  const body = await readJSON(req);
+  const abortController = new AbortController();
+  const abortCrawl = () => {
+    if (!res.writableEnded) {
+      abortController.abort();
+    }
+  };
+  req.on("aborted", abortCrawl);
+  res.on("close", abortCrawl);
+  try {
+    const result = await runCrawl(body, { signal: abortController.signal });
+    if (!res.writableEnded && !res.destroyed) {
+      writeJSON(res, 200, result);
+    }
+  } catch (err) {
+    if (abortController.signal.aborted && (res.writableEnded || res.destroyed)) {
+      return;
+    }
+    throw err;
+  } finally {
+    req.removeListener("aborted", abortCrawl);
+    res.removeListener("close", abortCrawl);
+  }
 }
 
 function userError(message, statusCode = 409) {
@@ -716,10 +744,8 @@ async function closeSessionBrowser(session) {
   session.context = null;
   session.page = null;
   session.releaseBrowserSlot = null;
-  if (browser) {
-    await browser.close().catch(() => {});
-  }
   releaseBrowserSlot?.();
+  await closeBrowserBestEffort(browser);
 }
 
 async function closeRemoteBrowser(session) {
@@ -820,11 +846,28 @@ async function openControlledBrowser(session, token) {
       session.page = null;
       session.releaseBrowserSlot = null;
     }
-    await browser?.close().catch(() => {});
     releaseBrowserSlot?.();
+    await closeBrowserBestEffort(browser);
     session.status = "error";
     session.error = error instanceof Error ? error.message : String(error);
     throw error;
+  }
+}
+
+async function closeBrowserBestEffort(browser) {
+  if (!browser?.close) {
+    return;
+  }
+  const closePromise = Promise.resolve()
+    .then(() => browser.close())
+    .catch(() => {});
+  let timeoutHandle;
+  const timeoutPromise = new Promise((resolve) => {
+    timeoutHandle = setTimeout(resolve, browserCloseTimeoutMS);
+  });
+  await Promise.race([closePromise, timeoutPromise]);
+  if (timeoutHandle) {
+    clearTimeout(timeoutHandle);
   }
 }
 
@@ -4580,8 +4623,12 @@ function parseNumericValue(value) {
   return base * multiplier;
 }
 
-async function runCrawl(body) {
+async function runCrawl(body, options = {}) {
   assertSafeParams(body.params || {});
+  const signal = options.signal;
+  if (signal?.aborted) {
+    throw userError("crawler request was cancelled", 499);
+  }
   const connector = connectorForID(body.connector_id);
   const capability = String(body.capability || "profile_verify").trim();
   if (!connector.capabilities.includes(capability)) {
@@ -4603,9 +4650,23 @@ async function runCrawl(body) {
     capability,
   });
   let browser;
+  let abortHandler;
   try {
+    if (signal) {
+      abortHandler = () => {
+        void crawlerBrowserLeases.retire(crawlerBrowserLease, "aborted");
+      };
+      signal.addEventListener("abort", abortHandler, { once: true });
+      if (signal.aborted) {
+        abortHandler();
+        throw userError("crawler request was cancelled", 499);
+      }
+    }
     browser = await chromium.launch(chromiumLaunchOptions(crawlerHeadless(connector)));
     crawlerBrowserLeases.attachBrowser(crawlerBrowserLease, browser);
+    if (signal?.aborted) {
+      throw userError("crawler request was cancelled", 499);
+    }
     const context = await browser.newContext({
       storageState,
       ...(connector.id === "appgrowing" ? { locale: "en" } : {}),
@@ -4692,6 +4753,9 @@ async function runCrawl(body) {
       },
     };
   } finally {
+    if (signal && abortHandler) {
+      signal.removeEventListener("abort", abortHandler);
+    }
     await crawlerBrowserLeases.retire(crawlerBrowserLease);
   }
 }
@@ -4935,7 +4999,7 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (req.method === "POST" && url.pathname === "/crawl") {
-      writeJSON(res, 200, await runCrawl(await readJSON(req)));
+      await handleCrawlRequest(req, res);
       return;
     }
 

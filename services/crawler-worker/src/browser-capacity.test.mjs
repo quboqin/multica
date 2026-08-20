@@ -91,3 +91,31 @@ test("browser lease timeout closes and releases the slot", async () => {
   assert.equal(capacity.active(), 0);
   assert.equal(registry.active(), 0);
 });
+
+test("browser lease retire releases the slot even when browser close hangs", async () => {
+  const capacity = createBrowserCapacity(1);
+  const registry = createBrowserLeaseRegistry(capacity, {
+    timeoutMS: 100,
+    browserCloseTimeoutMS: 1,
+  });
+
+  const first = await registry.acquire();
+  registry.attachBrowser(first, {
+    close() {
+      return new Promise(() => {});
+    },
+  });
+
+  const retirePromise = registry.retire(first);
+
+  assert.equal(capacity.active(), 0);
+  assert.equal(registry.active(), 0);
+
+  const second = await registry.acquire();
+  assert.equal(typeof second, "object");
+  assert.equal(capacity.active(), 1);
+
+  await retirePromise;
+  await registry.retire(second);
+  assert.equal(capacity.active(), 0);
+});
