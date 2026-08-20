@@ -2429,48 +2429,47 @@ async function runAppGrowingMaterialSearch(page, context, connector, params = {}
             break browserFallback;
           }
           const materialCountBeforeCapture = materials.length;
-          const capture = await captureAppGrowingMaterialPage(browserCapturePage, connector, {
-            competitor,
-            pageNumber,
-            params,
-            captureTimeoutMS,
-            pageTimeoutMS: appGrowingRequestTimeoutMS(deadline, 60_000),
-          });
-          captured.push({
-            competitor,
-            priority,
-            page: pageNumber,
-            source: "browser_network",
-            url: capture.url,
-            graphQL_operations: capture.operations,
-            graphQL_responses: capture.responses,
-            request_recipes: capture.request_recipes,
-            replay: capture.replay,
-            page_snapshot: capture.snapshot,
-            needs_reauth: capture.needsReauth,
-            error: capture.error,
-            page_crashed: capture.pageCrashed,
-            material_list_observed: capture.material_list_observed,
-            total: capture.total,
-            limit: capture.limit,
-            materials_found: capture.materials.length,
-          });
-          if (capture.materials.length > 0) {
-            appGrowingAddLearnedSourceStrategy(learnedStrategies, learnedStrategyKeys, competitor, "browser_network", capture.materials.length);
-          }
-          for (const material of capture.materials) {
-            materials.push({
-              ...material,
+          const captureAttempts = [];
+          for (let attempt = 1; attempt <= 2; attempt += 1) {
+            const capture = await captureAppGrowingMaterialPage(browserCapturePage, connector, {
               competitor,
-              priority,
+              pageNumber,
+              params,
+              captureTimeoutMS,
+              pageTimeoutMS: appGrowingRequestTimeoutMS(deadline, 60_000),
             });
+            captureAttempts.push(capture);
+            captured.push(appGrowingBrowserCaptureRecord(competitor, priority, pageNumber, capture, attempt));
+            if (capture.materials.length > 0) {
+              appGrowingAddLearnedSourceStrategy(learnedStrategies, learnedStrategyKeys, competitor, "browser_network", capture.materials.length);
+            }
+            for (const material of capture.materials) {
+              materials.push({
+                ...material,
+                competitor,
+                priority,
+              });
+            }
+            if (!appGrowingBrowserCaptureShouldRetry(capture, { priority })
+              || attempt >= 2
+              || !appGrowingHasBudget(deadline, appGrowingBrowserFallbackMinBudgetMS)) {
+              break;
+            }
+            const replacementPage = await recreateAppGrowingCapturePage(context, browserCapturePage)
+              .catch(() => null);
+            if (!replacementPage) {
+              browserFallbackStopped = true;
+              break;
+            }
+            browserCapturePage = replacementPage;
           }
           if (materials.length > materialCountBeforeCapture) {
             browserNoProgressCount = 0;
           } else {
             browserNoProgressCount += 1;
           }
-          if (capture.pageCrashed) {
+          const lastCapture = captureAttempts.at(-1);
+          if (lastCapture?.pageCrashed) {
             const replacementPage = await recreateAppGrowingCapturePage(context, browserCapturePage)
               .catch(() => null);
             if (!replacementPage) {
@@ -2653,6 +2652,52 @@ function appGrowingMaterialSearchBlockingError(captured, materials) {
 
 function appGrowingMaterialSearchNonBlockingError(error) {
   return error === "app_brand_not_found" || error === "browser_fallback_disabled_for_bulk_material_search";
+}
+
+function appGrowingBrowserCaptureRecord(competitor, priority, pageNumber, capture, attempt = 1) {
+  return {
+    competitor,
+    priority,
+    page: pageNumber,
+    source: "browser_network",
+    attempt,
+    retry: attempt > 1 || undefined,
+    url: capture.url,
+    graphQL_operations: capture.operations,
+    graphQL_responses: capture.responses,
+    request_recipes: capture.request_recipes,
+    replay: capture.replay,
+    page_snapshot: capture.snapshot,
+    needs_reauth: capture.needsReauth,
+    error: capture.error,
+    page_crashed: capture.pageCrashed,
+    material_list_observed: capture.material_list_observed,
+    material_list_data_observed: capture.material_list_data_observed,
+    total: capture.total,
+    limit: capture.limit,
+    materials_found: capture.materials.length,
+  };
+}
+
+function appGrowingBrowserCaptureShouldRetry(capture, { priority = false } = {}) {
+  if (!capture || capture.needsReauth === true) {
+    return false;
+  }
+  if (Array.isArray(capture.materials) && capture.materials.length > 0) {
+    return false;
+  }
+  const error = String(capture.error || "");
+  if (capture.pageCrashed
+    || error === "appgrowing_browser_material_list_not_observed"
+    || error === "appgrowing_browser_material_list_not_readable"
+    || error === "appgrowing_browser_material_extract_empty") {
+    return true;
+  }
+  const total = Number(capture.total);
+  if (Number.isFinite(total) && total > 0) {
+    return true;
+  }
+  return priority;
 }
 
 function appGrowingBrowserNoProgressThreshold(competitorCount, configuredLimit = appGrowingBrowserNoProgressLimit) {
@@ -3521,9 +3566,10 @@ async function captureAppGrowingMaterialPage(page, connector, options) {
   const requestRecipes = [];
   let materialListRequest = null;
   let materialListObserved = false;
-  let notifyMaterialListObserved = null;
-  const materialListObservedPromise = new Promise((resolve) => {
-    notifyMaterialListObserved = resolve;
+  let materialListDataObserved = false;
+  let notifyMaterialListReady = null;
+  const materialListReadyPromise = new Promise((resolve) => {
+    notifyMaterialListReady = resolve;
   });
   let captureError = "";
   let pageCrashed = false;
@@ -3535,54 +3581,56 @@ async function captureAppGrowingMaterialPage(page, connector, options) {
       }
       let operationNames = [];
       try {
-      const postData = response.request().postData() || "";
-      if (postData) {
-        operationNames = graphQLOperationNames(postData);
-        if (options.params?.diagnostic_capture_request_recipe === true) {
-          requestRecipes.push(...appGrowingGraphQLRequestRecipes(
-            postData,
-            response.request().headers(),
-            options.params?.diagnostic_include_query_text === true,
-          ));
+        const postData = response.request().postData() || "";
+        if (postData) {
+          operationNames = graphQLOperationNames(postData);
+          if (options.params?.diagnostic_capture_request_recipe === true) {
+            requestRecipes.push(...appGrowingGraphQLRequestRecipes(
+              postData,
+              response.request().headers(),
+              options.params?.diagnostic_include_query_text === true,
+            ));
+          }
+          if (!materialListRequest && operationNames.includes("materialList")) {
+            materialListRequest = {
+              url: response.url(),
+              payload: postData,
+              headers: response.request().headers(),
+            };
+          }
+          if (operationNames.includes("materialList")) {
+            materialListObserved = true;
+          }
         }
-        if (!materialListRequest && operationNames.includes("materialList")) {
-          materialListRequest = {
-            url: response.url(),
-            payload: postData,
-            headers: response.request().headers(),
-          };
+      } catch {
+        operationNames = [];
+      }
+      for (const operationName of operationNames) {
+        operations.add(operationName);
+      }
+      const summary = {
+        status: response.status(),
+        operations: operationNames,
+      };
+      responses.push(summary);
+      try {
+        const body = await response.json();
+        summary.needs_reauth = appGrowingGraphQLNeedsReauth(body) || undefined;
+        summary.error = appGrowingGraphQLErrorMessage(body) || undefined;
+        const materialList = valueAtPath(body, ["data", "materialList"]);
+        if (materialList && typeof materialList === "object") {
+          materialListDataObserved = true;
+          summary.total = parseNumericValue(materialList.total);
+          summary.limit = parseNumericValue(materialList.limit);
+          notifyMaterialListReady?.();
         }
-        if (operationNames.includes("materialList")) {
-          materialListObserved = true;
-          notifyMaterialListObserved?.();
+        const materials = operationNames.includes("materialList")
+          ? extractAppGrowingMaterialListMaterials(body)
+          : [];
+        if (materials.length > 0) {
+          captured.push(...materials);
+          notifyMaterialListReady?.();
         }
-      }
-    } catch {
-      operationNames = [];
-    }
-    for (const operationName of operationNames) {
-      operations.add(operationName);
-    }
-    const summary = {
-      status: response.status(),
-      operations: operationNames,
-    };
-    responses.push(summary);
-    try {
-      const body = await response.json();
-      summary.needs_reauth = appGrowingGraphQLNeedsReauth(body) || undefined;
-      summary.error = appGrowingGraphQLErrorMessage(body) || undefined;
-      const materialList = valueAtPath(body, ["data", "materialList"]);
-      if (materialList && typeof materialList === "object") {
-        summary.total = parseNumericValue(materialList.total);
-        summary.limit = parseNumericValue(materialList.limit);
-      }
-      const materials = operationNames.includes("materialList")
-        ? extractAppGrowingMaterialListMaterials(body)
-        : [];
-      if (materials.length > 0) {
-        captured.push(...materials);
-      }
       } catch {
         // Ignore non-JSON GraphQL responses and keep the crawl best-effort.
       }
@@ -3601,25 +3649,27 @@ async function captureAppGrowingMaterialPage(page, connector, options) {
   try {
     await page.goto(url, { waitUntil: "domcontentloaded", timeout: positiveIntegerParam(options.pageTimeoutMS, 60_000, 1_000, 60_000) });
     await Promise.race([
-      materialListObservedPromise,
+      materialListReadyPromise,
       sleep(options.captureTimeoutMS),
     ]);
-    if (!materialListObserved) {
+    if (!materialListDataObserved) {
       await stimulateAppGrowingMaterialList(page, options.captureTimeoutMS);
       await Promise.race([
-        materialListObservedPromise,
+        materialListReadyPromise,
         sleep(options.captureTimeoutMS),
       ]);
     }
-    if (!materialListObserved) {
+    if (!materialListDataObserved) {
       await page.reload({ waitUntil: "domcontentloaded", timeout: positiveIntegerParam(options.pageTimeoutMS, 60_000, 1_000, 60_000) });
       await Promise.race([
-        materialListObservedPromise,
+        materialListReadyPromise,
         sleep(options.captureTimeoutMS),
       ]);
     }
     if (!materialListObserved) {
       captureError = "appgrowing_browser_material_list_not_observed";
+    } else if (!materialListDataObserved) {
+      captureError = "appgrowing_browser_material_list_not_readable";
     }
   } catch (error) {
     captureError = errorMessage(error);
@@ -3645,6 +3695,10 @@ async function captureAppGrowingMaterialPage(page, connector, options) {
   const materialListResponse = responses.slice().reverse().find((response) => (
     response.operations.includes("materialList")
   ));
+  const total = parseNumericValue(materialListResponse?.total);
+  if (!captureError && Number.isFinite(total) && total > 0 && captured.length === 0) {
+    captureError = "appgrowing_browser_material_extract_empty";
+  }
   return {
     url,
     operations: Array.from(operations).sort(),
@@ -3657,7 +3711,8 @@ async function captureAppGrowingMaterialPage(page, connector, options) {
     error: captureError,
     pageCrashed,
     material_list_observed: materialListObserved,
-    total: parseNumericValue(materialListResponse?.total),
+    material_list_data_observed: materialListDataObserved,
+    total,
     limit: parseNumericValue(materialListResponse?.limit),
     materials: captured,
   };
@@ -5025,6 +5080,7 @@ export {
   appGrowingMaterialDedupeKey,
   appGrowingMaterialURL,
   appGrowingBrowserNoProgressThreshold,
+  appGrowingBrowserCaptureShouldRetry,
   appGrowingMaterialSearchBlockingError,
   appGrowingSearchAppVariables,
   appGrowingSelectionMixSummary,

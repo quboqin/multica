@@ -12,6 +12,7 @@ import {
   appGrowingGraphQLRequest,
   appGrowingMaterialDedupeKey,
   appGrowingMaterialURL,
+  appGrowingBrowserCaptureShouldRetry,
   appGrowingBrowserNoProgressThreshold,
   appGrowingMaterialSearchBlockingError,
   appGrowingSearchAppVariables,
@@ -306,6 +307,69 @@ test("captures AppGrowing browser page crashes as page-level errors", async () =
   assert.equal(capture.url.includes("page=2"), true);
 });
 
+test("waits for readable AppGrowing materialList bodies", async () => {
+  const handlers = new Map();
+  const materialListBody = {
+    data: {
+      materialList: {
+        total: 5,
+        limit: 50,
+        list: [],
+      },
+    },
+  };
+  const page = {
+    route: async () => null,
+    unroute: async () => null,
+    on: (event, handler) => {
+      handlers.set(event, handler);
+    },
+    off: (event, handler) => {
+      if (handlers.get(event) === handler) {
+        handlers.delete(event);
+      }
+    },
+    goto: async () => {
+      const handler = handlers.get("response");
+      handler?.({
+        url: () => "https://api-appgrowing-global.youcloud.com/graphql",
+        status: () => 200,
+        request: () => ({
+          postData: () => JSON.stringify({ operationName: "materialList", variables: { keyword: "Easycash" } }),
+          headers: () => ({}),
+        }),
+        json: async () => materialListBody,
+      });
+    },
+    reload: async () => null,
+    mouse: { wheel: async () => null },
+    keyboard: { press: async () => null },
+    locator: () => ({ innerText: async () => "" }),
+    title: async () => "AppGrowing",
+    url: () => "https://appgrowing-global.youcloud.com/leaflet?keyword=Easycash",
+  };
+
+  const capture = await captureAppGrowingMaterialPage(
+    page,
+    {
+      graphQLURL: "https://api-appgrowing-global.youcloud.com/graphql",
+      probeURL: "https://appgrowing-global.youcloud.com/leaflet",
+      anonymousTextPatterns: [],
+    },
+    {
+      competitor: "Easycash",
+      pageNumber: 1,
+      params: { date_range: "-29,0" },
+      captureTimeoutMS: 3000,
+    },
+  );
+
+  assert.equal(capture.material_list_observed, true);
+  assert.equal(capture.material_list_data_observed, true);
+  assert.equal(capture.total, 5);
+  assert.equal(capture.error, "appgrowing_browser_material_extract_empty");
+});
+
 
 test("builds AppGrowing GraphQL material-list variables from relative date ranges", () => {
   const now = new Date("2026-07-22T12:34:56Z");
@@ -563,6 +627,24 @@ test("falls back per competitor when only some GraphQL pages return material", (
 test("tries every browser fallback competitor before no-progress stop", () => {
   assert.equal(appGrowingBrowserNoProgressThreshold(7, 3), 7);
   assert.equal(appGrowingBrowserNoProgressThreshold(2, 3), 3);
+});
+
+test("retries priority browser captures that return empty material data", () => {
+  assert.equal(appGrowingBrowserCaptureShouldRetry({
+    materials: [],
+    total: 16402,
+    error: "",
+  }, { priority: true }), true);
+  assert.equal(appGrowingBrowserCaptureShouldRetry({
+    materials: [],
+    total: null,
+    error: "",
+  }, { priority: true }), true);
+  assert.equal(appGrowingBrowserCaptureShouldRetry({
+    materials: [{ id: "material-1" }],
+    total: 16402,
+    error: "",
+  }, { priority: true }), false);
 });
 
 test("classifies mixed empty browser attempts with capture errors as blocking", () => {
