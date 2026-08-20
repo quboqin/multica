@@ -2957,7 +2957,7 @@ export class ApiClient {
   async updateCreativeResourceFile(
     id: string,
     fileId: string,
-    data: { role: string; label?: string; metadata?: Record<string, unknown> },
+    data: { attachment_id?: string; role: string; label?: string; metadata?: Record<string, unknown> },
   ): Promise<CreativeResourceFile> {
     const raw = await this.fetch<unknown>(`/api/creative/resources/${id}/files/${fileId}`, {
       method: "PUT",

@@ -281,9 +281,7 @@ LEFT JOIN LATERAL (
       FROM default_pre_adaptation_resource resource
       WHERE latest_analysis.result->'adaptation'->>'status' = 'completed'
         AND latest_analysis.result->'adaptation'->'result'->>'market_pack_id' = resource.market_pack_id
-        AND latest_analysis.result->'adaptation'->'result'->>'market_pack_version' = resource.market_pack_version::text
         AND latest_analysis.result->'adaptation'->'result'->>'copy_library_id' = resource.copy_library_id
-        AND latest_analysis.result->'adaptation'->'result'->>'copy_library_version' = resource.copy_library_version::text
         AND (
           jsonb_array_length(CASE WHEN jsonb_typeof(latest_analysis.result->'adaptation'->'result'->'text_replacements') = 'array' THEN latest_analysis.result->'adaptation'->'result'->'text_replacements' ELSE '[]'::jsonb END) > 0
           OR jsonb_array_length(CASE WHEN jsonb_typeof(latest_analysis.result->'adaptation'->'result'->'numeric_layouts') = 'array' THEN latest_analysis.result->'adaptation'->'result'->'numeric_layouts' ELSE '[]'::jsonb END) > 0
@@ -493,9 +491,7 @@ LEFT JOIN LATERAL (
       FROM default_pre_adaptation_resource resource
       WHERE latest_analysis.result->'adaptation'->>'status' = 'completed'
         AND latest_analysis.result->'adaptation'->'result'->>'market_pack_id' = resource.market_pack_id
-        AND latest_analysis.result->'adaptation'->'result'->>'market_pack_version' = resource.market_pack_version::text
         AND latest_analysis.result->'adaptation'->'result'->>'copy_library_id' = resource.copy_library_id
-        AND latest_analysis.result->'adaptation'->'result'->>'copy_library_version' = resource.copy_library_version::text
         AND (
           jsonb_array_length(CASE WHEN jsonb_typeof(latest_analysis.result->'adaptation'->'result'->'text_replacements') = 'array' THEN latest_analysis.result->'adaptation'->'result'->'text_replacements' ELSE '[]'::jsonb END) > 0
           OR jsonb_array_length(CASE WHEN jsonb_typeof(latest_analysis.result->'adaptation'->'result'->'numeric_layouts') = 'array' THEN latest_analysis.result->'adaptation'->'result'->'numeric_layouts' ELSE '[]'::jsonb END) > 0
@@ -1340,9 +1336,10 @@ func (h *Handler) UpdateCreativeResourceFile(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	var req struct {
-		Role     string          `json:"role"`
-		Label    string          `json:"label"`
-		Metadata json.RawMessage `json:"metadata"`
+		AttachmentID string          `json:"attachment_id"`
+		Role         string          `json:"role"`
+		Label        string          `json:"label"`
+		Metadata     json.RawMessage `json:"metadata"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid JSON body")
@@ -1376,6 +1373,18 @@ FOR UPDATE
 `, fileID, resourceID, workspaceID).Scan(&attachmentID); err != nil {
 		writeError(w, http.StatusNotFound, "market resource file not found")
 		return
+	}
+	if strings.TrimSpace(req.AttachmentID) != "" {
+		nextAttachmentID, parsed := parseUUIDOrBadRequest(w, req.AttachmentID, "attachment_id")
+		if !parsed {
+			return
+		}
+		attachment, err := h.Queries.GetAttachmentByIDOnly(r.Context(), nextAttachmentID)
+		if err != nil || attachment.WorkspaceID != workspaceID {
+			writeError(w, http.StatusNotFound, "attachment not found")
+			return
+		}
+		attachmentID = nextAttachmentID
 	}
 	resource, err := bumpCreativeResourceRevision(r.Context(), tx, workspaceID, resourceID, userID)
 	if err != nil {

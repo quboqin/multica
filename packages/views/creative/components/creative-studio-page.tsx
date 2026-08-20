@@ -422,6 +422,7 @@ function CreativeOrderDetail({ orderId, onBack, onBrowseOrders, backLabel }: { o
   const [adjustOpen, setAdjustOpen] = useState(false);
   const [adjustment, setAdjustment] = useState("");
   const [adjustBusy, setAdjustBusy] = useState(false);
+  const [retryingVariantId, setRetryingVariantId] = useState("");
   const [cancelOpen, setCancelOpen] = useState(false);
   const comparisonRef = useRef<HTMLDivElement>(null);
   const confirmedContentRef = useRef<HTMLDivElement>(null);
@@ -545,6 +546,23 @@ function CreativeOrderDetail({ orderId, onBack, onBrowseOrders, backLabel }: { o
     } catch (error) { toast.error(error instanceof Error ? error.message : "无法提交调整请求"); }
     finally { setAdjustBusy(false); }
   };
+  const retryVariant = async (variant: CreativeOrderVariant, action: { kind: "workflow" | "qc"; taskId: string; label: string }) => {
+    setRetryingVariantId(variant.id);
+    try {
+      if (action.kind === "qc") {
+        await api.retryCreativeOrderVariantQC(orderId, variant.id);
+      } else {
+        await api.retryCreativeOrderWorkflowFailure(orderId, action.taskId);
+      }
+      await queryClient.invalidateQueries({ queryKey: creativeKeys.order(wsId, orderId) });
+      await queryClient.invalidateQueries({ queryKey: creativeKeys.orders(wsId) });
+      toast.success(action.kind === "qc" ? "已重新启动质检" : "已重新启动此方案");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "无法重试此方案");
+    } finally {
+      setRetryingVariantId("");
+    }
+  };
 
   return <div className="mx-auto max-w-[1440px] space-y-4">
     <div className="flex flex-wrap items-end justify-between gap-3 border-b pb-3">
@@ -568,6 +586,8 @@ function CreativeOrderDetail({ orderId, onBack, onBrowseOrders, backLabel }: { o
           defaultOpen={index === 0}
           showDirectionDetails={false}
           adjustment={adjustmentVariantId && adjustmentSizeKey ? { variantId: adjustmentVariantId, sizeKey: adjustmentSizeKey, status: adjustmentState } : undefined}
+          retryingVariantId={retryingVariantId}
+          onRetryVariant={(variant, action) => void retryVariant(variant, action)}
           onAdopt={(variantId, risk) => {
             const selectedAsset = reviewAssets.find((asset) => asset.variant_id === variantId && asset.size_key === "1080x1080")
               ?? reviewAssets.find((asset) => asset.variant_id === variantId);
@@ -1302,7 +1322,7 @@ function MarketPackForm({ resource, value, onChange, copyLibraries }: {
             <Field label="市场"><Input value={stringValue(value.market)} placeholder="Indonesia" onChange={(event) => set("market", event.target.value)} /></Field>
             <Field label="语言"><Input value={stringValue(value.locale)} placeholder="id-ID" onChange={(event) => set("locale", event.target.value)} /></Field>
             <Field label="币种"><Input value={stringValue(value.currency)} placeholder="IDR" onChange={(event) => set("currency", event.target.value)} /></Field>
-            <Field label="绑定文案库" wide><NativeSelect value={stringValue(value.copy_library_id)} onChange={(event) => set("copy_library_id", event.target.value)}><NativeSelectOption value="">选择已发布文案库</NativeSelectOption>{copyLibraries.filter((library) => library.published_version > 0).map((library) => <NativeSelectOption key={library.id} value={library.id}>{library.name} · v{library.published_version}</NativeSelectOption>)}</NativeSelect></Field>
+            <Field label="绑定文案库" wide><NativeSelect value={stringValue(value.copy_library_id)} onChange={(event) => set("copy_library_id", event.target.value)}><NativeSelectOption value="">选择已发布文案库</NativeSelectOption>{copyLibraries.filter((library) => library.published_version > 0).map((library) => <NativeSelectOption key={library.id} value={library.id}>{library.name}</NativeSelectOption>)}</NativeSelect></Field>
           </FormSection>
         </TabsContent>
         <TabsContent value="brand" className="mt-0 space-y-8">
@@ -1338,7 +1358,7 @@ function ResourceList({ title, resources, activeId, onSelect, onCreate }: {
       </div>
       {resources.map((resource) => (
         <button key={resource.id} type="button" onClick={() => onSelect(resource.id)} className={cn("block w-full border-b px-3 py-3 text-left hover:bg-muted/40", resource.id === activeId && "bg-background shadow-[inset_2px_0_0_hsl(var(--primary))]") }>
-          <div className="flex items-center justify-between gap-2"><span className="truncate text-sm font-medium">{resource.name}</span><span className="shrink-0 font-mono text-[10px] text-muted-foreground">v{resource.version}</span></div>
+          <div className="flex items-center justify-between gap-2"><span className="truncate text-sm font-medium">{resource.name}</span><span className="shrink-0 text-[10px] text-muted-foreground">{resource.status === "published" ? "已发布" : "草稿"}</span></div>
           <p className="mt-1 truncate text-xs text-muted-foreground">{resource.description || (resource.status === "published" ? "已发布" : "草稿")}</p>
         </button>
       ))}
@@ -1347,7 +1367,7 @@ function ResourceList({ title, resources, activeId, onSelect, onCreate }: {
 }
 
 function ResourceTitle({ resource }: { resource: CreativeResource }) {
-  return <div className="min-w-0"><div className="flex items-center gap-2"><h2 className="truncate text-sm font-semibold">{resource.name}</h2><Badge variant="outline">{resource.status === "published" ? `已发布 v${resource.published_version}` : `草稿 v${resource.version}`}</Badge></div><p className="mt-0.5 truncate text-xs text-muted-foreground">{resource.description}</p></div>;
+  return <div className="min-w-0"><div className="flex items-center gap-2"><h2 className="truncate text-sm font-semibold">{resource.name}</h2><Badge variant="outline">{resource.status === "published" ? "已发布" : "草稿"}</Badge></div><p className="mt-0.5 truncate text-xs text-muted-foreground">{resource.description}</p></div>;
 }
 
 function PublishButton({ resource }: { resource: CreativeResource }) {

@@ -755,8 +755,8 @@ function formatIDR(value: number): string {
 export function creativeMaterialAnalysisReadiness(
   analysis: CreativeSourceAnalysis | undefined,
   analysisState: MaterialAnalysisState,
-  marketPack: Pick<CreativeResource, "id" | "published_version"> | undefined,
-  copyLibrary: Pick<CreativeResource, "id" | "published_version"> | undefined,
+  marketPack: Pick<CreativeResource, "id"> | undefined,
+  copyLibrary: Pick<CreativeResource, "id"> | undefined,
 ): CreativeMaterialAnalysisReadiness {
   if (!analysisState.ready) {
     return { ready: false, active: analysisState.status !== "failed", failed: analysisState.status === "failed", reason: analysisState.error };
@@ -976,7 +976,7 @@ function CreativeOrderDraft({ candidates, analyses, deselecting, onDeselect, onC
     for (const candidate of candidates) {
       const analysis = completedAnalyses.get(candidate.id);
       if (!analysis || sourceAnalysisNeedsVisualUpgrade(analysis) || sourceAnalysisAdaptationStatus(analysis)) continue;
-      const attemptKey = `${analysis.id}:${marketPack.id}:v${marketPack.published_version}:${copyLibrary.id}:v${copyLibrary.published_version}`;
+      const attemptKey = `${analysis.id}:${marketPack.id}:${copyLibrary.id}`;
       if (autoPreAdaptationAttempts.current.has(attemptKey)) continue;
       autoPreAdaptationAttempts.current.add(attemptKey);
       preparePreAdaptation.mutate({ sourceAnalysisId: analysis.id, marketPackId: marketPack.id });
@@ -1084,7 +1084,7 @@ function CreativeOrderDraft({ candidates, analyses, deselecting, onDeselect, onC
   return <section className="min-w-0 border bg-background" aria-labelledby="creative-order-draft-title">
     <div className="flex flex-wrap items-center justify-between gap-2 border-b px-4 py-3">
       <div className="min-w-0"><h3 id="creative-order-draft-title" className="text-sm font-semibold">批量确认文案</h3><p className="mt-1 text-xs text-muted-foreground">确认画面文案后，会一次提交这批素材出图。</p></div>
-      <div className="flex min-w-0 flex-wrap items-center justify-end gap-2"><Badge variant="outline" className="max-w-full truncate">{marketPack ? `${marketPack.name} · v${marketPack.published_version}` : "市场规则未配置"}</Badge>{selectedSquad && <Badge variant="outline" className="max-w-full truncate">{selectedSquad.name}</Badge>}<Badge variant="outline">可提交 {candidates.length - unconfiguredCandidates.length}/{candidates.length}</Badge><Badge>{candidates.length} 张素材</Badge><Button size="sm" variant="outline" onClick={onClose}><ArrowLeft className="h-4 w-4" />返回素材库</Button></div>
+      <div className="flex min-w-0 flex-wrap items-center justify-end gap-2"><Badge variant="outline" className="max-w-full truncate">{marketPack ? marketPack.name : "市场规则未配置"}</Badge>{selectedSquad && <Badge variant="outline" className="max-w-full truncate">{selectedSquad.name}</Badge>}<Badge variant="outline">可提交 {candidates.length - unconfiguredCandidates.length}/{candidates.length}</Badge><Badge>{candidates.length} 张素材</Badge><Button size="sm" variant="outline" onClick={onClose}><ArrowLeft className="h-4 w-4" />返回素材库</Button></div>
     </div>
     <SelectedMaterialStrip candidates={candidates} activeCandidateId={activeCandidate?.id ?? ""} readinessByCandidateId={readinessByCandidateId} deselecting={deselecting} onSelect={setActiveCandidateId} onDeselect={onDeselect} />
     {activeCandidate && <article key={activeCandidate.id} className="min-w-0 space-y-4 p-4" data-testid="creative-order-active-editor" data-candidate-id={activeCandidate.id}>
@@ -1375,7 +1375,7 @@ export type PreparedPreAdaptation = {
   numericLayouts: PreparedNumericLayout[];
 };
 
-export function preparedPreAdaptation(analysis: CreativeSourceAnalysis | undefined, marketPack: { id: string; published_version: number } | undefined, copyLibrary: { id: string; published_version: number } | undefined): PreparedPreAdaptation | null {
+export function preparedPreAdaptation(analysis: CreativeSourceAnalysis | undefined, marketPack: { id: string } | undefined, copyLibrary: { id: string } | undefined): PreparedPreAdaptation | null {
   if (!analysis || !marketPack || !copyLibrary) return null;
   const adaptation = record(analysis.result).adaptation;
   const envelope = record(adaptation);
@@ -1383,9 +1383,7 @@ export function preparedPreAdaptation(analysis: CreativeSourceAnalysis | undefin
   const status = recordString(envelope, "status");
   if ((status !== "completed" && status !== "unavailable")
     || recordString(result, "market_pack_id") !== marketPack.id
-    || Number(result.market_pack_version) !== marketPack.published_version
-    || recordString(result, "copy_library_id") !== copyLibrary.id
-    || Number(result.copy_library_version) !== copyLibrary.published_version) return null;
+    || recordString(result, "copy_library_id") !== copyLibrary.id) return null;
   const sourceResult = record(analysis.result);
   const visualBoundsByBlockId = sourceTextBlockVisualBounds(sourceResult);
   const semanticKindsByBlockId = sourceTextBlockSemanticKinds(sourceResult);

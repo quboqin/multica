@@ -333,12 +333,12 @@ describe("CreativeOrderDeliveryCandidates", () => {
     expect(screen.getAllByText("生成失败").length).toBeGreaterThan(0);
     expect(screen.getByText("成图生成失败")).toBeInTheDocument();
     expect(screen.getByText("底部 Prime 固定贴片区域被模型内容占用，未注册三尺寸成图。")).toBeInTheDocument();
-    expect(screen.getByText("后台已记录该步骤未补齐；不用手动重试，可查看其他候选、标注调整或重新发起。")).toBeInTheDocument();
+    expect(screen.getByText("可以直接重试这个方案；也可以查看其他候选或标注调整。")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "重试失败步骤" })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "尚不可采用" })).toBeDisabled();
   });
 
-  it("does not expose workflow retry actions to business users", () => {
+  it("exposes workflow retry on each retryable blocked variant", () => {
     const blocked = variant("v01", false);
     blocked.status = "action_required";
     blocked.qc_reports = [];
@@ -352,10 +352,11 @@ describe("CreativeOrderDeliveryCandidates", () => {
     };
     const orderItem = item();
     orderItem.variants = [blocked];
-    render(<CreativeOrderDeliveryCandidates orderId="order-1" item={orderItem} source={{ label: "竞品原图", url: "https://cdn.example/source.png" }} attachments={attachmentMap(orderItem)} adoptingVariantId="" onAdopt={vi.fn()} onAssetSelect={vi.fn()} />);
+    const onRetryVariant = vi.fn();
+    render(<CreativeOrderDeliveryCandidates orderId="order-1" item={orderItem} source={{ label: "竞品原图", url: "https://cdn.example/source.png" }} attachments={attachmentMap(orderItem)} adoptingVariantId="" onAdopt={vi.fn()} onAssetSelect={vi.fn()} onRetryVariant={onRetryVariant} />);
 
-    expect(screen.getByText("后台已记录该步骤未补齐；不用手动重试，可查看其他候选、标注调整或重新发起。")).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "重试失败步骤" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "重试此方案" }));
+    expect(onRetryVariant).toHaveBeenCalledWith(blocked, { kind: "workflow", taskId: "task-1", label: "重试此方案" });
   });
 
   it("shows diagnostic model output when a stopped variant has no registered assets", () => {
@@ -484,6 +485,25 @@ describe("CreativeOrderDeliveryCandidates", () => {
       acknowledged: true,
       reason: "用户确认忽略系统提醒并采用",
     });
+  });
+
+  it("exposes dual-lane QC retry for recoverable failed QC variants", () => {
+    const failed = variant("v01");
+    failed.status = "action_required";
+    failed.qc_status = "failed";
+    failed.qc_recovery_available = true;
+    failed.qc_reports = [
+      qcReport({ id: "technical-r2", variant_id: failed.id, revision: 2, lane: "technical", status: "passed", findings: {}, updated_at: "2026-08-05T00:00:00Z" }),
+      qcReport({ id: "visual-r2", variant_id: failed.id, revision: 2, lane: "visual", status: "failed", findings: {}, updated_at: "2026-08-05T00:00:00Z" }),
+    ];
+    const orderItem = item();
+    orderItem.variants = [failed];
+    const onRetryVariant = vi.fn();
+
+    render(<CreativeOrderDeliveryCandidates orderId="order-1" item={orderItem} source={{ label: "竞品原图", url: "https://cdn.example/source.png" }} attachments={attachmentMap(orderItem)} adoptingVariantId="" onAdopt={vi.fn()} onAssetSelect={vi.fn()} onRetryVariant={onRetryVariant} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "重新质检" }));
+    expect(onRetryVariant).toHaveBeenCalledWith(failed, { kind: "qc", taskId: "", label: "重新质检" });
   });
 
   it("shows qc-finalize failures as system reminders without exposing internal lane text", () => {

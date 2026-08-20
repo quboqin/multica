@@ -177,7 +177,27 @@ describe("CreativeMaterialLibrary contracts", () => {
   });
 
   it("does not mark a generic adaptation as ready", () => {
-    expect(preparedPreAdaptation({ result: { adaptation: { status: "completed", summary: "generic", result: { market_pack_id: "market-1", market_pack_version: 1, copy_library_id: "library-1", copy_library_version: 1 } } } } as any, { id: "market-1", published_version: 1 }, { id: "library-1", published_version: 1 })).toBeNull();
+    expect(preparedPreAdaptation({ result: { adaptation: { status: "completed", summary: "generic", result: { market_pack_id: "market-1", market_pack_version: 1, copy_library_id: "library-1", copy_library_version: 1 } } } } as any, { id: "market-1" }, { id: "library-1" })).toBeNull();
+  });
+
+  it("keeps the latest completed adaptation usable across resource version changes", () => {
+    const result = preparedPreAdaptation({
+      result: {
+        adaptation: {
+          status: "completed",
+          summary: "ready",
+          result: {
+            market_pack_id: "market-1",
+            market_pack_version: 1,
+            copy_library_id: "library-1",
+            copy_library_version: 1,
+            text_replacements: [{ block_id: "headline", location: "标题", role: "headline", source_text: "Cash", replacement_text: "Pembiayaan Fleksibel", source_keys: ["headline"], status: "ready" }],
+          },
+        },
+      },
+    } as any, { id: "market-1" }, { id: "library-1" });
+
+    expect(result).toMatchObject({ status: "completed", textReplacements: [{ blockId: "headline", replacementText: "Pembiayaan Fleksibel" }] });
   });
 
   it("keeps a material with a failed adaptation visibly blocked", () => {

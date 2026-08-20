@@ -1,7 +1,7 @@
 "use client";
 
 import { useId, useState } from "react";
-import { AlertTriangle, Check, CheckCircle2, ChevronDown, Download, ExternalLink, Eye, Image as ImageIcon, Info, PackageCheck } from "lucide-react";
+import { AlertTriangle, Check, CheckCircle2, ChevronDown, Download, ExternalLink, Eye, Image as ImageIcon, Info, PackageCheck, RefreshCw } from "lucide-react";
 import { strToU8, zipSync } from "fflate";
 import type { Attachment, CreativeOrder, CreativeOrderAsset, CreativeOrderDiagnosticAsset, CreativeOrderItem, CreativeOrderQCReport, CreativeOrderVariant, CreativeOrderWorkflowFailure } from "@multica/core/types";
 import { Badge } from "@multica/ui/components/ui/badge";
@@ -52,6 +52,12 @@ export type CreativeDeliveryNamingContext = Pick<CreativeOrder, "created_at" | "
 export type CreativeVariantAdoptionRisk = {
   acknowledged: true;
   reason: string;
+};
+
+export type CreativeVariantRetryAction = {
+  kind: "workflow" | "qc";
+  taskId: string;
+  label: string;
 };
 
 export function adoptedCreativeOrderVariant(item: CreativeOrderItem): CreativeOrderVariant | undefined {
@@ -232,6 +238,8 @@ export function CreativeOrderDeliveryCandidates({
   showDirectionDetails = true,
   defaultOpen = true,
   adjustment,
+  retryingVariantId = "",
+  onRetryVariant,
 }: {
   orderId: string;
   item: CreativeOrderItem;
@@ -246,6 +254,8 @@ export function CreativeOrderDeliveryCandidates({
   showDirectionDetails?: boolean;
   defaultOpen?: boolean;
   adjustment?: { variantId: string; sizeKey: string; status: string };
+  retryingVariantId?: string;
+  onRetryVariant?: (variant: CreativeOrderVariant, action: CreativeVariantRetryAction) => void;
 }) {
   const adoptedVariant = adoptedCreativeOrderVariant(item);
   const otherVariants = adoptedVariant ? item.variants.filter((variant) => variant.id !== adoptedVariant.id) : [];
@@ -303,6 +313,8 @@ export function CreativeOrderDeliveryCandidates({
               disabled={disabled}
               subdued
               adjustment={adjustment}
+              retrying={retryingVariantId === variant.id}
+              onRetry={onRetryVariant}
             />)}
           </div>
         </details>}
@@ -318,6 +330,8 @@ export function CreativeOrderDeliveryCandidates({
             onAssetInfo={onAssetInfo}
             disabled={disabled}
             adjustment={adjustment}
+            retrying={retryingVariantId === variant.id}
+            onRetry={onRetryVariant}
           />)}
         </div> : <div className="grid gap-3 p-4 lg:grid-cols-3"><CreativeOrderVariantPlaceholder /></div>}
     </div>
@@ -442,6 +456,8 @@ function VariantCandidate({
   disabled = false,
   subdued = false,
   adjustment,
+  retrying = false,
+  onRetry,
 }: {
   variant: CreativeOrderVariant;
   attachments: Map<string, DeliveryAttachment>;
@@ -453,6 +469,8 @@ function VariantCandidate({
   disabled?: boolean;
   subdued?: boolean;
   adjustment?: { variantId: string; sizeKey: string; status: string };
+  retrying?: boolean;
+  onRetry?: (variant: CreativeOrderVariant, action: CreativeVariantRetryAction) => void;
 }) {
   const readiness = creativeVariantAdoptionReadiness(variant);
   const riskAdoption = creativeVariantRiskAdoptionReadiness(variant);
@@ -471,6 +489,7 @@ function VariantCandidate({
   const backgroundRunning = creativeVariantHasBackgroundWorkInProgress(variant);
   const requiresRiskAcknowledgement = riskAdoption.allowed;
   const currentSizeAdjustment = adjustment?.variantId === variant.id ? adjustment : undefined;
+  const retryAction = creativeVariantRetryAction(variant);
   const adjustmentBadge = currentSizeAdjustment?.status.includes("已完成")
     ? "已完成"
     : currentSizeAdjustment?.status.includes("未启动")
@@ -520,6 +539,10 @@ function VariantCandidate({
       <p id={descriptionId} className={cn("min-h-8 text-xs", statusTone)}>{readiness.status}</p>
       <VariantActionRequiredNotice variant={variant} disabled={disabled} />
       <VariantQCDetails details={qcDetails} />
+      {retryAction && onRetry && <Button className="w-full" size="sm" variant="outline" disabled={disabled || retrying} onClick={() => onRetry(variant, retryAction)}>
+        <RefreshCw className={cn("h-4 w-4", retrying && "animate-spin")} />
+        {retrying ? "正在重试" : retryAction.label}
+      </Button>}
       <Button className="w-full" size="sm" variant="outline" disabled={!cover || !coverURL} onClick={() => { if (cover && coverURL) onAssetSelect(cover.id); }}>
         <Eye className="h-4 w-4" />
         {cover && coverURL ? "查看并标注" : "暂无可标注成图"}
@@ -578,7 +601,7 @@ function VariantActionRequiredNotice({ variant, disabled = false }: { variant: C
   return <div role="status" className="space-y-1 border border-amber-300 bg-amber-50 px-2 py-2 text-xs text-amber-900 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-200" data-testid="creative-variant-action-required">
     <p className="flex items-center gap-1.5 font-medium"><AlertTriangle className="h-3.5 w-3.5" />{creativeVariantBlockerTitle(blocker?.workflow, creativeVariantHasProductionStop(variant))}</p>
     <p className="break-words">{detail}</p>
-    <p className="text-amber-800/80 dark:text-amber-200/80">{disabled ? "订单已结束，过程记录保留。" : "后台已记录该步骤未补齐；不用手动重试，可查看其他候选、标注调整或重新发起。"}</p>
+    <p className="text-amber-800/80 dark:text-amber-200/80">{disabled ? "订单已结束，过程记录保留。" : blocker?.retryable ? "可以直接重试这个方案；也可以查看其他候选或标注调整。" : "后台已记录该步骤未补齐；可查看其他候选、标注调整或重新发起。"}</p>
   </div>;
 }
 
@@ -863,6 +886,16 @@ export function creativeVariantCanRetryQC(variant: CreativeOrderVariant): boolea
     .filter((size) => CREATIVE_DELIVERY_SIZES.includes(size as (typeof CREATIVE_DELIVERY_SIZES)[number])));
   if (primedSizes.size !== CREATIVE_DELIVERY_SIZES.length) return false;
   return creativeVariantQCDetails(variant).some((detail) => detail.status === "failed");
+}
+
+export function creativeVariantRetryAction(variant: CreativeOrderVariant): CreativeVariantRetryAction | null {
+  if (creativeVariantCanRetryQC(variant)) {
+    return { kind: "qc", taskId: "", label: "重新质检" };
+  }
+  const blocker = variant.action_required;
+  if (!blocker?.retryable || !blocker.task_id || creativeOrderWorkflowFailureIsQC(blocker.workflow)) return null;
+  if (variant.status !== "action_required" && variant.status !== "failed") return null;
+  return { kind: "workflow", taskId: blocker.task_id, label: "重试此方案" };
 }
 
 function currentCreativeVariantQCReports(variant: CreativeOrderVariant): Map<"technical" | "visual", CreativeOrderQCReport> {
