@@ -2,7 +2,7 @@
 
 | Contract | Source |
 | --- | --- |
-| The Skill invokes `multica creative order prime-compose <order-id> --variant <variant-id> --output json` as its only execution command | `references/run_prime_compose.py` |
+| The Skill invokes `multica creative order prime-compose <order-id> --variant <variant-id> --output json` as its only execution command, with a 5 minute default HTTP timeout for the long-running backend composition request | `references/run_prime_compose.py` |
 | The backend owns deterministic image composition, Prime template validation, output assets, and composition evidence | `server/internal/handler/creative_prime_backend.go`, `server/internal/creative/primecompose` |
 | `primecompose` remains the pixel-composition implementation and is not reimplemented in this Skill | `server/internal/creative/primecompose/image_prime_compose.py`, `server/internal/creative/primecompose/runner.go` |
 | The model output remains an unbranded, normalized base; the Skill does not change prompt text, approved copy, layout, or Prime visual-context semantics | `scripts/creative-platform-skills/ad-creative-production/SKILL.md` |

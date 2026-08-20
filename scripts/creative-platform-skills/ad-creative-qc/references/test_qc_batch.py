@@ -2,10 +2,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-import qrcode
-from PIL import Image
-
-from qc_batch import decode_qr_evidence, package_contract_failures, resolve_layout_contract
+from qc_batch import package_contract_failures, resolve_layout_contract, skipped_qr_evidence
 
 
 LAYOUT = {
@@ -60,22 +57,12 @@ class QCBatchContractTest(unittest.TestCase):
             failures = package_contract_failures(manifest, compose, Path(directory))
         self.assertIn("V01-800x1000:template_selection_invalid", failures)
 
-    def test_qr_decode_is_optional_evidence(self) -> None:
-        payload = "https://example.com/qr"
-        with tempfile.TemporaryDirectory() as directory:
-            path = Path(directory) / "qr.png"
-            code = qrcode.QRCode(version=1, error_correction=qrcode.constants.ERROR_CORRECT_Q, box_size=8, border=4)
-            code.add_data(payload)
-            code.make(fit=True)
-            code.make_image(fill_color="black", back_color="white").save(path)
-            evidence = decode_qr_evidence(path)
-            self.assertTrue(evidence["detected"])
-            self.assertEqual(evidence["decoded"], payload)
-
-            Image.new("RGB", (160, 160), "white").save(path)
-            empty = decode_qr_evidence(path)
-            self.assertFalse(empty["detected"])
-            self.assertEqual(empty["decoded"], "")
+    def test_qr_decode_is_skipped_evidence(self) -> None:
+        evidence = skipped_qr_evidence()
+        self.assertTrue(evidence["skipped"])
+        self.assertEqual(evidence["reason"], "qr_decode_disabled")
+        self.assertFalse(evidence["detected"])
+        self.assertEqual(evidence["decoded"], "")
 
 if __name__ == "__main__":
     unittest.main()

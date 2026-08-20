@@ -38,7 +38,7 @@ func (h *Handler) ComposeCreativeOrderPrime(w http.ResponseWriter, r *http.Reque
 	if !ok {
 		return
 	}
-	composeContext, cancel := context.WithTimeout(r.Context(), 10*time.Minute)
+	composeContext, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 10*time.Minute)
 	defer cancel()
 	composed, err := h.composeCreativeOrderVariantPrime(composeContext, workspaceID, orderID, variantID, userID)
 	if err != nil {

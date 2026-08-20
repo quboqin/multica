@@ -10,7 +10,6 @@ import re
 from pathlib import Path
 from typing import Any
 
-import cv2
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont, ImageOps
 
@@ -19,44 +18,15 @@ SIZE_PATTERN = re.compile(r"(?:^|[-_])([1-9]\d*x[1-9]\d*)$", re.IGNORECASE)
 PACKAGE_CONTRACT_VERSION = 6
 
 
-def decode_qr_image(image: np.ndarray, scale: int = 1) -> str:
-    if scale > 1:
-        image = cv2.resize(image, None, fx=scale, fy=scale, interpolation=cv2.INTER_NEAREST)
-    decoded, _, _ = cv2.QRCodeDetector().detectAndDecode(image)
-    return decoded or ""
-
-
-def decode_qr_evidence(path: Path, layout: dict | None = None) -> dict[str, Any]:
-    del layout
-    image = cv2.imread(str(path), cv2.IMREAD_COLOR)
-    if image is None:
-        return {"detected": False, "decoded": "", "successful_attempt": None, "attempts": {}}
-    height, width = image.shape[:2]
-    regions = {
-        "full_frame": (0, 0, width, height),
-        "top_right": (width * 55 // 100, 0, width, height * 45 // 100),
-        "top_left": (0, 0, width * 45 // 100, height * 45 // 100),
-        "bottom_right": (width * 55 // 100, height * 55 // 100, width, height),
-        "bottom_left": (0, height * 55 // 100, width * 45 // 100, height),
-    }
-    attempts: dict[str, str] = {}
-    for region_name, (left, top, right, bottom) in regions.items():
-        crop = image[top:bottom, left:right]
-        if crop.size == 0:
-            continue
-        attempts[f"{region_name}_1x"] = decode_qr_image(crop)
-        attempts[f"{region_name}_2x_nearest"] = decode_qr_image(crop, scale=2)
-    successful_attempt = next((name for name, decoded in attempts.items() if decoded), None)
+def skipped_qr_evidence() -> dict[str, Any]:
     return {
-        "detected": successful_attempt is not None,
-        "decoded": attempts.get(successful_attempt, "") if successful_attempt else "",
-        "successful_attempt": successful_attempt,
-        "attempts": attempts,
+        "detected": False,
+        "decoded": "",
+        "successful_attempt": None,
+        "attempts": {},
+        "skipped": True,
+        "reason": "qr_decode_disabled",
     }
-
-
-def decode_qr(path: Path, layout: dict | None = None) -> str:
-    return str(decode_qr_evidence(path, layout)["decoded"])
 
 
 def parse_args() -> argparse.Namespace:
@@ -347,12 +317,7 @@ def main() -> int:
                 actual_size = list(image.size)
                 white_ratio = edge_white_ratio(image)
             contact_images.append((f"{variant} {size}", image_path))
-        qr_evidence = decode_qr_evidence(image_path, layout) if exists else {
-            "detected": False,
-            "decoded": "",
-            "successful_attempt": None,
-            "attempts": {},
-        }
+        qr_evidence = skipped_qr_evidence()
         visibility_audit = compose_item.get("visibility_audit") if isinstance(compose_item.get("visibility_audit"), dict) else {}
         visibility_blocking = bool(visibility_audit.get("blocking"))
         checks = {

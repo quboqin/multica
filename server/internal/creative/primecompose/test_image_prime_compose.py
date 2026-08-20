@@ -3,7 +3,6 @@ import tempfile
 import unittest
 from pathlib import Path
 
-import qrcode
 from PIL import Image, ImageDraw
 
 from image_prime_compose import compose_manifest
@@ -24,27 +23,21 @@ class FullTemplateComposeTest(unittest.TestCase):
     def tearDown(self) -> None:
         self.temp.cleanup()
 
-    def write_template(self, path: Path, size: tuple[int, int], color: tuple[int, int, int, int], qr_payload: str = "") -> None:
+    def write_template(self, path: Path, size: tuple[int, int], color: tuple[int, int, int, int]) -> None:
         width, height = size
         template = Image.new("RGBA", size, (0, 0, 0, 0))
         draw = ImageDraw.Draw(template)
         band = max(4, height // 10)
         draw.rectangle((0, 0, width - 1, band - 1), fill=color)
         draw.rectangle((0, height - band, width - 1, height - 1), fill=color)
-        if qr_payload:
-            code = qrcode.QRCode(version=1, error_correction=qrcode.constants.ERROR_CORRECT_Q, box_size=2, border=1)
-            code.add_data(qr_payload)
-            code.make(fit=True)
-            qr = code.make_image(fill_color="black", back_color="white").convert("RGBA")
-            template.alpha_composite(qr, (width - qr.width - 4, max(0, (height - qr.height) // 2)))
         template.save(path)
 
-    def write_family(self, family_id: str, color: tuple[int, int, int, int], high_resolution_square: bool = False, qr_payload: str = "") -> dict[str, Path]:
+    def write_family(self, family_id: str, color: tuple[int, int, int, int], high_resolution_square: bool = False) -> dict[str, Path]:
         paths: dict[str, Path] = {}
         for size, dimensions in SIZES.items():
             path = self.root / f"{family_id}-{size}.png"
             template_size = (480, 480) if high_resolution_square and size == "240x240" else dimensions
-            self.write_template(path, template_size, color, qr_payload if size == "240x240" else "")
+            self.write_template(path, template_size, color)
             paths[size] = path
         return paths
 
@@ -132,20 +125,20 @@ class FullTemplateComposeTest(unittest.TestCase):
         self.assertEqual(resize["applied_canvas"], [240, 240])
         self.assertEqual(resize["resize_method"], "lanczos")
 
-    def test_template_qr_is_decoded_as_optional_evidence(self) -> None:
-        payload = "https://example.com/qr"
+    def test_template_qr_decode_is_skipped(self) -> None:
         bodies = self.write_bodies((15, 30, 50, 255))
         result = self.compose(
             bodies,
-            self.write_family("white", (255, 255, 255, 255), qr_payload=payload),
+            self.write_family("white", (255, 255, 255, 255)),
             self.write_family("green", (0, 130, 70, 255)),
         )
 
         self.assertEqual(result["failed"], 0)
         square = next(item for item in result["results"] if item["size"] == "240x240")
-        self.assertTrue(square["qr"]["detected"])
-        self.assertEqual(square["qr"]["decoded"], payload)
-        self.assertEqual(square["qr"]["validation_basis"], "optional_template_qr_decode")
+        self.assertFalse(square["qr"]["detected"])
+        self.assertEqual(square["qr"]["decoded"], "")
+        self.assertEqual(square["qr"]["validation_basis"], "template_owned_qr_decode_disabled")
+        self.assertTrue(square["qr"]["skipped"])
 
     def test_published_full_template_set_supports_a_frozen_size_subset(self) -> None:
         bodies = self.write_bodies((15, 30, 50, 255))

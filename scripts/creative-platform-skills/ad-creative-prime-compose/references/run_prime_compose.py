@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 from collections.abc import Mapping, Sequence
@@ -57,6 +58,8 @@ def decode_completed_result(stdout: str) -> Mapping[str, Any]:
 
 
 def run_prime_compose(order_id: str, variant_id: str, output: str) -> Mapping[str, Any]:
+    env = os.environ.copy()
+    env.setdefault("MULTICA_HTTP_TIMEOUT", "5m")
     completed = subprocess.run(
         build_command(order_id, variant_id, output),
         check=False,
@@ -64,6 +67,7 @@ def run_prime_compose(order_id: str, variant_id: str, output: str) -> Mapping[st
         text=True,
         encoding="utf-8",
         errors="replace",
+        env=env,
     )
     if completed.returncode != 0:
         detail = completed.stderr.strip() or "no stderr output"

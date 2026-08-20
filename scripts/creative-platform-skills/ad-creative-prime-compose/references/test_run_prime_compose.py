@@ -34,27 +34,28 @@ class RunPrimeComposeTests(unittest.TestCase):
         payload = {"status": "completed", "order_id": "order-1"}
         run.return_value = CompletedProcess(stdout=json.dumps(payload))
 
-        result = run_prime_compose.run_prime_compose("order-1", "variant-2", "json")
+        with patch.dict(run_prime_compose.os.environ, {}, clear=True):
+            result = run_prime_compose.run_prime_compose("order-1", "variant-2", "json")
 
         self.assertEqual(result, payload)
-        run.assert_called_once_with(
-            [
-                "multica",
-                "creative",
-                "order",
-                "prime-compose",
-                "order-1",
-                "--variant",
-                "variant-2",
-                "--output",
-                "json",
-            ],
-            check=False,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-        )
+        run.assert_called_once()
+        self.assertEqual(run.call_args.args[0], [
+            "multica",
+            "creative",
+            "order",
+            "prime-compose",
+            "order-1",
+            "--variant",
+            "variant-2",
+            "--output",
+            "json",
+        ])
+        self.assertFalse(run.call_args.kwargs["check"])
+        self.assertTrue(run.call_args.kwargs["capture_output"])
+        self.assertTrue(run.call_args.kwargs["text"])
+        self.assertEqual(run.call_args.kwargs["encoding"], "utf-8")
+        self.assertEqual(run.call_args.kwargs["errors"], "replace")
+        self.assertEqual(run.call_args.kwargs["env"]["MULTICA_HTTP_TIMEOUT"], "5m")
 
     @patch("run_prime_compose.subprocess.run")
     def test_success_signal_is_accepted(self, run):

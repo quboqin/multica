@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -366,7 +367,7 @@ func runCreativeOrderPrimeCompose(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("encode prime composition request: %w", err)
 	}
-	return writeCreativeDomainPayload(cmd, "/api/creative/orders/"+url.PathEscape(args[0])+"/prime-compose", "POST", payload)
+	return writeCreativeDomainPayloadWithTimeout(cmd, "/api/creative/orders/"+url.PathEscape(args[0])+"/prime-compose", "POST", payload, 5*time.Minute)
 }
 
 func runCreativeOrderDiagnosticAssetPut(cmd *cobra.Command, args []string) error {
@@ -459,11 +460,24 @@ func writeCreativeDomainJSON(cmd *cobra.Command, path, method string) error {
 }
 
 func writeCreativeDomainPayload(cmd *cobra.Command, path, method string, payload json.RawMessage) error {
+	return writeCreativeDomainPayloadWithTimeout(cmd, path, method, payload, 0)
+}
+
+func writeCreativeDomainPayloadWithTimeout(cmd *cobra.Command, path, method string, payload json.RawMessage, minTimeout time.Duration) error {
 	client, err := newAPIClient(cmd)
 	if err != nil {
 		return err
 	}
-	ctx, cancel := cli.APIContext(context.Background())
+	timeout := cli.APITimeout()
+	if minTimeout > 0 {
+		if client.HTTPClient != nil && client.HTTPClient.Timeout < minTimeout {
+			client.HTTPClient.Timeout = minTimeout
+		}
+		if client.HTTPClient != nil && client.HTTPClient.Timeout+5*time.Second > timeout {
+			timeout = client.HTTPClient.Timeout + 5*time.Second
+		}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	var result any
 	switch method {

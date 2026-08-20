@@ -9,7 +9,6 @@ import re
 from pathlib import Path
 from typing import Any
 
-import cv2
 import numpy as np
 from PIL import Image
 
@@ -20,49 +19,15 @@ MAX_TEMPLATE_ASPECT_DEVIATION = 0.002
 SIZE_PATTERN = re.compile(r"^[1-9]\d*x[1-9]\d*$", re.IGNORECASE)
 
 
-def decode_qr_image(rgb: np.ndarray, scale: int = 1) -> dict[str, Any]:
-    image = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
-    if scale > 1:
-        image = cv2.resize(image, None, fx=scale, fy=scale, interpolation=cv2.INTER_NEAREST)
-    decoded, points, _ = cv2.QRCodeDetector().detectAndDecode(image)
-    normalized_points = None
-    if points is not None:
-        normalized_points = (points.reshape(-1, 2) / scale).round(1).tolist()
-    return {"decoded": decoded or "", "detected_points": normalized_points}
-
-
-def decode_qr_evidence(rgb: np.ndarray) -> dict[str, Any]:
-    height, width = rgb.shape[:2]
-    regions = {
-        "full_frame": (0, 0, width, height),
-        "top_right": (width * 55 // 100, 0, width, height * 45 // 100),
-        "top_left": (0, 0, width * 45 // 100, height * 45 // 100),
-        "bottom_right": (width * 55 // 100, height * 55 // 100, width, height),
-        "bottom_left": (0, height * 55 // 100, width * 45 // 100, height),
-    }
-    attempts: dict[str, dict[str, Any]] = {}
-    for region_name, (left, top, right, bottom) in regions.items():
-        crop = rgb[top:bottom, left:right]
-        if crop.size == 0:
-            continue
-        for scale, suffix in ((1, "1x"), (2, "2x_nearest")):
-            evidence = decode_qr_image(crop, scale=scale)
-            if evidence["detected_points"] is not None and region_name != "full_frame":
-                evidence["detected_points"] = [
-                    [point_x + left, point_y + top] for point_x, point_y in evidence["detected_points"]
-                ]
-            attempts[f"{region_name}_{suffix}"] = evidence
-    successful_attempt = next(
-        (name for name, evidence in attempts.items() if evidence["decoded"]),
-        None,
-    )
-    selected = attempts.get(successful_attempt, {"decoded": "", "detected_points": None})
+def skipped_qr_evidence() -> dict[str, Any]:
     return {
-        "detected": bool(selected["decoded"]),
-        "decoded": selected["decoded"],
-        "successful_attempt": successful_attempt,
-        "detected_points": selected["detected_points"],
-        "attempts": attempts,
+        "detected": False,
+        "decoded": "",
+        "successful_attempt": None,
+        "detected_points": None,
+        "attempts": {},
+        "skipped": True,
+        "reason": "qr_decode_disabled",
     }
 
 
@@ -363,8 +328,8 @@ def compose_job(job: dict[str, Any], body: Image.Image, family: dict[str, Any], 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     final.save(output_path, "PNG")
     visibility_audit = local_template_visibility(np.asarray(body.convert("RGB")), template, layout)
-    qr = decode_qr_evidence(np.asarray(final.convert("RGB")))
-    qr["validation_basis"] = "optional_template_qr_decode"
+    qr = skipped_qr_evidence()
+    qr["validation_basis"] = "template_owned_qr_decode_disabled"
     return {
         "id": job["id"], "size": size, "input": str(input_path), "output": str(output_path), "canvas": {"width": body.width, "height": body.height},
         "template_selection": {**family_selection, "selected_source_role": template_evidence["selected_source_role"], "template": template_evidence},
