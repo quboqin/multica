@@ -2412,6 +2412,7 @@ async function runAppGrowingMaterialSearch(page, context, connector, params = {}
       let browserCapturePage = page;
       let browserFallbackStopped = false;
       let browserNoProgressCount = 0;
+      const browserNoProgressLimit = appGrowingBrowserNoProgressThreshold(browserFallbackCompetitors.length);
       browserFallback:
       for (let pageNumber = 1; pageNumber <= maxPriorityPageLimit; pageNumber += 1) {
         for (const competitor of browserFallbackCompetitors) {
@@ -2478,7 +2479,7 @@ async function runAppGrowingMaterialSearch(page, context, connector, params = {}
             }
             browserCapturePage = replacementPage;
           }
-          if (browserNoProgressCount >= appGrowingBrowserNoProgressLimit) {
+          if (browserNoProgressCount >= browserNoProgressLimit) {
             captured.push({
               competitor,
               priority,
@@ -2636,10 +2637,6 @@ function appGrowingMaterialSearchBlockingError(captured, materials) {
   if (attempts.length === 0) {
     return "";
   }
-  const successfulAttempts = attempts.filter((capture) => !capture.error);
-  if (successfulAttempts.length > 0) {
-    return "";
-  }
   const blockingErrors = attempts
     .map((capture) => String(capture.error || "").trim())
     .filter((error) => error && !appGrowingMaterialSearchNonBlockingError(error));
@@ -2656,6 +2653,13 @@ function appGrowingMaterialSearchBlockingError(captured, materials) {
 
 function appGrowingMaterialSearchNonBlockingError(error) {
   return error === "app_brand_not_found" || error === "browser_fallback_disabled_for_bulk_material_search";
+}
+
+function appGrowingBrowserNoProgressThreshold(competitorCount, configuredLimit = appGrowingBrowserNoProgressLimit) {
+  return Math.max(
+    positiveIntegerParam(configuredLimit, appGrowingBrowserNoProgressLimit, 1, 200),
+    positiveIntegerParam(competitorCount, 1, 1, 200),
+  );
 }
 
 function appGrowingAdaptiveStrategyMemory(params = {}) {
@@ -5020,6 +5024,8 @@ export {
   appGrowingGraphQLRequest,
   appGrowingMaterialDedupeKey,
   appGrowingMaterialURL,
+  appGrowingBrowserNoProgressThreshold,
+  appGrowingMaterialSearchBlockingError,
   appGrowingSearchAppVariables,
   appGrowingSelectionMixSummary,
   appGrowingShouldUseAdaptiveBrowserFallback,

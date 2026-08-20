@@ -12,6 +12,8 @@ import {
   appGrowingGraphQLRequest,
   appGrowingMaterialDedupeKey,
   appGrowingMaterialURL,
+  appGrowingBrowserNoProgressThreshold,
+  appGrowingMaterialSearchBlockingError,
   appGrowingSearchAppVariables,
   appGrowingSelectionMixSummary,
   appGrowingShouldUseAdaptiveBrowserFallback,
@@ -556,6 +558,21 @@ test("falls back per competitor when only some GraphQL pages return material", (
     false,
     true,
   ), []);
+});
+
+test("tries every browser fallback competitor before no-progress stop", () => {
+  assert.equal(appGrowingBrowserNoProgressThreshold(7, 3), 7);
+  assert.equal(appGrowingBrowserNoProgressThreshold(2, 3), 3);
+});
+
+test("classifies mixed empty browser attempts with capture errors as blocking", () => {
+  const blocking = appGrowingMaterialSearchBlockingError([
+    { source: "browser_network", competitor: "Easycash", page: 1, materials_found: 0, error: "" },
+    { source: "browser_network", competitor: "Kredit Pintar", page: 1, materials_found: 0, error: "appgrowing_browser_material_list_not_observed" },
+    { source: "browser_network", competitor: "Adapundi", page: 1, materials_found: 0, error: "appgrowing_browser_material_list_not_observed" },
+  ], []);
+
+  assert.match(blocking, /appgrowing_browser_material_list_not_observed/);
 });
 
 test("reports multi-page coverage and per-competitor browser fallback", () => {
