@@ -754,8 +754,10 @@ func (h *Handler) ListAgents(w http.ResponseWriter, r *http.Request) {
 		if labels, ok := labelMap[resp.ID]; ok {
 			resp.Labels = labels
 		}
-		if actorType == "agent" || uuidToString(a.OwnerID) != userID {
+		if !canReadAgentMCPConfig(a, actorType, actorID, member.Role) {
 			redactMcpConfig(&resp)
+		}
+		if actorType == "agent" || uuidToString(a.OwnerID) != userID {
 			if h.composioMCPAppsEnabled(r.Context()) {
 				redactComposioToolkitAllowlist(&resp)
 			} else {
@@ -804,8 +806,18 @@ func (h *Handler) GetAgent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	resp.Labels = labelsToResponse(labels)
-	if actorType == "agent" || uuidToString(agent.OwnerID) != requestUserID(r) {
+	memberRole := ""
+	if actorType == "member" {
+		if member, ok := ctxMember(r.Context()); ok {
+			memberRole = member.Role
+		} else if member, err := h.getWorkspaceMember(r.Context(), actorID, workspaceID); err == nil {
+			memberRole = member.Role
+		}
+	}
+	if !canReadAgentMCPConfig(agent, actorType, actorID, memberRole) {
 		redactMcpConfig(&resp)
+	}
+	if actorType == "agent" || uuidToString(agent.OwnerID) != requestUserID(r) {
 		if h.composioMCPAppsEnabled(r.Context()) {
 			redactComposioToolkitAllowlist(&resp)
 		} else {
@@ -1075,6 +1087,16 @@ func redactAgentResponseForActor(resp *AgentResponse, actorType string) {
 		redactMcpConfig(resp)
 		redactComposioToolkitAllowlist(resp)
 	}
+}
+
+func canReadAgentMCPConfig(agent db.Agent, actorType, actorID, memberRole string) bool {
+	if actorType != "member" {
+		return false
+	}
+	if uuidToString(agent.OwnerID) == actorID {
+		return true
+	}
+	return roleAllowed(memberRole, "owner", "admin")
 }
 
 func redactMcpConfig(resp *AgentResponse) {

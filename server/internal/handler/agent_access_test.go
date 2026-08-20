@@ -134,6 +134,12 @@ func TestGetAgent_PrivateAgentForbidsPlainMember(t *testing.T) {
 	}
 
 	agentID, ownerID, memberID := privateAgentTestFixture(t)
+	if _, err := testPool.Exec(context.Background(), `
+		UPDATE agent SET mcp_config = '{"mcpServers":{"demo":{"command":"demo"}}}'::jsonb
+		WHERE id = $1
+	`, agentID); err != nil {
+		t.Fatalf("seed mcp_config: %v", err)
+	}
 
 	// Workspace owner (testUserID): allowed via role.
 	w := httptest.NewRecorder()
@@ -141,12 +147,26 @@ func TestGetAgent_PrivateAgentForbidsPlainMember(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("GetAgent as workspace owner: expected 200, got %d: %s", w.Code, w.Body.String())
 	}
+	var workspaceOwnerResp AgentResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &workspaceOwnerResp); err != nil {
+		t.Fatalf("decode workspace owner response: %v", err)
+	}
+	if workspaceOwnerResp.McpConfig == nil || workspaceOwnerResp.McpConfigRedacted {
+		t.Fatalf("workspace owner should read agent MCP config, got redacted=%v config=%s", workspaceOwnerResp.McpConfigRedacted, string(workspaceOwnerResp.McpConfig))
+	}
 
 	// Agent owner (plain member who happens to own the agent): allowed.
 	w = httptest.NewRecorder()
 	testHandler.GetAgent(w, withURLParam(newRequestAs(ownerID, "GET", "/api/agents/"+agentID, nil), "id", agentID))
 	if w.Code != http.StatusOK {
 		t.Fatalf("GetAgent as agent owner: expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var agentOwnerResp AgentResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &agentOwnerResp); err != nil {
+		t.Fatalf("decode agent owner response: %v", err)
+	}
+	if agentOwnerResp.McpConfig == nil || agentOwnerResp.McpConfigRedacted {
+		t.Fatalf("agent owner should read agent MCP config, got redacted=%v config=%s", agentOwnerResp.McpConfigRedacted, string(agentOwnerResp.McpConfig))
 	}
 
 	// Plain member (not in allowed_principals): denied with 403.
