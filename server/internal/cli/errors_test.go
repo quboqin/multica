@@ -133,6 +133,41 @@ func TestFormatErrorValidationUsesServerMessage(t *testing.T) {
 	}
 }
 
+func TestFormatErrorCredentialWorkerMessageUsesServerMessage(t *testing.T) {
+	withLang(t, "en_US.UTF-8")
+	cases := []struct {
+		name   string
+		status int
+		body   string
+		want   string
+	}{
+		{
+			name:   "busy 429",
+			status: 429,
+			body:   `{"error":"credential broker worker is busy: crawler worker is busy; wait for the active browser task to finish"}`,
+			want:   "credential broker worker is busy",
+		},
+		{
+			name:   "unavailable 503",
+			status: 503,
+			body:   `{"error":"credential broker worker is unavailable: context canceled"}`,
+			want:   "credential broker worker is unavailable",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			httpErr := &HTTPError{Method: "POST", Path: "/api/credential-crawl", StatusCode: tc.status, Body: tc.body}
+			got := FormatError(httpErr, false)
+			if !strings.Contains(got, tc.want) {
+				t.Fatalf("FormatError() = %q, want %q", got, tc.want)
+			}
+			if strings.Contains(got, "Too many requests") || strings.Contains(got, "temporarily unavailable") {
+				t.Fatalf("FormatError() used generic status copy: %q", got)
+			}
+		})
+	}
+}
+
 func TestFormatErrorDebugIncludesRawChain(t *testing.T) {
 	withLang(t, "en_US.UTF-8")
 	httpErr := &HTTPError{Method: "GET", Path: "/api/issues/abc", StatusCode: 404, Body: `{"error":"not found"}`}

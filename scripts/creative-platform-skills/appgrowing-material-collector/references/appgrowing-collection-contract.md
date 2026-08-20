@@ -27,6 +27,16 @@ run 说明中，不猜枚举。连接器分页、去重和浏览器 fallback 使
 `multica crawl run` 使用工作区可用的 AppGrowing 凭证，先创建稳定 Crawl Run，再调用 broker 并把候选关联到
 同一个 run。响应没有 `crawl_run_id` 属于服务契约错误。
 
+每个采集 task 只能提交一次 `multica crawl run`。Agent 必须把 exec/Bash 工具的外层等待时间设置为长于 CLI
+`--timeout`，并等待同一个前台命令返回。空 body、pending session、外层超时或无法确认命令状态时不能重新发起 crawl；
+只能继续等待同一命令/会话，无法继续等待则写 `crawl_command_wait_incomplete` / `action_required`。唯一允许的重试是
+第一次命令在创建浏览器 run 之前因参数校验错误失败，且缺失字段可由当前 task context 或 AutoPilot 明确筛选条件
+确定修复。
+
+HTTP 429、`worker_busy`、`credential broker worker is busy` 或 `crawler worker is busy` 是平台内部 crawler-worker
+容量信号，不是 AppGrowing 限流；当前 task 必须保留真实 error code/message 后停止。`worker_unavailable` 或
+`context canceled` 表示本次命令被取消、超时或 worker 不可用，同一 task 内不得补发第二次 crawl。
+
 以返回的 `selection_summary`、逐页 evidence、archive summary 和 errors 为真值。目标数量或比例不能反推为
 实际结果。单个查询失败不能覆盖其他查询的成功；run 可以是 `partial`。授权问题写业务可读的重新绑定入口，
 不得记录或输出凭证内容。

@@ -16,13 +16,18 @@ allowed-tools: Bash(multica *), Bash(powershell *), Bash(python *)
 1. 将输入写成结构化参数；新建或编辑的采集参数必须显式包含 `selection_rules.new_materials` 与
    `selection_rules.volume_materials` 的占比、投放天数和曝光阈值。连接器指出缺失字段时，必须仅从当前 task context
    或 AutoPilot 明确筛选条件重建完整规则后重试一次；没有明确依据则写 `action_required`，不得使用默认比例或阈值。
-   执行：
+   执行一次：
 
    ```text
    multica crawl run --connector appgrowing --capability material_search \
      --params-json <params-json> --analysis-agent-id <analysis-agent-id> \
      --timeout <task-budget> --output json
    ```
+
+   调用 `Bash`/exec 工具时，工具自身的 `timeout_ms` 必须大于 CLI `--timeout`，例如 15 分钟 crawl 使用
+   `timeout_ms >= 1000000`。等待该前台命令返回完整 JSON 或明确非零退出。若工具返回空 body、pending session、
+   无法确认命令状态或被外层超时中断，不得再启动第二个 `multica crawl run`；只能继续等待同一命令/会话，无法继续等待时
+   写 `crawl_command_wait_incomplete` / `action_required` 后停止。
 
 2. 响应必须返回 `crawl_run_id`。回读本次 run，确认候选已进入素材库；不得创建 Issue。
 3. 执行一次预分析委派脚本：
@@ -39,6 +44,11 @@ allowed-tools: Bash(multica *), Bash(powershell *), Bash(python *)
    `multica task fanout`；不支持时任务必须以 `multica task fanout unavailable; upgrade CLI` 失败，不能把采集结果报告为预分析完成。
    并发由 Agent、runtime 和 provider 限额控制。
 4. fanout 返回后立即结束，不轮询分析任务。Crawl Run 页面从候选、Source Analysis 和 task 派生进度。
+
+同一 task 最多创建一个 Crawl Run。除非第一次命令在创建浏览器 run 之前因可确定修复的参数校验错误失败，否则不得重试
+`multica crawl run`。HTTP 429、`worker_busy`、`credential broker worker is busy`、`crawler worker is busy` 表示平台
+内部 crawler worker 正忙，不是 AppGrowing 限流；当前 task 必须写真实错误并停止，等待下一次用户或平台调度重试。
+`worker_unavailable` 或 `context canceled` 表示本次命令被取消、超时或 worker 不可用；不得在同一 task 内补发第二次 crawl。
 
 凭证失效时把 Crawl Run 标为 `action_required` 并保留平台重新绑定入口。连接器、导入或 fanout 失败时写入
 真实阶段、error code/message 和已成功数量；不得以测试数据补齐，也不得输出 Cookie、Token 或请求头。
