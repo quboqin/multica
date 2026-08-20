@@ -2842,6 +2842,7 @@ export class ApiClient {
   async listCreativeMaterialLibrary(params?: CreativeMaterialLibraryQuery): Promise<CreativeMaterialLibraryResponse> {
     const search = new URLSearchParams();
     if (params?.runId) search.set("run_id", params.runId);
+    if (params?.includeEmptyRuns === false) search.set("include_empty_runs", "false");
     if (params?.limit !== undefined) search.set("limit", String(params.limit));
     if (params?.offset !== undefined) search.set("offset", String(params.offset));
     if (params?.query) search.set("query", params.query);

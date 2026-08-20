@@ -77,7 +77,6 @@ export function ComposableCopyLibraryEditor({ resources, onCreate, onArchive }: 
         <div className="min-w-0"><div className="flex flex-wrap items-center gap-2"><h2 className="min-w-0 truncate text-sm font-semibold">{active.name}</h2><Badge variant="outline">{active.status === "published" ? "已发布" : "草稿"}</Badge>{active.published_version > 0 && active.status !== "published" && <Badge variant="secondary">线上已发布</Badge>}</div><p className="mt-1 text-xs text-muted-foreground">模型只会使用这里已审核的文案和还款计划，不会拼变量或计算金额。</p></div>
         <div className="flex flex-wrap items-center gap-2"><Button size="sm" variant="outline" disabled={save.isPending || publish.isPending} onClick={() => save.mutate()}><Save className="h-4 w-4" />保存草稿</Button><Button size="sm" disabled={save.isPending || publish.isPending} onClick={() => publish.mutate()}><CheckCircle2 className="h-4 w-4" />发布版本</Button><Button size="icon-sm" variant="ghost" title="归档文案库" aria-label="归档文案库" onClick={() => onArchive(active.id)}><Archive className="h-4 w-4" /></Button></div>
       </header>
-      <SourceStatus config={draft} />
       <Tabs defaultValue="copy" className="px-5 py-4">
         <TabsList><TabsTrigger value="copy">投放文案 {draft.fragments.length}</TabsTrigger><TabsTrigger value="repayment">还款计划 {draft.repayment_plan.entries.length}</TabsTrigger></TabsList>
         <TabsContent value="copy"><CopyGroupEditor value={draft.fragments} onChange={(fragments) => setDraft((current) => ({ ...current, fragments }))} /></TabsContent>
@@ -85,11 +84,6 @@ export function ComposableCopyLibraryEditor({ resources, onCreate, onArchive }: 
       </Tabs>
     </main>
   </div>;
-}
-
-function SourceStatus({ config }: { config: CreativeCopyLibraryConfig }) {
-  const synced = config.source.sync_status === "synced";
-  return <div className="grid gap-3 border-b bg-muted/10 px-5 py-3 text-xs sm:grid-cols-[auto_1fr]"><span className="font-medium">内容来源</span><div><div className="flex flex-wrap items-center gap-2"><span>{config.source.name || "未设置"}</span><Badge variant={synced ? "secondary" : "outline"}>{synced ? "已同步" : "待同步"}</Badge></div>{config.source.note && <p className="mt-1 text-muted-foreground">{config.source.note}</p>}</div></div>;
 }
 
 function CopyGroupEditor({ value, onChange }: { value: CreativeCopyFragment[]; onChange: (value: CreativeCopyFragment[]) => void }) {

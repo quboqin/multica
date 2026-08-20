@@ -537,6 +537,71 @@ func TestCreativeMaterialLibraryRunFilterPreservesHistoricalRelation(t *testing.
 	}
 }
 
+func TestCreativeMaterialLibraryCanHideEmptyCrawlRuns(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+	dedupeKey := "empty-run-filter-" + uuid.NewString()
+	importOnce := func() creativeImportSummary {
+		summary, err := testHandler.importCreativeMaterials(t.Context(), creativeMaterialImportInput{
+			WorkspaceID: parseUUID(testWorkspaceID), ConnectorID: "test", QuerySummary: "empty run filter",
+			Materials: []creativeMaterialInput{{DedupeKey: dedupeKey, Title: "Empty run filter candidate", AssetType: "image", PreviewURL: "https://example.test/empty-run-filter.png"}},
+			ActorType: "member", ActorID: testUserID, UserID: parseUUID(testUserID),
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return summary
+	}
+	first := importOnce()
+	second := importOnce()
+	if first.ImportedCount != 1 || second.ImportedCount != 0 || second.ExistingCount != 1 {
+		t.Fatalf("run import counts = first %#v second %#v", first, second)
+	}
+
+	w := httptest.NewRecorder()
+	testHandler.ListCreativeMaterialLibrary(w, newRequest(http.MethodGet, "/api/creative/materials", nil))
+	if w.Code != http.StatusOK {
+		t.Fatalf("ListCreativeMaterialLibrary default: %d %s", w.Code, w.Body.String())
+	}
+	var defaultLibrary struct {
+		CrawlRuns []creativeMaterialCrawlRunResponse `json:"crawl_runs"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&defaultLibrary); err != nil {
+		t.Fatal(err)
+	}
+	if !crawlRunResponseContains(defaultLibrary.CrawlRuns, second.RunID) {
+		t.Fatalf("default crawl runs should include empty run %s: %#v", second.RunID, defaultLibrary.CrawlRuns)
+	}
+
+	w = httptest.NewRecorder()
+	testHandler.ListCreativeMaterialLibrary(w, newRequest(http.MethodGet, "/api/creative/materials?include_empty_runs=false", nil))
+	if w.Code != http.StatusOK {
+		t.Fatalf("ListCreativeMaterialLibrary non-empty: %d %s", w.Code, w.Body.String())
+	}
+	var filteredLibrary struct {
+		CrawlRuns []creativeMaterialCrawlRunResponse `json:"crawl_runs"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&filteredLibrary); err != nil {
+		t.Fatal(err)
+	}
+	if crawlRunResponseContains(filteredLibrary.CrawlRuns, second.RunID) {
+		t.Fatalf("filtered crawl runs should hide empty run %s: %#v", second.RunID, filteredLibrary.CrawlRuns)
+	}
+	if !crawlRunResponseContains(filteredLibrary.CrawlRuns, first.RunID) {
+		t.Fatalf("filtered crawl runs should keep imported run %s: %#v", first.RunID, filteredLibrary.CrawlRuns)
+	}
+}
+
+func crawlRunResponseContains(runs []creativeMaterialCrawlRunResponse, id string) bool {
+	for _, run := range runs {
+		if run.ID == id {
+			return true
+		}
+	}
+	return false
+}
+
 func TestCreativeMaterialLibraryPaginationAndFilter(t *testing.T) {
 	if testHandler == nil {
 		t.Skip("database not available")
@@ -772,7 +837,7 @@ func TestCreativeCrawlRunCreatedBeforeBrokerIsReusedByImport(t *testing.T) {
 	if runCount != 1 {
 		t.Fatalf("crawl run count = %d, want 1", runCount)
 	}
-	runs, err := testHandler.listCreativeCrawlRunsForWorkspace(t.Context(), parseUUID(testWorkspaceID), pgtype.UUID{}, false)
+	runs, err := testHandler.listCreativeCrawlRunsForWorkspace(t.Context(), parseUUID(testWorkspaceID), pgtype.UUID{}, false, true)
 	if err != nil {
 		t.Fatal(err)
 	}

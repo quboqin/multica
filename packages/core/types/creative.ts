@@ -100,6 +100,7 @@ export interface CreativeMaterialLibraryResponse {
 
 export interface CreativeMaterialLibraryQuery {
   runId?: string;
+  includeEmptyRuns?: boolean;
   limit?: number;
   offset?: number;
   query?: string;

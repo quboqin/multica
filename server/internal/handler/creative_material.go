@@ -740,7 +740,7 @@ ORDER BY
 }
 
 func (h *Handler) listCreativeCrawlRuns(ctx context.Context, issueID, workspaceID pgtype.UUID) ([]creativeMaterialCrawlRunResponse, error) {
-	return h.listCreativeCrawlRunsForWorkspace(ctx, workspaceID, issueID, true)
+	return h.listCreativeCrawlRunsForWorkspace(ctx, workspaceID, issueID, true, true)
 }
 
 func (h *Handler) ListCreativeCrawlRuns(w http.ResponseWriter, r *http.Request) {
@@ -752,7 +752,7 @@ func (h *Handler) ListCreativeCrawlRuns(w http.ResponseWriter, r *http.Request) 
 	if !ok {
 		return
 	}
-	runs, err := h.listCreativeCrawlRunsForWorkspace(r.Context(), workspaceID, pgtype.UUID{}, false)
+	runs, err := h.listCreativeCrawlRunsForWorkspace(r.Context(), workspaceID, pgtype.UUID{}, false, true)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list creative crawl runs")
 		return
@@ -760,7 +760,7 @@ func (h *Handler) ListCreativeCrawlRuns(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusOK, map[string]any{"crawl_runs": runs})
 }
 
-func (h *Handler) listCreativeCrawlRunsForWorkspace(ctx context.Context, workspaceID, issueID pgtype.UUID, filterIssue bool) ([]creativeMaterialCrawlRunResponse, error) {
+func (h *Handler) listCreativeCrawlRunsForWorkspace(ctx context.Context, workspaceID, issueID pgtype.UUID, filterIssue bool, includeEmpty bool) ([]creativeMaterialCrawlRunResponse, error) {
 	rows, err := h.DB.Query(ctx, `
 WITH crawl_candidate_analysis AS (
   SELECT rc.run_id, rc.candidate_id, rc.workspace_id,
@@ -807,11 +807,13 @@ SELECT cr.id::text, cr.workspace_id::text, COALESCE(cr.issue_id::text, ''),
 FROM creative_material_crawl_run cr
 LEFT JOIN crawl_candidate_analysis rc
   ON rc.run_id = cr.id AND rc.workspace_id = cr.workspace_id
-WHERE cr.workspace_id = $1 AND (NOT $2::boolean OR cr.issue_id = $3)
+WHERE cr.workspace_id = $1
+  AND (NOT $2::boolean OR cr.issue_id = $3)
+  AND ($4::boolean OR cr.imported_count > 0)
 GROUP BY cr.id
 ORDER BY cr.created_at DESC
 LIMIT 20
-`, workspaceID, filterIssue, nullableUUID(issueID, filterIssue))
+`, workspaceID, filterIssue, nullableUUID(issueID, filterIssue), includeEmpty)
 	if err != nil {
 		return nil, err
 	}

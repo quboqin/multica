@@ -20,7 +20,7 @@ export type CreativeGenerationInfo = {
   model: string;
   provider: string;
   marketRule: string;
-  marketVersion: string;
+  marketResource: string;
   createdAt: string;
   prompt: string;
   promptSha256: string;
@@ -50,7 +50,6 @@ export function creativeGenerationInfo(
   const layoutVersion = firstScalar([layoutContract, ...marketSources], ["version", "layout_contract_version", "package_contract_version"]);
   const marketName = firstString(marketSources, ["market_pack_name", "resource_pack_name", "market", "brand"])
     || firstString([brief], ["market_pack_id", "resource_pack_id"]);
-  const marketVersion = firstScalar(marketSources, ["market_pack_version", "resource_pack_version", "published_version"]);
   const explicitRule = firstString([brief, ...marketSources], ["market_rule", "market_rules", "compliance_rule", "compliance_rules"]);
   const layoutSummary = [
     layoutVersion ? `Prime 布局合同 v${layoutVersion}` : hardRegions.length > 0 || backdropRule ? "Prime 布局合同" : "",
@@ -76,7 +75,7 @@ export function creativeGenerationInfo(
     model: firstString(promptSources, ["model", "model_name", "generation_model"]),
     provider: firstString(promptSources, ["provider", "image_provider", "generation_provider"]),
     marketRule: explicitRule || layoutSummary || (marketName ? "已绑定市场资源包" : ""),
-    marketVersion: [marketName, marketVersion ? `v${marketVersion}` : ""].filter(Boolean).join(" · "),
+    marketResource: marketName,
     createdAt: asset.updated_at || asset.created_at || generated?.updated_at || generated?.created_at || "",
     prompt: firstString(promptSources, ["prompt", "model_prompt", "final_prompt", "provider_prompt"]),
     promptSha256: firstString(evidenceSources, ["prompt_sha256", "model_prompt_sha256", "final_prompt_sha256"]),
@@ -160,7 +159,7 @@ export function CreativeGenerationInfoDialog({
           <InfoSection icon={<Layers3 aria-hidden="true" className="h-4 w-4" />} title="生成与市场规则">
             <dl className="grid gap-x-5 gap-y-3 sm:grid-cols-2">
               <InfoValue label="生成模型" value={[info.provider, info.model].filter(Boolean).join(" · ")} />
-              <InfoValue label="市场资源版本" value={info.marketVersion} />
+              <InfoValue label="市场资源" value={info.marketResource} />
               <InfoValue label="市场规则" value={info.marketRule} wide />
             </dl>
           </InfoSection>

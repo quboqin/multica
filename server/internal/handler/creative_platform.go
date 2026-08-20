@@ -201,6 +201,7 @@ func (h *Handler) ListCreativeMaterialLibrary(w http.ResponseWriter, r *http.Req
 		writeError(w, http.StatusBadRequest, "view must be available, analyze, generated, rejected, selected, or all")
 		return
 	}
+	includeEmptyRuns := strings.TrimSpace(r.URL.Query().Get("include_empty_runs")) != "false"
 	rows, err := h.DB.Query(r.Context(), `
 WITH default_market_pack AS (
   SELECT r.id::text AS market_pack_id, revision.version AS market_pack_version, revision.config->>'copy_library_id' AS copy_library_id
@@ -532,7 +533,7 @@ WHERE c.workspace_id = $1
 		writeError(w, http.StatusInternalServerError, "failed to count creative material library")
 		return
 	}
-	runs, err := h.listCreativeCrawlRunsForWorkspace(r.Context(), workspaceID, pgtype.UUID{}, false)
+	runs, err := h.listCreativeCrawlRunsForWorkspace(r.Context(), workspaceID, pgtype.UUID{}, false, includeEmptyRuns)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list creative crawl runs")
 		return

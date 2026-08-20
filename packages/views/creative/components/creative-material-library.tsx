@@ -148,7 +148,13 @@ export function CreativeMaterialLibrary({
     ...materialQuery,
     runId: runId || undefined,
   }), [materialQuery, runId]);
+  const batchQuery = useMemo<CreativeMaterialLibraryQuery>(() => ({
+    includeEmptyRuns: false,
+    limit: 1,
+    offset: 0,
+  }), []);
   const materials = useQuery(creativeMaterialLibraryOptions(wsId, scopedMaterialQuery));
+  const materialBatches = useQuery(creativeMaterialLibraryOptions(wsId, batchQuery));
   const analyses = useQuery({
     ...creativeSourceAnalysesOptions(wsId),
     refetchInterval: orderDraftOpen ? 2500 : false,
@@ -267,8 +273,8 @@ export function CreativeMaterialLibrary({
   const totalCount = materials.data?.total_count || scopedCandidates.length;
   const nextOffset = materials.data?.next_offset ?? null;
   const crawlRuns = useMemo(
-    () => [...(materials.data?.crawl_runs ?? [])].sort(compareMaterialCrawlRuns),
-    [materials.data?.crawl_runs],
+    () => [...(materialBatches.data?.crawl_runs ?? [])].sort(compareMaterialCrawlRuns),
+    [materialBatches.data?.crawl_runs],
   );
   const activeCrawlRun = crawlRuns.find((run) => run.id === runId);
   const toggleSelection = (candidate: CreativeMaterialCandidate) => {

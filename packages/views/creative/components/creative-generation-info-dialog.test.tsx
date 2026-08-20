@@ -75,7 +75,7 @@ describe("creative generation information", () => {
       direction: "保留原图信息机制，突出额度利益点",
       model: "gpt-image-2",
       provider: "OpenAI",
-      marketVersion: "AdaKami Indonesia · v12",
+      marketResource: "AdaKami Indonesia",
       marketRule: "Prime 布局合同 v2 · 1 个保护区 · 背景规则 quiet",
       prompt: "完整提示词：保留蓝绿色信息卡片，并使用已审核文案。\nApproved repayment rows: Jumlah Pinjaman Rp80.000.000",
       attempts: "2",

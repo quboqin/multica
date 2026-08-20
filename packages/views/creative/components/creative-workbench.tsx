@@ -6,6 +6,8 @@ export interface CreativeWorkbenchProps {
   candidates?: CreativeMaterialCandidate[];
   orders?: CreativeOrder[];
   excludedCandidateIds?: readonly string[];
+  averageGenerationDuration?: string;
+  generationDurationPackageCount?: number;
   onOpenMaterialLibrary: (filter?: "available" | "analyze") => void;
   onOpenOrder: (orderId: string) => void;
 }
@@ -21,6 +23,8 @@ export function CreativeWorkbench({
   candidates = [],
   orders = [],
   excludedCandidateIds = [],
+  averageGenerationDuration = "-",
+  generationDurationPackageCount = 0,
 }: CreativeWorkbenchProps) {
   const excludedCandidateIdSet = new Set(excludedCandidateIds);
   const pendingMaterials = candidates.filter((candidate) => !excludedCandidateIdSet.has(candidate.id));
@@ -40,11 +44,17 @@ export function CreativeWorkbench({
         </div>
       </header>
 
-      <section aria-label="工作台概览" className="grid min-w-0 grid-cols-2 divide-x divide-y border bg-background sm:grid-cols-4 sm:divide-y-0">
+      <section aria-label="工作台概览" className="grid min-w-0 grid-cols-2 divide-x divide-y border bg-background sm:grid-cols-5 sm:divide-y-0">
         <WorkbenchMetric testId="creative-workbench-materials" value={pendingMaterials.length} label="待选素材" />
         <WorkbenchMetric testId="creative-workbench-running" value={runningOrders.length} label="真实出图中" />
         <WorkbenchMetric testId="creative-workbench-reviews" value={reviewOrders.length} label="待采用成图" />
         <WorkbenchMetric testId="creative-workbench-deliveries" value={deliveredThisWeek.length} label="本周交付" />
+        <WorkbenchMetric
+          testId="creative-workbench-average-duration"
+          value={averageGenerationDuration}
+          label="整套出图平均耗时"
+          hint={generationDurationPackageCount > 0 ? `基于 ${generationDurationPackageCount} 套` : undefined}
+        />
       </section>
     </div>
   );
@@ -92,11 +102,12 @@ function isAttentionRequiredOrder(order: CreativeOrder): boolean {
   return status === "action_required" || status === "failed" || (order.workflow_failures?.length ?? 0) > 0;
 }
 
-function WorkbenchMetric({ testId, value, label }: { testId: string; value: number; label: string }) {
+function WorkbenchMetric({ testId, value, label, hint }: { testId: string; value: number | string; label: string; hint?: string }) {
   return (
     <div className="min-w-0 px-5 py-4" data-testid={testId}>
       <span className="block text-2xl font-semibold tabular-nums">{value}</span>
       <span className="mt-0.5 block text-xs leading-4 text-muted-foreground">{label}</span>
+      {hint && <span className="mt-0.5 block truncate text-[11px] leading-4 text-muted-foreground">{hint}</span>}
     </div>
   );
 }

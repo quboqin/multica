@@ -21,6 +21,7 @@ import {
 } from "lucide-react";
 import { api } from "@multica/core/api";
 import {
+  creativeFeedbackDashboardOptions,
   creativeFeedbackOptions,
   creativeKeys,
   creativeOrderOptions,
@@ -84,6 +85,7 @@ import { useNavigation } from "../../navigation";
 import { useT } from "../../i18n";
 import { creativeAttachmentBrowserURL } from "../lib/creative-attachment-url";
 import { creativeAdjustmentCanRetry, creativeAdjustmentProgress, creativeAdjustmentTarget, latestOrderAdjustmentFeedback } from "../lib/creative-adjustment-progress";
+import { formatCreativeDuration } from "../lib/creative-feedback-insights";
 import { createDefaultPrimeTemplateSet, withDefaultPrimeTemplateSet } from "../lib/prime-template-set";
 import { creativeTimeZoneLabel, formatCreativeDateTime } from "../lib/creative-time";
 import { CreativeMaterialLibrary, creativeMaterialAnalysisReadiness, creativeMaterialProductionState, defaultPreAdaptationResources, latestCandidateFeedback, latestCompletedAnalyses, materialAnalysisState, type MaterialLibraryFilter } from "./creative-material-library";
@@ -194,6 +196,7 @@ function CreativeStudioContent() {
   const materials = useQuery(creativeMaterialLibraryOptions(wsId));
   const materialAnalyses = useQuery(creativeSourceAnalysesOptions(wsId));
   const candidateFeedback = useQuery(creativeFeedbackOptions(wsId, "candidate"));
+  const feedbackDashboard = useQuery(creativeFeedbackDashboardOptions(wsId));
   const allResources = useMemo(() => resources.data?.resources ?? [], [resources.data?.resources]);
   const { marketPack, copyLibrary } = useMemo(
     () => defaultPreAdaptationResources(allResources),
@@ -269,7 +272,15 @@ function CreativeStudioContent() {
 
         <TabsContent value="home" className="min-h-0 min-w-0 flex-1 overflow-y-auto p-4">
           <div className="min-w-0 space-y-4">
-            <CreativeWorkbench candidates={materials.data?.candidates ?? []} orders={orders.data?.orders ?? []} excludedCandidateIds={workbenchExcludedCandidateIds} onOpenMaterialLibrary={(filter = "available") => navigateStudio("materials", "", "push", filter)} onOpenOrder={openOrder} />
+            <CreativeWorkbench
+              candidates={materials.data?.candidates ?? []}
+              orders={orders.data?.orders ?? []}
+              excludedCandidateIds={workbenchExcludedCandidateIds}
+              averageGenerationDuration={formatCreativeDuration(feedbackDashboard.data?.workflow.image_generation_duration_seconds)}
+              generationDurationPackageCount={feedbackDashboard.data?.workflow.image_generation_duration_package_count ?? 0}
+              onOpenMaterialLibrary={(filter = "available") => navigateStudio("materials", "", "push", filter)}
+              onOpenOrder={openOrder}
+            />
             <div className="mx-auto w-full min-w-0 max-w-[1440px]"><CreativeCollectionPlans
               trackedAutopilotRunId={trackedCollectionAutopilotRunId}
               onTrackedAutopilotRunIdChange={setTrackedCollectionAutopilotRunId}

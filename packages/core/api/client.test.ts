@@ -1171,7 +1171,7 @@ describe("creative material library endpoint", () => {
     const client = new ApiClient("https://api.example.test");
 
     await client.listCreativeMaterialLibrary();
-    await client.listCreativeMaterialLibrary({ runId: "crawl run/1" });
+    await client.listCreativeMaterialLibrary({ runId: "crawl run/1", includeEmptyRuns: false });
     await client.listCreativeMaterialLibrary({
       limit: 60,
       offset: 120,
@@ -1186,7 +1186,7 @@ describe("creative material library endpoint", () => {
     });
 
     expect(fetchMock).toHaveBeenNthCalledWith(1, "https://api.example.test/api/creative/materials", expect.any(Object));
-    expect(fetchMock).toHaveBeenNthCalledWith(2, "https://api.example.test/api/creative/materials?run_id=crawl+run%2F1", expect.any(Object));
+    expect(fetchMock).toHaveBeenNthCalledWith(2, "https://api.example.test/api/creative/materials?run_id=crawl+run%2F1&include_empty_runs=false", expect.any(Object));
     expect(fetchMock).toHaveBeenNthCalledWith(3, "https://api.example.test/api/creative/materials?limit=60&offset=120&query=cash+advance&competitor=Easycash&area=Indonesia&language=Indonesian&media=Meta&asset_type=image&view=available&sort=impressions", expect.any(Object));
   });
 

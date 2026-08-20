@@ -171,6 +171,8 @@ describe("CreativeWorkbench", () => {
       candidates={candidates}
       orders={[generating, awaitingReview, needsAttention]}
       excludedCandidateIds={["candidate-selected", "candidate-rejected"]}
+      averageGenerationDuration="6 分 8 秒"
+      generationDurationPackageCount={3}
       onOpenMaterialLibrary={vi.fn()}
       onOpenOrder={vi.fn()}
     />);
@@ -179,6 +181,8 @@ describe("CreativeWorkbench", () => {
     expect(screen.getByTestId("creative-workbench-running")).toHaveTextContent("1");
     expect(screen.getByTestId("creative-workbench-reviews")).toHaveTextContent("1");
     expect(screen.getByTestId("creative-workbench-deliveries")).toHaveTextContent("0");
+    expect(screen.getByTestId("creative-workbench-average-duration")).toHaveTextContent("6 分 8 秒");
+    expect(screen.getByTestId("creative-workbench-average-duration")).toHaveTextContent("基于 3 套");
     expect(screen.getByRole("region", { name: "工作台概览" })).toBeInTheDocument();
     expect(screen.getByText("查看素材、生成、验收和本周交付的当前总览。")).toBeInTheDocument();
     expect(screen.queryByText("需处理异常")).not.toBeInTheDocument();
