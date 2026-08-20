@@ -359,6 +359,27 @@ describe("CreativeOrderDeliveryCandidates", () => {
     expect(onRetryVariant).toHaveBeenCalledWith(blocked, { kind: "workflow", taskId: "task-1", label: "重试此方案" });
   });
 
+  it("exposes Prime composition retry when brand component composition is blocked", () => {
+    const blocked = variant("v01", false);
+    blocked.status = "action_required";
+    blocked.qc_reports = [];
+    blocked.action_required = {
+      task_id: "",
+      workflow: "brand_components",
+      failure_reason: "brand_composition_failed",
+      detail: "compose brand components: Prime composer requires Python with Pillow, OpenCV, and NumPy",
+      failed_at: "2026-08-20T10:00:00Z",
+      retryable: true,
+    };
+    const orderItem = item();
+    orderItem.variants = [blocked];
+    const onRetryVariant = vi.fn();
+    render(<CreativeOrderDeliveryCandidates orderId="order-1" item={orderItem} source={{ label: "竞品原图", url: "https://cdn.example/source.png" }} attachments={attachmentMap(orderItem)} adoptingVariantId="" onAdopt={vi.fn()} onAssetSelect={vi.fn()} onRetryVariant={onRetryVariant} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "重试品牌组件合成" }));
+    expect(onRetryVariant).toHaveBeenCalledWith(blocked, { kind: "prime", taskId: "", label: "重试品牌组件合成" });
+  });
+
   it("shows diagnostic model output when a stopped variant has no registered assets", () => {
     const blocked = variant("v01", false);
     blocked.status = "action_required";

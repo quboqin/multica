@@ -199,6 +199,7 @@ export type {
 	CreativeOrder,
 	CreativeOrderWorkflowFailure,
 	CreativeOrderWorkflowRetryResponse,
+	CreativeOrderPrimeComposeResponse,
 	CreativeOrderQCRetryResponse,
 	CreativeOrderListResponse,
 	CreativeOrderItem,

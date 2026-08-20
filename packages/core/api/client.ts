@@ -156,6 +156,7 @@ import type {
 	CreativeOrderListResponse,
 	CreativeOrder,
 	CreativeOrderWorkflowRetryResponse,
+	CreativeOrderPrimeComposeResponse,
 	CreativeOrderQCRetryResponse,
 	CreativeOrderItem,
 	CreativeOrderQCFinalizeResponse,
@@ -324,6 +325,7 @@ import {
 	CreativeOrderListResponseSchema,
 	CreativeOrderSchema,
 	CreativeOrderWorkflowRetryResponseSchema,
+	CreativeOrderPrimeComposeResponseSchema,
 	CreativeOrderQCRetryResponseSchema,
 	CreativeOrderItemSchema,
 	EMPTY_CREATIVE_ORDER_ITEM,
@@ -3073,6 +3075,18 @@ export class ApiClient {
     });
     return parseWithFallback(raw, CreativeOrderWorkflowRetryResponseSchema, { task_id: "" }, {
       endpoint: "POST /api/creative/orders/:id/workflow-failures/:taskId/retry",
+    });
+  }
+
+  async composeCreativeOrderPrime(orderId: string, variantId: string): Promise<CreativeOrderPrimeComposeResponse> {
+    const raw = await this.fetch<unknown>(`/api/creative/orders/${encodeURIComponent(orderId)}/prime-compose`, {
+      method: "POST",
+      body: JSON.stringify({ variant_id: variantId }),
+    });
+    return parseWithFallback(raw, CreativeOrderPrimeComposeResponseSchema, {
+      variant_id: "", composed: false, completed: false,
+    }, {
+      endpoint: "POST /api/creative/orders/:id/prime-compose",
     });
   }
 

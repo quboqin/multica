@@ -90,7 +90,7 @@ import { CreativeMaterialLibrary, creativeMaterialAnalysisReadiness, creativeMat
 import { CreativeCollectionPlans } from "./creative-collection-plans";
 import { ComposableCopyLibraryEditor } from "./composable-copy-library-editor";
 import { CreativeComparisonWorkspace, type CreativeAnnotationDraft } from "./creative-comparison-workspace";
-import { adoptedCreativeOrderVariant, CREATIVE_DELIVERY_SIZES, CreativeOrderDeliveryCandidates, creativeOrderActionableWorkflowFailures, creativeOrderStage, creativeVariantIsInProgress, creativeVariantNeedsManualAction, type CreativeOrderStage } from "./creative-order-delivery";
+import { adoptedCreativeOrderVariant, CREATIVE_DELIVERY_SIZES, CreativeOrderDeliveryCandidates, creativeOrderActionableWorkflowFailures, creativeOrderStage, creativeVariantIsInProgress, creativeVariantNeedsManualAction, type CreativeOrderStage, type CreativeVariantRetryAction } from "./creative-order-delivery";
 import { CreativeGenerationInfoDialog } from "./creative-generation-info-dialog";
 import { CreativeFeedbackDashboard } from "./creative-feedback-dashboard";
 import { CreativeWorkbench } from "./creative-workbench";
@@ -546,17 +546,19 @@ function CreativeOrderDetail({ orderId, onBack, onBrowseOrders, backLabel }: { o
     } catch (error) { toast.error(error instanceof Error ? error.message : "无法提交调整请求"); }
     finally { setAdjustBusy(false); }
   };
-  const retryVariant = async (variant: CreativeOrderVariant, action: { kind: "workflow" | "qc"; taskId: string; label: string }) => {
+  const retryVariant = async (variant: CreativeOrderVariant, action: CreativeVariantRetryAction) => {
     setRetryingVariantId(variant.id);
     try {
       if (action.kind === "qc") {
         await api.retryCreativeOrderVariantQC(orderId, variant.id);
+      } else if (action.kind === "prime") {
+        await api.composeCreativeOrderPrime(orderId, variant.id);
       } else {
         await api.retryCreativeOrderWorkflowFailure(orderId, action.taskId);
       }
       await queryClient.invalidateQueries({ queryKey: creativeKeys.order(wsId, orderId) });
       await queryClient.invalidateQueries({ queryKey: creativeKeys.orders(wsId) });
-      toast.success(action.kind === "qc" ? "已重新启动质检" : "已重新启动此方案");
+      toast.success(action.kind === "qc" ? "已重新启动质检" : action.kind === "prime" ? "已重新启动品牌组件合成" : "已重新启动此方案");
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "无法重试此方案");
     } finally {

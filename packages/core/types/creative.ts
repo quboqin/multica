@@ -624,6 +624,7 @@ export interface CreativeOrderWorkflowFailure {
 }
 
 export interface CreativeOrderWorkflowRetryResponse { task_id: string; }
+export interface CreativeOrderPrimeComposeResponse { variant_id: string; composed: boolean; completed: boolean; status?: string; }
 export interface QueueCreativeOrderAdjustmentRequest {
   adjustment_issue_id: string;
   asset_id: string;

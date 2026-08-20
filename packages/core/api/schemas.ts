@@ -804,6 +804,12 @@ export const CreativeOrderWorkflowFailureSchema = z.object({
   retryable: z.boolean().default(false),
 }).loose();
 export const CreativeOrderWorkflowRetryResponseSchema = z.object({ task_id: z.string().default("") }).loose();
+export const CreativeOrderPrimeComposeResponseSchema = z.object({
+  variant_id: z.string().default(""),
+  composed: z.boolean().default(false),
+  completed: z.boolean().default(false),
+  status: z.string().optional(),
+}).loose();
 export const QueueCreativeOrderAdjustmentResponseSchema = z.object({ task_id: z.string().default(""), revision: z.number().int().positive().default(1) }).loose();
 export const CreativeOrderQCRetryResponseSchema = z.object({
   variant_id: z.string().default(""),

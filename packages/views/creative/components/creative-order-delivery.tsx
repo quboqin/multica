@@ -55,7 +55,7 @@ export type CreativeVariantAdoptionRisk = {
 };
 
 export type CreativeVariantRetryAction = {
-  kind: "workflow" | "qc";
+  kind: "workflow" | "qc" | "prime";
   taskId: string;
   label: string;
 };
@@ -893,8 +893,12 @@ export function creativeVariantRetryAction(variant: CreativeOrderVariant): Creat
     return { kind: "qc", taskId: "", label: "重新质检" };
   }
   const blocker = variant.action_required;
-  if (!blocker?.retryable || !blocker.task_id || creativeOrderWorkflowFailureIsQC(blocker.workflow)) return null;
+  if (!blocker?.retryable) return null;
   if (variant.status !== "action_required" && variant.status !== "failed") return null;
+  if (blocker.workflow === "brand_components") {
+    return { kind: "prime", taskId: "", label: "重试品牌组件合成" };
+  }
+  if (!blocker.task_id || creativeOrderWorkflowFailureIsQC(blocker.workflow)) return null;
   return { kind: "workflow", taskId: blocker.task_id, label: "重试此方案" };
 }
 
