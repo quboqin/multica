@@ -12,6 +12,7 @@ server/data
 tmp
 **/__pycache__
 *.pyc
+**/*.pyc
 .gami
 
 # Git
