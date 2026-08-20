@@ -28,6 +28,7 @@ const remoteApiUrl = resolveRemoteApiUrl(runtimeUrlEnv);
 const docsUrl = process.env.DOCS_URL || "http://localhost:4000";
 const remoteCrawlerWorkerUrl = (process.env.REMOTE_CRAWLER_WORKER_URL || "").replace(/\/$/, "");
 const remoteCreativeFilesUrl = (process.env.REMOTE_CREATIVE_FILES_URL || "").replace(/\/$/, "");
+const skipDockerTypecheck = process.env.MULTICA_SKIP_NEXT_BUILD_TYPECHECK === "true";
 
 // Parse hostnames from CORS_ALLOWED_ORIGINS so that Next.js dev server
 // allows cross-origin HMR / webpack requests (e.g. from Tailscale IPs).
@@ -55,6 +56,7 @@ const warmPageBufferLength = positiveInteger(
 
 const nextConfig: NextConfig = {
   ...(process.env.STANDALONE === "true" ? { output: "standalone" as const } : {}),
+  ...(skipDockerTypecheck ? { typescript: { ignoreBuildErrors: true } } : {}),
   outputFileTracingRoot: resolve(__dirname, "../.."),
   transpilePackages: ["@multica/core", "@multica/ui", "@multica/views"],
   experimental: {
