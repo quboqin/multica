@@ -565,6 +565,25 @@ test("classifies searchApp login expiry as reauthentication instead of generic f
   assert.match(result.authCheck.upstream_error, /05:403005/);
 });
 
+test("classifies AppGrowing single-device logout as reauthentication", () => {
+  const body = {
+    errors: [{
+      message: "You are logged out because the account is already signed in on another device.",
+      extensions: {
+        c: "05:403004",
+        m: "You are logged out because the account is already signed in on another device.",
+      },
+    }],
+  };
+
+  assert.equal(appGrowingGraphQLNeedsReauth(body), true);
+  assert.equal(connectorAuthVerificationError({
+    authenticated: false,
+    http_status: 200,
+    upstream_error: "05:403004: You are logged out because the account is already signed in on another device.",
+  }), "");
+});
+
 test("reports non-auth searchApp errors without guessing that login expired", () => {
   const result = appGrowingBusinessProbeResult(
     { authenticated: true, method: "graphql_userinfo", user_id_present: true },

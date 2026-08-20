@@ -1384,7 +1384,7 @@ function connectorAuthVerificationError(authCheck) {
     return String(authCheck.probe_error);
   }
   const upstreamError = String(authCheck?.upstream_error || "").trim();
-  if (upstreamError && !/05:403005|login has expired|please log in again|account was logged out|session (?:has )?expired/i.test(upstreamError)) {
+  if (upstreamError && !appGrowingAuthErrorNeedsReauth(upstreamError)) {
     return upstreamError;
   }
   const status = Number(authCheck?.http_status);
@@ -3321,9 +3321,15 @@ function appGrowingGraphQLNeedsReauth(body) {
     const extensions = error?.extensions;
     const code = String(extensions && typeof extensions === "object" ? extensions.c || extensions.code || "" : "").trim();
     const message = String(extensions && typeof extensions === "object" ? extensions.m || error?.message || "" : error?.message || "").trim();
-    return code === "05:403005"
-      || /login has expired|please log in again|account was logged out|session (?:has )?expired/i.test(message);
+    return code === "05:403004"
+      || code === "05:403005"
+      || appGrowingAuthErrorNeedsReauth(message);
   });
+}
+
+function appGrowingAuthErrorNeedsReauth(value) {
+  return /05:40300[45]\b|login has expired|please log in again|(?:you are|account was|user was)?\s*logged out|already signed in on another device|session (?:has )?expired/i
+    .test(String(value || ""));
 }
 
 function appGrowingBusinessProbeResult(authCheck, result) {
