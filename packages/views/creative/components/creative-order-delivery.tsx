@@ -10,6 +10,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { cn } from "@multica/ui/lib/utils";
 import { toast } from "sonner";
 import { creativeAttachmentBrowserURL } from "../lib/creative-attachment-url";
+import { creativeTimeZoneLabel, formatCreativeDateTime } from "../lib/creative-time";
 
 export const CREATIVE_DELIVERY_SIZES = ["1080x1080", "1200x628", "800x1000"] as const;
 
@@ -552,7 +553,7 @@ function VariantCandidate({
         {disabled ? "订单已结束" : busy ? "正在采用" : adopted ? "当前采用" : requiresRiskAcknowledgement ? "忽略提醒并采用" : readiness.ready ? "采用此变体" : "尚不可采用"}
       </Button>
     </div>
-    <CreativeProcessImageDialog open={processOpen} onOpenChange={setProcessOpen} variant={variant} assets={diagnostics} />
+    <CreativeProcessImageDialog open={processOpen} onOpenChange={setProcessOpen} variant={variant} assets={diagnostics} attachments={attachments} />
   </article>;
 }
 
@@ -561,36 +562,208 @@ function CreativeProcessImageDialog({
   onOpenChange,
   variant,
   assets,
+  attachments,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   variant: CreativeOrderVariant;
   assets: CreativeOrderDiagnosticAsset[];
+  attachments: Map<string, DeliveryAttachment>;
 }) {
+  const adjustment = creativeVariantDirectAdjustmentContext(variant);
+  const comparison = creativeProcessComparisonCards(variant, attachments, adjustment);
+  const groups = creativeProcessDiagnosticGroups(assets, adjustment);
   return <Dialog open={open} onOpenChange={onOpenChange}>
     <DialogContent className="grid max-h-[94vh] grid-rows-[auto_minmax(0,1fr)] gap-0 overflow-hidden p-0 sm:max-w-[min(96vw,1280px)]">
       <DialogHeader className="border-b px-5 py-4 pr-14">
         <DialogTitle className="text-base">{variant.variant_key || "当前方案"} · 过程图片</DialogTitle>
-        <DialogDescription>展示本次自动流程留下的中间图片；只能查看，不能作为最终采用图。</DialogDescription>
+        <DialogDescription>{adjustment?.targetSize ? `${CREATIVE_DELIVERY_SIZE_LABELS[adjustment.targetSize as (typeof CREATIVE_DELIVERY_SIZES)[number]] ?? adjustment.targetSize}精准调整 · ${creativeTimeZoneLabel()}` : `自动流程过程图 · ${creativeTimeZoneLabel()}`}</DialogDescription>
       </DialogHeader>
       <div className="min-h-0 overflow-y-auto p-4">
-        {assets.length > 0 ? <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-          {assets.map((asset) => <figure key={asset.id} className="min-w-0 overflow-hidden border bg-background">
-            <figcaption className="flex items-center justify-between gap-2 border-b px-3 py-2">
-              <div className="min-w-0">
-                <p className="truncate text-xs font-medium">{CREATIVE_DELIVERY_SIZE_LABELS[asset.size_key as (typeof CREATIVE_DELIVERY_SIZES)[number]] ?? asset.size_key} · {creativeDiagnosticAssetLabel(asset)}</p>
-                <p className="mt-0.5 truncate text-[11px] text-muted-foreground">{asset.filename}</p>
-              </div>
-              <Button size="icon-sm" variant="ghost" title="打开原图" aria-label={`打开过程图片 ${asset.filename}`} onClick={() => openCreativeDiagnosticAsset(asset)}><ExternalLink className="h-4 w-4" /></Button>
-            </figcaption>
-            <button type="button" className="flex min-h-72 w-full items-center justify-center bg-muted/10 p-3" onClick={() => openCreativeDiagnosticAsset(asset)}>
-              <img src={asset.url} alt={`${variant.variant_key} ${asset.label} ${asset.size_key}`} width={1200} height={1200} loading="lazy" className="max-h-[520px] w-full object-contain" />
-            </button>
-          </figure>)}
+        {comparison.length > 0 || groups.length > 0 ? <div className="space-y-6">
+          {comparison.length > 0 && <section className="space-y-3">
+            <div className="flex items-center justify-between gap-2">
+              <h3 className="text-sm font-semibold">前后对照</h3>
+              <Badge variant="secondary">{comparison.length}</Badge>
+            </div>
+            <div className="grid gap-4 md:grid-cols-2">
+              {comparison.map((card) => <figure key={card.key} className="min-w-0 overflow-hidden border bg-background">
+                <figcaption className="flex items-center justify-between gap-2 border-b px-3 py-2">
+                  <div className="min-w-0">
+                    <p className="truncate text-xs font-medium">{card.title}</p>
+                    <p className="mt-0.5 truncate text-[11px] text-muted-foreground">{creativeProcessSizeLabel(card.sizeKey)} · r{card.revision} · {creativeProcessTimeLabel(card.updatedAt)}</p>
+                  </div>
+                  <Button size="icon-sm" variant="ghost" title="打开图片" aria-label={`打开${card.title}`} onClick={() => openCreativeProcessURL(card.url)}><ExternalLink className="h-4 w-4" /></Button>
+                </figcaption>
+                <button type="button" className="flex min-h-72 w-full items-center justify-center bg-muted/10 p-3" onClick={() => openCreativeProcessURL(card.url)}>
+                  <img src={card.url} alt={`${variant.variant_key} ${card.title} ${card.sizeKey}`} width={1200} height={1200} loading="lazy" className="max-h-[520px] w-full object-contain" />
+                </button>
+              </figure>)}
+            </div>
+          </section>}
+          {groups.map((group) => <section key={group.title} className="space-y-3">
+            <div className="flex items-center justify-between gap-2">
+              <h3 className="text-sm font-semibold">{group.title}</h3>
+              <Badge variant="secondary">{group.assets.length}</Badge>
+            </div>
+            <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+              {group.assets.map((asset) => <figure key={asset.id} className="min-w-0 overflow-hidden border bg-background">
+                <figcaption className="flex items-center justify-between gap-2 border-b px-3 py-2">
+                  <div className="min-w-0">
+                    <p className="truncate text-xs font-medium">{creativeProcessSizeLabel(asset.size_key)} · {creativeDiagnosticAssetRole(asset, adjustment)}</p>
+                    <p className="mt-0.5 truncate text-[11px] text-muted-foreground">r{asset.revision} · {creativeDiagnosticAssetLabel(asset)} · {creativeProcessTimeLabel(asset.updated_at || asset.created_at)}</p>
+                    <p className="mt-0.5 truncate text-[11px] text-muted-foreground">{asset.filename}</p>
+                  </div>
+                  <Button size="icon-sm" variant="ghost" title="打开原图" aria-label={`打开过程图片 ${asset.filename}`} onClick={() => openCreativeDiagnosticAsset(asset)}><ExternalLink className="h-4 w-4" /></Button>
+                </figcaption>
+                <button type="button" className="flex min-h-72 w-full items-center justify-center bg-muted/10 p-3" onClick={() => openCreativeDiagnosticAsset(asset)}>
+                  <img src={asset.url} alt={`${variant.variant_key} ${asset.label} ${asset.size_key}`} width={1200} height={1200} loading="lazy" className="max-h-[520px] w-full object-contain" />
+                </button>
+              </figure>)}
+            </div>
+          </section>)}
         </div> : <EmptyImage label="暂无过程图片" />}
       </div>
     </DialogContent>
   </Dialog>;
+}
+
+type CreativeDirectAdjustmentContext = {
+  targetSize: string;
+  sourceRevision: number;
+};
+
+type CreativeProcessComparisonCard = {
+  key: string;
+  title: string;
+  sizeKey: string;
+  revision: number;
+  updatedAt: string;
+  url: string;
+};
+
+type CreativeProcessDiagnosticGroup = {
+  title: string;
+  assets: CreativeOrderDiagnosticAsset[];
+};
+
+function creativeVariantDirectAdjustmentContext(variant: CreativeOrderVariant): CreativeDirectAdjustmentContext | null {
+  const delivery = isRecord(variant.brief?.creative_direct_edit_delivery) ? variant.brief.creative_direct_edit_delivery : undefined;
+  const targetSize = typeof delivery?.target_size === "string" ? delivery.target_size : "";
+  const sourceRevision = typeof delivery?.source_revision === "number" ? delivery.source_revision : variant.revision > 1 ? variant.revision - 1 : 0;
+  if (!CREATIVE_DELIVERY_SIZES.includes(targetSize as (typeof CREATIVE_DELIVERY_SIZES)[number]) || sourceRevision < 1) return null;
+  return { targetSize, sourceRevision };
+}
+
+function creativeProcessComparisonCards(
+  variant: CreativeOrderVariant,
+  attachments: Map<string, DeliveryAttachment>,
+  adjustment: CreativeDirectAdjustmentContext | null,
+): CreativeProcessComparisonCard[] {
+  if (!adjustment) return [];
+  const before = creativeProcessReferenceAsset(variant, adjustment.targetSize, adjustment.sourceRevision);
+  const after = creativeProcessReferenceAsset(variant, adjustment.targetSize, variant.revision);
+  return [
+    before ? creativeProcessComparisonCard("before", "调整前原图", before, attachments) : null,
+    after ? creativeProcessComparisonCard("after", "调整后结果", after, attachments) : null,
+  ].filter((card): card is CreativeProcessComparisonCard => Boolean(card?.url));
+}
+
+function creativeProcessReferenceAsset(variant: CreativeOrderVariant, sizeKey: string, revision: number): CreativeOrderAsset | undefined {
+  const candidates = variant.assets
+    .filter((asset) => asset.size_key === sizeKey && asset.revision === revision && asset.status === "completed" && asset.attachment_id)
+    .sort((left, right) => creativeProcessAssetStageRank(left.stage) - creativeProcessAssetStageRank(right.stage)
+      || timestamp(right.updated_at || right.created_at) - timestamp(left.updated_at || left.created_at)
+      || right.id.localeCompare(left.id));
+  return candidates[0];
+}
+
+function creativeProcessComparisonCard(key: string, title: string, asset: CreativeOrderAsset, attachments: Map<string, DeliveryAttachment>): CreativeProcessComparisonCard | null {
+  const url = creativeAttachmentBrowserURL(attachments.get(asset.attachment_id));
+  if (!url) return null;
+  return { key, title, sizeKey: asset.size_key, revision: asset.revision, updatedAt: asset.updated_at || asset.created_at, url };
+}
+
+function creativeProcessAssetStageRank(stage: string): number {
+  if (stage === "delivered") return 0;
+  if (stage === "primed") return 1;
+  if (stage === "generated") return 2;
+  return 3;
+}
+
+function creativeProcessDiagnosticGroups(assets: CreativeOrderDiagnosticAsset[], adjustment: CreativeDirectAdjustmentContext | null): CreativeProcessDiagnosticGroup[] {
+  const groups = new Map<string, CreativeOrderDiagnosticAsset[]>();
+  for (const asset of [...assets].sort((left, right) => compareCreativeProcessDiagnostics(left, right, adjustment))) {
+    const title = creativeProcessDiagnosticGroupTitle(asset, adjustment);
+    groups.set(title, [...(groups.get(title) ?? []), asset]);
+  }
+  return [...groups.entries()]
+    .sort(([left], [right]) => creativeProcessDiagnosticGroupRank(left) - creativeProcessDiagnosticGroupRank(right))
+    .map(([title, groupedAssets]) => ({ title, assets: groupedAssets }));
+}
+
+function compareCreativeProcessDiagnostics(left: CreativeOrderDiagnosticAsset, right: CreativeOrderDiagnosticAsset, adjustment: CreativeDirectAdjustmentContext | null): number {
+  return creativeProcessDiagnosticGroupRank(creativeProcessDiagnosticGroupTitle(left, adjustment)) - creativeProcessDiagnosticGroupRank(creativeProcessDiagnosticGroupTitle(right, adjustment))
+    || creativeProcessSizeRank(left.size_key, adjustment) - creativeProcessSizeRank(right.size_key, adjustment)
+    || creativeProcessLabelRank(left.label) - creativeProcessLabelRank(right.label)
+    || timestamp(left.updated_at || left.created_at) - timestamp(right.updated_at || right.created_at)
+    || left.id.localeCompare(right.id);
+}
+
+function creativeProcessDiagnosticGroupTitle(asset: CreativeOrderDiagnosticAsset, adjustment: CreativeDirectAdjustmentContext | null): string {
+  if (creativeDiagnosticAssetReusedForAdjustment(asset)) return "沿用上一版过程图";
+  if (adjustment?.targetSize && asset.size_key === adjustment.targetSize) return "本次调整过程图";
+  if (asset.workflow === "brand_components") return "品牌贴片合成图";
+  if (asset.workflow === "creative_production") return "成图生成过程图";
+  return "其他过程图";
+}
+
+function creativeProcessDiagnosticGroupRank(title: string): number {
+  return ({
+    "本次调整过程图": 0,
+    "品牌贴片合成图": 1,
+    "成图生成过程图": 2,
+    "沿用上一版过程图": 3,
+    "其他过程图": 4,
+  } as Record<string, number>)[title] ?? 9;
+}
+
+function creativeProcessSizeRank(sizeKey: string, adjustment: CreativeDirectAdjustmentContext | null): number {
+  if (adjustment?.targetSize && sizeKey === adjustment.targetSize) return -1;
+  const index = CREATIVE_DELIVERY_SIZES.indexOf(sizeKey as (typeof CREATIVE_DELIVERY_SIZES)[number]);
+  return index >= 0 ? index : 99;
+}
+
+function creativeProcessLabelRank(label: string): number {
+  return ({
+    "Prime context": 0,
+    "模型原图": 1,
+    "规范化底图": 2,
+    "Prime 合成成图": 3,
+  } as Record<string, number>)[label] ?? 9;
+}
+
+function creativeDiagnosticAssetRole(asset: CreativeOrderDiagnosticAsset, adjustment: CreativeDirectAdjustmentContext | null): string {
+  if (creativeDiagnosticAssetReusedForAdjustment(asset)) return "沿用上一版";
+  if (asset.label === "Prime context") return adjustment?.targetSize === asset.size_key ? "调整前上下文" : "成图上下文";
+  if (asset.label === "模型原图") return adjustment?.targetSize === asset.size_key ? "模型改图回图" : "模型原图";
+  if (asset.label === "规范化底图") return adjustment?.targetSize === asset.size_key ? "规范化后改图" : "规范化底图";
+  if (asset.label === "Prime 合成成图") return adjustment?.targetSize === asset.size_key ? "调整后贴片结果" : "品牌贴片结果";
+  return asset.label;
+}
+
+function creativeDiagnosticAssetReusedForAdjustment(asset: CreativeOrderDiagnosticAsset): boolean {
+  const adjustment = isRecord(asset.metadata?.order_adjustment) ? asset.metadata.order_adjustment : undefined;
+  return adjustment?.reused_for_adjustment === true || adjustment?.reused_generated_base === true;
+}
+
+function creativeProcessSizeLabel(sizeKey: string): string {
+  const label = CREATIVE_DELIVERY_SIZE_LABELS[sizeKey as (typeof CREATIVE_DELIVERY_SIZES)[number]];
+  return label ? `${label} · ${sizeKey}` : sizeKey;
+}
+
+function creativeProcessTimeLabel(value: string | undefined): string {
+  return value ? `${formatCreativeDateTime(value)}（${creativeTimeZoneLabel()}）` : "时间未知";
 }
 
 function VariantActionRequiredNotice({ variant, disabled = false }: { variant: CreativeOrderVariant; disabled?: boolean }) {
@@ -720,7 +893,11 @@ function EmptyImage({ label }: { label: string }) {
 }
 
 function openCreativeDiagnosticAsset(asset: CreativeOrderDiagnosticAsset) {
-  window.open(asset.url, "_blank", "noopener,noreferrer");
+  openCreativeProcessURL(asset.url);
+}
+
+function openCreativeProcessURL(url: string) {
+  window.open(url, "_blank", "noopener,noreferrer");
 }
 
 export function creativeVariantAdoptionReadiness(variant: CreativeOrderVariant): { ready: boolean; status: string } {

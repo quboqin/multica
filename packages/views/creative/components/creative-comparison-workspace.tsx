@@ -93,7 +93,7 @@ export function CreativeComparisonWorkspace({
   onViewInfo,
   onDecision,
   onAnnotations,
-  annotationScopes = ["size", "variant", "order"],
+  annotationScopes = ["size", "variant"],
   acceptance,
   showDecisionActions = true,
   comparisonMode = "source",
@@ -116,6 +116,7 @@ export function CreativeComparisonWorkspace({
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const [annotationTool, setAnnotationTool] = useState<"point" | "rect" | null>(null);
+  const [annotationScope, setAnnotationScope] = useState<CreativeAnnotationDraft["scope"]>(annotationScopes[0] ?? "size");
   const [annotations, setAnnotations] = useState<PendingCreativeAnnotation[]>([]);
   const [activeAnnotationId, setActiveAnnotationId] = useState("");
   const [annotationBusy, setAnnotationBusy] = useState(false);
@@ -138,12 +139,17 @@ export function CreativeComparisonWorkspace({
   const transform = `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`;
   const canAnnotate = Boolean(onAnnotations);
   const defaultAnnotationScope = annotationScopes[0] ?? "size";
+  const annotationScopeKey = annotationScopes.join("|");
   const annotationImageBounds = transformedContainedImageBounds(annotationViewport, resultImageSize, zoom, pan);
   const activeAnnotation = annotations.find((annotation) => annotation.localId === activeAnnotationId);
   const drawingAnnotation = annotationTool && start && drawingEnd
-    ? { ...normalizeCreativeAnnotationInImage(start, drawingEnd, annotationViewport, resultImageSize, annotationTool), localId: "drawing", issueType: "other", scope: defaultAnnotationScope, comment: "" }
+    ? { ...normalizeCreativeAnnotationInImage(start, drawingEnd, annotationViewport, resultImageSize, annotationTool), localId: "drawing", issueType: "other", scope: annotationScope, comment: "" }
     : null;
   const updateAnnotation = (id: string, patch: Partial<CreativeAnnotationDraft>) => setAnnotations((current) => current.map((annotation) => annotation.localId === id ? { ...annotation, ...patch } : annotation));
+  const chooseAnnotationScope = (scope: CreativeAnnotationDraft["scope"]) => {
+    setAnnotationScope(scope);
+    setAnnotations((current) => current.map((annotation) => ({ ...annotation, scope })));
+  };
   const removeAnnotation = (id: string) => {
     setAnnotations((current) => current.filter((annotation) => annotation.localId !== id));
     setActiveAnnotationId((current) => current === id ? "" : current);
@@ -167,6 +173,11 @@ export function CreativeComparisonWorkspace({
   useEffect(() => {
     setSelectedAssetId(result.id);
   }, [result.id]);
+  useEffect(() => {
+    if (!annotationScopes.includes(annotationScope)) {
+      chooseAnnotationScope(defaultAnnotationScope);
+    }
+  }, [annotationScope, annotationScopeKey, defaultAnnotationScope]);
   useEffect(() => {
     const element = annotationSurfaceRef.current;
     if (!element || typeof ResizeObserver === "undefined") return;
@@ -228,7 +239,7 @@ export function CreativeComparisonWorkspace({
     const next = normalizeCreativeAnnotationInImage(start, { x: event.clientX - bounds.left, y: event.clientY - bounds.top }, bounds, resultImageSize, annotationTool);
     annotationSequence.current += 1;
     const localId = `annotation-${annotationSequence.current}`;
-    setAnnotations((current) => [...current, { ...next, localId, issueType: "other", scope: defaultAnnotationScope, comment: "" }]);
+    setAnnotations((current) => [...current, { ...next, localId, issueType: "other", scope: annotationScope, comment: "" }]);
     setActiveAnnotationId(localId);
     setAnnotationTool(null);
     setStart(null);
@@ -241,7 +252,7 @@ export function CreativeComparisonWorkspace({
     <div data-testid="creative-annotation-surface" className={cn("absolute inset-0", annotationTool && "pointer-events-auto cursor-crosshair")} onPointerDown={onAnnotationPointerDown} onPointerMove={onAnnotationPointerMove} onPointerUp={onAnnotationPointerUp} onPointerCancel={() => { setStart(null); setDrawingEnd(null); }} />
     {drawingAnnotation && <div data-testid="creative-drawing-annotation" className={cn("absolute border-2 border-rose-500 bg-rose-500/10", drawingAnnotation.kind === "point" && "rounded-full bg-rose-500/25")} style={annotationBoxStyle(drawingAnnotation)} />}
     {annotations.map((annotation, index) => <button key={annotation.localId} type="button" aria-label={`选择标注 ${index + 1}`} onPointerDown={(event) => event.stopPropagation()} onClick={() => setActiveAnnotationId(annotation.localId)} className={cn("pointer-events-auto absolute border-2 border-rose-500 bg-rose-500/5", annotation.kind === "point" && "rounded-full bg-rose-500/20", annotation.localId === activeAnnotationId && "ring-2 ring-white ring-offset-1 ring-offset-rose-500")} style={annotationBoxStyle(annotation)}><span className="absolute -left-3 -top-3 flex h-6 min-w-6 items-center justify-center rounded-full bg-rose-600 px-1 text-[11px] font-semibold text-white shadow-sm">{index + 1}</span>{annotation.comment && <span className="absolute left-0 top-full mt-1 max-w-56 truncate border bg-background/95 px-2 py-1 text-left text-[11px] text-foreground shadow-sm">{annotation.comment}</span>}</button>)}
-    {activeAnnotation && !annotationTool && <div className="pointer-events-auto absolute z-30 w-80 border bg-background p-2 shadow-lg" style={calloutStyle} onPointerDown={(event) => event.stopPropagation()}><div className="mb-2 flex items-center justify-between gap-2"><span className="text-xs font-semibold">标注 {annotations.findIndex((annotation) => annotation.localId === activeAnnotation.localId) + 1}</span><Button size="icon-sm" variant="ghost" title="删除标注" aria-label="删除标注" onClick={() => removeAnnotation(activeAnnotation.localId)}><Trash2 className="h-4 w-4" /></Button></div><div className={cn("mb-2 grid gap-2", annotationScopes.length > 1 ? "grid-cols-2" : "grid-cols-1")}><NativeSelect size="sm" aria-label="标注问题类型" value={activeAnnotation.issueType} onChange={(event) => updateAnnotation(activeAnnotation.localId, { issueType: event.target.value })}><NativeSelectOption value="copy_error">文案错误</NativeSelectOption><NativeSelectOption value="theme_drift">主题偏离</NativeSelectOption><NativeSelectOption value="brand_prime">品牌或 Prime</NativeSelectOption><NativeSelectOption value="artifact">破图</NativeSelectOption><NativeSelectOption value="other">其他</NativeSelectOption></NativeSelect>{annotationScopes.length > 1 && <NativeSelect size="sm" aria-label="调整作用范围" value={activeAnnotation.scope} onChange={(event) => updateAnnotation(activeAnnotation.localId, { scope: event.target.value as CreativeAnnotationDraft["scope"] })}>{annotationScopes.map((scope) => <NativeSelectOption key={scope} value={scope}>{ANNOTATION_SCOPE_LABELS[scope]}</NativeSelectOption>)}</NativeSelect>}</div><Textarea autoFocus aria-label={`标注 ${annotations.findIndex((annotation) => annotation.localId === activeAnnotation.localId) + 1} 调整说明`} value={activeAnnotation.comment} onChange={(event) => updateAnnotation(activeAnnotation.localId, { comment: event.target.value })} rows={2} placeholder="写下这个区域需要怎么调整" /><div className="mt-2 flex justify-end"><Button size="sm" variant="outline" disabled={!activeAnnotation.comment.trim()} onClick={() => setActiveAnnotationId("")}>完成标注</Button></div></div>}
+    {activeAnnotation && !annotationTool && <div className="pointer-events-auto absolute z-30 w-80 border bg-background p-2 shadow-lg" style={calloutStyle} onPointerDown={(event) => event.stopPropagation()}><div className="mb-2 flex items-center justify-between gap-2"><span className="text-xs font-semibold">标注 {annotations.findIndex((annotation) => annotation.localId === activeAnnotation.localId) + 1}</span><Button size="icon-sm" variant="ghost" title="删除标注" aria-label="删除标注" onClick={() => removeAnnotation(activeAnnotation.localId)}><Trash2 className="h-4 w-4" /></Button></div><div className="mb-2 grid gap-2"><NativeSelect size="sm" aria-label="标注问题类型" value={activeAnnotation.issueType} onChange={(event) => updateAnnotation(activeAnnotation.localId, { issueType: event.target.value })}><NativeSelectOption value="copy_error">文案错误</NativeSelectOption><NativeSelectOption value="theme_drift">主题偏离</NativeSelectOption><NativeSelectOption value="brand_prime">品牌或 Prime</NativeSelectOption><NativeSelectOption value="artifact">破图</NativeSelectOption><NativeSelectOption value="other">其他</NativeSelectOption></NativeSelect></div><Textarea autoFocus aria-label={`标注 ${annotations.findIndex((annotation) => annotation.localId === activeAnnotation.localId) + 1} 调整说明`} value={activeAnnotation.comment} onChange={(event) => updateAnnotation(activeAnnotation.localId, { comment: event.target.value })} rows={2} placeholder="写下这个区域需要怎么调整" /><div className="mt-2 flex justify-end"><Button size="sm" variant="outline" disabled={!activeAnnotation.comment.trim()} onClick={() => setActiveAnnotationId("")}>完成标注</Button></div></div>}
   </div>;
   const variants = useMemo(() => [...new Set(assets.map((asset) => asset.variant).filter((value): value is string => Boolean(value)))], [assets]);
   const sizes = useMemo(() => [...new Set(assets.map((asset) => asset.size).filter((value): value is string => Boolean(value)))], [assets]);
@@ -277,6 +288,7 @@ export function CreativeComparisonWorkspace({
     </div>
     <div className="flex flex-wrap items-center gap-2 border-t px-4 py-2">
       {canAnnotate && <><Button size="icon-sm" variant={annotationTool === "point" ? "default" : "outline"} aria-pressed={annotationTool === "point"} title="点标注" aria-label="点标注" onClick={() => beginAnnotation("point")}><MousePointer2 className="h-4 w-4" /></Button><Button size="icon-sm" variant={annotationTool === "rect" ? "default" : "outline"} aria-pressed={annotationTool === "rect"} title="框选标注" aria-label="框选标注" onClick={() => beginAnnotation("rect")}><SquareDashedMousePointer className="h-4 w-4" /></Button></>}
+      {canAnnotate && annotationScopes.length > 1 && <div className="inline-flex border" role="group" aria-label="调整范围">{annotationScopes.map((scope) => <button key={scope} type="button" aria-pressed={annotationScope === scope} onClick={() => chooseAnnotationScope(scope)} className={cn("h-8 whitespace-nowrap border-l px-2.5 text-xs first:border-l-0", annotationScope === scope && "bg-foreground text-background")}>{ANNOTATION_SCOPE_LABELS[scope]}</button>)}</div>}
       {annotationTool && <span className="text-xs font-medium text-amber-700" role="status">{annotationTool === "point" ? "在右侧成图上标记位置" : "在右侧成图上拖动圈选区域"}</span>}
       {annotations.length > 0 && <span className="text-xs font-medium text-rose-700">已标注 {annotations.length} 处</span>}
       {onAdjust && <Button size="sm" variant="outline" onClick={onAdjust}><PencilRuler className="h-4 w-4" />调整</Button>}
@@ -286,7 +298,7 @@ export function CreativeComparisonWorkspace({
       <Button size="icon-sm" variant="outline" title="下载当前成图" aria-label="下载当前成图" onClick={() => { onDecision?.("downloaded"); window.open(selectedResult.finalUrl, "_blank", "noopener,noreferrer"); }}><Download className="h-4 w-4" /></Button>
       {acceptance && <span id={acceptanceStatusId} role="status" className={cn("text-xs", acceptance.enabled ? "text-emerald-700" : "text-muted-foreground")}>{acceptance.status}</span>}
       <span className="ml-auto text-xs text-muted-foreground">{variants.length} 个变体 · {sizes.length} 个尺寸</span>
-      {annotations.length > 0 && <Button size="sm" disabled={annotationBusy || annotations.some((annotation) => !annotation.comment.trim())} onClick={() => { if (!onAnnotations) return; setAnnotationBusy(true); const drafts = annotations.map(({ localId: _, ...annotation }) => annotation); void onAnnotations(drafts).then((saved) => { if (saved) { setAnnotations([]); setActiveAnnotationId(""); } }).finally(() => setAnnotationBusy(false)); }}>{annotationBusy ? "正在提交" : `提交 ${annotations.length} 处调整`}</Button>}
+      {annotations.length > 0 && <Button size="sm" disabled={annotationBusy || annotations.some((annotation) => !annotation.comment.trim())} onClick={() => { if (!onAnnotations) return; setAnnotationBusy(true); const drafts = annotations.map(({ localId: _, ...annotation }) => ({ ...annotation, scope: annotationScope })); void onAnnotations(drafts).then((saved) => { if (saved) { setAnnotations([]); setActiveAnnotationId(""); } }).finally(() => setAnnotationBusy(false)); }}>{annotationBusy ? "正在提交" : `提交 ${annotations.length} 处调整`}</Button>}
     </div>
   </div>;
 }

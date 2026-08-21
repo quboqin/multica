@@ -398,6 +398,7 @@ describe("CreativeOrderDeliveryCandidates", () => {
       metadata: {},
       url: "/api/attachments/attachment-1/download",
       created_at: "2026-08-09T10:00:00Z",
+      updated_at: "2026-08-09T10:00:00Z",
     }];
     blocked.action_required = {
       task_id: "task-1",
@@ -436,6 +437,7 @@ describe("CreativeOrderDeliveryCandidates", () => {
       metadata: {},
       url: "/api/attachments/attachment-1/download",
       created_at: "2026-08-09T10:00:00Z",
+      updated_at: "2026-08-09T10:00:00Z",
     }];
     const orderItem = item();
     orderItem.variants = [ready];
@@ -446,8 +448,61 @@ describe("CreativeOrderDeliveryCandidates", () => {
 
     expect(screen.getByRole("dialog")).toBeInTheDocument();
     expect(screen.getByText("V01 · 过程图片")).toBeInTheDocument();
-    expect(screen.getByText("方形 · 贴片预览检查")).toBeInTheDocument();
+    expect(screen.getByText("方形 · 1080x1080 · 贴片预览检查")).toBeInTheDocument();
     expect(screen.getByText("prime-collision-preview-1080x1080.png")).toBeInTheDocument();
+  });
+
+  it("separates direct adjustment before, after, current process, and reused process images", () => {
+    const ready = variant("v01");
+    ready.brief = { creative_direct_edit_delivery: { skip_qc: true, target_size: "1080x1080", source_revision: 1 } };
+    ready.diagnostic_assets = [
+      {
+        id: "diagnostic-target",
+        variant_id: ready.id,
+        task_id: "task-1",
+        attachment_id: "diagnostic-target-attachment",
+        size_key: "1080x1080",
+        revision: ready.revision,
+        workflow: "creative_production",
+        label: "模型原图",
+        filename: "direct-edit-model-1080x1080.png",
+        metadata: {},
+        url: "/api/attachments/diagnostic-target-attachment/download",
+        created_at: "2026-08-02T00:01:00Z",
+        updated_at: "2026-08-02T00:02:00Z",
+      },
+      {
+        id: "diagnostic-reused",
+        variant_id: ready.id,
+        task_id: "task-1",
+        attachment_id: "diagnostic-reused-attachment",
+        size_key: "1200x628",
+        revision: ready.revision,
+        workflow: "creative_production",
+        label: "规范化底图",
+        filename: "reused-landscape.png",
+        metadata: { order_adjustment: { source_revision: 1, reused_for_adjustment: true } },
+        url: "/api/attachments/diagnostic-reused-attachment/download",
+        created_at: "2026-08-02T00:03:00Z",
+        updated_at: "2026-08-02T00:04:00Z",
+      },
+    ];
+    const orderItem = item();
+    orderItem.variants = [ready];
+
+    render(<CreativeOrderDeliveryCandidates orderId="order-1" item={orderItem} source={{ label: "竞品原图", url: "https://cdn.example/source.png" }} attachments={attachmentMap(orderItem)} adoptingVariantId="" onAdopt={vi.fn()} onAssetSelect={vi.fn()} />);
+
+    fireEvent.click(screen.getByRole("button", { name: /查看过程图片/ }));
+
+    expect(screen.getByText("前后对照")).toBeInTheDocument();
+    expect(screen.getByText("调整前原图")).toBeInTheDocument();
+    expect(screen.getByText("调整后结果")).toBeInTheDocument();
+    expect(screen.getByText("本次调整过程图")).toBeInTheDocument();
+    expect(screen.getByText("沿用上一版过程图")).toBeInTheDocument();
+    expect(screen.getByText("方形 · 1080x1080 · 模型改图回图")).toBeInTheDocument();
+    expect(screen.getByText("横版 · 1200x628 · 沿用上一版")).toBeInTheDocument();
+    expect(screen.getAllByText(/北京时间/).length).toBeGreaterThan(0);
+    expect(screen.getByText(/2026\/08\/02 08:02:00/)).toBeInTheDocument();
   });
 
   it("lets users ignore a QC reminder and adopt the current revision", () => {

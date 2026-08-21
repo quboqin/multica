@@ -31,10 +31,12 @@ export function creativeAdjustmentTarget(
 
 export function creativeAdjustmentProgress(variant: CreativeOrderVariant | undefined, event: CreateCreativeFeedbackResponse): string {
   const sourceRevision = adjustmentSourceRevision(event);
+  const expectedSizes = adjustmentExpectedSizes(event);
+  const scopeLabel = expectedSizes.length === 1 ? "当前尺寸" : "三尺寸";
   if (!variant || variant.revision <= sourceRevision) return "调整未启动";
   if (variant.status === "completed") return `调整已完成 · r${variant.revision}`;
   if (variant.status === "action_required" || variant.status === "failed") return `调整需要处理 · r${variant.revision}`;
-  return `当前尺寸调整中 · r${variant.revision}`;
+  return `${scopeLabel}调整中 · r${variant.revision}`;
 }
 
 export function creativeAdjustmentCanRetry(variant: CreativeOrderVariant | undefined, event: CreateCreativeFeedbackResponse): boolean {
@@ -75,5 +77,6 @@ function adjustmentSourceRevision(event: CreateCreativeFeedbackResponse): number
 function adjustmentExpectedSizes(event: CreateCreativeFeedbackResponse): string[] {
   const scope = typeof event.context_snapshot.scope === "string" ? event.context_snapshot.scope : "";
   const size = typeof event.context_snapshot.size_key === "string" ? event.context_snapshot.size_key : "";
-  return scope === "size" && size ? [size] : CREATIVE_ADJUSTMENT_ALL_SIZES;
+  if (scope === "variant") return CREATIVE_ADJUSTMENT_ALL_SIZES;
+  return size ? [size] : CREATIVE_ADJUSTMENT_ALL_SIZES;
 }

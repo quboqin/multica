@@ -130,8 +130,8 @@ func TestCreativeFactoryImageEditingUsesOneAgentWithWorkflowSkills(t *testing.T)
 			break
 		}
 	}
-	if directEditSkill.Version != 13 {
-		t.Fatalf("direct-edit Skill version = %d, want 13", directEditSkill.Version)
+	if directEditSkill.Version != 14 {
+		t.Fatalf("direct-edit Skill version = %d, want 14", directEditSkill.Version)
 	}
 	for index := range creativeFactoryAgentSpecs {
 		spec := &creativeFactoryAgentSpecs[index]
@@ -245,8 +245,8 @@ WHERE id = $1::uuid
 	if err := json.Unmarshal([]byte(configRaw), &config); err != nil {
 		t.Fatalf("decode refreshed skill config: %v", err)
 	}
-	if got := int(config["version"].(float64)); got != 13 {
-		t.Fatalf("direct-edit Skill version = %d, want 13", got)
+	if got := int(config["version"].(float64)); got != 14 {
+		t.Fatalf("direct-edit Skill version = %d, want 14", got)
 	}
 	if got := int(config["template_version"].(float64)); got != creativeFactoryTemplateVersion {
 		t.Fatalf("direct-edit template_version = %d, want %d", got, creativeFactoryTemplateVersion)
@@ -260,7 +260,7 @@ WHERE id = $1::uuid
 `, imageAgentID).Scan(&instructions); err != nil {
 		t.Fatalf("query refreshed image-edit agent: %v", err)
 	}
-	for _, required := range []string{"Input 2 只用于读取红框编号", "人物替换必须是肉眼可见的 replacement", "creative_direct_edit"} {
+	for _, required := range []string{"Input 2 只用于读取红框编号", "scope=variant 时按 edit_sizes/expected_sizes 遍历", "人物替换必须是肉眼可见的 replacement", "creative_direct_edit"} {
 		if !strings.Contains(instructions, required) {
 			t.Fatalf("image-edit Agent instructions missing refreshed contract %q", required)
 		}

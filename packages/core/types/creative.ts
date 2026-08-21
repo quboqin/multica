@@ -630,6 +630,7 @@ export interface QueueCreativeOrderAdjustmentRequest {
   adjustment_issue_id: string;
   asset_id: string;
   size_key: CreativeDeliverySize;
+  scope?: "size" | "variant";
   source_revision: number;
   annotation_guide_attachment_id?: string;
   comment: string;
@@ -657,7 +658,7 @@ export interface AdoptCreativeOrderVariantRequest {
   qc_risk_reason?: string;
 }
 export interface CreativeOrderVariantBlocker { task_id: string; workflow: string; failure_reason: string; detail: string; failed_at: string; retryable: boolean; }
-export interface CreativeOrderDiagnosticAsset { id: string; variant_id: string; task_id: string; attachment_id: string; size_key: CreativeDeliverySize | string; revision: number; workflow: string; label: string; filename: string; metadata: Record<string, unknown>; url: string; created_at: string; }
+export interface CreativeOrderDiagnosticAsset { id: string; variant_id: string; task_id: string; attachment_id: string; size_key: CreativeDeliverySize | string; revision: number; workflow: string; label: string; filename: string; metadata: Record<string, unknown>; url: string; created_at: string; updated_at: string; }
 export interface CreativeOrderVariant { id: string; order_item_id: string; variant_key: string; brief: Record<string, unknown>; revision: number; status: string; qc_status: string; qc_recovery_used: boolean; qc_recovery_available: boolean; action_required?: CreativeOrderVariantBlocker; created_at: string; updated_at: string; assets: CreativeOrderAsset[]; diagnostic_assets: CreativeOrderDiagnosticAsset[]; qc_reports: CreativeOrderQCReport[]; }
 export interface CreativeOrderAsset { id: string; variant_id: string; asset_family_id: string; size_key: CreativeDeliverySize | string; revision: number; stage: "generated" | "primed" | "delivered" | string; attachment_id: string; derived_from_asset_id: string; metadata: Record<string, unknown>; evidence: Record<string, unknown>; status: string; created_at: string; updated_at: string; }
 export interface CreativeOrderQCReport { id: string; variant_id: string; lane: "technical" | "visual" | string; revision: number; status: string; findings: Record<string, unknown>; trigger_evidence_kind: string; trigger_evidence_ref_id: string; created_at: string; updated_at: string; }

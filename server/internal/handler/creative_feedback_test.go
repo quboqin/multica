@@ -544,6 +544,7 @@ RETURNING id::text
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _, _ = testPool.Exec(t.Context(), `DELETE FROM creative_order WHERE id = $1`, orderID) })
+	var reworkedVariantID string
 	for _, itemCandidateID := range []string{candidateID, secondCandidateID} {
 		var itemID string
 		if err := testPool.QueryRow(t.Context(), `
@@ -561,6 +562,9 @@ VALUES ($1, $2, 1, 'completed', now() - interval '30 seconds')
 RETURNING id::text
 `, itemID, variantKey).Scan(&variantID); err != nil {
 				t.Fatal(err)
+			}
+			if reworkedVariantID == "" {
+				reworkedVariantID = variantID
 			}
 			for _, size := range standardCreativeAssetSizes {
 				if _, err := testPool.Exec(t.Context(), `
@@ -582,6 +586,33 @@ VALUES ($1, $2, 1, 'generated', $3, 'completed')
 	}
 	if after.ImageGenerationDurationSeconds == nil || *after.ImageGenerationDurationSeconds < 60 {
 		t.Fatalf("generated package duration = %v, want at least 60 seconds", after.ImageGenerationDurationSeconds)
+	}
+
+	initialDuration := *after.ImageGenerationDurationSeconds
+	initialCount := after.ImageGenerationDurationPackageCount
+	if _, err := testPool.Exec(t.Context(), `
+UPDATE creative_order_variant SET revision = 2, status = 'completed' WHERE id = $1
+`, reworkedVariantID); err != nil {
+		t.Fatal(err)
+	}
+	for _, size := range standardCreativeAssetSizes {
+		if _, err := testPool.Exec(t.Context(), `
+INSERT INTO creative_order_asset (variant_id, size_key, revision, stage, attachment_id, status, created_at, updated_at)
+VALUES ($1, $2, 2, 'generated', $3, 'completed', now() + interval '1 day', now() + interval '1 day')
+`, reworkedVariantID, size, attachmentID); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	afterRework, err := testHandler.creativeFeedbackWorkflowDashboard(t.Context(), parseUUID(testWorkspaceID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if afterRework.ImageGenerationDurationPackageCount != initialCount {
+		t.Fatalf("generated package count after rework = %d, want %d", afterRework.ImageGenerationDurationPackageCount, initialCount)
+	}
+	if afterRework.ImageGenerationDurationSeconds == nil || *afterRework.ImageGenerationDurationSeconds != initialDuration {
+		t.Fatalf("generated package duration after rework = %v, want %d", afterRework.ImageGenerationDurationSeconds, initialDuration)
 	}
 }
 

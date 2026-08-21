@@ -175,6 +175,7 @@ type creativeOrderDiagnosticAsset struct {
 	Metadata     json.RawMessage `json:"metadata"`
 	URL          string          `json:"url"`
 	CreatedAt    string          `json:"created_at"`
+	UpdatedAt    string          `json:"updated_at"`
 }
 
 type creativeOrderDiagnosticPromotionResponse struct {
@@ -2862,7 +2863,7 @@ ON CONFLICT (variant_id, revision, workflow, size_key, label, filename) DO UPDAT
   metadata = EXCLUDED.metadata,
   updated_at = now()
 RETURNING id::text, variant_id::text, COALESCE(task_id::text, ''), attachment_id::text,
-  size_key, revision, workflow, label, filename, metadata::text, created_at::text
+  size_key, revision, workflow, label, filename, metadata::text, created_at::text, updated_at::text
 `, variantID, taskID, attachmentID, input.SizeKey, input.Revision, input.Workflow, input.Label, input.Filename, input.Metadata))
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to save creative diagnostic asset")
@@ -2909,7 +2910,7 @@ func (h *Handler) PromoteCreativeOrderDiagnosticAsset(w http.ResponseWriter, r *
 SELECT diagnostic.id, diagnostic.variant_id, COALESCE(diagnostic.task_id::text, ''),
        diagnostic.attachment_id::text, diagnostic.size_key, diagnostic.revision,
        diagnostic.workflow, diagnostic.label, diagnostic.filename, diagnostic.metadata::text,
-       diagnostic.created_at::text, variant.revision, variant.status,
+       diagnostic.created_at::text, diagnostic.updated_at::text, variant.revision, variant.status,
        order_row.trigger_evidence_kind, order_row.input_snapshot::text, variant.brief::text,
        order_row.issue_id
 FROM creative_order_diagnostic_asset diagnostic
@@ -2923,7 +2924,7 @@ FOR UPDATE OF diagnostic, variant
 `, diagnosticAssetID, orderID, workspaceID).Scan(
 		&candidate.ID, &candidate.VariantID, &candidate.TaskID, &candidate.AttachmentID,
 		&candidate.SizeKey, &candidate.Revision, &candidate.Workflow, &candidate.Label,
-		&candidate.Filename, &metadata, &candidate.CreatedAt, &variantRevision,
+		&candidate.Filename, &metadata, &candidate.CreatedAt, &candidate.UpdatedAt, &variantRevision,
 		&variantStatus, &triggerKind, &inputSnapshot, &brief, &issueID,
 	); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -4736,13 +4737,14 @@ WHERE id = $1 AND revision = $2 AND status <> 'cancelled'
 }
 
 type creativeDirectEditTaskCompletionContext struct {
-	Type          string   `json:"type"`
-	Workflow      string   `json:"workflow"`
-	VariantID     string   `json:"variant_id"`
-	Revision      int      `json:"revision"`
-	TargetSize    string   `json:"target_size"`
-	DeliveryMode  string   `json:"delivery_mode"`
-	ExpectedSizes []string `json:"expected_sizes"`
+	Type            string   `json:"type"`
+	Workflow        string   `json:"workflow"`
+	CreativeOrderID string   `json:"creative_order_id"`
+	VariantID       string   `json:"variant_id"`
+	Revision        int      `json:"revision"`
+	TargetSize      string   `json:"target_size"`
+	DeliveryMode    string   `json:"delivery_mode"`
+	ExpectedSizes   []string `json:"expected_sizes"`
 }
 
 type creativeDirectEditArtifactState struct {
@@ -4761,6 +4763,7 @@ func parseCreativeDirectEditTaskCompletionContext(raw json.RawMessage) (creative
 	if taskContext.Type != "creative_domain_task" || taskContext.Workflow != "creative_direct_edit" {
 		return taskContext, false, nil
 	}
+	taskContext.CreativeOrderID = strings.TrimSpace(taskContext.CreativeOrderID)
 	taskContext.VariantID = strings.TrimSpace(taskContext.VariantID)
 	taskContext.TargetSize = strings.TrimSpace(taskContext.TargetSize)
 	taskContext.DeliveryMode = strings.TrimSpace(taskContext.DeliveryMode)
@@ -4918,7 +4921,15 @@ FOR UPDATE
 		return fmt.Errorf("check direct image edit output: %w", err)
 	}
 	if creativeDirectEditArtifactError(taskContext, state) == "" {
-		return tx.Commit(ctx)
+		if err := tx.Commit(ctx); err != nil {
+			return err
+		}
+		orderUUID := pgtype.UUID{}
+		if parsedOrderID, parseErr := parseUUIDString(taskContext.CreativeOrderID); parseErr == nil {
+			orderUUID = parsedOrderID
+		}
+		h.notifyCreativeDirectAdjustmentDelivery(ctx, pgtype.UUID{}, orderUUID, variantUUID, taskContext.Revision, taskContext.TargetSize)
+		return nil
 	}
 
 	detail := creativeDirectEditArtifactError(taskContext, state)
@@ -4993,7 +5004,7 @@ func scanCreativeOrderAsset(row rowScanner) (creativeOrderAssetResponse, error) 
 func scanCreativeOrderDiagnosticAsset(row rowScanner) (creativeOrderDiagnosticAsset, error) {
 	var asset creativeOrderDiagnosticAsset
 	var metadata string
-	err := row.Scan(&asset.ID, &asset.VariantID, &asset.TaskID, &asset.AttachmentID, &asset.SizeKey, &asset.Revision, &asset.Workflow, &asset.Label, &asset.Filename, &metadata, &asset.CreatedAt)
+	err := row.Scan(&asset.ID, &asset.VariantID, &asset.TaskID, &asset.AttachmentID, &asset.SizeKey, &asset.Revision, &asset.Workflow, &asset.Label, &asset.Filename, &metadata, &asset.CreatedAt, &asset.UpdatedAt)
 	asset.Metadata = json.RawMessage(metadata)
 	asset.URL = attachmentDownloadPath(asset.AttachmentID)
 	return asset, err
@@ -5880,7 +5891,7 @@ func truncateCreativeOrderBlockerDetail(value string, limit int) string {
 func (h *Handler) listCreativeOrderVariantDiagnosticAssets(r *http.Request, variantID pgtype.UUID) ([]creativeOrderDiagnosticAsset, error) {
 	rows, err := h.DB.Query(r.Context(), `
 SELECT id::text, variant_id::text, COALESCE(task_id::text, ''), attachment_id::text,
-  size_key, revision, workflow, label, filename, metadata::text, created_at::text
+  size_key, revision, workflow, label, filename, metadata::text, created_at::text, updated_at::text
 FROM creative_order_diagnostic_asset
 WHERE variant_id = $1
 ORDER BY revision, size_key, updated_at DESC, id

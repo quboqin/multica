@@ -3603,9 +3603,10 @@ RETURNING id::text
 		return attachmentID
 	}
 
-	setup := func(t *testing.T, withGenerated, withPrimed, withDelivered bool) (string, string) {
+	setup := func(t *testing.T, withGenerated, withPrimed, withDelivered bool) (string, string, string) {
 		t.Helper()
-		_, candidateID := createCreativeFeedbackCandidate(t, "direct edit completion artifacts "+uuid.NewString())
+		rootIssueID, candidateID := createCreativeFeedbackCandidate(t, "direct edit completion artifacts "+uuid.NewString())
+		adjustmentIssueID := createCreativeDeliveryTestIssue(t, "direct edit adjustment "+uuid.NewString(), rootIssueID)
 		var orderID, itemID, variantID, sourceAssetID string
 		if err := testPool.QueryRow(ctx, `
 INSERT INTO creative_order (workspace_id, status, input_snapshot, created_by)
@@ -3658,6 +3659,20 @@ VALUES ($1, $2, 2, $3, $4, $5, 'completed')
 		}
 		if withDelivered {
 			insertAssets("delivered")
+			processAttachmentID := createAttachment(t, "direct-edit-process-"+uuid.NewString()+".png")
+			if _, err := testPool.Exec(ctx, `
+INSERT INTO creative_order_diagnostic_asset (variant_id, task_id, attachment_id, size_key, revision, workflow, label, filename, metadata)
+VALUES ($1, NULL, $2, '1080x1080', 2, 'creative_production', '模型原图', 'direct-edit-model-1080x1080.png', '{}'::jsonb)
+`, variantID, processAttachmentID); err != nil {
+				t.Fatal(err)
+			}
+			reusedProcessAttachmentID := createAttachment(t, "direct-edit-reused-"+uuid.NewString()+".png")
+			if _, err := testPool.Exec(ctx, `
+INSERT INTO creative_order_diagnostic_asset (variant_id, task_id, attachment_id, size_key, revision, workflow, label, filename, metadata)
+VALUES ($1, NULL, $2, '1200x628', 2, 'creative_production', '规范化底图', 'reused-landscape.png', '{"order_adjustment":{"source_revision":1,"reused_for_adjustment":true}}'::jsonb)
+`, variantID, reusedProcessAttachmentID); err != nil {
+				t.Fatal(err)
+			}
 		}
 
 		contextJSON, _ := json.Marshal(map[string]any{
@@ -3665,6 +3680,7 @@ VALUES ($1, $2, 2, $3, $4, $5, 'completed')
 			"workflow":               "creative_direct_edit",
 			"creative_order_id":      orderID,
 			"creative_order_item_id": itemID,
+			"issue_id":               adjustmentIssueID,
 			"variant_id":             variantID,
 			"revision":               2,
 			"expected_sizes":         expectedSizes,
@@ -3674,19 +3690,24 @@ VALUES ($1, $2, 2, $3, $4, $5, 'completed')
 			"source_asset_id":        sourceAssetID,
 			"source_attachment_id":   sourceAttachmentID,
 			"user_request":           "把标题移出贴片遮挡区域",
+			"direct_edit": map[string]any{
+				"adjustment_issue_id": adjustmentIssueID,
+				"target_size":         "1080x1080",
+				"source_revision":     1,
+			},
 		})
 		var taskID string
 		if err := testPool.QueryRow(ctx, `
 INSERT INTO agent_task_queue (
-  agent_id, runtime_id, status, priority, context, trigger_evidence_kind, trigger_evidence_ref_id, started_at
+  agent_id, runtime_id, issue_id, status, priority, context, trigger_evidence_kind, trigger_evidence_ref_id, started_at
 )
-VALUES ($1, $2, 'running', 0, $3::jsonb, 'creative_order_item_direct_edit', $4, now())
+VALUES ($1, $2, $3, 'running', 0, $4::jsonb, 'creative_order_item_direct_edit', $5, now())
 RETURNING id::text
-`, agentID, runtimeID, contextJSON, itemID).Scan(&taskID); err != nil {
+`, agentID, runtimeID, adjustmentIssueID, contextJSON, itemID).Scan(&taskID); err != nil {
 			t.Fatal(err)
 		}
 		t.Cleanup(func() { _, _ = testPool.Exec(t.Context(), `DELETE FROM agent_task_queue WHERE id = $1`, taskID) })
-		return taskID, variantID
+		return taskID, variantID, adjustmentIssueID
 	}
 
 	complete := func(t *testing.T, taskID string) {
@@ -3701,7 +3722,7 @@ RETURNING id::text
 	}
 
 	t.Run("missing target generated", func(t *testing.T) {
-		taskID, variantID := setup(t, false, false, false)
+		taskID, variantID, _ := setup(t, false, false, false)
 		complete(t, taskID)
 		var status, failureReason, taskError, variantStatus, variantBrief string
 		if err := testPool.QueryRow(ctx, `
@@ -3722,7 +3743,7 @@ FROM agent_task_queue WHERE id = $1
 	})
 
 	t.Run("missing primed and delivered", func(t *testing.T) {
-		taskID, variantID := setup(t, true, false, false)
+		taskID, variantID, _ := setup(t, true, false, false)
 		complete(t, taskID)
 		var status, failureReason, taskError, variantStatus string
 		if err := testPool.QueryRow(ctx, `
@@ -3743,7 +3764,7 @@ FROM agent_task_queue WHERE id = $1
 	})
 
 	t.Run("complete published package", func(t *testing.T) {
-		taskID, _ := setup(t, true, true, true)
+		taskID, variantID, adjustmentIssueID := setup(t, true, true, true)
 		complete(t, taskID)
 		var status string
 		if err := testPool.QueryRow(ctx, `SELECT status FROM agent_task_queue WHERE id = $1`, taskID).Scan(&status); err != nil {
@@ -3751,6 +3772,71 @@ FROM agent_task_queue WHERE id = $1
 		}
 		if status != "completed" {
 			t.Fatalf("task status = %q, want completed", status)
+		}
+		var targetAttachmentID, untouchedAttachmentID string
+		if err := testPool.QueryRow(ctx, `
+SELECT
+  COALESCE(max(attachment_id::text) FILTER (WHERE size_key = '1080x1080'), ''),
+  COALESCE(max(attachment_id::text) FILTER (WHERE size_key = '1200x628'), '')
+FROM creative_order_asset
+WHERE variant_id = $1 AND revision = 2 AND stage = 'delivered'
+`, variantID).Scan(&targetAttachmentID, &untouchedAttachmentID); err != nil {
+			t.Fatal(err)
+		}
+		var content string
+		if err := testPool.QueryRow(ctx, `
+SELECT content
+FROM comment
+WHERE issue_id = $1
+  AND author_type = 'system'
+  AND type = 'system'
+  AND content LIKE '%multica:creative-direct-adjustment-delivery%'
+ORDER BY created_at DESC
+LIMIT 1
+`, adjustmentIssueID).Scan(&content); err != nil {
+			t.Fatal(err)
+		}
+		var processAttachmentID string
+		if err := testPool.QueryRow(ctx, `
+SELECT attachment_id::text
+FROM creative_order_diagnostic_asset
+WHERE variant_id = $1 AND revision = 2 AND size_key = '1080x1080' AND label = '模型原图'
+LIMIT 1
+`, variantID).Scan(&processAttachmentID); err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(content, "调整后的图片已生成") ||
+			!strings.Contains(content, "调整前原图") ||
+			!strings.Contains(content, "调整后结果") ||
+			!strings.Contains(content, "本次过程图片") ||
+			!strings.Contains(content, "北京时间") ||
+			!strings.Contains(content, attachmentDownloadPath(targetAttachmentID)) ||
+			!strings.Contains(content, attachmentDownloadPath(processAttachmentID)) {
+			t.Fatalf("delivery comment content = %q, want adjusted target image", content)
+		}
+		if strings.Contains(content, attachmentDownloadPath(untouchedAttachmentID)) {
+			t.Fatalf("delivery comment content = %q, should not include untouched size", content)
+		}
+		task, err := testHandler.Queries.GetAgentTask(ctx, parseUUID(taskID))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := testHandler.settleCreativeDirectEditTask(ctx, task); err != nil {
+			t.Fatal(err)
+		}
+		var commentCount int
+		if err := testPool.QueryRow(ctx, `
+SELECT count(*)
+FROM comment
+WHERE issue_id = $1
+  AND author_type = 'system'
+  AND type = 'system'
+  AND content LIKE '%multica:creative-direct-adjustment-delivery%'
+`, adjustmentIssueID).Scan(&commentCount); err != nil {
+			t.Fatal(err)
+		}
+		if commentCount != 1 {
+			t.Fatalf("delivery comment count = %d, want idempotent single comment", commentCount)
 		}
 	})
 }

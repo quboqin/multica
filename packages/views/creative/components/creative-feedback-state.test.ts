@@ -56,6 +56,7 @@ describe("creative feedback state", () => {
       assetId: "asset-4",
       attachmentId: "019fb932-3b59-77ab-841a-c57598f81097",
       sizeKey: "1080x1080",
+      scope: "size",
       sourceRevision: 1,
     } as const;
     const description = creativeOrderAdjustmentIssueDescription(input);
@@ -79,6 +80,29 @@ describe("creative feedback state", () => {
     });
   });
 
+  it("marks order adjustment issues that apply to all three variant sizes", () => {
+    const input = {
+      request: "三个尺寸都把标题上移",
+      orderId: "order-1",
+      itemId: "item-2",
+      variantId: "variant-3",
+      variantKey: "V01",
+      assetId: "asset-4",
+      attachmentId: "019fb932-3b59-77ab-841a-c57598f81097",
+      sizeKey: "1080x1080",
+      scope: "variant",
+      sourceRevision: 1,
+    } as const;
+
+    expect(creativeOrderAdjustmentIssueTitle(input)).toBe("V01 / 三尺寸 精准调整 · R2");
+    expect(creativeOrderAdjustmentIssueDescription(input)).toContain("scope: variant");
+    expect(creativeOrderAdjustmentIssueDescription(input)).toContain("Apply this adjustment across all expected sizes");
+    expect(creativeOrderAdjustmentIssueMetadata(input)).toMatchObject({
+      creative_scope: "variant",
+      creative_size: "1080x1080",
+    });
+  });
+
   it("keeps order adjustment scope on the current canvas size", () => {
     expect(creativeAnnotationAdjustmentSummary([
       { kind: "rect", x: 0, y: 0, width: 0.1, height: 0.1, issueType: "other", scope: "order", comment: "标题上移" },
@@ -89,14 +113,15 @@ describe("creative feedback state", () => {
   });
 
   it("keeps the latest order adjustment visible and derives its progress from the variant revision", () => {
-    const older = { id: "f1", decision: "needs_revision", created_at: "2026-08-05T10:00:00Z", context_snapshot: { order_id: "order-1", revision: 1 } };
-    const latest = { id: "f2", decision: "needs_revision", created_at: "2026-08-05T10:01:00Z", context_snapshot: { order_id: "order-1", revision: 1 } };
-    const ignored = { id: "f3", decision: "needs_revision", created_at: "2026-08-05T10:02:00Z", context_snapshot: { order_id: "order-2", revision: 1 } };
+    const older = { id: "f1", decision: "needs_revision", created_at: "2026-08-05T10:00:00Z", context_snapshot: { order_id: "order-1", revision: 1, size_key: "1080x1080" } };
+    const latest = { id: "f2", decision: "needs_revision", created_at: "2026-08-05T10:01:00Z", context_snapshot: { order_id: "order-1", revision: 1, size_key: "1080x1080" } };
+    const ignored = { id: "f3", decision: "needs_revision", created_at: "2026-08-05T10:02:00Z", context_snapshot: { order_id: "order-2", revision: 1, size_key: "1080x1080" } };
 
     expect(latestOrderAdjustmentFeedback([older, ignored, latest] as never, "order-1")?.id).toBe("f2");
     expect(creativeAdjustmentProgress({ revision: 1, status: "action_required" } as CreativeOrderVariant, latest as never)).toBe("调整未启动");
     expect(creativeAdjustmentCanRetry({ revision: 1, status: "action_required" } as CreativeOrderVariant, latest as never)).toBe(true);
     expect(creativeAdjustmentProgress({ revision: 2, status: "partial" } as CreativeOrderVariant, latest as never)).toBe("当前尺寸调整中 · r2");
+    expect(creativeAdjustmentProgress({ revision: 2, status: "partial" } as CreativeOrderVariant, { ...latest, context_snapshot: { ...latest.context_snapshot, scope: "variant" } } as never)).toBe("三尺寸调整中 · r2");
     expect(creativeAdjustmentProgress({ revision: 2, status: "action_required" } as CreativeOrderVariant, latest as never)).toBe("调整需要处理 · r2");
     expect(creativeAdjustmentProgress({ revision: 2, status: "completed" } as CreativeOrderVariant, latest as never)).toBe("调整已完成 · r2");
   });

@@ -99,6 +99,7 @@ import { CreativeWorkbench } from "./creative-workbench";
 import { MarketResourceFiles } from "./market-resource-files";
 
 type CreativeStudioTab = "home" | "materials" | "orders" | "resources" | "feedback";
+type CreativeAdjustmentScope = "size" | "variant";
 
 function creativeStudioTab(searchParams: URLSearchParams): CreativeStudioTab {
   if (searchParams.get("order")) return "orders";
@@ -432,6 +433,7 @@ function CreativeOrderDetail({ orderId, onBack, onBrowseOrders, backLabel }: { o
   const [generationInfoAssetId, setGenerationInfoAssetId] = useState("");
   const [adjustOpen, setAdjustOpen] = useState(false);
   const [adjustment, setAdjustment] = useState("");
+  const [adjustmentScope, setAdjustmentScope] = useState<CreativeAdjustmentScope>("size");
   const [adjustBusy, setAdjustBusy] = useState(false);
   const [retryingVariantId, setRetryingVariantId] = useState("");
   const [cancelOpen, setCancelOpen] = useState(false);
@@ -491,7 +493,7 @@ function CreativeOrderDetail({ orderId, onBack, onBrowseOrders, backLabel }: { o
       await api.createCreativeFeedback({ issue_id: data?.issue_id ?? "", subject_type: "asset", subject_id: asset.id, event_type: "viewed", decision: "", context_snapshot: { action: "download", order_id: orderId, variant_id: asset.variant_id, size_key: asset.size_key, revision: asset.revision } });
     } catch (error) { toast.error(error instanceof Error ? error.message : "无法记录下载行为"); }
   };
-  const createOrderAdjustmentIssue = async (asset: CreativeOrderAsset, request: string) => {
+  const createOrderAdjustmentIssue = async (asset: CreativeOrderAsset, request: string, scope: CreativeAdjustmentScope) => {
     if (!data?.issue_id) throw new Error("该订单缺少协作记录，无法创建精准调整");
     const target = variantById.get(asset.variant_id);
     if (!target) throw new Error("当前成图缺少变体上下文");
@@ -507,6 +509,7 @@ function CreativeOrderDetail({ orderId, onBack, onBrowseOrders, backLabel }: { o
       assetId: asset.id,
       attachmentId: asset.attachment_id,
       sizeKey,
+      scope,
       sourceRevision: asset.revision,
       request,
     };
@@ -526,18 +529,19 @@ function CreativeOrderDetail({ orderId, onBack, onBrowseOrders, backLabel }: { o
   };
   const annotation = async (asset: CreativeOrderAsset, drafts: CreativeAnnotationDraft[]) => {
     if (!data?.issue_id || drafts.length === 0 || drafts.some((draft) => !draft.comment.trim())) return false;
-    const summary = creativeAnnotationAdjustmentSummary(drafts);
+    const scope: CreativeAdjustmentScope = drafts.some((draft) => draft.scope === "variant") ? "variant" : "size";
+    const summary = creativeAnnotationAdjustmentSummary(drafts, scope);
     const first = drafts[0]!;
     try {
-      const adjustment = await createOrderAdjustmentIssue(asset, summary);
+      const adjustment = await createOrderAdjustmentIssue(asset, summary, scope);
       const sourceBase = generatedFor(asset);
       const sourceBaseURL = attachmentURL(sourceBase);
       if (!sourceBaseURL) throw new Error("当前调整缺少贴片前的无品牌底图");
       const targetURL = attachmentURL(asset);
       if (!targetURL) throw new Error("当前调整缺少可标注的目标成图");
       const annotationGuide = await createAnnotationGuideAttachment(targetURL, adjustment.issue.id, asset.size_key as CreativeDeliverySize, asset.revision, drafts);
-      const annotations = drafts.map((draft) => ({ ...draft, scope: "size" }));
-      await api.queueCreativeOrderAdjustment(orderId, { adjustment_issue_id: adjustment.issue.id, asset_id: asset.id, size_key: adjustment.sizeKey, source_revision: asset.revision, annotation_guide_attachment_id: annotationGuide.id, comment: summary, event_type: "annotation", reason_codes: [...new Set(drafts.map((draft) => assetFeedbackReason(draft.issueType)))], annotation: { id: crypto.randomUUID(), asset_id: asset.id, kind: first.kind, issue_type: first.issueType, x: first.x, y: first.y, width: first.width, height: first.height, scope: "size", comment: first.comment }, context_snapshot: { annotations, annotation_guide_attachment_id: annotationGuide.id, annotation_guide_source: "final_reference" } });
+      const annotations = drafts.map((draft) => ({ ...draft, scope }));
+      await api.queueCreativeOrderAdjustment(orderId, { adjustment_issue_id: adjustment.issue.id, asset_id: asset.id, size_key: adjustment.sizeKey, scope, source_revision: asset.revision, annotation_guide_attachment_id: annotationGuide.id, comment: summary, event_type: "annotation", reason_codes: [...new Set(drafts.map((draft) => assetFeedbackReason(draft.issueType)))], annotation: { id: crypto.randomUUID(), asset_id: asset.id, kind: first.kind, issue_type: first.issueType, x: first.x, y: first.y, width: first.width, height: first.height, scope, comment: first.comment }, context_snapshot: { scope, annotations, annotation_guide_attachment_id: annotationGuide.id, annotation_guide_source: "final_reference" } });
       await queryClient.invalidateQueries({ queryKey: creativeKeys.feedback(wsId, "asset", "") });
       await queryClient.invalidateQueries({ queryKey: creativeKeys.order(wsId, orderId) });
       await queryClient.invalidateQueries({ queryKey: creativeKeys.orders(wsId) });
@@ -550,12 +554,12 @@ function CreativeOrderDetail({ orderId, onBack, onBrowseOrders, backLabel }: { o
     setAdjustBusy(true);
     try {
       const request = adjustment.trim();
-      const created = await createOrderAdjustmentIssue(active, request);
-      await api.queueCreativeOrderAdjustment(orderId, { adjustment_issue_id: created.issue.id, asset_id: active.id, size_key: created.sizeKey, source_revision: active.revision, comment: request, event_type: "decision", reason_codes: ["other"] });
+      const created = await createOrderAdjustmentIssue(active, request, adjustmentScope);
+      await api.queueCreativeOrderAdjustment(orderId, { adjustment_issue_id: created.issue.id, asset_id: active.id, size_key: created.sizeKey, scope: adjustmentScope, source_revision: active.revision, comment: request, event_type: "decision", reason_codes: ["other"], context_snapshot: { scope: adjustmentScope } });
       await queryClient.invalidateQueries({ queryKey: creativeKeys.feedback(wsId, "asset", "") });
       await queryClient.invalidateQueries({ queryKey: creativeKeys.order(wsId, orderId) });
       await queryClient.invalidateQueries({ queryKey: creativeKeys.orders(wsId) });
-      setAdjustment(""); setAdjustOpen(false); toast.success("精准调整请求已创建");
+      setAdjustment(""); setAdjustmentScope("size"); setAdjustOpen(false); toast.success("精准调整请求已创建");
     } catch (error) { toast.error(error instanceof Error ? error.message : "无法提交调整请求"); }
     finally { setAdjustBusy(false); }
   };
@@ -632,11 +636,12 @@ function CreativeOrderDetail({ orderId, onBack, onBrowseOrders, backLabel }: { o
       }
       setAdjustBusy(true);
       try {
-        await api.queueCreativeOrderAdjustment(orderId, { adjustment_issue_id: adjustmentIssueId, asset_id: asset.id, size_key: targetSize, source_revision: sourceRevision, annotation_guide_attachment_id: annotationGuideAttachmentID || undefined, comment: latestAdjustment.comment, event_type: latestAdjustment.event_type === "annotation" ? "annotation" : "decision", reason_codes: latestAdjustment.reason_codes, annotation: latestAdjustment.annotation, context_snapshot: latestAdjustment.context_snapshot });
+        const scope = latestAdjustment.context_snapshot.scope === "variant" ? "variant" : "size";
+        await api.queueCreativeOrderAdjustment(orderId, { adjustment_issue_id: adjustmentIssueId, asset_id: asset.id, size_key: targetSize, scope, source_revision: sourceRevision, annotation_guide_attachment_id: annotationGuideAttachmentID || undefined, comment: latestAdjustment.comment, event_type: latestAdjustment.event_type === "annotation" ? "annotation" : "decision", reason_codes: latestAdjustment.reason_codes, annotation: latestAdjustment.annotation, context_snapshot: latestAdjustment.context_snapshot });
         await queryClient.invalidateQueries({ queryKey: creativeKeys.feedback(wsId, "asset", "") });
         await queryClient.invalidateQueries({ queryKey: creativeKeys.order(wsId, orderId) });
         await queryClient.invalidateQueries({ queryKey: creativeKeys.orders(wsId) });
-        toast.success("已重新启动当前尺寸调整");
+        toast.success(scope === "variant" ? "已重新启动三尺寸调整" : "已重新启动当前尺寸调整");
       } catch (error) {
         toast.error(error instanceof Error ? error.message : "无法重新启动调整");
       } finally {
@@ -654,7 +659,7 @@ function CreativeOrderDetail({ orderId, onBack, onBrowseOrders, backLabel }: { o
         onViewInfo={() => setGenerationInfoAssetId(active.id)}
         onDecision={(decision) => void event(active, decision)}
         onAnnotations={isCancelled ? undefined : (drafts) => annotation(active, drafts)}
-        annotationScopes={["size"]}
+        annotationScopes={["size", "variant"]}
         showDecisionActions={false}
         comparisonMode={adjustmentBefore && adjustmentBeforeURL ? "adjustment" : "source"}
       />
@@ -671,7 +676,7 @@ function CreativeOrderDetail({ orderId, onBack, onBrowseOrders, backLabel }: { o
       imageUrl={attachmentURL(generationInfoAsset)}
     />
     {data && !order.isLoading && reviewAssets.length === 0 && <div className="flex min-h-72 items-center justify-center border border-dashed px-6 text-center text-sm text-muted-foreground">{creativeOrderWaitingMessage(actionableFailures, isCancelled)}</div>}
-    <Dialog open={adjustOpen} onOpenChange={setAdjustOpen}><DialogContent className="max-w-xl"><DialogHeader><DialogTitle>精准调整当前成图</DialogTitle><DialogDescription>{activeVariant?.variant.variant_key || "当前变体"} · {active?.size_key}。本次只处理当前尺寸，协作记录会单独保存。</DialogDescription></DialogHeader><Textarea rows={5} value={adjustment} onChange={(event) => setAdjustment(event.target.value)} placeholder="说明当前成图需要改什么，以及必须保留的视觉风格、文案和布局..." /><DialogFooter><Button variant="outline" onClick={() => setAdjustOpen(false)}>取消</Button><Button disabled={adjustBusy || !adjustment.trim()} onClick={() => void submitAdjustment()}>{adjustBusy ? "正在提交" : "提交精准调整"}</Button></DialogFooter></DialogContent></Dialog>
+    <Dialog open={adjustOpen} onOpenChange={setAdjustOpen}><DialogContent className="max-w-xl"><DialogHeader><DialogTitle>精准调整当前成图</DialogTitle><DialogDescription>{activeVariant?.variant.variant_key || "当前变体"} · {active?.size_key}。{adjustmentScope === "variant" ? "本次会调整当前变体的三个交付尺寸，当前图作为参考。" : "本次只处理当前尺寸，协作记录会单独保存。"}</DialogDescription></DialogHeader><div className="space-y-3"><div className="space-y-1.5"><Label className="text-xs text-muted-foreground">调整范围</Label><div className="inline-flex border" role="group" aria-label="精准调整范围"><button type="button" aria-pressed={adjustmentScope === "size"} onClick={() => setAdjustmentScope("size")} className={cn("h-8 px-3 text-xs", adjustmentScope === "size" && "bg-foreground text-background")}>单尺寸</button><button type="button" aria-pressed={adjustmentScope === "variant"} onClick={() => setAdjustmentScope("variant")} className={cn("h-8 border-l px-3 text-xs", adjustmentScope === "variant" && "bg-foreground text-background")}>三尺寸</button></div></div><Textarea rows={5} value={adjustment} onChange={(event) => setAdjustment(event.target.value)} placeholder="说明当前成图需要改什么，以及必须保留的视觉风格、文案和布局..." /></div><DialogFooter><Button variant="outline" onClick={() => setAdjustOpen(false)}>取消</Button><Button disabled={adjustBusy || !adjustment.trim()} onClick={() => void submitAdjustment()}>{adjustBusy ? "正在提交" : "提交精准调整"}</Button></DialogFooter></DialogContent></Dialog>
     <AlertDialog open={cancelOpen} onOpenChange={(open) => { if (!cancelOrder.isPending) setCancelOpen(open); }}>
       <AlertDialogContent>
         <AlertDialogHeader><AlertDialogTitle>结束这个创意订单？</AlertDialogTitle><AlertDialogDescription>仍在运行的生成任务会停止。已有成图、失败原因和协作记录会保留，但订单不再占用工作台待验收列表，也不能继续采用或调整。</AlertDialogDescription></AlertDialogHeader>
@@ -686,12 +691,14 @@ function CreativeAdjustmentStatus({ event, variant, issueId, onRetry, retrying =
   const paths = useWorkspacePaths();
   const variantKey = variant?.variant_key || String(event.context_snapshot.variant_id || "").slice(0, 8);
   const sizeKey = typeof event.context_snapshot.size_key === "string" ? event.context_snapshot.size_key : "";
+  const scope = event.context_snapshot.scope === "variant" ? "variant" : "size";
+  const scopeLabel = scope === "variant" ? "三尺寸" : sizeKey;
   const adjustmentIssueId = typeof event.context_snapshot.adjustment_issue_id === "string" ? event.context_snapshot.adjustment_issue_id : "";
   const collaborationIssueId = adjustmentIssueId || issueId;
   const canRetry = creativeAdjustmentCanRetry(variant, event);
   return <section className="flex flex-wrap items-center gap-3 border-y bg-amber-50/60 px-4 py-3 dark:bg-amber-950/10" role="status" data-testid="creative-adjustment-status">
     <RefreshCw className={cn("h-4 w-4 text-amber-700", variant && !["completed", "action_required", "failed"].includes(variant.status) && "animate-spin")} />
-    <div className="min-w-0 flex-1"><p className="text-sm font-medium">{creativeAdjustmentProgress(variant, event)}</p><p className="mt-0.5 truncate text-xs text-muted-foreground">{variantKey}{sizeKey ? ` · ${sizeKey}` : ""} · {event.comment || "已记录调整要求"}</p></div>
+    <div className="min-w-0 flex-1"><p className="text-sm font-medium">{creativeAdjustmentProgress(variant, event)}</p><p className="mt-0.5 truncate text-xs text-muted-foreground">{variantKey}{scopeLabel ? ` · ${scopeLabel}` : ""} · {event.comment || "已记录调整要求"}</p></div>
     {canRetry && <Button size="sm" disabled={retrying} onClick={() => void onRetry()}>{retrying ? "正在启动" : "重新启动调整"}</Button>}
     <Button size="sm" variant="outline" disabled={!collaborationIssueId} onClick={() => navigation.push(paths.issueDetail(collaborationIssueId))}>查看协作记录</Button>
   </section>;
@@ -1143,6 +1150,7 @@ type CreativeOrderAdjustmentIssueInput = {
   assetId: string;
   attachmentId: string;
   sizeKey: CreativeDeliverySize;
+  scope: CreativeAdjustmentScope;
   sourceRevision: number;
   request: string;
 };
@@ -1156,12 +1164,14 @@ export function creativeOrderAdjustmentSize(asset: Pick<CreativeOrderAsset, "siz
   return CREATIVE_DELIVERY_SIZES.includes(asset.size_key as CreativeDeliverySize) ? asset.size_key as CreativeDeliverySize : "";
 }
 
-export function creativeAnnotationAdjustmentSummary(drafts: CreativeAnnotationDraft[]): string {
-  return drafts.map((draft, index) => `标注 ${index + 1}（当前尺寸）：${draft.comment.trim()}`).join("\n");
+export function creativeAnnotationAdjustmentSummary(drafts: CreativeAnnotationDraft[], scope: CreativeAdjustmentScope = "size"): string {
+  const label = scope === "variant" ? "三尺寸" : "当前尺寸";
+  return drafts.map((draft, index) => `标注 ${index + 1}（${label}）：${draft.comment.trim()}`).join("\n");
 }
 
-export function creativeOrderAdjustmentIssueTitle(input: Pick<CreativeOrderAdjustmentIssueInput, "variantKey" | "sizeKey" | "sourceRevision">): string {
-  return `${input.variantKey || "当前方案"} / ${creativeOrderSizeLabel(input.sizeKey)} 精准调整 · R${input.sourceRevision + 1}`;
+export function creativeOrderAdjustmentIssueTitle(input: Pick<CreativeOrderAdjustmentIssueInput, "variantKey" | "sizeKey" | "scope" | "sourceRevision">): string {
+  const scopeLabel = input.scope === "variant" ? "三尺寸" : creativeOrderSizeLabel(input.sizeKey);
+  return `${input.variantKey || "当前方案"} / ${scopeLabel} 精准调整 · R${input.sourceRevision + 1}`;
 }
 
 export function creativeOrderAdjustmentIssueMetadata(input: CreativeOrderAdjustmentIssueInput): IssueMetadata {
@@ -1174,7 +1184,7 @@ export function creativeOrderAdjustmentIssueMetadata(input: CreativeOrderAdjustm
     creative_variant_key: input.variantKey,
     creative_asset_id: input.assetId,
     creative_attachment_id: input.attachmentId,
-    creative_scope: "size",
+    creative_scope: input.scope,
     creative_size: input.sizeKey,
     creative_source_revision: input.sourceRevision,
     creative_revision: input.sourceRevision + 1,
@@ -1183,10 +1193,14 @@ export function creativeOrderAdjustmentIssueMetadata(input: CreativeOrderAdjustm
 
 export function creativeOrderAdjustmentIssueDescription(input: CreativeOrderAdjustmentIssueInput): string {
   const sizeLabel = creativeOrderSizeLabel(input.sizeKey);
-  const target = `订单 \`${input.orderId.slice(0, 8)}\` · \`${input.variantKey || "当前方案"}\` · ${sizeLabel} \`${input.sizeKey}\` · \`r${input.sourceRevision}\` · 成图 \`${input.assetId.slice(0, 8)}\``;
+  const scopeLabel = input.scope === "variant" ? `三尺寸（以 ${sizeLabel} \`${input.sizeKey}\` 为标注参考）` : `${sizeLabel} \`${input.sizeKey}\``;
+  const target = `订单 \`${input.orderId.slice(0, 8)}\` · \`${input.variantKey || "当前方案"}\` · ${scopeLabel} · \`r${input.sourceRevision}\` · 成图 \`${input.assetId.slice(0, 8)}\``;
   const imageURL = input.attachmentId ? attachmentDownloadPath(input.attachmentId) : "";
   const preview = imageURL ? `\n\n[![目标成图：${input.variantKey} ${sizeLabel} r${input.sourceRevision}](${imageURL})](${imageURL})` : "";
-  return `订单画布提交精准调整。\n\n**目标成图：** ${target}${preview}\n\n${input.request.trim()}\n\n<!-- creative-workflow-context\ncreative_order_id: ${input.orderId}\ncreative_order_item_id: ${input.itemId}\nvariant_id: ${input.variantId}\nvariant_key: ${input.variantKey}\nasset_id: ${input.assetId}\nattachment_id: ${input.attachmentId}\nsize_key: ${input.sizeKey}\nsource_revision: ${input.sourceRevision}\ntarget_revision: ${input.sourceRevision + 1}\ninstruction: Process only this size from the current approved image context. Preserve the approved style, layout family, business facts, and other assets unless the user explicitly marked them in this adjustment issue.\n-->`;
+  const instruction = input.scope === "variant"
+    ? "Apply this adjustment across all expected sizes in the current variant. Use the selected annotated size as reference; edit each delivery size from its same-size unbranded base and preserve approved style, layout family, business facts, and fixed Prime components unless the user explicitly marked them in this adjustment issue."
+    : "Process only this size from the current approved image context. Preserve the approved style, layout family, business facts, and other assets unless the user explicitly marked them in this adjustment issue.";
+  return `订单画布提交精准调整。\n\n**目标成图：** ${target}${preview}\n\n${input.request.trim()}\n\n<!-- creative-workflow-context\ncreative_order_id: ${input.orderId}\ncreative_order_item_id: ${input.itemId}\nvariant_id: ${input.variantId}\nvariant_key: ${input.variantKey}\nasset_id: ${input.assetId}\nattachment_id: ${input.attachmentId}\nsize_key: ${input.sizeKey}\nsource_revision: ${input.sourceRevision}\ntarget_revision: ${input.sourceRevision + 1}\nscope: ${input.scope}\ninstruction: ${instruction}\n-->`;
 }
 
 function creativeOrderSizeLabel(sizeKey: string): string {

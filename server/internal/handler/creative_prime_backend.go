@@ -177,14 +177,10 @@ WHERE variant.id = $1 AND order_row.id = $2 AND order_row.workspace_id = $3
 		return false, fmt.Errorf("load brand component input: %w", err)
 	}
 	skipQC := triggerKind == "creative_direct_edit" || creativeDirectEditSkipsQC(json.RawMessage(brief))
+	directDelivery := parseCreativeDirectEditDeliveryConfig(json.RawMessage(brief))
 
-	if triggerKind == "creative_direct_edit" {
-		var directBrief struct {
-			DeliveryMode string `json:"delivery_mode"`
-		}
-		if json.Unmarshal([]byte(brief), &directBrief) == nil && directBrief.DeliveryMode == "preview" {
-			return false, nil
-		}
+	if triggerKind == "creative_direct_edit" && directDelivery.DeliveryMode == "preview" {
+		return false, nil
 	}
 
 	expectedSizes, err := expectedCreativeVariantSizes(triggerKind, json.RawMessage(inputSnapshot), json.RawMessage(brief))
@@ -233,6 +229,7 @@ WHERE id = $1
 			if txErr := tx.Commit(ctx); txErr != nil {
 				return false, fmt.Errorf("save direct adjustment delivery: %w", txErr)
 			}
+			h.notifyCreativeDirectAdjustmentDelivery(ctx, workspaceID, orderID, variantID, revision, directDelivery.TargetSize)
 			return len(primed) > 0, nil
 		}
 		if err := h.enqueueCreativeVariantQC(ctx, workspaceID, orderID, variantID, requestedBy); err != nil {
@@ -492,6 +489,7 @@ WHERE id = $1
 		return false, fmt.Errorf("save composed creative assets: %w", err)
 	}
 	if skipQC {
+		h.notifyCreativeDirectAdjustmentDelivery(ctx, workspaceID, orderID, variantID, revision, directDelivery.TargetSize)
 		return true, nil
 	}
 	if err := h.enqueueCreativeVariantQC(ctx, workspaceID, orderID, variantID, requestedBy); err != nil {

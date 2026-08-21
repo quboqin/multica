@@ -102,6 +102,27 @@ describe("CreativeComparisonWorkspace", () => {
     expect(onAnnotations.mock.calls[0]?.[0]).toHaveLength(2);
   });
 
+  it("submits annotation adjustments for the selected variant scope", async () => {
+    const onAnnotations = vi.fn().mockResolvedValue(true);
+    render(<CreativeComparisonWorkspace {...props} onAnnotations={onAnnotations} annotationScopes={["size", "variant"]} />);
+    const scopeGroup = screen.getByRole("group", { name: "调整范围" });
+    expect(within(scopeGroup).getByRole("button", { name: "当前尺寸" })).toHaveAttribute("aria-pressed", "true");
+    fireEvent.click(within(scopeGroup).getByRole("button", { name: "当前变体三尺寸" }));
+
+    const surface = screen.getByTestId("creative-annotation-surface");
+    Object.defineProperty(surface, "getBoundingClientRect", { value: () => ({ x: 0, y: 0, left: 0, top: 0, right: 400, bottom: 400, width: 400, height: 400, toJSON: () => ({}) }) });
+    Object.defineProperty(surface, "setPointerCapture", { value: vi.fn() });
+    fireEvent.click(screen.getByRole("button", { name: "点标注" }));
+    fireEvent.pointerDown(surface, { clientX: 100, clientY: 100, pointerId: 1 });
+    fireEvent.pointerUp(surface, { clientX: 100, clientY: 100, pointerId: 1 });
+    fireEvent.change(screen.getByRole("textbox", { name: "标注 1 调整说明" }), { target: { value: "三个尺寸都改标题" } });
+    fireEvent.click(screen.getByRole("button", { name: "完成标注" }));
+    fireEvent.click(screen.getByRole("button", { name: "提交 1 处调整" }));
+
+    await waitFor(() => expect(onAnnotations).toHaveBeenCalledTimes(1));
+    expect(onAnnotations.mock.calls[0]?.[0]?.[0]).toMatchObject({ scope: "variant", comment: "三个尺寸都改标题" });
+  });
+
   it("shows the rectangle while the pointer is still moving", () => {
     render(<CreativeComparisonWorkspace {...props} />);
     const surface = screen.getByTestId("creative-annotation-surface");

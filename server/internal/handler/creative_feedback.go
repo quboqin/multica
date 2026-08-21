@@ -668,7 +668,7 @@ FROM production_progress
 	); err != nil {
 		return creativeFeedbackWorkflowDashboard{}, err
 	}
-	dashboard.ImageGenerationDurationSeconds, dashboard.ImageGenerationDurationPackageCount, err = h.creativeGeneratedPackageDuration(ctx, workspaceID)
+	dashboard.ImageGenerationDurationSeconds, dashboard.ImageGenerationDurationPackageCount, err = h.creativeInitialGeneratedPackageDuration(ctx, workspaceID)
 	if err != nil {
 		return creativeFeedbackWorkflowDashboard{}, err
 	}
@@ -707,30 +707,39 @@ LIMIT 6
 	return dashboard, nil
 }
 
-func (h *Handler) creativeGeneratedPackageDuration(ctx context.Context, workspaceID pgtype.UUID) (*int64, int, error) {
+func (h *Handler) creativeInitialGeneratedPackageDuration(ctx context.Context, workspaceID pgtype.UUID) (*int64, int, error) {
 	var durationSeconds pgtype.Int8
 	var packageCount int64
 	err := h.DB.QueryRow(ctx, `
-WITH generated_packages AS (
-  SELECT item.id,
-         order_row.created_at AS submitted_at,
-         max(asset.updated_at) AS generated_at
-  FROM creative_order order_row
-  JOIN creative_order_item item ON item.order_id = order_row.id
-  JOIN creative_order_variant variant ON variant.order_item_id = item.id
-  LEFT JOIN creative_order_asset asset
+WITH first_generated_asset AS (
+  SELECT variant.order_item_id,
+         variant.id AS variant_id,
+         asset.size_key,
+         min(asset.created_at) AS generated_at
+  FROM creative_order_variant variant
+  JOIN creative_order_asset asset
     ON asset.variant_id = variant.id
-   AND asset.revision = variant.revision
    AND asset.stage = 'generated'
    AND asset.status = 'completed'
    AND asset.attachment_id IS NOT NULL
    AND asset.size_key IN ('1080x1080', '1200x628', '800x1000')
+  GROUP BY variant.order_item_id, variant.id, asset.size_key
+),
+WITH generated_packages AS (
+  SELECT item.id,
+         order_row.created_at AS submitted_at,
+         max(first_asset.generated_at) AS generated_at
+  FROM creative_order order_row
+  JOIN creative_order_item item ON item.order_id = order_row.id
+  JOIN creative_order_variant variant ON variant.order_item_id = item.id
+  LEFT JOIN first_generated_asset first_asset
+    ON first_asset.variant_id = variant.id
   WHERE order_row.workspace_id = $1
     AND order_row.status <> 'cancelled'
     AND order_row.trigger_evidence_kind <> 'creative_direct_edit'
   GROUP BY item.id, order_row.created_at
   HAVING count(DISTINCT variant.id) = 3
-     AND count(DISTINCT (variant.id, asset.size_key)) FILTER (WHERE asset.id IS NOT NULL) = 9
+     AND count(DISTINCT (variant.id, first_asset.size_key)) FILTER (WHERE first_asset.size_key IS NOT NULL) = 9
 )
 SELECT ROUND(AVG(EXTRACT(EPOCH FROM (generated_at - submitted_at))))::bigint,
        count(*)

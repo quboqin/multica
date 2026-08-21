@@ -7,8 +7,8 @@ allowed-tools: Bash(multica *), Bash(python *)
 # 广告图片直接修改
 
 这是 Creative Order 的精准调整路径，不执行素材爬取、参考分析、三套新创意、标准出图或 QC。任务 context 必须给出
-`<order-id>`、`<variant-id>`、`revision`、`expected_sizes`、`target_size`、`user_request`、`delivery_mode`、
-`reviewer_agent_id`、同尺寸无品牌 `source_asset_id/source_attachment_id` 和可编辑的无品牌 base asset。没有这些字段，或
+`<order-id>`、`<variant-id>`、`revision`、`expected_sizes`、`target_size`、`scope`、`user_request`、`delivery_mode`、
+`reviewer_agent_id`、无品牌 `source_asset_id/source_attachment_id`、三尺寸 `source_assets` 和可编辑的无品牌 base asset。没有这些字段，或
 只有带品牌组件、二维码、Logo、条款、商店徽章的最终图而无法追溯 base asset 时，将 variant 写为 `action_required`；
 不得把最终 Prime 图作为可编辑来源。
 
@@ -19,18 +19,21 @@ allowed-tools: Bash(multica *), Bash(python *)
 诊断资产的 `task_id` 只允许使用这个环境变量；它为空时可以省略。若服务端报告 task ownership 不匹配，先修正为环境变量的值；
 仍是仅诊断资产写回时才允许去掉 `task_id` 重试。不能因为 task 关联错误重新调用 Image Edit。
 
-`expected_sizes` 是本次调整后要交付的完整尺寸集合，精准调整通常只把 `target_size` 交给 Image Edit，其他尺寸沿用上一
-revision 的 generated base 和过程证据。不得为未修改尺寸重新调用图像模型。source base 永远不可覆盖；输出必须写入
-平台已经锁定的 `revision`，并以 source asset ID 写入 `derived_from_asset_id`。
+`expected_sizes` 是本次调整后要交付的完整尺寸集合。`scope=size` 是默认模式，只把 `target_size` 交给 Image Edit，
+其他尺寸沿用上一 revision 的 generated base 和过程证据，不得为未修改尺寸重新调用图像模型。`scope=variant` 是三尺寸模式，
+必须按 `edit_sizes`/`expected_sizes` 逐尺寸处理，使用 `source_assets` 中同尺寸的 `asset_id/attachment_id` 作为该尺寸 Input 1，
+不能沿用旧 generated base 或旧过程证据冒充本次三尺寸调整。source base 永远不可覆盖；输出必须写入平台已经锁定的 `revision`，
+并以同尺寸 source asset ID 写入 `derived_from_asset_id`。
 
-先执行 `multica creative order get <order-id> --output json` 确认 source base 属于该 variant、尺寸和 revision。使用
-`multica attachment download <source-attachment-id> --output-dir <work-dir>` 下载目标尺寸的无品牌底图。
+先执行 `multica creative order get <order-id> --output json` 确认 source base 属于该 variant、尺寸和 revision。`scope=size`
+使用 `multica attachment download <source-attachment-id> --output-dir <work-dir>` 下载目标尺寸的无品牌底图；`scope=variant`
+要为每个 `edit_sizes` 找到 `source_assets` 中同尺寸附件并分别下载。
 
 如果 context 给出 `annotation_guide_attachment_id`，再下载该附件。它是用户在最终交付图上的标注 brief，可能包含 Prime 组件、
 Logo、二维码、商店徽章、官方条款、红色矩形、编号和评论位置；这些都用于理解用户在最终图上看到的问题，不是可复制广告内容。
 模型输入固定为：
 
-1. `Input 1`：同尺寸无品牌 source base，唯一的画面、文字、版式和视觉风格真值。
+1. `Input 1`：当前处理尺寸的同尺寸无品牌 source base，唯一的画面、文字、版式和视觉风格真值。
 2. `Input 2`：最终交付图的 annotation brief，只用于读取用户红框、编号、评论位置和固定贴片遮挡关系；不得复制红框、编号、
    引导线、Logo、二维码、商店徽章、官方条款或其他 Prime 组件到输出。
 
@@ -55,7 +58,8 @@ multica image edit \
   --size <provider-size> --quality high --output-file <model-output.png> --output json
 ```
 
-`--size` 使用平台允许的 provider 画布，最终文件必须归一化为 `target_size`。保留 CLI 返回的完整 JSON 为
+`--size` 使用平台允许的 provider 画布，最终文件必须归一化为当前处理尺寸；`scope=size` 当前处理尺寸就是 `target_size`。
+保留 CLI 返回的完整 JSON 为
 `image-edit-result.json`；其中的 `prompt` 和 `prompt_sha256` 是唯一真值，不能从展示用的 `prompt.txt`、用户原话或重新拼接的
 字符串恢复 hash。若需要 `prompt.txt`，只用于人读并确保末尾换行不进入提交内容。同时保留 model、request ID、实际宽高和本次
 attempt。每个尺寸最多执行一次有明确原因的编辑重试；传输重试不计入编辑次数。
@@ -76,7 +80,7 @@ annotation guide attachment、模型、request ID、prompt_sha256 和目标尺�
 - `image-edit-result.json`：Image Edit 返回的完整 JSON，必须包含原始 `prompt`、匹配的 `prompt_sha256`、model、request ID、attempt 和实际画布；不得保留本地 `path`。
 - `prompt-contract.json`：至少包含与模型结果完全相同的 `prompt_sha256`。
 - `copy-validation.json`：`{"passed": true}` 的通过证据。
-- `normalization.json`：包含当前 `target_size` 的归一化证据。
+- `normalization.json`：包含当前处理尺寸的归一化证据。
 
 四份证据必须一起传给 CLI：
 
@@ -89,13 +93,13 @@ multica creative order asset-put <order-id> --input-file <edited-asset.json> \
   --normalization-evidence-file <normalization.json> --output json
 ```
 
-`edited-asset.json` 必须保留原 `asset_family_id`，写入当前 task context 的 `variant_id`、`size_key`、`revision`、
-`derived_from_asset_id: source_asset_id`、`status: "completed"`。使用上述四个证据参数时，`edited-asset.json` 不得包含
+`edited-asset.json` 必须保留原 `asset_family_id`，写入当前 task context 的 `variant_id`、当前处理尺寸 `size_key`、`revision`、
+`derived_from_asset_id: <当前尺寸 source asset id>`、`status: "completed"`。使用上述四个证据参数时，`edited-asset.json` 不得包含
 `metadata` 或 `evidence` 字段；CLI 会从证据生成它们，并校验 prompt/hash、模型结果、复制校验和 target size。用户原话、输入附件、
 annotation guide、目检结论放在过程诊断资产的 metadata 或任务错误中，不要塞入 canonical asset 的自动生成字段。不得再次调用
 `variant-put` 或把 revision 再加一。
 
-canonical generated base 写回后，调用绑定的 `素材_技能_贴片`；它只调用后端唯一的确定性 Prime composer，由后端为所有 expected sizes
+所有需要编辑的 canonical generated base 写回后，调用绑定的 `素材_技能_贴片`；它只调用后端唯一的确定性 Prime composer，由后端为所有 expected sizes
 重新贴回官方透明组件并直接登记 `primed`、`delivered` 和 Prime 合成过程图。精准调整不创建贴片 task、不调用 QC、不创建 QC 子 Issue；
 贴片 Skill 是唯一的官方组件交接来源。
 
@@ -110,5 +114,5 @@ normalization 或本地 path 错误，都只修复对应 JSON、参数或 task_i
 绑定的 `素材_技能_贴片` 返回后再次执行 `multica creative order get <order-id> --output json`，确认每个 expected size 都有当前 revision
 的 `primed` 与 `delivered` 资产和 Prime 合成过程图；缺任何尺寸都不能报告完成。精准调整不执行 QC。
 
-只处理 task context 指定的对象、revision、target_size 和 scope。不得创建或修改 Issue，不得用评论代替领域数据，不得触发采集、分析、
+只处理 task context 指定的对象、revision、target_size、edit_sizes 和 scope。不得创建或修改 Issue，不得用评论代替领域数据，不得触发采集、分析、
 方案、标准生产、Prime agent 或 QC。

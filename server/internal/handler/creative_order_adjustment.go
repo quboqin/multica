@@ -21,6 +21,7 @@ type creativeOrderAdjustmentInput struct {
 	AdjustmentIssueID           string          `json:"adjustment_issue_id"`
 	AssetID                     string          `json:"asset_id"`
 	SizeKey                     string          `json:"size_key"`
+	Scope                       string          `json:"scope"`
 	SourceRevision              int             `json:"source_revision"`
 	AnnotationGuideAttachmentID string          `json:"annotation_guide_attachment_id"`
 	Comment                     string          `json:"comment"`
@@ -47,6 +48,30 @@ type creativeOrderAdjustmentIssueContext struct {
 	SizeKey        string `json:"creative_size"`
 	SourceRevision int    `json:"creative_source_revision"`
 	Revision       int    `json:"creative_revision"`
+}
+
+type creativeOrderAdjustmentSourceAsset struct {
+	SizeKey      string `json:"size_key"`
+	AssetID      string `json:"asset_id"`
+	AttachmentID string `json:"attachment_id"`
+}
+
+func normalizeCreativeOrderAdjustmentScope(scope string) string {
+	switch strings.TrimSpace(scope) {
+	case "", "size":
+		return "size"
+	case "variant":
+		return "variant"
+	default:
+		return ""
+	}
+}
+
+func creativeOrderAdjustmentEditSizes(scope, targetSize string, expectedSizes []string) []string {
+	if scope == "variant" {
+		return append([]string(nil), expectedSizes...)
+	}
+	return []string{targetSize}
 }
 
 // QueueCreativeOrderAdjustment starts an annotated size revision with the
@@ -97,8 +122,9 @@ func (h *Handler) QueueCreativeOrderAdjustment(w http.ResponseWriter, r *http.Re
 		return
 	}
 	input.SizeKey = strings.TrimSpace(input.SizeKey)
-	if !validCreativeAssetSize(input.SizeKey) || input.SourceRevision < 1 {
-		writeError(w, http.StatusBadRequest, "adjustment size_key and source_revision are required")
+	input.Scope = normalizeCreativeOrderAdjustmentScope(input.Scope)
+	if !validCreativeAssetSize(input.SizeKey) || input.Scope == "" || input.SourceRevision < 1 {
+		writeError(w, http.StatusBadRequest, "adjustment size_key, scope, and source_revision are required")
 		return
 	}
 
@@ -144,7 +170,7 @@ FOR UPDATE
 	if json.Unmarshal([]byte(issueMetadata), &issueContext) != nil ||
 		issueContext.Workflow != "creative_adjustment" || issueContext.Source != "creative_order" ||
 		parentIssueID != rootIssueID || issueContext.OrderID != uuidToString(orderID) ||
-		issueContext.AssetID != uuidToString(assetID) || issueContext.Scope != "size" ||
+		issueContext.AssetID != uuidToString(assetID) || issueContext.Scope != input.Scope ||
 		issueContext.SizeKey != input.SizeKey || issueContext.SourceRevision != input.SourceRevision ||
 		issueContext.Revision != input.SourceRevision+1 {
 		writeError(w, http.StatusConflict, "adjustment collaboration record no longer matches this order image")
@@ -190,6 +216,19 @@ FOR UPDATE OF item, variant, asset
 		writeError(w, http.StatusConflict, "adjustment target has already changed")
 		return
 	}
+	expectedSizes, foundExpectedSizes, err := creativeOrderSnapshotExpectedSizes(json.RawMessage(inputSnapshot))
+	if err != nil {
+		writeError(w, http.StatusConflict, err.Error())
+		return
+	}
+	if !foundExpectedSizes {
+		expectedSizes = append([]string(nil), standardCreativeAssetSizes...)
+	}
+	if !creativeSizeIsExpected(input.SizeKey, expectedSizes) {
+		writeError(w, http.StatusConflict, "adjustment size is not part of the order delivery package")
+		return
+	}
+	editSizes := creativeOrderAdjustmentEditSizes(input.Scope, input.SizeKey, expectedSizes)
 
 	var activeTask bool
 	if err := tx.QueryRow(r.Context(), `
@@ -211,19 +250,17 @@ SELECT EXISTS(
 
 	var retryingRevision bool
 	if currentRevision == input.SourceRevision+1 && currentRevision > input.SourceRevision {
-		var targetGenerated bool
+		var completedEditGenerated int
 		if err := tx.QueryRow(r.Context(), `
-SELECT EXISTS(
-  SELECT 1
+SELECT COUNT(DISTINCT size_key)
   FROM creative_order_asset
-  WHERE variant_id = $1 AND revision = $2 AND size_key = $3
+  WHERE variant_id = $1 AND revision = $2 AND size_key = ANY($3::text[])
     AND stage = 'generated' AND status = 'completed' AND attachment_id IS NOT NULL
-)
-`, parseUUID(variantID), currentRevision, input.SizeKey).Scan(&targetGenerated); err != nil {
+`, parseUUID(variantID), currentRevision, editSizes).Scan(&completedEditGenerated); err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to check previous adjustment output")
 			return
 		}
-		retryingRevision = !targetGenerated && currentRevision == input.SourceRevision+1 &&
+		retryingRevision = completedEditGenerated < len(editSizes) && currentRevision == input.SourceRevision+1 &&
 			(currentRevision > input.SourceRevision) &&
 			(variantStatus == "running" || variantStatus == "action_required" || variantStatus == "failed")
 	}
@@ -274,24 +311,12 @@ SELECT EXISTS(
 		writeError(w, http.StatusInternalServerError, "failed to load direct image edit agent")
 		return
 	}
-	expectedSizes, foundExpectedSizes, err := creativeOrderSnapshotExpectedSizes(json.RawMessage(inputSnapshot))
-	if err != nil {
-		writeError(w, http.StatusConflict, err.Error())
-		return
-	}
-	if !foundExpectedSizes {
-		expectedSizes = append([]string(nil), standardCreativeAssetSizes...)
-	}
-	if !creativeSizeIsExpected(input.SizeKey, expectedSizes) {
-		writeError(w, http.StatusConflict, "adjustment size is not part of the order delivery package")
-		return
-	}
 	if sourceAssetID == "" || sourceAttachmentID == "" {
 		writeError(w, http.StatusConflict, "adjustment requires an unbranded generated base asset")
 		return
 	}
 	rows, err := tx.Query(r.Context(), `
-SELECT size_key
+SELECT size_key, id::text, attachment_id::text
 FROM creative_order_asset
 WHERE variant_id = $1
   AND revision = $2
@@ -306,14 +331,16 @@ FOR UPDATE
 		return
 	}
 	generatedSizes := map[string]struct{}{}
+	sourceAssetsBySize := map[string]creativeOrderAdjustmentSourceAsset{}
 	for rows.Next() {
-		var size string
-		if err := rows.Scan(&size); err != nil {
+		var source creativeOrderAdjustmentSourceAsset
+		if err := rows.Scan(&source.SizeKey, &source.AssetID, &source.AttachmentID); err != nil {
 			rows.Close()
 			writeError(w, http.StatusInternalServerError, "failed to read generated adjustment base")
 			return
 		}
-		generatedSizes[size] = struct{}{}
+		generatedSizes[source.SizeKey] = struct{}{}
+		sourceAssetsBySize[source.SizeKey] = source
 	}
 	if err := rows.Err(); err != nil {
 		rows.Close()
@@ -324,6 +351,15 @@ FOR UPDATE
 	if !creativeSizesMatchExpected(generatedSizes, expectedSizes) {
 		writeError(w, http.StatusConflict, "adjustment requires a complete generated base package")
 		return
+	}
+	sourceAssetRefs := make([]creativeOrderAdjustmentSourceAsset, 0, len(expectedSizes))
+	for _, size := range expectedSizes {
+		source := sourceAssetsBySize[size]
+		if source.SizeKey == "" {
+			writeError(w, http.StatusConflict, "adjustment requires a complete generated base package")
+			return
+		}
+		sourceAssetRefs = append(sourceAssetRefs, source)
 	}
 
 	var feedbackContext map[string]any
@@ -372,13 +408,14 @@ WHERE id = $1 AND workspace_id = $3
 		writeError(w, http.StatusInternalServerError, "failed to freeze direct image edit agent")
 		return
 	}
-	if _, err := tx.Exec(r.Context(), `
+	if input.Scope == "size" {
+		if _, err := tx.Exec(r.Context(), `
 INSERT INTO creative_order_asset (
   variant_id, asset_family_id, size_key, revision, stage, attachment_id, derived_from_asset_id, metadata, evidence, status
 )
 SELECT variant_id, asset_family_id, size_key, $3, 'generated', attachment_id, id,
-  metadata || jsonb_build_object('order_adjustment', jsonb_build_object('source_revision', $2::integer, 'target_size', $5::text, 'reused_generated_base', true, 'source_asset_id', id::text)),
-  evidence || jsonb_build_object('order_adjustment', jsonb_build_object('source_revision', $2::integer, 'target_size', $5::text, 'reused_generated_base', true, 'source_asset_id', id::text)),
+  metadata || jsonb_build_object('order_adjustment', jsonb_build_object('source_revision', $2::integer, 'target_size', $5::text, 'scope', $6::text, 'reused_generated_base', true, 'source_asset_id', id::text)),
+  evidence || jsonb_build_object('order_adjustment', jsonb_build_object('source_revision', $2::integer, 'target_size', $5::text, 'scope', $6::text, 'reused_generated_base', true, 'source_asset_id', id::text)),
   'completed'
 FROM creative_order_asset
 WHERE variant_id = $1
@@ -389,22 +426,25 @@ WHERE variant_id = $1
   AND size_key = ANY($4::text[])
   AND size_key <> $5
 ON CONFLICT (variant_id, size_key, revision, stage) DO NOTHING
-`, parseUUID(variantID), input.SourceRevision, newRevision, expectedSizes, input.SizeKey); err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to preserve unaffected sizes for adjustment")
-		return
+`, parseUUID(variantID), input.SourceRevision, newRevision, expectedSizes, input.SizeKey, input.Scope); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to preserve unaffected sizes for adjustment")
+			return
+		}
 	}
-	if _, err := tx.Exec(r.Context(), `
+	if input.Scope == "size" {
+		if _, err := tx.Exec(r.Context(), `
 INSERT INTO creative_order_diagnostic_asset (
   variant_id, task_id, attachment_id, size_key, revision, workflow, label, filename, metadata
 )
 SELECT variant_id, task_id, attachment_id, size_key, $3, workflow, label, filename,
-  metadata || jsonb_build_object('order_adjustment', jsonb_build_object('source_revision', $2::integer, 'reused_for_adjustment', true))
+  metadata || jsonb_build_object('order_adjustment', jsonb_build_object('source_revision', $2::integer, 'target_size', $4::text, 'scope', $5::text, 'reused_for_adjustment', true))
 FROM creative_order_diagnostic_asset
 WHERE variant_id = $1 AND revision = $2
 ON CONFLICT (variant_id, revision, workflow, size_key, label, filename) DO NOTHING
-`, parseUUID(variantID), input.SourceRevision, newRevision); err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to preserve adjustment process evidence")
-		return
+`, parseUUID(variantID), input.SourceRevision, newRevision, input.SizeKey, input.Scope); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to preserve adjustment process evidence")
+			return
+		}
 	}
 	if _, err := tx.Exec(r.Context(), `
 UPDATE creative_order_variant
@@ -413,12 +453,12 @@ SET revision = $2,
     brief = jsonb_set(
       brief - 'creative_direct_edit_error',
       '{creative_direct_edit_delivery}',
-      jsonb_build_object('skip_qc', true, 'source_revision', $3::integer, 'target_size', $4::text),
+      jsonb_build_object('skip_qc', true, 'source_revision', $3::integer, 'target_size', $4::text, 'scope', $5::text, 'expected_sizes', to_jsonb($6::text[]), 'edit_sizes', to_jsonb($7::text[])),
       true
     ),
     updated_at = now()
 WHERE id = $1
-`, parseUUID(variantID), newRevision, input.SourceRevision, input.SizeKey); err != nil {
+`, parseUUID(variantID), newRevision, input.SourceRevision, input.SizeKey, input.Scope, expectedSizes, editSizes); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to begin image adjustment")
 		return
 	}
@@ -440,7 +480,9 @@ WHERE id = $1 AND adopted_variant_id = $2
 	feedbackContext["variant_id"] = variantID
 	feedbackContext["size_key"] = input.SizeKey
 	feedbackContext["revision"] = input.SourceRevision
-	feedbackContext["scope"] = "size"
+	feedbackContext["scope"] = input.Scope
+	feedbackContext["expected_sizes"] = expectedSizes
+	feedbackContext["edit_sizes"] = editSizes
 	if annotationGuideAttachmentID != "" {
 		feedbackContext["annotation_guide_attachment_id"] = annotationGuideAttachmentID
 		feedbackContext["annotation_guide_source"] = "final_reference"
@@ -450,7 +492,7 @@ WHERE id = $1 AND adopted_variant_id = $2
 	taskContext, err := json.Marshal(map[string]any{
 		"type":                           "creative_domain_task",
 		"workflow":                       "creative_direct_edit",
-		"scope":                          "size",
+		"scope":                          input.Scope,
 		"subject_id":                     variantID,
 		"item_key":                       fmt.Sprintf("%s:r%d", variantID, newRevision),
 		"creative_order_id":              uuidToString(orderID),
@@ -465,19 +507,25 @@ WHERE id = $1 AND adopted_variant_id = $2
 		"user_request":                   feedback.Comment,
 		"delivery_mode":                  "publish",
 		"target_size":                    input.SizeKey,
+		"edit_sizes":                     editSizes,
 		"source_revision":                input.SourceRevision,
 		"source_asset_id":                sourceAssetID,
 		"source_attachment_id":           sourceAttachmentID,
+		"source_assets":                  sourceAssetRefs,
 		"reference_asset_id":             uuidToString(assetID),
 		"reference_attachment_id":        assetAttachmentID,
 		"annotation_guide_attachment_id": annotationGuideAttachmentID,
 		"annotation_guide_source":        "final_reference",
 		"direct_edit": map[string]any{
 			"adjustment_issue_id":            uuidToString(adjustmentIssueID),
+			"scope":                          input.Scope,
 			"source_revision":                input.SourceRevision,
 			"target_size":                    input.SizeKey,
+			"expected_sizes":                 expectedSizes,
+			"edit_sizes":                     editSizes,
 			"source_asset_id":                sourceAssetID,
 			"source_attachment_id":           sourceAttachmentID,
+			"source_assets":                  sourceAssetRefs,
 			"reference_asset_id":             uuidToString(assetID),
 			"reference_attachment_id":        assetAttachmentID,
 			"annotation_guide_attachment_id": annotationGuideAttachmentID,
@@ -532,6 +580,9 @@ INSERT INTO creative_feedback_event (
 	adjustmentDetails, err := json.Marshal(map[string]any{
 		"variant_id":      variantID,
 		"size_key":        input.SizeKey,
+		"scope":           input.Scope,
+		"expected_sizes":  expectedSizes,
+		"edit_sizes":      editSizes,
 		"source_revision": input.SourceRevision,
 		"revision":        newRevision,
 		"task_id":         uuidToString(task.ID),
