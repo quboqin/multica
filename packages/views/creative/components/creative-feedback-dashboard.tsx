@@ -76,7 +76,7 @@ export function CreativeFeedbackDashboard() {
             <MetricRow label="成图问题反馈" value={workflow?.asset_reported ?? 0} />
             <MetricRow label="整套出图平均耗时" value={formatCreativeDuration(workflow?.image_generation_duration_seconds)} />
           </dl>
-          {(workflow?.image_generation_duration_package_count ?? 0) > 0 && <p className="mt-2 text-[11px] text-muted-foreground">基于 {workflow?.image_generation_duration_package_count} 套完整素材</p>}
+          {(workflow?.image_generation_duration_package_count ?? 0) > 0 && <p className="mt-2 text-[11px] text-muted-foreground">基于 {workflow?.image_generation_duration_package_count} 套完整出图</p>}
         </div>
       </section>
     </>}

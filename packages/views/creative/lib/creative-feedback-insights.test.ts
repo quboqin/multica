@@ -31,7 +31,7 @@ describe("creative feedback insights", () => {
     expect(creativeWorkflowInsights(workflow).map((insight) => insight.rate)).toEqual([75, 75, null, 40]);
   });
 
-  it("formats complete package durations for the dashboard", () => {
+  it("formats generation durations for the dashboard", () => {
     expect(formatCreativeDuration(null)).toBe("-");
     expect(formatCreativeDuration(42)).toBe("42 秒");
     expect(formatCreativeDuration(368)).toBe("6 分 8 秒");

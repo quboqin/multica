@@ -524,7 +524,7 @@ VALUES ($1, $2, 1, 'generated', $3, 'completed')
 	}
 }
 
-func TestCreativeFeedbackDashboardTracksCompletePackageDuration(t *testing.T) {
+func TestCreativeFeedbackDashboardTracksGeneratedPackageDuration(t *testing.T) {
 	if testHandler == nil {
 		t.Skip("database not available")
 	}
@@ -532,8 +532,8 @@ func TestCreativeFeedbackDashboardTracksCompletePackageDuration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, candidateID := createCreativeFeedbackCandidate(t, "complete package duration")
-	_, secondCandidateID := createCreativeFeedbackCandidate(t, "complete package duration second item")
+	_, candidateID := createCreativeFeedbackCandidate(t, "generated package duration")
+	_, secondCandidateID := createCreativeFeedbackCandidate(t, "generated package duration second item")
 	attachmentID := createCreativeFeedbackAsset(t)
 	var orderID string
 	if err := testPool.QueryRow(t.Context(), `
@@ -565,7 +565,7 @@ RETURNING id::text
 			for _, size := range standardCreativeAssetSizes {
 				if _, err := testPool.Exec(t.Context(), `
 INSERT INTO creative_order_asset (variant_id, size_key, revision, stage, attachment_id, status)
-VALUES ($1, $2, 1, 'delivered', $3, 'completed')
+VALUES ($1, $2, 1, 'generated', $3, 'completed')
 `, variantID, size, attachmentID); err != nil {
 					t.Fatal(err)
 				}
@@ -578,10 +578,10 @@ VALUES ($1, $2, 1, 'delivered', $3, 'completed')
 		t.Fatal(err)
 	}
 	if after.ImageGenerationDurationPackageCount != before.ImageGenerationDurationPackageCount+2 {
-		t.Fatalf("complete package count = %d, want %d", after.ImageGenerationDurationPackageCount, before.ImageGenerationDurationPackageCount+2)
+		t.Fatalf("generated package count = %d, want %d", after.ImageGenerationDurationPackageCount, before.ImageGenerationDurationPackageCount+2)
 	}
 	if after.ImageGenerationDurationSeconds == nil || *after.ImageGenerationDurationSeconds < 60 {
-		t.Fatalf("complete package duration = %v, want at least 60 seconds", after.ImageGenerationDurationSeconds)
+		t.Fatalf("generated package duration = %v, want at least 60 seconds", after.ImageGenerationDurationSeconds)
 	}
 }
 

@@ -668,7 +668,7 @@ FROM production_progress
 	); err != nil {
 		return creativeFeedbackWorkflowDashboard{}, err
 	}
-	dashboard.ImageGenerationDurationSeconds, dashboard.ImageGenerationDurationPackageCount, err = h.creativeFullPackageDuration(ctx, workspaceID)
+	dashboard.ImageGenerationDurationSeconds, dashboard.ImageGenerationDurationPackageCount, err = h.creativeGeneratedPackageDuration(ctx, workspaceID)
 	if err != nil {
 		return creativeFeedbackWorkflowDashboard{}, err
 	}
@@ -707,21 +707,21 @@ LIMIT 6
 	return dashboard, nil
 }
 
-func (h *Handler) creativeFullPackageDuration(ctx context.Context, workspaceID pgtype.UUID) (*int64, int, error) {
+func (h *Handler) creativeGeneratedPackageDuration(ctx context.Context, workspaceID pgtype.UUID) (*int64, int, error) {
 	var durationSeconds pgtype.Int8
 	var packageCount int64
 	err := h.DB.QueryRow(ctx, `
-WITH complete_packages AS (
+WITH generated_packages AS (
   SELECT item.id,
          order_row.created_at AS submitted_at,
-         max(variant.updated_at) AS completed_at
+         max(asset.updated_at) AS generated_at
   FROM creative_order order_row
   JOIN creative_order_item item ON item.order_id = order_row.id
   JOIN creative_order_variant variant ON variant.order_item_id = item.id
   LEFT JOIN creative_order_asset asset
     ON asset.variant_id = variant.id
    AND asset.revision = variant.revision
-   AND asset.stage = 'delivered'
+   AND asset.stage = 'generated'
    AND asset.status = 'completed'
    AND asset.attachment_id IS NOT NULL
    AND asset.size_key IN ('1080x1080', '1200x628', '800x1000')
@@ -730,12 +730,11 @@ WITH complete_packages AS (
     AND order_row.trigger_evidence_kind <> 'creative_direct_edit'
   GROUP BY item.id, order_row.created_at
   HAVING count(DISTINCT variant.id) = 3
-     AND count(DISTINCT variant.id) FILTER (WHERE variant.status = 'completed') = 3
      AND count(DISTINCT (variant.id, asset.size_key)) FILTER (WHERE asset.id IS NOT NULL) = 9
 )
-SELECT ROUND(AVG(EXTRACT(EPOCH FROM (completed_at - submitted_at))))::bigint,
+SELECT ROUND(AVG(EXTRACT(EPOCH FROM (generated_at - submitted_at))))::bigint,
        count(*)
-FROM complete_packages
+FROM generated_packages
 `, workspaceID).Scan(&durationSeconds, &packageCount)
 	if err != nil {
 		return nil, int(packageCount), err
