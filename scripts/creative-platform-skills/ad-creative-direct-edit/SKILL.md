@@ -10,7 +10,7 @@ allowed-tools: Bash(multica *), Bash(python *)
 `<order-id>`、`<variant-id>`、`revision`、`expected_sizes`、`target_size`、`user_request`、`delivery_mode`、
 `reviewer_agent_id`、同尺寸无品牌 `source_asset_id/source_attachment_id` 和可编辑的无品牌 base asset。没有这些字段，或
 只有带品牌组件、二维码、Logo、条款、商店徽章的最终图而无法追溯 base asset 时，将 variant 写为 `action_required`；
-不得把最终 Prime 图作为模型输入。
+不得把最终 Prime 图作为可编辑来源。
 
 订单冻结的 `copy_snapshot` 仍是可见文案和业务事实的唯一真值；精准调整只执行 `user_request` 指定的视觉修改，不能改写、补造或删除已批准文案。
 
@@ -26,25 +26,31 @@ revision 的 generated base 和过程证据。不得为未修改尺寸重新调�
 先执行 `multica creative order get <order-id> --output json` 确认 source base 属于该 variant、尺寸和 revision。使用
 `multica attachment download <source-attachment-id> --output-dir <work-dir>` 下载目标尺寸的无品牌底图。
 
-如果 context 给出 `annotation_guide_attachment_id`，再下载该附件。它与 source base 同尺寸，红色矩形和编号是用户的空间
-标注，不是广告内容。模型输入固定为：
+如果 context 给出 `annotation_guide_attachment_id`，再下载该附件。它是用户在最终交付图上的标注 brief，可能包含 Prime 组件、
+Logo、二维码、商店徽章、官方条款、红色矩形、编号和评论位置；这些都用于理解用户在最终图上看到的问题，不是可复制广告内容。
+模型输入固定为：
 
 1. `Input 1`：同尺寸无品牌 source base，唯一的画面、文字、版式和视觉风格真值。
-2. `Input 2`：同尺寸 annotation guide，只用于读取红框编号和位置；不得复制红框、编号或任何引导线到输出。
+2. `Input 2`：最终交付图的 annotation brief，只用于读取用户红框、编号、评论位置和固定贴片遮挡关系；不得复制红框、编号、
+   引导线、Logo、二维码、商店徽章、官方条款或其他 Prime 组件到输出。
 
 没有 annotation guide 时只传 Input 1。每个编号对应 `direct_edit.annotations` 中同序的 comment；多个红框必须逐一执行，不能合并、
-忽略或只按总描述猜测。`reference_attachment_id` 只用于必要的人工对照，不得传给 Image Edit，也不得让 Prime、Logo、二维码、
-商店徽章或官方条款进入模型输出。
+忽略或只按总描述猜测。`reference_attachment_id` 只用于必要的人工对照，不得作为可编辑输入。若红框覆盖标题、贴片、Logo、
+二维码或底部条款，说明用户是在指出最终交付图中的遮挡/关系问题；仍只修改 Input 1 的无品牌底图，让后续固定贴片重新叠加后解决问题，
+不得尝试修改、重画或移除 Prime 组件。
 
-把用户原话压缩为一次局部编辑提示词：明确修改对象、方向或像素量，并明确保留其余文字、金额、表格、主体、背景、比例和
-视觉风格。对于“上移 30px”这类几何要求，使用同尺寸画布和精确的移动方向；不要重绘整张广告，不要重排未标注区域。
+提示词保留用户原话，并追加执行约束：只编辑 Input 1；Input 2 仅用于理解用户标注和固定贴片位置；最终贴片会由平台重新叠加；
+不要把红框、编号、Prime 组件或官方条款画进无品牌底图。明确修改对象、方向或像素量，并明确保留其余文字、金额、表格、主体、
+背景、比例和视觉风格。对于“上移 30px”这类几何要求，使用同尺寸画布和精确的移动方向；不要重绘整张广告，不要重排未标注区域。
+对于“替换人物/换人/换模特”，提示词必须明确这是 replacement，不是微调：现有人物是移除目标，不是身份、五官、发型、服装、
+姿势、手势、身形轮廓或构图参考；新人物必须在 1x 预览下肉眼可见地不同，并给出具体不同的年龄段、肤色/发型、服装、姿势和相对关系。
 
 只调用 `multica image edit`。有 annotation guide 时保持 source 在前、guide 在后：
 
 ```bash
 multica image edit \
   --input <source-base.png> \
-  --input <annotation-guide.png> \
+  --input <annotation-brief.png> \
   --prompt "<局部编辑提示词>" \
   --size <provider-size> --quality high --output-file <model-output.png> --output json
 ```

@@ -52,7 +52,7 @@ type creativeOrderAdjustmentIssueContext struct {
 // QueueCreativeOrderAdjustment starts an annotated size revision with the
 // direct image-edit agent frozen from the order squad. The selected final
 // asset remains the collaboration reference, while the edit agent receives
-// the matching unbranded generated base and any rasterized annotation guide.
+// the matching unbranded generated base plus any annotated final-image brief.
 func (h *Handler) QueueCreativeOrderAdjustment(w http.ResponseWriter, r *http.Request) {
 	workspaceID, userID, ok := h.creativeFeedbackWorkspaceUser(w, r)
 	if !ok {
@@ -443,6 +443,7 @@ WHERE id = $1 AND adopted_variant_id = $2
 	feedbackContext["scope"] = "size"
 	if annotationGuideAttachmentID != "" {
 		feedbackContext["annotation_guide_attachment_id"] = annotationGuideAttachmentID
+		feedbackContext["annotation_guide_source"] = "final_reference"
 	}
 	feedback.ContextSnapshot, _ = json.Marshal(feedbackContext)
 
@@ -470,6 +471,7 @@ WHERE id = $1 AND adopted_variant_id = $2
 		"reference_asset_id":             uuidToString(assetID),
 		"reference_attachment_id":        assetAttachmentID,
 		"annotation_guide_attachment_id": annotationGuideAttachmentID,
+		"annotation_guide_source":        "final_reference",
 		"direct_edit": map[string]any{
 			"adjustment_issue_id":            uuidToString(adjustmentIssueID),
 			"source_revision":                input.SourceRevision,
@@ -479,6 +481,7 @@ WHERE id = $1 AND adopted_variant_id = $2
 			"reference_asset_id":             uuidToString(assetID),
 			"reference_attachment_id":        assetAttachmentID,
 			"annotation_guide_attachment_id": annotationGuideAttachmentID,
+			"annotation_guide_source":        "final_reference",
 			"request":                        feedback.Comment,
 			"annotations":                    feedbackContext["annotations"],
 		},

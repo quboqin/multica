@@ -59,6 +59,81 @@ func TestCreativeLibraryDownloadSourceUsesOriginWhileArchiveIsPending(t *testing
 	}
 }
 
+func TestCreativeLibraryDownloadSourcePrefersSourceAttachment(t *testing.T) {
+	candidate := creativeMaterialCandidateCLI{
+		SourceAttachmentID: "attachment-123",
+		ArchiveStatus:      "completed",
+		ArchivedURL:        "https://fat-cybertron.adakamicorp.id/api/attachments/attachment-123/download",
+		OriginalURL:        "https://cdn.example.test/original.png",
+		PreviewURL:         "https://cdn.example.test/preview.png",
+	}
+	gotURL, gotSource := creativeLibraryDownloadSource(candidate)
+	wantURL := "/api/attachments/attachment-123/download"
+	if gotURL != wantURL || gotSource != "attachment" {
+		t.Fatalf("creativeLibraryDownloadSource() = (%q, %q), want (%q, attachment)", gotURL, gotSource, wantURL)
+	}
+}
+
+func TestRunCreativeLibraryDownloadUsesSourceAttachmentWithAuth(t *testing.T) {
+	var sawAttachmentDownload atomic.Bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/creative/materials":
+			if got := r.Header.Get("Authorization"); got != "Bearer test-token" {
+				t.Errorf("materials Authorization = %q, want Bearer test-token", got)
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"candidates": []map[string]any{{
+					"id":                   "candidate-1",
+					"source_attachment_id": "attachment-123",
+					"archive_status":       "completed",
+					"archived_url":         "https://fat-cybertron.adakamicorp.id/api/attachments/archive-copy/download",
+					"original_url":         "https://cdn.example.test/original.png",
+				}},
+			})
+		case "/api/attachments/attachment-123/download":
+			sawAttachmentDownload.Store(true)
+			if got := r.Header.Get("Authorization"); got != "Bearer test-token" {
+				t.Errorf("attachment Authorization = %q, want Bearer test-token", got)
+			}
+			_, _ = w.Write([]byte("material-bytes"))
+		default:
+			t.Errorf("unexpected request path %s", r.URL.Path)
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	t.Setenv("MULTICA_SERVER_URL", server.URL)
+	t.Setenv("MULTICA_WORKSPACE_ID", "workspace-1")
+	t.Setenv("MULTICA_TOKEN", "test-token")
+	t.Setenv("MULTICA_AGENT_ID", "")
+	t.Setenv("MULTICA_TASK_ID", "")
+
+	outputFile := filepath.Join(t.TempDir(), "candidate.bin")
+	cmd := testCmd()
+	cmd.Flags().String("output-file", "", "")
+	cmd.Flags().String("output", "json", "")
+	if err := cmd.Flags().Set("output-file", outputFile); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := captureStdout(t, func() error {
+		return runCreativeLibraryDownload(cmd, []string{"candidate-1"})
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if !sawAttachmentDownload.Load() {
+		t.Fatal("expected source attachment download request")
+	}
+	data, err := os.ReadFile(outputFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != "material-bytes" {
+		t.Fatalf("downloaded bytes = %q", string(data))
+	}
+}
+
 func TestValidateGPTImageSize(t *testing.T) {
 	for _, size := range []string{"auto", "1024x1536", "1088x1360"} {
 		if err := validateGPTImageSize(size); err != nil {

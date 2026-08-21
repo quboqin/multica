@@ -286,6 +286,9 @@ func runCreativeLibraryDownload(cmd *cobra.Command, args []string) error {
 }
 
 func creativeLibraryDownloadSource(candidate creativeMaterialCandidateCLI) (string, string) {
+	if attachmentID := strings.TrimSpace(candidate.SourceAttachmentID); attachmentID != "" {
+		return "/api/attachments/" + url.PathEscape(attachmentID) + "/download", "attachment"
+	}
 	if candidate.ArchiveStatus == "completed" && strings.TrimSpace(candidate.ArchivedURL) != "" {
 		return strings.TrimSpace(candidate.ArchivedURL), "archive"
 	}

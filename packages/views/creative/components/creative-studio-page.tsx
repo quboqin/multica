@@ -533,9 +533,11 @@ function CreativeOrderDetail({ orderId, onBack, onBrowseOrders, backLabel }: { o
       const sourceBase = generatedFor(asset);
       const sourceBaseURL = attachmentURL(sourceBase);
       if (!sourceBaseURL) throw new Error("当前调整缺少贴片前的无品牌底图");
-      const annotationGuide = await createAnnotationGuideAttachment(sourceBaseURL, adjustment.issue.id, asset.size_key as CreativeDeliverySize, asset.revision, drafts);
+      const targetURL = attachmentURL(asset);
+      if (!targetURL) throw new Error("当前调整缺少可标注的目标成图");
+      const annotationGuide = await createAnnotationGuideAttachment(targetURL, adjustment.issue.id, asset.size_key as CreativeDeliverySize, asset.revision, drafts);
       const annotations = drafts.map((draft) => ({ ...draft, scope: "size" }));
-      await api.queueCreativeOrderAdjustment(orderId, { adjustment_issue_id: adjustment.issue.id, asset_id: asset.id, size_key: adjustment.sizeKey, source_revision: asset.revision, annotation_guide_attachment_id: annotationGuide.id, comment: summary, event_type: "annotation", reason_codes: [...new Set(drafts.map((draft) => assetFeedbackReason(draft.issueType)))], annotation: { id: crypto.randomUUID(), asset_id: asset.id, kind: first.kind, issue_type: first.issueType, x: first.x, y: first.y, width: first.width, height: first.height, scope: "size", comment: first.comment }, context_snapshot: { annotations, annotation_guide_attachment_id: annotationGuide.id } });
+      await api.queueCreativeOrderAdjustment(orderId, { adjustment_issue_id: adjustment.issue.id, asset_id: asset.id, size_key: adjustment.sizeKey, source_revision: asset.revision, annotation_guide_attachment_id: annotationGuide.id, comment: summary, event_type: "annotation", reason_codes: [...new Set(drafts.map((draft) => assetFeedbackReason(draft.issueType)))], annotation: { id: crypto.randomUUID(), asset_id: asset.id, kind: first.kind, issue_type: first.issueType, x: first.x, y: first.y, width: first.width, height: first.height, scope: "size", comment: first.comment }, context_snapshot: { annotations, annotation_guide_attachment_id: annotationGuide.id, annotation_guide_source: "final_reference" } });
       await queryClient.invalidateQueries({ queryKey: creativeKeys.feedback(wsId, "asset", "") });
       await queryClient.invalidateQueries({ queryKey: creativeKeys.order(wsId, orderId) });
       await queryClient.invalidateQueries({ queryKey: creativeKeys.orders(wsId) });
@@ -1059,16 +1061,16 @@ function trimmedStringValue(value: unknown): string {
 }
 
 async function createAnnotationGuideAttachment(
-  sourceURL: string,
+  targetURL: string,
   issueId: string,
   sizeKey: CreativeDeliverySize,
   sourceRevision: number,
   drafts: CreativeAnnotationDraft[],
 ): Promise<{ id: string }> {
-  const response = await fetch(sourceURL, { credentials: "include" });
-  if (!response.ok) throw new Error(`无法读取贴片前底图：${response.status}`);
-  const sourceBlob = await response.blob();
-  const objectURL = URL.createObjectURL(sourceBlob);
+  const response = await fetch(targetURL, { credentials: "include" });
+  if (!response.ok) throw new Error(`无法读取标注目标图：${response.status}`);
+  const targetBlob = await response.blob();
+  const objectURL = URL.createObjectURL(targetBlob);
   try {
     const image = await loadGuideImage(objectURL);
     const canvas = document.createElement("canvas");
@@ -1106,7 +1108,7 @@ async function createAnnotationGuideAttachment(
       context.fillText(String(index + 1), labelX, labelY + 1);
     });
     const guideBlob = await canvasBlob(canvas);
-    const guide = await api.uploadFile(new File([guideBlob], `annotation-guide-${sizeKey}-r${sourceRevision}.png`, { type: "image/png" }), { issueId });
+    const guide = await api.uploadFile(new File([guideBlob], `annotation-brief-${sizeKey}-r${sourceRevision}.png`, { type: "image/png" }), { issueId });
     if (!guide.id) throw new Error("标注引导图上传没有返回附件");
     return guide;
   } finally {
@@ -1118,7 +1120,7 @@ function loadGuideImage(sourceURL: string): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
     const image = new Image();
     image.onload = () => resolve(image);
-    image.onerror = () => reject(new Error("无法读取贴片前底图像素"));
+    image.onerror = () => reject(new Error("无法读取标注目标图像素"));
     image.src = sourceURL;
   });
 }

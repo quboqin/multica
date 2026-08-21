@@ -3575,6 +3575,186 @@ VALUES ($1, $2, 'dispatched', 0, $3) RETURNING id
 	}
 }
 
+func TestCompleteCreativeDirectEditTaskRequiresPublishedArtifacts(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+	ctx := t.Context()
+	expectedSizes := []string{"1080x1080", "1200x628", "800x1000"}
+
+	var agentID, runtimeID string
+	if err := testPool.QueryRow(ctx, `
+SELECT a.id, a.runtime_id FROM agent a WHERE a.workspace_id = $1 LIMIT 1
+`, testWorkspaceID).Scan(&agentID, &runtimeID); err != nil {
+		t.Fatal(err)
+	}
+
+	createAttachment := func(t *testing.T, name string) string {
+		t.Helper()
+		var attachmentID string
+		if err := testPool.QueryRow(ctx, `
+INSERT INTO attachment (workspace_id, uploader_type, uploader_id, filename, url, content_type, size_bytes)
+VALUES ($1, 'agent', $2, $3, '/uploads/' || $3, 'image/png', 100)
+RETURNING id::text
+`, testWorkspaceID, agentID, name).Scan(&attachmentID); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _, _ = testPool.Exec(t.Context(), `DELETE FROM attachment WHERE id = $1`, attachmentID) })
+		return attachmentID
+	}
+
+	setup := func(t *testing.T, withGenerated, withPrimed, withDelivered bool) (string, string) {
+		t.Helper()
+		_, candidateID := createCreativeFeedbackCandidate(t, "direct edit completion artifacts "+uuid.NewString())
+		var orderID, itemID, variantID, sourceAssetID string
+		if err := testPool.QueryRow(ctx, `
+INSERT INTO creative_order (workspace_id, status, input_snapshot, created_by)
+VALUES ($1, 'running', '{"expected_sizes":["1080x1080","1200x628","800x1000"]}'::jsonb, $2)
+RETURNING id::text
+`, testWorkspaceID, testUserID).Scan(&orderID); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _, _ = testPool.Exec(t.Context(), `DELETE FROM creative_order WHERE id = $1`, orderID) })
+		if err := testPool.QueryRow(ctx, `
+INSERT INTO creative_order_item (order_id, candidate_id, copy_snapshot)
+VALUES ($1, $2, '{}'::jsonb)
+RETURNING id::text
+`, orderID, candidateID).Scan(&itemID); err != nil {
+			t.Fatal(err)
+		}
+		if err := testPool.QueryRow(ctx, `
+INSERT INTO creative_order_variant (order_item_id, variant_key, revision, brief, status)
+VALUES ($1, 'V01', 2, '{"creative_direct_edit_delivery":{"skip_qc":true,"target_size":"1080x1080"}}'::jsonb, 'running')
+RETURNING id::text
+`, itemID).Scan(&variantID); err != nil {
+			t.Fatal(err)
+		}
+		sourceAttachmentID := createAttachment(t, "direct-edit-source-"+uuid.NewString()+".png")
+		if err := testPool.QueryRow(ctx, `
+INSERT INTO creative_order_asset (variant_id, size_key, revision, stage, attachment_id, status)
+VALUES ($1, '1080x1080', 1, 'generated', $2, 'completed')
+RETURNING id::text
+`, variantID, sourceAttachmentID).Scan(&sourceAssetID); err != nil {
+			t.Fatal(err)
+		}
+
+		insertAssets := func(stage string) {
+			t.Helper()
+			for _, size := range expectedSizes {
+				attachmentID := createAttachment(t, "direct-edit-"+stage+"-"+size+"-"+uuid.NewString()+".png")
+				if _, err := testPool.Exec(ctx, `
+INSERT INTO creative_order_asset (variant_id, size_key, revision, stage, attachment_id, derived_from_asset_id, status)
+VALUES ($1, $2, 2, $3, $4, $5, 'completed')
+`, variantID, size, stage, attachmentID, sourceAssetID); err != nil {
+					t.Fatal(err)
+				}
+			}
+		}
+		if withGenerated {
+			insertAssets("generated")
+		}
+		if withPrimed {
+			insertAssets("primed")
+		}
+		if withDelivered {
+			insertAssets("delivered")
+		}
+
+		contextJSON, _ := json.Marshal(map[string]any{
+			"type":                   "creative_domain_task",
+			"workflow":               "creative_direct_edit",
+			"creative_order_id":      orderID,
+			"creative_order_item_id": itemID,
+			"variant_id":             variantID,
+			"revision":               2,
+			"expected_sizes":         expectedSizes,
+			"target_size":            "1080x1080",
+			"delivery_mode":          "publish",
+			"source_revision":        1,
+			"source_asset_id":        sourceAssetID,
+			"source_attachment_id":   sourceAttachmentID,
+			"user_request":           "把标题移出贴片遮挡区域",
+		})
+		var taskID string
+		if err := testPool.QueryRow(ctx, `
+INSERT INTO agent_task_queue (
+  agent_id, runtime_id, status, priority, context, trigger_evidence_kind, trigger_evidence_ref_id, started_at
+)
+VALUES ($1, $2, 'running', 0, $3::jsonb, 'creative_order_item_direct_edit', $4, now())
+RETURNING id::text
+`, agentID, runtimeID, contextJSON, itemID).Scan(&taskID); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _, _ = testPool.Exec(t.Context(), `DELETE FROM agent_task_queue WHERE id = $1`, taskID) })
+		return taskID, variantID
+	}
+
+	complete := func(t *testing.T, taskID string) {
+		t.Helper()
+		w := httptest.NewRecorder()
+		req := newDaemonTokenRequest(http.MethodPost, "/api/daemon/tasks/"+taskID+"/complete", TaskCompleteRequest{Output: "done"}, testWorkspaceID, "direct-daemon")
+		req = withURLParam(req, "taskId", taskID)
+		testHandler.CompleteTask(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("complete direct-edit task: %d %s", w.Code, w.Body.String())
+		}
+	}
+
+	t.Run("missing target generated", func(t *testing.T) {
+		taskID, variantID := setup(t, false, false, false)
+		complete(t, taskID)
+		var status, failureReason, taskError, variantStatus, variantBrief string
+		if err := testPool.QueryRow(ctx, `
+SELECT status, COALESCE(failure_reason, ''), COALESCE(error, '')
+FROM agent_task_queue WHERE id = $1
+`, taskID).Scan(&status, &failureReason, &taskError); err != nil {
+			t.Fatal(err)
+		}
+		if err := testPool.QueryRow(ctx, `SELECT status, brief::text FROM creative_order_variant WHERE id = $1`, variantID).Scan(&variantStatus, &variantBrief); err != nil {
+			t.Fatal(err)
+		}
+		if status != "failed" || failureReason != "creative_output_missing" || !strings.Contains(taskError, "target generated asset") {
+			t.Fatalf("task terminal state = (%q, %q, %q), want failed creative_output_missing target generated error", status, failureReason, taskError)
+		}
+		if variantStatus != "action_required" || !strings.Contains(variantBrief, "creative_direct_edit_error") {
+			t.Fatalf("variant state = (%q, %s), want action_required with direct-edit blocker", variantStatus, variantBrief)
+		}
+	})
+
+	t.Run("missing primed and delivered", func(t *testing.T) {
+		taskID, variantID := setup(t, true, false, false)
+		complete(t, taskID)
+		var status, failureReason, taskError, variantStatus string
+		if err := testPool.QueryRow(ctx, `
+SELECT status, COALESCE(failure_reason, ''), COALESCE(error, '')
+FROM agent_task_queue WHERE id = $1
+`, taskID).Scan(&status, &failureReason, &taskError); err != nil {
+			t.Fatal(err)
+		}
+		if err := testPool.QueryRow(ctx, `SELECT status FROM creative_order_variant WHERE id = $1`, variantID).Scan(&variantStatus); err != nil {
+			t.Fatal(err)
+		}
+		if status != "failed" || failureReason != "creative_output_missing" || !strings.Contains(taskError, "completed primed assets") {
+			t.Fatalf("task terminal state = (%q, %q, %q), want failed creative_output_missing primed error", status, failureReason, taskError)
+		}
+		if variantStatus != "action_required" {
+			t.Fatalf("variant status = %q, want action_required", variantStatus)
+		}
+	})
+
+	t.Run("complete published package", func(t *testing.T) {
+		taskID, _ := setup(t, true, true, true)
+		complete(t, taskID)
+		var status string
+		if err := testPool.QueryRow(ctx, `SELECT status FROM agent_task_queue WHERE id = $1`, taskID).Scan(&status); err != nil {
+			t.Fatal(err)
+		}
+		if status != "completed" {
+			t.Fatalf("task status = %q, want completed", status)
+		}
+	})
+}
+
 func TestCompleteReferenceAnalysisTaskRequiresCompletedArtifact(t *testing.T) {
 	if testHandler == nil {
 		t.Skip("database not available")

@@ -2211,6 +2211,9 @@ func (h *Handler) CompleteTask(w http.ResponseWriter, r *http.Request) {
 	if validationErr == nil && artifactError == "" {
 		artifactError, validationErr = h.preAdaptationCompletionError(r.Context(), existingTask, workspaceID)
 	}
+	if validationErr == nil && artifactError == "" {
+		artifactError, validationErr = h.creativeDirectEditCompletionError(r.Context(), existingTask, workspaceID)
+	}
 	if validationErr != nil {
 		slog.Error("validate creative task output failed", "task_id", taskID, "error", validationErr)
 		writeError(w, http.StatusInternalServerError, "failed to validate task output")

@@ -4735,19 +4735,157 @@ WHERE id = $1 AND revision = $2 AND status <> 'cancelled'
 	return nil
 }
 
-func (h *Handler) settleCreativeDirectEditTask(ctx context.Context, task db.AgentTaskQueue) error {
-	var taskContext struct {
-		Type       string `json:"type"`
-		Workflow   string `json:"workflow"`
-		VariantID  string `json:"variant_id"`
-		Revision   int    `json:"revision"`
-		TargetSize string `json:"target_size"`
+type creativeDirectEditTaskCompletionContext struct {
+	Type          string   `json:"type"`
+	Workflow      string   `json:"workflow"`
+	VariantID     string   `json:"variant_id"`
+	Revision      int      `json:"revision"`
+	TargetSize    string   `json:"target_size"`
+	DeliveryMode  string   `json:"delivery_mode"`
+	ExpectedSizes []string `json:"expected_sizes"`
+}
+
+type creativeDirectEditArtifactState struct {
+	VariantExists   bool
+	TargetGenerated bool
+	GeneratedCount  int
+	PrimedCount     int
+	DeliveredCount  int
+}
+
+func parseCreativeDirectEditTaskCompletionContext(raw json.RawMessage) (creativeDirectEditTaskCompletionContext, bool, error) {
+	var taskContext creativeDirectEditTaskCompletionContext
+	if err := json.Unmarshal(raw, &taskContext); err != nil {
+		return taskContext, false, err
 	}
-	if json.Unmarshal(task.Context, &taskContext) != nil || taskContext.Type != "creative_domain_task" || taskContext.Workflow != "creative_direct_edit" {
+	if taskContext.Type != "creative_domain_task" || taskContext.Workflow != "creative_direct_edit" {
+		return taskContext, false, nil
+	}
+	taskContext.VariantID = strings.TrimSpace(taskContext.VariantID)
+	taskContext.TargetSize = strings.TrimSpace(taskContext.TargetSize)
+	taskContext.DeliveryMode = strings.TrimSpace(taskContext.DeliveryMode)
+	if _, err := uuid.Parse(taskContext.VariantID); err != nil || taskContext.Revision < 1 ||
+		!validCreativeAssetSize(taskContext.TargetSize) ||
+		(taskContext.DeliveryMode != "preview" && taskContext.DeliveryMode != "publish") {
+		return taskContext, true, errors.New("invalid creative direct-edit completion context")
+	}
+	expectedSizes, err := normalizeCreativeExpectedSizes(taskContext.ExpectedSizes)
+	if err != nil {
+		return taskContext, true, err
+	}
+	if !creativeSizeIsExpected(taskContext.TargetSize, expectedSizes) {
+		return taskContext, true, errors.New("creative direct-edit target size is not expected")
+	}
+	taskContext.ExpectedSizes = expectedSizes
+	return taskContext, true, nil
+}
+
+func (h *Handler) loadCreativeDirectEditArtifactState(ctx context.Context, variantID pgtype.UUID, revision int, targetSize string, expectedSizes []string, workspaceID pgtype.UUID) (creativeDirectEditArtifactState, error) {
+	var state creativeDirectEditArtifactState
+	if err := h.DB.QueryRow(ctx, `
+WITH expected(size_key) AS (
+  SELECT unnest($4::text[])
+)
+SELECT EXISTS(
+    SELECT 1
+    FROM creative_order_variant variant
+    JOIN creative_order_item item ON item.id = variant.order_item_id
+    JOIN creative_order order_row ON order_row.id = item.order_id
+    WHERE variant.id = $1 AND variant.revision = $2
+      AND (NOT $5::boolean OR order_row.workspace_id = $6)
+  ),
+  EXISTS(
+    SELECT 1
+    FROM creative_order_asset asset
+    WHERE asset.variant_id = $1 AND asset.revision = $2 AND asset.size_key = $3
+      AND asset.stage = 'generated' AND asset.status = 'completed' AND asset.attachment_id IS NOT NULL
+  ),
+  (
+    SELECT count(DISTINCT asset.size_key)
+    FROM creative_order_asset asset
+    JOIN expected ON expected.size_key = asset.size_key
+    WHERE asset.variant_id = $1 AND asset.revision = $2
+      AND asset.stage = 'generated' AND asset.status = 'completed' AND asset.attachment_id IS NOT NULL
+  ),
+  (
+    SELECT count(DISTINCT asset.size_key)
+    FROM creative_order_asset asset
+    JOIN expected ON expected.size_key = asset.size_key
+    WHERE asset.variant_id = $1 AND asset.revision = $2
+      AND asset.stage = 'primed' AND asset.status = 'completed' AND asset.attachment_id IS NOT NULL
+  ),
+  (
+    SELECT count(DISTINCT asset.size_key)
+    FROM creative_order_asset asset
+    JOIN expected ON expected.size_key = asset.size_key
+    WHERE asset.variant_id = $1 AND asset.revision = $2
+      AND asset.stage = 'delivered' AND asset.status = 'completed' AND asset.attachment_id IS NOT NULL
+  )
+`, variantID, revision, targetSize, expectedSizes, workspaceID.Valid, workspaceID).Scan(
+		&state.VariantExists,
+		&state.TargetGenerated,
+		&state.GeneratedCount,
+		&state.PrimedCount,
+		&state.DeliveredCount,
+	); err != nil {
+		return creativeDirectEditArtifactState{}, err
+	}
+	return state, nil
+}
+
+func creativeDirectEditArtifactError(taskContext creativeDirectEditTaskCompletionContext, state creativeDirectEditArtifactState) string {
+	if !state.VariantExists {
+		return "direct image edit task completed with invalid artifact coordinates"
+	}
+	if !state.TargetGenerated {
+		return "direct image edit did not register a completed target generated asset"
+	}
+	if taskContext.DeliveryMode != "publish" {
+		return ""
+	}
+	expectedCount := len(taskContext.ExpectedSizes)
+	if state.GeneratedCount < expectedCount {
+		return fmt.Sprintf("direct image edit registered %d/%d completed generated assets", state.GeneratedCount, expectedCount)
+	}
+	if state.PrimedCount < expectedCount {
+		return fmt.Sprintf("direct image edit registered %d/%d completed primed assets", state.PrimedCount, expectedCount)
+	}
+	if state.DeliveredCount < expectedCount {
+		return fmt.Sprintf("direct image edit registered %d/%d completed delivered assets", state.DeliveredCount, expectedCount)
+	}
+	return ""
+}
+
+func (h *Handler) creativeDirectEditCompletionError(ctx context.Context, task db.AgentTaskQueue, workspaceID string) (string, error) {
+	if task.Status == "completed" || task.Status == "failed" || task.Status == "cancelled" {
+		return "", nil
+	}
+	taskContext, ok, parseErr := parseCreativeDirectEditTaskCompletionContext(task.Context)
+	if !ok {
+		return "", nil
+	}
+	if parseErr != nil {
+		return "direct image edit task completed with invalid task context", nil
+	}
+	variantID, _ := parseUUIDString(taskContext.VariantID)
+	workspaceUUID, workspaceErr := parseUUIDString(workspaceID)
+	if workspaceErr != nil {
+		return "", workspaceErr
+	}
+	state, err := h.loadCreativeDirectEditArtifactState(ctx, variantID, taskContext.Revision, taskContext.TargetSize, taskContext.ExpectedSizes, workspaceUUID)
+	if err != nil {
+		return "", err
+	}
+	return creativeDirectEditArtifactError(taskContext, state), nil
+}
+
+func (h *Handler) settleCreativeDirectEditTask(ctx context.Context, task db.AgentTaskQueue) error {
+	taskContext, ok, parseErr := parseCreativeDirectEditTaskCompletionContext(task.Context)
+	if !ok || parseErr != nil {
 		return nil
 	}
-	variantID, err := uuid.Parse(strings.TrimSpace(taskContext.VariantID))
-	if err != nil || taskContext.Revision < 1 || !validCreativeAssetSize(strings.TrimSpace(taskContext.TargetSize)) {
+	variantID, err := uuid.Parse(taskContext.VariantID)
+	if err != nil {
 		return nil
 	}
 	if h.TxStarter == nil {
@@ -4775,22 +4913,18 @@ FOR UPDATE
 		return tx.Commit(ctx)
 	}
 
-	var generated bool
-	if err := tx.QueryRow(ctx, `
-SELECT EXISTS(
-  SELECT 1
-  FROM creative_order_asset
-  WHERE variant_id = $1 AND revision = $2 AND size_key = $3
-    AND stage = 'generated' AND status = 'completed' AND attachment_id IS NOT NULL
-)
-`, variantUUID, taskContext.Revision, taskContext.TargetSize).Scan(&generated); err != nil {
+	state, err := h.loadCreativeDirectEditArtifactState(ctx, variantUUID, taskContext.Revision, taskContext.TargetSize, taskContext.ExpectedSizes, pgtype.UUID{})
+	if err != nil {
 		return fmt.Errorf("check direct image edit output: %w", err)
 	}
-	if generated {
+	if creativeDirectEditArtifactError(taskContext, state) == "" {
 		return tx.Commit(ctx)
 	}
 
-	detail := "direct image edit did not register a completed target base"
+	detail := creativeDirectEditArtifactError(taskContext, state)
+	if detail == "" {
+		detail = "direct image edit did not register a completed target base"
+	}
 	if task.Error.Valid && strings.TrimSpace(task.Error.String) != "" {
 		detail = strings.TrimSpace(task.Error.String)
 	} else if task.FailureReason.Valid && strings.TrimSpace(task.FailureReason.String) != "" {

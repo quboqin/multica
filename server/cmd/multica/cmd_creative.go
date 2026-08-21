@@ -366,12 +366,16 @@ func runCreativeMaterialDownload(cmd *cobra.Command, args []string) error {
 	if selected == nil {
 		return fmt.Errorf("creative material candidate %s was not found on issue %s", args[1], args[0])
 	}
-	if selected.ArchiveStatus != "completed" || strings.TrimSpace(selected.ArchivedURL) == "" {
+	downloadURL, source := creativeLibraryDownloadSource(*selected)
+	if downloadURL == "" {
+		return fmt.Errorf("creative material candidate %s has no readable asset URL", args[1])
+	}
+	if source != "attachment" && (selected.ArchiveStatus != "completed" || strings.TrimSpace(selected.ArchivedURL) == "") {
 		return fmt.Errorf("creative material candidate %s is not available in platform archive storage", args[1])
 	}
-	data, err := client.DownloadFile(ctx, selected.ArchivedURL)
+	data, err := client.DownloadFile(ctx, downloadURL)
 	if err != nil {
-		return fmt.Errorf("download archived creative material: %w", err)
+		return fmt.Errorf("download creative material from %s: %w", source, err)
 	}
 	directory := filepath.Dir(outputFile)
 	if directory != "." {
@@ -388,7 +392,7 @@ func runCreativeMaterialDownload(cmd *cobra.Command, args []string) error {
 	}
 	result := map[string]any{
 		"issue_id": args[0], "candidate_id": selected.ID, "archive_status": selected.ArchiveStatus,
-		"path": abs, "bytes": len(data),
+		"path": abs, "bytes": len(data), "source": source,
 	}
 	output, _ := cmd.Flags().GetString("output")
 	if output == "table" {
