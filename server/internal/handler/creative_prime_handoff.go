@@ -8,10 +8,14 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/jackc/pgx/v5/pgtype"
+
+	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
 type creativePrimeComposeRequest struct {
 	VariantID string `json:"variant_id"`
+	Async     bool   `json:"async,omitempty"`
 }
 
 // ComposeCreativeOrderPrime is the explicit handoff from the bound Prime
@@ -38,17 +42,24 @@ func (h *Handler) ComposeCreativeOrderPrime(w http.ResponseWriter, r *http.Reque
 	if !ok {
 		return
 	}
-	composeContext, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 10*time.Minute)
-	defer cancel()
-	composed, err := h.composeCreativeOrderVariantPrime(composeContext, workspaceID, orderID, variantID, userID)
+	if input.Async {
+		requestContext := context.WithoutCancel(r.Context())
+		go h.runCreativeOrderPrimeComposition(requestContext, workspaceID, orderID, variantID, userID)
+		writeJSON(w, http.StatusAccepted, map[string]any{
+			"variant_id": uuidToString(variantID),
+			"composed":   false,
+			"completed":  false,
+			"status":     "composition_started",
+		})
+		return
+	}
+	composed, err := h.runCreativeOrderPrimeComposition(context.WithoutCancel(r.Context()), workspaceID, orderID, variantID, userID)
 	if err != nil {
 		var handoffErr *creativeQCHandoffError
 		if errors.As(err, &handoffErr) {
-			h.markCreativeQCHandoffFailed(context.WithoutCancel(r.Context()), variantID, handoffErr)
 			writeError(w, http.StatusBadGateway, err.Error())
 			return
 		}
-		h.markCreativePrimeCompositionFailed(context.WithoutCancel(r.Context()), variantID, err)
 		writeError(w, http.StatusUnprocessableEntity, err.Error())
 		return
 	}
@@ -66,4 +77,21 @@ func (h *Handler) ComposeCreativeOrderPrime(w http.ResponseWriter, r *http.Reque
 		"composed":   composed,
 		"completed":  true,
 	})
+}
+
+func (h *Handler) runCreativeOrderPrimeComposition(ctx context.Context, workspaceID, orderID, variantID, userID pgtype.UUID) (bool, error) {
+	composeContext, cancel := context.WithTimeout(ctx, 10*time.Minute)
+	defer cancel()
+	defer h.publish(protocol.EventCreativeMaterialsUpdated, uuidToString(workspaceID), "member", uuidToString(userID), map[string]any{"scope": "order", "order_id": uuidToString(orderID)})
+	composed, err := h.composeCreativeOrderVariantPrime(composeContext, workspaceID, orderID, variantID, userID)
+	if err != nil {
+		var handoffErr *creativeQCHandoffError
+		if errors.As(err, &handoffErr) {
+			h.markCreativeQCHandoffFailed(composeContext, variantID, handoffErr)
+			return false, err
+		}
+		h.markCreativePrimeCompositionFailed(composeContext, variantID, err)
+		return false, err
+	}
+	return composed, nil
 }

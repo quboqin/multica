@@ -3079,10 +3079,10 @@ export class ApiClient {
     });
   }
 
-  async composeCreativeOrderPrime(orderId: string, variantId: string): Promise<CreativeOrderPrimeComposeResponse> {
+  async composeCreativeOrderPrime(orderId: string, variantId: string, options?: { async?: boolean }): Promise<CreativeOrderPrimeComposeResponse> {
     const raw = await this.fetch<unknown>(`/api/creative/orders/${encodeURIComponent(orderId)}/prime-compose`, {
       method: "POST",
-      body: JSON.stringify({ variant_id: variantId }),
+      body: JSON.stringify({ variant_id: variantId, ...(options?.async ? { async: true } : {}) }),
     });
     return parseWithFallback(raw, CreativeOrderPrimeComposeResponseSchema, {
       variant_id: "", composed: false, completed: false,
