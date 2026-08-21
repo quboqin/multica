@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -129,8 +130,8 @@ func TestCreativeFactoryImageEditingUsesOneAgentWithWorkflowSkills(t *testing.T)
 			break
 		}
 	}
-	if directEditSkill.Version != 12 {
-		t.Fatalf("direct-edit Skill version = %d, want 12", directEditSkill.Version)
+	if directEditSkill.Version != 13 {
+		t.Fatalf("direct-edit Skill version = %d, want 13", directEditSkill.Version)
 	}
 	for index := range creativeFactoryAgentSpecs {
 		spec := &creativeFactoryAgentSpecs[index]
@@ -173,4 +174,147 @@ func TestCreativeFactoryImageEditingUsesOneAgentWithWorkflowSkills(t *testing.T)
 			t.Errorf("merged image-edit Agent instructions missing %q", required)
 		}
 	}
+}
+
+func TestInitializeCreativeFactoryRefreshesReadyManagedAssets(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("handler test fixture unavailable")
+	}
+	cleanupCreativeFactoryManagedAssetsForTest(t)
+	t.Cleanup(func() { cleanupCreativeFactoryManagedAssetsForTest(t) })
+
+	ctx := t.Context()
+	var directSkillID string
+	oldConfig := `{"kind":"creative_role","capability":"direct_image_edit","version":12,"template_version":5,"origin":"creative_factory"}`
+	if err := testPool.QueryRow(ctx, `
+INSERT INTO skill (workspace_id, name, description, content, config, created_by)
+VALUES ($1, '素材_技能_改图', 'old direct edit skill', 'stale skill body', $2::jsonb, $3)
+RETURNING id::text
+`, testWorkspaceID, oldConfig, testUserID).Scan(&directSkillID); err != nil {
+		t.Fatalf("seed direct-edit skill: %v", err)
+	}
+
+	var imageAgentID string
+	if err := testPool.QueryRow(ctx, `
+INSERT INTO agent (
+  workspace_id, name, description, runtime_mode, runtime_config,
+  runtime_id, visibility, max_concurrent_tasks, owner_id,
+  instructions, custom_env, custom_args, model, thinking_level
+) VALUES (
+  $1, '素材_出图', 'old image agent', 'cloud', '{}'::jsonb,
+  $2, 'workspace', 1, $3,
+  'stale image instructions', '{}'::jsonb, '[]'::jsonb, 'old-model', 'low'
+)
+RETURNING id::text
+`, testWorkspaceID, testRuntimeID, testUserID).Scan(&imageAgentID); err != nil {
+		t.Fatalf("seed image-edit agent: %v", err)
+	}
+
+	roleAgents, _ := json.Marshal(map[string]string{
+		"image_edit":        imageAgentID,
+		"direct_image_edit": imageAgentID,
+	})
+	roleSkills, _ := json.Marshal(map[string]string{
+		"direct_image_edit": directSkillID,
+	})
+	if _, err := testPool.Exec(ctx, `
+INSERT INTO creative_factory_installation (
+  workspace_id, status, schema_version, template_version, runtime_id,
+  role_agents, role_skills, config, initialized_by, initialized_at
+) VALUES ($1, 'ready', 1, 5, $2, $3::jsonb, $4::jsonb, '{"template_version":5}'::jsonb, $5, now())
+`, testWorkspaceID, testRuntimeID, string(roleAgents), string(roleSkills), testUserID); err != nil {
+		t.Fatalf("seed ready factory installation: %v", err)
+	}
+
+	if _, err := testHandler.initializeCreativeFactory(ctx, parseUUID(testWorkspaceID), parseUUID(testUserID)); err != nil {
+		t.Fatalf("initializeCreativeFactory refresh: %v", err)
+	}
+
+	var content, configRaw string
+	if err := testPool.QueryRow(ctx, `
+SELECT content, config::text
+FROM skill
+WHERE id = $1::uuid
+`, directSkillID).Scan(&content, &configRaw); err != nil {
+		t.Fatalf("query refreshed direct-edit skill: %v", err)
+	}
+	if !strings.Contains(content, "用户在最终交付图上的标注 brief") {
+		t.Fatalf("direct-edit skill was not refreshed with final-image annotation contract")
+	}
+	var config map[string]any
+	if err := json.Unmarshal([]byte(configRaw), &config); err != nil {
+		t.Fatalf("decode refreshed skill config: %v", err)
+	}
+	if got := int(config["version"].(float64)); got != 13 {
+		t.Fatalf("direct-edit Skill version = %d, want 13", got)
+	}
+	if got := int(config["template_version"].(float64)); got != creativeFactoryTemplateVersion {
+		t.Fatalf("direct-edit template_version = %d, want %d", got, creativeFactoryTemplateVersion)
+	}
+
+	var instructions string
+	if err := testPool.QueryRow(ctx, `
+SELECT instructions
+FROM agent
+WHERE id = $1::uuid
+`, imageAgentID).Scan(&instructions); err != nil {
+		t.Fatalf("query refreshed image-edit agent: %v", err)
+	}
+	for _, required := range []string{"Input 2 只用于读取红框编号", "人物替换必须是肉眼可见的 replacement", "creative_direct_edit"} {
+		if !strings.Contains(instructions, required) {
+			t.Fatalf("image-edit Agent instructions missing refreshed contract %q", required)
+		}
+	}
+
+	var directSkillBound bool
+	if err := testPool.QueryRow(ctx, `
+SELECT EXISTS (
+  SELECT 1 FROM agent_skill
+  WHERE agent_id = $1::uuid AND skill_id = $2::uuid
+)
+`, imageAgentID, directSkillID).Scan(&directSkillBound); err != nil {
+		t.Fatalf("query refreshed agent skills: %v", err)
+	}
+	if !directSkillBound {
+		t.Fatal("image-edit Agent was not rebound to the direct-edit Skill")
+	}
+
+	var templateVersion int
+	var storedRoleAgentsRaw, storedRoleSkillsRaw string
+	if err := testPool.QueryRow(ctx, `
+SELECT template_version, role_agents::text, role_skills::text
+FROM creative_factory_installation
+WHERE workspace_id = $1::uuid
+`, testWorkspaceID).Scan(&templateVersion, &storedRoleAgentsRaw, &storedRoleSkillsRaw); err != nil {
+		t.Fatalf("query refreshed installation: %v", err)
+	}
+	if templateVersion != creativeFactoryTemplateVersion {
+		t.Fatalf("installation template_version = %d, want %d", templateVersion, creativeFactoryTemplateVersion)
+	}
+	if !strings.Contains(storedRoleAgentsRaw, "collection") || !strings.Contains(storedRoleSkillsRaw, "creative_leadership") {
+		t.Fatalf("installation role maps were not reconciled: agents=%s skills=%s", storedRoleAgentsRaw, storedRoleSkillsRaw)
+	}
+}
+
+func cleanupCreativeFactoryManagedAssetsForTest(t *testing.T) {
+	t.Helper()
+	if testPool == nil {
+		return
+	}
+	ctx := context.Background()
+	skillNames := make([]string, 0, len(creativeFactorySkillSpecs)*2)
+	for _, spec := range creativeFactorySkillSpecs {
+		skillNames = append(skillNames, spec.Name)
+		skillNames = append(skillNames, spec.Aliases...)
+	}
+	agentNames := make([]string, 0, len(creativeFactoryAgentSpecs)*2)
+	for _, spec := range creativeFactoryAgentSpecs {
+		agentNames = append(agentNames, spec.Name)
+		agentNames = append(agentNames, spec.Aliases...)
+	}
+	_, _ = testPool.Exec(ctx, `DELETE FROM creative_factory_installation WHERE workspace_id = $1::uuid`, testWorkspaceID)
+	_, _ = testPool.Exec(ctx, `DELETE FROM autopilot WHERE workspace_id = $1::uuid AND title = ANY($2::text[])`, testWorkspaceID, []string{creativeFactoryAutopilotTitle, creativeFactoryLegacyAutopilotTitle})
+	_, _ = testPool.Exec(ctx, `DELETE FROM squad WHERE workspace_id = $1::uuid AND name = ANY($2::text[])`, testWorkspaceID, []string{"素材流程小队", "AdaKami 素材小队"})
+	_, _ = testPool.Exec(ctx, `DELETE FROM agent WHERE workspace_id = $1::uuid AND name = ANY($2::text[])`, testWorkspaceID, agentNames)
+	_, _ = testPool.Exec(ctx, `DELETE FROM skill WHERE workspace_id = $1::uuid AND name = ANY($2::text[])`, testWorkspaceID, skillNames)
 }

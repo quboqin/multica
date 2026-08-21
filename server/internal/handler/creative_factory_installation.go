@@ -182,6 +182,9 @@ WHERE workspace_id = $1
 FOR UPDATE
 	`, workspaceID)); err == nil && existing.Status == "ready" {
 		qtx := h.Queries.WithTx(tx)
+		if err := h.syncCreativeFactoryManagedAssets(ctx, tx, qtx, workspaceID, userID, &existing, templates); err != nil {
+			return creativeFactoryInstallationRecord{}, err
+		}
 		collectionAgentID, agentIDErr := creativeFactoryRoleAgentID(existing, "collection")
 		if agentIDErr != nil {
 			return creativeFactoryInstallationRecord{}, agentIDErr
@@ -191,19 +194,36 @@ FOR UPDATE
 			return creativeFactoryInstallationRecord{}, autopilotErr
 		}
 		autopilotID := uuidToString(autopilot.ID)
+		if existing.Config == nil {
+			existing.Config = map[string]any{}
+		}
 		if existing.Config["autopilot_id"] != autopilotID {
 			existing.Config["autopilot_id"] = autopilotID
-			configJSON, marshalErr := json.Marshal(existing.Config)
-			if marshalErr != nil {
-				return creativeFactoryInstallationRecord{}, marshalErr
-			}
-			if _, updateErr := tx.Exec(ctx, `
+		}
+		existing.Config["template_version"] = creativeFactoryTemplateVersion
+		roleAgentsJSON, marshalErr := json.Marshal(existing.RoleAgents)
+		if marshalErr != nil {
+			return creativeFactoryInstallationRecord{}, marshalErr
+		}
+		roleSkillsJSON, marshalErr := json.Marshal(existing.RoleSkills)
+		if marshalErr != nil {
+			return creativeFactoryInstallationRecord{}, marshalErr
+		}
+		configJSON, marshalErr := json.Marshal(existing.Config)
+		if marshalErr != nil {
+			return creativeFactoryInstallationRecord{}, marshalErr
+		}
+		if _, updateErr := tx.Exec(ctx, `
 UPDATE creative_factory_installation
-SET config = $2::jsonb, updated_at = now()
+SET template_version = $2,
+    orchestration_skill_id = $3,
+    role_agents = $4::jsonb,
+    role_skills = $5::jsonb,
+    config = $6::jsonb,
+    updated_at = now()
 WHERE workspace_id = $1
-`, workspaceID, string(configJSON)); updateErr != nil {
-				return creativeFactoryInstallationRecord{}, updateErr
-			}
+`, workspaceID, creativeFactoryTemplateVersion, existing.OrchestrationSkillID, string(roleAgentsJSON), string(roleSkillsJSON), string(configJSON)); updateErr != nil {
+			return creativeFactoryInstallationRecord{}, updateErr
 		}
 		if commitErr := tx.Commit(ctx); commitErr != nil {
 			return creativeFactoryInstallationRecord{}, commitErr
@@ -431,6 +451,212 @@ func creativeFactoryRoleAgentID(installation creativeFactoryInstallationRecord, 
 	return agentID, nil
 }
 
+func (h *Handler) syncCreativeFactoryManagedAssets(ctx context.Context, tx pgx.Tx, qtx *db.Queries, workspaceID, userID pgtype.UUID, installation *creativeFactoryInstallationRecord, templates map[string]creativeFactoryTemplate) error {
+	if installation.RoleSkills == nil {
+		installation.RoleSkills = map[string]string{}
+	}
+	if installation.RoleAgents == nil {
+		installation.RoleAgents = map[string]string{}
+	}
+	roleSkills := make(map[string]string, len(creativeFactorySkillSpecs))
+	skillIDs := make(map[string]pgtype.UUID, len(creativeFactorySkillSpecs))
+	for _, spec := range creativeFactorySkillSpecs {
+		template, ok := templates[spec.Directory]
+		if !ok {
+			return fmt.Errorf("creative factory skill template %q is unavailable", spec.Directory)
+		}
+		skill, found, err := creativeFactoryRoleSkill(ctx, qtx, workspaceID, installation.RoleSkills[spec.Role])
+		if err != nil {
+			return err
+		}
+		if !found {
+			skill, err = creativeFactorySkill(ctx, tx, qtx, workspaceID, userID, spec, template)
+			if err != nil {
+				return err
+			}
+		}
+		skill, err = syncCreativeFactorySkillTemplate(ctx, tx, qtx, workspaceID, skill, spec, template)
+		if err != nil {
+			return err
+		}
+		roleSkills[spec.Role] = uuidToString(skill.ID)
+		skillIDs[spec.Role] = skill.ID
+	}
+
+	runtimeID, runtimeMode, err := creativeFactoryRuntime(ctx, tx, workspaceID)
+	if err != nil {
+		return err
+	}
+	roleAgents := make(map[string]string, len(creativeFactoryAgentSpecs)+1)
+	agentIDs := make(map[string]pgtype.UUID, len(creativeFactoryAgentSpecs)+1)
+	for _, baseSpec := range creativeFactoryAgentSpecs {
+		spec := baseSpec
+		if spec.Role == "collection" {
+			analysisAgentID, ok := agentIDs["reference_analysis"]
+			if !ok || !analysisAgentID.Valid {
+				return errors.New("creative factory collection agent requires the workspace reference-analysis agent")
+			}
+			spec.Instructions = fmt.Sprintf(spec.Instructions, uuidToString(analysisAgentID))
+		}
+		skillUUIDs := make([]pgtype.UUID, 0, len(spec.SkillRoles))
+		for _, skillRole := range spec.SkillRoles {
+			skillID, ok := skillIDs[skillRole]
+			if !ok {
+				return fmt.Errorf("creative factory skill role %q is unavailable", skillRole)
+			}
+			skillUUIDs = append(skillUUIDs, skillID)
+		}
+		agent, found, err := creativeFactoryRoleAgent(ctx, qtx, workspaceID, installation.RoleAgents[spec.Role])
+		if err != nil {
+			return err
+		}
+		created := false
+		if !found {
+			agent, created, err = creativeFactoryAgent(ctx, tx, qtx, workspaceID, userID, runtimeID, runtimeMode, spec)
+			if err != nil {
+				return err
+			}
+		}
+		agent, err = syncCreativeFactoryAgentTemplate(ctx, tx, qtx, workspaceID, agent, spec)
+		if err != nil {
+			return err
+		}
+		for _, skillID := range skillUUIDs {
+			if err := qtx.AddAgentSkill(ctx, db.AddAgentSkillParams{AgentID: agent.ID, SkillID: skillID}); err != nil {
+				return err
+			}
+		}
+		if created && installation.SquadID.Valid {
+			if err := ensureCreativeFactorySquadMember(ctx, tx, workspaceID, installation.SquadID, agent.ID, creativeFactorySquadRole(spec.Role)); err != nil {
+				return err
+			}
+		}
+		roleAgents[spec.Role] = uuidToString(agent.ID)
+		agentIDs[spec.Role] = agent.ID
+	}
+	if imageEditAgentID, ok := agentIDs["image_edit"]; ok {
+		roleAgents["direct_image_edit"] = uuidToString(imageEditAgentID)
+		agentIDs["direct_image_edit"] = imageEditAgentID
+	}
+	if installation.SquadID.Valid {
+		for _, spec := range creativeFactoryAgentSpecs {
+			agentID, ok := agentIDs[spec.Role]
+			if !ok || !agentID.Valid {
+				continue
+			}
+			if err := ensureCreativeFactorySquadMember(ctx, tx, workspaceID, installation.SquadID, agentID, creativeFactorySquadRole(spec.Role)); err != nil {
+				return err
+			}
+		}
+		if leaderID, ok := agentIDs["leadership"]; ok && leaderID.Valid {
+			if _, err := tx.Exec(ctx, `
+UPDATE squad
+SET leader_id = $2, updated_at = now()
+WHERE id = $1 AND workspace_id = $3 AND archived_at IS NULL
+`, installation.SquadID, leaderID, workspaceID); err != nil {
+				return err
+			}
+		}
+	}
+	installation.RoleSkills = roleSkills
+	installation.RoleAgents = roleAgents
+	installation.OrchestrationSkillID = skillIDs["creative_leadership"]
+	return nil
+}
+
+func creativeFactoryRoleSkill(ctx context.Context, qtx *db.Queries, workspaceID pgtype.UUID, rawID string) (db.Skill, bool, error) {
+	rawID = strings.TrimSpace(rawID)
+	if rawID == "" {
+		return db.Skill{}, false, nil
+	}
+	skillID, err := parseUUIDString(rawID)
+	if err != nil {
+		return db.Skill{}, false, nil
+	}
+	skill, err := qtx.GetSkillInWorkspace(ctx, db.GetSkillInWorkspaceParams{ID: skillID, WorkspaceID: workspaceID})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return db.Skill{}, false, nil
+	}
+	return skill, err == nil, err
+}
+
+func creativeFactoryRoleAgent(ctx context.Context, qtx *db.Queries, workspaceID pgtype.UUID, rawID string) (db.Agent, bool, error) {
+	rawID = strings.TrimSpace(rawID)
+	if rawID == "" {
+		return db.Agent{}, false, nil
+	}
+	agentID, err := parseUUIDString(rawID)
+	if err != nil {
+		return db.Agent{}, false, nil
+	}
+	agent, err := qtx.GetAgentInWorkspace(ctx, db.GetAgentInWorkspaceParams{ID: agentID, WorkspaceID: workspaceID})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return db.Agent{}, false, nil
+	}
+	return agent, err == nil, err
+}
+
+func syncCreativeFactorySkillTemplate(ctx context.Context, tx pgx.Tx, qtx *db.Queries, workspaceID pgtype.UUID, skill db.Skill, spec creativeFactorySkillSpec, template creativeFactoryTemplate) (db.Skill, error) {
+	config, err := json.Marshal(creativeFactorySkillConfig(spec))
+	if err != nil {
+		return db.Skill{}, err
+	}
+	if _, err := tx.Exec(ctx, `
+UPDATE skill
+SET description = $3,
+    content = $4,
+    config = $5::jsonb,
+    updated_at = now()
+WHERE id = $1 AND workspace_id = $2
+`, skill.ID, workspaceID, spec.Description, template.Content, string(config)); err != nil {
+		return db.Skill{}, err
+	}
+	if err := qtx.DeleteSkillFilesBySkill(ctx, skill.ID); err != nil {
+		return db.Skill{}, err
+	}
+	for _, file := range template.Files {
+		if _, err := qtx.UpsertSkillFile(ctx, db.UpsertSkillFileParams{SkillID: skill.ID, Path: file.Path, Content: file.Content}); err != nil {
+			return db.Skill{}, err
+		}
+	}
+	return qtx.GetSkillInWorkspace(ctx, db.GetSkillInWorkspaceParams{ID: skill.ID, WorkspaceID: workspaceID})
+}
+
+func syncCreativeFactoryAgentTemplate(ctx context.Context, tx pgx.Tx, qtx *db.Queries, workspaceID pgtype.UUID, agent db.Agent, spec creativeFactoryAgentSpec) (db.Agent, error) {
+	var model any
+	if strings.TrimSpace(spec.Model) != "" {
+		model = spec.Model
+	}
+	var thinkingLevel any
+	if strings.TrimSpace(spec.ThinkingLevel) != "" {
+		thinkingLevel = spec.ThinkingLevel
+	}
+	if _, err := tx.Exec(ctx, `
+UPDATE agent
+SET description = $3,
+    instructions = $4,
+    max_concurrent_tasks = $5,
+    model = $6,
+    thinking_level = $7,
+    updated_at = now()
+WHERE id = $1 AND workspace_id = $2 AND archived_at IS NULL
+`, agent.ID, workspaceID, spec.Description, spec.Instructions, spec.MaxConcurrent, model, thinkingLevel); err != nil {
+		return db.Agent{}, err
+	}
+	return qtx.GetAgentInWorkspace(ctx, db.GetAgentInWorkspaceParams{ID: agent.ID, WorkspaceID: workspaceID})
+}
+
+func ensureCreativeFactorySquadMember(ctx context.Context, tx pgx.Tx, workspaceID, squadID, agentID pgtype.UUID, role string) error {
+	_, err := tx.Exec(ctx, `
+INSERT INTO squad_member (squad_id, member_type, member_id, role)
+SELECT $1, 'agent', $2, $3
+FROM squad
+WHERE id = $1 AND workspace_id = $4 AND archived_at IS NULL
+ON CONFLICT (squad_id, member_type, member_id) DO UPDATE SET role = EXCLUDED.role
+`, squadID, agentID, role, workspaceID)
+	return err
+}
+
 func creativeFactoryAutopilotNeedsMigration(autopilot db.Autopilot, legacySquadID pgtype.UUID) bool {
 	return autopilot.AssigneeType == "squad" &&
 		legacySquadID.Valid && autopilot.AssigneeID == legacySquadID &&
@@ -540,6 +766,16 @@ LIMIT 1
 	return runtimeID, runtimeMode, err
 }
 
+func creativeFactorySkillConfig(spec creativeFactorySkillSpec) map[string]any {
+	return map[string]any{
+		"kind":             "creative_role",
+		"capability":       spec.Capability,
+		"version":          spec.Version,
+		"template_version": creativeFactoryTemplateVersion,
+		"origin":           "creative_factory",
+	}
+}
+
 func creativeFactorySkill(ctx context.Context, tx pgx.Tx, qtx *db.Queries, workspaceID, userID pgtype.UUID, spec creativeFactorySkillSpec, template creativeFactoryTemplate) (db.Skill, error) {
 	names := append([]string{spec.Name}, spec.Aliases...)
 	var skillID pgtype.UUID
@@ -555,20 +791,13 @@ LIMIT 1
 	if !errors.Is(err, pgx.ErrNoRows) {
 		return db.Skill{}, err
 	}
-	config := map[string]any{
-		"kind":             "creative_role",
-		"capability":       spec.Capability,
-		"version":          spec.Version,
-		"template_version": creativeFactoryTemplateVersion,
-		"origin":           "creative_factory",
-	}
 	created, err := createSkillWithFilesInTx(ctx, qtx, skillCreateInput{
 		WorkspaceID: workspaceID,
 		CreatorID:   userID,
 		Name:        spec.Name,
 		Description: spec.Description,
 		Content:     template.Content,
-		Config:      config,
+		Config:      creativeFactorySkillConfig(spec),
 		Files:       template.Files,
 	})
 	if err != nil {
