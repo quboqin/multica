@@ -3,6 +3,8 @@ package handler
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -10,7 +12,9 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -24,6 +28,9 @@ import (
 )
 
 const maxCreativePrimeInputBytes = 64 << 20
+
+const defaultCreativePrimeTemplateCacheDir = "/app/data/uploads/creative-prime-cache"
+const defaultCreativePrimeComposeConcurrency = 2
 
 var creativeProductionProcessLabels = []string{
 	"Prime context",
@@ -63,6 +70,11 @@ type creativePrimeComposeResult struct {
 	QR                json.RawMessage `json:"qr"`
 }
 
+type creativePrimeVariantLock struct {
+	mu   sync.Mutex
+	refs int
+}
+
 type creativeQCHandoffError struct {
 	cause error
 }
@@ -73,6 +85,65 @@ func (err *creativeQCHandoffError) Error() string {
 
 func (err *creativeQCHandoffError) Unwrap() error {
 	return err.cause
+}
+
+func (h *Handler) lockCreativePrimeVariant(variantID pgtype.UUID) func() {
+	key := uuidToString(variantID)
+	h.creativePrimeLocksMu.Lock()
+	if h.creativePrimeLocks == nil {
+		h.creativePrimeLocks = make(map[string]*creativePrimeVariantLock)
+	}
+	lock := h.creativePrimeLocks[key]
+	if lock == nil {
+		lock = &creativePrimeVariantLock{}
+		h.creativePrimeLocks[key] = lock
+	}
+	lock.refs++
+	h.creativePrimeLocksMu.Unlock()
+
+	lock.mu.Lock()
+	return func() {
+		lock.mu.Unlock()
+		h.creativePrimeLocksMu.Lock()
+		lock.refs--
+		if lock.refs == 0 {
+			delete(h.creativePrimeLocks, key)
+		}
+		h.creativePrimeLocksMu.Unlock()
+	}
+}
+
+func (h *Handler) acquireCreativePrimeComposeSlot(ctx context.Context) (func(), error) {
+	limit := configuredCreativePrimeComposeConcurrency()
+	h.creativePrimeSlotsMu.Lock()
+	if h.creativePrimeSlots == nil || h.creativePrimeSlotCap != limit {
+		h.creativePrimeSlots = make(chan struct{}, limit)
+		h.creativePrimeSlotCap = limit
+	}
+	slots := h.creativePrimeSlots
+	h.creativePrimeSlotsMu.Unlock()
+
+	select {
+	case slots <- struct{}{}:
+		return func() { <-slots }, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+func configuredCreativePrimeComposeConcurrency() int {
+	raw := strings.TrimSpace(os.Getenv("MULTICA_CREATIVE_PRIME_MAX_CONCURRENT"))
+	if raw == "" {
+		return defaultCreativePrimeComposeConcurrency
+	}
+	value, err := strconv.Atoi(raw)
+	if err != nil || value < 1 {
+		return defaultCreativePrimeComposeConcurrency
+	}
+	if value > 8 {
+		return 8
+	}
+	return value
 }
 
 // composeCreativeOrderVariantPrime owns the fixed full-template composition
@@ -86,8 +157,8 @@ func (h *Handler) composeCreativeOrderVariantPrime(
 	if h.Storage == nil {
 		return false, errors.New("brand component storage is unavailable")
 	}
-	h.creativePrimeMu.Lock()
-	defer h.creativePrimeMu.Unlock()
+	unlockPrime := h.lockCreativePrimeVariant(variantID)
+	defer unlockPrime()
 
 	var variantKey, triggerKind, inputSnapshot, brief string
 	var revision int
@@ -176,6 +247,12 @@ WHERE id = $1
 		return false, err
 	}
 
+	releasePrimeSlot, err := h.acquireCreativePrimeComposeSlot(ctx)
+	if err != nil {
+		return false, fmt.Errorf("wait for brand component compose slot: %w", err)
+	}
+	defer releasePrimeSlot()
+
 	workDir, err := os.MkdirTemp("", "multica-creative-prime-")
 	if err != nil {
 		return false, fmt.Errorf("create brand component work directory: %w", err)
@@ -198,7 +275,7 @@ WHERE id = $1
 			if parseErr != nil {
 				return false, fmt.Errorf("frozen template %s has an invalid attachment", template.SourceRole)
 			}
-			data, downloadErr := h.readCreativePrimeAttachment(ctx, workspaceID, attachmentID)
+			data, downloadErr := h.readCreativePrimeTemplateAttachment(ctx, workspaceID, attachmentID)
 			if downloadErr != nil {
 				return false, fmt.Errorf("load frozen template %s: %w", template.SourceRole, downloadErr)
 			}
@@ -584,12 +661,44 @@ func (h *Handler) creativePrimeProcessEvidenceMissing(ctx context.Context, varia
 	return append(productionMissing, compositionMissing...), nil
 }
 
-func (h *Handler) readCreativePrimeAttachment(ctx context.Context, workspaceID, attachmentID pgtype.UUID) ([]byte, error) {
+func (h *Handler) loadCreativePrimeAttachment(ctx context.Context, workspaceID, attachmentID pgtype.UUID) (db.Attachment, string, error) {
 	attachment, err := h.Queries.GetAttachmentByIDOnly(ctx, attachmentID)
 	if err != nil || attachment.WorkspaceID != workspaceID {
-		return nil, errors.New("attachment is unavailable")
+		return db.Attachment{}, "", errors.New("attachment is unavailable")
 	}
-	reader, err := h.Storage.GetReader(ctx, h.Storage.KeyFromURL(attachment.Url))
+	key := h.Storage.KeyFromURL(attachment.Url)
+	if key == "" {
+		return db.Attachment{}, "", errors.New("attachment storage key is unavailable")
+	}
+	return attachment, key, nil
+}
+
+func (h *Handler) readCreativePrimeAttachment(ctx context.Context, workspaceID, attachmentID pgtype.UUID) ([]byte, error) {
+	_, key, err := h.loadCreativePrimeAttachment(ctx, workspaceID, attachmentID)
+	if err != nil {
+		return nil, err
+	}
+	return h.readCreativePrimeStorageObject(ctx, key)
+}
+
+func (h *Handler) readCreativePrimeTemplateAttachment(ctx context.Context, workspaceID, attachmentID pgtype.UUID) ([]byte, error) {
+	attachment, key, err := h.loadCreativePrimeAttachment(ctx, workspaceID, attachmentID)
+	if err != nil {
+		return nil, err
+	}
+	if data, ok := readCreativePrimeTemplateCache(attachment); ok {
+		return data, nil
+	}
+	data, err := h.readCreativePrimeStorageObject(ctx, key)
+	if err != nil {
+		return nil, err
+	}
+	writeCreativePrimeTemplateCache(attachment, data)
+	return data, nil
+}
+
+func (h *Handler) readCreativePrimeStorageObject(ctx context.Context, key string) ([]byte, error) {
+	reader, err := h.Storage.GetReader(ctx, key)
 	if err != nil {
 		return nil, err
 	}
@@ -602,6 +711,93 @@ func (h *Handler) readCreativePrimeAttachment(ctx context.Context, workspaceID, 
 		return nil, errors.New("attachment exceeds the brand component input limit")
 	}
 	return data, nil
+}
+
+func readCreativePrimeTemplateCache(attachment db.Attachment) ([]byte, bool) {
+	path, ok := creativePrimeTemplateCachePath(attachment)
+	if !ok {
+		return nil, false
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return nil, false
+	}
+	if attachment.SizeBytes > 0 && info.Size() != attachment.SizeBytes {
+		os.Remove(path)
+		return nil, false
+	}
+	if info.Size() > maxCreativePrimeInputBytes {
+		os.Remove(path)
+		return nil, false
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, false
+	}
+	if attachment.SizeBytes > 0 && int64(len(data)) != attachment.SizeBytes {
+		os.Remove(path)
+		return nil, false
+	}
+	if len(data) > maxCreativePrimeInputBytes {
+		os.Remove(path)
+		return nil, false
+	}
+	return data, true
+}
+
+func writeCreativePrimeTemplateCache(attachment db.Attachment, data []byte) {
+	if len(data) == 0 || len(data) > maxCreativePrimeInputBytes {
+		return
+	}
+	if attachment.SizeBytes > 0 && int64(len(data)) != attachment.SizeBytes {
+		return
+	}
+	path, ok := creativePrimeTemplateCachePath(attachment)
+	if !ok {
+		return
+	}
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return
+	}
+	file, err := os.CreateTemp(dir, ".prime-template-*.tmp")
+	if err != nil {
+		return
+	}
+	tmpPath := file.Name()
+	_, writeErr := file.Write(data)
+	closeErr := file.Close()
+	if writeErr != nil || closeErr != nil {
+		os.Remove(tmpPath)
+		return
+	}
+	if err := os.Chmod(tmpPath, 0o600); err != nil {
+		os.Remove(tmpPath)
+		return
+	}
+	if err := os.Rename(tmpPath, path); err != nil {
+		os.Remove(tmpPath)
+	}
+}
+
+func creativePrimeTemplateCachePath(attachment db.Attachment) (string, bool) {
+	attachmentID := uuidToString(attachment.ID)
+	if attachmentID == "" {
+		return "", false
+	}
+	sum := sha256.Sum256([]byte(attachmentID + "\x00" + attachment.Url))
+	name := attachmentID + "-" + hex.EncodeToString(sum[:8]) + ".bin"
+	return filepath.Join(creativePrimeTemplateCacheDir(), name), true
+}
+
+func creativePrimeTemplateCacheDir() string {
+	if dir := strings.TrimSpace(os.Getenv("MULTICA_CREATIVE_PRIME_CACHE_DIR")); dir != "" {
+		return dir
+	}
+	if uploadDir := strings.TrimSpace(os.Getenv("LOCAL_UPLOAD_DIR")); uploadDir != "" {
+		return filepath.Join(uploadDir, "creative-prime-cache")
+	}
+	return defaultCreativePrimeTemplateCacheDir
 }
 
 func (h *Handler) storeCreativePrimeAttachment(

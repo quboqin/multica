@@ -151,8 +151,12 @@ type Handler struct {
 	CreativeAssetDownloader *creative.Downloader
 	// Composio is nil unless an operator enables the optional integration.
 	// Ordinary agent MCP configuration remains independent of this service.
-	Composio        *composio.Service
-	creativePrimeMu sync.Mutex
+	Composio             *composio.Service
+	creativePrimeLocksMu sync.Mutex
+	creativePrimeLocks   map[string]*creativePrimeVariantLock
+	creativePrimeSlotsMu sync.Mutex
+	creativePrimeSlots   chan struct{}
+	creativePrimeSlotCap int
 	// Lark integration. All three are nil when the Lark master key
 	// (MULTICA_LARK_SECRET_KEY) is unset; the corresponding HTTP
 	// handlers return 503 in that case so a misconfigured self-host
