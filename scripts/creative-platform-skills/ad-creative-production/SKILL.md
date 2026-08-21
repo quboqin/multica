@@ -127,13 +127,12 @@ Prime context 是当前尺寸的真实视觉输入，不是黑白遮罩或可复
 
 每次模型调用都保存实际发送的 prompt、`prompt_sha256`、`request_id`、attempts、实际画布尺寸和输入资产指纹。
 调用 `multica image edit` 或 `image edit-batch` 时使用显式长超时；传输层 408/429/5xx/网络失败最多重试两次。必须把 CLI 返回的完整 JSON 原样保存，不能手工只保留 request ID、hash 或 `generated_asset` 摘要；后续 `asset-put` 使用同一份原始 JSON。
-模型调用画布必须遵守 GPT Image 2 的 16px 边长约束，交付尺寸与模型画布分开记录：`1080x1080` 使用 `1088x1088`，`1200x628` 使用 `1200x624`，`800x1000` 使用 `800x992`。CLI 接受 canonical 交付尺寸并自动映射到上述 provider canvas；完整模型 JSON 必须同时保留请求尺寸和实际 provider canvas。模型输出必须经过规范化到 `1080x1080`、`1200x628`、`800x1000`。比例在允许范围内直接缩放；模型连续返回错误比例时，CLI 会保留最后一张完整原图，规范化脚本用一次无边框 `aspect-compress` 兜底并在 evidence 中标记，不能因没有精确比例而丢弃该尺寸。不要把 `1080x1080`、`1200x628` 或 `800x1000` 直接作为 provider 的 `--size` 值传入旧版 CLI。
+模型调用画布必须遵守 GPT Image 2 的 16px 边长约束，交付尺寸与模型画布分开记录：`1080x1080` 使用 `1088x1088`，`1200x628` 使用 `1200x624`，`800x1000` 使用 `800x992`。CLI 接受 canonical 交付尺寸并自动映射到上述 provider canvas；完整模型 JSON 必须同时保留请求尺寸和实际 provider canvas。模型输出必须经过规范化到 `1080x1080`、`1200x628`、`800x1000`。比例在允许范围内直接缩放；如果模型连续返回明显错误比例，CLI 最多重试两次重新取图；两次后仍不符合目标比例时，该尺寸直接失败并交给平台续跑，不要保留最后一张图，也不得用 `aspect-compress`、`contain-edge-extend` 或其他内容挤压/拉伸兜底把错误比例强行压成交付尺寸。不要把 `1080x1080`、`1200x628` 或 `800x1000` 直接作为 provider 的 `--size` 值传入旧版 CLI。
 
 ```text
 python <当前 Skill 目录>/references/normalize_image.py \
   --input <model.png> --output <normalized.png> --width <w> --height <h> \
-  --model-size <requested-model-size> --allow-aspect-fallback \
-  --aspect-fallback-mode compress --evidence <normalization.json>
+  --model-size <requested-model-size> --evidence <normalization.json>
 ```
 
 三尺寸底图完成后登记 generated assets，再调用绑定的贴片 Skill，由后端合成官方 Prime 并进入 QC。最终 QC 只以真实 Prime 合成图为准：实际遮挡、文字不可读、

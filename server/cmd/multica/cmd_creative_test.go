@@ -569,7 +569,7 @@ func TestExecuteImageEditBatchRunsDependentJobsTogether(t *testing.T) {
 	}
 }
 
-func TestExecuteImageEditBatchKeepsWrongProviderAspectForNormalization(t *testing.T) {
+func TestExecuteImageEditBatchFailsAfterRepeatedWrongProviderAspect(t *testing.T) {
 	t.Setenv("MULTICA_IMAGE_SLOT_DIR", t.TempDir())
 	t.Setenv("MULTICA_IMAGE_MAX_CONCURRENT", "1")
 	workDir := t.TempDir()
@@ -593,48 +593,20 @@ func TestExecuteImageEditBatchKeepsWrongProviderAspectForNormalization(t *testin
 			Model: "gpt-image-2", Size: "1200x624", MaxAttempts: 1, OutputFile: output,
 		}},
 	})
-	if summary.Succeeded != 1 || summary.Results[0].Status != "succeeded" || !summary.Results[0].AspectFallback {
+	if summary.Succeeded != 0 || summary.Failed != 1 || summary.Results[0].Status != "failed" {
 		t.Fatalf("summary = %#v", summary)
 	}
-	if _, err := os.Stat(output); err != nil {
-		t.Fatalf("wrong-aspect provider output was not written: %v", err)
-	}
-	if requests.Load() != 2 || summary.Results[0].Attempts != 2 || summary.Results[0].AspectRetries != 1 {
+	if summary.Results[0].AspectFallback || summary.Results[0].Attempts != 3 || summary.Results[0].AspectRetries != 2 {
 		t.Fatalf("aspect retry evidence = %+v, requests=%d", summary.Results[0], requests.Load())
 	}
-}
-
-func TestExecuteImageEditBatchRetriesOneWrongProviderAspect(t *testing.T) {
-	t.Setenv("MULTICA_IMAGE_SLOT_DIR", t.TempDir())
-	t.Setenv("MULTICA_IMAGE_MAX_CONCURRENT", "1")
-	workDir := t.TempDir()
-	reference := filepath.Join(workDir, "reference.png")
-	if err := os.WriteFile(reference, []byte("reference"), 0o600); err != nil {
-		t.Fatal(err)
+	if !strings.Contains(summary.Results[0].Error, "failed after 3 aspect attempt(s)") {
+		t.Fatalf("error = %q", summary.Results[0].Error)
 	}
-	var requests atomic.Int32
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		if requests.Add(1) == 1 {
-			_, _ = fmt.Fprintf(w, `{"data":[{"b64_json":"%s"}]}`, base64.StdEncoding.EncodeToString(pngImageBytes(1536, 1024)))
-			return
-		}
-		_, _ = fmt.Fprintf(w, `{"data":[{"b64_json":"%s"}]}`, base64.StdEncoding.EncodeToString(pngImageBytes(1200, 624)))
-	}))
-	defer server.Close()
-
-	output := filepath.Join(workDir, "landscape.png")
-	summary := executeImageEditBatch(context.Background(), server.Client(), server.URL, "test-key", "image", preparedImageEditBatch{
-		MaxConcurrency: 1,
-		Jobs: []preparedImageEditJob{{
-			ID: "landscape", Inputs: []imageEditBatchInput{{Path: reference}}, Prompt: "landscape",
-			Model: "gpt-image-2", Size: "1200x624", MaxAttempts: 1, OutputFile: output,
-		}},
-	})
-	if summary.Succeeded != 1 || summary.Results[0].AspectRetries != 1 || summary.Results[0].Attempts != 2 || requests.Load() != 2 {
-		t.Fatalf("summary = %#v, requests=%d", summary, requests.Load())
+	if _, err := os.Stat(output); err == nil {
+		t.Fatal("wrong-aspect provider output should not be written")
 	}
-	if _, err := os.Stat(output); err != nil {
-		t.Fatalf("retried output was not written: %v", err)
+	if requests.Load() != 3 {
+		t.Fatalf("request count = %d, want 3", requests.Load())
 	}
 }
 

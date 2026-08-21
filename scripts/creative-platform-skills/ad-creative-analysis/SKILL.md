@@ -36,9 +36,10 @@ Analysis，`error_code=asset_unreadable`，不得用标题或标签补结论。
   `monthly_installment`、`total_interest`、`total_repayment`、`interest_rate`、`daily_interest_amount` 或
   `daily_interest_label`。它表达业务含义，不得根据蓝字、字号或 `role=benefit` 猜测：例如 `Rp10.000`
   的日利息金额是 `daily_interest_amount`，`0,1%` 才是 `interest_rate`。`location` 使用人可读的相对位置，
-  例如 `左上第一张还款卡`、`中部横幅`、`底部行动区`；数字区域中的额度、期限、月供必须分别记录为
-  `plan_field`，以便预适配识别该区域的完整版式。它们不是逐格替换合同，后续可以用不同数量的我方金额、期限和
-  月供重排。`role` 只能使用 `headline`、
+  例如 `左上第一张还款卡`、`中部横幅`、`底部行动区`；只有画面明显是还款卡、分期表或成组的还款结构时，额度、
+  期限、月供才分别记录为 `plan_field`。像 `Rp100Juta` 这类单独金额或核心利益点里的数字，默认仍按 `copy`
+  处理，不要因为带数字就把整块锁成还款计划；它们后续应保持可人工改写，只有明显的还款结构才锁定为
+  `plan_field`。`role` 只能使用 `headline`、
   `subheadline`、`benefit`、`supporting`、`cta`、`legal` 或 `plan_field`。看不清时仍记录该区块，
   `source_text` 写空字符串并降低置信度，绝不可根据图外信息补写；
 - `visual_regions`：确认页的唯一核对对象。每项必须含 `id`、`location`、`kind`、`source_block_ids` 和
@@ -46,7 +47,8 @@ Analysis，`error_code=asset_unreadable`，不得用标题或标签补结论。
   数值；所有 `text_blocks.id` 必须恰好出现在一个区域，不能同时属于文案区域和数值区域。`numeric` 只用于
   实际展示本金、期限、月供、总利息或总还款的卡片、表格、对照区；利率卡、日利息条等即使含数值，只要不来自
   还款计划，也属于 `copy` 区域并由后续语义校验决定能否替换。区域 `visual_bounds` 按同一千分比坐标框住
-  整个可变组件，供用户一次核对，不得把二维码、品牌贴片或 Prime 固定组件混入；
+  整个可变组件，供用户一次核对，不得把二维码、品牌贴片或 Prime 固定组件混入；单独金额、核心利益点和其他
+  非还款数值不要因为出现数字就落进 `numeric`，只有画面明确是还款结构时才锁定为 `numeric`。
 
   一个 `numeric` 区域必须只覆盖可由还款计划重排的字段。若一个组件同时包含普通提示词/标签和本金、期限或
   月供，必须拆成相邻的 `copy` 与 `numeric` 区域，并让每个 `source_block_id` 只出现一次。禁止用宽泛的

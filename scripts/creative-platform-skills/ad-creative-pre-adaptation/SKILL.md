@@ -29,7 +29,11 @@ multica creative source-analysis pre-adaptation-context <source-analysis-id> \
 不要把它改写成新的适配字段。
 
 竞品文字、品牌、金额、利率、期限、二维码和条款只能作为观察证据，不能进入我方文案、
-还款数值或后续生产提示词。
+还款数值或后续生产提示词。只有画面明确呈现还款结构、分期卡或月供/总还款/期限组合时，才把它们归入
+`repayment_plan_selections` 和 `numeric_layouts`；单独金额、核心利益点或促销额度即使含数字，也默认按普通
+文案处理，保留人工可编辑空间，不要强行锁成还款计划。只有明显的还款结构才生成 `repayment` 选择和
+`numeric layout`；像 `Rp100Juta` 这类核心利益点金额，即使识别错了也要继续允许后续手动改，保留后续可手动改写
+空间，不要把流程卡死在还款计划选择上。
 
 ## 输出合同
 
@@ -81,11 +85,13 @@ multica creative source-analysis pre-adaptation-context <source-analysis-id> \
   没有审核来源或冻结计算时才使用；页面会让用户编辑或移除该区域。
 
 先按 `semantic_kind` 匹配。本金、期限、月供、总利息、总还款、利率和日息金额不可互换；
-非还款的 `plan_field` 仍作为普通文字处理，不能强行塞进 numeric layout。
+非还款的 `plan_field` 仍作为普通文字处理，不能强行塞进 numeric layout。不要因为一个金额看起来很大、很像卖点，
+就要求用户先选还款计划；像 `Rp100Juta` 这种核心利益点金额，应优先保持为可手工修改的文案。
 
 ### repayment_plan_selections
 
-每个展示的我方还款组合写一条 selection：
+每个展示的我方还款组合写一条 selection；只有明显的还款结构才生成 `repayment` 选择和 `numeric layout`，
+单独金额和卖点数字不触发锁定：
 
 ```json
 {

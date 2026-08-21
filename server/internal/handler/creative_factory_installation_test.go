@@ -103,8 +103,8 @@ func TestCreativeFactoryPreAdaptationTemplateUsesFirstPartyRowCapacity(t *testin
 			break
 		}
 	}
-	if skill.Version != 25 {
-		t.Fatalf("pre-adaptation Skill version = %d, want 25", skill.Version)
+	if skill.Version != 26 {
+		t.Fatalf("pre-adaptation Skill version = %d, want 26", skill.Version)
 	}
 	var agent creativeFactoryAgentSpec
 	for _, candidate := range creativeFactoryAgentSpecs {
@@ -113,7 +113,7 @@ func TestCreativeFactoryPreAdaptationTemplateUsesFirstPartyRowCapacity(t *testin
 			break
 		}
 	}
-	for _, required := range []string{"我方可用方案数的较小值", "源图多出的数值块", "不得借用其他期限金额", "render_instruction", "完整冻结展示值"} {
+	for _, required := range []string{"我方可用方案数的较小值", "源图多出的数值块", "不得借用其他期限金额", "render_instruction", "完整冻结展示值", "只有明显的还款结构才锁定"} {
 		if !strings.Contains(agent.Instructions, required) {
 			t.Fatalf("reference-analysis Agent instructions missing %q", required)
 		}
@@ -130,8 +130,8 @@ func TestCreativeFactoryImageEditingUsesOneAgentWithWorkflowSkills(t *testing.T)
 			break
 		}
 	}
-	if directEditSkill.Version != 14 {
-		t.Fatalf("direct-edit Skill version = %d, want 14", directEditSkill.Version)
+	if directEditSkill.Version != 15 {
+		t.Fatalf("direct-edit Skill version = %d, want 15", directEditSkill.Version)
 	}
 	for index := range creativeFactoryAgentSpecs {
 		spec := &creativeFactoryAgentSpecs[index]
@@ -245,8 +245,8 @@ WHERE id = $1::uuid
 	if err := json.Unmarshal([]byte(configRaw), &config); err != nil {
 		t.Fatalf("decode refreshed skill config: %v", err)
 	}
-	if got := int(config["version"].(float64)); got != 14 {
-		t.Fatalf("direct-edit Skill version = %d, want 14", got)
+	if got := int(config["version"].(float64)); got != 15 {
+		t.Fatalf("direct-edit Skill version = %d, want 15", got)
 	}
 	if got := int(config["template_version"].(float64)); got != creativeFactoryTemplateVersion {
 		t.Fatalf("direct-edit template_version = %d, want %d", got, creativeFactoryTemplateVersion)
@@ -260,7 +260,7 @@ WHERE id = $1::uuid
 `, imageAgentID).Scan(&instructions); err != nil {
 		t.Fatalf("query refreshed image-edit agent: %v", err)
 	}
-	for _, required := range []string{"Input 2 只用于读取红框编号", "scope=variant 时按 edit_sizes/expected_sizes 遍历", "人物替换必须是肉眼可见的 replacement", "creative_direct_edit"} {
+	for _, required := range []string{"Input 2 只用于读取红框编号", "scope=variant 时按 edit_sizes/expected_sizes 遍历", "人物替换必须是肉眼可见的 replacement", "Rp100Juta", "creative_direct_edit"} {
 		if !strings.Contains(instructions, required) {
 			t.Fatalf("image-edit Agent instructions missing refreshed contract %q", required)
 		}

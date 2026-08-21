@@ -109,7 +109,7 @@ type imageEditHTTPError struct {
 }
 
 const maxProviderImageAspectDeviation = 0.05
-const maxProviderImageAspectRetries = 1
+const maxProviderImageAspectRetries = 2
 
 type imageOutputDimensions struct {
 	Width       int
@@ -734,11 +734,7 @@ func requestGPTImageEditWithValidAspect(
 			return nil, lastRequestID, totalAttempts, aspectAttempt, imageOutputDimensions{}, false, totalTiming, err
 		}
 		if aspectAttempt == maxProviderImageAspectRetries {
-			fallbackDimensions, dimensionErr := decodeImageDimensions(image)
-			if dimensionErr != nil {
-				return nil, lastRequestID, totalAttempts, aspectAttempt, imageOutputDimensions{}, false, totalTiming, dimensionErr
-			}
-			return image, lastRequestID, totalAttempts, aspectAttempt, fallbackDimensions, true, totalTiming, nil
+			return nil, lastRequestID, totalAttempts, aspectAttempt, imageOutputDimensions{}, false, totalTiming, fmt.Errorf("GPT Image edit failed after %d aspect attempt(s): %w", aspectAttempt+1, err)
 		}
 	}
 	panic("unreachable image aspect retry state")

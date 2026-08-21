@@ -65,10 +65,10 @@ func TestCreativePlatformSkillsUseFrozenBusinessInputs(t *testing.T) {
 	}
 	skillRoot := filepath.Join(filepath.Clean(filepath.Join(filepath.Dir(currentFile), "..", "..", "..")), "scripts", "creative-platform-skills")
 	required := map[string][]string{
-		"ad-creative-pre-adaptation": {"source_analysis", "text_replacements", "visual_direction", "recommendation_basis", "repayment_plan_selections", "numeric_layouts", "render_instruction", "完整展示字符串", "pre-adaptation-put", "min(", "我方优先、数量取小"},
+		"ad-creative-pre-adaptation": {"source_analysis", "text_replacements", "visual_direction", "recommendation_basis", "repayment_plan_selections", "numeric_layouts", "render_instruction", "完整展示字符串", "pre-adaptation-put", "min(", "我方优先、数量取小", "只有明显的还款结构才生成 repayment 选择和 numeric layout", "Rp100Juta", "保留后续可手动改写空间"},
 		"ad-creative-plan":           {"copy_snapshot", "input_snapshot", "source_analysis"},
 		"ad-creative-production":     {"copy_snapshot", "prompt_sha256", "request_id"},
-		"ad-creative-direct-edit":    {"copy_snapshot", "prompt_sha256", "delivery_mode"},
+		"ad-creative-direct-edit":    {"copy_snapshot", "prompt_sha256", "delivery_mode", "即使先前识别错了，也要保留后续手动改写空间", "不要把流程卡死在还款计划选择"},
 		"ad-creative-qc":             {"copy_snapshot", "compose_result", "qc-finalize"},
 		"ad-creative-prime-compose":  {"prime-compose", "creative_prime_backend.go", "does not edit model prompts"},
 	}
@@ -153,6 +153,8 @@ func TestCreativeProductionPromptTemplateDefinesInputRolesAndVerticalCompression
 		"failed",
 		"unbranded base for this size",
 		"compress vertically along the Y axis",
+		"比例异常连续重试 2 次后直接失败",
+		"不保留最后一张图",
 	} {
 		if !strings.Contains(content, required) {
 			t.Errorf("production prompt template must contain %q", required)
