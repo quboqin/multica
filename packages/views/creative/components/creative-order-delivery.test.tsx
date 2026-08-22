@@ -168,7 +168,7 @@ describe("creative order stage", () => {
     orderItem.variants = [continuing];
     render(<CreativeOrderDeliveryCandidates orderId="order-1" item={orderItem} source={{ label: "竞品原图", url: "https://cdn.example/source.png" }} attachments={new Map()} adoptingVariantId="" onAdopt={vi.fn()} onAssetSelect={vi.fn()} />);
 
-    expect(screen.getByText("成图生成中：已完成 1/3 个尺寸")).toBeInTheDocument();
+    expect(screen.getByText("等待成图")).toBeInTheDocument();
     expect(screen.queryByText("生成失败")).not.toBeInTheDocument();
     expect(screen.queryByText("成图生成失败")).not.toBeInTheDocument();
   });
@@ -184,8 +184,7 @@ describe("creative order stage", () => {
 
     expect(creativeVariantNeedsManualAction(handoff)).toBe(false);
     expect(creativeVariantIsInProgress(handoff)).toBe(true);
-    expect(screen.getByText("处理中")).toBeInTheDocument();
-    expect(screen.getByText("品牌组件已完成，等待质检：技术质检待完成、视觉质检待完成")).toBeInTheDocument();
+    expect(screen.getAllByText("处理中").length).toBeGreaterThan(0);
     expect(screen.queryByText("需要处理")).not.toBeInTheDocument();
     expect(screen.queryByText("品牌组件提醒")).not.toBeInTheDocument();
   });
@@ -209,8 +208,7 @@ describe("creative order stage", () => {
 
     expect(creativeVariantNeedsManualAction(pending)).toBe(false);
     expect(creativeVariantIsInProgress(pending)).toBe(true);
-    expect(screen.getByText("处理中")).toBeInTheDocument();
-    expect(screen.getByText("品牌组件已完成，等待质检：技术质检待完成、视觉质检待完成")).toBeInTheDocument();
+    expect(screen.getAllByText("处理中").length).toBeGreaterThan(0);
     expect(screen.queryByText("需要处理")).not.toBeInTheDocument();
     expect(screen.queryByText("视觉质检异常")).not.toBeInTheDocument();
   });
@@ -294,7 +292,7 @@ describe("CreativeOrderDeliveryCandidates", () => {
     expect(actions[0]).toBeEnabled();
     expect(screen.getByRole("button", { name: "尚不可采用" })).toBeDisabled();
     expect(screen.getAllByRole("button", { name: "查看并标注" })).toHaveLength(3);
-    expect(screen.getByText("品牌组件已完成，等待质检：技术质检待完成、视觉质检待完成")).toBeInTheDocument();
+    expect(screen.getAllByText("处理中").length).toBeGreaterThan(0);
     expect(screen.getAllByAltText(/方形主预览/)).toHaveLength(3);
     expect(screen.queryAllByAltText(/横版主预览|竖版主预览/)).toHaveLength(0);
     fireEvent.click(screen.getAllByRole("button", { name: "查看方形成图详情" })[0]!);
@@ -330,8 +328,7 @@ describe("CreativeOrderDeliveryCandidates", () => {
 
     render(<CreativeOrderDeliveryCandidates orderId="order-1" item={orderItem} source={{ label: "竞品原图", url: "https://cdn.example/source.png" }} attachments={attachmentMap(orderItem)} adoptingVariantId="" onAdopt={vi.fn()} onAssetSelect={vi.fn()} />);
 
-    expect(screen.getAllByText("生成失败").length).toBeGreaterThan(0);
-    expect(screen.getByText("成图生成失败")).toBeInTheDocument();
+    expect(screen.getAllByText("未完成").length).toBeGreaterThan(0);
     expect(screen.getByText("底部 Prime 固定贴片区域被模型内容占用，未注册三尺寸成图。")).toBeInTheDocument();
     expect(screen.getByText("可以直接重试这个方案；也可以查看其他候选或标注调整。")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "重试失败步骤" })).not.toBeInTheDocument();
@@ -416,7 +413,8 @@ describe("CreativeOrderDeliveryCandidates", () => {
     expect(screen.getByAltText("V01 过程图片 返工输出")).toBeInTheDocument();
     expect(screen.getByText("过程图片")).toBeInTheDocument();
     expect(screen.queryByText(/已保留 1 张过程图片/)).not.toBeInTheDocument();
-    expect(screen.getByText("生成失败：方形图两次模型输出均将 CTA 放入底部 Prime 固定排除区。")).toBeInTheDocument();
+    expect(screen.getAllByText("未完成").length).toBeGreaterThan(0);
+    expect(screen.getByText("方形图两次模型输出均将 CTA 放入底部 Prime 固定排除区。")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /方形过程图/ })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: /方形待成图/ })).toBeDisabled();
     expect(screen.getByRole("button", { name: "尚不可采用" })).toBeDisabled();
@@ -552,14 +550,14 @@ describe("CreativeOrderDeliveryCandidates", () => {
     expect(screen.getByText("800x1000：右上角品牌组件遮挡标题")).toBeInTheDocument();
     expect(screen.getByText("人物边缘略有锯齿")).toBeInTheDocument();
     expect(screen.queryByText("r1 旧问题不应展示")).not.toBeInTheDocument();
-    expect(screen.getByText("有系统提醒")).toBeInTheDocument();
-    expect(screen.getByText("系统提醒：视觉质检未通过，仍可查看、标注或忽略提醒采用")).toBeInTheDocument();
+    expect(screen.getByText("检测记录")).toBeInTheDocument();
+    expect(screen.getByText("可采用")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "重新质检" })).not.toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: "忽略提醒并采用" }));
+    fireEvent.click(screen.getByRole("button", { name: "采用此变体" }));
     expect(onAdopt).toHaveBeenCalledWith(adjusted.id, {
       acknowledged: true,
-      reason: "用户确认忽略系统提醒并采用",
+      reason: "用户确认采用当前成图",
     });
   });
 
@@ -687,7 +685,7 @@ describe("CreativeOrderDeliveryCandidates", () => {
 
     const missingBrandComponents = structuredClone(recoverable);
     missingBrandComponents.assets = missingBrandComponents.assets.filter((asset) => !(asset.revision === 2 && asset.stage === "primed" && asset.size_key === "800x1000"));
-    expect(creativeVariantRiskAdoptionReadiness(missingBrandComponents)).toMatchObject({ allowed: false, status: "系统提醒：品牌组件仅完成 2/3 个尺寸，暂不可采用" });
+    expect(creativeVariantRiskAdoptionReadiness(missingBrandComponents)).toMatchObject({ allowed: false, status: "品牌组件完成 2/3，暂不可采用" });
 
     const previousFailure = structuredClone(recoverable);
     previousFailure.qc_reports = [qcReport({ id: "visual-r1", variant_id: previousFailure.id, revision: 1, lane: "visual", status: "failed", findings: {}, updated_at: "2026-08-04T00:00:00Z" })];
@@ -710,8 +708,8 @@ describe("CreativeOrderDeliveryCandidates", () => {
     orderItem.variants = [exhausted];
     render(<CreativeOrderDeliveryCandidates orderId="order-1" item={orderItem} source={{ label: "竞品原图", url: "https://cdn.example/source.png" }} attachments={attachmentMap(orderItem)} adoptingVariantId="" onAdopt={vi.fn()} onAssetSelect={vi.fn()} />);
 
-    expect(screen.getByText("有系统提醒")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "忽略提醒并采用" })).toBeEnabled();
+    expect(screen.getByText("检测记录")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "采用此变体" })).toBeEnabled();
     expect(screen.queryByRole("button", { name: "重新质检" })).not.toBeInTheDocument();
   });
 
@@ -785,7 +783,7 @@ describe("creative order delivery selection", () => {
     const failed = structuredClone(warning);
     failed.status = "action_required";
     failed.qc_reports[0]!.status = "failed";
-    expect(creativeVariantAdoptionReadiness(failed)).toEqual({ ready: true, status: "系统提醒：技术质检未通过，仍可查看、标注或忽略提醒采用" });
+    expect(creativeVariantAdoptionReadiness(failed)).toEqual({ ready: true, status: "可查看并采用当前成图" });
 
     const pending = structuredClone(warning);
     pending.qc_reports[0]!.status = "pending";

@@ -291,6 +291,10 @@ type creativeVisualModelReworkFinding struct {
 	Diagnosis string `json:"diagnosis"`
 }
 
+const creativeVisualModelReworkMaxAttempts = 2
+
+const creativeQCOutcomeDeliveredWithRisk = "delivered_with_qc_risk"
+
 type creativeOrderItemAdoptionInput struct {
 	VariantID          string `json:"variant_id"`
 	QCRiskAcknowledged bool   `json:"qc_risk_acknowledged"`
@@ -1949,20 +1953,18 @@ func validCreativeVisualModelReworkDiagnosis(code, sizeKey, diagnosis string) bo
 		(strings.Contains(diagnosis, "冲突") || strings.Contains(diagnosis, "重叠") || strings.Contains(diagnosis, "遮挡") || strings.Contains(diagnosis, "进入"))
 }
 
-func creativeVisualModelReworkAlreadyQueued(ctx context.Context, tx pgx.Tx, variantID pgtype.UUID) (bool, error) {
-	var exists bool
+func creativeVisualModelReworkAttemptCount(ctx context.Context, tx pgx.Tx, variantID pgtype.UUID) (int, error) {
+	var count int
 	err := tx.QueryRow(ctx, `
-SELECT EXISTS(
-  SELECT 1
-  FROM agent_task_queue
-  WHERE trigger_evidence_kind = 'creative_order_item_production'
-    AND context->>'type' = 'creative_domain_task'
-    AND context->>'workflow' = 'creative_production'
-    AND context->>'variant_id' = $1::text
-    AND context ? 'qc_visual_rework'
-)
-`, variantID).Scan(&exists)
-	return exists, err
+SELECT count(*)
+FROM agent_task_queue
+WHERE trigger_evidence_kind = 'creative_order_item_production'
+  AND context->>'type' = 'creative_domain_task'
+  AND context->>'workflow' = 'creative_production'
+  AND context->>'variant_id' = $1::text
+  AND context ? 'qc_visual_rework'
+	`, variantID).Scan(&count)
+	return count, err
 }
 
 func creativeRecoverableQCTaskIDs(ctx context.Context, tx pgx.Tx, orderID, variantID pgtype.UUID, revision int) ([]string, error) {
@@ -2341,7 +2343,7 @@ SELECT
 	directEditNoQC := triggerKind == "creative_direct_edit" || creativeDirectEditSkipsQC(json.RawMessage(variantBrief))
 	standardAdoption := (directEditNoQC && variantStatus == "completed" && technicalStatus == "" && visualStatus == "" && qcOutcome == "") ||
 		(creativeQCStatusAllowsAdoption(technicalStatus) && creativeQCStatusAllowsAdoption(visualStatus) && qcOutcome == "delivered")
-	riskAdoption := (technicalStatus == "failed" || visualStatus == "failed") && qcOutcome == "action_required"
+	riskAdoption := (technicalStatus == "failed" || visualStatus == "failed") && creativeQCOutcomeAllowsRiskAdoption(qcOutcome)
 	if standardAdoption {
 		if input.QCRiskAcknowledged {
 			writeError(w, http.StatusBadRequest, "QC risk acknowledgement is only valid for a failed QC result")
@@ -2356,8 +2358,12 @@ SELECT
 			writeError(w, http.StatusConflict, "failed creative QC requires explicit risk acknowledgement and an adoption reason")
 			return
 		}
-		if variantStatus != "action_required" {
+		if qcOutcome == "action_required" && variantStatus != "action_required" {
 			writeError(w, http.StatusConflict, "failed creative variant is not awaiting manual action")
+			return
+		}
+		if qcOutcome == creativeQCOutcomeDeliveredWithRisk && variantStatus != "completed" {
+			writeError(w, http.StatusConflict, "creative variant with QC risk is not completed")
 			return
 		}
 	} else {
@@ -3363,17 +3369,23 @@ FOR UPDATE
 		outcome = "action_required"
 	}
 	var visualReworkFindings []creativeVisualModelReworkFinding
+	deliverDespiteVisualReworkExhausted := false
 	if outcome == "action_required" && !technicalHasBlockingFailure && reportStatuses["visual"] == "failed" {
-		alreadyQueued, queuedErr := creativeVisualModelReworkAlreadyQueued(r.Context(), tx, variantID)
+		reworkAttempts, queuedErr := creativeVisualModelReworkAttemptCount(r.Context(), tx, variantID)
 		if queuedErr != nil {
 			writeError(w, http.StatusInternalServerError, "failed to check creative visual rework limit")
 			return
 		}
-		if !alreadyQueued {
-			visualReworkFindings, _ = creativeVisualModelReworkFindings(failureSummary["visual"], expectedSizes)
+		eligibleFindings, findingErr := creativeVisualModelReworkFindings(failureSummary["visual"], expectedSizes)
+		if findingErr == nil {
+			if reworkAttempts < creativeVisualModelReworkMaxAttempts {
+				visualReworkFindings = eligibleFindings
+			} else {
+				deliverDespiteVisualReworkExhausted = true
+			}
 		}
 	}
-	if outcome == "action_required" && len(visualReworkFindings) == 0 {
+	if outcome == "action_required" && len(visualReworkFindings) == 0 && !deliverDespiteVisualReworkExhausted {
 		recoverableTaskIDs, recoveryErr := creativeRecoverableQCTaskIDs(r.Context(), tx, orderID, variantID, input.Revision)
 		if recoveryErr != nil {
 			writeError(w, http.StatusInternalServerError, "failed to check automatic creative QC recovery")
@@ -3439,6 +3451,9 @@ SELECT EXISTS(
 			}
 		}
 	}
+	if deliverDespiteVisualReworkExhausted {
+		outcome = creativeQCOutcomeDeliveredWithRisk
+	}
 	failureSummaryJSON, err := json.Marshal(failureSummary)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to encode creative QC findings")
@@ -3480,7 +3495,7 @@ SELECT outcome FROM creative_order_variant_qc_resolution WHERE variant_id = $1 A
 	var inbox db.InboxItem
 	var shouldPublishInbox bool
 	var reworkTask db.AgentTaskQueue
-	if outcome == "delivered" {
+	if creativeQCOutcomeCopiesDelivery(outcome) {
 		count, err := copyCreativePrimedAssetsToDelivered(r.Context(), tx, variantID, input.Revision, expectedSizes)
 		if err != nil {
 			writeError(w, http.StatusConflict, err.Error())
@@ -3490,6 +3505,22 @@ SELECT outcome FROM creative_order_variant_qc_resolution WHERE variant_id = $1 A
 		if _, err := tx.Exec(r.Context(), `UPDATE creative_order_variant SET status = 'completed', updated_at = now() WHERE id = $1`, variantID); err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to complete creative variant")
 			return
+		}
+		if deliverDespiteVisualReworkExhausted {
+			exhaustedDetails, _ := json.Marshal(map[string]any{
+				"creative_order_id": uuidToString(orderID),
+				"variant_id":        uuidToString(variantID),
+				"revision":          input.Revision,
+				"max_attempts":      creativeVisualModelReworkMaxAttempts,
+				"outcome":           creativeQCOutcomeDeliveredWithRisk,
+			})
+			if _, err := tx.Exec(r.Context(), `
+INSERT INTO activity_log (workspace_id, issue_id, actor_type, actor_id, action, details)
+VALUES ($1, $2, 'agent', $3, 'creative_visual_rework_exhausted_delivered', $4::jsonb)
+`, workspaceID, issueID, task.AgentID, exhaustedDetails); err != nil {
+				writeError(w, http.StatusInternalServerError, "failed to record exhausted creative visual rework")
+				return
+			}
 		}
 		shouldPublishInbox = true
 	} else if len(visualReworkFindings) > 0 {
@@ -3870,9 +3901,20 @@ func creativeQCInboxSeverity(outcome string) string {
 	return "info"
 }
 
+func creativeQCOutcomeCopiesDelivery(outcome string) bool {
+	return outcome == "delivered" || outcome == creativeQCOutcomeDeliveredWithRisk
+}
+
+func creativeQCOutcomeAllowsRiskAdoption(outcome string) bool {
+	return outcome == "action_required" || outcome == creativeQCOutcomeDeliveredWithRisk
+}
+
 func creativeQCInboxTitle(variantKey, outcome string) string {
 	if outcome == "action_required" {
 		return "Creative QC needs a decision: " + variantKey
+	}
+	if outcome == creativeQCOutcomeDeliveredWithRisk {
+		return "Creative variant ready with QC risk: " + variantKey
 	}
 	return "Creative variant ready: " + variantKey
 }
@@ -3880,6 +3922,9 @@ func creativeQCInboxTitle(variantKey, outcome string) string {
 func creativeQCInboxBody(variantKey, outcome string, expectedSizeCount int) string {
 	if outcome == "action_required" {
 		return "QC found a blocking issue for " + variantKey + ". Review the comparison and choose whether to revise or accept the risk."
+	}
+	if outcome == creativeQCOutcomeDeliveredWithRisk {
+		return "Automatic visual rework reached its limit for " + variantKey + ". The current final assets are available to review or accept with QC risk."
 	}
 	if expectedSizeCount == 1 {
 		return "The final asset for " + variantKey + " passed independent QC and is ready to review."

@@ -158,11 +158,15 @@ WHERE parent_task_id = $1 AND status = 'queued'
 	}
 }
 
-func creativeQCTaskContextForTest(t *testing.T, orderID, variantID, lane string) []byte {
+func creativeQCTaskContextForTest(t *testing.T, orderID, variantID, lane string, revisions ...int) []byte {
 	t.Helper()
+	revision := 1
+	if len(revisions) > 0 {
+		revision = revisions[0]
+	}
 	contextValue, err := json.Marshal(map[string]any{
 		"type": "creative_domain_task", "workflow": "creative_qc_" + lane,
-		"creative_order_id": orderID, "variant_id": variantID, "revision": 1,
+		"creative_order_id": orderID, "variant_id": variantID, "revision": revision,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -682,6 +686,17 @@ VALUES ($1, 1, $2, $3)
 	firstVariantID := createEligibleVariant("adopt-v01", "passed", "passed")
 	secondVariantID := createEligibleVariant("adopt-v02", "warning", "passed")
 	riskVariantID := createEligibleVariant("adopt-v03", "passed", "failed")
+	completedRiskVariantID := createEligibleVariant("adopt-v04", "passed", "failed")
+	if _, err := testPool.Exec(t.Context(), `
+UPDATE creative_order_variant SET status = 'completed' WHERE id = $1;
+UPDATE creative_order_variant_qc_resolution SET outcome = 'delivered_with_qc_risk' WHERE variant_id = $1 AND revision = 1;
+INSERT INTO creative_order_asset (variant_id, size_key, revision, stage, attachment_id, status)
+SELECT variant_id, size_key, revision, 'delivered', attachment_id, status
+FROM creative_order_asset
+WHERE variant_id = $1 AND revision = 1 AND stage = 'primed'
+`, completedRiskVariantID); err != nil {
+		t.Fatal(err)
+	}
 	if status, err := testHandler.derivedCreativeOrderStatus(newRequest(http.MethodGet, "/", nil), parseUUID(orderID)); err != nil || status != "awaiting_adoption" {
 		t.Fatalf("status before adoption = %q, %v; want awaiting_adoption", status, err)
 	}
@@ -769,6 +784,29 @@ WHERE variant_id = $1 AND revision = 1 AND stage = 'delivered' AND status = 'com
 		t.Fatalf("risk adoption delivered assets = %d, want %d", deliveredCount, len(standardCreativeAssetSizes))
 	}
 
+	w = httptest.NewRecorder()
+	req = newRequest(http.MethodPost, "/api/creative/orders/"+orderID+"/items/"+itemID+"/adoption", creativeOrderItemAdoptionInput{VariantID: completedRiskVariantID})
+	req = withURLParams(req, "id", orderID, "itemId", itemID)
+	testHandler.AdoptCreativeOrderItemVariant(w, req)
+	if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), "explicit risk acknowledgement") {
+		t.Fatalf("completed risk adoption without acknowledgement = %d %s", w.Code, w.Body.String())
+	}
+	w = httptest.NewRecorder()
+	req = newRequest(http.MethodPost, "/api/creative/orders/"+orderID+"/items/"+itemID+"/adoption", creativeOrderItemAdoptionInput{
+		VariantID: completedRiskVariantID, QCRiskAcknowledged: true, QCRiskReason: riskReason,
+	})
+	req = withURLParams(req, "id", orderID, "itemId", itemID)
+	testHandler.AdoptCreativeOrderItemVariant(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("completed risk adoption = %d %s", w.Code, w.Body.String())
+	}
+	if err := json.NewDecoder(w.Body).Decode(&riskItem); err != nil {
+		t.Fatal(err)
+	}
+	if riskItem.AdoptedVariantID != completedRiskVariantID {
+		t.Fatalf("completed risk adoption item = %#v", riskItem)
+	}
+
 	var reasonCodes []string
 	var feedbackComment, contextSnapshot string
 	if err := testPool.QueryRow(t.Context(), `
@@ -799,8 +837,8 @@ SELECT count(*) FROM activity_log WHERE issue_id = $1 AND action = 'creative_var
 `, issueID).Scan(&activityCount); err != nil {
 		t.Fatal(err)
 	}
-	if feedbackCount != 3 || activityCount != 3 {
-		t.Fatalf("audit counts = feedback %d activity %d, want 3 each", feedbackCount, activityCount)
+	if feedbackCount != 4 || activityCount != 4 {
+		t.Fatalf("audit counts = feedback %d activity %d, want 4 each", feedbackCount, activityCount)
 	}
 }
 
@@ -2527,7 +2565,7 @@ func TestCreativeQCFindingsNeedAutomaticRecoveryRecognizesContractFailureCode(t 
 	}
 }
 
-func TestCreativeVisualModelReworkIsQueuedOnlyOncePerVariant(t *testing.T) {
+func TestCreativeVisualModelReworkAttemptCountSupportsTwoAttempts(t *testing.T) {
 	if testPool == nil {
 		t.Skip("database not available")
 	}
@@ -2537,20 +2575,22 @@ func TestCreativeVisualModelReworkIsQueuedOnlyOncePerVariant(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer tx.Rollback(t.Context())
-	alreadyQueued, err := creativeVisualModelReworkAlreadyQueued(t.Context(), tx, variantID)
-	if err != nil || alreadyQueued {
-		t.Fatalf("initial visual rework state = %t, %v", alreadyQueued, err)
+	attempts, err := creativeVisualModelReworkAttemptCount(t.Context(), tx, variantID)
+	if err != nil || attempts != 0 {
+		t.Fatalf("initial visual rework attempts = %d, %v", attempts, err)
 	}
 	agentID := createHandlerTestAgent(t, "creative-visual-rework-limit-"+uuid.NewString(), nil)
-	if _, err := tx.Exec(t.Context(), `
-INSERT INTO agent_task_queue (agent_id, runtime_id, status, trigger_evidence_kind, trigger_evidence_ref_id, context)
-VALUES ($1, (SELECT runtime_id FROM agent WHERE id = $1), 'queued', 'creative_order_item_production', $2, $3::jsonb)
-`, agentID, uuid.New(), fmt.Sprintf(`{"type":"creative_domain_task","workflow":"creative_production","variant_id":"%s","qc_visual_rework":{}}`, uuidToString(variantID))); err != nil {
-		t.Fatal(err)
+	for i := 0; i < creativeVisualModelReworkMaxAttempts; i++ {
+		if _, err := tx.Exec(t.Context(), `
+	INSERT INTO agent_task_queue (agent_id, runtime_id, status, trigger_evidence_kind, trigger_evidence_ref_id, context)
+	VALUES ($1, (SELECT runtime_id FROM agent WHERE id = $1), 'queued', 'creative_order_item_production', $2, $3::jsonb)
+	`, agentID, uuid.New(), fmt.Sprintf(`{"type":"creative_domain_task","workflow":"creative_production","variant_id":"%s","qc_visual_rework":{}}`, uuidToString(variantID))); err != nil {
+			t.Fatal(err)
+		}
 	}
-	alreadyQueued, err = creativeVisualModelReworkAlreadyQueued(t.Context(), tx, variantID)
-	if err != nil || !alreadyQueued {
-		t.Fatalf("queued visual rework state = %t, %v", alreadyQueued, err)
+	attempts, err = creativeVisualModelReworkAttemptCount(t.Context(), tx, variantID)
+	if err != nil || attempts != creativeVisualModelReworkMaxAttempts {
+		t.Fatalf("queued visual rework attempts = %d, %v", attempts, err)
 	}
 }
 
@@ -2648,9 +2688,9 @@ WHERE variant_id = $1 AND revision = 2 AND stage = 'generated'
 	if strings.Join(copiedSizes, ",") != "1080x1080,800x1000" {
 		t.Fatalf("reused generated sizes = %#v", copiedSizes)
 	}
-	alreadyQueued, err := creativeVisualModelReworkAlreadyQueued(t.Context(), tx, parseUUID(variantID))
-	if err != nil || !alreadyQueued {
-		t.Fatalf("queued visual rework is not fenced = %t, %v", alreadyQueued, err)
+	attempts, err := creativeVisualModelReworkAttemptCount(t.Context(), tx, parseUUID(variantID))
+	if err != nil || attempts != 1 {
+		t.Fatalf("queued visual rework attempts = %d, %v", attempts, err)
 	}
 }
 
@@ -2846,6 +2886,66 @@ RETURNING id::text`, agentID, failedVariantID, creativeQCTaskContextForTest(t, o
 	}
 	if completedVariantStatus != "completed" {
 		t.Fatalf("completed sibling variant status = %q", completedVariantStatus)
+	}
+
+	var exhaustedVariantID, exhaustedTaskID string
+	if err := testPool.QueryRow(t.Context(), `
+INSERT INTO creative_order_variant (order_item_id, variant_key, revision, status)
+VALUES ($1, 'v03', 3, 'running') RETURNING id::text`, itemID).Scan(&exhaustedVariantID); err != nil {
+		t.Fatal(err)
+	}
+	for _, size := range standardCreativeAssetSizes {
+		attachmentID := createCreativeOrderAssetAttachment(t, "qc-exhausted-prime-"+strings.ReplaceAll(size, "x", "-")+".png")
+		if _, err := testPool.Exec(t.Context(), `
+INSERT INTO creative_order_asset (variant_id, size_key, revision, stage, attachment_id, metadata, evidence, status)
+VALUES ($1, $2, 3, 'primed', $3, '{}'::jsonb, '{}'::jsonb, 'completed')`, exhaustedVariantID, size, attachmentID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := testPool.Exec(t.Context(), `
+INSERT INTO creative_order_qc_report (variant_id, lane, revision, status, findings)
+VALUES ($1, 'technical', 3, 'passed', '{}'::jsonb),
+       ($1, 'visual', 3, 'failed', '{"blocking_failures":[{"code":"actual_prime_obstruction","size_key":"1200x628","diagnosis":"1200x628：正文 与底部 Prime 法务文字实际遮挡；期望移动到 safe_content_frame 内 y<=430"}]}'::jsonb)`, exhaustedVariantID); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < creativeVisualModelReworkMaxAttempts; i++ {
+		if _, err := testPool.Exec(t.Context(), `
+INSERT INTO agent_task_queue (agent_id, runtime_id, status, trigger_evidence_kind, trigger_evidence_ref_id, context)
+VALUES ($1, (SELECT runtime_id FROM agent WHERE id = $1), 'completed', 'creative_order_item_production', $2, $3::jsonb)
+`, agentID, itemID, fmt.Sprintf(`{"type":"creative_domain_task","workflow":"creative_production","variant_id":"%s","revision":%d,"qc_visual_rework":{}}`, exhaustedVariantID, i+2)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := testPool.QueryRow(t.Context(), `
+INSERT INTO agent_task_queue (agent_id, runtime_id, status, priority, trigger_evidence_kind, trigger_evidence_ref_id, context)
+VALUES ($1, (SELECT runtime_id FROM agent WHERE id = $1), 'running', 0, 'creative_order_variant_qc', $2, $3::jsonb)
+RETURNING id::text`, agentID, exhaustedVariantID, creativeQCTaskContextForTest(t, orderID, exhaustedVariantID, "visual", 3)).Scan(&exhaustedTaskID); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(t.Context(), `DELETE FROM agent_task_queue WHERE id = $1`, exhaustedTaskID)
+	})
+	w = httptest.NewRecorder()
+	req = newRequest(http.MethodPost, "/api/creative/orders/"+orderID+"/qc-finalize", creativeOrderQCFinalizeInput{VariantID: exhaustedVariantID, Revision: 3})
+	req = withURLParam(req, "id", orderID)
+	req.Header.Set("X-Actor-Source", "task_token")
+	req.Header.Set("X-Agent-ID", agentID)
+	req.Header.Set("X-Task-ID", exhaustedTaskID)
+	testHandler.FinalizeCreativeOrderQC(w, req)
+	var exhaustedResponse creativeOrderQCFinalizeResponse
+	if w.Code != http.StatusOK || json.NewDecoder(w.Body).Decode(&exhaustedResponse) != nil || exhaustedResponse.Outcome != creativeQCOutcomeDeliveredWithRisk || exhaustedResponse.DeliveredAssetCount != 3 {
+		t.Fatalf("exhausted visual rework must still deliver = %d %#v %s", w.Code, exhaustedResponse, w.Body.String())
+	}
+	var exhaustedVariantStatus string
+	var exhaustedDelivered int
+	if err := testPool.QueryRow(t.Context(), `SELECT status FROM creative_order_variant WHERE id = $1`, exhaustedVariantID).Scan(&exhaustedVariantStatus); err != nil {
+		t.Fatal(err)
+	}
+	if err := testPool.QueryRow(t.Context(), `SELECT count(*) FROM creative_order_asset WHERE variant_id = $1 AND revision = 3 AND stage = 'delivered'`, exhaustedVariantID).Scan(&exhaustedDelivered); err != nil {
+		t.Fatal(err)
+	}
+	if exhaustedVariantStatus != "completed" || exhaustedDelivered != 3 {
+		t.Fatalf("exhausted visual rework status=%q delivered=%d", exhaustedVariantStatus, exhaustedDelivered)
 	}
 }
 

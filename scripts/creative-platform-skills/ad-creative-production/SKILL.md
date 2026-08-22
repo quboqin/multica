@@ -191,8 +191,9 @@ python <当前 Skill 目录>/references/register_process_assets.py \
 
 ## 有界返工
 
-如果视觉 QC 指出 `actual_prime_obstruction` 或 `official_prime_text_unreadable`，当前 Variant 每个尺寸最多执行一次有证据的定向返工。
+如果视觉 QC 指出 `actual_prime_obstruction` 或 `official_prime_text_unreadable`，服务端最多为当前 Variant 排两轮有证据的定向返工。
 返工仍由出图智能体重新写当前尺寸的短提示词，输入为失败底图和同尺寸 Prime context；只描述实际遮挡和需要压缩/移动的内容，不改文案、金额、期限、表格、
-视觉身份或 Prime 规则。一次返工后仍失败就写 `action_required`；不要把过程图转成候选或要求用户选择技术实现。
+视觉身份或 Prime 规则。两轮返工后仍失败时，服务端保留当前品牌成图与交付资产，并由 `qc-finalize` 以 `delivered_with_qc_risk` 归档，页面让用户继续标注调整或风险采用；不要写 `action_required` 阻断输出，
+也不要把过程图转成候选或要求用户选择技术实现。
 
 过程图片只用于排查，固定登记 `Prime context`、`模型原图`、`规范化底图` 和 `Prime 合成成图`。不得把过程图当作最终交付或采用图。

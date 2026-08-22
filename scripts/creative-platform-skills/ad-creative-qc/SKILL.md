@@ -80,7 +80,8 @@ multica creative order qc-finalize <order-id> \
 
 每条 lane 写回后立即调用 finalize。finalize 只等待两份检测报告归档后登记最终成图；技术失败或不可自动修复的
 视觉失败进入人工处理。上述四类完整的 visual blocking finding 会新建下一 revision 的生产任务：服务端保留通过尺寸的
-无品牌底图，只让模型改失败尺寸，然后重新合成品牌组件与 QC。`outcome=pending` 或 `created=false` 时立即结束；只有
+无品牌底图，只让模型改失败尺寸，然后重新合成品牌组件与 QC。服务端最多排两轮真实视觉返工；两轮后仍失败会保留当前品牌成图和交付资产，
+并以 `delivered_with_qc_risk` 归档，让用户继续标注调整或风险采用，不再因为这类视觉返工耗尽阻断输出。`outcome=pending` 或 `created=false` 时立即结束；只有
 `created=true` 的 winner 写一次去重 Issue 留痕。结构化 findings 不复制进评论。
 
 如果 generated evidence 缺少 `parent_direction_sha256`、manifest/compose 对应或其他 delegation/manifest/Prime contract，
