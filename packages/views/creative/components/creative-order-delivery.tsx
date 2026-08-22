@@ -882,10 +882,10 @@ function VariantQCDetails({ details }: { details: CreativeVariantQCDetail[] }) {
   >
     {visible.map((detail) => <div key={detail.lane} className="space-y-1.5">
       <p className={cn("font-medium", detail.status === "failed" && "text-amber-800 dark:text-amber-200")}>
-        {detail.status === "failed" ? `${detail.label}未通过` : `${detail.label}提醒`}
+        {detail.status === "failed" ? `${detail.label}未通过` : `${detail.label}记录`}
       </p>
       {detail.blockingFailures.length > 0 ? <QCMessageList label="阻断原因" messages={detail.blockingFailures} /> : null}
-      {detail.qualityWarnings.length > 0 && <QCMessageList label="质量提醒" messages={detail.qualityWarnings} />}
+      {detail.qualityWarnings.length > 0 && <QCMessageList label="质量记录" messages={detail.qualityWarnings} />}
     </div>)}
   </div>;
 }
@@ -1229,7 +1229,7 @@ function timestamp(value: string | undefined): number {
 
 function qcStatusLabel(status: string): string {
   if (status === "passed") return "通过";
-  if (status === "warning") return "通过（有提醒）";
+  if (status === "warning") return "通过（有记录）";
   if (status === "failed") return "失败";
   return "待完成";
 }

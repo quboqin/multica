@@ -747,7 +747,7 @@ function CreativeOrderStatusPanel({
         <OrderStat label="素材" value={`${stage.totalItems}`} />
         <OrderStat label="可验收" value={`${stage.readyVariants}`} />
         <OrderStat label="运行中" value={`${stats.runningVariants}`} />
-        <OrderStat label="提醒" value={`${stats.blockedVariants + actionableFailures.length}`} />
+        <OrderStat label="待看" value={`${stats.blockedVariants + actionableFailures.length}`} />
       </div>
     </div>
   </section>;
@@ -773,16 +773,16 @@ function creativeOrderRuntimeStats(order: CreativeOrder): { runningVariants: num
 function creativeOrderStatusTitle(stage: CreativeOrderStage, stats: ReturnType<typeof creativeOrderRuntimeStats>, hasFailures: boolean): string {
   if (stage.key === "delivered") return "交付完成，可以下载最终采用方案";
   if (stage.key === "cancelled") return "订单已结束，过程记录仍保留";
-  if (stage.key === "review" && hasFailures) return "已有可验收方案，另有系统提醒";
+  if (stage.key === "review" && hasFailures) return "已有可验收方案，另有检测记录";
   if (stage.key === "review") return "已有方案可验收";
-  if (stage.key === "attention") return "等待人工验收，系统提醒仅作参考";
+  if (stage.key === "attention") return "等待人工验收，先查看成图";
   if (stage.key === "generating") return "后台正在生成方案";
   if (stats.expectedPreviewAssets > 0) return "订单已创建，等待首批成图";
   return "订单正在准备";
 }
 
 function creativeOrderStatusDetail(stage: CreativeOrderStage, stats: ReturnType<typeof creativeOrderRuntimeStats>, hasFailures: boolean): string {
-  if (stage.key === "review" && hasFailures) return "可以先验收已完成方案；系统提醒只说明后台还有步骤未补齐。";
+  if (stage.key === "review" && hasFailures) return "可以先验收已完成方案；检测记录只说明后台还有步骤未补齐。";
   if (stage.key === "review") return "先比较可用方案，采用后会生成交付包。";
   if (stage.key === "attention") return "不用手动重试流程；可查看可用图、标注调整或结束订单。";
   if (stage.key === "generating") return `${stats.previewAssets}/${Math.max(stats.expectedPreviewAssets, 1)} 张过程图已就绪，页面会自动刷新。`;

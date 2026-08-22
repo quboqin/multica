@@ -240,7 +240,7 @@ describe("creative feedback state", () => {
     expect(creativeVariantAdoptionReadiness(missingBrandComponents)).toEqual({ ready: false, status: "等待品牌组件合成：已完成 2/3 个尺寸" });
 
     const failedQC = { ...ready, qc_reports: ready.qc_reports.map((report) => report.lane === "visual" ? { ...report, status: "failed" } : report) };
-    expect(creativeVariantAdoptionReadiness(failedQC)).toEqual({ ready: true, status: "系统提醒：视觉质检未通过，仍可查看、标注或忽略提醒采用" });
+    expect(creativeVariantAdoptionReadiness(failedQC)).toEqual({ ready: true, status: "可查看并采用当前成图" });
 
     const warnedQC = { ...ready, qc_reports: ready.qc_reports.map((report) => report.lane === "visual" ? { ...report, status: "warning" } : report) };
     expect(creativeVariantAdoptionReadiness(warnedQC)).toEqual({ ready: true, status: "三尺寸、品牌组件与质检均已完成，可以采用" });
