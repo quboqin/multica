@@ -108,7 +108,7 @@ type imageEditHTTPError struct {
 	Body       string
 }
 
-const maxProviderImageAspectDeviation = 0.05
+const maxProviderImageAspectDeviation = 0.10
 const maxProviderImageAspectRetries = 2
 
 type imageOutputDimensions struct {

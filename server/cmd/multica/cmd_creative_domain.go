@@ -193,7 +193,7 @@ func init() {
 	creativeOrderAssetPutCmd.Flags().String("model-result-file", "", "UTF-8 JSON result from multica image edit or image edit-batch")
 	creativeOrderAssetPutCmd.Flags().String("model-result-id", "", "Result ID when --model-result-file is an image edit-batch response")
 	creativeOrderAssetPutCmd.Flags().String("prompt-contract-file", "", "UTF-8 JSON prompt compiler evidence")
-	creativeOrderAssetPutCmd.Flags().String("copy-validation-file", "", "UTF-8 JSON copy validation evidence")
+	creativeOrderAssetPutCmd.Flags().String("copy-validation-file", "", "UTF-8 JSON copy validation evidence (legacy optional)")
 	creativeOrderAssetPutCmd.Flags().String("normalization-evidence-file", "", "UTF-8 JSON normalized delivery evidence")
 	creativeOrderListCmd.Flags().String("output", "json", "Output format: json")
 	creativeOrderGetCmd.Flags().String("output", "json", "Output format: json")
@@ -523,9 +523,9 @@ func creativeOrderAssetPayload(cmd *cobra.Command) (json.RawMessage, error) {
 	copyValidationFile, _ := cmd.Flags().GetString("copy-validation-file")
 	normalizationFile, _ := cmd.Flags().GetString("normalization-evidence-file")
 	resultID, _ := cmd.Flags().GetString("model-result-id")
-	evidenceFiles := []string{modelResultFile, promptContractFile, copyValidationFile, normalizationFile}
+	requiredEvidenceFiles := []string{modelResultFile, promptContractFile, normalizationFile}
 	provided := 0
-	for _, file := range evidenceFiles {
+	for _, file := range requiredEvidenceFiles {
 		if strings.TrimSpace(file) != "" {
 			provided++
 		}
@@ -534,10 +534,13 @@ func creativeOrderAssetPayload(cmd *cobra.Command) (json.RawMessage, error) {
 		if strings.TrimSpace(resultID) != "" {
 			return nil, fmt.Errorf("--model-result-id requires --model-result-file")
 		}
+		if strings.TrimSpace(copyValidationFile) != "" {
+			return nil, fmt.Errorf("--copy-validation-file requires --model-result-file, --prompt-contract-file, and --normalization-evidence-file")
+		}
 		return payload, nil
 	}
-	if provided != len(evidenceFiles) {
-		return nil, fmt.Errorf("--model-result-file, --prompt-contract-file, --copy-validation-file, and --normalization-evidence-file must be provided together")
+	if provided != len(requiredEvidenceFiles) {
+		return nil, fmt.Errorf("--model-result-file, --prompt-contract-file, and --normalization-evidence-file must be provided together")
 	}
 
 	var envelope map[string]json.RawMessage
@@ -565,13 +568,16 @@ func creativeOrderAssetPayload(cmd *cobra.Command) (json.RawMessage, error) {
 	if err != nil {
 		return nil, err
 	}
-	copyValidation, err := creativeAssetEvidenceFile(copyValidationFile, "copy validation")
-	if err != nil {
-		return nil, err
-	}
 	normalization, err := creativeAssetEvidenceFile(normalizationFile, "normalization evidence")
 	if err != nil {
 		return nil, err
+	}
+	var copyValidation []byte
+	if strings.TrimSpace(copyValidationFile) != "" {
+		copyValidation, err = creativeAssetEvidenceFile(copyValidationFile, "copy validation")
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	var trace struct {
@@ -600,12 +606,6 @@ func creativeOrderAssetPayload(cmd *cobra.Command) (json.RawMessage, error) {
 	if err := json.Unmarshal(promptContract, &contract); err != nil || contract.PromptSHA256 != trace.PromptSHA256 {
 		return nil, fmt.Errorf("prompt contract prompt_sha256 does not match model result")
 	}
-	var validation struct {
-		Passed bool `json:"passed"`
-	}
-	if err := json.Unmarshal(copyValidation, &validation); err != nil || !validation.Passed {
-		return nil, fmt.Errorf("copy validation must be a passed JSON evidence object")
-	}
 	var normalized struct {
 		TargetSize map[string]json.RawMessage `json:"target_size"`
 	}
@@ -624,8 +624,11 @@ func creativeOrderAssetPayload(cmd *cobra.Command) (json.RawMessage, error) {
 	evidence := map[string]any{
 		"request_id": trace.RequestID, "attempts": trace.Attempts, "prompt_sha256": trace.PromptSHA256,
 		"model_result": json.RawMessage(modelResult), "prompt_contract": json.RawMessage(promptContract),
-		"copy_validation": json.RawMessage(copyValidation), "normalization": json.RawMessage(normalization),
-		"prime_status": "pending",
+		"normalization": json.RawMessage(normalization),
+		"prime_status":  "pending",
+	}
+	if len(copyValidation) > 0 {
+		evidence["copy_validation"] = json.RawMessage(copyValidation)
 	}
 	if trace.ProviderSlotLimit > 0 {
 		evidence["provider_slot_limit"] = trace.ProviderSlotLimit

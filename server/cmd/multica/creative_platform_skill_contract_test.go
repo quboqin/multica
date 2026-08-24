@@ -153,8 +153,11 @@ func TestCreativeProductionPromptTemplateDefinesInputRolesAndVerticalCompression
 		"failed",
 		"unbranded base for this size",
 		"compress vertically along the Y axis",
-		"比例异常连续重试 2 次后直接失败",
-		"不保留最后一张图",
+		"CANVAS LOCK",
+		"800x1000 is a locked 4:5 portrait ad canvas",
+		"比例偏差 `<=10%`",
+		"10%-25%",
+		"自适应恢复",
 	} {
 		if !strings.Contains(content, required) {
 			t.Errorf("production prompt template must contain %q", required)

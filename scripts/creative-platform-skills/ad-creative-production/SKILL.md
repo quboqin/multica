@@ -23,7 +23,7 @@ allowed-tools: Bash(multica *), Bash(python *)
 参考图的权威入口是任务上下文中的 `candidate_id`。订单响应没有展开 `reference_assets` 时，使用
 `multica creative material download <issue-id> <candidate-id> --output-file <source-reference.png> --output json`
 受控下载当前候选；下载失败才算缺少参考图，不能把 `reference_assets` 为空本身当作失败。不得使用同 candidate 的其他订单、历史工作目录或摘要替代该下载。
-如果该命令返回登录态过期/未登录，但 `multica creative materials <issue-id> --output json` 仍能读取当前 candidate，并且该 candidate 的
+如果该命令返回登录态过期/未登录，但当前 issue 的候选列表响应仍能读取当前 candidate，并且该 candidate 的
 `source_attachment_id` 非空，或 `archived_url` / `preview_url` / `resource_url` / `original_url` 明确是
 `/api/attachments/<attachment-id>/download`（可为同域或平台 app 域绝对 URL），则这是同一候选附件的下载域鉴权问题，不是缺少参考图。
 此时允许只用该同源 candidate 的 attachment id 执行：
@@ -55,6 +55,7 @@ python <当前 Skill 目录>/references/render_prime_guide.py \
 
 ```text
 COMPOSITION GATE
+CANVAS LOCK
 INPUTS
 TASK
 VISUAL INHERITANCE
@@ -75,6 +76,11 @@ Keep all business content in the middle content area between the protected Prime
 reserved for the later official overlay and must stay free of business copy, tables, buttons, icons, decorative marks, and shadows.
 If the middle business area feels crowded, compress vertically along the Y axis: reduce vertical whitespace, module gaps, and line
 spacing before reducing type. Preserve every module and keep it out of the protected bands. Never crop, delete, or push content into them.
+
+CANVAS LOCK
+{canvas_lock_for_this_size}. The final image must keep the requested canvas family and must not become a story, phone screenshot,
+long poster, scrolling page, 9:16 canvas, 9:19 canvas, or any extra-tall mobile screen. If layout pressure is high, compact spacing
+and module height inside the locked canvas instead of extending the canvas.
 
 INPUTS
 {input_one_role}. Input 2 is the current-size official Prime visual context. Do not swap input roles.
@@ -100,8 +106,14 @@ readable. Never draw Prime or any placeholder for it.
 
 FINAL CHECK
 All required copy, amount, tenor options, table rows, and source structures are present and legible. No business content enters the
-protected bands. No brand element, QR, store badge, legal text, invented CTA, crop, or duplicate copy is present.
+protected bands. The output still matches {canvas_lock_for_this_size}. No brand element, QR, store badge, legal text, invented CTA,
+crop, story frame, phone screenshot, long poster, scrolling page, 9:16, 9:19, or duplicate copy is present.
 ```
+
+`{canvas_lock_for_this_size}` 必须逐尺寸写成以下之一：`1080x1080 is a locked 1:1 square ad canvas`、`1200x628 is a locked
+1.91:1 landscape ad canvas`、`800x1000 is a locked 4:5 portrait ad canvas; the height is only 1.25x the width`。三尺寸都必须显式禁止
+`story`、`phone screenshot`、`long poster`、`scrolling page`、`9:16` 和 `9:19`；竖版不得写成 `mobile-first portrait canvas`，应写成
+`4:5 portrait ad canvas`。
 
 `{input_one_role}` 必须按调用阶段明确写成以下之一：方形母版使用“Input 1 is the downloaded candidate reference; use it only for business structure,
 reading order, and visual anchors”；横版或竖版使用“Input 1 is the approved square base from this Variant”；视觉返工使用“Input 1 is the failed
@@ -117,7 +129,7 @@ Variant brief `approved_copy` 中每一个非空字段（包括 `product_categor
 
 1. **方形母版（1080x1080）**：Input 1 为竞品参考结构，Input 2 为当前方形 Prime context。创建新的无品牌广告底图，继承信息机制、阅读顺序和可识别视觉锚点，重新设计背景、主体和装饰。
 2. **横版重排（1200x628）**：Input 1 为已批准的方形母版，Input 2 为当前横版 Prime context。横版优先处理，原生铺满画布；保留主体、标题、卖点、数值表和图标的内容关系，重新分配宽度和间距，不把方形图缩小居中、不裁切、不加边。
-3. **竖版重排（800x1000）**：Input 1 为已批准的方形母版，Input 2 为当前竖版 Prime context。按移动端阅读顺序原生重排，保持与方形母版相同的视觉身份和冻结文案。
+3. **竖版重排（800x1000）**：Input 1 为已批准的方形母版，Input 2 为当前竖版 Prime context。按 4:5 竖版广告画布原生重排，保持与方形母版相同的视觉身份和冻结文案；不得生成 story、手机截图、长海报、滚动页、9:16 或 9:19。
 
 横版拥挤时必须执行垂直方向的 Y 轴压缩：先减少装饰和上下留白，再压缩模块间距、行距和标题/金额/期限/表格之间的垂直节奏，最后才小幅降低字号；
 不得删除冻结文案、金融事实、底部图标或表格列。横版标题和利益点整体必须位于官方顶部 Logo/条款组件下方；金额、期限按钮和完整四行表格必须位于官方底部组件上方，
@@ -133,12 +145,12 @@ Prime context 是当前尺寸的真实视觉输入，不是黑白遮罩或可复
 
 每次模型调用都保存实际发送的 prompt、`prompt_sha256`、`request_id`、attempts、实际画布尺寸和输入资产指纹。
 调用 `multica image edit` 或 `image edit-batch` 时使用显式长超时；传输层 408/429/5xx/网络失败最多重试两次。必须把 CLI 返回的完整 JSON 原样保存，不能手工只保留 request ID、hash 或 `generated_asset` 摘要；后续 `asset-put` 使用同一份原始 JSON。
-模型调用画布必须遵守 GPT Image 2 的 16px 边长约束，交付尺寸与模型画布分开记录：`1080x1080` 使用 `1088x1088`，`1200x628` 使用 `1200x624`，`800x1000` 使用 `800x992`。CLI 接受 canonical 交付尺寸并自动映射到上述 provider canvas；完整模型 JSON 必须同时保留请求尺寸和实际 provider canvas。模型输出必须经过规范化到 `1080x1080`、`1200x628`、`800x1000`。比例在允许范围内直接缩放；如果模型连续返回明显错误比例，CLI 最多重试两次重新取图；两次后仍不符合目标比例时，该尺寸直接失败并交给平台续跑，不要保留最后一张图，也不得用 `aspect-compress`、`contain-edge-extend` 或其他内容挤压/拉伸兜底把错误比例强行压成交付尺寸。不要把 `1080x1080`、`1200x628` 或 `800x1000` 直接作为 provider 的 `--size` 值传入旧版 CLI。
+模型调用画布必须遵守 GPT Image 2 的 16px 边长约束，交付尺寸与模型画布分开记录：`1080x1080` 使用 `1088x1088`，`1200x628` 使用 `1200x624`，`800x1000` 使用 `800x992`。CLI 接受 canonical 交付尺寸并自动映射到上述 provider canvas；完整模型 JSON 必须同时保留请求尺寸和实际 provider canvas。模型输出必须经过规范化到 `1080x1080`、`1200x628`、`800x1000`。比例偏差 `<=10%` 直接接受并规范化；`10%-25%` 且已存在可下载的拒绝回图时，用该回图和同尺寸 Prime context 做一次 canvas repair retry，提示词只要求压回锁定画布并保留全部业务内容；`>25%` 视为真实画布跑偏，只重生当前失败尺寸并使用更强的 CANVAS LOCK 提示词。不要把 `1080x1080`、`1200x628` 或 `800x1000` 直接作为 provider 的 `--size` 值传入旧版 CLI。
 
 ```text
 python <当前 Skill 目录>/references/normalize_image.py \
   --input <model.png> --output <normalized.png> --width <w> --height <h> \
-  --model-size <requested-model-size> --evidence <normalization.json>
+  --model-size <requested-model-size> --max-aspect-deviation 0.10 --evidence <normalization.json>
 ```
 
 三尺寸底图完成后登记 generated assets，再调用绑定的贴片 Skill，由后端合成官方 Prime 并进入 QC。最终 QC 只以真实 Prime 合成图为准：实际遮挡、文字不可读、
@@ -163,10 +175,6 @@ python <当前 Skill 目录>/references/register_process_assets.py \
 任何登记失败都要保留真实错误并让当前 task 失败，以便平台创建有界续跑；在当前 revision 的所有 expected size 都有 canonical generated asset、完整过程证据并且贴片 Skill 返回后端合成成功前，禁止调用
 `multica task complete`。
 
-文案校验必须与本 Skill 的当前提示词合同一致：当前合同使用自然语言描述 Prime 保护带，禁止把坐标、矩形框或审计重复写进模型提示词。
-`--require-prime-guard` 应校验无品牌底图、Input 1/Input 2 角色、官方 Prime 视觉上下文、保护带避让和确定性叠加语义；旧版坐标合同只适用于仍明确使用坐标语法的历史提示词。
-期限数值带 `bulan`、`hari` 或 `tahun` 时由期限 token 校验，不得再拆成未批准的裸金融数字。
-
 每个 `prompt-contract-<size>.json` 除 `prompt_sha256` 外必须写入当前 Variant brief
 `creative_contract.parent_direction_sha256`，并保留 `size_key`、`revision`、`variant_id`、`input_roles` 和
 `active_content_groups`。该父方向哈希是 visual QC 校验三尺寸视觉继承的唯一证据；不能省略、伪造或从旧 revision 复制。
@@ -175,10 +183,20 @@ python <当前 Skill 目录>/references/register_process_assets.py \
 `multica task complete`。只生成方形或只生成部分尺寸时不能提前 complete，也不能把缺失尺寸写成成功；应在同一个 task 中继续补齐，或把真实错误交给
 `multica task fail`。若 task 因模型、网络或 daemon 中断而先结束，平台会在服务端自动创建有上限的 fresh continuation，并保持 Variant 为 running，直到尺寸齐全或达到上限。
 
+## 自适应恢复
+
+失败恢复优先复用已经生成的证据，只有缺少有效回图或真实视觉失败才重新调用模型：
+
+- `asset-put`、上传、协议、prompt/hash 或证据写回失败时，复用同一 normalized 图、同一模型 JSON、同一 prompt-contract 和 normalization evidence 补登记；不得重新出图。
+- Prime compose 失败时，只重试绑定的贴片 Skill 或后端确定性合成入口；已有 generated canonical asset 不重新生成。
+- 部分尺寸失败时，只补当前 revision 缺失的尺寸；已有 canonical generated asset 的尺寸跳过。
+- 比例失败按 `<=10%` 接受、`10%-25%` canvas repair、`>25%` 重生当前尺寸处理。
+- recovery 续跑必须先回读订单和过程证据，确认哪些尺寸已经有 canonical、哪些尺寸只有过程图、哪些尺寸没有有效回图，再选择补登记、补贴片或补生成。
+
 ### generated asset 写回格式
 
 每个尺寸都必须用同一 Variant、当前 revision 和已上传附件写回一个完整的 canonical JSON 对象，再调用
-`multica creative order asset-put <order-id> --input-file <asset.json> --model-result-file <model.json> --prompt-contract-file <prompt-contract.json> --copy-validation-file <copy-validation.json> --normalization-evidence-file <normalization.json>`：
+`multica creative order asset-put <order-id> --input-file <asset.json> --model-result-file <model.json> --prompt-contract-file <prompt-contract.json> --normalization-evidence-file <normalization.json>`：
 
 ```json
 {
@@ -191,7 +209,7 @@ python <当前 Skill 目录>/references/register_process_assets.py \
 }
 ```
 
-`model-result-file` 必须是该尺寸模型调用返回的完整 JSON，不能只摘录 prompt 或 request ID；四份证据文件必须逐尺寸对应。
+`model-result-file` 必须是该尺寸模型调用返回的完整 JSON，不能只摘录 prompt 或 request ID；模型结果、prompt contract 和 normalization evidence 必须逐尺寸对应。
 不要使用 `kind`、`asset_type` 代替 `stage`，也不要省略 `status`、`revision` 或 `attachment_id`。平台会兼容旧别名，但新任务必须按上面的 canonical
 格式写回，避免生成成功却没有进入订单资产链路。
 

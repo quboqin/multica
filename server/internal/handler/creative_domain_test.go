@@ -2009,10 +2009,25 @@ func completedGeneratedAssetTrace(prompt, requestID string, attempts int) (json.
 	evidence, _ := json.Marshal(map[string]any{
 		"request_id": requestID, "attempts": attempts, "prompt_sha256": promptSHA256,
 		"model_result": modelResult, "prompt_contract": map[string]any{"prompt_sha256": promptSHA256},
-		"copy_validation": map[string]any{"passed": true},
-		"normalization":   map[string]any{"target_size": map[string]int{"width": 1080, "height": 1080}},
+		"normalization": map[string]any{"target_size": map[string]int{"width": 1080, "height": 1080}},
 	})
 	return metadata, evidence
+}
+
+func TestValidateCompletedGeneratedAssetTraceAllowsLegacyFailedCopyValidation(t *testing.T) {
+	metadata, evidence := completedGeneratedAssetTrace("legacy failed copy validation", "req-copy-warning", 1)
+	var object map[string]any
+	if err := json.Unmarshal(evidence, &object); err != nil {
+		t.Fatal(err)
+	}
+	object["copy_validation"] = map[string]any{"passed": false, "reason": "legacy warning"}
+	evidence, err := json.Marshal(object)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := validateCompletedGeneratedAssetTrace(metadata, evidence); err != nil {
+		t.Fatalf("legacy failed copy validation should not block generated trace: %v", err)
+	}
 }
 
 func createCreativeOrderAssetAttachment(t *testing.T, filename string) string {
@@ -2096,7 +2111,12 @@ VALUES ($1, 'V01', 1, 'running') RETURNING id::text`, itemID).Scan(&variantID); 
 	if changed.Code != http.StatusConflict || !strings.Contains(changed.Body.String(), "trace is immutable") {
 		t.Fatalf("different completed trace = %d %s", changed.Code, changed.Body.String())
 	}
-	missing := put("1200x628", json.RawMessage(`{"prompt":"missing hash","model":"gpt-image-2","actual_width":1200,"actual_height":624,"actual_aspect_ratio":1.9230769231}`), json.RawMessage(`{"request_id":"req-missing","attempts":1}`))
+	noCopyMetadata, noCopyEvidence := completedGeneratedAssetTrace("prompt without copy validation", "req-prompt-3", 1)
+	withoutCopyValidation := put("1200x628", noCopyMetadata, noCopyEvidence)
+	if withoutCopyValidation.Code != http.StatusOK {
+		t.Fatalf("generated asset without copy validation = %d %s", withoutCopyValidation.Code, withoutCopyValidation.Body.String())
+	}
+	missing := put("800x1000", json.RawMessage(`{"prompt":"missing hash","model":"gpt-image-2","actual_width":800,"actual_height":992,"actual_aspect_ratio":0.8064516129}`), json.RawMessage(`{"request_id":"req-missing","attempts":1}`))
 	if missing.Code != http.StatusBadRequest || !strings.Contains(missing.Body.String(), "prompt_sha256") {
 		t.Fatalf("missing prompt hash = %d %s", missing.Code, missing.Body.String())
 	}

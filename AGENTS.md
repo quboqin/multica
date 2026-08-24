@@ -334,3 +334,9 @@ no previously seen release, the release announcement opens by default.
   analysis, order, planning, production, and QC without a user click. The
   release resource contract now verifies the current version exists in every
   supported locale.
+- **2026-08-24 / creative-production** — Removed copy validation as a hard
+  generated-asset write blocker, made `asset-put` require only model result,
+  prompt contract, and normalization evidence, added size-specific CANVAS LOCK
+  prompt guidance for all production sizes, raised default aspect tolerance to
+  10%, and documented recovery that reuses existing generated evidence before
+  re-running image generation.

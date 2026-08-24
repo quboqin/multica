@@ -4265,7 +4265,6 @@ func validateCompletedGeneratedAssetTrace(metadata, evidence json.RawMessage) er
 		PromptSHA256   string          `json:"prompt_sha256"`
 		ModelResult    json.RawMessage `json:"model_result"`
 		PromptContract json.RawMessage `json:"prompt_contract"`
-		CopyValidation json.RawMessage `json:"copy_validation"`
 		Normalization  json.RawMessage `json:"normalization"`
 	}
 	if err := json.Unmarshal(evidence, &evidenceTrace); err != nil {
@@ -4309,12 +4308,6 @@ func validateCompletedGeneratedAssetTrace(metadata, evidence json.RawMessage) er
 	}
 	if err := json.Unmarshal(evidenceTrace.PromptContract, &promptContract); err != nil || promptContract.PromptSHA256 != evidenceTrace.PromptSHA256 {
 		return errors.New("completed generated asset evidence.prompt_contract does not match prompt_sha256")
-	}
-	var copyValidation struct {
-		Passed bool `json:"passed"`
-	}
-	if err := json.Unmarshal(evidenceTrace.CopyValidation, &copyValidation); err != nil || !copyValidation.Passed {
-		return errors.New("completed generated asset evidence.copy_validation must be passed")
 	}
 	var normalization struct {
 		TargetSize map[string]json.RawMessage `json:"target_size"`

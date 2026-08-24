@@ -78,27 +78,25 @@ multica creative order diagnostic-asset-put <order-id> --input-file <direct-edit
 label 写为 `直接改图尝试 <attempt> · 未采用`。metadata 必须保留 `accepted`、`attempt`、拒绝原因、source revision、source asset、
 annotation guide attachment、模型、request ID、prompt_sha256 和目标尺寸。回读订单，确认附件属于当前 variant、task、revision 和 size。
 
-只有被采用的回图才能写入 `stage: "generated"` 的 canonical asset。先上传同一张已采用回图，再准备四份与该尺寸完全对应的证据文件：
+只有被采用的回图才能写入 `stage: "generated"` 的 canonical asset。先上传同一张已采用回图，再准备三份与该尺寸完全对应的必需证据文件；历史任务如果已经有 `copy-validation.json` 可以作为旧证据一并传入，但不得作为写回拦截：
 
 - `image-edit-result.json`：Image Edit 返回的完整 JSON，必须包含原始 `prompt`、匹配的 `prompt_sha256`、model、request ID、attempt 和实际画布；不得保留本地 `path`。
 - `prompt-contract.json`：至少包含与模型结果完全相同的 `prompt_sha256`。
-- `copy-validation.json`：`{"passed": true}` 的通过证据。
 - `normalization.json`：包含当前处理尺寸的归一化证据。
 
-四份证据必须一起传给 CLI：
+三份必需证据必须一起传给 CLI：
 
 ```bash
 multica attachment upload <accepted-base.png> --output json
 multica creative order asset-put <order-id> --input-file <edited-asset.json> \
   --model-result-file <image-edit-result.json> \
   --prompt-contract-file <prompt-contract.json> \
-  --copy-validation-file <copy-validation.json> \
   --normalization-evidence-file <normalization.json> --output json
 ```
 
 `edited-asset.json` 必须保留原 `asset_family_id`，写入当前 task context 的 `variant_id`、当前处理尺寸 `size_key`、`revision`、
-`derived_from_asset_id: <当前尺寸 source asset id>`、`status: "completed"`。使用上述四个证据参数时，`edited-asset.json` 不得包含
-`metadata` 或 `evidence` 字段；CLI 会从证据生成它们，并校验 prompt/hash、模型结果、复制校验和 target size。用户原话、输入附件、
+`derived_from_asset_id: <当前尺寸 source asset id>`、`status: "completed"`。使用上述证据参数时，`edited-asset.json` 不得包含
+`metadata` 或 `evidence` 字段；CLI 会从证据生成它们，并校验 prompt/hash、模型结果和 target size。用户原话、输入附件、
 annotation guide、目检结论放在过程诊断资产的 metadata 或任务错误中，不要塞入 canonical asset 的自动生成字段。不得再次调用
 `variant-put` 或把 revision 再加一。
 
@@ -106,7 +104,7 @@ annotation guide、目检结论放在过程诊断资产的 metadata 或任务错
 重新贴回官方透明组件并直接登记 `primed`、`delivered` 和 Prime 合成过程图。精准调整不创建贴片 task、不调用 QC、不创建 QC 子 Issue；
 贴片 Skill 是唯一的官方组件交接来源。
 
-如果回图已经存在，后续失败按协议层处理：task/variant 归属、JSON 字段、四份证据未同时提供、prompt/hash、copy validation、
+如果回图已经存在，后续失败按协议层处理：task/variant 归属、JSON 字段、三份必需证据未同时提供、prompt/hash、
 normalization 或本地 path 错误，都只修复对应 JSON、参数或 task_id，再用同一张上传附件和同一份模型结果重试；不要重新调用 Image Edit。
 只有没有有效模型回图、Provider 明确返回图片失败，或目检确认修改未完成时，才按每尺寸最多一次限制重新编辑。上传失败重试上传，
 不得重复生成。每次最终写回后都要回读订单，确认所有 `expected_sizes` 都有当前 revision 的 generated 资产、正确 source lineage 和过程图。

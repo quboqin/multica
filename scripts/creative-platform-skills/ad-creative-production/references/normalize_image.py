@@ -18,7 +18,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--height", required=True, type=int)
     parser.add_argument("--model-size")
     parser.add_argument("--evidence")
-    parser.add_argument("--max-aspect-deviation", type=float, default=0.05)
+    parser.add_argument("--max-aspect-deviation", type=float, default=0.10)
     parser.add_argument("--allow-aspect-fallback", action="store_true")
     parser.add_argument(
         "--aspect-fallback-mode",

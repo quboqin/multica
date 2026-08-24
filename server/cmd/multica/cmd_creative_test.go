@@ -169,11 +169,75 @@ func TestValidateProviderImageOutput(t *testing.T) {
 	if err != nil || dimensions.Width != 1200 || dimensions.Height != 624 {
 		t.Fatalf("validateProviderImageOutput(valid) = %#v, %v", dimensions, err)
 	}
-	if _, err := validateProviderImageOutput(pngImageBytes(1200, 650), "1200x624"); err != nil {
-		t.Fatalf("validateProviderImageOutput(within five percent) = %v", err)
+	if _, err := validateProviderImageOutput(pngImageBytes(1672, 941), "1200x624"); err != nil {
+		t.Fatalf("validateProviderImageOutput(within ten percent) = %v", err)
 	}
-	if _, err := validateProviderImageOutput(pngImageBytes(1536, 1024), "1200x624"); err == nil || !strings.Contains(err.Error(), "aspect deviation") {
+	if _, err := validateProviderImageOutput(pngImageBytes(1200, 700), "1200x624"); err == nil || !strings.Contains(err.Error(), "aspect deviation") {
 		t.Fatalf("validateProviderImageOutput(wrong aspect) = %v", err)
+	}
+}
+
+func TestCreativeOrderAssetPayloadAllowsOmittedCopyValidationEvidence(t *testing.T) {
+	directory := t.TempDir()
+	prompt := "Use the approved copy on a new full-bleed layout."
+	promptSHA256 := imagePromptSHA256(prompt)
+	writeJSON := func(name string, value any) string {
+		t.Helper()
+		path := filepath.Join(directory, name)
+		body, err := json.Marshal(value)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, body, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return path
+	}
+	inputFile := writeJSON("asset.json", map[string]any{
+		"variant_id": "variant-1", "size_key": "1080x1080", "revision": 1,
+		"stage": "generated", "status": "completed", "attachment_id": "attachment-1",
+	})
+	modelResultFile := writeJSON("image-edit.raw.json", map[string]any{
+		"model": "gpt-image-2", "prompt": prompt, "prompt_sha256": promptSHA256,
+		"request_id": "req-1", "attempts": 1, "actual_width": 1088, "actual_height": 1088,
+		"actual_aspect_ratio": 1.0,
+	})
+	promptContractFile := writeJSON("prompt-contract.json", map[string]any{"prompt_sha256": promptSHA256})
+	normalizationFile := writeJSON("normalize-evidence.json", map[string]any{"target_size": map[string]int{"width": 1080, "height": 1080}})
+
+	command := &cobra.Command{}
+	command.Flags().String("input-file", "", "")
+	command.Flags().String("model-result-file", "", "")
+	command.Flags().String("model-result-id", "", "")
+	command.Flags().String("prompt-contract-file", "", "")
+	command.Flags().String("copy-validation-file", "", "")
+	command.Flags().String("normalization-evidence-file", "", "")
+	for name, value := range map[string]string{
+		"input-file":                  inputFile,
+		"model-result-file":           modelResultFile,
+		"prompt-contract-file":        promptContractFile,
+		"normalization-evidence-file": normalizationFile,
+	} {
+		if err := command.Flags().Set(name, value); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	payload, err := creativeOrderAssetPayload(command)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var asset struct {
+		Evidence map[string]json.RawMessage `json:"evidence"`
+	}
+	if err := json.Unmarshal(payload, &asset); err != nil {
+		t.Fatal(err)
+	}
+	if _, exists := asset.Evidence["copy_validation"]; exists {
+		t.Fatalf("copy validation evidence should be omitted when no file is provided: %#v", asset.Evidence["copy_validation"])
+	}
+	if len(asset.Evidence["model_result"]) == 0 || len(asset.Evidence["prompt_contract"]) == 0 || len(asset.Evidence["normalization"]) == 0 {
+		t.Fatalf("required evidence missing: %#v", asset.Evidence)
 	}
 }
 
@@ -316,7 +380,101 @@ func TestCreativeOrderAssetPayloadEmbedsJSONEvidenceWithoutLocalPath(t *testing.
 		"generated_asset": map[string]any{"completed": true, "path": `C:\\workdir\\square-model.png`, "width": 1088, "height": 1088},
 	})
 	promptContractFile := writeJSON("prompt-contract.json", map[string]any{"prompt_sha256": promptSHA256})
-	copyValidationFile := writeJSON("copy-validation.json", map[string]any{"passed": true})
+	normalizationFile := writeJSON("normalize-evidence.json", map[string]any{"target_size": map[string]int{"width": 1080, "height": 1080}})
+
+	command := &cobra.Command{}
+	command.Flags().String("input-file", "", "")
+	command.Flags().String("model-result-file", "", "")
+	command.Flags().String("model-result-id", "", "")
+	command.Flags().String("prompt-contract-file", "", "")
+	command.Flags().String("copy-validation-file", "", "")
+	command.Flags().String("normalization-evidence-file", "", "")
+	for name, value := range map[string]string{
+		"input-file":                  inputFile,
+		"model-result-file":           modelResultFile,
+		"prompt-contract-file":        promptContractFile,
+		"normalization-evidence-file": normalizationFile,
+	} {
+		if err := command.Flags().Set(name, value); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	payload, err := creativeOrderAssetPayload(command)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var asset struct {
+		Metadata struct {
+			Prompt string `json:"prompt"`
+			Model  string `json:"model"`
+		} `json:"metadata"`
+		Evidence struct {
+			RequestID      string          `json:"request_id"`
+			PromptSHA256   string          `json:"prompt_sha256"`
+			ModelResult    json.RawMessage `json:"model_result"`
+			PromptContract json.RawMessage `json:"prompt_contract"`
+			Normalization  json.RawMessage `json:"normalization"`
+		} `json:"evidence"`
+	}
+	if err := json.Unmarshal(payload, &asset); err != nil {
+		t.Fatal(err)
+	}
+	if asset.Metadata.Prompt != prompt || asset.Metadata.Model != "gpt-image-2" || asset.Evidence.RequestID != "req-1" || asset.Evidence.PromptSHA256 != promptSHA256 {
+		t.Fatalf("asset trace = %#v", asset)
+	}
+	var modelResult map[string]any
+	if err := json.Unmarshal(asset.Evidence.ModelResult, &modelResult); err != nil {
+		t.Fatal(err)
+	}
+	if _, exists := modelResult["path"]; exists {
+		t.Fatalf("model result leaked local path: %#v", modelResult)
+	}
+	generatedAsset, ok := modelResult["generated_asset"].(map[string]any)
+	if !ok {
+		t.Fatalf("generated asset = %#v", modelResult["generated_asset"])
+	}
+	if _, exists := generatedAsset["path"]; exists {
+		t.Fatalf("generated asset leaked local path: %#v", generatedAsset)
+	}
+	for label, raw := range map[string]json.RawMessage{
+		"prompt contract": asset.Evidence.PromptContract,
+		"normalization":   asset.Evidence.Normalization,
+	} {
+		var object map[string]any
+		if err := json.Unmarshal(raw, &object); err != nil || len(object) == 0 {
+			t.Fatalf("%s = %#v, %v", label, object, err)
+		}
+	}
+}
+
+func TestCreativeOrderAssetPayloadPreservesOptionalCopyValidationEvidence(t *testing.T) {
+	directory := t.TempDir()
+	prompt := "legacy optional copy validation"
+	promptSHA256 := imagePromptSHA256(prompt)
+	writeJSON := func(name string, value any) string {
+		t.Helper()
+		path := filepath.Join(directory, name)
+		body, err := json.Marshal(value)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, body, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return path
+	}
+	inputFile := writeJSON("asset.json", map[string]any{
+		"variant_id": "variant-1", "size_key": "1080x1080", "revision": 1,
+		"stage": "generated", "status": "completed", "attachment_id": "attachment-1",
+	})
+	modelResultFile := writeJSON("image-edit.raw.json", map[string]any{
+		"model": "gpt-image-2", "prompt": prompt, "prompt_sha256": promptSHA256,
+		"request_id": "req-legacy-copy", "attempts": 1, "actual_width": 1088, "actual_height": 1088,
+		"actual_aspect_ratio": 1.0,
+	})
+	promptContractFile := writeJSON("prompt-contract.json", map[string]any{"prompt_sha256": promptSHA256})
+	copyValidationFile := writeJSON("copy-validation.json", map[string]any{"passed": false, "reason": "legacy warning"})
 	normalizationFile := writeJSON("normalize-evidence.json", map[string]any{"target_size": map[string]int{"width": 1080, "height": 1080}})
 
 	command := &cobra.Command{}
@@ -343,48 +501,22 @@ func TestCreativeOrderAssetPayloadEmbedsJSONEvidenceWithoutLocalPath(t *testing.
 		t.Fatal(err)
 	}
 	var asset struct {
-		Metadata struct {
-			Prompt string `json:"prompt"`
-			Model  string `json:"model"`
-		} `json:"metadata"`
 		Evidence struct {
-			RequestID      string          `json:"request_id"`
-			PromptSHA256   string          `json:"prompt_sha256"`
-			ModelResult    json.RawMessage `json:"model_result"`
-			PromptContract json.RawMessage `json:"prompt_contract"`
 			CopyValidation json.RawMessage `json:"copy_validation"`
-			Normalization  json.RawMessage `json:"normalization"`
 		} `json:"evidence"`
 	}
 	if err := json.Unmarshal(payload, &asset); err != nil {
 		t.Fatal(err)
 	}
-	if asset.Metadata.Prompt != prompt || asset.Metadata.Model != "gpt-image-2" || asset.Evidence.RequestID != "req-1" || asset.Evidence.PromptSHA256 != promptSHA256 {
-		t.Fatalf("asset trace = %#v", asset)
+	var validation struct {
+		Passed bool   `json:"passed"`
+		Reason string `json:"reason"`
 	}
-	var modelResult map[string]any
-	if err := json.Unmarshal(asset.Evidence.ModelResult, &modelResult); err != nil {
+	if err := json.Unmarshal(asset.Evidence.CopyValidation, &validation); err != nil {
 		t.Fatal(err)
 	}
-	if _, exists := modelResult["path"]; exists {
-		t.Fatalf("model result leaked local path: %#v", modelResult)
-	}
-	generatedAsset, ok := modelResult["generated_asset"].(map[string]any)
-	if !ok {
-		t.Fatalf("generated asset = %#v", modelResult["generated_asset"])
-	}
-	if _, exists := generatedAsset["path"]; exists {
-		t.Fatalf("generated asset leaked local path: %#v", generatedAsset)
-	}
-	for label, raw := range map[string]json.RawMessage{
-		"prompt contract": asset.Evidence.PromptContract,
-		"copy validation": asset.Evidence.CopyValidation,
-		"normalization":   asset.Evidence.Normalization,
-	} {
-		var object map[string]any
-		if err := json.Unmarshal(raw, &object); err != nil || len(object) == 0 {
-			t.Fatalf("%s = %#v, %v", label, object, err)
-		}
+	if validation.Passed || validation.Reason != "legacy warning" {
+		t.Fatalf("copy validation evidence = %#v", validation)
 	}
 }
 
@@ -542,9 +674,9 @@ func TestExecuteImageEditBatchRunsDependentJobsTogether(t *testing.T) {
 	batch := preparedImageEditBatch{
 		MaxConcurrency: 2,
 		Jobs: []preparedImageEditJob{
-			{ID: "square", Inputs: []imageEditBatchInput{{Path: reference}}, Prompt: "square", Model: "gpt-image-2", Size: "1088x1088", MaxAttempts: 1, OutputFile: filepath.Join(workDir, "square.png")},
-			{ID: "landscape", Inputs: []imageEditBatchInput{{Job: "square"}, {Path: reference}}, Prompt: "landscape", Model: "gpt-image-2", Size: "1680x880", MaxAttempts: 1, OutputFile: filepath.Join(workDir, "landscape.png"), DependsOn: []string{"square"}},
-			{ID: "portrait", Inputs: []imageEditBatchInput{{Job: "square"}, {Path: reference}}, Prompt: "portrait", Model: "gpt-image-2", Size: "832x1040", MaxAttempts: 1, OutputFile: filepath.Join(workDir, "portrait.png"), DependsOn: []string{"square"}},
+			{ID: "square", Inputs: []imageEditBatchInput{{Path: reference}}, Prompt: "square", Model: "gpt-image-2", Size: "1088x1088", ProviderSize: "1088x1088", MaxAttempts: 1, OutputFile: filepath.Join(workDir, "square.png")},
+			{ID: "landscape", Inputs: []imageEditBatchInput{{Job: "square"}, {Path: reference}}, Prompt: "landscape", Model: "gpt-image-2", Size: "1680x880", ProviderSize: "1680x880", MaxAttempts: 1, OutputFile: filepath.Join(workDir, "landscape.png"), DependsOn: []string{"square"}},
+			{ID: "portrait", Inputs: []imageEditBatchInput{{Job: "square"}, {Path: reference}}, Prompt: "portrait", Model: "gpt-image-2", Size: "832x1040", ProviderSize: "832x1040", MaxAttempts: 1, OutputFile: filepath.Join(workDir, "portrait.png"), DependsOn: []string{"square"}},
 		},
 	}
 	summary := executeImageEditBatch(context.Background(), server.Client(), server.URL, "test-key", "image", batch)
@@ -590,7 +722,7 @@ func TestExecuteImageEditBatchFailsAfterRepeatedWrongProviderAspect(t *testing.T
 		MaxConcurrency: 1,
 		Jobs: []preparedImageEditJob{{
 			ID: "landscape", Inputs: []imageEditBatchInput{{Path: reference}}, Prompt: "landscape",
-			Model: "gpt-image-2", Size: "1200x624", MaxAttempts: 1, OutputFile: output,
+			Model: "gpt-image-2", Size: "1200x628", ProviderSize: "1200x624", MaxAttempts: 1, OutputFile: output,
 		}},
 	})
 	if summary.Succeeded != 0 || summary.Failed != 1 || summary.Results[0].Status != "failed" {

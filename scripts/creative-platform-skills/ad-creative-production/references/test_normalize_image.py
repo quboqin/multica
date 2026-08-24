@@ -114,7 +114,7 @@ def test_prime_safe_fit_derives_default_frame_from_layout_contract(tmp_path: Pat
     assert evidence["safe_content_rect"] == {"x1": 3, "y1": 15, "x2": 97, "y2": 85}
 
 
-def test_normalize_preserves_edges_within_the_five_percent_aspect_limit(tmp_path: Path, monkeypatch) -> None:
+def test_normalize_preserves_edges_within_the_ten_percent_aspect_limit(tmp_path: Path, monkeypatch) -> None:
     source = Image.new("RGB", (100, 104), "white")
     for x in range(100):
         source.putpixel((x, 0), (220, 20, 20))
@@ -144,9 +144,9 @@ def test_normalize_preserves_edges_within_the_five_percent_aspect_limit(tmp_path
         assert output.getpixel((50, 99))[2] > 150
 
 
-def test_normalize_rejects_a_provider_aspect_beyond_five_percent(tmp_path: Path, monkeypatch) -> None:
+def test_normalize_rejects_a_provider_aspect_beyond_ten_percent(tmp_path: Path, monkeypatch) -> None:
     input_path = tmp_path / "input.png"
-    Image.new("RGB", (100, 106), "white").save(input_path)
+    Image.new("RGB", (100, 112), "white").save(input_path)
 
     monkeypatch.setattr("sys.argv", [
         "normalize_image.py",
