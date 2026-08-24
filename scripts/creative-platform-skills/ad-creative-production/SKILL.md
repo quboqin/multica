@@ -23,6 +23,12 @@ allowed-tools: Bash(multica *), Bash(python *)
 参考图的权威入口是任务上下文中的 `candidate_id`。订单响应没有展开 `reference_assets` 时，使用
 `multica creative material download <issue-id> <candidate-id> --output-file <source-reference.png> --output json`
 受控下载当前候选；下载失败才算缺少参考图，不能把 `reference_assets` 为空本身当作失败。不得使用同 candidate 的其他订单、历史工作目录或摘要替代该下载。
+如果该命令返回登录态过期/未登录，但 `multica creative materials <issue-id> --output json` 仍能读取当前 candidate，并且该 candidate 的
+`source_attachment_id` 非空，或 `archived_url` / `preview_url` / `resource_url` / `original_url` 明确是
+`/api/attachments/<attachment-id>/download`（可为同域或平台 app 域绝对 URL），则这是同一候选附件的下载域鉴权问题，不是缺少参考图。
+此时允许只用该同源 candidate 的 attachment id 执行：
+`mkdir -p <source-dir> && multica attachment download <attachment-id> -o <source-dir>`，再把下载得到的唯一图片文件作为
+`source-reference`。如果无法从当前 candidate 解析出唯一 attachment id，或下载后的文件不存在/不是图片，才停止并写 `action_required`。
 
 Prime context 必须以当前任务的 `revision` 登记在当前 Variant 下，并且每个目标尺寸各有一份；旧 revision 的同名附件不能代替当前 revision。
 如果受控候选下载失败、当前尺寸的 Prime context 无法生成、冻结文案缺失或 Variant execution 缺失，才停止并写 `action_required`，不要凭摘要补齐。
