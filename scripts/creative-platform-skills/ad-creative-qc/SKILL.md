@@ -18,9 +18,9 @@ multica creative order get <order-id> --output json
 缺失、重复、revision 错配、证据包不一致或夹带未声明尺寸时，本 lane 失败；不得按
 Issue、评论、Variant 展示名或 Agent 名称猜输入。
 
-## 证据下载与机器检查
+## Technical 证据下载与机器检查
 
-顺序下载完整品牌组件成图、context 给出的 manifest 和 compose result。每次下载显式设置
+仅 `creative_qc_technical` 执行本段。顺序下载完整品牌组件成图、context 给出的 manifest 和 compose result。每次下载显式设置
 `MULTICA_HTTP_TIMEOUT=2m`，等待结束后再开始下一项；单项超时只顺序重试该项，不并发下载。
 
 ```text
@@ -36,14 +36,31 @@ python <当前 Skill 目录>/references/qc_batch.py \
   --contact-sheet <contact-sheet.png>
 ```
 
+## Visual 后端检查
+
+`creative_qc_visual` 不下载图片到 agent workdir，不调用 `view_image`，不把图片转成 base64/stdout，也不运行本地 OCR 或
+`qc_batch.py`。visual lane 只调用后端视觉检查入口，让服务端从 OSS 读取当前 revision 的 primed 成图、生成短时签名 URL、
+调用视觉模型并上传 `visual-inspection.json` 与诊断联系表。
+
+```text
+multica creative order visual-inspect <order-id> \
+  --variant <variant-id> --revision <revision> --output json \
+  > visual-inspection.json
+```
+
+后端返回的 `visual-inspection.json` 就是本 lane 的 QC report：直接写回，不二次改写图片结论，不自行补造 passed。
+若返回 `visual_inspection_model_unconfigured`、`visual_inspection_asset_unavailable`、
+`visual_inspection_signed_url_unavailable` 或 `visual_inspection_model_error`，按返回内容写 failed，
+再调用 `qc-finalize` 归档。
+
 ## Lane 合同
 
 - `technical`：文件、目标尺寸、manifest/compose 对应、完整品牌模板、模板布局契约、四角/底部和 `backdrop_rule`。
-- `visual`：对照冻结 `copy_snapshot`、brief、source/generated assets 检查批准文案、金融事实、主题、主体、
-  信息层级和画质；同时核对 generated evidence 的 `prompt-contract-<size>.json` 父方向哈希是否等于
-  `brief.creative_contract.parent_direction_sha256`，并以父方向作为主题与核心事实的验收基线。多尺寸时检查同内容族一致性。
+- `visual`：通过后端 `visual-inspect` 对照冻结 `copy_snapshot`、brief 和当前 primed assets 检查批准文案、
+  金融事实、主题、主体、信息层级和画质。generated evidence 的父方向哈希和 compose_result 归属由后端证据包提供；
+  多尺寸时检查同内容族一致性。
 
-视觉 lane 只直接查看最终品牌组件成图和未标注联系表，必须按三个闸门验收：文案/组件完整、Prime 合成前后遮挡、官方 Prime 局部可读性。
+visual-inspect 必须按三个闸门验收：文案/组件完整、Prime 合成前后遮挡、官方 Prime 局部可读性。
 第一闸门检查冻结标题、利益点、金额、表格、CTA 是否全部出现；有边框但没有文字也算失败。第二闸门对照机器证据中的
 `safe_content_frame`、`top_key_content_exclusion_end`、`bottom_key_content_exclusion_start`，确认正文、金额、表格和 CTA 没有进入顶部或底部 Prime 禁区；
 正文被 Prime 实际盖住都算失败。第三闸门逐一放大 Logo、条款和底部组件，必须能看清官方文字，不能用整条带平均颜色代替局部判断。

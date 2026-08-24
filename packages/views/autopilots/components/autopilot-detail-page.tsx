@@ -61,6 +61,12 @@ import { WebhookPayloadPreview } from "./webhook-payload-preview";
 import { WebhookDeliveriesSection } from "./webhook-deliveries-section";
 import { ProjectIcon } from "../../projects/components/project-icon";
 import { useT } from "../../i18n";
+import {
+  autopilotExecutionModeLabelKey,
+  autopilotRunSourceLabelKey,
+  autopilotStatusLabelKey,
+  autopilotTriggerKindLabelKey,
+} from "./autopilot-labels";
 
 function formatDate(date: string): string {
   return new Date(date).toLocaleString(undefined, {
@@ -109,6 +115,7 @@ function RunRow({ run, agentId, agentName }: { run: AutopilotRun; agentId: strin
   const visual = RUN_VISUAL[status];
   const StatusIcon = visual.icon;
   const outputPreview = summarizeRunOutput(readRunOutput(run));
+  const sourceLabelKey = autopilotRunSourceLabelKey(run.source);
 
   // For runs with a task_id (run_only mode), build a minimal AgentTask so
   // TranscriptButton can lazy-load the execution transcript.
@@ -140,7 +147,7 @@ function RunRow({ run, agentId, agentName }: { run: AutopilotRun; agentId: strin
         {t(($) => $.run_status[status])}
       </span>
       <span className="w-20 shrink-0 text-xs text-muted-foreground">
-        {t(($) => $.run_source[run.source as "schedule" | "manual" | "webhook" | "api"]) ?? run.source}
+        {sourceLabelKey ? t(($) => $.run_source[sourceLabelKey]) : run.source}
       </span>
       <span className="flex-1 min-w-0 text-xs text-muted-foreground">
         {run.issue_id ? (
@@ -320,6 +327,8 @@ function TriggerRow({ trigger, autopilotId }: { trigger: AutopilotTrigger; autop
 
   const isWebhook = trigger.kind === "webhook";
   const isApi = trigger.kind === "api";
+  const isSchedule = trigger.kind === "schedule";
+  const triggerKindLabelKey = autopilotTriggerKindLabelKey(trigger.kind);
   // Resolve the URL from the server's webhook_url first, then compose
   // from the API base URL (desktop) or window.origin (web). Falls back
   // to the relative path if neither is available.
@@ -356,7 +365,7 @@ function TriggerRow({ trigger, autopilotId }: { trigger: AutopilotTrigger; autop
     }
   };
 
-  const Icon = isWebhook ? Webhook : isApi ? Zap : Clock;
+  const Icon = isWebhook ? Webhook : isApi ? Zap : isSchedule ? Clock : Zap;
   const showWebhookUrlRow = isWebhook && webhookUrl;
 
   // Delete control extracted so a webhook trigger can render it inline
@@ -382,7 +391,9 @@ function TriggerRow({ trigger, autopilotId }: { trigger: AutopilotTrigger; autop
       <Icon className="h-4 w-4 shrink-0 text-muted-foreground mt-0.5" />
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2 flex-wrap">
-          <span className="text-sm font-medium">{t(($) => $.trigger_kind[trigger.kind])}</span>
+          <span className="text-sm font-medium">
+            {triggerKindLabelKey ? t(($) => $.trigger_kind[triggerKindLabelKey]) : trigger.kind}
+          </span>
           {trigger.label && (
             <span className="text-xs text-muted-foreground">({trigger.label})</span>
           )}
@@ -685,6 +696,8 @@ export function AutopilotDetailPage({ autopilotId }: { autopilotId: string }) {
   }
 
   const { autopilot, triggers } = data;
+  const statusLabelKey = autopilotStatusLabelKey(autopilot.status);
+  const executionModeLabelKey = autopilotExecutionModeLabelKey(autopilot.execution_mode);
 
   const handleRunNow = async () => {
     try {
@@ -741,7 +754,7 @@ export function AutopilotDetailPage({ autopilotId }: { autopilotId: string }) {
                 autopilot.status === "paused" ? "text-amber-500" :
                 "text-muted-foreground",
               )}>
-                {t(($) => $.status[autopilot.status])}
+                {statusLabelKey ? t(($) => $.status[statusLabelKey]) : autopilot.status}
               </span>
             </div>
           </>
@@ -818,7 +831,9 @@ export function AutopilotDetailPage({ autopilotId }: { autopilotId: string }) {
               <div>
                 <label className="text-xs text-muted-foreground">{t(($) => $.detail.field_output_mode)}</label>
                 <div className="mt-1">
-                  {t(($) => $.execution_mode[autopilot.execution_mode as AutopilotExecutionMode])}
+                  {executionModeLabelKey
+                    ? t(($) => $.execution_mode[executionModeLabelKey])
+                    : autopilot.execution_mode}
                 </div>
               </div>
               {autopilot.execution_mode === "create_issue" && (

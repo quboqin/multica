@@ -19,6 +19,9 @@ allowed-tools: Bash(multica *), Bash(python *)
 - 竞品图的全部非空业务结构默认继承：标题区、金额区、期限卡、表格行列、辅助信息区和阅读顺序都必须保留。继承的是结构和我方冻结文案，不是竞品品牌、Logo、二维码、官方模板文字或原金融事实。
 - 用户把一个文案槽位清空时才删除对应文字；一行的必需槽位全部为空才删除该行；整个模块没有剩余可见内容才删除模块。不能为了适配横版主动删掉表格、卡片、底部图标或金融事实。
 - Prime context 必须来自当前尺寸的官方 Prime 组件预览或合成上下文，包含真实色彩、材质、光照和组件节奏。透明中性轮廓只能作为结构审计证据，不能作为模型的唯一视觉输入。
+- `brief.creative_contract.app_ui_replacement` 是是否替换手机 App 屏幕的唯一合同。若 `required=true` 且
+  `selected=true`，必须使用其中的 `attachment_id` 下载所选 AdaKami App UI 参考图，并把它作为 Image Edit
+  的额外输入；若 required=true 但没有 selected/attachment_id，当前 Variant 必须写 `action_required`。
 
 参考图的权威入口是任务上下文中的 `candidate_id`。订单响应没有展开 `reference_assets` 时，使用
 `multica creative material download <issue-id> <candidate-id> --output-file <source-reference.png> --output json`
@@ -32,6 +35,27 @@ allowed-tools: Bash(multica *), Bash(python *)
 
 Prime context 必须以当前任务的 `revision` 登记在当前 Variant 下，并且每个目标尺寸各有一份；旧 revision 的同名附件不能代替当前 revision。
 如果受控候选下载失败、当前尺寸的 Prime context 无法生成、冻结文案缺失或 Variant execution 缺失，才停止并写 `action_required`，不要凭摘要补齐。
+
+## App UI 参考输入
+
+若 brief 中 `creative_contract.app_ui_replacement.selected=true`，在写 prompt 前把
+`app_ui_replacement.attachment_id` 下载到当前任务的受控临时目录：
+
+```text
+app_ui_dir="$(mktemp -d)"
+trap 'rm -rf "$app_ui_dir"' EXIT
+multica attachment download <app-ui-reference-attachment-id> --output-dir "$app_ui_dir" --output json
+```
+
+下载后必须确认临时目录里只有一张可读图片，并将其作为同一次 `multica image edit` 调用的额外 `--input`。不要使用历史工作目录、
+同市场资源包里未选中的其他 UI 图、网页截图或竞品图裁剪替代。方形母版输入角色为：Input 1 是候选参考结构，
+Input 2 是当前尺寸 Prime context，Input 3 是选中的 AdaKami App UI reference。横版和竖版如果手机屏幕仍可见或需要保持
+同一品牌 UI，也继续使用同一个 Input 3；如果该尺寸明确移除了手机屏幕，prompt-contract 必须写明
+`app_ui_reference_attachment_id` 与 `used=false` 的原因。
+
+Input 3 只服务于手机屏幕内容替换：保留原画面中的手机机身、手、透视、遮挡、反光、光照和场景；只把屏幕内的竞品 App
+页面替换为 AdaKami 自有 UI。必须移除竞品 logo、品牌色、按钮文案、QR、商店元素和专属页面文案。不得把 AdaKami UI
+画到屏幕外，不得把整张参考 UI 拉伸硬贴；若参考图透视不匹配，应生成同品牌风格的屏幕内容，而不是扭曲 pasted screenshot。
 
 从订单 `input_snapshot.market_pack.files` 下载与当前尺寸匹配的官方模板，再生成低透明度的实际视觉上下文（只保留 Prime 保护区的组件内容）：
 
@@ -48,10 +72,11 @@ python <当前 Skill 目录>/references/render_prime_guide.py \
 ## 最终提示词由出图智能体负责
 
 出图智能体根据冻结输入，为每个尺寸和每次实际调用独立写出 `prompt-<size>.txt`。前端不提供提示词编辑器，预适配也不生成
-`production_prompt`；模型提示词的质量、长度和尺寸适配由本 Skill 负责。
+`production_prompt`；模型提示词的质量、长度和尺寸适配由本 Skill 负责。若存在 App UI 替换，prompt 必须显式声明
+Input 3 的角色和“只替换手机屏幕内容”的限制。
 
 提示词应保持 1800-2800 个字符，硬上限 3200。只保留能改变画面的信息，禁止粘贴审计日志、JSON、哈希、QC 结论、坐标、矩形框、
-像素值、重复的金融事实或同一句文案的多种写法。提示词必须按下面的固定模板写，先给构图闸门，再声明两张输入图的角色：
+像素值、重复的金融事实或同一句文案的多种写法。提示词必须按下面的固定模板写，先给构图闸门，再声明输入图的角色：
 
 ```text
 COMPOSITION GATE
@@ -86,6 +111,7 @@ INPUTS
 {input_one_role}. Input 2 is the current-size official Prime visual context. Do not swap input roles.
 Use Input 2 to understand official color, material, lighting, edge rhythm, and the quiet background needed below the overlay.
 Do not copy any Prime logo, QR, store badge, legal text, template wording, or component geometry from Input 2.
+{optional_app_ui_input_role}
 
 TASK
 {task_for_this_size}
@@ -123,13 +149,18 @@ Variant brief `approved_copy` 中每一个非空字段（包括 `product_categor
 只描述视觉主线、主体关系、材质、色彩和当前尺寸的重排意图。不要在提示词中写 `x/y`、`safe_content_frame`、`hard region` 或其他坐标语法；空间关系用
 “上方保护带下方、主体中部、下方官方组件上方的连续背景”等自然语言表达。
 
+`{optional_app_ui_input_role}` 在没有 App UI 替换时留空；若存在替换，必须写成：
+“Input 3 is the selected AdaKami App UI reference for the phone screen only. Replace only the visible screen content with an
+AdaKami-style interface; preserve the original phone body, hand, perspective, reflections, lighting, occlusion, and scene. Remove
+competitor app logos, brand colors, QR, buttons, and proprietary UI text. Do not draw AdaKami UI outside the phone screen.”
+
 ## 视觉继承和三尺寸顺序
 
 三尺寸共享同一内容族、业务事实、色彩系统和 `asset_family_id`，但不是同一张图缩放：
 
-1. **方形母版（1080x1080）**：Input 1 为竞品参考结构，Input 2 为当前方形 Prime context。创建新的无品牌广告底图，继承信息机制、阅读顺序和可识别视觉锚点，重新设计背景、主体和装饰。
-2. **横版重排（1200x628）**：Input 1 为已批准的方形母版，Input 2 为当前横版 Prime context。横版优先处理，原生铺满画布；保留主体、标题、卖点、数值表和图标的内容关系，重新分配宽度和间距，不把方形图缩小居中、不裁切、不加边。
-3. **竖版重排（800x1000）**：Input 1 为已批准的方形母版，Input 2 为当前竖版 Prime context。按 4:5 竖版广告画布原生重排，保持与方形母版相同的视觉身份和冻结文案；不得生成 story、手机截图、长海报、滚动页、9:16 或 9:19。
+1. **方形母版（1080x1080）**：Input 1 为竞品参考结构，Input 2 为当前方形 Prime context；如果 `app_ui_replacement.selected=true`，Input 3 为选中的 AdaKami App UI reference。创建新的无品牌广告底图，继承信息机制、阅读顺序和可识别视觉锚点，重新设计背景、主体和装饰。
+2. **横版重排（1200x628）**：Input 1 为已批准的方形母版，Input 2 为当前横版 Prime context；如果手机屏幕仍可见或需要保持同一品牌 UI，Input 3 仍为同一个 AdaKami App UI reference。横版优先处理，原生铺满画布；保留主体、标题、卖点、数值表和图标的内容关系，重新分配宽度和间距，不把方形图缩小居中、不裁切、不加边。
+3. **竖版重排（800x1000）**：Input 1 为已批准的方形母版，Input 2 为当前竖版 Prime context；如果手机屏幕仍可见或需要保持同一品牌 UI，Input 3 仍为同一个 AdaKami App UI reference。按 4:5 竖版广告画布原生重排，保持与方形母版相同的视觉身份和冻结文案；不得生成 story、手机截图、长海报、滚动页、9:16 或 9:19。
 
 横版拥挤时必须执行垂直方向的 Y 轴压缩：先减少装饰和上下留白，再压缩模块间距、行距和标题/金额/期限/表格之间的垂直节奏，最后才小幅降低字号；
 不得删除冻结文案、金融事实、底部图标或表格列。横版标题和利益点整体必须位于官方顶部 Logo/条款组件下方；金额、期限按钮和完整四行表格必须位于官方底部组件上方，
@@ -177,7 +208,9 @@ python <当前 Skill 目录>/references/register_process_assets.py \
 
 每个 `prompt-contract-<size>.json` 除 `prompt_sha256` 外必须写入当前 Variant brief
 `creative_contract.parent_direction_sha256`，并保留 `size_key`、`revision`、`variant_id`、`input_roles` 和
-`active_content_groups`。该父方向哈希是 visual QC 校验三尺寸视觉继承的唯一证据；不能省略、伪造或从旧 revision 复制。
+`active_content_groups`。若使用 App UI 参考图，还必须写 `app_ui_reference_attachment_id`、`resource_file_id`、
+Input 3 的 input role、是否实际用于当前尺寸，以及只替换手机屏幕内容的约束摘要。该父方向哈希是 visual QC
+校验三尺寸视觉继承的唯一证据；不能省略、伪造或从旧 revision 复制。
 
 生产 task 只有在当前 revision 的每个 `expected_sizes` 都存在完整、可验证的 `generated/completed` canonical asset 后才允许调用
 `multica task complete`。只生成方形或只生成部分尺寸时不能提前 complete，也不能把缺失尺寸写成成功；应在同一个 task 中继续补齐，或把真实错误交给

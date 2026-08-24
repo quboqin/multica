@@ -149,6 +149,7 @@ type Handler struct {
 	CloudRuntime            cloudRuntimeProxy
 	CredentialBroker        *broker.Service
 	CreativeAssetDownloader *creative.Downloader
+	CreativeVisualInspector creativeVisualInspector
 	// Composio is nil unless an operator enables the optional integration.
 	// Ordinary agent MCP configuration remains independent of this service.
 	Composio             *composio.Service
@@ -220,27 +221,28 @@ func New(queries *db.Queries, txStarter txStarter, hub *realtime.Hub, bus *event
 	taskSvc := service.NewTaskService(queries, txStarter, hub, bus, daemonHub)
 	taskSvc.Analytics = analyticsClient
 	return &Handler{
-		Queries:               queries,
-		DB:                    executor,
-		TxStarter:             txStarter,
-		Hub:                   hub,
-		DaemonHub:             daemonHub,
-		Bus:                   bus,
-		TaskService:           taskSvc,
-		IssueService:          service.NewIssueService(queries, txStarter, bus, analyticsClient, taskSvc),
-		AutopilotService:      service.NewAutopilotService(queries, txStarter, bus, taskSvc),
-		EmailService:          emailService,
-		UpdateStore:           NewInMemoryUpdateStore(),
-		ModelListStore:        NewInMemoryModelListStore(),
-		LocalSkillListStore:   NewInMemoryLocalSkillListStore(),
-		LocalSkillImportStore: NewInMemoryLocalSkillImportStore(),
-		LivenessStore:         NewNoopLivenessStore(),
-		HeartbeatScheduler:    NewPassthroughHeartbeatScheduler(queries),
-		Storage:               store,
-		CFSigner:              cfSigner,
-		Analytics:             analyticsClient,
-		WebhookRateLimiter:    NewMemoryWebhookRateLimiter(DefaultWebhookRateLimit()),
-		WebhookIPRateLimiter:  NewMemoryWebhookIPRateLimiter(DefaultWebhookIPRateLimit()),
+		Queries:                 queries,
+		DB:                      executor,
+		TxStarter:               txStarter,
+		Hub:                     hub,
+		DaemonHub:               daemonHub,
+		Bus:                     bus,
+		TaskService:             taskSvc,
+		IssueService:            service.NewIssueService(queries, txStarter, bus, analyticsClient, taskSvc),
+		AutopilotService:        service.NewAutopilotService(queries, txStarter, bus, taskSvc),
+		EmailService:            emailService,
+		UpdateStore:             NewInMemoryUpdateStore(),
+		ModelListStore:          NewInMemoryModelListStore(),
+		LocalSkillListStore:     NewInMemoryLocalSkillListStore(),
+		LocalSkillImportStore:   NewInMemoryLocalSkillImportStore(),
+		LivenessStore:           NewNoopLivenessStore(),
+		HeartbeatScheduler:      NewPassthroughHeartbeatScheduler(queries),
+		Storage:                 store,
+		CFSigner:                cfSigner,
+		Analytics:               analyticsClient,
+		WebhookRateLimiter:      NewMemoryWebhookRateLimiter(DefaultWebhookRateLimit()),
+		WebhookIPRateLimiter:    NewMemoryWebhookIPRateLimiter(DefaultWebhookIPRateLimit()),
+		CreativeVisualInspector: newCreativeVisualInspectorFromEnv(),
 		CloudRuntime: cloudruntime.NewClient(cloudruntime.Config{
 			BaseURL: cfg.CloudRuntimeFleetURL,
 			Timeout: cfg.CloudRuntimeFleetTimeout,

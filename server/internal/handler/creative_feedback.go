@@ -707,10 +707,7 @@ LIMIT 6
 	return dashboard, nil
 }
 
-func (h *Handler) creativeInitialGeneratedPackageDuration(ctx context.Context, workspaceID pgtype.UUID) (*int64, int, error) {
-	var durationSeconds pgtype.Int8
-	var packageCount int64
-	err := h.DB.QueryRow(ctx, `
+const creativeInitialGeneratedPackageDurationSQL = `
 WITH first_generated_asset AS (
   SELECT variant.order_item_id,
          variant.id AS variant_id,
@@ -725,7 +722,7 @@ WITH first_generated_asset AS (
    AND asset.size_key IN ('1080x1080', '1200x628', '800x1000')
   GROUP BY variant.order_item_id, variant.id, asset.size_key
 ),
-WITH generated_packages AS (
+generated_packages AS (
   SELECT item.id,
          order_row.created_at AS submitted_at,
          max(first_asset.generated_at) AS generated_at
@@ -744,7 +741,12 @@ WITH generated_packages AS (
 SELECT ROUND(AVG(EXTRACT(EPOCH FROM (generated_at - submitted_at))))::bigint,
        count(*)
 FROM generated_packages
-`, workspaceID).Scan(&durationSeconds, &packageCount)
+`
+
+func (h *Handler) creativeInitialGeneratedPackageDuration(ctx context.Context, workspaceID pgtype.UUID) (*int64, int, error) {
+	var durationSeconds pgtype.Int8
+	var packageCount int64
+	err := h.DB.QueryRow(ctx, creativeInitialGeneratedPackageDurationSQL, workspaceID).Scan(&durationSeconds, &packageCount)
 	if err != nil {
 		return nil, int(packageCount), err
 	}

@@ -54,11 +54,32 @@ brief 只保存结构化决策和必要事实，不粘贴最终模型提示词�
 
 参考机制中没有批准对应文本的选项、问题、标签或按钮只能转译为结构关系，写入
 `mechanism_adaptation` 和 `omitted_unapproved_copy`，不得生成空选项或重复金融字段；但原图中已有且冻结 snapshot 非空的结构必须保留，不能因为没有
-approved fragment 就改成空白。需要品牌 App UI 时，
-只从冻结 `app_ui_reference` 附件按分析类型和 tags 选择，并记录 attachment ID 与理由。
+approved fragment 就改成空白。
+
+### App UI 替换合同
+
+当 Source Analysis 有 `app_ui_detected=true`，并且手机屏幕或 App 页面是画面可见核心元素时，每个 brief 必须写
+`creative_contract.app_ui_replacement`。方案 Agent 不看图片像素，也不下载附件；它只从冻结
+`input_snapshot.market_pack.files` 中 role 为 `app_ui_reference` 的资源按 `app_ui_type`、tags、metadata
+和分析里的 `app_ui_visual_characteristics` 选择最多一张 AdaKami App UI 参考图。
+
+`app_ui_replacement` 必须包含：
+
+- `required`：是否需要把竞品 UI 替换为 AdaKami UI；
+- `selected`：是否已选到合适资源；
+- `resource_file_id` 与 `attachment_id`：只在 selected=true 时填写，来自冻结市场快照；
+- `source_screen`：记录 `app_ui_type`、屏幕位置、可见度、`app_ui_bounds` 和是否被手/手机边框遮挡；
+- `reason`：说明为什么这张参考 UI 与原图页面类型或视觉结构匹配；
+- `constraints`：至少说明“只替换手机屏幕内容，保留手机、手、透视、光照和场景；移除竞品 logo、品牌色、按钮文案、QR 和专属页面文案；不得把 AdaKami UI 画到屏幕外”。
+
+如果 App UI 是核心元素但没有合适 `app_ui_reference`，该 Variant 写 `action_required`，并在 `needs_input`
+中要求补充 App UI 参考资源；不能保留竞品 UI 继续出图。若 App UI 只是模糊、极小、背景性或不可读元素，
+写 `required=false` 并说明原因。若 Source Analysis 没有检测到 App UI，也必须写
+`required=false`、`selected=false` 和简短 reason，让生产 Agent 不下载 App UI 参考图。不得因为资源包里只有一张 UI
+图就机械选择；选择必须能被冻结分析和资源 metadata 解释。
 
 每个 brief 至少包含：candidate/source-analysis/copy/market snapshot identity，完整批准文案，
-`creative_contract.variant_execution`、`copy_adaptation`、`mechanism_adaptation`、禁用元素、App UI 选择、
+`creative_contract.variant_execution`、`copy_adaptation`、`mechanism_adaptation`、禁用元素、`app_ui_replacement`、
 三个尺寸规格。`prime_layout_contract` 是订单快照中的冻结事实，服务端会在写入时覆盖绑定；方案不得自行
 生成、补齐、删减或改写其中任一 hard region。`variant_execution` 至少有
 `visual_identity_strategy`、`must_preserve`、`allowed_variations` 和 `anti_copy_changes`；只能表达该 Variant
@@ -93,6 +114,19 @@ Prime 不是页角装饰或模型要重绘的业务元素。它承载官方品�
   "brief": {
     "expected_sizes": ["<size>"],
     "creative_contract": {
+      "app_ui_replacement": {
+        "required": true,
+        "selected": true,
+        "resource_file_id": "<frozen-app-ui-resource-file-id>",
+        "attachment_id": "<app-ui-reference-attachment-id>",
+        "source_screen": {
+          "app_ui_type": "<generic type from source analysis>",
+          "visibility": "<visible|partial|small|blurred>",
+          "bounds": {}
+        },
+        "reason": "<why this AdaKami UI reference matches>",
+        "constraints": ["only replace phone screen content", "preserve hand/phone/perspective/lighting"]
+      },
       "variant_execution": {
         "visual_identity_strategy": "<this Variant's derived visual identity>",
         "must_preserve": ["<parent facts this execution keeps>"],

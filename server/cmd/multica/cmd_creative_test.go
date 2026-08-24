@@ -134,6 +134,69 @@ func TestRunCreativeLibraryDownloadUsesSourceAttachmentWithAuth(t *testing.T) {
 	}
 }
 
+func TestRunCreativeOrderVisualInspectPostsVariantRevision(t *testing.T) {
+	var sawRequest atomic.Bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/creative/orders/order-1/visual-inspect" {
+			t.Errorf("path = %s, want visual-inspect endpoint", r.URL.Path)
+			http.NotFound(w, r)
+			return
+		}
+		if r.Method != http.MethodPost {
+			t.Errorf("method = %s, want POST", r.Method)
+		}
+		if got := r.Header.Get("Authorization"); got != "Bearer test-token" {
+			t.Errorf("Authorization = %q, want Bearer test-token", got)
+		}
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Errorf("decode body: %v", err)
+		}
+		if body["variant_id"] != "variant-1" || body["revision"] != float64(3) {
+			t.Errorf("body = %#v, want variant_id and revision", body)
+		}
+		sawRequest.Store(true)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"variant_id":            "variant-1",
+			"lane":                  "visual",
+			"revision":              3,
+			"status":                "failed",
+			"blocking_failures":     []map[string]string{{"code": "visual_inspection_model_unconfigured", "size_key": "all", "diagnosis": "未配置"}},
+			"trigger_evidence_kind": "creative_order_variant_qc_visual_inspection",
+		})
+	}))
+	defer server.Close()
+
+	t.Setenv("MULTICA_SERVER_URL", server.URL)
+	t.Setenv("MULTICA_WORKSPACE_ID", "workspace-1")
+	t.Setenv("MULTICA_TOKEN", "test-token")
+	t.Setenv("MULTICA_AGENT_ID", "")
+	t.Setenv("MULTICA_TASK_ID", "")
+
+	cmd := testCmd()
+	cmd.Flags().String("variant", "", "")
+	cmd.Flags().Int("revision", 1, "")
+	cmd.Flags().String("output", "json", "")
+	if err := cmd.Flags().Set("variant", "variant-1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := cmd.Flags().Set("revision", "3"); err != nil {
+		t.Fatal(err)
+	}
+	out, err := captureStdout(t, func() error {
+		return runCreativeOrderVisualInspect(cmd, []string{"order-1"})
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !sawRequest.Load() {
+		t.Fatal("expected visual-inspect request")
+	}
+	if !strings.Contains(out, `"lane": "visual"`) || !strings.Contains(out, "visual_inspection_model_unconfigured") {
+		t.Fatalf("stdout = %s", out)
+	}
+}
+
 func TestValidateGPTImageSize(t *testing.T) {
 	for _, size := range []string{"auto", "1024x1536", "1088x1360"} {
 		if err := validateGPTImageSize(size); err != nil {

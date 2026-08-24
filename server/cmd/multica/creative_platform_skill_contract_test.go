@@ -63,13 +63,15 @@ func TestCreativePlatformSkillsUseFrozenBusinessInputs(t *testing.T) {
 	if !ok {
 		t.Fatal("resolve current test file")
 	}
-	skillRoot := filepath.Join(filepath.Clean(filepath.Join(filepath.Dir(currentFile), "..", "..", "..")), "scripts", "creative-platform-skills")
+	root := filepath.Clean(filepath.Join(filepath.Dir(currentFile), "..", "..", ".."))
+	skillRoot := filepath.Join(root, "scripts", "creative-platform-skills")
 	required := map[string][]string{
+		"ad-creative-analysis":       {"app_ui_replacement_needed", "app_ui_bounds", "不得读取、选择或引用 `app_ui_reference`", "不得输出 attachment ID"},
 		"ad-creative-pre-adaptation": {"source_analysis", "text_replacements", "visual_direction", "recommendation_basis", "repayment_plan_selections", "numeric_layouts", "render_instruction", "完整展示字符串", "pre-adaptation-put", "min(", "我方优先、数量取小", "只有明显的还款结构才生成 repayment 选择和 numeric layout", "Rp100Juta", "保留后续可手动改写空间"},
-		"ad-creative-plan":           {"copy_snapshot", "input_snapshot", "source_analysis"},
-		"ad-creative-production":     {"copy_snapshot", "prompt_sha256", "request_id"},
+		"ad-creative-plan":           {"copy_snapshot", "input_snapshot", "source_analysis", "app_ui_replacement", "app_ui_reference", "resource_file_id", "attachment_id", "只替换手机屏幕内容"},
+		"ad-creative-production":     {"copy_snapshot", "prompt_sha256", "request_id", "Input 3 is the selected AdaKami App UI reference", "app_ui_reference_attachment_id", "multica attachment download", "只替换手机屏幕内容"},
 		"ad-creative-direct-edit":    {"copy_snapshot", "prompt_sha256", "delivery_mode", "即使先前识别错了，也要保留后续手动改写空间", "不要把流程卡死在还款计划选择"},
-		"ad-creative-qc":             {"copy_snapshot", "compose_result", "qc-finalize"},
+		"ad-creative-qc":             {"copy_snapshot", "compose_result", "qc-finalize", "visual-inspect", "view_image", "base64/stdout"},
 		"ad-creative-prime-compose":  {"prime-compose", "creative_prime_backend.go", "does not edit model prompts"},
 	}
 
@@ -79,6 +81,38 @@ func TestCreativePlatformSkillsUseFrozenBusinessInputs(t *testing.T) {
 			if !strings.Contains(content, term) {
 				t.Errorf("%s/SKILL.md must reference frozen/runtime contract %q", skillName, term)
 			}
+		}
+	}
+
+	bootstrap := readCreativePlatformContractFile(t, filepath.Join(root, "scripts", "bootstrap-creative-platform-demo.ps1"))
+	for _, required := range []string{
+		"capability = 'reference_analysis'; version = 19",
+		"capability = 'generation_plan'; version = 35",
+		"capability = 'image_edit'; version = 92",
+		"app_ui_replacement",
+		"Input 3",
+		"capability = 'quality_control'; version = 33",
+		"multica creative order visual-inspect",
+		"不得调用 view_image",
+	} {
+		if !strings.Contains(bootstrap, required) {
+			t.Errorf("bootstrap QC setup must contain %q", required)
+		}
+	}
+
+	installation := readCreativePlatformContractFile(t, filepath.Join(root, "server", "internal", "handler", "creative_factory_installation.go"))
+	for _, required := range []string{
+		`Capability: "reference_analysis", Version: 19`,
+		`Capability: "generation_plan", Version: 35`,
+		`Capability: "image_edit", Version: 92`,
+		"app_ui_replacement",
+		"Input 3",
+		`Capability: "quality_control", Version: 33`,
+		"multica creative order visual-inspect",
+		"不得调用 view_image",
+	} {
+		if !strings.Contains(installation, required) {
+			t.Errorf("creative factory QC setup must contain %q", required)
 		}
 	}
 }

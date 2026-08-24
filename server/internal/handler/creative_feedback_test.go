@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -415,6 +416,18 @@ func TestCreativeFeedbackDashboardContainsWorkflowMetricsOnly(t *testing.T) {
 	}
 	if len(raw) != 1 || raw["workflow"] == nil {
 		t.Fatalf("dashboard response keys = %#v, want workflow only", raw)
+	}
+}
+
+func TestCreativeInitialGeneratedPackageDurationSQLUsesSingleCTEChain(t *testing.T) {
+	if count := strings.Count(creativeInitialGeneratedPackageDurationSQL, "WITH "); count != 1 {
+		t.Fatalf("duration SQL WITH count = %d, want 1", count)
+	}
+	if strings.Contains(creativeInitialGeneratedPackageDurationSQL, "),\nWITH ") {
+		t.Fatal("duration SQL starts a second WITH inside the CTE chain")
+	}
+	if !strings.Contains(creativeInitialGeneratedPackageDurationSQL, "),\ngenerated_packages AS (") {
+		t.Fatal("duration SQL must define generated_packages in the first WITH chain")
 	}
 }
 

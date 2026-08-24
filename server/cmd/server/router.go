@@ -777,6 +777,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Route("/{id}", func(r chi.Router) {
 						r.Get("/", h.GetCreativeOrder)
 						r.Post("/prime-compose", h.ComposeCreativeOrderPrime)
+						r.Post("/visual-inspect", h.InspectCreativeOrderVisual)
 						r.With(handler.RequireHumanActor).Post("/adjustments", h.QueueCreativeOrderAdjustment)
 						r.With(handler.RequireHumanActor).Post("/cancel", h.CancelCreativeOrder)
 						r.With(handler.RequireHumanActor).Post("/workflow-failures/{taskId}/retry", h.RetryCreativeOrderWorkflowFailure)

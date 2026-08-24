@@ -37,6 +37,10 @@ import type {
   WebhookDeliveryStatus,
   WebhookSignatureStatus,
 } from "@multica/core/types";
+import {
+  webhookDeliveryStatusLabelKey,
+  webhookSignatureStatusLabelKey,
+} from "./autopilot-labels";
 
 // --- Status visuals -------------------------------------------------------
 
@@ -162,9 +166,10 @@ function DeliveryRow({
 
   const visual = visualForStatus(delivery.status);
   const StatusIcon = visual.icon;
-  const statusLabel =
-    t(($) => $.deliveries.status[delivery.status as WebhookDeliveryStatus]) ??
-    delivery.status;
+  const statusLabelKey = webhookDeliveryStatusLabelKey(delivery.status);
+  const statusLabel = statusLabelKey
+    ? t(($) => $.deliveries.status[statusLabelKey])
+    : delivery.status;
   const providerLabel = delivery.provider || "—";
 
   return (
@@ -244,6 +249,7 @@ function DeliveryDetailDialog({
   const full = detail ?? delivery;
   const visual = visualForStatus(full.status);
   const StatusIcon = visual.icon;
+  const statusLabelKey = webhookDeliveryStatusLabelKey(full.status);
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -268,8 +274,7 @@ function DeliveryDetailDialog({
                 )}
               />
               <span className={cn("text-sm font-medium", visual.color)}>
-                {t(($) => $.deliveries.status[full.status as WebhookDeliveryStatus]) ??
-                  full.status}
+                {statusLabelKey ? t(($) => $.deliveries.status[statusLabelKey]) : full.status}
               </span>
             </div>
             <Badge variant="outline">{full.provider || "—"}</Badge>
@@ -380,9 +385,10 @@ function SignatureBadge({ status }: { status: WebhookSignatureStatus | string })
   if (status === "valid") variant = "default";
   else if (status === "invalid") variant = "destructive";
   else if (status === "missing") variant = "secondary";
+  const signatureLabelKey = webhookSignatureStatusLabelKey(status);
   return (
     <Badge variant={variant}>
-      {t(($) => $.deliveries.signature[status as WebhookSignatureStatus]) ?? status}
+      {signatureLabelKey ? t(($) => $.deliveries.signature[signatureLabelKey]) : status}
     </Badge>
   );
 }

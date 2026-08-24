@@ -8,6 +8,8 @@ allowed-tools: Bash(multica *)
 
 只使用 task context 的 `crawl_run_id`、`candidate_id` 和 `analysis_version`。不得从 Issue、评论、标题或兄弟
 task 猜目标，也不得读取市场包、Prime、品牌 App UI 或批准文案。
+即使广告里出现手机 App 界面，也只做市场中立观察：判断是否需要替换为我方 App UI、描述通用页面类型、
+屏幕可见程度和大致位置；不得读取、选择或引用 `app_ui_reference` 附件，也不得把竞品 UI 的品牌元素当成可保留资产。
 
 ## 输入
 
@@ -59,7 +61,9 @@ Analysis，`error_code=asset_unreadable`，不得用标题或标签补结论。
   我方数值版式，不把整张图归入互斥的文案类型；
 - `visual_anchors`、`palette_anchors`、`must_preserve`、`allowed_variations`；
 - `detected_text`、`evidence`、`confidence`、`analysis_summary`；
-- `app_ui_detected`、`app_ui_type`、`app_ui_visual_characteristics`；
+- `app_ui_detected`、`app_ui_type`、`app_ui_visual_characteristics`、`app_ui_bounds`、
+  `app_ui_replacement_needed`。App UI 只描述通用页面类型、屏幕边界、可见度和与人物/手机/场景的关系；
+  不得选择品牌附件、不得输出 attachment ID、不得要求保留竞品 UI 的 logo、品牌色、按钮、QR 或专属页面文案；
 - `layout_constraints`、`edge_content_density`。
 
 `text_blocks` 只覆盖后续需要重写的正文与计划字段。底部应用商店徽章、合作方标识、监管/二维码贴片、
