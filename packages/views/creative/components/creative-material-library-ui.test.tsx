@@ -11,6 +11,7 @@ import {
   effectiveRepaymentPlanSelections,
   frozenCopySnapshot,
   hasPendingReplacementConfirmation,
+  manualRepaymentPlanChoice,
   manualCopySnapshot,
   orderDraftWithPreAdaptation,
   pendingNumericLayouts,
@@ -174,6 +175,25 @@ describe("CreativeMaterialLibrary contracts", () => {
     expect(frozen.pre_adaptation?.repayment_plan_selections).toMatchObject([{ id: "pending-row", plan_key: "8m-6" }]);
     expect(frozen.pre_adaptation?.numeric_layouts).toMatchObject([{ id: "pending-numeric:principal-region", source_block_ids: ["principal-1"], scenario_ids: ["pending-row"], target_columns: ["principal"] }]);
     expect(frozen.pre_adaptation?.numeric_layouts[0]?.render_instruction).toContain("Rp8.000.000");
+  });
+
+  it("freezes a manually entered single principal when a benefit amount was misclassified as repayment", () => {
+    const missingNumeric = adaptation({
+      visualRegions: [{ id: "hero-principal-region", location: "中右黄色额度徽章本金区", kind: "numeric", sourceBlockIds: ["hero-max-principal"], visualBounds: { x: 488, y: 367, width: 419, height: 115 } }],
+      textReplacements: [{ blockId: "hero-max-principal", visualRegionId: "hero-principal-region", location: "中右黄色额度徽章主体", role: "plan_field", semanticKind: "principal", sourceText: "Rp100 Juta", replacementText: "", sourceKeys: [], status: "missing", note: "" }],
+      repaymentPlanSelections: [],
+      numericLayouts: [],
+    });
+    const layout = pendingNumericLayouts(missingNumeric)[0]!;
+    const manualPlan = manualRepaymentPlanChoice(layout.id, { principal: "Rp100 Juta" });
+
+    expect(manualPlan).toMatchObject({ principal: 100_000_000, tenorMonths: 0, values: { principal: "Rp100 Juta", tenor: "", monthlyInstallment: "" } });
+
+    const frozen = frozenCopySnapshot({ headline: "", subheadline: "", benefit: "", supporting: "", cta: "", legal_text: "", fragments: [], repayment_plan_entries: [] } as any, missingNumeric, draft({ numericLayoutDrafts: { [layout.id]: { addedScenarios: { "manual-hero-principal": manualPlan } } } }), "analysis-1");
+    expect(frozen.pre_adaptation?.text_replacements).toEqual([]);
+    expect(frozen.pre_adaptation?.repayment_plan_selections).toMatchObject([{ id: "manual-hero-principal", plan_key: expect.stringContaining("manual-"), principal: 100_000_000, values: { principal: "Rp100 Juta" } }]);
+    expect(frozen.pre_adaptation?.numeric_layouts).toMatchObject([{ id: "pending-numeric:hero-principal-region", source_block_ids: ["hero-max-principal"], scenario_ids: ["manual-hero-principal"], target_columns: ["principal"] }]);
+    expect(frozen.pre_adaptation?.numeric_layouts[0]?.render_instruction).toContain("借款金额 Rp100 Juta");
   });
 
   it("does not mark a generic adaptation as ready", () => {

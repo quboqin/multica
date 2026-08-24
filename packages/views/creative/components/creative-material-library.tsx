@@ -2,7 +2,7 @@
 
 import { cloneElement, useDeferredValue, useEffect, useId, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, ArrowLeft, BookOpenText, Check, Download, ExternalLink, ImageIcon, LoaderCircle, Plus, RefreshCw, RotateCcw, Search, Sparkles, Upload, X } from "lucide-react";
+import { AlertTriangle, ArrowLeft, BookOpenText, Check, Download, ExternalLink, ImageIcon, LoaderCircle, Pencil, Plus, RefreshCw, RotateCcw, Search, Sparkles, Upload, X } from "lucide-react";
 import { api } from "@multica/core/api";
 import {
   creativeFeedbackOptions,
@@ -614,6 +614,14 @@ export type RepaymentPlanChoice = {
   values: PreparedRepaymentPlanSelection["values"];
 };
 
+const EMPTY_REPAYMENT_PLAN_VALUES: RepaymentPlanChoice["values"] = {
+  principal: "",
+  tenor: "",
+  totalInterest: "",
+  totalRepayment: "",
+  monthlyInstallment: "",
+};
+
 export type NumericLayoutDraft = {
   removedScenarioIds?: string[];
   addedScenarios?: Record<string, RepaymentPlanChoice>;
@@ -741,6 +749,58 @@ function repaymentPlanChoiceFromSelection(selection: PreparedRepaymentPlanSelect
     tenorMonths: selection.tenorMonths,
     values: selection.values,
   };
+}
+
+export function manualRepaymentPlanChoice(layoutId: string, values: Partial<RepaymentPlanChoice["values"]>, existingPlanKey = ""): RepaymentPlanChoice {
+  const normalizedValues: RepaymentPlanChoice["values"] = {
+    principal: values.principal?.trim() ?? "",
+    tenor: values.tenor?.trim() ?? "",
+    totalInterest: values.totalInterest?.trim() ?? "",
+    totalRepayment: values.totalRepayment?.trim() ?? "",
+    monthlyInstallment: values.monthlyInstallment?.trim() ?? "",
+  };
+  return {
+    planKey: existingPlanKey.startsWith("manual-") ? existingPlanKey : manualRepaymentPlanKey(layoutId, normalizedValues),
+    principal: parsePrincipalAmount(normalizedValues.principal),
+    tenorMonths: parseTenorMonths(normalizedValues.tenor),
+    values: normalizedValues,
+  };
+}
+
+function manualRepaymentPlanKey(layoutId: string, values: RepaymentPlanChoice["values"]): string {
+  const fingerprint = [
+    values.principal,
+    values.tenor,
+    values.monthlyInstallment,
+    values.totalInterest,
+    values.totalRepayment,
+  ].join("-").toLocaleLowerCase();
+  const slug = `${layoutId}-${fingerprint}`
+    .replace(/rp\s*/gi, "rp")
+    .replace(/[^a-z0-9]+/gi, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-|-$/g, "")
+    .slice(0, 96);
+  return `manual-${slug || "repayment-plan"}`;
+}
+
+function parsePrincipalAmount(value: string): number {
+  const text = value.trim().toLocaleLowerCase();
+  if (!text) return 0;
+  const numeric = text.match(/\d+(?:[.,]\d+)?/)?.[0]?.replace(",", ".");
+  if (!numeric) return 0;
+  const multiplier = text.includes("miliar") ? 1_000_000_000 : text.includes("juta") ? 1_000_000 : text.includes("ribu") ? 1_000 : 1;
+  if (multiplier > 1) return Math.round(Number(numeric) * multiplier);
+  const digits = text.replace(/\D/g, "");
+  return digits ? Number(digits) : 0;
+}
+
+function parseTenorMonths(value: string): number {
+  const text = value.trim().toLocaleLowerCase();
+  const numeric = Number(text.match(/\d+/)?.[0] ?? 0);
+  if (!Number.isFinite(numeric) || numeric <= 0) return 0;
+  if (/\btahun\b/.test(text)) return numeric * 12;
+  return numeric;
 }
 
 function nextAddedRepaymentPlanScenarioId(layoutId: string, planKey: string, existingIds: ReadonlySet<string>): string {
@@ -2070,11 +2130,18 @@ function NumericLayoutCards({
   onAddRepaymentPlan: (layoutId: string, plan: RepaymentPlanChoice) => void;
   onRemoveRepaymentPlan: (layoutId: string, scenarioId: string) => void;
 }) {
+  const [manualEditor, setManualEditor] = useState<{
+    layout: PreparedNumericLayout;
+    scenarioId?: string;
+    originalScenario?: PreparedRepaymentPlanSelection;
+    initialChoice?: RepaymentPlanChoice;
+  } | null>(null);
   const scenariosByID = scenarioByID(scenarios);
   const originalScenariosByID = scenarioByID(originalScenarios);
   const originalLayoutsByID = numericLayoutByID(originalNumericLayouts);
   const planByKey = new Map(repaymentPlanOptions.map((plan) => [plan.planKey, plan]));
-  return <div className="grid gap-3">{layouts.map((layout) => {
+  return <>
+  <div className="grid gap-3">{layouts.map((layout) => {
     const instruction = numericLayoutInstruction(layout, scenariosByID, repaymentPlanOverrides, originalLayoutsByID.get(layout.id));
     const nextPlan = nextRepaymentPlanOptionForLayout(layout, scenariosByID, repaymentPlanOptions);
     const pendingSelection = isPendingNumericLayout(layout) && layout.scenarioIds.length === 0;
@@ -2089,7 +2156,7 @@ function NumericLayoutCards({
             <tr>
               <th className="w-[300px] px-2 py-2 font-medium">已审核方案</th>
               {layout.targetColumns.map((column) => <th key={column} className="break-words px-2 py-2 font-medium">{numericColumnLabel(column)}</th>)}
-              <th className="w-12 px-2 py-2 font-medium"><span className="sr-only">操作</span></th>
+              <th className="w-24 px-2 py-2 font-medium"><span className="sr-only">操作</span></th>
             </tr>
           </thead>
           <tbody>
@@ -2116,9 +2183,14 @@ function NumericLayoutCards({
                 </td>
                 {layout.targetColumns.map((column) => <td key={column} className="break-words px-2 py-2 align-top text-foreground">{numericColumnValue(scenario, column)}</td>)}
                 <td className="px-2 py-2 align-top">
-                  <Button type="button" size="icon" variant="ghost" aria-label={`删除${layout.location}中的一行`} onClick={() => onRemoveRepaymentPlan(layout.id, scenarioID)}>
-                    <X className="h-4 w-4" />
-                  </Button>
+                  <div className="flex items-center justify-end gap-1">
+                    <Button type="button" size="icon" variant="ghost" aria-label={`手填${layout.location}中的数值`} title="手填数值" onClick={() => setManualEditor({ layout, scenarioId: scenarioID, originalScenario, initialChoice: current })}>
+                      <Pencil className="h-4 w-4" />
+                    </Button>
+                    <Button type="button" size="icon" variant="ghost" aria-label={`删除${layout.location}中的一行`} onClick={() => onRemoveRepaymentPlan(layout.id, scenarioID)}>
+                      <X className="h-4 w-4" />
+                    </Button>
+                  </div>
                 </td>
               </tr>;
             })}
@@ -2128,25 +2200,124 @@ function NumericLayoutCards({
       </div>
       <div className="flex flex-wrap items-center justify-between gap-2 border-t px-3 py-2">
         <p className="min-w-0 flex-1 whitespace-pre-wrap break-words text-xs leading-5 text-muted-foreground">{pendingSelection ? "未匹配到冻结还款方案；请选择已审核方案，或留空移除该数值区域。" : instruction || "已按当前选择更新数值区域。"}</p>
-        {pendingSelection && repaymentPlanOptions.length > 0 ? <NativeSelect
-          size="sm"
-          className="min-w-64"
-          aria-label={`选择${layout.location}还款方案`}
-          value=""
-          onChange={(event) => {
-            const plan = planByKey.get(event.target.value);
-            if (plan) onAddRepaymentPlan(layout.id, plan);
-          }}
-        >
-          <NativeSelectOption value="">选择已审核还款方案</NativeSelectOption>
-          {repaymentPlanOptions.map((plan) => <NativeSelectOption key={plan.planKey} value={plan.planKey}>{repaymentPlanOptionLabel(plan)}</NativeSelectOption>)}
-        </NativeSelect> : nextPlan && <Button type="button" size="sm" variant="outline" onClick={() => onAddRepaymentPlan(layout.id, nextPlan)}>
-          <Plus className="h-4 w-4" />
-          加一行
-        </Button>}
+        <div className="flex flex-wrap items-center justify-end gap-2">
+          {pendingSelection && repaymentPlanOptions.length > 0 ? <NativeSelect
+            size="sm"
+            className="min-w-64"
+            aria-label={`选择${layout.location}还款方案`}
+            value=""
+            onChange={(event) => {
+              const plan = planByKey.get(event.target.value);
+              if (plan) onAddRepaymentPlan(layout.id, plan);
+            }}
+          >
+            <NativeSelectOption value="">选择已审核还款方案</NativeSelectOption>
+            {repaymentPlanOptions.map((plan) => <NativeSelectOption key={plan.planKey} value={plan.planKey}>{repaymentPlanOptionLabel(plan)}</NativeSelectOption>)}
+          </NativeSelect> : nextPlan && <Button type="button" size="sm" variant="outline" onClick={() => onAddRepaymentPlan(layout.id, nextPlan)}>
+            <Plus className="h-4 w-4" />
+            加一行
+          </Button>}
+          <Button type="button" size="sm" variant="outline" onClick={() => setManualEditor({ layout })}>
+            <Pencil className="h-4 w-4" />
+            手填数值
+          </Button>
+        </div>
       </div>
     </div>;
-  })}</div>;
+  })}</div>
+  <ManualRepaymentPlanDialog
+    editor={manualEditor}
+    onClose={() => setManualEditor(null)}
+    onSave={(choice) => {
+      if (!manualEditor) return;
+      if (manualEditor.scenarioId && manualEditor.originalScenario) {
+        onChooseRepaymentPlan(manualEditor.scenarioId, choice, manualEditor.originalScenario);
+      } else {
+        onAddRepaymentPlan(manualEditor.layout.id, choice);
+      }
+      setManualEditor(null);
+    }}
+  />
+  </>;
+}
+
+function ManualRepaymentPlanDialog({
+  editor,
+  onClose,
+  onSave,
+}: {
+  editor: {
+    layout: PreparedNumericLayout;
+    initialChoice?: RepaymentPlanChoice;
+  } | null;
+  onClose: () => void;
+  onSave: (choice: RepaymentPlanChoice) => void;
+}) {
+  const [values, setValues] = useState<RepaymentPlanChoice["values"]>(EMPTY_REPAYMENT_PLAN_VALUES);
+  useEffect(() => {
+    setValues(editor ? manualValuesForLayout(editor.layout, editor.initialChoice) : EMPTY_REPAYMENT_PLAN_VALUES);
+  }, [editor]);
+  const columns = editor?.layout.targetColumns ?? [];
+  const canSave = Boolean(editor) && columns.every((column) => numericColumnChoiceValue(values, column).trim());
+  const update = (column: PreparedNumericLayout["targetColumns"][number], value: string) => {
+    setValues((current) => ({ ...current, [repaymentPlanValueKey(column)]: value }));
+  };
+  return <Dialog open={editor !== null} onOpenChange={(open) => !open && onClose()}>
+    <DialogContent className="max-w-lg">
+      <DialogHeader>
+        <DialogTitle>手填数值</DialogTitle>
+        <DialogDescription>{editor ? `${editor.layout.location} · 仅用于本次订单，不写入文案库。` : ""}</DialogDescription>
+      </DialogHeader>
+      <div className="space-y-3">
+        {columns.map((column) => <div key={column} className="space-y-1.5">
+          <Label htmlFor={`manual-repayment-${column}`} className="text-xs text-muted-foreground">{numericColumnLabel(column)}</Label>
+          <Input
+            id={`manual-repayment-${column}`}
+            value={numericColumnChoiceValue(values, column)}
+            onChange={(event) => update(column, event.target.value)}
+            placeholder={manualRepaymentPlaceholder(column)}
+          />
+        </div>)}
+        <p className="text-xs leading-5 text-muted-foreground">生成时会按这里的展示值覆盖当前数值区域；请只填写已确认的业务口径。</p>
+      </div>
+      <DialogFooter>
+        <Button variant="outline" onClick={onClose}>取消</Button>
+        <Button disabled={!canSave || !editor} onClick={() => editor && onSave(manualRepaymentPlanChoice(editor.layout.id, values, editor.initialChoice?.planKey))}>采用手填数值</Button>
+      </DialogFooter>
+    </DialogContent>
+  </Dialog>;
+}
+
+function manualValuesForLayout(layout: PreparedNumericLayout, choice: RepaymentPlanChoice | undefined): RepaymentPlanChoice["values"] {
+  const values = { ...EMPTY_REPAYMENT_PLAN_VALUES };
+  for (const column of layout.targetColumns) {
+    values[repaymentPlanValueKey(column)] = choice ? numericColumnChoiceValue(choice.values, column) : "";
+  }
+  return values;
+}
+
+function repaymentPlanValueKey(column: PreparedNumericLayout["targetColumns"][number]): keyof RepaymentPlanChoice["values"] {
+  switch (column) {
+    case "principal": return "principal";
+    case "tenor": return "tenor";
+    case "monthly_installment": return "monthlyInstallment";
+    case "total_interest": return "totalInterest";
+    case "total_repayment": return "totalRepayment";
+  }
+}
+
+function numericColumnChoiceValue(values: RepaymentPlanChoice["values"], column: PreparedNumericLayout["targetColumns"][number]): string {
+  return values[repaymentPlanValueKey(column)];
+}
+
+function manualRepaymentPlaceholder(column: PreparedNumericLayout["targetColumns"][number]): string {
+  switch (column) {
+    case "principal": return "例如：Rp100 Juta";
+    case "tenor": return "例如：6 Bulan";
+    case "monthly_installment": return "例如：Rp1.405.333";
+    case "total_interest": return "例如：Rp431.998";
+    case "total_repayment": return "例如：Rp8.431.998";
+  }
 }
 
 function nextRepaymentPlanOptionForLayout(layout: PreparedNumericLayout, scenarios: ReadonlyMap<string, PreparedRepaymentPlanSelection>, options: RepaymentPlanChoice[]): RepaymentPlanChoice | undefined {
@@ -2155,7 +2326,12 @@ function nextRepaymentPlanOptionForLayout(layout: PreparedNumericLayout, scenari
 }
 
 function repaymentPlanOptionLabel(plan: RepaymentPlanChoice): string {
-  return `${plan.values.principal} / ${plan.values.tenor} / 月还 ${plan.values.monthlyInstallment}`;
+  return [
+    plan.values.principal,
+    plan.values.tenor,
+    plan.values.monthlyInstallment ? `月还 ${plan.values.monthlyInstallment}` : "",
+    plan.values.totalRepayment ? `总还款 ${plan.values.totalRepayment}` : "",
+  ].filter(Boolean).join(" / ") || plan.planKey;
 }
 
 function numericLayoutKindLabel(kind: PreparedNumericLayout["layoutKind"]): string {
