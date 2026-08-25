@@ -115,6 +115,7 @@ type creativeOrderWorkflowRetryResponse struct {
 type creativeOrderQCRetryResponse struct {
 	VariantID       string `json:"variant_id"`
 	Revision        int    `json:"revision"`
+	Attempt         int    `json:"attempt"`
 	TechnicalTaskID string `json:"technical_task_id"`
 	VisualTaskID    string `json:"visual_task_id"`
 }
@@ -247,6 +248,7 @@ type creativeOrderQCReportResponse struct {
 	VariantID                string          `json:"variant_id"`
 	Lane                     string          `json:"lane"`
 	Revision                 int             `json:"revision"`
+	Attempt                  int             `json:"attempt"`
 	Status                   string          `json:"status"`
 	Findings                 json.RawMessage `json:"findings"`
 	TriggerEvidenceKind      string          `json:"trigger_evidence_kind"`
@@ -259,6 +261,7 @@ type creativeOrderQCInput struct {
 	VariantID                string          `json:"variant_id"`
 	Lane                     string          `json:"lane"`
 	Revision                 int             `json:"revision"`
+	Attempt                  int             `json:"attempt"`
 	Status                   string          `json:"status"`
 	Findings                 json.RawMessage `json:"findings"`
 	TriggerEvidenceKind      string          `json:"trigger_evidence_kind"`
@@ -268,6 +271,7 @@ type creativeOrderQCInput struct {
 type creativeOrderQCFinalizeInput struct {
 	VariantID string `json:"variant_id"`
 	Revision  int    `json:"revision"`
+	Attempt   int    `json:"attempt"`
 }
 
 type creativeOrderQCFinalizeResponse struct {
@@ -276,6 +280,7 @@ type creativeOrderQCFinalizeResponse struct {
 	Outcome              string `json:"outcome"`
 	VariantID            string `json:"variant_id"`
 	Revision             int    `json:"revision"`
+	Attempt              int    `json:"attempt"`
 	TechnicalStatus      string `json:"technical_status"`
 	VisualStatus         string `json:"visual_status"`
 	DeliveredAssetCount  int    `json:"delivered_asset_count"`
@@ -293,6 +298,8 @@ type creativeVisualModelReworkFinding struct {
 
 const creativeVisualModelReworkMaxAttempts = 2
 
+const defaultCreativeQCAttempt = 1
+
 const creativeQCOutcomeDeliveredWithRisk = "delivered_with_qc_risk"
 
 type creativeOrderItemAdoptionInput struct {
@@ -309,13 +316,15 @@ type creativeDeliveryScope struct {
 }
 
 type creativeOrderCapabilityBinding struct {
-	Capability    string
-	SnapshotField string
+	Capability        string
+	SnapshotField     string
+	PoolSnapshotField string
+	AllowMultiple     bool
 }
 
 var creativeOrderCapabilityBindings = []creativeOrderCapabilityBinding{
 	{Capability: "generation_plan", SnapshotField: "planner_agent_id"},
-	{Capability: "image_edit", SnapshotField: "producer_agent_id"},
+	{Capability: "image_edit", SnapshotField: "producer_agent_id", PoolSnapshotField: "producer_agent_ids", AllowMultiple: true},
 	{Capability: "quality_control", SnapshotField: "reviewer_agent_id"},
 }
 
@@ -717,11 +726,18 @@ ORDER BY role_skill.config->>'capability', sm.member_id::text
 		if len(agentIDs) == 0 {
 			return nil, &creativeOrderSquadValidationError{message: "squad is missing " + binding.Capability + " capability"}
 		}
-		if len(agentIDs) > 1 {
+		if len(agentIDs) > 1 && !binding.AllowMultiple {
 			return nil, &creativeOrderSquadValidationError{message: "squad has multiple agents with " + binding.Capability + " capability"}
 		}
 		if err := setSnapshotString(binding.SnapshotField, agentIDs[0]); err != nil {
 			return nil, err
+		}
+		if binding.PoolSnapshotField != "" {
+			encoded, err := json.Marshal(agentIDs)
+			if err != nil {
+				return nil, err
+			}
+			squadSnapshot[binding.PoolSnapshotField] = encoded
 		}
 	}
 	encodedSquad, err := json.Marshal(squadSnapshot)
@@ -1393,9 +1409,8 @@ func creativeWorkflowRequiresAtomicQCRecovery(workflow string) bool {
 	}
 }
 
-// RetryCreativeOrderVariantQC recovers the visual QC lane for a completed Prime
-// package. It is intentionally not a creative rework: no generated or primed
-// asset is changed or recreated.
+// RetryCreativeOrderVariantQC reruns the visual QC lane for a completed Prime
+// package. It appends a new QC attempt instead of replacing earlier reports.
 func (h *Handler) RetryCreativeOrderVariantQC(w http.ResponseWriter, r *http.Request) {
 	workspaceID, userID, ok := h.creativeFeedbackWorkspaceUser(w, r)
 	if !ok {
@@ -1441,8 +1456,8 @@ FOR UPDATE OF variant, order_row
 		writeError(w, http.StatusConflict, "creative order is cancelled")
 		return
 	}
-	if variantStatus != "action_required" {
-		writeError(w, http.StatusConflict, "creative QC recovery requires a variant awaiting action")
+	if variantStatus == "cancelled" {
+		writeError(w, http.StatusConflict, "creative QC recovery requires an active variant")
 		return
 	}
 	if !issueID.Valid {
@@ -1457,22 +1472,6 @@ FOR UPDATE OF variant, order_row
 	}
 	if len(expectedSizes) == 0 {
 		writeError(w, http.StatusConflict, "creative QC recovery requires at least one delivery size")
-		return
-	}
-	var recoveryAlreadyUsed bool
-	if err := tx.QueryRow(r.Context(), `
-SELECT EXISTS(
-  SELECT 1 FROM activity_log
-  WHERE issue_id = $1 AND action = 'creative_qc_recovery_queued'
-    AND details->>'variant_id' = $2::text
-    AND details->>'revision' = $3::text
-)
-`, issueID, variantID, strconv.Itoa(revision)).Scan(&recoveryAlreadyUsed); err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to check creative QC recovery limit")
-		return
-	}
-	if recoveryAlreadyUsed {
-		writeError(w, http.StatusConflict, "creative QC recovery has already been used for this revision")
 		return
 	}
 	primedSizes := map[string]struct{}{}
@@ -1526,14 +1525,22 @@ SELECT EXISTS(
 		return
 	}
 
-	failedTaskIDs, err := creativeRecoverableQCTaskIDs(r.Context(), tx, orderID, variantID, revision)
+	nextAttempt, err := creativeNextQCAttempt(r.Context(), tx, variantID, revision)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to check creative QC recovery eligibility")
+		writeError(w, http.StatusInternalServerError, "failed to allocate creative QC attempt")
 		return
 	}
-	if len(failedTaskIDs) == 0 {
-		writeError(w, http.StatusConflict, "creative QC recovery requires a recoverable system or contract failure")
-		return
+	previousAttempt := nextAttempt - 1
+	failedTaskIDs := []string{}
+	if previousAttempt > 0 {
+		failedTaskIDs, err = creativeRecoverableQCTaskIDs(r.Context(), tx, orderID, variantID, revision, previousAttempt)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to snapshot previous creative QC recovery eligibility")
+			return
+		}
+	}
+	if previousAttempt < 1 {
+		previousAttempt = defaultCreativeQCAttempt
 	}
 
 	leaderID, reviewerID, err := creativeOrderQCAgentSnapshot(json.RawMessage(inputSnapshot))
@@ -1576,10 +1583,10 @@ SELECT EXISTS(
 
 	var priorReports, priorResolution json.RawMessage
 	if err := tx.QueryRow(r.Context(), `
-SELECT COALESCE(jsonb_agg(jsonb_build_object('lane', lane, 'status', status, 'findings', findings) ORDER BY lane), '[]'::jsonb)::text,
-       COALESCE((SELECT jsonb_build_object('outcome', outcome, 'failure_summary', failure_summary, 'finalized_by_task_id', finalized_by_task_id::text)
+SELECT COALESCE(jsonb_agg(jsonb_build_object('attempt', attempt, 'lane', lane, 'status', status, 'findings', findings) ORDER BY attempt, lane), '[]'::jsonb)::text,
+       COALESCE((SELECT jsonb_agg(jsonb_build_object('attempt', attempt, 'outcome', outcome, 'failure_summary', failure_summary, 'finalized_by_task_id', COALESCE(finalized_by_task_id::text, '')) ORDER BY attempt)
                  FROM creative_order_variant_qc_resolution
-                 WHERE variant_id = $1 AND revision = $2), '{}'::jsonb)::text
+                 WHERE variant_id = $1 AND revision = $2), '[]'::jsonb)::text
 FROM creative_order_qc_report
 WHERE variant_id = $1 AND revision = $2
 `, variantID, revision).Scan(&priorReports, &priorResolution); err != nil {
@@ -1604,11 +1611,13 @@ WHERE variant_id = $1 AND revision = $2
 			"creative_order_item_id":      itemID,
 			"variant_id":                  uuidToString(variantID),
 			"revision":                    revision,
+			"qc_attempt":                  nextAttempt,
+			"qc_rerun_of_attempt":         previousAttempt,
 			"expected_sizes":              expectedSizes,
 			"issue_id":                    uuidToString(issueID),
 			"leader_agent_id":             uuidToString(leaderID),
 			"qc_recovery_of_task_ids":     failedTaskIDs,
-			"qc_recovery_kind":            "system_or_contract_failure",
+			"qc_recovery_kind":            "manual_append_rerun",
 			"qc_recovery_asset_invariant": "reuse_completed_primed_assets_only",
 		})
 		if err != nil {
@@ -1654,6 +1663,8 @@ WHERE variant_id = $1 AND revision = $2
 		"creative_order_id":      uuidToString(orderID),
 		"variant_id":             uuidToString(variantID),
 		"revision":               revision,
+		"attempt":                nextAttempt,
+		"previous_attempt":       previousAttempt,
 		"recovery_of_task_ids":   failedTaskIDs,
 		"visual_task_id":         uuidToString(created["visual"].ID),
 		"asset_invariant":        "reused_completed_primed_assets_only",
@@ -1671,14 +1682,6 @@ VALUES ($1, $2, 'member', $3, 'creative_qc_recovery_queued', $4::jsonb)
 		writeError(w, http.StatusInternalServerError, "failed to record creative QC recovery")
 		return
 	}
-	if _, err := tx.Exec(r.Context(), `DELETE FROM creative_order_qc_report WHERE variant_id = $1 AND revision = $2`, variantID, revision); err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to reset previous creative QC reports")
-		return
-	}
-	if _, err := tx.Exec(r.Context(), `DELETE FROM creative_order_variant_qc_resolution WHERE variant_id = $1 AND revision = $2`, variantID, revision); err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to reset previous creative QC resolution")
-		return
-	}
 	if _, err := tx.Exec(r.Context(), `UPDATE creative_order_variant SET status = 'running', updated_at = now() WHERE id = $1`, variantID); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to resume creative QC")
 		return
@@ -1692,11 +1695,12 @@ VALUES ($1, $2, 'member', $3, 'creative_qc_recovery_queued', $4::jsonb)
 	}
 	h.publishCreativeDomainUpdated(r, workspaceID, userID, map[string]any{
 		"scope": "order", "order_id": uuidToString(orderID), "variant_id": uuidToString(variantID), "revision": revision,
-		"recovery": "creative_qc",
+		"attempt": nextAttempt, "recovery": "creative_qc",
 	})
 	writeJSON(w, http.StatusOK, creativeOrderQCRetryResponse{
 		VariantID:    uuidToString(variantID),
 		Revision:     revision,
+		Attempt:      nextAttempt,
 		VisualTaskID: uuidToString(created["visual"].ID),
 	})
 }
@@ -1713,20 +1717,20 @@ func (h *Handler) queueCreativeQCAutomaticRecovery(
 	inputSnapshot json.RawMessage,
 	expectedSizes []string,
 	failedTaskIDs []string,
-) (map[string]db.AgentTaskQueue, error) {
+) (map[string]db.AgentTaskQueue, int, error) {
 	if h.TaskService == nil {
-		return nil, errors.New("creative QC task service is unavailable")
+		return nil, 0, errors.New("creative QC task service is unavailable")
 	}
 	leaderID, reviewerID, err := creativeOrderQCAgentSnapshot(inputSnapshot)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	reviewer, err := h.Queries.WithTx(tx).GetAgentInWorkspace(ctx, db.GetAgentInWorkspaceParams{ID: reviewerID, WorkspaceID: workspaceID})
 	if errors.Is(err, pgx.ErrNoRows) || reviewer.ArchivedAt.Valid {
-		return nil, errors.New("the frozen creative QC reviewer is unavailable")
+		return nil, 0, errors.New("the frozen creative QC reviewer is unavailable")
 	}
 	if err != nil {
-		return nil, errors.New("failed to load the frozen creative QC reviewer")
+		return nil, 0, errors.New("failed to load the frozen creative QC reviewer")
 	}
 	var reviewerCapable bool
 	if err := tx.QueryRow(ctx, `
@@ -1740,10 +1744,18 @@ SELECT EXISTS(
     AND skill_row.config->>'capability' = 'quality_control'
 )
 `, reviewer.ID, workspaceID).Scan(&reviewerCapable); err != nil {
-		return nil, errors.New("failed to validate the frozen creative QC reviewer")
+		return nil, 0, errors.New("failed to validate the frozen creative QC reviewer")
 	}
 	if !reviewerCapable {
-		return nil, errors.New("the frozen creative QC reviewer no longer provides quality_control")
+		return nil, 0, errors.New("the frozen creative QC reviewer no longer provides quality_control")
+	}
+	nextAttempt, err := creativeNextQCAttempt(ctx, tx, variantID, revision)
+	if err != nil {
+		return nil, 0, errors.New("failed to allocate automatic creative QC attempt")
+	}
+	previousAttempt := nextAttempt - 1
+	if previousAttempt < 1 {
+		previousAttempt = defaultCreativeQCAttempt
 	}
 
 	contexts := make(map[string]json.RawMessage, 1)
@@ -1763,6 +1775,8 @@ SELECT EXISTS(
 			"creative_order_item_id":      uuidToString(itemID),
 			"variant_id":                  uuidToString(variantID),
 			"revision":                    revision,
+			"qc_attempt":                  nextAttempt,
+			"qc_rerun_of_attempt":         previousAttempt,
 			"expected_sizes":              expectedSizes,
 			"issue_id":                    uuidToString(issueID),
 			"leader_agent_id":             uuidToString(leaderID),
@@ -1771,7 +1785,7 @@ SELECT EXISTS(
 			"qc_recovery_asset_invariant": "reuse_completed_primed_assets_only",
 		})
 		if err != nil {
-			return nil, errors.New("failed to prepare automatic creative QC recovery")
+			return nil, 0, errors.New("failed to prepare automatic creative QC recovery")
 		}
 		contexts[lane] = contextValue
 		items = append(items, struct {
@@ -1784,7 +1798,7 @@ SELECT EXISTS(
 		validationItems = append(validationItems, service.DirectTaskFanoutItem{ItemKey: item.key, Context: contexts[item.lane]})
 	}
 	if err := validateCreativeTaskFanoutContext("creative_order_variant_qc", variantID, validationItems); err != nil {
-		return nil, errors.New("failed to prepare canonical automatic creative QC recovery context")
+		return nil, 0, errors.New("failed to prepare canonical automatic creative QC recovery context")
 	}
 
 	attr := attribution.DirectHumanRun(userID, attribution.EvidenceKind("creative_order_variant_qc"), variantID)
@@ -1804,7 +1818,7 @@ SELECT EXISTS(
 			Context:              contexts[item.lane],
 		})
 		if err != nil {
-			return nil, errors.New("automatic creative QC recovery could not be queued")
+			return nil, 0, errors.New("automatic creative QC recovery could not be queued")
 		}
 		created[item.lane] = task
 	}
@@ -1812,36 +1826,28 @@ SELECT EXISTS(
 		"creative_order_id":    uuidToString(orderID),
 		"variant_id":           uuidToString(variantID),
 		"revision":             revision,
+		"attempt":              nextAttempt,
+		"previous_attempt":     previousAttempt,
 		"recovery_of_task_ids": failedTaskIDs,
 		"visual_task_id":       uuidToString(created["visual"].ID),
 		"asset_invariant":      "reused_completed_primed_assets_only",
 		"automatic":            true,
 	})
 	if err != nil {
-		return nil, errors.New("failed to record automatic creative QC recovery")
+		return nil, 0, errors.New("failed to record automatic creative QC recovery")
 	}
 	if _, err := tx.Exec(ctx, `
 INSERT INTO activity_log (workspace_id, issue_id, actor_type, actor_id, action, details)
 VALUES ($1, $2, 'member', $3, 'creative_qc_recovery_queued', $4::jsonb)
 `, workspaceID, issueID, userID, details); err != nil {
-		return nil, errors.New("failed to record automatic creative QC recovery")
-	}
-	if _, err := tx.Exec(ctx, `
-DELETE FROM creative_order_qc_report WHERE variant_id = $1 AND revision = $2
-`, variantID, revision); err != nil {
-		return nil, errors.New("failed to reset previous creative QC reports")
-	}
-	if _, err := tx.Exec(ctx, `
-DELETE FROM creative_order_variant_qc_resolution WHERE variant_id = $1 AND revision = $2
-`, variantID, revision); err != nil {
-		return nil, errors.New("failed to reset previous creative QC resolution")
+		return nil, 0, errors.New("failed to record automatic creative QC recovery")
 	}
 	if _, err := tx.Exec(ctx, `
 UPDATE creative_order_variant SET status = 'running', updated_at = now() WHERE id = $1
 `, variantID); err != nil {
-		return nil, errors.New("failed to resume creative QC")
+		return nil, 0, errors.New("failed to resume creative QC")
 	}
-	return created, nil
+	return created, nextAttempt, nil
 }
 
 func creativeOrderQCAgentSnapshot(raw json.RawMessage) (pgtype.UUID, pgtype.UUID, error) {
@@ -1880,6 +1886,117 @@ func creativeOrderProductionAgentSnapshot(raw json.RawMessage) (pgtype.UUID, pgt
 		return pgtype.UUID{}, pgtype.UUID{}, pgtype.UUID{}, err
 	}
 	return leaderID, producerID, reviewerID, nil
+}
+
+func creativeTaskPreferredProducerID(raw json.RawMessage) pgtype.UUID {
+	var taskContext struct {
+		ProducerAgentID string `json:"producer_agent_id"`
+	}
+	if len(raw) == 0 || json.Unmarshal(raw, &taskContext) != nil {
+		return pgtype.UUID{}
+	}
+	id, err := uuid.Parse(strings.TrimSpace(taskContext.ProducerAgentID))
+	if err != nil {
+		return pgtype.UUID{}
+	}
+	return pgtype.UUID{Bytes: id, Valid: true}
+}
+
+func (h *Handler) selectCreativeImageEditAgent(ctx context.Context, q creativeTaskFanoutQuerier, qtx *db.Queries, workspaceID pgtype.UUID, inputSnapshot json.RawMessage, seed string, preferred pgtype.UUID) (db.Agent, error) {
+	squadIDText, err := creativeOrderSnapshotSquadID(inputSnapshot)
+	if err != nil {
+		return db.Agent{}, err
+	}
+	squadUUID, err := uuid.Parse(strings.TrimSpace(squadIDText))
+	if err != nil {
+		return db.Agent{}, errors.New("creative order has an invalid frozen squad")
+	}
+	squadID := pgtype.UUID{Bytes: squadUUID, Valid: true}
+	seed = strings.TrimSpace(seed)
+	if seed == "" {
+		seed = squadUUID.String()
+	}
+
+	var agentID pgtype.UUID
+	err = q.QueryRow(ctx, `
+SELECT agent_row.id
+FROM squad_member member
+JOIN agent agent_row
+  ON agent_row.id = member.member_id
+ AND agent_row.workspace_id = $2
+ AND agent_row.archived_at IS NULL
+JOIN agent_runtime runtime_row
+  ON runtime_row.id = agent_row.runtime_id
+ AND runtime_row.workspace_id = agent_row.workspace_id
+ AND runtime_row.status = 'online'
+JOIN agent_skill binding
+  ON binding.agent_id = agent_row.id
+ AND binding.enabled
+JOIN skill role_skill
+  ON role_skill.id = binding.skill_id
+ AND role_skill.workspace_id = $2
+ AND role_skill.config->>'kind' = 'creative_role'
+ AND role_skill.config->>'capability' = 'image_edit'
+LEFT JOIN agent_task_queue active_task
+  ON active_task.agent_id = agent_row.id
+ AND active_task.status IN ('queued', 'dispatched', 'running', 'waiting_local_directory')
+WHERE member.squad_id = $1
+  AND member.member_type = 'agent'
+GROUP BY agent_row.id
+ORDER BY
+  ($4::uuid IS NOT NULL AND agent_row.id = $4::uuid) DESC,
+  count(active_task.id) ASC,
+  md5($3::text || ':' || agent_row.id::text) ASC
+LIMIT 1
+`, squadID, workspaceID, seed, preferred).Scan(&agentID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return db.Agent{}, errors.New("creative production image_edit agent pool has no online members")
+	}
+	if err != nil {
+		return db.Agent{}, err
+	}
+	agent, err := qtx.GetAgentInWorkspace(ctx, db.GetAgentInWorkspaceParams{ID: agentID, WorkspaceID: workspaceID})
+	if err != nil {
+		return db.Agent{}, err
+	}
+	if agent.ArchivedAt.Valid || !agent.RuntimeID.Valid {
+		return db.Agent{}, errors.New("selected creative production agent is unavailable")
+	}
+	return agent, nil
+}
+
+func selectedCreativeProductionAgentFromHistory(ctx context.Context, q creativeTaskFanoutQuerier, workspaceID, variantID pgtype.UUID, revision int) pgtype.UUID {
+	var agentID pgtype.UUID
+	err := q.QueryRow(ctx, `
+SELECT task.agent_id
+FROM agent_task_queue task
+JOIN agent agent_row ON agent_row.id = task.agent_id AND agent_row.workspace_id = $1
+WHERE task.trigger_evidence_kind = 'creative_order_item_production'
+  AND task.context->>'type' = 'creative_domain_task'
+  AND task.context->>'workflow' = 'creative_production'
+  AND task.context->>'variant_id' = $2::text
+  AND CASE
+        WHEN NULLIF(task.context->>'revision', '') ~ '^[0-9]+$'
+          THEN (task.context->>'revision')::int
+        ELSE 0
+      END = $3
+ORDER BY
+  CASE task.status
+    WHEN 'completed' THEN 0
+    WHEN 'running' THEN 1
+    WHEN 'dispatched' THEN 2
+    WHEN 'queued' THEN 3
+    WHEN 'waiting_local_directory' THEN 4
+    ELSE 5
+  END,
+  task.created_at ASC,
+  task.id ASC
+LIMIT 1
+`, workspaceID, variantID, revision).Scan(&agentID)
+	if err != nil {
+		return pgtype.UUID{}
+	}
+	return agentID
 }
 
 func creativeOrderDirectEditAgentSnapshot(raw json.RawMessage) (pgtype.UUID, error) {
@@ -1947,7 +2064,9 @@ func validCreativeVisualModelReworkDiagnosis(code, sizeKey, diagnosis string) bo
 	}
 	return strings.Contains(diagnosis, "期望调整为") &&
 		(strings.Contains(diagnosis, "背景") || strings.Contains(strings.ToLower(diagnosis), "background")) &&
-		(strings.Contains(diagnosis, "冲突") || strings.Contains(diagnosis, "重叠") || strings.Contains(diagnosis, "遮挡") || strings.Contains(diagnosis, "进入"))
+		(strings.Contains(diagnosis, "冲突") || strings.Contains(diagnosis, "重叠") || strings.Contains(diagnosis, "遮挡") || strings.Contains(diagnosis, "进入") ||
+			strings.Contains(diagnosis, "不可读") || strings.Contains(diagnosis, "看不清") || strings.Contains(diagnosis, "不清晰") ||
+			strings.Contains(diagnosis, "难以辨认") || strings.Contains(diagnosis, "对比不足"))
 }
 
 func creativeVisualModelReworkAttemptCount(ctx context.Context, tx pgx.Tx, variantID pgtype.UUID) (int, error) {
@@ -1964,7 +2083,11 @@ WHERE trigger_evidence_kind = 'creative_order_item_production'
 	return count, err
 }
 
-func creativeRecoverableQCTaskIDs(ctx context.Context, tx pgx.Tx, orderID, variantID pgtype.UUID, revision int) ([]string, error) {
+func creativeRecoverableQCTaskIDs(ctx context.Context, tx pgx.Tx, orderID, variantID pgtype.UUID, revision int, attempts ...int) ([]string, error) {
+	attempt := defaultCreativeQCAttempt
+	if len(attempts) > 0 && attempts[0] > 0 {
+		attempt = attempts[0]
+	}
 	rows, err := tx.Query(ctx, `
 SELECT id::text
 FROM agent_task_queue
@@ -1975,11 +2098,18 @@ WHERE (
   AND context->>'creative_order_id' = $1::text
   AND context->>'variant_id' = $2::text
   AND COALESCE(NULLIF(context->>'revision', '')::int, 1) = $3
+  AND COALESCE(
+    CASE
+      WHEN NULLIF(context->>'qc_attempt', '') ~ '^[0-9]+$'
+        THEN (context->>'qc_attempt')::int
+    END,
+    1
+  ) = $4
   AND (
     (
       context->>'workflow' = 'creative_qc_visual'
       AND status = 'failed'
-      AND COALESCE(NULLIF(failure_reason, ''), 'agent_error') = ANY($4::text[])
+      AND COALESCE(NULLIF(failure_reason, ''), 'agent_error') = ANY($5::text[])
     )
     OR (
       status = 'completed'
@@ -1988,6 +2118,7 @@ WHERE (
         FROM creative_order_qc_report report
         WHERE report.variant_id = $2::uuid
           AND report.revision = $3
+          AND report.attempt = $4
           AND report.lane = 'visual'
           AND (
             context->>'workflow' = 'creative_qc_visual'
@@ -2023,7 +2154,7 @@ WHERE (
     )
   )
 ORDER BY created_at, id
-`, orderID, variantID, revision, []string{
+`, orderID, variantID, revision, attempt, []string{
 		"agent_error", "api_invalid_request", "agent_fallback_message", "codex_semantic_inactivity",
 		"provider_rate_limited", "queued_expired", "runtime_offline", "runtime_recovery", "timeout",
 	})
@@ -2332,9 +2463,16 @@ WHERE variant.id = $1 AND item.id = $2 AND order_row.id = $3
 	}
 	var visualStatus, qcOutcome string
 	if err := tx.QueryRow(r.Context(), `
+WITH latest_resolution AS (
+  SELECT attempt, outcome
+  FROM creative_order_variant_qc_resolution
+  WHERE variant_id = $1 AND revision = $2
+  ORDER BY attempt DESC, created_at DESC
+  LIMIT 1
+)
 SELECT
-  COALESCE((SELECT status FROM creative_order_qc_report WHERE variant_id = $1 AND revision = $2 AND lane = 'visual'), ''),
-  COALESCE((SELECT outcome FROM creative_order_variant_qc_resolution WHERE variant_id = $1 AND revision = $2), '')
+  COALESCE((SELECT status FROM creative_order_qc_report WHERE variant_id = $1 AND revision = $2 AND lane = 'visual' AND attempt = (SELECT attempt FROM latest_resolution)), ''),
+  COALESCE((SELECT outcome FROM latest_resolution), '')
 `, variantID, revision).Scan(&visualStatus, &qcOutcome); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to load creative variant QC state")
 		return
@@ -2372,17 +2510,31 @@ SELECT
 
 	var qcReportsJSON, qcResolutionJSON string
 	if err := tx.QueryRow(r.Context(), `
+WITH latest_resolution AS (
+  SELECT attempt, outcome, failure_summary, finalized_by_task_id
+  FROM creative_order_variant_qc_resolution
+  WHERE variant_id = $1 AND revision = $2
+  ORDER BY attempt DESC, created_at DESC
+  LIMIT 1
+), latest_attempt AS (
+  SELECT COALESCE(
+    (SELECT attempt FROM latest_resolution),
+    (SELECT max(attempt) FROM creative_order_qc_report WHERE variant_id = $1 AND revision = $2),
+    1
+  ) AS attempt
+)
 SELECT
-  COALESCE(jsonb_agg(jsonb_build_object(
-    'id', id::text, 'lane', lane, 'revision', revision, 'status', status, 'findings', findings,
-    'created_at', created_at, 'updated_at', updated_at
-  ) ORDER BY lane), '[]'::jsonb)::text,
+  COALESCE((SELECT jsonb_agg(jsonb_build_object(
+    'id', report.id::text, 'lane', report.lane, 'revision', report.revision, 'attempt', report.attempt,
+    'status', report.status, 'findings', report.findings,
+    'created_at', report.created_at, 'updated_at', report.updated_at
+  ) ORDER BY lane)
+  FROM creative_order_qc_report report, latest_attempt
+  WHERE report.variant_id = $1 AND report.revision = $2 AND report.attempt = latest_attempt.attempt), '[]'::jsonb)::text,
   COALESCE((SELECT jsonb_build_object(
-    'outcome', outcome, 'failure_summary', failure_summary,
+    'attempt', attempt, 'outcome', outcome, 'failure_summary', failure_summary,
     'finalized_by_task_id', COALESCE(finalized_by_task_id::text, '')
-  ) FROM creative_order_variant_qc_resolution WHERE variant_id = $1 AND revision = $2), '{}'::jsonb)::text
-FROM creative_order_qc_report
-WHERE variant_id = $1 AND revision = $2
+  ) FROM latest_resolution), '{}'::jsonb)::text
 `, variantID, revision).Scan(&qcReportsJSON, &qcResolutionJSON); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to snapshot creative variant QC state")
 		return
@@ -3144,9 +3296,16 @@ func (h *Handler) UpsertCreativeOrderQC(w http.ResponseWriter, r *http.Request) 
 	if !ok {
 		return
 	}
-	if _, ok := h.creativeQCActiveTask(w, r, orderID, variantID, input.Revision, input.Lane); !ok {
+	task, ok := h.creativeQCActiveTask(w, r, orderID, variantID, input.Revision, input.Lane)
+	if !ok {
 		return
 	}
+	attempt, err := creativeQCAttemptFromTask(task, input.Attempt)
+	if err != nil {
+		writeError(w, http.StatusForbidden, err.Error())
+		return
+	}
+	input.Attempt = attempt
 	evidenceID, ok := optionalUUIDOrBadRequest(w, input.TriggerEvidenceReference, "trigger_evidence_ref_id")
 	if !ok {
 		return
@@ -3178,24 +3337,24 @@ FROM creative_order_variant v
 	if err := tx.QueryRow(r.Context(), `
 SELECT EXISTS(
   SELECT 1 FROM creative_order_variant_qc_resolution
-  WHERE variant_id = $1 AND revision = $2
+  WHERE variant_id = $1 AND revision = $2 AND attempt = $3
 )
-`, variantID, input.Revision).Scan(&finalized); err != nil {
+`, variantID, input.Revision, input.Attempt).Scan(&finalized); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to check creative QC resolution")
 		return
 	}
 	if finalized {
-		writeError(w, http.StatusConflict, "creative order QC revision is already finalized")
+		writeError(w, http.StatusConflict, "creative order QC attempt is already finalized")
 		return
 	}
 	var qcID string
 	err = tx.QueryRow(r.Context(), `
-INSERT INTO creative_order_qc_report (variant_id, lane, revision, status, findings, trigger_evidence_kind, trigger_evidence_ref_id)
-VALUES ($1,$2,$3,$4,$5::jsonb,$6,$7)
-ON CONFLICT (variant_id, lane, revision) DO UPDATE SET status = EXCLUDED.status, findings = EXCLUDED.findings,
+INSERT INTO creative_order_qc_report (variant_id, lane, revision, attempt, status, findings, trigger_evidence_kind, trigger_evidence_ref_id)
+VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7,$8)
+ON CONFLICT (variant_id, lane, revision, attempt) DO UPDATE SET status = EXCLUDED.status, findings = EXCLUDED.findings,
   trigger_evidence_kind = EXCLUDED.trigger_evidence_kind, trigger_evidence_ref_id = EXCLUDED.trigger_evidence_ref_id, updated_at = now()
 RETURNING id::text
-`, variantID, input.Lane, input.Revision, input.Status, input.Findings, input.TriggerEvidenceKind, evidenceID).Scan(&qcID)
+`, variantID, input.Lane, input.Revision, input.Attempt, input.Status, input.Findings, input.TriggerEvidenceKind, evidenceID).Scan(&qcID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to save creative order QC report")
 		return
@@ -3205,7 +3364,7 @@ RETURNING id::text
 		return
 	}
 	h.publishCreativeDomainUpdated(r, workspaceID, userID, map[string]any{"scope": "order", "order_id": chi.URLParam(r, "id")})
-	writeJSON(w, http.StatusOK, map[string]any{"id": qcID, "variant_id": input.VariantID, "lane": input.Lane, "revision": input.Revision, "status": input.Status})
+	writeJSON(w, http.StatusOK, map[string]any{"id": qcID, "variant_id": input.VariantID, "lane": input.Lane, "revision": input.Revision, "attempt": input.Attempt, "status": input.Status})
 }
 
 // decodeCreativeOrderQCInput accepts both the API envelope and the direct
@@ -3268,6 +3427,12 @@ func (h *Handler) FinalizeCreativeOrderQC(w http.ResponseWriter, r *http.Request
 	if !ok {
 		return
 	}
+	attempt, err := creativeQCAttemptFromTask(task, input.Attempt)
+	if err != nil {
+		writeError(w, http.StatusForbidden, err.Error())
+		return
+	}
+	input.Attempt = attempt
 
 	tx, err := h.TxStarter.Begin(r.Context())
 	if err != nil {
@@ -3308,9 +3473,9 @@ FOR UPDATE OF v
 	rows, err := tx.Query(r.Context(), `
 SELECT lane, status, findings::text
 FROM creative_order_qc_report
-WHERE variant_id = $1 AND revision = $2
+WHERE variant_id = $1 AND revision = $2 AND attempt = $3
 FOR UPDATE
-`, variantID, input.Revision)
+`, variantID, input.Revision, input.Attempt)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to load creative QC reports")
 		return
@@ -3344,6 +3509,7 @@ FOR UPDATE
 	response := creativeOrderQCFinalizeResponse{
 		VariantID:    input.VariantID,
 		Revision:     input.Revision,
+		Attempt:      input.Attempt,
 		VisualStatus: reportStatuses["visual"],
 		Outcome:      "pending",
 	}
@@ -3379,7 +3545,7 @@ FOR UPDATE
 		}
 	}
 	if outcome == "action_required" && len(visualReworkFindings) == 0 && !deliverDespiteVisualReworkExhausted {
-		recoverableTaskIDs, recoveryErr := creativeRecoverableQCTaskIDs(r.Context(), tx, orderID, variantID, input.Revision)
+		recoverableTaskIDs, recoveryErr := creativeRecoverableQCTaskIDs(r.Context(), tx, orderID, variantID, input.Revision, input.Attempt)
 		if recoveryErr != nil {
 			writeError(w, http.StatusInternalServerError, "failed to check automatic creative QC recovery")
 			return
@@ -3404,13 +3570,14 @@ SELECT EXISTS(
   WHERE issue_id = $1 AND action = 'creative_qc_recovery_queued'
     AND details->>'variant_id' = $2::text
     AND details->>'revision' = $3::text
+    AND COALESCE(details->>'automatic', 'false') = 'true'
 )
 `, issueID, variantID, strconv.Itoa(input.Revision)).Scan(&recoveryAlreadyUsed); err != nil {
 				writeError(w, http.StatusInternalServerError, "failed to check automatic creative QC recovery limit")
 				return
 			}
 			if !recoveryAlreadyUsed && len(recoverableTaskIDs) > 0 {
-				created, recoveryErr := h.queueCreativeQCAutomaticRecovery(
+				created, recoveryAttempt, recoveryErr := h.queueCreativeQCAutomaticRecovery(
 					r.Context(), tx, workspaceID, userID, orderID, itemID, variantID, issueID,
 					input.Revision, json.RawMessage(inputSnapshot), expectedSizes, recoverableTaskIDs,
 				)
@@ -3431,11 +3598,12 @@ SELECT EXISTS(
 				}
 				response.VisualStatus = "pending"
 				response.Outcome = "pending"
+				response.Attempt = recoveryAttempt
 				response.Finalized = false
 				response.OrderAggregateStatus, _ = h.derivedCreativeOrderStatus(r, orderID)
 				h.publishCreativeDomainUpdated(r, workspaceID, userID, map[string]any{
 					"scope": "order", "order_id": chi.URLParam(r, "id"), "variant_id": input.VariantID,
-					"revision": input.Revision, "recovery": "creative_qc_automatic",
+					"revision": input.Revision, "attempt": recoveryAttempt, "recovery": "creative_qc_automatic",
 				})
 				writeJSON(w, http.StatusOK, response)
 				return
@@ -3453,20 +3621,20 @@ SELECT EXISTS(
 	var resolutionCreated bool
 	err = tx.QueryRow(r.Context(), `
 INSERT INTO creative_order_variant_qc_resolution (
-  variant_id, revision, outcome, finalized_by_task_id, issue_id, failure_summary
+  variant_id, revision, attempt, outcome, finalized_by_task_id, issue_id, failure_summary
 )
-VALUES ($1, $2, $3, $4, $5, $6::jsonb)
-ON CONFLICT (variant_id, revision) DO NOTHING
+VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb)
+ON CONFLICT (variant_id, revision, attempt) DO NOTHING
 RETURNING true
-`, variantID, input.Revision, outcome, task.ID, issueID, failureSummaryJSON).Scan(&resolutionCreated)
+`, variantID, input.Revision, input.Attempt, outcome, task.ID, issueID, failureSummaryJSON).Scan(&resolutionCreated)
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		writeError(w, http.StatusInternalServerError, "failed to resolve creative QC")
 		return
 	}
 	if !resolutionCreated {
 		if err := tx.QueryRow(r.Context(), `
-SELECT outcome FROM creative_order_variant_qc_resolution WHERE variant_id = $1 AND revision = $2
-`, variantID, input.Revision).Scan(&response.Outcome); err != nil {
+SELECT outcome FROM creative_order_variant_qc_resolution WHERE variant_id = $1 AND revision = $2 AND attempt = $3
+`, variantID, input.Revision, input.Attempt).Scan(&response.Outcome); err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to read creative QC resolution")
 			return
 		}
@@ -3502,6 +3670,7 @@ SELECT outcome FROM creative_order_variant_qc_resolution WHERE variant_id = $1 A
 				"creative_order_id": uuidToString(orderID),
 				"variant_id":        uuidToString(variantID),
 				"revision":          input.Revision,
+				"attempt":           input.Attempt,
 				"max_attempts":      creativeVisualModelReworkMaxAttempts,
 				"outcome":           creativeQCOutcomeDeliveredWithRisk,
 			})
@@ -3540,7 +3709,7 @@ VALUES ($1, $2, 'agent', $3, 'creative_visual_rework_exhausted_delivered', $4::j
 	if shouldPublishInbox {
 		inboxDetails, _ := json.Marshal(map[string]any{
 			"creative_order_id": uuidToString(orderID), "variant_id": input.VariantID,
-			"revision": input.Revision, "outcome": outcome,
+			"revision": input.Revision, "attempt": input.Attempt, "outcome": outcome,
 		})
 		inbox, err = h.Queries.WithTx(tx).CreateInboxItem(r.Context(), db.CreateInboxItemParams{
 			WorkspaceID:   workspaceID,
@@ -3562,8 +3731,8 @@ VALUES ($1, $2, 'agent', $3, 'creative_visual_rework_exhausted_delivered', $4::j
 		response.InboxItemID = uuidToString(inbox.ID)
 		if _, err := tx.Exec(r.Context(), `
 UPDATE creative_order_variant_qc_resolution SET inbox_item_id = $3
-WHERE variant_id = $1 AND revision = $2
-`, variantID, input.Revision, inbox.ID); err != nil {
+WHERE variant_id = $1 AND revision = $2 AND attempt = $4
+`, variantID, input.Revision, inbox.ID, input.Attempt); err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to record creative QC notification")
 			return
 		}
@@ -3574,7 +3743,7 @@ WHERE variant_id = $1 AND revision = $2
 	}
 
 	response.OrderAggregateStatus, _ = h.derivedCreativeOrderStatus(r, orderID)
-	h.publishCreativeDomainUpdated(r, workspaceID, userID, map[string]any{"scope": "order", "order_id": chi.URLParam(r, "id")})
+	h.publishCreativeDomainUpdated(r, workspaceID, userID, map[string]any{"scope": "order", "order_id": chi.URLParam(r, "id"), "variant_id": input.VariantID, "revision": input.Revision, "attempt": input.Attempt})
 	if reworkTask.ID.Valid && h.TaskService != nil {
 		h.TaskService.NotifyTaskEnqueued(r.Context(), reworkTask)
 	}
@@ -3590,6 +3759,7 @@ type creativeQCTaskContext struct {
 	CreativeOrderID string `json:"creative_order_id"`
 	VariantID       string `json:"variant_id"`
 	Revision        int    `json:"revision"`
+	QCAttempt       int    `json:"qc_attempt"`
 }
 
 // creativeQCActiveTask is the write boundary for an independent QC lane.
@@ -3626,6 +3796,64 @@ func (h *Handler) creativeQCActiveTask(w http.ResponseWriter, r *http.Request, o
 		return db.AgentTaskQueue{}, false
 	}
 	return task, true
+}
+
+func creativeQCAttemptFromTask(task db.AgentTaskQueue, requested int) (int, error) {
+	if requested < 0 {
+		return 0, errors.New("creative QC attempt must be a positive integer")
+	}
+	var taskContext struct {
+		QCAttempt int `json:"qc_attempt"`
+		Attempt   int `json:"attempt"`
+	}
+	if len(task.Context) > 0 {
+		if err := json.Unmarshal(task.Context, &taskContext); err != nil {
+			return 0, errors.New("creative QC task context is invalid")
+		}
+	}
+	attempt := taskContext.QCAttempt
+	if attempt < 1 {
+		attempt = taskContext.Attempt
+	}
+	if attempt < 1 {
+		attempt = defaultCreativeQCAttempt
+	}
+	if requested > 0 && requested != attempt {
+		return 0, errors.New("creative QC attempt does not match the task context")
+	}
+	return attempt, nil
+}
+
+func creativeNextQCAttempt(ctx context.Context, tx pgx.Tx, variantID pgtype.UUID, revision int) (int, error) {
+	var nextAttempt int
+	err := tx.QueryRow(ctx, `
+SELECT GREATEST(
+  COALESCE((SELECT max(attempt) FROM creative_order_qc_report WHERE variant_id = $1 AND revision = $2), 0),
+  COALESCE((SELECT max(attempt) FROM creative_order_variant_qc_resolution WHERE variant_id = $1 AND revision = $2), 0),
+  COALESCE((
+    SELECT max(
+      COALESCE(
+        CASE
+          WHEN NULLIF(context->>'qc_attempt', '') ~ '^[0-9]+$'
+            THEN (context->>'qc_attempt')::int
+        END,
+        1
+      )
+    )
+    FROM agent_task_queue
+    WHERE trigger_evidence_kind = 'creative_order_variant_qc'
+      AND (
+        trigger_evidence_ref_id = $1
+        OR context->>'variant_id' = $1::text
+      )
+      AND COALESCE(NULLIF(context->>'revision', '')::int, 1) = $2
+  ), 0)
+) + 1
+`, variantID, revision).Scan(&nextAttempt)
+	if nextAttempt < 1 {
+		nextAttempt = defaultCreativeQCAttempt
+	}
+	return nextAttempt, err
 }
 
 func creativeQCLanesComplete(statuses map[string]string) bool {
@@ -3701,10 +3929,11 @@ func (h *Handler) queueCreativeVisualModelRework(
 	if err != nil {
 		return db.AgentTaskQueue{}, err
 	}
-	producer, err := h.Queries.WithTx(tx).GetAgentInWorkspace(ctx, db.GetAgentInWorkspaceParams{ID: producerID, WorkspaceID: workspaceID})
-	if errors.Is(err, pgx.ErrNoRows) || producer.ArchivedAt.Valid || !producer.RuntimeID.Valid {
-		return db.AgentTaskQueue{}, errors.New("the frozen creative production agent is unavailable")
+	preferredProducerID := selectedCreativeProductionAgentFromHistory(ctx, tx, workspaceID, variantID, sourceRevision)
+	if !preferredProducerID.Valid {
+		preferredProducerID = producerID
 	}
+	producer, err := h.selectCreativeImageEditAgent(ctx, tx, h.Queries.WithTx(tx), workspaceID, inputSnapshot, uuidToString(variantID), preferredProducerID)
 	if err != nil {
 		return db.AgentTaskQueue{}, err
 	}
@@ -3805,6 +4034,8 @@ WHERE id = $1
 		"expected_sizes":         expectedSizes,
 		"issue_id":               uuidToString(issueID),
 		"leader_agent_id":        uuidToString(leaderID),
+		"producer_agent_id":      uuidToString(producer.ID),
+		"producer_runtime_id":    uuidToString(producer.RuntimeID),
 		"reviewer_agent_id":      uuidToString(reviewerID),
 		"qc_visual_rework": map[string]any{
 			"source_revision": sourceRevision,
@@ -4352,7 +4583,7 @@ func normalizeCreativeOrderQC(input creativeOrderQCInput) (creativeOrderQCInput,
 	if input.Revision == 0 {
 		input.Revision = 1
 	}
-	if input.VariantID == "" || input.Revision < 1 || (input.Lane != "technical" && input.Lane != "visual") || !validCreativeQCStatus(input.Status) {
+	if input.VariantID == "" || input.Revision < 1 || input.Attempt < 0 || (input.Lane != "technical" && input.Lane != "visual") || !validCreativeQCStatus(input.Status) {
 		return input, errors.New("invalid creative order QC report")
 	}
 	var err error
@@ -5228,6 +5459,13 @@ AND (
               FROM creative_order_qc_report report
               WHERE report.variant_id = variant.id
                 AND report.revision = variant.revision
+                AND report.attempt = COALESCE(
+                  CASE
+                    WHEN NULLIF(context->>'qc_attempt', '') ~ '^[0-9]+$'
+                      THEN (context->>'qc_attempt')::int
+                  END,
+                  1
+                )
                 AND report.lane = 'visual'
                 AND (
                   context->>'workflow' = 'creative_qc_visual'
@@ -5523,16 +5761,8 @@ SELECT variant.id::text, variant.order_item_id::text, variant.variant_key, varia
       AND recovery.details->>'revision' = variant.revision::text
   ) AS qc_recovery_used,
   (
-    variant.status = 'action_required'
+    variant.status NOT IN ('queued', 'running', 'cancelled')
     AND recovery_order.issue_id IS NOT NULL
-    AND NOT EXISTS (
-      SELECT 1 FROM activity_log recovery
-      WHERE recovery.workspace_id = recovery_order.workspace_id
-        AND recovery.issue_id = recovery_order.issue_id
-        AND recovery.action = 'creative_qc_recovery_queued'
-        AND recovery.details->>'variant_id' = variant.id::text
-        AND recovery.details->>'revision' = variant.revision::text
-    )
     AND (
       SELECT count(DISTINCT asset.size_key)
       FROM creative_order_asset asset
@@ -5551,56 +5781,6 @@ SELECT variant.id::text, variant.order_item_id::text, variant.variant_key, varia
         AND COALESCE(NULLIF(task.context->>'revision', '')::int, 1) = variant.revision
         AND task.context->>'workflow' = 'creative_qc_visual'
         AND task.status IN ('queued', 'dispatched', 'running', 'waiting_local_directory')
-    )
-    AND EXISTS (
-      SELECT 1
-      FROM agent_task_queue task
-      WHERE (
-          (
-            task.context->>'type' = 'creative_domain_task'
-            AND task.context->>'workflow' = 'creative_qc_visual'
-            AND task.status = 'failed'
-            AND COALESCE(NULLIF(task.failure_reason, ''), 'agent_error') = ANY(ARRAY[
-              'agent_error', 'api_invalid_request', 'agent_fallback_message', 'codex_semantic_inactivity',
-              'provider_rate_limited', 'queued_expired', 'runtime_offline', 'runtime_recovery', 'timeout'
-            ])
-          )
-          OR (
-            task.status = 'completed'
-            AND EXISTS (
-              SELECT 1 FROM creative_order_qc_report report
-              WHERE report.variant_id = variant.id
-                AND report.revision = variant.revision
-                AND report.lane = 'visual'
-                AND (
-                  task.context->>'workflow' = 'creative_qc_visual'
-                  OR (task.context->>'workflow' = 'creative_qc' AND task.context->>'lane' = 'visual')
-                )
-                AND report.status = 'failed'
-                AND EXISTS (
-                  SELECT 1
-                  FROM jsonb_array_elements(
-                    CASE WHEN jsonb_typeof(report.findings->'blocking_failures') = 'array'
-                      THEN report.findings->'blocking_failures' ELSE '[]'::jsonb END
-                  ) finding
-                   WHERE finding->>'code' LIKE 'delegation_contract_%'
-                     OR finding->>'code' LIKE 'manifest_%'
-                     OR finding->>'code' LIKE 'prime_layout_contract_%'
-                     OR finding->>'code' LIKE 'qc_batch_%'
-                     OR finding->>'code' LIKE 'attachment_download_%'
-                 )
-                 OR report.findings->>'failure_code' LIKE 'delegation_contract_%'
-                 OR report.findings->>'failure_code' LIKE 'prompt_contract_%'
-                 OR report.findings->>'failure_code' LIKE 'manifest_%'
-                 OR report.findings->>'failure_code' LIKE 'prime_layout_contract_%'
-                 OR report.findings->>'failure_code' LIKE 'qc_batch_%'
-                 OR report.findings->>'failure_code' LIKE 'attachment_download_%'
-               )
-          )
-        )
-        AND task.context->>'creative_order_id' = recovery_order.id::text
-        AND task.context->>'variant_id' = variant.id::text
-        AND COALESCE(NULLIF(task.context->>'revision', '')::int, 1) = variant.revision
     )
 	) AS qc_recovery_available,
   variant.created_at::text, variant.updated_at::text
@@ -5805,6 +5985,13 @@ WITH latest AS (
               FROM creative_order_qc_report report
               WHERE report.variant_id = variant.id
                 AND report.revision = variant.revision
+                AND report.attempt = COALESCE(
+                  CASE
+                    WHEN NULLIF(q.context->>'qc_attempt', '') ~ '^[0-9]+$'
+                      THEN (q.context->>'qc_attempt')::int
+                  END,
+                  1
+                )
                 AND report.lane = 'visual'
                 AND (
                   q.context->>'workflow' = 'creative_qc_visual'
@@ -6006,25 +6193,51 @@ FROM creative_order_asset WHERE variant_id = $1 ORDER BY revision, size_key, sta
 func (h *Handler) derivedCreativeVariantQCStatus(r *http.Request, variantID pgtype.UUID) (string, error) {
 	var status string
 	err := h.DB.QueryRow(r.Context(), `
+WITH latest AS (
+  SELECT v.id, v.revision,
+    GREATEST(
+      COALESCE((SELECT max(report.attempt) FROM creative_order_qc_report report WHERE report.variant_id = v.id AND report.revision = v.revision), 0),
+      COALESCE((SELECT max(resolution.attempt) FROM creative_order_variant_qc_resolution resolution WHERE resolution.variant_id = v.id AND resolution.revision = v.revision), 0),
+      COALESCE((
+        SELECT max(
+          COALESCE(
+            CASE
+              WHEN NULLIF(task.context->>'qc_attempt', '') ~ '^[0-9]+$'
+                THEN (task.context->>'qc_attempt')::int
+            END,
+            1
+          )
+        )
+        FROM agent_task_queue task
+        WHERE task.trigger_evidence_kind = 'creative_order_variant_qc'
+          AND (
+            task.trigger_evidence_ref_id = v.id
+            OR task.context->>'variant_id' = v.id::text
+          )
+          AND COALESCE(NULLIF(task.context->>'revision', '')::int, v.revision) = v.revision
+      ), 0)
+    ) AS attempt
+  FROM creative_order_variant v
+  WHERE v.id = $1
+)
 SELECT CASE
   WHEN count(*) FILTER (WHERE q.status = 'failed') > 0 THEN 'failed'
   WHEN count(*) FILTER (WHERE q.status = 'warning') > 0 THEN 'warning'
-  WHEN count(*) FILTER (WHERE q.status = 'passed') = 2 THEN 'passed'
+  WHEN count(*) FILTER (WHERE q.lane = 'visual' AND q.status = 'passed') > 0 THEN 'passed'
   ELSE 'pending'
 END
-FROM creative_order_variant v
-LEFT JOIN creative_order_qc_report q ON q.variant_id = v.id AND q.revision = v.revision
-WHERE v.id = $1
-GROUP BY v.id
+FROM latest
+LEFT JOIN creative_order_qc_report q ON q.variant_id = latest.id AND q.revision = latest.revision AND q.attempt = latest.attempt
+GROUP BY latest.id
 `, variantID).Scan(&status)
 	return status, err
 }
 
 func (h *Handler) listCreativeOrderQCReports(r *http.Request, variantID pgtype.UUID) ([]creativeOrderQCReportResponse, error) {
 	rows, err := h.DB.Query(r.Context(), `
-SELECT id::text, variant_id::text, lane, revision, status, findings::text, trigger_evidence_kind,
+SELECT id::text, variant_id::text, lane, revision, attempt, status, findings::text, trigger_evidence_kind,
   COALESCE(trigger_evidence_ref_id::text, ''), created_at::text, updated_at::text
-FROM creative_order_qc_report WHERE variant_id = $1 ORDER BY revision, lane
+FROM creative_order_qc_report WHERE variant_id = $1 ORDER BY revision, attempt, lane
 `, variantID)
 	if err != nil {
 		return nil, err
@@ -6034,7 +6247,7 @@ FROM creative_order_qc_report WHERE variant_id = $1 ORDER BY revision, lane
 	for rows.Next() {
 		var report creativeOrderQCReportResponse
 		var findings string
-		if err := rows.Scan(&report.ID, &report.VariantID, &report.Lane, &report.Revision, &report.Status, &findings,
+		if err := rows.Scan(&report.ID, &report.VariantID, &report.Lane, &report.Revision, &report.Attempt, &report.Status, &findings,
 			&report.TriggerEvidenceKind, &report.TriggerEvidenceReference, &report.CreatedAt, &report.UpdatedAt); err != nil {
 			return nil, err
 		}

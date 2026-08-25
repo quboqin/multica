@@ -432,6 +432,105 @@ VALUES ($1, 'V01', 1, 'queued') RETURNING id::text
 	}
 }
 
+func TestFanoutAgentTasksCreativeProductionReusesHistoricalPoolAgent(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	_, candidateID := createCreativeFeedbackCandidate(t, "production fanout historical pool agent")
+	fixture := createCreativeOrderSquadFixture(t, "", "image_edit", true)
+	var orderID, itemID, variantID string
+	if err := testPool.QueryRow(t.Context(), `
+INSERT INTO creative_order (workspace_id, status, input_snapshot, created_by)
+VALUES ($1, 'running', $2::jsonb, $3) RETURNING id::text
+`, testWorkspaceID, `{"squad_snapshot":{"squad_id":"`+fixture.SquadID+`"}}`, testUserID).Scan(&orderID); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM creative_order WHERE id = $1`, orderID)
+	})
+	if err := testPool.QueryRow(t.Context(), `
+INSERT INTO creative_order_item (order_id, candidate_id, copy_snapshot)
+VALUES ($1, $2, '{}'::jsonb) RETURNING id::text
+`, orderID, candidateID).Scan(&itemID); err != nil {
+		t.Fatal(err)
+	}
+	if err := testPool.QueryRow(t.Context(), `
+INSERT INTO creative_order_variant (order_item_id, variant_key, revision, status)
+VALUES ($1, 'V01', 1, 'queued') RETURNING id::text
+`, itemID).Scan(&variantID); err != nil {
+		t.Fatal(err)
+	}
+	existingContext, err := json.Marshal(map[string]any{
+		"type":                   "creative_domain_task",
+		"workflow":               "creative_production",
+		"creative_order_id":      orderID,
+		"creative_order_item_id": itemID,
+		"variant_id":             variantID,
+		"revision":               1,
+		"item_key":               variantID + ":r1",
+		"expected_sizes":         standardCreativeAssetSizes,
+		"issue_id":               uuid.NewString(),
+		"leader_agent_id":        fixture.LeaderAgentID,
+		"producer_agent_id":      fixture.DuplicateAgentID,
+		"reviewer_agent_id":      fixture.ReviewerAgentID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var existingTaskID string
+	if err := testPool.QueryRow(t.Context(), `
+INSERT INTO agent_task_queue (
+  agent_id, runtime_id, status, context, trigger_evidence_kind, trigger_evidence_ref_id,
+  originator_user_id, accountable_user_id, requesting_user_id, originator_source
+)
+VALUES ($1, (SELECT runtime_id FROM agent WHERE id = $1), 'queued', $2::jsonb,
+        'creative_order_item_production', $3, $4, $4, $4, 'direct_human')
+RETURNING id::text
+`, fixture.DuplicateAgentID, existingContext, itemID, testUserID).Scan(&existingTaskID); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM agent_task_queue WHERE id = $1`, existingTaskID)
+	})
+
+	requestContext, err := json.Marshal(map[string]any{
+		"type":                   "creative_domain_task",
+		"workflow":               "creative_production",
+		"creative_order_id":      orderID,
+		"creative_order_item_id": itemID,
+		"variant_id":             variantID,
+		"revision":               1,
+		"expected_sizes":         standardCreativeAssetSizes,
+		"issue_id":               uuid.NewString(),
+		"leader_agent_id":        fixture.LeaderAgentID,
+		"producer_agent_id":      fixture.ProducerAgentID,
+		"reviewer_agent_id":      fixture.ReviewerAgentID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := httptest.NewRecorder()
+	req := withURLParam(newRequest(http.MethodPost, "/api/agents/"+fixture.ProducerAgentID+"/tasks/fanout", taskFanoutRequest{
+		TriggerEvidenceKind:  "creative_order_item_production",
+		TriggerEvidenceRefID: itemID,
+		Items: []service.DirectTaskFanoutItem{{
+			ItemKey: variantID + ":r1",
+			Context: requestContext,
+		}},
+	}), "agentId", fixture.ProducerAgentID)
+	testHandler.FanoutAgentTasks(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("creative production fanout = %d %s", w.Code, w.Body.String())
+	}
+	var response taskFanoutResponse
+	if err := json.NewDecoder(w.Body).Decode(&response); err != nil {
+		t.Fatal(err)
+	}
+	if len(response.Tasks) != 1 || response.Tasks[0].ID != existingTaskID {
+		t.Fatalf("fanout tasks = %#v, want existing %s", response.Tasks, existingTaskID)
+	}
+}
+
 func TestValidateCreativeProductionFanoutExpectedSizesMatchFrozenVariant(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")

@@ -952,6 +952,7 @@ SELECT EXISTS(
 			"creative_order_item_id":       itemID,
 			"variant_id":                   uuidToString(variantID),
 			"revision":                     revision,
+			"qc_attempt":                   defaultCreativeQCAttempt,
 			"expected_sizes":               expectedSizes,
 			"issue_id":                     uuidToString(issueID),
 			"leader_agent_id":              uuidToString(leaderID),

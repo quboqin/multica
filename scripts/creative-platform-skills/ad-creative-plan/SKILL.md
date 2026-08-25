@@ -149,12 +149,16 @@ multica creative order variant-put <order-id> --input-file <variant.json> --outp
 
 ## 委派生产
 
-三个 Variant 均写入后，从冻结 squad snapshot 或当前 task context 读取 `producer_agent_id`、
-`reviewer_agent_id`。先查询 producer 的
-`creative_order_item_production` source，逐个比较 `<variant-id>:r<revision>`；这里的 revision 必须是
+三个 Variant 均写入后，从冻结 squad snapshot 或当前 task context 读取 `producer_agent_ids`
+（缺失时回退 `producer_agent_id`）和 `reviewer_agent_id`。`producer_agent_ids[0]` 只作为 fanout 入口 Agent；
+实际生产 Agent 由服务端按当前 squad 成员、启用的 `image_edit` Skill 和在线 runtime 动态选择，并写回子任务
+context。不要在标准生产 manifest 的 item context 里写 `producer_agent_id`，否则会把动态池固定到单个优先 Agent。
+
+先对已知 producer 入口逐个查询
+`creative_order_item_production` source，比较 `<variant-id>:r<revision>`；这里的 revision 必须是
 `variant-put` 返回或订单当前行里的当前 revision。若返回缺失或为 0，必须重新 `creative order get` 读取当前
 Variant 行后再组 manifest；不得发出 `:r0` item key。active/succeeded task 或完整 generated assets 已存在时
-跳过该 item。一个 source 下的兄弟 item 不能阻止缺失项。
+跳过该 item。这个查询只是预检；服务端会按历史任务防重复，并会识别运行时新增或移除的出图池成员。
 
 将全部缺失 Variant 放进同一个 manifest：source kind 为 `creative_order_item_production`，ref 为真实
 Order Item ID；每项 context 固定 `type=creative_domain_task`、`workflow=creative_production`，并原样携带
@@ -162,9 +166,9 @@ Order Item ID；每项 context 固定 `type=creative_domain_task`、`workflow=cr
 IDs。先用 JSON 解析器校验，再执行：
 
 ```text
-multica task by-source list --agent <producer-agent-id> \
+multica task by-source list --agent <producer-entry-agent-id> \
   --kind creative_order_item_production --ref <item-id> --output json
-multica task fanout --agent <producer-agent-id> --input-file <manifest.json> --output json
+multica task fanout --agent <producer-entry-agent-id> --input-file <manifest.json> --output json
 ```
 
 `manifest.json` 必须包含 source 证据字段。一个 item 的三个 Variant 可放在同一个 manifest，但每个
@@ -188,7 +192,6 @@ multica task fanout --agent <producer-agent-id> --input-file <manifest.json> --o
       "scope": "variant",
       "issue_id": "<issue-id>",
       "leader_agent_id": "<leader-agent-id>",
-      "producer_agent_id": "<producer-agent-id>",
       "reviewer_agent_id": "<reviewer-agent-id>"
     }
   }]

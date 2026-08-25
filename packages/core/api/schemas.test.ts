@@ -198,7 +198,7 @@ describe("creative material schemas", () => {
 
   it("parses a visual QC recovery response defensively", () => {
     expect(CreativeOrderQCRetryResponseSchema.parse({})).toEqual({
-      variant_id: "", revision: 1, technical_task_id: "", visual_task_id: "",
+      variant_id: "", revision: 1, attempt: 1, technical_task_id: "", visual_task_id: "",
     });
     expect(CreativeOrderQCRetryResponseSchema.safeParse({ revision: "two" }).success).toBe(false);
   });
@@ -209,7 +209,7 @@ describe("creative material schemas", () => {
 
   it("defaults a partial QC finalization response and rejects null bodies", () => {
     expect(CreativeOrderQCFinalizeResponseSchema.parse({ outcome: "delivered" })).toEqual(expect.objectContaining({
-      created: false, finalized: false, outcome: "delivered", delivered_asset_count: 0,
+      created: false, finalized: false, outcome: "delivered", attempt: 1, delivered_asset_count: 0,
     }));
     expect(CreativeOrderQCFinalizeResponseSchema.safeParse(null).success).toBe(false);
   });

@@ -574,9 +574,14 @@ WITH order_scopes AS (
     EXISTS (
       SELECT 1
       FROM creative_order_variant variant
-      LEFT JOIN creative_order_variant_qc_resolution resolution
-        ON resolution.variant_id = variant.id
-       AND resolution.revision = variant.revision
+      LEFT JOIN LATERAL (
+        SELECT outcome
+        FROM creative_order_variant_qc_resolution
+        WHERE variant_id = variant.id
+          AND revision = variant.revision
+        ORDER BY attempt DESC, created_at DESC
+        LIMIT 1
+      ) resolution ON true
       WHERE variant.order_item_id = item.id
         AND (
           (
@@ -800,6 +805,15 @@ SELECT
 FROM creative_order_asset asset
 LEFT JOIN creative_order_qc_report report
   ON report.variant_id = asset.variant_id AND report.revision = asset.revision
+ AND report.attempt = COALESCE(
+   (SELECT max(resolution.attempt)
+    FROM creative_order_variant_qc_resolution resolution
+    WHERE resolution.variant_id = asset.variant_id AND resolution.revision = asset.revision),
+   (SELECT max(latest_report.attempt)
+    FROM creative_order_qc_report latest_report
+    WHERE latest_report.variant_id = asset.variant_id AND latest_report.revision = asset.revision),
+   1
+ )
 WHERE asset.variant_id = $1 AND asset.revision = $2
 `, variantID, revision).Scan(&deliveredCount, &activityCount, &reportCount, &visualStatus); err != nil {
 			return 0, 0, err

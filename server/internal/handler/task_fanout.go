@@ -68,6 +68,19 @@ func (h *Handler) FanoutAgentTasks(w http.ResponseWriter, r *http.Request) {
 	if !h.directTaskEvidenceInWorkspace(w, r, agent.WorkspaceID, evidenceKind, evidenceRefID) {
 		return
 	}
+	attr, requestingUserID, ok := h.fanoutAttribution(w, r, agent, evidenceRefID, evidenceKind)
+	if !ok {
+		return
+	}
+	if evidenceKind == "creative_order_item_production" {
+		tasks, err := h.enqueueCreativeProductionFanout(r.Context(), agent.WorkspaceID, evidenceRefID, req.Items, attr, requestingUserID)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusCreated, taskFanoutResponse{Tasks: h.directTaskResponses(r, tasks, uuidToString(agent.WorkspaceID))})
+		return
+	}
 	if capability := creativeTaskRequiredCapability(evidenceKind); capability != "" {
 		hasCapability, err := h.agentHasCreativeCapability(r, agent.ID, agent.WorkspaceID, capability)
 		if err != nil {
@@ -80,10 +93,6 @@ func (h *Handler) FanoutAgentTasks(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	attr, requestingUserID, ok := h.fanoutAttribution(w, r, agent, evidenceRefID, evidenceKind)
-	if !ok {
-		return
-	}
 	tasks, err := h.TaskService.EnqueueDirectTaskFanout(r.Context(), service.DirectTaskFanout{
 		Agent:                agent,
 		RequestingUserID:     requestingUserID,
@@ -97,6 +106,97 @@ func (h *Handler) FanoutAgentTasks(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusCreated, taskFanoutResponse{Tasks: h.directTaskResponses(r, tasks, uuidToString(agent.WorkspaceID))})
+}
+
+func (h *Handler) enqueueCreativeProductionFanout(ctx context.Context, workspaceID, orderItemID pgtype.UUID, items []service.DirectTaskFanoutItem, attr attribution.Result, requestingUserID pgtype.UUID) ([]db.AgentTaskQueue, error) {
+	if h.TaskService == nil {
+		return nil, errors.New("creative production task service is unavailable")
+	}
+	groups := map[string]struct {
+		agent db.Agent
+		items []service.DirectTaskFanoutItem
+	}{}
+	order := make([]string, 0, len(items))
+	for _, item := range items {
+		agent, normalized, err := h.selectCreativeProductionAgentForFanoutItem(ctx, workspaceID, orderItemID, item)
+		if err != nil {
+			return nil, err
+		}
+		key := uuidToString(agent.ID)
+		group, exists := groups[key]
+		if !exists {
+			group.agent = agent
+			order = append(order, key)
+		}
+		group.items = append(group.items, normalized)
+		groups[key] = group
+	}
+
+	tasks := make([]db.AgentTaskQueue, 0, len(items))
+	for _, key := range order {
+		group := groups[key]
+		created, err := h.TaskService.EnqueueDirectTaskFanout(ctx, service.DirectTaskFanout{
+			Agent:                group.agent,
+			RequestingUserID:     requestingUserID,
+			Attribution:          attr,
+			TriggerEvidenceKind:  "creative_order_item_production",
+			TriggerEvidenceRefID: orderItemID,
+			Items:                group.items,
+		})
+		if err != nil {
+			return nil, err
+		}
+		tasks = append(tasks, created...)
+	}
+	return tasks, nil
+}
+
+func (h *Handler) selectCreativeProductionAgentForFanoutItem(ctx context.Context, workspaceID, orderItemID pgtype.UUID, item service.DirectTaskFanoutItem) (db.Agent, service.DirectTaskFanoutItem, error) {
+	var taskContext map[string]json.RawMessage
+	if len(item.Context) == 0 || json.Unmarshal(item.Context, &taskContext) != nil || taskContext == nil {
+		return db.Agent{}, item, errors.New("creative production task context must be a JSON object")
+	}
+	var variantIDText string
+	if raw := taskContext["variant_id"]; raw == nil || json.Unmarshal(raw, &variantIDText) != nil || strings.TrimSpace(variantIDText) == "" {
+		return db.Agent{}, item, errors.New("creative production task context variant_id must be a UUID")
+	}
+	variantUUID, err := uuid.Parse(strings.TrimSpace(variantIDText))
+	if err != nil {
+		return db.Agent{}, item, errors.New("creative production task context variant_id must be a UUID")
+	}
+	variantID := pgtype.UUID{Bytes: variantUUID, Valid: true}
+
+	var inputSnapshot []byte
+	if err := h.DB.QueryRow(ctx, `
+SELECT order_row.input_snapshot
+FROM creative_order_item item
+JOIN creative_order order_row ON order_row.id = item.order_id
+WHERE item.id = $1 AND order_row.workspace_id = $2
+`, orderItemID, workspaceID).Scan(&inputSnapshot); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return db.Agent{}, item, errors.New("creative production trigger order item is unavailable")
+		}
+		return db.Agent{}, item, errors.New("failed to load creative production trigger order")
+	}
+
+	preferred := creativeTaskPreferredProducerID(item.Context)
+	if revision, hasRevision, err := jsonPositiveInt(taskContext["revision"]); err == nil && hasRevision && revision > 0 {
+		if historical := selectedCreativeProductionAgentFromHistory(ctx, h.DB, workspaceID, variantID, revision); historical.Valid {
+			preferred = historical
+		}
+	}
+	agent, err := h.selectCreativeImageEditAgent(ctx, h.DB, h.Queries, workspaceID, json.RawMessage(inputSnapshot), strings.TrimSpace(variantIDText), preferred)
+	if err != nil {
+		return db.Agent{}, item, err
+	}
+	taskContext["producer_agent_id"], _ = json.Marshal(uuidToString(agent.ID))
+	taskContext["producer_runtime_id"], _ = json.Marshal(uuidToString(agent.RuntimeID))
+	encoded, err := json.Marshal(taskContext)
+	if err != nil {
+		return db.Agent{}, item, errors.New("failed to encode creative production task context")
+	}
+	item.Context = encoded
+	return agent, item, nil
 }
 
 type creativeTaskFanoutQuerier interface {
@@ -714,6 +814,12 @@ func validateCreativeQCTaskContext(context map[string]any, itemKey, variantID, w
 	revision, ok := context["revision"].(float64)
 	if !ok || revision < 1 || revision != float64(int(revision)) {
 		return errors.New("creative QC task context revision must be a positive integer")
+	}
+	if rawAttempt, exists := context["qc_attempt"]; exists {
+		attempt, ok := rawAttempt.(float64)
+		if !ok || attempt < 1 || attempt != float64(int(attempt)) {
+			return errors.New("creative QC task context qc_attempt must be a positive integer")
+		}
 	}
 	expectedSizes, ok := context["expected_sizes"].([]any)
 	if !ok || len(expectedSizes) == 0 {

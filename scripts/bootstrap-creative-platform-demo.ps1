@@ -58,12 +58,9 @@ function Resolve-MulticaCliPath {
         throw "Multica CLI not found: $CliPath"
     }
 
-    $directImageCli = Join-Path $env:USERPROFILE '.multica\bin\direct-image2\multica.exe'
-    if (Test-Path -LiteralPath $directImageCli) {
-        if ([string]::IsNullOrWhiteSpace($CliProfile)) {
-            $script:CliProfile = 'direct-image2'
-        }
-        return $directImageCli
+    $defaultCli = Join-Path $env:USERPROFILE '.multica\bin\multica.exe'
+    if (Test-Path -LiteralPath $defaultCli) {
+        return $defaultCli
     }
 
     $candidateCommands = @('multica')
@@ -354,8 +351,8 @@ $collectorSkill = Set-WorkspaceSkill -Name '素材_技能_采集' -Aliases @('Ap
 $diagnosisSkill = Set-WorkspaceSkill -Name '素材_技能_诊断' -Aliases @('创意流程诊断', '出图诊断', 'AppGrowing 采集诊断') -Description '读取创意采集、出图、品牌组件、QC、订单和 daemon/runtime 证据，在允许范围内恢复或给出明确动作。' -Directory (Join-Path $skillTemplateRoot 'creative-flow-diagnostician') -Config @{ kind = 'creative_role'; capability = 'crawl_diagnosis'; version = 5 }
 $analysisSkill = Set-WorkspaceSkill -Name '素材_技能_分析' -Aliases @('广告参考分析') -Description '市场中立地读取真实图片，识别可变视觉区域、原图文字及坐标、主题、利益点、语义锚点、App UI 类型、屏幕边界和布局约束；App UI 只做通用检测，不选择品牌附件；只有明显的还款结构才锁定为 numeric，单独金额或核心利益点不得因为带数字就被卡死。' -Directory (Join-Path $skillTemplateRoot 'ad-creative-analysis') -Config @{ kind = 'creative_role'; capability = 'reference_analysis'; version = 19 }
 $preAdaptationSkill = Set-WorkspaceSkill -Name '素材_技能_文案适配' -Aliases @('广告预适配') -Description '按冻结资源完成可生产文案与数值适配；只有明显的还款结构才生成 repayment 选择和 numeric layout，单独金额、核心利益点或促销额度默认保留为可编辑文案，保留后续可手动改写空间；数值布局说明必须列出每个冻结展示值。' -Directory (Join-Path $skillTemplateRoot 'ad-creative-pre-adaptation') -Config @{ kind = 'creative_role'; capability = 'pre_adaptation'; version = 26 }
-$planSkill = Set-WorkspaceSkill -Name '素材_技能_方案' -Aliases @('广告生成方案') -Description '消费冻结分析、逐块文案与市场快照，严格继承顶层非空文案字段，规划 3 个同题变体及品牌组件视觉关系；当广告含核心 App 屏幕时从冻结 app_ui_reference 选择最多一张并写 app_ui_replacement。' -Directory (Join-Path $skillTemplateRoot 'ad-creative-plan') -Config @{ kind = 'creative_role'; capability = 'generation_plan'; version = 35 }
-$productionSkill = Set-WorkspaceSkill -Name '素材_技能_出图' -Aliases @('广告图像编辑') -Description '使用 GPT Image 2 提示词模板和冻结业务结构生成无品牌三尺寸底图，严格继承所有非空 approved copy，明确三尺寸 CANVAS LOCK 和 Input 1/Input 2 角色；如 brief 选中 App UI reference，则作为 Input 3 只替换手机屏幕内容，保留手机、手、透视、光照和场景。候选图通过 candidate_id 受控下载，下载域鉴权异常时仅允许用同 candidate attachment fallback，Prime context 按当前 revision 绑定，横版用 Y 轴压缩避开上下 Prime 组件带，竖版锁定 4:5 且禁止 story/phone screenshot/long poster/scrolling page，provider 画布使用 16px 合法尺寸再按 10% 比例阈值归一化为交付尺寸，使用 canonical generated asset 写回并保存完整 trace 与 parent_direction_sha256；每个尺寸同步登记 Prime context、模型原图和规范化底图，失败优先复用已有回图补登记、补贴片或只补缺失尺寸，视觉遮挡由服务端最多排两轮定向 Image2 重排，返工只改无品牌 generated 底图并重新贴片，耗尽后仍保留当前交付资产；缺尺寸不提前 complete，由平台自动续跑，完成底图后调用贴片 Skill。' -Directory (Join-Path $skillTemplateRoot 'ad-creative-production') -Config @{ kind = 'creative_role'; capability = 'image_edit'; version = 93 }
+$planSkill = Set-WorkspaceSkill -Name '素材_技能_方案' -Aliases @('广告生成方案') -Description '消费冻结分析、逐块文案与市场快照，严格继承顶层非空文案字段，规划 3 个同题变体及品牌组件视觉关系；当广告含核心 App 屏幕时从冻结 app_ui_reference 选择最多一张并写 app_ui_replacement。' -Directory (Join-Path $skillTemplateRoot 'ad-creative-plan') -Config @{ kind = 'creative_role'; capability = 'generation_plan'; version = 36 }
+$productionSkill = Set-WorkspaceSkill -Name '素材_技能_出图' -Aliases @('广告图像编辑') -Description '使用 GPT Image 2 提示词模板和冻结业务结构生成无品牌三尺寸底图，严格继承所有非空 approved copy，明确三尺寸 CANVAS LOCK 和 Input 1/Input 2 角色；如 brief 选中 App UI reference，则作为 Input 3 只替换手机屏幕内容，保留手机、手、透视、光照和场景。候选图通过 candidate_id 受控下载，下载域鉴权异常时仅允许用同 candidate attachment fallback，Prime context 按当前 revision 绑定，横版用 Y 轴压缩避开上下 Prime 组件带，竖版锁定 4:5 且禁止 story/phone screenshot/long poster/scrolling page，provider 画布使用 16px 合法尺寸再按 10% 比例阈值归一化为交付尺寸，使用 canonical generated asset 写回并保存完整 trace 与 parent_direction_sha256；每个尺寸同步登记 Prime context、模型原图和规范化底图，失败优先复用已有回图补登记、补贴片或只补缺失尺寸，视觉遮挡由服务端最多排两轮定向 Image2 重排，返工只改无品牌 generated 底图并重新贴片，耗尽后仍保留当前交付资产；缺尺寸不提前 complete，由平台自动续跑，完成底图后调用贴片 Skill。' -Directory (Join-Path $skillTemplateRoot 'ad-creative-production') -Config @{ kind = 'creative_role'; capability = 'image_edit'; version = 94 }
 $primeComposeSkill = Set-WorkspaceSkill -Name '素材_技能_贴片' -Aliases @('广告品牌组件合成') -Description '调用后端唯一的确定性 Prime 合成入口，校验合成 JSON，并由后端登记贴片完成过程图、primed 资产和标准 QC/交付交接；不创建 Prime Agent 或 Prime task。' -Directory (Join-Path $skillTemplateRoot 'ad-creative-prime-compose') -Config @{ kind = 'creative_role'; capability = 'prime_compose'; version = 2 }
 $directEditSkill = Set-WorkspaceSkill -Name '素材_技能_改图' -Aliases @('广告图片直接修改') -Description '按用户原话和最终图标注 brief 修改固定无品牌底图，再由贴片 Skill 调用平台确定性合成并直接交付，不执行 QC；单独金额和核心利益点即使先前识别错了也保留手动改写空间，协议错误复用同一回图修复写回。' -Directory (Join-Path $skillTemplateRoot 'ad-creative-direct-edit') -Config @{ kind = 'creative_role'; capability = 'direct_image_edit'; version = 16 }
 $qcSkill = Set-WorkspaceSkill -Name '素材_技能_质检' -Aliases @('广告成图验收') -Description '只执行视觉质检：下载当前 Prime 成图并用智能体原生视觉验收；技术质检已下线，不再创建、不等待、不阻断。' -Directory (Join-Path $skillTemplateRoot 'ad-creative-qc') -Config @{ kind = 'creative_role'; capability = 'quality_control'; version = 35 }

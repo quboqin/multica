@@ -3106,7 +3106,7 @@ export class ApiClient {
       method: "POST",
     });
     return parseWithFallback(raw, CreativeOrderQCRetryResponseSchema, {
-      variant_id: "", revision: 1, technical_task_id: "", visual_task_id: "",
+      variant_id: "", revision: 1, attempt: 1, technical_task_id: "", visual_task_id: "",
     }, {
       endpoint: "POST /api/creative/orders/:id/variants/:variantId/qc/retry",
     });

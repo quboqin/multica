@@ -195,7 +195,7 @@ python <当前 Skill 目录>/references/normalize_image.py \
 ```text
 python <当前 Skill 目录>/references/register_process_assets.py \
   --order-id <order-id> --variant-id <variant-id> --revision <revision> --task-id <task-id> \
-  --cli multica --profile direct-image2 \
+  --cli multica \
   --image 1080x1080 "Prime context" <prime-context-1080x1080.png> \
   --image 1080x1080 "模型原图" <model-1080x1080.png> \
   --image 1080x1080 "规范化底图" <normalized-1080x1080.png>
