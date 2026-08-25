@@ -124,14 +124,14 @@ var creativeOrderDiagnosticAssetPutCmd = &cobra.Command{
 
 var creativeOrderQCPutCmd = &cobra.Command{
 	Use:   "qc-put <order-id>",
-	Short: "Create or update one technical or visual QC report from JSON",
+	Short: "Create or update one visual QC report from JSON",
 	Args:  exactArgs(1),
 	RunE:  runCreativeOrderQCPut,
 }
 
 var creativeOrderQCFinalizeCmd = &cobra.Command{
 	Use:   "qc-finalize <order-id>",
-	Short: "Atomically finalize one Creative Order Variant after both QC lanes report",
+	Short: "Atomically finalize one Creative Order Variant after visual QC reports",
 	Args:  exactArgs(1),
 	RunE:  runCreativeOrderQCFinalize,
 }

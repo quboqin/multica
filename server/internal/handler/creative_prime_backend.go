@@ -940,8 +940,8 @@ SELECT EXISTS(
 		return err
 	}
 	attr := attribution.DirectHumanRun(requestedBy, attribution.EvidenceKind("creative_order_variant_qc"), variantID)
-	created := make([]db.AgentTaskQueue, 0, 2)
-	for _, lane := range []string{"technical", "visual"} {
+	created := make([]db.AgentTaskQueue, 0, 1)
+	for _, lane := range []string{"visual"} {
 		contextValue, marshalErr := json.Marshal(map[string]any{
 			"type":                         "creative_domain_task",
 			"workflow":                     "creative_qc_" + lane,

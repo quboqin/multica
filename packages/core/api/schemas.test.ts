@@ -196,7 +196,7 @@ describe("creative material schemas", () => {
     expect(QueueCreativeOrderAdjustmentResponseSchema.safeParse(null).success).toBe(false);
   });
 
-  it("parses a dual-lane QC recovery response defensively", () => {
+  it("parses a visual QC recovery response defensively", () => {
     expect(CreativeOrderQCRetryResponseSchema.parse({})).toEqual({
       variant_id: "", revision: 1, technical_task_id: "", visual_task_id: "",
     });

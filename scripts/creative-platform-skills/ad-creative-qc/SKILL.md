@@ -1,44 +1,25 @@
 ---
 name: multica-ad-creative-qc
-description: "当 Creative Order Variant 当前 revision 的品牌组件包齐备，需要独立执行 technical 或 visual lane、写可见的 QC 检测报告时使用。"
+description: "当 Creative Order Variant 当前 revision 的品牌组件包齐备，需要执行视觉质检并写可见的 QC 检测报告时使用。"
 allowed-tools: Bash(multica *), Bash(python *)
 ---
 
 # 广告成图终检
 
-每条 task 只执行 context 指定的 `creative_qc_technical` 或 `creative_qc_visual` lane。两 lane 使用相同且非空的
-Variant、revision 和 `expected_sizes`，并各写一份 QC Report；不得合并或互相等待。
+每条 task 只执行 `creative_qc_visual`。技术质检已下线，新流程不再创建、不等待、不阻断 technical lane。
+如遇历史 `creative_qc_technical` task，只记录技术质检已停用，不做文件、manifest 或机器证据阻断。
 
 ```text
 multica creative order get <order-id> --output json
 ```
 
 校验 context `issue_id` 与订单一致，并只读取同 Variant/revision/expected sizes 的 completed
-`stage=primed` assets。`manifest_attachment_id` 和 `compose_result_attachment_id` 是后端合成生成的共同证据。
-缺失、重复、revision 错配、证据包不一致或夹带未声明尺寸时，本 lane 失败；不得按
+`stage=primed` assets。缺失、重复、revision 错配或夹带未声明尺寸时，visual lane 失败；不得按
 Issue、评论、Variant 展示名或 Agent 名称猜输入。
-
-## Technical 证据下载与机器检查
-
-仅 `creative_qc_technical` 执行本段。顺序下载完整品牌组件成图、context 给出的 manifest 和 compose result。每次下载显式设置
-`MULTICA_HTTP_TIMEOUT=2m`，等待结束后再开始下一项；单项超时只顺序重试该项，不并发下载。
-
-```text
-multica attachment download <attachment-id> --output-dir <inspection-dir>
-```
-
-不得重建机器证据。只接受当前 v6 整模板包；合同缺失或不一致时记录后端品牌组件合成异常，不调用图像模型。
-
-```text
-python <当前 Skill 目录>/references/qc_batch.py \
-  --manifest <manifest.json> --compose-result <compose-result.json> \
-  --images-dir <final-images-dir> --output <machine-evidence.json> \
-  --contact-sheet <contact-sheet.png>
-```
 
 ## Visual 原生看图检查
 
-仅 `creative_qc_visual` 执行本段。visual lane 必须从 `creative order get` 返回的当前 Variant 中筛选
+visual lane 必须从 `creative order get` 返回的当前 Variant 中筛选
 `revision=<context.revision>`、`stage=primed`、`status=completed` 且 size 属于 `expected_sizes` 的 assets；
 只使用这些 asset 的 `attachment_id`，不得使用历史工作目录、页面预览图、生成前底图、兄弟 Variant 或旧 revision。
 
@@ -54,10 +35,9 @@ multica attachment download <primed-attachment-id> --output-dir <visual-inspecti
 visual lane 自己写 `visual-inspection.json`；报告中的 `checked_assets` 必须列出每个检查过的
 `size_key`、`attachment_id`、本地文件名和主要 observations。
 
-## Lane 合同
+## 视觉质检合同
 
-- `technical`：文件、目标尺寸、manifest/compose 对应、完整品牌模板、模板布局契约、四角/底部和 `backdrop_rule`。
-- `visual`：通过 `attachment download` 下载当前 primed assets，并用 `view_image` 对照冻结 `copy_snapshot`、
+通过 `attachment download` 下载当前 primed assets，并用 `view_image` 对照冻结 `copy_snapshot`、
   brief 和当前成图检查批准文案、金融事实、主题、主体、信息层级和画质。generated evidence 的父方向哈希和
   compose_result 归属来自订单证据包；多尺寸时检查同内容族一致性。
 
@@ -73,7 +53,7 @@ brief 的 `mechanism_adaptation` 是结构验收合同；
 分别写 `actual_prime_obstruction` 或 `official_prime_text_unreadable`。冻结关键内容缺失仍须写入阻断报告，但由人工决定重做或调整，不触发自动模型返工。
 其他发现仍写尺寸级 `quality_warnings`。
 
-每条 lane 输出逐尺寸 checked assets、`prime_assets_readable`、`key_content_preserved`、`quality_warnings` 和
+visual lane 输出逐尺寸 checked assets、`prime_assets_readable`、`key_content_preserved`、`quality_warnings` 和
 evidence attachments。没有阻断问题写 `passed`；只有 warning 时写 `warning`。存在上述实际缺陷时 visual lane 写
 `failed`，并在 `blocking_failures` 放每个失败尺寸一个对象：
 
@@ -96,15 +76,14 @@ multica creative order qc-finalize <order-id> \
   --variant <variant-id> --revision <revision> --output json
 ```
 
-每条 lane 写回后立即调用 finalize。finalize 只等待两份检测报告归档后登记最终成图；技术失败或不可自动修复的
-视觉失败进入人工处理。上述四类完整的 visual blocking finding 会新建下一 revision 的生产任务：服务端保留通过尺寸的
+写回后立即调用 finalize。finalize 只等待 visual 检测报告归档后登记最终成图；不可自动修复的视觉失败进入人工处理。
+上述完整的 visual blocking finding 会新建下一 revision 的生产任务：服务端保留通过尺寸的
 无品牌底图，只让模型改失败尺寸，然后重新合成品牌组件与 QC。服务端最多排两轮真实视觉返工；两轮后仍失败会保留当前品牌成图和交付资产，
 并以 `delivered_with_qc_risk` 归档，让用户继续标注调整或风险采用，不再因为这类视觉返工耗尽阻断输出。`outcome=pending` 或 `created=false` 时立即结束；只有
 `created=true` 的 winner 写一次去重 Issue 留痕。结构化 findings 不复制进评论。
 
-如果 generated evidence 缺少 `parent_direction_sha256`、manifest/compose 对应或其他 delegation/manifest/Prime contract，
-仍然如实写入对应阻断 finding；这类是平台证据契约错误，不是用户需要处理的图片质量问题。服务端会自动复用已完成 Prime
-资产重跑 technical 和 visual 两条 QC，当前 revision 最多一次；恢复任务只补证据，不重新生图。
+附件下载、查看图片或写回失败仍如实写入结构化错误；这类是平台执行错误，不是用户需要处理的图片质量问题。服务端会自动复用已完成 Prime
+资产重跑 visual QC，当前 revision 最多一次；恢复任务只补视觉验收，不重新生图。
 
 完整模板按上传文件原样 alpha 叠加；二维码属于官方 Prime 模板资产，机器检查不再解码二维码，只记录跳过状态且不得因此阻断。QC 不直接改图。它只提交最终视觉结论；符合上述合同的自动返工由服务端创建生产任务。工具或写回失败只影响当前 lane，
 保留真实 error code/message，不影响兄弟 Variant，也不创建子 Issue。

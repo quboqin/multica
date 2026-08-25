@@ -110,8 +110,8 @@ type creativeOrderWorkflowRetryResponse struct {
 }
 
 // creativeOrderQCRetryResponse describes a recovery run that deliberately
-// reuses the already completed Prime assets. These are two independent tasks,
-// not a creative-generation retry.
+// reuses the already completed Prime assets. New recovery runs are visual-only;
+// TechnicalTaskID is kept for older clients and remains empty.
 type creativeOrderQCRetryResponse struct {
 	VariantID       string `json:"variant_id"`
 	Revision        int    `json:"revision"`
@@ -1247,9 +1247,10 @@ func (h *Handler) RetryCreativeOrderWorkflowFailure(w http.ResponseWriter, r *ht
 	}
 	defer tx.Rollback(r.Context())
 
-	// QC action-required results are resolved as one atomic two-lane unit. A
-	// single task retry would leave the previous QC resolution in place while
-	// moving the variant back to running, which can strand the order forever.
+	// QC action-required results are resolved through the variant-level QC
+	// recovery path. A single task retry would leave the previous QC resolution
+	// in place while moving the variant back to running, which can strand the
+	// order forever.
 	var workflow string
 	err = tx.QueryRow(r.Context(), `
 SELECT COALESCE(task.context->>'workflow', '')
@@ -1281,7 +1282,7 @@ WHERE task.id = $1
 		return
 	}
 	if creativeWorkflowRequiresAtomicQCRecovery(workflow) {
-		writeError(w, http.StatusConflict, "creative QC failures require atomic dual-lane recovery")
+		writeError(w, http.StatusConflict, "creative QC failures require visual QC recovery")
 		return
 	}
 
@@ -1392,9 +1393,9 @@ func creativeWorkflowRequiresAtomicQCRecovery(workflow string) bool {
 	}
 }
 
-// RetryCreativeOrderVariantQC recovers only the two independent QC lanes for a
-// completed Prime package. It is intentionally not a creative rework: no
-// generated or primed asset is changed or recreated.
+// RetryCreativeOrderVariantQC recovers the visual QC lane for a completed Prime
+// package. It is intentionally not a creative rework: no generated or primed
+// asset is changed or recreated.
 func (h *Handler) RetryCreativeOrderVariantQC(w http.ResponseWriter, r *http.Request) {
 	workspaceID, userID, ok := h.creativeFeedbackWorkspaceUser(w, r)
 	if !ok {
@@ -1513,7 +1514,7 @@ SELECT EXISTS(
     AND context->>'creative_order_id' = $1::text
     AND context->>'variant_id' = $2::text
 	AND COALESCE(NULLIF(context->>'revision', '')::int, 1) = $3
-    AND context->>'workflow' IN ('creative_qc_technical', 'creative_qc_visual')
+    AND context->>'workflow' = 'creative_qc_visual'
     AND status IN ('queued', 'dispatched', 'running', 'waiting_local_directory')
 )
 `, orderID, variantID, revision).Scan(&activeQC); err != nil {
@@ -1586,12 +1587,12 @@ WHERE variant_id = $1 AND revision = $2
 		return
 	}
 
-	contexts := make(map[string]json.RawMessage, 2)
+	contexts := make(map[string]json.RawMessage, 1)
 	items := make([]struct {
 		lane string
 		key  string
-	}, 0, 2)
-	for _, lane := range []string{"technical", "visual"} {
+	}, 0, 1)
+	for _, lane := range []string{"visual"} {
 		itemKey := fmt.Sprintf("%s:%s:r%d", uuidToString(variantID), lane, revision)
 		context, err := json.Marshal(map[string]any{
 			"type":                        "creative_domain_task",
@@ -1654,7 +1655,6 @@ WHERE variant_id = $1 AND revision = $2
 		"variant_id":             uuidToString(variantID),
 		"revision":               revision,
 		"recovery_of_task_ids":   failedTaskIDs,
-		"technical_task_id":      uuidToString(created["technical"].ID),
 		"visual_task_id":         uuidToString(created["visual"].ID),
 		"asset_invariant":        "reused_completed_primed_assets_only",
 		"previous_qc_reports":    json.RawMessage(priorReports),
@@ -1695,17 +1695,15 @@ VALUES ($1, $2, 'member', $3, 'creative_qc_recovery_queued', $4::jsonb)
 		"recovery": "creative_qc",
 	})
 	writeJSON(w, http.StatusOK, creativeOrderQCRetryResponse{
-		VariantID:       uuidToString(variantID),
-		Revision:        revision,
-		TechnicalTaskID: uuidToString(created["technical"].ID),
-		VisualTaskID:    uuidToString(created["visual"].ID),
+		VariantID:    uuidToString(variantID),
+		Revision:     revision,
+		VisualTaskID: uuidToString(created["visual"].ID),
 	})
 }
 
 // queueCreativeQCAutomaticRecovery reuses a complete Prime package after a
-// QC delegation/contract failure. It deliberately shares the same two-lane
-// recovery shape as the user-facing recovery endpoint, but is called from the
-// QC barrier so a transient evidence failure never becomes a manual step.
+// visual QC delegation/contract failure. It is called from the QC barrier so a
+// transient evidence failure never becomes a manual step.
 func (h *Handler) queueCreativeQCAutomaticRecovery(
 	ctx context.Context,
 	tx pgx.Tx,
@@ -1748,12 +1746,12 @@ SELECT EXISTS(
 		return nil, errors.New("the frozen creative QC reviewer no longer provides quality_control")
 	}
 
-	contexts := make(map[string]json.RawMessage, 2)
+	contexts := make(map[string]json.RawMessage, 1)
 	items := make([]struct {
 		lane string
 		key  string
-	}, 0, 2)
-	for _, lane := range []string{"technical", "visual"} {
+	}, 0, 1)
+	for _, lane := range []string{"visual"} {
 		itemKey := fmt.Sprintf("%s:%s:r%d", uuidToString(variantID), lane, revision)
 		contextValue, err := json.Marshal(map[string]any{
 			"type":                        "creative_domain_task",
@@ -1790,7 +1788,7 @@ SELECT EXISTS(
 	}
 
 	attr := attribution.DirectHumanRun(userID, attribution.EvidenceKind("creative_order_variant_qc"), variantID)
-	created := make(map[string]db.AgentTaskQueue, 2)
+	created := make(map[string]db.AgentTaskQueue, 1)
 	for _, item := range items {
 		task, err := h.Queries.WithTx(tx).CreateAgentTask(ctx, db.CreateAgentTaskParams{
 			AgentID:              reviewer.ID,
@@ -1815,7 +1813,6 @@ SELECT EXISTS(
 		"variant_id":           uuidToString(variantID),
 		"revision":             revision,
 		"recovery_of_task_ids": failedTaskIDs,
-		"technical_task_id":    uuidToString(created["technical"].ID),
 		"visual_task_id":       uuidToString(created["visual"].ID),
 		"asset_invariant":      "reused_completed_primed_assets_only",
 		"automatic":            true,
@@ -1980,7 +1977,7 @@ WHERE (
   AND COALESCE(NULLIF(context->>'revision', '')::int, 1) = $3
   AND (
     (
-      context->>'workflow' IN ('creative_qc_technical', 'creative_qc_visual')
+      context->>'workflow' = 'creative_qc_visual'
       AND status = 'failed'
       AND COALESCE(NULLIF(failure_reason, ''), 'agent_error') = ANY($4::text[])
     )
@@ -1991,36 +1988,37 @@ WHERE (
         FROM creative_order_qc_report report
         WHERE report.variant_id = $2::uuid
           AND report.revision = $3
-          AND report.lane = CASE
-            WHEN context->>'workflow' = 'creative_qc_technical' THEN 'technical'
-            WHEN context->>'workflow' = 'creative_qc_visual' THEN 'visual'
-            WHEN context->>'workflow' = 'creative_qc' THEN context->>'lane'
-            ELSE ''
-          END
-          AND report.status = 'failed'
-          AND EXISTS (
-            SELECT 1
-            FROM jsonb_array_elements(
-              CASE
-                WHEN jsonb_typeof(report.findings->'blocking_failures') = 'array'
-                  THEN report.findings->'blocking_failures'
-                ELSE '[]'::jsonb
-              END
-            ) AS finding
-            WHERE finding->>'code' LIKE 'delegation_contract_%'
-              OR finding->>'code' LIKE 'manifest_%'
-              OR finding->>'code' LIKE 'prime_layout_contract_%'
-              OR finding->>'code' LIKE 'qc_batch_%'
-              OR finding->>'code' LIKE 'attachment_download_%'
-              OR finding->>'code' LIKE 'visual_inspection_%'
+          AND report.lane = 'visual'
+          AND (
+            context->>'workflow' = 'creative_qc_visual'
+            OR (context->>'workflow' = 'creative_qc' AND context->>'lane' = 'visual')
           )
-          OR report.findings->>'failure_code' LIKE 'delegation_contract_%'
-          OR report.findings->>'failure_code' LIKE 'prompt_contract_%'
-          OR report.findings->>'failure_code' LIKE 'manifest_%'
-          OR report.findings->>'failure_code' LIKE 'prime_layout_contract_%'
-          OR report.findings->>'failure_code' LIKE 'qc_batch_%'
-          OR report.findings->>'failure_code' LIKE 'attachment_download_%'
-          OR report.findings->>'failure_code' LIKE 'visual_inspection_%'
+          AND report.status = 'failed'
+          AND (
+            EXISTS (
+              SELECT 1
+              FROM jsonb_array_elements(
+                CASE
+                  WHEN jsonb_typeof(report.findings->'blocking_failures') = 'array'
+                    THEN report.findings->'blocking_failures'
+                  ELSE '[]'::jsonb
+                END
+              ) AS finding
+              WHERE finding->>'code' LIKE 'delegation_contract_%'
+                OR finding->>'code' LIKE 'manifest_%'
+                OR finding->>'code' LIKE 'prime_layout_contract_%'
+                OR finding->>'code' LIKE 'qc_batch_%'
+                OR finding->>'code' LIKE 'attachment_download_%'
+                OR finding->>'code' LIKE 'visual_inspection_%'
+            )
+            OR report.findings->>'failure_code' LIKE 'delegation_contract_%'
+            OR report.findings->>'failure_code' LIKE 'prompt_contract_%'
+            OR report.findings->>'failure_code' LIKE 'manifest_%'
+            OR report.findings->>'failure_code' LIKE 'prime_layout_contract_%'
+            OR report.findings->>'failure_code' LIKE 'qc_batch_%'
+            OR report.findings->>'failure_code' LIKE 'attachment_download_%'
+            OR report.findings->>'failure_code' LIKE 'visual_inspection_%'
+          )
         )
     )
   )
@@ -2107,7 +2105,7 @@ func (h *Handler) CancelCreativeOrder(w http.ResponseWriter, r *http.Request) {
 	if err := tx.QueryRow(r.Context(), `
 SELECT o.issue_id,
   o.status,
-	  o.submission_key,
+  o.submission_key,
   COALESCE((SELECT count(*) > 0 AND bool_and(i.adopted_variant_id IS NOT NULL)
     FROM creative_order_item i WHERE i.order_id = o.id), false)
 FROM creative_order o
@@ -2332,20 +2330,19 @@ WHERE variant.id = $1 AND item.id = $2 AND order_row.id = $3
 		writeError(w, http.StatusConflict, err.Error())
 		return
 	}
-	var technicalStatus, visualStatus, qcOutcome string
+	var visualStatus, qcOutcome string
 	if err := tx.QueryRow(r.Context(), `
 SELECT
-  COALESCE((SELECT status FROM creative_order_qc_report WHERE variant_id = $1 AND revision = $2 AND lane = 'technical'), ''),
   COALESCE((SELECT status FROM creative_order_qc_report WHERE variant_id = $1 AND revision = $2 AND lane = 'visual'), ''),
   COALESCE((SELECT outcome FROM creative_order_variant_qc_resolution WHERE variant_id = $1 AND revision = $2), '')
-`, variantID, revision).Scan(&technicalStatus, &visualStatus, &qcOutcome); err != nil {
+`, variantID, revision).Scan(&visualStatus, &qcOutcome); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to load creative variant QC state")
 		return
 	}
 	directEditNoQC := triggerKind == "creative_direct_edit" || creativeDirectEditSkipsQC(json.RawMessage(variantBrief))
-	standardAdoption := (directEditNoQC && variantStatus == "completed" && technicalStatus == "" && visualStatus == "" && qcOutcome == "") ||
-		(creativeQCStatusAllowsAdoption(technicalStatus) && creativeQCStatusAllowsAdoption(visualStatus) && qcOutcome == "delivered")
-	riskAdoption := (technicalStatus == "failed" || visualStatus == "failed") && creativeQCOutcomeAllowsRiskAdoption(qcOutcome)
+	standardAdoption := (directEditNoQC && variantStatus == "completed" && visualStatus == "" && qcOutcome == "") ||
+		(creativeQCStatusAllowsAdoption(visualStatus) && qcOutcome == "delivered")
+	riskAdoption := visualStatus == "failed" && creativeQCOutcomeAllowsRiskAdoption(qcOutcome)
 	if standardAdoption {
 		if input.QCRiskAcknowledged {
 			writeError(w, http.StatusBadRequest, "QC risk acknowledgement is only valid for a failed QC result")
@@ -2405,8 +2402,8 @@ LEFT JOIN LATERAL (
 		AND asset.stage = 'primed'
 		AND asset.status = 'completed'
 		AND asset.attachment_id IS NOT NULL
-	  ORDER BY asset.updated_at DESC
-	  LIMIT 1
+  ORDER BY asset.updated_at DESC
+  LIMIT 1
 ) prime_asset ON true
 `, variantID, revision, expectedSizes).Scan(&missingPrimeSizes); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to load creative variant Prime package")
@@ -2437,8 +2434,8 @@ LEFT JOIN LATERAL (
 		AND asset.stage = 'delivered'
 		AND asset.status = 'completed'
 		AND asset.attachment_id IS NOT NULL
-	  ORDER BY asset.updated_at DESC
-	  LIMIT 1
+  ORDER BY asset.updated_at DESC
+  LIMIT 1
 ) final_asset ON true
 `, variantID, revision, expectedSizes).Scan(&missingSizes); err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to load creative variant delivery package")
@@ -2499,11 +2496,10 @@ WHERE id = $1
 		"qc_risk_acknowledged":        riskAdoption,
 		"qc_risk_reason":              feedbackComment,
 		"qc_snapshot": map[string]any{
-			"technical_status": technicalStatus,
-			"visual_status":    visualStatus,
-			"outcome":          qcOutcome,
-			"reports":          json.RawMessage(qcReportsJSON),
-			"resolution":       json.RawMessage(qcResolutionJSON),
+			"visual_status": visualStatus,
+			"outcome":       qcOutcome,
+			"reports":       json.RawMessage(qcReportsJSON),
+			"resolution":    json.RawMessage(qcResolutionJSON),
 		},
 	})
 	if err != nil {
@@ -2581,7 +2577,7 @@ func (h *Handler) UpsertCreativeOrderVariant(w http.ResponseWriter, r *http.Requ
 	if err := h.DB.QueryRow(r.Context(), `
 SELECT EXISTS(SELECT 1 FROM creative_order_item i JOIN creative_order o ON o.id = i.order_id WHERE i.id = $1 AND i.order_id = $2 AND o.workspace_id = $3),
   COALESCE((SELECT i.direction FROM creative_order_item i JOIN creative_order o ON o.id = i.order_id WHERE i.id = $1 AND i.order_id = $2 AND o.workspace_id = $3), ''),
-	  COALESCE((SELECT o.input_snapshot::text FROM creative_order_item i JOIN creative_order o ON o.id = i.order_id WHERE i.id = $1 AND i.order_id = $2 AND o.workspace_id = $3), '{}'),
+  COALESCE((SELECT o.input_snapshot::text FROM creative_order_item i JOIN creative_order o ON o.id = i.order_id WHERE i.id = $1 AND i.order_id = $2 AND o.workspace_id = $3), '{}'),
   COALESCE((SELECT v.revision FROM creative_order_variant v WHERE v.order_item_id = $1 AND v.variant_key = $4), 0),
   COALESCE((SELECT v.status FROM creative_order_variant v WHERE v.order_item_id = $1 AND v.variant_key = $4), ''),
   COALESCE((SELECT o.trigger_evidence_kind FROM creative_order_item i JOIN creative_order o ON o.id = i.order_id WHERE i.id = $1), '')
@@ -2967,7 +2963,7 @@ FOR UPDATE OF diagnostic, variant
 		return
 	}
 	// A candidate is selected after an action-required QC resolution. Reopen
-	// the same revision so the replacement gets fresh technical and visual QC.
+	// the same revision so the replacement gets fresh visual QC.
 	if _, err := tx.Exec(r.Context(), `
 UPDATE agent_task_queue
 SET context = COALESCE(context, '{}'::jsonb) || '{"superseded_by_candidate":true}'::jsonb
@@ -3308,7 +3304,6 @@ FOR UPDATE OF v
 
 	reportStatuses := map[string]string{}
 	failureSummary := map[string]json.RawMessage{}
-	technicalHasBlockingFailure := false
 	visualHasBlockingFailure := false
 	rows, err := tx.Query(r.Context(), `
 SELECT lane, status, findings::text
@@ -3335,9 +3330,6 @@ FOR UPDATE
 		}
 		reportStatuses[lane] = status
 		failureSummary[lane] = json.RawMessage(findings)
-		if lane == "technical" && (hasBlockingFailure || status == "failed") {
-			technicalHasBlockingFailure = true
-		}
 		if lane == "visual" && (hasBlockingFailure || status == "failed") {
 			visualHasBlockingFailure = true
 		}
@@ -3350,11 +3342,10 @@ FOR UPDATE
 	rows.Close()
 
 	response := creativeOrderQCFinalizeResponse{
-		VariantID:       input.VariantID,
-		Revision:        input.Revision,
-		TechnicalStatus: reportStatuses["technical"],
-		VisualStatus:    reportStatuses["visual"],
-		Outcome:         "pending",
+		VariantID:    input.VariantID,
+		Revision:     input.Revision,
+		VisualStatus: reportStatuses["visual"],
+		Outcome:      "pending",
 	}
 	if !creativeQCLanesComplete(reportStatuses) {
 		if err := tx.Commit(r.Context()); err != nil {
@@ -3367,12 +3358,12 @@ FOR UPDATE
 	}
 
 	outcome := "delivered"
-	if technicalHasBlockingFailure || visualHasBlockingFailure {
+	if visualHasBlockingFailure {
 		outcome = "action_required"
 	}
 	var visualReworkFindings []creativeVisualModelReworkFinding
 	deliverDespiteVisualReworkExhausted := false
-	if outcome == "action_required" && !technicalHasBlockingFailure && reportStatuses["visual"] == "failed" {
+	if outcome == "action_required" && reportStatuses["visual"] == "failed" {
 		reworkAttempts, queuedErr := creativeVisualModelReworkAttemptCount(r.Context(), tx, variantID)
 		if queuedErr != nil {
 			writeError(w, http.StatusInternalServerError, "failed to check creative visual rework limit")
@@ -3394,7 +3385,6 @@ FOR UPDATE
 			return
 		}
 		automaticRecovery := len(recoverableTaskIDs) > 0 ||
-			creativeQCFindingsNeedAutomaticRecovery(failureSummary["technical"]) ||
 			creativeQCFindingsNeedAutomaticRecovery(failureSummary["visual"])
 		if automaticRecovery {
 			currentTaskID := uuidToString(task.ID)
@@ -3439,7 +3429,6 @@ SELECT EXISTS(
 				for _, recoveryTask := range created {
 					h.TaskService.NotifyTaskEnqueued(r.Context(), recoveryTask)
 				}
-				response.TechnicalStatus = "pending"
 				response.VisualStatus = "pending"
 				response.Outcome = "pending"
 				response.Finalized = false
@@ -3640,8 +3629,7 @@ func (h *Handler) creativeQCActiveTask(w http.ResponseWriter, r *http.Request, o
 }
 
 func creativeQCLanesComplete(statuses map[string]string) bool {
-	return statuses["technical"] != "" && statuses["technical"] != "pending" &&
-		statuses["visual"] != "" && statuses["visual"] != "pending"
+	return statuses["visual"] != "" && statuses["visual"] != "pending"
 }
 
 func copyCreativePrimedAssetsToDelivered(ctx context.Context, tx pgx.Tx, variantID pgtype.UUID, revision int, expectedSizes []string) (int, error) {
@@ -3874,6 +3862,37 @@ ON CONFLICT (variant_id, revision, workflow, size_key, label, filename) DO UPDAT
   updated_at = now()
 `, variantID, sourceRevision, newRevision, expectedSizes, targetSizes, task.ID); err != nil {
 		return db.AgentTaskQueue{}, errors.New("preserve creative visual rework process evidence")
+	}
+	findingsJSON, err := json.Marshal(findings)
+	if err != nil {
+		return db.AgentTaskQueue{}, errors.New("failed to encode creative visual rework findings")
+	}
+	if _, err := tx.Exec(ctx, `
+INSERT INTO creative_order_diagnostic_asset (
+  variant_id, task_id, attachment_id, size_key, revision, workflow, label, filename, metadata
+)
+SELECT variant_id, $5, attachment_id, size_key, $3, 'qc_visual_rework', '视觉质检失败触发图',
+  'qc-visual-failure-' || replace(size_key, 'x', '-') || '.png',
+  jsonb_build_object(
+    'source_revision', $2::integer,
+    'qc_visual_rework', true,
+    'model_input_policy', 'use_unbranded_generated_base_not_this_primed_image',
+    'failures', $6::jsonb
+  )
+FROM creative_order_asset
+WHERE variant_id = $1
+  AND revision = $2
+  AND stage = 'primed'
+  AND status = 'completed'
+  AND attachment_id IS NOT NULL
+  AND size_key = ANY($4::text[])
+ON CONFLICT (variant_id, revision, workflow, size_key, label, filename) DO UPDATE SET
+  task_id = EXCLUDED.task_id,
+  attachment_id = EXCLUDED.attachment_id,
+  metadata = EXCLUDED.metadata,
+  updated_at = now()
+`, variantID, sourceRevision, newRevision, targetSizes, task.ID, findingsJSON); err != nil {
+		return db.AgentTaskQueue{}, errors.New("record creative visual rework trigger evidence")
 	}
 	details, err := json.Marshal(map[string]any{
 		"creative_order_id": uuidToString(orderID),
@@ -5203,17 +5222,17 @@ AND (
             ) < jsonb_array_length(workflow_expected_sizes)
           )
           OR (
-            COALESCE(context->>'workflow', '') IN ('creative_qc', 'creative_qc_technical', 'creative_qc_visual')
+            COALESCE(context->>'workflow', '') IN ('creative_qc', 'creative_qc_visual')
             AND EXISTS (
               SELECT 1
               FROM creative_order_qc_report report
               WHERE report.variant_id = variant.id
                 AND report.revision = variant.revision
-                AND report.lane = CASE
-                  WHEN context->>'workflow' = 'creative_qc_technical' THEN 'technical'
-                  WHEN context->>'workflow' = 'creative_qc_visual' THEN 'visual'
-                  ELSE COALESCE(NULLIF(context->>'lane', ''), '')
-                END
+                AND report.lane = 'visual'
+                AND (
+                  context->>'workflow' = 'creative_qc_visual'
+                  OR (context->>'workflow' = 'creative_qc' AND context->>'lane' = 'visual')
+                )
                 AND report.status = 'failed'
             )
           )
@@ -5530,7 +5549,7 @@ SELECT variant.id::text, variant.order_item_id::text, variant.variant_key, varia
       WHERE task.context->>'creative_order_id' = recovery_order.id::text
         AND task.context->>'variant_id' = variant.id::text
         AND COALESCE(NULLIF(task.context->>'revision', '')::int, 1) = variant.revision
-        AND task.context->>'workflow' IN ('creative_qc_technical', 'creative_qc_visual')
+        AND task.context->>'workflow' = 'creative_qc_visual'
         AND task.status IN ('queued', 'dispatched', 'running', 'waiting_local_directory')
     )
     AND EXISTS (
@@ -5539,7 +5558,7 @@ SELECT variant.id::text, variant.order_item_id::text, variant.variant_key, varia
       WHERE (
           (
             task.context->>'type' = 'creative_domain_task'
-            AND task.context->>'workflow' IN ('creative_qc_technical', 'creative_qc_visual')
+            AND task.context->>'workflow' = 'creative_qc_visual'
             AND task.status = 'failed'
             AND COALESCE(NULLIF(task.failure_reason, ''), 'agent_error') = ANY(ARRAY[
               'agent_error', 'api_invalid_request', 'agent_fallback_message', 'codex_semantic_inactivity',
@@ -5552,12 +5571,11 @@ SELECT variant.id::text, variant.order_item_id::text, variant.variant_key, varia
               SELECT 1 FROM creative_order_qc_report report
               WHERE report.variant_id = variant.id
                 AND report.revision = variant.revision
-                AND report.lane = CASE
-                  WHEN task.context->>'workflow' = 'creative_qc_technical' THEN 'technical'
-                  WHEN task.context->>'workflow' = 'creative_qc_visual' THEN 'visual'
-                  WHEN task.context->>'workflow' = 'creative_qc' THEN task.context->>'lane'
-                  ELSE ''
-                END
+                AND report.lane = 'visual'
+                AND (
+                  task.context->>'workflow' = 'creative_qc_visual'
+                  OR (task.context->>'workflow' = 'creative_qc' AND task.context->>'lane' = 'visual')
+                )
                 AND report.status = 'failed'
                 AND EXISTS (
                   SELECT 1
@@ -5781,17 +5799,17 @@ WITH latest AS (
             )
           )
           OR (
-            q.context->>'workflow' IN ('creative_qc', 'creative_qc_technical', 'creative_qc_visual')
+            q.context->>'workflow' IN ('creative_qc', 'creative_qc_visual')
             AND EXISTS (
               SELECT 1
               FROM creative_order_qc_report report
               WHERE report.variant_id = variant.id
                 AND report.revision = variant.revision
-                AND report.lane = CASE
-                  WHEN q.context->>'workflow' = 'creative_qc_technical' THEN 'technical'
-                  WHEN q.context->>'workflow' = 'creative_qc_visual' THEN 'visual'
-                  ELSE COALESCE(NULLIF(q.context->>'lane', ''), '')
-                END
+                AND report.lane = 'visual'
+                AND (
+                  q.context->>'workflow' = 'creative_qc_visual'
+                  OR (q.context->>'workflow' = 'creative_qc' AND q.context->>'lane' = 'visual')
+                )
                 AND report.status = 'failed'
             )
           )

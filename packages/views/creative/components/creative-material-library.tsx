@@ -1290,7 +1290,7 @@ function DirectEditDialog({ candidate, onClose, onCreated }: { candidate: Creati
     }
   };
 
-  return <Dialog open={candidate !== null} onOpenChange={(open) => !open && onClose()}><DialogContent className="max-w-xl"><DialogHeader><DialogTitle>直接改图</DialogTitle><DialogDescription>原图会固定为本次修改的来源。预览只生成底图；正式投放会自动合成品牌组件并进入双路质检。</DialogDescription></DialogHeader>
+  return <Dialog open={candidate !== null} onOpenChange={(open) => !open && onClose()}><DialogContent className="max-w-xl"><DialogHeader><DialogTitle>直接改图</DialogTitle><DialogDescription>原图会固定为本次修改的来源。预览只生成底图；正式投放会自动合成品牌组件并进入视觉质检。</DialogDescription></DialogHeader>
     <div className="space-y-4">
       <div className="grid gap-3 sm:grid-cols-2">
         <Field label="目标尺寸"><NativeSelect disabled={Boolean(recovery.issueId)} value={targetSize} onChange={(event) => setTargetSize(event.target.value as typeof targetSize)}><NativeSelectOption value="1080x1080">1080 x 1080</NativeSelectOption><NativeSelectOption value="1200x628">1200 x 628</NativeSelectOption><NativeSelectOption value="800x1000">800 x 1000</NativeSelectOption></NativeSelect></Field>

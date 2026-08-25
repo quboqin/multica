@@ -189,7 +189,7 @@ describe("creative order stage", () => {
     expect(screen.queryByText("品牌组件提醒")).not.toBeInTheDocument();
   });
 
-  it("treats qc-finalize pending on the other lane as QC progress", () => {
+  it("treats qc-finalize pending as QC progress", () => {
     const pending = variant("v01", false);
     pending.status = "action_required";
     pending.assets = pending.assets.filter((asset) => asset.stage === "primed" || asset.stage === "generated");
@@ -197,7 +197,7 @@ describe("creative order stage", () => {
       task_id: "visual-qc-task",
       workflow: "creative_qc_visual",
       failure_reason: "agent_reported_action_required",
-      detail: "`qc-finalize` 结果：`pending`，因 technical lane 尚未完成；未修改 Issue 或其他 Variant。",
+      detail: "`qc-finalize` 结果：`pending`，视觉质检仍在同步中；未修改 Issue 或其他 Variant。",
       failed_at: "2026-08-09T10:00:00Z",
       retryable: true,
     };
@@ -484,6 +484,21 @@ describe("CreativeOrderDeliveryCandidates", () => {
         created_at: "2026-08-02T00:03:00Z",
         updated_at: "2026-08-02T00:04:00Z",
       },
+      {
+        id: "diagnostic-qc-visual-rework",
+        variant_id: ready.id,
+        task_id: "task-2",
+        attachment_id: "diagnostic-qc-visual-rework-attachment",
+        size_key: "800x1000",
+        revision: ready.revision,
+        workflow: "qc_visual_rework",
+        label: "视觉质检失败触发图",
+        filename: "qc-visual-failure-800-1000.png",
+        metadata: { qc_visual_rework: true },
+        url: "/api/attachments/diagnostic-qc-visual-rework-attachment/download",
+        created_at: "2026-08-02T00:05:00Z",
+        updated_at: "2026-08-02T00:06:00Z",
+      },
     ];
     const orderItem = item();
     orderItem.variants = [ready];
@@ -496,8 +511,10 @@ describe("CreativeOrderDeliveryCandidates", () => {
     expect(screen.getByText("调整前原图")).toBeInTheDocument();
     expect(screen.getByText("调整后结果")).toBeInTheDocument();
     expect(screen.getByText("本次调整过程图")).toBeInTheDocument();
+    expect(screen.getByText("视觉质检返工触发图")).toBeInTheDocument();
     expect(screen.getByText("沿用上一版过程图")).toBeInTheDocument();
     expect(screen.getByText("方形 · 1080x1080 · 模型改图回图")).toBeInTheDocument();
+    expect(screen.getByText("竖版 · 800x1000 · 失败贴片成图")).toBeInTheDocument();
     expect(screen.getByText("横版 · 1200x628 · 沿用上一版")).toBeInTheDocument();
     expect(screen.getAllByText(/北京时间/).length).toBeGreaterThan(0);
     expect(screen.getByText(/2026\/08\/02 08:02:00/)).toBeInTheDocument();
@@ -561,7 +578,7 @@ describe("CreativeOrderDeliveryCandidates", () => {
     });
   });
 
-  it("exposes dual-lane QC retry for recoverable failed QC variants", () => {
+  it("exposes visual QC retry for recoverable failed QC variants", () => {
     const failed = variant("v01");
     failed.status = "action_required";
     failed.qc_status = "failed";
@@ -580,7 +597,7 @@ describe("CreativeOrderDeliveryCandidates", () => {
     expect(onRetryVariant).toHaveBeenCalledWith(failed, { kind: "qc", taskId: "", label: "重新质检" });
   });
 
-  it("shows qc-finalize failures as system reminders without exposing internal lane text", () => {
+  it("ignores legacy technical QC failures when visual QC passed", () => {
     const failed = variant("v01");
     failed.status = "action_required";
     failed.qc_status = "failed";
@@ -627,8 +644,8 @@ describe("CreativeOrderDeliveryCandidates", () => {
     expect(creativeVariantNeedsManualAction(failed)).toBe(false);
     expect(creativeOrderActionableWorkflowFailures(order)).toEqual([]);
     expect(creativeOrderStage(order)).toMatchObject({ key: "review", label: "待验收", readyVariants: 1 });
-    expect(screen.getByText("技术质检未通过")).toBeInTheDocument();
-    expect(screen.getByText("质检未通过，需要人工确认当前成图是否可用")).toBeInTheDocument();
+    expect(creativeVariantAdoptionReadiness(failed)).toMatchObject({ ready: true });
+    expect(screen.queryByText("质检未通过，需要人工确认当前成图是否可用")).not.toBeInTheDocument();
     expect(screen.queryByText(/qc-finalize|technical lane|action_required/)).not.toBeInTheDocument();
   });
 
@@ -645,7 +662,6 @@ describe("CreativeOrderDeliveryCandidates", () => {
 
     render(<CreativeOrderDeliveryCandidates orderId="order-1" item={orderItem} source={{ label: "竞品原图", url: "https://cdn.example/source.png" }} attachments={attachmentMap(orderItem)} adoptingVariantId="" onAdopt={vi.fn()} onAssetSelect={vi.fn()} />);
 
-    expect(screen.getByText("技术质检没有同步具体失败明细；请人工复核文件完整性、品牌组件和渠道要求。")).toBeInTheDocument();
     expect(screen.getByText("视觉质检没有同步具体失败明细；请人工复核文字可读性、遮挡、数值一致性和整体画面质量。")).toBeInTheDocument();
     expect(screen.queryByText("报告未提供具体失败原因")).not.toBeInTheDocument();
   });
@@ -655,10 +671,10 @@ describe("CreativeOrderDeliveryCandidates", () => {
     failed.status = "action_required";
     failed.qc_reports = [
       qcReport({
-        id: "technical-r2",
+        id: "visual-r2",
         variant_id: failed.id,
         revision: 2,
-        lane: "technical",
+        lane: "visual",
         status: "failed",
         findings: { blocking_failures: [{ code: "corner_overlap" }] },
         updated_at: "2026-08-05T00:00:00Z",
@@ -782,11 +798,11 @@ describe("creative order delivery selection", () => {
 
     const failed = structuredClone(warning);
     failed.status = "action_required";
-    failed.qc_reports[0]!.status = "failed";
+    failed.qc_reports[1]!.status = "failed";
     expect(creativeVariantAdoptionReadiness(failed)).toEqual({ ready: true, status: "可查看并采用当前成图" });
 
     const pending = structuredClone(warning);
-    pending.qc_reports[0]!.status = "pending";
+    pending.qc_reports[1]!.status = "pending";
     expect(creativeVariantAdoptionReadiness(pending).ready).toBe(false);
   });
 

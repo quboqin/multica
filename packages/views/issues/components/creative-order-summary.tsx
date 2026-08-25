@@ -196,7 +196,7 @@ function variantCollaborationDetail(variant: CreativeOrderVariant): string {
 }
 
 function workflowLabel(workflow: string): string {
-  return ({ creative_plan: "创意方案", creative_production: "成图生成", brand_components: "品牌组件合成", creative_qc_technical: "技术质检", creative_qc_visual: "视觉质检", creative_direct_edit: "图片调整" } as Record<string, string>)[workflow] || "自动流程";
+  return ({ creative_plan: "创意方案", creative_production: "成图生成", brand_components: "品牌组件合成", creative_qc_technical: "质检", creative_qc_visual: "视觉质检", creative_direct_edit: "图片调整" } as Record<string, string>)[workflow] || "自动流程";
 }
 
 function CreativeAdjustmentTrace({ event, variant, item }: { event: CreateCreativeFeedbackResponse; variant?: CreativeOrderVariant; item?: CreativeOrderItem }) {

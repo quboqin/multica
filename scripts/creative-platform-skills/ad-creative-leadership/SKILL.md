@@ -1,6 +1,6 @@
 ---
 name: coordinate-ad-creative-squad
-description: "当 Creative Order 需要通过 Multica 原生 task 协调方案、标准生产或直接改图、双路 QC、异常恢复和最终用户通知时使用。"
+description: "当 Creative Order 需要通过 Multica 原生 task 协调方案、标准生产或直接改图、视觉质检、异常恢复和最终用户通知时使用。"
 allowed-tools: Bash(multica *)
 ---
 
@@ -27,7 +27,7 @@ allowed-tools: Bash(multica *)
 4. 按 target/source 分组，使用 `multica task fanout` 一次提交全部就绪项。提交后立即结束，不轮询、休眠或
    创建等待 Issue。
 
-正常主链所有权固定：Leader 创建方案或 direct-edit task；Planner 创建 production；Production 的最后一次资产登记由后端合成品牌组件并创建 technical/visual QC；QC 写检测报告并调用 `qc-finalize` 完成归档，真实遮挡或官方文字不可读会阻断当前尺寸并触发最多一轮定向返工，关键内容缺失仍然阻断并转人工确认。Leader 只在人工重试或异常恢复时补真正缺失的下一步，
+正常主链所有权固定：Leader 创建方案或 direct-edit task；Planner 创建 production；Production 的最后一次资产登记由后端合成品牌组件并创建 visual QC；QC 写视觉检测报告并调用 `qc-finalize` 完成归档，真实遮挡或官方文字不可读会阻断当前尺寸并触发最多两轮定向返工，关键内容缺失仍然阻断并转人工确认。Leader 只在人工重试或异常恢复时补真正缺失的下一步，
 不得与下游重复委派。
 
 ## 标准订单

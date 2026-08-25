@@ -61,7 +61,7 @@ runtime 和 provider 限额控制。
 拒绝覆盖更高 revision。
 
 标准 Variant 的 expected sizes 共享批准文案、业务语义、主体、信息层级和 `asset_family_id`；方形是横竖版
-重排基线。后端只按冻结 config 原样叠加完整品牌模板。`prime_compose` Skill 只调用后端确定性合成；technical/visual QC 并发并写独立报告；`qc-finalize` 在两份报告归档后
+重排基线。后端只按冻结 config 原样叠加完整品牌模板。`prime_compose` Skill 只调用后端确定性合成；visual QC 写独立报告；`qc-finalize` 在视觉报告归档后
 登记 delivered assets、Variant completion 和 Inbox，但检测发现只作为建议，不影响这些状态。
 
 direct edit 只处理 context 的 source asset 和 expected sizes；source 不可覆盖，输出 revision 加一并记录

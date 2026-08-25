@@ -65,9 +65,9 @@ describe("CreativeComparisonWorkspace", () => {
   });
 
   it("disables acceptance and explains which final delivery condition is pending", () => {
-    render(<CreativeComparisonWorkspace {...props} acceptance={{ enabled: false, status: "等待双路 QC：technical 通过，visual 待完成" }} />);
+    render(<CreativeComparisonWorkspace {...props} acceptance={{ enabled: false, status: "等待视觉质检完成" }} />);
     expect(screen.getByRole("button", { name: "接受" })).toBeDisabled();
-    expect(screen.getByRole("status")).toHaveTextContent("等待双路 QC：technical 通过，visual 待完成");
+    expect(screen.getByRole("status")).toHaveTextContent("等待视觉质检完成");
   });
 
   it("opens generation information for the current result", () => {

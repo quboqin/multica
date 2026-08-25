@@ -758,7 +758,7 @@ func (h *Handler) creativeInitialGeneratedPackageDuration(ctx context.Context, w
 
 // creativeThreeSizeQCMetrics counts variants whose frozen delivery scope is
 // exactly the standard three-size package and whose current revision reached
-// a final visual and technical QC verdict. Generated-count metrics are kept
+// a final visual QC verdict. Generated-count metrics are kept
 // separate so an incomplete or blocked package cannot look successful.
 func (h *Handler) creativeThreeSizeQCMetrics(ctx context.Context, workspaceID pgtype.UUID) (int, int, error) {
 	rows, err := h.DB.Query(ctx, `
@@ -788,7 +788,7 @@ WHERE order_row.workspace_id = $1
 			continue
 		}
 		var deliveredCount, activityCount, reportCount int
-		var technicalStatus, visualStatus string
+		var visualStatus string
 		if err := h.DB.QueryRow(ctx, `
 SELECT
   count(DISTINCT asset.size_key) FILTER (
@@ -796,20 +796,19 @@ SELECT
   ),
   count(asset.id),
   count(report.id),
-  COALESCE(max(report.status) FILTER (WHERE report.lane = 'technical'), ''),
   COALESCE(max(report.status) FILTER (WHERE report.lane = 'visual'), '')
 FROM creative_order_asset asset
 LEFT JOIN creative_order_qc_report report
   ON report.variant_id = asset.variant_id AND report.revision = asset.revision
 WHERE asset.variant_id = $1 AND asset.revision = $2
-`, variantID, revision).Scan(&deliveredCount, &activityCount, &reportCount, &technicalStatus, &visualStatus); err != nil {
+`, variantID, revision).Scan(&deliveredCount, &activityCount, &reportCount, &visualStatus); err != nil {
 			return 0, 0, err
 		}
 		if status == "queued" && activityCount == 0 && reportCount == 0 {
 			continue
 		}
 		total++
-		if deliveredCount == len(standardCreativeAssetSizes) && creativeQCStatusAllowsAdoption(technicalStatus) && creativeQCStatusAllowsAdoption(visualStatus) {
+		if deliveredCount == len(standardCreativeAssetSizes) && creativeQCStatusAllowsAdoption(visualStatus) {
 			success++
 		}
 	}

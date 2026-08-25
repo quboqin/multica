@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -633,7 +632,7 @@ VALUES ($1, $2, '{}'::jsonb, 'completed') RETURNING id::text
 	createEligibleVariant := func(key, technicalStatus, visualStatus string) string {
 		variantStatus := "completed"
 		qcOutcome := "delivered"
-		if technicalStatus == "failed" || visualStatus == "failed" {
+		if visualStatus == "failed" {
 			variantStatus = "action_required"
 			qcOutcome = "action_required"
 		}
@@ -1421,7 +1420,7 @@ VALUES ($1, 1, 'text', 'Production task ended without registering generated asse
 	}
 }
 
-func TestRetryCreativeOrderWorkflowFailureRejectsSingleLaneQCRetry(t *testing.T) {
+func TestRetryCreativeOrderWorkflowFailureRejectsDirectQCRetry(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
 	}
@@ -1477,8 +1476,8 @@ RETURNING id::text
 				"id", orderID, "taskId", taskID,
 			)
 			testHandler.RetryCreativeOrderWorkflowFailure(w, req)
-			if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), "atomic dual-lane recovery") {
-				t.Fatalf("single-lane %s retry = %d %s", workflow, w.Code, w.Body.String())
+			if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), "visual QC recovery") {
+				t.Fatalf("direct %s retry = %d %s", workflow, w.Code, w.Body.String())
 			}
 
 			var variantStatus, variantBrief string
@@ -2460,8 +2459,8 @@ VALUES ($1, $2, 1, 'failed', $3::jsonb)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(ids) != 2 || !slices.Contains(ids, legacyTasks["technical"]) || !slices.Contains(ids, legacyTasks["visual"]) {
-		t.Fatalf("legacy recoverable QC task ids = %#v, want both lanes %#v", ids, legacyTasks)
+	if len(ids) != 1 || ids[0] != legacyTasks["visual"] {
+		t.Fatalf("legacy recoverable QC task ids = %#v, want visual %s", ids, legacyTasks["visual"])
 	}
 	if _, err := testPool.Exec(t.Context(), `
 UPDATE creative_order_qc_report
@@ -2474,7 +2473,7 @@ WHERE variant_id = $1 AND lane = 'visual'
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(ids) != 1 || ids[0] != legacyTasks["technical"] {
+	if len(ids) != 0 {
 		t.Fatalf("quality failure was incorrectly recoverable: %#v", ids)
 	}
 	if _, err := testPool.Exec(t.Context(), `
@@ -2488,8 +2487,8 @@ WHERE variant_id = $1 AND lane = 'visual'
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(ids) != 2 || !slices.Contains(ids, legacyTasks["technical"]) || !slices.Contains(ids, legacyTasks["visual"]) {
-		t.Fatalf("legacy visual inspection system failure ids = %#v, want both lanes %#v", ids, legacyTasks)
+	if len(ids) != 1 || ids[0] != legacyTasks["visual"] {
+		t.Fatalf("legacy visual inspection system failure ids = %#v, want visual %s", ids, legacyTasks["visual"])
 	}
 
 	var currentVariantID string
@@ -2534,13 +2533,28 @@ VALUES ($1, $2, 1, $3, $4::jsonb)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(ids) != 1 || ids[0] != currentTasks["technical"] {
-		t.Fatalf("current contract failure task ids = %#v, want technical %s", ids, currentTasks["technical"])
+	if len(ids) != 0 {
+		t.Fatalf("technical contract failure was incorrectly recoverable: %#v", ids)
+	}
+	if _, err := testPool.Exec(t.Context(), `
+UPDATE creative_order_qc_report
+SET status = 'failed',
+    findings = '{"blocking_failures":[{"code":"manifest_layout_contract_missing"},{"code":"edge_white_ratio_needs_visual_review"}]}'::jsonb
+WHERE variant_id = $1 AND lane = 'visual'
+`, currentVariantID); err != nil {
+		t.Fatal(err)
+	}
+	ids, err = creativeRecoverableQCTaskIDs(t.Context(), tx, parseUUID(orderID), parseUUID(currentVariantID), 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ids) != 1 || ids[0] != currentTasks["visual"] {
+		t.Fatalf("current visual contract failure task ids = %#v, want visual %s", ids, currentTasks["visual"])
 	}
 	if _, err := testPool.Exec(t.Context(), `
 UPDATE creative_order_qc_report
 SET findings = '{"blocking_failures":[{"code":"edge_white_ratio_needs_visual_review"}]}'::jsonb
-WHERE variant_id = $1 AND lane = 'technical'
+WHERE variant_id = $1 AND lane = 'visual'
 `, currentVariantID); err != nil {
 		t.Fatal(err)
 	}
@@ -2905,8 +2919,8 @@ RETURNING id::text`, agentID, failedVariantID, creativeQCTaskContextForTest(t, o
 	req.Header.Set("X-Task-ID", failedTaskID)
 	testHandler.FinalizeCreativeOrderQC(w, req)
 	var failedResponse creativeOrderQCFinalizeResponse
-	if w.Code != http.StatusOK || json.NewDecoder(w.Body).Decode(&failedResponse) != nil || failedResponse.Outcome != "action_required" || failedResponse.DeliveredAssetCount != 0 || failedResponse.OrderAggregateStatus != "awaiting_adoption" {
-		t.Fatalf("technical QC finding must require action = %d %#v %s", w.Code, failedResponse, w.Body.String())
+	if w.Code != http.StatusOK || json.NewDecoder(w.Body).Decode(&failedResponse) != nil || failedResponse.Outcome != "delivered" || failedResponse.TechnicalStatus != "" || failedResponse.VisualStatus != "passed" || failedResponse.DeliveredAssetCount != 3 || failedResponse.OrderAggregateStatus != "awaiting_adoption" {
+		t.Fatalf("legacy technical QC finding must be ignored = %d %#v %s", w.Code, failedResponse, w.Body.String())
 	}
 	var failedVariantStatus, completedVariantStatus string
 	if err := testPool.QueryRow(t.Context(), `SELECT status FROM creative_order_variant WHERE id = $1`, failedVariantID).Scan(&failedVariantStatus); err != nil {
@@ -2915,7 +2929,7 @@ RETURNING id::text`, agentID, failedVariantID, creativeQCTaskContextForTest(t, o
 	if err := testPool.QueryRow(t.Context(), `SELECT status FROM creative_order_variant WHERE id = $1`, variantID).Scan(&completedVariantStatus); err != nil {
 		t.Fatal(err)
 	}
-	if failedVariantStatus != "action_required" {
+	if failedVariantStatus != "completed" {
 		t.Fatalf("QC finding variant status = %q", failedVariantStatus)
 	}
 	if completedVariantStatus != "completed" {

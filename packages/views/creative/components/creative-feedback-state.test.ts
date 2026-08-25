@@ -178,7 +178,7 @@ describe("creative feedback state", () => {
       ["精准调整", "done"],
       ["当前尺寸生成", "done"],
       ["品牌组件合成", "done"],
-      ["双路 QC", "current"],
+      ["视觉质检", "current"],
       ["完成", "pending"],
     ]);
   });

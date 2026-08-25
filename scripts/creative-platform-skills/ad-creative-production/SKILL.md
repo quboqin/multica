@@ -249,7 +249,8 @@ Input 3 的 input role、是否实际用于当前尺寸，以及只替换手机�
 ## 有界返工
 
 如果视觉 QC 指出 `actual_prime_obstruction` 或 `official_prime_text_unreadable`，服务端最多为当前 Variant 排两轮有证据的定向返工。
-返工仍由出图智能体重新写当前尺寸的短提示词，输入为失败底图和同尺寸 Prime context；只描述实际遮挡和需要压缩/移动的内容，不改文案、金额、期限、表格、
+返工仍由出图智能体重新写当前尺寸的短提示词，Input 1 必须是上一 revision 的同尺寸无品牌 generated 底图，不是已贴二维码、Logo、官方条款或 Prime 组件的最终成图；Input 2 是同尺寸 Prime context，仅用于理解后续固定贴片的视觉关系。
+只描述实际遮挡和需要压缩/移动的内容，不改文案、金额、期限、表格、
 视觉身份或 Prime 规则。两轮返工后仍失败时，服务端保留当前品牌成图与交付资产，并由 `qc-finalize` 以 `delivered_with_qc_risk` 归档，页面让用户继续标注调整或风险采用；不要写 `action_required` 阻断输出，
 也不要把过程图转成候选或要求用户选择技术实现。
 

@@ -719,6 +719,7 @@ function compareCreativeProcessDiagnostics(left: CreativeOrderDiagnosticAsset, r
 
 function creativeProcessDiagnosticGroupTitle(asset: CreativeOrderDiagnosticAsset, adjustment: CreativeDirectAdjustmentContext | null): string {
   if (creativeDiagnosticAssetReusedForAdjustment(asset)) return "沿用上一版过程图";
+  if (asset.workflow === "qc_visual_rework") return "视觉质检返工触发图";
   if (adjustment?.targetSize && asset.size_key === adjustment.targetSize) return "本次调整过程图";
   if (asset.workflow === "brand_components") return "品牌贴片合成图";
   if (asset.workflow === "creative_production") return "成图生成过程图";
@@ -730,8 +731,9 @@ function creativeProcessDiagnosticGroupRank(title: string): number {
     "本次调整过程图": 0,
     "品牌贴片合成图": 1,
     "成图生成过程图": 2,
-    "沿用上一版过程图": 3,
-    "其他过程图": 4,
+    "视觉质检返工触发图": 3,
+    "沿用上一版过程图": 4,
+    "其他过程图": 5,
   } as Record<string, number>)[title] ?? 9;
 }
 
@@ -747,11 +749,13 @@ function creativeProcessLabelRank(label: string): number {
     "模型原图": 1,
     "规范化底图": 2,
     "Prime 合成成图": 3,
+    "视觉质检失败触发图": 4,
   } as Record<string, number>)[label] ?? 9;
 }
 
 function creativeDiagnosticAssetRole(asset: CreativeOrderDiagnosticAsset, adjustment: CreativeDirectAdjustmentContext | null): string {
   if (creativeDiagnosticAssetReusedForAdjustment(asset)) return "沿用上一版";
+  if (asset.label === "视觉质检失败触发图") return "失败贴片成图";
   if (asset.label === "Prime context") return adjustment?.targetSize === asset.size_key ? "调整前上下文" : "成图上下文";
   if (asset.label === "模型原图") return adjustment?.targetSize === asset.size_key ? "模型改图回图" : "模型原图";
   if (asset.label === "规范化底图") return adjustment?.targetSize === asset.size_key ? "规范化后改图" : "规范化底图";
@@ -832,7 +836,7 @@ function creativeVariantWorkflowLabel(workflow: string): string {
     creative_plan: "创意方案",
     creative_production: "成图生成",
     brand_components: "品牌组件合成",
-    creative_qc_technical: "技术质检",
+    creative_qc_technical: "质检",
     creative_qc_visual: "视觉质检",
     creative_direct_edit: "图片调整",
   } as Record<string, string>)[workflow] || "";
@@ -854,13 +858,13 @@ export type CreativeVariantQCDetail = {
 
 export function creativeVariantQCDetails(variant: CreativeOrderVariant): CreativeVariantQCDetail[] {
   const reports = currentCreativeVariantQCReports(variant);
-  return (["technical", "visual"] as const).flatMap((lane) => {
+  return (["visual"] as const).flatMap((lane) => {
     const report = reports.get(lane);
     if (!report) return [];
     const blockingFailures = creativeVariantQCBlockingFailures(variant, lane, report);
     return [{
       lane,
-      label: lane === "technical" ? "技术质检" : "视觉质检",
+      label: "视觉质检",
       status: blockingFailures.length > 0 ? "failed" : report.status,
       blockingFailures,
       qualityWarnings: qcFindingMessages(report.findings?.quality_warnings),
@@ -947,7 +951,6 @@ export function creativeVariantAdoptionReadiness(variant: CreativeOrderVariant):
   const delivered = creativeVariantDeliveryAssets(variant);
   const primedSizes = currentCreativeVariantSizeSet(variant, "primed");
   const reportByLane = new Map(creativeVariantQCDetails(variant).map((detail) => [detail.lane, detail.status]));
-  const technical = reportByLane.get("technical") ?? "pending";
   const visual = reportByLane.get("visual") ?? "pending";
   const failedQC = creativeVariantFailedQCLabels(variant);
   if (creativeVariantUsesDirectEditNoQC(variant) && variant.status === "completed" && delivered.length === CREATIVE_DELIVERY_SIZES.length) {
@@ -962,16 +965,16 @@ export function creativeVariantAdoptionReadiness(variant: CreativeOrderVariant):
     if (risk.allowed) return { ready: true, status: "可查看并采用当前成图" };
     return { ready: false, status: risk.status };
   }
-  if (delivered.length === CREATIVE_DELIVERY_SIZES.length && primedSizes.size === CREATIVE_DELIVERY_SIZES.length && qcStatusAllowsAdoption(technical) && qcStatusAllowsAdoption(visual)) {
+  if (delivered.length === CREATIVE_DELIVERY_SIZES.length && primedSizes.size === CREATIVE_DELIVERY_SIZES.length && qcStatusAllowsAdoption(visual)) {
     return { ready: true, status: "三尺寸、品牌组件与质检均已完成，可以采用" };
   }
   const productionStopDetail = creativeVariantProductionStopDetail(variant);
   if (productionStopDetail) return { ready: false, status: "未完成，可查看过程或重试" };
   if (creativeVariantHasBackgroundWorkInProgress(variant)) {
     if (primedSizes.size !== CREATIVE_DELIVERY_SIZES.length) return { ready: false, status: `成图已完成，正在合成品牌组件：已完成 ${primedSizes.size}/${CREATIVE_DELIVERY_SIZES.length} 个尺寸` };
-    if (!qcStatusAllowsAdoption(technical) || !qcStatusAllowsAdoption(visual)) return { ready: false, status: `品牌组件已完成，等待质检：${creativeVariantPendingQCLabels(technical, visual).join("、")}` };
+    if (!qcStatusAllowsAdoption(visual)) return { ready: false, status: `品牌组件已完成，等待质检：${creativeVariantPendingQCLabels(visual).join("、")}` };
   }
-  if (!qcStatusAllowsAdoption(technical) || !qcStatusAllowsAdoption(visual)) return { ready: false, status: `等待质检：${creativeVariantPendingQCLabels(technical, visual).join("、")}` };
+  if (!qcStatusAllowsAdoption(visual)) return { ready: false, status: `等待质检：${creativeVariantPendingQCLabels(visual).join("、")}` };
   if (primedSizes.size !== CREATIVE_DELIVERY_SIZES.length) return { ready: false, status: `等待品牌组件合成：已完成 ${primedSizes.size}/${CREATIVE_DELIVERY_SIZES.length} 个尺寸` };
   if (delivered.length !== CREATIVE_DELIVERY_SIZES.length) return { ready: false, status: `等待正式交付：已完成 ${delivered.length}/${CREATIVE_DELIVERY_SIZES.length} 个尺寸` };
   if (variant.action_required?.detail) return { ready: false, status: "可查看现有结果或继续标注" };
@@ -1020,9 +1023,8 @@ function creativeVariantHasBackgroundWorkInProgress(variant: CreativeOrderVarian
   const primedSizes = currentCreativeVariantSizeSet(variant, "primed");
   if (generatedSizes.size === CREATIVE_DELIVERY_SIZES.length && primedSizes.size !== CREATIVE_DELIVERY_SIZES.length) return true;
   const reportByLane = new Map(creativeVariantQCDetails(variant).map((detail) => [detail.lane, detail.status]));
-  const technical = reportByLane.get("technical") ?? "pending";
   const visual = reportByLane.get("visual") ?? "pending";
-  if (primedSizes.size === CREATIVE_DELIVERY_SIZES.length && (!qcStatusAllowsAdoption(technical) || !qcStatusAllowsAdoption(visual))) return true;
+  if (primedSizes.size === CREATIVE_DELIVERY_SIZES.length && !qcStatusAllowsAdoption(visual)) return true;
   if (!pendingQCFinalize) return false;
   const deliveredSizes = new Set(creativeVariantDeliveryAssets(variant).map((asset) => asset.size_key));
   if (deliveredSizes.size === CREATIVE_DELIVERY_SIZES.length) return false;
@@ -1033,14 +1035,12 @@ function creativeVariantHasCompletePassingDelivery(variant: CreativeOrderVariant
   const delivered = creativeVariantDeliveryAssets(variant);
   const primedSizes = currentCreativeVariantSizeSet(variant, "primed");
   const reportByLane = new Map(creativeVariantQCDetails(variant).map((detail) => [detail.lane, detail.status]));
-  const technical = reportByLane.get("technical") ?? "pending";
   const visual = reportByLane.get("visual") ?? "pending";
   if (creativeVariantUsesDirectEditNoQC(variant)) {
     return delivered.length === CREATIVE_DELIVERY_SIZES.length && variant.status === "completed";
   }
   return delivered.length === CREATIVE_DELIVERY_SIZES.length
     && primedSizes.size === CREATIVE_DELIVERY_SIZES.length
-    && qcStatusAllowsAdoption(technical)
     && qcStatusAllowsAdoption(visual);
 }
 
@@ -1067,9 +1067,8 @@ function creativeVariantFailedQCLabels(variant: CreativeOrderVariant): string[] 
     .map((detail) => detail.label);
 }
 
-function creativeVariantPendingQCLabels(technical: string, visual: string): string[] {
+function creativeVariantPendingQCLabels(visual: string): string[] {
   const labels: string[] = [];
-  if (!qcStatusAllowsAdoption(technical)) labels.push(`技术质检${qcStatusLabel(technical)}`);
   if (!qcStatusAllowsAdoption(visual)) labels.push(`视觉质检${qcStatusLabel(visual)}`);
   return labels.length > 0 ? labels : ["质检结果同步中"];
 }
@@ -1153,9 +1152,7 @@ function creativeVariantQCBlockingFailures(variant: CreativeOrderVariant, lane: 
     if (blockerDetail && !isPendingQCSyncMessage(blockerDetail)) return [blockerDetail];
   }
 
-  return [lane === "technical"
-    ? "技术质检没有同步具体失败明细；请人工复核文件完整性、品牌组件和渠道要求。"
-    : "视觉质检没有同步具体失败明细；请人工复核文字可读性、遮挡、数值一致性和整体画面质量。"];
+  return ["视觉质检没有同步具体失败明细；请人工复核文字可读性、遮挡、数值一致性和整体画面质量。"];
 }
 
 function qcFindingMessages(value: unknown): string[] {
@@ -1194,7 +1191,7 @@ function businessQCMessage(message: string): string {
   if (!text) return "";
   const mappedCode = businessQCCodeMessage(text);
   if (mappedCode) return mappedCode;
-  if (/qc-finalize|technical lane|visual lane/i.test(text) && /pending|尚未完成|未完成|not complete|not completed/i.test(text) && !/failed|失败|质检未通过/i.test(text)) return "质检仍在同步中，等待另一条质检完成";
+  if (/qc-finalize|technical lane|visual lane/i.test(text) && /pending|尚未完成|未完成|not complete|not completed/i.test(text) && !/failed|失败|质检未通过/i.test(text)) return "视觉质检仍在同步中";
   if (/qc-finalize|technical lane|visual lane|action_required|failed/i.test(text)) return "质检未通过，需要人工确认当前成图是否可用";
   return text;
 }

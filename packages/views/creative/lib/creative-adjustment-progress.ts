@@ -55,13 +55,13 @@ export function creativeAdjustmentTimeline(variant: CreativeOrderVariant | undef
   const expectedSizes = adjustmentExpectedSizes(event);
   const generated = new Set(variant?.assets.filter((asset) => asset.revision === currentRevision && asset.stage === "generated" && asset.status === "completed" && expectedSizes.includes(asset.size_key)).map((asset) => asset.size_key) ?? []).size;
   const primed = new Set(variant?.assets.filter((asset) => asset.revision === currentRevision && ["primed", "delivered"].includes(asset.stage) && asset.status === "completed" && expectedSizes.includes(asset.size_key)).map((asset) => asset.size_key) ?? []).size;
-  const qcReports = variant?.qc_reports.filter((report) => report.revision === currentRevision && ["technical", "visual"].includes(report.lane)) ?? [];
+  const qcReports = variant?.qc_reports.filter((report) => report.revision === currentRevision && report.lane === "visual") ?? [];
   const directEditNoQC = Boolean(variant?.brief?.creative_direct_edit_delivery && typeof variant.brief.creative_direct_edit_delivery === "object" && !Array.isArray(variant.brief.creative_direct_edit_delivery) && (variant.brief.creative_direct_edit_delivery as { skip_qc?: unknown }).skip_qc === true);
-  const qcDone = directEditNoQC || ["technical", "visual"].every((lane) => qcReports.some((report) => report.lane === lane && ["passed", "warning"].includes(report.status)));
+  const qcDone = directEditNoQC || qcReports.some((report) => ["passed", "warning"].includes(report.status));
   const completed = variant?.status === "completed";
   const done = { submitted: true, planned: revisionStarted, generated: generated >= expectedSizes.length, primed: primed >= expectedSizes.length, qc: qcDone, completed };
   const order: CreativeAdjustmentStep["key"][] = ["submitted", "planned", "generated", "primed", "qc", "completed"];
-  const labels: Record<CreativeAdjustmentStep["key"], string> = { submitted: "已提交", planned: "精准调整", generated: expectedSizes.length === 1 ? "当前尺寸生成" : "三尺寸生成", primed: "品牌组件合成", qc: directEditNoQC ? "跳过质检" : "双路 QC", completed: "完成" };
+  const labels: Record<CreativeAdjustmentStep["key"], string> = { submitted: "已提交", planned: "精准调整", generated: expectedSizes.length === 1 ? "当前尺寸生成" : "三尺寸生成", primed: "品牌组件合成", qc: directEditNoQC ? "跳过质检" : "视觉质检", completed: "完成" };
   const firstPending = order.find((key) => !done[key]);
   return order.map((key) => ({
     key,
