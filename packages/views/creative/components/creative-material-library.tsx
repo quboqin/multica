@@ -2,7 +2,7 @@
 
 import { cloneElement, useDeferredValue, useEffect, useId, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, ArrowLeft, BookOpenText, Check, Download, ExternalLink, ImageIcon, LoaderCircle, Pencil, Plus, RefreshCw, RotateCcw, Search, Sparkles, Upload, X } from "lucide-react";
+import { AlertTriangle, ArrowLeft, BookOpenText, Bot, Check, Download, ExternalLink, ImageIcon, LoaderCircle, Pencil, Plus, RefreshCw, RotateCcw, Search, Sparkles, Upload, X } from "lucide-react";
 import { api } from "@multica/core/api";
 import {
   creativeFeedbackOptions,
@@ -18,15 +18,17 @@ import {
 import { useWorkspaceId } from "@multica/core/hooks";
 import { useFileUpload } from "@multica/core/hooks/use-file-upload";
 import { resolvePublicFileUrl } from "@multica/core/workspace/avatar-url";
-import { squadListOptions } from "@multica/core/workspace/queries";
-import type { CreateCreativeFeedbackRequest, CreateCreativeOrderRequest, CreativeCopySnapshot, CreativeMaterialCandidate, CreativeMaterialCrawlRun, CreativeMaterialImportResult, CreativeMaterialLibraryQuery, CreativeRepaymentPlanEntry, CreativeResource, CreativeSourceAnalysis, SquadMember, CreativeVisualDirection } from "@multica/core/types";
+import { agentListOptions, skillListOptions, squadListOptions, workspaceKeys } from "@multica/core/workspace/queries";
+import type { Agent, CreateCreativeFeedbackRequest, CreateCreativeOrderRequest, CreativeCopySnapshot, CreativeMaterialCandidate, CreativeMaterialCrawlRun, CreativeMaterialImportResult, CreativeMaterialLibraryQuery, CreativeRepaymentPlanEntry, CreativeResource, CreativeSourceAnalysis, SkillSummary, Squad, SquadMember, CreativeVisualDirection } from "@multica/core/types";
 import { Badge } from "@multica/ui/components/ui/badge";
 import { Button, buttonVariants } from "@multica/ui/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@multica/ui/components/ui/dialog";
 import { Input } from "@multica/ui/components/ui/input";
 import { Label } from "@multica/ui/components/ui/label";
 import { NativeSelect, NativeSelectOption } from "@multica/ui/components/ui/native-select";
+import { Switch } from "@multica/ui/components/ui/switch";
 import { Textarea } from "@multica/ui/components/ui/textarea";
+import { cn } from "@multica/ui/lib/utils";
 import { toast } from "sonner";
 import { candidateDecisionFeedbackInput, latestCandidateFeedback } from "../lib/creative-candidate-feedback";
 import { formatCreativeDateTime } from "../lib/creative-time";
@@ -117,6 +119,7 @@ export function CreativeMaterialLibrary({
 } = {}) {
   const wsId = useWorkspaceId();
   const queryClient = useQueryClient();
+  const squads = useQuery(squadListOptions(wsId));
   const [query, setQuery] = useState("");
   const [competitor, setCompetitor] = useState("");
   const [area, setArea] = useState("");
@@ -276,6 +279,8 @@ export function CreativeMaterialLibrary({
     () => [...(materialBatches.data?.crawl_runs ?? [])].sort(compareMaterialCrawlRuns),
     [materialBatches.data?.crawl_runs],
   );
+  const availableSquads = squads.data ?? [];
+  const selectedSquad = availableSquads.length === 1 ? availableSquads[0] : undefined;
   const activeCrawlRun = crawlRuns.find((run) => run.id === runId);
   const toggleSelection = (candidate: CreativeMaterialCandidate) => {
     setSelectedCandidatesById((current) => {
@@ -304,6 +309,12 @@ export function CreativeMaterialLibrary({
         <Button size="sm" onClick={() => setImportOpen(true)}><Plus className="h-4 w-4" />导入素材</Button>
       </div>
     </div>
+    <CreativeImageEditPoolPanel
+      squad={selectedSquad}
+      squadCount={availableSquads.length}
+      loading={squads.isLoading}
+      className="mb-4"
+    />
     <div className="grid min-w-0 gap-4 lg:grid-cols-[260px_minmax(0,1fr)]">
       <MaterialBatchSidebar runs={crawlRuns} activeRunId={runId} onSelect={selectRun} />
       <div className="min-w-0">
@@ -849,6 +860,177 @@ export function creativeMaterialAnalysisReadiness(
   };
 }
 
+function CreativeImageEditPoolPanel({ squad, squadCount, loading = false, className }: { squad?: Squad; squadCount: number; loading?: boolean; className?: string }) {
+  const wsId = useWorkspaceId();
+  const queryClient = useQueryClient();
+  const agents = useQuery(agentListOptions(wsId));
+  const skills = useQuery(skillListOptions(wsId));
+  const squadMembers = useQuery({
+    queryKey: ["workspaces", wsId, "squads", squad?.id ?? "", "members"],
+    queryFn: () => api.listSquadMembers(squad!.id),
+    enabled: !!wsId && !!squad?.id,
+  });
+  const [query, setQuery] = useState("");
+  const [pendingAgentId, setPendingAgentId] = useState("");
+  const imageEditSkill = useMemo(() => (skills.data ?? []).find((skill) => isCreativeRoleSkill(skill, "image_edit")), [skills.data]);
+  const memberIds = useMemo(() => new Set((squadMembers.data ?? []).filter((member) => member.member_type === "agent").map((member) => member.member_id)), [squadMembers.data]);
+  const allAgentRows = useMemo(() => {
+    const skillId = imageEditSkill?.id ?? "";
+    return (agents.data ?? [])
+      .filter((agent) => {
+        const inSquad = memberIds.has(agent.id);
+        const hasSkill = skillId ? agent.skills.some((skill) => skill.id === skillId) : false;
+        if (agent.archived_at && !inSquad && !hasSkill) return false;
+        return true;
+      })
+      .sort((left, right) => compareImageEditPoolAgents(left, right, memberIds, skillId));
+  }, [agents.data, imageEditSkill?.id, memberIds]);
+  const agentRows = useMemo(() => {
+    const needle = query.trim().toLocaleLowerCase();
+    if (!needle) return allAgentRows;
+    return allAgentRows.filter((agent) => [agent.name, agent.description, agent.id, ...agent.skills.map((skill) => skill.name)]
+      .join(" ")
+      .toLocaleLowerCase()
+      .includes(needle));
+  }, [allAgentRows, query]);
+  const readyCount = allAgentRows.filter((agent) => imageEditPoolReady(agent, memberIds, imageEditSkill?.id ?? "")).length;
+  const configuredCount = allAgentRows.filter((agent) => imageEditPoolConfigured(agent, memberIds, imageEditSkill?.id ?? "")).length;
+
+  const invalidatePoolQueries = async () => {
+    await Promise.all([
+      queryClient.invalidateQueries({ queryKey: workspaceKeys.agents(wsId) }),
+      queryClient.invalidateQueries({ queryKey: workspaceKeys.squads(wsId) }),
+    ]);
+  };
+
+  const togglePool = async (agent: Agent, checked: boolean) => {
+    if (!squad || !imageEditSkill || pendingAgentId) return;
+    setPendingAgentId(agent.id);
+    try {
+      if (checked) {
+        if (!memberIds.has(agent.id)) {
+          await api.addSquadMember(squad.id, { member_type: "agent", member_id: agent.id, role: "出图" });
+        }
+        await api.addAgentSkills(agent.id, { skill_ids: [imageEditSkill.id] });
+        toast.success(`${agent.name} 已加入出图池`);
+      } else {
+        const currentSkills = await api.listAgentSkills(agent.id);
+        await api.setAgentSkills(agent.id, {
+          skill_ids: currentSkills.filter((skill) => skill.id !== imageEditSkill.id).map((skill) => skill.id),
+        });
+        toast.success(`${agent.name} 已从出图池移出`);
+      }
+      await invalidatePoolQueries();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "出图池更新失败");
+    } finally {
+      setPendingAgentId("");
+    }
+  };
+
+  return <section className={cn("min-w-0 border bg-background", className)} aria-label="出图池">
+    <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3">
+      <div className="flex min-w-0 items-center gap-2">
+        <Bot className="h-4 w-4 shrink-0 text-muted-foreground" />
+        <div className="min-w-0">
+          <div className="text-sm font-semibold">出图池</div>
+          <div className="truncate text-xs text-muted-foreground">{squad ? squad.name : loading ? "正在加载执行服务" : "未确定执行服务"}</div>
+        </div>
+      </div>
+      <div className="flex flex-wrap items-center gap-2">
+        <Badge variant={readyCount > 0 ? "default" : "outline"}>可出图 {readyCount}</Badge>
+        <Badge variant="outline">已配置 {configuredCount}</Badge>
+      </div>
+    </div>
+    {!squad ? (
+      <div className="border-t px-4 py-3 text-xs text-muted-foreground">
+        {loading ? "正在加载 Squad" : squadCount === 0 ? "当前工作区尚未配置执行服务" : `当前工作区有 ${squadCount} 个 Squad，暂时无法确定创意执行服务`}
+      </div>
+    ) : !imageEditSkill && skills.isLoading ? (
+      <div className="border-t px-4 py-3 text-xs text-muted-foreground">正在加载出图 Skill</div>
+    ) : !imageEditSkill ? (
+      <div className="border-t px-4 py-3 text-xs text-destructive">未找到素材_技能_出图，无法配置出图池。</div>
+    ) : (
+      <div className="border-t px-4 pb-3 pt-3">
+        <div className="relative">
+          <Search className="pointer-events-none absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+          <Input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索智能体" className="pl-8" />
+        </div>
+        <div className="mt-3 grid max-h-80 min-w-0 gap-2 overflow-y-auto pr-1 md:grid-cols-2 xl:grid-cols-3">
+          {agentRows.length === 0 ? (
+            <div className="border border-dashed px-3 py-6 text-center text-xs text-muted-foreground md:col-span-2 xl:col-span-3">{agents.isLoading || squadMembers.isLoading ? "正在加载智能体" : "没有可配置的智能体"}</div>
+          ) : agentRows.map((agent) => {
+            const inSquad = memberIds.has(agent.id);
+            const hasSkill = agent.skills.some((skill) => skill.id === imageEditSkill.id);
+            const configured = inSquad && hasSkill;
+            const ready = configured && imageEditAgentOnline(agent);
+            const pending = pendingAgentId === agent.id;
+            return <div key={agent.id} className={cn("flex min-w-0 items-center gap-3 border px-3 py-2", configured && "border-emerald-300 bg-emerald-50/40 dark:border-emerald-900 dark:bg-emerald-950/20")}>
+              <div className="min-w-0 flex-1">
+                <div className="flex min-w-0 items-center gap-2">
+                  <span className={cn("h-2 w-2 shrink-0 rounded-full", ready ? "bg-emerald-600" : imageEditAgentOnline(agent) ? "bg-amber-500" : "bg-muted-foreground/40")} />
+                  <span className="truncate text-sm font-medium">{agent.name}</span>
+                  <span className="shrink-0 font-mono text-[10px] text-muted-foreground">{agent.id.slice(0, 8)}</span>
+                </div>
+                <div className="mt-1 flex min-w-0 flex-wrap gap-1">
+                  <Badge variant={inSquad ? "secondary" : "outline"} className="text-[10px]">{inSquad ? "Squad" : "未入 Squad"}</Badge>
+                  <Badge variant={hasSkill ? "secondary" : "outline"} className="text-[10px]">{hasSkill ? "出图 Skill" : "缺 Skill"}</Badge>
+                  <Badge variant={ready ? "default" : "outline"} className="text-[10px]">{imageEditAgentStatusLabel(agent)}</Badge>
+                </div>
+              </div>
+              <Switch
+                size="sm"
+                checked={configured}
+                disabled={Boolean(agent.archived_at) || pending || Boolean(pendingAgentId && !pending)}
+                onCheckedChange={(checked) => void togglePool(agent, checked)}
+                aria-label={`设置 ${agent.name} 出图池`}
+              />
+            </div>;
+          })}
+        </div>
+      </div>
+    )}
+  </section>;
+}
+
+function isCreativeRoleSkill(skill: SkillSummary, capability: string): boolean {
+  return skill.config?.kind === "creative_role" && skill.config?.capability === capability;
+}
+
+function imageEditPoolConfigured(agent: Agent, memberIds: Set<string>, skillId: string): boolean {
+  return Boolean(skillId && memberIds.has(agent.id) && agent.skills.some((skill) => skill.id === skillId));
+}
+
+function imageEditPoolReady(agent: Agent, memberIds: Set<string>, skillId: string): boolean {
+  return imageEditPoolConfigured(agent, memberIds, skillId) && imageEditAgentOnline(agent);
+}
+
+function imageEditAgentOnline(agent: Agent): boolean {
+  return !agent.archived_at && Boolean(agent.runtime_id) && agent.status !== "offline";
+}
+
+function imageEditAgentStatusLabel(agent: Agent): string {
+  if (agent.archived_at) return "已归档";
+  if (!agent.runtime_id || agent.status === "offline") return "离线";
+  if (agent.status === "working") return "工作中";
+  if (agent.status === "blocked") return "阻塞";
+  if (agent.status === "error") return "异常";
+  return "可出图";
+}
+
+function compareImageEditPoolAgents(left: Agent, right: Agent, memberIds: Set<string>, skillId: string): number {
+  const leftReady = imageEditPoolReady(left, memberIds, skillId);
+  const rightReady = imageEditPoolReady(right, memberIds, skillId);
+  if (leftReady !== rightReady) return leftReady ? -1 : 1;
+  const leftConfigured = imageEditPoolConfigured(left, memberIds, skillId);
+  const rightConfigured = imageEditPoolConfigured(right, memberIds, skillId);
+  if (leftConfigured !== rightConfigured) return leftConfigured ? -1 : 1;
+  const leftOnline = imageEditAgentOnline(left);
+  const rightOnline = imageEditAgentOnline(right);
+  if (leftOnline !== rightOnline) return leftOnline ? -1 : 1;
+  return left.name.localeCompare(right.name, "zh-Hans");
+}
+
 function CreativeOrderDraft({ candidates, analyses, deselecting, onDeselect, onClose, onDone, onOpenCopyLibrary, onRetrySourceAnalysis, retryingSourceAnalysis = false }: { candidates: CreativeMaterialCandidate[]; analyses: CreativeSourceAnalysis[]; deselecting: boolean; onDeselect: (candidateId: string) => void; onClose: () => void; onDone: (orderId: string) => void; onOpenCopyLibrary?: () => void; onRetrySourceAnalysis: (candidateId: string) => void; retryingSourceAnalysis?: boolean }) {
   const wsId = useWorkspaceId();
   const queryClient = useQueryClient();
@@ -1152,6 +1334,7 @@ function CreativeOrderDraft({ candidates, analyses, deselecting, onDeselect, onC
       <div className="min-w-0"><h3 id="creative-order-draft-title" className="text-sm font-semibold">批量确认文案</h3><p className="mt-1 text-xs text-muted-foreground">确认画面文案后，会一次提交这批素材出图。</p></div>
       <div className="flex min-w-0 flex-wrap items-center justify-end gap-2"><Badge variant="outline" className="max-w-full truncate">{marketPack ? marketPack.name : "市场规则未配置"}</Badge>{selectedSquad && <Badge variant="outline" className="max-w-full truncate">{selectedSquad.name}</Badge>}<Badge variant="outline">可提交 {candidates.length - unconfiguredCandidates.length}/{candidates.length}</Badge><Badge>{candidates.length} 张素材</Badge><Button size="sm" variant="outline" onClick={onClose}><ArrowLeft className="h-4 w-4" />返回素材库</Button></div>
     </div>
+    <CreativeImageEditPoolPanel squad={selectedSquad} squadCount={availableSquads.length} loading={squads.isLoading} className="border-x-0 border-t-0" />
     <SelectedMaterialStrip candidates={candidates} activeCandidateId={activeCandidate?.id ?? ""} readinessByCandidateId={readinessByCandidateId} deselecting={deselecting} onSelect={setActiveCandidateId} onDeselect={onDeselect} />
     {activeCandidate && <article key={activeCandidate.id} className="min-w-0 space-y-4 p-4" data-testid="creative-order-active-editor" data-candidate-id={activeCandidate.id}>
       <div className="min-w-0 border-b border-l-2 border-emerald-600 pb-4 pl-3"><div className="flex flex-wrap items-center gap-2"><Sparkles className="h-4 w-4 text-emerald-700" /><p className="break-words text-sm font-medium">{activeAnalysis?.summary || "素材分析中"}</p><span className="font-mono text-[10px] text-muted-foreground">素材 ID {activeCandidate.id.slice(0, 8)}</span></div>{activeAnalysis && <AnalysisHighlights analysis={activeAnalysis} adaptation={activePreAdaptation} />}{activePreAdaptation ? <PreAdaptationSummary adaptation={activePreAdaptation} /> : activeReadiness === "analyzing" ? <p className="mt-2 text-xs text-amber-700">{MATERIAL_ANALYSIS_RUNNING_MESSAGE}</p> : <p className="mt-2 text-xs text-destructive">素材分析未完成，暂时不能提交出图。</p>}</div>
