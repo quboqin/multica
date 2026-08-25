@@ -2012,6 +2012,7 @@ WHERE (
               OR finding->>'code' LIKE 'prime_layout_contract_%'
               OR finding->>'code' LIKE 'qc_batch_%'
               OR finding->>'code' LIKE 'attachment_download_%'
+              OR finding->>'code' LIKE 'visual_inspection_%'
           )
           OR report.findings->>'failure_code' LIKE 'delegation_contract_%'
           OR report.findings->>'failure_code' LIKE 'prompt_contract_%'
@@ -2019,6 +2020,7 @@ WHERE (
           OR report.findings->>'failure_code' LIKE 'prime_layout_contract_%'
           OR report.findings->>'failure_code' LIKE 'qc_batch_%'
           OR report.findings->>'failure_code' LIKE 'attachment_download_%'
+          OR report.findings->>'failure_code' LIKE 'visual_inspection_%'
         )
     )
   )

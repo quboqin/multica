@@ -2477,6 +2477,20 @@ WHERE variant_id = $1 AND lane = 'visual'
 	if len(ids) != 1 || ids[0] != legacyTasks["technical"] {
 		t.Fatalf("quality failure was incorrectly recoverable: %#v", ids)
 	}
+	if _, err := testPool.Exec(t.Context(), `
+UPDATE creative_order_qc_report
+SET findings = '{"blocking_failures":[{"code":"visual_inspection_model_unconfigured"}]}'::jsonb
+WHERE variant_id = $1 AND lane = 'visual'
+`, variantID); err != nil {
+		t.Fatal(err)
+	}
+	ids, err = creativeRecoverableQCTaskIDs(t.Context(), tx, parseUUID(orderID), parseUUID(variantID), 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ids) != 2 || !slices.Contains(ids, legacyTasks["technical"]) || !slices.Contains(ids, legacyTasks["visual"]) {
+		t.Fatalf("legacy visual inspection system failure ids = %#v, want both lanes %#v", ids, legacyTasks)
+	}
 
 	var currentVariantID string
 	if err := testPool.QueryRow(t.Context(), `
