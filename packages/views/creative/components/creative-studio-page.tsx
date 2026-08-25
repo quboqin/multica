@@ -8,6 +8,7 @@ import {
   Archive,
   BarChart3,
   BookOpenText,
+  Bot,
   Check,
   CircleStop,
   Globe2,
@@ -35,12 +36,14 @@ import {
 import { useWorkspaceId } from "@multica/core/hooks";
 import { useWorkspacePaths } from "@multica/core/paths";
 import {
+  agentListOptions,
   workspaceCapabilitiesOptions,
   workspaceCapabilityKeys,
 } from "@multica/core/workspace/queries";
 import { attachmentDownloadPath } from "@multica/core/types";
 import { resolvePublicFileUrl } from "@multica/core/workspace/avatar-url";
 import type {
+  Agent,
   CreativeOrder,
   CreativeOrderAsset,
   CreativeOrderItem,
@@ -418,6 +421,7 @@ function CreativeOrderDetail({ orderId, onBack, onBrowseOrders, backLabel }: { o
     ...creativeOrderOptions(wsId, orderId),
     refetchInterval: (query) => query.state.data?.items.some((item) => item.variants.some((variant) => ["queued", "running"].includes(variant.status))) ? 5000 : false,
   });
+  const agents = useQuery(agentListOptions(wsId));
   const feedback = useQuery(creativeFeedbackOptions(wsId, "asset"));
   const library = useQuery(creativeMaterialLibraryOptions(wsId));
   const adoptVariant = useAdoptCreativeOrderVariant(wsId, orderId);
@@ -427,6 +431,7 @@ function CreativeOrderDetail({ orderId, onBack, onBrowseOrders, backLabel }: { o
   const ids = [...new Set(assets.map((asset) => asset.attachment_id).filter(Boolean))];
   const attachments = useQuery({ queryKey: ["creative", wsId, "order-attachments", orderId, ids], queryFn: () => Promise.all(ids.map((id) => api.getAttachment(id))), enabled: ids.length > 0 });
   const byId = new Map((attachments.data ?? []).map((item) => [item.id, item]));
+  const agentById = useMemo(() => new Map((agents.data ?? []).map((agent) => [agent.id, agent])), [agents.data]);
   const variantOrder = data?.items.flatMap((item) => item.variants.map((variant) => variant.id)) ?? [];
   const reviewAssets = selectCreativeReviewAssets(assets, variantOrder);
   const [activeAssetId, setActiveAssetId] = useState("");
@@ -589,6 +594,7 @@ function CreativeOrderDetail({ orderId, onBack, onBrowseOrders, backLabel }: { o
       <div className="flex items-center gap-2"><Badge variant={stage.key === "review" || stage.key === "attention" || stage.key === "delivered" ? "default" : "outline"}>{stage.label}</Badge>{!isDirectEdit && <Badge variant={adoptionStatus === "已采用" ? "default" : "secondary"}>{adoptionStatus}</Badge>}{data && !["delivered", "cancelled"].includes(stage.key) && <Button size="sm" variant="outline" onClick={() => setCancelOpen(true)}><CircleStop className="h-4 w-4" />结束订单</Button>}</div>
     </div>
     {data && <CreativeOrderStatusPanel order={data} stage={stage} />}
+    {data && <CreativeOrderRoutingPanel order={data} agentById={agentById} />}
     <CreativeOrderJourney stageKey={stage.key} />
     <div className="space-y-4">
       {!isDirectEdit && data?.items.map((item, index) => {
@@ -684,6 +690,106 @@ function CreativeOrderDetail({ orderId, onBack, onBrowseOrders, backLabel }: { o
       </AlertDialogContent>
     </AlertDialog>
   </div>;
+}
+
+type CreativeOrderRoutingAgent = {
+  id: string;
+  name: string;
+  archived: boolean;
+};
+
+type CreativeOrderRoutingRow = {
+  key: string;
+  label: string;
+  capability: "image_edit" | "direct_image_edit";
+  agents: CreativeOrderRoutingAgent[];
+};
+
+function CreativeOrderRoutingPanel({ order, agentById }: { order: CreativeOrder; agentById: Map<string, Agent> }) {
+  const rows = creativeOrderRoutingRows(order, agentById);
+  if (rows.length === 0) return null;
+  return <section className="border bg-background" aria-label="生产路由">
+    <div className="flex flex-wrap items-start gap-3 px-4 py-3">
+      <div className="flex min-w-32 items-center gap-2">
+        <Bot className="h-4 w-4 text-muted-foreground" />
+        <div>
+          <div className="text-sm font-semibold">生产路由</div>
+          <div className="text-xs text-muted-foreground">订单快照</div>
+        </div>
+      </div>
+      <div className="grid min-w-0 flex-1 gap-2 md:grid-cols-2">
+        {rows.map((row) => (
+          <div key={row.key} className="min-w-0 border px-3 py-2">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-xs font-medium">{row.label}</span>
+              <Badge variant="outline" className="font-mono">{row.capability}</Badge>
+              {row.agents.length > 1 && <Badge variant="secondary">{row.agents.length} 个</Badge>}
+            </div>
+            <div className="mt-2 flex min-w-0 flex-wrap gap-1.5">
+              {row.agents.map((agent) => (
+                <span
+                  key={agent.id}
+                  title={agent.id}
+                  className={cn(
+                    "inline-flex max-w-full items-center gap-1 rounded-md border bg-muted/30 px-2 py-1 text-xs",
+                    agent.archived && "text-muted-foreground",
+                  )}
+                >
+                  <span className="truncate">{agent.name}</span>
+                  <span className="shrink-0 font-mono text-[10px] text-muted-foreground">{agent.id.slice(0, 8)}</span>
+                </span>
+              ))}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  </section>;
+}
+
+function creativeOrderRoutingRows(order: CreativeOrder, agentById: Map<string, Agent>): CreativeOrderRoutingRow[] {
+  const squad = recordValue(recordValue(order.input_snapshot).squad_snapshot);
+  const producerIDs = uniqueStrings([
+    ...stringArrayValue(squad.producer_agent_ids),
+    trimmedStringValue(squad.producer_agent_id),
+  ]);
+  const directEditID = trimmedStringValue(squad.direct_edit_agent_id);
+  const rows: CreativeOrderRoutingRow[] = [];
+  if (producerIDs.length > 0 && order.trigger_evidence_kind !== "creative_direct_edit") {
+    rows.push({
+      key: "image_edit",
+      label: producerIDs.length > 1 ? "出图 Agent 池" : "出图 Agent",
+      capability: "image_edit",
+      agents: producerIDs.map((id) => creativeOrderRoutingAgent(id, agentById)),
+    });
+  }
+  if (directEditID) {
+    rows.push({
+      key: "direct_image_edit",
+      label: "直接改图 Agent",
+      capability: "direct_image_edit",
+      agents: [creativeOrderRoutingAgent(directEditID, agentById)],
+    });
+  }
+  return rows;
+}
+
+function creativeOrderRoutingAgent(id: string, agentById: Map<string, Agent>): CreativeOrderRoutingAgent {
+  const agent = agentById.get(id);
+  return {
+    id,
+    name: agent?.name || `Agent ${id.slice(0, 8)}`,
+    archived: Boolean(agent?.archived_at),
+  };
+}
+
+function uniqueStrings(values: string[]): string[] {
+  const seen = new Set<string>();
+  return values.filter((value) => {
+    if (!value || seen.has(value)) return false;
+    seen.add(value);
+    return true;
+  });
 }
 
 function CreativeAdjustmentStatus({ event, variant, issueId, onRetry, retrying = false }: { event: CreateCreativeFeedbackResponse; variant?: CreativeOrderVariant; issueId: string; onRetry: () => Promise<void>; retrying?: boolean }) {

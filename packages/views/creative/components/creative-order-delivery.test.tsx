@@ -61,7 +61,7 @@ function item(adoptedVariantId = ""): CreativeOrderItem {
 }
 
 function qcReport(input: Pick<CreativeOrderQCReport, "id" | "variant_id" | "revision" | "lane" | "status" | "findings" | "updated_at">): CreativeOrderQCReport {
-  return { ...input, trigger_evidence_kind: "creative_order_variant_qc", trigger_evidence_ref_id: input.variant_id, created_at: input.updated_at };
+  return { ...input, attempt: 1, trigger_evidence_kind: "creative_order_variant_qc", trigger_evidence_ref_id: input.variant_id, created_at: input.updated_at };
 }
 
 describe("creative order stage", () => {
