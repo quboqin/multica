@@ -71,7 +71,7 @@ func TestCreativePlatformSkillsUseFrozenBusinessInputs(t *testing.T) {
 		"ad-creative-plan":           {"copy_snapshot", "input_snapshot", "source_analysis", "app_ui_replacement", "app_ui_reference", "resource_file_id", "attachment_id", "只替换手机屏幕内容"},
 		"ad-creative-production":     {"copy_snapshot", "prompt_sha256", "request_id", "Input 3 is the selected AdaKami App UI reference", "app_ui_reference_attachment_id", "multica attachment download", "只替换手机屏幕内容"},
 		"ad-creative-direct-edit":    {"copy_snapshot", "prompt_sha256", "delivery_mode", "即使先前识别错了，也要保留后续手动改写空间", "不要把流程卡死在还款计划选择"},
-		"ad-creative-qc":             {"copy_snapshot", "compose_result", "qc-finalize", "visual-inspect", "view_image", "base64/stdout"},
+		"ad-creative-qc":             {"copy_snapshot", "compose_result", "qc-finalize", "multica attachment download", "view_image", "base64/stdout", "stage=primed", "revision=<context.revision>"},
 		"ad-creative-prime-compose":  {"prime-compose", "creative_prime_backend.go", "does not edit model prompts"},
 	}
 
@@ -91,9 +91,9 @@ func TestCreativePlatformSkillsUseFrozenBusinessInputs(t *testing.T) {
 		"capability = 'image_edit'; version = 92",
 		"app_ui_replacement",
 		"Input 3",
-		"capability = 'quality_control'; version = 33",
-		"multica creative order visual-inspect",
-		"不得调用 view_image",
+		"capability = 'quality_control'; version = 34",
+		"multica attachment download",
+		"用 view_image 查看",
 	} {
 		if !strings.Contains(bootstrap, required) {
 			t.Errorf("bootstrap QC setup must contain %q", required)
@@ -107,9 +107,9 @@ func TestCreativePlatformSkillsUseFrozenBusinessInputs(t *testing.T) {
 		`Capability: "image_edit", Version: 92`,
 		"app_ui_replacement",
 		"Input 3",
-		`Capability: "quality_control", Version: 33`,
-		"multica creative order visual-inspect",
-		"不得调用 view_image",
+		`Capability: "quality_control", Version: 34`,
+		"multica attachment download",
+		"用 view_image 查看",
 	} {
 		if !strings.Contains(installation, required) {
 			t.Errorf("creative factory QC setup must contain %q", required)

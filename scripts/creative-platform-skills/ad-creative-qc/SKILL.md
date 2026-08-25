@@ -36,31 +36,32 @@ python <当前 Skill 目录>/references/qc_batch.py \
   --contact-sheet <contact-sheet.png>
 ```
 
-## Visual 后端检查
+## Visual 原生看图检查
 
-`creative_qc_visual` 不下载图片到 agent workdir，不调用 `view_image`，不把图片转成 base64/stdout，也不运行本地 OCR 或
-`qc_batch.py`。visual lane 只调用后端视觉检查入口，让服务端从 OSS 读取当前 revision 的 primed 成图、生成短时签名 URL、
-调用视觉模型并上传 `visual-inspection.json` 与诊断联系表。
+仅 `creative_qc_visual` 执行本段。visual lane 必须从 `creative order get` 返回的当前 Variant 中筛选
+`revision=<context.revision>`、`stage=primed`、`status=completed` 且 size 属于 `expected_sizes` 的 assets；
+只使用这些 asset 的 `attachment_id`，不得使用历史工作目录、页面预览图、生成前底图、兄弟 Variant 或旧 revision。
+
+为每个 expected size 顺序下载对应的 Prime 成图到当前 task workdir：
 
 ```text
-multica creative order visual-inspect <order-id> \
-  --variant <variant-id> --revision <revision> --output json \
-  > visual-inspection.json
+mkdir -p <visual-inspection-dir>
+multica attachment download <primed-attachment-id> --output-dir <visual-inspection-dir> --output json
 ```
 
-后端返回的 `visual-inspection.json` 就是本 lane 的 QC report：直接写回，不二次改写图片结论，不自行补造 passed。
-若返回 `visual_inspection_model_unconfigured`、`visual_inspection_asset_unavailable`、
-`visual_inspection_signed_url_unavailable` 或 `visual_inspection_model_error`，按返回内容写 failed，
-再调用 `qc-finalize` 归档。
+下载后必须用 `view_image` 查看每张本地 Prime 成图；多尺寸时逐张查看，不把图片转成 base64/stdout，不用 OCR 或
+`qc_batch.py` 代替视觉判断。下载失败、数量缺失、重复尺寸、revision 不符或非图片文件，按证据/附件合同错误写 failed。
+visual lane 自己写 `visual-inspection.json`；报告中的 `checked_assets` 必须列出每个检查过的
+`size_key`、`attachment_id`、本地文件名和主要 observations。
 
 ## Lane 合同
 
 - `technical`：文件、目标尺寸、manifest/compose 对应、完整品牌模板、模板布局契约、四角/底部和 `backdrop_rule`。
-- `visual`：通过后端 `visual-inspect` 对照冻结 `copy_snapshot`、brief 和当前 primed assets 检查批准文案、
-  金融事实、主题、主体、信息层级和画质。generated evidence 的父方向哈希和 compose_result 归属由后端证据包提供；
-  多尺寸时检查同内容族一致性。
+- `visual`：通过 `attachment download` 下载当前 primed assets，并用 `view_image` 对照冻结 `copy_snapshot`、
+  brief 和当前成图检查批准文案、金融事实、主题、主体、信息层级和画质。generated evidence 的父方向哈希和
+  compose_result 归属来自订单证据包；多尺寸时检查同内容族一致性。
 
-visual-inspect 必须按三个闸门验收：文案/组件完整、Prime 合成前后遮挡、官方 Prime 局部可读性。
+visual lane 必须按三个闸门验收：文案/组件完整、Prime 合成前后遮挡、官方 Prime 局部可读性。
 第一闸门检查冻结标题、利益点、金额、表格、CTA 是否全部出现；有边框但没有文字也算失败。第二闸门对照机器证据中的
 `safe_content_frame`、`top_key_content_exclusion_end`、`bottom_key_content_exclusion_start`，确认正文、金额、表格和 CTA 没有进入顶部或底部 Prime 禁区；
 正文被 Prime 实际盖住都算失败。第三闸门逐一放大 Logo、条款和底部组件，必须能看清官方文字，不能用整条带平均颜色代替局部判断。

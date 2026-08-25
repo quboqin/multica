@@ -115,13 +115,6 @@ var creativeOrderPrimeComposeCmd = &cobra.Command{
 	RunE:  runCreativeOrderPrimeCompose,
 }
 
-var creativeOrderVisualInspectCmd = &cobra.Command{
-	Use:   "visual-inspect <order-id>",
-	Short: "Run the backend-owned visual inspection for one variant",
-	Args:  exactArgs(1),
-	RunE:  runCreativeOrderVisualInspect,
-}
-
 var creativeOrderDiagnosticAssetPutCmd = &cobra.Command{
 	Use:   "diagnostic-asset-put <order-id>",
 	Short: "Create or update one process image from an uploaded attachment",
@@ -182,7 +175,6 @@ func init() {
 		creativeOrderVariantPutCmd,
 		creativeOrderAssetPutCmd,
 		creativeOrderPrimeComposeCmd,
-		creativeOrderVisualInspectCmd,
 		creativeOrderDiagnosticAssetPutCmd,
 		creativeOrderQCPutCmd,
 		creativeOrderQCFinalizeCmd,
@@ -207,9 +199,6 @@ func init() {
 	creativeOrderGetCmd.Flags().String("output", "json", "Output format: json")
 	creativeOrderPrimeComposeCmd.Flags().String("variant", "", "Creative Order Variant UUID (required)")
 	creativeOrderPrimeComposeCmd.Flags().String("output", "json", "Output format: json")
-	creativeOrderVisualInspectCmd.Flags().String("variant", "", "Creative Order Variant UUID (required)")
-	creativeOrderVisualInspectCmd.Flags().Int("revision", 1, "Variant revision to inspect")
-	creativeOrderVisualInspectCmd.Flags().String("output", "json", "Output format: json")
 	creativeOrderQCFinalizeCmd.Flags().String("variant", "", "Creative Order Variant UUID (required)")
 	creativeOrderQCFinalizeCmd.Flags().Int("revision", 1, "Variant revision to finalize")
 	creativeOrderQCFinalizeCmd.Flags().String("output", "json", "Output format: json")
@@ -382,25 +371,6 @@ func runCreativeOrderPrimeCompose(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("encode prime composition request: %w", err)
 	}
 	return writeCreativeDomainPayloadWithTimeout(cmd, "/api/creative/orders/"+url.PathEscape(args[0])+"/prime-compose", "POST", payload, 5*time.Minute)
-}
-
-func runCreativeOrderVisualInspect(cmd *cobra.Command, args []string) error {
-	variantID, _ := cmd.Flags().GetString("variant")
-	if strings.TrimSpace(variantID) == "" {
-		return fmt.Errorf("--variant is required")
-	}
-	revision, _ := cmd.Flags().GetInt("revision")
-	if revision < 1 {
-		revision = 1
-	}
-	payload, err := json.Marshal(map[string]any{
-		"variant_id": strings.TrimSpace(variantID),
-		"revision":   revision,
-	})
-	if err != nil {
-		return fmt.Errorf("encode visual inspection request: %w", err)
-	}
-	return writeCreativeDomainPayloadWithTimeout(cmd, "/api/creative/orders/"+url.PathEscape(args[0])+"/visual-inspect", "POST", payload, 5*time.Minute)
 }
 
 func runCreativeOrderDiagnosticAssetPut(cmd *cobra.Command, args []string) error {
