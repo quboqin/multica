@@ -16,6 +16,10 @@ import (
 type creativePrimeComposeRequest struct {
 	VariantID string `json:"variant_id"`
 	Async     bool   `json:"async,omitempty"`
+	// Force is a human-requested Prime-only recomposition. It reuses the
+	// canonical generated bases and frozen template contract, replacing only
+	// the deterministic Prime package before visual QC runs again.
+	Force bool `json:"force,omitempty"`
 }
 
 // ComposeCreativeOrderPrime is the explicit handoff from the bound Prime
@@ -44,7 +48,7 @@ func (h *Handler) ComposeCreativeOrderPrime(w http.ResponseWriter, r *http.Reque
 	}
 	if input.Async {
 		requestContext := context.WithoutCancel(r.Context())
-		go h.runCreativeOrderPrimeComposition(requestContext, workspaceID, orderID, variantID, userID)
+		go h.runCreativeOrderPrimeComposition(requestContext, workspaceID, orderID, variantID, userID, input.Force)
 		writeJSON(w, http.StatusAccepted, map[string]any{
 			"variant_id": uuidToString(variantID),
 			"composed":   false,
@@ -53,7 +57,7 @@ func (h *Handler) ComposeCreativeOrderPrime(w http.ResponseWriter, r *http.Reque
 		})
 		return
 	}
-	composed, err := h.runCreativeOrderPrimeComposition(context.WithoutCancel(r.Context()), workspaceID, orderID, variantID, userID)
+	composed, err := h.runCreativeOrderPrimeComposition(context.WithoutCancel(r.Context()), workspaceID, orderID, variantID, userID, input.Force)
 	if err != nil {
 		var handoffErr *creativeQCHandoffError
 		if errors.As(err, &handoffErr) {
@@ -79,11 +83,11 @@ func (h *Handler) ComposeCreativeOrderPrime(w http.ResponseWriter, r *http.Reque
 	})
 }
 
-func (h *Handler) runCreativeOrderPrimeComposition(ctx context.Context, workspaceID, orderID, variantID, userID pgtype.UUID) (bool, error) {
+func (h *Handler) runCreativeOrderPrimeComposition(ctx context.Context, workspaceID, orderID, variantID, userID pgtype.UUID, force bool) (bool, error) {
 	composeContext, cancel := context.WithTimeout(ctx, 10*time.Minute)
 	defer cancel()
 	defer h.publish(protocol.EventCreativeMaterialsUpdated, uuidToString(workspaceID), "member", uuidToString(userID), map[string]any{"scope": "order", "order_id": uuidToString(orderID)})
-	composed, err := h.composeCreativeOrderVariantPrime(composeContext, workspaceID, orderID, variantID, userID)
+	composed, err := h.composeCreativeOrderVariantPrime(composeContext, workspaceID, orderID, variantID, userID, force)
 	if err != nil {
 		var handoffErr *creativeQCHandoffError
 		if errors.As(err, &handoffErr) {

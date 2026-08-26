@@ -154,6 +154,7 @@ func configuredCreativePrimeComposeConcurrency() int {
 func (h *Handler) composeCreativeOrderVariantPrime(
 	ctx context.Context,
 	workspaceID, orderID, variantID, requestedBy pgtype.UUID,
+	force bool,
 ) (bool, error) {
 	if h.Storage == nil {
 		return false, errors.New("brand component storage is unavailable")
@@ -201,7 +202,7 @@ WHERE variant.id = $1 AND order_row.id = $2 AND order_row.workspace_id = $3
 	if err != nil {
 		return false, err
 	}
-	if primedComplete {
+	if primedComplete && !force {
 		missingProcess, processErr := h.creativePrimeProcessEvidenceMissing(ctx, variantID, revision, expectedSizes)
 		if processErr != nil {
 			return false, processErr

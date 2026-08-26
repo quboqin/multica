@@ -3287,7 +3287,7 @@ WHERE id = $1 AND revision = $2
 	compositionStarted := false
 	composeContext, cancelCompose := context.WithTimeout(context.WithoutCancel(r.Context()), 10*time.Minute)
 	defer cancelCompose()
-	if _, composeErr := h.composeCreativeOrderVariantPrime(composeContext, workspaceID, orderID, variantID, userID); composeErr != nil {
+	if _, composeErr := h.composeCreativeOrderVariantPrime(composeContext, workspaceID, orderID, variantID, userID, false); composeErr != nil {
 		var qcHandoffErr *creativeQCHandoffError
 		if errors.As(composeErr, &qcHandoffErr) {
 			h.markCreativeQCHandoffFailed(composeContext, variantID, qcHandoffErr)
