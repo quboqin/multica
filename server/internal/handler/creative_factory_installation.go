@@ -434,7 +434,7 @@ FOR UPDATE
 	if err != nil {
 		return creativeFactoryInstallationRecord{}, err
 	}
-	if existingErr == nil && existing.Status == "ready" {
+	if existingErr == nil && (existing.Status == "ready" || existing.Status == "needs_setup") {
 		qtx := h.Queries.WithTx(tx)
 		if err := h.syncCreativeFactoryManagedAssets(ctx, tx, qtx, workspaceID, userID, &existing, templates); err != nil {
 			return creativeFactoryInstallationRecord{}, err

@@ -176,7 +176,7 @@ func TestCreativeFactoryImageEditingUsesOneAgentWithWorkflowSkills(t *testing.T)
 	}
 }
 
-func TestInitializeCreativeFactoryRefreshesReadyManagedAssets(t *testing.T) {
+func TestInitializeCreativeFactoryRefreshesNeedsSetupManagedAssets(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("handler test fixture unavailable")
 	}
@@ -221,7 +221,7 @@ RETURNING id::text
 INSERT INTO creative_factory_installation (
   workspace_id, status, schema_version, template_version, runtime_id,
   role_agents, role_skills, config, initialized_by, initialized_at
-) VALUES ($1, 'ready', 1, 5, $2, $3::jsonb, $4::jsonb, '{"template_version":5}'::jsonb, $5, now())
+) VALUES ($1, 'needs_setup', 1, 5, $2, $3::jsonb, $4::jsonb, '{"template_version":5}'::jsonb, $5, now())
 `, testWorkspaceID, testRuntimeID, string(roleAgents), string(roleSkills), testUserID); err != nil {
 		t.Fatalf("seed ready factory installation: %v", err)
 	}
