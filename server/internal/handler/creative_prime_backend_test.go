@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 	"time"
 
@@ -122,5 +123,16 @@ func TestCreativePrimeComposeSlotLimit(t *testing.T) {
 	case <-secondDone:
 	case <-time.After(time.Second):
 		t.Fatal("second compose slot did not finish")
+	}
+}
+
+func TestCreativePrimeSkipsQCHonorsDirectAdjustmentFinalValidation(t *testing.T) {
+	legacy := json.RawMessage(`{"creative_direct_edit_delivery":{"skip_qc":true}}`)
+	if !creativePrimeSkipsQC("creative_direct_edit", legacy, creativeDirectEditDeliveryConfig{}) {
+		t.Fatal("legacy direct edit should retain its explicit QC skip")
+	}
+	validated := json.RawMessage(`{"creative_direct_edit_delivery":{"skip_qc":false,"final_visual_validation":true}}`)
+	if creativePrimeSkipsQC("creative_direct_edit", validated, parseCreativeDirectEditDeliveryConfig(validated)) {
+		t.Fatal("final-validated direct adjustment must enter visual QC")
 	}
 }

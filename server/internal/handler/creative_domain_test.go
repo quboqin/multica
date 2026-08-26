@@ -2958,6 +2958,117 @@ WHERE variant_id = $1 AND revision = 2 AND stage = 'generated'
 	}
 }
 
+func TestQueueCreativeDirectEditVisualReworkKeepsPrimeReferenceReadOnly(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	issueID, candidateID := createCreativeFeedbackCandidate(t, "direct visual rework queue")
+	fixture := createDirectEditSquadFixture(t)
+	inputSnapshot, err := json.Marshal(map[string]any{
+		"squad_snapshot": map[string]string{
+			"squad_id":             fixture.SquadID,
+			"leader_agent_id":      fixture.LeaderAgentID,
+			"producer_agent_id":    fixture.DirectEditorAgentID,
+			"reviewer_agent_id":    fixture.ReviewerAgentID,
+			"direct_edit_agent_id": fixture.DirectEditorAgentID,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var orderID, itemID, variantID string
+	if err := testPool.QueryRow(t.Context(), `
+INSERT INTO creative_order (workspace_id, issue_id, status, input_snapshot, created_by)
+VALUES ($1, $2, 'running', $3::jsonb, $4) RETURNING id::text
+`, testWorkspaceID, issueID, inputSnapshot, testUserID).Scan(&orderID); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _, _ = testPool.Exec(t.Context(), `DELETE FROM creative_order WHERE id = $1`, orderID) })
+	if err := testPool.QueryRow(t.Context(), `
+INSERT INTO creative_order_item (order_id, candidate_id, copy_snapshot)
+VALUES ($1, $2, '{}'::jsonb) RETURNING id::text
+`, orderID, candidateID).Scan(&itemID); err != nil {
+		t.Fatal(err)
+	}
+	if err := testPool.QueryRow(t.Context(), `
+INSERT INTO creative_order_variant (order_item_id, variant_key, revision, brief, status)
+VALUES ($1, 'V01', 1, $2::jsonb, 'running') RETURNING id::text
+`, itemID, `{"creative_direct_edit_delivery":{"final_visual_validation":true,"raw_user_request":"标题和表格都要避开贴片"}}`).Scan(&variantID); err != nil {
+		t.Fatal(err)
+	}
+	for _, size := range standardCreativeAssetSizes {
+		attachmentID := createCreativeFeedbackAsset(t)
+		if _, err := testPool.Exec(t.Context(), `
+INSERT INTO creative_order_asset (variant_id, size_key, revision, stage, attachment_id, metadata, evidence, status)
+VALUES ($1, $2, 1, 'generated', $3, '{}'::jsonb, '{}'::jsonb, 'completed')
+`, variantID, size, attachmentID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	primeAttachmentID := createCreativeFeedbackAsset(t)
+	if _, err := testPool.Exec(t.Context(), `
+INSERT INTO creative_order_asset (variant_id, size_key, revision, stage, attachment_id, metadata, evidence, status)
+VALUES ($1, '1200x628', 1, 'primed', $2, '{}'::jsonb, '{}'::jsonb, 'completed')
+`, variantID, primeAttachmentID); err != nil {
+		t.Fatal(err)
+	}
+	var parentTaskID string
+	if err := testPool.QueryRow(t.Context(), `
+INSERT INTO agent_task_queue (agent_id, runtime_id, issue_id, status, trigger_evidence_kind, trigger_evidence_ref_id, context)
+VALUES ($1, (SELECT runtime_id FROM agent WHERE id = $1), $2, 'running', 'creative_order_variant_qc', $3, $4::jsonb)
+RETURNING id::text
+`, fixture.ReviewerAgentID, issueID, variantID, creativeQCTaskContextForTest(t, orderID, variantID, "visual")).Scan(&parentTaskID); err != nil {
+		t.Fatal(err)
+	}
+	parentTask, err := testHandler.Queries.GetAgentTask(t.Context(), parseUUID(parentTaskID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tx, err := testPool.Begin(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback(t.Context())
+	reworkTask, err := testHandler.queueCreativeVisualModelRework(
+		t.Context(), tx, parseUUID(testWorkspaceID), parseUUID(orderID), parseUUID(itemID), parseUUID(candidateID), parseUUID(variantID), parseUUID(issueID),
+		inputSnapshot, 1, standardCreativeAssetSizes, parentTask,
+		[]creativeVisualModelReworkFinding{{
+			Code: "actual_prime_obstruction", SizeKey: "1200x628",
+			Diagnosis: "1200x628：标题和还款表格 与 bottom Prime content 冲突；期望移动到 safe_content_frame 内 y<=430",
+		}},
+	)
+	if err != nil || !reworkTask.ID.Valid {
+		t.Fatalf("queue direct visual rework = %#v, %v", reworkTask, err)
+	}
+	var contextValue struct {
+		Workflow              string `json:"workflow"`
+		TargetSize            string `json:"target_size"`
+		ReferenceAttachmentID string `json:"reference_attachment_id"`
+		FinalVisualValidation bool   `json:"final_visual_validation"`
+		DirectEdit            struct {
+			ValidationRework json.RawMessage `json:"validation_rework"`
+		} `json:"direct_edit"`
+	}
+	if err := json.Unmarshal(reworkTask.Context, &contextValue); err != nil {
+		t.Fatal(err)
+	}
+	if contextValue.Workflow != "creative_direct_edit" || contextValue.TargetSize != "1200x628" ||
+		contextValue.ReferenceAttachmentID != primeAttachmentID || !contextValue.FinalVisualValidation || len(contextValue.DirectEdit.ValidationRework) == 0 {
+		t.Fatalf("direct visual rework context = %#v", contextValue)
+	}
+	var copiedSizes []string
+	if err := tx.QueryRow(t.Context(), `
+SELECT COALESCE(array_agg(size_key ORDER BY size_key), '{}'::text[])
+FROM creative_order_asset
+WHERE variant_id = $1 AND revision = 2 AND stage = 'generated'
+`, variantID).Scan(&copiedSizes); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(copiedSizes, ",") != "1080x1080,800x1000" {
+		t.Fatalf("direct rework reused generated sizes = %#v", copiedSizes)
+	}
+}
+
 func TestFinalizeCreativeOrderQCAtomicallyDeliversAndFencesReports(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
@@ -3366,6 +3477,25 @@ func TestCreativeDirectEditDeliverySkipsQC(t *testing.T) {
 	}
 	if creativeDirectEditSkipsQC(json.RawMessage(`{"creative_direct_edit_delivery":{"skip_qc":false}}`)) {
 		t.Fatal("direct-edit preview contract must not skip QC implicitly")
+	}
+}
+
+func TestCreativeDirectEditFinalVisualValidationWaitsForPrimeNotDelivery(t *testing.T) {
+	context := creativeDirectEditTaskCompletionContext{
+		DeliveryMode:          "publish",
+		ExpectedSizes:         standardCreativeAssetSizes,
+		FinalVisualValidation: true,
+	}
+	state := creativeDirectEditArtifactState{
+		VariantExists: true, TargetGenerated: true,
+		GeneratedCount: len(standardCreativeAssetSizes), PrimedCount: len(standardCreativeAssetSizes),
+	}
+	if got := creativeDirectEditArtifactError(context, state); got != "" {
+		t.Fatalf("final visual validation should allow task completion after Prime handoff, got %q", got)
+	}
+	context.FinalVisualValidation = false
+	if got := creativeDirectEditArtifactError(context, state); got == "" {
+		t.Fatal("legacy direct edit should still require delivered assets")
 	}
 }
 

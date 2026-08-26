@@ -45,7 +45,7 @@ visual lane 必须按三个闸门验收：文案/组件完整、Prime 合成前�
 第一闸门检查冻结标题、利益点、金额、表格、CTA 是否全部出现；有边框但没有文字也算失败。第二闸门对照机器证据中的
 `safe_content_frame`、`top_key_content_exclusion_end`、`bottom_key_content_exclusion_start`，确认正文、金额、表格和 CTA 没有进入顶部或底部 Prime 禁区；
 正文被 Prime 实际盖住都算失败。第三闸门逐一放大 Logo、条款和底部组件，必须能看清官方文字，不能用整条带平均颜色代替局部判断。
-不得把 hard region 框线当成视觉证据，也不得因为正常搭接、背景物体靠近但文字仍清晰而报错。浅色边缘、装饰纹理和一般视觉平衡仅可形成 warning。
+不得把 hard region 框线当成视觉证据，也不得因为正常搭接、背景物体靠近但文字仍清晰而报错。检查 Prime 整体观感：官方组件应清晰但不应在可替换的已批准模板家族中表现为突兀的大面积亮色/白色贴片；也不应因与底图过于接近而失去辨识。合成器会在同一份已冻结模板家族内先做确定性重选，不重生底图。QC 若仍观察到这类问题，写入 `quality_warnings` 并附尺寸、贴片位置和候选家族信息；它不重画二维码或手动修改 Prime 像素。浅色边缘、装饰纹理和一般视觉平衡仅可形成 warning。
 brief 的 `mechanism_adaptation` 是结构验收合同；
 `omitted_unapproved_copy` 中的竞品文字不得作为必现文本。brief 自相矛盾时记录
 `brief_copy_contract_conflict`，建议 replan，不把未批准文字缺失判为图片质量失败。以下肉眼可见的最终图缺陷可以阻断：

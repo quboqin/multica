@@ -2110,9 +2110,9 @@ func creativeVisualModelReworkAttemptCount(ctx context.Context, tx pgx.Tx, varia
 	err := tx.QueryRow(ctx, `
 SELECT count(*)
 FROM agent_task_queue
-WHERE trigger_evidence_kind = 'creative_order_item_production'
+WHERE trigger_evidence_kind = ANY(ARRAY['creative_order_item_production', 'creative_order_item_direct_edit']::text[])
   AND context->>'type' = 'creative_domain_task'
-  AND context->>'workflow' = 'creative_production'
+  AND context->>'workflow' = ANY(ARRAY['creative_production', 'creative_direct_edit']::text[])
   AND context->>'variant_id' = $1::text
   AND context ? 'qc_visual_rework'
 	`, variantID).Scan(&count)
@@ -3969,6 +3969,16 @@ func (h *Handler) queueCreativeVisualModelRework(
 	if !issueID.Valid {
 		return db.AgentTaskQueue{}, errors.New("creative order is missing its root issue")
 	}
+	var variantBrief string
+	if err := tx.QueryRow(ctx, `SELECT brief::text FROM creative_order_variant WHERE id = $1 FOR UPDATE`, variantID).Scan(&variantBrief); err != nil {
+		return db.AgentTaskQueue{}, errors.New("failed to load creative visual rework contract")
+	}
+	if directDelivery := parseCreativeDirectEditDeliveryConfig(json.RawMessage(variantBrief)); directDelivery.FinalVisualValidation {
+		return h.queueCreativeDirectEditVisualRework(
+			ctx, tx, workspaceID, orderID, itemID, candidateID, variantID, issueID,
+			inputSnapshot, sourceRevision, expectedSizes, parentTask, findings, directDelivery,
+		)
+	}
 	leaderID, _, reviewerID, err := creativeOrderProductionAgentSnapshot(inputSnapshot)
 	if err != nil {
 		return db.AgentTaskQueue{}, err
@@ -4183,6 +4193,297 @@ INSERT INTO activity_log (workspace_id, issue_id, actor_type, actor_id, action, 
 VALUES ($1, $2, 'agent', $3, 'creative_visual_rework_queued', $4::jsonb)
 `, workspaceID, issueID, parentTask.AgentID, details); err != nil {
 		return db.AgentTaskQueue{}, errors.New("failed to record creative visual rework")
+	}
+	return task, nil
+}
+
+// queueCreativeDirectEditVisualRework keeps an annotated adjustment on the
+// direct-edit path after final Prime inspection. The model receives only the
+// generated base as an editable input; the prior primed asset is a reference
+// for the observed obstruction and the fixed template is composed again by
+// the backend.
+func (h *Handler) queueCreativeDirectEditVisualRework(
+	ctx context.Context,
+	tx pgx.Tx,
+	workspaceID, orderID, itemID, candidateID, variantID, issueID pgtype.UUID,
+	inputSnapshot json.RawMessage,
+	sourceRevision int,
+	expectedSizes []string,
+	parentTask db.AgentTaskQueue,
+	findings []creativeVisualModelReworkFinding,
+	delivery creativeDirectEditDeliveryConfig,
+) (db.AgentTaskQueue, error) {
+	leaderID, reviewerID, err := creativeOrderQCAgentSnapshot(inputSnapshot)
+	if err != nil {
+		return db.AgentTaskQueue{}, err
+	}
+	preferredEditorID := selectedCreativeDirectEditAgentFromHistory(ctx, tx, workspaceID, variantID, sourceRevision)
+	editor, err := h.selectCreativeDirectImageEditAgent(ctx, tx, h.Queries.WithTx(tx), workspaceID, inputSnapshot, uuidToString(variantID), preferredEditorID, false)
+	if err != nil {
+		return db.AgentTaskQueue{}, err
+	}
+
+	var editorCapable bool
+	if err := tx.QueryRow(ctx, `
+SELECT EXISTS(
+  SELECT 1
+  FROM agent_skill binding
+  JOIN skill bound_skill ON bound_skill.id = binding.skill_id
+  WHERE binding.agent_id = $1
+    AND binding.enabled
+    AND bound_skill.workspace_id = $2
+    AND bound_skill.config->>'kind' = 'creative_role'
+    AND bound_skill.config->>'capability' = 'direct_image_edit'
+)
+	`, editor.ID, workspaceID).Scan(&editorCapable); err != nil {
+		return db.AgentTaskQueue{}, err
+	}
+	if !editorCapable {
+		return db.AgentTaskQueue{}, errors.New("the selected direct image edit agent lacks direct_image_edit capability")
+	}
+
+	targetSizes := make([]string, 0, len(findings))
+	for _, finding := range findings {
+		targetSizes = append(targetSizes, finding.SizeKey)
+	}
+	rows, err := tx.Query(ctx, `
+SELECT id::text, size_key, attachment_id::text
+FROM creative_order_asset
+WHERE variant_id = $1
+  AND revision = $2
+  AND stage = 'generated'
+  AND status = 'completed'
+  AND attachment_id IS NOT NULL
+  AND size_key = ANY($3::text[])
+FOR UPDATE
+	`, variantID, sourceRevision, expectedSizes)
+	if err != nil {
+		return db.AgentTaskQueue{}, errors.New("failed to load generated assets for direct visual rework")
+	}
+	defer rows.Close()
+	generatedSizes := map[string]struct{}{}
+	sourceAssets := make([]creativeOrderAdjustmentSourceAsset, 0, len(expectedSizes))
+	sourceBySize := make(map[string]creativeOrderAdjustmentSourceAsset, len(expectedSizes))
+	for rows.Next() {
+		var source creativeOrderAdjustmentSourceAsset
+		if err := rows.Scan(&source.AssetID, &source.SizeKey, &source.AttachmentID); err != nil {
+			return db.AgentTaskQueue{}, errors.New("failed to read generated assets for direct visual rework")
+		}
+		generatedSizes[source.SizeKey] = struct{}{}
+		sourceBySize[source.SizeKey] = source
+	}
+	if err := rows.Err(); err != nil {
+		return db.AgentTaskQueue{}, errors.New("failed to read generated assets for direct visual rework")
+	}
+	if !creativeSizesMatchExpected(generatedSizes, expectedSizes) {
+		return db.AgentTaskQueue{}, errors.New("direct visual rework requires a complete generated base package")
+	}
+	for _, size := range expectedSizes {
+		sourceAssets = append(sourceAssets, sourceBySize[size])
+	}
+	if len(targetSizes) == 0 {
+		return db.AgentTaskQueue{}, errors.New("direct visual rework has no failed sizes")
+	}
+	targetSize := targetSizes[0]
+	targetSource := sourceBySize[targetSize]
+
+	var referenceAssetID, referenceAttachmentID string
+	if err := tx.QueryRow(ctx, `
+SELECT id::text, attachment_id::text
+FROM creative_order_asset
+WHERE variant_id = $1 AND revision = $2 AND size_key = $3
+  AND stage = 'primed' AND status = 'completed' AND attachment_id IS NOT NULL
+ORDER BY updated_at DESC, id DESC
+LIMIT 1
+`, variantID, sourceRevision, targetSize).Scan(&referenceAssetID, &referenceAttachmentID); err != nil {
+		return db.AgentTaskQueue{}, errors.New("direct visual rework requires the inspected Prime reference")
+	}
+
+	newRevision := sourceRevision + 1
+	if _, err := tx.Exec(ctx, `
+INSERT INTO creative_order_asset (
+  variant_id, asset_family_id, size_key, revision, stage, attachment_id, derived_from_asset_id, metadata, evidence, status
+)
+SELECT variant_id, asset_family_id, size_key, $3, 'generated', attachment_id, id,
+  metadata,
+  evidence || jsonb_build_object('qc_visual_rework', jsonb_build_object('source_revision', $2::integer, 'reused_generated_base', true, 'workflow', 'creative_direct_edit')),
+  'completed'
+FROM creative_order_asset
+WHERE variant_id = $1
+  AND revision = $2
+  AND stage = 'generated'
+  AND status = 'completed'
+  AND attachment_id IS NOT NULL
+  AND size_key = ANY($4::text[])
+  AND NOT (size_key = ANY($5::text[]))
+ON CONFLICT (variant_id, size_key, revision, stage) DO NOTHING
+	`, variantID, sourceRevision, newRevision, expectedSizes, targetSizes); err != nil {
+		return db.AgentTaskQueue{}, fmt.Errorf("preserve passed generated assets for direct visual rework: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `
+UPDATE creative_order_variant
+SET revision = $2, status = 'running', updated_at = now()
+WHERE id = $1
+	`, variantID, newRevision); err != nil {
+		return db.AgentTaskQueue{}, errors.New("failed to begin direct visual rework")
+	}
+
+	scope := "size"
+	if len(targetSizes) > 1 {
+		scope = "variant"
+	}
+	rawUserRequest := delivery.RawUserRequest
+	if rawUserRequest == "" {
+		rawUserRequest = "解决最终 Prime 成图视觉验收发现的遮挡问题"
+	}
+	annotations := any([]any(nil))
+	if len(delivery.Annotations) > 0 && string(delivery.Annotations) != "null" {
+		if err := json.Unmarshal(delivery.Annotations, &annotations); err != nil {
+			return db.AgentTaskQueue{}, errors.New("direct visual rework has invalid preserved annotations")
+		}
+	}
+	if delivery.AnnotationGuideAttachmentID == "" {
+		annotations = []any(nil)
+	}
+	context, err := json.Marshal(map[string]any{
+		"type":                           "creative_domain_task",
+		"workflow":                       "creative_direct_edit",
+		"scope":                          scope,
+		"subject_id":                     uuidToString(variantID),
+		"item_key":                       fmt.Sprintf("%s:r%d", uuidToString(variantID), newRevision),
+		"creative_order_id":              uuidToString(orderID),
+		"creative_order_item_id":         uuidToString(itemID),
+		"candidate_id":                   uuidToString(candidateID),
+		"variant_id":                     uuidToString(variantID),
+		"revision":                       newRevision,
+		"expected_sizes":                 expectedSizes,
+		"issue_id":                       uuidToString(issueID),
+		"leader_agent_id":                uuidToString(leaderID),
+		"reviewer_agent_id":              uuidToString(reviewerID),
+		"direct_edit_agent_id":           uuidToString(editor.ID),
+		"direct_edit_runtime_id":         uuidToString(editor.RuntimeID),
+		"user_request":                   rawUserRequest,
+		"raw_user_request":               rawUserRequest,
+		"prompt_compilation":             "intent_normalization_required",
+		"final_visual_validation":        true,
+		"delivery_mode":                  "publish",
+		"target_size":                    targetSize,
+		"edit_sizes":                     targetSizes,
+		"source_revision":                sourceRevision,
+		"source_asset_id":                targetSource.AssetID,
+		"source_attachment_id":           targetSource.AttachmentID,
+		"source_assets":                  sourceAssets,
+		"reference_asset_id":             referenceAssetID,
+		"reference_attachment_id":        referenceAttachmentID,
+		"annotation_guide_attachment_id": delivery.AnnotationGuideAttachmentID,
+		"annotation_guide_source":        "final_reference",
+		"qc_visual_rework": map[string]any{
+			"source_revision": sourceRevision,
+			"target_sizes":    targetSizes,
+			"failures":        findings,
+			"reflow_strategy": "direct_edit_intent_reflow",
+		},
+		"direct_edit": map[string]any{
+			"scope":                          scope,
+			"source_revision":                sourceRevision,
+			"target_size":                    targetSize,
+			"expected_sizes":                 expectedSizes,
+			"edit_sizes":                     targetSizes,
+			"source_asset_id":                targetSource.AssetID,
+			"source_attachment_id":           targetSource.AttachmentID,
+			"source_assets":                  sourceAssets,
+			"reference_asset_id":             referenceAssetID,
+			"reference_attachment_id":        referenceAttachmentID,
+			"direct_edit_agent_id":           uuidToString(editor.ID),
+			"direct_edit_runtime_id":         uuidToString(editor.RuntimeID),
+			"annotation_guide_attachment_id": delivery.AnnotationGuideAttachmentID,
+			"annotation_guide_source":        "final_reference",
+			"raw_user_request":               rawUserRequest,
+			"prompt_compilation":             "intent_normalization_required",
+			"final_visual_validation":        true,
+			"annotations":                    annotations,
+			"validation_rework": map[string]any{
+				"source_revision": sourceRevision,
+				"target_sizes":    targetSizes,
+				"failures":        findings,
+			},
+		},
+	})
+	if err != nil {
+		return db.AgentTaskQueue{}, errors.New("failed to encode direct visual rework task")
+	}
+	if err := validateCreativeTaskFanoutContext("creative_order_item_direct_edit", itemID, []service.DirectTaskFanoutItem{{
+		ItemKey: fmt.Sprintf("%s:r%d", uuidToString(variantID), newRevision), Context: context,
+	}}); err != nil {
+		return db.AgentTaskQueue{}, err
+	}
+	task, err := h.Queries.WithTx(tx).CreateAgentTask(ctx, db.CreateAgentTaskParams{
+		AgentID:              editor.ID,
+		RuntimeID:            editor.RuntimeID,
+		IssueID:              issueID,
+		Priority:             0,
+		ForceFreshSession:    pgtype.Bool{Bool: true, Valid: true},
+		RequestingUserID:     parentTask.RequestingUserID,
+		OriginatorUserID:     parentTask.OriginatorUserID,
+		AccountableUserID:    parentTask.AccountableUserID,
+		OriginatorSource:     parentTask.OriginatorSource,
+		DelegatedFromTaskID:  parentTask.ID,
+		TriggerEvidenceKind:  pgtype.Text{String: "creative_order_item_direct_edit", Valid: true},
+		TriggerEvidenceRefID: itemID,
+		Context:              context,
+	})
+	if err != nil {
+		return db.AgentTaskQueue{}, errors.New("failed to queue direct visual rework")
+	}
+	findingsJSON, err := json.Marshal(findings)
+	if err != nil {
+		return db.AgentTaskQueue{}, errors.New("failed to encode direct visual rework findings")
+	}
+	if _, err := tx.Exec(ctx, `
+INSERT INTO creative_order_diagnostic_asset (
+  variant_id, task_id, attachment_id, size_key, revision, workflow, label, filename, metadata
+)
+SELECT variant_id, $5, attachment_id, size_key, $3, 'creative_direct_edit', '最终贴片验收失败参考图',
+  'direct-visual-failure-' || replace(size_key, 'x', '-') || '.png',
+  jsonb_build_object(
+    'source_revision', $2::integer,
+    'qc_visual_rework', true,
+    'model_input_policy', 'use_unbranded_generated_base_not_this_primed_image',
+    'failures', $6::jsonb
+  )
+FROM creative_order_asset
+WHERE variant_id = $1
+  AND revision = $2
+  AND stage = 'primed'
+  AND status = 'completed'
+  AND attachment_id IS NOT NULL
+  AND size_key = ANY($4::text[])
+ON CONFLICT (variant_id, revision, workflow, size_key, label, filename) DO UPDATE SET
+  task_id = EXCLUDED.task_id,
+  attachment_id = EXCLUDED.attachment_id,
+  metadata = EXCLUDED.metadata,
+  updated_at = now()
+	`, variantID, sourceRevision, newRevision, targetSizes, task.ID, findingsJSON); err != nil {
+		return db.AgentTaskQueue{}, errors.New("record direct visual rework trigger evidence")
+	}
+	details, err := json.Marshal(map[string]any{
+		"creative_order_id": uuidToString(orderID),
+		"variant_id":        uuidToString(variantID),
+		"source_revision":   sourceRevision,
+		"revision":          newRevision,
+		"task_id":           uuidToString(task.ID),
+		"target_sizes":      targetSizes,
+		"failures":          findings,
+		"workflow":          "creative_direct_edit",
+	})
+	if err != nil {
+		return db.AgentTaskQueue{}, errors.New("failed to record direct visual rework")
+	}
+	if _, err := tx.Exec(ctx, `
+INSERT INTO activity_log (workspace_id, issue_id, actor_type, actor_id, action, details)
+VALUES ($1, $2, 'agent', $3, 'creative_direct_edit_visual_rework_queued', $4::jsonb)
+	`, workspaceID, issueID, parentTask.AgentID, details); err != nil {
+		return db.AgentTaskQueue{}, errors.New("failed to record direct visual rework")
 	}
 	return task, nil
 }
@@ -5140,14 +5441,15 @@ WHERE id = $1 AND revision = $2 AND status <> 'cancelled'
 }
 
 type creativeDirectEditTaskCompletionContext struct {
-	Type            string   `json:"type"`
-	Workflow        string   `json:"workflow"`
-	CreativeOrderID string   `json:"creative_order_id"`
-	VariantID       string   `json:"variant_id"`
-	Revision        int      `json:"revision"`
-	TargetSize      string   `json:"target_size"`
-	DeliveryMode    string   `json:"delivery_mode"`
-	ExpectedSizes   []string `json:"expected_sizes"`
+	Type                  string   `json:"type"`
+	Workflow              string   `json:"workflow"`
+	CreativeOrderID       string   `json:"creative_order_id"`
+	VariantID             string   `json:"variant_id"`
+	Revision              int      `json:"revision"`
+	TargetSize            string   `json:"target_size"`
+	DeliveryMode          string   `json:"delivery_mode"`
+	ExpectedSizes         []string `json:"expected_sizes"`
+	FinalVisualValidation bool     `json:"final_visual_validation"`
 }
 
 type creativeDirectEditArtifactState struct {
@@ -5255,6 +5557,9 @@ func creativeDirectEditArtifactError(taskContext creativeDirectEditTaskCompletio
 	}
 	if state.PrimedCount < expectedCount {
 		return fmt.Sprintf("direct image edit registered %d/%d completed primed assets", state.PrimedCount, expectedCount)
+	}
+	if taskContext.FinalVisualValidation {
+		return ""
 	}
 	if state.DeliveredCount < expectedCount {
 		return fmt.Sprintf("direct image edit registered %d/%d completed delivered assets", state.DeliveredCount, expectedCount)

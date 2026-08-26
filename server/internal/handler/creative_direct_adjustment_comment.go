@@ -17,9 +17,13 @@ import (
 )
 
 type creativeDirectEditDeliveryConfig struct {
-	DeliveryMode string
-	TargetSize   string
-	Scope        string
+	DeliveryMode                string
+	TargetSize                  string
+	Scope                       string
+	FinalVisualValidation       bool
+	RawUserRequest              string
+	AnnotationGuideAttachmentID string
+	Annotations                 json.RawMessage
 }
 
 type creativeDirectAdjustmentDeliveryAsset struct {
@@ -54,8 +58,12 @@ func parseCreativeDirectEditDeliveryConfig(raw json.RawMessage) creativeDirectEd
 		TargetSize   string `json:"target_size"`
 		Scope        string `json:"scope"`
 		Delivery     struct {
-			TargetSize string `json:"target_size"`
-			Scope      string `json:"scope"`
+			TargetSize                  string          `json:"target_size"`
+			Scope                       string          `json:"scope"`
+			FinalVisualValidation       bool            `json:"final_visual_validation"`
+			RawUserRequest              string          `json:"raw_user_request"`
+			AnnotationGuideAttachmentID string          `json:"annotation_guide_attachment_id"`
+			Annotations                 json.RawMessage `json:"annotations"`
 		} `json:"creative_direct_edit_delivery"`
 	}
 	if json.Unmarshal(raw, &contract) != nil {
@@ -73,9 +81,13 @@ func parseCreativeDirectEditDeliveryConfig(raw json.RawMessage) creativeDirectEd
 		scope = normalizeCreativeOrderAdjustmentScope(contract.Scope)
 	}
 	return creativeDirectEditDeliveryConfig{
-		DeliveryMode: strings.TrimSpace(contract.DeliveryMode),
-		TargetSize:   targetSize,
-		Scope:        scope,
+		DeliveryMode:                strings.TrimSpace(contract.DeliveryMode),
+		TargetSize:                  targetSize,
+		Scope:                       scope,
+		FinalVisualValidation:       contract.Delivery.FinalVisualValidation,
+		RawUserRequest:              strings.TrimSpace(contract.Delivery.RawUserRequest),
+		AnnotationGuideAttachmentID: strings.TrimSpace(contract.Delivery.AnnotationGuideAttachmentID),
+		Annotations:                 append(json.RawMessage(nil), contract.Delivery.Annotations...),
 	}
 }
 

@@ -27,6 +27,14 @@ the required unbranded base assets for the order variant.
 5. After a successful result, continue with the backend-owned process-asset,
    primed-asset, and QC handoff recorded by the command response.
 
+The backend evaluates every approved template family against the same frozen
+unbranded bases before composition. If the highest-contrast family produces an
+inconspicuous official component or a dominant bright patch and another
+approved family is readable, it reselects that family and composes again in the
+same request. This never asks the model to regenerate a base or recreate QR,
+Logo, legal, or other Prime pixels. The evidence records the candidate scores
+and whether a visual-adequacy reselect occurred.
+
 ## Ownership
 
 - `creative_prime_backend.go` and `primecompose` own all image composition,

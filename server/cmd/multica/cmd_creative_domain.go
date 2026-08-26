@@ -257,13 +257,12 @@ func runCreativeLibraryDownload(cmd *cobra.Command, args []string) error {
 	if candidate == nil {
 		return fmt.Errorf("creative material candidate %s was not found", args[0])
 	}
-	downloadURL, source := creativeLibraryDownloadSource(*candidate)
-	if downloadURL == "" {
-		return fmt.Errorf("creative material candidate %s has no readable asset URL", args[0])
-	}
-	data, err := client.DownloadFile(ctx, downloadURL)
+	data, source, err := downloadCreativeMaterialCandidate(ctx, client, *candidate)
 	if err != nil {
-		return fmt.Errorf("download creative material from %s: %w", source, err)
+		return err
+	}
+	if len(data) == 0 {
+		return fmt.Errorf("creative material candidate %s has no readable asset URL", args[0])
 	}
 	if directory := filepath.Dir(outputFile); directory != "." {
 		if err := os.MkdirAll(directory, 0o755); err != nil {
@@ -286,13 +285,86 @@ func runCreativeLibraryDownload(cmd *cobra.Command, args []string) error {
 }
 
 func creativeLibraryDownloadSource(candidate creativeMaterialCandidateCLI) (string, string) {
-	if attachmentID := strings.TrimSpace(candidate.SourceAttachmentID); attachmentID != "" {
+	if attachmentID := creativeCandidateAttachmentID(candidate); attachmentID != "" {
 		return "/api/attachments/" + url.PathEscape(attachmentID) + "/download", "attachment"
 	}
 	if candidate.ArchiveStatus == "completed" && strings.TrimSpace(candidate.ArchivedURL) != "" {
 		return strings.TrimSpace(candidate.ArchivedURL), "archive"
 	}
 	return firstNonEmpty(candidate.OriginalURL, candidate.PreviewURL, candidate.ResourceURL, candidate.PosterURL), "origin"
+}
+
+// creativeCandidateAttachmentID finds the candidate's own platform attachment
+// even when older material responses omitted source_attachment_id but retained
+// an attachment download URL. Ambiguous URLs deliberately do not become a
+// fallback: a candidate must resolve to exactly one attachment.
+func creativeCandidateAttachmentID(candidate creativeMaterialCandidateCLI) string {
+	if attachmentID := strings.TrimSpace(candidate.SourceAttachmentID); attachmentID != "" {
+		return attachmentID
+	}
+	attachmentIDs := map[string]struct{}{}
+	for _, rawURL := range []string{
+		candidate.ArchivedURL,
+		candidate.OriginalURL,
+		candidate.PreviewURL,
+		candidate.ResourceURL,
+		candidate.PosterURL,
+	} {
+		if attachmentID := attachmentIDFromDownloadURL(rawURL); attachmentID != "" {
+			attachmentIDs[attachmentID] = struct{}{}
+		}
+	}
+	if len(attachmentIDs) != 1 {
+		return ""
+	}
+	for attachmentID := range attachmentIDs {
+		return attachmentID
+	}
+	return ""
+}
+
+func attachmentIDFromDownloadURL(rawURL string) string {
+	parsed, err := url.Parse(strings.TrimSpace(rawURL))
+	if err != nil {
+		return ""
+	}
+	segments := strings.Split(strings.Trim(parsed.EscapedPath(), "/"), "/")
+	if len(segments) != 4 || !strings.EqualFold(segments[0], "api") || !strings.EqualFold(segments[1], "attachments") || !strings.EqualFold(segments[3], "download") {
+		return ""
+	}
+	attachmentID, err := url.PathUnescape(segments[2])
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(attachmentID)
+}
+
+func downloadCreativeMaterialCandidate(ctx context.Context, client *cli.APIClient, candidate creativeMaterialCandidateCLI) ([]byte, string, error) {
+	downloadURL, source := creativeLibraryDownloadSource(candidate)
+	if downloadURL == "" {
+		return nil, "", fmt.Errorf("creative material candidate %s has no readable asset URL", candidate.ID)
+	}
+	data, err := client.DownloadFile(ctx, downloadURL)
+	if err == nil {
+		return data, source, nil
+	}
+
+	// The current source might be a stale archive URL. If this candidate also
+	// exposes its own attachment identity, retry through the authenticated
+	// platform attachment endpoint before reporting a source failure.
+	attachmentID := creativeCandidateAttachmentID(candidate)
+	attachmentURL := ""
+	if attachmentID != "" {
+		attachmentURL = "/api/attachments/" + url.PathEscape(attachmentID) + "/download"
+	}
+	if source != "attachment" && attachmentURL != "" && attachmentURL != downloadURL {
+		fallbackData, fallbackErr := client.DownloadFile(ctx, attachmentURL)
+		if fallbackErr == nil {
+			return fallbackData, "attachment_fallback", nil
+		}
+		return nil, "", fmt.Errorf("download creative material from %s: %w; attachment fallback failed: %v", source, err, fallbackErr)
+	}
+	return nil, "", fmt.Errorf("download creative material from %s: %w", source, err)
 }
 
 func firstNonEmpty(values ...string) string {

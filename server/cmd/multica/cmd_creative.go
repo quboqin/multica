@@ -249,6 +249,7 @@ func init() {
 	imageEditCmd.Flags().String("quality", "", "Optional image quality: low, medium, high, or auto")
 	imageEditCmd.Flags().Int("max-attempts", 3, "Maximum attempts for transient image API failures (1-5)")
 	imageEditCmd.Flags().String("output-file", "", "Output PNG file")
+	imageEditCmd.Flags().String("result-file", "", "Optional JSON receipt written atomically after a successful image edit")
 	imageEditCmd.Flags().String("output", "json", "Output format: json or table")
 }
 
@@ -373,9 +374,9 @@ func runCreativeMaterialDownload(cmd *cobra.Command, args []string) error {
 	if source != "attachment" && (selected.ArchiveStatus != "completed" || strings.TrimSpace(selected.ArchivedURL) == "") {
 		return fmt.Errorf("creative material candidate %s is not available in platform archive storage", args[1])
 	}
-	data, err := client.DownloadFile(ctx, downloadURL)
+	data, source, err := downloadCreativeMaterialCandidate(ctx, client, *selected)
 	if err != nil {
-		return fmt.Errorf("download creative material from %s: %w", source, err)
+		return err
 	}
 	directory := filepath.Dir(outputFile)
 	if directory != "." {
@@ -483,11 +484,55 @@ func runImageEdit(cmd *cobra.Command, _ []string) error {
 			"height": dimensions.Height, "aspect_fallback": aspectFallback,
 		},
 	}
+	resultFile, _ := cmd.Flags().GetString("result-file")
+	if strings.TrimSpace(resultFile) != "" {
+		if err := writeImageEditResultFile(resultFile, result); err != nil {
+			return err
+		}
+	}
 	if output == "table" {
 		cli.PrintTable(os.Stdout, []string{"MODEL", "INPUTS", "SIZE", "QUALITY", "BYTES", "REQUEST ID", "PATH"}, [][]string{{model, strconv.Itoa(len(inputs)), size, quality, strconv.Itoa(len(image)), requestID, abs}})
 		return nil
 	}
 	return cli.PrintJSON(os.Stdout, result)
+}
+
+// writeImageEditResultFile publishes a complete successful result only after
+// the output image itself exists. A continuation can therefore distinguish an
+// unfinished provider call from a late tool event without starting another
+// image request for the same size.
+func writeImageEditResultFile(path string, result any) error {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return nil
+	}
+	payload, err := json.Marshal(result)
+	if err != nil {
+		return fmt.Errorf("encode image edit result: %w", err)
+	}
+	directory := filepath.Dir(path)
+	if directory != "." {
+		if err := os.MkdirAll(directory, 0o755); err != nil {
+			return fmt.Errorf("create image edit result directory: %w", err)
+		}
+	}
+	temporary, err := os.CreateTemp(directory, ".image-edit-result-*.json")
+	if err != nil {
+		return fmt.Errorf("create image edit result receipt: %w", err)
+	}
+	temporaryName := temporary.Name()
+	defer os.Remove(temporaryName)
+	if _, err := temporary.Write(payload); err != nil {
+		temporary.Close()
+		return fmt.Errorf("write image edit result receipt: %w", err)
+	}
+	if err := temporary.Close(); err != nil {
+		return fmt.Errorf("close image edit result receipt: %w", err)
+	}
+	if err := os.Rename(temporaryName, path); err != nil {
+		return fmt.Errorf("publish image edit result receipt: %w", err)
+	}
+	return nil
 }
 
 // providerGPTImageSize keeps the public delivery contract independent from the

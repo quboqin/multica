@@ -224,9 +224,15 @@ WHERE id = $1
 		t.Fatalf("task agent = %q, want one of %q or %q", taskAgentID, squad.DirectEditorAgentID, squad.ExtraDirectAgentID)
 	}
 	var contextValue struct {
-		DirectEditAgentID string `json:"direct_edit_agent_id"`
-		DirectEdit        struct {
-			DirectEditAgentID string `json:"direct_edit_agent_id"`
+		DirectEditAgentID     string `json:"direct_edit_agent_id"`
+		RawUserRequest        string `json:"raw_user_request"`
+		PromptCompilation     string `json:"prompt_compilation"`
+		FinalVisualValidation bool   `json:"final_visual_validation"`
+		DirectEdit            struct {
+			DirectEditAgentID     string `json:"direct_edit_agent_id"`
+			RawUserRequest        string `json:"raw_user_request"`
+			PromptCompilation     string `json:"prompt_compilation"`
+			FinalVisualValidation bool   `json:"final_visual_validation"`
 		} `json:"direct_edit"`
 	}
 	if err := json.Unmarshal([]byte(taskContext), &contextValue); err != nil {
@@ -234,6 +240,25 @@ WHERE id = $1
 	}
 	if contextValue.DirectEditAgentID != taskAgentID || contextValue.DirectEdit.DirectEditAgentID != taskAgentID {
 		t.Fatalf("task context direct editor = %#v, task agent %q", contextValue, taskAgentID)
+	}
+	if !contextValue.FinalVisualValidation || !contextValue.DirectEdit.FinalVisualValidation ||
+		contextValue.PromptCompilation != "intent_normalization_required" || contextValue.DirectEdit.PromptCompilation != "intent_normalization_required" ||
+		contextValue.RawUserRequest != "把背景换成更明亮的办公室" || contextValue.DirectEdit.RawUserRequest != contextValue.RawUserRequest {
+		t.Fatalf("task context direct-edit intent contract = %#v", contextValue)
+	}
+	var delivery struct {
+		SkipQC                bool   `json:"skip_qc"`
+		FinalVisualValidation bool   `json:"final_visual_validation"`
+		RawUserRequest        string `json:"raw_user_request"`
+	}
+	if err := testPool.QueryRow(t.Context(), `SELECT brief->'creative_direct_edit_delivery' FROM creative_order_variant WHERE id = $1`, variantID).Scan(&taskContext); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal([]byte(taskContext), &delivery); err != nil {
+		t.Fatal(err)
+	}
+	if delivery.SkipQC || !delivery.FinalVisualValidation || delivery.RawUserRequest != contextValue.RawUserRequest {
+		t.Fatalf("direct-edit delivery contract = %#v", delivery)
 	}
 	var frozen struct {
 		Squad struct {

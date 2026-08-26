@@ -187,6 +187,16 @@ Prime context 是当前尺寸的真实视觉输入，不是黑白遮罩或可复
 
 每次模型调用都保存实际发送的 prompt、`prompt_sha256`、`request_id`、attempts、实际画布尺寸和输入资产指纹。
 调用 `multica image edit` 或 `image edit-batch` 时使用显式长超时；传输层 408/429/5xx/网络失败最多重试两次。必须把 CLI 返回的完整 JSON 原样保存，不能手工只保留 request ID、hash 或 `generated_asset` 摘要；后续 `asset-put` 使用同一份原始 JSON。
+
+### 单尺寸 in-flight 与迟到回图恢复
+
+每个尺寸在当前 revision 只允许有一个未结算的 Image Edit 调用。调用单张 `multica image edit` 时，给它固定的
+`--result-file <workdir>/image-edit-result-<size>.json`；CLI 只会在模型图片已经成功写入 `--output-file` 后原子发布这份完整 JSON 回执。
+
+- 在发起调用前先检查该 `result-file`：若其中的 `generated_asset.completed=true`、`path` 存在且尺寸/`prompt_sha256` 对应当前调用，必须直接复用该回图做归一化、过程登记或写回，**不得再次调用模型**。
+- 发起调用后，必须等待同一个 Bash/exec 的 `tool_result` 返回完整 JSON 或明确的命令错误。不得在该结果抵达前运行 `find`、`ls`、第二个 `multica image edit`、把暂时不存在的输出文件当作失败，或写“provider 未返回”。工具事件晚于下一条日志不代表方图失败。
+- 若 shell/runtime 中断、返回为空或任务被续跑，先读取同尺寸 `result-file`。存在有效回执时它就是成功的原始模型结果；先补过程图、规范化、上传、`asset-put` 或贴片，不能因为先前工具结果缺失而重出图。
+- 只有同一个调用已经得到非零退出码，且没有有效 `result-file`、没有有效模型输出、并且错误确属 408/429/5xx/网络传输，才可按最多两次规则重新调用。连续三次“没有返回”必须保留每次命令结果、等待时间和 `request_id`（如有），先查是否存在迟到回执或未登记资产，不能直接归因于 provider。
 模型调用画布必须遵守 GPT Image 2 的 16px 边长约束，交付尺寸与模型画布分开记录：`1080x1080` 使用 `1088x1088`，`1200x628` 使用 `1200x624`，`800x1000` 使用 `800x992`。CLI 接受 canonical 交付尺寸并自动映射到上述 provider canvas；完整模型 JSON 必须同时保留请求尺寸和实际 provider canvas。模型输出必须经过规范化到 `1080x1080`、`1200x628`、`800x1000`。比例偏差 `<=10%` 直接接受并规范化；`10%-25%` 且已存在可下载的拒绝回图时，用该回图和同尺寸 Prime context 做一次 canvas repair retry，提示词只要求压回锁定画布并保留全部业务内容；`>25%` 视为真实画布跑偏，只重生当前失败尺寸并使用更强的 CANVAS LOCK 提示词。不要把 `1080x1080`、`1200x628` 或 `800x1000` 直接作为 provider 的 `--size` 值传入旧版 CLI。
 
 ```text

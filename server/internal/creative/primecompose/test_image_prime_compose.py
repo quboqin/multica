@@ -91,15 +91,19 @@ class FullTemplateComposeTest(unittest.TestCase):
         manifest_path.write_text(json.dumps(self.manifest(bodies, white, green)), encoding="utf-8")
         return compose_manifest(manifest_path)
 
-    def test_complete_templates_select_one_family_for_all_delivery_sizes(self) -> None:
+    def test_dominant_bright_patch_reselects_an_approved_readable_family(self) -> None:
         bodies = self.write_bodies((15, 30, 50, 255))
         result = self.compose(bodies, self.write_family("white", (255, 255, 255, 255)), self.write_family("green", (0, 130, 70, 255)))
 
         self.assertEqual(result["failed"], 0)
         selected_families = {item["template"]["family_id"] for item in result["results"]}
-        self.assertEqual(selected_families, {"white_full"})
-        self.assertEqual({item["template_selection"]["selected_family_id"] for item in result["results"]}, {"white_full"})
-        self.assertEqual(result["results"][0]["template_selection"]["selection_reason"], "highest_minimum_key_band_contrast_across_all_delivery_sizes")
+        self.assertEqual(selected_families, {"green_full"})
+        selection = result["results"][0]["template_selection"]
+        self.assertEqual({item["template_selection"]["selected_family_id"] for item in result["results"]}, {"green_full"})
+        self.assertEqual(selection["selection_reason"], "visual_adequacy_reselected_from_highest_contrast_family")
+        self.assertEqual(selection["visual_adequacy"]["status"], "reselected")
+        self.assertEqual(selection["visual_adequacy"]["contrast_preferred_family_id"], "white_full")
+        self.assertTrue(selection["visual_adequacy"]["reselected_without_regenerating_base"])
         self.assertTrue(all(item["compose"]["template_application"] == "unchanged_full_canvas_alpha_composite" for item in result["results"]))
         with Image.open(self.root / "final-240x240.png") as final:
             self.assertEqual(final.getpixel((120, 120)), (15, 30, 50, 255))
@@ -113,10 +117,22 @@ class FullTemplateComposeTest(unittest.TestCase):
         selection = result["results"][0]["template_selection"]
         self.assertEqual(len(selection["candidates"]), 2)
         self.assertEqual(selection["selected_family_id"], "green_full")
+        white_candidate = next(item for item in selection["candidates"] if item["family_id"] == "white_full")
+        self.assertIn("prime_template_inconspicuous", white_candidate["sizes"]["240x240"]["visual_adequacy"]["inadequacy_codes"])
+
+    def test_falls_back_to_highest_contrast_when_no_family_is_visually_adequate(self) -> None:
+        bodies = self.write_bodies((15, 30, 50, 255))
+        result = self.compose(bodies, self.write_family("white", (255, 255, 255, 255)), self.write_family("green", (15, 30, 50, 255)))
+
+        self.assertEqual(result["failed"], 0)
+        selection = result["results"][0]["template_selection"]
+        self.assertEqual(selection["selected_family_id"], "white_full")
+        self.assertEqual(selection["visual_adequacy"]["status"], "fallback_no_adequate_family")
+        self.assertFalse(selection["visual_adequacy"]["reselected_without_regenerating_base"])
 
     def test_high_resolution_template_is_applied_to_the_generated_canvas(self) -> None:
         bodies = self.write_bodies((15, 30, 50, 255))
-        result = self.compose(bodies, self.write_family("white", (255, 255, 255, 255), high_resolution_square=True), self.write_family("green", (0, 130, 70, 255)))
+        result = self.compose(bodies, self.write_family("white", (255, 255, 255, 255), high_resolution_square=True), self.write_family("green", (15, 30, 50, 255)))
 
         self.assertEqual(result["failed"], 0)
         square = next(item for item in result["results"] if item["size"] == "240x240")

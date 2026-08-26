@@ -14,9 +14,12 @@ from PIL import Image
 
 
 PACKAGE_CONTRACT_VERSION = 6
-ENGINE_VERSION = 4
+ENGINE_VERSION = 5
 MAX_TEMPLATE_ASPECT_DEVIATION = 0.002
 SIZE_PATTERN = re.compile(r"^[1-9]\d*x[1-9]\d*$", re.IGNORECASE)
+MINIMUM_TEMPLATE_READABILITY_CONTRAST = 24.0
+MAX_BRIGHT_OPAQUE_TILE_COVERAGE = 0.45
+BRIGHT_TEMPLATE_LUMINANCE = 235.0
 
 
 def skipped_qr_evidence() -> dict[str, Any]:
@@ -215,12 +218,35 @@ def local_template_visibility(body: np.ndarray, template: Image.Image, layout: d
                 "visible_pixels": visible_pixels,
             })
     minimum = min((float(sample["contrast_score"]) for sample in samples), default=0.0)
-    blocking = minimum < 24.0
+    blocking = minimum < MINIMUM_TEMPLATE_READABILITY_CONTRAST
     return {
         "minimum_local_contrast": round(minimum, 4),
-        "threshold": 24.0,
+        "threshold": MINIMUM_TEMPLATE_READABILITY_CONTRAST,
         "blocking": blocking,
         "blocking_code": "official_prime_text_unreadable" if blocking else "",
+        "samples": samples,
+    }
+
+
+def bright_opaque_tile_coverage(template: Image.Image, layout: dict[str, Any]) -> dict[str, Any]:
+    """Measure bright, mostly opaque template areas that read as a solid patch."""
+    rgba = np.asarray(template.convert("RGBA"), dtype=np.float32)
+    height, width = rgba.shape[:2]
+    luminance = 0.2126 * rgba[:, :, 0] + 0.7152 * rgba[:, :, 1] + 0.0722 * rgba[:, :, 2]
+    mask = (rgba[:, :, 3] >= 230.0) & (luminance >= BRIGHT_TEMPLATE_LUMINANCE)
+    samples: list[dict[str, Any]] = []
+    for band_name, start, end in key_template_bands(layout, height):
+        for tile_index, tile in enumerate(np.array_split(np.arange(width), 4)):
+            if tile.size == 0:
+                continue
+            left, right = int(tile[0]), int(tile[-1]) + 1
+            coverage = float(np.mean(mask[start:end, left:right]))
+            samples.append({"band": band_name, "tile": tile_index, "bright_opaque_coverage": round(coverage, 4)})
+    maximum = max((float(sample["bright_opaque_coverage"]) for sample in samples), default=0.0)
+    return {
+        "maximum_bright_opaque_tile_coverage": round(maximum, 4),
+        "threshold": MAX_BRIGHT_OPAQUE_TILE_COVERAGE,
+        "dominant_bright_patch": maximum >= MAX_BRIGHT_OPAQUE_TILE_COVERAGE,
         "samples": samples,
     }
 
@@ -263,6 +289,12 @@ def evaluate_template(body: Image.Image, template_spec: dict[str, str], sources:
     overall_contrast, visible_pixels = visible_template_contrast(body_rgb, template, 0, body.height)
     minimum_band_contrast = min(item["contrast_score"] for item in band_scores)
     average_band_contrast = sum(item["contrast_score"] for item in band_scores) / len(band_scores)
+    bright_patch = bright_opaque_tile_coverage(template, layout)
+    inadequacy_codes = []
+    if minimum_band_contrast < MINIMUM_TEMPLATE_READABILITY_CONTRAST:
+        inadequacy_codes.append("prime_template_inconspicuous")
+    if bright_patch["dominant_bright_patch"]:
+        inadequacy_codes.append("prime_template_dominant_bright_patch")
     return template, {
         "selected_source_role": source_role,
         "visible_pixels": visible_pixels,
@@ -271,6 +303,11 @@ def evaluate_template(body: Image.Image, template_spec: dict[str, str], sources:
         "overall_contrast": round(overall_contrast, 4),
         "resize": resize,
         "bands": band_scores,
+        "bright_patch": bright_patch,
+        "visual_adequacy": {
+            "adequate": not inadequacy_codes,
+            "inadequacy_codes": inadequacy_codes,
+        },
     }
 
 
@@ -289,15 +326,32 @@ def select_template_family(prepared_jobs: list[dict[str, Any]], package: dict[st
             average_scores.append(float(evidence["average_band_contrast"]))
             overall_scores.append(float(evidence["overall_contrast"]))
         scored.append((family, evaluated, min(minimum_scores), sum(average_scores) / len(average_scores), sum(overall_scores) / len(overall_scores)))
-    selected, evaluated, minimum, average, overall = max(scored, key=lambda item: (item[2], item[3], item[4]))
+    contrast_selected, contrast_evaluated, contrast_minimum, contrast_average, contrast_overall = max(scored, key=lambda item: (item[2], item[3], item[4]))
+    visually_adequate = [
+        item for item in scored
+        if all(evidence["visual_adequacy"]["adequate"] for _, evidence in item[1].values())
+    ]
+    if visually_adequate:
+        selected, evaluated, minimum, average, overall = max(visually_adequate, key=lambda item: (item[2], item[3], item[4]))
+        visual_status = "reselected" if selected["id"] != contrast_selected["id"] else "passed"
+    else:
+        selected, evaluated, minimum, average, overall = contrast_selected, contrast_evaluated, contrast_minimum, contrast_average, contrast_overall
+        visual_status = "fallback_no_adequate_family"
+    reselected = selected["id"] != contrast_selected["id"]
     return selected, evaluated, {
         "selection_mode": "automatic_family_contrast",
-        "selection_reason": "highest_minimum_key_band_contrast_across_all_delivery_sizes",
+        "selection_reason": "visual_adequacy_reselected_from_highest_contrast_family" if reselected else "highest_minimum_key_band_contrast_across_all_delivery_sizes",
         "selected_family_id": selected["id"],
         "selected_family_label": selected["label"],
         "minimum_band_contrast": round(minimum, 4),
         "average_band_contrast": round(average, 4),
         "overall_contrast": round(overall, 4),
+        "visual_adequacy": {
+            "status": visual_status,
+            "contrast_preferred_family_id": contrast_selected["id"],
+            "selected_family_id": selected["id"],
+            "reselected_without_regenerating_base": reselected,
+        },
         "candidates": [
             {
                 "family_id": family["id"],
@@ -311,6 +365,8 @@ def select_template_family(prepared_jobs: list[dict[str, Any]], package: dict[st
                         "minimum_band_contrast": evidence["minimum_band_contrast"],
                         "average_band_contrast": evidence["average_band_contrast"],
                         "overall_contrast": evidence["overall_contrast"],
+                        "bright_patch": evidence["bright_patch"],
+                        "visual_adequacy": evidence["visual_adequacy"],
                     }
                     for size, (_, evidence) in evaluated_family.items()
                 },

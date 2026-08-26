@@ -447,6 +447,10 @@ ON CONFLICT (variant_id, revision, workflow, size_key, label, filename) DO NOTHI
 			return
 		}
 	}
+	annotationsJSON, _ := json.Marshal(feedbackContext["annotations"])
+	if len(annotationsJSON) == 0 || string(annotationsJSON) == "null" {
+		annotationsJSON = []byte("[]")
+	}
 	if _, err := tx.Exec(r.Context(), `
 UPDATE creative_order_variant
 SET revision = $2,
@@ -454,12 +458,23 @@ SET revision = $2,
     brief = jsonb_set(
       brief - 'creative_direct_edit_error',
       '{creative_direct_edit_delivery}',
-      jsonb_build_object('skip_qc', true, 'source_revision', $3::integer, 'target_size', $4::text, 'scope', $5::text, 'expected_sizes', to_jsonb($6::text[]), 'edit_sizes', to_jsonb($7::text[])),
+      jsonb_build_object(
+        'skip_qc', false,
+        'final_visual_validation', true,
+        'source_revision', $3::integer,
+        'target_size', $4::text,
+        'scope', $5::text,
+        'expected_sizes', to_jsonb($6::text[]),
+        'edit_sizes', to_jsonb($7::text[]),
+        'raw_user_request', $8::text,
+        'annotations', $9::jsonb,
+        'annotation_guide_attachment_id', $10::text
+      ),
       true
     ),
     updated_at = now()
 WHERE id = $1
-`, parseUUID(variantID), newRevision, input.SourceRevision, input.SizeKey, input.Scope, expectedSizes, editSizes); err != nil {
+	`, parseUUID(variantID), newRevision, input.SourceRevision, input.SizeKey, input.Scope, expectedSizes, editSizes, feedback.Comment, string(annotationsJSON), annotationGuideAttachmentID); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to begin image adjustment")
 		return
 	}
@@ -508,6 +523,9 @@ WHERE id = $1 AND adopted_variant_id = $2
 		"direct_edit_agent_id":           uuidToString(directEditor.ID),
 		"direct_edit_runtime_id":         uuidToString(directEditor.RuntimeID),
 		"user_request":                   feedback.Comment,
+		"raw_user_request":               feedback.Comment,
+		"prompt_compilation":             "intent_normalization_required",
+		"final_visual_validation":        true,
 		"delivery_mode":                  "publish",
 		"target_size":                    input.SizeKey,
 		"edit_sizes":                     editSizes,
@@ -536,6 +554,9 @@ WHERE id = $1 AND adopted_variant_id = $2
 			"annotation_guide_attachment_id": annotationGuideAttachmentID,
 			"annotation_guide_source":        "final_reference",
 			"request":                        feedback.Comment,
+			"raw_user_request":               feedback.Comment,
+			"prompt_compilation":             "intent_normalization_required",
+			"final_visual_validation":        true,
 			"annotations":                    feedbackContext["annotations"],
 		},
 	})

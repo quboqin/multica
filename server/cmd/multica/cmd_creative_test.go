@@ -74,6 +74,24 @@ func TestCreativeLibraryDownloadSourcePrefersSourceAttachment(t *testing.T) {
 	}
 }
 
+func TestCreativeLibraryDownloadSourceDerivesCandidateAttachmentFromPlatformURL(t *testing.T) {
+	candidate := creativeMaterialCandidateCLI{
+		ArchiveStatus: "completed",
+		ArchivedURL:   "https://fat.example.test/api/attachments/attachment-123/download?expired=session",
+		OriginalURL:   "https://fat.example.test/api/attachments/attachment-123/download",
+	}
+	gotURL, gotSource := creativeLibraryDownloadSource(candidate)
+	wantURL := "/api/attachments/attachment-123/download"
+	if gotURL != wantURL || gotSource != "attachment" {
+		t.Fatalf("creativeLibraryDownloadSource() = (%q, %q), want (%q, attachment)", gotURL, gotSource, wantURL)
+	}
+
+	candidate.PreviewURL = "https://fat.example.test/api/attachments/another-attachment/download"
+	if got := creativeCandidateAttachmentID(candidate); got != "" {
+		t.Fatalf("ambiguous candidate attachment = %q, want empty", got)
+	}
+}
+
 func TestRunCreativeLibraryDownloadUsesSourceAttachmentWithAuth(t *testing.T) {
 	var sawAttachmentDownload atomic.Bool
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -131,6 +149,176 @@ func TestRunCreativeLibraryDownloadUsesSourceAttachmentWithAuth(t *testing.T) {
 	}
 	if string(data) != "material-bytes" {
 		t.Fatalf("downloaded bytes = %q", string(data))
+	}
+}
+
+func TestRunCreativeMaterialDownloadDerivesAttachmentFallbackFromCandidateURL(t *testing.T) {
+	var sawAttachmentDownload atomic.Bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/issues/issue-1/creative-materials":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"candidates": []map[string]any{{
+					"id":             "candidate-1",
+					"archive_status": "completed",
+					"archived_url":   "https://expired.example.test/api/attachments/attachment-123/download?signature=expired",
+					"preview_url":    "https://expired.example.test/api/attachments/attachment-123/download?signature=expired",
+				}},
+			})
+		case "/api/attachments/attachment-123/download":
+			sawAttachmentDownload.Store(true)
+			if got := r.Header.Get("Authorization"); got != "Bearer test-token" {
+				t.Errorf("attachment Authorization = %q, want Bearer test-token", got)
+			}
+			_, _ = w.Write([]byte("material-bytes"))
+		default:
+			t.Errorf("unexpected request path %s", r.URL.Path)
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	t.Setenv("MULTICA_SERVER_URL", server.URL)
+	t.Setenv("MULTICA_WORKSPACE_ID", "workspace-1")
+	t.Setenv("MULTICA_TOKEN", "test-token")
+	t.Setenv("MULTICA_AGENT_ID", "")
+	t.Setenv("MULTICA_TASK_ID", "")
+
+	outputFile := filepath.Join(t.TempDir(), "candidate.bin")
+	cmd := testCmd()
+	cmd.Flags().String("output-file", "", "")
+	cmd.Flags().String("output", "json", "")
+	if err := cmd.Flags().Set("output-file", outputFile); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := captureStdout(t, func() error {
+		return runCreativeMaterialDownload(cmd, []string{"issue-1", "candidate-1"})
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if !sawAttachmentDownload.Load() {
+		t.Fatal("expected derived attachment fallback download request")
+	}
+	data, err := os.ReadFile(outputFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != "material-bytes" {
+		t.Fatalf("downloaded bytes = %q", string(data))
+	}
+}
+
+func TestWriteImageEditResultFilePublishesValidReceipt(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "nested", "image-edit-result.json")
+	result := map[string]any{
+		"request_id": "request-123",
+		"generated_asset": map[string]any{
+			"completed": true,
+			"path":      "/work/output.png",
+		},
+	}
+	if err := writeImageEditResultFile(path, result); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var persisted map[string]any
+	if err := json.Unmarshal(raw, &persisted); err != nil {
+		t.Fatalf("receipt is not JSON: %v", err)
+	}
+	if persisted["request_id"] != "request-123" {
+		t.Fatalf("receipt request_id = %#v", persisted["request_id"])
+	}
+}
+
+func TestRunImageEditPublishesReceiptOnlyAfterDelayedProviderResult(t *testing.T) {
+	inputFile := filepath.Join(t.TempDir(), "input.png")
+	if err := os.WriteFile(inputFile, pngImageBytes(16, 16), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	providerStarted := make(chan struct{})
+	releaseProvider := make(chan struct{})
+	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/images/edits" {
+			t.Fatalf("path = %q", r.URL.Path)
+		}
+		close(providerStarted)
+		<-releaseProvider
+		w.Header().Set("x-request-id", "receipt-request")
+		_, _ = w.Write([]byte(`{"data":[{"b64_json":"` + base64.StdEncoding.EncodeToString(pngImageBytes(1088, 1088)) + `"}]}`))
+	}))
+	defer provider.Close()
+	t.Setenv("OPENAI_API_KEY", "test-key")
+	t.Setenv("OPENAI_BASE_URL", provider.URL)
+	t.Setenv("OPENAI_IMAGE_EDIT_PATH", "/images/edits")
+
+	directory := t.TempDir()
+	outputFile := filepath.Join(directory, "output.png")
+	resultFile := filepath.Join(directory, "receipts", "image-edit-result.json")
+	cmd := testCmd()
+	cmd.Flags().StringSlice("input", nil, "")
+	cmd.Flags().String("mask", "", "")
+	cmd.Flags().String("prompt", "", "")
+	cmd.Flags().String("prompt-file", "", "")
+	cmd.Flags().Bool("prompt-stdin", false, "")
+	cmd.Flags().String("model", "gpt-image-2", "")
+	cmd.Flags().String("size", "1080x1080", "")
+	cmd.Flags().String("quality", "high", "")
+	cmd.Flags().Int("max-attempts", 1, "")
+	cmd.Flags().String("output-file", "", "")
+	cmd.Flags().String("result-file", "", "")
+	cmd.Flags().String("output", "json", "")
+	for name, value := range map[string]string{
+		"input":       inputFile,
+		"prompt":      "reflow the content",
+		"output-file": outputFile,
+		"result-file": resultFile,
+	} {
+		if err := cmd.Flags().Set(name, value); err != nil {
+			t.Fatal(err)
+		}
+	}
+	done := make(chan error, 1)
+	go func() { done <- runImageEdit(cmd, nil) }()
+	select {
+	case <-providerStarted:
+	case <-time.After(time.Second):
+		t.Fatal("image edit did not reach delayed provider")
+	}
+	if _, err := os.Stat(resultFile); !os.IsNotExist(err) {
+		t.Fatalf("successful receipt appeared before provider returned: %v", err)
+	}
+	close(releaseProvider)
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("image edit did not finish after provider response")
+	}
+	if _, err := os.Stat(outputFile); err != nil {
+		t.Fatalf("output image missing: %v", err)
+	}
+	raw, err := os.ReadFile(resultFile)
+	if err != nil {
+		t.Fatalf("result receipt missing: %v", err)
+	}
+	var result struct {
+		RequestID      string `json:"request_id"`
+		ActualWidth    int    `json:"actual_width"`
+		ActualHeight   int    `json:"actual_height"`
+		GeneratedAsset struct {
+			Completed bool `json:"completed"`
+		} `json:"generated_asset"`
+	}
+	if err := json.Unmarshal(raw, &result); err != nil {
+		t.Fatal(err)
+	}
+	if result.RequestID != "receipt-request" || result.ActualWidth != 1088 || result.ActualHeight != 1088 || !result.GeneratedAsset.Completed {
+		t.Fatalf("unexpected persisted image edit result: %#v", result)
 	}
 }
 

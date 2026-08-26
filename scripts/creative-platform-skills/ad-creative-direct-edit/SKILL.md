@@ -6,13 +6,15 @@ allowed-tools: Bash(multica *), Bash(python *)
 
 # 广告图片直接修改
 
-这是 Creative Order 的精准调整路径，不执行素材爬取、参考分析、三套新创意、标准出图或 QC。任务 context 必须给出
+这是 Creative Order 的精准调整路径，不执行素材爬取、参考分析、三套新创意或标准出图。任务 context 必须给出
 `<order-id>`、`<variant-id>`、`revision`、`expected_sizes`、`target_size`、`scope`、`user_request`、`delivery_mode`、
 `reviewer_agent_id`、无品牌 `source_asset_id/source_attachment_id`、三尺寸 `source_assets` 和可编辑的无品牌 base asset。没有这些字段，或
 只有带品牌组件、二维码、Logo、条款、商店徽章的最终图而无法追溯 base asset 时，将 variant 写为 `action_required`；
 不得把最终 Prime 图作为可编辑来源。
 
-订单冻结的 `copy_snapshot` 仍是可见文案和业务事实的唯一真值；精准调整只执行 `user_request` 指定的视觉修改，不能改写、补造或删除已批准文案。
+订单冻结的 `copy_snapshot` 仍是可见文案和业务事实的唯一真值；精准调整不能改写、补造或删除已批准文案。
+`raw_user_request`/`user_request` 是审计和意图输入，**不是**最终模型 prompt 的逐字合同。保留原文用于过程证据，但先结合
+`annotations`、annotation brief、当前 Prime 成图关系和固定保护约束，编译为可执行的结构化编辑方案；最终 prompt 可以完全重写用户原话。
 
 运行中的 Agent 进程由 daemon 注入 `MULTICA_TASK_ID`，它是当前 direct-edit task 的唯一 task ID。不要从 `issue_id`、
 `direct_edit.adjustment_issue_id`、`variant_id` 或 `item_key` 猜 task ID，也不要把 Issue ID 当成 task ID 写入任何领域 JSON。
@@ -37,14 +39,23 @@ Logo、二维码、商店徽章、官方条款、红色矩形、编号和评论�
 2. `Input 2`：最终交付图的 annotation brief，只用于读取用户红框、编号、评论位置和固定贴片遮挡关系；不得复制红框、编号、
    引导线、Logo、二维码、商店徽章、官方条款或其他 Prime 组件到输出。
 
-没有 annotation guide 时只传 Input 1。每个编号对应 `direct_edit.annotations` 中同序的 comment；多个红框必须逐一执行，不能合并、
-忽略或只按总描述猜测。`reference_attachment_id` 只用于必要的人工对照，不得作为可编辑输入。若红框覆盖标题、贴片、Logo、
+没有 annotation guide 时只传 Input 1。`direct_edit.validation_rework` 存在时，`reference_attachment_id` 是上一 revision 已贴片的失败成图：
+可作为 Input 2 读取 `failures` 中所述的真实遮挡关系，但仍绝不可编辑、复制或输出其中任何 Prime 像素。每个编号对应 `direct_edit.annotations` 中同序的 comment；多个红框必须逐一执行，不能合并、
+忽略或只按总描述猜测。评论文字出现而红框未覆盖的独立问题也必须成为单独编辑目标，例如同一条反馈同时要求避开顶部二维码和底部条款时，
+必须形成“标题组”和“表格组”两个目标，不能只处理红框所在的顶部。`reference_attachment_id` 只用于必要的人工对照，不得作为可编辑输入。若红框覆盖标题、贴片、Logo、
 二维码或底部条款，说明用户是在指出最终交付图中的遮挡/关系问题；仍只修改 Input 1 的无品牌底图，让后续固定贴片重新叠加后解决问题，
 不得尝试修改、重画或移除 Prime 组件。
 
-提示词保留用户原话，并追加执行约束：只编辑 Input 1；Input 2 仅用于理解用户标注和固定贴片位置；最终贴片会由平台重新叠加；
-不要把红框、编号、Prime 组件或官方条款画进无品牌底图。明确修改对象、方向或像素量，并明确保留其余文字、金额、表格、主体、
-背景、比例和视觉风格。对于“上移 30px”这类几何要求，使用同尺寸画布和精确的移动方向；不要重绘整张广告，不要重排未标注区域。
+先写入 `intent-plan.json`，至少包含：`raw_user_request`、逐项 `edit_goals`、每项目标的证据（红框编号或评论文字）、
+`allowed_reflow`、`must_preserve`、`prime_constraints` 和 `acceptance_checks`。再从该方案生成最终 prompt；不得把原话、默认禁令和
+坐标机械拼接。默认的“不要重排未标注区域”只在不妨碍用户目标时生效：若多个关联内容组必须联动移动才能避开固定 Prime，明确授权在
+`safe_content_frame` 内重排这些内容组和必要留白。保留的是业务事实、批准文案、人物主体与视觉风格，不是每个原始像素位置。若
+`direct_edit.validation_rework.failures` 存在，它们是贴片后验收的最高优先级事实：逐尺寸将每个失败项转为 edit goal 和 acceptance check，
+不得用底图目检或“看起来已移动”替代。
+
+最终 prompt 必须按以下优先级表达：只编辑 Input 1；Input 2/最终成图仅用于理解固定贴片关系；用户要达成的视觉结果；允许联动调整的
+内容组；必须保持的业务事实；Prime 不可生成/不可复制约束；贴片后的验收条件。不要把红框、编号、Prime 组件或官方条款画进无品牌底图。
+对于“上移 30px”这类几何要求，使用同尺寸画布和精确的移动方向，但不能只依赖抽象坐标判断完成。
 对于“替换人物/换人/换模特”，提示词必须明确这是 replacement，不是微调：现有人物是移除目标，不是身份、五官、发型、服装、
 姿势、手势、身形轮廓或构图参考；新人物必须在 1x 预览下肉眼可见地不同，并给出具体不同的年龄段、肤色/发型、服装、姿势和相对关系。
 如果用户标注的是单独金额、核心利益点或促销卖点，例如 `Rp100Juta` 这类数值，不要默认把它锁成还款计划；
@@ -114,8 +125,8 @@ annotation guide、目检结论放在过程诊断资产的 metadata 或任务错
 `variant-put` 或把 revision 再加一。
 
 所有需要编辑的 canonical generated base 写回后，调用绑定的 `素材_技能_贴片`；它只调用后端唯一的确定性 Prime composer，由后端为所有 expected sizes
-重新贴回官方透明组件并直接登记 `primed`、`delivered` 和 Prime 合成过程图。精准调整不创建贴片 task、不调用 QC、不创建 QC 子 Issue；
-贴片 Skill 是唯一的官方组件交接来源。
+重新贴回官方透明组件并登记 `primed` 和 Prime 合成过程图。精准调整不创建贴片 task；贴片后的最终图由平台创建 visual QC，不能把
+无品牌底图自检当成交付验收。贴片 Skill 是唯一的官方组件交接来源。
 
 如果回图已经存在，后续失败按协议层处理：task/variant 归属、JSON 字段、三份必需证据未同时提供、prompt/hash、
 normalization 或本地 path 错误，都只修复对应 JSON、参数或 task_id，再用同一张上传附件和同一份模型结果重试；不要重新调用 Image Edit。
@@ -126,7 +137,8 @@ normalization 或本地 path 错误，都只修复对应 JSON、参数或 task_i
 并让当前 task 失败；平台会把 variant 标为可重试，已登记的方图和其他过程图片必须保留。不得用文字结果冒充图片，不得删除失败过程图。
 
 绑定的 `素材_技能_贴片` 返回后再次执行 `multica creative order get <order-id> --output json`，确认每个 expected size 都有当前 revision
-的 `primed` 与 `delivered` 资产和 Prime 合成过程图；缺任何尺寸都不能报告完成。精准调整不执行 QC。
+的 `primed` 资产和 Prime 合成过程图；`final_visual_validation=true` 时不等待 delivered 资产，交由平台最终图视觉验收。该验收若发现
+真实 Prime 遮挡，只会把失败尺寸创建为有上限的 `creative_direct_edit` 定向续调，继续使用无品牌底图，绝不编辑二维码、Logo 或条款。
 
 只处理 task context 指定的对象、revision、target_size、edit_sizes 和 scope。不得创建或修改 Issue，不得用评论代替领域数据，不得触发采集、分析、
 方案、标准生产、Prime agent 或 QC。

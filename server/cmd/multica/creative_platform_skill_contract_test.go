@@ -69,10 +69,10 @@ func TestCreativePlatformSkillsUseFrozenBusinessInputs(t *testing.T) {
 		"ad-creative-analysis":       {"app_ui_replacement_needed", "app_ui_bounds", "不得读取、选择或引用 `app_ui_reference`", "不得输出 attachment ID"},
 		"ad-creative-pre-adaptation": {"source_analysis", "text_replacements", "visual_direction", "recommendation_basis", "repayment_plan_selections", "numeric_layouts", "render_instruction", "完整展示字符串", "pre-adaptation-put", "min(", "我方优先、数量取小", "只有明显的还款结构才生成 repayment 选择和 numeric layout", "Rp100Juta", "保留后续可手动改写空间"},
 		"ad-creative-plan":           {"copy_snapshot", "input_snapshot", "source_analysis", "app_ui_replacement", "app_ui_reference", "resource_file_id", "attachment_id", "只替换手机屏幕内容"},
-		"ad-creative-production":     {"copy_snapshot", "prompt_sha256", "request_id", "Input 3 is the selected AdaKami App UI reference", "app_ui_reference_attachment_id", "multica attachment download", "只替换手机屏幕内容"},
-		"ad-creative-direct-edit":    {"copy_snapshot", "prompt_sha256", "delivery_mode", "即使先前识别错了，也要保留后续手动改写空间", "不要把流程卡死在还款计划选择"},
-		"ad-creative-qc":             {"copy_snapshot", "compose_result", "qc-finalize", "multica attachment download", "view_image", "base64/stdout", "stage=primed", "revision=<context.revision>"},
-		"ad-creative-prime-compose":  {"prime-compose", "creative_prime_backend.go", "does not edit model prompts"},
+		"ad-creative-production":     {"copy_snapshot", "prompt_sha256", "request_id", "Input 3 is the selected AdaKami App UI reference", "app_ui_reference_attachment_id", "multica attachment download", "只替换手机屏幕内容", "--result-file", "同一个 Bash/exec"},
+		"ad-creative-direct-edit":    {"copy_snapshot", "prompt_sha256", "delivery_mode", "即使先前识别错了，也要保留后续手动改写空间", "不要把流程卡死在还款计划选择", "intent-plan.json", "final_visual_validation=true"},
+		"ad-creative-qc":             {"copy_snapshot", "compose_result", "qc-finalize", "multica attachment download", "view_image", "base64/stdout", "stage=primed", "revision=<context.revision>", "已批准模板家族"},
+		"ad-creative-prime-compose":  {"prime-compose", "creative_prime_backend.go", "does not edit model prompts", "reselects that family"},
 	}
 
 	for skillName, terms := range required {
@@ -88,10 +88,12 @@ func TestCreativePlatformSkillsUseFrozenBusinessInputs(t *testing.T) {
 	for _, required := range []string{
 		"capability = 'reference_analysis'; version = 19",
 		"capability = 'generation_plan'; version = 37",
-		"capability = 'image_edit'; version = 96",
+		"capability = 'image_edit'; version = 97",
+		"capability = 'prime_compose'; version = 3",
+		"capability = 'direct_image_edit'; version = 18",
 		"app_ui_replacement",
 		"Input 3",
-		"capability = 'quality_control'; version = 35",
+		"capability = 'quality_control'; version = 36",
 		"multica attachment download",
 		"用 view_image 查看",
 	} {
@@ -104,10 +106,12 @@ func TestCreativePlatformSkillsUseFrozenBusinessInputs(t *testing.T) {
 	for _, required := range []string{
 		`Capability: "reference_analysis", Version: 19`,
 		`Capability: "generation_plan", Version: 37`,
-		`Capability: "image_edit", Version: 96`,
+		`Capability: "image_edit", Version: 97`,
+		`Capability: "prime_compose", Version: 3`,
+		`Capability: "direct_image_edit", Version: 18`,
 		"app_ui_replacement",
 		"Input 3",
-		`Capability: "quality_control", Version: 35`,
+		`Capability: "quality_control", Version: 36`,
 		"multica attachment download",
 		"用 view_image 查看",
 	} {

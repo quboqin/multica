@@ -7,6 +7,7 @@
 | `multica creative order qc-put` writes one report per variant, lane, and revision | `server/cmd/multica/cmd_creative_domain.go:runCreativeOrderQCPut`, `server/internal/handler/creative_domain.go:UpsertCreativeOrderQC` |
 | `multica creative order qc-finalize` waits for the visual report, then delivers a clean package, queues visual rework, or creates an action-required resolution | `server/cmd/multica/cmd_creative_domain.go:runCreativeOrderQCFinalize`, `server/internal/handler/creative_domain.go:FinalizeCreativeOrderQC` |
 | A structured final visual finding for actual Prime obstruction or unreadable official Prime text queues up to two next-revision production tasks; after that the current delivery stays available with QC risk, while unstructured visual failures remain manual | `server/internal/handler/creative_domain.go:creativeVisualModelReworkFindings`, `server/internal/handler/creative_domain.go:queueCreativeVisualModelRework` |
+| Before QC receives the composed asset, deterministic composition evaluates all frozen approved template families and can reselect away from an inconspicuous or dominant bright-patch family without regenerating the unbranded base | `server/internal/creative/primecompose/image_prime_compose.py:select_template_family` |
 | Native QC tasks are distinct by evidence pair plus visual-lane revision `item_key` | `server/internal/service/task.go:EnqueueDirectTaskFanout`, `server/internal/service/task.go:directTaskItemKey` |
 
 Reconfirm these paths before changing the QC release contract.

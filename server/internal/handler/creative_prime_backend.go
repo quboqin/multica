@@ -148,8 +148,9 @@ func configuredCreativePrimeComposeConcurrency() int {
 
 // composeCreativeOrderVariantPrime owns the fixed full-template composition
 // boundary. Image agents provide only generated bases; the API loads the
-// frozen order contract and applies an unmodified transparent template. A
-// direct adjustment ends at this boundary because it deliberately skips QC.
+// frozen order contract and applies an unmodified transparent template. Direct
+// adjustments preserve that deterministic boundary, then enter final visual
+// validation before delivery.
 func (h *Handler) composeCreativeOrderVariantPrime(
 	ctx context.Context,
 	workspaceID, orderID, variantID, requestedBy pgtype.UUID,
@@ -176,8 +177,8 @@ WHERE variant.id = $1 AND order_row.id = $2 AND order_row.workspace_id = $3
 		}
 		return false, fmt.Errorf("load brand component input: %w", err)
 	}
-	skipQC := triggerKind == "creative_direct_edit" || creativeDirectEditSkipsQC(json.RawMessage(brief))
 	directDelivery := parseCreativeDirectEditDeliveryConfig(json.RawMessage(brief))
+	skipQC := creativePrimeSkipsQC(triggerKind, json.RawMessage(brief), directDelivery)
 
 	if triggerKind == "creative_direct_edit" && directDelivery.DeliveryMode == "preview" {
 		return false, nil
@@ -496,6 +497,13 @@ WHERE id = $1
 		return true, &creativeQCHandoffError{cause: err}
 	}
 	return true, nil
+}
+
+// creativePrimeSkipsQC preserves the legacy direct-edit delivery mode while
+// allowing an annotated direct adjustment to explicitly require final-image
+// validation even if its parent order was created as a direct edit.
+func creativePrimeSkipsQC(triggerKind string, brief json.RawMessage, delivery creativeDirectEditDeliveryConfig) bool {
+	return (triggerKind == "creative_direct_edit" && !delivery.FinalVisualValidation) || creativeDirectEditSkipsQC(brief)
 }
 
 func creativePrimeCommandDetail(stdout, stderr string) string {

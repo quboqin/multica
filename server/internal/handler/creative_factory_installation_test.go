@@ -130,8 +130,8 @@ func TestCreativeFactoryImageEditingUsesOneAgentWithWorkflowSkills(t *testing.T)
 			break
 		}
 	}
-	if directEditSkill.Version != 16 {
-		t.Fatalf("direct-edit Skill version = %d, want 16", directEditSkill.Version)
+	if directEditSkill.Version != 18 {
+		t.Fatalf("direct-edit Skill version = %d, want 18", directEditSkill.Version)
 	}
 	for index := range creativeFactoryAgentSpecs {
 		spec := &creativeFactoryAgentSpecs[index]
@@ -169,7 +169,7 @@ func TestCreativeFactoryImageEditingUsesOneAgentWithWorkflowSkills(t *testing.T)
 			t.Errorf("merged image-edit Agent instructions missing %q branch", workflow)
 		}
 	}
-	for _, required := range []string{"MULTICA_TASK_ID", "diagnostic-asset-put", "asset-put", "task complete"} {
+	for _, required := range []string{"MULTICA_TASK_ID", "diagnostic-asset-put", "asset-put", "task complete", "--result-file", "creative material download"} {
 		if !strings.Contains(imageEditor.Instructions, required) {
 			t.Errorf("merged image-edit Agent instructions missing %q", required)
 		}
@@ -245,8 +245,8 @@ WHERE id = $1::uuid
 	if err := json.Unmarshal([]byte(configRaw), &config); err != nil {
 		t.Fatalf("decode refreshed skill config: %v", err)
 	}
-	if got := int(config["version"].(float64)); got != 17 {
-		t.Fatalf("direct-edit Skill version = %d, want 17", got)
+	if got := int(config["version"].(float64)); got != 18 {
+		t.Fatalf("direct-edit Skill version = %d, want 18", got)
 	}
 	if got := int(config["template_version"].(float64)); got != creativeFactoryTemplateVersion {
 		t.Fatalf("direct-edit template_version = %d, want %d", got, creativeFactoryTemplateVersion)
@@ -260,7 +260,7 @@ WHERE id = $1::uuid
 `, imageAgentID).Scan(&instructions); err != nil {
 		t.Fatalf("query refreshed image-edit agent: %v", err)
 	}
-	for _, required := range []string{"Input 2 只用于读取红框编号", "scope=variant 时按 edit_sizes/expected_sizes 遍历", "人物替换必须是肉眼可见的 replacement", "Rp100Juta", "creative_direct_edit", "比例偏差 <=10%"} {
+	for _, required := range []string{"Input 2 只用于读取红框编号", "intent-plan.json", "final_visual_validation", "scope=variant 时按 edit_sizes/expected_sizes 遍历", "人物替换必须是肉眼可见的 replacement", "Rp100Juta", "creative_direct_edit", "比例偏差 <=10%"} {
 		if !strings.Contains(instructions, required) {
 			t.Fatalf("image-edit Agent instructions missing refreshed contract %q", required)
 		}
