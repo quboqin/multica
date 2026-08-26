@@ -155,8 +155,8 @@ WHERE parent_task_id = $1 AND status = 'queued'
 `, taskID).Scan(&childCount, &childMaxAttempts); err != nil {
 		t.Fatal(err)
 	}
-	if childCount != 1 || childMaxAttempts != 4 {
-		t.Fatalf("continuation = count %d max_attempts %d, want one child with max_attempts 4", childCount, childMaxAttempts)
+	if childCount != 1 || childMaxAttempts != 5 {
+		t.Fatalf("continuation = count %d max_attempts %d, want one child with max_attempts 5", childCount, childMaxAttempts)
 	}
 }
 
@@ -1180,8 +1180,14 @@ VALUES ($1, 1, 'text', 'initial diagnostic'),
 	if _, err := testPool.Exec(t.Context(), `UPDATE agent_task_queue SET attempt = 4, max_attempts = 4 WHERE id = $1`, taskID); err != nil {
 		t.Fatal(err)
 	}
+	if failure := getOrder().WorkflowFailures[0]; !failure.Retryable {
+		t.Fatalf("fourth production action-required failure should allow one confirmed-repair retry: %#v", failure)
+	}
+	if _, err := testPool.Exec(t.Context(), `UPDATE agent_task_queue SET attempt = 5, max_attempts = 5 WHERE id = $1`, taskID); err != nil {
+		t.Fatal(err)
+	}
 	if failure := getOrder().WorkflowFailures[0]; failure.Retryable {
-		t.Fatalf("fourth production action-required failure is retryable: %#v", failure)
+		t.Fatalf("fifth production action-required failure is retryable: %#v", failure)
 	}
 	if _, err := testPool.Exec(t.Context(), `UPDATE agent_task_queue SET attempt = 1, max_attempts = 2 WHERE id = $1`, taskID); err != nil {
 		t.Fatal(err)
