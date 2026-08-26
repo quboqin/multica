@@ -112,6 +112,18 @@ test("normalizes structured browser filters before material search", () => {
   assert.deepEqual(normalized.platform, [1, 2]);
 });
 
+test("normalizes collection target aliases and compact recent-day ranges", () => {
+  const normalized = normalizeAppGrowingMaterialSearchParams({
+    region: "印度尼西亚",
+    limit: null,
+    date_range: { days: 30 },
+    max_outputs: 5,
+  });
+
+  assert.equal(normalized.limit, 5);
+  assert.equal(normalized.daterange, "-29,0");
+});
+
 test("uses the AutoPilot selection defaults when a legacy task omits explicit rules", () => {
   const normalized = normalizeAppGrowingMaterialSearchParams({
     region: "印度尼西亚",

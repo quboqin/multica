@@ -31,7 +31,7 @@ type creativeDirectEditResponse struct {
 }
 
 var creativeDirectEditCapabilityBindings = []creativeOrderCapabilityBinding{
-	{Capability: "direct_image_edit", SnapshotField: "direct_edit_agent_id"},
+	{Capability: "direct_image_edit", SnapshotField: "direct_edit_agent_id", PoolSnapshotField: "direct_edit_agent_ids", AllowMultiple: true},
 	{Capability: "quality_control", SnapshotField: "reviewer_agent_id"},
 }
 

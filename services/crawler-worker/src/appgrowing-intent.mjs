@@ -22,6 +22,8 @@ export const DEFAULT_MATERIAL_SELECTION_RULES = Object.freeze({
   }),
 });
 
+export const DEFAULT_MATERIAL_SEARCH_LIMIT = 5;
+
 export function normalizeAppGrowingMaterialSearchParams(params = {}) {
   if (!params || typeof params !== "object" || Array.isArray(params)) {
     return {};
@@ -154,8 +156,21 @@ function defaultMaterialSelectionRules() {
 
 function normalizeStructuredMaterialSearchFilters(params) {
   const out = { ...params };
-  if (out.limit === undefined && out.max_results !== undefined) {
-    out.limit = out.max_results;
+  if (out.limit === undefined || out.limit === null || out.limit === "") {
+    const limitAlias = firstDefined(
+      out.max_results,
+      out.max_materials,
+      out.max_outputs,
+      out.max_output,
+      out.output_limit,
+      out.target_count,
+      out.material_limit,
+    );
+    if (limitAlias !== undefined) {
+      out.limit = limitAlias;
+    } else {
+      delete out.limit;
+    }
   }
   if (typeof out.daterange !== "string" || !out.daterange.trim()) {
     const days = recentDaysFromDateRange(out.date_range);
@@ -191,7 +206,7 @@ function recentDaysFromDateRange(value) {
   }
   const type = String(value.type || "").trim().toLowerCase();
   const days = Number(value.days);
-  if (type !== "recent_days" || !Number.isInteger(days) || days < 1 || days > 3650) {
+  if ((type && type !== "recent_days") || !Number.isInteger(days) || days < 1 || days > 3650) {
     return null;
   }
   return days;

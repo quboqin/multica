@@ -52,6 +52,7 @@ import type {
   CreativeResource,
   CreativeResourceKind,
   CreateCreativeFeedbackResponse,
+  CreateIssueRequest,
   IssueMetadata,
 } from "@multica/core/types";
 import { Badge } from "@multica/ui/components/ui/badge";
@@ -514,17 +515,7 @@ function CreativeOrderDetail({ orderId, onBack, onBrowseOrders, backLabel }: { o
       sourceRevision: asset.revision,
       request,
     };
-    const issue = await api.createIssue({
-      title: creativeOrderAdjustmentIssueTitle(issueInput),
-      description: creativeOrderAdjustmentIssueDescription(issueInput),
-      parent_issue_id: data.issue_id,
-      assignee_type: "squad",
-      assignee_id: squadId,
-      // The order endpoint owns production routing. Keeping the record in the
-      // backlog prevents the generic issue path from inventing a direct-edit task.
-      status: "backlog",
-      metadata: creativeOrderAdjustmentIssueMetadata(issueInput),
-    });
+    const issue = await api.createIssue(creativeOrderAdjustmentIssueRequest(issueInput, data.issue_id, squadId));
     if (!issue.id) throw new Error("调整协作记录创建失败，请重试");
     return { issue, sizeKey };
   };
@@ -1189,6 +1180,21 @@ export function creativeOrderAdjustmentIssueMetadata(input: CreativeOrderAdjustm
     creative_size: input.sizeKey,
     creative_source_revision: input.sourceRevision,
     creative_revision: input.sourceRevision + 1,
+  };
+}
+
+export function creativeOrderAdjustmentIssueRequest(input: CreativeOrderAdjustmentIssueInput, parentIssueId: string, squadId: string): CreateIssueRequest {
+  return {
+    title: creativeOrderAdjustmentIssueTitle(input),
+    description: creativeOrderAdjustmentIssueDescription(input),
+    parent_issue_id: parentIssueId,
+    assignee_type: "squad",
+    assignee_id: squadId,
+    // The order endpoint owns production routing. Keeping the record in the
+    // backlog prevents the generic issue path from inventing a direct-edit task.
+    status: "backlog",
+    metadata: creativeOrderAdjustmentIssueMetadata(input),
+    allow_duplicate: true,
   };
 }
 

@@ -7,6 +7,7 @@ import { chromium } from "playwright";
 import pg from "pg";
 import { createBrowserCapacity, createBrowserLeaseRegistry } from "./browser-capacity.mjs";
 import {
+  DEFAULT_MATERIAL_SEARCH_LIMIT,
   normalizeAppGrowingMaterialSearchParams,
   normalizeMaterialRules,
 } from "./appgrowing-intent.mjs";
@@ -2246,7 +2247,7 @@ async function runAppGrowingMaterialSearch(page, context, connector, params = {}
   const priorityCompetitors = new Set(
     normalizeCompetitors(params.priority_competitors).map(normalizeCompetitorKey),
   );
-  const totalLimit = positiveIntegerParam(params.limit, 25, 1, 200);
+  const totalLimit = positiveIntegerParam(params.limit, DEFAULT_MATERIAL_SEARCH_LIMIT, 1, 200);
   const pageLimit = positiveIntegerParam(params.pages_per_competitor, 3, 1, 5);
   const priorityPageLimit = positiveIntegerParam(params.priority_pages_per_competitor, Math.max(5, pageLimit), 1, 8);
   const novelOnly = params.novel_only === true;

@@ -441,9 +441,43 @@ def test_concise_prompt_blocks_repeated_long_instruction() -> None:
     assert any(item.startswith("duplicate_segment:") for item in debt)
 
 
-def test_concise_prompt_enforces_6400_character_hard_limit() -> None:
+def test_concise_prompt_enforces_4800_character_hard_limit() -> None:
     assert not any(item.startswith("prompt_too_long:") for item in validate_concise_prompt("x" * MAX_PROMPT_CHARS))
     assert f"prompt_too_long:{MAX_PROMPT_CHARS + 1}>{MAX_PROMPT_CHARS}" in validate_concise_prompt("x" * (MAX_PROMPT_CHARS + 1))
+
+
+def test_main_explain_outputs_actionable_repair_guidance(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    materials = tmp_path / "materials.json"
+    materials.write_text(json.dumps({"items": [{"candidate_id": "candidate-1", "copy_snapshot": approved_snapshot()}]}), encoding="utf-8")
+    monkeypatch.setattr(sys, "argv", [
+        "validate_copy_snapshot.py",
+        "--materials-json", str(materials),
+        "--candidate-id", "candidate-1",
+        "--prompt-text", "APPROVED TEXT:\nGunakan limit Rp99.000.000\nTABLE:\nNo table.\n",
+        "--explain",
+    ])
+
+    assert main() == 2
+    payload = json.loads(capsys.readouterr().out)
+
+    assert payload["prompt_policy"] == {
+        "target_chars": "1800-3200",
+        "complex_soft_max_chars": 4200,
+        "hard_max_chars": 4800,
+    }
+    guidance = payload["repair_guidance"]
+    assert any(
+        item["rule"] == "unapproved_financial_token"
+        and item["token"] == "currency:99000000"
+        and item["line"] == 2
+        and "financial_number:80000000" in item["approved_financial_tokens"]
+        for item in guidance
+    )
+    assert any("unapproved_financial_token" in item for item in payload["repair_summary"])
 
 
 def test_main_requires_concise_prompt_when_requested(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

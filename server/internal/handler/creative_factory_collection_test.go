@@ -31,6 +31,17 @@ func TestCreativeFactoryCollectionTargetComesFromParams(t *testing.T) {
 	}
 }
 
+func TestCreativeFactoryCollectionTargetAcceptsOutputAliases(t *testing.T) {
+	params := json.RawMessage(`{"max_outputs":"5"}`)
+	if got := creativeFactoryCollectionTargetFromParams(params); got != 5 {
+		t.Fatalf("target = %d, want 5", got)
+	}
+	materials := make([]creativeMaterialInput, 25)
+	if got := len(capCreativeFactoryMaterials(materials, params)); got != 5 {
+		t.Fatalf("capped materials = %d, want 5", got)
+	}
+}
+
 func TestCreativeFactoryCollectionParamsHasAgent(t *testing.T) {
 	params := json.RawMessage(`{"analysis_agent_id":"agent-1"}`)
 	if !creativeFactoryCollectionParamsHasAgent(params, "agent-1") {

@@ -180,12 +180,14 @@ WHERE item.id = $1 AND order_row.workspace_id = $2
 	}
 
 	preferred := creativeTaskPreferredProducerID(item.Context)
+	pinPreferred := false
 	if revision, hasRevision, err := jsonPositiveInt(taskContext["revision"]); err == nil && hasRevision && revision > 0 {
 		if historical := selectedCreativeProductionAgentFromHistory(ctx, h.DB, workspaceID, variantID, revision); historical.Valid {
 			preferred = historical
+			pinPreferred = true
 		}
 	}
-	agent, err := h.selectCreativeImageEditAgent(ctx, h.DB, h.Queries, workspaceID, json.RawMessage(inputSnapshot), strings.TrimSpace(variantIDText), preferred)
+	agent, err := h.selectCreativeImageEditAgent(ctx, h.DB, h.Queries, workspaceID, json.RawMessage(inputSnapshot), strings.TrimSpace(variantIDText), preferred, pinPreferred)
 	if err != nil {
 		return db.Agent{}, item, err
 	}

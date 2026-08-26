@@ -229,6 +229,7 @@ FOR UPDATE OF item, variant, asset
 		return
 	}
 	editSizes := creativeOrderAdjustmentEditSizes(input.Scope, input.SizeKey, expectedSizes)
+	newRevision := input.SourceRevision + 1
 
 	var activeTask bool
 	if err := tx.QueryRow(r.Context(), `
@@ -286,7 +287,7 @@ SELECT COUNT(DISTINCT size_key)
 	}
 	squadID := pgtype.UUID{Bytes: squadUUID, Valid: true}
 	frozenSnapshot, err := freezeCreativeOrderSquadSnapshot(r.Context(), tx, workspaceID, squadID, json.RawMessage(inputSnapshot), []creativeOrderCapabilityBinding{
-		{Capability: "direct_image_edit", SnapshotField: "direct_edit_agent_id"},
+		{Capability: "direct_image_edit", SnapshotField: "direct_edit_agent_id", PoolSnapshotField: "direct_edit_agent_ids", AllowMultiple: true},
 	})
 	if err != nil {
 		var validationErr *creativeOrderSquadValidationError
@@ -297,18 +298,19 @@ SELECT COUNT(DISTINCT size_key)
 		}
 		return
 	}
-	directEditAgentID, err := creativeOrderDirectEditAgentSnapshot(frozenSnapshot)
+	preferredDirectEditAgentID, err := creativeOrderDirectEditAgentSnapshot(frozenSnapshot)
 	if err != nil {
 		writeError(w, http.StatusConflict, err.Error())
 		return
 	}
-	directEditor, err := h.Queries.WithTx(tx).GetAgentInWorkspace(r.Context(), db.GetAgentInWorkspaceParams{ID: directEditAgentID, WorkspaceID: workspaceID})
-	if errors.Is(err, pgx.ErrNoRows) || directEditor.ArchivedAt.Valid || !directEditor.RuntimeID.Valid {
-		writeError(w, http.StatusConflict, "the frozen direct image edit agent is unavailable")
-		return
+	pinPreferredDirectEditor := false
+	if historical := selectedCreativeDirectEditAgentFromHistory(r.Context(), tx, workspaceID, parseUUID(variantID), newRevision); historical.Valid {
+		preferredDirectEditAgentID = historical
+		pinPreferredDirectEditor = true
 	}
+	directEditor, err := h.selectCreativeDirectImageEditAgent(r.Context(), tx, h.Queries.WithTx(tx), workspaceID, frozenSnapshot, variantID, preferredDirectEditAgentID, pinPreferredDirectEditor)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to load direct image edit agent")
+		writeError(w, http.StatusConflict, err.Error())
 		return
 	}
 	if sourceAssetID == "" || sourceAttachmentID == "" {
@@ -399,7 +401,6 @@ SELECT EXISTS(
 		}
 	}
 
-	newRevision := input.SourceRevision + 1
 	if _, err := tx.Exec(r.Context(), `
 UPDATE creative_order
 SET input_snapshot = $2::jsonb, updated_at = now()
@@ -504,6 +505,8 @@ WHERE id = $1 AND adopted_variant_id = $2
 		"issue_id":                       uuidToString(adjustmentIssueID),
 		"leader_agent_id":                uuidToString(leaderID),
 		"reviewer_agent_id":              uuidToString(reviewerID),
+		"direct_edit_agent_id":           uuidToString(directEditor.ID),
+		"direct_edit_runtime_id":         uuidToString(directEditor.RuntimeID),
 		"user_request":                   feedback.Comment,
 		"delivery_mode":                  "publish",
 		"target_size":                    input.SizeKey,
@@ -528,6 +531,8 @@ WHERE id = $1 AND adopted_variant_id = $2
 			"source_assets":                  sourceAssetRefs,
 			"reference_asset_id":             uuidToString(assetID),
 			"reference_attachment_id":        assetAttachmentID,
+			"direct_edit_agent_id":           uuidToString(directEditor.ID),
+			"direct_edit_runtime_id":         uuidToString(directEditor.RuntimeID),
 			"annotation_guide_attachment_id": annotationGuideAttachmentID,
 			"annotation_guide_source":        "final_reference",
 			"request":                        feedback.Comment,

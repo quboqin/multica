@@ -50,6 +50,8 @@ export function creativeGenerationInfo(
   const layoutVersion = firstScalar([layoutContract, ...marketSources], ["version", "layout_contract_version", "package_contract_version"]);
   const marketName = firstString(marketSources, ["market_pack_name", "resource_pack_name", "market", "brand"])
     || firstString([brief], ["market_pack_id", "resource_pack_id"]);
+  const marketVersion = firstScalar(marketSources, ["market_pack_version", "resource_pack_version", "market_version"]);
+  const marketResource = marketName && marketVersion ? `${marketName} · v${marketVersion}` : marketName;
   const explicitRule = firstString([brief, ...marketSources], ["market_rule", "market_rules", "compliance_rule", "compliance_rules"]);
   const layoutSummary = [
     layoutVersion ? `Prime 布局合同 v${layoutVersion}` : hardRegions.length > 0 || backdropRule ? "Prime 布局合同" : "",
@@ -75,7 +77,7 @@ export function creativeGenerationInfo(
     model: firstString(promptSources, ["model", "model_name", "generation_model"]),
     provider: firstString(promptSources, ["provider", "image_provider", "generation_provider"]),
     marketRule: explicitRule || layoutSummary || (marketName ? "已绑定市场资源包" : ""),
-    marketResource: marketName,
+    marketResource,
     createdAt: asset.updated_at || asset.created_at || generated?.updated_at || generated?.created_at || "",
     prompt: firstString(promptSources, ["prompt", "model_prompt", "final_prompt", "provider_prompt"]),
     promptSha256: firstString(evidenceSources, ["prompt_sha256", "model_prompt_sha256", "final_prompt_sha256"]),

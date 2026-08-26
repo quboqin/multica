@@ -79,7 +79,8 @@ python <当前 Skill 目录>/references/render_prime_guide.py \
 `production_prompt`；模型提示词的质量、长度和尺寸适配由本 Skill 负责。若存在 App UI 替换，prompt 必须显式声明
 Input 3 的角色和“只替换手机屏幕内容”的限制。
 
-提示词应保持 1800-2800 个字符，硬上限 3200。只保留能改变画面的信息，禁止粘贴审计日志、JSON、哈希、QC 结论、坐标、矩形框、
+提示词建议保持 1800-3200 个字符；复杂还款表、App UI 替换或密集多模块结构可放宽到约 4200；硬上限 4800。不要为了贴合建议区间而删掉
+approved copy、表格行、Input 角色、CANVAS LOCK 或 Prime 避让语义。只保留能改变画面的信息，禁止粘贴审计日志、JSON、哈希、QC 结论、坐标、矩形框、
 像素值、重复的金融事实或同一句文案的多种写法。提示词必须按下面的固定模板写，先给构图闸门，再声明输入图的角色：
 
 ```text
@@ -158,6 +159,11 @@ Variant brief `approved_copy` 中每一个非空字段（包括 `product_categor
 “Input 3 is the selected AdaKami App UI reference for the phone screen only. Replace only the visible screen content with an
 AdaKami-style interface; preserve the original phone body, hand, perspective, reflections, lighting, occlusion, and scene. Remove
 competitor app logos, brand colors, QR, buttons, and proprietary UI text. Do not draw AdaKami UI outside the phone screen.”
+
+调用模型前运行 `validate_copy_snapshot.py --explain` 进行机械校验。若返回失败，先读取 JSON 中的 `repair_guidance` / `repair_summary`：
+只针对列出的 `source`、`size_key`、`rule` 和可接受术语补一两句或删违规值，再重跑校验。不要因为缺某个 guard 就整体重写三份 prompt，也不要用 CLI
+生成最终创意提示词；出图智能体仍负责润色与尺寸适配。只有 `prompt_too_long`、重复段、审计日志/JSON/哈希/坐标等非画面信息超限时才压缩长度；已经通过校验且
+不超过 4200 的复杂 prompt 不需要继续压到 2800。
 
 ## 视觉继承和三尺寸顺序
 

@@ -20,6 +20,7 @@ import {
   creativeAnnotationAdjustmentSummary,
   creativeOrderAdjustmentIssueDescription,
   creativeOrderAdjustmentIssueMetadata,
+  creativeOrderAdjustmentIssueRequest,
   creativeOrderAdjustmentIssueTitle,
   creativeOrderAdoptionStatus,
   creativeOrderSquadId,
@@ -77,6 +78,15 @@ describe("creative feedback state", () => {
       creative_scope: "size",
       creative_source_revision: 1,
       creative_revision: 2,
+    });
+    expect(creativeOrderAdjustmentIssueRequest(input, "issue-parent", "squad-1")).toMatchObject({
+      title: "V01 / 方形 精准调整 · R2",
+      parent_issue_id: "issue-parent",
+      assignee_type: "squad",
+      assignee_id: "squad-1",
+      status: "backlog",
+      allow_duplicate: true,
+      metadata,
     });
   });
 

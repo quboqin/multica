@@ -4,6 +4,7 @@ import { render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { I18nProvider } from "@multica/core/i18n/react";
 import { ReleaseAnnouncement } from "./release-announcement";
+import { PLATFORM_RELEASE_ID, PLATFORM_VERSION, platformReleaseContent } from "../changelog/releases";
 
 vi.mock("../navigation", () => ({
   useNavigation: () => ({ push: vi.fn() }),
@@ -19,6 +20,8 @@ describe("ReleaseAnnouncement", () => {
   });
 
   it("shows the first release announcement when no version has been seen", async () => {
+    const release = platformReleaseContent("zh-Hans", PLATFORM_RELEASE_ID);
+
     render(
       <I18nProvider
         locale="zh-Hans"
@@ -40,12 +43,8 @@ describe("ReleaseAnnouncement", () => {
     );
 
     await waitFor(() => {
-      expect(
-        screen.getByText(
-          "创意工厂可以在每个工作区独立开启或关闭。",
-        ),
-      ).toBeInTheDocument();
+      expect(screen.getByText(release.change_1)).toBeInTheDocument();
     });
-    expect(window.localStorage.getItem("multica:last-seen-platform-version")).toBe("0.3.23");
+    expect(window.localStorage.getItem("multica:last-seen-platform-version")).toBe(PLATFORM_VERSION);
   });
 });

@@ -2,6 +2,7 @@ package handler
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
@@ -3308,9 +3309,10 @@ func createCreativeOrderSquadFixture(t *testing.T, missingCapability, duplicateC
 		ReviewerAgentID: createHandlerTestAgent(t, "creative-order-reviewer-"+uuid.NewString(), nil),
 	}
 	agentsByCapability := map[string]string{
-		"generation_plan": fixture.PlannerAgentID,
-		"image_edit":      fixture.ProducerAgentID,
-		"quality_control": fixture.ReviewerAgentID,
+		"direct_image_edit": fixture.ProducerAgentID,
+		"generation_plan":   fixture.PlannerAgentID,
+		"image_edit":        fixture.ProducerAgentID,
+		"quality_control":   fixture.ReviewerAgentID,
 	}
 	skillIDs := make([]string, 0, len(agentsByCapability)+1)
 	bindCapability := func(agentID, capability string) {
@@ -3614,19 +3616,51 @@ func TestSelectCreativeImageEditAgentUsesCurrentSquadPool(t *testing.T) {
 	fixture := createCreativeOrderSquadFixture(t, "", "image_edit", true)
 	inputSnapshot := json.RawMessage(`{"squad_snapshot":{"squad_id":"` + fixture.SquadID + `"}}`)
 	preferred := parseUUID(fixture.ProducerAgentID)
-	selected, err := testHandler.selectCreativeImageEditAgent(t.Context(), testPool, testHandler.Queries, parseUUID(testWorkspaceID), inputSnapshot, uuid.NewString(), preferred)
+	selected, err := testHandler.selectCreativeImageEditAgent(t.Context(), testPool, testHandler.Queries, parseUUID(testWorkspaceID), inputSnapshot, uuid.NewString(), preferred, false)
 	if err != nil {
-		t.Fatalf("select preferred producer: %v", err)
+		t.Fatalf("select soft preferred producer: %v", err)
 	}
 	if uuidToString(selected.ID) != fixture.ProducerAgentID {
-		t.Fatalf("selected producer = %s, want preferred %s", uuidToString(selected.ID), fixture.ProducerAgentID)
+		t.Fatalf("selected producer = %s, want soft preferred %s", uuidToString(selected.ID), fixture.ProducerAgentID)
 	}
-	if _, err := testPool.Exec(t.Context(), `
-DELETE FROM squad_member WHERE squad_id = $1 AND member_id = $2
-`, fixture.SquadID, fixture.ProducerAgentID); err != nil {
+	var busyTaskID string
+	if err := testPool.QueryRow(t.Context(), `
+INSERT INTO agent_task_queue (
+  agent_id, runtime_id, status, context, trigger_evidence_kind, trigger_evidence_ref_id,
+  originator_user_id, accountable_user_id, requesting_user_id, originator_source
+)
+VALUES ($1, (SELECT runtime_id FROM agent WHERE id = $1), 'running', '{}'::jsonb,
+        'creative_order_item_production', $2, $3, $3, $3, 'direct_human')
+RETURNING id::text
+`, fixture.ProducerAgentID, uuid.NewString(), testUserID).Scan(&busyTaskID); err != nil {
 		t.Fatal(err)
 	}
-	selected, err = testHandler.selectCreativeImageEditAgent(t.Context(), testPool, testHandler.Queries, parseUUID(testWorkspaceID), inputSnapshot, uuid.NewString(), preferred)
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM agent_task_queue WHERE id = $1`, busyTaskID)
+	})
+	selected, err = testHandler.selectCreativeImageEditAgent(t.Context(), testPool, testHandler.Queries, parseUUID(testWorkspaceID), inputSnapshot, uuid.NewString(), preferred, false)
+	if err != nil {
+		t.Fatalf("select less busy producer: %v", err)
+	}
+	if uuidToString(selected.ID) != fixture.DuplicateAgentID {
+		t.Fatalf("selected producer with soft preferred = %s, want less busy %s", uuidToString(selected.ID), fixture.DuplicateAgentID)
+	}
+	selected, err = testHandler.selectCreativeImageEditAgent(t.Context(), testPool, testHandler.Queries, parseUUID(testWorkspaceID), inputSnapshot, uuid.NewString(), preferred, true)
+	if err != nil {
+		t.Fatalf("select pinned producer: %v", err)
+	}
+	if uuidToString(selected.ID) != fixture.ProducerAgentID {
+		t.Fatalf("selected pinned producer = %s, want preferred %s", uuidToString(selected.ID), fixture.ProducerAgentID)
+	}
+	if _, err := testPool.Exec(t.Context(), `DELETE FROM agent_task_queue WHERE id = $1`, busyTaskID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := testPool.Exec(t.Context(), `
+	DELETE FROM squad_member WHERE squad_id = $1 AND member_id = $2
+	`, fixture.SquadID, fixture.ProducerAgentID); err != nil {
+		t.Fatal(err)
+	}
+	selected, err = testHandler.selectCreativeImageEditAgent(t.Context(), testPool, testHandler.Queries, parseUUID(testWorkspaceID), inputSnapshot, uuid.NewString(), preferred, false)
 	if err != nil {
 		t.Fatalf("select after pool removal: %v", err)
 	}

@@ -172,7 +172,10 @@ SEMANTIC_REQUIRED_PROMPT_TERMS = {
 }
 PROMPT_SEGMENT_PATTERN = re.compile(r"[\n.;。]+")
 SIZE_PATTERN = re.compile(r"(?P<width>[1-9]\d*)x(?P<height>[1-9]\d*)", re.IGNORECASE)
-MAX_PROMPT_CHARS = 6400
+PROMPT_TARGET_MIN_CHARS = 1800
+PROMPT_TARGET_MAX_CHARS = 3200
+PROMPT_COMPLEX_SOFT_MAX_CHARS = 4200
+MAX_PROMPT_CHARS = 4800
 
 
 def digits(value: str) -> str:
@@ -529,6 +532,185 @@ def validate_concise_prompt(prompt: str) -> list[str]:
     return debt
 
 
+def infer_size_key(source: str, prompt: str) -> str:
+    for value in (source, prompt[:400]):
+        match = SIZE_PATTERN.search(value)
+        if match:
+            return f"{match.group('width')}x{match.group('height')}"
+    return ""
+
+
+def line_info(prompt: str, needle: str) -> dict[str, Any]:
+    if not needle:
+        return {}
+    normalized_needle = needle.casefold()
+    for index, line in enumerate(prompt.splitlines(), start=1):
+        if normalized_needle in line.casefold():
+            return {"line": index, "excerpt": line.strip()[:220]}
+    return {}
+
+
+def line_info_for_financial_token(prompt: str, token: str) -> dict[str, Any]:
+    if ":" not in token:
+        return {}
+    kind, value = token.split(":", 1)
+    if kind == "percent":
+        value = value.replace(".", ",")
+    compact_value = digits(value)
+    if not compact_value:
+        return {}
+    for index, line in enumerate(prompt.splitlines(), start=1):
+        compact_line = digits(line)
+        if compact_value in compact_line:
+            return {"line": index, "excerpt": line.strip()[:220]}
+    return {}
+
+
+def missing_terms_for_guard(rule: str) -> tuple[str, ...]:
+    if rule in SEMANTIC_PRIME_GUARD_TERMS:
+        return SEMANTIC_PRIME_GUARD_TERMS[rule]
+    if rule in PRIME_GUARD_TERMS:
+        return PRIME_GUARD_TERMS[rule]
+    if rule in SEMANTIC_REDESIGN_GUARD_TERMS:
+        return SEMANTIC_REDESIGN_GUARD_TERMS[rule]
+    if rule in REDESIGN_GUARD_TERMS:
+        return REDESIGN_GUARD_TERMS[rule]
+    if rule in SEMANTIC_REQUIRED_PROMPT_TERMS:
+        return SEMANTIC_REQUIRED_PROMPT_TERMS[rule]
+    if rule in REQUIRED_PROMPT_TERMS:
+        return REQUIRED_PROMPT_TERMS[rule]
+    return ()
+
+
+def build_repair_guidance(
+    *,
+    source: str,
+    prompt: str,
+    unapproved: list[str],
+    approved: set[str],
+    missing_prime_guard: list[str],
+    missing_redesign_guard: list[str],
+    prompt_debt: list[str],
+) -> list[dict[str, Any]]:
+    size_key = infer_size_key(source, prompt)
+    prefix = {"source": source, "size_key": size_key, "severity": "error"}
+    guidance: list[dict[str, Any]] = []
+    for token in unapproved:
+        item = {
+            **prefix,
+            "rule": "unapproved_financial_token",
+            "token": token,
+            "message": "Prompt contains a visible financial token that is absent from the selected copy_snapshot.",
+            "approved_financial_tokens": sorted(approved),
+            "fix": "Remove this visible value or replace it with an approved value from copy_snapshot/approved_copy; do not self-approve it in prompt text.",
+        }
+        item.update(line_info_for_financial_token(prompt, token))
+        guidance.append(item)
+    for rule in missing_prime_guard:
+        terms = missing_terms_for_guard(rule)
+        guidance.append(
+            {
+                **prefix,
+                "rule": "missing_prime_guard",
+                "requirement": rule,
+                "acceptable_terms": list(terms),
+                "message": "Prompt is missing a Prime-safety guard required before image generation.",
+                "fix": "Add one concise natural-language sentence that satisfies this requirement without adding coordinates, JSON, or repeated audit text.",
+            }
+        )
+    for rule in missing_redesign_guard:
+        terms = missing_terms_for_guard(rule)
+        guidance.append(
+            {
+                **prefix,
+                "rule": "missing_redesign_guard",
+                "requirement": rule,
+                "acceptable_terms": list(terms),
+                "message": "Prompt does not explicitly remove source/competitor identity or require a redesigned visual identity.",
+                "fix": "State that the reference is structure only, remove competitor/source identity, and redesign the high-salience visual identity.",
+            }
+        )
+    for debt in prompt_debt:
+        if debt.startswith("prompt_too_long:"):
+            current = len(prompt)
+            guidance.append(
+                {
+                    **prefix,
+                    "rule": "prompt_too_long",
+                    "current_chars": current,
+                    "target_chars": f"{PROMPT_TARGET_MIN_CHARS}-{PROMPT_TARGET_MAX_CHARS}",
+                    "complex_soft_max_chars": PROMPT_COMPLEX_SOFT_MAX_CHARS,
+                    "max_chars": MAX_PROMPT_CHARS,
+                    "message": f"Prompt is {current} characters; hard cap is {MAX_PROMPT_CHARS}.",
+                    "fix": "Keep model-facing composition instructions and approved copy, but remove audit logs, JSON, hashes, duplicate wording, and non-visual commentary. Complex table/App-UI prompts may stay above the target range, but must remain under the hard cap.",
+                }
+            )
+            continue
+        if debt.startswith("missing_section:"):
+            section = debt.split(":", 1)[1]
+            guidance.append(
+                {
+                    **prefix,
+                    "rule": "missing_section",
+                    "required_section": section,
+                    "message": f"Prompt must include the `{section}` section from the production template.",
+                    "fix": "Add this template heading and fill it with only the size-specific model-facing instruction.",
+                }
+            )
+            continue
+        if debt.startswith("missing_term:"):
+            requirement = debt.split(":", 1)[1]
+            terms = missing_terms_for_guard(requirement)
+            guidance.append(
+                {
+                    **prefix,
+                    "rule": "missing_term",
+                    "requirement": requirement,
+                    "acceptable_terms": list(terms),
+                    "message": "Prompt is missing a required semantic term from the production contract.",
+                    "fix": "Add the missing semantic constraint once, using the production template wording when possible.",
+                }
+            )
+            continue
+        if debt.startswith("duplicate_segment:"):
+            snippet = debt.split(":", 1)[1]
+            item = {
+                **prefix,
+                "rule": "duplicate_segment",
+                "snippet": snippet,
+                "message": "Prompt repeats a long instruction segment.",
+                "fix": "Keep the clearest occurrence and delete the duplicate segment; do not compensate by adding another paraphrase.",
+            }
+            item.update(line_info(prompt, snippet[:48]))
+            guidance.append(item)
+            continue
+        guidance.append(
+            {
+                **prefix,
+                "rule": "prompt_debt",
+                "requirement": debt,
+                "message": "Prompt failed a concise-prompt validation rule.",
+                "fix": "Revise only this rule's cause and rerun validation before calling the image model.",
+            }
+        )
+    return guidance
+
+
+def summarize_repair_guidance(guidance: list[dict[str, Any]]) -> list[str]:
+    if not guidance:
+        return ["All prompt validation checks passed."]
+    summary = []
+    for item in guidance:
+        where = item["source"]
+        if item.get("size_key"):
+            where += f" ({item['size_key']})"
+        line = f": line {item['line']}" if item.get("line") else ""
+        rule = item.get("rule") or "validation"
+        fix = item.get("fix") or item.get("message") or "Revise this item and rerun validation."
+        summary.append(f"{where}{line}: {rule} - {fix}")
+    return summary
+
+
 def item_has_variant(item: dict[str, Any], variant_id: str) -> bool:
     return any(str(variant.get("id")) == variant_id for variant in item.get("variants", []) if isinstance(variant, dict))
 
@@ -632,6 +814,7 @@ def main() -> int:
     parser.add_argument("--require-prime-guard", action="store_true")
     parser.add_argument("--require-redesign-guard", action="store_true")
     parser.add_argument("--require-concise-prompt", action="store_true")
+    parser.add_argument("--explain", action="store_true", help="include a concise repair summary for failed prompt checks")
     parser.add_argument("--evidence")
     args = parser.parse_args()
 
@@ -654,6 +837,7 @@ def main() -> int:
         raise ValueError("--require-prime-guard requires --prime-layout-file")
 
     checks = []
+    all_guidance: list[dict[str, Any]] = []
     passed = True
     for source, prompt in prompts:
         observed = visible_prompt_financial_tokens(prompt)
@@ -661,16 +845,30 @@ def main() -> int:
         missing_prime_guard = validate_prime_prompt_guard(prompt, layouts) if args.require_prime_guard else []
         missing_redesign_guard = validate_redesign_prompt_guard(prompt) if args.require_redesign_guard else []
         prompt_debt = validate_concise_prompt(prompt) if args.require_concise_prompt else []
-        passed = passed and not unapproved and not missing_prime_guard and not missing_redesign_guard and not prompt_debt
+        repair_guidance = build_repair_guidance(
+            source=source,
+            prompt=prompt,
+            unapproved=unapproved,
+            approved=approved,
+            missing_prime_guard=missing_prime_guard,
+            missing_redesign_guard=missing_redesign_guard,
+            prompt_debt=prompt_debt,
+        )
+        all_guidance.extend(repair_guidance)
+        prompt_passed = not unapproved and not missing_prime_guard and not missing_redesign_guard and not prompt_debt
+        passed = passed and prompt_passed
         checks.append(
             {
                 "source": source,
+                "size_key": infer_size_key(source, prompt),
+                "prompt_chars": len(prompt),
                 "observed_financial_tokens": sorted(observed),
                 "unapproved_financial_tokens": unapproved,
                 "missing_prime_guard": missing_prime_guard,
                 "missing_redesign_guard": missing_redesign_guard,
                 "prompt_debt": prompt_debt,
-                "passed": not unapproved and not missing_prime_guard and not missing_redesign_guard and not prompt_debt,
+                "repair_guidance": repair_guidance,
+                "passed": prompt_passed,
             }
         )
 
@@ -681,9 +879,17 @@ def main() -> int:
         "copy_snapshot_id": snapshot.get("composition_id") or snapshot.get("id"),
         "copy_snapshot_version": snapshot.get("library_version") or snapshot.get("version"),
         "approved_financial_tokens": sorted(approved),
+        "prompt_policy": {
+            "target_chars": f"{PROMPT_TARGET_MIN_CHARS}-{PROMPT_TARGET_MAX_CHARS}",
+            "complex_soft_max_chars": PROMPT_COMPLEX_SOFT_MAX_CHARS,
+            "hard_max_chars": MAX_PROMPT_CHARS,
+        },
         "prompt_checks": checks,
+        "repair_guidance": all_guidance,
         "passed": passed,
     }
+    if args.explain:
+        evidence["repair_summary"] = summarize_repair_guidance(all_guidance)
     encoded = json.dumps(evidence, ensure_ascii=False, indent=2)
     if args.evidence:
         Path(args.evidence).write_text(encoded + "\n", encoding="utf-8")

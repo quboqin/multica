@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/jackc/pgx/v5"
@@ -38,6 +39,11 @@ func (h *Handler) prepareCreativeFactoryCollectionParams(ctx context.Context, wo
 	if !ok {
 		return nil, errors.New("material_search params must be a JSON object")
 	}
+	if _, hasLimit := root["limit"]; !hasLimit {
+		if target := creativeFactoryCollectionTargetFromObject(root); target > 0 {
+			root["limit"] = target
+		}
+	}
 	root["analysis_agent_id"] = uuidToString(agent.ID)
 	encoded, err := json.Marshal(root)
 	if err != nil {
@@ -59,7 +65,11 @@ func creativeFactoryCollectionTargetFromParams(params json.RawMessage) int {
 	if !ok {
 		return 0
 	}
-	for _, key := range []string{"limit", "max_materials", "max_results", "target_count"} {
+	return creativeFactoryCollectionTargetFromObject(root)
+}
+
+func creativeFactoryCollectionTargetFromObject(root map[string]any) int {
+	for _, key := range []string{"limit", "max_materials", "max_results", "max_outputs", "max_output", "output_limit", "target_count", "material_limit"} {
 		if target := positiveCreativeFactoryCollectionTarget(root[key]); target > 0 {
 			return target
 		}
@@ -84,6 +94,11 @@ func positiveCreativeFactoryCollectionTarget(value any) int {
 	case int64:
 		if number > 0 {
 			return int(number)
+		}
+	case string:
+		parsed, err := strconv.Atoi(strings.TrimSpace(number))
+		if err == nil && parsed > 0 {
+			return parsed
 		}
 	}
 	return 0

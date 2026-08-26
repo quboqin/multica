@@ -1889,20 +1889,38 @@ func creativeOrderProductionAgentSnapshot(raw json.RawMessage) (pgtype.UUID, pgt
 }
 
 func creativeTaskPreferredProducerID(raw json.RawMessage) pgtype.UUID {
-	var taskContext struct {
-		ProducerAgentID string `json:"producer_agent_id"`
-	}
-	if len(raw) == 0 || json.Unmarshal(raw, &taskContext) != nil {
+	return creativeTaskPreferredAgentID(raw, "producer_agent_id")
+}
+
+func creativeTaskPreferredDirectEditAgentID(raw json.RawMessage) pgtype.UUID {
+	return creativeTaskPreferredAgentID(raw, "direct_edit_agent_id")
+}
+
+func creativeTaskPreferredAgentID(raw json.RawMessage, field string) pgtype.UUID {
+	var values map[string]json.RawMessage
+	if len(raw) == 0 || json.Unmarshal(raw, &values) != nil {
 		return pgtype.UUID{}
 	}
-	id, err := uuid.Parse(strings.TrimSpace(taskContext.ProducerAgentID))
+	var rawID string
+	if json.Unmarshal(values[field], &rawID) != nil {
+		return pgtype.UUID{}
+	}
+	id, err := uuid.Parse(strings.TrimSpace(rawID))
 	if err != nil {
 		return pgtype.UUID{}
 	}
 	return pgtype.UUID{Bytes: id, Valid: true}
 }
 
-func (h *Handler) selectCreativeImageEditAgent(ctx context.Context, q creativeTaskFanoutQuerier, qtx *db.Queries, workspaceID pgtype.UUID, inputSnapshot json.RawMessage, seed string, preferred pgtype.UUID) (db.Agent, error) {
+func (h *Handler) selectCreativeImageEditAgent(ctx context.Context, q creativeTaskFanoutQuerier, qtx *db.Queries, workspaceID pgtype.UUID, inputSnapshot json.RawMessage, seed string, preferred pgtype.UUID, pinPreferred bool) (db.Agent, error) {
+	return h.selectCreativeCapabilityAgent(ctx, q, qtx, workspaceID, inputSnapshot, "image_edit", seed, preferred, pinPreferred, "creative production image_edit agent pool has no online members", "selected creative production agent is unavailable")
+}
+
+func (h *Handler) selectCreativeDirectImageEditAgent(ctx context.Context, q creativeTaskFanoutQuerier, qtx *db.Queries, workspaceID pgtype.UUID, inputSnapshot json.RawMessage, seed string, preferred pgtype.UUID, pinPreferred bool) (db.Agent, error) {
+	return h.selectCreativeCapabilityAgent(ctx, q, qtx, workspaceID, inputSnapshot, "direct_image_edit", seed, preferred, pinPreferred, "creative direct image edit agent pool has no online members", "selected creative direct image edit agent is unavailable")
+}
+
+func (h *Handler) selectCreativeCapabilityAgent(ctx context.Context, q creativeTaskFanoutQuerier, qtx *db.Queries, workspaceID pgtype.UUID, inputSnapshot json.RawMessage, capability, seed string, preferred pgtype.UUID, pinPreferred bool, emptyPoolMessage, unavailableMessage string) (db.Agent, error) {
 	squadIDText, err := creativeOrderSnapshotSquadID(inputSnapshot)
 	if err != nil {
 		return db.Agent{}, err
@@ -1915,6 +1933,10 @@ func (h *Handler) selectCreativeImageEditAgent(ctx context.Context, q creativeTa
 	seed = strings.TrimSpace(seed)
 	if seed == "" {
 		seed = squadUUID.String()
+	}
+	capability = strings.TrimSpace(capability)
+	if capability == "" {
+		return db.Agent{}, errors.New("creative capability is required")
 	}
 
 	var agentID pgtype.UUID
@@ -1936,7 +1958,7 @@ JOIN skill role_skill
   ON role_skill.id = binding.skill_id
  AND role_skill.workspace_id = $2
  AND role_skill.config->>'kind' = 'creative_role'
- AND role_skill.config->>'capability' = 'image_edit'
+ AND role_skill.config->>'capability' = $5
 LEFT JOIN agent_task_queue active_task
   ON active_task.agent_id = agent_row.id
  AND active_task.status IN ('queued', 'dispatched', 'running', 'waiting_local_directory')
@@ -1944,13 +1966,14 @@ WHERE member.squad_id = $1
   AND member.member_type = 'agent'
 GROUP BY agent_row.id
 ORDER BY
-  ($4::uuid IS NOT NULL AND agent_row.id = $4::uuid) DESC,
+  CASE WHEN $6::boolean AND $4::uuid IS NOT NULL AND agent_row.id = $4::uuid THEN 0 ELSE 1 END ASC,
   count(active_task.id) ASC,
+  CASE WHEN NOT $6::boolean AND $4::uuid IS NOT NULL AND agent_row.id = $4::uuid THEN 0 ELSE 1 END ASC,
   md5($3::text || ':' || agent_row.id::text) ASC
 LIMIT 1
-`, squadID, workspaceID, seed, preferred).Scan(&agentID)
+`, squadID, workspaceID, seed, preferred, capability, pinPreferred).Scan(&agentID)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return db.Agent{}, errors.New("creative production image_edit agent pool has no online members")
+		return db.Agent{}, errors.New(emptyPoolMessage)
 	}
 	if err != nil {
 		return db.Agent{}, err
@@ -1960,20 +1983,28 @@ LIMIT 1
 		return db.Agent{}, err
 	}
 	if agent.ArchivedAt.Valid || !agent.RuntimeID.Valid {
-		return db.Agent{}, errors.New("selected creative production agent is unavailable")
+		return db.Agent{}, errors.New(unavailableMessage)
 	}
 	return agent, nil
 }
 
 func selectedCreativeProductionAgentFromHistory(ctx context.Context, q creativeTaskFanoutQuerier, workspaceID, variantID pgtype.UUID, revision int) pgtype.UUID {
+	return selectedCreativeAgentFromHistory(ctx, q, workspaceID, variantID, revision, "creative_order_item_production", "creative_production")
+}
+
+func selectedCreativeDirectEditAgentFromHistory(ctx context.Context, q creativeTaskFanoutQuerier, workspaceID, variantID pgtype.UUID, revision int) pgtype.UUID {
+	return selectedCreativeAgentFromHistory(ctx, q, workspaceID, variantID, revision, "creative_order_item_direct_edit", "creative_direct_edit")
+}
+
+func selectedCreativeAgentFromHistory(ctx context.Context, q creativeTaskFanoutQuerier, workspaceID, variantID pgtype.UUID, revision int, evidenceKind, workflow string) pgtype.UUID {
 	var agentID pgtype.UUID
 	err := q.QueryRow(ctx, `
 SELECT task.agent_id
 FROM agent_task_queue task
 JOIN agent agent_row ON agent_row.id = task.agent_id AND agent_row.workspace_id = $1
-WHERE task.trigger_evidence_kind = 'creative_order_item_production'
+WHERE task.trigger_evidence_kind = $4
   AND task.context->>'type' = 'creative_domain_task'
-  AND task.context->>'workflow' = 'creative_production'
+  AND task.context->>'workflow' = $5
   AND task.context->>'variant_id' = $2::text
   AND CASE
         WHEN NULLIF(task.context->>'revision', '') ~ '^[0-9]+$'
@@ -1992,7 +2023,7 @@ ORDER BY
   task.created_at ASC,
   task.id ASC
 LIMIT 1
-`, workspaceID, variantID, revision).Scan(&agentID)
+`, workspaceID, variantID, revision, evidenceKind, workflow).Scan(&agentID)
 	if err != nil {
 		return pgtype.UUID{}
 	}
@@ -3925,15 +3956,12 @@ func (h *Handler) queueCreativeVisualModelRework(
 	if !issueID.Valid {
 		return db.AgentTaskQueue{}, errors.New("creative order is missing its root issue")
 	}
-	leaderID, producerID, reviewerID, err := creativeOrderProductionAgentSnapshot(inputSnapshot)
+	leaderID, _, reviewerID, err := creativeOrderProductionAgentSnapshot(inputSnapshot)
 	if err != nil {
 		return db.AgentTaskQueue{}, err
 	}
 	preferredProducerID := selectedCreativeProductionAgentFromHistory(ctx, tx, workspaceID, variantID, sourceRevision)
-	if !preferredProducerID.Valid {
-		preferredProducerID = producerID
-	}
-	producer, err := h.selectCreativeImageEditAgent(ctx, tx, h.Queries.WithTx(tx), workspaceID, inputSnapshot, uuidToString(variantID), preferredProducerID)
+	producer, err := h.selectCreativeImageEditAgent(ctx, tx, h.Queries.WithTx(tx), workspaceID, inputSnapshot, uuidToString(variantID), preferredProducerID, false)
 	if err != nil {
 		return db.AgentTaskQueue{}, err
 	}
@@ -3949,11 +3977,11 @@ SELECT EXISTS(
     AND bound_skill.config->>'kind' = 'creative_role'
     AND bound_skill.config->>'capability' = 'image_edit'
 )
-`, producerID, workspaceID).Scan(&producerCapable); err != nil {
+	`, producer.ID, workspaceID).Scan(&producerCapable); err != nil {
 		return db.AgentTaskQueue{}, err
 	}
 	if !producerCapable {
-		return db.AgentTaskQueue{}, errors.New("the frozen creative production agent lacks image_edit capability")
+		return db.AgentTaskQueue{}, errors.New("the selected creative production agent lacks image_edit capability")
 	}
 
 	targetSizes := make([]string, 0, len(findings))
