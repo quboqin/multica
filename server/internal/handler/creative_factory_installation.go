@@ -935,13 +935,36 @@ func creativeFactoryAutopilotNeedsMigration(autopilot db.Autopilot, legacySquadI
 
 func creativeFactoryAutopilotUsesInstallerDefault(autopilot db.Autopilot) bool {
 	return autopilot.Title == creativeFactoryDefaultAutopilotTitle &&
-		autopilot.AssigneeType == "agent" &&
+		creativeFactoryAutopilotHasStandardAgentShape(autopilot) &&
+		creativeFactoryAutopilotDescriptionLooksManaged(autopilot.Description)
+}
+
+func creativeFactoryAutopilotHasStandardAgentShape(autopilot db.Autopilot) bool {
+	return autopilot.AssigneeType == "agent" &&
 		autopilot.Status == "active" &&
 		autopilot.ExecutionMode == "run_only" &&
 		!autopilot.IssueTitleTemplate.Valid &&
-		!autopilot.ProjectID.Valid &&
-		autopilot.Description.Valid &&
-		strings.TrimSpace(autopilot.Description.String) == creativeFactoryDefaultAutopilotDescription
+		!autopilot.ProjectID.Valid
+}
+
+func creativeFactoryAutopilotDescriptionLooksManaged(description pgtype.Text) bool {
+	if !description.Valid {
+		return false
+	}
+	text := strings.TrimSpace(description.String)
+	if text == creativeFactoryDefaultAutopilotDescription {
+		return true
+	}
+	for _, marker := range []string{
+		"工作区创意工厂安装记录负责解析市场资源包",
+		"执行真实 AppGrowing 多页图片采集",
+		"素材类型：仅图片广告（asset_type=image）",
+	} {
+		if !strings.Contains(text, marker) {
+			return false
+		}
+	}
+	return true
 }
 
 func loadCreativeFactoryTemplates() (map[string]creativeFactoryTemplate, error) {

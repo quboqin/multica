@@ -83,3 +83,40 @@ func TestCreativeFactoryAutopilotNeedsMigrationOnlyForInstallerDefault(t *testin
 		t.Fatal("autopilot with a changed assignee should not be migrated")
 	}
 }
+
+func TestCreativeFactoryAutopilotUsesInstallerDefaultWithLegacyDescription(t *testing.T) {
+	legacyDescription := strings.Replace(
+		creativeFactoryDefaultAutopilotDescription,
+		"不占用名额",
+		"不占用 2 条配额",
+		1,
+	)
+	legacyDescription = strings.Replace(
+		legacyDescription,
+		creativeFactoryDefaultCollectionTargetLine,
+		"最多输出：2 张图片",
+		1,
+	)
+	autopilot := db.Autopilot{
+		Title:         creativeFactoryDefaultAutopilotTitle,
+		AssigneeType:  "agent",
+		Status:        "active",
+		ExecutionMode: "run_only",
+		Description: pgtype.Text{
+			String: legacyDescription,
+			Valid:  true,
+		},
+	}
+	if !creativeFactoryAutopilotUsesInstallerDefault(autopilot) {
+		t.Fatal("installer-created collection autopilot with legacy prompt wording should be recognized")
+	}
+	autopilot.Description.String = "用户自定义采集规则"
+	if creativeFactoryAutopilotUsesInstallerDefault(autopilot) {
+		t.Fatal("user-authored collection autopilot should not be treated as installer default")
+	}
+	autopilot.Description.String = legacyDescription
+	autopilot.Title = "我的竞品素材采集"
+	if creativeFactoryAutopilotUsesInstallerDefault(autopilot) {
+		t.Fatal("custom title should not be treated as installer default")
+	}
+}
