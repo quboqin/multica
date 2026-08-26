@@ -2020,6 +2020,24 @@ func completedGeneratedAssetTrace(prompt, requestID string, attempts int) (json.
 	return metadata, evidence
 }
 
+func TestValidateCreativeGeneratedAssetNormalizationTarget(t *testing.T) {
+	_, evidence := completedGeneratedAssetTrace("normalization target", "req-normalization-target", 1)
+	input := creativeOrderAssetInput{SizeKey: "1080x1080", Stage: "generated", Status: "completed", Evidence: evidence}
+	if err := validateCreativeGeneratedAssetNormalizationTarget(input); err != nil {
+		t.Fatalf("matching normalization target: %v", err)
+	}
+
+	var changed map[string]any
+	if err := json.Unmarshal(evidence, &changed); err != nil {
+		t.Fatal(err)
+	}
+	changed["normalization"] = map[string]any{"target_size": map[string]int{"width": 1200, "height": 628}}
+	input.Evidence, _ = json.Marshal(changed)
+	if err := validateCreativeGeneratedAssetNormalizationTarget(input); err == nil || !strings.Contains(err.Error(), "target_size 1200x628 does not match 1080x1080") {
+		t.Fatalf("mismatched normalization target error = %v", err)
+	}
+}
+
 func TestUpsertCreativeOrderAssetRejectsGeneratedAttachmentDimensionMismatch(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")

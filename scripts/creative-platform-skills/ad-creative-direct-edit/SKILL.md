@@ -75,7 +75,7 @@ python /app/creative-platform-skills/ad-creative-production/references/normalize
   --model-size <provider-width>x<provider-height> --max-aspect-deviation 0.10 --evidence <normalization.json>
 ```
 
-确认 `accepted-base.png` 的像素尺寸与 `target_size` 完全一致后再继续；若归一化失败，只保留过程图并让 task 失败或按重试上限重新编辑。
+确认 `accepted-base.png` 的像素尺寸与 `target_size` 完全一致后再继续。精准修图与标准出图共用同一比例策略，不按像素绝对值判断：`1254x1254` 到 `1080x1080` 的比例偏差为 0%，脚本成功后继续使用同一回图，不得重编辑；比例偏差 `<=10%` 直接归一化，`10%-25%` 使用已有回图做一次 canvas repair，`>25%` 才只重生当前失败尺寸。归一化失败时只保留过程图，并按该策略处理。
 
 每一次 Image Edit 实际产生图片后，无论最后采用还是拒绝，都必须先上传并登记过程图：
 

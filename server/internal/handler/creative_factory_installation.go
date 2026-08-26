@@ -19,7 +19,7 @@ import (
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
-const creativeFactoryTemplateVersion = 9
+const creativeFactoryTemplateVersion = 10
 
 //go:embed creative_factory_defaults/resources.json
 var creativeFactoryDefaultResourcesJSON []byte
@@ -143,7 +143,7 @@ creative_production 分支只执行 creative_production；使用冻结 brief/cop
 creative_direct_edit 分支严格执行现有素材_技能_改图契约：
 ` + creativeFactoryDirectEditAgentInstructions + `
 
-两个分支都只处理 task context 指定的对象、revision 和 scope；按绑定 Skill 写结构化领域结果和机器证据。不得创建或修改 Issue，不得用评论代替领域数据。输入、凭证、工具或写回失败时保留已成功对象，写真实 error_code/error_message 并让当前 task 失败；兄弟对象继续。`
+两个分支都只处理 task context 指定的对象、revision 和 scope；按绑定 Skill 写结构化领域结果和机器证据。精准修图与标准出图共用比例策略：比例偏差 <=10% 归一化，10%-25% canvas repair，>25% 才重生当前尺寸；不要因像素绝对尺寸差重生。不得创建或修改 Issue，不得用评论代替领域数据。输入、凭证、工具或写回失败时保留已成功对象，写真实 error_code/error_message 并让当前 task 失败；兄弟对象继续。`
 }
 
 var creativeFactorySkillSpecs = []creativeFactorySkillSpec{
@@ -154,7 +154,7 @@ var creativeFactorySkillSpecs = []creativeFactorySkillSpec{
 	{Role: "generation_plan", Name: "素材_技能_方案", Aliases: []string{"广告生成方案"}, Directory: "ad-creative-plan", Description: "消费冻结分析、逐块文案与市场快照，严格继承顶层非空文案字段，规划 3 个同题变体及品牌组件视觉关系；当广告含核心 App 屏幕时只使用页面冻结的 App UI reference 写 app_ui_replacement。", Capability: "generation_plan", Version: 37},
 	{Role: "image_edit", Name: "素材_技能_出图", Aliases: []string{"广告图像编辑"}, Directory: "ad-creative-production", Description: "使用 GPT Image 2 提示词模板和冻结业务结构生成无品牌三尺寸底图，严格继承所有非空 approved copy，明确三尺寸 CANVAS LOCK 和 Input 1/Input 2 角色；仅当 brief 选中 App UI reference 时，才作为 Input 3 只替换手机屏幕内容，保留手机、手、透视、光照和场景；未选时不得从分析或方向里保留/臆造 App 页面。候选图通过 candidate_id 受控下载，下载域鉴权异常时仅允许用同 candidate attachment fallback，Prime context 按当前 revision 绑定，横版用 Y 轴压缩避开上下 Prime 组件带，竖版锁定 4:5 且禁止 story/phone screenshot/long poster/scrolling page，provider 画布使用 16px 合法尺寸再按 10% 比例阈值归一化为交付尺寸，使用 canonical generated asset 写回并保存完整 trace 与 parent_direction_sha256；每个尺寸同步登记 Prime context、模型原图和规范化底图，失败优先按 validator repair_guidance 补 guard/删违规值并复用已有回图补登记、补贴片或只补缺失尺寸，视觉遮挡由服务端最多排两轮定向 Image2 重排，返工只改无品牌 generated 底图并重新贴片，耗尽后仍保留当前交付资产；缺尺寸不提前 complete，由平台自动续跑，完成底图后调用贴片 Skill。", Capability: "image_edit", Version: 96},
 	{Role: "prime_compose", Name: "素材_技能_贴片", Aliases: []string{"广告品牌组件合成"}, Directory: "ad-creative-prime-compose", Description: "调用后端唯一的确定性 Prime 合成入口，校验合成 JSON，并由后端登记贴片完成过程图、primed 资产和标准 QC/交付交接；不创建 Prime Agent 或 Prime task。", Capability: "prime_compose", Version: 2},
-	{Role: "direct_image_edit", Name: "素材_技能_改图", Aliases: []string{"广告图片直接修改"}, Directory: "ad-creative-direct-edit", Description: "按用户原话和最终图标注 brief 修改固定无品牌底图，再由贴片 Skill 调用平台确定性合成并直接交付，不执行 QC；单独金额和核心利益点即使先前识别错了也保留手动改写空间，协议错误复用同一回图修复写回。", Capability: "direct_image_edit", Version: 16},
+	{Role: "direct_image_edit", Name: "素材_技能_改图", Aliases: []string{"广告图片直接修改"}, Directory: "ad-creative-direct-edit", Description: "按用户原话和最终图标注 brief 修改固定无品牌底图，再由贴片 Skill 调用平台确定性合成并直接交付，不执行 QC；与标准出图共用比例阈值：阈值内归一，偏差过大才重生当前尺寸；单独金额和核心利益点即使先前识别错了也保留手动改写空间，协议错误复用同一回图修复写回。", Capability: "direct_image_edit", Version: 17},
 	{Role: "quality_control", Name: "素材_技能_质检", Aliases: []string{"广告成图验收"}, Directory: "ad-creative-qc", Description: "只执行视觉质检：下载当前 Prime 成图并用智能体原生视觉验收；技术质检已下线，不再创建、不等待、不阻断。", Capability: "quality_control", Version: 35},
 	{Role: "creative_leadership", Name: "素材_技能_流程", Aliases: []string{"素材_技能_统筹", "创意素材协作", "素材小队 Leader 编排"}, Directory: "ad-creative-leadership", Description: "使用原生 task fanout 启动并恢复标准生产或直接改图，汇总结构化结果。", Capability: "creative_leadership", Version: 49},
 }

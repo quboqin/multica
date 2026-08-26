@@ -607,10 +607,21 @@ func creativeOrderAssetPayload(cmd *cobra.Command) (json.RawMessage, error) {
 		return nil, fmt.Errorf("prompt contract prompt_sha256 does not match model result")
 	}
 	var normalized struct {
-		TargetSize map[string]json.RawMessage `json:"target_size"`
+		TargetSize struct {
+			Width  int `json:"width"`
+			Height int `json:"height"`
+		} `json:"target_size"`
 	}
-	if err := json.Unmarshal(normalization, &normalized); err != nil || len(normalized.TargetSize) == 0 {
-		return nil, fmt.Errorf("normalization evidence must contain target_size")
+	if err := json.Unmarshal(normalization, &normalized); err != nil || normalized.TargetSize.Width < 1 || normalized.TargetSize.Height < 1 {
+		return nil, fmt.Errorf("normalization evidence must contain target_size.width and target_size.height")
+	}
+	var sizeKey string
+	if rawSizeKey, ok := asset["size_key"]; !ok || json.Unmarshal(rawSizeKey, &sizeKey) != nil {
+		return nil, fmt.Errorf("asset size_key is required when normalization evidence is provided")
+	}
+	wantWidth, wantHeight, ok := creativeOrderAssetDimensions(sizeKey)
+	if !ok || normalized.TargetSize.Width != wantWidth || normalized.TargetSize.Height != wantHeight {
+		return nil, fmt.Errorf("normalization target_size %dx%d does not match asset size_key %s", normalized.TargetSize.Width, normalized.TargetSize.Height, sizeKey)
 	}
 
 	metadata, err := json.Marshal(map[string]any{
@@ -640,6 +651,19 @@ func creativeOrderAssetPayload(cmd *cobra.Command) (json.RawMessage, error) {
 	asset["metadata"] = metadata
 	asset["evidence"] = encodedEvidence
 	return marshalCreativeAssetJSONObject(asset)
+}
+
+func creativeOrderAssetDimensions(sizeKey string) (int, int, bool) {
+	switch strings.TrimSpace(sizeKey) {
+	case "1080x1080":
+		return 1080, 1080, true
+	case "1200x628":
+		return 1200, 628, true
+	case "800x1000":
+		return 800, 1000, true
+	default:
+		return 0, 0, false
+	}
 }
 
 func creativeAssetModelResult(path, resultID string) (json.RawMessage, error) {

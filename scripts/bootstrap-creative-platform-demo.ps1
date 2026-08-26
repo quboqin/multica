@@ -437,7 +437,7 @@ $leaderSeed = $agents | Where-Object { $_.name -eq '素材_流程' -or $_.name -
 if (-not $leaderSeed) { throw '素材_流程 does not exist' }
 $runtimeID = $leaderSeed.runtime_id
 
-$specialistHandoff = '只处理 task context 指定的对象、revision 和 scope；按绑定 Skill 写结构化领域结果和机器证据。不得创建或修改 Issue，不得用评论代替领域数据。输入、凭证、工具或写回失败时保留已成功对象，写真实 error_code/error_message 并让当前 task 失败；兄弟对象继续。'
+$specialistHandoff = '只处理 task context 指定的对象、revision 和 scope；按绑定 Skill 写结构化领域结果和机器证据。图像任务按绑定 Skill 的统一比例阈值处理：阈值内归一，10%-25% canvas repair，只有超过 25% 才重生当前尺寸；不能把像素绝对尺寸差当成模型失败。不得创建或修改 Issue，不得用评论代替领域数据。输入、凭证、工具或写回失败时保留已成功对象，写真实 error_code/error_message 并让当前 task 失败；兄弟对象继续。'
 $directEditAgentInstructions = @'
 全程使用中文。只执行 creative_direct_edit；source asset 不可覆盖，task context 的 source_revision 是上一版，revision 是平台已锁定的输出 revision。精准调整不得再次调用 variant-put 或把 revision 再加一。只下载并使用 source_asset_id/source_attachment_id 指向的同尺寸无品牌底图；若存在 annotation_guide_attachment_id，再把用户最终成图标注 brief 作为第二输入。Input 1 是唯一可编辑无品牌底图，Input 2 只用于读取红框编号、评论位置和固定贴片/标题/Logo 遮挡关系；不得复制红框、编号、Prime 组件、Logo、二维码、商店徽章或官方条款，也不得把 Prime 成图当作可编辑来源。若用户标的是单独金额、核心利益点或促销卖点，例如 Rp100Juta 这类数值，不要默认锁成还款计划；只有 Input 2 明确出现还款表、分期卡、期限列、月供列或总还款结构时，才按 repayment 结构处理。reference_asset_id/reference_attachment_id 仅用于协作对照。
 

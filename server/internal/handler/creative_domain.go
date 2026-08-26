@@ -2929,6 +2929,10 @@ WHERE v.id = $1
 		writeError(w, http.StatusUnprocessableEntity, err.Error())
 		return
 	}
+	if err := validateCreativeGeneratedAssetNormalizationTarget(input); err != nil {
+		writeError(w, http.StatusUnprocessableEntity, err.Error())
+		return
+	}
 	asset, err := scanCreativeOrderAsset(h.DB.QueryRow(r.Context(), `
 INSERT INTO creative_order_asset (variant_id, asset_family_id, size_key, revision, stage, attachment_id, derived_from_asset_id, metadata, evidence, status)
 VALUES ($1,COALESCE($2::uuid, gen_random_uuid()),$3,$4,$5,$6,$7,$8::jsonb,$9::jsonb,$10)
@@ -4855,6 +4859,31 @@ func (h *Handler) validateCreativeGeneratedAssetAttachmentDimensions(ctx context
 	}
 	if config.Width != wantWidth || config.Height != wantHeight {
 		return fmt.Errorf("completed generated asset attachment dimensions %dx%d do not match %s", config.Width, config.Height, input.SizeKey)
+	}
+	return nil
+}
+
+func validateCreativeGeneratedAssetNormalizationTarget(input creativeOrderAssetInput) error {
+	if input.Stage != "generated" || input.Status != "completed" {
+		return nil
+	}
+	wantWidth, wantHeight, ok := creativeAssetSizeDimensions(input.SizeKey)
+	if !ok {
+		return nil
+	}
+	var evidence struct {
+		Normalization struct {
+			TargetSize struct {
+				Width  int `json:"width"`
+				Height int `json:"height"`
+			} `json:"target_size"`
+		} `json:"normalization"`
+	}
+	if err := json.Unmarshal(input.Evidence, &evidence); err != nil || evidence.Normalization.TargetSize.Width < 1 || evidence.Normalization.TargetSize.Height < 1 {
+		return errors.New("completed generated asset normalization target_size is invalid")
+	}
+	if evidence.Normalization.TargetSize.Width != wantWidth || evidence.Normalization.TargetSize.Height != wantHeight {
+		return fmt.Errorf("completed generated asset normalization target_size %dx%d does not match %s", evidence.Normalization.TargetSize.Width, evidence.Normalization.TargetSize.Height, input.SizeKey)
 	}
 	return nil
 }

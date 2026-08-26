@@ -239,6 +239,14 @@ func TestCreativeOrderAssetPayloadAllowsOmittedCopyValidationEvidence(t *testing
 	if len(asset.Evidence["model_result"]) == 0 || len(asset.Evidence["prompt_contract"]) == 0 || len(asset.Evidence["normalization"]) == 0 {
 		t.Fatalf("required evidence missing: %#v", asset.Evidence)
 	}
+
+	wrongNormalizationFile := writeJSON("wrong-normalize-evidence.json", map[string]any{"target_size": map[string]int{"width": 1200, "height": 628}})
+	if err := command.Flags().Set("normalization-evidence-file", wrongNormalizationFile); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := creativeOrderAssetPayload(command); err == nil || !strings.Contains(err.Error(), "does not match asset size_key 1080x1080") {
+		t.Fatalf("normalization target mismatch error = %v", err)
+	}
 }
 
 func TestNormalizedOpenAIImageBaseURL(t *testing.T) {
