@@ -115,6 +115,14 @@ func TestCreativePlatformSkillsUseFrozenBusinessInputs(t *testing.T) {
 			t.Errorf("creative factory QC setup must contain %q", required)
 		}
 	}
+
+	router := readCreativePlatformContractFile(t, filepath.Join(root, "server", "cmd", "server", "router.go"))
+	if strings.Contains(router, `r.With(handler.RequireHumanActor).Put("/", h.UpdateCreativeResource)`) {
+		t.Fatal("creative resource draft updates must remain callable by an authorized task actor")
+	}
+	if !strings.Contains(router, `r.Put("/", h.UpdateCreativeResource)`) {
+		t.Fatal("creative resource draft update route is missing")
+	}
 }
 
 func TestAppGrowingCollectorContractKeepsBusinessSemanticsAndSingleSubmission(t *testing.T) {

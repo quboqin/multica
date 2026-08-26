@@ -796,7 +796,10 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.With(handler.RequireHumanActor).Post("/files", h.AddCreativeResourceFile)
 					r.With(handler.RequireHumanActor).Put("/files/{fileId}", h.UpdateCreativeResourceFile)
 					r.With(handler.RequireHumanActor).Delete("/files/{fileId}", h.RemoveCreativeResourceFile)
-					r.With(handler.RequireHumanActor).Put("/", h.UpdateCreativeResource)
+					// Agents may update an existing draft only when a task carries the
+					// user's explicit resource-maintenance instruction. Creating,
+					// publishing, and archiving resources remain human-only.
+					r.Put("/", h.UpdateCreativeResource)
 					r.With(handler.RequireHumanActor).Post("/publish", h.PublishCreativeResource)
 					r.With(handler.RequireHumanActor).Delete("/", h.ArchiveCreativeResource)
 				})
