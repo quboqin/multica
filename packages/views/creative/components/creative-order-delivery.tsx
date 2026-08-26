@@ -46,7 +46,7 @@ const CREATIVE_DELIVERY_SIZE_LABELS: Record<(typeof CREATIVE_DELIVERY_SIZES)[num
   "800x1000": "竖版",
 };
 
-type DeliveryAttachment = Pick<Attachment, "id" | "filename" | "url" | "download_url" | "markdown_url" | "content_type">;
+export type DeliveryAttachment = Pick<Attachment, "id" | "filename" | "url" | "download_url" | "markdown_url" | "content_type">;
 
 export type CreativeDeliveryNamingContext = Pick<CreativeOrder, "created_at" | "input_snapshot">;
 
@@ -221,6 +221,75 @@ export async function downloadCreativeVariantArchive({
   triggerBrowserDownload(
     URL.createObjectURL(new Blob([buffer], { type: "application/zip" })),
     `${safeArchiveName(`creative-order-${orderId.slice(0, 8)}-${variant.variant_key || variant.id}`)}.zip`,
+    true,
+  );
+}
+
+export async function downloadCreativeAdoptedVariantArchives({
+  packages,
+  archiveName,
+}: {
+  packages: {
+    orderId: string;
+    order?: CreativeDeliveryNamingContext;
+    item: CreativeOrderItem;
+    variant: CreativeOrderVariant;
+    attachments: Map<string, DeliveryAttachment>;
+    folderName?: string;
+    label?: string;
+  }[];
+  archiveName?: string;
+}): Promise<void> {
+  if (packages.length === 0) throw new Error("没有可下载的采用成图");
+
+  const files: Record<string, Uint8Array> = {};
+  const usedNames = new Set<string>();
+  const manifestRows = [[
+    "order_id",
+    "item_id",
+    "candidate_id",
+    "variant",
+    "size",
+    "filename",
+    "adopted_at",
+    "label",
+  ]];
+
+  for (const itemPackage of packages) {
+    const entries = creativeVariantArchiveEntries(itemPackage.variant, itemPackage.attachments, itemPackage.order, itemPackage.item);
+    if (entries.length !== CREATIVE_DELIVERY_SIZES.length) {
+      throw new Error(`${itemPackage.label || itemPackage.orderId.slice(0, 8)} 的交付包尚未齐备`);
+    }
+    const folderName = safeArchiveName(itemPackage.folderName || `order-${itemPackage.orderId.slice(0, 8)}-${itemPackage.variant.variant_key || itemPackage.variant.id.slice(0, 8)}`);
+    const downloaded = await Promise.all(entries.map(async ({ asset, attachment, filename }) => {
+      const response = await fetch(creativeAttachmentBrowserURL(attachment), { credentials: "include" });
+      if (!response.ok) throw new Error(`无法下载 ${filename}`);
+      const bytes = new Uint8Array(await response.arrayBuffer());
+      return { asset, filename: filenameForResponse(filename, response.headers.get("content-type"), bytes), bytes };
+    }));
+    for (const { asset, filename, bytes } of downloaded) {
+      const path = `${folderName}/${filename}`;
+      files[uniqueArchiveFilename(path, usedNames, asset)] = bytes;
+      manifestRows.push([
+        itemPackage.orderId,
+        itemPackage.item.id,
+        itemPackage.item.candidate_id,
+        itemPackage.variant.variant_key || itemPackage.variant.id,
+        asset.size_key,
+        filename,
+        itemPackage.item.adopted_at || "",
+        itemPackage.label || "",
+      ]);
+    }
+  }
+
+  files["manifest.csv"] = strToU8(manifestRows.map((row) => row.map(csvCell).join(",")).join("\n"));
+  const archive = zipSync(files, { level: 0 });
+  const buffer = new ArrayBuffer(archive.byteLength);
+  new Uint8Array(buffer).set(archive);
+  triggerBrowserDownload(
+    URL.createObjectURL(new Blob([buffer], { type: "application/zip" })),
+    `${safeArchiveName(archiveName || `adopted-creatives-${creativeArchiveDateStamp()}`)}.zip`,
     true,
   );
 }
@@ -1458,6 +1527,19 @@ function replaceFileExtension(filename: string, extension: string): string {
 
 function filenameForResponse(filename: string, contentType: string | null, bytes: Uint8Array): string {
   return replaceFileExtension(filename, binaryExtension(bytes) || contentTypeExtension(contentType || undefined) || fileExtension(filename) || ".bin");
+}
+
+function csvCell(value: string): string {
+  return /[",\n\r]/.test(value) ? `"${value.replace(/"/g, '""')}"` : value;
+}
+
+function creativeArchiveDateStamp(): string {
+  const date = new Date();
+  return [
+    date.getFullYear(),
+    String(date.getMonth() + 1).padStart(2, "0"),
+    String(date.getDate()).padStart(2, "0"),
+  ].join("");
 }
 
 function uniqueArchiveFilename(filename: string, usedNames: Set<string>, asset?: CreativeOrderAsset): string {

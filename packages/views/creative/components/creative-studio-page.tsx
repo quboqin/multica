@@ -112,7 +112,7 @@ function creativeStudioTab(searchParams: URLSearchParams): CreativeStudioTab {
 
 function creativeMaterialLibraryFilter(searchParams: URLSearchParams): MaterialLibraryFilter {
   const filter = searchParams.get("materialFilter");
-  return filter === "analyze" || filter === "generated" || filter === "rejected" || filter === "all"
+  return filter === "analyze" || filter === "rejected" || filter === "all"
     ? filter
     : "available";
 }
@@ -317,7 +317,7 @@ function CreativeStudioContent() {
 }
 
 function CreativeDiscoveryWorkspace({ filter, runId, onFilterChange, onRunChange, onOrderCreated, onOpenCopyLibrary }: { filter: MaterialLibraryFilter; runId: string; onFilterChange: (filter: MaterialLibraryFilter) => void; onRunChange: (runId: string) => void; onOrderCreated: (orderId: string) => void; onOpenCopyLibrary: () => void }) {
-  return <div className="mx-auto w-full min-w-0 max-w-[1440px]"><CreativeMaterialLibrary filter={filter} runId={runId} onFilterChange={onFilterChange} onRunChange={onRunChange} onOpenCopyLibrary={onOpenCopyLibrary} onOrderCreated={onOrderCreated} /></div>;
+  return <div className="mx-auto w-full min-w-0 max-w-[1440px]"><CreativeMaterialLibrary filter={filter} runId={runId} onFilterChange={onFilterChange} onRunChange={onRunChange} onOpenCopyLibrary={onOpenCopyLibrary} onOrderCreated={onOrderCreated} onOpenOrder={onOrderCreated} /></div>;
 }
 
 function CreativeOrdersWorkspace({ selectedOrderId, onSelectOrder, onBack, backLabel }: { selectedOrderId: string; onSelectOrder: (orderId: string) => void; onBack: () => void; backLabel: string }) {

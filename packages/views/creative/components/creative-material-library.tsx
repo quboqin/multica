@@ -2,7 +2,7 @@
 
 import { cloneElement, useDeferredValue, useEffect, useId, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, ArrowLeft, BookOpenText, Bot, Check, Download, ExternalLink, ImageIcon, LoaderCircle, Pencil, Plus, RefreshCw, RotateCcw, Search, Sparkles, Upload, X } from "lucide-react";
+import { AlertTriangle, ArrowLeft, BookOpenText, Bot, Check, Download, ExternalLink, ImageIcon, Images, LoaderCircle, PackageCheck, Pencil, Plus, RefreshCw, RotateCcw, Search, Sparkles, Upload, X } from "lucide-react";
 import { api } from "@multica/core/api";
 import {
   creativeFeedbackOptions,
@@ -19,7 +19,7 @@ import { useWorkspaceId } from "@multica/core/hooks";
 import { useFileUpload } from "@multica/core/hooks/use-file-upload";
 import { resolvePublicFileUrl } from "@multica/core/workspace/avatar-url";
 import { agentListOptions, skillListOptions, squadListOptions, workspaceKeys } from "@multica/core/workspace/queries";
-import type { Agent, CreateCreativeFeedbackRequest, CreateCreativeOrderRequest, CreativeCopySnapshot, CreativeMaterialCandidate, CreativeMaterialCrawlRun, CreativeMaterialImportResult, CreativeMaterialLibraryQuery, CreativeRepaymentPlanEntry, CreativeResource, CreativeSourceAnalysis, SkillSummary, Squad, SquadMember, CreativeVisualDirection } from "@multica/core/types";
+import type { Agent, CreateCreativeFeedbackRequest, CreateCreativeOrderRequest, CreativeCopySnapshot, CreativeMaterialCandidate, CreativeMaterialCrawlRun, CreativeMaterialImportResult, CreativeMaterialLibraryQuery, CreativeOrder, CreativeOrderItem, CreativeOrderVariant, CreativeRepaymentPlanEntry, CreativeResource, CreativeSourceAnalysis, SkillSummary, Squad, SquadMember, CreativeVisualDirection } from "@multica/core/types";
 import { Badge } from "@multica/ui/components/ui/badge";
 import { Button, buttonVariants } from "@multica/ui/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@multica/ui/components/ui/dialog";
@@ -27,10 +27,12 @@ import { Input } from "@multica/ui/components/ui/input";
 import { Label } from "@multica/ui/components/ui/label";
 import { NativeSelect, NativeSelectOption } from "@multica/ui/components/ui/native-select";
 import { Switch } from "@multica/ui/components/ui/switch";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@multica/ui/components/ui/tabs";
 import { Textarea } from "@multica/ui/components/ui/textarea";
 import { cn } from "@multica/ui/lib/utils";
 import { toast } from "sonner";
 import { candidateDecisionFeedbackInput, latestCandidateFeedback } from "../lib/creative-candidate-feedback";
+import { creativeAttachmentBrowserURL } from "../lib/creative-attachment-url";
 import { formatCreativeDateTime } from "../lib/creative-time";
 import {
   creativeMaterialMatchesFilter,
@@ -44,6 +46,15 @@ import {
   type MaterialAnalysisState,
   type MaterialLibraryFilter,
 } from "../lib/creative-material-state";
+import {
+  adoptedCreativeOrderVariant,
+  CREATIVE_DELIVERY_SIZES,
+  creativeVariantArchiveEntries,
+  creativeVariantDeliveryAssets,
+  downloadCreativeAdoptedVariantArchives,
+  downloadCreativeVariantArchive,
+  type DeliveryAttachment,
+} from "./creative-order-delivery";
 
 export { candidateDecisionFeedbackInput, latestCandidateFeedback } from "../lib/creative-candidate-feedback";
 export {
@@ -94,6 +105,10 @@ const MATERIAL_FILTER_LABELS: Record<MaterialLibraryFilter, string> = {
   all: "全部历史",
 };
 
+const MATERIAL_FILTER_OPTIONS: MaterialLibraryFilter[] = ["available", "analyze", "rejected", "all"];
+
+type MaterialLibraryTab = "candidates" | "adopted";
+
 const MATERIAL_PAGE_SIZE = 60;
 
 const MATERIAL_SORT_LABELS = {
@@ -104,6 +119,7 @@ const MATERIAL_SORT_LABELS = {
 
 export function CreativeMaterialLibrary({
   onOrderCreated,
+  onOpenOrder,
   onOpenCopyLibrary,
   filter = "available",
   onFilterChange,
@@ -111,6 +127,7 @@ export function CreativeMaterialLibrary({
   runId = "",
 }: {
   onOrderCreated?: (orderId: string) => void;
+  onOpenOrder?: (orderId: string) => void;
   onOpenCopyLibrary?: () => void;
   filter?: MaterialLibraryFilter;
   onFilterChange?: (filter: MaterialLibraryFilter) => void;
@@ -134,6 +151,7 @@ export function CreativeMaterialLibrary({
   const [orderDraftOpen, setOrderDraftOpen] = useState(false);
   const [rejecting, setRejecting] = useState<CreativeMaterialCandidate | null>(null);
   const [selectedCandidatesById, setSelectedCandidatesById] = useState<Record<string, CreativeMaterialCandidate>>({});
+  const [libraryTab, setLibraryTab] = useState<MaterialLibraryTab>("candidates");
   const deferredQuery = useDeferredValue(query);
   const materialQuery = useMemo<CreativeMaterialLibraryQuery>(() => ({
     limit: MATERIAL_PAGE_SIZE,
@@ -165,6 +183,7 @@ export function CreativeMaterialLibrary({
   const feedback = useQuery(creativeFeedbackOptions(wsId, "candidate"));
   const orders = useQuery(creativeOrdersOptions(wsId));
   const resources = useQuery(creativeResourcesOptions(wsId));
+  const materialIndex = useQuery(creativeMaterialLibraryOptions(wsId, { limit: 1000, offset: 0, view: "all" }));
   const candidates = useMemo(() => materials.data?.candidates ?? [], [materials.data?.candidates]);
   const { marketPack, copyLibrary } = useMemo(
     () => defaultPreAdaptationResources(resources.data?.resources ?? []),
@@ -282,6 +301,27 @@ export function CreativeMaterialLibrary({
   const availableSquads = squads.data ?? [];
   const selectedSquad = availableSquads.length === 1 ? availableSquads[0] : undefined;
   const activeCrawlRun = crawlRuns.find((run) => run.id === runId);
+  const materialIndexById = useMemo(
+    () => new Map([...(materialIndex.data?.candidates ?? []), ...displayedCandidates].map((candidate) => [candidate.id, candidate])),
+    [displayedCandidates, materialIndex.data?.candidates],
+  );
+  const adoptedGalleryItems = useMemo(
+    () => adoptedCreativeGalleryItems(orders.data?.orders ?? [], materialIndexById),
+    [materialIndexById, orders.data?.orders],
+  );
+  const adoptedAttachmentIds = useMemo(
+    () => [...new Set(adoptedGalleryItems.flatMap((item) => item.deliveryAssets.map((asset) => asset.attachment_id)).filter(Boolean))],
+    [adoptedGalleryItems],
+  );
+  const adoptedAttachments = useQuery({
+    queryKey: ["creative", wsId, "adopted-gallery-attachments", adoptedAttachmentIds.join("|")],
+    queryFn: () => Promise.all(adoptedAttachmentIds.map((id) => api.getAttachment(id))),
+    enabled: libraryTab === "adopted" && adoptedAttachmentIds.length > 0,
+  });
+  const adoptedAttachmentMap = useMemo<Map<string, DeliveryAttachment>>(
+    () => new Map((adoptedAttachments.data ?? []).map((attachment) => [attachment.id, attachment] as const)),
+    [adoptedAttachments.data],
+  );
   const toggleSelection = (candidate: CreativeMaterialCandidate) => {
     setSelectedCandidatesById((current) => {
       if (current[candidate.id]) {
@@ -301,94 +341,112 @@ export function CreativeMaterialLibrary({
     <div className="mb-4 flex flex-wrap items-end justify-between gap-4">
       <div>
         <h2 className="text-base font-semibold">素材库</h2>
-        <p className="mt-1 text-sm text-muted-foreground">从已分析素材中选出需要出图的一批，再统一确认文案。</p>
+        <p className="mt-1 text-sm text-muted-foreground">管理候选素材和最终采用成图。</p>
       </div>
       <div className="flex items-center gap-2">
-        <Badge variant="outline">{totalCount} 条</Badge>
-        {selectedCandidates.length > 0 && <Badge>{selectedCandidates.length} 已选</Badge>}
-        <Button size="sm" onClick={() => setImportOpen(true)}><Plus className="h-4 w-4" />导入素材</Button>
+        <Badge variant="outline">{libraryTab === "adopted" ? `${adoptedGalleryItems.length} 个成图包` : `${totalCount} 条`}</Badge>
+        {libraryTab === "candidates" && selectedCandidates.length > 0 && <Badge>{selectedCandidates.length} 已选</Badge>}
+        {libraryTab === "candidates" && <Button size="sm" onClick={() => setImportOpen(true)}><Plus className="h-4 w-4" />导入素材</Button>}
       </div>
     </div>
-    <CreativeImageEditPoolPanel
-      squad={selectedSquad}
-      squadCount={availableSquads.length}
-      loading={squads.isLoading}
-      className="mb-4"
-    />
-    <div className="grid min-w-0 gap-4 lg:grid-cols-[260px_minmax(0,1fr)]">
-      <MaterialBatchSidebar runs={crawlRuns} activeRunId={runId} onSelect={selectRun} />
-      <div className="min-w-0">
-        <div className="mb-4 flex flex-wrap gap-2 border-y bg-muted/10 py-3">
-          <div className="relative min-w-56 flex-1 md:max-w-md"><Search className="pointer-events-none absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" /><Input className="pl-8" value={query} onChange={(event) => { setQuery(event.target.value); setOffset(0); }} placeholder="搜索标题、竞品或标签" /></div>
-          <select id="creative-material-status-filter" name="status" className="h-9 min-w-36 border bg-background px-3 text-sm" value={filter} onChange={(event) => { setOffset(0); onFilterChange?.(event.target.value as MaterialLibraryFilter); }} aria-label="按素材状态筛选">
-            {(Object.keys(MATERIAL_FILTER_LABELS) as MaterialLibraryFilter[]).map((key) => <option key={key} value={key}>{runId && key === "all" ? "本次全部" : MATERIAL_FILTER_LABELS[key]}</option>)}
-          </select>
-          <select id="creative-material-competitor-filter" name="competitor" className="h-9 min-w-40 border bg-background px-3 text-sm" value={competitor} onChange={(event) => { setCompetitor(event.target.value); setOffset(0); }} aria-label="按竞品筛选">
-            <option value="">全部竞品</option>
-            {competitors.map((name) => <option key={name} value={name}>{name}</option>)}
-          </select>
-          <select className="h-9 min-w-32 border bg-background px-3 text-sm" value={area} onChange={(event) => { setArea(event.target.value); setOffset(0); }} aria-label="按市场筛选"><option value="">全部市场</option>{areas.map((name) => <option key={name} value={name}>{name}</option>)}</select>
-          <select className="h-9 min-w-32 border bg-background px-3 text-sm" value={language} onChange={(event) => { setLanguage(event.target.value); setOffset(0); }} aria-label="按语言筛选"><option value="">全部语言</option>{languages.map((name) => <option key={name} value={name}>{name}</option>)}</select>
-          <select className="h-9 min-w-32 border bg-background px-3 text-sm" value={media} onChange={(event) => { setMedia(event.target.value); setOffset(0); }} aria-label="按渠道筛选"><option value="">全部渠道</option>{mediaNames.map((name) => <option key={name} value={name}>{name}</option>)}</select>
-          <select className="h-9 min-w-28 border bg-background px-3 text-sm" value={assetType} onChange={(event) => { setAssetType(event.target.value as typeof assetType); setOffset(0); }} aria-label="按素材类型筛选"><option value="">全部类型</option><option value="image">图片</option><option value="video">视频</option><option value="unknown">未知</option></select>
-          <select className="h-9 min-w-32 border bg-background px-3 text-sm" value={sort} onChange={(event) => { setSort(event.target.value as keyof typeof MATERIAL_SORT_LABELS); setOffset(0); }} aria-label="排序方式">{Object.entries(MATERIAL_SORT_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select>
-          {runId && <Badge variant="outline" className="h-9 px-3 text-sm">{activeCrawlRun ? materialBatchShortTitle(activeCrawlRun) : "本次采集"}</Badge>}
-          {runId && <Button size="sm" variant="ghost" onClick={() => selectRun("")}>全部批次</Button>}
-        </div>
-        {selectedCandidates.length > 0 && <MaterialBatchSelectionBar candidates={selectedCandidates} onClear={clearSelection} onConfirm={() => setOrderDraftOpen(true)} />}
-        {orderDraftOpen && <Dialog open onOpenChange={(open) => !open && setOrderDraftOpen(false)}><DialogContent className="!h-[100dvh] !w-[100vw] !max-w-none !gap-0 !overflow-y-auto !rounded-none !p-0"><DialogHeader className="sr-only"><DialogTitle>批量确认文案</DialogTitle><DialogDescription>逐图确认文案后，统一提交出图。</DialogDescription></DialogHeader><CreativeOrderDraft candidates={selectedCandidates} analyses={analyses.data?.analyses ?? []} deselecting={false} onOpenCopyLibrary={onOpenCopyLibrary} onRetrySourceAnalysis={(candidateId) => retryAnalysis.mutate(candidateId)} retryingSourceAnalysis={retryAnalysis.isPending} onDeselect={(candidateId) => setSelectedCandidatesById((current) => {
-          const { [candidateId]: _removed, ...remaining } = current;
-          return remaining;
-        })} onClose={() => setOrderDraftOpen(false)} onDone={(orderId) => {
-          clearSelection();
-          setOrderDraftOpen(false);
-          queryClient.invalidateQueries({ queryKey: creativeKeys.orders(wsId) });
-          onOrderCreated?.(orderId);
-        }} /></DialogContent></Dialog>}
-        {materials.isLoading ? <div className="py-16 text-center text-sm text-muted-foreground">正在加载素材库...</div> : visible.length === 0 ? (
-          <div className="flex min-h-64 flex-col items-center justify-center border border-dashed text-sm text-muted-foreground"><ImageIcon className="mb-3 h-6 w-6" /><p>没有符合条件的素材</p><div className="mt-4 flex gap-2"><Button size="sm" variant="outline" onClick={() => { setQuery(""); setCompetitor(""); setArea(""); setLanguage(""); setMedia(""); setAssetType(""); setSort("recent"); setOffset(0); onFilterChange?.(runId ? "all" : "available"); }}>清除筛选</Button><Button size="sm" variant="outline" onClick={() => setImportOpen(true)}>导入素材</Button></div></div>
-        ) : (
-          <div className="grid grid-cols-1 gap-px overflow-hidden border bg-border sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
-            {visible.map((candidate) => {
-              const decision = latestDecisions.get(candidate.id);
-              const selected = Boolean(selectedCandidatesById[candidate.id]);
-              const analysisState = analysisStateByCandidateId.get(candidate.id) ?? materialAnalysisState(candidate, analyses.data?.analyses ?? []);
-              const productionState = productionStateByCandidateId.get(candidate.id) ?? creativeMaterialProductionState(
-                candidate,
-                analysisState,
-                decision?.decision,
-                generatedCandidateIds.has(candidate.id),
-                creativeMaterialAnalysisReadiness(completedAnalyses.get(candidate.id), analysisState, marketPack, copyLibrary),
-              );
-              return <MaterialTile
-                key={candidate.id}
-                candidate={candidate}
-                analysisState={analysisState}
-                productionState={productionState}
-                selected={selected}
-                decision={decision?.decision ?? ""}
-                busy={decideCandidate.isPending || undoDecision.isPending}
-                retryingAnalysis={retryAnalysis.isPending}
-                analysisSummary={completedAnalyses.get(candidate.id)?.summary ?? ""}
-                showProductionState={filter !== "available" || productionState.status !== "available"}
-                onToggle={() => {
-                  toggleSelection(candidate);
-                }}
-                onReject={() => setRejecting(candidate)}
-                onUndo={() => undoDecision.mutate(candidate)}
-                onOpen={() => setPreview(candidate)}
-                onRetryAnalysis={() => retryAnalysis.mutate(candidate.id)}
-              />;
-            })}
-          </div>
-        )}
+    <Tabs value={libraryTab} onValueChange={(value) => setLibraryTab(value === "adopted" ? "adopted" : "candidates")}>
+      <div className="mb-4 border-b">
+        <TabsList className="h-auto min-h-8 justify-start gap-1 bg-transparent p-0">
+          <TabsTrigger value="candidates" className="rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent"><Images className="h-3.5 w-3.5" />候选素材</TabsTrigger>
+          <TabsTrigger value="adopted" className="rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent"><PackageCheck className="h-3.5 w-3.5" />成图库</TabsTrigger>
+        </TabsList>
+      </div>
+      <TabsContent value="candidates" className="m-0">
+        <CreativeImageEditPoolPanel
+          squad={selectedSquad}
+          squadCount={availableSquads.length}
+          loading={squads.isLoading}
+          className="mb-4"
+        />
+        <div className="grid min-w-0 gap-4 lg:grid-cols-[260px_minmax(0,1fr)]">
+          <MaterialBatchSidebar runs={crawlRuns} activeRunId={runId} onSelect={selectRun} />
+          <div className="min-w-0">
+            <div className="mb-4 flex flex-wrap gap-2 border-y bg-muted/10 py-3">
+              <div className="relative min-w-56 flex-1 md:max-w-md"><Search className="pointer-events-none absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" /><Input className="pl-8" value={query} onChange={(event) => { setQuery(event.target.value); setOffset(0); }} placeholder="搜索标题、竞品或标签" /></div>
+              <select id="creative-material-status-filter" name="status" className="h-9 min-w-36 border bg-background px-3 text-sm" value={filter} onChange={(event) => { setOffset(0); onFilterChange?.(event.target.value as MaterialLibraryFilter); }} aria-label="按素材状态筛选">
+                {MATERIAL_FILTER_OPTIONS.map((key) => <option key={key} value={key}>{runId && key === "all" ? "本次全部" : MATERIAL_FILTER_LABELS[key]}</option>)}
+              </select>
+              <select id="creative-material-competitor-filter" name="competitor" className="h-9 min-w-40 border bg-background px-3 text-sm" value={competitor} onChange={(event) => { setCompetitor(event.target.value); setOffset(0); }} aria-label="按竞品筛选">
+                <option value="">全部竞品</option>
+                {competitors.map((name) => <option key={name} value={name}>{name}</option>)}
+              </select>
+              <select className="h-9 min-w-32 border bg-background px-3 text-sm" value={area} onChange={(event) => { setArea(event.target.value); setOffset(0); }} aria-label="按市场筛选"><option value="">全部市场</option>{areas.map((name) => <option key={name} value={name}>{name}</option>)}</select>
+              <select className="h-9 min-w-32 border bg-background px-3 text-sm" value={language} onChange={(event) => { setLanguage(event.target.value); setOffset(0); }} aria-label="按语言筛选"><option value="">全部语言</option>{languages.map((name) => <option key={name} value={name}>{name}</option>)}</select>
+              <select className="h-9 min-w-32 border bg-background px-3 text-sm" value={media} onChange={(event) => { setMedia(event.target.value); setOffset(0); }} aria-label="按渠道筛选"><option value="">全部渠道</option>{mediaNames.map((name) => <option key={name} value={name}>{name}</option>)}</select>
+              <select className="h-9 min-w-28 border bg-background px-3 text-sm" value={assetType} onChange={(event) => { setAssetType(event.target.value as typeof assetType); setOffset(0); }} aria-label="按素材类型筛选"><option value="">全部类型</option><option value="image">图片</option><option value="video">视频</option><option value="unknown">未知</option></select>
+              <select className="h-9 min-w-32 border bg-background px-3 text-sm" value={sort} onChange={(event) => { setSort(event.target.value as keyof typeof MATERIAL_SORT_LABELS); setOffset(0); }} aria-label="排序方式">{Object.entries(MATERIAL_SORT_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select>
+              {runId && <Badge variant="outline" className="h-9 px-3 text-sm">{activeCrawlRun ? materialBatchShortTitle(activeCrawlRun) : "本次采集"}</Badge>}
+              {runId && <Button size="sm" variant="ghost" onClick={() => selectRun("")}>全部批次</Button>}
+            </div>
+            {selectedCandidates.length > 0 && <MaterialBatchSelectionBar candidates={selectedCandidates} onClear={clearSelection} onConfirm={() => setOrderDraftOpen(true)} />}
+            {orderDraftOpen && <Dialog open onOpenChange={(open) => !open && setOrderDraftOpen(false)}><DialogContent className="!h-[100dvh] !w-[100vw] !max-w-none !gap-0 !overflow-y-auto !rounded-none !p-0"><DialogHeader className="sr-only"><DialogTitle>批量确认文案</DialogTitle><DialogDescription>逐图确认文案后，统一提交出图。</DialogDescription></DialogHeader><CreativeOrderDraft candidates={selectedCandidates} analyses={analyses.data?.analyses ?? []} deselecting={false} onOpenCopyLibrary={onOpenCopyLibrary} onRetrySourceAnalysis={(candidateId) => retryAnalysis.mutate(candidateId)} retryingSourceAnalysis={retryAnalysis.isPending} onDeselect={(candidateId) => setSelectedCandidatesById((current) => {
+              const { [candidateId]: _removed, ...remaining } = current;
+              return remaining;
+            })} onClose={() => setOrderDraftOpen(false)} onDone={(orderId) => {
+              clearSelection();
+              setOrderDraftOpen(false);
+              queryClient.invalidateQueries({ queryKey: creativeKeys.orders(wsId) });
+              onOrderCreated?.(orderId);
+            }} /></DialogContent></Dialog>}
+            {materials.isLoading ? <div className="py-16 text-center text-sm text-muted-foreground">正在加载素材库...</div> : visible.length === 0 ? (
+              <div className="flex min-h-64 flex-col items-center justify-center border border-dashed text-sm text-muted-foreground"><ImageIcon className="mb-3 h-6 w-6" /><p>没有符合条件的素材</p><div className="mt-4 flex gap-2"><Button size="sm" variant="outline" onClick={() => { setQuery(""); setCompetitor(""); setArea(""); setLanguage(""); setMedia(""); setAssetType(""); setSort("recent"); setOffset(0); onFilterChange?.(runId ? "all" : "available"); }}>清除筛选</Button><Button size="sm" variant="outline" onClick={() => setImportOpen(true)}>导入素材</Button></div></div>
+            ) : (
+              <div className="grid grid-cols-1 gap-px overflow-hidden border bg-border sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
+                {visible.map((candidate) => {
+                  const decision = latestDecisions.get(candidate.id);
+                  const selected = Boolean(selectedCandidatesById[candidate.id]);
+                  const analysisState = analysisStateByCandidateId.get(candidate.id) ?? materialAnalysisState(candidate, analyses.data?.analyses ?? []);
+                  const productionState = productionStateByCandidateId.get(candidate.id) ?? creativeMaterialProductionState(
+                    candidate,
+                    analysisState,
+                    decision?.decision,
+                    generatedCandidateIds.has(candidate.id),
+                    creativeMaterialAnalysisReadiness(completedAnalyses.get(candidate.id), analysisState, marketPack, copyLibrary),
+                  );
+                  return <MaterialTile
+                    key={candidate.id}
+                    candidate={candidate}
+                    analysisState={analysisState}
+                    productionState={productionState}
+                    selected={selected}
+                    decision={decision?.decision ?? ""}
+                    busy={decideCandidate.isPending || undoDecision.isPending}
+                    retryingAnalysis={retryAnalysis.isPending}
+                    analysisSummary={completedAnalyses.get(candidate.id)?.summary ?? ""}
+                    showProductionState={filter !== "available" || productionState.status !== "available"}
+                    onToggle={() => {
+                      toggleSelection(candidate);
+                    }}
+                    onReject={() => setRejecting(candidate)}
+                    onUndo={() => undoDecision.mutate(candidate)}
+                    onOpen={() => setPreview(candidate)}
+                    onRetryAnalysis={() => retryAnalysis.mutate(candidate.id)}
+                  />;
+                })}
+              </div>
+            )}
 
-        {visible.length > 0 && totalCount > MATERIAL_PAGE_SIZE && <div className="mt-4 flex items-center justify-between border-y py-3 text-sm">
-          <span className="text-muted-foreground">显示 {offset + 1}-{Math.min(offset + visible.length, totalCount)} / {totalCount} 条</span>
-          <div className="flex items-center gap-2"><Button size="sm" variant="outline" disabled={offset === 0 || materials.isFetching} onClick={() => setOffset(Math.max(0, offset - MATERIAL_PAGE_SIZE))}>上一页</Button><Button size="sm" variant="outline" disabled={nextOffset === null || materials.isFetching} onClick={() => nextOffset !== null && setOffset(nextOffset)}>下一页</Button></div>
-        </div>}
-      </div>
-    </div>
+            {visible.length > 0 && totalCount > MATERIAL_PAGE_SIZE && <div className="mt-4 flex items-center justify-between border-y py-3 text-sm">
+              <span className="text-muted-foreground">显示 {offset + 1}-{Math.min(offset + visible.length, totalCount)} / {totalCount} 条</span>
+              <div className="flex items-center gap-2"><Button size="sm" variant="outline" disabled={offset === 0 || materials.isFetching} onClick={() => setOffset(Math.max(0, offset - MATERIAL_PAGE_SIZE))}>上一页</Button><Button size="sm" variant="outline" disabled={nextOffset === null || materials.isFetching} onClick={() => nextOffset !== null && setOffset(nextOffset)}>下一页</Button></div>
+            </div>}
+          </div>
+        </div>
+      </TabsContent>
+      <TabsContent value="adopted" className="m-0">
+        <CreativeAdoptedGallery
+          items={adoptedGalleryItems}
+          attachments={adoptedAttachmentMap}
+          loading={orders.isLoading || adoptedAttachments.isLoading}
+          onOpenOrder={onOpenOrder ?? onOrderCreated}
+        />
+      </TabsContent>
+    </Tabs>
 		<MaterialPreview candidate={previewCandidate} analysis={previewAnalysis} canRetryAnalysis={previewCanRetryAnalysis} onClose={() => setPreview(null)} onDirectEdit={() => previewCandidate && setDirectEditCandidate(previewCandidate)} onRetryAnalysis={(candidateId) => retryAnalysis.mutate(candidateId)} retryingAnalysis={retryAnalysis.isPending} />
 		<DirectEditDialog candidate={directEditCandidate} onClose={() => setDirectEditCandidate(null)} onCreated={(orderId) => {
 			setDirectEditCandidate(null);
@@ -436,6 +494,207 @@ export function materialCandidateDisplayDetails(candidate: CreativeMaterialCandi
     platforms: displayCandidateValues(platformNames),
     tags: displayCandidateValues(preferredCandidateValues(candidate.tags, records, ["tags", "tag_names"])),
     note: candidate.note?.trim() || firstRecordString(records, ["note", "remark", "remarks", "comment"]) || MATERIAL_SOURCE_MISSING,
+  };
+}
+
+type AdoptedCreativeGalleryItem = {
+  id: string;
+  order: CreativeOrder;
+  item: CreativeOrderItem;
+  variant: CreativeOrderVariant;
+  candidate?: CreativeMaterialCandidate;
+  deliveryAssets: ReturnType<typeof creativeVariantDeliveryAssets>;
+  label: string;
+  adoptedAt: string;
+};
+
+function adoptedCreativeGalleryItems(
+  orders: CreativeOrder[],
+  candidatesById: Map<string, CreativeMaterialCandidate>,
+): AdoptedCreativeGalleryItem[] {
+  return orders.flatMap((order) => order.items.flatMap((item) => {
+    const variant = adoptedCreativeOrderVariant(item);
+    if (!variant) return [];
+    const candidate = candidatesById.get(item.candidate_id);
+    return [{
+      id: `${order.id}:${item.id}:${variant.id}`,
+      order,
+      item,
+      variant,
+      candidate,
+      deliveryAssets: creativeVariantDeliveryAssets(variant),
+      label: candidate?.title || candidate?.competitor || item.candidate_id.slice(0, 8) || `订单 ${order.id.slice(0, 8)}`,
+      adoptedAt: item.adopted_at || order.updated_at || order.created_at,
+    }];
+  })).sort((left, right) => (Date.parse(right.adoptedAt) || 0) - (Date.parse(left.adoptedAt) || 0));
+}
+
+function CreativeAdoptedGallery({
+  items,
+  attachments,
+  loading,
+  onOpenOrder,
+}: {
+  items: AdoptedCreativeGalleryItem[];
+  attachments: Map<string, DeliveryAttachment>;
+  loading: boolean;
+  onOpenOrder?: (orderId: string) => void;
+}) {
+  const [query, setQuery] = useState("");
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set());
+  const [downloadBusy, setDownloadBusy] = useState("");
+  const needle = query.trim().toLocaleLowerCase();
+  const visible = useMemo(() => {
+    if (!needle) return items;
+    return items.filter((item) => [
+      item.label,
+      item.candidate?.competitor ?? "",
+      item.candidate?.connector_id ?? "",
+      item.order.id,
+      item.item.candidate_id,
+      item.variant.variant_key,
+    ].join(" ").toLocaleLowerCase().includes(needle));
+  }, [items, needle]);
+  const selectedItems = visible.filter((item) => selectedIds.has(item.id));
+  const downloadableVisible = visible.filter((item) => adoptedGalleryComplete(item, attachments));
+  const downloadableSelected = selectedItems.filter((item) => adoptedGalleryComplete(item, attachments));
+
+  const toggleSelected = (id: string, checked: boolean) => {
+    setSelectedIds((current) => {
+      const next = new Set(current);
+      if (checked) next.add(id);
+      else next.delete(id);
+      return next;
+    });
+  };
+  const downloadMany = async (targetItems: AdoptedCreativeGalleryItem[], scope: string) => {
+    if (targetItems.length === 0) return;
+    setDownloadBusy(scope);
+    try {
+      await downloadCreativeAdoptedVariantArchives({
+        packages: targetItems.map((item) => adoptedGalleryDownloadPackage(item, attachments)),
+        archiveName: scope === "selected" ? "adopted-creatives-selected" : "adopted-creatives-current",
+      });
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "无法下载采用成图");
+    } finally {
+      setDownloadBusy("");
+    }
+  };
+
+  return <section className="min-w-0">
+    <div className="mb-4 flex flex-wrap items-center justify-between gap-3 border-y bg-muted/10 py-3">
+      <div className="relative min-w-56 flex-1 md:max-w-md">
+        <Search className="pointer-events-none absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+        <Input className="pl-8" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索成图、订单或竞品" />
+      </div>
+      <div className="flex flex-wrap items-center gap-2">
+        <Badge variant="outline">{visible.length} 个成图包</Badge>
+        {selectedItems.length > 0 && <Badge>{selectedItems.length} 已选</Badge>}
+        {selectedItems.length > 0 && <Button size="sm" variant="outline" disabled={loading || downloadBusy !== "" || downloadableSelected.length === 0} onClick={() => void downloadMany(downloadableSelected, "selected")}><Download className="h-4 w-4" />{downloadBusy === "selected" ? "正在打包" : "下载已选"}</Button>}
+        <Button size="sm" disabled={loading || downloadBusy !== "" || downloadableVisible.length === 0} onClick={() => void downloadMany(downloadableVisible, "visible")}><Download className="h-4 w-4" />{downloadBusy === "visible" ? "正在打包" : "下载当前筛选"}</Button>
+      </div>
+    </div>
+    {loading ? <div className="py-16 text-center text-sm text-muted-foreground">正在加载成图库...</div> : visible.length === 0 ? (
+      <div className="flex min-h-64 flex-col items-center justify-center border border-dashed text-sm text-muted-foreground"><PackageCheck className="mb-3 h-6 w-6" /><p>还没有符合条件的采用成图</p></div>
+    ) : (
+      <div className="grid grid-cols-1 gap-px overflow-hidden border bg-border lg:grid-cols-2 2xl:grid-cols-3">
+        {visible.map((item) => <AdoptedGalleryTile
+          key={item.id}
+          item={item}
+          attachments={attachments}
+          selected={selectedIds.has(item.id)}
+          busy={downloadBusy !== ""}
+          onSelect={(checked) => toggleSelected(item.id, checked)}
+          onOpenOrder={() => onOpenOrder?.(item.order.id)}
+          onDownload={async () => {
+            setDownloadBusy(item.id);
+            try {
+              await downloadCreativeVariantArchive({
+                orderId: item.order.id,
+                item: item.item,
+                variant: item.variant,
+                attachments,
+                order: item.order,
+              });
+            } catch (error) {
+              toast.error(error instanceof Error ? error.message : "无法下载交付包");
+            } finally {
+              setDownloadBusy("");
+            }
+          }}
+        />)}
+      </div>
+    )}
+  </section>;
+}
+
+function AdoptedGalleryTile({
+  item,
+  attachments,
+  selected,
+  busy,
+  onSelect,
+  onDownload,
+  onOpenOrder,
+}: {
+  item: AdoptedCreativeGalleryItem;
+  attachments: Map<string, DeliveryAttachment>;
+  selected: boolean;
+  busy: boolean;
+  onSelect: (checked: boolean) => void;
+  onDownload: () => void;
+  onOpenOrder: () => void;
+}) {
+  const entries = creativeVariantArchiveEntries(item.variant, attachments, item.order, item.item);
+  const complete = entries.length === CREATIVE_DELIVERY_SIZES.length;
+  return <article className="min-w-0 bg-background">
+    <div className="flex min-w-0 items-start justify-between gap-3 px-3 py-3">
+      <label className="flex min-w-0 flex-1 items-start gap-2">
+        <input type="checkbox" className="mt-0.5 h-4 w-4 shrink-0" checked={selected} onChange={(event) => onSelect(event.target.checked)} />
+        <span className="min-w-0">
+          <span className="block truncate text-sm font-medium">{item.label}</span>
+          <span className="mt-1 block text-xs text-muted-foreground">订单 {item.order.id.slice(0, 8)} · {item.variant.variant_key || item.variant.id.slice(0, 8)}</span>
+        </span>
+      </label>
+      <Badge variant={complete ? "default" : "outline"}>{complete ? "交付齐备" : `${entries.length}/${CREATIVE_DELIVERY_SIZES.length}`}</Badge>
+    </div>
+    <div className="grid grid-cols-3 gap-px bg-border">
+      {CREATIVE_DELIVERY_SIZES.map((size) => {
+        const entry = entries.find((candidate) => candidate.asset.size_key === size);
+        const url = creativeAttachmentBrowserURL(entry?.attachment);
+        return <div key={size} className="min-w-0 bg-muted/30">
+          <div className="relative aspect-square">
+            {url ? <img src={url} alt={`${item.label} ${size}`} loading="lazy" className="h-full w-full object-cover" /> : <div className="flex h-full items-center justify-center text-muted-foreground"><ImageIcon className="h-5 w-5" /></div>}
+          </div>
+          <div className="truncate border-t bg-background px-2 py-1 text-[10px] text-muted-foreground">{size}</div>
+        </div>;
+      })}
+    </div>
+    <div className="space-y-1 px-3 py-2 text-xs text-muted-foreground">
+      <p className="truncate">采用时间 {formatCreativeDateTime(item.adoptedAt)}</p>
+      <p className="truncate">来源 {item.candidate?.competitor || item.candidate?.connector_id || item.item.candidate_id.slice(0, 8)}</p>
+    </div>
+    <div className="flex items-center justify-between gap-2 border-t px-3 py-2">
+      <Button size="sm" variant="outline" onClick={onOpenOrder}>查看订单</Button>
+      <Button size="sm" disabled={busy || !complete} onClick={onDownload}><Download className="h-4 w-4" />下载交付包</Button>
+    </div>
+  </article>;
+}
+
+function adoptedGalleryComplete(item: AdoptedCreativeGalleryItem, attachments: Map<string, DeliveryAttachment>): boolean {
+  return creativeVariantArchiveEntries(item.variant, attachments, item.order, item.item).length === CREATIVE_DELIVERY_SIZES.length;
+}
+
+function adoptedGalleryDownloadPackage(item: AdoptedCreativeGalleryItem, attachments: Map<string, DeliveryAttachment>) {
+  return {
+    orderId: item.order.id,
+    order: item.order,
+    item: item.item,
+    variant: item.variant,
+    attachments,
+    folderName: `order-${item.order.id.slice(0, 8)}-${item.variant.variant_key || item.variant.id.slice(0, 8)}`,
+    label: item.label,
   };
 }
 
@@ -871,6 +1130,8 @@ function CreativeImageEditPoolPanel({ squad, squadCount, loading = false, classN
     enabled: !!wsId && !!squad?.id,
   });
   const [query, setQuery] = useState("");
+  const [configOpen, setConfigOpen] = useState(false);
+  const [addOpen, setAddOpen] = useState(false);
   const [pendingAgentId, setPendingAgentId] = useState("");
   const imageEditSkill = useMemo(() => (skills.data ?? []).find((skill) => isCreativeRoleSkill(skill, "image_edit")), [skills.data]);
   const memberIds = useMemo(() => new Set((squadMembers.data ?? []).filter((member) => member.member_type === "agent").map((member) => member.member_id)), [squadMembers.data]);
@@ -885,21 +1146,29 @@ function CreativeImageEditPoolPanel({ squad, squadCount, loading = false, classN
       })
       .sort((left, right) => compareImageEditPoolAgents(left, right, memberIds, skillId));
   }, [agents.data, imageEditSkill?.id, memberIds]);
-  const agentRows = useMemo(() => {
+  const configuredAgentRows = useMemo(
+    () => allAgentRows.filter((agent) => imageEditPoolConfigured(agent, memberIds, imageEditSkill?.id ?? "")),
+    [allAgentRows, imageEditSkill?.id, memberIds],
+  );
+  const addAgentRows = useMemo(() => {
     const needle = query.trim().toLocaleLowerCase();
-    if (!needle) return allAgentRows;
-    return allAgentRows.filter((agent) => [agent.name, agent.description, agent.id, ...agent.skills.map((skill) => skill.name)]
+    return allAgentRows.filter((agent) => {
+      if (imageEditPoolConfigured(agent, memberIds, imageEditSkill?.id ?? "")) return false;
+      if (!needle) return true;
+      return [agent.name, agent.description, agent.id, ...agent.skills.map((skill) => skill.name)]
       .join(" ")
       .toLocaleLowerCase()
-      .includes(needle));
-  }, [allAgentRows, query]);
+      .includes(needle);
+    });
+  }, [allAgentRows, imageEditSkill?.id, memberIds, query]);
   const readyCount = allAgentRows.filter((agent) => imageEditPoolReady(agent, memberIds, imageEditSkill?.id ?? "")).length;
-  const configuredCount = allAgentRows.filter((agent) => imageEditPoolConfigured(agent, memberIds, imageEditSkill?.id ?? "")).length;
+  const configuredCount = configuredAgentRows.length;
 
   const invalidatePoolQueries = async () => {
     await Promise.all([
       queryClient.invalidateQueries({ queryKey: workspaceKeys.agents(wsId) }),
       queryClient.invalidateQueries({ queryKey: workspaceKeys.squads(wsId) }),
+      queryClient.invalidateQueries({ queryKey: ["workspaces", wsId, "squads", squad?.id ?? "", "members"] }),
     ]);
   };
 
@@ -912,85 +1181,149 @@ function CreativeImageEditPoolPanel({ squad, squadCount, loading = false, classN
           await api.addSquadMember(squad.id, { member_type: "agent", member_id: agent.id, role: "出图" });
         }
         await api.addAgentSkills(agent.id, { skill_ids: [imageEditSkill.id] });
-        toast.success(`${agent.name} 已加入出图池`);
+        toast.success(`${agent.name} 已启用出图`);
       } else {
         const currentSkills = await api.listAgentSkills(agent.id);
         await api.setAgentSkills(agent.id, {
           skill_ids: currentSkills.filter((skill) => skill.id !== imageEditSkill.id).map((skill) => skill.id),
         });
-        toast.success(`${agent.name} 已从出图池移出`);
+        toast.success(`${agent.name} 已停用出图`);
       }
       await invalidatePoolQueries();
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "出图池更新失败");
+      toast.error(error instanceof Error ? error.message : "出图智能体更新失败");
     } finally {
       setPendingAgentId("");
     }
   };
 
-  return <section className={cn("min-w-0 border bg-background", className)} aria-label="出图池">
+  const busy = agents.isLoading || squadMembers.isLoading || skills.isLoading || loading;
+  const unavailableMessage = !squad
+    ? loading ? "正在加载执行服务" : squadCount === 0 ? "当前工作区尚未配置执行服务" : `当前工作区有 ${squadCount} 个 Squad，暂时无法确定创意执行服务`
+    : !imageEditSkill && skills.isLoading ? "正在加载出图能力"
+      : !imageEditSkill ? "未找到素材_技能_出图，无法配置出图智能体。"
+        : "";
+
+  return <section className={cn("min-w-0 border bg-background", className)} aria-label="出图智能体">
     <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3">
       <div className="flex min-w-0 items-center gap-2">
         <Bot className="h-4 w-4 shrink-0 text-muted-foreground" />
         <div className="min-w-0">
-          <div className="text-sm font-semibold">出图池</div>
+          <div className="text-sm font-semibold">出图智能体</div>
           <div className="truncate text-xs text-muted-foreground">{squad ? squad.name : loading ? "正在加载执行服务" : "未确定执行服务"}</div>
         </div>
       </div>
       <div className="flex flex-wrap items-center gap-2">
-        <Badge variant={readyCount > 0 ? "default" : "outline"}>可出图 {readyCount}</Badge>
-        <Badge variant="outline">已配置 {configuredCount}</Badge>
+        <Badge variant={readyCount > 0 ? "default" : "outline"}>可用 {readyCount}</Badge>
+        <Badge variant="outline">已启用 {configuredCount}</Badge>
+        <Button size="sm" variant="outline" disabled={loading} onClick={() => setConfigOpen(true)}>配置</Button>
       </div>
     </div>
-    {!squad ? (
-      <div className="border-t px-4 py-3 text-xs text-muted-foreground">
-        {loading ? "正在加载 Squad" : squadCount === 0 ? "当前工作区尚未配置执行服务" : `当前工作区有 ${squadCount} 个 Squad，暂时无法确定创意执行服务`}
-      </div>
-    ) : !imageEditSkill && skills.isLoading ? (
-      <div className="border-t px-4 py-3 text-xs text-muted-foreground">正在加载出图 Skill</div>
-    ) : !imageEditSkill ? (
-      <div className="border-t px-4 py-3 text-xs text-destructive">未找到素材_技能_出图，无法配置出图池。</div>
-    ) : (
-      <div className="border-t px-4 pb-3 pt-3">
-        <div className="relative">
-          <Search className="pointer-events-none absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
-          <Input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索智能体" className="pl-8" />
-        </div>
-        <div className="mt-3 grid max-h-80 min-w-0 gap-2 overflow-y-auto pr-1 md:grid-cols-2 xl:grid-cols-3">
-          {agentRows.length === 0 ? (
-            <div className="border border-dashed px-3 py-6 text-center text-xs text-muted-foreground md:col-span-2 xl:col-span-3">{agents.isLoading || squadMembers.isLoading ? "正在加载智能体" : "没有可配置的智能体"}</div>
-          ) : agentRows.map((agent) => {
-            const inSquad = memberIds.has(agent.id);
-            const hasSkill = agent.skills.some((skill) => skill.id === imageEditSkill.id);
-            const configured = inSquad && hasSkill;
-            const ready = configured && imageEditAgentOnline(agent);
-            const pending = pendingAgentId === agent.id;
-            return <div key={agent.id} className={cn("flex min-w-0 items-center gap-3 border px-3 py-2", configured && "border-emerald-300 bg-emerald-50/40 dark:border-emerald-900 dark:bg-emerald-950/20")}>
-              <div className="min-w-0 flex-1">
-                <div className="flex min-w-0 items-center gap-2">
-                  <span className={cn("h-2 w-2 shrink-0 rounded-full", ready ? "bg-emerald-600" : imageEditAgentOnline(agent) ? "bg-amber-500" : "bg-muted-foreground/40")} />
-                  <span className="truncate text-sm font-medium">{agent.name}</span>
-                  <span className="shrink-0 font-mono text-[10px] text-muted-foreground">{agent.id.slice(0, 8)}</span>
+    {unavailableMessage && <div className={cn("border-t px-4 py-3 text-xs", !squad || skills.isLoading ? "text-muted-foreground" : "text-destructive")}>{unavailableMessage}</div>}
+    <Dialog open={configOpen} onOpenChange={(open) => {
+      setConfigOpen(open);
+      if (!open) {
+        setAddOpen(false);
+        setQuery("");
+      }
+    }}>
+      <DialogContent className="max-h-[85dvh] overflow-hidden sm:max-w-3xl">
+        <DialogHeader>
+          <DialogTitle>出图智能体</DialogTitle>
+          <DialogDescription>{squad ? `当前执行服务：${squad.name}` : "配置可承担素材出图的智能体。"}</DialogDescription>
+        </DialogHeader>
+        {unavailableMessage ? (
+          <div className="border border-dashed px-4 py-8 text-center text-sm text-muted-foreground">{unavailableMessage}</div>
+        ) : (
+          <div className="min-h-0 space-y-4 overflow-y-auto pr-1">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
+                <Badge variant="outline">已启用 {configuredCount}</Badge>
+                <Badge variant={readyCount > 0 ? "default" : "outline"}>可用 {readyCount}</Badge>
+              </div>
+              <Button size="sm" variant="outline" onClick={() => setAddOpen((current) => !current)}>
+                <Plus className="h-4 w-4" />添加
+              </Button>
+            </div>
+            {busy ? (
+              <div className="border border-dashed px-4 py-8 text-center text-sm text-muted-foreground">正在加载智能体</div>
+            ) : configuredAgentRows.length === 0 ? (
+              <div className="border border-dashed px-4 py-8 text-center text-sm text-muted-foreground">还没有启用出图智能体</div>
+            ) : (
+              <div className="divide-y border">
+                {configuredAgentRows.map((agent) => (
+                  <ImageEditAgentConfigRow
+                    key={agent.id}
+                    agent={agent}
+                    configured
+                    pending={pendingAgentId === agent.id}
+                    disabled={Boolean(pendingAgentId && pendingAgentId !== agent.id)}
+                    onToggle={(checked) => void togglePool(agent, checked)}
+                  />
+                ))}
+              </div>
+            )}
+            {addOpen && (
+              <div className="space-y-3 border-t pt-4">
+                <div className="relative">
+                  <Search className="pointer-events-none absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+                  <Input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索可添加智能体" className="pl-8" />
                 </div>
-                <div className="mt-1 flex min-w-0 flex-wrap gap-1">
-                  <Badge variant={inSquad ? "secondary" : "outline"} className="text-[10px]">{inSquad ? "Squad" : "未入 Squad"}</Badge>
-                  <Badge variant={hasSkill ? "secondary" : "outline"} className="text-[10px]">{hasSkill ? "出图 Skill" : "缺 Skill"}</Badge>
-                  <Badge variant={ready ? "default" : "outline"} className="text-[10px]">{imageEditAgentStatusLabel(agent)}</Badge>
+                <div className="max-h-72 divide-y overflow-y-auto border">
+                  {addAgentRows.length === 0 ? (
+                    <div className="px-4 py-8 text-center text-sm text-muted-foreground">{query.trim() ? "没有匹配的智能体" : "没有更多可添加的智能体"}</div>
+                  ) : addAgentRows.map((agent) => (
+                    <ImageEditAgentConfigRow
+                      key={agent.id}
+                      agent={agent}
+                      configured={false}
+                      pending={pendingAgentId === agent.id}
+                      disabled={Boolean(agent.archived_at) || Boolean(pendingAgentId && pendingAgentId !== agent.id)}
+                      onToggle={(checked) => void togglePool(agent, checked)}
+                    />
+                  ))}
                 </div>
               </div>
-              <Switch
-                size="sm"
-                checked={configured}
-                disabled={Boolean(agent.archived_at) || pending || Boolean(pendingAgentId && !pending)}
-                onCheckedChange={(checked) => void togglePool(agent, checked)}
-                aria-label={`设置 ${agent.name} 出图池`}
-              />
-            </div>;
-          })}
-        </div>
-      </div>
-    )}
+            )}
+          </div>
+        )}
+      </DialogContent>
+    </Dialog>
   </section>;
+}
+
+function ImageEditAgentConfigRow({
+  agent,
+  configured,
+  pending,
+  disabled,
+  onToggle,
+}: {
+  agent: Agent;
+  configured: boolean;
+  pending: boolean;
+  disabled: boolean;
+  onToggle: (checked: boolean) => void;
+}) {
+  const online = imageEditAgentOnline(agent);
+  return <div className={cn("flex min-w-0 items-center gap-3 bg-background px-4 py-3", configured && "bg-emerald-50/40 dark:bg-emerald-950/20")}>
+    <div className="min-w-0 flex-1">
+      <div className="flex min-w-0 items-center gap-2">
+        <span className={cn("h-2 w-2 shrink-0 rounded-full", online ? "bg-emerald-600" : "bg-muted-foreground/40")} />
+        <span className="truncate text-sm font-medium">{agent.name}</span>
+        <span className="shrink-0 font-mono text-[10px] text-muted-foreground">{agent.id.slice(0, 8)}</span>
+      </div>
+      <div className="mt-1 truncate text-xs text-muted-foreground">{agent.description || imageEditAgentStatusLabel(agent)}</div>
+    </div>
+    <Badge variant={online ? "secondary" : "outline"} className="shrink-0">{imageEditAgentStatusLabel(agent)}</Badge>
+    <Switch
+      size="sm"
+      checked={configured}
+      disabled={disabled || pending}
+      onCheckedChange={onToggle}
+      aria-label={`设置 ${agent.name} 出图智能体`}
+    />
+  </div>;
 }
 
 function isCreativeRoleSkill(skill: SkillSummary, capability: string): boolean {
@@ -1015,7 +1348,7 @@ function imageEditAgentStatusLabel(agent: Agent): string {
   if (agent.status === "working") return "工作中";
   if (agent.status === "blocked") return "阻塞";
   if (agent.status === "error") return "异常";
-  return "可出图";
+  return "在线";
 }
 
 function compareImageEditPoolAgents(left: Agent, right: Agent, memberIds: Set<string>, skillId: string): number {
