@@ -53,6 +53,20 @@ const warmPageBufferLength = positiveInteger(
   process.env.MULTICA_WEB_WARMUP_BUFFER_LENGTH,
   48,
 );
+const nextBuildCpus = positiveInteger(process.env.MULTICA_NEXT_BUILD_CPUS, 0);
+const nextStaticGenerationMaxConcurrency = positiveInteger(
+  process.env.MULTICA_NEXT_STATIC_GENERATION_MAX_CONCURRENCY,
+  0,
+);
+const dockerBuildConcurrency =
+  nextBuildCpus > 0 || nextStaticGenerationMaxConcurrency > 0
+    ? {
+        ...(nextBuildCpus > 0 ? { cpus: nextBuildCpus } : {}),
+        ...(nextStaticGenerationMaxConcurrency > 0
+          ? { staticGenerationMaxConcurrency: nextStaticGenerationMaxConcurrency }
+          : {}),
+      }
+    : {};
 
 const nextConfig: NextConfig = {
   ...(process.env.STANDALONE === "true" ? { output: "standalone" as const } : {}),
@@ -61,6 +75,7 @@ const nextConfig: NextConfig = {
   transpilePackages: ["@multica/core", "@multica/ui", "@multica/views"],
   experimental: {
     proxyClientMaxBodySize: "110mb",
+    ...dockerBuildConcurrency,
   },
   ...(allowedDevOrigins && allowedDevOrigins.length > 0
     ? { allowedDevOrigins }
