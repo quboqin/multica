@@ -304,7 +304,7 @@ SELECT COUNT(DISTINCT size_key)
 		return
 	}
 	pinPreferredDirectEditor := false
-	if historical := selectedCreativeDirectEditAgentFromHistory(r.Context(), tx, workspaceID, parseUUID(variantID), newRevision); historical.Valid {
+	if historical := selectedCreativeDirectEditAgentFromHistory(r.Context(), tx, workspaceID, parseUUID(variantID), newRevision); historical.Valid && historical == preferredDirectEditAgentID {
 		preferredDirectEditAgentID = historical
 		pinPreferredDirectEditor = true
 	}

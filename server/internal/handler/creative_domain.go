@@ -685,16 +685,42 @@ WHERE s.id = $1 AND s.workspace_id = $2 AND s.archived_at IS NULL
 		capabilities = append(capabilities, binding.Capability)
 	}
 	rows, err := tx.Query(ctx, `
-SELECT DISTINCT role_skill.config->>'capability', sm.member_id::text
+SELECT
+  role_skill.config->>'capability',
+  sm.member_id::text,
+  min(CASE WHEN factory.role_agents->>CASE role_skill.config->>'capability'
+    WHEN 'creative_leadership' THEN 'leadership'
+    WHEN 'reference_analysis' THEN 'reference_analysis'
+    WHEN 'material_collection' THEN 'collection'
+    WHEN 'generation_plan' THEN 'generation_plan'
+    WHEN 'image_edit' THEN 'image_edit'
+    WHEN 'direct_image_edit' THEN 'direct_image_edit'
+    WHEN 'quality_control' THEN 'quality_control'
+    WHEN 'crawl_diagnosis' THEN 'diagnostics'
+    ELSE ''
+  END = sm.member_id::text THEN 0 ELSE 1 END)
 FROM squad_member sm
 JOIN agent role_agent ON role_agent.id = sm.member_id AND role_agent.workspace_id = $2 AND role_agent.archived_at IS NULL
 JOIN agent_skill role_binding ON role_binding.agent_id = role_agent.id AND role_binding.enabled
 JOIN skill role_skill ON role_skill.id = role_binding.skill_id AND role_skill.workspace_id = $2
+LEFT JOIN creative_factory_installation factory
+  ON factory.workspace_id = $2
 WHERE sm.squad_id = $1
   AND sm.member_type = 'agent'
   AND role_skill.config->>'kind' = 'creative_role'
   AND role_skill.config->>'capability' = ANY($3::text[])
-ORDER BY role_skill.config->>'capability', sm.member_id::text
+GROUP BY role_skill.config->>'capability', sm.member_id::text
+ORDER BY role_skill.config->>'capability', min(CASE WHEN factory.role_agents->>CASE role_skill.config->>'capability'
+  WHEN 'creative_leadership' THEN 'leadership'
+  WHEN 'reference_analysis' THEN 'reference_analysis'
+  WHEN 'material_collection' THEN 'collection'
+  WHEN 'generation_plan' THEN 'generation_plan'
+  WHEN 'image_edit' THEN 'image_edit'
+  WHEN 'direct_image_edit' THEN 'direct_image_edit'
+  WHEN 'quality_control' THEN 'quality_control'
+  WHEN 'crawl_diagnosis' THEN 'diagnostics'
+  ELSE ''
+END = sm.member_id::text THEN 0 ELSE 1 END), sm.member_id::text
 `, squadID, workspaceID, capabilities)
 	if err != nil {
 		return nil, err
@@ -703,7 +729,8 @@ ORDER BY role_skill.config->>'capability', sm.member_id::text
 	resolved := make(map[string][]string, len(bindings))
 	for rows.Next() {
 		var capability, agentID string
-		if err := rows.Scan(&capability, &agentID); err != nil {
+		var installationPriority int
+		if err := rows.Scan(&capability, &agentID, &installationPriority); err != nil {
 			return nil, err
 		}
 		resolved[capability] = append(resolved[capability], agentID)
