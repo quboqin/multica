@@ -83,7 +83,8 @@ func (h *Handler) UpdateWorkspaceCapability(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	var input struct {
-		Enabled *bool `json:"enabled"`
+		Enabled         *bool                               `json:"enabled"`
+		CreativeFactory *creativeFactoryInitializationInput `json:"creative_factory,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&input); err != nil || input.Enabled == nil {
 		writeError(w, http.StatusBadRequest, "enabled must be a boolean")
@@ -100,7 +101,7 @@ func (h *Handler) UpdateWorkspaceCapability(w http.ResponseWriter, r *http.Reque
 			writeError(w, http.StatusBadRequest, "invalid workspace id")
 			return
 		}
-		if _, initErr := h.initializeCreativeFactory(r.Context(), workspaceUUID, userID); initErr != nil {
+		if _, initErr := h.initializeCreativeFactory(r.Context(), workspaceUUID, userID, input.CreativeFactory); initErr != nil {
 			writeError(w, http.StatusUnprocessableEntity, "creative factory initialization failed: "+initErr.Error())
 			return
 		}

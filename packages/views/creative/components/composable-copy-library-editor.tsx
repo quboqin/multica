@@ -61,7 +61,7 @@ export function ComposableCopyLibraryEditor({ resources, onCreate, onArchive }: 
       const saved = await api.updateCreativeResource(active.id, { name: active.name, description: active.description, config: draft as unknown as Record<string, unknown> });
       return api.publishCreativeResource(saved.id);
     },
-    onSuccess: () => { void queryClient.invalidateQueries({ queryKey: creativeKeys.resources(wsId) }); toast.success("新版本已发布，只用于后续素材"); },
+    onSuccess: () => { void queryClient.invalidateQueries({ queryKey: creativeKeys.resources(wsId) }); toast.success("文案库已发布，只用于后续素材"); },
     onError: (error) => toast.error(error instanceof Error ? error.message : "文案库发布失败"),
   });
 
@@ -75,7 +75,7 @@ export function ComposableCopyLibraryEditor({ resources, onCreate, onArchive }: 
     <main className="min-w-0 overflow-y-auto bg-background">
       <header className="sticky top-0 z-10 flex min-w-0 flex-wrap items-center justify-between gap-3 border-b bg-background px-5 py-4">
         <div className="min-w-0"><div className="flex flex-wrap items-center gap-2"><h2 className="min-w-0 truncate text-sm font-semibold">{active.name}</h2><Badge variant="outline">{active.status === "published" ? "已发布" : "草稿"}</Badge>{active.published_version > 0 && active.status !== "published" && <Badge variant="secondary">线上已发布</Badge>}</div><p className="mt-1 text-xs text-muted-foreground">模型只会使用这里已审核的文案和还款计划，不会拼变量或计算金额。</p></div>
-        <div className="flex flex-wrap items-center gap-2"><Button size="sm" variant="outline" disabled={save.isPending || publish.isPending} onClick={() => save.mutate()}><Save className="h-4 w-4" />保存草稿</Button><Button size="sm" disabled={save.isPending || publish.isPending} onClick={() => publish.mutate()}><CheckCircle2 className="h-4 w-4" />发布版本</Button><Button size="icon-sm" variant="ghost" title="归档文案库" aria-label="归档文案库" onClick={() => onArchive(active.id)}><Archive className="h-4 w-4" /></Button></div>
+        <div className="flex flex-wrap items-center gap-2"><Button size="sm" variant="outline" disabled={save.isPending || publish.isPending} onClick={() => save.mutate()}><Save className="h-4 w-4" />保存草稿</Button><Button size="sm" disabled={save.isPending || publish.isPending} onClick={() => publish.mutate()}><CheckCircle2 className="h-4 w-4" />发布</Button><Button size="icon-sm" variant="ghost" title="归档文案库" aria-label="归档文案库" onClick={() => onArchive(active.id)}><Archive className="h-4 w-4" /></Button></div>
       </header>
       <Tabs defaultValue="copy" className="px-5 py-4">
         <TabsList><TabsTrigger value="copy">投放文案 {draft.fragments.length}</TabsTrigger><TabsTrigger value="repayment">还款计划 {draft.repayment_plan.entries.length}</TabsTrigger></TabsList>

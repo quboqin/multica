@@ -226,7 +226,7 @@ INSERT INTO creative_factory_installation (
 		t.Fatalf("seed ready factory installation: %v", err)
 	}
 
-	if _, err := testHandler.initializeCreativeFactory(ctx, parseUUID(testWorkspaceID), parseUUID(testUserID)); err != nil {
+	if _, err := testHandler.initializeCreativeFactory(ctx, parseUUID(testWorkspaceID), parseUUID(testUserID), nil); err != nil {
 		t.Fatalf("initializeCreativeFactory refresh: %v", err)
 	}
 
@@ -313,7 +313,7 @@ func cleanupCreativeFactoryManagedAssetsForTest(t *testing.T) {
 		agentNames = append(agentNames, spec.Aliases...)
 	}
 	_, _ = testPool.Exec(ctx, `DELETE FROM creative_factory_installation WHERE workspace_id = $1::uuid`, testWorkspaceID)
-	_, _ = testPool.Exec(ctx, `DELETE FROM autopilot WHERE workspace_id = $1::uuid AND title = ANY($2::text[])`, testWorkspaceID, []string{creativeFactoryAutopilotTitle, creativeFactoryLegacyAutopilotTitle})
+	_, _ = testPool.Exec(ctx, `DELETE FROM autopilot WHERE workspace_id = $1::uuid AND title = ANY($2::text[])`, testWorkspaceID, []string{creativeFactoryDefaultAutopilotTitle, creativeFactoryLegacyAutopilotTitle, creativeFactoryAutopilotTitleForProfile(creativeFactoryMalaysiaProfile())})
 	_, _ = testPool.Exec(ctx, `DELETE FROM squad WHERE workspace_id = $1::uuid AND name = ANY($2::text[])`, testWorkspaceID, []string{"素材流程小队", "AdaKami 素材小队"})
 	_, _ = testPool.Exec(ctx, `DELETE FROM agent WHERE workspace_id = $1::uuid AND name = ANY($2::text[])`, testWorkspaceID, agentNames)
 	_, _ = testPool.Exec(ctx, `DELETE FROM skill WHERE workspace_id = $1::uuid AND name = ANY($2::text[])`, testWorkspaceID, skillNames)

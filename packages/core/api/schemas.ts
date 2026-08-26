@@ -605,7 +605,7 @@ export const CreativeMaterialLibrarySchema = z.object({
   crawl_runs: z.array(z.object({
     id: z.string().default(""), workspace_id: z.string().default(""), issue_id: z.string().default(""),
     autopilot_run_id: z.string().default(""), rerun_of_id: z.string().default(""), connector_id: z.string().default(""),
-    query_summary: z.string().default(""), status: z.string().default(""), error_code: z.string().default(""),
+    query_summary: z.string().default(""), competitors: z.array(z.string()).default([]), status: z.string().default(""), error_code: z.string().default(""),
     error_message: z.string().default(""), diagnostics: z.record(z.string(), z.unknown()).default({}), imported_count: z.number().default(0), existing_count: z.number().default(0),
     total_count: z.number().default(0), candidate_metrics: z.object({ total: z.number().default(0), analyzed: z.number().default(0), analysis_failed: z.number().default(0), selected: z.number().default(0), rejected: z.number().default(0) }).default({ total: 0, analyzed: 0, analysis_failed: 0, selected: 0, rejected: 0 }),
     started_at: z.string().default(""), finished_at: z.string().default(""), created_at: z.string().default(""),
@@ -867,6 +867,7 @@ export const CreativeMaterialCrawlRunSchema = z.object({
   rerun_of_id: z.string().default(""),
   connector_id: z.string().default(""),
   query_summary: z.string().default(""),
+  competitors: z.array(z.string()).default([]),
   status: z.string().default(""),
   error_code: z.string().default(""),
   error_message: z.string().default(""),

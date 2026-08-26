@@ -7,8 +7,8 @@ allowed-tools: Bash(multica *), Bash(powershell *), Bash(python *)
 # AppGrowing 素材采集
 
 读取 `references/appgrowing-collection-contract.md`。只处理当前 task context 和 AutoPilot 已明确的筛选条件、
-预算及 `analysis_agent_id`；不得从 Agent 名称、Issue 评论或本机配置猜输入。平台会把当前工作区的图片采集上限
-注入为 2，Skill 不得提高该上限。
+预算、目标数量及 `analysis_agent_id`；不得从 Agent 名称、Issue 评论或本机配置猜输入，也不得自行提高 AutoPilot
+或 task 已明确的目标数量。
 
 采集范围固定为图片广告：只导入 `asset_type=image` 的真实素材。视频、非图片资源和无法判定类型的资源不进入 Crawl Run
 候选，不占用数量配额，也不参与预分析。

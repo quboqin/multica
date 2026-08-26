@@ -84,6 +84,17 @@ describe("CreativeMaterialLibrary contracts", () => {
     });
   });
 
+  it("keeps app UI phone anchors out of the default visual direction", () => {
+    expect(visualDirectionFromAnalysis({
+      theme: "移动端借款",
+      visual_type: "信息型",
+      app_ui_detected: true,
+      app_ui_replacement_needed: true,
+      must_preserve: ["借款促销核心语义", "左文右人和手机展示的阅读顺序", "移动端申请场景", "绿色视觉层级"],
+      visual_anchors: ["右侧人物的手持手机姿势", "左文右人构图"],
+    }).must_preserve).toEqual(["借款促销核心语义", "绿色视觉层级", "左文右人构图"]);
+  });
+
   it("preserves user visual edits when the adaptation refreshes", () => {
     const initial = orderDraftWithPreAdaptation(undefined, adaptation());
     const edited = orderDraftWithPreAdaptation({ ...initial, visualDirection: { ...direction, theme: "用户主题" } }, adaptation({ analysisResult: { theme: "系统主题" } }));
@@ -97,6 +108,33 @@ describe("CreativeMaterialLibrary contracts", () => {
     expect(frozen.pre_adaptation?.text_replacements[0]).toMatchObject({ replacement_text: "Pembiayaan Fleksibel", status: "ready" });
     expect(frozen.pre_adaptation?.numeric_layouts[0]).toMatchObject({ scenario_ids: ["row-1"], layout_kind: "table" });
     expect("production_prompt" in (frozen.pre_adaptation ?? {})).toBe(false);
+  });
+
+  it("freezes the user selected app UI reference for planning", () => {
+    const selected = { resourceFileId: "file-1", attachmentId: "attachment-1", label: "AdaKami 首页", reason: "业务确认使用首页额度界面" };
+    const frozen = frozenCopySnapshot(
+      { headline: "", subheadline: "", benefit: "", supporting: "", cta: "", legal_text: "", fragments: [], repayment_plan_entries: [] } as any,
+      adaptation({
+        analysisResult: {
+          theme: direction.theme,
+          app_ui_detected: true,
+          app_ui_replacement_needed: true,
+          app_ui_type: "贷款额度页",
+          app_ui_visual_characteristics: "竖向手机屏幕大部分可见",
+          app_ui_bounds: { x: 600, y: 300, width: 220, height: 420 },
+        },
+      }),
+      draft({ appUIReference: selected }),
+      "analysis-1",
+    );
+    expect(frozen.pre_adaptation?.app_ui_replacement).toMatchObject({
+      required: true,
+      selected: true,
+      resource_file_id: "file-1",
+      attachment_id: "attachment-1",
+      reason: "业务确认使用首页额度界面",
+      source_screen: { app_ui_type: "贷款额度页", bounds: { x: 600, y: 300, width: 220, height: 420 } },
+    });
   });
 
   it("keeps manual copy under the same visual direction contract", () => {

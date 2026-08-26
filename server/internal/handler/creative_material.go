@@ -82,6 +82,7 @@ type creativeMaterialCrawlRunResponse struct {
 	RerunOfID        string                             `json:"rerun_of_id"`
 	ConnectorID      string                             `json:"connector_id"`
 	QuerySummary     string                             `json:"query_summary"`
+	Competitors      []string                           `json:"competitors"`
 	AnalysisAgentID  string                             `json:"analysis_agent_id"`
 	Status           string                             `json:"status"`
 	ErrorCode        string                             `json:"error_code"`
@@ -795,7 +796,9 @@ WITH crawl_candidate_analysis AS (
 )
 SELECT cr.id::text, cr.workspace_id::text, COALESCE(cr.issue_id::text, ''),
        COALESCE(cr.autopilot_run_id::text, ''), COALESCE(cr.rerun_of_id::text, ''),
-       cr.connector_id, cr.query_summary, COALESCE(cr.params->>'analysis_agent_id', ''),
+       cr.connector_id, cr.query_summary, COALESCE(cr.params->'competitors', '[]'::jsonb)::text,
+       COALESCE(array_remove(array_agg(DISTINCT NULLIF(BTRIM(candidate.competitor), '')), NULL), ARRAY[]::text[]),
+       COALESCE(cr.params->>'analysis_agent_id', ''),
        cr.status, cr.error_code, cr.error_message, cr.diagnostics,
        cr.imported_count, cr.existing_count, cr.total_count,
        count(rc.candidate_id)::int,
@@ -807,6 +810,8 @@ SELECT cr.id::text, cr.workspace_id::text, COALESCE(cr.issue_id::text, ''),
 FROM creative_material_crawl_run cr
 LEFT JOIN crawl_candidate_analysis rc
   ON rc.run_id = cr.id AND rc.workspace_id = cr.workspace_id
+LEFT JOIN creative_material_candidate candidate
+  ON candidate.id = rc.candidate_id AND candidate.workspace_id = rc.workspace_id
 WHERE cr.workspace_id = $1
   AND (NOT $2::boolean OR cr.issue_id = $3)
   AND ($4::boolean OR cr.imported_count > 0)
@@ -821,9 +826,11 @@ LIMIT 20
 	out := []creativeMaterialCrawlRunResponse{}
 	for rows.Next() {
 		var item creativeMaterialCrawlRunResponse
+		var paramsCompetitorsRaw string
+		var candidateCompetitors []string
 		if err := rows.Scan(
 			&item.ID, &item.WorkspaceID, &item.IssueID, &item.AutopilotRunID, &item.RerunOfID,
-			&item.ConnectorID, &item.QuerySummary, &item.AnalysisAgentID,
+			&item.ConnectorID, &item.QuerySummary, &paramsCompetitorsRaw, &candidateCompetitors, &item.AnalysisAgentID,
 			&item.Status, &item.ErrorCode, &item.ErrorMessage, &item.Diagnostics,
 			&item.ImportedCount, &item.ExistingCount, &item.TotalCount,
 			&item.CandidateMetrics.Total, &item.CandidateMetrics.Analyzed, &item.CandidateMetrics.AnalysisFailed,
@@ -832,9 +839,20 @@ LIMIT 20
 		); err != nil {
 			return nil, err
 		}
+		item.Competitors = creativeMaterialRunCompetitors(paramsCompetitorsRaw, candidateCompetitors)
 		out = append(out, item)
 	}
 	return out, rows.Err()
+}
+
+func creativeMaterialRunCompetitors(paramsCompetitorsRaw string, candidateCompetitors []string) []string {
+	var value any
+	if strings.TrimSpace(paramsCompetitorsRaw) != "" && json.Unmarshal([]byte(paramsCompetitorsRaw), &value) == nil {
+		if competitors := stringSliceFromAny(value); len(competitors) > 0 {
+			return competitors
+		}
+	}
+	return uniqueNonEmptyStrings(candidateCompetitors)
 }
 
 func (h *Handler) listSelectedCreativeCandidateIDs(ctx context.Context, issueID, workspaceID pgtype.UUID, limit int) ([]string, error) {

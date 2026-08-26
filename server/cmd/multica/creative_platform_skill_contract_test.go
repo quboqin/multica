@@ -87,8 +87,8 @@ func TestCreativePlatformSkillsUseFrozenBusinessInputs(t *testing.T) {
 	bootstrap := readCreativePlatformContractFile(t, filepath.Join(root, "scripts", "bootstrap-creative-platform-demo.ps1"))
 	for _, required := range []string{
 		"capability = 'reference_analysis'; version = 19",
-		"capability = 'generation_plan'; version = 36",
-		"capability = 'image_edit'; version = 94",
+		"capability = 'generation_plan'; version = 37",
+		"capability = 'image_edit'; version = 95",
 		"app_ui_replacement",
 		"Input 3",
 		"capability = 'quality_control'; version = 35",
@@ -103,8 +103,8 @@ func TestCreativePlatformSkillsUseFrozenBusinessInputs(t *testing.T) {
 	installation := readCreativePlatformContractFile(t, filepath.Join(root, "server", "internal", "handler", "creative_factory_installation.go"))
 	for _, required := range []string{
 		`Capability: "reference_analysis", Version: 19`,
-		`Capability: "generation_plan", Version: 36`,
-		`Capability: "image_edit", Version: 94`,
+		`Capability: "generation_plan", Version: 37`,
+		`Capability: "image_edit", Version: 95`,
 		"app_ui_replacement",
 		"Input 3",
 		`Capability: "quality_control", Version: 35`,
@@ -150,7 +150,7 @@ func TestAppGrowingCollectorContractKeepsBusinessSemanticsAndSingleSubmission(t 
 
 	bootstrap := readCreativePlatformContractFile(t, filepath.Join(root, "scripts", "bootstrap-creative-platform-demo.ps1"))
 	for _, required := range []string{
-		"capability = 'material_collection'; version = 16",
+		"capability = 'material_collection'; version = 17",
 		"Set-AgentDefinition -Name '素材_采集'",
 		"-MaxConcurrentTasks 1",
 	} {
@@ -161,7 +161,7 @@ func TestAppGrowingCollectorContractKeepsBusinessSemanticsAndSingleSubmission(t 
 
 	installation := readCreativePlatformContractFile(t, filepath.Join(root, "server", "internal", "handler", "creative_factory_installation.go"))
 	for _, required := range []string{
-		`Capability: "material_collection", Version: 16`,
+		`Capability: "material_collection", Version: 17`,
 		`Role: "collection", Name: "素材_采集"`,
 		`MaxConcurrent: 1`,
 	} {

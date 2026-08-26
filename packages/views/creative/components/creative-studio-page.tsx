@@ -27,6 +27,7 @@ import {
   creativeOrderOptions,
   creativeOrdersOptions,
   creativeMaterialLibraryOptions,
+  parseCreativeCopyLibraryConfig,
   creativeResourcesOptions,
   creativeSourceAnalysesOptions,
   useAdoptCreativeOrderVariant,
@@ -1303,13 +1304,13 @@ function ResourceEditor({ resources, copyLibraries, onCreate, onArchive }: {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: creativeKeys.resources(wsId) });
-      toast.success("配置已保存为新草稿版本");
+      toast.success("配置已保存为草稿");
     },
     onError: () => toast.error("无法保存配置"),
   });
   return (
     <div className="grid h-full min-h-0 grid-cols-1 overflow-hidden border md:grid-cols-[260px_minmax(0,1fr)]">
-      <ResourceList title="市场配置" resources={resources} activeId={active?.id ?? ""} onSelect={setActiveId} onCreate={resources.length === 0 ? onCreate : undefined} />
+      <ResourceList title="市场规则" resources={resources} activeId={active?.id ?? ""} onSelect={setActiveId} onCreate={resources.length === 0 ? onCreate : undefined} />
       <div className="min-w-0 overflow-y-auto bg-background">
         {!active ? <EmptyResource title="还没有市场配置" action="创建市场配置" onAction={onCreate} /> : (
           <>
@@ -1387,16 +1388,47 @@ function ResourceList({ title, resources, activeId, onSelect, onCreate }: {
       </div>
       {resources.map((resource) => (
         <button key={resource.id} type="button" onClick={() => onSelect(resource.id)} className={cn("block w-full border-b px-3 py-3 text-left hover:bg-muted/40", resource.id === activeId && "bg-background shadow-[inset_2px_0_0_hsl(var(--primary))]") }>
-          <div className="flex items-center justify-between gap-2"><span className="truncate text-sm font-medium">{resource.name}</span><span className="shrink-0 text-[10px] text-muted-foreground">{resource.status === "published" ? "已发布" : "草稿"}</span></div>
-          <p className="mt-1 truncate text-xs text-muted-foreground">{resource.description || (resource.status === "published" ? "已发布" : "草稿")}</p>
+          <div className="flex items-center justify-between gap-2"><span className="truncate text-sm font-medium">{resourceListTitle(resource)}</span><span className="shrink-0 text-[10px] text-muted-foreground">{resource.status === "published" ? "已发布" : "草稿"}</span></div>
+          <p className="mt-1 truncate text-xs text-muted-foreground">{resourceListSubtitle(resource)}</p>
         </button>
       ))}
     </aside>
   );
 }
 
+function resourceListTitle(resource: CreativeResource): string {
+  const config = resource.published_config ?? resource.config;
+  if (resource.kind === "market_pack") {
+    const brand = stringValue(config.brand);
+    const market = stringValue(config.market);
+    return [brand, market].filter(Boolean).join(" · ") || resource.name;
+  }
+  return resource.name;
+}
+
+function resourceListSubtitle(resource: CreativeResource): string {
+  const config = resource.published_config ?? resource.config;
+  if (resource.kind === "market_pack") {
+    const details = [
+      stringValue(config.locale),
+      stringValue(config.currency),
+      stringValue(config.copy_library_id) ? "已绑定文案库" : "未绑定文案库",
+    ].filter(Boolean);
+    return details.join(" · ") || resource.description || (resource.status === "published" ? "已发布" : "草稿");
+  }
+  const library = parseCreativeCopyLibraryConfig(config);
+  const approvedCopy = library.fragments.filter((fragment) => fragment.status === "approved").length;
+  const approvedPlans = library.repayment_plan.entries.filter((entry) => entry.status === "approved").length;
+  return [
+    library.market,
+    library.locale,
+    `已审核文案 ${approvedCopy}`,
+    `还款计划 ${approvedPlans}`,
+  ].filter(Boolean).join(" · ");
+}
+
 function ResourceTitle({ resource }: { resource: CreativeResource }) {
-  return <div className="min-w-0"><div className="flex items-center gap-2"><h2 className="truncate text-sm font-semibold">{resource.name}</h2><Badge variant="outline">{resource.status === "published" ? "已发布" : "草稿"}</Badge></div><p className="mt-0.5 truncate text-xs text-muted-foreground">{resource.description}</p></div>;
+  return <div className="min-w-0"><div className="flex items-center gap-2"><h2 className="truncate text-sm font-semibold">{resourceListTitle(resource)}</h2><Badge variant="outline">{resource.status === "published" ? "已发布" : "草稿"}</Badge></div><p className="mt-0.5 truncate text-xs text-muted-foreground">{resourceListSubtitle(resource)}</p></div>;
 }
 
 function PublishButton({ resource }: { resource: CreativeResource }) {
@@ -1404,8 +1436,8 @@ function PublishButton({ resource }: { resource: CreativeResource }) {
   const queryClient = useQueryClient();
   const publish = useMutation({
     mutationFn: () => api.publishCreativeResource(resource.id),
-    onSuccess: () => { queryClient.invalidateQueries({ queryKey: creativeKeys.resources(wsId) }); toast.success("版本已发布"); },
-    onError: (error) => toast.error(error instanceof Error ? error.message : "无法发布版本"),
+    onSuccess: () => { queryClient.invalidateQueries({ queryKey: creativeKeys.resources(wsId) }); toast.success("已发布"); },
+    onError: (error) => toast.error(error instanceof Error ? error.message : "无法发布"),
   });
   return <Button size="sm" onClick={() => publish.mutate()} disabled={publish.isPending || (resource.status === "published" && resource.published_version === resource.version)}><Check className="h-4 w-4" />发布</Button>;
 }
@@ -1413,16 +1445,35 @@ function PublishButton({ resource }: { resource: CreativeResource }) {
 function CreateResourceDialog({ kind, onClose, onCreated }: { kind: CreativeResourceKind | null; onClose: () => void; onCreated: () => void }) {
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
+  const [marketDraft, setMarketDraft] = useState(() => ({ brand: "AdaKami", market: "Indonesia", locale: "id-ID", currency: "IDR" }));
+  const derivedName = kind === "market_pack" ? marketPackResourceName(marketDraft.brand, marketDraft.market) : name;
   const create = useMutation({
-    mutationFn: () => api.createCreativeResource({ kind: kind!, name, description, config: initialResourceConfig(kind!) }),
-    onSuccess: () => { setName(""); setDescription(""); onCreated(); toast.success("资源已创建"); },
+    mutationFn: () => api.createCreativeResource({ kind: kind!, name: derivedName, description, config: initialResourceConfig(kind!, marketDraft) }),
+    onSuccess: () => { setName(""); setDescription(""); setMarketDraft({ brand: "AdaKami", market: "Indonesia", locale: "id-ID", currency: "IDR" }); onCreated(); toast.success("资源已创建"); },
     onError: () => toast.error("无法创建资源"),
   });
+  const canCreate = kind === "market_pack"
+    ? Boolean(marketDraft.brand.trim() && marketDraft.market.trim() && marketDraft.locale.trim() && marketDraft.currency.trim())
+    : Boolean(name.trim());
+  const setMarketField = (field: keyof typeof marketDraft, value: string) => setMarketDraft((current) => ({ ...current, [field]: value }));
   return (
     <Dialog open={kind !== null} onOpenChange={(open) => !open && onClose()}>
       <DialogContent><DialogHeader><DialogTitle>创建{kindLabel(kind)}</DialogTitle><DialogDescription>先创建草稿，配置完成后再发布给创意订单使用。</DialogDescription></DialogHeader>
-        <div className="space-y-4"><Field label="名称" wide><Input value={name} onChange={(event) => setName(event.target.value)} /></Field><Field label="描述" wide><Textarea rows={3} value={description} onChange={(event) => setDescription(event.target.value)} /></Field></div>
-        <DialogFooter><Button variant="outline" onClick={onClose}>取消</Button><Button disabled={!name.trim() || create.isPending} onClick={() => create.mutate()}>创建</Button></DialogFooter>
+        <div className="space-y-4">
+          {kind === "market_pack" ? (
+            <>
+              <div className="grid gap-4 sm:grid-cols-2">
+                <Field label="品牌"><Input value={marketDraft.brand} onChange={(event) => setMarketField("brand", event.target.value)} /></Field>
+                <Field label="市场"><Input value={marketDraft.market} onChange={(event) => setMarketField("market", event.target.value)} /></Field>
+                <Field label="语言"><Input value={marketDraft.locale} onChange={(event) => setMarketField("locale", event.target.value)} /></Field>
+                <Field label="币种"><Input value={marketDraft.currency} onChange={(event) => setMarketField("currency", event.target.value)} /></Field>
+              </div>
+              <div className="border bg-muted/20 px-3 py-2 text-xs text-muted-foreground">系统名称：{derivedName}</div>
+            </>
+          ) : <Field label="名称" wide><Input value={name} onChange={(event) => setName(event.target.value)} /></Field>}
+          <Field label="描述" wide><Textarea rows={3} value={description} onChange={(event) => setDescription(event.target.value)} /></Field>
+        </div>
+        <DialogFooter><Button variant="outline" onClick={onClose}>取消</Button><Button disabled={!canCreate || create.isPending} onClick={() => create.mutate()}>创建</Button></DialogFooter>
       </DialogContent>
     </Dialog>
   );
@@ -1442,7 +1493,7 @@ function EmptyResource({ title, action, onAction }: { title: string; action: str
   return <div className="flex min-h-80 flex-col items-center justify-center gap-3 text-sm text-muted-foreground"><span>{title}</span><Button size="sm" onClick={onAction}>{action}</Button></div>;
 }
 
-function initialResourceConfig(kind: CreativeResourceKind): Record<string, unknown> {
+function initialResourceConfig(kind: CreativeResourceKind, marketDraft: { brand: string; market: string; locale: string; currency: string } = { brand: "", market: "", locale: "", currency: "" }): Record<string, unknown> {
   if (kind === "copy_library") return {
     schema_version: 4,
     market: "Indonesia",
@@ -1461,7 +1512,12 @@ function initialResourceConfig(kind: CreativeResourceKind): Record<string, unkno
       entries: [],
     },
   };
-  return { brand: "", market: "", locale: "", currency: "", copy_library_id: "", pre_adaptation_default: true, prime_template_set: createDefaultPrimeTemplateSet(), compliance_rules: "", naming_rule: "" };
+  return { brand: marketDraft.brand.trim(), market: marketDraft.market.trim(), locale: marketDraft.locale.trim(), currency: marketDraft.currency.trim(), copy_library_id: "", pre_adaptation_default: true, prime_template_set: createDefaultPrimeTemplateSet(), compliance_rules: "", naming_rule: "" };
+}
+
+function marketPackResourceName(brand: string, market: string): string {
+  const parts = [brand.trim(), market.trim()].filter(Boolean);
+  return parts.length > 0 ? `${parts.join(" ")} 市场资源包` : "市场资源包";
 }
 
 function kindLabel(kind: CreativeResourceKind | null): string {

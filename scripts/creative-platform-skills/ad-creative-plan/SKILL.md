@@ -25,14 +25,15 @@ multica creative source-analysis list --candidate-id <candidate-id> --output jso
 - `copy_snapshot`：页面预适配后冻结的唯一可见文案、还款计划和用户视觉方向。`pre_adaptation.text_replacements` 是每个普通
   画面文字区块的权威替换表；`pre_adaptation.numeric_layouts`、`repayment_plan_entries`、
   `repayment_plan_selections.values` 和 `text_replacements[].calculation.result` 都是数值区域的权威版式与数值。
-  这里不保存模型提示词；生产 Agent 根据这些结构化事实和当前尺寸自行写短提示词。
+  `pre_adaptation.app_ui_replacement` 是页面冻结的 App UI 参考选择；这里不保存模型提示词，生产 Agent 根据这些结构化事实和当前尺寸自行写短提示词。
 - `copy_snapshot` 的顶层非空字段（`headline`、`subheadline`、`benefit`、`supporting`、`cta`、`legal_text`）优先级最高，必须逐字
   进入每个 Variant 的 `approved_copy`。`pre_adaptation.text_replacements` 只负责把源区块映射到这些字段或补充独立结构；当两者冲突时，不能用
   `recommended` 的替换文本覆盖顶层非空字段。只有顶层字段本身为空，或页面明确将该字段置空，才允许按区块状态补入或移除文案。
 - Source Analysis：只提供业务语义、信息机制、阅读顺序、区域锚点和通用 App UI 类型；参考图不是底图，
   不得保留竞品文字、品牌、QR、商店徽章、页脚、人脸、服装、手势、道具或背景。
 - order item `direction`：由页面 `copy_snapshot.visual_direction` 派生的可追踪摘要。它不替代结构化视觉方向，
-  也不是模型提示词；Variant 只能补充视觉执行，不能改写冻结主题、业务事实或文案。
+  也不是模型提示词；Variant 只能补充视觉执行，不能改写冻结主题、业务事实或文案。若 direction 或 Source Analysis 中含有手机、屏幕、手持手机或
+  App 页面描述，但 `pre_adaptation.app_ui_replacement.selected` 不是 true，这些内容只作为源图证据，不得写入 Variant 的 `must_preserve` 或要求生产保留手机界面。
 - order `input_snapshot`：冻结的市场资源包 ID/version/config/file IDs 和 squad snapshot。
 - 结构化市场 config 是尺寸、Prime、QR、布局和合规规则的真值；附件提供实际品牌与 App UI 文件。
 
@@ -59,24 +60,25 @@ approved fragment 就改成空白。
 ### App UI 替换合同
 
 当 Source Analysis 有 `app_ui_detected=true`，并且手机屏幕或 App 页面是画面可见核心元素时，每个 brief 必须写
-`creative_contract.app_ui_replacement`。方案 Agent 不看图片像素，也不下载附件；它只从冻结
-`input_snapshot.market_pack.files` 中 role 为 `app_ui_reference` 的资源按 `app_ui_type`、tags、metadata
-和分析里的 `app_ui_visual_characteristics` 选择最多一张 AdaKami App UI 参考图。
+`creative_contract.app_ui_replacement`。方案 Agent 不看图片像素，也不下载附件；它只消费页面冻结在
+`copy_snapshot.pre_adaptation.app_ui_replacement` 中的选择，不得自行从 `input_snapshot.market_pack.files` 中挑选或替换用户选择。
+页面冻结的选择必须对应市场资源包中的 `app_ui_reference` 文件，并带有 `resource_file_id` 与 `attachment_id`。
 
 `app_ui_replacement` 必须包含：
 
 - `required`：是否需要把竞品 UI 替换为 AdaKami UI；
-- `selected`：是否已选到合适资源；
-- `resource_file_id` 与 `attachment_id`：只在 selected=true 时填写，来自冻结市场快照；
+- `selected`：是否已有页面冻结的合适资源；
+- `resource_file_id` 与 `attachment_id`：只在 selected=true 时填写，必须逐字来自 `copy_snapshot.pre_adaptation.app_ui_replacement`；
 - `source_screen`：记录 `app_ui_type`、屏幕位置、可见度、`app_ui_bounds` 和是否被手/手机边框遮挡；
-- `reason`：说明为什么这张参考 UI 与原图页面类型或视觉结构匹配；
+- `reason`：复用页面冻结选择的 reason，可补充一句执行说明但不得改换资源；
 - `constraints`：至少说明“只替换手机屏幕内容，保留手机、手、透视、光照和场景；移除竞品 logo、品牌色、按钮文案、QR 和专属页面文案；不得把 AdaKami UI 画到屏幕外”。
 
-如果 App UI 是核心元素但没有合适 `app_ui_reference`，该 Variant 写 `action_required`，并在 `needs_input`
-中要求补充 App UI 参考资源；不能保留竞品 UI 继续出图。若 App UI 只是模糊、极小、背景性或不可读元素，
+如果 App UI 是核心元素但 `copy_snapshot.pre_adaptation.app_ui_replacement.selected` 不是 true，或缺少
+`resource_file_id`/`attachment_id`，该 Variant 写 `action_required`，并在 `needs_input`
+中要求用户在文案确认页选择 App UI 参考资源；不能保留竞品 UI 继续出图，也不能让生产 Agent 臆造 App 页面。若 App UI 只是模糊、极小、背景性或不可读元素，
 写 `required=false` 并说明原因。若 Source Analysis 没有检测到 App UI，也必须写
 `required=false`、`selected=false` 和简短 reason，让生产 Agent 不下载 App UI 参考图。不得因为资源包里只有一张 UI
-图就机械选择；选择必须能被冻结分析和资源 metadata 解释。
+图就机械选择；选择必须来自页面冻结的业务确认。
 
 每个 brief 至少包含：candidate/source-analysis/copy/market snapshot identity，完整批准文案，
 `creative_contract.variant_execution`、`copy_adaptation`、`mechanism_adaptation`、禁用元素、`app_ui_replacement`、

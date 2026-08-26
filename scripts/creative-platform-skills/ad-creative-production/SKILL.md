@@ -17,6 +17,7 @@ allowed-tools: Bash(multica *), Bash(python *)
   `pre_adaptation.text_replacements`；后者只提供区块映射和版式，不得覆盖顶层非空字段。`pre_adaptation` 不提供最终模型提示词。
 - `item.direction` 是由 `copy_snapshot.visual_direction` 派生的可追踪摘要，仅用于合同校验；不要把它当成可直接发送给模型的长提示词。
 - 竞品图的全部非空业务结构默认继承：标题区、金额区、期限卡、表格行列、辅助信息区和阅读顺序都必须保留。继承的是结构和我方冻结文案，不是竞品品牌、Logo、二维码、官方模板文字或原金融事实。
+- 若 `brief.creative_contract.app_ui_replacement.selected` 不是 true，Source Analysis 或 `item.direction` 中的手机、手持手机、屏幕、App 页面描述只作为源图证据，不是必须保留结构；不得追加 Input 3，不得仿造竞品 UI 或臆造 AdaKami App 页面，可将该区域重构为普通产品利益点、人物场景或留白。
 - 用户把一个文案槽位清空时才删除对应文字；一行的必需槽位全部为空才删除该行；整个模块没有剩余可见内容才删除模块。不能为了适配横版主动删掉表格、卡片、底部图标或金融事实。
 - Prime context 必须来自当前尺寸的官方 Prime 组件预览或合成上下文，包含真实色彩、材质、光照和组件节奏。透明中性轮廓只能作为结构审计证据，不能作为模型的唯一视觉输入。
 - `brief.creative_contract.app_ui_replacement` 是是否替换手机 App 屏幕的唯一合同。若 `required=true` 且
@@ -56,6 +57,9 @@ Input 2 是当前尺寸 Prime context，Input 3 是选中的 AdaKami App UI refe
 Input 3 只服务于手机屏幕内容替换：保留原画面中的手机机身、手、透视、遮挡、反光、光照和场景；只把屏幕内的竞品 App
 页面替换为 AdaKami 自有 UI。必须移除竞品 logo、品牌色、按钮文案、QR、商店元素和专属页面文案。不得把 AdaKami UI
 画到屏幕外，不得把整张参考 UI 拉伸硬贴；若参考图透视不匹配，应生成同品牌风格的屏幕内容，而不是扭曲 pasted screenshot。
+
+若 brief 没有 `app_ui_replacement.selected=true`，本节完全不生效：不要下载市场包里的任意 App UI 文件，不要给 Image Edit
+追加第三输入，也不要因为源图或 visual direction 提到手机屏幕就要求保留手机界面。
 
 从订单 `input_snapshot.market_pack.files` 下载与当前尺寸匹配的官方模板，再生成低透明度的实际视觉上下文（只保留 Prime 保护区的组件内容）：
 
@@ -97,6 +101,7 @@ COMPOSITION GATE
 Create an unbranded base layer for deterministic official Prime composition, not a standalone branded ad.
 Keep every non-empty approved_copy field and every non-empty source structure exactly once. Do not delete a title, benefit,
 product label, amount, tenor option, table row, icon, or supporting module to make the layout fit.
+If no selected App UI replacement exists, phone/app-screen mentions in source analysis are optional context, not a required source structure.
 Keep all business content in the middle content area between the protected Prime bands. The protected top and bottom bands are
 reserved for the later official overlay and must stay free of business copy, tables, buttons, icons, decorative marks, and shadows.
 If the middle business area feels crowded, compress vertically along the Y axis: reduce vertical whitespace, module gaps, and line

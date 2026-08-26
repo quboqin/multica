@@ -28,9 +28,10 @@ var creativeFactoryDefaultResourcesJSON []byte
 var creativeFactoryDefaultAssets embed.FS
 
 const (
-	creativeFactoryAutopilotTitle       = "印尼竞品素材周度采集"
-	creativeFactoryLegacyAutopilotTitle = "创意工厂自动化"
-	creativeFactoryAutopilotDescription = `每周抓取 AppGrowing 印度尼西亚的现金贷/金融竞品素材，并创建一个可追踪的 Crawl Run。
+	creativeFactoryDefaultAutopilotTitle       = "印尼竞品素材周度采集"
+	creativeFactoryLegacyAutopilotTitle        = "创意工厂自动化"
+	creativeFactoryDefaultCollectionTargetLine = "本次采集目标：2 张图片"
+	creativeFactoryDefaultAutopilotDescription = `每周抓取 AppGrowing 印度尼西亚的现金贷/金融竞品素材，并创建一个可追踪的 Crawl Run。
 
 工作区创意工厂安装记录负责解析市场资源包、执行小队和参考分析智能体；不要在 AutoPilot 说明中保存 UUID。
 
@@ -42,8 +43,8 @@ const (
 媒体：未限定
 时间范围：最近 30 天
 选材：新素材 40%，投放少于 7 天且曝光估算大于 1K；跑量素材 60%，投放超过 30 天且曝光估算不低于 10M
-素材类型：仅图片广告（asset_type=image）。视频、非图片和无法识别类型必须在选材前排除，不占用 2 条配额，也不进入 Crawl Run 或素材库。
-最多输出：2 张图片
+` + creativeFactoryDefaultCollectionTargetLine + `
+素材类型：仅图片广告（asset_type=image）。视频、非图片和无法识别类型必须在选材前排除，不占用名额，也不进入 Crawl Run 或素材库。
 
 执行真实 AppGrowing 多页图片采集，结果进入创意工厂素材库并关联当前 Crawl Run；图片入库后立即用原生 task fanout 对本次新增图片并发执行逐图创意分析，归档未完成时允许分析读取真实源图片。分析完成后在创意工厂提醒用户选图、确认主题与文案。整个采集与预分析阶段不创建 Issue。授权失效时将 Crawl Run 标为 action_required，并提示用户前往“设置 - 集成”重新绑定，不能用测试数据替代。`
 )
@@ -103,6 +104,29 @@ type creativeFactoryInstallationRecord struct {
 	Config               map[string]any
 }
 
+type creativeFactoryInitializationInput struct {
+	Brand               string   `json:"brand"`
+	Market              string   `json:"market"`
+	Locale              string   `json:"locale"`
+	Currency            string   `json:"currency"`
+	Competitors         []string `json:"competitors"`
+	PriorityCompetitors []string `json:"priority_competitors"`
+}
+
+type creativeFactoryMarketProfile struct {
+	Explicit            bool
+	Brand               string
+	Market              string
+	MarketLabel         string
+	Locale              string
+	Currency            string
+	CurrencyPrefix      string
+	LanguageLabel       string
+	MarketAbbreviation  string
+	Competitors         []string
+	PriorityCompetitors []string
+}
+
 const creativeFactoryDirectEditAgentInstructions = `全程使用中文。只执行 creative_direct_edit；source asset 不可覆盖，task context 的 source_revision 是上一版，revision 是平台已锁定的输出 revision。精准调整不得再次调用 variant-put 或把 revision 再加一。scope=size 时只下载并使用 source_asset_id/source_attachment_id 指向的 target_size 同尺寸无品牌底图；scope=variant 时按 edit_sizes/expected_sizes 遍历，使用 source_assets 中同尺寸 source_asset_id/source_attachment_id 逐尺寸编辑，target_size/reference_* 只是用户标注参考尺寸。若存在 annotation_guide_attachment_id，再把用户最终成图标注 brief 作为第二输入。Input 1 是当前尺寸唯一可编辑无品牌底图，Input 2 只用于读取红框编号、评论位置和固定贴片/标题/Logo 遮挡关系；不得复制红框、编号、Prime 组件、Logo、二维码、商店徽章或官方条款，也不得把 Prime 成图当作可编辑来源。reference_asset_id/reference_attachment_id 仅用于协作对照。
 
 任务号只使用运行时注入的 MULTICA_TASK_ID；不得把 issue_id、adjustment_issue_id、variant_id 或 item_key 当 task_id。使用 Image Edit 返回的完整 JSON 作为 image-edit-result.json，prompt 和 prompt_sha256 只取该 JSON，prompt.txt 仅供展示且末尾换行不能参与 hash。提示词保留用户原话并追加约束：只编辑 Input 1，Input 2 仅为标注/遮挡参考，平台会重新贴回固定组件，不能把标注或 Prime 组件画进底图。人物替换必须是肉眼可见的 replacement，现有人物是移除目标，不是身份、五官、发型、服装、姿势、手势、身形轮廓或构图参考；给出具体不同的新人物属性。如果用户标注的是单独金额、核心利益点或促销卖点，例如 Rp100Juta 这类数值，不要默认把它锁成还款计划；只有 Input 2 明确出现还款表、分期卡、期限列、月供列或总还款结构时，才把它当成 repayment 结构处理。scope=size 只处理 target_size，未修改尺寸沿用平台复制的上一 revision 底图和过程证据，不重新生成；scope=variant 必须处理每个 edit_sizes 尺寸，不得沿用旧 generated base 或旧过程证据冒充本次三尺寸调整。
@@ -114,7 +138,7 @@ const creativeFactoryDirectEditAgentInstructions = `全程使用中文。只执�
 func creativeFactoryImageEditAgentInstructions() string {
 	return `全程使用中文。根据 task context.workflow 选择唯一执行分支。
 
-creative_production 分支只执行 creative_production；使用冻结 brief/copy_snapshot、实际 Prime context 和无品牌来源，严格按生产 Skill 的 GPT Image 2 模板写每个尺寸的 prompt：先写 COMPOSITION GATE 和 CANVAS LOCK，再写明确的 Input 1/Input 2 角色；若 brief 有 app_ui_replacement.selected=true，先用 multica attachment download 下载其 attachment_id 作为 Input 3，prompt 只允许替换手机屏幕内容，保留手、手机、透视、光照和场景，并移除竞品 UI 品牌元素。1080x1080 锁定 1:1 square，1200x628 锁定 1.91:1 landscape，800x1000 锁定 4:5 portrait，三尺寸都禁止 story、phone screenshot、long poster、scrolling page、9:16 和 9:19；横版拥挤时沿 Y 轴压缩留白、模块间距和行距，不删 approved copy 或表格结构。写 generated assets、lineage 与 CLI 原始模型证据，只补当前 revision 的缺失尺寸。受控候选下载若因 app 域附件 URL 返回登录态过期，但当前 candidate 能解析出同一个 attachment id，必须按生产 Skill 使用 multica attachment download 作为同源 fallback，不得改用历史目录或直接写 action_required。保持 prompt 1800-2800 字符、无坐标、无审计重复，并记录 prompt/hash；prompt-contract 必须带当前 brief 的 parent_direction_sha256；使用 App UI 参考时还必须记录 app_ui_reference_attachment_id、resource_file_id、Input 3 角色和只替换手机屏幕内容的约束。调用 multica image edit/edit-batch 时必须给 Bash 工具设置 timeout_ms 至少 1500000（25 分钟），等待 CLI 返回完整 JSON 后，立即按生产 Skill 调用 register_process_assets.py 登记当前尺寸的 Prime context、模型原图和规范化底图，并回读订单确认 registered 数量和归属。比例偏差 <=10% 直接接受；10%-25% 且有拒绝回图时用同图执行 canvas repair；>25% 只重生当前失败尺寸并加强 CANVAS LOCK。asset-put、上传、协议、prompt/hash 或证据写回失败时复用同一回图、模型 JSON、prompt-contract 和 normalization evidence 补登记，不重新出图；Prime compose 失败只补贴片；部分尺寸失败只补缺失尺寸。遇到 qc_visual_rework 时只对失败尺寸执行本轮 Image2 重排，Input 1 必须是上一 revision 的同尺寸无品牌 generated 底图，不得使用已贴二维码、Logo、官方条款或 Prime 组件的最终成图；服务端最多排两轮视觉返工，返工耗尽后仍保留当前品牌成图与交付资产，并由 qc-finalize 以 delivered_with_qc_risk 归档，交给用户继续标注或风险采用，不得写 action_required 阻断输出。creative_production 分支不得处理 direct_edit、品牌组件、QC、采集或分析；只有当前 revision 的全部 expected_sizes 写回 generated/completed、过程证据登记回读成功且贴片 Skill 返回后端合成完成后才调用 task complete，缺尺寸不能提前完成，平台会自动创建有上限的 fresh continuation。调用绑定的素材_技能_贴片执行后端唯一 Prime 合成入口，不得直接创建 primed 资产或伪造贴片结果。
+creative_production 分支只执行 creative_production；使用冻结 brief/copy_snapshot、实际 Prime context 和无品牌来源，严格按生产 Skill 的 GPT Image 2 模板写每个尺寸的 prompt：先写 COMPOSITION GATE 和 CANVAS LOCK，再写明确的 Input 1/Input 2 角色；若 brief 有 app_ui_replacement.selected=true，先用 multica attachment download 下载其 attachment_id 作为 Input 3，prompt 只允许替换手机屏幕内容，保留手、手机、透视、光照和场景，并移除竞品 UI 品牌元素；若没有 selected=true，source analysis 或 direction 里的手机、屏幕、App 页面描述只作源图证据，不追加 Input 3、不保留或臆造 App 页面。1080x1080 锁定 1:1 square，1200x628 锁定 1.91:1 landscape，800x1000 锁定 4:5 portrait，三尺寸都禁止 story、phone screenshot、long poster、scrolling page、9:16 和 9:19；横版拥挤时沿 Y 轴压缩留白、模块间距和行距，不删 approved copy 或表格结构。写 generated assets、lineage 与 CLI 原始模型证据，只补当前 revision 的缺失尺寸。受控候选下载若因 app 域附件 URL 返回登录态过期，但当前 candidate 能解析出同一个 attachment id，必须按生产 Skill 使用 multica attachment download 作为同源 fallback，不得改用历史目录或直接写 action_required。保持 prompt 1800-2800 字符、无坐标、无审计重复，并记录 prompt/hash；prompt-contract 必须带当前 brief 的 parent_direction_sha256；使用 App UI 参考时还必须记录 app_ui_reference_attachment_id、resource_file_id、Input 3 角色和只替换手机屏幕内容的约束。调用 multica image edit/edit-batch 时必须给 Bash 工具设置 timeout_ms 至少 1500000（25 分钟），等待 CLI 返回完整 JSON 后，立即按生产 Skill 调用 register_process_assets.py 登记当前尺寸的 Prime context、模型原图和规范化底图，并回读订单确认 registered 数量和归属。比例偏差 <=10% 直接接受；10%-25% 且有拒绝回图时用同图执行 canvas repair；>25% 只重生当前失败尺寸并加强 CANVAS LOCK。asset-put、上传、协议、prompt/hash 或证据写回失败时复用同一回图、模型 JSON、prompt-contract 和 normalization evidence 补登记，不重新出图；Prime compose 失败只补贴片；部分尺寸失败只补缺失尺寸。遇到 qc_visual_rework 时只对失败尺寸执行本轮 Image2 重排，Input 1 必须是上一 revision 的同尺寸无品牌 generated 底图，不得使用已贴二维码、Logo、官方条款或 Prime 组件的最终成图；服务端最多排两轮视觉返工，返工耗尽后仍保留当前品牌成图与交付资产，并由 qc-finalize 以 delivered_with_qc_risk 归档，交给用户继续标注或风险采用，不得写 action_required 阻断输出。creative_production 分支不得处理 direct_edit、品牌组件、QC、采集或分析；只有当前 revision 的全部 expected_sizes 写回 generated/completed、过程证据登记回读成功且贴片 Skill 返回后端合成完成后才调用 task complete，缺尺寸不能提前完成，平台会自动创建有上限的 fresh continuation。调用绑定的素材_技能_贴片执行后端唯一 Prime 合成入口，不得直接创建 primed 资产或伪造贴片结果。
 
 creative_direct_edit 分支严格执行现有素材_技能_改图契约：
 ` + creativeFactoryDirectEditAgentInstructions + `
@@ -123,12 +147,12 @@ creative_direct_edit 分支严格执行现有素材_技能_改图契约：
 }
 
 var creativeFactorySkillSpecs = []creativeFactorySkillSpec{
-	{Role: "collection", Name: "素材_技能_采集", Aliases: []string{"AppGrowing 素材采集"}, Directory: "appgrowing-material-collector", Description: "创建 Crawl Run，只采集真实图片广告，平台最多采集 2 张，并用原生 task fanout 自动预分析新增图片。", Capability: "material_collection", Version: 16},
+	{Role: "collection", Name: "素材_技能_采集", Aliases: []string{"AppGrowing 素材采集"}, Directory: "appgrowing-material-collector", Description: "创建 Crawl Run，只采集真实图片广告，并用原生 task fanout 自动预分析新增图片。", Capability: "material_collection", Version: 17},
 	{Role: "diagnostics", Name: "素材_技能_诊断", Aliases: []string{"创意流程诊断", "出图诊断", "AppGrowing 采集诊断"}, Directory: "creative-flow-diagnostician", Description: "读取创意采集、出图、品牌组件、QC、订单和 daemon/runtime 证据，在允许范围内恢复或给出明确动作。", Capability: "crawl_diagnosis", Version: 5},
 	{Role: "reference_analysis", Name: "素材_技能_分析", Aliases: []string{"广告参考分析"}, Directory: "ad-creative-analysis", Description: "市场中立地读取真实图片，识别可变视觉区域、原图文字及坐标、主题、利益点、语义锚点、App UI 类型、屏幕边界和布局约束；App UI 只做通用检测，不选择品牌附件；只有明显的还款结构才锁定为 numeric，单独金额或核心利益点不得因为带数字就被卡死。", Capability: "reference_analysis", Version: 19},
 	{Role: "pre_adaptation", Name: "素材_技能_文案适配", Aliases: []string{"广告预适配"}, Directory: "ad-creative-pre-adaptation", Description: "按冻结资源完成可生产文案与数值适配；只有明显的还款结构才生成 repayment 选择和 numeric layout，单独金额、核心利益点或促销额度默认保留为可编辑文案，保留后续可手动改写空间；数值布局说明必须列出每个冻结展示值。", Capability: "pre_adaptation", Version: 26},
-	{Role: "generation_plan", Name: "素材_技能_方案", Aliases: []string{"广告生成方案"}, Directory: "ad-creative-plan", Description: "消费冻结分析、逐块文案与市场快照，严格继承顶层非空文案字段，规划 3 个同题变体及品牌组件视觉关系；当广告含核心 App 屏幕时从冻结 app_ui_reference 选择最多一张并写 app_ui_replacement。", Capability: "generation_plan", Version: 36},
-	{Role: "image_edit", Name: "素材_技能_出图", Aliases: []string{"广告图像编辑"}, Directory: "ad-creative-production", Description: "使用 GPT Image 2 提示词模板和冻结业务结构生成无品牌三尺寸底图，严格继承所有非空 approved copy，明确三尺寸 CANVAS LOCK 和 Input 1/Input 2 角色；如 brief 选中 App UI reference，则作为 Input 3 只替换手机屏幕内容，保留手机、手、透视、光照和场景。候选图通过 candidate_id 受控下载，下载域鉴权异常时仅允许用同 candidate attachment fallback，Prime context 按当前 revision 绑定，横版用 Y 轴压缩避开上下 Prime 组件带，竖版锁定 4:5 且禁止 story/phone screenshot/long poster/scrolling page，provider 画布使用 16px 合法尺寸再按 10% 比例阈值归一化为交付尺寸，使用 canonical generated asset 写回并保存完整 trace 与 parent_direction_sha256；每个尺寸同步登记 Prime context、模型原图和规范化底图，失败优先复用已有回图补登记、补贴片或只补缺失尺寸，视觉遮挡由服务端最多排两轮定向 Image2 重排，返工只改无品牌 generated 底图并重新贴片，耗尽后仍保留当前交付资产；缺尺寸不提前 complete，由平台自动续跑，完成底图后调用贴片 Skill。", Capability: "image_edit", Version: 94},
+	{Role: "generation_plan", Name: "素材_技能_方案", Aliases: []string{"广告生成方案"}, Directory: "ad-creative-plan", Description: "消费冻结分析、逐块文案与市场快照，严格继承顶层非空文案字段，规划 3 个同题变体及品牌组件视觉关系；当广告含核心 App 屏幕时只使用页面冻结的 App UI reference 写 app_ui_replacement。", Capability: "generation_plan", Version: 37},
+	{Role: "image_edit", Name: "素材_技能_出图", Aliases: []string{"广告图像编辑"}, Directory: "ad-creative-production", Description: "使用 GPT Image 2 提示词模板和冻结业务结构生成无品牌三尺寸底图，严格继承所有非空 approved copy，明确三尺寸 CANVAS LOCK 和 Input 1/Input 2 角色；仅当 brief 选中 App UI reference 时，才作为 Input 3 只替换手机屏幕内容，保留手机、手、透视、光照和场景；未选时不得从分析或方向里保留/臆造 App 页面。候选图通过 candidate_id 受控下载，下载域鉴权异常时仅允许用同 candidate attachment fallback，Prime context 按当前 revision 绑定，横版用 Y 轴压缩避开上下 Prime 组件带，竖版锁定 4:5 且禁止 story/phone screenshot/long poster/scrolling page，provider 画布使用 16px 合法尺寸再按 10% 比例阈值归一化为交付尺寸，使用 canonical generated asset 写回并保存完整 trace 与 parent_direction_sha256；每个尺寸同步登记 Prime context、模型原图和规范化底图，失败优先复用已有回图补登记、补贴片或只补缺失尺寸，视觉遮挡由服务端最多排两轮定向 Image2 重排，返工只改无品牌 generated 底图并重新贴片，耗尽后仍保留当前交付资产；缺尺寸不提前 complete，由平台自动续跑，完成底图后调用贴片 Skill。", Capability: "image_edit", Version: 95},
 	{Role: "prime_compose", Name: "素材_技能_贴片", Aliases: []string{"广告品牌组件合成"}, Directory: "ad-creative-prime-compose", Description: "调用后端唯一的确定性 Prime 合成入口，校验合成 JSON，并由后端登记贴片完成过程图、primed 资产和标准 QC/交付交接；不创建 Prime Agent 或 Prime task。", Capability: "prime_compose", Version: 2},
 	{Role: "direct_image_edit", Name: "素材_技能_改图", Aliases: []string{"广告图片直接修改"}, Directory: "ad-creative-direct-edit", Description: "按用户原话和最终图标注 brief 修改固定无品牌底图，再由贴片 Skill 调用平台确定性合成并直接交付，不执行 QC；单独金额和核心利益点即使先前识别错了也保留手动改写空间，协议错误复用同一回图修复写回。", Capability: "direct_image_edit", Version: 16},
 	{Role: "quality_control", Name: "素材_技能_质检", Aliases: []string{"广告成图验收"}, Directory: "ad-creative-qc", Description: "只执行视觉质检：下载当前 Prime 成图并用智能体原生视觉验收；技术质检已下线，不再创建、不等待、不阻断。", Capability: "quality_control", Version: 35},
@@ -138,22 +162,242 @@ var creativeFactorySkillSpecs = []creativeFactorySkillSpec{
 var creativeFactoryAgentSpecs = []creativeFactoryAgentSpec{
 	{Role: "leadership", Name: "素材_流程", Aliases: []string{"素材_统筹", "素材小队 Leader"}, Description: "按冻结能力映射启动和恢复 Creative Order，并负责用户汇总。", Instructions: "全程使用中文。只执行判断、原生 fanout、异常恢复和用户汇总，不代替专业角色。标准订单只创建方案 task；direct_edit 只创建直接修改 task；正常下游由各阶段唯一 owner 续链。每次唤醒回读订单、task 与冻结 squad snapshot，按 target/source/item_key 只补真正缺失项，一次提交后立即结束。不得按名称猜 Agent，不轮询，不创建阶段子 Issue；Issue 只记录人工决定、真实阻塞和最终验收。", SkillRoles: []string{"creative_leadership"}, Model: "gpt-5.6-terra", ThinkingLevel: "medium", MaxConcurrent: 6},
 	{Role: "reference_analysis", Name: "素材_分析", Aliases: []string{"广告参考分析智能体"}, Description: "按 task workflow 读取真实像素、识别可变视觉区域、写市场中立分析，并在后台完成可确认的文案与数值预适配。", Instructions: "全程使用中文。creative_reference_analysis 只写指定 candidate/version 的市场中立 Source Analysis；每个可变原图文字区块必须归入唯一 copy 或 numeric 视觉区域，不能把同一画面组件拆入两条处理路径；App UI 只输出通用页面类型、屏幕边界和 replacement_needed，不读取、选择或引用 app_ui_reference 附件。creative_pre_adaptation 只消费指定的冻结市场包和文案库，逐区域优先绑定已审核内容；没有兼容已审核片段的普通 headline、subheadline、benefit、supporting 或 cta 区块，必须按市场语言、区块职责、原图语义和可读长度生成一个新的 recommended 文案，source_keys 必须为空数组，recommendation_basis 必须说明依据，页面会标记待用户确认；不得引用不存在的 fragment key。本金、期限、月供、总利息、总还款、利率、法律文字和品牌事实没有审核来源或冻结计算时不得凭空生成，逐项写 missing replacement。多行数值表不要求原图行数与我方方案数量相等：按表格语义和期限从冻结 approved repayment plan 取我方兼容方案，实际渲染行数取原图可渲染行数与我方可用方案数的较小值；每个实际渲染行写 numeric_layouts，且每个 layout 的 render_instruction 必须逐字列出其 scenario_ids 对应 selection.values 中每个 target_columns 的完整冻结展示值，不能只写按行展示；源图多出的数值块逐项写空 missing 作为默认移除项。没有我方某一期限方案时不得借用其他期限金额；整体重构为我方支持的期限列，或让该列源块留空移除。只有明显的还款结构才锁定，单独金额、核心利益点或促销额度不得因为带数字就卡死成还款计划。不能把整表硬塞进一个 layout，也不能伪装成已绑定或改写原图事实。输入和产物不得混用，不生成图片，不修改市场包或文案库。只处理 task context 指定的对象、revision 和 scope；按绑定 Skill 写结构化领域结果和机器证据。不得创建或修改 Issue，不得用评论代替领域数据。输入、凭证、工具或写回失败时保留已成功对象，写真实 error_code/error_message 并让当前 task 失败；兄弟对象继续。", SkillRoles: []string{"reference_analysis", "pre_adaptation"}, Model: "gpt-5.6-terra", ThinkingLevel: "medium", MaxConcurrent: 6},
-	{Role: "collection", Name: "素材_采集", Aliases: []string{"AppGrowing 素材采集智能体"}, Description: "按 task 配置创建 Crawl Run，只导入真实图片广告并委派新增图片分析。", Instructions: "全程使用中文。只执行 task context 和 AutoPilot 明确的 AppGrowing 查询；只导入 asset_type=image，视频、非图片和未知类型不占用采集配额。使用注入的 analysis_agent_id=%s，不得按名称猜测。筛选、分页、预算和 fallback 由 task/平台配置决定。结果、证据和失败写 Crawl Run；导入后用原生 fanout 委派本次新增图片，不创建 Issue，不使用测试数据。", SkillRoles: []string{"collection"}, Model: "gpt-5.6-luna", ThinkingLevel: "low", MaxConcurrent: 1},
-	{Role: "generation_plan", Name: "素材_方案", Aliases: []string{"生成方案智能体"}, Description: "消费冻结分析、文案与市场快照，写 3 个同题 Variant 并委派生产。", Instructions: "全程使用中文。只执行 creative_plan。copy_snapshot 与 market snapshot 是唯一文案、事实和资源真值；不得重选或改写。写 V01-V03 结构化 brief，保留语义与主体，只改变表达；当 source analysis 表明核心 App 屏幕需要替换时，只从冻结 market snapshot 的 app_ui_reference 选择最多一张，写 app_ui_replacement 的 resource_file_id、attachment_id、reason、source_screen 和只替换手机屏幕内容的 constraints；没有检测到 App UI 或不是核心屏幕时写 required=false、selected=false；没有合适资源就写 needs_input/action_required，不让出图保留竞品 UI。将缺失 production items 一次 fanout。需要输入时写 needs_input/action_required，不生成图片。只处理 task context 指定的对象、revision 和 scope；按绑定 Skill 写结构化领域结果和机器证据。不得创建或修改 Issue，不得用评论代替领域数据。输入、凭证、工具或写回失败时保留已成功对象，写真实 error_code/error_message 并让当前 task 失败；兄弟对象继续。", SkillRoles: []string{"generation_plan"}, Model: "gpt-5.6-terra", ThinkingLevel: "medium", MaxConcurrent: 6},
+	{Role: "collection", Name: "素材_采集", Aliases: []string{"AppGrowing 素材采集智能体"}, Description: "按 task 配置创建 Crawl Run，只导入真实图片广告并委派新增图片分析。", Instructions: "全程使用中文。只执行 task context 和 AutoPilot 明确的 AppGrowing 查询；只导入 asset_type=image，视频、非图片和未知类型不占用名额。使用注入的 analysis_agent_id=%s，不得按名称猜测。筛选、分页、预算和 fallback 由 task/平台配置决定。结果、证据和失败写 Crawl Run；导入后用原生 fanout 委派本次新增图片，不创建 Issue，不使用测试数据。", SkillRoles: []string{"collection"}, Model: "gpt-5.6-luna", ThinkingLevel: "low", MaxConcurrent: 1},
+	{Role: "generation_plan", Name: "素材_方案", Aliases: []string{"生成方案智能体"}, Description: "消费冻结分析、文案与市场快照，写 3 个同题 Variant 并委派生产。", Instructions: "全程使用中文。只执行 creative_plan。copy_snapshot 与 market snapshot 是唯一文案、事实和资源真值；不得重选或改写。写 V01-V03 结构化 brief，保留语义与主体，只改变表达；当 source analysis 表明核心 App 屏幕需要替换时，只使用 copy_snapshot.pre_adaptation.app_ui_replacement 中页面冻结的选择，写 app_ui_replacement 的 resource_file_id、attachment_id、reason、source_screen 和只替换手机屏幕内容的 constraints；没有检测到 App UI 或不是核心屏幕时写 required=false、selected=false；需要替换但没有冻结 selected=true 或缺少 attachment_id/resource_file_id 时写 needs_input/action_required，不让出图保留竞品 UI，也不自行从市场包选择或臆造 App 页面。将缺失 production items 一次 fanout。需要输入时写 needs_input/action_required，不生成图片。只处理 task context 指定的对象、revision 和 scope；按绑定 Skill 写结构化领域结果和机器证据。不得创建或修改 Issue，不得用评论代替领域数据。输入、凭证、工具或写回失败时保留已成功对象，写真实 error_code/error_message 并让当前 task 失败；兄弟对象继续。", SkillRoles: []string{"generation_plan"}, Model: "gpt-5.6-terra", ThinkingLevel: "medium", MaxConcurrent: 6},
 	{Role: "image_edit", Name: "素材_出图", Aliases: []string{"图像编辑智能体"}, Description: "按 GPT Image 2 提示词模板执行标准出图或用户标注精准改图；分别生成或修改无品牌底图，调用贴片 Skill 完成后端合成，标准出图进入 QC，精准改图直接交付。", Instructions: creativeFactoryImageEditAgentInstructions(), SkillRoles: []string{"image_edit", "direct_image_edit", "prime_compose"}, Model: "gpt-5.6-terra", ThinkingLevel: "low", MaxConcurrent: 10},
 	{Role: "quality_control", Name: "素材_质检", Aliases: []string{"广告验收智能体"}, Description: "只执行视觉质检，按三道闸门验收当前 Prime 成图并输出尺寸级阻断或建议；技术质检已下线。", Instructions: "全程使用中文。只执行 creative_qc_visual；读取同 Variant/revision/expected_sizes 的完整品牌组件包。必须从 creative order get 的当前 Variant/revision 筛选 completed primed assets，用 multica attachment download 下载每个 attachment_id 到当前 task workdir，并用 view_image 查看每张最终品牌成图；不得使用旧目录、兄弟 Variant、旧 revision、generated 底图或页面预览图，不得把图片转 base64/stdout，不得自行补造 passed。写 visual QC Report 后立即调用 qc-finalize 完成归档。对 actual_prime_obstruction、official_prime_text_unreadable、generated_content_missing 写 failed 和每个失败尺寸一个 blocking_failure；附件下载、图片读取或写回失败也要写结构化 blocking_failure，平台会自动复用已完成 Prime 资产重跑 visual 一次。其他发现写 warning。服务端仅对真实 Prime 遮挡或官方 Prime 文字不可读最多自动返工当前 Variant 两轮；返工由生产 agent 只改无品牌 generated 底图，再重新贴片复检，不能改 Prime，不能影响兄弟 Variant；两轮后仍失败会保留当前交付资产并显示风险，用户可继续标注调整或风险采用；预测遮挡和关键内容缺失仍保留为人工阻断。只处理 task context 指定的对象、revision 和 scope；按绑定 Skill 写结构化领域结果和机器证据。不得创建或修改 Issue，不得用评论代替领域数据。输入、凭证、工具或写回失败时保留已成功对象，写真实 error_code/error_message 并让当前 task 失败；兄弟对象继续。", SkillRoles: []string{"quality_control"}, Model: "gpt-5.6-terra", ThinkingLevel: "medium", MaxConcurrent: 6},
 	{Role: "diagnostics", Name: "素材_诊断", Aliases: []string{"创意流程诊断智能体", "出图诊断智能体", "AppGrowing 采集诊断智能体"}, Description: "诊断创意采集、出图、品牌组件、QC、订单状态和 daemon/runtime 异常，并通过平台入口执行受控恢复。", Instructions: "全程使用中文。处理 creative_crawl_diagnosis、订单短 ID、Variant 标签、页面卡片文案、报错文本和用户明确指向的创意流程诊断。先定位当前订单、order item、Variant、revision、task、daemon/runtime 与 Skill 快照证据，再给结论；需要恢复时只通过 multica CLI 或平台 API 重试、取消、fanout、推进明确授权的 Variant revision 或调用现有修复入口。不得直接写 DB、修改凭证、业务筛选、市场包或生产代码；只有用户明确要求维护文案库时，才可先回读文案库并使用 multica creative copy-library 的 add-fragment、update-fragment、upsert-repayment-plan 保存草稿；只有用户明确要求发布时才加 --publish。不得把诊断图当成交付资产；修改前说明对象和原因，修改后回读验证。", SkillRoles: []string{"diagnostics"}, Model: "gpt-5.6-luna", ThinkingLevel: "medium", MaxConcurrent: 2},
 }
 
-func (h *Handler) initializeCreativeFactory(ctx context.Context, workspaceID, userID pgtype.UUID) (creativeFactoryInstallationRecord, error) {
+func creativeFactoryMarketProfileFromInput(input *creativeFactoryInitializationInput) creativeFactoryMarketProfile {
+	profile := creativeFactoryIndonesiaProfile()
+	if input == nil {
+		return profile
+	}
+	profile.Explicit = true
+	switch normalized := strings.ToLower(strings.TrimSpace(input.Market)); {
+	case normalized == "", normalized == "indonesia", normalized == "id", strings.Contains(normalized, "印尼"), strings.Contains(normalized, "印度尼西亚"):
+		profile = creativeFactoryIndonesiaProfile()
+		profile.Explicit = true
+	case normalized == "malaysia", normalized == "my", strings.Contains(normalized, "马来"):
+		profile = creativeFactoryMalaysiaProfile()
+		profile.Explicit = true
+	default:
+		profile = creativeFactoryGenericProfile(strings.TrimSpace(input.Market))
+	}
+	if brand := strings.TrimSpace(input.Brand); brand != "" {
+		profile.Brand = brand
+	}
+	if locale := strings.TrimSpace(input.Locale); locale != "" {
+		profile.Locale = locale
+	}
+	if currency := strings.ToUpper(strings.TrimSpace(input.Currency)); currency != "" {
+		profile.Currency = currency
+	}
+	if competitors := cleanCreativeFactoryList(input.Competitors); len(competitors) > 0 {
+		profile.Competitors = competitors
+	}
+	if priority := cleanCreativeFactoryList(input.PriorityCompetitors); len(priority) > 0 {
+		profile.PriorityCompetitors = priority
+	} else if len(profile.PriorityCompetitors) == 0 && len(profile.Competitors) > 0 {
+		limit := 3
+		if len(profile.Competitors) < limit {
+			limit = len(profile.Competitors)
+		}
+		profile.PriorityCompetitors = append([]string{}, profile.Competitors[:limit]...)
+	}
+	return profile
+}
+
+func creativeFactoryIndonesiaProfile() creativeFactoryMarketProfile {
+	return creativeFactoryMarketProfile{
+		Brand:              "AdaKami",
+		Market:             "Indonesia",
+		MarketLabel:        "印度尼西亚",
+		Locale:             "id-ID",
+		Currency:           "IDR",
+		CurrencyPrefix:     "Rp",
+		LanguageLabel:      "印度尼西亚语",
+		MarketAbbreviation: "ID",
+		Competitors: []string{
+			"Easycash", "Kredit Pintar", "Adapundi", "BantuSaku", "Rupiah Cepat", "UATAS", "JULO",
+		},
+		PriorityCompetitors: []string{"Easycash", "Kredit Pintar", "Adapundi"},
+	}
+}
+
+func creativeFactoryMalaysiaProfile() creativeFactoryMarketProfile {
+	return creativeFactoryMarketProfile{
+		Brand:              "AdaKami",
+		Market:             "Malaysia",
+		MarketLabel:        "马来西亚",
+		Locale:             "ms-MY",
+		Currency:           "MYR",
+		CurrencyPrefix:     "RM",
+		LanguageLabel:      "马来语",
+		MarketAbbreviation: "MY",
+	}
+}
+
+func creativeFactoryGenericProfile(market string) creativeFactoryMarketProfile {
+	if strings.TrimSpace(market) == "" {
+		market = "Market"
+	}
+	return creativeFactoryMarketProfile{
+		Brand:              "AdaKami",
+		Market:             market,
+		MarketLabel:        market,
+		Locale:             "en-US",
+		Currency:           "USD",
+		CurrencyPrefix:     "$",
+		LanguageLabel:      "英语",
+		MarketAbbreviation: strings.ToUpper(marketAbbreviationFromName(market)),
+	}
+}
+
+func marketAbbreviationFromName(market string) string {
+	trimmed := strings.TrimSpace(market)
+	if trimmed == "" {
+		return "MK"
+	}
+	letters := []rune{}
+	for _, char := range trimmed {
+		if (char >= 'A' && char <= 'Z') || (char >= 'a' && char <= 'z') {
+			letters = append(letters, char)
+		}
+		if len(letters) >= 2 {
+			break
+		}
+	}
+	if len(letters) == 0 {
+		return "MK"
+	}
+	if len(letters) == 1 {
+		letters = append(letters, 'K')
+	}
+	return string(letters[:2])
+}
+
+func creativeFactoryBrandAbbreviation(brand string) string {
+	normalized := strings.ToLower(strings.TrimSpace(brand))
+	if normalized == "adakami" || normalized == "ada kami" {
+		return "AK"
+	}
+	return strings.ToUpper(marketAbbreviationFromName(brand))
+}
+
+func cleanCreativeFactoryList(values []string) []string {
+	out := []string{}
+	seen := map[string]bool{}
+	for _, value := range values {
+		trimmed := strings.TrimSpace(value)
+		if trimmed == "" {
+			continue
+		}
+		key := strings.ToLower(trimmed)
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		out = append(out, trimmed)
+	}
+	return out
+}
+
+func creativeFactoryMarketProfileConfig(profile creativeFactoryMarketProfile) map[string]any {
+	return map[string]any{
+		"brand":                profile.Brand,
+		"market":               profile.Market,
+		"market_label":         profile.MarketLabel,
+		"locale":               profile.Locale,
+		"currency":             profile.Currency,
+		"currency_prefix":      profile.CurrencyPrefix,
+		"language_label":       profile.LanguageLabel,
+		"market_abbreviation":  profile.MarketAbbreviation,
+		"competitors":          profile.Competitors,
+		"priority_competitors": profile.PriorityCompetitors,
+	}
+}
+
+func creativeFactoryMarketProfileFromConfig(config map[string]any) (creativeFactoryMarketProfile, bool) {
+	raw, ok := config["market_profile"].(map[string]any)
+	if !ok {
+		return creativeFactoryMarketProfile{}, false
+	}
+	profile := creativeFactoryMarketProfileFromInput(&creativeFactoryInitializationInput{
+		Brand:               stringFromAny(raw["brand"]),
+		Market:              stringFromAny(raw["market"]),
+		Locale:              stringFromAny(raw["locale"]),
+		Currency:            stringFromAny(raw["currency"]),
+		Competitors:         stringSliceFromAny(raw["competitors"]),
+		PriorityCompetitors: stringSliceFromAny(raw["priority_competitors"]),
+	})
+	if marketLabel := stringFromAny(raw["market_label"]); marketLabel != "" {
+		profile.MarketLabel = marketLabel
+	}
+	if currencyPrefix := stringFromAny(raw["currency_prefix"]); currencyPrefix != "" {
+		profile.CurrencyPrefix = currencyPrefix
+	}
+	if languageLabel := stringFromAny(raw["language_label"]); languageLabel != "" {
+		profile.LanguageLabel = languageLabel
+	}
+	if marketAbbreviation := stringFromAny(raw["market_abbreviation"]); marketAbbreviation != "" {
+		profile.MarketAbbreviation = marketAbbreviation
+	}
+	profile.Explicit = false
+	return profile, strings.TrimSpace(profile.Market) != ""
+}
+
+func creativeFactoryResourceNames(profile creativeFactoryMarketProfile) (copyLibraryName string, marketPackName string) {
+	return fmt.Sprintf("%s %s 文案库", profile.Brand, profile.Market), fmt.Sprintf("%s %s 市场资源包", profile.Brand, profile.Market)
+}
+
+func creativeFactoryAutopilotTitleForProfile(profile creativeFactoryMarketProfile) string {
+	if profile.Market == "Indonesia" && profile.Brand == "AdaKami" {
+		return creativeFactoryDefaultAutopilotTitle
+	}
+	return fmt.Sprintf("%s竞品素材周度采集", profile.MarketLabel)
+}
+
+func creativeFactoryAutopilotDescriptionForProfile(profile creativeFactoryMarketProfile) string {
+	if profile.Market == "Indonesia" && profile.Brand == "AdaKami" && len(profile.Competitors) == 7 {
+		return creativeFactoryDefaultAutopilotDescription
+	}
+	competitors := creativeFactoryListText(profile.Competitors)
+	priorityCompetitors := creativeFactoryListText(profile.PriorityCompetitors)
+	return fmt.Sprintf(`每周抓取 AppGrowing %s的现金贷/金融竞品素材，并创建一个可追踪的 Crawl Run。
+
+工作区创意工厂安装记录负责解析市场资源包、执行小队和参考分析智能体；不要在 AutoPilot 说明中保存 UUID。
+
+竞品：%s
+优先竞品：%s
+地区：%s
+语言：%s
+设备：Android、iOS
+媒体：未限定
+时间范围：最近 30 天
+选材：新素材 40%%，投放少于 7 天且曝光估算大于 1K；跑量素材 60%%，投放超过 30 天且曝光估算不低于 10M
+%s
+素材类型：仅图片广告（asset_type=image）。视频、非图片和无法识别类型必须在选材前排除，不占用名额，也不进入 Crawl Run 或素材库。
+
+执行真实 AppGrowing 多页图片采集，结果进入创意工厂素材库并关联当前 Crawl Run；图片入库后立即用原生 task fanout 对本次新增图片并发执行逐图创意分析，归档未完成时允许分析读取真实源图片。分析完成后在创意工厂提醒用户选图、确认主题与文案。整个采集与预分析阶段不创建 Issue。授权失效时将 Crawl Run 标为 action_required，并提示用户前往“设置 - 集成”重新绑定，不能用测试数据替代。`,
+		profile.MarketLabel, competitors, priorityCompetitors, profile.MarketLabel, profile.LanguageLabel, creativeFactoryDefaultCollectionTargetLine)
+}
+
+func creativeFactoryListText(values []string) string {
+	cleaned := cleanCreativeFactoryList(values)
+	if len(cleaned) == 0 {
+		return "待配置"
+	}
+	return strings.Join(cleaned, "、")
+}
+
+func (h *Handler) initializeCreativeFactory(ctx context.Context, workspaceID, userID pgtype.UUID, input *creativeFactoryInitializationInput) (creativeFactoryInstallationRecord, error) {
 	if !workspaceID.Valid || !userID.Valid {
 		return creativeFactoryInstallationRecord{}, errors.New("workspace and user are required")
 	}
+	profile := creativeFactoryMarketProfileFromInput(input)
 	templates, err := loadCreativeFactoryTemplates()
-	if err != nil {
-		return creativeFactoryInstallationRecord{}, err
-	}
-	resourceDefaults, err := creativeFactoryResourceDefaults()
 	if err != nil {
 		return creativeFactoryInstallationRecord{}, err
 	}
@@ -173,14 +417,24 @@ func (h *Handler) initializeCreativeFactory(ctx context.Context, workspaceID, us
 	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, lockKey); err != nil {
 		return creativeFactoryInstallationRecord{}, err
 	}
-	if existing, err := scanCreativeFactoryInstallation(tx.QueryRow(ctx, `
+	existing, existingErr := scanCreativeFactoryInstallation(tx.QueryRow(ctx, `
 SELECT workspace_id, status, schema_version, template_version,
        runtime_id, market_pack_id, copy_library_id, squad_id,
        orchestration_skill_id, role_agents, role_skills, config
 FROM creative_factory_installation
 WHERE workspace_id = $1
 FOR UPDATE
-	`, workspaceID)); err == nil && existing.Status == "ready" {
+	`, workspaceID))
+	if existingErr == nil && input == nil {
+		if existingProfile, ok := creativeFactoryMarketProfileFromConfig(existing.Config); ok {
+			profile = existingProfile
+		}
+	}
+	resourceDefaults, err := creativeFactoryResourceDefaultsForProfile(profile)
+	if err != nil {
+		return creativeFactoryInstallationRecord{}, err
+	}
+	if existingErr == nil && existing.Status == "ready" {
 		qtx := h.Queries.WithTx(tx)
 		if err := h.syncCreativeFactoryManagedAssets(ctx, tx, qtx, workspaceID, userID, &existing, templates); err != nil {
 			return creativeFactoryInstallationRecord{}, err
@@ -189,9 +443,23 @@ FOR UPDATE
 		if agentIDErr != nil {
 			return creativeFactoryInstallationRecord{}, agentIDErr
 		}
-		autopilot, autopilotErr := h.creativeFactoryAutopilot(ctx, tx, qtx, workspaceID, userID, collectionAgentID, existing.SquadID)
+		autopilot, autopilotErr := h.creativeFactoryAutopilot(ctx, tx, qtx, workspaceID, userID, collectionAgentID, existing.SquadID, profile)
 		if autopilotErr != nil {
 			return creativeFactoryInstallationRecord{}, autopilotErr
+		}
+		if profile.Explicit {
+			copyLibrary, marketPack, clonedKeys, resourceErr := h.ensureCreativeFactoryProfileResources(ctx, tx, workspaceID, userID, resourceDefaults, profile)
+			if resourceErr != nil {
+				return creativeFactoryInstallationRecord{}, resourceErr
+			}
+			uploadedDefaultObjectKeys = append(uploadedDefaultObjectKeys, clonedKeys...)
+			existing.CopyLibraryID = parseUUID(copyLibrary.ID)
+			existing.MarketPackID = parseUUID(marketPack.ID)
+			if marketPack.Status != "published" || copyLibrary.Status != "published" || creativeFactoryMarketPackNeedsSetup(marketPack) {
+				existing.Status = "needs_setup"
+			} else {
+				existing.Status = "ready"
+			}
 		}
 		autopilotID := uuidToString(autopilot.ID)
 		if existing.Config == nil {
@@ -201,6 +469,7 @@ FOR UPDATE
 			existing.Config["autopilot_id"] = autopilotID
 		}
 		existing.Config["template_version"] = creativeFactoryTemplateVersion
+		existing.Config["market_profile"] = creativeFactoryMarketProfileConfig(profile)
 		roleAgentsJSON, marshalErr := json.Marshal(existing.RoleAgents)
 		if marshalErr != nil {
 			return creativeFactoryInstallationRecord{}, marshalErr
@@ -220,17 +489,20 @@ SET template_version = $2,
     role_agents = $4::jsonb,
     role_skills = $5::jsonb,
     config = $6::jsonb,
+    market_pack_id = $7,
+    copy_library_id = $8,
+    status = $9,
     updated_at = now()
 WHERE workspace_id = $1
-`, workspaceID, creativeFactoryTemplateVersion, existing.OrchestrationSkillID, string(roleAgentsJSON), string(roleSkillsJSON), string(configJSON)); updateErr != nil {
+`, workspaceID, creativeFactoryTemplateVersion, existing.OrchestrationSkillID, string(roleAgentsJSON), string(roleSkillsJSON), string(configJSON), existing.MarketPackID, existing.CopyLibraryID, existing.Status); updateErr != nil {
 			return creativeFactoryInstallationRecord{}, updateErr
 		}
 		if commitErr := tx.Commit(ctx); commitErr != nil {
 			return creativeFactoryInstallationRecord{}, commitErr
 		}
 		return existing, nil
-	} else if err != nil && !errors.Is(err, pgx.ErrNoRows) {
-		return creativeFactoryInstallationRecord{}, err
+	} else if existingErr != nil && !errors.Is(existingErr, pgx.ErrNoRows) {
+		return creativeFactoryInstallationRecord{}, existingErr
 	}
 	runtimeID, runtimeMode, err := creativeFactoryRuntime(ctx, tx, workspaceID)
 	if err != nil {
@@ -300,31 +572,16 @@ WHERE workspace_id = $1
 			}
 		}
 	}
-	autopilot, err := h.creativeFactoryAutopilot(ctx, tx, qtx, workspaceID, userID, agentIDs["collection"], squad.ID)
+	autopilot, err := h.creativeFactoryAutopilot(ctx, tx, qtx, workspaceID, userID, agentIDs["collection"], squad.ID, profile)
 	if err != nil {
 		return creativeFactoryInstallationRecord{}, err
 	}
 
-	copyDefault := resourceDefaults["copy_library"]
-	copyLibrary, _, err := creativeFactoryResource(ctx, tx, workspaceID, userID, "copy_library", "AdaKami Indonesia 文案库", copyDefault.Description, copyDefault.Config)
+	copyLibrary, marketPack, clonedKeys, err := h.ensureCreativeFactoryProfileResources(ctx, tx, workspaceID, userID, resourceDefaults, profile)
 	if err != nil {
 		return creativeFactoryInstallationRecord{}, err
 	}
-	marketDefault := resourceDefaults["market_pack"]
-	marketConfig := cloneCreativeFactoryConfig(marketDefault.Config)
-	marketConfig["copy_library_id"] = copyLibrary.ID
-	marketPack, marketCreated, err := creativeFactoryResource(ctx, tx, workspaceID, userID, "market_pack", "AdaKami Indonesia 市场资源包", marketDefault.Description, marketConfig)
-	if err != nil {
-		return creativeFactoryInstallationRecord{}, err
-	}
-	if marketCreated && len(marketDefault.Files) > 0 {
-		var clonedKeys []string
-		clonedKeys, err = h.cloneCreativeFactoryResourceFiles(ctx, tx, workspaceID, userID, parseUUID(marketPack.ID), marketDefault.Files)
-		if err != nil {
-			return creativeFactoryInstallationRecord{}, err
-		}
-		uploadedDefaultObjectKeys = append(uploadedDefaultObjectKeys, clonedKeys...)
-	}
+	uploadedDefaultObjectKeys = append(uploadedDefaultObjectKeys, clonedKeys...)
 
 	roleAgentsJSON, _ := json.Marshal(roleAgents)
 	roleSkillsJSON, _ := json.Marshal(roleSkills)
@@ -334,6 +591,7 @@ WHERE workspace_id = $1
 		"resource_policy":   "clone_ad_creative_published_defaults_adopt_existing",
 		"user_edits_policy": "never_overwrite",
 		"autopilot_id":      uuidToString(autopilot.ID),
+		"market_profile":    creativeFactoryMarketProfileConfig(profile),
 	})
 	status := "ready"
 	if marketPack.Status != "published" || copyLibrary.Status != "published" || creativeFactoryMarketPackNeedsSetup(marketPack) {
@@ -376,28 +634,34 @@ RETURNING workspace_id, status, schema_version, template_version,
 	return installation, nil
 }
 
-func (h *Handler) creativeFactoryAutopilot(ctx context.Context, tx pgx.Tx, qtx *db.Queries, workspaceID, userID, collectionAgentID, legacySquadID pgtype.UUID) (db.Autopilot, error) {
+func (h *Handler) creativeFactoryAutopilot(ctx context.Context, tx pgx.Tx, qtx *db.Queries, workspaceID, userID, collectionAgentID, legacySquadID pgtype.UUID, profile creativeFactoryMarketProfile) (db.Autopilot, error) {
 	var autopilotID pgtype.UUID
+	title := creativeFactoryAutopilotTitleForProfile(profile)
+	description := creativeFactoryAutopilotDescriptionForProfile(profile)
+	titles := []string{title, creativeFactoryLegacyAutopilotTitle}
+	if title != creativeFactoryDefaultAutopilotTitle {
+		titles = append(titles, creativeFactoryDefaultAutopilotTitle)
+	}
 	err := tx.QueryRow(ctx, `
 SELECT id
 FROM autopilot
 WHERE workspace_id = $1 AND title = ANY($2::text[])
 ORDER BY CASE WHEN title = $3 THEN 0 ELSE 1 END, created_at ASC
 LIMIT 1
-`, workspaceID, []string{creativeFactoryAutopilotTitle, creativeFactoryLegacyAutopilotTitle}, creativeFactoryAutopilotTitle).Scan(&autopilotID)
+`, workspaceID, titles, title).Scan(&autopilotID)
 	if err == nil {
 		autopilot, getErr := qtx.GetAutopilotInWorkspace(ctx, db.GetAutopilotInWorkspaceParams{ID: autopilotID, WorkspaceID: workspaceID})
 		if getErr != nil {
 			return db.Autopilot{}, getErr
 		}
-		if autopilot.Title == creativeFactoryAutopilotTitle {
+		if autopilot.Title == title {
 			return autopilot, nil
 		}
-		if autopilot.Title == creativeFactoryLegacyAutopilotTitle && creativeFactoryAutopilotNeedsMigration(autopilot, legacySquadID) {
+		if creativeFactoryAutopilotNeedsMigration(autopilot, legacySquadID) || creativeFactoryAutopilotUsesInstallerDefault(autopilot) {
 			updated, updateErr := qtx.UpdateAutopilot(ctx, db.UpdateAutopilotParams{
 				ID:                 autopilot.ID,
-				Title:              pgtype.Text{String: creativeFactoryAutopilotTitle, Valid: true},
-				Description:        pgtype.Text{String: creativeFactoryAutopilotDescription, Valid: true},
+				Title:              pgtype.Text{String: title, Valid: true},
+				Description:        pgtype.Text{String: description, Valid: true},
 				AssigneeType:       pgtype.Text{String: "agent", Valid: true},
 				AssigneeID:         collectionAgentID,
 				Status:             pgtype.Text{String: "active", Valid: true},
@@ -421,8 +685,8 @@ LIMIT 1
 	}
 	autopilot, err := qtx.CreateAutopilot(ctx, db.CreateAutopilotParams{
 		WorkspaceID:   workspaceID,
-		Title:         creativeFactoryAutopilotTitle,
-		Description:   pgtype.Text{String: creativeFactoryAutopilotDescription, Valid: true},
+		Title:         title,
+		Description:   pgtype.Text{String: description, Valid: true},
 		AssigneeType:  "agent",
 		AssigneeID:    collectionAgentID,
 		Status:        "active",
@@ -669,6 +933,17 @@ func creativeFactoryAutopilotNeedsMigration(autopilot db.Autopilot, legacySquadI
 		strings.TrimSpace(autopilot.Description.String) == "由创意工厂事件驱动，从素材分析、文案适配到出图和验收自动推进。"
 }
 
+func creativeFactoryAutopilotUsesInstallerDefault(autopilot db.Autopilot) bool {
+	return autopilot.Title == creativeFactoryDefaultAutopilotTitle &&
+		autopilot.AssigneeType == "agent" &&
+		autopilot.Status == "active" &&
+		autopilot.ExecutionMode == "run_only" &&
+		!autopilot.IssueTitleTemplate.Valid &&
+		!autopilot.ProjectID.Valid &&
+		autopilot.Description.Valid &&
+		strings.TrimSpace(autopilot.Description.String) == creativeFactoryDefaultAutopilotDescription
+}
+
 func loadCreativeFactoryTemplates() (map[string]creativeFactoryTemplate, error) {
 	root, err := creativeFactoryTemplateRoot()
 	if err != nil {
@@ -907,6 +1182,89 @@ func creativeFactoryResourceDefaults() (map[string]creativeFactoryResourceDefaul
 	return defaults, nil
 }
 
+func creativeFactoryResourceDefaultsForProfile(profile creativeFactoryMarketProfile) (map[string]creativeFactoryResourceDefault, error) {
+	defaults, err := creativeFactoryResourceDefaults()
+	if err != nil {
+		return nil, err
+	}
+	copyDefault := defaults["copy_library"]
+	copyConfig := cloneCreativeFactoryConfig(copyDefault.Config)
+	copyConfig["market"] = profile.Market
+	copyConfig["locale"] = profile.Locale
+	copyDefault.Description = fmt.Sprintf("%s %s 已审核投放文案和还款计划库。", profile.Brand, profile.MarketLabel)
+
+	usesEmbeddedIndonesiaCopy := profile.Brand == "AdaKami" && profile.Market == "Indonesia" && profile.Locale == "id-ID" && profile.Currency == "IDR"
+	if !usesEmbeddedIndonesiaCopy {
+		copyConfig["fragments"] = []any{}
+		copyConfig["recipes"] = []any{}
+		copyConfig["source"] = map[string]any{
+			"name":        "",
+			"url":         "",
+			"sync_status": "pending",
+			"note":        "待补充当前市场已审核文案与还款计划。",
+		}
+		copyConfig["repayment_plan"] = map[string]any{
+			"labels": map[string]any{
+				"principal":           "Principal",
+				"tenor":               "Tenor",
+				"monthly_installment": "Monthly Installment",
+				"total_interest":      "Total Interest",
+				"total_repayment":     "Total Repayment",
+			},
+			"entries": []any{},
+		}
+	}
+	copyDefault.Config = copyConfig
+	defaults["copy_library"] = copyDefault
+
+	marketDefault := defaults["market_pack"]
+	marketConfig := cloneCreativeFactoryConfig(marketDefault.Config)
+	marketConfig["brand"] = profile.Brand
+	marketConfig["market"] = profile.Market
+	marketConfig["locale"] = profile.Locale
+	marketConfig["currency"] = profile.Currency
+	if !usesEmbeddedIndonesiaCopy {
+		marketConfig["calculation_rules"] = []any{}
+		marketConfig["compliance_rules"] = "只能使用当前市场已审核的金融事实、文案和品牌组件；不得复制竞品品牌、金额、法律文字或专属页面元素。"
+	}
+	if !usesEmbeddedIndonesiaCopy {
+		namingDefaults, ok := marketConfig["naming_defaults"].(map[string]any)
+		if !ok {
+			namingDefaults = map[string]any{}
+		}
+		namingDefaults["brand_abbreviation"] = creativeFactoryBrandAbbreviation(profile.Brand)
+		namingDefaults["market_abbreviation"] = profile.MarketAbbreviation
+		marketConfig["naming_defaults"] = namingDefaults
+	}
+	marketDefault.Description = fmt.Sprintf("%s %s 市场规则、品牌组件和交付配置。", profile.Brand, profile.MarketLabel)
+	marketDefault.Config = marketConfig
+	marketDefault.Files = creativeFactoryResourceFileSeedsForProfile(marketDefault.Files, profile)
+	defaults["market_pack"] = marketDefault
+	return defaults, nil
+}
+
+func creativeFactoryResourceFileSeedsForProfile(files []creativeFactoryResourceFileSeed, profile creativeFactoryMarketProfile) []creativeFactoryResourceFileSeed {
+	if len(files) == 0 {
+		return nil
+	}
+	out := make([]creativeFactoryResourceFileSeed, 0, len(files))
+	for _, file := range files {
+		seed := file
+		var metadata map[string]any
+		if len(seed.Metadata) > 0 && json.Unmarshal(seed.Metadata, &metadata) == nil {
+			if seed.Role == "app_ui_reference" {
+				metadata["market"] = profile.Market
+				metadata["locale"] = profile.Locale
+			}
+			if encoded, err := json.Marshal(metadata); err == nil {
+				seed.Metadata = encoded
+			}
+		}
+		out = append(out, seed)
+	}
+	return out
+}
+
 func creativeFactoryAdaKamiNamingConfig(config map[string]any) map[string]any {
 	normalized := cloneCreativeFactoryConfig(config)
 	normalized["naming_rule"] = "{month}_P_AK_MY_{date}_{type}_{theme}_{device}_{designer}_{size}"
@@ -1012,6 +1370,64 @@ INSERT INTO creative_resource_file (
 		}
 	}
 	return uploadedKeys, nil
+}
+
+func (h *Handler) ensureCreativeFactoryProfileResources(ctx context.Context, tx pgx.Tx, workspaceID, userID pgtype.UUID, resourceDefaults map[string]creativeFactoryResourceDefault, profile creativeFactoryMarketProfile) (creativeResourceResponse, creativeResourceResponse, []string, error) {
+	copyDefault := resourceDefaults["copy_library"]
+	marketDefault := resourceDefaults["market_pack"]
+	copyLibraryName, marketPackName := creativeFactoryResourceNames(profile)
+	copyLibrary, _, err := creativeFactoryResource(ctx, tx, workspaceID, userID, "copy_library", copyLibraryName, copyDefault.Description, copyDefault.Config)
+	if err != nil {
+		return creativeResourceResponse{}, creativeResourceResponse{}, nil, err
+	}
+	marketConfig := cloneCreativeFactoryConfig(marketDefault.Config)
+	marketConfig["copy_library_id"] = copyLibrary.ID
+	marketPack, marketCreated, err := creativeFactoryResource(ctx, tx, workspaceID, userID, "market_pack", marketPackName, marketDefault.Description, marketConfig)
+	if err != nil {
+		return creativeResourceResponse{}, creativeResourceResponse{}, nil, err
+	}
+	clonedKeys := []string{}
+	if marketCreated && len(marketDefault.Files) > 0 {
+		clonedKeys, err = h.cloneCreativeFactoryResourceFiles(ctx, tx, workspaceID, userID, parseUUID(marketPack.ID), marketDefault.Files)
+		if err != nil {
+			return creativeResourceResponse{}, creativeResourceResponse{}, nil, err
+		}
+	}
+	if profile.Explicit {
+		if err := demoteOtherCreativeFactoryMarketDefaults(ctx, tx, workspaceID, parseUUID(marketPack.ID)); err != nil {
+			return creativeResourceResponse{}, creativeResourceResponse{}, nil, err
+		}
+	}
+	return copyLibrary, marketPack, clonedKeys, nil
+}
+
+func demoteOtherCreativeFactoryMarketDefaults(ctx context.Context, tx pgx.Tx, workspaceID, defaultMarketPackID pgtype.UUID) error {
+	if _, err := tx.Exec(ctx, `
+UPDATE creative_resource
+SET config = jsonb_set(config, '{pre_adaptation_default}', 'false'::jsonb, true),
+    updated_at = now()
+WHERE workspace_id = $1
+  AND kind = 'market_pack'
+  AND id <> $2
+  AND status <> 'archived'
+  AND COALESCE(config->>'pre_adaptation_default', 'false') = 'true'
+`, workspaceID, defaultMarketPackID); err != nil {
+		return err
+	}
+	_, err := tx.Exec(ctx, `
+UPDATE creative_resource_revision revision
+SET config = jsonb_set(revision.config, '{pre_adaptation_default}', 'false'::jsonb, true)
+FROM creative_resource resource
+WHERE revision.resource_id = resource.id
+  AND resource.workspace_id = $1
+  AND resource.kind = 'market_pack'
+  AND resource.id <> $2
+  AND resource.status <> 'archived'
+  AND resource.published_version IS NOT NULL
+  AND revision.version = resource.published_version
+  AND COALESCE(revision.config->>'pre_adaptation_default', 'false') = 'true'
+`, workspaceID, defaultMarketPackID)
+	return err
 }
 
 func creativeFactoryResource(ctx context.Context, tx pgx.Tx, workspaceID, userID pgtype.UUID, kind, name, description string, config map[string]any) (creativeResourceResponse, bool, error) {

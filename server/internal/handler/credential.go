@@ -452,7 +452,7 @@ func (h *Handler) RunCredentialCrawl(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	materials := capCreativeFactoryMaterials(creativeMaterialsFromCrawlRaw(result.Raw))
+	materials := capCreativeFactoryMaterials(creativeMaterialsFromCrawlRaw(result.Raw), req.Params)
 	importInput.Materials = materials
 	importSummary, err := h.importCreativeMaterials(r.Context(), importInput)
 	if err != nil {

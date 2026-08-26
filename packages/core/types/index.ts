@@ -65,7 +65,7 @@ export type {
 } from "./agent";
 export { RUNTIME_PROFILE_PROTOCOL_FAMILIES } from "./agent";
 export type { Workspace, WorkspaceRepo, Member, MemberRole, User, IntegrationTokens, MemberWithUser, Invitation } from "./workspace";
-export type { WorkspaceCapability, WorkspaceCapabilitiesResponse } from "./capability";
+export type { CreativeFactoryInitializationRequest, WorkspaceCapability, WorkspaceCapabilitiesResponse } from "./capability";
 export type { InboxItem, InboxSeverity, InboxItemType } from "./inbox";
 export type { NotificationGroupKey, NotificationGroupValue, NotificationPreferences, NotificationPreferenceResponse } from "./notification-preference";
 export type { Comment, CommentType, CommentAuthorType, CommentTriggerPreview, CommentTriggerPreviewAgent, CommentTriggerSource, Reaction } from "./comment";

@@ -9,24 +9,25 @@ import (
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
-func TestCreativeFactoryCollectionLimit(t *testing.T) {
+func TestCreativeFactoryCollectionTargetComesFromParams(t *testing.T) {
 	params := json.RawMessage(`{"limit":25,"max_materials":25,"selection_rules":{"new_materials":{"ratio_pct":40}}}`)
 	root, ok := crawlParamsObject(params)
 	if !ok {
 		t.Fatal("expected object params")
 	}
-	root["limit"] = creativeFactoryCollectionLimit
-	root["max_materials"] = creativeFactoryCollectionLimit
 	encoded, err := json.Marshal(root)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := creativeFactoryCollectionLimitFromParams(encoded); got != creativeFactoryCollectionLimit {
-		t.Fatalf("limit = %d, want %d", got, creativeFactoryCollectionLimit)
+	if got := creativeFactoryCollectionTargetFromParams(encoded); got != 25 {
+		t.Fatalf("target = %d, want 25", got)
 	}
-	materials := make([]creativeMaterialInput, 5)
-	if got := len(capCreativeFactoryMaterials(materials)); got != creativeFactoryCollectionLimit {
-		t.Fatalf("capped materials = %d, want %d", got, creativeFactoryCollectionLimit)
+	materials := make([]creativeMaterialInput, 30)
+	if got := len(capCreativeFactoryMaterials(materials, encoded)); got != 25 {
+		t.Fatalf("capped materials = %d, want 25", got)
+	}
+	if got := len(capCreativeFactoryMaterials(materials, json.RawMessage(`{}`))); got != 30 {
+		t.Fatalf("uncapped materials = %d, want 30", got)
 	}
 }
 
@@ -41,20 +42,21 @@ func TestCreativeFactoryCollectionParamsHasAgent(t *testing.T) {
 }
 
 func TestCreativeFactoryAutopilotUsesCollectionPrompt(t *testing.T) {
+	description := creativeFactoryAutopilotDescriptionForProfile(creativeFactoryIndonesiaProfile())
 	for _, required := range []string{
 		"AppGrowing",
 		"新素材 40%",
 		"asset_type=image",
-		"最多输出：2 张图片",
+		"不占用名额",
 		"task fanout",
 		"action_required",
 	} {
-		if !strings.Contains(creativeFactoryAutopilotDescription, required) {
+		if !strings.Contains(description, required) {
 			t.Fatalf("collection autopilot prompt is missing %q", required)
 		}
 	}
-	if len([]rune(creativeFactoryAutopilotDescription)) < 500 {
-		t.Fatalf("collection autopilot prompt is unexpectedly short: %d runes", len([]rune(creativeFactoryAutopilotDescription)))
+	if len([]rune(description)) < 500 {
+		t.Fatalf("collection autopilot prompt is unexpectedly short: %d runes", len([]rune(description)))
 	}
 }
 

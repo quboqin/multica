@@ -58,6 +58,7 @@ export interface CreativeMaterialCrawlRun {
   rerun_of_id: string;
   connector_id: string;
   query_summary: string;
+  competitors: string[];
   status: string;
   error_code: string;
   error_message: string;
@@ -372,6 +373,25 @@ export interface CreativeCopySnapshot {
     source_analysis_id: string;
     summary: string;
     analysis_highlights: string[];
+    app_ui_replacement?: {
+      required: boolean;
+      selected: boolean;
+      resource_file_id: string;
+      attachment_id: string;
+      label?: string;
+      reason: string;
+      source_screen: {
+        app_ui_type: string;
+        visual_characteristics?: string;
+        bounds?: {
+          x: number;
+          y: number;
+          width: number;
+          height: number;
+        };
+      };
+      constraints: string[];
+    };
     text_replacements: Array<{
       block_id: string;
       location: string;

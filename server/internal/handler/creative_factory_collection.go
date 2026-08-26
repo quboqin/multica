@@ -11,12 +11,11 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
-const creativeFactoryCollectionLimit = 2
-
 // prepareCreativeFactoryCollectionParams resolves all workspace-owned values
 // before a connector is invoked. The connector request is the only mutable
 // boundary, so an old AutoPilot description cannot select another workspace's
-// agent or raise the collection budget.
+// agent. Collection quantity remains owned by the AutoPilot/task business
+// request and is carried through params.
 func (h *Handler) prepareCreativeFactoryCollectionParams(ctx context.Context, workspaceID pgtype.UUID, connectorID, capability string, params json.RawMessage) (json.RawMessage, error) {
 	if normalizedCrawlConnectorID(connectorID) != "appgrowing" || normalizedCrawlCapability(capability) != "material_search" {
 		return params, nil
@@ -40,12 +39,6 @@ func (h *Handler) prepareCreativeFactoryCollectionParams(ctx context.Context, wo
 		return nil, errors.New("material_search params must be a JSON object")
 	}
 	root["analysis_agent_id"] = uuidToString(agent.ID)
-	root["limit"] = creativeFactoryCollectionLimit
-	for _, key := range []string{"max_materials", "max_results", "target_count"} {
-		if _, exists := root[key]; exists {
-			root[key] = creativeFactoryCollectionLimit
-		}
-	}
 	encoded, err := json.Marshal(root)
 	if err != nil {
 		return nil, err
@@ -53,30 +46,47 @@ func (h *Handler) prepareCreativeFactoryCollectionParams(ctx context.Context, wo
 	return encoded, nil
 }
 
-func capCreativeFactoryMaterials(materials []creativeMaterialInput) []creativeMaterialInput {
-	if len(materials) <= creativeFactoryCollectionLimit {
+func capCreativeFactoryMaterials(materials []creativeMaterialInput, params json.RawMessage) []creativeMaterialInput {
+	target := creativeFactoryCollectionTargetFromParams(params)
+	if target <= 0 || len(materials) <= target {
 		return materials
 	}
-	return materials[:creativeFactoryCollectionLimit]
+	return materials[:target]
 }
 
-func creativeFactoryCollectionLimitFromParams(params json.RawMessage) int {
+func creativeFactoryCollectionTargetFromParams(params json.RawMessage) int {
 	root, ok := crawlParamsObject(params)
 	if !ok {
 		return 0
 	}
-	value, ok := root["limit"]
-	if !ok {
-		return 0
+	for _, key := range []string{"limit", "max_materials", "max_results", "target_count"} {
+		if target := positiveCreativeFactoryCollectionTarget(root[key]); target > 0 {
+			return target
+		}
 	}
+	return 0
+}
+
+func positiveCreativeFactoryCollectionTarget(value any) int {
 	switch number := value.(type) {
 	case float64:
-		return int(number)
+		if number > 0 {
+			return int(number)
+		}
 	case int:
-		return number
-	default:
-		return 0
+		if number > 0 {
+			return number
+		}
+	case int32:
+		if number > 0 {
+			return int(number)
+		}
+	case int64:
+		if number > 0 {
+			return int(number)
+		}
 	}
+	return 0
 }
 
 func creativeFactoryCollectionParamsHasAgent(params json.RawMessage, agentID string) bool {

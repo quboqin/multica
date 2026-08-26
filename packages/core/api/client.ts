@@ -36,6 +36,7 @@ import type {
   IssueReaction,
   Workspace,
   WorkspaceRepo,
+  CreativeFactoryInitializationRequest,
   WorkspaceCapability,
   WorkspaceCapabilitiesResponse,
   MemberWithUser,
@@ -2780,10 +2781,10 @@ export class ApiClient {
     });
   }
 
-  async updateWorkspaceCapability(workspaceId: string, key: string, enabled: boolean): Promise<WorkspaceCapability> {
+  async updateWorkspaceCapability(workspaceId: string, key: string, enabled: boolean, creativeFactory?: CreativeFactoryInitializationRequest): Promise<WorkspaceCapability> {
     const raw = await this.fetch<unknown>(`/api/workspaces/${workspaceId}/capabilities/${encodeURIComponent(key)}`, {
       method: "PATCH",
-      body: JSON.stringify({ enabled }),
+      body: JSON.stringify({ enabled, ...(creativeFactory ? { creative_factory: creativeFactory } : {}) }),
     });
     return parseWithFallback(raw, WorkspaceCapabilitySchema, EMPTY_WORKSPACE_CAPABILITY, {
       endpoint: `PATCH /api/workspaces/${workspaceId}/capabilities/${key}`,
