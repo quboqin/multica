@@ -1331,7 +1331,7 @@ WHERE task.id = $1
     OR (
       task.trigger_evidence_kind = 'creative_order_item_production'
       AND task.context->>'workflow' = 'creative_production'
-      AND task.attempt < 3
+      AND task.attempt < 4
     )
   )
   AND task.context->>'type' = 'creative_domain_task'
@@ -5827,7 +5827,7 @@ SELECT id::text,
     OR (
       trigger_evidence_kind = 'creative_order_item_production'
       AND context->>'workflow' = 'creative_production'
-      AND attempt < 3
+      AND attempt < 4
     )
   )
 FROM ranked
@@ -6344,7 +6344,7 @@ WITH latest AS (
       OR (
         q.trigger_evidence_kind = 'creative_order_item_production'
         AND q.context->>'workflow' = 'creative_production'
-        AND q.attempt < 3
+        AND q.attempt < 4
       )
     ) AS retryable
   FROM agent_task_queue q

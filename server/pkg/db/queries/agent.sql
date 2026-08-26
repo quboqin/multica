@@ -262,7 +262,7 @@ SELECT
     CASE
       WHEN p.trigger_evidence_kind = 'creative_order_item_production'
         AND p.context->>'workflow' = 'creative_production'
-        AND p.max_attempts < 3 THEN 3
+        AND p.max_attempts < 4 THEN 4
       ELSE p.max_attempts
     END,
     p.id, TRUE, p.is_leader_task,
@@ -277,7 +277,7 @@ WHERE p.id = $1
     OR (
       p.trigger_evidence_kind = 'creative_order_item_production'
       AND p.context->>'workflow' = 'creative_production'
-      AND p.attempt < 3
+      AND p.attempt < 4
     )
   )
 RETURNING *;
