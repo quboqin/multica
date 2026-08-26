@@ -6,6 +6,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"image"
+	_ "image/gif"
+	_ "image/jpeg"
+	_ "image/png"
+	"io"
 	"log/slog"
 	"net/http"
 	"regexp"
@@ -2920,6 +2925,10 @@ WHERE v.id = $1
 		writeError(w, http.StatusUnprocessableEntity, "asset size is outside this creative variant's delivery scope")
 		return
 	}
+	if err := h.validateCreativeGeneratedAssetAttachmentDimensions(r.Context(), workspaceID, attachmentID, input); err != nil {
+		writeError(w, http.StatusUnprocessableEntity, err.Error())
+		return
+	}
 	asset, err := scanCreativeOrderAsset(h.DB.QueryRow(r.Context(), `
 INSERT INTO creative_order_asset (variant_id, asset_family_id, size_key, revision, stage, attachment_id, derived_from_asset_id, metadata, evidence, status)
 VALUES ($1,COALESCE($2::uuid, gen_random_uuid()),$3,$4,$5,$6,$7,$8::jsonb,$9::jsonb,$10)
@@ -4801,6 +4810,53 @@ func validCreativeVariantStatus(status string) bool {
 
 func validCreativeAssetSize(size string) bool {
 	return size == "1080x1080" || size == "1200x628" || size == "800x1000"
+}
+
+func creativeAssetSizeDimensions(size string) (int, int, bool) {
+	switch size {
+	case "1080x1080":
+		return 1080, 1080, true
+	case "1200x628":
+		return 1200, 628, true
+	case "800x1000":
+		return 800, 1000, true
+	default:
+		return 0, 0, false
+	}
+}
+
+func (h *Handler) validateCreativeGeneratedAssetAttachmentDimensions(ctx context.Context, workspaceID, attachmentID pgtype.UUID, input creativeOrderAssetInput) error {
+	if h.Storage == nil || !attachmentID.Valid || input.Stage != "generated" || input.Status != "completed" {
+		return nil
+	}
+	wantWidth, wantHeight, ok := creativeAssetSizeDimensions(input.SizeKey)
+	if !ok {
+		return nil
+	}
+	attachment, err := h.Queries.GetAttachmentByIDOnly(ctx, attachmentID)
+	if err != nil || attachment.WorkspaceID != workspaceID {
+		return errors.New("completed generated asset attachment is unavailable")
+	}
+	if !strings.HasPrefix(strings.ToLower(attachment.ContentType), "image/") {
+		return errors.New("completed generated asset attachment must be an image")
+	}
+	key := h.Storage.KeyFromURL(attachment.Url)
+	if key == "" {
+		return errors.New("completed generated asset attachment storage key is unavailable")
+	}
+	reader, err := h.Storage.GetReader(ctx, key)
+	if err != nil {
+		return errors.New("completed generated asset attachment is unavailable")
+	}
+	defer reader.Close()
+	config, _, err := image.DecodeConfig(io.LimitReader(reader, maxCreativePrimeInputBytes+1))
+	if err != nil {
+		return errors.New("completed generated asset attachment dimensions are unavailable")
+	}
+	if config.Width != wantWidth || config.Height != wantHeight {
+		return fmt.Errorf("completed generated asset attachment dimensions %dx%d do not match %s", config.Width, config.Height, input.SizeKey)
+	}
+	return nil
 }
 
 func validCreativeAssetStage(stage string) bool {

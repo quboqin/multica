@@ -67,6 +67,16 @@ multica image edit \
 字符串恢复 hash。若需要 `prompt.txt`，只用于人读并确保末尾换行不进入提交内容。同时保留 model、request ID、实际宽高和本次
 attempt。每个尺寸最多执行一次有明确原因的编辑重试；传输重试不计入编辑次数。
 
+模型原图只能作为过程图，不能直接写入 canonical generated asset。采用前必须把回图归一化到当前处理尺寸：
+
+```bash
+python /app/creative-platform-skills/ad-creative-production/references/normalize_image.py \
+  --input <model-output.png> --output <accepted-base.png> --width <w> --height <h> \
+  --model-size <provider-width>x<provider-height> --max-aspect-deviation 0.10 --evidence <normalization.json>
+```
+
+确认 `accepted-base.png` 的像素尺寸与 `target_size` 完全一致后再继续；若归一化失败，只保留过程图并让 task 失败或按重试上限重新编辑。
+
 每一次 Image Edit 实际产生图片后，无论最后采用还是拒绝，都必须先上传并登记过程图：
 
 ```bash
@@ -79,6 +89,9 @@ label 写为 `直接改图尝试 <attempt> · 未采用`。metadata 必须保留
 annotation guide attachment、模型、request ID、prompt_sha256 和目标尺寸。回读订单，确认附件属于当前 variant、task、revision 和 size。
 
 只有被采用的回图才能写入 `stage: "generated"` 的 canonical asset。先上传同一张已采用回图，再准备三份与该尺寸完全对应的必需证据文件；历史任务如果已经有 `copy-validation.json` 可以作为旧证据一并传入，但不得作为写回拦截：
+
+canonical 上传必须使用归一化后的 `accepted-base.png`，不得复用 `model-output.png` 的诊断附件 ID。`model-output.png` 只属于
+`creative_direct_edit` 过程图；`asset-put` 的 `attachment_id` 必须来自 `accepted-base.png` 的上传结果。
 
 - `image-edit-result.json`：Image Edit 返回的完整 JSON，必须包含原始 `prompt`、匹配的 `prompt_sha256`、model、request ID、attempt 和实际画布；不得保留本地 `path`。
 - `prompt-contract.json`：至少包含与模型结果完全相同的 `prompt_sha256`。

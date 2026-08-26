@@ -42,18 +42,24 @@ func TestCreateCreativeDirectEditAtomicallyInitializesSourceLineage(t *testing.T
 		t.Fatalf("snapshot = mode %q request %q delivery %q", mode, request, deliveryMode)
 	}
 	var snapshot struct {
-		Squad map[string]string `json:"squad_snapshot"`
+		Squad struct {
+			LeaderAgentID     string `json:"leader_agent_id"`
+			DirectEditAgentID string `json:"direct_edit_agent_id"`
+			ReviewerAgentID   string `json:"reviewer_agent_id"`
+		} `json:"squad_snapshot"`
 	}
 	if err := json.Unmarshal(response.Order.InputSnapshot, &snapshot); err != nil {
 		t.Fatal(err)
 	}
 	wantAgents := map[string]string{
-		"leader_agent_id": squad.LeaderAgentID, "direct_edit_agent_id": squad.DirectEditorAgentID,
-		"reviewer_agent_id": squad.ReviewerAgentID,
+		"leader_agent_id": squad.LeaderAgentID, "direct_edit_agent_id": squad.DirectEditorAgentID, "reviewer_agent_id": squad.ReviewerAgentID,
+	}
+	gotAgents := map[string]string{
+		"leader_agent_id": snapshot.Squad.LeaderAgentID, "direct_edit_agent_id": snapshot.Squad.DirectEditAgentID, "reviewer_agent_id": snapshot.Squad.ReviewerAgentID,
 	}
 	for field, want := range wantAgents {
-		if snapshot.Squad[field] != want {
-			t.Errorf("squad snapshot %s = %q, want %q", field, snapshot.Squad[field], want)
+		if gotAgents[field] != want {
+			t.Errorf("squad snapshot %s = %q, want %q", field, gotAgents[field], want)
 		}
 	}
 }

@@ -6,6 +6,8 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"image"
+	"image/png"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -2016,6 +2018,64 @@ func completedGeneratedAssetTrace(prompt, requestID string, attempts int) (json.
 		"normalization": map[string]any{"target_size": map[string]int{"width": 1080, "height": 1080}},
 	})
 	return metadata, evidence
+}
+
+func TestUpsertCreativeOrderAssetRejectsGeneratedAttachmentDimensionMismatch(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	issueID, candidateID := createCreativeFeedbackCandidate(t, "generated asset dimension mismatch")
+	var orderID, itemID, variantID string
+	if err := testPool.QueryRow(t.Context(), `
+INSERT INTO creative_order (workspace_id, issue_id, status, input_snapshot, trigger_evidence_kind, created_by)
+VALUES ($1, $2, 'running', '{"expected_sizes":["1080x1080"]}'::jsonb, 'manual', $3)
+RETURNING id::text
+`, testWorkspaceID, issueID, testUserID).Scan(&orderID); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _, _ = testPool.Exec(t.Context(), `DELETE FROM creative_order WHERE id = $1`, orderID) })
+	if err := testPool.QueryRow(t.Context(), `
+INSERT INTO creative_order_item (order_id, candidate_id, copy_snapshot, status)
+VALUES ($1, $2, '{}'::jsonb, 'running')
+RETURNING id::text
+`, orderID, candidateID).Scan(&itemID); err != nil {
+		t.Fatal(err)
+	}
+	if err := testPool.QueryRow(t.Context(), `
+INSERT INTO creative_order_variant (order_item_id, variant_key, revision, status)
+VALUES ($1, 'V01', 1, 'running')
+RETURNING id::text
+`, itemID).Scan(&variantID); err != nil {
+		t.Fatal(err)
+	}
+
+	store := &mockStorage{}
+	originalStorage := testHandler.Storage
+	testHandler.Storage = store
+	t.Cleanup(func() { testHandler.Storage = originalStorage })
+	store.put("oss://creative/bad-generated.png", creativeTestPNG(t, 1254, 1254))
+	attachmentID := createCreativeOrderAssetAttachment(t, "bad-generated.png")
+	metadata, evidence := completedGeneratedAssetTrace("dimension mismatch", "req-dimension-mismatch", 1)
+
+	w := httptest.NewRecorder()
+	req := newRequest(http.MethodPut, "/api/creative/orders/"+orderID+"/assets", creativeOrderAssetInput{
+		VariantID: variantID, SizeKey: "1080x1080", Revision: 1, Stage: "generated", Status: "completed",
+		AttachmentID: attachmentID, Metadata: metadata, Evidence: evidence,
+	})
+	req = withURLParam(req, "id", orderID)
+	testHandler.UpsertCreativeOrderAsset(w, req)
+	if w.Code != http.StatusUnprocessableEntity || !strings.Contains(w.Body.String(), "dimensions 1254x1254 do not match 1080x1080") {
+		t.Fatalf("dimension mismatch response = %d %s", w.Code, w.Body.String())
+	}
+}
+
+func creativeTestPNG(t *testing.T, width, height int) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, image.NewRGBA(image.Rect(0, 0, width, height))); err != nil {
+		t.Fatal(err)
+	}
+	return buf.Bytes()
 }
 
 func TestValidateCompletedGeneratedAssetTraceAllowsLegacyFailedCopyValidation(t *testing.T) {
