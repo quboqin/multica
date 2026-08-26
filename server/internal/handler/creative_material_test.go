@@ -126,6 +126,46 @@ RETURNING id::text
 	}
 }
 
+func TestCreativeMaterialsExposeCandidateSourceAttachment(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	issueID := createCreativeDeliveryTestIssue(t, "Material source attachment", "")
+	attachmentID := createCreativeFeedbackAsset(t)
+	var candidateID string
+	if err := testPool.QueryRow(t.Context(), `
+INSERT INTO creative_material_candidate (
+  workspace_id, connector_id, dedupe_key, title, asset_type, source_attachment_id, raw
+) VALUES ($1, 'manual_upload', $2, 'Source attachment candidate', 'image', $3, '{}'::jsonb)
+RETURNING id::text
+`, testWorkspaceID, "source-attachment-"+issueID, attachmentID).Scan(&candidateID); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(t.Context(), `DELETE FROM creative_material_candidate WHERE id = $1`, candidateID)
+	})
+	if _, err := testPool.Exec(t.Context(), `
+INSERT INTO creative_material_issue_candidate (issue_id, candidate_id, workspace_id, status)
+VALUES ($1, $2, $3, 'selected')
+`, issueID, candidateID, testWorkspaceID); err != nil {
+		t.Fatal(err)
+	}
+
+	candidates, err := testHandler.listCreativeCandidates(t.Context(), parseUUID(issueID), parseUUID(testWorkspaceID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, candidate := range candidates {
+		if candidate.ID == candidateID {
+			if candidate.SourceAttachmentID != attachmentID {
+				t.Fatalf("source attachment = %q, want %q", candidate.SourceAttachmentID, attachmentID)
+			}
+			return
+		}
+	}
+	t.Fatalf("candidate %s was not returned", candidateID)
+}
+
 func TestUniqueCreativeMaterialInputsCountsFinalAssets(t *testing.T) {
 	inputs := []creativeMaterialInput{
 		{ResourceURL: "https://cdn.example.com/a.jpg?auth_key=first", AssetType: "image"},

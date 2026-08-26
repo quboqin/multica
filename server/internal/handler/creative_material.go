@@ -688,8 +688,9 @@ SELECT
   c.language_names, c.platform_names, ic.status, c.tags || ic.tags,
   COALESCE(NULLIF(ic.note, ''), c.note),
   COALESCE(ic.selected_at::text, ''), c.first_seen_at::text, c.last_seen_at::text,
-  c.created_at::text, c.updated_at::text
-  , COALESCE(ic.issue_id::text, ''), COALESCE(ic.source_run_id::text, ''),
+  c.created_at::text, c.updated_at::text,
+  COALESCE(c.source_attachment_id::text, ''),
+  COALESCE(ic.issue_id::text, ''), COALESCE(ic.source_run_id::text, ''),
   COALESCE(c.created_at >= cr.created_at, false)
 FROM creative_material_issue_candidate ic
 JOIN creative_material_candidate c ON c.id = ic.candidate_id
@@ -725,6 +726,7 @@ ORDER BY
 			&duration, &impression, &item.MediaNames, &item.AreaNames,
 			&item.LanguageNames, &item.PlatformNames, &item.Status, &item.Tags, &item.Note,
 			&selectedAt, &item.FirstSeenAt, &item.LastSeenAt, &item.CreatedAt, &item.UpdatedAt,
+			&item.SourceAttachmentID,
 			&item.SourceIssueID, &item.SourceRunID, &item.IsNewInRun,
 		); err != nil {
 			return nil, err
