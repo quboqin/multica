@@ -224,12 +224,37 @@ describe("creative material schemas", () => {
   it("parses QC recovery and backend composition blockers", () => {
     const legacy = CreativeOrderItemSchema.parse({ id: "item-1", variants: [{ id: "variant-1" }] });
     expect(legacy.variants[0]).toMatchObject({ qc_recovery_used: false, qc_recovery_available: false });
+    expect(legacy.variants[0]?.active_revision).toBe(0);
+    expect(legacy.variants[0]?.staging_revision).toBe(0);
     expect(legacy.variants[0]?.action_required).toBeUndefined();
     const current = CreativeOrderItemSchema.parse({ id: "item-1", variants: [{ id: "variant-1", qc_recovery_used: true, qc_recovery_available: false, action_required: { task_id: "", workflow: "brand_components", detail: "模板尺寸不匹配", retryable: true } }] });
     expect(current.variants[0]).toMatchObject({ qc_recovery_used: true, qc_recovery_available: false });
     expect(current.variants[0]?.action_required).toMatchObject({ workflow: "brand_components", detail: "模板尺寸不匹配", retryable: true });
     expect(CreativeOrderItemSchema.safeParse({ id: "item-1", variants: [{ id: "variant-1", qc_recovery_used: "yes" }] }).success).toBe(false);
     expect(CreativeOrderItemSchema.safeParse({ id: "item-1", variants: [{ id: "variant-1", action_required: { retryable: "yes" } }] }).success).toBe(false);
+  });
+
+  it("accepts nullable provider diagnostics on image operation attempts", () => {
+    const parsed = CreativeOrderItemSchema.parse({
+      id: "item-1",
+      variants: [{
+        id: "variant-1",
+        image_operations: [{
+          id: "operation-1",
+          attempts: [{ id: "attempt-1", http_status: null, exit_code: null, duration_ms: null }],
+        }],
+      }],
+    });
+
+    expect(parsed.variants[0]?.image_operations?.[0]?.attempts[0]).toMatchObject({
+      http_status: null,
+      exit_code: null,
+      duration_ms: null,
+    });
+    expect(CreativeOrderItemSchema.safeParse({
+      id: "item-1",
+      variants: [{ id: "variant-1", image_operations: [{ id: "operation-1", attempts: [{ http_status: "timeout" }] }] }],
+    }).success).toBe(false);
   });
 
   it("parses direct image edit responses defensively", () => {

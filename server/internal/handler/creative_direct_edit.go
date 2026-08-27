@@ -145,6 +145,7 @@ FOR UPDATE
 
 	snapshotValue := map[string]any{
 		"mode":                 "direct_edit",
+		"pipeline_version":     creativePipelineDirectEditV1,
 		"candidate_id":         input.CandidateID,
 		"source_attachment_id": uuidToString(sourceAttachmentID),
 		"user_request":         input.UserRequest,
@@ -215,17 +216,31 @@ RETURNING id::text, order_id::text, candidate_id::text, COALESCE(source_analysis
 	}
 	brief, _ := json.Marshal(map[string]any{
 		"mode": "direct_edit", "user_request": input.UserRequest, "target_size": input.TargetSize, "delivery_mode": input.DeliveryMode,
+		"creative_direct_edit_delivery": map[string]any{
+			"final_visual_validation": true,
+			"delivery_mode":           input.DeliveryMode,
+			"target_size":             input.TargetSize,
+			"scope":                   "size",
+			"expected_sizes":          []string{input.TargetSize},
+			"raw_user_request":        input.UserRequest,
+		},
 	})
 	variant, err := scanCreativeOrderVariant(tx.QueryRow(r.Context(), `
-INSERT INTO creative_order_variant (order_item_id, variant_key, brief, revision, status)
-VALUES ($1,'direct_edit',$2::jsonb,1,'queued')
-RETURNING id::text, order_item_id::text, variant_key, brief::text, revision, status, false, false, created_at::text, updated_at::text
+	INSERT INTO creative_order_variant (order_item_id, variant_key, brief, revision, status, staging_revision)
+	VALUES ($1,'direct_edit',$2::jsonb,1,'queued',1)
+	RETURNING id::text, order_item_id::text, variant_key, brief::text, revision, status,
+	  COALESCE(active_revision, 0), COALESCE(staging_revision, 0), candidate_state,
+	  COALESCE(selection_rank, 0), primary_size, false, false, created_at::text, updated_at::text
 `, item.ID, brief))
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to create direct image edit variant")
 		return
 	}
 	variant.QCStatus = "pending"
+	if err := upsertCreativeVariantRevision(r.Context(), tx, parseUUID(variant.ID), 1, brief, "queued", []string{input.TargetSize}); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to create direct image edit revision")
+		return
+	}
 	assetMetadata, _ := json.Marshal(map[string]any{
 		"mode": "direct_edit", "role": "source", "source_attachment_id": uuidToString(sourceAttachmentID), "delivery_mode": input.DeliveryMode,
 	})
@@ -233,7 +248,7 @@ RETURNING id::text, order_item_id::text, variant_key, brief::text, revision, sta
 INSERT INTO creative_order_asset (variant_id, size_key, revision, stage, attachment_id, metadata, evidence, status)
 VALUES ($1,$2,1,'generated',$3,$4::jsonb,'{}'::jsonb,'completed')
 RETURNING id::text, variant_id::text, asset_family_id::text, size_key, revision, stage, COALESCE(attachment_id::text, ''),
-  COALESCE(derived_from_asset_id::text, ''), metadata::text, evidence::text, status, created_at::text, updated_at::text
+	  COALESCE(derived_from_asset_id::text, ''), COALESCE(operation_id::text, ''), metadata::text, evidence::text, status, created_at::text, updated_at::text
 `, variant.ID, input.TargetSize, sourceAttachmentID, assetMetadata))
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to create direct image source asset")
@@ -244,6 +259,8 @@ RETURNING id::text, variant_id::text, asset_family_id::text, size_key, revision,
 		return
 	}
 	order.DerivedStatus = "queued"
+	order.DeliveryStatus = "pending"
+	order.ProductionStatus = "queued"
 	h.publishCreativeDomainUpdated(r, workspaceID, userID, map[string]any{"scope": "order", "order_id": order.ID})
 	writeJSON(w, http.StatusCreated, creativeDirectEditResponse{Order: order, Item: item, Variant: variant, SourceAsset: sourceAsset})
 }
@@ -282,7 +299,9 @@ FROM creative_order_item WHERE order_id = $1 ORDER BY created_at LIMIT 1
 		return creativeDirectEditResponse{}, err
 	}
 	variant, err := scanCreativeOrderVariant(tx.QueryRow(r.Context(), `
-SELECT id::text, order_item_id::text, variant_key, brief::text, revision, status, false, false, created_at::text, updated_at::text
+SELECT id::text, order_item_id::text, variant_key, brief::text, revision, status,
+  COALESCE(active_revision, 0), COALESCE(staging_revision, 0), candidate_state,
+  COALESCE(selection_rank, 0), primary_size, false, false, created_at::text, updated_at::text
 FROM creative_order_variant WHERE order_item_id = $1 AND variant_key = 'direct_edit'
 `, parseUUID(item.ID)))
 	if err != nil {
@@ -291,7 +310,7 @@ FROM creative_order_variant WHERE order_item_id = $1 AND variant_key = 'direct_e
 	variant.QCStatus = "pending"
 	sourceAsset, err := scanCreativeOrderAsset(tx.QueryRow(r.Context(), `
 SELECT id::text, variant_id::text, asset_family_id::text, size_key, revision, stage, COALESCE(attachment_id::text, ''),
-  COALESCE(derived_from_asset_id::text, ''), metadata::text, evidence::text, status, created_at::text, updated_at::text
+	  COALESCE(derived_from_asset_id::text, ''), COALESCE(operation_id::text, ''), metadata::text, evidence::text, status, created_at::text, updated_at::text
 FROM creative_order_asset
 WHERE variant_id = $1 AND revision = 1 AND stage = 'generated'
 ORDER BY created_at LIMIT 1
@@ -300,5 +319,7 @@ ORDER BY created_at LIMIT 1
 		return creativeDirectEditResponse{}, err
 	}
 	order.DerivedStatus = order.Status
+	order.DeliveryStatus = "pending"
+	order.ProductionStatus = order.Status
 	return creativeDirectEditResponse{Order: order, Item: item, Variant: variant, SourceAsset: sourceAsset}, nil
 }

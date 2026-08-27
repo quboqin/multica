@@ -331,9 +331,10 @@ func main() {
 	// Start background workers.
 	sweepCtx, sweepCancel := context.WithCancel(context.Background())
 	autopilotCtx, autopilotCancel := context.WithCancel(context.Background())
-	taskSvc := service.NewTaskService(queries, pool, hub, bus, daemonWakeup)
-	taskSvc.Analytics = analyticsClient
-	taskSvc.Metrics = businessMetrics
+	// Reuse the HTTP handler's fully wired task service so runtime-offline and
+	// timeout sweepers execute the same creative terminal reconciliation hooks
+	// as daemon and user-facing task paths.
+	taskSvc := h.TaskService
 	autopilotSvc := service.NewAutopilotService(queries, pool, bus, taskSvc)
 	registerAutopilotListeners(bus, autopilotSvc)
 
@@ -352,6 +353,7 @@ func main() {
 	go runAutopilotScheduler(autopilotCtx, queries, autopilotSvc)
 	go runAutopilotFailureMonitor(autopilotCtx, queries, bus, envFailureMonitorConfig())
 	go runCreativeMaterialArchiver(sweepCtx, h)
+	go runCreativePrimeRecovery(sweepCtx, h)
 	go runDBStatsLogger(sweepCtx, pool)
 
 	// Lark inbound supervisor: holds the §4.4 WS lease per installation

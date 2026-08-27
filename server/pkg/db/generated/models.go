@@ -679,6 +679,54 @@ type CreativeOrderAsset struct {
 	Status             string             `json:"status"`
 	CreatedAt          pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt          pgtype.Timestamptz `json:"updated_at"`
+	OperationID        pgtype.UUID        `json:"operation_id"`
+}
+
+type CreativeImageOperation struct {
+	ID                 pgtype.UUID        `json:"id"`
+	VariantID          pgtype.UUID        `json:"variant_id"`
+	SizeKey            string             `json:"size_key"`
+	Revision           int32              `json:"revision"`
+	OperationKind      string             `json:"operation_kind"`
+	IdempotencyKey     string             `json:"idempotency_key"`
+	Status             string             `json:"status"`
+	Model              string             `json:"model"`
+	RuntimeID          pgtype.UUID        `json:"runtime_id"`
+	TaskID             pgtype.UUID        `json:"task_id"`
+	PromptSha256       string             `json:"prompt_sha256"`
+	InputSnapshot      []byte             `json:"input_snapshot"`
+	ProviderRequestID  string             `json:"provider_request_id"`
+	ResultReceipt      []byte             `json:"result_receipt"`
+	ErrorType          string             `json:"error_type"`
+	ErrorMessage       string             `json:"error_message"`
+	OutputAttachmentID pgtype.UUID        `json:"output_attachment_id"`
+	OutputAssetID      pgtype.UUID        `json:"output_asset_id"`
+	StartedAt          pgtype.Timestamptz `json:"started_at"`
+	CompletedAt        pgtype.Timestamptz `json:"completed_at"`
+	CreatedAt          pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt          pgtype.Timestamptz `json:"updated_at"`
+}
+
+type CreativeImageOperationAttempt struct {
+	ID                 pgtype.UUID        `json:"id"`
+	OperationID        pgtype.UUID        `json:"operation_id"`
+	Attempt            int32              `json:"attempt"`
+	Status             string             `json:"status"`
+	RuntimeID          pgtype.UUID        `json:"runtime_id"`
+	TaskID             pgtype.UUID        `json:"task_id"`
+	ProviderRequestID  string             `json:"provider_request_id"`
+	ProviderStatus     string             `json:"provider_status"`
+	HttpStatus         pgtype.Int4        `json:"http_status"`
+	ExitCode           pgtype.Int4        `json:"exit_code"`
+	ErrorType          string             `json:"error_type"`
+	ErrorMessage       string             `json:"error_message"`
+	ResultReceipt      []byte             `json:"result_receipt"`
+	OutputAttachmentID pgtype.UUID        `json:"output_attachment_id"`
+	DurationMs         pgtype.Int8        `json:"duration_ms"`
+	StartedAt          pgtype.Timestamptz `json:"started_at"`
+	CompletedAt        pgtype.Timestamptz `json:"completed_at"`
+	CreatedAt          pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt          pgtype.Timestamptz `json:"updated_at"`
 }
 
 type CreativeOrderDiagnosticAsset struct {
@@ -725,14 +773,30 @@ type CreativeOrderQcReport struct {
 }
 
 type CreativeOrderVariant struct {
-	ID          pgtype.UUID        `json:"id"`
-	OrderItemID pgtype.UUID        `json:"order_item_id"`
-	VariantKey  string             `json:"variant_key"`
-	Brief       []byte             `json:"brief"`
-	Status      string             `json:"status"`
-	CreatedAt   pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
-	Revision    int32              `json:"revision"`
+	ID              pgtype.UUID        `json:"id"`
+	OrderItemID     pgtype.UUID        `json:"order_item_id"`
+	VariantKey      string             `json:"variant_key"`
+	Brief           []byte             `json:"brief"`
+	Status          string             `json:"status"`
+	CreatedAt       pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt       pgtype.Timestamptz `json:"updated_at"`
+	Revision        int32              `json:"revision"`
+	ActiveRevision  pgtype.Int4        `json:"active_revision"`
+	StagingRevision pgtype.Int4        `json:"staging_revision"`
+	CandidateState  string             `json:"candidate_state"`
+	SelectionRank   pgtype.Int4        `json:"selection_rank"`
+	PrimarySize     string             `json:"primary_size"`
+}
+
+type CreativeOrderVariantRevision struct {
+	VariantID     pgtype.UUID        `json:"variant_id"`
+	Revision      int32              `json:"revision"`
+	Brief         []byte             `json:"brief"`
+	Status        string             `json:"status"`
+	ExpectedSizes []string           `json:"expected_sizes"`
+	ActivatedAt   pgtype.Timestamptz `json:"activated_at"`
+	CreatedAt     pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt     pgtype.Timestamptz `json:"updated_at"`
 }
 
 type CreativeOrderVariantQcResolution struct {

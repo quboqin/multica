@@ -28,6 +28,203 @@ type taskFanoutResponse struct {
 	Tasks []AgentTaskResponse `json:"tasks"`
 }
 
+type creativeFanoutScope struct {
+	orderID    pgtype.UUID
+	itemID     pgtype.UUID
+	variantIDs []pgtype.UUID
+}
+
+func creativeFanoutContextVariantIDs(items []service.DirectTaskFanoutItem) ([]pgtype.UUID, error) {
+	seen := make(map[string]struct{}, len(items))
+	ids := make([]pgtype.UUID, 0, len(items))
+	for _, item := range items {
+		var taskContext struct {
+			VariantID string `json:"variant_id"`
+		}
+		if json.Unmarshal(item.Context, &taskContext) != nil || strings.TrimSpace(taskContext.VariantID) == "" {
+			continue
+		}
+		parsed, err := uuid.Parse(strings.TrimSpace(taskContext.VariantID))
+		if err != nil {
+			return nil, errors.New("creative task context variant_id must be a UUID")
+		}
+		id := parseUUID(parsed.String())
+		key := uuidToString(id)
+		if _, exists := seen[key]; exists {
+			continue
+		}
+		seen[key] = struct{}{}
+		ids = append(ids, id)
+	}
+	return ids, nil
+}
+
+func resolveCreativeFanoutScope(ctx context.Context, tx pgx.Tx, kind string, evidenceID pgtype.UUID, items []service.DirectTaskFanoutItem) (creativeFanoutScope, error) {
+	var scope creativeFanoutScope
+	var err error
+	switch kind {
+	case "creative_order":
+		scope.orderID = evidenceID
+	case "creative_order_item", "creative_order_item_plan", "creative_order_item_production", "creative_order_item_direct_edit":
+		scope.itemID = evidenceID
+		err = tx.QueryRow(ctx, `SELECT order_id FROM creative_order_item WHERE id = $1`, evidenceID).Scan(&scope.orderID)
+	case "creative_variant", "creative_order_variant_qc":
+		scope.variantIDs = []pgtype.UUID{evidenceID}
+		err = tx.QueryRow(ctx, `
+SELECT item.id, item.order_id
+FROM creative_order_variant variant
+JOIN creative_order_item item ON item.id = variant.order_item_id
+WHERE variant.id = $1
+`, evidenceID).Scan(&scope.itemID, &scope.orderID)
+	case "creative_asset":
+		scope.variantIDs = make([]pgtype.UUID, 1)
+		err = tx.QueryRow(ctx, `
+SELECT item.id, item.order_id, variant.id
+FROM creative_order_asset asset
+JOIN creative_order_variant variant ON variant.id = asset.variant_id
+JOIN creative_order_item item ON item.id = variant.order_item_id
+WHERE asset.id = $1
+`, evidenceID).Scan(&scope.itemID, &scope.orderID, &scope.variantIDs[0])
+	case "creative_qc_report":
+		scope.variantIDs = make([]pgtype.UUID, 1)
+		err = tx.QueryRow(ctx, `
+SELECT item.id, item.order_id, variant.id
+FROM creative_order_qc_report report
+JOIN creative_order_variant variant ON variant.id = report.variant_id
+JOIN creative_order_item item ON item.id = variant.order_item_id
+WHERE report.id = $1
+`, evidenceID).Scan(&scope.itemID, &scope.orderID, &scope.variantIDs[0])
+	default:
+		return scope, nil
+	}
+	if errors.Is(err, pgx.ErrNoRows) {
+		return creativeFanoutScope{}, errors.New("creative trigger evidence is unavailable")
+	}
+	if err != nil {
+		return creativeFanoutScope{}, fmt.Errorf("resolve creative task scope: %w", err)
+	}
+	contextVariantIDs, err := creativeFanoutContextVariantIDs(items)
+	if err != nil {
+		return creativeFanoutScope{}, err
+	}
+	seen := make(map[string]struct{}, len(scope.variantIDs)+len(contextVariantIDs))
+	merged := make([]pgtype.UUID, 0, len(scope.variantIDs)+len(contextVariantIDs))
+	for _, id := range append(scope.variantIDs, contextVariantIDs...) {
+		key := uuidToString(id)
+		if !id.Valid || key == "" {
+			continue
+		}
+		if _, exists := seen[key]; exists {
+			continue
+		}
+		seen[key] = struct{}{}
+		merged = append(merged, id)
+	}
+	scope.variantIDs = merged
+	return scope, nil
+}
+
+// lockCreativeFanoutFence serializes task-created children with task/order
+// cancellation. Callers resolve coordinates without locks, then always take
+// task -> order -> item -> variant row locks in that order.
+func lockCreativeFanoutFence(ctx context.Context, tx pgx.Tx, workspaceID pgtype.UUID, kind string, evidenceID pgtype.UUID, items []service.DirectTaskFanoutItem, actorTaskID, actorAgentID pgtype.UUID) error {
+	scope, err := resolveCreativeFanoutScope(ctx, tx, kind, evidenceID, items)
+	if err != nil {
+		return err
+	}
+	if actorTaskID.Valid {
+		var taskOrderID string
+		err := tx.QueryRow(ctx, `
+SELECT COALESCE(task.context->>'creative_order_id', '')
+FROM agent_task_queue task
+JOIN agent assigned_agent ON assigned_agent.id = task.agent_id
+WHERE task.id = $1 AND task.agent_id = $2
+  AND assigned_agent.workspace_id = $3
+  AND task.status IN ('dispatched', 'running')
+FOR UPDATE OF task
+`, actorTaskID, actorAgentID, workspaceID).Scan(&taskOrderID)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return errors.New("delegating task is no longer active")
+		}
+		if err != nil {
+			return fmt.Errorf("lock delegating task: %w", err)
+		}
+		if scope.orderID.Valid && taskOrderID != uuidToString(scope.orderID) {
+			return errors.New("delegating task does not match the creative order")
+		}
+	}
+	if !scope.orderID.Valid {
+		return nil
+	}
+	var orderStatus string
+	if err := tx.QueryRow(ctx, `
+SELECT status FROM creative_order
+WHERE id = $1 AND workspace_id = $2
+FOR UPDATE
+`, scope.orderID, workspaceID).Scan(&orderStatus); errors.Is(err, pgx.ErrNoRows) {
+		return errors.New("creative order is unavailable")
+	} else if err != nil {
+		return fmt.Errorf("lock creative order: %w", err)
+	}
+	if orderStatus == "cancelled" || orderStatus == "completed" {
+		return fmt.Errorf("creative order is %s", orderStatus)
+	}
+	if scope.itemID.Valid {
+		var itemStatus string
+		if err := tx.QueryRow(ctx, `
+SELECT status FROM creative_order_item
+WHERE id = $1 AND order_id = $2
+FOR UPDATE
+`, scope.itemID, scope.orderID).Scan(&itemStatus); errors.Is(err, pgx.ErrNoRows) {
+			return errors.New("creative order item is unavailable")
+		} else if err != nil {
+			return fmt.Errorf("lock creative order item: %w", err)
+		}
+		if itemStatus == "cancelled" {
+			return errors.New("creative order item is cancelled")
+		}
+	}
+	if len(scope.variantIDs) == 0 {
+		return nil
+	}
+	variantTexts := make([]string, 0, len(scope.variantIDs))
+	for _, id := range scope.variantIDs {
+		variantTexts = append(variantTexts, uuidToString(id))
+	}
+	rows, err := tx.Query(ctx, `
+SELECT variant.id::text, variant.status
+FROM creative_order_variant variant
+JOIN creative_order_item item ON item.id = variant.order_item_id
+WHERE variant.id = ANY($1::uuid[])
+  AND item.order_id = $2
+  AND ($3::uuid IS NULL OR item.id = $3)
+ORDER BY variant.id
+FOR UPDATE OF variant
+`, variantTexts, scope.orderID, scope.itemID)
+	if err != nil {
+		return fmt.Errorf("lock creative task variants: %w", err)
+	}
+	defer rows.Close()
+	locked := 0
+	for rows.Next() {
+		var id, status string
+		if err := rows.Scan(&id, &status); err != nil {
+			return fmt.Errorf("read creative task variant: %w", err)
+		}
+		locked++
+		if status == "cancelled" {
+			return errors.New("creative order variant is cancelled")
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("read creative task variants: %w", err)
+	}
+	if locked != len(scope.variantIDs) {
+		return errors.New("creative task variant does not belong to the trigger scope")
+	}
+	return nil
+}
+
 func (h *Handler) FanoutAgentTasks(w http.ResponseWriter, r *http.Request) {
 	agent, ok := h.loadAgentForUser(w, r, chi.URLParam(r, "agentId"))
 	if !ok {
@@ -72,8 +269,16 @@ func (h *Handler) FanoutAgentTasks(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	var actorTaskID, actorAgentID pgtype.UUID
+	if r.Header.Get("X-Actor-Source") == "task_token" {
+		actorTaskID = attr.DelegatedFromTaskID
+		actorAgentID, ok = parseUUIDOrBadRequest(w, r.Header.Get("X-Agent-ID"), "agent_id")
+		if !ok {
+			return
+		}
+	}
 	if evidenceKind == "creative_order_item_production" {
-		tasks, err := h.enqueueCreativeProductionFanout(r.Context(), agent.WorkspaceID, evidenceRefID, req.Items, attr, requestingUserID)
+		tasks, err := h.enqueueCreativeProductionFanout(r.Context(), agent.WorkspaceID, evidenceRefID, req.Items, attr, requestingUserID, actorTaskID, actorAgentID)
 		if err != nil {
 			writeError(w, http.StatusBadRequest, err.Error())
 			return
@@ -93,14 +298,20 @@ func (h *Handler) FanoutAgentTasks(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	tasks, err := h.TaskService.EnqueueDirectTaskFanout(r.Context(), service.DirectTaskFanout{
+	fanout := service.DirectTaskFanout{
 		Agent:                agent,
 		RequestingUserID:     requestingUserID,
 		Attribution:          attr,
 		TriggerEvidenceKind:  evidenceKind,
 		TriggerEvidenceRefID: evidenceRefID,
 		Items:                req.Items,
-	})
+	}
+	var tasks []db.AgentTaskQueue
+	if strings.HasPrefix(evidenceKind, "creative_") {
+		tasks, err = h.enqueueDirectTaskFanoutWithCreativeFence(r.Context(), agent.WorkspaceID, fanout, actorTaskID, actorAgentID)
+	} else {
+		tasks, err = h.TaskService.EnqueueDirectTaskFanout(r.Context(), fanout)
+	}
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
@@ -108,14 +319,13 @@ func (h *Handler) FanoutAgentTasks(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, taskFanoutResponse{Tasks: h.directTaskResponses(r, tasks, uuidToString(agent.WorkspaceID))})
 }
 
-func (h *Handler) enqueueCreativeProductionFanout(ctx context.Context, workspaceID, orderItemID pgtype.UUID, items []service.DirectTaskFanoutItem, attr attribution.Result, requestingUserID pgtype.UUID) ([]db.AgentTaskQueue, error) {
-	if h.TaskService == nil {
-		return nil, errors.New("creative production task service is unavailable")
-	}
-	groups := map[string]struct {
-		agent db.Agent
-		items []service.DirectTaskFanoutItem
-	}{}
+type creativeProductionFanoutGroup struct {
+	agent db.Agent
+	items []service.DirectTaskFanoutItem
+}
+
+func (h *Handler) prepareCreativeProductionFanout(ctx context.Context, workspaceID, orderItemID pgtype.UUID, items []service.DirectTaskFanoutItem) ([]creativeProductionFanoutGroup, error) {
+	groups := map[string]creativeProductionFanoutGroup{}
 	order := make([]string, 0, len(items))
 	for _, item := range items {
 		agent, normalized, err := h.selectCreativeProductionAgentForFanoutItem(ctx, workspaceID, orderItemID, item)
@@ -131,11 +341,18 @@ func (h *Handler) enqueueCreativeProductionFanout(ctx context.Context, workspace
 		group.items = append(group.items, normalized)
 		groups[key] = group
 	}
-
-	tasks := make([]db.AgentTaskQueue, 0, len(items))
+	prepared := make([]creativeProductionFanoutGroup, 0, len(order))
 	for _, key := range order {
-		group := groups[key]
-		created, err := h.TaskService.EnqueueDirectTaskFanout(ctx, service.DirectTaskFanout{
+		prepared = append(prepared, groups[key])
+	}
+	return prepared, nil
+}
+
+func (h *Handler) enqueueCreativeProductionFanoutTx(ctx context.Context, tx pgx.Tx, orderItemID pgtype.UUID, groups []creativeProductionFanoutGroup, attr attribution.Result, requestingUserID pgtype.UUID) ([]db.AgentTaskQueue, []db.AgentTaskQueue, error) {
+	tasks := make([]db.AgentTaskQueue, 0)
+	created := make([]db.AgentTaskQueue, 0)
+	for _, group := range groups {
+		groupTasks, groupCreated, err := h.TaskService.EnqueueDirectTaskFanoutTx(ctx, tx, service.DirectTaskFanout{
 			Agent:                group.agent,
 			RequestingUserID:     requestingUserID,
 			Attribution:          attr,
@@ -144,10 +361,58 @@ func (h *Handler) enqueueCreativeProductionFanout(ctx context.Context, workspace
 			Items:                group.items,
 		})
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
-		tasks = append(tasks, created...)
+		tasks = append(tasks, groupTasks...)
+		created = append(created, groupCreated...)
 	}
+	return tasks, created, nil
+}
+
+func (h *Handler) enqueueCreativeProductionFanout(ctx context.Context, workspaceID, orderItemID pgtype.UUID, items []service.DirectTaskFanoutItem, attr attribution.Result, requestingUserID, actorTaskID, actorAgentID pgtype.UUID) ([]db.AgentTaskQueue, error) {
+	if h.TaskService == nil {
+		return nil, errors.New("creative production task service is unavailable")
+	}
+	groups, err := h.prepareCreativeProductionFanout(ctx, workspaceID, orderItemID, items)
+	if err != nil {
+		return nil, err
+	}
+	tx, err := h.TxStarter.Begin(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("begin creative production fanout: %w", err)
+	}
+	defer tx.Rollback(ctx)
+	if err := lockCreativeFanoutFence(ctx, tx, workspaceID, "creative_order_item_production", orderItemID, items, actorTaskID, actorAgentID); err != nil {
+		return nil, err
+	}
+	tasks, created, err := h.enqueueCreativeProductionFanoutTx(ctx, tx, orderItemID, groups, attr, requestingUserID)
+	if err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("commit creative production fanout: %w", err)
+	}
+	h.TaskService.NotifyDirectTaskFanoutEnqueued(ctx, created)
+	return tasks, nil
+}
+
+func (h *Handler) enqueueDirectTaskFanoutWithCreativeFence(ctx context.Context, workspaceID pgtype.UUID, fanout service.DirectTaskFanout, actorTaskID, actorAgentID pgtype.UUID) ([]db.AgentTaskQueue, error) {
+	tx, err := h.TxStarter.Begin(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("begin creative task fanout: %w", err)
+	}
+	defer tx.Rollback(ctx)
+	if err := lockCreativeFanoutFence(ctx, tx, workspaceID, fanout.TriggerEvidenceKind, fanout.TriggerEvidenceRefID, fanout.Items, actorTaskID, actorAgentID); err != nil {
+		return nil, err
+	}
+	tasks, created, err := h.TaskService.EnqueueDirectTaskFanoutTx(ctx, tx, fanout)
+	if err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("commit creative task fanout: %w", err)
+	}
+	h.TaskService.NotifyDirectTaskFanoutEnqueued(ctx, created)
 	return tasks, nil
 }
 
@@ -217,7 +482,7 @@ func (h *Handler) normalizeCreativeTaskFanoutItems(ctx context.Context, workspac
 }
 
 func (h *Handler) validateCreativeTaskFanoutExpectedSizes(ctx context.Context, workspaceID pgtype.UUID, kind string, evidenceRefID pgtype.UUID, items []service.DirectTaskFanoutItem) error {
-	if kind != "creative_order_item_production" && kind != "creative_order_variant_qc" && kind != "manual" {
+	if kind != "creative_order_item_production" && kind != "creative_order_item_direct_edit" && kind != "creative_order_variant_qc" && kind != "manual" {
 		return nil
 	}
 
@@ -257,18 +522,41 @@ func (h *Handler) validateCreativeTaskFanoutExpectedSizes(ctx context.Context, w
 }
 
 func creativeFanoutVariantExpectedSizes(ctx context.Context, q creativeTaskFanoutQuerier, workspaceID pgtype.UUID, kind string, evidenceRefID, variantID pgtype.UUID) ([]string, error) {
-	var triggerKind, inputSnapshot, brief string
+	var triggerKind, inputSnapshot, brief, candidateState, primarySize string
 	var err error
-	if kind == "creative_order_item_production" || kind == "manual" {
+	if kind == "creative_order_item_production" {
 		err = q.QueryRow(ctx, `
-SELECT order_row.trigger_evidence_kind, order_row.input_snapshot::text, variant.brief::text
+SELECT order_row.trigger_evidence_kind, order_row.input_snapshot::text, variant.brief::text,
+       variant.candidate_state, variant.primary_size
 FROM creative_order_variant variant
 JOIN creative_order_item item ON item.id = variant.order_item_id
 JOIN creative_order order_row ON order_row.id = item.order_id
 WHERE variant.id = $1
   AND item.id = $2
   AND order_row.workspace_id = $3
-`, variantID, evidenceRefID, workspaceID).Scan(&triggerKind, &inputSnapshot, &brief)
+`, variantID, evidenceRefID, workspaceID).Scan(&triggerKind, &inputSnapshot, &brief, &candidateState, &primarySize)
+	} else if kind == "manual" {
+		err = q.QueryRow(ctx, `
+SELECT order_row.trigger_evidence_kind, order_row.input_snapshot::text, variant.brief::text,
+       variant.candidate_state, variant.primary_size
+FROM creative_order_variant variant
+JOIN creative_order_item item ON item.id = variant.order_item_id
+JOIN creative_order order_row ON order_row.id = item.order_id
+WHERE variant.id = $1
+  AND order_row.id = $2
+  AND order_row.workspace_id = $3
+`, variantID, evidenceRefID, workspaceID).Scan(&triggerKind, &inputSnapshot, &brief, &candidateState, &primarySize)
+	} else if kind == "creative_order_item_direct_edit" {
+		err = q.QueryRow(ctx, `
+SELECT order_row.trigger_evidence_kind, order_row.input_snapshot::text, variant.brief::text,
+       variant.candidate_state, variant.primary_size
+FROM creative_order_variant variant
+JOIN creative_order_item item ON item.id = variant.order_item_id
+JOIN creative_order order_row ON order_row.id = item.order_id
+WHERE variant.id = $1
+  AND item.id = $2
+  AND order_row.workspace_id = $3
+`, variantID, evidenceRefID, workspaceID).Scan(&triggerKind, &inputSnapshot, &brief, &candidateState, &primarySize)
 	} else {
 		err = q.QueryRow(ctx, `
 SELECT order_row.trigger_evidence_kind, order_row.input_snapshot::text, variant.brief::text
@@ -291,7 +579,18 @@ WHERE variant.id = $1
 		}
 		return nil, errors.New("failed to validate creative production task variant")
 	}
-	expectedSizes, err := expectedCreativeVariantSizes(triggerKind, json.RawMessage(inputSnapshot), json.RawMessage(brief))
+	var expectedSizes []string
+	if kind == "creative_order_item_production" || kind == "manual" {
+		expectedSizes, err = expectedCreativeVariantProductionSizes(
+			triggerKind,
+			json.RawMessage(inputSnapshot),
+			json.RawMessage(brief),
+			candidateState,
+			primarySize,
+		)
+	} else {
+		expectedSizes, err = expectedCreativeVariantSizes(triggerKind, json.RawMessage(inputSnapshot), json.RawMessage(brief))
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -384,7 +683,11 @@ WHERE variant.id = $1
 	taskContext["revision"], _ = json.Marshal(revision)
 	taskContext["item_key"], _ = json.Marshal(canonicalItemKey)
 	if _, ok := taskContext["expected_sizes"]; !ok || jsonArrayLength(taskContext["expected_sizes"]) == 0 {
-		taskContext["expected_sizes"], _ = json.Marshal(standardCreativeAssetSizes)
+		expectedSizes, err := creativeFanoutVariantExpectedSizes(ctx, q, workspaceID, "creative_order_item_production", orderItemID, variantID)
+		if err != nil {
+			return item, err
+		}
+		taskContext["expected_sizes"], _ = json.Marshal(expectedSizes)
 	}
 	if _, adjustment := taskContext["order_adjustment"]; adjustment {
 		var orderAdjustment struct {
@@ -487,7 +790,11 @@ WHERE variant.id = $1
 	taskContext["revision"], _ = json.Marshal(revision)
 	taskContext["item_key"], _ = json.Marshal(canonicalItemKey)
 	if _, ok := taskContext["expected_sizes"]; !ok || jsonArrayLength(taskContext["expected_sizes"]) == 0 {
-		taskContext["expected_sizes"], _ = json.Marshal(standardCreativeAssetSizes)
+		expectedSizes, err := creativeFanoutVariantExpectedSizes(ctx, q, workspaceID, "manual", orderID, variantID)
+		if err != nil {
+			return item, err
+		}
+		taskContext["expected_sizes"], _ = json.Marshal(expectedSizes)
 	}
 	if _, adjustment := taskContext["order_adjustment"]; adjustment {
 		var orderAdjustment struct {
@@ -761,6 +1068,9 @@ func validateCreativeDirectEditTaskContext(context map[string]any, itemKey strin
 	if deliveryMode != "preview" && deliveryMode != "publish" {
 		return errors.New("creative direct-edit task context delivery_mode is invalid")
 	}
+	if finalVisualValidation, ok := context["final_visual_validation"].(bool); deliveryMode == "publish" && (!ok || !finalVisualValidation) {
+		return errors.New("creative direct-edit publish task requires final_visual_validation")
+	}
 	sourceRevision, ok := context["source_revision"].(float64)
 	if !ok || sourceRevision < 1 || sourceRevision != float64(int(sourceRevision)) || int(sourceRevision) != int(revision)-1 {
 		return errors.New("creative direct-edit task context source_revision is invalid")
@@ -929,11 +1239,55 @@ func (h *Handler) RetryFailedAgentTasksBySource(w http.ResponseWriter, r *http.R
 	if !h.canAccessDirectTaskSource(w, r, agent) {
 		return
 	}
-	retried, err := h.TaskService.RetryFailedDirectTasksByEvidence(r.Context(), agent.ID, kind, refID)
+	if !strings.HasPrefix(kind, "creative_") {
+		retried, err := h.TaskService.RetryFailedDirectTasksByEvidence(r.Context(), agent.ID, kind, refID)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusCreated, taskFanoutResponse{Tasks: h.directTaskResponses(r, retried, uuidToString(agent.WorkspaceID))})
+		return
+	}
+	priorTasks, err := h.TaskService.ListDirectTasksByEvidence(r.Context(), agent.ID, kind, refID, "")
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to load creative tasks for retry")
+		return
+	}
+	scopeItems := make([]service.DirectTaskFanoutItem, 0, len(priorTasks))
+	for _, task := range priorTasks {
+		scopeItems = append(scopeItems, service.DirectTaskFanoutItem{Context: task.Context})
+	}
+	var actorTaskID, actorAgentID pgtype.UUID
+	if r.Header.Get("X-Actor-Source") == "task_token" {
+		actorTaskID, ok = parseUUIDOrBadRequest(w, r.Header.Get("X-Task-ID"), "task_id")
+		if !ok {
+			return
+		}
+		actorAgentID, ok = parseUUIDOrBadRequest(w, r.Header.Get("X-Agent-ID"), "agent_id")
+		if !ok {
+			return
+		}
+	}
+	tx, err := h.TxStarter.Begin(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to start creative task retry")
+		return
+	}
+	defer tx.Rollback(r.Context())
+	if err := lockCreativeFanoutFence(r.Context(), tx, agent.WorkspaceID, kind, refID, scopeItems, actorTaskID, actorAgentID); err != nil {
+		writeError(w, http.StatusConflict, err.Error())
+		return
+	}
+	retried, err := h.TaskService.RetryFailedDirectTasksByEvidenceTx(r.Context(), tx, agent.ID, kind, refID)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	if err := tx.Commit(r.Context()); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to commit creative task retry")
+		return
+	}
+	h.TaskService.NotifyDirectTaskFanoutEnqueued(r.Context(), retried)
 	writeJSON(w, http.StatusCreated, taskFanoutResponse{Tasks: h.directTaskResponses(r, retried, uuidToString(agent.WorkspaceID))})
 }
 

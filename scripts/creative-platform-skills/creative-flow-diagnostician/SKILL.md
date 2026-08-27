@@ -22,7 +22,7 @@ allowed-tools: Bash(multica *), Bash(powershell *)
 
 - `creative_crawl_diagnosis`：只处理 task context 指定的 Crawl Run、连接器和结构化 diagnostics。
 - 用户给 `order_id`：读取 `multica creative order get <order-id> --output json`，围绕当前订单诊断。
-- 用户给订单短 ID、`V01/V02/V03`、页面卡片文案或截图里的报错：先定位当前 Creative Order、order item、
+- 用户给订单短 ID、`C01`-`C05`、页面卡片文案或截图里的报错：先定位当前 Creative Order、order item、
   Variant、revision 和最近任务，再解释卡住步骤。
 - 用户给 `variant_id`、`task_id` 或错误文本：先定位 Creative Order、Agent、source kind/ref 和当前 revision。
 - 用户问 daemon、账号或模型调用记录：区分 daemon profile、Agent runtime、Agent custom env 和外部模型账号。
@@ -43,7 +43,7 @@ allowed-tools: Bash(multica *), Bash(powershell *)
 - 取消同一 trigger evidence 下确认重复或卡死的 active task。
 - 为缺失的当前 revision item 重新 fanout，manifest 必须携带 order、item、variant、candidate、revision、
   expected_sizes 和下一阶段 Agent。
-- 通过 `creative order variant-put` 推进用户明确要求重跑的 Variant revision；不得覆盖新 revision。
+- 通过平台已有的 workflow failure retry、精准调整、Prime/QC 恢复或候补晋级入口处理；Variant revision 只由这些领域事务创建，诊断智能体不得用 `variant-put` 自行加 revision。
 - 使用平台已有的 Prime 修复、QC 重试或 workflow failure retry 入口；若接口要求 human actor，就回报需要用户点击。
 
 修改前要说明将改哪个对象和原因；修改后必须回读订单或 task 列表确认结果。
@@ -55,14 +55,14 @@ allowed-tools: Bash(multica *), Bash(powershell *)
   和 `variant_id` 精确选中当前 item。
 - “用最新的不就行了吗”类：标准订单使用冻结 `input_snapshot`、`copy_snapshot`、source analysis 和 market
   snapshot。只有用户明确要求重新规划或重新生成，才把 Variant 推进到新 revision；不能偷偷读取最新文案库替换冻结事实。
-- V01/V02/V03 重跑类：先看当前 Variant revision、当前 revision 资产数、workflow_failures 是否属于当前
-  revision，以及是否已有 active/succeeded task。需要重跑时推进 revision，再 fanout 新 item key。
+- C01-C05 重跑类：先看候选状态、active/staging revision、尺寸级 image operation、workflow_failures 是否属于当前
+  staging revision，以及是否已有 active/succeeded task。需要恢复时只调用对应平台入口；不得自行推进 revision 或为 reserve 重复生产。
 - 出图账号类：daemon profile 负责领取任务；图片模型账号来自出图/改图 Agent 的 image provider env。
   看到外部账号只有 image 调用记录是正常信号，不代表整个 daemon 只执行 image。
 - fanout 空或停住类：fanout accepted 不等于完成。要同时看 direct task 队列、daemon active_task_count、
   Agent runtime_id、source kind/ref 和 item_key；不要把“当前 Prime fanout 任务为空”当成整单无工作。
 - Prime/QC 类：generated、primed、delivered asset 必须匹配同一 variant/revision/expected_sizes。
-  旧 revision 或过程图片不能当成当前交付资产。只有真实 Prime 遮挡或官方文字不可读可自动定向返工一次；
+  旧 revision 或过程图片不能当成当前交付资产。只有真实 Prime 遮挡或官方文字不可读可按平台预算自动定向返工；
   关键内容缺失和其他 QC 失败仍需人工决定。
 - 过程图片类：只读取订单返回的 diagnostic assets；它们来自 attachment 存储并已登记归属，只能用于解释停止原因，
   不能登记为资产、不能进入 Prime、不能交付。未登记的本地模型输出不再是平台可见数据。

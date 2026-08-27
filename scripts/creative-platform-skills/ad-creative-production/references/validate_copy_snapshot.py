@@ -34,7 +34,7 @@ PRIME_GUARD_TERMS = {
 }
 SEMANTIC_PRIME_GUARD_TERMS = {
     "unbranded_base": ("unbranded base", "unbranded visual base", "unbranded"),
-    "prime_overlay": ("deterministic official prime composition", "official overlay", "official prime overlay"),
+    "prime_overlay": ("deterministic official prime composition", "official overlay", "official prime overlay", "official prime"),
     "prime_guide": ("input 2 is the current-size official prime visual context",),
     "guide_no_draw": (
         "never draw prime",
@@ -45,17 +45,19 @@ SEMANTIC_PRIME_GUARD_TERMS = {
     "no_logo": ("logo", "标识"),
     "no_qr": ("qr", "二维码"),
     "no_footer": ("footer", "legal text", "regulatory", "法律", "监管"),
-    "protected_bands": ("protected prime bands", "protected top and bottom bands", "protected bands"),
+    "protected_bands": ("protected prime bands", "protected top and bottom bands", "future component areas", "future prime component areas"),
     "business_avoidance": (
         "all business content in the middle content area between the protected prime bands",
         "no business content enters the protected bands",
         "keep every module and keep it out of the protected bands",
+        "keep its future component areas clear of business content",
     ),
     "natural_background": ("background", "continuous background", "low-detail"),
 }
 SEMANTIC_REDESIGN_GUARD_TERMS = {
     "reference_structure_only": (
         "use it only for business structure",
+        "used only for business structure",
         "use it only for structure",
         "reference structure",
         "visual anchors",
@@ -67,6 +69,7 @@ SEMANTIC_REDESIGN_GUARD_TERMS = {
         "competitor wording",
         "no competitor",
         "source identity",
+        "redesign the source identity",
     ),
     "change_high_salience_identity": (
         "reimagine",
@@ -155,27 +158,35 @@ REQUIRED_PROMPT_TERMS = {
     "body_coordinate_semantics": ("coordinate grammar", "坐标语义"),
 }
 SEMANTIC_REQUIRED_PROMPT_SECTIONS = (
-    "COMPOSITION GATE",
-    "INPUTS",
     "TASK",
-    "VISUAL INHERITANCE",
-    "APPROVED COPY AND TABLE",
-    "VARIANT DIRECTION",
-    "PRIME INTEGRATION",
-    "FINAL CHECK",
+    "INPUT ROLES",
+    "LOCKED DESIGN DNA",
+    "EDITABLE LAYOUT",
+    "APPROVED COPY",
+    "PRIME SUPPORT",
+    "ACCEPTANCE",
 )
 SEMANTIC_REQUIRED_PROMPT_TERMS = {
     "input_roles": ("input 1", "input 2"),
-    "protected_bands": ("protected prime bands", "protected top and bottom bands"),
-    "approved_copy": ("approved copy and table", "approved_copy"),
-    "prime_context": ("official prime visual context", "official overlay"),
+    "design_dna": ("design dna", "designdna"),
+    "approved_copy": ("render every approved string", "approved copy"),
+    "prime_context": ("current-size official prime visual context",),
+    "model_rendered_text": ("render every approved string", "render all approved copy"),
+}
+MODEL_PROMPT_PROTOCOL_TERMS = {
+    "task_or_revision": ("task_id", "task id", "multica_task_id", "revision"),
+    "attachment_or_lineage": ("attachment_id", "attachment id", "lineage"),
+    "request_or_hash": ("request_id", "request id", "prompt_sha256", "sha256"),
+    "workflow_command": ("multica ", "asset-put", "diagnostic-asset-put", "--result-file", "--output-file"),
+    "workflow_control": ("retry", "timeout", "upload", "json"),
+    "runtime_path": ("/app/", "<workdir>", "file path"),
 }
 PROMPT_SEGMENT_PATTERN = re.compile(r"[\n.;。]+")
 SIZE_PATTERN = re.compile(r"(?P<width>[1-9]\d*)x(?P<height>[1-9]\d*)", re.IGNORECASE)
-PROMPT_TARGET_MIN_CHARS = 1800
-PROMPT_TARGET_MAX_CHARS = 3200
-PROMPT_COMPLEX_SOFT_MAX_CHARS = 4200
-MAX_PROMPT_CHARS = 4800
+PROMPT_TARGET_MIN_CHARS = 900
+PROMPT_TARGET_MAX_CHARS = 1800
+PROMPT_COMPLEX_SOFT_MAX_CHARS = 2800
+MAX_PROMPT_CHARS = 3600
 
 
 def digits(value: str) -> str:
@@ -203,7 +214,7 @@ def financial_tokens(value: str) -> set[str]:
 def visible_prompt_financial_tokens(prompt: str) -> set[str]:
     """Extract financial facts only from sections the model may render."""
     sections = re.findall(
-        r"(?:^|\n)(APPROVED TEXT|TABLE):\n(.*?)(?=\n[A-Z][A-Z _-]+:\n|\Z)",
+        r"(?:^|\n)(APPROVED TEXT|APPROVED COPY|TABLE):\n(.*?)(?=\n[A-Z][A-Z _-]+:?\n|\Z)",
         prompt,
         flags=re.DOTALL,
     )
@@ -472,9 +483,10 @@ def validate_prime_prompt_guard(prompt: str, layouts: list[dict[str, Any]]) -> l
 def uses_coordinate_free_prime_contract(prompt: str) -> bool:
     normalized = re.sub(r"\s+", " ", prompt.casefold())
     return (
-        "composition gate" in normalized
+        "input roles" in normalized
+        and "locked design dna" in normalized
+        and "prime support" in normalized
         and "input 2 is the current-size official prime visual context" in normalized
-        and "protected prime bands" in normalized
     )
 
 
@@ -520,6 +532,9 @@ def validate_concise_prompt(prompt: str) -> list[str]:
     for key, terms in required_terms.items():
         if not text_has_any(prompt, terms):
             debt.append(f"missing_term:{key}")
+    for key, terms in MODEL_PROMPT_PROTOCOL_TERMS.items():
+        if text_has_any(prompt, terms):
+            debt.append(f"non_visual_protocol_term:{key}")
 
     normalized_counts: dict[str, int] = {}
     for raw_segment in PROMPT_SEGMENT_PATTERN.split(prompt):
@@ -683,6 +698,18 @@ def build_repair_guidance(
             }
             item.update(line_info(prompt, snippet[:48]))
             guidance.append(item)
+            continue
+        if debt.startswith("non_visual_protocol_term:"):
+            requirement = debt.split(":", 1)[1]
+            guidance.append(
+                {
+                    **prefix,
+                    "rule": "non_visual_protocol_term",
+                    "requirement": requirement,
+                    "message": "Model prompt contains workflow or transaction protocol that cannot change pixels.",
+                    "fix": "Remove task, revision, file, hash, request, upload, retry, timeout, JSON, CLI, and lineage instructions from model-facing text.",
+                }
+            )
             continue
         guidance.append(
             {

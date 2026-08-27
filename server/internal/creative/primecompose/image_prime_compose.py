@@ -14,10 +14,14 @@ from PIL import Image
 
 
 PACKAGE_CONTRACT_VERSION = 6
-ENGINE_VERSION = 5
+ENGINE_VERSION = 6
 MAX_TEMPLATE_ASPECT_DEVIATION = 0.002
 SIZE_PATTERN = re.compile(r"^[1-9]\d*x[1-9]\d*$", re.IGNORECASE)
 MINIMUM_TEMPLATE_READABILITY_CONTRAST = 24.0
+MINIMUM_RELATIVE_LUMINANCE_CONTRAST = 3.0
+MINIMUM_BACKGROUND_POLARITY_MATCH = 0.90
+MAX_BACKGROUND_TEXTURE_P90 = 0.18
+MINIMUM_COMPONENT_ALPHA = 0.35
 MAX_BRIGHT_OPAQUE_TILE_COVERAGE = 0.45
 BRIGHT_TEMPLATE_LUMINANCE = 235.0
 
@@ -187,45 +191,190 @@ def visible_template_contrast(body: np.ndarray, template: Image.Image, y_start: 
     return float(np.average(difference[visible], weights=alpha[visible])), int(np.count_nonzero(visible))
 
 
+def relative_luminance(rgb: np.ndarray) -> np.ndarray:
+    srgb = np.clip(rgb.astype(np.float32) / 255.0, 0.0, 1.0)
+    linear = np.where(srgb <= 0.04045, srgb / 12.92, ((srgb + 0.055) / 1.055) ** 2.4)
+    return 0.2126 * linear[:, :, 0] + 0.7152 * linear[:, :, 1] + 0.0722 * linear[:, :, 2]
+
+
+def weighted_percentile(values: np.ndarray, weights: np.ndarray, percentile: float) -> float:
+    if values.size == 0:
+        return 0.0
+    order = np.argsort(values)
+    ordered_values = values[order]
+    ordered_weights = weights[order]
+    total = float(np.sum(ordered_weights))
+    if total <= 0.0:
+        return float(np.percentile(ordered_values, percentile))
+    cumulative = np.cumsum(ordered_weights)
+    index = int(np.searchsorted(cumulative, total * percentile / 100.0, side="left"))
+    return float(ordered_values[min(index, ordered_values.size - 1)])
+
+
 def key_template_bands(layout: dict[str, Any], height: int) -> list[tuple[str, int, int]]:
     bands = [("header", 0, int(layout["top_key_content_exclusion_end"])), ("footer", int(layout["bottom_key_content_exclusion_start"]), height)]
     return [(name, start, end) for name, start, end in bands if end > start]
 
 
-def local_template_visibility(body: np.ndarray, template: Image.Image, layout: dict[str, Any]) -> dict[str, Any]:
+def template_component_mask(template: Image.Image, layout: dict[str, Any]) -> tuple[np.ndarray, dict[str, Any]]:
     rgba = np.asarray(template.convert("RGBA"), dtype=np.float32)
-    body_rgb = body.astype(np.float32)
+    height, width = rgba.shape[:2]
+    alpha = rgba[:, :, 3] / 255.0
+    band_mask = np.zeros((height, width), dtype=bool)
+    for _, start, end in key_template_bands(layout, height):
+        band_mask[start:end, :] = True
+    visible = (alpha >= MINIMUM_COMPONENT_ALPHA) & band_mask
+    if not np.any(visible):
+        return visible, {
+            "source": "template_alpha_and_dominant_foreground_polarity",
+            "alpha_threshold": MINIMUM_COMPONENT_ALPHA,
+            "visible_pixels": 0,
+            "coverage": 0.0,
+            "foreground_polarity": "unknown",
+            "foreground_relative_luminance_median": 0.0,
+        }
+    luminance = relative_luminance(rgba[:, :, :3])
+    median = weighted_percentile(luminance[visible], alpha[visible], 50.0)
+    polarity = "light" if median >= 0.5 else "dark"
+    if polarity == "light":
+        component = visible & (luminance >= max(0.5, median - 0.25))
+    else:
+        component = visible & (luminance <= min(0.5, median + 0.25))
+    component_pixels = int(np.count_nonzero(component))
+    return component, {
+        "source": "template_alpha_and_dominant_foreground_polarity",
+        "alpha_threshold": MINIMUM_COMPONENT_ALPHA,
+        "visible_pixels": component_pixels,
+        "coverage": round(component_pixels / float(height * width), 8),
+        "all_visible_template_pixels": int(np.count_nonzero(visible)),
+        "foreground_polarity": polarity,
+        "foreground_relative_luminance_median": round(
+            weighted_percentile(luminance[component], alpha[component], 50.0), 6
+        ) if component_pixels else 0.0,
+    }
+
+
+def background_texture_map(luminance: np.ndarray) -> np.ndarray:
+    horizontal = np.zeros_like(luminance)
+    vertical = np.zeros_like(luminance)
+    horizontal[:, 1:] = np.abs(luminance[:, 1:] - luminance[:, :-1])
+    vertical[1:, :] = np.abs(luminance[1:, :] - luminance[:-1, :])
+    return np.maximum(horizontal, vertical)
+
+
+def classify_background_polarity(luminance: float) -> str:
+    if luminance <= 0.35:
+        return "dark"
+    if luminance >= 0.65:
+        return "light"
+    return "midtone"
+
+
+def analyze_visible_component_support(body: np.ndarray, template: Image.Image, layout: dict[str, Any]) -> dict[str, Any]:
+    rgba = np.asarray(template.convert("RGBA"), dtype=np.float32)
+    alpha = rgba[:, :, 3] / 255.0
+    body_luminance = relative_luminance(body)
+    composited_rgb = rgba[:, :, :3] * alpha[:, :, None] + body.astype(np.float32) * (1.0 - alpha[:, :, None])
+    foreground_luminance = relative_luminance(composited_rgb)
+    texture = background_texture_map(body_luminance)
+    component_mask, mask_evidence = template_component_mask(template, layout)
+    foreground_polarity = mask_evidence["foreground_polarity"]
+    if foreground_polarity == "light":
+        support_requirement = "dark_low_texture"
+    elif foreground_polarity == "dark":
+        support_requirement = "light_low_texture"
+    else:
+        support_requirement = "unknown"
     height, width = body.shape[:2]
     samples: list[dict[str, Any]] = []
+    total_component_pixels = int(np.count_nonzero(component_mask))
+    minimum_sample_pixels = max(1, int(total_component_pixels * 0.005))
     for band_name, start, end in key_template_bands(layout, height):
-        alpha = rgba[start:end, :, 3] / 255.0
         for tile_index, tile in enumerate(np.array_split(np.arange(width), 4)):
             if tile.size == 0:
                 continue
             left, right = int(tile[0]), int(tile[-1]) + 1
-            tile_alpha = alpha[:, left:right]
-            visible = tile_alpha > 0.03
-            visible_pixels = int(np.count_nonzero(visible))
-            if visible_pixels < max(12, int(tile_alpha.size * 0.01)):
+            local_mask = component_mask[start:end, left:right]
+            visible_pixels = int(np.count_nonzero(local_mask))
+            if visible_pixels < minimum_sample_pixels:
                 continue
-            template_rgb = rgba[start:end, left:right, :3]
-            difference = np.linalg.norm(body_rgb[start:end, left:right] - template_rgb, axis=2)
-            score = float(np.average(difference[visible], weights=tile_alpha[visible]))
+            local_weights = alpha[start:end, left:right][local_mask]
+            local_foreground = foreground_luminance[start:end, left:right][local_mask]
+            local_background = body_luminance[start:end, left:right][local_mask]
+            local_contrast = (np.maximum(local_foreground, local_background) + 0.05) / (
+                np.minimum(local_foreground, local_background) + 0.05
+            )
+            if foreground_polarity == "light":
+                polarity_match = local_foreground > local_background
+            else:
+                polarity_match = local_foreground < local_background
+            polarity_match_ratio = float(np.average(polarity_match.astype(np.float32), weights=local_weights))
+            background_median = weighted_percentile(local_background, local_weights, 50.0)
+            local_texture = texture[start:end, left:right][local_mask]
             samples.append({
                 "band": band_name,
                 "tile": tile_index,
-                "contrast_score": round(score, 4),
                 "visible_pixels": visible_pixels,
+                "relative_luminance_contrast_p10": round(weighted_percentile(local_contrast, local_weights, 10.0), 4),
+                "relative_luminance_contrast_median": round(weighted_percentile(local_contrast, local_weights, 50.0), 4),
+                "polarity_match_ratio": round(polarity_match_ratio, 4),
+                "background_polarity": classify_background_polarity(background_median),
+                "background_relative_luminance_median": round(background_median, 6),
+                "background_texture_p90": round(weighted_percentile(local_texture, local_weights, 90.0), 6),
             })
-    minimum = min((float(sample["contrast_score"]) for sample in samples), default=0.0)
-    blocking = minimum < MINIMUM_TEMPLATE_READABILITY_CONTRAST
+    minimum_contrast = min((float(sample["relative_luminance_contrast_p10"]) for sample in samples), default=0.0)
+    minimum_polarity_match = min((float(sample["polarity_match_ratio"]) for sample in samples), default=0.0)
+    maximum_texture = max((float(sample["background_texture_p90"]) for sample in samples), default=1.0)
+    if total_component_pixels:
+        weights = alpha[component_mask]
+        background_median = weighted_percentile(body_luminance[component_mask], weights, 50.0)
+    else:
+        background_median = 0.0
+    inadequacy_codes: list[str] = []
+    if not samples:
+        inadequacy_codes.append("prime_visible_component_mask_missing")
+    if minimum_contrast < MINIMUM_RELATIVE_LUMINANCE_CONTRAST:
+        inadequacy_codes.extend(["prime_relative_luminance_contrast_below_threshold", "prime_template_inconspicuous"])
+    if minimum_polarity_match < MINIMUM_BACKGROUND_POLARITY_MATCH:
+        inadequacy_codes.append("prime_background_polarity_mismatch")
+    if maximum_texture > MAX_BACKGROUND_TEXTURE_P90:
+        inadequacy_codes.append("prime_background_too_textured")
     return {
-        "minimum_local_contrast": round(minimum, 4),
-        "threshold": MINIMUM_TEMPLATE_READABILITY_CONTRAST,
-        "blocking": blocking,
-        "blocking_code": "official_prime_text_unreadable" if blocking else "",
+        "foreground_polarity": foreground_polarity,
+        "support_requirement": support_requirement,
+        "visible_component_mask": mask_evidence,
+        "background_support": {
+            "polarity": classify_background_polarity(background_median),
+            "relative_luminance_contrast": {
+                "minimum_local_p10": round(minimum_contrast, 4),
+                "threshold": MINIMUM_RELATIVE_LUMINANCE_CONTRAST,
+                "basis": "alpha_composited_template_over_generated_body",
+            },
+            "polarity_match": {
+                "minimum_local_ratio": round(minimum_polarity_match, 4),
+                "threshold": MINIMUM_BACKGROUND_POLARITY_MATCH,
+            },
+            "texture": {
+                "maximum_local_p90": round(maximum_texture, 6),
+                "threshold": MAX_BACKGROUND_TEXTURE_P90,
+                "metric": "relative_luminance_neighbor_difference",
+            },
+        },
+        "blocking": bool(inadequacy_codes),
+        "blocking_code": inadequacy_codes[0] if inadequacy_codes else "",
+        "visual_adequacy": {
+            "adequate": not inadequacy_codes,
+            "inadequacy_codes": list(dict.fromkeys(inadequacy_codes)),
+        },
         "samples": samples,
     }
+
+
+def local_template_visibility(body: np.ndarray, template: Image.Image, layout: dict[str, Any]) -> dict[str, Any]:
+    audit = analyze_visible_component_support(body, template, layout)
+    audit["minimum_local_contrast"] = audit["background_support"]["relative_luminance_contrast"]["minimum_local_p10"]
+    audit["threshold"] = MINIMUM_RELATIVE_LUMINANCE_CONTRAST
+    return audit
 
 
 def bright_opaque_tile_coverage(template: Image.Image, layout: dict[str, Any]) -> dict[str, Any]:
@@ -290,9 +439,8 @@ def evaluate_template(body: Image.Image, template_spec: dict[str, str], sources:
     minimum_band_contrast = min(item["contrast_score"] for item in band_scores)
     average_band_contrast = sum(item["contrast_score"] for item in band_scores) / len(band_scores)
     bright_patch = bright_opaque_tile_coverage(template, layout)
-    inadequacy_codes = []
-    if minimum_band_contrast < MINIMUM_TEMPLATE_READABILITY_CONTRAST:
-        inadequacy_codes.append("prime_template_inconspicuous")
+    visibility_audit = analyze_visible_component_support(body_rgb, template, layout)
+    inadequacy_codes = list(visibility_audit["visual_adequacy"]["inadequacy_codes"])
     if bright_patch["dominant_bright_patch"]:
         inadequacy_codes.append("prime_template_dominant_bright_patch")
     return template, {
@@ -304,75 +452,116 @@ def evaluate_template(body: Image.Image, template_spec: dict[str, str], sources:
         "resize": resize,
         "bands": band_scores,
         "bright_patch": bright_patch,
+        "foreground_polarity": visibility_audit["foreground_polarity"],
+        "support_requirement": visibility_audit["support_requirement"],
+        "visible_component_mask": visibility_audit["visible_component_mask"],
+        "background_support": visibility_audit["background_support"],
+        "visibility_audit": visibility_audit,
         "visual_adequacy": {
             "adequate": not inadequacy_codes,
-            "inadequacy_codes": inadequacy_codes,
+            "inadequacy_codes": list(dict.fromkeys(inadequacy_codes)),
         },
     }
 
 
-def select_template_family(prepared_jobs: list[dict[str, Any]], package: dict[str, Any], root: Path) -> tuple[dict[str, Any], dict[str, tuple[Image.Image, dict[str, Any]]], dict[str, Any]]:
-    scored: list[tuple[dict[str, Any], dict[str, tuple[Image.Image, dict[str, Any]]], float, float, float]] = []
+def candidate_selection_evidence(family: dict[str, Any], size: str, evidence: dict[str, Any]) -> dict[str, Any]:
+    details = {
+        "source_role": evidence["selected_source_role"],
+        "minimum_band_contrast": evidence["minimum_band_contrast"],
+        "average_band_contrast": evidence["average_band_contrast"],
+        "overall_contrast": evidence["overall_contrast"],
+        "foreground_polarity": evidence["foreground_polarity"],
+        "support_requirement": evidence["support_requirement"],
+        "visible_component_mask": evidence["visible_component_mask"],
+        "background_support": evidence["background_support"],
+        "bright_patch": evidence["bright_patch"],
+        "visual_adequacy": evidence["visual_adequacy"],
+    }
+    return {
+        "family_id": family["id"],
+        "family_label": family["label"],
+        **details,
+        "sizes": {size: details},
+    }
+
+
+def select_template_for_size(job: dict[str, Any], package: dict[str, Any], root: Path) -> tuple[dict[str, Any] | None, Image.Image | None, dict[str, Any] | None, dict[str, Any]]:
+    size = job["size"]
+    scored: list[tuple[dict[str, Any], Image.Image, dict[str, Any]]] = []
+    candidate_failures: list[dict[str, Any]] = []
     for family in package["families"]:
-        evaluated: dict[str, tuple[Image.Image, dict[str, Any]]] = {}
-        minimum_scores: list[float] = []
-        average_scores: list[float] = []
-        overall_scores: list[float] = []
-        for job in prepared_jobs:
-            size = job["size"]
+        try:
             template, evidence = evaluate_template(job["body"], family["templates"][size], package["sources"], root, package["layout_contract"]["layouts"][size])
-            evaluated[size] = (template, evidence)
-            minimum_scores.append(float(evidence["minimum_band_contrast"]))
-            average_scores.append(float(evidence["average_band_contrast"]))
-            overall_scores.append(float(evidence["overall_contrast"]))
-        scored.append((family, evaluated, min(minimum_scores), sum(average_scores) / len(average_scores), sum(overall_scores) / len(overall_scores)))
-    contrast_selected, contrast_evaluated, contrast_minimum, contrast_average, contrast_overall = max(scored, key=lambda item: (item[2], item[3], item[4]))
-    visually_adequate = [
-        item for item in scored
-        if all(evidence["visual_adequacy"]["adequate"] for _, evidence in item[1].values())
-    ]
-    if visually_adequate:
-        selected, evaluated, minimum, average, overall = max(visually_adequate, key=lambda item: (item[2], item[3], item[4]))
-        visual_status = "reselected" if selected["id"] != contrast_selected["id"] else "passed"
-    else:
-        selected, evaluated, minimum, average, overall = contrast_selected, contrast_evaluated, contrast_minimum, contrast_average, contrast_overall
-        visual_status = "fallback_no_adequate_family"
-    reselected = selected["id"] != contrast_selected["id"]
-    return selected, evaluated, {
-        "selection_mode": "automatic_family_contrast",
-        "selection_reason": "visual_adequacy_reselected_from_highest_contrast_family" if reselected else "highest_minimum_key_band_contrast_across_all_delivery_sizes",
-        "selected_family_id": selected["id"],
-        "selected_family_label": selected["label"],
-        "minimum_band_contrast": round(minimum, 4),
-        "average_band_contrast": round(average, 4),
-        "overall_contrast": round(overall, 4),
-        "visual_adequacy": {
-            "status": visual_status,
-            "contrast_preferred_family_id": contrast_selected["id"],
-            "selected_family_id": selected["id"],
-            "reselected_without_regenerating_base": reselected,
-        },
-        "candidates": [
-            {
+            scored.append((family, template, evidence))
+        except Exception as error:
+            candidate_failures.append({
                 "family_id": family["id"],
                 "family_label": family["label"],
-                "minimum_band_contrast": round(minimum_score, 4),
-                "average_band_contrast": round(average_score, 4),
-                "overall_contrast": round(overall_score, 4),
-                "sizes": {
-                    size: {
-                        "source_role": evidence["selected_source_role"],
-                        "minimum_band_contrast": evidence["minimum_band_contrast"],
-                        "average_band_contrast": evidence["average_band_contrast"],
-                        "overall_contrast": evidence["overall_contrast"],
-                        "bright_patch": evidence["bright_patch"],
-                        "visual_adequacy": evidence["visual_adequacy"],
-                    }
-                    for size, (_, evidence) in evaluated_family.items()
-                },
-            }
-            for family, evaluated_family, minimum_score, average_score, overall_score in scored
-        ],
+                "source_role": family["templates"][size]["source_role"],
+                "visual_adequacy": {"adequate": False, "inadequacy_codes": ["prime_template_evaluation_failed"]},
+                "error": str(error),
+            })
+    rank = lambda item: (
+        float(item[2]["background_support"]["relative_luminance_contrast"]["minimum_local_p10"]),
+        float(item[2]["background_support"]["polarity_match"]["minimum_local_ratio"]),
+        -float(item[2]["background_support"]["texture"]["maximum_local_p90"]),
+        float(item[2]["average_band_contrast"]),
+    )
+    contrast_selected = max(scored, key=rank) if scored else None
+    visually_adequate = [item for item in scored if item[2]["visual_adequacy"]["adequate"]]
+    candidates = [candidate_selection_evidence(family, size, evidence) for family, _, evidence in scored] + candidate_failures
+    if visually_adequate:
+        selected, template, evidence = max(visually_adequate, key=rank)
+        reselected = contrast_selected is not None and selected["id"] != contrast_selected[0]["id"]
+        selection_reason = "visual_adequacy_reselected_from_highest_contrast_family" if reselected else "highest_adequate_visible_component_contrast_for_size"
+        return selected, template, evidence, {
+            "size": size,
+            "selection_scope": "delivery_size",
+            "selection_mode": "automatic_family_contrast",
+            "selection_reason": selection_reason,
+            "selected_family_id": selected["id"],
+            "selected_family_label": selected["label"],
+            "selected_source_role": evidence["selected_source_role"],
+            "minimum_band_contrast": evidence["minimum_band_contrast"],
+            "average_band_contrast": evidence["average_band_contrast"],
+            "overall_contrast": evidence["overall_contrast"],
+            "minimum_relative_luminance_contrast": evidence["background_support"]["relative_luminance_contrast"]["minimum_local_p10"],
+            "foreground_polarity": evidence["foreground_polarity"],
+            "support_requirement": evidence["support_requirement"],
+            "background_polarity": evidence["background_support"]["polarity"],
+            "visual_adequacy": {
+                "status": "reselected" if reselected else "passed",
+                "adequate": True,
+                "contrast_preferred_family_id": contrast_selected[0]["id"] if contrast_selected else "",
+                "selected_family_id": selected["id"],
+                "reselected_without_regenerating_base": reselected,
+                "inadequacy_codes": [],
+            },
+            "candidates": candidates,
+        }
+    failure_reasons = sorted({
+        code
+        for candidate in candidates
+        for code in candidate.get("visual_adequacy", {}).get("inadequacy_codes", [])
+    })
+    return None, None, None, {
+        "size": size,
+        "selection_scope": "delivery_size",
+        "selection_mode": "automatic_family_contrast",
+        "selection_reason": "no_adequate_template_for_size",
+        "selected_family_id": "",
+        "selected_family_label": "",
+        "selected_source_role": "",
+        "visual_adequacy": {
+            "status": "failed_no_adequate_template",
+            "adequate": False,
+            "failure_code": "prime_no_adequate_template_for_size",
+            "inadequacy_codes": failure_reasons,
+            "contrast_preferred_family_id": contrast_selected[0]["id"] if contrast_selected else "",
+            "selected_family_id": "",
+            "reselected_without_regenerating_base": False,
+        },
+        "candidates": candidates,
     }
 
 
@@ -383,7 +572,7 @@ def compose_job(job: dict[str, Any], body: Image.Image, family: dict[str, Any], 
     final = Image.alpha_composite(body, template)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     final.save(output_path, "PNG")
-    visibility_audit = local_template_visibility(np.asarray(body.convert("RGB")), template, layout)
+    visibility_audit = template_evidence["visibility_audit"]
     qr = skipped_qr_evidence()
     qr["validation_basis"] = "template_owned_qr_decode_disabled"
     return {
@@ -413,15 +602,36 @@ def compose_manifest(manifest_path: Path) -> dict[str, Any]:
             prepared_jobs.append({**job, "body": body})
         except Exception as error:
             failures.append({"id": job.get("id", ""), "size": job.get("size", ""), "error": str(error)})
+    selections: list[dict[str, Any]] = []
+    selected_jobs: list[tuple[dict[str, Any], dict[str, Any], Image.Image, dict[str, Any], dict[str, Any]]] = []
+    for job in prepared_jobs:
+        family, template, evidence, selection = select_template_for_size(job, package, manifest_path.parent)
+        selections.append({"id": job["id"], "size": job["size"], "template_selection": selection})
+        if family is None or template is None or evidence is None:
+            failures.append({
+                "id": job["id"],
+                "size": job["size"],
+                "error_code": "prime_no_adequate_template_for_size",
+                "error": f"no approved Prime template is visually adequate for {job['size']}",
+                "template_selection": selection,
+            })
+        else:
+            selected_jobs.append((job, family, template, evidence, selection))
     results = []
     if not failures:
         try:
-            family, evaluated, family_selection = select_template_family(prepared_jobs, package, manifest_path.parent)
-            for job in prepared_jobs:
-                template, evidence = evaluated[job["size"]]
-                results.append(compose_job(job, job["body"], family, template, evidence, family_selection, package["layout_contract"]["layouts"][job["size"]], manifest_path.parent))
+            for job, family, template, evidence, selection in selected_jobs:
+                results.append(compose_job(job, job["body"], family, template, evidence, selection, package["layout_contract"]["layouts"][job["size"]], manifest_path.parent))
         except Exception as error:
-            failures.extend({"id": job.get("id", ""), "size": job.get("size", ""), "error": str(error)} for job in prepared_jobs)
+            failures.extend({"id": job.get("id", ""), "size": job.get("size", ""), "error_code": "prime_compose_failed", "error": str(error)} for job in prepared_jobs)
+            results = []
+    if failures:
+        results = []
+        for job in package["jobs"]:
+            try:
+                (manifest_path.parent / str(job["output"])).unlink(missing_ok=True)
+            except OSError:
+                pass
     return {
         "engine_version": ENGINE_VERSION,
         "package_contract_version": PACKAGE_CONTRACT_VERSION,
@@ -432,6 +642,7 @@ def compose_manifest(manifest_path: Path) -> dict[str, Any]:
         "expected_sizes": package["sizes"],
         "succeeded": len(results),
         "failed": len(failures),
+        "size_selections": selections,
         "results": results,
         "failures": failures,
     }

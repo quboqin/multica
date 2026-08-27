@@ -3068,7 +3068,7 @@ export class ApiClient {
 
   async getCreativeOrder(id: string): Promise<CreativeOrder> {
     const raw = await this.fetch<unknown>(`/api/creative/orders/${id}`);
-    return parseWithFallback(raw, CreativeOrderSchema, { id: "", workspace_id: "", issue_id: "", status: "draft", derived_status: "draft", input_snapshot: {}, trigger_evidence_kind: "", trigger_evidence_ref_id: "", created_by: "", created_at: "", updated_at: "", workflow_failures: [], items: [] }, { endpoint: "GET /api/creative/orders/:id" });
+    return parseWithFallback(raw, CreativeOrderSchema, { id: "", workspace_id: "", issue_id: "", status: "draft", derived_status: "draft", delivery_status: "pending", production_status: "pending", input_snapshot: {}, trigger_evidence_kind: "", trigger_evidence_ref_id: "", created_by: "", created_at: "", updated_at: "", workflow_failures: [], items: [] }, { endpoint: "GET /api/creative/orders/:id" });
   }
 
   async retryCreativeOrderWorkflowFailure(orderId: string, taskId: string): Promise<CreativeOrderWorkflowRetryResponse> {
@@ -3115,12 +3115,12 @@ export class ApiClient {
 
   async cancelCreativeOrder(id: string): Promise<CreativeOrder> {
     const raw = await this.fetch<unknown>(`/api/creative/orders/${encodeURIComponent(id)}/cancel`, { method: "POST" });
-    return parseWithFallback(raw, CreativeOrderSchema, { id: "", workspace_id: "", issue_id: "", status: "cancelled", derived_status: "cancelled", input_snapshot: {}, trigger_evidence_kind: "", trigger_evidence_ref_id: "", created_by: "", created_at: "", updated_at: "", workflow_failures: [], items: [] }, { endpoint: "POST /api/creative/orders/:id/cancel" });
+    return parseWithFallback(raw, CreativeOrderSchema, { id: "", workspace_id: "", issue_id: "", status: "cancelled", derived_status: "cancelled", delivery_status: "cancelled", production_status: "cancelled", input_snapshot: {}, trigger_evidence_kind: "", trigger_evidence_ref_id: "", created_by: "", created_at: "", updated_at: "", workflow_failures: [], items: [] }, { endpoint: "POST /api/creative/orders/:id/cancel" });
   }
 
   async createCreativeOrder(data: CreateCreativeOrderRequest): Promise<CreativeOrder> {
     const raw = await this.fetch<unknown>("/api/creative/orders", { method: "POST", body: JSON.stringify(data) });
-    return parseWithFallback(raw, CreativeOrderSchema, { id: "", workspace_id: "", issue_id: "", status: "draft", derived_status: "draft", input_snapshot: {}, trigger_evidence_kind: "", trigger_evidence_ref_id: "", created_by: "", created_at: "", updated_at: "", workflow_failures: [], items: [] }, { endpoint: "POST /api/creative/orders" });
+    return parseWithFallback(raw, CreativeOrderSchema, { id: "", workspace_id: "", issue_id: "", status: "draft", derived_status: "draft", delivery_status: "pending", production_status: "pending", input_snapshot: {}, trigger_evidence_kind: "", trigger_evidence_ref_id: "", created_by: "", created_at: "", updated_at: "", workflow_failures: [], items: [] }, { endpoint: "POST /api/creative/orders" });
   }
 
   async adoptCreativeOrderVariant(orderId: string, itemId: string, data: AdoptCreativeOrderVariantRequest): Promise<CreativeOrderItem> {

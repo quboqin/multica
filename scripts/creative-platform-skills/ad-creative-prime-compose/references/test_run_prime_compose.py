@@ -29,6 +29,23 @@ class RunPrimeComposeTests(unittest.TestCase):
             ],
         )
 
+    def test_build_command_exposes_explicit_force_retry(self):
+        self.assertEqual(
+            run_prime_compose.build_command("order-1", "variant-2", "json", True),
+            [
+                "multica",
+                "creative",
+                "order",
+                "prime-compose",
+                "order-1",
+                "--variant",
+                "variant-2",
+                "--output",
+                "json",
+                "--force",
+            ],
+        )
+
     @patch("run_prime_compose.subprocess.run")
     def test_successful_backend_result_is_returned(self, run):
         payload = {"status": "completed", "order_id": "order-1"}

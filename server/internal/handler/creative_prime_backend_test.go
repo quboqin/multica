@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 	"time"
 
@@ -126,13 +127,36 @@ func TestCreativePrimeComposeSlotLimit(t *testing.T) {
 	}
 }
 
-func TestCreativePrimeSkipsQCHonorsDirectAdjustmentFinalValidation(t *testing.T) {
-	legacy := json.RawMessage(`{"creative_direct_edit_delivery":{"skip_qc":true}}`)
-	if !creativePrimeSkipsQC("creative_direct_edit", legacy, creativeDirectEditDeliveryConfig{}) {
-		t.Fatal("legacy direct edit should retain its explicit QC skip")
+func TestCreativePrimeCompositionFailurePayloadKeepsPerSizeEvidence(t *testing.T) {
+	manifestID := pgtype.UUID{Bytes: uuid.MustParse("33333333-3333-3333-3333-333333333333"), Valid: true}
+	resultID := pgtype.UUID{Bytes: uuid.MustParse("44444444-4444-4444-4444-444444444444"), Valid: true}
+	failure := json.RawMessage(`{
+  "size":"800x1000",
+  "error_code":"prime_no_adequate_template_for_size",
+  "template_selection":{"visual_adequacy":{"failure_code":"prime_no_adequate_template_for_size","inadequacy_codes":["prime_background_polarity_mismatch","prime_background_too_textured"]}}
+}`)
+	cause := &creativePrimeCompositionError{
+		cause:                errors.New("brand component composition rejected"),
+		manifestAttachmentID: manifestID, composeResultAttachmentID: resultID,
+		failures: []json.RawMessage{failure},
 	}
-	validated := json.RawMessage(`{"creative_direct_edit_delivery":{"skip_qc":false,"final_visual_validation":true}}`)
-	if creativePrimeSkipsQC("creative_direct_edit", validated, parseCreativeDirectEditDeliveryConfig(validated)) {
-		t.Fatal("final-validated direct adjustment must enter visual QC")
+	payload := creativePrimeCompositionFailurePayload(cause, time.Date(2026, time.August, 27, 12, 0, 0, 0, time.UTC))
+	var decoded struct {
+		ManifestAttachmentID      string                       `json:"manifest_attachment_id"`
+		ComposeResultAttachmentID string                       `json:"compose_result_attachment_id"`
+		FailureReasons            []creativePrimeFailureReason `json:"failure_reasons"`
+		Retryable                 bool                         `json:"retryable"`
+	}
+	if err := json.Unmarshal(payload, &decoded); err != nil {
+		t.Fatalf("decode failure payload: %v", err)
+	}
+	if decoded.ManifestAttachmentID != uuidToString(manifestID) || decoded.ComposeResultAttachmentID != uuidToString(resultID) {
+		t.Fatalf("failure evidence attachment ids were lost: %s", payload)
+	}
+	if len(decoded.FailureReasons) != 1 || decoded.FailureReasons[0].Size != "800x1000" || decoded.FailureReasons[0].ErrorCode != "prime_no_adequate_template_for_size" {
+		t.Fatalf("failure reasons were not preserved: %s", payload)
+	}
+	if len(decoded.FailureReasons[0].InadequacyCodes) != 2 || !decoded.Retryable {
+		t.Fatalf("failure quality evidence is incomplete: %s", payload)
 	}
 }

@@ -47,6 +47,21 @@ type creativePrimeGeneratedAsset struct {
 	AttachmentID  pgtype.UUID
 }
 
+func creativePrimeGeneratedFingerprint(assets []creativePrimeGeneratedAsset) string {
+	coordinates := make([]string, 0, len(assets))
+	for _, asset := range assets {
+		coordinates = append(coordinates, strings.Join([]string{
+			asset.SizeKey,
+			uuidToString(asset.ID),
+			uuidToString(asset.AssetFamilyID),
+			uuidToString(asset.AttachmentID),
+		}, "\x00"))
+	}
+	sort.Strings(coordinates)
+	sum := sha256.Sum256([]byte(strings.Join(coordinates, "\x01")))
+	return hex.EncodeToString(sum[:])
+}
+
 type creativePrimeFrozenMarketPack struct {
 	ID      string                         `json:"id"`
 	Version int                            `json:"version"`
@@ -57,8 +72,23 @@ type creativePrimeFrozenMarketPack struct {
 type creativePrimeComposeReport struct {
 	Succeeded int               `json:"succeeded"`
 	Failed    int               `json:"failed"`
+	Error     string            `json:"error"`
 	Results   []json.RawMessage `json:"results"`
 	Failures  []json.RawMessage `json:"failures"`
+}
+
+type creativePrimeImmutableRevisionError struct {
+	message string
+}
+
+func (e *creativePrimeImmutableRevisionError) Error() string {
+	return e.message
+}
+
+type creativePrimeCancelledError struct{}
+
+func (*creativePrimeCancelledError) Error() string {
+	return "creative Prime composition was cancelled"
 }
 
 type creativePrimeComposeResult struct {
@@ -66,6 +96,7 @@ type creativePrimeComposeResult struct {
 	Size              string          `json:"size"`
 	Template          json.RawMessage `json:"template"`
 	TemplateSelection json.RawMessage `json:"template_selection"`
+	VisibilityAudit   json.RawMessage `json:"visibility_audit"`
 	Compose           json.RawMessage `json:"compose"`
 	QR                json.RawMessage `json:"qr"`
 }
@@ -79,11 +110,26 @@ type creativeQCHandoffError struct {
 	cause error
 }
 
+type creativePrimeCompositionError struct {
+	cause                     error
+	manifestAttachmentID      pgtype.UUID
+	composeResultAttachmentID pgtype.UUID
+	failures                  []json.RawMessage
+}
+
 func (err *creativeQCHandoffError) Error() string {
 	return err.cause.Error()
 }
 
 func (err *creativeQCHandoffError) Unwrap() error {
+	return err.cause
+}
+
+func (err *creativePrimeCompositionError) Error() string {
+	return err.cause.Error()
+}
+
+func (err *creativePrimeCompositionError) Unwrap() error {
 	return err.cause
 }
 
@@ -155,6 +201,7 @@ func (h *Handler) composeCreativeOrderVariantPrime(
 	ctx context.Context,
 	workspaceID, orderID, variantID, requestedBy pgtype.UUID,
 	force bool,
+	primeClaim *creativePrimeCompositionClaim,
 ) (bool, error) {
 	if h.Storage == nil {
 		return false, errors.New("brand component storage is unavailable")
@@ -162,30 +209,41 @@ func (h *Handler) composeCreativeOrderVariantPrime(
 	unlockPrime := h.lockCreativePrimeVariant(variantID)
 	defer unlockPrime()
 
-	var variantKey, triggerKind, inputSnapshot, brief string
-	var revision int
+	var variantKey, triggerKind, inputSnapshot, brief, candidateState, primarySize string
+	var variantStatus, orderStatus string
+	var revision, activeRevision int
 	var createdBy pgtype.UUID
 	if err := h.DB.QueryRow(ctx, `
 SELECT variant.variant_key, variant.revision, order_row.trigger_evidence_kind,
-       order_row.input_snapshot::text, variant.brief::text, order_row.created_by
+       order_row.input_snapshot::text, variant.brief::text, order_row.created_by,
+       variant.candidate_state, variant.primary_size, COALESCE(variant.active_revision, 0),
+       variant.status, order_row.status
 FROM creative_order_variant variant
 JOIN creative_order_item item ON item.id = variant.order_item_id
 JOIN creative_order order_row ON order_row.id = item.order_id
 WHERE variant.id = $1 AND order_row.id = $2 AND order_row.workspace_id = $3
-`, variantID, orderID, workspaceID).Scan(&variantKey, &revision, &triggerKind, &inputSnapshot, &brief, &createdBy); err != nil {
+		`, variantID, orderID, workspaceID).Scan(
+		&variantKey, &revision, &triggerKind, &inputSnapshot, &brief, &createdBy,
+		&candidateState, &primarySize, &activeRevision, &variantStatus, &orderStatus,
+	); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return false, errors.New("creative variant does not belong to this order")
 		}
 		return false, fmt.Errorf("load brand component input: %w", err)
 	}
+	if variantStatus == "cancelled" || orderStatus == "cancelled" {
+		return false, &creativePrimeCancelledError{}
+	}
 	directDelivery := parseCreativeDirectEditDeliveryConfig(json.RawMessage(brief))
-	skipQC := creativePrimeSkipsQC(triggerKind, json.RawMessage(brief), directDelivery)
 
 	if triggerKind == "creative_direct_edit" && directDelivery.DeliveryMode == "preview" {
 		return false, nil
 	}
 
-	expectedSizes, err := expectedCreativeVariantSizes(triggerKind, json.RawMessage(inputSnapshot), json.RawMessage(brief))
+	if candidateState == "reserve" || candidateState == "rejected" {
+		return false, errors.New("inactive creative candidates cannot enter Prime composition")
+	}
+	expectedSizes, err := expectedCreativeVariantProductionSizes(triggerKind, json.RawMessage(inputSnapshot), json.RawMessage(brief), candidateState, primarySize)
 	if err != nil {
 		return false, err
 	}
@@ -202,6 +260,12 @@ WHERE variant.id = $1 AND order_row.id = $2 AND order_row.workspace_id = $3
 	if err != nil {
 		return false, err
 	}
+	if activeRevision == revision && force {
+		return false, &creativePrimeImmutableRevisionError{message: "active creative revision is immutable; create a staging revision before recomposing Prime"}
+	}
+	if activeRevision == revision && !primedComplete {
+		return false, &creativePrimeImmutableRevisionError{message: "active creative revision has an incomplete immutable Prime package"}
+	}
 	if primedComplete && !force {
 		missingProcess, processErr := h.creativePrimeProcessEvidenceMissing(ctx, variantID, revision, expectedSizes)
 		if processErr != nil {
@@ -210,34 +274,66 @@ WHERE variant.id = $1 AND order_row.id = $2 AND order_row.workspace_id = $3
 		if len(missingProcess) > 0 {
 			return false, fmt.Errorf("creative Prime process evidence is incomplete: %s", strings.Join(missingProcess, ", "))
 		}
-		if skipQC {
-			tx, txErr := h.TxStarter.Begin(ctx)
-			if txErr != nil {
-				return false, fmt.Errorf("start direct adjustment delivery: %w", txErr)
+		tx, txErr := h.TxStarter.Begin(ctx)
+		if txErr != nil {
+			return false, fmt.Errorf("start existing Prime package completion: %w", txErr)
+		}
+		defer tx.Rollback(ctx)
+		var currentOrderStatus string
+		if txErr := tx.QueryRow(ctx, `
+SELECT status FROM creative_order
+WHERE id = $1 AND workspace_id = $2
+FOR UPDATE
+`, orderID, workspaceID).Scan(&currentOrderStatus); txErr != nil {
+			return false, fmt.Errorf("lock existing Prime order: %w", txErr)
+		}
+		if currentOrderStatus == "cancelled" {
+			return false, &creativePrimeCancelledError{}
+		}
+		var currentRevision, currentActiveRevision int
+		var currentVariantStatus string
+		if txErr := tx.QueryRow(ctx, `
+SELECT variant.revision, COALESCE(variant.active_revision, 0), variant.status
+FROM creative_order_variant variant
+JOIN creative_order_item item ON item.id = variant.order_item_id
+WHERE variant.id = $1 AND item.order_id = $2
+FOR UPDATE OF variant
+`, variantID, orderID).Scan(&currentRevision, &currentActiveRevision, &currentVariantStatus); txErr != nil {
+			return false, fmt.Errorf("lock existing Prime package: %w", txErr)
+		}
+		if currentVariantStatus == "cancelled" {
+			return false, &creativePrimeCancelledError{}
+		}
+		if currentRevision != revision {
+			return false, &creativePrimeImmutableRevisionError{message: "creative variant revision changed before existing Prime handoff"}
+		}
+		if currentActiveRevision == revision {
+			return false, &creativePrimeImmutableRevisionError{message: "creative variant became active before existing Prime handoff"}
+		}
+		if primeClaim != nil {
+			if txErr := markCreativePrimeCompositionReady(ctx, tx, *primeClaim); txErr != nil {
+				return false, txErr
 			}
-			defer tx.Rollback(ctx)
-			if _, txErr := copyCreativePrimedAssetsToDelivered(ctx, tx, variantID, revision, expectedSizes); txErr != nil {
-				return false, fmt.Errorf("register direct adjustment delivery: %w", txErr)
+		}
+		if candidateState == "candidate" {
+			if _, txErr := tx.Exec(ctx, `UPDATE creative_order_variant SET status = 'completed', updated_at = now() WHERE id = $1 AND revision = $2`, variantID, revision); txErr != nil {
+				return false, fmt.Errorf("complete candidate primary: %w", txErr)
 			}
-			if _, txErr := tx.Exec(ctx, `
+			if _, txErr := tx.Exec(ctx, `UPDATE creative_order_variant_revision SET status = 'completed', updated_at = now() WHERE variant_id = $1 AND revision = $2`, variantID, revision); txErr != nil {
+				return false, fmt.Errorf("complete candidate primary revision: %w", txErr)
+			}
+		} else if _, txErr := tx.Exec(ctx, `
 UPDATE creative_order_variant
-SET status = 'completed',
+SET status = 'running',
     brief = brief - 'brand_composition_error' - 'creative_qc_handoff_error',
     updated_at = now()
-WHERE id = $1
-`, variantID); txErr != nil {
-				return false, fmt.Errorf("complete direct adjustment variant: %w", txErr)
-			}
-			if txErr := tx.Commit(ctx); txErr != nil {
-				return false, fmt.Errorf("save direct adjustment delivery: %w", txErr)
-			}
-			h.notifyCreativeDirectAdjustmentDelivery(ctx, workspaceID, orderID, variantID, revision, directDelivery.TargetSize)
-			return len(primed) > 0, nil
+WHERE id = $1 AND revision = $2
+`, variantID, revision); txErr != nil {
+			return false, fmt.Errorf("advance existing Prime package: %w", txErr)
 		}
-		if err := h.enqueueCreativeVariantQC(ctx, workspaceID, orderID, variantID, requestedBy); err != nil {
-			return false, &creativeQCHandoffError{cause: err}
+		if txErr := tx.Commit(ctx); txErr != nil {
+			return false, fmt.Errorf("save existing Prime package completion: %w", txErr)
 		}
-		h.clearCreativeQCHandoffError(ctx, variantID)
 		return len(primed) > 0, nil
 	}
 
@@ -334,15 +430,13 @@ WHERE id = $1
 	composeCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 	defer cancel()
 	var stdout, stderr bytes.Buffer
-	if err := primecompose.Run(composeCtx, manifestPath, &stdout, &stderr); err != nil {
-		return false, fmt.Errorf("compose brand components: %w%s", err, creativePrimeCommandDetail(stdout.String(), stderr.String()))
-	}
+	runErr := primecompose.Run(composeCtx, manifestPath, &stdout, &stderr)
 	var report creativePrimeComposeReport
 	if err := json.Unmarshal(stdout.Bytes(), &report); err != nil {
+		if runErr != nil {
+			return false, fmt.Errorf("compose brand components: %w%s", runErr, creativePrimeCommandDetail(stdout.String(), stderr.String()))
+		}
 		return false, fmt.Errorf("decode brand component result: %w", err)
-	}
-	if report.Failed != 0 || report.Succeeded != len(expectedSizes) || len(report.Results) != len(expectedSizes) {
-		return false, errors.New("brand component composition did not complete every delivery size")
 	}
 	sanitizedReport, err := sanitizeCreativePrimeComposeReport(stdout.Bytes())
 	if err != nil {
@@ -360,6 +454,18 @@ WHERE id = $1
 	composeAttachmentID, err := h.storeCreativePrimeAttachment(ctx, workspaceID, createdBy, orderID, variantID, revision, "brand-composition-result.json", sanitizedReport, "application/json")
 	if err != nil {
 		return false, err
+	}
+	if runErr != nil || report.Failed != 0 || report.Succeeded != len(expectedSizes) || len(report.Results) != len(expectedSizes) {
+		cause := errors.New(creativePrimeComposeFailureMessage(report))
+		if runErr != nil && report.Failed == 0 && strings.TrimSpace(report.Error) == "" {
+			cause = fmt.Errorf("compose brand components: %w%s", runErr, creativePrimeCommandDetail("", stderr.String()))
+		}
+		return false, &creativePrimeCompositionError{
+			cause:                     cause,
+			manifestAttachmentID:      manifestAttachmentID,
+			composeResultAttachmentID: composeAttachmentID,
+			failures:                  report.Failures,
+		}
 	}
 
 	resultByID := make(map[string]creativePrimeComposeResult, len(report.Results))
@@ -407,6 +513,7 @@ WHERE id = $1
 			"manifest_attachment_id":       uuidToString(manifestAttachmentID),
 			"compose_result_attachment_id": uuidToString(composeAttachmentID),
 			"template_selection":           json.RawMessage(result.TemplateSelection),
+			"visibility_audit":             json.RawMessage(result.VisibilityAudit),
 			"compose":                      json.RawMessage(result.Compose),
 			"qr":                           json.RawMessage(result.QR),
 		})
@@ -421,12 +528,41 @@ WHERE id = $1
 		return false, fmt.Errorf("start brand component registration: %w", err)
 	}
 	defer tx.Rollback(ctx)
-	var currentRevision int
-	if err := tx.QueryRow(ctx, `SELECT revision FROM creative_order_variant WHERE id = $1 FOR UPDATE`, variantID).Scan(&currentRevision); err != nil {
+	var currentOrderStatus string
+	if err := tx.QueryRow(ctx, `
+SELECT status FROM creative_order
+WHERE id = $1 AND workspace_id = $2
+FOR UPDATE
+`, orderID, workspaceID).Scan(&currentOrderStatus); err != nil {
+		return false, fmt.Errorf("lock creative order for brand component registration: %w", err)
+	}
+	if currentOrderStatus == "cancelled" {
+		return false, &creativePrimeCancelledError{}
+	}
+	var currentRevision, currentActiveRevision int
+	var currentVariantStatus string
+	if err := tx.QueryRow(ctx, `
+SELECT variant.revision, COALESCE(variant.active_revision, 0), variant.status
+FROM creative_order_variant variant
+JOIN creative_order_item item ON item.id = variant.order_item_id
+WHERE variant.id = $1 AND item.order_id = $2
+FOR UPDATE OF variant
+`, variantID, orderID).Scan(&currentRevision, &currentActiveRevision, &currentVariantStatus); err != nil {
 		return false, fmt.Errorf("lock creative variant for brand component registration: %w", err)
 	}
+	if currentVariantStatus == "cancelled" {
+		return false, &creativePrimeCancelledError{}
+	}
 	if currentRevision != revision {
-		return false, errors.New("creative variant revision changed during brand component composition")
+		return false, &creativePrimeImmutableRevisionError{message: "creative variant revision changed during brand component composition"}
+	}
+	if currentActiveRevision == revision {
+		return false, &creativePrimeImmutableRevisionError{message: "creative variant became active during brand component composition"}
+	}
+	if primeClaim != nil {
+		if err := markCreativePrimeCompositionReady(ctx, tx, *primeClaim); err != nil {
+			return false, err
+		}
 	}
 	for _, asset := range composed {
 		if _, err := tx.Exec(ctx, `
@@ -465,18 +601,12 @@ ON CONFLICT (variant_id, revision, workflow, size_key, label, filename) DO UPDAT
 			return false, fmt.Errorf("register composed %s process image: %w", asset.Generated.SizeKey, err)
 		}
 	}
-	if skipQC {
-		if _, err := copyCreativePrimedAssetsToDelivered(ctx, tx, variantID, revision, expectedSizes); err != nil {
-			return false, fmt.Errorf("register direct adjustment delivery: %w", err)
+	if candidateState == "candidate" {
+		if _, err := tx.Exec(ctx, `UPDATE creative_order_variant SET status = 'completed', updated_at = now() WHERE id = $1 AND revision = $2`, variantID, revision); err != nil {
+			return false, fmt.Errorf("complete candidate primary: %w", err)
 		}
-		if _, err := tx.Exec(ctx, `
-UPDATE creative_order_variant
-SET status = 'completed',
-    brief = brief - 'brand_composition_error' - 'creative_qc_handoff_error',
-    updated_at = now()
-WHERE id = $1
-`, variantID); err != nil {
-			return false, fmt.Errorf("complete direct adjustment variant: %w", err)
+		if _, err := tx.Exec(ctx, `UPDATE creative_order_variant_revision SET status = 'completed', updated_at = now() WHERE variant_id = $1 AND revision = $2`, variantID, revision); err != nil {
+			return false, fmt.Errorf("complete candidate primary revision: %w", err)
 		}
 	} else if _, err := tx.Exec(ctx, `
 UPDATE creative_order_variant
@@ -490,21 +620,7 @@ WHERE id = $1
 	if err := tx.Commit(ctx); err != nil {
 		return false, fmt.Errorf("save composed creative assets: %w", err)
 	}
-	if skipQC {
-		h.notifyCreativeDirectAdjustmentDelivery(ctx, workspaceID, orderID, variantID, revision, directDelivery.TargetSize)
-		return true, nil
-	}
-	if err := h.enqueueCreativeVariantQC(ctx, workspaceID, orderID, variantID, requestedBy); err != nil {
-		return true, &creativeQCHandoffError{cause: err}
-	}
 	return true, nil
-}
-
-// creativePrimeSkipsQC preserves the legacy direct-edit delivery mode while
-// allowing an annotated direct adjustment to explicitly require final-image
-// validation even if its parent order was created as a direct edit.
-func creativePrimeSkipsQC(triggerKind string, brief json.RawMessage, delivery creativeDirectEditDeliveryConfig) bool {
-	return (triggerKind == "creative_direct_edit" && !delivery.FinalVisualValidation) || creativeDirectEditSkipsQC(brief)
 }
 
 func creativePrimeCommandDetail(stdout, stderr string) string {
@@ -523,6 +639,65 @@ func creativePrimeCommandDetail(stdout, stderr string) string {
 		detail = detail[:1200]
 	}
 	return ": " + detail
+}
+
+type creativePrimeFailureReason struct {
+	Size            string   `json:"size"`
+	ErrorCode       string   `json:"error_code"`
+	InadequacyCodes []string `json:"inadequacy_codes,omitempty"`
+}
+
+func creativePrimeFailureReasons(failures []json.RawMessage) []creativePrimeFailureReason {
+	reasons := make([]creativePrimeFailureReason, 0, len(failures))
+	for _, raw := range failures {
+		var failure struct {
+			Size              string `json:"size"`
+			ErrorCode         string `json:"error_code"`
+			TemplateSelection struct {
+				VisualAdequacy struct {
+					FailureCode     string   `json:"failure_code"`
+					InadequacyCodes []string `json:"inadequacy_codes"`
+				} `json:"visual_adequacy"`
+			} `json:"template_selection"`
+		}
+		if json.Unmarshal(raw, &failure) != nil {
+			continue
+		}
+		code := strings.TrimSpace(failure.ErrorCode)
+		if code == "" {
+			code = strings.TrimSpace(failure.TemplateSelection.VisualAdequacy.FailureCode)
+		}
+		if code == "" {
+			code = "prime_compose_failed"
+		}
+		reasons = append(reasons, creativePrimeFailureReason{
+			Size: strings.TrimSpace(failure.Size), ErrorCode: code,
+			InadequacyCodes: append([]string(nil), failure.TemplateSelection.VisualAdequacy.InadequacyCodes...),
+		})
+	}
+	return reasons
+}
+
+func creativePrimeComposeFailureMessage(report creativePrimeComposeReport) string {
+	if detail := strings.TrimSpace(report.Error); detail != "" {
+		return "brand component composition failed: " + detail
+	}
+	reasons := creativePrimeFailureReasons(report.Failures)
+	parts := make([]string, 0, len(reasons))
+	for _, reason := range reasons {
+		part := reason.ErrorCode
+		if reason.Size != "" {
+			part = reason.Size + "/" + part
+		}
+		if len(reason.InadequacyCodes) > 0 {
+			part += " [" + strings.Join(reason.InadequacyCodes, ",") + "]"
+		}
+		parts = append(parts, part)
+	}
+	if len(parts) > 0 {
+		return "brand component composition rejected: " + strings.Join(parts, "; ")
+	}
+	return "brand component composition did not complete every delivery size"
 }
 
 func sanitizeCreativePrimeComposeReport(raw []byte) ([]byte, error) {
@@ -545,6 +720,33 @@ func sanitizeCreativePrimeComposeReport(raw []byte) ([]byte, error) {
 	return encoded, nil
 }
 
+func creativePrimeCompositionFailurePayload(cause error, updatedAt time.Time) json.RawMessage {
+	detail := strings.TrimSpace(cause.Error())
+	if len(detail) > 1200 {
+		detail = detail[:1200]
+	}
+	payload := map[string]any{
+		"message": detail, "retryable": true, "updated_at": updatedAt.UTC().Format(time.RFC3339Nano),
+	}
+	var compositionErr *creativePrimeCompositionError
+	if errors.As(cause, &compositionErr) {
+		if compositionErr.manifestAttachmentID.Valid {
+			payload["manifest_attachment_id"] = uuidToString(compositionErr.manifestAttachmentID)
+		}
+		if compositionErr.composeResultAttachmentID.Valid {
+			payload["compose_result_attachment_id"] = uuidToString(compositionErr.composeResultAttachmentID)
+		}
+		if reasons := creativePrimeFailureReasons(compositionErr.failures); len(reasons) > 0 {
+			payload["failure_reasons"] = reasons
+		}
+	}
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		return json.RawMessage(`{"message":"brand component composition failed","retryable":true}`)
+	}
+	return encoded
+}
+
 func frozenCreativePrimeMarketPack(raw json.RawMessage) (creativePrimeFrozenMarketPack, *primeTemplateSetConfig, map[string]creativeResourceFileResponse, error) {
 	var snapshot struct {
 		MarketPack creativePrimeFrozenMarketPack `json:"market_pack"`
@@ -563,8 +765,12 @@ func frozenCreativePrimeMarketPack(raw json.RawMessage) (creativePrimeFrozenMark
 	return snapshot.MarketPack, templateSet, filesByRole, nil
 }
 
-func (h *Handler) loadCreativePrimeGeneratedAssets(ctx context.Context, variantID pgtype.UUID, revision int, expectedSizes []string) ([]creativePrimeGeneratedAsset, bool, error) {
-	rows, err := h.DB.Query(ctx, `
+type creativePrimeAssetQuerier interface {
+	Query(context.Context, string, ...any) (pgx.Rows, error)
+}
+
+func loadCreativePrimeGeneratedAssetsWithQuerier(ctx context.Context, queryer creativePrimeAssetQuerier, variantID pgtype.UUID, revision int, expectedSizes []string) ([]creativePrimeGeneratedAsset, bool, error) {
+	rows, err := queryer.Query(ctx, `
 SELECT id, asset_family_id, size_key, attachment_id
 FROM creative_order_asset
 WHERE variant_id = $1 AND revision = $2 AND stage = 'generated' AND status = 'completed'
@@ -589,6 +795,10 @@ ORDER BY size_key
 		return nil, false, fmt.Errorf("read generated creative assets: %w", err)
 	}
 	return assets, creativeSizesMatchExpected(sizes, expectedSizes), nil
+}
+
+func (h *Handler) loadCreativePrimeGeneratedAssets(ctx context.Context, variantID pgtype.UUID, revision int, expectedSizes []string) ([]creativePrimeGeneratedAsset, bool, error) {
+	return loadCreativePrimeGeneratedAssetsWithQuerier(ctx, h.DB, variantID, revision, expectedSizes)
 }
 
 func (h *Handler) creativePrimePackageComplete(ctx context.Context, variantID pgtype.UUID, revision int, expectedSizes []string) ([]pgtype.UUID, bool, error) {
@@ -848,7 +1058,7 @@ func (h *Handler) storeCreativePrimeAttachment(
 	return attachmentID, nil
 }
 
-func (h *Handler) enqueueCreativeVariantQC(ctx context.Context, workspaceID, orderID, variantID, requestedBy pgtype.UUID) error {
+func (h *Handler) enqueueCreativeVariantQC(ctx context.Context, workspaceID, orderID, variantID, requestedBy pgtype.UUID, primeClaim *creativePrimeCompositionClaim) error {
 	if h.TaskService == nil {
 		return errors.New("creative QC task service is unavailable")
 	}
@@ -858,19 +1068,37 @@ func (h *Handler) enqueueCreativeVariantQC(ctx context.Context, workspaceID, ord
 	}
 	defer tx.Rollback(ctx)
 
-	var itemID, variantKey, triggerKind, inputSnapshot, brief string
-	var revision int
 	var issueID pgtype.UUID
+	var triggerKind, inputSnapshot, orderStatus string
 	if err := tx.QueryRow(ctx, `
-SELECT item.id::text, variant.variant_key, variant.revision, order_row.issue_id,
-       order_row.trigger_evidence_kind, order_row.input_snapshot::text, variant.brief::text
+SELECT issue_id, trigger_evidence_kind, input_snapshot::text, status
+FROM creative_order
+WHERE id = $1 AND workspace_id = $2
+FOR UPDATE
+`, orderID, workspaceID).Scan(&issueID, &triggerKind, &inputSnapshot, &orderStatus); err != nil {
+		return fmt.Errorf("lock creative QC handoff order: %w", err)
+	}
+	if orderStatus == "cancelled" {
+		return &creativePrimeCancelledError{}
+	}
+	var itemID, variantKey, brief, variantStatus string
+	var revision int
+	if err := tx.QueryRow(ctx, `
+SELECT item.id::text, variant.variant_key, variant.revision, variant.brief::text, variant.status
 FROM creative_order_variant variant
 JOIN creative_order_item item ON item.id = variant.order_item_id
-JOIN creative_order order_row ON order_row.id = item.order_id
-WHERE variant.id = $1 AND order_row.id = $2 AND order_row.workspace_id = $3
+WHERE variant.id = $1 AND item.order_id = $2
 FOR UPDATE OF variant
-`, variantID, orderID, workspaceID).Scan(&itemID, &variantKey, &revision, &issueID, &triggerKind, &inputSnapshot, &brief); err != nil {
+`, variantID, orderID).Scan(&itemID, &variantKey, &revision, &brief, &variantStatus); err != nil {
 		return fmt.Errorf("load creative QC handoff: %w", err)
+	}
+	if variantStatus == "cancelled" {
+		return &creativePrimeCancelledError{}
+	}
+	if primeClaim != nil {
+		if err := assertCreativePrimeCompositionLease(ctx, tx, *primeClaim, true); err != nil {
+			return err
+		}
 	}
 	expectedSizes, err := expectedCreativeVariantSizes(triggerKind, json.RawMessage(inputSnapshot), json.RawMessage(brief))
 	if err != nil {
@@ -888,6 +1116,15 @@ FOR UPDATE OF variant
 		return fmt.Errorf("check creative QC resolution: %w", err)
 	}
 	if alreadyResolved {
+		if primeClaim == nil {
+			return nil
+		}
+		if err := completeCreativePrimeCompositionJob(ctx, tx, *primeClaim); err != nil {
+			return err
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return fmt.Errorf("commit resolved creative QC handoff: %w", err)
+		}
 		return nil
 	}
 	missingProcess, err := h.creativePrimeProcessEvidenceMissing(ctx, variantID, revision, expectedSizes)
@@ -912,6 +1149,15 @@ SELECT EXISTS(
 		return fmt.Errorf("check creative QC handoff: %w", err)
 	}
 	if existingTasks {
+		if primeClaim == nil {
+			return nil
+		}
+		if err := completeCreativePrimeCompositionJob(ctx, tx, *primeClaim); err != nil {
+			return err
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return fmt.Errorf("commit existing creative QC handoff: %w", err)
+		}
 		return nil
 	}
 
@@ -997,6 +1243,11 @@ SELECT EXISTS(
 	if _, err := tx.Exec(ctx, `UPDATE creative_order_variant SET status = 'running', updated_at = now() WHERE id = $1`, variantID); err != nil {
 		return fmt.Errorf("advance creative QC variant: %w", err)
 	}
+	if primeClaim != nil {
+		if err := completeCreativePrimeCompositionJob(ctx, tx, *primeClaim); err != nil {
+			return err
+		}
+	}
 	if err := tx.Commit(ctx); err != nil {
 		return fmt.Errorf("save creative QC handoff: %w", err)
 	}
@@ -1065,22 +1316,31 @@ func (h *Handler) markCreativePrimeCompositionFailed(ctx context.Context, varian
 	if cause == nil {
 		return
 	}
-	detail := strings.TrimSpace(cause.Error())
-	if len(detail) > 1200 {
-		detail = detail[:1200]
-	}
+	payload := creativePrimeCompositionFailurePayload(cause, time.Now())
 	_, _ = h.DB.Exec(ctx, `
-UPDATE creative_order_variant
+WITH failed_variant AS (
+  UPDATE creative_order_variant
+  SET status = 'action_required',
+      brief = jsonb_set(
+        brief - 'creative_qc_handoff_error',
+        '{brand_composition_error}',
+        $2::jsonb,
+        true
+      ),
+      updated_at = now()
+  WHERE id = $1
+    AND active_revision IS DISTINCT FROM revision
+    AND status <> 'cancelled'
+  RETURNING id, revision, brief
+)
+UPDATE creative_order_variant_revision revision
 SET status = 'action_required',
-    brief = jsonb_set(
-      brief - 'creative_qc_handoff_error',
-      '{brand_composition_error}',
-      jsonb_build_object('message', $2::text, 'retryable', true, 'updated_at', now()::text),
-      true
-    ),
+    brief = failed_variant.brief,
     updated_at = now()
-WHERE id = $1
-`, variantID, detail)
+FROM failed_variant
+WHERE revision.variant_id = failed_variant.id
+  AND revision.revision = failed_variant.revision
+`, variantID, string(payload))
 }
 
 func (h *Handler) markCreativeQCHandoffFailed(ctx context.Context, variantID pgtype.UUID, cause error) {
@@ -1091,7 +1351,43 @@ func (h *Handler) markCreativeQCHandoffFailed(ctx context.Context, variantID pgt
 	if len(detail) > 1200 {
 		detail = detail[:1200]
 	}
-	_, _ = h.DB.Exec(ctx, `
+	var orderID pgtype.UUID
+	if err := h.DB.QueryRow(ctx, `
+SELECT item.order_id
+FROM creative_order_variant variant
+JOIN creative_order_item item ON item.id = variant.order_item_id
+WHERE variant.id = $1
+`, variantID).Scan(&orderID); err != nil {
+		return
+	}
+	tx, err := h.TxStarter.Begin(ctx)
+	if err != nil {
+		return
+	}
+	defer tx.Rollback(ctx)
+	var orderStatus string
+	if err := tx.QueryRow(ctx, `
+SELECT status FROM creative_order WHERE id = $1 FOR UPDATE
+`, orderID).Scan(&orderStatus); err != nil || orderStatus == "cancelled" {
+		return
+	}
+	var revision int
+	var activeRevision pgtype.Int4
+	var variantStatus string
+	if err := tx.QueryRow(ctx, `
+SELECT variant.revision, variant.active_revision, variant.status
+FROM creative_order_variant variant
+JOIN creative_order_item item ON item.id = variant.order_item_id
+WHERE variant.id = $1 AND item.order_id = $2
+FOR UPDATE OF variant
+`, variantID, orderID).Scan(&revision, &activeRevision, &variantStatus); err != nil {
+		return
+	}
+	if variantStatus == "cancelled" || (activeRevision.Valid && int(activeRevision.Int32) == revision) {
+		return
+	}
+	var updatedBrief string
+	if err := tx.QueryRow(ctx, `
 UPDATE creative_order_variant
 SET status = 'action_required',
     brief = jsonb_set(
@@ -1101,8 +1397,21 @@ SET status = 'action_required',
       true
     ),
     updated_at = now()
-WHERE id = $1
-`, variantID, detail)
+WHERE id = $1 AND revision = $3 AND status <> 'cancelled'
+  AND active_revision IS DISTINCT FROM revision
+RETURNING brief::text
+`, variantID, detail, revision).Scan(&updatedBrief); err != nil {
+		return
+	}
+	tag, err := tx.Exec(ctx, `
+UPDATE creative_order_variant_revision
+SET status = 'action_required', brief = $3::jsonb, updated_at = now()
+WHERE variant_id = $1 AND revision = $2 AND activated_at IS NULL
+`, variantID, revision, updatedBrief)
+	if err != nil || tag.RowsAffected() != 1 {
+		return
+	}
+	_ = tx.Commit(ctx)
 }
 
 func (h *Handler) clearCreativeQCHandoffError(ctx context.Context, variantID pgtype.UUID) {

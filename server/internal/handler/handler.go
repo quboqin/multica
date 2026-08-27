@@ -219,7 +219,7 @@ func New(queries *db.Queries, txStarter txStarter, hub *realtime.Hub, bus *event
 
 	taskSvc := service.NewTaskService(queries, txStarter, hub, bus, daemonHub)
 	taskSvc.Analytics = analyticsClient
-	return &Handler{
+	handler := &Handler{
 		Queries:               queries,
 		DB:                    executor,
 		TxStarter:             txStarter,
@@ -249,6 +249,9 @@ func New(queries *db.Queries, txStarter txStarter, hub *realtime.Hub, bus *event
 		CreativeAssetDownloader: creative.NewDownloader(30*time.Second, 100<<20, nil),
 		cfg:                     cfg,
 	}
+	taskSvc.TaskCancelledHook = handler.reconcileCreativeLifecycleForCancelledTask
+	taskSvc.TaskFailedHook = handler.reconcileCreativeLifecycleForFailedTask
+	return handler
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

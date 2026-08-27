@@ -1,6 +1,6 @@
 ---
 name: multica-ad-creative-plan
-description: "当 Creative Order Item 已冻结参考分析、业务选择、文案快照和市场资源快照，需要规划 V01-V03 并委派标准生产时使用。"
+description: "当 Creative Order Item 已冻结参考分析、业务选择、文案快照和市场资源快照，需要规划 4-5 个主视觉候选并委派候选生产时使用。"
 allowed-tools: Bash(multica *)
 ---
 
@@ -19,6 +19,11 @@ multica creative source-analysis list --candidate-id <candidate-id> --output jso
 ```
 
 除此之外不探测素材命令，不读旧 Issue 流程，不从标题、评论或本机文件补输入。
+
+## 流程合同
+
+先确认 order `input_snapshot.pipeline_version=candidate_v1`，该字段由平台创建订单时冻结，禁止修改。字段缺失或值不符时停止并写真实错误，
+不得推断、回填或切换到其他流程。每个标准订单都创建 4-5 个 `C01`-`C05` 候选，先生产各自主尺寸，再由独立质检晋级。
 
 ## 输入真值
 
@@ -44,14 +49,23 @@ multica creative source-analysis list --candidate-id <candidate-id> --output jso
 
 ## 方案合同
 
-为每个 item 固定写入 `V01`、`V02`、`V03`。三者共享批准文字、我方数值、业务语义、信息层级和主色家族；
-不得只改文案或数值。每个 brief 必须包含 `visual_identity_strategy` 和 3-5 条 `anti_copy_changes`，明确
-新人物/场景/材质/图标/背景或模块处理；V01-V03 至少有一个高显著视觉身份差异。数值区可以随变体换成另
-一种表格/卡片排布，但不得改变冻结金额、期限、月供或引入额外金融事实。若只是在不同变体中重排这些冻结
-数值，直接继续生产，不要额外设阻断状态。生产的 `expected_sizes` 来自冻结订单；没有显式小尺寸验收范围时默认使用
-三种标准尺寸，当前标准合同为
-`1080x1080`、`1200x628`、`800x1000`；横竖版依赖同变体方形母版，不依赖 Prime/QC，也不跨变体等待。
-brief 只保存结构化决策和必要事实，不粘贴最终模型提示词、还款表副本或来源审计说明；最终提示词由生产 Agent 在每个尺寸独立生成。
+先完整读取 [Creative Intent Contract](references/creative-intent-contract.md)。为每个 item 写入 4-5 个候选 Variant，固定使用
+`C01`-`C05` 中连续的 key；默认 5 个，只有无法形成第 5 个真实不同的创意假设时才使用 4 个，不能用同一方向换色凑数。
+每个候选必须有独立 `CreativeIntent`，并至少改变两个高显著 `DesignDNA` 维度。候选共享批准文字、我方数值和业务真值，
+但不强制共享主色；不得只改文案、数值或局部装饰。
+
+候选阶段只生成一个 `primary_size` 主视觉。主尺寸由该方向的构图机制决定：横向比较或宽场景选 `1200x628`，竖向人物、
+手机或叙事栈选 `800x1000`，均衡、径向或模块化方向选 `1080x1080`；不得固定先做方图。每个候选先在 variant-put 顶层写
+`candidate_state=candidate` 与 `primary_size`，再用仅包含该主尺寸的 task `expected_sizes` 独立 fanout 主尺寸生产。4-5 个主尺寸
+Prime 图形成 4-5 个合格候选后，由 `creative_candidate_selection` 独立比较；计划 5 个时允许其中 1 个在有界恢复后终态失败并由平台标记 rejected，
+其余 4 个继续比较，少于 4 个不得比较。Planner 不预选三个最终 Variant，不逐条改状态冒充晋级，也不在候选阶段补其他尺寸。
+
+候选比较原子选择恰好 3 个，按 rank 1-3 设为 `selected`，其余为 `reserve`。reserve 的主视觉、提示词、模型回执和附件血缘必须保留，
+但不参与订单交付汇总。selected 复用已完成主尺寸，平台把其 `expected_sizes` 扩展为冻结的完整三尺寸，再只补缺失两尺寸。
+当前标准尺寸为 `1080x1080`、`1200x628`、`800x1000`。
+
+数值区可以随候选换成另一种表格/卡片排布，但不得改变冻结金额、期限、月供或引入额外金融事实。brief 只保存结构化
+决策和必要事实，不粘贴最终模型提示词、还款表副本或来源审计说明；最终提示词由生产 Agent 从结构化合同逐尺寸编译。
 
 参考机制中没有批准对应文本的选项、问题、标签或按钮只能转译为结构关系，写入
 `mechanism_adaptation` 和 `omitted_unapproved_copy`，不得生成空选项或重复金融字段；但原图中已有且冻结 snapshot 非空的结构必须保留，不能因为没有
@@ -80,9 +94,16 @@ approved fragment 就改成空白。
 `required=false`、`selected=false` 和简短 reason，让生产 Agent 不下载 App UI 参考图。不得因为资源包里只有一张 UI
 图就机械选择；选择必须来自页面冻结的业务确认。
 
+每个 `variant-put` 对象顶层必须写 `candidate_state` 与 `primary_size`，不能把流程状态重复塞进 brief。
 每个 brief 至少包含：candidate/source-analysis/copy/market snapshot identity，完整批准文案，
-`creative_contract.variant_execution`、`copy_adaptation`、`mechanism_adaptation`、禁用元素、`app_ui_replacement`、
-三个尺寸规格。`prime_layout_contract` 是订单快照中的冻结事实，服务端会在写入时覆盖绑定；方案不得自行
+`creative_contract.creative_intent`、`creative_contract.design_dna`、每个冻结尺寸的 `creative_contract.layout_plans`、
+`variant_execution`、`copy_adaptation`、`mechanism_adaptation`、禁用元素和 `app_ui_replacement`。
+`CreativeIntent` 必须明确 `input_roles`、`locked_set`、`editable_set`、`change_budget`、优先级和可观察
+`acceptance_checks`；`DesignDNA` 必须明确一致性模式、主体、色彩/材质/光线、模型文字层级、视觉母题、空间签名、
+跨尺寸不变量和可改编项；每个 `LayoutPlan` 必须写原生重排、裁切容忍、内容密度、表格策略、Prime 承托策略与三尺寸风险。
+模型继续负责渲染所有批准业务文字；方案不得安排平台代码排字、空白文字框或后续文字 overlay。
+
+`prime_layout_contract` 是订单快照中的冻结事实，服务端会在写入时覆盖绑定；方案不得自行
 生成、补齐、删减或改写其中任一 hard region。`variant_execution` 至少有
 `visual_identity_strategy`、`must_preserve`、`allowed_variations` 和 `anti_copy_changes`；只能表达该 Variant
 允许新增的执行决策，不得复制或替代父方向、全量生产提示词、还款表或来源审计。hard region 只指导布局；原图主体
@@ -104,6 +125,7 @@ Prime 不是页角装饰或模型要重绘的业务元素。它承载官方品�
     "purpose": "官方品牌、合规与下载入口清晰可见",
     "visual_role": "与主视觉使用同一光线和材质体系",
     "readability_strategy": "integrated_background",
+    "background_polarity": "adaptive",
     "fallback_order": ["local_background_cleanup", "continuous_support_band", "native_layout_regeneration"]
   }
 }
@@ -112,9 +134,9 @@ Prime 不是页角装饰或模型要重绘的业务元素。它承载官方品�
 ```json
 {
   "order_item_id": "<item-id>",
-  "variant_key": "V01",
+  "variant_key": "C01",
   "brief": {
-    "expected_sizes": ["<size>"],
+    "expected_sizes": ["1080x1080", "1200x628", "800x1000"],
     "creative_contract": {
       "app_ui_replacement": {
         "required": true,
@@ -129,6 +151,30 @@ Prime 不是页角装饰或模型要重绘的业务元素。它承载官方品�
         "reason": "<why this AdaKami UI reference matches>",
         "constraints": ["only replace phone screen content", "preserve hand/phone/perspective/lighting"]
       },
+      "creative_intent": {
+        "hypothesis_id": "C01-hypothesis",
+        "input_roles": [],
+        "locked_set": [],
+        "editable_set": [],
+        "change_budget": "new_concept",
+        "priorities": [],
+        "acceptance_checks": []
+      },
+      "design_dna": {
+        "consistency_mode": "family_consistent",
+        "subject_system": {},
+        "visual_system": {},
+        "typography_system": {},
+        "motif_system": {},
+        "spatial_signature": {},
+        "invariants": [],
+        "adaptable_features": []
+      },
+      "layout_plans": {
+        "1080x1080": {},
+        "1200x628": {},
+        "800x1000": {}
+      },
       "variant_execution": {
         "visual_identity_strategy": "<this Variant's derived visual identity>",
         "must_preserve": ["<parent facts this execution keeps>"],
@@ -137,6 +183,9 @@ Prime 不是页角装饰或模型要重绘的业务元素。它承载官方品�
       }
     }
   },
+  "candidate_state": "candidate",
+  "primary_size": "<direction-selected-size>",
+  "selection_rank": null,
   "status": "queued"
 }
 ```
@@ -151,7 +200,7 @@ multica creative order variant-put <order-id> --input-file <variant.json> --outp
 
 ## 委派生产
 
-三个 Variant 均写入后，从冻结 squad snapshot 或当前 task context 读取 `producer_agent_ids`
+4-5 个候选 Variant 均写入后，从冻结 squad snapshot 或当前 task context 读取 `producer_agent_ids`
 （缺失时回退 `producer_agent_id`）和 `reviewer_agent_id`。`producer_agent_ids[0]` 只作为 fanout 入口 Agent；
 实际生产 Agent 由服务端按当前 squad 成员、启用的 `image_edit` Skill 和在线 runtime 动态选择，并写回子任务
 context。不要在标准生产 manifest 的 item context 里写 `producer_agent_id`，否则会把动态池固定到单个优先 Agent。
@@ -162,10 +211,11 @@ context。不要在标准生产 manifest 的 item context 里写 `producer_agent
 Variant 行后再组 manifest；不得发出 `:r0` item key。active/succeeded task 或完整 generated assets 已存在时
 跳过该 item。这个查询只是预检；服务端会按历史任务防重复，并会识别运行时新增或移除的出图池成员。
 
-将全部缺失 Variant 放进同一个 manifest：source kind 为 `creative_order_item_production`，ref 为真实
+将全部缺失候选放进同一个 manifest：source kind 为 `creative_order_item_production`，ref 为真实
 Order Item ID；每项 context 固定 `type=creative_domain_task`、`workflow=creative_production`，并原样携带
 `issue_id`、`leader_agent_id`、order/item/variant/candidate IDs、revision、`expected_sizes` 和下一阶段 Agent
-IDs。先用 JSON 解析器校验，再执行：
+IDs；候选阶段的 `expected_sizes` 必须严格为 `[primary_size]`，并带 `candidate_state=candidate`、
+`production_stage=candidate_primary`。先用 JSON 解析器校验，再执行：
 
 ```text
 multica task by-source list --agent <producer-entry-agent-id> \
@@ -173,7 +223,7 @@ multica task by-source list --agent <producer-entry-agent-id> \
 multica task fanout --agent <producer-entry-agent-id> --input-file <manifest.json> --output json
 ```
 
-`manifest.json` 必须包含 source 证据字段。一个 item 的三个 Variant 可放在同一个 manifest，但每个
+`manifest.json` 必须包含 source 证据字段。一个 item 的 4-5 个候选可放在同一个 manifest，但每个
 `item_key`、`variant_id` 和 `revision` 必须使用 `variant-put` 返回的实际值：
 
 ```json
@@ -190,7 +240,9 @@ multica task fanout --agent <producer-entry-agent-id> --input-file <manifest.jso
       "candidate_id": "<candidate-id>",
       "variant_id": "<variant-id>",
       "revision": 1,
-    "expected_sizes": ["1080x1080", "1200x628", "800x1000"],
+      "expected_sizes": ["<primary-size>"],
+      "candidate_state": "candidate",
+      "production_stage": "candidate_primary",
       "scope": "variant",
       "issue_id": "<issue-id>",
       "leader_agent_id": "<leader-agent-id>",
@@ -200,7 +252,7 @@ multica task fanout --agent <producer-entry-agent-id> --input-file <manifest.jso
 }
 ```
 
-CLI 返回的 `tasks` 必须覆盖每个缺失 Variant；否则记录真实错误并让当前 task 失败，不得宣称已委派。
+CLI 返回的 `tasks` 必须覆盖每个缺失候选；否则记录真实错误并让当前 task 失败，不得宣称已委派。
 
 fanout 成功后立即结束，不轮询。CLI 返回字段错误时修正同一 manifest；没有返回 created task 就不得声称
 已入队。写回或委派失败必须让当前 task 失败，并在 Variant/task 保留真实 error code/message，不创建 Issue。

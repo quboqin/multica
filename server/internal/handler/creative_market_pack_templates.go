@@ -85,12 +85,15 @@ type primeTemplateFamilyConfig struct {
 }
 
 type primeTemplateValidation struct {
-	SourceRole       string `json:"source_role"`
-	Filename         string `json:"filename"`
-	SourceDimensions []int  `json:"source_dimensions"`
-	HeaderEnd        int    `json:"header_end"`
-	FooterStart      int    `json:"footer_start"`
-	QRPayload        string `json:"qr_payload,omitempty"`
+	SourceRole             string `json:"source_role"`
+	Filename               string `json:"filename"`
+	SourceDimensions       []int  `json:"source_dimensions"`
+	HeaderEnd              int    `json:"header_end"`
+	FooterStart            int    `json:"footer_start"`
+	ForegroundPolarity     string `json:"foreground_polarity"`
+	SupportRequirement     string `json:"support_requirement"`
+	VisibleComponentPixels int    `json:"visible_component_pixels"`
+	QRPayload              string `json:"qr_payload,omitempty"`
 }
 
 type primeTemplateFamilyValidation struct {
@@ -284,6 +287,58 @@ func primeTemplateMatchesCanvas(source image.Image, canvas [2]int) bool {
 	return math.Abs(sourceRatio-canvasRatio)/canvasRatio <= 0.002
 }
 
+func primeTemplateForegroundEvidence(source image.Image) (string, string, int) {
+	var weightedLuminance [256]uint64
+	var pixelsByLuminance [256]int
+	bounds := source.Bounds()
+	var totalWeight uint64
+	for y := bounds.Min.Y; y < bounds.Max.Y; y++ {
+		for x := bounds.Min.X; x < bounds.Max.X; x++ {
+			pixel := color.NRGBAModel.Convert(source.At(x, y)).(color.NRGBA)
+			if pixel.A < 90 {
+				continue
+			}
+			luminance := int(math.Round(primeTemplateRelativeLuminance(pixel) * 255))
+			weightedLuminance[luminance] += uint64(pixel.A)
+			pixelsByLuminance[luminance]++
+			totalWeight += uint64(pixel.A)
+		}
+	}
+	if totalWeight == 0 {
+		return "unknown", "unknown", 0
+	}
+	median, cumulative := 0, uint64(0)
+	for luminance, weight := range weightedLuminance {
+		cumulative += weight
+		if cumulative*2 >= totalWeight {
+			median = luminance
+			break
+		}
+	}
+	polarity, supportRequirement := "dark", "light_low_texture"
+	start, end := 0, min(128, median+64)
+	if median >= 128 {
+		polarity, supportRequirement = "light", "dark_low_texture"
+		start, end = max(128, median-64), 255
+	}
+	visibleComponentPixels := 0
+	for luminance := start; luminance <= end; luminance++ {
+		visibleComponentPixels += pixelsByLuminance[luminance]
+	}
+	return polarity, supportRequirement, visibleComponentPixels
+}
+
+func primeTemplateRelativeLuminance(pixel color.NRGBA) float64 {
+	linear := func(channel uint8) float64 {
+		srgb := float64(channel) / 255
+		if srgb <= 0.04045 {
+			return srgb / 12.92
+		}
+		return math.Pow((srgb+0.055)/1.055, 2.4)
+	}
+	return 0.2126*linear(pixel.R) + 0.7152*linear(pixel.G) + 0.0722*linear(pixel.B)
+}
+
 func (h *Handler) validatePrimeTemplates(ctx context.Context, workspaceID pgtype.UUID, templateSet *primeTemplateSetConfig, files []creativeResourceFileResponse) ([]primeTemplateFamilyValidation, error) {
 	filesByRole, err := primeTemplateFilesByRole(templateSet, files)
 	if err != nil {
@@ -306,12 +361,18 @@ func (h *Handler) validatePrimeTemplates(ctx context.Context, workspaceID pgtype
 				return nil, fmt.Errorf("market pack %s template dimensions do not match the %s canvas", template.SourceRole, size)
 			}
 			headerEnd, footerStart := templateBandBounds(decoded, canvas[1])
+			foregroundPolarity, supportRequirement, visibleComponentPixels := primeTemplateForegroundEvidence(decoded)
+			if foregroundPolarity == "unknown" || visibleComponentPixels == 0 {
+				return nil, fmt.Errorf("market pack %s template has no visible Prime component pixels", template.SourceRole)
+			}
 			// QR is optional evidence: a missing or unreadable code never blocks publication.
 			qrPayload, _ := decodeQRCodeImage(decoded)
 			familyValidation.Templates[size] = primeTemplateValidation{
 				SourceRole: template.SourceRole, Filename: file.Filename,
 				SourceDimensions: []int{decoded.Bounds().Dx(), decoded.Bounds().Dy()},
-				HeaderEnd:        headerEnd, FooterStart: footerStart, QRPayload: qrPayload,
+				HeaderEnd:        headerEnd, FooterStart: footerStart,
+				ForegroundPolarity: foregroundPolarity, SupportRequirement: supportRequirement,
+				VisibleComponentPixels: visibleComponentPixels, QRPayload: qrPayload,
 			}
 		}
 		validated = append(validated, familyValidation)

@@ -94,9 +94,10 @@ import { CreativeMaterialLibrary, creativeMaterialAnalysisReadiness, creativeMat
 import { CreativeCollectionPlans } from "./creative-collection-plans";
 import { ComposableCopyLibraryEditor } from "./composable-copy-library-editor";
 import { CreativeComparisonWorkspace, type CreativeAnnotationDraft } from "./creative-comparison-workspace";
-import { adoptedCreativeOrderVariant, CREATIVE_DELIVERY_SIZES, CreativeOrderDeliveryCandidates, creativeOrderActionableWorkflowFailures, creativeOrderStage, creativeVariantIsInProgress, creativeVariantNeedsManualAction, type CreativeOrderStage, type CreativeVariantRetryAction } from "./creative-order-delivery";
+import { adoptedCreativeOrderVariant, CREATIVE_DELIVERY_SIZES, CreativeOrderDeliveryCandidates, creativeOrderActionableWorkflowFailures, creativeOrderStage, creativeVariantActiveExpectedSizes, creativeVariantGenerationProgress, creativeVariantIsInProgress, creativeVariantNeedsManualAction, type CreativeOrderStage, type CreativeVariantRetryAction } from "./creative-order-delivery";
 import { CreativeGenerationInfoDialog } from "./creative-generation-info-dialog";
 import { CreativeFeedbackDashboard } from "./creative-feedback-dashboard";
+import { CreativeStagingRepairWorkspace, creativeVariantRevisionExpectedSizes } from "./creative-staging-repair-workspace";
 import { CreativeWorkbench } from "./creative-workbench";
 import { MarketResourceFiles } from "./market-resource-files";
 
@@ -365,10 +366,29 @@ function creativeOrderListState(stage: CreativeOrderStage): CreativeOrderListSta
 }
 
 function creativeOrderListSummary(order: CreativeOrder): string {
-  const variants = order.items.flatMap((item) => item.variants);
-  const generated = variants.reduce((count, variant) => count + variant.assets.filter((asset) => asset.revision === variant.revision && asset.stage === "generated" && asset.status === "completed" && Boolean(asset.attachment_id)).length, 0);
-  const expected = variants.length * CREATIVE_DELIVERY_SIZES.length;
-  return `已选 ${order.items.length} 张素材 · 已生成 ${generated}/${expected} 张成图`;
+  const progress = creativeOrderGenerationProgress(order);
+  return `已选 ${order.items.length} 张素材 · 已生成 ${progress.ready}/${progress.expected} 张成图`;
+}
+
+export function creativeOrderGenerationProgress(order: CreativeOrder): { ready: number; expected: number } {
+  return order.items.flatMap((item) => item.variants).reduce((total, variant) => {
+    const progress = creativeVariantGenerationProgress(variant);
+    return { ready: total.ready + progress.ready, expected: total.expected + progress.expected };
+  }, { ready: 0, expected: 0 });
+}
+
+export function creativeOrderNeedsPolling(order: CreativeOrder | undefined): boolean {
+  if (!order) return false;
+  const activeStatuses = ["queued", "running", "partial", "awaiting_selection"];
+  const aggregateStatuses = [order.derived_status, order.production_status].filter((status): status is string => Boolean(status));
+  if (aggregateStatuses.some((status) => activeStatuses.includes(status))) return true;
+  if (aggregateStatuses.length === 0 && activeStatuses.includes(order.status ?? "")) return true;
+  return order?.items.some((item) => item.variants.some((variant) => {
+    if (["queued", "running", "partial"].includes(variant.status)) return true;
+    const workingRevision = (variant.staging_revision ?? 0) > 0 ? variant.staging_revision! : variant.revision;
+    return (variant.image_operations ?? []).some((operation) => operation.revision === workingRevision
+      && ["queued", "running", "submitted", "unknown"].includes(operation.status));
+  })) === true;
 }
 
 type CreativeOrderSourceSummary = {
@@ -418,7 +438,7 @@ function CreativeOrderDetail({ orderId, onBack, onBrowseOrders, backLabel }: { o
   const queryClient = useQueryClient();
   const order = useQuery({
     ...creativeOrderOptions(wsId, orderId),
-    refetchInterval: (query) => query.state.data?.items.some((item) => item.variants.some((variant) => ["queued", "running"].includes(variant.status))) ? 5000 : false,
+    refetchInterval: (query) => creativeOrderNeedsPolling(query.state.data) ? 5000 : false,
   });
   const feedback = useQuery(creativeFeedbackOptions(wsId, "asset"));
   const library = useQuery(creativeMaterialLibraryOptions(wsId));
@@ -429,8 +449,8 @@ function CreativeOrderDetail({ orderId, onBack, onBrowseOrders, backLabel }: { o
   const ids = [...new Set(assets.map((asset) => asset.attachment_id).filter(Boolean))];
   const attachments = useQuery({ queryKey: ["creative", wsId, "order-attachments", orderId, ids], queryFn: () => Promise.all(ids.map((id) => api.getAttachment(id))), enabled: ids.length > 0 });
   const byId = new Map((attachments.data ?? []).map((item) => [item.id, item]));
-  const variantOrder = data?.items.flatMap((item) => item.variants.map((variant) => variant.id)) ?? [];
-  const reviewAssets = selectCreativeReviewAssets(assets, variantOrder);
+  const reviewVariants = data?.items.flatMap((item) => item.variants) ?? [];
+  const reviewAssets = selectCreativeReviewAssets(assets, reviewVariants);
   const [activeAssetId, setActiveAssetId] = useState("");
   const [generationInfoAssetId, setGenerationInfoAssetId] = useState("");
   const [adjustOpen, setAdjustOpen] = useState(false);
@@ -460,6 +480,8 @@ function CreativeOrderDetail({ orderId, onBack, onBrowseOrders, backLabel }: { o
   const variantById = new Map(data?.items.flatMap((item) => item.variants.map((variant) => [variant.id, { variant, item }] as const)) ?? []);
   const actionableFailures = creativeOrderActionableWorkflowFailures(data);
   const activeVariant = active ? variantById.get(active.variant_id) : undefined;
+  const activeExpectedSizes = activeVariant ? creativeVariantActiveExpectedSizes(activeVariant.variant) : [];
+  const canAdjustAllSizes = activeExpectedSizes.length > 1;
   const generationInfoVariant = generationInfoAsset ? variantById.get(generationInfoAsset.variant_id) : undefined;
   const isDirectEdit = data?.trigger_evidence_kind === "creative_direct_edit";
   const adoptionStatus = creativeOrderAdoptionStatus(data);
@@ -484,6 +506,9 @@ function CreativeOrderDetail({ orderId, onBack, onBrowseOrders, backLabel }: { o
   const comparisonAssets = reviewAssets
     .filter((asset) => byId.has(asset.attachment_id) && (!activeVariant || variantById.get(asset.variant_id)?.item.id === activeVariant.item.id))
     .map((asset) => ({ id: asset.id, label: `${asset.stage} · ${asset.size_key}`, finalUrl: attachmentURL(asset), baseUrl: attachmentURL(generatedFor(asset)), thumbnailUrl: attachmentURL(asset), size: asset.size_key, variant: variantById.get(asset.variant_id)?.variant.variant_key || "" }));
+  useEffect(() => {
+    if (!canAdjustAllSizes && adjustmentScope !== "size") setAdjustmentScope("size");
+  }, [adjustmentScope, canAdjustAllSizes]);
   const selectReviewAsset = (assetId: string) => {
     setActiveAssetId(assetId);
     window.requestAnimationFrame(() => comparisonRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }));
@@ -503,6 +528,11 @@ function CreativeOrderDetail({ orderId, onBack, onBrowseOrders, backLabel }: { o
     if (!squadId) throw new Error("该订单缺少素材小队，无法创建精准调整");
     const sizeKey = creativeOrderAdjustmentSize(asset);
     if (!sizeKey) throw new Error("当前成图尺寸不支持精准调整");
+    const contractSizes = creativeVariantRevisionExpectedSizes(target.variant, asset.revision);
+    if (contractSizes.length === 0) throw new Error("当前成图版本没有登记交付尺寸，无法创建精准调整");
+    if (!contractSizes.includes(sizeKey)) throw new Error("当前成图不属于该版本的交付尺寸");
+    const normalizedScope: CreativeAdjustmentScope = scope === "variant" && contractSizes.length > 1 ? "variant" : "size";
+    const expectedSizes = normalizedScope === "variant" ? contractSizes : [sizeKey];
     const issueInput = {
       orderId,
       itemId: target.item.id,
@@ -511,18 +541,22 @@ function CreativeOrderDetail({ orderId, onBack, onBrowseOrders, backLabel }: { o
       assetId: asset.id,
       attachmentId: asset.attachment_id,
       sizeKey,
-      scope,
+      scope: normalizedScope,
+      expectedSizes,
       sourceRevision: asset.revision,
       request,
     };
     const issue = await api.createIssue(creativeOrderAdjustmentIssueRequest(issueInput, data.issue_id, squadId));
     if (!issue.id) throw new Error("调整协作记录创建失败，请重试");
-    return { issue, sizeKey };
+    return { issue, sizeKey, scope: normalizedScope, expectedSizes, sourceContext: creativeOrderAdjustmentSourceContext(asset, target.variant) };
   };
   const annotation = async (asset: CreativeOrderAsset, drafts: CreativeAnnotationDraft[]) => {
     if (!data?.issue_id || drafts.length === 0 || drafts.some((draft) => !draft.comment.trim())) return false;
-    const scope: CreativeAdjustmentScope = drafts.some((draft) => draft.scope === "variant") ? "variant" : "size";
-    const summary = creativeAnnotationAdjustmentSummary(drafts, scope);
+    const requestedScope: CreativeAdjustmentScope = drafts.some((draft) => draft.scope === "variant") ? "variant" : "size";
+    const target = variantById.get(asset.variant_id);
+    const contractSizeCount = target ? creativeVariantRevisionExpectedSizes(target.variant, asset.revision).length : 1;
+    const scope: CreativeAdjustmentScope = requestedScope === "variant" && contractSizeCount > 1 ? "variant" : "size";
+    const summary = creativeAnnotationAdjustmentSummary(drafts, scope, contractSizeCount);
     const first = drafts[0]!;
     try {
       const adjustment = await createOrderAdjustmentIssue(asset, summary, scope);
@@ -532,8 +566,8 @@ function CreativeOrderDetail({ orderId, onBack, onBrowseOrders, backLabel }: { o
       const targetURL = attachmentURL(asset);
       if (!targetURL) throw new Error("当前调整缺少可标注的目标成图");
       const annotationGuide = await createAnnotationGuideAttachment(targetURL, adjustment.issue.id, asset.size_key as CreativeDeliverySize, asset.revision, drafts);
-      const annotations = drafts.map((draft) => ({ ...draft, scope }));
-      await api.queueCreativeOrderAdjustment(orderId, { adjustment_issue_id: adjustment.issue.id, asset_id: asset.id, size_key: adjustment.sizeKey, scope, source_revision: asset.revision, annotation_guide_attachment_id: annotationGuide.id, comment: summary, event_type: "annotation", reason_codes: [...new Set(drafts.map((draft) => assetFeedbackReason(draft.issueType)))], annotation: { id: crypto.randomUUID(), asset_id: asset.id, kind: first.kind, issue_type: first.issueType, x: first.x, y: first.y, width: first.width, height: first.height, scope, comment: first.comment }, context_snapshot: { scope, annotations, annotation_guide_attachment_id: annotationGuide.id, annotation_guide_source: "final_reference" } });
+      const annotations = drafts.map((draft) => ({ ...draft, scope: adjustment.scope }));
+      await api.queueCreativeOrderAdjustment(orderId, { adjustment_issue_id: adjustment.issue.id, asset_id: asset.id, size_key: adjustment.sizeKey, scope: adjustment.scope, source_revision: asset.revision, annotation_guide_attachment_id: annotationGuide.id, comment: summary, event_type: "annotation", reason_codes: [...new Set(drafts.map((draft) => assetFeedbackReason(draft.issueType)))], annotation: { id: crypto.randomUUID(), asset_id: asset.id, kind: first.kind, issue_type: first.issueType, x: first.x, y: first.y, width: first.width, height: first.height, scope: adjustment.scope, comment: first.comment }, context_snapshot: creativeOrderAdjustmentContextSnapshot(adjustment.scope, adjustment.expectedSizes, adjustment.sourceContext, { annotations, annotation_guide_attachment_id: annotationGuide.id, annotation_guide_source: "final_reference" }) });
       await queryClient.invalidateQueries({ queryKey: creativeKeys.feedback(wsId, "asset", "") });
       await queryClient.invalidateQueries({ queryKey: creativeKeys.order(wsId, orderId) });
       await queryClient.invalidateQueries({ queryKey: creativeKeys.orders(wsId) });
@@ -547,7 +581,7 @@ function CreativeOrderDetail({ orderId, onBack, onBrowseOrders, backLabel }: { o
     try {
       const request = adjustment.trim();
       const created = await createOrderAdjustmentIssue(active, request, adjustmentScope);
-      await api.queueCreativeOrderAdjustment(orderId, { adjustment_issue_id: created.issue.id, asset_id: active.id, size_key: created.sizeKey, scope: adjustmentScope, source_revision: active.revision, comment: request, event_type: "decision", reason_codes: ["other"], context_snapshot: { scope: adjustmentScope } });
+      await api.queueCreativeOrderAdjustment(orderId, { adjustment_issue_id: created.issue.id, asset_id: active.id, size_key: created.sizeKey, scope: created.scope, source_revision: active.revision, comment: request, event_type: "decision", reason_codes: ["other"], context_snapshot: creativeOrderAdjustmentContextSnapshot(created.scope, created.expectedSizes, created.sourceContext) });
       await queryClient.invalidateQueries({ queryKey: creativeKeys.feedback(wsId, "asset", "") });
       await queryClient.invalidateQueries({ queryKey: creativeKeys.order(wsId, orderId) });
       await queryClient.invalidateQueries({ queryKey: creativeKeys.orders(wsId) });
@@ -615,6 +649,13 @@ function CreativeOrderDetail({ orderId, onBack, onBrowseOrders, backLabel }: { o
         />;
       })}
     </div>
+    {data && <CreativeStagingRepairWorkspace
+      items={data.items}
+      attachments={byId}
+      disabled={isCancelled}
+      onAnnotations={annotation}
+      onViewInfo={(asset) => setGenerationInfoAssetId(asset.id)}
+    />}
     {latestAdjustment && data && <CreativeAdjustmentStatus event={latestAdjustment} variant={adjustedVariant} issueId={data.issue_id} retrying={adjustBusy} onRetry={async () => {
       const asset = assets.find((candidate) => candidate.id === latestAdjustment.subject_id);
       const adjustmentIssueId = typeof latestAdjustment.context_snapshot.adjustment_issue_id === "string" ? latestAdjustment.context_snapshot.adjustment_issue_id : "";
@@ -633,7 +674,8 @@ function CreativeOrderDetail({ orderId, onBack, onBrowseOrders, backLabel }: { o
         await queryClient.invalidateQueries({ queryKey: creativeKeys.feedback(wsId, "asset", "") });
         await queryClient.invalidateQueries({ queryKey: creativeKeys.order(wsId, orderId) });
         await queryClient.invalidateQueries({ queryKey: creativeKeys.orders(wsId) });
-        toast.success(scope === "variant" ? "已重新启动三尺寸调整" : "已重新启动当前尺寸调整");
+        const expectedCount = Array.isArray(latestAdjustment.context_snapshot.expected_sizes) ? latestAdjustment.context_snapshot.expected_sizes.length : 0;
+        toast.success(scope === "variant" ? `已重新启动全部交付尺寸调整${expectedCount > 0 ? `（${expectedCount}）` : ""}` : "已重新启动当前尺寸调整");
       } catch (error) {
         toast.error(error instanceof Error ? error.message : "无法重新启动调整");
       } finally {
@@ -651,7 +693,8 @@ function CreativeOrderDetail({ orderId, onBack, onBrowseOrders, backLabel }: { o
         onViewInfo={() => setGenerationInfoAssetId(active.id)}
         onDecision={(decision) => void event(active, decision)}
         onAnnotations={isCancelled ? undefined : (drafts) => annotation(active, drafts)}
-        annotationScopes={["size", "variant"]}
+        annotationScopes={canAdjustAllSizes ? ["size", "variant"] : ["size"]}
+        annotationScopeLabels={{ variant: `全部交付尺寸（${activeExpectedSizes.length}）` }}
         showDecisionActions={false}
         comparisonMode={adjustmentBefore && adjustmentBeforeURL ? "adjustment" : "source"}
       />
@@ -668,7 +711,7 @@ function CreativeOrderDetail({ orderId, onBack, onBrowseOrders, backLabel }: { o
       imageUrl={attachmentURL(generationInfoAsset)}
     />
     {data && !order.isLoading && reviewAssets.length === 0 && <div className="flex min-h-72 items-center justify-center border border-dashed px-6 text-center text-sm text-muted-foreground">{creativeOrderWaitingMessage(actionableFailures, isCancelled)}</div>}
-    <Dialog open={adjustOpen} onOpenChange={setAdjustOpen}><DialogContent className="max-w-xl"><DialogHeader><DialogTitle>精准调整当前成图</DialogTitle><DialogDescription>{activeVariant?.variant.variant_key || "当前变体"} · {active?.size_key}。{adjustmentScope === "variant" ? "本次会调整当前变体的三个交付尺寸，当前图作为参考。" : "本次只处理当前尺寸，协作记录会单独保存。"}</DialogDescription></DialogHeader><div className="space-y-3"><div className="space-y-1.5"><Label className="text-xs text-muted-foreground">调整范围</Label><div className="inline-flex border" role="group" aria-label="精准调整范围"><button type="button" aria-pressed={adjustmentScope === "size"} onClick={() => setAdjustmentScope("size")} className={cn("h-8 px-3 text-xs", adjustmentScope === "size" && "bg-foreground text-background")}>单尺寸</button><button type="button" aria-pressed={adjustmentScope === "variant"} onClick={() => setAdjustmentScope("variant")} className={cn("h-8 border-l px-3 text-xs", adjustmentScope === "variant" && "bg-foreground text-background")}>三尺寸</button></div></div><Textarea rows={5} value={adjustment} onChange={(event) => setAdjustment(event.target.value)} placeholder="说明当前成图需要改什么，以及必须保留的视觉风格、文案和布局..." /></div><DialogFooter><Button variant="outline" onClick={() => setAdjustOpen(false)}>取消</Button><Button disabled={adjustBusy || !adjustment.trim()} onClick={() => void submitAdjustment()}>{adjustBusy ? "正在提交" : "提交精准调整"}</Button></DialogFooter></DialogContent></Dialog>
+    <Dialog open={adjustOpen} onOpenChange={setAdjustOpen}><DialogContent className="max-w-xl"><DialogHeader><DialogTitle>精准调整当前成图</DialogTitle><DialogDescription>{activeVariant?.variant.variant_key || "当前变体"} · {active?.size_key}。{adjustmentScope === "variant" ? `本次会调整当前版本的全部 ${activeExpectedSizes.length} 个交付尺寸，当前图作为参考。` : "本次只处理当前尺寸，协作记录会单独保存。"}</DialogDescription></DialogHeader><div className="space-y-3"><div className="space-y-1.5"><Label className="text-xs text-muted-foreground">调整范围</Label><div className="inline-flex border" role="group" aria-label="精准调整范围"><button type="button" aria-pressed={adjustmentScope === "size"} onClick={() => setAdjustmentScope("size")} className={cn("h-8 px-3 text-xs", adjustmentScope === "size" && "bg-foreground text-background")}>当前尺寸</button>{canAdjustAllSizes && <button type="button" aria-pressed={adjustmentScope === "variant"} onClick={() => setAdjustmentScope("variant")} className={cn("h-8 border-l px-3 text-xs", adjustmentScope === "variant" && "bg-foreground text-background")}>全部交付尺寸（{activeExpectedSizes.length}）</button>}</div></div><Textarea rows={5} value={adjustment} onChange={(event) => setAdjustment(event.target.value)} placeholder="说明当前成图需要改什么，以及必须保留的视觉风格、文案和布局..." /></div><DialogFooter><Button variant="outline" onClick={() => setAdjustOpen(false)}>取消</Button><Button disabled={adjustBusy || !adjustment.trim()} onClick={() => void submitAdjustment()}>{adjustBusy ? "正在提交" : "提交精准调整"}</Button></DialogFooter></DialogContent></Dialog>
     <AlertDialog open={cancelOpen} onOpenChange={(open) => { if (!cancelOrder.isPending) setCancelOpen(open); }}>
       <AlertDialogContent>
         <AlertDialogHeader><AlertDialogTitle>结束这个创意订单？</AlertDialogTitle><AlertDialogDescription>仍在运行的生成任务会停止。已有成图、失败原因和协作记录会保留，但订单不再占用工作台待验收列表，也不能继续采用或调整。</AlertDialogDescription></AlertDialogHeader>
@@ -684,7 +727,8 @@ function CreativeAdjustmentStatus({ event, variant, issueId, onRetry, retrying =
   const variantKey = variant?.variant_key || String(event.context_snapshot.variant_id || "").slice(0, 8);
   const sizeKey = typeof event.context_snapshot.size_key === "string" ? event.context_snapshot.size_key : "";
   const scope = event.context_snapshot.scope === "variant" ? "variant" : "size";
-  const scopeLabel = scope === "variant" ? "三尺寸" : sizeKey;
+  const expectedCount = Array.isArray(event.context_snapshot.expected_sizes) ? event.context_snapshot.expected_sizes.length : 0;
+  const scopeLabel = scope === "variant" ? `全部交付尺寸${expectedCount > 0 ? `（${expectedCount}）` : ""}` : sizeKey;
   const adjustmentIssueId = typeof event.context_snapshot.adjustment_issue_id === "string" ? event.context_snapshot.adjustment_issue_id : "";
   const collaborationIssueId = adjustmentIssueId || issueId;
   const canRetry = creativeAdjustmentCanRetry(variant, event);
@@ -754,11 +798,12 @@ function OrderStat({ label, value }: { label: string; value: string }) {
 
 function creativeOrderRuntimeStats(order: CreativeOrder): { runningVariants: number; blockedVariants: number; previewAssets: number; expectedPreviewAssets: number } {
   const variants = order.items.flatMap((item) => item.variants);
+  const progress = creativeOrderGenerationProgress(order);
   return {
     runningVariants: variants.filter(creativeVariantIsInProgress).length,
     blockedVariants: variants.filter(creativeVariantNeedsManualAction).length,
-    previewAssets: variants.reduce((count, variant) => count + variant.assets.filter((asset) => asset.status === "completed" && asset.attachment_id).length, 0),
-    expectedPreviewAssets: variants.length * CREATIVE_DELIVERY_SIZES.length,
+    previewAssets: progress.ready,
+    expectedPreviewAssets: progress.expected,
   };
 }
 
@@ -1143,6 +1188,7 @@ type CreativeOrderAdjustmentIssueInput = {
   attachmentId: string;
   sizeKey: CreativeDeliverySize;
   scope: CreativeAdjustmentScope;
+  expectedSizes: readonly CreativeDeliverySize[];
   sourceRevision: number;
   request: string;
 };
@@ -1156,13 +1202,36 @@ export function creativeOrderAdjustmentSize(asset: Pick<CreativeOrderAsset, "siz
   return CREATIVE_DELIVERY_SIZES.includes(asset.size_key as CreativeDeliverySize) ? asset.size_key as CreativeDeliverySize : "";
 }
 
-export function creativeAnnotationAdjustmentSummary(drafts: CreativeAnnotationDraft[], scope: CreativeAdjustmentScope = "size"): string {
-  const label = scope === "variant" ? "三尺寸" : "当前尺寸";
+export function creativeOrderAdjustmentSourceContext(
+  asset: Pick<CreativeOrderAsset, "id" | "revision">,
+  variant: Pick<CreativeOrderVariant, "active_revision" | "staging_revision">,
+): { source_asset_id: string; source_revision: number; source_revision_role: "active" | "staging" } {
+  const staging = variant.staging_revision > 0
+    && variant.staging_revision !== variant.active_revision
+    && asset.revision === variant.staging_revision;
+  return {
+    source_asset_id: asset.id,
+    source_revision: asset.revision,
+    source_revision_role: staging ? "staging" : "active",
+  };
+}
+
+export function creativeOrderAdjustmentContextSnapshot(
+  scope: CreativeAdjustmentScope,
+  expectedSizes: readonly CreativeDeliverySize[],
+  sourceContext: ReturnType<typeof creativeOrderAdjustmentSourceContext>,
+  details: Record<string, unknown> = {},
+): Record<string, unknown> {
+  return { scope, expected_sizes: expectedSizes, ...sourceContext, ...details };
+}
+
+export function creativeAnnotationAdjustmentSummary(drafts: CreativeAnnotationDraft[], scope: CreativeAdjustmentScope = "size", expectedSizeCount = 3): string {
+  const label = scope === "variant" ? `全部交付尺寸（${expectedSizeCount}）` : "当前尺寸";
   return drafts.map((draft, index) => `标注 ${index + 1}（${label}）：${draft.comment.trim()}`).join("\n");
 }
 
-export function creativeOrderAdjustmentIssueTitle(input: Pick<CreativeOrderAdjustmentIssueInput, "variantKey" | "sizeKey" | "scope" | "sourceRevision">): string {
-  const scopeLabel = input.scope === "variant" ? "三尺寸" : creativeOrderSizeLabel(input.sizeKey);
+export function creativeOrderAdjustmentIssueTitle(input: Pick<CreativeOrderAdjustmentIssueInput, "variantKey" | "sizeKey" | "scope" | "sourceRevision" | "expectedSizes">): string {
+  const scopeLabel = input.scope === "variant" ? `全部交付尺寸（${input.expectedSizes.length}）` : creativeOrderSizeLabel(input.sizeKey);
   return `${input.variantKey || "当前方案"} / ${scopeLabel} 精准调整 · R${input.sourceRevision + 1}`;
 }
 
@@ -1200,14 +1269,14 @@ export function creativeOrderAdjustmentIssueRequest(input: CreativeOrderAdjustme
 
 export function creativeOrderAdjustmentIssueDescription(input: CreativeOrderAdjustmentIssueInput): string {
   const sizeLabel = creativeOrderSizeLabel(input.sizeKey);
-  const scopeLabel = input.scope === "variant" ? `三尺寸（以 ${sizeLabel} \`${input.sizeKey}\` 为标注参考）` : `${sizeLabel} \`${input.sizeKey}\``;
+  const scopeLabel = input.scope === "variant" ? `全部交付尺寸（${input.expectedSizes.length}，以 ${sizeLabel} \`${input.sizeKey}\` 为标注参考）` : `${sizeLabel} \`${input.sizeKey}\``;
   const target = `订单 \`${input.orderId.slice(0, 8)}\` · \`${input.variantKey || "当前方案"}\` · ${scopeLabel} · \`r${input.sourceRevision}\` · 成图 \`${input.assetId.slice(0, 8)}\``;
   const imageURL = input.attachmentId ? attachmentDownloadPath(input.attachmentId) : "";
   const preview = imageURL ? `\n\n[![目标成图：${input.variantKey} ${sizeLabel} r${input.sourceRevision}](${imageURL})](${imageURL})` : "";
   const instruction = input.scope === "variant"
     ? "Apply this adjustment across all expected sizes in the current variant. Use the selected annotated size as reference; edit each delivery size from its same-size unbranded base and preserve approved style, layout family, business facts, and fixed Prime components unless the user explicitly marked them in this adjustment issue."
     : "Process only this size from the current approved image context. Preserve the approved style, layout family, business facts, and other assets unless the user explicitly marked them in this adjustment issue.";
-  return `订单画布提交精准调整。\n\n**目标成图：** ${target}${preview}\n\n${input.request.trim()}\n\n<!-- creative-workflow-context\ncreative_order_id: ${input.orderId}\ncreative_order_item_id: ${input.itemId}\nvariant_id: ${input.variantId}\nvariant_key: ${input.variantKey}\nasset_id: ${input.assetId}\nattachment_id: ${input.attachmentId}\nsize_key: ${input.sizeKey}\nsource_revision: ${input.sourceRevision}\ntarget_revision: ${input.sourceRevision + 1}\nscope: ${input.scope}\ninstruction: ${instruction}\n-->`;
+  return `订单画布提交精准调整。\n\n**目标成图：** ${target}${preview}\n\n${input.request.trim()}\n\n<!-- creative-workflow-context\ncreative_order_id: ${input.orderId}\ncreative_order_item_id: ${input.itemId}\nvariant_id: ${input.variantId}\nvariant_key: ${input.variantKey}\nasset_id: ${input.assetId}\nattachment_id: ${input.attachmentId}\nsize_key: ${input.sizeKey}\nsource_revision: ${input.sourceRevision}\ntarget_revision: ${input.sourceRevision + 1}\nscope: ${input.scope}\nexpected_sizes: ${input.expectedSizes.join(",")}\ninstruction: ${instruction}\n-->`;
 }
 
 function creativeOrderSizeLabel(sizeKey: string): string {
@@ -1221,15 +1290,24 @@ export function creativeOrderWaitingMessage(failures: CreativeOrderWorkflowFailu
     : "正在等待首批成图。各变体完成后会立即出现在这里。";
 }
 
-export function selectCreativeReviewAssets(assets: CreativeOrderAsset[], variantOrder: string[] = []): CreativeOrderAsset[] {
+type CreativeReviewVariant = Pick<CreativeOrderVariant, "id" | "revision" | "active_revision" | "staging_revision">;
+
+export function selectCreativeReviewAssets(assets: CreativeOrderAsset[], variants: Array<string | CreativeReviewVariant> = []): CreativeOrderAsset[] {
+  const targetRevision = new Map(variants.flatMap((variant) => {
+    if (typeof variant === "string") return [];
+    if (variant.active_revision > 0) return [[variant.id, variant.active_revision] as const];
+    return [[variant.id, variant.staging_revision > 0 ? variant.staging_revision : variant.revision] as const];
+  }));
   const selected = new Map<string, CreativeOrderAsset>();
   for (const asset of assets) {
     if (asset.status !== "completed" || !asset.attachment_id) continue;
+    const revision = targetRevision.get(asset.variant_id);
+    if (revision !== undefined && asset.revision !== revision) continue;
     const key = `${asset.variant_id}:${asset.size_key}`;
     const current = selected.get(key);
     if (!current || compareCreativeAssets(asset, current) > 0) selected.set(key, asset);
   }
-  const rank = new Map(variantOrder.map((variantId, index) => [variantId, index]));
+  const rank = new Map(variants.map((variant, index) => [typeof variant === "string" ? variant : variant.id, index]));
   return [...selected.values()].sort((left, right) => {
     const leftRank = rank.get(left.variant_id);
     const rightRank = rank.get(right.variant_id);

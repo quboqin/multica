@@ -15,10 +15,10 @@
 | `material_collection` | 创建 Crawl Run、导入候选 | `reference_analysis` |
 | `reference_analysis` | 写 Source Analysis | 无 |
 | `creative_leadership` | 首次委派、异常恢复、用户汇总 | plan 或 direct edit |
-| `generation_plan` | 写 V01-V03 brief | production |
-| `image_edit` | 写 generated assets 和底图过程证据 | 调用 `prime_compose` Skill，由后端品牌组件合成 |
-| `direct_image_edit` | 写下一 revision generated assets 和底图过程证据 | publish 调用 `prime_compose` Skill，由后端直接登记 delivered，不进 QC |
-| `quality_control` | 写一个 lane 检测报告 | 无 |
+| `generation_plan` | 写 4-5 个候选 brief 与主尺寸计划 | candidate primary production |
+| `image_edit` | 写候选主尺寸或 selected 缺失尺寸 generated assets 和过程证据 | 调用 `prime_compose` Skill |
+| `direct_image_edit` | 写下一 revision generated assets 和底图过程证据 | 调用 `prime_compose` Skill并进入最终 visual QC |
+| `quality_control` | 候选原子晋级 3 个，或按实际 expected sizes 写联合 visual 报告 | candidate selection 后由平台补排尺寸；finalize 后归档 |
 
 成员不得越级创建其他阶段。下游 Agent ID 来自冻结 squad snapshot 或上游 context，不按名称猜测。
 
@@ -28,9 +28,10 @@
 | --- | --- | --- | --- |
 | 参考分析 | `creative_crawl_run_analysis` | Crawl Run | candidate + analysis version |
 | 方案 | `creative_order_item_plan` | Order Item | item + revision |
-| 生产 | `creative_order_item_production` | Order Item | variant + revision |
+| 候选/晋级生产 | `creative_order_item_production` | Order Item | variant + revision + production stage |
+| 候选晋级 | `creative_order_item_candidate_selection` | Order Item | `candidate-selection:v1` |
 | QC | `creative_order_variant_qc` | Variant | variant + lane + revision |
-| 直接改图 | `creative_order_item_direct_edit` | Order Item | variant + size + source revision; unbranded base -> deterministic Prime compose -> delivered, no QC |
+| 直接改图 | `creative_order_item_direct_edit` | Order Item | variant + size + source revision; unbranded base -> deterministic Prime compose -> visual QC |
 
 Source Analysis 写回的 `trigger_evidence_kind=crawl_run` 是领域来源，不是 task source kind。
 
@@ -60,12 +61,14 @@ runtime 和 provider 限额控制。
 失败项不取消兄弟项；每个 Variant 独立推进并即时展示已交付结果。迟到 task 只能写声明 revision，服务端
 拒绝覆盖更高 revision。
 
-标准 Variant 的 expected sizes 共享批准文案、业务语义、主体、信息层级和 `asset_family_id`；方形是横竖版
-重排基线。后端只按冻结 config 原样叠加完整品牌模板。`prime_compose` Skill 只调用后端确定性合成；visual QC 写独立报告；`qc-finalize` 在视觉报告归档后
-登记 delivered assets、Variant completion 和 Inbox，但检测发现只作为建议，不影响这些状态。
+每个 item 先有 4-5 个 candidate Variant，各自只生成由方向选择的 `primary_size`；候选原子晋级恰好 3 个，reserve 保留但不参与交付汇总。
+计划 5 个候选时允许 1 个在有界恢复后终态失败并标记 rejected，其余 4 个仍可进入原子比较；少于 4 个合格候选不能比较。
+selected 的 expected sizes 共享批准文案、业务语义、DesignDNA、信息层级和 `asset_family_id`；各尺寸按 LayoutPlan 从同一参考独立生成，
+主尺寸只可作为一致性参考，不是方形硬依赖。后端只按冻结 config 原样叠加完整品牌模板。`prime_compose` Skill 只调用后端确定性合成；visual QC 写独立报告；`qc-finalize` 在视觉报告归档后
+按报告与返工策略登记 delivered assets、Variant completion 和 Inbox；阻断 finding 不能由 Agent 自报通过。
 
 direct edit 只处理 context 的 source asset 和 expected sizes；source 不可覆盖，输出 revision 加一并记录
-lineage。preview 不进入品牌组件/QC，publish 才调用 `prime_compose` Skill；后端合成后直接登记 delivered，不创建 QC。
+lineage。preview 不进入品牌组件/QC，publish 调用 `prime_compose` Skill并进入最终 visual QC，不能直接登记 delivered。
 
 ## 失败与人工反馈
 
@@ -75,4 +78,7 @@ lineage。preview 不进入品牌组件/QC，publish 才调用 `prime_compose` S
 以下用户操作追加 feedback event：素材采用/拒绝，文案推荐曝光/采用/替换/编辑，Variant 接受/调整/放弃，
 成图接受/下载/报告问题/区域标注，QC 误判/漏检/接受风险。撤销写新事件，不删除历史。
 
-QC 对真实 Prime 遮挡或官方文字不可读最多自动返工当前 Variant 一轮；预测遮挡、关键内容缺失和其他建议由用户在高清对比中决定局部调整、重做或放弃。
+composer 的结构化 Prime 承托失败只允许对失败尺寸做一次背景定向修复；最终 visual QC 的真实 Prime 遮挡或官方文字不可读按服务端有界轮次只返工失败尺寸。
+失败修复写 staging revision；通过全部硬门后才原子切换 active。已有 active 时 staging 失败不影响线上素材；首次交付的 selected 耗尽有界修复时，
+平台按排名晋级 reserve 并补齐缺失尺寸。没有 active 且没有 reserve 才进入人工处理，不能自动带风险发布。
+预测遮挡、关键内容缺失和其他建议由用户在高清对比中决定局部调整、重做或放弃。

@@ -2212,6 +2212,9 @@ func (h *Handler) CompleteTask(w http.ResponseWriter, r *http.Request) {
 		artifactError, validationErr = h.preAdaptationCompletionError(r.Context(), existingTask, workspaceID)
 	}
 	if validationErr == nil && artifactError == "" {
+		artifactError, validationErr = h.creativeCandidateSelectionCompletionError(r.Context(), existingTask, workspaceID)
+	}
+	if validationErr == nil && artifactError == "" {
 		artifactError, validationErr = h.creativeDirectEditCompletionError(r.Context(), existingTask, workspaceID)
 	}
 	if validationErr != nil {
@@ -2228,6 +2231,9 @@ func (h *Handler) CompleteTask(w http.ResponseWriter, r *http.Request) {
 		if err := h.Queries.DeleteTaskTokensByTask(r.Context(), task.ID); err != nil {
 			slog.Warn("complete task without output: failed to revoke task tokens", "task_id", uuidToString(task.ID), "error", err)
 		}
+		if err := h.reconcileCreativeImageOperationsForTerminalTask(r.Context(), *task); err != nil {
+			slog.Error("reconcile image operations after rejected completion", "task_id", taskID, "error", err)
+		}
 		if strings.HasPrefix(artifactError, creativePreAdaptationOutputMismatchError) {
 			if recoveryTaskID, retryErr := h.retryCreativePreAdaptationOutput(r.Context(), *task); retryErr != nil {
 				slog.Warn("queue automatic pre-adaptation recovery failed", "task_id", uuidToString(task.ID), "error", retryErr)
@@ -2238,6 +2244,8 @@ func (h *Handler) CompleteTask(w http.ResponseWriter, r *http.Request) {
 		}
 		if err := h.settleCreativeProductionVariantTask(r.Context(), *task); err != nil {
 			slog.Error("close incomplete creative production variant after rejected completion", "task_id", taskID, "error", err)
+		} else if err := h.reconcileCreativeCandidateOrchestrationForProductionTask(r.Context(), *task); err != nil {
+			slog.Error("reconcile creative candidates after rejected completion", "task_id", taskID, "error", err)
 		}
 		if err := h.settleCreativeDirectEditTask(r.Context(), *task); err != nil {
 			slog.Error("close incomplete creative direct edit after rejected completion", "task_id", taskID, "error", err)
@@ -2254,6 +2262,9 @@ func (h *Handler) CompleteTask(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	if err := h.reconcileCreativeImageOperationsForTerminalTask(r.Context(), *task); err != nil {
+		slog.Error("reconcile image operations after completion", "task_id", taskID, "error", err)
+	}
 
 	h.emitIssueExecutedOnFirstCompletion(r, task)
 	if err := h.enqueueCreativePreAdaptation(r.Context(), *task, workspaceID); err != nil {
@@ -2263,6 +2274,8 @@ func (h *Handler) CompleteTask(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := h.settleCreativeProductionVariantTask(r.Context(), *task); err != nil {
 		slog.Error("close incomplete creative production variant after completion", "task_id", taskID, "error", err)
+	} else if err := h.reconcileCreativeCandidateOrchestrationForProductionTask(r.Context(), *task); err != nil {
+		slog.Error("reconcile creative candidates after completion", "task_id", taskID, "error", err)
 	}
 	if err := h.settleCreativeDirectEditTask(r.Context(), *task); err != nil {
 		slog.Error("close incomplete creative direct edit after completion", "task_id", taskID, "error", err)
@@ -2415,6 +2428,9 @@ func (h *Handler) FailTask(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	if err := h.reconcileCreativeImageOperationsForTerminalTask(r.Context(), *task); err != nil {
+		slog.Error("reconcile image operations after failure", "task_id", taskID, "error", err)
+	}
 
 	// Best-effort revoke of the mat_ task token minted at claim. Same
 	// rationale as CompleteTask — eager deletion shrinks the post-
@@ -2430,6 +2446,8 @@ func (h *Handler) FailTask(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := h.settleCreativeProductionVariantTask(r.Context(), *task); err != nil {
 		slog.Error("close incomplete creative production variant after failure", "task_id", taskID, "error", err)
+	} else if err := h.reconcileCreativeCandidateOrchestrationForProductionTask(r.Context(), *task); err != nil {
+		slog.Error("reconcile creative candidates after failure", "task_id", taskID, "error", err)
 	}
 	if err := h.settleCreativeDirectEditTask(r.Context(), *task); err != nil {
 		slog.Error("close incomplete creative direct edit after failure", "task_id", taskID, "error", err)
@@ -2633,6 +2651,9 @@ func (h *Handler) CancelTask(w http.ResponseWriter, r *http.Request) {
 		slog.Warn("cancel task failed", "task_id", taskID, "error", err)
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
+	}
+	if err := h.reconcileCreativeImageOperationsForTerminalTask(r.Context(), *task); err != nil {
+		slog.Error("reconcile image operations after cancellation", "task_id", taskID, "error", err)
 	}
 
 	slog.Info("task cancelled by user", "task_id", taskID, "issue_id", uuidToString(task.IssueID))

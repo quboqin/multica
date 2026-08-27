@@ -77,6 +77,14 @@ describe("CreativeComparisonWorkspace", () => {
     expect(onViewInfo).toHaveBeenCalledTimes(1);
   });
 
+  it("can hide delivery actions while reviewing a staging revision", () => {
+    render(<CreativeComparisonWorkspace {...props} showDecisionActions={false} allowDownload={false} />);
+    expect(screen.queryByRole("button", { name: "下载当前成图" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "接受" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "点标注" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "框选标注" })).toBeEnabled();
+  });
+
   it("keeps multiple numbered annotations and submits them as one adjustment", async () => {
     const onAnnotations = vi.fn().mockResolvedValue(true);
     render(<CreativeComparisonWorkspace {...props} onAnnotations={onAnnotations} />);

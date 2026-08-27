@@ -27,14 +27,31 @@ describe("creativeOrderSummarySelections", () => {
     ]);
   });
 
-  it("uses the unique completed variant only for a direct edit order", () => {
+  it("uses the unique active variant only for a direct edit order", () => {
     const directItem = {
       id: "direct-item",
       adopted_variant_id: "",
-      variants: [{ id: "direct-result", status: "completed", variant_key: "DIRECT" }],
+      variants: [{ id: "direct-result", status: "completed", active_revision: 1, variant_key: "DIRECT" }],
     } as unknown as CreativeOrderItem;
 
     expect(creativeOrderSummarySelections([directItem])).toEqual([]);
+    expect(creativeOrderSummarySelections([directItem], true).map(({ variant }) => variant.id)).toEqual(["direct-result"]);
+  });
+
+  it("keeps a direct edit's active revision visible while a newer staging revision fails", () => {
+    const directItem = {
+      id: "direct-item",
+      adopted_variant_id: "",
+      variants: [{
+        id: "direct-result",
+        status: "action_required",
+        active_revision: 1,
+        staging_revision: 2,
+        revision: 2,
+        variant_key: "DIRECT",
+      }],
+    } as unknown as CreativeOrderItem;
+
     expect(creativeOrderSummarySelections([directItem], true).map(({ variant }) => variant.id)).toEqual(["direct-result"]);
   });
 });

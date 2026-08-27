@@ -15,8 +15,8 @@ from typing import Any
 COMPLETED_STATUSES = frozenset({"completed", "complete", "success", "succeeded"})
 
 
-def build_command(order_id: str, variant_id: str, output: str) -> list[str]:
-    return [
+def build_command(order_id: str, variant_id: str, output: str, force: bool = False) -> list[str]:
+    command = [
         "multica",
         "creative",
         "order",
@@ -27,6 +27,9 @@ def build_command(order_id: str, variant_id: str, output: str) -> list[str]:
         "--output",
         output,
     ]
+    if force:
+        command.append("--force")
+    return command
 
 
 def has_completion_signal(value: Any) -> bool:
@@ -57,11 +60,13 @@ def decode_completed_result(stdout: str) -> Mapping[str, Any]:
     return payload
 
 
-def run_prime_compose(order_id: str, variant_id: str, output: str) -> Mapping[str, Any]:
+def run_prime_compose(
+    order_id: str, variant_id: str, output: str, force: bool = False
+) -> Mapping[str, Any]:
     env = os.environ.copy()
     env.setdefault("MULTICA_HTTP_TIMEOUT", "5m")
     completed = subprocess.run(
-        build_command(order_id, variant_id, output),
+        build_command(order_id, variant_id, output, force),
         check=False,
         capture_output=True,
         text=True,
@@ -84,13 +89,18 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--order-id", required=True)
     parser.add_argument("--variant", required=True, dest="variant_id")
     parser.add_argument("--output", choices=("json",), default="json")
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Explicitly retry the deterministic job for the current staging revision.",
+    )
     return parser.parse_args(argv)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv)
     try:
-        result = run_prime_compose(args.order_id, args.variant_id, args.output)
+        result = run_prime_compose(args.order_id, args.variant_id, args.output, args.force)
     except (OSError, RuntimeError, ValueError) as exc:
         print(str(exc), file=sys.stderr)
         return 1

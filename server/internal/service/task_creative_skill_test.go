@@ -24,6 +24,11 @@ func TestCreativeTaskSkillCapabilities(t *testing.T) {
 			want:     map[string]struct{}{"direct_image_edit": {}, "prime_compose": {}},
 		},
 		{
+			name:     "candidate selection",
+			workflow: "creative_candidate_selection",
+			want:     map[string]struct{}{"quality_control": {}},
+		},
+		{
 			name:     "non creative task",
 			workflow: "chat",
 			want:     nil,

@@ -91,6 +91,9 @@ func (h *Handler) QueueCreativeOrderAdjustment(w http.ResponseWriter, r *http.Re
 	if !ok {
 		return
 	}
+	if !h.requireCreativeOrderWritable(w, r, orderID, workspaceID) {
+		return
+	}
 	var input creativeOrderAdjustmentInput
 	decoder := json.NewDecoder(r.Body)
 	decoder.DisallowUnknownFields()
@@ -135,19 +138,23 @@ func (h *Handler) QueueCreativeOrderAdjustment(w http.ResponseWriter, r *http.Re
 	}
 	defer tx.Rollback(r.Context())
 
-	var rootIssueID, inputSnapshot string
+	var rootIssueID, inputSnapshot, orderStatus string
 	err = tx.QueryRow(r.Context(), `
-SELECT COALESCE(issue_id::text, ''), input_snapshot::text
+SELECT COALESCE(issue_id::text, ''), input_snapshot::text, status
 FROM creative_order
 WHERE id = $1 AND workspace_id = $2
 FOR UPDATE
-`, orderID, workspaceID).Scan(&rootIssueID, &inputSnapshot)
+`, orderID, workspaceID).Scan(&rootIssueID, &inputSnapshot, &orderStatus)
 	if errors.Is(err, pgx.ErrNoRows) {
 		writeError(w, http.StatusNotFound, "creative order not found")
 		return
 	}
 	if err != nil || rootIssueID == "" {
 		writeError(w, http.StatusConflict, "creative order cannot start an adjustment")
+		return
+	}
+	if orderStatus == "cancelled" {
+		writeError(w, http.StatusConflict, "cancelled creative order cannot start an adjustment")
 		return
 	}
 
@@ -177,14 +184,19 @@ FOR UPDATE
 		return
 	}
 
-	var itemID, candidateID, variantID, assetAttachmentID, sourceAssetID, sourceAttachmentID, variantStatus string
+	var itemID, candidateID, variantID, assetAttachmentID, sourceAssetID, sourceAttachmentID string
+	var expectedSizes []string
 	var currentRevision int
 	err = tx.QueryRow(r.Context(), `
-SELECT item.id::text, item.candidate_id::text, variant.id::text, variant.revision, variant.status,
-  COALESCE(asset.attachment_id::text, ''),
-  COALESCE(source_asset.id::text, ''), COALESCE(source_asset.attachment_id::text, '')
+SELECT item.id::text, item.candidate_id::text, variant.id::text, variant.revision,
+	  COALESCE(asset.attachment_id::text, ''),
+	  COALESCE(source_asset.id::text, ''), COALESCE(source_asset.attachment_id::text, ''),
+	  source_revision.expected_sizes
 FROM creative_order_item item
 JOIN creative_order_variant variant ON variant.order_item_id = item.id
+JOIN creative_order_variant_revision source_revision
+  ON source_revision.variant_id = variant.id
+  AND source_revision.revision = $4
 JOIN creative_order_asset asset ON asset.variant_id = variant.id
 LEFT JOIN creative_order_asset source_asset
   ON source_asset.variant_id = variant.id
@@ -196,13 +208,14 @@ LEFT JOIN creative_order_asset source_asset
 WHERE item.order_id = $1
   AND variant.id::text = $2
   AND asset.id = $3
-  AND asset.revision = $4
-  AND asset.size_key = $5
+	  AND asset.revision = $4
+	  AND (variant.active_revision = $4 OR variant.staging_revision = $4)
+	  AND asset.size_key = $5
   AND asset.status = 'completed'
   AND asset.attachment_id IS NOT NULL
-FOR UPDATE OF item, variant, asset
+FOR UPDATE OF item, variant, source_revision, asset
 	`, orderID, issueContext.VariantID, assetID, input.SourceRevision, input.SizeKey).Scan(
-		&itemID, &candidateID, &variantID, &currentRevision, &variantStatus, &assetAttachmentID, &sourceAssetID, &sourceAttachmentID,
+		&itemID, &candidateID, &variantID, &currentRevision, &assetAttachmentID, &sourceAssetID, &sourceAttachmentID, &expectedSizes,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		writeError(w, http.StatusConflict, "adjustment target is no longer the current completed image")
@@ -216,13 +229,10 @@ FOR UPDATE OF item, variant, asset
 		writeError(w, http.StatusConflict, "adjustment target has already changed")
 		return
 	}
-	expectedSizes, foundExpectedSizes, err := creativeOrderSnapshotExpectedSizes(json.RawMessage(inputSnapshot))
+	expectedSizes, err = normalizeCreativeExpectedSizes(expectedSizes)
 	if err != nil {
-		writeError(w, http.StatusConflict, err.Error())
+		writeError(w, http.StatusConflict, "active creative revision has an invalid delivery contract")
 		return
-	}
-	if !foundExpectedSizes {
-		expectedSizes = append([]string(nil), standardCreativeAssetSizes...)
 	}
 	if !creativeSizeIsExpected(input.SizeKey, expectedSizes) {
 		writeError(w, http.StatusConflict, "adjustment size is not part of the order delivery package")
@@ -249,24 +259,8 @@ SELECT EXISTS(
 		return
 	}
 
-	var retryingRevision bool
-	if currentRevision == input.SourceRevision+1 && currentRevision > input.SourceRevision {
-		var completedEditGenerated int
-		if err := tx.QueryRow(r.Context(), `
-SELECT COUNT(DISTINCT size_key)
-  FROM creative_order_asset
-  WHERE variant_id = $1 AND revision = $2 AND size_key = ANY($3::text[])
-    AND stage = 'generated' AND status = 'completed' AND attachment_id IS NOT NULL
-`, parseUUID(variantID), currentRevision, editSizes).Scan(&completedEditGenerated); err != nil {
-			writeError(w, http.StatusInternalServerError, "failed to check previous adjustment output")
-			return
-		}
-		retryingRevision = completedEditGenerated < len(editSizes) && currentRevision == input.SourceRevision+1 &&
-			(currentRevision > input.SourceRevision) &&
-			(variantStatus == "running" || variantStatus == "action_required" || variantStatus == "failed")
-	}
-	if currentRevision != input.SourceRevision && !retryingRevision {
-		writeError(w, http.StatusConflict, "adjustment target has already changed")
+	if currentRevision != input.SourceRevision {
+		writeError(w, http.StatusConflict, "adjustment must explicitly target the current active or staging revision")
 		return
 	}
 
@@ -451,16 +445,17 @@ ON CONFLICT (variant_id, revision, workflow, size_key, label, filename) DO NOTHI
 	if len(annotationsJSON) == 0 || string(annotationsJSON) == "null" {
 		annotationsJSON = []byte("[]")
 	}
-	if _, err := tx.Exec(r.Context(), `
+	var revisionBrief string
+	if err := tx.QueryRow(r.Context(), `
 UPDATE creative_order_variant
 SET revision = $2,
     status = 'running',
+	staging_revision = $2,
     brief = jsonb_set(
       brief - 'creative_direct_edit_error',
       '{creative_direct_edit_delivery}',
-      jsonb_build_object(
-        'skip_qc', false,
-        'final_visual_validation', true,
+	      jsonb_build_object(
+	        'final_visual_validation', true,
         'source_revision', $3::integer,
         'target_size', $4::text,
         'scope', $5::text,
@@ -474,16 +469,13 @@ SET revision = $2,
     ),
     updated_at = now()
 WHERE id = $1
-	`, parseUUID(variantID), newRevision, input.SourceRevision, input.SizeKey, input.Scope, expectedSizes, editSizes, feedback.Comment, string(annotationsJSON), annotationGuideAttachmentID); err != nil {
+RETURNING brief::text
+	`, parseUUID(variantID), newRevision, input.SourceRevision, input.SizeKey, input.Scope, expectedSizes, editSizes, feedback.Comment, string(annotationsJSON), annotationGuideAttachmentID).Scan(&revisionBrief); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to begin image adjustment")
 		return
 	}
-	if _, err := tx.Exec(r.Context(), `
-UPDATE creative_order_item
-SET adopted_variant_id = NULL, adopted_at = NULL, adopted_by = NULL, updated_at = now()
-WHERE id = $1 AND adopted_variant_id = $2
-`, parseUUID(itemID), parseUUID(variantID)); err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to clear superseded adoption")
+	if err := upsertCreativeVariantRevision(r.Context(), tx, parseUUID(variantID), newRevision, json.RawMessage(revisionBrief), "running", expectedSizes); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to create image adjustment revision")
 		return
 	}
 	if _, err := tx.Exec(r.Context(), `UPDATE issue SET status = 'in_progress', updated_at = now() WHERE id = $1`, adjustmentIssueID); err != nil {

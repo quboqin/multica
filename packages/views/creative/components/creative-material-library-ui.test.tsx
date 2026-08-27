@@ -4,6 +4,7 @@ import "@testing-library/jest-dom/vitest";
 import { describe, expect, it, vi } from "vitest";
 import type { CreativeMaterialCandidate, CreativeVisualDirection } from "@multica/core/types";
 import {
+  adoptedGalleryComplete,
   creativeMaterialProductionState,
   creativeMaterialSelectionActionLabel,
   canRetryMaterialAnalysis,
@@ -16,7 +17,9 @@ import {
   orderDraftWithPreAdaptation,
   pendingNumericLayouts,
   preparedPreAdaptation,
+  resolveDirectEditMarketPack,
   sourceAnalysisHasNoEditableCopy,
+  submitCreativeDirectEdit,
   visualDirectionFromAnalysis,
   visualDirectionSummary,
   type OrderItemDraft,
@@ -68,6 +71,164 @@ function draft(overrides: Partial<OrderItemDraft> = {}): OrderItemDraft {
 }
 
 describe("CreativeMaterialLibrary contracts", () => {
+  it("resolves exactly one published default market pack for formal direct edits", () => {
+    const marketPack = (id: string) => ({
+      id,
+      name: `市场配置 ${id}`,
+      kind: "market_pack",
+      published_version: 3,
+      published_config: { pre_adaptation_default: true },
+    });
+
+    expect(resolveDirectEditMarketPack([], false)).toMatchObject({ status: "missing" });
+    expect(resolveDirectEditMarketPack([marketPack("one"), marketPack("two")] as never, false)).toMatchObject({ status: "ambiguous" });
+    expect(resolveDirectEditMarketPack([marketPack("one")] as never, false)).toMatchObject({
+      status: "ready",
+      marketPack: { id: "one", published_version: 3 },
+    });
+  });
+
+  it("freezes the formal direct edit before assigning the squad", async () => {
+    const calls: string[] = [];
+    const recoveries: unknown[] = [];
+    const apiClient = {
+      createIssue: vi.fn(async () => { calls.push("createIssue"); return { id: "issue-1" }; }),
+      updateIssue: vi.fn(async () => { calls.push("updateIssue"); return { id: "issue-1" }; }),
+      putCreativeIssueContext: vi.fn(async () => { calls.push("putCreativeIssueContext"); return {}; }),
+      createCreativeDirectEdit: vi.fn(async () => { calls.push("createCreativeDirectEdit"); return { order: { id: "order-1" } }; }),
+      setIssueMetadataKey: vi.fn(async () => { calls.push("setIssueMetadataKey"); return { metadata: {} }; }),
+    };
+
+    const result = await submitCreativeDirectEdit(apiClient as never, {
+      candidate: { id: "candidate-1", title: "参考素材", competitor: "", source_attachment_id: "attachment-1" },
+      instruction: "只调整标题位置",
+      targetSize: "1080x1080",
+      deliveryMode: "publish",
+      squadId: "squad-1",
+      submissionKey: "submission-1",
+      marketPackId: "market-pack-1",
+      recovery: { issueId: "", orderId: "", submissionKey: "", marketPackId: "" },
+      onRecovery: (recovery) => recoveries.push(recovery),
+    });
+
+    expect(result).toEqual({ issueId: "issue-1", orderId: "order-1" });
+    expect(calls).toEqual(["createIssue", "putCreativeIssueContext", "createCreativeDirectEdit", "setIssueMetadataKey", "updateIssue"]);
+    expect(apiClient.updateIssue).toHaveBeenCalledWith("issue-1", { assignee_type: "squad", assignee_id: "squad-1" });
+    expect(apiClient.putCreativeIssueContext).toHaveBeenCalledWith("issue-1", { market_pack_id: "market-pack-1", squad_id: "squad-1" });
+    expect(recoveries).toEqual([
+      { issueId: "issue-1", orderId: "", submissionKey: "submission-1", marketPackId: "market-pack-1" },
+      { issueId: "issue-1", orderId: "order-1", submissionKey: "submission-1", marketPackId: "market-pack-1" },
+    ]);
+  });
+
+  it("blocks a formal direct edit without a unique market pack before creating an issue", async () => {
+    const apiClient = {
+      createIssue: vi.fn(),
+      updateIssue: vi.fn(),
+      putCreativeIssueContext: vi.fn(),
+      createCreativeDirectEdit: vi.fn(),
+      setIssueMetadataKey: vi.fn(),
+    };
+
+    await expect(submitCreativeDirectEdit(apiClient as never, {
+      candidate: { id: "candidate-1", title: "参考素材", competitor: "", source_attachment_id: "attachment-1" },
+      instruction: "只调整标题位置",
+      targetSize: "1080x1080",
+      deliveryMode: "publish",
+      squadId: "squad-1",
+      submissionKey: "submission-1",
+      marketPackId: "",
+      recovery: { issueId: "", orderId: "", submissionKey: "", marketPackId: "" },
+      onRecovery: vi.fn(),
+    })).rejects.toThrow("正式投放必须绑定唯一的已发布默认市场配置");
+    expect(apiClient.createIssue).not.toHaveBeenCalled();
+  });
+
+  it("keeps preview direct edits independent from market-pack configuration", async () => {
+    const apiClient = {
+      createIssue: vi.fn(async () => ({ id: "issue-1" })),
+      updateIssue: vi.fn(async () => ({ id: "issue-1" })),
+      putCreativeIssueContext: vi.fn(),
+      createCreativeDirectEdit: vi.fn(async () => ({ order: { id: "order-1" } })),
+      setIssueMetadataKey: vi.fn(async () => ({ metadata: {} })),
+    };
+
+    await expect(submitCreativeDirectEdit(apiClient as never, {
+      candidate: { id: "candidate-1", title: "参考素材", competitor: "", source_attachment_id: "attachment-1" },
+      instruction: "只调整标题位置",
+      targetSize: "1080x1080",
+      deliveryMode: "preview",
+      squadId: "squad-1",
+      submissionKey: "submission-1",
+      marketPackId: "",
+      recovery: { issueId: "", orderId: "", submissionKey: "", marketPackId: "" },
+      onRecovery: vi.fn(),
+    })).resolves.toEqual({ issueId: "issue-1", orderId: "order-1" });
+    expect(apiClient.putCreativeIssueContext).not.toHaveBeenCalled();
+  });
+
+  it("recovers a created direct-edit order without repeating earlier submission steps", async () => {
+    const apiClient = {
+      createIssue: vi.fn(),
+      updateIssue: vi.fn(),
+      putCreativeIssueContext: vi.fn(),
+      createCreativeDirectEdit: vi.fn(),
+      setIssueMetadataKey: vi.fn(async () => ({ metadata: {} })),
+    };
+
+    await expect(submitCreativeDirectEdit(apiClient as never, {
+      candidate: { id: "candidate-1", title: "参考素材", competitor: "", source_attachment_id: "attachment-1" },
+      instruction: "只调整标题位置",
+      targetSize: "1080x1080",
+      deliveryMode: "publish",
+      squadId: "squad-1",
+      submissionKey: "submission-1",
+      marketPackId: "market-pack-1",
+      recovery: { issueId: "issue-1", orderId: "order-1", submissionKey: "submission-1", marketPackId: "market-pack-1" },
+      onRecovery: vi.fn(),
+    })).resolves.toEqual({ issueId: "issue-1", orderId: "order-1" });
+    expect(apiClient.createIssue).not.toHaveBeenCalled();
+    expect(apiClient.updateIssue).toHaveBeenCalledWith("issue-1", { assignee_type: "squad", assignee_id: "squad-1" });
+    expect(apiClient.putCreativeIssueContext).not.toHaveBeenCalled();
+    expect(apiClient.createCreativeDirectEdit).not.toHaveBeenCalled();
+    expect(apiClient.setIssueMetadataKey).toHaveBeenCalledWith("issue-1", "creative_order_id", "order-1");
+  });
+
+  it("treats a complete single-size precise edit as a downloadable adopted package", () => {
+    const attachmentID = "precise-square-attachment";
+    const variant = {
+      id: "precise-variant",
+      variant_key: "direct_edit",
+      revision: 2,
+      active_revision: 2,
+      staging_revision: 0,
+      candidate_state: "selected",
+      revisions: [{ revision: 2, expected_sizes: ["1080x1080"] }],
+      assets: [{
+        id: "precise-square-delivered",
+        variant_id: "precise-variant",
+        size_key: "1080x1080",
+        revision: 2,
+        stage: "delivered",
+        status: "completed",
+        attachment_id: attachmentID,
+      }],
+    };
+    const item = { id: "precise-item", candidate_id: "candidate-1", copy_snapshot: {}, variants: [variant] };
+    const galleryItem = {
+      id: "precise-gallery",
+      label: "精准改图",
+      order: { id: "precise-order", input_snapshot: {} },
+      item,
+      variant,
+      adoptedAt: "2026-08-27T00:00:00Z",
+    };
+    const attachments = new Map([[attachmentID, { id: attachmentID, filename: "precise.png", url: "https://cdn.example/precise.png", download_url: "https://cdn.example/precise.png" }]]);
+
+    expect(adoptedGalleryComplete(galleryItem as never, attachments as never)).toBe(true);
+    expect(adoptedGalleryComplete(galleryItem as never, new Map())).toBe(false);
+  });
+
   it("derives a small editable visual direction from source analysis", () => {
     expect(visualDirectionFromAnalysis({
       theme: "灵活融资",

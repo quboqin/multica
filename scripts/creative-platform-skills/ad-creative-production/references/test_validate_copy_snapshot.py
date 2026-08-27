@@ -441,7 +441,7 @@ def test_concise_prompt_blocks_repeated_long_instruction() -> None:
     assert any(item.startswith("duplicate_segment:") for item in debt)
 
 
-def test_concise_prompt_enforces_4800_character_hard_limit() -> None:
+def test_concise_prompt_enforces_current_character_hard_limit() -> None:
     assert not any(item.startswith("prompt_too_long:") for item in validate_concise_prompt("x" * MAX_PROMPT_CHARS))
     assert f"prompt_too_long:{MAX_PROMPT_CHARS + 1}>{MAX_PROMPT_CHARS}" in validate_concise_prompt("x" * (MAX_PROMPT_CHARS + 1))
 
@@ -465,9 +465,9 @@ def test_main_explain_outputs_actionable_repair_guidance(
     payload = json.loads(capsys.readouterr().out)
 
     assert payload["prompt_policy"] == {
-        "target_chars": "1800-3200",
-        "complex_soft_max_chars": 4200,
-        "hard_max_chars": 4800,
+        "target_chars": "900-1800",
+        "complex_soft_max_chars": 2800,
+        "hard_max_chars": 3600,
     }
     guidance = payload["repair_guidance"]
     assert any(
@@ -493,3 +493,44 @@ def test_main_requires_concise_prompt_when_requested(tmp_path: Path, monkeypatch
     ])
 
     assert main() == 2
+
+
+def compiled_visual_prompt(extra: str = "") -> str:
+    return f"""TASK
+Create one unbranded 1080x1080 locked 1:1 square ad base and redesign the source identity.
+
+INPUT ROLES
+Input 1 is used only for business structure and reading order. Input 2 is the current-size official Prime visual context.
+
+LOCKED DESIGN DNA
+Keep the same DesignDNA subject system, palette roles, material, lighting, motif, and information hierarchy.
+
+EDITABLE LAYOUT
+Use a native square layout with every business content group clear of the future component areas.
+
+APPROVED COPY
+Render every approved string exactly once: Pinjaman fleksibel. Limit hingga Rp80.000.000. No table.
+
+PRIME SUPPORT
+Input 2 is the current-size official Prime visual context. Keep its future component areas clear of business content and use a calm
+low-detail background with sufficient contrast. Official Prime is visual context only: never draw or copy its logo, QR, legal text,
+regulatory mark, template wording, or component geometry.
+
+ACCEPTANCE
+All approved copy is legible. No competitor or source identity, extra claim, duplicate copy, or Prime element is present. {extra}
+"""
+
+
+def test_compiled_visual_prompt_contract_passes_semantic_guards() -> None:
+    prompt = compiled_visual_prompt()
+
+    assert validate_prime_prompt_guard(prompt, [prime_layout()]) == []
+    assert validate_concise_prompt(prompt) == []
+
+
+def test_compiled_visual_prompt_rejects_transaction_protocol() -> None:
+    debt = validate_concise_prompt(compiled_visual_prompt("Retry asset-put with request_id from JSON after upload timeout."))
+
+    assert "non_visual_protocol_term:request_or_hash" in debt
+    assert "non_visual_protocol_term:workflow_command" in debt
+    assert "non_visual_protocol_term:workflow_control" in debt

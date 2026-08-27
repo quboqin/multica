@@ -619,6 +619,8 @@ export interface CreativeOrder {
   issue_id: string;
   status: string;
   derived_status: string;
+  delivery_status?: string;
+  production_status?: string;
   input_snapshot: Record<string, unknown>;
   trigger_evidence_kind: string;
   trigger_evidence_ref_id: string;
@@ -680,8 +682,11 @@ export interface AdoptCreativeOrderVariantRequest {
 }
 export interface CreativeOrderVariantBlocker { task_id: string; workflow: string; failure_reason: string; detail: string; failed_at: string; retryable: boolean; }
 export interface CreativeOrderDiagnosticAsset { id: string; variant_id: string; task_id: string; attachment_id: string; size_key: CreativeDeliverySize | string; revision: number; workflow: string; label: string; filename: string; metadata: Record<string, unknown>; url: string; created_at: string; updated_at: string; }
-export interface CreativeOrderVariant { id: string; order_item_id: string; variant_key: string; brief: Record<string, unknown>; revision: number; status: string; qc_status: string; qc_recovery_used: boolean; qc_recovery_available: boolean; action_required?: CreativeOrderVariantBlocker; created_at: string; updated_at: string; assets: CreativeOrderAsset[]; diagnostic_assets: CreativeOrderDiagnosticAsset[]; qc_reports: CreativeOrderQCReport[]; }
-export interface CreativeOrderAsset { id: string; variant_id: string; asset_family_id: string; size_key: CreativeDeliverySize | string; revision: number; stage: "generated" | "primed" | "delivered" | string; attachment_id: string; derived_from_asset_id: string; metadata: Record<string, unknown>; evidence: Record<string, unknown>; status: string; created_at: string; updated_at: string; }
+export interface CreativeOrderVariantRevision { revision: number; brief: Record<string, unknown>; status: string; expected_sizes: (CreativeDeliverySize | string)[]; activated_at: string; created_at: string; updated_at: string; }
+export interface CreativeImageOperationAttempt { id: string; attempt: number; status: string; runtime_id: string; task_id: string; provider_request_id: string; provider_status: string; http_status?: number | null; exit_code?: number | null; error_type: string; error_message: string; result_receipt: Record<string, unknown>; output_attachment_id: string; duration_ms?: number | null; started_at: string; completed_at: string; created_at: string; updated_at: string; }
+export interface CreativeImageOperation { id: string; variant_id: string; size_key: CreativeDeliverySize | string; revision: number; operation_kind: string; idempotency_key: string; status: string; model: string; runtime_id: string; task_id: string; prompt_sha256: string; input_snapshot: Record<string, unknown>; provider_request_id: string; result_receipt: Record<string, unknown>; error_type: string; error_message: string; output_attachment_id: string; output_asset_id: string; started_at: string; completed_at: string; created_at: string; updated_at: string; attempts: CreativeImageOperationAttempt[]; }
+export interface CreativeOrderVariant { id: string; order_item_id: string; variant_key: string; brief: Record<string, unknown>; revision: number; status: string; active_revision: number; staging_revision: number; candidate_state?: "candidate" | "selected" | "reserve" | "rejected" | string; selection_rank?: number; primary_size?: CreativeDeliverySize | string; qc_status: string; qc_recovery_used: boolean; qc_recovery_available: boolean; action_required?: CreativeOrderVariantBlocker; created_at: string; updated_at: string; assets: CreativeOrderAsset[]; revisions?: CreativeOrderVariantRevision[]; image_operations?: CreativeImageOperation[]; diagnostic_assets: CreativeOrderDiagnosticAsset[]; qc_reports: CreativeOrderQCReport[]; }
+export interface CreativeOrderAsset { id: string; variant_id: string; asset_family_id: string; size_key: CreativeDeliverySize | string; revision: number; stage: "generated" | "primed" | "delivered" | string; attachment_id: string; derived_from_asset_id: string; operation_id?: string; metadata: Record<string, unknown>; evidence: Record<string, unknown>; status: string; created_at: string; updated_at: string; }
 export interface CreativeOrderQCReport { id: string; variant_id: string; lane: "technical" | "visual" | string; revision: number; attempt: number; status: string; findings: Record<string, unknown>; trigger_evidence_kind: string; trigger_evidence_ref_id: string; created_at: string; updated_at: string; }
 export interface CreativeOrderQCFinalizeResponse {
   created: boolean;

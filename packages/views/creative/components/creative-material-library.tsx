@@ -49,7 +49,7 @@ import {
 } from "../lib/creative-material-state";
 import {
   adoptedCreativeOrderVariant,
-  CREATIVE_DELIVERY_SIZES,
+  creativeVariantActiveExpectedSizes,
   creativeVariantArchiveEntries,
   creativeVariantDeliveryAssets,
   downloadCreativeAdoptedVariantArchives,
@@ -199,6 +199,10 @@ export function CreativeMaterialLibrary({
   const { marketPack, copyLibrary } = useMemo(
     () => defaultPreAdaptationResources(resources.data?.resources ?? []),
     [resources.data?.resources],
+  );
+  const directEditMarketPack = useMemo(
+    () => resolveDirectEditMarketPack(resources.data?.resources ?? [], resources.isLoading),
+    [resources.data?.resources, resources.isLoading],
   );
   const completedAnalyses = useMemo(() => latestCompletedAnalyses(analyses.data?.analyses ?? []), [analyses.data?.analyses]);
   const latestDecisions = useMemo(() => latestCandidateFeedback(feedback.data?.events ?? []), [feedback.data?.events]);
@@ -459,7 +463,7 @@ export function CreativeMaterialLibrary({
       </TabsContent>
     </Tabs>
 		<MaterialPreview candidate={previewCandidate} analysis={previewAnalysis} canRetryAnalysis={previewCanRetryAnalysis} onClose={() => setPreview(null)} onDirectEdit={() => previewCandidate && setDirectEditCandidate(previewCandidate)} onRetryAnalysis={(candidateId) => retryAnalysis.mutate(candidateId)} retryingAnalysis={retryAnalysis.isPending} />
-		<DirectEditDialog candidate={directEditCandidate} onClose={() => setDirectEditCandidate(null)} onCreated={(orderId) => {
+			<DirectEditDialog candidate={directEditCandidate} marketPackResolution={directEditMarketPack} onClose={() => setDirectEditCandidate(null)} onCreated={(orderId) => {
 			setDirectEditCandidate(null);
 			queryClient.invalidateQueries({ queryKey: creativeKeys.orders(wsId) });
 			onOrderCreated?.(orderId);
@@ -658,7 +662,8 @@ function AdoptedGalleryTile({
   onOpenOrder: () => void;
 }) {
   const entries = creativeVariantArchiveEntries(item.variant, attachments, item.order, item.item);
-  const complete = entries.length === CREATIVE_DELIVERY_SIZES.length;
+  const expectedSizes = creativeVariantActiveExpectedSizes(item.variant);
+  const complete = entries.length === expectedSizes.length;
   return <article className="min-w-0 bg-background">
     <div className="flex min-w-0 items-start justify-between gap-3 px-3 py-3">
       <label className="flex min-w-0 flex-1 items-start gap-2">
@@ -668,10 +673,10 @@ function AdoptedGalleryTile({
           <span className="mt-1 block text-xs text-muted-foreground">订单 {item.order.id.slice(0, 8)} · {item.variant.variant_key || item.variant.id.slice(0, 8)}</span>
         </span>
       </label>
-      <Badge variant={complete ? "default" : "outline"}>{complete ? "交付齐备" : `${entries.length}/${CREATIVE_DELIVERY_SIZES.length}`}</Badge>
+      <Badge variant={complete ? "default" : "outline"}>{complete ? "交付齐备" : `${entries.length}/${expectedSizes.length}`}</Badge>
     </div>
-    <div className="grid grid-cols-3 gap-px bg-border">
-      {CREATIVE_DELIVERY_SIZES.map((size) => {
+    <div className={cn("grid gap-px bg-border", expectedSizes.length === 3 ? "grid-cols-3" : "grid-cols-1")}>
+      {expectedSizes.map((size) => {
         const entry = entries.find((candidate) => candidate.asset.size_key === size);
         const url = creativeAttachmentBrowserURL(entry?.attachment);
         return <div key={size} className="min-w-0 bg-muted/30">
@@ -693,8 +698,8 @@ function AdoptedGalleryTile({
   </article>;
 }
 
-function adoptedGalleryComplete(item: AdoptedCreativeGalleryItem, attachments: Map<string, DeliveryAttachment>): boolean {
-  return creativeVariantArchiveEntries(item.variant, attachments, item.order, item.item).length === CREATIVE_DELIVERY_SIZES.length;
+export function adoptedGalleryComplete(item: AdoptedCreativeGalleryItem, attachments: Map<string, DeliveryAttachment>): boolean {
+  return creativeVariantArchiveEntries(item.variant, attachments, item.order, item.item).length === creativeVariantActiveExpectedSizes(item.variant).length;
 }
 
 function adoptedGalleryDownloadPackage(item: AdoptedCreativeGalleryItem, attachments: Map<string, DeliveryAttachment>) {
@@ -957,9 +962,9 @@ const EMPTY_VISUAL_DIRECTION: CreativeVisualDirection = {
   avoid: [],
 };
 
-type SubmissionRecovery = { issueId: string; orderId: string; submissionKey: string };
+export type SubmissionRecovery = { issueId: string; orderId: string; submissionKey: string; marketPackId?: string };
 
-const EMPTY_SUBMISSION_RECOVERY: SubmissionRecovery = { issueId: "", orderId: "", submissionKey: "" };
+const EMPTY_SUBMISSION_RECOVERY: SubmissionRecovery = { issueId: "", orderId: "", submissionKey: "", marketPackId: "" };
 const MATERIAL_ANALYSIS_RUNNING_MESSAGE = "素材仍在分析中，完成后会自动刷新。";
 const MATERIAL_ANALYSIS_RUNNING_DETAIL = "无需逐张处理；当前选择会保留。";
 
@@ -1055,12 +1060,29 @@ function appUIReplacementSnapshot(adaptation: PreparedPreAdaptation, draft: Orde
   };
 }
 
-export function defaultPreAdaptationResources(resources: CreativeResource[]): { marketPack?: CreativeResource; copyLibrary?: CreativeResource } {
-  const marketPacks = resources.filter((resource) => (
+export type DirectEditMarketPackResolution =
+  | { status: "loading" | "missing" | "ambiguous"; message: string; marketPack?: undefined }
+  | { status: "ready"; message: string; marketPack: CreativeResource };
+
+export function defaultPublishedMarketPacks(resources: CreativeResource[]): CreativeResource[] {
+  return resources.filter((resource) => (
     resource.kind === "market_pack"
     && resource.published_version > 0
     && record(resource.published_config).pre_adaptation_default === true
   ));
+}
+
+export function resolveDirectEditMarketPack(resources: CreativeResource[], loading = false): DirectEditMarketPackResolution {
+  if (loading) return { status: "loading", message: "正在读取正式投放市场配置。" };
+  const marketPacks = defaultPublishedMarketPacks(resources);
+  if (marketPacks.length === 0) return { status: "missing", message: "没有唯一的已发布默认市场配置，暂时不能提交正式投放。" };
+  if (marketPacks.length > 1) return { status: "ambiguous", message: "存在多个已发布默认市场配置，请先保留一个默认配置。" };
+  const marketPack = marketPacks[0]!;
+  return { status: "ready", message: `将使用 ${marketPack.name || "默认市场配置"}（版本 ${marketPack.published_version}）`, marketPack };
+}
+
+export function defaultPreAdaptationResources(resources: CreativeResource[]): { marketPack?: CreativeResource; copyLibrary?: CreativeResource } {
+  const marketPacks = defaultPublishedMarketPacks(resources);
   const marketPack = marketPacks.length === 1 ? marketPacks[0] : undefined;
   const copyLibraryId = recordString(record(marketPack?.published_config), "copy_library_id");
   const copyLibrary = resources.find((resource) => (
@@ -1720,9 +1742,10 @@ function CreativeOrderDraft({ candidates, analyses, deselecting, onDeselect, onC
         const order = await api.createCreativeOrder({
           issue_id: issueId,
           submission_key: submissionKey,
-          status: "queued",
-          input_snapshot: {
-            market_pack: { id: marketPack.id, version: marketPack.published_version, config: marketPack.published_config ?? {}, files: marketFiles.data?.files ?? [] },
+	          status: "queued",
+	          input_snapshot: {
+	            pipeline_version: "candidate_v1",
+	            market_pack: { id: marketPack.id, version: marketPack.published_version, config: marketPack.published_config ?? {}, files: marketFiles.data?.files ?? [] },
             squad_snapshot: {
               squad_id: selectedSquad.id,
               squad_name: selectedSquad.name,
@@ -1837,7 +1860,78 @@ export function canCreateDirectEdit(candidate: Pick<CreativeMaterialCandidate, "
   return Boolean(candidate?.source_attachment_id && instruction.trim() && squadId);
 }
 
-function DirectEditDialog({ candidate, onClose, onCreated }: { candidate: CreativeMaterialCandidate | null; onClose: () => void; onCreated: (orderId: string) => void }) {
+type DirectEditSubmissionAPI = Pick<typeof api,
+  "createIssue" | "updateIssue" | "putCreativeIssueContext" | "createCreativeDirectEdit" | "setIssueMetadataKey"
+>;
+
+export type DirectEditSubmissionInput = {
+  candidate: Pick<CreativeMaterialCandidate, "id" | "title" | "competitor" | "source_attachment_id">;
+  instruction: string;
+  targetSize: "1080x1080" | "1200x628" | "800x1000";
+  deliveryMode: "preview" | "publish";
+  squadId: string;
+  submissionKey: string;
+  marketPackId: string;
+  recovery: SubmissionRecovery;
+  onRecovery: (recovery: SubmissionRecovery) => void;
+};
+
+export async function submitCreativeDirectEdit(
+  apiClient: DirectEditSubmissionAPI,
+  input: DirectEditSubmissionInput,
+): Promise<{ issueId: string; orderId: string }> {
+  if (input.deliveryMode === "publish" && !input.marketPackId) {
+    throw new Error("正式投放必须绑定唯一的已发布默认市场配置。");
+  }
+  let issueId = input.recovery.issueId;
+  let orderId = input.recovery.orderId;
+  if (!issueId) {
+    const issue = await apiClient.createIssue({
+      title: `直接改图 · ${input.candidate.title || input.candidate.competitor || input.candidate.id.slice(0, 8)}`,
+      description: `用户修改要求：${input.instruction}`,
+      status: "todo",
+      attachment_ids: [input.candidate.source_attachment_id],
+      metadata: { workflow: "creative_direct_edit", delivery_mode: input.deliveryMode, creative_submission_key: input.submissionKey },
+    });
+    if (!issue.id) throw new Error("直接改图 Issue 初始化失败，请重试");
+    issueId = issue.id;
+    input.onRecovery({ issueId, orderId: "", submissionKey: input.submissionKey, marketPackId: input.marketPackId });
+  }
+  if (!orderId) {
+    if (input.deliveryMode === "publish") {
+      await apiClient.putCreativeIssueContext(issueId, { market_pack_id: input.marketPackId, squad_id: input.squadId });
+    }
+    const directEdit = await apiClient.createCreativeDirectEdit({
+      issue_id: issueId,
+      submission_key: input.submissionKey,
+      candidate_id: input.candidate.id,
+      user_request: input.instruction,
+      target_size: input.targetSize,
+      delivery_mode: input.deliveryMode,
+      squad_id: input.squadId,
+    });
+    orderId = directEdit.order.id;
+    if (!orderId) throw new Error("直接改图订单初始化失败，请重试");
+    input.onRecovery({ issueId, orderId, submissionKey: input.submissionKey, marketPackId: input.marketPackId });
+  }
+  await apiClient.setIssueMetadataKey(issueId, "creative_order_id", orderId);
+  // Squad assignment dispatches work immediately, so publish the complete
+  // direct-edit coordinates before exposing the issue to the runtime.
+  await apiClient.updateIssue(issueId, { assignee_type: "squad", assignee_id: input.squadId });
+  return { issueId, orderId };
+}
+
+function DirectEditDialog({
+  candidate,
+  marketPackResolution,
+  onClose,
+  onCreated,
+}: {
+  candidate: CreativeMaterialCandidate | null;
+  marketPackResolution: DirectEditMarketPackResolution;
+  onClose: () => void;
+  onCreated: (orderId: string) => void;
+}) {
   const wsId = useWorkspaceId();
   const squads = useQuery(squadListOptions(wsId));
   const [instruction, setInstruction] = useState("");
@@ -1848,6 +1942,7 @@ function DirectEditDialog({ candidate, onClose, onCreated }: { candidate: Creati
   const [busy, setBusy] = useState(false);
   const availableSquads = squads.data ?? [];
   const selectedSquad = availableSquads.length === 1 ? availableSquads[0] : undefined;
+  const publishMarketPackBlocked = deliveryMode === "publish" && !recovery.marketPackId && marketPackResolution.status !== "ready";
 
   useEffect(() => {
     setInstruction("");
@@ -1861,51 +1956,37 @@ function DirectEditDialog({ candidate, onClose, onCreated }: { candidate: Creati
     if (!candidate || !candidate.source_attachment_id || !selectedSquad || !canCreateDirectEdit(candidate, instruction, selectedSquad.id)) return;
     setBusy(true);
     setError("");
-    let submissionKey = "";
-    let issueId = "";
-    let orderId = "";
+    let submissionKey = recovery.submissionKey;
     try {
-      submissionKey = await creativeSubmissionKey({
-        mode: "creative_direct_edit",
-        candidateId: candidate.id,
+      const marketPackId = recovery.marketPackId || (marketPackResolution.status === "ready" ? marketPackResolution.marketPack.id : "");
+      if (deliveryMode === "publish" && !marketPackId) throw new Error(marketPackResolution.message);
+      if (!submissionKey) {
+        submissionKey = await creativeSubmissionKey({
+          mode: "creative_direct_edit",
+          candidateId: candidate.id,
+          instruction: instruction.trim(),
+          targetSize,
+          deliveryMode,
+          squadId: selectedSquad.id,
+          marketPackId,
+          marketPackVersion: marketPackResolution.status === "ready" ? marketPackResolution.marketPack.published_version : 0,
+        });
+      }
+      const matchingRecovery = recoveryForSubmissionKey(recovery, submissionKey);
+      const result = await submitCreativeDirectEdit(api, {
+        candidate,
         instruction: instruction.trim(),
         targetSize,
         deliveryMode,
         squadId: selectedSquad.id,
+        submissionKey,
+        marketPackId: matchingRecovery.marketPackId || marketPackId,
+        recovery: matchingRecovery,
+        onRecovery: setRecovery,
       });
-      const matchingRecovery = recoveryForSubmissionKey(recovery, submissionKey);
-      issueId = matchingRecovery.issueId;
-      orderId = matchingRecovery.orderId;
-      if (!issueId) {
-        const issue = await api.createIssue({
-          title: `直接改图 · ${candidate.title || candidate.competitor || candidate.id.slice(0, 8)}`,
-          description: `用户修改要求：${instruction.trim()}`,
-          status: "todo",
-          attachment_ids: [candidate.source_attachment_id],
-          metadata: { workflow: "creative_direct_edit", delivery_mode: deliveryMode, creative_submission_key: submissionKey },
-        });
-        if (!issue.id) throw new Error("直接改图 Issue 初始化失败，请重试");
-        issueId = issue.id;
-        setRecovery({ issueId, orderId: "", submissionKey });
-      }
-      const directEdit = await api.createCreativeDirectEdit({
-        issue_id: issueId,
-        submission_key: submissionKey,
-        candidate_id: candidate.id,
-        user_request: instruction.trim(),
-        target_size: targetSize,
-        delivery_mode: deliveryMode,
-        squad_id: selectedSquad.id,
-      });
-      orderId = directEdit.order.id;
-      setRecovery({ issueId, orderId, submissionKey });
-      if (!orderId) throw new Error("直接改图订单初始化失败，请重试");
-      await api.setIssueMetadataKey(issueId, "creative_order_id", orderId);
-      await api.updateIssue(issueId, { assignee_type: "squad", assignee_id: selectedSquad.id });
       toast.success(deliveryMode === "publish" ? "直接改图已提交，将自动合成品牌组件并进入质检" : "直接改图预览已提交");
-      onCreated(orderId);
+      onCreated(result.orderId);
     } catch (submitError) {
-      if (submissionKey) setRecovery({ issueId, orderId, submissionKey });
       setError(submitError instanceof Error ? submitError.message : "提交未完成。可继续提交，不会重复创建已完成的步骤。");
     } finally {
       setBusy(false);
@@ -1920,10 +2001,11 @@ function DirectEditDialog({ candidate, onClose, onCreated }: { candidate: Creati
       </div>
       <Field label="修改要求" wide><Textarea disabled={Boolean(recovery.issueId)} rows={5} value={instruction} onChange={(event) => setInstruction(event.target.value)} placeholder="例如：保留人物和绿色信息卡片，将主标题改得更醒目，移除右上角竞品标识。" /></Field>
       {!candidate?.source_attachment_id && <p className="border border-destructive/30 bg-destructive/5 p-3 text-xs text-destructive">该素材尚无稳定源文件，暂时不能直接改图。</p>}
+      {deliveryMode === "publish" && <p className={cn("border p-3 text-xs", publishMarketPackBlocked ? "border-destructive/30 bg-destructive/5 text-destructive" : "bg-muted/20 text-muted-foreground")}>{recovery.marketPackId ? "本次提交已冻结正式投放市场配置。" : marketPackResolution.message}</p>}
       {recovery.issueId && <p className="border bg-muted/20 p-3 text-xs text-muted-foreground">本次提交参数已冻结。继续提交会恢复同一任务；关闭窗口后可重新配置。</p>}
       {error && <p role="alert" className="border border-destructive/30 bg-destructive/5 p-3 text-xs text-destructive">{error}</p>}
     </div>
-    <DialogFooter><Button variant="outline" onClick={onClose}>取消</Button><Button disabled={busy || !canCreateDirectEdit(candidate, instruction, selectedSquad?.id ?? "")} onClick={() => void submit()}>{busy ? "正在提交" : recovery.issueId ? "继续提交" : "提交改图"}</Button></DialogFooter>
+    <DialogFooter><Button variant="outline" onClick={onClose}>取消</Button><Button disabled={busy || publishMarketPackBlocked || !canCreateDirectEdit(candidate, instruction, selectedSquad?.id ?? "")} onClick={() => void submit()}>{busy ? "正在提交" : recovery.issueId ? "继续提交" : "提交改图"}</Button></DialogFooter>
   </DialogContent></Dialog>;
 }
 

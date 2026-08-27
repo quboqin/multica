@@ -67,6 +67,102 @@ export function adoptedCreativeOrderVariant(item: CreativeOrderItem): CreativeOr
   return item.variants.find((variant) => variant.id === adoptedVariantId);
 }
 
+type CreativeDeliverySizeKey = (typeof CREATIVE_DELIVERY_SIZES)[number];
+
+function creativeVariantCandidateState(variant: CreativeOrderVariant): "candidate" | "selected" | "reserve" | "rejected" {
+  switch (variant.candidate_state) {
+    case "candidate":
+    case "reserve":
+    case "rejected":
+      return variant.candidate_state;
+    default:
+      return "selected";
+  }
+}
+
+function creativeVariantParticipatesInDelivery(variant: CreativeOrderVariant): boolean {
+  return creativeVariantCandidateState(variant) === "selected";
+}
+
+function creativeVariantPrimarySize(variant: CreativeOrderVariant): CreativeDeliverySizeKey {
+  return CREATIVE_DELIVERY_SIZES.includes(variant.primary_size as CreativeDeliverySizeKey)
+    ? variant.primary_size as CreativeDeliverySizeKey
+    : "1080x1080";
+}
+
+function creativeVariantWorkingRevision(variant: CreativeOrderVariant): number {
+  return (variant.staging_revision ?? 0) > 0 ? variant.staging_revision! : variant.revision;
+}
+
+function creativeVariantActiveRevision(variant: CreativeOrderVariant): number {
+  return variant.active_revision > 0 ? variant.active_revision : 0;
+}
+
+function creativeVariantPreviewRevision(variant: CreativeOrderVariant): number {
+  const activeRevision = creativeVariantActiveRevision(variant);
+  return activeRevision > 0 ? activeRevision : creativeVariantWorkingRevision(variant);
+}
+
+function creativeVariantRevisionExpectedSizes(variant: CreativeOrderVariant, targetRevision: number): CreativeDeliverySizeKey[] {
+  const revision = (variant.revisions ?? []).find((candidate) => candidate.revision === targetRevision);
+  const persisted = (revision?.expected_sizes ?? []).filter((size): size is CreativeDeliverySizeKey => CREATIVE_DELIVERY_SIZES.includes(size as CreativeDeliverySizeKey));
+  return CREATIVE_DELIVERY_SIZES.filter((size) => persisted.includes(size));
+}
+
+function creativeVariantWorkingExpectedSizes(variant: CreativeOrderVariant): CreativeDeliverySizeKey[] {
+  if (!creativeVariantParticipatesInDelivery(variant)) return [creativeVariantPrimarySize(variant)];
+  const workingRevision = creativeVariantWorkingRevision(variant);
+  const persisted = creativeVariantRevisionExpectedSizes(variant, workingRevision);
+  if (persisted.length > 0) return CREATIVE_DELIVERY_SIZES.filter((size) => persisted.includes(size));
+  return [...CREATIVE_DELIVERY_SIZES];
+}
+
+export function creativeVariantActiveExpectedSizes(variant: CreativeOrderVariant): CreativeDeliverySizeKey[] {
+  const activeRevision = creativeVariantActiveRevision(variant);
+  if (activeRevision < 1) return [];
+  const persisted = creativeVariantRevisionExpectedSizes(variant, activeRevision);
+  return persisted.length > 0 ? persisted : [...CREATIVE_DELIVERY_SIZES];
+}
+
+function creativeVariantExpectedSizes(variant: CreativeOrderVariant, revision: number): CreativeDeliverySizeKey[] {
+  return revision === creativeVariantActiveRevision(variant)
+    ? creativeVariantActiveExpectedSizes(variant)
+    : creativeVariantWorkingExpectedSizes(variant);
+}
+
+function creativeVariantDisplaySizes(variant: CreativeOrderVariant): CreativeDeliverySizeKey[] {
+  const activeRevision = creativeVariantActiveRevision(variant);
+  if (activeRevision < 1) return creativeVariantWorkingExpectedSizes(variant);
+  return creativeVariantActiveExpectedSizes(variant);
+}
+
+function creativeVariantPrimaryPreviewReady(variant: CreativeOrderVariant): boolean {
+  const revision = creativeVariantWorkingRevision(variant);
+  const primarySize = creativeVariantPrimarySize(variant);
+  return variant.assets.some((asset) => asset.revision === revision
+    && asset.size_key === primarySize
+    && (asset.stage === "primed" || asset.stage === "delivered")
+    && asset.status === "completed"
+    && Boolean(asset.attachment_id));
+}
+
+function creativeVariantCandidateStateLabel(state: ReturnType<typeof creativeVariantCandidateState>, rank: number | undefined): string {
+  if (state === "candidate") return "候选主画面";
+  if (state === "reserve") return (rank ?? 0) > 0 ? `后备第 ${rank} 名` : "后备方案";
+  if (state === "rejected") return "本轮未入选";
+  return (rank ?? 0) > 0 ? `入选第 ${rank} 名` : "入选方案";
+}
+
+function compareCreativeVariantDisplayOrder(left: CreativeOrderVariant, right: CreativeOrderVariant): number {
+  const stateOrder = { selected: 0, candidate: 1, reserve: 2, rejected: 3 } as const;
+  const leftState = creativeVariantCandidateState(left);
+  const rightState = creativeVariantCandidateState(right);
+  return stateOrder[leftState] - stateOrder[rightState]
+    || (left.selection_rank || Number.MAX_SAFE_INTEGER) - (right.selection_rank || Number.MAX_SAFE_INTEGER)
+    || left.variant_key.localeCompare(right.variant_key)
+    || left.id.localeCompare(right.id);
+}
+
 export function creativeOrderActionableWorkflowFailures(order: CreativeOrder | undefined): CreativeOrderWorkflowFailure[] {
   if (!order) return [];
   const variantsById = new Map(order.items.flatMap((item) => item.variants.map((variant) => [variant.id, variant] as const)));
@@ -81,7 +177,10 @@ export function creativeOrderActionableWorkflowFailures(order: CreativeOrder | u
 
 export function creativeOrderStage(order: CreativeOrder | undefined): CreativeOrderStage {
   const items = order?.items ?? [];
-  const variants = items.flatMap((item) => item.variants);
+  const allVariants = items.flatMap((item) => item.variants);
+  const variants = allVariants.filter(creativeVariantParticipatesInDelivery);
+  const candidates = allVariants.filter((variant) => creativeVariantCandidateState(variant) === "candidate");
+  const readyCandidates = candidates.filter(creativeVariantPrimaryPreviewReady).length;
   const readyVariants = variants.filter((variant) => creativeVariantAdoptionReadiness(variant).ready).length;
   const blockedVariants = variants.filter(creativeVariantNeedsManualAction).length;
   const productionStoppedVariants = variants.filter(creativeVariantHasProductionStop).length;
@@ -102,6 +201,9 @@ export function creativeOrderStage(order: CreativeOrder | undefined): CreativeOr
   if (status === "awaiting_adoption") {
     return { ...base, key: "review", label: "待验收", detail: "已有可采用方案，等待选择", action: "选择最终方案" };
   }
+  if (status === "awaiting_selection" || (candidates.length >= 4 && readyCandidates >= 4)) {
+    return { ...base, key: "generating", label: "候选比较中", detail: `${readyCandidates}/${candidates.length} 个候选主画面已就绪`, action: "查看候选" };
+  }
   if (actionableFailures.length > 0 || status === "failed" || blockedVariants > 0 || (status === "action_required" && variants.length === 0)) {
     const failureCount = actionableFailures.length;
     const detail = [
@@ -112,33 +214,59 @@ export function creativeOrderStage(order: CreativeOrder | undefined): CreativeOr
     ].filter(Boolean).join("，");
     return { ...base, key: "attention", label: "待验收", detail: detail || "等待人工验收", action: "查看结果" };
   }
-  if (variants.length > 0 || ["queued", "running", "partial"].includes(status)) {
-    const completedSizes = variants.reduce((count, variant) => count + creativeVariantPreviewAssets(variant).length, 0);
-    const expectedSizes = variants.length * CREATIVE_DELIVERY_SIZES.length;
+  if (allVariants.length > 0 || ["queued", "running", "partial"].includes(status)) {
+    if (candidates.length > 0 && variants.length === 0) {
+      return { ...base, key: "generating", label: "候选生成中", detail: `${readyCandidates}/${candidates.length} 个候选主画面已就绪`, action: "查看生成进度" };
+    }
+    const completedSizes = variants.reduce((count, variant) => count + creativeVariantProgressAssets(variant).length, 0);
+    const expectedSizes = variants.reduce((count, variant) => count + creativeVariantWorkingExpectedSizes(variant).length, 0);
     return { ...base, key: "generating", label: "生成中", detail: `${completedSizes}/${expectedSizes} 张预览已就绪`, action: "查看生成进度" };
   }
   return { ...base, key: "preparing", label: "准备中", detail: items.length > 0 ? `${items.length} 个素材等待生成` : "正在准备订单", action: "查看订单" };
 }
 
 export function creativeVariantDeliveryAssets(variant: CreativeOrderVariant): CreativeOrderAsset[] {
+  if (!creativeVariantParticipatesInDelivery(variant)) return [];
+  const revision = creativeVariantActiveRevision(variant);
+  if (revision < 1) return [];
+  const expectedSizes = creativeVariantActiveExpectedSizes(variant);
+  const expected = new Set(expectedSizes);
   const selected = new Map<string, CreativeOrderAsset>();
   for (const asset of variant.assets) {
-    if (asset.revision !== variant.revision || asset.stage !== "delivered" || asset.status !== "completed" || !asset.attachment_id) continue;
-    if (!CREATIVE_DELIVERY_SIZES.includes(asset.size_key as (typeof CREATIVE_DELIVERY_SIZES)[number])) continue;
+    if (asset.revision !== revision || asset.stage !== "delivered" || asset.status !== "completed" || !asset.attachment_id) continue;
+    if (!expected.has(asset.size_key as CreativeDeliverySizeKey)) continue;
     const current = selected.get(asset.size_key);
     if (!current || compareDeliveryAssets(asset, current) > 0) selected.set(asset.size_key, asset);
   }
-  return CREATIVE_DELIVERY_SIZES.flatMap((size) => {
+  return expectedSizes.flatMap((size) => {
     const asset = selected.get(size);
     return asset ? [asset] : [];
   });
 }
 
 export function creativeVariantPreviewAssets(variant: CreativeOrderVariant): CreativeOrderAsset[] {
+  const revision = creativeVariantPreviewRevision(variant);
+  const expectedSizes = creativeVariantExpectedSizes(variant, revision);
+  const expected = new Set(expectedSizes);
   const selected = new Map<string, CreativeOrderAsset>();
   for (const asset of variant.assets) {
-    if (asset.revision !== variant.revision || asset.status !== "completed" || !asset.attachment_id) continue;
-    if (!CREATIVE_DELIVERY_SIZES.includes(asset.size_key as (typeof CREATIVE_DELIVERY_SIZES)[number])) continue;
+    if (asset.revision !== revision || asset.status !== "completed" || !asset.attachment_id) continue;
+    if (!expected.has(asset.size_key as CreativeDeliverySizeKey)) continue;
+    const current = selected.get(asset.size_key);
+    if (!current || comparePreviewAssets(asset, current) > 0) selected.set(asset.size_key, asset);
+  }
+  return expectedSizes.flatMap((size) => {
+    const asset = selected.get(size);
+    return asset ? [asset] : [];
+  });
+}
+
+function creativeVariantProgressAssets(variant: CreativeOrderVariant): CreativeOrderAsset[] {
+  const revision = creativeVariantWorkingRevision(variant);
+  const expectedSizes = new Set(creativeVariantWorkingExpectedSizes(variant));
+  const selected = new Map<string, CreativeOrderAsset>();
+  for (const asset of variant.assets) {
+    if (asset.revision !== revision || asset.status !== "completed" || !asset.attachment_id || !expectedSizes.has(asset.size_key as CreativeDeliverySizeKey)) continue;
     const current = selected.get(asset.size_key);
     if (!current || comparePreviewAssets(asset, current) > 0) selected.set(asset.size_key, asset);
   }
@@ -148,21 +276,24 @@ export function creativeVariantPreviewAssets(variant: CreativeOrderVariant): Cre
   });
 }
 
+export function creativeVariantGenerationProgress(variant: CreativeOrderVariant): { ready: number; expected: number } {
+  return {
+    ready: creativeVariantProgressAssets(variant).length,
+    expected: creativeVariantWorkingExpectedSizes(variant).length,
+  };
+}
+
 export function creativeVariantDiagnosticAssets(variant: CreativeOrderVariant): CreativeOrderDiagnosticAsset[] {
+  const revision = creativeVariantWorkingRevision(variant);
   const selected = new Map<string, CreativeOrderDiagnosticAsset[]>();
   for (const asset of variant.diagnostic_assets ?? []) {
-    if (asset.revision !== variant.revision || !asset.url) continue;
+    if (asset.revision !== revision || !asset.url) continue;
     if (!CREATIVE_DELIVERY_SIZES.includes(asset.size_key as (typeof CREATIVE_DELIVERY_SIZES)[number])) continue;
     const bucket = selected.get(asset.size_key) ?? [];
     bucket.push(asset);
     selected.set(asset.size_key, bucket);
   }
   return CREATIVE_DELIVERY_SIZES.flatMap((size) => selected.get(size) ?? []);
-}
-
-function creativeVariantUsesDirectEditNoQC(variant: CreativeOrderVariant): boolean {
-  const contract = variant.brief?.creative_direct_edit_delivery;
-  return Boolean(contract && typeof contract === "object" && !Array.isArray(contract) && (contract as { skip_qc?: unknown }).skip_qc === true);
 }
 
 export function creativeVariantArchiveEntries(
@@ -197,7 +328,8 @@ export async function downloadCreativeVariantArchive({
   order?: CreativeDeliveryNamingContext;
 }): Promise<void> {
   const entries = creativeVariantArchiveEntries(variant, attachments, order, item);
-  if (entries.length !== CREATIVE_DELIVERY_SIZES.length) throw new Error("交付包的三张图片尚未齐备");
+  const expectedSizes = creativeVariantActiveExpectedSizes(variant);
+  if (entries.length !== expectedSizes.length) throw new Error("交付包的图片尚未齐备");
   const files: Record<string, Uint8Array> = {};
   const downloaded = await Promise.all(entries.map(async ({ attachment, filename }) => {
     const response = await fetch(creativeAttachmentBrowserURL(attachment), { credentials: "include" });
@@ -213,7 +345,7 @@ export async function downloadCreativeVariantArchive({
     `素材条目：${item.id}`,
     `变体：${variant.variant_key || variant.id}`,
     `采用时间：${item.adopted_at || "未记录"}`,
-    "包含尺寸：1080x1080、1200x628、800x1000",
+    `包含尺寸：${expectedSizes.join("、")}`,
   ].join("\n"));
   const archive = zipSync(files, { level: 0 });
   const buffer = new ArrayBuffer(archive.byteLength);
@@ -257,7 +389,7 @@ export async function downloadCreativeAdoptedVariantArchives({
 
   for (const itemPackage of packages) {
     const entries = creativeVariantArchiveEntries(itemPackage.variant, itemPackage.attachments, itemPackage.order, itemPackage.item);
-    if (entries.length !== CREATIVE_DELIVERY_SIZES.length) {
+    if (entries.length !== creativeVariantActiveExpectedSizes(itemPackage.variant).length) {
       throw new Error(`${itemPackage.label || itemPackage.orderId.slice(0, 8)} 的交付包尚未齐备`);
     }
     const folderName = safeArchiveName(itemPackage.folderName || `order-${itemPackage.orderId.slice(0, 8)}-${itemPackage.variant.variant_key || itemPackage.variant.id.slice(0, 8)}`);
@@ -328,7 +460,8 @@ export function CreativeOrderDeliveryCandidates({
   onRetryVariant?: (variant: CreativeOrderVariant, action: CreativeVariantRetryAction) => void;
 }) {
   const adoptedVariant = adoptedCreativeOrderVariant(item);
-  const otherVariants = adoptedVariant ? item.variants.filter((variant) => variant.id !== adoptedVariant.id) : [];
+  const sortedVariants = [...item.variants].sort(compareCreativeVariantDisplayOrder);
+  const otherVariants = adoptedVariant ? sortedVariants.filter((variant) => variant.id !== adoptedVariant.id) : [];
   const title = source.label || `素材 ${item.candidate_id.slice(0, 8)}`;
   const progress = creativeOrderItemProgress(item);
   const [packageOpen, setPackageOpen] = useState(defaultOpen);
@@ -364,6 +497,12 @@ export function CreativeOrderDeliveryCandidates({
           onAssetSelect={onAssetSelect}
           onAssetInfo={onAssetInfo}
         />
+        <AdoptedVariantStagingStatus
+          variant={adoptedVariant}
+          disabled={disabled}
+          retrying={retryingVariantId === adoptedVariant.id}
+          onRetry={onRetryVariant}
+        />
         {otherVariants.length > 0 && <details className="group/other border-t bg-muted/10">
           <summary className="flex cursor-pointer list-none items-center gap-2 px-4 py-3 text-sm font-medium marker:content-none">
             <ChevronDown className="h-4 w-4 transition-transform group-open/other:rotate-180" />
@@ -388,8 +527,8 @@ export function CreativeOrderDeliveryCandidates({
             />)}
           </div>
         </details>}
-      </> : item.variants.length > 0 ? <div className="grid gap-3 p-4 lg:grid-cols-3">
-          {item.variants.map((variant) => <VariantCandidate
+      </> : sortedVariants.length > 0 ? <div className="grid gap-3 p-4 lg:grid-cols-3">
+          {sortedVariants.map((variant) => <VariantCandidate
             key={variant.id}
             variant={variant}
             attachments={attachments}
@@ -423,14 +562,18 @@ type CreativeOrderItemProgress = {
 
 function creativeOrderItemProgress(item: CreativeOrderItem): CreativeOrderItemProgress {
   const variants = item.variants;
-  const previewAssets = variants.reduce((count, variant) => count + creativeVariantPreviewAssets(variant).length, 0);
-  const expectedAssets = variants.length * CREATIVE_DELIVERY_SIZES.length;
+  const previewAssets = variants.reduce((count, variant) => count + creativeVariantProgressAssets(variant).length, 0);
+  const expectedAssets = variants.reduce((count, variant) => count + creativeVariantWorkingExpectedSizes(variant).length, 0);
   const runningVariants = variants.filter(creativeVariantIsInProgress).length;
-  const productionStoppedVariants = variants.filter(creativeVariantHasProductionStop).length;
-  const blockedVariants = variants.filter(creativeVariantNeedsManualAction).length;
-  const readyVariants = variants.filter((variant) => creativeVariantAdoptionReadiness(variant).ready).length;
+  const deliveryVariants = variants.filter(creativeVariantParticipatesInDelivery);
+  const productionStoppedVariants = deliveryVariants.filter(creativeVariantHasProductionStop).length;
+  const blockedVariants = deliveryVariants.filter(creativeVariantNeedsManualAction).length;
+  const readyVariants = deliveryVariants.filter((variant) => creativeVariantAdoptionReadiness(variant).ready).length;
+  const candidateCount = variants.filter((variant) => creativeVariantCandidateState(variant) === "candidate").length;
+  const candidateReady = variants.filter((variant) => creativeVariantCandidateState(variant) === "candidate" && creativeVariantPrimaryPreviewReady(variant)).length;
   if (item.adopted_variant_id) return { label: "已采用", detail: "已选择最终方案，可查看交付包。", tone: "default", variants: variants.length, previewAssets, expectedAssets, runningVariants, productionStoppedVariants, blockedVariants, readyVariants };
-  if (readyVariants > 0) return { label: "可验收", detail: `${readyVariants}/${variants.length} 个变体可验收，先比较成图再采用。`, tone: "default", variants: variants.length, previewAssets, expectedAssets, runningVariants, productionStoppedVariants, blockedVariants, readyVariants };
+  if (readyVariants > 0) return { label: "可验收", detail: `${readyVariants}/${Math.max(deliveryVariants.length, 1)} 个入选方案可验收，先比较成图再采用。`, tone: "default", variants: variants.length, previewAssets, expectedAssets, runningVariants, productionStoppedVariants, blockedVariants, readyVariants };
+  if (candidateCount > 0) return { label: "方案筛选中", detail: `${candidateReady}/${candidateCount} 个主画面已就绪，正在比较并选出三个方案。`, tone: "outline", variants: variants.length, previewAssets, expectedAssets, runningVariants, productionStoppedVariants, blockedVariants, readyVariants };
   if (productionStoppedVariants > 0) return { label: "未完成", detail: `${productionStoppedVariants} 个变体未完成，可先查看已有图。`, tone: "secondary", variants: variants.length, previewAssets, expectedAssets, runningVariants, productionStoppedVariants, blockedVariants, readyVariants };
   if (blockedVariants > 0) return { label: "待验收", detail: `${blockedVariants} 个变体待验收，先看图再决定。`, tone: "secondary", variants: variants.length, previewAssets, expectedAssets, runningVariants, productionStoppedVariants, blockedVariants, readyVariants };
   if (runningVariants > 0 || variants.length > 0) return { label: "生成中", detail: `${previewAssets}/${Math.max(expectedAssets, 1)} 张成图已就绪，页面会自动刷新。`, tone: "outline", variants: variants.length, previewAssets, expectedAssets, runningVariants, productionStoppedVariants, blockedVariants, readyVariants };
@@ -486,6 +629,7 @@ function AdoptedVariantDelivery({
   const [archiveError, setArchiveError] = useState("");
   const delivered = creativeVariantDeliveryAssets(variant);
   const entries = creativeVariantArchiveEntries(variant, attachments, order, item);
+  const expectedSizes = creativeVariantActiveExpectedSizes(variant);
   const downloadArchive = async () => {
     setArchiveBusy(true);
     setArchiveError("");
@@ -501,11 +645,11 @@ function AdoptedVariantDelivery({
   return <div className="bg-emerald-50/40 dark:bg-emerald-950/10" data-testid="creative-adopted-variant">
     <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3">
       <div className="flex items-center gap-2"><PackageCheck className="h-4 w-4 text-emerald-700 dark:text-emerald-400" /><h3 className="text-sm font-semibold">最终采用方案 · 交付包</h3><Badge variant="outline">{variant.variant_key}</Badge></div>
-      <Button size="sm" variant="outline" disabled={archiveBusy || entries.length !== CREATIVE_DELIVERY_SIZES.length} onClick={() => void downloadArchive()}><Download className="h-4 w-4" />{archiveBusy ? "正在打包" : "下载交付包"}</Button>
+      <Button size="sm" variant="outline" disabled={archiveBusy || entries.length !== expectedSizes.length} onClick={() => void downloadArchive()}><Download className="h-4 w-4" />{archiveBusy ? "正在打包" : "下载交付包"}</Button>
     </div>
     {archiveError && <p role="alert" className="border-y border-destructive/20 bg-destructive/5 px-4 py-2 text-xs text-destructive">{archiveError}</p>}
-    <div className="grid min-w-0 border-t md:grid-cols-3">
-      {CREATIVE_DELIVERY_SIZES.map((size, index) => {
+    <div className={cn("grid min-w-0 border-t", expectedSizes.length === 3 && "md:grid-cols-3")}>
+      {expectedSizes.map((size, index) => {
         const asset = delivered.find((candidate) => candidate.size_key === size);
         const attachment = asset ? attachments.get(asset.attachment_id) : undefined;
         const entry = asset ? entries.find((candidate) => candidate.asset.id === asset.id) : undefined;
@@ -513,6 +657,39 @@ function AdoptedVariantDelivery({
       })}
     </div>
   </div>;
+}
+
+function AdoptedVariantStagingStatus({
+  variant,
+  disabled = false,
+  retrying = false,
+  onRetry,
+}: {
+  variant: CreativeOrderVariant;
+  disabled?: boolean;
+  retrying?: boolean;
+  onRetry?: (variant: CreativeOrderVariant, action: CreativeVariantRetryAction) => void;
+}) {
+  const activeRevision = creativeVariantActiveRevision(variant);
+  const workingRevision = creativeVariantWorkingRevision(variant);
+  if (activeRevision < 1 || workingRevision < 1 || activeRevision === workingRevision) return null;
+  const details = creativeVariantWorkingQCDetails(variant);
+  const retryAction = creativeVariantRetryAction(variant);
+  const needsAttention = creativeVariantStagingNeedsAttention(variant);
+  return <section className="space-y-3 border-t bg-muted/10 px-4 py-3" data-testid="creative-adopted-staging-revision">
+    <div className="flex flex-wrap items-center gap-2">
+      <Badge variant="outline">线上 r{activeRevision}</Badge>
+      <Badge variant={needsAttention ? "secondary" : "outline"}>制作中 r{workingRevision}</Badge>
+      <p className="text-xs text-muted-foreground">线上版本继续可用，新版本通过全部检查后才会替换。</p>
+    </div>
+    {needsAttention
+      ? <VariantStagingDiagnostics variant={variant} details={details} />
+      : <p className="text-xs text-muted-foreground">新版本正在生成或检查，完成后会自动更新。</p>}
+    {retryAction && onRetry && <Button size="sm" variant="outline" disabled={disabled || retrying} onClick={() => onRetry(variant, retryAction)}>
+      <RefreshCw className={cn("h-4 w-4", retrying && "animate-spin")} />
+      {retrying ? "正在重试" : `${retryAction.label} · r${workingRevision}`}
+    </Button>}
+  </section>;
 }
 
 function VariantCandidate({
@@ -542,16 +719,24 @@ function VariantCandidate({
   retrying?: boolean;
   onRetry?: (variant: CreativeOrderVariant, action: CreativeVariantRetryAction) => void;
 }) {
+  const candidateState = creativeVariantCandidateState(variant);
+  const participatesInDelivery = creativeVariantParticipatesInDelivery(variant);
+  const expectedSizes = creativeVariantDisplaySizes(variant);
+  const primarySize = creativeVariantPrimarySize(variant);
+  const activeRevision = creativeVariantActiveRevision(variant);
+  const workingRevision = creativeVariantWorkingRevision(variant);
+  const hasStagingRevision = activeRevision > 0 && workingRevision > 0 && activeRevision !== workingRevision;
   const readiness = creativeVariantAdoptionReadiness(variant);
   const riskAdoption = creativeVariantRiskAdoptionReadiness(variant);
   const qcDetails = creativeVariantQCDetails(variant);
+  const workingQCDetails = creativeVariantWorkingQCDetails(variant);
   const descriptionId = useId();
   const previews = creativeVariantPreviewAssets(variant);
   const diagnostics = creativeVariantDiagnosticAssets(variant);
   const [processOpen, setProcessOpen] = useState(false);
-  const cover = previews.find((asset) => asset.size_key === "1080x1080") ?? previews[0];
+  const cover = previews.find((asset) => asset.size_key === primarySize) ?? previews[0];
   const coverURL = cover ? creativeAttachmentBrowserURL(attachments.get(cover.attachment_id)) : "";
-  const coverDiagnostic = coverURL ? undefined : diagnostics.find((asset) => asset.size_key === "1080x1080") ?? diagnostics[0];
+  const coverDiagnostic = coverURL ? undefined : diagnostics.find((asset) => asset.size_key === primarySize) ?? diagnostics[0];
   const adopted = adoptedVariantId === variant.id;
   const busy = adoptingVariantId === variant.id;
   const blocked = creativeVariantNeedsManualAction(variant);
@@ -559,7 +744,7 @@ function VariantCandidate({
   const backgroundRunning = creativeVariantHasBackgroundWorkInProgress(variant);
   const requiresRiskAcknowledgement = riskAdoption.allowed;
   const currentSizeAdjustment = adjustment?.variantId === variant.id ? adjustment : undefined;
-  const retryAction = creativeVariantRetryAction(variant);
+  const retryAction = participatesInDelivery ? creativeVariantRetryAction(variant) : null;
   const adjustmentBadge = currentSizeAdjustment?.status.includes("已完成")
     ? "已完成"
     : currentSizeAdjustment?.status.includes("未启动")
@@ -567,7 +752,7 @@ function VariantCandidate({
       : currentSizeAdjustment?.status.includes("需要处理")
         ? "待处理"
         : "调整中";
-  const adoptionDisabled = disabled || !readiness.ready || adopted || Boolean(adoptingVariantId);
+  const adoptionDisabled = disabled || !participatesInDelivery || !readiness.ready || adopted || Boolean(adoptingVariantId);
   const statusTone = blocked
     ? "text-amber-700 dark:text-amber-300"
     : requiresRiskAcknowledgement
@@ -592,17 +777,25 @@ function VariantCandidate({
   });
   return <article className={cn("flex min-w-0 flex-col border bg-background", subdued && "opacity-75 transition-opacity hover:opacity-100")}>
     <div className="flex items-center justify-between gap-2 border-b px-3 py-2">
-      <div className="flex min-w-0 items-center gap-2"><span className="text-sm font-semibold">{variant.variant_key || variant.id.slice(0, 8)}</span><Badge variant="outline">r{variant.revision}</Badge>{currentSizeAdjustment && <span className="truncate text-xs text-amber-800 dark:text-amber-200">{CREATIVE_DELIVERY_SIZE_LABELS[currentSizeAdjustment.sizeKey as (typeof CREATIVE_DELIVERY_SIZES)[number]] ?? currentSizeAdjustment.sizeKey} {currentSizeAdjustment.status}</span>}</div>
-      {adopted ? <Badge variant="default"><CheckCircle2 className="h-3 w-3" />已采用</Badge> : currentSizeAdjustment ? <Badge variant="outline">{adjustmentBadge}</Badge> : productionStopped ? <Badge variant="secondary">未完成</Badge> : blocked || requiresRiskAcknowledgement || readiness.ready ? <Badge variant="outline"><CheckCircle2 className="h-3 w-3" />待验收</Badge> : backgroundRunning ? <Badge variant="outline">处理中</Badge> : <Badge variant="secondary">尚未完成</Badge>}
+      <div className="flex min-w-0 flex-wrap items-center gap-2">
+        <span className="text-sm font-semibold">{variant.variant_key || variant.id.slice(0, 8)}</span>
+        {activeRevision > 0 && <Badge variant="outline">线上 r{activeRevision}</Badge>}
+        {hasStagingRevision && <Badge variant="secondary">制作中 r{workingRevision}</Badge>}
+        {activeRevision < 1 && workingRevision > 0 && <Badge variant="outline">r{workingRevision}</Badge>}
+        {candidateState !== "selected" && <Badge variant="outline">{creativeVariantCandidateStateLabel(candidateState, variant.selection_rank)}</Badge>}
+        {candidateState === "selected" && (variant.selection_rank ?? 0) > 0 && <Badge variant="outline">第 {variant.selection_rank} 名</Badge>}
+        {currentSizeAdjustment && <span className="truncate text-xs text-amber-800 dark:text-amber-200">{CREATIVE_DELIVERY_SIZE_LABELS[currentSizeAdjustment.sizeKey as (typeof CREATIVE_DELIVERY_SIZES)[number]] ?? currentSizeAdjustment.sizeKey} {currentSizeAdjustment.status}</span>}
+      </div>
+      {adopted ? <Badge variant="default"><CheckCircle2 className="h-3 w-3" />已采用</Badge> : candidateState !== "selected" ? <Badge variant="secondary">{creativeVariantCandidateStateLabel(candidateState, variant.selection_rank)}</Badge> : currentSizeAdjustment ? <Badge variant="outline">{adjustmentBadge}</Badge> : productionStopped ? <Badge variant="secondary">未完成</Badge> : blocked || requiresRiskAcknowledgement || readiness.ready ? <Badge variant="outline"><CheckCircle2 className="h-3 w-3" />待验收</Badge> : backgroundRunning ? <Badge variant="outline">处理中</Badge> : <Badge variant="secondary">尚未完成</Badge>}
     </div>
     <button type="button" disabled={(!cover || !coverURL) && !coverDiagnostic} onClick={() => { if (cover && coverURL) onAssetSelect(cover.id); else if (coverDiagnostic) openCreativeDiagnosticAsset(coverDiagnostic); }} className="group relative flex min-h-72 w-full items-center justify-center border-b bg-muted/10 p-3 disabled:cursor-default">
-      {coverURL ? <img src={coverURL} alt={`${variant.variant_key} 方形主预览`} width={720} height={720} loading="lazy" className="max-h-[420px] w-full object-contain transition-transform group-hover:scale-[1.01]" /> : coverDiagnostic ? <>
+      {coverURL ? <img src={coverURL} alt={`${variant.variant_key} ${CREATIVE_DELIVERY_SIZE_LABELS[primarySize]}主预览`} width={720} height={720} loading="lazy" className="max-h-[420px] w-full object-contain transition-transform group-hover:scale-[1.01]" /> : coverDiagnostic ? <>
         <img src={coverDiagnostic.url} alt={`${variant.variant_key} 过程图片 ${coverDiagnostic.label}`} width={720} height={720} loading="lazy" className="max-h-[420px] w-full object-contain opacity-90 transition-transform group-hover:scale-[1.01]" />
         <span className="absolute left-3 top-3 rounded-full border border-amber-300 bg-amber-50 px-2 py-1 text-[11px] font-medium text-amber-900 shadow-sm dark:border-amber-800 dark:bg-amber-950 dark:text-amber-200">过程图片</span>
       </> : <EmptyImage label="待成图" />}
     </button>
     <div className="mt-auto space-y-2 p-3">
-      <div className="grid grid-cols-3 divide-x border text-center text-[11px] text-muted-foreground">{CREATIVE_DELIVERY_SIZES.map((size) => {
+      <div className={cn("grid divide-x border text-center text-[11px] text-muted-foreground", expectedSizes.length === 1 ? "grid-cols-1" : "grid-cols-3")}>{expectedSizes.map((size) => {
         const asset = previews.find((candidate) => candidate.size_key === size);
         return <div key={size} className="relative min-w-0">
           <button type="button" disabled={!asset} onClick={() => { if (asset) onAssetSelect(asset.id); }} className="w-full px-2 py-2 pr-7 disabled:opacity-50"><span className="block font-medium text-foreground">{CREATIVE_DELIVERY_SIZE_LABELS[size]}</span><span>{asset ? "可查看" : "待成图"}</span></button>
@@ -614,11 +807,12 @@ function VariantCandidate({
         查看过程图片
         <Badge variant="secondary">{diagnostics.length}</Badge>
       </Button>}
-      <p id={descriptionId} className={cn("text-xs", statusTone)}>{compactStatus}</p>
-      <VariantCompactDiagnostics variant={variant} disabled={disabled} details={qcDetails} />
+      <p id={descriptionId} className={cn("text-xs", statusTone)}>{candidateState === "candidate" ? "主画面完成后进入统一比较" : candidateState === "reserve" ? "保留主画面，入选方案失败时自动递补" : candidateState === "rejected" ? "未进入本轮三个交付方案" : compactStatus}</p>
+      {participatesInDelivery && <VariantStagingDiagnostics variant={variant} details={workingQCDetails} />}
+      {participatesInDelivery && <VariantCompactDiagnostics variant={variant} disabled={disabled} details={qcDetails} />}
       {retryAction && onRetry && <Button className="w-full" size="sm" variant="outline" disabled={disabled || retrying} onClick={() => onRetry(variant, retryAction)}>
         <RefreshCw className={cn("h-4 w-4", retrying && "animate-spin")} />
-        {retrying ? "正在重试" : retryAction.label}
+        {retrying ? "正在重试" : hasStagingRevision ? `${retryAction.label} · r${workingRevision}` : retryAction.label}
       </Button>}
       <Button className="w-full" size="sm" variant="outline" disabled={!cover || !coverURL} onClick={() => { if (cover && coverURL) onAssetSelect(cover.id); }}>
         <Eye className="h-4 w-4" />
@@ -626,7 +820,7 @@ function VariantCandidate({
       </Button>
       <Button className={cn("w-full", requiresRiskAcknowledgement && !adopted && "border-amber-300 text-amber-800 hover:bg-amber-50 dark:border-amber-800 dark:text-amber-200 dark:hover:bg-amber-950/40")} size="sm" variant={adopted ? "secondary" : requiresRiskAcknowledgement ? "outline" : "default"} disabled={adoptionDisabled} aria-describedby={descriptionId} onClick={adoptVariant}>
         {adopted ? <CheckCircle2 className="h-4 w-4" /> : <Check className="h-4 w-4" />}
-        {disabled ? "订单已结束" : busy ? "正在采用" : adopted ? "当前采用" : readiness.ready ? "采用此变体" : "尚不可采用"}
+        {disabled ? "订单已结束" : busy ? "正在采用" : adopted ? "当前采用" : !participatesInDelivery ? "尚未入选" : readiness.ready ? "采用此变体" : "尚不可采用"}
       </Button>
     </div>
     <CreativeProcessImageDialog open={processOpen} onOpenChange={setProcessOpen} variant={variant} assets={diagnostics} attachments={attachments} />
@@ -882,6 +1076,29 @@ function VariantCompactDiagnostics({ variant, details, disabled = false }: { var
   </details>;
 }
 
+function VariantStagingDiagnostics({ variant, details }: { variant: CreativeOrderVariant; details: CreativeVariantQCDetail[] }) {
+  if (!creativeVariantStagingNeedsAttention(variant)) return null;
+  const revision = creativeVariantWorkingRevision(variant);
+  const blocker = variant.action_required;
+  const detail = blocker?.detail
+    ? businessActionRequiredDetail(blocker.workflow, blocker.detail)
+    : `制作中 r${revision} 未完成，后台没有返回可读原因。`;
+  return <div className="space-y-2 border border-amber-300 bg-amber-50 px-2 py-2 text-xs text-amber-900 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-200" data-testid="creative-staging-revision-diagnostics">
+    <p className="flex items-center gap-1.5 font-medium"><AlertTriangle className="h-3.5 w-3.5" />制作中 r{revision} 需要处理</p>
+    <p className="break-words">{detail}</p>
+    <VariantQCDetails details={details} />
+  </div>;
+}
+
+function creativeVariantStagingNeedsAttention(variant: CreativeOrderVariant): boolean {
+  const activeRevision = creativeVariantActiveRevision(variant);
+  const workingRevision = creativeVariantWorkingRevision(variant);
+  if (activeRevision < 1 || workingRevision < 1 || activeRevision === workingRevision) return false;
+  const revisionStatus = (variant.revisions ?? []).find((revision) => revision.revision === workingRevision)?.status;
+  return ["action_required", "failed"].includes(variant.status)
+    || ["action_required", "failed"].includes(revisionStatus ?? "");
+}
+
 function VariantActionRequiredNotice({ variant, disabled = false }: { variant: CreativeOrderVariant; disabled?: boolean }) {
   if (!creativeVariantNeedsManualAction(variant)) return null;
   if (creativeVariantHasQCFailure(variant)) return null;
@@ -903,6 +1120,7 @@ function creativeVariantBlockerTitle(workflow: string | undefined, productionSto
 function creativeVariantWorkflowLabel(workflow: string): string {
   return ({
     creative_plan: "创意方案",
+    creative_candidate_selection: "候选比较",
     creative_production: "成图生成",
     brand_components: "品牌组件合成",
     creative_qc_technical: "质检",
@@ -926,7 +1144,15 @@ export type CreativeVariantQCDetail = {
 };
 
 export function creativeVariantQCDetails(variant: CreativeOrderVariant): CreativeVariantQCDetail[] {
-  const reports = currentCreativeVariantQCReports(variant);
+  return creativeVariantQCDetailsForRevision(variant, creativeVariantActiveRevision(variant) || creativeVariantWorkingRevision(variant));
+}
+
+function creativeVariantWorkingQCDetails(variant: CreativeOrderVariant): CreativeVariantQCDetail[] {
+  return creativeVariantQCDetailsForRevision(variant, creativeVariantWorkingRevision(variant));
+}
+
+function creativeVariantQCDetailsForRevision(variant: CreativeOrderVariant, revision: number): CreativeVariantQCDetail[] {
+  const reports = creativeVariantQCReportsForRevision(variant, revision);
   return (["visual"] as const).flatMap((lane) => {
     const report = reports.get(lane);
     if (!report) return [];
@@ -1017,44 +1243,54 @@ function openCreativeProcessURL(url: string) {
 }
 
 export function creativeVariantAdoptionReadiness(variant: CreativeOrderVariant): { ready: boolean; status: string } {
+  if (!creativeVariantParticipatesInDelivery(variant)) {
+    const state = creativeVariantCandidateState(variant);
+    return { ready: false, status: state === "candidate" ? "等待候选比较" : state === "reserve" ? "后备方案暂不参与交付" : "本轮未入选" };
+  }
   const delivered = creativeVariantDeliveryAssets(variant);
   const primedSizes = currentCreativeVariantSizeSet(variant, "primed");
+  const expectedSizes = creativeVariantActiveRevision(variant) > 0
+    ? creativeVariantActiveExpectedSizes(variant)
+    : creativeVariantWorkingExpectedSizes(variant);
+  const expectedCount = expectedSizes.length;
   const reportByLane = new Map(creativeVariantQCDetails(variant).map((detail) => [detail.lane, detail.status]));
   const visual = reportByLane.get("visual") ?? "pending";
   const failedQC = creativeVariantFailedQCLabels(variant);
-  if (creativeVariantUsesDirectEditNoQC(variant) && variant.status === "completed" && delivered.length === CREATIVE_DELIVERY_SIZES.length) {
-    return { ready: true, status: "精准调整已完成，品牌贴片已重新合成，可以采用" };
-  }
-  if (creativeVariantHasProductionContinuation(variant)) {
-    const generatedSizes = currentCreativeVariantSizeSet(variant, "generated");
-    return { ready: false, status: `成图生成中：已完成 ${generatedSizes.size}/${CREATIVE_DELIVERY_SIZES.length} 个尺寸` };
+  if (creativeVariantActiveRevision(variant) < 1 && creativeVariantHasProductionContinuation(variant)) {
+    const generatedSizes = workingCreativeVariantSizeSet(variant, "generated");
+    return { ready: false, status: `成图生成中：已完成 ${generatedSizes.size}/${expectedCount} 个尺寸` };
   }
   if (failedQC.length > 0) {
     const risk = creativeVariantRiskAdoptionReadiness(variant);
     if (risk.allowed) return { ready: true, status: "可查看并采用当前成图" };
     return { ready: false, status: risk.status };
   }
-  if (delivered.length === CREATIVE_DELIVERY_SIZES.length && primedSizes.size === CREATIVE_DELIVERY_SIZES.length && qcStatusAllowsAdoption(visual)) {
-    return { ready: true, status: "三尺寸、品牌组件与质检均已完成，可以采用" };
+  if (delivered.length === expectedCount && primedSizes.size === expectedCount && qcStatusAllowsAdoption(visual)) {
+    return { ready: true, status: `${expectedCount === 3 ? "三尺寸" : "目标尺寸"}、品牌组件与质检均已完成，可以采用` };
   }
   const productionStopDetail = creativeVariantProductionStopDetail(variant);
   if (productionStopDetail) return { ready: false, status: "未完成，可查看过程或重试" };
   if (creativeVariantHasBackgroundWorkInProgress(variant)) {
-    if (primedSizes.size !== CREATIVE_DELIVERY_SIZES.length) return { ready: false, status: `成图已完成，正在合成品牌组件：已完成 ${primedSizes.size}/${CREATIVE_DELIVERY_SIZES.length} 个尺寸` };
+    if (primedSizes.size !== expectedCount) return { ready: false, status: `成图已完成，正在合成品牌组件：已完成 ${primedSizes.size}/${expectedCount} 个尺寸` };
     if (!qcStatusAllowsAdoption(visual)) return { ready: false, status: `品牌组件已完成，等待质检：${creativeVariantPendingQCLabels(visual).join("、")}` };
   }
   if (!qcStatusAllowsAdoption(visual)) return { ready: false, status: `等待质检：${creativeVariantPendingQCLabels(visual).join("、")}` };
-  if (primedSizes.size !== CREATIVE_DELIVERY_SIZES.length) return { ready: false, status: `等待品牌组件合成：已完成 ${primedSizes.size}/${CREATIVE_DELIVERY_SIZES.length} 个尺寸` };
-  if (delivered.length !== CREATIVE_DELIVERY_SIZES.length) return { ready: false, status: `等待正式交付：已完成 ${delivered.length}/${CREATIVE_DELIVERY_SIZES.length} 个尺寸` };
+  if (primedSizes.size !== expectedCount) return { ready: false, status: `等待品牌组件合成：已完成 ${primedSizes.size}/${expectedCount} 个尺寸` };
+  if (delivered.length !== expectedCount) return { ready: false, status: `等待正式交付：已完成 ${delivered.length}/${expectedCount} 个尺寸` };
   if (variant.action_required?.detail) return { ready: false, status: "可查看现有结果或继续标注" };
   return { ready: false, status: `等待变体完成：当前状态 ${variant.status}` };
 }
 
 export function creativeVariantIsInProgress(variant: CreativeOrderVariant): boolean {
-  return variant.status === "queued" || variant.status === "running" || variant.status === "partial" || creativeVariantHasBackgroundWorkInProgress(variant);
+  return variant.status === "queued"
+    || variant.status === "running"
+    || variant.status === "partial"
+    || creativeVariantHasUnsettledImageOperation(variant)
+    || creativeVariantHasBackgroundWorkInProgress(variant);
 }
 
 export function creativeVariantNeedsManualAction(variant: CreativeOrderVariant): boolean {
+  if (!creativeVariantParticipatesInDelivery(variant)) return false;
   if (creativeVariantHasCompletePassingDelivery(variant)) return false;
   if (creativeVariantHasProductionContinuation(variant)) return false;
   if (creativeVariantHasQCFailure(variant)) return !creativeVariantRiskAdoptionReadiness(variant).allowed;
@@ -1063,6 +1299,7 @@ export function creativeVariantNeedsManualAction(variant: CreativeOrderVariant):
 }
 
 function creativeVariantHasProductionStop(variant: CreativeOrderVariant): boolean {
+  if (!creativeVariantParticipatesInDelivery(variant) || creativeVariantHasCompletePassingDelivery(variant)) return false;
   return Boolean(creativeVariantProductionStopDetail(variant));
 }
 
@@ -1074,6 +1311,7 @@ function creativeVariantProductionStopDetail(variant: CreativeOrderVariant): str
 }
 
 function creativeVariantHasProductionContinuation(variant: CreativeOrderVariant): boolean {
+  if (!creativeVariantParticipatesInDelivery(variant)) return false;
   const blocker = variant.action_required;
   if (!blocker || blocker.workflow !== "creative_production") return false;
   return variant.status === "queued" || variant.status === "running" || variant.status === "partial";
@@ -1083,33 +1321,41 @@ function creativeOrderWorkflowFailureIsQC(workflow: string): boolean {
   return workflow === "creative_qc" || workflow === "creative_qc_technical" || workflow === "creative_qc_visual";
 }
 
+function creativeVariantHasUnsettledImageOperation(variant: CreativeOrderVariant): boolean {
+  const revision = creativeVariantWorkingRevision(variant);
+  return (variant.image_operations ?? []).some((operation) => operation.revision === revision
+    && ["queued", "running", "submitted", "unknown"].includes(operation.status));
+}
+
 function creativeVariantHasBackgroundWorkInProgress(variant: CreativeOrderVariant): boolean {
   if (creativeVariantHasQCFailure(variant)) return false;
   if (creativeVariantHasCompletePassingDelivery(variant)) return false;
+  if (creativeVariantHasUnsettledImageOperation(variant)) return true;
   const pendingQCFinalize = creativeVariantHasPendingQCFinalize(variant);
   if (variant.status !== "queued" && variant.status !== "running" && variant.status !== "partial" && !pendingQCFinalize) return false;
-  const generatedSizes = currentCreativeVariantSizeSet(variant, "generated");
-  const primedSizes = currentCreativeVariantSizeSet(variant, "primed");
-  if (generatedSizes.size === CREATIVE_DELIVERY_SIZES.length && primedSizes.size !== CREATIVE_DELIVERY_SIZES.length) return true;
+  const expectedCount = creativeVariantWorkingExpectedSizes(variant).length;
+  const generatedSizes = workingCreativeVariantSizeSet(variant, "generated");
+  const primedSizes = workingCreativeVariantSizeSet(variant, "primed");
+  if (generatedSizes.size === expectedCount && primedSizes.size !== expectedCount) return true;
+  if (!creativeVariantParticipatesInDelivery(variant)) return generatedSizes.size < expectedCount || primedSizes.size < expectedCount;
   const reportByLane = new Map(creativeVariantQCDetails(variant).map((detail) => [detail.lane, detail.status]));
   const visual = reportByLane.get("visual") ?? "pending";
-  if (primedSizes.size === CREATIVE_DELIVERY_SIZES.length && !qcStatusAllowsAdoption(visual)) return true;
+  if (primedSizes.size === expectedCount && !qcStatusAllowsAdoption(visual)) return true;
   if (!pendingQCFinalize) return false;
   const deliveredSizes = new Set(creativeVariantDeliveryAssets(variant).map((asset) => asset.size_key));
-  if (deliveredSizes.size === CREATIVE_DELIVERY_SIZES.length) return false;
+  if (deliveredSizes.size === expectedCount) return false;
   return true;
 }
 
 function creativeVariantHasCompletePassingDelivery(variant: CreativeOrderVariant): boolean {
+  if (!creativeVariantParticipatesInDelivery(variant) || creativeVariantActiveRevision(variant) < 1) return false;
   const delivered = creativeVariantDeliveryAssets(variant);
   const primedSizes = currentCreativeVariantSizeSet(variant, "primed");
+  const expectedCount = creativeVariantActiveExpectedSizes(variant).length;
   const reportByLane = new Map(creativeVariantQCDetails(variant).map((detail) => [detail.lane, detail.status]));
   const visual = reportByLane.get("visual") ?? "pending";
-  if (creativeVariantUsesDirectEditNoQC(variant)) {
-    return delivered.length === CREATIVE_DELIVERY_SIZES.length && variant.status === "completed";
-  }
-  return delivered.length === CREATIVE_DELIVERY_SIZES.length
-    && primedSizes.size === CREATIVE_DELIVERY_SIZES.length
+  return delivered.length === expectedCount
+    && primedSizes.size === expectedCount
     && qcStatusAllowsAdoption(visual);
 }
 
@@ -1143,21 +1389,32 @@ function creativeVariantPendingQCLabels(visual: string): string[] {
 }
 
 function currentCreativeVariantSizeSet(variant: CreativeOrderVariant, stage: string): Set<string> {
+  return creativeVariantSizeSet(variant, stage, creativeVariantActiveRevision(variant) || creativeVariantWorkingRevision(variant));
+}
+
+function workingCreativeVariantSizeSet(variant: CreativeOrderVariant, stage: string): Set<string> {
+  return creativeVariantSizeSet(variant, stage, creativeVariantWorkingRevision(variant));
+}
+
+function creativeVariantSizeSet(variant: CreativeOrderVariant, stage: string, revision: number): Set<string> {
   return new Set(variant.assets
-    .filter((asset) => asset.revision === variant.revision && asset.stage === stage && asset.status === "completed" && asset.attachment_id)
+    .filter((asset) => asset.revision === revision && asset.stage === stage && asset.status === "completed" && asset.attachment_id)
     .map((asset) => asset.size_key)
     .filter((size) => CREATIVE_DELIVERY_SIZES.includes(size as (typeof CREATIVE_DELIVERY_SIZES)[number])));
 }
 
 export function creativeVariantRiskAdoptionReadiness(variant: CreativeOrderVariant): { allowed: boolean; status: string } {
+  if (!creativeVariantParticipatesInDelivery(variant)) return { allowed: false, status: "候选尚未进入交付" };
   const failed = creativeVariantQCDetails(variant).filter((detail) => detail.status === "failed");
   if (failed.length === 0) return { allowed: false, status: "当前版本没有质检风险" };
+  const revision = creativeVariantActiveRevision(variant) || creativeVariantWorkingRevision(variant);
+  const expectedCount = creativeVariantExpectedSizes(variant, revision).length;
   const primedSizes = new Set(variant.assets
-    .filter((asset) => asset.revision === variant.revision && asset.stage === "primed" && asset.status === "completed" && asset.attachment_id)
+    .filter((asset) => asset.revision === revision && asset.stage === "primed" && asset.status === "completed" && asset.attachment_id)
     .map((asset) => asset.size_key)
     .filter((size) => CREATIVE_DELIVERY_SIZES.includes(size as (typeof CREATIVE_DELIVERY_SIZES)[number])));
-  if (primedSizes.size !== CREATIVE_DELIVERY_SIZES.length) {
-    return { allowed: false, status: `品牌组件完成 ${primedSizes.size}/${CREATIVE_DELIVERY_SIZES.length}，暂不可采用` };
+  if (primedSizes.size !== expectedCount) {
+    return { allowed: false, status: `品牌组件完成 ${primedSizes.size}/${expectedCount}，暂不可采用` };
   }
   return { allowed: true, status: "可采用当前成图" };
 }
@@ -1167,13 +1424,16 @@ function qcStatusAllowsAdoption(status: string): boolean {
 }
 
 export function creativeVariantCanRetryQC(variant: CreativeOrderVariant): boolean {
-  if (variant.qc_recovery_available !== true || variant.qc_recovery_used === true || variant.status !== "action_required") return false;
+  if (!creativeVariantParticipatesInDelivery(variant)) return false;
+  if (variant.qc_recovery_available !== true || variant.qc_recovery_used === true || !["action_required", "failed"].includes(variant.status)) return false;
+  const revision = creativeVariantWorkingRevision(variant);
   const primedSizes = new Set(variant.assets
-    .filter((asset) => asset.revision === variant.revision && asset.stage === "primed" && asset.status === "completed" && asset.attachment_id)
+    .filter((asset) => asset.revision === revision && asset.stage === "primed" && asset.status === "completed" && asset.attachment_id)
     .map((asset) => asset.size_key)
     .filter((size) => CREATIVE_DELIVERY_SIZES.includes(size as (typeof CREATIVE_DELIVERY_SIZES)[number])));
-  if (primedSizes.size !== CREATIVE_DELIVERY_SIZES.length) return false;
-  return creativeVariantQCDetails(variant).some((detail) => detail.status === "failed");
+  const expectedSizes = creativeVariantWorkingExpectedSizes(variant);
+  if (expectedSizes.some((size) => !primedSizes.has(size))) return false;
+  return creativeVariantWorkingQCDetails(variant).some((detail) => detail.status === "failed");
 }
 
 export function creativeVariantRetryAction(variant: CreativeOrderVariant): CreativeVariantRetryAction | null {
@@ -1190,10 +1450,10 @@ export function creativeVariantRetryAction(variant: CreativeOrderVariant): Creat
   return { kind: "workflow", taskId: blocker.task_id, label: "重试此方案" };
 }
 
-function currentCreativeVariantQCReports(variant: CreativeOrderVariant): Map<"technical" | "visual", CreativeOrderQCReport> {
+function creativeVariantQCReportsForRevision(variant: CreativeOrderVariant, revision: number): Map<"technical" | "visual", CreativeOrderQCReport> {
   const selected = new Map<"technical" | "visual", CreativeOrderQCReport>();
   for (const report of variant.qc_reports) {
-    if (report.revision !== variant.revision || (report.lane !== "technical" && report.lane !== "visual")) continue;
+    if (report.revision !== revision || (report.lane !== "technical" && report.lane !== "visual")) continue;
     const current = selected.get(report.lane);
     if (!current || compareQCReports(report, current) > 0) selected.set(report.lane, report);
   }
@@ -1216,7 +1476,9 @@ function creativeVariantQCBlockingFailures(variant: CreativeOrderVariant, lane: 
   if (fromFindings.length > 0) return fromFindings;
 
   const blocker = variant.action_required;
-  if (blocker && (blocker.workflow === "creative_qc" || blocker.workflow === `creative_qc_${lane}`)) {
+  if (blocker
+    && report.revision === creativeVariantWorkingRevision(variant)
+    && (blocker.workflow === "creative_qc" || blocker.workflow === `creative_qc_${lane}`)) {
     const blockerDetail = businessQCMessage(blocker.detail);
     if (blockerDetail && !isPendingQCSyncMessage(blockerDetail)) return [blockerDetail];
   }

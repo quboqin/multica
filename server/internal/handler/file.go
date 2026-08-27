@@ -36,6 +36,8 @@ const maxUploadSize = 100 << 20 // 100 MB
 
 const defaultAttachmentDownloadURLTTL = 30 * time.Minute
 
+var errAttachmentReferencedByActiveCreativeRevision = errors.New("attachment is referenced by an active creative revision")
+
 type attachmentDownloadMode string
 
 const (
@@ -951,10 +953,15 @@ func (h *Handler) DeleteAttachment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.Queries.DeleteAttachment(r.Context(), db.DeleteAttachmentParams{
-		ID:          att.ID,
-		WorkspaceID: att.WorkspaceID,
-	}); err != nil {
+	if err := h.deleteAttachmentUnlessActiveCreativeReference(r.Context(), att.ID, att.WorkspaceID); err != nil {
+		if errors.Is(err, errAttachmentReferencedByActiveCreativeRevision) {
+			writeError(w, http.StatusConflict, "attachment is part of an active creative delivery")
+			return
+		}
+		if errors.Is(err, pgx.ErrNoRows) {
+			writeError(w, http.StatusNotFound, "attachment not found")
+			return
+		}
 		slog.Error("failed to delete attachment", "error", err)
 		writeError(w, http.StatusInternalServerError, "failed to delete attachment")
 		return
@@ -962,6 +969,64 @@ func (h *Handler) DeleteAttachment(w http.ResponseWriter, r *http.Request) {
 
 	h.deleteS3Object(r.Context(), att.Url)
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *Handler) deleteAttachmentUnlessActiveCreativeReference(ctx context.Context, attachmentID, workspaceID pgtype.UUID) error {
+	if h.TxStarter == nil {
+		return errors.New("attachment deletion transaction is unavailable")
+	}
+	tx, err := h.TxStarter.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	var lockedID pgtype.UUID
+	if err := tx.QueryRow(ctx, `
+SELECT id
+FROM attachment
+WHERE id = $1 AND workspace_id = $2
+FOR UPDATE
+`, attachmentID, workspaceID).Scan(&lockedID); err != nil {
+		return err
+	}
+
+	rows, err := tx.Query(ctx, `
+SELECT COALESCE(variant.active_revision, 0), asset.revision
+FROM creative_order_asset asset
+JOIN creative_order_variant variant ON variant.id = asset.variant_id
+WHERE asset.attachment_id = $1
+ORDER BY variant.id, asset.revision
+FOR UPDATE OF variant
+`, attachmentID)
+	if err != nil {
+		return err
+	}
+	for rows.Next() {
+		var activeRevision, assetRevision int
+		if err := rows.Scan(&activeRevision, &assetRevision); err != nil {
+			rows.Close()
+			return err
+		}
+		if activeRevision > 0 && assetRevision == activeRevision {
+			rows.Close()
+			return errAttachmentReferencedByActiveCreativeRevision
+		}
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	rows.Close()
+
+	tag, err := tx.Exec(ctx, `DELETE FROM attachment WHERE id = $1 AND workspace_id = $2`, attachmentID, workspaceID)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() != 1 {
+		return pgx.ErrNoRows
+	}
+	return tx.Commit(ctx)
 }
 
 // ---------------------------------------------------------------------------

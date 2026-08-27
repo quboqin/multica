@@ -101,6 +101,20 @@ var creativeOrderVariantPutCmd = &cobra.Command{
 	RunE:  runCreativeOrderVariantPut,
 }
 
+var creativeOrderCandidateSelectCmd = &cobra.Command{
+	Use:   "candidate-select <order-id> <item-id>",
+	Short: "Atomically rank three selected creative candidates and ordered reserves",
+	Args:  exactArgs(2),
+	RunE:  runCreativeOrderCandidateSelect,
+}
+
+var creativeOrderImageOperationPutCmd = &cobra.Command{
+	Use:   "image-operation-put <order-id>",
+	Short: "Create or update one durable size-level image operation attempt",
+	Args:  exactArgs(1),
+	RunE:  runCreativeOrderImageOperationPut,
+}
+
 var creativeOrderAssetPutCmd = &cobra.Command{
 	Use:   "asset-put <order-id>",
 	Short: "Create or update one generated, Prime, or delivered asset from JSON",
@@ -173,6 +187,8 @@ func init() {
 		creativeOrderListCmd,
 		creativeOrderGetCmd,
 		creativeOrderVariantPutCmd,
+		creativeOrderCandidateSelectCmd,
+		creativeOrderImageOperationPutCmd,
 		creativeOrderAssetPutCmd,
 		creativeOrderPrimeComposeCmd,
 		creativeOrderDiagnosticAssetPutCmd,
@@ -183,6 +199,8 @@ func init() {
 	for _, command := range []*cobra.Command{
 		creativeOrderCreateCmd,
 		creativeOrderVariantPutCmd,
+		creativeOrderCandidateSelectCmd,
+		creativeOrderImageOperationPutCmd,
 		creativeOrderAssetPutCmd,
 		creativeOrderDiagnosticAssetPutCmd,
 		creativeOrderQCPutCmd,
@@ -198,6 +216,7 @@ func init() {
 	creativeOrderListCmd.Flags().String("output", "json", "Output format: json")
 	creativeOrderGetCmd.Flags().String("output", "json", "Output format: json")
 	creativeOrderPrimeComposeCmd.Flags().String("variant", "", "Creative Order Variant UUID (required)")
+	creativeOrderPrimeComposeCmd.Flags().Bool("force", false, "Explicitly retry deterministic Prime composition for the current staging revision")
 	creativeOrderPrimeComposeCmd.Flags().String("output", "json", "Output format: json")
 	creativeOrderQCFinalizeCmd.Flags().String("variant", "", "Creative Order Variant UUID (required)")
 	creativeOrderQCFinalizeCmd.Flags().Int("revision", 1, "Variant revision to finalize")
@@ -425,6 +444,14 @@ func runCreativeOrderVariantPut(cmd *cobra.Command, args []string) error {
 	return putCreativeDomainJSON(cmd, "/api/creative/orders/"+url.PathEscape(args[0])+"/variants")
 }
 
+func runCreativeOrderCandidateSelect(cmd *cobra.Command, args []string) error {
+	return postCreativeDomainJSON(cmd, "/api/creative/orders/"+url.PathEscape(args[0])+"/items/"+url.PathEscape(args[1])+"/candidate-selection")
+}
+
+func runCreativeOrderImageOperationPut(cmd *cobra.Command, args []string) error {
+	return putCreativeDomainJSON(cmd, "/api/creative/orders/"+url.PathEscape(args[0])+"/image-operations")
+}
+
 func runCreativeOrderAssetPut(cmd *cobra.Command, args []string) error {
 	payload, err := creativeOrderAssetPayload(cmd)
 	if err != nil {
@@ -438,7 +465,8 @@ func runCreativeOrderPrimeCompose(cmd *cobra.Command, args []string) error {
 	if strings.TrimSpace(variantID) == "" {
 		return fmt.Errorf("--variant is required")
 	}
-	payload, err := json.Marshal(map[string]string{"variant_id": strings.TrimSpace(variantID)})
+	force, _ := cmd.Flags().GetBool("force")
+	payload, err := json.Marshal(map[string]any{"variant_id": strings.TrimSpace(variantID), "force": force})
 	if err != nil {
 		return fmt.Errorf("encode prime composition request: %w", err)
 	}

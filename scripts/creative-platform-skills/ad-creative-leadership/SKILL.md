@@ -27,7 +27,9 @@ allowed-tools: Bash(multica *)
 4. 按 target/source 分组，使用 `multica task fanout` 一次提交全部就绪项。提交后立即结束，不轮询、休眠或
    创建等待 Issue。
 
-正常主链所有权固定：Leader 创建方案或 direct-edit task；Planner 创建 production；Production 的最后一次资产登记由后端合成品牌组件并创建 visual QC；QC 写视觉检测报告并调用 `qc-finalize` 完成归档，真实遮挡或官方文字不可读会阻断当前尺寸并触发最多两轮定向返工，关键内容缺失仍然阻断并转人工确认。Leader 只在人工重试或异常恢复时补真正缺失的下一步，
+正常主链所有权固定：Leader 创建方案或 direct-edit task；Planner 建立 4-5 个候选并委派主尺寸 production；Production 只完成候选主尺寸和 Prime；
+QC 的 `creative_candidate_selection` 原子晋级 3 个，平台自动为 selected 补排缺失尺寸；selected 三尺寸 Prime 齐备后，QC 做联合视觉终检并调用
+`qc-finalize` 完成归档。真实遮挡或官方文字不可读会阻断当前尺寸并触发有界定向返工，关键内容缺失仍然阻断并转人工确认。Leader 只在人工重试或异常恢复时补真正缺失的下一步，
 不得与下游重复委派。
 
 ## 标准订单
@@ -74,19 +76,20 @@ multica task fanout --agent <planner-agent-id> --input-file <manifest.json> --ou
 提交前用 JSON parser 校验 manifest。CLI 返回的 `tasks` 必须包含新 task ID；否则记录真实错误并让当前任务失败。
 
 文案推荐、编辑和市场资源选择在页面完成并冻结。Leader 只消费 `copy_snapshot` 和 market snapshot，不根据
-竞品数字或当前资源草稿改写输入。V01-V03、三尺寸、品牌组件和 QC 的详细合同由对应 Skill 负责。
+竞品数字或当前资源草稿改写输入。4-5 候选、主尺寸晋级 3 个、selected 三尺寸、品牌组件和 QC 的详细合同由对应 Skill 负责。
 
 ## 直接改图
 
 `input_snapshot.mode=direct_edit` 时只创建 `creative_order_item_direct_edit` task。snapshot 必须含
 `direct_edit_agent_id`、`reviewer_agent_id`；context 携带固定 source asset/attachment、
-用户原话、target/expected sizes、delivery mode 和 source revision。preview 到 generated 结束；publish 由后端直接
-重新执行确定性品牌组件合成并登记 delivered，不创建 QC task。不得触发采集、参考分析、三变体方案或标准生产。
+用户原话、target/expected sizes、delivery mode 和 source revision。preview 到 generated 结束；publish 由后端
+重新执行确定性品牌组件合成并进入最终视觉 QC，只有 QC 归档后才 delivered。不得触发采集、参考分析、候选方案或标准生产。
 
 ## 恢复与用户留痕
 
 失败项不阻塞兄弟对象。恢复前先检查领域输出、task status 和 item key，只补缺失尺寸/lane/revision；旧
-revision 不得覆盖新 revision。只有用户明确操作才 retry failed 或创建最多一轮返工。
+revision 不得覆盖新 revision。平台只按结构化证据自动创建有上限的尺寸续跑、视觉返工和首次交付候补晋级，Leader 不重复创建这些任务；
+除此之外只有用户明确操作才 retry failed。已有 active revision 始终继续在线，未通过的 staging revision 不能覆盖它。
 
 Issue 只记录订单启动、可交付 Variant、需要用户决定的真实阻塞和整单完成。过程证据写领域对象与 task。
 整单所有 Variant completed 后才将 Issue 设为 done 并通知创建人；否则保持 todo。候选、文案、变体、成图、

@@ -3,6 +3,16 @@
   "subtitle": "Release notes maintained inside this Multica platform.",
   "current_version": "Current platform version: {{version}}",
   "releases": {
+    "v0_3_47": {
+      "version": "0.3.47",
+      "date": "2026-08-27",
+      "title": "Creative candidates, native size layouts, and revision isolation",
+      "summary": "This release improves complete creative delivery and recovery: multiple primary concepts are compared before three delivery variants are chosen, each size receives a native layout, late image receipts are protected, and active revisions stay available during rework.",
+      "change_1": "Each material starts with four or five distinct primary-image candidates. Independent review selects three delivery variants atomically, while ranked reserves remain available for automatic promotion when an initial delivery is exhausted.",
+      "change_2": "Square, landscape, and portrait assets share CreativeIntent and DesignDNA but are generated with native layouts instead of depending on a square raster. The image model continues to render headlines, amounts, tables, and calls to action.",
+      "change_3": "Every size now records a durable image operation with attempts, provider request details, runtime, duration, and result receipt. Running or unknown calls are reconciled instead of being sent again, and successful sibling sizes are retained.",
+      "change_4": "Official Prime components are selected per size and checked against visible glyph polarity, contrast, and texture. A staging revision replaces the active revision only after all delivery gates pass."
+    },
     "v0_3_23": {
       "version": "0.3.23",
       "date": "2026-08-16",

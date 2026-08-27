@@ -2456,6 +2456,13 @@ func (d *Daemon) handleTask(ctx context.Context, task Task, slot int) {
 
 	result, err := d.runner.run(runCtx, task, provider, slot, taskLog)
 
+	// Image-edit subprocesses can publish their atomic result after the agent
+	// turn (and its task token) has already ended. Reconcile any result that is
+	// present before terminal reporting, then keep a bounded daemon-authenticated
+	// watcher for genuinely late files. The server binds and CAS-validates the
+	// full operation lineage, so this path never starts another provider call.
+	d.reconcileAtomicCreativeImageReceipts(ctx, task, result.WorkDir, predictedEnvRoot, taskLog)
+
 	// Report usage before any early return — the agent accumulates tokens
 	// whether the task completes, errors, or is cancelled mid-run by the poll
 	// goroutine. Both claude.go and codex.go populate result.Usage even when

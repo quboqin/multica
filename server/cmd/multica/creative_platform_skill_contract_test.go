@@ -69,10 +69,10 @@ func TestCreativePlatformSkillsUseFrozenBusinessInputs(t *testing.T) {
 		"ad-creative-analysis":       {"app_ui_replacement_needed", "app_ui_bounds", "不得读取、选择或引用 `app_ui_reference`", "不得输出 attachment ID"},
 		"ad-creative-pre-adaptation": {"source_analysis", "text_replacements", "visual_direction", "recommendation_basis", "repayment_plan_selections", "numeric_layouts", "render_instruction", "完整展示字符串", "pre-adaptation-put", "min(", "我方优先、数量取小", "只有明显的还款结构才生成 repayment 选择和 numeric layout", "Rp100Juta", "保留后续可手动改写空间"},
 		"ad-creative-plan":           {"copy_snapshot", "input_snapshot", "source_analysis", "app_ui_replacement", "app_ui_reference", "resource_file_id", "attachment_id", "只替换手机屏幕内容"},
-		"ad-creative-production":     {"copy_snapshot", "prompt_sha256", "request_id", "Input 3 is the selected AdaKami App UI reference", "app_ui_reference_attachment_id", "multica attachment download", "只替换手机屏幕内容", "--result-file", "同一个 Bash/exec"},
-		"ad-creative-direct-edit":    {"copy_snapshot", "prompt_sha256", "delivery_mode", "即使先前识别错了，也要保留后续手动改写空间", "不要把流程卡死在还款计划选择", "intent-plan.json", "final_visual_validation=true"},
+		"ad-creative-production":     {"copy_snapshot", "prompt_sha256", "request_id", "Input 3 是选中的 AdaKami App UI reference", "app_ui_reference_attachment_id", "multica attachment download", "只替换手机屏幕内容", "--result-file", "--operation-id", "--operation-attempt", "late_receipt_recovery", "late_receipt_recoveries", "同一个 Bash/exec", "operation_id", "reconcile_confirmed=true"},
+		"ad-creative-direct-edit":    {"copy_snapshot", "prompt_sha256", "delivery_mode", "即使先前识别错了，也要保留后续手动改写空间", "不要把流程卡死在还款计划选择", "intent-plan.json", "final_visual_validation=true", "--operation-id", "--operation-attempt", "late_receipt_recovery", "late_receipt_recoveries", "operation_id", "reconcile_confirmed=true"},
 		"ad-creative-qc":             {"copy_snapshot", "compose_result", "qc-finalize", "multica attachment download", "view_image", "base64/stdout", "stage=primed", "revision=<context.revision>", "已批准模板家族"},
-		"ad-creative-prime-compose":  {"prime-compose", "creative_prime_backend.go", "does not edit model prompts", "reselects that family"},
+		"ad-creative-prime-compose":  {"prime-compose", "creative_prime_backend.go", "does not edit model prompts", "each delivery size", "publishes no partial package"},
 	}
 
 	for skillName, terms := range required {
@@ -87,15 +87,13 @@ func TestCreativePlatformSkillsUseFrozenBusinessInputs(t *testing.T) {
 	bootstrap := readCreativePlatformContractFile(t, filepath.Join(root, "scripts", "bootstrap-creative-platform-demo.ps1"))
 	for _, required := range []string{
 		"capability = 'reference_analysis'; version = 19",
-		"capability = 'generation_plan'; version = 37",
-		"capability = 'image_edit'; version = 97",
-		"capability = 'prime_compose'; version = 3",
-		"capability = 'direct_image_edit'; version = 18",
-		"app_ui_replacement",
-		"Input 3",
-		"capability = 'quality_control'; version = 36",
-		"multica attachment download",
-		"用 view_image 查看",
+		"capability = 'generation_plan'; version = 39",
+		"capability = 'image_edit'; version = 99",
+		"capability = 'prime_compose'; version = 4",
+		"capability = 'direct_image_edit'; version = 19",
+		"capability = 'quality_control'; version = 37",
+		"creative_candidate_selection",
+		"Skill 及其 references 是提示词、证据、归一化、Prime 和恢复规则的唯一执行真值",
 	} {
 		if !strings.Contains(bootstrap, required) {
 			t.Errorf("bootstrap QC setup must contain %q", required)
@@ -105,18 +103,28 @@ func TestCreativePlatformSkillsUseFrozenBusinessInputs(t *testing.T) {
 	installation := readCreativePlatformContractFile(t, filepath.Join(root, "server", "internal", "handler", "creative_factory_installation.go"))
 	for _, required := range []string{
 		`Capability: "reference_analysis", Version: 19`,
-		`Capability: "generation_plan", Version: 37`,
-		`Capability: "image_edit", Version: 97`,
-		`Capability: "prime_compose", Version: 3`,
-		`Capability: "direct_image_edit", Version: 18`,
-		"app_ui_replacement",
-		"Input 3",
-		`Capability: "quality_control", Version: 36`,
-		"multica attachment download",
-		"用 view_image 查看",
+		`Capability: "generation_plan", Version: 39`,
+		`Capability: "image_edit", Version: 99`,
+		`Capability: "prime_compose", Version: 4`,
+		`Capability: "direct_image_edit", Version: 19`,
+		`Capability: "quality_control", Version: 37`,
+		"creative_candidate_selection",
+		"Skill 及其 references 是提示词、证据、归一化、Prime 和恢复规则的唯一执行真值",
 	} {
 		if !strings.Contains(installation, required) {
 			t.Errorf("creative factory QC setup must contain %q", required)
+		}
+	}
+	for _, required := range []string{
+		"只有用户明确要求维护文案库时",
+		"add-fragment、update-fragment、upsert-repayment-plan 保存草稿",
+		"只有用户明确要求发布时才加 --publish",
+	} {
+		if !strings.Contains(bootstrap, required) {
+			t.Errorf("bootstrap diagnostician policy must contain %q", required)
+		}
+		if !strings.Contains(installation, required) {
+			t.Errorf("creative factory diagnostician policy must contain %q", required)
 		}
 	}
 
@@ -183,30 +191,44 @@ func TestAppGrowingCollectorContractKeepsBusinessSemanticsAndSingleSubmission(t 
 	}
 }
 
-func TestCreativeProductionPromptTemplateDefinesInputRolesAndVerticalCompression(t *testing.T) {
+func TestCreativeProductionPromptContractDefinesInputRolesAndNativeReflow(t *testing.T) {
 	_, currentFile, _, ok := runtime.Caller(0)
 	if !ok {
 		t.Fatal("resolve current test file")
 	}
 	root := filepath.Clean(filepath.Join(filepath.Dir(currentFile), "..", "..", ".."))
-	content := readCreativePlatformContractFile(t, filepath.Join(root, "scripts", "creative-platform-skills", "ad-creative-production", "SKILL.md"))
+	skill := readCreativePlatformContractFile(t, filepath.Join(root, "scripts", "creative-platform-skills", "ad-creative-production", "SKILL.md"))
+	promptContract := readCreativePlatformContractFile(t, filepath.Join(root, "scripts", "creative-platform-skills", "ad-creative-production", "references", "model-prompt-contract.md"))
 	for _, required := range []string{
-		"COMPOSITION GATE",
-		"Input 2 is the current-size official Prime visual context",
-		"Do not swap input roles",
-		"Input 1 is the downloaded candidate reference",
-		"Input 1 is the approved square base from this Variant",
-		"failed",
-		"unbranded base for this size",
-		"compress vertically along the Y axis",
-		"CANVAS LOCK",
-		"800x1000 is a locked 4:5 portrait ad canvas",
+		"TASK",
+		"INPUT ROLES",
+		"LOCKED DESIGN DNA",
+		"EDITABLE LAYOUT",
+		"APPROVED COPY",
+		"PRIME SUPPORT",
+		"ACCEPTANCE",
+		"Input 1 is always the downloaded candidate source",
+		"Input 2 is always the current-size, current-revision official Prime visual context",
+		"Input 4 is optional",
+		"It must not donate layout",
+		"1080x1080 locked 1:1 square",
+		"1200x628 locked 1.91:1 landscape",
+		"800x1000 locked 4:5 portrait",
+	} {
+		if !strings.Contains(promptContract, required) {
+			t.Errorf("production model prompt contract must contain %q", required)
+		}
+	}
+	for _, required := range []string{
+		"不把方图 raster 当作不可替代输入",
+		"横版按 LayoutPlan 原生横向重排",
+		"最后才小幅降低字号，不删冻结文案",
 		"比例偏差 `<=10%`",
 		"10%-25%",
 		"自适应恢复",
 	} {
-		if !strings.Contains(content, required) {
-			t.Errorf("production prompt template must contain %q", required)
+		if !strings.Contains(skill, required) {
+			t.Errorf("production Skill must contain %q", required)
 		}
 	}
 }

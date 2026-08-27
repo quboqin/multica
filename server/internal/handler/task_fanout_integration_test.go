@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -55,6 +56,7 @@ func TestValidateCreativeDirectEditTaskContextRequiresUnbrandedBaseAndTargetScop
 		"target_size":             "1080x1080",
 		"user_request":            "保留人物，移除右侧竞品标识",
 		"delivery_mode":           "publish",
+		"final_visual_validation": true,
 		"source_asset_id":         uuid.NewString(),
 		"source_attachment_id":    uuid.NewString(),
 		"reference_asset_id":      uuid.NewString(),
@@ -69,6 +71,11 @@ func TestValidateCreativeDirectEditTaskContextRequiresUnbrandedBaseAndTargetScop
 	if err := validateCreativeDirectEditTaskContext(context, variantID+":r2"); err != nil {
 		t.Fatalf("direct edit context rejected: %v", err)
 	}
+	context["final_visual_validation"] = false
+	if err := validateCreativeDirectEditTaskContext(context, variantID+":r2"); err == nil {
+		t.Fatal("direct edit publish context without final visual validation was accepted")
+	}
+	context["final_visual_validation"] = true
 	context["source_asset_id"] = ""
 	if err := validateCreativeDirectEditTaskContext(context, variantID+":r2"); err == nil {
 		t.Fatal("direct edit context without unbranded source was accepted")
@@ -531,6 +538,208 @@ RETURNING id::text
 	}
 }
 
+func TestCreativeProductionFanoutDoesNotOutrunOrderCancellation(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	fixture := createCreativeCandidateOrchestrationFixture(t, "generic fanout cancellation fence")
+	variantID := createCreativeCandidateOrchestrationVariant(
+		t, fixture.ItemID, "C01", "selected", 1, "running", "1080x1080", standardCreativeAssetSizes,
+	)
+	taskContext, err := json.Marshal(map[string]any{
+		"type": "creative_domain_task", "workflow": "creative_production",
+		"creative_order_id": fixture.OrderID, "creative_order_item_id": fixture.ItemID,
+		"variant_id": variantID, "revision": 1, "expected_sizes": standardCreativeAssetSizes,
+		"issue_id": fixture.IssueID, "leader_agent_id": fixture.Squad.LeaderAgentID,
+		"reviewer_agent_id": fixture.Squad.ReviewerAgentID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fanout := func() *httptest.ResponseRecorder {
+		w := httptest.NewRecorder()
+		req := withURLParam(newRequest(http.MethodPost, "/api/agents/"+fixture.Squad.ProducerAgentID+"/tasks/fanout", taskFanoutRequest{
+			TriggerEvidenceKind: "creative_order_item_production", TriggerEvidenceRefID: fixture.ItemID,
+			Items: []service.DirectTaskFanoutItem{{ItemKey: variantID + ":r1", Context: taskContext}},
+		}), "agentId", fixture.Squad.ProducerAgentID)
+		testHandler.FanoutAgentTasks(w, req)
+		return w
+	}
+	cancelTx, err := testPool.Begin(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cancelTx.Rollback(t.Context())
+	if _, err := cancelTx.Exec(t.Context(), `UPDATE creative_order SET status = 'cancelled' WHERE id = $1`, fixture.OrderID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := cancelTx.Exec(t.Context(), `UPDATE creative_order_variant SET status = 'cancelled' WHERE id = $1`, variantID); err != nil {
+		t.Fatal(err)
+	}
+	result := make(chan *httptest.ResponseRecorder, 1)
+	go func() { result <- fanout() }()
+	select {
+	case w := <-result:
+		t.Fatalf("creative fanout bypassed cancellation lock: %d %s", w.Code, w.Body.String())
+	case <-time.After(150 * time.Millisecond):
+	}
+	if err := cancelTx.Commit(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	var w *httptest.ResponseRecorder
+	select {
+	case w = <-result:
+	case <-time.After(5 * time.Second):
+		t.Fatal("creative fanout did not resume after cancellation committed")
+	}
+	if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "cancelled") {
+		t.Fatalf("cancelled order accepted creative fanout = %d %s", w.Code, w.Body.String())
+	}
+	var taskCount int
+	if err := testPool.QueryRow(t.Context(), `
+SELECT count(*) FROM agent_task_queue
+WHERE trigger_evidence_kind = 'creative_order_item_production'
+  AND trigger_evidence_ref_id = $1
+`, fixture.ItemID).Scan(&taskCount); err != nil {
+		t.Fatal(err)
+	}
+	if taskCount != 0 {
+		t.Fatalf("cancelled creative fanout created %d tasks", taskCount)
+	}
+}
+
+func TestCreativeProductionFanoutDoesNotOutrunDelegatorCancellation(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	fixture := createCreativeCandidateOrchestrationFixture(t, "delegated fanout cancellation fence")
+	variantID := createCreativeCandidateOrchestrationVariant(
+		t, fixture.ItemID, "C01", "selected", 1, "running", "1080x1080", standardCreativeAssetSizes,
+	)
+	productionContext, err := json.Marshal(map[string]any{
+		"type": "creative_domain_task", "workflow": "creative_production",
+		"creative_order_id": fixture.OrderID, "creative_order_item_id": fixture.ItemID,
+		"variant_id": variantID, "revision": 1, "expected_sizes": standardCreativeAssetSizes,
+		"issue_id": fixture.IssueID, "leader_agent_id": fixture.Squad.LeaderAgentID,
+		"reviewer_agent_id": fixture.Squad.ReviewerAgentID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var parentTaskID string
+	if err := testPool.QueryRow(t.Context(), `
+INSERT INTO agent_task_queue (
+  agent_id, runtime_id, status, trigger_evidence_kind, trigger_evidence_ref_id, context
+)
+VALUES ($1,(SELECT runtime_id FROM agent WHERE id = $1),'running','creative_order_item_plan',$2::uuid,
+        jsonb_build_object(
+          'type','creative_domain_task','workflow','creative_plan',
+	          'creative_order_id',$3::uuid::text,'creative_order_item_id',$2::uuid::text
+        ))
+RETURNING id::text
+`, fixture.Squad.LeaderAgentID, fixture.ItemID, fixture.OrderID).Scan(&parentTaskID); err != nil {
+		t.Fatal(err)
+	}
+	fanout := func() *httptest.ResponseRecorder {
+		w := httptest.NewRecorder()
+		req := withURLParam(newRequest(http.MethodPost, "/api/agents/"+fixture.Squad.ProducerAgentID+"/tasks/fanout", taskFanoutRequest{
+			TriggerEvidenceKind: "creative_order_item_production", TriggerEvidenceRefID: fixture.ItemID,
+			Items: []service.DirectTaskFanoutItem{{ItemKey: variantID + ":r1", Context: productionContext}},
+		}), "agentId", fixture.Squad.ProducerAgentID)
+		req.Header.Set("X-Actor-Source", "task_token")
+		req.Header.Set("X-Agent-ID", fixture.Squad.LeaderAgentID)
+		req.Header.Set("X-Task-ID", parentTaskID)
+		testHandler.FanoutAgentTasks(w, req)
+		return w
+	}
+	cancelTx, err := testPool.Begin(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cancelTx.Rollback(t.Context())
+	if _, err := cancelTx.Exec(t.Context(), `UPDATE agent_task_queue SET status = 'cancelled', completed_at = now() WHERE id = $1`, parentTaskID); err != nil {
+		t.Fatal(err)
+	}
+	result := make(chan *httptest.ResponseRecorder, 1)
+	go func() { result <- fanout() }()
+	select {
+	case w := <-result:
+		t.Fatalf("creative fanout bypassed delegator cancellation lock: %d %s", w.Code, w.Body.String())
+	case <-time.After(150 * time.Millisecond):
+	}
+	if err := cancelTx.Commit(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	var w *httptest.ResponseRecorder
+	select {
+	case w = <-result:
+	case <-time.After(5 * time.Second):
+		t.Fatal("creative fanout did not resume after delegator cancellation committed")
+	}
+	if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "no longer active") {
+		t.Fatalf("cancelled delegator created creative fanout = %d %s", w.Code, w.Body.String())
+	}
+	var childCount int
+	if err := testPool.QueryRow(t.Context(), `SELECT count(*) FROM agent_task_queue WHERE parent_task_id = $1`, parentTaskID).Scan(&childCount); err != nil {
+		t.Fatal(err)
+	}
+	if childCount != 0 {
+		t.Fatalf("cancelled delegator created %d children", childCount)
+	}
+}
+
+func TestCreativeTaskRetryDoesNotOutrunOrderCancellation(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	fixture := createCreativeCandidateOrchestrationFixture(t, "creative retry cancellation fence")
+	variantID := createCreativeCandidateOrchestrationVariant(
+		t, fixture.ItemID, "C01", "selected", 1, "action_required", "1080x1080", standardCreativeAssetSizes,
+	)
+	failedTask := addCreativeCandidateOrchestrationProductionTask(t, fixture, variantID, "failed", creativeSelectedExpansionPhase)
+	retry := func() *httptest.ResponseRecorder {
+		w := httptest.NewRecorder()
+		req := newRequest(http.MethodPost, "/api/agents/"+uuidToString(failedTask.AgentID)+"/tasks/retry?trigger_evidence_kind=creative_order_item_production&trigger_evidence_ref_id="+fixture.ItemID, nil)
+		req = withURLParam(req, "agentId", uuidToString(failedTask.AgentID))
+		testHandler.RetryFailedAgentTasksBySource(w, req)
+		return w
+	}
+	cancelTx, err := testPool.Begin(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cancelTx.Rollback(t.Context())
+	if _, err := cancelTx.Exec(t.Context(), `UPDATE creative_order SET status = 'cancelled' WHERE id = $1`, fixture.OrderID); err != nil {
+		t.Fatal(err)
+	}
+	result := make(chan *httptest.ResponseRecorder, 1)
+	go func() { result <- retry() }()
+	select {
+	case w := <-result:
+		t.Fatalf("creative retry bypassed cancellation lock: %d %s", w.Code, w.Body.String())
+	case <-time.After(150 * time.Millisecond):
+	}
+	if err := cancelTx.Commit(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	var w *httptest.ResponseRecorder
+	select {
+	case w = <-result:
+	case <-time.After(5 * time.Second):
+		t.Fatal("creative retry did not resume after cancellation committed")
+	}
+	if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), "cancelled") {
+		t.Fatalf("cancelled order accepted creative retry = %d %s", w.Code, w.Body.String())
+	}
+	var retryCount int
+	if err := testPool.QueryRow(t.Context(), `SELECT count(*) FROM agent_task_queue WHERE retry_of_task_id = $1`, failedTask.ID).Scan(&retryCount); err != nil {
+		t.Fatal(err)
+	}
+	if retryCount != 0 {
+		t.Fatalf("cancelled order created %d retry tasks", retryCount)
+	}
+}
+
 func TestValidateCreativeProductionFanoutExpectedSizesMatchFrozenVariant(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
@@ -568,6 +777,148 @@ VALUES ($1, 'V01', 1, 'queued') RETURNING id::text
 	err = testHandler.validateCreativeTaskFanoutExpectedSizes(t.Context(), parseUUID(testWorkspaceID), "creative_order_item_production", parseUUID(itemID), []service.DirectTaskFanoutItem{{Context: contextValue}})
 	if err == nil || err.Error() != "creative production task context expected_sizes must match the current creative variant delivery sizes" {
 		t.Fatalf("production frozen-size validation error = %v", err)
+	}
+}
+
+func TestValidateCreativeProductionFanoutUsesCandidatePrimarySize(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	_, candidateID := createCreativeFeedbackCandidate(t, "candidate production fanout primary size")
+	var orderID, itemID, variantID string
+	if err := testPool.QueryRow(t.Context(), `
+INSERT INTO creative_order (workspace_id, status, input_snapshot, created_by)
+VALUES ($1, 'running', '{"expected_sizes":["1080x1080","1200x628","800x1000"]}'::jsonb, $2)
+RETURNING id::text
+`, testWorkspaceID, testUserID).Scan(&orderID); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM creative_order WHERE id = $1`, orderID)
+	})
+	if err := testPool.QueryRow(t.Context(), `
+INSERT INTO creative_order_item (order_id, candidate_id, copy_snapshot)
+VALUES ($1, $2, '{}'::jsonb) RETURNING id::text
+`, orderID, candidateID).Scan(&itemID); err != nil {
+		t.Fatal(err)
+	}
+	if err := testPool.QueryRow(t.Context(), `
+INSERT INTO creative_order_variant (
+  order_item_id, variant_key, revision, status, candidate_state, primary_size
+)
+VALUES ($1, 'C01', 1, 'queued', 'candidate', '1200x628') RETURNING id::text
+`, itemID).Scan(&variantID); err != nil {
+		t.Fatal(err)
+	}
+	validate := func(sizes []string) error {
+		contextValue, err := json.Marshal(map[string]any{
+			"variant_id":     variantID,
+			"expected_sizes": sizes,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return testHandler.validateCreativeTaskFanoutExpectedSizes(
+			t.Context(), parseUUID(testWorkspaceID), "creative_order_item_production", parseUUID(itemID),
+			[]service.DirectTaskFanoutItem{{Context: contextValue}},
+		)
+	}
+	if err := validate([]string{"1200x628"}); err != nil {
+		t.Fatalf("candidate primary-size fanout rejected: %v", err)
+	}
+	if err := validate(standardCreativeAssetSizes); err == nil {
+		t.Fatal("candidate fanout accepted all delivery sizes before selection")
+	}
+	if _, err := testPool.Exec(t.Context(), `
+UPDATE creative_order_variant SET candidate_state = 'selected', selection_rank = 1 WHERE id = $1
+`, variantID); err != nil {
+		t.Fatal(err)
+	}
+	if err := validate(standardCreativeAssetSizes); err != nil {
+		t.Fatalf("selected full-size fanout rejected: %v", err)
+	}
+}
+
+func TestFanoutAgentTasksCandidateProductionDefaultsToPrimarySize(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	issueID, candidateID := createCreativeFeedbackCandidate(t, "candidate production fanout API")
+	fixture := createCreativeOrderSquadFixture(t, "", "image_edit", true)
+	var orderID, itemID, variantID string
+	inputSnapshot := fmt.Sprintf(`{"expected_sizes":["1080x1080","1200x628","800x1000"],"squad_snapshot":{"squad_id":%q}}`, fixture.SquadID)
+	if err := testPool.QueryRow(t.Context(), `
+INSERT INTO creative_order (workspace_id, issue_id, status, input_snapshot, created_by)
+VALUES ($1, $2, 'running', $3::jsonb, $4) RETURNING id::text
+`, testWorkspaceID, issueID, inputSnapshot, testUserID).Scan(&orderID); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM creative_order WHERE id = $1`, orderID)
+	})
+	if err := testPool.QueryRow(t.Context(), `
+INSERT INTO creative_order_item (order_id, candidate_id, copy_snapshot)
+VALUES ($1, $2, '{}'::jsonb) RETURNING id::text
+`, orderID, candidateID).Scan(&itemID); err != nil {
+		t.Fatal(err)
+	}
+	if err := testPool.QueryRow(t.Context(), `
+INSERT INTO creative_order_variant (
+  order_item_id, variant_key, revision, status, candidate_state, primary_size
+)
+VALUES ($1, 'C01', 1, 'queued', 'candidate', '800x1000') RETURNING id::text
+`, itemID).Scan(&variantID); err != nil {
+		t.Fatal(err)
+	}
+	requestContext, err := json.Marshal(map[string]any{
+		"type":                   "creative_domain_task",
+		"workflow":               "creative_production",
+		"creative_order_id":      orderID,
+		"creative_order_item_id": itemID,
+		"variant_id":             variantID,
+		"revision":               1,
+		"item_key":               variantID + ":r1",
+		"issue_id":               issueID,
+		"leader_agent_id":        fixture.LeaderAgentID,
+		"producer_agent_id":      fixture.ProducerAgentID,
+		"reviewer_agent_id":      fixture.ReviewerAgentID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := httptest.NewRecorder()
+	req := withURLParam(newRequest(http.MethodPost, "/api/agents/"+fixture.ProducerAgentID+"/tasks/fanout", taskFanoutRequest{
+		TriggerEvidenceKind:  "creative_order_item_production",
+		TriggerEvidenceRefID: itemID,
+		Items: []service.DirectTaskFanoutItem{{
+			ItemKey: variantID + ":r1",
+			Context: requestContext,
+		}},
+	}), "agentId", fixture.ProducerAgentID)
+	testHandler.FanoutAgentTasks(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("candidate production fanout = %d %s", w.Code, w.Body.String())
+	}
+	var response taskFanoutResponse
+	if err := json.NewDecoder(w.Body).Decode(&response); err != nil {
+		t.Fatal(err)
+	}
+	if len(response.Tasks) != 1 {
+		t.Fatalf("candidate production tasks = %#v", response.Tasks)
+	}
+	taskID := response.Tasks[0].ID
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM agent_task_queue WHERE id = $1`, taskID)
+	})
+	var expectedSizes []string
+	if err := testPool.QueryRow(t.Context(), `
+SELECT ARRAY(SELECT jsonb_array_elements_text(context->'expected_sizes'))
+FROM agent_task_queue WHERE id = $1
+`, taskID).Scan(&expectedSizes); err != nil {
+		t.Fatal(err)
+	}
+	if len(expectedSizes) != 1 || expectedSizes[0] != "800x1000" {
+		t.Fatalf("candidate production expected_sizes = %#v, want primary size", expectedSizes)
 	}
 }
 

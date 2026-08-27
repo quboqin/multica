@@ -250,6 +250,8 @@ func init() {
 	imageEditCmd.Flags().Int("max-attempts", 3, "Maximum attempts for transient image API failures (1-5)")
 	imageEditCmd.Flags().String("output-file", "", "Output PNG file")
 	imageEditCmd.Flags().String("result-file", "", "Optional JSON receipt written atomically after a successful image edit")
+	imageEditCmd.Flags().String("operation-id", "", "Creative image operation UUID recorded in the atomic result receipt")
+	imageEditCmd.Flags().Int("operation-attempt", 0, "Creative image operation attempt recorded in the atomic result receipt")
 	imageEditCmd.Flags().String("output", "json", "Output format: json or table")
 }
 
@@ -420,6 +422,12 @@ func runImageEdit(cmd *cobra.Command, _ []string) error {
 	if strings.TrimSpace(outputFile) == "" {
 		return fmt.Errorf("--output-file is required")
 	}
+	operationID, _ := cmd.Flags().GetString("operation-id")
+	operationID = strings.TrimSpace(operationID)
+	operationAttempt, _ := cmd.Flags().GetInt("operation-attempt")
+	if (operationID == "") != (operationAttempt == 0) || operationAttempt < 0 {
+		return fmt.Errorf("--operation-id and a positive --operation-attempt must be provided together")
+	}
 	model, _ := cmd.Flags().GetString("model")
 	if strings.TrimSpace(model) != "gpt-image-2" {
 		return fmt.Errorf("only gpt-image-2 is supported by this direct image-edit capability")
@@ -473,16 +481,22 @@ func runImageEdit(cmd *cobra.Command, _ []string) error {
 		abs = outputFile
 	}
 	output, _ := cmd.Flags().GetString("output")
+	outputDigest := sha256.Sum256(image)
 	result := map[string]any{
 		"model": model, "input_count": len(inputs), "size": size, "provider_size": providerSize, "quality": quality,
 		"path": abs, "bytes": len(image), "request_id": requestID, "attempts": attempts, "aspect_retries": aspectRetries, "aspect_fallback": aspectFallback,
 		"actual_width": dimensions.Width, "actual_height": dimensions.Height, "actual_aspect_ratio": dimensions.AspectRatio,
-		"provider_slot_limit": providerSlotLimit, "prompt": prompt, "prompt_sha256": imagePromptSHA256(prompt),
+		"provider_slot_limit": providerSlotLimit, "prompt": prompt, "prompt_sha256": imagePromptSHA256(prompt), "output_sha256": fmt.Sprintf("%x", outputDigest),
 		"queue_wait_seconds": timing.QueueWait.Seconds(), "provider_elapsed_seconds": timing.ProviderElapsed.Seconds(), "timeout_stage": timing.TimeoutStage,
 		"generated_asset": map[string]any{
 			"completed": true, "path": abs, "size": size, "width": dimensions.Width,
 			"height": dimensions.Height, "aspect_fallback": aspectFallback,
 		},
+	}
+	if operationID != "" {
+		result["operation_id"] = operationID
+		result["operation_attempt"] = operationAttempt
+		result["task_id"] = strings.TrimSpace(os.Getenv("MULTICA_TASK_ID"))
 	}
 	resultFile, _ := cmd.Flags().GetString("result-file")
 	if strings.TrimSpace(resultFile) != "" {

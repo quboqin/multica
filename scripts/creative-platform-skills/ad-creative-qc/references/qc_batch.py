@@ -146,6 +146,123 @@ def compose_item_succeeded(compose: dict, item: dict) -> bool:
     )
 
 
+def finite_number(value: object) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(float(value))
+
+
+def selected_template_evidence_failures(selection: dict, size: str) -> list[str]:
+    failures: list[str] = []
+    if selection.get("selection_scope") != "delivery_size" or selection.get("size") != size:
+        failures.append("template_selection_scope_invalid")
+
+    selection_adequacy = selection.get("visual_adequacy")
+    if (
+        not isinstance(selection_adequacy, dict)
+        or selection_adequacy.get("adequate") is not True
+        or selection_adequacy.get("inadequacy_codes") not in (None, [])
+    ):
+        failures.append("template_visual_adequacy_not_passed")
+
+    selected_family = str(selection.get("selected_family_id") or "")
+    selected_source_role = str(selection.get("selected_source_role") or "")
+    selected_candidate = None
+    selected_size_evidence = None
+    candidates = selection.get("candidates")
+    if isinstance(candidates, list):
+        for candidate in candidates:
+            if not isinstance(candidate, dict) or str(candidate.get("family_id") or "") != selected_family:
+                continue
+            sizes = candidate.get("sizes")
+            size_evidence = sizes.get(size) if isinstance(sizes, dict) else None
+            if isinstance(size_evidence, dict) and str(size_evidence.get("source_role") or "") == selected_source_role:
+                selected_candidate = candidate
+                selected_size_evidence = size_evidence
+                break
+    if not isinstance(selected_candidate, dict) or not isinstance(selected_size_evidence, dict):
+        failures.append("template_selected_candidate_evidence_invalid")
+        return failures
+
+    for field in ("foreground_polarity", "visible_component_mask", "background_support", "visual_adequacy"):
+        if selected_candidate.get(field) != selected_size_evidence.get(field):
+            failures.append("template_selected_candidate_evidence_invalid")
+            return list(dict.fromkeys(failures))
+
+    foreground_polarity = selected_size_evidence.get("foreground_polarity")
+    if foreground_polarity not in {"light", "dark", "mixed"} or selection.get("foreground_polarity") != foreground_polarity:
+        failures.append("template_foreground_polarity_invalid")
+
+    mask = selected_size_evidence.get("visible_component_mask")
+    if (
+        not isinstance(mask, dict)
+        or mask.get("source") != "template_alpha_and_dominant_foreground_polarity"
+        or not finite_number(mask.get("alpha_threshold"))
+        or not 0 < float(mask.get("alpha_threshold", 0)) <= 1
+        or not isinstance(mask.get("visible_pixels"), int)
+        or isinstance(mask.get("visible_pixels"), bool)
+        or mask.get("visible_pixels", 0) <= 0
+        or not isinstance(mask.get("all_visible_template_pixels"), int)
+        or isinstance(mask.get("all_visible_template_pixels"), bool)
+        or mask.get("all_visible_template_pixels", 0) < mask.get("visible_pixels", 0)
+        or not finite_number(mask.get("coverage"))
+        or not 0 < float(mask.get("coverage", 0)) <= 1
+        or not finite_number(mask.get("foreground_relative_luminance_median"))
+        or mask.get("foreground_polarity") != foreground_polarity
+    ):
+        failures.append("template_visible_component_mask_invalid")
+
+    candidate_adequacy = selected_size_evidence.get("visual_adequacy")
+    if (
+        not isinstance(candidate_adequacy, dict)
+        or candidate_adequacy.get("adequate") is not True
+        or candidate_adequacy.get("inadequacy_codes") not in (None, [])
+    ):
+        failures.append("template_candidate_visual_adequacy_not_passed")
+
+    support = selected_size_evidence.get("background_support")
+    if not isinstance(support, dict) or support.get("polarity") not in {"light", "dark", "midtone", "mixed"}:
+        failures.append("template_background_polarity_invalid")
+        return list(dict.fromkeys(failures))
+    if selection.get("background_polarity") != support.get("polarity"):
+        failures.append("template_background_polarity_invalid")
+
+    contrast = support.get("relative_luminance_contrast")
+    if (
+        not isinstance(contrast, dict)
+        or contrast.get("basis") != "alpha_composited_template_over_generated_body"
+        or not finite_number(contrast.get("minimum_local_p10"))
+        or not finite_number(contrast.get("threshold"))
+        or float(contrast.get("minimum_local_p10", 0)) < 1
+        or float(contrast.get("threshold", 0)) < 1
+        or float(contrast.get("minimum_local_p10", 0)) < float(contrast.get("threshold", 0))
+        or selection.get("minimum_relative_luminance_contrast") != contrast.get("minimum_local_p10")
+    ):
+        failures.append("template_relative_luminance_contrast_invalid")
+
+    polarity_match = support.get("polarity_match")
+    if (
+        not isinstance(polarity_match, dict)
+        or not finite_number(polarity_match.get("minimum_local_ratio"))
+        or not finite_number(polarity_match.get("threshold"))
+        or not 0 <= float(polarity_match.get("minimum_local_ratio", -1)) <= 1
+        or not 0 < float(polarity_match.get("threshold", 0)) <= 1
+        or float(polarity_match.get("minimum_local_ratio", 0)) < float(polarity_match.get("threshold", 0))
+    ):
+        failures.append("template_background_polarity_evidence_invalid")
+
+    texture = support.get("texture")
+    if (
+        not isinstance(texture, dict)
+        or texture.get("metric") != "relative_luminance_neighbor_difference"
+        or not finite_number(texture.get("maximum_local_p90"))
+        or not finite_number(texture.get("threshold"))
+        or float(texture.get("maximum_local_p90", -1)) < 0
+        or float(texture.get("threshold", 0)) <= 0
+        or float(texture.get("maximum_local_p90", 0)) > float(texture.get("threshold", 0))
+    ):
+        failures.append("template_background_texture_invalid")
+    return list(dict.fromkeys(failures))
+
+
 def package_contract_failures(manifest: dict, compose: dict, images_dir: Path) -> list[str]:
     failures: list[str] = []
     jobs = manifest.get("jobs")
@@ -270,6 +387,10 @@ def package_contract_failures(manifest: dict, compose: dict, images_dir: Path) -
         selected_source_role = str(selection.get("selected_source_role") or "")
         if actual_families != expected_families or expected_families.get(selected_family) != selected_source_role:
             failures.append(f"{item.get('id') or 'unknown'}:template_selection_invalid")
+        failures.extend(
+            f"{item.get('id') or 'unknown'}:{failure}"
+            for failure in selected_template_evidence_failures(selection, size)
+        )
     return list(dict.fromkeys(failures))
 
 

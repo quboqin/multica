@@ -94,8 +94,10 @@ export function CreativeComparisonWorkspace({
   onDecision,
   onAnnotations,
   annotationScopes = ["size", "variant"],
+  annotationScopeLabels,
   acceptance,
   showDecisionActions = true,
+  allowDownload = true,
   comparisonMode = "source",
 }: {
   source: { label: string; url: string };
@@ -107,8 +109,10 @@ export function CreativeComparisonWorkspace({
   onDecision?: (decision: "accepted" | "abandoned" | "downloaded") => void;
   onAnnotations?: (annotations: CreativeAnnotationDraft[]) => Promise<boolean>;
   annotationScopes?: CreativeAnnotationDraft["scope"][];
+  annotationScopeLabels?: Partial<Record<CreativeAnnotationDraft["scope"], string>>;
   acceptance?: { enabled: boolean; status: string };
   showDecisionActions?: boolean;
+  allowDownload?: boolean;
   comparisonMode?: "source" | "adjustment";
 }) {
   const [selectedAssetId, setSelectedAssetId] = useState(result.id);
@@ -288,14 +292,14 @@ export function CreativeComparisonWorkspace({
     </div>
     <div className="flex flex-wrap items-center gap-2 border-t px-4 py-2">
       {canAnnotate && <><Button size="icon-sm" variant={annotationTool === "point" ? "default" : "outline"} aria-pressed={annotationTool === "point"} title="点标注" aria-label="点标注" onClick={() => beginAnnotation("point")}><MousePointer2 className="h-4 w-4" /></Button><Button size="icon-sm" variant={annotationTool === "rect" ? "default" : "outline"} aria-pressed={annotationTool === "rect"} title="框选标注" aria-label="框选标注" onClick={() => beginAnnotation("rect")}><SquareDashedMousePointer className="h-4 w-4" /></Button></>}
-      {canAnnotate && annotationScopes.length > 1 && <div className="inline-flex border" role="group" aria-label="调整范围">{annotationScopes.map((scope) => <button key={scope} type="button" aria-pressed={annotationScope === scope} onClick={() => chooseAnnotationScope(scope)} className={cn("h-8 whitespace-nowrap border-l px-2.5 text-xs first:border-l-0", annotationScope === scope && "bg-foreground text-background")}>{ANNOTATION_SCOPE_LABELS[scope]}</button>)}</div>}
+      {canAnnotate && annotationScopes.length > 1 && <div className="inline-flex border" role="group" aria-label="调整范围">{annotationScopes.map((scope) => <button key={scope} type="button" aria-pressed={annotationScope === scope} onClick={() => chooseAnnotationScope(scope)} className={cn("h-8 whitespace-nowrap border-l px-2.5 text-xs first:border-l-0", annotationScope === scope && "bg-foreground text-background")}>{annotationScopeLabels?.[scope] ?? ANNOTATION_SCOPE_LABELS[scope]}</button>)}</div>}
       {annotationTool && <span className="text-xs font-medium text-amber-700" role="status">{annotationTool === "point" ? "在右侧成图上标记位置" : "在右侧成图上拖动圈选区域"}</span>}
       {annotations.length > 0 && <span className="text-xs font-medium text-rose-700">已标注 {annotations.length} 处</span>}
       {onAdjust && <Button size="sm" variant="outline" onClick={onAdjust}><PencilRuler className="h-4 w-4" />调整</Button>}
       {onViewInfo && <Button size="sm" variant="outline" onClick={onViewInfo}><Info className="h-4 w-4" />生成信息</Button>}
       {showDecisionActions && <Button size="sm" variant="outline" onClick={() => onDecision?.("abandoned")}>放弃</Button>}
       {showDecisionActions && <Button size="sm" disabled={acceptance ? !acceptance.enabled : false} aria-describedby={acceptance ? acceptanceStatusId : undefined} onClick={() => onDecision?.("accepted")}><Check className="h-4 w-4" />接受</Button>}
-      <Button size="icon-sm" variant="outline" title="下载当前成图" aria-label="下载当前成图" onClick={() => { onDecision?.("downloaded"); window.open(selectedResult.finalUrl, "_blank", "noopener,noreferrer"); }}><Download className="h-4 w-4" /></Button>
+      {allowDownload && <Button size="icon-sm" variant="outline" title="下载当前成图" aria-label="下载当前成图" onClick={() => { onDecision?.("downloaded"); window.open(selectedResult.finalUrl, "_blank", "noopener,noreferrer"); }}><Download className="h-4 w-4" /></Button>}
       {acceptance && <span id={acceptanceStatusId} role="status" className={cn("text-xs", acceptance.enabled ? "text-emerald-700" : "text-muted-foreground")}>{acceptance.status}</span>}
       <span className="ml-auto text-xs text-muted-foreground">{variants.length} 个变体 · {sizes.length} 个尺寸</span>
       {annotations.length > 0 && <Button size="sm" disabled={annotationBusy || annotations.some((annotation) => !annotation.comment.trim())} onClick={() => { if (!onAnnotations) return; setAnnotationBusy(true); const drafts = annotations.map(({ localId: _, ...annotation }) => ({ ...annotation, scope: annotationScope })); void onAnnotations(drafts).then((saved) => { if (saved) { setAnnotations([]); setActiveAnnotationId(""); } }).finally(() => setAnnotationBusy(false)); }}>{annotationBusy ? "正在提交" : `提交 ${annotations.length} 处调整`}</Button>}

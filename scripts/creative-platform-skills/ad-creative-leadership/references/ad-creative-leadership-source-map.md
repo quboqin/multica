@@ -6,7 +6,8 @@
 | Active fanout idempotency is target Agent plus evidence pair plus item key | `server/internal/service/task.go:isUniqueTaskFanoutViolation`, `server/internal/service/task.go:directTaskItemKey` |
 | `multica task by-source list` exposes all tasks for reconciliation at an evidence source | `server/cmd/multica/cmd_task.go`, `server/internal/handler/task_fanout.go` |
 | Plan fanout requires `creative_plan`, a matching `creative_order_item_id`, and order trace UUIDs | `server/internal/handler/task_fanout.go:validateCreativeTaskFanoutContext` |
-| `qc-finalize` records two lanes, blocks delivery for structured Prime/content defects, and queues at most one bounded Variant rework | `server/internal/handler/creative_domain.go:FinalizeCreativeOrderQC` |
+| Planning creates 4-5 primary-size candidates; candidate selection atomically promotes three and platform orchestration queues selected missing sizes without a duplicate Leader fanout | `server/internal/handler/creative_variant_lifecycle.go:SelectCreativeOrderItemCandidates`, `scripts/creative-platform-skills/ad-creative-leadership/SKILL.md:标准订单` |
+| `qc-finalize` waits only for the visual lane and can queue at most two bounded size-specific Variant rework attempts; the technical lane is retired | `server/internal/handler/creative_domain.go:FinalizeCreativeOrderQC`, `server/internal/handler/creative_domain.go:creativeVisualModelReworkMaxAttempts` |
 | Creative Order API returns every frozen order input, including `squad_snapshot`, under `input_snapshot` | `server/internal/handler/creative_domain.go:GetCreativeOrder`, `server/internal/handler/creative_domain.go:creativeOrderResponse` |
 | Direct-edit initialization creates one Creative Order/Issue path and freezes the requested source, size, delivery mode, and agent snapshot | `server/internal/handler/creative_direct_edit.go:CreateCreativeDirectEdit` |
 

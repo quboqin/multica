@@ -58,6 +58,7 @@ func parseCreativeDirectEditDeliveryConfig(raw json.RawMessage) creativeDirectEd
 		TargetSize   string `json:"target_size"`
 		Scope        string `json:"scope"`
 		Delivery     struct {
+			DeliveryMode                string          `json:"delivery_mode"`
 			TargetSize                  string          `json:"target_size"`
 			Scope                       string          `json:"scope"`
 			FinalVisualValidation       bool            `json:"final_visual_validation"`
@@ -80,8 +81,12 @@ func parseCreativeDirectEditDeliveryConfig(raw json.RawMessage) creativeDirectEd
 	if scope == "" {
 		scope = normalizeCreativeOrderAdjustmentScope(contract.Scope)
 	}
+	deliveryMode := strings.TrimSpace(contract.Delivery.DeliveryMode)
+	if deliveryMode == "" {
+		deliveryMode = strings.TrimSpace(contract.DeliveryMode)
+	}
 	return creativeDirectEditDeliveryConfig{
-		DeliveryMode:                strings.TrimSpace(contract.DeliveryMode),
+		DeliveryMode:                deliveryMode,
 		TargetSize:                  targetSize,
 		Scope:                       scope,
 		FinalVisualValidation:       contract.Delivery.FinalVisualValidation,

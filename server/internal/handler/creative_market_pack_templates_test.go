@@ -106,6 +106,38 @@ func TestPrimeTemplateMatchesItsTargetCanvasWithoutCropping(t *testing.T) {
 	}
 }
 
+func TestPrimeTemplateForegroundEvidenceRecordsActualGlyphPolarity(t *testing.T) {
+	darkGlyphs := image.NewNRGBA(image.Rect(0, 0, 20, 10))
+	lightGlyphs := image.NewNRGBA(image.Rect(0, 0, 20, 10))
+	for x := 0; x < 14; x++ {
+		// This saturated brand-like green is above the midpoint in gamma-coded
+		// luma but remains a dark glyph under relative luminance.
+		darkGlyphs.SetNRGBA(x, 1, color.NRGBA{R: 0, G: 170, B: 100, A: 255})
+		lightGlyphs.SetNRGBA(x, 1, color.NRGBA{R: 255, G: 255, B: 255, A: 255})
+	}
+	// Opposite-polarity QR-like pixels must not change the dominant component polarity.
+	for x := 16; x < 20; x++ {
+		darkGlyphs.SetNRGBA(x, 1, color.NRGBA{R: 255, G: 255, B: 255, A: 255})
+		lightGlyphs.SetNRGBA(x, 1, color.NRGBA{A: 255})
+	}
+
+	polarity, support, visible := primeTemplateForegroundEvidence(darkGlyphs)
+	if polarity != "dark" || support != "light_low_texture" || visible != 14 {
+		t.Fatalf("dark glyph evidence = %q,%q,%d", polarity, support, visible)
+	}
+	polarity, support, visible = primeTemplateForegroundEvidence(lightGlyphs)
+	if polarity != "light" || support != "dark_low_texture" || visible != 14 {
+		t.Fatalf("light glyph evidence = %q,%q,%d", polarity, support, visible)
+	}
+}
+
+func TestPrimeTemplateForegroundEvidenceRejectsTransparentTemplate(t *testing.T) {
+	polarity, support, visible := primeTemplateForegroundEvidence(image.NewNRGBA(image.Rect(0, 0, 10, 10)))
+	if polarity != "unknown" || support != "unknown" || visible != 0 {
+		t.Fatalf("transparent template evidence = %q,%q,%d", polarity, support, visible)
+	}
+}
+
 func TestLegacyPrimeQRConfigurationIsRemovedWhenPublishing(t *testing.T) {
 	config := map[string]any{
 		"qr_payload":           "https://example.com/old",

@@ -58,6 +58,8 @@ function variant(id: string, status = "completed"): CreativeOrderVariant {
     variant_key: "V01",
     brief: {},
     revision: 1,
+    active_revision: status === "completed" ? 1 : 0,
+    staging_revision: 1,
     status,
     qc_status: status === "completed" ? "passed" : "pending",
     qc_recovery_used: false,

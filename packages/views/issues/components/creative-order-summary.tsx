@@ -10,7 +10,7 @@ import { useWorkspacePaths } from "@multica/core/paths";
 import type { CreateCreativeFeedbackResponse, CreativeOrder, CreativeOrderItem, CreativeOrderVariant } from "@multica/core/types";
 import { resolvePublicFileUrl } from "@multica/core/workspace/avatar-url";
 import { Badge } from "@multica/ui/components/ui/badge";
-import { adoptedCreativeOrderVariant, CREATIVE_DELIVERY_SIZES, creativeOrderStage, creativeOrderStatusLabel, creativeVariantDeliveryAssets } from "../../creative/components/creative-order-delivery";
+import { adoptedCreativeOrderVariant, creativeOrderStage, creativeOrderStatusLabel, creativeVariantActiveExpectedSizes, creativeVariantDeliveryAssets } from "../../creative/components/creative-order-delivery";
 import { creativeAttachmentBrowserURL } from "../../creative/lib/creative-attachment-url";
 import { creativeAdjustmentProgress, creativeAdjustmentTarget, creativeAdjustmentTimeline, latestOrderAdjustmentFeedback } from "../../creative/lib/creative-adjustment-progress";
 import { AppLink } from "../../navigation";
@@ -18,7 +18,7 @@ import { AppLink } from "../../navigation";
 export function creativeOrderSummarySelections(items: CreativeOrderItem[], directEdit = false): { item: CreativeOrderItem; variant: CreativeOrderVariant }[] {
   return items.flatMap((item) => {
     const variant = adoptedCreativeOrderVariant(item)
-      ?? (directEdit && item.variants.length === 1 && item.variants[0]?.status === "completed" ? item.variants[0] : undefined);
+      ?? (directEdit && item.variants.length === 1 && (item.variants[0]?.active_revision ?? 0) > 0 ? item.variants[0] : undefined);
     return variant ? [{ item, variant }] : [];
   });
 }
@@ -67,14 +67,15 @@ export function CreativeOrderSummary({ orderId }: { orderId: string }) {
       const candidate = library.data?.candidates.find((entry) => entry.id === item.candidate_id);
       const sourceUrl = resolvePublicFileUrl(candidate?.archived_url || candidate?.preview_url);
       const delivered = creativeVariantDeliveryAssets(variant);
+      const deliverySizes = creativeVariantActiveExpectedSizes(variant);
       return <div key={item.id} className="border-t" data-testid={`creative-summary-adopted-${variant.id}`}>
         <div className="flex flex-wrap items-center gap-2 px-4 py-3"><CheckCircle2 className="h-4 w-4 text-emerald-700" /><p className="text-sm font-medium">{directEdit ? "交付包" : "最终采用方案 · 交付包"}</p><Badge variant="outline">{variant.variant_key}</Badge><span className="min-w-0 truncate text-xs text-muted-foreground">{item.direction || candidate?.title || item.candidate_id.slice(0, 8)}</span></div>
-        <div className="grid border-t sm:grid-cols-2 xl:grid-cols-4">
+        <div className={`grid border-t sm:grid-cols-2 ${deliverySizes.length === 3 ? "xl:grid-cols-4" : ""}`}>
           <figure className="min-w-0 border-b bg-muted/10 sm:border-r xl:border-b-0">
             <figcaption className="border-b px-3 py-2 text-[11px] text-muted-foreground">原图 · {candidate?.id.slice(0, 8) || item.candidate_id.slice(0, 8)}</figcaption>
             <div className="flex min-h-48 items-center justify-center p-2">{sourceUrl ? <img src={sourceUrl} alt={`原图 ${candidate?.title || item.candidate_id}`} width={720} height={720} loading="lazy" className="max-h-72 w-full object-contain" /> : <span className="text-xs text-muted-foreground">原图不可用</span>}</div>
           </figure>
-          {CREATIVE_DELIVERY_SIZES.map((size, index) => {
+          {deliverySizes.map((size, index) => {
             const asset = delivered.find((entry) => entry.size_key === size);
             const finalUrl = creativeAttachmentBrowserURL(asset ? attachmentById.get(asset.attachment_id) : undefined);
             return <figure key={size} className={`min-w-0 border-b bg-muted/10 ${index < 2 ? "xl:border-r" : ""} ${index === 0 ? "sm:border-r xl:border-l-0" : ""} xl:border-b-0`}>
@@ -131,7 +132,7 @@ function CreativeOrderCollaborationBoard({
 function collaborationNextStep(order: CreativeOrder, stage: ReturnType<typeof creativeOrderStage>): { title: string; detail: string } {
   if (stage.key === "attention") return { title: "请处理异常", detail: "打开成图工作台查看失败步骤、影响范围与可重试操作。" };
   if (stage.key === "review") return { title: "请选择最终方案", detail: "每张素材可采用一个变体；即使有 QC 提醒，也可在确认风险后采用。" };
-  if (stage.key === "delivered") return { title: "可下载交付包", detail: "已采用方案和三个尺寸均保留在创意订单中。" };
+  if (stage.key === "delivered") return { title: "可下载交付包", detail: "已采用方案和完整交付尺寸均保留在创意订单中。" };
   if (stage.key === "cancelled") return { title: "订单已结束", detail: "已有结果和协作记录可以继续查看，但不会再自动续跑。" };
   return { title: "AI 正在处理", detail: order.workflow_failures.length > 0 ? "系统正在等待异常处理。" : "无需重复提交；完成后会自动进入下一阶段。" };
 }
@@ -177,10 +178,11 @@ function creativeOrderCollaboration(order: CreativeOrder, adjustment?: CreateCre
 
 function variantCollaborationTitle(variant: CreativeOrderVariant): string {
   const delivered = creativeVariantDeliveryAssets(variant).length;
+  const expected = creativeVariantActiveExpectedSizes(variant).length;
   if (variant.status === "action_required" || variant.status === "failed" || variant.action_required) return `${workflowLabel(variant.action_required?.workflow || "")}需要处理`;
   if (variant.qc_status === "failed") return "质检发现问题";
   if (variant.qc_status === "warning") return "可采用，存在质检提醒";
-  if (delivered === CREATIVE_DELIVERY_SIZES.length) return "三尺寸已交付";
+  if (expected > 0 && delivered === expected) return expected === 3 ? "三尺寸已交付" : "目标尺寸已交付";
   if (variant.assets.some((asset) => asset.stage === "primed" && asset.status === "completed")) return "正在质检";
   if (variant.assets.some((asset) => asset.status === "completed")) return "正在合成品牌组件";
   return variant.status === "completed" ? "等待交付收口" : "正在生成";
@@ -189,10 +191,12 @@ function variantCollaborationTitle(variant: CreativeOrderVariant): string {
 function variantCollaborationDetail(variant: CreativeOrderVariant): string {
   const completedAssets = variant.assets.filter((asset) => asset.revision === variant.revision && asset.status === "completed").length;
   const delivered = creativeVariantDeliveryAssets(variant).length;
+  const deliverySizes = creativeVariantActiveExpectedSizes(variant);
+  const expected = deliverySizes.length;
   if (variant.status === "action_required" || variant.status === "failed" || variant.action_required) return variant.action_required?.detail || `r${variant.revision} 已停止自动流程，打开成图工作台查看处理入口。`;
   if (variant.qc_status === "failed") return "已保留具体质检结果；可在成图工作台查看原因、调整或按风险采用。";
-  if (delivered === CREATIVE_DELIVERY_SIZES.length) return `r${variant.revision} 的方形、横版和竖版均已就绪。`;
-  return `r${variant.revision} · ${completedAssets} 个过程产物已完成，${delivered}/3 个交付尺寸可用。`;
+  if (expected > 0 && delivered === expected) return `r${variant.active_revision || variant.revision} 的${expected === 3 ? "方形、横版和竖版" : deliverySizes.join("、")}均已就绪。`;
+  return `r${variant.revision} · ${completedAssets} 个过程产物已完成，${delivered}/${expected || 0} 个交付尺寸可用。`;
 }
 
 function workflowLabel(workflow: string): string {

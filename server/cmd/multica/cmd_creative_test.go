@@ -30,6 +30,42 @@ func pngImageBytes(width, height int) []byte {
 	return output.Bytes()
 }
 
+func TestRunCreativeOrderPrimeComposeSendsExplicitForce(t *testing.T) {
+	var body map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/api/creative/orders/order-1/prime-compose" {
+			t.Fatalf("Prime compose request = %s %s", r.Method, r.URL.Path)
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"status": "completed", "completed": true})
+	}))
+	defer server.Close()
+	t.Setenv("MULTICA_SERVER_URL", server.URL)
+	t.Setenv("MULTICA_WORKSPACE_ID", "workspace-1")
+	t.Setenv("MULTICA_TOKEN", "test-token")
+
+	cmd := testCmd()
+	cmd.Flags().String("variant", "", "")
+	cmd.Flags().Bool("force", false, "")
+	cmd.Flags().String("output", "json", "")
+	if err := cmd.Flags().Set("variant", "variant-2"); err != nil {
+		t.Fatal(err)
+	}
+	if err := cmd.Flags().Set("force", "true"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := captureStdout(t, func() error {
+		return runCreativeOrderPrimeCompose(cmd, []string{"order-1"})
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if body["variant_id"] != "variant-2" || body["force"] != true {
+		t.Fatalf("Prime compose payload = %#v", body)
+	}
+}
+
 func TestFirstCreativeCandidateSourcePrefersArchivedAsset(t *testing.T) {
 	candidate := creativeMaterialCandidateCLI{
 		PreviewURL:  "https://cdn.example.test/preview.png",
@@ -269,17 +305,22 @@ func TestRunImageEditPublishesReceiptOnlyAfterDelayedProviderResult(t *testing.T
 	cmd.Flags().Int("max-attempts", 1, "")
 	cmd.Flags().String("output-file", "", "")
 	cmd.Flags().String("result-file", "", "")
+	cmd.Flags().String("operation-id", "", "")
+	cmd.Flags().Int("operation-attempt", 0, "")
 	cmd.Flags().String("output", "json", "")
 	for name, value := range map[string]string{
-		"input":       inputFile,
-		"prompt":      "reflow the content",
-		"output-file": outputFile,
-		"result-file": resultFile,
+		"input":             inputFile,
+		"prompt":            "reflow the content",
+		"output-file":       outputFile,
+		"result-file":       resultFile,
+		"operation-id":      "operation-123",
+		"operation-attempt": "2",
 	} {
 		if err := cmd.Flags().Set(name, value); err != nil {
 			t.Fatal(err)
 		}
 	}
+	t.Setenv("MULTICA_TASK_ID", "task-456")
 	done := make(chan error, 1)
 	go func() { done <- runImageEdit(cmd, nil) }()
 	select {
@@ -307,17 +348,23 @@ func TestRunImageEditPublishesReceiptOnlyAfterDelayedProviderResult(t *testing.T
 		t.Fatalf("result receipt missing: %v", err)
 	}
 	var result struct {
-		RequestID      string `json:"request_id"`
-		ActualWidth    int    `json:"actual_width"`
-		ActualHeight   int    `json:"actual_height"`
-		GeneratedAsset struct {
+		RequestID        string `json:"request_id"`
+		ActualWidth      int    `json:"actual_width"`
+		ActualHeight     int    `json:"actual_height"`
+		OperationID      string `json:"operation_id"`
+		OperationAttempt int    `json:"operation_attempt"`
+		TaskID           string `json:"task_id"`
+		OutputSHA256     string `json:"output_sha256"`
+		GeneratedAsset   struct {
 			Completed bool `json:"completed"`
 		} `json:"generated_asset"`
 	}
 	if err := json.Unmarshal(raw, &result); err != nil {
 		t.Fatal(err)
 	}
-	if result.RequestID != "receipt-request" || result.ActualWidth != 1088 || result.ActualHeight != 1088 || !result.GeneratedAsset.Completed {
+	if result.RequestID != "receipt-request" || result.ActualWidth != 1088 || result.ActualHeight != 1088 ||
+		result.OperationID != "operation-123" || result.OperationAttempt != 2 || result.TaskID != "task-456" ||
+		len(result.OutputSHA256) != 64 || !result.GeneratedAsset.Completed {
 		t.Fatalf("unexpected persisted image edit result: %#v", result)
 	}
 }

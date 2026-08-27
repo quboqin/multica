@@ -545,6 +545,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 		r.Post("/runtimes/{runtimeId}/models/{requestId}/result", h.ReportModelListResult)
 		r.Post("/runtimes/{runtimeId}/local-skills/{requestId}/result", h.ReportLocalSkillListResult)
 		r.Post("/runtimes/{runtimeId}/local-skills/import/{requestId}/result", h.ReportLocalSkillImportResult)
+		r.Post("/runtimes/{runtimeId}/tasks/{taskId}/creative-image-operations/{operationId}/attempts/{attempt}/late-success", h.ReportDaemonCreativeImageLateSuccess)
 
 		r.Get("/tasks/{taskId}/status", h.GetTaskStatus)
 		r.Post("/runtimes/{runtimeId}/tasks/{taskId}/prepare-lease", h.ExtendTaskPrepareLease)
@@ -782,7 +783,9 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 						r.With(handler.RequireHumanActor).Post("/workflow-failures/{taskId}/retry", h.RetryCreativeOrderWorkflowFailure)
 						r.With(handler.RequireHumanActor).Post("/variants/{variantId}/qc/retry", h.RetryCreativeOrderVariantQC)
 						r.With(handler.RequireHumanActor).Post("/items/{itemId}/adoption", h.AdoptCreativeOrderItemVariant)
+						r.Post("/items/{itemId}/candidate-selection", h.SelectCreativeOrderItemCandidates)
 						r.Put("/variants", h.UpsertCreativeOrderVariant)
+						r.Put("/image-operations", h.UpsertCreativeImageOperation)
 						r.Put("/assets", h.UpsertCreativeOrderAsset)
 						r.Put("/diagnostic-assets", h.UpsertCreativeOrderDiagnosticAsset)
 						r.Put("/qc-reports", h.UpsertCreativeOrderQC)

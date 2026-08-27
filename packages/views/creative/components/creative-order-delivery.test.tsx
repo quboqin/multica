@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import "@testing-library/jest-dom/vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Attachment, CreativeOrder, CreativeOrderItem, CreativeOrderQCReport, CreativeOrderVariant } from "@multica/core/types";
 import {
@@ -15,6 +15,7 @@ import {
   creativeVariantDeliveryAssets,
   creativeVariantIsInProgress,
   creativeVariantNeedsManualAction,
+  creativeVariantPreviewAssets,
   creativeVariantQCDetails,
   creativeVariantRiskAdoptionReadiness,
 } from "./creative-order-delivery";
@@ -30,6 +31,8 @@ function variant(id: string, complete = true): CreativeOrderVariant {
     id,
     variant_key: id.toUpperCase(),
     revision: 2,
+    active_revision: 2,
+    staging_revision: 2,
     status: complete ? "completed" : "running",
     qc_status: complete ? "passed" : "pending",
     qc_recovery_used: false,
@@ -111,6 +114,7 @@ describe("creative order stage", () => {
 
   it("treats background brand composition as running instead of a manual action", () => {
     const handoff = variant("v01", false);
+    handoff.active_revision = 0;
     handoff.status = "running";
     handoff.assets = sizes.map((size) => ({
       id: `${handoff.id}-${size}-generated`,
@@ -140,6 +144,7 @@ describe("creative order stage", () => {
 
   it("keeps an active production continuation out of the failure state", () => {
     const continuing = variant("v01", false);
+    continuing.active_revision = 0;
     continuing.status = "running";
     continuing.assets = [{
       id: "v01-generated",
@@ -452,7 +457,7 @@ describe("CreativeOrderDeliveryCandidates", () => {
 
   it("separates direct adjustment before, after, current process, and reused process images", () => {
     const ready = variant("v01");
-    ready.brief = { creative_direct_edit_delivery: { skip_qc: true, target_size: "1080x1080", source_revision: 1 } };
+    ready.brief = { creative_direct_edit_delivery: { final_visual_validation: true, target_size: "1080x1080", source_revision: 1 } };
     ready.diagnostic_assets = [
       {
         id: "diagnostic-target",
@@ -580,7 +585,7 @@ describe("CreativeOrderDeliveryCandidates", () => {
 
   it("exposes visual QC retry for recoverable failed QC variants", () => {
     const failed = variant("v01");
-    failed.status = "action_required";
+    failed.status = "failed";
     failed.qc_status = "failed";
     failed.qc_recovery_available = true;
     failed.qc_reports = [
@@ -769,6 +774,64 @@ describe("creative order delivery selection", () => {
     ]);
   });
 
+  it("uses a revision's persisted size contract for a single-size precise edit", () => {
+    const preciseEdit = variant("direct");
+    preciseEdit.brief = { creative_direct_edit_delivery: { final_visual_validation: true } };
+    preciseEdit.revisions = [{
+      revision: 2,
+      brief: preciseEdit.brief,
+      status: "completed",
+      expected_sizes: ["1080x1080"],
+      activated_at: "2026-08-02T00:00:00Z",
+      created_at: "2026-08-02T00:00:00Z",
+      updated_at: "2026-08-02T00:00:00Z",
+    }];
+    preciseEdit.assets = preciseEdit.assets.filter((asset) => asset.revision === 2
+      && asset.size_key === "1080x1080"
+      && (asset.stage === "primed" || asset.stage === "delivered"));
+    const directItem = item(preciseEdit.id);
+    directItem.variants = [preciseEdit];
+
+    expect(creativeVariantDeliveryAssets(preciseEdit)).toHaveLength(1);
+    expect(creativeVariantArchiveEntries(preciseEdit, attachmentMap(directItem))).toHaveLength(1);
+    expect(creativeVariantAdoptionReadiness(preciseEdit)).toEqual({
+      ready: true,
+      status: "目标尺寸、品牌组件与质检均已完成，可以采用",
+    });
+
+    render(<CreativeOrderDeliveryCandidates orderId="order-direct" item={directItem} source={{ label: "原素材", url: "https://cdn.example/source.png" }} attachments={attachmentMap(directItem)} adoptingVariantId="" onAdopt={vi.fn()} onAssetSelect={vi.fn()} />);
+    expect(screen.getByAltText("最终采用方案 1080x1080")).toBeInTheDocument();
+    expect(screen.queryByAltText("最终采用方案 1200x628")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "下载交付包" })).toBeEnabled();
+  });
+
+  it("does not let a legacy direct-edit flag bypass visual QC", () => {
+    const preciseEdit = variant("direct");
+    preciseEdit.brief = { creative_direct_edit_delivery: { skip_qc: true } };
+    preciseEdit.revisions = [{
+      revision: 2,
+      brief: preciseEdit.brief,
+      status: "active",
+      expected_sizes: ["1080x1080"],
+      activated_at: "2026-08-02T00:00:00Z",
+      created_at: "2026-08-02T00:00:00Z",
+      updated_at: "2026-08-02T00:00:00Z",
+    }];
+    preciseEdit.assets = preciseEdit.assets.filter((asset) => asset.revision === 2 && asset.size_key === "1080x1080");
+    preciseEdit.qc_reports = [];
+
+    expect(creativeVariantAdoptionReadiness(preciseEdit)).toMatchObject({ ready: false });
+  });
+
+  it("shows an unactivated revision as working preview without treating it as delivery", () => {
+    const working = variant("v01");
+    working.active_revision = 0;
+
+    expect(creativeVariantDeliveryAssets(working)).toEqual([]);
+    expect(creativeVariantPreviewAssets(working).map((asset) => asset.revision)).toEqual([2, 2, 2]);
+    expect(creativeVariantAdoptionReadiness(working).ready).toBe(false);
+  });
+
   it("never falls back to a Prime asset when the current delivery is incomplete", () => {
     const candidate = variant("v01");
     candidate.assets = candidate.assets.filter((asset) => !(asset.revision === 2 && asset.stage === "delivered" && asset.size_key === "800x1000"));
@@ -866,5 +929,256 @@ describe("creative order delivery selection", () => {
       lane: "visual",
       blockingFailures: ["最终结果"],
     })]);
+  });
+
+  it("keeps the active delivery usable while a newer staging revision needs work", () => {
+    const candidate = variant("v01");
+    candidate.revision = 3;
+    candidate.active_revision = 2;
+    candidate.staging_revision = 3;
+    candidate.candidate_state = "selected";
+    candidate.selection_rank = 1;
+    candidate.status = "action_required";
+    candidate.qc_recovery_available = true;
+    candidate.revisions = [
+      { revision: 2, brief: {}, status: "active", expected_sizes: sizes, activated_at: "2026-08-05T00:00:00Z", created_at: "2026-08-05T00:00:00Z", updated_at: "2026-08-05T00:00:00Z" },
+      { revision: 3, brief: {}, status: "action_required", expected_sizes: ["800x1000"], activated_at: "", created_at: "2026-08-06T00:00:00Z", updated_at: "2026-08-06T00:01:00Z" },
+    ];
+    candidate.action_required = {
+      task_id: "r3-task",
+      workflow: "creative_qc_visual",
+      failure_reason: "agent_reported_action_required",
+      detail: "r3 竖版仍需调整",
+      failed_at: "2026-08-06T00:00:00Z",
+      retryable: true,
+    };
+    candidate.assets.push({
+      id: "v01-r3-800x1000-prime",
+      variant_id: candidate.id,
+      size_key: "800x1000",
+      revision: 3,
+      stage: "primed",
+      status: "completed",
+      attachment_id: "v01-r3-800x1000-prime",
+      updated_at: "2026-08-06T00:00:00Z",
+    } as CreativeOrderVariant["assets"][number]);
+    candidate.qc_reports.push(qcReport({
+      id: "visual-r3",
+      variant_id: candidate.id,
+      revision: 3,
+      lane: "visual",
+      status: "failed",
+      findings: { blocking_failures: ["竖版白字对比不足"] },
+      updated_at: "2026-08-06T00:01:00Z",
+    }));
+
+    expect(creativeVariantDeliveryAssets(candidate).map((asset) => asset.revision)).toEqual([2, 2, 2]);
+    expect(creativeVariantPreviewAssets(candidate).map((asset) => asset.id)).toEqual([
+      "v01-1080x1080",
+      "v01-1200x628",
+      "v01-800x1000",
+    ]);
+    expect(creativeVariantAdoptionReadiness(candidate)).toMatchObject({ ready: true });
+    expect(creativeVariantNeedsManualAction(candidate)).toBe(false);
+    expect(creativeVariantQCDetails(candidate)).toEqual([
+      expect.objectContaining({ lane: "visual", status: "passed", blockingFailures: [] }),
+    ]);
+
+    const orderItem = item();
+    orderItem.variants = [candidate];
+    const onAssetSelect = vi.fn();
+    const onRetryVariant = vi.fn();
+    render(<CreativeOrderDeliveryCandidates orderId="order-1" item={orderItem} source={{ label: "竞品原图", url: "https://cdn.example/source.png" }} attachments={attachmentMap(orderItem)} adoptingVariantId="" onAdopt={vi.fn()} onAssetSelect={onAssetSelect} onRetryVariant={onRetryVariant} />);
+    expect(screen.getByText("线上 r2")).toBeInTheDocument();
+    expect(screen.getByText("制作中 r3")).toBeInTheDocument();
+    const cover = screen.getByAltText("V01 方形主预览");
+    expect(cover).toHaveAttribute("src", "https://cdn.example/v01-1080x1080.png");
+    const card = cover.closest("article");
+    expect(card).not.toBeNull();
+    fireEvent.click(within(card!).getByRole("button", { name: "横版可查看" }));
+    expect(onAssetSelect).toHaveBeenCalledWith("v01-1200x628");
+    expect(within(card!).getByRole("button", { name: "竖版可查看" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "采用此变体" })).toBeEnabled();
+    expect(screen.getByText("制作中 r3 需要处理")).toBeInTheDocument();
+    expect(screen.getByText("r3 竖版仍需调整")).toBeInTheDocument();
+    expect(screen.getByText("竖版白字对比不足")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "重新质检 · r3" }));
+    expect(onRetryVariant).toHaveBeenCalledWith(candidate, { kind: "qc", taskId: "", label: "重新质检" });
+
+    cleanup();
+    orderItem.adopted_variant_id = candidate.id;
+    render(<CreativeOrderDeliveryCandidates orderId="order-1" item={orderItem} source={{ label: "竞品原图", url: "https://cdn.example/source.png" }} attachments={attachmentMap(orderItem)} adoptingVariantId="" onAdopt={vi.fn()} onAssetSelect={onAssetSelect} onRetryVariant={onRetryVariant} />);
+    expect(screen.getByTestId("creative-adopted-variant")).toHaveTextContent("最终采用方案");
+    expect(screen.getByTestId("creative-adopted-staging-revision")).toHaveTextContent("线上版本继续可用");
+    expect(screen.getByText("制作中 r3 需要处理")).toBeInTheDocument();
+    expect(screen.getByText("r3 竖版仍需调整")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "重新质检 · r3" })).toBeEnabled();
+  });
+
+  it("uses each concept's chosen primary size and keeps reserves outside delivery", () => {
+    const candidate = variant("c01");
+    candidate.revision = 1;
+    candidate.active_revision = 0;
+    candidate.staging_revision = 1;
+    candidate.candidate_state = "candidate";
+    candidate.selection_rank = 0;
+    candidate.primary_size = "1200x628";
+    candidate.status = "completed";
+    candidate.assets = [{
+      id: "c01-landscape-prime",
+      variant_id: candidate.id,
+      size_key: "1200x628",
+      revision: 1,
+      stage: "primed",
+      status: "completed",
+      attachment_id: "c01-landscape-prime",
+      updated_at: "2026-08-06T00:00:00Z",
+    } as CreativeOrderVariant["assets"][number]];
+    candidate.qc_reports = [];
+
+    const reserve = structuredClone(candidate);
+    reserve.id = "c02";
+    reserve.variant_key = "C02";
+    reserve.candidate_state = "reserve";
+    reserve.selection_rank = 4;
+    reserve.assets = reserve.assets.map((asset) => ({ ...asset, id: "c02-landscape-prime", variant_id: reserve.id, attachment_id: "c02-landscape-prime" }));
+
+    const orderItem = item();
+    orderItem.variants = [reserve, candidate];
+    render(<CreativeOrderDeliveryCandidates orderId="order-1" item={orderItem} source={{ label: "竞品原图", url: "https://cdn.example/source.png" }} attachments={attachmentMap(orderItem)} adoptingVariantId="" onAdopt={vi.fn()} onAssetSelect={vi.fn()} />);
+
+    expect(screen.getByAltText("C01 横版主预览")).toBeInTheDocument();
+    expect(screen.getAllByText("后备第 4 名").length).toBeGreaterThan(0);
+    expect(creativeVariantAdoptionReadiness(reserve)).toEqual({ ready: false, status: "后备方案暂不参与交付" });
+    expect(creativeVariantNeedsManualAction(reserve)).toBe(false);
+  });
+
+  it("treats an unknown provider receipt as ongoing work instead of a failure", () => {
+    const pending = variant("v01", false);
+    pending.revision = 3;
+    pending.active_revision = 0;
+    pending.staging_revision = 3;
+    pending.candidate_state = "selected";
+    pending.status = "action_required";
+    pending.action_required = {
+      task_id: "late-task",
+      workflow: "creative_production",
+      failure_reason: "empty_result",
+      detail: "尚未收到最终回执",
+      failed_at: "2026-08-06T00:00:38Z",
+      retryable: true,
+    };
+    pending.image_operations = [{
+      id: "operation-1",
+      variant_id: pending.id,
+      size_key: "800x1000",
+      revision: 3,
+      operation_kind: "generation",
+      idempotency_key: "v01:r3:800x1000",
+      status: "unknown",
+      attempts: [],
+    } as unknown as NonNullable<CreativeOrderVariant["image_operations"]>[number]];
+
+    expect(creativeVariantIsInProgress(pending)).toBe(true);
+    expect(creativeVariantNeedsManualAction(pending)).toBe(false);
+  });
+
+  it("shows candidate comparison progress before three variants are selected", () => {
+    const variants = Array.from({ length: 5 }, (_, index) => {
+      const candidate = variant(`c0${index + 1}`, false);
+      candidate.candidate_state = "candidate";
+      candidate.primary_size = index % 2 === 0 ? "1200x628" : "800x1000";
+      candidate.active_revision = 0;
+      candidate.staging_revision = 1;
+      candidate.status = "completed";
+      candidate.revisions = [{
+        revision: 1,
+        brief: {},
+        status: "completed",
+        expected_sizes: sizes,
+        activated_at: "",
+        created_at: "2026-08-06T00:00:00Z",
+        updated_at: "2026-08-06T00:00:00Z",
+      }];
+      candidate.assets = [{
+        id: `${candidate.id}-primary`,
+        variant_id: candidate.id,
+        size_key: candidate.primary_size,
+        revision: 1,
+        stage: "primed",
+        status: "completed",
+        attachment_id: `${candidate.id}-primary`,
+        updated_at: "2026-08-06T00:00:00Z",
+      } as CreativeOrderVariant["assets"][number]];
+      return candidate;
+    });
+    const orderItem = item();
+    orderItem.variants = variants;
+    const candidateOrder = {
+      status: "running",
+      derived_status: "awaiting_selection",
+      workflow_failures: [],
+      items: [orderItem],
+    } as unknown as CreativeOrder;
+
+    expect(creativeOrderStage(candidateOrder)).toMatchObject({
+      key: "generating",
+      label: "候选比较中",
+      detail: "5/5 个候选主画面已就绪",
+      totalVariants: 0,
+    });
+
+    render(<CreativeOrderDeliveryCandidates orderId="order-1" item={orderItem} source={{ label: "竞品原图", url: "https://cdn.example/source.png" }} attachments={attachmentMap(orderItem)} adoptingVariantId="" onAdopt={vi.fn()} onAssetSelect={vi.fn()} />);
+    expect(screen.getAllByText("5/5 张成图")).toHaveLength(1);
+    expect(screen.queryByText("5/15 张成图")).not.toBeInTheDocument();
+  });
+
+  it("counts selected targets and only the primary size for reserves and rejected candidates", () => {
+    const selected = variant("s01", false);
+    selected.active_revision = 0;
+    selected.staging_revision = 2;
+    selected.candidate_state = "selected";
+    selected.revisions = [{ revision: 2, brief: {}, status: "running", expected_sizes: sizes, activated_at: "", created_at: "", updated_at: "" }];
+    selected.assets = sizes.map((size) => ({
+      id: `s01-${size}-generated`,
+      variant_id: selected.id,
+      size_key: size,
+      revision: 2,
+      stage: "generated",
+      status: "completed",
+      attachment_id: `s01-${size}-generated`,
+      updated_at: "2026-08-06T00:00:00Z",
+    })) as CreativeOrderVariant["assets"];
+    selected.qc_reports = [];
+
+    const reserve = variant("r01", false);
+    reserve.active_revision = 0;
+    reserve.staging_revision = 2;
+    reserve.candidate_state = "reserve";
+    reserve.primary_size = "1200x628";
+    reserve.revisions = [{ revision: 2, brief: {}, status: "completed", expected_sizes: sizes, activated_at: "", created_at: "", updated_at: "" }];
+    reserve.assets = reserve.assets.filter((asset) => asset.revision === 2 && asset.stage === "primed" && asset.size_key === reserve.primary_size);
+    reserve.status = "completed";
+    reserve.qc_reports = [];
+
+    const rejected = structuredClone(reserve);
+    rejected.id = "x01";
+    rejected.variant_key = "X01";
+    rejected.candidate_state = "rejected";
+    rejected.primary_size = "800x1000";
+    rejected.assets = [{
+      ...reserve.assets[0]!,
+      id: "x01-800x1000-prime",
+      variant_id: rejected.id,
+      size_key: rejected.primary_size,
+      attachment_id: "x01-800x1000-prime",
+    }];
+
+    const orderItem = item();
+    orderItem.variants = [selected, reserve, rejected];
+    render(<CreativeOrderDeliveryCandidates orderId="order-1" item={orderItem} source={{ label: "竞品原图", url: "https://cdn.example/source.png" }} attachments={attachmentMap(orderItem)} adoptingVariantId="" onAdopt={vi.fn()} onAssetSelect={vi.fn()} />);
+
+    expect(screen.getAllByText("5/5 张成图")).toHaveLength(1);
+    expect(screen.queryByText("5/9 张成图")).not.toBeInTheDocument();
   });
 });

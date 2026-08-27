@@ -3625,7 +3625,7 @@ RETURNING id::text
 		}
 		if err := testPool.QueryRow(ctx, `
 INSERT INTO creative_order_variant (order_item_id, variant_key, revision, brief, status)
-VALUES ($1, 'V01', 2, '{"creative_direct_edit_delivery":{"skip_qc":true,"target_size":"1080x1080"}}'::jsonb, 'running')
+VALUES ($1, 'V01', 2, '{"creative_direct_edit_delivery":{"final_visual_validation":true,"target_size":"1080x1080"}}'::jsonb, 'running')
 RETURNING id::text
 `, itemID).Scan(&variantID); err != nil {
 			t.Fatal(err)
@@ -3676,20 +3676,21 @@ VALUES ($1, NULL, $2, '1200x628', 2, 'creative_production', '规范化底图', '
 		}
 
 		contextJSON, _ := json.Marshal(map[string]any{
-			"type":                   "creative_domain_task",
-			"workflow":               "creative_direct_edit",
-			"creative_order_id":      orderID,
-			"creative_order_item_id": itemID,
-			"issue_id":               adjustmentIssueID,
-			"variant_id":             variantID,
-			"revision":               2,
-			"expected_sizes":         expectedSizes,
-			"target_size":            "1080x1080",
-			"delivery_mode":          "publish",
-			"source_revision":        1,
-			"source_asset_id":        sourceAssetID,
-			"source_attachment_id":   sourceAttachmentID,
-			"user_request":           "把标题移出贴片遮挡区域",
+			"type":                    "creative_domain_task",
+			"workflow":                "creative_direct_edit",
+			"creative_order_id":       orderID,
+			"creative_order_item_id":  itemID,
+			"issue_id":                adjustmentIssueID,
+			"variant_id":              variantID,
+			"revision":                2,
+			"expected_sizes":          expectedSizes,
+			"target_size":             "1080x1080",
+			"delivery_mode":           "publish",
+			"final_visual_validation": true,
+			"source_revision":         1,
+			"source_asset_id":         sourceAssetID,
+			"source_attachment_id":    sourceAttachmentID,
+			"user_request":            "把标题移出贴片遮挡区域",
 			"direct_edit": map[string]any{
 				"adjustment_issue_id": adjustmentIssueID,
 				"target_size":         "1080x1080",

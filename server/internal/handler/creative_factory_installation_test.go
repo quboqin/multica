@@ -3,6 +3,8 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -130,8 +132,8 @@ func TestCreativeFactoryImageEditingUsesOneAgentWithWorkflowSkills(t *testing.T)
 			break
 		}
 	}
-	if directEditSkill.Version != 18 {
-		t.Fatalf("direct-edit Skill version = %d, want 18", directEditSkill.Version)
+	if directEditSkill.Version != 19 {
+		t.Fatalf("direct-edit Skill version = %d, want 19", directEditSkill.Version)
 	}
 	for index := range creativeFactoryAgentSpecs {
 		spec := &creativeFactoryAgentSpecs[index]
@@ -169,10 +171,95 @@ func TestCreativeFactoryImageEditingUsesOneAgentWithWorkflowSkills(t *testing.T)
 			t.Errorf("merged image-edit Agent instructions missing %q branch", workflow)
 		}
 	}
-	for _, required := range []string{"MULTICA_TASK_ID", "diagnostic-asset-put", "asset-put", "task complete", "--result-file", "creative material download"} {
+	for _, required := range []string{"creative_production", "creative_direct_edit", "candidate_state", "DesignDNA", "多目标同时验收", "绑定的素材_技能_出图"} {
 		if !strings.Contains(imageEditor.Instructions, required) {
 			t.Errorf("merged image-edit Agent instructions missing %q", required)
 		}
+	}
+	for _, duplicated := range []string{"COMPOSITION GATE", "--result-file", "diagnostic-asset-put", "/app/creative-platform-skills"} {
+		if strings.Contains(imageEditor.Instructions, duplicated) {
+			t.Errorf("merged image-edit Agent instructions duplicate Skill contract %q", duplicated)
+		}
+	}
+}
+
+func TestCreativeFactoryCreativeContractTemplatesStayInSync(t *testing.T) {
+	wantVersions := map[string]int{
+		"generation_plan":     39,
+		"image_edit":          99,
+		"prime_compose":       4,
+		"direct_image_edit":   19,
+		"quality_control":     37,
+		"creative_leadership": 50,
+	}
+	for _, spec := range creativeFactorySkillSpecs {
+		if want, ok := wantVersions[spec.Role]; ok && spec.Version != want {
+			t.Errorf("%s Skill version = %d, want %d", spec.Role, spec.Version, want)
+		}
+	}
+	if !strings.Contains(creativeFactoryImageEditAgentInstructions(), "写真实 error_code/error_message 并让当前 task 失败；兄弟对象继续") {
+		t.Fatal("factory producer instructions lost the specialist failure handoff contract")
+	}
+
+	templates, err := loadCreativeFactoryTemplates()
+	if err != nil {
+		t.Fatalf("loadCreativeFactoryTemplates: %v", err)
+	}
+	checks := map[string][]string{
+		"ad-creative-plan":          {"4-5 个候选", "primary_size", "CreativeIntent", "DesignDNA", "LayoutPlan", "pipeline_version", "candidate_v1"},
+		"ad-creative-production":    {"candidate_primary", "selected", "model-prompt-contract.md", "不把方图 raster 当作不可替代输入", "pipeline_version", "candidate_v1"},
+		"ad-creative-prime-compose": {"each delivery size", "publishes no partial package", "fail closed"},
+		"ad-creative-direct-edit":   {"target_masks", "所有 target mask", "<当前 Skill 目录>/../ad-creative-production/references/normalize_image.py"},
+		"ad-creative-qc":            {"creative_candidate_selection", "candidate-select", "selected_ids", "foreground_polarity", "cross_size_design_dna_mismatch"},
+		"ad-creative-leadership":    {"4-5 个候选", "原子晋级 3 个", "最终视觉 QC"},
+	}
+	for directory, required := range checks {
+		template := templates[directory]
+		for _, value := range required {
+			if !strings.Contains(template.Content, value) {
+				t.Errorf("%s template missing %q", directory, value)
+			}
+		}
+	}
+
+	productionTemplate := templates["ad-creative-production"]
+	var promptContract string
+	for _, file := range productionTemplate.Files {
+		if file.Path == "references/model-prompt-contract.md" {
+			promptContract = file.Content
+			break
+		}
+	}
+	for _, value := range []string{"TASK", "INPUT ROLES", "LOCKED DESIGN DNA", "EDITABLE LAYOUT", "APPROVED COPY", "PRIME SUPPORT", "ACCEPTANCE", "platform to typeset"} {
+		if !strings.Contains(promptContract, value) {
+			t.Errorf("model prompt contract missing %q", value)
+		}
+	}
+
+	root, err := creativeFactoryTemplateRoot()
+	if err != nil {
+		t.Fatalf("creativeFactoryTemplateRoot: %v", err)
+	}
+	bootstrap, err := os.ReadFile(filepath.Join(root, "..", "bootstrap-creative-platform-demo.ps1"))
+	if err != nil {
+		t.Fatalf("read bootstrap script: %v", err)
+	}
+	for _, value := range []string{
+		"capability = 'generation_plan'; version = 39",
+		"capability = 'image_edit'; version = 99",
+		"capability = 'prime_compose'; version = 4",
+		"capability = 'direct_image_edit'; version = 19",
+		"capability = 'quality_control'; version = 37",
+		"capability = 'creative_leadership'; version = 50",
+		"creative_candidate_selection",
+		"写真实 error_code/error_message 并让当前 task 失败；兄弟对象继续",
+	} {
+		if !strings.Contains(string(bootstrap), value) {
+			t.Errorf("bootstrap contract missing %q", value)
+		}
+	}
+	if strings.Contains(string(bootstrap), "/app/creative-platform-skills/ad-creative-production/references/normalize_image.py") {
+		t.Fatal("bootstrap still embeds the old absolute normalization path")
 	}
 }
 
@@ -245,8 +332,8 @@ WHERE id = $1::uuid
 	if err := json.Unmarshal([]byte(configRaw), &config); err != nil {
 		t.Fatalf("decode refreshed skill config: %v", err)
 	}
-	if got := int(config["version"].(float64)); got != 18 {
-		t.Fatalf("direct-edit Skill version = %d, want 18", got)
+	if got := int(config["version"].(float64)); got != 19 {
+		t.Fatalf("direct-edit Skill version = %d, want 19", got)
 	}
 	if got := int(config["template_version"].(float64)); got != creativeFactoryTemplateVersion {
 		t.Fatalf("direct-edit template_version = %d, want %d", got, creativeFactoryTemplateVersion)
@@ -260,7 +347,7 @@ WHERE id = $1::uuid
 `, imageAgentID).Scan(&instructions); err != nil {
 		t.Fatalf("query refreshed image-edit agent: %v", err)
 	}
-	for _, required := range []string{"Input 2 只用于读取红框编号", "intent-plan.json", "final_visual_validation", "scope=variant 时按 edit_sizes/expected_sizes 遍历", "人物替换必须是肉眼可见的 replacement", "Rp100Juta", "creative_direct_edit", "比例偏差 <=10%"} {
+	for _, required := range []string{"creative_direct_edit", "多目标同时验收", "附件血缘", "归一化", "最终视觉 QC"} {
 		if !strings.Contains(instructions, required) {
 			t.Fatalf("image-edit Agent instructions missing refreshed contract %q", required)
 		}

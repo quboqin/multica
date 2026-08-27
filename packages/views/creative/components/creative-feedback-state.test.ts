@@ -21,8 +21,12 @@ import {
   creativeOrderAdjustmentIssueDescription,
   creativeOrderAdjustmentIssueMetadata,
   creativeOrderAdjustmentIssueRequest,
+  creativeOrderAdjustmentContextSnapshot,
+  creativeOrderAdjustmentSourceContext,
   creativeOrderAdjustmentIssueTitle,
   creativeOrderAdoptionStatus,
+  creativeOrderGenerationProgress,
+  creativeOrderNeedsPolling,
   creativeOrderSquadId,
   creativeStudioPath,
   selectCreativeReviewAssets,
@@ -34,6 +38,8 @@ function readyVariant(id: string): CreativeOrderVariant {
   return {
     id,
     revision: 2,
+    active_revision: 2,
+    staging_revision: 2,
     status: "completed",
     assets: sizes.flatMap((size) => [
       { id: `${id}-${size}-prime`, variant_id: id, size_key: size, revision: 2, stage: "primed", status: "completed", attachment_id: `${id}-${size}-attachment` },
@@ -58,6 +64,7 @@ describe("creative feedback state", () => {
       attachmentId: "019fb932-3b59-77ab-841a-c57598f81097",
       sizeKey: "1080x1080",
       scope: "size",
+      expectedSizes: ["1080x1080"],
       sourceRevision: 1,
     } as const;
     const description = creativeOrderAdjustmentIssueDescription(input);
@@ -101,11 +108,13 @@ describe("creative feedback state", () => {
       attachmentId: "019fb932-3b59-77ab-841a-c57598f81097",
       sizeKey: "1080x1080",
       scope: "variant",
+      expectedSizes: ["1080x1080", "1200x628", "800x1000"],
       sourceRevision: 1,
     } as const;
 
-    expect(creativeOrderAdjustmentIssueTitle(input)).toBe("V01 / 三尺寸 精准调整 · R2");
+    expect(creativeOrderAdjustmentIssueTitle(input)).toBe("V01 / 全部交付尺寸（3） 精准调整 · R2");
     expect(creativeOrderAdjustmentIssueDescription(input)).toContain("scope: variant");
+    expect(creativeOrderAdjustmentIssueDescription(input)).toContain("expected_sizes: 1080x1080,1200x628,800x1000");
     expect(creativeOrderAdjustmentIssueDescription(input)).toContain("Apply this adjustment across all expected sizes");
     expect(creativeOrderAdjustmentIssueMetadata(input)).toMatchObject({
       creative_scope: "variant",
@@ -131,7 +140,7 @@ describe("creative feedback state", () => {
     expect(creativeAdjustmentProgress({ revision: 1, status: "action_required" } as CreativeOrderVariant, latest as never)).toBe("调整未启动");
     expect(creativeAdjustmentCanRetry({ revision: 1, status: "action_required" } as CreativeOrderVariant, latest as never)).toBe(true);
     expect(creativeAdjustmentProgress({ revision: 2, status: "partial" } as CreativeOrderVariant, latest as never)).toBe("当前尺寸调整中 · r2");
-    expect(creativeAdjustmentProgress({ revision: 2, status: "partial" } as CreativeOrderVariant, { ...latest, context_snapshot: { ...latest.context_snapshot, scope: "variant" } } as never)).toBe("三尺寸调整中 · r2");
+    expect(creativeAdjustmentProgress({ revision: 2, status: "partial" } as CreativeOrderVariant, { ...latest, context_snapshot: { ...latest.context_snapshot, scope: "variant" } } as never)).toBe("全部交付尺寸调整中 · r2");
     expect(creativeAdjustmentProgress({ revision: 2, status: "action_required" } as CreativeOrderVariant, latest as never)).toBe("调整需要处理 · r2");
     expect(creativeAdjustmentProgress({ revision: 2, status: "completed" } as CreativeOrderVariant, latest as never)).toBe("调整已完成 · r2");
   });
@@ -160,7 +169,7 @@ describe("creative feedback state", () => {
         { revision: 2, stage: "primed", status: "completed", size_key: size },
       ]),
       qc_reports: [{ revision: 2, lane: "technical", status: "passed" }],
-    } as CreativeOrderVariant;
+    } as unknown as CreativeOrderVariant;
     expect(creativeAdjustmentTimeline(variant, event).map((step) => [step.key, step.status])).toEqual([
       ["submitted", "done"],
       ["planned", "done"],
@@ -187,6 +196,28 @@ describe("creative feedback state", () => {
       ["已提交", "done"],
       ["精准调整", "done"],
       ["当前尺寸生成", "done"],
+      ["品牌组件合成", "done"],
+      ["视觉质检", "current"],
+      ["完成", "pending"],
+    ]);
+  });
+
+  it("uses the persisted adjustment size contract instead of assuming three sizes", () => {
+    const event = { context_snapshot: { revision: 1, scope: "variant", size_key: "1080x1080", expected_sizes: ["1080x1080", "1200x628"] } } as never;
+    const variant = {
+      revision: 2,
+      status: "partial",
+      assets: ["1080x1080", "1200x628"].flatMap((size) => [
+        { revision: 2, stage: "generated", status: "completed", size_key: size },
+        { revision: 2, stage: "primed", status: "completed", size_key: size },
+      ]),
+      qc_reports: [],
+    } as unknown as CreativeOrderVariant;
+
+    expect(creativeAdjustmentTimeline(variant, event).map((step) => [step.label, step.status])).toEqual([
+      ["已提交", "done"],
+      ["精准调整", "done"],
+      ["全部交付尺寸生成", "done"],
       ["品牌组件合成", "done"],
       ["视觉质检", "current"],
       ["完成", "pending"],
@@ -290,7 +321,7 @@ describe("creative feedback state", () => {
     const recovery = { issueId: "issue-1", orderId: "order-1", submissionKey: "submission-1" };
 
     expect(recoveryForSubmissionKey(recovery, "submission-1")).toBe(recovery);
-    expect(recoveryForSubmissionKey(recovery, "submission-2")).toEqual({ issueId: "", orderId: "", submissionKey: "" });
+    expect(recoveryForSubmissionKey(recovery, "submission-2")).toEqual({ issueId: "", orderId: "", submissionKey: "", marketPackId: "" });
   });
 
   it("derives stable feedback keys per submission, subject, event, decision, and candidate", () => {
@@ -420,6 +451,122 @@ describe("creative feedback state", () => {
     ] as CreativeOrderAsset[];
 
     expect(selectCreativeReviewAssets(assets).map((asset) => asset.id)).toEqual(["v1-new", "v1-wide", "v2-square"]);
+  });
+
+  it("keeps the active revision on the review canvas until a staging revision is activated", () => {
+    const assets = [
+      { id: "r2-square", variant_id: "v1", size_key: "1080x1080", revision: 2, stage: "delivered", status: "completed", attachment_id: "r2", updated_at: "2026-08-01" },
+      { id: "r3-square", variant_id: "v1", size_key: "1080x1080", revision: 3, stage: "generated", status: "completed", attachment_id: "r3", updated_at: "2026-08-02" },
+    ] as CreativeOrderAsset[];
+
+    expect(selectCreativeReviewAssets(assets, [{ id: "v1", revision: 3, active_revision: 2, staging_revision: 3 }]).map((asset) => asset.id)).toEqual(["r2-square"]);
+    expect(selectCreativeReviewAssets(assets, [{ id: "v1", revision: 3, active_revision: 0, staging_revision: 3 }]).map((asset) => asset.id)).toEqual(["r3-square"]);
+  });
+
+  it("marks a failed staging image as the explicit source of the next adjustment", () => {
+    const sourceContext = creativeOrderAdjustmentSourceContext(
+      { id: "r3-prime", revision: 3 },
+      { active_revision: 2, staging_revision: 3 },
+    );
+    expect(sourceContext).toEqual({ source_asset_id: "r3-prime", source_revision: 3, source_revision_role: "staging" });
+    expect(creativeOrderAdjustmentContextSnapshot("size", ["800x1000"], sourceContext, { annotation_guide_source: "final_reference" })).toEqual({
+      scope: "size",
+      expected_sizes: ["800x1000"],
+      source_asset_id: "r3-prime",
+      source_revision: 3,
+      source_revision_role: "staging",
+      annotation_guide_source: "final_reference",
+    });
+    expect(creativeOrderAdjustmentSourceContext(
+      { id: "r2-delivered", revision: 2 },
+      { active_revision: 2, staging_revision: 3 },
+    )).toEqual({ source_asset_id: "r2-delivered", source_revision: 2, source_revision_role: "active" });
+  });
+
+  it("keeps polling partial work and unsettled operations on the working revision", () => {
+    const operation = { id: "operation-1", revision: 3, status: "unknown" };
+    const variant = {
+      id: "v1",
+      revision: 3,
+      active_revision: 2,
+      staging_revision: 3,
+      status: "action_required",
+      image_operations: [operation],
+    } as unknown as CreativeOrderVariant;
+    const order = { items: [{ variants: [variant] }] } as unknown as CreativeOrder;
+
+    expect(creativeOrderNeedsPolling(order)).toBe(true);
+    variant.image_operations = [{ ...operation, revision: 2 }] as CreativeOrderVariant["image_operations"];
+    expect(creativeOrderNeedsPolling(order)).toBe(false);
+    variant.status = "partial";
+    expect(creativeOrderNeedsPolling(order)).toBe(true);
+  });
+
+  it("keeps polling while completed candidate primaries are being compared", () => {
+    const order = {
+      status: "running",
+      derived_status: "awaiting_selection",
+      production_status: "completed",
+      items: [{ variants: [{
+        id: "candidate-1",
+        revision: 1,
+        staging_revision: 1,
+        status: "completed",
+        image_operations: [],
+      }] }],
+    } as unknown as CreativeOrder;
+
+    expect(creativeOrderNeedsPolling(order)).toBe(true);
+  });
+
+  it("stops polling a delivered order even when its original status remains queued", () => {
+    const order = {
+      status: "queued",
+      derived_status: "completed",
+      production_status: "completed",
+      items: [{ variants: [{
+        id: "selected-1",
+        revision: 1,
+        active_revision: 1,
+        staging_revision: 1,
+        status: "completed",
+        image_operations: [],
+      }] }],
+    } as unknown as CreativeOrder;
+
+    expect(creativeOrderNeedsPolling(order)).toBe(false);
+  });
+
+  it("counts one primary image for candidates and all expected sizes only for selected variants", () => {
+    const makeVariant = (id: string, candidateState: "candidate" | "selected" | "reserve" | "rejected", primarySize: string) => ({
+      id,
+      revision: 1,
+      active_revision: 0,
+      staging_revision: 1,
+      candidate_state: candidateState,
+      primary_size: primarySize,
+      status: "completed",
+      revisions: [{ revision: 1, expected_sizes: ["1080x1080", "1200x628", "800x1000"] }],
+      assets: ["1080x1080", "1200x628", "800x1000"].map((size) => ({
+        id: `${id}-${size}`,
+        variant_id: id,
+        size_key: size,
+        revision: 1,
+        stage: "generated",
+        status: "completed",
+        attachment_id: `${id}-${size}`,
+      })),
+    } as unknown as CreativeOrderVariant);
+    const order = {
+      items: [{ variants: [
+        makeVariant("selected", "selected", "1080x1080"),
+        makeVariant("candidate", "candidate", "1200x628"),
+        makeVariant("reserve", "reserve", "800x1000"),
+        makeVariant("rejected", "rejected", "1080x1080"),
+      ] }],
+    } as unknown as CreativeOrder;
+
+    expect(creativeOrderGenerationProgress(order)).toEqual({ ready: 6, expected: 6 });
   });
 
   it("shows review assets in the business variant order instead of UUID order", () => {

@@ -31,15 +31,17 @@ import (
 )
 
 type TaskService struct {
-	Queries      *db.Queries
-	TxStarter    TxStarter
-	Hub          *realtime.Hub
-	Bus          *events.Bus
-	Analytics    analytics.Client
-	Metrics      *obsmetrics.BusinessMetrics
-	Wakeup       TaskWakeupNotifier
-	FeatureFlags *featureflag.Service
-	Composio     ComposioOverlayBuilder
+	Queries           *db.Queries
+	TxStarter         TxStarter
+	Hub               *realtime.Hub
+	Bus               *events.Bus
+	Analytics         analytics.Client
+	Metrics           *obsmetrics.BusinessMetrics
+	Wakeup            TaskWakeupNotifier
+	FeatureFlags      *featureflag.Service
+	Composio          ComposioOverlayBuilder
+	TaskCancelledHook func(context.Context, db.AgentTaskQueue) error
+	TaskFailedHook    func(context.Context, db.AgentTaskQueue) error
 	// EmptyClaim caches "this runtime has no queued task" so the daemon
 	// poll path can skip a Postgres scan on the steady-state empty case.
 	// Optional — a nil cache disables the fast path and every claim
@@ -321,6 +323,58 @@ func (s *TaskService) captureTaskCancelled(ctx context.Context, task db.AgentTas
 		slog.Warn("cancel task: failed to revoke task tokens",
 			"task_id", util.UUIDToString(task.ID), "error", err)
 	}
+	if err := s.reconcileCancelledCreativeImageOperations(ctx, task); err != nil {
+		slog.Warn("cancel task: failed to reconcile creative image operations",
+			"task_id", util.UUIDToString(task.ID), "error", err)
+	}
+	if s.TaskCancelledHook != nil {
+		if err := s.TaskCancelledHook(ctx, task); err != nil {
+			slog.Warn("cancel task: creative lifecycle reconciliation failed",
+				"task_id", util.UUIDToString(task.ID), "error", err)
+		}
+	}
+}
+
+func (s *TaskService) reconcileCancelledCreativeImageOperations(ctx context.Context, task db.AgentTaskQueue) error {
+	var taskContext struct {
+		Type     string `json:"type"`
+		Workflow string `json:"workflow"`
+	}
+	if json.Unmarshal(task.Context, &taskContext) != nil || taskContext.Type != "creative_domain_task" ||
+		(taskContext.Workflow != "creative_production" && taskContext.Workflow != "creative_direct_edit") || s.TxStarter == nil {
+		return nil
+	}
+	tx, err := s.TxStarter.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if _, err := tx.Exec(ctx, `
+WITH unsettled_attempt AS (
+  UPDATE creative_image_operation_attempt attempt
+  SET status = 'unknown', completed_at = NULL, updated_at = now()
+  FROM creative_image_operation operation
+  WHERE attempt.operation_id = operation.id
+    AND attempt.task_id = $1
+    AND attempt.status = 'running'
+    AND attempt.attempt = (
+      SELECT max(latest.attempt)
+      FROM creative_image_operation_attempt latest
+      WHERE latest.operation_id = operation.id
+    )
+    AND operation.status IN ('queued', 'running')
+    AND operation.output_attachment_id IS NULL
+    AND operation.output_asset_id IS NULL
+  RETURNING attempt.operation_id
+)
+UPDATE creative_image_operation operation
+SET status = 'unknown', completed_at = NULL, updated_at = now()
+WHERE operation.id IN (SELECT operation_id FROM unsettled_attempt)
+  AND operation.status IN ('queued', 'running')
+`, task.ID); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
 }
 
 func (s *TaskService) CaptureTaskUsage(ctx context.Context, task db.AgentTaskQueue, provider, model string, inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens int64) {
@@ -597,14 +651,34 @@ type DirectTaskFanout struct {
 }
 
 func (s *TaskService) EnqueueDirectTaskFanout(ctx context.Context, fanout DirectTaskFanout) ([]db.AgentTaskQueue, error) {
+	tx, err := s.TxStarter.Begin(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("begin task fanout transaction: %w", err)
+	}
+	defer tx.Rollback(ctx)
+	tasks, created, err := s.EnqueueDirectTaskFanoutTx(ctx, tx, fanout)
+	if err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("commit task fanout transaction: %w", err)
+	}
+	s.NotifyDirectTaskFanoutEnqueued(ctx, created)
+	return tasks, nil
+}
+
+// EnqueueDirectTaskFanoutTx creates fanout rows inside a caller-owned
+// transaction. The caller must notify the returned created rows only after a
+// successful outer commit.
+func (s *TaskService) EnqueueDirectTaskFanoutTx(ctx context.Context, tx pgx.Tx, fanout DirectTaskFanout) ([]db.AgentTaskQueue, []db.AgentTaskQueue, error) {
 	if fanout.Agent.ArchivedAt.Valid {
-		return nil, fmt.Errorf("agent is archived")
+		return nil, nil, fmt.Errorf("agent is archived")
 	}
 	if strings.TrimSpace(fanout.TriggerEvidenceKind) == "" || !fanout.TriggerEvidenceRefID.Valid {
-		return nil, fmt.Errorf("trigger evidence kind and ref id are required")
+		return nil, nil, fmt.Errorf("trigger evidence kind and ref id are required")
 	}
 	if len(fanout.Items) == 0 || len(fanout.Items) > 100 {
-		return nil, fmt.Errorf("fanout must contain between 1 and 100 items")
+		return nil, nil, fmt.Errorf("fanout must contain between 1 and 100 items")
 	}
 	overlay := s.buildRuntimeMCPOverlay(ctx, fanout.Attribution.UserID, fanout.Agent)
 
@@ -613,24 +687,19 @@ func (s *TaskService) EnqueueDirectTaskFanout(ctx context.Context, fanout Direct
 	for i, item := range fanout.Items {
 		key := strings.TrimSpace(item.ItemKey)
 		if key == "" || len(key) > 256 {
-			return nil, fmt.Errorf("fanout item key must contain between 1 and 256 characters")
+			return nil, nil, fmt.Errorf("fanout item key must contain between 1 and 256 characters")
 		}
 		if _, exists := seen[key]; exists {
-			return nil, fmt.Errorf("fanout has duplicate item key %q", key)
+			return nil, nil, fmt.Errorf("fanout has duplicate item key %q", key)
 		}
 		context, err := normalizeDirectTaskContext(item.Context, key)
 		if err != nil {
-			return nil, fmt.Errorf("fanout item %q: %w", key, err)
+			return nil, nil, fmt.Errorf("fanout item %q: %w", key, err)
 		}
 		contexts[i] = context
 		seen[key] = struct{}{}
 	}
 
-	tx, err := s.TxStarter.Begin(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("begin task fanout transaction: %w", err)
-	}
-	defer tx.Rollback(ctx)
 	qtx := s.Queries.WithTx(tx)
 	tasks := make([]db.AgentTaskQueue, 0, len(fanout.Items))
 	created := make([]db.AgentTaskQueue, 0, len(fanout.Items))
@@ -640,7 +709,7 @@ func (s *TaskService) EnqueueDirectTaskFanout(ctx context.Context, fanout Direct
 		// resolved to the existing row without poisoning the whole fanout.
 		itemTx, beginErr := tx.Begin(ctx)
 		if beginErr != nil {
-			return nil, fmt.Errorf("begin direct task %q savepoint: %w", item.ItemKey, beginErr)
+			return nil, nil, fmt.Errorf("begin direct task %q savepoint: %w", item.ItemKey, beginErr)
 		}
 		itemQueries := s.Queries.WithTx(itemTx)
 		task, err := itemQueries.CreateAgentTask(ctx, db.CreateAgentTaskParams{
@@ -661,11 +730,11 @@ func (s *TaskService) EnqueueDirectTaskFanout(ctx context.Context, fanout Direct
 		})
 		if err != nil && isUniqueTaskFanoutViolation(err) {
 			if rollbackErr := itemTx.Rollback(ctx); rollbackErr != nil {
-				return nil, fmt.Errorf("rollback duplicate direct task %q savepoint: %w", item.ItemKey, rollbackErr)
+				return nil, nil, fmt.Errorf("rollback duplicate direct task %q savepoint: %w", item.ItemKey, rollbackErr)
 			}
 			existing, listErr := qtx.ListAgentTasks(ctx, fanout.Agent.ID)
 			if listErr != nil {
-				return nil, fmt.Errorf("find duplicate direct task %q: %w", item.ItemKey, listErr)
+				return nil, nil, fmt.Errorf("find duplicate direct task %q: %w", item.ItemKey, listErr)
 			}
 			for _, candidate := range existing {
 				if directTaskMatches(candidate, fanout.TriggerEvidenceKind, fanout.TriggerEvidenceRefID, "active") && directTaskItemKey(candidate) == strings.TrimSpace(item.ItemKey) {
@@ -676,25 +745,27 @@ func (s *TaskService) EnqueueDirectTaskFanout(ctx context.Context, fanout Direct
 			}
 		} else if err == nil {
 			if commitErr := itemTx.Commit(ctx); commitErr != nil {
-				return nil, fmt.Errorf("commit direct task %q savepoint: %w", item.ItemKey, commitErr)
+				return nil, nil, fmt.Errorf("commit direct task %q savepoint: %w", item.ItemKey, commitErr)
 			}
 			created = append(created, task)
 		} else {
 			_ = itemTx.Rollback(ctx)
 		}
 		if err != nil {
-			return nil, fmt.Errorf("enqueue direct task %q: %w", item.ItemKey, err)
+			return nil, nil, fmt.Errorf("enqueue direct task %q: %w", item.ItemKey, err)
 		}
 		tasks = append(tasks, task)
 	}
-	if err := tx.Commit(ctx); err != nil {
-		return nil, fmt.Errorf("commit task fanout transaction: %w", err)
-	}
+	return tasks, created, nil
+}
+
+// NotifyDirectTaskFanoutEnqueued publishes rows created by
+// EnqueueDirectTaskFanoutTx after their caller-owned transaction commits.
+func (s *TaskService) NotifyDirectTaskFanoutEnqueued(ctx context.Context, created []db.AgentTaskQueue) {
 	for _, task := range created {
 		s.broadcastTaskEvent(ctx, protocol.EventTaskQueued, task)
 		s.NotifyTaskEnqueued(ctx, task)
 	}
-	return tasks, nil
 }
 
 func normalizeDirectTaskContext(raw json.RawMessage, itemKey string) ([]byte, error) {
@@ -743,14 +814,41 @@ func (s *TaskService) CancelDirectTasksByEvidence(ctx context.Context, agentID p
 }
 
 func (s *TaskService) RetryFailedDirectTasksByEvidence(ctx context.Context, agentID pgtype.UUID, evidenceKind string, evidenceRefID pgtype.UUID) ([]db.AgentTaskQueue, error) {
-	tasks, err := s.ListDirectTasksByEvidence(ctx, agentID, evidenceKind, evidenceRefID, "")
+	tx, err := s.TxStarter.Begin(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("begin direct task retry: %w", err)
+	}
+	defer tx.Rollback(ctx)
+	retried, err := s.RetryFailedDirectTasksByEvidenceTx(ctx, tx, agentID, evidenceKind, evidenceRefID)
 	if err != nil {
 		return nil, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("commit direct task retry: %w", err)
+	}
+	s.NotifyDirectTaskFanoutEnqueued(ctx, retried)
+	return retried, nil
+}
+
+// RetryFailedDirectTasksByEvidenceTx clones retryable failures in a
+// caller-owned transaction. The caller publishes the returned children after
+// commit.
+func (s *TaskService) RetryFailedDirectTasksByEvidenceTx(ctx context.Context, tx pgx.Tx, agentID pgtype.UUID, evidenceKind string, evidenceRefID pgtype.UUID) ([]db.AgentTaskQueue, error) {
+	qtx := s.Queries.WithTx(tx)
+	allTasks, err := qtx.ListAgentTasks(ctx, agentID)
+	if err != nil {
+		return nil, err
+	}
+	tasks := make([]db.AgentTaskQueue, 0, len(allTasks))
+	for _, task := range allTasks {
+		if directTaskMatches(task, evidenceKind, evidenceRefID, "") {
+			tasks = append(tasks, task)
+		}
 	}
 	failed := latestRetryableFailedDirectTasks(tasks)
 	retried := make([]db.AgentTaskQueue, 0, len(failed))
 	for _, task := range failed {
-		child, err := s.Queries.CreateRetryTask(ctx, task.ID)
+		child, err := qtx.CreateRetryTask(ctx, task.ID)
 		if isUniqueTaskFanoutViolation(err) || errors.Is(err, pgx.ErrNoRows) {
 			continue
 		}
@@ -758,8 +856,6 @@ func (s *TaskService) RetryFailedDirectTasksByEvidence(ctx context.Context, agen
 			return nil, fmt.Errorf("retry direct task %s: %w", util.UUIDToString(task.ID), err)
 		}
 		retried = append(retried, child)
-		s.broadcastTaskEvent(ctx, protocol.EventTaskQueued, child)
-		s.NotifyTaskEnqueued(ctx, child)
 	}
 	return retried, nil
 }
@@ -2245,6 +2341,12 @@ func (s *TaskService) HandleFailedTasks(ctx context.Context, tasks []db.AgentTas
 				retriedIssues[util.UUIDToString(t.IssueID)] = true
 			}
 		}
+		if s.TaskFailedHook != nil {
+			if err := s.TaskFailedHook(ctx, t); err != nil {
+				slog.Warn("handle failed tasks: creative lifecycle reconciliation failed",
+					"task_id", util.UUIDToString(t.ID), "error", err)
+			}
+		}
 
 		failureReason := "agent_error"
 		if t.FailureReason.Valid && t.FailureReason.String != "" {
@@ -2430,14 +2532,15 @@ func creativeTaskSkillCapabilities(taskContext []byte) map[string]struct{} {
 	}
 
 	capabilities := map[string][]string{
-		"creative_reference_analysis": {"reference_analysis"},
-		"creative_pre_adaptation":     {"pre_adaptation"},
-		"creative_plan":               {"generation_plan"},
-		"creative_production":         {"image_edit", "prime_compose"},
-		"creative_direct_edit":        {"direct_image_edit", "prime_compose"},
-		"creative_qc_technical":       {"quality_control"},
-		"creative_qc_visual":          {"quality_control"},
-		"creative_crawl_diagnosis":    {"crawl_diagnosis"},
+		"creative_reference_analysis":  {"reference_analysis"},
+		"creative_pre_adaptation":      {"pre_adaptation"},
+		"creative_plan":                {"generation_plan"},
+		"creative_production":          {"image_edit", "prime_compose"},
+		"creative_direct_edit":         {"direct_image_edit", "prime_compose"},
+		"creative_candidate_selection": {"quality_control"},
+		"creative_qc_technical":        {"quality_control"},
+		"creative_qc_visual":           {"quality_control"},
+		"creative_crawl_diagnosis":     {"crawl_diagnosis"},
 	}
 	roles, ok := capabilities[context.Workflow]
 	if !ok {

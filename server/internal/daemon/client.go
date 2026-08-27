@@ -7,7 +7,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"mime/multipart"
 	"net/http"
+	"net/url"
 	"runtime"
 	"strings"
 	"time"
@@ -233,6 +235,78 @@ func (c *Client) ReportTaskUsage(ctx context.Context, taskID string, usage []Tas
 	return c.postJSON(ctx, fmt.Sprintf("/api/daemon/tasks/%s/usage", taskID), map[string]any{
 		"usage": usage,
 	}, nil)
+}
+
+// ReportCreativeImageLateSuccess uploads an atomic image-edit result through
+// the daemon credential. It remains valid after the task-scoped agent token is
+// revoked, while the server still binds every coordinate to the original
+// workspace, runtime, task, operation, attempt, provider request, and prompt.
+func (c *Client) ReportCreativeImageLateSuccess(
+	ctx context.Context,
+	runtimeID, taskID, operationID string,
+	attempt int,
+	receipt, image []byte,
+	filename string,
+) error {
+	path := fmt.Sprintf(
+		"/api/daemon/runtimes/%s/tasks/%s/creative-image-operations/%s/attempts/%d/late-success",
+		url.PathEscape(runtimeID), url.PathEscape(taskID), url.PathEscape(operationID), attempt,
+	)
+	var lastErr error
+	for retry := 0; ; retry++ {
+		if err := ctx.Err(); err != nil {
+			if lastErr != nil {
+				return lastErr
+			}
+			return err
+		}
+		err := c.postCreativeImageLateSuccess(ctx, path, receipt, image, filename)
+		if err == nil || !isTransientError(err) || retry >= len(defaultTerminalRetrySchedule) {
+			return err
+		}
+		lastErr = err
+		if err := retrySleep(ctx, defaultTerminalRetrySchedule[retry]); err != nil {
+			return lastErr
+		}
+	}
+}
+
+func (c *Client) postCreativeImageLateSuccess(ctx context.Context, path string, receipt, image []byte, filename string) error {
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	if err := writer.WriteField("receipt", string(receipt)); err != nil {
+		return err
+	}
+	part, err := writer.CreateFormFile("file", filename)
+	if err != nil {
+		return err
+	}
+	if _, err := part.Write(image); err != nil {
+		return err
+	}
+	if err := writer.Close(); err != nil {
+		return err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+path, &body)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	if c.token != "" {
+		req.Header.Set("Authorization", "Bearer "+c.token)
+	}
+	c.setIdentityHeaders(req)
+	resp, err := c.client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		data, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		return &requestError{Method: http.MethodPost, Path: path, StatusCode: resp.StatusCode, Body: strings.TrimSpace(string(data))}
+	}
+	_, _ = io.Copy(io.Discard, resp.Body)
+	return nil
 }
 
 func (c *Client) FailTask(ctx context.Context, taskID, errMsg, sessionID, workDir, failureReason string) error {
