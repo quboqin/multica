@@ -194,19 +194,6 @@ RETURNING id::text
 		t.Fatalf("seed direct-edit skill: %v", err)
 	}
 
-	var staleRuntimeID string
-	if err := testPool.QueryRow(ctx, `
-INSERT INTO agent_runtime (
-  workspace_id, daemon_id, name, runtime_mode, provider, status, device_info, metadata, owner_id
-) VALUES (
-  $1, 'creative-factory-stale-runtime', 'Stale creative factory runtime', 'local',
-  'handler_test_runtime', 'offline', 'stale runtime', '{}'::jsonb, $2
-)
-RETURNING id::text
-`, testWorkspaceID, testUserID).Scan(&staleRuntimeID); err != nil {
-		t.Fatalf("seed stale creative-factory runtime: %v", err)
-	}
-
 	var imageAgentID string
 	if err := testPool.QueryRow(ctx, `
 INSERT INTO agent (
@@ -219,7 +206,7 @@ INSERT INTO agent (
   'stale image instructions', '{}'::jsonb, '[]'::jsonb, 'old-model', 'low'
 )
 RETURNING id::text
-	`, testWorkspaceID, staleRuntimeID, testUserID).Scan(&imageAgentID); err != nil {
+`, testWorkspaceID, testRuntimeID, testUserID).Scan(&imageAgentID); err != nil {
 		t.Fatalf("seed image-edit agent: %v", err)
 	}
 
@@ -235,7 +222,7 @@ INSERT INTO creative_factory_installation (
   workspace_id, status, schema_version, template_version, runtime_id,
   role_agents, role_skills, config, initialized_by, initialized_at
 ) VALUES ($1, 'needs_setup', 1, 5, $2, $3::jsonb, $4::jsonb, '{"template_version":5}'::jsonb, $5, now())
-	`, testWorkspaceID, staleRuntimeID, string(roleAgents), string(roleSkills), testUserID); err != nil {
+`, testWorkspaceID, testRuntimeID, string(roleAgents), string(roleSkills), testUserID); err != nil {
 		t.Fatalf("seed ready factory installation: %v", err)
 	}
 
@@ -265,16 +252,13 @@ WHERE id = $1::uuid
 		t.Fatalf("direct-edit template_version = %d, want %d", got, creativeFactoryTemplateVersion)
 	}
 
-	var instructions, runtimeID, runtimeMode string
+	var instructions string
 	if err := testPool.QueryRow(ctx, `
-SELECT instructions, runtime_id::text, runtime_mode
+SELECT instructions
 FROM agent
 WHERE id = $1::uuid
-`, imageAgentID).Scan(&instructions, &runtimeID, &runtimeMode); err != nil {
+`, imageAgentID).Scan(&instructions); err != nil {
 		t.Fatalf("query refreshed image-edit agent: %v", err)
-	}
-	if runtimeID != testRuntimeID || runtimeMode != "cloud" {
-		t.Fatalf("image-edit agent runtime = (%q, %q), want current online runtime (%q, cloud)", runtimeID, runtimeMode, testRuntimeID)
 	}
 	for _, required := range []string{"Input 2 只用于读取红框编号", "intent-plan.json", "final_visual_validation", "scope=variant 时按 edit_sizes/expected_sizes 遍历", "人物替换必须是肉眼可见的 replacement", "Rp100Juta", "creative_direct_edit", "比例偏差 <=10%"} {
 		if !strings.Contains(instructions, required) {
@@ -296,20 +280,16 @@ SELECT EXISTS (
 	}
 
 	var templateVersion int
-	var installationRuntimeID string
 	var storedRoleAgentsRaw, storedRoleSkillsRaw string
 	if err := testPool.QueryRow(ctx, `
-SELECT template_version, runtime_id::text, role_agents::text, role_skills::text
+SELECT template_version, role_agents::text, role_skills::text
 FROM creative_factory_installation
 WHERE workspace_id = $1::uuid
-`, testWorkspaceID).Scan(&templateVersion, &installationRuntimeID, &storedRoleAgentsRaw, &storedRoleSkillsRaw); err != nil {
+`, testWorkspaceID).Scan(&templateVersion, &storedRoleAgentsRaw, &storedRoleSkillsRaw); err != nil {
 		t.Fatalf("query refreshed installation: %v", err)
 	}
 	if templateVersion != creativeFactoryTemplateVersion {
 		t.Fatalf("installation template_version = %d, want %d", templateVersion, creativeFactoryTemplateVersion)
-	}
-	if installationRuntimeID != testRuntimeID {
-		t.Fatalf("installation runtime = %q, want current online runtime %q", installationRuntimeID, testRuntimeID)
 	}
 	if !strings.Contains(storedRoleAgentsRaw, "collection") || !strings.Contains(storedRoleSkillsRaw, "creative_leadership") {
 		t.Fatalf("installation role maps were not reconciled: agents=%s skills=%s", storedRoleAgentsRaw, storedRoleSkillsRaw)

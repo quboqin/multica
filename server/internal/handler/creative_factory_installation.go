@@ -487,17 +487,16 @@ FOR UPDATE
 		if _, updateErr := tx.Exec(ctx, `
 UPDATE creative_factory_installation
 SET template_version = $2,
-    runtime_id = $3,
-    orchestration_skill_id = $4,
-    role_agents = $5::jsonb,
-    role_skills = $6::jsonb,
-    config = $7::jsonb,
-    market_pack_id = $8,
-    copy_library_id = $9,
-    status = $10,
+    orchestration_skill_id = $3,
+    role_agents = $4::jsonb,
+    role_skills = $5::jsonb,
+    config = $6::jsonb,
+    market_pack_id = $7,
+    copy_library_id = $8,
+    status = $9,
     updated_at = now()
 WHERE workspace_id = $1
-`, workspaceID, creativeFactoryTemplateVersion, existing.RuntimeID, existing.OrchestrationSkillID, string(roleAgentsJSON), string(roleSkillsJSON), string(configJSON), existing.MarketPackID, existing.CopyLibraryID, existing.Status); updateErr != nil {
+`, workspaceID, creativeFactoryTemplateVersion, existing.OrchestrationSkillID, string(roleAgentsJSON), string(roleSkillsJSON), string(configJSON), existing.MarketPackID, existing.CopyLibraryID, existing.Status); updateErr != nil {
 			return creativeFactoryInstallationRecord{}, updateErr
 		}
 		if commitErr := tx.Commit(ctx); commitErr != nil {
@@ -754,7 +753,6 @@ func (h *Handler) syncCreativeFactoryManagedAssets(ctx context.Context, tx pgx.T
 	if err != nil {
 		return err
 	}
-	installation.RuntimeID = runtimeID
 	roleAgents := make(map[string]string, len(creativeFactoryAgentSpecs)+1)
 	agentIDs := make(map[string]pgtype.UUID, len(creativeFactoryAgentSpecs)+1)
 	for _, baseSpec := range creativeFactoryAgentSpecs {
@@ -785,7 +783,7 @@ func (h *Handler) syncCreativeFactoryManagedAssets(ctx context.Context, tx pgx.T
 				return err
 			}
 		}
-		agent, err = syncCreativeFactoryAgentTemplate(ctx, tx, qtx, workspaceID, agent, spec, runtimeID, runtimeMode)
+		agent, err = syncCreativeFactoryAgentTemplate(ctx, tx, qtx, workspaceID, agent, spec)
 		if err != nil {
 			return err
 		}
@@ -890,7 +888,7 @@ WHERE id = $1 AND workspace_id = $2
 	return qtx.GetSkillInWorkspace(ctx, db.GetSkillInWorkspaceParams{ID: skill.ID, WorkspaceID: workspaceID})
 }
 
-func syncCreativeFactoryAgentTemplate(ctx context.Context, tx pgx.Tx, qtx *db.Queries, workspaceID pgtype.UUID, agent db.Agent, spec creativeFactoryAgentSpec, runtimeID pgtype.UUID, runtimeMode string) (db.Agent, error) {
+func syncCreativeFactoryAgentTemplate(ctx context.Context, tx pgx.Tx, qtx *db.Queries, workspaceID pgtype.UUID, agent db.Agent, spec creativeFactoryAgentSpec) (db.Agent, error) {
 	var model any
 	if strings.TrimSpace(spec.Model) != "" {
 		model = spec.Model
@@ -906,11 +904,9 @@ SET description = $3,
     max_concurrent_tasks = $5,
     model = $6,
     thinking_level = $7,
-    runtime_id = $8,
-    runtime_mode = $9,
     updated_at = now()
 WHERE id = $1 AND workspace_id = $2 AND archived_at IS NULL
-`, agent.ID, workspaceID, spec.Description, spec.Instructions, spec.MaxConcurrent, model, thinkingLevel, runtimeID, runtimeMode); err != nil {
+`, agent.ID, workspaceID, spec.Description, spec.Instructions, spec.MaxConcurrent, model, thinkingLevel); err != nil {
 		return db.Agent{}, err
 	}
 	return qtx.GetAgentInWorkspace(ctx, db.GetAgentInWorkspaceParams{ID: agent.ID, WorkspaceID: workspaceID})
