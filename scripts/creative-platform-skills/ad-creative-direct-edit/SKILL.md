@@ -84,10 +84,11 @@ multica image edit \
 `--size` 使用平台允许的 provider 画布，最终文件必须归一化为当前处理尺寸；`scope=size` 当前处理尺寸就是 `target_size`。
 保留 CLI 返回的完整 JSON 为
 `image-edit-result.json`；其中的 `prompt` 和 `prompt_sha256` 是唯一真值，不能从展示用的 `prompt.txt`、用户原话或重新拼接的
-字符串恢复 hash。若需要 `prompt.txt`，只用于人读并确保末尾换行不进入提交内容。同时保留 model、request ID、实际宽高和本次
-attempt。每个尺寸最多执行一次有明确原因的编辑重试；传输重试不计入编辑次数。
+字符串恢复 hash。首次登记时**不得填写** `prompt_sha256`：CLI 可能规范化提示词文件末尾换行，只有原子回执可提供可验的 hash。
+完成同一 operation 后，才从该回执读取 `prompt_sha256`、`request_id`、`provider_attempts`、实际宽高和本次 attempt 写回；每个尺寸最多执行一次有明确原因的编辑重试，传输重试不计入编辑次数。
 
 调用前先用 `multica creative order image-operation-put <order-id> --input-file <operation.json> --output json` 登记尺寸级持久化调用。
+首次 `operation.json` 的必填字段是 `variant_id`、`size_key`、`revision`、`operation_kind`、`idempotency_key`、`status: "running"`、`model`、`input_snapshot` 和 `attempt: 1`；`input_snapshot` 必须是对象，至少写输入资产指纹、输入角色与 target size。首次 JSON 不得带 `prompt_sha256`、request ID、结果回执或输出附件。完成写回时使用同一组坐标，并带入原子 `image-edit-result.json` 的唯一真值。
 一般精准修图使用 `operation_kind=direct_edit`，QC 返工使用 `visual_rework`，画布修复使用 `canvas_repair`；稳定幂等键为
 `<variant-id>:r<revision>:<size>:<operation-kind>:v1`。只有 `status=running` 的登记返回 `disposition=invoke` 才可发起模型调用；
 返回 `reconcile` 时检查同一个原子 `result-file`、订单中的 operation 和迟到回执，禁止重发；返回 `reuse` 时直接复用已完成回图。
@@ -104,7 +105,7 @@ task context 含 `late_receipt_recovery` 时，原精准修图已经成功，dae
 模型原图只能作为过程图，不能直接写入 canonical generated asset。采用前必须把回图归一化到当前处理尺寸：
 
 ```bash
-python <当前 Skill 目录>/../ad-creative-production/references/normalize_image.py \
+python3 <当前 Skill 目录>/../ad-creative-production/references/normalize_image.py \
   --input <model-output.png> --output <accepted-base.png> --width <w> --height <h> \
   --model-size <provider-width>x<provider-height> --max-aspect-deviation 0.10 --evidence <normalization.json>
 ```

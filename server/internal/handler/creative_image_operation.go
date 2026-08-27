@@ -659,8 +659,17 @@ FOR UPDATE
 				return
 			}
 		}
+		if existingPromptSHA256 == "" && input.PromptSHA256 != "" {
+			var receipt struct {
+				PromptSHA256 string `json:"prompt_sha256"`
+			}
+			if input.Status != "completed" || json.Unmarshal(input.ResultReceipt, &receipt) != nil || receipt.PromptSHA256 != input.PromptSHA256 {
+				writeError(w, http.StatusConflict, "creative image operation prompt hash must come from a completed result receipt")
+				return
+			}
+		}
 		if (input.Model != "" && input.Model != existingModel) ||
-			(input.PromptSHA256 != "" && input.PromptSHA256 != existingPromptSHA256) ||
+			(existingPromptSHA256 != "" && input.PromptSHA256 != "" && input.PromptSHA256 != existingPromptSHA256) ||
 			inputSnapshotChanged {
 			writeError(w, http.StatusConflict, "creative image operation model, prompt, and input snapshot are immutable")
 			return
@@ -791,8 +800,8 @@ WHERE operation_id = $1 AND attempt = $2
 			writeError(w, http.StatusConflict, "new creative image operation must start queued or running")
 			return
 		}
-		if input.Model == "" || input.PromptSHA256 == "" || string(input.InputSnapshot) == "{}" {
-			writeError(w, http.StatusBadRequest, "new creative image operation requires model, prompt_sha256, and input_snapshot")
+		if input.Model == "" || string(input.InputSnapshot) == "{}" {
+			writeError(w, http.StatusBadRequest, "new creative image operation requires model and input_snapshot")
 			return
 		}
 		switch input.Status {

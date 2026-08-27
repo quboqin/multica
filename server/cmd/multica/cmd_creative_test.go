@@ -564,12 +564,20 @@ func TestRequestGPTImageEditWithRetryRecoversFromRateLimit(t *testing.T) {
 	}))
 	defer server.Close()
 
-	image, requestID, usedAttempts, err := requestGPTImageEditWithRetry(
+	image, requestID, usedAttempts, timing, err := requestGPTImageEditWithRetryUsingSlotsTimed(
 		context.Background(), server.Client(), server.URL, "test-key", "gpt-image-2", "image",
-		[]string{input}, "", "change the layout", "1088x1088", "medium", 3,
+		[]string{input}, "", "change the layout", "1088x1088", "medium", 3, nil,
 	)
 	if err != nil || string(image) != "png-bytes" || requestID != "req_recovered" || usedAttempts != 3 {
-		t.Fatalf("requestGPTImageEditWithRetry() = %q, %q, %d, %v", image, requestID, usedAttempts, err)
+		t.Fatalf("requestGPTImageEditWithRetryUsingSlotsTimed() = %q, %q, %d, %v", image, requestID, usedAttempts, err)
+	}
+	if len(timing.ProviderAttempts) != 3 ||
+		timing.ProviderAttempts[0].HTTPStatus != http.StatusTooManyRequests ||
+		timing.ProviderAttempts[0].RequestID != "req_rate_limited" ||
+		timing.ProviderAttempts[0].ErrorType != "http_429" ||
+		timing.ProviderAttempts[2].Status != "completed" ||
+		timing.ProviderAttempts[2].RequestID != "req_recovered" {
+		t.Fatalf("provider attempts = %#v", timing.ProviderAttempts)
 	}
 }
 

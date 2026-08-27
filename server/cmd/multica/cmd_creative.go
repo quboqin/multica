@@ -488,6 +488,7 @@ func runImageEdit(cmd *cobra.Command, _ []string) error {
 		"actual_width": dimensions.Width, "actual_height": dimensions.Height, "actual_aspect_ratio": dimensions.AspectRatio,
 		"provider_slot_limit": providerSlotLimit, "prompt": prompt, "prompt_sha256": imagePromptSHA256(prompt), "output_sha256": fmt.Sprintf("%x", outputDigest),
 		"queue_wait_seconds": timing.QueueWait.Seconds(), "provider_elapsed_seconds": timing.ProviderElapsed.Seconds(), "timeout_stage": timing.TimeoutStage,
+		"provider_attempts": timing.ProviderAttempts,
 		"generated_asset": map[string]any{
 			"completed": true, "path": abs, "size": size, "width": dimensions.Width,
 			"height": dimensions.Height, "aspect_fallback": aspectFallback,
@@ -586,9 +587,45 @@ func requestGPTImageEditWithRetryAndSlots(ctx context.Context, client *http.Clie
 type imageSlotAcquirer func(context.Context, string, string) (func() error, error)
 
 type imageEditTiming struct {
-	QueueWait       time.Duration
-	ProviderElapsed time.Duration
-	TimeoutStage    string
+	QueueWait        time.Duration
+	ProviderElapsed  time.Duration
+	TimeoutStage     string
+	ProviderAttempts []imageEditProviderAttempt
+}
+
+// imageEditProviderAttempt records every HTTP/transport attempt inside one
+// logical image operation. The final request ID alone cannot prove whether an
+// earlier attempt hit a rate limit, timed out, or failed at transport level.
+type imageEditProviderAttempt struct {
+	Attempt      int    `json:"attempt"`
+	Status       string `json:"status"`
+	RequestID    string `json:"request_id,omitempty"`
+	HTTPStatus   int    `json:"http_status,omitempty"`
+	ErrorType    string `json:"error_type,omitempty"`
+	ErrorMessage string `json:"error_message,omitempty"`
+}
+
+func imageEditProviderAttemptFromResult(attempt int, requestID string, err error) imageEditProviderAttempt {
+	result := imageEditProviderAttempt{Attempt: attempt, RequestID: requestID}
+	if err == nil {
+		result.Status = "completed"
+		return result
+	}
+	result.Status = "failed"
+	result.ErrorMessage = err.Error()
+	var httpErr *imageEditHTTPError
+	if errors.As(err, &httpErr) {
+		result.HTTPStatus = httpErr.StatusCode
+		result.ErrorType = fmt.Sprintf("http_%d", httpErr.StatusCode)
+		return result
+	}
+	var transportErr *imageEditTransportError
+	if errors.As(err, &transportErr) {
+		result.ErrorType = "transport"
+		return result
+	}
+	result.ErrorType = "provider_response"
+	return result
 }
 
 func requestGPTImageEditWithRetryUsingSlots(ctx context.Context, client *http.Client, endpoint, apiKey, model, imageField string, inputs []string, mask, prompt, size, quality string, maxAttempts int, acquire imageSlotAcquirer) ([]byte, string, int, error) {
@@ -620,6 +657,7 @@ func requestGPTImageEditWithRetryUsingSlotsTimed(ctx context.Context, client *ht
 		providerStartedAt := time.Now()
 		image, requestID, err := requestGPTImageEdit(providerCtx, client, endpoint, apiKey, model, imageField, inputs, mask, prompt, size, quality)
 		timing.ProviderElapsed += time.Since(providerStartedAt)
+		timing.ProviderAttempts = append(timing.ProviderAttempts, imageEditProviderAttemptFromResult(len(timing.ProviderAttempts)+1, requestID, err))
 		if errors.Is(providerCtx.Err(), context.DeadlineExceeded) {
 			timing.TimeoutStage = "provider"
 		}
@@ -775,6 +813,10 @@ func requestGPTImageEditWithValidAspect(
 		totalAttempts += attempts
 		totalTiming.QueueWait += timing.QueueWait
 		totalTiming.ProviderElapsed += timing.ProviderElapsed
+		for _, providerAttempt := range timing.ProviderAttempts {
+			providerAttempt.Attempt += len(totalTiming.ProviderAttempts)
+			totalTiming.ProviderAttempts = append(totalTiming.ProviderAttempts, providerAttempt)
+		}
 		if timing.TimeoutStage != "" {
 			totalTiming.TimeoutStage = timing.TimeoutStage
 		}

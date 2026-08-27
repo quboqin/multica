@@ -948,6 +948,30 @@ RETURNING id::text
 	if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "input_snapshot") {
 		t.Fatalf("operation without frozen input contract = %d %s", w.Code, w.Body.String())
 	}
+	deferredPrompt := base
+	deferredPrompt.SizeKey = "800x1000"
+	deferredPrompt.IdempotencyKey = "deferred-prompt:" + variant.ID
+	deferredPrompt.PromptSHA256 = ""
+	w, deferredOperation := putOperation(deferredPrompt)
+	if w.Code != http.StatusOK || deferredOperation.Disposition != "invoke" || deferredOperation.PromptSHA256 != "" {
+		t.Fatalf("start operation before prompt receipt = %d %#v %s", w.Code, deferredOperation, w.Body.String())
+	}
+	unverifiedPrompt := deferredPrompt
+	unverifiedPrompt.PromptSHA256 = creativePromptSHA256("unverified prompt")
+	w, _ = putOperation(unverifiedPrompt)
+	if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), "completed result receipt") {
+		t.Fatalf("operation accepted prompt before result receipt = %d %s", w.Code, w.Body.String())
+	}
+	deferredPrompt.Status = "completed"
+	deferredPrompt.PromptSHA256 = creativePromptSHA256("prompt from atomic image receipt")
+	deferredPrompt.ProviderRequestID = "provider-deferred-prompt"
+	deferredPrompt.ProviderStatus = "completed"
+	deferredPrompt.ResultReceipt = json.RawMessage(`{"request_id":"provider-deferred-prompt","prompt_sha256":"` + deferredPrompt.PromptSHA256 + `"}`)
+	deferredPrompt.OutputAttachmentID = rawAttachmentID
+	w, deferredOperation = putOperation(deferredPrompt)
+	if w.Code != http.StatusOK || deferredOperation.Status != "completed" || deferredOperation.PromptSHA256 != deferredPrompt.PromptSHA256 {
+		t.Fatalf("settle operation with atomic prompt receipt = %d %#v %s", w.Code, deferredOperation, w.Body.String())
+	}
 	w, operation := putOperation(base)
 	if w.Code != http.StatusOK || operation.ID == "" || operation.Disposition != "invoke" || len(operation.Attempts) != 1 {
 		t.Fatalf("start image operation = %d %#v %s", w.Code, operation, w.Body.String())

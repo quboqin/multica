@@ -154,7 +154,7 @@ revision，并原子创建下一 writable staging revision；新 task 必须同�
 调用 `multica image edit` 或 `image edit-batch` 时使用显式长超时；传输层 408/429/5xx/网络失败最多重试两次。必须把 CLI 返回的完整 JSON 原样保存，不能手工只保留 request ID、hash 或 `generated_asset` 摘要；后续 `asset-put` 使用同一份原始 JSON。
 
 模型调用前必须先用 `multica creative order image-operation-put <order-id> --input-file <operation.json> --output json`
-登记当前 Variant、revision、size、operation kind、稳定幂等键、attempt、model、prompt hash 和输入资产指纹。标准生产使用
+登记当前 Variant、revision、size、operation kind、稳定幂等键、attempt、model 和输入资产指纹。首次登记不填写 `prompt_sha256`：只可在 Image Edit 的原子回执返回后，用其中的实际 `prompt_sha256` 完成同一 operation，避免提示词文件末尾换行等本地表示差异破坏谱系。标准生产使用
 `operation_kind=generation`，视觉返工和画布修复分别使用 `visual_rework`、`canvas_repair`；幂等键固定为
 `<variant-id>:r<revision>:<size>:<operation-kind>:v1`，同一逻辑调用重跑时不得换键。首次登记使用 `status=running`：只有返回
 `disposition=invoke` 才能调用模型；`reconcile` 表示已有 running/unknown 调用，必须等待或对账；`reuse` 表示已有 completed 回图，必须直接复用。
@@ -190,7 +190,7 @@ CLI 会把 daemon 注入的 task ID、operation 坐标、provider request ID、p
 模型调用画布必须遵守 GPT Image 2 的 16px 边长约束，交付尺寸与模型画布分开记录：`1080x1080` 使用 `1088x1088`，`1200x628` 使用 `1200x624`，`800x1000` 使用 `800x992`。当前 CLI 接受 canonical 交付尺寸并自动映射到上述 provider canvas；完整模型 JSON 必须同时保留请求尺寸和实际 provider canvas。模型输出必须经过规范化到 `1080x1080`、`1200x628`、`800x1000`。比例偏差 `<=10%` 直接接受并规范化；`10%-25%` 且已存在可下载的拒绝回图时，用该回图和同尺寸 Prime context 做一次 canvas repair retry，提示词只要求压回锁定画布并保留全部业务内容；`>25%` 视为真实画布跑偏，只重生当前失败尺寸并使用更强的 CANVAS LOCK 提示词。模型调用只能通过当前 CLI 的映射，不能自行把 canonical 交付尺寸改写成其他 provider 参数。
 
 ```text
-python <当前 Skill 目录>/references/normalize_image.py \
+python3 <当前 Skill 目录>/references/normalize_image.py \
   --input <model.png> --output <normalized.png> --width <w> --height <h> \
   --model-size <requested-model-size> --max-aspect-deviation 0.10 --evidence <normalization.json>
 ```
@@ -205,7 +205,7 @@ python <当前 Skill 目录>/references/normalize_image.py \
 就必须通过仓库内的登记助手上传并写回当前订单、Variant、revision 和 task：
 
 ```text
-python <当前 Skill 目录>/references/register_process_assets.py \
+python3 <当前 Skill 目录>/references/register_process_assets.py \
   --order-id <order-id> --variant-id <variant-id> --revision <revision> --task-id <task-id> \
   --cli multica \
   --image 1080x1080 "Prime context" <prime-context-1080x1080.png> \
