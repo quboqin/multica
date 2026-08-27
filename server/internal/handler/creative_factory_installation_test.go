@@ -132,8 +132,8 @@ func TestCreativeFactoryImageEditingUsesOneAgentWithWorkflowSkills(t *testing.T)
 			break
 		}
 	}
-	if directEditSkill.Version != 19 {
-		t.Fatalf("direct-edit Skill version = %d, want 19", directEditSkill.Version)
+	if directEditSkill.Version != 22 {
+		t.Fatalf("direct-edit Skill version = %d, want 22", directEditSkill.Version)
 	}
 	for index := range creativeFactoryAgentSpecs {
 		spec := &creativeFactoryAgentSpecs[index]
@@ -188,7 +188,7 @@ func TestCreativeFactoryCreativeContractTemplatesStayInSync(t *testing.T) {
 		"generation_plan":     39,
 		"image_edit":          99,
 		"prime_compose":       4,
-		"direct_image_edit":   19,
+		"direct_image_edit":   22,
 		"quality_control":     37,
 		"creative_leadership": 51,
 	}
@@ -219,7 +219,7 @@ func TestCreativeFactoryCreativeContractTemplatesStayInSync(t *testing.T) {
 		"ad-creative-plan":          {"4-5 个候选", "primary_size", "CreativeIntent", "DesignDNA", "LayoutPlan", "pipeline_version", "candidate_v1"},
 		"ad-creative-production":    {"candidate_primary", "selected", "model-prompt-contract.md", "不把方图 raster 当作不可替代输入", "pipeline_version", "candidate_v1"},
 		"ad-creative-prime-compose": {"each delivery size", "publishes no partial package", "fail closed"},
-		"ad-creative-direct-edit":   {"target_masks", "所有 target mask", "<当前 Skill 目录>/../ad-creative-production/references/normalize_image.py"},
+		"ad-creative-direct-edit":   {"target_masks", "Transform ONLY", "official Prime visual context", "<当前 Skill 目录>/../ad-creative-production/references/normalize_image.py"},
 		"ad-creative-qc":            {"creative_candidate_selection", "candidate-select", "selected_ids", "foreground_polarity", "cross_size_design_dna_mismatch"},
 		"ad-creative-leadership":    {"4-5 个候选", "原子晋级 3 个", "最终视觉 QC", "初始 direct-edit revision 和 task 由平台建单事务原子创建", "source_revision = revision - 1"},
 	}
@@ -263,7 +263,7 @@ func TestCreativeFactoryCreativeContractTemplatesStayInSync(t *testing.T) {
 		"capability = 'generation_plan'; version = 39",
 		"capability = 'image_edit'; version = 99",
 		"capability = 'prime_compose'; version = 4",
-		"capability = 'direct_image_edit'; version = 19",
+		"capability = 'direct_image_edit'; version = 22",
 		"capability = 'quality_control'; version = 37",
 		"capability = 'creative_leadership'; version = 51",
 		"初始 direct_edit 由平台原子创建 revision 和 task，Leader 只恢复领域状态确认缺失的当前 revision task",
@@ -431,15 +431,22 @@ WHERE id = $1::uuid
 `, directSkillID).Scan(&content, &configRaw); err != nil {
 		t.Fatalf("query refreshed direct-edit skill: %v", err)
 	}
-	if !strings.Contains(content, "用户在最终交付图上的标注 brief") {
-		t.Fatalf("direct-edit skill was not refreshed with final-image annotation contract")
+	for _, required := range []string{
+		"用户在最终交付图上的标注 brief",
+		"official Prime visual context",
+		"Transform ONLY",
+		"official_prime_visual_context_missing",
+	} {
+		if !strings.Contains(content, required) {
+			t.Fatalf("direct-edit skill was not refreshed with required contract %q", required)
+		}
 	}
 	var config map[string]any
 	if err := json.Unmarshal([]byte(configRaw), &config); err != nil {
 		t.Fatalf("decode refreshed skill config: %v", err)
 	}
-	if got := int(config["version"].(float64)); got != 19 {
-		t.Fatalf("direct-edit Skill version = %d, want 19", got)
+	if got := int(config["version"].(float64)); got != 22 {
+		t.Fatalf("direct-edit Skill version = %d, want 22", got)
 	}
 	if got := int(config["template_version"].(float64)); got != creativeFactoryTemplateVersion {
 		t.Fatalf("direct-edit template_version = %d, want %d", got, creativeFactoryTemplateVersion)

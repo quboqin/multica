@@ -35,12 +35,24 @@ allowed-tools: Bash(multica *), Bash(python *)
 Logo、二维码、商店徽章、官方条款、红色矩形、编号和评论位置；这些都用于理解用户在最终图上看到的问题，不是可复制广告内容。
 模型输入固定为：
 
-1. `Input 1`：当前处理尺寸的同尺寸无品牌 source base，唯一的画面、文字、版式和视觉风格真值。
-2. `Input 2`：最终交付图的 annotation brief，只用于读取用户红框、编号、评论位置和固定贴片遮挡关系；不得复制红框、编号、
+1. `Input 1`：当前处理尺寸的同尺寸无品牌 source base，唯一可编辑的画面、文字、版式和视觉风格真值。
+2. 有 annotation guide 时，`Input 2`：最终交付图的 annotation brief，只用于读取用户红框、编号、评论位置和固定贴片遮挡关系；不得复制红框、编号、
    引导线、Logo、二维码、商店徽章、官方条款或其他 Prime 组件到输出。
+3. `delivery_mode=publish` 时，额外传入当前尺寸的 `official Prime visual context`：它必须由冻结市场包中真实透明模板和
+   `prime_layout_contract` 渲染，半透明展示未来会覆盖的官方组件。没有 annotation guide 时它是 `Input 2`；有 annotation guide 时它是 `Input 3`。
+   它只用于理解实际遮挡关系、组件明暗和需保持安静的背景，绝不可复制其中的任何 Prime 像素或文字到输出。
 
-没有 annotation guide 时只传 Input 1。`direct_edit.validation_rework` 存在时，`reference_attachment_id` 是上一 revision 已贴片的失败成图：
-可作为 Input 2 读取 `failures` 中所述的真实遮挡关系，但仍绝不可编辑、复制或输出其中任何 Prime 像素。每个编号对应 `direct_edit.annotations` 中同序的 comment；多个红框必须逐一执行，不能合并、
+正式投放在写 `intent-plan.json` 前必须取得这一视觉上下文：从当前订单的冻结 `input_snapshot.market_pack` 读取当前尺寸模板和
+`prime_layout_contract`，下载匹配的官方透明模板，并使用同一 Skill 相对目录下的
+`../ad-creative-production/references/render_prime_guide.py` 生成 `render_style=official_prime_visual_context` 的 PNG。必须把这张 PNG
+作为同一次 `multica image edit` 的非可编辑输入；若模板、布局合同或视觉上下文任一项缺失，停止当前尺寸并写
+`error_code=official_prime_visual_context_missing`，不得改用虚线、抽象“安全区”文字或 Agent 目测。
+
+预览模式没有官方贴片真值。它可以完成用户明确可见的局部改图，但不得声称“重新贴片后不会遮挡”；用户要求避开二维码、Logo、条款或
+其他未提供的 Prime 组件时，必须要求切换为正式投放或提供最终图标注参考，不能靠猜测发起模型调用。
+
+`direct_edit.validation_rework` 存在时，`reference_attachment_id` 是上一 revision 已贴片的失败成图：
+可作为 annotation 输入读取 `failures` 中所述的真实遮挡关系，但仍绝不可编辑、复制或输出其中任何 Prime 像素。每个编号对应 `direct_edit.annotations` 中同序的 comment；多个红框必须逐一执行，不能合并、
 忽略或只按总描述猜测。评论文字出现而红框未覆盖的独立问题也必须成为单独编辑目标，例如同一条反馈同时要求避开顶部二维码和底部条款时，
 必须形成“标题组”和“表格组”两个目标，不能只处理红框所在的顶部。`reference_attachment_id` 只用于必要的人工对照，不得作为可编辑输入。若红框覆盖标题、贴片、Logo、
 二维码或底部条款，说明用户是在指出最终交付图中的遮挡/关系问题；仍只修改 Input 1 的无品牌底图，让后续固定贴片重新叠加后解决问题，
@@ -48,18 +60,17 @@ Logo、二维码、商店徽章、官方条款、红色矩形、编号和评论�
 
 先写入 `intent-plan.json`，至少包含：`raw_user_request`、有权限语义的 `input_roles`、`locked_set`、`editable_set`、
 `change_budget`、优先级、逐项 `edit_goals`、每项目标的证据（红框编号或评论文字）、`target_masks`、
-`allowed_reflow`、`must_preserve`、`prime_constraints` 和逐目标 `acceptance_checks`。每个红框、评论指向区域或视觉返工失败项必须有稳定
+`allowed_reflow`、`must_preserve`、`prime_constraints` 和逐目标 `acceptance_checks`。`editable_set` 只可包含用户点名的内容组和
+它们必要留白；`locked_set` 必须逐项列出冻结文案、金额、表格行列、人物/产品、场景、配色、光影、镜头、画风及所有未点名模块。每个红框、评论指向区域或视觉返工失败项必须有稳定
 `target_id`，并关联一个逻辑 target mask；没有像素 mask 时使用 annotation 编号和语义区域作为 mask identity，不能把多个目标折叠成一个总目标。
-再从该方案生成最终 prompt；不得把原话、默认禁令和
-坐标机械拼接。默认的“不要重排未标注区域”只在不妨碍用户目标时生效：若多个关联内容组必须联动移动才能避开固定 Prime，明确授权在
-`safe_content_frame` 内重排这些内容组和必要留白。保留的是业务事实、批准文案、人物主体与视觉风格，不是每个原始像素位置。若
+再从该方案生成最终 prompt；不得把原话、默认禁令和坐标机械拼接。提示词必须首先写明 `Transform ONLY` 的可编辑集合，随后写全
+冻结集合，再列出优先级：先保住全部业务事实与已通过内容，再完成点名编辑组，最后让结果自然融入原图。默认的“不要重排未标注区域”只在不妨碍用户目标时生效：若多个关联内容组必须联动移动才能避开固定 Prime，明确授权重排这些内容组和必要留白。保留的是业务事实、批准文案、人物主体与视觉风格，不是每个原始像素位置。若
 `direct_edit.validation_rework.failures` 存在，它们是贴片后验收的最高优先级事实：逐尺寸将每个失败项转为 edit goal 和 acceptance check，
 不得用底图目检或“看起来已移动”替代。
 
 最终 prompt 只包含会改变像素的编辑指令，不得包含 order/task/revision、文件路径、哈希、request ID、上传、登记、重试、超时、状态、JSON、
-CLI 或附件血缘。必须按以下优先级表达：只编辑 Input 1；Input 2/最终成图仅用于理解固定贴片关系；用户要达成的视觉结果；允许联动调整的
-内容组；必须保持的业务事实；Prime 不可生成/不可复制约束；贴片后的验收条件。不要把红框、编号、Prime 组件或官方条款画进无品牌底图。
-对于“上移 30px”这类几何要求，使用同尺寸画布和精确的移动方向，但不能只依赖抽象坐标判断完成。
+CLI 或附件血缘。必须按以下优先级表达：只编辑 Input 1；annotation 和 official Prime visual context 仅用于理解固定贴片关系；用户要达成的视觉结果；允许联动调整的
+内容组；必须保持的业务事实；Prime 不可生成/不可复制约束；贴片后的验收条件。正式投放的验收条件必须以视觉参考中的真实组件关系描述：完整标题、金额和表格行不得被它们覆盖，视觉参考所示上下贴片区域保持为安静连续的背景。不要把红框、编号、Prime 组件或官方条款画进无品牌底图。
 对于“替换人物/换人/换模特”，提示词必须明确这是 replacement，不是微调：现有人物是移除目标，不是身份、五官、发型、服装、
 姿势、手势、身形轮廓或构图参考；新人物必须在 1x 预览下肉眼可见地不同，并给出具体不同的年龄段、肤色/发型、服装、姿势和相对关系。
 如果用户标注的是单独金额、核心利益点或促销卖点，例如 `Rp100Juta` 这类数值，不要默认把它锁成还款计划；
