@@ -14,7 +14,7 @@
 | --- | --- | --- |
 | `material_collection` | 创建 Crawl Run、导入候选 | `reference_analysis` |
 | `reference_analysis` | 写 Source Analysis | 无 |
-| `creative_leadership` | 首次委派、异常恢复、用户汇总 | plan 或 direct edit |
+| `creative_leadership` | 标准订单首次委派、异常恢复、用户汇总；不重复创建平台已原子初始化的 direct edit | plan 或缺失任务恢复 |
 | `generation_plan` | 写 4-5 个候选 brief 与主尺寸计划 | candidate primary production |
 | `image_edit` | 写候选主尺寸或 selected 缺失尺寸 generated assets 和过程证据 | 调用 `prime_compose` Skill |
 | `direct_image_edit` | 写下一 revision generated assets 和底图过程证据 | 调用 `prime_compose` Skill并进入最终 visual QC |
@@ -31,7 +31,7 @@
 | 候选/晋级生产 | `creative_order_item_production` | Order Item | variant + revision + production stage |
 | 候选晋级 | `creative_order_item_candidate_selection` | Order Item | `candidate-selection:v1` |
 | QC | `creative_order_variant_qc` | Variant | variant + lane + revision |
-| 直接改图 | `creative_order_item_direct_edit` | Order Item | variant + size + source revision; unbranded base -> deterministic Prime compose -> visual QC |
+| 直接改图 | `creative_order_item_direct_edit` | Order Item | variant + target revision；source revision 固定为 target revision - 1 |
 
 Source Analysis 写回的 `trigger_evidence_kind=crawl_run` 是领域来源，不是 task source kind。
 
@@ -67,6 +67,7 @@ selected 的 expected sizes 共享批准文案、业务语义、DesignDNA、信�
 主尺寸只可作为一致性参考，不是方形硬依赖。后端只按冻结 config 原样叠加完整品牌模板。`prime_compose` Skill 只调用后端确定性合成；visual QC 写独立报告；`qc-finalize` 在视觉报告归档后
 按报告与返工策略登记 delivered assets、Variant completion 和 Inbox；阻断 finding 不能由 Agent 自报通过。
 
+初始 direct edit 的 R1 source、R2 staging revision 和执行 task 由平台建单事务原子创建；Leader 只恢复经领域状态确认真正缺失的当前 revision task。
 direct edit 只处理 context 的 source asset 和 expected sizes；source 不可覆盖，输出 revision 加一并记录
 lineage。preview 不进入品牌组件/QC，publish 调用 `prime_compose` Skill并进入最终 visual QC，不能直接登记 delivered。
 

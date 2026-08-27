@@ -92,6 +92,8 @@ func TestCreativePlatformSkillsUseFrozenBusinessInputs(t *testing.T) {
 		"capability = 'prime_compose'; version = 4",
 		"capability = 'direct_image_edit'; version = 19",
 		"capability = 'quality_control'; version = 37",
+		"capability = 'creative_leadership'; version = 51",
+		"初始 direct_edit 由平台原子创建 revision 和 task，Leader 只恢复领域状态确认缺失的当前 revision task",
 		"creative_candidate_selection",
 		"Skill 及其 references 是提示词、证据、归一化、Prime 和恢复规则的唯一执行真值",
 	} {
@@ -108,6 +110,8 @@ func TestCreativePlatformSkillsUseFrozenBusinessInputs(t *testing.T) {
 		`Capability: "prime_compose", Version: 4`,
 		`Capability: "direct_image_edit", Version: 19`,
 		`Capability: "quality_control", Version: 37`,
+		`Capability: "creative_leadership", Version: 51`,
+		"初始 direct_edit 由平台原子创建 revision 和 task，Leader 只恢复领域状态确认缺失的当前 revision task",
 		"creative_candidate_selection",
 		"Skill 及其 references 是提示词、证据、归一化、Prime 和恢复规则的唯一执行真值",
 	} {

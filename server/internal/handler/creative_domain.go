@@ -6493,6 +6493,17 @@ FOR UPDATE
 		return fmt.Errorf("check direct image edit output: %w", err)
 	}
 	if creativeDirectEditArtifactError(taskContext, state) == "" {
+		if taskContext.DeliveryMode == "preview" {
+			if _, err := tx.Exec(ctx, `
+UPDATE creative_order_variant
+SET status = 'completed',
+    brief = brief - 'creative_direct_edit_error' - 'error_code' - 'error_message',
+    updated_at = now()
+WHERE id = $1 AND revision = $2 AND status <> 'cancelled'
+`, variantUUID, taskContext.Revision); err != nil {
+				return fmt.Errorf("complete direct image edit preview: %w", err)
+			}
+		}
 		if err := commitSettlement(); err != nil {
 			return err
 		}

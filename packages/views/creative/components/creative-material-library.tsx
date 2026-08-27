@@ -1861,7 +1861,7 @@ export function canCreateDirectEdit(candidate: Pick<CreativeMaterialCandidate, "
 }
 
 type DirectEditSubmissionAPI = Pick<typeof api,
-  "createIssue" | "updateIssue" | "putCreativeIssueContext" | "createCreativeDirectEdit" | "setIssueMetadataKey"
+  "createIssue" | "putCreativeIssueContext" | "createCreativeDirectEdit"
 >;
 
 export type DirectEditSubmissionInput = {
@@ -1914,10 +1914,6 @@ export async function submitCreativeDirectEdit(
     if (!orderId) throw new Error("直接改图订单初始化失败，请重试");
     input.onRecovery({ issueId, orderId, submissionKey: input.submissionKey, marketPackId: input.marketPackId });
   }
-  await apiClient.setIssueMetadataKey(issueId, "creative_order_id", orderId);
-  // Squad assignment dispatches work immediately, so publish the complete
-  // direct-edit coordinates before exposing the issue to the runtime.
-  await apiClient.updateIssue(issueId, { assignee_type: "squad", assignee_id: input.squadId });
   return { issueId, orderId };
 }
 

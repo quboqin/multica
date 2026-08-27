@@ -517,8 +517,8 @@ foreach ($definition in $memberDefinitions) {
 }
 
 $leaderSkillDirectory = Join-Path $skillTemplateRoot 'ad-creative-leadership'
-$leaderSkill = Set-WorkspaceSkill -Name '素材_技能_流程' -Aliases @('素材_技能_统筹', '创意素材协作', '素材小队 Leader 编排') -Description '使用原生 task fanout 启动并恢复候选生产、晋级扩尺寸、直接改图和最终验收，汇总结构化结果。' -Directory $leaderSkillDirectory -Config @{ kind = 'creative_role'; capability = 'creative_leadership'; version = 50 }
-$leader = Set-AgentDefinition -Name '素材_流程' -Aliases @('素材_统筹', '素材小队 Leader') -Description '按冻结能力映射启动和恢复 Creative Order，并负责用户汇总。' -Instructions '全程使用中文。只执行判断、原生 fanout、异常恢复和用户汇总，不代替专业角色。标准订单只创建方案 task；Planner 建候选并委派主尺寸，候选晋级与 selected 扩尺寸由阶段 owner 和平台续链；direct_edit 只创建直接修改 task。每次唤醒回读订单、task 与冻结 squad snapshot，按 target/source/item_key 只补真正缺失项。严格执行绑定流程 Skill，不按名称猜 Agent，不轮询，不创建阶段子 Issue。' -SkillIDs @($leaderSkill.id) -RuntimeID $runtimeID -Model 'gpt-5.6-terra' -ThinkingLevel 'medium' -MaxConcurrentTasks 6
+$leaderSkill = Set-WorkspaceSkill -Name '素材_技能_流程' -Aliases @('素材_技能_统筹', '创意素材协作', '素材小队 Leader 编排') -Description '使用原生 task fanout 启动并恢复候选生产、晋级扩尺寸、直接改图和最终验收，汇总结构化结果。' -Directory $leaderSkillDirectory -Config @{ kind = 'creative_role'; capability = 'creative_leadership'; version = 51 }
+$leader = Set-AgentDefinition -Name '素材_流程' -Aliases @('素材_统筹', '素材小队 Leader') -Description '按冻结能力映射启动和恢复 Creative Order，并负责用户汇总。' -Instructions '全程使用中文。只执行判断、原生 fanout、异常恢复和用户汇总，不代替专业角色。标准订单只创建方案 task；Planner 建候选并委派主尺寸，候选晋级与 selected 扩尺寸由阶段 owner 和平台续链；初始 direct_edit 由平台原子创建 revision 和 task，Leader 只恢复领域状态确认缺失的当前 revision task。每次唤醒回读订单、task 与冻结 squad snapshot，按 target/source/item_key 只补真正缺失项。严格执行绑定流程 Skill，不按名称猜 Agent，不轮询，不创建阶段子 Issue。' -SkillIDs @($leaderSkill.id) -RuntimeID $runtimeID -Model 'gpt-5.6-terra' -ThinkingLevel 'medium' -MaxConcurrentTasks 6
 
 $resources = Get-Items (Invoke-MulticaApi -Method Get -Path '/api/creative/resources') 'resources'
 $copyLibrary = $resources | Where-Object { $_.kind -eq 'copy_library' -and $_.name -eq $copyLibraryName } | Select-Object -First 1

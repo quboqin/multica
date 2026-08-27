@@ -829,12 +829,14 @@ export const CreativeDirectEditResponseSchema = z.object({
   item: z.preprocess((value) => value ?? {}, CreativeOrderItemSchema),
   variant: z.preprocess((value) => value ?? {}, CreativeOrderVariantSchema),
   source_asset: z.preprocess((value) => value ?? {}, CreativeOrderAssetSchema),
+  task_id: z.string().default(""),
 }).loose();
 export const EMPTY_CREATIVE_DIRECT_EDIT_RESPONSE = {
   order: { id: "", workspace_id: "", issue_id: "", status: "draft", derived_status: "draft", delivery_status: "pending", production_status: "pending", input_snapshot: {}, trigger_evidence_kind: "", trigger_evidence_ref_id: "", created_by: "", created_at: "", updated_at: "", workflow_failures: [], items: [] },
   item: EMPTY_CREATIVE_ORDER_ITEM,
   variant: { id: "", order_item_id: "", variant_key: "", brief: {}, revision: 1, status: "queued", active_revision: 0, staging_revision: 0, candidate_state: "selected", selection_rank: 0, primary_size: "1080x1080", qc_status: "pending", qc_recovery_used: false, qc_recovery_available: false, assets: [], revisions: [], image_operations: [], diagnostic_assets: [], qc_reports: [], created_at: "", updated_at: "" },
   source_asset: { id: "", variant_id: "", asset_family_id: "", size_key: "", revision: 1, stage: "generated", attachment_id: "", derived_from_asset_id: "", operation_id: "", metadata: {}, evidence: {}, status: "queued", created_at: "", updated_at: "" },
+  task_id: "",
 };
 export const CreativeOrderQCFinalizeResponseSchema = z.object({
   created: z.boolean().default(false), finalized: z.boolean().default(false), outcome: z.string().default("pending"),

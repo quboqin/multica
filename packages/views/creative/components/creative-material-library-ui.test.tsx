@@ -88,15 +88,13 @@ describe("CreativeMaterialLibrary contracts", () => {
     });
   });
 
-  it("freezes the formal direct edit before assigning the squad", async () => {
+  it("freezes the formal direct edit before the backend atomically queues it", async () => {
     const calls: string[] = [];
     const recoveries: unknown[] = [];
     const apiClient = {
       createIssue: vi.fn(async () => { calls.push("createIssue"); return { id: "issue-1" }; }),
-      updateIssue: vi.fn(async () => { calls.push("updateIssue"); return { id: "issue-1" }; }),
       putCreativeIssueContext: vi.fn(async () => { calls.push("putCreativeIssueContext"); return {}; }),
-      createCreativeDirectEdit: vi.fn(async () => { calls.push("createCreativeDirectEdit"); return { order: { id: "order-1" } }; }),
-      setIssueMetadataKey: vi.fn(async () => { calls.push("setIssueMetadataKey"); return { metadata: {} }; }),
+      createCreativeDirectEdit: vi.fn(async () => { calls.push("createCreativeDirectEdit"); return { order: { id: "order-1" }, task_id: "task-1" }; }),
     };
 
     const result = await submitCreativeDirectEdit(apiClient as never, {
@@ -112,8 +110,7 @@ describe("CreativeMaterialLibrary contracts", () => {
     });
 
     expect(result).toEqual({ issueId: "issue-1", orderId: "order-1" });
-    expect(calls).toEqual(["createIssue", "putCreativeIssueContext", "createCreativeDirectEdit", "setIssueMetadataKey", "updateIssue"]);
-    expect(apiClient.updateIssue).toHaveBeenCalledWith("issue-1", { assignee_type: "squad", assignee_id: "squad-1" });
+    expect(calls).toEqual(["createIssue", "putCreativeIssueContext", "createCreativeDirectEdit"]);
     expect(apiClient.putCreativeIssueContext).toHaveBeenCalledWith("issue-1", { market_pack_id: "market-pack-1", squad_id: "squad-1" });
     expect(recoveries).toEqual([
       { issueId: "issue-1", orderId: "", submissionKey: "submission-1", marketPackId: "market-pack-1" },
@@ -124,10 +121,8 @@ describe("CreativeMaterialLibrary contracts", () => {
   it("blocks a formal direct edit without a unique market pack before creating an issue", async () => {
     const apiClient = {
       createIssue: vi.fn(),
-      updateIssue: vi.fn(),
       putCreativeIssueContext: vi.fn(),
       createCreativeDirectEdit: vi.fn(),
-      setIssueMetadataKey: vi.fn(),
     };
 
     await expect(submitCreativeDirectEdit(apiClient as never, {
@@ -147,10 +142,8 @@ describe("CreativeMaterialLibrary contracts", () => {
   it("keeps preview direct edits independent from market-pack configuration", async () => {
     const apiClient = {
       createIssue: vi.fn(async () => ({ id: "issue-1" })),
-      updateIssue: vi.fn(async () => ({ id: "issue-1" })),
       putCreativeIssueContext: vi.fn(),
-      createCreativeDirectEdit: vi.fn(async () => ({ order: { id: "order-1" } })),
-      setIssueMetadataKey: vi.fn(async () => ({ metadata: {} })),
+      createCreativeDirectEdit: vi.fn(async () => ({ order: { id: "order-1" }, task_id: "task-1" })),
     };
 
     await expect(submitCreativeDirectEdit(apiClient as never, {
@@ -170,10 +163,8 @@ describe("CreativeMaterialLibrary contracts", () => {
   it("recovers a created direct-edit order without repeating earlier submission steps", async () => {
     const apiClient = {
       createIssue: vi.fn(),
-      updateIssue: vi.fn(),
       putCreativeIssueContext: vi.fn(),
       createCreativeDirectEdit: vi.fn(),
-      setIssueMetadataKey: vi.fn(async () => ({ metadata: {} })),
     };
 
     await expect(submitCreativeDirectEdit(apiClient as never, {
@@ -188,10 +179,8 @@ describe("CreativeMaterialLibrary contracts", () => {
       onRecovery: vi.fn(),
     })).resolves.toEqual({ issueId: "issue-1", orderId: "order-1" });
     expect(apiClient.createIssue).not.toHaveBeenCalled();
-    expect(apiClient.updateIssue).toHaveBeenCalledWith("issue-1", { assignee_type: "squad", assignee_id: "squad-1" });
     expect(apiClient.putCreativeIssueContext).not.toHaveBeenCalled();
     expect(apiClient.createCreativeDirectEdit).not.toHaveBeenCalled();
-    expect(apiClient.setIssueMetadataKey).toHaveBeenCalledWith("issue-1", "creative_order_id", "order-1");
   });
 
   it("treats a complete single-size precise edit as a downloadable adopted package", () => {

@@ -3,11 +3,15 @@ package handler
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
+
+	"github.com/multica-ai/multica/server/internal/attribution"
+	"github.com/multica-ai/multica/server/internal/service"
 )
 
 // creativeDirectEditInput creates the domain shell for one independently
@@ -28,6 +32,7 @@ type creativeDirectEditResponse struct {
 	Item        creativeOrderItemResponse    `json:"item"`
 	Variant     creativeOrderVariantResponse `json:"variant"`
 	SourceAsset creativeOrderAssetResponse   `json:"source_asset"`
+	TaskID      string                       `json:"task_id"`
 }
 
 var creativeDirectEditCapabilityBindings = []creativeOrderCapabilityBinding{
@@ -47,6 +52,10 @@ func scanCreativeOrderItem(row rowScanner) (creativeOrderItemResponse, error) {
 func (h *Handler) CreateCreativeDirectEdit(w http.ResponseWriter, r *http.Request) {
 	workspaceID, userID, ok := h.creativeFeedbackWorkspaceUser(w, r)
 	if !ok {
+		return
+	}
+	if h.TaskService == nil {
+		writeError(w, http.StatusServiceUnavailable, "creative production runtime is unavailable")
 		return
 	}
 	var input creativeDirectEditInput
@@ -87,9 +96,23 @@ func (h *Handler) CreateCreativeDirectEdit(w http.ResponseWriter, r *http.Reques
 		}
 	}
 
-	var issueExists bool
-	if err := tx.QueryRow(r.Context(), `SELECT EXISTS(SELECT 1 FROM issue WHERE id = $1 AND workspace_id = $2)`, issueID, workspaceID).Scan(&issueExists); err != nil || !issueExists {
+	var issueStatus string
+	err = tx.QueryRow(r.Context(), `
+SELECT status
+FROM issue
+WHERE id = $1 AND workspace_id = $2
+FOR UPDATE
+`, issueID, workspaceID).Scan(&issueStatus)
+	if errors.Is(err, pgx.ErrNoRows) {
 		writeError(w, http.StatusUnprocessableEntity, "issue does not belong to this workspace")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to lock direct image edit issue")
+		return
+	}
+	if issueStatus == "cancelled" {
+		writeError(w, http.StatusConflict, "cancelled issue cannot start a direct image edit")
 		return
 	}
 
@@ -193,7 +216,7 @@ WHERE issue_id = $1 AND workspace_id = $2
 	}
 	order, err := scanCreativeOrder(tx.QueryRow(r.Context(), `
 INSERT INTO creative_order (workspace_id, issue_id, status, input_snapshot, trigger_evidence_kind, trigger_evidence_ref_id, created_by, submission_key)
-VALUES ($1,$2,'queued',$3::jsonb,'creative_direct_edit',$4,$5,$6)
+VALUES ($1,$2,'running',$3::jsonb,'creative_direct_edit',$4,$5,$6)
 RETURNING id::text, workspace_id::text, COALESCE(issue_id::text, ''), status, input_snapshot::text,
   trigger_evidence_kind, COALESCE(trigger_evidence_ref_id::text, ''), created_by::text, created_at::text, updated_at::text
 `, workspaceID, issueID, snapshot, candidateID, userID, input.SubmissionKey))
@@ -206,7 +229,7 @@ RETURNING id::text, workspace_id::text, COALESCE(issue_id::text, ''), status, in
 	})
 	item, err := scanCreativeOrderItem(tx.QueryRow(r.Context(), `
 INSERT INTO creative_order_item (order_id, candidate_id, copy_snapshot, direction, status)
-VALUES ($1,$2,$3::jsonb,$4,'ready')
+VALUES ($1,$2,$3::jsonb,$4,'running')
 RETURNING id::text, order_id::text, candidate_id::text, COALESCE(source_analysis_id::text, ''), copy_snapshot::text,
   direction, status, created_at::text, updated_at::text
 `, order.ID, candidateID, copySnapshot, input.UserRequest))
@@ -214,7 +237,7 @@ RETURNING id::text, order_id::text, candidate_id::text, COALESCE(source_analysis
 		writeError(w, http.StatusInternalServerError, "failed to create direct image edit item")
 		return
 	}
-	brief, _ := json.Marshal(map[string]any{
+	sourceBrief, _ := json.Marshal(map[string]any{
 		"mode": "direct_edit", "user_request": input.UserRequest, "target_size": input.TargetSize, "delivery_mode": input.DeliveryMode,
 		"creative_direct_edit_delivery": map[string]any{
 			"final_visual_validation": true,
@@ -225,19 +248,32 @@ RETURNING id::text, order_id::text, candidate_id::text, COALESCE(source_analysis
 			"raw_user_request":        input.UserRequest,
 		},
 	})
+	var taskBriefValue map[string]any
+	if err := json.Unmarshal(sourceBrief, &taskBriefValue); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to prepare direct image edit revision")
+		return
+	}
+	delivery, _ := taskBriefValue["creative_direct_edit_delivery"].(map[string]any)
+	delivery["source_revision"] = 1
+	delivery["edit_sizes"] = []string{input.TargetSize}
+	taskBrief, _ := json.Marshal(taskBriefValue)
 	variant, err := scanCreativeOrderVariant(tx.QueryRow(r.Context(), `
 	INSERT INTO creative_order_variant (order_item_id, variant_key, brief, revision, status, staging_revision)
-	VALUES ($1,'direct_edit',$2::jsonb,1,'queued',1)
+	VALUES ($1,'direct_edit',$2::jsonb,2,'running',2)
 	RETURNING id::text, order_item_id::text, variant_key, brief::text, revision, status,
 	  COALESCE(active_revision, 0), COALESCE(staging_revision, 0), candidate_state,
 	  COALESCE(selection_rank, 0), primary_size, false, false, created_at::text, updated_at::text
-`, item.ID, brief))
+`, item.ID, taskBrief))
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to create direct image edit variant")
 		return
 	}
 	variant.QCStatus = "pending"
-	if err := upsertCreativeVariantRevision(r.Context(), tx, parseUUID(variant.ID), 1, brief, "queued", []string{input.TargetSize}); err != nil {
+	if err := upsertCreativeVariantRevision(r.Context(), tx, parseUUID(variant.ID), 1, sourceBrief, "completed", []string{input.TargetSize}); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to create direct image source revision")
+		return
+	}
+	if err := upsertCreativeVariantRevision(r.Context(), tx, parseUUID(variant.ID), 2, taskBrief, "running", []string{input.TargetSize}); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to create direct image edit revision")
 		return
 	}
@@ -254,15 +290,141 @@ RETURNING id::text, variant_id::text, asset_family_id::text, size_key, revision,
 		writeError(w, http.StatusInternalServerError, "failed to create direct image source asset")
 		return
 	}
+	leaderID, err := creativeDirectEditSnapshotAgent(snapshot, "leader_agent_id", "leader")
+	if err != nil {
+		writeError(w, http.StatusConflict, err.Error())
+		return
+	}
+	reviewerID, err := creativeDirectEditSnapshotAgent(snapshot, "reviewer_agent_id", "QC reviewer")
+	if err != nil {
+		writeError(w, http.StatusConflict, err.Error())
+		return
+	}
+	preferredDirectEditorID, err := creativeOrderDirectEditAgentSnapshot(snapshot)
+	if err != nil {
+		writeError(w, http.StatusConflict, err.Error())
+		return
+	}
+	directEditor, err := h.selectCreativeDirectImageEditAgent(
+		r.Context(), tx, h.Queries.WithTx(tx), workspaceID, snapshot, variant.ID, preferredDirectEditorID, false,
+	)
+	if err != nil {
+		writeError(w, http.StatusConflict, err.Error())
+		return
+	}
+	itemKey := fmt.Sprintf("%s:r2", variant.ID)
+	sourceAssets := []creativeOrderAdjustmentSourceAsset{{
+		SizeKey: input.TargetSize, AssetID: sourceAsset.ID, AttachmentID: uuidToString(sourceAttachmentID),
+	}}
+	taskContext, err := json.Marshal(map[string]any{
+		"type":                    "creative_domain_task",
+		"workflow":                "creative_direct_edit",
+		"scope":                   "size",
+		"subject_id":              variant.ID,
+		"item_key":                itemKey,
+		"creative_order_id":       order.ID,
+		"creative_order_item_id":  item.ID,
+		"candidate_id":            input.CandidateID,
+		"variant_id":              variant.ID,
+		"revision":                2,
+		"expected_sizes":          []string{input.TargetSize},
+		"issue_id":                input.IssueID,
+		"leader_agent_id":         uuidToString(leaderID),
+		"reviewer_agent_id":       uuidToString(reviewerID),
+		"direct_edit_agent_id":    uuidToString(directEditor.ID),
+		"direct_edit_runtime_id":  uuidToString(directEditor.RuntimeID),
+		"user_request":            input.UserRequest,
+		"raw_user_request":        input.UserRequest,
+		"prompt_compilation":      "intent_normalization_required",
+		"final_visual_validation": true,
+		"delivery_mode":           input.DeliveryMode,
+		"target_size":             input.TargetSize,
+		"edit_sizes":              []string{input.TargetSize},
+		"source_revision":         1,
+		"source_asset_id":         sourceAsset.ID,
+		"source_attachment_id":    uuidToString(sourceAttachmentID),
+		"source_assets":           sourceAssets,
+		"direct_edit": map[string]any{
+			"scope":                   "size",
+			"source_revision":         1,
+			"target_size":             input.TargetSize,
+			"expected_sizes":          []string{input.TargetSize},
+			"edit_sizes":              []string{input.TargetSize},
+			"source_asset_id":         sourceAsset.ID,
+			"source_attachment_id":    uuidToString(sourceAttachmentID),
+			"source_assets":           sourceAssets,
+			"direct_edit_agent_id":    uuidToString(directEditor.ID),
+			"direct_edit_runtime_id":  uuidToString(directEditor.RuntimeID),
+			"request":                 input.UserRequest,
+			"raw_user_request":        input.UserRequest,
+			"prompt_compilation":      "intent_normalization_required",
+			"final_visual_validation": true,
+		},
+	})
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to prepare direct image edit task")
+		return
+	}
+	if err := validateCreativeTaskFanoutContext("creative_order_item_direct_edit", parseUUID(item.ID), []service.DirectTaskFanoutItem{{
+		ItemKey: itemKey, Context: taskContext,
+	}}); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to validate direct image edit task")
+		return
+	}
+	attr := attribution.DirectHumanRun(userID, attribution.EvidenceKind("creative_order_item_direct_edit"), parseUUID(item.ID))
+	tasks, createdTasks, err := h.TaskService.EnqueueDirectTaskFanoutTx(r.Context(), tx, service.DirectTaskFanout{
+		Agent: directEditor, IssueID: issueID, RequestingUserID: userID, Attribution: attr,
+		TriggerEvidenceKind: "creative_order_item_direct_edit", TriggerEvidenceRefID: parseUUID(item.ID),
+		Items: []service.DirectTaskFanoutItem{{ItemKey: itemKey, Context: taskContext}},
+	})
+	if err != nil || len(tasks) != 1 {
+		writeError(w, http.StatusConflict, "direct image edit could not be queued")
+		return
+	}
+	issueUpdate, err := tx.Exec(r.Context(), `
+UPDATE issue
+SET metadata = jsonb_set(COALESCE(metadata, '{}'::jsonb), '{creative_order_id}', to_jsonb($2::text), true),
+    assignee_type = 'squad', assignee_id = $3, status = 'in_progress', updated_at = now()
+WHERE id = $1 AND workspace_id = $4 AND status <> 'cancelled'
+`, issueID, order.ID, squadID, workspaceID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to link direct image edit issue")
+		return
+	}
+	if issueUpdate.RowsAffected() != 1 {
+		writeError(w, http.StatusConflict, "direct image edit issue was cancelled")
+		return
+	}
 	if err := tx.Commit(r.Context()); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to initialize direct image edit")
 		return
 	}
-	order.DerivedStatus = "queued"
+	h.TaskService.NotifyDirectTaskFanoutEnqueued(r.Context(), createdTasks)
+	order.DerivedStatus = "running"
 	order.DeliveryStatus = "pending"
-	order.ProductionStatus = "queued"
+	order.ProductionStatus = "running"
 	h.publishCreativeDomainUpdated(r, workspaceID, userID, map[string]any{"scope": "order", "order_id": order.ID})
-	writeJSON(w, http.StatusCreated, creativeDirectEditResponse{Order: order, Item: item, Variant: variant, SourceAsset: sourceAsset})
+	writeJSON(w, http.StatusCreated, creativeDirectEditResponse{
+		Order: order, Item: item, Variant: variant, SourceAsset: sourceAsset, TaskID: uuidToString(tasks[0].ID),
+	})
+}
+
+func creativeDirectEditSnapshotAgent(raw json.RawMessage, field, role string) (pgtype.UUID, error) {
+	var snapshot struct {
+		SquadSnapshot map[string]json.RawMessage `json:"squad_snapshot"`
+	}
+	if json.Unmarshal(raw, &snapshot) != nil {
+		return pgtype.UUID{}, errors.New("creative order has an invalid frozen squad snapshot")
+	}
+	var rawID string
+	if json.Unmarshal(snapshot.SquadSnapshot[field], &rawID) != nil {
+		return pgtype.UUID{}, fmt.Errorf("creative order is missing a frozen %s agent", role)
+	}
+	id, err := parseUUIDString(strings.TrimSpace(rawID))
+	if err != nil {
+		return pgtype.UUID{}, fmt.Errorf("creative order is missing a frozen %s agent", role)
+	}
+	return id, nil
 }
 
 func normalizeCreativeDirectEdit(input creativeDirectEditInput) (creativeDirectEditInput, error) {
@@ -318,8 +480,23 @@ ORDER BY created_at LIMIT 1
 	if err != nil {
 		return creativeDirectEditResponse{}, err
 	}
+	var taskID string
+	if err := tx.QueryRow(r.Context(), `
+SELECT id::text
+FROM agent_task_queue
+WHERE trigger_evidence_kind = 'creative_order_item_direct_edit'
+  AND trigger_evidence_ref_id = $1
+  AND context->>'workflow' = 'creative_direct_edit'
+  AND context->>'creative_order_id' = $2
+  AND context->>'variant_id' = $3
+ORDER BY CASE WHEN status IN ('queued','dispatched','running','waiting_local_directory') THEN 0 ELSE 1 END,
+         created_at DESC, id DESC
+LIMIT 1
+`, parseUUID(item.ID), order.ID, variant.ID).Scan(&taskID); err != nil {
+		return creativeDirectEditResponse{}, err
+	}
 	order.DerivedStatus = order.Status
 	order.DeliveryStatus = "pending"
 	order.ProductionStatus = order.Status
-	return creativeDirectEditResponse{Order: order, Item: item, Variant: variant, SourceAsset: sourceAsset}, nil
+	return creativeDirectEditResponse{Order: order, Item: item, Variant: variant, SourceAsset: sourceAsset, TaskID: taskID}, nil
 }

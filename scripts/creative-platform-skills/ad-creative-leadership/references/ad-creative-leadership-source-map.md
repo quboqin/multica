@@ -9,6 +9,6 @@
 | Planning creates 4-5 primary-size candidates; candidate selection atomically promotes three and platform orchestration queues selected missing sizes without a duplicate Leader fanout | `server/internal/handler/creative_variant_lifecycle.go:SelectCreativeOrderItemCandidates`, `scripts/creative-platform-skills/ad-creative-leadership/SKILL.md:标准订单` |
 | `qc-finalize` waits only for the visual lane and can queue at most two bounded size-specific Variant rework attempts; the technical lane is retired | `server/internal/handler/creative_domain.go:FinalizeCreativeOrderQC`, `server/internal/handler/creative_domain.go:creativeVisualModelReworkMaxAttempts` |
 | Creative Order API returns every frozen order input, including `squad_snapshot`, under `input_snapshot` | `server/internal/handler/creative_domain.go:GetCreativeOrder`, `server/internal/handler/creative_domain.go:creativeOrderResponse` |
-| Direct-edit initialization creates one Creative Order/Issue path and freezes the requested source, size, delivery mode, and agent snapshot | `server/internal/handler/creative_direct_edit.go:CreateCreativeDirectEdit` |
+| Direct-edit initialization atomically creates the R1 source lineage, R2 staging revision, pooled runtime task, and Issue trace; Leader only repairs a truly missing current-revision task | `server/internal/handler/creative_direct_edit.go:CreateCreativeDirectEdit`, `server/internal/handler/task_fanout.go:validateCreativeDirectEditTaskContext` |
 
 The stage owner and human-visible Issue policy are specified in `collaboration-contract.md`.

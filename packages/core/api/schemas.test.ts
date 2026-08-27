@@ -262,6 +262,7 @@ describe("creative material schemas", () => {
       order: expect.objectContaining({ id: "order-1" }),
       item: expect.objectContaining({ id: "" }),
       source_asset: expect.objectContaining({ id: "" }),
+      task_id: "",
     }));
     expect(CreativeDirectEditResponseSchema.safeParse(null).success).toBe(false);
   });

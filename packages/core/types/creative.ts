@@ -721,6 +721,7 @@ export interface CreativeDirectEditResponse {
   item: CreativeOrderItem;
   variant: CreativeOrderVariant;
   source_asset: CreativeOrderAsset;
+  task_id: string;
 }
 
 export interface CreativeImportSummary { run_id: string; imported_count: number; existing_count: number; total_count: number; skipped_count: number; }

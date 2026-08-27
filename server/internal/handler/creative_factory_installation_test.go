@@ -190,7 +190,7 @@ func TestCreativeFactoryCreativeContractTemplatesStayInSync(t *testing.T) {
 		"prime_compose":       4,
 		"direct_image_edit":   19,
 		"quality_control":     37,
-		"creative_leadership": 50,
+		"creative_leadership": 51,
 	}
 	for _, spec := range creativeFactorySkillSpecs {
 		if want, ok := wantVersions[spec.Role]; ok && spec.Version != want {
@@ -199,6 +199,16 @@ func TestCreativeFactoryCreativeContractTemplatesStayInSync(t *testing.T) {
 	}
 	if !strings.Contains(creativeFactoryImageEditAgentInstructions(), "写真实 error_code/error_message 并让当前 task 失败；兄弟对象继续") {
 		t.Fatal("factory producer instructions lost the specialist failure handoff contract")
+	}
+	leaderInstructions := ""
+	for _, spec := range creativeFactoryAgentSpecs {
+		if spec.Role == "leadership" {
+			leaderInstructions = spec.Instructions
+			break
+		}
+	}
+	if !strings.Contains(leaderInstructions, "初始 direct_edit 由平台原子创建 revision 和 task，Leader 只恢复领域状态确认缺失的当前 revision task") {
+		t.Fatal("factory Leader instructions lost the atomic direct-edit initialization contract")
 	}
 
 	templates, err := loadCreativeFactoryTemplates()
@@ -211,7 +221,7 @@ func TestCreativeFactoryCreativeContractTemplatesStayInSync(t *testing.T) {
 		"ad-creative-prime-compose": {"each delivery size", "publishes no partial package", "fail closed"},
 		"ad-creative-direct-edit":   {"target_masks", "所有 target mask", "<当前 Skill 目录>/../ad-creative-production/references/normalize_image.py"},
 		"ad-creative-qc":            {"creative_candidate_selection", "candidate-select", "selected_ids", "foreground_polarity", "cross_size_design_dna_mismatch"},
-		"ad-creative-leadership":    {"4-5 个候选", "原子晋级 3 个", "最终视觉 QC"},
+		"ad-creative-leadership":    {"4-5 个候选", "原子晋级 3 个", "最终视觉 QC", "初始 direct-edit revision 和 task 由平台建单事务原子创建", "source_revision = revision - 1"},
 	}
 	for directory, required := range checks {
 		template := templates[directory]
@@ -255,7 +265,8 @@ func TestCreativeFactoryCreativeContractTemplatesStayInSync(t *testing.T) {
 		"capability = 'prime_compose'; version = 4",
 		"capability = 'direct_image_edit'; version = 19",
 		"capability = 'quality_control'; version = 37",
-		"capability = 'creative_leadership'; version = 50",
+		"capability = 'creative_leadership'; version = 51",
+		"初始 direct_edit 由平台原子创建 revision 和 task，Leader 只恢复领域状态确认缺失的当前 revision task",
 		"creative_candidate_selection",
 		"写真实 error_code/error_message 并让当前 task 失败；兄弟对象继续",
 	} {

@@ -27,7 +27,7 @@ allowed-tools: Bash(multica *)
 4. 按 target/source 分组，使用 `multica task fanout` 一次提交全部就绪项。提交后立即结束，不轮询、休眠或
    创建等待 Issue。
 
-正常主链所有权固定：Leader 创建方案或 direct-edit task；Planner 建立 4-5 个候选并委派主尺寸 production；Production 只完成候选主尺寸和 Prime；
+正常主链所有权固定：Leader 创建标准订单方案；初始 direct-edit revision 和 task 由平台建单事务原子创建，Leader 不重复委派；Planner 建立 4-5 个候选并委派主尺寸 production；Production 只完成候选主尺寸和 Prime；
 QC 的 `creative_candidate_selection` 原子晋级 3 个，平台自动为 selected 补排缺失尺寸；selected 三尺寸 Prime 齐备后，QC 做联合视觉终检并调用
 `qc-finalize` 完成归档。真实遮挡或官方文字不可读会阻断当前尺寸并触发有界定向返工，关键内容缺失仍然阻断并转人工确认。Leader 只在人工重试或异常恢复时补真正缺失的下一步，
 不得与下游重复委派。
@@ -80,10 +80,17 @@ multica task fanout --agent <planner-agent-id> --input-file <manifest.json> --ou
 
 ## 直接改图
 
-`input_snapshot.mode=direct_edit` 时只创建 `creative_order_item_direct_edit` task。snapshot 必须含
-`direct_edit_agent_id`、`reviewer_agent_id`；context 携带固定 source asset/attachment、
-用户原话、target/expected sizes、delivery mode 和 source revision。preview 到 generated 结束；publish 由后端
-重新执行确定性品牌组件合成并进入最终视觉 QC，只有 QC 归档后才 delivered。不得触发采集、参考分析、候选方案或标准生产。
+`input_snapshot.mode=direct_edit` 的初始 R1 source、R2 staging revision 和 `creative_order_item_direct_edit` task 已由
+`CreateCreativeDirectEdit` 在同一事务内创建。Leader 正常情况下不得再创建初始 task，也不得把 Issue 的小队分配当成再次启动信号。
+snapshot 必须含 `direct_edit_agent_id`、`reviewer_agent_id`；task context 携带固定 source asset/attachment、用户原话、
+target/expected sizes、delivery mode、`revision` 和 `source_revision`。
+
+只有人工重试或异常恢复时，才能补真正缺失的 direct-edit task。恢复前必须同时确认：Variant 当前 `revision` 与
+`staging_revision` 一致、`source_revision = revision - 1` 且不小于 1、source asset/attachment 属于该 Variant 的
+source revision 和目标尺寸、当前 item key 没有 active/succeeded task、当前 revision 也没有已经登记的有效 generated 输出。
+恢复 task 必须沿用当前 revision/source_revision 和现有 source lineage，不能新建 revision、不能从旧 R1 壳或 Issue 文本猜字段，
+也不能因通知遗漏而重复调用图像模型。preview 到 generated 后由平台收敛 revision；publish 由后端重新执行确定性品牌组件合成并进入最终视觉 QC，
+只有 QC 归档后才 delivered。不得触发采集、参考分析、候选方案或标准生产。
 
 ## 恢复与用户留痕
 

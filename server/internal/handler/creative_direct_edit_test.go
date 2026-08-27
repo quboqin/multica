@@ -1,13 +1,16 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 )
 
 func TestCreateCreativeDirectEditAtomicallyInitializesSourceLineage(t *testing.T) {
@@ -17,10 +20,13 @@ func TestCreateCreativeDirectEditAtomicallyInitializesSourceLineage(t *testing.T
 	issueID := createCreativeDeliveryTestIssue(t, "Direct edit order", "")
 	candidateID, sourceAttachmentID := createDirectEditCandidate(t, testWorkspaceID, testUserID)
 	squad := createDirectEditSquadFixture(t)
+	submissionKey := "direct-edit-" + uuid.NewString()
+	input := creativeDirectEditInput{
+		IssueID: issueID, SubmissionKey: submissionKey, CandidateID: candidateID,
+		UserRequest: "保留人物，移除竞品标识", TargetSize: "1080x1080", DeliveryMode: "preview", SquadID: squad.SquadID,
+	}
 	w := httptest.NewRecorder()
-	req := newRequest(http.MethodPost, "/api/creative/direct-edits", creativeDirectEditInput{
-		IssueID: issueID, CandidateID: candidateID, UserRequest: "保留人物，移除竞品标识", TargetSize: "1080x1080", DeliveryMode: "preview", SquadID: squad.SquadID,
-	})
+	req := newRequest(http.MethodPost, "/api/creative/direct-edits", input)
 	testHandler.CreateCreativeDirectEdit(w, req)
 	if w.Code != http.StatusCreated {
 		t.Fatalf("CreateCreativeDirectEdit: %d %s", w.Code, w.Body.String())
@@ -32,7 +38,9 @@ func TestCreateCreativeDirectEditAtomicallyInitializesSourceLineage(t *testing.T
 	if response.Order.IssueID != issueID || response.Order.TriggerEvidenceKind != "creative_direct_edit" || response.Item.CandidateID != candidateID {
 		t.Fatalf("direct edit trace = %#v", response)
 	}
-	if response.Variant.VariantKey != "direct_edit" || response.Variant.Revision != 1 || response.SourceAsset.AttachmentID != sourceAttachmentID || response.SourceAsset.Revision != 1 || response.SourceAsset.DerivedFromAssetID != "" {
+	if response.TaskID == "" || response.Variant.VariantKey != "direct_edit" || response.Variant.Revision != 2 ||
+		response.Variant.Status != "running" || response.Variant.ActiveRevision != 0 || response.Variant.StagingRevision != 2 ||
+		response.SourceAsset.AttachmentID != sourceAttachmentID || response.SourceAsset.Revision != 1 || response.SourceAsset.DerivedFromAssetID != "" {
 		t.Fatalf("direct edit source lineage = %#v", response)
 	}
 	initialDelivery := parseCreativeDirectEditDeliveryConfig(response.Variant.Brief)
@@ -66,6 +74,135 @@ func TestCreateCreativeDirectEditAtomicallyInitializesSourceLineage(t *testing.T
 		if gotAgents[field] != want {
 			t.Errorf("squad snapshot %s = %q, want %q", field, gotAgents[field], want)
 		}
+	}
+	var taskAgentID, taskRuntimeID, taskIssueID, taskEvidenceKind, taskEvidenceRefID, taskContext string
+	if err := testPool.QueryRow(t.Context(), `
+SELECT agent_id::text, runtime_id::text, issue_id::text,
+       trigger_evidence_kind, trigger_evidence_ref_id::text, context::text
+FROM agent_task_queue WHERE id = $1
+`, response.TaskID).Scan(&taskAgentID, &taskRuntimeID, &taskIssueID, &taskEvidenceKind, &taskEvidenceRefID, &taskContext); err != nil {
+		t.Fatal(err)
+	}
+	if taskAgentID != squad.DirectEditorAgentID || taskIssueID != issueID || taskEvidenceKind != "creative_order_item_direct_edit" || taskEvidenceRefID != response.Item.ID {
+		t.Fatalf("direct edit task routing = agent %q issue %q evidence %q/%q", taskAgentID, taskIssueID, taskEvidenceKind, taskEvidenceRefID)
+	}
+	var agentRuntimeID string
+	if err := testPool.QueryRow(t.Context(), `SELECT runtime_id::text FROM agent WHERE id = $1`, taskAgentID).Scan(&agentRuntimeID); err != nil {
+		t.Fatal(err)
+	}
+	if taskRuntimeID != agentRuntimeID {
+		t.Fatalf("direct edit task runtime = %q, want selected agent runtime %q", taskRuntimeID, agentRuntimeID)
+	}
+	var contextValue struct {
+		Workflow            string                               `json:"workflow"`
+		ItemKey             string                               `json:"item_key"`
+		VariantID           string                               `json:"variant_id"`
+		Revision            int                                  `json:"revision"`
+		SourceRevision      int                                  `json:"source_revision"`
+		SourceAssetID       string                               `json:"source_asset_id"`
+		SourceAttachmentID  string                               `json:"source_attachment_id"`
+		DirectEditAgentID   string                               `json:"direct_edit_agent_id"`
+		DirectEditRuntimeID string                               `json:"direct_edit_runtime_id"`
+		DeliveryMode        string                               `json:"delivery_mode"`
+		ExpectedSizes       []string                             `json:"expected_sizes"`
+		SourceAssets        []creativeOrderAdjustmentSourceAsset `json:"source_assets"`
+	}
+	if err := json.Unmarshal([]byte(taskContext), &contextValue); err != nil {
+		t.Fatal(err)
+	}
+	if contextValue.Workflow != "creative_direct_edit" || contextValue.ItemKey != response.Variant.ID+":r2" ||
+		contextValue.VariantID != response.Variant.ID || contextValue.Revision != 2 || contextValue.SourceRevision != 1 ||
+		contextValue.SourceAssetID != response.SourceAsset.ID || contextValue.SourceAttachmentID != sourceAttachmentID ||
+		contextValue.DirectEditAgentID != taskAgentID || contextValue.DirectEditRuntimeID != taskRuntimeID ||
+		contextValue.DeliveryMode != "preview" || len(contextValue.ExpectedSizes) != 1 || contextValue.ExpectedSizes[0] != "1080x1080" ||
+		len(contextValue.SourceAssets) != 1 || contextValue.SourceAssets[0].AssetID != response.SourceAsset.ID {
+		t.Fatalf("direct edit task context = %#v", contextValue)
+	}
+	var sourceRevisionStatus, stagingRevisionStatus string
+	if err := testPool.QueryRow(t.Context(), `
+SELECT source.status, staging.status
+FROM creative_order_variant_revision source
+JOIN creative_order_variant_revision staging ON staging.variant_id = source.variant_id
+WHERE source.variant_id = $1 AND source.revision = 1 AND staging.revision = 2
+`, response.Variant.ID).Scan(&sourceRevisionStatus, &stagingRevisionStatus); err != nil {
+		t.Fatal(err)
+	}
+	if sourceRevisionStatus != "completed" || stagingRevisionStatus != "running" {
+		t.Fatalf("direct edit revisions = source %q staging %q", sourceRevisionStatus, stagingRevisionStatus)
+	}
+	var issueStatus, issueAssigneeType, issueAssigneeID, issueOrderID string
+	if err := testPool.QueryRow(t.Context(), `
+SELECT status, assignee_type, assignee_id::text, metadata->>'creative_order_id'
+FROM issue WHERE id = $1
+`, issueID).Scan(&issueStatus, &issueAssigneeType, &issueAssigneeID, &issueOrderID); err != nil {
+		t.Fatal(err)
+	}
+	if issueStatus != "in_progress" || issueAssigneeType != "squad" || issueAssigneeID != squad.SquadID || issueOrderID != response.Order.ID {
+		t.Fatalf("direct edit issue = status %q assignee %q/%q order %q", issueStatus, issueAssigneeType, issueAssigneeID, issueOrderID)
+	}
+
+	retry := httptest.NewRecorder()
+	testHandler.CreateCreativeDirectEdit(retry, newRequest(http.MethodPost, "/api/creative/direct-edits", input))
+	if retry.Code != http.StatusOK {
+		t.Fatalf("recover direct edit: %d %s", retry.Code, retry.Body.String())
+	}
+	var recovered creativeDirectEditResponse
+	if err := json.NewDecoder(retry.Body).Decode(&recovered); err != nil {
+		t.Fatal(err)
+	}
+	if recovered.Order.ID != response.Order.ID || recovered.TaskID != response.TaskID || recovered.Variant.Revision != 2 {
+		t.Fatalf("recovered direct edit = %#v, want order %s task %s", recovered, response.Order.ID, response.TaskID)
+	}
+	var taskCount int
+	if err := testPool.QueryRow(t.Context(), `
+SELECT count(*) FROM agent_task_queue
+WHERE trigger_evidence_kind = 'creative_order_item_direct_edit' AND trigger_evidence_ref_id = $1
+`, response.Item.ID).Scan(&taskCount); err != nil {
+		t.Fatal(err)
+	}
+	if taskCount != 1 {
+		t.Fatalf("direct edit task count = %d, want 1", taskCount)
+	}
+
+	outputAttachmentID := createCreativeFeedbackAsset(t)
+	if _, err := testPool.Exec(t.Context(), `
+INSERT INTO creative_order_asset (variant_id, size_key, revision, stage, attachment_id, derived_from_asset_id, status)
+VALUES ($1, '1080x1080', 2, 'generated', $2, $3, 'completed')
+`, response.Variant.ID, outputAttachmentID, response.SourceAsset.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := testPool.Exec(t.Context(), `UPDATE agent_task_queue SET status = 'running', started_at = now() WHERE id = $1`, response.TaskID); err != nil {
+		t.Fatal(err)
+	}
+	complete := httptest.NewRecorder()
+	completeRequest := newDaemonTokenRequest(http.MethodPost, "/api/daemon/tasks/"+response.TaskID+"/complete", TaskCompleteRequest{Output: "done"}, testWorkspaceID, "direct-daemon")
+	completeRequest = withURLParam(completeRequest, "taskId", response.TaskID)
+	testHandler.CompleteTask(complete, completeRequest)
+	if complete.Code != http.StatusOK {
+		t.Fatalf("complete direct edit preview: %d %s", complete.Code, complete.Body.String())
+	}
+	var completedTaskStatus, completedVariantStatus, completedRevisionStatus string
+	var activeRevision, stagingRevision int
+	if err := testPool.QueryRow(t.Context(), `
+SELECT task.status, variant.status, COALESCE(variant.active_revision, 0), COALESCE(variant.staging_revision, 0), revision.status
+FROM agent_task_queue task
+JOIN creative_order_variant variant ON variant.id = $2
+JOIN creative_order_variant_revision revision ON revision.variant_id = variant.id AND revision.revision = 2
+WHERE task.id = $1
+`, response.TaskID, response.Variant.ID).Scan(
+		&completedTaskStatus, &completedVariantStatus, &activeRevision, &stagingRevision, &completedRevisionStatus,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if completedTaskStatus != "completed" || completedVariantStatus != "completed" || completedRevisionStatus != "completed" || activeRevision != 0 || stagingRevision != 2 {
+		t.Fatalf("completed direct edit preview = task %q variant %q revision %q active %d staging %d", completedTaskStatus, completedVariantStatus, completedRevisionStatus, activeRevision, stagingRevision)
+	}
+	derivedStatus, err := testHandler.derivedCreativeOrderStatusWithFailures(completeRequest, parseUUID(response.Order.ID), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if derivedStatus != "completed" {
+		t.Fatalf("direct edit preview derived status = %q, want completed", derivedStatus)
 	}
 }
 
@@ -529,6 +666,117 @@ RETURNING id::text
 		}
 		assertNoDirectEditOrder(t, issueID)
 	})
+}
+
+func TestCreateCreativeDirectEditRejectsCancelledIssueWithoutOrderOrTask(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	newInput := func(t *testing.T, title string) (string, creativeDirectEditInput) {
+		t.Helper()
+		issueID := createCreativeDeliveryTestIssue(t, title, "")
+		candidateID, _ := createDirectEditCandidate(t, testWorkspaceID, testUserID)
+		return issueID, creativeDirectEditInput{
+			IssueID: issueID, CandidateID: candidateID, UserRequest: "调整背景",
+			TargetSize: "1080x1080", DeliveryMode: "preview", SquadID: createDirectEditSquad(t),
+		}
+	}
+	assertRejected := func(t *testing.T, issueID string, w *httptest.ResponseRecorder) {
+		t.Helper()
+		if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), "cancelled") {
+			t.Fatalf("cancelled issue direct edit: %d %s", w.Code, w.Body.String())
+		}
+		assertNoDirectEditOrder(t, issueID)
+		var taskCount int
+		if err := testPool.QueryRow(t.Context(), `SELECT count(*) FROM agent_task_queue WHERE issue_id = $1`, issueID).Scan(&taskCount); err != nil {
+			t.Fatal(err)
+		}
+		if taskCount != 0 {
+			t.Fatalf("cancelled issue created %d tasks", taskCount)
+		}
+	}
+
+	t.Run("already cancelled", func(t *testing.T) {
+		issueID, input := newInput(t, "Direct edit cancelled before initialization")
+		if _, err := testPool.Exec(t.Context(), `UPDATE issue SET status = 'cancelled' WHERE id = $1`, issueID); err != nil {
+			t.Fatal(err)
+		}
+		w := httptest.NewRecorder()
+		testHandler.CreateCreativeDirectEdit(w, newRequest(http.MethodPost, "/api/creative/direct-edits", input))
+		assertRejected(t, issueID, w)
+	})
+
+	t.Run("concurrent cancellation owns the issue lock", func(t *testing.T) {
+		issueID, input := newInput(t, "Direct edit cancelled while initializing")
+		cancelTx, err := testPool.Begin(t.Context())
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer cancelTx.Rollback(t.Context())
+		if _, err := cancelTx.Exec(t.Context(), `SELECT id FROM issue WHERE id = $1 FOR UPDATE`, issueID); err != nil {
+			t.Fatal(err)
+		}
+
+		lockReached := make(chan struct{})
+		handler := *testHandler
+		handler.TxStarter = directEditLockObservingTxStarter{
+			base: testPool, lockReached: lockReached,
+		}
+		w := httptest.NewRecorder()
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			handler.CreateCreativeDirectEdit(w, newRequest(http.MethodPost, "/api/creative/direct-edits", input))
+		}()
+		select {
+		case <-lockReached:
+		case <-time.After(5 * time.Second):
+			t.Fatal("direct edit did not attempt to lock the issue")
+		}
+		if _, err := cancelTx.Exec(t.Context(), `UPDATE issue SET status = 'cancelled' WHERE id = $1`, issueID); err != nil {
+			t.Fatal(err)
+		}
+		if err := cancelTx.Commit(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+			t.Fatal("direct edit did not resume after cancellation committed")
+		}
+		assertRejected(t, issueID, w)
+	})
+}
+
+type directEditLockObservingTxStarter struct {
+	base interface {
+		Begin(context.Context) (pgx.Tx, error)
+	}
+	lockReached chan struct{}
+}
+
+func (s directEditLockObservingTxStarter) Begin(ctx context.Context) (pgx.Tx, error) {
+	tx, err := s.base.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return &directEditLockObservingTx{Tx: tx, lockReached: s.lockReached}, nil
+}
+
+type directEditLockObservingTx struct {
+	pgx.Tx
+	lockReached chan struct{}
+}
+
+func (tx *directEditLockObservingTx) QueryRow(ctx context.Context, sql string, args ...any) pgx.Row {
+	if strings.Contains(sql, "FROM issue") && strings.Contains(sql, "FOR UPDATE") {
+		select {
+		case <-tx.lockReached:
+		default:
+			close(tx.lockReached)
+		}
+	}
+	return tx.Tx.QueryRow(ctx, sql, args...)
 }
 
 func createDirectEditCandidate(t *testing.T, workspaceID, uploaderID string) (string, string) {
