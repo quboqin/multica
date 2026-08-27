@@ -220,6 +220,11 @@ func TestCreativeFactoryCreativeContractTemplatesStayInSync(t *testing.T) {
 				t.Errorf("%s template missing %q", directory, value)
 			}
 		}
+		for _, file := range template.Files {
+			if strings.Contains(file.Path, "/.pytest_cache/") || strings.Contains(file.Path, "/__pycache__/") || strings.HasSuffix(file.Path, ".pyc") {
+				t.Errorf("%s template includes test cache file %q", directory, file.Path)
+			}
+		}
 	}
 
 	productionTemplate := templates["ad-creative-production"]
@@ -271,6 +276,16 @@ func TestInitializeCreativeFactoryRefreshesNeedsSetupManagedAssets(t *testing.T)
 	t.Cleanup(func() { cleanupCreativeFactoryManagedAssetsForTest(t) })
 
 	ctx := t.Context()
+	var imageSkillID string
+	oldImageConfig := `{"kind":"creative_role","capability":"image_edit","version":70,"template_version":5,"origin":"creative_factory"}`
+	if err := testPool.QueryRow(ctx, `
+INSERT INTO skill (workspace_id, name, description, content, config, created_by)
+VALUES ($1, '素材_技能_出图', 'old image edit skill', 'stale image skill body', $2::jsonb, $3)
+RETURNING id::text
+`, testWorkspaceID, oldImageConfig, testUserID).Scan(&imageSkillID); err != nil {
+		t.Fatalf("seed image-edit skill: %v", err)
+	}
+
 	var directSkillID string
 	oldConfig := `{"kind":"creative_role","capability":"direct_image_edit","version":12,"template_version":5,"origin":"creative_factory"}`
 	if err := testPool.QueryRow(ctx, `
@@ -293,8 +308,74 @@ INSERT INTO agent (
   'stale image instructions', '{}'::jsonb, '[]'::jsonb, 'old-model', 'low'
 )
 RETURNING id::text
-`, testWorkspaceID, testRuntimeID, testUserID).Scan(&imageAgentID); err != nil {
+	`, testWorkspaceID, testRuntimeID, testUserID).Scan(&imageAgentID); err != nil {
 		t.Fatalf("seed image-edit agent: %v", err)
+	}
+	var poolAgentID string
+	if err := testPool.QueryRow(ctx, `
+INSERT INTO agent (
+  workspace_id, name, description, runtime_mode, runtime_config,
+  runtime_id, visibility, max_concurrent_tasks, owner_id,
+  instructions, custom_env, custom_args, model, thinking_level
+) VALUES (
+  $1, '图像编辑智能体', '旧版精准改图直接交付', 'cloud', '{}'::jsonb,
+  $2, 'workspace', 6, $3,
+  '旧版合同要求不创建 QC task', '{}'::jsonb, '[]'::jsonb, 'pool-model', 'medium'
+)
+RETURNING id::text
+`, testWorkspaceID, testRuntimeID, testUserID).Scan(&poolAgentID); err != nil {
+		t.Fatalf("seed image-edit pool agent: %v", err)
+	}
+	if _, err := testPool.Exec(ctx, `
+INSERT INTO agent_skill (agent_id, skill_id)
+VALUES ($1::uuid, $2::uuid), ($1::uuid, $3::uuid)
+`, poolAgentID, imageSkillID, directSkillID); err != nil {
+		t.Fatalf("bind image-edit pool skills: %v", err)
+	}
+	var squadID string
+	if err := testPool.QueryRow(ctx, `
+INSERT INTO squad (workspace_id, name, description, leader_id, creator_id)
+VALUES ($1, '素材流程小队', 'test creative factory pool', $2, $3)
+RETURNING id::text
+`, testWorkspaceID, imageAgentID, testUserID).Scan(&squadID); err != nil {
+		t.Fatalf("seed creative factory squad: %v", err)
+	}
+	if _, err := testPool.Exec(ctx, `
+INSERT INTO squad_member (squad_id, member_type, member_id, role)
+VALUES ($1::uuid, 'agent', $2::uuid, '图像编辑'),
+       ($1::uuid, 'agent', $3::uuid, '出图')
+`, squadID, imageAgentID, poolAgentID); err != nil {
+		t.Fatalf("seed image-edit pool members: %v", err)
+	}
+	var customPoolAgentID string
+	if err := testPool.QueryRow(ctx, `
+INSERT INTO agent (
+  workspace_id, name, description, runtime_mode, runtime_config,
+  runtime_id, visibility, max_concurrent_tasks, owner_id,
+  instructions, custom_env, custom_args, model, thinking_level
+) VALUES (
+  $1, '素材_出图池_自定义测试', 'keep custom pool description', 'cloud', '{}'::jsonb,
+  $2, 'workspace', 4, $3,
+  'keep custom pool instructions', '{}'::jsonb, '[]'::jsonb, 'custom-pool-model', 'high'
+)
+RETURNING id::text
+`, testWorkspaceID, testRuntimeID, testUserID).Scan(&customPoolAgentID); err != nil {
+		t.Fatalf("seed custom image-edit pool agent: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM agent WHERE id = $1::uuid`, customPoolAgentID)
+	})
+	if _, err := testPool.Exec(ctx, `
+INSERT INTO agent_skill (agent_id, skill_id)
+VALUES ($1::uuid, $2::uuid)
+`, customPoolAgentID, imageSkillID); err != nil {
+		t.Fatalf("seed custom image-edit pool skill: %v", err)
+	}
+	if _, err := testPool.Exec(ctx, `
+INSERT INTO squad_member (squad_id, member_type, member_id, role)
+VALUES ($1::uuid, 'agent', $2::uuid, '自定义出图')
+`, squadID, customPoolAgentID); err != nil {
+		t.Fatalf("seed custom image-edit pool binding: %v", err)
 	}
 
 	roleAgents, _ := json.Marshal(map[string]string{
@@ -302,19 +383,33 @@ RETURNING id::text
 		"direct_image_edit": imageAgentID,
 	})
 	roleSkills, _ := json.Marshal(map[string]string{
+		"image_edit":        imageSkillID,
 		"direct_image_edit": directSkillID,
 	})
 	if _, err := testPool.Exec(ctx, `
 INSERT INTO creative_factory_installation (
   workspace_id, status, schema_version, template_version, runtime_id,
-  role_agents, role_skills, config, initialized_by, initialized_at
-) VALUES ($1, 'needs_setup', 1, 5, $2, $3::jsonb, $4::jsonb, '{"template_version":5}'::jsonb, $5, now())
-`, testWorkspaceID, testRuntimeID, string(roleAgents), string(roleSkills), testUserID); err != nil {
+  squad_id, role_agents, role_skills, config, initialized_by, initialized_at
+) VALUES ($1, 'needs_setup', 1, 5, $2, $3, $4::jsonb, $5::jsonb, '{"template_version":5}'::jsonb, $6, now())
+`, testWorkspaceID, testRuntimeID, squadID, string(roleAgents), string(roleSkills), testUserID); err != nil {
 		t.Fatalf("seed ready factory installation: %v", err)
 	}
 
 	if _, err := testHandler.initializeCreativeFactory(ctx, parseUUID(testWorkspaceID), parseUUID(testUserID), nil); err != nil {
 		t.Fatalf("initializeCreativeFactory refresh: %v", err)
+	}
+	if _, err := testPool.Exec(ctx, `
+UPDATE agent_skill binding
+SET enabled = false
+FROM skill role_skill
+WHERE binding.skill_id = role_skill.id
+  AND binding.agent_id IN ($1::uuid, $2::uuid)
+  AND role_skill.config->>'capability' = 'prime_compose'
+`, poolAgentID, customPoolAgentID); err != nil {
+		t.Fatalf("disable pool Prime skills before repeated refresh: %v", err)
+	}
+	if _, err := testHandler.initializeCreativeFactory(ctx, parseUUID(testWorkspaceID), parseUUID(testUserID), nil); err != nil {
+		t.Fatalf("initializeCreativeFactory repeated refresh: %v", err)
 	}
 
 	var content, configRaw string
@@ -351,6 +446,69 @@ WHERE id = $1::uuid
 		if !strings.Contains(instructions, required) {
 			t.Fatalf("image-edit Agent instructions missing refreshed contract %q", required)
 		}
+	}
+
+	var poolInstructions, poolDescription, poolModel string
+	var poolMaxConcurrent int
+	if err := testPool.QueryRow(ctx, `
+SELECT instructions, description, model, max_concurrent_tasks
+FROM agent
+WHERE id = $1::uuid
+`, poolAgentID).Scan(&poolInstructions, &poolDescription, &poolModel, &poolMaxConcurrent); err != nil {
+		t.Fatalf("query refreshed image-edit pool agent: %v", err)
+	}
+	for _, required := range []string{"creative_production", "creative_direct_edit", "DesignDNA", "最终视觉 QC"} {
+		if !strings.Contains(poolInstructions, required) {
+			t.Fatalf("image-edit pool Agent instructions missing refreshed contract %q", required)
+		}
+	}
+	if poolDescription != "按唯一提示词合同执行候选主视觉、selected 扩尺寸或用户标注精准改图；只编辑无品牌底图，由贴片 Skill 确定性合成。" {
+		t.Fatalf("image-edit pool Agent description was not refreshed: %q", poolDescription)
+	}
+	if poolModel != "pool-model" || poolMaxConcurrent != 6 {
+		t.Fatalf("image-edit pool runtime settings changed: model=%q max_concurrent=%d", poolModel, poolMaxConcurrent)
+	}
+	var poolCapabilities []string
+	if err := testPool.QueryRow(ctx, `
+SELECT array_agg(role_skill.config->>'capability' ORDER BY role_skill.config->>'capability')
+FROM agent_skill binding
+JOIN skill role_skill ON role_skill.id = binding.skill_id
+WHERE binding.agent_id = $1::uuid AND binding.enabled
+  AND role_skill.config->>'kind' = 'creative_role'
+`, poolAgentID).Scan(&poolCapabilities); err != nil {
+		t.Fatalf("query refreshed image-edit pool capabilities: %v", err)
+	}
+	if strings.Join(poolCapabilities, ",") != "direct_image_edit,image_edit,prime_compose" {
+		t.Fatalf("image-edit pool capabilities = %v", poolCapabilities)
+	}
+
+	var customInstructions, customDescription, customModel string
+	var customMaxConcurrent int
+	if err := testPool.QueryRow(ctx, `
+SELECT instructions, description, model, max_concurrent_tasks
+FROM agent
+WHERE id = $1::uuid
+`, customPoolAgentID).Scan(&customInstructions, &customDescription, &customModel, &customMaxConcurrent); err != nil {
+		t.Fatalf("query custom image-edit pool agent: %v", err)
+	}
+	if customInstructions != "keep custom pool instructions" || customDescription != "keep custom pool description" {
+		t.Fatalf("custom image-edit pool contract was overwritten: description=%q instructions=%q", customDescription, customInstructions)
+	}
+	if customModel != "custom-pool-model" || customMaxConcurrent != 4 {
+		t.Fatalf("custom image-edit pool runtime settings changed: model=%q max_concurrent=%d", customModel, customMaxConcurrent)
+	}
+	var customCapabilities []string
+	if err := testPool.QueryRow(ctx, `
+SELECT array_agg(role_skill.config->>'capability' ORDER BY role_skill.config->>'capability')
+FROM agent_skill binding
+JOIN skill role_skill ON role_skill.id = binding.skill_id
+WHERE binding.agent_id = $1::uuid AND binding.enabled
+  AND role_skill.config->>'kind' = 'creative_role'
+`, customPoolAgentID).Scan(&customCapabilities); err != nil {
+		t.Fatalf("query custom image-edit pool capabilities: %v", err)
+	}
+	if strings.Join(customCapabilities, ",") != "image_edit,prime_compose" {
+		t.Fatalf("custom image-edit pool capabilities = %v", customCapabilities)
 	}
 
 	var directSkillBound bool

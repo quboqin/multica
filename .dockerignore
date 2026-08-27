@@ -13,6 +13,7 @@ tmp
 **/__pycache__
 *.pyc
 **/*.pyc
+**/.pytest_cache
 .gami
 
 # Git

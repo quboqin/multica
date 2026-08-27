@@ -19,7 +19,7 @@ import (
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
-const creativeFactoryTemplateVersion = 12
+const creativeFactoryTemplateVersion = 13
 
 //go:embed creative_factory_defaults/resources.json
 var creativeFactoryDefaultResourcesJSON []byte
@@ -131,7 +131,7 @@ const creativeFactoryDirectEditAgentInstructions = `creative_direct_edit 分支�
 const creativeFactorySpecialistHandoff = `只处理 task context 指定的对象、revision 和 scope；按绑定 Skill 写结构化领域结果和机器证据。图像任务按绑定 Skill 的统一比例阈值处理：阈值内归一，10%-25% canvas repair，只有超过 25% 才重生当前尺寸；不能把像素绝对尺寸差当成模型失败。不得创建或修改 Issue，不得用评论代替领域数据。输入、凭证、工具或写回失败时保留已成功对象，写真实 error_code/error_message 并让当前 task 失败；兄弟对象继续。`
 
 func creativeFactoryImageEditAgentInstructions() string {
-	return `全程使用中文。根据 task context.workflow 选择唯一分支，并在执行前完整读取对应绑定 Skill；Skill 及其 references 是提示词、证据、归一化、Prime 和恢复规则的唯一执行真值。
+	return fmt.Sprintf("创意工厂出图能力池合同版本：%d。\n\n", creativeFactoryTemplateVersion) + `全程使用中文。根据 task context.workflow 选择唯一分支，并在执行前完整读取对应绑定 Skill；Skill 及其 references 是提示词、证据、归一化、Prime 和恢复规则的唯一执行真值。
 
 creative_production 只执行绑定的素材_技能_出图：按订单当前 candidate_state、primary_size、production_stage 和 expected_sizes 处理候选主尺寸或 selected 缺失尺寸；复用已有主图和成功回执，按 CreativeIntent、DesignDNA、LayoutPlan 独立生成尺寸，不把方图 raster 当硬依赖。只在当前阶段尺寸与过程证据齐全后调用绑定的贴片 Skill。
 
@@ -808,6 +808,15 @@ func (h *Handler) syncCreativeFactoryManagedAssets(ctx context.Context, tx pgx.T
 				return err
 			}
 		}
+		for _, spec := range creativeFactoryAgentSpecs {
+			if spec.Role != "image_edit" {
+				continue
+			}
+			if err := syncCreativeFactoryImageEditPoolAgents(ctx, tx, workspaceID, installation.SquadID, skillIDs, spec); err != nil {
+				return err
+			}
+			break
+		}
 		if leaderID, ok := agentIDs["leadership"]; ok && leaderID.Valid {
 			if _, err := tx.Exec(ctx, `
 UPDATE squad
@@ -906,6 +915,99 @@ WHERE id = $1 AND workspace_id = $2 AND archived_at IS NULL
 	return qtx.GetAgentInWorkspace(ctx, db.GetAgentInWorkspaceParams{ID: agent.ID, WorkspaceID: workspaceID})
 }
 
+func syncCreativeFactoryImageEditPoolAgents(ctx context.Context, tx pgx.Tx, workspaceID, squadID pgtype.UUID, skillIDs map[string]pgtype.UUID, spec creativeFactoryAgentSpec) error {
+	imageEditSkillID := skillIDs["image_edit"]
+	directEditSkillID := skillIDs["direct_image_edit"]
+	primeComposeSkillID := skillIDs["prime_compose"]
+	if !workspaceID.Valid || !squadID.Valid || !imageEditSkillID.Valid || !directEditSkillID.Valid || !primeComposeSkillID.Valid {
+		return nil
+	}
+
+	// Prime compose is an execution dependency for every image-edit lane. Keep
+	// custom pool instructions intact while making that dependency explicit.
+	if _, err := tx.Exec(ctx, `
+INSERT INTO agent_skill (agent_id, skill_id, enabled)
+SELECT DISTINCT pool_agent.id, $4::uuid, true
+FROM squad_member member
+JOIN squad pool_squad
+  ON pool_squad.id = member.squad_id
+ AND pool_squad.workspace_id = $2
+ AND pool_squad.archived_at IS NULL
+JOIN agent pool_agent
+  ON pool_agent.id = member.member_id
+ AND pool_agent.workspace_id = $2
+ AND pool_agent.archived_at IS NULL
+JOIN agent_skill lane_binding
+  ON lane_binding.agent_id = pool_agent.id
+ AND lane_binding.enabled
+WHERE member.squad_id = $1
+  AND member.member_type = 'agent'
+  AND lane_binding.skill_id IN ($3::uuid, $5::uuid)
+ON CONFLICT (agent_id, skill_id) DO UPDATE SET enabled = true
+`, squadID, workspaceID, imageEditSkillID, primeComposeSkillID, directEditSkillID); err != nil {
+		return err
+	}
+
+	rows, err := tx.Query(ctx, `
+UPDATE agent pool_agent
+SET description = $4,
+    instructions = $5,
+    updated_at = now()
+FROM squad_member member
+JOIN squad pool_squad
+  ON pool_squad.id = member.squad_id
+ AND pool_squad.workspace_id = $2
+ AND pool_squad.archived_at IS NULL
+JOIN agent_skill binding
+  ON binding.agent_id = member.member_id
+ AND binding.enabled
+WHERE member.squad_id = $1
+  AND member.member_type = 'agent'
+  AND binding.skill_id = $3
+  AND pool_agent.id = member.member_id
+  AND pool_agent.workspace_id = $2
+  AND pool_agent.archived_at IS NULL
+  AND (
+    pool_agent.instructions LIKE '%创意工厂出图能力池合同版本：%'
+    OR (
+      pool_agent.instructions LIKE '%不创建 QC task%'
+      AND (
+        pool_agent.instructions LIKE '%delivered_with_qc_risk%'
+        OR pool_agent.description LIKE '%精准改图直接交付%'
+      )
+    )
+  )
+RETURNING pool_agent.id
+`, squadID, workspaceID, imageEditSkillID, spec.Description, spec.Instructions)
+	if err != nil {
+		return err
+	}
+	migrated := make([]pgtype.UUID, 0)
+	for rows.Next() {
+		var agentID pgtype.UUID
+		if err := rows.Scan(&agentID); err != nil {
+			rows.Close()
+			return err
+		}
+		migrated = append(migrated, agentID)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	rows.Close()
+	for _, agentID := range migrated {
+		if _, err := tx.Exec(ctx, `
+INSERT INTO agent_skill (agent_id, skill_id, enabled)
+VALUES ($1::uuid, $2::uuid, true), ($1::uuid, $3::uuid, true)
+ON CONFLICT (agent_id, skill_id) DO UPDATE SET enabled = true
+`, agentID, directEditSkillID, primeComposeSkillID); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func ensureCreativeFactorySquadMember(ctx context.Context, tx pgx.Tx, workspaceID, squadID, agentID pgtype.UUID, role string) error {
 	_, err := tx.Exec(ctx, `
 INSERT INTO squad_member (squad_id, member_type, member_id, role)
@@ -986,7 +1088,7 @@ func loadCreativeFactoryTemplates() (map[string]creativeFactoryTemplate, error) 
 					return err
 				}
 				if entry.IsDir() {
-					if entry.Name() == "__pycache__" {
+					if entry.Name() == "__pycache__" || entry.Name() == ".pytest_cache" {
 						return filepath.SkipDir
 					}
 					return nil
