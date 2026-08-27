@@ -241,6 +241,7 @@ RETURNING id::text, order_id::text, candidate_id::text, COALESCE(source_analysis
 		"mode": "direct_edit", "user_request": input.UserRequest, "target_size": input.TargetSize, "delivery_mode": input.DeliveryMode,
 		"creative_direct_edit_delivery": map[string]any{
 			"final_visual_validation": true,
+			"visual_rework_budget":    1,
 			"delivery_mode":           input.DeliveryMode,
 			"target_size":             input.TargetSize,
 			"scope":                   "size",
@@ -256,6 +257,7 @@ RETURNING id::text, order_id::text, candidate_id::text, COALESCE(source_analysis
 	delivery, _ := taskBriefValue["creative_direct_edit_delivery"].(map[string]any)
 	delivery["source_revision"] = 1
 	delivery["edit_sizes"] = []string{input.TargetSize}
+	delivery["visual_rework_budget"] = 1
 	taskBrief, _ := json.Marshal(taskBriefValue)
 	variant, err := scanCreativeOrderVariant(tx.QueryRow(r.Context(), `
 	INSERT INTO creative_order_variant (order_item_id, variant_key, brief, revision, status, staging_revision)
@@ -337,6 +339,7 @@ RETURNING id::text, variant_id::text, asset_family_id::text, size_key, revision,
 		"raw_user_request":        input.UserRequest,
 		"prompt_compilation":      "intent_normalization_required",
 		"final_visual_validation": true,
+		"visual_rework_budget":    1,
 		"delivery_mode":           input.DeliveryMode,
 		"target_size":             input.TargetSize,
 		"edit_sizes":              []string{input.TargetSize},
@@ -359,6 +362,7 @@ RETURNING id::text, variant_id::text, asset_family_id::text, size_key, revision,
 			"raw_user_request":        input.UserRequest,
 			"prompt_compilation":      "intent_normalization_required",
 			"final_visual_validation": true,
+			"visual_rework_budget":    1,
 		},
 	})
 	if err != nil {

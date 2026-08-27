@@ -111,8 +111,9 @@ type creativeTaskImageScopeContext struct {
 		TargetSizes json.RawMessage `json:"target_sizes"`
 	} `json:"qc_visual_rework"`
 	DirectEdit struct {
-		EditSizes  json.RawMessage `json:"edit_sizes"`
-		TargetSize string          `json:"target_size"`
+		EditSizes          json.RawMessage `json:"edit_sizes"`
+		TargetSize         string          `json:"target_size"`
+		VisualReworkBudget int             `json:"visual_rework_budget"`
 	} `json:"direct_edit"`
 }
 
@@ -803,6 +804,30 @@ WHERE operation_id = $1 AND attempt = $2
 		if input.Model == "" || string(input.InputSnapshot) == "{}" {
 			writeError(w, http.StatusBadRequest, "new creative image operation requires model and input_snapshot")
 			return
+		}
+		if input.OperationKind == "visual_rework" {
+			var taskScope creativeTaskImageScopeContext
+			if err := json.Unmarshal([]byte(taskContextRaw), &taskScope); err != nil || taskScope.Workflow != "creative_direct_edit" || taskScope.DirectEdit.VisualReworkBudget < 1 {
+				writeError(w, http.StatusConflict, "creative direct edit visual rework is not budgeted by the task")
+				return
+			}
+			var rejectedDirectEditExists bool
+			if err := tx.QueryRow(r.Context(), `
+SELECT EXISTS(
+  SELECT 1
+  FROM creative_image_operation
+  WHERE variant_id = $1 AND revision = $2 AND size_key = $3
+    AND operation_kind = 'direct_edit' AND status = 'completed'
+    AND output_attachment_id IS NOT NULL AND output_asset_id IS NULL
+)
+`, variantID, input.Revision, input.SizeKey).Scan(&rejectedDirectEditExists); err != nil {
+				writeError(w, http.StatusInternalServerError, "failed to validate direct edit visual rework")
+				return
+			}
+			if !rejectedDirectEditExists {
+				writeError(w, http.StatusConflict, "creative direct edit visual rework requires one rejected completed direct edit")
+				return
+			}
 		}
 		switch input.Status {
 		case "running":

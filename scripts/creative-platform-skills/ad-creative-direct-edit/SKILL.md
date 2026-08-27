@@ -97,6 +97,7 @@ multica image edit \
 prompt hash 和输出 hash 一起写入原子 result-file。缺少其中任一参数都禁止调用 provider。
 完成后上传模型原图，并把同一 attempt 更新为 `completed`，保存完整 result receipt、request ID、provider status、耗时和输出附件；
 runtime 中断或 provider 状态不明时更新为 `unknown`。unknown 必须先对账原子 result-file、已有模型输出、过程附件和 provider 回执；只有确认都没有有效结果时，才把同一 attempt 更新为 `failed`，并提交 `error_type=provider_receipt_not_found`、`reconcile_confirmed=true`，之后才允许递增 attempt。不得更换幂等键绕过 unknown。其他明确非零退出且没有有效 result-file/回图时，才写带真实错误类型的 `failed`。
+若首次 `direct_edit` 已有成功回图但最终视觉验收失败，先把它保留为未采用过程图，绝不能将其写成 canonical asset 或 Prime。只有 task context 的 `direct_edit.visual_rework_budget >= 1` 时，才允许一次后续 `visual_rework`：新建操作使用稳定键 `<variant-id>:r<revision>:<size>:visual_rework:v1`、`operation_kind=visual_rework`、`attempt=1`，输入快照必须引用被拒绝过程图的附件和失败验收项。模型 Input 1 使用该被拒绝回图，prompt 只强化失败的安全区移动与冻结内容，禁止改写已通过的内容。这个返工是独立的受平台预算保护的 operation，不得把已完成的 `direct_edit` operation 改回 running，也不得用其他 key 建立第二次返工；返工仍失败即保留证据并转人工。
 task context 含 `late_receipt_recovery` 时，原精准修图已经成功，daemon 也已可信归档。按 `late_receipt_recoveries` 逐项处理所有迟到尺寸
 （单项时也保留 `late_receipt_recovery` 作为首项指针），回读每个 operation/attempt 的 `result_receipt`，下载对应
 `output_attachment_id`，只补归一化、过程登记、`asset-put` 和 Prime；禁止再次调用 `multica image edit`、

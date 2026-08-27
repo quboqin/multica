@@ -1192,6 +1192,105 @@ VALUES ($1, '1200x628', 1, 'generated', $2, 'running')
 	}
 }
 
+func TestCreativeDirectEditVisualReworkRequiresOneRejectedOutputAndUsesOneBudget(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	orderID, itemID, _ := createCreativeLifecycleTestOrder(t, "direct edit visual rework budget")
+	variant := putCreativeLifecycleVariant(t, orderID, itemID, "C01", 1, "running")
+	agentID := createHandlerTestAgent(t, "direct-edit-visual-rework", []byte(`{}`))
+	taskContext := fmt.Sprintf(`{
+  "type":"creative_domain_task","workflow":"creative_direct_edit",
+  "creative_order_id":%q,"creative_order_item_id":%q,
+  "variant_id":%q,"revision":1,
+  "expected_sizes":["1080x1080"],"edit_sizes":["1080x1080"],
+  "direct_edit":{"target_size":"1080x1080","edit_sizes":["1080x1080"],"visual_rework_budget":1}
+}`, orderID, itemID, variant.ID)
+	var taskID string
+	if err := testPool.QueryRow(t.Context(), `
+INSERT INTO agent_task_queue (
+  agent_id, runtime_id, status, trigger_evidence_kind, trigger_evidence_ref_id, context
+)
+VALUES ($1, (SELECT runtime_id FROM agent WHERE id = $1), 'running', 'creative_order_item_direct_edit', $2::uuid, $3::jsonb)
+RETURNING id::text
+`, agentID, itemID, taskContext).Scan(&taskID); err != nil {
+		t.Fatal(err)
+	}
+	putOperation := func(input creativeImageOperationInput) (*httptest.ResponseRecorder, creativeImageOperationResponse) {
+		t.Helper()
+		w := httptest.NewRecorder()
+		req := newRequest(http.MethodPut, "/api/creative/orders/"+orderID+"/image-operations", input)
+		req = withURLParam(req, "id", orderID)
+		req.Header.Set("X-Actor-Source", "task_token")
+		req.Header.Set("X-Agent-ID", agentID)
+		req.Header.Set("X-Task-ID", taskID)
+		testHandler.UpsertCreativeImageOperation(w, req)
+		var response creativeImageOperationResponse
+		if w.Code == http.StatusOK {
+			if err := json.NewDecoder(w.Body).Decode(&response); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return w, response
+	}
+	prompt := "move the title and table into the approved safe areas"
+	direct := creativeImageOperationInput{
+		VariantID: variant.ID, SizeKey: "1080x1080", Revision: 1, OperationKind: "direct_edit",
+		IdempotencyKey: "direct-edit:" + variant.ID + ":r1:1080x1080", Status: "running", Attempt: 1,
+		Model: "gpt-image-2", PromptSHA256: creativePromptSHA256(prompt),
+		InputSnapshot: json.RawMessage(`{"input_attachment_id":"source","input_role":"source"}`),
+	}
+	w, directOperation := putOperation(direct)
+	if w.Code != http.StatusOK || directOperation.Disposition != "invoke" {
+		t.Fatalf("start direct edit = %d %#v %s", w.Code, directOperation, w.Body.String())
+	}
+	rawAttachmentID := createCreativeOrderAssetAttachment(t, "rejected-direct-edit-output.png")
+	direct.Status = "completed"
+	direct.ProviderRequestID = "rejected-direct-edit-provider-request"
+	direct.ProviderStatus = "succeeded"
+	direct.ResultReceipt = json.RawMessage(`{"request_id":"rejected-direct-edit-provider-request","provider_status":"succeeded"}`)
+	direct.OutputAttachmentID = rawAttachmentID
+	w, directOperation = putOperation(direct)
+	if w.Code != http.StatusOK || directOperation.Status != "completed" || directOperation.OutputAttachmentID != rawAttachmentID || directOperation.OutputAssetID != "" {
+		t.Fatalf("settle rejected direct edit = %d %#v %s", w.Code, directOperation, w.Body.String())
+	}
+
+	visualRework := creativeImageOperationInput{
+		VariantID: variant.ID, SizeKey: "1080x1080", Revision: 1, OperationKind: "visual_rework",
+		IdempotencyKey: "visual-rework:" + variant.ID + ":r1:1080x1080:v1", Status: "running", Attempt: 1,
+		Model: "gpt-image-2", PromptSHA256: creativePromptSHA256("only correct the rejected safe-area findings"),
+		InputSnapshot: json.RawMessage(`{"input_attachment_id":"` + rawAttachmentID + `","input_role":"rejected_direct_edit_output","acceptance_failures":["title_safe_area","table_safe_area"]}`),
+	}
+	if _, err := testPool.Exec(t.Context(), `
+UPDATE agent_task_queue
+SET context = jsonb_set(context, '{direct_edit,visual_rework_budget}', '0'::jsonb)
+WHERE id = $1
+`, taskID); err != nil {
+		t.Fatal(err)
+	}
+	w, _ = putOperation(visualRework)
+	if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), "not budgeted") {
+		t.Fatalf("unbudgeted visual rework = %d %s", w.Code, w.Body.String())
+	}
+	if _, err := testPool.Exec(t.Context(), `
+UPDATE agent_task_queue
+SET context = jsonb_set(context, '{direct_edit,visual_rework_budget}', '1'::jsonb)
+WHERE id = $1
+`, taskID); err != nil {
+		t.Fatal(err)
+	}
+	w, reworkOperation := putOperation(visualRework)
+	if w.Code != http.StatusOK || reworkOperation.Disposition != "invoke" || reworkOperation.OperationKind != "visual_rework" {
+		t.Fatalf("start budgeted visual rework = %d %#v %s", w.Code, reworkOperation, w.Body.String())
+	}
+	duplicate := visualRework
+	duplicate.IdempotencyKey = "visual-rework-duplicate:" + variant.ID
+	w, recovered := putOperation(duplicate)
+	if w.Code != http.StatusOK || recovered.ID != reworkOperation.ID || recovered.Disposition != "reconcile" {
+		t.Fatalf("duplicate visual rework = %d %#v %s", w.Code, recovered, w.Body.String())
+	}
+}
+
 func TestCreativeImageOperationCancellationFencesOrdinaryMutation(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")

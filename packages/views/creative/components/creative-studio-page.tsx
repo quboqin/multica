@@ -648,6 +648,23 @@ function CreativeOrderDetail({ orderId, onBack, onBrowseOrders, backLabel }: { o
           onAssetInfo={setGenerationInfoAssetId}
         />;
       })}
+      {isDirectEdit && data && reviewAssets.length === 0 && data.items.map((item, index) => {
+        const itemSource = library.data?.candidates.find((candidate) => candidate.id === item.candidate_id);
+        return <CreativeOrderDeliveryCandidates
+          key={item.id}
+          orderId={orderId}
+          item={item}
+          order={data}
+          source={{ label: itemSource?.title || itemSource?.competitor || "原始素材", url: resolvePublicFileUrl(itemSource?.archived_url || itemSource?.preview_url) ?? "" }}
+          attachments={byId}
+          adoptingVariantId=""
+          onAdopt={() => undefined}
+          onAssetSelect={selectReviewAsset}
+          onAssetInfo={setGenerationInfoAssetId}
+          defaultOpen={index === 0}
+          showDirectionDetails={false}
+        />;
+      })}
     </div>
     {data && <CreativeStagingRepairWorkspace
       items={data.items}

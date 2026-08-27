@@ -518,6 +518,7 @@ RETURNING brief::text
 		"raw_user_request":               feedback.Comment,
 		"prompt_compilation":             "intent_normalization_required",
 		"final_visual_validation":        true,
+		"visual_rework_budget":           1,
 		"delivery_mode":                  "publish",
 		"target_size":                    input.SizeKey,
 		"edit_sizes":                     editSizes,
@@ -549,6 +550,7 @@ RETURNING brief::text
 			"raw_user_request":               feedback.Comment,
 			"prompt_compilation":             "intent_normalization_required",
 			"final_visual_validation":        true,
+			"visual_rework_budget":           1,
 			"annotations":                    feedbackContext["annotations"],
 		},
 	})
