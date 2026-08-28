@@ -1291,6 +1291,62 @@ WHERE id = $1
 	}
 }
 
+func TestCreativeProductionVisualReworkUsesBoundedQCReworkScope(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	orderID, itemID, _ := createCreativeLifecycleTestOrder(t, "production visual rework scope")
+	variant := putCreativeLifecycleVariant(t, orderID, itemID, "C01", 1, "running")
+	agentID := createHandlerTestAgent(t, "production-visual-rework", []byte(`{}`))
+	taskContext := fmt.Sprintf(`{
+  "type":"creative_domain_task","workflow":"creative_production",
+  "creative_order_id":%q,"creative_order_item_id":%q,
+  "variant_id":%q,"revision":1,
+  "expected_sizes":["1080x1080","1200x628","800x1000"],
+  "qc_visual_rework":{"target_sizes":["1080x1080","1200x628"]}
+}`, orderID, itemID, variant.ID)
+	var taskID string
+	if err := testPool.QueryRow(t.Context(), `
+INSERT INTO agent_task_queue (
+  agent_id, runtime_id, status, trigger_evidence_kind, trigger_evidence_ref_id, context
+)
+VALUES ($1, (SELECT runtime_id FROM agent WHERE id = $1), 'running', 'creative_order_item_production', $2::uuid, $3::jsonb)
+RETURNING id::text
+`, agentID, itemID, taskContext).Scan(&taskID); err != nil {
+		t.Fatal(err)
+	}
+	putOperation := func(sizeKey string) (*httptest.ResponseRecorder, creativeImageOperationResponse) {
+		t.Helper()
+		w := httptest.NewRecorder()
+		req := newRequest(http.MethodPut, "/api/creative/orders/"+orderID+"/image-operations", creativeImageOperationInput{
+			VariantID: variant.ID, SizeKey: sizeKey, Revision: 1, OperationKind: "visual_rework",
+			IdempotencyKey: "production-visual-rework:" + variant.ID + ":r1:" + sizeKey, Status: "running", Attempt: 1,
+			Model: "gpt-image-2", PromptSHA256: creativePromptSHA256("correct only the rejected Prime readability findings"),
+			InputSnapshot: json.RawMessage(`{"input_asset_sha256":"source","input_role":"generated_body"}`),
+		})
+		req = withURLParam(req, "id", orderID)
+		req.Header.Set("X-Actor-Source", "task_token")
+		req.Header.Set("X-Agent-ID", agentID)
+		req.Header.Set("X-Task-ID", taskID)
+		testHandler.UpsertCreativeImageOperation(w, req)
+		var response creativeImageOperationResponse
+		if w.Code == http.StatusOK {
+			if err := json.NewDecoder(w.Body).Decode(&response); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return w, response
+	}
+	w, operation := putOperation("1080x1080")
+	if w.Code != http.StatusOK || operation.Disposition != "invoke" || operation.OperationKind != "visual_rework" {
+		t.Fatalf("start bounded production visual rework = %d %#v %s", w.Code, operation, w.Body.String())
+	}
+	w, _ = putOperation("800x1000")
+	if w.Code != http.StatusUnprocessableEntity || !strings.Contains(w.Body.String(), "outside the task's current execution scope") {
+		t.Fatalf("out-of-scope production visual rework = %d %s", w.Code, w.Body.String())
+	}
+}
+
 func TestCreativeImageOperationCancellationFencesOrdinaryMutation(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")

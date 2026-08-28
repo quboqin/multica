@@ -807,12 +807,23 @@ WHERE operation_id = $1 AND attempt = $2
 		}
 		if input.OperationKind == "visual_rework" {
 			var taskScope creativeTaskImageScopeContext
-			if err := json.Unmarshal([]byte(taskContextRaw), &taskScope); err != nil || taskScope.Workflow != "creative_direct_edit" || taskScope.DirectEdit.VisualReworkBudget < 1 {
-				writeError(w, http.StatusConflict, "creative direct edit visual rework is not budgeted by the task")
+			if err := json.Unmarshal([]byte(taskContextRaw), &taskScope); err != nil {
+				writeError(w, http.StatusConflict, "creative visual rework is not budgeted by the task")
 				return
 			}
-			var rejectedDirectEditExists bool
-			if err := tx.QueryRow(r.Context(), `
+			switch taskScope.Workflow {
+			case "creative_production":
+				if _, err := parseCreativeTaskSizeArray(taskScope.QCVisualRework.TargetSizes, "qc_visual_rework.target_sizes"); err != nil {
+					writeError(w, http.StatusConflict, "creative production visual rework is not budgeted by the task")
+					return
+				}
+			case "creative_direct_edit":
+				if taskScope.DirectEdit.VisualReworkBudget < 1 {
+					writeError(w, http.StatusConflict, "creative direct edit visual rework is not budgeted by the task")
+					return
+				}
+				var rejectedDirectEditExists bool
+				if err := tx.QueryRow(r.Context(), `
 SELECT EXISTS(
   SELECT 1
   FROM creative_image_operation
@@ -821,11 +832,15 @@ SELECT EXISTS(
     AND output_attachment_id IS NOT NULL AND output_asset_id IS NULL
 )
 `, variantID, input.Revision, input.SizeKey).Scan(&rejectedDirectEditExists); err != nil {
-				writeError(w, http.StatusInternalServerError, "failed to validate direct edit visual rework")
-				return
-			}
-			if !rejectedDirectEditExists {
-				writeError(w, http.StatusConflict, "creative direct edit visual rework requires one rejected completed direct edit")
+					writeError(w, http.StatusInternalServerError, "failed to validate direct edit visual rework")
+					return
+				}
+				if !rejectedDirectEditExists {
+					writeError(w, http.StatusConflict, "creative direct edit visual rework requires one rejected completed direct edit")
+					return
+				}
+			default:
+				writeError(w, http.StatusConflict, "creative visual rework is not budgeted by the task")
 				return
 			}
 		}
