@@ -97,7 +97,7 @@ Input 3 只服务于手机屏幕内容替换：保留原画面中的手机机身
 
 ```text
 python3 <当前 Skill 目录>/references/render_prime_guide.py \
-  --layout-file <layout-<size>.json> --template-image <official-prime-template.png> \
+  --layout-file <layout-contract.json> --size-key <canonical-size> --template-image <official-prime-template.png> \
   --width <model-width> --height <model-height> --output <prime-context-<size>.png> \
   --evidence <prime-context-<size>.json>
 ```

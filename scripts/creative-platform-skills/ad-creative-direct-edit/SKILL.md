@@ -56,7 +56,7 @@ Logo、二维码、商店徽章、官方条款、红色矩形、编号和评论�
 
 ```bash
 python3 <当前 Skill 目录>/../ad-creative-production/references/render_prime_guide.py \
-  --layout-file <layout-contract.json> --width <w> --height <h> \
+  --layout-file <layout-contract.json> --size-key <size> --width <w> --height <h> \
   --template-image <official-prime-template.png> \
   --output <workdir>/official-prime-visual-context-<size>.png \
   --content-envelope-output <workdir>/official-prime-reflow-context-<size>.png \
