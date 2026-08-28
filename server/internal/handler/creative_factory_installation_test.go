@@ -217,7 +217,7 @@ func TestCreativeFactoryCreativeContractTemplatesStayInSync(t *testing.T) {
 	}
 	checks := map[string][]string{
 		"ad-creative-plan":          {"4-5 个候选", "primary_size", "CreativeIntent", "DesignDNA", "LayoutPlan", "pipeline_version", "candidate_v1"},
-		"ad-creative-production":    {"candidate_primary", "selected", "model-prompt-contract.md", "不把方图 raster 当作不可替代输入", "pipeline_version", "candidate_v1"},
+		"ad-creative-production":    {"candidate_primary", "selected", "model-prompt-contract.md", "不把方图 raster 当作不可替代输入", "pipeline_version", "candidate_v1", "MULTICA_TASK_ID"},
 		"ad-creative-prime-compose": {"each delivery size", "publishes no partial package", "fail closed"},
 		"ad-creative-direct-edit":   {"target_masks", "Transform ONLY", "official Prime visual context", "<当前 Skill 目录>/../ad-creative-production/references/normalize_image.py"},
 		"ad-creative-qc":            {"creative_candidate_selection", "candidate-select", "selected_ids", "foreground_polarity", "cross_size_design_dna_mismatch"},

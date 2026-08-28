@@ -7,6 +7,11 @@ allowed-tools: Bash(multica *), Bash(python *)
 # 广告底图生产
 
 只处理 task context 指定的 Order、Order Item、Variant、revision 和 `expected_sizes`；direct edit 不进入本 Skill。
+运行中的 Agent 进程由 daemon 注入 `MULTICA_TASK_ID`，它是当前 production task 的唯一 task ID。任何过程证据的
+`task_id` 只能使用这个环境变量；不得从 `issue_id`、`candidate_id`、`variant_id`、`item_key` 或任务描述猜测。开始上传
+Prime context、模型原图或规范化底图前，先执行 `test -n "$MULTICA_TASK_ID"`；为空时如实报告运行时身份缺失，不能调用模型。
+写回因 task ID 或并发状态冲突而失败时，先回读订单和当前 operation，用同一模型回执、附件和 `MULTICA_TASK_ID` 修复写回；
+不得重新调用模型。
 先执行 `multica creative order get <order-id> --output json`，按 `creative_order_item_id` 与 `variant_id` 精确定位当前
 订单项和变体。当前订单项的 `copy_snapshot`、Variant brief 中的 CreativeIntent/DesignDNA/LayoutPlan、冻结 market snapshot、候选素材和 Prime context 是唯一输入。
 回读后必须用以下校验器确认精确 ID、revision 和尺寸范围；只有该精确记录仍不匹配 task context 才能报告 stale task，
