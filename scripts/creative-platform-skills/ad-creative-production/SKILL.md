@@ -224,6 +224,11 @@ CLI 会把 daemon 注入的 task ID、operation 坐标、provider request ID、p
 - runtime 中断、空返回或 provider 状态不明时，把同一 operation/attempt 更新为 `unknown` 并保存已有 request ID、退出信息和耗时；unknown 只允许 reconcile，不能重发。明确完成后上传模型原图，再把同一 operation/attempt 更新为 `completed`，保存完整 `result_receipt`、request ID、provider status、耗时和 `output_attachment_id`。
 - unknown 对账时先检查原子 `result-file`、已有模型输出、过程附件和 provider 回执。找到成功结果就完成原 attempt；只有已经确认这些位置都没有有效回执时，才能把同一 attempt 更新为 `failed`，并同时提交 `error_type=provider_receipt_not_found`、`reconcile_confirmed=true`。之后才允许用递增 attempt 请求下一次 `disposition=invoke`；不得通过更换幂等键绕过 unknown。
 - 只有同一个调用已经得到非零退出码，且没有有效 `result-file`、没有有效模型输出、并且错误确属 408/429/5xx/网络传输，才把该 attempt 更新为带真实 `error_type` 的 `failed`，然后用递增 attempt 请求下一次 `disposition=invoke`。连续三次“没有返回”必须保留每次命令结果、等待时间和 `request_id`（如有），先查是否存在迟到回执或未登记资产，不能直接归因于 provider。
+
+`wait` 返回完成且原子 `result-file` 有效时，必须先上传模型原图并用该原始 JSON、原图附件 ID、`prompt_sha256`、`request_id` 和同一
+`operation_id`/attempt 调用 `image-operation-put` 将 operation 结算为 `completed`；确认服务端返回 `completed` 后，才允许写
+`asset-put`。不得以“模型回图已在本地”为由跳过这一步，否则 canonical asset 必然被 running operation 拒绝。该写回冲突只允许补齐
+operation 完成对账并重试同一 asset-put，不得重新调用模型。
 模型调用画布必须遵守 GPT Image 2 的 16px 边长约束，交付尺寸与模型画布分开记录：`1080x1080` 使用 `1088x1088`，`1200x628` 使用 `1200x624`，`800x1000` 使用 `800x992`。当前 CLI 接受 canonical 交付尺寸并自动映射到上述 provider canvas；完整模型 JSON 必须同时保留请求尺寸和实际 provider canvas。模型输出必须经过规范化到 `1080x1080`、`1200x628`、`800x1000`。比例偏差 `<=10%` 直接接受并规范化；`10%-25%` 且已存在可下载的拒绝回图时，用该回图和同尺寸 Prime context 做一次 canvas repair retry，提示词只要求压回锁定画布并保留全部业务内容；`>25%` 视为真实画布跑偏，只重生当前失败尺寸并使用更强的 CANVAS LOCK 提示词。模型调用只能通过当前 CLI 的映射，不能自行把 canonical 交付尺寸改写成其他 provider 参数。
 
 ```text
