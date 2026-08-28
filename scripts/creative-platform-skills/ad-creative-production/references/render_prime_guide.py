@@ -21,7 +21,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--height", type=int)
     parser.add_argument("--size-key")
     parser.add_argument("--template-image", help="Official Prime template preview for visual context")
-    parser.add_argument("--content-envelope-output", help="Optional non-rendering guide for conservative title/table reflow")
+    parser.add_argument("--content-envelope-output", help="Optional non-rendering dimmed-window guide for conservative title/table reflow")
     parser.add_argument("--evidence")
     return parser.parse_args()
 
@@ -223,15 +223,20 @@ def render_content_envelope_context(
 ) -> tuple[Image.Image, dict[str, Any]]:
     image, evidence = render_prime_context(layout, width, height, template_path)
     envelope = protected_content_envelope(layout, width, height)
-    overlay = Image.new("RGBA", (width, height), (0, 0, 0, 0))
-    draw = ImageDraw.Draw(overlay)
-    line_width = max(2, round(width / 270))
-    for rect, color in ((envelope["title"], (28, 174, 233, 210)), (envelope["table"], (16, 185, 129, 210))):
-        draw.rectangle(rect, fill=(color[0], color[1], color[2], 42), outline=color, width=line_width)
-    image.alpha_composite(overlay)
+    # A dimmed photomask makes the two reflow windows visible without introducing
+    # colored borders or glyphs that an image model could reproduce in the output.
+    veil_alpha = Image.new("L", (width, height), 88)
+    draw = ImageDraw.Draw(veil_alpha)
+    for region in evidence["hard_regions"]:
+        draw.rectangle(region["rect"], fill=0)
+    for rect in envelope.values():
+        draw.rectangle(rect, fill=0)
+    veil = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+    veil.putalpha(veil_alpha)
+    image.alpha_composite(veil)
     evidence["content_envelope"] = envelope
     evidence["non_rendering_context"] = True
-    evidence["render_style"] = "official_prime_reflow_context"
+    evidence["render_style"] = "official_prime_reflow_window_context"
     return image, evidence
 
 

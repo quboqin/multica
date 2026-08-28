@@ -111,8 +111,8 @@ def test_render_prime_context_emits_conservative_reflow_guide(tmp_path: Path, mo
     assert main() == 0
     with Image.open(envelope_path) as image:
         assert image.mode == "RGBA"
-        assert image.getpixel((33, 216))[3] > 0
-        assert image.getpixel((33, 620))[3] > 0
+        assert image.getpixel((540, 300))[3] == 0
+        assert image.getpixel((540, 500))[3] == 88
     evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
     assert evidence["content_envelope"] == {"title": [33, 216, 1047, 430], "table": [33, 620, 1047, 860]}
-    assert evidence["content_envelope_render_style"] == "official_prime_reflow_context"
+    assert evidence["content_envelope_render_style"] == "official_prime_reflow_window_context"
