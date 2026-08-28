@@ -2532,11 +2532,13 @@ func creativeTaskSkillCapabilities(taskContext []byte) map[string]struct{} {
 	}
 
 	capabilities := map[string][]string{
-		"creative_reference_analysis":  {"reference_analysis"},
-		"creative_pre_adaptation":      {"pre_adaptation"},
-		"creative_plan":                {"generation_plan"},
-		"creative_production":          {"image_edit", "prime_compose"},
-		"creative_direct_edit":         {"direct_image_edit", "prime_compose"},
+		"creative_reference_analysis": {"reference_analysis"},
+		"creative_pre_adaptation":     {"pre_adaptation"},
+		"creative_plan":               {"generation_plan"},
+		"creative_production":         {"image_edit", "prime_compose"},
+		// Direct edits use the production Skill's normalization and Prime-context
+		// renderer from the same task-scoped Skill bundle.
+		"creative_direct_edit":         {"image_edit", "direct_image_edit", "prime_compose"},
 		"creative_candidate_selection": {"quality_control"},
 		"creative_qc_technical":        {"quality_control"},
 		"creative_qc_visual":           {"quality_control"},

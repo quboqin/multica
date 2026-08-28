@@ -21,7 +21,7 @@ func TestCreativeTaskSkillCapabilities(t *testing.T) {
 		{
 			name:     "direct edit",
 			workflow: "creative_direct_edit",
-			want:     map[string]struct{}{"direct_image_edit": {}, "prime_compose": {}},
+			want:     map[string]struct{}{"image_edit": {}, "direct_image_edit": {}, "prime_compose": {}},
 		},
 		{
 			name:     "candidate selection",
