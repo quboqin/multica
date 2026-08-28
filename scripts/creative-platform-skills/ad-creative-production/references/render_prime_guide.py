@@ -21,6 +21,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--height", type=int)
     parser.add_argument("--size-key")
     parser.add_argument("--template-image", help="Official Prime template preview for visual context")
+    parser.add_argument("--content-envelope-output", help="Optional non-rendering guide for conservative title/table reflow")
     parser.add_argument("--evidence")
     return parser.parse_args()
 
@@ -200,6 +201,40 @@ def render_prime_context(layout: dict[str, Any], width: int, height: int, templa
     return image, evidence
 
 
+def protected_content_envelope(layout: dict[str, Any], width: int, height: int) -> dict[str, list[int]]:
+    source_width, source_height = layout_canvas_size(layout, (width, height))
+    frame = layout_safe_content_frame({**layout, "__canvas_width": source_width, "__canvas_height": source_height})
+    if frame is None:
+        raise SystemExit("official Prime layout has no safe content frame for reflow guide")
+    x1, y1, x2, y2 = scale_rect(
+        (frame["x1"], frame["y1"], frame["x2"], frame["y2"]),
+        (source_width, source_height),
+        (width, height),
+    )
+    title = [x1, max(y1, round(height * 0.20)), x2, min(y2, round(height * 0.398))]
+    table = [x1, max(y1, round(height * 0.574)), x2, min(y2 - round(height * 0.072), round(height * 0.796))]
+    if title[2] <= title[0] or title[3] <= title[1] or table[2] <= table[0] or table[3] <= table[1]:
+        raise SystemExit("official Prime layout has no room for conservative reflow guide")
+    return {"title": title, "table": table}
+
+
+def render_content_envelope_context(
+    layout: dict[str, Any], width: int, height: int, template_path: Path,
+) -> tuple[Image.Image, dict[str, Any]]:
+    image, evidence = render_prime_context(layout, width, height, template_path)
+    envelope = protected_content_envelope(layout, width, height)
+    overlay = Image.new("RGBA", (width, height), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(overlay)
+    line_width = max(2, round(width / 270))
+    for rect, color in ((envelope["title"], (28, 174, 233, 210)), (envelope["table"], (16, 185, 129, 210))):
+        draw.rectangle(rect, fill=(color[0], color[1], color[2], 42), outline=color, width=line_width)
+    image.alpha_composite(overlay)
+    evidence["content_envelope"] = envelope
+    evidence["non_rendering_context"] = True
+    evidence["render_style"] = "official_prime_reflow_context"
+    return image, evidence
+
+
 def main() -> int:
     args = parse_args()
     layouts = load_prime_layout(args.layout_file)
@@ -209,6 +244,15 @@ def main() -> int:
     output_path = Path(args.output)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     image.save(output_path, format="PNG")
+    if args.content_envelope_output:
+        if not args.template_image:
+            raise SystemExit("content envelope guide requires --template-image")
+        envelope_image, envelope_evidence = render_content_envelope_context(layout, width, height, Path(args.template_image))
+        envelope_path = Path(args.content_envelope_output)
+        envelope_path.parent.mkdir(parents=True, exist_ok=True)
+        envelope_image.save(envelope_path, format="PNG")
+        evidence["content_envelope"] = envelope_evidence["content_envelope"]
+        evidence["content_envelope_render_style"] = envelope_evidence["render_style"]
     if args.evidence:
         evidence_path = Path(args.evidence)
         evidence_path.parent.mkdir(parents=True, exist_ok=True)

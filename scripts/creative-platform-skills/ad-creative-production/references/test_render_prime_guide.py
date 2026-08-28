@@ -86,3 +86,33 @@ def test_render_prime_context_preserves_official_visual_cues_only_in_hard_region
     assert evidence["non_rendering_context"] is True
     assert evidence["render_style"] == "official_prime_visual_context"
     assert evidence["template_alpha"] == 0.58
+
+
+def test_render_prime_context_emits_conservative_reflow_guide(tmp_path: Path, monkeypatch) -> None:
+    layout_path = tmp_path / "layout-1080x1080.json"
+    template_path = tmp_path / "official-prime.png"
+    output_path = tmp_path / "prime-context.png"
+    envelope_path = tmp_path / "prime-envelope.png"
+    evidence_path = tmp_path / "prime-context.json"
+    layout_path.write_text(json.dumps({
+        "hard_regions": [
+            {"id": "header", "x1": 0, "y1": 0, "x2": 1080, "y2": 100},
+            {"id": "footer", "x1": 0, "y1": 988, "x2": 1080, "y2": 1080},
+        ],
+        "safe_content_frame": [33, 149, 1047, 938],
+    }), encoding="utf-8")
+    Image.new("RGBA", (1080, 1080), (180, 20, 30, 255)).save(template_path)
+    monkeypatch.setattr("sys.argv", [
+        "render_prime_guide.py", "--layout-file", str(layout_path), "--width", "1080", "--height", "1080",
+        "--template-image", str(template_path), "--output", str(output_path),
+        "--content-envelope-output", str(envelope_path), "--evidence", str(evidence_path),
+    ])
+
+    assert main() == 0
+    with Image.open(envelope_path) as image:
+        assert image.mode == "RGBA"
+        assert image.getpixel((33, 216))[3] > 0
+        assert image.getpixel((33, 620))[3] > 0
+    evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+    assert evidence["content_envelope"] == {"title": [33, 216, 1047, 430], "table": [33, 620, 1047, 860]}
+    assert evidence["content_envelope_render_style"] == "official_prime_reflow_context"

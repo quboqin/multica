@@ -445,8 +445,8 @@ WHERE id = $1::uuid
 	if err := json.Unmarshal([]byte(configRaw), &config); err != nil {
 		t.Fatalf("decode refreshed skill config: %v", err)
 	}
-	if got := int(config["version"].(float64)); got != 26 {
-		t.Fatalf("direct-edit Skill version = %d, want 26", got)
+	if got := int(config["version"].(float64)); got != 27 {
+		t.Fatalf("direct-edit Skill version = %d, want 27", got)
 	}
 	if got := int(config["template_version"].(float64)); got != creativeFactoryTemplateVersion {
 		t.Fatalf("direct-edit template_version = %d, want %d", got, creativeFactoryTemplateVersion)

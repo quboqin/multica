@@ -41,12 +41,32 @@ Logo、二维码、商店徽章、官方条款、红色矩形、编号和评论�
 3. `delivery_mode=publish` 时，额外传入当前尺寸的 `official Prime visual context`：它必须由冻结市场包中真实透明模板和
    `prime_layout_contract` 渲染，半透明展示未来会覆盖的官方组件。没有 annotation guide 时它是 `Input 2`；有 annotation guide 时它是 `Input 3`。
    它只用于理解实际遮挡关系、组件明暗和需保持安静的背景，绝不可复制其中的任何 Prime 像素或文字到输出。
+4. 当正式投放同时调整标题组和表格组时，额外传入由同一真实 Prime 模板派生的 `official Prime reflow context`：它以无文字的半透明框显示
+   `protected_content_envelope` 的标题/表格内侧目标区。没有 annotation guide 时它是 `Input 3`；有 annotation guide 时它是 `Input 4`。
+   这是位置参考，不是可编辑内容；绝不可复制绿色/蓝色框、Prime 像素或任何引导标记到输出。
 
 正式投放在写 `intent-plan.json` 前必须取得这一视觉上下文：从当前订单的冻结 `input_snapshot.market_pack` 读取当前尺寸模板和
 `prime_layout_contract`，下载匹配的官方透明模板，并使用同一 Skill 相对目录下的
 `../ad-creative-production/references/render_prime_guide.py` 生成 `render_style=official_prime_visual_context` 的 PNG。必须把这张 PNG
 作为同一次 `multica image edit` 的非可编辑输入；若模板、布局合同或视觉上下文任一项缺失，停止当前尺寸并写
 `error_code=official_prime_visual_context_missing`，不得改用虚线、抽象“安全区”文字或 Agent 目测。
+
+正式投放必须按以下实际命令生成视觉输入；`<layout-contract.json>`、`<official-prime-template.png>`、`<w>` 与 `<h>` 都来自当前尺寸
+冻结市场包，不能由旧订单或记忆代替：
+
+```bash
+python3 <当前 Skill 目录>/../ad-creative-production/references/render_prime_guide.py \
+  --layout-file <layout-contract.json> --width <w> --height <h> \
+  --template-image <official-prime-template.png> \
+  --output <workdir>/official-prime-visual-context-<size>.png \
+  --content-envelope-output <workdir>/official-prime-reflow-context-<size>.png \
+  --evidence <workdir>/official-prime-context-<size>.json
+```
+
+当同时处理标题组和表格组时，同一次 `multica image edit` 必须按 `source base`、可选 `annotation brief`、`official Prime visual context`、
+`official Prime reflow context` 的顺序传入上述 PNG；后两个永远只读。渲染命令必须传入 `--content-envelope-output <workdir>/official-prime-reflow-context-<size>.png`，
+并把生成的 `render_style=official_prime_reflow_context` PNG 作为紧跟 Prime visual context 的只读输入。它直接由当前真实模板和安全框计算，
+不允许用手写坐标、文本说明或历史模板替代；缺少它时停止当前尺寸并写 `error_code=official_prime_reflow_context_missing`。
 
 预览模式没有官方贴片真值。它可以完成用户明确可见的局部改图，但不得声称“重新贴片后不会遮挡”；用户要求避开二维码、Logo、条款或
 其他未提供的 Prime 组件时，必须要求切换为正式投放或提供最终图标注参考，不能靠猜测发起模型调用。
@@ -71,11 +91,9 @@ Logo、二维码、商店徽章、官方条款、红色矩形、编号和评论�
 不得用底图目检或“看起来已移动”替代。
 
 正式投放的 `protected_content_envelope` 必须从当前尺寸的真实 Prime visual context 和 `safe_content_frame` 推导，而不是沿用底图旧坐标。
-它要为标题组和表格组留出比贴片边界更保守的内侧缓冲：标题组外边界至少在画布高度的 `20%` 以下，表格面板外边界必须在画布高度的
-`80%` 以上结束，且与底部官方贴片起点之间保留不少于画布高度 `12%` 的连续空背景。对 `1080x1080`，必须把完整标题组放在
-`y=216..430` 的内侧区，把完整表格面板（边框、每行文字和必要留白都计入）放在 `y=620..860` 的内侧区；如果原表格放不下，只可对该
-表格整体缩小并压缩行距、列距和内部留白，绝不能仅向上轻推后让底边贴近或越过底部贴片。将这些内侧边界写成每个 target mask 的
-acceptance check，并让最终 prompt 明确要求保留显著、连续的顶部和底部空背景。
+标题组和表格组的内侧边界以同尺寸 `official Prime reflow context` 的无文字框为唯一视觉真值；prompt 不得写入坐标、百分比、
+尺寸特例或对模板位置的文字猜测。如果原表格放不下，只可对该表格整体缩小并压缩行距、列距和内部留白，绝不能仅向上轻推后让底边贴近或越过
+底部贴片。将视觉框关系写成每个 target mask 的 acceptance check，并让最终 prompt 明确要求保留显著、连续的顶部和底部空背景。
 
 最终 prompt 只包含会改变像素的编辑指令，不得包含 order/task/revision、文件路径、哈希、request ID、上传、登记、重试、超时、状态、JSON、
 CLI 或附件血缘。必须按以下优先级表达：只编辑 Input 1；annotation 和 official Prime visual context 仅用于理解固定贴片关系；用户要达成的视觉结果；允许联动调整的
