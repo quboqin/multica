@@ -127,9 +127,9 @@ visual lane 输出逐尺寸 checked assets、`prime_assets_readable`、`key_cont
 }
 ```
 
-`official_prime_text_unreadable` 的 diagnosis 使用同一格式，末段必须引用该尺寸 selected template 的
-`foreground_polarity`、所需 `background_support.polarity`、失败的 contrast/texture threshold 和 component mask，写成
-`期望承托区匹配结构化极性并达到证据中的相对亮度与纹理门槛`；禁止把任何背景极性写成固定常量。
+`official_prime_text_unreadable` 的 diagnosis 使用同一格式，必须引用该尺寸 selected template 的
+`foreground_polarity`、所需 `background_support.polarity`、失败的 contrast/texture threshold 和 component mask，并以
+`期望调整为满足 background_support.polarity 的低纹理承托背景，使该官方文字区域达到证据中的相对亮度与纹理门槛` 收尾；禁止把任何背景极性写成固定常量。
 `generated_content_missing` 的 diagnosis 必须写明 `期望补齐冻结文案 copy_snapshot`，但该问题不属于自动模型返工范围。
 遮挡诊断的冲突词可以使用 `冲突`、`重叠`、`叠压`、`遮挡` 或明确的 `进入顶部 Prime 禁区`/`进入底部 Prime 禁区`，并始终保留 `期望移动到 safe_content_frame ...` 的目标坐标。
 这是对最终图的视觉结论，不是区域脚本推断。模型收到后只改无品牌底图；它不能画横条、白块或品牌组件占位物。

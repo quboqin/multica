@@ -2155,11 +2155,15 @@ func validCreativeVisualModelReworkDiagnosis(code, sizeKey, diagnosis string) bo
 			(strings.Contains(diagnosis, "safe_content_frame") || strings.Contains(diagnosis, " y")) &&
 			(strings.Contains(diagnosis, "冲突") || strings.Contains(diagnosis, "重叠") || strings.Contains(diagnosis, "叠压") || strings.Contains(diagnosis, "遮挡") || strings.Contains(diagnosis, "进入顶部 Prime 禁区") || strings.Contains(diagnosis, "进入底部 Prime 禁区"))
 	}
-	return strings.Contains(diagnosis, "期望调整为") &&
-		(strings.Contains(diagnosis, "背景") || strings.Contains(strings.ToLower(diagnosis), "background")) &&
-		(strings.Contains(diagnosis, "冲突") || strings.Contains(diagnosis, "重叠") || strings.Contains(diagnosis, "遮挡") || strings.Contains(diagnosis, "进入") ||
-			strings.Contains(diagnosis, "不可读") || strings.Contains(diagnosis, "看不清") || strings.Contains(diagnosis, "不清晰") ||
-			strings.Contains(diagnosis, "难以辨认") || strings.Contains(diagnosis, "对比不足"))
+	readsUnclearOfficialText := strings.Contains(diagnosis, "不可读") || strings.Contains(diagnosis, "看不清") ||
+		strings.Contains(diagnosis, "不清晰") || strings.Contains(diagnosis, "难以辨认") || strings.Contains(diagnosis, "对比不足")
+	requestsBackgroundRework := strings.Contains(diagnosis, "期望调整为") &&
+		(strings.Contains(diagnosis, "背景") || strings.Contains(strings.ToLower(diagnosis), "background"))
+	legacyStructuredSupport := strings.Contains(diagnosis, "期望承托区") &&
+		strings.Contains(diagnosis, "极性") &&
+		(strings.Contains(diagnosis, "相对亮度") || strings.Contains(strings.ToLower(diagnosis), "luminance")) &&
+		(strings.Contains(diagnosis, "纹理") || strings.Contains(strings.ToLower(diagnosis), "texture"))
+	return (requestsBackgroundRework || legacyStructuredSupport) && readsUnclearOfficialText
 }
 
 func creativeVisualModelReworkAttemptCount(ctx context.Context, tx pgx.Tx, variantID pgtype.UUID) (int, error) {

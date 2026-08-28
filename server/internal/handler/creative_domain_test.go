@@ -3323,10 +3323,18 @@ func TestCreativeVisualModelReworkFindingsAcceptsOnlyFinalVisualDefects(t *testi
 }`), expectedSizes); err != nil {
 		t.Fatalf("unreadable official text diagnosis rejected: %v", err)
 	}
+	if _, err := creativeVisualModelReworkFindings(json.RawMessage(`{
+  "blocking_failures": [
+    {"code":"official_prime_text_unreadable","size_key":"800x1000","diagnosis":"800x1000：右上官方条款在最终 Prime 成图的深色背景上不可读；selected template foreground_polarity=dark，background_support.polarity=dark，relative luminance p10=1.0295 低于 threshold=3、texture p90=0.086863（threshold=0.18）；期望承托区匹配结构化极性并达到证据中的相对亮度与纹理门槛"}
+  ]
+}`), expectedSizes); err != nil {
+		t.Fatalf("structured official text support diagnosis rejected: %v", err)
+	}
 	for _, invalid := range []json.RawMessage{
 		json.RawMessage(`{"blocking_failures":["normal visual overlap"]}`),
 		json.RawMessage(`{"blocking_failures":[{"code":"predicted_prime_obstruction","size_key":"1200x628","diagnosis":"1200x628：标题 与 bottom Prime 冲突；期望移动到 safe_content_frame 内 y<=430"}]}`),
 		json.RawMessage(`{"blocking_failures":[{"code":"generated_content_missing","size_key":"1080x1080","diagnosis":"1080x1080：利益点组件 与 冻结文案缺失；期望补齐冻结文案 copy_snapshot"}]}`),
+		json.RawMessage(`{"blocking_failures":[{"code":"official_prime_text_unreadable","size_key":"1200x628","diagnosis":"1200x628：官方条款不可读；期望承托区匹配结构化极性"}]}`),
 		json.RawMessage(`{"blocking_failures":[{"code":"actual_prime_obstruction","size_key":"1200x628","diagnosis":"1200x628：标题 与 top official Prime template content 冲突；期望移动到 safe_content_frame 内 y<=430"},{"code":"actual_prime_obstruction","size_key":"1200x628","diagnosis":"1200x628：表格 与 bottom official Prime template content 冲突；期望移动到 safe_content_frame 内 y<=430"}]}`),
 	} {
 		if _, err := creativeVisualModelReworkFindings(invalid, expectedSizes); err == nil {
