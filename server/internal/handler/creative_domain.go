@@ -2273,39 +2273,66 @@ func mergeCreativePrimeCriticalReadabilityFailures(input creativeOrderQCInput, c
 			return input, errors.New("findings.blocking_failures must be an array")
 		}
 	}
-	blockingIndexes := make(map[string]int, len(blocking))
-	for index, raw := range blocking {
-		var existing creativeVisualModelReworkFinding
-		if json.Unmarshal(raw, &existing) == nil && strings.TrimSpace(existing.SizeKey) != "" {
-			blockingIndexes[strings.TrimSpace(existing.SizeKey)] = index
-		}
-	}
+	criticalBySize := make(map[string]creativeVisualModelReworkFinding, len(critical))
 	for _, finding := range critical {
-		if index, exists := blockingIndexes[finding.SizeKey]; exists {
-			var existing creativeVisualModelReworkFinding
-			if json.Unmarshal(blocking[index], &existing) == nil &&
-				strings.TrimSpace(existing.Code) == "official_prime_text_unreadable" &&
-				!validCreativeVisualModelReworkDiagnosis(
-					strings.TrimSpace(existing.Code),
-					strings.TrimSpace(existing.SizeKey),
-					strings.TrimSpace(existing.Diagnosis),
-				) {
-				encoded, err := json.Marshal(finding)
-				if err != nil {
-					return input, err
-				}
-				// A same-size model diagnosis that cannot drive bounded rework must
-				// not suppress the compositor's authoritative readability failure.
-				blocking[index] = encoded
-			}
+		finding.SizeKey = strings.TrimSpace(finding.SizeKey)
+		criticalBySize[finding.SizeKey] = finding
+	}
+	type criticalSizeState struct {
+		seen        bool
+		allEligible bool
+		obstruction string
+	}
+	criticalState := make(map[string]criticalSizeState, len(critical))
+	retained := make([]json.RawMessage, 0, len(blocking))
+	for _, raw := range blocking {
+		var existing creativeVisualModelReworkFinding
+		if json.Unmarshal(raw, &existing) != nil {
+			retained = append(retained, raw)
 			continue
+		}
+		sizeKey := strings.TrimSpace(existing.SizeKey)
+		if _, isCritical := criticalBySize[sizeKey]; !isCritical {
+			retained = append(retained, raw)
+			continue
+		}
+		state := criticalState[sizeKey]
+		if !state.seen {
+			state.allEligible = true
+		}
+		state.seen = true
+		existing.Code = strings.TrimSpace(existing.Code)
+		existing.Diagnosis = strings.TrimSpace(existing.Diagnosis)
+		if existing.Code != "actual_prime_obstruction" && existing.Code != "official_prime_text_unreadable" {
+			state.allEligible = false
+			retained = append(retained, raw)
+		} else if existing.Code == "actual_prime_obstruction" &&
+			validCreativeVisualModelReworkDiagnosis(existing.Code, sizeKey, existing.Diagnosis) {
+			state.obstruction = existing.Diagnosis
+		}
+		criticalState[sizeKey] = state
+	}
+	blocking = retained
+	for _, finding := range critical {
+		finding.SizeKey = strings.TrimSpace(finding.SizeKey)
+		state := criticalState[finding.SizeKey]
+		if state.seen && !state.allEligible {
+			continue
+		}
+		if state.obstruction != "" {
+			obstruction := strings.TrimPrefix(state.obstruction, finding.SizeKey+"：")
+			candidate := finding.Diagnosis + "；同时修正已核实的 Prime 遮挡：" + obstruction
+			if len([]rune(candidate)) <= 500 {
+				finding.Diagnosis = candidate
+			} else {
+				finding.Diagnosis += "；同时将被遮挡的正文移回 safe_content_frame"
+			}
 		}
 		encoded, err := json.Marshal(finding)
 		if err != nil {
 			return input, err
 		}
 		blocking = append(blocking, encoded)
-		blockingIndexes[finding.SizeKey] = len(blocking) - 1
 	}
 	encodedBlocking, err := json.Marshal(blocking)
 	if err != nil {

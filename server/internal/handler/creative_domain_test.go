@@ -3377,7 +3377,9 @@ func TestCreativePrimeCriticalReadabilityFindingsFenceVisualQCBypass(t *testing.
   "checked_assets":[{"size_key":"800x1000"}],
   "quality_warnings":[],
   "blocking_failures":[
+    {"code":"actual_prime_obstruction","size_key":"1080x1080","diagnosis":"1080x1080：冻结标题与顶部 Prime 禁区冲突；期望移动到 safe_content_frame 内 y>99"},
     {"code":"official_prime_text_unreadable","size_key":"1080x1080","diagnosis":"1080x1080：selected template support has p10=1.0345 and texture=0.227531；期望调整为低纹理背景"},
+    {"code":"actual_prime_obstruction","size_key":"1200x628","diagnosis":"1200x628：还款表与底部 Prime 禁区冲突；期望移动到 safe_content_frame 内 y<566"},
     {"code":"official_prime_text_unreadable","size_key":"1200x628","diagnosis":"1200x628：selected template support has p10=1.2408；期望调整为低纹理背景"}
   ]
 }`),
@@ -3397,8 +3399,8 @@ func TestCreativePrimeCriticalReadabilityFindingsFenceVisualQCBypass(t *testing.
 		t.Fatalf("merged critical finding sizes = %#v", sizes)
 	}
 	for _, finding := range findings {
-		if !strings.Contains(finding.Diagnosis, "实际不可读") {
-			t.Fatalf("critical finding did not replace malformed model diagnosis: %#v", finding)
+		if !strings.Contains(finding.Diagnosis, "实际不可读") || !strings.Contains(finding.Diagnosis, "safe_content_frame") {
+			t.Fatalf("critical finding did not consolidate model findings: %#v", finding)
 		}
 	}
 }
