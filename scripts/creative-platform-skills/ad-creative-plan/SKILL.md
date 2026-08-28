@@ -57,8 +57,8 @@ multica creative source-analysis list --candidate-id <candidate-id> --output jso
 候选阶段只生成一个 `primary_size` 主视觉。主尺寸由该方向的构图机制决定：横向比较或宽场景选 `1200x628`，竖向人物、
 手机或叙事栈选 `800x1000`，均衡、径向或模块化方向选 `1080x1080`；不得固定先做方图。每个候选先在 variant-put 顶层写
 `candidate_state=candidate` 与 `primary_size`，再用仅包含该主尺寸的 task `expected_sizes` 独立 fanout 主尺寸生产。4-5 个主尺寸
-Prime 图形成 4-5 个合格候选后，由 `creative_candidate_selection` 独立比较；计划 5 个时允许其中 1 个在有界恢复后终态失败并由平台标记 rejected，
-其余 4 个继续比较，少于 4 个不得比较。Planner 不预选三个最终 Variant，不逐条改状态冒充晋级，也不在候选阶段补其他尺寸。
+Prime 图形成至少 3 个合格候选后，由 `creative_candidate_selection` 独立比较；终态失败候选由平台标记 rejected，
+其余候选继续比较。少于 3 个时不晋级，保留真实失败供有界恢复或人工处理。Planner 不预选三个最终 Variant，不逐条改状态冒充晋级，也不在候选阶段补其他尺寸。
 
 候选比较原子选择恰好 3 个，按 rank 1-3 设为 `selected`，其余为 `reserve`。reserve 的主视觉、提示词、模型回执和附件血缘必须保留，
 但不参与订单交付汇总。selected 复用已完成主尺寸，平台把其 `expected_sizes` 扩展为冻结的完整三尺寸，再只补缺失两尺寸。

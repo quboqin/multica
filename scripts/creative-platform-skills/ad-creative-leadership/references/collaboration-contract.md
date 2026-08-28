@@ -62,7 +62,7 @@ runtime 和 provider 限额控制。
 拒绝覆盖更高 revision。
 
 每个 item 先有 4-5 个 candidate Variant，各自只生成由方向选择的 `primary_size`；候选原子晋级恰好 3 个，reserve 保留但不参与交付汇总。
-计划 5 个候选时允许 1 个在有界恢复后终态失败并标记 rejected，其余 4 个仍可进入原子比较；少于 4 个合格候选不能比较。
+终态失败候选由平台标记 rejected；至少 3 个合格候选即可进入原子比较，少于 3 个则保留真实失败供有界恢复或人工处理。
 selected 的 expected sizes 共享批准文案、业务语义、DesignDNA、信息层级和 `asset_family_id`；各尺寸按 LayoutPlan 从同一参考独立生成，
 主尺寸只可作为一致性参考，不是方形硬依赖。后端只按冻结 config 原样叠加完整品牌模板。`prime_compose` Skill 只调用后端确定性合成；visual QC 写独立报告；`qc-finalize` 在视觉报告归档后
 按报告与返工策略登记 delivered assets、Variant completion 和 Inbox；阻断 finding 不能由 Agent 自报通过。

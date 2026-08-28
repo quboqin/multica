@@ -161,7 +161,7 @@ class FullTemplateComposeTest(unittest.TestCase):
             {"240x240": "light_low_texture", "300x150": "dark_low_texture", "150x300": "light_low_texture"},
         )
 
-    def test_one_size_without_an_adequate_template_fails_the_whole_package_closed(self) -> None:
+    def test_one_size_without_an_adequate_template_is_composed_with_qc_risk(self) -> None:
         bodies = self.write_bodies_by_size({
             "240x240": (245, 245, 245, 255),
             "300x150": (15, 30, 50, 255),
@@ -174,18 +174,14 @@ class FullTemplateComposeTest(unittest.TestCase):
             self.write_family("green", (0, 130, 70, 255)),
         )
 
-        self.assertEqual(result["succeeded"], 0)
-        self.assertEqual(result["failed"], 1)
-        self.assertEqual(result["results"], [])
-        self.assertFalse(any((self.root / f"final-{size}.png").exists() for size in SIZES))
-        failed = result["failures"][0]
-        self.assertEqual(failed["size"], "150x300")
-        self.assertEqual(failed["error_code"], "prime_no_adequate_template_for_size")
-        self.assertEqual(failed["template_selection"]["visual_adequacy"]["status"], "failed_no_adequate_template")
-        selection_by_size = {item["size"]: item["template_selection"] for item in result["size_selections"]}
+        self.assertEqual(result["succeeded"], 3)
+        self.assertEqual(result["failed"], 0)
+        self.assertTrue(all((self.root / f"final-{size}.png").exists() for size in SIZES))
+        selection_by_size = {item["size"]: item["template_selection"] for item in result["results"]}
         self.assertEqual(selection_by_size["240x240"]["selected_family_id"], "green_full")
         self.assertEqual(selection_by_size["300x150"]["selected_family_id"], "white_full")
-        self.assertEqual(selection_by_size["150x300"]["selected_family_id"], "")
+        self.assertEqual(selection_by_size["150x300"]["selection_reason"], "highest_measured_support_with_qc_risk")
+        self.assertEqual(selection_by_size["150x300"]["visual_adequacy"]["status"], "qc_risk")
 
     def test_legacy_validation_snapshot_without_polarity_metadata_remains_compatible(self) -> None:
         bodies = self.write_bodies((15, 30, 50, 255))
@@ -204,7 +200,7 @@ class FullTemplateComposeTest(unittest.TestCase):
         self.assertEqual(result["succeeded"], 3)
         self.assertTrue(all(item["visibility_audit"]["visual_adequacy"]["adequate"] for item in result["results"]))
 
-    def test_high_texture_under_the_visible_glyph_mask_is_rejected(self) -> None:
+    def test_high_texture_under_the_visible_glyph_mask_is_retained_as_qc_risk(self) -> None:
         bodies = self.write_bodies((250, 250, 250, 255))
         for size, path in bodies.items():
             width, height = SIZES[size]
@@ -219,11 +215,11 @@ class FullTemplateComposeTest(unittest.TestCase):
             self.write_family("green", (0, 80, 40, 255)),
         )
 
-        self.assertGreater(result["failed"], 0)
+        self.assertEqual(result["failed"], 0)
         codes = {
             code
-            for failure in result["failures"]
-            for candidate in failure["template_selection"]["candidates"]
+            for selection in result["size_selections"]
+            for candidate in selection["template_selection"]["candidates"]
             for code in candidate["visual_adequacy"]["inadequacy_codes"]
         }
         self.assertIn("prime_background_too_textured", codes)

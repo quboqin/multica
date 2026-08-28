@@ -14,7 +14,7 @@ from PIL import Image
 
 
 PACKAGE_CONTRACT_VERSION = 6
-ENGINE_VERSION = 6
+ENGINE_VERSION = 7
 MAX_TEMPLATE_ASPECT_DEVIATION = 0.002
 SIZE_PATTERN = re.compile(r"^[1-9]\d*x[1-9]\d*$", re.IGNORECASE)
 MINIMUM_TEMPLATE_READABILITY_CONTRAST = 24.0
@@ -539,26 +539,52 @@ def select_template_for_size(job: dict[str, Any], package: dict[str, Any], root:
             },
             "candidates": candidates,
         }
-    failure_reasons = sorted({
-        code
-        for candidate in candidates
-        for code in candidate.get("visual_adequacy", {}).get("inadequacy_codes", [])
-    })
-    return None, None, None, {
+    if contrast_selected is None:
+        return None, None, None, {
+            "size": size,
+            "selection_scope": "delivery_size",
+            "selection_mode": "automatic_family_contrast",
+            "selection_reason": "no_evaluable_template_for_size",
+            "selected_family_id": "",
+            "selected_family_label": "",
+            "selected_source_role": "",
+            "visual_adequacy": {
+                "status": "failed_no_evaluable_template",
+                "adequate": False,
+                "failure_code": "prime_template_evaluation_failed",
+                "inadequacy_codes": ["prime_template_evaluation_failed"],
+                "contrast_preferred_family_id": "",
+                "selected_family_id": "",
+                "reselected_without_regenerating_base": False,
+            },
+            "candidates": candidates,
+        }
+
+    # Support measurements are quality evidence, not an availability gate. An
+    # approved template with the strongest measured support still composes; the
+    # final visual QC evaluates the actual Prime image.
+    selected, template, evidence = contrast_selected
+    return selected, template, evidence, {
         "size": size,
         "selection_scope": "delivery_size",
         "selection_mode": "automatic_family_contrast",
-        "selection_reason": "no_adequate_template_for_size",
-        "selected_family_id": "",
-        "selected_family_label": "",
-        "selected_source_role": "",
+        "selection_reason": "highest_measured_support_with_qc_risk",
+        "selected_family_id": selected["id"],
+        "selected_family_label": selected["label"],
+        "selected_source_role": evidence["selected_source_role"],
+        "minimum_band_contrast": evidence["minimum_band_contrast"],
+        "average_band_contrast": evidence["average_band_contrast"],
+        "overall_contrast": evidence["overall_contrast"],
+        "minimum_relative_luminance_contrast": evidence["background_support"]["relative_luminance_contrast"]["minimum_local_p10"],
+        "foreground_polarity": evidence["foreground_polarity"],
+        "support_requirement": evidence["support_requirement"],
+        "background_polarity": evidence["background_support"]["polarity"],
         "visual_adequacy": {
-            "status": "failed_no_adequate_template",
+            "status": "qc_risk",
             "adequate": False,
-            "failure_code": "prime_no_adequate_template_for_size",
-            "inadequacy_codes": failure_reasons,
-            "contrast_preferred_family_id": contrast_selected[0]["id"] if contrast_selected else "",
-            "selected_family_id": "",
+            "inadequacy_codes": evidence["visual_adequacy"]["inadequacy_codes"],
+            "contrast_preferred_family_id": selected["id"],
+            "selected_family_id": selected["id"],
             "reselected_without_regenerating_base": False,
         },
         "candidates": candidates,

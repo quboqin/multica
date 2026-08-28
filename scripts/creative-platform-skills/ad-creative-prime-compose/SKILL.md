@@ -24,9 +24,8 @@ the required unbranded base assets for the order variant.
    Use `--force` only for an explicit deterministic retry of a failed job on
    the same writable staging revision when the platform operator or task
    contract requests it. It does not make a completed generated asset
-   writable and must not be used for `prime_no_adequate_template_for_size`;
-   that failure requires the production Skill's platform-created next-revision
-   background-support task.
+   writable. A successful result may report `qc_risk`; preserve that evidence
+   and let final visual QC assess the actual Prime image.
 
 4. Treat a non-zero exit, invalid JSON, or a JSON result without an explicit
    success/completed signal as a composition failure. Do not register a

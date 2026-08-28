@@ -87,8 +87,8 @@ composer evidence; it is not copied into the model prompt.
 ## Candidate comparison
 
 Every candidate must differ in hypothesis and at least two high-salience DesignDNA dimensions. Before main-image generation, record
-an adaptability forecast for all three sizes. After four or five usable main-size Prime images exist, the independent candidate-selection
+an adaptability forecast for all three sizes. After at least three usable main-size Prime images exist, the independent candidate-selection
 review scores each image on approved-copy readability, visual appeal, hypothesis clarity, differentiation, Prime integration, and
 three-size adaptability. The reviewer selects exactly three; the Planner and producer must not update candidates one by one to mimic
-an atomic selection. If five were planned and exactly one is terminally unusable after bounded recovery, the platform may reject it and
-continue with the other four; fewer than four usable candidates cannot enter comparison.
+an atomic selection. The platform may reject terminally unusable candidates and continue with the remaining candidates; fewer than three
+usable candidates cannot enter comparison.

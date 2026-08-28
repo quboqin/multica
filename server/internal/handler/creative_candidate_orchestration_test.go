@@ -414,7 +414,7 @@ WHERE trigger_evidence_kind = $1 AND trigger_evidence_ref_id = $2
 	}
 }
 
-func TestCreativeCandidateSelectionDoesNotQueueBelowFourReady(t *testing.T) {
+func TestCreativeCandidateSelectionQueuesThreeReadyAfterTerminalFailure(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
 	}
@@ -440,8 +440,8 @@ func TestCreativeCandidateSelectionDoesNotQueueBelowFourReady(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if queued {
-		t.Fatal("candidate comparison queued with only three ready primary packages")
+	if !queued {
+		t.Fatal("candidate comparison did not queue with three ready primary packages")
 	}
 	var taskCount int
 	if err := testPool.QueryRow(t.Context(), `
@@ -450,8 +450,22 @@ WHERE trigger_evidence_kind = $1 AND trigger_evidence_ref_id = $2
 `, creativeCandidateSelectionEvidenceKind, fixture.ItemID).Scan(&taskCount); err != nil {
 		t.Fatal(err)
 	}
-	if taskCount != 0 {
-		t.Fatalf("candidate comparison tasks below minimum = %d", taskCount)
+	if taskCount != 1 {
+		t.Fatalf("candidate comparison tasks = %d, want 1", taskCount)
+	}
+	var rejectedCount, candidateCount int
+	if err := testPool.QueryRow(t.Context(), `
+SELECT count(*) FILTER (WHERE candidate_state = 'rejected'),
+       COALESCE(max(jsonb_array_length(context->'candidates')), 0)
+FROM creative_order_variant variant
+LEFT JOIN agent_task_queue task
+  ON task.trigger_evidence_kind = $2 AND task.trigger_evidence_ref_id = variant.order_item_id
+WHERE variant.order_item_id = $1
+`, fixture.ItemID, creativeCandidateSelectionEvidenceKind).Scan(&rejectedCount, &candidateCount); err != nil {
+		t.Fatal(err)
+	}
+	if rejectedCount != 1 || candidateCount != 3 {
+		t.Fatalf("three-ready handoff = rejected %d candidates %d", rejectedCount, candidateCount)
 	}
 }
 
@@ -624,6 +638,53 @@ WHERE trigger_evidence_kind = $1 AND trigger_evidence_ref_id = $2
 	}
 	if selectionTaskCount != 1 {
 		t.Fatalf("ranked candidate selection tasks = %d, want 1", selectionTaskCount)
+	}
+}
+
+func TestCreativeCandidateSelectionCompletesWithoutReserveAfterTerminalRejection(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	fixture, task, variantIDs := prepareCreativeCandidateSelectionTask(t, "candidate completion without reserve")
+	if _, err := testPool.Exec(t.Context(), `
+UPDATE creative_order_variant
+SET candidate_state = 'rejected', status = 'action_required', selection_rank = NULL
+WHERE id = $1
+`, variantIDs[3]); err != nil {
+		t.Fatal(err)
+	}
+
+	w := httptest.NewRecorder()
+	req := newRequest(
+		http.MethodPost,
+		"/api/creative/orders/"+fixture.OrderID+"/items/"+fixture.ItemID+"/candidate-selection",
+		creativeCandidateSelectionInput{SelectedIDs: variantIDs[:3]},
+	)
+	req = withURLParams(req, "id", fixture.OrderID, "itemId", fixture.ItemID)
+	testHandler.SelectCreativeOrderItemCandidates(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("three-only candidate selection = %d %s", w.Code, w.Body.String())
+	}
+
+	w = httptest.NewRecorder()
+	req = newDaemonTokenRequest(
+		http.MethodPost,
+		"/api/daemon/tasks/"+uuidToString(task.ID)+"/complete",
+		TaskCompleteRequest{Output: "三个候选完成原子晋级"},
+		testWorkspaceID,
+		"candidate-selection-daemon",
+	)
+	req = withURLParam(req, "taskId", uuidToString(task.ID))
+	testHandler.CompleteTask(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("complete three-only candidate selection = %d %s", w.Code, w.Body.String())
+	}
+	var status string
+	if err := testPool.QueryRow(t.Context(), `SELECT status FROM agent_task_queue WHERE id = $1`, task.ID).Scan(&status); err != nil {
+		t.Fatal(err)
+	}
+	if status != "completed" {
+		t.Fatalf("three-only candidate selection task status = %q, want completed", status)
 	}
 }
 

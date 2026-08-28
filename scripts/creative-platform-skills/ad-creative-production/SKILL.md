@@ -118,40 +118,23 @@ Prime context 是当前尺寸的真实视觉输入，不是黑白遮罩或可复
 不得绘制 Prime Logo、QR、官方模板文字、商店徽章、OJK/AFPI/Pindai、占位卡片、白块、横条或灰色引导线。官方 Prime 由后续 deterministic compose
 原样叠加；模型只负责让业务内容和背景为组件留出自然、可读的空间。
 
-### Prime 承托背景修复
+### Prime 承托质量
 
-确定性 composer 对每个尺寸 fail closed。失败完整 report 必须从 `brand_composition_error.compose_result_attachment_id` 下载，不能按错误文字猜。
-若返回 `prime_no_adequate_template_for_size`，或候选证据包含
-`prime_relative_luminance_contrast_below_threshold`/`prime_template_inconspicuous`、`prime_background_polarity_mismatch`、
-`prime_background_too_textured`，
-不得 fallback 发布、换全局 family、把失败当 warning，或重生整组三尺寸。只对失败尺寸创建一次有证据的承托背景修复：
+确定性 composer 选择已批准模板中承托评分最高的一个。若 `template_selection.visual_adequacy.status=qc_risk`，仍应登记 Prime 成图并进入最终 visual QC；
+`inadequacy_codes` 是需要放大核验的质量证据，不是重出图、换模板或阻断交付的理由。最终 QC 只以真实 Prime 成图中官方文字、条款与业务内容的实际可读性和遮挡为准。
 
-原 Prime task 不得覆盖当前 revision 的 completed generated asset，也不得在本地自行把 revision 加一。后端会把结构化失败保存到当前
-revision，并原子创建下一 writable staging revision；新 task 必须同时满足
-`qc_visual_rework.reflow_strategy=prime_background_support`、`source_revision=<失败 revision>`，且
-`target_sizes` 只含 report 中允许修复的失败尺寸。没有这个平台合同就停止，不得假装已经进入修复流程。
-
-- Input 1 是该尺寸当前无品牌 generated base；Input 2 是当前尺寸 Prime visual context。Prime 成图仍只读，不能编辑或复制其像素。
-- 从失败 candidate 的 `visible_component_mask` 和组件范围建立 `target_masks`；只接受
-  `background_support.relative_luminance_contrast.basis=alpha_composited_template_over_generated_body` 的真实可见字形证据；`locked_set` 包含全部批准文字、金额/表格、主体、DesignDNA、
-  内容组位置和非目标背景，`editable_set` 只有官方组件将覆盖区域下方的背景材质、明暗和纹理。
-- `foreground_polarity=light` 时生成低纹理深色承托，`dark` 时生成低纹理浅色承托，`mixed` 时按 component mask 分区满足各自相反极性；
-  以证据的 relative-luminance 与 texture threshold 为验收目标，不硬编码背景极性。
-- 模型 prompt 只描述上述可见修复，不包含 failure code、JSON、task/revision、上传或重试说明。所有 target mask 必须在同一回图中同时通过，
-  且任何业务文字、主体或布局变化都拒绝。
-
-修复图仍执行相同比例归一化、过程图登记、完整模型回执和 prompt contract，并写入 task 指定的 writable staging revision；后端已经把未失败尺寸
-从 source revision 复制到新 revision，智能体只生成 `target_sizes`，不得覆盖 source revision 或重生已复制尺寸，也不得自行增加 revision。
-新 revision 的 generated package 齐全后调用绑定 composer；平台按新输入指纹创建新的 Prime job。一次承托修复后仍无 adequate template，保留失败证据并让 task 失败转人工，
-不能振荡修图或降低门槛。
-
-`prime_visible_component_mask_missing` 是模板/证据合同错误，`prime_template_dominant_bright_patch` 是批准模板自身的视觉支配问题；
-这两类不能靠改底图掩盖。保留 report 并让 task 失败，交由市场包/模板修复，不调用图像模型。
+只有 composer 没有任何可评估模板、模板/证据合同错误或进程失败时才失败。失败完整 report 必须从
+`brand_composition_error.compose_result_attachment_id` 下载，不能按错误文字猜。遗留订单若仍返回
+`prime_no_adequate_template_for_size`，仅在后端创建带 `qc_visual_rework.reflow_strategy=prime_background_support` 的下一 staging revision 后，
+才可做一次仅限失败尺寸的承托修复；当前新订单不得因为质量证据单独触发该重绘路径。
 
 ## 调用和证据
 
 每次模型调用都保存实际发送的 prompt、`prompt_sha256`、`request_id`、attempts、实际画布尺寸和输入资产指纹。
 调用 `multica image edit` 或 `image edit-batch` 时使用显式长超时；传输层 408/429/5xx/网络失败最多重试两次。必须把 CLI 返回的完整 JSON 原样保存，不能手工只保留 request ID、hash 或 `generated_asset` 摘要；后续 `asset-put` 使用同一份原始 JSON。
+写 canonical generated asset 时，`metadata.prompt`、`model_result.prompt` 和 `prompt_sha256` 必须从该原子 JSON 的同一个
+JSON string 逐字复制。不得用 `jq -r`、命令替换、shell 变量、`echo` 或展示用的 `prompt-<size>.txt` 重建 prompt：它们会改变末尾换行或
+其他空白字节，导致模型已成功生成却被资产谱系校验拒绝。应生成 JSON 对象后把原字段原样嵌入；只有 `prompt_sha256` 可作为单独标量读取。
 
 模型调用前必须先用 `multica creative order image-operation-put <order-id> --input-file <operation.json> --output json`
 登记当前 Variant、revision、size、operation kind、稳定幂等键、attempt、model 和输入资产指纹。首次登记不填写 `prompt_sha256`：只可在 Image Edit 的原子回执返回后，用其中的实际 `prompt_sha256` 完成同一 operation，避免提示词文件末尾换行等本地表示差异破坏谱系。标准生产使用
@@ -234,8 +217,7 @@ Input 3 的 input role、是否实际用于当前尺寸，以及只替换手机�
 失败恢复优先复用已经生成的证据，只有缺少有效回图或真实视觉失败才重新调用模型：
 
 - `asset-put`、上传、协议、prompt/hash 或证据写回失败时，复用同一 normalized 图、同一模型 JSON、同一 prompt-contract 和 normalization evidence 补登记；不得重新出图。
-- Prime 的传输/进程类失败由后端 durable job 恢复，不重新生成 generated asset；`prime_no_adequate_template_for_size` 不是传输重试，原 task 必须失败并等待平台创建
-  `prime_background_support` 的下一 staging revision，只修 task 指定尺寸。缺少该新 revision 合同时不得重调模型或声称已自愈。
+- Prime 的传输/进程类失败由后端 durable job 恢复，不重新生成 generated asset；`qc_risk` 质量证据继续进入真实 Prime 的最终 QC，不单独重调模型。
 - 部分尺寸失败时，只补当前 revision 缺失的尺寸；已有 canonical generated asset 的尺寸跳过。
 - 比例失败按 `<=10%` 接受、`10%-25%` canvas repair、`>25%` 重生当前尺寸处理。
 - recovery 续跑必须先回读订单和过程证据，确认哪些尺寸已经有 canonical、哪些尺寸只有过程图、哪些尺寸没有有效回图，再选择补登记、补贴片或补生成。

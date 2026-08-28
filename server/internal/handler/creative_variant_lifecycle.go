@@ -269,8 +269,8 @@ func (h *Handler) SelectCreativeOrderItemCandidates(w http.ResponseWriter, r *ht
 		writeError(w, http.StatusBadRequest, "invalid creative candidate selection")
 		return
 	}
-	if len(input.SelectedIDs) != 3 || len(input.ReserveIDs) < 1 || len(input.ReserveIDs) > 2 {
-		writeError(w, http.StatusBadRequest, "candidate selection requires three selected variants and one or two ordered reserves")
+	if len(input.SelectedIDs) != 3 || len(input.ReserveIDs) > 2 {
+		writeError(w, http.StatusBadRequest, "candidate selection requires three selected variants and up to two ordered reserves")
 		return
 	}
 	orderedIDs := append(append([]string{}, input.SelectedIDs...), input.ReserveIDs...)
@@ -420,7 +420,7 @@ FOR UPDATE
 		return
 	}
 	rows.Close()
-	if len(candidates) != len(orderedIDs) || len(candidates) < 4 || len(candidates) > 5 {
+	if len(candidates) != len(orderedIDs) || len(candidates) < 3 || len(candidates) > 5 {
 		writeError(w, http.StatusConflict, "candidate selection must rank every non-rejected candidate in this order item")
 		return
 	}

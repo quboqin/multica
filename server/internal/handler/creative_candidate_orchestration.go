@@ -23,6 +23,7 @@ const (
 	creativePipelineCandidateV1            = "candidate_v1"
 	creativePipelineDirectEditV1           = "direct_edit_v1"
 	creativeCandidateSelectionMaxAttempts  = 3
+	creativeCandidateSelectionMinimumReady = 3
 	creativeSelectedExpansionPhase         = "selected_missing_sizes"
 	creativeReservePromotionPhase          = "reserve_promotion"
 )
@@ -175,8 +176,8 @@ SELECT EXISTS (
 }
 
 // maybeQueueCreativeCandidateSelection creates exactly one comparison task
-// after four or five primary packages have settled. A fifth terminally failed
-// candidate is rejected before the remaining four are compared.
+// after primary packages settle. Terminal failures are rejected before
+// comparison so three usable candidates can still complete an order.
 func (h *Handler) maybeQueueCreativeCandidateSelection(ctx context.Context, orderItemID pgtype.UUID, cause creativeOrchestrationCause) (bool, error) {
 	return h.maybeQueueCreativeCandidateSelectionWithPrimeHandoff(ctx, orderItemID, cause, nil)
 }
@@ -316,7 +317,7 @@ FOR UPDATE
 		return false, fmt.Errorf("read creative candidates: %w", err)
 	}
 	rows.Close()
-	if len(candidateRows) < 4 || len(candidateRows) > 5 {
+	if len(candidateRows) < creativeCandidateSelectionMinimumReady || len(candidateRows) > 5 {
 		return false, nil
 	}
 
@@ -420,8 +421,10 @@ SELECT
 			nonRejectedCount++
 		}
 	}
-	if len(candidateRows) == 5 && nonRejectedCount == 5 && len(ready) == 4 && len(failed) == 1 {
-		rejected := failed[0]
+	if len(ready)+len(failed) != nonRejectedCount || len(ready) < creativeCandidateSelectionMinimumReady {
+		return false, nil
+	}
+	for _, rejected := range failed {
 		if _, err := tx.Exec(ctx, `
 UPDATE creative_order_variant
 SET candidate_state = 'rejected', selection_rank = NULL, status = 'action_required',
@@ -438,14 +441,12 @@ WHERE id = $1 AND candidate_state = 'candidate' AND active_revision IS NULL
 UPDATE creative_order_variant_revision
 SET status = 'action_required', updated_at = now()
 WHERE variant_id = $1 AND revision = $2
-`, rejected.id, rejected.revision); err != nil {
+		`, rejected.id, rejected.revision); err != nil {
 			return false, fmt.Errorf("reject failed creative candidate revision: %w", err)
 		}
 		nonRejectedCount--
-	} else if len(failed) > 0 || len(ready) != nonRejectedCount {
-		return false, nil
 	}
-	if len(ready) < 4 || len(ready) > 5 {
+	if len(ready) != nonRejectedCount || len(ready) < creativeCandidateSelectionMinimumReady || len(ready) > 5 {
 		return false, nil
 	}
 
@@ -532,26 +533,26 @@ func (h *Handler) creativeCandidateSelectionCommitted(ctx context.Context, works
 	var committed bool
 	err := h.DB.QueryRow(ctx, `
 SELECT
-  count(*) BETWEEN 4 AND 5
+  count(*) BETWEEN 3 AND 5
   AND count(*) FILTER (WHERE variant.variant_key !~ '^C0[1-5]$') = 0
   AND count(*) FILTER (WHERE variant.candidate_state = 'candidate') = 0
   AND count(*) FILTER (WHERE variant.candidate_state = 'selected') = 3
   AND count(*) FILTER (WHERE variant.candidate_state = 'selected' AND variant.selection_rank = 1) = 1
   AND count(*) FILTER (WHERE variant.candidate_state = 'selected' AND variant.selection_rank = 2) = 1
   AND count(*) FILTER (WHERE variant.candidate_state = 'selected' AND variant.selection_rank = 3) = 1
-  AND count(*) FILTER (WHERE variant.candidate_state = 'reserve') BETWEEN 1 AND 2
-  AND count(*) FILTER (WHERE variant.candidate_state = 'reserve' AND variant.selection_rank = 4) = 1
-  AND (
-    count(*) FILTER (WHERE variant.candidate_state = 'reserve') = 1
-    OR count(*) FILTER (WHERE variant.candidate_state = 'reserve' AND variant.selection_rank = 5) = 1
-  )
+  AND count(*) FILTER (WHERE variant.candidate_state = 'reserve') BETWEEN 0 AND 2
+  AND count(*) FILTER (WHERE variant.candidate_state = 'reserve' AND variant.selection_rank NOT IN (4, 5)) = 0
+  AND count(*) FILTER (WHERE variant.candidate_state = 'reserve' AND variant.selection_rank = 4) =
+    CASE WHEN count(*) FILTER (WHERE variant.candidate_state = 'reserve') >= 1 THEN 1 ELSE 0 END
+  AND count(*) FILTER (WHERE variant.candidate_state = 'reserve' AND variant.selection_rank = 5) =
+    CASE WHEN count(*) FILTER (WHERE variant.candidate_state = 'reserve') = 2 THEN 1 ELSE 0 END
   AND count(*) FILTER (
     WHERE variant.candidate_state IN ('selected', 'reserve') AND variant.selection_rank IS NULL
   ) = 0
   AND count(*) FILTER (
     WHERE variant.candidate_state IN ('candidate', 'rejected') AND variant.selection_rank IS NOT NULL
   ) = 0
-  AND count(*) FILTER (WHERE variant.candidate_state = 'rejected') <= 1
+  AND count(*) FILTER (WHERE variant.candidate_state = 'rejected') <= 2
 FROM creative_order_variant variant
 JOIN creative_order_item item ON item.id = variant.order_item_id
 JOIN creative_order order_row ON order_row.id = item.order_id
@@ -593,7 +594,7 @@ func (h *Handler) creativeCandidateSelectionCompletionError(ctx context.Context,
 		return "", err
 	}
 	if !committed {
-		return "candidate selection task completed without exactly three selected ranks and one or two ordered reserves", nil
+		return "candidate selection task completed without exactly three selected ranks and ordered reserves when available", nil
 	}
 	return "", nil
 }

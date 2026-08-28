@@ -16,14 +16,14 @@ multica creative order get <order-id> --output json
 ## 候选主视觉晋级
 
 `creative_candidate_selection` 只比较同一 Order Item 中已经完成当前 revision、各自 `primary_size` 的 completed
-`stage=primed` asset 且 Prime `visual_adequacy.adequate=true` 的 4-5 个候选。不得使用 generated 底图、页面缩略图、旧 revision 或其他 item。
-计划 5 个候选时，若其中 1 个在有界恢复后已经是终态失败且没有合格主图，平台会原子标记该候选为 `rejected`，允许其余 4 个进入比较；
-少于 4 个合格候选时不得创建或执行比较，也不得由 QC 自行把失败候选改成 reserve、伪造主图或降低 Prime 门槛。
+`stage=primed` asset 完整的 3-5 个候选。`visual_adequacy.status=qc_risk` 必须保留给最终 visual QC，不得在候选阶段伪造通过或因指标单独排除。不得使用 generated 底图、页面缩略图、旧 revision 或其他 item。
+终态失败且没有完整主图的候选由平台原子标记为 `rejected`，其余候选可继续进入比较；
+少于 3 个合格候选时不得创建或执行比较，也不得由 QC 自行把失败候选改成 reserve、伪造主图或降低 Prime 门槛。
 task source 必须是 `trigger_evidence_kind=creative_order_item_candidate_selection`、ref 为当前 item ID，且
-`item_key=candidate-selection:v1`；context 必须携带 `creative_order_id`、`creative_order_item_id` 和这 4-5 个候选的主图引用。
+`item_key=candidate-selection:v1`；context 必须携带 `creative_order_id`、`creative_order_item_id` 和这些候选的主图引用。
 context 的 order/item 与回读订单不一致、主图引用无法逐一归属当前候选时停止，不能按候选名称猜。
 
-逐张下载并用 `view_image` 查看当前 4-5 张合格主尺寸 Prime 图，再放在同一比较上下文中独立评分。`candidate-comparison.json` 对每个 Variant
+逐张下载并用 `view_image` 查看当前 3-5 张主尺寸 Prime 图，再放在同一比较上下文中独立评分。`candidate-comparison.json` 对每个 Variant
 记录 0-100 分、观察证据和以下固定分项：批准文案/金融事实可读性 25、视觉吸引力 25、创意假设清晰度 15、相对其他候选的差异度 15、
 三尺寸可扩展性 15、Prime 融合 5。三尺寸可扩展性必须结合 brief 的 `layout_plans`，检查主体裁切容忍、横竖重排、表格密度、App UI 和
 Prime 承托风险；不能因为方图本身好看就默认可扩展。
@@ -86,14 +86,15 @@ visual lane 必须按五个闸门验收：文案/组件完整、Prime 合成前�
 `safe_content_frame`、`top_key_content_exclusion_end`、`bottom_key_content_exclusion_start`，确认正文、金额、表格和 CTA 没有进入顶部或底部 Prime 禁区；
 正文被 Prime 实际盖住都算失败。第三闸门逐一放大 Logo、条款和底部组件，必须能看清官方文字，不能用整条带平均颜色代替局部判断。
 不得把 hard region 框线当成视觉证据，也不得因为正常搭接、背景物体靠近但文字仍清晰而报错。第三闸门必须逐尺寸消费
-asset evidence 顶层 `template_selection`：要求 `selection_scope=delivery_size`、`visual_adequacy.adequate=true`，并核对 selected candidate 的
+asset evidence 顶层 `template_selection`：要求 `selection_scope=delivery_size`，并核对 selected candidate 的
 `visible_component_mask`、`foreground_polarity`、`background_support.polarity`、`relative_luminance_contrast` 与 `texture`。
 `background_support.relative_luminance_contrast.basis` 必须是
 `alpha_composited_template_over_generated_body`；缺失或使用其他 basis 视为 Prime 证据合同错误，不能用背景采样替代。
 亮色官方字形通常需要深色承托，深色字形通常需要浅色承托，mixed 必须按 component mask 分区判断；最终目标完全来自结构化极性，
-不得硬编码任何背景极性，也不得用整条带平均 RGB 代替实际可见字形 mask。任一尺寸存在
+不得硬编码任何背景极性，也不得用整条带平均 RGB 代替实际可见字形 mask。`visual_adequacy.status=qc_risk` 或任一尺寸存在
 `prime_relative_luminance_contrast_below_threshold`、`prime_background_polarity_mismatch`、`prime_background_too_textured` 或
-`prime_visible_component_mask_missing`、`prime_template_dominant_bright_patch` 或 `prime_no_adequate_template_for_size` 时不能人工自报通过。
+`prime_visible_component_mask_missing`、`prime_template_dominant_bright_patch` 时必须放大真实 Prime 成图逐项判断；只有官方文字或条款实际不可读、
+或正文实际被盖住时才失败，不能仅凭质量证据自动通过或自动失败。
 
 第四闸门在 `expected_sizes` 多于一个时把全部交付尺寸并排检查：CreativeIntent、DesignDNA 哈希和批准 copy 必须一致；主体身份/类别、场景逻辑、色彩角色、材质、光线、
 视觉母题、信息层级和阅读关系应属于同一设计族，同时允许 LayoutPlan 指定的原生重排、裁切与尺度变化。只要有一个尺寸成为另一套创意，写
