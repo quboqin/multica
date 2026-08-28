@@ -317,6 +317,11 @@ type creativeVisualModelReworkFinding struct {
 
 const creativeVisualModelReworkMaxAttempts = 2
 
+// This is intentionally stricter than the normal contrast target. Ordinary
+// qc_risk evidence still needs visual review, but this severity cannot be
+// released on a single model assertion that the Prime text looks readable.
+const creativePrimeCriticalRelativeLuminanceContrast = 1.25
+
 const defaultCreativeQCAttempt = 1
 
 const creativeQCOutcomeDeliveredWithRisk = "delivered_with_qc_risk"
@@ -2164,6 +2169,135 @@ func validCreativeVisualModelReworkDiagnosis(code, sizeKey, diagnosis string) bo
 		(strings.Contains(diagnosis, "相对亮度") || strings.Contains(strings.ToLower(diagnosis), "luminance")) &&
 		(strings.Contains(diagnosis, "纹理") || strings.Contains(strings.ToLower(diagnosis), "texture"))
 	return (requestsBackgroundRework || legacyStructuredSupport) && readsUnclearOfficialText
+}
+
+type creativePrimeReadabilityEvidence struct {
+	TemplateSelection struct {
+		VisualAdequacy struct {
+			Status string `json:"status"`
+		} `json:"visual_adequacy"`
+	} `json:"template_selection"`
+	VisibilityAudit struct {
+		Blocking          bool `json:"blocking"`
+		BackgroundSupport struct {
+			RelativeLuminanceContrast struct {
+				MinimumLocalP10 float64 `json:"minimum_local_p10"`
+			} `json:"relative_luminance_contrast"`
+			Texture struct {
+				MaximumLocalP90 float64 `json:"maximum_local_p90"`
+				Threshold       float64 `json:"threshold"`
+			} `json:"texture"`
+		} `json:"background_support"`
+	} `json:"visibility_audit"`
+}
+
+// creativePrimeCriticalReadabilityFinding promotes only the extreme subset of
+// composer's qc_risk evidence. This preserves the visual lane for borderline
+// anti-aliasing samples while fencing a severe visibility failure.
+func creativePrimeCriticalReadabilityFinding(sizeKey string, evidence json.RawMessage) (creativeVisualModelReworkFinding, bool) {
+	var parsed creativePrimeReadabilityEvidence
+	if err := json.Unmarshal(evidence, &parsed); err != nil || parsed.TemplateSelection.VisualAdequacy.Status != "qc_risk" || !parsed.VisibilityAudit.Blocking {
+		return creativeVisualModelReworkFinding{}, false
+	}
+	contrast := parsed.VisibilityAudit.BackgroundSupport.RelativeLuminanceContrast.MinimumLocalP10
+	texture := parsed.VisibilityAudit.BackgroundSupport.Texture
+	criticalContrast := contrast > 0 && contrast <= creativePrimeCriticalRelativeLuminanceContrast
+	criticalTexture := texture.Threshold > 0 && texture.MaximumLocalP90 > texture.Threshold
+	if !criticalContrast && !criticalTexture {
+		return creativeVisualModelReworkFinding{}, false
+	}
+	causes := make([]string, 0, 2)
+	if criticalContrast {
+		causes = append(causes, fmt.Sprintf("局部相对亮度 %.4f 低于严重下限 %.2f", contrast, creativePrimeCriticalRelativeLuminanceContrast))
+	}
+	if criticalTexture {
+		causes = append(causes, fmt.Sprintf("局部纹理 %.6f 超过阈值 %.6f", texture.MaximumLocalP90, texture.Threshold))
+	}
+	return creativeVisualModelReworkFinding{
+		Code:    "official_prime_text_unreadable",
+		SizeKey: sizeKey,
+		Diagnosis: fmt.Sprintf(
+			"%s：官方 Prime 文字在可见字形 mask 上%s，实际不可读；期望调整为满足 background_support.polarity 的低纹理承托背景，使该官方文字区域达到证据中的相对亮度与纹理门槛",
+			sizeKey, strings.Join(causes, "且"),
+		),
+	}, true
+}
+
+func creativePrimeCriticalReadabilityFindings(ctx context.Context, tx pgx.Tx, variantID pgtype.UUID, revision int) ([]creativeVisualModelReworkFinding, error) {
+	rows, err := tx.Query(ctx, `
+SELECT size_key, evidence
+FROM creative_order_asset
+WHERE variant_id = $1
+  AND revision = $2
+  AND stage = 'primed'
+  AND status = 'completed'
+  AND attachment_id IS NOT NULL
+ORDER BY size_key
+`, variantID, revision)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	findings := make([]creativeVisualModelReworkFinding, 0)
+	for rows.Next() {
+		var sizeKey string
+		var evidence json.RawMessage
+		if err := rows.Scan(&sizeKey, &evidence); err != nil {
+			return nil, err
+		}
+		if finding, critical := creativePrimeCriticalReadabilityFinding(sizeKey, evidence); critical {
+			findings = append(findings, finding)
+		}
+	}
+	return findings, rows.Err()
+}
+
+func mergeCreativePrimeCriticalReadabilityFailures(input creativeOrderQCInput, critical []creativeVisualModelReworkFinding) (creativeOrderQCInput, error) {
+	if input.Lane != "visual" || len(critical) == 0 {
+		return input, nil
+	}
+	var findings map[string]json.RawMessage
+	if err := json.Unmarshal(input.Findings, &findings); err != nil || findings == nil {
+		return input, errors.New("visual QC findings must be an object")
+	}
+	var blocking []json.RawMessage
+	if raw, exists := findings["blocking_failures"]; exists && string(raw) != "null" {
+		if err := json.Unmarshal(raw, &blocking); err != nil {
+			return input, errors.New("findings.blocking_failures must be an array")
+		}
+	}
+	seenSizes := make(map[string]struct{}, len(blocking))
+	for _, raw := range blocking {
+		var existing struct {
+			SizeKey string `json:"size_key"`
+		}
+		if json.Unmarshal(raw, &existing) == nil && strings.TrimSpace(existing.SizeKey) != "" {
+			seenSizes[strings.TrimSpace(existing.SizeKey)] = struct{}{}
+		}
+	}
+	for _, finding := range critical {
+		if _, exists := seenSizes[finding.SizeKey]; exists {
+			continue
+		}
+		encoded, err := json.Marshal(finding)
+		if err != nil {
+			return input, err
+		}
+		blocking = append(blocking, encoded)
+		seenSizes[finding.SizeKey] = struct{}{}
+	}
+	encodedBlocking, err := json.Marshal(blocking)
+	if err != nil {
+		return input, err
+	}
+	findings["blocking_failures"] = encodedBlocking
+	encodedFindings, err := json.Marshal(findings)
+	if err != nil {
+		return input, err
+	}
+	input.Findings = encodedFindings
+	input.Status = "failed"
+	return input, nil
 }
 
 func creativeVisualModelReworkAttemptCount(ctx context.Context, tx pgx.Tx, variantID pgtype.UUID) (int, error) {
@@ -4072,6 +4206,18 @@ SELECT EXISTS(
 	if finalized {
 		writeError(w, http.StatusConflict, "creative order QC attempt is already finalized")
 		return
+	}
+	if input.Lane == "visual" {
+		criticalFindings, findingsErr := creativePrimeCriticalReadabilityFindings(r.Context(), tx, variantID, input.Revision)
+		if findingsErr != nil {
+			writeError(w, http.StatusInternalServerError, "failed to evaluate Prime readability evidence")
+			return
+		}
+		input, findingsErr = mergeCreativePrimeCriticalReadabilityFailures(input, criticalFindings)
+		if findingsErr != nil {
+			writeError(w, http.StatusBadRequest, findingsErr.Error())
+			return
+		}
 	}
 	var qcID string
 	err = tx.QueryRow(r.Context(), `

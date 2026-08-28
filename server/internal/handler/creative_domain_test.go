@@ -3343,6 +3343,51 @@ func TestCreativeVisualModelReworkFindingsAcceptsOnlyFinalVisualDefects(t *testi
 	}
 }
 
+func TestCreativePrimeCriticalReadabilityFindingsFenceVisualQCBypass(t *testing.T) {
+	criticalEvidence := func(contrast, texture, textureThreshold float64) json.RawMessage {
+		return json.RawMessage(fmt.Sprintf(`{
+  "template_selection":{"visual_adequacy":{"status":"qc_risk"}},
+  "visibility_audit":{"blocking":true,"background_support":{
+    "relative_luminance_contrast":{"minimum_local_p10":%.4f},
+    "texture":{"maximum_local_p90":%.6f,"threshold":%.6f}
+  }}
+}`, contrast, texture, textureThreshold))
+	}
+	inputs := map[string]json.RawMessage{
+		"1080x1080": criticalEvidence(1.0345, 0.227531, 0.18),
+		"1200x628":  criticalEvidence(1.2408, 0.076344, 0.18),
+		"800x1000":  criticalEvidence(1.3690, 0.149559, 0.18),
+	}
+	critical := make([]creativeVisualModelReworkFinding, 0, 2)
+	for size, evidence := range inputs {
+		if finding, found := creativePrimeCriticalReadabilityFinding(size, evidence); found {
+			critical = append(critical, finding)
+		}
+	}
+	if len(critical) != 2 {
+		t.Fatalf("critical readability findings = %#v, want square and landscape", critical)
+	}
+	input, err := mergeCreativePrimeCriticalReadabilityFailures(creativeOrderQCInput{
+		Lane:     "visual",
+		Status:   "passed",
+		Findings: json.RawMessage(`{"checked_assets":[{"size_key":"800x1000"}],"quality_warnings":[]}`),
+	}, critical)
+	if err != nil || input.Status != "failed" {
+		t.Fatalf("merged critical report = %#v, %v", input, err)
+	}
+	findings, err := creativeVisualModelReworkFindings(input.Findings, []string{"1080x1080", "1200x628", "800x1000"})
+	if err != nil || len(findings) != 2 {
+		t.Fatalf("merged model rework findings = %#v, %v", findings, err)
+	}
+	sizes := map[string]bool{}
+	for _, finding := range findings {
+		sizes[finding.SizeKey] = true
+	}
+	if !sizes["1080x1080"] || !sizes["1200x628"] || sizes["800x1000"] {
+		t.Fatalf("merged critical finding sizes = %#v", sizes)
+	}
+}
+
 func TestCreativeQCFindingsNeedAutomaticRecoveryRecognizesContractFailureCode(t *testing.T) {
 	if !creativeQCFindingsNeedAutomaticRecovery(json.RawMessage(`{"failure_code":"prompt_contract_parent_direction_sha256_missing","blocking_failures":[]}`)) {
 		t.Fatal("prompt contract failure code should trigger automatic QC recovery")

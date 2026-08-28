@@ -95,6 +95,12 @@ asset evidence 顶层 `template_selection`：要求 `selection_scope=delivery_si
 `prime_visible_component_mask_missing`、`prime_template_dominant_bright_patch` 时必须放大真实 Prime 成图逐项判断；只有官方文字或条款实际不可读、
 或正文实际被盖住时才失败，不能仅凭质量证据自动通过或自动失败。
 
+`qc_risk` 不是“默认可读”。逐尺寸读取 `visibility_audit.background_support`：当
+`minimum_local_p10 <= 1.25`，或 `maximum_local_p90 > texture.threshold` 时，这是服务端不可绕过的严重可读性失败；visual lane 必须写
+`official_prime_text_unreadable`，不能写 `passed` 或把它降为 warning。其余临界样本仍须放大真实字形后独立判断。
+第二闸门的 `top_key_content_exclusion_end` 和 `bottom_key_content_exclusion_start` 是正文文字边界，不是只检查 Logo/二维码的不透明像素：
+冻结标题、利益点、金额、表格或 CTA 的可见字形只要进入对应禁区，就写 `actual_prime_obstruction`；`checked_assets.observations` 必须记录可见内容边界和所对照的禁区坐标，不能只声明“位于安全区”。
+
 第四闸门在 `expected_sizes` 多于一个时把全部交付尺寸并排检查：CreativeIntent、DesignDNA 哈希和批准 copy 必须一致；主体身份/类别、场景逻辑、色彩角色、材质、光线、
 视觉母题、信息层级和阅读关系应属于同一设计族，同时允许 LayoutPlan 指定的原生重排、裁切与尺度变化。只要有一个尺寸成为另一套创意，写
 `cross_size_design_dna_mismatch` 并指出离群尺寸；不能为迁就一个尺寸而让另外两个一起重生。

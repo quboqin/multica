@@ -151,7 +151,7 @@ var creativeFactorySkillSpecs = []creativeFactorySkillSpec{
 	{Role: "image_edit", Name: "素材_技能_出图", Aliases: []string{"广告图像编辑"}, Directory: "ad-creative-production", Description: "按唯一模型提示词合同生成候选主视觉或 selected 缺失尺寸；三尺寸共享 DesignDNA、文案与血缘但从原参考和各自 LayoutPlan 独立生成，保留 App UI、归一化、过程证据与 Prime 有界修复合同。", Capability: "image_edit", Version: 108},
 	{Role: "prime_compose", Name: "素材_技能_贴片", Aliases: []string{"广告品牌组件合成"}, Directory: "ad-creative-prime-compose", Description: "调用后端唯一的确定性 Prime 合成入口，逐尺寸选择视觉可辨识的已批准模板并在任一尺寸不合格时整包失败，校验合成 JSON，并由后端登记贴片完成过程图、primed 资产和标准 QC/交付交接；不创建 Prime Agent 或 Prime task。", Capability: "prime_compose", Version: 5},
 	{Role: "direct_image_edit", Name: "素材_技能_改图", Aliases: []string{"广告图片直接修改"}, Directory: "ad-creative-direct-edit", Description: "将用户反馈编译为带输入角色、锁定/可编辑集合和 target masks 的多目标无品牌底图调整；正式投放使用真实 Prime 与无边框暗化明窗重排视觉参考，必要时仅重排或缩放点名内容组，阻塞等待模型回执后全部目标同时通过再贴片并终检。", Capability: "direct_image_edit", Version: 29},
-	{Role: "quality_control", Name: "素材_技能_质检", Aliases: []string{"广告成图验收"}, Directory: "ad-creative-qc", Description: "独立比较 4-5 个候选主尺寸并原子晋级 3 个，或对标准/精准改图的实际交付尺寸执行 Prime 与 DesignDNA 联合视觉终检。", Capability: "quality_control", Version: 39},
+	{Role: "quality_control", Name: "素材_技能_质检", Aliases: []string{"广告成图验收"}, Directory: "ad-creative-qc", Description: "独立比较 4-5 个候选主尺寸并原子晋级 3 个，或对标准/精准改图的实际交付尺寸执行 Prime 与 DesignDNA 联合视觉终检。", Capability: "quality_control", Version: 40},
 	{Role: "creative_leadership", Name: "素材_技能_流程", Aliases: []string{"素材_技能_统筹", "创意素材协作", "素材小队 Leader 编排"}, Directory: "ad-creative-leadership", Description: "使用原生 task fanout 启动并恢复候选生产、晋级扩尺寸、直接改图和最终验收，汇总结构化结果。", Capability: "creative_leadership", Version: 51},
 }
 
