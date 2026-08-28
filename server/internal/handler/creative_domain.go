@@ -1375,7 +1375,14 @@ WHERE task.id = $1
   AND item.id = variant.order_item_id
   AND item.order_id = $3
   AND task.context->>'variant_id' = variant.id::text
-  AND task.issue_id IS NULL
+  AND (
+    task.issue_id IS NULL
+    OR (
+      task.trigger_evidence_kind = 'creative_order_item_production'
+      AND task.context->>'workflow' = 'creative_production'
+      AND task.context ? 'qc_visual_rework'
+    )
+  )
   AND task.status = 'completed'
   AND (
     task.attempt < task.max_attempts

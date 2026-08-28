@@ -1769,7 +1769,7 @@ func TestCreativeOrderWorkflowFailuresExposeCompletedProductionWithoutArtifacts(
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
 	}
-	_, candidateID := createCreativeFeedbackCandidate(t, "completed production without artifacts")
+	issueID, candidateID := createCreativeFeedbackCandidate(t, "completed production without artifacts")
 	var orderID, itemID, variantID, taskID string
 	if err := testPool.QueryRow(t.Context(), `
 INSERT INTO creative_order (workspace_id, status, input_snapshot, created_by)
@@ -1794,6 +1794,9 @@ VALUES ($1, 'V01', 1, 'queued') RETURNING id::text
 		"type": "creative_domain_task", "workflow": "creative_production", "creative_order_id": orderID,
 		"creative_order_item_id": itemID, "variant_id": variantID, "scope": "variant", "item_key": variantID + ":r0",
 		"revision": 0,
+		"qc_visual_rework": map[string]any{
+			"target_sizes": []string{"1080x1080"},
+		},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -1802,11 +1805,11 @@ VALUES ($1, 'V01', 1, 'queued') RETURNING id::text
 	if err := testPool.QueryRow(t.Context(), `
 INSERT INTO agent_task_queue (
   agent_id, runtime_id, status, context, trigger_evidence_kind, trigger_evidence_ref_id,
-  completed_at, attempt, max_attempts
+  issue_id, completed_at, attempt, max_attempts
 )
-VALUES ($1, $2, 'completed', $3::jsonb, 'creative_order_item_production', $4, now(), 1, 2)
+VALUES ($1, $2, 'completed', $3::jsonb, 'creative_order_item_production', $4, $5, now(), 1, 2)
 RETURNING id::text
-`, agentID, handlerTestRuntimeID(t), contextValue, itemID).Scan(&taskID); err != nil {
+`, agentID, handlerTestRuntimeID(t), contextValue, itemID, issueID).Scan(&taskID); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := testPool.Exec(t.Context(), `
