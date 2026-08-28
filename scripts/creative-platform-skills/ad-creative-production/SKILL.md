@@ -9,6 +9,18 @@ allowed-tools: Bash(multica *), Bash(python *)
 只处理 task context 指定的 Order、Order Item、Variant、revision 和 `expected_sizes`；direct edit 不进入本 Skill。
 先执行 `multica creative order get <order-id> --output json`，按 `creative_order_item_id` 与 `variant_id` 精确定位当前
 订单项和变体。当前订单项的 `copy_snapshot`、Variant brief 中的 CreativeIntent/DesignDNA/LayoutPlan、冻结 market snapshot、候选素材和 Prime context 是唯一输入。
+回读后必须用以下校验器确认精确 ID、revision 和尺寸范围；只有该精确记录仍不匹配 task context 才能报告 stale task，
+不能因为读到了同订单的另一个候选而停止：
+
+```bash
+python3 <当前 Skill 目录>/references/validate_task_scope.py \
+  --order-file <order.json> \
+  --order-item-id <creative_order_item_id> \
+  --variant-id <variant_id> \
+  --revision <revision> \
+  --expected-size <size>
+```
+
 不得读取最新文案库、历史工作目录、同 candidate 的其他订单项，也不得重新分析竞品素材。
 
 ## 流程合同
