@@ -2358,6 +2358,14 @@ WHERE trigger_evidence_kind = ANY(ARRAY['creative_order_item_production', 'creat
   AND context->>'workflow' = ANY(ARRAY['creative_production', 'creative_direct_edit']::text[])
   AND context->>'variant_id' = $1::text
   AND context ? 'qc_visual_rework'
+	AND (
+	  status NOT IN ('completed', 'failed', 'cancelled')
+	  OR EXISTS (
+	    SELECT 1
+	    FROM creative_image_operation operation
+	    WHERE operation.task_id = agent_task_queue.id
+	  )
+	)
 	`, variantID).Scan(&count)
 	return count, err
 }

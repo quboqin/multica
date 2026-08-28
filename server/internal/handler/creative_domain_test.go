@@ -3441,6 +3441,16 @@ func TestCreativeVisualModelReworkAttemptCountSupportsTwoAttempts(t *testing.T) 
 	if err != nil || attempts != creativeVisualModelReworkMaxAttempts {
 		t.Fatalf("queued visual rework attempts = %d, %v", attempts, err)
 	}
+	if _, err := tx.Exec(t.Context(), `
+	INSERT INTO agent_task_queue (agent_id, runtime_id, status, trigger_evidence_kind, trigger_evidence_ref_id, context, completed_at)
+	VALUES ($1, (SELECT runtime_id FROM agent WHERE id = $1), 'completed', 'creative_order_item_production', $2, $3::jsonb, now())
+	`, agentID, uuid.New(), fmt.Sprintf(`{"type":"creative_domain_task","workflow":"creative_production","variant_id":"%s","qc_visual_rework":{}}`, uuidToString(variantID))); err != nil {
+		t.Fatal(err)
+	}
+	attempts, err = creativeVisualModelReworkAttemptCount(t.Context(), tx, variantID)
+	if err != nil || attempts != creativeVisualModelReworkMaxAttempts {
+		t.Fatalf("empty completed visual rework consumed an attempt = %d, %v", attempts, err)
+	}
 }
 
 func TestQueueCreativeVisualModelReworkReusesOnlyPassingGeneratedSizes(t *testing.T) {
