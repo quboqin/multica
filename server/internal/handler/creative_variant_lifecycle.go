@@ -75,6 +75,24 @@ WHERE creative_order_variant_revision.activated_at IS NULL
 	return nil
 }
 
+// markCreativeVariantRevisionActionRequired preserves the historical activation
+// record while allowing a later blocking QC result to withdraw this revision
+// from delivery. Content and expected-size snapshots remain immutable.
+func markCreativeVariantRevisionActionRequired(ctx context.Context, tx pgx.Tx, variantID pgtype.UUID, revision int, brief json.RawMessage, expectedSizes []string) error {
+	tag, err := tx.Exec(ctx, `
+UPDATE creative_order_variant_revision
+SET status = 'action_required', updated_at = now()
+WHERE variant_id = $1 AND revision = $2
+`, variantID, revision)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 1 {
+		return nil
+	}
+	return upsertCreativeVariantRevision(ctx, tx, variantID, revision, brief, "action_required", expectedSizes)
+}
+
 func syncCreativeVariantRevisionFromVariant(ctx context.Context, tx pgx.Tx, variantID pgtype.UUID, revision int, expectedSizes []string) error {
 	var brief string
 	var status string

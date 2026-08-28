@@ -4785,6 +4785,28 @@ SELECT outcome FROM creative_order_variant_qc_resolution WHERE variant_id = $1 A
 	var inbox db.InboxItem
 	var shouldPublishInbox bool
 	var reworkTask db.AgentTaskQueue
+	if outcome == "action_required" {
+		// A later blocking report can invalidate a revision that an earlier,
+		// contradictory report activated. Keep its activation timestamp for
+		// audit, but remove it from the active delivery pointer immediately.
+		if _, err := tx.Exec(r.Context(), `
+UPDATE creative_order_variant
+SET status = 'action_required',
+    active_revision = CASE WHEN active_revision = $2 THEN NULL ELSE active_revision END,
+    staging_revision = $2,
+    updated_at = now()
+WHERE id = $1 AND revision = $2
+`, variantID, input.Revision); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to require creative QC action")
+			return
+		}
+		if err := markCreativeVariantRevisionActionRequired(
+			r.Context(), tx, variantID, input.Revision, json.RawMessage(brief), expectedSizes,
+		); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to preserve creative QC revision state")
+			return
+		}
+	}
 	if creativeQCOutcomeCopiesDelivery(outcome) {
 		count, err := copyCreativePrimedAssetsToDelivered(r.Context(), tx, variantID, input.Revision, expectedSizes)
 		if err != nil {
@@ -4826,20 +4848,6 @@ WHERE id = $1 AND revision = $2
 		response.ReworkTaskID = uuidToString(reworkTask.ID)
 		response.ReworkRevision = input.Revision + 1
 	} else {
-		if _, err := tx.Exec(r.Context(), `
-UPDATE creative_order_variant
-SET status = 'action_required', staging_revision = $2, updated_at = now()
-WHERE id = $1 AND revision = $2
-`, variantID, input.Revision); err != nil {
-			writeError(w, http.StatusInternalServerError, "failed to require creative QC action")
-			return
-		}
-		if err := upsertCreativeVariantRevision(
-			r.Context(), tx, variantID, input.Revision, json.RawMessage(brief), "action_required", expectedSizes,
-		); err != nil {
-			writeError(w, http.StatusInternalServerError, "failed to preserve creative QC revision state")
-			return
-		}
 		if deliverDespiteVisualReworkExhausted {
 			exhaustedDetails, _ := json.Marshal(map[string]any{
 				"creative_order_id": uuidToString(orderID),

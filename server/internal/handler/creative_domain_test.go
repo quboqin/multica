@@ -3880,6 +3880,12 @@ INSERT INTO creative_order_variant (order_item_id, variant_key, revision, status
 VALUES ($1, 'v03', 3, 'running') RETURNING id::text`, itemID).Scan(&exhaustedVariantID); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := testPool.Exec(t.Context(), `
+INSERT INTO creative_order_variant_revision (variant_id, revision, brief, status, expected_sizes)
+VALUES ($1, 3, '{}'::jsonb, 'running', $2::text[])
+`, exhaustedVariantID, standardCreativeAssetSizes); err != nil {
+		t.Fatal(err)
+	}
 	for _, size := range standardCreativeAssetSizes {
 		attachmentID := createCreativeOrderAssetAttachment(t, "qc-exhausted-prime-"+strings.ReplaceAll(size, "x", "-")+".png")
 		if _, err := testPool.Exec(t.Context(), `
@@ -3894,14 +3900,29 @@ VALUES ($1, 'technical', 3, 'passed', '{}'::jsonb),
        ($1, 'visual', 3, 'failed', '{"blocking_failures":[{"code":"actual_prime_obstruction","size_key":"1200x628","diagnosis":"1200x628：正文 与底部 Prime 法务文字实际遮挡；期望移动到 safe_content_frame 内 y<=430"}]}'::jsonb)`, exhaustedVariantID); err != nil {
 		t.Fatal(err)
 	}
+	reworkTaskIDs := make([]string, 0, creativeVisualModelReworkMaxAttempts)
 	for i := 0; i < creativeVisualModelReworkMaxAttempts; i++ {
-		if _, err := testPool.Exec(t.Context(), `
+		var reworkTaskID string
+		if err := testPool.QueryRow(t.Context(), `
 INSERT INTO agent_task_queue (agent_id, runtime_id, status, trigger_evidence_kind, trigger_evidence_ref_id, context)
 VALUES ($1, (SELECT runtime_id FROM agent WHERE id = $1), 'completed', 'creative_order_item_production', $2, $3::jsonb)
-`, agentID, itemID, fmt.Sprintf(`{"type":"creative_domain_task","workflow":"creative_production","variant_id":"%s","revision":%d,"qc_visual_rework":{}}`, exhaustedVariantID, i+2)); err != nil {
+
+RETURNING id::text`, agentID, itemID, fmt.Sprintf(`{"type":"creative_domain_task","workflow":"creative_production","variant_id":"%s","revision":%d,"qc_visual_rework":{}}`, exhaustedVariantID, i+2)).Scan(&reworkTaskID); err != nil {
+			t.Fatal(err)
+		}
+		reworkTaskIDs = append(reworkTaskIDs, reworkTaskID)
+		if _, err := testPool.Exec(t.Context(), `
+INSERT INTO creative_image_operation (variant_id, size_key, revision, operation_kind, idempotency_key, status, task_id)
+VALUES ($1, $2, 3, 'visual_rework', $3, 'completed', $4)
+`, exhaustedVariantID, standardCreativeAssetSizes[i], "exhausted-rework:"+reworkTaskID, reworkTaskID); err != nil {
 			t.Fatal(err)
 		}
 	}
+	t.Cleanup(func() {
+		for _, taskID := range reworkTaskIDs {
+			_, _ = testPool.Exec(t.Context(), `DELETE FROM agent_task_queue WHERE id = $1`, taskID)
+		}
+	})
 	if err := testPool.QueryRow(t.Context(), `
 INSERT INTO agent_task_queue (agent_id, runtime_id, status, priority, trigger_evidence_kind, trigger_evidence_ref_id, context)
 VALUES ($1, (SELECT runtime_id FROM agent WHERE id = $1), 'running', 0, 'creative_order_variant_qc', $2, $3::jsonb)
@@ -3936,6 +3957,53 @@ FROM creative_order_variant WHERE id = $1
 	}
 	if exhaustedVariantStatus != "action_required" || exhaustedActiveRevision != 0 || exhaustedStagingRevision != 3 || exhaustedDelivered != 0 {
 		t.Fatalf("exhausted visual rework status=%q active=%d staging=%d delivered=%d", exhaustedVariantStatus, exhaustedActiveRevision, exhaustedStagingRevision, exhaustedDelivered)
+	}
+
+	// A later blocking inspection must be able to withdraw a revision that an
+	// earlier visual report activated. The historical activation remains for
+	// audit, but it must no longer be the active delivery revision.
+	if _, err := testPool.Exec(t.Context(), `
+INSERT INTO creative_order_qc_report (variant_id, lane, revision, attempt, status, findings)
+VALUES ($1, 'visual', 1, 2, 'failed',
+  '{"blocking_failures":[{"code":"prime_reinspection_conflict","size_key":"1080x1080","diagnosis":"same attachment received contradictory Prime inspection results"}]}'::jsonb)
+`, variantID); err != nil {
+		t.Fatal(err)
+	}
+	var lateFailureTaskID string
+	if err := testPool.QueryRow(t.Context(), `
+INSERT INTO agent_task_queue (agent_id, runtime_id, status, priority, trigger_evidence_kind, trigger_evidence_ref_id, context)
+VALUES ($1, (SELECT runtime_id FROM agent WHERE id = $1), 'running', 0, 'creative_order_variant_qc', $2, $3::jsonb)
+RETURNING id::text`, agentID, variantID, creativeQCTaskContextForTest(t, orderID, variantID, "visual", 1, 2)).Scan(&lateFailureTaskID); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(t.Context(), `DELETE FROM agent_task_queue WHERE id = $1`, lateFailureTaskID)
+	})
+	w = httptest.NewRecorder()
+	req = newRequest(http.MethodPost, "/api/creative/orders/"+orderID+"/qc-finalize", creativeOrderQCFinalizeInput{VariantID: variantID, Revision: 1, Attempt: 2})
+	req = withURLParam(req, "id", orderID)
+	req.Header.Set("X-Actor-Source", "task_token")
+	req.Header.Set("X-Agent-ID", agentID)
+	req.Header.Set("X-Task-ID", lateFailureTaskID)
+	testHandler.FinalizeCreativeOrderQC(w, req)
+	var lateFailureResponse creativeOrderQCFinalizeResponse
+	if w.Code != http.StatusOK || json.NewDecoder(w.Body).Decode(&lateFailureResponse) != nil || lateFailureResponse.Outcome != "action_required" {
+		t.Fatalf("late blocking inspection must withdraw delivery = %d %#v %s", w.Code, lateFailureResponse, w.Body.String())
+	}
+	var lateStatus, lateRevisionStatus string
+	var lateActiveRevision, lateStagingRevision int
+	var wasActivated bool
+	if err := testPool.QueryRow(t.Context(), `
+SELECT variant.status, COALESCE(variant.active_revision, 0), COALESCE(variant.staging_revision, 0),
+       revision.status, revision.activated_at IS NOT NULL
+FROM creative_order_variant variant
+JOIN creative_order_variant_revision revision ON revision.variant_id = variant.id AND revision.revision = variant.revision
+WHERE variant.id = $1
+`, variantID).Scan(&lateStatus, &lateActiveRevision, &lateStagingRevision, &lateRevisionStatus, &wasActivated); err != nil {
+		t.Fatal(err)
+	}
+	if lateStatus != "action_required" || lateActiveRevision != 0 || lateStagingRevision != 1 || lateRevisionStatus != "action_required" || !wasActivated {
+		t.Fatalf("late failure state=%q active=%d staging=%d revision=%q wasActivated=%t", lateStatus, lateActiveRevision, lateStagingRevision, lateRevisionStatus, wasActivated)
 	}
 }
 

@@ -293,9 +293,15 @@ function CollectionPlanRow({
       </div>
       <div className="flex flex-wrap items-center gap-2">
         {status === "action_required" && (
-          <Button size="sm" variant="outline" onClick={onOpenCredentials}>
-            <KeyRound className="h-4 w-4" />重新登录/检查凭证
-          </Button>
+          <>
+            <Button size="sm" variant="outline" onClick={onOpenCredentials}>
+              <KeyRound className="h-4 w-4" />重新登录/检查凭证
+            </Button>
+            <Button size="sm" variant="outline" disabled={!canRun || running} onClick={onRunNow}>
+              {running ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+              重新运行
+            </Button>
+          </>
         )}
         {status === "failed" && (
           <Button size="sm" variant="outline" disabled={!canRun || running} onClick={onRunNow}>
