@@ -143,7 +143,8 @@ Prime context 是当前尺寸的真实视觉输入，不是黑白遮罩或可复
 ## 调用和证据
 
 每次模型调用都保存实际发送的 prompt、`prompt_sha256`、`request_id`、attempts、实际画布尺寸和输入资产指纹。
-调用 `multica image edit` 或 `image edit-batch` 时，任务执行器的进程超时必须至少为 25 分钟；传输层 408/429/5xx/网络失败最多重试两次。若执行器只先返回短周期的“仍在运行”状态，必须持续恢复同一进程会话直到完整 JSON 或明确非零错误到达，不能启动第二个 shell 或第二次模型调用。约 30 秒的空 stdout 不是成功、失败或“provider 未返回”证据，不能据此把 operation 标记为 unknown。必须把 CLI 返回的完整 JSON 原样保存，不能手工只保留 request ID、hash 或 `generated_asset` 摘要；后续 `asset-put` 使用同一份原始 JSON。
+Codex 的短 exec bridge 会在约 30 秒无 stdout 时提前返回，即使 Image Edit 子进程仍在请求 provider。因此单张
+`multica image edit` 一律使用本 Skill 的 `run_image_edit_job.py`：它把唯一模型命令放到独立会话，持久化状态和原始 stdout/stderr，前台只做 20 秒轮询。worker 的真实进程超时固定至少 25 分钟；`wait` 返回 `running` 时立即再次执行同一个 `wait`，直到 state 是 `completed`。不得因任意一次短轮询、空 stdout 或 `waiting` 把 operation 标记为 `unknown`，不得启动第二次模型调用。传输层 408/429/5xx/网络失败最多重试两次。必须把 `result-file` 中 CLI 的完整原子 JSON 原样保存，不能手工只保留 request ID、hash 或 `generated_asset` 摘要；后续 `asset-put` 使用同一份原始 JSON。
 写 canonical generated asset 时，`metadata.prompt`、`model_result.prompt` 和 `prompt_sha256` 必须从该原子 JSON 的同一个
 JSON string 逐字复制。不得用 `jq -r`、命令替换、shell 变量、`echo` 或展示用的 `prompt-<size>.txt` 重建 prompt：它们会改变末尾换行或
 其他空白字节，导致模型已成功生成却被资产谱系校验拒绝。应生成 JSON 对象后把原字段原样嵌入；只有 `prompt_sha256` 可作为单独标量读取。
@@ -191,11 +192,16 @@ python3 <当前 Skill 目录>/references/validate_image_operation.py \
 ```bash
 operation_id="$(jq -er '.id' <image-operation-response.json>)"
 operation_attempt="$(jq -er '.attempts | last | .attempt' <image-operation-response.json>)"
-multica image edit \
-  --input <input.png> --prompt-file <model-prompt.txt> \
+runner="<当前 Skill 目录>/references/run_image_edit_job.py"
+state_file="<workdir>/image-edit-job-<size>.json"
+python3 "$runner" start --state "$state_file" \
+  --stdout-file "<workdir>/image-edit-<size>.stdout" \
+  --stderr-file "<workdir>/image-edit-<size>.stderr" --timeout-seconds 1500 -- \
+  multica image edit --input <input.png> --prompt-file <model-prompt.txt> \
   --size <canonical-size> --quality high --output-file <model-output.png> \
   --result-file <workdir>/image-edit-result-<size>.json \
   --operation-id "$operation_id" --operation-attempt "$operation_attempt" --output json
+python3 "$runner" wait --state "$state_file" --max-wait-seconds 20 --heartbeat-seconds 5
 ```
 
 CLI 会把 daemon 注入的 task ID、operation 坐标、provider request ID、prompt hash、输出 hash 和附件路径一起写入原子
@@ -207,8 +213,8 @@ CLI 会把 daemon 注入的 task ID、operation 坐标、provider request ID、p
 `--result-file <workdir>/image-edit-result-<size>.json`；CLI 只会在模型图片已经成功写入 `--output-file` 后原子发布这份完整 JSON 回执。
 
 - 在发起调用前先检查该 `result-file`：若其中的 `generated_asset.completed=true`、`path` 存在且尺寸/`prompt_sha256` 对应当前调用，必须直接复用该回图做归一化、过程登记或写回，**不得再次调用模型**。
-- 发起调用后，必须等待同一个 Bash/exec 的 `tool_result` 返回完整 JSON 或明确的命令错误。不得在该结果抵达前运行 `find`、`ls`、第二个 `multica image edit`、把暂时不存在的输出文件当作失败，或写“provider 未返回”。工具事件晚于下一条日志不代表方图失败。
-- 若 shell/runtime 中断、返回为空或任务被续跑，先读取同尺寸 `result-file`。存在有效回执时它就是成功的原始模型结果；先补过程图、规范化、上传、`asset-put` 或贴片，不能因为先前工具结果缺失而重出图。
+- 通过 `start` 后只能对同一个 `state_file` 重复执行 `wait`；每次 `running` 都表示独立 worker 仍活着，不是失败。只有 `wait` 返回 `completed` 才能检查 `exit_code`、`result-file` 和 `output-file`。不得在此之前运行 `find`、`ls`、第二个 `multica image edit`，或写“provider 未返回”。这个持久 worker 替代不可靠的同一个 Bash/exec 阻塞等待，且始终只承载一次模型调用。
+- 若 task 被续跑，先执行 `python3 "$runner" inspect --state "$state_file"`，再继续 `wait`。state 为 `running` 时绝不能更新 operation；state 为 `completed` 且有有效 `result-file` 时，它就是成功的原始模型结果，先补过程图、规范化、上传、`asset-put` 或贴片，不能重出图。
 - task context 含 `late_receipt_recovery` 时，provider 成功回图已由原 runtime 的 daemon 可信归档。按 `late_receipt_recoveries` 逐项处理所有迟到尺寸（单项时也保留 `late_receipt_recovery` 作为首项指针）：从订单回读每个 `operation_id`/attempt 的完整 `result_receipt`，下载对应 `output_attachment_id`，只补规范化、过程登记、`asset-put` 和后续 Prime；**禁止调用 `multica image edit` 或创建新 operation/attempt**。
 - runtime 中断、空返回或 provider 状态不明时，把同一 operation/attempt 更新为 `unknown` 并保存已有 request ID、退出信息和耗时；unknown 只允许 reconcile，不能重发。明确完成后上传模型原图，再把同一 operation/attempt 更新为 `completed`，保存完整 `result_receipt`、request ID、provider status、耗时和 `output_attachment_id`。
 - unknown 对账时先检查原子 `result-file`、已有模型输出、过程附件和 provider 回执。找到成功结果就完成原 attempt；只有已经确认这些位置都没有有效回执时，才能把同一 attempt 更新为 `failed`，并同时提交 `error_type=provider_receipt_not_found`、`reconcile_confirmed=true`。之后才允许用递增 attempt 请求下一次 `disposition=invoke`；不得通过更换幂等键绕过 unknown。

@@ -69,7 +69,7 @@ func TestCreativePlatformSkillsUseFrozenBusinessInputs(t *testing.T) {
 		"ad-creative-analysis":       {"app_ui_replacement_needed", "app_ui_bounds", "不得读取、选择或引用 `app_ui_reference`", "不得输出 attachment ID"},
 		"ad-creative-pre-adaptation": {"source_analysis", "text_replacements", "visual_direction", "recommendation_basis", "repayment_plan_selections", "numeric_layouts", "render_instruction", "完整展示字符串", "pre-adaptation-put", "min(", "我方优先、数量取小", "只有明显的还款结构才生成 repayment 选择和 numeric layout", "Rp100Juta", "保留后续可手动改写空间"},
 		"ad-creative-plan":           {"copy_snapshot", "input_snapshot", "source_analysis", "app_ui_replacement", "app_ui_reference", "resource_file_id", "attachment_id", "只替换手机屏幕内容"},
-		"ad-creative-production":     {"copy_snapshot", "prompt_sha256", "request_id", "Input 3 是选中的 AdaKami App UI reference", "app_ui_reference_attachment_id", "multica attachment download", "只替换手机屏幕内容", "--result-file", "--operation-id", "--operation-attempt", "late_receipt_recovery", "late_receipt_recoveries", "同一个 Bash/exec", "operation_id", "reconcile_confirmed=true", "input_snapshot", "input_asset_fingerprints", "validate_image_operation.py", "validate_task_scope.py", "不能因为读到了同订单的另一个候选", "进程超时必须至少为 25 分钟", "约 30 秒的空 stdout"},
+		"ad-creative-production":     {"copy_snapshot", "prompt_sha256", "request_id", "Input 3 是选中的 AdaKami App UI reference", "app_ui_reference_attachment_id", "multica attachment download", "只替换手机屏幕内容", "--result-file", "--operation-id", "--operation-attempt", "late_receipt_recovery", "late_receipt_recoveries", "同一个 Bash/exec", "operation_id", "reconcile_confirmed=true", "input_snapshot", "input_asset_fingerprints", "validate_image_operation.py", "validate_task_scope.py", "不能因为读到了同订单的另一个候选", "run_image_edit_job.py", "独立会话", "约 30 秒无 stdout"},
 		"ad-creative-direct-edit":    {"copy_snapshot", "prompt_sha256", "delivery_mode", "即使先前识别错了，也要保留后续手动改写空间", "不要把流程卡死在还款计划选择", "不得同时要求“保持原始 scale”", "protected_content_envelope", "prompt 不得写入坐标、百分比", "official_prime_reflow_window_context", "--content-envelope-output", "阻塞屏障", "任务工作目录根部", "image-edit-result-<size>.json", "intent-plan.json", "final_visual_validation=true", "--operation-id", "--operation-attempt", "late_receipt_recovery", "late_receipt_recoveries", "operation_id", "reconcile_confirmed=true"},
 		"ad-creative-qc":             {"copy_snapshot", "compose_result", "qc-finalize", "multica attachment download", "view_image", "base64/stdout", "stage=primed", "revision=<context.revision>", "已批准模板家族"},
 		"ad-creative-prime-compose":  {"prime-compose", "creative_prime_backend.go", "does not edit model prompts", "each delivery size", "publishes no partial package"},
@@ -88,7 +88,7 @@ func TestCreativePlatformSkillsUseFrozenBusinessInputs(t *testing.T) {
 	for _, required := range []string{
 		"capability = 'reference_analysis'; version = 19",
 		"capability = 'generation_plan'; version = 39",
-		"capability = 'image_edit'; version = 104",
+		"capability = 'image_edit'; version = 105",
 		"capability = 'prime_compose'; version = 5",
 		"capability = 'direct_image_edit'; version = 28",
 		"capability = 'quality_control'; version = 38",
@@ -106,7 +106,7 @@ func TestCreativePlatformSkillsUseFrozenBusinessInputs(t *testing.T) {
 	for _, required := range []string{
 		`Capability: "reference_analysis", Version: 19`,
 		`Capability: "generation_plan", Version: 39`,
-		`Capability: "image_edit", Version: 104`,
+		`Capability: "image_edit", Version: 105`,
 		`Capability: "prime_compose", Version: 5`,
 		`Capability: "direct_image_edit", Version: 28`,
 		`Capability: "quality_control", Version: 38`,
