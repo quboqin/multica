@@ -3368,9 +3368,16 @@ func TestCreativePrimeCriticalReadabilityFindingsFenceVisualQCBypass(t *testing.
 		t.Fatalf("critical readability findings = %#v, want square and landscape", critical)
 	}
 	input, err := mergeCreativePrimeCriticalReadabilityFailures(creativeOrderQCInput{
-		Lane:     "visual",
-		Status:   "passed",
-		Findings: json.RawMessage(`{"checked_assets":[{"size_key":"800x1000"}],"quality_warnings":[]}`),
+		Lane:   "visual",
+		Status: "passed",
+		Findings: json.RawMessage(`{
+  "checked_assets":[{"size_key":"800x1000"}],
+  "quality_warnings":[],
+  "blocking_failures":[
+    {"code":"official_prime_text_unreadable","size_key":"1080x1080","diagnosis":"1080x1080：selected template support has p10=1.0345 and texture=0.227531；期望调整为低纹理背景"},
+    {"code":"official_prime_text_unreadable","size_key":"1200x628","diagnosis":"1200x628：selected template support has p10=1.2408；期望调整为低纹理背景"}
+  ]
+}`),
 	}, critical)
 	if err != nil || input.Status != "failed" {
 		t.Fatalf("merged critical report = %#v, %v", input, err)
@@ -3385,6 +3392,11 @@ func TestCreativePrimeCriticalReadabilityFindingsFenceVisualQCBypass(t *testing.
 	}
 	if !sizes["1080x1080"] || !sizes["1200x628"] || sizes["800x1000"] {
 		t.Fatalf("merged critical finding sizes = %#v", sizes)
+	}
+	for _, finding := range findings {
+		if !strings.Contains(finding.Diagnosis, "实际不可读") {
+			t.Fatalf("critical finding did not replace malformed model diagnosis: %#v", finding)
+		}
 	}
 }
 

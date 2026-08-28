@@ -2266,17 +2266,31 @@ func mergeCreativePrimeCriticalReadabilityFailures(input creativeOrderQCInput, c
 			return input, errors.New("findings.blocking_failures must be an array")
 		}
 	}
-	seenSizes := make(map[string]struct{}, len(blocking))
-	for _, raw := range blocking {
-		var existing struct {
-			SizeKey string `json:"size_key"`
-		}
+	blockingIndexes := make(map[string]int, len(blocking))
+	for index, raw := range blocking {
+		var existing creativeVisualModelReworkFinding
 		if json.Unmarshal(raw, &existing) == nil && strings.TrimSpace(existing.SizeKey) != "" {
-			seenSizes[strings.TrimSpace(existing.SizeKey)] = struct{}{}
+			blockingIndexes[strings.TrimSpace(existing.SizeKey)] = index
 		}
 	}
 	for _, finding := range critical {
-		if _, exists := seenSizes[finding.SizeKey]; exists {
+		if index, exists := blockingIndexes[finding.SizeKey]; exists {
+			var existing creativeVisualModelReworkFinding
+			if json.Unmarshal(blocking[index], &existing) == nil &&
+				strings.TrimSpace(existing.Code) == "official_prime_text_unreadable" &&
+				!validCreativeVisualModelReworkDiagnosis(
+					strings.TrimSpace(existing.Code),
+					strings.TrimSpace(existing.SizeKey),
+					strings.TrimSpace(existing.Diagnosis),
+				) {
+				encoded, err := json.Marshal(finding)
+				if err != nil {
+					return input, err
+				}
+				// A same-size model diagnosis that cannot drive bounded rework must
+				// not suppress the compositor's authoritative readability failure.
+				blocking[index] = encoded
+			}
 			continue
 		}
 		encoded, err := json.Marshal(finding)
@@ -2284,7 +2298,7 @@ func mergeCreativePrimeCriticalReadabilityFailures(input creativeOrderQCInput, c
 			return input, err
 		}
 		blocking = append(blocking, encoded)
-		seenSizes[finding.SizeKey] = struct{}{}
+		blockingIndexes[finding.SizeKey] = len(blocking) - 1
 	}
 	encodedBlocking, err := json.Marshal(blocking)
 	if err != nil {
