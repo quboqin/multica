@@ -2348,6 +2348,130 @@ func mergeCreativePrimeCriticalReadabilityFailures(input creativeOrderQCInput, c
 	return input, nil
 }
 
+type creativeQCPrimeReinspectionConflict struct {
+	SizeKey      string
+	PreviousCode string
+}
+
+// A retry may revise a hard Prime conclusion only after the inspected assets
+// changed. Otherwise a prior hard failure remains a delivery fence.
+func creativeQCCheckedPrimeAttachments(findings json.RawMessage) (map[string]string, bool) {
+	var report struct {
+		CheckedAssets []struct {
+			SizeKey      string `json:"size_key"`
+			AttachmentID string `json:"attachment_id"`
+		} `json:"checked_assets"`
+	}
+	if err := json.Unmarshal(findings, &report); err != nil || len(report.CheckedAssets) == 0 {
+		return nil, false
+	}
+	attachments := make(map[string]string, len(report.CheckedAssets))
+	for _, asset := range report.CheckedAssets {
+		sizeKey := strings.TrimSpace(asset.SizeKey)
+		attachmentID := strings.TrimSpace(asset.AttachmentID)
+		if sizeKey == "" || attachmentID == "" {
+			return nil, false
+		}
+		if _, duplicate := attachments[sizeKey]; duplicate {
+			return nil, false
+		}
+		attachments[sizeKey] = attachmentID
+	}
+	return attachments, true
+}
+
+func creativeQCPrimeAttachmentsMatch(left, right map[string]string) bool {
+	if len(left) == 0 || len(left) != len(right) {
+		return false
+	}
+	for sizeKey, attachmentID := range left {
+		if right[sizeKey] != attachmentID {
+			return false
+		}
+	}
+	return true
+}
+
+func creativeQCHardPrimeReinspectionConflicts(previous, current json.RawMessage) []creativeQCPrimeReinspectionConflict {
+	previousAttachments, previousOK := creativeQCCheckedPrimeAttachments(previous)
+	currentAttachments, currentOK := creativeQCCheckedPrimeAttachments(current)
+	if !previousOK || !currentOK || !creativeQCPrimeAttachmentsMatch(previousAttachments, currentAttachments) {
+		return nil
+	}
+	var report struct {
+		BlockingFailures []struct {
+			Code    string `json:"code"`
+			SizeKey string `json:"size_key"`
+		} `json:"blocking_failures"`
+	}
+	if json.Unmarshal(previous, &report) != nil {
+		return nil
+	}
+	seen := make(map[string]struct{})
+	conflicts := make([]creativeQCPrimeReinspectionConflict, 0)
+	for _, failure := range report.BlockingFailures {
+		code := strings.TrimSpace(failure.Code)
+		sizeKey := strings.TrimSpace(failure.SizeKey)
+		if (code != "actual_prime_obstruction" && code != "official_prime_text_unreadable") || sizeKey == "" {
+			continue
+		}
+		if _, duplicate := seen[sizeKey]; duplicate {
+			continue
+		}
+		seen[sizeKey] = struct{}{}
+		conflicts = append(conflicts, creativeQCPrimeReinspectionConflict{SizeKey: sizeKey, PreviousCode: code})
+	}
+	return conflicts
+}
+
+func mergeCreativeQCPrimeReinspectionConflicts(findings json.RawMessage, conflicts []creativeQCPrimeReinspectionConflict) (json.RawMessage, error) {
+	if len(conflicts) == 0 {
+		return findings, nil
+	}
+	var report map[string]json.RawMessage
+	if err := json.Unmarshal(findings, &report); err != nil || report == nil {
+		return nil, errors.New("visual QC findings must be an object")
+	}
+	var blocking []json.RawMessage
+	if raw, exists := report["blocking_failures"]; exists && string(raw) != "null" {
+		if err := json.Unmarshal(raw, &blocking); err != nil {
+			return nil, errors.New("findings.blocking_failures must be an array")
+		}
+	}
+	alreadyFenced := make(map[string]struct{})
+	for _, raw := range blocking {
+		var existing struct {
+			Code    string `json:"code"`
+			SizeKey string `json:"size_key"`
+		}
+		if json.Unmarshal(raw, &existing) == nil && strings.TrimSpace(existing.Code) == "prime_reinspection_conflict" {
+			alreadyFenced[strings.TrimSpace(existing.SizeKey)] = struct{}{}
+		}
+	}
+	for _, conflict := range conflicts {
+		if _, exists := alreadyFenced[conflict.SizeKey]; exists {
+			continue
+		}
+		fence := map[string]string{
+			"code":      "prime_reinspection_conflict",
+			"size_key":  conflict.SizeKey,
+			"diagnosis": fmt.Sprintf("%s: the same Prime attachment previously failed %s; unchanged assets cannot be released by a retry", conflict.SizeKey, conflict.PreviousCode),
+		}
+		encoded, err := json.Marshal(fence)
+		if err != nil {
+			return nil, err
+		}
+		blocking = append(blocking, encoded)
+		alreadyFenced[conflict.SizeKey] = struct{}{}
+	}
+	encodedBlocking, err := json.Marshal(blocking)
+	if err != nil {
+		return nil, err
+	}
+	report["blocking_failures"] = encodedBlocking
+	return json.Marshal(report)
+}
+
 func creativeVisualModelReworkAttemptCount(ctx context.Context, tx pgx.Tx, variantID pgtype.UUID) (int, error) {
 	var count int
 	err := tx.QueryRow(ctx, `
@@ -4460,6 +4584,54 @@ FOR UPDATE
 		return
 	}
 	rows.Close()
+
+	if visualFindings, ok := failureSummary["visual"]; ok {
+		previousRows, queryErr := tx.Query(r.Context(), `
+SELECT findings::text
+FROM creative_order_qc_report
+WHERE variant_id = $1 AND revision = $2 AND lane = 'visual' AND attempt < $3
+ORDER BY attempt DESC
+FOR UPDATE
+`, variantID, input.Revision, input.Attempt)
+		if queryErr != nil {
+			writeError(w, http.StatusInternalServerError, "failed to load prior visual QC reports")
+			return
+		}
+		conflicts := make([]creativeQCPrimeReinspectionConflict, 0)
+		for previousRows.Next() {
+			var previousFindings string
+			if err := previousRows.Scan(&previousFindings); err != nil {
+				previousRows.Close()
+				writeError(w, http.StatusInternalServerError, "failed to read prior visual QC reports")
+				return
+			}
+			conflicts = append(conflicts, creativeQCHardPrimeReinspectionConflicts(json.RawMessage(previousFindings), visualFindings)...)
+		}
+		if err := previousRows.Err(); err != nil {
+			previousRows.Close()
+			writeError(w, http.StatusInternalServerError, "failed to read prior visual QC reports")
+			return
+		}
+		previousRows.Close()
+		if len(conflicts) > 0 {
+			fencedFindings, mergeErr := mergeCreativeQCPrimeReinspectionConflicts(visualFindings, conflicts)
+			if mergeErr != nil {
+				writeError(w, http.StatusBadRequest, mergeErr.Error())
+				return
+			}
+			if _, updateErr := tx.Exec(r.Context(), `
+UPDATE creative_order_qc_report
+SET status = 'failed', findings = $4::jsonb
+WHERE variant_id = $1 AND revision = $2 AND attempt = $3 AND lane = 'visual'
+`, variantID, input.Revision, input.Attempt, string(fencedFindings)); updateErr != nil {
+				writeError(w, http.StatusInternalServerError, "failed to fence contradictory visual QC")
+				return
+			}
+			failureSummary["visual"] = fencedFindings
+			reportStatuses["visual"] = "failed"
+			visualHasBlockingFailure = true
+		}
+	}
 
 	response := creativeOrderQCFinalizeResponse{
 		VariantID:    input.VariantID,

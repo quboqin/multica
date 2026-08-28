@@ -4048,6 +4048,48 @@ func TestNormalizeCreativeOrderQCFailsClosedForBlockingFindings(t *testing.T) {
 	}
 }
 
+func TestCreativeQCPrimeReinspectionFenceRequiresChangedAttachments(t *testing.T) {
+	previous := json.RawMessage(`{
+  "checked_assets":[
+    {"size_key":"1080x1080","attachment_id":"square-v3"},
+    {"size_key":"1200x628","attachment_id":"landscape-v3"}
+  ],
+  "blocking_failures":[
+    {"code":"actual_prime_obstruction","size_key":"1080x1080","diagnosis":"1080x1080: content overlaps Prime"}
+  ]
+}`)
+	unchangedRetry := json.RawMessage(`{
+  "checked_assets":[
+    {"size_key":"1080x1080","attachment_id":"square-v3"},
+    {"size_key":"1200x628","attachment_id":"landscape-v3"}
+  ],
+  "blocking_failures":[]
+}`)
+	conflicts := creativeQCHardPrimeReinspectionConflicts(previous, unchangedRetry)
+	if len(conflicts) != 1 || conflicts[0].SizeKey != "1080x1080" || conflicts[0].PreviousCode != "actual_prime_obstruction" {
+		t.Fatalf("unchanged Prime retry conflicts = %#v", conflicts)
+	}
+	fenced, err := mergeCreativeQCPrimeReinspectionConflicts(unchangedRetry, conflicts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	blocked, err := creativeQCFindingsHaveBlockingFailures(fenced)
+	if err != nil || !blocked {
+		t.Fatalf("fenced findings blocked=%t err=%v findings=%s", blocked, err, fenced)
+	}
+
+	changedRetry := json.RawMessage(`{
+  "checked_assets":[
+    {"size_key":"1080x1080","attachment_id":"square-v4"},
+    {"size_key":"1200x628","attachment_id":"landscape-v3"}
+  ],
+  "blocking_failures":[]
+}`)
+	if conflicts := creativeQCHardPrimeReinspectionConflicts(previous, changedRetry); len(conflicts) != 0 {
+		t.Fatalf("changed Prime assets must be eligible for a fresh QC conclusion: %#v", conflicts)
+	}
+}
+
 func TestDecodeCreativeOrderQCInputAcceptsDirectReportShape(t *testing.T) {
 	input, err := decodeCreativeOrderQCInput(json.RawMessage(`{
 		"variant_id":"2f8f9b6b-2a4c-4f4e-bf0d-0b4b1b2aa111",
