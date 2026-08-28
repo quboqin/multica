@@ -135,9 +135,15 @@ func lockCreativeFanoutFence(ctx context.Context, tx pgx.Tx, workspaceID pgtype.
 	if actorTaskID.Valid {
 		var taskOrderID string
 		err := tx.QueryRow(ctx, `
-SELECT COALESCE(task.context->>'creative_order_id', '')
+SELECT COALESCE(
+  task.context->>'creative_order_id',
+  issue.metadata->>'creative_order_id',
+  ''
+)
 FROM agent_task_queue task
 JOIN agent assigned_agent ON assigned_agent.id = task.agent_id
+LEFT JOIN issue ON issue.id = task.issue_id
+  AND issue.workspace_id = assigned_agent.workspace_id
 WHERE task.id = $1 AND task.agent_id = $2
   AND assigned_agent.workspace_id = $3
   AND task.status IN ('dispatched', 'running')

@@ -203,6 +203,53 @@ RETURNING id::text
 	}
 }
 
+func TestLockCreativeFanoutFenceReadsOrderFromDelegatingIssueMetadata(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	ctx := t.Context()
+	orderID, itemID, issueID := createCreativeLifecycleTestOrder(t, "creative fanout issue metadata")
+	if _, err := testPool.Exec(ctx, `
+UPDATE issue
+SET metadata = jsonb_set(metadata, '{creative_order_id}', to_jsonb($2::text), true)
+WHERE id = $1
+`, issueID, orderID); err != nil {
+		t.Fatalf("set issue creative order metadata: %v", err)
+	}
+
+	delegatorID := createHandlerTestAgent(t, "creative-fanout-issue-metadata", []byte(`{}`))
+	var parentTaskID string
+	if err := testPool.QueryRow(ctx, `
+INSERT INTO agent_task_queue (agent_id, runtime_id, issue_id, status, priority, context)
+VALUES ($1, $2, $3, 'running', 0, '{}'::jsonb)
+RETURNING id::text
+`, delegatorID, handlerTestRuntimeID(t), issueID).Scan(&parentTaskID); err != nil {
+		t.Fatalf("create delegating issue task: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM agent_task_queue WHERE id = $1`, parentTaskID)
+	})
+
+	tx, err := testPool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback(ctx)
+	err = lockCreativeFanoutFence(
+		ctx,
+		tx,
+		parseUUID(testWorkspaceID),
+		"creative_order_item_plan",
+		parseUUID(itemID),
+		[]service.DirectTaskFanoutItem{{ItemKey: itemID + ":r1", Context: json.RawMessage(`{"type":"creative_domain_task","workflow":"creative_plan"}`)}},
+		parseUUID(parentTaskID),
+		parseUUID(delegatorID),
+	)
+	if err != nil {
+		t.Fatalf("fanout fence rejected same order from issue metadata: %v", err)
+	}
+}
+
 func TestFanoutAgentTasks_ReusesActiveTaskAfterUniqueConflict(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
