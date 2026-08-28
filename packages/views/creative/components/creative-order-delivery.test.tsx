@@ -68,6 +68,41 @@ function qcReport(input: Pick<CreativeOrderQCReport, "id" | "variant_id" | "revi
 }
 
 describe("creative order stage", () => {
+  it("keeps exploratory candidates out of the delivery page until three selections are committed", () => {
+    const orderItem = item();
+    orderItem.variants = ["c01", "c02", "c03", "c04", "c05"].map((id) => ({
+      ...variant(id),
+      variant_key: id.toUpperCase(),
+      candidate_state: "candidate",
+      selection_rank: null,
+    })) as CreativeOrderVariant[];
+
+    render(<CreativeOrderDeliveryCandidates orderId="order-1" item={orderItem} source={{ label: "竞品原图", url: "https://cdn.example/source.png" }} attachments={attachmentMap(orderItem)} adoptingVariantId="" onAdopt={vi.fn()} onAssetSelect={vi.fn()} />);
+
+    expect(screen.getByTestId("creative-order-candidate-selection-pending")).toBeInTheDocument();
+    expect(screen.queryByText("C01")).not.toBeInTheDocument();
+    expect(screen.queryByText("C05")).not.toBeInTheDocument();
+    expect(screen.getByText("自动筛选中")).toBeInTheDocument();
+  });
+
+  it("shows only the three selected variants after candidate comparison", () => {
+    const orderItem = item();
+    orderItem.variants = ["c01", "c02", "c03", "c04", "c05"].map((id, index) => ({
+      ...variant(id),
+      variant_key: id.toUpperCase(),
+      candidate_state: index < 3 ? "selected" : index === 3 ? "reserve" : "rejected",
+      selection_rank: index < 3 ? index + 1 : index === 3 ? 4 : null,
+    })) as CreativeOrderVariant[];
+
+    render(<CreativeOrderDeliveryCandidates orderId="order-1" item={orderItem} source={{ label: "竞品原图", url: "https://cdn.example/source.png" }} attachments={attachmentMap(orderItem)} adoptingVariantId="" onAdopt={vi.fn()} onAssetSelect={vi.fn()} />);
+
+    expect(screen.getByText("C01")).toBeInTheDocument();
+    expect(screen.getByText("C02")).toBeInTheDocument();
+    expect(screen.getByText("C03")).toBeInTheDocument();
+    expect(screen.queryByText("C04")).not.toBeInTheDocument();
+    expect(screen.queryByText("C05")).not.toBeInTheDocument();
+  });
+
   it("keeps a ready variant actionable even when another workflow failed", () => {
     const order = {
       status: "partial",
@@ -1015,7 +1050,7 @@ describe("creative order delivery selection", () => {
     expect(screen.getByRole("button", { name: "重新质检 · r3" })).toBeEnabled();
   });
 
-  it("uses each concept's chosen primary size and keeps reserves outside delivery", () => {
+  it("keeps exploratory primary images and reserves out of the delivery page", () => {
     const candidate = variant("c01");
     candidate.revision = 1;
     candidate.active_revision = 0;
@@ -1047,8 +1082,9 @@ describe("creative order delivery selection", () => {
     orderItem.variants = [reserve, candidate];
     render(<CreativeOrderDeliveryCandidates orderId="order-1" item={orderItem} source={{ label: "竞品原图", url: "https://cdn.example/source.png" }} attachments={attachmentMap(orderItem)} adoptingVariantId="" onAdopt={vi.fn()} onAssetSelect={vi.fn()} />);
 
-    expect(screen.getByAltText("C01 横版主预览")).toBeInTheDocument();
-    expect(screen.getAllByText("后备第 4 名").length).toBeGreaterThan(0);
+    expect(screen.getByTestId("creative-order-candidate-selection-pending")).toBeInTheDocument();
+    expect(screen.queryByAltText("C01 横版主预览")).not.toBeInTheDocument();
+    expect(screen.queryByText("后备第 4 名")).not.toBeInTheDocument();
     expect(creativeVariantAdoptionReadiness(reserve)).toEqual({ ready: false, status: "后备方案暂不参与交付" });
     expect(creativeVariantNeedsManualAction(reserve)).toBe(false);
   });
@@ -1124,13 +1160,14 @@ describe("creative order delivery selection", () => {
     expect(creativeOrderStage(candidateOrder)).toMatchObject({
       key: "generating",
       label: "候选比较中",
-      detail: "5/5 个候选主画面已就绪",
+      detail: "正在自动比较候选主画面，确定三个入选方案后继续生成",
       totalVariants: 0,
     });
 
     render(<CreativeOrderDeliveryCandidates orderId="order-1" item={orderItem} source={{ label: "竞品原图", url: "https://cdn.example/source.png" }} attachments={attachmentMap(orderItem)} adoptingVariantId="" onAdopt={vi.fn()} onAssetSelect={vi.fn()} />);
-    expect(screen.getAllByText("5/5 张成图")).toHaveLength(1);
-    expect(screen.queryByText("5/15 张成图")).not.toBeInTheDocument();
+    expect(screen.getByTestId("creative-order-candidate-selection-pending")).toBeInTheDocument();
+    expect(screen.getByText("自动筛选中")).toBeInTheDocument();
+    expect(screen.queryByText("5/5 张成图")).not.toBeInTheDocument();
   });
 
   it("counts selected targets and only the primary size for reserves and rejected candidates", () => {
@@ -1178,7 +1215,8 @@ describe("creative order delivery selection", () => {
     orderItem.variants = [selected, reserve, rejected];
     render(<CreativeOrderDeliveryCandidates orderId="order-1" item={orderItem} source={{ label: "竞品原图", url: "https://cdn.example/source.png" }} attachments={attachmentMap(orderItem)} adoptingVariantId="" onAdopt={vi.fn()} onAssetSelect={vi.fn()} />);
 
-    expect(screen.getAllByText("5/5 张成图")).toHaveLength(1);
-    expect(screen.queryByText("5/9 张成图")).not.toBeInTheDocument();
+    expect(screen.getAllByText("3/3 张成图")).toHaveLength(1);
+    expect(screen.queryByText("R01")).not.toBeInTheDocument();
+    expect(screen.queryByText("X01")).not.toBeInTheDocument();
   });
 });

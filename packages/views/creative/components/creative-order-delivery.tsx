@@ -202,7 +202,7 @@ export function creativeOrderStage(order: CreativeOrder | undefined): CreativeOr
     return { ...base, key: "review", label: "待验收", detail: "已有可采用方案，等待选择", action: "选择最终方案" };
   }
   if (status === "awaiting_selection" || (candidates.length >= 4 && readyCandidates >= 4)) {
-    return { ...base, key: "generating", label: "候选比较中", detail: `${readyCandidates}/${candidates.length} 个候选主画面已就绪`, action: "查看候选" };
+    return { ...base, key: "generating", label: "候选比较中", detail: "正在自动比较候选主画面，确定三个入选方案后继续生成", action: "等待筛选" };
   }
   if (actionableFailures.length > 0 || status === "failed" || blockedVariants > 0 || (status === "action_required" && variants.length === 0)) {
     const failureCount = actionableFailures.length;
@@ -216,7 +216,7 @@ export function creativeOrderStage(order: CreativeOrder | undefined): CreativeOr
   }
   if (allVariants.length > 0 || ["queued", "running", "partial"].includes(status)) {
     if (candidates.length > 0 && variants.length === 0) {
-      return { ...base, key: "generating", label: "候选生成中", detail: `${readyCandidates}/${candidates.length} 个候选主画面已就绪`, action: "查看生成进度" };
+      return { ...base, key: "generating", label: "候选生成中", detail: "正在生成并自动筛选三个入选方案", action: "等待筛选" };
     }
     const completedSizes = variants.reduce((count, variant) => count + creativeVariantProgressAssets(variant).length, 0);
     const expectedSizes = variants.reduce((count, variant) => count + creativeVariantWorkingExpectedSizes(variant).length, 0);
@@ -461,7 +461,9 @@ export function CreativeOrderDeliveryCandidates({
 }) {
   const adoptedVariant = adoptedCreativeOrderVariant(item);
   const sortedVariants = [...item.variants].sort(compareCreativeVariantDisplayOrder);
-  const otherVariants = adoptedVariant ? sortedVariants.filter((variant) => variant.id !== adoptedVariant.id) : [];
+  const deliveryVariants = sortedVariants.filter(creativeVariantParticipatesInDelivery);
+  const selectionPending = !adoptedVariant && deliveryVariants.length === 0 && sortedVariants.some((variant) => creativeVariantCandidateState(variant) === "candidate");
+  const otherVariants = adoptedVariant ? deliveryVariants.filter((variant) => variant.id !== adoptedVariant.id) : [];
   const title = source.label || `素材 ${item.candidate_id.slice(0, 8)}`;
   const progress = creativeOrderItemProgress(item);
   const [packageOpen, setPackageOpen] = useState(defaultOpen);
@@ -527,8 +529,8 @@ export function CreativeOrderDeliveryCandidates({
             />)}
           </div>
         </details>}
-      </> : sortedVariants.length > 0 ? <div className="grid gap-3 p-4 lg:grid-cols-3">
-          {sortedVariants.map((variant) => <VariantCandidate
+      </> : deliveryVariants.length > 0 ? <div className="grid gap-3 p-4 lg:grid-cols-3">
+          {deliveryVariants.map((variant) => <VariantCandidate
             key={variant.id}
             variant={variant}
             attachments={attachments}
@@ -542,7 +544,7 @@ export function CreativeOrderDeliveryCandidates({
             retrying={retryingVariantId === variant.id}
             onRetry={onRetryVariant}
           />)}
-        </div> : <div className="grid gap-3 p-4 lg:grid-cols-3"><CreativeOrderVariantPlaceholder /></div>}
+        </div> : selectionPending ? <CreativeOrderCandidateSelectionPending /> : <div className="grid gap-3 p-4 lg:grid-cols-3"><CreativeOrderVariantPlaceholder /></div>}
     </div>
   </details>;
 }
@@ -558,26 +560,27 @@ type CreativeOrderItemProgress = {
   productionStoppedVariants: number;
   blockedVariants: number;
   readyVariants: number;
+  selectionPending: boolean;
 };
 
 function creativeOrderItemProgress(item: CreativeOrderItem): CreativeOrderItemProgress {
-  const variants = item.variants;
-  const previewAssets = variants.reduce((count, variant) => count + creativeVariantProgressAssets(variant).length, 0);
-  const expectedAssets = variants.reduce((count, variant) => count + creativeVariantWorkingExpectedSizes(variant).length, 0);
-  const runningVariants = variants.filter(creativeVariantIsInProgress).length;
-  const deliveryVariants = variants.filter(creativeVariantParticipatesInDelivery);
+  const allVariants = item.variants;
+  const deliveryVariants = allVariants.filter(creativeVariantParticipatesInDelivery);
+  const previewAssets = deliveryVariants.reduce((count, variant) => count + creativeVariantProgressAssets(variant).length, 0);
+  const expectedAssets = deliveryVariants.reduce((count, variant) => count + creativeVariantWorkingExpectedSizes(variant).length, 0);
+  const runningVariants = deliveryVariants.filter(creativeVariantIsInProgress).length;
   const productionStoppedVariants = deliveryVariants.filter(creativeVariantHasProductionStop).length;
   const blockedVariants = deliveryVariants.filter(creativeVariantNeedsManualAction).length;
   const readyVariants = deliveryVariants.filter((variant) => creativeVariantAdoptionReadiness(variant).ready).length;
-  const candidateCount = variants.filter((variant) => creativeVariantCandidateState(variant) === "candidate").length;
-  const candidateReady = variants.filter((variant) => creativeVariantCandidateState(variant) === "candidate" && creativeVariantPrimaryPreviewReady(variant)).length;
-  if (item.adopted_variant_id) return { label: "已采用", detail: "已选择最终方案，可查看交付包。", tone: "default", variants: variants.length, previewAssets, expectedAssets, runningVariants, productionStoppedVariants, blockedVariants, readyVariants };
-  if (readyVariants > 0) return { label: "可验收", detail: `${readyVariants}/${Math.max(deliveryVariants.length, 1)} 个入选方案可验收，先比较成图再采用。`, tone: "default", variants: variants.length, previewAssets, expectedAssets, runningVariants, productionStoppedVariants, blockedVariants, readyVariants };
-  if (candidateCount > 0) return { label: "方案筛选中", detail: `${candidateReady}/${candidateCount} 个主画面已就绪，正在比较并选出三个方案。`, tone: "outline", variants: variants.length, previewAssets, expectedAssets, runningVariants, productionStoppedVariants, blockedVariants, readyVariants };
-  if (productionStoppedVariants > 0) return { label: "未完成", detail: `${productionStoppedVariants} 个变体未完成，可先查看已有图。`, tone: "secondary", variants: variants.length, previewAssets, expectedAssets, runningVariants, productionStoppedVariants, blockedVariants, readyVariants };
-  if (blockedVariants > 0) return { label: "待验收", detail: `${blockedVariants} 个变体待验收，先看图再决定。`, tone: "secondary", variants: variants.length, previewAssets, expectedAssets, runningVariants, productionStoppedVariants, blockedVariants, readyVariants };
-  if (runningVariants > 0 || variants.length > 0) return { label: "生成中", detail: `${previewAssets}/${Math.max(expectedAssets, 1)} 张成图已就绪，页面会自动刷新。`, tone: "outline", variants: variants.length, previewAssets, expectedAssets, runningVariants, productionStoppedVariants, blockedVariants, readyVariants };
-  return { label: "准备中", detail: "等待后台创建生成任务。", tone: "secondary", variants: 0, previewAssets: 0, expectedAssets: 0, runningVariants: 0, productionStoppedVariants: 0, blockedVariants: 0, readyVariants: 0 };
+  const selectionPending = deliveryVariants.length === 0 && allVariants.some((variant) => creativeVariantCandidateState(variant) === "candidate");
+  const shared = { variants: deliveryVariants.length, previewAssets, expectedAssets, runningVariants, productionStoppedVariants, blockedVariants, readyVariants, selectionPending };
+  if (item.adopted_variant_id) return { label: "已采用", detail: "已选择最终方案，可查看交付包。", tone: "default", ...shared };
+  if (readyVariants > 0) return { label: "可验收", detail: `${readyVariants}/${Math.max(deliveryVariants.length, 1)} 个入选方案可验收，先比较成图再采用。`, tone: "default", ...shared };
+  if (selectionPending) return { label: "方案筛选中", detail: "正在自动比较候选主画面，确定三个方案后展示。", tone: "outline", ...shared };
+  if (productionStoppedVariants > 0) return { label: "未完成", detail: `${productionStoppedVariants} 个入选方案未完成，可先查看已有图。`, tone: "secondary", ...shared };
+  if (blockedVariants > 0) return { label: "待验收", detail: `${blockedVariants} 个入选方案待验收，先看图再决定。`, tone: "secondary", ...shared };
+  if (runningVariants > 0 || deliveryVariants.length > 0) return { label: "生成中", detail: `${previewAssets}/${Math.max(expectedAssets, 1)} 张成图已就绪，页面会自动刷新。`, tone: "outline", ...shared };
+  return { label: "准备中", detail: "等待后台创建生成任务。", tone: "secondary", variants: 0, previewAssets: 0, expectedAssets: 0, runningVariants: 0, productionStoppedVariants: 0, blockedVariants: 0, readyVariants: 0, selectionPending: false };
 }
 
 function CreativeOrderSourceAndPrompt({ source, progress }: { source: { label: string; url: string }; progress: CreativeOrderItemProgress }) {
@@ -590,9 +593,11 @@ function CreativeOrderSourceAndPrompt({ source, progress }: { source: { label: s
     </figure>
     <div className="min-w-0 space-y-3 px-4 py-3">
       <div className="flex flex-wrap gap-2 text-xs">
-        <Badge variant="outline">{progress.variants} 个变体</Badge>
-        <Badge variant="outline">{progress.expectedAssets > 0 ? `${progress.previewAssets}/${progress.expectedAssets} 张成图` : "等待任务"}</Badge>
-        {progress.runningVariants > 0 && <Badge variant="outline">{progress.runningVariants} 个生成中</Badge>}
+        {progress.selectionPending ? <Badge variant="outline">自动筛选中</Badge> : <>
+          <Badge variant="outline">{progress.variants} 个入选方案</Badge>
+          <Badge variant="outline">{progress.expectedAssets > 0 ? `${progress.previewAssets}/${progress.expectedAssets} 张成图` : "等待任务"}</Badge>
+          {progress.runningVariants > 0 && <Badge variant="outline">{progress.runningVariants} 个生成中</Badge>}
+        </>}
         {progress.productionStoppedVariants > 0 && <Badge variant="secondary">{progress.productionStoppedVariants} 个未完成</Badge>}
         {progress.blockedVariants - progress.productionStoppedVariants > 0 && <Badge variant="secondary">{progress.blockedVariants - progress.productionStoppedVariants} 个待验收</Badge>}
         {progress.readyVariants > 0 && <Badge>{progress.readyVariants} 个可验收</Badge>}
@@ -605,6 +610,12 @@ function CreativeOrderSourceAndPrompt({ source, progress }: { source: { label: s
 function CreativeOrderVariantPlaceholder() {
   return <div className="flex min-h-48 items-center justify-center border border-dashed bg-muted/10 px-6 text-center text-sm text-muted-foreground lg:col-span-3">
     等待后台创建生成任务，完成后这里会出现成图和验收入口。
+  </div>;
+}
+
+function CreativeOrderCandidateSelectionPending() {
+  return <div className="flex min-h-48 items-center justify-center border bg-muted/10 px-6 text-center text-sm text-muted-foreground" data-testid="creative-order-candidate-selection-pending">
+    正在自动比较候选主画面，确定三个入选方案后在这里展示。
   </div>;
 }
 
