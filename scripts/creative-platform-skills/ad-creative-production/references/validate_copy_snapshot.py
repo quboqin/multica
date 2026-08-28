@@ -54,6 +54,18 @@ SEMANTIC_PRIME_GUARD_TERMS = {
     ),
     "natural_background": ("background", "continuous background", "low-detail"),
 }
+SEMANTIC_MODEL_INTEGRATED_PRIME_GUARD_TERMS = {
+    "integrated_template": ("model-integrated", "model integrated"),
+    "prime_guide": ("input 2 is the current-size official prime visual context",),
+    "qr_free_template": ("qr-free full official prime template", "qr free full official prime template"),
+    "template_fidelity": ("visible official text", "official text, logo, color", "official text and logo"),
+    "no_invented_official_component": ("do not invent any qr", "do not add official component", "no additional official component"),
+    "business_avoidance": (
+        "keep business content clear of the template areas",
+        "keep business content clear of template areas",
+        "keep every module and keep it out of the protected bands",
+    ),
+}
 SEMANTIC_REDESIGN_GUARD_TERMS = {
     "reference_structure_only": (
         "use it only for business structure",
@@ -409,6 +421,8 @@ def prompt_mentions_bottom_group_clearance(prompt: str, y2: int, bottom_start: i
 def validate_prime_prompt_guard(prompt: str, layouts: list[dict[str, Any]]) -> list[str]:
     """Return missing Prime-safe guard requirements for a final image prompt."""
 
+    if uses_model_integrated_prime_contract(prompt):
+        return validate_model_integrated_prime_prompt_guard(prompt, layouts)
     if uses_coordinate_free_prime_contract(prompt):
         return validate_semantic_prime_prompt_guard(prompt, layouts)
 
@@ -490,6 +504,15 @@ def uses_coordinate_free_prime_contract(prompt: str) -> bool:
     )
 
 
+def uses_model_integrated_prime_contract(prompt: str) -> bool:
+    normalized = re.sub(r"\s+", " ", prompt.casefold())
+    return (
+        "model-integrated" in normalized
+        and "qr-free full official prime template" in normalized
+        and "input 2 is the current-size official prime visual context" in normalized
+    )
+
+
 def validate_semantic_prime_prompt_guard(prompt: str, layouts: list[dict[str, Any]]) -> list[str]:
     """Validate the current coordinate-free Prime prompt contract.
 
@@ -508,7 +531,21 @@ def validate_semantic_prime_prompt_guard(prompt: str, layouts: list[dict[str, An
     return missing
 
 
+def validate_model_integrated_prime_prompt_guard(prompt: str, layouts: list[dict[str, Any]]) -> list[str]:
+    missing = [key for key, terms in SEMANTIC_MODEL_INTEGRATED_PRIME_GUARD_TERMS.items() if not text_has_any(prompt, terms)]
+    for layout in layouts:
+        if not isinstance(layout.get("hard_regions"), list):
+            missing.append("layout.hard_regions")
+        if not isinstance(layout.get("top_key_content_exclusion_end"), int):
+            missing.append("layout.top_key_content_exclusion_end")
+        if not isinstance(layout.get("bottom_key_content_exclusion_start"), int):
+            missing.append("layout.bottom_key_content_exclusion_start")
+    return missing
+
+
 def validate_redesign_prompt_guard(prompt: str) -> list[str]:
+    if uses_model_integrated_prime_contract(prompt):
+        return [key for key, terms in SEMANTIC_REDESIGN_GUARD_TERMS.items() if not text_has_any(prompt, terms)]
     if uses_coordinate_free_prime_contract(prompt):
         return [key for key, terms in SEMANTIC_REDESIGN_GUARD_TERMS.items() if not text_has_any(prompt, terms)]
     return [key for key, terms in REDESIGN_GUARD_TERMS.items() if not text_has_any(prompt, terms)]
@@ -582,6 +619,8 @@ def line_info_for_financial_token(prompt: str, token: str) -> dict[str, Any]:
 
 
 def missing_terms_for_guard(rule: str) -> tuple[str, ...]:
+    if rule in SEMANTIC_MODEL_INTEGRATED_PRIME_GUARD_TERMS:
+        return SEMANTIC_MODEL_INTEGRATED_PRIME_GUARD_TERMS[rule]
     if rule in SEMANTIC_PRIME_GUARD_TERMS:
         return SEMANTIC_PRIME_GUARD_TERMS[rule]
     if rule in PRIME_GUARD_TERMS:

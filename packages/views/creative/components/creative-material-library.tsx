@@ -4,6 +4,7 @@ import { cloneElement, useDeferredValue, useEffect, useId, useMemo, useRef, useS
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AlertTriangle, ArrowLeft, BookOpenText, Bot, Check, Download, ExternalLink, ImageIcon, Images, LoaderCircle, PackageCheck, Pencil, Plus, RefreshCw, RotateCcw, Search, Smartphone, Sparkles, Upload, X } from "lucide-react";
 import { api } from "@multica/core/api";
+import { useWorkspacePresenceMap, type AgentPresenceDetail } from "@multica/core/agents";
 import {
   creativeFeedbackOptions,
   creativeKeys,
@@ -1239,6 +1240,7 @@ function CreativeImageEditPoolPanel({ squad, squadCount, loading = false, classN
   const wsId = useWorkspaceId();
   const queryClient = useQueryClient();
   const agents = useQuery(agentListOptions(wsId));
+  const { byAgent: presenceByAgent, loading: presenceLoading } = useWorkspacePresenceMap(wsId);
   const skills = useQuery(skillListOptions(wsId));
   const squadMembers = useQuery({
     queryKey: ["workspaces", wsId, "squads", squad?.id ?? "", "members"],
@@ -1260,8 +1262,8 @@ function CreativeImageEditPoolPanel({ squad, squadCount, loading = false, classN
         if (agent.archived_at && !inSquad && !hasSkill) return false;
         return true;
       })
-      .sort((left, right) => compareImageEditPoolAgents(left, right, memberIds, skillId));
-  }, [agents.data, imageEditSkill?.id, memberIds]);
+      .sort((left, right) => compareImageEditPoolAgents(left, right, memberIds, skillId, presenceByAgent));
+  }, [agents.data, imageEditSkill?.id, memberIds, presenceByAgent]);
   const configuredAgentRows = useMemo(
     () => allAgentRows.filter((agent) => imageEditPoolConfigured(agent, memberIds, imageEditSkill?.id ?? "")),
     [allAgentRows, imageEditSkill?.id, memberIds],
@@ -1277,7 +1279,7 @@ function CreativeImageEditPoolPanel({ squad, squadCount, loading = false, classN
       .includes(needle);
     });
   }, [allAgentRows, imageEditSkill?.id, memberIds, query]);
-  const readyCount = allAgentRows.filter((agent) => imageEditPoolReady(agent, memberIds, imageEditSkill?.id ?? "")).length;
+  const readyCount = allAgentRows.filter((agent) => imageEditPoolReady(agent, memberIds, imageEditSkill?.id ?? "", presenceByAgent.get(agent.id))).length;
   const configuredCount = configuredAgentRows.length;
 
   const invalidatePoolQueries = async () => {
@@ -1313,7 +1315,7 @@ function CreativeImageEditPoolPanel({ squad, squadCount, loading = false, classN
     }
   };
 
-  const busy = agents.isLoading || squadMembers.isLoading || skills.isLoading || loading;
+  const busy = agents.isLoading || squadMembers.isLoading || skills.isLoading || presenceLoading || loading;
   const unavailableMessage = !squad
     ? loading ? "正在加载执行服务" : squadCount === 0 ? "当前工作区尚未配置执行服务" : `当前工作区有 ${squadCount} 个 Squad，暂时无法确定创意执行服务`
     : !imageEditSkill && skills.isLoading ? "正在加载出图能力"
@@ -1371,6 +1373,7 @@ function CreativeImageEditPoolPanel({ squad, squadCount, loading = false, classN
                   <ImageEditAgentConfigRow
                     key={agent.id}
                     agent={agent}
+                    presence={presenceByAgent.get(agent.id)}
                     configured
                     pending={pendingAgentId === agent.id}
                     disabled={Boolean(pendingAgentId && pendingAgentId !== agent.id)}
@@ -1392,6 +1395,7 @@ function CreativeImageEditPoolPanel({ squad, squadCount, loading = false, classN
                     <ImageEditAgentConfigRow
                       key={agent.id}
                       agent={agent}
+                      presence={presenceByAgent.get(agent.id)}
                       configured={false}
                       pending={pendingAgentId === agent.id}
                       disabled={Boolean(agent.archived_at) || Boolean(pendingAgentId && pendingAgentId !== agent.id)}
@@ -1410,18 +1414,20 @@ function CreativeImageEditPoolPanel({ squad, squadCount, loading = false, classN
 
 function ImageEditAgentConfigRow({
   agent,
+  presence,
   configured,
   pending,
   disabled,
   onToggle,
 }: {
   agent: Agent;
+  presence: AgentPresenceDetail | undefined;
   configured: boolean;
   pending: boolean;
   disabled: boolean;
   onToggle: (checked: boolean) => void;
 }) {
-  const online = imageEditAgentOnline(agent);
+  const online = imageEditAgentOnline(agent, presence);
   return <div className={cn("flex min-w-0 items-center gap-3 bg-background px-4 py-3", configured && "bg-emerald-50/40 dark:bg-emerald-950/20")}>
     <div className="min-w-0 flex-1">
       <div className="flex min-w-0 items-center gap-2">
@@ -1429,9 +1435,9 @@ function ImageEditAgentConfigRow({
         <span className="truncate text-sm font-medium">{agent.name}</span>
         <span className="shrink-0 font-mono text-[10px] text-muted-foreground">{agent.id.slice(0, 8)}</span>
       </div>
-      <div className="mt-1 truncate text-xs text-muted-foreground">{agent.description || imageEditAgentStatusLabel(agent)}</div>
+      <div className="mt-1 truncate text-xs text-muted-foreground">{agent.description || imageEditAgentStatusLabel(agent, presence)}</div>
     </div>
-    <Badge variant={online ? "secondary" : "outline"} className="shrink-0">{imageEditAgentStatusLabel(agent)}</Badge>
+    <Badge variant={online ? "secondary" : "outline"} className="shrink-0">{imageEditAgentStatusLabel(agent, presence)}</Badge>
     <Switch
       size="sm"
       checked={configured}
@@ -1450,32 +1456,34 @@ function imageEditPoolConfigured(agent: Agent, memberIds: Set<string>, skillId: 
   return Boolean(skillId && memberIds.has(agent.id) && agent.skills.some((skill) => skill.id === skillId));
 }
 
-function imageEditPoolReady(agent: Agent, memberIds: Set<string>, skillId: string): boolean {
-  return imageEditPoolConfigured(agent, memberIds, skillId) && imageEditAgentOnline(agent);
+function imageEditPoolReady(agent: Agent, memberIds: Set<string>, skillId: string, presence: AgentPresenceDetail | undefined): boolean {
+  return imageEditPoolConfigured(agent, memberIds, skillId) && imageEditAgentOnline(agent, presence);
 }
 
-function imageEditAgentOnline(agent: Agent): boolean {
-  return !agent.archived_at && Boolean(agent.runtime_id) && agent.status !== "offline";
+function imageEditAgentOnline(agent: Agent, presence: AgentPresenceDetail | undefined): boolean {
+  return !agent.archived_at && presence?.availability === "online";
 }
 
-function imageEditAgentStatusLabel(agent: Agent): string {
+function imageEditAgentStatusLabel(agent: Agent, presence: AgentPresenceDetail | undefined): string {
   if (agent.archived_at) return "已归档";
-  if (!agent.runtime_id || agent.status === "offline") return "离线";
-  if (agent.status === "working") return "工作中";
-  if (agent.status === "blocked") return "阻塞";
-  if (agent.status === "error") return "异常";
+  if (!presence) return "检查中";
+  if (presence.availability === "offline") return "离线";
+  if (presence.availability === "unstable") return "连接不稳";
+  if (presence.workload === "working") return "工作中";
   return "在线";
 }
 
-function compareImageEditPoolAgents(left: Agent, right: Agent, memberIds: Set<string>, skillId: string): number {
-  const leftReady = imageEditPoolReady(left, memberIds, skillId);
-  const rightReady = imageEditPoolReady(right, memberIds, skillId);
+function compareImageEditPoolAgents(left: Agent, right: Agent, memberIds: Set<string>, skillId: string, presenceByAgent: Map<string, AgentPresenceDetail>): number {
+  const leftPresence = presenceByAgent.get(left.id);
+  const rightPresence = presenceByAgent.get(right.id);
+  const leftReady = imageEditPoolReady(left, memberIds, skillId, leftPresence);
+  const rightReady = imageEditPoolReady(right, memberIds, skillId, rightPresence);
   if (leftReady !== rightReady) return leftReady ? -1 : 1;
   const leftConfigured = imageEditPoolConfigured(left, memberIds, skillId);
   const rightConfigured = imageEditPoolConfigured(right, memberIds, skillId);
   if (leftConfigured !== rightConfigured) return leftConfigured ? -1 : 1;
-  const leftOnline = imageEditAgentOnline(left);
-  const rightOnline = imageEditAgentOnline(right);
+  const leftOnline = imageEditAgentOnline(left, leftPresence);
+  const rightOnline = imageEditAgentOnline(right, rightPresence);
   if (leftOnline !== rightOnline) return leftOnline ? -1 : 1;
   return left.name.localeCompare(right.name, "zh-Hans");
 }

@@ -35,6 +35,8 @@ const appGrowingMaterialSearchBudgetMS = positiveIntegerEnv("APPGROWING_MATERIAL
 const appGrowingGraphQLTimeoutMS = positiveIntegerEnv("APPGROWING_GRAPHQL_TIMEOUT_MS", 12_000);
 const appGrowingBrowserFallbackMinBudgetMS = positiveIntegerEnv("APPGROWING_BROWSER_FALLBACK_MIN_BUDGET_MS", 75_000);
 const appGrowingBrowserNoProgressLimit = positiveIntegerEnv("APPGROWING_BROWSER_NO_PROGRESS_LIMIT", 3);
+const credentialSessionStateTimeoutMS = positiveIntegerEnv("CRAWLER_WORKER_CREDENTIAL_STATE_TIMEOUT_MS", 30_000);
+const credentialSessionCallbackTimeoutMS = positiveIntegerEnv("CRAWLER_WORKER_CREDENTIAL_CALLBACK_TIMEOUT_MS", 30_000);
 
 function chromiumLaunchOptions(headless) {
   return {
@@ -548,8 +550,12 @@ function getSession(token) {
   if (!session) {
     return null;
   }
-  if (Date.now() > session.expiresAt) {
+  if (Date.now() > session.expiresAt && session.status !== "completed") {
+    if (deferSessionExpiryWhileCompleting(session)) {
+      return session;
+    }
     session.status = "expired";
+    session.error ||= "login session expired";
   }
   return session;
 }
@@ -750,6 +756,11 @@ async function closeSessionBrowser(session) {
 }
 
 async function closeRemoteBrowser(session) {
+  if (session.autoCompleting) {
+    // Do not discard the state that the credential callback is about to persist.
+    session.closeAfterCompletion = true;
+    return publicSession(session);
+  }
   await closeSessionBrowser(session);
   if (!["completed", "expired", "superseded"].includes(session.status)) {
     session.status = "pending";
@@ -779,9 +790,21 @@ async function expireSession(token) {
   if (!session || session.status === "completed" || Date.now() < session.expiresAt) {
     return;
   }
+  if (deferSessionExpiryWhileCompleting(session)) {
+    return;
+  }
   session.status = "expired";
   session.error = "login session expired";
   await closeSessionBrowser(session);
+}
+
+function deferSessionExpiryWhileCompleting(session) {
+  if (!session.autoCompleting) {
+    return false;
+  }
+  // A completion that began before expiry owns the browser until it settles.
+  session.expireAfterCompletion = true;
+  return true;
 }
 
 function scheduleSessionExpiry(token, expiresAt) {
@@ -1080,7 +1103,37 @@ async function completeSession(session, token) {
       verification: session.verification || null,
     };
   }
+  if (session.completionPromise) {
+    return session.completionPromise;
+  }
   assertSessionNotExpired(session);
+  session.autoCompleting = true;
+  session.autoCompleteReason = "validating credential state";
+  const completion = completeSessionAttempt(session, token);
+  session.completionPromise = completion;
+  try {
+    return await completion;
+  } finally {
+    if (session.completionPromise === completion) {
+      session.completionPromise = null;
+      session.autoCompleting = false;
+      session.autoCompleteReason = "";
+      const expireAfterCompletion = Boolean(session.expireAfterCompletion && session.status !== "completed");
+      session.expireAfterCompletion = false;
+      const closeAfterCompletion = Boolean(session.closeAfterCompletion || expireAfterCompletion);
+      session.closeAfterCompletion = false;
+      if (expireAfterCompletion) {
+        session.status = "expired";
+        session.error = "login session expired";
+      }
+      if (closeAfterCompletion) {
+        await closeSessionBrowser(session);
+      }
+    }
+  }
+}
+
+async function completeSessionAttempt(session, token) {
   session.error = "";
   session.streamError = "";
   if (!session.context) {
@@ -1124,15 +1177,28 @@ async function completeSession(session, token) {
     storage_state: storageState,
     session_storage: sessionStorageState,
   });
-  const upstream = await fetch(`${apiURL}/api/credential-login-sessions/complete`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({
-      session_token: token,
-      ciphertext: sealed.toString("base64"),
-      key_version: keyVersion,
-    }),
-  });
+  const callbackController = new AbortController();
+  const callbackTimer = setTimeout(() => callbackController.abort(), credentialSessionCallbackTimeoutMS);
+  let upstream;
+  try {
+    upstream = await fetch(`${apiURL}/api/credential-login-sessions/complete`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        session_token: token,
+        ciphertext: sealed.toString("base64"),
+        key_version: keyVersion,
+      }),
+      signal: callbackController.signal,
+    });
+  } catch (err) {
+    if (callbackController.signal.aborted) {
+      throw userError("credential save callback timed out; retry save before this login session expires", 504);
+    }
+    throw err;
+  } finally {
+    clearTimeout(callbackTimer);
+  }
   const text = await upstream.text();
   if (!upstream.ok) {
     throw new Error(text || upstream.statusText);
@@ -1180,9 +1246,18 @@ async function verifyConnectorAuth(context, connector) {
 
 async function browserStorageState(context) {
   try {
-    return await context.storageState({ indexedDB: true });
-  } catch {
-    return context.storageState();
+    return await withinCredentialStateTimeout(
+      context.storageState({ indexedDB: true }),
+      "credential browser state capture timed out",
+    );
+  } catch (err) {
+    if (err?.statusCode === 504) {
+      throw err;
+    }
+    return withinCredentialStateTimeout(
+      context.storageState(),
+      "credential browser state capture timed out",
+    );
   }
 }
 
@@ -1190,18 +1265,33 @@ async function captureSessionStorage(page) {
   if (!page) {
     return {};
   }
-  return page.evaluate(() => {
-    const entries = {};
-    for (let index = 0; index < sessionStorage.length; index += 1) {
-      const key = sessionStorage.key(index);
-      if (key) {
-        entries[key] = sessionStorage.getItem(key);
+  try {
+    return await withinCredentialStateTimeout(page.evaluate(() => {
+      const entries = {};
+      for (let index = 0; index < sessionStorage.length; index += 1) {
+        const key = sessionStorage.key(index);
+        if (key) {
+          entries[key] = sessionStorage.getItem(key);
+        }
       }
+      return {
+        [window.location.origin]: entries,
+      };
+    }), "credential session state capture timed out");
+  } catch (err) {
+    if (err?.statusCode === 504) {
+      throw err;
     }
-    return {
-      [window.location.origin]: entries,
-    };
-  }).catch(() => ({}));
+    return {};
+  }
+}
+
+function withinCredentialStateTimeout(promise, message) {
+  let timeoutHandle;
+  const timeout = new Promise((_, reject) => {
+    timeoutHandle = setTimeout(() => reject(userError(message, 504)), credentialSessionStateTimeoutMS);
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timeoutHandle));
 }
 
 async function restoreSessionStorage(context, sessionStorageState) {
@@ -1226,29 +1316,46 @@ async function verifyConnectorPageAuth(page, connector) {
   if (!check) {
     return { authenticated: true, method: "none" };
   }
-  const result = await page.evaluate(async ({ url, payload }) => {
-    const response = await fetch(url, {
-      method: "POST",
-      credentials: "include",
-      headers: {
-        "content-type": "application/json",
-      },
-      body: JSON.stringify(payload),
-    });
-    let body = null;
+  const result = await page.evaluate(async ({ url, payload, timeoutMS }) => {
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => controller.abort(), timeoutMS);
     try {
-      body = await response.json();
-    } catch {
-      body = null;
+      const response = await fetch(url, {
+        method: "POST",
+        credentials: "include",
+        headers: {
+          "content-type": "application/json",
+        },
+        body: JSON.stringify(payload),
+        signal: controller.signal,
+      });
+      let body = null;
+      try {
+        body = await response.json();
+      } catch {
+        body = null;
+      }
+      return {
+        status: response.status,
+        body,
+      };
+    } catch (err) {
+      return {
+        status: null,
+        body: null,
+        error: controller.signal.aborted ? "credential page auth probe timed out" : String(err),
+      };
+    } finally {
+      window.clearTimeout(timer);
     }
-    return {
-      status: response.status,
-      body,
-    };
   }, {
     url: check.url,
     payload: check.payload,
+    timeoutMS: credentialSessionStateTimeoutMS,
   });
+  if (result.error) {
+    return authCheckUnavailable(new Error(result.error), "page_fetch_graphql_userinfo");
+  }
   return authCheckFromBody(result.body, connector, result.status, "page_fetch_graphql_userinfo");
 }
 
@@ -1587,7 +1694,9 @@ function closeRemoteBrowser() {
   fetch(urls.close, {method: "POST", keepalive: true}).catch(() => {});
 }
 
-window.addEventListener("pagehide", closeRemoteBrowser);
+if (window.self === window.top) {
+  window.addEventListener("pagehide", closeRemoteBrowser);
+}
 
 async function parseResponse(resp) {
   const text = await resp.text();
@@ -4989,6 +5098,9 @@ const server = http.createServer(async (req, res) => {
         viewport: sessionViewport,
         error: "",
         streamError: "",
+        autoCompleting: false,
+        closeAfterCompletion: false,
+        expireAfterCompletion: false,
       });
       scheduleSessionExpiry(body.session_token, expiresAt);
       writeJSON(res, 200, {
@@ -5094,10 +5206,12 @@ export {
   appGrowingShouldUseAdaptiveBrowserFallback,
   captureAppGrowingMaterialPage,
   authCheckFromBody,
+  closeRemoteBrowser,
   connectorGraphQLHeaders,
   connectorAuthVerificationError,
   connectorForID,
   connectorTargetURL,
+  deferSessionExpiryWhileCompleting,
   extractAppGrowingMaterials,
   isBrowserPageCrashError,
   isAppGrowingImageMaterial,
@@ -5106,6 +5220,7 @@ export {
   selectAppGrowingMaterials,
   shouldBlockAppGrowingCrawlResource,
   shouldUseAppGrowingBrowserFallback,
+  verifyConnectorPageAuth,
 };
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

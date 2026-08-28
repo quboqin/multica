@@ -1,6 +1,6 @@
 ---
 name: multica-ad-creative-direct-edit
-description: "按用户自然语言对 Creative Order 的无品牌底图做定向修改，并将结果交给平台重新贴片时使用。"
+description: "按用户自然语言对 Creative Order 的冻结生成图做定向修改，并按订单指定的 Prime 模式交给平台完成最终交接时使用。"
 allowed-tools: Bash(multica *), Bash(python *)
 ---
 
@@ -28,8 +28,10 @@ allowed-tools: Bash(multica *), Bash(python *)
 并以同尺寸 source asset ID 写入 `derived_from_asset_id`。
 
 先执行 `multica creative order get <order-id> --output json` 确认 source base 属于该 variant、尺寸和 revision。`scope=size`
-使用 `multica attachment download <source-attachment-id> --output-dir <work-dir>` 下载目标尺寸的无品牌底图；`scope=variant`
-要为每个 `edit_sizes` 找到 `source_assets` 中同尺寸附件并分别下载。
+先读取 Variant brief 的冻结 `prime_composition.mode`。`deterministic` 使用
+`multica attachment download <source-attachment-id> --output-dir <work-dir>` 下载目标尺寸的无品牌底图；`model_integrated` 使用同尺寸
+模型成图并保留其已融入的 QR-free 官方模板。`scope=variant` 要为每个 `edit_sizes` 找到 `source_assets` 中同尺寸附件并分别下载；不得按市场名、
+历史任务或模板文件名猜模式。
 
 如果 context 给出 `annotation_guide_attachment_id`，再下载该附件。它是用户在最终交付图上的标注 brief，可能包含 Prime 组件、
 Logo、二维码、商店徽章、官方条款、红色矩形、编号和评论位置；这些都用于理解用户在最终图上看到的问题，不是可复制广告内容。
@@ -75,8 +77,9 @@ python3 <当前 Skill 目录>/../ad-creative-production/references/render_prime_
 可作为 annotation 输入读取 `failures` 中所述的真实遮挡关系，但仍绝不可编辑、复制或输出其中任何 Prime 像素。每个编号对应 `direct_edit.annotations` 中同序的 comment；多个红框必须逐一执行，不能合并、
 忽略或只按总描述猜测。评论文字出现而红框未覆盖的独立问题也必须成为单独编辑目标，例如同一条反馈同时要求避开顶部二维码和底部条款时，
 必须形成“标题组”和“表格组”两个目标，不能只处理红框所在的顶部。`reference_attachment_id` 只用于必要的人工对照，不得作为可编辑输入。若红框覆盖标题、贴片、Logo、
-二维码或底部条款，说明用户是在指出最终交付图中的遮挡/关系问题；仍只修改 Input 1 的无品牌底图，让后续固定贴片重新叠加后解决问题，
-不得尝试修改、重画或移除 Prime 组件。
+二维码或底部条款，说明用户是在指出最终交付图中的遮挡/关系问题；`deterministic` 仍只修改 Input 1 的无品牌底图，让后续固定贴片重新叠加；
+`model_integrated` 则保留 Input 1 已有的 QR-free 官方组件并用同一冻结模板作 Input 2 对照。两种模式均不得修改、重画或移除 Prime 组件，
+不得添加二维码或切换模板族。
 
 先写入 `intent-plan.json`，至少包含：`raw_user_request`、有权限语义的 `input_roles`、`locked_set`、`editable_set`、
 `change_budget`、优先级、逐项 `edit_goals`、每项目标的证据（红框编号或评论文字）、`target_masks`、
@@ -97,9 +100,10 @@ python3 <当前 Skill 目录>/../ad-creative-production/references/render_prime_
 
 最终 prompt 只包含会改变像素的编辑指令，不得包含 order/task/revision、文件路径、哈希、request ID、上传、登记、重试、超时、状态、JSON、
 CLI 或附件血缘。必须按以下优先级表达：只编辑 Input 1；annotation、official Prime visual context 和 official Prime reflow context 仅用于理解固定贴片关系与可读内容的目标区，
-不得把其中的 Prime、压暗层或任何参考像素画进 Input 1；随后表达用户要达成的视觉结果、允许联动调整的
+`deterministic` 不得把其中的 Prime、压暗层或任何参考像素画进 Input 1；`model_integrated` 必须保留 Input 1 中已融入的官方组件，
+只调整点名业务内容并以同一冻结 QR-free 模板作参考。随后表达用户要达成的视觉结果、允许联动调整的
 内容组；必须保持的业务事实；Prime 不可生成/不可复制约束；贴片后的验收条件。若已点名内容组以原始整体尺寸无法同时避开真实组件，prompt 必须明确允许仅缩小这些内容组或压缩其内部
-行距、列距和留白，直至完整可读地进入中部安全内容区；不得同时要求“保持原始 scale”。正式投放的验收条件必须以视觉参考中的真实组件关系描述：完整标题、金额和表格行不得被它们覆盖，视觉参考所示上下贴片区域保持为安静连续的背景。对于存在顶部/底部贴片的方图，prompt 还必须要求标题和表格落在 `protected_content_envelope` 的内侧保守区，表格底部到 footer 之间保留显著连续空白；不得只做小幅上移。不要把红框、编号、Prime 组件或官方条款画进无品牌底图。
+行距、列距和留白，直至完整可读地进入中部安全内容区；不得同时要求“保持原始 scale”。正式投放的验收条件必须以视觉参考中的真实组件关系描述：完整标题、金额和表格行不得被它们覆盖，视觉参考所示上下贴片区域保持为安静连续的背景。对于存在顶部/底部贴片的方图，prompt 还必须要求标题和表格落在 `protected_content_envelope` 的内侧保守区，表格底部到 footer 之间保留显著连续空白；不得只做小幅上移。不要把红框、编号或新的 Prime 组件画进输出；`deterministic` 也不得把官方条款画进无品牌底图。
 对于“替换人物/换人/换模特”，提示词必须明确这是 replacement，不是微调：现有人物是移除目标，不是身份、五官、发型、服装、
 姿势、手势、身形轮廓或构图参考；新人物必须在 1x 预览下肉眼可见地不同，并给出具体不同的年龄段、肤色/发型、服装、姿势和相对关系。
 如果用户标注的是单独金额、核心利益点或促销卖点，例如 `Rp100Juta` 这类数值，不要默认把它锁成还款计划；
@@ -198,9 +202,9 @@ multica creative order asset-put <order-id> --input-file <edited-asset.json> \
 annotation guide、目检结论放在过程诊断资产的 metadata 或任务错误中，不要塞入 canonical asset 的自动生成字段。不得再次调用
 `variant-put` 或把 revision 再加一。
 
-所有需要编辑的 canonical generated base 写回后，调用绑定的 `素材_技能_贴片`；它只调用后端唯一的确定性 Prime composer，由后端为所有 expected sizes
-重新贴回官方透明组件并登记 `primed` 和 Prime 合成过程图。精准调整不创建贴片 task；贴片后的最终图由平台创建 visual QC，不能把
-无品牌底图自检当成交付验收。贴片 Skill 是唯一的官方组件交接来源。
+所有需要编辑的 canonical generated asset 写回后，调用绑定的 `素材_技能_贴片`。`deterministic` 由后端为所有 expected sizes
+重新贴回官方透明组件；`model_integrated` 由后端校验冻结 QR-free 模板证据、登记现有模型成图为 `primed`，不会二次叠加。精准调整不创建贴片 task；
+交接后的最终图由平台创建 visual QC，不能把生成图自检当成交付验收。贴片 Skill 是唯一的官方组件交接来源。
 
 如果回图已经存在，后续失败按协议层处理：task/variant 归属、JSON 字段、三份必需证据未同时提供、prompt/hash、
 normalization 或本地 path 错误，都只修复对应 JSON、参数或 task_id，再用同一张上传附件和同一份模型结果重试；不要重新调用 Image Edit。
@@ -215,7 +219,7 @@ normalization 或本地 path 错误，都只修复对应 JSON、参数或 task_i
 
 绑定的 `素材_技能_贴片` 返回后再次执行 `multica creative order get <order-id> --output json`，确认每个 expected size 都有当前 revision
 的 `primed` 资产和 Prime 合成过程图；`final_visual_validation=true` 时不等待 delivered 资产，交由平台最终图视觉验收。该验收若发现
-真实 Prime 遮挡，只会把失败尺寸创建为有上限的 `creative_direct_edit` 定向续调，继续使用无品牌底图，绝不编辑二维码、Logo 或条款。
+真实 Prime 遮挡，只会把失败尺寸创建为有上限的 `creative_direct_edit` 定向续调，保留冻结的确定性或模型融入模式，绝不编辑二维码、Logo 或条款。
 
 只处理 task context 指定的对象、revision、target_size、edit_sizes 和 scope。不得创建或修改 Issue，不得用评论代替领域数据，不得触发采集、分析、
 方案、标准生产、Prime agent 或 QC。

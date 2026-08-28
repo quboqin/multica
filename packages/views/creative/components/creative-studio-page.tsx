@@ -78,6 +78,7 @@ import {
 import { Input } from "@multica/ui/components/ui/input";
 import { Label } from "@multica/ui/components/ui/label";
 import { NativeSelect, NativeSelectOption } from "@multica/ui/components/ui/native-select";
+import { Switch } from "@multica/ui/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@multica/ui/components/ui/tabs";
 import { Textarea } from "@multica/ui/components/ui/textarea";
 import { cn } from "@multica/ui/lib/utils";
@@ -1438,7 +1439,21 @@ function MarketPackForm({ resource, value, onChange, copyLibraries }: {
   copyLibraries: CreativeResource[];
 }) {
   const set = (key: string, next: unknown) => onChange({ ...value, [key]: next });
-  const templateValidation = readPrimeTemplateValidation(resource.config.prime_template_set_validation);
+  const templateFamilies = readPrimeTemplateValidation(resource.config.prime_template_set_validation);
+  const modelIntegrated = stringValue(value.prime_composition_mode) === "model_integrated";
+  const eligibleModelFamilies = templateFamilies?.filter((family) => !family.hasQR) ?? [];
+  const selectedModelFamily = stringValue(value.prime_model_template_family);
+  const setModelIntegrated = (enabled: boolean) => {
+    if (!enabled) {
+      const next = { ...value, prime_composition_mode: "deterministic" };
+      delete next.prime_model_template_family;
+      onChange(next);
+      return;
+    }
+    const family = eligibleModelFamilies.find((item) => item.id === selectedModelFamily) ?? eligibleModelFamilies[0];
+    if (!family) return;
+    onChange({ ...value, prime_composition_mode: "model_integrated", prime_model_template_family: family.id });
+  };
   return (
     <div className="mx-auto max-w-6xl px-5 py-6">
       <Tabs defaultValue="identity" className="space-y-7">
@@ -1457,6 +1472,22 @@ function MarketPackForm({ resource, value, onChange, copyLibraries }: {
           </FormSection>
         </TabsContent>
         <TabsContent value="brand" className="mt-0 space-y-8">
+          <FormSection title="Prime 贴片方式" description="默认由平台保留完整官方模板并确定性合成。只有已验证且不含二维码的模板族可交给模型融入成图，仍须通过最终目检。">
+            <div className="flex items-center justify-between gap-4 border-y py-3">
+              <div className="min-w-0">
+                <Label htmlFor="prime-model-integrated" className="text-sm font-medium">模型融入 Prime 模板</Label>
+                <p className="mt-1 text-xs text-muted-foreground">适用于无二维码市场；模型负责整体融合，平台保留模板和结果证据。</p>
+              </div>
+              <Switch id="prime-model-integrated" checked={modelIntegrated} disabled={eligibleModelFamilies.length === 0} onCheckedChange={setModelIntegrated} />
+            </div>
+            {modelIntegrated && <Field label="模型使用的模板族" wide>
+              <NativeSelect value={selectedModelFamily} onChange={(event) => set("prime_model_template_family", event.target.value)}>
+                {eligibleModelFamilies.map((family) => <NativeSelectOption key={family.id} value={family.id}>{family.label}</NativeSelectOption>)}
+              </NativeSelect>
+            </Field>}
+            {!templateFamilies && <p className="text-xs text-muted-foreground">先保存并发布完整 Prime 模板，系统验证后才可选择模型融入。</p>}
+            {templateFamilies && eligibleModelFamilies.length === 0 && <p className="text-xs text-muted-foreground">当前模板族均含二维码，必须使用平台确定性贴片。</p>}
+          </FormSection>
           <MarketResourceFiles resource={resource} value={value} />
         </TabsContent>
         <TabsContent value="delivery" className="mt-0 space-y-8">
@@ -1466,7 +1497,7 @@ function MarketPackForm({ resource, value, onChange, copyLibraries }: {
           </FormSection>
           <section>
             <div className="mb-3"><h3 className="text-sm font-semibold">发布校验</h3></div>
-            {templateValidation ? <div className="border-y">{Object.entries(templateValidation.templates).flatMap(([size, templates]) => templates.map((template) => <div key={`${size}-${template.source_role}`} className="grid gap-1 border-b px-4 py-3 text-xs last:border-b-0 sm:grid-cols-[116px_minmax(0,1fr)_auto] sm:items-center"><span className="font-medium">{size}</span><span className="truncate text-muted-foreground">{template.filename}</span><span className="text-emerald-700 dark:text-emerald-400">模板已验证</span></div>))}</div> : <div className="border-y px-4 py-3 text-sm text-muted-foreground">保存并发布后，系统会验证每张完整模板的文件、尺寸和布局映射。</div>}
+            {templateFamilies ? <div className="border-y">{templateFamilies.flatMap((family) => Object.entries(family.templates).map(([size, template]) => <div key={`${family.id}-${size}-${template.source_role}`} className="grid gap-1 border-b px-4 py-3 text-xs last:border-b-0 sm:grid-cols-[116px_minmax(0,1fr)_auto] sm:items-center"><span className="font-medium">{family.label} · {size}</span><span className="truncate text-muted-foreground">{template.filename}</span><span className="text-emerald-700 dark:text-emerald-400">模板已验证{template.qr_payload ? "，含二维码" : ""}</span></div>))}</div> : <div className="border-y px-4 py-3 text-sm text-muted-foreground">保存并发布后，系统会验证每张完整模板的文件、尺寸和布局映射。</div>}
           </section>
         </TabsContent>
       </Tabs>
@@ -1613,7 +1644,7 @@ function initialResourceConfig(kind: CreativeResourceKind, marketDraft: { brand:
       entries: [],
     },
   };
-  return { brand: marketDraft.brand.trim(), market: marketDraft.market.trim(), locale: marketDraft.locale.trim(), currency: marketDraft.currency.trim(), copy_library_id: "", pre_adaptation_default: true, prime_template_set: createDefaultPrimeTemplateSet(), compliance_rules: "", naming_rule: "" };
+  return { brand: marketDraft.brand.trim(), market: marketDraft.market.trim(), locale: marketDraft.locale.trim(), currency: marketDraft.currency.trim(), copy_library_id: "", pre_adaptation_default: true, prime_composition_mode: "deterministic", prime_template_set: createDefaultPrimeTemplateSet(), compliance_rules: "", naming_rule: "" };
 }
 
 function marketPackResourceName(brand: string, market: string): string {
@@ -1628,21 +1659,35 @@ function kindLabel(kind: CreativeResourceKind | null): string {
 
 function stringValue(value: unknown): string { return typeof value === "string" ? value : ""; }
 
-type PrimeTemplateValidation = { filename: string; source_role: string };
+type PrimeTemplateValidation = { filename: string; source_role: string; qr_payload?: string };
+type PrimeTemplateFamilyValidation = { id: string; label: string; hasQR: boolean; templates: Record<string, PrimeTemplateValidation> };
 
-function readPrimeTemplateValidation(value: unknown): { templates: Record<string, PrimeTemplateValidation[]> } | null {
+function readPrimeTemplateValidation(value: unknown): PrimeTemplateFamilyValidation[] | null {
   if (!value || typeof value !== "object") return null;
   const record = value as Record<string, unknown>;
-  if (record.status !== "passed" || !record.templates || typeof record.templates !== "object") return null;
-  const templates: Record<string, PrimeTemplateValidation[]> = {};
-  for (const [size, items] of Object.entries(record.templates as Record<string, unknown>)) {
-    if (!Array.isArray(items)) continue;
-    const parsed: PrimeTemplateValidation[] = items.flatMap((item) => {
-      if (!item || typeof item !== "object") return [];
-      const template = item as Record<string, unknown>;
-      return typeof template.filename === "string" && typeof template.source_role === "string" ? [{ filename: template.filename, source_role: template.source_role }] : [];
-    });
-    if (parsed.length) templates[size] = parsed;
-  }
-  return Object.keys(templates).length ? { templates } : null;
+  if (record.status !== "passed" || !Array.isArray(record.families)) return null;
+  const families = record.families.flatMap((rawFamily): PrimeTemplateFamilyValidation[] => {
+    if (!rawFamily || typeof rawFamily !== "object") return [];
+    const family = rawFamily as Record<string, unknown>;
+    if (typeof family.id !== "string" || typeof family.label !== "string" || !family.templates || typeof family.templates !== "object") return [];
+    const templates: Record<string, PrimeTemplateValidation> = {};
+    for (const [size, rawTemplate] of Object.entries(family.templates as Record<string, unknown>)) {
+      if (!rawTemplate || typeof rawTemplate !== "object") continue;
+      const template = rawTemplate as Record<string, unknown>;
+      if (typeof template.filename !== "string" || typeof template.source_role !== "string") continue;
+      templates[size] = {
+        filename: template.filename,
+        source_role: template.source_role,
+        ...(typeof template.qr_payload === "string" && template.qr_payload.trim() ? { qr_payload: template.qr_payload } : {}),
+      };
+    }
+    if (!Object.keys(templates).length) return [];
+    return [{
+      id: family.id,
+      label: family.label,
+      hasQR: Object.values(templates).some((template) => Boolean(template.qr_payload)),
+      templates,
+    }];
+  });
+  return families.length ? families : null;
 }

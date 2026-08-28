@@ -421,10 +421,10 @@ $diagnosisSkill = Set-WorkspaceSkill -Name '素材_技能_诊断' -Aliases @('�
 $analysisSkill = Set-WorkspaceSkill -Name '素材_技能_分析' -Aliases @('广告参考分析') -Description '市场中立地读取真实图片，识别可变视觉区域、原图文字及坐标、主题、利益点、语义锚点、App UI 类型、屏幕边界和布局约束；App UI 只做通用检测，不选择品牌附件；只有明显的还款结构才锁定为 numeric，单独金额或核心利益点不得因为带数字就被卡死。' -Directory (Join-Path $skillTemplateRoot 'ad-creative-analysis') -Config @{ kind = 'creative_role'; capability = 'reference_analysis'; version = 19 }
 $preAdaptationSkill = Set-WorkspaceSkill -Name '素材_技能_文案适配' -Aliases @('广告预适配') -Description '按冻结资源完成可生产文案与数值适配；只有明显的还款结构才生成 repayment 选择和 numeric layout，单独金额、核心利益点或促销额度默认保留为可编辑文案，保留后续可手动改写空间；数值布局说明必须列出每个冻结展示值。' -Directory (Join-Path $skillTemplateRoot 'ad-creative-pre-adaptation') -Config @{ kind = 'creative_role'; capability = 'pre_adaptation'; version = 26 }
 $planSkill = Set-WorkspaceSkill -Name '素材_技能_方案' -Aliases @('广告生成方案') -Description '消费冻结分析、文案与市场快照，规划 4-5 个带 CreativeIntent、DesignDNA、三尺寸 LayoutPlan 和方向自选主尺寸的候选，委派主视觉生产后由独立质检原子晋级 3 个。' -Directory (Join-Path $skillTemplateRoot 'ad-creative-plan') -Config @{ kind = 'creative_role'; capability = 'generation_plan'; version = 39 }
-$productionSkill = Set-WorkspaceSkill -Name '素材_技能_出图' -Aliases @('广告图像编辑') -Description '按唯一模型提示词合同生成候选主视觉或 selected 缺失尺寸；三尺寸共享 DesignDNA、文案与血缘但从原参考和各自 LayoutPlan 独立生成，保留 App UI、归一化、过程证据与 Prime 有界修复合同。' -Directory (Join-Path $skillTemplateRoot 'ad-creative-production') -Config @{ kind = 'creative_role'; capability = 'image_edit'; version = 108 }
-$primeComposeSkill = Set-WorkspaceSkill -Name '素材_技能_贴片' -Aliases @('广告品牌组件合成') -Description '调用后端唯一的确定性 Prime 合成入口，逐尺寸选择视觉可辨识的已批准模板并在任一尺寸不合格时整包失败，校验合成 JSON，并由后端登记贴片完成过程图、primed 资产和标准 QC/交付交接；不创建 Prime Agent 或 Prime task。' -Directory (Join-Path $skillTemplateRoot 'ad-creative-prime-compose') -Config @{ kind = 'creative_role'; capability = 'prime_compose'; version = 5 }
-$directEditSkill = Set-WorkspaceSkill -Name '素材_技能_改图' -Aliases @('广告图片直接修改') -Description '将用户反馈编译为带输入角色、锁定/可编辑集合和 target masks 的多目标无品牌底图调整；正式投放使用真实 Prime 与无边框暗化明窗重排视觉参考，必要时仅重排或缩放点名内容组，阻塞等待模型回执后全部目标同时通过再贴片并终检。' -Directory (Join-Path $skillTemplateRoot 'ad-creative-direct-edit') -Config @{ kind = 'creative_role'; capability = 'direct_image_edit'; version = 29 }
-$qcSkill = Set-WorkspaceSkill -Name '素材_技能_质检' -Aliases @('广告成图验收') -Description '独立比较 4-5 个候选主尺寸并原子晋级 3 个，或对标准/精准改图的实际交付尺寸执行 Prime 与 DesignDNA 联合视觉终检。' -Directory (Join-Path $skillTemplateRoot 'ad-creative-qc') -Config @{ kind = 'creative_role'; capability = 'quality_control'; version = 40 }
+$productionSkill = Set-WorkspaceSkill -Name '素材_技能_出图' -Aliases @('广告图像编辑') -Description '按唯一模型提示词合同生成候选主视觉或 selected 缺失尺寸；三尺寸共享 DesignDNA、文案与血缘但从原参考和各自 LayoutPlan 独立生成，按冻结 Prime 模式保留 App UI、归一化、过程证据与有界修复合同。' -Directory (Join-Path $skillTemplateRoot 'ad-creative-production') -Config @{ kind = 'creative_role'; capability = 'image_edit'; version = 109 }
+$primeComposeSkill = Set-WorkspaceSkill -Name '素材_技能_贴片' -Aliases @('广告品牌组件合成') -Description '调用后端唯一的 Prime 交接入口：默认确定性合成，或登记冻结的无二维码模型融入结果；校验 JSON，并由后端登记过程图、primed 资产和标准 QC/交付交接；不创建 Prime Agent 或 Prime task。' -Directory (Join-Path $skillTemplateRoot 'ad-creative-prime-compose') -Config @{ kind = 'creative_role'; capability = 'prime_compose'; version = 6 }
+$directEditSkill = Set-WorkspaceSkill -Name '素材_技能_改图' -Aliases @('广告图片直接修改') -Description '将用户反馈编译为带输入角色、锁定/可编辑集合和 target masks 的多目标调整；按冻结 Prime 模式保留官方组件关系，必要时仅重排或缩放点名内容组，阻塞等待模型回执后全部目标同时通过交接并终检。' -Directory (Join-Path $skillTemplateRoot 'ad-creative-direct-edit') -Config @{ kind = 'creative_role'; capability = 'direct_image_edit'; version = 30 }
+$qcSkill = Set-WorkspaceSkill -Name '素材_技能_质检' -Aliases @('广告成图验收') -Description '独立比较 4-5 个候选主尺寸并原子晋级 3 个，或对标准/精准改图的实际交付尺寸执行 Prime 与 DesignDNA 联合视觉终检，按冻结模式消费证据；附件下载逐张有界，失败可恢复。' -Directory (Join-Path $skillTemplateRoot 'ad-creative-qc') -Config @{ kind = 'creative_role'; capability = 'quality_control'; version = 42 }
 
 $agents = Get-Items (Invoke-MulticaApi -Method Get -Path '/api/agents') ''
 foreach ($legacyPrimeAgent in @($agents | Where-Object {
@@ -439,12 +439,12 @@ $runtimeID = $leaderSeed.runtime_id
 
 $specialistHandoff = '只处理 task context 指定的对象、revision 和 scope；按绑定 Skill 写结构化领域结果和机器证据。图像任务按绑定 Skill 的统一比例阈值处理：阈值内归一，10%-25% canvas repair，只有超过 25% 才重生当前尺寸；不能把像素绝对尺寸差当成模型失败。不得创建或修改 Issue，不得用评论代替领域数据。输入、凭证、工具或写回失败时保留已成功对象，写真实 error_code/error_message 并让当前 task 失败；兄弟对象继续。'
 $directEditAgentInstructions = @'
-creative_direct_edit 分支严格执行绑定的素材_技能_改图；只编辑 task context 指向的无品牌 source base，保留批准文案、附件血缘、归一化、完整模型回执、过程图登记和多目标同时验收，再调用绑定的贴片 Skill 并进入最终视觉 QC。绑定 Skill 是直接改图合同的唯一执行真值，不从 Agent instructions 或历史 prompt 补另一套协议。
+creative_direct_edit 分支严格执行绑定的素材_技能_改图；按 Variant 冻结的 prime_composition 编辑 task context 指向的 source asset，保留批准文案、附件血缘、归一化、完整模型回执、过程图登记和多目标同时验收，再调用绑定的贴片 Skill 并进入最终视觉 QC。绑定 Skill 是直接改图合同的唯一执行真值，不从 Agent instructions 或历史 prompt 补另一套协议。
 '@
 $producerInstructions = @'
 全程使用中文。根据 task context.workflow 选择唯一分支，并在执行前完整读取对应绑定 Skill；Skill 及其 references 是提示词、证据、归一化、Prime 和恢复规则的唯一执行真值。
 
-creative_production 只执行绑定的素材_技能_出图：按订单当前 candidate_state、primary_size、production_stage 和 expected_sizes 处理候选主尺寸或 selected 缺失尺寸；复用已有主图和成功回执，按 CreativeIntent、DesignDNA、LayoutPlan 独立生成尺寸，不把方图 raster 当硬依赖。只在当前阶段尺寸与过程证据齐全后调用绑定的贴片 Skill。
+creative_production 只执行绑定的素材_技能_出图：按订单当前 candidate_state、primary_size、production_stage 和 expected_sizes 处理候选主尺寸或 selected 缺失尺寸；复用已有主图和成功回执，按 CreativeIntent、DesignDNA、LayoutPlan 独立生成尺寸，不把方图 raster 当硬依赖。严格按 Variant 冻结的 prime_composition 选择无品牌底图或 QR-free 模板融入，不按市场名猜模式；只在当前阶段尺寸与过程证据齐全后调用绑定的贴片 Skill。
 '@
 $producerInstructions += "`n`n" + $directEditAgentInstructions + @'
 
@@ -455,7 +455,7 @@ $analyst = Set-AgentDefinition -Name '素材_分析' -Aliases @('广告参考分
 $collector = Set-AgentDefinition -Name '素材_采集' -Aliases @('AppGrowing 素材采集智能体') -Description '按 task 配置创建 Crawl Run，只导入真实图片广告并委派新增图片分析。' -Instructions "全程使用中文。只执行 task context 和 AutoPilot 明确的 AppGrowing 查询；只导入 asset_type=image，视频、非图片和未知类型不占用名额。analysis_agent_id 由平台按当前 workspace installation 注入，不从名称、评论或历史说明猜测。筛选、分页、预算、目标数量和 fallback 来自 AutoPilot/task 的业务描述。结果、证据和失败写 Crawl Run；导入后用原生 fanout 委派本次新增图片，不创建 Issue，不使用测试数据。" -SkillIDs @($collectorSkill.id) -RuntimeID $runtimeID -MaxConcurrentTasks 1
 $diagnostician = Set-AgentDefinition -Name '素材_诊断' -Aliases @('创意流程诊断智能体', '出图诊断智能体', 'AppGrowing 采集诊断智能体') -Description '诊断创意采集、候选、尺寸调用、版本、Prime、QC 和 daemon/runtime 异常，并通过平台入口执行受控恢复。' -Instructions '全程使用中文。处理 creative_crawl_diagnosis、订单短 ID、Variant 标签、页面卡片文案、报错文本和用户明确指向的创意流程诊断。先定位当前订单、order item、候选状态、active/staging revision、尺寸 operation、task、daemon/runtime 与 Skill 快照证据，再给结论；需要恢复时只通过 multica CLI 或平台 API 的重试、取消、fanout 或现有领域修复入口，revision 只能由平台事务创建，不得用 variant-put 自行推进。不得直接写 DB、修改凭证、业务筛选、市场包或生产代码；只有用户明确要求维护文案库时，才可先回读文案库并使用 multica creative copy-library 的 add-fragment、update-fragment、upsert-repayment-plan 保存草稿；只有用户明确要求发布时才加 --publish。不得把诊断图当成交付资产；修改前说明对象和原因，修改后回读验证。' -SkillIDs @($diagnosisSkill.id) -RuntimeID $runtimeID -Model 'gpt-5.6-luna' -ThinkingLevel 'medium' -MaxConcurrentTasks 2
 $planner = Set-AgentDefinition -Name '素材_方案' -Aliases @('生成方案智能体') -Description '消费冻结输入，为标准订单建立 4-5 个主视觉候选。' -Instructions '全程使用中文。只执行 creative_plan，完整执行绑定的素材_技能_方案；该 Skill 及 Creative Intent reference 是候选数量、主尺寸、CreativeIntent、DesignDNA、LayoutPlan、App UI、金融文案和生产 fanout 的唯一真值。只接受平台冻结的 candidate_v1，写 4-5 个 candidate Variant 并委派各自主尺寸，不预选 3 个、不生成图片、不把方图设为固定母版；流程版本缺失或不符时写真实错误，不推断或切换流程。只处理 task context 指定对象，失败保留已写候选和真实错误。' -SkillIDs @($planSkill.id) -RuntimeID $runtimeID -Model 'gpt-5.6-terra' -ThinkingLevel 'medium' -MaxConcurrentTasks 6
-$producer = Set-AgentDefinition -Name '素材_出图' -Aliases @('图像编辑智能体') -Description '按唯一提示词合同执行候选主视觉、selected 扩尺寸或用户标注精准改图；只编辑无品牌底图，由贴片 Skill 确定性合成。' -Instructions $producerInstructions -SkillIDs @($productionSkill.id, $directEditSkill.id, $primeComposeSkill.id) -RuntimeID $runtimeID -Model 'gpt-5.6-terra' -ThinkingLevel 'low' -MaxConcurrentTasks 10
+$producer = Set-AgentDefinition -Name '素材_出图' -Aliases @('图像编辑智能体') -Description '按唯一提示词合同执行候选主视觉、selected 扩尺寸或用户标注精准改图；按冻结 Prime 模式生成无品牌底图或融入无二维码完整模板，再由贴片 Skill 交接终检。' -Instructions $producerInstructions -SkillIDs @($productionSkill.id, $directEditSkill.id, $primeComposeSkill.id) -RuntimeID $runtimeID -Model 'gpt-5.6-terra' -ThinkingLevel 'low' -MaxConcurrentTasks 10
 $reviewer = Set-AgentDefinition -Name '素材_质检' -Aliases @('广告验收智能体') -Description '独立晋级候选主视觉，或联合验收当前实际交付尺寸的 Prime 成图。' -Instructions '全程使用中文。根据 task context.workflow 只执行 creative_candidate_selection 或 creative_qc_visual，并完整执行绑定的素材_技能_质检；Skill 是评分、candidate-select、结构化 Prime 极性、实际交付尺寸联合验收、多目标检查和 qc-finalize 的唯一真值。候选分支恰选 3 个并使用原子 candidate-select，回读平台自动排队结果，不自行重复 fanout；终检分支不得硬编码背景极性、逐图自报通过或使用旧 revision 资产，单尺寸精准改图也必须完成最终视觉质检。' -SkillIDs @($qcSkill.id) -RuntimeID $runtimeID -Model 'gpt-5.6-terra' -ThinkingLevel 'medium' -MaxConcurrentTasks 6
 
 $imageCredentialConfigured = Set-AgentImageCredential -AgentID $producer.id -ApiKey $ImageApiKey
@@ -744,6 +744,7 @@ $marketConfig = @{
     }
     naming_defaults = @{ device = 'SX'; designer = 'AI'; brand_abbreviation = 'AK'; market_abbreviation = $marketProfile.market_abbreviation }
     output_sizes = @('1080x1080','1200x628','800x1000')
+    prime_composition_mode = 'deterministic'
     prime_template_set = @{
         schema_version = 2
         selection_mode = 'automatic_family_contrast'

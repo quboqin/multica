@@ -98,7 +98,8 @@ Input 3 只服务于手机屏幕内容替换：保留原画面中的手机机身
 若 brief 没有 `app_ui_replacement.selected=true`，本节完全不生效：不要下载市场包里的任意 App UI 文件，不要给 Image Edit
 追加第三输入，也不要因为源图或 visual direction 提到手机屏幕就要求保留手机界面。
 
-从订单 `input_snapshot.market_pack.files` 下载与当前尺寸匹配的官方模板，再生成低透明度的实际视觉上下文（只保留 Prime 保护区的组件内容）：
+先读取当前 Variant brief 的 `prime_composition.mode`。缺失时按 `deterministic` 处理；不得按市场名称、历史任务或模板文件名猜测。
+`deterministic` 从订单 `input_snapshot.market_pack.files` 下载与当前尺寸匹配的官方模板，再生成低透明度的实际视觉上下文（只保留 Prime 保护区的组件内容）：
 
 ```text
 python3 <当前 Skill 目录>/references/render_prime_guide.py \
@@ -110,6 +111,11 @@ python3 <当前 Skill 目录>/references/render_prime_guide.py \
 `prime-context` 的证据必须是 `render_style=official_prime_visual_context`；如果只能生成
 `transparent_neutral_outlines`，不能把它作为唯一模型输入，应停止当前尺寸并写 `action_required`。
 
+`model_integrated` 只能使用 brief 中 `prime_composition.template_sources[<size>]` 指向的完整官方模板作为 Input 2，不生成低透明度 guide，
+不切换 family，也不从未选中的市场文件中挑模板。该模式只会由平台为已验证、无二维码的冻结模板族写入；若当前附件、family 或尺寸不一致，停止并写
+`action_required`。模型需要把 Input 2 的可见官方文字、Logo、色彩与大致位置融入当前尺寸成图，业务内容仍须避开这些区域；不得补画二维码、添加其他
+官方组件或要求后端二次贴片。
+
 ## 模型提示词与三尺寸一致性
 
 每次模型调用前必须完整读取 [GPT Image Model Prompt Contract](references/model-prompt-contract.md)，并从当前 brief 的
@@ -118,7 +124,8 @@ python3 <当前 Skill 目录>/references/render_prime_guide.py \
 
 提示词只包含会改变像素的视觉指令。order/task/revision、文件路径、哈希、request ID、上传、登记、重试、超时、状态、JSON、
 CLI 和附件血缘只属于模型调用外的工作流，不能发送给图像模型。GPT Image 继续负责在底图中渲染完整批准文案、金额、表格和 CTA；
-平台不代码排字，不预留稍后排字的空白框，后续唯一确定性 overlay 是官方 Prime。
+平台不代码排字，不预留稍后排字的空白框。`deterministic` 的后续唯一确定性 overlay 是官方 Prime；`model_integrated` 则按冻结的 QR-free
+完整模板直接生成最终图，后端只登记证据，不会二次叠加。
 
 三尺寸共享 DesignDNA、批准文案、业务结构和 `asset_family_id`，但每个尺寸从同一候选 source reference、当前尺寸 Prime context
 和自身 LayoutPlan 原生生成，不把方图 raster 当作不可替代输入。selected 主尺寸可作为可选的一致性参考，只锁主体/材质/色彩/视觉母题，
@@ -131,9 +138,10 @@ CLI 和附件血缘只属于模型调用外的工作流，不能发送给图像�
 
 ## Prime 参与构图
 
-Prime context 是当前尺寸的真实视觉输入，不是黑白遮罩或可复制的模板。它用于让模型理解官方组件的真实色系、材质、光照方向和边缘节奏，并让整张底图在组件下方保持连续背景。模型输出仍然是无品牌底图：
-不得绘制 Prime Logo、QR、官方模板文字、商店徽章、OJK/AFPI/Pindai、占位卡片、白块、横条或灰色引导线。官方 Prime 由后续 deterministic compose
-原样叠加；模型只负责让业务内容和背景为组件留出自然、可读的空间。
+Prime context 是当前尺寸的真实视觉输入，不是黑白遮罩。`deterministic` 中它不可复制，模型输出仍是无品牌底图：不得绘制 Prime Logo、QR、
+官方模板文字、商店徽章、OJK/AFPI/Pindai、占位卡片、白块、横条或灰色引导线，后端再原样叠加。`model_integrated` 中 Input 2 是唯一冻结且无二维码的
+完整模板，模型可把它融入成图，但必须保留其可见官方文字、Logo、色彩和大致位置；不补画 QR、不增加官方组件、不改写官方文字，也不要求后端二次贴片。
+两种模式下模型都负责让业务内容和背景为官方组件留出自然、可读的空间。
 
 ### Prime 承托质量
 
@@ -307,7 +315,9 @@ Input 3 的 input role、是否实际用于当前尺寸，以及只替换手机�
 ## 有界返工
 
 如果视觉 QC 指出 `actual_prime_obstruction` 或 `official_prime_text_unreadable`，服务端最多为当前 Variant 排两轮有证据的定向返工。
-返工仍由出图智能体重新写当前尺寸的短提示词，Input 1 必须是上一 revision 的同尺寸无品牌 generated 底图，不是已贴二维码、Logo、官方条款或 Prime 组件的最终成图；Input 2 是同尺寸 Prime context，仅用于理解后续固定贴片的视觉关系。
+返工仍由出图智能体重新写当前尺寸的短提示词。`deterministic` 的 Input 1 必须是上一 revision 的同尺寸无品牌 generated 底图，不是最终成图；
+`model_integrated` 的 Input 1 则是上一 revision 的同尺寸模型成图，Input 2 是同一冻结的 QR-free 完整模板。两种模式都只改失败验收目标，
+不得更换模板族、添加 QR 或要求后端二次贴片。
 只描述实际遮挡和需要压缩/移动的内容，不改文案、金额、期限、表格、
 视觉身份或 Prime 规则。两轮返工后仍失败时，当前 staging revision 不得发布：已有 active revision 时继续保留并展示 active；首次交付没有
 active revision 时由平台自动晋级最低序号 reserve 并只补缺失尺寸。没有可用 reserve 才进入人工处理，不能由 Agent 自报通过、自动带风险归档，

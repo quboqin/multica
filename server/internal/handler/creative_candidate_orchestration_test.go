@@ -1338,6 +1338,19 @@ func TestCreativeReservePromotionIsIdempotentAndProtectsActiveRevision(t *testin
 	promoted, tasks, err := testHandler.maybePromoteCreativeReserve(
 		t.Context(), parseUUID(failedID), creativeOrchestrationCause{ParentTask: &failedTask},
 	)
+	if err != nil || promoted || len(tasks) != 0 {
+		t.Fatalf("default reserve promotion = promoted %v tasks %d err %v", promoted, len(tasks), err)
+	}
+	if _, err := testPool.Exec(t.Context(), `
+UPDATE creative_order
+SET input_snapshot = input_snapshot || '{"reserve_promotion_mode":"allow"}'::jsonb
+WHERE id = $1
+`, fixture.OrderID); err != nil {
+		t.Fatal(err)
+	}
+	promoted, tasks, err = testHandler.maybePromoteCreativeReserve(
+		t.Context(), parseUUID(failedID), creativeOrchestrationCause{ParentTask: &failedTask},
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1417,6 +1430,13 @@ func TestExhaustedCreativeQCFinalizationPromotesReserveOnce(t *testing.T) {
 		t.Skip("database not available")
 	}
 	fixture := createCreativeCandidateOrchestrationFixture(t, "exhausted QC reserve promotion")
+	if _, err := testPool.Exec(t.Context(), `
+UPDATE creative_order
+SET input_snapshot = input_snapshot || '{"reserve_promotion_mode":"allow"}'::jsonb
+WHERE id = $1
+`, fixture.OrderID); err != nil {
+		t.Fatal(err)
+	}
 	var failedID string
 	if err := testPool.QueryRow(t.Context(), `
 INSERT INTO creative_order_variant (

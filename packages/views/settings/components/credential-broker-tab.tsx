@@ -210,6 +210,15 @@ export function CredentialBrokerTab() {
   }, [activeSession, qc, t, wsId]);
 
   useEffect(() => {
+    if (!activeSession) {
+      return;
+    }
+    const handlePageHide = () => closeRemoteBrowser(activeSession);
+    window.addEventListener("pagehide", handlePageHide);
+    return () => window.removeEventListener("pagehide", handlePageHide);
+  }, [activeSession]);
+
+  useEffect(() => {
     if (!shouldAutoCloseCredentialSession(activeSession, pendingProfile)) {
       return;
     }
@@ -474,7 +483,6 @@ export function CredentialBrokerTab() {
                     <Button
                       variant="ghost"
                       size="icon-sm"
-                      onClick={() => closeRemoteBrowser(activeSession)}
                     />
                   }
                 >

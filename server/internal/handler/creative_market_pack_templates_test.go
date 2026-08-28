@@ -40,6 +40,85 @@ func TestParsePrimeTemplateSetRequiresEverySizeAndUniqueSourceFiles(t *testing.T
 	}
 }
 
+func TestParsePrimeCompositionConfigDefaultsToDeterministicComposition(t *testing.T) {
+	templateSet, err := parsePrimeTemplateSetConfig(primeTemplateSetJSON())
+	if err != nil {
+		t.Fatalf("parse template set: %v", err)
+	}
+	config, err := parsePrimeCompositionConfig(primeTemplateSetJSON(), templateSet)
+	if err != nil {
+		t.Fatalf("parse composition config: %v", err)
+	}
+	if config.Mode != primeCompositionModeDeterministic || config.TemplateFamilyID != "" {
+		t.Fatalf("default composition config = %+v", config)
+	}
+}
+
+func TestParsePrimeCompositionConfigRequiresQRFreeSelectedFamily(t *testing.T) {
+	configJSON := json.RawMessage(`{
+  "prime_composition_mode":"model_integrated",
+  "prime_model_template_family":"light_background",
+  "prime_template_set": {
+    "schema_version":2,
+    "selection_mode":"automatic_family_contrast",
+    "families":[
+      {"id":"light_background","label":"Light","templates":{"1080x1080":{"source_role":"light-square"},"1200x628":{"source_role":"light-landscape"},"800x1000":{"source_role":"light-portrait"}}},
+      {"id":"dark_background","label":"Dark","templates":{"1080x1080":{"source_role":"dark-square"},"1200x628":{"source_role":"dark-landscape"},"800x1000":{"source_role":"dark-portrait"}}}
+    ]
+  }
+}`)
+	templateSet, err := parsePrimeTemplateSetConfig(configJSON)
+	if err != nil {
+		t.Fatalf("parse template set: %v", err)
+	}
+	composition, err := parsePrimeCompositionConfig(configJSON, templateSet)
+	if err != nil {
+		t.Fatalf("parse composition config: %v", err)
+	}
+	if composition.Mode != primeCompositionModeModelIntegrated || composition.TemplateFamilyID != "light_background" {
+		t.Fatalf("composition config = %+v", composition)
+	}
+	if !primeTemplateFamilyContainsQR([]primeTemplateFamilyValidation{{
+		ID: "light_background",
+		Templates: map[string]primeTemplateValidation{
+			"1080x1080": {QRPayload: "https://example.test/qr"},
+		},
+	}}, composition.TemplateFamilyID) {
+		t.Fatal("expected QR-bearing selected family to be detected")
+	}
+	if primeTemplateFamilyContainsQR([]primeTemplateFamilyValidation{{
+		ID: "light_background",
+		Templates: map[string]primeTemplateValidation{
+			"1080x1080": {},
+		},
+	}}, composition.TemplateFamilyID) {
+		t.Fatal("expected QR-free selected family to remain eligible")
+	}
+}
+
+func TestParseFrozenPrimeCompositionConfigRejectsQRTemplateFamily(t *testing.T) {
+	configJSON := json.RawMessage(`{
+  "prime_composition_mode":"model_integrated",
+  "prime_model_template_family":"light_background",
+  "prime_template_set": {
+    "schema_version":2,
+    "selection_mode":"automatic_family_contrast",
+    "families":[{"id":"light_background","label":"Light","templates":{"1080x1080":{"source_role":"light-square"},"1200x628":{"source_role":"light-landscape"},"800x1000":{"source_role":"light-portrait"}}}]
+  },
+  "prime_template_set_validation": {
+    "status":"passed",
+    "families":[{"id":"light_background","templates":{"1080x1080":{"qr_payload":"https://example.test/qr"},"1200x628":{"qr_payload":"https://example.test/qr"},"800x1000":{"qr_payload":"https://example.test/qr"}}}]
+  }
+}`)
+	templateSet, err := parsePrimeTemplateSetConfig(configJSON)
+	if err != nil {
+		t.Fatalf("parse template set: %v", err)
+	}
+	if _, err := parseFrozenPrimeCompositionConfig(configJSON, templateSet); err == nil {
+		t.Fatal("frozen QR-bearing model-integrated family must be rejected")
+	}
+}
+
 func TestNormalizeMarketPackPrimeTemplateSetUsesCompleteStandardFiles(t *testing.T) {
 	files := []creativeResourceFileResponse{
 		{Role: "prime_light_square"}, {Role: "prime_light_landscape"}, {Role: "prime_light_portrait"},

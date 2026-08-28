@@ -186,10 +186,10 @@ func TestCreativeFactoryImageEditingUsesOneAgentWithWorkflowSkills(t *testing.T)
 func TestCreativeFactoryCreativeContractTemplatesStayInSync(t *testing.T) {
 	wantVersions := map[string]int{
 		"generation_plan":     39,
-		"image_edit":          108,
-		"prime_compose":       4,
-		"direct_image_edit":   22,
-		"quality_control":     40,
+		"image_edit":          109,
+		"prime_compose":       6,
+		"direct_image_edit":   30,
+		"quality_control":     42,
 		"creative_leadership": 51,
 	}
 	for _, spec := range creativeFactorySkillSpecs {
@@ -236,6 +236,13 @@ func TestCreativeFactoryCreativeContractTemplatesStayInSync(t *testing.T) {
 			}
 		}
 	}
+	qcTemplate := templates["ad-creative-qc"]
+	if strings.Contains(qcTemplate.Content, "multica attachment download <primed-attachment-id> --output-dir <visual-inspection-dir> --output") {
+		t.Fatal("QC template passes unsupported --output to attachment download")
+	}
+	if !strings.Contains(qcTemplate.Content, "timeout --kill-after=10s 90s multica attachment download") {
+		t.Fatal("QC template lost bounded per-attachment download contract")
+	}
 
 	productionTemplate := templates["ad-creative-production"]
 	var promptContract string
@@ -261,10 +268,10 @@ func TestCreativeFactoryCreativeContractTemplatesStayInSync(t *testing.T) {
 	}
 	for _, value := range []string{
 		"capability = 'generation_plan'; version = 39",
-		"capability = 'image_edit'; version = 108",
-		"capability = 'prime_compose'; version = 5",
-		"capability = 'direct_image_edit'; version = 22",
-		"capability = 'quality_control'; version = 40",
+		"capability = 'image_edit'; version = 109",
+		"capability = 'prime_compose'; version = 6",
+		"capability = 'direct_image_edit'; version = 30",
+		"capability = 'quality_control'; version = 42",
 		"capability = 'creative_leadership'; version = 51",
 		"初始 direct_edit 由平台原子创建 revision 和 task，Leader 只恢复领域状态确认缺失的当前 revision task",
 		"creative_candidate_selection",
@@ -445,8 +452,8 @@ WHERE id = $1::uuid
 	if err := json.Unmarshal([]byte(configRaw), &config); err != nil {
 		t.Fatalf("decode refreshed skill config: %v", err)
 	}
-	if got := int(config["version"].(float64)); got != 28 {
-		t.Fatalf("direct-edit Skill version = %d, want 28", got)
+	if got := int(config["version"].(float64)); got != 30 {
+		t.Fatalf("direct-edit Skill version = %d, want 30", got)
 	}
 	if got := int(config["template_version"].(float64)); got != creativeFactoryTemplateVersion {
 		t.Fatalf("direct-edit template_version = %d, want %d", got, creativeFactoryTemplateVersion)

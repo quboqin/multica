@@ -47,6 +47,13 @@ type creativePrimeGeneratedAsset struct {
 	AttachmentID  pgtype.UUID
 }
 
+type creativePrimeComposedAsset struct {
+	Generated  creativePrimeGeneratedAsset
+	Attachment pgtype.UUID
+	Metadata   json.RawMessage
+	Evidence   json.RawMessage
+}
+
 func creativePrimeGeneratedFingerprint(assets []creativePrimeGeneratedAsset) string {
 	coordinates := make([]string, 0, len(assets))
 	for _, asset := range assets {
@@ -341,6 +348,16 @@ WHERE id = $1 AND revision = $2
 	if err != nil {
 		return false, err
 	}
+	composition, err := parseFrozenPrimeCompositionConfig(marketPack.Config, templateSet)
+	if err != nil {
+		return false, err
+	}
+	if composition.Mode == primeCompositionModeModelIntegrated {
+		return h.registerCreativeOrderVariantModelIntegratedPrime(
+			ctx, workspaceID, orderID, variantID, createdBy, variantKey, revision, candidateState,
+			expectedSizes, generated, marketPack, templateSet, filesByRole, composition, primeClaim,
+		)
+	}
 
 	releasePrimeSlot, err := h.acquireCreativePrimeComposeSlot(ctx)
 	if err != nil {
@@ -477,13 +494,7 @@ WHERE id = $1 AND revision = $2
 		resultByID[result.ID] = result
 	}
 
-	type composedAsset struct {
-		Generated  creativePrimeGeneratedAsset
-		Attachment pgtype.UUID
-		Metadata   json.RawMessage
-		Evidence   json.RawMessage
-	}
-	composed := make([]composedAsset, 0, len(expectedSizes))
+	composed := make([]creativePrimeComposedAsset, 0, len(expectedSizes))
 	for _, size := range expectedSizes {
 		generatedAsset := generatedBySize[size]
 		result, found := resultByID[uuidToString(generatedAsset.ID)]
@@ -520,9 +531,133 @@ WHERE id = $1 AND revision = $2
 		if evidenceErr != nil {
 			return false, fmt.Errorf("encode composed %s evidence: %w", size, evidenceErr)
 		}
-		composed = append(composed, composedAsset{Generated: generatedAsset, Attachment: attachmentID, Metadata: metadata, Evidence: evidence})
+		composed = append(composed, creativePrimeComposedAsset{Generated: generatedAsset, Attachment: attachmentID, Metadata: metadata, Evidence: evidence})
+	}
+	return h.registerCreativePrimeComposedAssets(ctx, workspaceID, orderID, variantID, revision, candidateState, composed, primeClaim)
+}
+
+func (h *Handler) registerCreativeOrderVariantModelIntegratedPrime(
+	ctx context.Context,
+	workspaceID, orderID, variantID, createdBy pgtype.UUID,
+	variantKey string,
+	revision int,
+	candidateState string,
+	expectedSizes []string,
+	generated []creativePrimeGeneratedAsset,
+	marketPack creativePrimeFrozenMarketPack,
+	templateSet *primeTemplateSetConfig,
+	filesByRole map[string]creativeResourceFileResponse,
+	composition primeCompositionConfig,
+	primeClaim *creativePrimeCompositionClaim,
+) (bool, error) {
+	var selectedFamily *primeTemplateFamilyConfig
+	for index := range templateSet.Families {
+		if templateSet.Families[index].ID == composition.TemplateFamilyID {
+			selectedFamily = &templateSet.Families[index]
+			break
+		}
+	}
+	if selectedFamily == nil {
+		return false, errors.New("frozen model-integrated Prime template family is unavailable")
+	}
+	generatedBySize := make(map[string]creativePrimeGeneratedAsset, len(generated))
+	for _, asset := range generated {
+		generatedBySize[asset.SizeKey] = asset
 	}
 
+	templateEvidence := make(map[string]map[string]string, len(expectedSizes))
+	generatedEvidence := make([]map[string]string, 0, len(expectedSizes))
+	for _, size := range expectedSizes {
+		generatedAsset, found := generatedBySize[size]
+		if !found {
+			return false, fmt.Errorf("model-integrated Prime is missing generated %s", size)
+		}
+		template, found := selectedFamily.Templates[size]
+		if !found {
+			return false, fmt.Errorf("frozen model-integrated Prime template family is missing %s", size)
+		}
+		file, found := filesByRole[template.SourceRole]
+		if !found || strings.TrimSpace(file.AttachmentID) == "" {
+			return false, fmt.Errorf("frozen model-integrated Prime template %s is unavailable", template.SourceRole)
+		}
+		templateEvidence[size] = map[string]string{
+			"source_role": template.SourceRole, "attachment_id": strings.TrimSpace(file.AttachmentID),
+		}
+		generatedEvidence = append(generatedEvidence, map[string]string{
+			"size_key": size, "asset_id": uuidToString(generatedAsset.ID), "attachment_id": uuidToString(generatedAsset.AttachmentID),
+		})
+	}
+	manifest, err := json.Marshal(map[string]any{
+		"package_contract_version": 7,
+		"composition_mode":         primeCompositionModeModelIntegrated,
+		"variant_id":               uuidToString(variantID),
+		"variant_key":              variantKey,
+		"revision":                 revision,
+		"expected_sizes":           expectedSizes,
+		"market_pack":              map[string]any{"id": marketPack.ID, "version": marketPack.Version},
+		"template_family":          map[string]any{"id": selectedFamily.ID, "label": selectedFamily.Label, "templates": templateEvidence},
+		"generated_assets":         generatedEvidence,
+	})
+	if err != nil {
+		return false, fmt.Errorf("encode model-integrated Prime manifest: %w", err)
+	}
+	result, err := json.Marshal(map[string]any{
+		"package_contract_version": 7,
+		"composition_mode":         primeCompositionModeModelIntegrated,
+		"status":                   "completed",
+		"generated_fingerprint":    creativePrimeGeneratedFingerprint(generated),
+		"results":                  generatedEvidence,
+	})
+	if err != nil {
+		return false, fmt.Errorf("encode model-integrated Prime result: %w", err)
+	}
+	manifestAttachmentID, err := h.storeCreativePrimeAttachment(ctx, workspaceID, createdBy, orderID, variantID, revision, "model-integrated-prime-manifest.json", manifest, "application/json")
+	if err != nil {
+		return false, err
+	}
+	composeAttachmentID, err := h.storeCreativePrimeAttachment(ctx, workspaceID, createdBy, orderID, variantID, revision, "model-integrated-prime-result.json", result, "application/json")
+	if err != nil {
+		return false, err
+	}
+	composed := make([]creativePrimeComposedAsset, 0, len(expectedSizes))
+	for _, size := range expectedSizes {
+		generatedAsset := generatedBySize[size]
+		template := templateEvidence[size]
+		metadata, metadataErr := json.Marshal(map[string]any{
+			"composition": "model_integrated_frozen_template",
+			"market_pack": map[string]any{"id": marketPack.ID, "version": marketPack.Version},
+			"template":    map[string]any{"family_id": selectedFamily.ID, "source_role": template["source_role"], "attachment_id": template["attachment_id"]},
+		})
+		if metadataErr != nil {
+			return false, fmt.Errorf("encode model-integrated %s metadata: %w", size, metadataErr)
+		}
+		evidence, evidenceErr := json.Marshal(map[string]any{
+			"package_contract_version":     7,
+			"composition_mode":             primeCompositionModeModelIntegrated,
+			"manifest_attachment_id":       uuidToString(manifestAttachmentID),
+			"compose_result_attachment_id": uuidToString(composeAttachmentID),
+			"template_family_id":           selectedFamily.ID,
+			"template_source_role":         template["source_role"],
+			"template_attachment_id":       template["attachment_id"],
+		})
+		if evidenceErr != nil {
+			return false, fmt.Errorf("encode model-integrated %s evidence: %w", size, evidenceErr)
+		}
+		composed = append(composed, creativePrimeComposedAsset{
+			Generated: generatedAsset, Attachment: generatedAsset.AttachmentID, Metadata: metadata, Evidence: evidence,
+		})
+	}
+	return h.registerCreativePrimeComposedAssets(ctx, workspaceID, orderID, variantID, revision, candidateState, composed, primeClaim)
+}
+
+func (h *Handler) registerCreativePrimeComposedAssets(
+	ctx context.Context,
+	workspaceID, orderID, variantID pgtype.UUID,
+	revision int,
+	candidateState string,
+	composed []creativePrimeComposedAsset,
+	primeClaim *creativePrimeCompositionClaim,
+) (bool, error) {
 	tx, err := h.TxStarter.Begin(ctx)
 	if err != nil {
 		return false, fmt.Errorf("start brand component registration: %w", err)
@@ -582,8 +717,7 @@ ON CONFLICT (variant_id, size_key, revision, stage) DO UPDATE SET
 			return false, fmt.Errorf("register composed %s asset: %w", asset.Generated.SizeKey, err)
 		}
 		processMetadata, metadataErr := json.Marshal(map[string]any{
-			"process_stage":   "Prime 合成成图",
-			"source_asset_id": uuidToString(asset.Generated.ID),
+			"process_stage": "Prime 合成成图", "source_asset_id": uuidToString(asset.Generated.ID),
 		})
 		if metadataErr != nil {
 			return false, fmt.Errorf("encode composed %s process evidence: %w", asset.Generated.SizeKey, metadataErr)

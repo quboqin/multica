@@ -32,6 +32,11 @@ var primeCanvasSizes = map[string][2]int{
 var primeTemplateSizes = []string{"1080x1080", "1200x628", "800x1000"}
 var primeTemplateIDPattern = regexp.MustCompile(`^[a-z][a-z0-9_]{0,47}$`)
 
+const (
+	primeCompositionModeDeterministic   = "deterministic"
+	primeCompositionModeModelIntegrated = "model_integrated"
+)
+
 var legacyPrimeQRConfigFields = []string{
 	"qr_payload", "qr_canonical_payload", "qr_allowed_domains", "qr_approval_status", "qr_approval_note",
 }
@@ -110,6 +115,11 @@ type primeTemplateSetValidation struct {
 	Families      []primeTemplateFamilyValidation `json:"families"`
 }
 
+type primeCompositionConfig struct {
+	Mode             string
+	TemplateFamilyID string
+}
+
 func parsePrimeTemplateSetConfig(config json.RawMessage) (*primeTemplateSetConfig, error) {
 	var envelope struct {
 		PrimeTemplateSet json.RawMessage `json:"prime_template_set"`
@@ -168,6 +178,72 @@ func parsePrimeTemplateSetConfig(config json.RawMessage) (*primeTemplateSetConfi
 		}
 	}
 	return &templateSet, nil
+}
+
+func parsePrimeCompositionConfig(config json.RawMessage, templateSet *primeTemplateSetConfig) (primeCompositionConfig, error) {
+	var envelope struct {
+		Mode             string `json:"prime_composition_mode"`
+		TemplateFamilyID string `json:"prime_model_template_family"`
+	}
+	if err := json.Unmarshal(config, &envelope); err != nil {
+		return primeCompositionConfig{}, errors.New("market pack composition config is invalid")
+	}
+	composition := primeCompositionConfig{
+		Mode:             strings.ToLower(strings.TrimSpace(envelope.Mode)),
+		TemplateFamilyID: strings.ToLower(strings.TrimSpace(envelope.TemplateFamilyID)),
+	}
+	if composition.Mode == "" {
+		composition.Mode = primeCompositionModeDeterministic
+	}
+	if composition.Mode != primeCompositionModeDeterministic && composition.Mode != primeCompositionModeModelIntegrated {
+		return primeCompositionConfig{}, errors.New("market pack prime_composition_mode must be deterministic or model_integrated")
+	}
+	if composition.Mode == primeCompositionModeDeterministic {
+		if composition.TemplateFamilyID != "" {
+			return primeCompositionConfig{}, errors.New("market pack prime_model_template_family requires model_integrated composition")
+		}
+		return composition, nil
+	}
+	if !primeTemplateIDPattern.MatchString(composition.TemplateFamilyID) {
+		return primeCompositionConfig{}, errors.New("market pack model_integrated composition requires prime_model_template_family")
+	}
+	for _, family := range templateSet.Families {
+		if family.ID == composition.TemplateFamilyID {
+			return composition, nil
+		}
+	}
+	return primeCompositionConfig{}, fmt.Errorf("market pack prime_model_template_family %q is not defined", composition.TemplateFamilyID)
+}
+
+func primeTemplateFamilyContainsQR(validations []primeTemplateFamilyValidation, familyID string) bool {
+	for _, family := range validations {
+		if family.ID != familyID {
+			continue
+		}
+		for _, template := range family.Templates {
+			if strings.TrimSpace(template.QRPayload) != "" {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func parseFrozenPrimeCompositionConfig(config json.RawMessage, templateSet *primeTemplateSetConfig) (primeCompositionConfig, error) {
+	composition, err := parsePrimeCompositionConfig(config, templateSet)
+	if err != nil || composition.Mode != primeCompositionModeModelIntegrated {
+		return composition, err
+	}
+	var envelope struct {
+		Validation primeTemplateSetValidation `json:"prime_template_set_validation"`
+	}
+	if err := json.Unmarshal(config, &envelope); err != nil || envelope.Validation.Status != "passed" {
+		return primeCompositionConfig{}, errors.New("frozen model-integrated Prime template validation is unavailable")
+	}
+	if primeTemplateFamilyContainsQR(envelope.Validation.Families, composition.TemplateFamilyID) {
+		return primeCompositionConfig{}, fmt.Errorf("frozen model-integrated Prime template family %q contains a QR code", composition.TemplateFamilyID)
+	}
+	return composition, nil
 }
 
 func requiredPrimeTemplateSourceRoles(templateSet *primeTemplateSetConfig) map[string]struct{} {
@@ -464,11 +540,24 @@ func (h *Handler) validateMarketPackPrimeTemplates(ctx context.Context, workspac
 	if err != nil {
 		return nil, err
 	}
+	composition, err := parsePrimeCompositionConfig(normalizedConfig, templateSet)
+	if err != nil {
+		return nil, err
+	}
+	if composition.Mode == primeCompositionModeModelIntegrated && primeTemplateFamilyContainsQR(templates, composition.TemplateFamilyID) {
+		return nil, fmt.Errorf("market pack model_integrated template family %q contains a QR code", composition.TemplateFamilyID)
+	}
 	var merged map[string]any
 	if err := json.Unmarshal(normalizedConfig, &merged); err != nil || merged == nil {
 		return nil, errors.New("market pack config is invalid")
 	}
 	stripLegacyPrimeQRConfigFields(merged)
+	merged["prime_composition_mode"] = composition.Mode
+	if composition.Mode == primeCompositionModeModelIntegrated {
+		merged["prime_model_template_family"] = composition.TemplateFamilyID
+	} else {
+		delete(merged, "prime_model_template_family")
+	}
 	merged["prime_template_set_validation"] = primeTemplateSetValidation{
 		Status: "passed", SchemaVersion: templateSet.SchemaVersion, SelectionMode: templateSet.SelectionMode,
 		ValidatedAt: time.Now().UTC().Format(time.RFC3339), Families: templates,

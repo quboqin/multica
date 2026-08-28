@@ -5639,6 +5639,13 @@ func bindCreativeOrderVariantFrozenContract(rawBrief json.RawMessage, direction 
 	}
 	if found {
 		brief["prime_layout_contract"] = primeLayout
+		primeComposition, compositionFound, compositionErr := frozenCreativePrimeCompositionContract(rawInputSnapshot)
+		if compositionErr != nil {
+			return nil, compositionErr
+		}
+		if compositionFound {
+			brief["prime_composition"] = primeComposition
+		}
 	}
 	if creativeOrderPipelineVersion(rawInputSnapshot) == creativePipelineDirectEditV1 {
 		var snapshot struct {
@@ -5675,6 +5682,46 @@ func bindCreativeOrderVariantFrozenContract(rawBrief json.RawMessage, direction 
 		return nil, fmt.Errorf("encode brief: %w", err)
 	}
 	return encodedBrief, nil
+}
+
+func frozenCreativePrimeCompositionContract(rawInputSnapshot json.RawMessage) (json.RawMessage, bool, error) {
+	marketPack, templateSet, filesByRole, err := frozenCreativePrimeMarketPack(rawInputSnapshot)
+	if err != nil {
+		return nil, false, err
+	}
+	composition, err := parseFrozenPrimeCompositionConfig(marketPack.Config, templateSet)
+	if err != nil {
+		return nil, false, err
+	}
+	contract := map[string]any{"mode": composition.Mode}
+	if composition.Mode == primeCompositionModeModelIntegrated {
+		var selectedFamily *primeTemplateFamilyConfig
+		for index := range templateSet.Families {
+			if templateSet.Families[index].ID == composition.TemplateFamilyID {
+				selectedFamily = &templateSet.Families[index]
+				break
+			}
+		}
+		if selectedFamily == nil {
+			return nil, false, errors.New("frozen model-integrated Prime template family is unavailable")
+		}
+		sources := make(map[string]map[string]string, len(primeTemplateSizes))
+		for _, size := range primeTemplateSizes {
+			template := selectedFamily.Templates[size]
+			file, found := filesByRole[template.SourceRole]
+			if !found || strings.TrimSpace(file.AttachmentID) == "" {
+				return nil, false, fmt.Errorf("frozen model-integrated Prime template %s is unavailable", template.SourceRole)
+			}
+			sources[size] = map[string]string{"source_role": template.SourceRole, "attachment_id": strings.TrimSpace(file.AttachmentID)}
+		}
+		contract["template_family_id"] = selectedFamily.ID
+		contract["template_sources"] = sources
+	}
+	encoded, err := json.Marshal(contract)
+	if err != nil {
+		return nil, false, fmt.Errorf("encode frozen Prime composition contract: %w", err)
+	}
+	return encoded, true, nil
 }
 
 // frozenCreativePrimeLayoutContract returns the immutable per-size Prime layout

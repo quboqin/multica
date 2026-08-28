@@ -832,8 +832,9 @@ SELECT EXISTS (
 }
 
 // maybePromoteCreativeReserve replaces an exhausted initial selected variant
-// only when it has never had an active delivery. Existing active revisions are
-// immutable from this recovery path.
+// only when the frozen order contract explicitly permits it. Candidate
+// selection is otherwise stable: a reserve is not an implicit fourth final
+// candidate. Existing active revisions are immutable from this recovery path.
 func (h *Handler) maybePromoteCreativeReserve(ctx context.Context, failedVariantID pgtype.UUID, cause creativeOrchestrationCause) (bool, []db.AgentTaskQueue, error) {
 	if h.TxStarter == nil || !failedVariantID.Valid {
 		return false, nil, nil
@@ -866,11 +867,14 @@ WHERE variant.id = $1
 	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, "creative-reserve-promotion:"+uuidToString(itemID)); err != nil {
 		return false, nil, fmt.Errorf("lock creative reserve promotion: %w", err)
 	}
-	var orderStatus string
-	if err := tx.QueryRow(ctx, `SELECT status FROM creative_order WHERE id = $1 FOR UPDATE`, orderID).Scan(&orderStatus); errors.Is(err, pgx.ErrNoRows) || orderStatus == "cancelled" {
+	var orderStatus, inputSnapshot string
+	if err := tx.QueryRow(ctx, `SELECT status, input_snapshot::text FROM creative_order WHERE id = $1 FOR UPDATE`, orderID).Scan(&orderStatus, &inputSnapshot); errors.Is(err, pgx.ErrNoRows) || orderStatus == "cancelled" {
 		return false, nil, nil
 	} else if err != nil {
 		return false, nil, fmt.Errorf("lock creative reserve promotion order: %w", err)
+	}
+	if !creativeReservePromotionAllowed(json.RawMessage(inputSnapshot)) {
+		return false, nil, nil
 	}
 	var itemStatus string
 	if err := tx.QueryRow(ctx, `SELECT status FROM creative_order_item WHERE id = $1 AND order_id = $2 FOR UPDATE`, itemID, orderID).Scan(&itemStatus); errors.Is(err, pgx.ErrNoRows) || itemStatus == "cancelled" {
@@ -942,10 +946,10 @@ SELECT EXISTS (
 
 	var reserveID pgtype.UUID
 	var reserveRevision, reserveRank int
-	var reserveBrief, reservePrimarySize, triggerKind, inputSnapshot string
+	var reserveBrief, reservePrimarySize, triggerKind string
 	err = tx.QueryRow(ctx, `
 SELECT reserve.id, reserve.revision, reserve.selection_rank, reserve.brief::text, reserve.primary_size,
-       order_row.trigger_evidence_kind, order_row.input_snapshot::text
+       order_row.trigger_evidence_kind
 FROM creative_order_variant reserve
 JOIN creative_order_item item ON item.id = reserve.order_item_id
 JOIN creative_order order_row ON order_row.id = item.order_id
@@ -968,7 +972,7 @@ WHERE reserve.order_item_id = $1
 ORDER BY reserve.selection_rank, reserve.id
 LIMIT 1
 FOR UPDATE OF reserve
-`, itemID).Scan(&reserveID, &reserveRevision, &reserveRank, &reserveBrief, &reservePrimarySize, &triggerKind, &inputSnapshot)
+	`, itemID).Scan(&reserveID, &reserveRevision, &reserveRank, &reserveBrief, &reservePrimarySize, &triggerKind)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return false, nil, nil
 	}
@@ -1024,6 +1028,13 @@ WHERE id = $1 AND candidate_state = 'reserve' AND active_revision IS NULL
 		return true, tasks, err
 	}
 	return true, tasks, nil
+}
+
+func creativeReservePromotionAllowed(inputSnapshot json.RawMessage) bool {
+	var contract struct {
+		ReservePromotionMode string `json:"reserve_promotion_mode"`
+	}
+	return json.Unmarshal(inputSnapshot, &contract) == nil && contract.ReservePromotionMode == "allow"
 }
 
 func creativeCauseParentTaskID(cause creativeOrchestrationCause) pgtype.UUID {

@@ -65,8 +65,10 @@ visual lane 必须从 `creative order get` 返回的当前 Variant 中筛选
 
 ```text
 mkdir -p <visual-inspection-dir>
-multica attachment download <primed-attachment-id> --output-dir <visual-inspection-dir> --output json
+timeout --kill-after=10s 90s multica attachment download <primed-attachment-id> --output-dir <visual-inspection-dir>
 ```
+
+`attachment download` 不支持 `--output`。每个 attachment 必须作为独立的、有界 shell 调用顺序下载；不得把多个下载串成一个无超时命令。任一调用超时或失败时，记录 `attachment_download_timeout` 或 `attachment_download_failed`（带 size、attachment ID 和真实 stderr），让当前 QC task 失败以便平台复用同一批 completed Prime assets 创建受限重试；不得继续猜测、使用旧本地文件或卡住等待。
 
 下载后必须用 `view_image` 查看每张本地 Prime 成图；多尺寸时逐张查看，不把图片转成 base64/stdout，不用 OCR 或
 `qc_batch.py` 代替视觉判断。下载失败、数量缺失、重复尺寸、revision 不符或非图片文件，按证据/附件合同错误写 failed。
@@ -84,11 +86,15 @@ visual lane 必须按五个闸门验收：文案/组件完整、Prime 合成前�
 第一闸门检查冻结标题、利益点、金额、表格、CTA 是否全部出现；有边框但没有文字也算失败。第二闸门对照机器证据中的
 `safe_content_frame`、`top_key_content_exclusion_end`、`bottom_key_content_exclusion_start`，确认正文、金额、表格和 CTA 没有进入顶部或底部 Prime 禁区；
 正文被 Prime 实际盖住都算失败。第三闸门逐一放大 Logo、条款和底部组件，必须能看清官方文字，不能用整条带平均颜色代替局部判断。
-不得把 hard region 框线当成视觉证据，也不得因为正常搭接、背景物体靠近但文字仍清晰而报错。第三闸门必须逐尺寸消费
+不得把 hard region 框线当成视觉证据，也不得因为正常搭接、背景物体靠近但文字仍清晰而报错。`composition_mode=deterministic` 时第三闸门必须逐尺寸消费
 asset evidence 顶层 `template_selection`：要求 `selection_scope=delivery_size`，并核对 selected candidate 的
 `visible_component_mask`、`foreground_polarity`、`background_support.polarity`、`relative_luminance_contrast` 与 `texture`。
 `background_support.relative_luminance_contrast.basis` 必须是
 `alpha_composited_template_over_generated_body`；缺失或使用其他 basis 视为 Prime 证据合同错误，不能用背景采样替代。
+`composition_mode=model_integrated` 时，不要求不存在的 `template_selection`、对比度阈值或 component mask。回读 evidence 的
+`template_family_id`、`template_source_role` 与 `template_attachment_id`，确认它们属于同一冻结 QR-free family；然后逐张放大实际最终图，
+核对官方文字、Logo、色彩和大致位置确实可见、没有被业务内容遮挡，也没有凭空出现 QR 或第二套官方组件。此模式的 `polarity_evidence` 写
+`not_applicable:model_integrated_visual_inspection`，不得以机器阈值替代真实目检。
 亮色官方字形通常需要深色承托，深色字形通常需要浅色承托，mixed 必须按 component mask 分区判断；最终目标完全来自结构化极性，
 不得硬编码任何背景极性，也不得用整条带平均 RGB 代替实际可见字形 mask。`visual_adequacy.status=qc_risk` 或任一尺寸存在
 `prime_relative_luminance_contrast_below_threshold`、`prime_background_polarity_mismatch`、`prime_background_too_textured` 或
@@ -138,7 +144,8 @@ visual lane 输出逐尺寸 checked assets、`prime_assets_readable`、`key_cont
 `期望调整为满足 background_support.polarity 的低纹理承托背景，使该官方文字区域达到证据中的相对亮度与纹理门槛` 收尾；禁止把任何背景极性写成固定常量。
 `generated_content_missing` 的 diagnosis 必须写明 `期望补齐冻结文案 copy_snapshot`，但该问题不属于自动模型返工范围。
 遮挡诊断的冲突词可以使用 `冲突`、`重叠`、`叠压`、`遮挡` 或明确的 `进入顶部 Prime 禁区`/`进入底部 Prime 禁区`，并始终保留 `期望移动到 safe_content_frame ...` 的目标坐标。
-这是对最终图的视觉结论，不是区域脚本推断。模型收到后只改无品牌底图；它不能画横条、白块或品牌组件占位物。
+这是对最终图的视觉结论，不是区域脚本推断。`deterministic` 的模型只改无品牌底图；`model_integrated` 的模型只在同一冻结 QR-free
+模板上下文中调整失败业务内容，不能增加 QR、横条、白块或第二套品牌组件。
 
 ```text
 multica creative order qc-put <order-id> --input-file <qc-report.json> --output json
@@ -147,8 +154,8 @@ multica creative order qc-finalize <order-id> \
 ```
 
 写回后立即调用 finalize。finalize 只等待 visual 检测报告归档后登记最终成图；不可自动修复的视觉失败进入人工处理。
-上述完整的 visual blocking finding 会新建下一 revision 的生产任务：服务端保留通过尺寸的
-无品牌底图，只让模型改失败尺寸，然后重新合成品牌组件与 QC。服务端最多排两轮真实视觉返工；耗尽后不得把未通过的 staging revision
+上述完整的 visual blocking finding 会新建下一 revision 的生产任务：服务端保留通过尺寸的生成资产，只让模型改失败尺寸，然后按冻结模式
+重新交接品牌组件与 QC。服务端最多排两轮真实视觉返工；耗尽后不得把未通过的 staging revision
 发布为交付资产。已有 active revision 时继续展示原 active，失败的 staging 保留完整证据；首次交付尚无 active 时，平台按候选排名自动晋级
 最低序号 reserve 并只生产其缺失尺寸。没有可晋级 reserve 时进入人工处理，只有用户明确接受风险后才能发布。`outcome=pending` 或 `created=false` 时立即结束；只有
 `created=true` 的 winner 写一次去重 Issue 留痕。结构化 findings 不复制进评论。
@@ -156,5 +163,6 @@ multica creative order qc-finalize <order-id> \
 附件下载、查看图片或写回失败仍如实写入结构化错误；这类是平台执行错误，不是用户需要处理的图片质量问题。服务端会自动复用已完成 Prime
 资产重跑 visual QC，当前 revision 最多一次；恢复任务只补视觉验收，不重新生图。
 
-完整模板按上传文件原样 alpha 叠加；二维码属于官方 Prime 模板资产，机器检查不再解码二维码，只记录跳过状态且不得因此阻断。QC 不直接改图。它只提交最终视觉结论；符合上述合同的自动返工由服务端创建生产任务。工具或写回失败只影响当前 lane，
+`deterministic` 的完整模板按上传文件原样 alpha 叠加；`model_integrated` 只允许已验证的无二维码模板族，由实际目检而非 alpha 证据验收。
+二维码属于官方 Prime 模板资产，机器检查不再解码二维码，只记录跳过状态且不得因此阻断。QC 不直接改图。它只提交最终视觉结论；符合上述合同的自动返工由服务端创建生产任务。工具或写回失败只影响当前 lane，
 保留真实 error code/message，不影响兄弟 Variant，也不创建子 Issue。
