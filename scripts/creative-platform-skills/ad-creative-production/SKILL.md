@@ -143,7 +143,7 @@ Prime context 是当前尺寸的真实视觉输入，不是黑白遮罩或可复
 ## 调用和证据
 
 每次模型调用都保存实际发送的 prompt、`prompt_sha256`、`request_id`、attempts、实际画布尺寸和输入资产指纹。
-调用 `multica image edit` 或 `image edit-batch` 时使用显式长超时；传输层 408/429/5xx/网络失败最多重试两次。必须把 CLI 返回的完整 JSON 原样保存，不能手工只保留 request ID、hash 或 `generated_asset` 摘要；后续 `asset-put` 使用同一份原始 JSON。
+调用 `multica image edit` 或 `image edit-batch` 时，任务执行器的进程超时必须至少为 25 分钟；传输层 408/429/5xx/网络失败最多重试两次。若执行器只先返回短周期的“仍在运行”状态，必须持续恢复同一进程会话直到完整 JSON 或明确非零错误到达，不能启动第二个 shell 或第二次模型调用。约 30 秒的空 stdout 不是成功、失败或“provider 未返回”证据，不能据此把 operation 标记为 unknown。必须把 CLI 返回的完整 JSON 原样保存，不能手工只保留 request ID、hash 或 `generated_asset` 摘要；后续 `asset-put` 使用同一份原始 JSON。
 写 canonical generated asset 时，`metadata.prompt`、`model_result.prompt` 和 `prompt_sha256` 必须从该原子 JSON 的同一个
 JSON string 逐字复制。不得用 `jq -r`、命令替换、shell 变量、`echo` 或展示用的 `prompt-<size>.txt` 重建 prompt：它们会改变末尾换行或
 其他空白字节，导致模型已成功生成却被资产谱系校验拒绝。应生成 JSON 对象后把原字段原样嵌入；只有 `prompt_sha256` 可作为单独标量读取。
