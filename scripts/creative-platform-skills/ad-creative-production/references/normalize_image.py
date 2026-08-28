@@ -10,6 +10,9 @@ from pathlib import Path
 from PIL import Image, ImageFilter
 
 
+RESAMPLING = getattr(Image, "Resampling", Image)
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--input", required=True)
@@ -131,7 +134,7 @@ def contain_with_edge_extension(source: Image.Image, width: int, height: int) ->
     scale = min(width / source.width, height / source.height)
     fitted_width = max(1, round(source.width * scale))
     fitted_height = max(1, round(source.height * scale))
-    fitted = source.resize((fitted_width, fitted_height), Image.Resampling.LANCZOS)
+    fitted = source.resize((fitted_width, fitted_height), RESAMPLING.LANCZOS)
     canvas = Image.new("RGB", (width, height), fitted.getpixel((fitted.width // 2, fitted.height // 2)))
     x1 = (width - fitted_width) // 2
     y1 = (height - fitted_height) // 2
@@ -142,24 +145,24 @@ def contain_with_edge_extension(source: Image.Image, width: int, height: int) ->
 
     if x1 > 0:
         strip_width = min(fitted.width, max(2, fitted.width // 24))
-        left = fitted.crop((0, 0, strip_width, fitted.height)).resize((x1, height), Image.Resampling.BICUBIC)
+        left = fitted.crop((0, 0, strip_width, fitted.height)).resize((x1, height), RESAMPLING.BICUBIC)
         canvas.paste(left.filter(ImageFilter.GaussianBlur(blur_radius)), (0, 0))
         if width > x2:
-            right = fitted.crop((fitted.width - strip_width, 0, fitted.width, fitted.height)).resize((width - x2, height), Image.Resampling.BICUBIC)
+            right = fitted.crop((fitted.width - strip_width, 0, fitted.width, fitted.height)).resize((width - x2, height), RESAMPLING.BICUBIC)
             canvas.paste(right.filter(ImageFilter.GaussianBlur(blur_radius)), (x2, 0))
     if y1 > 0:
         strip_height = min(fitted.height, max(2, fitted.height // 24))
-        top = fitted.crop((0, 0, fitted.width, strip_height)).resize((width, y1), Image.Resampling.BICUBIC)
+        top = fitted.crop((0, 0, fitted.width, strip_height)).resize((width, y1), RESAMPLING.BICUBIC)
         canvas.paste(top.filter(ImageFilter.GaussianBlur(blur_radius)), (0, 0))
         if height > y2:
-            bottom = fitted.crop((0, fitted.height - strip_height, fitted.width, fitted.height)).resize((width, height - y2), Image.Resampling.BICUBIC)
+            bottom = fitted.crop((0, fitted.height - strip_height, fitted.width, fitted.height)).resize((width, height - y2), RESAMPLING.BICUBIC)
             canvas.paste(bottom.filter(ImageFilter.GaussianBlur(blur_radius)), (0, y2))
     canvas.paste(fitted, (x1, y1))
     return canvas, (x1, y1, x2, y2)
 
 
 def compress_to_canvas(source: Image.Image, width: int, height: int) -> tuple[Image.Image, tuple[int, int, int, int]]:
-    return source.resize((width, height), Image.Resampling.LANCZOS), (0, 0, width, height)
+    return source.resize((width, height), RESAMPLING.LANCZOS), (0, 0, width, height)
 
 
 def prime_safe_audit(
@@ -208,7 +211,7 @@ def main() -> int:
                 normalized, content_rect = compress_to_canvas(source_rgb, args.width, args.height)
                 method = "aspect-compress"
         else:
-            normalized = source_rgb.resize((args.width, args.height), Image.Resampling.LANCZOS)
+            normalized = source_rgb.resize((args.width, args.height), RESAMPLING.LANCZOS)
             method = "direct-resize-lanczos"
         output_path.parent.mkdir(parents=True, exist_ok=True)
         safe_fit_evidence: dict[str, object] = {"prime_safe_audit": False, "prime_safe_fit": False}

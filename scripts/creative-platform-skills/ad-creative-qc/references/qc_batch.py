@@ -14,6 +14,9 @@ import numpy as np
 from PIL import Image, ImageDraw, ImageFont, ImageOps
 
 
+RESAMPLING = getattr(Image, "Resampling", Image)
+
+
 SIZE_PATTERN = re.compile(r"(?:^|[-_])([1-9]\d*x[1-9]\d*)$", re.IGNORECASE)
 PACKAGE_CONTRACT_VERSION = 6
 
@@ -58,7 +61,7 @@ def make_contact_sheet(images: list[tuple[str, Path]], output: Path) -> None:
         x = gap + column * (cell_width + gap)
         y = gap + row * (cell_height + label_height + gap)
         with Image.open(path) as image:
-            preview = ImageOps.contain(image.convert("RGB"), (cell_width, cell_height), Image.Resampling.LANCZOS)
+            preview = ImageOps.contain(image.convert("RGB"), (cell_width, cell_height), RESAMPLING.LANCZOS)
         px = x + (cell_width - preview.width) // 2
         py = y + label_height + (cell_height - preview.height) // 2
         sheet.paste(preview, (px, py))

@@ -13,6 +13,9 @@ from PIL import Image, ImageChops, ImageDraw
 from validate_copy_snapshot import layout_safe_content_frame, load_prime_layout
 
 
+RESAMPLING = getattr(Image, "Resampling", Image)
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--layout-file", required=True)
@@ -160,7 +163,7 @@ def render_prime_context(layout: dict[str, Any], width: int, height: int, templa
         raise SystemExit(f"official Prime template does not exist: {template_path}")
     try:
         with Image.open(template_path) as source:
-            template = source.convert("RGBA").resize((width, height), Image.Resampling.LANCZOS)
+            template = source.convert("RGBA").resize((width, height), RESAMPLING.LANCZOS)
     except OSError as exc:
         raise SystemExit(f"cannot read official Prime template: {exc}") from exc
 

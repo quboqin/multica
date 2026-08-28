@@ -264,7 +264,7 @@ func TestCreativeFactoryCreativeContractTemplatesStayInSync(t *testing.T) {
 		"capability = 'image_edit'; version = 99",
 		"capability = 'prime_compose'; version = 5",
 		"capability = 'direct_image_edit'; version = 22",
-		"capability = 'quality_control'; version = 37",
+		"capability = 'quality_control'; version = 38",
 		"capability = 'creative_leadership'; version = 51",
 		"初始 direct_edit 由平台原子创建 revision 和 task，Leader 只恢复领域状态确认缺失的当前 revision task",
 		"creative_candidate_selection",
