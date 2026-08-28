@@ -145,6 +145,37 @@ JSON string 逐字复制。不得用 `jq -r`、命令替换、shell 变量、`ec
 把 `image-operation-put` 的完整响应保存为文件，并从响应的 `id` 和对应 `attempts[].attempt` 读取本次坐标；不得只从本地
 `operation.json` 猜 attempt。所有真正调用 provider 的单尺寸命令必须同时传入这两个返回值：
 
+首次 `operation.json` 的顶层只能使用服务端字段名，输入指纹和角色必须嵌套在 `input_snapshot`，不能写成顶层
+`input_asset_fingerprints`、`input_fingerprints`、`input_roles`、`target_size`，也不能把 `operation_kind` 缩写成 `kind`：
+
+```json
+{
+  "variant_id": "<variant-id>",
+  "size_key": "<canonical-size>",
+  "revision": 1,
+  "operation_kind": "generation",
+  "idempotency_key": "<variant-id>:r1:<canonical-size>:generation:v1",
+  "status": "running",
+  "model": "gpt-image-2",
+  "input_snapshot": {
+    "input_asset_fingerprints": {
+      "source_reference_sha256": "<sha256>",
+      "prime_context_sha256": "<sha256>"
+    },
+    "input_roles": ["source_reference", "prime_visual_context"],
+    "target_size": "<canonical-size>"
+  },
+  "attempt": 1
+}
+```
+
+在每次首次登记前必须执行以下本地校验；失败时修正 JSON 后再登记，不能靠更换幂等键或猜别名重试：
+
+```bash
+python3 <当前 Skill 目录>/references/validate_image_operation.py \
+  --input-file <operation.json>
+```
+
 ```bash
 operation_id="$(jq -er '.id' <image-operation-response.json>)"
 operation_attempt="$(jq -er '.attempts | last | .attempt' <image-operation-response.json>)"
