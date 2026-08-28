@@ -96,7 +96,7 @@ Input 3 只服务于手机屏幕内容替换：保留原画面中的手机机身
 从订单 `input_snapshot.market_pack.files` 下载与当前尺寸匹配的官方模板，再生成低透明度的实际视觉上下文（只保留 Prime 保护区的组件内容）：
 
 ```text
-python <当前 Skill 目录>/references/render_prime_guide.py \
+python3 <当前 Skill 目录>/references/render_prime_guide.py \
   --layout-file <layout-<size>.json> --template-image <official-prime-template.png> \
   --width <model-width> --height <model-height> --output <prime-context-<size>.png> \
   --evidence <prime-context-<size>.json>

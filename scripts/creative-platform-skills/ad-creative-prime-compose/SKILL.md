@@ -18,7 +18,7 @@ the required unbranded base assets for the order variant.
 3. Run the bundled wrapper:
 
    ```text
-   python references/run_prime_compose.py --order-id <order-id> --variant <variant-id> --output json
+   python3 references/run_prime_compose.py --order-id <order-id> --variant <variant-id> --output json
    ```
 
    Use `--force` only for an explicit deterministic retry of a failed job on
