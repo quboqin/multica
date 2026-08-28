@@ -95,6 +95,11 @@ multica image edit \
   --output json
 ```
 
+`multica image edit` 是当前尺寸的**阻塞屏障**：必须在同一个 exec 完整返回退出结果、`model-output.png` 和原子
+`image-edit-result.json` 后，才能执行任何 `ls`、`image-operation-put`、上传、对账或下一次模型调用。不得因为任务流中先出现了后续消息，
+就用另一个并发 exec 检查文件并把仍在运行的 provider 进程误判为无回图。调用命令不得后台化；如需额外验证，必须在同一 Bash/exec 的命令成功返回后
+串行验证输出文件和 receipt。只有该阻塞调用真实非零退出且同一调用已无有效回图时，才进入 unknown/reconcile 流程。
+
 `--size` 使用平台允许的 provider 画布，最终文件必须归一化为当前处理尺寸；`scope=size` 当前处理尺寸就是 `target_size`。
 保留 CLI 返回的完整 JSON 为
 `image-edit-result.json`；其中的 `prompt` 和 `prompt_sha256` 是唯一真值，不能从展示用的 `prompt.txt`、用户原话或重新拼接的
