@@ -193,6 +193,62 @@ func TestRetryCreativeMaterialReferenceAnalysisRequeuesFailedCandidate(t *testin
 	}
 }
 
+func TestRetryCreativeMaterialReferenceAnalysisReusesMaterialSearchRun(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	agentID := createReferenceAnalysisAgent(t)
+	summary, err := testHandler.importCreativeMaterials(t.Context(), creativeMaterialImportInput{
+		WorkspaceID:  parseUUID(testWorkspaceID),
+		ConnectorID:  "appgrowing",
+		QuerySummary: "material_search",
+		Params:       json.RawMessage(`{"analysis_agent_id":"` + agentID + `"}`),
+		Materials: []creativeMaterialInput{{
+			DedupeKey:  "retry-material-search-" + uuid.NewString(),
+			Title:      "Retry material search evidence",
+			AssetType:  "image",
+			PreviewURL: "https://example.test/retry-material-search-" + uuid.NewString() + ".png",
+		}},
+		ActorType: "member", ActorID: testUserID, UserID: parseUUID(testUserID),
+	})
+	if err != nil || len(summary.ImportedCandidateIDs) != 1 {
+		t.Fatalf("import material search summary=%#v err=%v", summary, err)
+	}
+	candidateID := summary.ImportedCandidateIDs[0]
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(t.Context(), `DELETE FROM agent_task_queue WHERE trigger_evidence_ref_id = $1`, summary.RunID)
+		_, _ = testPool.Exec(t.Context(), `DELETE FROM creative_source_analysis WHERE candidate_id = $1`, candidateID)
+		_, _ = testPool.Exec(t.Context(), `DELETE FROM creative_material_crawl_run WHERE id = $1`, summary.RunID)
+		_, _ = testPool.Exec(t.Context(), `DELETE FROM creative_material_candidate WHERE id = $1`, candidateID)
+	})
+
+	w := httptest.NewRecorder()
+	req := withURLParam(newRequest(http.MethodPost, "/api/creative/materials/"+candidateID+"/analysis/retry", nil), "id", candidateID)
+	testHandler.RetryCreativeMaterialReferenceAnalysis(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("RetryCreativeMaterialReferenceAnalysis: %d %s", w.Code, w.Body.String())
+	}
+	var response creativeMaterialLibraryImportResponse
+	if err := json.NewDecoder(w.Body).Decode(&response); err != nil {
+		t.Fatal(err)
+	}
+	if response.Analysis.Action != "queued" || response.Analysis.CrawlRunID != summary.RunID || response.Analysis.TaskID == "" {
+		t.Fatalf("retry response = %#v, want original material search run %s", response, summary.RunID)
+	}
+	var runCount int
+	if err := testPool.QueryRow(t.Context(), `
+SELECT count(*)
+FROM creative_material_crawl_run_candidate rc
+JOIN creative_material_crawl_run cr ON cr.id = rc.run_id
+WHERE rc.candidate_id = $1 AND cr.workspace_id = $2
+`, candidateID, testWorkspaceID).Scan(&runCount); err != nil {
+		t.Fatal(err)
+	}
+	if runCount != 1 {
+		t.Fatalf("retry created duplicate crawl evidence: candidate runs=%d", runCount)
+	}
+}
+
 func TestCreativeAnalysisStatusFromTask(t *testing.T) {
 	for status, want := range map[string]string{
 		"queued": "pending", "dispatched": "pending", "running": "running",

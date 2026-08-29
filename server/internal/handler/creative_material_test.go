@@ -453,7 +453,7 @@ func TestCreativeCrawlRunWithoutIssueCreatesRunCandidateRelations(t *testing.T) 
 	summary, err := testHandler.importCreativeMaterials(t.Context(), creativeMaterialImportInput{
 		WorkspaceID:  parseUUID(testWorkspaceID),
 		ConnectorID:  "test",
-		QuerySummary: "run-only crawl",
+		QuerySummary: "material_search",
 		Materials: []creativeMaterialInput{{
 			DedupeKey:  "run-only-" + testWorkspaceID,
 			Title:      "Run-only material",
@@ -546,7 +546,7 @@ func TestCreativeMaterialLibraryRunFilterPreservesHistoricalRelation(t *testing.
 	dedupeKey := "historical-run-filter-" + testWorkspaceID
 	importOnce := func() creativeImportSummary {
 		summary, err := testHandler.importCreativeMaterials(t.Context(), creativeMaterialImportInput{
-			WorkspaceID: parseUUID(testWorkspaceID), ConnectorID: "test", QuerySummary: "historical run filter",
+			WorkspaceID: parseUUID(testWorkspaceID), ConnectorID: "test", QuerySummary: "material_search",
 			Materials: []creativeMaterialInput{{DedupeKey: dedupeKey, Title: "Historical run candidate", AssetType: "image", PreviewURL: "https://example.test/historical-run.png"}},
 			ActorType: "member", ActorID: testUserID, UserID: parseUUID(testUserID),
 		})
@@ -584,7 +584,7 @@ func TestCreativeMaterialLibraryCanHideEmptyCrawlRuns(t *testing.T) {
 	dedupeKey := "empty-run-filter-" + uuid.NewString()
 	importOnce := func() creativeImportSummary {
 		summary, err := testHandler.importCreativeMaterials(t.Context(), creativeMaterialImportInput{
-			WorkspaceID: parseUUID(testWorkspaceID), ConnectorID: "test", QuerySummary: "empty run filter",
+			WorkspaceID: parseUUID(testWorkspaceID), ConnectorID: "test", QuerySummary: "material_search",
 			Materials: []creativeMaterialInput{{DedupeKey: dedupeKey, Title: "Empty run filter candidate", AssetType: "image", PreviewURL: "https://example.test/empty-run-filter.png"}},
 			ActorType: "member", ActorID: testUserID, UserID: parseUUID(testUserID),
 		})
@@ -630,6 +630,46 @@ func TestCreativeMaterialLibraryCanHideEmptyCrawlRuns(t *testing.T) {
 	}
 	if !crawlRunResponseContains(filteredLibrary.CrawlRuns, first.RunID) {
 		t.Fatalf("filtered crawl runs should keep imported run %s: %#v", first.RunID, filteredLibrary.CrawlRuns)
+	}
+}
+
+func TestCreativeMaterialLibraryOnlyListsMaterialSearchRuns(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+	materialSearch, err := testHandler.importCreativeMaterials(t.Context(), creativeMaterialImportInput{
+		WorkspaceID: parseUUID(testWorkspaceID), ConnectorID: "test", QuerySummary: "material_search",
+		Materials: []creativeMaterialInput{{DedupeKey: "material-search-run-" + uuid.NewString(), Title: "Material search", AssetType: "image", PreviewURL: "https://example.test/material-search.png"}},
+		ActorType: "member", ActorID: testUserID, UserID: parseUUID(testUserID),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	nonCollection, err := testHandler.importCreativeMaterials(t.Context(), creativeMaterialImportInput{
+		WorkspaceID: parseUUID(testWorkspaceID), ConnectorID: "test", QuerySummary: "profile_verify",
+		Materials: []creativeMaterialInput{{DedupeKey: "profile-verify-run-" + uuid.NewString(), Title: "Profile verification", AssetType: "image", PreviewURL: "https://example.test/profile-verify.png"}},
+		ActorType: "member", ActorID: testUserID, UserID: parseUUID(testUserID),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	w := httptest.NewRecorder()
+	testHandler.ListCreativeCrawlRuns(w, newRequest(http.MethodGet, "/api/creative/crawl-runs", nil))
+	if w.Code != http.StatusOK {
+		t.Fatalf("ListCreativeCrawlRuns: %d %s", w.Code, w.Body.String())
+	}
+	var response struct {
+		CrawlRuns []creativeMaterialCrawlRunResponse `json:"crawl_runs"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&response); err != nil {
+		t.Fatal(err)
+	}
+	if !crawlRunResponseContains(response.CrawlRuns, materialSearch.RunID) {
+		t.Fatalf("material search run missing: %#v", response.CrawlRuns)
+	}
+	if crawlRunResponseContains(response.CrawlRuns, nonCollection.RunID) {
+		t.Fatalf("non-collection run leaked into collection list: %#v", response.CrawlRuns)
 	}
 }
 

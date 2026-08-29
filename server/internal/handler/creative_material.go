@@ -117,11 +117,12 @@ type creativeMaterialsResponse struct {
 }
 
 type creativeImportSummary struct {
-	RunID         string `json:"run_id"`
-	ImportedCount int    `json:"imported_count"`
-	ExistingCount int    `json:"existing_count"`
-	TotalCount    int    `json:"total_count"`
-	SkippedCount  int    `json:"skipped_count"`
+	RunID                string   `json:"run_id"`
+	ImportedCount        int      `json:"imported_count"`
+	ExistingCount        int      `json:"existing_count"`
+	TotalCount           int      `json:"total_count"`
+	SkippedCount         int      `json:"skipped_count"`
+	ImportedCandidateIDs []string `json:"-"`
 }
 
 type creativeMaterialInput struct {
@@ -551,6 +552,7 @@ SELECT id::text, inserted FROM upsert
 		}
 		if inserted {
 			summary.ImportedCount++
+			summary.ImportedCandidateIDs = append(summary.ImportedCandidateIDs, candidateID)
 		} else {
 			summary.ExistingCount++
 		}
@@ -814,8 +816,9 @@ LEFT JOIN crawl_candidate_analysis rc
   ON rc.run_id = cr.id AND rc.workspace_id = cr.workspace_id
 LEFT JOIN creative_material_candidate candidate
   ON candidate.id = rc.candidate_id AND candidate.workspace_id = rc.workspace_id
-WHERE cr.workspace_id = $1
-  AND (NOT $2::boolean OR cr.issue_id = $3)
+	WHERE cr.workspace_id = $1
+	  AND cr.query_summary = 'material_search'
+	  AND (NOT $2::boolean OR cr.issue_id = $3)
   AND ($4::boolean OR cr.imported_count > 0)
 GROUP BY cr.id
 ORDER BY cr.created_at DESC

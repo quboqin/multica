@@ -222,8 +222,8 @@ SELECT rc.run_id, NULLIF(cr.params->>'analysis_agent_id', '')::uuid,
 FROM creative_material_crawl_run_candidate rc
 JOIN creative_material_crawl_run cr ON cr.id = rc.run_id AND cr.workspace_id = rc.workspace_id
 WHERE rc.workspace_id = $1 AND rc.candidate_id = $2
-  AND rc.analysis_status = 'completed'
-ORDER BY cr.created_at DESC, rc.created_at DESC
+  AND cr.query_summary = 'material_search'
+ORDER BY CASE WHEN rc.is_new_in_run THEN 0 ELSE 1 END, cr.created_at DESC, rc.created_at DESC
 LIMIT 1
 `, workspaceID, candidateID).Scan(
 		&evidence.RunID,

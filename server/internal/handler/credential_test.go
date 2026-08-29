@@ -15,6 +15,8 @@ import (
 
 type credentialTestWorker struct {
 	loginRequests []broker.WorkerLoginSessionRequest
+	crawlResponse broker.WorkerCrawlResponse
+	crawlErr      error
 }
 
 func (w *credentialTestWorker) Configured() bool { return true }
@@ -28,7 +30,101 @@ func (w *credentialTestWorker) StartLoginSession(_ context.Context, request brok
 }
 
 func (w *credentialTestWorker) RunCrawl(context.Context, broker.WorkerCrawlRequest) (broker.WorkerCrawlResponse, error) {
-	return broker.WorkerCrawlResponse{Status: "completed"}, nil
+	if w.crawlErr != nil {
+		return broker.WorkerCrawlResponse{}, w.crawlErr
+	}
+	if w.crawlResponse.Status == "" {
+		return broker.WorkerCrawlResponse{Status: "completed"}, nil
+	}
+	return w.crawlResponse, nil
+}
+
+func TestRunCredentialCrawlQueuesReferenceAnalysisForNewMaterials(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	agentID := createReferenceAnalysisAgent(t)
+	worker := &credentialTestWorker{crawlResponse: broker.WorkerCrawlResponse{
+		Status: "completed",
+		Raw: json.RawMessage(`{"selected_materials":[
+			{"materialId":"crawl-fanout-` + uuid.NewString() + `","assetType":"image","resourceUrl":"https://example.test/crawl-fanout-one-` + uuid.NewString() + `.png"},
+			{"materialId":"crawl-fanout-` + uuid.NewString() + `","assetType":"image","resourceUrl":"https://example.test/crawl-fanout-two-` + uuid.NewString() + `.png"}
+		]}`),
+	}}
+	registry, err := broker.RegistryWithJSON(`[{"id":"fixture-crawl","display_name":"Fixture Crawl","login_url":"https://example.test/login","capabilities":["material_search"],"scope":"deployment"}]`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := broker.NewServiceWithRegistry(testHandler.Queries, worker, registry)
+	workspaceID := parseUUID(testWorkspaceID)
+	userID := parseUUID(testUserID)
+	started, err := service.StartLoginSession(t.Context(), broker.StartLoginSessionInput{
+		WorkspaceID: workspaceID, UserID: userID, ConnectorID: "fixture-crawl", Label: "Fixture crawl profile",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(t.Context(), `DELETE FROM credential_profile WHERE id = $1`, started.Profile.ID)
+	})
+	if _, err := service.CompleteLoginSession(t.Context(), broker.CompleteLoginSessionInput{
+		SessionToken: worker.loginRequests[0].SessionToken, Ciphertext: []byte("test-ciphertext"), KeyVersion: "test-v1",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	handler := *testHandler
+	handler.CredentialBroker = service
+	w := httptest.NewRecorder()
+	req := newRequest(http.MethodPost, "/api/credential-crawl", map[string]any{
+		"profile_id": uuidToString(started.Profile.ID), "connector_id": "fixture-crawl", "capability": "material_search",
+		"params": map[string]any{"analysis_agent_id": agentID},
+	})
+	handler.RunCredentialCrawl(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("RunCredentialCrawl: %d %s", w.Code, w.Body.String())
+	}
+	var response struct {
+		CrawlRunID        string                       `json:"crawl_run_id"`
+		Analysis          creativeCrawlAnalysisSummary `json:"analysis"`
+		CreativeMaterials creativeImportSummary        `json:"creative_materials"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&response); err != nil {
+		t.Fatal(err)
+	}
+	if response.CrawlRunID == "" || response.CreativeMaterials.ImportedCount != 2 || response.Analysis != (creativeCrawlAnalysisSummary{Requested: 2, Queued: 2}) {
+		t.Fatalf("crawl response = %#v", response)
+	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(t.Context(), `DELETE FROM agent_task_queue WHERE trigger_evidence_ref_id = $1`, response.CrawlRunID)
+		_, _ = testPool.Exec(t.Context(), `DELETE FROM creative_source_analysis WHERE trigger_evidence_ref_id = $1`, response.CrawlRunID)
+		_, _ = testPool.Exec(t.Context(), `
+WITH removed_candidates AS (
+  DELETE FROM creative_material_crawl_run_candidate
+  WHERE run_id = $1
+  RETURNING candidate_id
+)
+DELETE FROM creative_material_candidate
+WHERE id IN (SELECT candidate_id FROM removed_candidates)
+`, response.CrawlRunID)
+		_, _ = testPool.Exec(t.Context(), `DELETE FROM creative_material_crawl_run WHERE id = $1`, response.CrawlRunID)
+	})
+	var queued, pending int
+	if err := testPool.QueryRow(t.Context(), `
+SELECT
+  count(*) FILTER (WHERE task.status IN ('queued', 'dispatched', 'running')),
+  count(*) FILTER (WHERE rc.analysis_status = 'pending')
+FROM creative_material_crawl_run_candidate rc
+LEFT JOIN agent_task_queue task
+  ON task.trigger_evidence_kind = 'creative_crawl_run_analysis'
+ AND task.trigger_evidence_ref_id = rc.run_id
+ AND task.context->>'candidate_id' = rc.candidate_id::text
+WHERE rc.run_id = $1
+`, response.CrawlRunID).Scan(&queued, &pending); err != nil {
+		t.Fatal(err)
+	}
+	if queued != 2 || pending != 2 {
+		t.Fatalf("crawl fanout state queued=%d pending=%d", queued, pending)
+	}
 }
 
 func TestWriteCredentialBrokerErrorClassifiesWorkerFailures(t *testing.T) {

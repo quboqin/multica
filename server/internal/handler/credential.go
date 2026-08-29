@@ -467,6 +467,9 @@ func (h *Handler) RunCredentialCrawl(w http.ResponseWriter, r *http.Request) {
 	if err := h.recordCreativeMaterialCrawlStrategyMemory(r.Context(), workspaceID, strategyProjectID, req.ConnectorID, req.Capability, result.Raw, importSummary.RunID); err != nil {
 		slog.Warn("credential crawl strategy memory update failed", append(logger.RequestAttrs(r), "error", err, "issue_id", req.IssueID)...)
 	}
+	analysis := h.enqueueCrawledMaterialReferenceAnalyses(
+		r.Context(), workspaceID, requestingUserID, req.ConnectorID, importSummary.ImportedCandidateIDs,
+	)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"status":             result.Status,
 		"downloaded":         result.Downloaded,
@@ -475,8 +478,39 @@ func (h *Handler) RunCredentialCrawl(w http.ResponseWriter, r *http.Request) {
 		"raw":                result.Raw,
 		"crawl_run_id":       firstNonEmpty(crawlRunID, importSummary.RunID),
 		"analysis_agent_id":  creativeCrawlAnalysisAgentID(req.Params),
+		"analysis":           analysis,
 		"creative_materials": importSummary,
 	})
+}
+
+type creativeCrawlAnalysisSummary struct {
+	Requested int `json:"requested"`
+	Queued    int `json:"queued"`
+	Failed    int `json:"failed"`
+}
+
+func (h *Handler) enqueueCrawledMaterialReferenceAnalyses(
+	ctx context.Context,
+	workspaceID, userID pgtype.UUID,
+	connectorID string,
+	candidateIDs []string,
+) creativeCrawlAnalysisSummary {
+	summary := creativeCrawlAnalysisSummary{Requested: len(candidateIDs)}
+	for _, candidateRaw := range candidateIDs {
+		candidateID, err := uuid.Parse(strings.TrimSpace(candidateRaw))
+		if err != nil {
+			summary.Failed++
+			continue
+		}
+		result := h.enqueueManualReferenceAnalysis(ctx, workspaceID, userID, pgtype.UUID{Bytes: candidateID, Valid: true}, connectorID, false)
+		if result.Action == "queued" || result.Action == "already_queued" || result.Action == "already_completed" {
+			summary.Queued++
+			continue
+		}
+		summary.Failed++
+		slog.Warn("crawl material reference analysis was not queued", "candidate_id", candidateRaw, "crawl_run_id", result.CrawlRunID, "warning", result.Warning)
+	}
+	return summary
 }
 
 func creativeCrawlAnalysisAgentID(params json.RawMessage) string {
