@@ -12,6 +12,8 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const creativeFactoryMaterialSearchBudgetMS = 8 * 60 * 1000
+
 // prepareCreativeFactoryCollectionParams resolves all workspace-owned values
 // before a connector is invoked. The connector request is the only mutable
 // boundary, so an old AutoPilot description cannot select another workspace's
@@ -44,12 +46,27 @@ func (h *Handler) prepareCreativeFactoryCollectionParams(ctx context.Context, wo
 			root["limit"] = target
 		}
 	}
+	// Credential crawls are currently a synchronous API request. Keep the
+	// browser search below the public request deadline so imports can finish.
+	root["material_search_budget_ms"] = boundedCreativeFactoryMaterialSearchBudget(root)
 	root["analysis_agent_id"] = uuidToString(agent.ID)
 	encoded, err := json.Marshal(root)
 	if err != nil {
 		return nil, err
 	}
 	return encoded, nil
+}
+
+func boundedCreativeFactoryMaterialSearchBudget(root map[string]any) int {
+	for _, key := range []string{"material_search_budget_ms", "crawl_budget_ms"} {
+		if requested := positiveCreativeFactoryCollectionTarget(root[key]); requested > 0 {
+			if requested < creativeFactoryMaterialSearchBudgetMS {
+				return requested
+			}
+			break
+		}
+	}
+	return creativeFactoryMaterialSearchBudgetMS
 }
 
 func capCreativeFactoryMaterials(materials []creativeMaterialInput, params json.RawMessage) []creativeMaterialInput {

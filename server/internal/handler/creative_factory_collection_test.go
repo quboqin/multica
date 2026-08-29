@@ -42,6 +42,18 @@ func TestCreativeFactoryCollectionTargetAcceptsOutputAliases(t *testing.T) {
 	}
 }
 
+func TestCreativeFactoryMaterialSearchBudgetLeavesRequestCompletionHeadroom(t *testing.T) {
+	if got := boundedCreativeFactoryMaterialSearchBudget(map[string]any{}); got != creativeFactoryMaterialSearchBudgetMS {
+		t.Fatalf("default budget = %d, want %d", got, creativeFactoryMaterialSearchBudgetMS)
+	}
+	if got := boundedCreativeFactoryMaterialSearchBudget(map[string]any{"crawl_budget_ms": 90_000}); got != 90_000 {
+		t.Fatalf("short caller budget = %d, want 90000", got)
+	}
+	if got := boundedCreativeFactoryMaterialSearchBudget(map[string]any{"material_search_budget_ms": 12 * 60 * 1000}); got != creativeFactoryMaterialSearchBudgetMS {
+		t.Fatalf("long caller budget = %d, want %d", got, creativeFactoryMaterialSearchBudgetMS)
+	}
+}
+
 func TestCreativeFactoryCollectionParamsHasAgent(t *testing.T) {
 	params := json.RawMessage(`{"analysis_agent_id":"agent-1"}`)
 	if !creativeFactoryCollectionParamsHasAgent(params, "agent-1") {
