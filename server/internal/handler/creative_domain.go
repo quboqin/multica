@@ -4451,7 +4451,31 @@ func decodeCreativeOrderQCInput(raw json.RawMessage) (creativeOrderQCInput, erro
 	if len(raw) == 0 || json.Unmarshal(raw, &envelope) != nil || envelope == nil {
 		return creativeOrderQCInput{}, errors.New("invalid creative order QC report")
 	}
-	encoded, err := json.Marshal(envelope)
+	// The task CLI may wrap qc-report.json in {"report": ...}. Keep the
+	// request-scoped identifiers from the outer envelope, but otherwise accept
+	// the same direct report shape as the API. qc_status is the read-model name
+	// exposed by order responses and is equivalent to the write-side status.
+	report := envelope
+	if rawReport, hasReport := envelope["report"]; hasReport {
+		var nested map[string]json.RawMessage
+		if err := json.Unmarshal(rawReport, &nested); err != nil || nested == nil {
+			return creativeOrderQCInput{}, errors.New("invalid creative order QC report")
+		}
+		report = nested
+		for _, key := range []string{"variant_id", "lane", "revision", "attempt", "status", "qc_status", "trigger_evidence_kind", "trigger_evidence_ref_id"} {
+			if _, present := report[key]; !present {
+				if value, exists := envelope[key]; exists {
+					report[key] = value
+				}
+			}
+		}
+	}
+	if _, hasStatus := report["status"]; !hasStatus {
+		if qcStatus, exists := report["qc_status"]; exists {
+			report["status"] = qcStatus
+		}
+	}
+	encoded, err := json.Marshal(report)
 	if err != nil {
 		return creativeOrderQCInput{}, errors.New("invalid creative order QC report")
 	}
@@ -4459,7 +4483,7 @@ func decodeCreativeOrderQCInput(raw json.RawMessage) (creativeOrderQCInput, erro
 	if err := json.Unmarshal(encoded, &input); err != nil {
 		return creativeOrderQCInput{}, errors.New("invalid creative order QC report")
 	}
-	if _, hasFindings := envelope["findings"]; !hasFindings {
+	if _, hasFindings := report["findings"]; !hasFindings {
 		input.Findings = encoded
 	}
 	return input, nil

@@ -4200,6 +4200,30 @@ func TestDecodeCreativeOrderQCInputAcceptsDirectReportShape(t *testing.T) {
 	}
 }
 
+func TestDecodeCreativeOrderQCInputAcceptsWrappedReportAndQCStatus(t *testing.T) {
+	input, err := decodeCreativeOrderQCInput(json.RawMessage(`{
+		"variant_id":"2f8f9b6b-2a4c-4f4e-bf0d-0b4b1b2aa111",
+		"lane":"visual",
+		"revision":1,
+		"report":{
+			"qc_status":"failed",
+			"blocking_failures":[{"code":"actual_prime_obstruction","size_key":"800x1000","diagnosis":"800x1000：正文与 Prime 冲突。"}]
+		}
+	}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if input.Status != "failed" || input.Lane != "visual" || input.VariantID == "" {
+		t.Fatalf("wrapped QC report = %#v", input)
+	}
+	if !bytes.Contains(input.Findings, []byte(`"blocking_failures"`)) {
+		t.Fatalf("wrapped QC findings = %s", input.Findings)
+	}
+	if _, err := normalizeCreativeOrderQC(input); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestExpectedCreativeVariantSizesDependOnOrderMode(t *testing.T) {
 	standard, err := expectedCreativeVariantSizes("manual", json.RawMessage(`{"expected_sizes":["1080x1080"]}`), json.RawMessage(`{}`))
 	if err != nil {
