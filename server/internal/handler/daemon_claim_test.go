@@ -1,8 +1,11 @@
 package handler
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
-func TestPrepareCreativeDomainTaskClaimUsesDirectEnvelope(t *testing.T) {
+func TestPrepareCreativeDomainTaskClaimKeepsLegacyPreparationEnvelope(t *testing.T) {
 	t.Parallel()
 
 	trigger := "comment-1"
@@ -21,18 +24,26 @@ func TestPrepareCreativeDomainTaskClaimUsesDirectEnvelope(t *testing.T) {
 		TriggerAuthorName:     "tester",
 		NewCommentCount:       2,
 		NewCommentsSince:      "2026-08-29T00:00:00Z",
+		Agent: &TaskAgentData{
+			Instructions: "base instructions",
+		},
 	}
 
 	prepareCreativeDomainTaskClaim(resp)
 
-	if resp.IssueID != "" || resp.PriorSessionID != "" || resp.PriorWorkDir != "" {
-		t.Fatalf("creative claim retained root envelope: %#v", resp)
+	if resp.IssueID != "root-issue" || resp.PriorSessionID != "" || resp.PriorWorkDir != "" {
+		t.Fatalf("creative claim did not retain only the legacy preparation envelope: %#v", resp)
 	}
 	if resp.TriggerCommentID != nil || resp.TriggerSummary != nil || resp.TriggerThreadID != "" || resp.TriggerCommentContent != "" || resp.NewCommentCount != 0 {
 		t.Fatalf("creative claim retained issue-trigger context: %#v", resp)
 	}
 	if resp.WorkspaceID != "workspace-1" {
 		t.Fatalf("workspace changed: %q", resp.WorkspaceID)
+	}
+	if !strings.Contains(resp.Agent.Instructions, "workflow 为 `creative_candidate_selection`") ||
+		!strings.Contains(resp.Agent.Instructions, "candidate-select") ||
+		!strings.Contains(resp.Agent.Instructions, "根工单仅用于审计和启动兼容") {
+		t.Fatalf("creative claim instructions did not pin task workflow: %q", resp.Agent.Instructions)
 	}
 }
 

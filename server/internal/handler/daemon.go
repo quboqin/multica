@@ -1763,15 +1763,15 @@ func (h *Handler) ClaimTaskByRuntime(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"task": resp})
 }
 
-// prepareCreativeDomainTaskClaim makes a structured creative task direct for
-// the daemon. The linked Issue remains the server-side audit envelope, but
-// is not execution context: legacy daemons otherwise prompt the agent to
-// infer a workflow from the root Issue metadata instead of task.context.
+// prepareCreativeDomainTaskClaim clears stale issue-session context and adds
+// an execution supplement for structured creative tasks. The IssueID itself
+// remains populated because deployed legacy daemons use it while preparing a
+// working directory. The supplement makes task.context authoritative so that
+// compatibility does not let the root Issue metadata select the workflow.
 func prepareCreativeDomainTaskClaim(resp *AgentTaskResponse) {
 	if resp == nil || !isCreativeDomainTaskContext(resp.Context) {
 		return
 	}
-	resp.IssueID = ""
 	resp.PriorSessionID = ""
 	resp.PriorWorkDir = ""
 	resp.TriggerCommentID = nil
@@ -1782,6 +1782,41 @@ func prepareCreativeDomainTaskClaim(resp *AgentTaskResponse) {
 	resp.TriggerAuthorName = ""
 	resp.NewCommentCount = 0
 	resp.NewCommentsSince = ""
+	if resp.Agent != nil {
+		resp.Agent.Instructions = strings.TrimSpace(resp.Agent.Instructions + "\n\n" + creativeDomainTaskClaimInstructions(resp.Context))
+	}
+}
+
+type creativeDomainTaskClaimContext struct {
+	Type                string `json:"type"`
+	Workflow            string `json:"workflow"`
+	CreativeOrderID     string `json:"creative_order_id"`
+	CreativeOrderItemID string `json:"creative_order_item_id"`
+}
+
+func creativeDomainTaskClaimInstructions(raw json.RawMessage) string {
+	var taskContext creativeDomainTaskClaimContext
+	if json.Unmarshal(raw, &taskContext) != nil || taskContext.Type != "creative_domain_task" {
+		return ""
+	}
+
+	workflow := strings.TrimSpace(taskContext.Workflow)
+	var b strings.Builder
+	b.WriteString("## 当前创意任务的强制执行范围\n\n")
+	b.WriteString("本次任务的唯一流程依据是 `MULTICA_TASK_ID` 对应的 Task Context；当前 workflow 为 `")
+	b.WriteString(workflow)
+	b.WriteString("`。根工单仅用于审计和启动兼容，根工单的 metadata、标题、评论和历史会话都不能改变本次 workflow。\n\n")
+	b.WriteString("不得根据根工单推断流程；先读取 `.agent_context/issue_context.md` 的 Task Context，只执行其中绑定的流程。\n")
+
+	if workflow == creativeCandidateSelectionWorkflow {
+		b.WriteString("这是候选比较任务。完成比较后，必须且只能通过原子候选晋级接口提交结果；接口成功前不得报告完成。\n")
+		if orderID := strings.TrimSpace(taskContext.CreativeOrderID); orderID != "" && strings.TrimSpace(taskContext.CreativeOrderItemID) != "" {
+			fmt.Fprintf(&b, "使用 `multica creative order candidate-select %s %s`，提交恰好三条有序 selected_ids，以及其余有序 reserve_ids。\n", orderID, strings.TrimSpace(taskContext.CreativeOrderItemID))
+		} else {
+			b.WriteString("使用 `multica creative order candidate-select <creative_order_id> <creative_order_item_id>`，提交恰好三条有序 selected_ids，以及其余有序 reserve_ids。\n")
+		}
+	}
+	return strings.TrimSpace(b.String())
 }
 
 // trailingUserMessages returns the run of user messages after the last
