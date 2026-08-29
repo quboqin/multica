@@ -2134,27 +2134,50 @@ func creativeVisualModelReworkFindings(findings json.RawMessage, expectedSizes [
 	for _, size := range expectedSizes {
 		expected[size] = struct{}{}
 	}
-	seen := make(map[string]struct{}, len(report.BlockingFailures))
+	// A visual report can contain independent failures for multiple sizes. A
+	// non-reworkable problem must keep its own size out of model rework, but it
+	// must not suppress a precise Prime fix for another size.
+	eligibleBySize := make(map[string]creativeVisualModelReworkFinding, len(report.BlockingFailures))
+	blockedSizes := make(map[string]struct{}, len(report.BlockingFailures))
 	for index := range report.BlockingFailures {
 		finding := &report.BlockingFailures[index]
 		finding.Code = strings.TrimSpace(finding.Code)
 		finding.SizeKey = strings.TrimSpace(finding.SizeKey)
 		finding.Diagnosis = strings.TrimSpace(finding.Diagnosis)
-		if finding.Code != "actual_prime_obstruction" && finding.Code != "official_prime_text_unreadable" {
-			return nil, errors.New("visual QC finding is not eligible for model rework")
+		isEligibleCode := finding.Code == "actual_prime_obstruction" || finding.Code == "official_prime_text_unreadable"
+		if !isEligibleCode {
+			if _, ok := expected[finding.SizeKey]; ok {
+				blockedSizes[finding.SizeKey] = struct{}{}
+			}
+			continue
 		}
-		if _, ok := expected[finding.SizeKey]; !ok {
-			return nil, errors.New("visual QC model-rework finding has an unexpected size")
+		if _, ok := expected[finding.SizeKey]; !ok || !validCreativeVisualModelReworkDiagnosis(finding.Code, finding.SizeKey, finding.Diagnosis) {
+			blockedSizes[finding.SizeKey] = struct{}{}
+			continue
 		}
-		if _, duplicate := seen[finding.SizeKey]; duplicate {
-			return nil, errors.New("visual QC model-rework findings must have one finding per size")
+		if _, duplicate := eligibleBySize[finding.SizeKey]; duplicate {
+			blockedSizes[finding.SizeKey] = struct{}{}
+			continue
 		}
-		seen[finding.SizeKey] = struct{}{}
-		if !validCreativeVisualModelReworkDiagnosis(finding.Code, finding.SizeKey, finding.Diagnosis) {
-			return nil, errors.New("visual QC model-rework finding has an invalid diagnosis")
-		}
+		eligibleBySize[finding.SizeKey] = *finding
 	}
-	return report.BlockingFailures, nil
+
+	eligible := make([]creativeVisualModelReworkFinding, 0, len(eligibleBySize))
+	for _, finding := range report.BlockingFailures {
+		if _, blocked := blockedSizes[finding.SizeKey]; blocked {
+			continue
+		}
+		selected, ok := eligibleBySize[finding.SizeKey]
+		if !ok || selected.Code != finding.Code || selected.Diagnosis != finding.Diagnosis {
+			continue
+		}
+		eligible = append(eligible, selected)
+		delete(eligibleBySize, finding.SizeKey)
+	}
+	if len(eligible) == 0 {
+		return nil, errors.New("visual QC has no safely eligible model-rework findings")
+	}
+	return eligible, nil
 }
 
 func validCreativeVisualModelReworkDiagnosis(code, sizeKey, diagnosis string) bool {

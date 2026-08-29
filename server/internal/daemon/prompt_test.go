@@ -1,9 +1,55 @@
 package daemon
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 )
+
+func TestBuildPromptCreativeCandidateSelectionUsesTaskContext(t *testing.T) {
+	task := Task{
+		ID:      "task-current",
+		IssueID: "root-issue-with-creative-order-metadata",
+		Context: json.RawMessage(`{
+  "type":"creative_domain_task",
+  "workflow":"creative_candidate_selection",
+  "creative_order_id":"order-current",
+  "creative_order_item_id":"item-current"
+}`),
+	}
+
+	out := BuildPrompt(task, "codex")
+	for _, expected := range []string{
+		"MULTICA_TASK_ID=task-current",
+		"authoritative workflow is `creative_candidate_selection`",
+		"root Issue may describe `creative_order`",
+		"candidate-select order-current item-current",
+		"exactly three ordered `selected_ids`",
+	} {
+		if !strings.Contains(out, expected) {
+			t.Fatalf("creative candidate prompt missing %q:\n%s", expected, out)
+		}
+	}
+	if strings.Contains(out, "Start by running `multica issue get") {
+		t.Fatalf("creative candidate prompt fell back to root issue workflow discovery:\n%s", out)
+	}
+}
+
+func TestBuildPromptCreativeDomainWorkflowDoesNotUseRootIssue(t *testing.T) {
+	task := Task{
+		ID:      "task-visual-qc",
+		IssueID: "root-issue-with-creative-order-metadata",
+		Context: json.RawMessage(`{"type":"creative_domain_task","workflow":"creative_qc_visual"}`),
+	}
+
+	out := BuildPrompt(task, "codex")
+	if !strings.Contains(out, "authoritative workflow is `creative_qc_visual`") || !strings.Contains(out, "Do not infer the workflow from the root Issue") {
+		t.Fatalf("creative QC prompt did not pin task workflow:\n%s", out)
+	}
+	if strings.Contains(out, "Start by running `multica issue get") {
+		t.Fatalf("creative QC prompt fell back to root issue workflow discovery:\n%s", out)
+	}
+}
 
 // TestBuildQuickCreatePromptRules locks in the rules that govern how the
 // quick-create agent is allowed to translate raw user input into the issue

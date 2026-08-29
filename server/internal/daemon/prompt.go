@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -17,6 +18,9 @@ import (
 func BuildPrompt(task Task, provider string) string {
 	if task.ChatSessionID != "" {
 		return buildChatPrompt(task)
+	}
+	if creativeTask, ok := parseCreativeDomainTaskContext(task.Context); ok {
+		return buildCreativeDomainTaskPrompt(task, creativeTask)
 	}
 	if task.TriggerCommentID != "" {
 		return buildCommentPrompt(task, provider)
@@ -42,6 +46,45 @@ func buildDirectTaskPrompt(task Task) string {
 	var b strings.Builder
 	b.WriteString("You are executing one direct task for a Multica workspace.\n\n")
 	b.WriteString("Read the structured task context in `.agent_context/issue_context.md` and execute only that item. There is no Issue to update unless the task context explicitly directs an API operation.\n")
+	return b.String()
+}
+
+type creativeDomainTaskPromptContext struct {
+	Type                string `json:"type"`
+	Workflow            string `json:"workflow"`
+	CreativeOrderID     string `json:"creative_order_id"`
+	CreativeOrderItemID string `json:"creative_order_item_id"`
+}
+
+func parseCreativeDomainTaskContext(raw json.RawMessage) (creativeDomainTaskPromptContext, bool) {
+	var context creativeDomainTaskPromptContext
+	if json.Unmarshal(raw, &context) != nil || context.Type != "creative_domain_task" || strings.TrimSpace(context.Workflow) == "" {
+		return creativeDomainTaskPromptContext{}, false
+	}
+	context.Workflow = strings.TrimSpace(context.Workflow)
+	context.CreativeOrderID = strings.TrimSpace(context.CreativeOrderID)
+	context.CreativeOrderItemID = strings.TrimSpace(context.CreativeOrderItemID)
+	return context, true
+}
+
+func buildCreativeDomainTaskPrompt(task Task, context creativeDomainTaskPromptContext) string {
+	var b strings.Builder
+	b.WriteString("You are executing one task-scoped creative workflow for a Multica workspace.\n\n")
+	fmt.Fprintf(&b, "The current task identity is `MULTICA_TASK_ID=%s`. Its authoritative workflow is `%s`, from `.agent_context/issue_context.md` Task Context.\n\n", task.ID, context.Workflow)
+	b.WriteString("Do not infer the workflow from the root Issue, its metadata, title, comments, or prior conversation. A root Issue may describe `creative_order`; it is only the parent envelope and never overrides this task's workflow. Execute only the workflow named above.\n\n")
+
+	if context.Workflow == "creative_candidate_selection" {
+		b.WriteString("This is a candidate comparison task. Inspect only the candidates in this task context, then finish by calling the atomic candidate-selection API through the CLI exactly once. Do not report success before that call returns successfully.\n")
+		if context.CreativeOrderID != "" && context.CreativeOrderItemID != "" {
+			fmt.Fprintf(&b, "Use `multica creative order candidate-select %s %s` with exactly three ordered `selected_ids` and any ordered reserves. The server binds that call to the current MULTICA_TASK_ID and rejects a different workflow, order, or item.\n", context.CreativeOrderID, context.CreativeOrderItemID)
+		} else {
+			b.WriteString("Use `multica creative order candidate-select <creative_order_id> <creative_order_item_id>` with exactly three ordered `selected_ids` and any ordered reserves. The server binds that call to the current MULTICA_TASK_ID and rejects a different workflow, order, or item.\n")
+		}
+		b.WriteString("Do not use `multica issue get` to choose a workflow, and do not complete the task merely after writing a comparison.\n")
+		return b.String()
+	}
+
+	b.WriteString("Read `.agent_context/issue_context.md` and execute the bound Skill for this workflow. Do not use `multica issue get` to choose or replace the task workflow.\n")
 	return b.String()
 }
 

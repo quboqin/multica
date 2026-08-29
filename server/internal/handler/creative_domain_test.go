@@ -3305,6 +3305,25 @@ func TestCreativeVisualModelReworkFindingsAcceptsOnlyFinalVisualDefects(t *testi
 	if err != nil || len(findings) != 2 {
 		t.Fatalf("valid visual findings = %#v, %v", findings, err)
 	}
+	mixedFindings, err := creativeVisualModelReworkFindings(json.RawMessage(`{
+  "blocking_failures": [
+    {"code":"actual_prime_obstruction","size_key":"1200x628","diagnosis":"1200x628：还款表格下沿与底部 Prime 法务文字实际叠压；期望移动到 safe_content_frame 内 y<=566"},
+    {"code":"cross_size_design_dna_mismatch","size_key":"800x1000","diagnosis":"800x1000：与其他尺寸的排版结构不一致"}
+  ]
+}`), expectedSizes)
+	if err != nil || len(mixedFindings) != 1 || mixedFindings[0].SizeKey != "1200x628" {
+		t.Fatalf("mixed-size visual rework findings = %#v, %v", mixedFindings, err)
+	}
+	perSizeFindings, err := creativeVisualModelReworkFindings(json.RawMessage(`{
+  "blocking_failures": [
+    {"code":"actual_prime_obstruction","size_key":"1200x628","diagnosis":"1200x628：还款表格下沿与底部 Prime 法务文字实际叠压；期望移动到 safe_content_frame 内 y<=566"},
+    {"code":"generated_content_missing","size_key":"1200x628","diagnosis":"1200x628：冻结文案缺失"},
+    {"code":"official_prime_text_unreadable","size_key":"800x1000","diagnosis":"800x1000：条款下方深色背景 与 top Prime terms 冲突；期望调整为该组件下方连续、低细节的浅色背景"}
+  ]
+}`), expectedSizes)
+	if err != nil || len(perSizeFindings) != 1 || perSizeFindings[0].SizeKey != "800x1000" {
+		t.Fatalf("same-size blocking visual findings = %#v, %v", perSizeFindings, err)
+	}
 	if _, err := creativeVisualModelReworkFindings(json.RawMessage(`{
   "blocking_failures": [
     {"code":"actual_prime_obstruction","size_key":"1200x628","diagnosis":"1200x628：冻结标题首行进入顶部 Prime 禁区并与 AdaKami Logo 实际重叠；期望移动到 safe_content_frame 内 y>=107。"}
