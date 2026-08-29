@@ -757,6 +757,7 @@ SELECT EXISTS (
     AND task.context->>'variant_id' = $2::text
 	    AND (task.context->>'revision')::integer = $3
     AND task.context->>'production_phase' = $4
+	    AND task.status IN ('queued', 'dispatched', 'running', 'waiting_local_directory', 'completed')
 )
 `, orderItemID, value.VariantID, value.Revision, phase).Scan(&existing); err != nil {
 			return queued, fmt.Errorf("check selected creative production task: %w", err)

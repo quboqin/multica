@@ -985,6 +985,7 @@ func TestSelectedCreativeProductionQueuesOnlyMissingSizesIdempotently(t *testing
 	if len(tasks) != 2 {
 		t.Fatalf("selected missing-size tasks = %d, want 2", len(tasks))
 	}
+	initialTasks := append([]db.AgentTaskQueue(nil), tasks...)
 	var taskCount int
 	if err := testPool.QueryRow(t.Context(), `
 SELECT count(*)
@@ -1020,6 +1021,23 @@ WHERE trigger_evidence_kind = 'creative_order_item_production'
 	}
 	if len(tasks) != 0 {
 		t.Fatalf("selected expansion replay returned %d tasks, want 0", len(tasks))
+	}
+	if _, err := testPool.Exec(t.Context(), `
+UPDATE agent_task_queue
+SET status = CASE WHEN id = $1 THEN 'cancelled' ELSE 'failed' END,
+    completed_at = now()
+WHERE id = ANY($2::uuid[])
+`, initialTasks[0].ID, []pgtype.UUID{initialTasks[0].ID, initialTasks[1].ID}); err != nil {
+		t.Fatal(err)
+	}
+	tasks, err = testHandler.queueSelectedCreativeProductionTasks(
+		t.Context(), parseUUID(fixture.ItemID), creativeOrchestrationCause{RequestedBy: parseUUID(testUserID)}, creativeSelectedExpansionPhase,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tasks) != 2 {
+		t.Fatalf("selected expansion did not rebuild cancelled or failed tasks: %d, want 2", len(tasks))
 	}
 }
 
