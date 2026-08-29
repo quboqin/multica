@@ -348,6 +348,9 @@ describe("CreativeMaterialLibrary contracts", () => {
     expect(effectiveRepaymentPlanSelections(missingNumeric, {}, {
       "pending-numeric:principal-region": { addedScenarios: { "pending-row": selectedPlan } },
     })).toMatchObject([{ id: "pending-row", planKey: "8m-6", principal: 8_000_000 }]);
+    expect(effectiveNumericLayouts(missingNumeric, {
+      "pending-numeric:principal-region": { omitted: true },
+    }).some((layout) => layout.id === "pending-numeric:principal-region")).toBe(false);
   });
 
   it("freezes selected pending numeric blocks as a layout instead of duplicate text replacements", () => {
