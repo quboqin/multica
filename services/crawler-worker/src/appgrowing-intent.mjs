@@ -262,16 +262,28 @@ function normalizeMaterialRuleAliases(value, segment) {
       source.duration_lt_days,
       source.duration_max_days,
       source.max_duration_days,
+      source.duration_max_days_exclusive,
       objectValue(source.duration_days, "lt", "max"),
       objectValue(source.ad_days, "lt", "max"),
+    ));
+    setIfMissing(out, "duration_days_lte", firstDefined(
+      source.duration_max_days_inclusive,
+      objectValue(source.duration_days, "lte"),
+      objectValue(source.ad_days, "lte"),
     ));
   } else if (!isNewMaterials && !hasLowerBound(out, "duration_days")) {
     setIfMissing(out, "duration_days_gt", firstDefined(
       source.duration_gt_days,
       source.duration_min_days,
       source.min_duration_days,
+      source.duration_min_days_exclusive,
       objectValue(source.duration_days, "gt", "min"),
       objectValue(source.ad_days, "gt", "min"),
+    ));
+    setIfMissing(out, "duration_days_gte", firstDefined(
+      source.duration_min_days_inclusive,
+      objectValue(source.duration_days, "gte"),
+      objectValue(source.ad_days, "gte"),
     ));
   }
 

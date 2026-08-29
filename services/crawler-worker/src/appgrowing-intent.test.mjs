@@ -207,3 +207,21 @@ test("normalizes inclusive threshold rules", () => {
   assert.equal(rules.volume_materials.duration_days_gte, 30);
   assert.equal(rules.volume_materials.impression_gte, 10_000_000);
 });
+
+test("normalizes explicit duration threshold aliases from collection agents", () => {
+  const rules = normalizeMaterialRules({
+    new_materials: {
+      ratio: 0.4,
+      duration_max_days_inclusive: 7,
+      impression_gt: 1000,
+    },
+    volume_materials: {
+      ratio: 0.6,
+      duration_min_days_exclusive: 30,
+      impression_gte: 10_000_000,
+    },
+  });
+
+  assert.equal(rules.new_materials.duration_days_lte, 7);
+  assert.equal(rules.volume_materials.duration_days_gt, 30);
+});
