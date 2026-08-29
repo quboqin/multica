@@ -89,6 +89,12 @@ func TestValidateComposableCopyLibraryConfig(t *testing.T) {
 	if err := validateComposableCopyLibraryConfig(json.RawMessage(validComposableCopyLibraryJSON)); err != nil {
 		t.Fatalf("valid config rejected: %v", err)
 	}
+	withoutHeadline := strings.Replace(validComposableCopyLibraryJSON, `    {"id":"fragment-headline","key":"headline","creative_types":["num","repayment_plan"],"role":"headline","text":"Pinjaman Fleksibel","status":"approved"},
+`, "", 1)
+	withoutHeadline = strings.ReplaceAll(withoutHeadline, `"headline":["fragment-headline"],`, "")
+	if err := validateComposableCopyLibraryConfig(json.RawMessage(withoutHeadline)); err != nil {
+		t.Fatalf("headline-optional config rejected: %v", err)
+	}
 	for _, test := range []struct {
 		name        string
 		replaceFrom string

@@ -1009,7 +1009,6 @@ func validateComposableCopyLibraryConfig(raw json.RawMessage) error {
 		text  string
 	}
 	fragments := make(map[string]fragmentContract, len(config.Fragments))
-	approvedHeadlines := 0
 	approvedBenefits := 0
 	for index, fragment := range config.Fragments {
 		id := strings.TrimSpace(fragment.ID)
@@ -1039,9 +1038,6 @@ func validateComposableCopyLibraryConfig(raw json.RawMessage) error {
 			return fmt.Errorf("approved fragment %q must contain final copy, not template variables", fragment.Key)
 		}
 		fragments[id] = fragmentContract{role: fragment.Role, types: types, text: fragment.Text}
-		if fragment.Role == "headline" {
-			approvedHeadlines++
-		}
 		if fragment.Role == "benefit" {
 			approvedBenefits++
 		}
@@ -1116,8 +1112,11 @@ func validateComposableCopyLibraryConfig(raw json.RawMessage) error {
 			return fmt.Errorf("approved recipe %d must use at least one fragment", index+1)
 		}
 	}
-	if approvedHeadlines == 0 || approvedBenefits == 0 {
-		return errors.New("approved headline and benefit fragments are required")
+	// A library may intentionally omit headline copy. Source analyses can then
+	// leave title blocks for a user-confirmed recommendation or one-off edit.
+	// Benefits remain required because they carry reusable product facts.
+	if approvedBenefits == 0 {
+		return errors.New("at least one approved benefit fragment is required")
 	}
 	return nil
 }

@@ -44,6 +44,11 @@ export function ComposableCopyLibraryEditor({ resources, onCreate, onArchive }: 
   const active = resources.find((resource) => resource.id === activeId) ?? resources[0];
   const [draft, setDraft] = useState<CreativeCopyLibraryConfig>(() => parseCreativeCopyLibraryConfig(active?.config ?? {}));
   useEffect(() => { setDraft(parseCreativeCopyLibraryConfig(active?.config ?? {})); }, [active?.id, active?.version]);
+  const publishError = copyLibraryDraftError(draft);
+  const hasUnsavedChanges = Boolean(active && JSON.stringify(draft) !== JSON.stringify(parseCreativeCopyLibraryConfig(active.config ?? {})));
+  const hasUnpublishedDraft = Boolean(active && active.version !== active.published_version);
+  const hasPendingRelease = hasUnsavedChanges || hasUnpublishedDraft;
+  const releaseVersion = active ? active.version + (hasUnsavedChanges ? 1 : 0) : 0;
 
   const save = useMutation({
     mutationFn: () => {
@@ -70,13 +75,14 @@ export function ComposableCopyLibraryEditor({ resources, onCreate, onArchive }: 
   return <div className="grid h-full min-h-0 w-full min-w-0 grid-cols-1 overflow-hidden border md:grid-cols-[240px_minmax(0,1fr)]">
     <aside className="min-h-0 min-w-0 overflow-y-auto border-r bg-muted/10 p-2">
       <div className="flex items-center justify-between px-2 py-2"><span className="text-xs font-semibold">文案库</span><Button size="icon-sm" variant="ghost" title="创建文案库" aria-label="创建文案库" onClick={onCreate}><Plus className="h-4 w-4" /></Button></div>
-      {resources.map((resource) => <button key={resource.id} type="button" onClick={() => setActiveId(resource.id)} className={`w-full border-l-2 px-3 py-3 text-left ${resource.id === active.id ? "border-foreground bg-background" : "border-transparent text-muted-foreground hover:bg-muted"}`}><span className="block truncate text-sm font-medium">{resource.name}</span><span className="mt-1 block text-[11px]">{resource.status === "published" ? "已发布" : "草稿"}</span></button>)}
+      {resources.map((resource) => <button key={resource.id} type="button" onClick={() => setActiveId(resource.id)} className={`w-full border-l-2 px-3 py-3 text-left ${resource.id === active.id ? "border-foreground bg-background" : "border-transparent text-muted-foreground hover:bg-muted"}`}><span className="block truncate text-sm font-medium">{resource.name}</span><span className="mt-1 block text-[11px]">{copyLibraryReleaseLabel(resource)}</span></button>)}
     </aside>
     <main className="min-w-0 overflow-y-auto bg-background">
       <header className="sticky top-0 z-10 flex min-w-0 flex-wrap items-center justify-between gap-3 border-b bg-background px-5 py-4">
-        <div className="min-w-0"><div className="flex flex-wrap items-center gap-2"><h2 className="min-w-0 truncate text-sm font-semibold">{active.name}</h2><Badge variant="outline">{active.status === "published" ? "已发布" : "草稿"}</Badge>{active.published_version > 0 && active.status !== "published" && <Badge variant="secondary">线上已发布</Badge>}</div><p className="mt-1 text-xs text-muted-foreground">模型只会使用这里已审核的文案和还款计划，不会拼变量或计算金额。</p></div>
-        <div className="flex flex-wrap items-center gap-2"><Button size="sm" variant="outline" disabled={save.isPending || publish.isPending} onClick={() => save.mutate()}><Save className="h-4 w-4" />保存草稿</Button><Button size="sm" disabled={save.isPending || publish.isPending} onClick={() => publish.mutate()}><CheckCircle2 className="h-4 w-4" />发布</Button><Button size="icon-sm" variant="ghost" title="归档文案库" aria-label="归档文案库" onClick={() => onArchive(active.id)}><Archive className="h-4 w-4" /></Button></div>
+        <div className="min-w-0"><div className="flex flex-wrap items-center gap-2"><h2 className="min-w-0 truncate text-sm font-semibold">{active.name}</h2><Badge variant="secondary">编辑草稿 v{active.version}</Badge>{hasUnsavedChanges && <Badge variant="outline">未保存编辑</Badge>}{active.published_version > 0 ? <Badge variant="outline">生产生效 v{active.published_version}</Badge> : <Badge variant="outline">尚未发布</Badge>}</div><p className="mt-1 text-xs text-muted-foreground">{hasUnsavedChanges ? `当前编辑尚未保存；发布会生成并生效 v${releaseVersion}。` : hasUnpublishedDraft ? `草稿 v${active.version} 尚未影响生产；发布后会替代当前生产 v${active.published_version}。` : `生产正在使用 v${active.published_version}。`}</p></div>
+        <div className="flex flex-wrap items-center gap-2"><Button size="sm" variant="outline" disabled={save.isPending || publish.isPending || !hasUnsavedChanges} onClick={() => save.mutate()}><Save className="h-4 w-4" />保存草稿</Button><Button size="sm" disabled={save.isPending || publish.isPending || !hasPendingRelease || Boolean(publishError)} onClick={() => publish.mutate()}><CheckCircle2 className="h-4 w-4" />{hasPendingRelease ? `发布 v${releaseVersion} 到生产` : `生产已生效 v${active.published_version}`}</Button><Button size="icon-sm" variant="ghost" title="归档文案库" aria-label="归档文案库" onClick={() => onArchive(active.id)}><Archive className="h-4 w-4" /></Button></div>
       </header>
+      <div className={`border-b px-5 py-2 text-xs ${publishError ? "border-amber-300 bg-amber-50 text-amber-900" : "bg-muted/20 text-muted-foreground"}`} role={publishError ? "alert" : "status"}>{publishError ? `发布检查：${publishError}` : "发布检查通过：主标题按素材需要配置；至少保留一条已审核核心卖点和一条已审核还款计划。"}</div>
       <Tabs defaultValue="copy" className="px-5 py-4">
         <TabsList><TabsTrigger value="copy">投放文案 {draft.fragments.length}</TabsTrigger><TabsTrigger value="repayment">还款计划 {draft.repayment_plan.entries.length}</TabsTrigger></TabsList>
         <TabsContent value="copy"><CopyGroupEditor value={draft.fragments} onChange={(fragments) => setDraft((current) => ({ ...current, fragments }))} /></TabsContent>
@@ -84,6 +90,12 @@ export function ComposableCopyLibraryEditor({ resources, onCreate, onArchive }: 
       </Tabs>
     </main>
   </div>;
+}
+
+function copyLibraryReleaseLabel(resource: CreativeResource): string {
+  if (resource.published_version <= 0) return `草稿 v${resource.version} · 未发布`;
+  if (resource.version !== resource.published_version) return `草稿 v${resource.version} · 生产 v${resource.published_version}`;
+  return `生产已生效 v${resource.published_version}`;
 }
 
 function CopyGroupEditor({ value, onChange }: { value: CreativeCopyFragment[]; onChange: (value: CreativeCopyFragment[]) => void }) {

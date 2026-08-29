@@ -16,6 +16,11 @@ function config(): CreativeCopyLibraryConfig {
 
 describe("business copy library editing", () => {
   it("accepts final copy and approved repayment rows", () => expect(copyLibraryDraftError(config())).toBe(""));
+  it("allows a library without headline copy", () => {
+    const value = config();
+    value.fragments = value.fragments.filter((fragment) => fragment.role !== "headline");
+    expect(copyLibraryDraftError(value)).toBe("");
+  });
   it("blocks template variables in an approved copy", () => {
     const value = config();
     value.fragments[1]!.text = "Limit hingga {{fact.limit.copy_text}}";

@@ -17,7 +17,6 @@ export function copyLibraryDraftError(value: CreativeCopyLibraryConfig): string 
     seen.add(identity);
   }
   const approved = value.fragments.filter((fragment) => fragment.status === "approved");
-  if (!approved.some((fragment) => fragment.role === "headline")) return "投放文案至少需要一个已审核主标题";
   if (!approved.some((fragment) => fragment.role === "benefit")) return "投放文案至少需要一个已审核核心卖点";
   if (approvedEntries.length === 0) return "还款计划至少需要一条已审核的金额和期限组合";
   return "";
