@@ -47,6 +47,21 @@ func TestPrepareCreativeDomainTaskClaimKeepsLegacyPreparationEnvelope(t *testing
 	}
 }
 
+func TestPrepareCreativeDomainTaskClaimRecoversNativeTaskAuditEnvelope(t *testing.T) {
+	t.Parallel()
+
+	resp := &AgentTaskResponse{
+		Context: []byte(`{"type":"creative_domain_task","workflow":"creative_production","issue_id":"root-issue"}`),
+		Agent:   &TaskAgentData{},
+	}
+
+	prepareCreativeDomainTaskClaim(resp)
+
+	if resp.IssueID != "root-issue" {
+		t.Fatalf("native creative task did not recover audit envelope: %#v", resp)
+	}
+}
+
 func TestPrepareCreativeDomainTaskClaimPreservesOrdinaryIssueTask(t *testing.T) {
 	t.Parallel()
 

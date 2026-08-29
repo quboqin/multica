@@ -1764,13 +1764,17 @@ func (h *Handler) ClaimTaskByRuntime(w http.ResponseWriter, r *http.Request) {
 }
 
 // prepareCreativeDomainTaskClaim clears stale issue-session context and adds
-// an execution supplement for structured creative tasks. The IssueID itself
-// remains populated because deployed legacy daemons use it while preparing a
-// working directory. The supplement makes task.context authoritative so that
-// compatibility does not let the root Issue metadata select the workflow.
+// an execution supplement for structured creative tasks. Legacy daemons need
+// an IssueID while preparing a working directory, so native no-Issue tasks
+// recover their audit envelope from verified task.context. The supplement
+// keeps task.context authoritative for workflow selection.
 func prepareCreativeDomainTaskClaim(resp *AgentTaskResponse) {
 	if resp == nil || !isCreativeDomainTaskContext(resp.Context) {
 		return
+	}
+	var taskContext creativeDomainTaskClaimContext
+	if json.Unmarshal(resp.Context, &taskContext) == nil && resp.IssueID == "" {
+		resp.IssueID = strings.TrimSpace(taskContext.IssueID)
 	}
 	resp.PriorSessionID = ""
 	resp.PriorWorkDir = ""
@@ -1792,6 +1796,7 @@ type creativeDomainTaskClaimContext struct {
 	Workflow            string `json:"workflow"`
 	CreativeOrderID     string `json:"creative_order_id"`
 	CreativeOrderItemID string `json:"creative_order_item_id"`
+	IssueID             string `json:"issue_id"`
 }
 
 func creativeDomainTaskClaimInstructions(raw json.RawMessage) string {
