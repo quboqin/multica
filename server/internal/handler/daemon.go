@@ -1757,8 +1757,31 @@ func (h *Handler) ClaimTaskByRuntime(w http.ResponseWriter, r *http.Request) {
 	}
 	resp.AuthToken = tokenStr
 
+	prepareCreativeDomainTaskClaim(&resp)
+
 	slog.Info("task claimed by runtime", "task_id", uuidToString(task.ID), "runtime_id", runtimeID, "agent_id", uuidToString(task.AgentID), "prior_session", resp.PriorSessionID)
 	writeJSON(w, http.StatusOK, map[string]any{"task": resp})
+}
+
+// prepareCreativeDomainTaskClaim makes a structured creative task direct for
+// the daemon. The linked Issue remains the server-side audit envelope, but
+// is not execution context: legacy daemons otherwise prompt the agent to
+// infer a workflow from the root Issue metadata instead of task.context.
+func prepareCreativeDomainTaskClaim(resp *AgentTaskResponse) {
+	if resp == nil || !isCreativeDomainTaskContext(resp.Context) {
+		return
+	}
+	resp.IssueID = ""
+	resp.PriorSessionID = ""
+	resp.PriorWorkDir = ""
+	resp.TriggerCommentID = nil
+	resp.TriggerThreadID = ""
+	resp.TriggerCommentContent = ""
+	resp.TriggerSummary = nil
+	resp.TriggerAuthorType = ""
+	resp.TriggerAuthorName = ""
+	resp.NewCommentCount = 0
+	resp.NewCommentsSince = ""
 }
 
 // trailingUserMessages returns the run of user messages after the last
