@@ -4889,6 +4889,7 @@ WHERE id = $1 AND revision = $2
 			json.RawMessage(inputSnapshot), input.Revision, expectedSizes, task, visualReworkFindings,
 		)
 		if err != nil {
+			slog.Error("queue creative visual rework failed", "order_id", uuidToString(orderID), "variant_id", input.VariantID, "revision", input.Revision, "attempt", input.Attempt, "error", err)
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
