@@ -592,7 +592,7 @@ FROM creative_order WHERE id = $1`, parseUUID(existingID)))
 		writeError(w, http.StatusUnprocessableEntity, err.Error())
 		return
 	}
-	input.InputSnapshot, err = h.freezeCreativeOrderInputAttachments(r.Context(), tx, workspaceID, userID, input.InputSnapshot, input.Items)
+	input.InputSnapshot, err = h.freezeCreativeOrderInputAttachments(r.Context(), tx, workspaceID, input.InputSnapshot, input.Items)
 	if err != nil {
 		var attachmentErr *creativeOrderAttachmentValidationError
 		if errors.As(err, &attachmentErr) {

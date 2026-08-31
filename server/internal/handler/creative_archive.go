@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"strings"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
@@ -112,7 +113,7 @@ func (h *Handler) archiveCreativeMaterial(ctx context.Context, candidate creativ
 		return h.markCreativeArchiveFailed(ctx, candidate, errors.New("creative material has no downloadable asset URL"))
 	}
 	if strings.HasPrefix(sourceURL, "/uploads/") {
-		return h.completeCreativeArchive(ctx, candidate, sourceURL)
+		return h.completeCreativeArchive(ctx, candidate, sourceURL, 0)
 	}
 
 	download, err := h.CreativeAssetDownloader.Fetch(ctx, sourceURL)
@@ -131,20 +132,80 @@ func (h *Handler) archiveCreativeMaterial(ctx context.Context, candidate creativ
 		_ = h.markCreativeArchiveFailed(ctx, candidate, err)
 		return err
 	}
-	return h.completeCreativeArchive(ctx, candidate, archivedURL)
+	return h.completeCreativeArchive(ctx, candidate, archivedURL, int64(len(download.Data)))
 }
 
-func (h *Handler) completeCreativeArchive(ctx context.Context, candidate creativeArchiveCandidate, archivedURL string) error {
-	if _, err := h.DB.Exec(ctx, `
+func (h *Handler) completeCreativeArchive(ctx context.Context, candidate creativeArchiveCandidate, archivedURL string, sizeBytes int64) error {
+	tx, err := h.TxStarter.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+
+	var sourceAttachmentID pgtype.UUID
+	if err := tx.QueryRow(ctx, `
+SELECT source_attachment_id
+FROM creative_material_candidate
+WHERE id = $1 AND workspace_id = $2
+FOR UPDATE
+`, candidate.ID, candidate.WorkspaceID).Scan(&sourceAttachmentID); err != nil {
+		return err
+	}
+	if !sourceAttachmentID.Valid {
+		var uploaderID pgtype.UUID
+		if err := tx.QueryRow(ctx, `
+SELECT user_id
+FROM member
+WHERE workspace_id = $1
+ORDER BY CASE role WHEN 'owner' THEN 0 WHEN 'admin' THEN 1 ELSE 2 END, created_at
+LIMIT 1
+`, candidate.WorkspaceID).Scan(&uploaderID); err != nil {
+			return fmt.Errorf("find creative archive attachment owner: %w", err)
+		}
+		attachmentUUID, err := uuid.NewV7()
+		if err != nil {
+			return fmt.Errorf("create creative archive attachment id: %w", err)
+		}
+		sourceAttachmentID = pgtype.UUID{Bytes: attachmentUUID, Valid: true}
+		if _, err := tx.Exec(ctx, `
+INSERT INTO attachment (id, workspace_id, uploader_type, uploader_id, filename, url, content_type, size_bytes)
+VALUES ($1, $2, 'member', $3, $4, $5, $6, $7)
+`, sourceAttachmentID, candidate.WorkspaceID, uploaderID,
+			creativeCandidateArchiveFilename(archivedURL, candidate.AssetType), archivedURL,
+			creativeArchiveContentType(archivedURL, candidate.AssetType), sizeBytes); err != nil {
+			return fmt.Errorf("register creative archive attachment: %w", err)
+		}
+	}
+	if _, err := tx.Exec(ctx, `
 UPDATE creative_material_candidate
 SET archived_url = $2, archive_status = 'completed', archive_error = '',
-    archived_at = now(), updated_at = now()
-WHERE id = $1
-`, candidate.ID, archivedURL); err != nil {
+    archived_at = now(), source_attachment_id = $3, updated_at = now()
+WHERE id = $1 AND workspace_id = $4
+`, candidate.ID, archivedURL, sourceAttachmentID, candidate.WorkspaceID); err != nil {
+		return err
+	}
+	if err := tx.Commit(ctx); err != nil {
 		return err
 	}
 	h.publishCreativeMaterialsUpdated(candidate.WorkspaceID, pgtype.UUID{}, "system", "")
 	return nil
+}
+
+func creativeCandidateArchiveFilename(archivedURL, assetType string) string {
+	filename := strings.TrimSpace(archivedURL)
+	if slash := strings.LastIndex(filename, "/"); slash >= 0 && slash < len(filename)-1 {
+		filename = filename[slash+1:]
+	}
+	if question := strings.IndexByte(filename, '?'); question >= 0 {
+		filename = filename[:question]
+	}
+	if filename != "" {
+		return filename
+	}
+	if strings.EqualFold(assetType, "video") {
+		return "source.mp4"
+	}
+	return "source.jpg"
 }
 
 func (h *Handler) markCreativeArchiveFailed(ctx context.Context, candidate creativeArchiveCandidate, archiveErr error) error {

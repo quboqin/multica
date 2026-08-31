@@ -40,16 +40,12 @@ func TestNormalizeCreativeImageOperationClassifiesAttachmentFailure(t *testing.T
 	}
 }
 
-func TestBindArchivedCreativeCandidateSourceAttachmentRepairsHistoricalArchive(t *testing.T) {
+func TestCompleteCreativeArchiveCreatesSourceAttachment(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
 	}
 	handler := *testHandler
-	store := &mockStorage{}
-	handler.Storage = store
-	const key = "creative-materials/historical/source.jpeg"
-	const archivedURL = "https://cdn.example.com/" + key
-	store.put(key, []byte("archived source"))
+	const archivedURL = "https://cdn.example.com/creative-materials/historical/source.jpeg"
 
 	ctx := t.Context()
 	tx, err := testPool.Begin(ctx)
@@ -62,18 +58,22 @@ func TestBindArchivedCreativeCandidateSourceAttachmentRepairsHistoricalArchive(t
 INSERT INTO creative_material_candidate (
   workspace_id, connector_id, dedupe_key, title, asset_type, archived_url, archive_status, raw
 )
-VALUES ($1, 'test', $2, 'Historical archive', 'image', $3, 'completed', '{}'::jsonb)
+VALUES ($1, 'test', $2, 'Archived source', 'image', '', 'running', '{}'::jsonb)
 RETURNING id::text
-`, testWorkspaceID, "historical-source-attachment-"+testWorkspaceID, archivedURL).Scan(&candidateID); err != nil {
-		t.Fatal(err)
-	}
-	attachmentID, err := handler.bindArchivedCreativeCandidateSourceAttachment(
-		ctx, tx, parseUUID(testWorkspaceID), parseUUID(testUserID), parseUUID(candidateID), archivedURL, "completed", "image",
-	)
-	if err != nil {
+`, testWorkspaceID, "archive-source-attachment-"+testWorkspaceID).Scan(&candidateID); err != nil {
 		t.Fatal(err)
 	}
 	if err := tx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := handler.completeCreativeArchive(ctx, creativeArchiveCandidate{
+		ID: parseUUID(candidateID), WorkspaceID: parseUUID(testWorkspaceID), AssetType: "image",
+	}, archivedURL, 17); err != nil {
+		t.Fatal(err)
+	}
+
+	var attachmentID string
+	if err := testPool.QueryRow(ctx, `SELECT source_attachment_id::text FROM creative_material_candidate WHERE id = $1`, candidateID).Scan(&attachmentID); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
@@ -91,7 +91,7 @@ WHERE c.id = $1
 `, candidateID).Scan(&boundID, &attachmentURL, &filename, &contentType, &sizeBytes); err != nil {
 		t.Fatal(err)
 	}
-	if boundID != uuidToString(attachmentID) || attachmentURL != archivedURL || filename != "source.jpeg" || contentType != "image/jpeg" || sizeBytes != int64(len("archived source")) {
+	if boundID != attachmentID || attachmentURL != archivedURL || filename != "source.jpeg" || contentType != "image/jpeg" || sizeBytes != 17 {
 		t.Fatalf("bound source = id=%q url=%q filename=%q content_type=%q bytes=%d", boundID, attachmentURL, filename, contentType, sizeBytes)
 	}
 }
