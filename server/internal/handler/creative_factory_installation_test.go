@@ -171,7 +171,7 @@ func TestCreativeFactoryImageEditingUsesOneAgentWithWorkflowSkills(t *testing.T)
 			t.Errorf("merged image-edit Agent instructions missing %q branch", workflow)
 		}
 	}
-	for _, required := range []string{"creative_production", "creative_direct_edit", "candidate_state", "DesignDNA", "多目标同时验收", "绑定的素材_技能_出图"} {
+	for _, required := range []string{"creative_production", "creative_direct_edit", "candidate_state", "DesignDNA", "多目标同时验收", "绑定的素材_技能_出图", "attachment_snapshot", "auth_expired"} {
 		if !strings.Contains(imageEditor.Instructions, required) {
 			t.Errorf("merged image-edit Agent instructions missing %q", required)
 		}
@@ -268,14 +268,15 @@ func TestCreativeFactoryCreativeContractTemplatesStayInSync(t *testing.T) {
 	}
 	for _, value := range []string{
 		"capability = 'generation_plan'; version = 40",
-		"capability = 'image_edit'; version = 110",
+		"capability = 'image_edit'; version = 111",
 		"capability = 'prime_compose'; version = 6",
 		"capability = 'direct_image_edit'; version = 30",
-		"capability = 'quality_control'; version = 42",
+		"capability = 'quality_control'; version = 43",
 		"capability = 'creative_leadership'; version = 51",
 		"初始 direct_edit 由平台原子创建 revision 和 task，Leader 只恢复领域状态确认缺失的当前 revision task",
 		"creative_candidate_selection",
 		"写真实 error_code/error_message 并让当前 task 失败；兄弟对象继续",
+		"qc-finalize 瞬态失败保留报告并结束当前任务",
 	} {
 		if !strings.Contains(string(bootstrap), value) {
 			t.Errorf("bootstrap contract missing %q", value)

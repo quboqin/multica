@@ -940,6 +940,7 @@ export type NumericLayoutDraft = {
   removedScenarioIds?: string[];
   addedScenarios?: Record<string, RepaymentPlanChoice>;
   omitted?: boolean;
+  removedSourceBlockIds?: string[];
 };
 
 export type AppUIReferenceChoice = {
@@ -1615,6 +1616,40 @@ function CreativeOrderDraft({ candidates, analyses, deselecting, onDeselect, onC
       },
     };
   });
+  const setNumericReplacementChoice = (candidateId: string, blockId: string, text: string, source: ReplacementSourceChoice) => setDrafts((current) => {
+    const draft = current[candidateId];
+    if (!draft) return current;
+    const adaptation = preparedPreAdaptation(completedAnalyses.get(candidateId), marketPack, copyLibrary);
+    const numericLayoutDrafts = { ...(draft.numericLayoutDrafts ?? {}) };
+    if (adaptation?.status === "completed") {
+      for (const layout of effectiveNumericLayouts(adaptation, numericLayoutDrafts).filter((item) => item.sourceBlockIds.includes(blockId))) {
+        const layoutDraft = numericLayoutDrafts[layout.id] ?? {};
+        const removedSourceBlockIDs = new Set((layoutDraft.removedSourceBlockIds ?? []).map((value) => value.trim()).filter(Boolean));
+        removedSourceBlockIDs.add(blockId);
+        const nextLayoutDraft: NumericLayoutDraft = {
+          ...layoutDraft,
+          removedSourceBlockIds: [...removedSourceBlockIDs],
+        };
+        if (layout.sourceBlockIds.length === 1) {
+          nextLayoutDraft.removedScenarioIds = Array.from(new Set([
+            ...(layoutDraft.removedScenarioIds ?? []),
+            ...layout.scenarioIds,
+          ]));
+          nextLayoutDraft.addedScenarios = {};
+        }
+        numericLayoutDrafts[layout.id] = nextLayoutDraft;
+      }
+    }
+    return {
+      ...current,
+      [candidateId]: {
+        ...draft,
+        textOverrides: { ...draft.textOverrides, [blockId]: text },
+        replacementSources: { ...(draft.replacementSources ?? {}), [blockId]: source },
+        numericLayoutDrafts,
+      },
+    };
+  });
   const setRepaymentPlanChoice = (candidateId: string, scenarioId: string, plan: RepaymentPlanChoice, original: PreparedRepaymentPlanSelection) => setDrafts((current) => {
     const draft = current[candidateId];
     if (!draft) return current;
@@ -1826,7 +1861,7 @@ function CreativeOrderDraft({ candidates, analyses, deselecting, onDeselect, onC
     {activeCandidate && <article key={activeCandidate.id} className="min-w-0 space-y-4 p-4" data-testid="creative-order-active-editor" data-candidate-id={activeCandidate.id}>
       <div className="min-w-0 border-b border-l-2 border-emerald-600 pb-4 pl-3"><div className="flex flex-wrap items-center gap-2"><Sparkles className="h-4 w-4 text-emerald-700" /><p className="break-words text-sm font-medium">{activeAnalysis?.summary || "素材分析中"}</p><span className="font-mono text-[10px] text-muted-foreground">素材 ID {activeCandidate.id.slice(0, 8)}</span></div>{activeAnalysis && <AnalysisHighlights analysis={activeAnalysis} adaptation={activePreAdaptation} />}{activePreAdaptation ? <PreAdaptationSummary adaptation={activePreAdaptation} /> : activeReadiness === "analyzing" ? <p className="mt-2 text-xs text-amber-700">{MATERIAL_ANALYSIS_RUNNING_MESSAGE}</p> : <p className="mt-2 text-xs text-destructive">素材分析未完成，暂时不能提交出图。</p>}</div>
       <div className="min-w-0 space-y-4">
-         {activeAnalysisNeedsVisualUpgrade ? <div role="alert" className="space-y-3 border border-amber-300 bg-amber-50/50 px-3 py-3 text-xs text-amber-900"><p className="font-medium">这张素材需要重新分析后才能提交。</p><p>重新分析会刷新画面文字区域、业务信息和出图配置。</p><Button size="sm" disabled={retryingSourceAnalysis} onClick={() => onRetrySourceAnalysis(activeCandidate.id)}><RefreshCw className={`h-4 w-4 ${retryingSourceAnalysis ? "animate-spin" : ""}`} />{retryingSourceAnalysis ? "正在重新分析" : "重新分析"}</Button></div> : activePreAdaptation?.status === "completed" && activeDraft ? <TextReplacementPlan sourceImage={activeSource} sourceImageAlt={activeCandidate.title || activeCandidate.competitor} adaptation={activePreAdaptation} copyLibrary={copyLibrary} appUIReferences={appUIReferences} appUIReference={activeDraft.appUIReference ?? null} appUIReferencesLoading={marketFiles.isLoading} overrides={activeDraft.textOverrides} replacementSources={activeDraft.replacementSources ?? {}} repaymentPlanOverrides={activeDraft.repaymentPlanOverrides ?? {}} numericLayoutDrafts={activeDraft.numericLayoutDrafts ?? {}} repaymentPlanOptions={repaymentPlanOptions} visualDirection={activeDraft.visualDirection} onVisualDirectionChange={(value) => setDraft(activeCandidate.id, { visualDirection: value })} onAppUIReferenceChange={(value) => setDraft(activeCandidate.id, { appUIReference: value })} onOpenCopyLibrary={onOpenCopyLibrary} onRetrySourceAnalysis={() => onRetrySourceAnalysis(activeCandidate.id)} retryingSourceAnalysis={retryingSourceAnalysis} onChooseReplacement={(blockId, value, source) => setReplacementChoice(activeCandidate.id, blockId, value, source)} onChooseRepaymentPlan={(scenarioId, plan, original) => setRepaymentPlanChoice(activeCandidate.id, scenarioId, plan, original)} onAddRepaymentPlan={(layoutId, plan) => addRepaymentPlanRow(activeCandidate.id, layoutId, plan)} onRemoveRepaymentPlan={(layoutId, scenarioId) => removeRepaymentPlanRow(activeCandidate.id, layoutId, scenarioId)} onOmitNumericLayout={(layoutId) => omitPendingNumericLayout(activeCandidate.id, layoutId)} /> : activeReadiness === "unavailable" ? <div role="status" className="space-y-2 border border-slate-300 bg-slate-50 px-3 py-3 text-xs text-slate-700"><p className="font-medium">这张素材没有可配置的原图文案。</p><p>平台已保留分析结果，不会继续重试，也不会把它加入出图配置；可选择其他有可编辑文案的素材。</p></div> : activeReadiness === "analyzing" ? <div role="status" className="flex items-start gap-2 border border-amber-300 bg-amber-50/50 px-3 py-3 text-xs text-amber-900"><LoaderCircle className="mt-0.5 h-4 w-4 shrink-0 animate-spin" /><div className="min-w-0 flex-1"><p className="font-medium">{MATERIAL_ANALYSIS_RUNNING_MESSAGE}</p><p className="mt-1 text-amber-800">{MATERIAL_ANALYSIS_RUNNING_DETAIL}</p></div><Button size="sm" variant="outline" disabled={retryingSourceAnalysis} onClick={() => onRetrySourceAnalysis(activeCandidate.id)}><RefreshCw className={`h-4 w-4 ${retryingSourceAnalysis ? "animate-spin" : ""}`} />{retryingSourceAnalysis ? "正在重新分析" : "重新分析"}</Button></div> : activeReadiness === "manual_required" ? <div role="alert" className="space-y-2 border border-amber-300 bg-amber-50/50 px-3 py-3 text-xs text-amber-900"><p className="font-medium">预适配已重试一次仍未通过，需人工确认文案与数值映射。</p><p className="text-amber-800">这张素材不会进入可用素材，也不会继续自动重试。</p></div> : <div role="alert" className="space-y-3 border border-amber-300 bg-amber-50/50 px-3 py-3 text-xs text-amber-800"><p>{!marketPack ? "当前工作区尚未发布唯一市场配置，素材分析暂不可用。" : !copyLibrary ? "当前市场配置没有绑定已发布文案库，素材分析暂不可用。" : "本图尚未按当前市场配置完成分析，不会替换为泛文案。"}</p>{activeAnalysis && <Button size="sm" variant="outline" disabled={retryingSourceAnalysis} onClick={() => onRetrySourceAnalysis(activeCandidate.id)}><RefreshCw className={`h-4 w-4 ${retryingSourceAnalysis ? "animate-spin" : ""}`} />{retryingSourceAnalysis ? "正在重新分析" : "重新分析"}</Button>}</div>}
+    {activeAnalysisNeedsVisualUpgrade ? <div role="alert" className="space-y-3 border border-amber-300 bg-amber-50/50 px-3 py-3 text-xs text-amber-900"><p className="font-medium">这张素材需要重新分析后才能提交。</p><p>重新分析会刷新画面文字区域、业务信息和出图配置。</p><Button size="sm" disabled={retryingSourceAnalysis} onClick={() => onRetrySourceAnalysis(activeCandidate.id)}><RefreshCw className={`h-4 w-4 ${retryingSourceAnalysis ? "animate-spin" : ""}`} />{retryingSourceAnalysis ? "正在重新分析" : "重新分析"}</Button></div> : activePreAdaptation?.status === "completed" && activeDraft ? <TextReplacementPlan sourceImage={activeSource} sourceImageAlt={activeCandidate.title || activeCandidate.competitor} adaptation={activePreAdaptation} copyLibrary={copyLibrary} appUIReferences={appUIReferences} appUIReference={activeDraft.appUIReference ?? null} appUIReferencesLoading={marketFiles.isLoading} overrides={activeDraft.textOverrides} replacementSources={activeDraft.replacementSources ?? {}} repaymentPlanOverrides={activeDraft.repaymentPlanOverrides ?? {}} numericLayoutDrafts={activeDraft.numericLayoutDrafts ?? {}} repaymentPlanOptions={repaymentPlanOptions} visualDirection={activeDraft.visualDirection} onVisualDirectionChange={(value) => setDraft(activeCandidate.id, { visualDirection: value })} onAppUIReferenceChange={(value) => setDraft(activeCandidate.id, { appUIReference: value })} onOpenCopyLibrary={onOpenCopyLibrary} onRetrySourceAnalysis={() => onRetrySourceAnalysis(activeCandidate.id)} retryingSourceAnalysis={retryingSourceAnalysis} onChooseReplacement={(blockId, value, source) => setReplacementChoice(activeCandidate.id, blockId, value, source)} onChooseNumericReplacement={(blockId, value, source) => setNumericReplacementChoice(activeCandidate.id, blockId, value, source)} onChooseRepaymentPlan={(scenarioId, plan, original) => setRepaymentPlanChoice(activeCandidate.id, scenarioId, plan, original)} onAddRepaymentPlan={(layoutId, plan) => addRepaymentPlanRow(activeCandidate.id, layoutId, plan)} onRemoveRepaymentPlan={(layoutId, scenarioId) => removeRepaymentPlanRow(activeCandidate.id, layoutId, scenarioId)} onOmitNumericLayout={(layoutId) => omitPendingNumericLayout(activeCandidate.id, layoutId)} /> : activeReadiness === "unavailable" ? <div role="status" className="space-y-2 border border-slate-300 bg-slate-50 px-3 py-3 text-xs text-slate-700"><p className="font-medium">这张素材没有可配置的原图文案。</p><p>平台已保留分析结果，不会继续重试，也不会把它加入出图配置；可选择其他有可编辑文案的素材。</p></div> : activeReadiness === "analyzing" ? <div role="status" className="flex items-start gap-2 border border-amber-300 bg-amber-50/50 px-3 py-3 text-xs text-amber-900"><LoaderCircle className="mt-0.5 h-4 w-4 shrink-0 animate-spin" /><div className="min-w-0 flex-1"><p className="font-medium">{MATERIAL_ANALYSIS_RUNNING_MESSAGE}</p><p className="mt-1 text-amber-800">{MATERIAL_ANALYSIS_RUNNING_DETAIL}</p></div><Button size="sm" variant="outline" disabled={retryingSourceAnalysis} onClick={() => onRetrySourceAnalysis(activeCandidate.id)}><RefreshCw className={`h-4 w-4 ${retryingSourceAnalysis ? "animate-spin" : ""}`} />{retryingSourceAnalysis ? "正在重新分析" : "重新分析"}</Button></div> : activeReadiness === "manual_required" ? <div role="alert" className="space-y-2 border border-amber-300 bg-amber-50/50 px-3 py-3 text-xs text-amber-900"><p className="font-medium">预适配已重试一次仍未通过，需人工确认文案与数值映射。</p><p className="text-amber-800">这张素材不会进入可用素材，也不会继续自动重试。</p></div> : <div role="alert" className="space-y-3 border border-amber-300 bg-amber-50/50 px-3 py-3 text-xs text-amber-800"><p>{!marketPack ? "当前工作区尚未发布唯一市场配置，素材分析暂不可用。" : !copyLibrary ? "当前市场配置没有绑定已发布文案库，素材分析暂不可用。" : "本图尚未按当前市场配置完成分析，不会替换为泛文案。"}</p>{activeAnalysis && <Button size="sm" variant="outline" disabled={retryingSourceAnalysis} onClick={() => onRetrySourceAnalysis(activeCandidate.id)}><RefreshCw className={`h-4 w-4 ${retryingSourceAnalysis ? "animate-spin" : ""}`} />{retryingSourceAnalysis ? "正在重新分析" : "重新分析"}</Button>}</div>}
         {activeCustomCopyValidation && !activeCustomCopyValidation.allowed && <p className="border border-amber-300 bg-amber-50/50 px-3 py-2 text-xs text-amber-900">{activeCustomCopyValidation.message} 这是本次人工改写的提示，不会阻止提交；请确认该数字已获业务确认。</p>}
       </div>
     </article>}
@@ -2103,6 +2138,16 @@ export type PreparedTextReplacement = {
   calculation?: { formula: string; inputs: string[]; result: string };
 };
 
+type SourceTextBlockInfo = {
+  id: string;
+  location: string;
+  role: string;
+  sourceText: string;
+  semanticKind: string;
+  visualRegionId: string;
+  visualBounds?: NormalizedVisualBounds;
+};
+
 export type NormalizedVisualBounds = {
   x: number;
   y: number;
@@ -2343,6 +2388,59 @@ export function sourceTextBlockSemanticKinds(result: Record<string, unknown>): M
   return kinds;
 }
 
+function sourceTextBlockInfosByID(result: Record<string, unknown>): Map<string, SourceTextBlockInfo> {
+  const infos = new Map<string, SourceTextBlockInfo>();
+  const visualBoundsByBlockID = sourceTextBlockVisualBounds(result);
+  const visualRegionByBlockID = new Map<string, string>();
+  for (const region of sourceVisualRegions(result)) {
+    for (const blockID of region.sourceBlockIds) visualRegionByBlockID.set(blockID, region.id);
+  }
+  const textBlocks = Array.isArray(result.text_blocks) ? result.text_blocks : [];
+  for (const textBlock of textBlocks) {
+    const block = record(textBlock);
+    const id = recordString(block, "id");
+    const location = recordString(block, "location");
+    if (!id || !location) continue;
+    infos.set(id, {
+      id,
+      location,
+      role: recordString(block, "role") || "supporting",
+      sourceText: recordString(block, "source_text"),
+      semanticKind: recordString(block, "semantic_kind"),
+      visualRegionId: visualRegionByBlockID.get(id) ?? "",
+      ...(visualBoundsByBlockID.get(id) ? { visualBounds: visualBoundsByBlockID.get(id) } : {}),
+    });
+  }
+  return infos;
+}
+
+type ManualNumericOverride = {
+  block: SourceTextBlockInfo;
+  value: string;
+  source: ReplacementSourceChoice | undefined;
+};
+
+function manualNumericOverrides(adaptation: PreparedPreAdaptation, draft: Pick<OrderItemDraft, "textOverrides" | "replacementSources">): ManualNumericOverride[] {
+  const numericBlockIDs = new Set<string>();
+  for (const layout of adaptation.numericLayouts) {
+    for (const blockID of layout.sourceBlockIds) numericBlockIDs.add(blockID);
+  }
+  for (const region of adaptation.visualRegions ?? []) {
+    if (region.kind !== "numeric") continue;
+    for (const blockID of region.sourceBlockIds) numericBlockIDs.add(blockID);
+  }
+  if (numericBlockIDs.size === 0) return [];
+
+  const textReplacementBlockIDs = new Set(adaptation.textReplacements.map((replacement) => replacement.blockId));
+  const overrides = draft.textOverrides ?? {};
+  const sources = draft.replacementSources ?? {};
+  return [...sourceTextBlockInfosByID(adaptation.analysisResult).values()].flatMap((block) => {
+    if (!numericBlockIDs.has(block.id) || textReplacementBlockIDs.has(block.id)) return [];
+    const value = overrides[block.id]?.trim();
+    return value ? [{ block, value, source: sources[block.id] }] : [];
+  });
+}
+
 export function normalizedVisualBounds(value: unknown): NormalizedVisualBounds | null {
   const bounds = record(value);
   const x = typeof bounds.x === "number" ? bounds.x : NaN;
@@ -2507,12 +2605,17 @@ export function effectiveNumericLayouts(
     const draft = numericLayoutDrafts[layout.id] ?? {};
     if (draft.omitted && isPendingNumericLayout(layout)) return [];
     const removed = new Set((draft.removedScenarioIds ?? []).map((scenarioId) => scenarioId.trim()).filter(Boolean));
+    const removedSourceBlocks = new Set((draft.removedSourceBlockIds ?? []).map((blockID) => blockID.trim()).filter(Boolean));
     const addedScenarioIds = Object.keys(draft.addedScenarios ?? {}).filter((scenarioId) => !removed.has(scenarioId));
     const scenarioIds = Array.from(new Set([
       ...layout.scenarioIds.filter((scenarioId) => !removed.has(scenarioId)),
       ...addedScenarioIds,
     ]));
-    return [{ ...layout, scenarioIds }];
+    return [{
+      ...layout,
+      sourceBlockIds: layout.sourceBlockIds.filter((blockID) => !removedSourceBlocks.has(blockID)),
+      scenarioIds,
+    }];
   });
 }
 
@@ -2597,9 +2700,22 @@ export function frozenCopySnapshot(
   const numericLayoutDrafts = draft.numericLayoutDrafts ?? {};
   const repaymentPlanSelections = effectiveRepaymentPlanSelections(adaptation, repaymentPlanOverrides, numericLayoutDrafts);
   const repaymentPlanSelectionsByID = scenarioByID(repaymentPlanSelections);
-  const numericLayouts = effectiveNumericLayouts(adaptation, numericLayoutDrafts).filter((layout) => layout.scenarioIds.length > 0);
+  const numericLayouts = effectiveNumericLayouts(adaptation, numericLayoutDrafts).filter((layout) => layout.sourceBlockIds.length > 0 && layout.scenarioIds.length > 0);
   const numericLayoutBlockIDs = new Set(numericLayouts.flatMap((layout) => layout.sourceBlockIds));
   const originalLayoutsByID = numericLayoutByID(adaptation.numericLayouts);
+  const manualNumericReplacements = manualNumericOverrides(adaptation, draft).map((override) => ({
+    block_id: override.block.id,
+    location: override.block.location,
+    role: override.block.role,
+    semantic_kind: override.block.semanticKind,
+    source_text: override.block.sourceText,
+    replacement_text: override.value,
+    source_kind: override.source?.kind ?? "manual",
+    source_keys: override.source?.kind === "library" && override.source.sourceKey ? [override.source.sourceKey] : [],
+    status: "ready" as const,
+    note: override.source?.kind === "library" ? "原数值区块已改为普通文案，并采用已审核文案。" : "原数值区块已改为普通文案。",
+    recommendation_basis: [],
+  }));
   return {
     ...copy,
     visual_direction: draft.visualDirection,
@@ -2633,7 +2749,7 @@ export function frozenCopySnapshot(
         recommendation_basis: replacement.recommendationBasis ?? [],
         calculation: replacement.calculation,
         };
-      }),
+      }).concat(manualNumericReplacements),
       repayment_plan_selections: repaymentPlanSelections.map((scenario) => ({
         id: scenario.id,
         plan_key: scenario.planKey,
@@ -2666,11 +2782,19 @@ export function preAdaptedCopySnapshot(
   draft: OrderItemDraft,
   sourceAnalysisID: string,
 ): CreativeCopySnapshot {
-  const textForRole = (role: string) => adaptation.textReplacements
-    .filter((replacement) => replacement.role === role)
-    .map((replacement) => replacementText(replacement, draft.textOverrides))
-    .filter(Boolean)
-    .join("\n");
+  const manualNumericTextsByRole = new Map<string, string[]>();
+  for (const override of manualNumericOverrides(adaptation, draft)) {
+    const values = manualNumericTextsByRole.get(override.block.role) ?? [];
+    values.push(override.value);
+    manualNumericTextsByRole.set(override.block.role, values);
+  }
+  const textForRole = (role: string) => [
+    ...adaptation.textReplacements
+      .filter((replacement) => replacement.role === role)
+      .map((replacement) => replacementText(replacement, draft.textOverrides))
+      .filter(Boolean),
+    ...(manualNumericTextsByRole.get(role) ?? []),
+  ].filter(Boolean).join("\n");
   const coreBenefit = coreBenefitFromDraft(draft);
   const sourceBenefit = textForRole("benefit");
   const hasPlan = effectiveRepaymentPlanSelections(adaptation, draft.repaymentPlanOverrides ?? {}, draft.numericLayoutDrafts ?? {}).length > 0;
@@ -2733,17 +2857,35 @@ function VisualDirectionEditor({ value, onChange }: { value: CreativeVisualDirec
   </section>;
 }
 
-function TextReplacementPlan({ sourceImage, sourceImageAlt, adaptation, copyLibrary, appUIReferences, appUIReference, appUIReferencesLoading = false, overrides, replacementSources, repaymentPlanOverrides, numericLayoutDrafts, repaymentPlanOptions, visualDirection, onVisualDirectionChange, onAppUIReferenceChange, onChooseReplacement, onChooseRepaymentPlan, onAddRepaymentPlan, onRemoveRepaymentPlan, onOmitNumericLayout, onOpenCopyLibrary, onRetrySourceAnalysis, retryingSourceAnalysis = false }: { sourceImage: string; sourceImageAlt: string; adaptation: PreparedPreAdaptation; copyLibrary?: CreativeResource; appUIReferences: CreativeResourceFile[]; appUIReference: AppUIReferenceChoice | null; appUIReferencesLoading?: boolean; overrides: Record<string, string>; replacementSources: Record<string, ReplacementSourceChoice>; repaymentPlanOverrides: Record<string, RepaymentPlanChoice>; numericLayoutDrafts: Record<string, NumericLayoutDraft>; repaymentPlanOptions: RepaymentPlanChoice[]; visualDirection: CreativeVisualDirection; onVisualDirectionChange: (value: CreativeVisualDirection) => void; onAppUIReferenceChange: (value: AppUIReferenceChoice | null) => void; onChooseReplacement: (blockId: string, value: string, source: ReplacementSourceChoice) => void; onChooseRepaymentPlan: (scenarioId: string, plan: RepaymentPlanChoice, original: PreparedRepaymentPlanSelection) => void; onAddRepaymentPlan: (layoutId: string, plan: RepaymentPlanChoice) => void; onRemoveRepaymentPlan: (layoutId: string, scenarioId: string) => void; onOmitNumericLayout: (layoutId: string) => void; onOpenCopyLibrary?: () => void; onRetrySourceAnalysis?: () => void; retryingSourceAnalysis?: boolean }) {
+function TextReplacementPlan({ sourceImage, sourceImageAlt, adaptation, copyLibrary, appUIReferences, appUIReference, appUIReferencesLoading = false, overrides, replacementSources, repaymentPlanOverrides, numericLayoutDrafts, repaymentPlanOptions, visualDirection, onVisualDirectionChange, onAppUIReferenceChange, onChooseReplacement, onChooseNumericReplacement, onChooseRepaymentPlan, onAddRepaymentPlan, onRemoveRepaymentPlan, onOmitNumericLayout, onOpenCopyLibrary, onRetrySourceAnalysis, retryingSourceAnalysis = false }: { sourceImage: string; sourceImageAlt: string; adaptation: PreparedPreAdaptation; copyLibrary?: CreativeResource; appUIReferences: CreativeResourceFile[]; appUIReference: AppUIReferenceChoice | null; appUIReferencesLoading?: boolean; overrides: Record<string, string>; replacementSources: Record<string, ReplacementSourceChoice>; repaymentPlanOverrides: Record<string, RepaymentPlanChoice>; numericLayoutDrafts: Record<string, NumericLayoutDraft>; repaymentPlanOptions: RepaymentPlanChoice[]; visualDirection: CreativeVisualDirection; onVisualDirectionChange: (value: CreativeVisualDirection) => void; onAppUIReferenceChange: (value: AppUIReferenceChoice | null) => void; onChooseReplacement: (blockId: string, value: string, source: ReplacementSourceChoice) => void; onChooseNumericReplacement: (blockId: string, value: string, source: ReplacementSourceChoice) => void; onChooseRepaymentPlan: (scenarioId: string, plan: RepaymentPlanChoice, original: PreparedRepaymentPlanSelection) => void; onAddRepaymentPlan: (layoutId: string, plan: RepaymentPlanChoice) => void; onRemoveRepaymentPlan: (layoutId: string, scenarioId: string) => void; onOmitNumericLayout: (layoutId: string) => void; onOpenCopyLibrary?: () => void; onRetrySourceAnalysis?: () => void; retryingSourceAnalysis?: boolean }) {
+  const sourceBlocksByID = useMemo(() => sourceTextBlockInfosByID(adaptation.analysisResult), [adaptation.analysisResult]);
   const effectiveLayouts = effectiveNumericLayouts(adaptation, numericLayoutDrafts);
+  const originalNumericLayouts = useMemo(() => [...adaptation.numericLayouts, ...pendingNumericLayouts(adaptation)], [adaptation]);
   const effectiveScenarios = effectiveRepaymentPlanSelections(adaptation, repaymentPlanOverrides, numericLayoutDrafts);
-  const pendingNumericPlanLayouts = effectiveLayouts.filter((layout) => isPendingNumericLayout(layout) && layout.scenarioIds.length === 0);
+  const pendingNumericPlanLayouts = effectiveLayouts.filter((layout) => isPendingNumericLayout(layout) && layout.sourceBlockIds.length > 0 && layout.scenarioIds.length === 0);
   const pendingRecommendations = adaptation.textReplacements.filter((replacement) => hasPendingReplacementConfirmation(replacement, overrides, replacementSources));
   const reviewRegions = useMemo(() => visualReviewRegions(adaptation, effectiveLayouts), [adaptation, effectiveLayouts]);
   const missingReplacements = reviewRegions.flatMap((region) => region.textReplacements).filter((replacement) => !replacementText(replacement, overrides).trim());
   const positionedRegions = useMemo(() => reviewRegions.filter((region): region is PreparedVisualReviewRegion & { visualBounds: NormalizedVisualBounds } => Boolean(region.visualBounds)), [reviewRegions]);
   const [activeRegionId, setActiveRegionId] = useState(positionedRegions[0]?.id ?? reviewRegions[0]?.id ?? "");
   const [selectorBlockId, setSelectorBlockId] = useState("");
+  const [numericSelectorBlockId, setNumericSelectorBlockId] = useState("");
   const selectorReplacement = adaptation.textReplacements.find((replacement) => replacement.blockId === selectorBlockId) ?? null;
+  const numericSelectorBlock = numericSelectorBlockId ? sourceBlocksByID.get(numericSelectorBlockId) ?? null : null;
+  const numericSelectorReplacement = numericSelectorBlock ? {
+    blockId: numericSelectorBlock.id,
+    visualRegionId: numericSelectorBlock.visualRegionId,
+    location: numericSelectorBlock.location,
+    role: numericSelectorBlock.role,
+    semanticKind: numericSelectorBlock.semanticKind,
+    sourceText: numericSelectorBlock.sourceText,
+    visualBounds: numericSelectorBlock.visualBounds,
+    replacementText: overrides[numericSelectorBlock.id] ?? numericSelectorBlock.sourceText,
+    sourceKeys: [],
+    status: "missing" as const,
+    note: "这是一处原本被识别成数值组件的内容，可改成普通文案。",
+    recommendationBasis: [],
+  } : null;
   useEffect(() => {
     if (reviewRegions.some((region) => region.id === activeRegionId)) return;
     setActiveRegionId(positionedRegions[0]?.id ?? reviewRegions[0]?.id ?? "");
@@ -2758,10 +2900,11 @@ function TextReplacementPlan({ sourceImage, sourceImageAlt, adaptation, copyLibr
     <AppUIReferenceSelector analysisResult={adaptation.analysisResult} references={appUIReferences} selected={appUIReference} loading={appUIReferencesLoading} onChange={onAppUIReferenceChange} />
     <CoreBenefitEditor value={overrides[CORE_BENEFIT_BLOCK_ID] ?? ""} onChange={(value) => onChooseReplacement(CORE_BENEFIT_BLOCK_ID, value, { kind: "manual" })} />
     <div className="grid min-w-0 xl:grid-cols-[minmax(360px,0.9fr)_minmax(0,1.1fr)] xl:items-start"><SourceTextVisualReview sourceImage={sourceImage} sourceImageAlt={sourceImageAlt} regions={positionedRegions} activeRegionId={activeRegionId} onSelect={(regionId) => selectRegion(regionId, true)} onRetrySourceAnalysis={onRetrySourceAnalysis} retryingSourceAnalysis={retryingSourceAnalysis} />
-      <div className="min-w-0 border-t xl:border-l xl:border-t-0"><div className="space-y-3 p-3">{reviewRegions.map((region) => <VisualReviewRegionCard key={region.id} region={region} visualIndex={visualIndexByRegionId.get(region.id)} active={activeRegionId === region.id} overrides={overrides} replacementSources={replacementSources} scenarios={effectiveScenarios} originalScenarios={adaptation.repaymentPlanSelections} originalNumericLayouts={adaptation.numericLayouts} repaymentPlanOverrides={repaymentPlanOverrides} repaymentPlanOptions={repaymentPlanOptions} onSelect={() => selectRegion(region.id)} onOpenSelector={setSelectorBlockId} onChooseReplacement={onChooseReplacement} onChooseRepaymentPlan={onChooseRepaymentPlan} onAddRepaymentPlan={onAddRepaymentPlan} onRemoveRepaymentPlan={onRemoveRepaymentPlan} onOmitNumericLayout={onOmitNumericLayout} />)}</div></div>
+      <div className="min-w-0 border-t xl:border-l xl:border-t-0"><div className="space-y-3 p-3">{reviewRegions.map((region) => <VisualReviewRegionCard key={region.id} region={region} visualIndex={visualIndexByRegionId.get(region.id)} active={activeRegionId === region.id} overrides={overrides} replacementSources={replacementSources} sourceBlocksByID={sourceBlocksByID} scenarios={effectiveScenarios} originalScenarios={adaptation.repaymentPlanSelections} originalNumericLayouts={originalNumericLayouts} repaymentPlanOverrides={repaymentPlanOverrides} repaymentPlanOptions={repaymentPlanOptions} onSelect={() => selectRegion(region.id)} onOpenSelector={setSelectorBlockId} onOpenNumericSelector={setNumericSelectorBlockId} onChooseReplacement={onChooseReplacement} onChooseRepaymentPlan={onChooseRepaymentPlan} onAddRepaymentPlan={onAddRepaymentPlan} onRemoveRepaymentPlan={onRemoveRepaymentPlan} onOmitNumericLayout={onOmitNumericLayout} />)}</div></div>
     </div>
     <VisualDirectionEditor value={visualDirection} onChange={onVisualDirectionChange} />
     <ReplacementSourceDialog open={selectorReplacement !== null} replacement={selectorReplacement} currentValue={selectorReplacement ? replacementText(selectorReplacement, overrides) : ""} copyLibrary={copyLibrary} onOpenChange={(open) => !open && setSelectorBlockId("")} onChoose={(value, source) => { if (selectorReplacement) onChooseReplacement(selectorReplacement.blockId, value, source); setSelectorBlockId(""); }} onOpenCopyLibrary={onOpenCopyLibrary} />
+    <ReplacementSourceDialog open={numericSelectorReplacement !== null} replacement={numericSelectorReplacement} currentValue={numericSelectorBlock ? overrides[numericSelectorBlock.id] ?? numericSelectorBlock.sourceText : ""} copyLibrary={copyLibrary} onOpenChange={(open) => !open && setNumericSelectorBlockId("")} onChoose={(value, source) => { if (numericSelectorReplacement) onChooseNumericReplacement(numericSelectorReplacement.blockId, value, source); setNumericSelectorBlockId(""); }} onOpenCopyLibrary={onOpenCopyLibrary} />
   </section>;
 }
 
@@ -2863,7 +3006,7 @@ function resourceFileMetadataStrings(metadata: Record<string, unknown>, key: str
   return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
 }
 
-function VisualReviewRegionCard({ region, visualIndex, active, overrides, replacementSources, scenarios, originalScenarios, originalNumericLayouts, repaymentPlanOverrides, repaymentPlanOptions, onSelect, onOpenSelector, onChooseReplacement, onChooseRepaymentPlan, onAddRepaymentPlan, onRemoveRepaymentPlan, onOmitNumericLayout }: { region: PreparedVisualReviewRegion; visualIndex?: number; active: boolean; overrides: Record<string, string>; replacementSources: Record<string, ReplacementSourceChoice>; scenarios: PreparedRepaymentPlanSelection[]; originalScenarios: PreparedRepaymentPlanSelection[]; originalNumericLayouts: PreparedNumericLayout[]; repaymentPlanOverrides: Record<string, RepaymentPlanChoice>; repaymentPlanOptions: RepaymentPlanChoice[]; onSelect: () => void; onOpenSelector: (blockId: string) => void; onChooseReplacement: (blockId: string, value: string, source: ReplacementSourceChoice) => void; onChooseRepaymentPlan: (scenarioId: string, plan: RepaymentPlanChoice, original: PreparedRepaymentPlanSelection) => void; onAddRepaymentPlan: (layoutId: string, plan: RepaymentPlanChoice) => void; onRemoveRepaymentPlan: (layoutId: string, scenarioId: string) => void; onOmitNumericLayout: (layoutId: string) => void }) {
+function VisualReviewRegionCard({ region, visualIndex, active, overrides, replacementSources, sourceBlocksByID, scenarios, originalScenarios, originalNumericLayouts, repaymentPlanOverrides, repaymentPlanOptions, onSelect, onOpenSelector, onOpenNumericSelector, onChooseReplacement, onChooseRepaymentPlan, onAddRepaymentPlan, onRemoveRepaymentPlan, onOmitNumericLayout }: { region: PreparedVisualReviewRegion; visualIndex?: number; active: boolean; overrides: Record<string, string>; replacementSources: Record<string, ReplacementSourceChoice>; sourceBlocksByID: ReadonlyMap<string, SourceTextBlockInfo>; scenarios: PreparedRepaymentPlanSelection[]; originalScenarios: PreparedRepaymentPlanSelection[]; originalNumericLayouts: PreparedNumericLayout[]; repaymentPlanOverrides: Record<string, RepaymentPlanChoice>; repaymentPlanOptions: RepaymentPlanChoice[]; onSelect: () => void; onOpenSelector: (blockId: string) => void; onOpenNumericSelector: (blockId: string) => void; onChooseReplacement: (blockId: string, value: string, source: ReplacementSourceChoice) => void; onChooseRepaymentPlan: (scenarioId: string, plan: RepaymentPlanChoice, original: PreparedRepaymentPlanSelection) => void; onAddRepaymentPlan: (layoutId: string, plan: RepaymentPlanChoice) => void; onRemoveRepaymentPlan: (layoutId: string, scenarioId: string) => void; onOmitNumericLayout: (layoutId: string) => void }) {
   return <section id={`visual-review-region-${region.id}`} className={`min-w-0 border transition-colors ${active ? "border-foreground bg-muted/20" : ""}`} onClick={onSelect}>
     <div className="flex flex-wrap items-center justify-between gap-2 border-b bg-muted/20 px-3 py-2"><div className="flex min-w-0 items-center gap-2"><span className="break-words text-xs font-medium">{region.location}</span>{visualIndex && <span className="inline-flex size-5 items-center justify-center rounded-full bg-foreground font-mono text-[10px] font-semibold text-background">{visualIndex}</span>}</div><Badge variant="outline">{region.kind === "numeric" ? "数值组件" : "文案区域"}</Badge></div>
     {region.textReplacements.map((replacement) => {
@@ -2876,7 +3019,7 @@ function VisualReviewRegionCard({ region, visualIndex, active, overrides, replac
       const detail = replacement.status === "calculated" && replacement.calculation ? `${replacement.calculation.formula}；${replacement.calculation.inputs.join("；")}` : (replacement.recommendationBasis ?? []).join("；") || replacement.note || (replacement.status === "missing" ? (region.kind === "numeric" ? "未匹配到冻结方案，可选择已审核方案或留空移除。" : "没有可自动采用的内容。") : "来自当前冻结文案库。");
       return <div key={replacement.blockId} className="grid min-w-0 gap-4 border-b p-3 last:border-b-0 xl:grid-cols-[minmax(180px,0.8fr)_minmax(0,1.2fr)] xl:items-start"><div className="min-w-0 xl:border-r xl:pr-4"><p className="text-[11px] font-medium text-muted-foreground">原图文字</p><p className="mt-1 whitespace-pre-wrap break-words text-sm leading-6 text-foreground">{replacement.sourceText || "未识别清晰文字"}</p>{replacement.semanticKind && <p className="mt-2 font-mono text-[10px] text-muted-foreground">{replacement.semanticKind}</p>}</div><div className="min-w-0"><div className="flex flex-wrap items-center justify-between gap-2"><p className="text-[11px] font-medium text-muted-foreground">最终替换文字</p><Badge variant="outline" className={sourceTone}>{sourceLabel}</Badge></div><Textarea rows={2} value={value} onFocus={onSelect} onChange={(event) => onChooseReplacement(replacement.blockId, event.target.value, { kind: "manual" })} placeholder="留空则移除原文" className="mt-1 min-h-12 resize-y text-sm leading-6" /><div className="mt-2 flex flex-wrap items-center gap-2">{pendingConfirmation && <Button size="sm" onClick={(event) => { event.stopPropagation(); onChooseReplacement(replacement.blockId, replacement.replacementText, replacementRecommendationSource(replacement)); }}><Check className="h-4 w-4" />{replacement.status === "calculated" ? "确认计算" : "确认推荐"}</Button>}<Button size="sm" variant="outline" onClick={(event) => { event.stopPropagation(); onOpenSelector(replacement.blockId); }}><BookOpenText className="h-4 w-4" />选择来源</Button></div><p className={`mt-2 break-words border-l-2 pl-2 text-[11px] leading-4 ${replacement.status === "missing" ? "border-amber-300 text-amber-800" : "border-muted-foreground/30 text-muted-foreground"}`}>{detail}</p></div></div>;
     })}
-    {region.numericLayouts.length > 0 && <div className="p-3"><p className="mb-2 text-[11px] font-medium text-muted-foreground">我方数值版式</p><NumericLayoutCards layouts={region.numericLayouts} scenarios={scenarios} originalScenarios={originalScenarios} originalNumericLayouts={originalNumericLayouts} repaymentPlanOverrides={repaymentPlanOverrides} repaymentPlanOptions={repaymentPlanOptions} onChooseRepaymentPlan={onChooseRepaymentPlan} onAddRepaymentPlan={onAddRepaymentPlan} onRemoveRepaymentPlan={onRemoveRepaymentPlan} onOmitNumericLayout={onOmitNumericLayout} /></div>}
+    {region.numericLayouts.length > 0 && <div className="p-3"><p className="mb-2 text-[11px] font-medium text-muted-foreground">我方数值版式</p><NumericLayoutCards layouts={region.numericLayouts} scenarios={scenarios} originalScenarios={originalScenarios} originalNumericLayouts={originalNumericLayouts} sourceBlocksByID={sourceBlocksByID} overrides={overrides} replacementSources={replacementSources} repaymentPlanOverrides={repaymentPlanOverrides} repaymentPlanOptions={repaymentPlanOptions} onOpenNumericSelector={onOpenNumericSelector} onChooseRepaymentPlan={onChooseRepaymentPlan} onAddRepaymentPlan={onAddRepaymentPlan} onRemoveRepaymentPlan={onRemoveRepaymentPlan} onOmitNumericLayout={onOmitNumericLayout} /></div>}
   </section>;
 }
 
@@ -2949,8 +3092,12 @@ function NumericLayoutCards({
   scenarios,
   originalScenarios,
   originalNumericLayouts,
+  sourceBlocksByID,
+  overrides,
+  replacementSources,
   repaymentPlanOverrides,
   repaymentPlanOptions,
+  onOpenNumericSelector,
   onChooseRepaymentPlan,
   onAddRepaymentPlan,
   onRemoveRepaymentPlan,
@@ -2960,8 +3107,12 @@ function NumericLayoutCards({
   scenarios: PreparedRepaymentPlanSelection[];
   originalScenarios: PreparedRepaymentPlanSelection[];
   originalNumericLayouts: PreparedNumericLayout[];
+  sourceBlocksByID: ReadonlyMap<string, SourceTextBlockInfo>;
+  overrides: Record<string, string>;
+  replacementSources: Record<string, ReplacementSourceChoice>;
   repaymentPlanOverrides: Record<string, RepaymentPlanChoice>;
   repaymentPlanOptions: RepaymentPlanChoice[];
+  onOpenNumericSelector: (blockId: string) => void;
   onChooseRepaymentPlan: (scenarioId: string, plan: RepaymentPlanChoice, original: PreparedRepaymentPlanSelection) => void;
   onAddRepaymentPlan: (layoutId: string, plan: RepaymentPlanChoice) => void;
   onRemoveRepaymentPlan: (layoutId: string, scenarioId: string) => void;
@@ -2979,15 +3130,28 @@ function NumericLayoutCards({
   const planByKey = new Map(repaymentPlanOptions.map((plan) => [plan.planKey, plan]));
   return <>
   <div className="grid gap-3">{layouts.map((layout) => {
-    const instruction = numericLayoutInstruction(layout, scenariosByID, repaymentPlanOverrides, originalLayoutsByID.get(layout.id));
+    const originalLayout = originalLayoutsByID.get(layout.id);
+    const instruction = numericLayoutInstruction(layout, scenariosByID, repaymentPlanOverrides, originalLayout);
     const nextPlan = nextRepaymentPlanOptionForLayout(layout, scenariosByID, repaymentPlanOptions);
-    const pendingSelection = isPendingNumericLayout(layout) && layout.scenarioIds.length === 0;
+    const pendingSelection = isPendingNumericLayout(layout) && layout.sourceBlockIds.length > 0 && layout.scenarioIds.length === 0;
+    const originalBlockIDs = originalLayout?.sourceBlockIds ?? layout.sourceBlockIds;
+    const removedBlockIDs = originalBlockIDs.filter((blockID) => !layout.sourceBlockIds.includes(blockID));
+    const renderBlock = (blockID: string, removed: boolean) => {
+      const block = sourceBlocksByID.get(blockID);
+      const value = overrides[blockID] ?? "";
+      const source = replacementSources[blockID];
+      return <div key={blockID} className="flex flex-wrap items-start justify-between gap-2 rounded border border-dashed border-muted-foreground/20 px-2 py-2">
+        <div className="min-w-0 flex-1"><p className="text-[11px] font-medium text-muted-foreground">{block?.semanticKind || block?.role || "文本"}</p><p className="mt-0.5 break-words text-sm leading-5 text-foreground">{block?.sourceText || "未识别清晰文字"}</p>{removed && value.trim() && <p className="mt-1 break-words text-sm leading-5 text-foreground">{value}</p>}</div>
+        <div className="flex shrink-0 items-center gap-2"><Badge variant="outline">{source?.kind === "library" ? "已审核文案" : source ? "本次改写" : "原图文字"}</Badge><Button type="button" size="sm" variant="outline" onClick={() => onOpenNumericSelector(blockID)}>{removed ? "重新编辑" : "改成普通文案"}</Button></div>
+      </div>;
+    };
     return <div key={layout.id} className="min-w-0 border bg-muted/20">
       <div className="flex flex-wrap items-center justify-between gap-2 border-b px-3 py-2">
         <span className="break-words text-xs font-medium">{layout.location}</span>
         <Badge variant="outline">{numericLayoutKindLabel(layout.layoutKind)}</Badge>
       </div>
-      <div className="overflow-x-auto">
+      {(layout.sourceBlockIds.length > 0 || removedBlockIDs.length > 0) && <div className="space-y-2 border-b px-3 py-2"><p className="text-[11px] font-medium text-muted-foreground">{layout.sourceBlockIds.length > 0 ? "原图文字" : "已改为普通文案"}</p>{layout.sourceBlockIds.map((blockID) => renderBlock(blockID, false))}{removedBlockIDs.map((blockID) => renderBlock(blockID, true))}</div>}
+      {layout.sourceBlockIds.length > 0 && <div className="overflow-x-auto">
         <table className="w-full min-w-[720px] text-xs">
           <thead className="border-b text-left text-muted-foreground">
             <tr>
@@ -3034,7 +3198,7 @@ function NumericLayoutCards({
             {layout.scenarioIds.length === 0 && <tr><td colSpan={layout.targetColumns.length + 2} className="px-2 py-5 text-center text-muted-foreground">这个数值区域已清空，可继续加一行。</td></tr>}
           </tbody>
         </table>
-      </div>
+      </div>}
       <div className="flex flex-wrap items-center justify-between gap-2 border-t px-3 py-2">
         <p className="min-w-0 flex-1 whitespace-pre-wrap break-words text-xs leading-5 text-muted-foreground">{pendingSelection ? "未匹配到冻结还款方案；请选择已审核方案，或留空移除该数值区域。" : instruction || "已按当前选择更新数值区域。"}</p>
         <div className="flex flex-wrap items-center justify-end gap-2">

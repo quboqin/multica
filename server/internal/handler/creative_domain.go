@@ -592,6 +592,16 @@ FROM creative_order WHERE id = $1`, parseUUID(existingID)))
 		writeError(w, http.StatusUnprocessableEntity, err.Error())
 		return
 	}
+	input.InputSnapshot, err = h.freezeCreativeOrderInputAttachments(r.Context(), tx, workspaceID, input.InputSnapshot, input.Items)
+	if err != nil {
+		var attachmentErr *creativeOrderAttachmentValidationError
+		if errors.As(err, &attachmentErr) {
+			writeError(w, http.StatusUnprocessableEntity, attachmentErr.Error())
+		} else {
+			writeError(w, http.StatusInternalServerError, "failed to freeze creative order attachments")
+		}
+		return
+	}
 	order, err := scanCreativeOrder(tx.QueryRow(r.Context(), `
 INSERT INTO creative_order (workspace_id, issue_id, status, input_snapshot, trigger_evidence_kind, trigger_evidence_ref_id, created_by, submission_key)
 VALUES ($1,$2,$3,$4::jsonb,$5,$6,$7,$8)
@@ -1793,7 +1803,11 @@ func (h *Handler) queueCreativeQCAutomaticRecovery(
 	inputSnapshot json.RawMessage,
 	expectedSizes []string,
 	failedTaskIDs []string,
+	recoveryKind string,
 ) (map[string]db.AgentTaskQueue, int, error) {
+	if recoveryKind == "" {
+		recoveryKind = creativeQCAutomaticContractRecoveryKind
+	}
 	if h.TaskService == nil {
 		return nil, 0, errors.New("creative QC task service is unavailable")
 	}
@@ -1857,7 +1871,7 @@ SELECT EXISTS(
 			"issue_id":                    uuidToString(issueID),
 			"leader_agent_id":             uuidToString(leaderID),
 			"qc_recovery_of_task_ids":     failedTaskIDs,
-			"qc_recovery_kind":            "automatic_contract_recovery",
+			"qc_recovery_kind":            recoveryKind,
 			"qc_recovery_asset_invariant": "reuse_completed_primed_assets_only",
 		})
 		if err != nil {
@@ -1908,6 +1922,7 @@ SELECT EXISTS(
 		"visual_task_id":       uuidToString(created["visual"].ID),
 		"asset_invariant":      "reused_completed_primed_assets_only",
 		"automatic":            true,
+		"recovery_kind":        recoveryKind,
 	})
 	if err != nil {
 		return nil, 0, errors.New("failed to record automatic creative QC recovery")
@@ -4981,7 +4996,7 @@ SELECT EXISTS(
 			if !recoveryAlreadyUsed && len(recoverableTaskIDs) > 0 {
 				created, recoveryAttempt, recoveryErr := h.queueCreativeQCAutomaticRecovery(
 					r.Context(), tx, workspaceID, userID, orderID, itemID, variantID, issueID,
-					input.Revision, json.RawMessage(inputSnapshot), expectedSizes, recoverableTaskIDs,
+					input.Revision, json.RawMessage(inputSnapshot), expectedSizes, recoverableTaskIDs, creativeQCAutomaticContractRecoveryKind,
 				)
 				if recoveryErr != nil {
 					writeError(w, http.StatusInternalServerError, recoveryErr.Error())

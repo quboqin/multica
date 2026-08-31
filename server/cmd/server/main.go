@@ -354,6 +354,7 @@ func main() {
 	go runAutopilotFailureMonitor(autopilotCtx, queries, bus, envFailureMonitorConfig())
 	go runCreativeMaterialArchiver(sweepCtx, h)
 	go runCreativePrimeRecovery(sweepCtx, h)
+	go runCreativeQCFinalizationRecovery(sweepCtx, h)
 	go runDBStatsLogger(sweepCtx, pool)
 
 	// Lark inbound supervisor: holds the §4.4 WS lease per installation

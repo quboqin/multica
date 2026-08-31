@@ -4510,7 +4510,6 @@ func TestCreateCreativeOrderFreezesSquadAgentsByCapability(t *testing.T) {
 	fixture := createCreativeOrderSquadFixture(t, "", "", true)
 	inputSnapshot, err := json.Marshal(map[string]any{
 		"pipeline_version": creativePipelineCandidateV1,
-		"market_pack":      map[string]any{"id": "market-pack", "version": 7},
 		"squad_snapshot": map[string]any{
 			"squad_id": fixture.SquadID, "squad_name": "client-visible name", "members": []any{map[string]any{"agent_id": "client-member"}},
 			"leader_agent_id": "client-leader", "planner_agent_id": "client-planner", "producer_agent_id": "client-producer",
@@ -4536,14 +4535,10 @@ func TestCreateCreativeOrderFreezesSquadAgentsByCapability(t *testing.T) {
 	t.Cleanup(func() { _, _ = testPool.Exec(t.Context(), `DELETE FROM creative_order WHERE id = $1`, order.ID) })
 	var frozen struct {
 		PipelineVersion string         `json:"pipeline_version"`
-		MarketPack      map[string]any `json:"market_pack"`
 		Squad           map[string]any `json:"squad_snapshot"`
 	}
 	if err := json.Unmarshal(order.InputSnapshot, &frozen); err != nil {
 		t.Fatal(err)
-	}
-	if frozen.MarketPack["id"] != "market-pack" || frozen.MarketPack["version"] != float64(7) {
-		t.Fatalf("market pack was not preserved: %#v", frozen.MarketPack)
 	}
 	if frozen.PipelineVersion != creativePipelineCandidateV1 {
 		t.Fatalf("pipeline version = %q, want %q", frozen.PipelineVersion, creativePipelineCandidateV1)

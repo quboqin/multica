@@ -567,16 +567,25 @@ RETURNING id::text
 `, orderID, itemCandidateID).Scan(&itemID); err != nil {
 			t.Fatal(err)
 		}
-		for _, variantKey := range []string{"V01", "V02", "V03"} {
+		for _, variantSpec := range []struct {
+			key   string
+			state string
+		}{
+			{key: "V01", state: "selected"},
+			{key: "V02", state: "selected"},
+			{key: "V03", state: "selected"},
+			{key: "V04", state: "reserve"},
+			{key: "V05", state: "reserve"},
+		} {
 			var variantID string
 			if err := testPool.QueryRow(t.Context(), `
-INSERT INTO creative_order_variant (order_item_id, variant_key, revision, status, updated_at)
-VALUES ($1, $2, 1, 'completed', now() - interval '30 seconds')
+INSERT INTO creative_order_variant (order_item_id, variant_key, revision, status, candidate_state, updated_at)
+VALUES ($1, $2, 1, 'completed', $3, now() - interval '30 seconds')
 RETURNING id::text
-`, itemID, variantKey).Scan(&variantID); err != nil {
+`, itemID, variantSpec.key, variantSpec.state).Scan(&variantID); err != nil {
 				t.Fatal(err)
 			}
-			if reworkedVariantID == "" {
+			if reworkedVariantID == "" && variantSpec.state == "selected" {
 				reworkedVariantID = variantID
 			}
 			for _, size := range standardCreativeAssetSizes {

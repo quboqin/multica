@@ -410,6 +410,11 @@ func normalizeCreativeImageOperation(input creativeImageOperationInput) (creativ
 	input.ErrorType = strings.TrimSpace(input.ErrorType)
 	input.ErrorMessage = strings.TrimSpace(input.ErrorMessage)
 	input.OutputAttachmentID = strings.TrimSpace(input.OutputAttachmentID)
+	if input.Status == "failed" && creativeAttachmentFailureMentioned(input.ErrorMessage) {
+		if input.ErrorType == "" || input.ErrorType == "attachment_download_failed" || input.ErrorType == "attachment_unavailable" {
+			input.ErrorType = creativeAttachmentFailureCode(errors.New(input.ErrorMessage))
+		}
+	}
 	if input.VariantID == "" || !validCreativeAssetSize(input.SizeKey) || input.Revision < 1 ||
 		!validCreativeImageOperationKind(input.OperationKind) || input.IdempotencyKey == "" || len(input.IdempotencyKey) > 240 ||
 		!validCreativeImageOperationStatus(input.Status) || input.Attempt < 1 || len(input.ErrorMessage) > 4000 {

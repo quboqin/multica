@@ -48,14 +48,16 @@ candidate 只做主尺寸，selected 复用已合格主尺寸并补缺失尺寸�
   的额外输入；若 required=true 但没有 selected/attachment_id，当前 Variant 必须写 `action_required`。
 
 参考图的权威入口是任务上下文中的 `candidate_id`。订单响应没有展开 `reference_assets` 时，使用
-`multica creative material download <issue-id> <candidate-id> --output-file <source-reference.png> --output json`
-受控下载当前候选；下载失败才算缺少参考图，不能把 `reference_assets` 为空本身当作失败。不得使用同 candidate 的其他订单、历史工作目录或摘要替代该下载。
-如果该命令返回登录态过期/未登录，但当前 issue 的候选列表响应仍能读取当前 candidate，并且该 candidate 的
-`source_attachment_id` 非空，或 `archived_url` / `preview_url` / `resource_url` / `original_url` 明确是
-`/api/attachments/<attachment-id>/download`（可为同域或平台 app 域绝对 URL），则这是同一候选附件的下载域鉴权问题，不是缺少参考图。
-此时允许只用该同源 candidate 的 attachment id 执行：
-`mkdir -p <source-dir> && multica attachment download <attachment-id> -o <source-dir>`，再把下载得到的唯一图片文件作为
-`source-reference`。如果无法从当前 candidate 解析出唯一 attachment id，或下载后的文件不存在/不是图片，才停止并写 `action_required`。
+订单的 `input_snapshot.attachment_snapshot.candidate_sources` 是候选原图的唯一运行时来源：取 `candidate_id` 等于当前
+Order Item candidate 的 `attachment_id`，再执行
+`mkdir -p <source-dir> && multica attachment download <attachment-id> -o <source-dir>`。该 ID 在建单时已验证归属、发布版本和
+对象存储可读性；不得改用 `archived_url`、`preview_url`、`resource_url`、`original_url`、浏览器会话或历史工作目录。下载得到的唯一图片文件才是
+`source-reference`；`reference_assets` 为空本身不是失败。
+
+下载失败时把真实 stderr 连同 `attachment_id`、`size_key` 写入当前 `image-operation-put` 的 `error_message`，并使用唯一
+`error_type`：登录态失效、401 或 403 为 `auth_expired`；超时、连接重置或临时存储不可用为 `storage_timeout`；不存在、无对象或无下载 URL
+为 `attachment_not_found`；不支持的 CLI 参数或命令合同不匹配为 `cli_contract_mismatch`。不得把这些错误写成笼统的
+`attachment_download_failed`，不得换 URL、猜附件或以旧本地文件继续出图。
 
 Prime context 必须以当前任务的 `revision` 登记在当前 Variant 下，并且每个目标尺寸各有一份；旧 revision 的同名附件不能代替当前 revision。
 如果受控候选下载失败、当前尺寸的 Prime context 无法生成、冻结文案缺失或 Variant execution 缺失，才停止并写 `action_required`，不要凭摘要补齐。

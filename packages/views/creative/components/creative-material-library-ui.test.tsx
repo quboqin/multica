@@ -361,6 +361,40 @@ describe("CreativeMaterialLibrary contracts", () => {
     expect(effectiveNumericLayouts(adaptation(), { table: { removedScenarioIds: [], addedScenarios: {} } })[0]?.scenarioIds).toEqual(["row-1"]);
   });
 
+  it("treats a manually rewritten numeric benefit as ordinary copy", () => {
+    const source = {
+      text_blocks: [
+        { id: "amount", location: "中心金额区", role: "benefit", source_text: "Rp100Juta", semantic_kind: "principal" },
+      ],
+      visual_regions: [
+        { id: "loan-region", location: "中心金额区", kind: "numeric", source_block_ids: ["amount"], visual_bounds: { x: 40, y: 200, width: 260, height: 120 } },
+      ],
+    };
+    const adapted = adaptation({
+      analysisResult: source,
+      visualRegions: [
+        { id: "loan-region", location: "中心金额区", kind: "numeric", sourceBlockIds: ["amount"], visualBounds: { x: 40, y: 200, width: 260, height: 120 } },
+      ],
+      repaymentPlanSelections: [],
+      numericLayouts: [
+        { id: "loan-region", sourceBlockIds: ["amount"], location: "中心金额区", layoutKind: "single_value", scenarioIds: ["row-1"], targetColumns: ["principal"], renderInstruction: "请选择还款方案" },
+      ],
+      textReplacements: [],
+    });
+    const manual = draft({
+      textOverrides: { amount: "Rp100Juta" },
+      replacementSources: { amount: { kind: "manual" } },
+      numericLayoutDrafts: { "loan-region": { removedScenarioIds: ["row-1"], removedSourceBlockIds: ["amount"] } },
+    });
+    const snapshot = preAdaptedCopySnapshot({ id: "library-1", published_version: 3 }, adapted, manual, "analysis-1");
+    expect(snapshot.creative_type).toBe("num");
+    expect(snapshot.benefit).toBe("Rp100Juta");
+    expect(snapshot.pre_adaptation?.text_replacements).toEqual(expect.arrayContaining([
+      expect.objectContaining({ block_id: "amount", replacement_text: "Rp100Juta", source_kind: "manual", status: "ready" }),
+    ]));
+    expect(snapshot.pre_adaptation?.numeric_layouts).toHaveLength(0);
+  });
+
   it("restores a repayment-plan selector for missing numeric regions without copying source values", () => {
     const missingNumeric = adaptation({
       visualRegions: [

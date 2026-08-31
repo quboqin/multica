@@ -739,6 +739,7 @@ generated_packages AS (
   WHERE order_row.workspace_id = $1
     AND order_row.status <> 'cancelled'
     AND order_row.trigger_evidence_kind <> 'creative_direct_edit'
+    AND variant.candidate_state = 'selected'
   GROUP BY item.id, order_row.created_at
   HAVING count(DISTINCT variant.id) = 3
      AND count(DISTINCT (variant.id, first_asset.size_key)) FILTER (WHERE first_asset.size_key IS NOT NULL) = 9

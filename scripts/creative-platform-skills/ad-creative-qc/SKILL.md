@@ -68,7 +68,7 @@ mkdir -p <visual-inspection-dir>
 timeout --kill-after=10s 90s multica attachment download <primed-attachment-id> --output-dir <visual-inspection-dir>
 ```
 
-`attachment download` 不支持 `--output`。每个 attachment 必须作为独立的、有界 shell 调用顺序下载；不得把多个下载串成一个无超时命令。任一调用超时或失败时，记录 `attachment_download_timeout` 或 `attachment_download_failed`（带 size、attachment ID 和真实 stderr），让当前 QC task 失败以便平台复用同一批 completed Prime assets 创建受限重试；不得继续猜测、使用旧本地文件或卡住等待。
+`attachment download` 不支持 `--output`。每个 attachment 必须作为独立的、有界 shell 调用顺序下载；不得把多个下载串成一个无超时命令。任一调用失败时，带 `size_key`、`attachment_id` 和真实 stderr 记录唯一错误码：登录态失效、401 或 403 为 `auth_expired`；超时、连接重置或临时存储不可用为 `storage_timeout`；不存在、无对象或无下载 URL 为 `attachment_not_found`；不支持的 CLI 参数或命令合同不匹配为 `cli_contract_mismatch`。让当前 QC task 失败以便平台复用同一批 completed Prime assets 创建受限重试；不得继续猜测、使用旧本地文件或卡住等待。
 
 下载后必须用 `view_image` 查看每张本地 Prime 成图；多尺寸时逐张查看，不把图片转成 base64/stdout，不用 OCR 或
 `qc_batch.py` 代替视觉判断。下载失败、数量缺失、重复尺寸、revision 不符或非图片文件，按证据/附件合同错误写 failed。
@@ -153,7 +153,9 @@ multica creative order qc-finalize <order-id> \
   --variant <variant-id> --revision <revision> --output json
 ```
 
-写回后立即调用 finalize。finalize 只等待 visual 检测报告归档后登记最终成图；不可自动修复的视觉失败进入人工处理。
+写回后立即调用 finalize。finalize 只等待 visual 检测报告归档后登记最终成图；不可自动修复的视觉失败进入人工处理。若 `qc-finalize` 返回
+5xx 或连接中断，不得重复 `qc-put`、重复调用模型、重生图或盲目重试 finalize；保留已成功的 report 与真实响应，写
+`qc_finalize_transient_failure` 后结束当前 QC task。服务端会从未决 report 创建新的、只复用当前 Prime assets 的终检尝试。
 上述完整的 visual blocking finding 会新建下一 revision 的生产任务：服务端保留通过尺寸的生成资产，只让模型改失败尺寸，然后按冻结模式
 重新交接品牌组件与 QC。服务端最多排两轮真实视觉返工；耗尽后不得把未通过的 staging revision
 发布为交付资产。已有 active revision 时继续展示原 active，失败的 staging 保留完整证据；首次交付尚无 active 时，平台按候选排名自动晋级
