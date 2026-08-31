@@ -818,6 +818,30 @@ VALUES ($1, $2, 'member', $3, 'creative_order_cancelled', $4::jsonb)
 `, testWorkspaceID, issueID, testUserID, activityDetails); err != nil {
 		t.Fatal(err)
 	}
+	feedbackContext, err := json.Marshal(map[string]any{"creative_order_id": orderID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	feedbackSubjectID := uuid.NewString()
+	var feedbackID, undoFeedbackID string
+	if err := testPool.QueryRow(t.Context(), `
+INSERT INTO creative_feedback_event (
+  workspace_id, issue_id, actor_type, actor_id, subject_type, subject_id,
+  event_type, decision, context_snapshot
+) VALUES ($1, $2, 'member', $3, 'candidate', $4, 'decision', 'rejected', $5::jsonb)
+RETURNING id::text
+`, testWorkspaceID, issueID, testUserID, feedbackSubjectID, feedbackContext).Scan(&feedbackID); err != nil {
+		t.Fatal(err)
+	}
+	if err := testPool.QueryRow(t.Context(), `
+INSERT INTO creative_feedback_event (
+  workspace_id, issue_id, actor_type, actor_id, subject_type, subject_id,
+  event_type, context_snapshot, undo_of_id
+) VALUES ($1, $2, 'member', $3, 'candidate', $4, 'undo', $5::jsonb, $6)
+RETURNING id::text
+`, testWorkspaceID, issueID, testUserID, feedbackSubjectID, feedbackContext, feedbackID).Scan(&undoFeedbackID); err != nil {
+		t.Fatal(err)
+	}
 
 	w := httptest.NewRecorder()
 	req := withURLParam(newRequest(http.MethodDelete, "/api/creative/orders/"+orderID, nil), "id", orderID)
@@ -860,6 +884,15 @@ WHERE workspace_id = $1 AND details->>'creative_order_id' = $2
 	}
 	if activityCount != 0 {
 		t.Fatalf("deleted creative order activity count = %d", activityCount)
+	}
+	var feedbackCount int
+	if err := testPool.QueryRow(t.Context(), `
+SELECT count(*) FROM creative_feedback_event WHERE id = ANY($1::uuid[])
+`, []string{feedbackID, undoFeedbackID}).Scan(&feedbackCount); err != nil {
+		t.Fatal(err)
+	}
+	if feedbackCount != 0 {
+		t.Fatalf("deleted creative order feedback count = %d", feedbackCount)
 	}
 }
 

@@ -2927,27 +2927,8 @@ SELECT EXISTS(
 		return
 	}
 
-	if _, err := tx.Exec(r.Context(), `
-DELETE FROM creative_feedback_event event
-WHERE event.workspace_id = $1
-  AND (
-    event.context_snapshot->>'creative_order_id' = $2::text
-    OR event.subject_id = $2
-    OR event.subject_id IN (
-      SELECT variant.id
-      FROM creative_order_variant variant
-      JOIN creative_order_item item ON item.id = variant.order_item_id
-      WHERE item.order_id = $2
-    )
-    OR event.subject_id IN (
-      SELECT asset.id
-      FROM creative_order_asset asset
-      JOIN creative_order_variant variant ON variant.id = asset.variant_id
-      JOIN creative_order_item item ON item.id = variant.order_item_id
-      WHERE item.order_id = $2
-    )
-  )
-`, workspaceID, orderID); err != nil {
+	if err := h.deleteCreativeOrderFeedback(r.Context(), tx, workspaceID, orderID); err != nil {
+		slog.Error("failed to remove creative order feedback", "order_id", uuidToString(orderID), "workspace_id", uuidToString(workspaceID), "error", err)
 		writeError(w, http.StatusInternalServerError, "failed to remove creative order feedback")
 		return
 	}
@@ -2987,6 +2968,44 @@ WHERE id = $1
 		"scope": "order", "order_id": chi.URLParam(r, "id"), "deleted": true,
 	})
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *Handler) deleteCreativeOrderFeedback(ctx context.Context, tx pgx.Tx, workspaceID, orderID pgtype.UUID) error {
+	// Undo events retain a restrictive self-reference to their original feedback.
+	// Detach those references in the same statement before deleting the order's
+	// feedback graph, including malformed legacy undo children without a copied
+	// order id in their snapshot.
+	_, err := tx.Exec(ctx, `
+WITH target_feedback AS MATERIALIZED (
+  SELECT feedback.id
+  FROM creative_feedback_event AS feedback
+  WHERE feedback.workspace_id = $1
+    AND (
+      feedback.context_snapshot->>'creative_order_id' = $2::text
+      OR feedback.subject_id = $2
+      OR feedback.subject_id IN (
+        SELECT variant.id
+        FROM creative_order_variant AS variant
+        JOIN creative_order_item AS item ON item.id = variant.order_item_id
+        WHERE item.order_id = $2
+      )
+      OR feedback.subject_id IN (
+        SELECT asset.id
+        FROM creative_order_asset AS asset
+        JOIN creative_order_variant AS variant ON variant.id = asset.variant_id
+        JOIN creative_order_item AS item ON item.id = variant.order_item_id
+        WHERE item.order_id = $2
+      )
+    )
+), detached_undo AS (
+  UPDATE creative_feedback_event AS undo
+  SET undo_of_id = NULL
+  WHERE undo.undo_of_id IN (SELECT id FROM target_feedback)
+)
+DELETE FROM creative_feedback_event AS feedback
+WHERE feedback.id IN (SELECT id FROM target_feedback)
+`, workspaceID, orderID)
+	return err
 }
 
 // AdoptCreativeOrderItemVariant selects the single delivery package for an
