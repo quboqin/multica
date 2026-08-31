@@ -314,6 +314,8 @@
     "creative_order_adjustment_queued": "{{size}}の精密調整を開始しました",
     "creative_variant_adopted": "クリエイティブ案を採用しました",
     "creative_variant_adopted_key": "案 {{variant}} を採用しました",
+    "creative_variant_unadopted": "クリエイティブ案の採用を取り消しました",
+    "creative_variant_revision_selected": "クリエイティブのバージョン r{{revision}} を選択しました",
     "coalesced_badge": "×{{count}}",
     "activity_count_other": "アクティビティ {{count}} 件",
     "show_more_activities_other": "アクティビティをさらに {{count}} 件表示"

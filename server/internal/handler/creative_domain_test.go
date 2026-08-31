@@ -783,6 +783,86 @@ FROM issue WHERE id = $1
 	}
 }
 
+func TestDeleteCreativeOrderRequiresNoActiveTasksAndUnlinksIssue(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	orderID, _, issueID := createCreativeLifecycleTestOrder(t, "delete creative order")
+	if _, err := testPool.Exec(t.Context(), `
+UPDATE issue
+SET metadata = jsonb_build_object('workflow', 'creative_order', 'creative_order_id', $2::text)
+WHERE id = $1
+`, issueID, orderID); err != nil {
+		t.Fatal(err)
+	}
+	agentID := createHandlerTestAgent(t, "creative-delete-state-"+uuid.NewString(), nil)
+	contextValue, err := json.Marshal(map[string]any{"type": "creative_domain_task", "creative_order_id": orderID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var taskID string
+	if err := testPool.QueryRow(t.Context(), `
+INSERT INTO agent_task_queue (agent_id, runtime_id, issue_id, status, context)
+VALUES ($1, $2, $3, 'queued', $4::jsonb)
+RETURNING id::text
+`, agentID, handlerTestRuntimeID(t), issueID, contextValue).Scan(&taskID); err != nil {
+		t.Fatal(err)
+	}
+	activityDetails, err := json.Marshal(map[string]any{"creative_order_id": orderID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := testPool.Exec(t.Context(), `
+INSERT INTO activity_log (workspace_id, issue_id, actor_type, actor_id, action, details)
+VALUES ($1, $2, 'member', $3, 'creative_order_cancelled', $4::jsonb)
+`, testWorkspaceID, issueID, testUserID, activityDetails); err != nil {
+		t.Fatal(err)
+	}
+
+	w := httptest.NewRecorder()
+	req := withURLParam(newRequest(http.MethodDelete, "/api/creative/orders/"+orderID, nil), "id", orderID)
+	testHandler.DeleteCreativeOrder(w, req)
+	if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), "end the creative order") {
+		t.Fatalf("delete active creative order = %d %s", w.Code, w.Body.String())
+	}
+	if _, err := testPool.Exec(t.Context(), `UPDATE agent_task_queue SET status = 'cancelled' WHERE id = $1`, taskID); err != nil {
+		t.Fatal(err)
+	}
+
+	w = httptest.NewRecorder()
+	testHandler.DeleteCreativeOrder(w, req)
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("delete stopped creative order = %d %s", w.Code, w.Body.String())
+	}
+	var orderCount int
+	if err := testPool.QueryRow(t.Context(), `SELECT count(*) FROM creative_order WHERE id = $1`, orderID).Scan(&orderCount); err != nil {
+		t.Fatal(err)
+	}
+	if orderCount != 0 {
+		t.Fatalf("deleted creative order count = %d", orderCount)
+	}
+	var workflow, linkedOrderID string
+	if err := testPool.QueryRow(t.Context(), `
+SELECT COALESCE(metadata->>'workflow', ''), COALESCE(metadata->>'creative_order_id', '')
+FROM issue WHERE id = $1
+`, issueID).Scan(&workflow, &linkedOrderID); err != nil {
+		t.Fatal(err)
+	}
+	if workflow != "" || linkedOrderID != "" {
+		t.Fatalf("deleted creative order issue metadata = workflow %q order %q", workflow, linkedOrderID)
+	}
+	var activityCount int
+	if err := testPool.QueryRow(t.Context(), `
+SELECT count(*) FROM activity_log
+WHERE workspace_id = $1 AND details->>'creative_order_id' = $2
+`, testWorkspaceID, orderID).Scan(&activityCount); err != nil {
+		t.Fatal(err)
+	}
+	if activityCount != 0 {
+		t.Fatalf("deleted creative order activity count = %d", activityCount)
+	}
+}
+
 func TestCreativeQCStatusAllowsAdoption(t *testing.T) {
 	tests := map[string]bool{
 		"passed":  true,
@@ -795,6 +875,64 @@ func TestCreativeQCStatusAllowsAdoption(t *testing.T) {
 		if got := creativeQCStatusAllowsAdoption(status); got != want {
 			t.Errorf("creativeQCStatusAllowsAdoption(%q) = %v, want %v", status, got, want)
 		}
+	}
+}
+
+func TestUnadoptCreativeOrderItemVariantRetainsDeliveryPackage(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	orderID, itemID, issueID := createCreativeLifecycleTestOrder(t, "unadopt creative order")
+	variant := putCreativeLifecycleVariant(t, orderID, itemID, "C01", 1, "completed")
+	attachmentID := createCreativeOrderAssetAttachment(t, "unadopt-delivery.png")
+	if _, err := testPool.Exec(t.Context(), `
+INSERT INTO creative_order_asset (variant_id, size_key, revision, stage, attachment_id, status)
+VALUES ($1, '1080x1080', 1, 'delivered', $2, 'completed')
+`, variant.ID, attachmentID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := testPool.Exec(t.Context(), `
+UPDATE creative_order_item
+SET adopted_variant_id = $2, adopted_at = now(), adopted_by = $3
+WHERE id = $1
+`, itemID, variant.ID, testUserID); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(t.Context(), `DELETE FROM creative_feedback_event WHERE subject_id = $1`, variant.ID)
+		_, _ = testPool.Exec(t.Context(), `DELETE FROM activity_log WHERE issue_id = $1 AND action = 'creative_variant_unadopted'`, issueID)
+	})
+
+	w := httptest.NewRecorder()
+	req := withURLParams(newRequest(http.MethodDelete, "/api/creative/orders/"+orderID+"/items/"+itemID+"/adoption", nil), "id", orderID, "itemId", itemID)
+	testHandler.UnadoptCreativeOrderItemVariant(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("UnadoptCreativeOrderItemVariant = %d %s", w.Code, w.Body.String())
+	}
+	var item creativeOrderItemResponse
+	if err := json.NewDecoder(w.Body).Decode(&item); err != nil {
+		t.Fatal(err)
+	}
+	if item.AdoptedVariantID != "" || item.AdoptedAt != "" || item.AdoptedBy != "" {
+		t.Fatalf("unadopted item = %#v", item)
+	}
+	var retainedDeliveryCount, activityCount int
+	if err := testPool.QueryRow(t.Context(), `
+SELECT count(*) FROM creative_order_asset
+WHERE variant_id = $1 AND stage = 'delivered' AND status = 'completed'
+`, variant.ID).Scan(&retainedDeliveryCount); err != nil {
+		t.Fatal(err)
+	}
+	if retainedDeliveryCount != 1 {
+		t.Fatalf("retained delivery asset count = %d", retainedDeliveryCount)
+	}
+	if err := testPool.QueryRow(t.Context(), `
+SELECT count(*) FROM activity_log WHERE issue_id = $1 AND action = 'creative_variant_unadopted'
+`, issueID).Scan(&activityCount); err != nil {
+		t.Fatal(err)
+	}
+	if activityCount != 1 {
+		t.Fatalf("unadoption activity count = %d", activityCount)
 	}
 }
 

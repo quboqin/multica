@@ -319,6 +319,8 @@
     "creative_order_adjustment_queued": "{{size}} 정밀 조정을 시작했습니다",
     "creative_variant_adopted": "크리에이티브 변형을 채택했습니다",
     "creative_variant_adopted_key": "변형 {{variant}}을(를) 채택했습니다",
+    "creative_variant_unadopted": "크리에이티브 변형 채택을 취소했습니다",
+    "creative_variant_revision_selected": "크리에이티브 버전 r{{revision}}을(를) 선택했습니다",
     "coalesced_badge": "×{{count}}",
     "activity_count_one": "활동 {{count}}개",
     "activity_count_other": "활동 {{count}}개",

@@ -319,6 +319,8 @@
     "creative_order_adjustment_queued": "started a precise {{size}} adjustment",
     "creative_variant_adopted": "adopted a creative variant",
     "creative_variant_adopted_key": "adopted variant {{variant}}",
+    "creative_variant_unadopted": "cancelled creative variant adoption",
+    "creative_variant_revision_selected": "selected creative version r{{revision}}",
     "coalesced_badge": "×{{count}}",
     "activity_count_one": "{{count}} activity",
     "activity_count_other": "{{count}} activities",

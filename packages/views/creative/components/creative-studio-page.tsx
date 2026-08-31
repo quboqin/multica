@@ -18,6 +18,7 @@ import {
   RefreshCw,
   Save,
   Settings2,
+  Trash2,
 } from "lucide-react";
 import { api } from "@multica/core/api";
 import {
@@ -32,6 +33,9 @@ import {
   creativeSourceAnalysesOptions,
   useAdoptCreativeOrderVariant,
   useCancelCreativeOrder,
+  useDeleteCreativeOrder,
+  useSelectCreativeOrderVariantRevision,
+  useUnadoptCreativeOrderVariant,
 } from "@multica/core/creative";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { useWorkspacePaths } from "@multica/core/paths";
@@ -42,6 +46,7 @@ import {
 import { attachmentDownloadPath } from "@multica/core/types";
 import { resolvePublicFileUrl } from "@multica/core/workspace/avatar-url";
 import type {
+  Attachment,
   CreativeOrder,
   CreativeOrderAsset,
   CreativeOrderItem,
@@ -182,6 +187,7 @@ export function CreativeStudioPage() {
 }
 
 function CreativeStudioContent() {
+  const { t } = useT("creative");
   const wsId = useWorkspaceId();
   const queryClient = useQueryClient();
   const navigation = useNavigation();
@@ -250,8 +256,8 @@ function CreativeStudioContent() {
   const refreshResources = () => queryClient.invalidateQueries({ queryKey: creativeKeys.resources(wsId) });
   const archiveResource = useMutation({
     mutationFn: (id: string) => api.archiveCreativeResource(id),
-    onSuccess: () => { refreshResources(); toast.success("资源已归档"); },
-    onError: () => toast.error("无法归档资源"),
+    onSuccess: () => { refreshResources(); toast.success(t(($) => $.resourceFiles.removed)); },
+    onError: () => toast.error(t(($) => $.resourceFiles.removeFailed)),
   });
 
   return (
@@ -259,19 +265,19 @@ function CreativeStudioContent() {
       <PageHeader className="min-w-0 justify-between px-5">
         <div className="flex min-w-0 items-center gap-2">
           <Settings2 className="h-4 w-4 text-emerald-700" />
-          <h1 className="text-sm font-medium">创意工厂</h1>
-          <span className="hidden text-xs text-muted-foreground md:inline">选素材、验收成图、维护市场规则</span>
+          <h1 className="text-sm font-medium">{t(($) => $.studio.title)}</h1>
+          <span className="hidden text-xs text-muted-foreground md:inline">{t(($) => $.studio.subtitle)}</span>
         </div>
       </PageHeader>
 
       <Tabs value={tab} onValueChange={changeTab} className="flex min-h-0 min-w-0 flex-1 flex-col">
         <div className="min-w-0 border-b px-5 py-2">
           <TabsList className="h-auto min-h-8 w-full max-w-full min-w-0 flex-wrap justify-start gap-1 overflow-visible">
-            <TabsTrigger className="flex-none" value="home"><LayoutDashboard className="h-3.5 w-3.5" />工作台</TabsTrigger>
-            <TabsTrigger className="flex-none" value="materials"><Images className="h-3.5 w-3.5" />素材库</TabsTrigger>
-            <TabsTrigger className="flex-none" value="orders"><Layers3 className="h-3.5 w-3.5" />创意订单</TabsTrigger>
-            <TabsTrigger className="flex-none" value="resources"><Globe2 className="h-3.5 w-3.5" />品牌与市场规则</TabsTrigger>
-            <TabsTrigger className="flex-none" value="feedback"><BarChart3 className="h-3.5 w-3.5" />数据反馈</TabsTrigger>
+            <TabsTrigger className="flex-none" value="home"><LayoutDashboard className="h-3.5 w-3.5" />{t(($) => $.studio.workbench)}</TabsTrigger>
+            <TabsTrigger className="flex-none" value="materials"><Images className="h-3.5 w-3.5" />{t(($) => $.studio.materials)}</TabsTrigger>
+            <TabsTrigger className="flex-none" value="orders"><Layers3 className="h-3.5 w-3.5" />{t(($) => $.studio.orders)}</TabsTrigger>
+            <TabsTrigger className="flex-none" value="resources"><Globe2 className="h-3.5 w-3.5" />{t(($) => $.studio.resources)}</TabsTrigger>
+            <TabsTrigger className="flex-none" value="feedback"><BarChart3 className="h-3.5 w-3.5" />{t(($) => $.studio.feedback)}</TabsTrigger>
           </TabsList>
         </div>
 
@@ -303,7 +309,7 @@ function CreativeStudioContent() {
             onOrderCreated={openOrder}
           />
         </TabsContent>
-        <TabsContent value="orders" className="min-h-0 min-w-0 flex-1 overflow-y-auto p-5"><CreativeOrdersWorkspace selectedOrderId={selectedOrderId} onSelectOrder={openOrder} onBack={closeOrder} backLabel={returnIssueId ? "返回 issue" : "返回订单列表"} /></TabsContent>
+        <TabsContent value="orders" className="min-h-0 min-w-0 flex-1 overflow-y-auto p-5"><CreativeOrdersWorkspace selectedOrderId={selectedOrderId} onSelectOrder={openOrder} onBack={closeOrder} backLabel={returnIssueId ? t(($) => $.studio.returnToIssue) : t(($) => $.studio.returnToOrders)} /></TabsContent>
         <TabsContent value="resources" className="min-h-0 min-w-0 flex-1 overflow-hidden p-5">
           <CreativeResourcesWorkspace initialSection={resourceSection} resources={allResources} onCreate={setCreateKind} onArchive={(id) => archiveResource.mutate(id)} />
         </TabsContent>
@@ -325,6 +331,7 @@ function CreativeDiscoveryWorkspace({ filter, runId, onFilterChange, onRunChange
 }
 
 function CreativeOrdersWorkspace({ selectedOrderId, onSelectOrder, onBack, backLabel }: { selectedOrderId: string; onSelectOrder: (orderId: string) => void; onBack: () => void; backLabel: string }) {
+  const { t } = useT("creative");
   const wsId = useWorkspaceId();
   const orders = useQuery(creativeOrdersOptions(wsId));
   const materials = useQuery(creativeMaterialLibraryOptions(wsId));
@@ -332,43 +339,43 @@ function CreativeOrdersWorkspace({ selectedOrderId, onSelectOrder, onBack, backL
   if (selectedOrderId) return <CreativeOrderDetail orderId={selectedOrderId} onBack={onBack} onBrowseOrders={() => onSelectOrder("")} backLabel={backLabel} />;
   const candidatesById = new Map((materials.data?.candidates ?? []).map((candidate) => [candidate.id, candidate]));
   return <div className="mx-auto w-full min-w-0 max-w-[1440px] space-y-4">
-    <div className="flex flex-wrap items-end justify-between gap-3 border-b pb-3"><div><h2 className="text-base font-semibold">创意订单</h2><p className="mt-1 text-sm text-muted-foreground">从生成到验收、采用和下载都在订单内完成</p></div><Badge variant="outline">{creativeOrders.length} 个订单</Badge></div>
+    <div className="flex flex-wrap items-end justify-between gap-3 border-b pb-3"><div><h2 className="text-base font-semibold">{t(($) => $.studio.ordersTitle)}</h2><p className="mt-1 text-sm text-muted-foreground">{t(($) => $.studio.ordersDescription)}</p></div><Badge variant="outline">{t(($) => $.studio.ordersCount, { count: creativeOrders.length })}</Badge></div>
     <div className="divide-y border-y">{creativeOrders.map((creativeOrder) => {
       const stage = creativeOrderStage(creativeOrder);
-      const listState = creativeOrderListState(stage);
-      const summary = creativeOrderListSummary(creativeOrder);
-      const sources = creativeOrderSourceSummaries(creativeOrder, candidatesById);
+      const listState = creativeOrderListState(stage, t);
+      const summary = creativeOrderListSummary(creativeOrder, t);
+      const sources = creativeOrderSourceSummaries(creativeOrder, candidatesById, t);
       return <div key={creativeOrder.id} className="grid min-h-24 gap-3 bg-background px-4 py-3 transition-colors hover:bg-muted/20 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-center">
         <button type="button" className="grid min-w-0 grid-cols-[auto_minmax(0,1fr)] items-center gap-3 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" onClick={() => onSelectOrder(creativeOrder.id)}>
           <CreativeOrderSourceThumbs sources={sources} />
           <span className="min-w-0">
-            <span className="block truncate text-sm font-semibold">{creativeOrderSourceTitle(sources, creativeOrder)}</span>
-            <span className="mt-1 block truncate text-xs text-muted-foreground">{summary} · 更新于 {formatCreativeDateTime(creativeOrder.updated_at)}（{creativeTimeZoneLabel()}）</span>
+            <span className="block truncate text-sm font-semibold">{creativeOrderSourceTitle(sources, creativeOrder, t)}</span>
+            <span className="mt-1 block truncate text-xs text-muted-foreground">{summary} · {t(($) => $.studio.updatedAt, { time: formatCreativeDateTime(creativeOrder.updated_at), zone: t(($) => $.generationInfo.beijingTime) })}</span>
           </span>
         </button>
         <div className="flex flex-wrap items-center gap-2 lg:justify-end"><Badge variant={listState.badgeVariant}>{listState.label}</Badge><Button size="sm" onClick={() => onSelectOrder(creativeOrder.id)}>{listState.action}<ArrowRight className="h-4 w-4" /></Button></div>
       </div>;
     })}</div>
-    {!orders.isLoading && creativeOrders.length === 0 && <div className="flex min-h-64 items-center justify-center border border-dashed text-sm text-muted-foreground">暂无创意订单。请先在素材库选择素材并开始生成。</div>}
+    {!orders.isLoading && creativeOrders.length === 0 && <div className="flex min-h-64 items-center justify-center border border-dashed text-sm text-muted-foreground">{t(($) => $.studio.noOrders)}</div>}
   </div>;
 }
 
 type CreativeOrderListState = {
-  label: "生成中" | "待验收" | "已采用" | "已结束";
-  action: "查看进度" | "去验收" | "查看交付" | "查看记录";
+  label: string;
+  action: string;
   badgeVariant: "default" | "secondary" | "outline";
 };
 
-function creativeOrderListState(stage: CreativeOrderStage): CreativeOrderListState {
-  if (stage.key === "cancelled") return { label: "已结束", action: "查看记录", badgeVariant: "outline" };
-  if (stage.key === "delivered") return { label: "已采用", action: "查看交付", badgeVariant: "default" };
-  if (stage.key === "generating" || stage.key === "preparing") return { label: "生成中", action: "查看进度", badgeVariant: "outline" };
-  return { label: "待验收", action: "去验收", badgeVariant: "default" };
+function creativeOrderListState(stage: CreativeOrderStage, t: ReturnType<typeof useT>["t"]): CreativeOrderListState {
+  if (stage.key === "cancelled") return { label: t(($) => $.studio.orderStatus.ended), action: t(($) => $.studio.orderAction.record), badgeVariant: "outline" };
+  if (stage.key === "delivered") return { label: t(($) => $.studio.orderStatus.adopted), action: t(($) => $.studio.orderAction.delivery), badgeVariant: "default" };
+  if (stage.key === "generating" || stage.key === "preparing") return { label: t(($) => $.studio.orderStatus.generating), action: t(($) => $.studio.orderAction.progress), badgeVariant: "outline" };
+  return { label: t(($) => $.studio.orderStatus.review), action: t(($) => $.studio.orderAction.review), badgeVariant: "default" };
 }
 
-function creativeOrderListSummary(order: CreativeOrder): string {
+function creativeOrderListSummary(order: CreativeOrder, t: ReturnType<typeof useT>["t"]): string {
   const progress = creativeOrderGenerationProgress(order);
-  return `已选 ${order.items.length} 张素材 · 已生成 ${progress.ready}/${progress.expected} 张成图`;
+  return t(($) => $.studio.orderSummary, { items: order.items.length, ready: progress.ready, expected: progress.expected });
 }
 
 export function creativeOrderGenerationProgress(order: CreativeOrder): { ready: number; expected: number } {
@@ -398,43 +405,45 @@ type CreativeOrderSourceSummary = {
   url: string;
 };
 
-function creativeOrderSourceSummaries(order: CreativeOrder, candidatesById: Map<string, CreativeMaterialCandidate>): CreativeOrderSourceSummary[] {
+function creativeOrderSourceSummaries(order: CreativeOrder, candidatesById: Map<string, CreativeMaterialCandidate>, t: ReturnType<typeof useT>["t"]): CreativeOrderSourceSummary[] {
   return order.items.map((item, index) => {
     const candidate = candidatesById.get(item.candidate_id);
     return {
       id: item.candidate_id || item.id || String(index),
-      label: creativeOrderSourceLabel(candidate, item, index),
+      label: creativeOrderSourceLabel(candidate, item, index, t),
       url: resolvePublicFileUrl(candidate?.archived_url || candidate?.poster_url || candidate?.preview_url || "") ?? "",
     };
   });
 }
 
-function creativeOrderSourceLabel(candidate: CreativeMaterialCandidate | undefined, item: CreativeOrderItem, index: number): string {
-  return candidate?.title || candidate?.competitor || item.candidate_id?.slice(0, 8) || `素材 ${index + 1}`;
+function creativeOrderSourceLabel(candidate: CreativeMaterialCandidate | undefined, item: CreativeOrderItem, index: number, t: ReturnType<typeof useT>["t"]): string {
+  return candidate?.title || candidate?.competitor || item.candidate_id?.slice(0, 8) || t(($) => $.studio.sourceMaterialNumber, { index: index + 1 });
 }
 
-function creativeOrderSourceTitle(sources: CreativeOrderSourceSummary[], order: CreativeOrder): string {
-  if (sources.length === 0) return `订单 ${order.id.slice(0, 8)}`;
+function creativeOrderSourceTitle(sources: CreativeOrderSourceSummary[], order: CreativeOrder, t: ReturnType<typeof useT>["t"]): string {
+  if (sources.length === 0) return t(($) => $.studio.orderNumber, { id: order.id.slice(0, 8) });
   const labels = [...new Set(sources.map((source) => source.label).filter(Boolean))];
   const visible = labels.slice(0, 3).join(" / ");
   if (labels.length <= 3) return visible;
-  return `${visible} 等 ${labels.length} 张素材`;
+  return t(($) => $.studio.andMoreMaterials, { visible, count: labels.length });
 }
 
 function CreativeOrderSourceThumbs({ sources }: { sources: CreativeOrderSourceSummary[] }) {
+  const { t } = useT("creative");
   const visible = sources.slice(0, 3);
   if (visible.length === 0) {
     return <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-md border bg-muted/30 text-muted-foreground"><Images className="h-4 w-4" /></span>;
   }
   return <span className="flex shrink-0 items-center gap-1">
     {visible.map((source) => <span key={source.id} className="flex h-12 w-12 overflow-hidden rounded-md border bg-muted/20">
-      {source.url ? <img src={source.url} alt={`来源素材 ${source.label}`} width={96} height={96} loading="lazy" className="h-full w-full object-cover" /> : <span className="flex h-full w-full items-center justify-center text-muted-foreground"><Images className="h-4 w-4" /></span>}
+      {source.url ? <img src={source.url} alt={t(($) => $.studio.sourceMaterialAlt, { label: source.label })} width={96} height={96} loading="lazy" className="h-full w-full object-cover" /> : <span className="flex h-full w-full items-center justify-center text-muted-foreground"><Images className="h-4 w-4" /></span>}
     </span>)}
     {sources.length > visible.length && <span className="flex h-12 min-w-12 items-center justify-center rounded-md border bg-muted/30 px-2 text-xs font-medium text-muted-foreground">+{sources.length - visible.length}</span>}
   </span>;
 }
 
 function CreativeOrderDetail({ orderId, onBack, onBrowseOrders, backLabel }: { orderId: string; onBack: () => void; onBrowseOrders: () => void; backLabel: string }) {
+  const { t } = useT("creative");
   const wsId = useWorkspaceId();
   const queryClient = useQueryClient();
   const order = useQuery({
@@ -445,6 +454,9 @@ function CreativeOrderDetail({ orderId, onBack, onBrowseOrders, backLabel }: { o
   const library = useQuery(creativeMaterialLibraryOptions(wsId));
   const adoptVariant = useAdoptCreativeOrderVariant(wsId, orderId);
   const cancelOrder = useCancelCreativeOrder(wsId, orderId);
+  const deleteOrder = useDeleteCreativeOrder(wsId, orderId);
+  const unadoptVariant = useUnadoptCreativeOrderVariant(wsId, orderId);
+  const selectRevision = useSelectCreativeOrderVariantRevision(wsId, orderId);
   const data = order.data;
   const assets = data?.items.flatMap((item) => item.variants.flatMap((variant) => variant.assets)) ?? [];
   const ids = [...new Set(assets.map((asset) => asset.attachment_id).filter(Boolean))];
@@ -460,6 +472,7 @@ function CreativeOrderDetail({ orderId, onBack, onBrowseOrders, backLabel }: { o
   const [adjustBusy, setAdjustBusy] = useState(false);
   const [retryingVariantId, setRetryingVariantId] = useState("");
   const [cancelOpen, setCancelOpen] = useState(false);
+  const [deleteOpen, setDeleteOpen] = useState(false);
   const comparisonRef = useRef<HTMLDivElement>(null);
   const confirmedContentRef = useRef<HTMLDivElement>(null);
   const adoptedVariantIds = new Set(data?.items.flatMap((item) => {
@@ -485,7 +498,7 @@ function CreativeOrderDetail({ orderId, onBack, onBrowseOrders, backLabel }: { o
   const canAdjustAllSizes = activeExpectedSizes.length > 1;
   const generationInfoVariant = generationInfoAsset ? variantById.get(generationInfoAsset.variant_id) : undefined;
   const isDirectEdit = data?.trigger_evidence_kind === "creative_direct_edit";
-  const adoptionStatus = creativeOrderAdoptionStatus(data);
+  const adoptionStatus = creativeOrderAdoptionStatus(data) === "已采用" ? t(($) => $.studio.orderStatus.adopted) : t(($) => $.studio.orderStatus.review);
   const stage = creativeOrderStage(data);
   const isCancelled = stage.key === "cancelled";
   const source = library.data?.candidates.find((candidate) => candidate.id === activeVariant?.item.candidate_id);
@@ -502,8 +515,8 @@ function CreativeOrderDetail({ orderId, onBack, onBrowseOrders, backLabel }: { o
     : undefined;
   const adjustmentBeforeURL = attachmentURL(adjustmentBefore);
   const comparisonSource = adjustmentBefore && adjustmentBeforeURL
-    ? { label: `调整前 · r${adjustmentBefore.revision}`, url: adjustmentBeforeURL }
-    : { label: source?.title || "原始素材", url: resolvePublicFileUrl(source?.archived_url || source?.preview_url) ?? "" };
+    ? { label: t(($) => $.studio.beforeAdjustment, { revision: adjustmentBefore.revision }), url: adjustmentBeforeURL }
+    : { label: source?.title || t(($) => $.studio.originalMaterial), url: resolvePublicFileUrl(source?.archived_url || source?.preview_url) ?? "" };
   const comparisonAssets = reviewAssets
     .filter((asset) => byId.has(asset.attachment_id) && (!activeVariant || variantById.get(asset.variant_id)?.item.id === activeVariant.item.id))
     .map((asset) => ({ id: asset.id, label: `${asset.stage} · ${asset.size_key}`, finalUrl: attachmentURL(asset), baseUrl: attachmentURL(generatedFor(asset)), thumbnailUrl: attachmentURL(asset), size: asset.size_key, variant: variantById.get(asset.variant_id)?.variant.variant_key || "" }));
@@ -519,7 +532,7 @@ function CreativeOrderDetail({ orderId, onBack, onBrowseOrders, backLabel }: { o
     if (decision !== "downloaded") return;
     try {
       await api.createCreativeFeedback({ issue_id: data?.issue_id ?? "", subject_type: "asset", subject_id: asset.id, event_type: "viewed", decision: "", context_snapshot: { action: "download", order_id: orderId, variant_id: asset.variant_id, size_key: asset.size_key, revision: asset.revision } });
-    } catch (error) { toast.error(error instanceof Error ? error.message : "无法记录下载行为"); }
+    } catch (error) { toast.error(error instanceof Error ? error.message : t(($) => $.studio.downloadTrackingFailed)); }
   };
   const createOrderAdjustmentIssue = async (asset: CreativeOrderAsset, request: string, scope: CreativeAdjustmentScope) => {
     if (!data?.issue_id) throw new Error("该订单缺少协作记录，无法创建精准调整");
@@ -572,9 +585,9 @@ function CreativeOrderDetail({ orderId, onBack, onBrowseOrders, backLabel }: { o
       await queryClient.invalidateQueries({ queryKey: creativeKeys.feedback(wsId, "asset", "") });
       await queryClient.invalidateQueries({ queryKey: creativeKeys.order(wsId, orderId) });
       await queryClient.invalidateQueries({ queryKey: creativeKeys.orders(wsId) });
-      toast.success("精准调整请求已创建");
+      toast.success(t(($) => $.studio.adjustmentCreated));
       return true;
-    } catch (error) { toast.error(error instanceof Error ? error.message : "无法提交标注调整"); return false; }
+    } catch (error) { toast.error(error instanceof Error ? error.message : t(($) => $.studio.adjustmentAnnotationFailed)); return false; }
   };
   const submitAdjustment = async () => {
     if (!active || !data?.issue_id || !adjustment.trim()) return;
@@ -586,8 +599,8 @@ function CreativeOrderDetail({ orderId, onBack, onBrowseOrders, backLabel }: { o
       await queryClient.invalidateQueries({ queryKey: creativeKeys.feedback(wsId, "asset", "") });
       await queryClient.invalidateQueries({ queryKey: creativeKeys.order(wsId, orderId) });
       await queryClient.invalidateQueries({ queryKey: creativeKeys.orders(wsId) });
-      setAdjustment(""); setAdjustmentScope("size"); setAdjustOpen(false); toast.success("精准调整请求已创建");
-    } catch (error) { toast.error(error instanceof Error ? error.message : "无法提交调整请求"); }
+      setAdjustment(""); setAdjustmentScope("size"); setAdjustOpen(false); toast.success(t(($) => $.studio.adjustmentCreated));
+    } catch (error) { toast.error(error instanceof Error ? error.message : t(($) => $.studio.adjustmentSubmitFailed)); }
     finally { setAdjustBusy(false); }
   };
   const retryVariant = async (variant: CreativeOrderVariant, action: CreativeVariantRetryAction) => {
@@ -602,9 +615,9 @@ function CreativeOrderDetail({ orderId, onBack, onBrowseOrders, backLabel }: { o
       }
       await queryClient.invalidateQueries({ queryKey: creativeKeys.order(wsId, orderId) });
       await queryClient.invalidateQueries({ queryKey: creativeKeys.orders(wsId) });
-      toast.success(action.kind === "qc" ? "已重新启动质检" : action.kind === "prime" ? "已重新启动品牌组件合成" : "已重新启动此方案");
+      toast.success(action.kind === "qc" ? t(($) => $.studio.retryQcStarted) : action.kind === "prime" ? t(($) => $.studio.retryPrimeStarted) : t(($) => $.studio.retryVariantStarted));
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "无法重试此方案");
+      toast.error(error instanceof Error ? error.message : t(($) => $.studio.retryFailed));
     } finally {
       setRetryingVariantId("");
     }
@@ -612,8 +625,8 @@ function CreativeOrderDetail({ orderId, onBack, onBrowseOrders, backLabel }: { o
 
   return <div className="mx-auto max-w-[1440px] space-y-4">
     <div className="flex flex-wrap items-end justify-between gap-3 border-b pb-3">
-      <div><div className="flex items-center gap-1"><Button size="sm" variant="ghost" onClick={onBack}><ArrowLeft className="h-4 w-4" />{backLabel}</Button>{backLabel === "返回 issue" && <Button size="sm" variant="ghost" onClick={onBrowseOrders}>全部订单</Button>}</div><h2 className="mt-2 text-base font-semibold">订单 {orderId.slice(0, 8)}</h2><p className="mt-1 text-xs text-muted-foreground">{stage.detail} · 更新于 {formatCreativeDateTime(data?.updated_at || "")}（{creativeTimeZoneLabel()}）</p></div>
-      <div className="flex items-center gap-2"><Badge variant={stage.key === "review" || stage.key === "attention" || stage.key === "delivered" ? "default" : "outline"}>{stage.label}</Badge>{!isDirectEdit && <Badge variant={adoptionStatus === "已采用" ? "default" : "secondary"}>{adoptionStatus}</Badge>}{data && !["delivered", "cancelled"].includes(stage.key) && <Button size="sm" variant="outline" onClick={() => setCancelOpen(true)}><CircleStop className="h-4 w-4" />结束订单</Button>}</div>
+      <div><div className="flex items-center gap-1"><Button size="sm" variant="ghost" onClick={onBack}><ArrowLeft className="h-4 w-4" />{backLabel}</Button>{backLabel === t(($) => $.studio.returnToIssue) && <Button size="sm" variant="ghost" onClick={onBrowseOrders}>{t(($) => $.studio.allOrders)}</Button>}</div><h2 className="mt-2 text-base font-semibold">{t(($) => $.studio.order, { id: orderId.slice(0, 8) })}</h2><p className="mt-1 text-xs text-muted-foreground">{stage.detail} · {t(($) => $.studio.updatedAt, { time: formatCreativeDateTime(data?.updated_at || ""), zone: t(($) => $.generationInfo.beijingTime) })}</p></div>
+      <div className="flex flex-wrap items-center justify-end gap-2"><Badge variant={stage.key === "review" || stage.key === "attention" || stage.key === "delivered" ? "default" : "outline"}>{stage.label}</Badge>{!isDirectEdit && <Badge variant={adoptionStatus === t(($) => $.studio.orderStatus.adopted) ? "default" : "secondary"}>{adoptionStatus}</Badge>}{data && !["delivered", "cancelled"].includes(stage.key) && <Button size="sm" variant="outline" onClick={() => setCancelOpen(true)}><CircleStop className="h-4 w-4" />{t(($) => $.studio.endOrder)}</Button>}{data && <Button size="sm" variant="outline" className="text-destructive hover:text-destructive" onClick={() => setDeleteOpen(true)}><Trash2 className="h-4 w-4" />{t(($) => $.studio.deleteOrder)}</Button>}</div>
     </div>
     {data && <CreativeOrderStatusPanel order={data} stage={stage} />}
     <CreativeOrderJourney stageKey={stage.key} />
@@ -625,7 +638,7 @@ function CreativeOrderDetail({ orderId, onBack, onBrowseOrders, backLabel }: { o
           orderId={orderId}
           item={item}
           order={data}
-          source={{ label: itemSource?.title || itemSource?.competitor || "原始素材", url: resolvePublicFileUrl(itemSource?.archived_url || itemSource?.preview_url) ?? "" }}
+          source={{ label: itemSource?.title || itemSource?.competitor || t(($) => $.studio.originalMaterial), url: resolvePublicFileUrl(itemSource?.archived_url || itemSource?.preview_url) ?? "" }}
           attachments={byId}
           adoptingVariantId={adoptVariant.isPending ? adoptVariant.variables?.variantId ?? "" : ""}
           disabled={isCancelled}
@@ -640,11 +653,15 @@ function CreativeOrderDetail({ orderId, onBack, onBrowseOrders, backLabel }: { o
             adoptVariant.mutate({ itemId: item.id, variantId, qcRiskAcknowledged: risk?.acknowledged, qcRiskReason: risk?.reason }, {
               onSuccess: () => {
                 if (selectedAsset) setActiveAssetId(selectedAsset.id);
-                toast.success("最终采用方案已更新");
+                toast.success(t(($) => $.studio.adoptionUpdated));
               },
-              onError: (error) => toast.error(error instanceof Error ? error.message : "无法采用此变体"),
+              onError: (error) => toast.error(error instanceof Error ? error.message : t(($) => $.studio.adoptFailed)),
             });
           }}
+          onUnadopt={(itemId) => unadoptVariant.mutate({ itemId }, {
+            onSuccess: () => toast.success(t(($) => $.studio.unadopted)),
+            onError: (error) => toast.error(error instanceof Error ? error.message : t(($) => $.studio.unadoptFailed)),
+          })}
           onAssetSelect={selectReviewAsset}
           onAssetInfo={setGenerationInfoAssetId}
         />;
@@ -656,7 +673,7 @@ function CreativeOrderDetail({ orderId, onBack, onBrowseOrders, backLabel }: { o
           orderId={orderId}
           item={item}
           order={data}
-          source={{ label: itemSource?.title || itemSource?.competitor || "原始素材", url: resolvePublicFileUrl(itemSource?.archived_url || itemSource?.preview_url) ?? "" }}
+          source={{ label: itemSource?.title || itemSource?.competitor || t(($) => $.studio.originalMaterial), url: resolvePublicFileUrl(itemSource?.archived_url || itemSource?.preview_url) ?? "" }}
           attachments={byId}
           adoptingVariantId=""
           onAdopt={() => undefined}
@@ -682,7 +699,7 @@ function CreativeOrderDetail({ orderId, onBack, onBrowseOrders, backLabel }: { o
       const targetSize = creativeOrderAdjustmentSize({ size_key: sizeKey });
       const annotationGuideAttachmentID = typeof latestAdjustment.context_snapshot.annotation_guide_attachment_id === "string" ? latestAdjustment.context_snapshot.annotation_guide_attachment_id : "";
       if (!asset || !adjustmentIssueId || !targetSize || sourceRevision < 1) {
-        toast.error("当前调整记录缺少可重启的目标信息");
+        toast.error(t(($) => $.studio.adjustmentTargetMissing));
         return;
       }
       setAdjustBusy(true);
@@ -693,18 +710,31 @@ function CreativeOrderDetail({ orderId, onBack, onBrowseOrders, backLabel }: { o
         await queryClient.invalidateQueries({ queryKey: creativeKeys.order(wsId, orderId) });
         await queryClient.invalidateQueries({ queryKey: creativeKeys.orders(wsId) });
         const expectedCount = Array.isArray(latestAdjustment.context_snapshot.expected_sizes) ? latestAdjustment.context_snapshot.expected_sizes.length : 0;
-        toast.success(scope === "variant" ? `已重新启动全部交付尺寸调整${expectedCount > 0 ? `（${expectedCount}）` : ""}` : "已重新启动当前尺寸调整");
+        toast.success(scope === "variant" ? t(($) => $.studio.adjustmentRestartedAll, { count: expectedCount }) : t(($) => $.studio.adjustmentRestartedCurrent));
       } catch (error) {
-        toast.error(error instanceof Error ? error.message : "无法重新启动调整");
+        toast.error(error instanceof Error ? error.message : t(($) => $.studio.adjustmentRestartFailed));
       } finally {
         setAdjustBusy(false);
       }
     }} />}
+    {isDirectEdit && activeVariant && <CreativeDirectEditRevisionPicker
+      variant={activeVariant.variant}
+      attachments={byId}
+      disabled={isCancelled || selectRevision.isPending}
+      selectingRevision={selectRevision.isPending ? selectRevision.variables?.revision ?? 0 : 0}
+      onSelect={(revision) => selectRevision.mutate({ variantId: activeVariant.variant.id, revision }, {
+        onSuccess: () => {
+          setActiveAssetId("");
+          toast.success(t(($) => $.studio.revisionSwitched, { revision }));
+        },
+        onError: (error) => toast.error(error instanceof Error ? error.message : t(($) => $.studio.revisionSwitchFailed)),
+      })}
+    />}
     {active && attachmentURL(active) && <div ref={comparisonRef} className={cn("h-[min(78vh,860px)] min-h-[620px] scroll-mt-4 overflow-hidden border", isDirectEdit && "grid grid-rows-[auto_minmax(0,1fr)]")}>
-      {isDirectEdit && <div className="flex items-center gap-2 border-b px-4 py-3"><span className="text-sm font-semibold">交付包</span><Badge variant="outline">直接改图</Badge></div>}
+      {isDirectEdit && <div className="flex items-center gap-2 border-b px-4 py-3"><span className="text-sm font-semibold">{t(($) => $.studio.directEditPackage)}</span><Badge variant="outline">{t(($) => $.studio.directEdit)}</Badge></div>}
       <CreativeComparisonWorkspace
         source={comparisonSource}
-        result={{ id: active.id, label: `${activeVariant?.variant.variant_key || "结果"} · ${active.size_key}`, finalUrl: attachmentURL(active), baseUrl: attachmentURL(generatedFor(active)), size: active.size_key, variant: activeVariant?.variant.variant_key }}
+        result={{ id: active.id, label: `${activeVariant?.variant.variant_key || t(($) => $.studio.result)} · ${active.size_key}`, finalUrl: attachmentURL(active), baseUrl: attachmentURL(generatedFor(active)), size: active.size_key, variant: activeVariant?.variant.variant_key }}
         assets={comparisonAssets}
         onAssetChange={setActiveAssetId}
         onAdjust={isCancelled ? undefined : () => setAdjustOpen(true)}
@@ -712,7 +742,7 @@ function CreativeOrderDetail({ orderId, onBack, onBrowseOrders, backLabel }: { o
         onDecision={(decision) => void event(active, decision)}
         onAnnotations={isCancelled ? undefined : (drafts) => annotation(active, drafts)}
         annotationScopes={canAdjustAllSizes ? ["size", "variant"] : ["size"]}
-        annotationScopeLabels={{ variant: `全部交付尺寸（${activeExpectedSizes.length}）` }}
+        annotationScopeLabels={{ variant: t(($) => $.studio.allDeliverySizes, { count: activeExpectedSizes.length }) }}
         showDecisionActions={false}
         comparisonMode={adjustmentBefore && adjustmentBeforeURL ? "adjustment" : "source"}
       />
@@ -729,45 +759,107 @@ function CreativeOrderDetail({ orderId, onBack, onBrowseOrders, backLabel }: { o
       imageUrl={attachmentURL(generationInfoAsset)}
     />
     {data && !order.isLoading && reviewAssets.length === 0 && <div className="flex min-h-72 items-center justify-center border border-dashed px-6 text-center text-sm text-muted-foreground">{creativeOrderWaitingMessage(actionableFailures, isCancelled)}</div>}
-    <Dialog open={adjustOpen} onOpenChange={setAdjustOpen}><DialogContent className="max-w-xl"><DialogHeader><DialogTitle>精准调整当前成图</DialogTitle><DialogDescription>{activeVariant?.variant.variant_key || "当前变体"} · {active?.size_key}。{adjustmentScope === "variant" ? `本次会调整当前版本的全部 ${activeExpectedSizes.length} 个交付尺寸，当前图作为参考。` : "本次只处理当前尺寸，协作记录会单独保存。"}</DialogDescription></DialogHeader><div className="space-y-3"><div className="space-y-1.5"><Label className="text-xs text-muted-foreground">调整范围</Label><div className="inline-flex border" role="group" aria-label="精准调整范围"><button type="button" aria-pressed={adjustmentScope === "size"} onClick={() => setAdjustmentScope("size")} className={cn("h-8 px-3 text-xs", adjustmentScope === "size" && "bg-foreground text-background")}>当前尺寸</button>{canAdjustAllSizes && <button type="button" aria-pressed={adjustmentScope === "variant"} onClick={() => setAdjustmentScope("variant")} className={cn("h-8 border-l px-3 text-xs", adjustmentScope === "variant" && "bg-foreground text-background")}>全部交付尺寸（{activeExpectedSizes.length}）</button>}</div></div><Textarea rows={5} value={adjustment} onChange={(event) => setAdjustment(event.target.value)} placeholder="说明当前成图需要改什么，以及必须保留的视觉风格、文案和布局..." /></div><DialogFooter><Button variant="outline" onClick={() => setAdjustOpen(false)}>取消</Button><Button disabled={adjustBusy || !adjustment.trim()} onClick={() => void submitAdjustment()}>{adjustBusy ? "正在提交" : "提交精准调整"}</Button></DialogFooter></DialogContent></Dialog>
+    <Dialog open={adjustOpen} onOpenChange={setAdjustOpen}><DialogContent className="max-w-xl"><DialogHeader><DialogTitle>{t(($) => $.studio.adjustDialogTitle)}</DialogTitle><DialogDescription>{activeVariant?.variant.variant_key || t(($) => $.studio.adjustCurrentVariant)} · {active?.size_key}。{adjustmentScope === "variant" ? t(($) => $.studio.adjustAllSizes, { count: activeExpectedSizes.length }) : t(($) => $.studio.adjustThisSize)}</DialogDescription></DialogHeader><div className="space-y-3"><div className="space-y-1.5"><Label className="text-xs text-muted-foreground">{t(($) => $.studio.adjustScope)}</Label><div className="inline-flex border" role="group" aria-label={t(($) => $.studio.adjustScope)}><button type="button" aria-pressed={adjustmentScope === "size"} onClick={() => setAdjustmentScope("size")} className={cn("h-8 px-3 text-xs", adjustmentScope === "size" && "bg-foreground text-background")}>{t(($) => $.studio.currentSize)}</button>{canAdjustAllSizes && <button type="button" aria-pressed={adjustmentScope === "variant"} onClick={() => setAdjustmentScope("variant")} className={cn("h-8 border-l px-3 text-xs", adjustmentScope === "variant" && "bg-foreground text-background")}>{t(($) => $.studio.allDeliverySizes, { count: activeExpectedSizes.length })}</button>}</div></div><Textarea rows={5} value={adjustment} onChange={(event) => setAdjustment(event.target.value)} placeholder={t(($) => $.studio.adjustPlaceholder)} /></div><DialogFooter><Button variant="outline" onClick={() => setAdjustOpen(false)}>{t(($) => $.studio.cancel)}</Button><Button disabled={adjustBusy || !adjustment.trim()} onClick={() => void submitAdjustment()}>{adjustBusy ? t(($) => $.studio.submitting) : t(($) => $.studio.submitAdjustment)}</Button></DialogFooter></DialogContent></Dialog>
     <AlertDialog open={cancelOpen} onOpenChange={(open) => { if (!cancelOrder.isPending) setCancelOpen(open); }}>
       <AlertDialogContent>
-        <AlertDialogHeader><AlertDialogTitle>结束这个创意订单？</AlertDialogTitle><AlertDialogDescription>仍在运行的生成任务会停止。已有成图、失败原因和协作记录会保留，但订单不再占用工作台待验收列表，也不能继续采用或调整。</AlertDialogDescription></AlertDialogHeader>
-        <AlertDialogFooter><AlertDialogCancel disabled={cancelOrder.isPending}>继续保留</AlertDialogCancel><AlertDialogAction className="bg-destructive text-white hover:bg-destructive/90" disabled={cancelOrder.isPending} onClick={() => cancelOrder.mutate(undefined, { onSuccess: () => { setCancelOpen(false); toast.success("订单已结束"); }, onError: (error) => toast.error(error instanceof Error ? error.message : "无法结束订单") })}>{cancelOrder.isPending ? "正在结束" : "结束订单"}</AlertDialogAction></AlertDialogFooter>
+        <AlertDialogHeader><AlertDialogTitle>{t(($) => $.studio.endConfirmTitle)}</AlertDialogTitle><AlertDialogDescription>{t(($) => $.studio.endConfirmDescription)}</AlertDialogDescription></AlertDialogHeader>
+        <AlertDialogFooter><AlertDialogCancel disabled={cancelOrder.isPending}>{t(($) => $.studio.keepOrder)}</AlertDialogCancel><AlertDialogAction className="bg-destructive text-white hover:bg-destructive/90" disabled={cancelOrder.isPending} onClick={() => cancelOrder.mutate(undefined, { onSuccess: () => { setCancelOpen(false); toast.success(t(($) => $.studio.ended)); }, onError: (error) => toast.error(error instanceof Error ? error.message : t(($) => $.studio.endFailed)) })}>{cancelOrder.isPending ? t(($) => $.studio.ending) : t(($) => $.studio.endOrder)}</AlertDialogAction></AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+    <AlertDialog open={deleteOpen} onOpenChange={(open) => { if (!deleteOrder.isPending) setDeleteOpen(open); }}>
+      <AlertDialogContent>
+        <AlertDialogHeader><AlertDialogTitle>{t(($) => $.studio.deleteConfirmTitle)}</AlertDialogTitle><AlertDialogDescription>{t(($) => $.studio.deleteConfirmDescription)}</AlertDialogDescription></AlertDialogHeader>
+        <AlertDialogFooter><AlertDialogCancel disabled={deleteOrder.isPending}>{t(($) => $.studio.cancel)}</AlertDialogCancel><AlertDialogAction className="bg-destructive text-white hover:bg-destructive/90" disabled={deleteOrder.isPending} onClick={() => deleteOrder.mutate(undefined, { onSuccess: () => { setDeleteOpen(false); onBrowseOrders(); toast.success(t(($) => $.studio.deleted)); }, onError: (error) => toast.error(error instanceof Error ? error.message : t(($) => $.studio.deleteFailed)) })}>{deleteOrder.isPending ? t(($) => $.studio.deleting) : t(($) => $.studio.deleteOrder)}</AlertDialogAction></AlertDialogFooter>
       </AlertDialogContent>
     </AlertDialog>
   </div>;
 }
 
+type CreativeDirectEditRevisionChoice = {
+  revision: number;
+  asset: CreativeOrderAsset;
+};
+
+function creativeDirectEditRevisionChoices(variant: CreativeOrderVariant): CreativeDirectEditRevisionChoice[] {
+  return [...(variant.revisions ?? [])]
+    .sort((left, right) => right.revision - left.revision)
+    .flatMap((revision) => {
+      if (revision.status !== "completed") return [];
+      const expectedSizes = creativeVariantRevisionExpectedSizes(variant, revision.revision);
+      const delivered = expectedSizes.map((size) => variant.assets.find((asset) =>
+        asset.revision === revision.revision
+        && asset.size_key === size
+        && asset.stage === "delivered"
+        && asset.status === "completed"
+        && Boolean(asset.attachment_id),
+      ));
+      const primary = delivered[0];
+      return delivered.length === expectedSizes.length && primary ? [{ revision: revision.revision, asset: primary }] : [];
+    });
+}
+
+function CreativeDirectEditRevisionPicker({
+  variant,
+  attachments,
+  disabled,
+  selectingRevision,
+  onSelect,
+}: {
+  variant: CreativeOrderVariant;
+  attachments: Map<string, Attachment>;
+  disabled: boolean;
+  selectingRevision: number;
+  onSelect: (revision: number) => void;
+}) {
+  const { t } = useT("creative");
+  const choices = creativeDirectEditRevisionChoices(variant);
+  if (choices.length < 2) return null;
+  return <section className="border bg-background" aria-label={t(($) => $.studio.revisionPicker)}>
+    <div className="flex items-center justify-between gap-3 border-b px-4 py-3"><h3 className="text-sm font-semibold">{t(($) => $.studio.revisionSelection)}</h3><Badge variant="outline">{t(($) => $.studio.currentRevision, { revision: variant.active_revision })}</Badge></div>
+    <div className="grid gap-px bg-border sm:grid-cols-2 lg:grid-cols-3">
+      {choices.map(({ revision, asset }) => {
+        const active = revision === variant.active_revision;
+        const url = creativeAttachmentBrowserURL(attachments.get(asset.attachment_id));
+        return <div key={revision} className="min-w-0 bg-background p-3">
+          {url && <img src={url} alt={t(($) => $.studio.directEditRevision, { revision })} width={800} height={1000} className="mb-3 aspect-square w-full border object-contain" />}
+          <div className="flex items-center justify-between gap-2"><span className="text-sm font-medium">r{revision}</span>{active ? <Badge>{t(($) => $.studio.currentlyUsed)}</Badge> : <Button size="sm" variant="outline" disabled={disabled || selectingRevision > 0} onClick={() => onSelect(revision)}>{selectingRevision === revision ? t(($) => $.studio.switching) : t(($) => $.studio.useThisRevision)}</Button>}</div>
+        </div>;
+      })}
+    </div>
+  </section>;
+}
+
 function CreativeAdjustmentStatus({ event, variant, issueId, onRetry, retrying = false }: { event: CreateCreativeFeedbackResponse; variant?: CreativeOrderVariant; issueId: string; onRetry: () => Promise<void>; retrying?: boolean }) {
+  const { t } = useT("creative");
   const navigation = useNavigation();
   const paths = useWorkspacePaths();
   const variantKey = variant?.variant_key || String(event.context_snapshot.variant_id || "").slice(0, 8);
   const sizeKey = typeof event.context_snapshot.size_key === "string" ? event.context_snapshot.size_key : "";
   const scope = event.context_snapshot.scope === "variant" ? "variant" : "size";
   const expectedCount = Array.isArray(event.context_snapshot.expected_sizes) ? event.context_snapshot.expected_sizes.length : 0;
-  const scopeLabel = scope === "variant" ? `全部交付尺寸${expectedCount > 0 ? `（${expectedCount}）` : ""}` : sizeKey;
+  const scopeLabel = scope === "variant" ? t(($) => $.studio.adjustmentScopeVariant, { count: expectedCount > 0 ? ` (${expectedCount})` : "" }) : sizeKey;
   const adjustmentIssueId = typeof event.context_snapshot.adjustment_issue_id === "string" ? event.context_snapshot.adjustment_issue_id : "";
   const collaborationIssueId = adjustmentIssueId || issueId;
   const canRetry = creativeAdjustmentCanRetry(variant, event);
   return <section className="flex flex-wrap items-center gap-3 border-y bg-amber-50/60 px-4 py-3 dark:bg-amber-950/10" role="status" data-testid="creative-adjustment-status">
     <RefreshCw className={cn("h-4 w-4 text-amber-700", variant && !["completed", "action_required", "failed"].includes(variant.status) && "animate-spin")} />
-    <div className="min-w-0 flex-1"><p className="text-sm font-medium">{creativeAdjustmentProgress(variant, event)}</p><p className="mt-0.5 truncate text-xs text-muted-foreground">{variantKey}{scopeLabel ? ` · ${scopeLabel}` : ""} · {event.comment || "已记录调整要求"}</p></div>
-    {canRetry && <Button size="sm" disabled={retrying} onClick={() => void onRetry()}>{retrying ? "正在启动" : "重新启动调整"}</Button>}
-    <Button size="sm" variant="outline" disabled={!collaborationIssueId} onClick={() => navigation.push(paths.issueDetail(collaborationIssueId))}>查看协作记录</Button>
+    <div className="min-w-0 flex-1"><p className="text-sm font-medium">{creativeAdjustmentProgress(variant, event)}</p><p className="mt-0.5 truncate text-xs text-muted-foreground">{variantKey}{scopeLabel ? ` · ${scopeLabel}` : ""} · {event.comment || t(($) => $.studio.adjustmentRequirement)}</p></div>
+    {canRetry && <Button size="sm" disabled={retrying} onClick={() => void onRetry()}>{retrying ? t(($) => $.studio.starting) : t(($) => $.studio.restartAdjustment)}</Button>}
+    <Button size="sm" variant="outline" disabled={!collaborationIssueId} onClick={() => navigation.push(paths.issueDetail(collaborationIssueId))}>{t(($) => $.studio.viewCollaboration)}</Button>
   </section>;
 }
 
 function CreativeOrderJourney({ stageKey }: { stageKey: ReturnType<typeof creativeOrderStage>["key"] }) {
-  if (stageKey === "cancelled") return <div className="flex min-h-12 items-center gap-2 border px-4 py-3 text-sm text-muted-foreground"><CircleStop className="h-4 w-4" /><span><strong className="font-medium text-foreground">订单已结束</strong> · 已有结果和过程记录仍可查看</span></div>;
+  const { t } = useT("creative");
+  if (stageKey === "cancelled") return <div className="flex min-h-12 items-center gap-2 border px-4 py-3 text-sm text-muted-foreground"><CircleStop className="h-4 w-4" /><span>{t(($) => $.studio.orderEndedMessage)}</span></div>;
   const steps = [
-    { key: "preparing", label: "确认素材与方向" },
-    { key: "generating", label: "生成三套方案" },
-    { key: "review", label: "验收与调整" },
-    { key: "delivered", label: "采用并下载" },
+    { key: "preparing", label: t(($) => $.studio.journeyPrepare) },
+    { key: "generating", label: t(($) => $.studio.journeyGenerate) },
+    { key: "review", label: t(($) => $.studio.journeyReview) },
+    { key: "delivered", label: t(($) => $.studio.journeyDeliver) },
   ] as const;
   const currentIndex = stageKey === "delivered" ? 3 : stageKey === "review" ? 2 : stageKey === "generating" || stageKey === "attention" ? 1 : 0;
-  return <ol className="grid grid-cols-2 border sm:grid-cols-4" aria-label="订单进度">
+  return <ol className="grid grid-cols-2 border sm:grid-cols-4" aria-label={t(($) => $.studio.journey)}>
     {steps.map((step, index) => <li key={step.key} className={cn("flex min-h-12 items-center gap-2 px-3 py-2 text-xs", index > 0 && "border-l", index > 1 && "border-t sm:border-t-0", index <= currentIndex ? "text-foreground" : "text-muted-foreground")}>
       <span className={cn("flex h-5 w-5 shrink-0 items-center justify-center rounded-full border text-[10px] font-semibold", index < currentIndex && "border-foreground bg-foreground text-background", index === currentIndex && "border-foreground")}>{index < currentIndex ? <Check className="h-3 w-3" /> : index + 1}</span>
       <span className={cn(index === currentIndex && "font-semibold")}>{step.label}</span>
@@ -782,13 +874,14 @@ function CreativeOrderStatusPanel({
   order: CreativeOrder;
   stage: CreativeOrderStage;
 }) {
+  const { t } = useT("creative");
   const stats = creativeOrderRuntimeStats(order);
   const actionableFailures = creativeOrderActionableWorkflowFailures(order);
   const hasFailures = actionableFailures.length > 0;
-  const title = creativeOrderStatusTitle(stage, stats, hasFailures);
-  const detail = creativeOrderStatusDetail(stage, stats, hasFailures);
+  const title = creativeOrderStatusTitle(stage, stats, hasFailures, t);
+  const detail = creativeOrderStatusDetail(stage, stats, hasFailures, t);
 
-  return <section className="border bg-background" aria-label="订单现状">
+  return <section className="border bg-background" aria-label={t(($) => $.studio.currentStatus)}>
     <div className="grid gap-0 md:grid-cols-[minmax(0,1fr)_auto]">
       <div className="min-w-0 px-4 py-3">
         <div className="flex flex-wrap items-center gap-2">
@@ -798,10 +891,10 @@ function CreativeOrderStatusPanel({
         <p className="mt-1 text-sm text-muted-foreground">{detail}</p>
       </div>
       <div className="grid grid-cols-2 border-t text-xs md:w-[420px] md:grid-cols-4 md:border-l md:border-t-0">
-        <OrderStat label="素材" value={`${stage.totalItems}`} />
-        <OrderStat label="可验收" value={`${stage.readyVariants}`} />
-        <OrderStat label="运行中" value={`${stats.runningVariants}`} />
-        <OrderStat label="待看" value={`${stats.blockedVariants + actionableFailures.length}`} />
+        <OrderStat label={t(($) => $.studio.statMaterials)} value={`${stage.totalItems}`} />
+        <OrderStat label={t(($) => $.studio.statReviewReady)} value={`${stage.readyVariants}`} />
+        <OrderStat label={t(($) => $.studio.statRunning)} value={`${stats.runningVariants}`} />
+        <OrderStat label={t(($) => $.studio.statToReview)} value={`${stats.blockedVariants + actionableFailures.length}`} />
       </div>
     </div>
   </section>;
@@ -825,22 +918,22 @@ function creativeOrderRuntimeStats(order: CreativeOrder): { runningVariants: num
   };
 }
 
-function creativeOrderStatusTitle(stage: CreativeOrderStage, stats: ReturnType<typeof creativeOrderRuntimeStats>, hasFailures: boolean): string {
-  if (stage.key === "delivered") return "交付完成，可以下载最终采用方案";
-  if (stage.key === "cancelled") return "订单已结束，过程记录仍保留";
-  if (stage.key === "review" && hasFailures) return "已有可验收方案，另有检测记录";
-  if (stage.key === "review") return "已有方案可验收";
-  if (stage.key === "attention") return "等待人工验收，先查看成图";
-  if (stage.key === "generating") return "后台正在生成方案";
-  if (stats.expectedPreviewAssets > 0) return "订单已创建，等待首批成图";
-  return "订单正在准备";
+function creativeOrderStatusTitle(stage: CreativeOrderStage, stats: ReturnType<typeof creativeOrderRuntimeStats>, hasFailures: boolean, t: ReturnType<typeof useT>["t"]): string {
+  if (stage.key === "delivered") return t(($) => $.studio.statusTitle.delivered);
+  if (stage.key === "cancelled") return t(($) => $.studio.statusTitle.cancelled);
+  if (stage.key === "review" && hasFailures) return t(($) => $.studio.statusTitle.reviewWithFailures);
+  if (stage.key === "review") return t(($) => $.studio.statusTitle.review);
+  if (stage.key === "attention") return t(($) => $.studio.statusTitle.attention);
+  if (stage.key === "generating") return t(($) => $.studio.statusTitle.generating);
+  if (stats.expectedPreviewAssets > 0) return t(($) => $.studio.statusTitle.waiting);
+  return t(($) => $.studio.statusTitle.preparing);
 }
 
-function creativeOrderStatusDetail(stage: CreativeOrderStage, stats: ReturnType<typeof creativeOrderRuntimeStats>, hasFailures: boolean): string {
-  if (stage.key === "review" && hasFailures) return "可以先验收已完成方案；检测记录只说明后台还有步骤未补齐。";
-  if (stage.key === "review") return "先比较可用方案，采用后会生成交付包。";
-  if (stage.key === "attention") return "不用手动重试流程；可查看可用图、标注调整或结束订单。";
-  if (stage.key === "generating") return `${stats.previewAssets}/${Math.max(stats.expectedPreviewAssets, 1)} 张过程图已就绪，页面会自动刷新。`;
+function creativeOrderStatusDetail(stage: CreativeOrderStage, stats: ReturnType<typeof creativeOrderRuntimeStats>, hasFailures: boolean, t: ReturnType<typeof useT>["t"]): string {
+  if (stage.key === "review" && hasFailures) return t(($) => $.studio.statusDetail.reviewWithFailures);
+  if (stage.key === "review") return t(($) => $.studio.statusDetail.review);
+  if (stage.key === "attention") return t(($) => $.studio.statusDetail.attention);
+  if (stage.key === "generating") return t(($) => $.studio.statusDetail.generating, { ready: stats.previewAssets, expected: Math.max(stats.expectedPreviewAssets, 1) });
   return stage.detail;
 }
 

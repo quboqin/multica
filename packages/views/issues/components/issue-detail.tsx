@@ -304,6 +304,10 @@ function formatActivity(
       return details.variant_key
         ? t(($) => $.activity.creative_variant_adopted_key, { variant: details.variant_key })
         : t(($) => $.activity.creative_variant_adopted);
+    case "creative_variant_unadopted":
+      return t(($) => $.activity.creative_variant_unadopted);
+    case "creative_variant_revision_selected":
+      return t(($) => $.activity.creative_variant_revision_selected, { revision: details.selected_revision || "" });
     default:
       return entry.action ?? "";
   }

@@ -4,10 +4,33 @@ import { Clock3, FileText, Image as ImageIcon, Layers3, Sparkles } from "lucide-
 import type { CreativeOrderAsset, CreativeOrderItem, CreativeOrderVariant } from "@multica/core/types";
 import { Badge } from "@multica/ui/components/ui/badge";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@multica/ui/components/ui/dialog";
-import { formatCreativeDateTime, creativeTimeZoneLabel } from "../lib/creative-time";
+import { useT } from "../../i18n";
+import { formatCreativeDateTime } from "../lib/creative-time";
 
 type GenerationFact = { label: string; value: string };
-type GenerationCopyLine = { label: string; value: string };
+type GenerationCopyLine = { field: keyof GenerationInfoLabels["copyFields"]; label: string; value: string };
+
+type GenerationInfoLabels = {
+  layoutContract: string;
+  layoutContractVersion: (version: string) => string;
+  protectedRegions: (count: number) => string;
+  backdropRule: (rule: string) => string;
+  marketBound: string;
+  copyFields: Record<"headline" | "subheadline" | "benefit" | "supporting" | "cta" | "legal", string>;
+  sizeLabel: (size: string) => string;
+  stageLabel: (stage: string) => string;
+};
+
+const DEFAULT_GENERATION_INFO_LABELS: GenerationInfoLabels = {
+  layoutContract: "Prime layout contract",
+  layoutContractVersion: (version) => `Prime layout contract v${version}`,
+  protectedRegions: (count) => `${count} protected regions`,
+  backdropRule: (rule) => `Backdrop rule ${rule}`,
+  marketBound: "Market resource pack is bound",
+  copyFields: { headline: "Headline", subheadline: "Subheadline", benefit: "Benefit", supporting: "Supporting information", cta: "Call to action", legal: "Legal copy" },
+  sizeLabel: creativeSizeLabel,
+  stageLabel,
+};
 
 export type CreativeGenerationInfo = {
   assetId: string;
@@ -33,6 +56,7 @@ export function creativeGenerationInfo(
   item: CreativeOrderItem,
   variant: CreativeOrderVariant,
   asset: CreativeOrderAsset,
+  labels: GenerationInfoLabels = DEFAULT_GENERATION_INFO_LABELS,
 ): CreativeGenerationInfo {
   const lineage = creativeAssetLineage(variant, asset);
   const generated = lineage.find((candidate) => candidate.stage === "generated");
@@ -54,29 +78,29 @@ export function creativeGenerationInfo(
   const marketResource = marketName && marketVersion ? `${marketName} · v${marketVersion}` : marketName;
   const explicitRule = firstString([brief, ...marketSources], ["market_rule", "market_rules", "compliance_rule", "compliance_rules"]);
   const layoutSummary = [
-    layoutVersion ? `Prime 布局合同 v${layoutVersion}` : hardRegions.length > 0 || backdropRule ? "Prime 布局合同" : "",
-    hardRegions.length > 0 ? `${hardRegions.length} 个保护区` : "",
-    backdropRule ? `背景规则 ${backdropRule}` : "",
+    layoutVersion ? labels.layoutContractVersion(layoutVersion) : hardRegions.length > 0 || backdropRule ? labels.layoutContract : "",
+    hardRegions.length > 0 ? labels.protectedRegions(hardRegions.length) : "",
+    backdropRule ? labels.backdropRule(backdropRule) : "",
   ].filter(Boolean).join(" · ");
 
   return {
     assetId: asset.id,
     variantLabel: variant.variant_key || variant.id.slice(0, 8),
-    sizeLabel: creativeSizeLabel(asset.size_key),
+    sizeLabel: labels.sizeLabel(asset.size_key),
     revision: asset.revision,
     direction: item.direction.trim() || firstString([brief, record(brief.copy_adaptation)], ["creative_direction", "visual_direction", "direction", "concept", "summary", "theme"]),
     copyLines: [
-      { label: "主标题", value: stringValue(snapshot.headline) },
-      { label: "副标题", value: stringValue(snapshot.subheadline) },
-      { label: "利益点", value: stringValue(snapshot.benefit) },
-      { label: "补充信息", value: stringValue(snapshot.supporting) },
-      { label: "行动文案", value: stringValue(snapshot.cta) },
-      { label: "合规文案", value: stringValue(snapshot.legal_text) },
+      { field: "headline", label: labels.copyFields.headline, value: stringValue(snapshot.headline) },
+      { field: "subheadline", label: labels.copyFields.subheadline, value: stringValue(snapshot.subheadline) },
+      { field: "benefit", label: labels.copyFields.benefit, value: stringValue(snapshot.benefit) },
+      { field: "supporting", label: labels.copyFields.supporting, value: stringValue(snapshot.supporting) },
+      { field: "cta", label: labels.copyFields.cta, value: stringValue(snapshot.cta) },
+      { field: "legal", label: labels.copyFields.legal, value: stringValue(snapshot.legal_text) },
     ].filter((entry) => Boolean(entry.value)),
     repaymentPlans: parseRepaymentPlanSelections(record(snapshot.pre_adaptation).repayment_plan_selections),
     model: firstString(promptSources, ["model", "model_name", "generation_model"]),
     provider: firstString(promptSources, ["provider", "image_provider", "generation_provider"]),
-    marketRule: explicitRule || layoutSummary || (marketName ? "已绑定市场资源包" : ""),
+    marketRule: explicitRule || layoutSummary || (marketName ? labels.marketBound : ""),
     marketResource,
     createdAt: asset.updated_at || asset.created_at || generated?.updated_at || generated?.created_at || "",
     prompt: firstString(promptSources, ["prompt", "model_prompt", "final_prompt", "provider_prompt"]),
@@ -128,20 +152,22 @@ export function CreativeGenerationInfoDialog({
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }) {
-  const info = item && variant && asset ? creativeGenerationInfo(item, variant, asset) : undefined;
+  const { t } = useT("creative");
+  const labels = generationInfoLabels(t);
+  const info = item && variant && asset ? creativeGenerationInfo(item, variant, asset, labels) : undefined;
   return <Dialog open={open} onOpenChange={onOpenChange}>
     <DialogContent className="grid max-h-[94vh] grid-rows-[auto_minmax(0,1fr)] gap-0 overflow-hidden p-0 sm:max-w-[min(94vw,1120px)]">
       <DialogHeader className="border-b px-5 py-4 pr-14">
         <div className="flex flex-wrap items-center gap-2">
-          <DialogTitle className="text-base">成图详情</DialogTitle>
+          <DialogTitle className="text-base">{t(($) => $.generationInfo.title)}</DialogTitle>
           {info && <><Badge variant="outline">{info.variantLabel}</Badge><Badge variant="outline">{info.sizeLabel}</Badge><Badge variant="secondary">r{info.revision}</Badge></>}
         </div>
-        <DialogDescription>查看这张成图采用的创意方向、冻结文案、市场规则与生成记录。</DialogDescription>
+        <DialogDescription>{t(($) => $.generationInfo.description)}</DialogDescription>
       </DialogHeader>
       {info ? <div className="grid min-h-0 overflow-y-auto overscroll-contain lg:grid-cols-[minmax(260px,0.72fr)_minmax(0,1.28fr)]">
         <figure className="min-w-0 border-b bg-muted/20 p-4 lg:sticky lg:top-0 lg:h-full lg:border-b-0 lg:border-r">
           <div className="flex min-h-72 items-center justify-center overflow-hidden border bg-background">
-            {imageUrl ? <img src={imageUrl} alt={`${info.variantLabel} ${info.sizeLabel} 成图`} width={1200} height={1200} loading="lazy" className="max-h-[72vh] w-full object-contain" /> : <span className="flex min-h-72 flex-col items-center justify-center gap-2 text-xs text-muted-foreground"><ImageIcon aria-hidden="true" className="h-5 w-5" />成图预览不可用</span>}
+            {imageUrl ? <img src={imageUrl} alt={t(($) => $.generationInfo.imageAlt, { variant: info.variantLabel, size: info.sizeLabel })} width={1200} height={1200} loading="lazy" className="max-h-[72vh] w-full object-contain" /> : <span className="flex min-h-72 flex-col items-center justify-center gap-2 text-xs text-muted-foreground"><ImageIcon aria-hidden="true" className="h-5 w-5" />{t(($) => $.generationInfo.previewUnavailable)}</span>}
           </div>
           <figcaption className="mt-3 flex items-center justify-between gap-3 text-xs text-muted-foreground">
             <span>{info.variantLabel} · {info.sizeLabel}</span>
@@ -149,44 +175,44 @@ export function CreativeGenerationInfoDialog({
           </figcaption>
         </figure>
         <div className="min-w-0 divide-y">
-          <InfoSection icon={<Sparkles aria-hidden="true" className="h-4 w-4" />} title="创意方向">
-            <p className="whitespace-pre-wrap break-words text-sm leading-6">{info.direction || "未记录创意方向"}</p>
+          <InfoSection icon={<Sparkles aria-hidden="true" className="h-4 w-4" />} title={t(($) => $.generationInfo.creativeDirection)}>
+            <p className="whitespace-pre-wrap break-words text-sm leading-6">{info.direction || t(($) => $.generationInfo.noDirection)}</p>
           </InfoSection>
-          <InfoSection icon={<FileText aria-hidden="true" className="h-4 w-4" />} title="成图文案">
+          <InfoSection icon={<FileText aria-hidden="true" className="h-4 w-4" />} title={t(($) => $.generationInfo.creativeCopy)}>
             {info.copyLines.length > 0 ? <dl className="space-y-2">
               {info.copyLines.map((line) => <div key={line.label} className="grid gap-1 sm:grid-cols-[88px_minmax(0,1fr)]"><dt className="text-xs text-muted-foreground">{line.label}</dt><dd className="whitespace-pre-wrap break-words text-sm">{line.value}</dd></div>)}
-            </dl> : <p className="text-sm text-muted-foreground">未记录冻结文案</p>}
-            {info.repaymentPlans.length > 0 && <div className="mt-4 border-t pt-3"><p className="mb-2 text-xs font-medium text-muted-foreground">已选还款计划</p><div className="flex flex-wrap gap-2">{info.repaymentPlans.map((plan, index) => <Badge key={`repayment-plan-${index}-${plan.label}-${plan.value}`} variant="outline" className="max-w-full whitespace-normal text-left"><span className="text-muted-foreground">{plan.label}</span><span className="mx-1">·</span><span className="break-words">{plan.value}</span></Badge>)}</div></div>}
+            </dl> : <p className="text-sm text-muted-foreground">{t(($) => $.generationInfo.noCopy)}</p>}
+            {info.repaymentPlans.length > 0 && <div className="mt-4 border-t pt-3"><p className="mb-2 text-xs font-medium text-muted-foreground">{t(($) => $.generationInfo.repaymentPlans)}</p><div className="flex flex-wrap gap-2">{info.repaymentPlans.map((plan, index) => <Badge key={`repayment-plan-${index}-${plan.label}-${plan.value}`} variant="outline" className="max-w-full whitespace-normal text-left"><span className="text-muted-foreground">{plan.label}</span><span className="mx-1">·</span><span className="break-words">{plan.value}</span></Badge>)}</div></div>}
           </InfoSection>
-          <InfoSection icon={<Layers3 aria-hidden="true" className="h-4 w-4" />} title="生成与市场规则">
+          <InfoSection icon={<Layers3 aria-hidden="true" className="h-4 w-4" />} title={t(($) => $.generationInfo.generationAndMarket)}>
             <dl className="grid gap-x-5 gap-y-3 sm:grid-cols-2">
-              <InfoValue label="生成模型" value={[info.provider, info.model].filter(Boolean).join(" · ")} />
-              <InfoValue label="市场资源" value={info.marketResource} />
-              <InfoValue label="市场规则" value={info.marketRule} wide />
+              <InfoValue label={t(($) => $.generationInfo.generationModel)} value={[info.provider, info.model].filter(Boolean).join(" · ")} fallback={t(($) => $.generationInfo.notRecorded)} />
+              <InfoValue label={t(($) => $.generationInfo.marketResource)} value={info.marketResource} fallback={t(($) => $.generationInfo.notRecorded)} />
+              <InfoValue label={t(($) => $.generationInfo.marketRule)} value={info.marketRule} fallback={t(($) => $.generationInfo.notRecorded)} wide />
             </dl>
           </InfoSection>
-          <InfoSection icon={<Clock3 aria-hidden="true" className="h-4 w-4" />} title="版本与时间">
+          <InfoSection icon={<Clock3 aria-hidden="true" className="h-4 w-4" />} title={t(($) => $.generationInfo.versionAndTime)}>
             <dl className="grid gap-x-5 gap-y-3 sm:grid-cols-2">
-              <InfoValue label="资产链" value={info.lineage.map((entry) => stageLabel(entry.stage)).join(" → ")} />
-              <InfoValue label="最后更新" value={info.createdAt ? `${formatCreativeDateTime(info.createdAt)}（${creativeTimeZoneLabel()}）` : ""} />
+              <InfoValue label={t(($) => $.generationInfo.assetLineage)} value={info.lineage.map((entry) => labels.stageLabel(entry.stage)).join(" → ")} fallback={t(($) => $.generationInfo.notRecorded)} />
+              <InfoValue label={t(($) => $.generationInfo.lastUpdated)} value={info.createdAt ? `${formatCreativeDateTime(info.createdAt)} (${t(($) => $.generationInfo.beijingTime)})` : ""} fallback={t(($) => $.generationInfo.notRecorded)} />
             </dl>
           </InfoSection>
-          <InfoSection icon={<FileText aria-hidden="true" className="h-4 w-4" />} title="完整模型提示词">
-            <pre className="max-h-80 overflow-auto overscroll-contain whitespace-pre-wrap break-words border bg-muted/20 p-3 font-sans text-xs leading-5">{info.prompt || "未记录完整模型提示词"}</pre>
+          <InfoSection icon={<FileText aria-hidden="true" className="h-4 w-4" />} title={t(($) => $.generationInfo.fullPrompt)}>
+            <pre className="max-h-80 overflow-auto overscroll-contain whitespace-pre-wrap break-words border bg-muted/20 p-3 font-sans text-xs leading-5">{info.prompt || t(($) => $.generationInfo.noPrompt)}</pre>
           </InfoSection>
           <details className="group px-5 py-4">
-            <summary className="cursor-pointer text-sm font-medium marker:text-muted-foreground">高级信息</summary>
+            <summary className="cursor-pointer text-sm font-medium marker:text-muted-foreground">{t(($) => $.generationInfo.advanced)}</summary>
             <div className="mt-4 space-y-4">
               <dl className="grid gap-x-5 gap-y-3 sm:grid-cols-2">
-                <InfoValue label="模型请求" value={info.requestId ? compactId(info.requestId, 20) : ""} />
-                <InfoValue label="调用次数" value={info.attempts} />
-                <InfoValue label="提示词 SHA-256" value={info.promptSha256 ? compactId(info.promptSha256, 20) : ""} />
+                <InfoValue label={t(($) => $.generationInfo.modelRequest)} value={info.requestId ? compactId(info.requestId, 20) : ""} fallback={t(($) => $.generationInfo.notRecorded)} />
+                <InfoValue label={t(($) => $.generationInfo.attempts)} value={info.attempts} fallback={t(($) => $.generationInfo.notRecorded)} />
+                <InfoValue label={t(($) => $.generationInfo.promptHash)} value={info.promptSha256 ? compactId(info.promptSha256, 20) : ""} fallback={t(($) => $.generationInfo.notRecorded)} />
               </dl>
-              <div><p className="text-xs font-medium text-muted-foreground">资产溯源</p><ol className="mt-2 space-y-2">{info.lineage.map((entry) => <li key={entry.id} className="flex flex-wrap items-center gap-2 text-xs"><Badge variant="outline">{stageLabel(entry.stage)}</Badge><span>{entry.size_key}</span><span className="text-muted-foreground" translate="no">{compactId(entry.id, 18)}</span></li>)}</ol></div>
+              <div><p className="text-xs font-medium text-muted-foreground">{t(($) => $.generationInfo.trace)}</p><ol className="mt-2 space-y-2">{info.lineage.map((entry) => <li key={entry.id} className="flex flex-wrap items-center gap-2 text-xs"><Badge variant="outline">{labels.stageLabel(entry.stage)}</Badge><span>{entry.size_key}</span><span className="text-muted-foreground" translate="no">{compactId(entry.id, 18)}</span></li>)}</ol></div>
             </div>
           </details>
         </div>
-      </div> : <div className="flex min-h-72 items-center justify-center text-sm text-muted-foreground">没有可展示的生成信息</div>}
+      </div> : <div className="flex min-h-72 items-center justify-center text-sm text-muted-foreground">{t(($) => $.generationInfo.noInfo)}</div>}
     </DialogContent>
   </Dialog>;
 }
@@ -195,8 +221,8 @@ function InfoSection({ icon, title, children }: { icon: React.ReactNode; title: 
   return <section className="px-5 py-4"><div className="mb-3 flex items-center gap-2"><span className="text-muted-foreground">{icon}</span><h3 className="text-sm font-semibold">{title}</h3></div>{children}</section>;
 }
 
-function InfoValue({ label, value, wide = false }: { label: string; value: string; wide?: boolean }) {
-  return <div className={wide ? "sm:col-span-2" : undefined}><dt className="text-xs text-muted-foreground">{label}</dt><dd className="mt-1 whitespace-pre-wrap break-words text-sm">{value || "未记录"}</dd></div>;
+function InfoValue({ label, value, fallback, wide = false }: { label: string; value: string; fallback: string; wide?: boolean }) {
+  return <div className={wide ? "sm:col-span-2" : undefined}><dt className="text-xs text-muted-foreground">{label}</dt><dd className="mt-1 whitespace-pre-wrap break-words text-sm">{value || fallback}</dd></div>;
 }
 
 function parseRepaymentPlanSelections(value: unknown): GenerationFact[] {
@@ -259,20 +285,45 @@ function timestamp(value: string | undefined): number {
 }
 
 function compactId(value: string, length = 12): string {
-  if (!value) return "未记录";
+  if (!value) return "Not recorded";
   return value.length > length ? `${value.slice(0, length)}…` : value;
 }
 
 function creativeSizeLabel(size: string): string {
-  if (size === "1080x1080") return "方形 · 1080x1080";
-  if (size === "1200x628") return "横版 · 1200x628";
-  if (size === "800x1000") return "竖版 · 800x1000";
-  return size || "未知尺寸";
+  if (size === "1080x1080") return "Square - 1080x1080";
+  if (size === "1200x628") return "Landscape - 1200x628";
+  if (size === "800x1000") return "Portrait - 800x1000";
+  return size || "Unknown size";
 }
 
 function stageLabel(stage: string): string {
-  if (stage === "generated") return "模型底图";
-  if (stage === "primed") return "Prime 成图";
-  if (stage === "delivered") return "正式交付";
-  return stage || "未知阶段";
+  if (stage === "generated") return "Model base image";
+  if (stage === "primed") return "Prime creative";
+  if (stage === "delivered") return "Delivered creative";
+  return stage || "Unknown stage";
+}
+
+function generationInfoLabels(t: ReturnType<typeof useT>["t"]): GenerationInfoLabels {
+  return {
+    layoutContract: t(($) => $.generationInfo.layoutContract),
+    layoutContractVersion: (version) => t(($) => $.generationInfo.layoutContractVersion, { version }),
+    protectedRegions: (count) => t(($) => $.generationInfo.protectedRegions, { count }),
+    backdropRule: (rule) => t(($) => $.generationInfo.backdropRule, { rule }),
+    marketBound: t(($) => $.generationInfo.marketBound),
+    copyFields: {
+      headline: t(($) => $.generationInfo.copyFields.headline), subheadline: t(($) => $.generationInfo.copyFields.subheadline), benefit: t(($) => $.generationInfo.copyFields.benefit), supporting: t(($) => $.generationInfo.copyFields.supporting), cta: t(($) => $.generationInfo.copyFields.cta), legal: t(($) => $.generationInfo.copyFields.legal),
+    },
+    sizeLabel: (size) => {
+      if (size === "1080x1080") return t(($) => $.generationInfo.sizes.square);
+      if (size === "1200x628") return t(($) => $.generationInfo.sizes.landscape);
+      if (size === "800x1000") return t(($) => $.generationInfo.sizes.portrait);
+      return size || t(($) => $.generationInfo.sizes.unknown);
+    },
+    stageLabel: (stage) => {
+      if (stage === "generated") return t(($) => $.generationInfo.stages.generated);
+      if (stage === "primed") return t(($) => $.generationInfo.stages.primed);
+      if (stage === "delivered") return t(($) => $.generationInfo.stages.delivered);
+      return stage || t(($) => $.generationInfo.stages.unknown);
+    },
+  };
 }

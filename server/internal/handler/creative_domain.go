@@ -2861,6 +2861,119 @@ FROM creative_order WHERE id = $1 AND workspace_id = $2
 	writeJSON(w, http.StatusOK, order)
 }
 
+// DeleteCreativeOrder removes a stopped order and its order-domain records.
+// Attached source and rendered files stay available because they can be shared
+// with materials or other issue history.
+func (h *Handler) DeleteCreativeOrder(w http.ResponseWriter, r *http.Request) {
+	workspaceID, userID, ok := h.creativeFeedbackWorkspaceUser(w, r)
+	if !ok {
+		return
+	}
+	orderID, ok := parseUUIDOrBadRequest(w, chi.URLParam(r, "id"), "order_id")
+	if !ok {
+		return
+	}
+
+	tx, err := h.TxStarter.Begin(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to start creative order deletion")
+		return
+	}
+	defer tx.Rollback(r.Context())
+
+	var issueID pgtype.UUID
+	if err := tx.QueryRow(r.Context(), `
+SELECT issue_id
+FROM creative_order
+WHERE id = $1 AND workspace_id = $2
+FOR UPDATE
+`, orderID, workspaceID).Scan(&issueID); errors.Is(err, pgx.ErrNoRows) {
+		writeError(w, http.StatusNotFound, "creative order not found")
+		return
+	} else if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to lock creative order")
+		return
+	}
+
+	var hasActiveTasks bool
+	if err := tx.QueryRow(r.Context(), `
+SELECT EXISTS(
+  SELECT 1
+  FROM agent_task_queue
+  WHERE context->>'creative_order_id' = $1::text
+    AND status IN ('queued', 'dispatched', 'running', 'waiting_local_directory')
+)
+`, orderID).Scan(&hasActiveTasks); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to check active creative order tasks")
+		return
+	}
+	if hasActiveTasks {
+		writeError(w, http.StatusConflict, "end the creative order before deleting it")
+		return
+	}
+
+	if _, err := tx.Exec(r.Context(), `
+DELETE FROM creative_feedback_event event
+WHERE event.workspace_id = $1
+  AND (
+    event.context_snapshot->>'creative_order_id' = $2::text
+    OR event.subject_id = $2
+    OR event.subject_id IN (
+      SELECT variant.id
+      FROM creative_order_variant variant
+      JOIN creative_order_item item ON item.id = variant.order_item_id
+      WHERE item.order_id = $2
+    )
+    OR event.subject_id IN (
+      SELECT asset.id
+      FROM creative_order_asset asset
+      JOIN creative_order_variant variant ON variant.id = asset.variant_id
+      JOIN creative_order_item item ON item.id = variant.order_item_id
+      WHERE item.order_id = $2
+    )
+  )
+`, workspaceID, orderID); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to remove creative order feedback")
+		return
+	}
+	if _, err := tx.Exec(r.Context(), `
+DELETE FROM activity_log
+WHERE workspace_id = $1
+  AND details->>'creative_order_id' = $2::text
+`, workspaceID, orderID); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to remove creative order activity")
+		return
+	}
+	if _, err := tx.Exec(r.Context(), `
+DELETE FROM creative_order
+WHERE id = $1 AND workspace_id = $2
+`, orderID, workspaceID); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to delete creative order")
+		return
+	}
+	if issueID.Valid {
+		if _, err := tx.Exec(r.Context(), `
+UPDATE issue
+SET metadata = COALESCE(metadata, '{}'::jsonb) - 'workflow' - 'creative_order_id' - 'creative_submission_key',
+    updated_at = now()
+WHERE id = $1
+  AND workspace_id = $2
+  AND metadata->>'creative_order_id' = $3::text
+`, issueID, workspaceID, orderID); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to unlink creative order issue")
+			return
+		}
+	}
+	if err := tx.Commit(r.Context()); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to delete creative order")
+		return
+	}
+	h.publishCreativeDomainUpdated(r, workspaceID, userID, map[string]any{
+		"scope": "order", "order_id": chi.URLParam(r, "id"), "deleted": true,
+	})
+	w.WriteHeader(http.StatusNoContent)
+}
+
 // AdoptCreativeOrderItemVariant selects the single delivery package for an
 // order item. The item lock serializes competing human decisions, while the
 // deferred composite foreign key also prevents cross-item adoption at commit.
@@ -3213,6 +3326,119 @@ VALUES ($1, $2, 'member', $3, 'creative_variant_adopted', $4::jsonb)
 	item, err := h.loadCreativeOrderItem(r, itemID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to load adopted creative order item")
+		return
+	}
+	h.publishCreativeDomainUpdated(r, workspaceID, userID, map[string]any{
+		"scope": "order", "order_id": chi.URLParam(r, "id"), "order_item_id": chi.URLParam(r, "itemId"),
+	})
+	writeJSON(w, http.StatusOK, item)
+}
+
+// UnadoptCreativeOrderItemVariant returns an item to review without removing
+// its delivered assets, so a different ready variant can be selected later.
+func (h *Handler) UnadoptCreativeOrderItemVariant(w http.ResponseWriter, r *http.Request) {
+	workspaceID, userID, ok := h.creativeFeedbackWorkspaceUser(w, r)
+	if !ok {
+		return
+	}
+	orderID, ok := parseUUIDOrBadRequest(w, chi.URLParam(r, "id"), "order_id")
+	if !ok {
+		return
+	}
+	if !h.requireCreativeOrderWritable(w, r, orderID, workspaceID) {
+		return
+	}
+	itemID, ok := parseUUIDOrBadRequest(w, chi.URLParam(r, "itemId"), "order_item_id")
+	if !ok {
+		return
+	}
+
+	tx, err := h.TxStarter.Begin(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to start creative variant unadoption")
+		return
+	}
+	defer tx.Rollback(r.Context())
+
+	var issueID, previousVariantID pgtype.UUID
+	var orderStatus string
+	if err := tx.QueryRow(r.Context(), `
+SELECT order_row.issue_id, order_row.status, item.adopted_variant_id
+FROM creative_order_item item
+JOIN creative_order order_row ON order_row.id = item.order_id
+WHERE item.id = $1
+  AND item.order_id = $2
+  AND order_row.workspace_id = $3
+FOR UPDATE OF item, order_row
+`, itemID, orderID, workspaceID).Scan(&issueID, &orderStatus, &previousVariantID); errors.Is(err, pgx.ErrNoRows) {
+		writeError(w, http.StatusUnprocessableEntity, "order item does not belong to this creative order")
+		return
+	} else if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to lock creative order item")
+		return
+	}
+	if orderStatus == "cancelled" {
+		writeError(w, http.StatusConflict, errCreativeOrderCancelled.Error())
+		return
+	}
+	if !previousVariantID.Valid {
+		if err := tx.Commit(r.Context()); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to confirm creative variant unadoption")
+			return
+		}
+		item, err := h.loadCreativeOrderItem(r, itemID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to load creative order item")
+			return
+		}
+		writeJSON(w, http.StatusOK, item)
+		return
+	}
+
+	if _, err := tx.Exec(r.Context(), `
+UPDATE creative_order_item
+SET adopted_variant_id = NULL, adopted_at = NULL, adopted_by = NULL, updated_at = now()
+WHERE id = $1
+`, itemID); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to unadopt creative variant")
+		return
+	}
+	if _, err := tx.Exec(r.Context(), `UPDATE creative_order SET updated_at = now() WHERE id = $1`, orderID); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to update creative order")
+		return
+	}
+	details, err := json.Marshal(map[string]any{
+		"creative_order_id":      uuidToString(orderID),
+		"creative_order_item_id": uuidToString(itemID),
+		"previous_variant_id":    uuidToString(previousVariantID),
+	})
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to record creative variant unadoption")
+		return
+	}
+	if _, err := tx.Exec(r.Context(), `
+INSERT INTO creative_feedback_event (
+  workspace_id, issue_id, actor_type, actor_id, subject_type, subject_id,
+  event_type, decision, context_snapshot
+) VALUES ($1, $2, 'member', $3, 'variant', $4, 'decision', 'replaced', $5::jsonb)
+`, workspaceID, issueID, userID, previousVariantID, details); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to record creative variant feedback")
+		return
+	}
+	if _, err := tx.Exec(r.Context(), `
+INSERT INTO activity_log (workspace_id, issue_id, actor_type, actor_id, action, details)
+VALUES ($1, $2, 'member', $3, 'creative_variant_unadopted', $4::jsonb)
+`, workspaceID, issueID, userID, details); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to record creative variant activity")
+		return
+	}
+	if err := tx.Commit(r.Context()); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to unadopt creative variant")
+		return
+	}
+	item, err := h.loadCreativeOrderItem(r, itemID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to load creative order item")
 		return
 	}
 	h.publishCreativeDomainUpdated(r, workspaceID, userID, map[string]any{

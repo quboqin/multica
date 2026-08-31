@@ -12,7 +12,13 @@ export {
   creativeResourceFilesOptions,
   creativeResourcesOptions,
 } from "./queries";
-export { useAdoptCreativeOrderVariant, useCancelCreativeOrder } from "./mutations";
+export {
+  useAdoptCreativeOrderVariant,
+  useCancelCreativeOrder,
+  useDeleteCreativeOrder,
+  useSelectCreativeOrderVariantRevision,
+  useUnadoptCreativeOrderVariant,
+} from "./mutations";
 export {
   creativeCopyContentGroupForFragment,
   creativeCopyContentGroupLabel,

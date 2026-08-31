@@ -29,6 +29,7 @@ import type squads from "../locales/en/squads.json";
 import type billing from "../locales/en/billing.json";
 import type plans from "../locales/en/plans.json";
 import type changelog from "../locales/en/changelog.json";
+import type creative from "../locales/en/creative.json";
 
 // Module augmentation enables i18next v26 selector API across the monorepo:
 // `t($ => $.signin.title)` resolves to the value in en/auth.json.
@@ -72,6 +73,7 @@ declare global {
     billing: typeof billing;
     plans: typeof plans;
     changelog: typeof changelog;
+    creative: typeof creative;
   }
 }
 

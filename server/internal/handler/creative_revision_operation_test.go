@@ -207,6 +207,72 @@ VALUES ($1, $2, 1, 'delivered', $3, 'completed')
 	}
 }
 
+func TestSelectCreativeOrderVariantRevisionRestoresCompletedDelivery(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	orderID, itemID, issueID := createCreativeLifecycleTestOrder(t, "select creative revision")
+	variant := putCreativeLifecycleVariant(t, orderID, itemID, "C01", 1, "completed")
+	for _, revision := range []int{1, 2} {
+		if revision == 2 {
+			variant = putCreativeLifecycleVariant(t, orderID, itemID, "C01", revision, "completed")
+		}
+		for _, size := range standardCreativeAssetSizes {
+			attachmentID := createCreativeOrderAssetAttachment(t, fmt.Sprintf("revision-select-r%d-%s.png", revision, strings.ReplaceAll(size, "x", "-")))
+			if _, err := testPool.Exec(t.Context(), `
+INSERT INTO creative_order_asset (variant_id, size_key, revision, stage, attachment_id, status)
+VALUES ($1, $2, $3, 'delivered', $4, 'completed')
+`, variant.ID, size, revision, attachmentID); err != nil {
+				t.Fatal(err)
+			}
+		}
+		tx, err := testPool.Begin(t.Context())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := activateCreativeVariantRevision(t.Context(), tx, parseUUID(variant.ID), revision, standardCreativeAssetSizes); err != nil {
+			_ = tx.Rollback(t.Context())
+			t.Fatal(err)
+		}
+		if err := tx.Commit(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(t.Context(), `DELETE FROM creative_feedback_event WHERE subject_id = $1`, variant.ID)
+		_, _ = testPool.Exec(t.Context(), `DELETE FROM activity_log WHERE issue_id = $1 AND action = 'creative_variant_revision_selected'`, issueID)
+	})
+
+	w := httptest.NewRecorder()
+	req := withURLParams(newRequest(http.MethodPost, "/api/creative/orders/"+orderID+"/variants/"+variant.ID+"/revisions/1/select", nil), "id", orderID, "variantId", variant.ID, "revision", "1")
+	testHandler.SelectCreativeOrderVariantRevision(w, req)
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("SelectCreativeOrderVariantRevision = %d %s", w.Code, w.Body.String())
+	}
+	var activeRevision, stagingRevision, currentRevision int
+	if err := testPool.QueryRow(t.Context(), `
+SELECT active_revision, staging_revision, revision
+FROM creative_order_variant WHERE id = $1
+`, variant.ID).Scan(&activeRevision, &stagingRevision, &currentRevision); err != nil {
+		t.Fatal(err)
+	}
+	if activeRevision != 1 || stagingRevision != 1 || currentRevision != 2 {
+		t.Fatalf("selected revision lifecycle = active %d staging %d current %d", activeRevision, stagingRevision, currentRevision)
+	}
+	w = httptest.NewRecorder()
+	req = withURLParams(newRequest(http.MethodPost, "/api/creative/orders/"+orderID+"/variants/"+variant.ID+"/revisions/2/select", nil), "id", orderID, "variantId", variant.ID, "revision", "2")
+	testHandler.SelectCreativeOrderVariantRevision(w, req)
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("restore latest creative revision = %d %s", w.Code, w.Body.String())
+	}
+	if err := testPool.QueryRow(t.Context(), `SELECT active_revision FROM creative_order_variant WHERE id = $1`, variant.ID).Scan(&activeRevision); err != nil {
+		t.Fatal(err)
+	}
+	if activeRevision != 2 {
+		t.Fatalf("restored active revision = %d", activeRevision)
+	}
+}
+
 func TestCreativeOrderListIncludesOnlyActiveAndStagingRevisionScopes(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")

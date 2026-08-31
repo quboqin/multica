@@ -1,7 +1,7 @@
 "use client";
 
 import { useId, useState } from "react";
-import { AlertTriangle, Check, CheckCircle2, ChevronDown, Download, ExternalLink, Eye, Image as ImageIcon, Info, PackageCheck, RefreshCw } from "lucide-react";
+import { AlertTriangle, Check, CheckCircle2, ChevronDown, Download, ExternalLink, Eye, Image as ImageIcon, Info, PackageCheck, RefreshCw, Undo2 } from "lucide-react";
 import { strToU8, zipSync } from "fflate";
 import type { Attachment, CreativeOrder, CreativeOrderAsset, CreativeOrderDiagnosticAsset, CreativeOrderItem, CreativeOrderQCReport, CreativeOrderVariant, CreativeOrderWorkflowFailure } from "@multica/core/types";
 import { Badge } from "@multica/ui/components/ui/badge";
@@ -9,6 +9,7 @@ import { Button } from "@multica/ui/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@multica/ui/components/ui/dialog";
 import { cn } from "@multica/ui/lib/utils";
 import { toast } from "sonner";
+import { useT } from "../../i18n";
 import { creativeAttachmentBrowserURL } from "../lib/creative-attachment-url";
 import { creativeTimeZoneLabel, formatCreativeDateTime } from "../lib/creative-time";
 
@@ -434,6 +435,7 @@ export function CreativeOrderDeliveryCandidates({
   attachments,
   adoptingVariantId,
   onAdopt,
+  onUnadopt,
   onAssetSelect,
   onAssetInfo,
   disabled = false,
@@ -450,6 +452,7 @@ export function CreativeOrderDeliveryCandidates({
   attachments: Map<string, DeliveryAttachment>;
   adoptingVariantId: string;
   onAdopt: (variantId: string, risk?: CreativeVariantAdoptionRisk) => void;
+  onUnadopt?: (itemId: string) => void;
   onAssetSelect: (assetId: string) => void;
   onAssetInfo?: (assetId: string) => void;
   disabled?: boolean;
@@ -459,13 +462,14 @@ export function CreativeOrderDeliveryCandidates({
   retryingVariantId?: string;
   onRetryVariant?: (variant: CreativeOrderVariant, action: CreativeVariantRetryAction) => void;
 }) {
+  const { t } = useT("creative");
   const adoptedVariant = adoptedCreativeOrderVariant(item);
   const sortedVariants = [...item.variants].sort(compareCreativeVariantDisplayOrder);
   const deliveryVariants = sortedVariants.filter(creativeVariantParticipatesInDelivery);
   const selectionPending = !adoptedVariant && deliveryVariants.length === 0 && sortedVariants.some((variant) => creativeVariantCandidateState(variant) === "candidate");
   const otherVariants = adoptedVariant ? deliveryVariants.filter((variant) => variant.id !== adoptedVariant.id) : [];
-  const title = source.label || `素材 ${item.candidate_id.slice(0, 8)}`;
-  const progress = creativeOrderItemProgress(item);
+  const title = source.label || t(($) => $.delivery.material, { id: item.candidate_id.slice(0, 8) });
+  const progress = creativeOrderItemProgress(item, t);
   const [packageOpen, setPackageOpen] = useState(defaultOpen);
 
   return <details className="group border bg-background" open={packageOpen} onToggle={(event) => setPackageOpen(event.currentTarget.open)} data-testid={`creative-order-item-${item.id}`}>
@@ -479,12 +483,12 @@ export function CreativeOrderDeliveryCandidates({
       </div>
       <div className="flex flex-wrap items-center gap-2">
         <Badge variant={progress.tone}>{progress.label}</Badge>
-        <Badge variant={adoptedVariant ? "default" : "secondary"}>{adoptedVariant ? `已采用 ${adoptedVariant.variant_key}` : "待选择"}</Badge>
+        <Badge variant={adoptedVariant ? "default" : "secondary"}>{adoptedVariant ? t(($) => $.delivery.adoptedVariant, { variant: adoptedVariant.variant_key }) : t(($) => $.delivery.pendingSelection)}</Badge>
       </div>
     </summary>
     <div className="border-t">
       {showDirectionDetails && item.direction.trim() && <details className="border-b px-4 py-3 text-xs text-muted-foreground">
-          <summary className="w-fit cursor-pointer select-none">生成方向详情</summary>
+          <summary className="w-fit cursor-pointer select-none">{t(($) => $.delivery.directionDetails)}</summary>
           <pre className="mt-2 max-h-48 overflow-auto whitespace-pre-wrap break-words border bg-muted/20 p-3 font-sans text-xs leading-5">{item.direction.trim()}</pre>
         </details>}
       <CreativeOrderSourceAndPrompt source={source} progress={progress} />
@@ -498,6 +502,8 @@ export function CreativeOrderDeliveryCandidates({
           attachments={attachments}
           onAssetSelect={onAssetSelect}
           onAssetInfo={onAssetInfo}
+          onUnadopt={onUnadopt ? () => onUnadopt(item.id) : undefined}
+          unadoptDisabled={disabled}
         />
         <AdoptedVariantStagingStatus
           variant={adoptedVariant}
@@ -508,7 +514,7 @@ export function CreativeOrderDeliveryCandidates({
         {otherVariants.length > 0 && <details className="group/other border-t bg-muted/10">
           <summary className="flex cursor-pointer list-none items-center gap-2 px-4 py-3 text-sm font-medium marker:content-none">
             <ChevronDown className="h-4 w-4 transition-transform group-open/other:rotate-180" />
-            查看其他候选
+            {t(($) => $.delivery.otherCandidates)}
             <Badge variant="outline">{otherVariants.length}</Badge>
           </summary>
           <div className="grid gap-3 border-t p-4 lg:grid-cols-3">
@@ -563,7 +569,7 @@ type CreativeOrderItemProgress = {
   selectionPending: boolean;
 };
 
-function creativeOrderItemProgress(item: CreativeOrderItem): CreativeOrderItemProgress {
+function creativeOrderItemProgress(item: CreativeOrderItem, t?: ReturnType<typeof useT>["t"]): CreativeOrderItemProgress {
   const allVariants = item.variants;
   const deliveryVariants = allVariants.filter(creativeVariantParticipatesInDelivery);
   const previewAssets = deliveryVariants.reduce((count, variant) => count + creativeVariantProgressAssets(variant).length, 0);
@@ -574,48 +580,51 @@ function creativeOrderItemProgress(item: CreativeOrderItem): CreativeOrderItemPr
   const readyVariants = deliveryVariants.filter((variant) => creativeVariantAdoptionReadiness(variant).ready).length;
   const selectionPending = deliveryVariants.length === 0 && allVariants.some((variant) => creativeVariantCandidateState(variant) === "candidate");
   const shared = { variants: deliveryVariants.length, previewAssets, expectedAssets, runningVariants, productionStoppedVariants, blockedVariants, readyVariants, selectionPending };
-  if (item.adopted_variant_id) return { label: "已采用", detail: "已选择最终方案，可查看交付包。", tone: "default", ...shared };
-  if (readyVariants > 0) return { label: "可验收", detail: `${readyVariants}/${Math.max(deliveryVariants.length, 1)} 个入选方案可验收，先比较成图再采用。`, tone: "default", ...shared };
-  if (selectionPending) return { label: "方案筛选中", detail: "正在自动比较候选主画面，确定三个方案后展示。", tone: "outline", ...shared };
-  if (productionStoppedVariants > 0) return { label: "未完成", detail: `${productionStoppedVariants} 个入选方案未完成，可先查看已有图。`, tone: "secondary", ...shared };
-  if (blockedVariants > 0) return { label: "待验收", detail: `${blockedVariants} 个入选方案待验收，先看图再决定。`, tone: "secondary", ...shared };
-  if (runningVariants > 0 || deliveryVariants.length > 0) return { label: "生成中", detail: `${previewAssets}/${Math.max(expectedAssets, 1)} 张成图已就绪，页面会自动刷新。`, tone: "outline", ...shared };
-  return { label: "准备中", detail: "等待后台创建生成任务。", tone: "secondary", variants: 0, previewAssets: 0, expectedAssets: 0, runningVariants: 0, productionStoppedVariants: 0, blockedVariants: 0, readyVariants: 0, selectionPending: false };
+  if (item.adopted_variant_id) return { label: t ? t(($) => $.studio.orderStatus.adopted) : "Adopted", detail: "The final variant is selected and ready for delivery.", tone: "default", ...shared };
+  if (readyVariants > 0) return { label: t ? t(($) => $.studio.orderStatus.review) : "Ready for review", detail: `${readyVariants}/${Math.max(deliveryVariants.length, 1)} selected variants are ready for review. Compare creatives before adopting.`, tone: "default", ...shared };
+  if (selectionPending) return { label: t ? t(($) => $.delivery.selectionInProgress) : "Selecting candidates", detail: t ? t(($) => $.delivery.candidateSelectionPending) : "Candidate hero images are being compared automatically.", tone: "outline", ...shared };
+  if (productionStoppedVariants > 0) return { label: "Incomplete", detail: `${productionStoppedVariants} selected variants are incomplete. You can review existing images first.`, tone: "secondary", ...shared };
+  if (blockedVariants > 0) return { label: t ? t(($) => $.studio.orderStatus.review) : "Ready for review", detail: `${blockedVariants} selected variants need review. Review images before deciding.`, tone: "secondary", ...shared };
+  if (runningVariants > 0 || deliveryVariants.length > 0) return { label: t ? t(($) => $.studio.orderStatus.generating) : "Generating", detail: `${previewAssets}/${Math.max(expectedAssets, 1)} creative images are ready. The page refreshes automatically.`, tone: "outline", ...shared };
+  return { label: "Preparing", detail: t ? t(($) => $.delivery.waitingGeneration) : "Waiting for the background to create generation tasks.", tone: "secondary", variants: 0, previewAssets: 0, expectedAssets: 0, runningVariants: 0, productionStoppedVariants: 0, blockedVariants: 0, readyVariants: 0, selectionPending: false };
 }
 
 function CreativeOrderSourceAndPrompt({ source, progress }: { source: { label: string; url: string }; progress: CreativeOrderItemProgress }) {
+  const { t } = useT("creative");
   return <div className="grid border-b bg-muted/10 lg:grid-cols-[minmax(240px,0.72fr)_minmax(0,1.28fr)]">
     <figure className="min-w-0 border-b bg-background lg:border-b-0 lg:border-r">
-      <figcaption className="border-b px-3 py-2 text-xs font-medium">原图 · {source.label}</figcaption>
+      <figcaption className="border-b px-3 py-2 text-xs font-medium">{t(($) => $.delivery.sourceImage, { label: source.label })}</figcaption>
       <div className="flex min-h-64 items-center justify-center p-3">
-        {source.url ? <img src={source.url} alt={`原图 ${source.label}`} width={1200} height={1200} loading="lazy" className="max-h-[360px] w-full object-contain" /> : <EmptyImage label="原图不可用" />}
+        {source.url ? <img src={source.url} alt={t(($) => $.delivery.sourceImageAlt, { label: source.label })} width={1200} height={1200} loading="lazy" className="max-h-[360px] w-full object-contain" /> : <EmptyImage label={t(($) => $.delivery.sourceUnavailable)} />}
       </div>
     </figure>
     <div className="min-w-0 space-y-3 px-4 py-3">
       <div className="flex flex-wrap gap-2 text-xs">
-        {progress.selectionPending ? <Badge variant="outline">自动筛选中</Badge> : <>
-          <Badge variant="outline">{progress.variants} 个入选方案</Badge>
-          <Badge variant="outline">{progress.expectedAssets > 0 ? `${progress.previewAssets}/${progress.expectedAssets} 张成图` : "等待任务"}</Badge>
-          {progress.runningVariants > 0 && <Badge variant="outline">{progress.runningVariants} 个生成中</Badge>}
+        {progress.selectionPending ? <Badge variant="outline">{t(($) => $.delivery.selectionInProgress)}</Badge> : <>
+          <Badge variant="outline">{t(($) => $.delivery.selectedDirections, { count: progress.variants })}</Badge>
+          <Badge variant="outline">{progress.expectedAssets > 0 ? t(($) => $.delivery.previewImages, { ready: progress.previewAssets, expected: progress.expectedAssets }) : t(($) => $.delivery.waitingTask)}</Badge>
+          {progress.runningVariants > 0 && <Badge variant="outline">{t(($) => $.delivery.generatingCount, { count: progress.runningVariants })}</Badge>}
         </>}
-        {progress.productionStoppedVariants > 0 && <Badge variant="secondary">{progress.productionStoppedVariants} 个未完成</Badge>}
-        {progress.blockedVariants - progress.productionStoppedVariants > 0 && <Badge variant="secondary">{progress.blockedVariants - progress.productionStoppedVariants} 个待验收</Badge>}
-        {progress.readyVariants > 0 && <Badge>{progress.readyVariants} 个可验收</Badge>}
+        {progress.productionStoppedVariants > 0 && <Badge variant="secondary">{t(($) => $.delivery.incompleteCount, { count: progress.productionStoppedVariants })}</Badge>}
+        {progress.blockedVariants - progress.productionStoppedVariants > 0 && <Badge variant="secondary">{t(($) => $.delivery.reviewCount, { count: progress.blockedVariants - progress.productionStoppedVariants })}</Badge>}
+        {progress.readyVariants > 0 && <Badge>{t(($) => $.delivery.reviewCount, { count: progress.readyVariants })}</Badge>}
       </div>
-      <p className="text-xs leading-5 text-muted-foreground">每张成图旁都可查看完整模型提示词、冻结文案、生成记录和版本溯源。</p>
+      <p className="text-xs leading-5 text-muted-foreground">{t(($) => $.delivery.infoNote)}</p>
     </div>
   </div>;
 }
 
 function CreativeOrderVariantPlaceholder() {
+  const { t } = useT("creative");
   return <div className="flex min-h-48 items-center justify-center border border-dashed bg-muted/10 px-6 text-center text-sm text-muted-foreground lg:col-span-3">
-    等待后台创建生成任务，完成后这里会出现成图和验收入口。
+    {t(($) => $.delivery.waitingGeneration)}
   </div>;
 }
 
 function CreativeOrderCandidateSelectionPending() {
+  const { t } = useT("creative");
   return <div className="flex min-h-48 items-center justify-center border bg-muted/10 px-6 text-center text-sm text-muted-foreground" data-testid="creative-order-candidate-selection-pending">
-    正在自动比较候选主画面，确定三个入选方案后在这里展示。
+    {t(($) => $.delivery.candidateSelectionPending)}
   </div>;
 }
 
@@ -627,6 +636,8 @@ function AdoptedVariantDelivery({
   attachments,
   onAssetSelect,
   onAssetInfo,
+  onUnadopt,
+  unadoptDisabled = false,
 }: {
   orderId: string;
   item: CreativeOrderItem;
@@ -635,7 +646,10 @@ function AdoptedVariantDelivery({
   attachments: Map<string, DeliveryAttachment>;
   onAssetSelect: (assetId: string) => void;
   onAssetInfo?: (assetId: string) => void;
+  onUnadopt?: () => void;
+  unadoptDisabled?: boolean;
 }) {
+  const { t } = useT("creative");
   const [archiveBusy, setArchiveBusy] = useState(false);
   const [archiveError, setArchiveError] = useState("");
   const delivered = creativeVariantDeliveryAssets(variant);
@@ -647,7 +661,7 @@ function AdoptedVariantDelivery({
     try {
       await downloadCreativeVariantArchive({ orderId, item, variant, attachments, order });
     } catch (error) {
-      setArchiveError(error instanceof Error ? error.message : "无法打包下载交付包");
+      setArchiveError(error instanceof Error ? error.message : t(($) => $.delivery.archiveFailed));
     } finally {
       setArchiveBusy(false);
     }
@@ -655,8 +669,11 @@ function AdoptedVariantDelivery({
 
   return <div className="bg-emerald-50/40 dark:bg-emerald-950/10" data-testid="creative-adopted-variant">
     <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3">
-      <div className="flex items-center gap-2"><PackageCheck className="h-4 w-4 text-emerald-700 dark:text-emerald-400" /><h3 className="text-sm font-semibold">最终采用方案 · 交付包</h3><Badge variant="outline">{variant.variant_key}</Badge></div>
-      <Button size="sm" variant="outline" disabled={archiveBusy || entries.length !== expectedSizes.length} onClick={() => void downloadArchive()}><Download className="h-4 w-4" />{archiveBusy ? "正在打包" : "下载交付包"}</Button>
+      <div className="flex items-center gap-2"><PackageCheck className="h-4 w-4 text-emerald-700 dark:text-emerald-400" /><h3 className="text-sm font-semibold">{t(($) => $.delivery.adoptedPackage)}</h3><Badge variant="outline">{variant.variant_key}</Badge></div>
+      <div className="flex flex-wrap items-center gap-2">
+        {onUnadopt && <Button size="sm" variant="outline" disabled={unadoptDisabled} onClick={onUnadopt}><Undo2 className="h-4 w-4" />{t(($) => $.delivery.cancelAdoption)}</Button>}
+        <Button size="sm" variant="outline" disabled={archiveBusy || entries.length !== expectedSizes.length} onClick={() => void downloadArchive()}><Download className="h-4 w-4" />{archiveBusy ? t(($) => $.delivery.packaging) : t(($) => $.delivery.downloadPackage)}</Button>
+      </div>
     </div>
     {archiveError && <p role="alert" className="border-y border-destructive/20 bg-destructive/5 px-4 py-2 text-xs text-destructive">{archiveError}</p>}
     <div className={cn("grid min-w-0 border-t", expectedSizes.length === 3 && "md:grid-cols-3")}>

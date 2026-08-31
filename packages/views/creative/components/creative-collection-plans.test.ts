@@ -66,17 +66,17 @@ describe("matchCollectionPlans", () => {
 
   it("labels collection batches by imported materials only", () => {
     expect(crawlRunImportBadgeLabel({ status: "completed", imported_count: 20 } as any))
-      .toBe("本次入库 20 张素材");
+      .toBe("Imported 20 materials this run");
     expect(crawlRunImportBadgeLabel({ status: "completed", imported_count: 0 } as any))
-      .toBe("本次没有新增素材");
+      .toBe("No new materials this run");
   });
 
   it("does not present an active zero-import CrawlRun as a terminal empty result", () => {
     expect(crawlRunNeedsRefresh({ status: "running", imported_count: 0 } as any)).toBe(true);
-    expect(crawlRunImportBadgeLabel({ status: "running", imported_count: 0 } as any)).toBe("正在查找新增素材");
+    expect(crawlRunImportBadgeLabel({ status: "running", imported_count: 0 } as any)).toBe("Looking for new materials");
 
     expect(crawlRunNeedsRefresh({ status: "completed", imported_count: 0 } as any)).toBe(false);
-    expect(crawlRunImportBadgeLabel({ status: "completed", imported_count: 0 } as any)).toBe("本次没有新增素材");
+    expect(crawlRunImportBadgeLabel({ status: "completed", imported_count: 0 } as any)).toBe("No new materials this run");
   });
 
   it("keeps only new material records when opening one exact crawl run", () => {

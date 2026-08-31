@@ -3118,6 +3118,10 @@ export class ApiClient {
     return parseWithFallback(raw, CreativeOrderSchema, { id: "", workspace_id: "", issue_id: "", status: "cancelled", derived_status: "cancelled", delivery_status: "cancelled", production_status: "cancelled", input_snapshot: {}, trigger_evidence_kind: "", trigger_evidence_ref_id: "", created_by: "", created_at: "", updated_at: "", workflow_failures: [], items: [] }, { endpoint: "POST /api/creative/orders/:id/cancel" });
   }
 
+  async deleteCreativeOrder(id: string): Promise<void> {
+    await this.fetch(`/api/creative/orders/${encodeURIComponent(id)}`, { method: "DELETE" });
+  }
+
   async createCreativeOrder(data: CreateCreativeOrderRequest): Promise<CreativeOrder> {
     const raw = await this.fetch<unknown>("/api/creative/orders", { method: "POST", body: JSON.stringify(data) });
     return parseWithFallback(raw, CreativeOrderSchema, { id: "", workspace_id: "", issue_id: "", status: "draft", derived_status: "draft", delivery_status: "pending", production_status: "pending", input_snapshot: {}, trigger_evidence_kind: "", trigger_evidence_ref_id: "", created_by: "", created_at: "", updated_at: "", workflow_failures: [], items: [] }, { endpoint: "POST /api/creative/orders" });
@@ -3130,6 +3134,21 @@ export class ApiClient {
     });
     return parseWithFallback(raw, CreativeOrderItemSchema, EMPTY_CREATIVE_ORDER_ITEM, {
       endpoint: "POST /api/creative/orders/:orderId/items/:itemId/adoption",
+    });
+  }
+
+  async unadoptCreativeOrderVariant(orderId: string, itemId: string): Promise<CreativeOrderItem> {
+    const raw = await this.fetch<unknown>(`/api/creative/orders/${encodeURIComponent(orderId)}/items/${encodeURIComponent(itemId)}/adoption`, {
+      method: "DELETE",
+    });
+    return parseWithFallback(raw, CreativeOrderItemSchema, EMPTY_CREATIVE_ORDER_ITEM, {
+      endpoint: "DELETE /api/creative/orders/:orderId/items/:itemId/adoption",
+    });
+  }
+
+  async selectCreativeOrderVariantRevision(orderId: string, variantId: string, revision: number): Promise<void> {
+    await this.fetch(`/api/creative/orders/${encodeURIComponent(orderId)}/variants/${encodeURIComponent(variantId)}/revisions/${encodeURIComponent(String(revision))}/select`, {
+      method: "POST",
     });
   }
 

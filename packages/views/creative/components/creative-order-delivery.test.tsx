@@ -119,6 +119,16 @@ describe("creative order stage", () => {
     });
   });
 
+  it("keeps the delivery package visible when adoption is cancelled", () => {
+    const orderItem = item("v01");
+    const onUnadopt = vi.fn();
+    render(<CreativeOrderDeliveryCandidates orderId="order-1" item={orderItem} source={{ label: "竞品原图", url: "https://cdn.example/source.png" }} attachments={attachmentMap(orderItem)} adoptingVariantId="" onAdopt={vi.fn()} onUnadopt={onUnadopt} onAssetSelect={vi.fn()} />);
+
+    expect(screen.getByTestId("creative-adopted-variant")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "取消采用" }));
+    expect(onUnadopt).toHaveBeenCalledWith("item-1");
+  });
+
   it("moves adopted orders to delivery", () => {
     const adopted = item("v01");
     adopted.variants = [variant("v01")];

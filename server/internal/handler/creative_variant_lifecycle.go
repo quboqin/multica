@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
@@ -233,6 +234,166 @@ WHERE id = $1
 		}
 	}
 	return nil
+}
+
+func (h *Handler) SelectCreativeOrderVariantRevision(w http.ResponseWriter, r *http.Request) {
+	workspaceID, userID, ok := h.creativeFeedbackWorkspaceUser(w, r)
+	if !ok {
+		return
+	}
+	orderID, ok := parseUUIDOrBadRequest(w, chi.URLParam(r, "id"), "order_id")
+	if !ok {
+		return
+	}
+	if !h.requireCreativeOrderWritable(w, r, orderID, workspaceID) {
+		return
+	}
+	variantID, ok := parseUUIDOrBadRequest(w, chi.URLParam(r, "variantId"), "variant_id")
+	if !ok {
+		return
+	}
+	revision, err := strconv.Atoi(chi.URLParam(r, "revision"))
+	if err != nil || revision < 1 {
+		writeError(w, http.StatusBadRequest, "revision must be a positive integer")
+		return
+	}
+
+	tx, err := h.TxStarter.Begin(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to start creative revision selection")
+		return
+	}
+	defer tx.Rollback(r.Context())
+
+	var issueID pgtype.UUID
+	var activeRevision, workingRevision int
+	var orderStatus, variantStatus string
+	if err := tx.QueryRow(r.Context(), `
+SELECT order_row.issue_id, order_row.status,
+       COALESCE(variant.active_revision, 0),
+       COALESCE(variant.staging_revision, variant.revision),
+       variant.status
+FROM creative_order_variant variant
+JOIN creative_order_item item ON item.id = variant.order_item_id
+JOIN creative_order order_row ON order_row.id = item.order_id
+WHERE variant.id = $1
+  AND item.order_id = $2
+  AND order_row.workspace_id = $3
+FOR UPDATE OF variant, item, order_row
+`, variantID, orderID, workspaceID).Scan(&issueID, &orderStatus, &activeRevision, &workingRevision, &variantStatus); errors.Is(err, pgx.ErrNoRows) {
+		writeError(w, http.StatusUnprocessableEntity, "variant does not belong to this creative order")
+		return
+	} else if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to lock creative variant")
+		return
+	}
+	if orderStatus == "cancelled" {
+		writeError(w, http.StatusConflict, errCreativeOrderCancelled.Error())
+		return
+	}
+	if workingRevision != activeRevision || variantStatus != "completed" {
+		writeError(w, http.StatusConflict, "wait for the current creative revision before selecting a previous version")
+		return
+	}
+
+	var revisionStatus string
+	var expectedSizes []string
+	if err := tx.QueryRow(r.Context(), `
+SELECT status, expected_sizes
+FROM creative_order_variant_revision
+WHERE variant_id = $1 AND revision = $2
+`, variantID, revision).Scan(&revisionStatus, &expectedSizes); errors.Is(err, pgx.ErrNoRows) {
+		writeError(w, http.StatusNotFound, "creative revision not found")
+		return
+	} else if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to load creative revision")
+		return
+	}
+	if revisionStatus != "completed" {
+		writeError(w, http.StatusConflict, "only a completed creative revision can be selected")
+		return
+	}
+	expectedSizes, err = normalizeCreativeExpectedSizes(expectedSizes)
+	if err != nil {
+		writeError(w, http.StatusConflict, "creative revision has an invalid delivery contract")
+		return
+	}
+	var deliveredCount int
+	if err := tx.QueryRow(r.Context(), `
+SELECT count(DISTINCT size_key)
+FROM creative_order_asset
+WHERE variant_id = $1
+  AND revision = $2
+  AND stage = 'delivered'
+  AND status = 'completed'
+  AND attachment_id IS NOT NULL
+  AND size_key = ANY($3::text[])
+`, variantID, revision, expectedSizes).Scan(&deliveredCount); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to load creative revision delivery package")
+		return
+	}
+	if deliveredCount != len(expectedSizes) {
+		writeError(w, http.StatusConflict, "creative revision delivery package is incomplete")
+		return
+	}
+	if activeRevision == revision {
+		if err := tx.Commit(r.Context()); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to confirm creative revision selection")
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	if _, err := tx.Exec(r.Context(), `
+UPDATE creative_order_variant
+SET active_revision = $2,
+    staging_revision = $2,
+    status = 'completed',
+    updated_at = now()
+WHERE id = $1
+`, variantID, revision); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to select creative revision")
+		return
+	}
+	if _, err := tx.Exec(r.Context(), `UPDATE creative_order SET updated_at = now() WHERE id = $1`, orderID); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to update creative order")
+		return
+	}
+	details, err := json.Marshal(map[string]any{
+		"creative_order_id":        uuidToString(orderID),
+		"variant_id":               uuidToString(variantID),
+		"previous_active_revision": activeRevision,
+		"selected_revision":        revision,
+		"delivery_package_sizes":   expectedSizes,
+	})
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to record creative revision selection")
+		return
+	}
+	if _, err := tx.Exec(r.Context(), `
+INSERT INTO creative_feedback_event (
+  workspace_id, issue_id, actor_type, actor_id, subject_type, subject_id,
+  event_type, decision, context_snapshot
+) VALUES ($1, $2, 'member', $3, 'variant', $4, 'decision', 'selected', $5::jsonb)
+`, workspaceID, issueID, userID, variantID, details); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to record creative revision feedback")
+		return
+	}
+	if _, err := tx.Exec(r.Context(), `
+INSERT INTO activity_log (workspace_id, issue_id, actor_type, actor_id, action, details)
+VALUES ($1, $2, 'member', $3, 'creative_variant_revision_selected', $4::jsonb)
+`, workspaceID, issueID, userID, details); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to record creative revision activity")
+		return
+	}
+	if err := tx.Commit(r.Context()); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to select creative revision")
+		return
+	}
+	h.publishCreativeDomainUpdated(r, workspaceID, userID, map[string]any{
+		"scope": "order", "order_id": chi.URLParam(r, "id"), "variant_id": chi.URLParam(r, "variantId"), "revision": revision,
+	})
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (h *Handler) listCreativeOrderVariantRevisions(ctx context.Context, variantID pgtype.UUID) ([]creativeOrderVariantRevision, error) {

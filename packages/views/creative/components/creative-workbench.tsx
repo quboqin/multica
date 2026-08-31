@@ -1,6 +1,7 @@
 "use client";
 
 import type { CreativeMaterialCandidate, CreativeOrder } from "@multica/core/types";
+import { useT } from "../../i18n";
 
 export interface CreativeWorkbenchProps {
   candidates?: CreativeMaterialCandidate[];
@@ -14,11 +15,6 @@ export interface CreativeWorkbenchProps {
 
 type WorkbenchOrderState = "review" | "running" | "attention" | "delivered" | "inactive";
 
-const WORKBENCH_COPY = {
-  title: "创意工作台",
-  subtitle: "查看素材、生成、验收和本周交付的当前总览。",
-} as const;
-
 export function CreativeWorkbench({
   candidates = [],
   orders = [],
@@ -26,6 +22,7 @@ export function CreativeWorkbench({
   averageGenerationDuration = "-",
   generationDurationPackageCount = 0,
 }: CreativeWorkbenchProps) {
+  const { t } = useT("creative");
   const excludedCandidateIdSet = new Set(excludedCandidateIds);
   const pendingMaterials = candidates.filter((candidate) => !excludedCandidateIdSet.has(candidate.id));
   const reviewOrders = orders.filter(isAdoptionReadyOrder).sort(compareActionOrders);
@@ -39,21 +36,21 @@ export function CreativeWorkbench({
     <div className="mx-auto w-full min-w-0 max-w-[1440px] space-y-4" data-testid="creative-workbench">
       <header className="flex flex-wrap items-end justify-between gap-3 border-b pb-3">
         <div className="min-w-0">
-          <h2 className="text-base font-semibold">{WORKBENCH_COPY.title}</h2>
-          <p className="mt-1 text-sm text-muted-foreground">{WORKBENCH_COPY.subtitle}</p>
+          <h2 className="text-base font-semibold">{t(($) => $.workbench.title)}</h2>
+          <p className="mt-1 text-sm text-muted-foreground">{t(($) => $.workbench.subtitle)}</p>
         </div>
       </header>
 
-      <section aria-label="工作台概览" className="grid min-w-0 grid-cols-2 divide-x divide-y border bg-background sm:grid-cols-5 sm:divide-y-0">
-        <WorkbenchMetric testId="creative-workbench-materials" value={pendingMaterials.length} label="待选素材" />
-        <WorkbenchMetric testId="creative-workbench-running" value={runningOrders.length} label="真实出图中" />
-        <WorkbenchMetric testId="creative-workbench-reviews" value={reviewOrders.length} label="待采用成图" />
-        <WorkbenchMetric testId="creative-workbench-deliveries" value={deliveredThisWeek.length} label="本周交付" />
+      <section aria-label={t(($) => $.workbench.overview)} className="grid min-w-0 grid-cols-2 divide-x divide-y border bg-background sm:grid-cols-5 sm:divide-y-0">
+        <WorkbenchMetric testId="creative-workbench-materials" value={pendingMaterials.length} label={t(($) => $.workbench.materials)} />
+        <WorkbenchMetric testId="creative-workbench-running" value={runningOrders.length} label={t(($) => $.workbench.generating)} />
+        <WorkbenchMetric testId="creative-workbench-reviews" value={reviewOrders.length} label={t(($) => $.workbench.readyToAdopt)} />
+        <WorkbenchMetric testId="creative-workbench-deliveries" value={deliveredThisWeek.length} label={t(($) => $.workbench.weeklyDelivery)} />
         <WorkbenchMetric
           testId="creative-workbench-average-duration"
           value={averageGenerationDuration}
-          label="整套出图平均耗时"
-          hint={generationDurationPackageCount > 0 ? `基于 ${generationDurationPackageCount} 套` : undefined}
+          label={t(($) => $.workbench.averageDuration)}
+          hint={generationDurationPackageCount > 0 ? t(($) => $.workbench.basedOnPackages, { count: generationDurationPackageCount }) : undefined}
         />
       </section>
     </div>

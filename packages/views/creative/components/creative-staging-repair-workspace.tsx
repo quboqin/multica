@@ -6,6 +6,7 @@ import type { CreativeDeliverySize, CreativeOrderAsset, CreativeOrderItem, Creat
 import { Badge } from "@multica/ui/components/ui/badge";
 import { Button } from "@multica/ui/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@multica/ui/components/ui/dialog";
+import { useT } from "../../i18n";
 import { creativeAttachmentBrowserURL } from "../lib/creative-attachment-url";
 import { CreativeComparisonWorkspace, type CreativeAnnotationDraft } from "./creative-comparison-workspace";
 import type { DeliveryAttachment } from "./creative-order-delivery";
@@ -69,6 +70,7 @@ export function CreativeStagingRepairWorkspace({
   onAnnotations: (asset: CreativeOrderAsset, annotations: CreativeAnnotationDraft[]) => Promise<boolean>;
   onViewInfo?: (asset: CreativeOrderAsset) => void;
 }) {
+  const { t } = useT("creative");
   const entries = useMemo(() => creativeStagingRepairEntries(items), [items]);
   const [selectedAssetId, setSelectedAssetId] = useState("");
   const selected = entries.find((entry) => entry.asset.id === selectedAssetId);
@@ -84,9 +86,9 @@ export function CreativeStagingRepairWorkspace({
   return <section className="border-y bg-amber-50/50 px-4 py-3 dark:bg-amber-950/20" data-testid="creative-staging-repair-workspace">
     <div className="flex flex-wrap items-center gap-2">
       <AlertTriangle className="h-4 w-4 text-amber-700 dark:text-amber-300" />
-      <h3 className="text-sm font-semibold">制作中版本需要调整</h3>
-      <Badge variant="outline">{entries.length} 个尺寸</Badge>
-      <p className="text-xs text-muted-foreground">线上版本继续用于采用和下载。</p>
+      <h3 className="text-sm font-semibold">{t(($) => $.stagingRepair.title)}</h3>
+      <Badge variant="outline">{t(($) => $.stagingRepair.sizes, { count: entries.length })}</Badge>
+      <p className="text-xs text-muted-foreground">{t(($) => $.stagingRepair.activeRevision)}</p>
     </div>
     <div className="mt-3 flex flex-wrap gap-2">
       {entries.map((entry) => <Button
@@ -97,23 +99,23 @@ export function CreativeStagingRepairWorkspace({
         onClick={() => setSelectedAssetId(entry.asset.id)}
       >
         <PencilRuler className="h-4 w-4" />
-        查看并标注 {entry.variant.variant_key || entry.variant.id.slice(0, 8)} · r{entry.asset.revision} · {deliverySizeLabel(entry.asset.size_key)}
+        {t(($) => $.stagingRepair.viewAndAnnotate, { variant: entry.variant.variant_key || entry.variant.id.slice(0, 8), revision: entry.asset.revision, size: deliverySizeLabel(t, entry.asset.size_key) })}
       </Button>)}
     </div>
     <Dialog open={Boolean(selected)} onOpenChange={(open) => { if (!open) setSelectedAssetId(""); }}>
       <DialogContent className="flex h-[min(92vh,920px)] max-w-6xl flex-col overflow-hidden p-0">
         <DialogHeader className="shrink-0 border-b px-5 py-4 pr-14">
-          <DialogTitle>标注制作中版本</DialogTitle>
+          <DialogTitle>{t(($) => $.stagingRepair.dialogTitle)}</DialogTitle>
           <DialogDescription>
-            {selected ? `${selected.variant.variant_key || "当前变体"} · 制作中 r${selected.asset.revision} · ${deliverySizeLabel(selected.asset.size_key)}。提交后会创建新版本，线上 r${selected.variant.active_revision} 保持不变。` : ""}
+            {selected ? t(($) => $.stagingRepair.dialogDescription, { variant: selected.variant.variant_key || t(($) => $.stagingRepair.currentVariant), stagingRevision: selected.asset.revision, size: deliverySizeLabel(t, selected.asset.size_key), activeRevision: selected.variant.active_revision }) : ""}
           </DialogDescription>
         </DialogHeader>
         {selected && <div className="min-h-0 flex-1">
           <CreativeComparisonWorkspace
-            source={{ label: `线上 r${selected.variant.active_revision}`, url: attachmentURL(selected.activeAsset) }}
+            source={{ label: t(($) => $.stagingRepair.liveRevision, { revision: selected.variant.active_revision }), url: attachmentURL(selected.activeAsset) }}
             result={{
               id: selected.asset.id,
-              label: `制作中 r${selected.asset.revision} · ${deliverySizeLabel(selected.asset.size_key)}`,
+              label: t(($) => $.stagingRepair.productionRevision, { revision: selected.asset.revision, size: deliverySizeLabel(t, selected.asset.size_key) }),
               finalUrl: attachmentURL(selected.asset),
               baseUrl: attachmentURL(selected.baseAsset),
               size: selected.asset.size_key,
@@ -121,7 +123,7 @@ export function CreativeStagingRepairWorkspace({
             }}
             assets={selectedVariantEntries.map((entry) => ({
               id: entry.asset.id,
-              label: `制作中 r${entry.asset.revision} · ${deliverySizeLabel(entry.asset.size_key)}`,
+              label: t(($) => $.stagingRepair.productionRevision, { revision: entry.asset.revision, size: deliverySizeLabel(t, entry.asset.size_key) }),
               finalUrl: attachmentURL(entry.asset),
               baseUrl: attachmentURL(entry.baseAsset),
               thumbnailUrl: attachmentURL(entry.asset),
@@ -132,7 +134,7 @@ export function CreativeStagingRepairWorkspace({
             onViewInfo={onViewInfo ? () => onViewInfo(selected.asset) : undefined}
             onAnnotations={disabled ? undefined : (annotations) => onAnnotations(selected.asset, annotations)}
             annotationScopes={selected.expectedSizes.length > 1 ? ["size", "variant"] : ["size"]}
-            annotationScopeLabels={{ variant: `全部制作中尺寸（${selected.expectedSizes.length}）` }}
+            annotationScopeLabels={{ variant: t(($) => $.stagingRepair.allProductionSizes, { count: selected.expectedSizes.length }) }}
             showDecisionActions={false}
             allowDownload={false}
             comparisonMode="adjustment"
@@ -159,9 +161,9 @@ function compareAssets(left: CreativeOrderAsset, right: CreativeOrderAsset): num
   return rank(right) - rank(left) || right.updated_at.localeCompare(left.updated_at) || right.id.localeCompare(left.id);
 }
 
-function deliverySizeLabel(size: string): string {
-  if (size === "1080x1080") return "方形";
-  if (size === "1200x628") return "横版";
-  if (size === "800x1000") return "竖版";
+function deliverySizeLabel(t: ReturnType<typeof useT>["t"], size: string): string {
+  if (size === "1080x1080") return t(($) => $.stagingRepair.square);
+  if (size === "1200x628") return t(($) => $.stagingRepair.landscape);
+  if (size === "800x1000") return t(($) => $.stagingRepair.portrait);
   return size;
 }

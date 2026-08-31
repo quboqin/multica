@@ -317,6 +317,8 @@
     "creative_order_adjustment_queued": "已启动{{size}}精准调整",
     "creative_variant_adopted": "采用了一个创意变体",
     "creative_variant_adopted_key": "采用了变体 {{variant}}",
+    "creative_variant_unadopted": "取消采用了创意变体",
+    "creative_variant_revision_selected": "选择了创意版本 r{{revision}}",
     "coalesced_badge": "×{{count}}",
     "activity_count_one": "{{count}} 条动态",
     "activity_count_other": "{{count}} 条动态",
