@@ -5,9 +5,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
+	"path/filepath"
 	"sort"
 	"strings"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 )
@@ -72,6 +75,7 @@ func (h *Handler) freezeCreativeOrderInputAttachments(
 	ctx context.Context,
 	tx pgx.Tx,
 	workspaceID pgtype.UUID,
+	createdBy pgtype.UUID,
 	raw json.RawMessage,
 	items []creativeOrderItemInput,
 ) (json.RawMessage, error) {
@@ -135,13 +139,21 @@ FOR SHARE
 			return nil, &creativeOrderAttachmentValidationError{Code: "attachment_not_found", Message: "candidate source attachment is invalid"}
 		}
 		var sourceAttachmentID pgtype.UUID
+		var archivedURL, archiveStatus, assetType string
 		if err := tx.QueryRow(ctx, `
-SELECT source_attachment_id
+SELECT source_attachment_id, archived_url, archive_status, asset_type
 FROM creative_material_candidate
 WHERE id = $1 AND workspace_id = $2
-FOR SHARE
-`, candidateID, workspaceID).Scan(&sourceAttachmentID); err != nil || !sourceAttachmentID.Valid {
-			return nil, &creativeOrderAttachmentValidationError{Code: "attachment_not_found", Message: "candidate source attachment is unavailable"}
+FOR UPDATE
+`, candidateID, workspaceID).Scan(&sourceAttachmentID, &archivedURL, &archiveStatus, &assetType); err != nil {
+			return nil, &creativeOrderAttachmentValidationError{Code: "attachment_not_found", Message: "candidate source is unavailable"}
+		}
+		if !sourceAttachmentID.Valid {
+			var bindErr error
+			sourceAttachmentID, bindErr = h.bindArchivedCreativeCandidateSourceAttachment(ctx, tx, workspaceID, createdBy, candidateID, archivedURL, archiveStatus, assetType)
+			if bindErr != nil {
+				return nil, bindErr
+			}
 		}
 		if _, err := h.readCreativePrimeAttachment(ctx, workspaceID, sourceAttachmentID); err != nil {
 			return nil, creativeOrderAttachmentValidationFailure("candidate source attachment", err)
@@ -181,6 +193,67 @@ FOR SHARE
 	}
 	snapshot["attachment_snapshot"] = attachmentSnapshot
 	return json.Marshal(snapshot)
+}
+
+// bindArchivedCreativeCandidateSourceAttachment repairs the historical gap where
+// a candidate archive was stored successfully but was not registered as an
+// attachment. It never downloads an App UI reference and it does not duplicate
+// the archived object; it simply gives the existing immutable source an ID that
+// later production tasks can use without a browser session.
+func (h *Handler) bindArchivedCreativeCandidateSourceAttachment(
+	ctx context.Context,
+	tx pgx.Tx,
+	workspaceID, createdBy, candidateID pgtype.UUID,
+	archivedURL, archiveStatus, assetType string,
+) (pgtype.UUID, error) {
+	if !createdBy.Valid {
+		return pgtype.UUID{}, errors.New("creative order is missing its owner")
+	}
+	if archiveStatus != "completed" || strings.TrimSpace(archivedURL) == "" || h.Storage == nil {
+		return pgtype.UUID{}, &creativeOrderAttachmentValidationError{Code: "attachment_not_found", Message: "candidate source is still being archived"}
+	}
+	key := h.Storage.KeyFromURL(archivedURL)
+	if key == "" {
+		return pgtype.UUID{}, &creativeOrderAttachmentValidationError{Code: "attachment_not_found", Message: "candidate archive is not a platform-managed source"}
+	}
+	data, err := h.readCreativePrimeStorageObject(ctx, key)
+	if err != nil {
+		return pgtype.UUID{}, creativeOrderAttachmentValidationFailure("candidate source", err)
+	}
+	attachmentUUID, err := uuid.NewV7()
+	if err != nil {
+		return pgtype.UUID{}, fmt.Errorf("create candidate source attachment id: %w", err)
+	}
+	attachmentID := pgtype.UUID{Bytes: attachmentUUID, Valid: true}
+	filename := creativeCandidateArchiveFilename(archivedURL, assetType)
+	contentType := creativeArchiveContentType(archivedURL, assetType)
+	if _, err := tx.Exec(ctx, `
+INSERT INTO attachment (id, workspace_id, uploader_type, uploader_id, filename, url, content_type, size_bytes)
+VALUES ($1, $2, 'member', $3, $4, $5, $6, $7)
+`, attachmentID, workspaceID, createdBy, filename, archivedURL, contentType, int64(len(data))); err != nil {
+		return pgtype.UUID{}, fmt.Errorf("register archived candidate source: %w", err)
+	}
+	if tag, err := tx.Exec(ctx, `
+UPDATE creative_material_candidate
+SET source_attachment_id = $3, updated_at = now()
+WHERE id = $1 AND workspace_id = $2 AND source_attachment_id IS NULL
+`, candidateID, workspaceID, attachmentID); err != nil || tag.RowsAffected() != 1 {
+		return pgtype.UUID{}, errors.New("failed to bind archived candidate source")
+	}
+	return attachmentID, nil
+}
+
+func creativeCandidateArchiveFilename(archivedURL, assetType string) string {
+	parsed, err := url.Parse(archivedURL)
+	if err == nil {
+		if filename := filepath.Base(parsed.Path); filename != "" && filename != "." && filename != "/" {
+			return filename
+		}
+	}
+	if strings.EqualFold(assetType, "video") {
+		return "source.mp4"
+	}
+	return "source.jpg"
 }
 
 func (h *Handler) validateCreativeOrderResourceAttachment(
