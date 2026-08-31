@@ -758,14 +758,25 @@ func (h *Handler) proxyAttachmentDownload(w http.ResponseWriter, r *http.Request
 	} else {
 		w.Header().Set("Content-Type", "application/octet-stream")
 	}
-	if att.SizeBytes >= 0 {
-		w.Header().Set("Content-Length", fmt.Sprintf("%d", att.SizeBytes))
-	}
+	// Attachment metadata can predate object storage or be backfilled without
+	// an authoritative byte count. Do not make it an HTTP framing contract:
+	// an incorrect Content-Length truncates an otherwise readable stream.
 	w.Header().Set("Content-Disposition", storage.ContentDisposition(att.ContentType, att.Filename))
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
-	if _, err := io.Copy(w, reader); err != nil {
+	written, err := io.Copy(w, reader)
+	if err != nil {
 		slog.Error("failed to stream attachment download", "id", uuidToString(att.ID), "error", err)
+		return
+	}
+	if written != att.SizeBytes {
+		if _, err := h.DB.Exec(r.Context(), `
+UPDATE attachment
+SET size_bytes = $2
+WHERE id = $1 AND size_bytes IS DISTINCT FROM $2
+`, att.ID, written); err != nil {
+			slog.Warn("failed to reconcile attachment size after download", "id", uuidToString(att.ID), "error", err)
+		}
 	}
 }
 

@@ -793,6 +793,43 @@ func TestDownloadAttachment_AutoInternalEndpointProxies(t *testing.T) {
 	}
 }
 
+func TestDownloadAttachment_ProxyStreamsStaleZeroSizeAndRepairsMetadata(t *testing.T) {
+	store := &mockStorage{}
+	origStorage := testHandler.Storage
+	origCfg := testHandler.cfg
+	origSigner := testHandler.CFSigner
+	testHandler.Storage = store
+	testHandler.cfg.AttachmentDownloadMode = "proxy"
+	testHandler.CFSigner = nil
+	t.Cleanup(func() {
+		testHandler.Storage = origStorage
+		testHandler.cfg = origCfg
+		testHandler.CFSigner = origSigner
+	})
+
+	key := "creative-materials/stale-size/source.jpeg"
+	body := []byte("stored image bytes")
+	store.put(key, body)
+	id := seedAttachmentURL(t, "https://assets-bucket.oss-ap-southeast-3.aliyuncs.com/"+key, "source.jpeg", "image/jpeg", 0)
+
+	req, w := newDownloadRequest(t, id, testWorkspaceID)
+	testHandler.DownloadAttachment(w, req)
+
+	if w.Code != http.StatusOK || !bytes.Equal(w.Body.Bytes(), body) {
+		t.Fatalf("stale-size proxy = %d body %q", w.Code, w.Body.Bytes())
+	}
+	if got := w.Header().Get("Content-Length"); got != "" {
+		t.Fatalf("Content-Length = %q, want omitted for stale metadata", got)
+	}
+	var sizeBytes int64
+	if err := testPool.QueryRow(t.Context(), `SELECT size_bytes FROM attachment WHERE id = $1`, id).Scan(&sizeBytes); err != nil {
+		t.Fatal(err)
+	}
+	if sizeBytes != int64(len(body)) {
+		t.Fatalf("reconciled size = %d, want %d", sizeBytes, len(body))
+	}
+}
+
 func TestDownloadAttachment_AutoPublicEndpointPresigns(t *testing.T) {
 	store := &mockStorage{}
 	origStorage := testHandler.Storage
