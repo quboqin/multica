@@ -26,6 +26,7 @@ import (
 
 	"github.com/multica-ai/multica/server/internal/attribution"
 	"github.com/multica-ai/multica/server/internal/service"
+	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
@@ -125,6 +126,24 @@ type creativeOrderQCRetryResponse struct {
 	Attempt         int    `json:"attempt"`
 	TechnicalTaskID string `json:"technical_task_id"`
 	VisualTaskID    string `json:"visual_task_id"`
+}
+
+// creativeOrderQCContextResponse is deliberately narrower than an order
+// detail response. A visual QC task receives only its frozen target and the
+// current Prime package, so sibling variants cannot become an accidental
+// selection source during an independent QC lane.
+type creativeOrderQCContextResponse struct {
+	OrderID       string                       `json:"order_id"`
+	OrderItemID   string                       `json:"order_item_id"`
+	VariantID     string                       `json:"variant_id"`
+	VariantKey    string                       `json:"variant_key"`
+	Workflow      string                       `json:"workflow"`
+	Revision      int                          `json:"revision"`
+	Attempt       int                          `json:"attempt"`
+	ExpectedSizes []string                     `json:"expected_sizes"`
+	Brief         json.RawMessage              `json:"brief"`
+	CopySnapshot  json.RawMessage              `json:"copy_snapshot"`
+	PrimeAssets   []creativeOrderAssetResponse `json:"prime_assets"`
 }
 
 type creativeOrderItemResponse struct {
@@ -1307,12 +1326,99 @@ FROM creative_order WHERE id = $1 AND workspace_id = $2
 	writeJSON(w, http.StatusOK, order)
 }
 
+// GetCreativeOrderQCContext returns the one variant a visual QC task may
+// inspect. This is task-token-only because it is also used as the CLI's local
+// write preflight for qc-put and qc-finalize.
+func (h *Handler) GetCreativeOrderQCContext(w http.ResponseWriter, r *http.Request) {
+	workspaceID, _, ok := h.creativeFeedbackWorkspaceUser(w, r)
+	if !ok {
+		return
+	}
+	orderID, ok := parseUUIDOrBadRequest(w, chi.URLParam(r, "id"), "order_id")
+	if !ok {
+		return
+	}
+	task, taskContext, ok := h.creativeQCVisualContextTask(w, r)
+	if !ok {
+		return
+	}
+	if taskContext.CreativeOrderID != uuidToString(orderID) {
+		writeError(w, http.StatusForbidden, "task context is not authorized for this creative order")
+		return
+	}
+	variantID, err := util.ParseUUID(taskContext.VariantID)
+	if err != nil {
+		writeError(w, http.StatusForbidden, "creative QC task context is invalid")
+		return
+	}
+
+	var itemID, variantKey, brief, copySnapshot, triggerKind, inputSnapshot string
+	var revision int
+	err = h.DB.QueryRow(r.Context(), `
+SELECT item.id::text, variant.variant_key, variant.brief::text, item.copy_snapshot::text,
+       order_row.trigger_evidence_kind, order_row.input_snapshot::text, variant.revision
+FROM creative_order_variant variant
+JOIN creative_order_item item ON item.id = variant.order_item_id
+JOIN creative_order order_row ON order_row.id = item.order_id
+WHERE variant.id = $1 AND order_row.id = $2 AND order_row.workspace_id = $3
+`, parseUUID(variantID.String()), orderID, workspaceID).Scan(
+		&itemID, &variantKey, &brief, &copySnapshot, &triggerKind, &inputSnapshot, &revision,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		writeError(w, http.StatusNotFound, "task-bound creative QC target was not found")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to load task-bound creative QC target")
+		return
+	}
+	if taskContext.CreativeOrderItemID != "" && taskContext.CreativeOrderItemID != itemID {
+		writeError(w, http.StatusForbidden, "creative QC task item does not match the target")
+		return
+	}
+	if revision != taskContext.Revision {
+		writeError(w, http.StatusConflict, "creative QC task revision is no longer current")
+		return
+	}
+	expectedSizes, err := expectedCreativeVariantSizes(triggerKind, json.RawMessage(inputSnapshot), json.RawMessage(brief))
+	if err != nil {
+		writeError(w, http.StatusConflict, err.Error())
+		return
+	}
+	assets, err := h.listCreativeOrderAssets(r, parseUUID(variantID.String()))
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to load task-bound Prime assets")
+		return
+	}
+	expected := make(map[string]struct{}, len(expectedSizes))
+	for _, size := range expectedSizes {
+		expected[size] = struct{}{}
+	}
+	primeAssets := make([]creativeOrderAssetResponse, 0, len(expectedSizes))
+	for _, asset := range assets {
+		if asset.Revision == revision && asset.Stage == "primed" && asset.Status == "completed" && asset.AttachmentID != "" {
+			if _, allowed := expected[asset.SizeKey]; allowed {
+				primeAssets = append(primeAssets, asset)
+			}
+		}
+	}
+	writeJSON(w, http.StatusOK, creativeOrderQCContextResponse{
+		OrderID: orderID.String(), OrderItemID: itemID, VariantID: variantID.String(), VariantKey: variantKey,
+		Workflow: taskContext.Workflow, Revision: revision, Attempt: creativeQCAttemptFromContext(task),
+		ExpectedSizes: expectedSizes, Brief: json.RawMessage(brief), CopySnapshot: json.RawMessage(copySnapshot), PrimeAssets: primeAssets,
+	})
+}
+
 // RetryCreativeOrderWorkflowFailure requeues a completed direct creative task
 // only when its target variant has not reached a usable terminal state. This is
 // separate from issue rerun because creative domain fanout tasks are
 // intentionally unbound from issues.
 func (h *Handler) RetryCreativeOrderWorkflowFailure(w http.ResponseWriter, r *http.Request) {
 	workspaceID, userID, ok := h.creativeFeedbackWorkspaceUser(w, r)
+	if !ok {
+		return
+	}
+	diagnosticActor, ok := h.requireCreativeDiagnosticRecoveryAuthority(w, r, workspaceID)
 	if !ok {
 		return
 	}
@@ -1330,6 +1436,17 @@ func (h *Handler) RetryCreativeOrderWorkflowFailure(w http.ResponseWriter, r *ht
 		return
 	}
 	defer tx.Rollback(r.Context())
+	if diagnosticActor.TaskID.Valid {
+		if _, err := tx.Exec(r.Context(), `
+UPDATE agent_task_queue task
+SET max_attempts = GREATEST(task.max_attempts, $1)
+FROM agent assigned_agent
+WHERE task.id = $2 AND task.agent_id = assigned_agent.id AND assigned_agent.workspace_id = $3
+`, creativeDiagnosticRecoveryMaxAttempts, taskID, workspaceID); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to grant diagnostic retry budget")
+			return
+		}
+	}
 
 	// QC action-required results are resolved through the variant-level QC
 	// recovery path. A single task retry would leave the previous QC resolution
@@ -1468,6 +1585,21 @@ RETURNING variant.id::text
 		writeError(w, http.StatusInternalServerError, "failed to queue workflow retry")
 		return
 	}
+	if diagnosticActor.TaskID.Valid {
+		details, _ := json.Marshal(map[string]any{
+			"diagnostic_task_id": uuidToString(diagnosticActor.TaskID),
+			"source_task_id":     uuidToString(taskID),
+			"retry_task_id":      uuidToString(child.ID),
+			"variant_id":         variantID,
+			"retry_budget":       creativeDiagnosticRecoveryMaxAttempts,
+		})
+		if _, err := h.DB.Exec(r.Context(), `
+INSERT INTO activity_log (workspace_id, actor_type, actor_id, action, details)
+VALUES ($1, 'agent', $2, 'creative_diagnostic_workflow_retry', $3::jsonb)
+`, workspaceID, diagnosticActor.AgentID, details); err != nil {
+			slog.Warn("record diagnostic workflow retry", "task_id", uuidToString(diagnosticActor.TaskID), "error", err)
+		}
+	}
 	h.TaskService.NotifyTaskEnqueued(r.Context(), child)
 	h.publishCreativeDomainUpdated(r, workspaceID, userID, map[string]any{
 		"scope": "order", "order_id": uuidToString(orderID), "task_id": uuidToString(taskID), "variant_id": variantID,
@@ -1488,6 +1620,10 @@ func creativeWorkflowRequiresAtomicQCRecovery(workflow string) bool {
 // package. It appends a new QC attempt instead of replacing earlier reports.
 func (h *Handler) RetryCreativeOrderVariantQC(w http.ResponseWriter, r *http.Request) {
 	workspaceID, userID, ok := h.creativeFeedbackWorkspaceUser(w, r)
+	if !ok {
+		return
+	}
+	diagnosticActor, ok := h.requireCreativeDiagnosticRecoveryAuthority(w, r, workspaceID)
 	if !ok {
 		return
 	}
@@ -1614,6 +1750,10 @@ SELECT EXISTS(
 	nextAttempt, err := creativeNextQCAttempt(r.Context(), tx, variantID, revision)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to allocate creative QC attempt")
+		return
+	}
+	if diagnosticActor.TaskID.Valid && nextAttempt > creativeDiagnosticRecoveryMaxAttempts {
+		writeError(w, http.StatusConflict, "diagnostic creative QC recovery budget is exhausted")
 		return
 	}
 	previousAttempt := nextAttempt - 1
@@ -1745,7 +1885,7 @@ WHERE variant_id = $1 AND revision = $2
 		created[item.lane] = task
 	}
 
-	details, err := json.Marshal(map[string]any{
+	detailsPayload := map[string]any{
 		"creative_order_id":      uuidToString(orderID),
 		"variant_id":             uuidToString(variantID),
 		"revision":               revision,
@@ -1756,15 +1896,24 @@ WHERE variant_id = $1 AND revision = $2
 		"asset_invariant":        "reused_completed_primed_assets_only",
 		"previous_qc_reports":    json.RawMessage(priorReports),
 		"previous_qc_resolution": json.RawMessage(priorResolution),
-	})
+	}
+	actorType := "member"
+	actorID := userID
+	if diagnosticActor.TaskID.Valid {
+		actorType = "agent"
+		actorID = diagnosticActor.AgentID
+		detailsPayload["diagnostic_task_id"] = uuidToString(diagnosticActor.TaskID)
+		detailsPayload["retry_budget"] = creativeDiagnosticRecoveryMaxAttempts
+	}
+	details, err := json.Marshal(detailsPayload)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to record creative QC recovery")
 		return
 	}
 	if _, err := tx.Exec(r.Context(), `
 INSERT INTO activity_log (workspace_id, issue_id, actor_type, actor_id, action, details)
-VALUES ($1, $2, 'member', $3, 'creative_qc_recovery_queued', $4::jsonb)
-`, workspaceID, issueID, userID, details); err != nil {
+VALUES ($1, $2, $3, $4, 'creative_qc_recovery_queued', $5::jsonb)
+`, workspaceID, issueID, actorType, actorID, details); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to record creative QC recovery")
 		return
 	}
@@ -5237,12 +5386,52 @@ WHERE variant_id = $1 AND revision = $2 AND attempt = $4
 }
 
 type creativeQCTaskContext struct {
-	Type            string `json:"type"`
-	Workflow        string `json:"workflow"`
-	CreativeOrderID string `json:"creative_order_id"`
-	VariantID       string `json:"variant_id"`
-	Revision        int    `json:"revision"`
-	QCAttempt       int    `json:"qc_attempt"`
+	Type                string `json:"type"`
+	Workflow            string `json:"workflow"`
+	CreativeOrderID     string `json:"creative_order_id"`
+	CreativeOrderItemID string `json:"creative_order_item_id"`
+	VariantID           string `json:"variant_id"`
+	Revision            int    `json:"revision"`
+	QCAttempt           int    `json:"qc_attempt"`
+}
+
+func creativeQCAttemptFromContext(task db.AgentTaskQueue) int {
+	attempt, err := creativeQCAttemptFromTask(task, 0)
+	if err != nil {
+		return defaultCreativeQCAttempt
+	}
+	return attempt
+}
+
+func (h *Handler) creativeQCVisualContextTask(w http.ResponseWriter, r *http.Request) (db.AgentTaskQueue, creativeQCTaskContext, bool) {
+	if r.Header.Get("X-Actor-Source") != "task_token" {
+		writeError(w, http.StatusForbidden, "creative QC context requires a task token")
+		return db.AgentTaskQueue{}, creativeQCTaskContext{}, false
+	}
+	taskID, ok := parseUUIDOrBadRequest(w, r.Header.Get("X-Task-ID"), "task_id")
+	if !ok {
+		return db.AgentTaskQueue{}, creativeQCTaskContext{}, false
+	}
+	task, err := h.Queries.GetAgentTask(r.Context(), taskID)
+	if err != nil || uuidToString(task.AgentID) != r.Header.Get("X-Agent-ID") ||
+		!task.TriggerEvidenceKind.Valid || task.TriggerEvidenceKind.String != "creative_order_variant_qc" ||
+		(task.Status != "dispatched" && task.Status != "running") {
+		writeError(w, http.StatusForbidden, "task is not authorized to read this creative QC context")
+		return db.AgentTaskQueue{}, creativeQCTaskContext{}, false
+	}
+	var taskContext creativeQCTaskContext
+	if json.Unmarshal(task.Context, &taskContext) != nil || taskContext.Type != "creative_domain_task" ||
+		taskContext.Workflow != "creative_qc_visual" || taskContext.Revision < 1 ||
+		strings.TrimSpace(taskContext.CreativeOrderID) == "" || strings.TrimSpace(taskContext.VariantID) == "" {
+		writeError(w, http.StatusForbidden, "creative QC task context is invalid")
+		return db.AgentTaskQueue{}, creativeQCTaskContext{}, false
+	}
+	variantID, err := util.ParseUUID(taskContext.VariantID)
+	if err != nil || !task.TriggerEvidenceRefID.Valid || task.TriggerEvidenceRefID != parseUUID(variantID.String()) {
+		writeError(w, http.StatusForbidden, "task context is not authorized for this creative QC")
+		return db.AgentTaskQueue{}, creativeQCTaskContext{}, false
+	}
+	return task, taskContext, true
 }
 
 // creativeQCActiveTask is the write boundary for an independent QC lane.

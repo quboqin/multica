@@ -9,9 +9,8 @@ allowed-tools: Bash(multica *), Bash(python *)
 先按 task context `workflow` 选择唯一分支：`creative_candidate_selection` 或 `creative_qc_visual`。不得在一次 task 中混跑。
 技术质检已下线，新流程只接受上述两个 workflow，不创建、不等待、不处理 technical lane；其他 workflow 直接按无效任务失败。
 
-```text
-multica creative order get <order-id> --output json
-```
+`creative_candidate_selection` 可以读取完整订单比较同一 item 的候选；`creative_qc_visual` 不可以。visual lane 必须先读取
+`multica creative order qc-context <order-id> --output json`，它返回 task token 绑定的唯一 Variant、revision、expected sizes、brief、copy snapshot 和 Prime 附件。不得再调用 `creative order get`、`issue get`、评论列表或按 C01-C05 标签筛选整单来选择目标。
 
 ## 候选主视觉晋级
 
@@ -51,13 +50,13 @@ multica creative order candidate-select <order-id> <item-id> \
 
 以下仅适用于 `creative_qc_visual`。
 
-校验 context `issue_id` 与订单一致，并只读取同 Variant/revision/expected sizes 的 completed
+校验 `qc-context` 的 Variant/revision/attempt 与 task context 一致，并只读取该响应中同 Variant/revision/expected sizes 的 completed
 `stage=primed` assets。缺失、重复、revision 错配或夹带未声明尺寸时，visual lane 失败；不得按
 Issue、评论、Variant 展示名或 Agent 名称猜输入。
 
 ## Visual 原生看图检查
 
-visual lane 必须从 `creative order get` 返回的当前 Variant 中筛选
+visual lane 必须从 `creative order qc-context` 返回的唯一 target 中使用
 `revision=<context.revision>`、`stage=primed`、`status=completed` 且 size 属于 `expected_sizes` 的 assets；
 只使用这些 asset 的 `attachment_id`，不得使用历史工作目录、页面预览图、生成前底图、兄弟 Variant 或旧 revision。
 
@@ -149,11 +148,10 @@ visual lane 输出逐尺寸 checked assets、`prime_assets_readable`、`key_cont
 
 ```text
 multica creative order qc-put <order-id> --input-file <qc-report.json> --output json
-multica creative order qc-finalize <order-id> \
-  --variant <variant-id> --revision <revision> --output json
+multica creative order qc-finalize <order-id> --output json
 ```
 
-写回后立即调用 finalize。finalize 只等待 visual 检测报告归档后登记最终成图；不可自动修复的视觉失败进入人工处理。若 `qc-finalize` 返回
+`qc-put` 会把 report 的 variant、lane、revision、attempt 与 `qc-context` 的 task-bound target 做本地校验并补齐；`qc-finalize` 也只使用同一 target。坐标不一致时立即失败，绝不能改用兄弟 Variant 重试。写回后立即调用 finalize。finalize 只等待 visual 检测报告归档后登记最终成图；不可自动修复的视觉失败进入人工处理。若 `qc-finalize` 返回
 5xx 或连接中断，不得重复 `qc-put`、重复调用模型、重生图或盲目重试 finalize；保留已成功的 report 与真实响应，写
 `qc_finalize_transient_failure` 后结束当前 QC task。服务端会从未决 report 创建新的、只复用当前 Prime assets 的终检尝试。
 上述完整的 visual blocking finding 会新建下一 revision 的生产任务：服务端保留通过尺寸的生成资产，只让模型改失败尺寸，然后按冻结模式

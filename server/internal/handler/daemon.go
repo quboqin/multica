@@ -2181,6 +2181,49 @@ FROM creative_source_analysis WHERE id = $1 AND workspace_id = $2
 	return "", nil
 }
 
+func (h *Handler) creativeQCVisualCompletionError(ctx context.Context, task db.AgentTaskQueue, workspaceID string) (string, error) {
+	if !task.TriggerEvidenceKind.Valid || task.TriggerEvidenceKind.String != "creative_order_variant_qc" {
+		return "", nil
+	}
+	if task.Status == "completed" || task.Status == "failed" || task.Status == "cancelled" {
+		return "", nil
+	}
+	var taskContext creativeQCTaskContext
+	if json.Unmarshal(task.Context, &taskContext) != nil || taskContext.Type != "creative_domain_task" || taskContext.Workflow != "creative_qc_visual" {
+		return "creative visual QC task completed with invalid task context", nil
+	}
+	orderID, orderErr := util.ParseUUID(strings.TrimSpace(taskContext.CreativeOrderID))
+	variantID, variantErr := util.ParseUUID(strings.TrimSpace(taskContext.VariantID))
+	workspaceUUID, workspaceErr := util.ParseUUID(strings.TrimSpace(workspaceID))
+	attempt := creativeQCAttemptFromContext(task)
+	if orderErr != nil || variantErr != nil || workspaceErr != nil || taskContext.Revision < 1 || attempt < 1 ||
+		!task.TriggerEvidenceRefID.Valid || task.TriggerEvidenceRefID != parseUUID(variantID.String()) {
+		return "creative visual QC task completed with invalid artifact coordinates", nil
+	}
+	var finalized bool
+	err := h.DB.QueryRow(ctx, `
+SELECT EXISTS(
+  SELECT 1
+  FROM creative_order_variant_qc_resolution resolution
+  JOIN creative_order_variant variant ON variant.id = resolution.variant_id
+  JOIN creative_order_item item ON item.id = variant.order_item_id
+  JOIN creative_order order_row ON order_row.id = item.order_id
+  WHERE resolution.variant_id = $1
+    AND resolution.revision = $2
+    AND resolution.attempt = $3
+    AND order_row.id = $4
+    AND order_row.workspace_id = $5
+)
+`, parseUUID(variantID.String()), taskContext.Revision, attempt, parseUUID(orderID.String()), parseUUID(workspaceUUID.String())).Scan(&finalized)
+	if err != nil {
+		return "", err
+	}
+	if !finalized {
+		return "creative visual QC task completed without a finalized QC resolution", nil
+	}
+	return "", nil
+}
+
 func (h *Handler) creativePreAdaptationHasNoEditableCopy(ctx context.Context, workspaceID, analysisID pgtype.UUID) (bool, error) {
 	var textBlockCount int
 	err := h.DB.QueryRow(ctx, `
@@ -2279,6 +2322,9 @@ func (h *Handler) CompleteTask(w http.ResponseWriter, r *http.Request) {
 	}
 	if validationErr == nil && artifactError == "" {
 		artifactError, validationErr = h.creativeDirectEditCompletionError(r.Context(), existingTask, workspaceID)
+	}
+	if validationErr == nil && artifactError == "" {
+		artifactError, validationErr = h.creativeQCVisualCompletionError(r.Context(), existingTask, workspaceID)
 	}
 	if validationErr != nil {
 		slog.Error("validate creative task output failed", "task_id", taskID, "error", validationErr)

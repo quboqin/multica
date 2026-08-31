@@ -39,14 +39,14 @@ func TestBuildPromptCreativeDomainWorkflowDoesNotUseRootIssue(t *testing.T) {
 	task := Task{
 		ID:      "task-visual-qc",
 		IssueID: "root-issue-with-creative-order-metadata",
-		Context: json.RawMessage(`{"type":"creative_domain_task","workflow":"creative_qc_visual"}`),
+		Context: json.RawMessage(`{"type":"creative_domain_task","workflow":"creative_qc_visual","creative_order_id":"order-c01","variant_id":"variant-c01","revision":1}`),
 	}
 
 	out := BuildPrompt(task, "codex")
-	if !strings.Contains(out, "authoritative workflow is `creative_qc_visual`") || !strings.Contains(out, "Do not infer the workflow from the root Issue") {
+	if !strings.Contains(out, "authoritative workflow is `creative_qc_visual`") || !strings.Contains(out, "Do not infer the workflow from the root Issue") || !strings.Contains(out, "qc-context order-c01") {
 		t.Fatalf("creative QC prompt did not pin task workflow:\n%s", out)
 	}
-	if strings.Contains(out, "Start by running `multica issue get") {
+	if strings.Contains(out, "Start by running `multica issue get") || strings.Contains(out, "Start by running `multica creative order get") {
 		t.Fatalf("creative QC prompt fell back to root issue workflow discovery:\n%s", out)
 	}
 }

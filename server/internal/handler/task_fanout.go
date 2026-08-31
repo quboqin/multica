@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strings"
 
@@ -1254,6 +1255,10 @@ func (h *Handler) RetryFailedAgentTasksBySource(w http.ResponseWriter, r *http.R
 		writeJSON(w, http.StatusCreated, taskFanoutResponse{Tasks: h.directTaskResponses(r, retried, uuidToString(agent.WorkspaceID))})
 		return
 	}
+	diagnosticActor, ok := h.requireCreativeDiagnosticRecoveryAuthority(w, r, agent.WorkspaceID)
+	if !ok {
+		return
+	}
 	priorTasks, err := h.TaskService.ListDirectTasksByEvidence(r.Context(), agent.ID, kind, refID, "")
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to load creative tasks for retry")
@@ -1284,6 +1289,22 @@ func (h *Handler) RetryFailedAgentTasksBySource(w http.ResponseWriter, r *http.R
 		writeError(w, http.StatusConflict, err.Error())
 		return
 	}
+	if diagnosticActor.TaskID.Valid {
+		if _, err := tx.Exec(r.Context(), `
+UPDATE agent_task_queue
+SET max_attempts = GREATEST(max_attempts, $1)
+WHERE agent_id = $2
+  AND trigger_evidence_kind = $3
+  AND trigger_evidence_ref_id = $4
+  AND issue_id IS NULL
+  AND chat_session_id IS NULL
+  AND autopilot_run_id IS NULL
+  AND status = 'failed'
+`, creativeDiagnosticRecoveryMaxAttempts, agent.ID, kind, refID); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to grant diagnostic retry budget")
+			return
+		}
+	}
 	retried, err := h.TaskService.RetryFailedDirectTasksByEvidenceTx(r.Context(), tx, agent.ID, kind, refID)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
@@ -1293,8 +1314,32 @@ func (h *Handler) RetryFailedAgentTasksBySource(w http.ResponseWriter, r *http.R
 		writeError(w, http.StatusInternalServerError, "failed to commit creative task retry")
 		return
 	}
+	if diagnosticActor.TaskID.Valid && len(retried) > 0 {
+		details, _ := json.Marshal(map[string]any{
+			"diagnostic_task_id":      uuidToString(diagnosticActor.TaskID),
+			"target_agent_id":         uuidToString(agent.ID),
+			"trigger_evidence_kind":   kind,
+			"trigger_evidence_ref_id": uuidToString(refID),
+			"retry_budget":            creativeDiagnosticRecoveryMaxAttempts,
+			"retried_task_ids":        taskIDsForAudit(retried),
+		})
+		if _, err := h.DB.Exec(r.Context(), `
+INSERT INTO activity_log (workspace_id, actor_type, actor_id, action, details)
+VALUES ($1, 'agent', $2, 'creative_diagnostic_retry_budget_used', $3::jsonb)
+`, agent.WorkspaceID, diagnosticActor.AgentID, details); err != nil {
+			slog.Warn("record diagnostic direct-task retry", "task_id", uuidToString(diagnosticActor.TaskID), "error", err)
+		}
+	}
 	h.TaskService.NotifyDirectTaskFanoutEnqueued(r.Context(), retried)
 	writeJSON(w, http.StatusCreated, taskFanoutResponse{Tasks: h.directTaskResponses(r, retried, uuidToString(agent.WorkspaceID))})
+}
+
+func taskIDsForAudit(tasks []db.AgentTaskQueue) []string {
+	ids := make([]string, 0, len(tasks))
+	for _, task := range tasks {
+		ids = append(ids, uuidToString(task.ID))
+	}
+	return ids
 }
 
 func (h *Handler) fanoutAttribution(w http.ResponseWriter, r *http.Request, target db.Agent, evidenceRefID pgtype.UUID, evidenceKind string) (attribution.Result, pgtype.UUID, bool) {

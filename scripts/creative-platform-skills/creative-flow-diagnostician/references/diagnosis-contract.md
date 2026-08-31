@@ -24,8 +24,10 @@ The diagnostician may perform only platform-native recovery:
 
 It must not write the database directly, modify credentials, broaden AppGrowing
 filters, edit market/copy resources, or treat diagnostic model outputs as
-deliverable assets. If a recovery API requires a human actor, the task ends with
-the exact user action needed.
+deliverable assets. A running diagnostician task with the `crawl_diagnosis`
+capability may use the bounded 12-attempt recovery budget only for a verified
+creative target in its own workspace; every such retry is recorded in the
+activity log.
 
 ## Image-Generation Diagnosis Playbooks
 

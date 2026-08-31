@@ -54,6 +54,8 @@ type creativeDomainTaskPromptContext struct {
 	Workflow            string `json:"workflow"`
 	CreativeOrderID     string `json:"creative_order_id"`
 	CreativeOrderItemID string `json:"creative_order_item_id"`
+	VariantID           string `json:"variant_id"`
+	Revision            int    `json:"revision"`
 }
 
 func parseCreativeDomainTaskContext(raw json.RawMessage) (creativeDomainTaskPromptContext, bool) {
@@ -64,6 +66,7 @@ func parseCreativeDomainTaskContext(raw json.RawMessage) (creativeDomainTaskProm
 	context.Workflow = strings.TrimSpace(context.Workflow)
 	context.CreativeOrderID = strings.TrimSpace(context.CreativeOrderID)
 	context.CreativeOrderItemID = strings.TrimSpace(context.CreativeOrderItemID)
+	context.VariantID = strings.TrimSpace(context.VariantID)
 	return context, true
 }
 
@@ -81,6 +84,16 @@ func buildCreativeDomainTaskPrompt(task Task, context creativeDomainTaskPromptCo
 			b.WriteString("Use `multica creative order candidate-select <creative_order_id> <creative_order_item_id>` with exactly three ordered `selected_ids` and any ordered reserves. The server binds that call to the current MULTICA_TASK_ID and rejects a different workflow, order, or item.\n")
 		}
 		b.WriteString("Do not use `multica issue get` to choose a workflow, and do not complete the task merely after writing a comparison.\n")
+		return b.String()
+	}
+
+	if context.Workflow == "creative_qc_visual" {
+		b.WriteString("This is one bound visual QC task. Start by reading the task-scoped target with `multica creative order qc-context <creative_order_id> --output json`. That command is the only authority for the Variant, revision, expected sizes, and Prime attachment IDs to inspect. Do not run `multica creative order get`, `multica issue get`, or comment history to choose a Cxx Variant, and never filter an order response to substitute a sibling Variant.\n\n")
+		if context.CreativeOrderID != "" {
+			fmt.Fprintf(&b, "Use `multica creative order qc-context %s --output json`; it must return task Variant `%s` at revision %d before downloading any asset. `qc-put` and `qc-finalize` re-check these coordinates locally and at the server. Do not report task success unless `qc-finalize` returns successfully.\n", context.CreativeOrderID, context.VariantID, context.Revision)
+		} else {
+			b.WriteString("Use `multica creative order qc-context <creative_order_id> --output json`; `qc-put` and `qc-finalize` re-check the returned coordinates locally and at the server. Do not report task success unless `qc-finalize` returns successfully.\n")
+		}
 		return b.String()
 	}
 

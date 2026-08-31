@@ -94,6 +94,13 @@ var creativeOrderGetCmd = &cobra.Command{
 	RunE:  runCreativeOrderGet,
 }
 
+var creativeOrderQCContextCmd = &cobra.Command{
+	Use:   "qc-context <order-id>",
+	Short: "Get the current task-bound visual QC target and Prime assets",
+	Args:  exactArgs(1),
+	RunE:  runCreativeOrderQCContext,
+}
+
 var creativeOrderVariantPutCmd = &cobra.Command{
 	Use:   "variant-put <order-id>",
 	Short: "Create or update one order variant from JSON",
@@ -150,6 +157,20 @@ var creativeOrderQCFinalizeCmd = &cobra.Command{
 	RunE:  runCreativeOrderQCFinalize,
 }
 
+var creativeOrderWorkflowRetryCmd = &cobra.Command{
+	Use:   "workflow-retry <order-id> <task-id>",
+	Short: "Retry one recoverable creative workflow task",
+	Args:  exactArgs(2),
+	RunE:  runCreativeOrderWorkflowRetry,
+}
+
+var creativeOrderQCRetryCmd = &cobra.Command{
+	Use:   "qc-retry <order-id> <variant-id>",
+	Short: "Queue another visual QC attempt for one completed Prime package",
+	Args:  exactArgs(2),
+	RunE:  runCreativeOrderQCRetry,
+}
+
 var creativeOrderAdoptCmd = &cobra.Command{
 	Use:   "adopt <order-id> <item-id>",
 	Short: "Adopt one finalized creative order variant for delivery",
@@ -186,6 +207,7 @@ func init() {
 		creativeOrderCreateCmd,
 		creativeOrderListCmd,
 		creativeOrderGetCmd,
+		creativeOrderQCContextCmd,
 		creativeOrderVariantPutCmd,
 		creativeOrderCandidateSelectCmd,
 		creativeOrderImageOperationPutCmd,
@@ -194,6 +216,8 @@ func init() {
 		creativeOrderDiagnosticAssetPutCmd,
 		creativeOrderQCPutCmd,
 		creativeOrderQCFinalizeCmd,
+		creativeOrderWorkflowRetryCmd,
+		creativeOrderQCRetryCmd,
 		creativeOrderAdoptCmd,
 	)
 	for _, command := range []*cobra.Command{
@@ -215,12 +239,15 @@ func init() {
 	creativeOrderAssetPutCmd.Flags().String("normalization-evidence-file", "", "UTF-8 JSON normalized delivery evidence")
 	creativeOrderListCmd.Flags().String("output", "json", "Output format: json")
 	creativeOrderGetCmd.Flags().String("output", "json", "Output format: json")
+	creativeOrderQCContextCmd.Flags().String("output", "json", "Output format: json")
 	creativeOrderPrimeComposeCmd.Flags().String("variant", "", "Creative Order Variant UUID (required)")
 	creativeOrderPrimeComposeCmd.Flags().Bool("force", false, "Explicitly retry deterministic Prime composition for the current staging revision")
 	creativeOrderPrimeComposeCmd.Flags().String("output", "json", "Output format: json")
-	creativeOrderQCFinalizeCmd.Flags().String("variant", "", "Creative Order Variant UUID (required)")
-	creativeOrderQCFinalizeCmd.Flags().Int("revision", 1, "Variant revision to finalize")
+	creativeOrderQCFinalizeCmd.Flags().String("variant", "", "Creative Order Variant UUID (must match the task-bound target when provided)")
+	creativeOrderQCFinalizeCmd.Flags().Int("revision", 0, "Variant revision (must match the task-bound target when provided)")
 	creativeOrderQCFinalizeCmd.Flags().String("output", "json", "Output format: json")
+	creativeOrderWorkflowRetryCmd.Flags().String("output", "json", "Output format: json")
+	creativeOrderQCRetryCmd.Flags().String("output", "json", "Output format: json")
 	creativeOrderAdoptCmd.Flags().String("variant", "", "Creative Order Variant UUID (required)")
 	creativeOrderAdoptCmd.Flags().Bool("qc-risk-acknowledged", false, "Explicitly accept a failed QC result for adoption")
 	creativeOrderAdoptCmd.Flags().String("qc-risk-reason", "", "Reason for accepting a failed QC result")
@@ -440,6 +467,10 @@ func runCreativeOrderGet(cmd *cobra.Command, args []string) error {
 	return getCreativeDomainJSON(cmd, "/api/creative/orders/"+url.PathEscape(args[0]))
 }
 
+func runCreativeOrderQCContext(cmd *cobra.Command, args []string) error {
+	return getCreativeDomainJSON(cmd, "/api/creative/orders/"+url.PathEscape(args[0])+"/qc-context")
+}
+
 func runCreativeOrderVariantPut(cmd *cobra.Command, args []string) error {
 	return putCreativeDomainJSON(cmd, "/api/creative/orders/"+url.PathEscape(args[0])+"/variants")
 }
@@ -478,15 +509,34 @@ func runCreativeOrderDiagnosticAssetPut(cmd *cobra.Command, args []string) error
 }
 
 func runCreativeOrderQCPut(cmd *cobra.Command, args []string) error {
-	return putCreativeDomainJSON(cmd, "/api/creative/orders/"+url.PathEscape(args[0])+"/qc-reports")
+	payload, err := creativeDomainPayload(cmd)
+	if err != nil {
+		return err
+	}
+	target, err := creativeOrderQCTarget(cmd, args[0])
+	if err != nil {
+		return err
+	}
+	payload, err = bindCreativeOrderQCReportPayload(payload, target)
+	if err != nil {
+		return err
+	}
+	return writeCreativeDomainPayload(cmd, "/api/creative/orders/"+url.PathEscape(args[0])+"/qc-reports", "PUT", payload)
 }
 
 func runCreativeOrderQCFinalize(cmd *cobra.Command, args []string) error {
+	target, err := creativeOrderQCTarget(cmd, args[0])
+	if err != nil {
+		return err
+	}
 	variantID, _ := cmd.Flags().GetString("variant")
-	if strings.TrimSpace(variantID) == "" {
-		return fmt.Errorf("--variant is required")
+	if cmd.Flags().Changed("variant") && strings.TrimSpace(variantID) != target.VariantID {
+		return fmt.Errorf("creative QC target mismatch: --variant %q does not match task variant_id %q", strings.TrimSpace(variantID), target.VariantID)
 	}
 	revision, _ := cmd.Flags().GetInt("revision")
+	if cmd.Flags().Changed("revision") && revision != target.Revision {
+		return fmt.Errorf("creative QC target mismatch: --revision %d does not match task revision %d", revision, target.Revision)
+	}
 	client, err := newAPIClient(cmd)
 	if err != nil {
 		return err
@@ -495,12 +545,82 @@ func runCreativeOrderQCFinalize(cmd *cobra.Command, args []string) error {
 	defer cancel()
 	var result any
 	if err := client.PostJSON(ctx, "/api/creative/orders/"+url.PathEscape(args[0])+"/qc-finalize", map[string]any{
-		"variant_id": strings.TrimSpace(variantID),
-		"revision":   revision,
+		"variant_id": target.VariantID,
+		"revision":   target.Revision,
 	}, &result); err != nil {
 		return err
 	}
 	return cli.PrintJSON(os.Stdout, result)
+}
+
+func runCreativeOrderWorkflowRetry(cmd *cobra.Command, args []string) error {
+	return postCreativeDomainEmpty(cmd, "/api/creative/orders/"+url.PathEscape(args[0])+"/workflow-failures/"+url.PathEscape(args[1])+"/retry")
+}
+
+func runCreativeOrderQCRetry(cmd *cobra.Command, args []string) error {
+	return postCreativeDomainEmpty(cmd, "/api/creative/orders/"+url.PathEscape(args[0])+"/variants/"+url.PathEscape(args[1])+"/qc/retry")
+}
+
+type creativeOrderQCTargetResponse struct {
+	VariantID string `json:"variant_id"`
+	Workflow  string `json:"workflow"`
+	Revision  int    `json:"revision"`
+	Attempt   int    `json:"attempt"`
+}
+
+func creativeOrderQCTarget(cmd *cobra.Command, orderID string) (creativeOrderQCTargetResponse, error) {
+	client, err := newAPIClient(cmd)
+	if err != nil {
+		return creativeOrderQCTargetResponse{}, err
+	}
+	ctx, cancel := cli.APIContext(context.Background())
+	defer cancel()
+	var target creativeOrderQCTargetResponse
+	if err := client.GetJSON(ctx, "/api/creative/orders/"+url.PathEscape(orderID)+"/qc-context", &target); err != nil {
+		return creativeOrderQCTargetResponse{}, err
+	}
+	if target.Workflow != "creative_qc_visual" || strings.TrimSpace(target.VariantID) == "" || target.Revision < 1 || target.Attempt < 1 {
+		return creativeOrderQCTargetResponse{}, fmt.Errorf("invalid task-bound creative QC target")
+	}
+	return target, nil
+}
+
+func bindCreativeOrderQCReportPayload(payload json.RawMessage, target creativeOrderQCTargetResponse) (json.RawMessage, error) {
+	var report map[string]json.RawMessage
+	if json.Unmarshal(payload, &report) != nil || report == nil {
+		return nil, fmt.Errorf("creative QC report must be a JSON object")
+	}
+	var variantID, lane string
+	var revision, attempt int
+	if raw := report["variant_id"]; raw != nil && json.Unmarshal(raw, &variantID) != nil {
+		return nil, fmt.Errorf("creative QC report variant_id must be a string")
+	}
+	if raw := report["lane"]; raw != nil && json.Unmarshal(raw, &lane) != nil {
+		return nil, fmt.Errorf("creative QC report lane must be a string")
+	}
+	if raw := report["revision"]; raw != nil && json.Unmarshal(raw, &revision) != nil {
+		return nil, fmt.Errorf("creative QC report revision must be an integer")
+	}
+	if raw := report["attempt"]; raw != nil && json.Unmarshal(raw, &attempt) != nil {
+		return nil, fmt.Errorf("creative QC report attempt must be an integer")
+	}
+	if strings.TrimSpace(variantID) != "" && strings.TrimSpace(variantID) != target.VariantID {
+		return nil, fmt.Errorf("creative QC target mismatch: report variant_id %q does not match task variant_id %q", strings.TrimSpace(variantID), target.VariantID)
+	}
+	if strings.TrimSpace(lane) != "" && strings.TrimSpace(lane) != "visual" {
+		return nil, fmt.Errorf("creative QC target mismatch: report lane %q does not match task lane %q", strings.TrimSpace(lane), "visual")
+	}
+	if revision != 0 && revision != target.Revision {
+		return nil, fmt.Errorf("creative QC target mismatch: report revision %d does not match task revision %d", revision, target.Revision)
+	}
+	if attempt != 0 && attempt != target.Attempt {
+		return nil, fmt.Errorf("creative QC target mismatch: report attempt %d does not match task attempt %d", attempt, target.Attempt)
+	}
+	report["variant_id"], _ = json.Marshal(target.VariantID)
+	report["lane"], _ = json.Marshal("visual")
+	report["revision"], _ = json.Marshal(target.Revision)
+	report["attempt"], _ = json.Marshal(target.Attempt)
+	return json.Marshal(report)
 }
 
 func runCreativeOrderAdopt(cmd *cobra.Command, args []string) error {
@@ -548,6 +668,10 @@ func getCreativeDomainJSON(cmd *cobra.Command, path string) error {
 
 func postCreativeDomainJSON(cmd *cobra.Command, path string) error {
 	return writeCreativeDomainJSON(cmd, path, "POST")
+}
+
+func postCreativeDomainEmpty(cmd *cobra.Command, path string) error {
+	return writeCreativeDomainPayload(cmd, path, "POST", nil)
 }
 
 func putCreativeDomainJSON(cmd *cobra.Command, path string) error {

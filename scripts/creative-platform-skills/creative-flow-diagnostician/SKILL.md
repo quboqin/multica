@@ -44,7 +44,7 @@ allowed-tools: Bash(multica *), Bash(powershell *)
 - 为缺失的当前 revision item 重新 fanout，manifest 必须携带 order、item、variant、candidate、revision、
   expected_sizes 和下一阶段 Agent。
 - 通过平台已有的 workflow failure retry、精准调整、Prime/QC 恢复或候补晋级入口处理；Variant revision 只由这些领域事务创建，诊断智能体不得用 `variant-put` 自行加 revision。
-- 使用平台已有的 Prime 修复、QC 重试或 workflow failure retry 入口；若接口要求 human actor，就回报需要用户点击。
+- 对已核验的同工作区创意对象，可以使用 `multica creative order workflow-retry <order-id> <task-id>`、`multica creative order qc-retry <order-id> <variant-id>` 和 `multica task by-source retry-failed`。平台对具备 `crawl_diagnosis` 能力的运行诊断任务授予最多 12 次恢复预算，并记录 agent task、目标和原因；不允许跨工作区、写库、改凭证或绕过当前 revision/Prime 完整性检查。
 
 修改前要说明将改哪个对象和原因；修改后必须回读订单或 task 列表确认结果。
 
