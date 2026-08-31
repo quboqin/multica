@@ -54,10 +54,10 @@ multica creative source-analysis list --candidate-id <candidate-id> --output jso
 每个候选必须有独立 `CreativeIntent`，并至少改变两个高显著 `DesignDNA` 维度。候选共享批准文字、我方数值和业务真值，
 但不强制共享主色；不得只改文案、数值或局部装饰。
 
-候选阶段只生成一个 `primary_size` 主视觉。主尺寸由该方向的构图机制决定：横向比较或宽场景选 `1200x628`，竖向人物、
-手机或叙事栈选 `800x1000`，均衡、径向或模块化方向选 `1080x1080`；不得固定先做方图。每个候选先在 variant-put 顶层写
-`candidate_state=candidate` 与 `primary_size`，再用仅包含该主尺寸的 task `expected_sizes` 独立 fanout 主尺寸生产。4-5 个主尺寸
-Prime 图形成至少 3 个合格候选后，由 `creative_candidate_selection` 独立比较；终态失败候选由平台标记 rejected，
+候选阶段只生成一个 `primary_size` 主视觉。为确保 4-5 个候选可公平并排比较，所有候选固定先生成
+`1080x1080` 方图；横版、竖版和手机叙事方向仍须在各自三尺寸 LayoutPlan 中预先设计，但不能把候选首轮改成其他比例。每个候选先在
+variant-put 顶层写 `candidate_state=candidate` 与 `primary_size=1080x1080`，再用仅包含该方图的 task `expected_sizes`
+独立 fanout 主尺寸生产。4-5 个主尺寸 Prime 图形成至少 3 个合格候选后，由 `creative_candidate_selection` 独立比较；终态失败候选由平台标记 rejected，
 其余候选继续比较。少于 3 个时不晋级，保留真实失败供有界恢复或人工处理。Planner 不预选三个最终 Variant，不逐条改状态冒充晋级，也不在候选阶段补其他尺寸。
 
 候选比较原子选择恰好 3 个，按 rank 1-3 设为 `selected`，其余为 `reserve`。reserve 的主视觉、提示词、模型回执和附件血缘必须保留，
@@ -73,26 +73,32 @@ approved fragment 就改成空白。
 
 ### App UI 替换合同
 
-当 Source Analysis 有 `app_ui_detected=true`，并且手机屏幕或 App 页面是画面可见核心元素时，每个 brief 必须写
-`creative_contract.app_ui_replacement`。方案 Agent 不看图片像素，也不下载附件；它只消费页面冻结在
-`copy_snapshot.pre_adaptation.app_ui_replacement` 中的选择，不得自行从 `input_snapshot.market_pack.files` 中挑选或替换用户选择。
-页面冻结的选择必须对应市场资源包中的 `app_ui_reference` 文件，并带有 `resource_file_id` 与 `attachment_id`。
+每个 brief 必须写 `creative_contract.app_ui_replacement`，但 Source Analysis 检测到手机或 App 页面并不意味着必须替换 UI。
+方案 Agent 不看图片像素，也不下载附件；它只消费页面冻结在 `copy_snapshot.pre_adaptation.app_ui_replacement` 中的业务选择，
+不得自行从 `input_snapshot.market_pack.files` 中挑选或替换用户选择。只有页面冻结的 `required=true` 时，选择才必须对应
+市场资源包中的 `app_ui_reference` 文件，并带有 `resource_file_id` 与 `attachment_id`。
 
 `app_ui_replacement` 必须包含：
 
 - `required`：是否需要把竞品 UI 替换为 AdaKami UI；
-- `selected`：是否已有页面冻结的合适资源；
+- `selected`：仅在 `required=true` 时表示是否已有页面冻结的合适资源；
 - `resource_file_id` 与 `attachment_id`：只在 selected=true 时填写，必须逐字来自 `copy_snapshot.pre_adaptation.app_ui_replacement`；
 - `source_screen`：记录 `app_ui_type`、屏幕位置、可见度、`app_ui_bounds` 和是否被手/手机边框遮挡；
 - `reason`：复用页面冻结选择的 reason，可补充一句执行说明但不得改换资源；
-- `constraints`：至少说明“只替换手机屏幕内容，保留手机、手、透视、光照和场景；移除竞品 logo、品牌色、按钮文案、QR 和专属页面文案；不得把 AdaKami UI 画到屏幕外”。
+- `constraints`：仅在 `required=true` 时至少说明“只替换手机屏幕内容，保留手机、手、透视、光照和场景；移除竞品 logo、品牌色、按钮文案、QR 和专属页面文案；不得把 AdaKami UI 画到屏幕外”。
 
-如果 App UI 是核心元素但 `copy_snapshot.pre_adaptation.app_ui_replacement.selected` 不是 true，或缺少
-`resource_file_id`/`attachment_id`，该 Variant 写 `action_required`，并在 `needs_input`
-中要求用户在文案确认页选择 App UI 参考资源；不能保留竞品 UI 继续出图，也不能让生产 Agent 臆造 App 页面。若 App UI 只是模糊、极小、背景性或不可读元素，
-写 `required=false` 并说明原因。若 Source Analysis 没有检测到 App UI，也必须写
-`required=false`、`selected=false` 和简短 reason，让生产 Agent 不下载 App UI 参考图。不得因为资源包里只有一张 UI
-图就机械选择；选择必须来自页面冻结的业务确认。
+当页面冻结的 `required=true` 但 `selected` 不是 true，或缺少 `resource_file_id`/`attachment_id`，该 Variant 写
+`action_required`，并在 `needs_input` 中要求用户完成已选择的 App UI 替换。`required=false` 时必须同时写
+`selected=false`、清空资源字段和简短 reason；生产不得下载任何 App UI 参考图，也不得把手机、屏幕或 App 页面当作必须保留的 UI。
+手机可以被移除，也可以仅作为表达利益点的视觉形式；不得保留竞品屏幕或臆造 AdaKami 页面。不得因为资源包里有 UI 图或 Source Analysis
+检测到 UI 就机械选择；替换只来自页面冻结的业务确认。
+
+### 核心利益点
+
+顶层冻结 `benefit` 非空，或 `copy_snapshot.pre_adaptation.additional_copy` 中存在 `role=benefit` 的 `ready` 文案时，
+它是批准的核心利益点，不是仅供图标表达的语义提示。每个候选必须把这段文字加入 `creative_intent.locked_set` 和当前尺寸的
+`content_groups`，在手机屏幕外规划清晰可读的文本区域；即使有图标、步骤卡或手机形式，也只能辅助，不能替代该文字。每个尺寸的
+`acceptance_checks` 必须包含“核心利益点逐字可见且可读”的可观察条件。利益点为空时可使用纯视觉机制，但不得臆造业务 claim。
 
 每个 `variant-put` 对象顶层必须写 `candidate_state` 与 `primary_size`，不能把流程状态重复塞进 brief。
 每个 brief 至少包含：candidate/source-analysis/copy/market snapshot identity，完整批准文案，
@@ -184,7 +190,7 @@ Prime 不是页角装饰或模型要重绘的业务元素。它承载官方品�
     }
   },
   "candidate_state": "candidate",
-  "primary_size": "<direction-selected-size>",
+  "primary_size": "1080x1080",
   "selection_rank": null,
   "status": "queued"
 }
@@ -215,7 +221,7 @@ Variant 行后再组 manifest；不得发出 `:r0` item key。active/succeeded t
 Order Item ID；每项 context 固定 `type=creative_domain_task`、`workflow=creative_production`，并原样携带
 `issue_id`、`leader_agent_id`、order/item/variant/candidate IDs、revision、`expected_sizes` 和下一阶段 Agent
 IDs；候选阶段的 `expected_sizes` 必须严格为 `[primary_size]`，并带 `candidate_state=candidate`、
-`production_stage=candidate_primary`。先用 JSON 解析器校验，再执行：
+`production_stage=candidate_primary`，且候选阶段的唯一 `expected_sizes` 为 `["1080x1080"]`。先用 JSON 解析器校验，再执行：
 
 ```text
 multica task by-source list --agent <producer-entry-agent-id> \
@@ -240,7 +246,7 @@ multica task fanout --agent <producer-entry-agent-id> --input-file <manifest.jso
       "candidate_id": "<candidate-id>",
       "variant_id": "<variant-id>",
       "revision": 1,
-      "expected_sizes": ["<primary-size>"],
+      "expected_sizes": ["1080x1080"],
       "candidate_state": "candidate",
       "production_stage": "candidate_primary",
       "scope": "variant",

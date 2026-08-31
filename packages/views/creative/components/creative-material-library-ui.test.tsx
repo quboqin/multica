@@ -16,6 +16,7 @@ import {
   manualCopySnapshot,
   orderDraftWithPreAdaptation,
   pendingNumericLayouts,
+  preAdaptedCopySnapshot,
   preparedPreAdaptation,
   resolveDirectEditMarketPack,
   sourceAnalysisHasNoEditableCopy,
@@ -285,6 +286,46 @@ describe("CreativeMaterialLibrary contracts", () => {
       reason: "业务确认使用首页额度界面",
       source_screen: { app_ui_type: "贷款额度页", bounds: { x: 600, y: 300, width: 220, height: 420 } },
     });
+  });
+
+  it("does not require an App UI reference until the user selects one", () => {
+    const frozen = frozenCopySnapshot(
+      { headline: "", subheadline: "", benefit: "", supporting: "", cta: "", legal_text: "", fragments: [], repayment_plan_entries: [] } as any,
+      adaptation({ analysisResult: { app_ui_detected: true, app_ui_replacement_needed: true, app_ui_type: "贷款额度页" } }),
+      draft(),
+      "analysis-1",
+    );
+    expect(frozen.pre_adaptation?.app_ui_replacement).toMatchObject({
+      required: false,
+      selected: false,
+      reason: "业务用户选择不替换 App UI；手机仅可作为视觉形式",
+    });
+  });
+
+  it("requires a reference after the user requests App UI replacement", () => {
+    const frozen = frozenCopySnapshot(
+      { headline: "", subheadline: "", benefit: "", supporting: "", cta: "", legal_text: "", fragments: [], repayment_plan_entries: [] } as any,
+      adaptation({ analysisResult: { app_ui_detected: true, app_ui_replacement_needed: true, app_ui_type: "贷款额度页" } }),
+      draft({ appUIReference: { resourceFileId: "", attachmentId: "", label: "", reason: "", replacementRequested: true } }),
+      "analysis-1",
+    );
+    expect(frozen.pre_adaptation?.app_ui_replacement).toMatchObject({
+      required: true,
+      selected: false,
+      reason: "业务用户尚未选择 App UI 参考",
+    });
+  });
+
+  it("freezes a manually configured core benefit as visible approved copy", () => {
+    const configured = draft({ textOverrides: { __core_benefit__: "Ajukan hanya dalam 3 langkah" } });
+    const snapshot = preAdaptedCopySnapshot({ id: "library-1", published_version: 2 }, adaptation(), configured, "analysis-1");
+    expect(snapshot.benefit).toBe("Ajukan hanya dalam 3 langkah");
+    expect(snapshot.pre_adaptation?.additional_copy).toEqual([{
+      role: "benefit",
+      text: "Ajukan hanya dalam 3 langkah",
+      source_kind: "manual",
+      status: "ready",
+    }]);
   });
 
   it("keeps manual copy under the same visual direction contract", () => {

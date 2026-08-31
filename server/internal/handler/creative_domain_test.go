@@ -4250,6 +4250,25 @@ func TestExpectedCreativeVariantSizesDependOnOrderMode(t *testing.T) {
 	}
 }
 
+func TestExpectedCreativeVariantProductionSizesRequiresSquareCandidatePreview(t *testing.T) {
+	sizes, err := expectedCreativeVariantProductionSizes("manual", json.RawMessage(`{}`), json.RawMessage(`{}`), "candidate", creativeCandidatePreviewSize)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sizes) != 1 || sizes[0] != creativeCandidatePreviewSize {
+		t.Fatalf("candidate preview sizes = %#v", sizes)
+	}
+
+	if _, err := expectedCreativeVariantProductionSizes("manual", json.RawMessage(`{}`), json.RawMessage(`{}`), "candidate", "1200x628"); err == nil || !strings.Contains(err.Error(), "must be 1080x1080") {
+		t.Fatalf("non-square candidate error = %v", err)
+	}
+
+	reserve, err := expectedCreativeVariantProductionSizes("manual", json.RawMessage(`{}`), json.RawMessage(`{}`), "reserve", "1200x628")
+	if err != nil || len(reserve) != 1 || reserve[0] != "1200x628" {
+		t.Fatalf("legacy reserve sizes = %#v, err = %v", reserve, err)
+	}
+}
+
 func TestCreativeDirectEditPublishRequiresFinalVisualValidation(t *testing.T) {
 	context := creativeDirectEditTaskCompletionContext{
 		DeliveryMode:          "publish",

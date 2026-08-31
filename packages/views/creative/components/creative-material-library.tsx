@@ -947,6 +947,7 @@ export type AppUIReferenceChoice = {
   attachmentId: string;
   label: string;
   reason: string;
+  replacementRequested?: boolean;
 };
 
 export type ReplacementSourceChoice = {
@@ -1003,7 +1004,7 @@ export function visualDirectionFromAnalysis(result: Record<string, unknown>): Cr
     ...recordStringArray(result, "must_preserve").slice(0, 4),
     ...recordStringArray(result, "visual_anchors").slice(0, 3),
   ];
-  const mustPreserve = uniqueDirectionValues(sourceAnalysisRequiresAppUIReplacement(result)
+  const mustPreserve = uniqueDirectionValues(sourceAnalysisHasAppUI(result)
     ? rawMustPreserve.filter((value) => !isAppUIVisualAnchor(value))
     : rawMustPreserve);
   const avoid = uniqueDirectionValues([
@@ -1023,14 +1024,14 @@ function isAppUIVisualAnchor(value: string): boolean {
   return APP_UI_VISUAL_ANCHOR_PATTERN.test(value);
 }
 
-function sourceAnalysisRequiresAppUIReplacement(result: Record<string, unknown> | undefined): boolean {
+function sourceAnalysisHasAppUI(result: Record<string, unknown> | undefined): boolean {
   if (!result) return false;
   if (recordBoolean(result, "app_ui_replacement_needed")) return true;
   return recordBoolean(result, "app_ui_detected") && Boolean(recordString(result, "app_ui_type").trim());
 }
 
 function appUISelectionConfigured(adaptation: PreparedPreAdaptation, draft: OrderItemDraft, references: CreativeResourceFile[] = []): boolean {
-  if (!sourceAnalysisRequiresAppUIReplacement(adaptation.analysisResult)) return true;
+  if (!sourceAnalysisHasAppUI(adaptation.analysisResult) || !draft.appUIReference) return true;
   const selected = draft.appUIReference;
   if (!selected?.resourceFileId || !selected.attachmentId) return false;
   if (references.length === 0) return true;
@@ -1038,7 +1039,8 @@ function appUISelectionConfigured(adaptation: PreparedPreAdaptation, draft: Orde
 }
 
 function appUIReplacementSnapshot(adaptation: PreparedPreAdaptation, draft: OrderItemDraft): NonNullable<NonNullable<CreativeCopySnapshot["pre_adaptation"]>["app_ui_replacement"]> {
-  const required = sourceAnalysisRequiresAppUIReplacement(adaptation.analysisResult);
+  const appUIDetected = sourceAnalysisHasAppUI(adaptation.analysisResult);
+  const required = appUIDetected && Boolean(draft.appUIReference?.replacementRequested || (draft.appUIReference?.resourceFileId && draft.appUIReference.attachmentId));
   const selected = required ? draft.appUIReference ?? null : null;
   const bounds = normalizedVisualBounds(adaptation.analysisResult.app_ui_bounds);
   return {
@@ -1047,7 +1049,7 @@ function appUIReplacementSnapshot(adaptation: PreparedPreAdaptation, draft: Orde
     resource_file_id: selected?.resourceFileId ?? "",
     attachment_id: selected?.attachmentId ?? "",
     label: selected?.label ?? "",
-    reason: selected?.reason ?? (required ? "业务用户尚未选择 App UI 参考" : "未检测到需要替换的核心 App UI"),
+    reason: selected?.reason || (required ? "业务用户尚未选择 App UI 参考" : appUIDetected ? "业务用户选择不替换 App UI；手机仅可作为视觉形式" : "未检测到 App UI"),
     source_screen: {
       app_ui_type: recordString(adaptation.analysisResult, "app_ui_type"),
       visual_characteristics: recordString(adaptation.analysisResult, "app_ui_visual_characteristics"),
@@ -1060,6 +1062,12 @@ function appUIReplacementSnapshot(adaptation: PreparedPreAdaptation, draft: Orde
       "不得把 AdaKami UI 画到屏幕外",
     ] : [],
   };
+}
+
+const CORE_BENEFIT_BLOCK_ID = "__core_benefit__";
+
+function coreBenefitFromDraft(draft: OrderItemDraft): string {
+  return draft.textOverrides[CORE_BENEFIT_BLOCK_ID]?.trim() || "";
 }
 
 export type DirectEditMarketPackResolution =
@@ -2601,6 +2609,12 @@ export function frozenCopySnapshot(
       summary: adaptation.summary,
       analysis_highlights: adaptation.analysisHighlights,
       app_ui_replacement: appUIReplacementSnapshot(adaptation, draft),
+      additional_copy: coreBenefitFromDraft(draft) ? [{
+        role: "benefit",
+        text: coreBenefitFromDraft(draft),
+        source_kind: "manual",
+        status: "ready",
+      }] : [],
       text_replacements: adaptation.textReplacements.filter((replacement) => !numericLayoutBlockIDs.has(replacement.blockId)).map((replacement) => {
         const replacementTextValue = replacementText(replacement, draft.textOverrides);
         const source = replacementSource(replacement, draft.replacementSources ?? {});
@@ -2657,6 +2671,8 @@ export function preAdaptedCopySnapshot(
     .map((replacement) => replacementText(replacement, draft.textOverrides))
     .filter(Boolean)
     .join("\n");
+  const coreBenefit = coreBenefitFromDraft(draft);
+  const sourceBenefit = textForRole("benefit");
   const hasPlan = effectiveRepaymentPlanSelections(adaptation, draft.repaymentPlanOverrides ?? {}, draft.numericLayoutDrafts ?? {}).length > 0;
   const snapshot: CreativeCopySnapshot = {
     schema_version: 3,
@@ -2668,7 +2684,7 @@ export function preAdaptedCopySnapshot(
     creative_type: hasPlan ? "repayment_plan" : "num",
     headline: textForRole("headline"),
     subheadline: textForRole("subheadline"),
-    benefit: textForRole("benefit"),
+    benefit: [sourceBenefit, coreBenefit].filter((value, index, values) => Boolean(value) && values.indexOf(value) === index).join("\n"),
     supporting: textForRole("supporting"),
     cta: textForRole("cta"),
     legal_text: textForRole("legal"),
@@ -2740,6 +2756,7 @@ function TextReplacementPlan({ sourceImage, sourceImageAlt, adaptation, copyLibr
   return <section aria-labelledby="text-replacement-title" className="min-w-0 border">
     <div className="flex flex-wrap items-center justify-between gap-2 border-b px-3 py-2"><div><h4 id="text-replacement-title" className="text-sm font-semibold">画面内容核对</h4><p className="mt-0.5 text-[11px] text-muted-foreground">对着原图逐区确认文案和数值；系统生成的候选会先标记待确认。</p></div><div className="flex flex-wrap items-center gap-2">{pendingRecommendations.length > 0 && <Badge variant="outline" className="border-amber-300 bg-amber-50 text-amber-900">{pendingRecommendations.length} 个推荐待确认</Badge>}{pendingNumericPlanLayouts.length > 0 && <Badge variant="outline" className="border-amber-300 bg-amber-50 text-amber-900">{pendingNumericPlanLayouts.length} 个数值区域待选择</Badge>}<Badge variant={missingReplacements.length === 0 && pendingRecommendations.length === 0 && pendingNumericPlanLayouts.length === 0 ? "default" : "outline"}>{missingReplacements.length > 0 ? `${missingReplacements.length} 个文字可留空移除` : pendingRecommendations.length > 0 ? "推荐确认后可提交" : pendingNumericPlanLayouts.length > 0 ? "请选择还款方案或留空移除" : `${reviewRegions.length} 个区域已处理`}</Badge></div></div>
     <AppUIReferenceSelector analysisResult={adaptation.analysisResult} references={appUIReferences} selected={appUIReference} loading={appUIReferencesLoading} onChange={onAppUIReferenceChange} />
+    <CoreBenefitEditor value={overrides[CORE_BENEFIT_BLOCK_ID] ?? ""} onChange={(value) => onChooseReplacement(CORE_BENEFIT_BLOCK_ID, value, { kind: "manual" })} />
     <div className="grid min-w-0 xl:grid-cols-[minmax(360px,0.9fr)_minmax(0,1.1fr)] xl:items-start"><SourceTextVisualReview sourceImage={sourceImage} sourceImageAlt={sourceImageAlt} regions={positionedRegions} activeRegionId={activeRegionId} onSelect={(regionId) => selectRegion(regionId, true)} onRetrySourceAnalysis={onRetrySourceAnalysis} retryingSourceAnalysis={retryingSourceAnalysis} />
       <div className="min-w-0 border-t xl:border-l xl:border-t-0"><div className="space-y-3 p-3">{reviewRegions.map((region) => <VisualReviewRegionCard key={region.id} region={region} visualIndex={visualIndexByRegionId.get(region.id)} active={activeRegionId === region.id} overrides={overrides} replacementSources={replacementSources} scenarios={effectiveScenarios} originalScenarios={adaptation.repaymentPlanSelections} originalNumericLayouts={adaptation.numericLayouts} repaymentPlanOverrides={repaymentPlanOverrides} repaymentPlanOptions={repaymentPlanOptions} onSelect={() => selectRegion(region.id)} onOpenSelector={setSelectorBlockId} onChooseReplacement={onChooseReplacement} onChooseRepaymentPlan={onChooseRepaymentPlan} onAddRepaymentPlan={onAddRepaymentPlan} onRemoveRepaymentPlan={onRemoveRepaymentPlan} onOmitNumericLayout={onOmitNumericLayout} />)}</div></div>
     </div>
@@ -2749,8 +2766,10 @@ function TextReplacementPlan({ sourceImage, sourceImageAlt, adaptation, copyLibr
 }
 
 function AppUIReferenceSelector({ analysisResult, references, selected, loading, onChange }: { analysisResult: Record<string, unknown>; references: CreativeResourceFile[]; selected: AppUIReferenceChoice | null; loading: boolean; onChange: (value: AppUIReferenceChoice | null) => void }) {
-  if (!sourceAnalysisRequiresAppUIReplacement(analysisResult)) return null;
+  const [enabled, setEnabled] = useState(Boolean(selected?.replacementRequested || (selected?.resourceFileId && selected.attachmentId)));
+  if (!sourceAnalysisHasAppUI(analysisResult)) return null;
   const selectedId = selected?.resourceFileId ?? "";
+  const hasSelectedReference = Boolean(selected?.resourceFileId && selected.attachmentId);
   const selectedAvailable = Boolean(selectedId) && references.some((file) => file.id === selectedId && file.attachment_id === selected?.attachmentId);
   const appUIType = recordString(analysisResult, "app_ui_type") || "源图 App UI";
   const characteristics = recordString(analysisResult, "app_ui_visual_characteristics");
@@ -2764,11 +2783,11 @@ function AppUIReferenceSelector({ analysisResult, references, selected, loading,
         <p className="mt-1 break-words text-xs leading-5 text-muted-foreground">{appUIType}{characteristics ? `：${characteristics}` : ""}</p>
       </div>
       <div className="flex shrink-0 items-center gap-2">
-        <Badge variant={selected ? "default" : "outline"}>{selected ? "已选择" : "需选择"}</Badge>
-        {selected && <Button type="button" size="sm" variant="ghost" onClick={() => onChange(null)}>清除</Button>}
+        <Badge variant={enabled && hasSelectedReference ? "default" : "outline"}>{enabled ? hasSelectedReference ? "已选择" : "需选择" : "不替换"}</Badge>
+        <Switch checked={enabled} onCheckedChange={(value) => { setEnabled(value); onChange(value ? { resourceFileId: "", attachmentId: "", label: "", reason: "", replacementRequested: true } : null); }} aria-label="替换手机屏幕内容" />
       </div>
     </div>
-    {loading ? <div className="border border-dashed bg-background px-4 py-6 text-center text-sm text-muted-foreground">正在加载 App UI 参考图</div> : references.length === 0 ? (
+    {!enabled ? <p className="border border-dashed bg-background px-3 py-2 text-xs leading-5 text-muted-foreground">手机仅作为视觉形式，不下载或传入 App UI 参考图。</p> : loading ? <div className="border border-dashed bg-background px-4 py-6 text-center text-sm text-muted-foreground">正在加载 App UI 参考图</div> : references.length === 0 ? (
       <div className="border border-amber-300 bg-background px-4 py-4 text-sm text-amber-900">当前市场资源包没有 App UI 参考图，补充并发布后才能提交这张素材。</div>
     ) : (
       <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
@@ -2794,7 +2813,15 @@ function AppUIReferenceSelector({ analysisResult, references, selected, loading,
         })}
       </div>
     )}
-    {selected && !selectedAvailable && !loading && <p className="mt-2 text-xs text-amber-900">已选参考图不在当前资源包列表中；重新选择可更新为当前发布资源。</p>}
+    {enabled && hasSelectedReference && !selectedAvailable && !loading && <p className="mt-2 text-xs text-amber-900">已选参考图不在当前资源包列表中；重新选择可更新为当前发布资源。</p>}
+  </section>;
+}
+
+function CoreBenefitEditor({ value, onChange }: { value: string; onChange: (value: string) => void }) {
+  return <section className="border-b bg-muted/10 px-3 py-3" aria-labelledby="core-benefit-title">
+    <div className="mb-2"><h5 id="core-benefit-title" className="text-sm font-semibold">核心利益点</h5><p className="mt-1 text-xs leading-5 text-muted-foreground">可选。用于补充原图未识别的价值表达；填写后会冻结为成图中必须可见的文字。</p></div>
+    <Textarea rows={2} value={value} onChange={(event) => onChange(event.target.value)} placeholder="例如：借款申请只需 3 步" className="resize-y text-sm leading-6" />
+    <p className="mt-2 text-[11px] leading-4 text-muted-foreground">涉及金额、利率、期限或法律事实时，仅填写已审批内容。</p>
   </section>;
 }
 
@@ -2811,6 +2838,7 @@ function appUIReferenceChoice(file: CreativeResourceFile, analysisResult: Record
     attachmentId: file.attachment_id,
     label,
     reason: `${label} 用于替换${appUIType}${tags ? `，标签：${tags}` : ""}`.slice(0, 300),
+    replacementRequested: true,
   };
 }
 

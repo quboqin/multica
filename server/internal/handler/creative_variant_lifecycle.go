@@ -38,6 +38,9 @@ func validCreativeCandidateState(state string) bool {
 }
 
 func expectedCreativeVariantProductionSizes(triggerKind string, inputSnapshot, brief json.RawMessage, candidateState, primarySize string) ([]string, error) {
+	if candidateState == "candidate" && primarySize != creativeCandidatePreviewSize {
+		return nil, errors.New("creative candidate primary_size must be 1080x1080")
+	}
 	if candidateState != "selected" {
 		if !validCreativeAssetSize(primarySize) {
 			return nil, errors.New("creative candidate primary_size is invalid")

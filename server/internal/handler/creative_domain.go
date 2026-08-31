@@ -332,7 +332,9 @@ type creativeOrderItemAdoptionInput struct {
 	QCRiskReason       string `json:"qc_risk_reason"`
 }
 
-var standardCreativeAssetSizes = []string{"1080x1080", "1200x628", "800x1000"}
+const creativeCandidatePreviewSize = "1080x1080"
+
+var standardCreativeAssetSizes = []string{creativeCandidatePreviewSize, "1200x628", "800x1000"}
 
 type creativeDeliveryScope struct {
 	TargetSize    string   `json:"target_size"`

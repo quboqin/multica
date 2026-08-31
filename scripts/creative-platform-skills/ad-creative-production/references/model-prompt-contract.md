@@ -9,7 +9,8 @@ The prompt contains only instructions that can change pixels. Do not include ord
 hash, request, upload, registration, retry, timeout, status, JSON, CLI, audit, or lineage instructions. Those remain in the workflow
 outside the model call.
 
-GPT Image renders all approved headline, benefit, amount, table, supporting copy, and CTA text. Do not reserve blank text boxes for
+GPT Image renders all approved headline, benefit, amount, table, supporting copy, and CTA text. A nonempty approved benefit must be
+visible, legible text in the image; icons, phone forms, and step cards may reinforce it but never replace it. Do not reserve blank text boxes for
 later code rendering and do not ask the platform to typeset, patch, or overlay business copy. The frozen
 `brief.prime_composition.mode` decides the Prime boundary: `deterministic` produces an unbranded base for the later official overlay;
 `model_integrated` produces the complete final image with the QR-free official template from Input 2. Never infer this choice from

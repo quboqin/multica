@@ -185,8 +185,8 @@ func TestCreativeFactoryImageEditingUsesOneAgentWithWorkflowSkills(t *testing.T)
 
 func TestCreativeFactoryCreativeContractTemplatesStayInSync(t *testing.T) {
 	wantVersions := map[string]int{
-		"generation_plan":     39,
-		"image_edit":          109,
+		"generation_plan":     40,
+		"image_edit":          110,
 		"prime_compose":       6,
 		"direct_image_edit":   30,
 		"quality_control":     42,
@@ -267,8 +267,8 @@ func TestCreativeFactoryCreativeContractTemplatesStayInSync(t *testing.T) {
 		t.Fatalf("read bootstrap script: %v", err)
 	}
 	for _, value := range []string{
-		"capability = 'generation_plan'; version = 39",
-		"capability = 'image_edit'; version = 109",
+		"capability = 'generation_plan'; version = 40",
+		"capability = 'image_edit'; version = 110",
 		"capability = 'prime_compose'; version = 6",
 		"capability = 'direct_image_edit'; version = 30",
 		"capability = 'quality_control'; version = 42",

@@ -64,7 +64,8 @@ Prime context 必须以当前任务的 `revision` 登记在当前 Variant 下，
 
 先以订单回读的 `candidate_state`、`primary_size` 和 `expected_sizes` 判断阶段，不从 Variant key 猜：
 
-- `candidate_state=candidate` / `production_stage=candidate_primary`：只生成 `primary_size`，且 `expected_sizes` 必须恰好只有该尺寸。
+- `candidate_state=candidate` / `production_stage=candidate_primary`：只生成 `primary_size=1080x1080`，且 `expected_sizes` 必须恰好为
+  `["1080x1080"]`。这是所有候选统一的方形比较图，不得因横版、竖版或手机叙事方向改用其他首轮比例。
   写回 generated 后调用绑定贴片 Skill 生成该主尺寸 Prime 图，供独立 `creative_candidate_selection` 比较；不补另外两尺寸，
   不自行选择候选，也不触发完整交付 QC。
 - `candidate_state=selected`：回读平台原子晋级后的完整 `expected_sizes`，复用候选阶段已经完成的主尺寸 canonical asset、
@@ -97,6 +98,10 @@ Input 3 只服务于手机屏幕内容替换：保留原画面中的手机机身
 
 若 brief 没有 `app_ui_replacement.selected=true`，本节完全不生效：不要下载市场包里的任意 App UI 文件，不要给 Image Edit
 追加第三输入，也不要因为源图或 visual direction 提到手机屏幕就要求保留手机界面。
+
+若冻结批准文案的 `benefit` 非空，或 `copy_snapshot.pre_adaptation.additional_copy` 包含 `role=benefit` 的 ready 文案，必须把该利益点
+作为成图中清晰、可读的可见文字逐字渲染。图标、步骤卡、手机外形或人物动作只能强化该利益点，不能替代文字；未选择 App UI 时尤其不得
+把利益点藏进手机屏幕或以虚构 UI 代替。只有冻结利益点为空时才允许只使用图形表达，不得补写业务 claim。
 
 先读取当前 Variant brief 的 `prime_composition.mode`。缺失时按 `deterministic` 处理；不得按市场名称、历史任务或模板文件名猜测。
 `deterministic` 从订单 `input_snapshot.market_pack.files` 下载与当前尺寸匹配的官方模板，再生成低透明度的实际视觉上下文（只保留 Prime 保护区的组件内容）：

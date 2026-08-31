@@ -392,6 +392,12 @@ export interface CreativeCopySnapshot {
       };
       constraints: string[];
     };
+    additional_copy?: Array<{
+      role: "benefit";
+      text: string;
+      source_kind: "manual";
+      status: "ready";
+    }>;
     text_replacements: Array<{
       block_id: string;
       location: string;

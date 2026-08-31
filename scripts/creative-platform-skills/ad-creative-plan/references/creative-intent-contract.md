@@ -10,7 +10,7 @@ Each Order Item has four or five candidate Variants named `C01` through `C05`. E
 ```json
 {
   "candidate_state": "candidate",
-  "primary_size": "1200x628",
+  "primary_size": "1080x1080",
   "selection_rank": null,
   "creative_contract": {
     "contract_version": 2,
@@ -21,11 +21,8 @@ Each Order Item has four or five candidate Variants named `C01` through `C05`. E
 }
 ```
 
-`primary_size` is selected from the frozen delivery sizes for that concept. It is not always square:
-
-- choose `1200x628` for horizontal comparison, wide environment, or left-right product/benefit relationships;
-- choose `800x1000` for a vertical person, phone, stacked journey, or strong top-to-bottom reading order;
-- choose `1080x1080` for balanced, radial, modular, or aspect-neutral concepts.
+All candidate previews use `primary_size=1080x1080`. This makes the four or five candidate comparisons consistent; their
+`layout_plans` must still forecast native landscape and portrait reflow before selection.
 
 Only `primary_size` is generated while `candidate_state=candidate`. Candidate selection atomically promotes exactly three candidates
 to `selected` with ranks 1 through 3 and moves the rest to `reserve`. Reserve candidates and their main images remain traceable but do
@@ -83,6 +80,9 @@ hard dependency on the square delivery image.
 
 LayoutPlan describes semantic relationships. Exact protected geometry stays in the frozen `prime_layout_contract` and deterministic
 composer evidence; it is not copied into the model prompt.
+
+When frozen approved copy contains a nonempty `benefit`, every LayoutPlan must include it as a readable text content group and an
+acceptance check. Icons, phones, and step cards may reinforce the benefit but cannot replace the text.
 
 ## Candidate comparison
 
