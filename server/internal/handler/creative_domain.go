@@ -2982,19 +2982,19 @@ WITH target_feedback AS MATERIALIZED (
   WHERE feedback.workspace_id = $1
     AND (
       feedback.context_snapshot->>'creative_order_id' = $2::text
-      OR feedback.subject_id = $2
+      OR feedback.subject_id = $2::uuid
       OR feedback.subject_id IN (
         SELECT variant.id
         FROM creative_order_variant AS variant
         JOIN creative_order_item AS item ON item.id = variant.order_item_id
-        WHERE item.order_id = $2
+        WHERE item.order_id = $2::uuid
       )
       OR feedback.subject_id IN (
         SELECT asset.id
         FROM creative_order_asset AS asset
         JOIN creative_order_variant AS variant ON variant.id = asset.variant_id
         JOIN creative_order_item AS item ON item.id = variant.order_item_id
-        WHERE item.order_id = $2
+        WHERE item.order_id = $2::uuid
       )
     )
 ), detached_undo AS (
