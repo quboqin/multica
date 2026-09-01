@@ -298,7 +298,9 @@
       "delivery": "View delivery",
       "record": "View record"
     },
-    "orderSummary": "{{items}} selected materials - {{ready}}/{{expected}} creatives generated",
+    "orderList": {
+      "metadata": "{{items}} materials · {{ready}}/{{expected}} creative images · Started {{createdAt}} · Progress {{updatedAt}}"
+    },
     "sourceMaterialNumber": "Material {{index}}",
     "orderNumber": "Order {{id}}",
     "andMoreMaterials": "{{visible}} and {{count}} more materials",

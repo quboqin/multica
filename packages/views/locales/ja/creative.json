@@ -298,7 +298,9 @@
       "delivery": "納品を表示",
       "record": "記録を表示"
     },
-    "orderSummary": "{{items}} 件の素材を選択 - {{ready}}/{{expected}} 件のクリエイティブを生成",
+    "orderList": {
+      "metadata": "素材 {{items}}件 · クリエイティブ {{ready}}/{{expected}}件 · 開始 {{createdAt}} · 進捗 {{updatedAt}}"
+    },
     "sourceMaterialNumber": "素材 {{index}}",
     "orderNumber": "注文 {{id}}",
     "andMoreMaterials": "{{visible}} ほか {{count}} 件の素材",

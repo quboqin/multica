@@ -95,7 +95,7 @@ import { creativeAttachmentBrowserURL } from "../lib/creative-attachment-url";
 import { creativeAdjustmentCanRetry, creativeAdjustmentProgress, creativeAdjustmentTarget, latestOrderAdjustmentFeedback } from "../lib/creative-adjustment-progress";
 import { formatCreativeDuration } from "../lib/creative-feedback-insights";
 import { createDefaultPrimeTemplateSet, withDefaultPrimeTemplateSet } from "../lib/prime-template-set";
-import { creativeTimeZoneLabel, formatCreativeDateTime } from "../lib/creative-time";
+import { creativeTimeZoneLabel, formatCreativeDateTime, formatCreativeDateTimeToMinute } from "../lib/creative-time";
 import { CreativeMaterialLibrary, creativeMaterialAnalysisReadiness, creativeMaterialProductionState, defaultPreAdaptationResources, latestCandidateFeedback, latestCompletedAnalyses, materialAnalysisState, type MaterialLibraryFilter } from "./creative-material-library";
 import { CreativeCollectionPlans } from "./creative-collection-plans";
 import { ComposableCopyLibraryEditor } from "./composable-copy-library-editor";
@@ -350,7 +350,7 @@ function CreativeOrdersWorkspace({ selectedOrderId, onSelectOrder, onBack, backL
           <CreativeOrderSourceThumbs sources={sources} />
           <span className="min-w-0">
             <span className="block truncate text-sm font-semibold">{creativeOrderSourceTitle(sources, creativeOrder, t)}</span>
-            <span className="mt-1 block truncate text-xs text-muted-foreground">{summary} · {t(($) => $.studio.updatedAt, { time: formatCreativeDateTime(creativeOrder.updated_at), zone: t(($) => $.generationInfo.beijingTime) })}</span>
+            <span className="mt-1 block text-xs leading-5 text-muted-foreground">{summary}</span>
           </span>
         </button>
         <div className="flex flex-wrap items-center gap-2 lg:justify-end"><Badge variant={listState.badgeVariant}>{listState.label}</Badge><Button size="sm" onClick={() => onSelectOrder(creativeOrder.id)}>{listState.action}<ArrowRight className="h-4 w-4" /></Button></div>
@@ -375,7 +375,13 @@ function creativeOrderListState(stage: CreativeOrderStage, t: ReturnType<typeof 
 
 function creativeOrderListSummary(order: CreativeOrder, t: ReturnType<typeof useT>["t"]): string {
   const progress = creativeOrderGenerationProgress(order);
-  return t(($) => $.studio.orderSummary, { items: order.items.length, ready: progress.ready, expected: progress.expected });
+  return t(($) => $.studio.orderList.metadata, {
+    items: order.items.length,
+    ready: progress.ready,
+    expected: progress.expected,
+    createdAt: formatCreativeDateTimeToMinute(order.created_at),
+    updatedAt: formatCreativeDateTimeToMinute(order.updated_at),
+  });
 }
 
 export function creativeOrderGenerationProgress(order: CreativeOrder): { ready: number; expected: number } {

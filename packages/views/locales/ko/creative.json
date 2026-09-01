@@ -298,7 +298,9 @@
       "delivery": "납품 보기",
       "record": "기록 보기"
     },
-    "orderSummary": "선택한 소재 {{items}}개 - 크리에이티브 {{ready}}/{{expected}}개 생성됨",
+    "orderList": {
+      "metadata": "소재 {{items}}개 · 크리에이티브 {{ready}}/{{expected}}개 · 시작 {{createdAt}} · 진행 {{updatedAt}}"
+    },
     "sourceMaterialNumber": "소재 {{index}}",
     "orderNumber": "주문 {{id}}",
     "andMoreMaterials": "{{visible}} 외 소재 {{count}}개",

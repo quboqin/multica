@@ -1264,7 +1264,7 @@ func (h *Handler) ListCreativeOrders(w http.ResponseWriter, r *http.Request) {
 	rows, err := h.DB.Query(r.Context(), `
 SELECT id::text, workspace_id::text, COALESCE(issue_id::text, ''), status, input_snapshot::text,
   trigger_evidence_kind, COALESCE(trigger_evidence_ref_id::text, ''), created_by::text, created_at::text, updated_at::text
-FROM creative_order WHERE workspace_id = $1 ORDER BY updated_at DESC LIMIT 100
+FROM creative_order WHERE workspace_id = $1 ORDER BY created_at DESC, id DESC LIMIT 100
 `, workspaceID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list creative orders")

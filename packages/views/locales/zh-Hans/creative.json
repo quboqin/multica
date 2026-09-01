@@ -298,7 +298,9 @@
       "delivery": "查看交付",
       "record": "查看记录"
     },
-    "orderSummary": "已选 {{items}} 张素材 · 已生成 {{ready}}/{{expected}} 张成图",
+    "orderList": {
+      "metadata": "{{items}} 张素材 · {{ready}}/{{expected}} 张成图 · 发起 {{createdAt}} · 进度 {{updatedAt}}"
+    },
     "sourceMaterialNumber": "素材 {{index}}",
     "orderNumber": "订单 {{id}}",
     "andMoreMaterials": "{{visible}} 等 {{count}} 张素材",

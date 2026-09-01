@@ -53,6 +53,54 @@ func TestNormalizeCreativeOrderAllowsComplexProductionPrompt(t *testing.T) {
 	}
 }
 
+func TestListCreativeOrdersSortsByCreationTime(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	olderOrderID, _, _ := createCreativeLifecycleTestOrder(t, "older creative order")
+	newerOrderID, _, _ := createCreativeLifecycleTestOrder(t, "newer creative order")
+	olderCreatedAt := time.Date(2026, time.August, 31, 12, 0, 0, 0, time.UTC)
+	newerCreatedAt := olderCreatedAt.Add(time.Hour)
+	if _, err := testPool.Exec(t.Context(), `
+UPDATE creative_order
+SET created_at = $1, updated_at = $2
+WHERE id = $3
+`, olderCreatedAt, newerCreatedAt.Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := testPool.Exec(t.Context(), `
+UPDATE creative_order
+SET created_at = $1, updated_at = $2
+WHERE id = $3
+`, newerCreatedAt, olderCreatedAt); err != nil {
+		t.Fatal(err)
+	}
+
+	w := httptest.NewRecorder()
+	testHandler.ListCreativeOrders(w, newRequest(http.MethodGet, "/api/creative/orders", nil))
+	if w.Code != http.StatusOK {
+		t.Fatalf("ListCreativeOrders = %d %s", w.Code, w.Body.String())
+	}
+	var response struct {
+		Orders []creativeOrderResponse `json:"orders"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&response); err != nil {
+		t.Fatal(err)
+	}
+	positions := map[string]int{}
+	for index, order := range response.Orders {
+		positions[order.ID] = index
+	}
+	newerPosition, newerFound := positions[newerOrderID]
+	olderPosition, olderFound := positions[olderOrderID]
+	if !newerFound || !olderFound {
+		t.Fatalf("listed orders missing newer=%t older=%t", newerFound, olderFound)
+	}
+	if newerPosition >= olderPosition {
+		t.Fatalf("creation order positions = newer %d older %d, want newer before older", newerPosition, olderPosition)
+	}
+}
+
 func TestSummarizeCreativeOrderVariantBlockerKeepsModelFailureCause(t *testing.T) {
 	raw := strings.Join([]string{
 		"方形模型已成功返回完整原始 JSON。",
