@@ -7253,6 +7253,11 @@ type creativeDirectEditArtifactState struct {
 	DeliveredCount  int
 }
 
+const (
+	creativeDirectEditOutputPendingFailureReason = "creative_output_pending"
+	creativeDirectEditOutputPendingError         = "direct image edit is awaiting a durable provider receipt"
+)
+
 func parseCreativeDirectEditTaskCompletionContext(raw json.RawMessage) (creativeDirectEditTaskCompletionContext, bool, error) {
 	var taskContext creativeDirectEditTaskCompletionContext
 	if err := json.Unmarshal(raw, &taskContext); err != nil {
@@ -7380,6 +7385,53 @@ func (h *Handler) creativeDirectEditCompletionError(ctx context.Context, task db
 	return creativeDirectEditArtifactError(taskContext, state), nil
 }
 
+// creativeDirectEditTargetOperationPending reports whether the missing target
+// asset still has one persisted provider attempt that can deliver a late
+// receipt. A terminal task must retain this recoverable state instead of
+// turning its variant into action_required.
+func (h *Handler) creativeDirectEditTargetOperationPending(ctx context.Context, task db.AgentTaskQueue) (bool, error) {
+	taskContext, ok, parseErr := parseCreativeDirectEditTaskCompletionContext(task.Context)
+	if !ok {
+		return false, nil
+	}
+	if parseErr != nil {
+		return false, parseErr
+	}
+	variantID, err := parseUUIDString(taskContext.VariantID)
+	if err != nil {
+		return false, err
+	}
+	state, err := h.loadCreativeDirectEditArtifactState(ctx, variantID, taskContext.Revision, taskContext.TargetSize, taskContext.ExpectedSizes, pgtype.UUID{})
+	if err != nil || !state.VariantExists || state.TargetGenerated {
+		return false, err
+	}
+	var pending bool
+	err = h.DB.QueryRow(ctx, `
+SELECT EXISTS(
+  SELECT 1
+  FROM creative_image_operation operation
+  JOIN creative_image_operation_attempt attempt ON attempt.operation_id = operation.id
+  WHERE operation.task_id = $1
+    AND attempt.task_id = $1
+    AND operation.variant_id = $2
+    AND operation.revision = $3
+    AND operation.size_key = $4
+    AND operation.operation_kind IN ('direct_edit', 'visual_rework', 'canvas_repair')
+    AND operation.status IN ('queued', 'running', 'unknown')
+    AND attempt.attempt = (
+      SELECT max(latest.attempt)
+      FROM creative_image_operation_attempt latest
+      WHERE latest.operation_id = operation.id
+    )
+    AND attempt.status IN ('running', 'unknown')
+)
+`, task.ID, variantID, taskContext.Revision, taskContext.TargetSize).Scan(&pending)
+	if err != nil {
+		return false, err
+	}
+	return pending, nil
+}
+
 func (h *Handler) settleCreativeDirectEditTask(ctx context.Context, task db.AgentTaskQueue) error {
 	taskContext, ok, parseErr := parseCreativeDirectEditTaskCompletionContext(task.Context)
 	if !ok || parseErr != nil {
@@ -7417,6 +7469,18 @@ FOR UPDATE
 		return tx.Commit(ctx)
 	}
 	if variantStatus == "cancelled" {
+		return commitSettlement()
+	}
+	if task.FailureReason.Valid && strings.TrimSpace(task.FailureReason.String) == creativeDirectEditOutputPendingFailureReason {
+		if _, err := tx.Exec(ctx, `
+UPDATE creative_order_variant
+SET status = 'running',
+    brief = brief - 'creative_direct_edit_error' - 'error_code' - 'error_message',
+    updated_at = now()
+WHERE id = $1 AND revision = $2 AND status <> 'cancelled'
+`, variantUUID, taskContext.Revision); err != nil {
+			return fmt.Errorf("preserve pending direct image edit: %w", err)
+		}
 		return commitSettlement()
 	}
 

@@ -243,12 +243,14 @@ func daemonCreativeLateReceiptIsExactReplay(binding daemonCreativeLateReceiptBin
 }
 
 // ReportDaemonCreativeImageLateSuccess accepts a provider result after the
-// task-scoped token has expired. Only the exact daemon that owns the original
-// runtime may call it; the route, receipt, database lineage, and uploaded bytes
-// must all agree before the operation is moved to completed.
+// task-scoped token has expired. A daemon token is bound to the exact daemon;
+// the legacy PAT compatibility path is bound to the runtime owner. The route,
+// receipt, database lineage, and uploaded bytes must all agree before the
+// operation is moved to completed.
 func (h *Handler) ReportDaemonCreativeImageLateSuccess(w http.ResponseWriter, r *http.Request) {
-	if middleware.DaemonAuthPathFromContext(r.Context()) != middleware.DaemonAuthPathDaemonToken {
-		writeError(w, http.StatusForbidden, "late image receipts require a daemon token")
+	authPath := middleware.DaemonAuthPathFromContext(r.Context())
+	if !daemonCreativeLateReceiptAuthAllowed(authPath) {
+		writeError(w, http.StatusForbidden, "late image receipts require a daemon token or daemon PAT")
 		return
 	}
 	if h.Storage == nil || h.TxStarter == nil {
@@ -267,7 +269,13 @@ func (h *Handler) ReportDaemonCreativeImageLateSuccess(w http.ResponseWriter, r 
 	if !ok {
 		return
 	}
-	if !runtime.DaemonID.Valid || runtime.DaemonID.String != middleware.DaemonIDFromContext(r.Context()) {
+	if authPath == middleware.DaemonAuthPathDaemonToken &&
+		(!runtime.DaemonID.Valid || runtime.DaemonID.String != middleware.DaemonIDFromContext(r.Context())) {
+		writeError(w, http.StatusNotFound, "runtime not found")
+		return
+	}
+	if authPath == middleware.DaemonAuthPathPAT &&
+		(!runtime.OwnerID.Valid || uuidToString(runtime.OwnerID) != requestUserID(r)) {
 		writeError(w, http.StatusNotFound, "runtime not found")
 		return
 	}
@@ -515,6 +523,10 @@ WHERE operation_id = $1 AND attempt <> $2 AND status IN ('running','unknown')
 		"status": "completed", "disposition": "late_success", "operation_id": operationID,
 		"attempt": attempt, "output_attachment_id": uuidToString(attachmentUUID), "recovery_queued": recovery.Queued,
 	})
+}
+
+func daemonCreativeLateReceiptAuthAllowed(authPath string) bool {
+	return authPath == middleware.DaemonAuthPathDaemonToken || authPath == middleware.DaemonAuthPathPAT
 }
 
 func (h *Handler) enqueueCreativeLateReceiptRecovery(

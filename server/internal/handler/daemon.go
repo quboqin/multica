@@ -2326,12 +2326,21 @@ func (h *Handler) CompleteTask(w http.ResponseWriter, r *http.Request) {
 	if validationErr == nil && artifactError == "" {
 		artifactError, validationErr = h.creativeQCVisualCompletionError(r.Context(), existingTask, workspaceID)
 	}
+	directEditOutputPending := false
+	if validationErr == nil && artifactError != "" {
+		directEditOutputPending, validationErr = h.creativeDirectEditTargetOperationPending(r.Context(), existingTask)
+	}
 	if validationErr != nil {
 		slog.Error("validate creative task output failed", "task_id", taskID, "error", validationErr)
 		writeError(w, http.StatusInternalServerError, "failed to validate task output")
 		return
 	} else if artifactError != "" {
-		task, failErr := h.TaskService.FailTask(r.Context(), existingTask.ID, artifactError, req.SessionID, req.WorkDir, "creative_output_missing")
+		failureReason := "creative_output_missing"
+		if directEditOutputPending {
+			artifactError = creativeDirectEditOutputPendingError
+			failureReason = creativeDirectEditOutputPendingFailureReason
+		}
+		task, failErr := h.TaskService.FailTask(r.Context(), existingTask.ID, artifactError, req.SessionID, req.WorkDir, failureReason)
 		if failErr != nil {
 			slog.Warn("fail creative task without output", "task_id", taskID, "error", failErr)
 			writeError(w, http.StatusBadRequest, failErr.Error())

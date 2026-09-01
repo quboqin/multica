@@ -70,7 +70,7 @@ func TestCreativePlatformSkillsUseFrozenBusinessInputs(t *testing.T) {
 		"ad-creative-pre-adaptation": {"source_analysis", "text_replacements", "visual_direction", "recommendation_basis", "repayment_plan_selections", "numeric_layouts", "render_instruction", "完整展示字符串", "pre-adaptation-put", "min(", "我方优先、数量取小", "只有明显的还款结构才生成 repayment 选择和 numeric layout", "Rp100Juta", "保留后续可手动改写空间"},
 		"ad-creative-plan":           {"copy_snapshot", "input_snapshot", "source_analysis", "app_ui_replacement", "app_ui_reference", "resource_file_id", "attachment_id", "只替换手机屏幕内容"},
 		"ad-creative-production":     {"copy_snapshot", "prompt_sha256", "request_id", "Input 3 是选中的 AdaKami App UI reference", "app_ui_reference_attachment_id", "multica attachment download", "attachment_snapshot.candidate_sources", "auth_expired", "attachment_not_found", "storage_timeout", "cli_contract_mismatch", "只替换手机屏幕内容", "--result-file", "--operation-id", "--operation-attempt", "late_receipt_recovery", "late_receipt_recoveries", "同一个 Bash/exec", "operation_id", "reconcile_confirmed=true", "input_snapshot", "input_asset_fingerprints", "validate_image_operation.py", "validate_task_scope.py", "不能因为读到了同订单的另一个候选", "run_image_edit_job.py", "独立会话", "约 30 秒无 stdout"},
-		"ad-creative-direct-edit":    {"copy_snapshot", "prompt_sha256", "delivery_mode", "即使先前识别错了，也要保留后续手动改写空间", "不要把流程卡死在还款计划选择", "不得同时要求“保持原始 scale”", "protected_content_envelope", "prompt 不得写入坐标、百分比", "official_prime_reflow_window_context", "--content-envelope-output", "阻塞屏障", "任务工作目录根部", "image-edit-result-<size>.json", "intent-plan.json", "final_visual_validation=true", "--operation-id", "--operation-attempt", "late_receipt_recovery", "late_receipt_recoveries", "operation_id", "reconcile_confirmed=true"},
+		"ad-creative-direct-edit":    {"copy_snapshot", "prompt_sha256", "delivery_mode", "即使先前识别错了，也要保留后续手动改写空间", "不要把流程卡死在还款计划选择", "不得同时要求“保持原始 scale”", "protected_content_envelope", "prompt 不得写入坐标、百分比", "official_prime_reflow_window_context", "--content-envelope-output", "阻塞屏障", "任务工作目录根部", "image-edit-result-<size>.json", "intent-plan.json", "final_visual_validation=true", "--operation-id", "--operation-attempt", "late_receipt_recovery", "late_receipt_recoveries", "operation_id", "reconcile_confirmed=true", "run_image_edit_job.py", "同一 state file", "waiting"},
 		"ad-creative-qc":             {"copy_snapshot", "compose_result", "qc-context", "qc-finalize", "qc_finalize_transient_failure", "auth_expired", "attachment_not_found", "storage_timeout", "cli_contract_mismatch", "multica attachment download", "view_image", "base64/stdout", "stage=primed", "revision=<context.revision>", "已批准模板家族"},
 		"ad-creative-prime-compose":  {"prime-compose", "creative_prime_backend.go", "does not edit model prompts", "each delivery size", "publishes no partial package"},
 	}
@@ -90,13 +90,14 @@ func TestCreativePlatformSkillsUseFrozenBusinessInputs(t *testing.T) {
 		"capability = 'generation_plan'; version = 40",
 		"capability = 'image_edit'; version = 111",
 		"capability = 'prime_compose'; version = 6",
-		"capability = 'direct_image_edit'; version = 30",
+		"capability = 'direct_image_edit'; version = 31",
 		"capability = 'quality_control'; version = 43",
 		"capability = 'crawl_diagnosis'; version = 7",
 		"capability = 'creative_leadership'; version = 51",
 		"初始 direct_edit 由平台原子创建 revision 和 task，Leader 只恢复领域状态确认缺失的当前 revision task",
 		"creative_candidate_selection",
 		"Skill 及其 references 是提示词、证据、归一化、Prime 和恢复规则的唯一执行真值",
+		"run_image_edit_job.py 只可 start 一次",
 	} {
 		if !strings.Contains(bootstrap, required) {
 			t.Errorf("bootstrap QC setup must contain %q", required)
@@ -109,13 +110,14 @@ func TestCreativePlatformSkillsUseFrozenBusinessInputs(t *testing.T) {
 		`Capability: "generation_plan", Version: 40`,
 		`Capability: "image_edit", Version: 111`,
 		`Capability: "prime_compose", Version: 6`,
-		`Capability: "direct_image_edit", Version: 30`,
+		`Capability: "direct_image_edit", Version: 31`,
 		`Capability: "quality_control", Version: 43`,
 		`Capability: "crawl_diagnosis", Version: 7`,
 		`Capability: "creative_leadership", Version: 51`,
 		"初始 direct_edit 由平台原子创建 revision 和 task，Leader 只恢复领域状态确认缺失的当前 revision task",
 		"creative_candidate_selection",
 		"Skill 及其 references 是提示词、证据、归一化、Prime 和恢复规则的唯一执行真值",
+		"run_image_edit_job.py 只可 start 一次",
 	} {
 		if !strings.Contains(installation, required) {
 			t.Errorf("creative factory QC setup must contain %q", required)

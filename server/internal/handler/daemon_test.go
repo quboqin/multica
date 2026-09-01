@@ -3743,6 +3743,72 @@ FROM agent_task_queue WHERE id = $1
 		}
 	})
 
+	t.Run("in-flight target stays recoverable", func(t *testing.T) {
+		taskID, variantID, _ := setup(t, false, false, false)
+		if _, err := testPool.Exec(ctx, `
+INSERT INTO creative_order_variant_revision (variant_id, revision, brief, status, expected_sizes)
+SELECT id, revision, brief, status, $2::text[]
+FROM creative_order_variant
+WHERE id = $1
+ON CONFLICT (variant_id, revision) DO NOTHING
+`, variantID, expectedSizes); err != nil {
+			t.Fatal(err)
+		}
+		var operationID string
+		if err := testPool.QueryRow(ctx, `
+INSERT INTO creative_image_operation (
+  variant_id, size_key, revision, operation_kind, idempotency_key, status,
+  model, runtime_id, task_id, input_snapshot, started_at
+)
+VALUES (
+  $1, '1080x1080', 2, 'direct_edit', $2, 'running', 'gpt-image-2',
+  (SELECT runtime_id FROM agent_task_queue WHERE id = $3), $3,
+  '{"source":"direct-edit-completion-test"}'::jsonb, now()
+)
+RETURNING id::text
+`, variantID, "direct-edit-pending:"+taskID, taskID).Scan(&operationID); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := testPool.Exec(ctx, `
+INSERT INTO creative_image_operation_attempt (operation_id, attempt, status, runtime_id, task_id)
+SELECT $1, 1, 'running', runtime_id, id
+FROM agent_task_queue
+WHERE id = $2
+`, operationID, taskID); err != nil {
+			t.Fatal(err)
+		}
+
+		complete(t, taskID)
+
+		var status, failureReason, taskError, variantStatus, variantBrief, operationStatus, attemptStatus string
+		if err := testPool.QueryRow(ctx, `
+SELECT status, COALESCE(failure_reason, ''), COALESCE(error, '')
+FROM agent_task_queue WHERE id = $1
+`, taskID).Scan(&status, &failureReason, &taskError); err != nil {
+			t.Fatal(err)
+		}
+		if err := testPool.QueryRow(ctx, `SELECT status, brief::text FROM creative_order_variant WHERE id = $1`, variantID).Scan(&variantStatus, &variantBrief); err != nil {
+			t.Fatal(err)
+		}
+		if err := testPool.QueryRow(ctx, `
+SELECT operation.status, attempt.status
+FROM creative_image_operation operation
+JOIN creative_image_operation_attempt attempt ON attempt.operation_id = operation.id
+WHERE operation.id = $1
+`, operationID).Scan(&operationStatus, &attemptStatus); err != nil {
+			t.Fatal(err)
+		}
+		if status != "failed" || failureReason != creativeDirectEditOutputPendingFailureReason || !strings.Contains(taskError, "durable provider receipt") {
+			t.Fatalf("task terminal state = (%q, %q, %q), want failed recoverable direct-edit receipt state", status, failureReason, taskError)
+		}
+		if variantStatus != "running" || strings.Contains(variantBrief, "creative_direct_edit_error") {
+			t.Fatalf("variant state = (%q, %s), want running without direct-edit blocker", variantStatus, variantBrief)
+		}
+		if operationStatus != "unknown" || attemptStatus != "unknown" {
+			t.Fatalf("operation state = (%q, %q), want unknown pending late receipt", operationStatus, attemptStatus)
+		}
+	})
+
 	t.Run("missing primed and delivered", func(t *testing.T) {
 		taskID, variantID, _ := setup(t, true, false, false)
 		complete(t, taskID)

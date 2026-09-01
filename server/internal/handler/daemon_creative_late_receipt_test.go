@@ -45,6 +45,26 @@ func TestCreativeLateReceiptRecoverySkipsCanonicalOperation(t *testing.T) {
 	}
 }
 
+func TestDaemonCreativeLateReceiptAuthPaths(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		authPath string
+		allowed  bool
+	}{
+		{name: "daemon token", authPath: middleware.DaemonAuthPathDaemonToken, allowed: true},
+		{name: "daemon PAT", authPath: middleware.DaemonAuthPathPAT, allowed: true},
+		{name: "cloud PAT", authPath: middleware.DaemonAuthPathCloudPAT},
+		{name: "JWT", authPath: middleware.DaemonAuthPathJWT},
+		{name: "missing"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := daemonCreativeLateReceiptAuthAllowed(test.authPath); got != test.allowed {
+				t.Fatalf("late receipt auth path %q allowed = %v, want %v", test.authPath, got, test.allowed)
+			}
+		})
+	}
+}
+
 func createDaemonCreativeLateReceiptFixture(t *testing.T) daemonCreativeLateReceiptFixture {
 	t.Helper()
 	orderID, itemID, issueID := createCreativeLifecycleTestOrder(t, "daemon creative late receipt "+uuid.NewString())

@@ -128,10 +128,15 @@ multica image edit \
 `--result-file` 必须是当前**任务工作目录根部**的精确文件名 `image-edit-result-<size>.json`，不得放进临时子目录、不得省略
 `<size>`，也不得改成无尺寸的 `image-edit-result.json`。这使 daemon 能在执行器晚到回执时可信归档原图并创建恢复任务。
 
-`multica image edit` 是当前尺寸的**阻塞屏障**：必须在同一个 exec 完整返回退出结果、`model-output.png` 和原子
-`image-edit-result-<size>.json` 后，才能执行任何 `ls`、`image-operation-put`、上传、对账或下一次模型调用。不得因为任务流中先出现了后续消息，
-就用另一个并发 exec 检查文件并把仍在运行的 provider 进程误判为无回图。调用命令不得后台化；如需额外验证，必须在同一 Bash/exec 的命令成功返回后
-串行验证输出文件和 receipt。只有该阻塞调用真实非零退出且同一调用已无有效回图时，才进入 unknown/reconcile 流程。
+`multica image edit` 是当前尺寸的**阻塞屏障**。为了覆盖 command bridge 约 30 秒无 stdout 的情况，必须使用当前 Skill
+相邻生产 Skill 的 `../ad-creative-production/references/run_image_edit_job.py` 启动**唯一一个**持久化 provider worker：只执行一次
+`start`，随后对同一 state file 反复执行 `wait`，直到结果为 `completed`。worker 虽是 detached，当前 task 的交接屏障仍未解除。
+调用前必须完整读取 `../ad-creative-production/SKILL.md` 的“单尺寸 in-flight 与迟到回图恢复”段落和其 runner 命令块；那是本分支
+`start`、state file、stdout/stderr、timeout 与 `wait` 参数的唯一执行合同。
+每次 `running` 或 `waiting` 都只继续 `wait` 并报告进度；不得输出最终答复、调用 task complete、标 unknown、登记 operation、上传、列目录，
+也不得发起第二次模型调用。只有 `completed` 后，才能串行验证 `model-output.png` 与原子
+`image-edit-result-<size>.json`，再执行 `image-operation-put`、上传和对账。若 runtime 在完成前被终止，保留原子 receipt 交由
+late-receipt recovery 处理，禁止重复调用 provider。
 
 `--size` 使用平台允许的 provider 画布，最终文件必须归一化为当前处理尺寸；`scope=size` 当前处理尺寸就是 `target_size`。
 保留 CLI 返回的完整 JSON 为

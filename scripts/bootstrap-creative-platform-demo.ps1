@@ -423,7 +423,7 @@ $preAdaptationSkill = Set-WorkspaceSkill -Name '素材_技能_文案适配' -Ali
 $planSkill = Set-WorkspaceSkill -Name '素材_技能_方案' -Aliases @('广告生成方案') -Description '消费冻结分析、文案与市场快照，规划 4-5 个统一方形首轮候选及三尺寸 LayoutPlan；只有用户明确选择时才替换 App UI，非空核心利益点必须作为可见文字，独立质检原子晋级 3 个。' -Directory (Join-Path $skillTemplateRoot 'ad-creative-plan') -Config @{ kind = 'creative_role'; capability = 'generation_plan'; version = 40 }
 $productionSkill = Set-WorkspaceSkill -Name '素材_技能_出图' -Aliases @('广告图像编辑') -Description '按唯一模型提示词合同生成统一方形候选主视觉或 selected 缺失尺寸；三尺寸共享 DesignDNA、文案与血缘但从冻结附件和各自 LayoutPlan 独立生成，附件失败结构化分类，按冻结 Prime 模式仅在明确选择时替换 App UI，并把批准利益点渲染为可见文字。' -Directory (Join-Path $skillTemplateRoot 'ad-creative-production') -Config @{ kind = 'creative_role'; capability = 'image_edit'; version = 111 }
 $primeComposeSkill = Set-WorkspaceSkill -Name '素材_技能_贴片' -Aliases @('广告品牌组件合成') -Description '调用后端唯一的 Prime 交接入口：默认确定性合成，或登记冻结的无二维码模型融入结果；校验 JSON，并由后端登记过程图、primed 资产和标准 QC/交付交接；不创建 Prime Agent 或 Prime task。' -Directory (Join-Path $skillTemplateRoot 'ad-creative-prime-compose') -Config @{ kind = 'creative_role'; capability = 'prime_compose'; version = 6 }
-$directEditSkill = Set-WorkspaceSkill -Name '素材_技能_改图' -Aliases @('广告图片直接修改') -Description '将用户反馈编译为带输入角色、锁定/可编辑集合和 target masks 的多目标调整；按冻结 Prime 模式保留官方组件关系，必要时仅重排或缩放点名内容组，阻塞等待模型回执后全部目标同时通过交接并终检。' -Directory (Join-Path $skillTemplateRoot 'ad-creative-direct-edit') -Config @{ kind = 'creative_role'; capability = 'direct_image_edit'; version = 30 }
+$directEditSkill = Set-WorkspaceSkill -Name '素材_技能_改图' -Aliases @('广告图片直接修改') -Description '将用户反馈编译为带输入角色、锁定/可编辑集合和 target masks 的多目标调整；按冻结 Prime 模式保留官方组件关系，必要时仅重排或缩放点名内容组，阻塞等待模型回执后全部目标同时通过交接并终检。' -Directory (Join-Path $skillTemplateRoot 'ad-creative-direct-edit') -Config @{ kind = 'creative_role'; capability = 'direct_image_edit'; version = 31 }
 $qcSkill = Set-WorkspaceSkill -Name '素材_技能_质检' -Aliases @('广告成图验收') -Description '独立比较 4-5 个候选主尺寸并原子晋级 3 个，或对标准/精准改图的实际交付尺寸执行 Prime 与 DesignDNA 联合视觉终检；附件失败结构化分类，qc-finalize 瞬态失败由服务端持久化恢复。' -Directory (Join-Path $skillTemplateRoot 'ad-creative-qc') -Config @{ kind = 'creative_role'; capability = 'quality_control'; version = 43 }
 
 $agents = Get-Items (Invoke-MulticaApi -Method Get -Path '/api/agents') ''
@@ -439,7 +439,7 @@ $runtimeID = $leaderSeed.runtime_id
 
 $specialistHandoff = '只处理 task context 指定的对象、revision 和 scope；按绑定 Skill 写结构化领域结果和机器证据。图像任务按绑定 Skill 的统一比例阈值处理：阈值内归一，10%-25% canvas repair，只有超过 25% 才重生当前尺寸；不能把像素绝对尺寸差当成模型失败。不得创建或修改 Issue，不得用评论代替领域数据。输入、凭证、工具或写回失败时保留已成功对象，写真实 error_code/error_message 并让当前 task 失败；兄弟对象继续。'
 $directEditAgentInstructions = @'
-creative_direct_edit 分支严格执行绑定的素材_技能_改图；按 Variant 冻结的 prime_composition 编辑 task context 指向的 source asset，保留批准文案、附件血缘、归一化、完整模型回执、过程图登记和多目标同时验收，再调用绑定的贴片 Skill 并进入最终视觉 QC。绑定 Skill 是直接改图合同的唯一执行真值，不从 Agent instructions 或历史 prompt 补另一套协议。
+creative_direct_edit 分支严格执行绑定的素材_技能_改图；按 Variant 冻结的 prime_composition 编辑 task context 指向的 source asset，保留批准文案、附件血缘、归一化、完整模型回执、过程图登记和多目标同时验收，再调用绑定的贴片 Skill 并进入最终视觉 QC。run_image_edit_job.py 只可 start 一次；返回 running 或 waiting 时在同一 task 反复 wait，只报告进度，不输出最终答复、不调用 task complete、不更新 operation，直到 completed 且资产已登记。runtime 提前终止时依赖 late receipt recovery，禁止重复模型调用。绑定 Skill 是直接改图合同的唯一执行真值，不从 Agent instructions 或历史 prompt 补另一套协议。
 '@
 $producerInstructions = @'
 全程使用中文。根据 task context.workflow 选择唯一分支，并在执行前完整读取对应绑定 Skill；Skill 及其 references 是提示词、证据、归一化、Prime 和恢复规则的唯一执行真值。
