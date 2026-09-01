@@ -225,6 +225,21 @@ WHERE trigger_evidence_kind = $1 AND trigger_evidence_ref_id = $2
 	if taskCount != 1 || workflow != creativeCandidateSelectionWorkflow || itemKey != creativeCandidateSelectionItemKey || candidateCount != 4 {
 		t.Fatalf("candidate comparison task = count %d workflow %q key %q candidates %d", taskCount, workflow, itemKey, candidateCount)
 	}
+	var taskIssueID pgtype.UUID
+	var contextIssueID string
+	if err := testPool.QueryRow(t.Context(), `
+SELECT issue_id, context->>'issue_id'
+FROM agent_task_queue
+WHERE trigger_evidence_kind = $1 AND trigger_evidence_ref_id = $2
+`, creativeCandidateSelectionEvidenceKind, fixture.ItemID).Scan(&taskIssueID, &contextIssueID); err != nil {
+		t.Fatal(err)
+	}
+	if taskIssueID.Valid {
+		t.Fatalf("candidate comparison task issue_id = %s, want NULL", uuidToString(taskIssueID))
+	}
+	if contextIssueID != fixture.IssueID {
+		t.Fatalf("candidate comparison context issue_id = %q, want %q", contextIssueID, fixture.IssueID)
+	}
 	var rejectedCount int
 	if err := testPool.QueryRow(t.Context(), `
 SELECT count(*) FROM creative_order_variant
@@ -246,6 +261,84 @@ WHERE trigger_evidence_kind = $1 AND trigger_evidence_ref_id = $2
 	}
 	if taskCount != 1 {
 		t.Fatalf("candidate comparison tasks after replay = %d, want 1", taskCount)
+	}
+}
+
+func TestCreativeCandidateSelectionsForSameIssueQueueIndependently(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	fixture := createCreativeCandidateOrchestrationFixture(t, "candidate comparison parallel queueing")
+	var secondCandidateID, secondItemID string
+	if err := testPool.QueryRow(t.Context(), `
+INSERT INTO creative_material_candidate (workspace_id, connector_id, dedupe_key, title, asset_type, preview_url, raw)
+VALUES ($1, 'test', $2, 'parallel candidate', 'image', 'https://example.test/creative.png', '{}'::jsonb)
+RETURNING id::text
+`, testWorkspaceID, "candidate-selection-parallel-"+uuid.NewString()).Scan(&secondCandidateID); err != nil {
+		t.Fatal(err)
+	}
+	if err := testPool.QueryRow(t.Context(), `
+INSERT INTO creative_order_item (order_id, candidate_id, copy_snapshot, status)
+VALUES ($1, $2, '{}'::jsonb, 'running')
+RETURNING id::text
+`, fixture.OrderID, secondCandidateID).Scan(&secondItemID); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(t.Context(), `DELETE FROM agent_task_queue WHERE trigger_evidence_ref_id = $1`, secondItemID)
+		_, _ = testPool.Exec(t.Context(), `DELETE FROM creative_order_item WHERE id = $1`, secondItemID)
+		_, _ = testPool.Exec(t.Context(), `DELETE FROM creative_material_candidate WHERE id = $1`, secondCandidateID)
+	})
+	secondFixture := fixture
+	secondFixture.ItemID = secondItemID
+	for _, current := range []creativeCandidateOrchestrationFixture{fixture, secondFixture} {
+		for index := 1; index <= 4; index++ {
+			variantID := createCreativeCandidateOrchestrationVariant(
+				t, current.ItemID, fmt.Sprintf("C%02d", index), "candidate", nil, "completed", "1080x1080", []string{"1080x1080"},
+			)
+			addCreativeCandidateOrchestrationAsset(t, variantID, "1080x1080", "generated")
+			addCreativeCandidateOrchestrationAsset(t, variantID, "1080x1080", "primed")
+			addCreativeCandidateOrchestrationProductionTask(t, current, variantID, "completed", "candidate_primary")
+		}
+		queued, err := testHandler.maybeQueueCreativeCandidateSelection(
+			t.Context(), parseUUID(current.ItemID), creativeOrchestrationCause{RequestedBy: parseUUID(testUserID)},
+		)
+		if err != nil || !queued {
+			t.Fatalf("queue candidate selection for item %s = %v, err %v", current.ItemID, queued, err)
+		}
+	}
+	var taskCount int
+	if err := testPool.QueryRow(t.Context(), `
+SELECT count(*)
+FROM agent_task_queue
+WHERE trigger_evidence_kind = $1
+  AND trigger_evidence_ref_id IN ($2, $3)
+  AND issue_id IS NULL
+`, creativeCandidateSelectionEvidenceKind, fixture.ItemID, secondItemID).Scan(&taskCount); err != nil {
+		t.Fatal(err)
+	}
+	if taskCount != 2 {
+		t.Fatalf("same-issue candidate comparison tasks = %d, want 2", taskCount)
+	}
+}
+
+func TestCancelTasksForIssueCancelsCandidateSelectionByContextIssue(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	fixture, task, _ := prepareCreativeCandidateSelectionTask(t, "candidate selection issue cancellation")
+	if task.IssueID.Valid {
+		t.Fatalf("candidate selection task issue_id = %s, want NULL", uuidToString(task.IssueID))
+	}
+	if err := testHandler.TaskService.CancelTasksForIssue(t.Context(), parseUUID(fixture.IssueID)); err != nil {
+		t.Fatal(err)
+	}
+	var status string
+	if err := testPool.QueryRow(t.Context(), `SELECT status FROM agent_task_queue WHERE id = $1`, task.ID).Scan(&status); err != nil {
+		t.Fatal(err)
+	}
+	if status != "cancelled" {
+		t.Fatalf("candidate selection task status after issue cancellation = %q, want cancelled", status)
 	}
 }
 

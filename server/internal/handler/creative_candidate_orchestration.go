@@ -499,9 +499,10 @@ SELECT EXISTS (
 	}
 	attr, requestedBy := creativeOrchestrationAttribution(cause, createdBy, creativeCandidateSelectionEvidenceKind, orderItemID)
 	task, err := h.Queries.WithTx(tx).CreateAgentTask(ctx, db.CreateAgentTaskParams{
-		AgentID:              reviewer.ID,
-		RuntimeID:            reviewer.RuntimeID,
-		IssueID:              issueID,
+		AgentID:   reviewer.ID,
+		RuntimeID: reviewer.RuntimeID,
+		// Candidate selection is scoped to an order item, so it must not inherit issue serialization.
+		IssueID:              pgtype.UUID{},
 		Priority:             0,
 		ForceFreshSession:    pgtype.Bool{Bool: true, Valid: true},
 		RequestingUserID:     requestedBy,

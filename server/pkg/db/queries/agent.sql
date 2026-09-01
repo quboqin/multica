@@ -283,14 +283,22 @@ WHERE p.id = $1
 RETURNING *;
 
 -- name: CancelAgentTasksByIssue :many
--- Cancels every active task on the issue and returns the affected rows so the
--- caller can reconcile each agent's status and broadcast task:cancelled events
--- (#1587). Prior :exec form silently dropped that info, so internal cancel
--- paths (issue status flips to cancelled/done, etc.) left agents stuck at
--- status="working" with no self-correction.
+-- Cancels every active task on the issue, including item-scoped candidate
+-- selection tasks whose root issue is retained in context for parallel
+-- scheduling. Returns affected rows so callers can reconcile each agent's
+-- status and broadcast task:cancelled events (#1587).
 UPDATE agent_task_queue
 SET status = 'cancelled', completed_at = now(), prepare_lease_expires_at = NULL
-WHERE issue_id = $1 AND status IN ('queued', 'dispatched', 'running', 'waiting_local_directory')
+WHERE (
+  issue_id = $1
+  OR (
+    issue_id IS NULL
+    AND context->>'type' = 'creative_domain_task'
+    AND context->>'workflow' = 'creative_candidate_selection'
+    AND context->>'issue_id' = $1::text
+  )
+)
+  AND status IN ('queued', 'dispatched', 'running', 'waiting_local_directory')
 RETURNING *;
 
 -- name: CancelAgentTasksByIssueAndAgent :many
