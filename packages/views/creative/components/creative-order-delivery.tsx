@@ -137,6 +137,24 @@ function creativeVariantDisplaySizes(variant: CreativeOrderVariant): CreativeDel
   return creativeVariantActiveExpectedSizes(variant);
 }
 
+function creativeVariantHasFailedStagingRevision(variant: CreativeOrderVariant): boolean {
+  const activeRevision = creativeVariantActiveRevision(variant);
+  const workingRevision = creativeVariantWorkingRevision(variant);
+  return activeRevision > 0
+    && workingRevision > activeRevision
+    && (variant.status === "action_required" || variant.status === "failed" || Boolean(variant.action_required));
+}
+
+function creativeVariantStagingPrimaryPreviewMissing(variant: CreativeOrderVariant): boolean {
+  if (!creativeVariantHasFailedStagingRevision(variant)) return false;
+  const revision = creativeVariantWorkingRevision(variant);
+  const primarySize = creativeVariantPrimarySize(variant);
+  return !variant.assets.some((asset) => asset.revision === revision
+    && asset.size_key === primarySize
+    && asset.status === "completed"
+    && Boolean(asset.attachment_id));
+}
+
 function creativeVariantPrimaryPreviewReady(variant: CreativeOrderVariant): boolean {
   const revision = creativeVariantWorkingRevision(variant);
   const primarySize = creativeVariantPrimarySize(variant);
@@ -771,6 +789,7 @@ function VariantCandidate({
   const productionStopped = creativeVariantHasProductionStop(variant);
   const backgroundRunning = creativeVariantHasBackgroundWorkInProgress(variant);
   const requiresRiskAcknowledgement = riskAdoption.allowed;
+  const stagingResultMissing = creativeVariantStagingPrimaryPreviewMissing(variant);
   const currentSizeAdjustment = adjustment?.variantId === variant.id ? adjustment : undefined;
   const retryAction = participatesInDelivery ? creativeVariantRetryAction(variant) : null;
   const adjustmentBadge = currentSizeAdjustment?.status.includes("已完成")
@@ -822,6 +841,10 @@ function VariantCandidate({
         <span className="absolute left-3 top-3 rounded-full border border-amber-300 bg-amber-50 px-2 py-1 text-[11px] font-medium text-amber-900 shadow-sm dark:border-amber-800 dark:bg-amber-950 dark:text-amber-200">过程图片</span>
       </> : <EmptyImage label="待成图" />}
     </button>
+    {stagingResultMissing && <p className="flex items-center gap-2 border-b bg-amber-50 px-3 py-2 text-xs text-amber-900 dark:bg-amber-950/30 dark:text-amber-100" data-testid="creative-staging-result-missing">
+      <AlertTriangle className="h-4 w-4 shrink-0" />
+      r{workingRevision} 修图结果未返回，当前展示的是 r{activeRevision} 已交付成图。
+    </p>}
     <div className="mt-auto space-y-2 p-3">
       <div className={cn("grid divide-x border text-center text-[11px] text-muted-foreground", expectedSizes.length === 1 ? "grid-cols-1" : "grid-cols-3")}>{expectedSizes.map((size) => {
         const asset = previews.find((candidate) => candidate.size_key === size);
@@ -848,7 +871,7 @@ function VariantCandidate({
       </Button>
       <Button className={cn("w-full", requiresRiskAcknowledgement && !adopted && "border-amber-300 text-amber-800 hover:bg-amber-50 dark:border-amber-800 dark:text-amber-200 dark:hover:bg-amber-950/40")} size="sm" variant={adopted ? "secondary" : requiresRiskAcknowledgement ? "outline" : "default"} disabled={adoptionDisabled} aria-describedby={descriptionId} onClick={adoptVariant}>
         {adopted ? <CheckCircle2 className="h-4 w-4" /> : <Check className="h-4 w-4" />}
-        {disabled ? "订单已结束" : busy ? "正在采用" : adopted ? "当前采用" : !participatesInDelivery ? "尚未入选" : readiness.ready ? "采用此变体" : "尚不可采用"}
+        {disabled ? "订单已结束" : busy ? "正在采用" : adopted ? "当前采用" : !participatesInDelivery ? "尚未入选" : readiness.ready ? stagingResultMissing ? `采用当前 r${activeRevision} 成图` : "采用此变体" : "尚不可采用"}
       </Button>
     </div>
     <CreativeProcessImageDialog open={processOpen} onOpenChange={setProcessOpen} variant={variant} assets={diagnostics} attachments={attachments} />
@@ -1287,6 +1310,9 @@ export function creativeVariantAdoptionReadiness(variant: CreativeOrderVariant):
   if (creativeVariantActiveRevision(variant) < 1 && creativeVariantHasProductionContinuation(variant)) {
     const generatedSizes = workingCreativeVariantSizeSet(variant, "generated");
     return { ready: false, status: `成图生成中：已完成 ${generatedSizes.size}/${expectedCount} 个尺寸` };
+  }
+  if (creativeVariantHasFailedStagingRevision(variant)) {
+    return { ready: true, status: `r${creativeVariantWorkingRevision(variant)} 制作未完成；可采用当前 r${creativeVariantActiveRevision(variant)} 成图` };
   }
   if (failedQC.length > 0) {
     const risk = creativeVariantRiskAdoptionReadiness(variant);

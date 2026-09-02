@@ -243,6 +243,94 @@ func TestCreateCreativeDirectEditAllowsMultipleDirectEditors(t *testing.T) {
 	}
 }
 
+func TestRetryCreativeOrderWorkflowFailureRetriesFailedDirectEditWithFreshSession(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	issueID := createCreativeDeliveryTestIssue(t, "Retry failed direct edit", "")
+	candidateID, _ := createDirectEditCandidate(t, testWorkspaceID, testUserID)
+	squad := createDirectEditSquadFixture(t)
+
+	created := httptest.NewRecorder()
+	testHandler.CreateCreativeDirectEdit(created, newRequest(http.MethodPost, "/api/creative/direct-edits", creativeDirectEditInput{
+		IssueID: issueID, CandidateID: candidateID, UserRequest: "移除右下角标识", TargetSize: "1080x1080", DeliveryMode: "preview", SquadID: squad.SquadID,
+	}))
+	if created.Code != http.StatusCreated {
+		t.Fatalf("CreateCreativeDirectEdit: %d %s", created.Code, created.Body.String())
+	}
+	var original creativeDirectEditResponse
+	if err := json.NewDecoder(created.Body).Decode(&original); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := testPool.Exec(t.Context(), `
+UPDATE agent_task_queue
+SET status = 'failed', completed_at = now(), failure_reason = 'agent_reported_action_required',
+    session_id = 'expired-direct-edit-session', work_dir = '/missing/direct-edit-workspace'
+WHERE id = $1
+`, original.TaskID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := testPool.Exec(t.Context(), `
+UPDATE creative_order_variant
+SET status = 'action_required',
+    brief = brief || '{"creative_direct_edit_error":{"message":"direct image edit did not register a completed target generated asset","retryable":true}}'::jsonb
+WHERE id = $1
+`, original.Variant.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	retry := httptest.NewRecorder()
+	retryRequest := withURLParams(
+		newRequest(http.MethodPost, "/api/creative/orders/"+original.Order.ID+"/workflow-failures/"+original.TaskID+"/retry", nil),
+		"id", original.Order.ID, "taskId", original.TaskID,
+	)
+	testHandler.RetryCreativeOrderWorkflowFailure(retry, retryRequest)
+	if retry.Code != http.StatusOK {
+		t.Fatalf("RetryCreativeOrderWorkflowFailure: %d %s", retry.Code, retry.Body.String())
+	}
+	var retried creativeOrderWorkflowRetryResponse
+	if err := json.NewDecoder(retry.Body).Decode(&retried); err != nil {
+		t.Fatal(err)
+	}
+	var child struct {
+		Status        string
+		Attempt       int
+		RetryOfTaskID string
+		SessionID     string
+		WorkDir       string
+		FreshSession  bool
+		Context       []byte
+	}
+	if err := testPool.QueryRow(t.Context(), `
+SELECT status, attempt, retry_of_task_id::text, COALESCE(session_id, ''), COALESCE(work_dir, ''), force_fresh_session, context
+FROM agent_task_queue
+WHERE id = $1
+`, retried.TaskID).Scan(&child.Status, &child.Attempt, &child.RetryOfTaskID, &child.SessionID, &child.WorkDir, &child.FreshSession, &child.Context); err != nil {
+		t.Fatal(err)
+	}
+	var childContext map[string]any
+	if err := json.Unmarshal(child.Context, &childContext); err != nil {
+		t.Fatal(err)
+	}
+	if child.Status != "queued" || child.Attempt != 2 || child.RetryOfTaskID != original.TaskID ||
+		child.SessionID != "" || child.WorkDir != "" || !child.FreshSession ||
+		childContext["workflow"] != "creative_direct_edit" || childContext["item_key"] != original.Variant.ID+":r2" {
+		t.Fatalf("direct edit retry child = %#v, context=%#v", child, childContext)
+	}
+	var variantStatus string
+	var hasDirectEditError bool
+	if err := testPool.QueryRow(t.Context(), `
+SELECT status, brief ? 'creative_direct_edit_error'
+FROM creative_order_variant
+WHERE id = $1
+`, original.Variant.ID).Scan(&variantStatus, &hasDirectEditError); err != nil {
+		t.Fatal(err)
+	}
+	if variantStatus != "running" || hasDirectEditError {
+		t.Fatalf("direct edit retry variant = status %q, has error %t", variantStatus, hasDirectEditError)
+	}
+}
+
 func TestQueueCreativeDirectEditAdjustmentPreservesSingleSizeAndActivates(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")

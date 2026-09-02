@@ -877,6 +877,30 @@ describe("creative order delivery selection", () => {
     expect(creativeVariantAdoptionReadiness(working).ready).toBe(false);
   });
 
+  it("labels adoption as the active delivery when a newer revision failed before its primary result arrived", () => {
+    const stagingFailed = variant("v01");
+    stagingFailed.active_revision = 1;
+    stagingFailed.staging_revision = 2;
+    stagingFailed.status = "action_required";
+    stagingFailed.assets = stagingFailed.assets.filter((asset) => !(asset.revision === 2 && asset.size_key === "1080x1080"));
+    stagingFailed.action_required = {
+      task_id: "direct-edit-task",
+      workflow: "creative_production",
+      failure_reason: "missing_direct_edit_output",
+      detail: "direct image edit did not register a completed target generated asset",
+      failed_at: "2026-08-09T10:00:00Z",
+      retryable: true,
+    };
+    const orderItem = item();
+    orderItem.variants = [stagingFailed];
+
+    expect(creativeVariantAdoptionReadiness(stagingFailed)).toEqual({ ready: true, status: "r2 制作未完成；可采用当前 r1 成图" });
+    render(<CreativeOrderDeliveryCandidates orderId="order-1" item={orderItem} source={{ label: "竞品原图", url: "https://cdn.example/source.png" }} attachments={attachmentMap(orderItem)} adoptingVariantId="" onAdopt={vi.fn()} onAssetSelect={vi.fn()} />);
+
+    expect(screen.getByTestId("creative-staging-result-missing")).toHaveTextContent("r2 修图结果未返回，当前展示的是 r1 已交付成图。");
+    expect(screen.getByRole("button", { name: "采用当前 r1 成图" })).toBeEnabled();
+  });
+
   it("never falls back to a Prime asset when the current delivery is incomplete", () => {
     const candidate = variant("v01");
     candidate.assets = candidate.assets.filter((asset) => !(asset.revision === 2 && asset.stage === "delivered" && asset.size_key === "800x1000"));

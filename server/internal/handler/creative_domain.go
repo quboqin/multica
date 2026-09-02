@@ -1409,10 +1409,10 @@ WHERE variant.id = $1 AND order_row.id = $2 AND order_row.workspace_id = $3
 	})
 }
 
-// RetryCreativeOrderWorkflowFailure requeues a completed direct creative task
-// only when its target variant has not reached a usable terminal state. This is
-// separate from issue rerun because creative domain fanout tasks are
-// intentionally unbound from issues.
+// RetryCreativeOrderWorkflowFailure requeues an eligible failed or
+// action-required direct creative task only when its target variant has not
+// reached a usable terminal state. This is separate from issue rerun because
+// creative domain fanout tasks have their own execution lineage.
 func (h *Handler) RetryCreativeOrderWorkflowFailure(w http.ResponseWriter, r *http.Request) {
 	workspaceID, userID, ok := h.creativeFeedbackWorkspaceUser(w, r)
 	if !ok {
@@ -1451,10 +1451,10 @@ WHERE task.id = $2 AND task.agent_id = assigned_agent.id AND assigned_agent.work
 	// QC action-required results are resolved through the variant-level QC
 	// recovery path. A single task retry would leave the previous QC resolution
 	// in place while moving the variant back to running, which can strand the
-	// order forever.
-	var workflow string
+	// order forever. Other failed direct creative tasks can be retried here.
+	var workflow, taskStatus string
 	err = tx.QueryRow(r.Context(), `
-SELECT COALESCE(task.context->>'workflow', '')
+SELECT COALESCE(task.context->>'workflow', ''), task.status
 FROM agent_task_queue task
 JOIN agent assigned_agent ON assigned_agent.id = task.agent_id
 WHERE task.id = $1
@@ -1473,7 +1473,7 @@ WHERE task.id = $1
       )
     )
   )
-`, taskID, workspaceID, orderID).Scan(&workflow)
+	`, taskID, workspaceID, orderID).Scan(&workflow, &taskStatus)
 	if errors.Is(err, pgx.ErrNoRows) {
 		writeError(w, http.StatusConflict, "workflow failure is no longer eligible for retry")
 		return
@@ -1494,7 +1494,7 @@ WHERE task.id = $1
 	err = tx.QueryRow(r.Context(), `
 UPDATE creative_order_variant variant
 SET status = 'running',
-    brief = variant.brief - 'error_code' - 'error_message',
+    brief = variant.brief - 'error_code' - 'error_message' - 'creative_direct_edit_error',
     updated_at = now()
 FROM creative_order_item item
 JOIN agent_task_queue task ON TRUE
@@ -1511,8 +1511,12 @@ WHERE task.id = $1
       AND task.context->>'workflow' = 'creative_production'
       AND task.context ? 'qc_visual_rework'
     )
+    OR (
+      task.trigger_evidence_kind = 'creative_order_item_direct_edit'
+      AND task.context->>'workflow' = 'creative_direct_edit'
+    )
   )
-  AND task.status = 'completed'
+  AND task.status IN ('completed', 'failed')
   AND (
     task.attempt < task.max_attempts
     OR (
@@ -1547,7 +1551,12 @@ RETURNING variant.id::text
 		writeError(w, http.StatusInternalServerError, "failed to prepare workflow retry")
 		return
 	}
-	child, err := h.Queries.WithTx(tx).CreateActionRequiredRetryTask(r.Context(), taskID)
+	var child db.AgentTaskQueue
+	if taskStatus == "failed" {
+		child, err = h.Queries.WithTx(tx).CreateRetryTask(r.Context(), taskID)
+	} else {
+		child, err = h.Queries.WithTx(tx).CreateActionRequiredRetryTask(r.Context(), taskID)
+	}
 	if errors.Is(err, pgx.ErrNoRows) {
 		writeError(w, http.StatusConflict, "workflow failure is no longer eligible for retry")
 		return
@@ -1555,6 +1564,21 @@ RETURNING variant.id::text
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to retry workflow task")
 		return
+	}
+	if taskStatus == "failed" && workflow == "creative_direct_edit" {
+		// A failed direct image edit may refer to an expired daemon workspace.
+		// Its retry must create new provider state instead of resuming that run.
+		if _, err := tx.Exec(r.Context(), `
+UPDATE agent_task_queue
+SET session_id = NULL, work_dir = NULL, force_fresh_session = TRUE
+WHERE id = $1
+`, child.ID); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to reset direct edit retry session")
+			return
+		}
+		child.SessionID = pgtype.Text{}
+		child.WorkDir = pgtype.Text{}
+		child.ForceFreshSession = true
 	}
 	if child.TriggerEvidenceKind.Valid && child.TriggerEvidenceKind.String == "creative_order_item_production" && child.TriggerEvidenceRefID.Valid {
 		normalized, err := normalizeCreativeProductionFanoutItem(r.Context(), tx, workspaceID, child.TriggerEvidenceRefID, service.DirectTaskFanoutItem{Context: child.Context})
