@@ -132,8 +132,8 @@ func TestCreativeFactoryImageEditingUsesOneAgentWithWorkflowSkills(t *testing.T)
 			break
 		}
 	}
-	if directEditSkill.Version != 22 {
-		t.Fatalf("direct-edit Skill version = %d, want 22", directEditSkill.Version)
+	if directEditSkill.Version != 31 {
+		t.Fatalf("direct-edit Skill version = %d, want 31", directEditSkill.Version)
 	}
 	for index := range creativeFactoryAgentSpecs {
 		spec := &creativeFactoryAgentSpecs[index]
@@ -186,10 +186,10 @@ func TestCreativeFactoryImageEditingUsesOneAgentWithWorkflowSkills(t *testing.T)
 func TestCreativeFactoryCreativeContractTemplatesStayInSync(t *testing.T) {
 	wantVersions := map[string]int{
 		"generation_plan":     40,
-		"image_edit":          110,
+		"image_edit":          111,
 		"prime_compose":       6,
-		"direct_image_edit":   30,
-		"quality_control":     42,
+		"direct_image_edit":   31,
+		"quality_control":     43,
 		"creative_leadership": 51,
 	}
 	for _, spec := range creativeFactorySkillSpecs {
@@ -270,7 +270,7 @@ func TestCreativeFactoryCreativeContractTemplatesStayInSync(t *testing.T) {
 		"capability = 'generation_plan'; version = 40",
 		"capability = 'image_edit'; version = 111",
 		"capability = 'prime_compose'; version = 6",
-		"capability = 'direct_image_edit'; version = 30",
+		"capability = 'direct_image_edit'; version = 31",
 		"capability = 'quality_control'; version = 43",
 		"capability = 'creative_leadership'; version = 51",
 		"初始 direct_edit 由平台原子创建 revision 和 task，Leader 只恢复领域状态确认缺失的当前 revision task",
@@ -453,8 +453,8 @@ WHERE id = $1::uuid
 	if err := json.Unmarshal([]byte(configRaw), &config); err != nil {
 		t.Fatalf("decode refreshed skill config: %v", err)
 	}
-	if got := int(config["version"].(float64)); got != 30 {
-		t.Fatalf("direct-edit Skill version = %d, want 30", got)
+	if got := int(config["version"].(float64)); got != 31 {
+		t.Fatalf("direct-edit Skill version = %d, want 31", got)
 	}
 	if got := int(config["template_version"].(float64)); got != creativeFactoryTemplateVersion {
 		t.Fatalf("direct-edit template_version = %d, want %d", got, creativeFactoryTemplateVersion)
