@@ -636,7 +636,7 @@ function CreativeOrderDetail({ orderId, onBack, onBrowseOrders, backLabel }: { o
       await api.adoptCreativeOrderProcessImage(orderId, variantId, assetId);
       await queryClient.invalidateQueries({ queryKey: creativeKeys.order(wsId, orderId) });
       await queryClient.invalidateQueries({ queryKey: creativeKeys.orders(wsId) });
-      toast.success("已采用过程图片，正在重新合成并质检");
+      toast.success("已采用调整后结果，当前成图已更新");
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "采用过程图片失败");
       throw error;

@@ -319,12 +319,6 @@ function creativeDiagnosticAssetIsUnadoptedDirectEditPreview(asset: CreativeOrde
   return asset.workflow === "creative_direct_edit" && isRecord(asset.metadata) && asset.metadata.accepted === false;
 }
 
-function creativeDiagnosticAssetCanBeAdopted(asset: CreativeOrderDiagnosticAsset, adjustment: CreativeDirectAdjustmentContext | null): boolean {
-  return asset.workflow === "creative_direct_edit"
-    && asset.label.startsWith("直接改图")
-    && adjustment?.targetSize === asset.size_key;
-}
-
 function creativeVariantUnadoptedDirectEditPreview(assets: CreativeOrderDiagnosticAsset[], sizeKey: string): CreativeOrderDiagnosticAsset | undefined {
   return assets.find((asset) => asset.size_key === sizeKey && creativeDiagnosticAssetIsUnadoptedDirectEditPreview(asset))
     ?? assets.find(creativeDiagnosticAssetIsUnadoptedDirectEditPreview);
@@ -761,24 +755,24 @@ function AdoptedVariantStagingStatus({
   const diagnostics = creativeVariantDiagnosticAssets(variant);
   const [processOpen, setProcessOpen] = useState(false);
   const stagingLabel = needsAttention
-    ? t(($) => $.stagingRepair.draftNeedsAttention, { revision: workingRevision })
+    ? "调整需要处理"
     : revisionStatus === "completed"
-      ? t(($) => $.stagingRepair.awaitingReview, { revision: workingRevision })
-      : t(($) => $.stagingRepair.inProgress, { revision: workingRevision });
+      ? "调整已完成"
+      : "正在更新当前成图";
   return <section className="space-y-3 border-t bg-muted/10 px-4 py-3" data-testid="creative-adopted-staging-revision">
     <div className="flex flex-wrap items-center gap-2">
-      <Badge variant="outline">线上 r{activeRevision}</Badge>
+      <Badge variant="outline">当前成图</Badge>
       <Badge variant={needsAttention ? "secondary" : "outline"}>{stagingLabel}</Badge>
-      <p className="text-xs text-muted-foreground">线上版本继续可用，新版本通过全部检查后才会替换。</p>
+      <p className="text-xs text-muted-foreground">调整通过检查后会直接替换当前 C01。</p>
     </div>
     {needsAttention
       ? <VariantStagingDiagnostics variant={variant} details={details} />
-      : <p className="text-xs text-muted-foreground">新版本正在生成或检查，完成后会自动更新。</p>}
+      : <p className="text-xs text-muted-foreground">正在生成或检查，完成后会直接更新当前成图。</p>}
     {retryAction && onRetry && <Button size="sm" variant="outline" disabled={disabled || retrying} onClick={() => onRetry(variant, retryAction)}>
       <RefreshCw className={cn("h-4 w-4", retrying && "animate-spin")} />
       {retrying
         ? t(($) => $.stagingRepair.retrying)
-        : `${retryAction.kind === "qc" ? t(($) => $.stagingRepair.rerunQC) : retryAction.label} · r${workingRevision}`}
+        : `${retryAction.kind === "qc" ? t(($) => $.stagingRepair.rerunQC) : retryAction.label}`}
     </Button>}
     {diagnostics.length > 0 && <Button size="sm" variant="outline" onClick={() => setProcessOpen(true)}><ImageIcon className="h-4 w-4" />查看过程图片</Button>}
     <CreativeProcessImageDialog
@@ -885,9 +879,9 @@ function VariantCandidate({
     <div className="flex items-center justify-between gap-2 border-b px-3 py-2">
       <div className="flex min-w-0 flex-wrap items-center gap-2">
         <span className="text-sm font-semibold">{variant.variant_key || variant.id.slice(0, 8)}</span>
-        {activeRevision > 0 && <Badge variant="outline">线上 r{activeRevision}</Badge>}
-        {hasStagingRevision && <Badge variant="secondary">{t(($) => $.stagingRepair.stagingDraft, { revision: workingRevision })}</Badge>}
-        {activeRevision < 1 && workingRevision > 0 && <Badge variant="outline">r{workingRevision}</Badge>}
+        {activeRevision > 0 && <Badge variant="outline">当前成图</Badge>}
+        {hasStagingRevision && <Badge variant="secondary">正在更新</Badge>}
+        {activeRevision < 1 && workingRevision > 0 && <Badge variant="outline">生成中</Badge>}
         {candidateState !== "selected" && <Badge variant="outline">{creativeVariantCandidateStateLabel(candidateState, variant.selection_rank)}</Badge>}
         {candidateState === "selected" && (variant.selection_rank ?? 0) > 0 && <Badge variant="outline">第 {variant.selection_rank} 名</Badge>}
         {currentSizeAdjustment && <span className="truncate text-xs text-amber-800 dark:text-amber-200">{CREATIVE_DELIVERY_SIZE_LABELS[currentSizeAdjustment.sizeKey as (typeof CREATIVE_DELIVERY_SIZES)[number]] ?? currentSizeAdjustment.sizeKey} {currentSizeAdjustment.status}</span>}
@@ -902,7 +896,7 @@ function VariantCandidate({
     </button>
     {stagingResultMissing && <p className="flex items-center gap-2 border-b bg-amber-50 px-3 py-2 text-xs text-amber-900 dark:bg-amber-950/30 dark:text-amber-100" data-testid="creative-staging-result-missing">
       <AlertTriangle className="h-4 w-4 shrink-0" />
-      r{workingRevision} 修图结果未返回，当前展示的是 r{activeRevision} 已交付成图。
+      调整结果尚未返回，当前仍展示已交付成图。
     </p>}
     <div className="mt-auto space-y-2 p-3">
       <div className={cn("grid divide-x border text-center text-[11px] text-muted-foreground", expectedSizes.length === 1 ? "grid-cols-1" : "grid-cols-3")}>{expectedSizes.map((size) => {
@@ -925,7 +919,7 @@ function VariantCandidate({
         {retrying
           ? t(($) => $.stagingRepair.retrying)
           : hasStagingRevision
-            ? `${retryAction.kind === "qc" ? t(($) => $.stagingRepair.rerunQC) : retryAction.label} · r${workingRevision}`
+            ? `${retryAction.kind === "qc" ? t(($) => $.stagingRepair.rerunQC) : retryAction.label}`
             : retryAction.kind === "qc" ? t(($) => $.stagingRepair.rerunQC) : retryAction.label}
       </Button>}
       <Button className="w-full" size="sm" variant="outline" disabled={!cover || !coverURL} onClick={() => { if (cover && coverURL) onAssetSelect(cover.id); }}>
@@ -967,7 +961,7 @@ function CreativeProcessImageDialog({
   onAdopt?: (asset: CreativeOrderDiagnosticAsset) => Promise<void>;
 }) {
   const adjustment = creativeVariantDirectAdjustmentContext(variant);
-  const comparison = creativeProcessComparisonCards(variant, attachments, adjustment);
+  const comparison = creativeProcessComparisonCards(variant, attachments, adjustment, assets);
   const groups = creativeProcessDiagnosticGroups(assets, adjustment);
   const [adoptingAssetId, setAdoptingAssetId] = useState("");
   const adopt = async (asset: CreativeOrderDiagnosticAsset) => {
@@ -1002,7 +996,13 @@ function CreativeProcessImageDialog({
                     <p className="truncate text-xs font-medium">{card.title}</p>
                     <p className="mt-0.5 truncate text-[11px] text-muted-foreground">{creativeProcessSizeLabel(card.sizeKey)} · r{card.revision} · {creativeProcessTimeLabel(card.updatedAt)}</p>
                   </div>
-                  <Button size="icon-sm" variant="ghost" title="打开图片" aria-label={`打开${card.title}`} onClick={() => openCreativeProcessURL(card.url)}><ExternalLink className="h-4 w-4" /></Button>
+                  <div className="flex shrink-0 items-center gap-1">
+                    {onAdopt && card.adoptableAssetId && <Button size="sm" variant="outline" disabled={disabled || Boolean(adoptingAssetId)} onClick={() => {
+                      const asset = assets.find((candidate) => candidate.id === card.adoptableAssetId);
+                      if (asset) void adopt(asset);
+                    }}>{adoptingAssetId === card.adoptableAssetId ? "正在采用" : "采用此结果"}</Button>}
+                    <Button size="icon-sm" variant="ghost" title="打开图片" aria-label={`打开${card.title}`} onClick={() => openCreativeProcessURL(card.url)}><ExternalLink className="h-4 w-4" /></Button>
+                  </div>
                 </figcaption>
                 <button type="button" className="flex min-h-72 w-full items-center justify-center bg-muted/10 p-3" onClick={() => openCreativeProcessURL(card.url)}>
                   <img src={card.url} alt={`${variant.variant_key} ${card.title} ${card.sizeKey}`} width={1200} height={1200} loading="lazy" className="max-h-[520px] w-full object-contain" />
@@ -1023,10 +1023,7 @@ function CreativeProcessImageDialog({
                     <p className="mt-0.5 truncate text-[11px] text-muted-foreground">r{asset.revision} · {creativeDiagnosticAssetLabel(asset)} · {creativeProcessTimeLabel(asset.updated_at || asset.created_at)}</p>
                     <p className="mt-0.5 truncate text-[11px] text-muted-foreground">{asset.filename}</p>
                   </div>
-                  <div className="flex shrink-0 items-center gap-1">
-                    {onAdopt && creativeDiagnosticAssetCanBeAdopted(asset, adjustment) && <Button size="sm" variant="outline" disabled={disabled || Boolean(adoptingAssetId)} onClick={() => void adopt(asset)}>{adoptingAssetId === asset.id ? "正在采用" : "采用此图"}</Button>}
-                    <Button size="icon-sm" variant="ghost" title="打开原图" aria-label={`打开过程图片 ${asset.filename}`} onClick={() => openCreativeDiagnosticAsset(asset)}><ExternalLink className="h-4 w-4" /></Button>
-                  </div>
+                  <Button size="icon-sm" variant="ghost" title="打开原图" aria-label={`打开过程图片 ${asset.filename}`} onClick={() => openCreativeDiagnosticAsset(asset)}><ExternalLink className="h-4 w-4" /></Button>
                 </figcaption>
                 <button type="button" className="flex min-h-72 w-full items-center justify-center bg-muted/10 p-3" onClick={() => openCreativeDiagnosticAsset(asset)}>
                   <img src={asset.url} alt={`${variant.variant_key} ${asset.label} ${asset.size_key}`} width={1200} height={1200} loading="lazy" className="max-h-[520px] w-full object-contain" />
@@ -1052,6 +1049,7 @@ type CreativeProcessComparisonCard = {
   revision: number;
   updatedAt: string;
   url: string;
+  adoptableAssetId?: string;
 };
 
 type CreativeProcessDiagnosticGroup = {
@@ -1071,13 +1069,20 @@ function creativeProcessComparisonCards(
   variant: CreativeOrderVariant,
   attachments: Map<string, DeliveryAttachment>,
   adjustment: CreativeDirectAdjustmentContext | null,
+  diagnostics: CreativeOrderDiagnosticAsset[],
 ): CreativeProcessComparisonCard[] {
   if (!adjustment) return [];
   const before = creativeProcessReferenceAsset(variant, adjustment.targetSize, adjustment.sourceRevision);
   const after = creativeProcessReferenceAsset(variant, adjustment.targetSize, variant.revision);
+  const composedDiagnostic = diagnostics.find((asset) => asset.size_key === adjustment.targetSize
+    && asset.revision === variant.revision
+    && asset.workflow === "brand_components"
+    && asset.label === "Prime 合成成图");
   return [
     before ? creativeProcessComparisonCard("before", "调整前原图", before, attachments) : null,
-    after ? creativeProcessComparisonCard("after", "调整后结果", after, attachments) : null,
+    composedDiagnostic
+      ? creativeProcessDiagnosticComparisonCard("after", "调整后结果", composedDiagnostic)
+      : after ? creativeProcessComparisonCard("after", "调整后结果", after, attachments) : null,
   ].filter((card): card is CreativeProcessComparisonCard => Boolean(card?.url));
 }
 
@@ -1090,10 +1095,23 @@ function creativeProcessReferenceAsset(variant: CreativeOrderVariant, sizeKey: s
   return candidates[0];
 }
 
-function creativeProcessComparisonCard(key: string, title: string, asset: CreativeOrderAsset, attachments: Map<string, DeliveryAttachment>): CreativeProcessComparisonCard | null {
+function creativeProcessComparisonCard(key: string, title: string, asset: CreativeOrderAsset, attachments: Map<string, DeliveryAttachment>, adoptableAssetId?: string): CreativeProcessComparisonCard | null {
   const url = creativeAttachmentBrowserURL(attachments.get(asset.attachment_id));
   if (!url) return null;
-  return { key, title, sizeKey: asset.size_key, revision: asset.revision, updatedAt: asset.updated_at || asset.created_at, url };
+  return { key, title, sizeKey: asset.size_key, revision: asset.revision, updatedAt: asset.updated_at || asset.created_at, url, adoptableAssetId };
+}
+
+function creativeProcessDiagnosticComparisonCard(key: string, title: string, asset: CreativeOrderDiagnosticAsset): CreativeProcessComparisonCard | null {
+  if (!asset.url) return null;
+  return {
+    key,
+    title,
+    sizeKey: asset.size_key,
+    revision: asset.revision,
+    updatedAt: asset.updated_at || asset.created_at,
+    url: asset.url,
+    adoptableAssetId: asset.id,
+  };
 }
 
 function creativeProcessAssetStageRank(stage: string): number {
@@ -1219,15 +1237,13 @@ function VariantCompactDiagnostics({ variant, details, disabled = false }: { var
 }
 
 function VariantStagingDiagnostics({ variant, details }: { variant: CreativeOrderVariant; details: CreativeVariantQCDetail[] }) {
-  const { t } = useT("creative");
   if (!creativeVariantStagingNeedsAttention(variant)) return null;
-  const revision = creativeVariantWorkingRevision(variant);
   const blocker = variant.action_required;
   const detail = blocker?.detail
     ? creativeVariantBlockerDetail(variant)
-    : t(($) => $.stagingRepair.noDetail, { revision });
+    : "调整结果需要处理。";
   return <div className="space-y-2 border border-amber-300 bg-amber-50 px-2 py-2 text-xs text-amber-900 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-200" data-testid="creative-staging-revision-diagnostics">
-    <p className="flex items-center gap-1.5 font-medium"><AlertTriangle className="h-3.5 w-3.5" />{t(($) => $.stagingRepair.needsAttention, { revision })}</p>
+    <p className="flex items-center gap-1.5 font-medium"><AlertTriangle className="h-3.5 w-3.5" />调整需要处理</p>
     <p className="break-words">{detail}</p>
     <VariantQCDetails details={details} />
   </div>;

@@ -5049,3 +5049,177 @@ VALUES ($1, $2, 'test', 'completed', 'member', $3) RETURNING id::text`, testWork
 		t.Fatalf("unlinked crawl evidence = %d %s", w.Code, w.Body.String())
 	}
 }
+
+func TestPromoteCreativeOrderDiagnosticAssetActivatesComposedDirectEditResult(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	issueID, candidateID := createCreativeFeedbackCandidate(t, "composed direct-edit promotion")
+	const targetSize = "1080x1080"
+	inputSnapshot := `{"expected_sizes":["1080x1080","1200x628","800x1000"]}`
+	brief := `{"creative_direct_edit_delivery":{"scope":"size","target_size":"1080x1080","final_visual_validation":true}}`
+	var orderID, itemID, variantID string
+	if err := testPool.QueryRow(t.Context(), `
+INSERT INTO creative_order (workspace_id, issue_id, status, input_snapshot, trigger_evidence_kind, created_by)
+VALUES ($1, $2, 'partial', $3::jsonb, 'creative_direct_edit', $4)
+RETURNING id::text
+`, testWorkspaceID, issueID, inputSnapshot, testUserID).Scan(&orderID); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _, _ = testPool.Exec(t.Context(), `DELETE FROM creative_order WHERE id = $1`, orderID) })
+	if err := testPool.QueryRow(t.Context(), `
+INSERT INTO creative_order_item (order_id, candidate_id, copy_snapshot, status)
+VALUES ($1, $2, '{}'::jsonb, 'completed')
+RETURNING id::text
+`, orderID, candidateID).Scan(&itemID); err != nil {
+		t.Fatal(err)
+	}
+	if err := testPool.QueryRow(t.Context(), `
+INSERT INTO creative_order_variant (
+  order_item_id, variant_key, brief, revision, active_revision, staging_revision, status, candidate_state
+)
+VALUES ($1, 'C01', $2::jsonb, 2, 1, 2, 'action_required', 'selected')
+RETURNING id::text
+`, itemID, brief).Scan(&variantID); err != nil {
+		t.Fatal(err)
+	}
+	for revision, status := range map[int]string{1: "completed", 2: "action_required"} {
+		activatedAt := "NULL"
+		if revision == 1 {
+			activatedAt = "now()"
+		}
+		if _, err := testPool.Exec(t.Context(), `
+INSERT INTO creative_order_variant_revision (variant_id, revision, brief, status, expected_sizes, activated_at)
+VALUES ($1, $2, $3::jsonb, $4, $5::text[], `+activatedAt+`)
+`, variantID, revision, brief, status, standardCreativeAssetSizes); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	primedAttachments := make(map[string]string, len(standardCreativeAssetSizes))
+	for _, size := range standardCreativeAssetSizes {
+		generatedAttachmentID := createCreativeFeedbackAsset(t)
+		var generatedAssetID string
+		if err := testPool.QueryRow(t.Context(), `
+INSERT INTO creative_order_asset (variant_id, size_key, revision, stage, attachment_id, status)
+VALUES ($1, $2, 1, 'generated', $3, 'completed')
+RETURNING id::text
+`, variantID, size, generatedAttachmentID).Scan(&generatedAssetID); err != nil {
+			t.Fatal(err)
+		}
+		primedAttachmentID := createCreativeFeedbackAsset(t)
+		var primedAssetID string
+		if err := testPool.QueryRow(t.Context(), `
+INSERT INTO creative_order_asset (variant_id, size_key, revision, stage, attachment_id, derived_from_asset_id, status)
+VALUES ($1, $2, 1, 'primed', $3, $4, 'completed')
+RETURNING id::text
+`, variantID, size, primedAttachmentID, generatedAssetID).Scan(&primedAssetID); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := testPool.Exec(t.Context(), `
+INSERT INTO creative_order_asset (variant_id, size_key, revision, stage, attachment_id, derived_from_asset_id, status)
+VALUES ($1, $2, 1, 'delivered', $3, $4, 'completed')
+`, variantID, size, primedAttachmentID, primedAssetID); err != nil {
+			t.Fatal(err)
+		}
+
+		replacementBaseID := createCreativeFeedbackAsset(t)
+		var replacementBaseAssetID string
+		if err := testPool.QueryRow(t.Context(), `
+INSERT INTO creative_order_asset (variant_id, size_key, revision, stage, attachment_id, status)
+VALUES ($1, $2, 2, 'generated', $3, 'completed')
+RETURNING id::text
+`, variantID, size, replacementBaseID).Scan(&replacementBaseAssetID); err != nil {
+			t.Fatal(err)
+		}
+		if size == targetSize {
+			continue
+		}
+		primedAttachments[size] = createCreativeFeedbackAsset(t)
+		if _, err := testPool.Exec(t.Context(), `
+INSERT INTO creative_order_asset (variant_id, size_key, revision, stage, attachment_id, derived_from_asset_id, status)
+VALUES ($1, $2, 2, 'primed', $3, $4, 'completed')
+`, variantID, size, primedAttachments[size], replacementBaseAssetID); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	composedAttachmentID := createCreativeFeedbackAsset(t)
+	var composedDiagnosticID, rawDiagnosticID string
+	if err := testPool.QueryRow(t.Context(), `
+INSERT INTO creative_order_diagnostic_asset (
+  variant_id, attachment_id, size_key, revision, workflow, label, filename, metadata
+)
+VALUES ($1, $2, $3, 2, 'brand_components', 'Prime 合成成图', 'composed-adjustment.png', '{}'::jsonb)
+RETURNING id::text
+`, variantID, composedAttachmentID, targetSize).Scan(&composedDiagnosticID); err != nil {
+		t.Fatal(err)
+	}
+	if err := testPool.QueryRow(t.Context(), `
+INSERT INTO creative_order_diagnostic_asset (
+  variant_id, attachment_id, size_key, revision, workflow, label, filename, metadata
+)
+VALUES ($1, $2, $3, 2, 'creative_direct_edit', '直接改图结果', 'uncomposed-adjustment.png', '{}'::jsonb)
+RETURNING id::text
+`, variantID, createCreativeFeedbackAsset(t), targetSize).Scan(&rawDiagnosticID); err != nil {
+		t.Fatal(err)
+	}
+
+	reject := httptest.NewRecorder()
+	rejectRequest := withURLParams(newRequest(http.MethodPost, "/api/creative/orders/"+orderID+"/variants/"+variantID+"/process-images/"+rawDiagnosticID+"/adopt", nil),
+		"id", orderID, "variantId", variantID, "assetId", rawDiagnosticID)
+	testHandler.PromoteCreativeOrderDiagnosticAsset(reject, rejectRequest)
+	if reject.Code != http.StatusConflict {
+		t.Fatalf("uncomposed process image adoption = %d %s", reject.Code, reject.Body.String())
+	}
+
+	w := httptest.NewRecorder()
+	req := withURLParams(newRequest(http.MethodPost, "/api/creative/orders/"+orderID+"/variants/"+variantID+"/process-images/"+composedDiagnosticID+"/adopt", nil),
+		"id", orderID, "variantId", variantID, "assetId", composedDiagnosticID)
+	testHandler.PromoteCreativeOrderDiagnosticAsset(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("PromoteCreativeOrderDiagnosticAsset: %d %s", w.Code, w.Body.String())
+	}
+
+	var status string
+	var activeRevision, stagingRevision int
+	if err := testPool.QueryRow(t.Context(), `
+SELECT status, active_revision, COALESCE(staging_revision, 0)
+FROM creative_order_variant
+WHERE id = $1
+`, variantID).Scan(&status, &activeRevision, &stagingRevision); err != nil {
+		t.Fatal(err)
+	}
+	if status != "completed" || activeRevision != 2 || stagingRevision != 0 {
+		t.Fatalf("composed adjustment lifecycle = status %q active r%d staging r%d", status, activeRevision, stagingRevision)
+	}
+
+	delivered := map[string]string{}
+	rows, err := testPool.Query(t.Context(), `
+SELECT size_key, attachment_id::text
+FROM creative_order_asset
+WHERE variant_id = $1 AND revision = 2 AND stage = 'delivered' AND status = 'completed'
+`, variantID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var size, attachmentID string
+		if err := rows.Scan(&size, &attachmentID); err != nil {
+			t.Fatal(err)
+		}
+		delivered[size] = attachmentID
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if len(delivered) != len(standardCreativeAssetSizes) || delivered[targetSize] != composedAttachmentID {
+		t.Fatalf("composed adjustment delivered package = %#v", delivered)
+	}
+	for _, size := range []string{"1200x628", "800x1000"} {
+		if delivered[size] != primedAttachments[size] {
+			t.Fatalf("composed adjustment retained %s = %q, want %q", size, delivered[size], primedAttachments[size])
+		}
+	}
+}

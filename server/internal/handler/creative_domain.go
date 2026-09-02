@@ -4689,9 +4689,9 @@ RETURNING id::text, variant_id::text, COALESCE(task_id::text, ''), attachment_id
 	writeJSON(w, http.StatusOK, asset)
 }
 
-// PromoteCreativeOrderDiagnosticAsset adopts an explicitly selected direct
-// image-edit process result as the new generated base. The image still has to
-// pass backend Prime composition and visual QC before the revision activates.
+// PromoteCreativeOrderDiagnosticAsset adopts the completed Prime composition
+// of a direct image edit. The composed asset is already the final result, so
+// it replaces the active delivery package without another composition pass.
 func (h *Handler) PromoteCreativeOrderDiagnosticAsset(w http.ResponseWriter, r *http.Request) {
 	workspaceID, userID, ok := h.creativeFeedbackWorkspaceUser(w, r)
 	if !ok {
@@ -4761,8 +4761,8 @@ FOR UPDATE OF diagnostic, variant
 		writeError(w, http.StatusUnprocessableEntity, "process image does not belong to this creative variant")
 		return
 	}
-	if candidate.Workflow != "creative_direct_edit" || !strings.HasPrefix(candidate.Label, "直接改图") {
-		writeError(w, http.StatusConflict, "only a direct image-edit process result can be adopted")
+	if candidate.Workflow != "brand_components" || candidate.Label != "Prime 合成成图" {
+		writeError(w, http.StatusConflict, "only a composed direct image-edit result can be adopted")
 		return
 	}
 	delivery := parseCreativeDirectEditDeliveryConfig(json.RawMessage(brief))
@@ -4788,16 +4788,16 @@ FOR UPDATE OF diagnostic, variant
 		writeError(w, http.StatusUnprocessableEntity, "repair candidate size is outside this creative variant's delivery scope")
 		return
 	}
-	// A candidate is selected after an action-required QC resolution. Reopen
-	// the same revision so the replacement gets fresh visual QC.
+	// A composed direct-edit result has already passed the deterministic Prime
+	// step. It becomes the final delivery package directly, so stale QC state
+	// and failed composition recovery cannot reopen this revision afterward.
 	if _, err := tx.Exec(r.Context(), `
 UPDATE agent_task_queue
-SET context = COALESCE(context, '{}'::jsonb) || '{"superseded_by_candidate":true}'::jsonb
-WHERE trigger_evidence_kind = 'creative_order_variant_qc'
-  AND trigger_evidence_ref_id = $1
+SET context = COALESCE(context, '{}'::jsonb) || '{"superseded_by_process_result":true}'::jsonb
+WHERE context->>'variant_id' = $1::text
   AND COALESCE(NULLIF(context->>'revision', '')::int, 1) = $2
 `, variantID, candidate.Revision); err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to supersede previous creative QC tasks")
+		writeError(w, http.StatusInternalServerError, "failed to supersede previous creative tasks")
 		return
 	}
 	if _, err := tx.Exec(r.Context(), `
@@ -4814,14 +4814,6 @@ WHERE variant_id = $1 AND revision = $2
 		writeError(w, http.StatusInternalServerError, "failed to reset previous creative QC resolution")
 		return
 	}
-	if _, err := tx.Exec(r.Context(), `
-DELETE FROM creative_order_asset
-WHERE variant_id = $1 AND revision = $2 AND stage = 'primed' AND size_key = $3
-`, variantID, candidate.Revision, candidate.SizeKey); err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to invalidate previous Prime asset")
-		return
-	}
-
 	var sourceAssetID, assetFamilyID pgtype.UUID
 	var sourceRevision int
 	if err := tx.QueryRow(r.Context(), `
@@ -4829,27 +4821,27 @@ SELECT id, asset_family_id, revision
 FROM creative_order_asset
 WHERE variant_id = $1
   AND size_key = $2
+  AND revision = $3
   AND stage = 'generated'
   AND status = 'completed'
-  AND revision < $3
-ORDER BY revision DESC
-LIMIT 1
+  AND attachment_id IS NOT NULL
+FOR UPDATE
 `, variantID, candidate.SizeKey, candidate.Revision).Scan(&sourceAssetID, &assetFamilyID, &sourceRevision); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			writeError(w, http.StatusConflict, "repair candidate has no generated source asset")
+			writeError(w, http.StatusConflict, "composed adjustment result has no generated base")
 			return
 		}
-		writeError(w, http.StatusInternalServerError, "failed to load repair candidate source asset")
+		writeError(w, http.StatusInternalServerError, "failed to load composed adjustment base")
 		return
 	}
 	var generated creativeOrderAssetResponse
 	var generatedMetadata, generatedEvidence string
-	err = tx.QueryRow(r.Context(), `
+	if err := tx.QueryRow(r.Context(), `
 INSERT INTO creative_order_asset (
   variant_id, asset_family_id, size_key, revision, stage, attachment_id,
   derived_from_asset_id, metadata, evidence, status
 )
-VALUES ($1,$2,$3,$4,'generated',$5,$6,$7::jsonb,$8::jsonb,'completed')
+VALUES ($1,$2,$3,$4,'primed',$5,$6,$7::jsonb,$8::jsonb,'completed')
 ON CONFLICT (variant_id, size_key, revision, stage) DO UPDATE SET
   asset_family_id = EXCLUDED.asset_family_id,
   attachment_id = EXCLUDED.attachment_id,
@@ -4861,20 +4853,13 @@ ON CONFLICT (variant_id, size_key, revision, stage) DO UPDATE SET
 RETURNING id::text, variant_id::text, asset_family_id::text, size_key, revision,
   stage, COALESCE(attachment_id::text, ''), COALESCE(derived_from_asset_id::text, ''),
   metadata::text, evidence::text, status, created_at::text, updated_at::text
-	`, variantID, assetFamilyID, candidate.SizeKey, candidate.Revision, parseUUID(candidate.AttachmentID), sourceAssetID,
-		json.RawMessage(fmt.Sprintf(`{"repair_candidate":{"method":%q,"diagnostic_asset_id":%q,"source_revision":%d}}`,
-			selectedMethod, uuidToString(diagnosticAssetID), sourceRevision)),
-		json.RawMessage(fmt.Sprintf(`{"repair_comparison":{"selected_method":%q,"diagnostic_asset_id":%q,"source_asset_id":%q}}`,
-			selectedMethod, uuidToString(diagnosticAssetID), uuidToString(sourceAssetID))),
+`, variantID, assetFamilyID, candidate.SizeKey, candidate.Revision, parseUUID(candidate.AttachmentID), sourceAssetID,
+		json.RawMessage(fmt.Sprintf(`{"adopted_process_result":%q,"diagnostic_asset_id":%q}`, selectedMethod, uuidToString(diagnosticAssetID))),
+		json.RawMessage(fmt.Sprintf(`{"adopted_process_result":%q,"diagnostic_asset_id":%q,"source_asset_id":%q}`, selectedMethod, uuidToString(diagnosticAssetID), uuidToString(sourceAssetID))),
 	).Scan(&generated.ID, &generated.VariantID, &generated.AssetFamilyID, &generated.SizeKey, &generated.Revision,
 		&generated.Stage, &generated.AttachmentID, &generated.DerivedFromAssetID, &generatedMetadata,
-		&generatedEvidence, &generated.Status, &generated.CreatedAt, &generated.UpdatedAt)
-	if err != nil {
-		if isUniqueViolation(err) {
-			writeError(w, http.StatusConflict, "a repair candidate has already been promoted for this size")
-			return
-		}
-		writeError(w, http.StatusInternalServerError, "failed to promote repair candidate")
+		&generatedEvidence, &generated.Status, &generated.CreatedAt, &generated.UpdatedAt); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to restore composed adjustment result")
 		return
 	}
 	generated.Metadata = json.RawMessage(generatedMetadata)
@@ -4892,16 +4877,33 @@ WHERE variant_id = $1 AND revision = $2 AND size_key = $3
 UPDATE creative_order_diagnostic_asset
 SET metadata = metadata || $2::jsonb, updated_at = now()
 WHERE id = $1
-`, diagnosticAssetID, selectedMetadata); err != nil {
+	`, diagnosticAssetID, selectedMetadata); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to record selected repair candidate")
 		return
 	}
 	if _, err := tx.Exec(r.Context(), `
+UPDATE creative_prime_composition_job
+SET status = 'cancelled', completed_at = COALESCE(completed_at, now()), updated_at = now()
+WHERE variant_id = $1 AND revision = $2 AND status <> 'completed'
+`, variantID, candidate.Revision); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to stop obsolete Prime composition")
+		return
+	}
+	if _, err := tx.Exec(r.Context(), `
 UPDATE creative_order_variant
-SET status = 'running', updated_at = now()
+SET brief = brief - 'brand_composition_error' - 'creative_qc_handoff_error' - 'creative_direct_edit_error' - 'prime_composition_pending',
+    updated_at = now()
 WHERE id = $1 AND revision = $2
 `, variantID, candidate.Revision); err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to resume creative variant")
+		writeError(w, http.StatusInternalServerError, "failed to clear replaced creative state")
+		return
+	}
+	if _, err := copyCreativePrimedAssetsToDelivered(r.Context(), tx, variantID, candidate.Revision, expectedSizes); err != nil {
+		writeError(w, http.StatusConflict, err.Error())
+		return
+	}
+	if err := activateCreativeVariantRevision(r.Context(), tx, variantID, candidate.Revision, expectedSizes); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to activate composed adjustment result")
 		return
 	}
 	if _, err := tx.Exec(r.Context(), `UPDATE creative_order SET updated_at = now() WHERE id = $1`, orderID); err != nil {
@@ -4913,32 +4915,17 @@ WHERE id = $1 AND revision = $2
 		return
 	}
 
-	compositionStarted := false
-	_, jobStatus, generatedComplete, queueErr := h.queueCreativePrimeComposition(
-		context.WithoutCancel(r.Context()), workspaceID, orderID, variantID, false,
-	)
-	if queueErr != nil {
-		var immutableErr *creativePrimeImmutableRevisionError
-		var cancelledErr *creativePrimeCancelledError
-		if !errors.As(queueErr, &immutableErr) && !errors.As(queueErr, &cancelledErr) {
-			h.markCreativePrimeCompositionFailed(context.WithoutCancel(r.Context()), variantID, queueErr)
-		}
-	} else {
-		compositionStarted = generatedComplete && (jobStatus == "queued" || jobStatus == "running" || jobStatus == "completed")
-	}
 	candidate.Metadata = selectedMetadata
+	h.notifyCreativeDirectAdjustmentDelivery(context.WithoutCancel(r.Context()), workspaceID, orderID, variantID, candidate.Revision, candidate.SizeKey)
 	h.publishCreativeDomainUpdated(r, workspaceID, userID, map[string]any{"scope": "order", "order_id": chi.URLParam(r, "id")})
 	writeJSON(w, http.StatusOK, creativeOrderDiagnosticPromotionResponse{
 		Candidate: candidate, Generated: generated, VariantID: uuidToString(variantID),
-		Revision: candidate.Revision, SelectedMethod: selectedMethod, CompositionStarted: compositionStarted,
+		Revision: candidate.Revision, SelectedMethod: selectedMethod, CompositionStarted: false,
 	})
 }
 
 func creativeProcessImageAdoptionMethod(candidate creativeOrderDiagnosticAsset) string {
-	if candidate.Workflow == "creative_direct_edit" {
-		return "direct_edit_process_image"
-	}
-	return "diagnostic_process_image"
+	return "direct_edit_composed_result"
 }
 
 func (h *Handler) UpsertCreativeOrderQC(w http.ResponseWriter, r *http.Request) {
@@ -8042,6 +8029,7 @@ WITH ranked AS (
   JOIN agent a ON a.id = q.agent_id
   JOIN creative_order o ON o.id = $1 AND o.workspace_id = a.workspace_id
   WHERE q.context->>'type' = 'creative_domain_task'
+    AND COALESCE(q.context->>'superseded_by_process_result', 'false') <> 'true'
     AND (
       q.context->>'creative_order_id' = o.id::text
       OR (
