@@ -31,7 +31,7 @@
 | 候选/晋级生产 | `creative_order_item_production` | Order Item | variant + revision + production stage |
 | 候选晋级 | `creative_order_item_candidate_selection` | Order Item | `candidate-selection:v1` |
 | QC | `creative_order_variant_qc` | Variant | variant + lane + revision |
-| 直接改图 | `creative_order_item_direct_edit` | Order Item | variant + target revision；source revision 固定为 target revision - 1 |
+| 直接改图 | `creative_order_item_direct_edit` | Order Item | variant + target revision；source revision 指向当前 active revision，通常为 target revision - 1；中间 staging 已废弃时可跨过已废弃版本 |
 
 Source Analysis 写回的 `trigger_evidence_kind=crawl_run` 是领域来源，不是 task source kind。
 

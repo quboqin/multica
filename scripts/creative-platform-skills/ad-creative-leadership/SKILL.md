@@ -86,7 +86,7 @@ snapshot 必须含 `direct_edit_agent_id`、`reviewer_agent_id`；task context �
 target/expected sizes、delivery mode、`revision` 和 `source_revision`。
 
 只有人工重试或异常恢复时，才能补真正缺失的 direct-edit task。恢复前必须同时确认：Variant 当前 `revision` 与
-`staging_revision` 一致、`source_revision = revision - 1` 且不小于 1、source asset/attachment 属于该 Variant 的
+`staging_revision` 一致、`source_revision` 为不小于 1 且严格小于 target `revision` 的当前 active source（正常时为 `revision - 1`；若中间 staging 已废弃则保持 active source）、source asset/attachment 属于该 Variant 的
 source revision 和目标尺寸、当前 item key 没有 active/succeeded task、当前 revision 也没有已经登记的有效 generated 输出。
 恢复 task 必须沿用当前 revision/source_revision 和现有 source lineage，不能新建 revision、不能从旧 R1 壳或 Issue 文本猜字段，
 也不能因通知遗漏而重复调用图像模型。preview 到 generated 后由平台收敛 revision；publish 由后端重新执行确定性品牌组件合成并进入最终视觉 QC，

@@ -1079,7 +1079,7 @@ func validateCreativeDirectEditTaskContext(context map[string]any, itemKey strin
 		return errors.New("creative direct-edit publish task requires final_visual_validation")
 	}
 	sourceRevision, ok := context["source_revision"].(float64)
-	if !ok || sourceRevision < 1 || sourceRevision != float64(int(sourceRevision)) || int(sourceRevision) != int(revision)-1 {
+	if !ok || sourceRevision < 1 || sourceRevision != float64(int(sourceRevision)) || int(sourceRevision) >= int(revision) {
 		return errors.New("creative direct-edit task context source_revision is invalid")
 	}
 	for _, field := range []string{"source_asset_id", "source_attachment_id", "reviewer_agent_id"} {

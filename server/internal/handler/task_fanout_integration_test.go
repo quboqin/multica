@@ -80,6 +80,15 @@ func TestValidateCreativeDirectEditTaskContextRequiresUnbrandedBaseAndTargetScop
 	if err := validateCreativeDirectEditTaskContext(context, variantID+":r2"); err == nil {
 		t.Fatal("direct edit context without unbranded source was accepted")
 	}
+	context["source_asset_id"] = uuid.NewString()
+	context["revision"] = float64(3)
+	if err := validateCreativeDirectEditTaskContext(context, variantID+":r3"); err != nil {
+		t.Fatalf("direct edit context following a discarded revision rejected: %v", err)
+	}
+	context["source_revision"] = float64(3)
+	if err := validateCreativeDirectEditTaskContext(context, variantID+":r3"); err == nil {
+		t.Fatal("direct edit context with a non-prior source revision was accepted")
+	}
 }
 
 func TestClaimAgentTask_DirectFanoutParallelButQuickCreateSerial(t *testing.T) {

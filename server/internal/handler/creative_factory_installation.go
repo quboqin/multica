@@ -152,7 +152,7 @@ var creativeFactorySkillSpecs = []creativeFactorySkillSpec{
 	{Role: "prime_compose", Name: "素材_技能_贴片", Aliases: []string{"广告品牌组件合成"}, Directory: "ad-creative-prime-compose", Description: "调用后端唯一的 Prime 交接入口：默认确定性合成，或登记冻结的无二维码模型融入结果；校验 JSON，并由后端登记过程图、primed 资产和标准 QC/交付交接；不创建 Prime Agent 或 Prime task。", Capability: "prime_compose", Version: 6},
 	{Role: "direct_image_edit", Name: "素材_技能_改图", Aliases: []string{"广告图片直接修改"}, Directory: "ad-creative-direct-edit", Description: "将用户反馈编译为带输入角色、锁定/可编辑集合和 target masks 的多目标调整；布局微调保留原图主体占比和适度留白，不把模糊的空间要求放大为大面积空白；按冻结 Prime 模式完成终检。", Capability: "direct_image_edit", Version: 32},
 	{Role: "quality_control", Name: "素材_技能_质检", Aliases: []string{"广告成图验收"}, Directory: "ad-creative-qc", Description: "独立比较 4-5 个候选主尺寸并原子晋级 3 个，或对标准/精准改图的实际交付尺寸执行 Prime 与 DesignDNA 联合视觉终检；附件失败结构化分类，qc-finalize 瞬态失败由服务端持久化恢复。", Capability: "quality_control", Version: 43},
-	{Role: "creative_leadership", Name: "素材_技能_流程", Aliases: []string{"素材_技能_统筹", "创意素材协作", "素材小队 Leader 编排"}, Directory: "ad-creative-leadership", Description: "使用原生 task fanout 启动并恢复候选生产、晋级扩尺寸、直接改图和最终验收，汇总结构化结果。", Capability: "creative_leadership", Version: 51},
+	{Role: "creative_leadership", Name: "素材_技能_流程", Aliases: []string{"素材_技能_统筹", "创意素材协作", "素材小队 Leader 编排"}, Directory: "ad-creative-leadership", Description: "使用原生 task fanout 启动并恢复候选生产、晋级扩尺寸、直接改图和最终验收，汇总结构化结果。", Capability: "creative_leadership", Version: 52},
 }
 
 var creativeFactoryAgentSpecs = []creativeFactoryAgentSpec{
