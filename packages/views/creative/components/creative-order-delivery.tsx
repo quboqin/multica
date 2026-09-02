@@ -319,6 +319,12 @@ function creativeDiagnosticAssetIsUnadoptedDirectEditPreview(asset: CreativeOrde
   return asset.workflow === "creative_direct_edit" && isRecord(asset.metadata) && asset.metadata.accepted === false;
 }
 
+function creativeDiagnosticAssetCanBeAdopted(asset: CreativeOrderDiagnosticAsset, adjustment: CreativeDirectAdjustmentContext | null): boolean {
+  return asset.workflow === "creative_direct_edit"
+    && asset.label.startsWith("直接改图")
+    && adjustment?.targetSize === asset.size_key;
+}
+
 function creativeVariantUnadoptedDirectEditPreview(assets: CreativeOrderDiagnosticAsset[], sizeKey: string): CreativeOrderDiagnosticAsset | undefined {
   return assets.find((asset) => asset.size_key === sizeKey && creativeDiagnosticAssetIsUnadoptedDirectEditPreview(asset))
     ?? assets.find(creativeDiagnosticAssetIsUnadoptedDirectEditPreview);
@@ -480,6 +486,7 @@ export function CreativeOrderDeliveryCandidates({
   adjustment,
   retryingVariantId = "",
   onRetryVariant,
+  onAdoptProcessImage,
 }: {
   orderId: string;
   item: CreativeOrderItem;
@@ -497,6 +504,7 @@ export function CreativeOrderDeliveryCandidates({
   adjustment?: { variantId: string; sizeKey: string; status: string };
   retryingVariantId?: string;
   onRetryVariant?: (variant: CreativeOrderVariant, action: CreativeVariantRetryAction) => void;
+  onAdoptProcessImage?: (variantId: string, assetId: string) => Promise<void>;
 }) {
   const { t } = useT("creative");
   const adoptedVariant = adoptedCreativeOrderVariant(item);
@@ -543,9 +551,11 @@ export function CreativeOrderDeliveryCandidates({
         />
         <AdoptedVariantStagingStatus
           variant={adoptedVariant}
+          attachments={attachments}
           disabled={disabled}
           retrying={retryingVariantId === adoptedVariant.id}
           onRetry={onRetryVariant}
+          onAdoptProcessImage={onAdoptProcessImage}
         />
         {otherVariants.length > 0 && <details className="group/other border-t bg-muted/10">
           <summary className="flex cursor-pointer list-none items-center gap-2 px-4 py-3 text-sm font-medium marker:content-none">
@@ -568,6 +578,7 @@ export function CreativeOrderDeliveryCandidates({
               adjustment={adjustment}
               retrying={retryingVariantId === variant.id}
               onRetry={onRetryVariant}
+              onAdoptProcessImage={onAdoptProcessImage}
             />)}
           </div>
         </details>}
@@ -585,6 +596,7 @@ export function CreativeOrderDeliveryCandidates({
             adjustment={adjustment}
             retrying={retryingVariantId === variant.id}
             onRetry={onRetryVariant}
+            onAdoptProcessImage={onAdoptProcessImage}
           />)}
         </div> : selectionPending ? <CreativeOrderCandidateSelectionPending /> : <div className="grid gap-3 p-4 lg:grid-cols-3"><CreativeOrderVariantPlaceholder /></div>}
     </div>
@@ -725,14 +737,18 @@ function AdoptedVariantDelivery({
 
 function AdoptedVariantStagingStatus({
   variant,
+  attachments,
   disabled = false,
   retrying = false,
   onRetry,
+  onAdoptProcessImage,
 }: {
   variant: CreativeOrderVariant;
+  attachments: Map<string, DeliveryAttachment>;
   disabled?: boolean;
   retrying?: boolean;
   onRetry?: (variant: CreativeOrderVariant, action: CreativeVariantRetryAction) => void;
+  onAdoptProcessImage?: (variantId: string, assetId: string) => Promise<void>;
 }) {
   const { t } = useT("creative");
   const activeRevision = creativeVariantActiveRevision(variant);
@@ -742,6 +758,8 @@ function AdoptedVariantStagingStatus({
   const retryAction = creativeVariantRetryAction(variant);
   const needsAttention = creativeVariantStagingNeedsAttention(variant);
   const revisionStatus = (variant.revisions ?? []).find((revision) => revision.revision === workingRevision)?.status;
+  const diagnostics = creativeVariantDiagnosticAssets(variant);
+  const [processOpen, setProcessOpen] = useState(false);
   const stagingLabel = needsAttention
     ? t(($) => $.stagingRepair.draftNeedsAttention, { revision: workingRevision })
     : revisionStatus === "completed"
@@ -762,6 +780,16 @@ function AdoptedVariantStagingStatus({
         ? t(($) => $.stagingRepair.retrying)
         : `${retryAction.kind === "qc" ? t(($) => $.stagingRepair.rerunQC) : retryAction.label} · r${workingRevision}`}
     </Button>}
+    {diagnostics.length > 0 && <Button size="sm" variant="outline" onClick={() => setProcessOpen(true)}><ImageIcon className="h-4 w-4" />查看过程图片</Button>}
+    <CreativeProcessImageDialog
+      open={processOpen}
+      onOpenChange={setProcessOpen}
+      variant={variant}
+      assets={diagnostics}
+      attachments={attachments}
+      disabled={disabled}
+      onAdopt={onAdoptProcessImage ? (asset) => onAdoptProcessImage(variant.id, asset.id) : undefined}
+    />
   </section>;
 }
 
@@ -778,6 +806,7 @@ function VariantCandidate({
   adjustment,
   retrying = false,
   onRetry,
+  onAdoptProcessImage,
 }: {
   variant: CreativeOrderVariant;
   attachments: Map<string, DeliveryAttachment>;
@@ -791,6 +820,7 @@ function VariantCandidate({
   adjustment?: { variantId: string; sizeKey: string; status: string };
   retrying?: boolean;
   onRetry?: (variant: CreativeOrderVariant, action: CreativeVariantRetryAction) => void;
+  onAdoptProcessImage?: (variantId: string, assetId: string) => Promise<void>;
 }) {
   const { t } = useT("creative");
   const candidateState = creativeVariantCandidateState(variant);
@@ -907,7 +937,15 @@ function VariantCandidate({
         {disabled ? "订单已结束" : busy ? "正在采用" : adopted ? "当前采用" : !participatesInDelivery ? "尚未入选" : readiness.ready ? stagingResultMissing ? `采用当前 r${activeRevision} 成图` : "采用此变体" : "尚不可采用"}
       </Button>
     </div>
-    <CreativeProcessImageDialog open={processOpen} onOpenChange={setProcessOpen} variant={variant} assets={diagnostics} attachments={attachments} />
+    <CreativeProcessImageDialog
+      open={processOpen}
+      onOpenChange={setProcessOpen}
+      variant={variant}
+      assets={diagnostics}
+      attachments={attachments}
+      disabled={disabled}
+      onAdopt={onAdoptProcessImage ? (asset) => onAdoptProcessImage(variant.id, asset.id) : undefined}
+    />
   </article>;
 }
 
@@ -917,16 +955,33 @@ function CreativeProcessImageDialog({
   variant,
   assets,
   attachments,
+  disabled = false,
+  onAdopt,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   variant: CreativeOrderVariant;
   assets: CreativeOrderDiagnosticAsset[];
   attachments: Map<string, DeliveryAttachment>;
+  disabled?: boolean;
+  onAdopt?: (asset: CreativeOrderDiagnosticAsset) => Promise<void>;
 }) {
   const adjustment = creativeVariantDirectAdjustmentContext(variant);
   const comparison = creativeProcessComparisonCards(variant, attachments, adjustment);
   const groups = creativeProcessDiagnosticGroups(assets, adjustment);
+  const [adoptingAssetId, setAdoptingAssetId] = useState("");
+  const adopt = async (asset: CreativeOrderDiagnosticAsset) => {
+    if (!onAdopt) return;
+    setAdoptingAssetId(asset.id);
+    try {
+      await onAdopt(asset);
+      onOpenChange(false);
+    } catch {
+      // The caller reports adoption failures in the surrounding order view.
+    } finally {
+      setAdoptingAssetId("");
+    }
+  };
   return <Dialog open={open} onOpenChange={onOpenChange}>
     <DialogContent className="grid max-h-[94vh] grid-rows-[auto_minmax(0,1fr)] gap-0 overflow-hidden p-0 sm:max-w-[min(96vw,1280px)]">
       <DialogHeader className="border-b px-5 py-4 pr-14">
@@ -968,7 +1023,10 @@ function CreativeProcessImageDialog({
                     <p className="mt-0.5 truncate text-[11px] text-muted-foreground">r{asset.revision} · {creativeDiagnosticAssetLabel(asset)} · {creativeProcessTimeLabel(asset.updated_at || asset.created_at)}</p>
                     <p className="mt-0.5 truncate text-[11px] text-muted-foreground">{asset.filename}</p>
                   </div>
-                  <Button size="icon-sm" variant="ghost" title="打开原图" aria-label={`打开过程图片 ${asset.filename}`} onClick={() => openCreativeDiagnosticAsset(asset)}><ExternalLink className="h-4 w-4" /></Button>
+                  <div className="flex shrink-0 items-center gap-1">
+                    {onAdopt && creativeDiagnosticAssetCanBeAdopted(asset, adjustment) && <Button size="sm" variant="outline" disabled={disabled || Boolean(adoptingAssetId)} onClick={() => void adopt(asset)}>{adoptingAssetId === asset.id ? "正在采用" : "采用此图"}</Button>}
+                    <Button size="icon-sm" variant="ghost" title="打开原图" aria-label={`打开过程图片 ${asset.filename}`} onClick={() => openCreativeDiagnosticAsset(asset)}><ExternalLink className="h-4 w-4" /></Button>
+                  </div>
                 </figcaption>
                 <button type="button" className="flex min-h-72 w-full items-center justify-center bg-muted/10 p-3" onClick={() => openCreativeDiagnosticAsset(asset)}>
                   <img src={asset.url} alt={`${variant.variant_key} ${asset.label} ${asset.size_key}`} width={1200} height={1200} loading="lazy" className="max-h-[520px] w-full object-contain" />

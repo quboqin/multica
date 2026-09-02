@@ -443,6 +443,29 @@ ON CONFLICT (variant_id, size_key, revision, stage) DO NOTHING
 	}
 	if input.Scope == "size" {
 		if _, err := tx.Exec(r.Context(), `
+INSERT INTO creative_order_asset (
+  variant_id, asset_family_id, size_key, revision, stage, attachment_id, derived_from_asset_id, metadata, evidence, status
+)
+SELECT variant_id, asset_family_id, size_key, $3, 'primed', attachment_id, id,
+  metadata || jsonb_build_object('order_adjustment', jsonb_build_object('source_revision', $2::integer, 'target_size', $5::text, 'scope', $6::text, 'reused_primed_asset', true, 'source_asset_id', id::text)),
+  evidence || jsonb_build_object('order_adjustment', jsonb_build_object('source_revision', $2::integer, 'target_size', $5::text, 'scope', $6::text, 'reused_primed_asset', true, 'source_asset_id', id::text)),
+  'completed'
+FROM creative_order_asset
+WHERE variant_id = $1
+  AND revision = $2
+  AND stage = 'primed'
+  AND status = 'completed'
+  AND attachment_id IS NOT NULL
+  AND size_key = ANY($4::text[])
+  AND size_key <> $5
+ON CONFLICT (variant_id, size_key, revision, stage) DO NOTHING
+`, parseUUID(variantID), input.SourceRevision, newRevision, expectedSizes, input.SizeKey, input.Scope); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to preserve unaffected Prime assets for adjustment")
+			return
+		}
+	}
+	if input.Scope == "size" {
+		if _, err := tx.Exec(r.Context(), `
 INSERT INTO creative_order_diagnostic_asset (
   variant_id, task_id, attachment_id, size_key, revision, workflow, label, filename, metadata
 )

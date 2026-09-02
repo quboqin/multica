@@ -3108,6 +3108,12 @@ export class ApiClient {
     });
   }
 
+  async adoptCreativeOrderProcessImage(orderId: string, variantId: string, assetId: string): Promise<void> {
+    await this.fetch(`/api/creative/orders/${encodeURIComponent(orderId)}/variants/${encodeURIComponent(variantId)}/process-images/${encodeURIComponent(assetId)}/adopt`, {
+      method: "POST",
+    });
+  }
+
   async retryCreativeOrderVariantQC(orderId: string, variantId: string): Promise<CreativeOrderQCRetryResponse> {
     const raw = await this.fetch<unknown>(`/api/creative/orders/${encodeURIComponent(orderId)}/variants/${encodeURIComponent(variantId)}/qc/retry`, {
       method: "POST",

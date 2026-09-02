@@ -254,8 +254,12 @@ WHERE variant.id = $1 AND order_row.id = $2 AND order_row.workspace_id = $3
 	if err != nil {
 		return false, err
 	}
+	compositionSizes, err := creativeDirectEditProcessingSizes(json.RawMessage(brief), expectedSizes)
+	if err != nil {
+		return false, err
+	}
 
-	generated, complete, err := h.loadCreativePrimeGeneratedAssets(ctx, variantID, revision, expectedSizes)
+	generated, complete, err := h.loadCreativePrimeGeneratedAssets(ctx, variantID, revision, compositionSizes)
 	if err != nil {
 		return false, err
 	}
@@ -263,7 +267,7 @@ WHERE variant.id = $1 AND order_row.id = $2 AND order_row.workspace_id = $3
 		return false, nil
 	}
 
-	primed, primedComplete, err := h.creativePrimePackageComplete(ctx, variantID, revision, expectedSizes)
+	primed, primedComplete, err := h.creativePrimePackageComplete(ctx, variantID, revision, compositionSizes)
 	if err != nil {
 		return false, err
 	}
@@ -274,7 +278,7 @@ WHERE variant.id = $1 AND order_row.id = $2 AND order_row.workspace_id = $3
 		return false, &creativePrimeImmutableRevisionError{message: "active creative revision has an incomplete immutable Prime package"}
 	}
 	if primedComplete && !force {
-		missingProcess, processErr := h.creativePrimeProcessEvidenceMissing(ctx, variantID, revision, expectedSizes)
+		missingProcess, processErr := h.creativePrimeProcessEvidenceMissing(ctx, variantID, revision, compositionSizes)
 		if processErr != nil {
 			return false, processErr
 		}
@@ -355,7 +359,7 @@ WHERE id = $1 AND revision = $2
 	if composition.Mode == primeCompositionModeModelIntegrated {
 		return h.registerCreativeOrderVariantModelIntegratedPrime(
 			ctx, workspaceID, orderID, variantID, createdBy, variantKey, revision, candidateState,
-			expectedSizes, generated, marketPack, templateSet, filesByRole, composition, primeClaim,
+			compositionSizes, generated, marketPack, templateSet, filesByRole, composition, primeClaim,
 		)
 	}
 
@@ -375,9 +379,9 @@ WHERE id = $1 AND revision = $2
 		"variant_id":     uuidToString(variantID),
 		"variant_key":    variantKey,
 		"revision":       revision,
-		"expected_sizes": expectedSizes,
+		"expected_sizes": compositionSizes,
 		"sources":        map[string]string{},
-		"jobs":           make([]map[string]string, 0, len(expectedSizes)),
+		"jobs":           make([]map[string]string, 0, len(compositionSizes)),
 	}
 	sources := manifest["sources"].(map[string]string)
 	for _, family := range templateSet.Families {
@@ -406,7 +410,7 @@ WHERE id = $1 AND revision = $2
 	for _, asset := range generated {
 		generatedBySize[asset.SizeKey] = asset
 	}
-	for _, size := range expectedSizes {
+	for _, size := range compositionSizes {
 		asset := generatedBySize[size]
 		data, downloadErr := h.readCreativePrimeAttachment(ctx, workspaceID, asset.AttachmentID)
 		if downloadErr != nil {
@@ -472,7 +476,7 @@ WHERE id = $1 AND revision = $2
 	if err != nil {
 		return false, err
 	}
-	if runErr != nil || report.Failed != 0 || report.Succeeded != len(expectedSizes) || len(report.Results) != len(expectedSizes) {
+	if runErr != nil || report.Failed != 0 || report.Succeeded != len(compositionSizes) || len(report.Results) != len(compositionSizes) {
 		cause := errors.New(creativePrimeComposeFailureMessage(report))
 		if runErr != nil && report.Failed == 0 && strings.TrimSpace(report.Error) == "" {
 			cause = fmt.Errorf("compose brand components: %w%s", runErr, creativePrimeCommandDetail("", stderr.String()))
@@ -494,8 +498,8 @@ WHERE id = $1 AND revision = $2
 		resultByID[result.ID] = result
 	}
 
-	composed := make([]creativePrimeComposedAsset, 0, len(expectedSizes))
-	for _, size := range expectedSizes {
+	composed := make([]creativePrimeComposedAsset, 0, len(compositionSizes))
+	for _, size := range compositionSizes {
 		generatedAsset := generatedBySize[size]
 		result, found := resultByID[uuidToString(generatedAsset.ID)]
 		if !found || result.Size != size {
@@ -1238,6 +1242,10 @@ FOR UPDATE OF variant
 	if err != nil {
 		return err
 	}
+	qcSizes, err := creativeDirectEditProcessingSizes(json.RawMessage(brief), expectedSizes)
+	if err != nil {
+		return err
+	}
 	_, complete, err := h.creativePrimePackageComplete(ctx, variantID, revision, expectedSizes)
 	if err != nil {
 		return err
@@ -1261,7 +1269,7 @@ FOR UPDATE OF variant
 		}
 		return nil
 	}
-	missingProcess, err := h.creativePrimeProcessEvidenceMissing(ctx, variantID, revision, expectedSizes)
+	missingProcess, err := h.creativePrimeProcessEvidenceMissing(ctx, variantID, revision, qcSizes)
 	if err != nil {
 		return err
 	}
@@ -1324,7 +1332,7 @@ SELECT EXISTS(
 		return errors.New("the frozen creative QC reviewer no longer provides quality_control")
 	}
 
-	manifestAttachmentID, composeAttachmentID, err := h.creativePrimeEvidenceAttachments(ctx, variantID, revision, expectedSizes)
+	manifestAttachmentID, composeAttachmentID, err := h.creativePrimeEvidenceAttachments(ctx, variantID, revision, qcSizes)
 	if err != nil {
 		return err
 	}
@@ -1342,7 +1350,7 @@ SELECT EXISTS(
 			"variant_id":                   uuidToString(variantID),
 			"revision":                     revision,
 			"qc_attempt":                   defaultCreativeQCAttempt,
-			"expected_sizes":               expectedSizes,
+			"expected_sizes":               qcSizes,
 			"issue_id":                     uuidToString(issueID),
 			"leader_agent_id":              uuidToString(leaderID),
 			"manifest_attachment_id":       uuidToString(manifestAttachmentID),

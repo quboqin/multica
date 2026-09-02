@@ -1,12 +1,38 @@
 package handler
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgtype"
 )
+
+func TestCreativeDirectEditProcessingSizes(t *testing.T) {
+	expected := []string{"1080x1080", "1200x628", "800x1000"}
+	targetOnly, err := creativeDirectEditProcessingSizes([]byte(`{
+  "creative_direct_edit_delivery": {
+    "scope": "size",
+    "target_size": "1080x1080",
+    "edit_sizes": ["1080x1080"],
+    "final_visual_validation": true
+  }
+}`), expected)
+	if err != nil || !reflect.DeepEqual(targetOnly, []string{"1080x1080"}) {
+		t.Fatalf("size-scoped processing sizes = %v, %v", targetOnly, err)
+	}
+	all, err := creativeDirectEditProcessingSizes([]byte(`{
+  "creative_direct_edit_delivery": {
+    "scope": "variant",
+    "target_size": "1080x1080",
+    "final_visual_validation": true
+  }
+}`), expected)
+	if err != nil || !reflect.DeepEqual(all, expected) {
+		t.Fatalf("variant-scoped processing sizes = %v, %v", all, err)
+	}
+}
 
 func TestCreativeDirectAdjustmentPreviewCommentIncludesUnadoptedImages(t *testing.T) {
 	content := creativeDirectAdjustmentDeliveryCommentContent(

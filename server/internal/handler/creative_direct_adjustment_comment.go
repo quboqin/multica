@@ -20,6 +20,7 @@ type creativeDirectEditDeliveryConfig struct {
 	DeliveryMode                string
 	TargetSize                  string
 	Scope                       string
+	EditSizes                   []string
 	FinalVisualValidation       bool
 	RawUserRequest              string
 	AnnotationGuideAttachmentID string
@@ -61,6 +62,7 @@ func parseCreativeDirectEditDeliveryConfig(raw json.RawMessage) creativeDirectEd
 			DeliveryMode                string          `json:"delivery_mode"`
 			TargetSize                  string          `json:"target_size"`
 			Scope                       string          `json:"scope"`
+			EditSizes                   []string        `json:"edit_sizes"`
 			FinalVisualValidation       bool            `json:"final_visual_validation"`
 			RawUserRequest              string          `json:"raw_user_request"`
 			AnnotationGuideAttachmentID string          `json:"annotation_guide_attachment_id"`
@@ -89,11 +91,36 @@ func parseCreativeDirectEditDeliveryConfig(raw json.RawMessage) creativeDirectEd
 		DeliveryMode:                deliveryMode,
 		TargetSize:                  targetSize,
 		Scope:                       scope,
+		EditSizes:                   append([]string(nil), contract.Delivery.EditSizes...),
 		FinalVisualValidation:       contract.Delivery.FinalVisualValidation,
 		RawUserRequest:              strings.TrimSpace(contract.Delivery.RawUserRequest),
 		AnnotationGuideAttachmentID: strings.TrimSpace(contract.Delivery.AnnotationGuideAttachmentID),
 		Annotations:                 append(json.RawMessage(nil), contract.Delivery.Annotations...),
 	}
+}
+
+// creativeDirectEditProcessingSizes narrows a size-scoped revision to the
+// image the user changed. The revision itself retains its full delivery
+// contract, so unchanged sizes can be carried forward without reprocessing.
+func creativeDirectEditProcessingSizes(brief json.RawMessage, expectedSizes []string) ([]string, error) {
+	delivery := parseCreativeDirectEditDeliveryConfig(brief)
+	if !delivery.FinalVisualValidation || delivery.Scope != "size" {
+		return append([]string(nil), expectedSizes...), nil
+	}
+	sizes := delivery.EditSizes
+	if len(sizes) == 0 && delivery.TargetSize != "" {
+		sizes = []string{delivery.TargetSize}
+	}
+	normalized, err := normalizeCreativeExpectedSizes(sizes)
+	if err != nil {
+		return nil, err
+	}
+	for _, size := range normalized {
+		if !creativeSizeIsExpected(size, expectedSizes) {
+			return nil, errors.New("creative direct-edit processing size is outside the delivery contract")
+		}
+	}
+	return normalized, nil
 }
 
 func (h *Handler) notifyCreativeDirectAdjustmentDelivery(ctx context.Context, workspaceID, orderID, variantID pgtype.UUID, revision int, targetSize string) {

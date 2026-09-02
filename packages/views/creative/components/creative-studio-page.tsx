@@ -103,7 +103,7 @@ import { CreativeComparisonWorkspace, type CreativeAnnotationDraft } from "./cre
 import { adoptedCreativeOrderVariant, CREATIVE_DELIVERY_SIZES, CreativeOrderDeliveryCandidates, creativeOrderActionableWorkflowFailures, creativeOrderStage, creativeVariantActiveExpectedSizes, creativeVariantGenerationProgress, creativeVariantIsInProgress, creativeVariantNeedsManualAction, type CreativeOrderStage, type CreativeVariantRetryAction } from "./creative-order-delivery";
 import { CreativeGenerationInfoDialog } from "./creative-generation-info-dialog";
 import { CreativeFeedbackDashboard } from "./creative-feedback-dashboard";
-import { CreativeStagingRepairWorkspace, creativeVariantRevisionExpectedSizes } from "./creative-staging-repair-workspace";
+import { creativeVariantRevisionExpectedSizes } from "./creative-staging-repair-workspace";
 import { CreativeWorkbench } from "./creative-workbench";
 import { MarketResourceFiles } from "./market-resource-files";
 
@@ -631,6 +631,17 @@ function CreativeOrderDetail({ orderId, onBack, onBrowseOrders, backLabel }: { o
       setRetryingVariantId("");
     }
   };
+  const adoptProcessImage = async (variantId: string, assetId: string) => {
+    try {
+      await api.adoptCreativeOrderProcessImage(orderId, variantId, assetId);
+      await queryClient.invalidateQueries({ queryKey: creativeKeys.order(wsId, orderId) });
+      await queryClient.invalidateQueries({ queryKey: creativeKeys.orders(wsId) });
+      toast.success("已采用过程图片，正在重新合成并质检");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "采用过程图片失败");
+      throw error;
+    }
+  };
   const restartAdjustment = async (event: CreateCreativeFeedbackResponse) => {
     const asset = assets.find((candidate) => candidate.id === event.subject_id);
     const adjustmentIssueId = typeof event.context_snapshot.adjustment_issue_id === "string" ? event.context_snapshot.adjustment_issue_id : "";
@@ -657,17 +668,6 @@ function CreativeOrderDetail({ orderId, onBack, onBrowseOrders, backLabel }: { o
       setAdjustBusy(false);
     }
   };
-  const discardStaging = async (variant: CreativeOrderVariant) => {
-    try {
-      await api.discardCreativeOrderVariantStaging(orderId, variant.id);
-      await queryClient.invalidateQueries({ queryKey: creativeKeys.order(wsId, orderId) });
-      await queryClient.invalidateQueries({ queryKey: creativeKeys.orders(wsId) });
-      toast.success(t(($) => $.studio.stagingDiscarded, { stagingRevision: variant.staging_revision, activeRevision: variant.active_revision }));
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : t(($) => $.studio.stagingDiscardFailed));
-    }
-  };
-
   return <div className="mx-auto max-w-[1440px] space-y-4">
     <div className="flex flex-wrap items-end justify-between gap-3 border-b pb-3">
       <div><div className="flex items-center gap-1"><Button size="sm" variant="ghost" onClick={onBack}><ArrowLeft className="h-4 w-4" />{backLabel}</Button>{backLabel === t(($) => $.studio.returnToIssue) && <Button size="sm" variant="ghost" onClick={onBrowseOrders}>{t(($) => $.studio.allOrders)}</Button>}</div><h2 className="mt-2 text-base font-semibold">{t(($) => $.studio.order, { id: orderId.slice(0, 8) })}</h2><p className="mt-1 text-xs text-muted-foreground">{stage.detail} · {t(($) => $.studio.updatedAt, { time: formatCreativeDateTime(data?.updated_at || ""), zone: t(($) => $.generationInfo.beijingTime) })}</p></div>
@@ -691,6 +691,7 @@ function CreativeOrderDetail({ orderId, onBack, onBrowseOrders, backLabel }: { o
           showDirectionDetails={false}
           retryingVariantId={retryingVariantId}
           onRetryVariant={(variant, action) => void retryVariant(variant, action)}
+          onAdoptProcessImage={adoptProcessImage}
           onAdopt={(variantId, risk) => {
             const selectedAsset = reviewAssets.find((asset) => asset.variant_id === variantId && asset.size_key === "1080x1080")
               ?? reviewAssets.find((asset) => asset.variant_id === variantId);
@@ -723,19 +724,12 @@ function CreativeOrderDetail({ orderId, onBack, onBrowseOrders, backLabel }: { o
           onAdopt={() => undefined}
           onAssetSelect={selectReviewAsset}
           onAssetInfo={setGenerationInfoAssetId}
+          onAdoptProcessImage={adoptProcessImage}
           defaultOpen={index === 0}
           showDirectionDetails={false}
         />;
       })}
     </div>
-    {data && <CreativeStagingRepairWorkspace
-      items={data.items}
-      attachments={byId}
-      disabled={isCancelled}
-      onAnnotations={annotation}
-      onViewInfo={(asset) => setGenerationInfoAssetId(asset.id)}
-      onDiscard={(variant) => discardStaging(variant)}
-    />}
     {adjustmentEvents.length > 0 && data && <section className="divide-y border-y" aria-label={t(($) => $.studio.adjustmentStatus)}>
       {adjustmentEvents.map((event) => <CreativeAdjustmentStatus key={event.id} event={event} variant={creativeAdjustmentTarget(data.items, event)?.variant} issueId={data.issue_id} retrying={adjustBusy} onRetry={() => restartAdjustment(event)} />)}
     </section>}

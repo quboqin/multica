@@ -156,6 +156,10 @@ LIMIT 1
 	if err != nil {
 		return false, fmt.Errorf("load pending creative QC finalization sizes: %w", err)
 	}
+	qcSizes, err := creativeDirectEditProcessingSizes([]byte(brief), expectedSizes)
+	if err != nil {
+		return false, fmt.Errorf("load pending creative QC finalization scope: %w", err)
+	}
 	if _, complete, err := h.creativePrimePackageComplete(ctx, variantID, revision, expectedSizes); err != nil {
 		return false, err
 	} else if !complete {
@@ -197,7 +201,7 @@ ORDER BY created_at, id
 
 	created, _, err := h.queueCreativeQCAutomaticRecovery(
 		ctx, tx, workspaceID, createdBy, orderID, itemID, variantID, issueID,
-		revision, []byte(inputSnapshot), expectedSizes, failedTaskIDs, recoveryKind,
+		revision, []byte(inputSnapshot), qcSizes, failedTaskIDs, recoveryKind,
 	)
 	if err != nil {
 		return false, fmt.Errorf("queue pending creative QC finalization recovery: %w", err)
