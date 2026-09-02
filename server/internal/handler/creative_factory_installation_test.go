@@ -200,6 +200,9 @@ func TestCreativeFactoryCreativeContractTemplatesStayInSync(t *testing.T) {
 	if !strings.Contains(creativeFactoryImageEditAgentInstructions(), "写真实 error_code/error_message 并让当前 task 失败；兄弟对象继续") {
 		t.Fatal("factory producer instructions lost the specialist failure handoff contract")
 	}
+	if !strings.Contains(creativeFactoryImageEditAgentInstructions(), "provider_receipt_not_found") {
+		t.Fatal("factory producer instructions lost the reconciled provider retry contract")
+	}
 	leaderInstructions := ""
 	for _, spec := range creativeFactoryAgentSpecs {
 		if spec.Role == "leadership" {

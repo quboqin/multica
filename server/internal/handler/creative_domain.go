@@ -1486,8 +1486,11 @@ WHERE task.id = $1
 		writeError(w, http.StatusConflict, "creative QC failures require visual QC recovery")
 		return
 	}
+	freshProviderAttemptAuthorized := false
 	if taskStatus == "failed" && workflow == "creative_direct_edit" {
-		if _, err := h.reconcileUnrecoverableDirectEditOperationForRetry(r.Context(), tx, taskID); err != nil {
+		var err error
+		freshProviderAttemptAuthorized, err = h.reconcileUnrecoverableDirectEditOperationForRetry(r.Context(), tx, taskID)
+		if err != nil {
 			writeError(w, http.StatusInternalServerError, "failed to reconcile direct edit provider receipt")
 			return
 		}
@@ -1611,6 +1614,18 @@ WHERE id = $1
 			child.Context = normalized.Context
 		}
 	}
+	if freshProviderAttemptAuthorized {
+		recoveryContext, err := annotateDirectEditProviderReceiptRecovery(child.Context)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to annotate direct edit provider recovery")
+			return
+		}
+		if _, err := tx.Exec(r.Context(), `UPDATE agent_task_queue SET context = $2::jsonb WHERE id = $1`, child.ID, recoveryContext); err != nil {
+			writeError(w, http.StatusConflict, "workflow retry is already queued")
+			return
+		}
+		child.Context = recoveryContext
+	}
 	if err := tx.Commit(r.Context()); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to queue workflow retry")
 		return
@@ -1646,6 +1661,23 @@ func creativeWorkflowRequiresAtomicQCRecovery(workflow string) bool {
 	}
 }
 
+func annotateDirectEditProviderReceiptRecovery(contextValue json.RawMessage) (json.RawMessage, error) {
+	var taskContext map[string]any
+	if json.Unmarshal(contextValue, &taskContext) != nil || taskContext["workflow"] != "creative_direct_edit" {
+		return nil, errors.New("direct edit recovery task context is invalid")
+	}
+	taskContext["provider_receipt_reconciliation"] = map[string]any{
+		"status":                       "provider_receipt_not_found",
+		"allow_fresh_provider_attempt": true,
+		"instruction":                  "the prior provider attempt was verified empty; register and invoke exactly one next provider attempt",
+	}
+	annotated, err := json.Marshal(taskContext)
+	if err != nil {
+		return nil, err
+	}
+	return json.RawMessage(annotated), nil
+}
+
 // reconcileUnrecoverableDirectEditOperationForRetry closes an unknown direct
 // image attempt only after the user explicitly retries an exhausted task and
 // the database proves that no provider request, receipt, or output exists.
@@ -1669,6 +1701,7 @@ FOR UPDATE
 	}
 
 	var operationID pgtype.UUID
+	var operationStatus string
 	err := tx.QueryRow(ctx, `
 WITH RECURSIVE task_lineage AS (
   SELECT id, parent_task_id, retry_of_task_id
@@ -1680,26 +1713,47 @@ WITH RECURSIVE task_lineage AS (
   JOIN task_lineage child
     ON parent.id = child.parent_task_id OR parent.id = child.retry_of_task_id
 )
-SELECT operation.id
+SELECT operation.id, operation.status
 FROM creative_image_operation operation
 JOIN creative_image_operation_attempt attempt
   ON attempt.operation_id = operation.id
 WHERE operation.operation_kind = 'direct_edit'
-  AND operation.status = 'unknown'
-  AND operation.provider_request_id = ''
-  AND operation.result_receipt = '{}'::jsonb
-  AND operation.output_attachment_id IS NULL
-  AND operation.output_asset_id IS NULL
   AND operation.task_id IN (SELECT id FROM task_lineage)
-  AND attempt.status = 'unknown'
-  AND attempt.provider_request_id = ''
-  AND attempt.result_receipt = '{}'::jsonb
-  AND attempt.output_attachment_id IS NULL
   AND attempt.task_id IN (SELECT id FROM task_lineage)
+  AND (
+    (
+      operation.status = 'unknown'
+      AND operation.provider_request_id = ''
+      AND operation.result_receipt = '{}'::jsonb
+      AND operation.output_attachment_id IS NULL
+      AND operation.output_asset_id IS NULL
+      AND attempt.status = 'unknown'
+      AND attempt.provider_request_id = ''
+      AND attempt.result_receipt = '{}'::jsonb
+      AND attempt.output_attachment_id IS NULL
+    )
+    OR (
+      operation.status = 'failed'
+      AND operation.error_type = 'provider_receipt_not_found'
+      AND operation.provider_request_id = ''
+      AND operation.result_receipt = '{}'::jsonb
+      AND operation.output_attachment_id IS NULL
+      AND operation.output_asset_id IS NULL
+      AND attempt.status = 'failed'
+      AND attempt.error_type = 'provider_receipt_not_found'
+      AND attempt.provider_request_id = ''
+      AND attempt.result_receipt = '{}'::jsonb
+      AND attempt.output_attachment_id IS NULL
+      AND NOT EXISTS (
+        SELECT 1 FROM creative_image_operation_attempt newer_attempt
+        WHERE newer_attempt.operation_id = operation.id AND newer_attempt.attempt > attempt.attempt
+      )
+    )
+  )
 ORDER BY operation.started_at
 LIMIT 1
 FOR UPDATE OF operation, attempt
-`, taskID).Scan(&operationID)
+`, taskID).Scan(&operationID, &operationStatus)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return false, nil
 	}
@@ -1707,8 +1761,9 @@ FOR UPDATE OF operation, attempt
 		return false, err
 	}
 
-	const receiptMissing = "provider receipt was not found during explicit direct-edit retry"
-	updatedAttempt, err := tx.Exec(ctx, `
+	if operationStatus == "unknown" {
+		const receiptMissing = "provider receipt was not found during explicit direct-edit retry"
+		updatedAttempt, err := tx.Exec(ctx, `
 UPDATE creative_image_operation_attempt
 SET status = 'failed', error_type = 'provider_receipt_not_found', error_message = $2,
     completed_at = now(), updated_at = now()
@@ -1718,13 +1773,13 @@ WHERE operation_id = $1
   AND result_receipt = '{}'::jsonb
   AND output_attachment_id IS NULL
 `, operationID, receiptMissing)
-	if err != nil {
-		return false, err
-	}
-	if updatedAttempt.RowsAffected() != 1 {
-		return false, errors.New("unrecoverable direct edit attempt changed during reconciliation")
-	}
-	updatedOperation, err := tx.Exec(ctx, `
+		if err != nil {
+			return false, err
+		}
+		if updatedAttempt.RowsAffected() != 1 {
+			return false, errors.New("unrecoverable direct edit attempt changed during reconciliation")
+		}
+		updatedOperation, err := tx.Exec(ctx, `
 UPDATE creative_image_operation
 SET status = 'failed', error_type = 'provider_receipt_not_found', error_message = $2,
     completed_at = now(), updated_at = now()
@@ -1734,12 +1789,13 @@ WHERE id = $1
   AND result_receipt = '{}'::jsonb
   AND output_attachment_id IS NULL
   AND output_asset_id IS NULL
-`, operationID, receiptMissing)
-	if err != nil {
-		return false, err
-	}
-	if updatedOperation.RowsAffected() != 1 {
-		return false, errors.New("unrecoverable direct edit operation changed during reconciliation")
+	`, operationID, receiptMissing)
+		if err != nil {
+			return false, err
+		}
+		if updatedOperation.RowsAffected() != 1 {
+			return false, errors.New("unrecoverable direct edit operation changed during reconciliation")
+		}
 	}
 	updatedTask, err := tx.Exec(ctx, `
 UPDATE agent_task_queue

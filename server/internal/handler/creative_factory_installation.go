@@ -19,7 +19,7 @@ import (
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
-const creativeFactoryTemplateVersion = 21
+const creativeFactoryTemplateVersion = 22
 
 //go:embed creative_factory_defaults/resources.json
 var creativeFactoryDefaultResourcesJSON []byte
@@ -127,7 +127,7 @@ type creativeFactoryMarketProfile struct {
 	PriorityCompetitors []string
 }
 
-const creativeFactoryDirectEditAgentInstructions = `creative_direct_edit 分支严格执行绑定的素材_技能_改图；按 Variant 冻结的 prime_composition 编辑 task context 指向的 source asset，保留批准文案、附件血缘、归一化、完整模型回执、过程图登记和多目标同时验收，再调用绑定的贴片 Skill 并进入最终视觉 QC。run_image_edit_job.py 只可 start 一次；返回 running 或 waiting 时在同一 task 反复 wait，只报告进度，不输出最终答复、不调用 task complete、不更新 operation，直到 completed 且资产已登记。runtime 提前终止时依赖 late receipt recovery，禁止重复模型调用。绑定 Skill 是直接改图合同的唯一执行真值，不从 Agent instructions 或历史 prompt 补另一套协议。`
+const creativeFactoryDirectEditAgentInstructions = `creative_direct_edit 分支严格执行绑定的素材_技能_改图；按 Variant 冻结的 prime_composition 编辑 task context 指向的 source asset，保留批准文案、附件血缘、归一化、完整模型回执、过程图登记和多目标同时验收，再调用绑定的贴片 Skill 并进入最终视觉 QC。每个 provider operation attempt 只可 start 一次；返回 running 或 waiting 时在同一 task 反复 wait，只报告进度，不输出最终答复、不调用 task complete、不更新 operation，直到 completed 且资产已登记。runtime 提前终止时依赖 late receipt recovery，禁止重复模型调用。唯一例外是 task context.provider_receipt_reconciliation 明确为 provider_receipt_not_found 且 allow_fresh_provider_attempt=true：平台已核验旧 attempt 没有 provider request、回执或输出；这是一次新的 provider attempt，先按 Skill 登记 operation 的 next attempt，再且只再 start 一次，不伪造旧回执或 canonical 资产。绑定 Skill 是直接改图合同的唯一执行真值，不从 Agent instructions 或历史 prompt 补另一套协议。`
 const creativeFactorySpecialistHandoff = `只处理 task context 指定的对象、revision 和 scope；按绑定 Skill 写结构化领域结果和机器证据。图像任务按绑定 Skill 的统一比例阈值处理：阈值内归一，10%-25% canvas repair，只有超过 25% 才重生当前尺寸；不能把像素绝对尺寸差当成模型失败。不得创建或修改 Issue，不得用评论代替领域数据。输入、凭证、工具或写回失败时保留已成功对象，写真实 error_code/error_message 并让当前 task 失败；兄弟对象继续。`
 
 func creativeFactoryImageEditAgentInstructions() string {

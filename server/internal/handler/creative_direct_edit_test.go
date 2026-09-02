@@ -13,6 +13,24 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
+func TestAnnotateDirectEditProviderReceiptRecovery(t *testing.T) {
+	annotated, err := annotateDirectEditProviderReceiptRecovery(json.RawMessage(`{"workflow":"creative_direct_edit","revision":2}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var contextValue map[string]any
+	if err := json.Unmarshal(annotated, &contextValue); err != nil {
+		t.Fatal(err)
+	}
+	recovery, ok := contextValue["provider_receipt_reconciliation"].(map[string]any)
+	if !ok || recovery["status"] != "provider_receipt_not_found" || recovery["allow_fresh_provider_attempt"] != true {
+		t.Fatalf("provider receipt recovery context = %#v", contextValue)
+	}
+	if _, err := annotateDirectEditProviderReceiptRecovery(json.RawMessage(`{"workflow":"creative_production"}`)); err == nil {
+		t.Fatal("production task context unexpectedly accepted direct-edit recovery")
+	}
+}
+
 func TestCreateCreativeDirectEditAtomicallyInitializesSourceLineage(t *testing.T) {
 	if testHandler == nil {
 		t.Skip("database not available")
@@ -336,6 +354,10 @@ WHERE id = $1
 		child.SessionID != "" || child.WorkDir != "" || !child.FreshSession ||
 		childContext["workflow"] != "creative_direct_edit" || childContext["item_key"] != original.Variant.ID+":r2" {
 		t.Fatalf("direct edit retry child = %#v, context=%#v", child, childContext)
+	}
+	recovery, ok := childContext["provider_receipt_reconciliation"].(map[string]any)
+	if !ok || recovery["status"] != "provider_receipt_not_found" || recovery["allow_fresh_provider_attempt"] != true {
+		t.Fatalf("direct edit recovery context = %#v", childContext)
 	}
 	var variantStatus string
 	var hasDirectEditError bool
