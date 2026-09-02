@@ -92,7 +92,7 @@ import { PageHeader } from "../../layout/page-header";
 import { useNavigation } from "../../navigation";
 import { useT } from "../../i18n";
 import { creativeAttachmentBrowserURL } from "../lib/creative-attachment-url";
-import { creativeAdjustmentCanRetry, creativeAdjustmentProgress, creativeAdjustmentTarget, latestOrderAdjustmentFeedback } from "../lib/creative-adjustment-progress";
+import { creativeAdjustmentCanRetry, creativeAdjustmentIsDiscarded, creativeAdjustmentProgress, creativeAdjustmentTarget, latestOrderAdjustmentFeedbackByVariant } from "../lib/creative-adjustment-progress";
 import { formatCreativeDuration } from "../lib/creative-feedback-insights";
 import { createDefaultPrimeTemplateSet, withDefaultPrimeTemplateSet } from "../lib/prime-template-set";
 import { creativeTimeZoneLabel, formatCreativeDateTime, formatCreativeDateTimeToMinute } from "../lib/creative-time";
@@ -485,11 +485,12 @@ function CreativeOrderDetail({ orderId, onBack, onBrowseOrders, backLabel }: { o
     const variant = adoptedCreativeOrderVariant(item);
     return variant ? [variant.id] : [];
   }) ?? []);
-  const latestAdjustment = latestOrderAdjustmentFeedback(feedback.data?.events ?? [], orderId);
+  const adjustmentEvents = latestOrderAdjustmentFeedbackByVariant(feedback.data?.events ?? [], orderId)
+    .filter((event) => !creativeAdjustmentIsDiscarded(creativeAdjustmentTarget(data?.items ?? [], event)?.variant, event));
+  const latestAdjustment = adjustmentEvents[0];
   const adjustedVariant = creativeAdjustmentTarget(data?.items ?? [], latestAdjustment)?.variant;
   const adjustmentVariantId = typeof latestAdjustment?.context_snapshot.variant_id === "string" ? latestAdjustment.context_snapshot.variant_id : "";
   const adjustmentSizeKey = typeof latestAdjustment?.context_snapshot.size_key === "string" ? latestAdjustment.context_snapshot.size_key : "";
-  const adjustmentState = latestAdjustment ? creativeAdjustmentProgress(adjustedVariant, latestAdjustment).replace(/ · r\d+$/, "") : "";
   const defaultAsset = reviewAssets.find((asset) => adoptedVariantIds.has(asset.variant_id) && asset.size_key === "1080x1080")
     ?? reviewAssets.find((asset) => adoptedVariantIds.has(asset.variant_id))
     ?? reviewAssets.find((asset) => asset.variant_id === adjustmentVariantId && asset.size_key === adjustmentSizeKey)
@@ -544,6 +545,7 @@ function CreativeOrderDetail({ orderId, onBack, onBrowseOrders, backLabel }: { o
     if (!data?.issue_id) throw new Error("该订单缺少协作记录，无法创建精准调整");
     const target = variantById.get(asset.variant_id);
     if (!target) throw new Error("当前成图缺少变体上下文");
+    if (creativeVariantHasLiveStagingRevision(target.variant)) throw new Error(t(($) => $.studio.adjustmentInProgress, { revision: target.variant.staging_revision }));
     const squadId = creativeOrderSquadId(data);
     if (!squadId) throw new Error("该订单缺少素材小队，无法创建精准调整");
     const sizeKey = creativeOrderAdjustmentSize(asset);
@@ -564,6 +566,7 @@ function CreativeOrderDetail({ orderId, onBack, onBrowseOrders, backLabel }: { o
       scope: normalizedScope,
       expectedSizes,
       sourceRevision: asset.revision,
+      targetRevision: target.variant.revision + 1,
       request,
     };
     const issue = await api.createIssue(creativeOrderAdjustmentIssueRequest(issueInput, data.issue_id, squadId));
@@ -628,6 +631,42 @@ function CreativeOrderDetail({ orderId, onBack, onBrowseOrders, backLabel }: { o
       setRetryingVariantId("");
     }
   };
+  const restartAdjustment = async (event: CreateCreativeFeedbackResponse) => {
+    const asset = assets.find((candidate) => candidate.id === event.subject_id);
+    const adjustmentIssueId = typeof event.context_snapshot.adjustment_issue_id === "string" ? event.context_snapshot.adjustment_issue_id : "";
+    const sizeKey = typeof event.context_snapshot.size_key === "string" ? event.context_snapshot.size_key : "";
+    const sourceRevision = typeof event.context_snapshot.revision === "number" ? event.context_snapshot.revision : 0;
+    const targetSize = creativeOrderAdjustmentSize({ size_key: sizeKey });
+    const annotationGuideAttachmentID = typeof event.context_snapshot.annotation_guide_attachment_id === "string" ? event.context_snapshot.annotation_guide_attachment_id : "";
+    if (!asset || !adjustmentIssueId || !targetSize || sourceRevision < 1) {
+      toast.error(t(($) => $.studio.adjustmentTargetMissing));
+      return;
+    }
+    setAdjustBusy(true);
+    try {
+      const scope = event.context_snapshot.scope === "variant" ? "variant" : "size";
+      await api.queueCreativeOrderAdjustment(orderId, { adjustment_issue_id: adjustmentIssueId, asset_id: asset.id, size_key: targetSize, scope, source_revision: sourceRevision, annotation_guide_attachment_id: annotationGuideAttachmentID || undefined, comment: event.comment, event_type: event.event_type === "annotation" ? "annotation" : "decision", reason_codes: event.reason_codes, annotation: event.annotation, context_snapshot: event.context_snapshot });
+      await queryClient.invalidateQueries({ queryKey: creativeKeys.feedback(wsId, "asset", "") });
+      await queryClient.invalidateQueries({ queryKey: creativeKeys.order(wsId, orderId) });
+      await queryClient.invalidateQueries({ queryKey: creativeKeys.orders(wsId) });
+      const expectedCount = Array.isArray(event.context_snapshot.expected_sizes) ? event.context_snapshot.expected_sizes.length : 0;
+      toast.success(scope === "variant" ? t(($) => $.studio.adjustmentRestartedAll, { count: expectedCount }) : t(($) => $.studio.adjustmentRestartedCurrent));
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : t(($) => $.studio.adjustmentRestartFailed));
+    } finally {
+      setAdjustBusy(false);
+    }
+  };
+  const discardStaging = async (variant: CreativeOrderVariant) => {
+    try {
+      await api.discardCreativeOrderVariantStaging(orderId, variant.id);
+      await queryClient.invalidateQueries({ queryKey: creativeKeys.order(wsId, orderId) });
+      await queryClient.invalidateQueries({ queryKey: creativeKeys.orders(wsId) });
+      toast.success(t(($) => $.studio.stagingDiscarded, { stagingRevision: variant.staging_revision, activeRevision: variant.active_revision }));
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : t(($) => $.studio.stagingDiscardFailed));
+    }
+  };
 
   return <div className="mx-auto max-w-[1440px] space-y-4">
     <div className="flex flex-wrap items-end justify-between gap-3 border-b pb-3">
@@ -650,7 +689,6 @@ function CreativeOrderDetail({ orderId, onBack, onBrowseOrders, backLabel }: { o
           disabled={isCancelled}
           defaultOpen={index === 0}
           showDirectionDetails={false}
-          adjustment={adjustmentVariantId && adjustmentSizeKey ? { variantId: adjustmentVariantId, sizeKey: adjustmentSizeKey, status: adjustmentState } : undefined}
           retryingVariantId={retryingVariantId}
           onRetryVariant={(variant, action) => void retryVariant(variant, action)}
           onAdopt={(variantId, risk) => {
@@ -696,33 +734,11 @@ function CreativeOrderDetail({ orderId, onBack, onBrowseOrders, backLabel }: { o
       disabled={isCancelled}
       onAnnotations={annotation}
       onViewInfo={(asset) => setGenerationInfoAssetId(asset.id)}
+      onDiscard={(variant) => discardStaging(variant)}
     />}
-    {latestAdjustment && data && <CreativeAdjustmentStatus event={latestAdjustment} variant={adjustedVariant} issueId={data.issue_id} retrying={adjustBusy} onRetry={async () => {
-      const asset = assets.find((candidate) => candidate.id === latestAdjustment.subject_id);
-      const adjustmentIssueId = typeof latestAdjustment.context_snapshot.adjustment_issue_id === "string" ? latestAdjustment.context_snapshot.adjustment_issue_id : "";
-      const sizeKey = typeof latestAdjustment.context_snapshot.size_key === "string" ? latestAdjustment.context_snapshot.size_key : "";
-      const sourceRevision = typeof latestAdjustment.context_snapshot.revision === "number" ? latestAdjustment.context_snapshot.revision : 0;
-      const targetSize = creativeOrderAdjustmentSize({ size_key: sizeKey });
-      const annotationGuideAttachmentID = typeof latestAdjustment.context_snapshot.annotation_guide_attachment_id === "string" ? latestAdjustment.context_snapshot.annotation_guide_attachment_id : "";
-      if (!asset || !adjustmentIssueId || !targetSize || sourceRevision < 1) {
-        toast.error(t(($) => $.studio.adjustmentTargetMissing));
-        return;
-      }
-      setAdjustBusy(true);
-      try {
-        const scope = latestAdjustment.context_snapshot.scope === "variant" ? "variant" : "size";
-        await api.queueCreativeOrderAdjustment(orderId, { adjustment_issue_id: adjustmentIssueId, asset_id: asset.id, size_key: targetSize, scope, source_revision: sourceRevision, annotation_guide_attachment_id: annotationGuideAttachmentID || undefined, comment: latestAdjustment.comment, event_type: latestAdjustment.event_type === "annotation" ? "annotation" : "decision", reason_codes: latestAdjustment.reason_codes, annotation: latestAdjustment.annotation, context_snapshot: latestAdjustment.context_snapshot });
-        await queryClient.invalidateQueries({ queryKey: creativeKeys.feedback(wsId, "asset", "") });
-        await queryClient.invalidateQueries({ queryKey: creativeKeys.order(wsId, orderId) });
-        await queryClient.invalidateQueries({ queryKey: creativeKeys.orders(wsId) });
-        const expectedCount = Array.isArray(latestAdjustment.context_snapshot.expected_sizes) ? latestAdjustment.context_snapshot.expected_sizes.length : 0;
-        toast.success(scope === "variant" ? t(($) => $.studio.adjustmentRestartedAll, { count: expectedCount }) : t(($) => $.studio.adjustmentRestartedCurrent));
-      } catch (error) {
-        toast.error(error instanceof Error ? error.message : t(($) => $.studio.adjustmentRestartFailed));
-      } finally {
-        setAdjustBusy(false);
-      }
-    }} />}
+    {adjustmentEvents.length > 0 && data && <section className="divide-y border-y" aria-label={t(($) => $.studio.adjustmentStatus)}>
+      {adjustmentEvents.map((event) => <CreativeAdjustmentStatus key={event.id} event={event} variant={creativeAdjustmentTarget(data.items, event)?.variant} issueId={data.issue_id} retrying={adjustBusy} onRetry={() => restartAdjustment(event)} />)}
+    </section>}
     {isDirectEdit && activeVariant && <CreativeDirectEditRevisionPicker
       variant={activeVariant.variant}
       attachments={byId}
@@ -1307,6 +1323,7 @@ type CreativeOrderAdjustmentIssueInput = {
   scope: CreativeAdjustmentScope;
   expectedSizes: readonly CreativeDeliverySize[];
   sourceRevision: number;
+  targetRevision?: number;
   request: string;
 };
 
@@ -1347,9 +1364,9 @@ export function creativeAnnotationAdjustmentSummary(drafts: CreativeAnnotationDr
   return drafts.map((draft, index) => `标注 ${index + 1}（${label}）：${draft.comment.trim()}`).join("\n");
 }
 
-export function creativeOrderAdjustmentIssueTitle(input: Pick<CreativeOrderAdjustmentIssueInput, "variantKey" | "sizeKey" | "scope" | "sourceRevision" | "expectedSizes">): string {
+export function creativeOrderAdjustmentIssueTitle(input: Pick<CreativeOrderAdjustmentIssueInput, "variantKey" | "sizeKey" | "scope" | "sourceRevision" | "targetRevision" | "expectedSizes">): string {
   const scopeLabel = input.scope === "variant" ? `全部交付尺寸（${input.expectedSizes.length}）` : creativeOrderSizeLabel(input.sizeKey);
-  return `${input.variantKey || "当前方案"} / ${scopeLabel} 精准调整 · R${input.sourceRevision + 1}`;
+  return `${input.variantKey || "当前方案"} / ${scopeLabel} 精准调整 · R${creativeOrderAdjustmentTargetRevision(input)}`;
 }
 
 export function creativeOrderAdjustmentIssueMetadata(input: CreativeOrderAdjustmentIssueInput): IssueMetadata {
@@ -1365,7 +1382,7 @@ export function creativeOrderAdjustmentIssueMetadata(input: CreativeOrderAdjustm
     creative_scope: input.scope,
     creative_size: input.sizeKey,
     creative_source_revision: input.sourceRevision,
-    creative_revision: input.sourceRevision + 1,
+    creative_revision: creativeOrderAdjustmentTargetRevision(input),
   };
 }
 
@@ -1393,7 +1410,17 @@ export function creativeOrderAdjustmentIssueDescription(input: CreativeOrderAdju
   const instruction = input.scope === "variant"
     ? "Apply this adjustment across all expected sizes in the current variant. Use the selected annotated size as reference; edit each delivery size from its same-size unbranded base and preserve approved style, layout family, business facts, and fixed Prime components unless the user explicitly marked them in this adjustment issue."
     : "Process only this size from the current approved image context. Preserve the approved style, layout family, business facts, and other assets unless the user explicitly marked them in this adjustment issue.";
-  return `订单画布提交精准调整。\n\n**目标成图：** ${target}${preview}\n\n${input.request.trim()}\n\n<!-- creative-workflow-context\ncreative_order_id: ${input.orderId}\ncreative_order_item_id: ${input.itemId}\nvariant_id: ${input.variantId}\nvariant_key: ${input.variantKey}\nasset_id: ${input.assetId}\nattachment_id: ${input.attachmentId}\nsize_key: ${input.sizeKey}\nsource_revision: ${input.sourceRevision}\ntarget_revision: ${input.sourceRevision + 1}\nscope: ${input.scope}\nexpected_sizes: ${input.expectedSizes.join(",")}\ninstruction: ${instruction}\n-->`;
+  return `订单画布提交精准调整。\n\n**目标成图：** ${target}${preview}\n\n${input.request.trim()}\n\n<!-- creative-workflow-context\ncreative_order_id: ${input.orderId}\ncreative_order_item_id: ${input.itemId}\nvariant_id: ${input.variantId}\nvariant_key: ${input.variantKey}\nasset_id: ${input.assetId}\nattachment_id: ${input.attachmentId}\nsize_key: ${input.sizeKey}\nsource_revision: ${input.sourceRevision}\ntarget_revision: ${creativeOrderAdjustmentTargetRevision(input)}\nscope: ${input.scope}\nexpected_sizes: ${input.expectedSizes.join(",")}\ninstruction: ${instruction}\n-->`;
+}
+
+function creativeOrderAdjustmentTargetRevision(input: Pick<CreativeOrderAdjustmentIssueInput, "sourceRevision" | "targetRevision">): number {
+  return input.targetRevision ?? input.sourceRevision + 1;
+}
+
+function creativeVariantHasLiveStagingRevision(variant: Pick<CreativeOrderVariant, "active_revision" | "staging_revision" | "status" | "revisions">): boolean {
+  if (variant.active_revision < 1 || variant.staging_revision <= variant.active_revision) return false;
+  const stagingStatus = variant.revisions?.find((revision) => revision.revision === variant.staging_revision)?.status;
+  return ["queued", "running", "partial"].includes(stagingStatus || variant.status);
 }
 
 function creativeOrderSizeLabel(sizeKey: string): string {

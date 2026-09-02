@@ -31,7 +31,7 @@ import {
   creativeStudioPath,
   selectCreativeReviewAssets,
 } from "./creative-studio-page";
-import { creativeAdjustmentCanRetry, creativeAdjustmentProgress, creativeAdjustmentTarget, creativeAdjustmentTimeline, latestOrderAdjustmentFeedback } from "../lib/creative-adjustment-progress";
+import { creativeAdjustmentCanRetry, creativeAdjustmentIsDiscarded, creativeAdjustmentProgress, creativeAdjustmentTarget, creativeAdjustmentTimeline, latestOrderAdjustmentFeedback, latestOrderAdjustmentFeedbackByVariant } from "../lib/creative-adjustment-progress";
 
 function readyVariant(id: string): CreativeOrderVariant {
   const sizes = ["1080x1080", "1200x628", "800x1000"];
@@ -143,6 +143,22 @@ describe("creative feedback state", () => {
     expect(creativeAdjustmentProgress({ revision: 2, status: "partial" } as CreativeOrderVariant, { ...latest, context_snapshot: { ...latest.context_snapshot, scope: "variant" } } as never)).toBe("全部交付尺寸调整中 · r2");
     expect(creativeAdjustmentProgress({ revision: 2, status: "action_required" } as CreativeOrderVariant, latest as never)).toBe("调整需要处理 · r2");
     expect(creativeAdjustmentProgress({ revision: 2, status: "completed" } as CreativeOrderVariant, latest as never)).toBe("调整已完成 · r2");
+    expect(creativeAdjustmentCanRetry({ revision: 2, status: "action_required" } as CreativeOrderVariant, latest as never)).toBe(false);
+  });
+
+  it("keeps one latest adjustment status for each Variant", () => {
+    const olderC01 = { id: "f1", decision: "needs_revision", created_at: "2026-08-05T10:00:00Z", context_snapshot: { order_id: "order-1", variant_id: "c01" } };
+    const latestC01 = { id: "f2", decision: "needs_revision", created_at: "2026-08-05T10:01:00Z", context_snapshot: { order_id: "order-1", variant_id: "c01" } };
+    const latestC02 = { id: "f3", decision: "needs_revision", created_at: "2026-08-05T10:02:00Z", context_snapshot: { order_id: "order-1", variant_id: "c02" } };
+
+    expect(latestOrderAdjustmentFeedbackByVariant([olderC01, latestC02, latestC01] as never, "order-1").map((event) => event.id)).toEqual(["f3", "f2"]);
+  });
+
+  it("hides a discarded adjustment draft from the status area", () => {
+    const event = { context_snapshot: { revision: 1, target_revision: 2 } } as never;
+    const variant = { revisions: [{ revision: 2, status: "cancelled" }] } as never;
+
+    expect(creativeAdjustmentIsDiscarded(variant, event)).toBe(true);
   });
 
   it("follows a replacement variant record to the latest revision of the same item and variant key", () => {

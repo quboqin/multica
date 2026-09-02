@@ -9,9 +9,19 @@ export type CreativeAdjustmentStep = {
 };
 
 export function latestOrderAdjustmentFeedback(events: CreateCreativeFeedbackResponse[], orderId: string): CreateCreativeFeedbackResponse | undefined {
-  return events
+  return latestOrderAdjustmentFeedbackByVariant(events, orderId)[0];
+}
+
+export function latestOrderAdjustmentFeedbackByVariant(events: CreateCreativeFeedbackResponse[], orderId: string): CreateCreativeFeedbackResponse[] {
+  const latestByVariant = new Map<string, CreateCreativeFeedbackResponse>();
+  for (const event of events
     .filter((event) => event.decision === "needs_revision" && event.context_snapshot.order_id === orderId)
-    .sort((left, right) => right.created_at.localeCompare(left.created_at))[0];
+    .sort((left, right) => right.created_at.localeCompare(left.created_at))) {
+    const variantId = typeof event.context_snapshot.variant_id === "string" ? event.context_snapshot.variant_id : "";
+    const key = variantId || event.id;
+    if (!latestByVariant.has(key)) latestByVariant.set(key, event);
+  }
+  return [...latestByVariant.values()];
 }
 
 export function creativeAdjustmentTarget(
@@ -41,10 +51,12 @@ export function creativeAdjustmentProgress(variant: CreativeOrderVariant | undef
 
 export function creativeAdjustmentCanRetry(variant: CreativeOrderVariant | undefined, event: CreateCreativeFeedbackResponse): boolean {
   const sourceRevision = adjustmentSourceRevision(event);
-  return Boolean(variant && (
-    variant.revision <= sourceRevision ||
-    (variant.revision === sourceRevision + 1 && ["running", "action_required", "failed"].includes(variant.status))
-  ));
+  return Boolean(variant && variant.revision <= sourceRevision);
+}
+
+export function creativeAdjustmentIsDiscarded(variant: CreativeOrderVariant | undefined, event: CreateCreativeFeedbackResponse): boolean {
+  const targetRevision = adjustmentTargetRevision(event);
+  return Boolean(targetRevision && variant?.revisions?.some((revision) => revision.revision === targetRevision && revision.status === "cancelled"));
 }
 
 export function creativeAdjustmentTimeline(variant: CreativeOrderVariant | undefined, event: CreateCreativeFeedbackResponse): CreativeAdjustmentStep[] {
@@ -71,6 +83,12 @@ export function creativeAdjustmentTimeline(variant: CreativeOrderVariant | undef
 
 function adjustmentSourceRevision(event: CreateCreativeFeedbackResponse): number {
   return typeof event.context_snapshot.revision === "number" ? event.context_snapshot.revision : 0;
+}
+
+function adjustmentTargetRevision(event: CreateCreativeFeedbackResponse): number {
+  return typeof event.context_snapshot.target_revision === "number"
+    ? event.context_snapshot.target_revision
+    : adjustmentSourceRevision(event) + 1;
 }
 
 function adjustmentExpectedSizes(event: CreateCreativeFeedbackResponse, variant?: CreativeOrderVariant): string[] {

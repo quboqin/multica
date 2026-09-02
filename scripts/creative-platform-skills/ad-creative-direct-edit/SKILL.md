@@ -7,7 +7,7 @@ allowed-tools: Bash(multica *), Bash(python *)
 # 广告图片直接修改
 
 这是 Creative Order 的精准调整路径，不执行素材爬取、参考分析、三套新创意或标准出图。任务 context 必须给出
-`<order-id>`、`<variant-id>`、`revision`、`expected_sizes`、`target_size`、`scope`、`user_request`、`delivery_mode`、
+`<order-id>`、`<variant-id>`、`revision`、`expected_sizes`、`target_size`、`scope`、`user_request`、`prompt_profile`、`delivery_mode`、
 `reviewer_agent_id`、无品牌 `source_asset_id/source_attachment_id`、与本次 `expected_sizes` 对应的 `source_assets` 和可编辑的无品牌 base asset。没有这些字段，或
 只有带品牌组件、二维码、Logo、条款、商店徽章的最终图而无法追溯 base asset 时，将 variant 写为 `action_required`；
 不得把最终 Prime 图作为可编辑来源。
@@ -15,6 +15,10 @@ allowed-tools: Bash(multica *), Bash(python *)
 订单冻结的 `copy_snapshot` 仍是可见文案和业务事实的唯一真值；精准调整不能改写、补造或删除已批准文案。
 `raw_user_request`/`user_request` 是审计和意图输入，**不是**最终模型 prompt 的逐字合同。保留原文用于过程证据，但先结合
 `annotations`、annotation brief、当前 Prime 成图关系和固定保护约束，编译为可执行的结构化编辑方案；最终 prompt 可以完全重写用户原话。
+
+当 `prompt_profile=layout_micro_adjustment` 时，这是仅针对版式、主体比例、居中、聚拢或留白的轻微调整，不能影响其他精准改图和标准出图。将“稍微、一些、一定、适度”等弱量词保持为轻量级变化，禁止强化成“明显、宽大、充足、显著、大面积”或等价表达。以 Input 1 的主体占比、视觉重心和上下留白为默认真值：只做用户要求的最小缩放和必要的联动位移，保持原有内容覆盖率，不能把业务内容压缩成居中的小岛，也不能仅为留白把 CTA、表格或主体明显上移。
+
+此 profile 中的“下方预留空间”仅表示与原图比例协调的适度呼吸空间；“不要出现文字”只禁止在该预留区新增业务文案，不授权创造大块纯背景。`intent-plan.json` 必须将此限制写入 `change_budget` 和 acceptance checks：主体仍保持接近原有视觉占比、上下重心自然、下方没有超过请求所需的连续大面积空白、未新增文字。最终 prompt 应使用类似 “Make only a subtle proportional reduction and gentle recentering of the existing content group. Preserve the original visual coverage and balance. Keep only a modest lower breathing margin with no new copy; do not create a large empty lower field.” 的像素指令，并随实际用户目标替换可编辑内容组。
 
 运行中的 Agent 进程由 daemon 注入 `MULTICA_TASK_ID`，它是当前 direct-edit task 的唯一 task ID。不要从 `issue_id`、
 `direct_edit.adjustment_issue_id`、`variant_id` 或 `item_key` 猜 task ID，也不要把 Issue ID 当成 task ID 写入任何领域 JSON。

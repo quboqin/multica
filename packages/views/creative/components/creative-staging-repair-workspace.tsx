@@ -63,16 +63,19 @@ export function CreativeStagingRepairWorkspace({
   disabled = false,
   onAnnotations,
   onViewInfo,
+  onDiscard,
 }: {
   items: CreativeOrderItem[];
   attachments: Map<string, DeliveryAttachment>;
   disabled?: boolean;
   onAnnotations: (asset: CreativeOrderAsset, annotations: CreativeAnnotationDraft[]) => Promise<boolean>;
   onViewInfo?: (asset: CreativeOrderAsset) => void;
+  onDiscard?: (variant: CreativeOrderVariant) => Promise<void>;
 }) {
   const { t } = useT("creative");
   const entries = useMemo(() => creativeStagingRepairEntries(items), [items]);
   const [selectedAssetId, setSelectedAssetId] = useState("");
+  const [discardingVariantId, setDiscardingVariantId] = useState("");
   const selected = entries.find((entry) => entry.asset.id === selectedAssetId);
   const selectedVariantEntries = selected
     ? entries.filter((entry) => entry.variant.id === selected.variant.id)
@@ -91,16 +94,28 @@ export function CreativeStagingRepairWorkspace({
       <p className="text-xs text-muted-foreground">{t(($) => $.stagingRepair.activeRevision)}</p>
     </div>
     <div className="mt-3 flex flex-wrap gap-2">
-      {entries.map((entry) => <Button
-        key={entry.asset.id}
-        size="sm"
-        variant="outline"
-        disabled={!attachmentURL(entry.asset)}
-        onClick={() => setSelectedAssetId(entry.asset.id)}
-      >
-        <PencilRuler className="h-4 w-4" />
-        {t(($) => $.stagingRepair.viewAndAnnotate, { variant: entry.variant.variant_key || entry.variant.id.slice(0, 8), revision: entry.asset.revision, size: deliverySizeLabel(t, entry.asset.size_key) })}
-      </Button>)}
+      {entries.map((entry, index) => <div key={entry.asset.id} className="flex gap-2">
+        <Button
+          size="sm"
+          variant="outline"
+          disabled={!attachmentURL(entry.asset)}
+          onClick={() => setSelectedAssetId(entry.asset.id)}
+        >
+          <PencilRuler className="h-4 w-4" />
+          {t(($) => $.stagingRepair.viewAndAnnotate, { variant: entry.variant.variant_key || entry.variant.id.slice(0, 8), revision: entry.asset.revision, size: deliverySizeLabel(t, entry.asset.size_key) })}
+        </Button>
+        {onDiscard && !disabled && entries.findIndex((candidate) => candidate.variant.id === entry.variant.id) === index && <Button
+          size="sm"
+          variant="ghost"
+          disabled={discardingVariantId === entry.variant.id}
+          onClick={() => {
+            setDiscardingVariantId(entry.variant.id);
+            void onDiscard(entry.variant).finally(() => setDiscardingVariantId(""));
+          }}
+        >
+          {discardingVariantId === entry.variant.id ? t(($) => $.stagingRepair.discarding) : t(($) => $.stagingRepair.discardDraft, { revision: entry.variant.staging_revision })}
+        </Button>}
+      </div>)}
     </div>
     <Dialog open={Boolean(selected)} onOpenChange={(open) => { if (!open) setSelectedAssetId(""); }}>
       <DialogContent className="flex h-[min(92vh,920px)] max-w-6xl flex-col overflow-hidden p-0">
@@ -132,7 +147,7 @@ export function CreativeStagingRepairWorkspace({
             }))}
             onAssetChange={setSelectedAssetId}
             onViewInfo={onViewInfo ? () => onViewInfo(selected.asset) : undefined}
-            onAnnotations={disabled ? undefined : (annotations) => onAnnotations(selected.asset, annotations)}
+            onAnnotations={disabled ? undefined : (annotations) => onAnnotations(selected.activeAsset ?? selected.asset, annotations)}
             annotationScopes={selected.expectedSizes.length > 1 ? ["size", "variant"] : ["size"]}
             annotationScopeLabels={{ variant: t(($) => $.stagingRepair.allProductionSizes, { count: selected.expectedSizes.length }) }}
             showDecisionActions={false}

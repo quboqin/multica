@@ -1059,7 +1059,7 @@ describe("creative order delivery selection", () => {
     const onRetryVariant = vi.fn();
     render(<CreativeOrderDeliveryCandidates orderId="order-1" item={orderItem} source={{ label: "竞品原图", url: "https://cdn.example/source.png" }} attachments={attachmentMap(orderItem)} adoptingVariantId="" onAdopt={vi.fn()} onAssetSelect={onAssetSelect} onRetryVariant={onRetryVariant} />);
     expect(screen.getByText("线上 r2")).toBeInTheDocument();
-    expect(screen.getByText("制作中 r3")).toBeInTheDocument();
+    expect(screen.getByText("修订草稿 r3")).toBeInTheDocument();
     const cover = screen.getByAltText("V01 方形主预览");
     expect(cover).toHaveAttribute("src", "https://cdn.example/v01-1080x1080.png");
     const card = cover.closest("article");
@@ -1068,20 +1068,20 @@ describe("creative order delivery selection", () => {
     expect(onAssetSelect).toHaveBeenCalledWith("v01-1200x628");
     expect(within(card!).getByRole("button", { name: "竖版可查看" })).toBeEnabled();
     expect(screen.getByRole("button", { name: "采用此变体" })).toBeEnabled();
-    expect(screen.getByText("制作中 r3 需要处理")).toBeInTheDocument();
+    expect(screen.getByText("r3 待处理")).toBeInTheDocument();
     expect(screen.getByText("r3 竖版仍需调整")).toBeInTheDocument();
     expect(screen.getByText("竖版白字对比不足")).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "重新质检 · r3" }));
-    expect(onRetryVariant).toHaveBeenCalledWith(candidate, { kind: "qc", taskId: "", label: "重新质检" });
+    fireEvent.click(screen.getByRole("button", { name: "重新运行质检 · r3" }));
+    expect(onRetryVariant).toHaveBeenCalledWith(candidate, { kind: "qc", taskId: "", label: "rerun_qc" });
 
     cleanup();
     orderItem.adopted_variant_id = candidate.id;
     render(<CreativeOrderDeliveryCandidates orderId="order-1" item={orderItem} source={{ label: "竞品原图", url: "https://cdn.example/source.png" }} attachments={attachmentMap(orderItem)} adoptingVariantId="" onAdopt={vi.fn()} onAssetSelect={onAssetSelect} onRetryVariant={onRetryVariant} />);
     expect(screen.getByTestId("creative-adopted-variant")).toHaveTextContent("最终采用方案");
     expect(screen.getByTestId("creative-adopted-staging-revision")).toHaveTextContent("线上版本继续可用");
-    expect(screen.getByText("制作中 r3 需要处理")).toBeInTheDocument();
+    expect(screen.getByText("r3 待处理")).toBeInTheDocument();
     expect(screen.getByText("r3 竖版仍需调整")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "重新质检 · r3" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "重新运行质检 · r3" })).toBeEnabled();
   });
 
   it("keeps exploratory primary images and reserves out of the delivery page", () => {

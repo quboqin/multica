@@ -83,7 +83,7 @@ describe("CreativeStagingRepairWorkspace", () => {
     }]);
   });
 
-  it("keeps staging out of delivery actions and submits annotations against the staging asset", async () => {
+  it("keeps staging out of delivery actions and submits annotations against the live asset", async () => {
     const item = failedStagingItem();
     const attachments = new Map(item.variants[0]!.assets.map((entry) => [entry.attachment_id, {
       id: entry.attachment_id,
@@ -112,7 +112,7 @@ describe("CreativeStagingRepairWorkspace", () => {
     fireEvent.click(screen.getByRole("button", { name: "提交 1 处调整" }));
 
     await waitFor(() => expect(onAnnotations).toHaveBeenCalledTimes(1));
-    expect(onAnnotations.mock.calls[0]?.[0]).toMatchObject({ id: "staging-r3-prime", revision: 3, stage: "primed" });
+    expect(onAnnotations.mock.calls[0]?.[0]).toMatchObject({ id: "active-r2", revision: 2, stage: "delivered" });
     expect(onAnnotations.mock.calls[0]?.[1]?.[0]).toMatchObject({ kind: "point", comment: "提高标题对比度", scope: "size" });
   });
 });

@@ -516,12 +516,14 @@ WHERE id = $1
 		DirectEditAgentID     string   `json:"direct_edit_agent_id"`
 		RawUserRequest        string   `json:"raw_user_request"`
 		PromptCompilation     string   `json:"prompt_compilation"`
+		PromptProfile         string   `json:"prompt_profile"`
 		FinalVisualValidation bool     `json:"final_visual_validation"`
 		ExpectedSizes         []string `json:"expected_sizes"`
 		DirectEdit            struct {
 			DirectEditAgentID     string `json:"direct_edit_agent_id"`
 			RawUserRequest        string `json:"raw_user_request"`
 			PromptCompilation     string `json:"prompt_compilation"`
+			PromptProfile         string `json:"prompt_profile"`
 			FinalVisualValidation bool   `json:"final_visual_validation"`
 		} `json:"direct_edit"`
 	}
@@ -533,6 +535,7 @@ WHERE id = $1
 	}
 	if !contextValue.FinalVisualValidation || !contextValue.DirectEdit.FinalVisualValidation ||
 		contextValue.PromptCompilation != "intent_normalization_required" || contextValue.DirectEdit.PromptCompilation != "intent_normalization_required" ||
+		contextValue.PromptProfile != "standard_direct_edit" || contextValue.DirectEdit.PromptProfile != contextValue.PromptProfile ||
 		contextValue.RawUserRequest != "把背景换成更明亮的办公室" || contextValue.DirectEdit.RawUserRequest != contextValue.RawUserRequest ||
 		len(contextValue.ExpectedSizes) != 1 || contextValue.ExpectedSizes[0] != targetSize {
 		t.Fatalf("task context direct-edit intent contract = %#v", contextValue)
@@ -540,6 +543,7 @@ WHERE id = $1
 	var delivery struct {
 		FinalVisualValidation bool     `json:"final_visual_validation"`
 		RawUserRequest        string   `json:"raw_user_request"`
+		PromptProfile         string   `json:"prompt_profile"`
 		ExpectedSizes         []string `json:"expected_sizes"`
 	}
 	if err := testPool.QueryRow(t.Context(), `SELECT brief->'creative_direct_edit_delivery' FROM creative_order_variant WHERE id = $1`, variantID).Scan(&taskContext); err != nil {
@@ -548,9 +552,25 @@ WHERE id = $1
 	if err := json.Unmarshal([]byte(taskContext), &delivery); err != nil {
 		t.Fatal(err)
 	}
-	if !delivery.FinalVisualValidation || delivery.RawUserRequest != contextValue.RawUserRequest ||
+	if !delivery.FinalVisualValidation || delivery.RawUserRequest != contextValue.RawUserRequest || delivery.PromptProfile != contextValue.PromptProfile ||
 		len(delivery.ExpectedSizes) != 1 || delivery.ExpectedSizes[0] != targetSize || strings.Contains(taskContext, "skip_qc") {
 		t.Fatalf("direct-edit delivery contract = %#v", delivery)
+	}
+	var feedbackContext map[string]any
+	if err := testPool.QueryRow(t.Context(), `
+SELECT context_snapshot
+FROM creative_feedback_event
+WHERE issue_id = $1 AND subject_id = $2 AND decision = 'needs_revision'
+ORDER BY created_at DESC
+LIMIT 1
+`, adjustmentIssueID, targetAssetID).Scan(&taskContext); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal([]byte(taskContext), &feedbackContext); err != nil {
+		t.Fatal(err)
+	}
+	if feedbackContext["target_revision"] != float64(2) || feedbackContext["prompt_profile"] != "standard_direct_edit" {
+		t.Fatalf("adjustment feedback context = %#v", feedbackContext)
 	}
 	var revisionSizes []string
 	if err := testPool.QueryRow(t.Context(), `
@@ -575,14 +595,23 @@ SELECT expected_sizes FROM creative_order_variant_revision WHERE variant_id = $1
 	if len(frozen.Squad.DirectEditAgentIDs) != 2 {
 		t.Fatalf("frozen direct edit pool = %#v", frozen.Squad.DirectEditAgentIDs)
 	}
+	r2GeneratedAttachmentID := createCreativeFeedbackAsset(t)
+	if _, err := testPool.Exec(t.Context(), `
+INSERT INTO creative_order_asset (variant_id, size_key, revision, stage, attachment_id, status)
+VALUES ($1, $2, 2, 'generated', $3, 'completed')
+	`, variantID, targetSize, r2GeneratedAttachmentID); err != nil {
+		t.Fatal(err)
+	}
 	deliveredAttachmentID := createCreativeFeedbackAsset(t)
+	var deliveredAssetID string
 	if _, err := testPool.Exec(t.Context(), `UPDATE creative_order_variant SET status = 'completed' WHERE id = $1 AND revision = 2`, variantID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := testPool.Exec(t.Context(), `
+	if err := testPool.QueryRow(t.Context(), `
 INSERT INTO creative_order_asset (variant_id, size_key, revision, stage, attachment_id, status)
 VALUES ($1, $2, 2, 'delivered', $3, 'completed')
-	`, variantID, targetSize, deliveredAttachmentID); err != nil {
+	RETURNING id::text
+	`, variantID, targetSize, deliveredAttachmentID).Scan(&deliveredAssetID); err != nil {
 		t.Fatal(err)
 	}
 	tx, err := testPool.Begin(t.Context())
@@ -650,11 +679,11 @@ WHERE id = $1
 		"creative_order_id":          orderID,
 		"creative_order_item_id":     itemID,
 		"creative_variant_id":        variantID,
-		"creative_asset_id":          failedPrimeAssetID,
-		"creative_attachment_id":     failedPrimeAttachmentID,
+		"creative_asset_id":          deliveredAssetID,
+		"creative_attachment_id":     deliveredAttachmentID,
 		"creative_scope":             "size",
 		"creative_size":              targetSize,
-		"creative_source_revision":   3,
+		"creative_source_revision":   2,
 		"creative_revision":          4,
 	})
 	if err != nil {
@@ -666,11 +695,11 @@ WHERE id = $1
 	w = httptest.NewRecorder()
 	req = newRequest(http.MethodPost, "/api/creative/orders/"+orderID+"/adjustments", creativeOrderAdjustmentInput{
 		AdjustmentIssueID: failedAdjustmentIssueID,
-		AssetID:           failedPrimeAssetID,
+		AssetID:           deliveredAssetID,
 		SizeKey:           targetSize,
 		Scope:             "size",
-		SourceRevision:    3,
-		Comment:           "修复最终视觉验收失败稿",
+		SourceRevision:    2,
+		Comment:           "基于线上版本重做最终视觉修订",
 		EventType:         "decision",
 		ReasonCodes:       []string{"theme_mismatch"},
 		ContextSnapshot:   json.RawMessage(`{}`),
@@ -707,7 +736,7 @@ FROM creative_order_variant WHERE id = $1
 	if err := json.Unmarshal([]byte(taskContext), &repairTaskContext); err != nil {
 		t.Fatal(err)
 	}
-	if repairTaskContext.SourceRevision != 3 || len(repairTaskContext.ExpectedSizes) != 1 || repairTaskContext.ExpectedSizes[0] != targetSize {
+	if repairTaskContext.SourceRevision != 2 || len(repairTaskContext.ExpectedSizes) != 1 || repairTaskContext.ExpectedSizes[0] != targetSize {
 		t.Fatalf("failed staging repair task context = %#v", repairTaskContext)
 	}
 	finalAttachmentID := createCreativeFeedbackAsset(t)

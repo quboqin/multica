@@ -74,6 +74,22 @@ func creativeOrderAdjustmentEditSizes(scope, targetSize string, expectedSizes []
 	return []string{targetSize}
 }
 
+func creativeOrderAdjustmentPromptProfile(request string) string {
+	request = strings.ToLower(strings.TrimSpace(request))
+	if request == "" {
+		return "standard_direct_edit"
+	}
+	for _, keyword := range []string{
+		"缩小", "缩放", "变小", "聚拢", "居中", "中间",
+		"shrink", "scale down", "smaller", "compact", "recenter", "center", "centre",
+	} {
+		if strings.Contains(request, keyword) {
+			return "layout_micro_adjustment"
+		}
+	}
+	return "standard_direct_edit"
+}
+
 // QueueCreativeOrderAdjustment starts an annotated size revision with the
 // direct image-edit agent frozen from the order squad. The selected final
 // asset remains the collaboration reference, while the edit agent receives
@@ -179,7 +195,7 @@ FOR UPDATE
 		parentIssueID != rootIssueID || issueContext.OrderID != uuidToString(orderID) ||
 		issueContext.AssetID != uuidToString(assetID) || issueContext.Scope != input.Scope ||
 		issueContext.SizeKey != input.SizeKey || issueContext.SourceRevision != input.SourceRevision ||
-		issueContext.Revision != input.SourceRevision+1 {
+		issueContext.Revision < 1 {
 		writeError(w, http.StatusConflict, "adjustment collaboration record no longer matches this order image")
 		return
 	}
@@ -239,7 +255,11 @@ FOR UPDATE OF item, variant, source_revision, asset
 		return
 	}
 	editSizes := creativeOrderAdjustmentEditSizes(input.Scope, input.SizeKey, expectedSizes)
-	newRevision := input.SourceRevision + 1
+	newRevision := currentRevision + 1
+	if issueContext.Revision != newRevision {
+		writeError(w, http.StatusConflict, "adjustment collaboration record is stale; reopen the active image before submitting")
+		return
+	}
 
 	var activeTask bool
 	if err := tx.QueryRow(r.Context(), `
@@ -256,11 +276,6 @@ SELECT EXISTS(
 	}
 	if activeTask {
 		writeError(w, http.StatusConflict, "this variant already has active work")
-		return
-	}
-
-	if currentRevision != input.SourceRevision {
-		writeError(w, http.StatusConflict, "adjustment must explicitly target the current active or staging revision")
 		return
 	}
 
@@ -445,6 +460,7 @@ ON CONFLICT (variant_id, revision, workflow, size_key, label, filename) DO NOTHI
 	if len(annotationsJSON) == 0 || string(annotationsJSON) == "null" {
 		annotationsJSON = []byte("[]")
 	}
+	promptProfile := creativeOrderAdjustmentPromptProfile(feedback.Comment)
 	var revisionBrief string
 	if err := tx.QueryRow(r.Context(), `
 UPDATE creative_order_variant
@@ -461,16 +477,17 @@ SET revision = $2,
         'scope', $5::text,
         'expected_sizes', to_jsonb($6::text[]),
         'edit_sizes', to_jsonb($7::text[]),
-        'raw_user_request', $8::text,
-        'annotations', $9::jsonb,
-        'annotation_guide_attachment_id', $10::text
+	        'raw_user_request', $8::text,
+	        'prompt_profile', $9::text,
+	        'annotations', $10::jsonb,
+	        'annotation_guide_attachment_id', $11::text
       ),
       true
     ),
     updated_at = now()
 WHERE id = $1
 RETURNING brief::text
-	`, parseUUID(variantID), newRevision, input.SourceRevision, input.SizeKey, input.Scope, expectedSizes, editSizes, feedback.Comment, string(annotationsJSON), annotationGuideAttachmentID).Scan(&revisionBrief); err != nil {
+		`, parseUUID(variantID), newRevision, input.SourceRevision, input.SizeKey, input.Scope, expectedSizes, editSizes, feedback.Comment, promptProfile, string(annotationsJSON), annotationGuideAttachmentID).Scan(&revisionBrief); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to begin image adjustment")
 		return
 	}
@@ -491,6 +508,8 @@ RETURNING brief::text
 	feedbackContext["scope"] = input.Scope
 	feedbackContext["expected_sizes"] = expectedSizes
 	feedbackContext["edit_sizes"] = editSizes
+	feedbackContext["target_revision"] = newRevision
+	feedbackContext["prompt_profile"] = promptProfile
 	if annotationGuideAttachmentID != "" {
 		feedbackContext["annotation_guide_attachment_id"] = annotationGuideAttachmentID
 		feedbackContext["annotation_guide_source"] = "final_reference"
@@ -517,6 +536,7 @@ RETURNING brief::text
 		"user_request":                   feedback.Comment,
 		"raw_user_request":               feedback.Comment,
 		"prompt_compilation":             "intent_normalization_required",
+		"prompt_profile":                 promptProfile,
 		"final_visual_validation":        true,
 		"visual_rework_budget":           1,
 		"delivery_mode":                  "publish",
@@ -549,6 +569,7 @@ RETURNING brief::text
 			"request":                        feedback.Comment,
 			"raw_user_request":               feedback.Comment,
 			"prompt_compilation":             "intent_normalization_required",
+			"prompt_profile":                 promptProfile,
 			"final_visual_validation":        true,
 			"visual_rework_budget":           1,
 			"annotations":                    feedbackContext["annotations"],
@@ -607,6 +628,7 @@ INSERT INTO creative_feedback_event (
 		"revision":        newRevision,
 		"task_id":         uuidToString(task.ID),
 		"request":         feedback.Comment,
+		"prompt_profile":  promptProfile,
 	})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to prepare adjustment collaboration record")
@@ -635,4 +657,102 @@ RETURNING id::text, created_at
 	})
 	h.publishCreativeFeedbackActivity(workspaceID, adjustmentIssueID, actorType, actorID, activity)
 	writeJSON(w, http.StatusCreated, creativeOrderAdjustmentResponse{TaskID: uuidToString(task.ID), Revision: newRevision})
+}
+
+// DiscardCreativeOrderVariantStaging removes a terminal staging revision from
+// the active workflow while preserving its evidence and the adopted revision.
+func (h *Handler) DiscardCreativeOrderVariantStaging(w http.ResponseWriter, r *http.Request) {
+	workspaceID, userID, ok := h.creativeFeedbackWorkspaceUser(w, r)
+	if !ok {
+		return
+	}
+	orderID, ok := parseUUIDOrBadRequest(w, chi.URLParam(r, "id"), "order_id")
+	if !ok {
+		return
+	}
+	variantID, ok := parseUUIDOrBadRequest(w, chi.URLParam(r, "variantId"), "variant_id")
+	if !ok {
+		return
+	}
+	if !h.requireCreativeOrderWritable(w, r, orderID, workspaceID) {
+		return
+	}
+	tx, err := h.TxStarter.Begin(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to discard staging revision")
+		return
+	}
+	defer tx.Rollback(r.Context())
+
+	var currentRevision, activeRevision, stagingRevision int
+	var variantStatus, stagingStatus, activeBrief string
+	err = tx.QueryRow(r.Context(), `
+SELECT variant.revision,
+       COALESCE(variant.active_revision, 0),
+       COALESCE(variant.staging_revision, 0),
+       variant.status,
+       COALESCE(staging.status, ''),
+       COALESCE(active.brief::text, '{}')
+FROM creative_order_variant variant
+JOIN creative_order_item item ON item.id = variant.order_item_id
+LEFT JOIN creative_order_variant_revision staging
+  ON staging.variant_id = variant.id AND staging.revision = variant.staging_revision
+LEFT JOIN creative_order_variant_revision active
+  ON active.variant_id = variant.id AND active.revision = variant.active_revision
+WHERE variant.id = $1 AND item.order_id = $2
+FOR UPDATE OF variant
+`, variantID, orderID).Scan(&currentRevision, &activeRevision, &stagingRevision, &variantStatus, &stagingStatus, &activeBrief)
+	if errors.Is(err, pgx.ErrNoRows) {
+		writeError(w, http.StatusUnprocessableEntity, "variant does not belong to this creative order")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to load staging revision")
+		return
+	}
+	if activeRevision < 1 || stagingRevision < 1 || activeRevision == stagingRevision || currentRevision != stagingRevision {
+		writeError(w, http.StatusConflict, "this variant has no separate staging revision to discard")
+		return
+	}
+	if !creativeOrderAdjustmentTerminalRevisionStatus(variantStatus) || !creativeOrderAdjustmentTerminalRevisionStatus(stagingStatus) {
+		writeError(w, http.StatusConflict, "wait for the current image adjustment to finish before discarding its draft")
+		return
+	}
+	if _, err := tx.Exec(r.Context(), `
+UPDATE creative_order_variant_revision
+SET status = 'cancelled', updated_at = now()
+WHERE variant_id = $1 AND revision = $2
+`, variantID, stagingRevision); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to discard staging revision")
+		return
+	}
+	if _, err := tx.Exec(r.Context(), `
+UPDATE creative_order_variant
+SET status = 'completed',
+    staging_revision = active_revision,
+    brief = $2::jsonb,
+    updated_at = now()
+WHERE id = $1
+`, variantID, activeBrief); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to restore active creative revision")
+		return
+	}
+	if err := tx.Commit(r.Context()); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to discard staging revision")
+		return
+	}
+	h.publishCreativeDomainUpdated(r, workspaceID, userID, map[string]any{
+		"scope": "order", "order_id": uuidToString(orderID), "variant_id": uuidToString(variantID),
+		"revision": stagingRevision, "discarded": true,
+	})
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func creativeOrderAdjustmentTerminalRevisionStatus(status string) bool {
+	switch status {
+	case "completed", "action_required", "failed", "cancelled":
+		return true
+	default:
+		return false
+	}
 }

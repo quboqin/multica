@@ -784,6 +784,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 						r.With(handler.RequireHumanActor).Post("/cancel", h.CancelCreativeOrder)
 						r.Post("/workflow-failures/{taskId}/retry", h.RetryCreativeOrderWorkflowFailure)
 						r.Post("/variants/{variantId}/qc/retry", h.RetryCreativeOrderVariantQC)
+						r.With(handler.RequireHumanActor).Post("/variants/{variantId}/staging/discard", h.DiscardCreativeOrderVariantStaging)
 						r.With(handler.RequireHumanActor).Post("/variants/{variantId}/revisions/{revision}/select", h.SelectCreativeOrderVariantRevision)
 						r.With(handler.RequireHumanActor).Post("/items/{itemId}/adoption", h.AdoptCreativeOrderItemVariant)
 						r.With(handler.RequireHumanActor).Delete("/items/{itemId}/adoption", h.UnadoptCreativeOrderItemVariant)

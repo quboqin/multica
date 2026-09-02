@@ -716,16 +716,23 @@ function AdoptedVariantStagingStatus({
   retrying?: boolean;
   onRetry?: (variant: CreativeOrderVariant, action: CreativeVariantRetryAction) => void;
 }) {
+  const { t } = useT("creative");
   const activeRevision = creativeVariantActiveRevision(variant);
   const workingRevision = creativeVariantWorkingRevision(variant);
   if (activeRevision < 1 || workingRevision < 1 || activeRevision === workingRevision) return null;
   const details = creativeVariantWorkingQCDetails(variant);
   const retryAction = creativeVariantRetryAction(variant);
   const needsAttention = creativeVariantStagingNeedsAttention(variant);
+  const revisionStatus = (variant.revisions ?? []).find((revision) => revision.revision === workingRevision)?.status;
+  const stagingLabel = needsAttention
+    ? t(($) => $.stagingRepair.draftNeedsAttention, { revision: workingRevision })
+    : revisionStatus === "completed"
+      ? t(($) => $.stagingRepair.awaitingReview, { revision: workingRevision })
+      : t(($) => $.stagingRepair.inProgress, { revision: workingRevision });
   return <section className="space-y-3 border-t bg-muted/10 px-4 py-3" data-testid="creative-adopted-staging-revision">
     <div className="flex flex-wrap items-center gap-2">
       <Badge variant="outline">线上 r{activeRevision}</Badge>
-      <Badge variant={needsAttention ? "secondary" : "outline"}>制作中 r{workingRevision}</Badge>
+      <Badge variant={needsAttention ? "secondary" : "outline"}>{stagingLabel}</Badge>
       <p className="text-xs text-muted-foreground">线上版本继续可用，新版本通过全部检查后才会替换。</p>
     </div>
     {needsAttention
@@ -733,7 +740,9 @@ function AdoptedVariantStagingStatus({
       : <p className="text-xs text-muted-foreground">新版本正在生成或检查，完成后会自动更新。</p>}
     {retryAction && onRetry && <Button size="sm" variant="outline" disabled={disabled || retrying} onClick={() => onRetry(variant, retryAction)}>
       <RefreshCw className={cn("h-4 w-4", retrying && "animate-spin")} />
-      {retrying ? "正在重试" : `${retryAction.label} · r${workingRevision}`}
+      {retrying
+        ? t(($) => $.stagingRepair.retrying)
+        : `${retryAction.kind === "qc" ? t(($) => $.stagingRepair.rerunQC) : retryAction.label} · r${workingRevision}`}
     </Button>}
   </section>;
 }
@@ -765,6 +774,7 @@ function VariantCandidate({
   retrying?: boolean;
   onRetry?: (variant: CreativeOrderVariant, action: CreativeVariantRetryAction) => void;
 }) {
+  const { t } = useT("creative");
   const candidateState = creativeVariantCandidateState(variant);
   const participatesInDelivery = creativeVariantParticipatesInDelivery(variant);
   const expectedSizes = creativeVariantDisplaySizes(variant);
@@ -827,7 +837,7 @@ function VariantCandidate({
       <div className="flex min-w-0 flex-wrap items-center gap-2">
         <span className="text-sm font-semibold">{variant.variant_key || variant.id.slice(0, 8)}</span>
         {activeRevision > 0 && <Badge variant="outline">线上 r{activeRevision}</Badge>}
-        {hasStagingRevision && <Badge variant="secondary">制作中 r{workingRevision}</Badge>}
+        {hasStagingRevision && <Badge variant="secondary">{t(($) => $.stagingRepair.stagingDraft, { revision: workingRevision })}</Badge>}
         {activeRevision < 1 && workingRevision > 0 && <Badge variant="outline">r{workingRevision}</Badge>}
         {candidateState !== "selected" && <Badge variant="outline">{creativeVariantCandidateStateLabel(candidateState, variant.selection_rank)}</Badge>}
         {candidateState === "selected" && (variant.selection_rank ?? 0) > 0 && <Badge variant="outline">第 {variant.selection_rank} 名</Badge>}
@@ -863,7 +873,11 @@ function VariantCandidate({
       {participatesInDelivery && <VariantCompactDiagnostics variant={variant} disabled={disabled} details={qcDetails} />}
       {retryAction && onRetry && <Button className="w-full" size="sm" variant="outline" disabled={disabled || retrying} onClick={() => onRetry(variant, retryAction)}>
         <RefreshCw className={cn("h-4 w-4", retrying && "animate-spin")} />
-        {retrying ? "正在重试" : hasStagingRevision ? `${retryAction.label} · r${workingRevision}` : retryAction.label}
+        {retrying
+          ? t(($) => $.stagingRepair.retrying)
+          : hasStagingRevision
+            ? `${retryAction.kind === "qc" ? t(($) => $.stagingRepair.rerunQC) : retryAction.label} · r${workingRevision}`
+            : retryAction.kind === "qc" ? t(($) => $.stagingRepair.rerunQC) : retryAction.label}
       </Button>}
       <Button className="w-full" size="sm" variant="outline" disabled={!cover || !coverURL} onClick={() => { if (cover && coverURL) onAssetSelect(cover.id); }}>
         <Eye className="h-4 w-4" />
@@ -1128,14 +1142,15 @@ function VariantCompactDiagnostics({ variant, details, disabled = false }: { var
 }
 
 function VariantStagingDiagnostics({ variant, details }: { variant: CreativeOrderVariant; details: CreativeVariantQCDetail[] }) {
+  const { t } = useT("creative");
   if (!creativeVariantStagingNeedsAttention(variant)) return null;
   const revision = creativeVariantWorkingRevision(variant);
   const blocker = variant.action_required;
   const detail = blocker?.detail
     ? businessActionRequiredDetail(blocker.workflow, blocker.detail)
-    : `制作中 r${revision} 未完成，后台没有返回可读原因。`;
+    : t(($) => $.stagingRepair.noDetail, { revision });
   return <div className="space-y-2 border border-amber-300 bg-amber-50 px-2 py-2 text-xs text-amber-900 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-200" data-testid="creative-staging-revision-diagnostics">
-    <p className="flex items-center gap-1.5 font-medium"><AlertTriangle className="h-3.5 w-3.5" />制作中 r{revision} 需要处理</p>
+    <p className="flex items-center gap-1.5 font-medium"><AlertTriangle className="h-3.5 w-3.5" />{t(($) => $.stagingRepair.needsAttention, { revision })}</p>
     <p className="break-words">{detail}</p>
     <VariantQCDetails details={details} />
   </div>;
@@ -1312,7 +1327,7 @@ export function creativeVariantAdoptionReadiness(variant: CreativeOrderVariant):
     return { ready: false, status: `成图生成中：已完成 ${generatedSizes.size}/${expectedCount} 个尺寸` };
   }
   if (creativeVariantHasFailedStagingRevision(variant)) {
-    return { ready: true, status: `r${creativeVariantWorkingRevision(variant)} 制作未完成；可采用当前 r${creativeVariantActiveRevision(variant)} 成图` };
+    return { ready: true, status: `r${creativeVariantWorkingRevision(variant)} 修订草稿未采用；可采用当前 r${creativeVariantActiveRevision(variant)} 成图` };
   }
   if (failedQC.length > 0) {
     const risk = creativeVariantRiskAdoptionReadiness(variant);
@@ -1492,7 +1507,7 @@ export function creativeVariantCanRetryQC(variant: CreativeOrderVariant): boolea
 
 export function creativeVariantRetryAction(variant: CreativeOrderVariant): CreativeVariantRetryAction | null {
   if (creativeVariantCanRetryQC(variant)) {
-    return { kind: "qc", taskId: "", label: "重新质检" };
+    return { kind: "qc", taskId: "", label: "rerun_qc" };
   }
   const blocker = variant.action_required;
   if (!blocker?.retryable) return null;
