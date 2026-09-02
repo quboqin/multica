@@ -470,6 +470,59 @@ describe("CreativeOrderDeliveryCandidates", () => {
     expect(screen.getByRole("button", { name: "尚不可采用" })).toBeDisabled();
   });
 
+  it("shows an unadopted direct-edit result as a viewable preview", () => {
+    const blocked = variant("v01", false);
+    blocked.status = "action_required";
+    blocked.assets = [];
+    blocked.qc_reports = [];
+    blocked.diagnostic_assets = [{
+      id: "diagnostic-source",
+      variant_id: blocked.id,
+      task_id: "task-1",
+      attachment_id: "attachment-source",
+      size_key: "1080x1080",
+      revision: blocked.revision,
+      workflow: "creative_production",
+      label: "模型原图",
+      filename: "source.png",
+      metadata: {},
+      url: "/api/attachments/attachment-source/download",
+      created_at: "2026-09-02T10:00:00Z",
+      updated_at: "2026-09-02T10:00:00Z",
+    }, {
+      id: "diagnostic-preview",
+      variant_id: blocked.id,
+      task_id: "task-1",
+      attachment_id: "attachment-preview",
+      size_key: "1080x1080",
+      revision: blocked.revision,
+      workflow: "creative_direct_edit",
+      label: "直接改图尝试 2 · 未采用",
+      filename: "direct-edit-preview.png",
+      metadata: { accepted: false },
+      url: "/api/attachments/attachment-preview/download",
+      created_at: "2026-09-02T10:01:00Z",
+      updated_at: "2026-09-02T10:01:00Z",
+    }];
+    blocked.action_required = {
+      task_id: "task-1",
+      workflow: "creative_direct_edit",
+      failure_reason: "creative_output_missing",
+      detail: "direct image edit did not register a completed target generated asset",
+      failed_at: "2026-09-02T10:02:00Z",
+      retryable: true,
+    };
+    const orderItem = item();
+    orderItem.variants = [blocked];
+
+    render(<CreativeOrderDeliveryCandidates orderId="order-1" item={orderItem} source={{ label: "竞品原图", url: "https://cdn.example/source.png" }} attachments={new Map()} adoptingVariantId="" onAdopt={vi.fn()} onAssetSelect={vi.fn()} />);
+
+    expect(screen.getByAltText("V01 过程图片 直接改图尝试 2 · 未采用")).toBeInTheDocument();
+    expect(screen.getByText("改后预览 · 未采用")).toBeInTheDocument();
+    expect(screen.getByText("已生成改后预览，但未通过交付验收；请查看预览图片。")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /查看改后预览/ })).toBeInTheDocument();
+  });
+
   it("opens process images even when the variant already has preview assets", () => {
     const ready = variant("v01");
     ready.diagnostic_assets = [{

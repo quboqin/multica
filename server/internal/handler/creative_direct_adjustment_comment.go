@@ -97,7 +97,7 @@ func parseCreativeDirectEditDeliveryConfig(raw json.RawMessage) creativeDirectEd
 }
 
 func (h *Handler) notifyCreativeDirectAdjustmentDelivery(ctx context.Context, workspaceID, orderID, variantID pgtype.UUID, revision int, targetSize string) {
-	if err := h.postCreativeDirectAdjustmentDeliveryComment(ctx, workspaceID, orderID, variantID, revision, targetSize); err != nil {
+	if err := h.postCreativeDirectAdjustmentDeliveryComment(ctx, workspaceID, orderID, variantID, revision, targetSize, false); err != nil {
 		slog.Warn("creative direct adjustment delivery comment failed",
 			"error", err,
 			"workspace_id", uuidToString(workspaceID),
@@ -109,7 +109,20 @@ func (h *Handler) notifyCreativeDirectAdjustmentDelivery(ctx context.Context, wo
 	}
 }
 
-func (h *Handler) postCreativeDirectAdjustmentDeliveryComment(ctx context.Context, workspaceID, orderID, variantID pgtype.UUID, revision int, targetSize string) error {
+func (h *Handler) notifyCreativeDirectAdjustmentPreview(ctx context.Context, workspaceID, orderID, variantID pgtype.UUID, revision int, targetSize string) {
+	if err := h.postCreativeDirectAdjustmentDeliveryComment(ctx, workspaceID, orderID, variantID, revision, targetSize, true); err != nil {
+		slog.Warn("creative direct adjustment preview comment failed",
+			"error", err,
+			"workspace_id", uuidToString(workspaceID),
+			"order_id", uuidToString(orderID),
+			"variant_id", uuidToString(variantID),
+			"revision", revision,
+			"target_size", targetSize,
+		)
+	}
+}
+
+func (h *Handler) postCreativeDirectAdjustmentDeliveryComment(ctx context.Context, workspaceID, orderID, variantID pgtype.UUID, revision int, targetSize string, previewOnly bool) error {
 	if h == nil || h.DB == nil || h.Queries == nil || !variantID.Valid || revision < 1 {
 		return nil
 	}
@@ -128,7 +141,7 @@ func (h *Handler) postCreativeDirectAdjustmentDeliveryComment(ctx context.Contex
 		targetSize = ""
 	}
 	assets, err := h.creativeDirectAdjustmentDeliveryAssets(ctx, variantID, revision, targetSize)
-	if err != nil || len(assets) == 0 {
+	if err != nil {
 		return err
 	}
 	var before []creativeDirectAdjustmentDeliveryAsset
@@ -142,8 +155,11 @@ func (h *Handler) postCreativeDirectAdjustmentDeliveryComment(ctx context.Contex
 	if err != nil {
 		return err
 	}
-	marker := creativeDirectAdjustmentDeliveryMarker(variantID, revision, targetSize)
-	content := creativeDirectAdjustmentDeliveryCommentContent(revision, target, before, assets, processAssets, marker)
+	if len(assets) == 0 && len(processAssets) == 0 {
+		return nil
+	}
+	marker := creativeDirectAdjustmentDeliveryMarker(variantID, revision, targetSize, previewOnly)
+	content := creativeDirectAdjustmentDeliveryCommentContent(revision, target, before, assets, processAssets, marker, previewOnly)
 	comment, created, err := h.createCreativeDirectAdjustmentDeliveryComment(ctx, target.Issue, content, marker)
 	if err != nil || !created {
 		return err
@@ -326,16 +342,23 @@ ORDER BY array_position($4::text[], size_key),
 	return assets, nil
 }
 
-func creativeDirectAdjustmentDeliveryMarker(variantID pgtype.UUID, revision int, targetSize string) string {
+func creativeDirectAdjustmentDeliveryMarker(variantID pgtype.UUID, revision int, targetSize string, previewOnly bool) string {
 	if targetSize == "" {
 		targetSize = "all"
+	}
+	if previewOnly {
+		return fmt.Sprintf("<!-- multica:creative-direct-adjustment-delivery:%s:r%d:%s:preview -->", uuidToString(variantID), revision, targetSize)
 	}
 	return fmt.Sprintf("<!-- multica:creative-direct-adjustment-delivery:%s:r%d:%s -->", uuidToString(variantID), revision, targetSize)
 }
 
-func creativeDirectAdjustmentDeliveryCommentContent(revision int, target creativeDirectAdjustmentDeliveryTarget, before []creativeDirectAdjustmentDeliveryAsset, assets []creativeDirectAdjustmentDeliveryAsset, processAssets []creativeDirectAdjustmentProcessAsset, marker string) string {
+func creativeDirectAdjustmentDeliveryCommentContent(revision int, target creativeDirectAdjustmentDeliveryTarget, before []creativeDirectAdjustmentDeliveryAsset, assets []creativeDirectAdjustmentDeliveryAsset, processAssets []creativeDirectAdjustmentProcessAsset, marker string, previewOnly bool) string {
 	var b strings.Builder
-	b.WriteString("调整后的图片已生成。\n\n")
+	if previewOnly {
+		b.WriteString("调整后的预览图已生成，但未通过交付验收，尚未替换当前正式成图。\n\n")
+	} else {
+		b.WriteString("调整后的图片已生成。\n\n")
+	}
 	completedAt := target.CompletedAt
 	if !completedAt.Valid && len(assets) > 0 {
 		completedAt = assets[0].UpdatedAt

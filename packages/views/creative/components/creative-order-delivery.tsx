@@ -315,6 +315,24 @@ export function creativeVariantDiagnosticAssets(variant: CreativeOrderVariant): 
   return CREATIVE_DELIVERY_SIZES.flatMap((size) => selected.get(size) ?? []);
 }
 
+function creativeDiagnosticAssetIsUnadoptedDirectEditPreview(asset: CreativeOrderDiagnosticAsset): boolean {
+  return asset.workflow === "creative_direct_edit" && isRecord(asset.metadata) && asset.metadata.accepted === false;
+}
+
+function creativeVariantUnadoptedDirectEditPreview(assets: CreativeOrderDiagnosticAsset[], sizeKey: string): CreativeOrderDiagnosticAsset | undefined {
+  return assets.find((asset) => asset.size_key === sizeKey && creativeDiagnosticAssetIsUnadoptedDirectEditPreview(asset))
+    ?? assets.find(creativeDiagnosticAssetIsUnadoptedDirectEditPreview);
+}
+
+function creativeVariantBlockerDetail(variant: CreativeOrderVariant): string {
+  const detail = variant.action_required?.detail ?? "";
+  const hasUnadoptedPreview = creativeVariantDiagnosticAssets(variant).some(creativeDiagnosticAssetIsUnadoptedDirectEditPreview);
+  if (hasUnadoptedPreview && detail.includes("did not register a completed target generated asset")) {
+    return "已生成改后预览，但未通过交付验收；请查看预览图片。";
+  }
+  return detail ? businessActionRequiredDetail(variant.action_required?.workflow, detail) : "";
+}
+
 export function creativeVariantArchiveEntries(
   variant: CreativeOrderVariant,
   attachments: Map<string, DeliveryAttachment>,
@@ -792,7 +810,8 @@ function VariantCandidate({
   const [processOpen, setProcessOpen] = useState(false);
   const cover = previews.find((asset) => asset.size_key === primarySize) ?? previews[0];
   const coverURL = cover ? creativeAttachmentBrowserURL(attachments.get(cover.attachment_id)) : "";
-  const coverDiagnostic = coverURL ? undefined : diagnostics.find((asset) => asset.size_key === primarySize) ?? diagnostics[0];
+  const unadoptedPreview = creativeVariantUnadoptedDirectEditPreview(diagnostics, primarySize);
+  const coverDiagnostic = coverURL ? undefined : unadoptedPreview ?? diagnostics.find((asset) => asset.size_key === primarySize) ?? diagnostics[0];
   const adopted = adoptedVariantId === variant.id;
   const busy = adoptingVariantId === variant.id;
   const blocked = creativeVariantNeedsManualAction(variant);
@@ -848,7 +867,7 @@ function VariantCandidate({
     <button type="button" disabled={(!cover || !coverURL) && !coverDiagnostic} onClick={() => { if (cover && coverURL) onAssetSelect(cover.id); else if (coverDiagnostic) openCreativeDiagnosticAsset(coverDiagnostic); }} className="group relative flex min-h-72 w-full items-center justify-center border-b bg-muted/10 p-3 disabled:cursor-default">
       {coverURL ? <img src={coverURL} alt={`${variant.variant_key} ${CREATIVE_DELIVERY_SIZE_LABELS[primarySize]}主预览`} width={720} height={720} loading="lazy" className="max-h-[420px] w-full object-contain transition-transform group-hover:scale-[1.01]" /> : coverDiagnostic ? <>
         <img src={coverDiagnostic.url} alt={`${variant.variant_key} 过程图片 ${coverDiagnostic.label}`} width={720} height={720} loading="lazy" className="max-h-[420px] w-full object-contain opacity-90 transition-transform group-hover:scale-[1.01]" />
-        <span className="absolute left-3 top-3 rounded-full border border-amber-300 bg-amber-50 px-2 py-1 text-[11px] font-medium text-amber-900 shadow-sm dark:border-amber-800 dark:bg-amber-950 dark:text-amber-200">过程图片</span>
+        <span className="absolute left-3 top-3 rounded-full border border-amber-300 bg-amber-50 px-2 py-1 text-[11px] font-medium text-amber-900 shadow-sm dark:border-amber-800 dark:bg-amber-950 dark:text-amber-200">{coverDiagnostic && creativeDiagnosticAssetIsUnadoptedDirectEditPreview(coverDiagnostic) ? "改后预览 · 未采用" : "过程图片"}</span>
       </> : <EmptyImage label="待成图" />}
     </button>
     {stagingResultMissing && <p className="flex items-center gap-2 border-b bg-amber-50 px-3 py-2 text-xs text-amber-900 dark:bg-amber-950/30 dark:text-amber-100" data-testid="creative-staging-result-missing">
@@ -865,7 +884,7 @@ function VariantCandidate({
       })}</div>
       {diagnostics.length > 0 && <Button className="w-full" size="sm" variant="outline" onClick={() => setProcessOpen(true)}>
         <ImageIcon className="h-4 w-4" />
-        查看过程图片
+        {unadoptedPreview ? "查看改后预览" : "查看过程图片"}
         <Badge variant="secondary">{diagnostics.length}</Badge>
       </Button>}
       <p id={descriptionId} className={cn("text-xs", statusTone)}>{candidateState === "candidate" ? "主画面完成后进入统一比较" : candidateState === "reserve" ? "保留主画面，入选方案失败时自动递补" : candidateState === "rejected" ? "未进入本轮三个交付方案" : compactStatus}</p>
@@ -1147,7 +1166,7 @@ function VariantStagingDiagnostics({ variant, details }: { variant: CreativeOrde
   const revision = creativeVariantWorkingRevision(variant);
   const blocker = variant.action_required;
   const detail = blocker?.detail
-    ? businessActionRequiredDetail(blocker.workflow, blocker.detail)
+    ? creativeVariantBlockerDetail(variant)
     : t(($) => $.stagingRepair.noDetail, { revision });
   return <div className="space-y-2 border border-amber-300 bg-amber-50 px-2 py-2 text-xs text-amber-900 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-200" data-testid="creative-staging-revision-diagnostics">
     <p className="flex items-center gap-1.5 font-medium"><AlertTriangle className="h-3.5 w-3.5" />{t(($) => $.stagingRepair.needsAttention, { revision })}</p>
@@ -1169,7 +1188,7 @@ function VariantActionRequiredNotice({ variant, disabled = false }: { variant: C
   if (!creativeVariantNeedsManualAction(variant)) return null;
   if (creativeVariantHasQCFailure(variant)) return null;
   const blocker = variant.action_required;
-  const detail = blocker?.detail ? businessActionRequiredDetail(blocker.workflow, blocker.detail) : "该变体需要人工确认，但任务未返回可读原因。";
+  const detail = blocker?.detail ? creativeVariantBlockerDetail(variant) : "该变体需要人工确认，但任务未返回可读原因。";
   return <div role="status" className="space-y-1 border border-amber-300 bg-amber-50 px-2 py-2 text-xs text-amber-900 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-200" data-testid="creative-variant-action-required">
     <p className="flex items-center gap-1.5 font-medium"><AlertTriangle className="h-3.5 w-3.5" />{creativeVariantBlockerTitle(blocker?.workflow, creativeVariantHasProductionStop(variant))}</p>
     <p className="break-words">{detail}</p>

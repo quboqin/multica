@@ -7559,6 +7559,27 @@ func creativeDirectEditArtifactError(taskContext creativeDirectEditTaskCompletio
 	return ""
 }
 
+const creativeDirectEditPreviewRejectedError = "已生成改后预览，但未通过交付验收；请查看预览图片"
+
+// creativeDirectEditPreviewAvailable distinguishes a real missing writeback
+// from a model result deliberately retained as an unadopted diagnostic asset.
+func (h *Handler) creativeDirectEditPreviewAvailable(ctx context.Context, variantID pgtype.UUID, revision int, targetSize string, rejectedOnly bool) (bool, error) {
+	var available bool
+	err := h.DB.QueryRow(ctx, `
+SELECT EXISTS(
+  SELECT 1
+  FROM creative_order_diagnostic_asset
+  WHERE variant_id = $1
+    AND revision = $2
+    AND size_key = $3
+    AND workflow = 'creative_direct_edit'
+    AND attachment_id IS NOT NULL
+    AND (NOT $4::boolean OR metadata->>'accepted' = 'false')
+)
+`, variantID, revision, targetSize, rejectedOnly).Scan(&available)
+	return available, err
+}
+
 func (h *Handler) creativeDirectEditCompletionError(ctx context.Context, task db.AgentTaskQueue, workspaceID string) (string, error) {
 	if task.Status == "completed" || task.Status == "failed" || task.Status == "cancelled" {
 		return "", nil
@@ -7578,6 +7599,15 @@ func (h *Handler) creativeDirectEditCompletionError(ctx context.Context, task db
 	state, err := h.loadCreativeDirectEditArtifactState(ctx, variantID, taskContext.Revision, taskContext.TargetSize, taskContext.ExpectedSizes, workspaceUUID)
 	if err != nil {
 		return "", err
+	}
+	if !state.TargetGenerated {
+		hasRejectedPreview, err := h.creativeDirectEditPreviewAvailable(ctx, variantID, taskContext.Revision, taskContext.TargetSize, true)
+		if err != nil {
+			return "", err
+		}
+		if hasRejectedPreview {
+			return creativeDirectEditPreviewRejectedError, nil
+		}
 	}
 	return creativeDirectEditArtifactError(taskContext, state), nil
 }
@@ -7720,6 +7750,13 @@ WHERE id = $1 AND revision = $2 AND status <> 'cancelled'
 	if len(detail) > 1200 {
 		detail = detail[:1200]
 	}
+	hasPreview, err := h.creativeDirectEditPreviewAvailable(ctx, variantUUID, taskContext.Revision, taskContext.TargetSize, true)
+	if err != nil {
+		return fmt.Errorf("check direct image edit preview: %w", err)
+	}
+	if hasPreview {
+		detail = creativeDirectEditPreviewRejectedError
+	}
 	if _, err := tx.Exec(ctx, `
 UPDATE creative_order_variant
 SET status = 'action_required',
@@ -7734,7 +7771,17 @@ WHERE id = $1 AND revision = $3
 `, variantUUID, detail, taskContext.Revision); err != nil {
 		return fmt.Errorf("mark direct image edit action required: %w", err)
 	}
-	return commitSettlement()
+	if err := commitSettlement(); err != nil {
+		return err
+	}
+	if hasPreview {
+		orderUUID := pgtype.UUID{}
+		if parsedOrderID, parseErr := parseUUIDString(taskContext.CreativeOrderID); parseErr == nil {
+			orderUUID = parsedOrderID
+		}
+		h.notifyCreativeDirectAdjustmentPreview(ctx, pgtype.UUID{}, orderUUID, variantUUID, taskContext.Revision, taskContext.TargetSize)
+	}
+	return nil
 }
 
 func validCreativeQCStatus(status string) bool {
