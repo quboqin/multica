@@ -1486,6 +1486,12 @@ WHERE task.id = $1
 		writeError(w, http.StatusConflict, "creative QC failures require visual QC recovery")
 		return
 	}
+	if taskStatus == "failed" && workflow == "creative_direct_edit" {
+		if _, err := h.reconcileUnrecoverableDirectEditOperationForRetry(r.Context(), tx, taskID); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to reconcile direct edit provider receipt")
+			return
+		}
+	}
 
 	// This update is both the eligibility fence and the domain-state reset. It
 	// locks the target variant before a new task is queued, so a concurrent
@@ -1638,6 +1644,117 @@ func creativeWorkflowRequiresAtomicQCRecovery(workflow string) bool {
 	default:
 		return false
 	}
+}
+
+// reconcileUnrecoverableDirectEditOperationForRetry closes an unknown direct
+// image attempt only after the user explicitly retries an exhausted task and
+// the database proves that no provider request, receipt, or output exists.
+// This releases the single in-flight operation slot for one fresh retry while
+// retaining a durable explanation for why the old attempt was abandoned.
+func (h *Handler) reconcileUnrecoverableDirectEditOperationForRetry(ctx context.Context, tx pgx.Tx, taskID pgtype.UUID) (bool, error) {
+	var taskAttempt, taskMaxAttempts int
+	var failureReason string
+	if err := tx.QueryRow(ctx, `
+SELECT attempt, max_attempts, COALESCE(failure_reason, '')
+FROM agent_task_queue
+WHERE id = $1 AND status = 'failed'
+FOR UPDATE
+`, taskID).Scan(&taskAttempt, &taskMaxAttempts, &failureReason); errors.Is(err, pgx.ErrNoRows) {
+		return false, nil
+	} else if err != nil {
+		return false, err
+	}
+	if taskAttempt < taskMaxAttempts || failureReason != "creative_output_missing" {
+		return false, nil
+	}
+
+	var operationID pgtype.UUID
+	err := tx.QueryRow(ctx, `
+WITH RECURSIVE task_lineage AS (
+  SELECT id, parent_task_id, retry_of_task_id
+  FROM agent_task_queue
+  WHERE id = $1
+  UNION
+  SELECT parent.id, parent.parent_task_id, parent.retry_of_task_id
+  FROM agent_task_queue parent
+  JOIN task_lineage child
+    ON parent.id = child.parent_task_id OR parent.id = child.retry_of_task_id
+)
+SELECT operation.id
+FROM creative_image_operation operation
+JOIN creative_image_operation_attempt attempt
+  ON attempt.operation_id = operation.id
+WHERE operation.operation_kind = 'direct_edit'
+  AND operation.status = 'unknown'
+  AND operation.provider_request_id = ''
+  AND operation.result_receipt = '{}'::jsonb
+  AND operation.output_attachment_id IS NULL
+  AND operation.output_asset_id IS NULL
+  AND operation.task_id IN (SELECT id FROM task_lineage)
+  AND attempt.status = 'unknown'
+  AND attempt.provider_request_id = ''
+  AND attempt.result_receipt = '{}'::jsonb
+  AND attempt.output_attachment_id IS NULL
+  AND attempt.task_id IN (SELECT id FROM task_lineage)
+ORDER BY operation.started_at
+LIMIT 1
+FOR UPDATE OF operation, attempt
+`, taskID).Scan(&operationID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+
+	const receiptMissing = "provider receipt was not found during explicit direct-edit retry"
+	updatedAttempt, err := tx.Exec(ctx, `
+UPDATE creative_image_operation_attempt
+SET status = 'failed', error_type = 'provider_receipt_not_found', error_message = $2,
+    completed_at = now(), updated_at = now()
+WHERE operation_id = $1
+  AND status = 'unknown'
+  AND provider_request_id = ''
+  AND result_receipt = '{}'::jsonb
+  AND output_attachment_id IS NULL
+`, operationID, receiptMissing)
+	if err != nil {
+		return false, err
+	}
+	if updatedAttempt.RowsAffected() != 1 {
+		return false, errors.New("unrecoverable direct edit attempt changed during reconciliation")
+	}
+	updatedOperation, err := tx.Exec(ctx, `
+UPDATE creative_image_operation
+SET status = 'failed', error_type = 'provider_receipt_not_found', error_message = $2,
+    completed_at = now(), updated_at = now()
+WHERE id = $1
+  AND status = 'unknown'
+  AND provider_request_id = ''
+  AND result_receipt = '{}'::jsonb
+  AND output_attachment_id IS NULL
+  AND output_asset_id IS NULL
+`, operationID, receiptMissing)
+	if err != nil {
+		return false, err
+	}
+	if updatedOperation.RowsAffected() != 1 {
+		return false, errors.New("unrecoverable direct edit operation changed during reconciliation")
+	}
+	updatedTask, err := tx.Exec(ctx, `
+UPDATE agent_task_queue
+SET max_attempts = attempt + 1
+WHERE id = $1
+  AND status = 'failed'
+  AND attempt >= max_attempts
+`, taskID)
+	if err != nil {
+		return false, err
+	}
+	if updatedTask.RowsAffected() != 1 {
+		return false, errors.New("direct edit retry budget changed during reconciliation")
+	}
+	return true, nil
 }
 
 // RetryCreativeOrderVariantQC reruns the visual QC lane for a completed Prime

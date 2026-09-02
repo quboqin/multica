@@ -243,7 +243,7 @@ func TestCreateCreativeDirectEditAllowsMultipleDirectEditors(t *testing.T) {
 	}
 }
 
-func TestRetryCreativeOrderWorkflowFailureRetriesFailedDirectEditWithFreshSession(t *testing.T) {
+func TestRetryCreativeOrderWorkflowFailureReconcilesMissingDirectEditReceiptWithFreshSession(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
 	}
@@ -262,9 +262,29 @@ func TestRetryCreativeOrderWorkflowFailureRetriesFailedDirectEditWithFreshSessio
 	if err := json.NewDecoder(created.Body).Decode(&original); err != nil {
 		t.Fatal(err)
 	}
+	var runtimeID, operationID string
+	if err := testPool.QueryRow(t.Context(), `SELECT runtime_id::text FROM agent_task_queue WHERE id = $1`, original.TaskID).Scan(&runtimeID); err != nil {
+		t.Fatal(err)
+	}
+	if err := testPool.QueryRow(t.Context(), `
+INSERT INTO creative_image_operation (
+  variant_id, size_key, revision, operation_kind, idempotency_key, status,
+  model, runtime_id, task_id, input_snapshot, started_at
+)
+VALUES ($1, '1080x1080', 2, 'direct_edit', $2, 'unknown', 'gpt-image-2', $3, $4, '{}'::jsonb, now())
+RETURNING id::text
+`, original.Variant.ID, "missing-provider-receipt-"+original.TaskID, runtimeID, original.TaskID).Scan(&operationID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := testPool.Exec(t.Context(), `
+INSERT INTO creative_image_operation_attempt (operation_id, attempt, status, runtime_id, task_id)
+VALUES ($1, 1, 'unknown', $2, $3)
+`, operationID, runtimeID, original.TaskID); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := testPool.Exec(t.Context(), `
 UPDATE agent_task_queue
-SET status = 'failed', completed_at = now(), failure_reason = 'agent_reported_action_required',
+SET status = 'failed', completed_at = now(), attempt = 2, max_attempts = 2, failure_reason = 'creative_output_missing',
     session_id = 'expired-direct-edit-session', work_dir = '/missing/direct-edit-workspace'
 WHERE id = $1
 `, original.TaskID); err != nil {
@@ -312,7 +332,7 @@ WHERE id = $1
 	if err := json.Unmarshal(child.Context, &childContext); err != nil {
 		t.Fatal(err)
 	}
-	if child.Status != "queued" || child.Attempt != 2 || child.RetryOfTaskID != original.TaskID ||
+	if child.Status != "queued" || child.Attempt != 3 || child.RetryOfTaskID != original.TaskID ||
 		child.SessionID != "" || child.WorkDir != "" || !child.FreshSession ||
 		childContext["workflow"] != "creative_direct_edit" || childContext["item_key"] != original.Variant.ID+":r2" {
 		t.Fatalf("direct edit retry child = %#v, context=%#v", child, childContext)
@@ -328,6 +348,18 @@ WHERE id = $1
 	}
 	if variantStatus != "running" || hasDirectEditError {
 		t.Fatalf("direct edit retry variant = status %q, has error %t", variantStatus, hasDirectEditError)
+	}
+	var operationStatus, attemptStatus, operationError, attemptError string
+	if err := testPool.QueryRow(t.Context(), `
+SELECT operation.status, attempt.status, operation.error_type, attempt.error_type
+FROM creative_image_operation operation
+JOIN creative_image_operation_attempt attempt ON attempt.operation_id = operation.id AND attempt.attempt = 1
+WHERE operation.id = $1
+`, operationID).Scan(&operationStatus, &attemptStatus, &operationError, &attemptError); err != nil {
+		t.Fatal(err)
+	}
+	if operationStatus != "failed" || attemptStatus != "failed" || operationError != "provider_receipt_not_found" || attemptError != "provider_receipt_not_found" {
+		t.Fatalf("missing provider receipt reconciliation = operation %q/%q, attempt %q/%q", operationStatus, operationError, attemptStatus, attemptError)
 	}
 }
 
