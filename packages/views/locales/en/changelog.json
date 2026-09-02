@@ -3,6 +3,16 @@
   "subtitle": "Release notes maintained inside this Multica platform.",
   "current_version": "Current platform version: {{version}}",
   "releases": {
+    "v0_3_48": {
+      "version": "0.3.48",
+      "date": "2026-09-02",
+      "title": "Direct adjustment delivery switching",
+      "summary": "After Prime composition, a direct adjustment now replaces the active delivery package by default.",
+      "change_1": "The before and after Prime-composed results can be switched in either direction without recreating work.",
+      "change_2": "Only completed Prime-composed delivery packages can be selected. Raw image-edit process images remain unavailable.",
+      "change_3": "Switching a completed historical result no longer appears as an in-progress update.",
+      "change_4": "Creative Factory initialization refreshes the direct-edit skill contract without overwriting user-managed resources."
+    },
     "v0_3_47": {
       "version": "0.3.47",
       "date": "2026-08-27",

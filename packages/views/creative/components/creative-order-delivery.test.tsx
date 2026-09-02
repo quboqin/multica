@@ -555,8 +555,25 @@ describe("CreativeOrderDeliveryCandidates", () => {
 
   it("separates direct adjustment before, after, current process, and reused process images", () => {
     const ready = variant("v01");
+    ready.active_revision = 1;
+    ready.staging_revision = 0;
     ready.brief = { creative_direct_edit_delivery: { final_visual_validation: true, target_size: "1080x1080", source_revision: 1 } };
     ready.diagnostic_assets = [
+      {
+        id: "diagnostic-composed-source",
+        variant_id: ready.id,
+        task_id: "task-source",
+        attachment_id: "diagnostic-composed-source-attachment",
+        size_key: "1080x1080",
+        revision: 1,
+        workflow: "brand_components",
+        label: "Prime 合成成图",
+        filename: "source-composed-1080x1080.png",
+        metadata: {},
+        url: "/api/attachments/diagnostic-composed-source-attachment/download",
+        created_at: "2026-08-01T00:02:30Z",
+        updated_at: "2026-08-01T00:02:30Z",
+      },
       {
         id: "diagnostic-target",
         variant_id: ready.id,
@@ -627,8 +644,8 @@ describe("CreativeOrderDeliveryCandidates", () => {
     fireEvent.click(screen.getByRole("button", { name: /查看过程图片/ }));
 
     expect(screen.getByText("前后对照")).toBeInTheDocument();
-    expect(screen.getByText("调整前原图")).toBeInTheDocument();
-    expect(screen.getByText("调整后结果")).toBeInTheDocument();
+    expect(screen.getByText("调整前贴片结果")).toBeInTheDocument();
+    expect(screen.getByText("调整后贴片结果")).toBeInTheDocument();
     expect(screen.getByText("本次调整过程图")).toBeInTheDocument();
     expect(screen.getByText("视觉质检返工触发图")).toBeInTheDocument();
     expect(screen.getByText("沿用上一版过程图")).toBeInTheDocument();
@@ -637,7 +654,9 @@ describe("CreativeOrderDeliveryCandidates", () => {
     expect(screen.getByText("横版 · 1200x628 · 沿用上一版")).toBeInTheDocument();
     expect(screen.getAllByText(/北京时间/).length).toBeGreaterThan(0);
     expect(screen.getByText(/2026\/08\/02 08:02:00/)).toBeInTheDocument();
-    fireEvent.click(within(screen.getByText("调整后结果").closest("figure")!).getByRole("button", { name: "采用此结果" }));
+    expect(within(screen.getByText("调整前贴片结果").closest("figure")!).getByRole("button", { name: "当前成图" })).toBeDisabled();
+    expect(screen.queryByText("正在更新")).not.toBeInTheDocument();
+    fireEvent.click(within(screen.getByText("调整后贴片结果").closest("figure")!).getByRole("button", { name: "采用此结果" }));
     expect(onAdoptProcessImage).toHaveBeenCalledWith(ready.id, "diagnostic-composed-target");
     expect(screen.queryByRole("button", { name: "采用此图" })).not.toBeInTheDocument();
   });

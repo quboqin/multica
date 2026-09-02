@@ -20,6 +20,7 @@ type creativeDirectEditDeliveryConfig struct {
 	DeliveryMode                string
 	TargetSize                  string
 	Scope                       string
+	SourceRevision              int
 	EditSizes                   []string
 	FinalVisualValidation       bool
 	RawUserRequest              string
@@ -62,6 +63,7 @@ func parseCreativeDirectEditDeliveryConfig(raw json.RawMessage) creativeDirectEd
 			DeliveryMode                string          `json:"delivery_mode"`
 			TargetSize                  string          `json:"target_size"`
 			Scope                       string          `json:"scope"`
+			SourceRevision              int             `json:"source_revision"`
 			EditSizes                   []string        `json:"edit_sizes"`
 			FinalVisualValidation       bool            `json:"final_visual_validation"`
 			RawUserRequest              string          `json:"raw_user_request"`
@@ -91,6 +93,7 @@ func parseCreativeDirectEditDeliveryConfig(raw json.RawMessage) creativeDirectEd
 		DeliveryMode:                deliveryMode,
 		TargetSize:                  targetSize,
 		Scope:                       scope,
+		SourceRevision:              contract.Delivery.SourceRevision,
 		EditSizes:                   append([]string(nil), contract.Delivery.EditSizes...),
 		FinalVisualValidation:       contract.Delivery.FinalVisualValidation,
 		RawUserRequest:              strings.TrimSpace(contract.Delivery.RawUserRequest),

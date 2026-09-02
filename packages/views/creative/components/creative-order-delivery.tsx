@@ -99,6 +99,12 @@ function creativeVariantActiveRevision(variant: CreativeOrderVariant): number {
   return variant.active_revision > 0 ? variant.active_revision : 0;
 }
 
+function creativeVariantHasStagingRevision(variant: CreativeOrderVariant): boolean {
+  const activeRevision = creativeVariantActiveRevision(variant);
+  const stagingRevision = variant.staging_revision ?? 0;
+  return activeRevision > 0 && stagingRevision > 0 && stagingRevision !== activeRevision;
+}
+
 function creativeVariantPreviewRevision(variant: CreativeOrderVariant): number {
   const activeRevision = creativeVariantActiveRevision(variant);
   return activeRevision > 0 ? activeRevision : creativeVariantWorkingRevision(variant);
@@ -138,10 +144,10 @@ function creativeVariantDisplaySizes(variant: CreativeOrderVariant): CreativeDel
 }
 
 function creativeVariantHasFailedStagingRevision(variant: CreativeOrderVariant): boolean {
+  if (!creativeVariantHasStagingRevision(variant)) return false;
   const activeRevision = creativeVariantActiveRevision(variant);
   const workingRevision = creativeVariantWorkingRevision(variant);
-  return activeRevision > 0
-    && workingRevision > activeRevision
+  return workingRevision > activeRevision
     && (variant.status === "action_required" || variant.status === "failed" || Boolean(variant.action_required));
 }
 
@@ -745,9 +751,8 @@ function AdoptedVariantStagingStatus({
   onAdoptProcessImage?: (variantId: string, assetId: string) => Promise<void>;
 }) {
   const { t } = useT("creative");
-  const activeRevision = creativeVariantActiveRevision(variant);
   const workingRevision = creativeVariantWorkingRevision(variant);
-  if (activeRevision < 1 || workingRevision < 1 || activeRevision === workingRevision) return null;
+  if (!creativeVariantHasStagingRevision(variant)) return null;
   const details = creativeVariantWorkingQCDetails(variant);
   const retryAction = creativeVariantRetryAction(variant);
   const needsAttention = creativeVariantStagingNeedsAttention(variant);
@@ -823,7 +828,7 @@ function VariantCandidate({
   const primarySize = creativeVariantPrimarySize(variant);
   const activeRevision = creativeVariantActiveRevision(variant);
   const workingRevision = creativeVariantWorkingRevision(variant);
-  const hasStagingRevision = activeRevision > 0 && workingRevision > 0 && activeRevision !== workingRevision;
+  const hasStagingRevision = creativeVariantHasStagingRevision(variant);
   const readiness = creativeVariantAdoptionReadiness(variant);
   const riskAdoption = creativeVariantRiskAdoptionReadiness(variant);
   const qcDetails = creativeVariantQCDetails(variant);
@@ -961,7 +966,8 @@ function CreativeProcessImageDialog({
   onAdopt?: (asset: CreativeOrderDiagnosticAsset) => Promise<void>;
 }) {
   const adjustment = creativeVariantDirectAdjustmentContext(variant);
-  const comparison = creativeProcessComparisonCards(variant, attachments, adjustment, assets);
+  const comparisonAssets = variant.diagnostic_assets ?? assets;
+  const comparison = creativeProcessComparisonCards(variant, attachments, adjustment, comparisonAssets);
   const groups = creativeProcessDiagnosticGroups(assets, adjustment);
   const [adoptingAssetId, setAdoptingAssetId] = useState("");
   const adopt = async (asset: CreativeOrderDiagnosticAsset) => {
@@ -997,10 +1003,10 @@ function CreativeProcessImageDialog({
                     <p className="mt-0.5 truncate text-[11px] text-muted-foreground">{creativeProcessSizeLabel(card.sizeKey)} · r{card.revision} · {creativeProcessTimeLabel(card.updatedAt)}</p>
                   </div>
                   <div className="flex shrink-0 items-center gap-1">
-                    {onAdopt && card.adoptableAssetId && <Button size="sm" variant="outline" disabled={disabled || Boolean(adoptingAssetId)} onClick={() => {
-                      const asset = assets.find((candidate) => candidate.id === card.adoptableAssetId);
+                    {onAdopt && card.adoptableAssetId && <Button size="sm" variant="outline" disabled={disabled || card.active || Boolean(adoptingAssetId)} onClick={() => {
+                      const asset = comparisonAssets.find((candidate) => candidate.id === card.adoptableAssetId);
                       if (asset) void adopt(asset);
-                    }}>{adoptingAssetId === card.adoptableAssetId ? "正在采用" : "采用此结果"}</Button>}
+                    }}>{card.active ? "当前成图" : adoptingAssetId === card.adoptableAssetId ? "正在采用" : "采用此结果"}</Button>}
                     <Button size="icon-sm" variant="ghost" title="打开图片" aria-label={`打开${card.title}`} onClick={() => openCreativeProcessURL(card.url)}><ExternalLink className="h-4 w-4" /></Button>
                   </div>
                 </figcaption>
@@ -1050,6 +1056,7 @@ type CreativeProcessComparisonCard = {
   updatedAt: string;
   url: string;
   adoptableAssetId?: string;
+  active?: boolean;
 };
 
 type CreativeProcessDiagnosticGroup = {
@@ -1074,14 +1081,19 @@ function creativeProcessComparisonCards(
   if (!adjustment) return [];
   const before = creativeProcessReferenceAsset(variant, adjustment.targetSize, adjustment.sourceRevision);
   const after = creativeProcessReferenceAsset(variant, adjustment.targetSize, variant.revision);
-  const composedDiagnostic = diagnostics.find((asset) => asset.size_key === adjustment.targetSize
-    && asset.revision === variant.revision
+  const activeRevision = creativeVariantActiveRevision(variant);
+  const composedDiagnostic = (revision: number) => diagnostics.find((asset) => asset.size_key === adjustment.targetSize
+    && asset.revision === revision
     && asset.workflow === "brand_components"
     && asset.label === "Prime 合成成图");
+  const beforeComposedDiagnostic = composedDiagnostic(adjustment.sourceRevision);
+  const afterComposedDiagnostic = composedDiagnostic(variant.revision);
   return [
-    before ? creativeProcessComparisonCard("before", "调整前原图", before, attachments) : null,
-    composedDiagnostic
-      ? creativeProcessDiagnosticComparisonCard("after", "调整后结果", composedDiagnostic)
+    beforeComposedDiagnostic
+      ? creativeProcessDiagnosticComparisonCard("before", "调整前贴片结果", beforeComposedDiagnostic, activeRevision === adjustment.sourceRevision)
+      : before ? creativeProcessComparisonCard("before", "调整前原图", before, attachments) : null,
+    afterComposedDiagnostic
+      ? creativeProcessDiagnosticComparisonCard("after", "调整后贴片结果", afterComposedDiagnostic, activeRevision === variant.revision)
       : after ? creativeProcessComparisonCard("after", "调整后结果", after, attachments) : null,
   ].filter((card): card is CreativeProcessComparisonCard => Boolean(card?.url));
 }
@@ -1101,7 +1113,7 @@ function creativeProcessComparisonCard(key: string, title: string, asset: Creati
   return { key, title, sizeKey: asset.size_key, revision: asset.revision, updatedAt: asset.updated_at || asset.created_at, url, adoptableAssetId };
 }
 
-function creativeProcessDiagnosticComparisonCard(key: string, title: string, asset: CreativeOrderDiagnosticAsset): CreativeProcessComparisonCard | null {
+function creativeProcessDiagnosticComparisonCard(key: string, title: string, asset: CreativeOrderDiagnosticAsset, active = false): CreativeProcessComparisonCard | null {
   if (!asset.url) return null;
   return {
     key,
@@ -1111,6 +1123,7 @@ function creativeProcessDiagnosticComparisonCard(key: string, title: string, ass
     updatedAt: asset.updated_at || asset.created_at,
     url: asset.url,
     adoptableAssetId: asset.id,
+    active,
   };
 }
 
@@ -1250,9 +1263,8 @@ function VariantStagingDiagnostics({ variant, details }: { variant: CreativeOrde
 }
 
 function creativeVariantStagingNeedsAttention(variant: CreativeOrderVariant): boolean {
-  const activeRevision = creativeVariantActiveRevision(variant);
+  if (!creativeVariantHasStagingRevision(variant)) return false;
   const workingRevision = creativeVariantWorkingRevision(variant);
-  if (activeRevision < 1 || workingRevision < 1 || activeRevision === workingRevision) return false;
   const revisionStatus = (variant.revisions ?? []).find((revision) => revision.revision === workingRevision)?.status;
   return ["action_required", "failed"].includes(variant.status)
     || ["action_required", "failed"].includes(revisionStatus ?? "");

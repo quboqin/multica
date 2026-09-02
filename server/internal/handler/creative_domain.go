@@ -4771,14 +4771,6 @@ FOR UPDATE OF diagnostic, variant
 		return
 	}
 	selectedMethod := creativeProcessImageAdoptionMethod(candidate)
-	var candidateState struct {
-		Selected bool `json:"selected"`
-	}
-	_ = json.Unmarshal(candidate.Metadata, &candidateState)
-	if (variantStatus != "action_required" && !(variantStatus == "running" && candidateState.Selected)) || candidate.Revision != variantRevision {
-		writeError(w, http.StatusConflict, "creative repair candidate is not awaiting a selection")
-		return
-	}
 	expectedSizes, err := expectedCreativeVariantSizes(triggerKind, json.RawMessage(inputSnapshot), json.RawMessage(brief))
 	if err != nil {
 		writeError(w, http.StatusConflict, err.Error())
@@ -4786,6 +4778,90 @@ FOR UPDATE OF diagnostic, variant
 	}
 	if !creativeSizeIsExpected(candidate.SizeKey, expectedSizes) {
 		writeError(w, http.StatusUnprocessableEntity, "repair candidate size is outside this creative variant's delivery scope")
+		return
+	}
+
+	// A completed direct adjustment can switch between its source and adjusted
+	// delivery packages. Both revisions are immutable completed packages; only
+	// active_revision changes, so this must not restart composition or QC.
+	if variantStatus == "completed" {
+		if candidate.Revision != variantRevision && candidate.Revision != delivery.SourceRevision {
+			writeError(w, http.StatusConflict, "creative repair result is not available for switching")
+			return
+		}
+		var completedRevisionStatus string
+		var completedExpectedSizes []string
+		var completedAt pgtype.Timestamptz
+		if err := tx.QueryRow(r.Context(), `
+SELECT status, expected_sizes, activated_at
+FROM creative_order_variant_revision
+WHERE variant_id = $1 AND revision = $2
+FOR UPDATE
+`, variantID, candidate.Revision).Scan(&completedRevisionStatus, &completedExpectedSizes, &completedAt); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				writeError(w, http.StatusConflict, "creative repair result is not available for switching")
+				return
+			}
+			writeError(w, http.StatusInternalServerError, "failed to load completed creative repair result")
+			return
+		}
+		normalizedCompletedSizes, normalizeErr := normalizeCreativeExpectedSizes(completedExpectedSizes)
+		completedSizeSet := make(map[string]struct{}, len(normalizedCompletedSizes))
+		for _, size := range normalizedCompletedSizes {
+			completedSizeSet[size] = struct{}{}
+		}
+		if normalizeErr != nil || completedRevisionStatus != "completed" || !completedAt.Valid || !creativeSizesMatchExpected(completedSizeSet, expectedSizes) {
+			writeError(w, http.StatusConflict, "creative repair result does not have a completed delivery package")
+			return
+		}
+		var deliveredCount int
+		if err := tx.QueryRow(r.Context(), `
+SELECT count(*)
+FROM creative_order_asset
+WHERE variant_id = $1
+  AND revision = $2
+  AND stage = 'delivered'
+  AND status = 'completed'
+  AND attachment_id IS NOT NULL
+  AND size_key = ANY($3::text[])
+`, variantID, candidate.Revision, expectedSizes).Scan(&deliveredCount); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to verify completed creative repair delivery")
+			return
+		}
+		if deliveredCount != len(expectedSizes) {
+			writeError(w, http.StatusConflict, "creative repair result does not have a completed delivery package")
+			return
+		}
+		if _, err := tx.Exec(r.Context(), `
+UPDATE creative_order_variant
+SET status = 'completed', active_revision = $2, staging_revision = NULL, updated_at = now()
+WHERE id = $1 AND revision = $3 AND status = 'completed'
+`, variantID, candidate.Revision, variantRevision); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to switch completed creative repair result")
+			return
+		}
+		if _, err := tx.Exec(r.Context(), `UPDATE creative_order SET updated_at = now() WHERE id = $1`, orderID); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to update creative order after switching repair result")
+			return
+		}
+		if err := tx.Commit(r.Context()); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to commit completed creative repair switch")
+			return
+		}
+		h.publishCreativeDomainUpdated(r, workspaceID, userID, map[string]any{"scope": "order", "order_id": chi.URLParam(r, "id")})
+		writeJSON(w, http.StatusOK, creativeOrderDiagnosticPromotionResponse{
+			Candidate: candidate, VariantID: uuidToString(variantID), Revision: candidate.Revision,
+			SelectedMethod: selectedMethod, CompositionStarted: false,
+		})
+		return
+	}
+
+	var candidateState struct {
+		Selected bool `json:"selected"`
+	}
+	_ = json.Unmarshal(candidate.Metadata, &candidateState)
+	if (variantStatus != "action_required" && !(variantStatus == "running" && candidateState.Selected)) || candidate.Revision != variantRevision {
+		writeError(w, http.StatusConflict, "creative repair candidate is not awaiting a selection")
 		return
 	}
 	// A composed direct-edit result has already passed the deterministic Prime

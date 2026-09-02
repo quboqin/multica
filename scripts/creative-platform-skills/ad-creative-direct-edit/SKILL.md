@@ -213,7 +213,7 @@ annotation guide、目检结论放在过程诊断资产的 metadata 或任务错
 
 所有需要编辑的 canonical generated asset 写回后，调用绑定的 `素材_技能_贴片`。`deterministic` 由后端为所有 expected sizes
 重新贴回官方透明组件；`model_integrated` 由后端校验冻结 QR-free 模板证据、登记现有模型成图为 `primed`，不会二次叠加。精准调整不创建贴片 task；
-交接后的最终图由平台创建 visual QC，不能把生成图自检当成交付验收。贴片 Skill 是唯一的官方组件交接来源。
+贴片 Skill 是唯一的官方组件交接来源。`Prime 合成成图` 是贴片后的可审计完成结果：平台默认直接覆盖当前交付版本，人工随后只能在这个完整版本和其 source revision 的完整交付版本之间切换。模型原图、`creative_direct_edit` 过程图和任何未完成资产都不可采用，也不得由 Agent 调用采用接口。
 
 如果回图已经存在，后续失败按协议层处理：task/variant 归属、JSON 字段、三份必需证据未同时提供、prompt/hash、
 normalization 或本地 path 错误，都只修复对应 JSON、参数或 task_id，再用同一张上传附件和同一份模型结果重试；不要重新调用 Image Edit。
