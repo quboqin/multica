@@ -199,7 +199,8 @@ func validateDaemonCreativeLateReceiptBinding(binding daemonCreativeLateReceiptB
 		(binding.VariantActiveRevision.Valid && int(binding.VariantActiveRevision.Int32) == binding.Revision) {
 		return errors.New("late image receipt revision is no longer mutable")
 	}
-	if binding.OperationModel != receipt.Model || binding.OperationPromptSHA256 != receipt.PromptSHA256 || binding.SizeKey != receipt.Size {
+	if binding.OperationModel != receipt.Model || binding.SizeKey != receipt.Size ||
+		(binding.OperationPromptSHA256 != "" && binding.OperationPromptSHA256 != receipt.PromptSHA256) {
 		return errors.New("late image receipt model, prompt, or size does not match the operation")
 	}
 	if binding.AttemptProviderRequestID != "" && binding.AttemptProviderRequestID != receipt.RequestID {
@@ -484,10 +485,11 @@ WHERE operation_id = $1 AND attempt = $2 AND status <> 'completed'
 	if _, err := tx.Exec(r.Context(), `
 UPDATE creative_image_operation
 SET status = 'completed', provider_request_id = $2, result_receipt = $3::jsonb,
-    error_type = '', error_message = '', output_attachment_id = $4,
+    prompt_sha256 = CASE WHEN prompt_sha256 = '' THEN $4 ELSE prompt_sha256 END,
+    error_type = '', error_message = '', output_attachment_id = $5,
     started_at = COALESCE(started_at, now()), completed_at = COALESCE(completed_at, now()), updated_at = now()
 WHERE id = $1 AND status <> 'completed'
-`, operationUUID, receipt.RequestID, receiptJSON, attachmentUUID); err != nil {
+`, operationUUID, receipt.RequestID, receiptJSON, receipt.PromptSHA256, attachmentUUID); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to complete late image operation")
 		return
 	}

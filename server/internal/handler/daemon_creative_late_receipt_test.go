@@ -293,6 +293,39 @@ WHERE parent_task_id = $1 AND context ? 'late_receipt_recovery'
 	}
 }
 
+func TestDaemonCreativeImageLateSuccessBackfillsLegacyMissingPromptHash(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	fixture := createDaemonCreativeLateReceiptFixture(t)
+	if _, err := testPool.Exec(t.Context(), `
+UPDATE creative_image_operation SET prompt_sha256 = '' WHERE id = $1
+`, fixture.OperationID); err != nil {
+		t.Fatal(err)
+	}
+	image := creativeTestPNG(t, fixture.Width, fixture.Height)
+	store := &mockStorage{}
+	originalStorage := testHandler.Storage
+	testHandler.Storage = store
+	t.Cleanup(func() { testHandler.Storage = originalStorage })
+
+	w := httptest.NewRecorder()
+	req := daemonCreativeLateReceiptRequest(t, fixture, testWorkspaceID, fixture.DaemonID, "legacy-missing-prompt", image)
+	testHandler.ReportDaemonCreativeImageLateSuccess(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("legacy missing prompt late success = %d %s", w.Code, w.Body.String())
+	}
+	var promptHash string
+	if err := testPool.QueryRow(t.Context(), `
+SELECT prompt_sha256 FROM creative_image_operation WHERE id = $1
+`, fixture.OperationID).Scan(&promptHash); err != nil {
+		t.Fatal(err)
+	}
+	if promptHash != fixture.PromptHash {
+		t.Fatalf("legacy prompt hash = %q, want %q", promptHash, fixture.PromptHash)
+	}
+}
+
 func TestDaemonCreativeImageLateSuccessQueuesRecoveryBeforeTaskTerminal(t *testing.T) {
 	if testHandler == nil || testPool == nil {
 		t.Skip("database not available")
