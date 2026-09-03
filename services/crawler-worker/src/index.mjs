@@ -3851,6 +3851,17 @@ function shouldBlockAppGrowingCrawlResource(request) {
     return true;
   }
   const url = request.url?.() || "";
+  try {
+    const parsedURL = new URL(url);
+    if (
+      parsedURL.hostname === "appgrowing-global.youcloud.com"
+      && parsedURL.pathname.startsWith("/static/img/")
+    ) {
+      return true;
+    }
+  } catch {
+    // Keep the generic tracker check for malformed request URLs.
+  }
   return /(?:google-analytics|googletagmanager|doubleclick|hotjar|sentry|clarity|facebook|tiktok|analytics|collect|beacon)/i.test(url);
 }
 

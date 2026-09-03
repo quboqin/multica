@@ -242,7 +242,9 @@ test("blocks heavyweight AppGrowing fallback resources", () => {
 
   assert.equal(shouldBlockAppGrowingCrawlResource(request("image", "https://cdn.example.com/ad.jpg")), true);
   assert.equal(shouldBlockAppGrowingCrawlResource(request("media", "https://cdn.example.com/ad.mp4")), true);
+  assert.equal(shouldBlockAppGrowingCrawlResource(request("other", "https://appgrowing-global.youcloud.com/static/img/home-banner.png")), true);
   assert.equal(shouldBlockAppGrowingCrawlResource(request("script", "https://www.googletagmanager.com/gtm.js")), true);
+  assert.equal(shouldBlockAppGrowingCrawlResource(request("script", "https://appgrowing-global.youcloud.com/static/js/app.js")), false);
   assert.equal(shouldBlockAppGrowingCrawlResource(request("xhr", "https://api-appgrowing-global.youcloud.com/graphql")), false);
 });
 
