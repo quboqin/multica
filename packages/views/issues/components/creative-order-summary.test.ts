@@ -3,7 +3,7 @@ import type { CreativeOrderItem } from "@multica/core/types";
 import { creativeOrderSummarySelections } from "./creative-order-summary";
 
 describe("creativeOrderSummarySelections", () => {
-  it("returns only persisted adopted variants and never falls back to a latest asset", () => {
+  it("returns every variant added to the gallery and never falls back to a latest asset", () => {
     const items = [
       {
         id: "item-pending",
@@ -22,7 +22,8 @@ describe("creativeOrderSummarySelections", () => {
       },
     ] as unknown as CreativeOrderItem[];
 
-    expect(creativeOrderSummarySelections(items).map(({ item, variant }) => [item.id, variant.id])).toEqual([
+    expect(creativeOrderSummarySelections(items, new Set(["adopted-v01", "adopted-v02"])).map(({ item, variant }) => [item.id, variant.id])).toEqual([
+      ["item-adopted", "adopted-v01"],
       ["item-adopted", "adopted-v02"],
     ]);
   });
@@ -34,8 +35,8 @@ describe("creativeOrderSummarySelections", () => {
       variants: [{ id: "direct-result", status: "completed", active_revision: 1, variant_key: "DIRECT" }],
     } as unknown as CreativeOrderItem;
 
-    expect(creativeOrderSummarySelections([directItem])).toEqual([]);
-    expect(creativeOrderSummarySelections([directItem], true).map(({ variant }) => variant.id)).toEqual(["direct-result"]);
+    expect(creativeOrderSummarySelections([directItem], new Set())).toEqual([]);
+    expect(creativeOrderSummarySelections([directItem], new Set(), true).map(({ variant }) => variant.id)).toEqual(["direct-result"]);
   });
 
   it("keeps a direct edit's active revision visible while a newer staging revision fails", () => {
@@ -52,6 +53,6 @@ describe("creativeOrderSummarySelections", () => {
       }],
     } as unknown as CreativeOrderItem;
 
-    expect(creativeOrderSummarySelections([directItem], true).map(({ variant }) => variant.id)).toEqual(["direct-result"]);
+    expect(creativeOrderSummarySelections([directItem], new Set(), true).map(({ variant }) => variant.id)).toEqual(["direct-result"]);
   });
 });

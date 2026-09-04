@@ -11,6 +11,7 @@ from validate_copy_snapshot import (
     find_item,
     main,
     validate_concise_prompt,
+    validate_identity_prompt_guard,
     validate_prime_prompt_guard,
     validate_snapshot,
 )
@@ -503,7 +504,8 @@ INPUT ROLES
 Input 1 is used only for business structure and reading order. Input 2 is the current-size official Prime visual context.
 
 LOCKED DESIGN DNA
-Keep the same DesignDNA subject system, palette roles, material, lighting, motif, and information hierarchy.
+Keep the same DesignDNA subject system, palette roles, material, lighting, motif, and information hierarchy. Keep the same declared
+identity anchor as the same person, product, or core object across every delivery size; it must not be replaced.
 
 EDITABLE LAYOUT
 Use a native square layout with every business content group clear of the future component areas.
@@ -525,7 +527,14 @@ def test_compiled_visual_prompt_contract_passes_semantic_guards() -> None:
     prompt = compiled_visual_prompt()
 
     assert validate_prime_prompt_guard(prompt, [prime_layout()]) == []
+    assert validate_identity_prompt_guard(prompt) == []
     assert validate_concise_prompt(prompt) == []
+
+
+def test_identity_guard_requires_a_stable_subject_across_sizes() -> None:
+    missing = validate_identity_prompt_guard("Keep the DesignDNA recognizable across delivery sizes.")
+
+    assert missing == ["same_declared_identity_anchor", "identity_anchor_not_replaced"]
 
 
 def test_compiled_visual_prompt_rejects_transaction_protocol() -> None:

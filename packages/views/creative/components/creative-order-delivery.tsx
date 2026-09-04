@@ -1,12 +1,14 @@
 "use client";
 
-import { useId, useState } from "react";
-import { AlertTriangle, Check, CheckCircle2, ChevronDown, Download, ExternalLink, Eye, Image as ImageIcon, Info, PackageCheck, RefreshCw, Undo2 } from "lucide-react";
+import { useEffect, useId, useState } from "react";
+import { AlertTriangle, Check, CheckCircle2, ChevronDown, ExternalLink, Eye, Image as ImageIcon, Info, RefreshCw } from "lucide-react";
 import { strToU8, zipSync } from "fflate";
-import type { Attachment, CreativeOrder, CreativeOrderAsset, CreativeOrderDiagnosticAsset, CreativeOrderItem, CreativeOrderQCReport, CreativeOrderVariant, CreativeOrderWorkflowFailure } from "@multica/core/types";
+import type { Attachment, CreateCreativeFeedbackResponse, CreativeOrder, CreativeOrderAsset, CreativeOrderDiagnosticAsset, CreativeOrderItem, CreativeOrderQCReport, CreativeOrderVariant, CreativeOrderWorkflowFailure } from "@multica/core/types";
 import { Badge } from "@multica/ui/components/ui/badge";
 import { Button } from "@multica/ui/components/ui/button";
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@multica/ui/components/ui/dialog";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@multica/ui/components/ui/dialog";
+import { NativeSelect, NativeSelectOption } from "@multica/ui/components/ui/native-select";
+import { Textarea } from "@multica/ui/components/ui/textarea";
 import { cn } from "@multica/ui/lib/utils";
 import { toast } from "sonner";
 import { useT } from "../../i18n";
@@ -22,7 +24,7 @@ export type CreativeOrderStage = {
   action: string;
   readyVariants: number;
   totalVariants: number;
-  adoptedItems: number;
+  galleryItems: number;
   totalItems: number;
 };
 
@@ -34,8 +36,8 @@ export function creativeOrderStatusLabel(status: string | undefined): string {
     case "partial": return "生成中";
     case "action_required": return "待验收";
     case "failed": return "待验收";
-    case "awaiting_adoption": return "待验收";
-    case "completed": return "已采用";
+    case "awaiting_adoption": return "可入图库";
+    case "completed": return "成图完成";
     case "cancelled": return "已结束";
     default: return status ? "处理中" : "加载中";
   }
@@ -51,21 +53,17 @@ export type DeliveryAttachment = Pick<Attachment, "id" | "filename" | "url" | "d
 
 export type CreativeDeliveryNamingContext = Pick<CreativeOrder, "created_at" | "input_snapshot">;
 
-export type CreativeVariantAdoptionRisk = {
-  acknowledged: true;
-  reason: string;
-};
-
 export type CreativeVariantRetryAction = {
   kind: "workflow" | "qc" | "prime";
   taskId: string;
   label: string;
 };
 
-export function adoptedCreativeOrderVariant(item: CreativeOrderItem): CreativeOrderVariant | undefined {
-  const adoptedVariantId = item.adopted_variant_id;
-  if (!adoptedVariantId) return undefined;
-  return item.variants.find((variant) => variant.id === adoptedVariantId);
+export function creativeGalleryVariantIds(events: Array<Pick<CreateCreativeFeedbackResponse, "id" | "undo_of_id" | "subject_type" | "subject_id" | "event_type" | "decision">>): Set<string> {
+  const undoneEventIds = new Set(events.map((event) => event.undo_of_id).filter(Boolean));
+  return new Set(events
+    .filter((event) => event.subject_type === "variant" && event.event_type === "decision" && event.decision === "accepted" && !undoneEventIds.has(event.id))
+    .map((event) => event.subject_id));
 }
 
 type CreativeDeliverySizeKey = (typeof CREATIVE_DELIVERY_SIZES)[number];
@@ -209,22 +207,22 @@ export function creativeOrderStage(order: CreativeOrder | undefined): CreativeOr
   const readyVariants = variants.filter((variant) => creativeVariantAdoptionReadiness(variant).ready).length;
   const blockedVariants = variants.filter(creativeVariantNeedsManualAction).length;
   const productionStoppedVariants = variants.filter(creativeVariantHasProductionStop).length;
-  const adoptedItems = items.filter((item) => Boolean(adoptedCreativeOrderVariant(item))).length;
+  const galleryItems = 0;
   const actionableFailures = creativeOrderActionableWorkflowFailures(order);
-  const base = { readyVariants, totalVariants: variants.length, adoptedItems, totalItems: items.length };
+  const base = { readyVariants, totalVariants: variants.length, galleryItems, totalItems: items.length };
   const status = order?.derived_status || order?.status || "";
 
   if (status === "cancelled" || order?.status === "cancelled") {
     return { ...base, key: "cancelled", label: "已结束", detail: "订单已结束，结果与记录仍保留", action: "查看记录" };
   }
-  if (status === "completed" || (items.length > 0 && adoptedItems === items.length)) {
-    return { ...base, key: "delivered", label: "已采用", detail: items.length > 0 ? `${adoptedItems}/${items.length} 个素材已采用，可查看和下载` : "已采用最终方案", action: "查看并下载" };
+  if (status === "completed") {
+    return { ...base, key: "delivered", label: "成图完成", detail: "已交付成图可分别加入成图库并下载", action: "查看并下载" };
   }
-  if (readyVariants > adoptedItems) {
-    return { ...base, key: "review", label: "待验收", detail: `${readyVariants} 个变体可以比较`, action: "选择最终方案" };
+  if (readyVariants > 0) {
+    return { ...base, key: "review", label: "可入图库", detail: `${readyVariants} 个变体可分别加入成图库`, action: "查看成图" };
   }
   if (status === "awaiting_adoption") {
-    return { ...base, key: "review", label: "待验收", detail: "已有可采用方案，等待选择", action: "选择最终方案" };
+    return { ...base, key: "review", label: "可入图库", detail: "已有交付成图，可分别加入成图库", action: "查看成图" };
   }
   if (status === "awaiting_selection" || (candidates.length >= 4 && readyCandidates >= 4)) {
     return { ...base, key: "generating", label: "候选比较中", detail: "正在自动比较候选主画面，确定三个入选方案后继续生成", action: "等待筛选" };
@@ -344,15 +342,17 @@ export function creativeVariantArchiveEntries(
   attachments: Map<string, DeliveryAttachment>,
   order?: CreativeDeliveryNamingContext,
   item?: Pick<CreativeOrderItem, "candidate_id" | "copy_snapshot">,
+  materialNumberStart = 1,
 ): { asset: CreativeOrderAsset; attachment: DeliveryAttachment; filename: string }[] {
   const usedNames = new Set<string>();
+  let materialNumber = materialNumberStart;
   return creativeVariantDeliveryAssets(variant).flatMap((asset) => {
     const attachment = attachments.get(asset.attachment_id);
     if (!attachment || !creativeAttachmentBrowserURL(attachment)) return [];
     return [{
       asset,
       attachment,
-      filename: creativeDeliveryFilename({ order, item, asset, attachment, usedNames }),
+      filename: creativeDeliveryFilename({ order, item, asset, attachment, materialNumber: materialNumber++, usedNames }),
     }];
   });
 }
@@ -383,11 +383,11 @@ export async function downloadCreativeVariantArchive({
   const usedNames = new Set<string>();
   for (const { filename, bytes } of downloaded) files[uniqueArchiveFilename(filename, usedNames)] = bytes;
   files["说明.txt"] = strToU8([
-    "最终采用方案交付包",
+    "成图库成图交付包",
     `订单：${orderId}`,
     `素材条目：${item.id}`,
     `变体：${variant.variant_key || variant.id}`,
-    `采用时间：${item.adopted_at || "未记录"}`,
+    `入图库时间：${item.adopted_at || "未记录"}`,
     `包含尺寸：${expectedSizes.join("、")}`,
   ].join("\n"));
   const archive = zipSync(files, { level: 0 });
@@ -400,7 +400,7 @@ export async function downloadCreativeVariantArchive({
   );
 }
 
-export async function downloadCreativeAdoptedVariantArchives({
+export async function downloadCreativeVariantArchives({
   packages,
   archiveName,
 }: {
@@ -412,10 +412,11 @@ export async function downloadCreativeAdoptedVariantArchives({
     attachments: Map<string, DeliveryAttachment>;
     folderName?: string;
     label?: string;
+    addedAt?: string;
   }[];
   archiveName?: string;
 }): Promise<void> {
-  if (packages.length === 0) throw new Error("没有可下载的采用成图");
+  if (packages.length === 0) throw new Error("没有可下载的成图库成图");
 
   const files: Record<string, Uint8Array> = {};
   const usedNames = new Set<string>();
@@ -426,15 +427,17 @@ export async function downloadCreativeAdoptedVariantArchives({
     "variant",
     "size",
     "filename",
-    "adopted_at",
+    "gallery_added_at",
     "label",
   ]];
+  let nextMaterialNumber = 1;
 
   for (const itemPackage of packages) {
-    const entries = creativeVariantArchiveEntries(itemPackage.variant, itemPackage.attachments, itemPackage.order, itemPackage.item);
+    const entries = creativeVariantArchiveEntries(itemPackage.variant, itemPackage.attachments, itemPackage.order, itemPackage.item, nextMaterialNumber);
     if (entries.length !== creativeVariantActiveExpectedSizes(itemPackage.variant).length) {
       throw new Error(`${itemPackage.label || itemPackage.orderId.slice(0, 8)} 的交付包尚未齐备`);
     }
+    nextMaterialNumber += entries.length;
     const folderName = safeArchiveName(itemPackage.folderName || `order-${itemPackage.orderId.slice(0, 8)}-${itemPackage.variant.variant_key || itemPackage.variant.id.slice(0, 8)}`);
     const downloaded = await Promise.all(entries.map(async ({ asset, attachment, filename }) => {
       const response = await fetch(creativeAttachmentBrowserURL(attachment), { credentials: "include" });
@@ -452,7 +455,7 @@ export async function downloadCreativeAdoptedVariantArchives({
         itemPackage.variant.variant_key || itemPackage.variant.id,
         asset.size_key,
         filename,
-        itemPackage.item.adopted_at || "",
+        itemPackage.addedAt || itemPackage.item.adopted_at || "",
         itemPackage.label || "",
       ]);
     }
@@ -464,20 +467,19 @@ export async function downloadCreativeAdoptedVariantArchives({
   new Uint8Array(buffer).set(archive);
   triggerBrowserDownload(
     URL.createObjectURL(new Blob([buffer], { type: "application/zip" })),
-    `${safeArchiveName(archiveName || `adopted-creatives-${creativeArchiveDateStamp()}`)}.zip`,
+    `${safeArchiveName(archiveName || `creative-gallery-${creativeArchiveDateStamp()}`)}.zip`,
     true,
   );
 }
 
 export function CreativeOrderDeliveryCandidates({
-  orderId,
   item,
-  order,
   source,
   attachments,
-  adoptingVariantId,
-  onAdopt,
-  onUnadopt,
+  galleryVariantIds,
+  addingToGalleryVariantId = "",
+  onAddToGallery,
+  onCollectFeedback,
   onAssetSelect,
   onAssetInfo,
   disabled = false,
@@ -493,9 +495,10 @@ export function CreativeOrderDeliveryCandidates({
   order?: CreativeDeliveryNamingContext;
   source: { label: string; url: string };
   attachments: Map<string, DeliveryAttachment>;
-  adoptingVariantId: string;
-  onAdopt: (variantId: string, risk?: CreativeVariantAdoptionRisk) => void;
-  onUnadopt?: (itemId: string) => void;
+  galleryVariantIds?: ReadonlySet<string>;
+  addingToGalleryVariantId?: string;
+  onAddToGallery?: (variantId: string) => void;
+  onCollectFeedback?: (variant: CreativeOrderVariant, reasonCode: string, comment: string) => Promise<void>;
   onAssetSelect: (assetId: string) => void;
   onAssetInfo?: (assetId: string) => void;
   disabled?: boolean;
@@ -507,13 +510,12 @@ export function CreativeOrderDeliveryCandidates({
   onAdoptProcessImage?: (variantId: string, assetId: string) => Promise<void>;
 }) {
   const { t } = useT("creative");
-  const adoptedVariant = adoptedCreativeOrderVariant(item);
   const sortedVariants = [...item.variants].sort(compareCreativeVariantDisplayOrder);
   const deliveryVariants = sortedVariants.filter(creativeVariantParticipatesInDelivery);
-  const selectionPending = !adoptedVariant && deliveryVariants.length === 0 && sortedVariants.some((variant) => creativeVariantCandidateState(variant) === "candidate");
-  const otherVariants = adoptedVariant ? deliveryVariants.filter((variant) => variant.id !== adoptedVariant.id) : [];
+  const selectionPending = deliveryVariants.length === 0 && sortedVariants.some((variant) => creativeVariantCandidateState(variant) === "candidate");
   const title = source.label || t(($) => $.delivery.material, { id: item.candidate_id.slice(0, 8) });
   const progress = creativeOrderItemProgress(item, t);
+  const galleryCount = deliveryVariants.filter((variant) => galleryVariantIds?.has(variant.id)).length;
   const [packageOpen, setPackageOpen] = useState(defaultOpen);
 
   return <details className="group border bg-background" open={packageOpen} onToggle={(event) => setPackageOpen(event.currentTarget.open)} data-testid={`creative-order-item-${item.id}`}>
@@ -527,7 +529,7 @@ export function CreativeOrderDeliveryCandidates({
       </div>
       <div className="flex flex-wrap items-center gap-2">
         <Badge variant={progress.tone}>{progress.label}</Badge>
-        <Badge variant={adoptedVariant ? "default" : "secondary"}>{adoptedVariant ? t(($) => $.delivery.adoptedVariant, { variant: adoptedVariant.variant_key }) : t(($) => $.delivery.pendingSelection)}</Badge>
+        {deliveryVariants.length > 0 && <Badge variant={galleryCount > 0 ? "default" : "secondary"}>{galleryCount > 0 ? `${galleryCount} 个已入图库` : "可分别加入成图库"}</Badge>}
       </div>
     </summary>
     <div className="border-t">
@@ -537,59 +539,15 @@ export function CreativeOrderDeliveryCandidates({
         </details>}
       <CreativeOrderSourceAndPrompt source={source} progress={progress} />
 
-      {adoptedVariant ? <>
-        <AdoptedVariantDelivery
-          orderId={orderId}
-          item={item}
-          order={order}
-          variant={adoptedVariant}
-          attachments={attachments}
-          onAssetSelect={onAssetSelect}
-          onAssetInfo={onAssetInfo}
-          onUnadopt={onUnadopt ? () => onUnadopt(item.id) : undefined}
-          unadoptDisabled={disabled}
-        />
-        <AdoptedVariantStagingStatus
-          variant={adoptedVariant}
-          attachments={attachments}
-          disabled={disabled}
-          retrying={retryingVariantId === adoptedVariant.id}
-          onRetry={onRetryVariant}
-          onAdoptProcessImage={onAdoptProcessImage}
-        />
-        {otherVariants.length > 0 && <details className="group/other border-t bg-muted/10">
-          <summary className="flex cursor-pointer list-none items-center gap-2 px-4 py-3 text-sm font-medium marker:content-none">
-            <ChevronDown className="h-4 w-4 transition-transform group-open/other:rotate-180" />
-            {t(($) => $.delivery.otherCandidates)}
-            <Badge variant="outline">{otherVariants.length}</Badge>
-          </summary>
-          <div className="grid gap-3 border-t p-4 lg:grid-cols-3">
-            {otherVariants.map((variant) => <VariantCandidate
-              key={variant.id}
-              variant={variant}
-              attachments={attachments}
-              adoptedVariantId={adoptedVariant.id}
-              adoptingVariantId={adoptingVariantId}
-              onAdopt={onAdopt}
-              onAssetSelect={onAssetSelect}
-              onAssetInfo={onAssetInfo}
-              disabled={disabled}
-              subdued
-              adjustment={adjustment}
-              retrying={retryingVariantId === variant.id}
-              onRetry={onRetryVariant}
-              onAdoptProcessImage={onAdoptProcessImage}
-            />)}
-          </div>
-        </details>}
-      </> : deliveryVariants.length > 0 ? <div className="grid gap-3 p-4 lg:grid-cols-3">
+      {deliveryVariants.length > 0 ? <div className="grid gap-3 p-4 lg:grid-cols-3">
           {deliveryVariants.map((variant) => <VariantCandidate
             key={variant.id}
             variant={variant}
             attachments={attachments}
-            adoptedVariantId=""
-            adoptingVariantId={adoptingVariantId}
-            onAdopt={onAdopt}
+            inGallery={galleryVariantIds?.has(variant.id) ?? false}
+            addingToGallery={addingToGalleryVariantId === variant.id}
+            onAddToGallery={onAddToGallery}
+            onCollectFeedback={onCollectFeedback}
             onAssetSelect={onAssetSelect}
             onAssetInfo={onAssetInfo}
             disabled={disabled}
@@ -628,8 +586,7 @@ function creativeOrderItemProgress(item: CreativeOrderItem, t?: ReturnType<typeo
   const readyVariants = deliveryVariants.filter((variant) => creativeVariantAdoptionReadiness(variant).ready).length;
   const selectionPending = deliveryVariants.length === 0 && allVariants.some((variant) => creativeVariantCandidateState(variant) === "candidate");
   const shared = { variants: deliveryVariants.length, previewAssets, expectedAssets, runningVariants, productionStoppedVariants, blockedVariants, readyVariants, selectionPending };
-  if (item.adopted_variant_id) return { label: t ? t(($) => $.studio.orderStatus.adopted) : "Adopted", detail: "The final variant is selected and ready for delivery.", tone: "default", ...shared };
-  if (readyVariants > 0) return { label: t ? t(($) => $.studio.orderStatus.review) : "Ready for review", detail: `${readyVariants}/${Math.max(deliveryVariants.length, 1)} selected variants are ready for review. Compare creatives before adopting.`, tone: "default", ...shared };
+  if (readyVariants > 0) return { label: "可入图库", detail: `${readyVariants}/${Math.max(deliveryVariants.length, 1)} 个入选变体已完成，可分别加入成图库。`, tone: "default", ...shared };
   if (selectionPending) return { label: t ? t(($) => $.delivery.selectionInProgress) : "Selecting candidates", detail: t ? t(($) => $.delivery.candidateSelectionPending) : "Candidate hero images are being compared automatically.", tone: "outline", ...shared };
   if (productionStoppedVariants > 0) return { label: "Incomplete", detail: `${productionStoppedVariants} selected variants are incomplete. You can review existing images first.`, tone: "secondary", ...shared };
   if (blockedVariants > 0) return { label: t ? t(($) => $.studio.orderStatus.review) : "Ready for review", detail: `${blockedVariants} selected variants need review. Review images before deciding.`, tone: "secondary", ...shared };
@@ -676,132 +633,16 @@ function CreativeOrderCandidateSelectionPending() {
   </div>;
 }
 
-function AdoptedVariantDelivery({
-  orderId,
-  item,
-  order,
-  variant,
-  attachments,
-  onAssetSelect,
-  onAssetInfo,
-  onUnadopt,
-  unadoptDisabled = false,
-}: {
-  orderId: string;
-  item: CreativeOrderItem;
-  order?: CreativeDeliveryNamingContext;
-  variant: CreativeOrderVariant;
-  attachments: Map<string, DeliveryAttachment>;
-  onAssetSelect: (assetId: string) => void;
-  onAssetInfo?: (assetId: string) => void;
-  onUnadopt?: () => void;
-  unadoptDisabled?: boolean;
-}) {
-  const { t } = useT("creative");
-  const [archiveBusy, setArchiveBusy] = useState(false);
-  const [archiveError, setArchiveError] = useState("");
-  const delivered = creativeVariantDeliveryAssets(variant);
-  const entries = creativeVariantArchiveEntries(variant, attachments, order, item);
-  const expectedSizes = creativeVariantActiveExpectedSizes(variant);
-  const downloadArchive = async () => {
-    setArchiveBusy(true);
-    setArchiveError("");
-    try {
-      await downloadCreativeVariantArchive({ orderId, item, variant, attachments, order });
-    } catch (error) {
-      setArchiveError(error instanceof Error ? error.message : t(($) => $.delivery.archiveFailed));
-    } finally {
-      setArchiveBusy(false);
-    }
-  };
-
-  return <div className="bg-emerald-50/40 dark:bg-emerald-950/10" data-testid="creative-adopted-variant">
-    <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3">
-      <div className="flex items-center gap-2"><PackageCheck className="h-4 w-4 text-emerald-700 dark:text-emerald-400" /><h3 className="text-sm font-semibold">{t(($) => $.delivery.adoptedPackage)}</h3><Badge variant="outline">{variant.variant_key}</Badge></div>
-      <div className="flex flex-wrap items-center gap-2">
-        {onUnadopt && <Button size="sm" variant="outline" disabled={unadoptDisabled} onClick={onUnadopt}><Undo2 className="h-4 w-4" />{t(($) => $.delivery.cancelAdoption)}</Button>}
-        <Button size="sm" variant="outline" disabled={archiveBusy || entries.length !== expectedSizes.length} onClick={() => void downloadArchive()}><Download className="h-4 w-4" />{archiveBusy ? t(($) => $.delivery.packaging) : t(($) => $.delivery.downloadPackage)}</Button>
-      </div>
-    </div>
-    {archiveError && <p role="alert" className="border-y border-destructive/20 bg-destructive/5 px-4 py-2 text-xs text-destructive">{archiveError}</p>}
-    <div className={cn("grid min-w-0 border-t", expectedSizes.length === 3 && "md:grid-cols-3")}>
-      {expectedSizes.map((size, index) => {
-        const asset = delivered.find((candidate) => candidate.size_key === size);
-        const attachment = asset ? attachments.get(asset.attachment_id) : undefined;
-        const entry = asset ? entries.find((candidate) => candidate.asset.id === asset.id) : undefined;
-        return <DeliveryAssetPane key={size} asset={asset} attachment={attachment} size={size} downloadFilename={entry?.filename} onAssetSelect={onAssetSelect} onAssetInfo={onAssetInfo} divided={index > 0} />;
-      })}
-    </div>
-  </div>;
-}
-
-function AdoptedVariantStagingStatus({
-  variant,
-  attachments,
-  disabled = false,
-  retrying = false,
-  onRetry,
-  onAdoptProcessImage,
-}: {
-  variant: CreativeOrderVariant;
-  attachments: Map<string, DeliveryAttachment>;
-  disabled?: boolean;
-  retrying?: boolean;
-  onRetry?: (variant: CreativeOrderVariant, action: CreativeVariantRetryAction) => void;
-  onAdoptProcessImage?: (variantId: string, assetId: string) => Promise<void>;
-}) {
-  const { t } = useT("creative");
-  const workingRevision = creativeVariantWorkingRevision(variant);
-  if (!creativeVariantHasStagingRevision(variant)) return null;
-  const details = creativeVariantWorkingQCDetails(variant);
-  const retryAction = creativeVariantRetryAction(variant);
-  const needsAttention = creativeVariantStagingNeedsAttention(variant);
-  const revisionStatus = (variant.revisions ?? []).find((revision) => revision.revision === workingRevision)?.status;
-  const diagnostics = creativeVariantDiagnosticAssets(variant);
-  const [processOpen, setProcessOpen] = useState(false);
-  const stagingLabel = needsAttention
-    ? "调整需要处理"
-    : revisionStatus === "completed"
-      ? "调整已完成"
-      : "正在更新当前成图";
-  return <section className="space-y-3 border-t bg-muted/10 px-4 py-3" data-testid="creative-adopted-staging-revision">
-    <div className="flex flex-wrap items-center gap-2">
-      <Badge variant="outline">当前成图</Badge>
-      <Badge variant={needsAttention ? "secondary" : "outline"}>{stagingLabel}</Badge>
-      <p className="text-xs text-muted-foreground">调整通过检查后会直接替换当前 C01。</p>
-    </div>
-    {needsAttention
-      ? <VariantStagingDiagnostics variant={variant} details={details} />
-      : <p className="text-xs text-muted-foreground">正在生成或检查，完成后会直接更新当前成图。</p>}
-    {retryAction && onRetry && <Button size="sm" variant="outline" disabled={disabled || retrying} onClick={() => onRetry(variant, retryAction)}>
-      <RefreshCw className={cn("h-4 w-4", retrying && "animate-spin")} />
-      {retrying
-        ? t(($) => $.stagingRepair.retrying)
-        : `${retryAction.kind === "qc" ? t(($) => $.stagingRepair.rerunQC) : retryAction.label}`}
-    </Button>}
-    {diagnostics.length > 0 && <Button size="sm" variant="outline" onClick={() => setProcessOpen(true)}><ImageIcon className="h-4 w-4" />查看过程图片</Button>}
-    <CreativeProcessImageDialog
-      open={processOpen}
-      onOpenChange={setProcessOpen}
-      variant={variant}
-      assets={diagnostics}
-      attachments={attachments}
-      disabled={disabled}
-      onAdopt={onAdoptProcessImage ? (asset) => onAdoptProcessImage(variant.id, asset.id) : undefined}
-    />
-  </section>;
-}
-
 function VariantCandidate({
   variant,
   attachments,
-  adoptedVariantId,
-  adoptingVariantId,
-  onAdopt,
+  inGallery,
+  addingToGallery,
+  onAddToGallery,
+  onCollectFeedback,
   onAssetSelect,
   onAssetInfo,
   disabled = false,
-  subdued = false,
   adjustment,
   retrying = false,
   onRetry,
@@ -809,13 +650,13 @@ function VariantCandidate({
 }: {
   variant: CreativeOrderVariant;
   attachments: Map<string, DeliveryAttachment>;
-  adoptedVariantId: string;
-  adoptingVariantId: string;
-  onAdopt: (variantId: string, risk?: CreativeVariantAdoptionRisk) => void;
+  inGallery: boolean;
+  addingToGallery: boolean;
+  onAddToGallery?: (variantId: string) => void;
+  onCollectFeedback?: (variant: CreativeOrderVariant, reasonCode: string, comment: string) => Promise<void>;
   onAssetSelect: (assetId: string) => void;
   onAssetInfo?: (assetId: string) => void;
   disabled?: boolean;
-  subdued?: boolean;
   adjustment?: { variantId: string; sizeKey: string; status: string };
   retrying?: boolean;
   onRetry?: (variant: CreativeOrderVariant, action: CreativeVariantRetryAction) => void;
@@ -837,12 +678,11 @@ function VariantCandidate({
   const previews = creativeVariantPreviewAssets(variant);
   const diagnostics = creativeVariantDiagnosticAssets(variant);
   const [processOpen, setProcessOpen] = useState(false);
+  const [feedbackOpen, setFeedbackOpen] = useState(false);
   const cover = previews.find((asset) => asset.size_key === primarySize) ?? previews[0];
   const coverURL = cover ? creativeAttachmentBrowserURL(attachments.get(cover.attachment_id)) : "";
   const unadoptedPreview = creativeVariantUnadoptedDirectEditPreview(diagnostics, primarySize);
   const coverDiagnostic = coverURL ? undefined : unadoptedPreview ?? diagnostics.find((asset) => asset.size_key === primarySize) ?? diagnostics[0];
-  const adopted = adoptedVariantId === variant.id;
-  const busy = adoptingVariantId === variant.id;
   const blocked = creativeVariantNeedsManualAction(variant);
   const productionStopped = creativeVariantHasProductionStop(variant);
   const backgroundRunning = creativeVariantHasBackgroundWorkInProgress(variant);
@@ -857,7 +697,7 @@ function VariantCandidate({
       : currentSizeAdjustment?.status.includes("需要处理")
         ? "待处理"
         : "调整中";
-  const adoptionDisabled = disabled || !participatesInDelivery || !readiness.ready || adopted || Boolean(adoptingVariantId);
+  const addToGalleryDisabled = disabled || !onAddToGallery || !participatesInDelivery || !readiness.ready || inGallery || addingToGallery;
   const statusTone = blocked
     ? "text-amber-700 dark:text-amber-300"
     : requiresRiskAcknowledgement
@@ -865,22 +705,15 @@ function VariantCandidate({
       : readiness.ready
         ? "text-emerald-700 dark:text-emerald-400"
         : "text-muted-foreground";
-  const adoptVariant = () => {
-    if (requiresRiskAcknowledgement) {
-      onAdopt(variant.id, { acknowledged: true, reason: "用户确认采用当前成图" });
-      return;
-    }
-    onAdopt(variant.id);
-  };
   const compactStatus = creativeVariantCompactStatus({
-    adopted,
+    inGallery,
     backgroundRunning,
     blocked,
     productionStopped,
     requiresRiskAcknowledgement,
     ready: readiness.ready,
   });
-  return <article className={cn("flex min-w-0 flex-col border bg-background", subdued && "opacity-75 transition-opacity hover:opacity-100")}>
+  return <article className="flex min-w-0 flex-col border bg-background">
     <div className="flex items-center justify-between gap-2 border-b px-3 py-2">
       <div className="flex min-w-0 flex-wrap items-center gap-2">
         <span className="text-sm font-semibold">{variant.variant_key || variant.id.slice(0, 8)}</span>
@@ -891,7 +724,7 @@ function VariantCandidate({
         {candidateState === "selected" && (variant.selection_rank ?? 0) > 0 && <Badge variant="outline">第 {variant.selection_rank} 名</Badge>}
         {currentSizeAdjustment && <span className="truncate text-xs text-amber-800 dark:text-amber-200">{CREATIVE_DELIVERY_SIZE_LABELS[currentSizeAdjustment.sizeKey as (typeof CREATIVE_DELIVERY_SIZES)[number]] ?? currentSizeAdjustment.sizeKey} {currentSizeAdjustment.status}</span>}
       </div>
-      {adopted ? <Badge variant="default"><CheckCircle2 className="h-3 w-3" />已采用</Badge> : candidateState !== "selected" ? <Badge variant="secondary">{creativeVariantCandidateStateLabel(candidateState, variant.selection_rank)}</Badge> : currentSizeAdjustment ? <Badge variant="outline">{adjustmentBadge}</Badge> : productionStopped ? <Badge variant="secondary">未完成</Badge> : blocked || requiresRiskAcknowledgement || readiness.ready ? <Badge variant="outline"><CheckCircle2 className="h-3 w-3" />待验收</Badge> : backgroundRunning ? <Badge variant="outline">处理中</Badge> : <Badge variant="secondary">尚未完成</Badge>}
+      {inGallery ? <Badge variant="default"><CheckCircle2 className="h-3 w-3" />已入图库</Badge> : candidateState !== "selected" ? <Badge variant="secondary">{creativeVariantCandidateStateLabel(candidateState, variant.selection_rank)}</Badge> : currentSizeAdjustment ? <Badge variant="outline">{adjustmentBadge}</Badge> : productionStopped ? <Badge variant="secondary">未完成</Badge> : blocked || requiresRiskAcknowledgement || readiness.ready ? <Badge variant="outline"><CheckCircle2 className="h-3 w-3" />待验收</Badge> : backgroundRunning ? <Badge variant="outline">处理中</Badge> : <Badge variant="secondary">尚未完成</Badge>}
     </div>
     <button type="button" disabled={(!cover || !coverURL) && !coverDiagnostic} onClick={() => { if (cover && coverURL) onAssetSelect(cover.id); else if (coverDiagnostic) openCreativeDiagnosticAsset(coverDiagnostic); }} className="group relative flex min-h-72 w-full items-center justify-center border-b bg-muted/10 p-3 disabled:cursor-default">
       {coverURL ? <img src={coverURL} alt={`${variant.variant_key} ${CREATIVE_DELIVERY_SIZE_LABELS[primarySize]}主预览`} width={720} height={720} loading="lazy" className="max-h-[420px] w-full object-contain transition-transform group-hover:scale-[1.01]" /> : coverDiagnostic ? <>
@@ -922,19 +755,22 @@ function VariantCandidate({
       {retryAction && onRetry && <Button className="w-full" size="sm" variant="outline" disabled={disabled || retrying} onClick={() => onRetry(variant, retryAction)}>
         <RefreshCw className={cn("h-4 w-4", retrying && "animate-spin")} />
         {retrying
-          ? t(($) => $.stagingRepair.retrying)
+          ? t(($) => $.stagingRepair.retrying) || "retrying"
           : hasStagingRevision
-            ? `${retryAction.kind === "qc" ? t(($) => $.stagingRepair.rerunQC) : retryAction.label}`
-            : retryAction.kind === "qc" ? t(($) => $.stagingRepair.rerunQC) : retryAction.label}
+            ? `${retryAction.kind === "qc" ? t(($) => $.stagingRepair.rerunQC) || retryAction.label : retryAction.label}`
+            : retryAction.kind === "qc" ? t(($) => $.stagingRepair.rerunQC) || retryAction.label : retryAction.label}
       </Button>}
       <Button className="w-full" size="sm" variant="outline" disabled={!cover || !coverURL} onClick={() => { if (cover && coverURL) onAssetSelect(cover.id); }}>
         <Eye className="h-4 w-4" />
         {cover && coverURL ? "查看并标注" : "暂无可标注成图"}
       </Button>
-      <Button className={cn("w-full", requiresRiskAcknowledgement && !adopted && "border-amber-300 text-amber-800 hover:bg-amber-50 dark:border-amber-800 dark:text-amber-200 dark:hover:bg-amber-950/40")} size="sm" variant={adopted ? "secondary" : requiresRiskAcknowledgement ? "outline" : "default"} disabled={adoptionDisabled} aria-describedby={descriptionId} onClick={adoptVariant}>
-        {adopted ? <CheckCircle2 className="h-4 w-4" /> : <Check className="h-4 w-4" />}
-        {disabled ? "订单已结束" : busy ? "正在采用" : adopted ? "当前采用" : !participatesInDelivery ? "尚未入选" : readiness.ready ? stagingResultMissing ? `采用当前 r${activeRevision} 成图` : "采用此变体" : "尚不可采用"}
-      </Button>
+      {onCollectFeedback && <Button className="w-full" size="sm" variant="outline" disabled={disabled || !participatesInDelivery} onClick={() => setFeedbackOpen(true)}>
+        收集反馈
+      </Button>}
+      {onAddToGallery && <Button className={cn("w-full", requiresRiskAcknowledgement && !inGallery && "border-amber-300 text-amber-800 hover:bg-amber-50 dark:border-amber-800 dark:text-amber-200 dark:hover:bg-amber-950/40")} size="sm" variant={inGallery ? "secondary" : requiresRiskAcknowledgement ? "outline" : "default"} disabled={addToGalleryDisabled} aria-describedby={descriptionId} onClick={() => onAddToGallery(variant.id)}>
+        {inGallery ? <CheckCircle2 className="h-4 w-4" /> : <Check className="h-4 w-4" />}
+        {disabled ? "订单已结束" : addingToGallery ? "正在加入" : inGallery ? "已入图库" : !participatesInDelivery ? "尚未入选" : readiness.ready ? stagingResultMissing ? `加入当前 r${activeRevision} 成图` : "添加到成图库" : "尚不可入库"}
+      </Button>}
     </div>
     <CreativeProcessImageDialog
       open={processOpen}
@@ -945,7 +781,74 @@ function VariantCandidate({
       disabled={disabled}
       onAdopt={onAdoptProcessImage ? (asset) => onAdoptProcessImage(variant.id, asset.id) : undefined}
     />
+    {onCollectFeedback && <VariantFeedbackDialog
+      open={feedbackOpen}
+      onOpenChange={setFeedbackOpen}
+      variant={variant}
+      onSubmit={(reasonCode, comment) => onCollectFeedback(variant, reasonCode, comment)}
+    />}
   </article>;
+}
+
+const VARIANT_FEEDBACK_REASONS = [
+  { value: "visual_direction_mismatch", label: "视觉方向不符合预期" },
+  { value: "benefit_mismatch", label: "利益点表达不符合预期" },
+  { value: "layout_mismatch", label: "版式或信息层级需要调整" },
+  { value: "brand_issue", label: "品牌呈现需要调整" },
+  { value: "other", label: "其他" },
+] as const;
+
+function VariantFeedbackDialog({
+  open,
+  onOpenChange,
+  variant,
+  onSubmit,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  variant: CreativeOrderVariant;
+  onSubmit: (reasonCode: string, comment: string) => Promise<void>;
+}) {
+  const [reasonCode, setReasonCode] = useState<(typeof VARIANT_FEEDBACK_REASONS)[number]["value"]>("visual_direction_mismatch");
+  const [comment, setComment] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+
+  useEffect(() => {
+    if (!open) return;
+    setReasonCode("visual_direction_mismatch");
+    setComment("");
+  }, [open, variant.id]);
+
+  const submit = async () => {
+    setSubmitting(true);
+    try {
+      await onSubmit(reasonCode, comment.trim());
+      onOpenChange(false);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "反馈记录失败");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return <Dialog open={open} onOpenChange={onOpenChange}>
+    <DialogContent className="sm:max-w-md">
+      <DialogHeader>
+        <DialogTitle>收集方案反馈</DialogTitle>
+        <DialogDescription>{variant.variant_key || variant.id.slice(0, 8)} 的反馈会用于后续创意调优。</DialogDescription>
+      </DialogHeader>
+      <div className="space-y-4 py-2">
+        <NativeSelect value={reasonCode} onChange={(event) => setReasonCode(event.target.value as typeof reasonCode)} aria-label="反馈类型">
+          {VARIANT_FEEDBACK_REASONS.map((reason) => <NativeSelectOption key={reason.value} value={reason.value}>{reason.label}</NativeSelectOption>)}
+        </NativeSelect>
+        <Textarea value={comment} onChange={(event) => setComment(event.target.value)} placeholder="补充具体原因或建议" rows={4} />
+      </div>
+      <DialogFooter>
+        <Button variant="outline" onClick={() => onOpenChange(false)} disabled={submitting}>取消</Button>
+        <Button onClick={() => void submit()} disabled={submitting}>{submitting ? "正在记录" : "记录反馈"}</Button>
+      </DialogFooter>
+    </DialogContent>
+  </Dialog>;
 }
 
 function CreativeProcessImageDialog({
@@ -1214,23 +1117,23 @@ function creativeProcessTimeLabel(value: string | undefined): string {
 }
 
 function creativeVariantCompactStatus({
-  adopted,
+  inGallery,
   backgroundRunning,
   blocked,
   productionStopped,
   requiresRiskAcknowledgement,
   ready,
 }: {
-  adopted: boolean;
+  inGallery: boolean;
   backgroundRunning: boolean;
   blocked: boolean;
   productionStopped: boolean;
   requiresRiskAcknowledgement: boolean;
   ready: boolean;
 }): string {
-  if (adopted) return "已采用";
+  if (inGallery) return "已入图库";
   if (backgroundRunning) return "处理中";
-  if (ready) return "可采用";
+  if (ready) return "可加入成图库";
   if (productionStopped) return "未完成";
   if (blocked || requiresRiskAcknowledgement) return "可查看并标注";
   return "等待成图";
@@ -1278,7 +1181,7 @@ function VariantActionRequiredNotice({ variant, disabled = false }: { variant: C
   return <div role="status" className="space-y-1 border border-amber-300 bg-amber-50 px-2 py-2 text-xs text-amber-900 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-200" data-testid="creative-variant-action-required">
     <p className="flex items-center gap-1.5 font-medium"><AlertTriangle className="h-3.5 w-3.5" />{creativeVariantBlockerTitle(blocker?.workflow, creativeVariantHasProductionStop(variant))}</p>
     <p className="break-words">{detail}</p>
-    <p className="text-amber-800/80 dark:text-amber-200/80">{disabled ? "订单已结束，过程记录保留。" : blocker?.retryable ? "可以直接重试这个方案；也可以查看其他候选或标注调整。" : "后台已记录该步骤未补齐；可查看其他候选、标注调整或重新发起。"}</p>
+    <p className="text-amber-800/80 dark:text-amber-200/80">{disabled ? "订单已结束，过程记录保留。" : blocker?.retryable ? "可以直接重试这个方案；也可以查看成图或标注调整。" : "后台已记录该步骤未补齐；可查看其他候选、标注调整或重新发起。"}</p>
   </div>;
 }
 
@@ -1369,38 +1272,6 @@ function QCMessageList({ label, messages }: { label: string; messages: string[] 
   </div>;
 }
 
-function DeliveryAssetPane({
-  asset,
-  attachment,
-  size,
-  downloadFilename,
-  onAssetSelect,
-  onAssetInfo,
-  divided,
-}: {
-  asset?: CreativeOrderAsset;
-  attachment?: DeliveryAttachment;
-  size: (typeof CREATIVE_DELIVERY_SIZES)[number];
-  downloadFilename?: string;
-  onAssetSelect: (assetId: string) => void;
-  onAssetInfo?: (assetId: string) => void;
-  divided: boolean;
-}) {
-  const url = creativeAttachmentBrowserURL(attachment);
-  return <figure className={cn("min-w-0 bg-background", divided && "border-t md:border-l md:border-t-0")}>
-    <figcaption className="flex items-center justify-between gap-2 border-b px-3 py-2">
-      <span className="text-xs font-medium">{CREATIVE_DELIVERY_SIZE_LABELS[size]} · {size}</span>
-      <span className="flex items-center gap-1">
-        {asset && onAssetInfo && <Button size="icon-sm" variant="ghost" title={`查看${CREATIVE_DELIVERY_SIZE_LABELS[size]}成图详情`} aria-label={`查看${CREATIVE_DELIVERY_SIZE_LABELS[size]}成图详情`} onClick={() => onAssetInfo(asset.id)}><Info className="h-4 w-4" /></Button>}
-        {url && attachment && <Button size="icon-sm" variant="ghost" title={`下载 ${size}`} aria-label={`下载 ${size}`} onClick={() => void downloadCreativeAttachment(attachment, downloadFilename || `${size}${attachmentExtension(attachment)}`).catch((error: unknown) => toast.error(error instanceof Error ? error.message : "无法下载交付图"))}><Download className="h-4 w-4" /></Button>}
-      </span>
-    </figcaption>
-    <button type="button" disabled={!asset || !url} onClick={() => asset && onAssetSelect(asset.id)} className="flex min-h-72 w-full items-center justify-center p-3 disabled:cursor-default">
-      {url ? <img src={url} alt={`最终采用方案 ${size}`} width={1200} height={1200} loading="lazy" className="max-h-[480px] w-full object-contain" /> : <EmptyImage label={`${size} 尚未交付`} />}
-    </button>
-  </figure>;
-}
-
 function EmptyImage({ label }: { label: string }) {
   return <span className="flex min-h-40 w-full flex-col items-center justify-center gap-2 text-xs text-muted-foreground"><ImageIcon className="h-5 w-5" />{label}</span>;
 }
@@ -1432,15 +1303,15 @@ export function creativeVariantAdoptionReadiness(variant: CreativeOrderVariant):
     return { ready: false, status: `成图生成中：已完成 ${generatedSizes.size}/${expectedCount} 个尺寸` };
   }
   if (creativeVariantHasFailedStagingRevision(variant)) {
-    return { ready: true, status: `r${creativeVariantWorkingRevision(variant)} 修订草稿未采用；可采用当前 r${creativeVariantActiveRevision(variant)} 成图` };
+    return { ready: true, status: `r${creativeVariantWorkingRevision(variant)} 修订草稿尚未生效；可将当前 r${creativeVariantActiveRevision(variant)} 成图加入成图库` };
   }
   if (failedQC.length > 0) {
     const risk = creativeVariantRiskAdoptionReadiness(variant);
-    if (risk.allowed) return { ready: true, status: "可查看并采用当前成图" };
+    if (risk.allowed) return { ready: true, status: "可查看当前成图并加入成图库" };
     return { ready: false, status: risk.status };
   }
   if (delivered.length === expectedCount && primedSizes.size === expectedCount && qcStatusAllowsAdoption(visual)) {
-    return { ready: true, status: `${expectedCount === 3 ? "三尺寸" : "目标尺寸"}、品牌组件与质检均已完成，可以采用` };
+    return { ready: true, status: `${expectedCount === 3 ? "三尺寸" : "目标尺寸"}、品牌组件与质检均已完成，可以加入成图库` };
   }
   const productionStopDetail = creativeVariantProductionStopDetail(variant);
   if (productionStopDetail) return { ready: false, status: "未完成，可查看过程或重试" };
@@ -1588,9 +1459,9 @@ export function creativeVariantRiskAdoptionReadiness(variant: CreativeOrderVaria
     .map((asset) => asset.size_key)
     .filter((size) => CREATIVE_DELIVERY_SIZES.includes(size as (typeof CREATIVE_DELIVERY_SIZES)[number])));
   if (primedSizes.size !== expectedCount) {
-    return { allowed: false, status: `品牌组件完成 ${primedSizes.size}/${expectedCount}，暂不可采用` };
+    return { allowed: false, status: `品牌组件完成 ${primedSizes.size}/${expectedCount}，暂不可入库` };
   }
-  return { allowed: true, status: "可采用当前成图" };
+  return { allowed: true, status: "可加入当前成图" };
 }
 
 function qcStatusAllowsAdoption(status: string): boolean {
@@ -1746,13 +1617,6 @@ function comparePreviewAssets(left: CreativeOrderAsset, right: CreativeOrderAsse
   return stageRank(left) - stageRank(right) || compareDeliveryAssets(left, right);
 }
 
-async function downloadCreativeAttachment(attachment: DeliveryAttachment, filename: string): Promise<void> {
-  const response = await fetch(creativeAttachmentBrowserURL(attachment), { credentials: "include" });
-  if (!response.ok) throw new Error(`无法下载 ${filename}`);
-  const bytes = new Uint8Array(await response.arrayBuffer());
-  triggerBrowserDownload(URL.createObjectURL(new Blob([bytes], { type: response.headers.get("content-type") || attachment.content_type || "application/octet-stream" })), filenameForResponse(filename, response.headers.get("content-type"), bytes), true);
-}
-
 function triggerBrowserDownload(href: string, filename: string, revoke: boolean): void {
   const anchor = document.createElement("a");
   anchor.href = href;
@@ -1768,8 +1632,8 @@ function fileExtension(filename: string): string {
   return match?.[1]?.toLowerCase() ?? "";
 }
 
-const CREATIVE_NAMING_TOKENS = new Set(["month", "kind", "brand", "market", "date", "type", "theme", "device", "designer", "size", "duration"]);
-const ADAKAMI_IMAGE_NAMING_RULE = "{month}_P_AK_MY_{date}_{type}_{theme}_{device}_{designer}_{size}";
+const CREATIVE_NAMING_TOKENS = new Set(["month", "kind", "brand", "market", "date", "type", "theme", "device", "designer", "size", "duration", "production_date", "material_number"]);
+const ADAKAMI_IMAGE_NAMING_RULE = "{production_date}_P_AK_MY_{type}_Regular_ALL_AI_{size}_{material_number}";
 const ADAKAMI_VIDEO_NAMING_RULE = "{month}_V_AK_MY_{date}_{type}_{theme}_{device}_{designer}_{size}_{duration}";
 const CREATIVE_SIZE_ABBREVIATIONS: Record<string, string> = {
   "1080x1080": "11",
@@ -1784,17 +1648,20 @@ function creativeDeliveryFilename({
   item,
   asset,
   attachment,
+  materialNumber,
   usedNames,
 }: {
   order?: CreativeDeliveryNamingContext;
   item?: Pick<CreativeOrderItem, "candidate_id" | "copy_snapshot">;
   asset: CreativeOrderAsset;
   attachment: DeliveryAttachment;
+  materialNumber: number;
   usedNames: Set<string>;
 }): string {
   const config = creativeOrderNamingConfig(order);
   const defaults = isRecord(config.naming_defaults) ? config.naming_defaults : {};
   const copySnapshot = isRecord(item?.copy_snapshot) ? item.copy_snapshot : {};
+  const deliveryNaming = isRecord(copySnapshot.delivery_naming) ? copySnapshot.delivery_naming : {};
   const visualDirection = isRecord(copySnapshot.visual_direction) ? copySnapshot.visual_direction : {};
   const video = creativeAttachmentIsVideo(attachment);
   const generatedAt = asset.created_at || asset.updated_at || order?.created_at;
@@ -1813,16 +1680,18 @@ function creativeDeliveryFilename({
       "MY",
     ),
     date: generatedDate.date,
-    type: creativeNamingType(copySnapshot),
-    theme: firstString(visualDirection, ["theme", "campaign", "activity"]) || firstString(copySnapshot, ["theme", "campaign", "activity"]),
-    device: firstString(config, ["naming_device", "device", "model", "machine"])
+    production_date: generatedDate.date,
+    type: video ? creativeNamingType(copySnapshot) : creativeNamingDeliveryType(deliveryNaming),
+    theme: video ? firstString(visualDirection, ["theme", "campaign", "activity"]) || firstString(copySnapshot, ["theme", "campaign", "activity"]) : "Regular",
+    device: video ? firstString(config, ["naming_device", "device", "model", "machine"])
       || firstString(defaults, ["device", "model", "machine"])
-      || "SX",
-    designer: firstString(config, ["naming_designer", "designer", "creator"])
+      || "SX" : "ALL",
+    designer: video ? firstString(config, ["naming_designer", "designer", "creator"])
       || firstString(defaults, ["designer", "creator"])
-      || "AI",
+      || "AI" : "AI",
     size: creativeNamingSize(asset.size_key, config),
     duration: creativeNamingDuration(asset, video),
+    material_number: String(materialNumber),
   };
   const rule = creativeOrderNamingRule(order, video);
   const rendered = renderCreativeNamingRule(rule, values);
@@ -1847,7 +1716,7 @@ function creativeOrderNamingRule(order: CreativeDeliveryNamingContext | undefine
 
 function creativeNamingRuleIsValid(rule: string, video: boolean): boolean {
   const tokens = Array.from(rule.matchAll(/\{([^{}]+)\}/g), (match) => match[1]).filter((token): token is string => Boolean(token));
-  const requiredTokens = video ? ["date", "type", "size", "duration"] : ["date", "type", "size"];
+  const requiredTokens = video ? ["date", "type", "size", "duration"] : ["production_date", "type", "size", "material_number"];
   return Boolean(rule && tokens.length > 0 && requiredTokens.every((token) => tokens.includes(token)) && tokens.every((token) => CREATIVE_NAMING_TOKENS.has(token)));
 }
 
@@ -1864,6 +1733,15 @@ function creativeNamingType(copySnapshot: Record<string, unknown>): string {
   if (!raw) return "";
   const normalized = raw.replace(/[\s-]+/g, "_").toUpperCase();
   return normalized === "REPAYMENT_PLAN" ? "NUM" : normalized;
+}
+
+function creativeNamingDeliveryType(deliveryNaming: Record<string, unknown>): string {
+  const raw = firstString(deliveryNaming, ["type"]);
+  if (!raw) return "Num";
+  const normalized = raw.replace(/[\s-]+/g, "_").toLowerCase();
+  if (normalized === "repayment_plan") return "Repayment Plan";
+  if (normalized === "num") return "Num";
+  return raw;
 }
 
 function creativeNamingSize(size: string, config: Record<string, unknown>): string {

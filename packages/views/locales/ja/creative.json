@@ -82,7 +82,7 @@
     "overview": "ワークベンチ概要",
     "materials": "選択待ちの素材",
     "generating": "画像を生成中",
-    "readyToAdopt": "採用待ちの画像",
+    "readyToAdopt": "ギャラリーに追加できる画像",
     "weeklyDelivery": "今週の納品",
     "averageDuration": "パッケージ生成の平均時間",
     "basedOnPackages": "{{count}} パッケージに基づく"

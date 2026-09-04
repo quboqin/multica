@@ -70,7 +70,7 @@ func TestCreativeFactoryResourceDefaultsAreEmbedded(t *testing.T) {
 			t.Fatalf("embedded market pack is missing %q", key)
 		}
 	}
-	if marketConfig["naming_rule"] != "{month}_P_AK_MY_{date}_{type}_{theme}_{device}_{designer}_{size}" {
+	if marketConfig["naming_rule"] != "{production_date}_P_AK_MY_{type}_Regular_ALL_AI_{size}_{material_number}" {
 		t.Fatalf("embedded market pack has unexpected image naming rule: %#v", marketConfig["naming_rule"])
 	}
 	if marketConfig["video_naming_rule"] != "{month}_V_AK_MY_{date}_{type}_{theme}_{device}_{designer}_{size}_{duration}" {
@@ -79,6 +79,10 @@ func TestCreativeFactoryResourceDefaultsAreEmbedded(t *testing.T) {
 	sizeAliases, ok := marketConfig["naming_size_abbreviations"].(map[string]any)
 	if !ok || sizeAliases["1200x628"] != "191" {
 		t.Fatalf("embedded market pack has unexpected size aliases: %#v", marketConfig["naming_size_abbreviations"])
+	}
+	namingDefaults, ok := marketConfig["naming_defaults"].(map[string]any)
+	if !ok || namingDefaults["device"] != "ALL" || namingDefaults["designer"] != "AI" {
+		t.Fatalf("embedded market pack has unexpected naming defaults: %#v", marketConfig["naming_defaults"])
 	}
 	encodedMarketConfig, err := json.Marshal(marketConfig)
 	if err != nil {
@@ -132,8 +136,8 @@ func TestCreativeFactoryImageEditingUsesOneAgentWithWorkflowSkills(t *testing.T)
 			break
 		}
 	}
-	if directEditSkill.Version != 32 {
-		t.Fatalf("direct-edit Skill version = %d, want 32", directEditSkill.Version)
+	if directEditSkill.Version != 33 {
+		t.Fatalf("direct-edit Skill version = %d, want 33", directEditSkill.Version)
 	}
 	for index := range creativeFactoryAgentSpecs {
 		spec := &creativeFactoryAgentSpecs[index]
@@ -186,9 +190,9 @@ func TestCreativeFactoryImageEditingUsesOneAgentWithWorkflowSkills(t *testing.T)
 func TestCreativeFactoryCreativeContractTemplatesStayInSync(t *testing.T) {
 	wantVersions := map[string]int{
 		"generation_plan":     40,
-		"image_edit":          111,
+		"image_edit":          112,
 		"prime_compose":       6,
-		"direct_image_edit":   32,
+		"direct_image_edit":   33,
 		"quality_control":     43,
 		"creative_leadership": 52,
 	}
@@ -224,7 +228,7 @@ func TestCreativeFactoryCreativeContractTemplatesStayInSync(t *testing.T) {
 		"ad-creative-prime-compose": {"each delivery size", "publishes no partial package", "fail closed"},
 		"ad-creative-direct-edit":   {"target_masks", "Transform ONLY", "official Prime visual context", "<当前 Skill 目录>/../ad-creative-production/references/normalize_image.py"},
 		"ad-creative-qc":            {"creative_candidate_selection", "candidate-select", "selected_ids", "foreground_polarity", "cross_size_design_dna_mismatch"},
-		"ad-creative-leadership":    {"4-5 个候选", "原子晋级 3 个", "最终视觉 QC", "初始 direct-edit revision 和 task 由平台建单事务原子创建", "source revision 指向当前 active revision"},
+		"ad-creative-leadership":    {"4-5 个候选", "原子晋级 3 个", "最终视觉 QC", "初始 direct-edit revision 和 task 由平台建单事务原子创建", "严格小于 target `revision` 的当前 active source"},
 	}
 	for directory, required := range checks {
 		template := templates[directory]
@@ -271,7 +275,7 @@ func TestCreativeFactoryCreativeContractTemplatesStayInSync(t *testing.T) {
 	}
 	for _, value := range []string{
 		"capability = 'generation_plan'; version = 40",
-		"capability = 'image_edit'; version = 111",
+		"capability = 'image_edit'; version = 112",
 		"capability = 'prime_compose'; version = 6",
 		"capability = 'direct_image_edit'; version = 33",
 		"capability = 'quality_control'; version = 43",

@@ -82,7 +82,7 @@
     "overview": "워크벤치 개요",
     "materials": "선택할 소재",
     "generating": "이미지 생성 중",
-    "readyToAdopt": "채택 대기 이미지",
+    "readyToAdopt": "갤러리에 추가할 수 있는 이미지",
     "weeklyDelivery": "이번 주 납품",
     "averageDuration": "패키지 생성 평균 시간",
     "basedOnPackages": "{{count}}개 패키지 기준"

@@ -25,7 +25,7 @@ export function CreativeWorkbench({
   const { t } = useT("creative");
   const excludedCandidateIdSet = new Set(excludedCandidateIds);
   const pendingMaterials = candidates.filter((candidate) => !excludedCandidateIdSet.has(candidate.id));
-  const reviewOrders = orders.filter(isAdoptionReadyOrder).sort(compareActionOrders);
+  const reviewOrders = orders.filter(isGalleryReadyOrder).sort(compareActionOrders);
   const runningOrders = orders.filter(isRunningOrder).sort(compareActionOrders);
   const deliveredThisWeek = orders
     .filter(isDeliveredOrder)
@@ -60,7 +60,7 @@ export function CreativeWorkbench({
 export function creativeWorkbenchOrderState(order: CreativeOrder): WorkbenchOrderState {
   if (isCancelledOrder(order)) return "inactive";
   if (isDeliveredOrder(order)) return "delivered";
-  if (isAdoptionReadyOrder(order)) return "review";
+  if (isGalleryReadyOrder(order)) return "review";
   if (isRunningOrder(order)) return "running";
   if (isAttentionRequiredOrder(order)) return "attention";
   return "inactive";
@@ -72,14 +72,14 @@ function isCancelledOrder(order: CreativeOrder): boolean {
 
 function isDeliveredOrder(order: CreativeOrder): boolean {
   const status = order.derived_status || order.status;
-  return status === "completed" || (order.items.length > 0 && order.items.every((item) => Boolean(item.adopted_variant_id)));
+  return status === "completed";
 }
 
-function isAdoptionReadyOrder(order: CreativeOrder): boolean {
+function isGalleryReadyOrder(order: CreativeOrder): boolean {
   if (isCancelledOrder(order) || isDeliveredOrder(order)) return false;
   const status = order.derived_status || order.status;
   if (status === "awaiting_adoption") return true;
-  return order.items.some((item) => !item.adopted_variant_id && item.variants.some((variant) =>
+  return order.items.some((item) => item.variants.some((variant) =>
     variant.status === "completed"
     || variant.qc_status === "passed"
     || variant.assets.some((asset) => asset.status === "completed" && asset.stage === "delivered"),

@@ -52,8 +52,8 @@ identity, copy, brand, UI, QR, legal footer, face, clothing, gesture, props, or 
 
 `design_dna` is the cross-size identity, not a square raster:
 
-- `consistency_mode`: `family_consistent` by default, or `strict_identity` when the same person/product/object identity is essential;
-- `subject_system`: subject type, identity anchor, pose/action family, relative scale, and subject-background relationship;
+- `consistency_mode`: use `strict_identity` whenever the selected direction contains a recurring person, product, or distinctive central object; `family_consistent` is only for abstract or unanchored directions;
+- `subject_system`: subject type, explicit identity anchor, pose/action family, relative scale, and subject-background relationship. A recurring person, product, or distinctive central object must have one declared anchor;
 - `visual_system`: palette roles, contrast character, material, lighting, depth, image medium, and texture budget;
 - `typography_system`: hierarchy, weight character, alignment behavior, line-count intent, and numeric/table treatment. GPT Image renders
   the approved text; this field does not authorize platform code-rendered typography;
@@ -64,8 +64,9 @@ identity, copy, brand, UI, QR, legal footer, face, clothing, gesture, props, or 
 
 For `family_consistent`, each size can be generated independently from the same source reference and DesignDNA. A selected primary
 image is an optional consistency reference, never a layout source or availability prerequisite. For `strict_identity`, use an explicit
-approved identity anchor or selected-primary reference; that identity dependency must be declared and must never be disguised as a
-hard dependency on the square delivery image.
+approved identity anchor and the selected-primary reference for every later size; the same declared person, product, or central object
+must not be replaced. That identity dependency must be declared and must never be disguised as a hard dependency on the square
+delivery image.
 
 ## LayoutPlan
 

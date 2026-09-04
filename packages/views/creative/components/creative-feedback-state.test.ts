@@ -24,7 +24,6 @@ import {
   creativeOrderAdjustmentContextSnapshot,
   creativeOrderAdjustmentSourceContext,
   creativeOrderAdjustmentIssueTitle,
-  creativeOrderAdoptionStatus,
   creativeOrderGenerationProgress,
   creativeOrderNeedsPolling,
   creativeOrderSquadId,
@@ -272,35 +271,21 @@ describe("creative feedback state", () => {
       .toEqual({ ready: false, status: "running", error: "", version: 0 });
   });
 
-  it("marks an order adopted only after every item has one persisted variant selection", () => {
-    const order = {
-      id: "order-1",
-      items: [
-        { adopted_variant_id: "variant-1", variants: [readyVariant("variant-1"), readyVariant("variant-2")] },
-        { adopted_variant_id: "", variants: [readyVariant("variant-3"), readyVariant("variant-4")] },
-      ],
-    } as unknown as CreativeOrder;
-
-    expect(creativeOrderAdoptionStatus(order)).toBe("待选择");
-    order.items[1]!.adopted_variant_id = "variant-4";
-    expect(creativeOrderAdoptionStatus(order)).toBe("已采用");
-  });
-
   it("allows acceptance after three sizes are ready and treats failed QC as a user reminder", () => {
     const ready = readyVariant("variant-ready");
     expect(creativeVariantAdoptionReadiness(ready)).toEqual({
       ready: true,
-      status: "三尺寸、品牌组件与质检均已完成，可以采用",
+      status: "三尺寸、品牌组件与质检均已完成，可以加入成图库",
     });
 
     const missingBrandComponents = { ...ready, assets: ready.assets.filter((asset) => !(asset.stage === "primed" && asset.size_key === "800x1000")) };
     expect(creativeVariantAdoptionReadiness(missingBrandComponents)).toEqual({ ready: false, status: "等待品牌组件合成：已完成 2/3 个尺寸" });
 
     const failedQC = { ...ready, qc_reports: ready.qc_reports.map((report) => report.lane === "visual" ? { ...report, status: "failed" } : report) };
-    expect(creativeVariantAdoptionReadiness(failedQC)).toEqual({ ready: true, status: "可查看并采用当前成图" });
+    expect(creativeVariantAdoptionReadiness(failedQC)).toEqual({ ready: true, status: "可查看当前成图并加入成图库" });
 
     const warnedQC = { ...ready, qc_reports: ready.qc_reports.map((report) => report.lane === "visual" ? { ...report, status: "warning" } : report) };
-    expect(creativeVariantAdoptionReadiness(warnedQC)).toEqual({ ready: true, status: "三尺寸、品牌组件与质检均已完成，可以采用" });
+    expect(creativeVariantAdoptionReadiness(warnedQC)).toEqual({ ready: true, status: "三尺寸、品牌组件与质检均已完成，可以加入成图库" });
 
     const missingDelivery = { ...ready, assets: ready.assets.filter((asset) => !(asset.stage === "delivered" && asset.size_key === "1200x628")) };
     expect(creativeVariantAdoptionReadiness(missingDelivery)).toEqual({ ready: false, status: "等待正式交付：已完成 2/3 个尺寸" });
@@ -428,10 +413,10 @@ describe("creative feedback state", () => {
   });
 
   it("freezes the user's creative idea in the submitted order item", () => {
-    expect(creativeOrderItemInput("candidate-1", "analysis-2", { headline: "已审核文案" }, "  保留人物，突出 CTA  ")).toEqual({
+    expect(creativeOrderItemInput("candidate-1", "analysis-2", { headline: "已审核文案" }, "  保留人物，突出 CTA  ", "num")).toEqual({
       candidate_id: "candidate-1",
       source_analysis_id: "analysis-2",
-      copy_snapshot: { headline: "已审核文案" },
+      copy_snapshot: { headline: "已审核文案", delivery_naming: { type: "num" } },
       direction: "保留人物，突出 CTA",
     });
   });

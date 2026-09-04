@@ -88,7 +88,7 @@ func TestCreativePlatformSkillsUseFrozenBusinessInputs(t *testing.T) {
 	for _, required := range []string{
 		"capability = 'reference_analysis'; version = 19",
 		"capability = 'generation_plan'; version = 40",
-		"capability = 'image_edit'; version = 111",
+		"capability = 'image_edit'; version = 112",
 		"capability = 'prime_compose'; version = 6",
 		"capability = 'direct_image_edit'; version = 33",
 		"capability = 'quality_control'; version = 43",
@@ -108,7 +108,7 @@ func TestCreativePlatformSkillsUseFrozenBusinessInputs(t *testing.T) {
 	for _, required := range []string{
 		`Capability: "reference_analysis", Version: 19`,
 		`Capability: "generation_plan", Version: 40`,
-		`Capability: "image_edit", Version: 111`,
+		`Capability: "image_edit", Version: 112`,
 		`Capability: "prime_compose", Version: 6`,
 		`Capability: "direct_image_edit", Version: 33`,
 		`Capability: "quality_control", Version: 43`,
@@ -217,7 +217,8 @@ func TestCreativeProductionPromptContractDefinesInputRolesAndNativeReflow(t *tes
 		"ACCEPTANCE",
 		"Input 1 is always the downloaded candidate source",
 		"Input 2 is always the current-size, current-revision official Prime visual context",
-		"Input 4 is optional",
+		"Input 4 is the selected primary image",
+		"same declared identity anchor",
 		"It must not donate layout",
 		"1080x1080 locked 1:1 square",
 		"1200x628 locked 1.91:1 landscape",

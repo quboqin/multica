@@ -21,7 +21,7 @@ import { useFileUpload } from "@multica/core/hooks/use-file-upload";
 import { resolvePublicFileUrl } from "@multica/core/workspace/avatar-url";
 import { agentListOptions, skillListOptions, squadListOptions, workspaceKeys } from "@multica/core/workspace/queries";
 import { attachmentDownloadPath } from "@multica/core/types";
-import type { Agent, CreateCreativeFeedbackRequest, CreateCreativeOrderRequest, CreativeCopySnapshot, CreativeMaterialCandidate, CreativeMaterialCrawlRun, CreativeMaterialImportResult, CreativeMaterialLibraryQuery, CreativeOrder, CreativeOrderItem, CreativeOrderVariant, CreativeRepaymentPlanEntry, CreativeResource, CreativeResourceFile, CreativeSourceAnalysis, SkillSummary, Squad, SquadMember, CreativeVisualDirection } from "@multica/core/types";
+import type { Agent, CreateCreativeFeedbackRequest, CreateCreativeOrderRequest, CreativeCopySnapshot, CreativeMaterialCandidate, CreativeMaterialCrawlRun, CreativeMaterialImportResult, CreativeMaterialLibraryQuery, CreativeOrder, CreativeOrderItem, CreativeOrderVariant, CreativeRepaymentPlanEntry, CreativeResource, CreativeResourceFile, CreativeSourceAnalysis, CreativeType, SkillSummary, Squad, SquadMember, CreativeVisualDirection } from "@multica/core/types";
 import { Badge } from "@multica/ui/components/ui/badge";
 import { Button, buttonVariants } from "@multica/ui/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@multica/ui/components/ui/dialog";
@@ -49,11 +49,11 @@ import {
   type MaterialLibraryFilter,
 } from "../lib/creative-material-state";
 import {
-  adoptedCreativeOrderVariant,
+  creativeGalleryVariantIds,
   creativeVariantActiveExpectedSizes,
   creativeVariantArchiveEntries,
   creativeVariantDeliveryAssets,
-  downloadCreativeAdoptedVariantArchives,
+  downloadCreativeVariantArchives,
   downloadCreativeVariantArchive,
   type DeliveryAttachment,
 } from "./creative-order-delivery";
@@ -109,7 +109,7 @@ const MATERIAL_FILTER_LABELS: Record<MaterialLibraryFilter, string> = {
 
 const MATERIAL_FILTER_OPTIONS: MaterialLibraryFilter[] = ["available", "analyze", "rejected", "all"];
 
-type MaterialLibraryTab = "candidates" | "adopted";
+type MaterialLibraryTab = "candidates" | "gallery";
 
 const MATERIAL_PAGE_SIZE = 60;
 
@@ -193,6 +193,7 @@ export function CreativeMaterialLibrary({
     refetchInterval: orderDraftOpen ? 2500 : false,
   });
   const feedback = useQuery(creativeFeedbackOptions(wsId, "candidate"));
+  const galleryFeedback = useQuery(creativeFeedbackOptions(wsId, "variant"));
   const orders = useQuery(creativeOrdersOptions(wsId));
   const resources = useQuery(creativeResourcesOptions(wsId));
   const materialIndex = useQuery(creativeMaterialLibraryOptions(wsId, { limit: 1000, offset: 0, view: "all" }));
@@ -321,22 +322,23 @@ export function CreativeMaterialLibrary({
     () => new Map([...(materialIndex.data?.candidates ?? []), ...displayedCandidates].map((candidate) => [candidate.id, candidate])),
     [displayedCandidates, materialIndex.data?.candidates],
   );
-  const adoptedGalleryItems = useMemo(
-    () => adoptedCreativeGalleryItems(orders.data?.orders ?? [], materialIndexById),
-    [materialIndexById, orders.data?.orders],
+  const galleryVariantIds = creativeGalleryVariantIds(galleryFeedback.data?.events ?? []);
+  const galleryItems = useMemo(
+    () => creativeGalleryItems(orders.data?.orders ?? [], materialIndexById, galleryVariantIds),
+    [galleryVariantIds, materialIndexById, orders.data?.orders],
   );
-  const adoptedAttachmentIds = useMemo(
-    () => [...new Set(adoptedGalleryItems.flatMap((item) => item.deliveryAssets.map((asset) => asset.attachment_id)).filter(Boolean))],
-    [adoptedGalleryItems],
+  const galleryAttachmentIds = useMemo(
+    () => [...new Set(galleryItems.flatMap((item) => item.deliveryAssets.map((asset) => asset.attachment_id)).filter(Boolean))],
+    [galleryItems],
   );
-  const adoptedAttachments = useQuery({
-    queryKey: ["creative", wsId, "adopted-gallery-attachments", adoptedAttachmentIds.join("|")],
-    queryFn: () => Promise.all(adoptedAttachmentIds.map((id) => api.getAttachment(id))),
-    enabled: libraryTab === "adopted" && adoptedAttachmentIds.length > 0,
+  const galleryAttachments = useQuery({
+    queryKey: ["creative", wsId, "gallery-attachments", galleryAttachmentIds.join("|")],
+    queryFn: () => Promise.all(galleryAttachmentIds.map((id) => api.getAttachment(id))),
+    enabled: libraryTab === "gallery" && galleryAttachmentIds.length > 0,
   });
-  const adoptedAttachmentMap = useMemo<Map<string, DeliveryAttachment>>(
-    () => new Map((adoptedAttachments.data ?? []).map((attachment) => [attachment.id, attachment] as const)),
-    [adoptedAttachments.data],
+  const galleryAttachmentMap = useMemo<Map<string, DeliveryAttachment>>(
+    () => new Map((galleryAttachments.data ?? []).map((attachment) => [attachment.id, attachment] as const)),
+    [galleryAttachments.data],
   );
   const toggleSelection = (candidate: CreativeMaterialCandidate) => {
     setSelectedCandidatesById((current) => {
@@ -357,19 +359,19 @@ export function CreativeMaterialLibrary({
     <div className="mb-4 flex flex-wrap items-end justify-between gap-4">
       <div>
         <h2 className="text-base font-semibold">素材库</h2>
-        <p className="mt-1 text-sm text-muted-foreground">管理候选素材和最终采用成图。</p>
+        <p className="mt-1 text-sm text-muted-foreground">管理候选素材和已加入成图库的成图。</p>
       </div>
       <div className="flex items-center gap-2">
-        <Badge variant="outline">{libraryTab === "adopted" ? `${adoptedGalleryItems.length} 个成图包` : `${totalCount} 条`}</Badge>
+        <Badge variant="outline">{libraryTab === "gallery" ? `${galleryItems.length} 个成图包` : `${totalCount} 条`}</Badge>
         {libraryTab === "candidates" && selectedCandidates.length > 0 && <Badge>{selectedCandidates.length} 已选</Badge>}
         {libraryTab === "candidates" && <Button size="sm" onClick={() => setImportOpen(true)}><Plus className="h-4 w-4" />导入素材</Button>}
       </div>
     </div>
-    <Tabs value={libraryTab} onValueChange={(value) => setLibraryTab(value === "adopted" ? "adopted" : "candidates")}>
+    <Tabs value={libraryTab} onValueChange={(value) => setLibraryTab(value === "gallery" ? "gallery" : "candidates")}>
       <div className="mb-4 border-b">
         <TabsList className="h-auto min-h-8 justify-start gap-1 bg-transparent p-0">
           <TabsTrigger value="candidates" className="rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent"><Images className="h-3.5 w-3.5" />候选素材</TabsTrigger>
-          <TabsTrigger value="adopted" className="rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent"><PackageCheck className="h-3.5 w-3.5" />成图库</TabsTrigger>
+          <TabsTrigger value="gallery" className="rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent"><PackageCheck className="h-3.5 w-3.5" />成图库</TabsTrigger>
         </TabsList>
       </div>
       <TabsContent value="candidates" className="m-0">
@@ -454,11 +456,11 @@ export function CreativeMaterialLibrary({
           </div>
         </div>
       </TabsContent>
-      <TabsContent value="adopted" className="m-0">
-        <CreativeAdoptedGallery
-          items={adoptedGalleryItems}
-          attachments={adoptedAttachmentMap}
-          loading={orders.isLoading || adoptedAttachments.isLoading}
+      <TabsContent value="gallery" className="m-0">
+        <CreativeGallery
+          items={galleryItems}
+          attachments={galleryAttachmentMap}
+          loading={orders.isLoading || galleryAttachments.isLoading}
           onOpenOrder={onOpenOrder ?? onOrderCreated}
         />
       </TabsContent>
@@ -513,7 +515,7 @@ export function materialCandidateDisplayDetails(candidate: CreativeMaterialCandi
   };
 }
 
-type AdoptedCreativeGalleryItem = {
+type CreativeGalleryItem = {
   id: string;
   order: CreativeOrder;
   item: CreativeOrderItem;
@@ -521,18 +523,17 @@ type AdoptedCreativeGalleryItem = {
   candidate?: CreativeMaterialCandidate;
   deliveryAssets: ReturnType<typeof creativeVariantDeliveryAssets>;
   label: string;
-  adoptedAt: string;
+  addedAt: string;
 };
 
-function adoptedCreativeGalleryItems(
+function creativeGalleryItems(
   orders: CreativeOrder[],
   candidatesById: Map<string, CreativeMaterialCandidate>,
-): AdoptedCreativeGalleryItem[] {
+  galleryVariantIds: ReadonlySet<string>,
+): CreativeGalleryItem[] {
   return orders.flatMap((order) => order.items.flatMap((item) => {
-    const variant = adoptedCreativeOrderVariant(item);
-    if (!variant) return [];
     const candidate = candidatesById.get(item.candidate_id);
-    return [{
+    return item.variants.filter((variant) => galleryVariantIds.has(variant.id)).map((variant) => ({
       id: `${order.id}:${item.id}:${variant.id}`,
       order,
       item,
@@ -540,18 +541,18 @@ function adoptedCreativeGalleryItems(
       candidate,
       deliveryAssets: creativeVariantDeliveryAssets(variant),
       label: candidate?.title || candidate?.competitor || item.candidate_id.slice(0, 8) || `订单 ${order.id.slice(0, 8)}`,
-      adoptedAt: item.adopted_at || order.updated_at || order.created_at,
-    }];
-  })).sort((left, right) => (Date.parse(right.adoptedAt) || 0) - (Date.parse(left.adoptedAt) || 0));
+      addedAt: order.updated_at || order.created_at,
+    }));
+  })).sort((left, right) => (Date.parse(right.addedAt) || 0) - (Date.parse(left.addedAt) || 0));
 }
 
-function CreativeAdoptedGallery({
+function CreativeGallery({
   items,
   attachments,
   loading,
   onOpenOrder,
 }: {
-  items: AdoptedCreativeGalleryItem[];
+  items: CreativeGalleryItem[];
   attachments: Map<string, DeliveryAttachment>;
   loading: boolean;
   onOpenOrder?: (orderId: string) => void;
@@ -572,8 +573,8 @@ function CreativeAdoptedGallery({
     ].join(" ").toLocaleLowerCase().includes(needle));
   }, [items, needle]);
   const selectedItems = visible.filter((item) => selectedIds.has(item.id));
-  const downloadableVisible = visible.filter((item) => adoptedGalleryComplete(item, attachments));
-  const downloadableSelected = selectedItems.filter((item) => adoptedGalleryComplete(item, attachments));
+  const downloadableVisible = visible.filter((item) => galleryItemComplete(item, attachments));
+  const downloadableSelected = selectedItems.filter((item) => galleryItemComplete(item, attachments));
 
   const toggleSelected = (id: string, checked: boolean) => {
     setSelectedIds((current) => {
@@ -583,16 +584,16 @@ function CreativeAdoptedGallery({
       return next;
     });
   };
-  const downloadMany = async (targetItems: AdoptedCreativeGalleryItem[], scope: string) => {
+  const downloadMany = async (targetItems: CreativeGalleryItem[], scope: string) => {
     if (targetItems.length === 0) return;
     setDownloadBusy(scope);
     try {
-      await downloadCreativeAdoptedVariantArchives({
-        packages: targetItems.map((item) => adoptedGalleryDownloadPackage(item, attachments)),
-        archiveName: scope === "selected" ? "adopted-creatives-selected" : "adopted-creatives-current",
+      await downloadCreativeVariantArchives({
+        packages: targetItems.map((item) => galleryDownloadPackage(item, attachments)),
+        archiveName: scope === "selected" ? "creative-gallery-selected" : "creative-gallery-current",
       });
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "无法下载采用成图");
+      toast.error(error instanceof Error ? error.message : "无法下载成图库成图");
     } finally {
       setDownloadBusy("");
     }
@@ -612,10 +613,10 @@ function CreativeAdoptedGallery({
       </div>
     </div>
     {loading ? <div className="py-16 text-center text-sm text-muted-foreground">正在加载成图库...</div> : visible.length === 0 ? (
-      <div className="flex min-h-64 flex-col items-center justify-center border border-dashed text-sm text-muted-foreground"><PackageCheck className="mb-3 h-6 w-6" /><p>还没有符合条件的采用成图</p></div>
+      <div className="flex min-h-64 flex-col items-center justify-center border border-dashed text-sm text-muted-foreground"><PackageCheck className="mb-3 h-6 w-6" /><p>还没有加入成图库的成图</p></div>
     ) : (
       <div className="grid grid-cols-1 gap-px overflow-hidden border bg-border lg:grid-cols-2 2xl:grid-cols-3">
-        {visible.map((item) => <AdoptedGalleryTile
+        {visible.map((item) => <GalleryTile
           key={item.id}
           item={item}
           attachments={attachments}
@@ -645,7 +646,7 @@ function CreativeAdoptedGallery({
   </section>;
 }
 
-function AdoptedGalleryTile({
+function GalleryTile({
   item,
   attachments,
   selected,
@@ -654,7 +655,7 @@ function AdoptedGalleryTile({
   onDownload,
   onOpenOrder,
 }: {
-  item: AdoptedCreativeGalleryItem;
+  item: CreativeGalleryItem;
   attachments: Map<string, DeliveryAttachment>;
   selected: boolean;
   busy: boolean;
@@ -689,7 +690,7 @@ function AdoptedGalleryTile({
       })}
     </div>
     <div className="space-y-1 px-3 py-2 text-xs text-muted-foreground">
-      <p className="truncate">采用时间 {formatCreativeDateTime(item.adoptedAt)}</p>
+      <p className="truncate">更新时间 {formatCreativeDateTime(item.addedAt)}</p>
       <p className="truncate">来源 {item.candidate?.competitor || item.candidate?.connector_id || item.item.candidate_id.slice(0, 8)}</p>
     </div>
     <div className="flex items-center justify-between gap-2 border-t px-3 py-2">
@@ -699,16 +700,17 @@ function AdoptedGalleryTile({
   </article>;
 }
 
-export function adoptedGalleryComplete(item: AdoptedCreativeGalleryItem, attachments: Map<string, DeliveryAttachment>): boolean {
+export function galleryItemComplete(item: CreativeGalleryItem, attachments: Map<string, DeliveryAttachment>): boolean {
   return creativeVariantArchiveEntries(item.variant, attachments, item.order, item.item).length === creativeVariantActiveExpectedSizes(item.variant).length;
 }
 
-function adoptedGalleryDownloadPackage(item: AdoptedCreativeGalleryItem, attachments: Map<string, DeliveryAttachment>) {
+function galleryDownloadPackage(item: CreativeGalleryItem, attachments: Map<string, DeliveryAttachment>) {
   return {
     orderId: item.order.id,
     order: item.order,
     item: item.item,
     variant: item.variant,
+    addedAt: item.addedAt,
     attachments,
     folderName: `order-${item.order.id.slice(0, 8)}-${item.variant.variant_key || item.variant.id.slice(0, 8)}`,
     label: item.label,
@@ -908,6 +910,7 @@ export function MaterialBatchSelectionBar({
 
 export type OrderItemDraft = {
   mode: "pre_adaptation" | "manual";
+  deliveryType: CreativeType;
   visualDirection: CreativeVisualDirection;
   textOverrides: Record<string, string>;
   replacementSources?: Record<string, ReplacementSourceChoice>;
@@ -977,17 +980,16 @@ export function orderDraftWithPreAdaptation(current: OrderItemDraft | undefined,
   if (current) {
     const normalized = {
       ...current,
+      deliveryType: current.deliveryType ?? "num",
       visualDirection: current.visualDirection ?? visualDirection,
       replacementSources: current.replacementSources ?? {},
       repaymentPlanOverrides: current.repaymentPlanOverrides ?? {},
       numericLayoutDrafts: current.numericLayoutDrafts ?? {},
       appUIReference: current.appUIReference ?? null,
     };
-    return current.visualDirection === undefined || current.replacementSources === undefined || current.repaymentPlanOverrides === undefined || current.numericLayoutDrafts === undefined || current.appUIReference === undefined
-      ? normalized
-      : normalized;
+    return normalized;
   }
-  return { mode: "pre_adaptation", visualDirection, textOverrides: {}, replacementSources: {}, repaymentPlanOverrides: {}, numericLayoutDrafts: {}, appUIReference: null, manualHeadline: "", manualSubheadline: "", manualBenefit: "", manualSupporting: "", manualCta: "" };
+  return { mode: "pre_adaptation", deliveryType: "num", visualDirection, textOverrides: {}, replacementSources: {}, repaymentPlanOverrides: {}, numericLayoutDrafts: {}, appUIReference: null, manualHeadline: "", manualSubheadline: "", manualBenefit: "", manualSupporting: "", manualCta: "" };
 }
 
 export function recoveryForSubmissionKey(recovery: SubmissionRecovery, submissionKey: string): SubmissionRecovery {
@@ -1824,6 +1826,7 @@ function CreativeOrderDraft({ candidates, analyses, deselecting, onDeselect, onC
               completedAnalyses.get(candidate.id)!.id,
               preAdaptedCopySnapshot(copyLibrary, adaptation, draft, completedAnalyses.get(candidate.id)!.id) as unknown as Record<string, unknown>,
               visualDirectionSummary(draft.visualDirection),
+              draft.deliveryType,
             );
           }),
         });
@@ -1861,6 +1864,7 @@ function CreativeOrderDraft({ candidates, analyses, deselecting, onDeselect, onC
     {activeCandidate && <article key={activeCandidate.id} className="min-w-0 space-y-4 p-4" data-testid="creative-order-active-editor" data-candidate-id={activeCandidate.id}>
       <div className="min-w-0 border-b border-l-2 border-emerald-600 pb-4 pl-3"><div className="flex flex-wrap items-center gap-2"><Sparkles className="h-4 w-4 text-emerald-700" /><p className="break-words text-sm font-medium">{activeAnalysis?.summary || "素材分析中"}</p><span className="font-mono text-[10px] text-muted-foreground">素材 ID {activeCandidate.id.slice(0, 8)}</span></div>{activeAnalysis && <AnalysisHighlights analysis={activeAnalysis} adaptation={activePreAdaptation} />}{activePreAdaptation ? <PreAdaptationSummary adaptation={activePreAdaptation} /> : activeReadiness === "analyzing" ? <p className="mt-2 text-xs text-amber-700">{MATERIAL_ANALYSIS_RUNNING_MESSAGE}</p> : <p className="mt-2 text-xs text-destructive">素材分析未完成，暂时不能提交出图。</p>}</div>
       <div className="min-w-0 space-y-4">
+        {activePreAdaptation?.status === "completed" && activeDraft && <Field label="类型"><NativeSelect value={activeDraft.deliveryType} onChange={(event) => setDraft(activeCandidate.id, { deliveryType: event.target.value as CreativeType })}><NativeSelectOption value="num">Num</NativeSelectOption><NativeSelectOption value="repayment_plan">Repayment Plan</NativeSelectOption></NativeSelect></Field>}
     {activeAnalysisNeedsVisualUpgrade ? <div role="alert" className="space-y-3 border border-amber-300 bg-amber-50/50 px-3 py-3 text-xs text-amber-900"><p className="font-medium">这张素材需要重新分析后才能提交。</p><p>重新分析会刷新画面文字区域、业务信息和出图配置。</p><Button size="sm" disabled={retryingSourceAnalysis} onClick={() => onRetrySourceAnalysis(activeCandidate.id)}><RefreshCw className={`h-4 w-4 ${retryingSourceAnalysis ? "animate-spin" : ""}`} />{retryingSourceAnalysis ? "正在重新分析" : "重新分析"}</Button></div> : activePreAdaptation?.status === "completed" && activeDraft ? <TextReplacementPlan sourceImage={activeSource} sourceImageAlt={activeCandidate.title || activeCandidate.competitor} adaptation={activePreAdaptation} copyLibrary={copyLibrary} appUIReferences={appUIReferences} appUIReference={activeDraft.appUIReference ?? null} appUIReferencesLoading={marketFiles.isLoading} overrides={activeDraft.textOverrides} replacementSources={activeDraft.replacementSources ?? {}} repaymentPlanOverrides={activeDraft.repaymentPlanOverrides ?? {}} numericLayoutDrafts={activeDraft.numericLayoutDrafts ?? {}} repaymentPlanOptions={repaymentPlanOptions} visualDirection={activeDraft.visualDirection} onVisualDirectionChange={(value) => setDraft(activeCandidate.id, { visualDirection: value })} onAppUIReferenceChange={(value) => setDraft(activeCandidate.id, { appUIReference: value })} onOpenCopyLibrary={onOpenCopyLibrary} onRetrySourceAnalysis={() => onRetrySourceAnalysis(activeCandidate.id)} retryingSourceAnalysis={retryingSourceAnalysis} onChooseReplacement={(blockId, value, source) => setReplacementChoice(activeCandidate.id, blockId, value, source)} onChooseNumericReplacement={(blockId, value, source) => setNumericReplacementChoice(activeCandidate.id, blockId, value, source)} onChooseRepaymentPlan={(scenarioId, plan, original) => setRepaymentPlanChoice(activeCandidate.id, scenarioId, plan, original)} onAddRepaymentPlan={(layoutId, plan) => addRepaymentPlanRow(activeCandidate.id, layoutId, plan)} onRemoveRepaymentPlan={(layoutId, scenarioId) => removeRepaymentPlanRow(activeCandidate.id, layoutId, scenarioId)} onOmitNumericLayout={(layoutId) => omitPendingNumericLayout(activeCandidate.id, layoutId)} /> : activeReadiness === "unavailable" ? <div role="status" className="space-y-2 border border-slate-300 bg-slate-50 px-3 py-3 text-xs text-slate-700"><p className="font-medium">这张素材没有可配置的原图文案。</p><p>平台已保留分析结果，不会继续重试，也不会把它加入出图配置；可选择其他有可编辑文案的素材。</p></div> : activeReadiness === "analyzing" ? <div role="status" className="flex items-start gap-2 border border-amber-300 bg-amber-50/50 px-3 py-3 text-xs text-amber-900"><LoaderCircle className="mt-0.5 h-4 w-4 shrink-0 animate-spin" /><div className="min-w-0 flex-1"><p className="font-medium">{MATERIAL_ANALYSIS_RUNNING_MESSAGE}</p><p className="mt-1 text-amber-800">{MATERIAL_ANALYSIS_RUNNING_DETAIL}</p></div><Button size="sm" variant="outline" disabled={retryingSourceAnalysis} onClick={() => onRetrySourceAnalysis(activeCandidate.id)}><RefreshCw className={`h-4 w-4 ${retryingSourceAnalysis ? "animate-spin" : ""}`} />{retryingSourceAnalysis ? "正在重新分析" : "重新分析"}</Button></div> : activeReadiness === "manual_required" ? <div role="alert" className="space-y-2 border border-amber-300 bg-amber-50/50 px-3 py-3 text-xs text-amber-900"><p className="font-medium">预适配已重试一次仍未通过，需人工确认文案与数值映射。</p><p className="text-amber-800">这张素材不会进入可用素材，也不会继续自动重试。</p></div> : <div role="alert" className="space-y-3 border border-amber-300 bg-amber-50/50 px-3 py-3 text-xs text-amber-800"><p>{!marketPack ? "当前工作区尚未发布唯一市场配置，素材分析暂不可用。" : !copyLibrary ? "当前市场配置没有绑定已发布文案库，素材分析暂不可用。" : "本图尚未按当前市场配置完成分析，不会替换为泛文案。"}</p>{activeAnalysis && <Button size="sm" variant="outline" disabled={retryingSourceAnalysis} onClick={() => onRetrySourceAnalysis(activeCandidate.id)}><RefreshCw className={`h-4 w-4 ${retryingSourceAnalysis ? "animate-spin" : ""}`} />{retryingSourceAnalysis ? "正在重新分析" : "重新分析"}</Button>}</div>}
         {activeCustomCopyValidation && !activeCustomCopyValidation.allowed && <p className="border border-amber-300 bg-amber-50/50 px-3 py-2 text-xs text-amber-900">{activeCustomCopyValidation.message} 这是本次人工改写的提示，不会阻止提交；请确认该数字已获业务确认。</p>}
       </div>
@@ -3493,11 +3497,15 @@ export function creativeOrderItemInput(
   sourceAnalysisId: string,
   frozenCopy: Record<string, unknown> | CreativeCopySnapshot,
   direction: string,
+  deliveryType: CreativeType,
 ): CreateCreativeOrderRequest["items"][number] {
   return {
     candidate_id: candidateId,
     source_analysis_id: sourceAnalysisId,
-    copy_snapshot: frozenCopy as unknown as Record<string, unknown>,
+    copy_snapshot: {
+      ...frozenCopy,
+      delivery_naming: { type: deliveryType },
+    },
     direction: direction.trim(),
   };
 }

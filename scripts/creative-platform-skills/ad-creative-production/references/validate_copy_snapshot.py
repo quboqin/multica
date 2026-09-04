@@ -91,6 +91,21 @@ SEMANTIC_REDESIGN_GUARD_TERMS = {
         "modern wedding planning table",
     ),
 }
+IDENTITY_GUARD_TERMS = {
+    "same_declared_identity_anchor": (
+        "same declared identity anchor",
+        "same person, product, or core object",
+        "same person, product, or object",
+        "同一身份锚点",
+        "同一人物、产品或核心对象",
+    ),
+    "identity_anchor_not_replaced": (
+        "must not be replaced",
+        "do not replace that person, product, or object",
+        "never replaced",
+        "不得替换",
+    ),
+}
 BOTTOM_BUSINESS_TERMS = ("active business", "business group", "business content", "approved business", "正文内容", "业务内容", "内容组")
 BOTTOM_AVOID_TERMS = ("above", "outside", "safe", "clear", "上方", "之外", "安全区", "避让", "不进入")
 BOTTOM_GROUP_TERMS = (
@@ -551,6 +566,10 @@ def validate_redesign_prompt_guard(prompt: str) -> list[str]:
     return [key for key, terms in REDESIGN_GUARD_TERMS.items() if not text_has_any(prompt, terms)]
 
 
+def validate_identity_prompt_guard(prompt: str) -> list[str]:
+    return [key for key, terms in IDENTITY_GUARD_TERMS.items() if not text_has_any(prompt, terms)]
+
+
 def validate_concise_prompt(prompt: str) -> list[str]:
     debt: list[str] = []
     if len(prompt) > MAX_PROMPT_CHARS:
@@ -629,6 +648,8 @@ def missing_terms_for_guard(rule: str) -> tuple[str, ...]:
         return SEMANTIC_REDESIGN_GUARD_TERMS[rule]
     if rule in REDESIGN_GUARD_TERMS:
         return REDESIGN_GUARD_TERMS[rule]
+    if rule in IDENTITY_GUARD_TERMS:
+        return IDENTITY_GUARD_TERMS[rule]
     if rule in SEMANTIC_REQUIRED_PROMPT_TERMS:
         return SEMANTIC_REQUIRED_PROMPT_TERMS[rule]
     if rule in REQUIRED_PROMPT_TERMS:
@@ -644,6 +665,7 @@ def build_repair_guidance(
     approved: set[str],
     missing_prime_guard: list[str],
     missing_redesign_guard: list[str],
+    missing_identity_guard: list[str],
     prompt_debt: list[str],
 ) -> list[dict[str, Any]]:
     size_key = infer_size_key(source, prompt)
@@ -682,6 +704,18 @@ def build_repair_guidance(
                 "acceptable_terms": list(terms),
                 "message": "Prompt does not explicitly remove source/competitor identity or require a redesigned visual identity.",
                 "fix": "State that the reference is structure only, remove competitor/source identity, and redesign the high-salience visual identity.",
+            }
+        )
+    for rule in missing_identity_guard:
+        terms = missing_terms_for_guard(rule)
+        guidance.append(
+            {
+                **prefix,
+                "rule": "missing_identity_guard",
+                "requirement": rule,
+                "acceptable_terms": list(terms),
+                "message": "Prompt does not lock a declared person, product, or core object to the same identity across sizes.",
+                "fix": "State once that the declared identity anchor remains the same person, product, or core object and must not be replaced.",
             }
         )
     for debt in prompt_debt:
@@ -879,6 +913,7 @@ def main() -> int:
     parser.add_argument("--prime-layout-file")
     parser.add_argument("--require-prime-guard", action="store_true")
     parser.add_argument("--require-redesign-guard", action="store_true")
+    parser.add_argument("--require-identity-guard", action="store_true")
     parser.add_argument("--require-concise-prompt", action="store_true")
     parser.add_argument("--explain", action="store_true", help="include a concise repair summary for failed prompt checks")
     parser.add_argument("--evidence")
@@ -910,6 +945,7 @@ def main() -> int:
         unapproved = sorted(observed - approved)
         missing_prime_guard = validate_prime_prompt_guard(prompt, layouts) if args.require_prime_guard else []
         missing_redesign_guard = validate_redesign_prompt_guard(prompt) if args.require_redesign_guard else []
+        missing_identity_guard = validate_identity_prompt_guard(prompt) if args.require_identity_guard else []
         prompt_debt = validate_concise_prompt(prompt) if args.require_concise_prompt else []
         repair_guidance = build_repair_guidance(
             source=source,
@@ -918,10 +954,11 @@ def main() -> int:
             approved=approved,
             missing_prime_guard=missing_prime_guard,
             missing_redesign_guard=missing_redesign_guard,
+            missing_identity_guard=missing_identity_guard,
             prompt_debt=prompt_debt,
         )
         all_guidance.extend(repair_guidance)
-        prompt_passed = not unapproved and not missing_prime_guard and not missing_redesign_guard and not prompt_debt
+        prompt_passed = not unapproved and not missing_prime_guard and not missing_redesign_guard and not missing_identity_guard and not prompt_debt
         passed = passed and prompt_passed
         checks.append(
             {
@@ -932,6 +969,7 @@ def main() -> int:
                 "unapproved_financial_tokens": unapproved,
                 "missing_prime_guard": missing_prime_guard,
                 "missing_redesign_guard": missing_redesign_guard,
+                "missing_identity_guard": missing_identity_guard,
                 "prompt_debt": prompt_debt,
                 "repair_guidance": repair_guidance,
                 "passed": prompt_passed,

@@ -31,11 +31,9 @@ import {
   parseCreativeCopyLibraryConfig,
   creativeResourcesOptions,
   creativeSourceAnalysesOptions,
-  useAdoptCreativeOrderVariant,
   useCancelCreativeOrder,
   useDeleteCreativeOrder,
   useSelectCreativeOrderVariantRevision,
-  useUnadoptCreativeOrderVariant,
 } from "@multica/core/creative";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { useWorkspacePaths } from "@multica/core/paths";
@@ -95,12 +93,12 @@ import { creativeAttachmentBrowserURL } from "../lib/creative-attachment-url";
 import { creativeAdjustmentCanRetry, creativeAdjustmentIsDiscarded, creativeAdjustmentProgress, creativeAdjustmentTarget, latestOrderAdjustmentFeedbackByVariant } from "../lib/creative-adjustment-progress";
 import { formatCreativeDuration } from "../lib/creative-feedback-insights";
 import { createDefaultPrimeTemplateSet, withDefaultPrimeTemplateSet } from "../lib/prime-template-set";
-import { creativeTimeZoneLabel, formatCreativeDateTime, formatCreativeDateTimeToMinute } from "../lib/creative-time";
+import { formatCreativeDateTime, formatCreativeDateTimeToMinute } from "../lib/creative-time";
 import { CreativeMaterialLibrary, creativeMaterialAnalysisReadiness, creativeMaterialProductionState, defaultPreAdaptationResources, latestCandidateFeedback, latestCompletedAnalyses, materialAnalysisState, type MaterialLibraryFilter } from "./creative-material-library";
 import { CreativeCollectionPlans } from "./creative-collection-plans";
 import { ComposableCopyLibraryEditor } from "./composable-copy-library-editor";
 import { CreativeComparisonWorkspace, type CreativeAnnotationDraft } from "./creative-comparison-workspace";
-import { adoptedCreativeOrderVariant, CREATIVE_DELIVERY_SIZES, CreativeOrderDeliveryCandidates, creativeOrderActionableWorkflowFailures, creativeOrderStage, creativeVariantActiveExpectedSizes, creativeVariantGenerationProgress, creativeVariantIsInProgress, creativeVariantNeedsManualAction, type CreativeOrderStage, type CreativeVariantRetryAction } from "./creative-order-delivery";
+import { CREATIVE_DELIVERY_SIZES, CreativeOrderDeliveryCandidates, creativeGalleryVariantIds, creativeOrderActionableWorkflowFailures, creativeOrderStage, creativeVariantActiveExpectedSizes, creativeVariantGenerationProgress, creativeVariantIsInProgress, creativeVariantNeedsManualAction, type CreativeOrderStage, type CreativeVariantRetryAction } from "./creative-order-delivery";
 import { CreativeGenerationInfoDialog } from "./creative-generation-info-dialog";
 import { CreativeFeedbackDashboard } from "./creative-feedback-dashboard";
 import { creativeVariantRevisionExpectedSizes } from "./creative-staging-repair-workspace";
@@ -457,11 +455,10 @@ function CreativeOrderDetail({ orderId, onBack, onBrowseOrders, backLabel }: { o
     refetchInterval: (query) => creativeOrderNeedsPolling(query.state.data) ? 5000 : false,
   });
   const feedback = useQuery(creativeFeedbackOptions(wsId, "asset"));
+  const variantFeedback = useQuery(creativeFeedbackOptions(wsId, "variant"));
   const library = useQuery(creativeMaterialLibraryOptions(wsId));
-  const adoptVariant = useAdoptCreativeOrderVariant(wsId, orderId);
   const cancelOrder = useCancelCreativeOrder(wsId, orderId);
   const deleteOrder = useDeleteCreativeOrder(wsId, orderId);
-  const unadoptVariant = useUnadoptCreativeOrderVariant(wsId, orderId);
   const selectRevision = useSelectCreativeOrderVariantRevision(wsId, orderId);
   const data = order.data;
   const assets = data?.items.flatMap((item) => item.variants.flatMap((variant) => variant.assets)) ?? [];
@@ -477,22 +474,19 @@ function CreativeOrderDetail({ orderId, onBack, onBrowseOrders, backLabel }: { o
   const [adjustmentScope, setAdjustmentScope] = useState<CreativeAdjustmentScope>("size");
   const [adjustBusy, setAdjustBusy] = useState(false);
   const [retryingVariantId, setRetryingVariantId] = useState("");
+  const [addingToGalleryVariantId, setAddingToGalleryVariantId] = useState("");
   const [cancelOpen, setCancelOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const comparisonRef = useRef<HTMLDivElement>(null);
   const confirmedContentRef = useRef<HTMLDivElement>(null);
-  const adoptedVariantIds = new Set(data?.items.flatMap((item) => {
-    const variant = adoptedCreativeOrderVariant(item);
-    return variant ? [variant.id] : [];
-  }) ?? []);
+  const galleryVariantIds = creativeGalleryVariantIds(variantFeedback.data?.events ?? []);
   const adjustmentEvents = latestOrderAdjustmentFeedbackByVariant(feedback.data?.events ?? [], orderId)
     .filter((event) => !creativeAdjustmentIsDiscarded(creativeAdjustmentTarget(data?.items ?? [], event)?.variant, event));
   const latestAdjustment = adjustmentEvents[0];
-  const adjustedVariant = creativeAdjustmentTarget(data?.items ?? [], latestAdjustment)?.variant;
   const adjustmentVariantId = typeof latestAdjustment?.context_snapshot.variant_id === "string" ? latestAdjustment.context_snapshot.variant_id : "";
   const adjustmentSizeKey = typeof latestAdjustment?.context_snapshot.size_key === "string" ? latestAdjustment.context_snapshot.size_key : "";
-  const defaultAsset = reviewAssets.find((asset) => adoptedVariantIds.has(asset.variant_id) && asset.size_key === "1080x1080")
-    ?? reviewAssets.find((asset) => adoptedVariantIds.has(asset.variant_id))
+  const defaultAsset = reviewAssets.find((asset) => galleryVariantIds.has(asset.variant_id) && asset.size_key === "1080x1080")
+    ?? reviewAssets.find((asset) => galleryVariantIds.has(asset.variant_id))
     ?? reviewAssets.find((asset) => asset.variant_id === adjustmentVariantId && asset.size_key === adjustmentSizeKey)
     ?? reviewAssets.find((asset) => asset.status === "completed")
     ?? reviewAssets[0];
@@ -505,7 +499,6 @@ function CreativeOrderDetail({ orderId, onBack, onBrowseOrders, backLabel }: { o
   const canAdjustAllSizes = activeExpectedSizes.length > 1;
   const generationInfoVariant = generationInfoAsset ? variantById.get(generationInfoAsset.variant_id) : undefined;
   const isDirectEdit = data?.trigger_evidence_kind === "creative_direct_edit";
-  const adoptionStatus = creativeOrderAdoptionStatus(data) === "已采用" ? t(($) => $.studio.orderStatus.adopted) : t(($) => $.studio.orderStatus.review);
   const stage = creativeOrderStage(data);
   const isCancelled = stage.key === "cancelled";
   const source = library.data?.candidates.find((candidate) => candidate.id === activeVariant?.item.candidate_id);
@@ -533,6 +526,58 @@ function CreativeOrderDetail({ orderId, onBack, onBrowseOrders, backLabel }: { o
   const selectReviewAsset = (assetId: string) => {
     setActiveAssetId(assetId);
     window.requestAnimationFrame(() => comparisonRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }));
+  };
+
+  const addVariantToGallery = async (item: CreativeOrderItem, variant: CreativeOrderVariant) => {
+    setAddingToGalleryVariantId(variant.id);
+    try {
+      await api.createCreativeFeedback({
+        idempotency_key: `gallery:${variant.id}`,
+        issue_id: data?.issue_id ?? "",
+        subject_type: "variant",
+        subject_id: variant.id,
+        event_type: "decision",
+        decision: "accepted",
+        context_snapshot: {
+          action: "add_to_gallery",
+          order_id: orderId,
+          item_id: item.id,
+          variant_key: variant.variant_key,
+          revision: variant.active_revision || variant.revision,
+        },
+      });
+      const selectedAsset = reviewAssets.find((asset) => asset.variant_id === variant.id && asset.size_key === "1080x1080")
+        ?? reviewAssets.find((asset) => asset.variant_id === variant.id);
+      if (selectedAsset) setActiveAssetId(selectedAsset.id);
+      await queryClient.invalidateQueries({ queryKey: creativeKeys.feedback(wsId, "variant", "") });
+      toast.success("已添加到成图库");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "添加到成图库失败");
+    } finally {
+      setAddingToGalleryVariantId("");
+    }
+  };
+
+  const collectVariantFeedback = async (item: CreativeOrderItem, variant: CreativeOrderVariant, reasonCode: string, comment: string) => {
+    await api.createCreativeFeedback({
+      idempotency_key: `variant-feedback:${variant.id}:${crypto.randomUUID()}`,
+      issue_id: data?.issue_id ?? "",
+      subject_type: "variant",
+      subject_id: variant.id,
+      event_type: "decision",
+      decision: "needs_revision",
+      reason_codes: [reasonCode],
+      comment,
+      context_snapshot: {
+        action: "collect_variant_feedback",
+        order_id: orderId,
+        item_id: item.id,
+        variant_key: variant.variant_key,
+        revision: variant.active_revision || variant.revision,
+      },
+    });
+    await queryClient.invalidateQueries({ queryKey: creativeKeys.feedback(wsId, "variant", "") });
+    toast.success("方案反馈已记录");
   };
 
   const event = async (asset: CreativeOrderAsset, decision: "accepted" | "abandoned" | "downloaded") => {
@@ -671,7 +716,7 @@ function CreativeOrderDetail({ orderId, onBack, onBrowseOrders, backLabel }: { o
   return <div className="mx-auto max-w-[1440px] space-y-4">
     <div className="flex flex-wrap items-end justify-between gap-3 border-b pb-3">
       <div><div className="flex items-center gap-1"><Button size="sm" variant="ghost" onClick={onBack}><ArrowLeft className="h-4 w-4" />{backLabel}</Button>{backLabel === t(($) => $.studio.returnToIssue) && <Button size="sm" variant="ghost" onClick={onBrowseOrders}>{t(($) => $.studio.allOrders)}</Button>}</div><h2 className="mt-2 text-base font-semibold">{t(($) => $.studio.order, { id: orderId.slice(0, 8) })}</h2><p className="mt-1 text-xs text-muted-foreground">{stage.detail} · {t(($) => $.studio.updatedAt, { time: formatCreativeDateTime(data?.updated_at || ""), zone: t(($) => $.generationInfo.beijingTime) })}</p></div>
-      <div className="flex flex-wrap items-center justify-end gap-2"><Badge variant={stage.key === "review" || stage.key === "attention" || stage.key === "delivered" ? "default" : "outline"}>{stage.label}</Badge>{!isDirectEdit && <Badge variant={adoptionStatus === t(($) => $.studio.orderStatus.adopted) ? "default" : "secondary"}>{adoptionStatus}</Badge>}{data && !["delivered", "cancelled"].includes(stage.key) && <Button size="sm" variant="outline" onClick={() => setCancelOpen(true)}><CircleStop className="h-4 w-4" />{t(($) => $.studio.endOrder)}</Button>}{data && <Button size="sm" variant="outline" className="text-destructive hover:text-destructive" onClick={() => setDeleteOpen(true)}><Trash2 className="h-4 w-4" />{t(($) => $.studio.deleteOrder)}</Button>}</div>
+      <div className="flex flex-wrap items-center justify-end gap-2"><Badge variant={stage.key === "review" || stage.key === "attention" || stage.key === "delivered" ? "default" : "outline"}>{stage.label}</Badge>{!isDirectEdit && galleryVariantIds.size > 0 && <Badge variant="default">{galleryVariantIds.size} 个已入图库</Badge>}{data && !["delivered", "cancelled"].includes(stage.key) && <Button size="sm" variant="outline" onClick={() => setCancelOpen(true)}><CircleStop className="h-4 w-4" />{t(($) => $.studio.endOrder)}</Button>}{data && <Button size="sm" variant="outline" className="text-destructive hover:text-destructive" onClick={() => setDeleteOpen(true)}><Trash2 className="h-4 w-4" />{t(($) => $.studio.deleteOrder)}</Button>}</div>
     </div>
     {data && <CreativeOrderStatusPanel order={data} stage={stage} />}
     <CreativeOrderJourney stageKey={stage.key} />
@@ -685,28 +730,19 @@ function CreativeOrderDetail({ orderId, onBack, onBrowseOrders, backLabel }: { o
           order={data}
           source={{ label: itemSource?.title || itemSource?.competitor || t(($) => $.studio.originalMaterial), url: resolvePublicFileUrl(itemSource?.archived_url || itemSource?.preview_url) ?? "" }}
           attachments={byId}
-          adoptingVariantId={adoptVariant.isPending ? adoptVariant.variables?.variantId ?? "" : ""}
+          galleryVariantIds={galleryVariantIds}
+          addingToGalleryVariantId={addingToGalleryVariantId}
           disabled={isCancelled}
           defaultOpen={index === 0}
           showDirectionDetails={false}
           retryingVariantId={retryingVariantId}
           onRetryVariant={(variant, action) => void retryVariant(variant, action)}
           onAdoptProcessImage={adoptProcessImage}
-          onAdopt={(variantId, risk) => {
-            const selectedAsset = reviewAssets.find((asset) => asset.variant_id === variantId && asset.size_key === "1080x1080")
-              ?? reviewAssets.find((asset) => asset.variant_id === variantId);
-            adoptVariant.mutate({ itemId: item.id, variantId, qcRiskAcknowledged: risk?.acknowledged, qcRiskReason: risk?.reason }, {
-              onSuccess: () => {
-                if (selectedAsset) setActiveAssetId(selectedAsset.id);
-                toast.success(t(($) => $.studio.adoptionUpdated));
-              },
-              onError: (error) => toast.error(error instanceof Error ? error.message : t(($) => $.studio.adoptFailed)),
-            });
+          onAddToGallery={(variantId) => {
+            const variant = item.variants.find((candidate) => candidate.id === variantId);
+            if (variant) void addVariantToGallery(item, variant);
           }}
-          onUnadopt={(itemId) => unadoptVariant.mutate({ itemId }, {
-            onSuccess: () => toast.success(t(($) => $.studio.unadopted)),
-            onError: (error) => toast.error(error instanceof Error ? error.message : t(($) => $.studio.unadoptFailed)),
-          })}
+          onCollectFeedback={(variant, reasonCode, comment) => collectVariantFeedback(item, variant, reasonCode, comment)}
           onAssetSelect={selectReviewAsset}
           onAssetInfo={setGenerationInfoAssetId}
         />;
@@ -720,8 +756,6 @@ function CreativeOrderDetail({ orderId, onBack, onBrowseOrders, backLabel }: { o
           order={data}
           source={{ label: itemSource?.title || itemSource?.competitor || t(($) => $.studio.originalMaterial), url: resolvePublicFileUrl(itemSource?.archived_url || itemSource?.preview_url) ?? "" }}
           attachments={byId}
-          adoptingVariantId=""
-          onAdopt={() => undefined}
           onAssetSelect={selectReviewAsset}
           onAssetInfo={setGenerationInfoAssetId}
           onAdoptProcessImage={adoptProcessImage}
@@ -1466,11 +1500,6 @@ function compareCreativeAssets(left: CreativeOrderAsset, right: CreativeOrderAss
   return updatedDifference || left.id.localeCompare(right.id);
 }
 
-export function creativeOrderAdoptionStatus(order: CreativeOrder | undefined): "待选择" | "已采用" {
-  if (!order?.items.length) return "待选择";
-  return order.items.every((item) => Boolean(adoptedCreativeOrderVariant(item))) ? "已采用" : "待选择";
-}
-
 function assetFeedbackReason(issueType: string): string {
   if (issueType === "theme_drift") return "theme_mismatch";
   if (issueType === "artifact") return "broken_image";
@@ -1613,11 +1642,11 @@ function MarketPackForm({ resource, value, onChange, copyLibraries }: {
         <TabsContent value="delivery" className="mt-0 space-y-8">
           <FormSection title="交付规则" description="控制成图合规要求和交付文件名称。">
             <Field label="合规规则" wide><Textarea rows={7} value={stringValue(value.compliance_rules)} onChange={(event) => set("compliance_rules", event.target.value)} /></Field>
-            <Field label="文件命名" wide><Input value={stringValue(value.naming_rule)} placeholder="Month_P_Brand_Country_Date_Type_Designer_Size.png" onChange={(event) => set("naming_rule", event.target.value)} /></Field>
+            <Field label="文件命名" wide><Input value={stringValue(value.naming_rule)} placeholder="{production_date}_P_AK_MY_{type}_Regular_ALL_AI_{size}_{material_number}" onChange={(event) => set("naming_rule", event.target.value)} /></Field>
           </FormSection>
           <section>
             <div className="mb-3"><h3 className="text-sm font-semibold">发布校验</h3></div>
-            {templateFamilies ? <div className="border-y">{templateFamilies.flatMap((family) => Object.entries(family.templates).map(([size, template]) => <div key={`${family.id}-${size}-${template.source_role}`} className="grid gap-1 border-b px-4 py-3 text-xs last:border-b-0 sm:grid-cols-[116px_minmax(0,1fr)_auto] sm:items-center"><span className="font-medium">{family.label} · {size}</span><span className="truncate text-muted-foreground">{template.filename}</span><span className="text-emerald-700 dark:text-emerald-400">模板已验证{template.qr_payload ? "，含二维码" : ""}</span></div>))}</div> : <div className="border-y px-4 py-3 text-sm text-muted-foreground">保存并发布后，系统会验证每张完整模板的文件、尺寸和布局映射。</div>}
+            {templateFamilies && <div className="border-y">{templateFamilies.flatMap((family) => Object.entries(family.templates).map(([size, template]) => <div key={`${family.id}-${size}-${template.source_role}`} className="grid gap-1 border-b px-4 py-3 text-xs last:border-b-0 sm:grid-cols-[116px_minmax(0,1fr)_auto] sm:items-center"><span className="font-medium">{family.label} · {size}</span><span className="truncate text-muted-foreground">{template.filename}</span><span className="text-emerald-700 dark:text-emerald-400">模板已验证{template.qr_payload ? "，含二维码" : ""}</span></div>))}</div>}
           </section>
         </TabsContent>
       </Tabs>

@@ -226,6 +226,7 @@ RETURNING id::text, workspace_id::text, COALESCE(issue_id::text, ''), status, in
 	}
 	copySnapshot, _ := json.Marshal(map[string]any{
 		"mode": "direct_edit", "source_attachment_id": uuidToString(sourceAttachmentID),
+		"delivery_naming": map[string]string{"type": "num"},
 	})
 	item, err := scanCreativeOrderItem(tx.QueryRow(r.Context(), `
 INSERT INTO creative_order_item (order_id, candidate_id, copy_snapshot, direction, status)

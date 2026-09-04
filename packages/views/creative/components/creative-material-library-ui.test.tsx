@@ -4,7 +4,7 @@ import "@testing-library/jest-dom/vitest";
 import { describe, expect, it, vi } from "vitest";
 import type { CreativeMaterialCandidate, CreativeVisualDirection } from "@multica/core/types";
 import {
-  adoptedGalleryComplete,
+  galleryItemComplete,
   creativeMaterialProductionState,
   creativeMaterialSelectionActionLabel,
   canRetryMaterialAnalysis,
@@ -57,6 +57,7 @@ function adaptation(overrides: Partial<PreparedPreAdaptation> = {}): PreparedPre
 function draft(overrides: Partial<OrderItemDraft> = {}): OrderItemDraft {
   return {
     mode: "pre_adaptation",
+    deliveryType: "num",
     visualDirection: direction,
     textOverrides: {},
     replacementSources: {},
@@ -211,12 +212,12 @@ describe("CreativeMaterialLibrary contracts", () => {
       order: { id: "precise-order", input_snapshot: {} },
       item,
       variant,
-      adoptedAt: "2026-08-27T00:00:00Z",
+      addedAt: "2026-08-27T00:00:00Z",
     };
     const attachments = new Map([[attachmentID, { id: attachmentID, filename: "precise.png", url: "https://cdn.example/precise.png", download_url: "https://cdn.example/precise.png" }]]);
 
-    expect(adoptedGalleryComplete(galleryItem as never, attachments as never)).toBe(true);
-    expect(adoptedGalleryComplete(galleryItem as never, new Map())).toBe(false);
+    expect(galleryItemComplete(galleryItem as never, attachments as never)).toBe(true);
+    expect(galleryItemComplete(galleryItem as never, new Map())).toBe(false);
   });
 
   it("derives a small editable visual direction from source analysis", () => {
@@ -250,6 +251,7 @@ describe("CreativeMaterialLibrary contracts", () => {
     const initial = orderDraftWithPreAdaptation(undefined, adaptation());
     const edited = orderDraftWithPreAdaptation({ ...initial, visualDirection: { ...direction, theme: "用户主题" } }, adaptation({ analysisResult: { theme: "系统主题" } }));
     expect(initial.visualDirection.theme).toBe("灵活融资");
+    expect(initial.deliveryType).toBe("num");
     expect(edited.visualDirection.theme).toBe("用户主题");
   });
 

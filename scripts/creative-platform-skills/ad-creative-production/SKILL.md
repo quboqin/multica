@@ -90,8 +90,9 @@ multica attachment download <app-ui-reference-attachment-id> --output-dir "$app_
 
 下载后必须确认临时目录里只有一张可读图片，并将其作为同一次 `multica image edit` 调用的额外 `--input`。不要使用历史工作目录、
 同市场资源包里未选中的其他 UI 图、网页截图或竞品图裁剪替代。每个尺寸的 Input 1 都是候选参考结构，
-Input 2 是当前尺寸 Prime context，Input 3 是选中的 AdaKami App UI reference；晋级主视觉如被使用，只能作为 Input 4 的 DesignDNA
-一致性参考。如果该尺寸明确移除了手机屏幕，prompt-contract 必须写明
+Input 2 是当前尺寸 Prime context，Input 3 是选中的 AdaKami App UI reference；若 `design_dna.subject_system` 声明人物、产品或
+核心对象身份锚点，selected 主视觉必须作为 Input 4，并且后续尺寸只能用它保持同一身份。没有身份锚点时，晋级主视觉可作为 Input 4 的
+DesignDNA 一致性参考。如果该尺寸明确移除了手机屏幕，prompt-contract 必须写明
 `app_ui_reference_attachment_id` 与 `used=false` 的原因。
 
 Input 3 只服务于手机屏幕内容替换：保留原画面中的手机机身、手、透视、遮挡、反光、光照和场景；只把屏幕内的竞品 App
@@ -135,9 +136,10 @@ CLI 和附件血缘只属于模型调用外的工作流，不能发送给图像�
 完整模板直接生成最终图，后端只登记证据，不会二次叠加。
 
 三尺寸共享 DesignDNA、批准文案、业务结构和 `asset_family_id`，但每个尺寸从同一候选 source reference、当前尺寸 Prime context
-和自身 LayoutPlan 原生生成，不把方图 raster 当作不可替代输入。selected 主尺寸可作为可选的一致性参考，只锁主体/材质/色彩/视觉母题，
-不得捐赠布局、裁切或 Prime 像素；`family_consistent` 下它缺失也不阻塞其他尺寸。只有 `strict_identity` 明确声明的人物/产品身份锚点
-可以成为真实依赖，且不能伪装成方图依赖。
+和自身 LayoutPlan 原生生成，不把方图 raster 当作不可替代输入。人物、产品或核心对象只要在 `subject_system` 中作为身份锚点出现，
+每个后续尺寸必须使用 selected 主视觉作为 Input 4，保持同一身份，不得替换为另一人物、产品或对象；Input 4 只锁身份、材质、色彩和
+视觉母题，绝不捐赠布局、裁切或 Prime 像素。`family_consistent` 只允许没有身份锚点的抽象或无主体方向缺少 Input 4；身份锚点是
+真实依赖，且不能伪装成方图布局依赖。
 
 横版按 LayoutPlan 原生横向重排；拥挤时依次减少装饰和上下留白、模块间距、行距，最后才小幅降低字号，不删冻结文案、金融事实、
 底部图标或表格列。竖版固定为 4:5，不得成为 story、手机截图、长海报、滚动页、9:16 或 9:19。三个尺寸可以并行；任一尺寸迟到或失败
@@ -278,8 +280,9 @@ python3 <当前 Skill 目录>/references/register_process_assets.py \
 每个 `prompt-contract-<size>.json` 除 `prompt_sha256` 外必须写入当前 Variant brief
 `creative_contract.parent_direction_sha256`，以及 canonical `creative_intent_sha256`、`design_dna_sha256` 和当前
 `layout_plan_sha256`；并保留 `size_key`、`revision`、`variant_id`、`candidate_state`、`input_roles`、`locked_set`、
-`editable_set`、`active_content_groups` 和逐项 `acceptance_checks`。若使用 App UI 参考图，还必须写 `app_ui_reference_attachment_id`、`resource_file_id`、
-Input 3 的 input role、是否实际用于当前尺寸，以及只替换手机屏幕内容的约束摘要。该父方向哈希是 visual QC
+`editable_set`、`active_content_groups` 和逐项 `acceptance_checks`。若存在身份锚点，还必须写 `identity_anchor`、Input 4 的 input role、
+所用 selected-primary asset 及“同一人物/产品/核心对象，不得替换”的约束摘要。若使用 App UI 参考图，还必须写 `app_ui_reference_attachment_id`、
+`resource_file_id`、Input 3 的 input role、是否实际用于当前尺寸，以及只替换手机屏幕内容的约束摘要。该父方向哈希是 visual QC
 追溯父方向的证据；DesignDNA 与 LayoutPlan 哈希共同用于三尺寸联合验收，不能省略、伪造或从旧 revision 复制。
 
 生产 task 只有在当前阶段的每个 `expected_sizes` 都存在完整、可验证的 `generated/completed` canonical asset 后才允许调用

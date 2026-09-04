@@ -167,7 +167,7 @@ Prime 不是页角装饰或模型要重绘的业务元素。它承载官方品�
         "acceptance_checks": []
       },
       "design_dna": {
-        "consistency_mode": "family_consistent",
+        "consistency_mode": "strict_identity",
         "subject_system": {},
         "visual_system": {},
         "typography_system": {},

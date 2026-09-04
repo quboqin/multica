@@ -82,7 +82,7 @@
     "overview": "Workbench overview",
     "materials": "Materials to select",
     "generating": "Images in production",
-    "readyToAdopt": "Images ready to adopt",
+    "readyToAdopt": "Images ready for gallery",
     "weeklyDelivery": "This week's deliveries",
     "averageDuration": "Average package generation time",
     "basedOnPackages": "Based on {{count}} packages"
