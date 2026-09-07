@@ -106,6 +106,8 @@ import { CreativeFeedbackDashboard } from "./creative-feedback-dashboard";
 import { creativeVariantRevisionExpectedSizes } from "./creative-staging-repair-workspace";
 import { CreativeWorkbench } from "./creative-workbench";
 import { MarketResourceFiles } from "./market-resource-files";
+import { CreativeGalleryConfirmationDialog } from "./creative-gallery-confirmation-dialog";
+import { creativeVariantRiskAdoptionReadiness } from "./creative-order-delivery";
 
 type CreativeStudioTab = "home" | "materials" | "orders" | "resources" | "feedback";
 type CreativeAdjustmentScope = "size" | "variant";
@@ -479,6 +481,7 @@ function CreativeOrderDetail({ orderId, onBack, onBrowseOrders, backLabel }: { o
   const [adjustBusy, setAdjustBusy] = useState(false);
   const [retryingVariantId, setRetryingVariantId] = useState("");
   const [addingToGalleryVariantId, setAddingToGalleryVariantId] = useState("");
+  const [galleryConfirmation, setGalleryConfirmation] = useState<{ variantId: string; revision: number } | null>(null);
   const [cancelOpen, setCancelOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const comparisonRef = useRef<HTMLDivElement>(null);
@@ -532,10 +535,10 @@ function CreativeOrderDetail({ orderId, onBack, onBrowseOrders, backLabel }: { o
     window.requestAnimationFrame(() => comparisonRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }));
   };
 
-  const addVariantToGallery = async (item: CreativeOrderItem, variant: CreativeOrderVariant) => {
+  const addVariantToGallery = async (item: CreativeOrderItem, variant: CreativeOrderVariant, restored?: CreateCreativeFeedbackResponse) => {
     setAddingToGalleryVariantId(variant.id);
     try {
-      await galleryMutation.mutateAsync({ variantId: variant.id, issueId: data?.issue_id ?? "", orderId, itemId: item.id, variantKey: variant.variant_key, revision: variant.active_revision || variant.revision });
+      await galleryMutation.mutateAsync({ variantId: variant.id, issueId: data?.issue_id ?? "", orderId, itemId: item.id, variantKey: variant.variant_key, revision: typeof restored?.context_snapshot.revision === "number" ? restored.context_snapshot.revision : variant.active_revision || variant.revision, qcRiskAcknowledged: restored?.context_snapshot.qc_risk_acknowledged === true, qcRiskReason: typeof restored?.context_snapshot.qc_risk_reason === "string" ? restored.context_snapshot.qc_risk_reason : "" });
       const selectedAsset = reviewAssets.find((asset) => asset.variant_id === variant.id && asset.size_key === "1080x1080")
         ?? reviewAssets.find((asset) => asset.variant_id === variant.id);
       if (selectedAsset) setActiveAssetId(selectedAsset.id);
@@ -552,7 +555,7 @@ function CreativeOrderDetail({ orderId, onBack, onBrowseOrders, backLabel }: { o
     if (!event) return;
     try {
       await galleryMutation.mutateAsync({ variantId: variant.id, issueId: data?.issue_id ?? "", orderId, itemId: item.id, variantKey: variant.variant_key, revision: variant.active_revision || variant.revision, removeEventId: event.id });
-      toast.success(t(($) => $.gallery.removed), { action: { label: t(($) => $.gallery.undo), onClick: () => void addVariantToGallery(item, variant) } });
+      toast.success(t(($) => $.gallery.removed), { action: { label: t(($) => $.gallery.undo), onClick: () => void addVariantToGallery(item, variant, event) } });
     } catch (error) {
       toast.error(error instanceof Error ? error.message : t(($) => $.gallery.removeFailed));
     }
@@ -742,13 +745,15 @@ function CreativeOrderDetail({ orderId, onBack, onBrowseOrders, backLabel }: { o
           onAdoptProcessImage={adoptProcessImage}
           onAddToGallery={(variantId) => {
             const variant = item.variants.find((candidate) => candidate.id === variantId);
-            if (variant) void addVariantToGallery(item, variant);
+            if (variant && creativeVariantRiskAdoptionReadiness(variant).allowed) setGalleryConfirmation({ variantId, revision: variant.active_revision || variant.revision });
+            else if (variant) void addVariantToGallery(item, variant);
           }}
           onCollectFeedback={(variant, reasonCode, comment) => collectVariantFeedback(item, variant, reasonCode, comment)}
           onAssetSelect={selectReviewAsset}
           onAssetInfo={setGenerationInfoAssetId}
         />;
       })}
+      {galleryConfirmation && <CreativeGalleryConfirmationDialog orderId={orderId} variantId={galleryConfirmation.variantId} revision={galleryConfirmation.revision} onClose={() => setGalleryConfirmation(null)} onConfirmed={() => setGalleryConfirmation(null)} />}
       {isDirectEdit && data && reviewAssets.length === 0 && data.items.map((item, index) => {
         const itemSource = library.data?.candidates.find((candidate) => candidate.id === item.candidate_id);
         return <CreativeOrderDeliveryCandidates

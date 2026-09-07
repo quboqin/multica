@@ -1,5 +1,11 @@
 {
   "gallery": {
+    "confirmDelivery": "确认交付",
+    "needsConfirmation": "待确认交付",
+    "riskNotice": "此版本的视觉质检存在问题。",
+    "riskAcknowledge": "我已查看成图，并接受已记录的质检风险。",
+    "riskReason": "接受此版本的原因",
+    "confirmNotice": "将此版本的完整交付成图加入成图库。",
     "added": "已添加到成图库",
     "addFailed": "无法添加到成图库",
     "removed": "已移出成图库",

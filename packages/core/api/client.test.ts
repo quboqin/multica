@@ -1204,6 +1204,14 @@ describe("creative material library endpoint", () => {
 });
 
 describe("creative feedback endpoint", () => {
+  it("confirms a gallery version and degrades malformed confirmation responses", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ context_snapshot: null }), { status: 200, headers: { "Content-Type": "application/json" } }));
+    vi.stubGlobal("fetch", fetchMock);
+    const client = new ApiClient("https://api.example.test");
+    const input = { variant_id: "variant", revision: 1, idempotency_key: "gallery:variant", qc_risk_acknowledged: true, qc_risk_reason: "Reviewed" };
+    await expect(client.confirmCreativeGalleryDelivery(input)).resolves.toMatchObject({ id: "" });
+    expect(fetchMock).toHaveBeenCalledWith("https://api.example.test/api/creative-feedback-events/gallery", expect.objectContaining({ method: "POST", body: JSON.stringify(input) }));
+  });
   it("posts the unified event contract and degrades malformed responses", async () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ event: { annotation: { x: "broken" } } }), { status: 200, headers: { "Content-Type": "application/json" } }));
     vi.stubGlobal("fetch", fetchMock);

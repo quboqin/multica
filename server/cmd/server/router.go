@@ -817,6 +817,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 			r.With(creativeCapability).Get("/api/creative-feedback-events/metrics", h.GetCreativeFeedbackMetrics)
 			r.With(creativeCapability).Get("/api/creative-feedback-events/dashboard", h.GetCreativeFeedbackDashboard)
 			r.With(creativeCapability).With(handler.RequireHumanActor).Post("/api/creative-feedback-events", h.CreateCreativeFeedbackEvent)
+			r.With(creativeCapability).With(handler.RequireHumanActor).Post("/api/creative-feedback-events/gallery", h.ConfirmCreativeGalleryDelivery)
 			r.With(creativeCapability).With(handler.RequireHumanActor).Post("/api/creative-feedback-events/{id}/undo", h.UndoCreativeFeedbackEvent)
 
 			// Issues

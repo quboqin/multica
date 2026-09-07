@@ -1,5 +1,11 @@
 {
   "gallery": {
+    "confirmDelivery": "Confirm delivery",
+    "needsConfirmation": "Delivery confirmation needed",
+    "riskNotice": "Visual QC reported issues for this version.",
+    "riskAcknowledge": "I have reviewed the images and accept the recorded QC risks.",
+    "riskReason": "Reason for accepting this version",
+    "confirmNotice": "Add this version's completed delivery images to the gallery.",
     "added": "Added to gallery",
     "addFailed": "Could not add to gallery",
     "removed": "Removed from gallery",

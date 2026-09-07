@@ -1,5 +1,11 @@
 {
   "gallery": {
+    "confirmDelivery": "納品を確認",
+    "needsConfirmation": "納品確認が必要",
+    "riskNotice": "このバージョンには目視検品の指摘があります。",
+    "riskAcknowledge": "画像を確認し、記録された検品リスクを受け入れます。",
+    "riskReason": "このバージョンを受け入れる理由",
+    "confirmNotice": "このバージョンの完成した納品画像をギャラリーに追加します。",
     "added": "ギャラリーに追加しました",
     "addFailed": "ギャラリーに追加できません",
     "removed": "ギャラリーから除外しました",

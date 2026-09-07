@@ -1,13 +1,15 @@
 "use client";
 
 import { cloneElement, useDeferredValue, useEffect, useId, useMemo, useRef, useState } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueries, useQueryClient } from "@tanstack/react-query";
 import { AlertTriangle, ArrowLeft, BookOpenText, Bot, Check, Download, ExternalLink, ImageIcon, Images, LoaderCircle, PackageCheck, Pencil, Plus, RefreshCw, RotateCcw, Search, Smartphone, Sparkles, Upload, X } from "lucide-react";
 import { api } from "@multica/core/api";
 import { useWorkspacePresenceMap, type AgentPresenceDetail } from "@multica/core/agents";
 import {
   creativeFeedbackOptions,
   creativeGalleryEvents,
+  creativeGalleryDeliverySelection,
+  creativeOrderOptions,
   useCreativeGalleryMutation,
   creativeKeys,
   creativeMaterialLibraryOptions,
@@ -18,6 +20,9 @@ import {
   parseCreativeCopyLibraryConfig,
   validateCustomCopyFinancialFacts,
 } from "@multica/core/creative";
+import type { CreativeGalleryDeliverySelection } from "@multica/core/creative";
+import type { CreateCreativeFeedbackResponse, CreativeOrderAsset } from "@multica/core/types";
+import { CreativeGalleryConfirmationDialog } from "./creative-gallery-confirmation-dialog";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { useFileUpload } from "@multica/core/hooks/use-file-upload";
 import { resolvePublicFileUrl } from "@multica/core/workspace/avatar-url";
@@ -52,7 +57,7 @@ import {
   type MaterialLibraryFilter,
 } from "../lib/creative-material-state";
 import {
-  creativeVariantActiveExpectedSizes,
+  creativeDeliveryExpectedSizes,
   creativeVariantArchiveEntries,
   creativeVariantDeliveryAssets,
   downloadCreativeVariantArchives,
@@ -325,13 +330,17 @@ export function CreativeMaterialLibrary({
     [displayedCandidates, materialIndex.data?.candidates],
   );
   const galleryEvents = creativeGalleryEvents(galleryFeedback.data?.events ?? []);
-  const galleryVariantIds = new Set(galleryEvents.keys());
+  const galleryOrderDetails = useQueries({ queries: libraryTab === "gallery" ? (orders.data?.orders ?? []).filter((order) => order.items.some((item) => item.variants.some((variant) => {
+    const event = galleryEvents.get(variant.id);
+    return event && !Array.isArray(event.context_snapshot.delivery_package_sizes);
+  }))).map((order) => creativeOrderOptions(wsId, order.id)) : [] });
+  const detailedGalleryOrders = (orders.data?.orders ?? []).map((order) => galleryOrderDetails.find((result) => result.data?.id === order.id)?.data ?? order);
   const galleryItems = useMemo(
-    () => creativeGalleryItems(orders.data?.orders ?? [], materialIndexById, galleryVariantIds).map((item) => ({ ...item, addedAt: galleryEvents.get(item.variant.id)?.created_at ?? item.addedAt })),
-    [galleryVariantIds, materialIndexById, orders.data?.orders],
+    () => creativeGalleryItems(detailedGalleryOrders, materialIndexById, galleryEvents),
+    [detailedGalleryOrders, materialIndexById, galleryEvents],
   );
   const galleryAttachmentIds = useMemo(
-    () => [...new Set(galleryItems.flatMap((item) => item.deliveryAssets.map((asset) => asset.attachment_id)).filter(Boolean))],
+    () => [...new Set(galleryItems.flatMap((item) => item.previewAssets.map((asset) => asset.attachment_id)).filter(Boolean))],
     [galleryItems],
   );
   const galleryAttachments = useQuery({
@@ -463,7 +472,7 @@ export function CreativeMaterialLibrary({
         <CreativeGallery
           items={galleryItems}
           attachments={galleryAttachmentMap}
-          loading={orders.isLoading || galleryAttachments.isLoading}
+          loading={orders.isLoading || galleryAttachments.isLoading || galleryOrderDetails.some((result) => result.isLoading)}
           onOpenOrder={onOpenOrder ?? onOrderCreated}
         />
       </TabsContent>
@@ -525,6 +534,8 @@ type CreativeGalleryItem = {
   variant: CreativeOrderVariant;
   candidate?: CreativeMaterialCandidate;
   deliveryAssets: ReturnType<typeof creativeVariantDeliveryAssets>;
+  previewAssets: CreativeOrderAsset[];
+  selection: CreativeGalleryDeliverySelection;
   label: string;
   addedAt: string;
 };
@@ -532,20 +543,29 @@ type CreativeGalleryItem = {
 function creativeGalleryItems(
   orders: CreativeOrder[],
   candidatesById: Map<string, CreativeMaterialCandidate>,
-  galleryVariantIds: ReadonlySet<string>,
+  galleryEvents: ReadonlyMap<string, CreateCreativeFeedbackResponse>,
 ): CreativeGalleryItem[] {
   return orders.flatMap((order) => order.items.flatMap((item) => {
     const candidate = candidatesById.get(item.candidate_id);
-    return item.variants.filter((variant) => galleryVariantIds.has(variant.id)).map((variant) => ({
+    return item.variants.filter((variant) => galleryEvents.has(variant.id)).map((variant) => {
+      const event = galleryEvents.get(variant.id)!;
+      const selection = creativeGalleryDeliverySelection(variant, event);
+      const deliveryAssets = creativeVariantDeliveryAssets(variant, selection);
+      const expectedSizes = creativeDeliveryExpectedSizes(variant, selection);
+      const previewAssets = expectedSizes.flatMap((size) => {
+        const asset = deliveryAssets.find((entry) => entry.size_key === size) ?? variant.assets.find((entry) => entry.revision === selection.revision && entry.size_key === size && entry.stage === "primed" && entry.status === "completed" && entry.attachment_id);
+        return asset ? [asset] : [];
+      });
+      return {
       id: `${order.id}:${item.id}:${variant.id}`,
       order,
       item,
       variant,
       candidate,
-      deliveryAssets: creativeVariantDeliveryAssets(variant),
+      deliveryAssets, previewAssets, selection,
       label: candidate?.title || candidate?.competitor || (typeof item.copy_snapshot.library_name === "string" ? item.copy_snapshot.library_name : "") || item.candidate_id.slice(0, 8) || `订单 ${order.id.slice(0, 8)}`,
-      addedAt: order.updated_at || order.created_at,
-    }));
+      addedAt: event.created_at,
+    }; });
   })).sort((left, right) => (Date.parse(right.addedAt) || 0) - (Date.parse(left.addedAt) || 0));
 }
 
@@ -569,6 +589,7 @@ export function CreativeGallery({
   const [query, setQuery] = useState("");
   const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set());
   const [downloadBusy, setDownloadBusy] = useState("");
+  const [confirming, setConfirming] = useState<CreativeGalleryItem | null>(null);
   const needle = query.trim().toLocaleLowerCase();
   const visible = useMemo(() => {
     if (!needle) return items;
@@ -585,12 +606,12 @@ export function CreativeGallery({
   const downloadableVisible = visible.filter((item) => galleryItemComplete(item, attachments));
   const downloadableSelected = selectedItems.filter((item) => galleryItemComplete(item, attachments));
   const preview = items.find((item) => item.id === previewId);
-  const previewEntries = preview ? creativeVariantArchiveEntries(preview.variant, attachments, preview.order, preview.item) : [];
+  const previewEntries = preview ? galleryPreviewEntries(preview, attachments) : [];
   const previewEntry = previewEntries.find((entry) => entry.asset.size_key === previewSize) ?? previewEntries[0];
   const remove = async (item: CreativeGalleryItem) => {
     const event = creativeGalleryEvents(feedback.data?.events ?? []).get(item.variant.id);
     if (!event) return;
-    const input = { variantId: item.variant.id, itemId: item.item.id, orderId: item.order.id, issueId: item.order.issue_id, variantKey: item.variant.variant_key, revision: item.variant.active_revision || item.variant.revision };
+    const input = { variantId: item.variant.id, itemId: item.item.id, orderId: item.order.id, issueId: item.order.issue_id, variantKey: item.variant.variant_key, revision: item.selection.revision, qcRiskAcknowledged: event.context_snapshot.qc_risk_acknowledged === true, qcRiskReason: typeof event.context_snapshot.qc_risk_reason === "string" ? event.context_snapshot.qc_risk_reason : "" };
     try {
       await galleryMutation.mutateAsync({ ...input, removeEventId: event.id });
       setPreviewId("");
@@ -651,6 +672,7 @@ export function CreativeGallery({
           onSelect={(checked) => toggleSelected(item.id, checked)}
           onPreview={() => { setPreviewId(item.id); setPreviewSize("1080x1080"); }}
           onRemove={() => void remove(item)}
+          onConfirm={() => setConfirming(item)}
           onDownload={async () => {
             setDownloadBusy(item.id);
             try {
@@ -660,6 +682,8 @@ export function CreativeGallery({
                 variant: item.variant,
                 attachments,
                 order: item.order,
+                selection: item.selection,
+                addedAt: item.addedAt,
               });
             } catch (error) {
               toast.error(error instanceof Error ? error.message : "无法下载交付包");
@@ -684,11 +708,13 @@ export function CreativeGallery({
             <dl className="space-y-4 break-words"><div><dt className="text-muted-foreground">{t(($) => $.gallery.source)}</dt><dd>{preview.label}</dd></div><div><dt className="text-muted-foreground">{t(($) => $.gallery.order)}</dt><dd>{preview.order.id.slice(0, 8)}</dd></div><div><dt className="text-muted-foreground">{t(($) => $.gallery.addedAt)}</dt><dd>{formatCreativeDateTime(preview.addedAt)}</dd></div></dl>
             <Button variant="outline" onClick={() => { setPreviewId(""); onOpenOrder?.(preview.order.id); }}><ExternalLink className="h-4 w-4" />{t(($) => $.gallery.openOrder)}</Button>
             <Button disabled={downloadBusy !== "" || !galleryItemComplete(preview, attachments)} onClick={() => void downloadMany([preview], preview.id)}><Download className="h-4 w-4" />{t(($) => $.gallery.download)}</Button>
+            {!galleryItemComplete(preview, attachments) && <Button variant="outline" onClick={() => setConfirming(preview)}>{t(($) => $.gallery.confirmDelivery)}</Button>}
             <Button variant="outline" disabled={galleryMutation.isPending} onClick={() => void remove(preview)}><X className="h-4 w-4" />{t(($) => $.gallery.remove)}</Button>
           </div>
         </div>}
       </DialogContent>
     </Dialog>
+    {confirming && <CreativeGalleryConfirmationDialog orderId={confirming.order.id} variantId={confirming.variant.id} revision={confirming.selection.revision || confirming.variant.active_revision || confirming.variant.revision} onClose={() => setConfirming(null)} onConfirmed={() => setConfirming(null)} />}
   </section>;
 }
 
@@ -701,6 +727,7 @@ function GalleryTile({
   onDownload,
   onPreview,
   onRemove,
+  onConfirm,
 }: {
   item: CreativeGalleryItem;
   attachments: Map<string, DeliveryAttachment>;
@@ -710,13 +737,14 @@ function GalleryTile({
   onDownload: () => void;
   onPreview: () => void;
   onRemove: () => void;
+  onConfirm: () => void;
 }) {
   const { t } = useT("creative");
-  const entries = creativeVariantArchiveEntries(item.variant, attachments, item.order, item.item);
+  const entries = galleryPreviewEntries(item, attachments);
   const mainEntry = entries.find((entry) => entry.asset.size_key === "1080x1080") ?? entries[0];
   const mainURL = creativeAttachmentBrowserURL(mainEntry?.attachment);
-  const expectedSizes = creativeVariantActiveExpectedSizes(item.variant);
-  const complete = entries.length === expectedSizes.length;
+  const expectedSizes = creativeDeliveryExpectedSizes(item.variant, item.selection);
+  const complete = galleryItemComplete(item, attachments);
   return <article className="min-w-0 bg-background">
     <div className="flex min-w-0 items-start justify-between gap-3 px-3 py-3">
       <label className="flex min-w-0 flex-1 items-start gap-2">
@@ -726,7 +754,7 @@ function GalleryTile({
           <span className="mt-1 block text-xs text-muted-foreground">订单 {item.order.id.slice(0, 8)} · {item.variant.variant_key || item.variant.id.slice(0, 8)}</span>
         </span>
       </label>
-      <Badge variant={complete ? "default" : "outline"}>{complete ? "交付齐备" : `${entries.length}/${expectedSizes.length}`}</Badge>
+      <Badge variant={complete ? "default" : "outline"}>{complete ? "交付齐备" : t(($) => $.gallery.needsConfirmation)}</Badge>
     </div>
     <button type="button" className="relative block aspect-square w-full bg-muted/20 focus-visible:outline-2 focus-visible:outline-ring" onClick={onPreview} aria-label={t(($) => $.gallery.preview, { label: item.label })}>
       {mainURL ? <img src={mainURL} alt={`${item.label} ${mainEntry?.asset.size_key}`} loading="lazy" className="h-full w-full object-contain" /> : <span className="flex h-full items-center justify-center"><ImageIcon className="h-6 w-6 text-muted-foreground" /></span>}
@@ -740,12 +768,21 @@ function GalleryTile({
       <Button size="sm" variant="outline" onClick={onPreview}>{t(($) => $.gallery.view)}</Button>
       <Button size="icon-sm" variant="ghost" disabled={busy} onClick={onRemove} title={t(($) => $.gallery.remove)} aria-label={t(($) => $.gallery.remove)}><X className="h-4 w-4" /></Button>
       <Button size="sm" disabled={busy || !complete} onClick={onDownload}><Download className="h-4 w-4" />下载交付包</Button>
+      {!complete && <Button size="sm" variant="outline" disabled={busy} onClick={onConfirm}>{t(($) => $.gallery.confirmDelivery)}</Button>}
     </div>
   </article>;
 }
 
 export function galleryItemComplete(item: CreativeGalleryItem, attachments: Map<string, DeliveryAttachment>): boolean {
-  return creativeVariantArchiveEntries(item.variant, attachments, item.order, item.item).length === creativeVariantActiveExpectedSizes(item.variant).length;
+  const expected = creativeDeliveryExpectedSizes(item.variant, item.selection);
+  return expected.length > 0 && creativeVariantArchiveEntries(item.variant, attachments, item.order, item.item, 1, item.selection).length === expected.length;
+}
+
+function galleryPreviewEntries(item: CreativeGalleryItem, attachments: Map<string, DeliveryAttachment>) {
+  return item.previewAssets.flatMap((asset) => {
+    const attachment = attachments.get(asset.attachment_id);
+    return attachment && creativeAttachmentBrowserURL(attachment) ? [{ asset, attachment }] : [];
+  });
 }
 
 function galleryDownloadPackage(item: CreativeGalleryItem, attachments: Map<string, DeliveryAttachment>) {
@@ -755,6 +792,7 @@ function galleryDownloadPackage(item: CreativeGalleryItem, attachments: Map<stri
     item: item.item,
     variant: item.variant,
     addedAt: item.addedAt,
+    selection: item.selection,
     attachments,
     folderName: `order-${item.order.id.slice(0, 8)}-${item.variant.variant_key || item.variant.id.slice(0, 8)}`,
     label: item.label,

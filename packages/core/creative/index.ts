@@ -13,6 +13,8 @@ export {
   creativeResourcesOptions,
 } from "./queries";
 export { creativeGalleryEvents, creativeGalleryVariantIds, useCreativeGalleryMutation } from "./gallery";
+export { creativeGalleryDeliverySelection } from "./gallery";
+export type { CreativeGalleryDeliverySelection } from "./gallery";
 export {
   useAdoptCreativeOrderVariant,
   useCancelCreativeOrder,

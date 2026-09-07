@@ -137,6 +137,16 @@ func (h *Handler) CreateCreativeFeedbackEvent(w http.ResponseWriter, r *http.Req
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	if input.SubjectType == "variant" && input.EventType == "decision" && input.Decision == "accepted" {
+		var gallery creativeGalleryInput
+		if err := json.Unmarshal(input.ContextSnapshot, &gallery); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid gallery delivery context")
+			return
+		}
+		gallery.VariantID, gallery.IdempotencyKey = input.SubjectID, input.IdempotencyKey
+		h.confirmCreativeGalleryDelivery(w, r, workspaceID, userID, gallery)
+		return
+	}
 	subjectID, ok := parseUUIDOrBadRequest(w, input.SubjectID, "subject_id")
 	if !ok {
 		return

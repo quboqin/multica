@@ -12,6 +12,7 @@ import { Textarea } from "@multica/ui/components/ui/textarea";
 import { cn } from "@multica/ui/lib/utils";
 import { toast } from "sonner";
 import { useT } from "../../i18n";
+import type { CreativeGalleryDeliverySelection } from "@multica/core/creative";
 import { creativeAttachmentBrowserURL } from "../lib/creative-attachment-url";
 import { creativeTimeZoneLabel, formatCreativeDateTime } from "../lib/creative-time";
 
@@ -243,15 +244,25 @@ export function creativeOrderStage(order: CreativeOrder | undefined): CreativeOr
   return { ...base, key: "preparing", label: "准备中", detail: items.length > 0 ? `${items.length} 个素材等待生成` : "正在准备订单", action: "查看订单" };
 }
 
-export function creativeVariantDeliveryAssets(variant: CreativeOrderVariant): CreativeOrderAsset[] {
-  if (!creativeVariantParticipatesInDelivery(variant)) return [];
-  const revision = creativeVariantActiveRevision(variant);
+export function creativeDeliveryExpectedSizes(variant: CreativeOrderVariant, selection?: CreativeGalleryDeliverySelection): CreativeDeliverySizeKey[] {
+  if (!selection) return creativeVariantActiveExpectedSizes(variant);
+  if (!Number.isInteger(selection.revision) || selection.revision < 1 || selection.expectedSizes.length === 0
+    || new Set(selection.expectedSizes).size !== selection.expectedSizes.length
+    || (selection.assetIds && (selection.assetIds.length !== selection.expectedSizes.length || new Set(selection.assetIds).size !== selection.assetIds.length))
+    || selection.expectedSizes.some((size) => !CREATIVE_DELIVERY_SIZES.includes(size as CreativeDeliverySizeKey))) return [];
+  return CREATIVE_DELIVERY_SIZES.filter((size) => selection.expectedSizes.includes(size));
+}
+
+export function creativeVariantDeliveryAssets(variant: CreativeOrderVariant, selection?: CreativeGalleryDeliverySelection): CreativeOrderAsset[] {
+  if (!selection && !creativeVariantParticipatesInDelivery(variant)) return [];
+  const revision = selection?.revision ?? creativeVariantActiveRevision(variant);
   if (revision < 1) return [];
-  const expectedSizes = creativeVariantActiveExpectedSizes(variant);
+  const expectedSizes = creativeDeliveryExpectedSizes(variant, selection);
   const expected = new Set(expectedSizes);
   const selected = new Map<string, CreativeOrderAsset>();
   for (const asset of variant.assets) {
     if (asset.revision !== revision || asset.stage !== "delivered" || asset.status !== "completed" || !asset.attachment_id) continue;
+    if (selection?.assetIds && !selection.assetIds.includes(asset.id)) continue;
     if (!expected.has(asset.size_key as CreativeDeliverySizeKey)) continue;
     const current = selected.get(asset.size_key);
     if (!current || compareDeliveryAssets(asset, current) > 0) selected.set(asset.size_key, asset);
@@ -338,10 +349,11 @@ export function creativeVariantArchiveEntries(
   order?: CreativeDeliveryNamingContext,
   item?: Pick<CreativeOrderItem, "candidate_id" | "copy_snapshot">,
   materialNumberStart = 1,
+  selection?: CreativeGalleryDeliverySelection,
 ): { asset: CreativeOrderAsset; attachment: DeliveryAttachment; filename: string }[] {
   const usedNames = new Set<string>();
   let materialNumber = materialNumberStart;
-  return creativeVariantDeliveryAssets(variant).flatMap((asset) => {
+  return creativeVariantDeliveryAssets(variant, selection).flatMap((asset) => {
     const attachment = attachments.get(asset.attachment_id);
     if (!attachment || !creativeAttachmentBrowserURL(attachment)) return [];
     return [{
@@ -358,16 +370,20 @@ export async function downloadCreativeVariantArchive({
   variant,
   attachments,
   order,
+  selection,
+  addedAt,
 }: {
   orderId: string;
   item: CreativeOrderItem;
   variant: CreativeOrderVariant;
   attachments: Map<string, DeliveryAttachment>;
   order?: CreativeDeliveryNamingContext;
+  selection?: CreativeGalleryDeliverySelection;
+  addedAt?: string;
 }): Promise<void> {
-  const entries = creativeVariantArchiveEntries(variant, attachments, order, item);
-  const expectedSizes = creativeVariantActiveExpectedSizes(variant);
-  if (entries.length !== expectedSizes.length) throw new Error("交付包的图片尚未齐备");
+  const entries = creativeVariantArchiveEntries(variant, attachments, order, item, 1, selection);
+  const expectedSizes = creativeDeliveryExpectedSizes(variant, selection);
+  if (expectedSizes.length === 0 || entries.length === 0 || entries.length !== expectedSizes.length) throw new Error("交付包的图片尚未齐备");
   const files: Record<string, Uint8Array> = {};
   const downloaded = await Promise.all(entries.map(async ({ attachment, filename }) => {
     const response = await fetch(creativeAttachmentBrowserURL(attachment), { credentials: "include" });
@@ -382,7 +398,7 @@ export async function downloadCreativeVariantArchive({
     `订单：${orderId}`,
     `素材条目：${item.id}`,
     `变体：${variant.variant_key || variant.id}`,
-    `入图库时间：${item.adopted_at || "未记录"}`,
+    `入图库时间：${addedAt || item.adopted_at || "未记录"}`,
     `包含尺寸：${expectedSizes.join("、")}`,
   ].join("\n"));
   const archive = zipSync(files, { level: 0 });
@@ -408,6 +424,7 @@ export async function downloadCreativeVariantArchives({
     folderName?: string;
     label?: string;
     addedAt?: string;
+    selection?: CreativeGalleryDeliverySelection;
   }[];
   archiveName?: string;
 }): Promise<void> {
@@ -428,8 +445,9 @@ export async function downloadCreativeVariantArchives({
   let nextMaterialNumber = 1;
 
   for (const itemPackage of packages) {
-    const entries = creativeVariantArchiveEntries(itemPackage.variant, itemPackage.attachments, itemPackage.order, itemPackage.item, nextMaterialNumber);
-    if (entries.length !== creativeVariantActiveExpectedSizes(itemPackage.variant).length) {
+    const entries = creativeVariantArchiveEntries(itemPackage.variant, itemPackage.attachments, itemPackage.order, itemPackage.item, nextMaterialNumber, itemPackage.selection);
+    const expectedSizes = creativeDeliveryExpectedSizes(itemPackage.variant, itemPackage.selection);
+    if (expectedSizes.length === 0 || entries.length === 0 || entries.length !== expectedSizes.length) {
       throw new Error(`${itemPackage.label || itemPackage.orderId.slice(0, 8)} 的交付包尚未齐备`);
     }
     nextMaterialNumber += entries.length;
@@ -1231,7 +1249,7 @@ function creativeVariantWorkingQCDetails(variant: CreativeOrderVariant): Creativ
   return creativeVariantQCDetailsForRevision(variant, creativeVariantWorkingRevision(variant));
 }
 
-function creativeVariantQCDetailsForRevision(variant: CreativeOrderVariant, revision: number): CreativeVariantQCDetail[] {
+export function creativeVariantQCDetailsForRevision(variant: CreativeOrderVariant, revision: number): CreativeVariantQCDetail[] {
   const reports = creativeVariantQCReportsForRevision(variant, revision);
   return (["visual"] as const).flatMap((lane) => {
     const report = reports.get(lane);

@@ -3061,6 +3061,11 @@ export class ApiClient {
     });
   }
 
+  async confirmCreativeGalleryDelivery(data: { variant_id: string; revision: number; idempotency_key: string; qc_risk_acknowledged: boolean; qc_risk_reason: string }): Promise<CreateCreativeFeedbackResponse> {
+    const raw = await this.fetch<unknown>("/api/creative-feedback-events/gallery", { method: "POST", body: JSON.stringify(data) });
+    return parseWithFallback(raw, CreateCreativeFeedbackResponseSchema, EMPTY_CREATIVE_FEEDBACK_RESPONSE, { endpoint: "POST /api/creative-feedback-events/gallery" });
+  }
+
   async listCreativeOrders(): Promise<CreativeOrderListResponse> {
     const raw = await this.fetch<unknown>("/api/creative/orders");
     return parseWithFallback(raw, CreativeOrderListResponseSchema, EMPTY_CREATIVE_ORDER_LIST_RESPONSE, { endpoint: "GET /api/creative/orders" });
