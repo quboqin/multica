@@ -13,6 +13,7 @@ import { cn } from "@multica/ui/lib/utils";
 import { toast } from "sonner";
 import { useT } from "../../i18n";
 import type { CreativeGalleryDeliverySelection } from "@multica/core/creative";
+import { creativeOrderTargetVariantCount } from "@multica/core/creative";
 import { creativeAttachmentBrowserURL } from "../lib/creative-attachment-url";
 import { creativeTimeZoneLabel, formatCreativeDateTime } from "../lib/creative-time";
 
@@ -195,6 +196,7 @@ export function creativeOrderActionableWorkflowFailures(order: CreativeOrder | u
 }
 
 export function creativeOrderStage(order: CreativeOrder | undefined): CreativeOrderStage {
+  const targetPerItem = creativeOrderTargetVariantCount(order?.input_snapshot);
   const items = order?.items ?? [];
   const allVariants = items.flatMap((item) => item.variants);
   const variants = allVariants.filter(creativeVariantParticipatesInDelivery);
@@ -215,13 +217,13 @@ export function creativeOrderStage(order: CreativeOrder | undefined): CreativeOr
     return { ...base, key: "delivered", label: "成图完成", detail: "已交付成图可分别加入成图库并下载", action: "查看并下载" };
   }
   if (readyVariants > 0) {
-    return { ...base, key: "review", label: "可入图库", detail: `${readyVariants} 个变体可分别加入成图库`, action: "查看成图" };
+    return { ...base, key: "review", label: "可入图库", detail: `${readyVariants}/${targetPerItem * items.length} 套成图可分别加入成图库`, action: "查看成图" };
   }
   if (status === "awaiting_adoption") {
     return { ...base, key: "review", label: "可入图库", detail: "已有交付成图，可分别加入成图库", action: "查看成图" };
   }
-  if (status === "awaiting_selection" || (candidates.length >= 4 && readyCandidates >= 4)) {
-    return { ...base, key: "generating", label: "候选比较中", detail: "正在自动比较候选主画面，确定三个入选方案后继续生成", action: "等待筛选" };
+  if (status === "awaiting_selection" || (candidates.length >= targetPerItem && readyCandidates === candidates.length)) {
+    return { ...base, key: "generating", label: "候选比较中", detail: `正在自动比较候选主画面，确定 ${targetPerItem} 个入选方案后继续生成`, action: "等待筛选" };
   }
   if (actionableFailures.length > 0 || status === "failed" || blockedVariants > 0 || (status === "action_required" && variants.length === 0)) {
     const failureCount = actionableFailures.length;
@@ -235,7 +237,7 @@ export function creativeOrderStage(order: CreativeOrder | undefined): CreativeOr
   }
   if (allVariants.length > 0 || ["queued", "running", "partial"].includes(status)) {
     if (candidates.length > 0 && variants.length === 0) {
-      return { ...base, key: "generating", label: "候选生成中", detail: "正在生成并自动筛选三个入选方案", action: "等待筛选" };
+      return { ...base, key: "generating", label: "候选生成中", detail: `正在生成并自动筛选 ${targetPerItem} 个入选方案`, action: "等待筛选" };
     }
     const completedSizes = variants.reduce((count, variant) => count + creativeVariantProgressAssets(variant).length, 0);
     const expectedSizes = variants.reduce((count, variant) => count + creativeVariantWorkingExpectedSizes(variant).length, 0);
@@ -768,7 +770,7 @@ function VariantCandidate({
         {unadoptedPreview ? "查看改后预览" : "查看过程图片"}
         <Badge variant="secondary">{diagnostics.length}</Badge>
       </Button>}
-      <p id={descriptionId} className={cn("text-xs", statusTone)}>{candidateState === "candidate" ? "主画面完成后进入统一比较" : candidateState === "reserve" ? "保留主画面，入选方案失败时自动递补" : candidateState === "rejected" ? "未进入本轮三个交付方案" : compactStatus}</p>
+      <p id={descriptionId} className={cn("text-xs", statusTone)}>{candidateState === "candidate" ? "主画面完成后进入统一比较" : candidateState === "reserve" ? "保留主画面，入选方案失败时自动递补" : candidateState === "rejected" ? "未进入本轮交付方案" : compactStatus}</p>
       {participatesInDelivery && <VariantStagingDiagnostics variant={variant} details={workingQCDetails} />}
       {participatesInDelivery && <VariantCompactDiagnostics variant={variant} disabled={disabled} details={qcDetails} />}
       {retryAction && onRetry && <Button className="w-full" size="sm" variant="outline" disabled={disabled || retrying} onClick={() => onRetry(variant, retryAction)}>

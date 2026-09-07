@@ -671,7 +671,7 @@ FROM agent_task_queue WHERE id = $1
 `, task.ID).Scan(&status, &failureReason, &taskError); err != nil {
 		t.Fatal(err)
 	}
-	if status != "failed" || failureReason != "creative_output_missing" || !strings.Contains(taskError, "three selected ranks") {
+	if status != "failed" || failureReason != "creative_output_missing" || !strings.Contains(taskError, "frozen target number of selected ranks") {
 		t.Fatalf("candidate completion gate = status %q reason %q error %q", status, failureReason, taskError)
 	}
 	var queuedReplacements int
@@ -1019,7 +1019,7 @@ WHERE id = $1
 			t.Fatalf("candidate C01 write = %d %s", candidate.Code, candidate.Body.String())
 		}
 		legacy := put("V01", "selected")
-		if legacy.Code != http.StatusConflict || !strings.Contains(legacy.Body.String(), "C01-C05") {
+		if legacy.Code != http.StatusConflict || !strings.Contains(legacy.Body.String(), "candidate key exceeds") {
 			t.Fatalf("candidate V01 write = %d %s", legacy.Code, legacy.Body.String())
 		}
 	})
@@ -1535,7 +1535,7 @@ WHERE id = $1
 	if err := testPool.QueryRow(t.Context(), `SELECT candidate_state, selection_rank FROM creative_order_variant WHERE id = $1`, reserveIDs[1]).Scan(&remainingState, &remainingRank); err != nil {
 		t.Fatal(err)
 	}
-	if failedState != "rejected" || failedRank.Valid || promotedState != "selected" || !promotedRank.Valid || promotedRank.Int32 != 1 || remainingState != "reserve" || !remainingRank.Valid || remainingRank.Int32 != 5 {
+	if failedState != "rejected" || failedRank.Valid || promotedState != "selected" || !promotedRank.Valid || promotedRank.Int32 != 1 || remainingState != "reserve" || !remainingRank.Valid || remainingRank.Int32 != 4 {
 		t.Fatalf("promotion states = failed %q/%v promoted %q/%v remaining %q/%v", failedState, failedRank, promotedState, promotedRank, remainingState, remainingRank)
 	}
 	var promotedTaskCount int
@@ -1587,7 +1587,7 @@ WHERE id = $1
 	if err := testPool.QueryRow(t.Context(), `SELECT candidate_state, selection_rank FROM creative_order_variant WHERE id = $1`, reserveIDs[1]).Scan(&remainingState, &remainingRank); err != nil {
 		t.Fatal(err)
 	}
-	if remainingState != "reserve" || !remainingRank.Valid || remainingRank.Int32 != 5 {
+	if remainingState != "reserve" || !remainingRank.Valid || remainingRank.Int32 != 4 {
 		t.Fatalf("active revision consumed remaining reserve: %q/%v", remainingState, remainingRank)
 	}
 }

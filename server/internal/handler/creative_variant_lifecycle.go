@@ -451,8 +451,8 @@ func (h *Handler) SelectCreativeOrderItemCandidates(w http.ResponseWriter, r *ht
 		writeError(w, http.StatusBadRequest, "invalid creative candidate selection")
 		return
 	}
-	if len(input.SelectedIDs) != 3 || len(input.ReserveIDs) > 2 {
-		writeError(w, http.StatusBadRequest, "candidate selection requires three selected variants and up to two ordered reserves")
+	if len(input.SelectedIDs) < 1 || len(input.SelectedIDs) > creativeMaxVariantCount || len(input.ReserveIDs) > creativeReserveCount {
+		writeError(w, http.StatusBadRequest, "candidate selection requires 1-10 selected variants and up to two ordered reserves")
 		return
 	}
 	orderedIDs := append(append([]string{}, input.SelectedIDs...), input.ReserveIDs...)
@@ -539,11 +539,12 @@ FOR UPDATE
 		return
 	}
 	var lockedItemID pgtype.UUID
+	var sourceKind string
 	if err := tx.QueryRow(r.Context(), `
-SELECT id FROM creative_order_item
+SELECT id, source_kind FROM creative_order_item
 WHERE id = $1 AND order_id = $2
 FOR UPDATE
-`, itemID, orderID).Scan(&lockedItemID); errors.Is(err, pgx.ErrNoRows) {
+`, itemID, orderID).Scan(&lockedItemID, &sourceKind); errors.Is(err, pgx.ErrNoRows) {
 		writeError(w, http.StatusNotFound, "creative order item not found")
 		return
 	} else if err != nil {
@@ -557,6 +558,26 @@ FOR UPDATE
 	if creativeOrderPipelineVersion(json.RawMessage(inputSnapshot)) != creativePipelineCandidateV1 {
 		writeError(w, http.StatusConflict, "standard creative orders require pipeline_version candidate_v1")
 		return
+	}
+	counts, err := creativeOrderVariantCounts(json.RawMessage(inputSnapshot))
+	if err != nil {
+		writeError(w, http.StatusConflict, err.Error())
+		return
+	}
+	if err := counts.validateSelection(len(input.SelectedIDs), len(input.ReserveIDs)); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if sourceKind == "copy_library" && counts.Configured {
+		var plannedCount int
+		if err := tx.QueryRow(r.Context(), `SELECT count(*) FROM creative_order_variant WHERE order_item_id = $1`, itemID).Scan(&plannedCount); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to load planned candidates")
+			return
+		}
+		if plannedCount != counts.Candidates {
+			writeError(w, http.StatusConflict, "candidate planning has not registered the frozen candidate count")
+			return
+		}
 	}
 
 	type candidate struct {
@@ -588,9 +609,9 @@ FOR UPDATE
 			writeError(w, http.StatusInternalServerError, "failed to read creative candidates")
 			return
 		}
-		if !isCreativeCandidateVariantKey(value.variantKey) {
+		if !counts.allowsKey(value.variantKey) {
 			rows.Close()
-			writeError(w, http.StatusConflict, "candidate creative orders only accept C01-C05 candidate variants")
+			writeError(w, http.StatusConflict, "candidate key exceeds the order candidate count")
 			return
 		}
 		value.brief = json.RawMessage(brief)
@@ -602,7 +623,7 @@ FOR UPDATE
 		return
 	}
 	rows.Close()
-	if len(candidates) != len(orderedIDs) || len(candidates) < 3 || len(candidates) > 5 {
+	if len(candidates) != len(orderedIDs) || len(candidates) < counts.Target || len(candidates) > counts.Candidates {
 		writeError(w, http.StatusConflict, "candidate selection must rank every non-rejected candidate in this order item")
 		return
 	}

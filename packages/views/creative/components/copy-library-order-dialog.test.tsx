@@ -9,7 +9,7 @@ import { CopyLibraryOrderDialog } from "./copy-library-order-dialog";
 const apiMock = vi.hoisted(() => ({ listCreativeResources: vi.fn(), listSquads: vi.fn(), listCreativeResourceFiles: vi.fn(), createIssue: vi.fn(), createCreativeOrder: vi.fn(), setIssueMetadataKey: vi.fn(), updateIssue: vi.fn() }));
 vi.mock("@multica/core/api", () => ({ api: apiMock }));
 vi.mock("@multica/core/hooks", () => ({ useWorkspaceId: () => "workspace" }));
-vi.mock("../../i18n", () => ({ useT: () => ({ t: (selector: (value: typeof copy) => string) => selector(copy) }) }));
+vi.mock("../../i18n", () => ({ useT: () => ({ t: (selector: (value: typeof copy) => string, values: Record<string, string | number> = {}) => Object.entries(values).reduce((text, [key, value]) => text.replaceAll(`{{${key}}}`, String(value)), selector(copy)) }) }));
 vi.mock("./creative-material-library", () => ({ creativeSubmissionKey: async (value: unknown) => JSON.stringify(value), EMPTY_VISUAL_DIRECTION: { schema_version: 1, theme: "", style_tags: [], must_preserve: [], avoid: [] }, VisualDirectionEditor: () => null, visualDirectionSummary: () => "" }));
 
 const library = { id: "library", name: "Approved library", published_version: 2, published_config: { fragments: [
@@ -35,6 +35,36 @@ function mount(onCreated = vi.fn()) {
 }
 
 describe("copy library order", () => {
+  it.each([1, 3, 10])("freezes %i sets and displays the corresponding image count", async (count) => {
+    mount();
+    const control = screen.getByRole("combobox", { name: "Number of sets" });
+    expect(control).toHaveValue("3");
+    expect(within(control).getAllByRole("option")).toHaveLength(10);
+    fireEvent.change(control, { target: { value: String(count) } });
+    expect(screen.getByText(`${count} sets · ${count * 3} images`)).toBeInTheDocument();
+    const submit = screen.getByRole("button", { name: "Start visual exploration" });
+    await waitFor(() => expect(submit).toBeEnabled());
+    fireEvent.click(submit);
+    await waitFor(() => expect(apiMock.createCreativeOrder).toHaveBeenCalledOnce());
+    expect(apiMock.createCreativeOrder.mock.calls[0]?.[0].input_snapshot.target_variant_count).toBe(count);
+  });
+
+  it("starts a distinct submission when the requested set count changes after a handoff failure", async () => {
+    apiMock.updateIssue.mockRejectedValueOnce(new Error("Handoff failed"));
+    mount();
+    const submit = screen.getByRole("button", { name: "Start visual exploration" });
+    await waitFor(() => expect(submit).toBeEnabled());
+    fireEvent.click(submit);
+    await screen.findByText("Handoff failed");
+    fireEvent.change(screen.getByRole("combobox", { name: "Number of sets" }), { target: { value: "10" } });
+    fireEvent.click(submit);
+    await waitFor(() => expect(apiMock.createCreativeOrder).toHaveBeenCalledTimes(2));
+    const first = apiMock.createCreativeOrder.mock.calls[0]?.[0];
+    const second = apiMock.createCreativeOrder.mock.calls[1]?.[0];
+    expect(first.submission_key).not.toBe(second.submission_key);
+    expect(first.input_snapshot.target_variant_count).toBe(3);
+    expect(second.input_snapshot.target_variant_count).toBe(10);
+  });
   it("submits an explicit visual-only order with all slots optional", async () => {
     const onCreated = vi.fn();
     mount(onCreated);

@@ -22,6 +22,8 @@
     "view": "미리 보기"
   },
   "copyOrder": {
+    "variantCount": "제작 세트 수",
+    "deliveryCount": "{{sets}}세트 · 이미지 {{images}}장",
     "title": "크리에이티브 만들기",
     "headline": "제목",
     "subheadline": "부제목",

@@ -22,7 +22,7 @@ allowed-tools: Bash(multica *), Bash(powershell *)
 
 - `creative_crawl_diagnosis`：只处理 task context 指定的 Crawl Run、连接器和结构化 diagnostics。
 - 用户给 `order_id`：读取 `multica creative order get <order-id> --output json`，围绕当前订单诊断。
-- 用户给订单短 ID、`C01`-`C05`、页面卡片文案或截图里的报错：先定位当前 Creative Order、order item、
+- 用户给订单短 ID、`C01`-`C12`、页面卡片文案或截图里的报错：先定位当前 Creative Order、order item、
   Variant、revision 和最近任务，再解释卡住步骤。
 - 用户给 `variant_id`、`task_id` 或错误文本：先定位 Creative Order、Agent、source kind/ref 和当前 revision。
 - 用户问 daemon、账号或模型调用记录：区分 daemon profile、Agent runtime、Agent custom env 和外部模型账号。
@@ -55,7 +55,7 @@ allowed-tools: Bash(multica *), Bash(powershell *)
   和 `variant_id` 精确选中当前 item。
 - “用最新的不就行了吗”类：标准订单使用冻结 `input_snapshot`、`copy_snapshot`、source analysis 和 market
   snapshot。只有用户明确要求重新规划或重新生成，才把 Variant 推进到新 revision；不能偷偷读取最新文案库替换冻结事实。
-- C01-C05 重跑类：先看候选状态、active/staging revision、尺寸级 image operation、workflow_failures 是否属于当前
+- C01-C12 重跑类：先看候选状态、active/staging revision、尺寸级 image operation、workflow_failures 是否属于当前
   staging revision，以及是否已有 active/succeeded task。需要恢复时只调用对应平台入口；不得自行推进 revision 或为 reserve 重复生产。
 - 出图账号类：daemon profile 负责领取任务；图片模型账号来自出图/改图 Agent 的 image provider env。
   看到外部账号只有 image 调用记录是正常信号，不代表整个 daemon 只执行 image。

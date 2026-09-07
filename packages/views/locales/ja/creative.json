@@ -22,6 +22,8 @@
     "view": "プレビュー"
   },
   "copyOrder": {
+    "variantCount": "制作セット数",
+    "deliveryCount": "{{sets}} セット · {{images}} 枚",
     "title": "クリエイティブを作成",
     "headline": "見出し",
     "subheadline": "小見出し",

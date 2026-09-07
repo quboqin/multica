@@ -1,6 +1,6 @@
 ---
 name: multica-ad-creative-qc
-description: "当计划中的 4-5 个候选已有 3-5 个可用主视觉需要原子晋级 3 个，或标准/精准改图 Variant 的实际交付尺寸需要视觉终检时使用。"
+description: "当候选主视觉需要按订单冻结套数原子晋级，或标准/精准改图 Variant 的实际交付尺寸需要视觉终检时使用。"
 allowed-tools: Bash(multica *), Bash(python *)
 ---
 
@@ -14,24 +14,28 @@ allowed-tools: Bash(multica *), Bash(python *)
 技术质检已下线，新流程只接受上述两个 workflow，不创建、不等待、不处理 technical lane；其他 workflow 直接按无效任务失败。
 
 `creative_candidate_selection` 可以读取完整订单比较同一 item 的候选；`creative_qc_visual` 不可以。visual lane 必须先读取
-`multica creative order qc-context <order-id> --output json`，它返回 task token 绑定的唯一 Variant、revision、expected sizes、brief、copy snapshot 和 Prime 附件。不得再调用 `creative order get`、`issue get`、评论列表或按 C01-C05 标签筛选整单来选择目标。
+`multica creative order qc-context <order-id> --output json`，它返回 task token 绑定的唯一 Variant、revision、expected sizes、brief、copy snapshot 和 Prime 附件。不得再调用 `creative order get`、`issue get`、评论列表或按 C01-C12 标签筛选整单来选择目标。
 
 ## 候选主视觉晋级
 
+从订单 `input_snapshot.target_variant_count` 读取目标 N（1-10），`candidate_count` 读取候选上限 K=N+2（最多 12）；
+未保存数量的历史订单按 N=3、K=5 处理。任务中的 target_variant_count 仅用于交叉核对，不得覆盖订单快照。
+
 `creative_candidate_selection` 只比较同一 Order Item 中已经完成当前 revision、各自 `primary_size` 的 completed
-`stage=primed` asset 完整的 3-5 个候选。计划阶段始终先创建 4-5 个候选，但终态失败且没有完整主图的候选已由平台原子标记为 `rejected` 后，恰好 3 个可用候选是合法且应立即比较的集合。`visual_adequacy.status=qc_risk` 必须保留给最终 visual QC，不得在候选阶段伪造通过或因指标单独排除。不得使用 generated 底图、页面缩略图、旧 revision 或其他 item。
-少于 3 个合格候选时不得创建或执行比较，也不得由 QC 自行把失败候选改成 reserve、伪造主图或降低 Prime 门槛。
+`stage=primed` asset 完整的 N 至 K 个候选。新文案库订单计划 K 个，素材订单仍计划 4-5 个；终态失败且没有完整主图的候选由平台标记 `rejected` 后，恰好 N 个可用候选仍是合法集合。`visual_adequacy.status=qc_risk` 必须保留给最终 visual QC，不得在候选阶段伪造通过或因指标单独排除。不得使用 generated 底图、页面缩略图、旧 revision 或其他 item。
+少于 N 个合格候选时不得晋级，也不得伪造主图、降低 Prime 门槛或把不足的数量标为交付完成。
 task source 必须是 `trigger_evidence_kind=creative_order_item_candidate_selection`、ref 为当前 item ID，且
 `item_key=candidate-selection:v1`；context 必须携带 `creative_order_id`、`creative_order_item_id` 和这些候选的主图引用。
 这项 source 校验只检查当前 task 的 trigger evidence，绝不能拿 `creative_order.trigger_evidence_kind` 的原始建单来源（例如 `creative_crawl_run`）替代或否定它。context 的 order/item 与回读订单不一致、主图引用无法逐一归属当前候选时停止，不能按候选名称猜。
 
-逐张下载并用 `view_image` 查看当前 3-5 张主尺寸 Prime 图，再放在同一比较上下文中独立评分。`candidate-comparison.json` 对每个 Variant
+逐张下载并用 `view_image` 查看当前全部合格主尺寸 Prime 图，再在同一比较上下文中统一排名。10 套时最多比较 12 张，不能只检查前五张。`candidate-comparison.json` 对每个 Variant
 记录 0-100 分、观察证据和以下固定分项：批准文案/金融事实可读性 25、视觉吸引力 25、创意假设清晰度 15、相对其他候选的差异度 15、
 三尺寸可扩展性 15、Prime 融合 5。三尺寸可扩展性必须结合 brief 的 `layout_plans`，检查主体裁切容忍、横竖重排、表格密度、App UI 和
 Prime 承托风险；不能因为方图本身好看就默认可扩展。
 
-按总分排序并用分项证据处理同分，恰好选择 3 个。选择必须保留不同 CreativeHypothesis，不能让三个近似换色方向同时晋级。
-将 rank 1-3 的 Variant ID 按顺序写入 `selected_ids`，其余 0-2 个合格候选按 rank 4-5 顺序写入 `reserve_ids`。恰好只有 3 个可用候选时，必须明确提交空数组 `reserve_ids: []`，不得把已 rejected 的候选重新写成 reserve：
+按总分排序并用分项证据处理同分，恰好选择 N 个不同 CreativeHypothesis，不能仅靠换色凑满数量。
+将 rank 1-N 的 Variant ID 按顺序写入 `selected_ids`，其余 0-2 个合格候选按 N+1、N+2 排入 `reserve_ids`。只有 N 个可用候选时提交空数组 `reserve_ids: []`。
+下例仅展示 N=3 的 JSON 结构，实际数组长度必须等于订单目标，N=10 时 selected_ids 必须有十项：
 
 ```json
 {
@@ -45,8 +49,8 @@ multica creative order candidate-select <order-id> <item-id> \
   --input-file <selection.json> --output json
 ```
 
-`candidate-select` 是唯一晋级入口；不得逐条 `variant-put` 改状态。命令原子设置 selected rank 和 reserve，扩展三个 selected 的
-三尺寸范围，并由平台排入缺失尺寸生产；已有主图原样复用。调用后回读订单，确认恰好 3 个 selected、0-2 个 reserve、终态失败候选仍为 rejected、rank 顺序、主图仍在，
+`candidate-select` 是唯一晋级入口；不得逐条 `variant-put` 改状态。命令原子设置 selected rank 和 reserve，扩展全部 N 个 selected 的
+三尺寸范围，并由平台排入缺失尺寸生产；已有主图原样复用。调用后回读订单，确认恰好 N 个 selected、0-2 个 reserve、终态失败候选仍为 rejected、rank 顺序、主图仍在，
 以及 selected expansion task 已存在或平台明确返回已齐全。不要再次 fanout，避免重复出图。候选初筛不写 QC Report、不调用
 `qc-put`/`qc-finalize`，也不把 reserve 删除或标为失败。
 

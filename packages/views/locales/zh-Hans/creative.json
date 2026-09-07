@@ -22,6 +22,8 @@
     "view": "预览"
   },
   "copyOrder": {
+    "variantCount": "出图套数",
+    "deliveryCount": "{{sets}} 套 · {{images}} 张",
     "title": "创建创意",
     "headline": "主标题",
     "subheadline": "副标题",

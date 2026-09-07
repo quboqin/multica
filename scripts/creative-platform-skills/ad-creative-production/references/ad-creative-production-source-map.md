@@ -2,6 +2,7 @@
 
 | Contract | Source |
 | --- | --- |
+| The frozen target count is 1-10 for copy-library orders; production still runs one variant at a time and expands every selected rank, including rank 10, while reusing completed sizes | `server/internal/handler/creative_variant_count.go`, `server/internal/handler/creative_candidate_orchestration.go:queueSelectedCreativeProductionTasks` |
 | `multica creative order get` returns the frozen order item, Variant brief, assets and QC records used by production | `server/cmd/multica/cmd_creative_domain.go:runCreativeOrderGet` |
 | Order creation validates the candidate source, required Prime templates, and selected App UI attachments against their frozen published resource version and storage object, then writes immutable attachment IDs to `input_snapshot.attachment_snapshot` | `server/internal/handler/creative_order_input_attachments.go:freezeCreativeOrderInputAttachments`, `server/internal/handler/creative_domain.go:CreateCreativeOrder` |
 | Production downloads the current candidate only through its frozen `attachment_snapshot.candidate_sources` attachment ID; attachment failures are recorded as `auth_expired`, `attachment_not_found`, `storage_timeout`, or `cli_contract_mismatch` | `server/cmd/multica/cmd_attachment.go:runAttachmentDownload`, `server/internal/handler/creative_image_operation.go:normalizeCreativeImageOperation`, `scripts/creative-platform-skills/ad-creative-production/SKILL.md:流程合同` |

@@ -5,7 +5,9 @@ visual fields inside each Variant brief; downstream workers consume them without
 
 ## Candidate envelope
 
-Each Order Item has four or five candidate Variants named `C01` through `C05`. Every candidate starts with:
+Read N from frozen `input_snapshot.target_variant_count` and K from `candidate_count` (N+2). Historical snapshots without these fields
+use N=3 and K=5. New copy-library orders plan exactly K candidates named `C01` through `C{K:02d}`; N=10 uses C01-C12.
+Material orders retain four or five candidates and three selected directions. Every candidate starts with:
 
 ```json
 {
@@ -21,11 +23,11 @@ Each Order Item has four or five candidate Variants named `C01` through `C05`. E
 }
 ```
 
-All candidate previews use `primary_size=1080x1080`. This makes the four or five candidate comparisons consistent; their
+All candidate previews use `primary_size=1080x1080`. This makes the candidate comparisons consistent; their
 `layout_plans` must still forecast native landscape and portrait reflow before selection.
 
-Only `primary_size` is generated while `candidate_state=candidate`. Candidate selection atomically promotes exactly three candidates
-to `selected` with ranks 1 through 3 and moves the rest to `reserve`. Reserve candidates and their main images remain traceable but do
+Only `primary_size` is generated while `candidate_state=candidate`. Candidate selection atomically promotes exactly N candidates
+to `selected` with ranks 1 through N and places up to two remaining candidates in `reserve` with ranks N+1 and N+2. Reserve candidates and their main images remain traceable but do
 not participate in delivery aggregation. A selected candidate reuses its completed main image and expands to the full frozen delivery
 size set.
 
@@ -93,8 +95,8 @@ acceptance check. Icons, phones, and step cards may reinforce the benefit but ca
 ## Candidate comparison
 
 Every candidate must differ in hypothesis and at least two high-salience DesignDNA dimensions. Before main-image generation, record
-an adaptability forecast for all three sizes. After at least three usable main-size Prime images exist, the independent candidate-selection
+an adaptability forecast for all three sizes. After all planned candidates settle and at least N usable main-size Prime images exist, the independent candidate-selection
 review scores each image on approved-copy readability, visual appeal, hypothesis clarity, differentiation, Prime integration, and
-three-size adaptability. The reviewer selects exactly three; the Planner and producer must not update candidates one by one to mimic
-an atomic selection. The platform may reject terminally unusable candidates and continue with the remaining candidates; fewer than three
+three-size adaptability. The reviewer selects exactly N; the Planner and producer must not update candidates one by one to mimic
+an atomic selection. The platform may reject terminally unusable candidates and continue with the remaining candidates; fewer than N
 usable candidates cannot enter comparison.

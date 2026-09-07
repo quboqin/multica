@@ -246,6 +246,8 @@ See CLAUDE.md for the complete command reference.
 
 ### Platform Change Log
 
+- **2026-09-07 / 0.3.50** — 文案库出图支持选择 1-10 套、默认 3 套，每套仍交付三个尺寸；订单冻结套数并纳入提交幂等键，按 N+2 个候选选出 N 套，沿用既有并发和缺失尺寸恢复，候补按排名接替首次交付失败；编排、完成状态、耗时统计、Agent/Skill 模板及 bootstrap 同步数量契约，素材来源与历史订单保持三套。
+
 - **2026-09-07 / 0.3.49** — 文案库支持任选已审核文案与还款计划直接创建创意订单，全空时进入纯视觉探索；成图库提供大图与多尺寸预览，移出可撤销并与订单入库状态联动；Codex 智能体支持 GPT-6 Astra 及运行时声明的思考深度；创意工厂初始化和 bootstrap 同步文案来源的规划、制作与质检合同。
 
 Bug fixes, internal refactors, and implementation-only changes do not require a

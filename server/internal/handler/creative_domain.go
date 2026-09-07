@@ -4036,6 +4036,11 @@ FOR UPDATE
 			writeError(w, http.StatusConflict, "standard creative orders require pipeline_version candidate_v1")
 			return
 		}
+		counts, err := creativeOrderVariantCounts(json.RawMessage(inputSnapshot))
+		if err != nil {
+			writeError(w, http.StatusConflict, err.Error())
+			return
+		}
 		var variantCount, incompatibleCount int
 		if err := tx.QueryRow(r.Context(), `
 SELECT count(*), count(*) FILTER (
@@ -4047,13 +4052,13 @@ WHERE order_item_id = $1
 			writeError(w, http.StatusInternalServerError, "failed to validate creative candidate pipeline")
 			return
 		}
-		if incompatibleCount > 0 || !isCreativeCandidateVariantKey(input.VariantKey) {
-			writeError(w, http.StatusConflict, "candidate creative orders only accept C01-C05 candidate variants")
+		if incompatibleCount > 0 || !counts.allowsKey(input.VariantKey) {
+			writeError(w, http.StatusConflict, "candidate key exceeds the order candidate count")
 			return
 		}
 		if newVariant {
-			if variantCount >= 5 || candidateState != "candidate" || input.SelectionRank != nil {
-				writeError(w, http.StatusConflict, "new candidate variants must be unranked candidates within C01-C05")
+			if variantCount >= counts.Candidates || candidateState != "candidate" || input.SelectionRank != nil {
+				writeError(w, http.StatusConflict, "new variants must be unranked candidates within the frozen candidate count")
 				return
 			}
 		} else {
@@ -4068,6 +4073,17 @@ WHERE order_item_id = $1
 			} else {
 				selectionRank = nil
 			}
+		}
+		rank := 0
+		if currentSelectionRank.Valid {
+			rank = int(currentSelectionRank.Int32)
+		}
+		if input.SelectionRank != nil {
+			rank = *input.SelectionRank
+		}
+		if err := counts.validateRank(candidateState, rank); err != nil {
+			writeError(w, http.StatusConflict, err.Error())
+			return
 		}
 	}
 	expectedSizes, err := expectedCreativeVariantProductionSizes(triggerKind, json.RawMessage(inputSnapshot), input.Brief, candidateState, primarySize)
@@ -6616,6 +6632,9 @@ func normalizeCreativeOrder(input creativeOrderInput) (creativeOrderInput, error
 			return input, errors.New("copy_snapshot must be an object")
 		}
 	}
+	if err := freezeCreativeOrderVariantCount(&input); err != nil {
+		return input, err
+	}
 	return input, nil
 }
 
@@ -6631,16 +6650,10 @@ func normalizeCreativeOrderVariant(input creativeOrderVariantInput) (creativeOrd
 	if input.OrderItemID == "" || input.VariantKey == "" || input.Revision < 1 || len(input.VariantKey) > 64 || !validCreativeVariantStatus(input.Status) ||
 		(input.CandidateState != "" && !validCreativeCandidateState(input.CandidateState)) ||
 		(input.PrimarySize != "" && !validCreativeAssetSize(input.PrimarySize)) ||
-		(input.SelectionRank != nil && (*input.SelectionRank < 1 || *input.SelectionRank > 5)) {
+		(input.SelectionRank != nil && (*input.SelectionRank < 1 || *input.SelectionRank > creativeMaxCandidateCount)) {
 		return input, errors.New("invalid creative order variant")
 	}
 	if input.SelectionRank != nil {
-		if input.CandidateState == "selected" && *input.SelectionRank > 3 {
-			return input, errors.New("selected creative candidate rank must be between 1 and 3")
-		}
-		if input.CandidateState == "reserve" && *input.SelectionRank < 4 {
-			return input, errors.New("reserve creative candidate rank must be 4 or 5")
-		}
 		if input.CandidateState == "candidate" || input.CandidateState == "rejected" {
 			return input, errors.New("unranked creative candidate cannot have selection_rank")
 		}
@@ -8049,8 +8062,12 @@ func (h *Handler) loadCreativeOrderWorkflowState(r *http.Request, order *creativ
 }
 
 func (h *Handler) derivedCreativeOrderDeliveryStatus(ctx context.Context, orderID pgtype.UUID) (string, error) {
+	counts, err := loadCreativeOrderVariantCounts(ctx, h.DB, orderID, pgtype.UUID{})
+	if err != nil {
+		return "", err
+	}
 	var status string
-	err := h.DB.QueryRow(ctx, `
+	err = h.DB.QueryRow(ctx, `
 WITH item_delivery AS (
   SELECT item.id,
     item.adopted_variant_id IS NOT NULL AS adopted,
@@ -8086,9 +8103,10 @@ WITH item_delivery AS (
     order_row.trigger_evidence_kind,
     count(item_delivery.id) AS item_total,
     count(*) FILTER (WHERE item_delivery.adopted) AS adopted_items,
+    count(*) FILTER (WHERE item_delivery.active_selected_count > 0) AS items_with_delivery,
     count(*) FILTER (WHERE item_delivery.active_reference_count > item_delivery.active_selected_count) AS incomplete_active_items,
     count(*) FILTER (WHERE CASE
-      WHEN item_delivery.candidate_pipeline THEN item_delivery.selected_count = 3 AND item_delivery.active_selected_count = 3
+      WHEN item_delivery.candidate_pipeline THEN item_delivery.selected_count = $2 AND item_delivery.active_selected_count = $2
       ELSE item_delivery.active_selected_count > 0
     END) AS ready_items
   FROM creative_order order_row
@@ -8101,11 +8119,11 @@ SELECT CASE
   WHEN item_total > 0 AND adopted_items = item_total AND ready_items = item_total THEN 'completed'
   WHEN item_total > 0 AND ready_items = item_total AND trigger_evidence_kind = 'creative_direct_edit' THEN 'completed'
   WHEN item_total > 0 AND ready_items = item_total THEN 'awaiting_adoption'
-  WHEN ready_items > 0 OR incomplete_active_items > 0 THEN 'partial'
+  WHEN ready_items > 0 OR incomplete_active_items > 0 OR items_with_delivery > 0 THEN 'partial'
   ELSE 'pending'
 END
 FROM aggregate
-`, orderID).Scan(&status)
+`, orderID, counts.Target).Scan(&status)
 	return status, err
 }
 

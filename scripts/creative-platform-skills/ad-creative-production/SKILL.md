@@ -30,6 +30,9 @@ python3 <当前 Skill 目录>/references/validate_task_scope.py \
 
 ## 流程合同
 
+订单套数来自 `input_snapshot.target_variant_count`（未保存时为 3），文案订单可为 1-10 套、候选最多到 C12。
+套数不改变单个 task 的 Variant 和 expected_sizes 范围，不能只执行前三个变体，也不能把其他变体的尺寸纳入当前 task。
+
 先确认 order `input_snapshot.pipeline_version=candidate_v1`，不得修改。字段缺失或值不符时停止并写真实错误，不得推断、回填或切换流程。
 candidate 只做主尺寸，selected 复用已合格主尺寸并补缺失尺寸，reserve 不生产。Variant 缺少
 `creative_intent`、`design_dna` 或当前尺寸 `layout_plan` 时写 `action_required`，不得从旧字段合成替代合同。

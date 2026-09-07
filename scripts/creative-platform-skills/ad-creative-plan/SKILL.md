@@ -1,6 +1,6 @@
 ---
 name: multica-ad-creative-plan
-description: "当 Creative Order Item 已冻结参考分析、业务选择、文案快照和市场资源快照，需要规划 4-5 个主视觉候选并委派候选生产时使用。"
+description: "当 Creative Order Item 已冻结输入，需要按订单目标套数规划主视觉候选并委派候选生产时使用。"
 allowed-tools: Bash(multica *)
 ---
 
@@ -23,7 +23,10 @@ multica creative source-analysis list --candidate-id <candidate-id> --output jso
 ## 流程合同
 
 先确认 order `input_snapshot.pipeline_version=candidate_v1`，该字段由平台创建订单时冻结，禁止修改。字段缺失或值不符时停止并写真实错误，
-不得推断、回填或切换到其他流程。每个标准订单都创建 4-5 个 `C01`-`C05` 候选，先生产各自主尺寸，再由独立质检晋级。
+不得推断、回填或切换到其他流程。读取 `input_snapshot.target_variant_count` 为交付目标 N（1-10），
+读取 `input_snapshot.candidate_count` 为候选数 K（N+2，最多 12）。未保存数量的历史订单按 N=3、K=5 处理。
+新文案库订单必须先完整建立 K 个候选；素材来源及未保存数量的历史订单继续允许 4-5 个候选，最终交付 3 套。
+先生产候选主尺寸，再由独立质检原子晋级 N 个。不能擅自改变用户的目标数量。
 
 ## 输入真值
 
@@ -55,18 +58,19 @@ multica creative source-analysis list --candidate-id <candidate-id> --output jso
 
 ## 方案合同
 
-先完整读取 [Creative Intent Contract](references/creative-intent-contract.md)。为每个 item 写入 4-5 个候选 Variant，固定使用
-`C01`-`C05` 中连续的 key；默认 5 个，只有无法形成第 5 个真实不同的创意假设时才使用 4 个，不能用同一方向换色凑数。
+先完整读取 [Creative Intent Contract](references/creative-intent-contract.md)。为每个新文案库 item 写入 K 个候选 Variant，固定使用
+`C01` 至 `C{K:02d}` 的连续 key；10 套订单为 C01-C12。素材订单仍默认 5 个，只有无法形成第 5 个真实不同创意时才使用 4 个。
+不得仅换色凑数；文案订单若无法形成足量不同方向，应报告真实缺口，不能降低冻结数量。
 每个候选必须有独立 `CreativeIntent`，并至少改变两个高显著 `DesignDNA` 维度。候选共享批准文字、我方数值和业务真值，
 但不强制共享主色；不得只改文案、数值或局部装饰。
 
-候选阶段只生成一个 `primary_size` 主视觉。为确保 4-5 个候选可公平并排比较，所有候选固定先生成
+候选阶段只生成一个 `primary_size` 主视觉。为确保候选可公平并排比较，所有候选固定先生成
 `1080x1080` 方图；横版、竖版和手机叙事方向仍须在各自三尺寸 LayoutPlan 中预先设计，但不能把候选首轮改成其他比例。每个候选先在
 variant-put 顶层写 `candidate_state=candidate` 与 `primary_size=1080x1080`，再用仅包含该方图的 task `expected_sizes`
-独立 fanout 主尺寸生产。4-5 个主尺寸 Prime 图形成至少 3 个合格候选后，由 `creative_candidate_selection` 独立比较；终态失败候选由平台标记 rejected，
-其余候选继续比较。少于 3 个时不晋级，保留真实失败供有界恢复或人工处理。Planner 不预选三个最终 Variant，不逐条改状态冒充晋级，也不在候选阶段补其他尺寸。
+独立 fanout 主尺寸生产。全部已规划候选完成或终态失败后，至少 N 个合格主尺寸 Prime 图才进入 `creative_candidate_selection` 独立比较；终态失败候选由平台标记 rejected。
+少于 N 个时不晋级，保留真实失败供有界恢复或人工处理。Planner 不预选最终 Variant，不逐条改状态冒充晋级，也不在候选阶段补其他尺寸。
 
-候选比较原子选择恰好 3 个，按 rank 1-3 设为 `selected`，其余为 `reserve`。reserve 的主视觉、提示词、模型回执和附件血缘必须保留，
+候选比较原子选择恰好 N 个，按 rank 1-N 设为 `selected`，其余最多两个按 N+1、N+2 排为 `reserve`。reserve 的主视觉、提示词、模型回执和附件血缘必须保留，
 但不参与订单交付汇总。selected 复用已完成主尺寸，平台把其 `expected_sizes` 扩展为冻结的完整三尺寸，再只补缺失两尺寸。
 当前标准尺寸为 `1080x1080`、`1200x628`、`800x1000`。
 
@@ -212,7 +216,7 @@ multica creative order variant-put <order-id> --input-file <variant.json> --outp
 
 ## 委派生产
 
-4-5 个候选 Variant 均写入后，从冻结 squad snapshot 或当前 task context 读取 `producer_agent_ids`
+全部计划候选 Variant 均写入后，从冻结 squad snapshot 或当前 task context 读取 `producer_agent_ids`
 （缺失时回退 `producer_agent_id`）和 `reviewer_agent_id`。`producer_agent_ids[0]` 只作为 fanout 入口 Agent；
 实际生产 Agent 由服务端按当前 squad 成员、启用的 `image_edit` Skill 和在线 runtime 动态选择，并写回子任务
 context。不要在标准生产 manifest 的 item context 里写 `producer_agent_id`，否则会把动态池固定到单个优先 Agent。
@@ -235,7 +239,7 @@ multica task by-source list --agent <producer-entry-agent-id> \
 multica task fanout --agent <producer-entry-agent-id> --input-file <manifest.json> --output json
 ```
 
-`manifest.json` 必须包含 source 证据字段。一个 item 的 4-5 个候选可放在同一个 manifest，但每个
+`manifest.json` 必须包含 source 证据字段。一个 item 的全部候选可放在同一个 manifest，但每个
 `item_key`、`variant_id` 和 `revision` 必须使用 `variant-put` 返回的实际值：
 
 ```json

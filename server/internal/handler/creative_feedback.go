@@ -750,9 +750,9 @@ generated_packages AS (
     AND order_row.status <> 'cancelled'
     AND order_row.trigger_evidence_kind <> 'creative_direct_edit'
     AND variant.candidate_state = 'selected'
-  GROUP BY item.id, order_row.created_at
-  HAVING count(DISTINCT variant.id) = 3
-     AND count(DISTINCT (variant.id, first_asset.size_key)) FILTER (WHERE first_asset.size_key IS NOT NULL) = 9
+  GROUP BY item.id, order_row.created_at, order_row.input_snapshot
+  HAVING count(DISTINCT variant.id) = COALESCE((order_row.input_snapshot->>'target_variant_count')::int, 3)
+     AND count(DISTINCT (variant.id, first_asset.size_key)) FILTER (WHERE first_asset.size_key IS NOT NULL) = 3 * COALESCE((order_row.input_snapshot->>'target_variant_count')::int, 3)
 )
 SELECT ROUND(AVG(EXTRACT(EPOCH FROM (generated_at - submitted_at))))::bigint,
        count(*)

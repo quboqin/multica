@@ -22,6 +22,8 @@
     "view": "Preview"
   },
   "copyOrder": {
+    "variantCount": "Number of sets",
+    "deliveryCount": "{{sets}} sets · {{images}} images",
     "title": "Create creative",
     "headline": "Headline",
     "subheadline": "Subheadline",

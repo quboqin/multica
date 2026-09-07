@@ -27,12 +27,16 @@ allowed-tools: Bash(multica *)
 4. 按 target/source 分组，使用 `multica task fanout` 一次提交全部就绪项。提交后立即结束，不轮询、休眠或
    创建等待 Issue。
 
-正常主链所有权固定：Leader 创建标准订单方案；初始 direct-edit revision 和 task 由平台建单事务原子创建，Leader 不重复委派；Planner 建立 4-5 个候选并委派主尺寸 production；Production 只完成候选主尺寸和 Prime；
-QC 的 `creative_candidate_selection` 原子晋级 3 个，平台自动为 selected 补排缺失尺寸；selected 三尺寸 Prime 齐备后，QC 做联合视觉终检并调用
+正常主链所有权固定：Leader 创建标准订单方案；初始 direct-edit revision 和 task 由平台建单事务原子创建，Leader 不重复委派；Planner 按冻结数量建立候选并委派主尺寸 production；Production 只完成候选主尺寸和 Prime；
+QC 的 `creative_candidate_selection` 按冻结目标原子晋级，平台自动为全部 selected 补排缺失尺寸；selected 三尺寸 Prime 齐备后，QC 做联合视觉终检并调用
 `qc-finalize` 完成归档。真实遮挡或官方文字不可读会阻断当前尺寸并触发有界定向返工，关键内容缺失仍然阻断并转人工确认。Leader 只在人工重试或异常恢复时补真正缺失的下一步，
 不得与下游重复委派。
 
 ## 标准订单
+
+从订单 `input_snapshot.target_variant_count` 读取交付套数 N，`candidate_count` 读取候选数 K=N+2；历史订单未保存时使用 N=3、K=5。
+新文案库订单支持 N=1-10，10 套对应 12 个候选、10 个 selected、30 张最终交付图。每套仍独立生产、质检和入库，按现有并发上限排队。
+只有 N 套各自完成冻结尺寸后才汇总完整交付；失败只恢复缺失套/尺寸，最多使用两个候补，不把部分成功或候补耗尽当成全单完成。
 
 先读取每个 item 的 `source_kind`。`copy_library` 来源直接进入方案；将真实 `source_kind`、`copy_library_id` 放入 task context，
 省略空的 candidate/source-analysis IDs，不采集、不分析、不预适配、不创建占位素材。`material` 来源沿用冻结的素材和分析 ID。
@@ -80,7 +84,7 @@ multica task fanout --agent <planner-agent-id> --input-file <manifest.json> --ou
 提交前用 JSON parser 校验 manifest。CLI 返回的 `tasks` 必须包含新 task ID；否则记录真实错误并让当前任务失败。
 
 文案推荐、编辑和市场资源选择在页面完成并冻结。Leader 只消费 `copy_snapshot` 和 market snapshot，不根据
-竞品数字或当前资源草稿改写输入。4-5 候选、主尺寸晋级 3 个、selected 三尺寸、品牌组件和 QC 的详细合同由对应 Skill 负责。
+竞品数字或当前资源草稿改写输入。候选数量、按冻结目标晋级、selected 三尺寸、品牌组件和 QC 的详细合同由对应 Skill 负责。
 
 ## 直接改图
 

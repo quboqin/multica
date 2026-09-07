@@ -15,10 +15,10 @@
 | `material_collection` | 创建 Crawl Run、导入候选 | `reference_analysis` |
 | `reference_analysis` | 写 Source Analysis | 无 |
 | `creative_leadership` | 标准订单首次委派、异常恢复、用户汇总；不重复创建平台已原子初始化的 direct edit | plan 或缺失任务恢复 |
-| `generation_plan` | 写 4-5 个候选 brief 与主尺寸计划 | candidate primary production |
+| `generation_plan` | 按冻结 candidate_count 写候选 brief 与主尺寸计划 | candidate primary production |
 | `image_edit` | 写候选主尺寸或 selected 缺失尺寸 generated assets 和过程证据 | 调用 `prime_compose` Skill |
 | `direct_image_edit` | 写下一 revision generated assets 和底图过程证据 | 调用 `prime_compose` Skill并进入最终 visual QC |
-| `quality_control` | 候选原子晋级 3 个，或按实际 expected sizes 写联合 visual 报告 | candidate selection 后由平台补排尺寸；finalize 后归档 |
+| `quality_control` | 按冻结 target_variant_count 原子晋级，或按实际 expected sizes 写联合 visual 报告 | candidate selection 后由平台补排尺寸；finalize 后归档 |
 
 成员不得越级创建其他阶段。下游 Agent ID 来自冻结 squad snapshot 或上游 context，不按名称猜测。
 
@@ -61,8 +61,8 @@ runtime 和 provider 限额控制。
 失败项不取消兄弟项；每个 Variant 独立推进并即时展示已交付结果。迟到 task 只能写声明 revision，服务端
 拒绝覆盖更高 revision。
 
-每个 item 先有 4-5 个 candidate Variant，各自只生成由方向选择的 `primary_size`；候选原子晋级恰好 3 个，reserve 保留但不参与交付汇总。
-终态失败候选由平台标记 rejected；至少 3 个合格候选即可进入原子比较，少于 3 个则保留真实失败供有界恢复或人工处理。
+文案 item 按 candidate_count 先规划 N+2 个候选（N=target_variant_count，最多 10）；素材订单仍为 4-5 个候选。每个候选先生成统一方形 primary_size；候选原子晋级恰好 N 个，reserve 保留但不参与交付汇总。
+终态失败候选由平台标记 rejected；至少 N 个合格候选才能进入原子比较，少于 N 个则保留真实失败供有界恢复或人工处理。
 selected 的 expected sizes 共享批准文案、业务语义、DesignDNA、信息层级和 `asset_family_id`；各尺寸按 LayoutPlan 从同一参考独立生成，
 主尺寸只可作为一致性参考，不是方形硬依赖。后端只按冻结 config 原样叠加完整品牌模板。`prime_compose` Skill 只调用后端确定性合成；visual QC 写独立报告；`qc-finalize` 在视觉报告归档后
 按报告与返工策略登记 delivered assets、Variant completion 和 Inbox；阻断 finding 不能由 Agent 自报通过。

@@ -23,7 +23,6 @@ const (
 	creativePipelineCandidateV1            = "candidate_v1"
 	creativePipelineDirectEditV1           = "direct_edit_v1"
 	creativeCandidateSelectionMaxAttempts  = 3
-	creativeCandidateSelectionMinimumReady = 3
 	creativeSelectedExpansionPhase         = "selected_missing_sizes"
 	creativeReservePromotionPhase          = "reserve_promotion"
 )
@@ -49,13 +48,6 @@ func freezeCreativeOrderPipelineVersion(raw json.RawMessage, version string) (js
 	}
 	snapshot["pipeline_version"] = encodedVersion
 	return json.Marshal(snapshot)
-}
-
-func isCreativeCandidateVariantKey(value string) bool {
-	if len(value) != 3 || value[0] != 'C' || value[1] != '0' {
-		return false
-	}
-	return value[2] >= '1' && value[2] <= '5'
 }
 
 // creativeOrchestrationCause preserves the human attribution of the task that
@@ -223,18 +215,22 @@ FOR UPDATE
 	} else if err != nil {
 		return false, fmt.Errorf("lock creative candidate selection order: %w", err)
 	}
-	var itemStatus string
+	var itemStatus, sourceKind string
 	if err := tx.QueryRow(ctx, `
-SELECT status FROM creative_order_item
+SELECT status, source_kind FROM creative_order_item
 WHERE id = $1 AND order_id = $2
 FOR UPDATE
-`, orderItemID, orderID).Scan(&itemStatus); errors.Is(err, pgx.ErrNoRows) || itemStatus == "cancelled" {
+`, orderItemID, orderID).Scan(&itemStatus, &sourceKind); errors.Is(err, pgx.ErrNoRows) || itemStatus == "cancelled" {
 		return false, nil
 	} else if err != nil {
 		return false, fmt.Errorf("lock creative candidate selection item: %w", err)
 	}
 	if creativeOrderPipelineVersion(json.RawMessage(inputSnapshot)) != creativePipelineCandidateV1 {
 		return false, nil
+	}
+	counts, err := creativeOrderVariantCounts(json.RawMessage(inputSnapshot))
+	if err != nil {
+		return false, err
 	}
 
 	var ranked, incompatibleVariants bool
@@ -247,9 +243,9 @@ SELECT
   EXISTS (
     SELECT 1 FROM creative_order_variant
     WHERE order_item_id = $1
-      AND (variant_key !~ '^C0[1-5]$' OR (candidate_state = 'selected' AND selection_rank IS NULL))
+      AND (variant_key !~ $2 OR (candidate_state = 'selected' AND selection_rank IS NULL))
   )
-`, orderItemID).Scan(&ranked, &incompatibleVariants); err != nil {
+`, orderItemID, counts.keyPattern()).Scan(&ranked, &incompatibleVariants); err != nil {
 		return false, fmt.Errorf("check creative candidate ranking: %w", err)
 	}
 	if ranked || incompatibleVariants {
@@ -306,7 +302,7 @@ FOR UPDATE
 	if err != nil {
 		return false, fmt.Errorf("load creative candidates: %w", err)
 	}
-	candidateRows := make([]candidateRow, 0, 5)
+	candidateRows := make([]candidateRow, 0, counts.Candidates)
 	for rows.Next() {
 		var row candidateRow
 		if err := rows.Scan(&row.id, &row.variantKey, &row.revision, &row.status, &row.state, &row.primarySize, &row.brief); err != nil {
@@ -320,7 +316,7 @@ FOR UPDATE
 		return false, fmt.Errorf("read creative candidates: %w", err)
 	}
 	rows.Close()
-	if len(candidateRows) < creativeCandidateSelectionMinimumReady || len(candidateRows) > 5 {
+	if len(candidateRows) < counts.Target || len(candidateRows) > counts.Candidates || (sourceKind == "copy_library" && counts.Configured && len(candidateRows) != counts.Candidates) {
 		return false, nil
 	}
 
@@ -424,7 +420,7 @@ SELECT
 			nonRejectedCount++
 		}
 	}
-	if len(ready)+len(failed) != nonRejectedCount || len(ready) < creativeCandidateSelectionMinimumReady {
+	if len(ready)+len(failed) != nonRejectedCount || len(ready) < counts.Target {
 		return false, nil
 	}
 	for _, rejected := range failed {
@@ -449,7 +445,7 @@ WHERE variant_id = $1 AND revision = $2
 		}
 		nonRejectedCount--
 	}
-	if len(ready) != nonRejectedCount || len(ready) < creativeCandidateSelectionMinimumReady || len(ready) > 5 {
+	if len(ready) != nonRejectedCount || len(ready) < counts.Target || len(ready) > counts.Candidates {
 		return false, nil
 	}
 
@@ -495,6 +491,7 @@ SELECT EXISTS (
 		"reviewer_agent_id":      uuidToString(reviewer.ID),
 		"selection_attempt":      terminalAttempts + 1,
 		"candidate_count":        len(ready),
+		"target_variant_count":   counts.Target,
 		"candidates":             ready,
 	})
 	if err != nil {
@@ -534,21 +531,24 @@ func (h *Handler) creativeCandidateSelectionCommitted(ctx context.Context, works
 	if !workspaceID.Valid || !orderID.Valid || !orderItemID.Valid {
 		return false, nil
 	}
+	counts, err := loadCreativeOrderVariantCounts(ctx, h.DB, orderID, workspaceID)
+	if err != nil {
+		return false, err
+	}
 	var committed bool
-	err := h.DB.QueryRow(ctx, `
+	err = h.DB.QueryRow(ctx, `
 SELECT
-  count(*) BETWEEN 3 AND 5
-  AND count(*) FILTER (WHERE variant.variant_key !~ '^C0[1-5]$') = 0
+  count(*) BETWEEN $5 AND $6
+  AND count(*) FILTER (WHERE variant.variant_key !~ $7) = 0
   AND count(*) FILTER (WHERE variant.candidate_state = 'candidate') = 0
-  AND count(*) FILTER (WHERE variant.candidate_state = 'selected') = 3
-  AND count(*) FILTER (WHERE variant.candidate_state = 'selected' AND variant.selection_rank = 1) = 1
-  AND count(*) FILTER (WHERE variant.candidate_state = 'selected' AND variant.selection_rank = 2) = 1
-  AND count(*) FILTER (WHERE variant.candidate_state = 'selected' AND variant.selection_rank = 3) = 1
+  AND count(*) FILTER (WHERE variant.candidate_state = 'selected') = $5
+  AND count(DISTINCT variant.selection_rank) FILTER (WHERE variant.candidate_state = 'selected') = $5
+  AND count(*) FILTER (WHERE variant.candidate_state = 'selected' AND variant.selection_rank NOT BETWEEN 1 AND $5) = 0
   AND count(*) FILTER (WHERE variant.candidate_state = 'reserve') BETWEEN 0 AND 2
-  AND count(*) FILTER (WHERE variant.candidate_state = 'reserve' AND variant.selection_rank NOT IN (4, 5)) = 0
-  AND count(*) FILTER (WHERE variant.candidate_state = 'reserve' AND variant.selection_rank = 4) =
+  AND count(*) FILTER (WHERE variant.candidate_state = 'reserve' AND variant.selection_rank NOT BETWEEN $5 + 1 AND $6) = 0
+  AND count(*) FILTER (WHERE variant.candidate_state = 'reserve' AND variant.selection_rank = $5 + 1) =
     CASE WHEN count(*) FILTER (WHERE variant.candidate_state = 'reserve') >= 1 THEN 1 ELSE 0 END
-  AND count(*) FILTER (WHERE variant.candidate_state = 'reserve' AND variant.selection_rank = 5) =
+  AND count(*) FILTER (WHERE variant.candidate_state = 'reserve' AND variant.selection_rank = $5 + 2) =
     CASE WHEN count(*) FILTER (WHERE variant.candidate_state = 'reserve') = 2 THEN 1 ELSE 0 END
   AND count(*) FILTER (
     WHERE variant.candidate_state IN ('selected', 'reserve') AND variant.selection_rank IS NULL
@@ -564,7 +564,7 @@ WHERE item.id = $1
   AND order_row.id = $2
   AND order_row.workspace_id = $3
   AND order_row.input_snapshot->>'pipeline_version' = $4
-`, orderItemID, orderID, workspaceID, creativePipelineCandidateV1).Scan(&committed)
+`, orderItemID, orderID, workspaceID, creativePipelineCandidateV1, counts.Target, counts.Candidates, counts.keyPattern()).Scan(&committed)
 	return committed, err
 }
 
@@ -598,7 +598,7 @@ func (h *Handler) creativeCandidateSelectionCompletionError(ctx context.Context,
 		return "", err
 	}
 	if !committed {
-		return "candidate selection task completed without exactly three selected ranks and ordered reserves when available", nil
+		return "candidate selection task completed without the frozen target number of selected ranks and ordered reserves", nil
 	}
 	return "", nil
 }
@@ -631,11 +631,15 @@ func (h *Handler) queueSelectedCreativeProductionTasks(ctx context.Context, orde
 	} else if err != nil {
 		return nil, fmt.Errorf("resolve selected creative production order: %w", err)
 	}
-	var orderStatus string
-	if err := tx.QueryRow(ctx, `SELECT status FROM creative_order WHERE id = $1 FOR UPDATE`, orderID).Scan(&orderStatus); errors.Is(err, pgx.ErrNoRows) || orderStatus == "cancelled" {
+	var orderStatus, orderSnapshot string
+	if err := tx.QueryRow(ctx, `SELECT status, input_snapshot::text FROM creative_order WHERE id = $1 FOR UPDATE`, orderID).Scan(&orderStatus, &orderSnapshot); errors.Is(err, pgx.ErrNoRows) || orderStatus == "cancelled" {
 		return nil, nil
 	} else if err != nil {
 		return nil, fmt.Errorf("lock selected creative production order: %w", err)
+	}
+	counts, err := creativeOrderVariantCounts(json.RawMessage(orderSnapshot))
+	if err != nil {
+		return nil, err
 	}
 	var itemStatus string
 	if err := tx.QueryRow(ctx, `SELECT status FROM creative_order_item WHERE id = $1 AND order_id = $2 FOR UPDATE`, orderItemID, orderID).Scan(&itemStatus); errors.Is(err, pgx.ErrNoRows) || itemStatus == "cancelled" {
@@ -667,15 +671,15 @@ JOIN creative_order_item item ON item.id = variant.order_item_id
 JOIN creative_order order_row ON order_row.id = item.order_id
 WHERE item.id = $1
   AND variant.candidate_state = 'selected'
-  AND variant.selection_rank BETWEEN 1 AND 3
+  AND variant.selection_rank BETWEEN 1 AND $2
   AND order_row.status <> 'cancelled'
 ORDER BY variant.selection_rank, variant.id
 FOR UPDATE OF variant, revision
-`, orderItemID)
+`, orderItemID, counts.Target)
 	if err != nil {
 		return nil, fmt.Errorf("load selected creative production variants: %w", err)
 	}
-	selected := make([]creativeSelectedExpansion, 0, 3)
+	selected := make([]creativeSelectedExpansion, 0, counts.Target)
 	for rows.Next() {
 		var value creativeSelectedExpansion
 		var snapshot string
@@ -892,6 +896,10 @@ WHERE variant.id = $1
 	if !creativeReservePromotionAllowed(json.RawMessage(inputSnapshot)) {
 		return false, nil, nil
 	}
+	counts, err := creativeOrderVariantCounts(json.RawMessage(inputSnapshot))
+	if err != nil {
+		return false, nil, err
+	}
 	var itemStatus string
 	if err := tx.QueryRow(ctx, `SELECT status FROM creative_order_item WHERE id = $1 AND order_id = $2 FOR UPDATE`, itemID, orderID).Scan(&itemStatus); errors.Is(err, pgx.ErrNoRows) || itemStatus == "cancelled" {
 		return false, nil, nil
@@ -937,7 +945,7 @@ FOR UPDATE OF variant
 		tasks, queueErr := h.queueSelectedCreativeProductionTasks(ctx, itemID, cause, creativeReservePromotionPhase, replacementID)
 		return false, tasks, queueErr
 	}
-	if failedState != "selected" || failedRank < 1 || failedRank > 3 || activeRevision.Valid || adoptedVariantID.Valid || (failedStatus != "action_required" && failedStatus != "failed") {
+	if failedState != "selected" || failedRank < 1 || failedRank > counts.Target || activeRevision.Valid || adoptedVariantID.Valid || (failedStatus != "action_required" && failedStatus != "failed") {
 		return false, nil, nil
 	}
 
@@ -1025,6 +1033,13 @@ SET candidate_state = 'selected', selection_rank = $2, status = 'running',
 WHERE id = $1 AND candidate_state = 'reserve' AND active_revision IS NULL
 `, reserveID, failedRank, reserveRank, uuidToString(failedVariantID)); err != nil {
 		return false, nil, fmt.Errorf("promote creative reserve: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `
+UPDATE creative_order_variant
+SET selection_rank = $2, updated_at = now()
+WHERE order_item_id = $1 AND candidate_state = 'reserve'
+`, itemID, counts.Target+1); err != nil {
+		return false, nil, fmt.Errorf("reorder remaining creative reserve: %w", err)
 	}
 	if err := tx.QueryRow(ctx, `SELECT brief::text FROM creative_order_variant WHERE id = $1`, reserveID).Scan(&reserveBrief); err != nil {
 		return false, nil, fmt.Errorf("load promoted creative reserve brief: %w", err)

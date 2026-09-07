@@ -5,6 +5,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ChevronDown, LoaderCircle, Sparkles } from "lucide-react";
 import { api } from "@multica/core/api";
 import { creativeKeys, creativeResourceFilesOptions, creativeResourcesOptions, parseCreativeCopyLibraryConfig } from "@multica/core/creative";
+import { DEFAULT_CREATIVE_VARIANT_COUNT, MAX_CREATIVE_VARIANT_COUNT } from "@multica/core/creative";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { squadListOptions } from "@multica/core/workspace/queries";
 import type { CreativeCopyFragmentRole, CreativeResource, CreativeType } from "@multica/core/types";
@@ -32,6 +33,7 @@ export function CopyLibraryOrderDialog({ library, onClose, onCreated }: { librar
   const squad = squads.data?.find((entry) => entry.id === squadId) ?? (squads.data?.length === 1 ? squads.data[0] : undefined);
   const config = useMemo(() => parseCreativeCopyLibraryConfig(library.published_config ?? {}), [library.published_config]);
   const [creativeType, setCreativeType] = useState<CreativeType>("num");
+  const [targetVariantCount, setTargetVariantCount] = useState(DEFAULT_CREATIVE_VARIANT_COUNT);
   const [slots, setSlots] = useState<Partial<Record<CreativeCopyFragmentRole, string[]>>>({});
   const [plans, setPlans] = useState<string[]>([]);
   const [direction, setDirection] = useState(EMPTY_VISUAL_DIRECTION);
@@ -48,7 +50,7 @@ export function CopyLibraryOrderDialog({ library, onClose, onCreated }: { librar
     mutationFn: async () => {
       if (!market || !squad || !files.data) throw new Error(t(($) => $.copyOrder.missingConfiguration));
       const selection = { library_version: library.published_version, creative_type: creativeType, slots, repayment_plan_keys: plans, visual_only: visualOnly, visual_direction: direction };
-      const key = await creativeSubmissionKey({ source_kind: "copy_library", library: library.id, market: market.id, marketVersion: market.published_version, squad: squad.id, selection });
+      const key = await creativeSubmissionKey({ source_kind: "copy_library", library: library.id, market: market.id, marketVersion: market.published_version, squad: squad.id, targetVariantCount, selection });
       if (recovery.current.key !== key) recovery.current = { key, issueId: "", orderId: "" };
       if (!recovery.current.issueId) {
         const issue = await api.createIssue({ title: `${t(($) => $.copyOrder.title)} · ${library.name}`, status: "todo", allow_duplicate: true, metadata: { workflow: "creative_order", creative_submission_key: key } });
@@ -58,7 +60,7 @@ export function CopyLibraryOrderDialog({ library, onClose, onCreated }: { librar
       if (!recovery.current.orderId) {
         const order = await api.createCreativeOrder({
           issue_id: recovery.current.issueId, submission_key: key, status: "queued", trigger_evidence_kind: "copy_library", trigger_evidence_ref_id: library.id,
-          input_snapshot: { pipeline_version: "candidate_v1", market_pack: { id: market.id, version: market.published_version, config: market.published_config ?? {}, files: files.data.files }, squad_snapshot: { squad_id: squad.id } },
+          input_snapshot: { pipeline_version: "candidate_v1", target_variant_count: targetVariantCount, market_pack: { id: market.id, version: market.published_version, config: market.published_config ?? {}, files: files.data.files }, squad_snapshot: { squad_id: squad.id } },
           items: [{ source_kind: "copy_library", copy_library_id: library.id, candidate_id: "", source_analysis_id: "", copy_snapshot: selection, direction: visualDirectionSummary(direction) }],
         });
         if (!order.id) throw new Error(t(($) => $.copyOrder.createFailed));
@@ -81,11 +83,13 @@ export function CopyLibraryOrderDialog({ library, onClose, onCreated }: { librar
     <DialogContent className="flex max-h-[94dvh] w-[96vw] !max-w-5xl flex-col gap-0 overflow-hidden p-0" aria-describedby={undefined}>
       <DialogHeader className="border-b px-5 py-4"><DialogTitle>{t(($) => $.copyOrder.title)}</DialogTitle><div className="flex flex-wrap gap-2 pt-1"><Badge variant="outline">{library.name} · v{library.published_version}</Badge>{visualOnly && <Badge variant="secondary">{t(($) => $.copyOrder.visualOnly)}</Badge>}</div></DialogHeader>
       <div className="min-h-0 flex-1 overflow-y-auto" data-testid="copy-order-scroll"><fieldset disabled={create.isPending} className="min-w-0 p-5">
-        <div className="grid gap-4 sm:grid-cols-3">
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
           <label className="grid gap-2 text-sm">{t(($) => $.copyOrder.market)}<NativeSelect value={market?.id ?? ""} onChange={(event) => setMarketId(event.target.value)}><NativeSelectOption value="">{t(($) => $.copyOrder.selectMarket)}</NativeSelectOption>{markets.map((entry) => <NativeSelectOption key={entry.id} value={entry.id}>{entry.name}</NativeSelectOption>)}</NativeSelect></label>
           <label className="grid gap-2 text-sm">{t(($) => $.copyOrder.squad)}<NativeSelect value={squad?.id ?? ""} onChange={(event) => setSquadId(event.target.value)}><NativeSelectOption value="">{t(($) => $.copyOrder.selectSquad)}</NativeSelectOption>{squads.data?.map((entry) => <NativeSelectOption key={entry.id} value={entry.id}>{entry.name}</NativeSelectOption>)}</NativeSelect></label>
           <label className="grid gap-2 text-sm">{t(($) => $.copyOrder.type)}<NativeSelect value={creativeType} onChange={(event) => { setCreativeType(event.target.value as CreativeType); setSlots({}); setRecipeId(""); }}><NativeSelectOption value="num">Num</NativeSelectOption><NativeSelectOption value="repayment_plan">Repayment Plan</NativeSelectOption></NativeSelect></label>
+          <label className="grid gap-2 text-sm">{t(($) => $.copyOrder.variantCount)}<NativeSelect value={targetVariantCount} onChange={(event) => setTargetVariantCount(Number(event.target.value))}>{Array.from({ length: MAX_CREATIVE_VARIANT_COUNT }, (_, index) => index + 1).map((count) => <NativeSelectOption key={count} value={count}>{count}</NativeSelectOption>)}</NativeSelect></label>
         </div>
+        <p className="mt-3 text-sm text-muted-foreground" role="status">{t(($) => $.copyOrder.deliveryCount, { sets: targetVariantCount, images: targetVariantCount * 3 })}</p>
         {config.recipes.some((recipe) => recipe.status === "approved") && <label className="mt-4 grid gap-2 text-sm">{t(($) => $.copyOrder.recipe)}<NativeSelect value={recipeId} onChange={(event) => chooseRecipe(event.target.value)}><NativeSelectOption value="">{t(($) => $.copyOrder.custom)}</NativeSelectOption>{config.recipes.filter((recipe) => recipe.status === "approved").map((recipe) => <NativeSelectOption key={recipe.id} value={recipe.id}>{recipe.name}</NativeSelectOption>)}</NativeSelect></label>}
         <div className="mt-5 grid min-w-0 gap-6 md:grid-cols-2">
           <div className="min-w-0 divide-y border-y">{COPY_SLOTS.map((role, index) => <details key={role} open={index === 0 || (slots[role]?.length ?? 0) > 0} className="group py-3">

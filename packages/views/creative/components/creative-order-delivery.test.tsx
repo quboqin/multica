@@ -68,6 +68,23 @@ function qcReport(input: Pick<CreativeOrderQCReport, "id" | "variant_id" | "revi
 }
 
 describe("creative order stage", () => {
+  it("shows nine of ten ready sets without counting two reserves as deliveries", () => {
+    const orderItem = item();
+    orderItem.variants = Array.from({ length: 12 }, (_, index) => ({
+      ...variant(`c${String(index + 1).padStart(2, "0")}`, index !== 9),
+      candidate_state: index < 10 ? "selected" : "reserve",
+      selection_rank: index + 1,
+    })) as CreativeOrderVariant[];
+    const incomplete = orderItem.variants[9]!;
+    incomplete.assets = incomplete.assets.filter((asset) => !(asset.revision === 2 && asset.stage === "primed" && asset.size_key === "800x1000"));
+    const order = { status: "running", derived_status: "partial", input_snapshot: { target_variant_count: 10 }, items: [orderItem], workflow_failures: [] } as unknown as CreativeOrder;
+    expect(creativeOrderStage(order)).toMatchObject({ key: "review", readyVariants: 9, totalVariants: 10, detail: "9/10 套成图可分别加入成图库" });
+    render(<CreativeOrderDeliveryCandidates orderId="order-1" item={orderItem} source={{ label: "文案库", url: "" }} attachments={attachmentMap(orderItem)} galleryVariantIds={new Set()} onAddToGallery={vi.fn()} onAssetSelect={vi.fn()} />);
+    expect(screen.getByText("C10")).toBeInTheDocument();
+    expect(screen.queryByText("C11")).not.toBeInTheDocument();
+    expect(screen.queryByText("C12")).not.toBeInTheDocument();
+  });
+
   it("keeps exploratory candidates out of the delivery page until three selections are committed", () => {
     const orderItem = item();
     orderItem.variants = ["c01", "c02", "c03", "c04", "c05"].map((id) => ({
@@ -1286,7 +1303,7 @@ describe("creative order delivery selection", () => {
     expect(creativeOrderStage(candidateOrder)).toMatchObject({
       key: "generating",
       label: "候选比较中",
-      detail: "正在自动比较候选主画面，确定三个入选方案后继续生成",
+      detail: "正在自动比较候选主画面，确定 3 个入选方案后继续生成",
       totalVariants: 0,
     });
 

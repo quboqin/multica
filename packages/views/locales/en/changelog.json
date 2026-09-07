@@ -3,6 +3,16 @@
   "subtitle": "Release notes maintained inside this Multica platform.",
   "current_version": "Current platform version: {{version}}",
   "releases": {
+    "v0_3_50": {
+      "version": "0.3.50",
+      "date": "2026-09-07",
+      "title": "Choose the number of copy-based creative sets",
+      "summary": "Copy-library orders support 1-10 creative sets, defaulting to three, with three delivery sizes per set.",
+      "change_1": "Choose a set count and see the delivery image count before submitting. Ten sets deliver 30 images; the count is frozen with the order.",
+      "change_2": "Plan two additional candidates and let independent review select the requested number of directions. Ten-set orders compare 12 primary images.",
+      "change_3": "Keep existing task concurrency and reuse completed primary images when generating other sizes. Ranked reserves can replace failed initial deliveries without regenerating successful directions.",
+      "change_4": "Progress, delivery metrics, and agent contracts follow the frozen count. Material-based and historical orders retain the three-set default; gallery sets can be previewed and downloaded in batches."
+    },
     "v0_3_49": {
       "version": "0.3.49",
       "date": "2026-09-07",

@@ -20,6 +20,8 @@ function fixture(activeRevision = 0) {
 
 function browserDownloads() {
   let archive: NodeBlob | undefined;
+  // Keep encoded text in the jsdom Uint8Array realm used by fflate.
+  vi.stubGlobal("TextEncoder", class extends TextEncoder { encode(value?: string) { return Uint8Array.from(super.encode(value)); } });
   const fetchMock = vi.fn(async (_url: RequestInfo | URL, _init?: RequestInit) => new Response(new Uint8Array(png).buffer, { headers: { "content-type": "image/png" } }));
   vi.stubGlobal("fetch", fetchMock);
   vi.stubGlobal("Blob", NodeBlob);
@@ -32,6 +34,31 @@ function browserDownloads() {
 afterEach(() => { vi.runOnlyPendingTimers(); vi.useRealTimers(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
 describe("gallery archives", () => {
+  it("packages all ten copy-library sets as thirty uniquely numbered images", async () => {
+    const browser = browserDownloads();
+    const packages = Array.from({ length: 10 }, (_, index) => {
+      const input = fixture(2);
+      const key = `C${String(index + 1).padStart(2, "0")}`;
+      const variant = { ...input.variant, id: key, variant_key: key };
+      const item = { ...input.item, source_kind: "copy_library", candidate_id: "", variants: [variant] } as CreativeOrderItem;
+      return { ...input, variant, item, folderName: key, selection: { revision: 1, expectedSizes: sizes } };
+    });
+    await downloadCreativeVariantArchives({ packages });
+    const zip = await browser.unzip();
+    const images = Object.keys(zip).filter((name) => name.endsWith(".png"));
+    expect(images).toHaveLength(30);
+    expect(Object.keys(zip)).toHaveLength(31);
+    expect(new Set(images).size).toBe(30);
+    expect(images.map((name) => Number(name.match(/_(\d+)\.png$/)![1]))).toEqual(Array.from({ length: 30 }, (_, index) => index + 1));
+    for (const [index, image] of images.entries()) {
+      expect(image.startsWith(`C${String(Math.floor(index / 3) + 1).padStart(2, "0")}/`)).toBe(true);
+      expect(zip[image]).toEqual(png);
+    }
+    expect(new TextDecoder().decode(zip["manifest.csv"])).toContain("C10");
+    expect(browser.fetchMock).toHaveBeenCalledTimes(30);
+    expect(browser.fetchMock.mock.calls.every(([url]) => String(url).includes("/r1-"))).toBe(true);
+  });
+
   it("rejects zero-image packages before downloading or creating a ZIP", async () => {
     const browser = browserDownloads();
     const input = fixture();
