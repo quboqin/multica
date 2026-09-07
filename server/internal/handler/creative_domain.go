@@ -60,6 +60,8 @@ type creativeSourceAnalysisResponse struct {
 }
 
 type creativeOrderItemInput struct {
+	SourceKind       string          `json:"source_kind"`
+	CopyLibraryID    string          `json:"copy_library_id"`
 	CandidateID      string          `json:"candidate_id"`
 	SourceAnalysisID string          `json:"source_analysis_id"`
 	CopySnapshot     json.RawMessage `json:"copy_snapshot"`
@@ -147,6 +149,8 @@ type creativeOrderQCContextResponse struct {
 }
 
 type creativeOrderItemResponse struct {
+	SourceKind       string                         `json:"source_kind"`
+	CopyLibraryID    string                         `json:"copy_library_id"`
 	ID               string                         `json:"id"`
 	OrderID          string                         `json:"order_id"`
 	CandidateID      string                         `json:"candidate_id"`
@@ -607,6 +611,10 @@ FROM creative_order WHERE id = $1`, parseUUID(existingID)))
 		}
 		return
 	}
+	if err := h.freezeCreativeCopyLibraryOrder(r.Context(), workspaceID, &input); err != nil {
+		writeError(w, http.StatusUnprocessableEntity, err.Error())
+		return
+	}
 	if err := h.validateCustomCreativeOrderCopyFacts(r.Context(), workspaceID, input.InputSnapshot, input.Items); err != nil {
 		writeError(w, http.StatusUnprocessableEntity, err.Error())
 		return
@@ -632,7 +640,7 @@ RETURNING id::text, workspace_id::text, COALESCE(issue_id::text, ''), status, in
 		return
 	}
 	for _, item := range input.Items {
-		candidateID, valid := parseUUIDOrBadRequest(w, item.CandidateID, "candidate_id")
+		candidateID, valid := optionalUUIDOrBadRequest(w, item.CandidateID, "candidate_id")
 		if !valid {
 			return
 		}
@@ -640,15 +648,21 @@ RETURNING id::text, workspace_id::text, COALESCE(issue_id::text, ''), status, in
 		if !valid {
 			return
 		}
+		copyLibraryID, valid := optionalUUIDOrBadRequest(w, item.CopyLibraryID, "copy_library_id")
+		if !valid {
+			return
+		}
 		var referencesValid bool
-		if err := tx.QueryRow(r.Context(), `
+		if item.SourceKind == "material" {
+			if err := tx.QueryRow(r.Context(), `
 SELECT EXISTS(SELECT 1 FROM creative_material_candidate WHERE id = $1 AND workspace_id = $2)
   AND ($3::uuid IS NULL OR EXISTS(SELECT 1 FROM creative_source_analysis WHERE id = $3 AND candidate_id = $1 AND workspace_id = $2))
 `, candidateID, workspaceID, analysisID).Scan(&referencesValid); err != nil || !referencesValid {
-			writeError(w, http.StatusUnprocessableEntity, "order item references do not belong to this workspace")
-			return
+				writeError(w, http.StatusUnprocessableEntity, "order item references do not belong to this workspace")
+				return
+			}
 		}
-		if issueID.Valid {
+		if issueID.Valid && candidateID.Valid {
 			if _, err := tx.Exec(r.Context(), `
 INSERT INTO creative_material_issue_candidate (
   issue_id, candidate_id, workspace_id, status, selected_by, selected_at
@@ -664,9 +678,9 @@ ON CONFLICT (issue_id, candidate_id) DO UPDATE SET
 			}
 		}
 		if _, err := tx.Exec(r.Context(), `
-INSERT INTO creative_order_item (order_id, candidate_id, source_analysis_id, copy_snapshot, direction)
-VALUES ($1,$2,$3,$4::jsonb,$5)
-`, order.ID, candidateID, analysisID, item.CopySnapshot, item.Direction); err != nil {
+INSERT INTO creative_order_item (order_id, candidate_id, source_analysis_id, copy_snapshot, direction, source_kind, copy_library_id)
+VALUES ($1,$2,$3,$4::jsonb,$5,$6,$7)
+`, order.ID, candidateID, analysisID, item.CopySnapshot, item.Direction, item.SourceKind, copyLibraryID); err != nil {
 			writeError(w, http.StatusUnprocessableEntity, "failed to create creative order item")
 			return
 		}
@@ -905,6 +919,9 @@ func (h *Handler) validateCustomCreativeOrderCopyFacts(ctx context.Context, work
 	snapshots := make([]creativeOrderCopySnapshot, 0, len(items))
 	requiresLibrary := false
 	for index, item := range items {
+		if item.SourceKind == "copy_library" {
+			continue
+		}
 		var snapshot creativeOrderCopySnapshot
 		if err := json.Unmarshal(item.CopySnapshot, &snapshot); err != nil {
 			return errors.New("copy_snapshot must be valid JSON")
@@ -6573,19 +6590,27 @@ func normalizeCreativeOrder(input creativeOrderInput) (creativeOrderInput, error
 	seen := map[string]struct{}{}
 	for index := range input.Items {
 		item := &input.Items[index]
+		item.SourceKind = strings.TrimSpace(item.SourceKind)
+		if item.SourceKind == "" {
+			item.SourceKind = "material"
+		}
+		item.CopyLibraryID = strings.TrimSpace(item.CopyLibraryID)
 		item.CandidateID = strings.TrimSpace(item.CandidateID)
 		item.SourceAnalysisID = strings.TrimSpace(item.SourceAnalysisID)
 		item.Direction = strings.TrimSpace(item.Direction)
-		if item.CandidateID == "" {
+		if (item.SourceKind != "material" && item.SourceKind != "copy_library") ||
+			(item.SourceKind == "material" && (item.CandidateID == "" || item.CopyLibraryID != "")) ||
+			(item.SourceKind == "copy_library" && (item.CandidateID != "" || item.SourceAnalysisID != "" || item.CopyLibraryID == "")) {
 			return input, errors.New("invalid creative order item")
 		}
 		if len(item.Direction) > maxCreativeOrderDirectionLength {
 			return input, errors.New("visual direction exceeds the maximum supported length")
 		}
-		if _, exists := seen[item.CandidateID]; exists {
+		identity := item.SourceKind + ":" + item.CandidateID + item.CopyLibraryID
+		if _, exists := seen[identity]; exists {
 			return input, errors.New("duplicate candidate_id")
 		}
-		seen[item.CandidateID] = struct{}{}
+		seen[identity] = struct{}{}
 		item.CopySnapshot, err = normalizedOptionalJSONObject(item.CopySnapshot)
 		if err != nil {
 			return input, errors.New("copy_snapshot must be an object")
@@ -8368,9 +8393,9 @@ END FROM base
 
 func (h *Handler) listCreativeOrderItems(r *http.Request, orderID pgtype.UUID) ([]creativeOrderItemResponse, error) {
 	rows, err := h.DB.Query(r.Context(), `
-SELECT id::text, order_id::text, candidate_id::text, COALESCE(source_analysis_id::text, ''), copy_snapshot::text,
+SELECT id::text, order_id::text, COALESCE(candidate_id::text, ''), COALESCE(source_analysis_id::text, ''), copy_snapshot::text,
   direction, status, COALESCE(adopted_variant_id::text, ''), COALESCE(adopted_at::text, ''),
-  COALESCE(adopted_by::text, ''), created_at::text, updated_at::text
+  COALESCE(adopted_by::text, ''), created_at::text, updated_at::text, source_kind, COALESCE(copy_library_id::text, '')
 FROM creative_order_item WHERE order_id = $1 ORDER BY created_at
 `, orderID)
 	if err != nil {
@@ -8398,10 +8423,10 @@ FROM creative_order_item WHERE order_id = $1 ORDER BY created_at
 // detail endpoint's per-variant N+1 query tree for every order.
 func (h *Handler) listCreativeOrderListItems(r *http.Request, orderID pgtype.UUID) ([]creativeOrderItemResponse, error) {
 	rows, err := h.DB.Query(r.Context(), `
-SELECT i.id::text, i.order_id::text, i.candidate_id::text,
+SELECT i.id::text, i.order_id::text, COALESCE(i.candidate_id::text, ''),
   COALESCE(i.source_analysis_id::text, ''), i.copy_snapshot::text, i.direction, i.status,
   COALESCE(i.adopted_variant_id::text, ''), COALESCE(i.adopted_at::text, ''),
-  COALESCE(i.adopted_by::text, ''), i.created_at::text, i.updated_at::text,
+  COALESCE(i.adopted_by::text, ''), i.created_at::text, i.updated_at::text, i.source_kind, COALESCE(i.copy_library_id::text, ''),
 	  COALESCE(v.id::text, ''), COALESCE(v.order_item_id::text, ''), COALESCE(v.variant_key, ''),
 	  COALESCE(v.brief::text, '{}'), COALESCE(v.revision, 0), COALESCE(v.status, ''),
 	  COALESCE(v.active_revision, 0), COALESCE(v.staging_revision, 0), COALESCE(v.candidate_state, ''),
@@ -8459,7 +8484,7 @@ ORDER BY i.created_at, v.variant_key, a.revision, a.size_key, a.stage
 		if err := rows.Scan(
 			&item.ID, &item.OrderID, &item.CandidateID, &item.SourceAnalysisID, &itemSnapshot,
 			&item.Direction, &item.Status, &item.AdoptedVariantID, &item.AdoptedAt, &item.AdoptedBy,
-			&item.CreatedAt, &item.UpdatedAt,
+			&item.CreatedAt, &item.UpdatedAt, &item.SourceKind, &item.CopyLibraryID,
 			&variantID, &variantItemID, &variantKey, &variantBrief, &variantRevision, &variantStatus,
 			&variantActiveRevision, &variantStagingRevision, &variantCandidateState, &variantSelectionRank, &variantPrimarySize,
 			&variantCreatedAt, &variantUpdatedAt, &variantRevisionsJSON,
@@ -8527,16 +8552,16 @@ func scanCreativeOrderItemWithAdoption(row rowScanner) (creativeOrderItemRespons
 	var snapshot string
 	err := row.Scan(&item.ID, &item.OrderID, &item.CandidateID, &item.SourceAnalysisID, &snapshot,
 		&item.Direction, &item.Status, &item.AdoptedVariantID, &item.AdoptedAt, &item.AdoptedBy,
-		&item.CreatedAt, &item.UpdatedAt)
+		&item.CreatedAt, &item.UpdatedAt, &item.SourceKind, &item.CopyLibraryID)
 	item.CopySnapshot = json.RawMessage(snapshot)
 	return item, err
 }
 
 func (h *Handler) loadCreativeOrderItem(r *http.Request, itemID pgtype.UUID) (creativeOrderItemResponse, error) {
 	item, err := scanCreativeOrderItemWithAdoption(h.DB.QueryRow(r.Context(), `
-SELECT id::text, order_id::text, candidate_id::text, COALESCE(source_analysis_id::text, ''), copy_snapshot::text,
+SELECT id::text, order_id::text, COALESCE(candidate_id::text, ''), COALESCE(source_analysis_id::text, ''), copy_snapshot::text,
   direction, status, COALESCE(adopted_variant_id::text, ''), COALESCE(adopted_at::text, ''),
-  COALESCE(adopted_by::text, ''), created_at::text, updated_at::text
+  COALESCE(adopted_by::text, ''), created_at::text, updated_at::text, source_kind, COALESCE(copy_library_id::text, '')
 FROM creative_order_item WHERE id = $1
 `, itemID))
 	if err != nil {

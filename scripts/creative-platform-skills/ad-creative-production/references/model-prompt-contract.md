@@ -25,7 +25,7 @@ Replace every placeholder. Send exactly these sections in this order:
 
 ```text
 TASK
-{prime_task_instruction} {canvas_lock} ad image. Redesign the source identity while preserving the approved business mechanism.
+{prime_task_instruction} {canvas_lock} ad image. {source_or_original_creation_instruction}
 
 INPUT ROLES
 {input_roles}
@@ -40,7 +40,7 @@ APPROVED COPY
 Render every approved string and frozen repayment row exactly once: {approved_copy_and_table}
 
 PRIME SUPPORT
-Input 2 is the current-size official Prime visual context. {prime_support_instruction}
+{prime_input_label} is the current-size official Prime visual context. {prime_support_instruction}
 
 ACCEPTANCE
 All approved copy and content groups are present and legible; the requested canvas is preserved; DesignDNA remains recognizable; every
@@ -57,7 +57,9 @@ The canvas locks are:
 
 ## Input roles
 
-Input 1 is always the downloaded candidate source and is used only for business structure, reading order, and permitted visual
+### Material orders
+
+For material orders, Input 1 is the downloaded candidate source and is used only for business structure, reading order, and permitted visual
 anchors. It is never the editable square base for landscape or portrait.
 
 Input 2 is always the current-size, current-revision official Prime visual context. In `deterministic` mode it is a rendered visual
@@ -75,6 +77,17 @@ do not replace that person, product, or object. It must not donate layout, crop,
 Input 4 may be omitted only for an unanchored `family_consistent` direction. This is an identity dependency, never a square-image
 layout dependency.
 
+### Copy library orders
+
+For `source_kind=copy_library`, no candidate source is supplied. Input 1 is current-size official Prime context; subsequent inputs are
+only the declared primary-image identity references. Number input labels by their actual order and use those same labels throughout
+TASK, INPUT ROLES, and PRIME SUPPORT. Do not synthesize a source image or copy competitor-structure instructions into this branch.
+Set the creation instruction to create an original visual identity from the selected copy. APPROVED COPY includes only selected strings
+and repayment rows; explicitly prohibit filling omitted slots. With `visual_only=true`, state that no business copy, claims, numbers,
+repayment table, or CTA may be added. Official Prime content keeps its existing composition contract.
+
+### Bounded visual rework
+
 For bounded visual rework, Input 1 is the failed same-size generated base in `deterministic` mode, or the failed same-size
 model-integrated image in `model_integrated` mode. Input 2 remains current-size Prime context. Keep the same DesignDNA, approved copy,
 and business facts and edit only the failed acceptance targets.
@@ -82,11 +95,13 @@ and business facts and edit only the failed acceptance targets.
 ## Compilation
 
 Compile the prompt from `creative_intent`, `design_dna`, the current `layout_plan`, approved copy, and semantic Input roles. Do not paste
-the JSON or field names into the prompt. For every declared identity anchor, compile one explicit sentence that it remains the same
+the JSON or field names into the prompt. For material orders, set the creation instruction to `Redesign the source identity while
+preserving the approved business mechanism.` For copy-library orders, use the original-creation instruction defined above.
+For every declared identity anchor, compile one explicit sentence that it remains the same
 person, product, or core object in every size and must not be replaced. For `deterministic`, set `{prime_task_instruction}` to `Create one unbranded`, explain that
-Input 2 is context only, keep future component areas clear, and state that no Prime pixel is drawn. For `model_integrated`, set it to
-`Create one model-integrated image using the QR-free full official Prime template from Input 2`, require the visible official text,
-logo, color, and approximate placement to remain faithful to Input 2, prohibit inventing any QR or additional official component, and
+the actual Prime input is context only, keep future component areas clear, and state that no Prime pixel is drawn. For `model_integrated`, set it to
+`Create one model-integrated image using the QR-free full official Prime template from {prime_input_label}`, require the visible official text,
+logo, color, and approximate placement to remain faithful to that Prime input, prohibit inventing any QR or additional official component, and
 keep business content clear of the template areas. The backend will not add a second overlay in this mode. If
 `prime_support.background_polarity=adaptive`, describe sufficient visual separation from Input 2 without inventing a fixed light or
 dark background. If a structured polarity is supplied, express that polarity once.

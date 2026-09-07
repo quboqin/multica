@@ -7,6 +7,8 @@ import { api } from "@multica/core/api";
 import { useWorkspacePresenceMap, type AgentPresenceDetail } from "@multica/core/agents";
 import {
   creativeFeedbackOptions,
+  creativeGalleryEvents,
+  useCreativeGalleryMutation,
   creativeKeys,
   creativeMaterialLibraryOptions,
   creativeOrdersOptions,
@@ -33,6 +35,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@multica/ui/components
 import { Textarea } from "@multica/ui/components/ui/textarea";
 import { cn } from "@multica/ui/lib/utils";
 import { toast } from "sonner";
+import { useT } from "../../i18n";
 import { candidateDecisionFeedbackInput, latestCandidateFeedback } from "../lib/creative-candidate-feedback";
 import { creativeAttachmentBrowserURL } from "../lib/creative-attachment-url";
 import { formatCreativeDateTime } from "../lib/creative-time";
@@ -49,7 +52,6 @@ import {
   type MaterialLibraryFilter,
 } from "../lib/creative-material-state";
 import {
-  creativeGalleryVariantIds,
   creativeVariantActiveExpectedSizes,
   creativeVariantArchiveEntries,
   creativeVariantDeliveryAssets,
@@ -322,9 +324,10 @@ export function CreativeMaterialLibrary({
     () => new Map([...(materialIndex.data?.candidates ?? []), ...displayedCandidates].map((candidate) => [candidate.id, candidate])),
     [displayedCandidates, materialIndex.data?.candidates],
   );
-  const galleryVariantIds = creativeGalleryVariantIds(galleryFeedback.data?.events ?? []);
+  const galleryEvents = creativeGalleryEvents(galleryFeedback.data?.events ?? []);
+  const galleryVariantIds = new Set(galleryEvents.keys());
   const galleryItems = useMemo(
-    () => creativeGalleryItems(orders.data?.orders ?? [], materialIndexById, galleryVariantIds),
+    () => creativeGalleryItems(orders.data?.orders ?? [], materialIndexById, galleryVariantIds).map((item) => ({ ...item, addedAt: galleryEvents.get(item.variant.id)?.created_at ?? item.addedAt })),
     [galleryVariantIds, materialIndexById, orders.data?.orders],
   );
   const galleryAttachmentIds = useMemo(
@@ -540,13 +543,13 @@ function creativeGalleryItems(
       variant,
       candidate,
       deliveryAssets: creativeVariantDeliveryAssets(variant),
-      label: candidate?.title || candidate?.competitor || item.candidate_id.slice(0, 8) || `订单 ${order.id.slice(0, 8)}`,
+      label: candidate?.title || candidate?.competitor || (typeof item.copy_snapshot.library_name === "string" ? item.copy_snapshot.library_name : "") || item.candidate_id.slice(0, 8) || `订单 ${order.id.slice(0, 8)}`,
       addedAt: order.updated_at || order.created_at,
     }));
   })).sort((left, right) => (Date.parse(right.addedAt) || 0) - (Date.parse(left.addedAt) || 0));
 }
 
-function CreativeGallery({
+export function CreativeGallery({
   items,
   attachments,
   loading,
@@ -557,6 +560,12 @@ function CreativeGallery({
   loading: boolean;
   onOpenOrder?: (orderId: string) => void;
 }) {
+  const { t } = useT("creative");
+  const wsId = useWorkspaceId();
+  const galleryMutation = useCreativeGalleryMutation(wsId);
+  const feedback = useQuery(creativeFeedbackOptions(wsId, "variant"));
+  const [previewId, setPreviewId] = useState("");
+  const [previewSize, setPreviewSize] = useState("1080x1080");
   const [query, setQuery] = useState("");
   const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set());
   const [downloadBusy, setDownloadBusy] = useState("");
@@ -575,6 +584,23 @@ function CreativeGallery({
   const selectedItems = visible.filter((item) => selectedIds.has(item.id));
   const downloadableVisible = visible.filter((item) => galleryItemComplete(item, attachments));
   const downloadableSelected = selectedItems.filter((item) => galleryItemComplete(item, attachments));
+  const preview = items.find((item) => item.id === previewId);
+  const previewEntries = preview ? creativeVariantArchiveEntries(preview.variant, attachments, preview.order, preview.item) : [];
+  const previewEntry = previewEntries.find((entry) => entry.asset.size_key === previewSize) ?? previewEntries[0];
+  const remove = async (item: CreativeGalleryItem) => {
+    const event = creativeGalleryEvents(feedback.data?.events ?? []).get(item.variant.id);
+    if (!event) return;
+    const input = { variantId: item.variant.id, itemId: item.item.id, orderId: item.order.id, issueId: item.order.issue_id, variantKey: item.variant.variant_key, revision: item.variant.active_revision || item.variant.revision };
+    try {
+      await galleryMutation.mutateAsync({ ...input, removeEventId: event.id });
+      setPreviewId("");
+      toast.success(t(($) => $.gallery.removed), { action: { label: t(($) => $.gallery.undo), onClick: () => {
+        galleryMutation.mutate(input, { onError: (error) => toast.error(error instanceof Error ? error.message : t(($) => $.gallery.addFailed)) });
+      } } });
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : t(($) => $.gallery.removeFailed));
+    }
+  };
 
   const toggleSelected = (id: string, checked: boolean) => {
     setSelectedIds((current) => {
@@ -621,9 +647,10 @@ function CreativeGallery({
           item={item}
           attachments={attachments}
           selected={selectedIds.has(item.id)}
-          busy={downloadBusy !== ""}
+          busy={downloadBusy !== "" || galleryMutation.isPending}
           onSelect={(checked) => toggleSelected(item.id, checked)}
-          onOpenOrder={() => onOpenOrder?.(item.order.id)}
+          onPreview={() => { setPreviewId(item.id); setPreviewSize("1080x1080"); }}
+          onRemove={() => void remove(item)}
           onDownload={async () => {
             setDownloadBusy(item.id);
             try {
@@ -643,6 +670,25 @@ function CreativeGallery({
         />)}
       </div>
     )}
+    <Dialog open={Boolean(preview)} onOpenChange={(open) => { if (!open) setPreviewId(""); }}>
+      <DialogContent className="flex max-h-[92dvh] w-[96vw] !max-w-6xl flex-col overflow-y-auto">
+        <DialogHeader><DialogTitle>{preview?.label}</DialogTitle><DialogDescription>{preview?.variant.variant_key}</DialogDescription></DialogHeader>
+        {preview && <div className="grid min-w-0 gap-5 md:grid-cols-[minmax(0,1fr)_240px]">
+          <div className="min-w-0">
+            <div className="flex h-[50dvh] min-h-56 items-center justify-center bg-muted/20 md:h-[62dvh]">
+              {previewEntry ? <img src={creativeAttachmentBrowserURL(previewEntry.attachment)} alt={`${preview.label} ${previewEntry.asset.size_key}`} className="h-full w-full object-contain" /> : <ImageIcon className="h-8 w-8 text-muted-foreground" />}
+            </div>
+            <Tabs value={previewEntry?.asset.size_key ?? previewSize} onValueChange={setPreviewSize} className="mt-3"><TabsList className="h-auto flex-wrap">{previewEntries.map((entry) => <TabsTrigger key={entry.asset.id} value={entry.asset.size_key}>{entry.asset.size_key}</TabsTrigger>)}</TabsList></Tabs>
+          </div>
+          <div className="flex min-w-0 flex-col gap-4 text-sm">
+            <dl className="space-y-4 break-words"><div><dt className="text-muted-foreground">{t(($) => $.gallery.source)}</dt><dd>{preview.label}</dd></div><div><dt className="text-muted-foreground">{t(($) => $.gallery.order)}</dt><dd>{preview.order.id.slice(0, 8)}</dd></div><div><dt className="text-muted-foreground">{t(($) => $.gallery.addedAt)}</dt><dd>{formatCreativeDateTime(preview.addedAt)}</dd></div></dl>
+            <Button variant="outline" onClick={() => { setPreviewId(""); onOpenOrder?.(preview.order.id); }}><ExternalLink className="h-4 w-4" />{t(($) => $.gallery.openOrder)}</Button>
+            <Button disabled={downloadBusy !== "" || !galleryItemComplete(preview, attachments)} onClick={() => void downloadMany([preview], preview.id)}><Download className="h-4 w-4" />{t(($) => $.gallery.download)}</Button>
+            <Button variant="outline" disabled={galleryMutation.isPending} onClick={() => void remove(preview)}><X className="h-4 w-4" />{t(($) => $.gallery.remove)}</Button>
+          </div>
+        </div>}
+      </DialogContent>
+    </Dialog>
   </section>;
 }
 
@@ -653,7 +699,8 @@ function GalleryTile({
   busy,
   onSelect,
   onDownload,
-  onOpenOrder,
+  onPreview,
+  onRemove,
 }: {
   item: CreativeGalleryItem;
   attachments: Map<string, DeliveryAttachment>;
@@ -661,9 +708,13 @@ function GalleryTile({
   busy: boolean;
   onSelect: (checked: boolean) => void;
   onDownload: () => void;
-  onOpenOrder: () => void;
+  onPreview: () => void;
+  onRemove: () => void;
 }) {
+  const { t } = useT("creative");
   const entries = creativeVariantArchiveEntries(item.variant, attachments, item.order, item.item);
+  const mainEntry = entries.find((entry) => entry.asset.size_key === "1080x1080") ?? entries[0];
+  const mainURL = creativeAttachmentBrowserURL(mainEntry?.attachment);
   const expectedSizes = creativeVariantActiveExpectedSizes(item.variant);
   const complete = entries.length === expectedSizes.length;
   return <article className="min-w-0 bg-background">
@@ -677,24 +728,17 @@ function GalleryTile({
       </label>
       <Badge variant={complete ? "default" : "outline"}>{complete ? "交付齐备" : `${entries.length}/${expectedSizes.length}`}</Badge>
     </div>
-    <div className={cn("grid gap-px bg-border", expectedSizes.length === 3 ? "grid-cols-3" : "grid-cols-1")}>
-      {expectedSizes.map((size) => {
-        const entry = entries.find((candidate) => candidate.asset.size_key === size);
-        const url = creativeAttachmentBrowserURL(entry?.attachment);
-        return <div key={size} className="min-w-0 bg-muted/30">
-          <div className="relative aspect-square">
-            {url ? <img src={url} alt={`${item.label} ${size}`} loading="lazy" className="h-full w-full object-cover" /> : <div className="flex h-full items-center justify-center text-muted-foreground"><ImageIcon className="h-5 w-5" /></div>}
-          </div>
-          <div className="truncate border-t bg-background px-2 py-1 text-[10px] text-muted-foreground">{size}</div>
-        </div>;
-      })}
-    </div>
+    <button type="button" className="relative block aspect-square w-full bg-muted/20 focus-visible:outline-2 focus-visible:outline-ring" onClick={onPreview} aria-label={t(($) => $.gallery.preview, { label: item.label })}>
+      {mainURL ? <img src={mainURL} alt={`${item.label} ${mainEntry?.asset.size_key}`} loading="lazy" className="h-full w-full object-contain" /> : <span className="flex h-full items-center justify-center"><ImageIcon className="h-6 w-6 text-muted-foreground" /></span>}
+      <Badge variant="secondary" className="absolute bottom-2 right-2">{t(($) => $.gallery.sizes, { count: expectedSizes.length })}</Badge>
+    </button>
     <div className="space-y-1 px-3 py-2 text-xs text-muted-foreground">
-      <p className="truncate">更新时间 {formatCreativeDateTime(item.addedAt)}</p>
+      <p className="truncate">{t(($) => $.gallery.addedAt)} {formatCreativeDateTime(item.addedAt)}</p>
       <p className="truncate">来源 {item.candidate?.competitor || item.candidate?.connector_id || item.item.candidate_id.slice(0, 8)}</p>
     </div>
-    <div className="flex items-center justify-between gap-2 border-t px-3 py-2">
-      <Button size="sm" variant="outline" onClick={onOpenOrder}>查看订单</Button>
+    <div className="flex flex-wrap items-center justify-between gap-2 border-t px-3 py-2">
+      <Button size="sm" variant="outline" onClick={onPreview}>{t(($) => $.gallery.view)}</Button>
+      <Button size="icon-sm" variant="ghost" disabled={busy} onClick={onRemove} title={t(($) => $.gallery.remove)} aria-label={t(($) => $.gallery.remove)}><X className="h-4 w-4" /></Button>
       <Button size="sm" disabled={busy || !complete} onClick={onDownload}><Download className="h-4 w-4" />下载交付包</Button>
     </div>
   </article>;
@@ -961,7 +1005,7 @@ export type ReplacementSourceChoice = {
 
 export type SelectedMaterialReadinessStatus = "ready" | "analyzing" | "failed" | "manual_required" | "unavailable";
 
-const EMPTY_VISUAL_DIRECTION: CreativeVisualDirection = {
+export const EMPTY_VISUAL_DIRECTION: CreativeVisualDirection = {
   schema_version: 1,
   theme: "",
   style_tags: [],
@@ -2735,7 +2779,7 @@ export function frozenCopySnapshot(
         source_kind: "manual",
         status: "ready",
       }] : [],
-      text_replacements: adaptation.textReplacements.filter((replacement) => !numericLayoutBlockIDs.has(replacement.blockId)).map((replacement) => {
+      text_replacements: adaptation.textReplacements.filter((replacement) => !numericLayoutBlockIDs.has(replacement.blockId)).map<NonNullable<CreativeCopySnapshot["pre_adaptation"]>["text_replacements"][number]>((replacement) => {
         const replacementTextValue = replacementText(replacement, draft.textOverrides);
         const source = replacementSource(replacement, draft.replacementSources ?? {});
         const ready = replacementTextValue.trim().length > 0;
@@ -2846,12 +2890,13 @@ export function groupTextReplacementsByLocation(replacements: PreparedTextReplac
   return [...groups.entries()].map(([location, groupedReplacements]) => ({ location, replacements: groupedReplacements }));
 }
 
-function VisualDirectionEditor({ value, onChange }: { value: CreativeVisualDirection; onChange: (value: CreativeVisualDirection) => void }) {
+export function VisualDirectionEditor({ value, onChange }: { value: CreativeVisualDirection; onChange: (value: CreativeVisualDirection) => void }) {
+  const { t } = useT("creative");
   const updateList = (key: "style_tags" | "must_preserve" | "avoid", raw: string) => {
     onChange({ ...value, [key]: raw.split(/[\n,，、]/).map((item) => item.trim()).filter(Boolean) });
   };
   return <section className="border-t px-3 py-3" aria-labelledby="visual-direction-title">
-    <div className="mb-3"><h4 id="visual-direction-title" className="text-sm font-semibold">主题与风格约束</h4><p className="mt-0.5 text-[11px] text-muted-foreground">只描述希望保留的视觉方向；最终提示词由出图智能体根据原图继承和目标尺寸自行组织。</p></div>
+    <div className="mb-3"><h4 id="visual-direction-title" className="text-sm font-semibold">{t(($) => $.copyOrder.direction)} <span className="text-xs font-normal text-muted-foreground">{t(($) => $.copyOrder.optional)}</span></h4></div>
     <div className="grid gap-3 lg:grid-cols-2">
       <div className="min-w-0 space-y-1.5 lg:col-span-2"><Label htmlFor="creative-visual-theme" className="text-xs text-muted-foreground">主题</Label><Input id="creative-visual-theme" value={value.theme} onChange={(event) => onChange({ ...value, theme: event.target.value })} placeholder="例如：灵活融资、轻量可信、适合移动端阅读" /></div>
       <div className="min-w-0 space-y-1.5"><Label htmlFor="creative-visual-style-tags" className="text-xs text-muted-foreground">风格标签</Label><Input id="creative-visual-style-tags" value={value.style_tags.join("、")} onChange={(event) => updateList("style_tags", event.target.value)} placeholder="例如：红黑高对比、信息型、现代" /></div>

@@ -327,7 +327,7 @@ export function newMaterialsFromCrawlRun(candidates: CreativeMaterialCandidate[]
   return candidates.filter((candidate) => candidate.is_new_in_run);
 }
 
-export function crawlRunImportBadgeLabel(run: CreativeMaterialCrawlRun, t?: ReturnType<typeof useT>["t"]): string {
+export function crawlRunImportBadgeLabel(run: CreativeMaterialCrawlRun, t?: ReturnType<typeof useT<"creative">>["t"]): string {
   const importedCount = Math.max(run.imported_count ?? 0, 0);
   if (importedCount > 0) return t ? t(($) => $.collection.imported, { count: importedCount }) : `Imported ${importedCount} materials this run`;
   return crawlRunNeedsRefresh(run) ? t ? t(($) => $.collection.searchingNew) : "Looking for new materials" : t ? t(($) => $.collection.noNew) : "No new materials this run";
@@ -479,7 +479,7 @@ function AuthenticatedMaterialImage({ source, alt }: { source: string; alt: stri
   return <div className="flex h-full items-center justify-center"><LoaderCircle className="h-5 w-5 animate-spin text-muted-foreground" /></div>;
 }
 
-function crawlRunDiagnosis(run: CreativeMaterialCrawlRun, t?: ReturnType<typeof useT>["t"]): { label: string; tone: "neutral" | "error" } | null {
+function crawlRunDiagnosis(run: CreativeMaterialCrawlRun, t?: ReturnType<typeof useT<"creative">>["t"]): { label: string; tone: "neutral" | "error" } | null {
   const diagnosis = run.diagnostics?.diagnosis;
   if (!diagnosis?.summary) return null;
   const sourceTotal = typeof diagnosis.matched_total === "number" ? ` · ${t ? t(($) => $.collection.diagnosisMatched, { count: diagnosis.matched_total }) : `AppGrowing query matched ${diagnosis.matched_total}`}` : "";
@@ -496,7 +496,7 @@ function crawlRunDiagnosis(run: CreativeMaterialCrawlRun, t?: ReturnType<typeof 
   return counts ? { label: t ? t(($) => $.collection.diagnosis, { summary: diagnosis.summary, counts }) : `Collection diagnosis: ${diagnosis.summary}${counts}`, tone: "neutral" } : null;
 }
 
-function crawlRunStatusLabel(status: string, t?: ReturnType<typeof useT>["t"]) {
+function crawlRunStatusLabel(status: string, t?: ReturnType<typeof useT<"creative">>["t"]) {
   switch (status) {
     case "running": return t ? t(($) => $.collection.status.running) : "Collecting";
     case "completed": return t ? t(($) => $.collection.status.completed) : "Collection complete";

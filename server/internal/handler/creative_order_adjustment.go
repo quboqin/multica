@@ -204,7 +204,7 @@ FOR UPDATE
 	var expectedSizes []string
 	var currentRevision int
 	err = tx.QueryRow(r.Context(), `
-SELECT item.id::text, item.candidate_id::text, variant.id::text, variant.revision,
+SELECT item.id::text, COALESCE(item.candidate_id::text, ''), variant.id::text, variant.revision,
 	  COALESCE(asset.attachment_id::text, ''),
 	  COALESCE(source_asset.id::text, ''), COALESCE(source_asset.attachment_id::text, ''),
 	  source_revision.expected_sizes

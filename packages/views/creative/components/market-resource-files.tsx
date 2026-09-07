@@ -99,7 +99,7 @@ export function MarketResourceFiles({ resource, value }: { resource: CreativeRes
   </section>;
 }
 
-function TemplateSlot({ t, sizeLabel, slot, file, busy, onPreview, onUpload, onRemove }: { t: ReturnType<typeof useT>["t"]; sizeLabel: string; slot: { filename: string }; file?: CreativeResourceFile; busy: boolean; onPreview: () => void; onUpload: () => void; onRemove: () => void }) {
+function TemplateSlot({ t, sizeLabel, slot, file, busy, onPreview, onUpload, onRemove }: { t: ReturnType<typeof useT<"creative">>["t"]; sizeLabel: string; slot: { filename: string }; file?: CreativeResourceFile; busy: boolean; onPreview: () => void; onUpload: () => void; onRemove: () => void }) {
   const source = file ? resourceFileBrowserURL(file) : "";
   return <div className="grid grid-cols-[42px_minmax(0,1fr)_auto] items-center gap-2 px-3 py-2.5">
     <button type="button" disabled={!file} onClick={onPreview} className={cn("flex size-10 items-center justify-center overflow-hidden border disabled:cursor-default", imagePreviewBackground(file))} aria-label={file ? t(($) => $.resourceFiles.preview, { name: sizeLabel }) : t(($) => $.resourceFiles.notUploaded, { name: sizeLabel })}>{file && source ? <img src={source} alt="" className="h-full w-full object-contain" /> : <ImageIcon className="h-4 w-4 text-muted-foreground" />}</button>
@@ -108,7 +108,7 @@ function TemplateSlot({ t, sizeLabel, slot, file, busy, onPreview, onUpload, onR
   </div>;
 }
 
-function ResourceFileRow({ t, file, onPreview, onEdit, onRemove }: { t: ReturnType<typeof useT>["t"]; file: CreativeResourceFile; onPreview: () => void; onEdit: () => void; onRemove: () => void }) {
+function ResourceFileRow({ t, file, onPreview, onEdit, onRemove }: { t: ReturnType<typeof useT<"creative">>["t"]; file: CreativeResourceFile; onPreview: () => void; onEdit: () => void; onRemove: () => void }) {
   const source = resourceFileBrowserURL(file); const image = file.content_type.startsWith("image/"); const description = textMetadata(file.metadata, "description"); const dimensions = textMetadata(file.metadata, "dimensions");
   return <div className="grid gap-3 border-b px-3 py-3 last:border-b-0 sm:grid-cols-[72px_minmax(0,1fr)_auto] sm:items-center"><button type="button" onClick={onPreview} className="flex aspect-square w-[72px] items-center justify-center overflow-hidden border bg-muted/30" title={t(($) => $.resourceFiles.previewResource)}>{image && source ? <img src={source} alt={file.label || file.filename} className="h-full w-full object-contain" /> : <FileText className="h-5 w-5 text-muted-foreground" />}</button><div className="min-w-0"><div className="flex min-w-0 flex-wrap items-center gap-2"><p className="truncate text-sm font-medium">{file.label || file.filename}</p><Badge variant="outline" className="text-[10px]">{purposeLabel(t, file.role)}</Badge>{dimensions && <Badge variant="secondary" className="text-[10px]">{dimensions}</Badge>}</div><p className="mt-1 truncate text-xs text-muted-foreground">{description || file.filename}</p></div><div className="flex items-center justify-end gap-1"><Button size="icon-sm" variant="ghost" title={t(($) => $.resourceFiles.previewFile)} onClick={onPreview}><Eye className="h-4 w-4" /></Button>{source && <a href={source} download={file.filename} title={t(($) => $.resourceFiles.downloadFile)} className={buttonVariants({ size: "icon-sm", variant: "ghost" })}><Download className="h-4 w-4" /></a>}<Button size="icon-sm" variant="ghost" title={t(($) => $.resourceFiles.editFile)} onClick={onEdit}><Pencil className="h-4 w-4" /></Button><Button size="icon-sm" variant="ghost" title={t(($) => $.resourceFiles.removeFile)} onClick={onRemove}><Trash2 className="h-4 w-4" /></Button></div></div>;
 }
@@ -136,7 +136,7 @@ export function imagePreviewBackground(file?: CreativeResourceFile | null): stri
   return file && (file.role.startsWith("prime_dark_") || textMetadata(file.metadata, "family") === "dark_background") ? "bg-black" : "bg-white";
 }
 
-export function purposeLabel(t: ReturnType<typeof useT>["t"], role: string): string {
+export function purposeLabel(t: ReturnType<typeof useT<"creative">>["t"], role: string): string {
   if (role === "app_ui_reference") return t(($) => $.resourceFiles.appUiReference);
   if (role === "brand_asset") return t(($) => $.resourceFiles.brandAsset);
   if (role === "brand_guideline") return t(($) => $.resourceFiles.brandGuideline);
@@ -144,17 +144,17 @@ export function purposeLabel(t: ReturnType<typeof useT>["t"], role: string): str
   return t(($) => $.resourceFiles.otherMaterial);
 }
 
-function primeTemplateSizeLabel(t: ReturnType<typeof useT>["t"], size: string): string {
+function primeTemplateSizeLabel(t: ReturnType<typeof useT<"creative">>["t"], size: string): string {
   if (size === "1080x1080") return t(($) => $.comparison.square);
   if (size === "1200x628") return t(($) => $.comparison.landscape);
   if (size === "800x1000") return t(($) => $.comparison.portrait);
   return size;
 }
 
-function primeTemplateFamilyLabel(t: ReturnType<typeof useT>["t"], familyId: string): string {
+function primeTemplateFamilyLabel(t: ReturnType<typeof useT<"creative">>["t"], familyId: string): string {
   return familyId === "dark_background" ? t(($) => $.resourceFiles.family.darkTitle) : t(($) => $.resourceFiles.family.lightTitle);
 }
 
-function primeTemplateFamilyDescription(t: ReturnType<typeof useT>["t"], familyId: string): string {
+function primeTemplateFamilyDescription(t: ReturnType<typeof useT<"creative">>["t"], familyId: string): string {
   return familyId === "dark_background" ? t(($) => $.resourceFiles.family.darkDescription) : t(($) => $.resourceFiles.family.lightDescription);
 }

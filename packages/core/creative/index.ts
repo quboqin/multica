@@ -12,6 +12,7 @@ export {
   creativeResourceFilesOptions,
   creativeResourcesOptions,
 } from "./queries";
+export { creativeGalleryEvents, creativeGalleryVariantIds, useCreativeGalleryMutation } from "./gallery";
 export {
   useAdoptCreativeOrderVariant,
   useCancelCreativeOrder,

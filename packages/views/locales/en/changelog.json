@@ -3,6 +3,16 @@
   "subtitle": "Release notes maintained inside this Multica platform.",
   "current_version": "Current platform version: {{version}}",
   "releases": {
+    "v0_3_49": {
+      "version": "0.3.49",
+      "date": "2026-09-07",
+      "title": "Copy-led creative production and gallery management",
+      "summary": "Create images from published copy, manage gallery packages with full previews, and configure GPT-6 Astra agents.",
+      "change_1": "Create creative orders from approved library copy. Headlines, benefits, supporting text, calls to action, and repayment plans are optional; selecting none starts visual-only exploration.",
+      "change_2": "Gallery packages have large previews and size switching. Removing a package preserves images and feedback, supports undo, and updates the order's add-to-gallery action.",
+      "change_3": "Codex agents can select GPT-6 Astra and the reasoning levels reported by their runtime, including Ultra when supported.",
+      "change_4": "Creative Factory initialization and bootstrap include the copy-library source contract across planning, production, and QC while retaining candidate selection and cross-size identity consistency."
+    },
     "v0_3_48": {
       "version": "0.3.48",
       "date": "2026-09-02",

@@ -677,10 +677,10 @@ export interface CreativeOrderQCRetryResponse {
 }
 
 export interface CreativeOrderListResponse { orders: CreativeOrder[]; }
-export interface CreateCreativeOrderRequest { issue_id: string; submission_key?: string; status: string; input_snapshot: Record<string, unknown>; trigger_evidence_kind: string; trigger_evidence_ref_id: string; items: { candidate_id: string; source_analysis_id: string; copy_snapshot: Record<string, unknown>; direction: string }[]; }
+export interface CreateCreativeOrderRequest { issue_id: string; submission_key?: string; status: string; input_snapshot: Record<string, unknown>; trigger_evidence_kind: string; trigger_evidence_ref_id: string; items: { source_kind?: "material" | "copy_library"; copy_library_id?: string; candidate_id: string; source_analysis_id: string; copy_snapshot: Record<string, unknown>; direction: string }[]; }
 export interface CreativeSourceAnalysis { id: string; candidate_id: string; analysis_version: number; status: string; summary: string; result: Record<string, unknown>; error_code: string; error_message: string; trigger_evidence_kind: string; trigger_evidence_ref_id: string; created_at: string; completed_at: string; }
 export interface CreativeSourceAnalysisListResponse { analyses: CreativeSourceAnalysis[]; }
-export interface CreativeOrderItem { id: string; order_id: string; candidate_id: string; source_analysis_id: string; copy_snapshot: Record<string, unknown>; direction: string; status: string; adopted_variant_id: string; adopted_at: string; adopted_by: string; created_at: string; updated_at: string; variants: CreativeOrderVariant[]; }
+export interface CreativeOrderItem { id: string; order_id: string; source_kind?: string; copy_library_id?: string; candidate_id: string; source_analysis_id: string; copy_snapshot: Record<string, unknown>; direction: string; status: string; adopted_variant_id: string; adopted_at: string; adopted_by: string; created_at: string; updated_at: string; variants: CreativeOrderVariant[]; }
 export interface AdoptCreativeOrderVariantRequest {
   variant_id: string;
   qc_risk_acknowledged?: boolean;

@@ -36,6 +36,11 @@ candidate 只做主尺寸，selected 复用已合格主尺寸并补缺失尺寸�
 
 ## 冻结输入
 
+- `item.source_kind=copy_library`：没有竞品原图，不下载或补造 source-reference；以下竞品来源与结构继承规则仅适用于 material。
+  只渲染冻结的已选顶层文字和 `repayment_plan_entries`，空文案槽和未选还款模块保持不存在；`visual_only=true` 时只制作原创视觉。
+  首轮模型输入只有当前尺寸 Prime context，后续按身份锚点增加已选主视觉参考；按真实顺序命名输入，不保留虚假的 Input 1/source 指纹。
+  `image-operation-put.input_snapshot.input_roles` 只记录实际输入，保留 Prime 指纹；其余 operation、回执、归一化与贴片规则相同。
+  运行 `validate_copy_snapshot.py` 时用 `--order-item-id` 和 `--variant-id`，不传空的 `--candidate-id`。
 - `copy_snapshot` 是文案、金融事实、还款计划和用户视觉方向的唯一真值。顶层非空文案字段（`headline`、`subheadline`、`benefit`、`supporting`、`cta`、`legal_text`）逐字优先于
   `pre_adaptation.text_replacements`；后者只提供区块映射和版式，不得覆盖顶层非空字段。`pre_adaptation` 不提供最终模型提示词。
 - `item.direction` 是由 `copy_snapshot.visual_direction` 派生的可追踪摘要，仅用于合同校验；不要把它当成可直接发送给模型的长提示词。
@@ -47,7 +52,7 @@ candidate 只做主尺寸，selected 复用已合格主尺寸并补缺失尺寸�
   `selected=true`，必须使用其中的 `attachment_id` 下载所选 AdaKami App UI 参考图，并把它作为 Image Edit
   的额外输入；若 required=true 但没有 selected/attachment_id，当前 Variant 必须写 `action_required`。
 
-参考图的权威入口是任务上下文中的 `candidate_id`。订单响应没有展开 `reference_assets` 时，使用
+material 来源参考图的权威入口是任务上下文中的 `candidate_id`。订单响应没有展开 `reference_assets` 时，使用
 订单的 `input_snapshot.attachment_snapshot.candidate_sources` 是候选原图的唯一运行时来源：取 `candidate_id` 等于当前
 Order Item candidate 的 `attachment_id`，再执行
 `mkdir -p <source-dir> && multica attachment download <attachment-id> -o <source-dir>`。该 ID 在建单时已验证归属、发布版本和

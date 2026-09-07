@@ -35,7 +35,7 @@ PRIME_GUARD_TERMS = {
 SEMANTIC_PRIME_GUARD_TERMS = {
     "unbranded_base": ("unbranded base", "unbranded visual base", "unbranded"),
     "prime_overlay": ("deterministic official prime composition", "official overlay", "official prime overlay", "official prime"),
-    "prime_guide": ("input 2 is the current-size official prime visual context",),
+    "prime_guide": ("input 2 is the current-size official prime visual context", "input 1 is the current-size official prime visual context"),
     "guide_no_draw": (
         "never draw prime",
         "do not copy any prime",
@@ -56,7 +56,7 @@ SEMANTIC_PRIME_GUARD_TERMS = {
 }
 SEMANTIC_MODEL_INTEGRATED_PRIME_GUARD_TERMS = {
     "integrated_template": ("model-integrated", "model integrated"),
-    "prime_guide": ("input 2 is the current-size official prime visual context",),
+    "prime_guide": ("input 2 is the current-size official prime visual context", "input 1 is the current-size official prime visual context"),
     "qr_free_template": ("qr-free full official prime template", "qr free full official prime template"),
     "template_fidelity": ("visible official text", "official text, logo, color", "official text and logo"),
     "no_invented_official_component": ("do not invent any qr", "do not add official component", "no additional official component"),
@@ -515,7 +515,7 @@ def uses_coordinate_free_prime_contract(prompt: str) -> bool:
         "input roles" in normalized
         and "locked design dna" in normalized
         and "prime support" in normalized
-        and "input 2 is the current-size official prime visual context" in normalized
+        and text_has_any(normalized, SEMANTIC_PRIME_GUARD_TERMS["prime_guide"])
     )
 
 
@@ -524,7 +524,7 @@ def uses_model_integrated_prime_contract(prompt: str) -> bool:
     return (
         "model-integrated" in normalized
         and "qr-free full official prime template" in normalized
-        and "input 2 is the current-size official prime visual context" in normalized
+        and text_has_any(normalized, SEMANTIC_MODEL_INTEGRATED_PRIME_GUARD_TERMS["prime_guide"])
     )
 
 
@@ -558,7 +558,10 @@ def validate_model_integrated_prime_prompt_guard(prompt: str, layouts: list[dict
     return missing
 
 
-def validate_redesign_prompt_guard(prompt: str) -> list[str]:
+def validate_redesign_prompt_guard(prompt: str, source_kind: str = "material") -> list[str]:
+    if source_kind == "copy_library":
+        return [key for key, terms in SEMANTIC_REDESIGN_GUARD_TERMS.items()
+                if key != "reference_structure_only" and not text_has_any(prompt, terms)]
     if uses_model_integrated_prime_contract(prompt):
         return [key for key, terms in SEMANTIC_REDESIGN_GUARD_TERMS.items() if not text_has_any(prompt, terms)]
     if uses_coordinate_free_prime_contract(prompt):
@@ -834,6 +837,8 @@ def find_item(payload: dict[str, Any], candidate_id: str, order_item_id: str = "
             return item
         target = f"order item {order_item_id}" if order_item_id else f"variant {variant_id}"
         raise ValueError(f"{target} has no selected copy snapshot")
+    if not candidate_id:
+        raise ValueError("--order-item-id or --variant-id is required without --candidate-id")
     for item in payload.get("items", []):
         if isinstance(item, dict) and str(item.get("candidate_id")) == candidate_id:
             return item
@@ -870,7 +875,7 @@ def approved_text(snapshot: dict[str, Any]) -> str:
             if isinstance(calculation, dict):
                 values.append(calculation.get("result"))
                 values.extend(calculation.get("inputs") or [])
-    for selection in adaptation.get("repayment_plan_selections") or []:
+    for selection in snapshot.get("repayment_plan_selections") or adaptation.get("repayment_plan_selections") or []:
         if isinstance(selection, dict):
             values.extend(selection.get(key) for key in ("principal", "tenor_months"))
             selection_values = selection.get("values")
@@ -905,7 +910,7 @@ def validate_snapshot(snapshot: dict[str, Any], candidate_id: str) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--materials-json", required=True)
-    parser.add_argument("--candidate-id", required=True)
+    parser.add_argument("--candidate-id", default="")
     parser.add_argument("--order-item-id", default="")
     parser.add_argument("--variant-id", default="")
     parser.add_argument("--prompt-file", action="append", default=[])
@@ -944,7 +949,7 @@ def main() -> int:
         observed = visible_prompt_financial_tokens(prompt)
         unapproved = sorted(observed - approved)
         missing_prime_guard = validate_prime_prompt_guard(prompt, layouts) if args.require_prime_guard else []
-        missing_redesign_guard = validate_redesign_prompt_guard(prompt) if args.require_redesign_guard else []
+        missing_redesign_guard = validate_redesign_prompt_guard(prompt, str(item.get("source_kind") or "material")) if args.require_redesign_guard else []
         missing_identity_guard = validate_identity_prompt_guard(prompt) if args.require_identity_guard else []
         prompt_debt = validate_concise_prompt(prompt) if args.require_concise_prompt else []
         repair_guidance = build_repair_guidance(

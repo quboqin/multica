@@ -14,6 +14,7 @@ from validate_copy_snapshot import (
     validate_identity_prompt_guard,
     validate_prime_prompt_guard,
     validate_snapshot,
+    validate_redesign_prompt_guard,
 )
 
 
@@ -529,6 +530,21 @@ def test_compiled_visual_prompt_contract_passes_semantic_guards() -> None:
     assert validate_prime_prompt_guard(prompt, [prime_layout()]) == []
     assert validate_identity_prompt_guard(prompt) == []
     assert validate_concise_prompt(prompt) == []
+
+
+def test_copy_library_prompt_uses_prime_as_first_input() -> None:
+    prompt = compiled_visual_prompt().replace("Input 1 is used only for business structure and reading order. ", "").replace("Input 2", "Input 1")
+    assert validate_prime_prompt_guard(prompt, [prime_layout()]) == []
+    assert validate_redesign_prompt_guard(prompt, "copy_library") == []
+    assert validate_concise_prompt(prompt) == []
+    assert "reference_structure_only" in validate_redesign_prompt_guard(prompt)
+
+
+def test_copy_library_item_requires_exact_scope_without_candidate() -> None:
+    item = {"id": "copy-item", "source_kind": "copy_library", "candidate_id": "", "copy_snapshot": {}}
+    assert find_item({"items": [item]}, "", "copy-item") == item
+    with pytest.raises(ValueError, match="order-item-id"):
+        find_item({"items": [item]}, "")
 
 
 def test_identity_guard_requires_a_stable_subject_across_sizes() -> None:

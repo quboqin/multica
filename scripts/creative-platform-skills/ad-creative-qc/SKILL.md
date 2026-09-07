@@ -6,6 +6,10 @@ allowed-tools: Bash(multica *), Bash(python *)
 
 # 广告成图终检
 
+`copy_snapshot.source_kind=copy_library` 时，文案与金融事实验收只覆盖冻结的非空文字和已选 `repayment_plan_entries`。
+空主标题、核心利益点、CTA 或还款计划不是缺失错误；纯视觉探索按 `visual_only=true` 验收原创视觉和 Prime。
+对任何自行补写的业务声明、数字、利率、还款模块或空槽文字记录真实问题。不得要求竞品图或 source analysis，也不得从最新文案库补文案。
+
 先按 task context `workflow` 选择唯一分支：`creative_candidate_selection` 或 `creative_qc_visual`。不得在一次 task 中混跑。
 技术质检已下线，新流程只接受上述两个 workflow，不创建、不等待、不处理 technical lane；其他 workflow 直接按无效任务失败。
 

@@ -12,7 +12,7 @@ allowed-tools: Bash(multica *)
 multica creative order get <order-id> --output json
 ```
 
-订单只保存 `source_analysis_id` 而未内嵌结果时，允许按 candidate 回读一次：
+当 item `source_kind=material`，且订单只保存 `source_analysis_id` 而未内嵌结果时，允许按 candidate 回读一次：
 
 ```text
 multica creative source-analysis list --candidate-id <candidate-id> --output json
@@ -27,6 +27,12 @@ multica creative source-analysis list --candidate-id <candidate-id> --output jso
 
 ## 输入真值
 
+- item `source_kind=copy_library` 时直接规划原创画面，`candidate_id` 和 `source_analysis_id` 为空是正常状态，不读取或补造竞品分析。
+  `copy_snapshot.slots`、`fragments`、顶层文字、`repayment_plan_entries` 和 `repayment_plan_labels` 是完整的已选内容；
+  所有文案槽和还款计划均可为空，空槽禁止补写。`visual_only=true` 时只规划视觉，不增加业务卖点、数字、利率、还款表或 CTA。
+  图片分类 `creative_type` 仅控制分类，不要求存在数字或还款模块。Prime 保持官方合同。
+  从实际输入生成 `creative_intent.input_roles`：没有 source reference，Prime 是第一张视觉输入；后续尺寸仅按身份合同增加主视觉参考。
+  `approved_copy` 保留空槽，LayoutPlan 的内容组和验收项只覆盖实际选择的文字及还款行。
 - `copy_snapshot`：页面预适配后冻结的唯一可见文案、还款计划和用户视觉方向。`pre_adaptation.text_replacements` 是每个普通
   画面文字区块的权威替换表；`pre_adaptation.numeric_layouts`、`repayment_plan_entries`、
   `repayment_plan_selections.values` 和 `text_replacements[].calculation.result` 都是数值区域的权威版式与数值。

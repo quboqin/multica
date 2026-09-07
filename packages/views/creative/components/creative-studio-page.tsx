@@ -24,6 +24,8 @@ import { api } from "@multica/core/api";
 import {
   creativeFeedbackDashboardOptions,
   creativeFeedbackOptions,
+  creativeGalleryEvents,
+  useCreativeGalleryMutation,
   creativeKeys,
   creativeOrderOptions,
   creativeOrdersOptions,
@@ -309,7 +311,7 @@ function CreativeStudioContent() {
         </TabsContent>
         <TabsContent value="orders" className="min-h-0 min-w-0 flex-1 overflow-y-auto p-5"><CreativeOrdersWorkspace selectedOrderId={selectedOrderId} onSelectOrder={openOrder} onBack={closeOrder} backLabel={returnIssueId ? t(($) => $.studio.returnToIssue) : t(($) => $.studio.returnToOrders)} /></TabsContent>
         <TabsContent value="resources" className="min-h-0 min-w-0 flex-1 overflow-hidden p-5">
-          <CreativeResourcesWorkspace initialSection={resourceSection} resources={allResources} onCreate={setCreateKind} onArchive={(id) => archiveResource.mutate(id)} />
+          <CreativeResourcesWorkspace initialSection={resourceSection} resources={allResources} onCreate={setCreateKind} onArchive={(id) => archiveResource.mutate(id)} onOrderCreated={openOrder} />
         </TabsContent>
         <TabsContent value="feedback" className="min-h-0 min-w-0 flex-1 overflow-y-auto p-5">
           <CreativeFeedbackDashboard />
@@ -364,14 +366,14 @@ type CreativeOrderListState = {
   badgeVariant: "default" | "secondary" | "outline";
 };
 
-function creativeOrderListState(stage: CreativeOrderStage, t: ReturnType<typeof useT>["t"]): CreativeOrderListState {
+function creativeOrderListState(stage: CreativeOrderStage, t: ReturnType<typeof useT<"creative">>["t"]): CreativeOrderListState {
   if (stage.key === "cancelled") return { label: t(($) => $.studio.orderStatus.ended), action: t(($) => $.studio.orderAction.record), badgeVariant: "outline" };
   if (stage.key === "delivered") return { label: t(($) => $.studio.orderStatus.adopted), action: t(($) => $.studio.orderAction.delivery), badgeVariant: "default" };
   if (stage.key === "generating" || stage.key === "preparing") return { label: t(($) => $.studio.orderStatus.generating), action: t(($) => $.studio.orderAction.progress), badgeVariant: "outline" };
   return { label: t(($) => $.studio.orderStatus.review), action: t(($) => $.studio.orderAction.review), badgeVariant: "default" };
 }
 
-function creativeOrderListSummary(order: CreativeOrder, t: ReturnType<typeof useT>["t"]): string {
+function creativeOrderListSummary(order: CreativeOrder, t: ReturnType<typeof useT<"creative">>["t"]): string {
   const progress = creativeOrderGenerationProgress(order);
   return t(($) => $.studio.orderList.metadata, {
     items: order.items.length,
@@ -409,7 +411,7 @@ type CreativeOrderSourceSummary = {
   url: string;
 };
 
-function creativeOrderSourceSummaries(order: CreativeOrder, candidatesById: Map<string, CreativeMaterialCandidate>, t: ReturnType<typeof useT>["t"]): CreativeOrderSourceSummary[] {
+function creativeOrderSourceSummaries(order: CreativeOrder, candidatesById: Map<string, CreativeMaterialCandidate>, t: ReturnType<typeof useT<"creative">>["t"]): CreativeOrderSourceSummary[] {
   return order.items.map((item, index) => {
     const candidate = candidatesById.get(item.candidate_id);
     return {
@@ -420,11 +422,12 @@ function creativeOrderSourceSummaries(order: CreativeOrder, candidatesById: Map<
   });
 }
 
-function creativeOrderSourceLabel(candidate: CreativeMaterialCandidate | undefined, item: CreativeOrderItem, index: number, t: ReturnType<typeof useT>["t"]): string {
+function creativeOrderSourceLabel(candidate: CreativeMaterialCandidate | undefined, item: CreativeOrderItem, index: number, t: ReturnType<typeof useT<"creative">>["t"]): string {
+  if (item.source_kind === "copy_library") return `${t(($) => $.copyOrder.title)} · ${typeof item.copy_snapshot.library_name === "string" ? item.copy_snapshot.library_name : ""}`;
   return candidate?.title || candidate?.competitor || item.candidate_id?.slice(0, 8) || t(($) => $.studio.sourceMaterialNumber, { index: index + 1 });
 }
 
-function creativeOrderSourceTitle(sources: CreativeOrderSourceSummary[], order: CreativeOrder, t: ReturnType<typeof useT>["t"]): string {
+function creativeOrderSourceTitle(sources: CreativeOrderSourceSummary[], order: CreativeOrder, t: ReturnType<typeof useT<"creative">>["t"]): string {
   if (sources.length === 0) return t(($) => $.studio.orderNumber, { id: order.id.slice(0, 8) });
   const labels = [...new Set(sources.map((source) => source.label).filter(Boolean))];
   const visible = labels.slice(0, 3).join(" / ");
@@ -456,6 +459,7 @@ function CreativeOrderDetail({ orderId, onBack, onBrowseOrders, backLabel }: { o
   });
   const feedback = useQuery(creativeFeedbackOptions(wsId, "asset"));
   const variantFeedback = useQuery(creativeFeedbackOptions(wsId, "variant"));
+  const galleryMutation = useCreativeGalleryMutation(wsId);
   const library = useQuery(creativeMaterialLibraryOptions(wsId));
   const cancelOrder = useCancelCreativeOrder(wsId, orderId);
   const deleteOrder = useDeleteCreativeOrder(wsId, orderId);
@@ -531,30 +535,26 @@ function CreativeOrderDetail({ orderId, onBack, onBrowseOrders, backLabel }: { o
   const addVariantToGallery = async (item: CreativeOrderItem, variant: CreativeOrderVariant) => {
     setAddingToGalleryVariantId(variant.id);
     try {
-      await api.createCreativeFeedback({
-        idempotency_key: `gallery:${variant.id}`,
-        issue_id: data?.issue_id ?? "",
-        subject_type: "variant",
-        subject_id: variant.id,
-        event_type: "decision",
-        decision: "accepted",
-        context_snapshot: {
-          action: "add_to_gallery",
-          order_id: orderId,
-          item_id: item.id,
-          variant_key: variant.variant_key,
-          revision: variant.active_revision || variant.revision,
-        },
-      });
+      await galleryMutation.mutateAsync({ variantId: variant.id, issueId: data?.issue_id ?? "", orderId, itemId: item.id, variantKey: variant.variant_key, revision: variant.active_revision || variant.revision });
       const selectedAsset = reviewAssets.find((asset) => asset.variant_id === variant.id && asset.size_key === "1080x1080")
         ?? reviewAssets.find((asset) => asset.variant_id === variant.id);
       if (selectedAsset) setActiveAssetId(selectedAsset.id);
-      await queryClient.invalidateQueries({ queryKey: creativeKeys.feedback(wsId, "variant", "") });
-      toast.success("已添加到成图库");
+      toast.success(t(($) => $.gallery.added));
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "添加到成图库失败");
     } finally {
       setAddingToGalleryVariantId("");
+    }
+  };
+
+  const removeVariantFromGallery = async (item: CreativeOrderItem, variant: CreativeOrderVariant) => {
+    const event = creativeGalleryEvents(variantFeedback.data?.events ?? []).get(variant.id);
+    if (!event) return;
+    try {
+      await galleryMutation.mutateAsync({ variantId: variant.id, issueId: data?.issue_id ?? "", orderId, itemId: item.id, variantKey: variant.variant_key, revision: variant.active_revision || variant.revision, removeEventId: event.id });
+      toast.success(t(($) => $.gallery.removed), { action: { label: t(($) => $.gallery.undo), onClick: () => void addVariantToGallery(item, variant) } });
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : t(($) => $.gallery.removeFailed));
     }
   };
 
@@ -728,9 +728,11 @@ function CreativeOrderDetail({ orderId, onBack, onBrowseOrders, backLabel }: { o
           orderId={orderId}
           item={item}
           order={data}
-          source={{ label: itemSource?.title || itemSource?.competitor || t(($) => $.studio.originalMaterial), url: resolvePublicFileUrl(itemSource?.archived_url || itemSource?.preview_url) ?? "" }}
+          source={{ label: item.source_kind === "copy_library" ? creativeOrderSourceLabel(undefined, item, index, t) : itemSource?.title || itemSource?.competitor || t(($) => $.studio.originalMaterial), url: resolvePublicFileUrl(itemSource?.archived_url || itemSource?.preview_url) ?? "" }}
           attachments={byId}
           galleryVariantIds={galleryVariantIds}
+          removingFromGalleryVariantId={galleryMutation.isPending && galleryMutation.variables?.removeEventId ? galleryMutation.variables.variantId : ""}
+          onRemoveFromGallery={(variantId) => { const variant = item.variants.find((entry) => entry.id === variantId); if (variant) void removeVariantFromGallery(item, variant); }}
           addingToGalleryVariantId={addingToGalleryVariantId}
           disabled={isCancelled}
           defaultOpen={index === 0}
@@ -887,7 +889,7 @@ function CreativeAdjustmentStatus({ event, variant, issueId, onRetry, retrying =
   const sizeKey = typeof event.context_snapshot.size_key === "string" ? event.context_snapshot.size_key : "";
   const scope = event.context_snapshot.scope === "variant" ? "variant" : "size";
   const expectedCount = Array.isArray(event.context_snapshot.expected_sizes) ? event.context_snapshot.expected_sizes.length : 0;
-  const scopeLabel = scope === "variant" ? t(($) => $.studio.adjustmentScopeVariant, { count: expectedCount > 0 ? ` (${expectedCount})` : "" }) : sizeKey;
+  const scopeLabel = scope === "variant" ? t(($) => $.studio.adjustmentScopeVariant, { sizes: expectedCount > 0 ? ` (${expectedCount})` : "" }) : sizeKey;
   const adjustmentIssueId = typeof event.context_snapshot.adjustment_issue_id === "string" ? event.context_snapshot.adjustment_issue_id : "";
   const collaborationIssueId = adjustmentIssueId || issueId;
   const canRetry = creativeAdjustmentCanRetry(variant, event);
@@ -968,7 +970,7 @@ function creativeOrderRuntimeStats(order: CreativeOrder): { runningVariants: num
   };
 }
 
-function creativeOrderStatusTitle(stage: CreativeOrderStage, stats: ReturnType<typeof creativeOrderRuntimeStats>, hasFailures: boolean, t: ReturnType<typeof useT>["t"]): string {
+function creativeOrderStatusTitle(stage: CreativeOrderStage, stats: ReturnType<typeof creativeOrderRuntimeStats>, hasFailures: boolean, t: ReturnType<typeof useT<"creative">>["t"]): string {
   if (stage.key === "delivered") return t(($) => $.studio.statusTitle.delivered);
   if (stage.key === "cancelled") return t(($) => $.studio.statusTitle.cancelled);
   if (stage.key === "review" && hasFailures) return t(($) => $.studio.statusTitle.reviewWithFailures);
@@ -979,7 +981,7 @@ function creativeOrderStatusTitle(stage: CreativeOrderStage, stats: ReturnType<t
   return t(($) => $.studio.statusTitle.preparing);
 }
 
-function creativeOrderStatusDetail(stage: CreativeOrderStage, stats: ReturnType<typeof creativeOrderRuntimeStats>, hasFailures: boolean, t: ReturnType<typeof useT>["t"]): string {
+function creativeOrderStatusDetail(stage: CreativeOrderStage, stats: ReturnType<typeof creativeOrderRuntimeStats>, hasFailures: boolean, t: ReturnType<typeof useT<"creative">>["t"]): string {
   if (stage.key === "review" && hasFailures) return t(($) => $.studio.statusDetail.reviewWithFailures);
   if (stage.key === "review") return t(($) => $.studio.statusDetail.review);
   if (stage.key === "attention") return t(($) => $.studio.statusDetail.attention);
@@ -1111,10 +1113,10 @@ function confirmedOrderItem(item: CreativeOrderItem, index: number, label?: stri
   const visualDirection = recordValue(snapshot.visual_direction);
   const replacements = arrayValue(preAdaptation.text_replacements).map(confirmedReplacement).filter((entry): entry is ConfirmedReplacement => entry !== null);
   const numericLayouts = arrayValue(preAdaptation.numeric_layouts).map(confirmedNumericLayout).filter((entry): entry is ConfirmedNumericLayout => entry !== null);
-  const repaymentPlans = confirmedRepaymentPlans(preAdaptation.repayment_plan_selections);
+  const repaymentPlans = confirmedRepaymentPlans(snapshot.repayment_plan_selections ?? preAdaptation.repayment_plan_selections);
   return {
     id: item.id || item.candidate_id || String(index),
-    label: label || item.candidate_id.slice(0, 8) || `素材 ${index + 1}`,
+    label: label || trimmedStringValue(snapshot.library_name) || item.candidate_id.slice(0, 8) || `素材 ${index + 1}`,
     replacements: replacements.length > 0 ? replacements : fallbackSnapshotReplacements(snapshot),
     numericLayouts,
     repaymentPlans,
@@ -1508,11 +1510,12 @@ function assetFeedbackReason(issueType: string): string {
   return "other";
 }
 
-function CreativeResourcesWorkspace({ resources, onCreate, onArchive, initialSection }: {
+function CreativeResourcesWorkspace({ resources, onCreate, onArchive, initialSection, onOrderCreated }: {
   resources: CreativeResource[];
   onCreate: (kind: CreativeResourceKind) => void;
   onArchive: (id: string) => void;
   initialSection: "market" | "copy";
+  onOrderCreated: (orderId: string) => void;
 }) {
   const [section, setSection] = useState<"market" | "copy">(initialSection);
   useEffect(() => { setSection(initialSection); }, [initialSection]);
@@ -1528,7 +1531,7 @@ function CreativeResourcesWorkspace({ resources, onCreate, onArchive, initialSec
       </div>
     </div>
     <div className="mt-4 min-h-0 min-w-0 flex-1">
-      {section === "market" ? <ResourceEditor resources={marketPacks} copyLibraries={copyLibraries} onCreate={() => onCreate("market_pack")} onArchive={onArchive} /> : <ComposableCopyLibraryEditor resources={copyLibraries} onCreate={() => onCreate("copy_library")} onArchive={onArchive} />}
+      {section === "market" ? <ResourceEditor resources={marketPacks} copyLibraries={copyLibraries} onCreate={() => onCreate("market_pack")} onArchive={onArchive} /> : <ComposableCopyLibraryEditor resources={copyLibraries} onCreate={() => onCreate("copy_library")} onArchive={onArchive} onOrderCreated={onOrderCreated} />}
     </div>
   </div>;
 }
@@ -1594,7 +1597,7 @@ function MarketPackForm({ resource, value, onChange, copyLibraries }: {
   const selectedModelFamily = stringValue(value.prime_model_template_family);
   const setModelIntegrated = (enabled: boolean) => {
     if (!enabled) {
-      const next = { ...value, prime_composition_mode: "deterministic" };
+      const next: Record<string, unknown> = { ...value, prime_composition_mode: "deterministic" };
       delete next.prime_model_template_family;
       onChange(next);
       return;

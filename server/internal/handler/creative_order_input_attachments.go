@@ -130,6 +130,9 @@ FOR SHARE
 	candidateSources := make([]creativeOrderFrozenAttachment, 0, len(items))
 	appUIReferences := make([]creativeOrderAppUIAttachmentReference, 0, len(items))
 	for _, item := range items {
+		if item.SourceKind == "copy_library" {
+			continue
+		}
 		candidateID, parseErr := parseUUIDString(item.CandidateID)
 		if parseErr != nil {
 			return nil, &creativeOrderAttachmentValidationError{Code: "attachment_not_found", Message: "candidate source attachment is invalid"}

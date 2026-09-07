@@ -89,15 +89,15 @@ export function creativeGenerationInfo(
     sizeLabel: labels.sizeLabel(asset.size_key),
     revision: asset.revision,
     direction: item.direction.trim() || firstString([brief, record(brief.copy_adaptation)], ["creative_direction", "visual_direction", "direction", "concept", "summary", "theme"]),
-    copyLines: [
+    copyLines: ([
       { field: "headline", label: labels.copyFields.headline, value: stringValue(snapshot.headline) },
       { field: "subheadline", label: labels.copyFields.subheadline, value: stringValue(snapshot.subheadline) },
       { field: "benefit", label: labels.copyFields.benefit, value: stringValue(snapshot.benefit) },
       { field: "supporting", label: labels.copyFields.supporting, value: stringValue(snapshot.supporting) },
       { field: "cta", label: labels.copyFields.cta, value: stringValue(snapshot.cta) },
       { field: "legal", label: labels.copyFields.legal, value: stringValue(snapshot.legal_text) },
-    ].filter((entry) => Boolean(entry.value)),
-    repaymentPlans: parseRepaymentPlanSelections(record(snapshot.pre_adaptation).repayment_plan_selections),
+    ] satisfies GenerationCopyLine[]).filter((entry) => Boolean(entry.value)),
+    repaymentPlans: parseRepaymentPlanSelections(snapshot.repayment_plan_selections ?? record(snapshot.pre_adaptation).repayment_plan_selections),
     model: firstString(promptSources, ["model", "model_name", "generation_model"]),
     provider: firstString(promptSources, ["provider", "image_provider", "generation_provider"]),
     marketRule: explicitRule || layoutSummary || (marketName ? labels.marketBound : ""),
@@ -303,7 +303,7 @@ function stageLabel(stage: string): string {
   return stage || "Unknown stage";
 }
 
-function generationInfoLabels(t: ReturnType<typeof useT>["t"]): GenerationInfoLabels {
+function generationInfoLabels(t: ReturnType<typeof useT<"creative">>["t"]): GenerationInfoLabels {
   return {
     layoutContract: t(($) => $.generationInfo.layoutContract),
     layoutContractVersion: (version) => t(($) => $.generationInfo.layoutContractVersion, { version }),

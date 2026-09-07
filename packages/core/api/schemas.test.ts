@@ -221,6 +221,12 @@ describe("creative material schemas", () => {
     expect(CreativeOrderItemSchema.safeParse({ id: "item-1", adopted_variant_id: null }).success).toBe(false);
   });
 
+  it("parses copy-library orders without a candidate and tolerates missing source fields", () => {
+    expect(CreativeOrderItemSchema.parse({ source_kind: "copy_library", copy_library_id: "library", candidate_id: null })).toMatchObject({ source_kind: "copy_library", copy_library_id: "library", candidate_id: "" });
+    expect(CreativeOrderItemSchema.parse({})).toMatchObject({ source_kind: "material", copy_library_id: "" });
+    expect(CreativeOrderItemSchema.safeParse({ source_kind: 42 }).success).toBe(false);
+  });
+
   it("parses QC recovery and backend composition blockers", () => {
     const legacy = CreativeOrderItemSchema.parse({ id: "item-1", variants: [{ id: "variant-1" }] });
     expect(legacy.variants[0]).toMatchObject({ qc_recovery_used: false, qc_recovery_available: false });

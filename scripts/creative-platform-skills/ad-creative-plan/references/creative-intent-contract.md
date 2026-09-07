@@ -31,6 +31,11 @@ size set.
 
 ## CreativeIntent
 
+For `source_kind=copy_library`, there is no source reference or source analysis. Derive the concept from the frozen selected copy and
+optional visual direction. Empty slots stay absent; an empty repayment list creates no repayment module, regardless of creative type.
+With `visual_only=true`, explore visual hypotheses without inventing business claims. Prime remains required. Input roles list actual
+assets only, starting with current-size Prime context and adding the selected-primary reference when identity continuity requires it.
+
 `creative_intent` contains:
 
 - `hypothesis_id`, `audience_tension`, `hook`, `message_mechanism`, `desired_response`, and `emotional_tone`;

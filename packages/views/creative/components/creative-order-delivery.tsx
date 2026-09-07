@@ -3,7 +3,7 @@
 import { useEffect, useId, useState } from "react";
 import { AlertTriangle, Check, CheckCircle2, ChevronDown, ExternalLink, Eye, Image as ImageIcon, Info, RefreshCw } from "lucide-react";
 import { strToU8, zipSync } from "fflate";
-import type { Attachment, CreateCreativeFeedbackResponse, CreativeOrder, CreativeOrderAsset, CreativeOrderDiagnosticAsset, CreativeOrderItem, CreativeOrderQCReport, CreativeOrderVariant, CreativeOrderWorkflowFailure } from "@multica/core/types";
+import type { Attachment, CreativeOrder, CreativeOrderAsset, CreativeOrderDiagnosticAsset, CreativeOrderItem, CreativeOrderQCReport, CreativeOrderVariant, CreativeOrderWorkflowFailure } from "@multica/core/types";
 import { Badge } from "@multica/ui/components/ui/badge";
 import { Button } from "@multica/ui/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@multica/ui/components/ui/dialog";
@@ -59,12 +59,7 @@ export type CreativeVariantRetryAction = {
   label: string;
 };
 
-export function creativeGalleryVariantIds(events: Array<Pick<CreateCreativeFeedbackResponse, "id" | "undo_of_id" | "subject_type" | "subject_id" | "event_type" | "decision">>): Set<string> {
-  const undoneEventIds = new Set(events.map((event) => event.undo_of_id).filter(Boolean));
-  return new Set(events
-    .filter((event) => event.subject_type === "variant" && event.event_type === "decision" && event.decision === "accepted" && !undoneEventIds.has(event.id))
-    .map((event) => event.subject_id));
-}
+export { creativeGalleryVariantIds } from "@multica/core/creative";
 
 type CreativeDeliverySizeKey = (typeof CREATIVE_DELIVERY_SIZES)[number];
 
@@ -478,6 +473,8 @@ export function CreativeOrderDeliveryCandidates({
   attachments,
   galleryVariantIds,
   addingToGalleryVariantId = "",
+  removingFromGalleryVariantId = "",
+  onRemoveFromGallery,
   onAddToGallery,
   onCollectFeedback,
   onAssetSelect,
@@ -497,6 +494,8 @@ export function CreativeOrderDeliveryCandidates({
   attachments: Map<string, DeliveryAttachment>;
   galleryVariantIds?: ReadonlySet<string>;
   addingToGalleryVariantId?: string;
+  removingFromGalleryVariantId?: string;
+  onRemoveFromGallery?: (variantId: string) => void;
   onAddToGallery?: (variantId: string) => void;
   onCollectFeedback?: (variant: CreativeOrderVariant, reasonCode: string, comment: string) => Promise<void>;
   onAssetSelect: (assetId: string) => void;
@@ -528,6 +527,7 @@ export function CreativeOrderDeliveryCandidates({
         </div>
       </div>
       <div className="flex flex-wrap items-center gap-2">
+        {item.copy_snapshot.visual_only === true && <Badge variant="outline">{t(($) => $.copyOrder.visualOnly)}</Badge>}
         <Badge variant={progress.tone}>{progress.label}</Badge>
         {deliveryVariants.length > 0 && <Badge variant={galleryCount > 0 ? "default" : "secondary"}>{galleryCount > 0 ? `${galleryCount} 个已入图库` : "可分别加入成图库"}</Badge>}
       </div>
@@ -537,7 +537,7 @@ export function CreativeOrderDeliveryCandidates({
           <summary className="w-fit cursor-pointer select-none">{t(($) => $.delivery.directionDetails)}</summary>
           <pre className="mt-2 max-h-48 overflow-auto whitespace-pre-wrap break-words border bg-muted/20 p-3 font-sans text-xs leading-5">{item.direction.trim()}</pre>
         </details>}
-      <CreativeOrderSourceAndPrompt source={source} progress={progress} />
+      <CreativeOrderSourceAndPrompt source={source} progress={progress} showSource={item.source_kind !== "copy_library"} />
 
       {deliveryVariants.length > 0 ? <div className="grid gap-3 p-4 lg:grid-cols-3">
           {deliveryVariants.map((variant) => <VariantCandidate
@@ -546,6 +546,8 @@ export function CreativeOrderDeliveryCandidates({
             attachments={attachments}
             inGallery={galleryVariantIds?.has(variant.id) ?? false}
             addingToGallery={addingToGalleryVariantId === variant.id}
+            removingFromGallery={removingFromGalleryVariantId === variant.id}
+            onRemoveFromGallery={onRemoveFromGallery}
             onAddToGallery={onAddToGallery}
             onCollectFeedback={onCollectFeedback}
             onAssetSelect={onAssetSelect}
@@ -575,7 +577,7 @@ type CreativeOrderItemProgress = {
   selectionPending: boolean;
 };
 
-function creativeOrderItemProgress(item: CreativeOrderItem, t?: ReturnType<typeof useT>["t"]): CreativeOrderItemProgress {
+function creativeOrderItemProgress(item: CreativeOrderItem, t?: ReturnType<typeof useT<"creative">>["t"]): CreativeOrderItemProgress {
   const allVariants = item.variants;
   const deliveryVariants = allVariants.filter(creativeVariantParticipatesInDelivery);
   const previewAssets = deliveryVariants.reduce((count, variant) => count + creativeVariantProgressAssets(variant).length, 0);
@@ -594,15 +596,15 @@ function creativeOrderItemProgress(item: CreativeOrderItem, t?: ReturnType<typeo
   return { label: "Preparing", detail: t ? t(($) => $.delivery.waitingGeneration) : "Waiting for the background to create generation tasks.", tone: "secondary", variants: 0, previewAssets: 0, expectedAssets: 0, runningVariants: 0, productionStoppedVariants: 0, blockedVariants: 0, readyVariants: 0, selectionPending: false };
 }
 
-function CreativeOrderSourceAndPrompt({ source, progress }: { source: { label: string; url: string }; progress: CreativeOrderItemProgress }) {
+function CreativeOrderSourceAndPrompt({ source, progress, showSource }: { source: { label: string; url: string }; progress: CreativeOrderItemProgress; showSource: boolean }) {
   const { t } = useT("creative");
-  return <div className="grid border-b bg-muted/10 lg:grid-cols-[minmax(240px,0.72fr)_minmax(0,1.28fr)]">
-    <figure className="min-w-0 border-b bg-background lg:border-b-0 lg:border-r">
+  return <div className={cn("grid border-b bg-muted/10", showSource && "lg:grid-cols-[minmax(240px,0.72fr)_minmax(0,1.28fr)]")}>
+    {showSource && <figure className="min-w-0 border-b bg-background lg:border-b-0 lg:border-r">
       <figcaption className="border-b px-3 py-2 text-xs font-medium">{t(($) => $.delivery.sourceImage, { label: source.label })}</figcaption>
       <div className="flex min-h-64 items-center justify-center p-3">
         {source.url ? <img src={source.url} alt={t(($) => $.delivery.sourceImageAlt, { label: source.label })} width={1200} height={1200} loading="lazy" className="max-h-[360px] w-full object-contain" /> : <EmptyImage label={t(($) => $.delivery.sourceUnavailable)} />}
       </div>
-    </figure>
+    </figure>}
     <div className="min-w-0 space-y-3 px-4 py-3">
       <div className="flex flex-wrap gap-2 text-xs">
         {progress.selectionPending ? <Badge variant="outline">{t(($) => $.delivery.selectionInProgress)}</Badge> : <>
@@ -638,6 +640,8 @@ function VariantCandidate({
   attachments,
   inGallery,
   addingToGallery,
+  removingFromGallery,
+  onRemoveFromGallery,
   onAddToGallery,
   onCollectFeedback,
   onAssetSelect,
@@ -652,6 +656,8 @@ function VariantCandidate({
   attachments: Map<string, DeliveryAttachment>;
   inGallery: boolean;
   addingToGallery: boolean;
+  removingFromGallery: boolean;
+  onRemoveFromGallery?: (variantId: string) => void;
   onAddToGallery?: (variantId: string) => void;
   onCollectFeedback?: (variant: CreativeOrderVariant, reasonCode: string, comment: string) => Promise<void>;
   onAssetSelect: (assetId: string) => void;
@@ -767,7 +773,7 @@ function VariantCandidate({
       {onCollectFeedback && <Button className="w-full" size="sm" variant="outline" disabled={disabled || !participatesInDelivery} onClick={() => setFeedbackOpen(true)}>
         收集反馈
       </Button>}
-      {onAddToGallery && <Button className={cn("w-full", requiresRiskAcknowledgement && !inGallery && "border-amber-300 text-amber-800 hover:bg-amber-50 dark:border-amber-800 dark:text-amber-200 dark:hover:bg-amber-950/40")} size="sm" variant={inGallery ? "secondary" : requiresRiskAcknowledgement ? "outline" : "default"} disabled={addToGalleryDisabled} aria-describedby={descriptionId} onClick={() => onAddToGallery(variant.id)}>
+      {inGallery && onRemoveFromGallery ? <Button size="sm" variant="outline" className="w-full" disabled={removingFromGallery} onClick={() => onRemoveFromGallery(variant.id)}>{t(($) => $.gallery.remove)}</Button> : onAddToGallery && <Button className={cn("w-full", requiresRiskAcknowledgement && !inGallery && "border-amber-300 text-amber-800 hover:bg-amber-50 dark:border-amber-800 dark:text-amber-200 dark:hover:bg-amber-950/40")} size="sm" variant={inGallery ? "secondary" : requiresRiskAcknowledgement ? "outline" : "default"} disabled={addToGalleryDisabled || removingFromGallery} aria-describedby={descriptionId} onClick={() => onAddToGallery(variant.id)}>
         {inGallery ? <CheckCircle2 className="h-4 w-4" /> : <Check className="h-4 w-4" />}
         {disabled ? "订单已结束" : addingToGallery ? "正在加入" : inGallery ? "已入图库" : !participatesInDelivery ? "尚未入选" : readiness.ready ? stagingResultMissing ? `加入当前 r${activeRevision} 成图` : "添加到成图库" : "尚不可入库"}
       </Button>}

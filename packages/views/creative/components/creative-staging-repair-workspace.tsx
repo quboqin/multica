@@ -176,7 +176,7 @@ function compareAssets(left: CreativeOrderAsset, right: CreativeOrderAsset): num
   return rank(right) - rank(left) || right.updated_at.localeCompare(left.updated_at) || right.id.localeCompare(left.id);
 }
 
-function deliverySizeLabel(t: ReturnType<typeof useT>["t"], size: string): string {
+function deliverySizeLabel(t: ReturnType<typeof useT<"creative">>["t"], size: string): string {
   if (size === "1080x1080") return t(($) => $.stagingRepair.square);
   if (size === "1200x628") return t(($) => $.stagingRepair.landscape);
   if (size === "800x1000") return t(($) => $.stagingRepair.portrait);

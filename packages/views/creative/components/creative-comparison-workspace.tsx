@@ -303,7 +303,7 @@ export function CreativeComparisonWorkspace({
   </div>;
 }
 
-function annotationScopeLabel(t: ReturnType<typeof useT>["t"], scope: CreativeAnnotationDraft["scope"]): string {
+function annotationScopeLabel(t: ReturnType<typeof useT<"creative">>["t"], scope: CreativeAnnotationDraft["scope"]): string {
   if (scope === "size") return t(($) => $.comparison.scopeSize);
   if (scope === "variant") return t(($) => $.comparison.scopeVariant);
   return t(($) => $.comparison.scopeOrder);

@@ -246,6 +246,8 @@ See CLAUDE.md for the complete command reference.
 
 ### Platform Change Log
 
+- **2026-09-07 / 0.3.49** — 文案库支持任选已审核文案与还款计划直接创建创意订单，全空时进入纯视觉探索；成图库提供大图与多尺寸预览，移出可撤销并与订单入库状态联动；Codex 智能体支持 GPT-6 Astra 及运行时声明的思考深度；创意工厂初始化和 bootstrap 同步文案来源的规划、制作与质检合同。
+
 Bug fixes, internal refactors, and implementation-only changes do not require a
 changelog entry. Add a dated entry here for a major feature or an important
 user-visible behavior change. User-facing entries must also update the

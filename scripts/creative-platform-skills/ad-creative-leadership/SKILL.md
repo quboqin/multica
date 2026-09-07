@@ -34,6 +34,10 @@ QC 的 `creative_candidate_selection` 原子晋级 3 个，平台自动为 selec
 
 ## 标准订单
 
+先读取每个 item 的 `source_kind`。`copy_library` 来源直接进入方案；将真实 `source_kind`、`copy_library_id` 放入 task context，
+省略空的 candidate/source-analysis IDs，不采集、不分析、不预适配、不创建占位素材。`material` 来源沿用冻结的素材和分析 ID。
+文案来源仍使用相同的 item-plan、候选生产、晋级、三尺寸制作和 QC task；不得另建一条执行流程。
+
 每个就绪 Order Item 单独提交一个 `creative_order_item_plan` fanout；一个 manifest 的 source ref 必须是该 item ID，
 不能把不同 item 放入同一个 manifest。item key 固定为 `<item-id>:r1`，context 固定
 `type=creative_domain_task`、`workflow=creative_plan`，并携带 issue/leader/order/item/candidate/source-analysis IDs、

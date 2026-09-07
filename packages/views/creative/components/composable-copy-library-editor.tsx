@@ -17,10 +17,11 @@ import { Textarea } from "@multica/ui/components/ui/textarea";
 import { toast } from "sonner";
 import { useT } from "../../i18n";
 import { copyLibraryDraftError } from "../lib/copy-template";
+import { CopyLibraryOrderDialog } from "./copy-library-order-dialog";
 
 export { copyLibraryDraftError } from "../lib/copy-template";
 
-type CreativeT = ReturnType<typeof useT>["t"];
+type CreativeT = ReturnType<typeof useT<"creative">>["t"];
 
 const COPY_GROUPS: Array<{
   value: CreativeCopyContentGroup;
@@ -35,15 +36,17 @@ const COPY_GROUPS: Array<{
   { value: "repayment_headline", role: "headline", types: ["num", "repayment_plan"], usage: "core" },
 ];
 
-export function ComposableCopyLibraryEditor({ resources, onCreate, onArchive }: {
+export function ComposableCopyLibraryEditor({ resources, onCreate, onArchive, onOrderCreated }: {
   resources: CreativeResource[];
   onCreate: () => void;
   onArchive: (id: string) => void;
+  onOrderCreated?: (orderId: string) => void;
 }) {
   const { t } = useT("creative");
   const wsId = useWorkspaceId();
   const queryClient = useQueryClient();
   const [activeId, setActiveId] = useState(resources[0]?.id ?? "");
+  const [orderOpen, setOrderOpen] = useState(false);
   const active = resources.find((resource) => resource.id === activeId) ?? resources[0];
   const [draft, setDraft] = useState<CreativeCopyLibraryConfig>(() => parseCreativeCopyLibraryConfig(active?.config ?? {}));
   useEffect(() => { setDraft(parseCreativeCopyLibraryConfig(active?.config ?? {})); }, [active?.id, active?.version]);
@@ -86,6 +89,8 @@ export function ComposableCopyLibraryEditor({ resources, onCreate, onArchive }: 
         <div className="flex flex-wrap items-center gap-2"><Button size="sm" variant="outline" disabled={save.isPending || publish.isPending || !hasUnsavedChanges} onClick={() => save.mutate()}><Save className="h-4 w-4" />{t(($) => $.copyLibrary.saveDraft)}</Button><Button size="sm" disabled={save.isPending || publish.isPending || !hasPendingRelease || Boolean(publishError)} onClick={() => publish.mutate()}><CheckCircle2 className="h-4 w-4" />{hasPendingRelease ? t(($) => $.copyLibrary.publishToProduction, { version: releaseVersion }) : t(($) => $.copyLibrary.productionActive, { version: active.published_version })}</Button><Button size="icon-sm" variant="ghost" title={t(($) => $.copyLibrary.archive)} aria-label={t(($) => $.copyLibrary.archive)} onClick={() => onArchive(active.id)}><Archive className="h-4 w-4" /></Button></div>
       </header>
       <div className={`border-b px-5 py-2 text-xs ${publishError ? "border-amber-300 bg-amber-50 text-amber-900" : "bg-muted/20 text-muted-foreground"}`} role={publishError ? "alert" : "status"}>{publishError ? t(($) => $.copyLibrary.validation, { error: publishError }) : t(($) => $.copyLibrary.validationPassed)}</div>
+      {onOrderCreated && active.published_version > 0 && <div className="flex justify-end border-b px-5 py-3"><Button size="sm" onClick={() => setOrderOpen(true)}><Plus className="h-4 w-4" />{t(($) => $.copyOrder.title)}</Button></div>}
+      {orderOpen && onOrderCreated && <CopyLibraryOrderDialog key={`${active.id}:${active.published_version}`} library={active} onClose={() => setOrderOpen(false)} onCreated={(orderId) => { setOrderOpen(false); onOrderCreated(orderId); }} />}
       <Tabs defaultValue="copy" className="px-5 py-4">
         <TabsList><TabsTrigger value="copy">{t(($) => $.copyLibrary.advertisingCopy, { count: draft.fragments.length })}</TabsTrigger><TabsTrigger value="repayment">{t(($) => $.copyLibrary.repaymentPlans, { count: draft.repayment_plan.entries.length })}</TabsTrigger></TabsList>
         <TabsContent value="copy"><CopyGroupEditor t={t} value={draft.fragments} onChange={(fragments) => setDraft((current) => ({ ...current, fragments }))} /></TabsContent>

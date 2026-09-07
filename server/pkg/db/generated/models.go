@@ -757,6 +757,8 @@ type CreativeOrderItem struct {
 	AdoptedVariantID pgtype.UUID        `json:"adopted_variant_id"`
 	AdoptedAt        pgtype.Timestamptz `json:"adopted_at"`
 	AdoptedBy        pgtype.UUID        `json:"adopted_by"`
+	SourceKind       string             `json:"source_kind"`
+	CopyLibraryID    pgtype.UUID        `json:"copy_library_id"`
 }
 
 type CreativeOrderQcReport struct {
