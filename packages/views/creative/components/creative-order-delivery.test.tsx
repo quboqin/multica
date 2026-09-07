@@ -278,7 +278,7 @@ describe("creative order stage", () => {
     } as CreativeOrder;
 
     expect(creativeVariantNeedsManualAction(stale)).toBe(false);
-    expect(creativeVariantAdoptionReadiness(stale)).toEqual({ ready: true, status: "三尺寸、品牌组件与质检均已完成，可以加入成图库" });
+    expect(creativeVariantAdoptionReadiness(stale)).toEqual({ ready: true, status: "三尺寸品牌组件已完成，可以加入成图库" });
     expect(creativeOrderActionableWorkflowFailures(order)).toEqual([]);
     expect(creativeOrderStage(order)).toMatchObject({ key: "review", label: "可入图库", readyVariants: 1 });
   });
@@ -926,7 +926,7 @@ describe("creative order delivery selection", () => {
     expect(creativeVariantArchiveEntries(preciseEdit, attachmentMap(directItem))).toHaveLength(1);
     expect(creativeVariantAdoptionReadiness(preciseEdit)).toEqual({
       ready: true,
-      status: "目标尺寸、品牌组件与质检均已完成，可以加入成图库",
+      status: "目标尺寸品牌组件已完成，可以加入成图库",
     });
 
     render(<CreativeOrderDeliveryCandidates orderId="order-direct" item={directItem} source={{ label: "原素材", url: "https://cdn.example/source.png" }} attachments={attachmentMap(directItem)} galleryVariantIds={new Set()} onAddToGallery={vi.fn()} onAssetSelect={vi.fn()} />);
@@ -986,7 +986,7 @@ describe("creative order delivery selection", () => {
     expect(screen.getByRole("button", { name: "加入当前 r1 成图" })).toBeEnabled();
   });
 
-  it("never falls back to a Prime asset when the current delivery is incomplete", () => {
+  it("keeps archives on delivered assets while allowing a complete Prime package into the gallery", () => {
     const candidate = variant("v01");
     candidate.assets = candidate.assets.filter((asset) => !(asset.revision === 2 && asset.stage === "delivered" && asset.size_key === "800x1000"));
     expect(creativeVariantDeliveryAssets(candidate).map((asset) => asset.id)).toEqual([
@@ -994,10 +994,10 @@ describe("creative order delivery selection", () => {
       "v01-1200x628",
     ]);
     expect(creativeVariantArchiveEntries(candidate, attachmentMap({ variants: [candidate] } as CreativeOrderItem))).toHaveLength(2);
-    expect(creativeVariantAdoptionReadiness(candidate)).toEqual({ ready: false, status: "等待正式交付：已完成 2/3 个尺寸" });
+    expect(creativeVariantAdoptionReadiness(candidate)).toEqual({ ready: true, status: "三尺寸品牌组件已完成，可以加入成图库" });
   });
 
-  it("requires a complete current-revision brand component package before adding to gallery", () => {
+  it("requires a complete current-revision Prime package before adding to gallery", () => {
     const candidate = variant("v01");
     candidate.assets = candidate.assets.filter((asset) => !(asset.revision === 2 && asset.stage === "primed" && asset.size_key === "800x1000"));
 
@@ -1005,7 +1005,7 @@ describe("creative order delivery selection", () => {
     expect(creativeVariantAdoptionReadiness(candidate)).toEqual({ ready: false, status: "等待品牌组件合成：已完成 2/3 个尺寸" });
   });
 
-  it("accepts warning QC, keeps a risk-reviewed image addable, and blocks pending lanes", () => {
+  it("keeps a complete Prime package addable regardless of QC state", () => {
     const warning = variant("v01");
     warning.qc_reports = [
       { id: "technical-warning", variant_id: warning.id, revision: 2, lane: "technical", status: "warning", findings: { blocking_failures: [] } },
@@ -1016,11 +1016,11 @@ describe("creative order delivery selection", () => {
     const failed = structuredClone(warning);
     failed.status = "action_required";
     failed.qc_reports[1]!.status = "failed";
-    expect(creativeVariantAdoptionReadiness(failed)).toEqual({ ready: true, status: "可查看当前成图并加入成图库" });
+    expect(creativeVariantAdoptionReadiness(failed)).toEqual({ ready: true, status: "三尺寸品牌组件已完成，可以加入成图库" });
 
     const pending = structuredClone(warning);
     pending.qc_reports[1]!.status = "pending";
-    expect(creativeVariantAdoptionReadiness(pending).ready).toBe(false);
+    expect(creativeVariantAdoptionReadiness(pending)).toEqual({ ready: true, status: "三尺寸品牌组件已完成，可以加入成图库" });
   });
 
   it("builds a three-file archive manifest with stable size names", () => {

@@ -271,24 +271,24 @@ describe("creative feedback state", () => {
       .toEqual({ ready: false, status: "running", error: "", version: 0 });
   });
 
-  it("allows acceptance after three sizes are ready and treats failed QC as a user reminder", () => {
+  it("allows acceptance after three Prime sizes are ready without waiting for QC or delivery", () => {
     const ready = readyVariant("variant-ready");
     expect(creativeVariantAdoptionReadiness(ready)).toEqual({
       ready: true,
-      status: "三尺寸、品牌组件与质检均已完成，可以加入成图库",
+      status: "三尺寸品牌组件已完成，可以加入成图库",
     });
 
     const missingBrandComponents = { ...ready, assets: ready.assets.filter((asset) => !(asset.stage === "primed" && asset.size_key === "800x1000")) };
     expect(creativeVariantAdoptionReadiness(missingBrandComponents)).toEqual({ ready: false, status: "等待品牌组件合成：已完成 2/3 个尺寸" });
 
     const failedQC = { ...ready, qc_reports: ready.qc_reports.map((report) => report.lane === "visual" ? { ...report, status: "failed" } : report) };
-    expect(creativeVariantAdoptionReadiness(failedQC)).toEqual({ ready: true, status: "可查看当前成图并加入成图库" });
+    expect(creativeVariantAdoptionReadiness(failedQC)).toEqual({ ready: true, status: "三尺寸品牌组件已完成，可以加入成图库" });
 
     const warnedQC = { ...ready, qc_reports: ready.qc_reports.map((report) => report.lane === "visual" ? { ...report, status: "warning" } : report) };
-    expect(creativeVariantAdoptionReadiness(warnedQC)).toEqual({ ready: true, status: "三尺寸、品牌组件与质检均已完成，可以加入成图库" });
+    expect(creativeVariantAdoptionReadiness(warnedQC)).toEqual({ ready: true, status: "三尺寸品牌组件已完成，可以加入成图库" });
 
     const missingDelivery = { ...ready, assets: ready.assets.filter((asset) => !(asset.stage === "delivered" && asset.size_key === "1200x628")) };
-    expect(creativeVariantAdoptionReadiness(missingDelivery)).toEqual({ ready: false, status: "等待正式交付：已完成 2/3 个尺寸" });
+    expect(creativeVariantAdoptionReadiness(missingDelivery)).toEqual({ ready: true, status: "三尺寸品牌组件已完成，可以加入成图库" });
   });
 
   it("keeps the selected order in the creative studio URL and preserves unrelated query state", () => {

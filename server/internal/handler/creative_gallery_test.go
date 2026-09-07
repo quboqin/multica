@@ -75,14 +75,16 @@ func seedGalleryVariant(t *testing.T, tx pgx.Tx, itemID pgtype.UUID, risk bool) 
 	return id
 }
 
-func TestCreativeGalleryRiskConfirmationAndIndependentVariants(t *testing.T) {
+func TestCreativeGalleryAcceptsCompletePrimePackageWithoutFinalizedQC(t *testing.T) {
 	tx, workspaceID, userID, itemID := galleryTestTransaction(t)
 	riskID := seedGalleryVariant(t, tx, itemID, true)
-	input := creativeGalleryInput{VariantID: uuidToString(riskID), Revision: 1, IdempotencyKey: "risk-entry"}
-	if _, err := confirmCreativeGalleryEntry(t.Context(), tx, workspaceID, userID, riskID, input); err == nil {
-		t.Fatal("risk was accepted without acknowledgement")
+	if _, err := tx.Exec(t.Context(), `DELETE FROM creative_order_qc_report WHERE variant_id = $1`, riskID); err != nil {
+		t.Fatal(err)
 	}
-	input.QCRiskAcknowledged, input.QCRiskReason = true, "Reviewed all three sizes"
+	if _, err := tx.Exec(t.Context(), `DELETE FROM creative_order_variant_qc_resolution WHERE variant_id = $1`, riskID); err != nil {
+		t.Fatal(err)
+	}
+	input := creativeGalleryInput{VariantID: uuidToString(riskID), Revision: 1, IdempotencyKey: "risk-entry"}
 	event, err := confirmCreativeGalleryEntry(t.Context(), tx, workspaceID, userID, riskID, input)
 	if err != nil {
 		t.Fatal(err)
@@ -97,6 +99,10 @@ func TestCreativeGalleryRiskConfirmationAndIndependentVariants(t *testing.T) {
 	}
 	if snapshot.Revision != 1 || len(snapshot.Assets) != 3 || len(snapshot.Sizes) != 3 {
 		t.Fatalf("incomplete bound package: %s", event.ContextSnapshot)
+	}
+	var delivered int
+	if err := tx.QueryRow(t.Context(), `SELECT count(*) FROM creative_order_asset WHERE variant_id = $1 AND revision = 1 AND stage = 'delivered' AND status = 'completed'`, riskID).Scan(&delivered); err != nil || delivered != 3 {
+		t.Fatalf("delivered package = %d, %v", delivered, err)
 	}
 	var active int
 	if err := tx.QueryRow(t.Context(), `SELECT active_revision FROM creative_order_variant WHERE id = $1`, riskID).Scan(&active); err != nil || active != 1 {

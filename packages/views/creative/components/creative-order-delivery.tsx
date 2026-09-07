@@ -695,7 +695,6 @@ function VariantCandidate({
   const workingRevision = creativeVariantWorkingRevision(variant);
   const hasStagingRevision = creativeVariantHasStagingRevision(variant);
   const readiness = creativeVariantAdoptionReadiness(variant);
-  const riskAdoption = creativeVariantRiskAdoptionReadiness(variant);
   const qcDetails = creativeVariantQCDetails(variant);
   const workingQCDetails = creativeVariantWorkingQCDetails(variant);
   const descriptionId = useId();
@@ -710,7 +709,6 @@ function VariantCandidate({
   const blocked = creativeVariantNeedsManualAction(variant);
   const productionStopped = creativeVariantHasProductionStop(variant);
   const backgroundRunning = creativeVariantHasBackgroundWorkInProgress(variant);
-  const requiresRiskAcknowledgement = riskAdoption.allowed;
   const stagingResultMissing = creativeVariantStagingPrimaryPreviewMissing(variant);
   const currentSizeAdjustment = adjustment?.variantId === variant.id ? adjustment : undefined;
   const retryAction = participatesInDelivery ? creativeVariantRetryAction(variant) : null;
@@ -724,17 +722,14 @@ function VariantCandidate({
   const addToGalleryDisabled = disabled || !onAddToGallery || !participatesInDelivery || !readiness.ready || inGallery || addingToGallery;
   const statusTone = blocked
     ? "text-amber-700 dark:text-amber-300"
-    : requiresRiskAcknowledgement
-      ? "text-amber-700 dark:text-amber-300"
-      : readiness.ready
-        ? "text-emerald-700 dark:text-emerald-400"
-        : "text-muted-foreground";
+    : readiness.ready
+      ? "text-emerald-700 dark:text-emerald-400"
+      : "text-muted-foreground";
   const compactStatus = creativeVariantCompactStatus({
     inGallery,
     backgroundRunning,
     blocked,
     productionStopped,
-    requiresRiskAcknowledgement,
     ready: readiness.ready,
   });
   return <article className="flex min-w-0 flex-col border bg-background">
@@ -748,7 +743,7 @@ function VariantCandidate({
         {candidateState === "selected" && (variant.selection_rank ?? 0) > 0 && <Badge variant="outline">第 {variant.selection_rank} 名</Badge>}
         {currentSizeAdjustment && <span className="truncate text-xs text-amber-800 dark:text-amber-200">{CREATIVE_DELIVERY_SIZE_LABELS[currentSizeAdjustment.sizeKey as (typeof CREATIVE_DELIVERY_SIZES)[number]] ?? currentSizeAdjustment.sizeKey} {currentSizeAdjustment.status}</span>}
       </div>
-      {inGallery ? <Badge variant="default"><CheckCircle2 className="h-3 w-3" />已入图库</Badge> : candidateState !== "selected" ? <Badge variant="secondary">{creativeVariantCandidateStateLabel(candidateState, variant.selection_rank)}</Badge> : currentSizeAdjustment ? <Badge variant="outline">{adjustmentBadge}</Badge> : productionStopped ? <Badge variant="secondary">未完成</Badge> : blocked || requiresRiskAcknowledgement || readiness.ready ? <Badge variant="outline"><CheckCircle2 className="h-3 w-3" />待验收</Badge> : backgroundRunning ? <Badge variant="outline">处理中</Badge> : <Badge variant="secondary">尚未完成</Badge>}
+      {inGallery ? <Badge variant="default"><CheckCircle2 className="h-3 w-3" />已入图库</Badge> : candidateState !== "selected" ? <Badge variant="secondary">{creativeVariantCandidateStateLabel(candidateState, variant.selection_rank)}</Badge> : currentSizeAdjustment ? <Badge variant="outline">{adjustmentBadge}</Badge> : productionStopped ? <Badge variant="secondary">未完成</Badge> : blocked || readiness.ready ? <Badge variant="outline"><CheckCircle2 className="h-3 w-3" />待验收</Badge> : backgroundRunning ? <Badge variant="outline">处理中</Badge> : <Badge variant="secondary">尚未完成</Badge>}
     </div>
     <button type="button" disabled={(!cover || !coverURL) && !coverDiagnostic} onClick={() => { if (cover && coverURL) onAssetSelect(cover.id); else if (coverDiagnostic) openCreativeDiagnosticAsset(coverDiagnostic); }} className="group relative flex min-h-72 w-full items-center justify-center border-b bg-muted/10 p-3 disabled:cursor-default">
       {coverURL ? <img src={coverURL} alt={`${variant.variant_key} ${CREATIVE_DELIVERY_SIZE_LABELS[primarySize]}主预览`} width={720} height={720} loading="lazy" className="max-h-[420px] w-full object-contain transition-transform group-hover:scale-[1.01]" /> : coverDiagnostic ? <>
@@ -791,7 +786,7 @@ function VariantCandidate({
       {onCollectFeedback && <Button className="w-full" size="sm" variant="outline" disabled={disabled || !participatesInDelivery} onClick={() => setFeedbackOpen(true)}>
         收集反馈
       </Button>}
-      {inGallery && onRemoveFromGallery ? <Button size="sm" variant="outline" className="w-full" disabled={removingFromGallery} onClick={() => onRemoveFromGallery(variant.id)}>{t(($) => $.gallery.remove)}</Button> : onAddToGallery && <Button className={cn("w-full", requiresRiskAcknowledgement && !inGallery && "border-amber-300 text-amber-800 hover:bg-amber-50 dark:border-amber-800 dark:text-amber-200 dark:hover:bg-amber-950/40")} size="sm" variant={inGallery ? "secondary" : requiresRiskAcknowledgement ? "outline" : "default"} disabled={addToGalleryDisabled || removingFromGallery} aria-describedby={descriptionId} onClick={() => onAddToGallery(variant.id)}>
+      {inGallery && onRemoveFromGallery ? <Button size="sm" variant="outline" className="w-full" disabled={removingFromGallery} onClick={() => onRemoveFromGallery(variant.id)}>{t(($) => $.gallery.remove)}</Button> : onAddToGallery && <Button className="w-full" size="sm" variant={inGallery ? "secondary" : "default"} disabled={addToGalleryDisabled || removingFromGallery} aria-describedby={descriptionId} onClick={() => onAddToGallery(variant.id)}>
         {inGallery ? <CheckCircle2 className="h-4 w-4" /> : <Check className="h-4 w-4" />}
         {disabled ? "订单已结束" : addingToGallery ? "正在加入" : inGallery ? "已入图库" : !participatesInDelivery ? "尚未入选" : readiness.ready ? stagingResultMissing ? `加入当前 r${activeRevision} 成图` : "添加到成图库" : "尚不可入库"}
       </Button>}
@@ -1145,21 +1140,19 @@ function creativeVariantCompactStatus({
   backgroundRunning,
   blocked,
   productionStopped,
-  requiresRiskAcknowledgement,
   ready,
 }: {
   inGallery: boolean;
   backgroundRunning: boolean;
   blocked: boolean;
   productionStopped: boolean;
-  requiresRiskAcknowledgement: boolean;
   ready: boolean;
 }): string {
   if (inGallery) return "已入图库";
   if (backgroundRunning) return "处理中";
   if (ready) return "可加入成图库";
   if (productionStopped) return "未完成";
-  if (blocked || requiresRiskAcknowledgement) return "可查看并标注";
+  if (blocked) return "可查看并标注";
   return "等待成图";
 }
 
@@ -1313,39 +1306,27 @@ export function creativeVariantAdoptionReadiness(variant: CreativeOrderVariant):
     const state = creativeVariantCandidateState(variant);
     return { ready: false, status: state === "candidate" ? "等待候选比较" : state === "reserve" ? "后备方案暂不参与交付" : "本轮未入选" };
   }
-  const delivered = creativeVariantDeliveryAssets(variant);
   const primedSizes = currentCreativeVariantSizeSet(variant, "primed");
   const expectedSizes = creativeVariantActiveRevision(variant) > 0
     ? creativeVariantActiveExpectedSizes(variant)
     : creativeVariantWorkingExpectedSizes(variant);
   const expectedCount = expectedSizes.length;
-  const reportByLane = new Map(creativeVariantQCDetails(variant).map((detail) => [detail.lane, detail.status]));
-  const visual = reportByLane.get("visual") ?? "pending";
-  const failedQC = creativeVariantFailedQCLabels(variant);
-  if (creativeVariantActiveRevision(variant) < 1 && creativeVariantHasProductionContinuation(variant)) {
-    const generatedSizes = workingCreativeVariantSizeSet(variant, "generated");
-    return { ready: false, status: `成图生成中：已完成 ${generatedSizes.size}/${expectedCount} 个尺寸` };
-  }
   if (creativeVariantHasFailedStagingRevision(variant)) {
     return { ready: true, status: `r${creativeVariantWorkingRevision(variant)} 修订草稿尚未生效；可将当前 r${creativeVariantActiveRevision(variant)} 成图加入成图库` };
   }
-  if (failedQC.length > 0) {
-    const risk = creativeVariantRiskAdoptionReadiness(variant);
-    if (risk.allowed) return { ready: true, status: "可查看当前成图并加入成图库" };
-    return { ready: false, status: risk.status };
+  if (expectedSizes.length > 0 && expectedSizes.every((size) => primedSizes.has(size))) {
+    return { ready: true, status: `${expectedCount === 3 ? "三尺寸" : "目标尺寸"}品牌组件已完成，可以加入成图库` };
   }
-  if (delivered.length === expectedCount && primedSizes.size === expectedCount && qcStatusAllowsAdoption(visual)) {
-    return { ready: true, status: `${expectedCount === 3 ? "三尺寸" : "目标尺寸"}、品牌组件与质检均已完成，可以加入成图库` };
+  if (creativeVariantActiveRevision(variant) < 1 && creativeVariantHasProductionContinuation(variant)) {
+    const generatedSizes = workingCreativeVariantSizeSet(variant, "generated");
+    return { ready: false, status: `成图生成中：已完成 ${generatedSizes.size}/${expectedCount} 个尺寸` };
   }
   const productionStopDetail = creativeVariantProductionStopDetail(variant);
   if (productionStopDetail) return { ready: false, status: "未完成，可查看过程或重试" };
   if (creativeVariantHasBackgroundWorkInProgress(variant)) {
     if (primedSizes.size !== expectedCount) return { ready: false, status: `成图已完成，正在合成品牌组件：已完成 ${primedSizes.size}/${expectedCount} 个尺寸` };
-    if (!qcStatusAllowsAdoption(visual)) return { ready: false, status: `品牌组件已完成，等待质检：${creativeVariantPendingQCLabels(visual).join("、")}` };
   }
-  if (!qcStatusAllowsAdoption(visual)) return { ready: false, status: `等待质检：${creativeVariantPendingQCLabels(visual).join("、")}` };
   if (primedSizes.size !== expectedCount) return { ready: false, status: `等待品牌组件合成：已完成 ${primedSizes.size}/${expectedCount} 个尺寸` };
-  if (delivered.length !== expectedCount) return { ready: false, status: `等待正式交付：已完成 ${delivered.length}/${expectedCount} 个尺寸` };
   if (variant.action_required?.detail) return { ready: false, status: "可查看现有结果或继续标注" };
   return { ready: false, status: `等待变体完成：当前状态 ${variant.status}` };
 }

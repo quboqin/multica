@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"strings"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -44,9 +43,8 @@ func (h *Handler) confirmCreativeGalleryDelivery(w http.ResponseWriter, r *http.
 	if !ok {
 		return
 	}
-	input.QCRiskReason = strings.TrimSpace(input.QCRiskReason)
-	if input.Revision < 1 || len(input.IdempotencyKey) > 200 || len(input.QCRiskReason) > 1000 || input.QCRiskAcknowledged != (input.QCRiskReason != "") {
-		writeError(w, http.StatusBadRequest, "invalid gallery revision or risk acknowledgement")
+	if input.Revision < 1 || len(input.IdempotencyKey) > 200 {
+		writeError(w, http.StatusBadRequest, "invalid gallery revision")
 		return
 	}
 	tx, err := h.TxStarter.Begin(r.Context())
@@ -134,36 +132,14 @@ ORDER BY created_at DESC, id DESC LIMIT 1 FOR UPDATE`, workspaceID, variantID))
 		if saved, ok := snapshot["revision"].(float64); ok && saved > 0 && saved != float64(input.Revision) {
 			return event, creativeGalleryConflict("remove the gallery entry before selecting a different revision")
 		}
-		if acknowledged, _ := snapshot["qc_risk_acknowledged"].(bool); acknowledged && !input.QCRiskAcknowledged {
-			input.QCRiskReason, _ = snapshot["qc_risk_reason"].(string)
-			input.QCRiskAcknowledged = strings.TrimSpace(input.QCRiskReason) != ""
-		}
 	}
-	var revisionStatus string
 	var expectedSizes []string
-	if err := tx.QueryRow(ctx, `SELECT status, expected_sizes FROM creative_order_variant_revision WHERE variant_id = $1 AND revision = $2 FOR UPDATE`, variantID, input.Revision).Scan(&revisionStatus, &expectedSizes); err != nil {
+	if err := tx.QueryRow(ctx, `SELECT expected_sizes FROM creative_order_variant_revision WHERE variant_id = $1 AND revision = $2 FOR UPDATE`, variantID, input.Revision).Scan(&expectedSizes); err != nil {
 		return event, err
 	}
 	expectedSizes, err = normalizeCreativeExpectedSizes(expectedSizes)
 	if err != nil {
 		return event, creativeGalleryConflict("gallery delivery has no valid size contract")
-	}
-	var visualStatus, outcome string
-	if err := tx.QueryRow(ctx, `WITH latest AS (
-SELECT attempt, outcome FROM creative_order_variant_qc_resolution WHERE variant_id = $1 AND revision = $2 ORDER BY attempt DESC, created_at DESC LIMIT 1)
-SELECT COALESCE((SELECT outcome FROM latest), ''), COALESCE((SELECT status FROM creative_order_qc_report WHERE variant_id = $1 AND revision = $2 AND lane = 'visual' AND attempt = (SELECT attempt FROM latest)), '')`, variantID, input.Revision).Scan(&outcome, &visualStatus); err != nil {
-		return event, err
-	}
-	risk := visualStatus == "failed" && creativeQCOutcomeAllowsRiskAdoption(outcome)
-	if risk {
-		if !input.QCRiskAcknowledged || input.QCRiskReason == "" {
-			return event, creativeGalleryConflict("failed creative QC requires explicit risk acknowledgement and a reason")
-		}
-		if revisionStatus != "action_required" && revisionStatus != "completed" {
-			return event, creativeGalleryConflict("gallery revision is still being produced")
-		}
-	} else if !creativeQCStatusAllowsAdoption(visualStatus) || outcome != "delivered" || revisionStatus != "completed" {
-		return event, creativeGalleryConflict("gallery delivery requires finalized visual QC")
 	}
 	var deliveredCount, primedCount int
 	if err := tx.QueryRow(ctx, `SELECT count(DISTINCT size_key) FILTER (WHERE stage = 'delivered'), count(DISTINCT size_key) FILTER (WHERE stage = 'primed')
@@ -174,9 +150,6 @@ FROM creative_order_asset WHERE variant_id = $1 AND revision = $2 AND status = '
 		return event, creativeGalleryConflict("gallery Prime package is incomplete")
 	}
 	if deliveredCount != len(expectedSizes) {
-		if !risk {
-			return event, creativeGalleryConflict("gallery delivery package is incomplete")
-		}
 		if _, err := copyCreativePrimedAssetsToDelivered(ctx, tx, variantID, input.Revision, expectedSizes); err != nil {
 			return event, creativeGalleryConflict(err.Error())
 		}
@@ -199,7 +172,6 @@ AND a.stage = 'delivered' AND a.status = 'completed' AND a.attachment_id IS NOT 
 	snapshot["action"], snapshot["order_id"], snapshot["item_id"] = "add_to_gallery", uuidToString(orderID), uuidToString(itemID)
 	snapshot["variant_key"], snapshot["revision"] = variantKey, input.Revision
 	snapshot["delivery_package_sizes"], snapshot["delivery_asset_ids"] = expectedSizes, assetIDs
-	snapshot["qc_risk_acknowledged"], snapshot["qc_risk_reason"] = risk, input.QCRiskReason
 	snapshot["delivery_confirmed_by"] = uuidToString(userID)
 	raw, err := json.Marshal(snapshot)
 	if err != nil {

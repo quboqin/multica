@@ -22,24 +22,19 @@ function mount(status: string, onConfirmed = vi.fn()) {
 }
 
 describe("gallery delivery confirmation", () => {
-  it("requires explicit acknowledgement and a reason for risk results, preserving input on failure", async () => {
+  it("confirms a failed QC result without requiring acknowledgement", async () => {
     mocks.confirmCreativeGalleryDelivery.mockRejectedValueOnce(new Error("Prime package incomplete"));
     const confirmed = vi.fn();
     mount("failed", confirmed);
-    const check = await screen.findByRole("checkbox");
     const confirm = screen.getByRole("button", { name: "Confirm delivery" });
-    expect(confirm).toBeDisabled();
-    fireEvent.click(check);
-    expect(confirm).toBeDisabled();
-    const reason = screen.getByRole("textbox");
-    fireEvent.change(reason, { target: { value: "Reviewed all three images" } });
+    await waitFor(() => expect(confirm).toBeEnabled());
+    expect(screen.queryByRole("checkbox")).not.toBeInTheDocument();
+    expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
     fireEvent.click(confirm);
     await screen.findByRole("alert");
-    expect(reason).toHaveValue("Reviewed all three images");
-    expect(check).toBeChecked();
     fireEvent.click(confirm);
     await waitFor(() => expect(confirmed).toHaveBeenCalledOnce());
-    expect(mocks.confirmCreativeGalleryDelivery).toHaveBeenLastCalledWith(expect.objectContaining({ variant_id: "variant", revision: 1, qc_risk_acknowledged: true, qc_risk_reason: "Reviewed all three images" }));
+    expect(mocks.confirmCreativeGalleryDelivery).toHaveBeenLastCalledWith(expect.objectContaining({ variant_id: "variant", revision: 1, qc_risk_acknowledged: false, qc_risk_reason: "" }));
   });
 
   it("confirms a passing historical package without inventing risk acknowledgement", async () => {
