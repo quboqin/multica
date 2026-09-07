@@ -651,15 +651,18 @@ func normalizeCreativeProductionFanoutItem(ctx context.Context, q creativeTaskFa
 	variantID := parseUUID(variantUUID.String())
 	var revision int
 	var canonicalOrderItemID, canonicalOrderID, canonicalIssueID string
+	var sourceKind, candidateID, sourceAnalysisID, copyLibraryID string
 	err = q.QueryRow(ctx, `
-SELECT variant.revision, item.id::text, order_row.id::text, COALESCE(order_row.issue_id::text, '')
+SELECT variant.revision, item.id::text, order_row.id::text, COALESCE(order_row.issue_id::text, ''),
+       item.source_kind, COALESCE(item.candidate_id::text, ''),
+       COALESCE(item.source_analysis_id::text, ''), COALESCE(item.copy_library_id::text, '')
 FROM creative_order_variant variant
 JOIN creative_order_item item ON item.id = variant.order_item_id
 JOIN creative_order order_row ON order_row.id = item.order_id
 WHERE variant.id = $1
   AND item.id = $2
   AND order_row.workspace_id = $3
-`, variantID, orderItemID, workspaceID).Scan(&revision, &canonicalOrderItemID, &canonicalOrderID, &canonicalIssueID)
+`, variantID, orderItemID, workspaceID).Scan(&revision, &canonicalOrderItemID, &canonicalOrderID, &canonicalIssueID, &sourceKind, &candidateID, &sourceAnalysisID, &copyLibraryID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return item, errors.New("creative production task variant must belong to the trigger order item")
 	}
@@ -678,6 +681,9 @@ WHERE variant.id = $1
 	taskContext["variant_id"], _ = json.Marshal(canonicalVariantID)
 	taskContext["creative_order_id"], _ = json.Marshal(canonicalOrderID)
 	taskContext["creative_order_item_id"], _ = json.Marshal(canonicalOrderItemID)
+	if err := setCreativeProductionSourceContext(taskContext, sourceKind, candidateID, sourceAnalysisID, copyLibraryID); err != nil {
+		return item, err
+	}
 	var suppliedIssueID string
 	_ = json.Unmarshal(taskContext["issue_id"], &suppliedIssueID)
 	if strings.TrimSpace(suppliedIssueID) != "" {
@@ -758,15 +764,18 @@ func normalizeManualCreativeProductionFanoutItem(ctx context.Context, q creative
 	variantID := parseUUID(variantUUID.String())
 	var revision int
 	var canonicalOrderItemID, canonicalOrderID, canonicalIssueID string
+	var sourceKind, candidateID, sourceAnalysisID, copyLibraryID string
 	err = q.QueryRow(ctx, `
-SELECT variant.revision, item.id::text, order_row.id::text, COALESCE(order_row.issue_id::text, '')
+SELECT variant.revision, item.id::text, order_row.id::text, COALESCE(order_row.issue_id::text, ''),
+       item.source_kind, COALESCE(item.candidate_id::text, ''),
+       COALESCE(item.source_analysis_id::text, ''), COALESCE(item.copy_library_id::text, '')
 FROM creative_order_variant variant
 JOIN creative_order_item item ON item.id = variant.order_item_id
 JOIN creative_order order_row ON order_row.id = item.order_id
 WHERE variant.id = $1
   AND order_row.id = $2
   AND order_row.workspace_id = $3
-`, variantID, orderID, workspaceID).Scan(&revision, &canonicalOrderItemID, &canonicalOrderID, &canonicalIssueID)
+`, variantID, orderID, workspaceID).Scan(&revision, &canonicalOrderItemID, &canonicalOrderID, &canonicalIssueID, &sourceKind, &candidateID, &sourceAnalysisID, &copyLibraryID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return item, errors.New("manual creative production task variant must belong to the trigger order")
 	}
@@ -785,6 +794,9 @@ WHERE variant.id = $1
 	taskContext["variant_id"], _ = json.Marshal(canonicalVariantID)
 	taskContext["creative_order_id"], _ = json.Marshal(canonicalOrderID)
 	taskContext["creative_order_item_id"], _ = json.Marshal(canonicalOrderItemID)
+	if err := setCreativeProductionSourceContext(taskContext, sourceKind, candidateID, sourceAnalysisID, copyLibraryID); err != nil {
+		return item, err
+	}
 	var suppliedIssueID string
 	_ = json.Unmarshal(taskContext["issue_id"], &suppliedIssueID)
 	if strings.TrimSpace(suppliedIssueID) != "" {
@@ -829,6 +841,48 @@ WHERE variant.id = $1
 		return item, errors.New("failed to normalize manual creative production task context")
 	}
 	return service.DirectTaskFanoutItem{ItemKey: canonicalItemKey, Context: encoded}, nil
+}
+
+func setCreativeProductionSourceContext(taskContext map[string]json.RawMessage, sourceKind, candidateID, sourceAnalysisID, copyLibraryID string) error {
+	fields, err := creativeProductionSourceFields(sourceKind, candidateID, sourceAnalysisID, copyLibraryID)
+	if err != nil {
+		return err
+	}
+	delete(taskContext, "source_kind")
+	delete(taskContext, "candidate_id")
+	delete(taskContext, "source_analysis_id")
+	delete(taskContext, "copy_library_id")
+	for key, value := range fields {
+		taskContext[key], _ = json.Marshal(value)
+	}
+	return nil
+}
+
+func creativeProductionSourceFields(sourceKind, candidateID, sourceAnalysisID, copyLibraryID string) (map[string]string, error) {
+	switch sourceKind {
+	case "material":
+		if strings.TrimSpace(candidateID) == "" {
+			return nil, errors.New("material creative production item is missing candidate_id")
+		}
+		fields := map[string]string{
+			"source_kind":  sourceKind,
+			"candidate_id": candidateID,
+		}
+		if strings.TrimSpace(sourceAnalysisID) != "" {
+			fields["source_analysis_id"] = sourceAnalysisID
+		}
+		return fields, nil
+	case "copy_library":
+		if strings.TrimSpace(copyLibraryID) == "" {
+			return nil, errors.New("copy-library creative production item is missing copy_library_id")
+		}
+		return map[string]string{
+			"source_kind":     sourceKind,
+			"copy_library_id": copyLibraryID,
+		}, nil
+	default:
+		return nil, errors.New("creative production item has unsupported source_kind")
+	}
 }
 
 func jsonPositiveInt(raw json.RawMessage) (int, bool, error) {

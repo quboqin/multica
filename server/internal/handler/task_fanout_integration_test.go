@@ -45,6 +45,49 @@ func TestValidateCreativeProductionTaskContextAcceptsCurrentSizeAdjustment(t *te
 	}
 }
 
+func TestCreativeProductionSourceFieldsUsesFrozenSource(t *testing.T) {
+	candidateID := uuid.NewString()
+	analysisID := uuid.NewString()
+	libraryID := uuid.NewString()
+	material, err := creativeProductionSourceFields("material", candidateID, analysisID, libraryID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if material["source_kind"] != "material" || material["candidate_id"] != candidateID || material["source_analysis_id"] != analysisID {
+		t.Fatalf("material source fields = %#v", material)
+	}
+	if _, exists := material["copy_library_id"]; exists {
+		t.Fatalf("material source fields retained copy library = %#v", material)
+	}
+
+	copyLibrary, err := creativeProductionSourceFields("copy_library", candidateID, analysisID, libraryID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if copyLibrary["source_kind"] != "copy_library" || copyLibrary["copy_library_id"] != libraryID {
+		t.Fatalf("copy-library source fields = %#v", copyLibrary)
+	}
+	for _, field := range []string{"candidate_id", "source_analysis_id"} {
+		if _, exists := copyLibrary[field]; exists {
+			t.Fatalf("copy-library source fields retained %s: %#v", field, copyLibrary)
+		}
+	}
+
+	for _, test := range []struct {
+		name, sourceKind, candidateID, libraryID string
+	}{
+		{name: "material without candidate", sourceKind: "material"},
+		{name: "copy library without library", sourceKind: "copy_library", candidateID: candidateID},
+		{name: "unknown source", sourceKind: "unknown", candidateID: candidateID, libraryID: libraryID},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if _, err := creativeProductionSourceFields(test.sourceKind, test.candidateID, "", test.libraryID); err == nil {
+				t.Fatal("invalid production source unexpectedly accepted")
+			}
+		})
+	}
+}
+
 func TestValidateCreativeDirectEditTaskContextRequiresUnbrandedBaseAndTargetScope(t *testing.T) {
 	variantID := uuid.NewString()
 	issueID := uuid.NewString()
@@ -468,6 +511,9 @@ VALUES ($1, 'V01', 1, 'queued') RETURNING id::text
 		"variant_id":             variantID,
 		"revision":               0,
 		"item_key":               variantID + ":r0",
+		"source_kind":            "copy_library",
+		"candidate_id":           uuid.NewString(),
+		"copy_library_id":        uuid.NewString(),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -492,6 +538,89 @@ VALUES ($1, 'V01', 1, 'queued') RETURNING id::text
 	expectedSizes, _ := normalized["expected_sizes"].([]any)
 	if len(expectedSizes) != len(standardCreativeAssetSizes) {
 		t.Fatalf("expected sizes = %#v", expectedSizes)
+	}
+	if normalized["source_kind"] != "material" || normalized["candidate_id"] != candidateID {
+		t.Fatalf("normalized material source = %#v", normalized)
+	}
+	if _, exists := normalized["copy_library_id"]; exists {
+		t.Fatalf("normalized material context retained copy library = %#v", normalized)
+	}
+}
+
+func TestNormalizeCreativeProductionFanoutUsesCopyLibrarySource(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	libraryID := uuid.NewString()
+	if _, err := testPool.Exec(t.Context(), `
+INSERT INTO creative_resource (id, workspace_id, kind, name, status, version, published_version, config, created_by)
+VALUES ($1, $2, 'copy_library', $3, 'published', 1, 1, '{}'::jsonb, $4)
+`, libraryID, testWorkspaceID, "Production fanout copy library "+uuid.NewString(), testUserID); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM creative_resource WHERE id = $1`, libraryID)
+	})
+	var orderID, itemID, variantID string
+	if err := testPool.QueryRow(t.Context(), `
+INSERT INTO creative_order (workspace_id, status, input_snapshot, created_by)
+VALUES ($1, 'running', '{}'::jsonb, $2) RETURNING id::text
+`, testWorkspaceID, testUserID).Scan(&orderID); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM creative_order WHERE id = $1`, orderID)
+	})
+	if err := testPool.QueryRow(t.Context(), `
+INSERT INTO creative_order_item (order_id, source_kind, copy_library_id, copy_snapshot)
+VALUES ($1, 'copy_library', $2, '{}'::jsonb) RETURNING id::text
+`, orderID, libraryID).Scan(&itemID); err != nil {
+		t.Fatal(err)
+	}
+	if err := testPool.QueryRow(t.Context(), `
+INSERT INTO creative_order_variant (order_item_id, variant_key, revision, status)
+VALUES ($1, 'V01', 1, 'queued') RETURNING id::text
+`, itemID).Scan(&variantID); err != nil {
+		t.Fatal(err)
+	}
+	rawContext, err := json.Marshal(map[string]any{
+		"type":                   "creative_domain_task",
+		"workflow":               "creative_production",
+		"creative_order_id":      orderID,
+		"issue_id":               uuid.NewString(),
+		"leader_agent_id":        uuid.NewString(),
+		"creative_order_item_id": itemID,
+		"variant_id":             variantID,
+		"revision":               1,
+		"item_key":               variantID + ":r1",
+		"source_kind":            "material",
+		"candidate_id":           uuid.NewString(),
+		"source_analysis_id":     uuid.NewString(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	items, err := normalizeCreativeProductionFanoutItems(t.Context(), testPool, parseUUID(testWorkspaceID), parseUUID(itemID), []service.DirectTaskFanoutItem{{
+		ItemKey: variantID + ":r1",
+		Context: rawContext,
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 1 || items[0].ItemKey != variantID+":r1" {
+		t.Fatalf("normalized item = %#v", items)
+	}
+	var normalized map[string]any
+	if err := json.Unmarshal(items[0].Context, &normalized); err != nil {
+		t.Fatal(err)
+	}
+	if normalized["source_kind"] != "copy_library" || normalized["copy_library_id"] != libraryID {
+		t.Fatalf("normalized copy-library source = %#v", normalized)
+	}
+	for _, field := range []string{"candidate_id", "source_analysis_id"} {
+		if _, exists := normalized[field]; exists {
+			t.Fatalf("normalized copy-library context retained %s: %#v", field, normalized)
+		}
 	}
 }
 

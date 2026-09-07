@@ -87,7 +87,10 @@ type creativeSelectedExpansion struct {
 	PrimarySize           string
 	ExpectedSizes         []string
 	MissingSizes          []string
+	SourceKind            string
 	CandidateID           string
+	SourceAnalysisID      string
+	CopyLibraryID         string
 	OrderID               pgtype.UUID
 	OrderIDText           string
 	OrderItemID           pgtype.UUID
@@ -642,7 +645,8 @@ func (h *Handler) queueSelectedCreativeProductionTasks(ctx context.Context, orde
 	}
 	rows, err := tx.Query(ctx, `
 SELECT variant.id, variant.id::text, variant.variant_key, variant.revision, variant.primary_size,
-       revision.expected_sizes, item.candidate_id::text,
+       revision.expected_sizes, item.source_kind, COALESCE(item.candidate_id::text, ''),
+       COALESCE(item.source_analysis_id::text, ''), COALESCE(item.copy_library_id::text, ''),
        order_row.id, order_row.id::text, item.id, item.id::text, order_row.workspace_id,
        order_row.issue_id, COALESCE(order_row.issue_id::text, ''), order_row.input_snapshot::text,
        order_row.created_by,
@@ -682,7 +686,10 @@ FOR UPDATE OF variant, revision
 			&value.Revision,
 			&value.PrimarySize,
 			&value.ExpectedSizes,
+			&value.SourceKind,
 			&value.CandidateID,
+			&value.SourceAnalysisID,
+			&value.CopyLibraryID,
 			&value.OrderID,
 			&value.OrderIDText,
 			&value.OrderItemID,
@@ -772,7 +779,11 @@ SELECT EXISTS (
 		}
 		value.LeaderID = leaderID
 		value.ReviewerID = reviewerID
-		contextValue, err := json.Marshal(map[string]any{
+		sourceFields, err := creativeProductionSourceFields(value.SourceKind, value.CandidateID, value.SourceAnalysisID, value.CopyLibraryID)
+		if err != nil {
+			return queued, err
+		}
+		contextFields := map[string]any{
 			"type":                          "creative_domain_task",
 			"workflow":                      "creative_production",
 			"scope":                         "variant",
@@ -780,7 +791,6 @@ SELECT EXISTS (
 			"item_key":                      fmt.Sprintf("%s:r%d", value.VariantIDText, value.Revision),
 			"creative_order_id":             value.OrderIDText,
 			"creative_order_item_id":        value.OrderItemIDText,
-			"candidate_id":                  value.CandidateID,
 			"variant_id":                    value.VariantIDText,
 			"variant_key":                   value.VariantKey,
 			"revision":                      value.Revision,
@@ -800,7 +810,11 @@ SELECT EXISTS (
 			"rejected_source_variant_id":    value.RejectedSourceVariant,
 			"independent_size_generation":   true,
 			"primary_is_optional_reference": true,
-		})
+		}
+		for key, sourceValue := range sourceFields {
+			contextFields[key] = sourceValue
+		}
+		contextValue, err := json.Marshal(contextFields)
 		if err != nil {
 			return queued, fmt.Errorf("encode selected creative production task: %w", err)
 		}

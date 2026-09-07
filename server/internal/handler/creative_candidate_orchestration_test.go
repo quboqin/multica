@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -1131,6 +1132,61 @@ WHERE id = ANY($2::uuid[])
 	}
 	if len(tasks) != 2 {
 		t.Fatalf("selected expansion did not rebuild cancelled or failed tasks: %d, want 2", len(tasks))
+	}
+}
+
+func TestSelectedCreativeProductionPreservesCopyLibrarySource(t *testing.T) {
+	if testHandler == nil || testPool == nil {
+		t.Skip("database not available")
+	}
+	fixture := createCreativeCandidateOrchestrationFixture(t, "copy-library selected production")
+	libraryID := uuid.NewString()
+	if _, err := testPool.Exec(t.Context(), `
+INSERT INTO creative_resource (id, workspace_id, kind, name, status, version, published_version, config, created_by)
+VALUES ($1, $2, 'copy_library', $3, 'published', 1, 1, '{}'::jsonb, $4)
+	`, libraryID, testWorkspaceID, "Selected production copy library "+uuid.NewString(), testUserID); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM creative_order WHERE id = $1`, fixture.OrderID)
+		_, _ = testPool.Exec(context.Background(), `DELETE FROM creative_resource WHERE id = $1`, libraryID)
+	})
+	if _, err := testPool.Exec(t.Context(), `
+UPDATE creative_order_item
+SET source_kind = 'copy_library', candidate_id = NULL, source_analysis_id = NULL, copy_library_id = $2
+WHERE id = $1
+`, fixture.ItemID, libraryID); err != nil {
+		t.Fatal(err)
+	}
+	variantID := createCreativeCandidateOrchestrationVariant(
+		t, fixture.ItemID, "C01", "selected", 1, "completed", "1080x1080", standardCreativeAssetSizes,
+	)
+	addCreativeCandidateOrchestrationAsset(t, variantID, "1080x1080", "generated")
+	addCreativeCandidateOrchestrationAsset(t, variantID, "1080x1080", "primed")
+	tasks, err := testHandler.queueSelectedCreativeProductionTasks(
+		t.Context(), parseUUID(fixture.ItemID), creativeOrchestrationCause{RequestedBy: parseUUID(testUserID)}, creativeSelectedExpansionPhase,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tasks) != 1 {
+		t.Fatalf("copy-library selected production tasks = %d, want 1", len(tasks))
+	}
+	var contextValue string
+	if err := testPool.QueryRow(t.Context(), `SELECT context::text FROM agent_task_queue WHERE id = $1`, tasks[0].ID).Scan(&contextValue); err != nil {
+		t.Fatal(err)
+	}
+	var context map[string]any
+	if err := json.Unmarshal([]byte(contextValue), &context); err != nil {
+		t.Fatal(err)
+	}
+	if context["source_kind"] != "copy_library" || context["copy_library_id"] != libraryID {
+		t.Fatalf("copy-library selected production context = %#v", context)
+	}
+	for _, field := range []string{"candidate_id", "source_analysis_id"} {
+		if _, exists := context[field]; exists {
+			t.Fatalf("copy-library selected production retained %s: %#v", field, context)
+		}
 	}
 }
 
