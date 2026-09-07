@@ -7,6 +7,8 @@ import type { CreativeOrderAsset, CreativeOrderItem, CreativeOrderVariant } from
 import { CreativeGenerationInfoDialog, creativeAssetLineage, creativeGenerationInfo } from "./creative-generation-info-dialog";
 import { renderWithI18n } from "../../test/i18n";
 
+vi.mock("@multica/core/api", () => ({ api: { getBaseUrl: () => "" } }));
+
 afterEach(cleanup);
 
 function asset(input: Partial<CreativeOrderAsset> & Pick<CreativeOrderAsset, "id" | "stage">): CreativeOrderAsset {
@@ -67,6 +69,30 @@ function fixture() {
 }
 
 describe("creative generation information", () => {
+  it("shows actual model integration and the exact template independently of frozen configuration", () => {
+    const { delivered, primed, variant, item } = fixture();
+    variant.brief = { prime_composition: { mode: "deterministic" } };
+    primed.evidence = { composition_mode: "model_integrated", template_family_id: "light_background", template_source_role: "prime_light_square", template_attachment_id: "template-123" };
+    const info = creativeGenerationInfo(item, variant, delivered);
+    expect(info.primeConfigured.mode).toBe("deterministic");
+    expect(info.primeActual).toMatchObject({ mode: "model_integrated", templateAttachmentId: "template-123" });
+    renderWithI18n(<CreativeGenerationInfoDialog open onOpenChange={vi.fn()} item={item} variant={variant} asset={delivered} imageUrl="https://cdn.example/delivered.png" />);
+    expect(screen.getByText("Platform overlay")).toBeInTheDocument();
+    expect(screen.getByText("Model integration")).toBeInTheDocument();
+    expect(screen.getByText("Actual processing differs from the frozen order mode")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "View actual template" })).toHaveAttribute("href", expect.stringContaining("template-123"));
+  });
+
+  it("never infers execution from the current brief or borrows evidence from another revision", () => {
+    const { delivered, variant, item } = fixture();
+    variant.revision = 3;
+    variant.brief = { prime_composition: { mode: "model_integrated" } };
+    variant.assets.push(asset({ id: "new-prime", stage: "primed", revision: 3, evidence: { composition_mode: "model_integrated" } }));
+    const info = creativeGenerationInfo(item, variant, delivered);
+    expect(info.primeConfigured.mode).toBe("unknown");
+    expect(info.primeActual.mode).toBe("unknown");
+  });
+
   it("resolves delivered, Prime, and generated records into business information", () => {
     const { delivered, variant, item } = fixture();
     const info = creativeGenerationInfo(item, variant, delivered);

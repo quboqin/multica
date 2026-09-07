@@ -4,9 +4,9 @@ import koChangelog from "../locales/ko/changelog.json";
 import zhHansChangelog from "../locales/zh-Hans/changelog.json";
 import type { SupportedLocale } from "@multica/core/i18n";
 
-export const PLATFORM_VERSION = "0.3.50";
+export const PLATFORM_VERSION = "0.3.51";
 
-export const PLATFORM_RELEASE_ID = "v0_3_50" as const;
+export const PLATFORM_RELEASE_ID = "v0_3_51" as const;
 
 type ChangelogResources = typeof changelog;
 export type PlatformReleaseId = keyof ChangelogResources["releases"];

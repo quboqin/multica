@@ -3,6 +3,16 @@
   "subtitle": "Release notes maintained inside this Multica platform.",
   "current_version": "Current platform version: {{version}}",
   "releases": {
+    "v0_3_51": {
+      "version": "0.3.51",
+      "date": "2026-09-07",
+      "title": "Prime mode persistence and execution details",
+      "summary": "Resource refreshes preserve model-integration edits, and orders distinguish their frozen mode from actual image processing.",
+      "change_1": "Unsaved market-rule edits are retained per workspace and resource. Publishing saves current edits first; failed saves or publication preserve your work.",
+      "change_2": "Draft and published modes are shown separately. An enabled model-integration mode can still be turned off while templates await validation.",
+      "change_3": "Orders show the frozen mode; image details show recorded processing, template family, and available template attachments. Missing historical evidence is shown as not recorded.",
+      "change_4": "Bootstrap preserves existing market rules, Prime modes, and templates unless creating a resource or explicitly resetting business configuration."
+    },
     "v0_3_50": {
       "version": "0.3.50",
       "date": "2026-09-07",

@@ -16,6 +16,9 @@ export { creativeGalleryEvents, creativeGalleryVariantIds, useCreativeGalleryMut
 export { creativeGalleryDeliverySelection } from "./gallery";
 export type { CreativeGalleryDeliverySelection } from "./gallery";
 export { DEFAULT_CREATIVE_VARIANT_COUNT, MAX_CREATIVE_VARIANT_COUNT, creativeOrderTargetVariantCount } from "./variant-count";
+export { creativePrimeConfig, creativeOrderPrimeConfig, creativeAssetPrimeComposition } from "./prime-composition";
+export type { CreativePrimeMode, CreativePrimeComposition } from "./prime-composition";
+export { useCreativeResourceDraftStore, creativeResourceDraftKey, applyCreativeResourceChanges, hasCreativeResourceChanges, EMPTY_CREATIVE_RESOURCE_CHANGES } from "./resource-draft-store";
 export {
   useAdoptCreativeOrderVariant,
   useCancelCreativeOrder,

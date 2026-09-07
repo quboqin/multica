@@ -658,19 +658,6 @@ if ($seedCopyLibrary) {
 $resources = Get-Items (Invoke-MulticaApi -Method Get -Path '/api/creative/resources') 'resources'
 $marketPack = $resources | Where-Object { $_.kind -eq 'market_pack' -and $_.name -eq $marketPackName } | Select-Object -First 1
 $marketPackIsNew = -not $marketPack
-$marketPackHasPreAdaptationDefault = $false
-if ($marketPack -and $marketPack.config -and $marketPack.config.PSObject.Properties.Name -contains 'pre_adaptation_default') {
-    $marketPackHasPreAdaptationDefault = $marketPack.config.pre_adaptation_default -eq $true
-}
-$marketPackHasCalculationRules = $false
-if ($marketPack -and $marketPack.config -and $marketPack.config.PSObject.Properties.Name -contains 'calculation_rules') {
-    $marketPackHasCalculationRules = @($marketPack.config.calculation_rules).Count -gt 0
-}
-$legacyPrimeQRConfigFields = @('qr_payload', 'qr_canonical_payload', 'qr_allowed_domains', 'qr_approval_status', 'qr_approval_note')
-$marketPackHasLegacyQRConfig = $false
-if ($marketPack -and $marketPack.config) {
-    $marketPackHasLegacyQRConfig = @($legacyPrimeQRConfigFields | Where-Object { $marketPack.config.PSObject.Properties.Name -contains $_ }).Count -gt 0
-}
 $primeTemplates = @(
     @{ role = 'prime_light_square'; label = '明亮底图方案 · 方形 · 11-01.png'; path = (Join-Path $PrimeDirectory '11-01.png'); size = '1080x1080'; family = 'light_background' },
     @{ role = 'prime_light_landscape'; label = '明亮底图方案 · 横版 · 191-01.png'; path = (Join-Path $PrimeDirectory '191-01.png'); size = '1200x628'; family = 'light_background' },
@@ -680,23 +667,7 @@ $primeTemplates = @(
     @{ role = 'prime_dark_portrait'; label = '深色底图方案 · 竖版 · 45-03.png'; path = (Join-Path $PrimeDirectory '45-03.png'); size = '800x1000'; family = 'dark_background' }
 )
 $requiredPrimeTemplateRoles = @($primeTemplates | ForEach-Object { $_.role })
-$marketPackHasPrimeTemplateSet = $false
-if ($marketPack -and $marketPack.config -and $marketPack.config.PSObject.Properties.Name -contains 'prime_template_set') {
-    $templateSet = $marketPack.config.prime_template_set
-    if ($templateSet -and $templateSet.PSObject.Properties.Name -contains 'families') {
-        $configuredRoles = @($templateSet.families | ForEach-Object { $_.templates.PSObject.Properties | ForEach-Object { $_.Value.source_role } })
-        $marketPackHasPrimeTemplateSet = $templateSet.schema_version -eq 2 -and $templateSet.selection_mode -eq 'automatic_family_contrast' -and @($templateSet.families).Count -eq 2 -and $configuredRoles.Count -eq $requiredPrimeTemplateRoles.Count -and @($configuredRoles | Where-Object { $_ -notin $requiredPrimeTemplateRoles }).Count -eq 0
-    }
-}
-$marketPackHasExactPrimeFiles = $false
-if ($marketPack) {
-    $marketFiles = Get-Items (Invoke-MulticaApi -Method Get -Path "/api/creative/resources/$($marketPack.id)/files") 'files'
-    $primeFiles = @($marketFiles | Where-Object { $_.role -like 'prime_*' })
-    $primeRoles = @($primeFiles | ForEach-Object { $_.role } | Select-Object -Unique)
-    $marketPackHasExactPrimeFiles = $primeFiles.Count -eq $requiredPrimeTemplateRoles.Count -and $primeRoles.Count -eq $requiredPrimeTemplateRoles.Count -and @($primeRoles | Where-Object { $_ -notin $requiredPrimeTemplateRoles }).Count -eq 0
-}
-$marketPackIsCurrentPublished = $marketPack -and ([int]$marketPack.version -eq [int]$marketPack.published_version) -and $marketPack.config.prime_template_set_validation.status -eq 'passed'
-$seedMarketPack = $marketPackIsNew -or $ResetBusinessConfig -or $marketPackHasLegacyQRConfig -or -not $marketPackIsCurrentPublished -or -not $marketPackHasPreAdaptationDefault -or ($useIndonesiaSeedData -and -not $marketPackHasCalculationRules) -or -not $marketPackHasPrimeTemplateSet -or -not $marketPackHasExactPrimeFiles
+$seedMarketPack = $marketPackIsNew -or $ResetBusinessConfig
 $calculationRules = @()
 $complianceRules = '只能使用当前市场已审核的金融事实、文案和品牌组件；不得复制竞品品牌、金额、法律文字或专属页面元素。'
 if ($useIndonesiaSeedData) {

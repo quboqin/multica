@@ -36,6 +36,12 @@ import {
   useCancelCreativeOrder,
   useDeleteCreativeOrder,
   useSelectCreativeOrderVariantRevision,
+  useCreativeResourceDraftStore,
+  creativeResourceDraftKey,
+  applyCreativeResourceChanges,
+  hasCreativeResourceChanges,
+  EMPTY_CREATIVE_RESOURCE_CHANGES,
+  creativePrimeConfig,
 } from "@multica/core/creative";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { useWorkspacePaths } from "@multica/core/paths";
@@ -56,6 +62,7 @@ import type {
   CreativeMaterialCandidate,
   CreativeResource,
   CreativeResourceKind,
+  CreativeResourceListResponse,
   CreateCreativeFeedbackResponse,
   CreateIssueRequest,
   IssueMetadata,
@@ -106,6 +113,7 @@ import { CreativeFeedbackDashboard } from "./creative-feedback-dashboard";
 import { creativeVariantRevisionExpectedSizes } from "./creative-staging-repair-workspace";
 import { CreativeWorkbench } from "./creative-workbench";
 import { MarketResourceFiles } from "./market-resource-files";
+import { CreativeOrderPrimeSummary, creativePrimeFamilyLabel, creativePrimeModeLabel } from "./creative-prime-mode";
 
 type CreativeStudioTab = "home" | "materials" | "orders" | "resources" | "feedback";
 type CreativeAdjustmentScope = "size" | "variant";
@@ -718,6 +726,7 @@ function CreativeOrderDetail({ orderId, onBack, onBrowseOrders, backLabel }: { o
       <div><div className="flex items-center gap-1"><Button size="sm" variant="ghost" onClick={onBack}><ArrowLeft className="h-4 w-4" />{backLabel}</Button>{backLabel === t(($) => $.studio.returnToIssue) && <Button size="sm" variant="ghost" onClick={onBrowseOrders}>{t(($) => $.studio.allOrders)}</Button>}</div><h2 className="mt-2 text-base font-semibold">{t(($) => $.studio.order, { id: orderId.slice(0, 8) })}</h2><p className="mt-1 text-xs text-muted-foreground">{stage.detail} · {t(($) => $.studio.updatedAt, { time: formatCreativeDateTime(data?.updated_at || ""), zone: t(($) => $.generationInfo.beijingTime) })}</p></div>
       <div className="flex flex-wrap items-center justify-end gap-2"><Badge variant={stage.key === "review" || stage.key === "attention" || stage.key === "delivered" ? "default" : "outline"}>{stage.label}</Badge>{!isDirectEdit && galleryVariantIds.size > 0 && <Badge variant="default">{galleryVariantIds.size} 个已入图库</Badge>}{data && !["delivered", "cancelled"].includes(stage.key) && <Button size="sm" variant="outline" onClick={() => setCancelOpen(true)}><CircleStop className="h-4 w-4" />{t(($) => $.studio.endOrder)}</Button>}{data && <Button size="sm" variant="outline" className="text-destructive hover:text-destructive" onClick={() => setDeleteOpen(true)}><Trash2 className="h-4 w-4" />{t(($) => $.studio.deleteOrder)}</Button>}</div>
     </div>
+    {data && <CreativeOrderPrimeSummary order={data} />}
     {data && <CreativeOrderStatusPanel order={data} stage={stage} />}
     <CreativeOrderJourney stageKey={stage.key} />
     <div className="space-y-4">
@@ -1536,31 +1545,40 @@ function CreativeResourcesWorkspace({ resources, onCreate, onArchive, initialSec
   </div>;
 }
 
-function ResourceEditor({ resources, copyLibraries, onCreate, onArchive }: {
+export function ResourceEditor({ resources, copyLibraries, onCreate, onArchive }: {
   resources: CreativeResource[];
   copyLibraries: CreativeResource[];
   onCreate: () => void;
   onArchive: (id: string) => void;
 }) {
+  const { t } = useT("creative");
   const wsId = useWorkspaceId();
   const queryClient = useQueryClient();
   const [activeId, setActiveId] = useState(resources[0]?.id ?? "");
   const active = resources.find((resource) => resource.id === activeId) ?? resources[0];
-  const [draft, setDraft] = useState<Record<string, unknown>>(() => withDefaultPrimeTemplateSet(active?.config ?? {}));
-  const draftKey = active ? `${active.id}:${active.version}` : "";
-  useEffect(() => {
-    setDraft(withDefaultPrimeTemplateSet(active?.config ?? {}));
-  }, [draftKey, active]);
+  const draftKey = creativeResourceDraftKey(wsId, active?.id ?? "");
+  const changes = useCreativeResourceDraftStore((state) => state.changes[draftKey] ?? EMPTY_CREATIVE_RESOURCE_CHANGES);
+  const updateDraft = useCreativeResourceDraftStore((state) => state.update);
+  const clearDraft = useCreativeResourceDraftStore((state) => state.clear);
+  const draft = withDefaultPrimeTemplateSet(applyCreativeResourceChanges(active?.config ?? {}, changes));
+  const dirty = hasCreativeResourceChanges(active?.config ?? {}, changes);
+  const setDraft = (next: Record<string, unknown>) => updateDraft(draftKey, draft, next);
+  const cacheResource = (resource: CreativeResource) => {
+    queryClient.setQueryData<CreativeResourceListResponse>(creativeKeys.resources(wsId), (current) => current && ({ resources: current.resources.map((entry) => entry.id === resource.id ? resource : entry) }));
+  };
   const save = useMutation({
-    mutationFn: () => {
+    mutationFn: async (publish: boolean) => {
       if (!active) throw new Error("resource missing");
-      return api.updateCreativeResource(active.id, { name: active.name, description: active.description, config: draft });
+      if (dirty) {
+        const saved = await api.updateCreativeResource(active.id, { name: active.name, description: active.description, config: draft });
+        cacheResource(saved);
+        clearDraft(draftKey, changes);
+      }
+      if (publish) cacheResource(await api.publishCreativeResource(active.id));
     },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: creativeKeys.resources(wsId) });
-      toast.success("配置已保存为草稿");
-    },
-    onError: () => toast.error("无法保存配置"),
+    onSuccess: (_, publish) => toast.success(publish ? t(($) => $.primeMode.published) : t(($) => $.primeMode.saved)),
+    onError: (error) => toast.error(error instanceof Error ? error.message : t(($) => $.primeMode.saveFailed)),
+    onSettled: () => queryClient.invalidateQueries({ queryKey: creativeKeys.resources(wsId) }),
   });
   return (
     <div className="grid h-full min-h-0 grid-cols-1 overflow-hidden border md:grid-cols-[260px_minmax(0,1fr)]">
@@ -1569,14 +1587,16 @@ function ResourceEditor({ resources, copyLibraries, onCreate, onArchive }: {
         {!active ? <EmptyResource title="还没有市场配置" action="创建市场配置" onAction={onCreate} /> : (
           <>
             <div className="sticky top-0 z-10 flex flex-wrap items-center justify-between gap-3 border-b bg-background px-5 py-3">
-              <ResourceTitle resource={active} />
+              <div className="min-w-0"><ResourceTitle resource={active} /><p className="mt-1 text-xs text-muted-foreground" role="status">{dirty ? t(($) => $.primeMode.unsaved) : active.status === "draft" ? t(($) => $.primeMode.savedDraft) : t(($) => $.primeMode.published)}</p></div>
               <div className="flex items-center gap-2">
-                <Button size="sm" variant="outline" onClick={() => save.mutate()} disabled={save.isPending}><Save className="h-4 w-4" />保存草稿</Button>
-                <PublishButton resource={active} />
-                <Button size="icon-sm" variant="ghost" title="归档资源" aria-label="归档资源" onClick={() => onArchive(active.id)}><Archive className="h-4 w-4" /></Button>
+                {dirty && <Button size="icon-sm" variant="ghost" title={t(($) => $.primeMode.discard)} aria-label={t(($) => $.primeMode.discard)} disabled={save.isPending} onClick={() => clearDraft(draftKey)}><RefreshCw className="h-4 w-4" /></Button>}
+                <Button size="sm" variant="outline" onClick={() => save.mutate(false)} disabled={save.isPending || !dirty}><Save className="h-4 w-4" />{t(($) => $.primeMode.saveDraft)}</Button>
+                <Button size="sm" onClick={() => save.mutate(true)} disabled={save.isPending || (!dirty && active.status === "published" && active.published_version === active.version)}><Check className="h-4 w-4" />{save.isPending ? t(($) => $.primeMode.saving) : dirty ? t(($) => $.primeMode.saveAndPublish) : t(($) => $.primeMode.publish)}</Button>
+                <Button size="icon-sm" variant="ghost" title="归档资源" aria-label="归档资源" disabled={save.isPending} onClick={() => onArchive(active.id)}><Archive className="h-4 w-4" /></Button>
               </div>
             </div>
-            <MarketPackForm resource={active} value={draft} onChange={setDraft} copyLibraries={copyLibraries} />
+            {save.error && <p role="alert" className="border-b px-5 py-3 text-sm text-destructive">{save.error.message}</p>}
+            <fieldset disabled={save.isPending} className="min-w-0"><MarketPackForm resource={active} value={draft} onChange={setDraft} copyLibraries={copyLibraries} disabled={save.isPending} /></fieldset>
           </>
         )}
       </div>
@@ -1584,12 +1604,14 @@ function ResourceEditor({ resources, copyLibraries, onCreate, onArchive }: {
   );
 }
 
-function MarketPackForm({ resource, value, onChange, copyLibraries }: {
+function MarketPackForm({ resource, value, onChange, copyLibraries, disabled }: {
   resource: CreativeResource;
   value: Record<string, unknown>;
   onChange: (value: Record<string, unknown>) => void;
   copyLibraries: CreativeResource[];
+  disabled: boolean;
 }) {
+  const { t } = useT("creative");
   const set = (key: string, next: unknown) => onChange({ ...value, [key]: next });
   const templateFamilies = readPrimeTemplateValidation(resource.config.prime_template_set_validation);
   const modelIntegrated = stringValue(value.prime_composition_mode) === "model_integrated";
@@ -1624,21 +1646,23 @@ function MarketPackForm({ resource, value, onChange, copyLibraries }: {
           </FormSection>
         </TabsContent>
         <TabsContent value="brand" className="mt-0 space-y-8">
-          <FormSection title="Prime 贴片方式" description="默认由平台保留完整官方模板并确定性合成。只有已验证且不含二维码的模板族可交给模型融入成图，仍须通过最终目检。">
-            <div className="flex items-center justify-between gap-4 border-y py-3">
+          <FormSection title={t(($) => $.primeMode.title)} description="">
+            <div className="flex items-center justify-between gap-4 border-y py-3 sm:col-span-2">
               <div className="min-w-0">
-                <Label htmlFor="prime-model-integrated" className="text-sm font-medium">模型融入 Prime 模板</Label>
-                <p className="mt-1 text-xs text-muted-foreground">适用于无二维码市场；模型负责整体融合，平台保留模板和结果证据。</p>
+                <Label htmlFor="prime-model-integrated" className="text-sm font-medium">{t(($) => $.primeMode.switchLabel)}</Label>
+                <p className="mt-1 text-xs text-muted-foreground">{t(($) => $.primeMode.draftMode)}: {creativePrimeModeLabel(t, creativePrimeConfig(value).mode)}</p>
               </div>
-              <Switch id="prime-model-integrated" checked={modelIntegrated} disabled={eligibleModelFamilies.length === 0} onCheckedChange={setModelIntegrated} />
+              <Switch id="prime-model-integrated" checked={modelIntegrated} disabled={disabled || (!modelIntegrated && eligibleModelFamilies.length === 0)} onCheckedChange={setModelIntegrated} />
             </div>
-            {modelIntegrated && <Field label="模型使用的模板族" wide>
-              <NativeSelect value={selectedModelFamily} onChange={(event) => set("prime_model_template_family", event.target.value)}>
+            <p className="text-xs text-muted-foreground sm:col-span-2" data-testid="prime-published-mode">{t(($) => $.primeMode.publishedMode)}: {activePublishedPrimeLabel(resource, t)}</p>
+            {modelIntegrated && <Field label={t(($) => $.primeMode.templateFamily)} wide>
+              <NativeSelect value={selectedModelFamily} disabled={eligibleModelFamilies.length === 0} onChange={(event) => set("prime_model_template_family", event.target.value)}>
+                {selectedModelFamily && !eligibleModelFamilies.some((family) => family.id === selectedModelFamily) && <NativeSelectOption value={selectedModelFamily}>{creativePrimeFamilyLabel(t, selectedModelFamily)}</NativeSelectOption>}
                 {eligibleModelFamilies.map((family) => <NativeSelectOption key={family.id} value={family.id}>{family.label}</NativeSelectOption>)}
               </NativeSelect>
             </Field>}
-            {!templateFamilies && <p className="text-xs text-muted-foreground">先保存并发布完整 Prime 模板，系统验证后才可选择模型融入。</p>}
-            {templateFamilies && eligibleModelFamilies.length === 0 && <p className="text-xs text-muted-foreground">当前模板族均含二维码，必须使用平台确定性贴片。</p>}
+            {!templateFamilies && <p className="text-xs text-muted-foreground sm:col-span-2">{t(($) => $.primeMode.validationPending)}</p>}
+            {templateFamilies && eligibleModelFamilies.length === 0 && <p className="text-xs text-muted-foreground sm:col-span-2">{t(($) => $.primeMode.qrBlocked)}</p>}
           </FormSection>
           <MarketResourceFiles resource={resource} value={value} />
         </TabsContent>
@@ -1715,15 +1739,10 @@ function ResourceTitle({ resource }: { resource: CreativeResource }) {
   return <div className="min-w-0"><div className="flex items-center gap-2"><h2 className="truncate text-sm font-semibold">{resourceListTitle(resource)}</h2><Badge variant="outline">{resource.status === "published" ? "已发布" : "草稿"}</Badge></div><p className="mt-0.5 truncate text-xs text-muted-foreground">{resourceListSubtitle(resource)}</p></div>;
 }
 
-function PublishButton({ resource }: { resource: CreativeResource }) {
-  const wsId = useWorkspaceId();
-  const queryClient = useQueryClient();
-  const publish = useMutation({
-    mutationFn: () => api.publishCreativeResource(resource.id),
-    onSuccess: () => { queryClient.invalidateQueries({ queryKey: creativeKeys.resources(wsId) }); toast.success("已发布"); },
-    onError: (error) => toast.error(error instanceof Error ? error.message : "无法发布"),
-  });
-  return <Button size="sm" onClick={() => publish.mutate()} disabled={publish.isPending || (resource.status === "published" && resource.published_version === resource.version)}><Check className="h-4 w-4" />发布</Button>;
+function activePublishedPrimeLabel(resource: CreativeResource, t: ReturnType<typeof useT<"creative">>["t"]): string {
+  if (resource.published_version < 1) return t(($) => $.primeMode.notPublished);
+  const config = creativePrimeConfig(resource.published_config ?? (resource.status === "published" && resource.version === resource.published_version ? resource.config : undefined));
+  return [creativePrimeModeLabel(t, config.mode), creativePrimeFamilyLabel(t, config.templateFamilyId), `v${resource.published_version}`].filter(Boolean).join(" · ");
 }
 
 function CreateResourceDialog({ kind, onClose, onCreated }: { kind: CreativeResourceKind | null; onClose: () => void; onCreated: () => void }) {

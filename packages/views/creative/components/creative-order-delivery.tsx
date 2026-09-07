@@ -13,7 +13,7 @@ import { cn } from "@multica/ui/lib/utils";
 import { toast } from "sonner";
 import { useT } from "../../i18n";
 import type { CreativeGalleryDeliverySelection } from "@multica/core/creative";
-import { creativeOrderTargetVariantCount } from "@multica/core/creative";
+import { creativeOrderTargetVariantCount, creativeAssetPrimeComposition } from "@multica/core/creative";
 import { creativeAttachmentBrowserURL } from "../lib/creative-attachment-url";
 import { creativeTimeZoneLabel, formatCreativeDateTime } from "../lib/creative-time";
 
@@ -889,6 +889,7 @@ function CreativeProcessImageDialog({
   disabled?: boolean;
   onAdopt?: (asset: CreativeOrderDiagnosticAsset) => Promise<void>;
 }) {
+  const { t } = useT("creative");
   const adjustment = creativeVariantDirectAdjustmentContext(variant);
   const comparisonAssets = variant.diagnostic_assets ?? assets;
   const comparison = creativeProcessComparisonCards(variant, attachments, adjustment, comparisonAssets);
@@ -949,7 +950,7 @@ function CreativeProcessImageDialog({
               {group.assets.map((asset) => <figure key={asset.id} className="min-w-0 overflow-hidden border bg-background">
                 <figcaption className="flex items-center justify-between gap-2 border-b px-3 py-2">
                   <div className="min-w-0">
-                    <p className="truncate text-xs font-medium">{creativeProcessSizeLabel(asset.size_key)} · {creativeDiagnosticAssetRole(asset, adjustment)}</p>
+                    <p className="truncate text-xs font-medium">{creativeProcessSizeLabel(asset.size_key)} · {creativeDiagnosticPrimeMode(variant, asset) === "model_integrated" ? t(($) => $.primeMode.integratedResult) : creativeDiagnosticAssetRole(asset, adjustment)}</p>
                     <p className="mt-0.5 truncate text-[11px] text-muted-foreground">r{asset.revision} · {creativeDiagnosticAssetLabel(asset)} · {creativeProcessTimeLabel(asset.updated_at || asset.created_at)}</p>
                     <p className="mt-0.5 truncate text-[11px] text-muted-foreground">{asset.filename}</p>
                   </div>
@@ -1121,6 +1122,11 @@ function creativeDiagnosticAssetRole(asset: CreativeOrderDiagnosticAsset, adjust
   if (asset.label === "规范化底图") return adjustment?.targetSize === asset.size_key ? "规范化后改图" : "规范化底图";
   if (asset.label === "Prime 合成成图") return adjustment?.targetSize === asset.size_key ? "调整后贴片结果" : "品牌贴片结果";
   return asset.label;
+}
+
+function creativeDiagnosticPrimeMode(variant: CreativeOrderVariant, diagnostic: CreativeOrderDiagnosticAsset) {
+  if (diagnostic.workflow !== "brand_components") return "unknown";
+  return creativeAssetPrimeComposition(variant.assets.find((asset) => asset.attachment_id === diagnostic.attachment_id && asset.revision === diagnostic.revision && asset.size_key === diagnostic.size_key && (asset.stage === "primed" || asset.stage === "delivered"))).mode;
 }
 
 function creativeDiagnosticAssetReusedForAdjustment(asset: CreativeOrderDiagnosticAsset): boolean {

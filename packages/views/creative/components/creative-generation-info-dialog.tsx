@@ -2,10 +2,14 @@
 
 import { Clock3, FileText, Image as ImageIcon, Layers3, Sparkles } from "lucide-react";
 import type { CreativeOrderAsset, CreativeOrderItem, CreativeOrderVariant } from "@multica/core/types";
+import { attachmentDownloadPath } from "@multica/core/types";
+import { creativePrimeConfig, creativeAssetPrimeComposition, type CreativePrimeComposition } from "@multica/core/creative";
+import { resolvePublicFileUrl } from "@multica/core/workspace/avatar-url";
 import { Badge } from "@multica/ui/components/ui/badge";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@multica/ui/components/ui/dialog";
 import { useT } from "../../i18n";
 import { formatCreativeDateTime } from "../lib/creative-time";
+import { creativePrimeFamilyLabel, creativePrimeModeLabel } from "./creative-prime-mode";
 
 type GenerationFact = { label: string; value: string };
 type GenerationCopyLine = { field: keyof GenerationInfoLabels["copyFields"]; label: string; value: string };
@@ -50,6 +54,8 @@ export type CreativeGenerationInfo = {
   requestId: string;
   attempts: string;
   lineage: CreativeOrderAsset[];
+  primeConfigured: CreativePrimeComposition;
+  primeActual: CreativePrimeComposition;
 };
 
 export function creativeGenerationInfo(
@@ -63,6 +69,10 @@ export function creativeGenerationInfo(
   const primed = lineage.find((candidate) => candidate.stage === "primed");
   const snapshot = record(item.copy_snapshot);
   const brief = record(variant.brief);
+  const revisionBrief = record(variant.revisions?.find((entry) => entry.revision === asset.revision)?.brief ?? (variant.revision === asset.revision ? variant.brief : undefined));
+  const primeContract = record(revisionBrief.prime_composition);
+  const primeConfigured = creativePrimeConfig({ prime_composition_mode: primeContract.mode ?? "unknown", prime_model_template_family: primeContract.template_family_id });
+  const primeActual = creativeAssetPrimeComposition([...lineage].reverse().find((entry) => creativeAssetPrimeComposition(entry).mode !== "unknown"));
   const generatedMetadata = record(generated?.metadata);
   const generatedEvidence = record(generated?.evidence);
   const promptSources = [generatedMetadata, generatedEvidence, record(asset.metadata), record(asset.evidence), record(primed?.metadata), record(primed?.evidence)];
@@ -108,6 +118,8 @@ export function creativeGenerationInfo(
     requestId: firstString(evidenceSources, ["request_id", "model_request_id", "generation_request_id"]),
     attempts: firstScalar(evidenceSources, ["attempts", "attempt", "generation_attempts"]),
     lineage,
+    primeConfigured,
+    primeActual,
   };
 }
 
@@ -187,9 +199,14 @@ export function CreativeGenerationInfoDialog({
           <InfoSection icon={<Layers3 aria-hidden="true" className="h-4 w-4" />} title={t(($) => $.generationInfo.generationAndMarket)}>
             <dl className="grid gap-x-5 gap-y-3 sm:grid-cols-2">
               <InfoValue label={t(($) => $.generationInfo.generationModel)} value={[info.provider, info.model].filter(Boolean).join(" · ")} fallback={t(($) => $.generationInfo.notRecorded)} />
+              <InfoValue label={t(($) => $.primeMode.orderMode)} value={creativePrimeModeLabel(t, info.primeConfigured.mode)} fallback={t(($) => $.primeMode.unknown)} />
+              <InfoValue label={t(($) => $.primeMode.actualMode)} value={creativePrimeModeLabel(t, info.primeActual.mode)} fallback={t(($) => $.primeMode.unknown)} />
+              <InfoValue label={t(($) => $.primeMode.actualTemplate)} value={[creativePrimeFamilyLabel(t, info.primeActual.templateFamilyId), info.primeActual.templateRole].filter(Boolean).join(" · ")} fallback={t(($) => $.primeMode.unknown)} />
               <InfoValue label={t(($) => $.generationInfo.marketResource)} value={info.marketResource} fallback={t(($) => $.generationInfo.notRecorded)} />
               <InfoValue label={t(($) => $.generationInfo.marketRule)} value={info.marketRule} fallback={t(($) => $.generationInfo.notRecorded)} wide />
             </dl>
+            {info.primeActual.templateAttachmentId && <a className="mt-3 inline-block text-xs underline underline-offset-4" href={resolvePublicFileUrl(attachmentDownloadPath(info.primeActual.templateAttachmentId)) ?? undefined} target="_blank" rel="noreferrer">{t(($) => $.primeMode.viewTemplate)}</a>}
+            {info.primeConfigured.mode !== "unknown" && info.primeActual.mode !== "unknown" && info.primeActual.mode !== info.primeConfigured.mode && <p role="status" className="mt-3 text-sm text-destructive">{t(($) => $.primeMode.mismatch)}</p>}
           </InfoSection>
           <InfoSection icon={<Clock3 aria-hidden="true" className="h-4 w-4" />} title={t(($) => $.generationInfo.versionAndTime)}>
             <dl className="grid gap-x-5 gap-y-3 sm:grid-cols-2">
