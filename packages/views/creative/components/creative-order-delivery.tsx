@@ -1434,12 +1434,6 @@ function creativeVariantFailedQCLabels(variant: CreativeOrderVariant): string[] 
     .map((detail) => detail.label);
 }
 
-function creativeVariantPendingQCLabels(visual: string): string[] {
-  const labels: string[] = [];
-  if (!qcStatusAllowsAdoption(visual)) labels.push(`视觉质检${qcStatusLabel(visual)}`);
-  return labels.length > 0 ? labels : ["质检结果同步中"];
-}
-
 function currentCreativeVariantSizeSet(variant: CreativeOrderVariant, stage: string): Set<string> {
   return creativeVariantSizeSet(variant, stage, creativeVariantActiveRevision(variant) || creativeVariantWorkingRevision(variant));
 }
@@ -1605,13 +1599,6 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function timestamp(value: string | undefined): number {
   const parsed = Date.parse(value ?? "");
   return Number.isNaN(parsed) ? 0 : parsed;
-}
-
-function qcStatusLabel(status: string): string {
-  if (status === "passed") return "通过";
-  if (status === "warning") return "通过（有记录）";
-  if (status === "failed") return "失败";
-  return "待完成";
 }
 
 function compareDeliveryAssets(left: CreativeOrderAsset, right: CreativeOrderAsset): number {

@@ -131,7 +131,7 @@ describe("creative order stage", () => {
       key: "review",
       label: "可入图库",
       action: "查看成图",
-      readyVariants: 2,
+      readyVariants: 3,
     });
   });
 
@@ -334,6 +334,8 @@ describe("CreativeOrderDeliveryCandidates", () => {
 
   it("offers gallery actions and disables adding incomplete variants", () => {
     const orderItem = item();
+    const incomplete = orderItem.variants[1]!;
+    incomplete.assets = incomplete.assets.filter((asset) => !(asset.revision === 2 && asset.stage === "primed" && asset.size_key === "800x1000"));
     const onAdopt = vi.fn();
     const onAssetSelect = vi.fn();
     const onAssetInfo = vi.fn();
@@ -344,7 +346,7 @@ describe("CreativeOrderDeliveryCandidates", () => {
     expect(actions[0]).toBeEnabled();
     expect(screen.getByRole("button", { name: "尚不可入库" })).toBeDisabled();
     expect(screen.getAllByRole("button", { name: "查看并标注" })).toHaveLength(3);
-    expect(screen.getAllByText("处理中").length).toBeGreaterThan(0);
+    expect(screen.getByText("等待成图")).toBeInTheDocument();
     expect(screen.getAllByAltText(/方形主预览/)).toHaveLength(3);
     expect(screen.queryAllByAltText(/横版主预览|竖版主预览/)).toHaveLength(0);
     fireEvent.click(screen.getAllByRole("button", { name: "查看方形成图详情" })[0]!);
@@ -384,7 +386,7 @@ describe("CreativeOrderDeliveryCandidates", () => {
     expect(screen.getByText("底部 Prime 固定贴片区域被模型内容占用，未注册三尺寸成图。")).toBeInTheDocument();
     expect(screen.getByText("可以直接重试这个方案；也可以查看成图或标注调整。")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "重试失败步骤" })).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "尚不可入库" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "添加到成图库" })).toBeEnabled();
   });
 
   it("exposes workflow retry on each retryable blocked variant", () => {
@@ -952,7 +954,7 @@ describe("creative order delivery selection", () => {
     expect(screen.getByRole("button", { name: "添加到成图库" })).toBeEnabled();
   });
 
-  it("does not let a legacy direct-edit flag bypass visual QC", () => {
+  it("does not let a legacy direct-edit flag bypass Prime completeness", () => {
     const preciseEdit = variant("direct");
     preciseEdit.brief = { creative_direct_edit_delivery: { skip_qc: true } };
     preciseEdit.revisions = [{
@@ -967,16 +969,18 @@ describe("creative order delivery selection", () => {
     preciseEdit.assets = preciseEdit.assets.filter((asset) => asset.revision === 2 && asset.size_key === "1080x1080");
     preciseEdit.qc_reports = [];
 
+    expect(creativeVariantAdoptionReadiness(preciseEdit)).toMatchObject({ ready: true });
+    preciseEdit.assets = preciseEdit.assets.filter((asset) => asset.stage !== "primed");
     expect(creativeVariantAdoptionReadiness(preciseEdit)).toMatchObject({ ready: false });
   });
 
-  it("shows an unactivated revision as working preview without treating it as delivery", () => {
+  it("allows a complete unactivated Prime package into the gallery but not directly into an archive", () => {
     const working = variant("v01");
     working.active_revision = 0;
 
     expect(creativeVariantDeliveryAssets(working)).toEqual([]);
     expect(creativeVariantPreviewAssets(working).map((asset) => asset.revision)).toEqual([2, 2, 2]);
-    expect(creativeVariantAdoptionReadiness(working).ready).toBe(false);
+    expect(creativeVariantAdoptionReadiness(working).ready).toBe(true);
   });
 
   it("keeps the active delivery addable when a newer revision failed before its primary result arrived", () => {
