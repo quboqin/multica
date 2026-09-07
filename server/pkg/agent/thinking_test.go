@@ -260,6 +260,29 @@ func TestParseCodexDebugModels_Malformed(t *testing.T) {
 	}
 }
 
+func TestAnnotateCodexThinkingUsesAstraCatalogAndAPIFallback(t *testing.T) {
+	resetThinkingCacheForTests()
+	defer resetThinkingCacheForTests()
+
+	models := []Model{{ID: "gpt-6-astra"}}
+	annotateCodexThinking(context.Background(), models, filepath.Join(t.TempDir(), "missing-codex"))
+	got := models[0].Thinking
+	if got == nil || got.DefaultLevel != "low" {
+		t.Fatalf("unexpected Astra fallback: %+v", got)
+	}
+	var efforts []string
+	for _, level := range got.SupportedLevels {
+		efforts = append(efforts, level.Value)
+	}
+	if !reflect.DeepEqual(efforts, []string{"low", "medium", "high", "xhigh", "max"}) {
+		t.Fatalf("unexpected fallback efforts: %v", efforts)
+	}
+	catalog := parseCodexDebugModels([]byte(`{"models":[{"slug":"gpt-6-astra","default_reasoning_level":"low","supported_reasoning_levels":[{"effort":"low"},{"effort":"ultra"}]}]}`))
+	if entry := catalog["gpt-6-astra"]; entry == nil || entry.SupportedLevels[1].Value != "ultra" {
+		t.Fatalf("runtime-specific efforts were lost: %+v", entry)
+	}
+}
+
 func TestAnnotateCodexThinkingUsesGPT56APIFallback(t *testing.T) {
 	resetThinkingCacheForTests()
 	defer resetThinkingCacheForTests()

@@ -240,8 +240,8 @@ func projectClaudeLevels(superset []string, allow map[string]bool) []ThinkingLev
 // tokens the local binary actually accepts, which is the only thing we
 // need for validation.
 //
-// On older Codex versions / failures, the picker just disappears for
-// that model rather than offering a wrong list.
+// Known API models retain documented effort defaults when CLI discovery fails.
+// Other models omit the picker until their runtime exposes an effort catalog.
 
 // codexEffortLabel is the human display string for each Codex effort
 // value, matching Codex's own TUI (`Extra high`, `Minimal`, …) so
@@ -280,10 +280,7 @@ type codexDebugModelsResponse struct {
 	} `json:"models"`
 }
 
-// annotateCodexThinking decorates each model entry with its reasoning
-// catalog. Models the CLI doesn't know about (older codex install,
-// brand-new ID we haven't shipped) get Thinking=nil — the UI hides
-// the picker for those rows rather than guessing.
+// CLI-discovered effort levels take precedence over documented API defaults.
 func annotateCodexThinking(ctx context.Context, models []Model, executablePath string) {
 	mapping := loadCodexThinkingByModel(ctx, executablePath)
 	for i := range models {
@@ -295,6 +292,12 @@ func annotateCodexThinking(ctx context.Context, models []Model, executablePath s
 			models[i].Thinking = &ModelThinking{
 				SupportedLevels: append([]ThinkingLevel(nil), codexGPT56APIEfforts...),
 				DefaultLevel:    "medium",
+			}
+		}
+		if models[i].ID == "gpt-6-astra" {
+			models[i].Thinking = &ModelThinking{
+				SupportedLevels: append([]ThinkingLevel(nil), codexGPT56APIEfforts[1:]...),
+				DefaultLevel:    "low",
 			}
 		}
 	}
