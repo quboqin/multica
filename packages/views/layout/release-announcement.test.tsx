@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
-import { render, screen, waitFor } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { I18nProvider } from "@multica/core/i18n/react";
 import { ReleaseAnnouncement } from "./release-announcement";
 import { PLATFORM_RELEASE_ID, PLATFORM_VERSION, platformReleaseContent } from "../changelog/releases";
@@ -15,6 +15,7 @@ vi.mock("@multica/core/paths", () => ({
 }));
 
 describe("ReleaseAnnouncement", () => {
+  afterEach(cleanup);
   beforeEach(() => {
     window.localStorage.clear();
   });
@@ -43,8 +44,10 @@ describe("ReleaseAnnouncement", () => {
     );
 
     await waitFor(() => {
-      expect(screen.getByText(release.change_1)).toBeInTheDocument();
+      expect(screen.getByText(release.changes[0]!)).toBeInTheDocument();
     });
+    expect(within(screen.getByRole("alertdialog")).getAllByRole("listitem")).toHaveLength(release.changes.length);
+    for (const change of release.changes) expect(screen.getByText(change)).toBeInTheDocument();
     expect(window.localStorage.getItem("multica:last-seen-platform-version")).toBe(PLATFORM_VERSION);
   });
 });

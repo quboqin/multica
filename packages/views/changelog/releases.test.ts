@@ -10,7 +10,7 @@ import {
   platformReleaseContent,
 } from "./releases";
 
-const RELEASE_FIELDS = ["summary", "change_1", "change_2", "change_3", "change_4"] as const;
+const RELEASE_FIELDS = ["version", "date", "title", "summary"] as const;
 const LOCALE_RESOURCES = [
   ["en", en],
   ["zh-Hans", zhHans],
@@ -35,9 +35,23 @@ describe("platform release resources", () => {
         for (const field of RELEASE_FIELDS) {
           expect(release[field]).toBeTruthy();
         }
+        expect(release.changes.length).toBeGreaterThan(0);
+        expect(release.changes).toHaveLength(en.releases[releaseId].changes.length);
+        expect(new Set(release.changes).size).toBe(release.changes.length);
+        for (const change of release.changes) expect(change.trim()).not.toBe("");
+        expect(release.version).toBe(en.releases[releaseId].version);
+        expect(release.date).toBe(en.releases[releaseId].date);
       }
     }
 
     expect(en.releases[PLATFORM_RELEASE_ID].version).toBe(PLATFORM_VERSION);
+  });
+
+  it("keeps release notes focused on user-facing changes without filler slots", () => {
+    expect(zhHans.releases.v0_3_48.changes).toHaveLength(1);
+    expect(zhHans.releases.v0_3_51.changes).toHaveLength(2);
+    for (const [, resources] of LOCALE_RESOURCES) {
+      expect(JSON.stringify(resources)).not.toMatch(/bootstrap|DesignDNA|LayoutPlan|request_id|change_[1-4]/i);
+    }
   });
 });

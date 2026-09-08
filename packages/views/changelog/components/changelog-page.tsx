@@ -7,22 +7,10 @@ import { PLATFORM_RELEASE_IDS, PLATFORM_VERSION, platformReleaseContent } from "
 
 export function ChangelogPage() {
   const { i18n, t } = useT("changelog");
-  const releases = PLATFORM_RELEASE_IDS.map((id) => {
-    const release = platformReleaseContent(i18n.language, id);
-    return {
-      id,
-      version: release.version,
-      date: release.date,
-      title: release.title,
-      summary: release.summary,
-      changes: [
-        release.change_1,
-        release.change_2,
-        release.change_3,
-        release.change_4,
-      ],
-    };
-  });
+  const releases = PLATFORM_RELEASE_IDS.map((id) => ({
+    id,
+    ...platformReleaseContent(i18n.language, id),
+  }));
 
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col">

@@ -55,7 +55,7 @@ export function ReleaseAnnouncement() {
           <AlertDialogDescription>{release.summary}</AlertDialogDescription>
         </AlertDialogHeader>
         <ul className="space-y-2 text-sm text-muted-foreground">
-          {[release.change_1, release.change_2, release.change_3, release.change_4].map((change) => (
+          {release.changes.map((change) => (
             <li key={change} className="flex gap-2">
               <span aria-hidden="true">-</span>
               <span>{change}</span>

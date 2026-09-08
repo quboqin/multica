@@ -1,21 +1,25 @@
-import { render, screen } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { cleanup, render, screen, within } from "@testing-library/react";
+import { afterEach, describe, expect, it } from "vitest";
 import { I18nProvider } from "@multica/core/i18n/react";
 import { renderWithI18n } from "../../test/i18n";
-import { PLATFORM_RELEASE_IDS } from "../releases";
+import { PLATFORM_RELEASE_IDS, platformReleaseContent } from "../releases";
 import { ChangelogPage } from "./changelog-page";
 
-describe("ChangelogPage", () => {
-  it("renders the single release for the active locale", () => {
-    renderWithI18n(<ChangelogPage />, { locale: "zh-Hans" });
+afterEach(cleanup);
 
-    expect(screen.getByText("创意工厂、模型配置与平台更新")).toBeInTheDocument();
-    expect(
-      screen.getByText(
-        "Codex 智能体支持选择 GPT-5.6 Sol、GPT-5.6 Terra 和 GPT-5.6 Luna，并按模型展示可用的思考程度；每个智能体都可以单独配置模型和思考程度。",
-      ),
-    ).toBeInTheDocument();
-    expect(screen.getAllByRole("article")).toHaveLength(PLATFORM_RELEASE_IDS.length);
+describe("ChangelogPage", () => {
+  it.each(["zh-Hans", "en", "ja", "ko"] as const)("renders only the authored highlights in %s", (locale) => {
+    renderWithI18n(<ChangelogPage />, { locale });
+
+    const articles = screen.getAllByRole("article");
+    expect(articles).toHaveLength(PLATFORM_RELEASE_IDS.length);
+    for (const [index, id] of PLATFORM_RELEASE_IDS.entries()) {
+      const release = platformReleaseContent(locale, id);
+      const article = within(articles[index]!);
+      expect(article.getByRole("heading", { name: release.title })).toBeInTheDocument();
+      expect(article.getAllByRole("listitem")).toHaveLength(release.changes.length);
+      for (const change of release.changes) expect(article.getByText(change)).toBeInTheDocument();
+    }
     expect(screen.queryByText("releases.v0_3_35.title")).not.toBeInTheDocument();
   });
 
@@ -40,7 +44,7 @@ describe("ChangelogPage", () => {
 
     expect(
       screen.getByText(
-        "创意工厂支持按工作区独立启用，串联素材采集、分析、预适配、素材与文案确认、生图和交付；API、导航和直达页面统一执行能力校验。",
+        platformReleaseContent("zh-Hans", "v0_3_23").changes[0]!,
       ),
     ).toBeInTheDocument();
     expect(screen.queryByText("releases.v0_3_36.summary")).not.toBeInTheDocument();

@@ -16,10 +16,7 @@ type PlatformRelease = {
   date: string;
   title: string;
   summary: string;
-  change_1: string;
-  change_2: string;
-  change_3: string;
-  change_4: string;
+  changes: string[];
 };
 
 type PlatformChangelog = {

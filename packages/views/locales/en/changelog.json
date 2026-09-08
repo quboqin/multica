@@ -1,67 +1,68 @@
 {
   "title": "Change log",
-  "subtitle": "Release notes maintained inside this Multica platform.",
+  "subtitle": "New features and changes to how you work in Multica.",
   "current_version": "Current platform version: {{version}}",
   "releases": {
     "v0_3_51": {
       "version": "0.3.51",
       "date": "2026-09-07",
-      "title": "Prime mode persistence and execution details",
-      "summary": "Resource refreshes preserve model-integration edits, and orders distinguish their frozen mode from actual image processing.",
-      "change_1": "Unsaved market-rule edits are retained per workspace and resource. Publishing saves current edits first; failed saves or publication preserve your work.",
-      "change_2": "Draft and published modes are shown separately. An enabled model-integration mode can still be turned off while templates await validation.",
-      "change_3": "Orders show the frozen mode; image details show recorded processing, template family, and available template attachments. Missing historical evidence is shown as not recorded.",
-      "change_4": "Bootstrap preserves existing market rules, Prime modes, and templates unless creating a resource or explicitly resetting business configuration."
+      "title": "Prime modes and creative details",
+      "summary": "Compare draft and published market settings with the processing used for a creative.",
+      "changes": [
+        "Use Save and publish in market rules and view draft and published Prime modes side by side.",
+        "Orders show their Prime mode at submission; creative details show the recorded processing mode and template used."
+      ]
     },
     "v0_3_50": {
       "version": "0.3.50",
       "date": "2026-09-07",
-      "title": "Choose the number of copy-based creative sets",
-      "summary": "Copy-library orders support 1-10 creative sets, defaulting to three, with three delivery sizes per set.",
-      "change_1": "Choose a set count and see the delivery image count before submitting. Ten sets deliver 30 images; the count is frozen with the order.",
-      "change_2": "Plan two additional candidates and let independent review select the requested number of directions. Ten-set orders compare 12 primary images.",
-      "change_3": "Keep existing task concurrency and reuse completed primary images when generating other sizes. Ranked reserves can replace failed initial deliveries without regenerating successful directions.",
-      "change_4": "Progress, delivery metrics, and agent contracts follow the frozen count. Material-based and historical orders retain the three-set default; gallery sets can be previewed and downloaded in batches."
+      "title": "Choose creative set counts",
+      "summary": "Choose how many creative sets to produce, with three sizes in each set.",
+      "changes": [
+        "Copy-library orders support 1-10 sets, with three as the default. Ten sets deliver 30 images.",
+        "See the expected image count before submitting and the completed set count during production."
+      ]
     },
     "v0_3_49": {
       "version": "0.3.49",
       "date": "2026-09-07",
-      "title": "Copy-led creative production and gallery management",
-      "summary": "Create images from published copy, manage gallery packages with full previews, and configure GPT-6 Astra agents.",
-      "change_1": "Create creative orders from approved library copy. Headlines, benefits, supporting text, calls to action, and repayment plans are optional; selecting none starts visual-only exploration.",
-      "change_2": "Gallery packages have large previews and size switching. Removing a package preserves images and feedback, supports undo, and updates the order's add-to-gallery action.",
-      "change_3": "Codex agents can select GPT-6 Astra and the reasoning levels reported by their runtime, including Ultra when supported.",
-      "change_4": "Creative Factory initialization and bootstrap include the copy-library source contract across planning, production, and QC while retaining candidate selection and cross-size identity consistency."
+      "title": "Copy-based creatives, gallery, and Astra",
+      "summary": "Create from your copy library, manage finished images, and select GPT-6 Astra for agents.",
+      "changes": [
+        "Create image orders from approved copy and repayment plans. All selections are optional; leave them empty for visual-only exploration.",
+        "Preview gallery images at full size, switch sizes, and undo removals. Gallery membership stays linked to the order.",
+        "Codex agents can use GPT-6 Astra with the thinking levels supported by their runtime."
+      ]
     },
     "v0_3_48": {
       "version": "0.3.48",
       "date": "2026-09-02",
-      "title": "Direct adjustment delivery switching",
-      "summary": "After Prime composition, a direct adjustment now replaces the active delivery package by default.",
-      "change_1": "The before and after Prime-composed results can be switched in either direction without recreating work.",
-      "change_2": "Only completed Prime-composed delivery packages can be selected. Raw image-edit process images remain unavailable.",
-      "change_3": "Switching a completed historical result no longer appears as an in-progress update.",
-      "change_4": "Creative Factory initialization refreshes the direct-edit skill contract without overwriting user-managed resources."
+      "title": "Switch adjusted creative versions",
+      "summary": "Choose between the finished images before and after an adjustment.",
+      "changes": [
+        "Use the new creative after a precise adjustment, or switch back to the complete previous version without producing it again."
+      ]
     },
     "v0_3_47": {
       "version": "0.3.47",
       "date": "2026-08-27",
-      "title": "Creative candidates, native size layouts, and revision isolation",
-      "summary": "This release improves complete creative delivery and recovery: multiple primary concepts are compared before three delivery variants are chosen, each size receives a native layout, late image receipts are protected, and active revisions stay available during rework.",
-      "change_1": "Each material starts with four or five distinct primary-image candidates. Independent review selects three delivery variants atomically, while ranked reserves remain available for automatic promotion when an initial delivery is exhausted.",
-      "change_2": "Square, landscape, and portrait assets share CreativeIntent and DesignDNA but are generated with native layouts instead of depending on a square raster. The image model continues to render headlines, amounts, tables, and calls to action.",
-      "change_3": "Every size now records a durable image operation with attempts, provider request details, runtime, duration, and result receipt. Running or unknown calls are reconciled instead of being sent again, and successful sibling sizes are retained.",
-      "change_4": "Official Prime components are selected per size and checked against visible glyph polarity, contrast, and texture. A staging revision replaces the active revision only after all delivery gates pass."
+      "title": "Creative candidates and three-size sets",
+      "summary": "Compare creative directions before producing square, landscape, and portrait images.",
+      "changes": [
+        "Competitor-material orders begin with four or five primary images. Independent review selects three sets for delivery and retains reserves.",
+        "Keep the subject and visual style consistent across each set, with a composition suited to each image size."
+      ]
     },
     "v0_3_23": {
       "version": "0.3.23",
       "date": "2026-08-16",
-      "title": "Creative Factory, model configuration, and platform updates",
-      "summary": "This release connects the Creative Factory workflow from material collection to image generation and delivery, adds workspace-level capability controls, introduces GPT-5.6 model choices with per-model thinking levels, and improves requirement filters, child issue ordering, and the platform update log.",
-      "change_1": "Creative Factory can be enabled independently per workspace and connects material collection, analysis, preparation, material and copy confirmation, image generation, and delivery. The API, navigation, and direct page access enforce the same capability control.",
-      "change_2": "Codex agents can select GPT-5.6 Sol, GPT-5.6 Terra, or GPT-5.6 Luna, with the thinking levels available for each model. Every agent can configure its model and thinking level independently.",
-      "change_3": "Requirements support persisted label filters, with multiple labels using OR semantics. Workflow-created child issues now sort consistently by workflow stage, variant, revision, and issue identifier.",
-      "change_4": "The help menu and new-version announcement open the same internal update log, which brings version features and improvements together in Chinese, English, Japanese, and Korean."
+      "title": "Creative Factory and agent settings",
+      "summary": "Enable Creative Factory per workspace to manage collection through image delivery.",
+      "changes": [
+        "Creative Factory connects material collection, analysis, copy confirmation, image generation, and delivery.",
+        "Choose GPT-5.6 Sol, Terra, or Luna for Codex agents and set the thinking level supported by each model.",
+        "Filter requirements by multiple labels, matching any selected label. Creative workflow child issues appear in production-stage order."
+      ]
     }
   }
 }

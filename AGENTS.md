@@ -246,11 +246,11 @@ See CLAUDE.md for the complete command reference.
 
 ### Platform Change Log
 
-- **2026-09-07 / 0.3.51** — 市场规则保留按工作区和资源区分的未保存修改，发布先保存当前草稿；模型融入开关在模板待验证时仍可关闭，草稿与已发布模式分别展示。订单显示冻结模式，成图详情按同版本执行证据展示实际处理方式和模板；bootstrap 默认保留已有市场设置，仅新建或明确重置时写入种子配置。
+- **2026-09-07 / 0.3.51** — 市场规则支持保存并发布，并分别展示草稿与已发布的 Prime 模式；订单显示下单时的模式，成图详情显示实际处理方式和所用模板。
 
-- **2026-09-07 / 0.3.50** — 文案库出图支持选择 1-10 套、默认 3 套，每套仍交付三个尺寸；订单冻结套数并纳入提交幂等键，按 N+2 个候选选出 N 套，沿用既有并发和缺失尺寸恢复，候补按排名接替首次交付失败；编排、完成状态、耗时统计、Agent/Skill 模板及 bootstrap 同步数量契约，素材来源与历史订单保持三套。
+- **2026-09-07 / 0.3.50** — 文案库出图可选 1-10 套，默认 3 套，每套交付三个尺寸；提交前可查看预计交付张数，制作中可查看已完成套数。
 
-- **2026-09-07 / 0.3.49** — 文案库支持任选已审核文案与还款计划直接创建创意订单，全空时进入纯视觉探索；成图库提供大图与多尺寸预览，移出可撤销并与订单入库状态联动；Codex 智能体支持 GPT-6 Astra 及运行时声明的思考深度；创意工厂初始化和 bootstrap 同步文案来源的规划、制作与质检合同。
+- **2026-09-07 / 0.3.49** — 可从已审核文案和还款计划创建出图订单，或全部留空进行纯视觉探索；成图库支持大图预览、尺寸切换和移出撤销，入库状态与订单联动；Codex 智能体可选 GPT-6 Astra 及运行时支持的思考深度。
 
 Bug fixes, internal refactors, and implementation-only changes do not require a
 changelog entry. Add a dated entry here for a major feature or an important
@@ -259,6 +259,10 @@ platform-owned changelog under `packages/views/locales/*/changelog.json`; keep
 the version and release id in `packages/views/changelog/releases.ts` as the
 single source of truth. The first platform release is `0.3.23`; when there is
 no previously seen release, the release announcement opens by default.
+Write user-facing notes around new capabilities and meaningful workflow changes.
+Keep implementation fixes in commits, not as feature highlights. Each release
+uses a `changes` array with only the points it needs; do not pad it to a fixed
+count. Editorial changes preserve existing version numbers, release IDs, and dates.
 
 - **2026-08-18 / 0.3.42** — 精准调整改为基于同尺寸无品牌 generated 底图交给素材_改图 direct_image_edit 智能体；未改尺寸复用上一 revision 的底图和过程证据，调整前后成图在对比区直接并列，直接改图结果单独登记过程资产。
 
@@ -269,9 +273,9 @@ no previously seen release, the release announcement opens by default.
 
 - **2026-08-19 / 0.3.46** — 交付图片按 MM_P_AK_MY_YYYYMMDD_类型_活动_机型_制作方_尺寸缩写、视频按 MM_V_AK_MY_YYYYMMDD_类型_活动_机型_制作方_尺寸缩写_时长命名，尺寸缩写固定为 11、169、191、916、45；精准改图只使用运行时 task ID，asset-put 的 metadata/evidence 由四份证据交给 CLI 生成，已有回图的协议错误复用同一结果修复，Prime 回填完成后必须回读订单确认所有尺寸和过程图后才能 complete；隔离底图对位 demo 支持 84%–108% 自由缩放与满版覆盖切换，透明边缘不做拉伸补纹理。
 
-- **2026-08-27 / 0.3.47** — 创意工厂先生成 4-5 个方向自选主尺寸的候选，由独立质检原子晋级 3 个并保留候补；三尺寸共享 DesignDNA 但按各自 LayoutPlan 原生生成。图片调用按尺寸持久化并保护迟到回图，Prime 按实际可见字形逐尺寸选择且无合格模板时禁止发布；制作中 revision 全部通过后才替换 active revision。
+- **2026-08-27 / 0.3.47** — 竞品素材出图先生成 4-5 个候选主画面，经独立质检选出 3 套交付方案，并保留候补；每套图片保持主体和视觉风格一致，按方形、横版和竖版分别构图。
 
-- **2026-09-02 / 0.3.48** — 精准调整完成 Prime 合成后默认直接替换当前交付版本；调整前和调整后的完整贴片结果可双向切换，原始改图过程图始终不可采用。创意工厂初始化与既有工作区 bootstrap 同步改图 Skill v33，不覆盖用户管理资源。
+- **2026-09-02 / 0.3.48** — 精准调整后可使用新成图，也可切回调整前的完整成图，无需重新制作。
 
 - **2026-08-18 / 0.3.41** — 移除 Prime 流程对二维码的强制验证：发布、确定性合成和 QC 不再要求读取、解码或校验二维码；若上传模板或最终成图含二维码，则记录可解码内容作为非阻断证据，完整透明贴片按上传文件原样叠加；无二维码市场可直接上传并发布，文件、尺寸、布局和合成完整性校验保留。创意工厂初始化、默认资源快照和现有工作区 bootstrap 同步到 Prime 合同 v6。
 
