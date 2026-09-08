@@ -1,0 +1,251 @@
+---
+title: Architecture internals
+description: A source-level walkthrough of Multica's monorepo topology, backend request pipeline, realtime hubs, daemon execution path, and frontend state rules.
+---
+
+import { Callout } from "fumadocs-ui/components/callout";
+
+This page is the deep-dive companion to [Project architecture](/developers/architecture). It follows one causal chain end to end: how an assignment becomes a CLI process on someone else's computer, and how that process streams back to every screen. Read it together with [Data model](/developers/data-model) and [Authentication and permissions](/developers/auth-and-permissions).
+
+Throughout the developer handbook, diagrams distinguish two kinds of actors: **human / platform paths** and **agent / machine paths**. The product's whole premise is that both kinds sit on the same board.
+
+## Overview
+
+Multica collapses the "five terminal tabs running Claude Code, Codex, and Cursor" workflow into a task management platform where **agents are first-class citizens**: they can be assigned issues, post comments, and change status, and they appear on the board and in the member list like any human. The key design decision is that execution is separated from the platform. The platform (the Go server plus the web, desktop, and mobile clients) owns collaboration and orchestration. Actual code execution happens on the user's own machine, where `multica daemon` claims tasks and launches a local agent CLI. Code never leaves the machine.
+
+### Stack
+
+| Layer | Choice | Notes |
+| --- | --- | --- |
+| **Backend** | Go 1.26, chi v5, pgx v5 + sqlc, gorilla/websocket | Single API service; handler → service → sqlc-generated code; routes live in one file, `server/cmd/server/router.go` |
+| **Data** | PostgreSQL 17 (pgvector image), Redis | No database foreign keys, relations are maintained in application code; Redis carries rate limits, auth caches, and cross-node realtime relay |
+| **Web** | Next.js 16, React 19, App Router | Cookie session (HttpOnly + CSRF); rewrites proxy `/api` and `/ws` to the Go service |
+| **Desktop** | Electron, react-router 7 (memory router) | Single-route, multi-tab shell; the main process ships the packaged `multica` CLI and supervises the local daemon |
+| **Mobile** | Expo, React Native, NativeWind | Standalone app with its own data layer and UI; imports only types and pure functions from `@multica/core` |
+| **Shared state** | TanStack Query 5, Zustand 5, Zod 4 | Hard split between server state (Query) and client state (Zustand), see [Frontend architecture](#frontend-architecture-and-state-rules) |
+| **UI** | Tailwind 4, shadcn / Base UI, TipTap 3 | Semantic tokens such as `bg-background`; rich-text editor |
+| **Tooling** | pnpm 10, Turborepo 2, Vitest, Playwright | Shared packages ship raw `.ts` and are compiled by consumers; CI runs Node 22 + Go 1.26 |
+
+### Repository map
+
+```text
+multica/
+├── server/            Go module (outside the pnpm workspace)
+│   ├── cmd/server     API + WebSocket service
+│   ├── cmd/multica    CLI (includes the daemon subcommand, distributed via Homebrew)
+│   ├── cmd/migrate    Migration runner (runs outside transactions to allow CONCURRENTLY)
+│   ├── internal/      handler · service · middleware · realtime · daemonws · daemon …
+│   ├── pkg/           agent backends · db (sqlc) · protocol · publicapi …
+│   └── migrations/    Numbered up migrations
+├── apps/
+│   ├── web/           Next.js (App Router + platform/ adapter layer)
+│   ├── desktop/       Electron (main / preload / renderer)
+│   ├── mobile/        Expo iOS (own data layer, shares types only)
+│   └── docs/          Fumadocs documentation site
+└── packages/
+    ├── core/          Headless business logic: API client · Query hooks · Zustand stores · platform adapters
+    ├── ui/            Atomic components (must not depend on core)
+    ├── views/         Shared business pages (web and desktop)
+    ├── plugin-sdk/    postMessage SDK for plugin panels
+    └── tsconfig / eslint-config
+```
+
+Suggested reading order: build the component map here first, then align each domain's storage shape with the [Data model](/developers/data-model), and finish with [Authentication and permissions](/developers/auth-and-permissions), which cuts across both and explains how an agent is safely admitted into a collaboration system.
+
+## Monorepo topology and package boundaries
+
+The frontend is a TypeScript monorepo managed by pnpm and Turborepo. The backend in `server/` is a standalone Go module outside the pnpm workspace. Shared packages export raw `.ts` / `.tsx` source that web and desktop compile themselves. The dependency direction is hard-constrained to **views → core + ui**; `core` and `ui` never depend on each other.
+
+<Mermaid chart={`
+flowchart TB
+  subgraph ts["pnpm + Turborepo monorepo (TypeScript)"]
+    web["apps/web<br/>Next.js"]
+    desktop["apps/desktop<br/>Electron"]
+    docs["apps/docs<br/>Fumadocs"]
+    mobile["apps/mobile<br/>Expo, standalone"]
+    views["packages/views<br/>shared business pages"]
+    ui["packages/ui<br/>atomic components"]
+    core["packages/core<br/>headless business logic"]
+    web --> views
+    desktop --> views
+    views --> ui
+    views --> core
+    mobile -. "import type / pure functions only" .-> core
+  end
+  subgraph go["server/ (standalone Go module)"]
+    api["cmd/server<br/>API + WebSocket service"]
+    cli["cmd/multica<br/>CLI + daemon, runs on the user's machine"]
+    internal["internal/*<br/>handler · service · middleware<br/>realtime · daemonws · daemon · scheduler"]
+    dbpkg["pkg/db (sqlc) · migrations"]
+    api --> internal
+    cli --> internal
+    internal --> dbpkg
+  end
+  ts -- "HTTPS + WS" --> api
+  dbpkg --> pg[("PostgreSQL 17 + pgvector")]
+  api --> redis[("Redis<br/>rate limits · caches · WS relay")]
+`} />
+
+Web and desktop reuse the whole views → core + ui chain. Mobile is deliberately independent and shares only types and pure functions from `core`. The `cmd/multica` binary is both the CLI and the daemon, distributed to user machines through Homebrew; the desktop main process also bundles and supervises a copy.
+
+Package boundaries are hard constraints and are enforced in review:
+
+| Package | Forbidden | Why |
+| --- | --- | --- |
+| `packages/core` | `react-dom`, `localStorage`, `process.env`, UI libraries | Pure headless layer; platform differences are injected through adapters such as `StorageAdapter` |
+| `packages/ui` | `@multica/core`, business logic | Atomic components must stay independently reusable |
+| `packages/views` | `next/*`, `react-router-dom`, store definitions | The same page code runs under two routers, so navigation goes through `NavigationAdapter` / `AppLink` |
+| Platform APIs | Only inside `apps/web/platform/` and `apps/desktop/.../platform/` | Next.js and react-router knowledge is locked into two directories |
+
+## Backend layers and the request pipeline
+
+The backend is a monolith with strict layering. chi routes are centralised in `server/cmd/server/router.go`, so the router file doubles as documentation. A request enters one of four route groups and then flows handler → service → sqlc-generated code. Write operations publish in-process events on `events.Bus` synchronously from the handler or service, and realtime push derives from those events (see [Realtime](#realtime-two-hubs-and-a-redis-relay)).
+
+<Mermaid chart={`
+flowchart LR
+  client["Client<br/>Web / Desktop / Mobile / CLI / daemon"] --> mw
+  subgraph mw["Global middleware, in order"]
+    direction TB
+    m1["1 RequestID"] --> m2["2 ClientMetadata"] --> m3["3 RequestLogger"] --> m4["4 Prometheus metrics"]
+    m4 --> m5["5 Recoverer"] --> m6["6 PluginSurface boundary"] --> m7["7 CSP headers"] --> m8["8 CORS, credentialed allowlist"]
+  end
+  mw --> pub["Public routes<br/>health · /auth/* · webhooks · capability URLs"]
+  mw --> dmn["/api/daemon/*<br/>DaemonAuth: Bearer only, no cookies"]
+  mw --> plg["/v1 plugin public API<br/>PluginBearerOnly: mpi_ / mpc_"]
+  mw --> main["/api/* main authenticated group<br/>Auth + CSRF + Workspace middleware"]
+  pub --> handler
+  dmn --> handler
+  plg --> handler
+  main --> handler
+  handler["internal/handler<br/>HTTP codec · fine-grained authz"] --> service["internal/service<br/>business rules · event publishing"]
+  service --> sqlc["pkg/db (sqlc)<br/>type-safe queries"] --> pg[("PostgreSQL<br/>everything filtered by workspace_id")]
+`} />
+
+The four route groups differ only in how they authenticate (details in [Authentication and permissions](/developers/auth-and-permissions)). The daemon and plugin groups accept only Bearer tokens and structurally exclude cookies; the main group layers CSRF and workspace membership checks on top.
+
+Three backend facts worth remembering:
+
+- **Routes live in `cmd/server`, not in `internal/handler`.** Handlers are route-agnostic method sets. The router composes middleware into permission tiers, so one file tells you the authentication requirement of any endpoint.
+- **sqlc is the only SQL channel.** Handwritten queries under `pkg/db/queries/` generate the Go code, and the schema source is the `migrations/` directory itself.
+- **Cron lives in the database.** `internal/scheduler` implements DB cron with lease plus audit rows in `sys_cron_executions` (hourly usage rollups, autopilot schedule dispatch, plugin hook dispatch), so multi-replica deployments never double-run a job.
+
+### Resident background workers
+
+All of these are started from `cmd/server/main.go`:
+
+| Worker | Responsibility |
+| --- | --- |
+| `runtime sweeper` | Marks runtimes offline after missed heartbeats, reclaims or expires stranded tasks (`MULTICA_RUNTIME_RECONNECT_GRACE`, `MULTICA_TASK_QUEUED_TTL`) |
+| `runtime GC sweeper` | Hourly cleanup of runtime rows not seen for 7 days |
+| `webhook delivery worker` | Lease-based retry delivery of autopilot outbound webhooks (outbox pattern) |
+| Autopilot monitors (×2) | Consecutive-failure detection and quota reconciliation |
+| `channel supervisor` | One WS lease and session driver per Lark / Slack / DingTalk / WeCom / Telegram installation |
+| `channel media reconciler` | Settles "uploaded but not yet bound" channel media objects |
+| `seat capacity worker` | Executes the Cloud seat-capacity protocol (outbox) |
+| `PR snapshot refresh` | GitHub PR card snapshot pool with TTL cleanup |
+| `scheduler manager` | DB cron: `TaskUsageHourly`, `AutopilotScheduleDispatch`, `PluginHookScheduleDispatch` |
+| metrics / pprof | Prometheus metrics and pprof listen on separate ports |
+
+## Realtime: two hubs and a Redis relay
+
+The realtime layer has **two WebSocket hubs that never mix**: `internal/realtime` serves people (browser, desktop, mobile; room-based) and `internal/daemonws` serves machines (daemon wake-ups and RPC). Every event originates on the in-process `events.Bus`. Typed listeners run first (notifications, activity, subscribers, plugin bridge), then a global listener serialises the event into WS frames and fans it out.
+
+<Mermaid chart={`
+flowchart LR
+  producers["handler / service / worker<br/>publish synchronously on every write<br/>80+ event types"] --> bus["events.Bus<br/>in-process · typed listeners run before global listeners"]
+  bus --> rt["realtime.Hub (GET /ws)<br/>rooms: workspace:id, user:id, auto-subscribed<br/>task:id, chat:id, explicit + authorizer<br/>64 KiB read limit · ping 54s / pong 60s · slow-client eviction<br/>sensitive fields stripped before send"]
+  bus --> dw["daemonws.Hub (GET /api/daemon/ws)<br/>daemon:task_available / pending_work wake-ups<br/>rpc_request / rpc_response incl. tasks.claim<br/>64 MiB read limit, up to 32 task payloads per claim"]
+  rt -- "event frames" --> clients["Web / Desktop / Mobile<br/>GET /ws?workspace_slug=…<br/>cookie or first-frame auth token"]
+  dw -- "task wake-up" --> daemon["multica daemon<br/>one connection per machine, shared by its runtimes<br/>WS first, HTTP fallback"]
+  rt <-. "Redis Streams sharded relay<br/>REALTIME_RELAY_MODE=sharded" .-> redis[("Redis")]
+  dw <-.-> redis
+  redis <-.-> other["Other API nodes<br/>each with its own hubs<br/>consume the stream, deliver to local rooms"]
+`} />
+
+On a single node, events reach the hubs in-process. With horizontal scaling, the Redis Streams sharded relay double-writes every broadcast (local delivery plus publish upstream), and each client de-duplicates with a 128-entry ULID ring. Daemon wake-ups travel under a dedicated `daemon_runtime` scope. The shipped TypeScript clients only use the two auto-subscribed rooms, `workspace` and `user`; explicit `task` / `chat` subscriptions are reserved for future use.
+
+For daemon connections, disconnect semantics are graded: an `unavailable` connection may fall back to HTTP, but an `uncertain` one (a claim was sent and the connection dropped before the reply) must not retry on another channel, which prevents double claims.
+
+| Event domain | Representative events (`pkg/protocol/events.go`) |
+| --- | --- |
+| issue | `issue:created/updated/deleted`, `issue_metadata:changed`, `issue_labels:changed`, `issue_status:changed` |
+| task execution | `task:queued/dispatch/running/progress/message/completed/failed/cancelled` |
+| collaboration | comment · reaction · subscriber · activity · pin · project (+resource) · label · property |
+| organisation | workspace · member · invitation · `inbox:*` (delivered on the user room) |
+| agent ecosystem | `agent:status/created/archived` · skill · squad · autopilot (incl. run_start / run_done) · chat |
+| machine side | `daemon:heartbeat/register/task_available/rpc_*` · runtime profile changes |
+| integrations | GitHub installation / pull_request · VCS · Lark / Slack / DingTalk / WeCom / Telegram installation events |
+
+## Daemon and the task execution path
+
+This is Multica's most distinctive path: **the platform orchestrates, execution happens on the user's own machine.** The daemon is embedded in the `multica` CLI (`multica daemon start`). A machine-level batch poller first reserves a local execution slot, then claims tasks in bulk across every runtime registered from that machine.
+
+<Mermaid chart={`
+sequenceDiagram
+  participant Trig as Trigger
+  participant Srv as Server · TaskService
+  participant Hub as daemonws.Hub
+  participant Dmn as multica daemon (user machine)
+  participant CLI as Agent CLI process
+  Trig->>Srv: assign issue / @mention / autopilot / chat / channel message
+  Srv->>Srv: admission check (ReasonCode) → insert agent_task_queue (queued)
+  Srv-->>Hub: broadcast task:queued (visible in the UI immediately)
+  Hub-->>Dmn: daemon:task_available wake-up
+  Dmn->>Dmn: reserve a local execution slot
+  Dmn->>Srv: tasks.claim (WS first, HTTP fallback)
+  Srv-->>Dmn: batch of task payloads + mat_ task tokens (dispatched)
+  Dmn->>Dmn: prepare repo / execenv / MCP / skill bundle
+  Dmn->>Srv: POST /tasks/{id}/start (running)
+  Dmn->>CLI: spawn CLI with MULTICA_TOKEN=mat_…
+  CLI-->>Dmn: streamed JSON events
+  Dmn->>Srv: /messages · /progress batched uploads
+  Srv-->>Hub: task:message / task:progress → live rendering
+  CLI-->>Dmn: process exit
+  Dmn->>Srv: /complete or /fail, plus /usage
+  Srv-->>Hub: task:completed / task:failed
+`} />
+
+The state machine is `queued → dispatched → running → completed / failed / cancelled`. Recovery after a disconnect is covered from both sides: the server-side runtime sweeper expires stranded tasks, and the daemon runs `recover-orphans` when it reconnects.
+
+**Admission is not a plain enqueue.** `internal/dispatch` defines a set of `ReasonCode` values that turn "why did it not run" into an observable, first-class result:
+
+| Reason | Meaning |
+| --- | --- |
+| `queued` | Accepted and queued |
+| `coalesced` | Folded into an already-running task |
+| `deferred` | Postponed |
+| `invocation_not_allowed` | The triggering human may not invoke this agent |
+| `runtime_offline` / `runtime_unusable` / `target_unavailable` | No usable execution target |
+| `attribution_blocked` | No accountable human could be attributed |
+| `already_active` | The same work is already active |
+| `self_trigger_suppressed` | An agent would have triggered itself |
+| `quota_exceeded` | Autopilot quota exhausted |
+
+**Runtimes have three layers.** First, the `pkg/agent.SupportedTypes` allowlist defines the protocol families (claude, codex, cursor, copilot, kimi, opencode, qwen, grok, and more), one backend file per family that owns launch arguments and stream parsing. Second, the only built-in runtime today is `omp` (Oh-My-Pi, speaking the `pi` JSON protocol). Third, a workspace can define custom runtime profiles (`command_name` plus `fixed_args`), but `protocol_family` must stay inside the allowlist, enforced by both a DB `CHECK` and application validation.
+
+## Frontend architecture and state rules
+
+The most important frontend decision is the **hard split between server state and client state**, written into `CLAUDE.md` as a review yardstick:
+
+| Owner | Manages | Rules |
+| --- | --- | --- |
+| **TanStack Query** | Everything from the API: issues, members, agents, inbox, workspaces… | Workspace-scoped query keys start with `wsId`; WS events may only patch or invalidate the Query cache |
+| **Zustand** | Filters, drafts, dialogs, tab layout, navigation history | Shared stores live only in `packages/core`; never mirror server payloads; selectors return stable references |
+| **React Context** | Platform plumbing only (navigation adapter, i18n adapter) | Carries no business state |
+
+The full path of a typical read and write:
+
+1. **Read.** The view builds a key with `issueKeys.listSorted(wsId, sort)`, then `api.listIssues()` stamps `Authorization` / `X-Workspace-Slug` / `X-CSRF-Token` headers. The response passes through `parseWithFallback` plus a zod schema, so contract drift degrades to an empty fallback with a warning log instead of a blank screen. This is the core defence for "an installed desktop build must work against a newer backend".
+2. **Write.** `useUpdateIssue` patches every determinate cache in `onMutate` and snapshots them. On the server, `loadIssueForUser` resolves the path parameter and honours `expected_revision` for optimistic concurrency. On success the server publishes `issue:updated` with change flags.
+3. **Echo.** The WS frame reaches `useRealtimeSync`, and `ws-updaters` patches determinate projections and invalidates uncertain ones. The mutation's `onSettled` invalidates one more round, and `onError` rolls back from the snapshot. Reconnecting or switching workspace invalidates every workspace-scoped query.
+
+<Callout type="info">
+Optimistic updates require all four conditions: the outcome is locally predictable, the user stays on the same screen, failure is rare, and rollback is trivial. Status, assignee, and toggle patches qualify. Flows that navigate or confirm (create, delete, leave) must await the server. Chat send uses a visible pending state with retry, never silent optimism.
+</Callout>
+
+There are only a few **platform seams**, all explicit: `NavigationAdapter` (web wraps `next/navigation`, desktop writes the tab store), `StorageAdapter` (localStorage on web and desktop, Keychain on mobile), `CoreProvider` (the single place that constructs the API client, auth store, i18n, and WS provider), and `setCurrentWorkspace` (the route-driven workspace mirror used for request headers, persistence namespaces, and reconnects). Desktop is a single-route, multi-tab system: a tab is a serialisable `TabSession`, `tab-coordinator` is the only writer of the router, and pre-workspace one-shot flows such as creating a workspace or accepting an invitation are `WindowOverlay` state rather than routes.
+
+## Next steps
+
+- [Data model](/developers/data-model) — conventions, per-domain ER diagrams, and the polymorphic relationship table.
+- [Authentication and permissions](/developers/auth-and-permissions) — passwordless login, the token family, the authorization ladder, and agent identity.

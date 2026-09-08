@@ -1,0 +1,251 @@
+---
+title: 架构内幕
+description: 从源码出发拆解 Multica 的 monorepo 拓扑、后端请求管线、实时双 Hub、daemon 任务执行链路与前端状态规则。
+---
+
+import { Callout } from "fumadocs-ui/components/callout";
+
+本页是[项目架构](/developers/architecture)的深入版。它沿着一条完整的因果链展开：一次指派如何变成另一台机器上的一次 CLI 执行，再实时流回每个人的屏幕。建议与[数据模型](/developers/data-model)和[认证与权限](/developers/auth-and-permissions)一起阅读。
+
+开发者手册里的图表始终区分两类 actor：**人类 / 平台路径**与 **agent / 机器路径**——这正对应产品「人机同板」的前提。
+
+## 总览
+
+Multica 把「同时开着五个终端标签页跑 Claude Code / Codex / Cursor」的散装工作方式，收敛为一个任务管理平台：**agent 是一等公民**——它可以被指派 issue、发表评论、改变状态，和人类成员一样出现在看板与成员列表里。关键设计是执行与平台分离：平台（server + web / desktop / mobile）负责协作与编排，真正的代码执行由用户机器上的 `multica daemon` 领取任务后调起本地 agent CLI 完成，代码不出门。
+
+### 技术栈
+
+| 层 | 选型 | 要点 |
+| --- | --- | --- |
+| **后端** | Go 1.26、chi v5、pgx v5 + sqlc、gorilla/websocket | 单体 API 服务；handler → service → sqlc 生成代码；路由集中在 `server/cmd/server/router.go` 一个文件 |
+| **数据** | PostgreSQL 17（pgvector 镜像）、Redis | 无数据库外键，关系由应用层维护；Redis 承担限流、鉴权缓存与实时消息跨节点中继 |
+| **Web** | Next.js 16、React 19、App Router | Cookie 会话（HttpOnly + CSRF）；rewrite 把 `/api`、`/ws` 代理到 Go 服务 |
+| **Desktop** | Electron、react-router 7（memory router） | 单路由多标签页体系；主进程托管打包的 `multica` CLI 并代管本机 daemon |
+| **Mobile** | Expo、React Native、NativeWind | 独立 app：自有数据层与 UI，只从 `@multica/core` 引类型与纯函数 |
+| **共享状态** | TanStack Query 5、Zustand 5、Zod 4 | 服务端状态归 Query、客户端状态归 Zustand 的硬性分界，见[前端架构](#前端架构与状态规则) |
+| **UI** | Tailwind 4、shadcn / Base UI、TipTap 3 | 语义化 token（`bg-background` 等）；富文本编辑器 |
+| **工程** | pnpm 10、Turborepo 2、Vitest、Playwright | 共享包发布裸 `.ts`，由消费方编译；CI 跑 Node 22 + Go 1.26 |
+
+### 仓库地图
+
+```text
+multica/
+├── server/            Go module（独立于 pnpm workspace）
+│   ├── cmd/server     API + WebSocket 服务
+│   ├── cmd/multica    CLI（内含 daemon 子命令，Homebrew 分发）
+│   ├── cmd/migrate    迁移执行器（事务外执行，支持 CONCURRENTLY）
+│   ├── internal/      handler · service · middleware · realtime · daemonws · daemon …
+│   ├── pkg/           agent 后端 · db(sqlc) · protocol · publicapi …
+│   └── migrations/    带编号的 up 迁移
+├── apps/
+│   ├── web/           Next.js（App Router + platform/ 适配层）
+│   ├── desktop/       Electron（main / preload / renderer）
+│   ├── mobile/        Expo iOS（独立数据层，只共享类型）
+│   └── docs/          Fumadocs 文档站
+└── packages/
+    ├── core/          无头业务：API client · Query hooks · Zustand stores · 平台适配
+    ├── ui/            原子组件（禁止依赖 core）
+    ├── views/         共享业务页面（web 与 desktop 共用）
+    ├── plugin-sdk/    插件面板 postMessage SDK
+    └── tsconfig / eslint-config
+```
+
+阅读顺序建议：先在本页建立组件间关系，再用[数据模型](/developers/data-model)对准每个域的存储形状，最后读[认证与权限](/developers/auth-and-permissions)——它横跨前两者，是理解「agent 如何被安全地放进协作系统」的关键。
+
+## Monorepo 拓扑与包边界
+
+前端是 pnpm + Turborepo 管理的 TypeScript monorepo；后端 `server/` 是独立 Go module，不在 pnpm workspace 里。共享包发布裸 `.ts` / `.tsx` 源码，由消费方（web / desktop）自行编译，依赖方向被硬性约束为 **views → core + ui**，core 与 ui 互不依赖。
+
+<Mermaid chart={`
+flowchart TB
+  subgraph ts["pnpm + Turborepo monorepo（TypeScript）"]
+    web["apps/web<br/>Next.js"]
+    desktop["apps/desktop<br/>Electron"]
+    docs["apps/docs<br/>Fumadocs"]
+    mobile["apps/mobile<br/>Expo · 独立"]
+    views["packages/views<br/>共享业务页面"]
+    ui["packages/ui<br/>原子组件"]
+    core["packages/core<br/>无头业务逻辑"]
+    web --> views
+    desktop --> views
+    views --> ui
+    views --> core
+    mobile -. "仅 import type / 纯函数" .-> core
+  end
+  subgraph go["server/（独立 Go module）"]
+    api["cmd/server<br/>API + WebSocket 服务"]
+    cli["cmd/multica<br/>CLI + daemon，跑在用户机器上"]
+    internal["internal/*<br/>handler · service · middleware<br/>realtime · daemonws · daemon · scheduler"]
+    dbpkg["pkg/db（sqlc）· migrations"]
+    api --> internal
+    cli --> internal
+    internal --> dbpkg
+  end
+  ts -- "HTTPS + WS" --> api
+  dbpkg --> pg[("PostgreSQL 17 + pgvector")]
+  api --> redis[("Redis<br/>限流 · 缓存 · WS 中继")]
+`} />
+
+web / desktop 复用 views → core + ui 整条链；mobile 是刻意独立的 app，只以 `import type` 共享 core 的类型与纯函数。`cmd/multica` 同一二进制既是 CLI 又内含 daemon，经 Homebrew 分发到用户机器；Desktop 主进程也会捆绑并代管一份。
+
+包边界是硬约束（违反即 review 打回）：
+
+| 包 | 禁止 | 原因 |
+| --- | --- | --- |
+| `packages/core` | `react-dom`、`localStorage`、`process.env`、UI 库 | 纯无头层，平台差异走 `StorageAdapter` 等适配器注入 |
+| `packages/ui` | `@multica/core`、业务逻辑 | 原子组件必须可独立复用 |
+| `packages/views` | `next/*`、`react-router-dom`、定义 store | 同一份页面代码跑在两种路由器上，导航一律走 `NavigationAdapter` / `AppLink` |
+| 平台 API | 只能出现在 `apps/web/platform/` 与 `apps/desktop/.../platform/` | 把 Next.js / react-router 的知识锁进两个目录 |
+
+## 后端分层与请求管线
+
+后端是单体服务，但分层非常规整：chi 路由集中在 `server/cmd/server/router.go`（路由即文档），进入四类路由组之一后走 handler → service → sqlc 生成代码。写操作在 handler / service 里同步发布进程内事件（`events.Bus`），实时推送由此派生（见[实时体系](#实时体系双-hub--redis-中继)）。
+
+<Mermaid chart={`
+flowchart LR
+  client["客户端<br/>Web / Desktop / Mobile / CLI / daemon"] --> mw
+  subgraph mw["全局中间件（顺序执行）"]
+    direction TB
+    m1["1 RequestID"] --> m2["2 ClientMetadata"] --> m3["3 RequestLogger"] --> m4["4 Prometheus 指标"]
+    m4 --> m5["5 Recoverer"] --> m6["6 PluginSurface 边界"] --> m7["7 CSP 头"] --> m8["8 CORS（凭证白名单）"]
+  end
+  mw --> pub["公开路由<br/>health · /auth/* · webhooks · 能力 URL"]
+  mw --> dmn["/api/daemon/*<br/>DaemonAuth：仅 Bearer，无 Cookie"]
+  mw --> plg["/v1 插件公开 API<br/>PluginBearerOnly：仅 mpi_ / mpc_"]
+  mw --> main["/api/* 主认证组<br/>Auth + CSRF + Workspace 中间件"]
+  pub --> handler
+  dmn --> handler
+  plg --> handler
+  main --> handler
+  handler["internal/handler<br/>HTTP 编解码 · 鉴权细则"] --> service["internal/service<br/>业务规则 · 事件发布"]
+  service --> sqlc["pkg/db（sqlc）<br/>类型安全查询"] --> pg[("PostgreSQL<br/>全部按 workspace_id 过滤")]
+`} />
+
+四类路由组的差别全在鉴权方式（详见[认证与权限](/developers/auth-and-permissions)）：daemon 组与插件组只收 Bearer、结构性排除 Cookie；主认证组叠加 CSRF 与工作区成员校验。
+
+值得记住的三个后端事实：
+
+- **路由住在 `cmd/server`，不在 `internal/handler`。** handler 是无路由知识的方法集合，router.go 用中间件组合出权限层级，读一个文件即可判断任意端点的鉴权要求。
+- **sqlc 是唯一的 SQL 通道。** `pkg/db/queries/` 下的手写查询生成 Go 代码；schema 来源就是 `migrations/` 目录本身。
+- **定时任务进数据库。** `internal/scheduler` 用 `sys_cron_executions` 表做租约 + 审计的 DB cron（用量小时汇总、autopilot 定时调度、插件 hook 调度），多副本部署下不重复执行。
+
+### 常驻后台 worker
+
+全部由 `cmd/server/main.go` 启动：
+
+| Worker | 职责 |
+| --- | --- |
+| `runtime sweeper` | 把心跳超时的 runtime 标记离线，回收 / 过期滞留任务（`MULTICA_RUNTIME_RECONNECT_GRACE`、`MULTICA_TASK_QUEUED_TTL`） |
+| `runtime GC sweeper` | 每小时清理 7 天未见的 runtime 记录 |
+| `webhook delivery worker` | autopilot 出站 webhook 的租约重试投递（outbox 模式） |
+| autopilot 监控 ×2 | 连续失败检测 + 配额对账 |
+| `channel supervisor` | Lark / Slack / 钉钉 / 企微 / Telegram 每个安装一份 WS 租约与会话驱动 |
+| `channel media reconciler` | 结算「已上传未绑定」的渠道媒体对象 |
+| `seat capacity worker` | Cloud 席位容量协议执行器（outbox） |
+| `PR snapshot refresh` | GitHub PR 卡片快照池 + TTL 清理 |
+| `scheduler manager` | DB cron：`TaskUsageHourly`、`AutopilotScheduleDispatch`、`PluginHookScheduleDispatch` |
+| metrics / pprof | Prometheus 指标端口与 pprof 端口独立监听 |
+
+## 实时体系：双 Hub + Redis 中继
+
+实时层有**两个互不混用的 WebSocket Hub**：面向人的 `internal/realtime`（浏览器 / 桌面 / 移动端，房间制）和面向机器的 `internal/daemonws`（daemon 唤醒与 RPC）。所有事件都从进程内 `events.Bus` 派生——先跑类型监听器（通知、活动、订阅者、插件桥），再由全局监听器序列化成 WS 帧扇出。
+
+<Mermaid chart={`
+flowchart LR
+  producers["handler / service / worker<br/>写操作同步发布事件<br/>80+ 种事件类型"] --> bus["events.Bus<br/>进程内同步发布 · 类型监听器先于全局监听器"]
+  bus --> rt["realtime.Hub（GET /ws）<br/>房间：workspace:id · user:id，连接即自动订阅<br/>task:id · chat:id，显式订阅 + 授权器校验<br/>读限 64 KiB · ping 54s / pong 60s · 慢客户端驱逐<br/>敏感字段出站前剥离"]
+  bus --> dw["daemonws.Hub（GET /api/daemon/ws）<br/>daemon:task_available / pending_work 唤醒提示<br/>rpc_request / rpc_response 通用 RPC（含 tasks.claim）<br/>读限 64 MiB，一次批量领取最多 32 个任务载荷"]
+  rt -- "事件帧" --> clients["Web / Desktop / Mobile<br/>GET /ws?workspace_slug=…<br/>Cookie 或首帧 auth 令牌"]
+  dw -- "任务唤醒" --> daemon["multica daemon<br/>一台机器一条连接，多 runtime 复用<br/>WS 优先，HTTP 兜底"]
+  rt <-. "Redis Streams 分片中继<br/>REALTIME_RELAY_MODE=sharded" .-> redis[("Redis")]
+  dw <-.-> redis
+  redis <-.-> other["其他 API 节点<br/>各自的 realtime.Hub / daemonws.Hub<br/>消费流后向本地房间投递"]
+`} />
+
+单节点时事件在进程内直达 Hub；水平扩容时，Redis Streams 分片中继对每次广播双写（本地投递 + 发布上游），客户端侧靠 128 位 ULID 环去重，daemon 唤醒走独立的 `daemon_runtime` scope。已发布的 TS 客户端只用 workspace + user 两个自动订阅房间，`task` / `chat` 显式订阅通道目前留给未来。
+
+daemon 连接的断连语义是分级的：`unavailable` 可降级到 HTTP；`uncertain`（claim 已发出但连接在回包前中断）禁止换通道重试，防止双重领取。
+
+| 事件域 | 代表事件（`pkg/protocol/events.go`） |
+| --- | --- |
+| issue | `issue:created/updated/deleted`、`issue_metadata:changed`、`issue_labels:changed`、`issue_status:changed` |
+| 任务执行 | `task:queued/dispatch/running/progress/message/completed/failed/cancelled` |
+| 协作 | comment · reaction · subscriber · activity · pin · project（+resource）· label · property |
+| 组织 | workspace · member · invitation · `inbox:*`（走 user 房间） |
+| agent 生态 | `agent:status/created/archived` · skill · squad · autopilot（含 run_start / run_done）· chat |
+| 机器侧 | `daemon:heartbeat/register/task_available/rpc_*` · runtime profile 变更 |
+| 集成 | GitHub installation / pull_request · VCS · Lark / Slack / 钉钉 / 企微 / Telegram 安装事件 |
+
+## Daemon 与任务执行链路
+
+这是 Multica 最有辨识度的一条链路：**平台负责编排，执行发生在用户自己的机器上。** daemon 内嵌在 `multica` CLI 里（`multica daemon start`），机器级批量轮询器先占本机执行槽，再跨该机所有 runtime 批量领取任务。
+
+<Mermaid chart={`
+sequenceDiagram
+  participant Trig as 触发源
+  participant Srv as Server · TaskService
+  participant Hub as daemonws.Hub
+  participant Dmn as multica daemon（用户机器）
+  participant CLI as Agent CLI 进程
+  Trig->>Srv: 指派 issue / @提及 / autopilot / chat / 渠道消息
+  Srv->>Srv: 准入判定（ReasonCode）→ 写入 agent_task_queue（queued）
+  Srv-->>Hub: 广播 task:queued（前端同步可见）
+  Hub-->>Dmn: daemon:task_available 唤醒
+  Dmn->>Dmn: 先占本机执行槽位
+  Dmn->>Srv: tasks.claim（WS 优先，HTTP 兜底）
+  Srv-->>Dmn: 批量任务载荷 + mat_ 任务令牌（dispatched）
+  Dmn->>Dmn: 准备 repo / execenv / MCP / 技能包
+  Dmn->>Srv: POST /tasks/{id}/start（running）
+  Dmn->>CLI: 启动 CLI，注入 MULTICA_TOKEN=mat_…
+  CLI-->>Dmn: 流式 JSON 事件
+  Dmn->>Srv: /messages · /progress 批量回传
+  Srv-->>Hub: task:message / task:progress → 前端实时渲染
+  CLI-->>Dmn: 进程退出
+  Dmn->>Srv: /complete 或 /fail，附 /usage 用量
+  Srv-->>Hub: task:completed / task:failed
+`} />
+
+状态机：`queued → dispatched → running → completed / failed / cancelled`。断连恢复由服务端 runtime sweeper（过期滞留任务）与 daemon 重连时的 `recover-orphans` 双向兜底。
+
+**准入判定不是简单的入队。** `internal/dispatch` 定义了一套 `ReasonCode`，把「为什么没跑」变成可观测的一等结果：
+
+| Reason | 含义 |
+| --- | --- |
+| `queued` | 已接受并入队 |
+| `coalesced` | 合并进正在进行的任务 |
+| `deferred` | 延后 |
+| `invocation_not_allowed` | 触发者无权调用该 agent |
+| `runtime_offline` / `runtime_unusable` / `target_unavailable` | 没有可用的执行目标 |
+| `attribution_blocked` | 找不到可归责的人 |
+| `already_active` | 同一份工作已在进行 |
+| `self_trigger_suppressed` | 防止 agent 自触发 |
+| `quota_exceeded` | autopilot 配额耗尽 |
+
+**Runtime 分三层。** ① `pkg/agent.SupportedTypes` 白名单定义协议族（claude、codex、cursor、copilot、kimi、opencode、qwen、grok……），每族一个后端文件负责启动参数与流式输出解析；② 内建 runtime 目前只有 `omp`（Oh-My-Pi，讲 `pi` JSON 协议）；③ 工作区可定义自定义 runtime profile（`command_name` + `fixed_args`），但 `protocol_family` 必须落在白名单内（DB `CHECK` + 应用双重校验）。
+
+## 前端架构与状态规则
+
+前端最重要的架构决定是**服务端状态与客户端状态的硬分界**，写进 `CLAUDE.md` 成为 review 准绳：
+
+| 归属 | 管什么 | 规则 |
+| --- | --- | --- |
+| **TanStack Query** | 一切来自 API 的数据：issues、members、agents、inbox、workspaces… | 工作区级查询 key 必须以 `wsId` 开头；WS 事件只允许打补丁 / 失效 Query 缓存 |
+| **Zustand** | 筛选器、草稿、弹窗、标签页布局、导航历史 | 共享 store 只能放在 `packages/core`；禁止把服务端载荷镜像进来；selector 必须返回稳定引用 |
+| **React Context** | 仅平台管道（导航适配、i18n 适配） | 不承载业务状态 |
+
+一次典型读写的完整路径：
+
+1. **读。** 视图用 `issueKeys.listSorted(wsId, sort)` 建 key → `api.listIssues()` 自动盖上 `Authorization` / `X-Workspace-Slug` / `X-CSRF-Token` 头 → 响应过 `parseWithFallback` + zod schema——契约漂移时降级为空兜底 + 告警日志，而不是白屏。这是「已安装桌面端要能对上新版后端」的核心防线。
+2. **写。** `useUpdateIssue` 的 `onMutate` 同步补丁所有可确定缓存并快照；服务端 `loadIssueForUser` 解析路径参数、支持 `expected_revision` 乐观并发；成功后发布 `issue:updated`（带变更标记位）。
+3. **回声。** WS 帧到达 `useRealtimeSync` → `ws-updaters` 补丁确定投影、失效不确定投影；mutation 的 `onSettled` 再失效一轮；`onError` 用快照回滚。断线重连或切工作区时全量失效工作区级查询。
+
+<Callout type="info">
+乐观更新的四个前置条件：结果可本地预测、用户停留原屏、失败罕见、回滚廉价——四者齐备才允许乐观（典型：状态 / 指派 / 开关补丁）。会导航或需确认的流程（创建 / 删除 / 退出）必须等服务端返回；聊天发送用「可见 pending + 失败重试」模式，不做无痕乐观。
+</Callout>
+
+**平台适配的缝**只有几条，全部显式：`NavigationAdapter`（web 包 next/navigation，desktop 写 tab store）、`StorageAdapter`（web / desktop 用 localStorage，mobile 用 Keychain）、`CoreProvider`（唯一构造 ApiClient / auth store / i18n / WSProvider 的地方）、`setCurrentWorkspace`（路由驱动的工作区镜像，用于请求头、持久化命名空间与重连）。桌面端是「单路由多标签」体系：标签是可序列化的 `TabSession`，`tab-coordinator` 是唯一写路由器的地方；工作区前的一次性流程（建工作区、接受邀请）不是路由，是 `WindowOverlay` 状态。
+
+## 下一步
+
+- [数据模型](/developers/data-model) — 建模约定、分域 ER 图与多态关系总表。
+- [认证与权限](/developers/auth-and-permissions) — 无密码登录、凭证家族、鉴权梯度与 agent 身份。

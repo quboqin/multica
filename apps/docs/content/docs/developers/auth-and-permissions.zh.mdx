@@ -1,0 +1,157 @@
+---
+title: 认证与权限
+description: 无密码登录、前缀分流的凭证家族、请求鉴权管线、工作区角色、资源级规则，以及 agent 如何获得随任务生灭的身份。
+---
+
+import { Callout } from "fumadocs-ui/components/callout";
+
+一句话概括：**无密码的人类认证（JWT + Cookie），前缀分流的七类凭证，以「工作区成员」为地基、角色与资源属主逐层收窄的授权体系**——而 agent 从头到尾没有自己的账号，它的身份是一枚随任务生灭的令牌。
+
+本页讲实现。面向运维的说明见[安全模型](/security-model)与[认证令牌](/auth-tokens)；面向产品的角色说明见[成员与角色](/members-roles)。
+
+## 无密码登录
+
+整个系统**没有密码**：`user` 表没有密码列，也就不存在密码哈希与找回流程。登录只有两条路，全部在公开路由组、按 IP 限流：
+
+<Mermaid chart={`
+sequenceDiagram
+  participant B as 浏览器
+  participant S as Server（handler/auth.go）
+  participant M as 邮件（Resend / SMTP）
+  B->>S: POST /auth/send-code {email}
+  S->>S: 注册闸门：ALLOWED_EMAILS → 域白名单 → ALLOW_SIGNUP（老用户全豁免）
+  S->>M: 6 位验证码（crypto/rand · 10 分钟有效 · 同邮箱 60s 冷却）
+  B->>S: POST /auth/verify-code {email, code}
+  S->>S: 常数时间比对 · 每码最多试 5 次 · 存 verification_code 表
+  S-->>B: JWT（HS256，默认 30 天）+ Set-Cookie
+  Note over B,S: multica_auth（HttpOnly · SameSite=Strict）+ multica_csrf（JS 可读）+ CloudFront 签名 Cookie
+  Note over B,S: Google OAuth：POST /auth/google 交换 code → userinfo，随后同样签发 JWT / Cookie
+`} />
+
+「拥有邮箱里的验证码」本身就是邮箱验证，没有独立的验证环节。Google 是唯一的 OAuth *登录*方；GitHub / Slack / Lark 等 OAuth 只用于工作区集成，从不承载用户身份。开发后门 `MULTICA_DEV_VERIFICATION_CODE` 在 `APP_ENV=production` 下被硬禁用。
+
+会话是**无状态 JWT**：HS256 签名（`JWT_SECRET`，生产环境弱密钥直接拒绝启动），claims 只有 `sub / email / name / exp / iat`，没有 sessions 表，因此没有「注销其他设备」，也没有刷新流程——过期即重新登录。`POST /auth/logout` 只清 Cookie，被复制走的 JWT 在到期前仍然有效；可吊销的凭证只有 PAT / daemon / task / plugin 令牌。
+
+## 凭证家族
+
+所有非 JWT 凭证统一形态：`前缀 + 40 位 hex（20 随机字节）`，服务端只存 SHA-256 哈希。前缀既是路由（中间件按它分流），也是标签（一眼看出凭证类别）：
+
+| 凭证 | 持有者 | 存储 / 校验 | 有效期 | 用途与边界 |
+| --- | --- | --- | --- | --- |
+| JWT | 人类 | 自包含，不落库；Cookie `multica_auth` 或 `Bearer` | 30 天 | 浏览器与桌面会话；无服务端吊销 |
+| `mul_` | 人类（CLI / daemon / 桌面） | `personal_access_token`，Redis 缓存 10 分钟 | 可永久 | 个人访问令牌；CLI 登录默认 90 天并在剩 7 天内自动续期；桌面为 daemon 铸永久 PAT；可撤销 |
+| `mat_` | Agent（任务作用域） | `task_token`，任务领取时铸造 | 24 h | agent 的全部身份：权限 = 运行时属主的成员资格 ∩ 令牌绑定的单个工作区 |
+| `mdt_` | Daemon | `daemon_token` | 24 h | 绑定工作区、无用户身份；目前仅在任务携带 Remote MCP 连接时铸造，日常 daemon 用 `mul_` |
+| `mcn_` | Cloud 节点 | 远程调 Multica Cloud 验证（60s 缓存；Cloud 不可达返回 503 而非放行） | Cloud 管理 | 云托管 runtime 的机器凭证 |
+| `mpi_` | 插件安装 | `plugin_installation.token_hash`，可轮换 | 长期 | 插件公开 API `/v1` 唯一入场券 |
+| `mpc_` | 插件回调 | 一次性；使用时**复查**被代表者的成员资格 | 5 分钟 | 代表某个人的单次回调，成员被移除立即失效 |
+
+## 请求鉴权管线
+
+主认证中间件 `middleware.Auth` 做的第一件事是 `r.Header.Del("X-Actor-Source")`——这个头**只能由服务端盖章**，客户端传入一律丢弃。随后取凭证（`Authorization` 头优先于 Cookie；Cookie 承载的写请求必须过 CSRF），按前缀分流：
+
+| 前缀 | 查验 | 盖章到请求头 |
+| --- | --- | --- |
+| `mat_` | `task_token` 按哈希查、未过期 | `X-User-ID`（属主）· `X-Agent-ID` · `X-Task-ID` · `X-Workspace-ID` 全部**覆写**客户端值，再盖 `X-Actor-Source: task_token` |
+| `mcn_` | HTTP 调 Cloud `/pat/verify`；本地必须有对应 `user` 行 | `X-User-ID` + `X-Actor-Source: cloud_pat` |
+| `mul_` | Redis 缓存 → `personal_access_token`（未撤销、未过期） | `X-User-ID` |
+| 其他 | 按 JWT 解析（签名算法钉死 HMAC，拒绝 alg 混淆） | `X-User-ID` = `sub`，`X-User-Email` |
+
+身份在进程内的传递方式很朴素：handler 用 `r.Header.Get("X-User-ID")` 取用户；工作区成员行则放进 context（`MemberFromContext`）。鉴权缓存全在 Redis：PAT 10 分钟、成员资格 5 分钟、daemon 令牌与 Cloud PAT 各有缓存——官方声明的最坏撤销滞后为 **10 分钟**。
+
+## 工作区作用域与角色
+
+工作区是权限地基。解析优先级：`mat_` 令牌绑定的工作区（无条件优先，其余标识一律忽略）→ URL 参数 → `?workspace_slug` / `X-Workspace-Slug`（web / desktop / mobile 走这条）→ `?workspace_id` / `X-Workspace-ID`（CLI / daemon 走这条）。成员校验失败返回的是 **404 而非 403**——非成员连「这个工作区存在」都探测不到；前端同样用一张 `NoAccessPage` 刻意不区分两者。
+
+<Mermaid chart={`
+flowchart LR
+  pub["公开路由<br/>health · /auth/* · webhooks<br/>HMAC 签名能力 URL"]
+  authn["已认证用户<br/>middleware.Auth<br/>/api/me · /api/tokens · 邀请"]
+  member["工作区成员<br/>RequireWorkspaceMember<br/>issues · agents · chat · inbox …"]
+  admin["owner + admin<br/>RequireWorkspaceRole<br/>成员 / 邀请 · 集成 · 插件 · profile"]
+  owner["仅 owner<br/>删除工作区 · owner 角色变更<br/>「至少一名 owner」不变量"]
+  pub --> authn --> member --> admin --> owner
+`} />
+
+梯子之外还有两类叠加检查：资源级规则（属主 / `permission_mode`，见下文）与 `RequireHumanActor`——当 `X-Actor-Source` 为 `task_token` 或 `cloud_pat` 时，billing 等端点直接拒绝。router.go 用中间件组合表达整个梯子；handler 内部对关键操作还有防御性复查（如删工作区再验一次 owner）。issue 域刻意**没有任何角色门槛**——成员即全权，协作摩擦最小化。
+
+| 能力 | owner | admin | member |
+| --- | --- | --- | --- |
+| issues / 评论 / chat / inbox / 项目 / 小队的创建与编辑 | ✓ | ✓ | ✓ |
+| 邀请成员（只能授 admin / member）· 改角色 · 移除成员 | ✓ | ✓ | — |
+| 工作区设置 · 集成（GitHub / VCS / 渠道）· 插件 · MCP 库 · runtime profile · 分享链接 · issue 状态 / 属性 / 快捷指令管理 | ✓ | ✓ | — |
+| 删除工作区 · 提升 / 降级 owner · 移除 owner | ✓ | — | — |
+| 「最后一名 owner」的降级 / 移除 / 退出 | 一律 400 拒绝（不变量保护） | | |
+
+入口除邀请外还有**分享链接**：24 位 hex 一次一条活跃，可限次数与时效，兑换用条件 UPDATE 原子递增杜绝超发。移除成员是一整个事务的级联：下线其 runtime、归档绑定 agent、取消在途任务、删订阅与 daemon 令牌、删成员行，最后立刻失效成员资格缓存。
+
+## 资源级权限
+
+角色之上叠加「资源属主」层——多数写操作的判据是 `owner/admin ∥ 资源属主`，但 agent 的**调用权**是唯一一处连管理员都没有豁免的地方：
+
+| 资源 | 规则 |
+| --- | --- |
+| **Agent 调用**（触发运行） | 由 `agent.permission_mode` 决定：`private` 仅属主——**无管理员豁免、无 agent 链路豁免**；`public_to` 按白名单（workspace / member）。agent 调 agent 时以**链顶人类发起者**（`originator_user_id`）判权，防止借 agent 洗权限 |
+| Agent 管理（改配置 / 归档） | owner / admin 或 `agent.owner_id` |
+| Agent 环境变量 / 密钥 | **agent actor 一律 403**；人类侧 owner / admin 或 agent 属主；每次明文披露写入 `activity_log`，审计写入失败则不返回明文（fail-closed）；`mcp_config` 在 WS 广播副本中无条件脱敏 |
+| 评论编辑 / 删除 | 作者（`author_type + author_id` 精确匹配，agent 只能改自己的评论）或 owner / admin |
+| Skill / Runtime / 视图 / Autopilot / Squad | 创建者或属主，或 owner / admin；他人私有视图直接 404 不可见 |
+| 计费与订阅、client-usage 上报 | `RequireHumanActor`：`X-Actor-Source ∈ {task_token, cloud_pat}` 一律 403——agent 拿不到钱包 |
+
+前端在 `packages/core/permissions/rules.ts` 以纯函数镜像同一套规则（返回 `Decision {allowed, reason}` 供 UI 提示），但 Go handler 才是权威判定。
+
+## Daemon 与 Agent 身份
+
+`/api/daemon/*` 使用独立的 `DaemonAuth`：只收 `Authorization` 头（结构性排除 Cookie / CSRF 问题），支持 `mdt_ / mcn_ / mul_ / JWT` 四条路径。实践中 daemon 主要以属主的 `mul_` PAT 运行；runtime 访问经 `requireDaemonRuntimeAccess` 校验，且刻意用「404 = runtime 已不存在，daemon 应丢弃并重注册」作自愈信号（其余 DB 错误保持 500，防止抖动触发自清理）。
+
+**Agent 没有账号，身份是随任务生灭的 `mat_` 令牌**——这是全系统最重要的安全设计：
+
+1. **铸造。** daemon 领取任务时，服务端为每个任务铸 `mat_` 令牌，绑定 `task + agent + workspace + runtime 属主`，24 小时过期，与领取回执同事务落库。runtime 属主缺失时**取消任务而不是派发**——绝不产生无主凭证。历史上曾把属主的 PAT 注入 agent 进程，此设计正是为替换它。
+2. **注入。** daemon 把令牌以 `MULTICA_TOKEN` 环境变量交给 CLI 进程（另有 `MULTICA_WORKSPACE_ID / MULTICA_AGENT_ID / MULTICA_TASK_ID` 等）；daemon 侧校验注入值必须是 `mat_` 前缀，CLI 侧在任务上下文里拒绝回退到用户全局配置的 token，也拒绝 `login` 等人类命令。
+3. **行权。** 请求进来后中间件覆写四个身份头并盖 `X-Actor-Source: task_token`；工作区解析无条件采用令牌绑定值；成员校验跑的是**属主**的资格——所以 agent 的能力恒等于「属主权限 ∩ 单一工作区 ∩ 24 小时」。
+4. **署名。** `resolveActor` 据此返回 `("agent", agent_id)`，评论落库为 `author_type='agent'`。旧路径若想声明 agent 身份，必须同时给出 `X-Agent-ID` 与归属该 agent 的有效 `X-Task-ID`——单凭 `X-Agent-ID` 永远不被信任，成员无法冒充 agent。
+
+CLI 的人类登录则是一段本地回环握手：
+
+<Mermaid chart={`
+sequenceDiagram
+  participant C as multica CLI
+  participant Br as 浏览器（已有会话）
+  participant S as Server
+  C->>C: 本地监听 127.0.0.1 随机端口 + 生成 state
+  C->>Br: 打开 /login?cli_callback=… 与 cli_state=…
+  Br->>Br: 校验回调地址：仅 http + localhost / 私网段
+  Br->>S: POST /api/cli-token（凭 Cookie 会话）
+  S-->>Br: 新 JWT
+  Br->>C: 重定向到 http://127.0.0.1:…/callback，携带 token + state
+  C->>C: 核对 state
+  C->>S: POST /api/tokens（JWT 换 PAT，90 天）
+  S-->>C: mul_…（明文仅出现这一次）
+  C->>C: 存 profile 配置，余期 ≤ 7 天时自动续至 90 天（不轮换密钥）
+`} />
+
+桌面端类似，但走 `multica://auth/callback` 深链把 JWT 交给主进程，主进程再为本机 daemon 铸一枚**永不过期**的 PAT（按 profile 缓存，401 时重铸）。
+
+## 前端凭证管线
+
+| | Web | Desktop | Mobile |
+| --- | --- | --- | --- |
+| 模式 | **Cookie**（`multica_auth` HttpOnly + `multica_csrf`） | Token（Bearer） | Token（Bearer） |
+| 存储 | 浏览器 Cookie；旧 localStorage token 存量用户保持 token 模式直至下次重新登录 | Electron `localStorage["multica_token"]` | `expo-secure-store`（iOS Keychain），键名与桌面一致 |
+| 随行头 | `credentials: "include"` + `X-CSRF-Token` + `X-Workspace-Slug` | `Authorization` + `X-Workspace-Slug` | `Authorization` + `X-Workspace-Slug`（明确无 CSRF） |
+
+启动时序由 `AuthInitializer` 掌控：拉配置（指数退避）→ `getMe()`。**只有真正的 401 才判死刑**（清 token、登出、重置分析身份）；网络故障进入 `recovering` 状态按 1s → 30s 退避重试并监听 `online` 事件——断网永远不会把人登出。API client 收到任意 401 时同步清空内存 token 并回调宿主清存储。WebSocket 的认证走 Cookie（升级前校验）或首帧 `{"type":"auth"}`（换取 `auth_ack`），只接受 JWT 与 `mul_`，`mat_` / `mcn_` 上不了 `/ws`。
+
+## 攻击面加固
+
+- **CSRF 三层。** `SameSite=Strict` 为主防线；双提交 Cookie 的值是 `nonce.HMAC(nonce, 会话JWT)`——把 CSRF 令牌与会话绑定，子域写 Cookie 也伪造不了；Bearer 路径与插件 API 结构性免疫。
+- **限流**（Redis 固定窗口 + Lua 原子）：send-code 5/分/IP、verify 20/分/IP、contact-sales 5/时、插件 API 120/分；邀请另有三重滑窗（发起人 10/10min · 工作区 50/24h · 收件人 6/24h，**fail-closed**）；`X-Forwarded-For` 仅在可信代理 CIDR 内采信。
+- **能力 URL 替代 Cookie。** `SameSite=Strict` 会挡住图片与下载场景，于是附件下载、头像、插件面板都改用短时效 HMAC 签名 URL——凭证在链接里而不在会话里。
+- **启动守卫。** 生产环境下弱 `JWT_SECRET` 直接退出；开发验证码后门在生产硬关闭；保留 slug 表解析失败则拒绝启动（保留字防路由劫持）。
+- **删掉的攻击面。** 早期的 OpenAI 兼容透传端点 `/api/llm/*` 已整体移除——它曾允许任何登录用户白嫖部署方的模型密钥。
+- **WS 来源校验。** 同源放行、`X-Forwarded-Host` 仅信任可信代理、其余按显式 origin 白名单。
+
+## 下一步
+
+- [架构内幕](/developers/architecture-internals) — 这些中间件组在请求管线中的位置。
+- [数据模型](/developers/data-model) — 支撑本页的 `task_token`、`personal_access_token` 与 `agent_task_queue` 表。

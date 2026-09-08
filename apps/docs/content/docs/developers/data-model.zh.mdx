@@ -1,0 +1,571 @@
+---
+title: 数据模型
+description: Multica PostgreSQL 数据库的建模约定、分域 ER 图、多态关系总表与按域归组的全表清单。
+---
+
+import { Callout } from "fumadocs-ui/components/callout";
+
+Multica 的全部数据存放在 PostgreSQL 17 中，由 sqlc 建模，表数量远超一百张。最重要的一条设计决定：**整库没有一个外键**——关系、校验、级联清理全部由应用层显式完成。下面的 ER 图里所有连线都是虚线，提醒你它们是「应用层约定」而非数据库约束。
+
+本页与[架构内幕](/developers/architecture-internals)和[认证与权限](/developers/auth-and-permissions)配套阅读。
+
+## 建模约定
+
+| 约定 | 做法 | 备注 |
+| --- | --- | --- |
+| **无外键** | 禁止 `FOREIGN KEY` / 级联删除；依赖清理放进应用事务（如删成员时同一事务内下线 runtime、归档 agent、取消任务、删 token） | 迁移 lint 测试强制执行 |
+| **主键** | 统一 `UUID DEFAULT gen_random_uuid()` | 少数例外：GitHub 待领安装以平台数字 ID（`BIGINT`）作 PK、渠道绑定令牌以 `token_hash` 作 PK、若干汇总表只有复合唯一索引 |
+| **租户边界** | 几乎每张表都带 `workspace_id`，所有查询按它过滤 | 它同时是权限边界与索引前缀 |
+| **人读 ID** | issue 编号 = `workspace.issue_prefix + '-' + issue.number`（如 `MUL-4302`） | 计数器是 `workspace.issue_counter` 行内自增，配 `UNIQUE(workspace_id, number)`，每个工作区从头计数 |
+| **排序** | `position DOUBLE PRECISION` 分数排序（issue、pinned_item、issue_status、issue_property…） | 拖拽插入无需重排整表 |
+| **乐观并发** | `revision BIGINT`（issue、comment）+ 请求携带 `expected_revision` | 渠道会话绑定另有 `route_revision` / `context_revision` |
+| **「软删」** | 全库没有 `deleted_at`；用语义化字段：`archived_at`（agent、squad）、`status='archived'`（chat、autopilot）、`revoked`（PAT）、`is_active`（分享链接）… | 删除要么是真删（应用事务清理），要么是语义归档 |
+| **时间** | 一律 `TIMESTAMPTZ DEFAULT now()`；仅 issue / project 的起止日期与用量日表用 `DATE` | 汇总按 UTC 物化，`user.timezone` 只影响渲染 |
+| **JSONB** | `issue.metadata` ≤ 8 KB、`issue.properties` ≤ 16 KB（`CHECK` 限长 + GIN `jsonb_path_ops`）；配置类字段广泛使用 JSONB | `properties` 的键是 `issue_property.id`，值类型由属性定义决定 |
+| **租约 / Outbox** | `lease_token + lease_expires_at + next_attempt_at + attempt + dead_lettered_at` 模式反复出现 | webhook_delivery、seat_capacity_outbox、channel_media_pending_object、sys_cron_executions… |
+| **迁移纪律** | 索引必须 `CREATE INDEX CONCURRENTLY` 且单文件单语句；新 `CHECK` 先 `NOT VALID` 再补 `VALIDATE`；条件跳过的迁移要求后续 DDL 幂等 | 迁移执行器在事务外跑文件，因此 migrations 目录里有大量单条索引文件 |
+
+## 分域 ER 图
+
+一张全表全景图没有可读性，下面按域拆成八张。连线上标注的是承载关系的列名；`||..o{` 一对多、`}o..o{` 多对多，全部为应用层维护。
+
+### 身份与工作区
+
+<Mermaid chart={`
+erDiagram
+  workspace ||..o{ member : "workspace_id"
+  user ||..o{ member : "user_id"
+  workspace ||..o{ workspace_invitation : "workspace_id"
+  user ||..o{ workspace_invitation : "invitee_email / invitee_user_id"
+  workspace ||..o{ workspace_share_link : "workspace_id"
+  user ||..o{ personal_access_token : "user_id"
+  workspace {
+    uuid id PK
+    text name
+    text slug UK "全局唯一，排除保留字"
+    text issue_prefix "issue 编号前缀"
+    int issue_counter "行内自增计数器"
+    jsonb settings
+    jsonb repos
+    bool attribution_fail_closed "无归责人时拒绝 agent 运行"
+  }
+  user {
+    uuid id PK
+    text email UK "小写唯一，无密码列"
+    text name
+    text timezone "仅影响渲染"
+    timestamptz onboarded_at
+  }
+  member {
+    uuid id PK
+    uuid workspace_id
+    uuid user_id
+    text role "owner | admin | member"
+  }
+  workspace_invitation {
+    uuid id PK "UUID 本身即受邀凭证"
+    text invitee_email
+    text role "admin | member（不可邀 owner）"
+    text status "pending | accepted | declined | expired"
+    timestamptz expires_at "7 天"
+  }
+  workspace_share_link {
+    uuid id PK
+    text code UK "24 位 hex，一工作区一条活跃"
+    text role "member | admin"
+    int max_uses
+    int use_count "条件 UPDATE 原子递增"
+    bool is_active
+  }
+  personal_access_token {
+    uuid id PK
+    text token_hash UK "SHA-256"
+    text token_prefix "展示用前 12 位"
+    timestamptz expires_at "可空 = 永不过期"
+    bool revoked
+  }
+  verification_code {
+    uuid id PK
+    text email
+    text code "6 位数字，10 分钟"
+    int attempts "上限 5 次"
+    bool used
+  }
+`} />
+
+`member` 是 user 与 workspace 的关联表并承载角色；一切认证凭证（验证码、PAT）都直接挂在 user 上，工作区不持有凭证。
+
+### 议题核心
+
+<Mermaid chart={`
+erDiagram
+  workspace ||..o{ issue : "workspace_id"
+  issue ||..o{ issue : "parent_issue_id 子任务"
+  issue ||..o{ comment : "issue_id"
+  comment ||..o{ comment : "parent_id 回复"
+  issue ||..o{ issue_dependency : "issue_id → depends_on_issue_id"
+  workspace ||..o{ issue_status : "workspace_id"
+  issue }o..|| issue_status : "status → key（工作区内）"
+  workspace ||..o{ issue_property : "workspace_id"
+  workspace ||..o{ issue_label : "workspace_id"
+  issue }o..o{ issue_label : "issue_to_label"
+  issue {
+    uuid id PK
+    uuid workspace_id
+    int number "prefix-number 即人读 ID"
+    text title
+    text status "指向 issue_status.key"
+    text priority "urgent | high | medium | low | none"
+    text assignee_type "member | agent（多态）"
+    uuid assignee_id
+    text creator_type "member | agent"
+    uuid parent_issue_id
+    uuid project_id
+    text origin_type "autopilot | quick_create | *_chat | agent_create"
+    jsonb properties "键为 issue_property.id，≤ 16 KB"
+    jsonb metadata "≤ 8 KB"
+    float position "分数排序"
+    bigint revision "乐观并发"
+    timestamptz last_activity_at
+  }
+  comment {
+    uuid id PK
+    uuid issue_id
+    text author_type "member | agent | system | plugin"
+    uuid author_id
+    text content
+    uuid parent_id
+    uuid source_task_id "agent 评论回链任务"
+    uuid quick_action_id
+    timestamptz resolved_at
+    bigint revision
+  }
+  issue_status {
+    uuid id PK
+    text key "工作区内唯一"
+    text name
+    text category "归组用"
+    bool is_system "内建七态"
+    float position
+  }
+  issue_property {
+    uuid id PK
+    text name
+    text type "text | number | date | url | select | multi_select …"
+    jsonb config "select 选项"
+  }
+  issue_label {
+    uuid id PK
+    text name
+    text color
+    text resource_type "issue | agent | skill"
+  }
+`} />
+
+三处关键设计：`assignee_type + assignee_id` 多态指派（人或 agent 用同一列）；issue 状态不是枚举而是每工作区的 `issue_status` 目录（内建 backlog / todo / in_progress / in_review / done / blocked / cancelled，可自定义）；自定义字段的值直接以 JSONB 存进 `issue.properties`，键为属性定义的 UUID。
+
+### 协作外围
+
+通知、订阅、附件与活动。
+
+<Mermaid chart={`
+erDiagram
+  issue ||..o{ attachment : "issue_id（也可挂 comment / chat / task）"
+  issue ||..o{ issue_subscriber : "issue_id"
+  issue ||..o{ issue_reaction : "issue_id"
+  comment ||..o{ comment_reaction : "comment_id"
+  issue ||..o{ activity_log : "issue_id"
+  workspace ||..o{ inbox_item : "workspace_id"
+  user ||..o{ inbox_item : "recipient_id"
+  user ||..o{ pinned_item : "user_id"
+  user ||..o{ issue_view : "owner_id"
+  attachment {
+    uuid id PK
+    text uploader_type "member | agent"
+    uuid uploader_id
+    uuid issue_id "六选一挂载点"
+    uuid comment_id
+    uuid chat_session_id
+    uuid task_id
+    text url
+    bigint size_bytes
+  }
+  issue_subscriber {
+    uuid issue_id
+    text user_type "member | agent"
+    uuid user_id
+    text reason "creator | assignee | commenter | mentioned | manual | autopilot | delegated"
+    timestamptz unsubscribed_at
+  }
+  inbox_item {
+    uuid id PK
+    text recipient_type "member | agent"
+    uuid recipient_id
+    text type "通知类型"
+    text severity "action_required | attention | info"
+    text actor_type "member | agent | system"
+    bool read
+    bool archived
+  }
+  activity_log {
+    uuid id PK
+    uuid issue_id
+    text actor_type
+    uuid actor_id
+    text action
+    jsonb details "含 agent_env_revealed 审计"
+  }
+  pinned_item {
+    uuid id PK
+    text item_type "issue | project | view"
+    uuid item_id
+    float position
+  }
+  issue_view {
+    uuid id PK
+    uuid owner_id
+    text scope_type "workspace | my | project"
+    text visibility "private | workspace"
+    jsonb query "筛选条件"
+    jsonb display
+    int revision
+  }
+`} />
+
+agent 的一等公民身份贯穿到底：订阅者、收件箱收件人、附件上传者、活动 actor 全都是 `member | agent` 二元多态。附件用「六个可空外挂列」而非判别列，同一张表服务 issue / 评论 / 聊天 / 任务 / 来源上下文。
+
+### 项目与小队
+
+<Mermaid chart={`
+erDiagram
+  workspace ||..o{ project : "workspace_id"
+  project ||..o{ issue : "project_id"
+  project ||..o{ project_resource : "project_id"
+  workspace ||..o{ squad : "workspace_id"
+  squad ||..o{ squad_member : "squad_id"
+  agent ||..o| squad : "leader_id（小队长必须是 agent）"
+  project {
+    uuid id PK
+    text title
+    text status
+    text priority
+    text lead_type "member | agent（多态负责人）"
+    uuid lead_id
+    date start_date
+    date due_date
+  }
+  project_resource {
+    uuid id PK
+    text resource_type
+    jsonb resource_ref
+    int position
+  }
+  squad {
+    uuid id PK
+    text name
+    uuid leader_id "agent.id"
+    text instructions
+    timestamptz archived_at
+  }
+  squad_member {
+    uuid id PK
+    text member_type "agent | member"
+    uuid member_id
+    text role
+  }
+`} />
+
+小队是人机混编的编制单位：成员多态，但 `leader_id` 恒指向 agent——「谁来接活」由小队长 agent 判断（leader task）。项目负责人同样可以是 agent。
+
+### Agent 定义与调用授权
+
+<Mermaid chart={`
+erDiagram
+  workspace ||..o{ agent : "workspace_id"
+  user ||..o{ agent : "owner_id"
+  agent ||..o{ agent_invocation_target : "agent_id（permission_mode = public_to 时生效）"
+  agent }o..o{ skill : "agent_skill（enabled）"
+  skill ||..o{ skill_file : "skill_id"
+  agent }o..o{ workspace_mcp_server : "agent_mcp_server"
+  agent {
+    uuid id PK
+    uuid workspace_id
+    uuid owner_id "资源属主"
+    text name
+    text kind "user | system（内建 Mika）"
+    text permission_mode "private | public_to"
+    text status "idle | working | blocked | error | offline"
+    text runtime_mode "local | cloud"
+    uuid runtime_id "绑定的运行时"
+    text model
+    text instructions
+    jsonb mcp_config "出站广播时脱敏"
+    jsonb custom_env
+    text_arr composio_toolkit_allowlist
+    int max_concurrent_tasks
+    timestamptz archived_at
+  }
+  agent_invocation_target {
+    uuid id PK
+    uuid agent_id
+    text target_type "workspace | member | team（保留）"
+    uuid target_id
+  }
+  skill {
+    uuid id PK
+    uuid workspace_id
+    text name
+    text content "SKILL.md"
+    uuid created_by
+    uuid plugin_installation_id "插件安装的技能"
+  }
+  workspace_mcp_server {
+    uuid id PK
+    text name
+    jsonb config
+  }
+`} />
+
+`permission_mode` 是调用授权的唯一来源：`private` 仅属主可触发（管理员也不能越权），`public_to` 按 `agent_invocation_target` 白名单 OR 匹配。技能与 MCP 服务器都是工作区级资产，通过关联表挂到 agent。
+
+### 运行时与任务队列
+
+执行域的心脏。
+
+<Mermaid chart={`
+erDiagram
+  workspace ||..o{ agent_runtime : "workspace_id"
+  runtime_profile ||..o{ agent_runtime : "profile_id（自定义运行时）"
+  agent ||..o{ agent_task_queue : "agent_id"
+  issue ||..o{ agent_task_queue : "issue_id"
+  agent_runtime ||..o{ agent_task_queue : "runtime_id"
+  agent_task_queue ||..o{ agent_task_queue : "parent / retry_of / rerun_of / delegated_from"
+  agent_task_queue ||..o{ task_message : "task_id"
+  agent_task_queue ||..o{ task_usage : "task_id"
+  agent_task_queue ||..o| task_token : "task_id（一任务一令牌）"
+  workspace ||..o{ daemon_token : "workspace_id"
+  agent_runtime {
+    uuid id PK
+    text daemon_id "机器指纹"
+    uuid owner_id "任务令牌以此人身份运行"
+    text provider "claude | codex | cursor … 协议族"
+    text status "online | offline"
+    text runtime_mode "local | cloud"
+    uuid profile_id
+    timestamptz last_seen_at
+  }
+  agent_task_queue {
+    uuid id PK
+    uuid agent_id
+    uuid issue_id
+    text status "queued → dispatched → running → terminal"
+    uuid runtime_id
+    uuid trigger_comment_id
+    uuid chat_session_id
+    uuid autopilot_run_id
+    uuid squad_id
+    uuid originator_user_id "链顶人类（授权判据）"
+    uuid accountable_user_id "归责人（审计判据）"
+    text originator_source "direct_human | delegation | rule_owner …"
+    text trigger_evidence_kind "comment | issue_assignment | autopilot_run …"
+    uuid trigger_evidence_ref_id
+    jsonb runtime_mcp_overlay "终态触发器清空"
+    text session_id "跨任务续会话"
+    text branch_name
+    int attempt
+    timestamptz fire_at "定时任务"
+  }
+  task_token {
+    uuid id PK
+    text token_hash UK "mat_ 的 SHA-256"
+    uuid task_id
+    uuid agent_id
+    uuid workspace_id
+    uuid user_id "runtime 属主"
+    timestamptz expires_at "24h"
+  }
+  task_message {
+    uuid id PK
+    uuid task_id
+    int seq
+    text type
+    text tool
+    jsonb input
+  }
+  task_usage {
+    uuid id PK
+    uuid task_id
+    text provider
+    text model
+    bigint input_tokens
+    bigint output_tokens
+    bigint cost_usd_ticks "1e-10 美元"
+  }
+`} />
+
+`agent_task_queue` 是全库最宽的表（70+ 列），同时承担队列、生命周期、会话延续与**归因审计**：`originator_user_id`（授权判据，A2A 链路取链顶人类）与 `accountable_user_id`（审计 / 成本归责）刻意分离；五个自引用列（parent / escalation / delegated_from / retry_of / rerun_of）完整保留任务谱系。
+
+### Chat 与 Autopilot
+
+<Mermaid chart={`
+erDiagram
+  workspace ||..o{ chat_session : "workspace_id"
+  agent ||..o{ chat_session : "agent_id"
+  chat_session ||..o{ chat_message : "chat_session_id"
+  chat_message ||..o| agent_task_queue : "task_id（一条助手消息一任务）"
+  workspace ||..o{ autopilot : "workspace_id"
+  autopilot ||..o{ autopilot_trigger : "autopilot_id"
+  autopilot ||..o{ autopilot_run : "autopilot_id"
+  autopilot ||..o{ autopilot_rule_version : "发布快照（归责）"
+  autopilot_run ||..o| agent_task_queue : "task_id"
+  webhook_delivery ||..o| autopilot_run : "webhook_delivery_id"
+  chat_session {
+    uuid id PK
+    uuid agent_id
+    uuid creator_id
+    text status "active | archived"
+    text session_id "运行时会话延续"
+    uuid runtime_id
+    uuid project_id
+  }
+  chat_message {
+    uuid id PK
+    text role "user | assistant"
+    text message_kind
+    uuid task_id
+    jsonb quick_actions
+  }
+  autopilot {
+    uuid id PK
+    text assignee_type "agent | squad"
+    uuid assignee_id
+    text execution_mode "create_issue | run_only"
+    text status "active | paused | archived"
+    uuid project_id
+  }
+  autopilot_trigger {
+    uuid id PK
+    text kind "schedule | webhook | api"
+    text cron_expression
+    text webhook_token
+    text provider
+    jsonb event_filters
+  }
+  autopilot_run {
+    uuid id PK
+    text source
+    text status "pending | issue_created | running | skipped | completed | failed"
+    uuid issue_id
+    uuid task_id
+    text reason_code
+  }
+  webhook_delivery {
+    uuid id PK
+    text provider
+    text signature_status "not_required | valid | invalid | missing"
+    bytea raw_body
+    uuid lease_token "outbox 租约重试"
+    timestamptz dead_lettered_at
+  }
+`} />
+
+两者都汇入同一个 `agent_task_queue`：聊天里每条助手回复背后是一个任务；autopilot 触发（定时 / webhook / API）先落 `autopilot_run`，再视 `execution_mode` 建 issue 或直接跑任务。`autopilot_rule_version` 是发布快照，为无人值守的运行提供「规则发布者」这一归责人。
+
+### 渠道与插件
+
+<Mermaid chart={`
+erDiagram
+  workspace ||..o{ channel_installation : "workspace_id"
+  agent ||..o| channel_installation : "agent_id（渠道绑定的默认 agent）"
+  channel_installation ||..o{ channel_user_binding : "installation_id"
+  channel_installation ||..o{ channel_chat_session_binding : "installation_id"
+  channel_chat_session_binding ||..o| chat_session : "chat_session_id"
+  channel_installation ||..o{ channel_inbound_message_dedup : "去重"
+  channel_installation ||..o{ channel_outbound_message : "出站映射"
+  workspace ||..o{ plugin_installation : "workspace_id"
+  plugin_package ||..o{ plugin_package_version : "package_id"
+  plugin_package_version ||..o{ plugin_package_file : "version_id"
+  plugin_package_version ||..o| plugin_installation : "package_version_id"
+  plugin_installation ||..o{ plugin_secret : "installation_id"
+  plugin_installation ||..o{ plugin_storage : "installation_id"
+  plugin_installation ||..o{ plugin_invocation : "installation_id"
+  plugin_installation ||..o{ plugin_hook_schedule : "installation_id"
+  channel_installation {
+    uuid id PK
+    text channel_type "slack | dingtalk | wecom | telegram …"
+    jsonb config "凭证与平台 ID"
+    text status "active | revoked"
+    text ws_lease_token "单驱动租约"
+  }
+  channel_user_binding {
+    uuid id PK
+    uuid multica_user_id
+    text channel_user_id "平台侧身份映射"
+  }
+  plugin_installation {
+    uuid id PK
+    text plugin_key
+    jsonb manifest
+    jsonb granted_scopes
+    text token_hash "mpi_ 安装令牌"
+    bool enabled
+  }
+  plugin_storage {
+    uuid id PK
+    text scope_type "workspace | user"
+    uuid scope_id
+    text key
+  }
+`} />
+
+Lark 先行实现了一套专用表（`lark_*`），随后被抽象成 `channel_*` 通用模型覆盖 Slack / 钉钉 / 企微 / Telegram——同一模式：安装 → 用户绑定 → 会话绑定 → 进站去重 / 审计 → 出站映射。插件域是「包 → 版本 → 文件」的发布链加安装侧的密文、存储、调用日志与定时 hook。
+
+## 多态关系总表
+
+没有外键的另一面是多态关系用得非常自由——「判别列 + ID 列」是全库最高频的建模手势，agent 借此在每个协作场景与人类同权出现：
+
+| 表 · 判别列 | 可指向 | 语义 |
+| --- | --- | --- |
+| `issue.assignee_type` | `member \| agent` | 核心多态：任务指派给人或 agent |
+| `issue.creator_type` / `project.lead_type` | `member \| agent` | 创建者 / 项目负责人 |
+| `comment.author_type` | `member \| agent \| system \| plugin` | 四类评论作者，编辑权按 (type, id) 精确匹配 |
+| `inbox_item.recipient_type` · `.actor_type` | `member \| agent`（actor 另含 `system`） | 通知的收件人与动作者都可是 agent |
+| `issue_subscriber.user_type` / reactions 的 `actor_type` | `member \| agent` | 订阅与表情 |
+| `attachment.uploader_type` | `member \| agent` | 附件上传者；挂载点为六个可空列 |
+| `squad_member.member_type` | `agent \| member` | 人机混编小队 |
+| `autopilot.assignee_type` / `quick_action.assignee_type` | `agent \| squad` | 自动化的执行者是 agent 或小队（不能是人） |
+| `agent_invocation_target.target_type` | `workspace \| member \| team`（保留） | 调用白名单的授权对象 |
+| `pinned_item.item_type` | `issue \| project \| view` | 个人置顶 |
+| `issue_label.resource_type` | `issue \| agent \| skill` | 一套标签服务三种资源，各有关联表 |
+| `agent_task_queue.trigger_evidence_kind` | `comment \| issue_assignment \| autopilot_run \| rule_version \| rerun …` | 触发证据指针，free TEXT 便于扩展 |
+| `plugin_storage.scope_type` | `workspace \| user` | 插件 KV 的作用域 |
+
+## 全表清单（按域）
+
+核心链条：**workspace → issue → agent_task_queue**，其余域都围绕这条主干生长。表数随迁移变化，以下按域归组。
+
+| 域 | 表 |
+| --- | --- |
+| 身份与工作区 | `user` `workspace` `member` `workspace_invitation` `workspace_share_link` `personal_access_token` `verification_code` `notification_preference` |
+| 议题与协作 | `issue` `issue_dependency` `issue_status` `issue_property` `issue_label` `issue_to_label` `comment` `comment_reaction` `issue_reaction` `issue_subscriber` `attachment` `activity_log` `inbox_item` `pinned_item` `issue_view` `issue_view_preference` |
+| 议题来源上下文 | `issue_source_context` `issue_source_context_object_intent`（从聊天 / 任务「一键立项」时的快照与对象搬运意图） |
+| 项目与小队 | `project` `project_resource` `squad` `squad_member` |
+| Agent 定义 | `agent` `agent_invocation_target` `agent_mcp_server` `agent_skill` `agent_to_label` `agent_builder_draft` |
+| 技能与 MCP | `skill` `skill_file` `skill_to_label` `workspace_mcp_server` |
+| 运行时与任务 | `agent_runtime` `runtime_profile` `agent_task_queue` `task_message` `task_token` `task_usage` `daemon_connection` `daemon_token` |
+| Chat | `chat_session` `chat_message` `chat_pinned_agent` `chat_draft_restore` |
+| Autopilot 与快捷指令 | `autopilot` `autopilot_trigger` `autopilot_run` `autopilot_rule_version` `autopilot_subscriber` `autopilot_collaborator` `autopilot_quota_period` `autopilot_quota_reservation` `webhook_delivery` `quick_action` |
+| 渠道（通用） | `channel_installation` `channel_user_binding` `channel_binding_token` `channel_chat_session_binding` `channel_chat_context_generation` `channel_inbound_audit` `channel_inbound_message_dedup` `channel_media_pending_object` `channel_outbound_card_message` `channel_outbound_message` `channel_task_delivery` |
+| Lark 专用（先行实现） | `lark_installation` `lark_user_binding` `lark_binding_token` `lark_chat_session_binding` `lark_inbound_audit` `lark_inbound_message_dedup` `lark_outbound_card_message` |
+| 钉钉专用 | `dingtalk_bot_identity` `dingtalk_group_presence` `dingtalk_group_route`（带镜像触发器） |
+| GitHub 集成 | `github_installation` `github_pending_installation` `github_pull_request` `github_pull_request_check_run` `github_pull_request_check_suite` `github_pending_check_suite` |
+| 自托管 VCS | `vcs_connection` `vcs_pull_request` `vcs_commit_status`（GitLab 等，token 加密存储） |
+| Issue–PR 关联 | `issue_pull_request` `issue_vcs_pull_request`（`linked_by` 多态） |
+| 插件平台 | `plugin_package` `plugin_package_version` `plugin_package_file` `plugin_installation` `plugin_secret` `plugin_storage` `plugin_invocation` `plugin_hook_schedule` |
+| Composio | `user_composio_connection`（用户级第三方应用连接） |
+| 用量与配额 | `task_usage_hourly` `task_usage_hourly_dirty` `task_usage_hourly_rollup_state`（触发器喂 dirty、水位线增量汇总）`client_usage_daily` `seat_capacity_outbox` |
+| 系统与运营 | `sys_cron_executions`（DB cron 租约 + 审计）`feedback` `contact_sales_inquiry` |
+
+<Callout type="info">
+读表小抄。判断一张表属于谁：看 `workspace_id`（租户资产）还是 `user_id`（个人资产，如 PAT、置顶、视图偏好、Composio 连接）；判断谁能动它：找 `owner_id` / `created_by`（资源属主，见[资源级权限](/developers/auth-and-permissions#资源级权限)）；判断它是不是队列：找 `lease_token` / `next_attempt_at`（outbox 模式）。
+</Callout>
