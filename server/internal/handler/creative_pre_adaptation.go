@@ -167,6 +167,10 @@ func (h *Handler) enqueueCreativePreAdaptation(ctx context.Context, sourceTask d
 	err = h.DB.QueryRow(ctx, `
 SELECT id FROM creative_source_analysis
 WHERE workspace_id = $1 AND candidate_id = $2 AND analysis_version = $3 AND status = 'completed'
+  AND NOT EXISTS (
+    SELECT 1 FROM creative_source_analysis newer
+    WHERE newer.workspace_id = $1 AND newer.candidate_id = $2 AND newer.analysis_version > $3
+  )
 ORDER BY completed_at DESC LIMIT 1
 `, workspaceID, candidateID, sourceContext.AnalysisVersion).Scan(&analysisID)
 	if err != nil {

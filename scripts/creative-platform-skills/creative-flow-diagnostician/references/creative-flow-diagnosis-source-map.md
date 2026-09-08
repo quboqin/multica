@@ -10,3 +10,5 @@
 | Native task recovery is grouped by trigger evidence kind/ref and target Agent | `server/internal/handler/task_fanout.go`, `server/cmd/multica/cmd_task.go` |
 | Production copy validation selects the current order item by `creative_order_item_id` and `variant_id` | `scripts/creative-platform-skills/ad-creative-production/references/validate_copy_snapshot.py` |
 | Process images are exposed from registered diagnostic assets, backed by attachment storage, and stay separate from generated/primed/delivered creative order assets | `server/internal/handler/creative_domain.go:listCreativeOrderVariantDiagnosticAssets`, `server/migrations/265_creative_order_diagnostic_assets.up.sql`, `packages/views/creative/components/creative-order-delivery.tsx:CreativeProcessImageDialog` |
+
+| Reference analysis dispatch belongs to the backend; direct analysis fanout is disabled | `server/internal/handler/creative_manual_analysis.go`, `server/internal/handler/creative_reference_analysis_recovery.go`, `server/internal/handler/task_fanout.go` |

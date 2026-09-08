@@ -385,6 +385,9 @@ func main() {
 		slog.Error("scheduler: failed to register creative order recovery", "error", err)
 		os.Exit(1)
 	}
+	if err := schedulerMgr.Register(creativeReferenceAnalysisRecoveryJob(h)); err != nil {
+		slog.Error("scheduler: failed to register creative reference analysis recovery", "error", err)
+	}
 	if err := schedulerMgr.Register(scheduler.TaskUsageHourlyJob(pool)); err != nil {
 		slog.Warn("scheduler: failed to register task_usage_hourly rollup job", "error", err)
 	} else {

@@ -26,7 +26,7 @@
 
 | 阶段 | `trigger_evidence_kind` | ref | item key |
 | --- | --- | --- | --- |
-| 参考分析 | `creative_crawl_run_analysis` | Crawl Run | candidate + analysis version |
+| 参考分析（仅后端派发，Leader 不调用 fanout） | `creative_crawl_run_analysis` | Crawl Run | 后端管理 candidate + analysis version |
 | 方案 | `creative_order_item_plan` | Order Item | item + revision |
 | 候选/晋级生产 | `creative_order_item_production` | Order Item | variant + revision + production stage |
 | 候选晋级 | `creative_order_item_candidate_selection` | Order Item | `candidate-selection:v1` |

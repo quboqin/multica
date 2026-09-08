@@ -28,7 +28,7 @@ function Harness() {
 function mount() { return renderWithI18n(<QueryClientProvider client={client}><Harness /></QueryClientProvider>); }
 async function openPrime() {
   fireEvent.click(await screen.findByRole("tab", { name: "品牌与 Prime" }));
-  return screen.findByRole("switch", { name: "Integrate Prime template with the model" });
+  return screen.findByTestId("prime-published-mode");
 }
 
 beforeEach(() => {
@@ -53,96 +53,69 @@ beforeEach(() => {
 });
 afterEach(() => { cleanup(); client.clear(); });
 
-it("keeps unsaved mode across server refresh and remount, isolated by workspace", async () => {
+function changeBrand(value = "Updated") {
+  fireEvent.change(screen.getByDisplayValue("Test"), { target: { value } });
+}
+
+it("keeps unsaved inputs across refresh and remount, isolated by workspace", async () => {
   let view = mount();
-  fireEvent.click(await openPrime());
-  expect(screen.getByRole("switch")).toBeChecked();
+  changeBrand();
   await act(async () => { resource = { ...resource, updated_at: "changed", config: { ...resource.config, currency: "MYR" } }; client.setQueryData(creativeKeys.resources("workspace"), { resources: [resource] }); });
-  expect(screen.getByRole("switch")).toBeChecked();
-  expect(screen.getByText("Unsaved changes")).toBeInTheDocument();
+  expect(screen.getByDisplayValue("Updated")).toBeInTheDocument();
   view.unmount();
   view = mount();
-  expect(await openPrime()).toBeChecked();
-  expect(screen.getByTestId("prime-published-mode")).toHaveTextContent("Platform overlay");
+  expect(screen.getByDisplayValue("Updated")).toBeInTheDocument();
   view.unmount();
   mocks.workspaceId = "another-workspace";
   client.setQueryData(creativeKeys.resources(mocks.workspaceId), { resources: [resource] });
   mount();
-  expect(await openPrime()).not.toBeChecked();
+  expect(screen.getByDisplayValue("Test")).toBeInTheDocument();
 });
 
-it("saves the current mode before publishing and shows the effective published mode", async () => {
+it("saves changes before publishing and preserves the underlying Prime mode", async () => {
+  resource.config.prime_composition_mode = "model_integrated";
+  resource.config.prime_model_template_family = "light_background";
   mount();
-  fireEvent.click(await openPrime());
+  changeBrand();
+  await openPrime();
+  expect(screen.queryByRole("switch")).not.toBeInTheDocument();
+  expect(screen.queryByRole("combobox")).not.toBeInTheDocument();
   fireEvent.click(screen.getByRole("button", { name: "Save and publish" }));
   await waitFor(() => expect(mocks.publish).toHaveBeenCalledOnce());
-  expect(mocks.update.mock.calls[0]?.[1].config).toMatchObject({ prime_composition_mode: "model_integrated", prime_model_template_family: "light_background" });
+  expect(mocks.update.mock.calls[0]?.[1].config).toMatchObject({ brand: "Updated", prime_composition_mode: "model_integrated", prime_model_template_family: "light_background" });
   expect(mocks.update.mock.invocationCallOrder[0]).toBeLessThan(mocks.publish.mock.invocationCallOrder[0]!);
   await waitFor(() => expect(screen.getByTestId("prime-published-mode")).toHaveTextContent("Model integration"));
-  expect(resource.published_config?.prime_composition_mode).toBe("model_integrated");
-  expect(screen.queryByText("Unsaved changes")).not.toBeInTheDocument();
 });
 
-it("keeps drafts separate when switching between market resources", async () => {
+it("keeps drafts separate when switching between resources", async () => {
   const second = { ...fixture(), id: "second", name: "Second", config: { ...fixture().config, brand: "Second" } };
   second.published_config = second.config;
   client.setQueryData(creativeKeys.resources("workspace"), { resources: [resource, second] });
   mount();
-  fireEvent.click(await openPrime());
+  changeBrand();
   fireEvent.click(screen.getByRole("button", { name: /Second/ }));
-  expect(screen.getByRole("switch")).not.toBeChecked();
+  expect(screen.getByDisplayValue("Second")).toBeInTheDocument();
   fireEvent.click(screen.getByRole("button", { name: /Test/ }));
-  expect(screen.getByRole("switch")).toBeChecked();
+  expect(screen.getByDisplayValue("Updated")).toBeInTheDocument();
 });
 
-it("keeps QR-bearing templates ineligible for enabling model integration", async () => {
-  const templateSet = createDefaultPrimeTemplateSet();
-  resource.config.prime_template_set_validation = { status: "passed", families: templateSet.families.map((family) => ({ ...family, templates: Object.fromEntries(Object.entries(family.templates).map(([size, template]) => [size, { ...template, qr_payload: "https://example.test/qr" }])) })) };
-  mount();
-  const control = await openPrime();
-  expect(control).not.toBeChecked();
-  expect(control).toHaveAttribute("aria-disabled", "true");
-  expect(screen.getByText("All template families contain QR codes; model integration is unavailable")).toBeInTheDocument();
-});
-
-it("preserves unsaved input when saving fails and does not publish stale settings", async () => {
+it("preserves unsaved input when saving fails without publishing stale settings", async () => {
   mocks.update.mockRejectedValueOnce(new Error("Save failed"));
   mount();
-  fireEvent.click(await openPrime());
+  changeBrand();
   fireEvent.click(screen.getByRole("button", { name: "Save and publish" }));
   await screen.findByRole("alert");
-  expect(screen.getByRole("switch")).toBeChecked();
-  expect(screen.getByText("Unsaved changes")).toBeInTheDocument();
+  expect(screen.getByDisplayValue("Updated")).toBeInTheDocument();
   expect(mocks.publish).not.toHaveBeenCalled();
 });
 
-it("allows turning the saved mode off even after draft validation is cleared", async () => {
-  mount();
-  fireEvent.click(await openPrime());
-  fireEvent.click(screen.getByRole("button", { name: "Save draft" }));
-  await screen.findByText("Draft saved, not published");
-  const control = screen.getByRole("switch");
-  expect(control).toBeChecked();
-  expect(control).not.toHaveAttribute("aria-disabled", "true");
-  expect(screen.getByTestId("prime-published-mode")).toHaveTextContent("Platform overlay");
-  fireEvent.click(control);
-  expect(control).not.toBeChecked();
-  fireEvent.click(screen.getByRole("button", { name: "Save and publish" }));
-  await waitFor(() => expect(mocks.publish).toHaveBeenCalledOnce());
-  expect(resource.config.prime_composition_mode).toBe("deterministic");
-  expect(resource.config.prime_model_template_family).toBeUndefined();
-});
-
-it("keeps a saved draft after publication failure and retries without resaving", async () => {
+it("keeps saved drafts after publication failure and retries without resaving", async () => {
   mocks.publish.mockRejectedValueOnce(new Error("Template validation failed"));
   mount();
-  fireEvent.click(await openPrime());
+  changeBrand();
   fireEvent.click(screen.getByRole("button", { name: "Save and publish" }));
   await screen.findByRole("alert");
-  expect(screen.getByRole("switch")).toBeChecked();
-  expect(screen.getByRole("switch")).not.toHaveAttribute("aria-disabled", "true");
-  expect(screen.getByTestId("prime-published-mode")).toHaveTextContent("Platform overlay");
   fireEvent.click(screen.getByRole("button", { name: "Publish" }));
-  await waitFor(() => expect(screen.getByTestId("prime-published-mode")).toHaveTextContent("Model integration"));
+  await waitFor(() => expect(mocks.publish).toHaveBeenCalledTimes(2));
   expect(mocks.update).toHaveBeenCalledOnce();
 });

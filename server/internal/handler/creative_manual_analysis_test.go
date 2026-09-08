@@ -4,10 +4,114 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgtype"
+	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
+
+func TestReferenceAnalysisDispatchOwnsVersionsAndDeduplicatesBatch(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+	agentID := createReferenceAnalysisAgent(t)
+	materials := make([]creativeMaterialInput, 50)
+	for i := range materials {
+		materials[i] = creativeMaterialInput{DedupeKey: uuid.NewString(), AssetType: "image", PreviewURL: "https://example.test/" + uuid.NewString() + ".png"}
+	}
+	workspaceID, userID := parseUUID(testWorkspaceID), parseUUID(testUserID)
+	run, err := testHandler.importCreativeMaterials(t.Context(), creativeMaterialImportInput{
+		WorkspaceID: workspaceID, ConnectorID: "appgrowing", QuerySummary: "material_search",
+		Params: json.RawMessage(`{"analysis_agent_id":"` + agentID + `"}`), Materials: materials,
+		ActorType: "member", ActorID: testUserID, UserID: userID,
+	})
+	if err != nil || len(run.ImportedCandidateIDs) != 50 {
+		t.Fatalf("import: %#v %v", run, err)
+	}
+	for range 2 {
+		result := testHandler.enqueueCrawledMaterialReferenceAnalyses(t.Context(), workspaceID, userID, "appgrowing", run.ImportedCandidateIDs)
+		if result.Queued != 50 || result.Failed != 0 {
+			t.Fatalf("dispatch: %#v", result)
+		}
+	}
+	var count int
+	if err := testPool.QueryRow(t.Context(), `SELECT count(*) FROM agent_task_queue WHERE trigger_evidence_ref_id=$1`, run.RunID).Scan(&count); err != nil || count != 50 {
+		t.Fatalf("50 materials must create 50 tasks: count=%d err=%v", count, err)
+	}
+	candidateID := parseUUID(run.ImportedCandidateIDs[0])
+	// Concurrent retry clicks must reuse the active analysis, even across versions.
+	var wg sync.WaitGroup
+	for range 6 {
+		wg.Go(func() {
+			result := testHandler.enqueueManualReferenceAnalysis(t.Context(), workspaceID, userID, candidateID, "appgrowing", true)
+			if result.Action != "already_queued" {
+				t.Errorf("active retry: %#v", result)
+			}
+		})
+	}
+	wg.Wait()
+	_, err = testPool.Exec(t.Context(), `UPDATE agent_task_queue SET status='completed' WHERE context->>'candidate_id'=$1;
+`, uuidToString(candidateID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := testHandler.enqueueManualReferenceAnalysis(t.Context(), workspaceID, userID, candidateID, "appgrowing", true)
+	if result.Action != "queued" {
+		t.Fatalf("explicit retry: %#v", result)
+	}
+	var version int
+	if err := testPool.QueryRow(t.Context(), `SELECT (context->>'analysis_version')::int FROM agent_task_queue WHERE id=$1`, result.TaskID).Scan(&version); err != nil || version != 3 {
+		t.Fatalf("retry version=%d err=%v", version, err)
+	}
+	if _, err := testPool.Exec(t.Context(), `UPDATE creative_source_analysis SET status='completed' WHERE candidate_id=$1 AND analysis_version=2`, candidateID); err != nil {
+		t.Fatal(err)
+	}
+	oldContext, _ := json.Marshal(map[string]any{"workflow": "creative_reference_analysis", "candidate_id": uuidToString(candidateID), "analysis_version": 2})
+	if err := testHandler.enqueueCreativePreAdaptation(t.Context(), db.AgentTaskQueue{
+		AgentID: parseUUID(agentID), Context: oldContext,
+		TriggerEvidenceKind: pgtype.Text{String: "creative_crawl_run_analysis", Valid: true},
+	}, testWorkspaceID); err != nil {
+		t.Fatalf("superseded analysis must not start pre-adaptation: %v", err)
+	}
+	w := httptest.NewRecorder()
+	req := withURLParam(newRequest(http.MethodPost, "/api/agents/"+agentID+"/tasks/fanout", map[string]any{
+		"trigger_evidence_kind": "creative_crawl_run_analysis", "trigger_evidence_ref_id": run.RunID,
+		"items": []map[string]any{{"item_key": uuidToString(candidateID) + ":v1", "context": map[string]any{"workflow": "creative_reference_analysis", "candidate_id": uuidToString(candidateID), "analysis_version": 1, "crawl_run_id": run.RunID}}},
+	}), "agentId", agentID)
+	testHandler.FanoutAgentTasks(w, req)
+	if w.Code != http.StatusConflict {
+		t.Fatalf("legacy fanout: %d %s", w.Code, w.Body.String())
+	}
+}
+
+func TestReferenceAnalysisRecoveryOnlyDispatchesMissingTasks(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+	createReferenceAnalysisAgent(t)
+	run, err := testHandler.importCreativeMaterials(t.Context(), creativeMaterialImportInput{
+		WorkspaceID: parseUUID(testWorkspaceID), ConnectorID: "appgrowing", QuerySummary: "material_search",
+		Materials: []creativeMaterialInput{{DedupeKey: uuid.NewString(), AssetType: "image", PreviewURL: "https://example.test/missing.png"}},
+		ActorType: "member", ActorID: testUserID, UserID: parseUUID(testUserID),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := testPool.Exec(t.Context(), `UPDATE creative_material_crawl_run_candidate SET updated_at=now()-interval '2 minutes' WHERE run_id=$1`, run.RunID); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := testHandler.RecoverCreativeReferenceAnalyses(t.Context(), 25); err != nil || n != 1 {
+		t.Fatalf("missing recovery=%d err=%v", n, err)
+	}
+	if _, err := testPool.Exec(t.Context(), `UPDATE agent_task_queue SET status='failed' WHERE trigger_evidence_ref_id=$1`, run.RunID); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := testHandler.RecoverCreativeReferenceAnalyses(t.Context(), 25); err != nil || n != 0 {
+		t.Fatalf("execution failure must not auto-retry: n=%d err=%v", n, err)
+	}
+}
 
 func TestImportCreativeMaterialLibraryQueuesReferenceAnalysisIdempotently(t *testing.T) {
 	if testHandler == nil {

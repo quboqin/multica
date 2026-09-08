@@ -247,6 +247,10 @@ func (h *Handler) FanoutAgentTasks(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	evidenceKind := strings.TrimSpace(req.TriggerEvidenceKind)
+	if evidenceKind == manualReferenceAnalysisEvidenceKind {
+		writeError(w, http.StatusConflict, "Reference analysis is queued by the platform after import. Use the material reanalysis action to request a new analysis; direct analysis fanout is disabled.")
+		return
+	}
 	if evidenceKind == "" {
 		writeError(w, http.StatusBadRequest, "trigger_evidence_kind is required")
 		return

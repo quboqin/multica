@@ -161,8 +161,8 @@ func TestAppGrowingCollectorContractKeepsBusinessSemanticsAndSingleSubmission(t 
 		"selection_rules.volume_materials",
 		"asset_type=image",
 		"crawl_run_id",
-		"delegate_preanalysis.py",
-		"multica task fanout unavailable; upgrade CLI",
+		"analysis.requested",
+		"版本、去重和缺失派发恢复由后端管理",
 		"真实阶段、error code/message",
 		"同一 task 最多创建一个 Crawl Run",
 		"timeout_ms",
@@ -178,7 +178,7 @@ func TestAppGrowingCollectorContractKeepsBusinessSemanticsAndSingleSubmission(t 
 
 	bootstrap := readCreativePlatformContractFile(t, filepath.Join(root, "scripts", "bootstrap-creative-platform-demo.ps1"))
 	for _, required := range []string{
-		"capability = 'material_collection'; version = 17",
+		"capability = 'material_collection'; version = 18",
 		"Set-AgentDefinition -Name '素材_采集'",
 		"-MaxConcurrentTasks 1",
 	} {
@@ -189,7 +189,7 @@ func TestAppGrowingCollectorContractKeepsBusinessSemanticsAndSingleSubmission(t 
 
 	installation := readCreativePlatformContractFile(t, filepath.Join(root, "server", "internal", "handler", "creative_factory_installation.go"))
 	for _, required := range []string{
-		`Capability: "material_collection", Version: 17`,
+		`Capability: "material_collection", Version: 18`,
 		`Role: "collection", Name: "素材_采集"`,
 		`MaxConcurrent: 1`,
 	} {

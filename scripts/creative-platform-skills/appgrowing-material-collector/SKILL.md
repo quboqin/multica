@@ -1,7 +1,7 @@
 ---
 name: appgrowing-material-collector
-description: "当原生 task 要求通过 AppGrowing 创建 Crawl Run、只导入真实图片广告并为本次新增图片委派参考分析时使用。"
-allowed-tools: Bash(multica *), Bash(powershell *), Bash(python *)
+description: "当原生 task 要求通过 AppGrowing 创建 Crawl Run、只导入真实图片广告由平台自动分析本次新增图片时使用。"
+allowed-tools: Bash(multica *), Bash(powershell *)
 ---
 
 # AppGrowing 素材采集
@@ -30,25 +30,16 @@ allowed-tools: Bash(multica *), Bash(powershell *), Bash(python *)
    写 `crawl_command_wait_incomplete` / `action_required` 后停止。
 
 2. 响应必须返回 `crawl_run_id`。回读本次 run，确认候选已进入素材库；不得创建 Issue。
-3. 执行一次预分析委派脚本：
-
-   ```text
-   python <当前 Skill 目录>/references/delegate_preanalysis.py \
-     --crawl-run-id <run-id> --assignee-id <analysis-agent-id>
-   ```
-
-   脚本只为本次新增、可读、尚无 completed Source Analysis 且无 active/succeeded 同 item task 的图片创建
-   `creative_crawl_run_analysis` fanout。脚本优先使用 `--cli`，其次是任务运行时注入的 `MULTICA_CLI`，否则在 Windows 使用
-   `PATH` 中的 `multica.com`（其他系统使用 `multica`）；默认调用不得猜测或硬编码本机绝对路径。
-   只有任务运行时已经验证可用的可执行文件才允许通过 `--cli` 显式传入。提交前必须确认该 CLI 支持
-   `multica task fanout`；不支持时任务必须以 `multica task fanout unavailable; upgrade CLI` 失败，不能把采集结果报告为预分析完成。
-   并发由 Agent、runtime 和 provider 限额控制。
-4. fanout 返回后立即结束，不轮询分析任务。Crawl Run 页面从候选、Source Analysis 和 task 派生进度。
+3. 后端在入库后自动派发参考分析。核对响应中的 `analysis.requested`、`analysis.queued` 和 `analysis.failed`，
+   如实报告已入库数量与分析排队情况；排队成功不代表分析完成。不得运行委派脚本或调用 `multica task fanout`，
+   不得指定 `analysis_version`。版本、去重和缺失派发恢复由后端管理。
+4. 回读完成后结束，不轮询分析任务。入库后未派发的任务由平台定时补派；执行失败通过素材页“重新分析”恢复。
+   保留真实采集结果与失败信息，不重跑采集来补分析。并发仍由 Agent、runtime 和 provider 限额控制。
 
 同一 task 最多创建一个 Crawl Run。除非第一次命令在创建浏览器 run 之前因可确定修复的参数校验错误失败，否则不得重试
 `multica crawl run`。HTTP 429、`worker_busy`、`credential broker worker is busy`、`crawler worker is busy` 表示平台
 内部 crawler worker 正忙，不是 AppGrowing 限流；当前 task 必须写真实错误并停止，等待下一次用户或平台调度重试。
 `worker_unavailable` 或 `context canceled` 表示本次命令被取消、超时或 worker 不可用；不得在同一 task 内补发第二次 crawl。
 
-凭证失效时把 Crawl Run 标为 `action_required` 并保留平台重新绑定入口。连接器、导入或 fanout 失败时写入
+凭证失效时把 Crawl Run 标为 `action_required` 并保留平台重新绑定入口。连接器、导入或分析排队失败时写入
 真实阶段、error code/message 和已成功数量；不得以测试数据补齐，也不得输出 Cookie、Token 或请求头。

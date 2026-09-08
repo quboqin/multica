@@ -78,4 +78,4 @@ last_error、source_task_id、result_task_id、resolved_asset_id 及 attempts。
 2. 授权失效时停止并保留 `needs_user_action`，不反复重试。
 3. GraphQL 直调异常时使用浏览器网络采集路径，只为当前 Run 的原业务筛选复跑一次。
 4. 浏览器素材响应未观察到时最多复跑一次；仍失败就保留真实错误和证据。
-5. 只有当前 Run 采集完成且导入成功，才可继续参考分析 fanout；不得重复导入历史素材。
+5. 采集完成且导入成功后，由后端统一派发参考分析；漏派由平台恢复，执行失败使用素材重新分析入口。不得直接 fanout 参考分析或重复导入历史素材。

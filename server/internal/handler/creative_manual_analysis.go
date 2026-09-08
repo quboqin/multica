@@ -50,6 +50,38 @@ func (h *Handler) enqueueManualReferenceAnalysis(
 	connectorID string,
 	force bool,
 ) creativeMaterialImportAnalysisResponse {
+	failed := creativeMaterialImportAnalysisResponse{Action: "enqueue_failed", Status: "failed", Warning: "Reference analysis could not be queued."}
+	if h.TxStarter == nil {
+		return failed
+	}
+	tx, err := h.TxStarter.Begin(ctx)
+	if err != nil {
+		return failed
+	}
+	defer tx.Rollback(ctx)
+	// Serialize version allocation and task creation across every import/retry.
+	lockKey := uuidToString(workspaceID) + ":manual-reference-analysis:" + uuidToString(candidateID)
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, lockKey); err != nil {
+		return failed
+	}
+	transactional := *h
+	transactional.DB, transactional.Queries, transactional.TxStarter = tx, db.New(tx), tx
+	var created []db.AgentTaskQueue
+	result := transactional.enqueueManualReferenceAnalysisTx(ctx, tx, workspaceID, userID, candidateID, connectorID, force, &created)
+	if err := tx.Commit(ctx); err != nil {
+		return failed
+	}
+	if h.TaskService != nil {
+		h.TaskService.NotifyDirectTaskFanoutEnqueued(ctx, created)
+	}
+	return result
+}
+
+func (h *Handler) enqueueManualReferenceAnalysisTx(
+	ctx context.Context, tx pgx.Tx,
+	workspaceID, userID, candidateID pgtype.UUID,
+	connectorID string, force bool, created *[]db.AgentTaskQueue,
+) creativeMaterialImportAnalysisResponse {
 	result := creativeMaterialImportAnalysisResponse{Action: "enqueue_failed", Status: "failed"}
 	resolvedAgent, resolveErr := h.resolveReferenceAnalysisAgent(ctx, workspaceID, pgtype.UUID{})
 	if resolveErr != nil && !errors.Is(resolveErr, pgx.ErrNoRows) {
@@ -63,6 +95,26 @@ func (h *Handler) enqueueManualReferenceAnalysis(
 	}
 	result.CrawlRunID = uuidToString(evidence.RunID)
 	result.AnalysisAgentID = uuidToString(evidence.AnalysisAgentID)
+	var activeTaskID, activeAgentID pgtype.UUID
+	var activeStatus string
+	err = h.DB.QueryRow(ctx, `
+SELECT task.id, task.agent_id, task.status
+FROM agent_task_queue task JOIN agent ON agent.id = task.agent_id
+WHERE agent.workspace_id = $1
+  AND task.trigger_evidence_kind = 'creative_crawl_run_analysis'
+  AND task.context->>'candidate_id' = $2
+  AND task.status IN ('queued', 'dispatched', 'running', 'waiting_local_directory')
+ORDER BY task.created_at DESC LIMIT 1
+`, workspaceID, uuidToString(candidateID)).Scan(&activeTaskID, &activeAgentID, &activeStatus)
+	if err == nil {
+		result.Action, result.Status = "already_queued", creativeAnalysisStatusFromTask(activeStatus)
+		result.TaskID, result.AnalysisAgentID = uuidToString(activeTaskID), uuidToString(activeAgentID)
+		return result
+	}
+	if !errors.Is(err, pgx.ErrNoRows) {
+		result.Warning = "The existing reference analysis task could not be checked."
+		return result
+	}
 	if evidence.Status == "completed" && !force {
 		result.Action = "already_completed"
 		result.Status = "completed"
@@ -137,7 +189,7 @@ WHERE run_id = $1 AND candidate_id = $2 AND workspace_id = $3
 		result.Warning = warning
 		return result
 	}
-	tasks, err := h.TaskService.EnqueueDirectTaskFanout(ctx, service.DirectTaskFanout{
+	tasks, newlyCreated, err := h.TaskService.EnqueueDirectTaskFanoutTx(ctx, tx, service.DirectTaskFanout{
 		Agent:                agent,
 		RequestingUserID:     userID,
 		Attribution:          attribution.DirectHumanRun(userID, attribution.EvidenceKind(manualReferenceAnalysisEvidenceKind), evidence.RunID),
@@ -159,15 +211,13 @@ WHERE run_id = $1 AND candidate_id = $2 AND workspace_id = $3
 		return result
 	}
 	result.Action = "queued"
+	*created = append(*created, newlyCreated...)
 	result.Status = creativeAnalysisStatusFromTask(tasks[0].Status)
 	result.TaskID = uuidToString(tasks[0].ID)
 	return result
 }
 
 func (h *Handler) nextManualReferenceAnalysisVersion(ctx context.Context, workspaceID, candidateID pgtype.UUID, force bool) (int32, error) {
-	if !force {
-		return currentManualReferenceAnalysisVersion, nil
-	}
 	var latest int32
 	if err := h.DB.QueryRow(ctx, `
 SELECT COALESCE(MAX(analysis_version), 0)
@@ -178,6 +228,9 @@ WHERE workspace_id = $1 AND candidate_id = $2
 	}
 	if latest < currentManualReferenceAnalysisVersion {
 		return currentManualReferenceAnalysisVersion, nil
+	}
+	if !force {
+		return latest, nil
 	}
 	return latest + 1, nil
 }

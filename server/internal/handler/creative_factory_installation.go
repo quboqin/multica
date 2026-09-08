@@ -19,7 +19,7 @@ import (
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
-const creativeFactoryTemplateVersion = 28
+const creativeFactoryTemplateVersion = 29
 
 //go:embed creative_factory_defaults/resources.json
 var creativeFactoryDefaultResourcesJSON []byte
@@ -46,7 +46,7 @@ const (
 ` + creativeFactoryDefaultCollectionTargetLine + `
 素材类型：仅图片广告（asset_type=image）。视频、非图片和无法识别类型必须在选材前排除，不占用名额，也不进入 Crawl Run 或素材库。
 
-执行真实 AppGrowing 多页图片采集，结果进入创意工厂素材库并关联当前 Crawl Run；图片入库后立即用原生 task fanout 对本次新增图片并发执行逐图创意分析，归档未完成时允许分析读取真实源图片。分析完成后在创意工厂提醒用户选图、确认主题与文案。整个采集与预分析阶段不创建 Issue。授权失效时将 Crawl Run 标为 action_required，并提示用户前往“设置 - 集成”重新绑定，不能用测试数据替代。`
+执行真实 AppGrowing 多页图片采集，结果进入创意工厂素材库并关联当前 Crawl Run；图片入库后由后端自动派发逐图创意分析，采集 Agent 核对 analysis 排队汇总，不再委派分析或指定版本，归档未完成时允许分析读取真实源图片。分析完成后在创意工厂提醒用户选图、确认主题与文案。整个采集与预分析阶段不创建 Issue。授权失效时将 Crawl Run 标为 action_required，并提示用户前往“设置 - 集成”重新绑定，不能用测试数据替代。`
 )
 
 type creativeFactorySkillSpec struct {
@@ -143,7 +143,7 @@ creative_production 只执行绑定的素材_技能_出图：候选阶段全部�
 }
 
 var creativeFactorySkillSpecs = []creativeFactorySkillSpec{
-	{Role: "collection", Name: "素材_技能_采集", Aliases: []string{"AppGrowing 素材采集"}, Directory: "appgrowing-material-collector", Description: "创建 Crawl Run，只采集真实图片广告，并用原生 task fanout 自动预分析新增图片。", Capability: "material_collection", Version: 17},
+	{Role: "collection", Name: "素材_技能_采集", Aliases: []string{"AppGrowing 素材采集"}, Directory: "appgrowing-material-collector", Description: "创建 Crawl Run，只采集真实图片广告，并核对后端自动分析的排队结果。", Capability: "material_collection", Version: 18},
 	{Role: "diagnostics", Name: "素材_技能_诊断", Aliases: []string{"创意流程诊断", "出图诊断", "AppGrowing 采集诊断"}, Directory: "creative-flow-diagnostician", Description: "读取创意采集、候选、尺寸调用、版本、Prime、QC 和 daemon/runtime 证据，只通过平台领域入口恢复或给出明确动作。", Capability: "crawl_diagnosis", Version: 9},
 	{Role: "reference_analysis", Name: "素材_技能_分析", Aliases: []string{"广告参考分析"}, Directory: "ad-creative-analysis", Description: "市场中立地读取真实图片，识别可变视觉区域、原图文字及坐标、主题、利益点、语义锚点、App UI 类型、屏幕边界和布局约束；App UI 只做通用检测，不选择品牌附件；只有明显的还款结构才锁定为 numeric，单独金额或核心利益点不得因为带数字就被卡死。", Capability: "reference_analysis", Version: 19},
 	{Role: "pre_adaptation", Name: "素材_技能_文案适配", Aliases: []string{"广告预适配"}, Directory: "ad-creative-pre-adaptation", Description: "按冻结资源完成可生产文案与数值适配；只有明显的还款结构才生成 repayment 选择和 numeric layout，单独金额、核心利益点或促销额度默认保留为可编辑文案，保留后续可手动改写空间；数值布局说明必须列出每个冻结展示值。", Capability: "pre_adaptation", Version: 26},
@@ -158,7 +158,7 @@ var creativeFactorySkillSpecs = []creativeFactorySkillSpec{
 var creativeFactoryAgentSpecs = []creativeFactoryAgentSpec{
 	{Role: "leadership", Name: "素材_流程", Aliases: []string{"素材_统筹", "素材小队 Leader"}, Description: "按冻结能力映射启动和恢复 Creative Order，并负责用户汇总。", Instructions: "全程使用中文。只执行判断、原生 fanout、异常恢复和用户汇总，不代替专业角色。标准订单只创建方案 task；Planner 建候选并委派主尺寸，候选晋级与 selected 扩尺寸由阶段 owner 和平台续链；初始 direct_edit 由平台原子创建 revision 和 task，Leader 只恢复领域状态确认缺失的当前 revision task。每次唤醒回读订单、task 与冻结 squad snapshot，按 target/source/item_key 只补真正缺失项。严格执行绑定流程 Skill，不按名称猜 Agent，不轮询，不创建阶段子 Issue。", SkillRoles: []string{"creative_leadership"}, Model: "gpt-5.6-terra", ThinkingLevel: "medium", MaxConcurrent: 6},
 	{Role: "reference_analysis", Name: "素材_分析", Aliases: []string{"广告参考分析智能体"}, Description: "按 task workflow 读取真实像素、识别可变视觉区域、写市场中立分析，并在后台完成可确认的文案与数值预适配。", Instructions: "全程使用中文。creative_reference_analysis 只写指定 candidate/version 的市场中立 Source Analysis；每个可变原图文字区块必须归入唯一 copy 或 numeric 视觉区域，不能把同一画面组件拆入两条处理路径；App UI 只输出通用页面类型、屏幕边界和 replacement_needed，不读取、选择或引用 app_ui_reference 附件。creative_pre_adaptation 只消费指定的冻结市场包和文案库，逐区域优先绑定已审核内容；没有兼容已审核片段的普通 headline、subheadline、benefit、supporting 或 cta 区块，必须按市场语言、区块职责、原图语义和可读长度生成一个新的 recommended 文案，source_keys 必须为空数组，recommendation_basis 必须说明依据，页面会标记待用户确认；不得引用不存在的 fragment key。本金、期限、月供、总利息、总还款、利率、法律文字和品牌事实没有审核来源或冻结计算时不得凭空生成，逐项写 missing replacement。多行数值表不要求原图行数与我方方案数量相等：按表格语义和期限从冻结 approved repayment plan 取我方兼容方案，实际渲染行数取原图可渲染行数与我方可用方案数的较小值；每个实际渲染行写 numeric_layouts，且每个 layout 的 render_instruction 必须逐字列出其 scenario_ids 对应 selection.values 中每个 target_columns 的完整冻结展示值，不能只写按行展示；源图多出的数值块逐项写空 missing 作为默认移除项。没有我方某一期限方案时不得借用其他期限金额；整体重构为我方支持的期限列，或让该列源块留空移除。只有明显的还款结构才锁定，单独金额、核心利益点或促销额度不得因为带数字就卡死成还款计划。不能把整表硬塞进一个 layout，也不能伪装成已绑定或改写原图事实。输入和产物不得混用，不生成图片，不修改市场包或文案库。只处理 task context 指定的对象、revision 和 scope；按绑定 Skill 写结构化领域结果和机器证据。不得创建或修改 Issue，不得用评论代替领域数据。输入、凭证、工具或写回失败时保留已成功对象，写真实 error_code/error_message 并让当前 task 失败；兄弟对象继续。", SkillRoles: []string{"reference_analysis", "pre_adaptation"}, Model: "gpt-5.6-terra", ThinkingLevel: "medium", MaxConcurrent: 6},
-	{Role: "collection", Name: "素材_采集", Aliases: []string{"AppGrowing 素材采集智能体"}, Description: "按 task 配置创建 Crawl Run，只导入真实图片广告并委派新增图片分析。", Instructions: "全程使用中文。只执行 task context 和 AutoPilot 明确的 AppGrowing 查询；只导入 asset_type=image，视频、非图片和未知类型不占用名额。使用注入的 analysis_agent_id=%s，不得按名称猜测。筛选、分页、预算和 fallback 由 task/平台配置决定。结果、证据和失败写 Crawl Run；导入后用原生 fanout 委派本次新增图片，不创建 Issue，不使用测试数据。", SkillRoles: []string{"collection"}, Model: "gpt-5.6-luna", ThinkingLevel: "low", MaxConcurrent: 1},
+	{Role: "collection", Name: "素材_采集", Aliases: []string{"AppGrowing 素材采集智能体"}, Description: "按 task 配置创建 Crawl Run，只导入真实图片广告并核对平台分析排队结果。", Instructions: "全程使用中文。只执行 task context 和 AutoPilot 明确的 AppGrowing 查询；只导入 asset_type=image，视频、非图片和未知类型不占用名额。使用注入的 analysis_agent_id=%s，不得按名称猜测。筛选、分页、预算和 fallback 由 task/平台配置决定。结果、证据和失败写 Crawl Run；导入后核对后端返回的 analysis 排队汇总，不调用分析 fanout，不指定分析版本，不创建 Issue，不使用测试数据。", SkillRoles: []string{"collection"}, Model: "gpt-5.6-luna", ThinkingLevel: "low", MaxConcurrent: 1},
 	{Role: "generation_plan", Name: "素材_方案", Aliases: []string{"生成方案智能体"}, Description: "消费冻结输入，按标准订单冻结数量建立主视觉候选。", Instructions: "全程使用中文。只执行 creative_plan，完整执行绑定的素材_技能_方案；该 Skill 及 Creative Intent reference 是候选数量、主尺寸、CreativeIntent、DesignDNA、LayoutPlan、App UI、金融文案和生产 fanout 的唯一真值。按 item.source_kind 消费素材或文案库来源；文案库来源不需要竞品分析，空槽不补写，纯视觉探索不添加业务文案。只接受平台冻结的 candidate_v1，按 input_snapshot.candidate_count 写 candidate Variant（历史及素材订单沿用 4-5 个），target_variant_count 是最终交付套数，所有候选首轮固定 `1080x1080` 并委派方形主视觉；不预选最终方案、不生成图片，selected 后再按各尺寸原生重排且不把候选方图当母版。只有页面冻结的明确选择才使用 App UI，非空核心利益点必须列为可见文字。流程版本缺失或不符时写真实错误，不推断或切换流程。只处理 task context 指定对象，失败保留已写候选和真实错误。", SkillRoles: []string{"generation_plan"}, Model: "gpt-5.6-terra", ThinkingLevel: "medium", MaxConcurrent: 6},
 	{Role: "image_edit", Name: "素材_出图", Aliases: []string{"图像编辑智能体"}, Description: "按唯一提示词合同执行候选主视觉、selected 扩尺寸或用户标注精准改图；只用订单冻结附件，结构化记录下载失败，再由贴片 Skill 交接终检。", Instructions: creativeFactoryImageEditAgentInstructions(), SkillRoles: []string{"image_edit", "direct_image_edit", "prime_compose"}, Model: "gpt-5.6-terra", ThinkingLevel: "low", MaxConcurrent: 10},
 	{Role: "quality_control", Name: "素材_质检", Aliases: []string{"广告验收智能体"}, Description: "独立晋级候选主视觉，或联合验收当前实际交付尺寸的 Prime 成图。", Instructions: "全程使用中文。根据 task context.workflow 只执行 creative_candidate_selection 或 creative_qc_visual，并完整执行绑定的素材_技能_质检；Skill 是评分、candidate-select、结构化 Prime 极性、实际交付尺寸联合验收、多目标检查和 qc-finalize 的唯一真值。候选分支按订单 target_variant_count 恰选对应数量（历史订单默认 3 套）并使用原子 candidate-select，回读平台自动排队结果，不自行重复 fanout；终检分支不得硬编码背景极性、逐图自报通过或使用旧 revision 资产，单尺寸精准改图也必须完成最终视觉质检。附件下载失败按 Skill 写精确错误码；qc-finalize 瞬态失败保留报告并结束当前任务，由服务端复用 Prime 资产恢复。", SkillRoles: []string{"quality_control"}, Model: "gpt-5.6-terra", ThinkingLevel: "medium", MaxConcurrent: 6},
@@ -376,7 +376,7 @@ func creativeFactoryAutopilotDescriptionForProfile(profile creativeFactoryMarket
 %s
 素材类型：仅图片广告（asset_type=image）。视频、非图片和无法识别类型必须在选材前排除，不占用名额，也不进入 Crawl Run 或素材库。
 
-执行真实 AppGrowing 多页图片采集，结果进入创意工厂素材库并关联当前 Crawl Run；图片入库后立即用原生 task fanout 对本次新增图片并发执行逐图创意分析，归档未完成时允许分析读取真实源图片。分析完成后在创意工厂提醒用户选图、确认主题与文案。整个采集与预分析阶段不创建 Issue。授权失效时将 Crawl Run 标为 action_required，并提示用户前往“设置 - 集成”重新绑定，不能用测试数据替代。`,
+执行真实 AppGrowing 多页图片采集，结果进入创意工厂素材库并关联当前 Crawl Run；图片入库后由后端自动派发逐图创意分析，采集 Agent 核对 analysis 排队汇总，不再委派分析或指定版本，归档未完成时允许分析读取真实源图片。分析完成后在创意工厂提醒用户选图、确认主题与文案。整个采集与预分析阶段不创建 Issue。授权失效时将 Crawl Run 标为 action_required，并提示用户前往“设置 - 集成”重新绑定，不能用测试数据替代。`,
 		profile.MarketLabel, competitors, priorityCompetitors, profile.MarketLabel, profile.LanguageLabel, creativeFactoryDefaultCollectionTargetLine)
 }
 

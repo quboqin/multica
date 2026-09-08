@@ -90,7 +90,6 @@ import {
 import { Input } from "@multica/ui/components/ui/input";
 import { Label } from "@multica/ui/components/ui/label";
 import { NativeSelect, NativeSelectOption } from "@multica/ui/components/ui/native-select";
-import { Switch } from "@multica/ui/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@multica/ui/components/ui/tabs";
 import { Textarea } from "@multica/ui/components/ui/textarea";
 import { cn } from "@multica/ui/lib/utils";
@@ -1581,7 +1580,7 @@ export function ResourceEditor({ resources, copyLibraries, onCreate, onArchive }
               </div>
             </div>
             {save.error && <p role="alert" className="border-b px-5 py-3 text-sm text-destructive">{save.error.message}</p>}
-            <fieldset disabled={save.isPending} className="min-w-0"><MarketPackForm resource={active} value={draft} onChange={setDraft} copyLibraries={copyLibraries} disabled={save.isPending} /></fieldset>
+            <fieldset disabled={save.isPending} className="min-w-0"><MarketPackForm resource={active} value={draft} onChange={setDraft} copyLibraries={copyLibraries} /></fieldset>
           </>
         )}
       </div>
@@ -1589,30 +1588,15 @@ export function ResourceEditor({ resources, copyLibraries, onCreate, onArchive }
   );
 }
 
-function MarketPackForm({ resource, value, onChange, copyLibraries, disabled }: {
+function MarketPackForm({ resource, value, onChange, copyLibraries }: {
   resource: CreativeResource;
   value: Record<string, unknown>;
   onChange: (value: Record<string, unknown>) => void;
   copyLibraries: CreativeResource[];
-  disabled: boolean;
 }) {
   const { t } = useT("creative");
   const set = (key: string, next: unknown) => onChange({ ...value, [key]: next });
   const templateFamilies = readPrimeTemplateValidation(resource.config.prime_template_set_validation);
-  const modelIntegrated = stringValue(value.prime_composition_mode) === "model_integrated";
-  const eligibleModelFamilies = templateFamilies?.filter((family) => !family.hasQR) ?? [];
-  const selectedModelFamily = stringValue(value.prime_model_template_family);
-  const setModelIntegrated = (enabled: boolean) => {
-    if (!enabled) {
-      const next: Record<string, unknown> = { ...value, prime_composition_mode: "deterministic" };
-      delete next.prime_model_template_family;
-      onChange(next);
-      return;
-    }
-    const family = eligibleModelFamilies.find((item) => item.id === selectedModelFamily) ?? eligibleModelFamilies[0];
-    if (!family) return;
-    onChange({ ...value, prime_composition_mode: "model_integrated", prime_model_template_family: family.id });
-  };
   return (
     <div className="mx-auto max-w-6xl px-5 py-6">
       <Tabs defaultValue="identity" className="space-y-7">
@@ -1632,22 +1616,7 @@ function MarketPackForm({ resource, value, onChange, copyLibraries, disabled }: 
         </TabsContent>
         <TabsContent value="brand" className="mt-0 space-y-8">
           <FormSection title={t(($) => $.primeMode.title)} description="">
-            <div className="flex items-center justify-between gap-4 border-y py-3 sm:col-span-2">
-              <div className="min-w-0">
-                <Label htmlFor="prime-model-integrated" className="text-sm font-medium">{t(($) => $.primeMode.switchLabel)}</Label>
-                <p className="mt-1 text-xs text-muted-foreground">{t(($) => $.primeMode.draftMode)}: {creativePrimeModeLabel(t, creativePrimeConfig(value).mode)}</p>
-              </div>
-              <Switch id="prime-model-integrated" checked={modelIntegrated} disabled={disabled || (!modelIntegrated && eligibleModelFamilies.length === 0)} onCheckedChange={setModelIntegrated} />
-            </div>
             <p className="text-xs text-muted-foreground sm:col-span-2" data-testid="prime-published-mode">{t(($) => $.primeMode.publishedMode)}: {activePublishedPrimeLabel(resource, t)}</p>
-            {modelIntegrated && <Field label={t(($) => $.primeMode.templateFamily)} wide>
-              <NativeSelect value={selectedModelFamily} disabled={eligibleModelFamilies.length === 0} onChange={(event) => set("prime_model_template_family", event.target.value)}>
-                {selectedModelFamily && !eligibleModelFamilies.some((family) => family.id === selectedModelFamily) && <NativeSelectOption value={selectedModelFamily}>{creativePrimeFamilyLabel(t, selectedModelFamily)}</NativeSelectOption>}
-                {eligibleModelFamilies.map((family) => <NativeSelectOption key={family.id} value={family.id}>{family.label}</NativeSelectOption>)}
-              </NativeSelect>
-            </Field>}
-            {!templateFamilies && <p className="text-xs text-muted-foreground sm:col-span-2">{t(($) => $.primeMode.validationPending)}</p>}
-            {templateFamilies && eligibleModelFamilies.length === 0 && <p className="text-xs text-muted-foreground sm:col-span-2">{t(($) => $.primeMode.qrBlocked)}</p>}
           </FormSection>
           <MarketResourceFiles resource={resource} value={value} />
         </TabsContent>

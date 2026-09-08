@@ -71,7 +71,7 @@ func TestCreativeFactoryAutopilotUsesCollectionPrompt(t *testing.T) {
 		"新素材 40%",
 		"asset_type=image",
 		"不占用名额",
-		"task fanout",
+		"由后端自动派发",
 		"action_required",
 	} {
 		if !strings.Contains(description, required) {

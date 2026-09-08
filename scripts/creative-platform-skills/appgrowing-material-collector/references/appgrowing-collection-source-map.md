@@ -9,7 +9,9 @@
 | AppGrowing round-robin pagination continues until the unseen image target or budget is reached; video, non-image and unknown resources are excluded before selection | `services/crawler-worker/src/index.mjs` |
 | Collection submits at most one browser crawl per task and treats worker busy/canceled signals as internal crawler-worker capacity, not AppGrowing rate limits | `scripts/creative-platform-skills/appgrowing-material-collector/SKILL.md`, `server/internal/broker/worker.go`, `server/internal/handler/credential.go`, `services/crawler-worker/src/browser-capacity.mjs` |
 | Credential profiles are managed through platform integrations | `server/internal/handler/credential.go` |
-| `creative library list --run-id` filters a single Crawl Run before eligible images are converted to one native fanout manifest | `server/cmd/multica/cmd_creative_domain.go`, `references/delegate_preanalysis.py` |
-| `multica task fanout` is the native CLI contract; the collector checks the task-runtime CLI before dispatch and accepts an explicit executable path | `server/cmd/multica/cmd_task.go`, `references/delegate_preanalysis.py` |
 | Fanout concurrency is enforced by Agent and runtime limits; active task idempotency includes the evidence pair and item key | `server/internal/service/task.go:EnqueueDirectTaskFanout` |
 | Reference-analysis completion requires matching completed Source Analysis and run-candidate state; missing output fails closed | `server/internal/handler/daemon.go:referenceAnalysisCompletionError`, `server/internal/handler/daemon.go:CompleteTask` |
+
+| Backend owns analysis dispatch, version allocation and candidate-level serialization | `server/internal/handler/credential.go`, `server/internal/handler/creative_manual_analysis.go` |
+| Direct analysis fanout is rejected; imported materials missing a task are recovered without rerunning collection | `server/internal/handler/task_fanout.go`, `server/internal/handler/creative_reference_analysis_recovery.go`, `server/cmd/server/creative_reference_analysis_recovery.go` |
+| Late results for superseded analysis versions do not fan out pre-adaptation | `server/internal/handler/creative_pre_adaptation.go:enqueueCreativePreAdaptation` |

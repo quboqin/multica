@@ -1051,7 +1051,7 @@ VALUES ($1, $2, '{}'::jsonb) RETURNING id::text
 INSERT INTO creative_order_variant (
   order_item_id, variant_key, revision, status, candidate_state, primary_size
 )
-VALUES ($1, 'C01', 1, 'queued', 'candidate', '800x1000') RETURNING id::text
+VALUES ($1, 'C01', 1, 'queued', 'candidate', '1080x1080') RETURNING id::text
 `, itemID).Scan(&variantID); err != nil {
 		t.Fatal(err)
 	}
@@ -1102,7 +1102,7 @@ FROM agent_task_queue WHERE id = $1
 `, taskID).Scan(&expectedSizes); err != nil {
 		t.Fatal(err)
 	}
-	if len(expectedSizes) != 1 || expectedSizes[0] != "800x1000" {
+	if len(expectedSizes) != 1 || expectedSizes[0] != "1080x1080" {
 		t.Fatalf("candidate production expected_sizes = %#v, want primary size", expectedSizes)
 	}
 }

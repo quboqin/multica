@@ -41,22 +41,11 @@ HTTP 429、`worker_busy`、`credential broker worker is busy` 或 `crawler worke
 实际结果。单个查询失败不能覆盖其他查询的成功；run 可以是 `partial`。授权问题写业务可读的重新绑定入口，
 不得记录或输出凭证内容。
 
-## 参考分析 fanout
+## 入库后的参考分析
 
-只处理本次 run 中满足以下条件的候选：
+后端为本次新增图片统一派发参考分析。采集 Agent 回读 Crawl Run 与响应中的 `analysis` 排队汇总后结束，
+不执行委派脚本、不调用分析 fanout、不指定分析版本。采集数量、筛选、分页和预算仍完全由采集参数控制。
 
-- `is_new_in_run=true`；
-- `asset_type=image` 且存在可下载归档或真实源；
-- 当前 analysis version 没有 completed Source Analysis；
-- 目标 Agent、`creative_crawl_run_analysis` source 和 `<candidate-id>:v<version>` item key 下没有
-  active/succeeded task。
-
-每个 item context 固定为 `type=creative_domain_task`、`workflow=creative_reference_analysis`，并携带
-`crawl_run_id`、`candidate_id` 和 `analysis_version`。不注入品牌市场包、Prime、App UI 或文案库。
-
-委派脚本使用任务运行时的 `multica task fanout` 原生命令。可用 `--cli` 显式传入任务运行时可执行文件，或由
-`MULTICA_CLI` 提供；两者都没有时，Windows 优先从 `PATH` 解析 `multica.com`，其他系统解析 `multica`。非 dry-run 必须先验证该命令存在。旧 CLI 缺少
-该子命令时，必须以 `multica task fanout unavailable; upgrade CLI` 失败，不能把本次采集报告为预分析完成。
-
-分析 task 必须写回并回读匹配的 Source Analysis。平台完成任务时再次校验候选、版本、run 和领域产物；
-缺失产物以 `creative_output_missing` 失败关闭。fanout 某项失败不取消兄弟项。
+同一素材已有活动任务时复用该任务；普通请求复用当前版本，明确重新分析才分配新版本。
+入库后未派发的任务由平台在最近七天的采集记录中定时补派；已执行失败或取消的任务需要明确重新分析。
+分析 task 写回匹配 candidate、version 和 run 的 Source Analysis，并回读确认。排队数量不等于分析完成数量。
