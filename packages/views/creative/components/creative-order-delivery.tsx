@@ -16,6 +16,7 @@ import type { CreativeGalleryDeliverySelection } from "@multica/core/creative";
 import { creativeOrderTargetVariantCount, creativeAssetPrimeComposition } from "@multica/core/creative";
 import { creativeAttachmentBrowserURL } from "../lib/creative-attachment-url";
 import { creativeTimeZoneLabel, formatCreativeDateTime } from "../lib/creative-time";
+import { CreativeCandidateRecoveryAction, creativeCandidateProgressLabel } from "./creative-candidate-progress";
 
 export const CREATIVE_DELIVERY_SIZES = ["1080x1080", "1200x628", "800x1000"] as const;
 
@@ -486,6 +487,7 @@ export async function downloadCreativeVariantArchives({
 }
 
 export function CreativeOrderDeliveryCandidates({
+  orderId,
   item,
   source,
   attachments,
@@ -529,7 +531,6 @@ export function CreativeOrderDeliveryCandidates({
   const { t } = useT("creative");
   const sortedVariants = [...item.variants].sort(compareCreativeVariantDisplayOrder);
   const deliveryVariants = sortedVariants.filter(creativeVariantParticipatesInDelivery);
-  const selectionPending = deliveryVariants.length === 0 && sortedVariants.some((variant) => creativeVariantCandidateState(variant) === "candidate");
   const title = source.label || t(($) => $.delivery.material, { id: item.candidate_id.slice(0, 8) });
   const progress = creativeOrderItemProgress(item, t);
   const galleryCount = deliveryVariants.filter((variant) => galleryVariantIds?.has(variant.id)).length;
@@ -546,7 +547,7 @@ export function CreativeOrderDeliveryCandidates({
       </div>
       <div className="flex flex-wrap items-center gap-2">
         {item.copy_snapshot.visual_only === true && <Badge variant="outline">{t(($) => $.copyOrder.visualOnly)}</Badge>}
-        <Badge variant={progress.tone}>{progress.label}</Badge>
+        <Badge variant={progress.tone} className="max-w-full whitespace-normal">{progress.label}</Badge>
         {deliveryVariants.length > 0 && <Badge variant={galleryCount > 0 ? "default" : "secondary"}>{galleryCount > 0 ? `${galleryCount} 个已入图库` : "可分别加入成图库"}</Badge>}
       </div>
     </summary>
@@ -576,7 +577,7 @@ export function CreativeOrderDeliveryCandidates({
             onRetry={onRetryVariant}
             onAdoptProcessImage={onAdoptProcessImage}
           />)}
-        </div> : selectionPending ? <CreativeOrderCandidateSelectionPending /> : <div className="grid gap-3 p-4 lg:grid-cols-3"><CreativeOrderVariantPlaceholder /></div>}
+        </div> : progress.selectionPending ? <CreativeOrderCandidateSelectionPending orderId={orderId} item={item} disabled={disabled} /> : <div className="grid gap-3 p-4 lg:grid-cols-3"><CreativeOrderVariantPlaceholder /></div>}
     </div>
   </details>;
 }
@@ -604,9 +605,13 @@ function creativeOrderItemProgress(item: CreativeOrderItem, t?: ReturnType<typeo
   const productionStoppedVariants = deliveryVariants.filter(creativeVariantHasProductionStop).length;
   const blockedVariants = deliveryVariants.filter(creativeVariantNeedsManualAction).length;
   const readyVariants = deliveryVariants.filter((variant) => creativeVariantAdoptionReadiness(variant).ready).length;
-  const selectionPending = deliveryVariants.length === 0 && allVariants.some((variant) => creativeVariantCandidateState(variant) === "candidate");
+  const selectionPending = deliveryVariants.length === 0 && (Boolean(item.candidate_progress) || allVariants.some((variant) => creativeVariantCandidateState(variant) === "candidate"));
   const shared = { variants: deliveryVariants.length, previewAssets, expectedAssets, runningVariants, productionStoppedVariants, blockedVariants, readyVariants, selectionPending };
   if (readyVariants > 0) return { label: "可入图库", detail: `${readyVariants}/${Math.max(deliveryVariants.length, 1)} 个入选变体已完成，可分别加入成图库。`, tone: "default", ...shared };
+  if (selectionPending && item.candidate_progress && t) {
+    const p = item.candidate_progress;
+    return { label: creativeCandidateProgressLabel(p, t), detail: t(($) => $.candidateProgress.counts, { planned: p.planned, expected: p.expected, generated: p.generated, primed: p.primed, target: p.target }), tone: "outline", ...shared };
+  }
   if (selectionPending) return { label: t ? t(($) => $.delivery.selectionInProgress) : "Selecting candidates", detail: t ? t(($) => $.delivery.candidateSelectionPending) : "Candidate hero images are being compared automatically.", tone: "outline", ...shared };
   if (productionStoppedVariants > 0) return { label: "Incomplete", detail: `${productionStoppedVariants} selected variants are incomplete. You can review existing images first.`, tone: "secondary", ...shared };
   if (blockedVariants > 0) return { label: t ? t(($) => $.studio.orderStatus.review) : "Ready for review", detail: `${blockedVariants} selected variants need review. Review images before deciding.`, tone: "secondary", ...shared };
@@ -625,7 +630,7 @@ function CreativeOrderSourceAndPrompt({ source, progress, showSource }: { source
     </figure>}
     <div className="min-w-0 space-y-3 px-4 py-3">
       <div className="flex flex-wrap gap-2 text-xs">
-        {progress.selectionPending ? <Badge variant="outline">{t(($) => $.delivery.selectionInProgress)}</Badge> : <>
+        {progress.selectionPending ? <Badge variant="outline" className="max-w-full whitespace-normal">{progress.label}</Badge> : <>
           <Badge variant="outline">{t(($) => $.delivery.selectedDirections, { count: progress.variants })}</Badge>
           <Badge variant="outline">{progress.expectedAssets > 0 ? t(($) => $.delivery.previewImages, { ready: progress.previewAssets, expected: progress.expectedAssets }) : t(($) => $.delivery.waitingTask)}</Badge>
           {progress.runningVariants > 0 && <Badge variant="outline">{t(($) => $.delivery.generatingCount, { count: progress.runningVariants })}</Badge>}
@@ -646,10 +651,11 @@ function CreativeOrderVariantPlaceholder() {
   </div>;
 }
 
-function CreativeOrderCandidateSelectionPending() {
+function CreativeOrderCandidateSelectionPending({ orderId, item, disabled }: { orderId: string; item: CreativeOrderItem; disabled: boolean }) {
   const { t } = useT("creative");
-  return <div className="flex min-h-48 items-center justify-center border bg-muted/10 px-6 text-center text-sm text-muted-foreground" data-testid="creative-order-candidate-selection-pending">
-    {t(($) => $.delivery.candidateSelectionPending)}
+  return <div className="flex min-h-48 flex-col items-center justify-center gap-3 border bg-muted/10 px-6 text-center text-sm text-muted-foreground" data-testid="creative-order-candidate-selection-pending">
+    <p>{item.candidate_progress ? creativeCandidateProgressLabel(item.candidate_progress, t) : t(($) => $.delivery.candidateSelectionPending)}</p>
+    {item.candidate_progress && <CreativeCandidateRecoveryAction orderId={orderId} item={item} disabled={disabled} />}
   </div>;
 }
 

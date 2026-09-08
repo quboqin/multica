@@ -112,7 +112,6 @@ import { CreativeFeedbackDashboard } from "./creative-feedback-dashboard";
 import { creativeVariantRevisionExpectedSizes } from "./creative-staging-repair-workspace";
 import { CreativeWorkbench } from "./creative-workbench";
 import { MarketResourceFiles } from "./market-resource-files";
-import { CreativeCandidateProgressPanel } from "./creative-candidate-progress";
 import { CreativeOrderPrimeSummary, creativePrimeFamilyLabel, creativePrimeModeLabel } from "./creative-prime-mode";
 
 type CreativeStudioTab = "home" | "materials" | "orders" | "resources" | "feedback";
@@ -711,7 +710,6 @@ function CreativeOrderDetail({ orderId, onBack, onBrowseOrders, backLabel }: { o
     </div>
     {data && <CreativeOrderPrimeSummary order={data} />}
     {data && <CreativeOrderStatusPanel order={data} stage={stage} />}
-    {data?.items.map((item) => <CreativeCandidateProgressPanel key={item.id} orderId={orderId} item={item} />)}
     <CreativeOrderJourney stageKey={stage.key} />
     <div className="space-y-4">
       {!isDirectEdit && data?.items.map((item, index) => {
