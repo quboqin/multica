@@ -86,6 +86,11 @@ Set the creation instruction to create an original visual identity from the sele
 and repayment rows; explicitly prohibit filling omitted slots. With `visual_only=true`, state that no business copy, claims, numbers,
 repayment table, or CTA may be added. Official Prime content keeps its existing composition contract.
 
+Compile the copy-library LayoutPlan as natural-language reading order and content grouping. For dense copy, reduce decoration and
+adjust subject emphasis; describe native landscape or portrait reflow instead of carrying over a square layout. Do not add coordinates,
+percentage boxes, font-size thresholds, or instructions to shrink the entire image. Preserve all selected copy. Business content stays
+clear of the real Prime context while the background remains full-bleed; the platform overlays the official template unchanged.
+
 ### Bounded visual rework
 
 For bounded visual rework, Input 1 is the failed same-size generated base in `deterministic` mode, or the failed same-size

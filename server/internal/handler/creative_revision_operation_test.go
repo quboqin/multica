@@ -643,6 +643,10 @@ func TestCreativeQCExhaustionKeepsPreviousActiveRevision(t *testing.T) {
 		t.Skip("database not available")
 	}
 	orderID, itemID, issueID := createCreativeLifecycleTestOrder(t, "creative QC active revision fence")
+	squad := createCreativeOrderSquadFixture(t, "", "", true)
+	if _, err := testPool.Exec(t.Context(), `UPDATE creative_order SET input_snapshot=input_snapshot||jsonb_build_object('squad_snapshot',jsonb_build_object('leader_agent_id',$2::text,'producer_agent_id',$3::text,'reviewer_agent_id',$4::text,'squad_id',$5::text)) WHERE id=$1`, orderID, squad.LeaderAgentID, squad.ProducerAgentID, squad.ReviewerAgentID, squad.SquadID); err != nil {
+		t.Fatal(err)
+	}
 	variant := putCreativeLifecycleVariant(t, orderID, itemID, "C01", 1, "running")
 	for _, size := range standardCreativeAssetSizes {
 		attachmentID := createCreativeOrderAssetAttachment(t, "qc-active-r1-"+strings.ReplaceAll(size, "x", "-")+".png")
@@ -684,13 +688,19 @@ VALUES ($1, 'technical', 2, 1, 'passed', '{}'::jsonb),
 	}
 	agentID := createHandlerTestAgent(t, "creative-qc-active-fence", []byte(`{}`))
 	for attempt := 0; attempt < creativeVisualModelReworkMaxAttempts; attempt++ {
-		if _, err := testPool.Exec(t.Context(), `
+		var reworkTaskID string
+		if err := testPool.QueryRow(t.Context(), `
 INSERT INTO agent_task_queue (
   agent_id, runtime_id, status, trigger_evidence_kind, trigger_evidence_ref_id, context, completed_at
 )
 VALUES ($1, (SELECT runtime_id FROM agent WHERE id = $1), 'completed', 'creative_order_item_production', $2,
-        jsonb_build_object('type','creative_domain_task','workflow','creative_production','variant_id',$3::text,'revision',2,'qc_visual_rework',jsonb_build_object()), now())
-`, agentID, itemID, variant.ID); err != nil {
+        jsonb_build_object('type','creative_domain_task','workflow','creative_production','creative_order_id',$4::text,'variant_id',$3::text,'revision',2,'qc_visual_rework',jsonb_build_object()), now())
+RETURNING id::text
+`, agentID, itemID, variant.ID, orderID).Scan(&reworkTaskID); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := testPool.Exec(t.Context(), `INSERT INTO creative_image_operation(variant_id,size_key,revision,operation_kind,idempotency_key,status,task_id,provider_request_id)
+VALUES($1,$2,2,'visual_rework',$3,'failed',$4,$3)`, variant.ID, standardCreativeAssetSizes[attempt], fmt.Sprintf("qc-budget-%d", attempt), reworkTaskID); err != nil {
 			t.Fatal(err)
 		}
 	}

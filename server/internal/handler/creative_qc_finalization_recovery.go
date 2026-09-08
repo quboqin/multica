@@ -39,7 +39,11 @@ func (h *Handler) RecoverPendingCreativeQCFinalizations(ctx context.Context, lim
 	return processed, nil
 }
 
-func (h *Handler) recoverPendingCreativeQCFinalization(ctx context.Context) (bool, error) {
+func (h *Handler) recoverPendingCreativeQCFinalization(ctx context.Context, targetVariants ...pgtype.UUID) (bool, error) {
+	var targetVariant pgtype.UUID
+	if len(targetVariants) > 0 {
+		targetVariant = targetVariants[0]
+	}
 	if h.TaskService == nil {
 		return false, errors.New("creative QC task service is unavailable")
 	}
@@ -59,6 +63,7 @@ WITH unresolved_qc AS (
          row_number() OVER (PARTITION BY report.variant_id, report.revision ORDER BY report.attempt DESC) AS row_number
   FROM creative_order_qc_report report
   WHERE report.status IN ('passed', 'warning', 'failed')
+    AND ($4::uuid IS NULL OR report.variant_id=$4)
     AND NOT EXISTS (
       SELECT 1
       FROM creative_order_variant_qc_resolution resolution
@@ -78,6 +83,7 @@ WITH unresolved_qc AS (
          ) AS row_number
   FROM agent_task_queue task
   WHERE task.trigger_evidence_kind = 'creative_order_variant_qc'
+    AND ($4::uuid IS NULL OR task.trigger_evidence_ref_id=$4)
     AND task.context->>'type' = 'creative_domain_task'
     AND task.context->>'workflow' = 'creative_qc_visual'
     AND task.status IN ('completed', 'failed')
@@ -105,6 +111,7 @@ JOIN creative_order_variant variant
 JOIN creative_order_item item ON item.id = variant.order_item_id
 JOIN creative_order order_row ON order_row.id = item.order_id
 WHERE unresolved_qc.row_number = 1
+  AND ($4::uuid IS NULL OR variant.id = $4)
   AND order_row.status <> 'cancelled'
   AND variant.status NOT IN ('cancelled', 'completed')
   AND NOT EXISTS (
@@ -141,7 +148,7 @@ ORDER BY unresolved_qc.updated_at, variant.id
 FOR UPDATE OF variant, order_row SKIP LOCKED
 LIMIT 1
 
-`, creativeQCFinalizationRecoveryKind, creativeQCMissingReportRecoveryKind, creativeQCFinalizationRecoveryMaxAttempts).Scan(
+`, creativeQCFinalizationRecoveryKind, creativeQCMissingReportRecoveryKind, creativeQCFinalizationRecoveryMaxAttempts, targetVariant).Scan(
 		&workspaceID, &orderID, &itemID, &variantID, &issueID, &createdBy,
 		&revision, &reportAttempt, &recoveryKind, &triggerKind, &inputSnapshot, &brief,
 	)
@@ -160,7 +167,7 @@ LIMIT 1
 	if err != nil {
 		return false, fmt.Errorf("load pending creative QC finalization scope: %w", err)
 	}
-	if _, complete, err := h.creativePrimePackageComplete(ctx, variantID, revision, expectedSizes); err != nil {
+	if _, complete, err := h.creativePrimePackageComplete(ctx, tx, variantID, revision, expectedSizes); err != nil {
 		return false, err
 	} else if !complete {
 		return false, errors.New("pending creative QC finalization has an incomplete Prime package")

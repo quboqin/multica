@@ -905,18 +905,14 @@ WHERE trigger_evidence_kind = $1 AND trigger_evidence_ref_id = $2 AND status = '
 	})
 	t.Run("cancelled", func(t *testing.T) {
 		fixture, task, _ := prepareCreativeCandidateSelectionTask(t, "cancelled candidate selection rebuild")
-		w := httptest.NewRecorder()
-		req := newRequest(http.MethodPost, "/api/issues/"+fixture.IssueID+"/tasks/"+uuidToString(task.ID)+"/cancel", nil)
-		req = withURLParams(req, "id", fixture.IssueID, "taskId", uuidToString(task.ID))
-		testHandler.CancelTask(w, req)
-		if w.Code != http.StatusOK {
-			t.Fatalf("cancel candidate selection = %d %s", w.Code, w.Body.String())
+		if _, err := testHandler.TaskService.CancelTask(t.Context(), task.ID); err != nil {
+			t.Fatal(err)
 		}
 		queued, err := testHandler.maybeQueueCreativeCandidateSelection(
 			t.Context(), parseUUID(fixture.ItemID), creativeOrchestrationCause{RequestedBy: parseUUID(testUserID)},
 		)
-		if err != nil || !queued {
-			t.Fatalf("rebuild cancelled candidate selection = %v, err %v", queued, err)
+		if err != nil || queued {
+			t.Fatalf("cancelled candidate selection resumed = %v, err %v", queued, err)
 		}
 		var cancelled, replacements int
 		if err := testPool.QueryRow(t.Context(), `
@@ -926,7 +922,7 @@ WHERE trigger_evidence_kind = $1 AND trigger_evidence_ref_id = $2
 `, creativeCandidateSelectionEvidenceKind, fixture.ItemID).Scan(&cancelled, &replacements); err != nil {
 			t.Fatal(err)
 		}
-		if cancelled != 1 || replacements != 1 {
+		if cancelled != 1 || replacements != 0 {
 			t.Fatalf("cancelled candidate selection tasks = cancelled %d queued %d", cancelled, replacements)
 		}
 	})

@@ -354,7 +354,6 @@ func main() {
 	go runAutopilotFailureMonitor(autopilotCtx, queries, bus, envFailureMonitorConfig())
 	go runCreativeMaterialArchiver(sweepCtx, h)
 	go runCreativePrimeRecovery(sweepCtx, h)
-	go runCreativeQCFinalizationRecovery(sweepCtx, h)
 	go runDBStatsLogger(sweepCtx, pool)
 
 	// Lark inbound supervisor: holds the §4.4 WS lease per installation
@@ -382,6 +381,10 @@ func main() {
 	// logging them on the tick that fails and retrying on the next
 	// cycle, so a temporary outage does not crash the server.
 	schedulerMgr := scheduler.NewManager(pool, scheduler.Options{})
+	if err := schedulerMgr.Register(creativeOrderRecoveryJob(h)); err != nil {
+		slog.Error("scheduler: failed to register creative order recovery", "error", err)
+		os.Exit(1)
+	}
 	if err := schedulerMgr.Register(scheduler.TaskUsageHourlyJob(pool)); err != nil {
 		slog.Warn("scheduler: failed to register task_usage_hourly rollup job", "error", err)
 	} else {

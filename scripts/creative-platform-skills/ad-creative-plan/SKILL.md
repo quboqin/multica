@@ -58,6 +58,15 @@ multica creative source-analysis list --candidate-id <candidate-id> --output jso
 
 ## 方案合同
 
+### 文案来源的自然语言构图
+
+`source_kind=copy_library` 没有竞品画面可继承，先按实际选择的文字和还款行确定内容主次，再写每个尺寸的 `reading_order`、
+`content_groups`、`native_reflow` 和 `prime_support`。不要把“原创”解释为新增更多模块；空槽不补，已选内容不删、不改写。
+文案多时先减少装饰、简化背景和调整主体占比；横版可采用主体与文案左右组织，竖版按内容主次纵向组织，方版保持视觉焦点。
+这些是构图方向，不是固定模板：不得指定像素坐标、百分比边框、最低字号或可用面积阈值，不做程序排字，也不要求把整张图缩入安全框。
+用自然语言说明正文、金额、表格与 CTA 如何避开官方 Prime 上下区域；背景仍满版。三尺寸的内容组织可以不同，但批准文字、数值和主体身份一致。
+生产继续由图片模型渲染完整底图与业务文字，官方 Prime 由平台脚本原样合成；不要建议模型重画或融入官方组件。
+
 先完整读取 [Creative Intent Contract](references/creative-intent-contract.md)。为每个新文案库 item 写入 K 个候选 Variant，固定使用
 `C01` 至 `C{K:02d}` 的连续 key；10 套订单为 C01-C12。素材订单仍默认 5 个，只有无法形成第 5 个真实不同创意时才使用 4 个。
 不得仅换色凑数；文案订单若无法形成足量不同方向，应报告真实缺口，不能降低冻结数量。
@@ -269,6 +278,9 @@ multica task fanout --agent <producer-entry-agent-id> --input-file <manifest.jso
 ```
 
 CLI 返回的 `tasks` 必须覆盖每个缺失候选；否则记录真实错误并让当前 task 失败，不得宣称已委派。
+
+完成前必须回读订单，核对已登记候选数量与 `candidate_count`，并核对每个候选的生产 task。平台会拒绝候选或委派不齐的完成请求。
+恢复方案只创建缺失 key、补缺失生产委派，保留已有候选、图片、revision 和成功任务；六套订单需要登记八个候选，而不是六个。
 
 fanout 成功后立即结束，不轮询。CLI 返回字段错误时修正同一 manifest；没有返回 created task 就不得声称
 已入队。写回或委派失败必须让当前 task 失败，并在 Variant/task 保留真实 error code/message，不创建 Issue。

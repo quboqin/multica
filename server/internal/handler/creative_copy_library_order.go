@@ -19,7 +19,7 @@ type creativeCopyLibrarySelection struct {
 	VisualDirection   json.RawMessage     `json:"visual_direction"`
 }
 
-func (h *Handler) freezeCreativeCopyLibraryOrder(ctx context.Context, workspaceID pgtype.UUID, input *creativeOrderInput) error {
+func freezeCreativeCopyLibraryOrder(ctx context.Context, q dbExecutor, workspaceID pgtype.UUID, input *creativeOrderInput) error {
 	for index := range input.Items {
 		item := &input.Items[index]
 		if item.SourceKind != "copy_library" {
@@ -37,7 +37,7 @@ func (h *Handler) freezeCreativeCopyLibraryOrder(ctx context.Context, workspaceI
 		if err != nil {
 			return errors.New("market pack id must be a UUID")
 		}
-		publishedMarket, err := h.loadPublishedCreativeResource(ctx, workspaceID, marketID, "market_pack")
+		publishedMarket, err := loadPublishedCreativeResource(ctx, q, workspaceID, marketID, "market_pack")
 		if err != nil || market.Version != publishedMarket.PublishedVersion {
 			return errors.New("market pack published version has changed; reload the selection")
 		}
@@ -58,7 +58,7 @@ func (h *Handler) freezeCreativeCopyLibraryOrder(ctx context.Context, workspaceI
 		if err != nil || boundID != libraryID {
 			return errors.New("selected market pack must bind this copy library")
 		}
-		library, err := h.loadPublishedCreativeResource(ctx, workspaceID, libraryID, "copy_library")
+		library, err := loadPublishedCreativeResource(ctx, q, workspaceID, libraryID, "copy_library")
 		if err != nil {
 			return errors.New("copy library is not published in this workspace")
 		}

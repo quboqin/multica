@@ -995,61 +995,11 @@ func scanCreativeImageOperation(row rowScanner) (creativeImageOperationResponse,
 }
 
 func (h *Handler) listCreativeImageOperations(ctx context.Context, variantID pgtype.UUID) ([]creativeImageOperationResponse, error) {
-	rows, err := h.DB.Query(ctx, `
-SELECT id::text, variant_id::text, size_key, revision, operation_kind, idempotency_key, status, model,
-  COALESCE(runtime_id::text, ''), COALESCE(task_id::text, ''), prompt_sha256, input_snapshot::text,
-  provider_request_id, result_receipt::text, error_type, error_message,
-  COALESCE(output_attachment_id::text, ''), COALESCE(output_asset_id::text, ''),
-  COALESCE(started_at::text, ''), COALESCE(completed_at::text, ''), created_at::text, updated_at::text
-FROM creative_image_operation
-WHERE variant_id = $1
-ORDER BY revision, size_key, created_at
-`, variantID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	operations := []creativeImageOperationResponse{}
-	for rows.Next() {
-		operation, err := scanCreativeImageOperation(rows)
-		if err != nil {
-			return nil, err
-		}
-		operation.Attempts, err = h.listCreativeImageOperationAttempts(ctx, parseUUID(operation.ID))
-		if err != nil {
-			return nil, err
-		}
-		operations = append(operations, operation)
-	}
-	return operations, rows.Err()
+	values, err := h.creativeImageOperationsBatch(ctx, []pgtype.UUID{variantID})
+	return creativeOwnerRows(values, variantID), err
 }
 
 func (h *Handler) listCreativeImageOperationAttempts(ctx context.Context, operationID pgtype.UUID) ([]creativeImageOperationAttemptResponse, error) {
-	rows, err := h.DB.Query(ctx, `
-SELECT id::text, attempt, status, COALESCE(runtime_id::text, ''), COALESCE(task_id::text, ''),
-  provider_request_id, provider_status, http_status, exit_code, error_type, error_message, result_receipt::text,
-  COALESCE(output_attachment_id::text, ''), duration_ms, started_at::text, COALESCE(completed_at::text, ''),
-  created_at::text, updated_at::text
-FROM creative_image_operation_attempt
-WHERE operation_id = $1
-ORDER BY attempt
-`, operationID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	attempts := []creativeImageOperationAttemptResponse{}
-	for rows.Next() {
-		var attempt creativeImageOperationAttemptResponse
-		var resultReceipt string
-		if err := rows.Scan(&attempt.ID, &attempt.Attempt, &attempt.Status, &attempt.RuntimeID, &attempt.TaskID,
-			&attempt.ProviderRequestID, &attempt.ProviderStatus, &attempt.HTTPStatus, &attempt.ExitCode, &attempt.ErrorType,
-			&attempt.ErrorMessage, &resultReceipt, &attempt.OutputAttachmentID, &attempt.DurationMS, &attempt.StartedAt,
-			&attempt.CompletedAt, &attempt.CreatedAt, &attempt.UpdatedAt); err != nil {
-			return nil, err
-		}
-		attempt.ResultReceipt = json.RawMessage(resultReceipt)
-		attempts = append(attempts, attempt)
-	}
-	return attempts, rows.Err()
+	values, err := creativeRowsByOwner[creativeImageOperationAttemptResponse](ctx, h.DB, creativeOperationAttemptBatchSQL, []pgtype.UUID{operationID})
+	return creativeOwnerRows(values, operationID), err
 }

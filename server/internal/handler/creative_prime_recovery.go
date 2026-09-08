@@ -546,11 +546,6 @@ WHERE revision.variant_id = $1 AND revision.revision = $2
 
 func (h *Handler) completeCreativePrimeCompositionHandoff(ctx context.Context, claim creativePrimeCompositionClaim) error {
 	if claim.CandidateState == "candidate" {
-		if _, err := h.maybeQueueCreativeCandidateSelectionWithPrimeHandoff(
-			ctx, claim.OrderItemID, creativeOrchestrationCause{RequestedBy: claim.RequestedBy}, &claim,
-		); err != nil {
-			return fmt.Errorf("wake creative candidate selection before Prime completion: %w", err)
-		}
 		tx, err := h.TxStarter.Begin(ctx)
 		if err != nil {
 			return fmt.Errorf("begin candidate Prime handoff completion: %w", err)
@@ -559,8 +554,16 @@ func (h *Handler) completeCreativePrimeCompositionHandoff(ctx context.Context, c
 		if err := completeCreativePrimeCompositionJob(ctx, tx, claim); err != nil {
 			return err
 		}
+		var selectionTask db.AgentTaskQueue
+		queued, err := h.queueCreativeCandidateSelectionTx(ctx, tx, claim.OrderItemID, creativeOrchestrationCause{RequestedBy: claim.RequestedBy}, nil, &selectionTask)
+		if err != nil {
+			return fmt.Errorf("queue candidate selection during Prime completion: %w", err)
+		}
 		if err := tx.Commit(ctx); err != nil {
 			return fmt.Errorf("commit candidate Prime handoff completion: %w", err)
+		}
+		if queued {
+			h.TaskService.NotifyTaskEnqueued(ctx, selectionTask)
 		}
 		return nil
 	}

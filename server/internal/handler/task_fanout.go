@@ -331,11 +331,11 @@ type creativeProductionFanoutGroup struct {
 	items []service.DirectTaskFanoutItem
 }
 
-func (h *Handler) prepareCreativeProductionFanout(ctx context.Context, workspaceID, orderItemID pgtype.UUID, items []service.DirectTaskFanoutItem) ([]creativeProductionFanoutGroup, error) {
+func (h *Handler) prepareCreativeProductionFanout(ctx context.Context, q dbExecutor, workspaceID, orderItemID pgtype.UUID, items []service.DirectTaskFanoutItem) ([]creativeProductionFanoutGroup, error) {
 	groups := map[string]creativeProductionFanoutGroup{}
 	order := make([]string, 0, len(items))
 	for _, item := range items {
-		agent, normalized, err := h.selectCreativeProductionAgentForFanoutItem(ctx, workspaceID, orderItemID, item)
+		agent, normalized, err := h.selectCreativeProductionAgentForFanoutItem(ctx, q, workspaceID, orderItemID, item)
 		if err != nil {
 			return nil, err
 		}
@@ -380,7 +380,7 @@ func (h *Handler) enqueueCreativeProductionFanout(ctx context.Context, workspace
 	if h.TaskService == nil {
 		return nil, errors.New("creative production task service is unavailable")
 	}
-	groups, err := h.prepareCreativeProductionFanout(ctx, workspaceID, orderItemID, items)
+	groups, err := h.prepareCreativeProductionFanout(ctx, h.DB, workspaceID, orderItemID, items)
 	if err != nil {
 		return nil, err
 	}
@@ -423,7 +423,7 @@ func (h *Handler) enqueueDirectTaskFanoutWithCreativeFence(ctx context.Context, 
 	return tasks, nil
 }
 
-func (h *Handler) selectCreativeProductionAgentForFanoutItem(ctx context.Context, workspaceID, orderItemID pgtype.UUID, item service.DirectTaskFanoutItem) (db.Agent, service.DirectTaskFanoutItem, error) {
+func (h *Handler) selectCreativeProductionAgentForFanoutItem(ctx context.Context, q dbExecutor, workspaceID, orderItemID pgtype.UUID, item service.DirectTaskFanoutItem) (db.Agent, service.DirectTaskFanoutItem, error) {
 	var taskContext map[string]json.RawMessage
 	if len(item.Context) == 0 || json.Unmarshal(item.Context, &taskContext) != nil || taskContext == nil {
 		return db.Agent{}, item, errors.New("creative production task context must be a JSON object")
@@ -439,7 +439,7 @@ func (h *Handler) selectCreativeProductionAgentForFanoutItem(ctx context.Context
 	variantID := pgtype.UUID{Bytes: variantUUID, Valid: true}
 
 	var inputSnapshot []byte
-	if err := h.DB.QueryRow(ctx, `
+	if err := q.QueryRow(ctx, `
 SELECT order_row.input_snapshot
 FROM creative_order_item item
 JOIN creative_order order_row ON order_row.id = item.order_id
@@ -454,12 +454,12 @@ WHERE item.id = $1 AND order_row.workspace_id = $2
 	preferred := creativeTaskPreferredProducerID(item.Context)
 	pinPreferred := false
 	if revision, hasRevision, err := jsonPositiveInt(taskContext["revision"]); err == nil && hasRevision && revision > 0 {
-		if historical := selectedCreativeProductionAgentFromHistory(ctx, h.DB, workspaceID, variantID, revision); historical.Valid {
+		if historical := selectedCreativeProductionAgentFromHistory(ctx, q, workspaceID, variantID, revision); historical.Valid {
 			preferred = historical
 			pinPreferred = true
 		}
 	}
-	agent, err := h.selectCreativeImageEditAgent(ctx, h.DB, h.Queries, workspaceID, json.RawMessage(inputSnapshot), strings.TrimSpace(variantIDText), preferred, pinPreferred)
+	agent, err := h.selectCreativeImageEditAgent(ctx, q, db.New(q), workspaceID, json.RawMessage(inputSnapshot), strings.TrimSpace(variantIDText), preferred, pinPreferred)
 	if err != nil {
 		return db.Agent{}, item, err
 	}
@@ -489,6 +489,10 @@ func (h *Handler) normalizeCreativeTaskFanoutItems(ctx context.Context, workspac
 }
 
 func (h *Handler) validateCreativeTaskFanoutExpectedSizes(ctx context.Context, workspaceID pgtype.UUID, kind string, evidenceRefID pgtype.UUID, items []service.DirectTaskFanoutItem) error {
+	return validateCreativeTaskFanoutExpectedSizes(ctx, h.DB, workspaceID, kind, evidenceRefID, items)
+}
+
+func validateCreativeTaskFanoutExpectedSizes(ctx context.Context, q creativeTaskFanoutQuerier, workspaceID pgtype.UUID, kind string, evidenceRefID pgtype.UUID, items []service.DirectTaskFanoutItem) error {
 	if kind != "creative_order_item_production" && kind != "creative_order_item_direct_edit" && kind != "creative_order_variant_qc" && kind != "manual" {
 		return nil
 	}
@@ -514,7 +518,7 @@ func (h *Handler) validateCreativeTaskFanoutExpectedSizes(ctx context.Context, w
 			}
 			variantID = parseUUID(parsedVariantID.String())
 		}
-		expectedSizes, err := creativeFanoutVariantExpectedSizes(ctx, h.DB, workspaceID, kind, evidenceRefID, variantID)
+		expectedSizes, err := creativeFanoutVariantExpectedSizes(ctx, q, workspaceID, kind, evidenceRefID, variantID)
 		if err != nil {
 			return err
 		}

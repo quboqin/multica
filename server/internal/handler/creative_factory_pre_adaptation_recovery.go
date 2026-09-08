@@ -32,12 +32,21 @@ LIMIT 10
 	}
 	defer rows.Close()
 
+	var taskIDs []pgtype.UUID
 	for rows.Next() {
 		var taskID pgtype.UUID
 		if err := rows.Scan(&taskID); err != nil {
 			slog.Warn("read creative pre-adaptation recovery failed", "workspace_id", uuidToString(workspaceID), "error", err)
 			continue
 		}
+		taskIDs = append(taskIDs, taskID)
+	}
+	if err := rows.Err(); err != nil {
+		slog.Warn("iterate creative pre-adaptation recovery failed", "workspace_id", uuidToString(workspaceID), "error", err)
+		return
+	}
+	rows.Close()
+	for _, taskID := range taskIDs {
 		task, err := h.Queries.GetAgentTask(ctx, taskID)
 		if err != nil {
 			slog.Warn("load creative pre-adaptation recovery failed", "task_id", uuidToString(taskID), "error", err)
@@ -65,8 +74,5 @@ LIMIT 10
 		if markErr := h.markCreativePreAdaptationAutomaticRepairAttempted(ctx, workspaceID, analysisID); markErr != nil {
 			slog.Warn("mark creative pre-adaptation repair attempted failed", "task_id", uuidToString(taskID), "error", markErr)
 		}
-	}
-	if err := rows.Err(); err != nil {
-		slog.Warn("iterate creative pre-adaptation recovery failed", "workspace_id", uuidToString(workspaceID), "error", err)
 	}
 }

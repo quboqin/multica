@@ -89,6 +89,11 @@ delivery image.
 LayoutPlan describes semantic relationships. Exact protected geometry stays in the frozen `prime_layout_contract` and deterministic
 composer evidence; it is not copied into the model prompt.
 
+For copy-library inputs, decide content hierarchy before scene decoration. Explain how the selected text and repayment rows fit the
+square, landscape, and portrait compositions in natural language. Reduce decoration and adjust subject emphasis before crowding text.
+Do not add coordinates, percentage boxes, minimum font sizes, capacity thresholds, or programmatic typesetting. Do not omit approved
+copy or shrink the entire image into a frame. The model renders the business image; the platform retains the official Prime overlay.
+
 When frozen approved copy contains a nonempty `benefit`, every LayoutPlan must include it as a readable text content group and an
 acceptance check. Icons, phones, and step cards may reinforce the benefit but cannot replace the text.
 

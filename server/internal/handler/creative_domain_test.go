@@ -65,14 +65,14 @@ func TestListCreativeOrdersSortsByCreationTime(t *testing.T) {
 UPDATE creative_order
 SET created_at = $1, updated_at = $2
 WHERE id = $3
-`, olderCreatedAt, newerCreatedAt.Add(time.Hour)); err != nil {
+`, olderCreatedAt, newerCreatedAt.Add(time.Hour), olderOrderID); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := testPool.Exec(t.Context(), `
 UPDATE creative_order
 SET created_at = $1, updated_at = $2
 WHERE id = $3
-`, newerCreatedAt, olderCreatedAt); err != nil {
+`, newerCreatedAt, olderCreatedAt, newerOrderID); err != nil {
 		t.Fatal(err)
 	}
 
@@ -237,6 +237,7 @@ func creativeQCTaskContextForTest(t *testing.T, orderID, variantID, lane string,
 	contextValue, err := json.Marshal(map[string]any{
 		"type": "creative_domain_task", "workflow": "creative_qc_" + lane,
 		"creative_order_id": orderID, "variant_id": variantID, "revision": revision, "qc_attempt": attempt,
+		"expected_sizes": standardCreativeAssetSizes,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -3518,7 +3519,7 @@ func TestCreativeVisualModelReworkFindingsAcceptsOnlyFinalVisualDefects(t *testi
 	findings, err := creativeVisualModelReworkFindings(json.RawMessage(`{
   "blocking_failures": [
     {"code":"actual_prime_obstruction","size_key":"1200x628","diagnosis":"1200x628：还款表格 与 bottom official Prime template content 冲突；期望移动到 safe_content_frame 内 y<=430"},
-    {"code":"official_prime_text_unreadable","size_key":"800x1000","diagnosis":"800x1000：条款下方深色背景 与 top Prime terms 冲突；期望调整为该组件下方连续、低细节的浅色背景"}
+    {"code":"official_prime_text_unreadable","size_key":"800x1000","diagnosis":"800x1000：条款下方深色背景导致 top Prime terms 不可读；期望调整为该组件下方连续、低细节的浅色背景"}
   ]
 }`), expectedSizes)
 	if err != nil || len(findings) != 2 {
@@ -3537,7 +3538,7 @@ func TestCreativeVisualModelReworkFindingsAcceptsOnlyFinalVisualDefects(t *testi
   "blocking_failures": [
     {"code":"actual_prime_obstruction","size_key":"1200x628","diagnosis":"1200x628：还款表格下沿与底部 Prime 法务文字实际叠压；期望移动到 safe_content_frame 内 y<=566"},
     {"code":"generated_content_missing","size_key":"1200x628","diagnosis":"1200x628：冻结文案缺失"},
-    {"code":"official_prime_text_unreadable","size_key":"800x1000","diagnosis":"800x1000：条款下方深色背景 与 top Prime terms 冲突；期望调整为该组件下方连续、低细节的浅色背景"}
+    {"code":"official_prime_text_unreadable","size_key":"800x1000","diagnosis":"800x1000：条款下方深色背景导致 top Prime terms 不可读；期望调整为该组件下方连续、低细节的浅色背景"}
   ]
 }`), expectedSizes)
 	if err != nil || len(perSizeFindings) != 1 || perSizeFindings[0].SizeKey != "800x1000" {

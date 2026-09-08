@@ -149,7 +149,7 @@ FOR UPDATE
 		if !sourceAttachmentID.Valid {
 			return nil, &creativeOrderAttachmentValidationError{Code: "attachment_not_found", Message: "candidate source attachment is unavailable"}
 		}
-		if _, err := h.readCreativePrimeAttachment(ctx, workspaceID, sourceAttachmentID); err != nil {
+		if _, err := h.readCreativePrimeAttachment(ctx, tx, workspaceID, sourceAttachmentID); err != nil {
 			return nil, creativeOrderAttachmentValidationFailure("candidate source attachment", err)
 		}
 		candidateSources = append(candidateSources, creativeOrderFrozenAttachment{
@@ -217,7 +217,7 @@ SELECT EXISTS(
 `, resourceFileID, resourceID, workspaceID, attachmentID, version).Scan(&valid); err != nil || !valid {
 		return &creativeOrderAttachmentValidationError{Code: "attachment_not_found", Message: fmt.Sprintf("%s attachment is no longer in the frozen market pack", scope)}
 	}
-	if _, err := h.readCreativePrimeAttachment(ctx, workspaceID, attachmentID); err != nil {
+	if _, err := h.readCreativePrimeAttachment(ctx, tx, workspaceID, attachmentID); err != nil {
 		return creativeOrderAttachmentValidationFailure(scope+" attachment", err)
 	}
 	return nil

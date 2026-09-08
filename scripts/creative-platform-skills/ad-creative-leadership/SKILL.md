@@ -102,9 +102,18 @@ source revision 和目标尺寸、当前 item key 没有 active/succeeded task�
 
 ## 恢复与用户留痕
 
+订单 item 的 `candidate_progress` 是候选等待原因：区分方案/委派未齐、方图、Prime、生产 task 收尾和筛选排队状态。
+没有 `selection_task_id` 不能汇报“正在比较”。方图与 Prime 的完成交接由平台在同一事务推进；Leader 不重复派筛选任务。
+用户可从候选进度使用补齐方案或继续筛选，平台沿用现有 task 重试预算；取消的订单或任务不自动恢复。不重做已有方图，不降低目标套数。
+
+平台补偿从订单进入，逐个检查 item、当前制作版本和所需尺寸，自动补缺失规划、候选筛选、出图续跑和 Prime/QC 交接。
+订单详情的 `recoveries` 记录对象、原因、重试预算、下次检查时间、原 task、恢复 task 和每次处理结果；`waiting` 不是失败，
+`manual_required` 必须按真实原因处理。已有 queued/running task 或 queued/running/unknown image operation 时不重复派发。
+出完图但等待用户采用的订单、未入选候补和已取消对象不属于缺图恢复。补偿已派发不等于图片已交付，仍须回读当前版本资产。
+
 失败项不阻塞兄弟对象。恢复前先检查领域输出、task status 和 item key，只补缺失尺寸/lane/revision；旧
 revision 不得覆盖新 revision。平台只按结构化证据自动创建有上限的尺寸续跑、视觉返工和首次交付候补晋级，Leader 不重复创建这些任务；
-除此之外只有用户明确操作才 retry failed。已有 active revision 始终继续在线，未通过的 staging revision 不能覆盖它。
+超出平台补偿范围或达到重试上限后，只有用户明确操作才 retry failed。已有 active revision 始终继续在线，未通过的 staging revision 不能覆盖它。
 
 Issue 只记录订单启动、可交付 Variant、需要用户决定的真实阻塞和整单完成。过程证据写领域对象与 task。
 整单所有 Variant completed 后才将 Issue 设为 done 并通知创建人；否则保持 todo。候选、文案、变体、成图、

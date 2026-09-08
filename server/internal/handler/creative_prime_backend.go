@@ -267,7 +267,7 @@ WHERE variant.id = $1 AND order_row.id = $2 AND order_row.workspace_id = $3
 		return false, nil
 	}
 
-	primed, primedComplete, err := h.creativePrimePackageComplete(ctx, variantID, revision, compositionSizes)
+	primed, primedComplete, err := h.creativePrimePackageComplete(ctx, h.DB, variantID, revision, compositionSizes)
 	if err != nil {
 		return false, err
 	}
@@ -278,7 +278,7 @@ WHERE variant.id = $1 AND order_row.id = $2 AND order_row.workspace_id = $3
 		return false, &creativePrimeImmutableRevisionError{message: "active creative revision has an incomplete immutable Prime package"}
 	}
 	if primedComplete && !force {
-		missingProcess, processErr := h.creativePrimeProcessEvidenceMissing(ctx, variantID, revision, compositionSizes)
+		missingProcess, processErr := h.creativePrimeProcessEvidenceMissing(ctx, h.DB, variantID, revision, compositionSizes)
 		if processErr != nil {
 			return false, processErr
 		}
@@ -412,7 +412,7 @@ WHERE id = $1 AND revision = $2
 	}
 	for _, size := range compositionSizes {
 		asset := generatedBySize[size]
-		data, downloadErr := h.readCreativePrimeAttachment(ctx, workspaceID, asset.AttachmentID)
+		data, downloadErr := h.readCreativePrimeAttachment(ctx, h.DB, workspaceID, asset.AttachmentID)
 		if downloadErr != nil {
 			return false, fmt.Errorf("load generated %s base: %w", size, downloadErr)
 		}
@@ -939,8 +939,8 @@ func (h *Handler) loadCreativePrimeGeneratedAssets(ctx context.Context, variantI
 	return loadCreativePrimeGeneratedAssetsWithQuerier(ctx, h.DB, variantID, revision, expectedSizes)
 }
 
-func (h *Handler) creativePrimePackageComplete(ctx context.Context, variantID pgtype.UUID, revision int, expectedSizes []string) ([]pgtype.UUID, bool, error) {
-	rows, err := h.DB.Query(ctx, `
+func (h *Handler) creativePrimePackageComplete(ctx context.Context, q dbExecutor, variantID pgtype.UUID, revision int, expectedSizes []string) ([]pgtype.UUID, bool, error) {
+	rows, err := q.Query(ctx, `
 SELECT attachment_id, size_key
 FROM creative_order_asset
 WHERE variant_id = $1 AND revision = $2 AND stage = 'primed' AND status = 'completed'
@@ -967,8 +967,8 @@ WHERE variant_id = $1 AND revision = $2 AND stage = 'primed' AND status = 'compl
 	return attachments, creativeSizesMatchExpected(sizes, expectedSizes), nil
 }
 
-func (h *Handler) creativeProcessEvidenceMissing(ctx context.Context, variantID pgtype.UUID, revision int, expectedSizes []string, workflow string, requiredLabels []string) ([]string, error) {
-	rows, err := h.DB.Query(ctx, `
+func (h *Handler) creativeProcessEvidenceMissing(ctx context.Context, q dbExecutor, variantID pgtype.UUID, revision int, expectedSizes []string, workflow string, requiredLabels []string) ([]string, error) {
+	rows, err := q.Query(ctx, `
 SELECT size_key, label
 FROM creative_order_diagnostic_asset
 WHERE variant_id = $1
@@ -1004,20 +1004,20 @@ WHERE variant_id = $1
 	return missing, nil
 }
 
-func (h *Handler) creativePrimeProcessEvidenceMissing(ctx context.Context, variantID pgtype.UUID, revision int, expectedSizes []string) ([]string, error) {
-	productionMissing, err := h.creativeProcessEvidenceMissing(ctx, variantID, revision, expectedSizes, "creative_production", creativeProductionProcessLabels)
+func (h *Handler) creativePrimeProcessEvidenceMissing(ctx context.Context, q dbExecutor, variantID pgtype.UUID, revision int, expectedSizes []string) ([]string, error) {
+	productionMissing, err := h.creativeProcessEvidenceMissing(ctx, q, variantID, revision, expectedSizes, "creative_production", creativeProductionProcessLabels)
 	if err != nil {
 		return nil, err
 	}
-	compositionMissing, err := h.creativeProcessEvidenceMissing(ctx, variantID, revision, expectedSizes, "brand_components", creativePrimeCompositionProcessLabels)
+	compositionMissing, err := h.creativeProcessEvidenceMissing(ctx, q, variantID, revision, expectedSizes, "brand_components", creativePrimeCompositionProcessLabels)
 	if err != nil {
 		return nil, err
 	}
 	return append(productionMissing, compositionMissing...), nil
 }
 
-func (h *Handler) loadCreativePrimeAttachment(ctx context.Context, workspaceID, attachmentID pgtype.UUID) (db.Attachment, string, error) {
-	attachment, err := h.Queries.GetAttachmentByIDOnly(ctx, attachmentID)
+func (h *Handler) loadCreativePrimeAttachment(ctx context.Context, q dbExecutor, workspaceID, attachmentID pgtype.UUID) (db.Attachment, string, error) {
+	attachment, err := db.New(q).GetAttachmentByIDOnly(ctx, attachmentID)
 	if err != nil || attachment.WorkspaceID != workspaceID {
 		return db.Attachment{}, "", errors.New("attachment is unavailable")
 	}
@@ -1028,8 +1028,8 @@ func (h *Handler) loadCreativePrimeAttachment(ctx context.Context, workspaceID, 
 	return attachment, key, nil
 }
 
-func (h *Handler) readCreativePrimeAttachment(ctx context.Context, workspaceID, attachmentID pgtype.UUID) ([]byte, error) {
-	_, key, err := h.loadCreativePrimeAttachment(ctx, workspaceID, attachmentID)
+func (h *Handler) readCreativePrimeAttachment(ctx context.Context, q dbExecutor, workspaceID, attachmentID pgtype.UUID) ([]byte, error) {
+	_, key, err := h.loadCreativePrimeAttachment(ctx, q, workspaceID, attachmentID)
 	if err != nil {
 		return nil, err
 	}
@@ -1037,7 +1037,7 @@ func (h *Handler) readCreativePrimeAttachment(ctx context.Context, workspaceID, 
 }
 
 func (h *Handler) readCreativePrimeTemplateAttachment(ctx context.Context, workspaceID, attachmentID pgtype.UUID) ([]byte, error) {
-	attachment, key, err := h.loadCreativePrimeAttachment(ctx, workspaceID, attachmentID)
+	attachment, key, err := h.loadCreativePrimeAttachment(ctx, h.DB, workspaceID, attachmentID)
 	if err != nil {
 		return nil, err
 	}
@@ -1246,7 +1246,7 @@ FOR UPDATE OF variant
 	if err != nil {
 		return err
 	}
-	_, complete, err := h.creativePrimePackageComplete(ctx, variantID, revision, expectedSizes)
+	_, complete, err := h.creativePrimePackageComplete(ctx, tx, variantID, revision, expectedSizes)
 	if err != nil {
 		return err
 	}
@@ -1269,7 +1269,7 @@ FOR UPDATE OF variant
 		}
 		return nil
 	}
-	missingProcess, err := h.creativePrimeProcessEvidenceMissing(ctx, variantID, revision, qcSizes)
+	missingProcess, err := h.creativePrimeProcessEvidenceMissing(ctx, tx, variantID, revision, qcSizes)
 	if err != nil {
 		return err
 	}

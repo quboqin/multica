@@ -649,25 +649,27 @@ WITH current_variants AS (
   JOIN creative_order_item item ON item.id = variant.order_item_id
   JOIN creative_order order_row ON order_row.id = item.order_id
   WHERE order_row.workspace_id = $1
-), production_progress AS (
+), asset_progress AS (
   SELECT
     variant.id,
     count(DISTINCT asset.size_key) FILTER (
       WHERE asset.stage = 'generated'
         AND asset.status = 'completed'
         AND asset.attachment_id IS NOT NULL
-    ) AS completed_size_count,
-    COALESCE(bool_or(task.id IS NOT NULL AND task.completed_at IS NULL), false) AS has_active_task,
-    COALESCE(bool_or(task.id IS NOT NULL AND task.completed_at IS NOT NULL), false) AS has_terminal_task
+    ) AS completed_size_count
   FROM current_variants variant
   LEFT JOIN creative_order_asset asset
     ON asset.variant_id = variant.id
    AND asset.revision = variant.revision
-  LEFT JOIN agent_task_queue task
-    ON task.context->>'workflow' = 'creative_production'
-   AND task.context->>'variant_id' = variant.id::text
-   AND task.context->>'revision' = variant.revision::text
   GROUP BY variant.id
+), task_progress AS (
+  SELECT v.id,bool_or(t.completed_at IS NULL) AS has_active_task,bool_or(t.completed_at IS NOT NULL) AS has_terminal_task
+  FROM current_variants v JOIN creative_task_binding b ON b.variant_id=v.id AND b.revision=v.revision AND b.workflow='creative_production'
+  JOIN agent_task_queue t ON t.id=b.task_id GROUP BY v.id
+), production_progress AS (
+  SELECT a.id,a.completed_size_count,COALESCE(t.has_active_task,false) AS has_active_task,
+    COALESCE(t.has_terminal_task,false) AS has_terminal_task
+  FROM asset_progress a LEFT JOIN task_progress t ON t.id=a.id
 )
 SELECT
   count(*) FILTER (WHERE has_terminal_task AND NOT has_active_task AND completed_size_count = 3),
@@ -735,6 +737,8 @@ WITH first_generated_asset AS (
    AND asset.status = 'completed'
    AND asset.attachment_id IS NOT NULL
    AND asset.size_key IN ('1080x1080', '1200x628', '800x1000')
+  JOIN creative_order_item scoped_item ON scoped_item.id=variant.order_item_id
+  JOIN creative_order scoped_order ON scoped_order.id=scoped_item.order_id AND scoped_order.workspace_id=$1
   GROUP BY variant.order_item_id, variant.id, asset.size_key
 ),
 generated_packages AS (
@@ -777,70 +781,41 @@ func (h *Handler) creativeInitialGeneratedPackageDuration(ctx context.Context, w
 // a final visual QC verdict. Generated-count metrics are kept
 // separate so an incomplete or blocked package cannot look successful.
 func (h *Handler) creativeThreeSizeQCMetrics(ctx context.Context, workspaceID pgtype.UUID) (int, int, error) {
-	rows, err := h.DB.Query(ctx, `
-SELECT variant.id, variant.revision, variant.status,
-       order_row.trigger_evidence_kind, order_row.input_snapshot::text, variant.brief::text
-FROM creative_order_variant variant
-JOIN creative_order_item item ON item.id = variant.order_item_id
-JOIN creative_order order_row ON order_row.id = item.order_id
-WHERE order_row.workspace_id = $1
-`, workspaceID)
+	rows, err := h.DB.Query(ctx, `SELECT v.status,o.trigger_evidence_kind,o.input_snapshot::text,v.brief::text,
+ stats.delivered_count,stats.activity_count,stats.report_count,stats.visual_status
+FROM creative_order_variant v JOIN creative_order_item i ON i.id=v.order_item_id JOIN creative_order o ON o.id=i.order_id
+LEFT JOIN LATERAL (
+ SELECT count(DISTINCT a.size_key) FILTER(WHERE a.stage='delivered' AND a.status='completed' AND a.attachment_id IS NOT NULL) AS delivered_count,
+ count(a.id) AS activity_count,count(r.id) AS report_count,COALESCE(max(r.status) FILTER(WHERE r.lane='visual'),'') AS visual_status
+ FROM creative_order_asset a LEFT JOIN creative_order_qc_report r ON r.variant_id=a.variant_id AND r.revision=a.revision
+ AND r.attempt=COALESCE((SELECT max(attempt) FROM creative_order_variant_qc_resolution WHERE variant_id=a.variant_id AND revision=a.revision),
+ (SELECT max(attempt) FROM creative_order_qc_report WHERE variant_id=a.variant_id AND revision=a.revision),1)
+ WHERE a.variant_id=v.id AND a.revision=v.revision
+) stats ON true WHERE o.workspace_id=$1`, workspaceID)
 	if err != nil {
 		return 0, 0, err
 	}
 	defer rows.Close()
 	success, total := 0, 0
 	for rows.Next() {
-		var variantID pgtype.UUID
-		var revision int
-		var status, triggerKind, inputSnapshot, brief string
-		if err := rows.Scan(&variantID, &revision, &status, &triggerKind, &inputSnapshot, &brief); err != nil {
+		var status, triggerKind, snapshot, brief, visualStatus string
+		var delivered, activity, reports int
+		if err := rows.Scan(&status, &triggerKind, &snapshot, &brief, &delivered, &activity, &reports, &visualStatus); err != nil {
 			return 0, 0, err
 		}
-		expected, expectedErr := expectedCreativeVariantSizes(triggerKind, json.RawMessage(inputSnapshot), json.RawMessage(brief))
-		if expectedErr != nil || !creativeSizesMatchExpected(map[string]struct{}{
-			"1080x1080": {}, "1200x628": {}, "800x1000": {},
-		}, expected) {
+		expected, err := expectedCreativeVariantSizes(triggerKind, json.RawMessage(snapshot), json.RawMessage(brief))
+		if err != nil || !creativeSizesMatchExpected(map[string]struct{}{"1080x1080": {}, "1200x628": {}, "800x1000": {}}, expected) {
 			continue
 		}
-		var deliveredCount, activityCount, reportCount int
-		var visualStatus string
-		if err := h.DB.QueryRow(ctx, `
-SELECT
-  count(DISTINCT asset.size_key) FILTER (
-    WHERE asset.stage = 'delivered' AND asset.status = 'completed' AND asset.attachment_id IS NOT NULL
-  ),
-  count(asset.id),
-  count(report.id),
-  COALESCE(max(report.status) FILTER (WHERE report.lane = 'visual'), '')
-FROM creative_order_asset asset
-LEFT JOIN creative_order_qc_report report
-  ON report.variant_id = asset.variant_id AND report.revision = asset.revision
- AND report.attempt = COALESCE(
-   (SELECT max(resolution.attempt)
-    FROM creative_order_variant_qc_resolution resolution
-    WHERE resolution.variant_id = asset.variant_id AND resolution.revision = asset.revision),
-   (SELECT max(latest_report.attempt)
-    FROM creative_order_qc_report latest_report
-    WHERE latest_report.variant_id = asset.variant_id AND latest_report.revision = asset.revision),
-   1
- )
-WHERE asset.variant_id = $1 AND asset.revision = $2
-`, variantID, revision).Scan(&deliveredCount, &activityCount, &reportCount, &visualStatus); err != nil {
-			return 0, 0, err
-		}
-		if status == "queued" && activityCount == 0 && reportCount == 0 {
+		if status == "queued" && activity == 0 && reports == 0 {
 			continue
 		}
 		total++
-		if deliveredCount == len(standardCreativeAssetSizes) && creativeQCStatusAllowsAdoption(visualStatus) {
+		if delivered == len(standardCreativeAssetSizes) && creativeQCStatusAllowsAdoption(visualStatus) {
 			success++
 		}
 	}
-	if err := rows.Err(); err != nil {
-		return 0, 0, err
-	}
-	return success, total, nil
+	return success, total, rows.Err()
 }
 
 func (h *Handler) creativeFeedbackWorkspaceUser(w http.ResponseWriter, r *http.Request) (pgtype.UUID, pgtype.UUID, bool) {

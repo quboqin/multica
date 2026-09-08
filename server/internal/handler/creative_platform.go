@@ -1659,7 +1659,7 @@ ORDER BY created_at
 }
 
 func (h *Handler) buildCreativeIssueSnapshot(ctx context.Context, workspaceID, marketPackID, squadID pgtype.UUID) (json.RawMessage, error) {
-	marketPack, err := h.loadPublishedCreativeResource(ctx, workspaceID, marketPackID, "market_pack")
+	marketPack, err := loadPublishedCreativeResource(ctx, h.DB, workspaceID, marketPackID, "market_pack")
 	if err != nil {
 		return nil, errors.New("market pack must have a published version")
 	}
@@ -1694,7 +1694,7 @@ WHERE id = $1 AND workspace_id = $2 AND archived_at IS NULL
 			if parseErr != nil {
 				return nil, errors.New("market pack copy library is invalid")
 			}
-			library, loadErr := h.loadPublishedCreativeResource(ctx, workspaceID, parsed, "copy_library")
+			library, loadErr := loadPublishedCreativeResource(ctx, h.DB, workspaceID, parsed, "copy_library")
 			if loadErr != nil {
 				return nil, errors.New("market pack copy library must have a published version")
 			}
@@ -1764,8 +1764,8 @@ func (h *Handler) buildCreativeAgentSnapshot(ctx context.Context, agentID pgtype
 	}, nil
 }
 
-func (h *Handler) loadPublishedCreativeResource(ctx context.Context, workspaceID, resourceID pgtype.UUID, kind string) (creativeResourceResponse, error) {
-	return scanCreativeResource(h.DB.QueryRow(ctx, `
+func loadPublishedCreativeResource(ctx context.Context, q dbExecutor, workspaceID, resourceID pgtype.UUID, kind string) (creativeResourceResponse, error) {
+	return scanCreativeResource(q.QueryRow(ctx, `
 SELECT r.id::text, r.workspace_id::text, r.kind, rr.name, rr.description, r.status,
        rr.version, rr.version, rr.config::text, r.created_by::text,
        r.created_at::text, rr.created_at::text
@@ -1779,13 +1779,14 @@ WHERE r.id = $1 AND r.workspace_id = $2 AND r.kind = $3
 
 func (h *Handler) loadCreativeResourceFiles(ctx context.Context, workspaceID, resourceID pgtype.UUID, version int) ([]creativeResourceFileResponse, error) {
 	rows, err := h.DB.Query(ctx, `
-SELECT id::text, resource_id::text, attachment_id::text, role, label, metadata::text,
-       created_version, created_at::text
-FROM creative_resource_file
-WHERE resource_id = $1 AND workspace_id = $2
-  AND (($3 = 0 AND removed_version IS NULL)
-    OR ($3 > 0 AND created_version <= $3 AND (removed_version IS NULL OR removed_version > $3)))
-ORDER BY role, created_at
+SELECT f.id::text, f.resource_id::text, f.attachment_id::text, f.role, f.label, f.metadata::text,
+       f.created_version, f.created_at::text, to_jsonb(a)
+FROM creative_resource_file f
+LEFT JOIN attachment a ON a.id=f.attachment_id AND a.workspace_id=f.workspace_id
+WHERE f.resource_id = $1 AND f.workspace_id = $2
+  AND (($3 = 0 AND f.removed_version IS NULL)
+    OR ($3 > 0 AND f.created_version <= $3 AND (f.removed_version IS NULL OR f.removed_version > $3)))
+ORDER BY f.role, f.created_at
 `, resourceID, workspaceID, version)
 	if err != nil {
 		return nil, err
@@ -1795,19 +1796,16 @@ ORDER BY role, created_at
 	for rows.Next() {
 		var file creativeResourceFileResponse
 		var metadata string
+		var attachmentRaw []byte
 		if err := rows.Scan(
 			&file.ID, &file.ResourceID, &file.AttachmentID, &file.Role, &file.Label,
-			&metadata, &file.CreatedVersion, &file.CreatedAt,
+			&metadata, &file.CreatedVersion, &file.CreatedAt, &attachmentRaw,
 		); err != nil {
 			return nil, err
 		}
 		file.Metadata = json.RawMessage(metadata)
-		attachmentID, err := parseUUIDString(file.AttachmentID)
-		if err != nil {
-			return nil, err
-		}
-		attachment, err := h.Queries.GetAttachmentByIDOnly(ctx, attachmentID)
-		if err != nil || attachment.WorkspaceID != workspaceID {
+		var attachment db.Attachment
+		if json.Unmarshal(attachmentRaw, &attachment) != nil || !attachment.ID.Valid || attachment.WorkspaceID != workspaceID {
 			return nil, errors.New("market resource attachment is unavailable")
 		}
 		attachmentResponse := h.attachmentToResponse(attachment)

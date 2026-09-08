@@ -29,11 +29,16 @@ allowed-tools: Bash(multica *), Bash(powershell *)
 
 ## 证据顺序
 
-1. 读取当前订单 JSON，确认 order item、variant、revision、status、assets、QC report、workflow_failures。
+1. 读取当前订单 JSON，确认 order item、variant、revision、status、assets、QC report、workflow_failures 和 `recoveries`。
 2. 用 `multica task by-source list` 按目标 Agent、source kind/ref 查看 active、failed、succeeded task。
 3. 用 `multica daemon status --output json` 确认当前 daemon 是否在线、active_task_count 是否匹配。
 4. 需要时读取对应 Skill 的持久化内容和 config version，确认运行时用的是平台快照而不是源文件草稿。
 5. 只把当前 revision 的领域对象当作当前事实；旧 revision 只能作为历史证据。
+
+`recoveries` 按 item、variant、revision、stage、size_key 定位补偿；检查 reason_code、attempt/max_attempts、next_retry_at、
+last_error、source_task_id、result_task_id、resolved_asset_id 及 attempts。`waiting` 先核对已有任务和模型调用，不能重复派发；
+`manual_required` 给出对应配置、凭证、质检或预算原因。补偿记录的 `queued` 只证明恢复任务已派发，不证明图片完成。
+未完成订单可能只是等待采用；候补未扩尺寸也不是卡单。平台从订单逐层自动续接缺失步骤，诊断智能体不与补偿 job 抢同一任务。
 
 ## 受控恢复
 

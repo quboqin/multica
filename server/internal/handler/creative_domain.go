@@ -83,6 +83,7 @@ type creativeOrderInput struct {
 const maxCreativeOrderDirectionLength = 16_000
 
 type creativeOrderResponse struct {
+	Recoveries               []creativeOrderRecoveryResponse        `json:"recoveries,omitempty"`
 	ID                       string                                 `json:"id"`
 	WorkspaceID              string                                 `json:"workspace_id"`
 	IssueID                  string                                 `json:"issue_id"`
@@ -149,21 +150,22 @@ type creativeOrderQCContextResponse struct {
 }
 
 type creativeOrderItemResponse struct {
-	SourceKind       string                         `json:"source_kind"`
-	CopyLibraryID    string                         `json:"copy_library_id"`
-	ID               string                         `json:"id"`
-	OrderID          string                         `json:"order_id"`
-	CandidateID      string                         `json:"candidate_id"`
-	SourceAnalysisID string                         `json:"source_analysis_id"`
-	CopySnapshot     json.RawMessage                `json:"copy_snapshot"`
-	Direction        string                         `json:"direction"`
-	Status           string                         `json:"status"`
-	AdoptedVariantID string                         `json:"adopted_variant_id"`
-	AdoptedAt        string                         `json:"adopted_at"`
-	AdoptedBy        string                         `json:"adopted_by"`
-	CreatedAt        string                         `json:"created_at"`
-	UpdatedAt        string                         `json:"updated_at"`
-	Variants         []creativeOrderVariantResponse `json:"variants,omitempty"`
+	CandidateProgress *creativeCandidateProgress     `json:"candidate_progress,omitempty"`
+	SourceKind        string                         `json:"source_kind"`
+	CopyLibraryID     string                         `json:"copy_library_id"`
+	ID                string                         `json:"id"`
+	OrderID           string                         `json:"order_id"`
+	CandidateID       string                         `json:"candidate_id"`
+	SourceAnalysisID  string                         `json:"source_analysis_id"`
+	CopySnapshot      json.RawMessage                `json:"copy_snapshot"`
+	Direction         string                         `json:"direction"`
+	Status            string                         `json:"status"`
+	AdoptedVariantID  string                         `json:"adopted_variant_id"`
+	AdoptedAt         string                         `json:"adopted_at"`
+	AdoptedBy         string                         `json:"adopted_by"`
+	CreatedAt         string                         `json:"created_at"`
+	UpdatedAt         string                         `json:"updated_at"`
+	Variants          []creativeOrderVariantResponse `json:"variants,omitempty"`
 }
 
 type creativeOrderVariantResponse struct {
@@ -611,11 +613,11 @@ FROM creative_order WHERE id = $1`, parseUUID(existingID)))
 		}
 		return
 	}
-	if err := h.freezeCreativeCopyLibraryOrder(r.Context(), workspaceID, &input); err != nil {
+	if err := freezeCreativeCopyLibraryOrder(r.Context(), tx, workspaceID, &input); err != nil {
 		writeError(w, http.StatusUnprocessableEntity, err.Error())
 		return
 	}
-	if err := h.validateCustomCreativeOrderCopyFacts(r.Context(), workspaceID, input.InputSnapshot, input.Items); err != nil {
+	if err := validateCustomCreativeOrderCopyFacts(r.Context(), tx, workspaceID, input.InputSnapshot, input.Items); err != nil {
 		writeError(w, http.StatusUnprocessableEntity, err.Error())
 		return
 	}
@@ -915,7 +917,7 @@ type creativeOrderCopySnapshot struct {
 	PreAdaptation  creativeOrderCopySnapshotPreAdaptation `json:"pre_adaptation"`
 }
 
-func (h *Handler) validateCustomCreativeOrderCopyFacts(ctx context.Context, workspaceID pgtype.UUID, inputSnapshot json.RawMessage, items []creativeOrderItemInput) error {
+func validateCustomCreativeOrderCopyFacts(ctx context.Context, q dbExecutor, workspaceID pgtype.UUID, inputSnapshot json.RawMessage, items []creativeOrderItemInput) error {
 	snapshots := make([]creativeOrderCopySnapshot, 0, len(items))
 	requiresLibrary := false
 	for index, item := range items {
@@ -951,7 +953,7 @@ func (h *Handler) validateCustomCreativeOrderCopyFacts(ctx context.Context, work
 	if err != nil {
 		return err
 	}
-	library, err := h.loadPublishedCreativeResource(ctx, workspaceID, libraryID, "copy_library")
+	library, err := loadPublishedCreativeResource(ctx, q, workspaceID, libraryID, "copy_library")
 	if err != nil {
 		return errors.New("creative order requires the market pack to bind a published copy library")
 	}
@@ -1295,16 +1297,32 @@ FROM creative_order WHERE workspace_id = $1 ORDER BY created_at DESC, id DESC LI
 			writeError(w, http.StatusInternalServerError, "failed to read creative orders")
 			return
 		}
-		if err := h.loadCreativeOrderWorkflowState(r, &order); err != nil {
-			writeError(w, http.StatusInternalServerError, "failed to derive creative order status")
-			return
-		}
-		order.Items, err = h.listCreativeOrderListItems(r, parseUUID(order.ID))
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, "failed to load creative order list summary")
-			return
-		}
 		orders = append(orders, order)
+	}
+	if err := rows.Err(); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to read creative orders")
+		return
+	}
+	rows.Close()
+	if err := h.loadCreativeOrderWorkflowStates(r.Context(), orders); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to derive creative order status")
+		return
+	}
+	ids := make([]pgtype.UUID, 0, len(orders))
+	for _, order := range orders {
+		ids = append(ids, parseUUID(order.ID))
+	}
+	items, err := h.listCreativeOrderListItemsBatch(r, ids)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to load creative order list summary")
+		return
+	}
+	byOrder := make(map[string][]creativeOrderItemResponse)
+	for _, item := range items {
+		byOrder[item.OrderID] = append(byOrder[item.OrderID], item)
+	}
+	for i := range orders {
+		orders[i].Items = byOrder[orders[i].ID]
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"orders": orders})
 }
@@ -1338,6 +1356,11 @@ FROM creative_order WHERE id = $1 AND workspace_id = $2
 	order.Items, err = h.listCreativeOrderItems(r, orderID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to load creative order items")
+		return
+	}
+	order.Recoveries, err = h.listCreativeOrderRecoveries(r.Context(), orderID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to load creative recovery history")
 		return
 	}
 	writeJSON(w, http.StatusOK, order)
@@ -7411,7 +7434,7 @@ WHERE asset.variant_id = $1
 		return fmt.Errorf("count creative production assets: %w", err)
 	}
 	if completedCount >= len(expectedSizes) {
-		missingProcess, err := h.creativeProcessEvidenceMissing(ctx, variantUUID, taskContext.Revision, expectedSizes, "creative_production", creativeProductionProcessLabels)
+		missingProcess, err := h.creativeProcessEvidenceMissing(ctx, h.DB, variantUUID, taskContext.Revision, expectedSizes, "creative_production", creativeProductionProcessLabels)
 		if err != nil {
 			return err
 		}
@@ -8035,378 +8058,49 @@ func (h *Handler) derivedCreativeOrderStatus(r *http.Request, orderID pgtype.UUI
 }
 
 func (h *Handler) loadCreativeOrderWorkflowState(r *http.Request, order *creativeOrderResponse) error {
-	orderID := parseUUID(order.ID)
-	failures, err := h.listCreativeOrderWorkflowFailures(r, orderID)
-	if err != nil {
+	if len(order.InputSnapshot) == 0 {
+		var snapshot string
+		if err := h.DB.QueryRow(r.Context(), `SELECT input_snapshot::text FROM creative_order WHERE id=$1`, parseUUID(order.ID)).Scan(&snapshot); err != nil {
+			return err
+		}
+		order.InputSnapshot = json.RawMessage(snapshot)
+	}
+	values := []creativeOrderResponse{*order}
+	if err := h.loadCreativeOrderWorkflowStates(r.Context(), values); err != nil {
 		return err
 	}
-	productionStatus, err := h.derivedCreativeOrderStatusWithFailures(r, orderID, len(failures) > 0)
-	if err != nil {
-		return err
-	}
-	deliveryStatus, err := h.derivedCreativeOrderDeliveryStatus(r.Context(), orderID)
-	if err != nil {
-		return err
-	}
-	status := productionStatus
-	if deliveryStatus == "completed" || deliveryStatus == "awaiting_adoption" {
-		status = deliveryStatus
-	} else if deliveryStatus == "partial" && productionStatus == "completed" {
-		status = "partial"
-	}
-	order.WorkflowFailures = failures
-	order.DerivedStatus = status
-	order.DeliveryStatus = deliveryStatus
-	order.ProductionStatus = productionStatus
+	*order = values[0]
 	return nil
 }
 
 func (h *Handler) derivedCreativeOrderDeliveryStatus(ctx context.Context, orderID pgtype.UUID) (string, error) {
-	counts, err := loadCreativeOrderVariantCounts(ctx, h.DB, orderID, pgtype.UUID{})
-	if err != nil {
+	var snapshot string
+	if err := h.DB.QueryRow(ctx, "SELECT input_snapshot::text FROM creative_order WHERE id=$1", orderID).Scan(&snapshot); err != nil {
 		return "", err
 	}
-	var status string
-	err = h.DB.QueryRow(ctx, `
-WITH item_delivery AS (
-  SELECT item.id,
-    item.adopted_variant_id IS NOT NULL AS adopted,
-    bool_or(variant.candidate_state <> 'selected' OR variant.selection_rank IS NOT NULL) AS candidate_pipeline,
-    count(*) FILTER (WHERE variant.candidate_state = 'selected') AS selected_count,
-    count(*) FILTER (WHERE variant.candidate_state = 'selected' AND variant.active_revision IS NOT NULL) AS active_reference_count,
-    count(*) FILTER (
-      WHERE variant.candidate_state = 'selected'
-        AND variant.active_revision IS NOT NULL
-        AND EXISTS (
-          SELECT 1
-          FROM creative_order_variant_revision active_revision
-          WHERE active_revision.variant_id = variant.id
-            AND active_revision.revision = variant.active_revision
-            AND (
-              SELECT count(DISTINCT asset.size_key)
-              FROM creative_order_asset asset
-              WHERE asset.variant_id = variant.id
-                AND asset.revision = active_revision.revision
-                AND asset.stage = 'delivered'
-                AND asset.status = 'completed'
-                AND asset.attachment_id IS NOT NULL
-                AND asset.size_key = ANY(active_revision.expected_sizes)
-            ) = cardinality(active_revision.expected_sizes)
-        )
-    ) AS active_selected_count
-  FROM creative_order_item item
-  LEFT JOIN creative_order_variant variant ON variant.order_item_id = item.id
-  WHERE item.order_id = $1
-  GROUP BY item.id, item.adopted_variant_id
-), aggregate AS (
-  SELECT order_row.status AS order_status,
-    order_row.trigger_evidence_kind,
-    count(item_delivery.id) AS item_total,
-    count(*) FILTER (WHERE item_delivery.adopted) AS adopted_items,
-    count(*) FILTER (WHERE item_delivery.active_selected_count > 0) AS items_with_delivery,
-    count(*) FILTER (WHERE item_delivery.active_reference_count > item_delivery.active_selected_count) AS incomplete_active_items,
-    count(*) FILTER (WHERE CASE
-      WHEN item_delivery.candidate_pipeline THEN item_delivery.selected_count = $2 AND item_delivery.active_selected_count = $2
-      ELSE item_delivery.active_selected_count > 0
-    END) AS ready_items
-  FROM creative_order order_row
-  LEFT JOIN item_delivery ON true
-  WHERE order_row.id = $1
-  GROUP BY order_row.status, order_row.trigger_evidence_kind
-)
-SELECT CASE
-  WHEN order_status = 'cancelled' THEN 'cancelled'
-  WHEN item_total > 0 AND adopted_items = item_total AND ready_items = item_total THEN 'completed'
-  WHEN item_total > 0 AND ready_items = item_total AND trigger_evidence_kind = 'creative_direct_edit' THEN 'completed'
-  WHEN item_total > 0 AND ready_items = item_total THEN 'awaiting_adoption'
-  WHEN ready_items > 0 OR incomplete_active_items > 0 OR items_with_delivery > 0 THEN 'partial'
-  ELSE 'pending'
-END
-FROM aggregate
-`, orderID, counts.Target).Scan(&status)
-	return status, err
+	values, err := h.creativeOrderDeliveryBatch(ctx, []creativeOrderResponse{{ID: uuidToString(orderID), InputSnapshot: json.RawMessage(snapshot)}})
+	return values[uuidToString(orderID)], err
 }
 
 func (h *Handler) listCreativeOrderWorkflowFailures(r *http.Request, orderID pgtype.UUID) ([]creativeOrderWorkflowFailureResponse, error) {
-	rows, err := h.DB.Query(r.Context(), `
-WITH ranked AS (
-  SELECT q.*,
-    CASE
-      WHEN jsonb_typeof(q.context->'expected_sizes') = 'array'
-        AND jsonb_array_length(q.context->'expected_sizes') > 0
-      THEN q.context->'expected_sizes'
-      ELSE '["1080x1080","1200x628","800x1000"]'::jsonb
-    END AS workflow_expected_sizes,
-    row_number() OVER (
-      PARTITION BY q.agent_id,
-        COALESCE(q.trigger_evidence_kind, ''),
-        COALESCE(q.trigger_evidence_ref_id::text, ''),
-        COALESCE(q.context->>'item_key', '')
-      ORDER BY q.created_at DESC, q.id DESC
-    ) AS row_number
-  FROM agent_task_queue q
-  JOIN agent a ON a.id = q.agent_id
-  JOIN creative_order o ON o.id = $1 AND o.workspace_id = a.workspace_id
-  WHERE q.context->>'type' = 'creative_domain_task'
-    AND COALESCE(q.context->>'superseded_by_process_result', 'false') <> 'true'
-    AND (
-      q.context->>'creative_order_id' = o.id::text
-      OR (
-        q.trigger_evidence_ref_id = o.id
-        AND NULLIF(q.context->>'variant_id', '') IS NOT NULL
-        AND EXISTS (
-          SELECT 1
-          FROM creative_order_variant linked_variant
-          JOIN creative_order_item linked_item ON linked_item.id = linked_variant.order_item_id
-          WHERE linked_variant.id::text = q.context->>'variant_id'
-            AND linked_item.order_id = o.id
-        )
-      )
-    )
-)
-SELECT id::text,
-  agent_id::text,
-  COALESCE(context->>'workflow', ''),
-  COALESCE(NULLIF(context->>'scope', ''),
-    CASE
-      WHEN NULLIF(context->>'variant_id', '') IS NOT NULL THEN 'variant'
-      WHEN NULLIF(context->>'creative_order_item_id', '') IS NOT NULL THEN 'order_item'
-      ELSE 'order'
-    END),
-  COALESCE(NULLIF(context->>'subject_id', ''),
-    CASE COALESCE(NULLIF(context->>'scope', ''),
-      CASE
-        WHEN NULLIF(context->>'variant_id', '') IS NOT NULL THEN 'variant'
-        WHEN NULLIF(context->>'creative_order_item_id', '') IS NOT NULL THEN 'order_item'
-        ELSE 'order'
-      END)
-      WHEN 'variant' THEN NULLIF(context->>'variant_id', '')
-      WHEN 'order_item' THEN NULLIF(context->>'creative_order_item_id', '')
-      WHEN 'order' THEN NULLIF(context->>'creative_order_id', '')
-      ELSE NULL
-    END,
-    NULLIF(context->>'variant_id', ''),
-    NULLIF(context->>'creative_order_item_id', ''),
-    NULLIF(context->>'creative_order_id', ''),
-    COALESCE(trigger_evidence_ref_id::text, '')),
-  COALESCE(context->>'item_key', ''),
-  COALESCE(trigger_evidence_kind, ''),
-  COALESCE(trigger_evidence_ref_id::text, ''),
-  CASE
-    WHEN status = 'completed' THEN 'agent_reported_action_required'
-    ELSE COALESCE(NULLIF(failure_reason, ''), 'agent_error')
-  END,
-  CASE
-    WHEN status = 'completed' THEN COALESCE((
-      SELECT message.content
-      FROM task_message message
-      WHERE message.task_id = ranked.id
-        AND message.type = 'text'
-        AND btrim(message.content) <> ''
-      ORDER BY message.seq DESC, message.id DESC
-      LIMIT 1
-    ), '')
-    ELSE COALESCE(error, '')
-  END,
-  COALESCE(completed_at, created_at)::text,
-  (
-    attempt < max_attempts
-    OR (
-      trigger_evidence_kind = 'creative_order_item_production'
-      AND context->>'workflow' = 'creative_production'
-      AND attempt < 5
-    )
-  )
-FROM ranked
-WHERE row_number = 1
-AND (
-  NULLIF(context->>'variant_id', '') IS NULL
-  OR EXISTS (
-    SELECT 1
-    FROM creative_order_variant variant
-    JOIN creative_order_item item ON item.id = variant.order_item_id
-    WHERE variant.id::text = context->>'variant_id'
-      AND item.order_id = $1
-      AND COALESCE(NULLIF(NULLIF(context->>'revision', '')::int, 0), variant.revision) = variant.revision
-  )
-)
-AND (
-  status = 'failed'
-  OR (
-    status = 'completed'
-    AND NULLIF(context->>'variant_id', '') IS NOT NULL
-    AND EXISTS(
-      SELECT 1
-      FROM creative_order_variant variant
-      JOIN creative_order_item item ON item.id = variant.order_item_id
-      WHERE variant.id::text = context->>'variant_id'
-        AND item.order_id = $1
-        AND variant.status NOT IN ('completed', 'cancelled')
-        AND (
-          (
-            COALESCE(context->>'workflow', '') = 'creative_production'
-            AND (
-              SELECT count(DISTINCT asset.size_key)
-              FROM creative_order_asset asset
-              WHERE asset.variant_id = variant.id
-                AND asset.revision = variant.revision
-                AND asset.stage = 'generated'
-                AND asset.status = 'completed'
-                AND asset.size_key IN (
-                  SELECT jsonb_array_elements_text(workflow_expected_sizes)
-                )
-            ) < jsonb_array_length(workflow_expected_sizes)
-          )
-          OR (
-            COALESCE(context->>'workflow', '') IN ('creative_qc', 'creative_qc_visual')
-            AND EXISTS (
-              SELECT 1
-              FROM creative_order_qc_report report
-              WHERE report.variant_id = variant.id
-                AND report.revision = variant.revision
-                AND report.attempt = COALESCE(
-                  CASE
-                    WHEN NULLIF(context->>'qc_attempt', '') ~ '^[0-9]+$'
-                      THEN (context->>'qc_attempt')::int
-                  END,
-                  1
-                )
-                AND report.lane = 'visual'
-                AND (
-                  context->>'workflow' = 'creative_qc_visual'
-                  OR (context->>'workflow' = 'creative_qc' AND context->>'lane' = 'visual')
-                )
-                AND report.status = 'failed'
-            )
-          )
-        )
-    )
-  )
-)
-ORDER BY COALESCE(completed_at, created_at), id
-`, orderID)
+	values, err := h.creativeOrderFailuresBatch(r.Context(), []pgtype.UUID{orderID})
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-
-	failures := []creativeOrderWorkflowFailureResponse{}
-	for rows.Next() {
-		var failure creativeOrderWorkflowFailureResponse
-		if err := rows.Scan(
-			&failure.TaskID,
-			&failure.AgentID,
-			&failure.Workflow,
-			&failure.Scope,
-			&failure.SubjectID,
-			&failure.ItemKey,
-			&failure.TriggerEvidenceKind,
-			&failure.TriggerEvidenceReference,
-			&failure.FailureReason,
-			&failure.Error,
-			&failure.FailedAt,
-			&failure.Retryable,
-		); err != nil {
-			return nil, err
-		}
-		failures = append(failures, failure)
+	result := values[uuidToString(orderID)]
+	if result == nil {
+		result = []creativeOrderWorkflowFailureResponse{}
 	}
-	return failures, rows.Err()
+	return result, nil
 }
 
 func (h *Handler) derivedCreativeOrderStatusWithFailures(r *http.Request, orderID pgtype.UUID, hasOpenFailures bool) (string, error) {
-	var status string
-	err := h.DB.QueryRow(r.Context(), `
-WITH aggregate AS (
-  SELECT count(v.id) AS total,
-	COALESCE(max(o.status), 'draft') AS order_status,
-    count(*) FILTER (WHERE v.candidate_state = 'candidate') AS candidate_count,
-    count(*) FILTER (WHERE v.candidate_state = 'selected') AS selected_count,
-    count(*) FILTER (WHERE v.status = 'failed') AS failed,
-    count(*) FILTER (WHERE v.status = 'action_required') AS action_required,
-    count(*) FILTER (WHERE v.status = 'running') AS running,
-    count(*) FILTER (WHERE v.status = 'partial') AS partial,
-    count(*) FILTER (WHERE v.status = 'completed') AS completed,
-    count(*) FILTER (WHERE v.status = 'cancelled') AS cancelled,
-    (SELECT count(*)
-      FROM agent_task_queue q
-      WHERE q.context->>'type' = 'creative_domain_task'
-        AND (
-          q.context->>'creative_order_id' = $1::uuid::text
-          OR (
-            q.trigger_evidence_ref_id = $1::uuid
-            AND NULLIF(q.context->>'variant_id', '') IS NOT NULL
-            AND EXISTS (
-              SELECT 1
-              FROM creative_order_variant linked_variant
-              JOIN creative_order_item linked_item ON linked_item.id = linked_variant.order_item_id
-              WHERE linked_variant.id::text = q.context->>'variant_id'
-                AND linked_item.order_id = $1::uuid
-            )
-          )
-        )
-        AND q.status IN ('queued', 'dispatched', 'running', 'waiting_local_directory')) AS active_tasks,
-    (SELECT count(*)
-      FROM agent_task_queue q
-      WHERE q.context->>'type' = 'creative_domain_task'
-        AND (
-          q.context->>'creative_order_id' = $1::uuid::text
-          OR (
-            q.trigger_evidence_ref_id = $1::uuid
-            AND NULLIF(q.context->>'variant_id', '') IS NOT NULL
-            AND EXISTS (
-              SELECT 1
-              FROM creative_order_variant linked_variant
-              JOIN creative_order_item linked_item ON linked_item.id = linked_variant.order_item_id
-              WHERE linked_variant.id::text = q.context->>'variant_id'
-                AND linked_item.order_id = $1::uuid
-            )
-          )
-        )
-        AND q.status IN ('dispatched', 'running', 'waiting_local_directory')) AS started_tasks
-    ,(SELECT count(*)
-      FROM creative_prime_composition_job job
-      JOIN creative_order_variant prime_variant ON prime_variant.id = job.variant_id
-      JOIN creative_order_item prime_item ON prime_item.id = prime_variant.order_item_id
-      WHERE prime_item.order_id = $1::uuid
-        AND job.status IN ('queued', 'running')) AS active_prime_jobs,
-    (SELECT count(*)
-      FROM creative_prime_composition_job job
-      JOIN creative_order_variant prime_variant ON prime_variant.id = job.variant_id
-      JOIN creative_order_item prime_item ON prime_item.id = prime_variant.order_item_id
-      WHERE prime_item.order_id = $1::uuid
-        AND job.status = 'running') AS started_prime_jobs
-  FROM creative_order o
-  LEFT JOIN creative_order_item i ON i.order_id = o.id
-	  LEFT JOIN creative_order_variant v ON v.order_item_id = i.id AND v.candidate_state IN ('candidate', 'selected')
-  WHERE o.id = $1
-), base AS (
-  SELECT aggregate.*,
-    CASE
-      WHEN order_status = 'cancelled' THEN 'cancelled'
-		WHEN active_tasks + active_prime_jobs > 0 AND (completed > 0 OR action_required > 0 OR failed > 0 OR partial > 0) THEN 'partial'
-		WHEN active_tasks + active_prime_jobs > 0 AND started_tasks + started_prime_jobs > 0 THEN 'running'
-		WHEN active_tasks + active_prime_jobs > 0 THEN 'queued'
-		WHEN action_required > 0 OR failed > 0 OR partial > 0 OR running > 0 THEN 'action_required'
-		WHEN candidate_count > 0 AND selected_count = 0 AND completed = total THEN 'awaiting_selection'
-		WHEN total > 0 AND completed = total THEN 'completed'
-		WHEN total > 0 AND cancelled = total THEN 'cancelled'
-		WHEN total = 0 AND order_status IN ('failed', 'action_required') THEN 'action_required'
-		WHEN total = 0 AND order_status = 'draft' THEN 'draft'
-		WHEN total > 0 AND (completed > 0 OR cancelled > 0) THEN 'partial'
-		WHEN total > 0 THEN 'action_required'
-		ELSE 'queued'
-	END AS status
-  FROM aggregate
-)
-SELECT CASE
-	WHEN NOT $2::boolean THEN status
-	WHEN status IN ('completed', 'awaiting_adoption', 'cancelled') THEN status
-	WHEN active_tasks + active_prime_jobs > 0 THEN 'partial'
-	ELSE 'action_required'
-END FROM base
-`, orderID, hasOpenFailures).Scan(&status)
-	return status, err
+	failed := []pgtype.UUID{}
+	if hasOpenFailures {
+		failed = append(failed, orderID)
+	}
+	values, err := h.creativeOrderProductionBatch(r.Context(), []pgtype.UUID{orderID}, failed)
+	return values[uuidToString(orderID)], err
 }
 
 func (h *Handler) listCreativeOrderItems(r *http.Request, orderID pgtype.UUID) ([]creativeOrderItemResponse, error) {
@@ -8426,13 +8120,33 @@ FROM creative_order_item WHERE order_id = $1 ORDER BY created_at
 		if err != nil {
 			return nil, err
 		}
-		item.Variants, err = h.listCreativeOrderVariants(r, parseUUID(item.ID))
-		if err != nil {
-			return nil, err
-		}
 		items = append(items, item)
 	}
-	return items, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	rows.Close()
+	ids := make([]pgtype.UUID, 0, len(items))
+	for _, item := range items {
+		ids = append(ids, parseUUID(item.ID))
+	}
+	variants, err := h.listCreativeOrderVariantsBatch(r, ids)
+	if err != nil {
+		return nil, err
+	}
+	byItem := make(map[string][]creativeOrderVariantResponse)
+	for _, variant := range variants {
+		byItem[variant.OrderItemID] = append(byItem[variant.OrderItemID], variant)
+	}
+	progress, err := loadCreativeCandidateProgressBatch(r.Context(), h.DB, orderID, ids)
+	if err != nil {
+		return nil, err
+	}
+	for i := range items {
+		items[i].Variants = byItem[items[i].ID]
+		items[i].CandidateProgress = progress[items[i].ID]
+	}
+	return items, nil
 }
 
 // List responses only need enough item, variant, and asset data to render the
@@ -8440,129 +8154,7 @@ FROM creative_order_item WHERE order_id = $1 ORDER BY created_at
 // Keeping this projection separate prevents the list page from issuing the
 // detail endpoint's per-variant N+1 query tree for every order.
 func (h *Handler) listCreativeOrderListItems(r *http.Request, orderID pgtype.UUID) ([]creativeOrderItemResponse, error) {
-	rows, err := h.DB.Query(r.Context(), `
-SELECT i.id::text, i.order_id::text, COALESCE(i.candidate_id::text, ''),
-  COALESCE(i.source_analysis_id::text, ''), i.copy_snapshot::text, i.direction, i.status,
-  COALESCE(i.adopted_variant_id::text, ''), COALESCE(i.adopted_at::text, ''),
-  COALESCE(i.adopted_by::text, ''), i.created_at::text, i.updated_at::text, i.source_kind, COALESCE(i.copy_library_id::text, ''),
-	  COALESCE(v.id::text, ''), COALESCE(v.order_item_id::text, ''), COALESCE(v.variant_key, ''),
-	  COALESCE(v.brief::text, '{}'), COALESCE(v.revision, 0), COALESCE(v.status, ''),
-	  COALESCE(v.active_revision, 0), COALESCE(v.staging_revision, 0), COALESCE(v.candidate_state, ''),
-	  COALESCE(v.selection_rank, 0), COALESCE(v.primary_size, ''),
-	  COALESCE(v.created_at::text, ''), COALESCE(v.updated_at::text, ''),
-	  COALESCE((
-	    SELECT jsonb_agg(
-	      jsonb_build_object(
-	        'revision', target.revision,
-	        'brief', target.brief,
-	        'status', target.status,
-	        'expected_sizes', target.expected_sizes,
-	        'activated_at', COALESCE(target.activated_at::text, ''),
-	        'created_at', target.created_at::text,
-	        'updated_at', target.updated_at::text
-	      ) ORDER BY target.revision
-	    )
-	    FROM creative_order_variant_revision target
-	    WHERE target.variant_id = v.id
-	      AND target.revision IN (v.active_revision, v.staging_revision)
-	  ), '[]'::jsonb)::text,
-  COALESCE(a.id::text, ''), COALESCE(a.variant_id::text, ''), COALESCE(a.asset_family_id::text, ''),
-	  COALESCE(a.size_key, ''), COALESCE(a.revision, 0), COALESCE(a.stage, ''),
-	  COALESCE(a.attachment_id::text, ''), COALESCE(a.derived_from_asset_id::text, ''),
-	  COALESCE(a.operation_id::text, ''),
-	  COALESCE(a.metadata::text, '{}'), COALESCE(a.evidence::text, '{}'), COALESCE(a.status, ''),
-  COALESCE(a.created_at::text, ''), COALESCE(a.updated_at::text, '')
-FROM creative_order_item i
-LEFT JOIN creative_order_variant v ON v.order_item_id = i.id
-LEFT JOIN creative_order_asset a ON a.variant_id = v.id
-WHERE i.order_id = $1
-ORDER BY i.created_at, v.variant_key, a.revision, a.size_key, a.stage
-`, orderID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	type listItem struct {
-		item     creativeOrderItemResponse
-		variants []*creativeOrderVariantResponse
-		byID     map[string]*creativeOrderVariantResponse
-	}
-	items := make([]*listItem, 0)
-	byItemID := make(map[string]*listItem)
-	for rows.Next() {
-		var item creativeOrderItemResponse
-		var itemSnapshot string
-		var variantID, variantItemID, variantKey, variantBrief, variantStatus, variantCreatedAt, variantUpdatedAt string
-		var variantRevision, variantActiveRevision, variantStagingRevision, variantSelectionRank int
-		var variantCandidateState, variantPrimarySize, variantRevisionsJSON string
-		var assetID, assetVariantID, assetFamilyID, assetSizeKey, assetStage, assetAttachmentID string
-		var assetDerivedFromID, assetOperationID, assetMetadata, assetEvidence, assetStatus, assetCreatedAt, assetUpdatedAt string
-		var assetRevision int
-		if err := rows.Scan(
-			&item.ID, &item.OrderID, &item.CandidateID, &item.SourceAnalysisID, &itemSnapshot,
-			&item.Direction, &item.Status, &item.AdoptedVariantID, &item.AdoptedAt, &item.AdoptedBy,
-			&item.CreatedAt, &item.UpdatedAt, &item.SourceKind, &item.CopyLibraryID,
-			&variantID, &variantItemID, &variantKey, &variantBrief, &variantRevision, &variantStatus,
-			&variantActiveRevision, &variantStagingRevision, &variantCandidateState, &variantSelectionRank, &variantPrimarySize,
-			&variantCreatedAt, &variantUpdatedAt, &variantRevisionsJSON,
-			&assetID, &assetVariantID, &assetFamilyID, &assetSizeKey, &assetRevision, &assetStage,
-			&assetAttachmentID, &assetDerivedFromID, &assetOperationID, &assetMetadata, &assetEvidence, &assetStatus,
-			&assetCreatedAt, &assetUpdatedAt,
-		); err != nil {
-			return nil, err
-		}
-		item.CopySnapshot = json.RawMessage(itemSnapshot)
-		entry := byItemID[item.ID]
-		if entry == nil {
-			entry = &listItem{item: item, byID: make(map[string]*creativeOrderVariantResponse)}
-			byItemID[item.ID] = entry
-			items = append(items, entry)
-		}
-		if variantID == "" {
-			continue
-		}
-		variant := entry.byID[variantID]
-		if variant == nil {
-			var targetRevisions []creativeOrderVariantRevision
-			if err := json.Unmarshal([]byte(variantRevisionsJSON), &targetRevisions); err != nil {
-				return nil, fmt.Errorf("decode creative order list revisions: %w", err)
-			}
-			variant = &creativeOrderVariantResponse{
-				ID: variantID, OrderItemID: variantItemID, VariantKey: variantKey,
-				Brief: json.RawMessage(variantBrief), Revision: variantRevision, Status: variantStatus,
-				ActiveRevision: variantActiveRevision, StagingRevision: variantStagingRevision,
-				CandidateState: variantCandidateState, SelectionRank: variantSelectionRank, PrimarySize: variantPrimarySize,
-				QCStatus: "pending", Assets: []creativeOrderAssetResponse{}, Revisions: targetRevisions,
-				DiagnosticAssets: []creativeOrderDiagnosticAsset{}, QCReports: []creativeOrderQCReportResponse{},
-				CreatedAt: variantCreatedAt, UpdatedAt: variantUpdatedAt,
-			}
-			entry.byID[variantID] = variant
-			entry.variants = append(entry.variants, variant)
-		}
-		if assetID != "" {
-			variant.Assets = append(variant.Assets, creativeOrderAssetResponse{
-				ID: assetID, VariantID: assetVariantID, AssetFamilyID: assetFamilyID,
-				SizeKey: assetSizeKey, Revision: assetRevision, Stage: assetStage,
-				AttachmentID: assetAttachmentID, DerivedFromAssetID: assetDerivedFromID,
-				OperationID: assetOperationID,
-				Metadata:    json.RawMessage(assetMetadata), Evidence: json.RawMessage(assetEvidence),
-				Status: assetStatus, CreatedAt: assetCreatedAt, UpdatedAt: assetUpdatedAt,
-			})
-		}
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	result := make([]creativeOrderItemResponse, 0, len(items))
-	for _, entry := range items {
-		entry.item.Variants = make([]creativeOrderVariantResponse, 0, len(entry.variants))
-		for _, variant := range entry.variants {
-			entry.item.Variants = append(entry.item.Variants, *variant)
-		}
-		result = append(result, entry.item)
-	}
-	return result, nil
+	return h.listCreativeOrderListItemsBatch(r, []pgtype.UUID{orderID})
 }
 
 func scanCreativeOrderItemWithAdoption(row rowScanner) (creativeOrderItemResponse, error) {
@@ -8586,307 +8178,27 @@ FROM creative_order_item WHERE id = $1
 		return creativeOrderItemResponse{}, err
 	}
 	item.Variants, err = h.listCreativeOrderVariants(r, itemID)
+	if err == nil {
+		item.CandidateProgress, err = loadCreativeCandidateProgress(r.Context(), h.DB, parseUUID(item.OrderID), itemID)
+	}
 	return item, err
 }
 
 func (h *Handler) listCreativeOrderVariants(r *http.Request, itemID pgtype.UUID) ([]creativeOrderVariantResponse, error) {
-	rows, err := h.DB.Query(r.Context(), `
-SELECT variant.id::text, variant.order_item_id::text, variant.variant_key, variant.brief::text, variant.revision, variant.status,
-  COALESCE(variant.active_revision, 0), COALESCE(variant.staging_revision, 0), variant.candidate_state,
-  COALESCE(variant.selection_rank, 0), variant.primary_size,
-  EXISTS (
-    SELECT 1
-    FROM activity_log recovery
-    JOIN creative_order_item recovery_item ON recovery_item.id = variant.order_item_id
-    JOIN creative_order recovery_order ON recovery_order.id = recovery_item.order_id
-    WHERE recovery.workspace_id = recovery_order.workspace_id
-      AND recovery.issue_id = recovery_order.issue_id
-      AND recovery.action = 'creative_qc_recovery_queued'
-      AND recovery.details->>'variant_id' = variant.id::text
-      AND recovery.details->>'revision' = variant.revision::text
-  ) AS qc_recovery_used,
-  (
-    variant.status NOT IN ('queued', 'running', 'cancelled')
-    AND recovery_order.issue_id IS NOT NULL
-    AND (
-      SELECT count(DISTINCT asset.size_key)
-      FROM creative_order_asset asset
-      WHERE asset.variant_id = variant.id
-        AND asset.revision = variant.revision
-        AND asset.stage = 'primed'
-        AND asset.status = 'completed'
-        AND asset.size_key IN (
-          SELECT jsonb_array_elements_text(expected_scope.expected_sizes)
-        )
-    ) = jsonb_array_length(expected_scope.expected_sizes)
-    AND NOT EXISTS (
-      SELECT 1 FROM agent_task_queue task
-      WHERE task.context->>'creative_order_id' = recovery_order.id::text
-        AND task.context->>'variant_id' = variant.id::text
-        AND COALESCE(NULLIF(task.context->>'revision', '')::int, 1) = variant.revision
-        AND task.context->>'workflow' = 'creative_qc_visual'
-        AND task.status IN ('queued', 'dispatched', 'running', 'waiting_local_directory')
-    )
-	) AS qc_recovery_available,
-  variant.created_at::text, variant.updated_at::text
-FROM creative_order_variant variant
-JOIN creative_order_item recovery_item ON recovery_item.id = variant.order_item_id
-JOIN creative_order recovery_order ON recovery_order.id = recovery_item.order_id
-CROSS JOIN LATERAL (
-  SELECT CASE
-    WHEN jsonb_typeof(recovery_order.input_snapshot->'expected_sizes') = 'array'
-      AND jsonb_array_length(recovery_order.input_snapshot->'expected_sizes') > 0
-    THEN recovery_order.input_snapshot->'expected_sizes'
-    WHEN jsonb_typeof(recovery_order.input_snapshot->'delivery_scope'->'expected_sizes') = 'array'
-      AND jsonb_array_length(recovery_order.input_snapshot->'delivery_scope'->'expected_sizes') > 0
-    THEN recovery_order.input_snapshot->'delivery_scope'->'expected_sizes'
-    ELSE '["1080x1080","1200x628","800x1000"]'::jsonb
-  END AS expected_sizes
-) expected_scope
-WHERE variant.order_item_id = $1 ORDER BY variant.variant_key
-`, itemID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	variants := []creativeOrderVariantResponse{}
-	for rows.Next() {
-		variant, err := scanCreativeOrderVariant(rows)
-		if err != nil {
-			return nil, err
-		}
-		variant.QCStatus, err = h.derivedCreativeVariantQCStatus(r, parseUUID(variant.ID))
-		if err != nil {
-			return nil, err
-		}
-		variant.Assets, err = h.listCreativeOrderAssets(r, parseUUID(variant.ID))
-		if err != nil {
-			return nil, err
-		}
-		variant.Revisions, err = h.listCreativeOrderVariantRevisions(r.Context(), parseUUID(variant.ID))
-		if err != nil {
-			return nil, err
-		}
-		variant.ImageOperations, err = h.listCreativeImageOperations(r.Context(), parseUUID(variant.ID))
-		if err != nil {
-			return nil, err
-		}
-		variant.QCReports, err = h.listCreativeOrderQCReports(r, parseUUID(variant.ID))
-		if err != nil {
-			return nil, err
-		}
-		if variant.Status != "cancelled" {
-			variant.DiagnosticAssets, err = h.listCreativeOrderVariantDiagnosticAssets(r, parseUUID(variant.ID))
-			if err != nil {
-				return nil, err
-			}
-		}
-		if variant.Status != "completed" && variant.Status != "cancelled" {
-			variant.ActionRequired, err = h.loadCreativeOrderVariantBlocker(r, parseUUID(variant.ID))
-			if err != nil {
-				return nil, err
-			}
-		}
-		variants = append(variants, variant)
-	}
-	return variants, rows.Err()
+	return h.listCreativeOrderVariantsBatch(r, []pgtype.UUID{itemID})
 }
 
 func (h *Handler) loadCreativeOrderVariantBlocker(r *http.Request, variantID pgtype.UUID) (*creativeOrderVariantBlocker, error) {
-	var directEditError struct {
-		Message   string `json:"message"`
-		UpdatedAt string `json:"updated_at"`
-	}
-	var rawDirectEditError string
-	if err := h.DB.QueryRow(r.Context(), `
-SELECT COALESCE(brief->>'creative_direct_edit_error', '')
-FROM creative_order_variant
-WHERE id = $1
-`, variantID).Scan(&rawDirectEditError); err != nil && !errors.Is(err, pgx.ErrNoRows) {
-		return nil, err
-	}
-	if json.Unmarshal([]byte(rawDirectEditError), &directEditError) == nil && strings.TrimSpace(directEditError.Message) != "" {
-		return &creativeOrderVariantBlocker{
-			Workflow:      "creative_direct_edit",
-			FailureReason: "direct_image_edit_failed",
-			Detail:        summarizeCreativeOrderVariantBlocker(directEditError.Message),
-			FailedAt:      directEditError.UpdatedAt,
-			Retryable:     true,
-		}, nil
-	}
-
-	var qcHandoffError struct {
-		Message   string `json:"message"`
-		UpdatedAt string `json:"updated_at"`
-	}
-	var rawQCHandoffError string
-	err := h.DB.QueryRow(r.Context(), `
-SELECT COALESCE(brief->>'creative_qc_handoff_error', '')
-FROM creative_order_variant
-WHERE id = $1
-`, variantID).Scan(&rawQCHandoffError)
+	var brief string
+	err := h.DB.QueryRow(r.Context(), `SELECT brief::text FROM creative_order_variant WHERE id=$1`, variantID).Scan(&brief)
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		return nil, err
 	}
-	if json.Unmarshal([]byte(rawQCHandoffError), &qcHandoffError) == nil && strings.TrimSpace(qcHandoffError.Message) != "" {
-		return &creativeOrderVariantBlocker{
-			Workflow:      "quality_control",
-			FailureReason: "quality_control_queue_failed",
-			Detail:        summarizeCreativeOrderVariantBlocker(qcHandoffError.Message),
-			FailedAt:      qcHandoffError.UpdatedAt,
-			Retryable:     true,
-		}, nil
+	if blocker := creativeVariantBriefBlocker(json.RawMessage(brief)); blocker != nil {
+		return blocker, nil
 	}
-
-	var compositionError struct {
-		Message   string `json:"message"`
-		UpdatedAt string `json:"updated_at"`
-	}
-	var rawCompositionError string
-	err = h.DB.QueryRow(r.Context(), `
-SELECT COALESCE(brief->>'brand_composition_error', '')
-FROM creative_order_variant
-WHERE id = $1
-`, variantID).Scan(&rawCompositionError)
-	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
-		return nil, err
-	}
-	if json.Unmarshal([]byte(rawCompositionError), &compositionError) == nil && strings.TrimSpace(compositionError.Message) != "" {
-		return &creativeOrderVariantBlocker{
-			Workflow:      "brand_components",
-			FailureReason: "brand_composition_failed",
-			Detail:        summarizeCreativeOrderVariantBlocker(compositionError.Message),
-			FailedAt:      compositionError.UpdatedAt,
-			Retryable:     true,
-		}, nil
-	}
-
-	var blocker creativeOrderVariantBlocker
-	var rawDetail string
-	err = h.DB.QueryRow(r.Context(), `
-WITH latest AS (
-  SELECT q.id,
-    COALESCE(q.context->>'workflow', '') AS workflow,
-    CASE
-      WHEN q.status = 'completed' THEN 'agent_reported_action_required'
-      ELSE COALESCE(NULLIF(q.failure_reason, ''), 'agent_error')
-    END AS failure_reason,
-    COALESCE(q.error, '') AS error,
-    COALESCE(q.result->>'output', '') AS result_output,
-    COALESCE(q.completed_at, q.created_at)::text AS failed_at,
-    (
-      q.attempt < q.max_attempts
-      OR (
-        q.trigger_evidence_kind = 'creative_order_item_production'
-        AND q.context->>'workflow' = 'creative_production'
-        AND q.attempt < 5
-      )
-    ) AS retryable
-  FROM agent_task_queue q
-  JOIN creative_order_variant variant ON variant.id = $1
-  WHERE q.context->>'type' = 'creative_domain_task'
-    AND q.context->>'variant_id' = variant.id::text
-    AND COALESCE(NULLIF(q.context->>'revision', '')::int, variant.revision) = variant.revision
-    AND q.status IN ('failed', 'completed')
-    AND NOT EXISTS (
-      SELECT 1
-      FROM agent_task_queue active
-      WHERE active.id <> q.id
-        AND active.status IN ('queued', 'dispatched', 'running', 'waiting_local_directory')
-        AND active.context->>'type' = 'creative_domain_task'
-        AND active.context->>'workflow' = q.context->>'workflow'
-        AND active.context->>'variant_id' = variant.id::text
-        AND COALESCE(NULLIF(active.context->>'revision', '')::int, variant.revision) = variant.revision
-    )
-    AND (
-      q.status = 'failed'
-      OR (
-        q.status = 'completed'
-        AND (
-          (
-            q.context->>'workflow' = 'creative_production'
-            AND (
-              SELECT count(DISTINCT asset.size_key)
-              FROM creative_order_asset asset
-              WHERE asset.variant_id = variant.id
-                AND asset.revision = variant.revision
-                AND asset.stage = 'generated'
-                AND asset.status = 'completed'
-                AND asset.size_key IN (
-                  SELECT jsonb_array_elements_text(
-                    CASE
-                      WHEN jsonb_typeof(q.context->'expected_sizes') = 'array'
-                        AND jsonb_array_length(q.context->'expected_sizes') > 0
-                      THEN q.context->'expected_sizes'
-                      ELSE '["1080x1080","1200x628","800x1000"]'::jsonb
-                    END
-                  )
-                )
-            ) < jsonb_array_length(
-              CASE
-                WHEN jsonb_typeof(q.context->'expected_sizes') = 'array'
-                  AND jsonb_array_length(q.context->'expected_sizes') > 0
-                THEN q.context->'expected_sizes'
-                ELSE '["1080x1080","1200x628","800x1000"]'::jsonb
-              END
-            )
-          )
-          OR (
-            q.context->>'workflow' IN ('creative_qc', 'creative_qc_visual')
-            AND EXISTS (
-              SELECT 1
-              FROM creative_order_qc_report report
-              WHERE report.variant_id = variant.id
-                AND report.revision = variant.revision
-                AND report.attempt = COALESCE(
-                  CASE
-                    WHEN NULLIF(q.context->>'qc_attempt', '') ~ '^[0-9]+$'
-                      THEN (q.context->>'qc_attempt')::int
-                  END,
-                  1
-                )
-                AND report.lane = 'visual'
-                AND (
-                  q.context->>'workflow' = 'creative_qc_visual'
-                  OR (q.context->>'workflow' = 'creative_qc' AND q.context->>'lane' = 'visual')
-                )
-                AND report.status = 'failed'
-            )
-          )
-        )
-      )
-    )
-  ORDER BY COALESCE(q.completed_at, q.created_at) DESC, q.id DESC
-  LIMIT 1
-), latest_message AS (
-  SELECT message.content
-  FROM task_message message
-  JOIN latest ON latest.id = message.task_id
-  WHERE message.type = 'text'
-    AND btrim(message.content) <> ''
-  ORDER BY message.seq DESC, message.id DESC
-  LIMIT 1
-)
-SELECT latest.id::text,
-  latest.workflow,
-  latest.failure_reason,
-  COALESCE(NULLIF(latest_message.content, ''), NULLIF(latest.error, ''), NULLIF(latest.result_output, ''), ''),
-  latest.failed_at,
-  latest.retryable
-FROM latest
-LEFT JOIN latest_message ON true
-`, variantID).Scan(&blocker.TaskID, &blocker.Workflow, &blocker.FailureReason, &rawDetail, &blocker.FailedAt, &blocker.Retryable)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	blocker.Detail = summarizeCreativeOrderVariantBlocker(rawDetail)
-	if blocker.Detail == "" {
-		blocker.Detail = "该变体已停止自动流程，但任务未返回可读原因。"
-	}
-	return &blocker, nil
+	values, err := h.creativeVariantBlockers(r.Context(), []pgtype.UUID{variantID})
+	return values[uuidToString(variantID)], err
 }
 
 func summarizeCreativeOrderVariantBlocker(value string) string {
@@ -8987,26 +8299,12 @@ func truncateCreativeOrderBlockerDetail(value string, limit int) string {
 }
 
 func (h *Handler) listCreativeOrderVariantDiagnosticAssets(r *http.Request, variantID pgtype.UUID) ([]creativeOrderDiagnosticAsset, error) {
-	rows, err := h.DB.Query(r.Context(), `
-SELECT id::text, variant_id::text, COALESCE(task_id::text, ''), attachment_id::text,
-  size_key, revision, workflow, label, filename, metadata::text, created_at::text, updated_at::text
-FROM creative_order_diagnostic_asset
-WHERE variant_id = $1
-ORDER BY revision, size_key, updated_at DESC, id
-`, variantID)
-	if err != nil {
-		return nil, err
+	values, err := creativeRowsByOwner[creativeOrderDiagnosticAsset](r.Context(), h.DB, creativeDiagnosticBatchSQL, []pgtype.UUID{variantID})
+	result := creativeOwnerRows(values, variantID)
+	for i := range result {
+		result[i].URL = attachmentDownloadPath(result[i].AttachmentID)
 	}
-	defer rows.Close()
-	assets := []creativeOrderDiagnosticAsset{}
-	for rows.Next() {
-		asset, err := scanCreativeOrderDiagnosticAsset(rows)
-		if err != nil {
-			return nil, err
-		}
-		assets = append(assets, asset)
-	}
-	return assets, rows.Err()
+	return result, err
 }
 
 func creativeAssetSizeOrder(size string) int {
@@ -9023,89 +8321,23 @@ func creativeAssetSizeOrder(size string) int {
 }
 
 func (h *Handler) listCreativeOrderAssets(r *http.Request, variantID pgtype.UUID) ([]creativeOrderAssetResponse, error) {
-	rows, err := h.DB.Query(r.Context(), `
-SELECT id::text, variant_id::text, asset_family_id::text, size_key, revision, stage, COALESCE(attachment_id::text, ''),
-  COALESCE(derived_from_asset_id::text, ''), COALESCE(operation_id::text, ''), metadata::text, evidence::text, status, created_at::text, updated_at::text
-FROM creative_order_asset WHERE variant_id = $1 ORDER BY revision, size_key, stage
-`, variantID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	assets := []creativeOrderAssetResponse{}
-	for rows.Next() {
-		asset, err := scanCreativeOrderAsset(rows)
-		if err != nil {
-			return nil, err
-		}
-		assets = append(assets, asset)
-	}
-	return assets, rows.Err()
+	values, err := creativeRowsByOwner[creativeOrderAssetResponse](r.Context(), h.DB, creativeAssetBatchSQL, []pgtype.UUID{variantID})
+	return creativeOwnerRows(values, variantID), err
 }
 
 func (h *Handler) derivedCreativeVariantQCStatus(r *http.Request, variantID pgtype.UUID) (string, error) {
-	var status string
-	err := h.DB.QueryRow(r.Context(), `
-WITH latest AS (
-  SELECT v.id, v.revision,
-    GREATEST(
-      COALESCE((SELECT max(report.attempt) FROM creative_order_qc_report report WHERE report.variant_id = v.id AND report.revision = v.revision), 0),
-      COALESCE((SELECT max(resolution.attempt) FROM creative_order_variant_qc_resolution resolution WHERE resolution.variant_id = v.id AND resolution.revision = v.revision), 0),
-      COALESCE((
-        SELECT max(
-          COALESCE(
-            CASE
-              WHEN NULLIF(task.context->>'qc_attempt', '') ~ '^[0-9]+$'
-                THEN (task.context->>'qc_attempt')::int
-            END,
-            1
-          )
-        )
-        FROM agent_task_queue task
-        WHERE task.trigger_evidence_kind = 'creative_order_variant_qc'
-          AND (
-            task.trigger_evidence_ref_id = v.id
-            OR task.context->>'variant_id' = v.id::text
-          )
-          AND COALESCE(NULLIF(task.context->>'revision', '')::int, v.revision) = v.revision
-      ), 0)
-    ) AS attempt
-  FROM creative_order_variant v
-  WHERE v.id = $1
-)
-SELECT CASE
-  WHEN count(*) FILTER (WHERE q.status = 'failed') > 0 THEN 'failed'
-  WHEN count(*) FILTER (WHERE q.status = 'warning') > 0 THEN 'warning'
-  WHEN count(*) FILTER (WHERE q.lane = 'visual' AND q.status = 'passed') > 0 THEN 'passed'
-  ELSE 'pending'
-END
-FROM latest
-LEFT JOIN creative_order_qc_report q ON q.variant_id = latest.id AND q.revision = latest.revision AND q.attempt = latest.attempt
-GROUP BY latest.id
-`, variantID).Scan(&status)
-	return status, err
+	values, err := h.creativeVariantQCStatuses(r.Context(), []pgtype.UUID{variantID})
+	if err != nil {
+		return "", err
+	}
+	value, found := values[uuidToString(variantID)]
+	if !found {
+		return "", pgx.ErrNoRows
+	}
+	return value, nil
 }
 
 func (h *Handler) listCreativeOrderQCReports(r *http.Request, variantID pgtype.UUID) ([]creativeOrderQCReportResponse, error) {
-	rows, err := h.DB.Query(r.Context(), `
-SELECT id::text, variant_id::text, lane, revision, attempt, status, findings::text, trigger_evidence_kind,
-  COALESCE(trigger_evidence_ref_id::text, ''), created_at::text, updated_at::text
-FROM creative_order_qc_report WHERE variant_id = $1 ORDER BY revision, attempt, lane
-`, variantID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	reports := []creativeOrderQCReportResponse{}
-	for rows.Next() {
-		var report creativeOrderQCReportResponse
-		var findings string
-		if err := rows.Scan(&report.ID, &report.VariantID, &report.Lane, &report.Revision, &report.Attempt, &report.Status, &findings,
-			&report.TriggerEvidenceKind, &report.TriggerEvidenceReference, &report.CreatedAt, &report.UpdatedAt); err != nil {
-			return nil, err
-		}
-		report.Findings = json.RawMessage(findings)
-		reports = append(reports, report)
-	}
-	return reports, rows.Err()
+	values, err := creativeRowsByOwner[creativeOrderQCReportResponse](r.Context(), h.DB, creativeQCReportBatchSQL, []pgtype.UUID{variantID})
+	return creativeOwnerRows(values, variantID), err
 }

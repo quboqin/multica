@@ -44,6 +44,7 @@ candidate 只做主尺寸，selected 复用已合格主尺寸并补缺失尺寸�
   首轮模型输入只有当前尺寸 Prime context，后续按身份锚点增加已选主视觉参考；按真实顺序命名输入，不保留虚假的 Input 1/source 指纹。
   `image-operation-put.input_snapshot.input_roles` 只记录实际输入，保留 Prime 指纹；其余 operation、回执、归一化与贴片规则相同。
   运行 `validate_copy_snapshot.py` 时用 `--order-item-id` 和 `--variant-id`，不传空的 `--candidate-id`。
+  先按当前尺寸 LayoutPlan 的自然语言主次与内容组构图，文案多时优先减少装饰、调整主体占比与横竖版组织；不补坐标、百分比框、字号阈值，不代码排字，不删已选文案，不整体内缩。
 - `copy_snapshot` 是文案、金融事实、还款计划和用户视觉方向的唯一真值。顶层非空文案字段（`headline`、`subheadline`、`benefit`、`supporting`、`cta`、`legal_text`）逐字优先于
   `pre_adaptation.text_replacements`；后者只提供区块映射和版式，不得覆盖顶层非空字段。`pre_adaptation` 不提供最终模型提示词。
 - `item.direction` 是由 `copy_snapshot.visual_direction` 派生的可追踪摘要，仅用于合同校验；不要把它当成可直接发送给模型的长提示词。

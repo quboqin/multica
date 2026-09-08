@@ -2318,6 +2318,9 @@ func (h *Handler) CompleteTask(w http.ResponseWriter, r *http.Request) {
 		artifactError, validationErr = h.preAdaptationCompletionError(r.Context(), existingTask, workspaceID)
 	}
 	if validationErr == nil && artifactError == "" {
+		artifactError, validationErr = h.creativePlanningCompletionError(r.Context(), existingTask, workspaceID)
+	}
+	if validationErr == nil && artifactError == "" {
 		artifactError, validationErr = h.creativeCandidateSelectionCompletionError(r.Context(), existingTask, workspaceID)
 	}
 	if validationErr == nil && artifactError == "" {

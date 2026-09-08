@@ -828,7 +828,7 @@ ORDER BY rr.created_at DESC, r.id LIMIT 2
 	if err != nil {
 		return creativeResourceResponse{}, creativeResourceResponse{}, errors.New("default market pack must bind a published copy library")
 	}
-	library, err := h.loadPublishedCreativeResource(ctx, workspaceID, libraryID, "copy_library")
+	library, err := loadPublishedCreativeResource(ctx, h.DB, workspaceID, libraryID, "copy_library")
 	if err != nil {
 		return creativeResourceResponse{}, creativeResourceResponse{}, errors.New("default market pack copy library must have a published version")
 	}
@@ -961,7 +961,7 @@ LIMIT 1
 		writeError(w, http.StatusConflict, "source analysis must be updated with visual regions before preparing copy")
 		return
 	}
-	marketPack, err := h.loadPublishedCreativeResource(r.Context(), workspaceID, marketPackID, "market_pack")
+	marketPack, err := loadPublishedCreativeResource(r.Context(), h.DB, workspaceID, marketPackID, "market_pack")
 	if errors.Is(err, pgx.ErrNoRows) {
 		writeError(w, http.StatusConflict, "selected market pack is unavailable")
 		return
@@ -980,7 +980,7 @@ LIMIT 1
 		writeError(w, http.StatusConflict, "selected market pack must bind a published copy library")
 		return
 	}
-	copyLibrary, err := h.loadPublishedCreativeResource(r.Context(), workspaceID, copyLibraryID, "copy_library")
+	copyLibrary, err := loadPublishedCreativeResource(r.Context(), h.DB, workspaceID, copyLibraryID, "copy_library")
 	if errors.Is(err, pgx.ErrNoRows) {
 		writeError(w, http.StatusConflict, "selected market pack copy library is unavailable")
 		return

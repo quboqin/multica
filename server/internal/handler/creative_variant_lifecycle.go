@@ -397,27 +397,8 @@ VALUES ($1, $2, 'member', $3, 'creative_variant_revision_selected', $4::jsonb)
 }
 
 func (h *Handler) listCreativeOrderVariantRevisions(ctx context.Context, variantID pgtype.UUID) ([]creativeOrderVariantRevision, error) {
-	rows, err := h.DB.Query(ctx, `
-SELECT revision, brief::text, status, expected_sizes, COALESCE(activated_at::text, ''), created_at::text, updated_at::text
-FROM creative_order_variant_revision
-WHERE variant_id = $1
-ORDER BY revision
-`, variantID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	revisions := []creativeOrderVariantRevision{}
-	for rows.Next() {
-		var revision creativeOrderVariantRevision
-		var brief string
-		if err := rows.Scan(&revision.Revision, &brief, &revision.Status, &revision.ExpectedSizes, &revision.ActivatedAt, &revision.CreatedAt, &revision.UpdatedAt); err != nil {
-			return nil, err
-		}
-		revision.Brief = json.RawMessage(brief)
-		revisions = append(revisions, revision)
-	}
-	return revisions, rows.Err()
+	values, err := creativeRowsByOwner[creativeOrderVariantRevision](ctx, h.DB, creativeRevisionBatchSQL, []pgtype.UUID{variantID})
+	return creativeOwnerRows(values, variantID), err
 }
 
 func (h *Handler) SelectCreativeOrderItemCandidates(w http.ResponseWriter, r *http.Request) {

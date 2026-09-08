@@ -172,7 +172,7 @@ SELECT EXISTS (
 
 // maybeQueueCreativeCandidateSelection creates exactly one comparison task
 // after primary packages settle. Terminal failures are rejected before
-// comparison so three usable candidates can still complete an order.
+// comparison so the frozen target can be selected from usable candidates.
 func (h *Handler) maybeQueueCreativeCandidateSelection(ctx context.Context, orderItemID pgtype.UUID, cause creativeOrchestrationCause) (bool, error) {
 	return h.maybeQueueCreativeCandidateSelectionWithPrimeHandoff(ctx, orderItemID, cause, nil)
 }
@@ -181,6 +181,26 @@ func (h *Handler) maybeQueueCreativeCandidateSelectionWithPrimeHandoff(ctx conte
 	if h.TxStarter == nil || h.Queries == nil || h.TaskService == nil || !orderItemID.Valid {
 		return false, nil
 	}
+	tx, err := h.TxStarter.Begin(ctx)
+	if err != nil {
+		return false, fmt.Errorf("begin creative candidate selection handoff: %w", err)
+	}
+	defer tx.Rollback(ctx)
+	var task db.AgentTaskQueue
+	queued, err := h.queueCreativeCandidateSelectionTx(ctx, tx, orderItemID, cause, primeClaim, &task)
+	if err != nil {
+		return false, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return false, fmt.Errorf("commit creative candidate selection handoff: %w", err)
+	}
+	if queued {
+		h.TaskService.NotifyTaskEnqueued(ctx, task)
+	}
+	return queued, nil
+}
+
+func (h *Handler) queueCreativeCandidateSelectionTx(ctx context.Context, tx pgx.Tx, orderItemID pgtype.UUID, cause creativeOrchestrationCause, primeClaim *creativePrimeCompositionClaim, createdTask *db.AgentTaskQueue) (bool, error) {
 	var handoffVariantID, handoffLeaseToken pgtype.UUID
 	var handoffRevision int
 	if primeClaim != nil {
@@ -188,11 +208,6 @@ func (h *Handler) maybeQueueCreativeCandidateSelectionWithPrimeHandoff(ctx conte
 		handoffRevision = primeClaim.Revision
 		handoffLeaseToken = primeClaim.LeaseToken
 	}
-	tx, err := h.TxStarter.Begin(ctx)
-	if err != nil {
-		return false, fmt.Errorf("begin creative candidate selection handoff: %w", err)
-	}
-	defer tx.Rollback(ctx)
 	var workspaceID, orderID, issueID, createdBy pgtype.UUID
 	var inputSnapshot string
 	var orderStatus string
@@ -201,10 +216,7 @@ func (h *Handler) maybeQueueCreativeCandidateSelectionWithPrimeHandoff(ctx conte
 	} else if err != nil {
 		return false, fmt.Errorf("resolve creative candidate selection order: %w", err)
 	}
-	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, creativeCandidateSelectionEvidenceKind+":"+uuidToString(orderItemID)); err != nil {
-		return false, fmt.Errorf("lock creative candidate selection handoff: %w", err)
-	}
-	err = tx.QueryRow(ctx, `
+	err := tx.QueryRow(ctx, `
 SELECT workspace_id, issue_id, created_by, input_snapshot::text, status
 FROM creative_order
 WHERE id = $1
@@ -266,6 +278,15 @@ SELECT EXISTS (
 	if activeTask {
 		return false, nil
 	}
+	var cancelledSelection bool
+	if err := tx.QueryRow(ctx, `SELECT COALESCE((SELECT status='cancelled' FROM agent_task_queue
+WHERE trigger_evidence_kind=$1 AND trigger_evidence_ref_id=$2 AND context->>'item_key'=$3
+ORDER BY created_at DESC,id DESC LIMIT 1),false)`, creativeCandidateSelectionEvidenceKind, orderItemID, creativeCandidateSelectionItemKey).Scan(&cancelledSelection); err != nil {
+		return false, err
+	}
+	if cancelledSelection {
+		return false, nil
+	}
 	var terminalAttempts int
 	if err := tx.QueryRow(ctx, `
 SELECT count(*)
@@ -323,6 +344,9 @@ FOR UPDATE
 	ready := make([]creativeCandidatePrimary, 0, len(candidateRows))
 	failed := make([]candidateRow, 0, 1)
 	for _, row := range candidateRows {
+		if row.status == "cancelled" {
+			return false, nil
+		}
 		if row.state == "rejected" {
 			continue
 		}
@@ -520,10 +544,7 @@ SELECT EXISTS (
 	if _, err := tx.Exec(ctx, `UPDATE creative_order SET updated_at = now() WHERE id = $1`, orderID); err != nil {
 		return false, fmt.Errorf("touch creative order candidate selection: %w", err)
 	}
-	if err := tx.Commit(ctx); err != nil {
-		return false, fmt.Errorf("commit creative candidate selection handoff: %w", err)
-	}
-	h.TaskService.NotifyTaskEnqueued(ctx, task)
+	*createdTask = task
 	return true, nil
 }
 
@@ -672,6 +693,7 @@ JOIN creative_order order_row ON order_row.id = item.order_id
 WHERE item.id = $1
   AND variant.candidate_state = 'selected'
   AND variant.selection_rank BETWEEN 1 AND $2
+  AND variant.status <> 'cancelled'
   AND order_row.status <> 'cancelled'
 ORDER BY variant.selection_rank, variant.id
 FOR UPDATE OF variant, revision
@@ -829,11 +851,11 @@ SELECT EXISTS (
 		if err := validateCreativeTaskFanoutContext("creative_order_item_production", orderItemID, []service.DirectTaskFanoutItem{fanoutItem}); err != nil {
 			return queued, fmt.Errorf("validate selected creative production: %w", err)
 		}
-		if err := h.validateCreativeTaskFanoutExpectedSizes(ctx, value.WorkspaceID, "creative_order_item_production", orderItemID, []service.DirectTaskFanoutItem{fanoutItem}); err != nil {
+		if err := validateCreativeTaskFanoutExpectedSizes(ctx, tx, value.WorkspaceID, "creative_order_item_production", orderItemID, []service.DirectTaskFanoutItem{fanoutItem}); err != nil {
 			return queued, fmt.Errorf("validate selected creative delivery sizes: %w", err)
 		}
 		attr, requestedBy := creativeOrchestrationAttribution(cause, value.CreatedBy, "creative_order_item_production", orderItemID)
-		groups, err := h.prepareCreativeProductionFanout(ctx, value.WorkspaceID, orderItemID, []service.DirectTaskFanoutItem{fanoutItem})
+		groups, err := h.prepareCreativeProductionFanout(ctx, tx, value.WorkspaceID, orderItemID, []service.DirectTaskFanoutItem{fanoutItem})
 		if err != nil {
 			return queued, fmt.Errorf("prepare selected creative production: %w", err)
 		}
@@ -1094,6 +1116,10 @@ func (h *Handler) reconcileCreativeCandidateOrchestrationForProductionTask(ctx c
 		return nil
 	}
 	cause := creativeOrchestrationCause{ParentTask: &task, RequestedBy: task.RequestingUserID}
+	if taskContext.Workflow == "creative_plan" && task.Status == "completed" {
+		_, err := h.maybeQueueCreativeCandidateSelection(ctx, itemID, cause)
+		return err
+	}
 	if taskContext.Workflow == creativeCandidateSelectionWorkflow {
 		var orderID pgtype.UUID
 		var workspaceID pgtype.UUID

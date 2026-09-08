@@ -93,6 +93,7 @@ func TestCreativeMaterialPrivateArchiveUsesAuthenticatedProxyRoute(t *testing.T)
 		t.Skip("database not available")
 	}
 	store := &mockStorageNoCdn{}
+	enableCreativeFactoryForTest(t)
 	store.put("creative-materials/private/source.png", []byte("image"))
 	handler := *testHandler
 	handler.Storage = store
@@ -362,9 +363,9 @@ func TestCreativeCrawlRunResponseIncludesLifecycleAndDerivedMetrics(t *testing.T
 	var runID, candidateID string
 	if err := testPool.QueryRow(t.Context(), `
 INSERT INTO creative_material_crawl_run (
-  workspace_id, issue_id, connector_id, status, autopilot_run_id, started_at, finished_at,
+  workspace_id, issue_id, connector_id, status, autopilot_run_id, started_at, finished_at, query_summary,
   error_code, error_message, created_by_type, created_by_id
-) VALUES ($1, $2, 'test', 'partial', NULL, now() - interval '1 minute', now(),
+) VALUES ($1, $2, 'test', 'partial', NULL, now() - interval '1 minute', now(), 'material_search',
   'analysis_partial', 'one analysis failed', 'member', $3)
 RETURNING id::text`, testWorkspaceID, issueID, testUserID).Scan(&runID); err != nil {
 		t.Fatal(err)

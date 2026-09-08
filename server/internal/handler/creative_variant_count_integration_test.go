@@ -50,7 +50,7 @@ func selectCreativeCountCandidates(t *testing.T, f creativeCandidateOrchestratio
 }
 
 func TestCreativeVariantCountsCandidateSelectionAndFanout(t *testing.T) {
-	for _, target := range []int{1, 3, 10} {
+	for _, target := range []int{1, 3, 6, 10} {
 		t.Run(fmt.Sprint(target), func(t *testing.T) {
 			f := createCreativeCountFixture(t, target)
 			ids := make([]string, 0, target+2)

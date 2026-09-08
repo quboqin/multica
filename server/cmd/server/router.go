@@ -790,6 +790,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 						r.With(handler.RequireHumanActor).Post("/items/{itemId}/adoption", h.AdoptCreativeOrderItemVariant)
 						r.With(handler.RequireHumanActor).Delete("/items/{itemId}/adoption", h.UnadoptCreativeOrderItemVariant)
 						r.Post("/items/{itemId}/candidate-selection", h.SelectCreativeOrderItemCandidates)
+						r.With(handler.RequireHumanActor).Post("/items/{itemId}/candidate-recovery", h.RecoverCreativeOrderCandidates)
 						r.Put("/variants", h.UpsertCreativeOrderVariant)
 						r.Put("/image-operations", h.UpsertCreativeImageOperation)
 						r.Put("/assets", h.UpsertCreativeOrderAsset)
