@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Multica 架构手册</title>
-<meta name="description" content="从源码整理的 Multica 工程手册：系统架构、数据库 ER 模型与认证权限体系，含拓扑图、分域 ER 图与鉴权时序。">
+<meta name="description" content="从源码整理的 Multica 工程手册：系统架构、数据模型、认证权限、执行与数据边界、异常恢复、工作目录和部署运维。">
 <meta name="color-scheme" content="light dark">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&family=Noto+Sans+SC:wght@400;500;700&display=swap">
 <style>
@@ -333,6 +333,35 @@
   .kv dt { font-family: var(--font-mono); font-size: 12.5px; color: var(--muted); white-space: nowrap; }
   .kv dd { margin: 0; }
 
+  /* Execution and operations chapters reuse the handbook palette. */
+  .new-chapter .tbl { min-width: 660px; }
+  .new-chapter .tbl td { overflow-wrap: anywhere; }
+  .new-chapter .tbl td:first-child { width: 23%; }
+  .new-chapter .tbl td code { white-space: normal; }
+  .source-map { font-size: 12.5px; color: var(--muted); line-height: 1.8; }
+  .flow-steps {
+    display: grid; grid-template-columns: repeat(3, minmax(0, 1fr));
+    list-style: none; padding: 0; margin: 0; gap: 12px;
+  }
+  .flow-steps li {
+    display: flex; flex-direction: column; gap: 8px;
+    padding: 16px; background: var(--surface-2);
+    border: 1px solid var(--line); border-radius: 8px;
+    font-size: 13px; line-height: 1.75;
+  }
+  .flow-steps .flow-no { color: var(--accent-ink); font-family: var(--font-mono); font-size: 11px; }
+  .flow-steps li:nth-child(2) { border-color: var(--copper); }
+  .flow-steps li:nth-child(2) .flow-no { color: var(--copper-ink); }
+  @media (max-width: 640px) {
+    .flow-steps { grid-template-columns: 1fr; }
+    .new-chapter .tbl-wrap::before {
+      content: "左右滑动查看完整表格"; display: block;
+      position: sticky; left: 0; width: 100%; padding: 6px 14px;
+      color: var(--muted); font-size: 11px; background: var(--surface-2);
+      border-bottom: 1px solid var(--line);
+    }
+  }
+
   footer.foot {
     margin-top: 72px; padding-top: 20px;
     border-top: 1px solid var(--line);
@@ -413,6 +442,39 @@
         <li><a href="#auth-hardening">攻击面加固</a></li>
       </ol>
     </li>
+    <li class="part">
+      <a href="#execution-boundaries"><span class="no">05</span>执行与数据边界</a>
+      <ol class="sub">
+        <li><a href="#boundary-identity">API 身份与机器权限</a></li>
+        <li><a href="#boundary-data">三条数据路径</a></li>
+        <li><a href="#boundary-audit">标识与审计</a></li>
+      </ol>
+    </li>
+    <li class="part">
+      <a href="#task-recovery"><span class="no">06</span>状态机与异常恢复</a>
+      <ol class="sub">
+        <li><a href="#recovery-states">三套状态</a></li>
+        <li><a href="#recovery-matrix">故障窗口与恢复责任</a></li>
+        <li><a href="#recovery-budgets">超时预算</a></li>
+      </ol>
+    </li>
+    <li class="part">
+      <a href="#execution-workspaces"><span class="no">07</span>执行目录与成果</a>
+      <ol class="sub">
+        <li><a href="#workspace-modes">三种目录安排</a></li>
+        <li><a href="#workspace-prepare">准备、执行与收尾</a></li>
+        <li><a href="#workspace-retention">复用、清理与找回</a></li>
+      </ol>
+    </li>
+    <li class="part">
+      <a href="#operations"><span class="no">08</span>部署与运维</a>
+      <ol class="sub">
+        <li><a href="#ops-topology">拓扑与可选依赖</a></li>
+        <li><a href="#ops-readiness">启动、升级与就绪</a></li>
+        <li><a href="#ops-storage">存储与恢复</a></li>
+        <li><a href="#ops-troubleshooting">按症状排查</a></li>
+      </ol>
+    </li>
   </ol>
 </nav>
 
@@ -422,10 +484,11 @@
 <header class="masthead">
   <span class="eyebrow">Multica Engineering Handbook</span>
   <h1>Multica 架构手册</h1>
-  <p class="lede">Multica 是一个开源团队工作区——「智能体，也在看板上」。人类与 AI 编码智能体在同一块看板协作：任务派给 agent，它在你自己的机器上接活、边做边汇报、做完交回审核。本手册从源码出发，拆解它的系统架构、数据模型与认证权限体系。</p>
+  <p class="lede">Multica 是一个开源团队工作区，人类与 AI 编码智能体在同一块看板协作。本手册从源码出发，拆解系统架构、数据模型和认证权限，再展开执行边界、异常恢复、成果保留与部署运维。</p>
   <div class="meta-row">
     <span class="chip">commit <b>dcc2d5825</b></span>
-    <span class="chip">2026-08-28</span>
+    <span class="chip">源码基线 2026-08-28</span>
+    <span class="chip">手册更新 <b>2026-09-08</b></span>
     <span class="chip">Go <b>1.26</b> · chi v5 · pgx/sqlc</span>
     <span class="chip">Next.js <b>16</b> · React <b>19</b></span>
     <span class="chip">PostgreSQL <b>17</b> + pgvector · Redis</span>
@@ -442,7 +505,7 @@
 <div class="part-head">
   <span class="no">PART 01</span>
   <h2>总览</h2>
-  <p class="lede">先建立一张地图：这是一个 pnpm + Turborepo 的前端 monorepo，加一个独立的 Go module 后端，靠 HTTP + WebSocket 连接；agent 的执行发生在用户自己机器上的 daemon 里。</p>
+  <p class="lede">先建立一张地图：这是一个 pnpm + Turborepo 的前端 monorepo，加一个独立的 Go module 后端，靠 HTTP + WebSocket 连接；智能体 CLI 由执行节点上的守护进程启动，本地模式下该节点就是用户自己的机器。</p>
 </div>
 
 <div class="stats">
@@ -456,7 +519,7 @@
 </div>
 
 <h3 id="ov-what">产品形态</h3>
-<p>Multica 把「同时开着五个终端标签页跑 Claude Code / Codex / Cursor」的散装工作方式，收敛为一个任务管理平台：<strong>agent 是一等公民</strong>——它可以被指派 issue、发表评论、改变状态，和人类成员一样出现在看板与成员列表里。关键设计是执行与平台分离：平台（server + web/desktop/mobile）负责协作与编排，真正的代码执行由用户机器上的 <code>multica daemon</code> 领取任务后调起本地 agent CLI 完成，代码不出门。产品支持自部署（Docker Compose），CLI 通过 goreleaser + Homebrew tap 分发。</p>
+<p>Multica 把同时运行多个编码 CLI 的工作方式收敛为任务管理平台：<strong>智能体是一等公民</strong>，可以被指派任务、发表评论、改变状态。平台负责协作与编排，守护进程领取 task 后启动运行时 CLI；本地运行时在用户机器上执行，云运行时在相应执行节点上运行。执行位置不等于模型推理位置，也不保证代码、上下文或工具输出不被发送到平台及外部服务，详见 <a href="#execution-boundaries">§05 执行与数据边界</a>。产品支持自部署（Docker Compose），CLI 通过 goreleaser + Homebrew tap 分发。</p>
 
 <h3 id="ov-stack">技术栈</h3>
 <div class="tbl-wrap"><table class="tbl">
@@ -494,7 +557,7 @@
     ├── plugin-sdk/    插件面板 postMessage SDK
     └── tsconfig / eslint-config</code></pre>
 
-<p>阅读顺序建议：先看 <a href="#arch">§02 架构</a> 建立组件间关系，再用 <a href="#er">§03 数据模型</a> 对准每个域的存储形状，最后读 <a href="#auth">§04 认证与权限</a>——它横跨前两者，是理解「agent 如何被安全地放进协作系统」的关键。</p>
+<p>阅读顺序：<a href="#arch">§02 架构</a> 建立组件关系，<a href="#er">§03 数据模型</a> 和 <a href="#auth">§04 认证与权限</a> 解释持久化与授权；运行系统前再看 <a href="#execution-boundaries">§05 执行边界</a>、<a href="#task-recovery">§06 异常恢复</a>、<a href="#execution-workspaces">§07 执行目录与成果</a> 和 <a href="#operations">§08 部署运维</a>。文中的默认值对应所标注的源码基线，不代表实际部署已采用这些配置。</p>
 </section>
 
 <!-- ================================================================ -->
@@ -708,7 +771,7 @@
 <p>值得记住的三个后端事实：</p>
 <ul class="tight">
   <li><strong>路由住在 <code>cmd/server</code>，不在 <code>internal/handler</code></strong>。handler 是无路由知识的方法集合，router.go 用中间件组合出权限层级，读一个文件即可判断任意端点的鉴权要求。</li>
-  <li><strong>sqlc 是唯一的 SQL 通道</strong>：56 个 <code>.sql</code> 查询文件生成 61 个 Go 文件；schema 来源就是 <code>migrations/</code> 目录本身。</li>
+  <li><strong>主要静态查询由 sqlc 管理</strong>：56 个 <code>.sql</code> 查询文件生成 61 个 Go 文件，schema 来源是 <code>migrations/</code>；Issue 动态筛选及调度器等路径也会直接通过 pgx 执行 SQL。例如 <code>handler/issue.go</code> 使用 <code>h.DB.QueryRow</code> 计算动态查询的总数。</li>
   <li><strong>定时任务进数据库</strong>：<code>internal/scheduler</code> 用 <code>sys_cron_executions</code> 表做租约 + 审计的 DB cron（用量小时汇总、autopilot 定时调度、插件 hook 调度），多副本部署下不重复执行。</li>
 </ul>
 
@@ -821,7 +884,7 @@
 </table></div>
 
 <h3 id="arch-daemon"><span class="sec">2.4</span>Daemon 与任务执行链路</h3>
-<p>这是 Multica 最有辨识度的一条链路：<strong>平台负责编排，执行发生在用户自己的机器上</strong>。daemon 内嵌在 <code>multica</code> CLI 里（<code>multica daemon start</code>），机器级批量轮询器先占本机执行槽，再跨该机所有 runtime 批量领取任务。</p>
+<p>以本地运行时为例：<strong>平台负责编排，执行发生在用户自己的机器上</strong>。daemon 内嵌在 <code>multica</code> CLI 里（<code>multica daemon start</code>），机器级批量轮询器先占本机执行槽，再跨该机所有 runtime 批量领取任务。</p>
 
 <figure class="fig">
   <pre class="mermaid">
@@ -848,7 +911,7 @@ sequenceDiagram
   Dmn->>Srv: /complete 或 /fail，附 /usage 用量
   Srv-->>Hub: task:completed / task:failed
   </pre>
-  <figcaption><b>图 2-4 · 任务生命周期。</b>状态机：<span class="mono">queued → dispatched → running → completed / failed / cancelled</span>。断连恢复由服务端 runtime sweeper（过期滞留任务）与 daemon 重连时的 <code>recover-orphans</code> 双向兜底；claim 在 WS 上发出但连接中断（uncertain）时禁止换通道重试，防止双重领取。</figcaption>
+  <figcaption><b>图 2-4 · 任务生命周期。</b>状态机：<span class="mono">queued → dispatched → running → completed / failed / cancelled</span>。服务端扫描处理滞留执行；守护进程真正重启时走 <code>recover-orphans</code>，网络断连则需考虑重连宽限。WS claim 已发送但结果未知（uncertain）时禁止<strong>立即</strong>切 HTTP；等待安全窗口后会强制一次 HTTP 领取，详见 <a href="#task-recovery">§06</a>。</figcaption>
 </figure>
 
 <p><strong>准入判定</strong>不是简单的入队：<code>internal/dispatch</code> 定义了一套 ReasonCode，把「为什么没跑」变成可观测的一等结果——</p>
@@ -871,7 +934,7 @@ sequenceDiagram
 <div class="tbl-wrap"><table class="tbl">
   <thead><tr><th>归属</th><th>管什么</th><th>规则</th></tr></thead>
   <tbody>
-    <tr><td><strong>TanStack Query</strong></td><td class="wrap">一切来自 API 的数据：issues、members、agents、inbox、workspaces…</td><td class="wrap">工作区级查询 key 必须以 <code>wsId</code> 开头；WS 事件只允许打补丁/失效 Query 缓存</td></tr>
+    <tr><td><strong>TanStack Query</strong></td><td class="wrap">一切来自 API 的数据：issues、members、agents、inbox、workspaces…</td><td class="wrap">工作区级查询 key 必须包含 <code>wsId</code>；如 <code>["issues", wsId, "list", sort]</code>。WS 的服务端数据更新进入 Query 缓存</td></tr>
     <tr><td><strong>Zustand</strong></td><td class="wrap">筛选器、草稿、弹窗、标签页布局、导航历史</td><td class="wrap">共享 store 只能放在 <code>packages/core</code>；禁止把服务端载荷镜像进来；selector 必须返回稳定引用</td></tr>
     <tr><td><strong>React Context</strong></td><td class="wrap">仅平台管道（导航适配、i18n 适配）</td><td class="wrap">不承载业务状态</td></tr>
   </tbody>
@@ -1131,7 +1194,7 @@ erDiagram
   project ||..o{ project_resource : "project_id"
   workspace ||..o{ squad : "workspace_id"
   squad ||..o{ squad_member : "squad_id"
-  agent ||..o| squad : "leader_id（小队长必须是 agent）"
+  agent ||..o{ squad : "leader_id（agent 可领导多个小队）"
   project {
     uuid id PK
     text title
@@ -1371,7 +1434,7 @@ erDiagram
   workspace ||..o{ plugin_installation : "workspace_id"
   plugin_package ||..o{ plugin_package_version : "package_id"
   plugin_package_version ||..o{ plugin_package_file : "version_id"
-  plugin_package_version ||..o| plugin_installation : "package_version_id"
+  plugin_package_version ||..o{ plugin_installation : "package_version_id（同一版本可被多处安装）"
   plugin_installation ||..o{ plugin_secret : "installation_id"
   plugin_installation ||..o{ plugin_storage : "installation_id"
   plugin_installation ||..o{ plugin_invocation : "installation_id"
@@ -1467,7 +1530,7 @@ erDiagram
 </div>
 
 <h3 id="auth-login"><span class="sec">4.1</span>无密码登录</h3>
-<p>整个系统<strong>没有密码</strong>：<code>user</code> 表没有密码列，也就不存在密码哈希与找回流程。登录只有两条路，全部在公开路由组、按 IP 限流：</p>
+<p>整个系统<strong>没有密码</strong>：<code>user</code> 表没有密码列，也就不存在密码哈希与找回流程。登录只有两条路，全部在公开路由组；对应的按 IP 限流需配置请求路径 Redis（见 §8.1）：</p>
 
 <figure class="fig">
   <pre class="mermaid">
@@ -1643,7 +1706,7 @@ sequenceDiagram
 <h3 id="auth-hardening"><span class="sec">4.8</span>攻击面加固</h3>
 <ul class="tight">
   <li><strong>CSRF 三层</strong>：<code>SameSite=Strict</code> 为主防线；双提交 Cookie 的值是 <code>nonce.HMAC(nonce, 会话JWT)</code>——把 CSRF 令牌与会话绑定，子域写 Cookie 也伪造不了；Bearer 路径与插件 API 结构性免疫。</li>
-  <li><strong>限流</strong>（Redis 固定窗口 + Lua 原子）：send-code 5/分/IP、verify 20/分/IP、contact-sales 5/时、插件 API 120/分；邀请另有三重滑窗（发起人 10/10min · 工作区 50/24h · 收件人 6/24h，<strong>fail-closed</strong>）；<code>X-Forwarded-For</code> 仅在可信代理 CIDR 内采信。</li>
+  <li><strong>限流</strong>（启用对应 Redis 后，固定窗口 + Lua 原子）：send-code 5/分/IP、verify 20/分/IP、contact-sales 5/时、插件 API 120/分；邀请另有三重滑窗（发起人 10/10min · 工作区 50/24h · 收件人 6/24h，<strong>fail-closed</strong>）。不同入口的降级策略需分别核对：未配置请求路径 Redis 时认证限流会被禁用，见 <a href="#ops-topology">§8.1</a>；<code>X-Forwarded-For</code> 仅在可信代理 CIDR 内采信。</li>
   <li><strong>能力 URL 替代 Cookie</strong>：<code>SameSite=Strict</code> 会挡住 <code>&lt;img&gt;</code>/下载场景，于是附件下载、头像、插件面板都改用短时效 HMAC 签名 URL——凭证在链接里而不在会话里。</li>
   <li><strong>启动守卫</strong>：生产环境下弱 <code>JWT_SECRET</code> 直接 <code>os.Exit(1)</code>；开发验证码后门在生产硬关闭；保留 slug 表解析失败则拒绝启动（92 个保留字防路由劫持）。</li>
   <li><strong>删掉的攻击面</strong>：早期的 OpenAI 兼容透传端点 <code>/api/llm/*</code> 已整体移除——它曾允许任何登录用户白嫖部署方的模型密钥。</li>
@@ -1655,9 +1718,230 @@ sequenceDiagram
 
 <!-- @AUTH-DONE -->
 
+<!-- Execution, recovery, workspaces, and operations; verified against dcc2d5825. -->
+<section class="part new-chapter" id="execution-boundaries">
+<div class="part-head">
+  <span class="no">PART 05</span>
+  <h2>执行与数据边界</h2>
+  <p class="lede">任务级 API 身份、工作目录隔离、操作系统权限和模型的数据流是四个不同的边界。判断一次执行能做什么，需要逐层看，不能只看令牌或目录名称。</p>
+</div>
+
+<h3 id="boundary-identity"><span class="sec">5.1</span>API 身份与机器权限</h3>
+<div class="tbl-wrap"><table class="tbl">
+  <thead><tr><th>层次</th><th>当前实现</th><th>保证的范围</th></tr></thead>
+  <tbody>
+    <tr><td>Multica API 身份</td><td><code>mat_</code> 绑定智能体、task、工作区和运行时属主；服务端执行成员资格与资源权限检查</td><td>限制通过 Multica API 访问的身份与工作区。它不是只允许操作某一条任务的通用 ACL，也不限制操作系统文件访问</td></tr>
+    <tr><td>执行目录</td><td>守护进程管理环境目录；本地目录还可选择 <code>in_place</code> 或 <code>worktree</code></td><td>减少并发覆盖、隔离配置与保留成果；目录约定本身不阻止进程读取目录外文件</td></tr>
+    <tr><td>操作系统用户</td><td>智能体 CLI 作为守护进程的子进程运行，使用该用户可访问的文件、网络与宿主 CLI 凭据</td><td>必须由实际运行环境确定权限上限。任务级 <code>CODEX_HOME</code> 不等于新的操作系统用户</td></tr>
+    <tr><td>工具沙箱与审批</td><td>Claude Code 启动参数包含 <code>--permission-mode bypassPermissions</code>；Codex 按平台和检测到的配置选择沙箱策略</td><td>不能把无人值守执行描述成统一的强沙箱。应核对启动日志及实际生成的配置</td></tr>
+  </tbody>
+</table></div>
+<p>本基线中，Codex 在 Linux 使用 <code>danger-full-access</code>；Windows 未显式配置原生沙箱时也采用该模式，显式 opt-in 路径另行处理；macOS 由版本检测决定是否能保留带网络的 <code>workspace-write</code>，否则回退。实际策略以 <code>execenv/codex_sandbox.go</code> 和该次执行日志为准。</p>
+<div class="risk"><span class="t">部署边界</span>若需要限制智能体可触达的文件和凭据，应在守护进程之外设置专用操作系统用户、容器或虚拟机，并按任务需要分配目录和凭据。工作区权限与工作目录隔离不能代替这一层。</div>
+
+<h3 id="boundary-data"><span class="sec">5.2</span>三条数据路径</h3>
+<figure class="fig">
+  <ol class="flow-steps">
+    <li><span class="flow-no">01 · 平台</span><strong>协作与执行记录</strong><span>任务说明、评论、上下文和配置下发给守护进程；消息、进度、结果与用量回传 API。</span></li>
+    <li><span class="flow-no">02 · 执行机器</span><strong>CLI 与工作目录</strong><span>读取代码、运行工具、写入文件；结果分支和会话文件可能只保存在该机器上。</span></li>
+    <li><span class="flow-no">03 · 外部服务</span><strong>模型与 MCP 工具</strong><span>所选运行时决定模型后端；MCP 与其他 CLI 按各自配置访问第三方服务。</span></li>
+  </ol>
+  <figcaption><b>图 5-1 · 数据路径。</b>这三类位置不是单向流水线。CLI 与模型、MCP 的请求和回复是双向的；上报平台的工具消息也可能含代码片段或其他文件内容。</figcaption>
+</figure>
+<p><strong>本地执行不等于本地推理，也不等于代码永不离开机器。</strong>代码是否发送给模型、MCP 或其他服务，取决于运行时、工具配置和实际调用；进入 <code>task_message</code>、结果或附件的内容还会进入平台存储。API 中的密钥脱敏只覆盖对应的字段与出口，不能推导为任意工具输出都会自动脱敏。</p>
+<p>自托管决定 Multica API、数据库与对象存储由谁管理；它不会自动把第三方模型或工具变为本地服务。<code>runtime_mode=cloud</code> 则改变执行机器的位置。服务端另有可选的 LLM 辅助层，例如生成聊天标题，应与守护进程启动的编码 CLI 分开理解。</p>
+
+<h3 id="boundary-audit"><span class="sec">5.3</span>用一组标识串起审计</h3>
+<p>排查一次执行时，记录 <code>workspace_id</code>、<code>issue_id</code>（若有）、<code>task_id</code>、<code>agent_id</code>、<code>runtime_id</code> 与 <code>daemon_id</code>。调用授权看链顶人类 <code>originator_user_id</code>，成本和审计归责看 <code>accountable_user_id</code>，API 认证还涉及任务令牌绑定的运行时属主；这几个身份可能不同。</p>
+<p>任务令牌有 24 小时有效期，终态路径还会尝试删除该 task 的令牌。过期校验与删除是两道不同机制；删除失败应查服务端日志，不能仅凭界面已完成就证明凭据已清理。</p>
+<p class="source-map">源码入口（固定基线）：<a href="https://github.com/multica-ai/multica/blob/dcc2d5825/server/pkg/agent/claude.go">CLI 启动参数</a> · <a href="https://github.com/multica-ai/multica/blob/dcc2d5825/server/internal/daemon/execenv/codex_sandbox.go">Codex 沙箱策略</a> · <a href="https://github.com/multica-ai/multica/blob/dcc2d5825/server/internal/daemon/client.go">消息与结果上报</a> · <a href="https://github.com/multica-ai/multica/blob/dcc2d5825/server/pkg/db/queries/task_token.sql">任务令牌查询</a> · <a href="https://github.com/multica-ai/multica/blob/dcc2d5825/apps/docs/content/docs/security-model.zh.mdx">安全模型说明</a>。</p>
+</section>
+
+<section class="part new-chapter" id="task-recovery">
+<div class="part-head">
+  <span class="no">PART 06</span>
+  <h2>状态机与异常恢复</h2>
+  <p class="lede">正常执行只是主路径。分布式系统还要回答：请求是否送达、数据库是否提交、本机进程是否仍在运行，以及用户是否已经看到结果。</p>
+</div>
+
+<h3 id="recovery-states"><span class="sec">6.1</span>三套状态，各自回答一个问题</h3>
+<div class="tbl-wrap"><table class="tbl">
+  <thead><tr><th>对象</th><th>状态含义</th><th>不能直接推导的结论</th></tr></thead>
+  <tbody>
+    <tr><td>任务 <code>issue</code></td><td>协作流程：工作区维护的 <code>issue_status</code>，如 <code>todo / in_progress / in_review / done</code></td><td>一个 task 成功不等于任务已通过业务验收；同一任务可以有多次执行、重试或委派</td></tr>
+    <tr><td>执行 <code>agent_task_queue</code></td><td><code>queued → dispatched → running → completed / failed / cancelled</code></td><td><code>dispatched</code> 只表示已领取，准备目录、下载 skill 或等待本地锁时可能还未启动 CLI</td></tr>
+    <tr><td>运行时 <code>agent_runtime</code></td><td><code>online / offline</code> 表示平台观察到的运行时可达性</td><td><code>offline</code> 不证明本地进程已退出；网络分区期间，执行可能仍在本机继续</td></tr>
+  </tbody>
+</table></div>
+<p>上面的 task 状态链是典型路径；取消可以从多个非终态发生，过期或准备失败也可能在 <code>queued / dispatched</code> 阶段结束。重试由服务创建或调度后续执行，并保留 <code>retry_of_task_id</code> 等谱系；不要把所有恢复都画成原记录从 <code>failed</code> 回到 <code>running</code>。</p>
+
+<h3 id="recovery-matrix"><span class="sec">6.2</span>故障窗口与恢复责任</h3>
+<div class="tbl-wrap"><table class="tbl">
+  <thead><tr><th>发生在哪里</th><th>谁处理、如何恢复</th><th>排查时看什么</th></tr></thead>
+  <tbody>
+    <tr><td>WS 领取请求确认未发送</td><td>守护进程可以切到 HTTP 领取；例如无连接或请求尚未发出就超时</td><td>WS RPC 日志与 HTTP 领取结果，不必把 WS 不可用等同于无法执行</td></tr>
+    <tr><td>领取请求已发送，但回包丢失</td><td>结果标记为 <code>uncertain</code>。跳过当前领取周期，等待服务端执行预算加响应宽限的安全窗口，再强制一次 HTTP 领取；已提交的旧领取由滞留任务恢复机制处理</td><td><code>ws claim outcome uncertain</code>、任务是否已为 <code>dispatched</code>。禁止立即换通道重复领取</td></tr>
+    <tr><td>准备环境或等待本地目录锁</td><td>守护进程续 <code>prepare_lease</code>；服务端扫描时排除有效准备租约。锁等待有单独状态提示，仍需监听取消</td><td>准备阶段日志、租约是否继续刷新、哪个 task 持有同一路径</td></tr>
+    <tr><td>执行期间网络断开</td><td>运行时可先显示离线；服务端保留重连宽限，给仍在本机执行的进程恢复通信的机会</td><td>本机日志与进程、最后心跳、<code>MULTICA_RUNTIME_RECONNECT_GRACE</code>，避免把暂时离线直接当成崩溃</td></tr>
+    <tr><td>守护进程真正重启</td><td><code>recover-orphans</code> 处理该运行时遗留的执行，再由失败恢复策略判断是否可重试；与单纯断网不同，不依赖等待完整重连宽限</td><td>启动时间、孤儿恢复日志、原 task 与后续 task 的关联</td></tr>
+    <tr><td>完成回调重发，或取消与完成同时到达</td><td>服务端按状态条件更新并使用事务；完成路径遇到已有终态时返回已存在的结果，避免覆盖终态或重复写入聊天结果</td><td>数据库中的最终状态及接口返回值；HTTP 成功不必然表示该次请求赢得了状态竞争</td></tr>
+    <tr><td>前端断线后重新连接</td><td>前端失效工作区 Query 缓存，从 API 重新取得当前状态；WS 用于实时同步，不替代持久化事实</td><td>区分界面缓存陈旧、服务端状态异常与本机执行异常</td></tr>
+  </tbody>
+</table></div>
+
+<h3 id="recovery-budgets"><span class="sec">6.3</span>超时不是一个总开关</h3>
+<div class="tbl-wrap"><table class="tbl">
+  <thead><tr><th>预算</th><th>本基线默认值</th><th>适用条件</th></tr></thead>
+  <tbody>
+    <tr><td>服务端扫描周期</td><td>30 秒</td><td>周期性判断运行时与 task；不是检测发生即立刻终止</td></tr>
+    <tr><td>运行时领取新鲜度</td><td>150 秒</td><td>共享的数据库心跳资格窗口，参与领取和服务端存活判断</td></tr>
+    <tr><td>离线重连宽限</td><td>3 小时</td><td><code>MULTICA_RUNTIME_RECONNECT_GRACE</code> 可配置；真正重启走显式孤儿恢复</td></tr>
+    <tr><td>排队过期</td><td>2 小时</td><td><code>MULTICA_TASK_QUEUED_TTL</code> 可配置；低并发、长任务场景需结合排队时间调整</td></tr>
+    <tr><td>领取后未开始</td><td>5 分钟</td><td>服务端滞留扫描会排除持有有效准备租约的执行</td></tr>
+    <tr><td>运行态时钟兜底</td><td>9000 秒</td><td>还受运行时心跳新鲜度约束；健康、持续心跳的长任务不会仅因超过此值被终止</td></tr>
+  </tbody>
+</table></div>
+<p>守护进程和具体 CLI 后端另有空闲、工具执行、语义无进展等 watchdog。它们测量的活动不同，不能把任一超时值解释为全系统统一的最长执行时长。修改预算时，同时检查准备租约、队列等待、重连和重试策略。</p>
+<div class="note"><span class="t">幂等的范围</span>状态条件更新能保护平台记录，不能自动撤销已经发生的 Git 推送、外部 API 写入或其他工具副作用。人工重试前应先确认原执行是否已经产生外部结果。</div>
+<p class="source-map">源码入口（固定基线）：<a href="https://github.com/multica-ai/multica/blob/dcc2d5825/server/internal/daemon/wsrpc.go">WS / HTTP 领取策略</a> · <a href="https://github.com/multica-ai/multica/blob/dcc2d5825/server/cmd/server/runtime_sweeper.go">服务端扫描与预算</a> · <a href="https://github.com/multica-ai/multica/blob/dcc2d5825/server/internal/service/task.go">终态事务、取消与重试</a> · <a href="https://github.com/multica-ai/multica/blob/dcc2d5825/server/internal/daemon/daemon.go">准备租约与本地执行</a>。</p>
+</section>
+
+<section class="part new-chapter" id="execution-workspaces">
+<div class="part-head">
+  <span class="no">PART 07</span>
+  <h2>执行目录与成果生命周期</h2>
+  <p class="lede">平台保存了执行记录，不代表已经保存了所有本地文件。理解工作目录的来源、复用与清理，才能找到成果，并解释并发执行是否会影响用户的 checkout。</p>
+</div>
+
+<h3 id="workspace-modes"><span class="sec">7.1</span>三种目录安排</h3>
+<div class="tbl-wrap"><table class="tbl">
+  <thead><tr><th>模式</th><th>目录与并发</th><th>成果位置</th></tr></thead>
+  <tbody>
+    <tr><td>守护进程管理的工作区</td><td>在配置的 <code>WorkspacesRoot</code> 下解析稳定环境根，准备仓库与上下文；环境根有独占声明，避免执行与清理互相覆盖</td><td>环境中的工作目录、结果分支和会话文件；具体仓库准备方式由执行路径与 provider 决定</td></tr>
+    <tr><td>本地目录 <code>in_place</code></td><td>在用户指定目录直接执行；模式字段为空时仍按此处理。同一规范化路径上的执行通过路径锁串行</td><td>直接改动原目录。执行前后的文件差异需要在原 checkout 检查，不能假设任务结束就能还原</td></tr>
+    <tr><td>本地目录 <code>worktree</code></td><td>在环境根内创建用户仓库的独立 worktree；绕过整段执行的路径串行锁，Git 管理操作仍受仓库级锁保护</td><td>通常交付用户仓库内的 <code>agent/&lt;name&gt;/&lt;short-task-id&gt;</code> 分支；收尾失败时保留 worktree 路径供恢复</td></tr>
+  </tbody>
+</table></div>
+<p>这里描述的是守护进程如何安排正常执行。worktree 减少文件写入冲突，但其目录位置不会限制拥有宿主用户权限的进程访问其他目录；权限范围仍见 <a href="#execution-boundaries">§05</a>。</p>
+
+<h3 id="workspace-prepare"><span class="sec">7.2</span>从用户目录到可恢复的结果</h3>
+<figure class="fig">
+  <ol class="flow-steps">
+    <li><span class="flow-no">01 · 准备</span><strong>捕获起点</strong><span>解析仓库根与用户选择的子目录；复制已跟踪的未提交修改及允许复制的未跟踪文件。</span></li>
+    <li><span class="flow-no">02 · 执行</span><strong>独立工作树</strong><span>在新 worktree 内恢复起点、准备上下文和运行时配置，智能体在对应子目录运行。</span></li>
+    <li><span class="flow-no">03 · 收尾</span><strong>保留可交付结果</strong><span>清理托管配置后处理剩余修改；能提交则保留结果分支，无法安全收尾则留下目录。</span></li>
+  </ol>
+  <figcaption><b>图 7-1 · 本地 worktree 模式。</b>准备阶段使用 <code>git stash create</code> 捕获已跟踪修改，并不执行会清空用户工作树的 <code>git stash push</code>。</figcaption>
+</figure>
+<p>未跟踪文件复制受数量和大小限制：本基线为 2000 个、200 MiB，并遵循 Git 的忽略规则。无法完整复现纳入复制范围的文件时，准备阶段报错退出；不是静默以缺失文件的环境继续运行。存在用户未提交内容时，还会在执行分支记录基线提交，以区分原有内容与智能体新增结果。</p>
+<p>收尾阶段可能自动提交智能体遗留的未提交修改；如果没有新增成果，则清理空结果分支。提交失败或收尾被判定不安全时，返回 <code>PreservedPath</code> 并保留 worktree。这里的结果分支是本地成果指针，不代表已推送、已合并或已通过测试。</p>
+<div class="note"><span class="t">锁文件与活动锁</span>仓库级 <code>multica-worktree.lock</code> 位于 common Git directory，由进程持有文件锁。同一仓库的多个 linked worktree 共享这道协调。文件存在不等于锁仍被占用；不要通过删除锁文件解除竞争，否则可能让两个进程分别锁住不同 inode。</div>
+
+<h3 id="workspace-retention"><span class="sec">7.3</span>会话复用、清理与找回成果</h3>
+<p>后续执行可以复用先前的目录和 CLI 会话，但服务端的 <code>session_id</code> 只是指针。目录、会话文件或运行时条件不再满足时，需要走新环境或会话恢复路径；不能仅凭数据库中的会话 ID 保证可以续跑。</p>
+<div class="tbl-wrap"><table class="tbl">
+  <thead><tr><th>内容</th><th>保留与回收边界</th><th>检查方式</th></tr></thead>
+  <tbody>
+    <tr><td>执行记录与结果摘要</td><td>在服务端数据库；不等于完整 Git 仓库、构建输出或 CLI 会话备份</td><td>查 task 详情、结果里的 <code>work_dir / branch_name / session_id</code> 与本机日志</td></tr>
+    <tr><td>用户原目录</td><td><code>in_place</code> 不按可丢弃 workdir 清理；托管 sidecar 的清理与用户代码清理是两回事</td><td>在原仓库查看 <code>git status</code> 与差异</td></tr>
+    <tr><td>管理的执行环境与缓存</td><td>守护进程按父任务生命周期、完成时间、孤儿状态、缓存类型等分别执行 GC；活动环境有锁保护</td><td>查看当前 profile 的 GC 配置与日志。自托管的完成环境独立 TTL 默认关闭，但其他清理规则仍可能生效</td></tr>
+    <tr><td>收尾失败保留的 worktree</td><td>保留用于恢复，不是永久归档承诺。应先把有效成果保存到稳定分支或其他持久位置，再处理清理</td><td><code>git worktree list</code>、日志中的保留路径、该目录下的 <code>git status</code></td></tr>
+  </tbody>
+</table></div>
+<pre class="block"><code># Run in the original repository; these commands only inspect state.
+git worktree list
+git branch --list 'agent/*'
+git status --short
+
+# Read logs for the active daemon profile.
+multica daemon logs --lines 200</code></pre>
+<p>同一机器可能存在多个 profile 和旧日志。使用命名 profile 时显式指定 CLI 的 <code>--profile</code>；以日志命令输出的实际文件位置为准，不要只凭文件修改时间判断当前守护进程。</p>
+<p class="source-map">源码入口（固定基线）：<a href="https://github.com/multica-ai/multica/blob/dcc2d5825/server/internal/daemon/local_directory.go">本地目录模式</a> · <a href="https://github.com/multica-ai/multica/blob/dcc2d5825/server/internal/daemon/execenv/execenv.go">准备与复用</a> · <a href="https://github.com/multica-ai/multica/blob/dcc2d5825/server/internal/daemon/execenv/local_worktree.go">worktree 与成果收尾</a> · <a href="https://github.com/multica-ai/multica/blob/dcc2d5825/server/internal/daemon/execenv/gitroot_lock.go">仓库级锁</a> · <a href="https://github.com/multica-ai/multica/blob/dcc2d5825/server/internal/daemon/gc.go">GC</a> · <a href="https://github.com/multica-ai/multica/blob/dcc2d5825/server/internal/daemon/config.go">保留策略默认值</a>。</p>
+</section>
+
+<section class="part new-chapter" id="operations">
+<div class="part-head">
+  <span class="no">PART 08</span>
+  <h2>部署、存储与故障排查</h2>
+  <p class="lede">先确认流量到达哪个服务，再确认数据库与执行机器是否就绪。以下为部署和排查方法，实际可用性需在目标环境逐项验证。</p>
+</div>
+
+<h3 id="ops-topology"><span class="sec">8.1</span>部署拓扑与可选依赖</h3>
+<p>默认自托管 Compose 启动 PostgreSQL、backend 与 frontend 三个服务；守护进程和已登录的智能体 CLI 运行在执行机器上。Web 和 API 默认分别绑定宿主机 <code>127.0.0.1:3000 / 8080</code>，跨机器访问由 HTTPS 反向代理承接。</p>
+<div class="tbl-wrap"><table class="tbl">
+  <thead><tr><th>路径 / 依赖</th><th>应到达的位置</th><th>常见误判</th></tr></thead>
+  <tbody>
+    <tr><td>页面与普通 API</td><td>页面到 frontend；普通 API 可经 frontend rewrite 或按部署方案直接到 backend</td><td>浏览器能打开首页，不代表执行机器访问的 API 地址也正确</td></tr>
+    <tr><td><code>/ws</code></td><td>浏览器实时连接到 backend 的 <code>realtime.Hub</code>，代理需转发 WS Upgrade</td><td>普通 HTTP 代理成功不能证明 WS 升级成功</td></tr>
+    <tr><td><code>/api/daemon/ws</code></td><td>执行机器到 backend 的机器连接；与浏览器的 <code>/ws</code> 不同</td><td>漏配后可能回退轮询，表现为能执行但实时唤醒异常</td></tr>
+    <tr><td>Redis</td><td>单节点可使用内存 Hub；跨节点实时扇出需显式配置 relay。请求路径缓存/限流与 relay 还可使用不同 Redis 配置</td><td>默认 Compose 没有 Redis 服务，也未传入 <code>REDIS_URL</code>；仅在宿主 <code>.env</code> 写它不会自动接入容器</td></tr>
+    <tr><td>邮件与对象存储</td><td>邮件用于验证码；附件可使用本地上传卷或配置好的 S3 后端</td><td>API 就绪不表示邮件可投递、附件可下载、智能体已登录</td></tr>
+  </tbody>
+</table></div>
+<div class="risk"><span class="t">Redis 的关闭语义</span>未配置请求路径 Redis 时，服务端会记录 <code>auth rate limiting disabled: REDIS_URL not configured</code>。因此 §4.8 中的认证限流数值属于启用对应 Redis 限流后的行为，不是所有自托管安装都会自动具备的保证。多副本部署还需同时检查 relay、后台租约及共享附件存储。</div>
+<p>要接入 Redis，应在自己的 Compose override 中显式增加服务或外部连接及 backend 环境变量，再核对启动日志。仅配置 <code>REALTIME_RELAY_REDIS_URL</code> 可以让 relay 使用独立实例，但不能据此推断请求路径限流也已开启。</p>
+<p>公开 URL 的职责也应分开：<code>MULTICA_APP_URL</code> 指向页面，<code>MULTICA_PUBLIC_URL</code> 提供公开 API 地址；守护进程需要不同地址时使用 <code>MULTICA_DAEMON_SERVER_URL</code>。从实际 <code>/api/config</code> 响应核对 <code>daemon_server_url</code>，尤其留意远程安装是否仍返回 <code>localhost</code>。</p>
+
+<h3 id="ops-readiness"><span class="sec">8.2</span>启动、升级与就绪验证</h3>
+<pre class="block"><code># Published images; does not build the current checkout.
+make selfhost
+
+# Alternatively, build this checkout.
+make selfhost-build
+
+# Inspect the self-hosted services and backend readiness.
+docker compose -f docker-compose.selfhost.yml ps
+curl -fsS http://127.0.0.1:8080/health
+curl -fsS http://127.0.0.1:8080/readyz</code></pre>
+<p><code>/health</code> 证明 API 进程存活，并提供 PID/commit 等信息；<code>/readyz</code> 检查数据库连通性与当前二进制要求的迁移版本，正常返回如下。它不验证邮件、Redis、对象存储或远端守护进程。</p>
+<pre class="block"><code>{"status":"ok","checks":{"db":"ok","migrations":"ok"}}</code></pre>
+<p>容器启动流程先执行迁移，再启动 API。迁移文件在显式事务外执行，以支持并发索引；版本登记也可能包含条件跳过的迁移，因此 readiness 不替代关键表、索引及业务流程的验证。</p>
+<p><strong>建议的升级顺序：</strong>记录当前镜像 tag 与数据库迁移基线 → 备份数据库、上传对象及恢复所需配置 → 在独立环境验证目标版本 → 更新并重新创建服务 → 检查 readiness、登录、WS、一次执行和附件下载。回退旧镜像不会自动撤销数据库变更；只有确认 schema 兼容或验证过恢复方案后才执行回退。</p>
+<p>修改 Compose 传入的环境变量后，用 <code>docker compose -f docker-compose.selfhost.yml up -d</code> 重新创建受影响服务；单纯 <code>restart</code> 不会重新读取容器环境。<code>make selfhost</code> 使用发布镜像，测试当前 checkout 应使用 <code>make selfhost-build</code>；升级记录中分别注明源码提交与镜像 tag。</p>
+<pre class="block"><code># Run on the execution machine; replace these example domains.
+curl -fsS https://api.example.com/health
+curl -fsS https://api.example.com/readyz
+multica setup self-host \
+  --server-url https://api.example.com \
+  --app-url https://app.example.com
+multica daemon status --output json
+multica daemon logs --lines 100</code></pre>
+<p><code>setup self-host</code> 会探测 API、引导登录、保存本机凭据并启动守护进程；它是初始化操作。只想排查已有安装时，先运行状态和日志命令。</p>
+
+<h3 id="ops-storage"><span class="sec">8.3</span>数据落在哪里，恢复需要哪些部分</h3>
+<div class="tbl-wrap"><table class="tbl">
+  <thead><tr><th>持久化位置</th><th>主要内容</th><th>恢复边界</th></tr></thead>
+  <tbody>
+    <tr><td>PostgreSQL / <code>pgdata</code></td><td>工作区、任务、执行、消息、权限、安装配置和迁移账本</td><td>备份需可恢复到与应用兼容的版本；数据库恢复不包含附件字节和执行机器上的 Git 成果</td></tr>
+    <tr><td><code>backend_uploads</code> 或 S3</td><td>上传的附件、头像等对象；默认本地卷挂载到 <code>/app/data/uploads</code></td><td>本地卷需单独备份；使用 S3 时核对桶、对象键及访问配置。多副本不能各自持有不共享的本地附件副本</td></tr>
+    <tr><td>执行机器的仓库、环境根与会话目录</td><td>本地修改、worktree、分支、CLI 会话和运行时状态</td><td>由该机器的备份与 GC 策略覆盖；平台恢复不能重建所有未上传的文件</td></tr>
+    <tr><td>部署配置与加密密钥</td><td>连接地址、JWT 签名配置、集成密文所依赖的密钥、对象存储配置</td><td>与数据分开受控保存；缺失解密密钥时，即使恢复了数据库，也可能无法使用已有集成凭据</td></tr>
+  </tbody>
+</table></div>
+<p>数据库与对象存储之间不是一笔 PostgreSQL 事务。渠道媒体和来源上下文等流程使用 pending object / intent 记录加 reconciler 处理上传、绑定、删除与补偿；不能将这一机制推导为所有对象操作都能原子回滚。</p>
+<p><strong>建议做一次隔离恢复演练：</strong>暂停会产生新写入的入口和执行后，取得相互匹配的数据库、对象和必要配置快照；恢复到独立实例，检查登录、任务记录、附件读取和集成解密。确认恢复实例连接的是专用执行环境，再验证新 task。备份文件存在不等于恢复已经验证。</p>
+<div class="risk"><span class="t">清理边界</span><code>docker compose down -v</code> 会移除 Compose 数据卷，不应作为普通重启步骤。源码开发环境的 <code>make destroy</code> 同样会清理该环境的数据库、profile 等数据；保留环境数据时使用对应的停止命令。</div>
+
+<h3 id="ops-troubleshooting"><span class="sec">8.4</span>按症状缩小范围</h3>
+<div class="tbl-wrap"><table class="tbl">
+  <thead><tr><th>症状</th><th>先检查</th><th>下一层证据</th></tr></thead>
+  <tbody>
+    <tr><td>页面能打开，初始化报服务器不可达</td><td>在执行机器上请求配置的 API <code>/health</code></td><td>DNS/TLS、代理目标、HTTP 状态和返回内容；200 HTML 不是期望的 API 健康响应</td></tr>
+    <tr><td>task 一直 <code>queued</code></td><td>运行时在线资格、本机槽位、准入原因及排队时间</td><td>守护进程状态、领取日志、队列过期配置；不要直接启动第二份守护进程试图解决</td></tr>
+    <tr><td>task 停在 <code>dispatched</code></td><td>准备环境、skill 下载、本地锁、准备租约</td><td>该 <code>task_id</code> 的守护进程日志；是否真正发出 start 回调</td></tr>
+    <tr><td>运行时离线，但本机仍有输出</td><td>心跳连接与服务端重连宽限</td><td>本机进程存活和 API 可达性，按 §6.2 区分网络分区与重启</td></tr>
+    <tr><td>执行有结果，其他客户端不刷新</td><td>API 返回的持久化状态、浏览器 <code>/ws</code></td><td>WS 连接、工作区订阅、Query 重取、多节点 relay 配置</td></tr>
+    <tr><td>附件记录存在但无法下载</td><td>对象是否存在、存储后端和签名地址</td><td>下载模式、域名、过期时间及代理；恢复数据库后尤其要确认对象也已恢复</td></tr>
+  </tbody>
+</table></div>
+<p>观察链路用 <code>request_id</code> 连接 HTTP 日志，用 <code>task_id / runtime_id / daemon_id</code> 连接执行日志。Prometheus 监听通过 <code>METRICS_ADDR</code> 显式启用；pprof 使用独立回环监听 <code>127.0.0.1:6060</code>。是否已被采集、是否有告警，需要在实际部署中验证。</p>
+<p class="source-map">源码入口（固定基线）：<a href="https://github.com/multica-ai/multica/blob/dcc2d5825/docker-compose.selfhost.yml">Compose 拓扑与卷</a> · <a href="https://github.com/multica-ai/multica/blob/dcc2d5825/Makefile">启动命令</a> · <a href="https://github.com/multica-ai/multica/blob/dcc2d5825/server/cmd/server/health.go">健康与就绪检查</a> · <a href="https://github.com/multica-ai/multica/blob/dcc2d5825/server/cmd/server/main.go">Redis 与后台服务</a> · <a href="https://github.com/multica-ai/multica/blob/dcc2d5825/server/cmd/server/router.go">路由、限流与存储选择</a> · <a href="https://github.com/multica-ai/multica/blob/dcc2d5825/apps/docs/content/docs/self-host-quickstart.zh.mdx">自托管步骤</a>。</p>
+</section>
+
+
 <footer class="foot">
   <span>基于仓库 <span class="mono">multica-ai/multica</span> @ <span class="mono">dcc2d5825</span>（2026-08-28）源码整理</span>
-  <span>生成于 2026-09-02 · 图中文件路径均相对仓库根目录</span>
+  <span>生成于 2026-09-02 · 补充与校订于 2026-09-08 · 文件路径相对仓库根目录</span>
 </footer>
 
 </div>
@@ -1692,7 +1976,7 @@ sequenceDiagram
             if (e.isIntersecting) visible.add(e.target.id); else visible.delete(e.target.id);
           });
           var best = null;
-          targets.forEach(function (t) { if (visible.has(t.id) && best === null) best = t.id; });
+          targets.forEach(function (t) { if (visible.has(t.id)) best = t.id; });
           if (best) setActive(best);
         }, { rootMargin: "-72px 0px -65% 0px" });
         targets.forEach(function (t) { io.observe(t); });
