@@ -12,7 +12,10 @@ import (
 	"time"
 )
 
-const defaultImageConcurrency = 9
+const (
+	defaultImageConcurrency = 9
+	maxImageConcurrency     = 50
+)
 
 func configuredImageConcurrency() (int, error) {
 	raw := strings.TrimSpace(os.Getenv("MULTICA_IMAGE_MAX_CONCURRENT"))
@@ -20,8 +23,8 @@ func configuredImageConcurrency() (int, error) {
 		return defaultImageConcurrency, nil
 	}
 	value, err := strconv.Atoi(raw)
-	if err != nil || value < 1 || value > 20 {
-		return 0, fmt.Errorf("MULTICA_IMAGE_MAX_CONCURRENT must be between 1 and 20")
+	if err != nil || value < 1 || value > maxImageConcurrency {
+		return 0, fmt.Errorf("MULTICA_IMAGE_MAX_CONCURRENT must be between 1 and %d", maxImageConcurrency)
 	}
 	return value, nil
 }

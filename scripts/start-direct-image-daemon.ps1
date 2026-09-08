@@ -5,7 +5,7 @@ param(
     [ValidateRange(1, 10)]
     [int]$MaxConcurrentTasks = 10,
 
-    [ValidateRange(1, 10)]
+    [ValidateRange(1, 50)]
     [int]$ImageMaxConcurrent = 10,
 
     [ValidateRange(30, 3600)]
