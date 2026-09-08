@@ -195,7 +195,7 @@ describe("useRealtimeSync — ws instance change", () => {
     }
   });
 
-  it("invalidates creative materials for material-analysis and pre-adaptation task lifecycle events", () => {
+  it("marks creative data stale for analysis, planning, production, selection and QC lifecycle events", () => {
     const { ws, emit } = createObservableMockWs();
     renderHook(() => useRealtimeSync(ws, stores), {
       wrapper: createWrapper(qc),
@@ -213,8 +213,9 @@ describe("useRealtimeSync — ws instance change", () => {
     ] as const;
 
     act(() => {
-      for (const triggerEvidenceKind of ["creative_crawl_run_analysis", "creative_source_analysis"]) {
+      for (const triggerEvidenceKind of ["creative_crawl_run_analysis", "creative_source_analysis", "creative_order_item_plan", "creative_order_item_production", "creative_order_item_candidate_selection", "creative_order_variant_qc", "creative_order_item_direct_edit"]) {
         for (const type of lifecycleEvents) {
+          qc.setQueryData(["creative", "ws-1", "orders"], []);
           emit({
             type,
             payload: {
@@ -226,14 +227,11 @@ describe("useRealtimeSync — ws instance change", () => {
               trigger_evidence_kind: triggerEvidenceKind,
             },
           });
+          expect(qc.getQueryState(["creative", "ws-1", "orders"])?.isInvalidated).toBe(true);
         }
       }
     });
 
-    const creativeInvalidations = invalidateSpy.mock.calls.filter(
-      (call: [{ queryKey?: unknown }, ...unknown[]]) => JSON.stringify(call[0].queryKey) === JSON.stringify(["creative", "ws-1"]),
-    );
-    expect(creativeInvalidations).toHaveLength(lifecycleEvents.length * 2);
   });
 
   it("does not invalidate creative materials for unrelated task events", () => {
@@ -251,7 +249,7 @@ describe("useRealtimeSync — ws instance change", () => {
           agent_id: "agent-1",
           issue_id: "issue-1",
           status: "failed",
-          trigger_evidence_kind: "creative_order_variant_qc",
+          trigger_evidence_kind: "issue_assignment",
         },
       });
     });

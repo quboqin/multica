@@ -23,46 +23,46 @@ export const creativeKeys = {
 export const creativeMaterialLibraryOptions = (wsId: string, params?: CreativeMaterialLibraryQuery) =>
   queryOptions({
     queryKey: params ? [...creativeKeys.materials(wsId), params] : creativeKeys.materials(wsId),
-    queryFn: () => api.listCreativeMaterialLibrary(params),
+    queryFn: ({ signal }) => api.listCreativeMaterialLibrary(params, signal),
     enabled: !!wsId,
   });
 
 export const creativeResourcesOptions = (wsId: string, kind?: CreativeResourceKind) =>
   queryOptions({
     queryKey: creativeKeys.resources(wsId, kind),
-    queryFn: () => api.listCreativeResources(kind),
+    queryFn: ({ signal }) => api.listCreativeResources(kind, signal),
     enabled: !!wsId,
   });
 
 export const creativeResourceFilesOptions = (wsId: string, resourceId: string) =>
   queryOptions({
     queryKey: creativeKeys.resourceFiles(wsId, resourceId),
-    queryFn: () => api.listCreativeResourceFiles(resourceId),
+    queryFn: ({ signal }) => api.listCreativeResourceFiles(resourceId, signal),
     enabled: !!wsId && !!resourceId,
   });
 
 export const creativeMaterialsOptions = (wsId: string, issueId: string) =>
   queryOptions({
     queryKey: creativeKeys.issue(wsId, issueId),
-    queryFn: () => api.getCreativeMaterials(issueId),
+    queryFn: ({ signal }) => api.getCreativeMaterials(issueId, signal),
     enabled: !!wsId && !!issueId,
   });
 
-export const creativeOrdersOptions = (wsId: string) => queryOptions({ queryKey: creativeKeys.orders(wsId), queryFn: () => api.listCreativeOrders(), enabled: !!wsId });
-export const creativeOrderOptions = (wsId: string, orderId: string) => queryOptions({ queryKey: creativeKeys.order(wsId, orderId), queryFn: () => api.getCreativeOrder(orderId), enabled: !!wsId && !!orderId });
-export const creativeSourceAnalysesOptions = (wsId: string) => queryOptions({ queryKey: creativeKeys.analyses(wsId), queryFn: () => api.listCreativeSourceAnalyses(), enabled: !!wsId });
+export const creativeOrdersOptions = (wsId: string) => queryOptions({ queryKey: creativeKeys.orders(wsId), queryFn: ({ signal }) => api.listCreativeOrders(signal), enabled: !!wsId });
+export const creativeOrderOptions = (wsId: string, orderId: string) => queryOptions({ queryKey: creativeKeys.order(wsId, orderId), queryFn: ({ signal }) => api.getCreativeOrder(orderId, signal), enabled: !!wsId && !!orderId });
+export const creativeSourceAnalysesOptions = (wsId: string) => queryOptions({ queryKey: creativeKeys.analyses(wsId), queryFn: ({ signal }) => api.listCreativeSourceAnalyses(undefined, signal), enabled: !!wsId });
 export const creativeFeedbackOptions = (wsId: string, subjectType = "", subjectId = "") => queryOptions({
   queryKey: creativeKeys.feedback(wsId, subjectType, subjectId),
-  queryFn: () => api.listCreativeFeedback(subjectType, subjectId),
+  queryFn: ({ signal }) => api.listCreativeFeedback(subjectType, subjectId, signal),
   enabled: !!wsId,
 });
 export const creativeFeedbackMetricsOptions = (wsId: string) => queryOptions({
   queryKey: creativeKeys.feedbackMetrics(wsId),
-  queryFn: () => api.getCreativeFeedbackMetrics(),
+  queryFn: ({ signal }) => api.getCreativeFeedbackMetrics(signal),
   enabled: !!wsId,
 });
 export const creativeFeedbackDashboardOptions = (wsId: string) => queryOptions({
   queryKey: creativeKeys.feedbackDashboard(wsId),
-  queryFn: () => api.getCreativeFeedbackDashboard(),
+  queryFn: ({ signal }) => api.getCreativeFeedbackDashboard(signal),
   enabled: !!wsId,
 });

@@ -1,4 +1,23 @@
 {
+  "candidateProgress": {
+    "title": "候補の進捗",
+    "planning": "候補企画または制作の委派が未完了",
+    "invalid": "候補数が不正です",
+    "generating": "候補の正方形画像を生成中",
+    "priming": "候補の Prime を合成中",
+    "settling": "候補制作 task の終了待ち",
+    "incomplete": "候補画像または Prime 合成が未完了",
+    "ready": "候補準備済み・選定 task 未作成",
+    "queued": "候補選定は待機中",
+    "selecting": "候補を比較中",
+    "selectionFailed": "候補選定が未完了",
+    "cancelled": "候補フローをキャンセル済み",
+    "pending": "候補の状態待ち",
+    "counts": "企画 {{planned}}/{{expected}} · 画像 {{generated}} · 合成 {{primed}} · 目標 {{target}} セット",
+    "recoverPlan": "候補企画を補完",
+    "recoverSelection": "候補選定を続行",
+    "recovering": "復旧中"
+  },
   "primeMode": {
     "title": "Prime テンプレート処理",
     "switchLabel": "モデルで Prime テンプレートを統合",

@@ -25,7 +25,6 @@ import {
   creativeOrderAdjustmentSourceContext,
   creativeOrderAdjustmentIssueTitle,
   creativeOrderGenerationProgress,
-  creativeOrderNeedsPolling,
   creativeOrderSquadId,
   creativeStudioPath,
   selectCreativeReviewAssets,
@@ -482,60 +481,6 @@ describe("creative feedback state", () => {
       { id: "r2-delivered", revision: 2 },
       { active_revision: 2, staging_revision: 3 },
     )).toEqual({ source_asset_id: "r2-delivered", source_revision: 2, source_revision_role: "active" });
-  });
-
-  it("keeps polling partial work and unsettled operations on the working revision", () => {
-    const operation = { id: "operation-1", revision: 3, status: "unknown" };
-    const variant = {
-      id: "v1",
-      revision: 3,
-      active_revision: 2,
-      staging_revision: 3,
-      status: "action_required",
-      image_operations: [operation],
-    } as unknown as CreativeOrderVariant;
-    const order = { items: [{ variants: [variant] }] } as unknown as CreativeOrder;
-
-    expect(creativeOrderNeedsPolling(order)).toBe(true);
-    variant.image_operations = [{ ...operation, revision: 2 }] as CreativeOrderVariant["image_operations"];
-    expect(creativeOrderNeedsPolling(order)).toBe(false);
-    variant.status = "partial";
-    expect(creativeOrderNeedsPolling(order)).toBe(true);
-  });
-
-  it("keeps polling while completed candidate primaries are being compared", () => {
-    const order = {
-      status: "running",
-      derived_status: "awaiting_selection",
-      production_status: "completed",
-      items: [{ variants: [{
-        id: "candidate-1",
-        revision: 1,
-        staging_revision: 1,
-        status: "completed",
-        image_operations: [],
-      }] }],
-    } as unknown as CreativeOrder;
-
-    expect(creativeOrderNeedsPolling(order)).toBe(true);
-  });
-
-  it("stops polling a delivered order even when its original status remains queued", () => {
-    const order = {
-      status: "queued",
-      derived_status: "completed",
-      production_status: "completed",
-      items: [{ variants: [{
-        id: "selected-1",
-        revision: 1,
-        active_revision: 1,
-        staging_revision: 1,
-        status: "completed",
-        image_operations: [],
-      }] }],
-    } as unknown as CreativeOrder;
-
-    expect(creativeOrderNeedsPolling(order)).toBe(false);
   });
 
   it("counts one primary image for candidates and all expected sizes only for selected variants", () => {

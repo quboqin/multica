@@ -113,6 +113,7 @@ import { CreativeFeedbackDashboard } from "./creative-feedback-dashboard";
 import { creativeVariantRevisionExpectedSizes } from "./creative-staging-repair-workspace";
 import { CreativeWorkbench } from "./creative-workbench";
 import { MarketResourceFiles } from "./market-resource-files";
+import { CreativeCandidateProgressPanel } from "./creative-candidate-progress";
 import { CreativeOrderPrimeSummary, creativePrimeFamilyLabel, creativePrimeModeLabel } from "./creative-prime-mode";
 
 type CreativeStudioTab = "home" | "materials" | "orders" | "resources" | "feedback";
@@ -210,12 +211,12 @@ function CreativeStudioContent() {
   const [selectedOrderId, setSelectedOrderId] = useState(routeOrderId);
   const [trackedCollectionAutopilotRunId, setTrackedCollectionAutopilotRunId] = useState("");
   const [createKind, setCreateKind] = useState<CreativeResourceKind | null>(null);
-  const resources = useQuery(creativeResourcesOptions(wsId));
-  const orders = useQuery(creativeOrdersOptions(wsId));
-  const materials = useQuery(creativeMaterialLibraryOptions(wsId));
-  const materialAnalyses = useQuery(creativeSourceAnalysesOptions(wsId));
-  const candidateFeedback = useQuery(creativeFeedbackOptions(wsId, "candidate"));
-  const feedbackDashboard = useQuery(creativeFeedbackDashboardOptions(wsId));
+  const resources = useQuery({ ...creativeResourcesOptions(wsId), enabled: !!wsId && (tab === "home" || tab === "resources") });
+  const orders = useQuery({ ...creativeOrdersOptions(wsId), enabled: !!wsId && tab === "home" });
+  const materials = useQuery({ ...creativeMaterialLibraryOptions(wsId), enabled: !!wsId && tab === "home" });
+  const materialAnalyses = useQuery({ ...creativeSourceAnalysesOptions(wsId), enabled: !!wsId && tab === "home" });
+  const candidateFeedback = useQuery({ ...creativeFeedbackOptions(wsId, "candidate"), enabled: !!wsId && tab === "home" });
+  const feedbackDashboard = useQuery({ ...creativeFeedbackDashboardOptions(wsId), enabled: !!wsId && tab === "home" });
   const allResources = useMemo(() => resources.data?.resources ?? [], [resources.data?.resources]);
   const { marketPack, copyLibrary } = useMemo(
     () => defaultPreAdaptationResources(allResources),
@@ -341,8 +342,8 @@ function CreativeDiscoveryWorkspace({ filter, runId, onFilterChange, onRunChange
 function CreativeOrdersWorkspace({ selectedOrderId, onSelectOrder, onBack, backLabel }: { selectedOrderId: string; onSelectOrder: (orderId: string) => void; onBack: () => void; backLabel: string }) {
   const { t } = useT("creative");
   const wsId = useWorkspaceId();
-  const orders = useQuery(creativeOrdersOptions(wsId));
-  const materials = useQuery(creativeMaterialLibraryOptions(wsId));
+  const orders = useQuery({ ...creativeOrdersOptions(wsId), enabled: !!wsId && !selectedOrderId });
+  const materials = useQuery({ ...creativeMaterialLibraryOptions(wsId), enabled: !!wsId && !selectedOrderId });
   const creativeOrders = orders.data?.orders ?? [];
   if (selectedOrderId) return <CreativeOrderDetail orderId={selectedOrderId} onBack={onBack} onBrowseOrders={() => onSelectOrder("")} backLabel={backLabel} />;
   const candidatesById = new Map((materials.data?.candidates ?? []).map((candidate) => [candidate.id, candidate]));
@@ -399,20 +400,6 @@ export function creativeOrderGenerationProgress(order: CreativeOrder): { ready: 
   }, { ready: 0, expected: 0 });
 }
 
-export function creativeOrderNeedsPolling(order: CreativeOrder | undefined): boolean {
-  if (!order) return false;
-  const activeStatuses = ["queued", "running", "partial", "awaiting_selection"];
-  const aggregateStatuses = [order.derived_status, order.production_status].filter((status): status is string => Boolean(status));
-  if (aggregateStatuses.some((status) => activeStatuses.includes(status))) return true;
-  if (aggregateStatuses.length === 0 && activeStatuses.includes(order.status ?? "")) return true;
-  return order?.items.some((item) => item.variants.some((variant) => {
-    if (["queued", "running", "partial"].includes(variant.status)) return true;
-    const workingRevision = (variant.staging_revision ?? 0) > 0 ? variant.staging_revision! : variant.revision;
-    return (variant.image_operations ?? []).some((operation) => operation.revision === workingRevision
-      && ["queued", "running", "submitted", "unknown"].includes(operation.status));
-  })) === true;
-}
-
 type CreativeOrderSourceSummary = {
   id: string;
   label: string;
@@ -461,10 +448,7 @@ function CreativeOrderDetail({ orderId, onBack, onBrowseOrders, backLabel }: { o
   const { t } = useT("creative");
   const wsId = useWorkspaceId();
   const queryClient = useQueryClient();
-  const order = useQuery({
-    ...creativeOrderOptions(wsId, orderId),
-    refetchInterval: (query) => creativeOrderNeedsPolling(query.state.data) ? 5000 : false,
-  });
+  const order = useQuery(creativeOrderOptions(wsId, orderId));
   const feedback = useQuery(creativeFeedbackOptions(wsId, "asset"));
   const variantFeedback = useQuery(creativeFeedbackOptions(wsId, "variant"));
   const galleryMutation = useCreativeGalleryMutation(wsId);
@@ -728,6 +712,7 @@ function CreativeOrderDetail({ orderId, onBack, onBrowseOrders, backLabel }: { o
     </div>
     {data && <CreativeOrderPrimeSummary order={data} />}
     {data && <CreativeOrderStatusPanel order={data} stage={stage} />}
+    {data?.items.map((item) => <CreativeCandidateProgressPanel key={item.id} orderId={orderId} item={item} />)}
     <CreativeOrderJourney stageKey={stage.key} />
     <div className="space-y-4">
       {!isDirectEdit && data?.items.map((item, index) => {

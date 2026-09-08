@@ -2840,7 +2840,7 @@ export class ApiClient {
   }
 
   // Creative Studio resources
-  async listCreativeMaterialLibrary(params?: CreativeMaterialLibraryQuery): Promise<CreativeMaterialLibraryResponse> {
+  async listCreativeMaterialLibrary(params?: CreativeMaterialLibraryQuery, signal?: AbortSignal): Promise<CreativeMaterialLibraryResponse> {
     const search = new URLSearchParams();
     if (params?.runId) search.set("run_id", params.runId);
     if (params?.includeEmptyRuns === false) search.set("include_empty_runs", "false");
@@ -2855,7 +2855,7 @@ export class ApiClient {
     if (params?.view && params.view !== "all") search.set("view", params.view);
     if (params?.sort && params.sort !== "recent") search.set("sort", params.sort);
     const query = search.toString();
-    const raw = await this.fetch<unknown>(`/api/creative/materials${query ? `?${query}` : ""}`);
+    const raw = await this.fetch<unknown>(`/api/creative/materials${query ? `?${query}` : ""}`, { signal });
     return parseWithFallback(raw, CreativeMaterialLibrarySchema, EMPTY_CREATIVE_MATERIAL_LIBRARY, {
       endpoint: "GET /api/creative/materials",
     });
@@ -2895,9 +2895,9 @@ export class ApiClient {
 		});
 	}
 
-  async listCreativeResources(kind?: CreativeResourceKind): Promise<CreativeResourceListResponse> {
+  async listCreativeResources(kind?: CreativeResourceKind, signal?: AbortSignal): Promise<CreativeResourceListResponse> {
     const query = kind ? `?kind=${encodeURIComponent(kind)}` : "";
-    const raw = await this.fetch<unknown>(`/api/creative/resources${query}`);
+    const raw = await this.fetch<unknown>(`/api/creative/resources${query}`, { signal });
     return parseWithFallback(raw, CreativeResourceListSchema, EMPTY_CREATIVE_RESOURCE_LIST, {
       endpoint: "GET /api/creative/resources",
     });
@@ -2934,8 +2934,8 @@ export class ApiClient {
     await this.fetch<void>(`/api/creative/resources/${id}`, { method: "DELETE" });
   }
 
-  async listCreativeResourceFiles(id: string): Promise<CreativeResourceFileListResponse> {
-    const raw = await this.fetch<unknown>(`/api/creative/resources/${id}/files`);
+  async listCreativeResourceFiles(id: string, signal?: AbortSignal): Promise<CreativeResourceFileListResponse> {
+    const raw = await this.fetch<unknown>(`/api/creative/resources/${id}/files`, { signal });
     return parseWithFallback(raw, CreativeResourceFileListSchema, EMPTY_CREATIVE_RESOURCE_FILE_LIST, {
       endpoint: "GET /api/creative/resources/:id/files",
     });
@@ -2973,8 +2973,8 @@ export class ApiClient {
   }
 
   // Creative issue workflow
-  async getCreativeMaterials(issueId: string): Promise<CreativeMaterialsResponse> {
-    const raw = await this.fetch<unknown>(`/api/issues/${issueId}/creative-materials`);
+  async getCreativeMaterials(issueId: string, signal?: AbortSignal): Promise<CreativeMaterialsResponse> {
+    const raw = await this.fetch<unknown>(`/api/issues/${issueId}/creative-materials`, { signal });
     return parseWithFallback(
       raw,
       CreativeMaterialsResponseSchema,
@@ -3029,26 +3029,26 @@ export class ApiClient {
     });
   }
 
-  async listCreativeFeedback(subjectType?: string, subjectId?: string): Promise<CreativeFeedbackEventListResponse> {
+  async listCreativeFeedback(subjectType?: string, subjectId?: string, signal?: AbortSignal): Promise<CreativeFeedbackEventListResponse> {
     const params = new URLSearchParams();
     if (subjectType) params.set("subject_type", subjectType);
     if (subjectId) params.set("subject_id", subjectId);
     const query = params.size > 0 ? `?${params.toString()}` : "";
-    const raw = await this.fetch<unknown>(`/api/creative-feedback-events${query}`);
+    const raw = await this.fetch<unknown>(`/api/creative-feedback-events${query}`, { signal });
     return parseWithFallback(raw, CreativeFeedbackEventListResponseSchema, EMPTY_CREATIVE_FEEDBACK_EVENT_LIST_RESPONSE, {
       endpoint: "GET /api/creative-feedback-events",
     });
   }
 
-  async getCreativeFeedbackMetrics(): Promise<CreativeFeedbackMetrics> {
-    const raw = await this.fetch<unknown>("/api/creative-feedback-events/metrics");
+  async getCreativeFeedbackMetrics(signal?: AbortSignal): Promise<CreativeFeedbackMetrics> {
+    const raw = await this.fetch<unknown>("/api/creative-feedback-events/metrics", { signal });
     return parseWithFallback(raw, CreativeFeedbackMetricsSchema, EMPTY_CREATIVE_FEEDBACK_METRICS, {
       endpoint: "GET /api/creative-feedback-events/metrics",
     });
   }
 
-  async getCreativeFeedbackDashboard(): Promise<CreativeFeedbackDashboard> {
-    const raw = await this.fetch<unknown>("/api/creative-feedback-events/dashboard");
+  async getCreativeFeedbackDashboard(signal?: AbortSignal): Promise<CreativeFeedbackDashboard> {
+    const raw = await this.fetch<unknown>("/api/creative-feedback-events/dashboard", { signal });
     return parseWithFallback(raw, CreativeFeedbackDashboardSchema, EMPTY_CREATIVE_FEEDBACK_DASHBOARD, {
       endpoint: "GET /api/creative-feedback-events/dashboard",
     });
@@ -3066,13 +3066,13 @@ export class ApiClient {
     return parseWithFallback(raw, CreateCreativeFeedbackResponseSchema, EMPTY_CREATIVE_FEEDBACK_RESPONSE, { endpoint: "POST /api/creative-feedback-events/gallery" });
   }
 
-  async listCreativeOrders(): Promise<CreativeOrderListResponse> {
-    const raw = await this.fetch<unknown>("/api/creative/orders");
+  async listCreativeOrders(signal?: AbortSignal): Promise<CreativeOrderListResponse> {
+    const raw = await this.fetch<unknown>("/api/creative/orders", { signal });
     return parseWithFallback(raw, CreativeOrderListResponseSchema, EMPTY_CREATIVE_ORDER_LIST_RESPONSE, { endpoint: "GET /api/creative/orders" });
   }
 
-  async getCreativeOrder(id: string): Promise<CreativeOrder> {
-    const raw = await this.fetch<unknown>(`/api/creative/orders/${id}`);
+  async getCreativeOrder(id: string, signal?: AbortSignal): Promise<CreativeOrder> {
+    const raw = await this.fetch<unknown>(`/api/creative/orders/${id}`, { signal });
     return parseWithFallback(raw, CreativeOrderSchema, { id: "", workspace_id: "", issue_id: "", status: "draft", derived_status: "draft", delivery_status: "pending", production_status: "pending", input_snapshot: {}, trigger_evidence_kind: "", trigger_evidence_ref_id: "", created_by: "", created_at: "", updated_at: "", workflow_failures: [], items: [] }, { endpoint: "GET /api/creative/orders/:id" });
   }
 
@@ -3095,6 +3095,11 @@ export class ApiClient {
     }, {
       endpoint: "POST /api/creative/orders/:id/prime-compose",
     });
+  }
+
+  async recoverCreativeOrderCandidates(orderId: string, itemId: string): Promise<CreativeOrderWorkflowRetryResponse> {
+    const raw = await this.fetch<unknown>(`/api/creative/orders/${encodeURIComponent(orderId)}/items/${encodeURIComponent(itemId)}/candidate-recovery`, { method: "POST" });
+    return parseWithFallback(raw, CreativeOrderWorkflowRetryResponseSchema, { task_id: "" }, { endpoint: "POST /api/creative/orders/:id/items/:itemId/candidate-recovery" });
   }
 
   async queueCreativeOrderAdjustment(orderId: string, data: QueueCreativeOrderAdjustmentRequest): Promise<QueueCreativeOrderAdjustmentResponse> {
@@ -3186,9 +3191,9 @@ export class ApiClient {
     });
   }
 
-  async listCreativeSourceAnalyses(candidateId?: string) {
+  async listCreativeSourceAnalyses(candidateId?: string, signal?: AbortSignal) {
     const query = candidateId ? `?candidate_id=${encodeURIComponent(candidateId)}` : "";
-    const raw = await this.fetch<unknown>(`/api/creative/source-analyses${query}`);
+    const raw = await this.fetch<unknown>(`/api/creative/source-analyses${query}`, { signal });
     return parseWithFallback(raw, CreativeSourceAnalysisListResponseSchema, EMPTY_CREATIVE_SOURCE_ANALYSIS_LIST_RESPONSE, { endpoint: "GET /api/creative/source-analyses" });
   }
 

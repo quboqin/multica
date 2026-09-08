@@ -1,4 +1,23 @@
 {
+  "candidateProgress": {
+    "title": "Candidate progress",
+    "planning": "Candidate plans or production tasks are incomplete",
+    "invalid": "Unexpected candidate count",
+    "generating": "Generating candidate square images",
+    "priming": "Applying candidate Prime overlays",
+    "settling": "Waiting for candidate production tasks to settle",
+    "incomplete": "Candidate images or overlays are incomplete",
+    "ready": "Candidates ready; selection task not queued",
+    "queued": "Candidate selection queued",
+    "selecting": "Comparing candidates",
+    "selectionFailed": "Candidate selection incomplete",
+    "cancelled": "Candidate workflow cancelled",
+    "pending": "Waiting for candidate status",
+    "counts": "Plans {{planned}}/{{expected}} · Images {{generated}} · Overlays {{primed}} · Target {{target}} sets",
+    "recoverPlan": "Complete candidate planning",
+    "recoverSelection": "Continue candidate selection",
+    "recovering": "Recovering"
+  },
   "primeMode": {
     "title": "Prime template processing",
     "switchLabel": "Integrate Prime template with the model",

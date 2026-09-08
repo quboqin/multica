@@ -68,6 +68,14 @@ function qcReport(input: Pick<CreativeOrderQCReport, "id" | "variant_id" | "revi
 }
 
 describe("creative order stage", () => {
+  it("uses actual candidate progress instead of inferring selection from completed square images", () => {
+    const orderItem = item();
+    orderItem.variants = Array.from({ length: 6 }, (_, index) => ({ ...variant(`c${index}`), candidate_state: "candidate" }));
+    orderItem.candidate_progress = { state: "planning_incomplete", target: 6, expected: 8, planned: 6, generated: 6, primed: 6, settled: 6, plan_task_id: "plan", plan_status: "completed", selection_task_id: "", selection_status: "" };
+    expect(creativeOrderStage({ status: "running", derived_status: "awaiting_selection", items: [orderItem], input_snapshot: { target_variant_count: 6 }, workflow_failures: [] } as unknown as CreativeOrder)).toMatchObject({ label: "候选方案未齐", detail: "候选方案 6/8，方图 6，贴片 6" });
+    orderItem.candidate_progress.state = "selection_queued";
+    expect(creativeOrderStage({ status: "running", items: [orderItem], input_snapshot: { target_variant_count: 6 }, workflow_failures: [] } as unknown as CreativeOrder)).toMatchObject({ label: "候选比较中" });
+  });
   it("shows nine of ten ready sets without counting two reserves as deliveries", () => {
     const orderItem = item();
     orderItem.variants = Array.from({ length: 12 }, (_, index) => ({
@@ -1306,8 +1314,8 @@ describe("creative order delivery selection", () => {
 
     expect(creativeOrderStage(candidateOrder)).toMatchObject({
       key: "generating",
-      label: "候选比较中",
-      detail: "正在自动比较候选主画面，确定 3 个入选方案后继续生成",
+      label: "候选待筛选",
+      detail: "候选主画面已就绪，等待筛选任务",
       totalVariants: 0,
     });
 

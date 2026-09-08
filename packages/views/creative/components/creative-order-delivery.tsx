@@ -156,16 +156,6 @@ function creativeVariantStagingPrimaryPreviewMissing(variant: CreativeOrderVaria
     && Boolean(asset.attachment_id));
 }
 
-function creativeVariantPrimaryPreviewReady(variant: CreativeOrderVariant): boolean {
-  const revision = creativeVariantWorkingRevision(variant);
-  const primarySize = creativeVariantPrimarySize(variant);
-  return variant.assets.some((asset) => asset.revision === revision
-    && asset.size_key === primarySize
-    && (asset.stage === "primed" || asset.stage === "delivered")
-    && asset.status === "completed"
-    && Boolean(asset.attachment_id));
-}
-
 function creativeVariantCandidateStateLabel(state: ReturnType<typeof creativeVariantCandidateState>, rank: number | undefined): string {
   if (state === "candidate") return "候选主画面";
   if (state === "reserve") return (rank ?? 0) > 0 ? `后备第 ${rank} 名` : "后备方案";
@@ -201,7 +191,6 @@ export function creativeOrderStage(order: CreativeOrder | undefined): CreativeOr
   const allVariants = items.flatMap((item) => item.variants);
   const variants = allVariants.filter(creativeVariantParticipatesInDelivery);
   const candidates = allVariants.filter((variant) => creativeVariantCandidateState(variant) === "candidate");
-  const readyCandidates = candidates.filter(creativeVariantPrimaryPreviewReady).length;
   const readyVariants = variants.filter((variant) => creativeVariantAdoptionReadiness(variant).ready).length;
   const blockedVariants = variants.filter(creativeVariantNeedsManualAction).length;
   const productionStoppedVariants = variants.filter(creativeVariantHasProductionStop).length;
@@ -222,8 +211,17 @@ export function creativeOrderStage(order: CreativeOrder | undefined): CreativeOr
   if (status === "awaiting_adoption") {
     return { ...base, key: "review", label: "可入图库", detail: "已有交付成图，可分别加入成图库", action: "查看成图" };
   }
-  if (status === "awaiting_selection" || (candidates.length >= targetPerItem && readyCandidates === candidates.length)) {
+  if (items.some((item) => ["selection_queued", "selecting"].includes(item.candidate_progress?.state ?? ""))) {
     return { ...base, key: "generating", label: "候选比较中", detail: `正在自动比较候选主画面，确定 ${targetPerItem} 个入选方案后继续生成`, action: "等待筛选" };
+  }
+  const candidateProgress = items.map((item) => item.candidate_progress).find((progress) => progress && !["selection_queued", "selecting"].includes(progress.state));
+  if (candidateProgress) {
+    const detail = `候选方案 ${candidateProgress.planned}/${candidateProgress.expected}，方图 ${candidateProgress.generated}，贴片 ${candidateProgress.primed}`;
+    const labels: Record<string, string> = { planning_incomplete: "候选方案未齐", planning_invalid: "候选方案异常", generating: "候选生成中", priming: "候选贴片中", settling: "候选任务收尾中", primary_incomplete: "候选成图未齐", selection_ready: "候选待筛选", selection_incomplete: "候选筛选未完成", cancelled: "候选流程已取消" };
+    return { ...base, key: ["planning_invalid", "primary_incomplete", "selection_incomplete", "cancelled"].includes(candidateProgress.state) ? "attention" : "generating", label: labels[candidateProgress.state] ?? "候选处理中", detail, action: "查看候选进度" };
+  }
+  if (status === "awaiting_selection") {
+    return { ...base, key: "generating", label: "候选待筛选", detail: "候选主画面已就绪，等待筛选任务", action: "查看候选进度" };
   }
   if (actionableFailures.length > 0 || status === "failed" || blockedVariants > 0 || (status === "action_required" && variants.length === 0)) {
     const failureCount = actionableFailures.length;

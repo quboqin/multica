@@ -1,4 +1,23 @@
 {
+  "candidateProgress": {
+    "title": "候选进度",
+    "planning": "候选方案未齐或尚未委派",
+    "invalid": "候选方案数量异常",
+    "generating": "正在生成候选方图",
+    "priming": "正在完成候选贴片",
+    "settling": "等待候选生产任务收尾",
+    "incomplete": "候选主图或贴片未齐",
+    "ready": "候选已就绪，待创建筛选任务",
+    "queued": "候选筛选已排队",
+    "selecting": "正在比较候选",
+    "selectionFailed": "候选筛选未完成",
+    "cancelled": "候选流程已取消",
+    "pending": "等待候选状态",
+    "counts": "方案 {{planned}}/{{expected}} · 方图 {{generated}} · 贴片 {{primed}} · 目标 {{target}} 套",
+    "recoverPlan": "补齐候选方案",
+    "recoverSelection": "继续候选筛选",
+    "recovering": "正在恢复"
+  },
   "primeMode": {
     "title": "Prime 模板处理",
     "switchLabel": "模型融入 Prime 模板",

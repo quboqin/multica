@@ -620,6 +620,7 @@ export interface CreativeFeedbackDashboard {
 }
 
 export interface CreativeOrder {
+  recoveries?: CreativeOrderRecovery[];
   id: string;
   workspace_id: string;
   issue_id: string;
@@ -653,6 +654,16 @@ export interface CreativeOrderWorkflowFailure {
 }
 
 export interface CreativeOrderWorkflowRetryResponse { task_id: string; }
+export interface CreativeRecoveryAttempt {
+  id: string; attempt: number; status: string; source_task_id: string; result_task_id: string;
+  result_asset_id: string; reason_code: string; error_message: string; started_at: string; completed_at: string;
+}
+export interface CreativeOrderRecovery {
+  id: string; order_item_id: string; variant_id: string; revision: number; stage: string; size_key: string;
+  status: string; reason_code: string; source_task_id: string; result_task_id: string; resolved_asset_id: string;
+  attempt: number; max_attempts: number; next_retry_at: string; last_error: string; created_at: string;
+  updated_at: string; resolved_at: string; attempts: CreativeRecoveryAttempt[];
+}
 export interface CreativeOrderPrimeComposeResponse { variant_id: string; composed: boolean; completed: boolean; status?: string; }
 export interface QueueCreativeOrderAdjustmentRequest {
   adjustment_issue_id: string;
@@ -680,7 +691,8 @@ export interface CreativeOrderListResponse { orders: CreativeOrder[]; }
 export interface CreateCreativeOrderRequest { issue_id: string; submission_key?: string; status: string; input_snapshot: Record<string, unknown>; trigger_evidence_kind: string; trigger_evidence_ref_id: string; items: { source_kind?: "material" | "copy_library"; copy_library_id?: string; candidate_id: string; source_analysis_id: string; copy_snapshot: Record<string, unknown>; direction: string }[]; }
 export interface CreativeSourceAnalysis { id: string; candidate_id: string; analysis_version: number; status: string; summary: string; result: Record<string, unknown>; error_code: string; error_message: string; trigger_evidence_kind: string; trigger_evidence_ref_id: string; created_at: string; completed_at: string; }
 export interface CreativeSourceAnalysisListResponse { analyses: CreativeSourceAnalysis[]; }
-export interface CreativeOrderItem { id: string; order_id: string; source_kind?: string; copy_library_id?: string; candidate_id: string; source_analysis_id: string; copy_snapshot: Record<string, unknown>; direction: string; status: string; adopted_variant_id: string; adopted_at: string; adopted_by: string; created_at: string; updated_at: string; variants: CreativeOrderVariant[]; }
+export interface CreativeCandidateProgress { state: string; target: number; expected: number; planned: number; generated: number; primed: number; settled: number; plan_task_id: string; plan_status: string; selection_task_id: string; selection_status: string; }
+export interface CreativeOrderItem { candidate_progress?: CreativeCandidateProgress | null; id: string; order_id: string; source_kind?: string; copy_library_id?: string; candidate_id: string; source_analysis_id: string; copy_snapshot: Record<string, unknown>; direction: string; status: string; adopted_variant_id: string; adopted_at: string; adopted_by: string; created_at: string; updated_at: string; variants: CreativeOrderVariant[]; }
 export interface AdoptCreativeOrderVariantRequest {
   variant_id: string;
   qc_risk_acknowledged?: boolean;
