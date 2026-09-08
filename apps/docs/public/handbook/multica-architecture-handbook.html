@@ -1,0 +1,1779 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Multica 架构手册</title>
+<meta name="description" content="从源码整理的 Multica 工程手册：系统架构、数据库 ER 模型与认证权限体系，含拓扑图、分域 ER 图与鉴权时序。">
+<meta name="color-scheme" content="light dark">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&family=Noto+Sans+SC:wght@400;500;700&display=swap">
+<style>
+  :root {
+    --bg: #F5F7F4;
+    --surface: #FFFFFF;
+    --surface-2: #ECF1EC;
+    --ink: #1C2823;
+    --body-c: #2F3C35;
+    --muted: #66776D;
+    --line: #DCE3DC;
+    --line-strong: #B9C5BC;
+    --accent: #0B7A63;
+    --accent-ink: #085D4C;
+    --accent-soft: #E0EFE9;
+    --copper: #B25E2B;
+    --copper-ink: #944A21;
+    --copper-soft: #F5E9DC;
+    --danger: #B3403A;
+    --danger-soft: #F7E7E4;
+    --code-bg: #ECF1EC;
+    --shadow: 0 1px 2px rgba(28, 40, 35, 0.05), 0 4px 16px rgba(28, 40, 35, 0.05);
+    --font-sans: "Archivo", "PingFang SC", "Hiragino Sans GB", "Noto Sans SC", "Microsoft YaHei", system-ui, sans-serif;
+    --font-mono: "IBM Plex Mono", ui-monospace, "SF Mono", "SFMono-Regular", Menlo, Consolas, "PingFang SC", monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #101613;
+      --surface: #171F1B;
+      --surface-2: #1E2823;
+      --ink: #E6ECE8;
+      --body-c: #C6D1CA;
+      --muted: #8CA095;
+      --line: #28332D;
+      --line-strong: #3E4C44;
+      --accent: #43BFA3;
+      --accent-ink: #6FD4BC;
+      --accent-soft: #14332B;
+      --copper: #D9915B;
+      --copper-ink: #E5AC7E;
+      --copper-soft: #33241A;
+      --danger: #E07B72;
+      --danger-soft: #38201E;
+      --code-bg: #1E2823;
+      --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 4px 16px rgba(0, 0, 0, 0.25);
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #101613;
+    --surface: #171F1B;
+    --surface-2: #1E2823;
+    --ink: #E6ECE8;
+    --body-c: #C6D1CA;
+    --muted: #8CA095;
+    --line: #28332D;
+    --line-strong: #3E4C44;
+    --accent: #43BFA3;
+    --accent-ink: #6FD4BC;
+    --accent-soft: #14332B;
+    --copper: #D9915B;
+    --copper-ink: #E5AC7E;
+    --copper-soft: #33241A;
+    --danger: #E07B72;
+    --danger-soft: #38201E;
+    --code-bg: #1E2823;
+    --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 4px 16px rgba(0, 0, 0, 0.25);
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    background: var(--bg);
+    color: var(--body-c);
+    font-family: var(--font-sans);
+    font-size: 15px;
+    line-height: 1.85;
+    margin: 0;
+    -webkit-font-smoothing: antialiased;
+  }
+  ::selection { background: var(--accent-soft); color: var(--ink); }
+
+  a { color: var(--accent-ink); text-decoration: none; }
+  a:hover { text-decoration: underline; text-underline-offset: 3px; }
+  a:focus-visible, button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 3px; }
+
+  code, .mono {
+    font-family: var(--font-mono);
+    font-size: 0.86em;
+  }
+  code {
+    background: var(--code-bg);
+    border-radius: 4px;
+    padding: 1px 5px;
+    color: var(--ink);
+    overflow-wrap: anywhere;
+  }
+  pre.block {
+    background: var(--code-bg);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 14px 16px;
+    overflow-x: auto;
+    font-family: var(--font-mono);
+    font-size: 12.5px;
+    line-height: 1.7;
+    color: var(--ink);
+  }
+  pre.block code { background: none; padding: 0; }
+
+  .shell {
+    display: grid;
+    grid-template-columns: 252px minmax(0, 1fr);
+    max-width: 1280px;
+    margin: 0 auto;
+  }
+
+  /* ---------- nav ---------- */
+  .nav {
+    position: sticky;
+    top: 0;
+    align-self: start;
+    height: 100dvh;
+    overflow-y: auto;
+    padding: 28px 20px 40px 24px;
+    border-right: 1px solid var(--line);
+    scrollbar-width: thin;
+  }
+  .nav .brand {
+    display: flex; align-items: center; gap: 10px;
+    color: var(--ink); font-weight: 700; font-size: 15px;
+    letter-spacing: 0.01em;
+    margin-bottom: 22px;
+  }
+  .nav .brand svg { flex: none; }
+  .nav ol { list-style: none; margin: 0; padding: 0; }
+  .nav .part { margin-bottom: 18px; }
+  .nav .part > a {
+    display: flex; gap: 8px; align-items: baseline;
+    color: var(--ink); font-weight: 600; font-size: 13.5px;
+    padding: 4px 8px; border-radius: 6px;
+  }
+  .nav .part > a .no {
+    font-family: var(--font-mono); font-size: 11px; color: var(--muted); font-weight: 500;
+  }
+  .nav .sub { margin-top: 2px; }
+  .nav .sub a {
+    display: block;
+    color: var(--muted); font-size: 12.5px;
+    padding: 3px 8px 3px 30px;
+    border-left: 2px solid transparent;
+    border-radius: 0 6px 6px 0;
+    line-height: 1.55;
+  }
+  .nav a:hover { text-decoration: none; background: var(--surface-2); }
+  .nav .sub a.active {
+    color: var(--accent-ink); border-left-color: var(--accent);
+    background: var(--accent-soft); font-weight: 500;
+  }
+  .nav .part > a.active { color: var(--accent-ink); background: var(--accent-soft); }
+
+  /* ---------- content ---------- */
+  .content { padding: 0 52px 96px; min-width: 0; }
+  .inner { max-width: 900px; }
+
+  header.masthead { padding: 64px 0 36px; border-bottom: 1px solid var(--line); }
+  .eyebrow {
+    font-family: var(--font-mono);
+    font-size: 11px; font-weight: 500;
+    letter-spacing: 0.14em; text-transform: uppercase;
+    color: var(--accent-ink);
+  }
+  header.masthead h1 {
+    font-size: 40px; line-height: 1.15; font-weight: 700;
+    color: var(--ink); margin: 10px 0 14px; letter-spacing: -0.01em;
+    text-wrap: balance;
+  }
+  header.masthead .lede { font-size: 16.5px; max-width: 700px; margin: 0 0 22px; }
+  .meta-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  .chip {
+    display: inline-flex; align-items: center; gap: 6px;
+    font-family: var(--font-mono); font-size: 11.5px;
+    color: var(--muted);
+    border: 1px solid var(--line);
+    background: var(--surface);
+    border-radius: 999px; padding: 3px 11px;
+    white-space: nowrap;
+  }
+  .chip b { color: var(--ink); font-weight: 500; }
+
+  .legend { display: flex; flex-wrap: wrap; gap: 18px; margin-top: 18px; font-size: 12.5px; color: var(--muted); }
+  .legend .key { display: inline-flex; align-items: center; gap: 7px; }
+  .legend .swatch { width: 20px; height: 4px; border-radius: 2px; }
+
+  section.part { padding-top: 26px; }
+  .part-head { margin: 44px 0 8px; }
+  .part-head .no {
+    font-family: var(--font-mono); font-size: 12px; color: var(--accent-ink);
+    letter-spacing: 0.12em;
+  }
+  .part-head h2 {
+    font-size: 27px; font-weight: 700; color: var(--ink);
+    margin: 6px 0 10px; letter-spacing: -0.01em; text-wrap: balance;
+  }
+  .part-head .lede { font-size: 15.5px; max-width: 720px; margin: 0; color: var(--body-c); }
+  .part-head::before {
+    content: ""; display: block; width: 44px; height: 3px;
+    background: var(--accent); border-radius: 2px; margin-bottom: 18px;
+  }
+
+  h3 {
+    font-size: 19px; font-weight: 600; color: var(--ink);
+    margin: 44px 0 10px; letter-spacing: -0.005em;
+  }
+  h3 .sec {
+    font-family: var(--font-mono); font-size: 12px; color: var(--muted);
+    font-weight: 500; margin-right: 8px;
+  }
+  h4 { font-size: 15.5px; font-weight: 600; color: var(--ink); margin: 28px 0 6px; }
+  p { margin: 10px 0; max-width: 780px; }
+  ul.tight, ol.tight { margin: 10px 0; padding-left: 22px; max-width: 780px; }
+  ul.tight li, ol.tight li { margin: 5px 0; }
+  ul.tight li::marker { color: var(--accent); }
+  strong { color: var(--ink); font-weight: 600; }
+
+  /* stats */
+  .stats {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(128px, 1fr));
+    gap: 10px; margin: 26px 0;
+  }
+  .stat {
+    background: var(--surface); border: 1px solid var(--line);
+    border-radius: 10px; padding: 14px 16px 12px;
+  }
+  .stat .n {
+    font-family: var(--font-mono); font-variant-numeric: tabular-nums;
+    font-size: 24px; font-weight: 600; color: var(--ink); line-height: 1.2;
+  }
+  .stat .n em { font-style: normal; font-size: 13px; color: var(--muted); font-weight: 500; }
+  .stat .l { font-size: 12px; color: var(--muted); margin-top: 2px; }
+
+  /* figures */
+  figure.fig {
+    margin: 22px 0 28px;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    box-shadow: var(--shadow);
+    padding: 20px 20px 12px;
+  }
+  figure.fig .scroll { overflow-x: auto; }
+  figure.fig svg { display: block; max-width: 100%; height: auto; color: var(--body-c); }
+  figure.fig figcaption {
+    font-size: 12.5px; color: var(--muted);
+    border-top: 1px solid var(--line);
+    margin-top: 14px; padding-top: 10px;
+    line-height: 1.6;
+  }
+  figure.fig figcaption b { color: var(--ink); font-weight: 600; }
+  pre.mermaid {
+    background: transparent; border: 0; margin: 6px 0;
+    display: flex; justify-content: flex-start;
+    overflow-x: auto;
+    font-family: var(--font-mono); font-size: 13px;
+    color: var(--body-c);
+  }
+
+  /* tables */
+  .tbl-wrap { overflow-x: auto; margin: 18px 0 26px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); }
+  table.tbl { border-collapse: collapse; width: 100%; font-size: 13.5px; line-height: 1.6; }
+  table.tbl th {
+    text-align: left; font-family: var(--font-mono);
+    font-size: 10.5px; font-weight: 600; letter-spacing: 0.1em; text-transform: uppercase;
+    color: var(--muted);
+    background: var(--surface-2);
+    padding: 9px 14px;
+    border-bottom: 1px solid var(--line);
+    white-space: nowrap;
+  }
+  table.tbl td {
+    padding: 9px 14px; vertical-align: top;
+    border-bottom: 1px solid var(--line);
+  }
+  table.tbl tbody tr:last-child td { border-bottom: 0; }
+  table.tbl td code { white-space: nowrap; }
+  table.tbl td.wrap code { white-space: normal; }
+  .num { font-variant-numeric: tabular-nums; font-family: var(--font-mono); font-size: 12.5px; }
+
+  /* callouts */
+  .note, .risk {
+    border: 1px solid var(--line);
+    border-left: 3px solid var(--accent);
+    background: var(--surface);
+    border-radius: 8px;
+    padding: 12px 16px;
+    margin: 18px 0;
+    font-size: 13.5px;
+    max-width: 820px;
+  }
+  .note .t, .risk .t {
+    font-family: var(--font-mono); font-size: 10.5px; font-weight: 600;
+    letter-spacing: 0.12em; text-transform: uppercase;
+    color: var(--accent-ink); display: block; margin-bottom: 4px;
+  }
+  .risk { border-left-color: var(--copper); }
+  .risk .t { color: var(--copper-ink); }
+
+  /* token chips */
+  .tok {
+    font-family: var(--font-mono); font-size: 12px; font-weight: 500;
+    border-radius: 5px; padding: 1px 7px; white-space: nowrap;
+  }
+  .tok.human { background: var(--accent-soft); color: var(--accent-ink); }
+  .tok.machine { background: var(--copper-soft); color: var(--copper-ink); }
+
+  .pills { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 14px 0; }
+  .pill {
+    font-family: var(--font-mono); font-size: 12px;
+    border: 1px solid var(--line-strong);
+    border-radius: 999px; padding: 3px 12px; color: var(--ink);
+    background: var(--surface);
+  }
+  .pill.ok { border-color: var(--accent); color: var(--accent-ink); }
+  .pill.bad { border-color: var(--danger); color: var(--danger); }
+  .pill-arrow { color: var(--muted); font-size: 12px; }
+
+  .kv { display: grid; grid-template-columns: max-content 1fr; gap: 4px 18px; font-size: 13.5px; margin: 12px 0; max-width: 780px; }
+  .kv dt { font-family: var(--font-mono); font-size: 12.5px; color: var(--muted); white-space: nowrap; }
+  .kv dd { margin: 0; }
+
+  footer.foot {
+    margin-top: 72px; padding-top: 20px;
+    border-top: 1px solid var(--line);
+    font-size: 12.5px; color: var(--muted);
+    display: flex; flex-wrap: wrap; gap: 6px 24px;
+  }
+
+  @media (max-width: 979px) {
+    .shell { grid-template-columns: 1fr; }
+    .nav {
+      position: sticky; top: 0; height: auto; z-index: 20;
+      display: flex; gap: 4px; align-items: center;
+      overflow-x: auto; overflow-y: hidden;
+      padding: 10px 16px; border-right: 0; border-bottom: 1px solid var(--line);
+      background: var(--bg);
+    }
+    .nav .brand { margin: 0 12px 0 0; font-size: 13.5px; white-space: nowrap; }
+    .nav ol { display: flex; gap: 2px; }
+    .nav .part { margin: 0; }
+    .nav .part > a { white-space: nowrap; font-size: 12.5px; padding: 4px 10px; }
+    .nav .sub { display: none; }
+    .content { padding: 0 20px 72px; }
+    header.masthead { padding-top: 36px; }
+    header.masthead h1 { font-size: 30px; }
+  }
+  @media (prefers-reduced-motion: no-preference) {
+    html { scroll-behavior: smooth; }
+  }
+  section[id], h3[id] { scroll-margin-top: 84px; }
+</style>
+<style>.mermaid-diagram{margin-block:4px}.mermaid-diagram svg{display:block;margin:0 auto;max-width:100%;height:auto}</style>
+</head>
+<body>
+
+<div class="shell">
+<nav class="nav" aria-label="目录">
+  <div class="brand">
+    <svg width="22" height="22" viewBox="0 0 22 22" role="img" aria-label="Multica 手册标志">
+      <rect x="1.5" y="3" width="4.4" height="16" rx="1.6" fill="var(--accent)" opacity="0.9"/>
+      <rect x="8.8" y="3" width="4.4" height="10.5" rx="1.6" fill="var(--accent)" opacity="0.45"/>
+      <rect x="16.1" y="3" width="4.4" height="13" rx="1.6" fill="var(--copper)"/>
+    </svg>
+    Multica 架构手册
+  </div>
+  <ol>
+    <li class="part">
+      <a href="#overview"><span class="no">01</span>总览</a>
+    </li>
+    <li class="part">
+      <a href="#arch"><span class="no">02</span>系统架构</a>
+      <ol class="sub">
+        <li><a href="#arch-mono">Monorepo 拓扑与包边界</a></li>
+        <li><a href="#arch-backend">后端分层与请求管线</a></li>
+        <li><a href="#arch-realtime">实时体系：双 Hub + Redis</a></li>
+        <li><a href="#arch-daemon">Daemon 与任务执行链路</a></li>
+        <li><a href="#arch-frontend">前端架构与状态规则</a></li>
+      </ol>
+    </li>
+    <li class="part">
+      <a href="#er"><span class="no">03</span>数据模型</a>
+      <ol class="sub">
+        <li><a href="#er-conventions">建模约定</a></li>
+        <li><a href="#er-domains">分域 ER 图</a></li>
+        <li><a href="#er-poly">多态关系总表</a></li>
+        <li><a href="#er-catalog">全表清单</a></li>
+      </ol>
+    </li>
+    <li class="part">
+      <a href="#auth"><span class="no">04</span>认证与权限</a>
+      <ol class="sub">
+        <li><a href="#auth-login">无密码登录</a></li>
+        <li><a href="#auth-tokens">凭证家族</a></li>
+        <li><a href="#auth-middleware">请求鉴权管线</a></li>
+        <li><a href="#auth-roles">工作区作用域与角色</a></li>
+        <li><a href="#auth-resources">资源级权限</a></li>
+        <li><a href="#auth-machine">Daemon 与 Agent 身份</a></li>
+        <li><a href="#auth-frontend">前端凭证管线</a></li>
+        <li><a href="#auth-hardening">攻击面加固</a></li>
+      </ol>
+    </li>
+  </ol>
+</nav>
+
+<main class="content">
+<div class="inner">
+
+<header class="masthead">
+  <span class="eyebrow">Multica Engineering Handbook</span>
+  <h1>Multica 架构手册</h1>
+  <p class="lede">Multica 是一个开源团队工作区——「智能体，也在看板上」。人类与 AI 编码智能体在同一块看板协作：任务派给 agent，它在你自己的机器上接活、边做边汇报、做完交回审核。本手册从源码出发，拆解它的系统架构、数据模型与认证权限体系。</p>
+  <div class="meta-row">
+    <span class="chip">commit <b>dcc2d5825</b></span>
+    <span class="chip">2026-08-28</span>
+    <span class="chip">Go <b>1.26</b> · chi v5 · pgx/sqlc</span>
+    <span class="chip">Next.js <b>16</b> · React <b>19</b></span>
+    <span class="chip">PostgreSQL <b>17</b> + pgvector · Redis</span>
+  </div>
+  <div class="legend" role="note">
+    <span class="key"><span class="swatch" style="background: var(--accent)"></span>人类 / 平台路径</span>
+    <span class="key"><span class="swatch" style="background: var(--copper)"></span>Agent / 机器路径</span>
+    <span style="font-size:12px">— 全文图表沿用这套双色语义，对应产品里的两类 actor。</span>
+  </div>
+</header>
+
+<!-- ================================================================ -->
+<section class="part" id="overview">
+<div class="part-head">
+  <span class="no">PART 01</span>
+  <h2>总览</h2>
+  <p class="lede">先建立一张地图：这是一个 pnpm + Turborepo 的前端 monorepo，加一个独立的 Go module 后端，靠 HTTP + WebSocket 连接；agent 的执行发生在用户自己机器上的 daemon 里。</p>
+</div>
+
+<div class="stats">
+  <div class="stat"><div class="n">111<em> 张</em></div><div class="l">活跃数据表</div></div>
+  <div class="stat"><div class="n">468<em> 个</em></div><div class="l">SQL 迁移（up）</div></div>
+  <div class="stat"><div class="n">~30<em> 域</em></div><div class="l">REST API 路由域</div></div>
+  <div class="stat"><div class="n">24<em> 族</em></div><div class="l">Agent CLI 协议家族</div></div>
+  <div class="stat"><div class="n">80+<em> 种</em></div><div class="l">WebSocket 事件</div></div>
+  <div class="stat"><div class="n">3<em> 种</em></div><div class="l">工作区角色</div></div>
+  <div class="stat"><div class="n">7<em> 类</em></div><div class="l">凭证 / Token</div></div>
+</div>
+
+<h3 id="ov-what">产品形态</h3>
+<p>Multica 把「同时开着五个终端标签页跑 Claude Code / Codex / Cursor」的散装工作方式，收敛为一个任务管理平台：<strong>agent 是一等公民</strong>——它可以被指派 issue、发表评论、改变状态，和人类成员一样出现在看板与成员列表里。关键设计是执行与平台分离：平台（server + web/desktop/mobile）负责协作与编排，真正的代码执行由用户机器上的 <code>multica daemon</code> 领取任务后调起本地 agent CLI 完成，代码不出门。产品支持自部署（Docker Compose），CLI 通过 goreleaser + Homebrew tap 分发。</p>
+
+<h3 id="ov-stack">技术栈</h3>
+<div class="tbl-wrap"><table class="tbl">
+  <thead><tr><th>层</th><th>选型</th><th>要点</th></tr></thead>
+  <tbody>
+    <tr><td><strong>后端</strong></td><td class="wrap"><code>Go 1.26</code> · <code>chi v5</code> · <code>pgx v5</code> + <code>sqlc</code> · <code>gorilla/websocket</code></td><td>单体 API 服务；handler → service → sqlc 生成代码；路由集中在 <code>server/cmd/server/router.go</code>（约 2400 行）</td></tr>
+    <tr><td><strong>数据</strong></td><td class="wrap"><code>PostgreSQL 17</code>（pgvector 镜像）· <code>Redis</code></td><td>无数据库外键，关系由应用层维护；Redis 承担限流、鉴权缓存与实时消息跨节点中继</td></tr>
+    <tr><td><strong>Web</strong></td><td class="wrap"><code>Next.js 16</code> · <code>React 19.2</code> · App Router</td><td>Cookie 会话（HttpOnly + CSRF）；rewrite 把 <code>/api</code>、<code>/ws</code> 代理到 Go 服务</td></tr>
+    <tr><td><strong>Desktop</strong></td><td class="wrap"><code>Electron 39</code> · <code>react-router 7</code>（memory router）</td><td>单路由多标签页体系；主进程托管打包的 <code>multica</code> CLI 并代管本机 daemon</td></tr>
+    <tr><td><strong>Mobile</strong></td><td class="wrap"><code>Expo 55</code> · <code>React Native 0.83</code> · NativeWind 4</td><td>独立 app：自有数据层与 UI，只从 <code>@multica/core</code> 引类型与纯函数</td></tr>
+    <tr><td><strong>共享状态</strong></td><td class="wrap"><code>TanStack Query 5</code> · <code>Zustand 5</code> · <code>Zod 4</code></td><td>服务端状态归 Query、客户端状态归 Zustand 的硬性分界（见 §2.5）</td></tr>
+    <tr><td><strong>UI</strong></td><td class="wrap"><code>Tailwind 4</code> · shadcn / Base UI · <code>TipTap 3</code></td><td>语义化 token（<code>bg-background</code> 等）；富文本编辑器 61 个模块</td></tr>
+    <tr><td><strong>工程</strong></td><td class="wrap"><code>pnpm 10</code> · <code>Turborepo 2</code> · Vitest 4 · Playwright</td><td>共享包发布裸 <code>.ts</code>，由消费方编译；CI 跑 Node 22 + Go 1.26</td></tr>
+  </tbody>
+</table></div>
+
+<h3 id="ov-map">仓库地图</h3>
+<pre class="block"><code>multica/
+├── server/            Go module（独立于 pnpm workspace）
+│   ├── cmd/server     API + WebSocket 服务
+│   ├── cmd/multica    CLI（内含 daemon 子命令，Homebrew 分发）
+│   ├── cmd/migrate    迁移执行器（事务外执行，支持 CONCURRENTLY）
+│   ├── internal/      handler · service · middleware · realtime · daemonws · daemon …
+│   ├── pkg/           agent 后端 ×24 · db(sqlc) · protocol · publicapi …
+│   └── migrations/    468 个 up 迁移（编号至 439）
+├── apps/
+│   ├── web/           Next.js 16（App Router + platform/ 适配层）
+│   ├── desktop/       Electron（main / preload / renderer）
+│   ├── mobile/        Expo iOS（独立数据层，只共享类型）
+│   └── docs/          Fumadocs 文档站
+└── packages/
+    ├── core/          无头业务：API client · Query hooks · Zustand stores · 平台适配
+    ├── ui/            原子组件（禁止依赖 core）
+    ├── views/         共享业务页面（web 与 desktop 共用）
+    ├── plugin-sdk/    插件面板 postMessage SDK
+    └── tsconfig / eslint-config</code></pre>
+
+<p>阅读顺序建议：先看 <a href="#arch">§02 架构</a> 建立组件间关系，再用 <a href="#er">§03 数据模型</a> 对准每个域的存储形状，最后读 <a href="#auth">§04 认证与权限</a>——它横跨前两者，是理解「agent 如何被安全地放进协作系统」的关键。</p>
+</section>
+
+<!-- ================================================================ -->
+<section class="part" id="arch">
+<div class="part-head">
+  <span class="no">PART 02</span>
+  <h2>系统架构</h2>
+  <p class="lede">五个视角：包拓扑、后端请求管线、实时双 Hub、daemon 任务执行链路、前端状态规则。合在一起就是一条完整的因果链——一次指派如何变成另一台机器上的一次 CLI 执行，再实时流回每个人的屏幕。</p>
+</div>
+
+<h3 id="arch-mono"><span class="sec">2.1</span>Monorepo 拓扑与包边界</h3>
+<p>前端是 pnpm + Turborepo 管理的 TypeScript monorepo；后端 <code>server/</code> 是独立 Go module，不在 pnpm workspace 里。共享包发布裸 <code>.ts/.tsx</code> 源码，由消费方（web/desktop）自行编译，依赖方向被硬性约束为 <strong>views → core + ui</strong>，core 与 ui 互不依赖。</p>
+
+<figure class="fig">
+  <div class="scroll">
+  <svg viewBox="0 0 960 600" role="img" aria-label="Multica monorepo 拓扑：apps 依赖 packages，前端整体通过 HTTP 与 WebSocket 访问 Go 后端" style="min-width: 860px">
+    <defs>
+      <marker id="ah" viewBox="0 0 10 8" refX="9" refY="4" markerWidth="9" markerHeight="7" orient="auto-start-reverse">
+        <polygon points="0,0 10,4 0,8" fill="var(--muted)"/>
+      </marker>
+      <marker id="ahC" viewBox="0 0 10 8" refX="9" refY="4" markerWidth="9" markerHeight="7" orient="auto-start-reverse">
+        <polygon points="0,0 10,4 0,8" fill="var(--copper)"/>
+      </marker>
+      <marker id="ahA" viewBox="0 0 10 8" refX="9" refY="4" markerWidth="9" markerHeight="7" orient="auto-start-reverse">
+        <polygon points="0,0 10,4 0,8" fill="var(--accent)"/>
+      </marker>
+    </defs>
+
+    <!-- cluster A: TS monorepo -->
+    <rect x="20" y="40" width="580" height="440" rx="12" fill="none" stroke="var(--line-strong)" stroke-dasharray="none"/>
+    <text x="36" y="66" font-family="var(--font-mono)" font-size="11" fill="var(--muted)">pnpm + Turborepo monorepo（TypeScript）</text>
+
+    <!-- apps -->
+    <g>
+      <rect x="40" y="84" width="128" height="56" rx="8" fill="var(--surface-2)" stroke="var(--line-strong)"/>
+      <text x="52" y="107" font-family="var(--font-mono)" font-size="12" font-weight="600" fill="var(--ink)">apps/web</text>
+      <text x="52" y="126" font-size="10.5" fill="var(--muted)">Next.js 16</text>
+
+      <rect x="184" y="84" width="128" height="56" rx="8" fill="var(--surface-2)" stroke="var(--line-strong)"/>
+      <text x="196" y="107" font-family="var(--font-mono)" font-size="12" font-weight="600" fill="var(--ink)">apps/desktop</text>
+      <text x="196" y="126" font-size="10.5" fill="var(--muted)">Electron 39</text>
+
+      <rect x="328" y="84" width="128" height="56" rx="8" fill="var(--surface-2)" stroke="var(--line-strong)"/>
+      <text x="340" y="107" font-family="var(--font-mono)" font-size="12" font-weight="600" fill="var(--ink)">apps/docs</text>
+      <text x="340" y="126" font-size="10.5" fill="var(--muted)">Fumadocs</text>
+
+      <rect x="472" y="84" width="128" height="56" rx="8" fill="var(--surface)" stroke="var(--line-strong)" stroke-dasharray="5 4"/>
+      <text x="484" y="107" font-family="var(--font-mono)" font-size="12" font-weight="600" fill="var(--ink)">apps/mobile</text>
+      <text x="484" y="126" font-size="10.5" fill="var(--muted)">Expo 55 · 独立</text>
+    </g>
+
+    <!-- packages -->
+    <rect x="40" y="228" width="272" height="56" rx="8" fill="var(--accent-soft)" stroke="var(--accent)"/>
+    <text x="52" y="251" font-family="var(--font-mono)" font-size="12" font-weight="600" fill="var(--ink)">packages/views</text>
+    <text x="52" y="270" font-size="10.5" fill="var(--muted)">共享业务页面（web + desktop）</text>
+
+    <rect x="40" y="352" width="128" height="56" rx="8" fill="var(--surface-2)" stroke="var(--line-strong)"/>
+    <text x="52" y="375" font-family="var(--font-mono)" font-size="12" font-weight="600" fill="var(--ink)">packages/ui</text>
+    <text x="52" y="394" font-size="10.5" fill="var(--muted)">原子组件</text>
+
+    <rect x="184" y="352" width="128" height="56" rx="8" fill="var(--surface-2)" stroke="var(--line-strong)"/>
+    <text x="196" y="375" font-family="var(--font-mono)" font-size="12" font-weight="600" fill="var(--ink)">packages/core</text>
+    <text x="196" y="394" font-size="10.5" fill="var(--muted)">无头业务逻辑</text>
+
+    <!-- arrows within cluster A -->
+    <line x1="104" y1="140" x2="104" y2="224" stroke="var(--muted)" marker-end="url(#ah)"/>
+    <line x1="248" y1="140" x2="248" y2="224" stroke="var(--muted)" marker-end="url(#ah)"/>
+    <line x1="104" y1="284" x2="104" y2="348" stroke="var(--muted)" marker-end="url(#ah)"/>
+    <line x1="248" y1="284" x2="248" y2="348" stroke="var(--muted)" marker-end="url(#ah)"/>
+    <path d="M 536 140 L 536 380 L 320 380" fill="none" stroke="var(--muted)" stroke-dasharray="5 4" marker-end="url(#ah)"/>
+    <text x="430" y="371" font-size="10.5" fill="var(--muted)" text-anchor="middle">仅 import type / 纯函数</text>
+
+    <text x="40" y="452" font-size="11" fill="var(--muted)">依赖方向：views → core + ui；core 与 ui 互不依赖 · 另有 tsconfig / eslint-config / plugin-sdk</text>
+
+    <!-- cluster B: Go module -->
+    <rect x="640" y="40" width="300" height="440" rx="12" fill="none" stroke="var(--line-strong)"/>
+    <text x="656" y="66" font-family="var(--font-mono)" font-size="11" fill="var(--muted)">server/（独立 Go module）</text>
+
+    <rect x="656" y="84" width="268" height="56" rx="8" fill="var(--accent-soft)" stroke="var(--accent)"/>
+    <text x="668" y="107" font-family="var(--font-mono)" font-size="12" font-weight="600" fill="var(--ink)">cmd/server</text>
+    <text x="668" y="126" font-size="10.5" fill="var(--muted)">API + WebSocket 服务（部署端）</text>
+
+    <rect x="656" y="160" width="268" height="56" rx="8" fill="var(--copper-soft)" stroke="var(--copper)"/>
+    <text x="668" y="183" font-family="var(--font-mono)" font-size="12" font-weight="600" fill="var(--ink)">cmd/multica</text>
+    <text x="668" y="202" font-size="10.5" fill="var(--muted)">CLI + daemon（跑在用户机器上）</text>
+
+    <rect x="656" y="236" width="268" height="72" rx="8" fill="var(--surface-2)" stroke="var(--line-strong)"/>
+    <text x="668" y="259" font-family="var(--font-mono)" font-size="12" font-weight="600" fill="var(--ink)">internal/*</text>
+    <text x="668" y="278" font-size="10.5" fill="var(--muted)">handler ×117 · service ×33 · middleware</text>
+    <text x="668" y="294" font-size="10.5" fill="var(--muted)">realtime · daemonws · daemon · scheduler …</text>
+
+    <rect x="656" y="328" width="268" height="56" rx="8" fill="var(--surface-2)" stroke="var(--line-strong)"/>
+    <text x="668" y="351" font-family="var(--font-mono)" font-size="12" font-weight="600" fill="var(--ink)">pkg/db（sqlc）· migrations</text>
+    <text x="668" y="370" font-size="10.5" fill="var(--muted)">56 组查询 · 468 个 up 迁移</text>
+
+    <text x="656" y="452" font-size="11" fill="var(--muted)">pkg/agent：24 个 CLI 协议族后端</text>
+
+    <!-- cross-cluster arrows -->
+    <line x1="600" y1="112" x2="652" y2="112" stroke="var(--accent)" stroke-width="1.6" marker-end="url(#ahA)"/>
+    <text x="626" y="98" font-size="10.5" fill="var(--accent-ink)" text-anchor="middle">HTTPS + WS</text>
+
+    <!-- external stores -->
+    <rect x="640" y="520" width="145" height="52" rx="8" fill="var(--surface-2)" stroke="var(--line-strong)"/>
+    <text x="654" y="542" font-family="var(--font-mono)" font-size="11.5" font-weight="600" fill="var(--ink)">PostgreSQL 17</text>
+    <text x="654" y="559" font-size="10" fill="var(--muted)">pgvector · 无外键</text>
+    <rect x="795" y="520" width="145" height="52" rx="8" fill="var(--surface-2)" stroke="var(--line-strong)"/>
+    <text x="809" y="542" font-family="var(--font-mono)" font-size="11.5" font-weight="600" fill="var(--ink)">Redis</text>
+    <text x="809" y="559" font-size="10" fill="var(--muted)">限流 · 缓存 · WS 中继</text>
+    <line x1="712" y1="480" x2="712" y2="516" stroke="var(--muted)" marker-end="url(#ah)"/>
+    <line x1="867" y1="480" x2="867" y2="516" stroke="var(--muted)" marker-end="url(#ah)"/>
+  </svg>
+  </div>
+  <figcaption><b>图 2-1 · Monorepo 拓扑。</b>web/desktop 复用 views→core+ui 整条链；mobile 是刻意独立的 app，只以 <code>import type</code> 共享 core 的类型与纯函数。<code>cmd/multica</code> 同一二进制既是 CLI 又内含 daemon，经 Homebrew 分发到用户机器；Desktop 主进程也会捆绑并代管一份。</figcaption>
+</figure>
+
+<p>包边界是硬约束（违反即 review 打回）：</p>
+<div class="tbl-wrap"><table class="tbl">
+  <thead><tr><th>包</th><th>禁止</th><th>原因</th></tr></thead>
+  <tbody>
+    <tr><td><code>packages/core</code></td><td class="wrap"><code>react-dom</code> · <code>localStorage</code> · <code>process.env</code> · UI 库</td><td>纯无头层，平台差异走 <code>StorageAdapter</code> 等适配器注入</td></tr>
+    <tr><td><code>packages/ui</code></td><td class="wrap"><code>@multica/core</code> · 业务逻辑</td><td>原子组件必须可独立复用</td></tr>
+    <tr><td><code>packages/views</code></td><td class="wrap"><code>next/*</code> · <code>react-router-dom</code> · 定义 store</td><td>同一份页面代码跑在两种路由器上，导航一律走 <code>NavigationAdapter</code> / <code>&lt;AppLink&gt;</code></td></tr>
+    <tr><td>平台 API</td><td class="wrap">只能出现在 <code>apps/web/platform/</code> 与 <code>apps/desktop/…/platform/</code></td><td>把 Next.js / react-router 的知识锁进两个目录</td></tr>
+  </tbody>
+</table></div>
+
+<h3 id="arch-backend"><span class="sec">2.2</span>后端分层与请求管线</h3>
+<p>后端是单体服务，但分层非常规整：chi 路由集中在 <code>server/cmd/server/router.go</code>（约 2400 行，路由即文档），进入四类路由组之一后走 handler → service → sqlc 生成代码。写操作在 handler/service 里同步发布进程内事件（<code>events.Bus</code>），实时推送由此派生（见 §2.3）。</p>
+
+<figure class="fig">
+  <div class="scroll">
+  <svg viewBox="0 0 960 520" role="img" aria-label="一次 HTTP 请求经过八个全局中间件，进入四类路由组之一，再流经 handler、service、sqlc 到 PostgreSQL" style="min-width: 860px">
+    <!-- client -->
+    <rect x="20" y="170" width="130" height="88" rx="10" fill="var(--surface-2)" stroke="var(--line-strong)"/>
+    <text x="36" y="200" font-size="12" font-weight="600" fill="var(--ink)">客户端</text>
+    <text x="36" y="219" font-size="10.5" fill="var(--muted)">Web / Desktop</text>
+    <text x="36" y="235" font-size="10.5" fill="var(--muted)">Mobile / CLI / daemon</text>
+    <line x1="150" y1="214" x2="206" y2="214" stroke="var(--muted)" marker-end="url(#ah)"/>
+
+    <!-- middleware chain -->
+    <rect x="210" y="48" width="210" height="332" rx="10" fill="var(--surface-2)" stroke="var(--line-strong)"/>
+    <text x="226" y="76" font-size="12" font-weight="600" fill="var(--ink)">全局中间件（顺序执行）</text>
+    <g font-family="var(--font-mono)" font-size="11" fill="var(--body-c)">
+      <text x="226" y="106">1 RequestID</text>
+      <text x="226" y="139">2 ClientMetadata</text>
+      <text x="226" y="172">3 RequestLogger</text>
+      <text x="226" y="205">4 Prometheus 指标</text>
+      <text x="226" y="238">5 Recoverer</text>
+      <text x="226" y="271">6 PluginSurface 边界</text>
+      <text x="226" y="304">7 CSP 头</text>
+      <text x="226" y="337">8 CORS（凭证白名单）</text>
+    </g>
+
+    <!-- route groups -->
+    <g>
+      <rect x="480" y="48" width="230" height="64" rx="8" fill="var(--surface)" stroke="var(--line-strong)"/>
+      <text x="494" y="73" font-size="12" font-weight="600" fill="var(--ink)">公开路由</text>
+      <text x="494" y="92" font-size="10.5" fill="var(--muted)">health · /auth/* · webhooks · 能力 URL</text>
+
+      <rect x="480" y="132" width="230" height="64" rx="8" fill="var(--copper-soft)" stroke="var(--copper)"/>
+      <text x="494" y="157" font-family="var(--font-mono)" font-size="12" font-weight="600" fill="var(--ink)">/api/daemon/*</text>
+      <text x="494" y="176" font-size="10.5" fill="var(--muted)">DaemonAuth：仅 Bearer，无 Cookie</text>
+
+      <rect x="480" y="216" width="230" height="64" rx="8" fill="var(--copper-soft)" stroke="var(--copper)"/>
+      <text x="494" y="241" font-family="var(--font-mono)" font-size="12" font-weight="600" fill="var(--ink)">/v1（插件公开 API）</text>
+      <text x="494" y="260" font-size="10.5" fill="var(--muted)">PluginBearerOnly：仅 mpi_/mpc_</text>
+
+      <rect x="480" y="300" width="230" height="64" rx="8" fill="var(--accent-soft)" stroke="var(--accent)" stroke-width="1.4"/>
+      <text x="494" y="325" font-family="var(--font-mono)" font-size="12" font-weight="600" fill="var(--ink)">/api/*（主认证组）</text>
+      <text x="494" y="344" font-size="10.5" fill="var(--muted)">Auth + CSRF + Workspace 中间件</text>
+    </g>
+
+    <!-- fan-out from middleware -->
+    <line x1="420" y1="180" x2="476" y2="80" stroke="var(--muted)" marker-end="url(#ah)"/>
+    <line x1="420" y1="205" x2="476" y2="164" stroke="var(--muted)" marker-end="url(#ah)"/>
+    <line x1="420" y1="230" x2="476" y2="248" stroke="var(--muted)" marker-end="url(#ah)"/>
+    <line x1="420" y1="255" x2="476" y2="332" stroke="var(--muted)" marker-end="url(#ah)"/>
+
+    <!-- trunk into handler -->
+    <path d="M 710 80 L 736 80" fill="none" stroke="var(--line-strong)"/>
+    <path d="M 710 164 L 736 164" fill="none" stroke="var(--line-strong)"/>
+    <path d="M 710 248 L 736 248" fill="none" stroke="var(--line-strong)"/>
+    <path d="M 710 332 L 736 332" fill="none" stroke="var(--line-strong)"/>
+    <path d="M 736 80 L 736 404 L 290 404 L 290 432" fill="none" stroke="var(--muted)" marker-end="url(#ah)"/>
+
+    <!-- bottom chain -->
+    <rect x="210" y="436" width="160" height="56" rx="8" fill="var(--surface-2)" stroke="var(--line-strong)"/>
+    <text x="224" y="459" font-family="var(--font-mono)" font-size="12" font-weight="600" fill="var(--ink)">internal/handler</text>
+    <text x="224" y="478" font-size="10.5" fill="var(--muted)">HTTP 编解码 · 鉴权细则</text>
+
+    <rect x="410" y="436" width="160" height="56" rx="8" fill="var(--surface-2)" stroke="var(--line-strong)"/>
+    <text x="424" y="459" font-family="var(--font-mono)" font-size="12" font-weight="600" fill="var(--ink)">internal/service</text>
+    <text x="424" y="478" font-size="10.5" fill="var(--muted)">业务规则 · 事件发布</text>
+
+    <rect x="610" y="436" width="140" height="56" rx="8" fill="var(--surface-2)" stroke="var(--line-strong)"/>
+    <text x="624" y="459" font-family="var(--font-mono)" font-size="12" font-weight="600" fill="var(--ink)">pkg/db（sqlc）</text>
+    <text x="624" y="478" font-size="10.5" fill="var(--muted)">类型安全查询</text>
+
+    <rect x="790" y="436" width="150" height="56" rx="8" fill="var(--surface-2)" stroke="var(--line-strong)"/>
+    <text x="804" y="459" font-family="var(--font-mono)" font-size="12" font-weight="600" fill="var(--ink)">PostgreSQL</text>
+    <text x="804" y="478" font-size="10.5" fill="var(--muted)">全部按 workspace_id 过滤</text>
+
+    <line x1="370" y1="464" x2="406" y2="464" stroke="var(--muted)" marker-end="url(#ah)"/>
+    <line x1="570" y1="464" x2="606" y2="464" stroke="var(--muted)" marker-end="url(#ah)"/>
+    <line x1="750" y1="464" x2="786" y2="464" stroke="var(--muted)" marker-end="url(#ah)"/>
+  </svg>
+  </div>
+  <figcaption><b>图 2-2 · 请求管线。</b>四类路由组的差别全在鉴权方式（详见 §04）：daemon 组与插件组只收 Bearer、结构性排除 Cookie；主认证组叠加 CSRF 与工作区成员校验。写路径的 handler/service 会同步向 <code>events.Bus</code> 发布事件，进入图 2-3 的实时扇出。</figcaption>
+</figure>
+
+<p>值得记住的三个后端事实：</p>
+<ul class="tight">
+  <li><strong>路由住在 <code>cmd/server</code>，不在 <code>internal/handler</code></strong>。handler 是无路由知识的方法集合，router.go 用中间件组合出权限层级，读一个文件即可判断任意端点的鉴权要求。</li>
+  <li><strong>sqlc 是唯一的 SQL 通道</strong>：56 个 <code>.sql</code> 查询文件生成 61 个 Go 文件；schema 来源就是 <code>migrations/</code> 目录本身。</li>
+  <li><strong>定时任务进数据库</strong>：<code>internal/scheduler</code> 用 <code>sys_cron_executions</code> 表做租约 + 审计的 DB cron（用量小时汇总、autopilot 定时调度、插件 hook 调度），多副本部署下不重复执行。</li>
+</ul>
+
+<h4>常驻后台 worker（<code>cmd/server/main.go</code> 启动）</h4>
+<div class="tbl-wrap"><table class="tbl">
+  <thead><tr><th>Worker</th><th>职责</th></tr></thead>
+  <tbody>
+    <tr><td><code>runtime sweeper</code></td><td>把心跳超时的 runtime 标记离线，回收/过期滞留任务（<code>MULTICA_RUNTIME_RECONNECT_GRACE</code>、<code>MULTICA_TASK_QUEUED_TTL</code>）</td></tr>
+    <tr><td><code>runtime GC sweeper</code></td><td>每小时清理 7 天未见的 runtime 记录</td></tr>
+    <tr><td><code>webhook delivery worker</code></td><td>autopilot 出站 webhook 的租约重试投递（outbox 模式）</td></tr>
+    <tr><td><code>autopilot 监控 ×2</code></td><td>连续失败检测 + 配额对账</td></tr>
+    <tr><td><code>channel supervisor</code></td><td>Lark / Slack / 钉钉 / 企微 / Telegram 每个安装一份 WS 租约与会话驱动</td></tr>
+    <tr><td><code>channel media reconciler</code></td><td>结算「已上传未绑定」的渠道媒体对象</td></tr>
+    <tr><td><code>seat capacity worker</code></td><td>Cloud 席位容量协议执行器（outbox）</td></tr>
+    <tr><td><code>PR snapshot refresh</code></td><td>GitHub PR 卡片快照池 + TTL 清理</td></tr>
+    <tr><td><code>scheduler manager</code></td><td>DB cron：<code>TaskUsageHourly</code> · <code>AutopilotScheduleDispatch</code> · <code>PluginHookScheduleDispatch</code></td></tr>
+    <tr><td>metrics / pprof</td><td>Prometheus 指标端口与 pprof 端口独立监听</td></tr>
+  </tbody>
+</table></div>
+
+<h3 id="arch-realtime"><span class="sec">2.3</span>实时体系：双 Hub + Redis 中继</h3>
+<p>实时层有<strong>两个互不混用的 WebSocket Hub</strong>：面向人的 <code>internal/realtime</code>（浏览器/桌面/移动端，房间制）和面向机器的 <code>internal/daemonws</code>（daemon 唤醒与 RPC）。所有事件都从进程内 <code>events.Bus</code> 派生——先跑类型监听器（通知、活动、订阅者、插件桥），再由全局监听器序列化成 WS 帧扇出。</p>
+
+<figure class="fig">
+  <div class="scroll">
+  <svg viewBox="0 0 960 520" role="img" aria-label="events.Bus 同时喂给面向浏览器的 realtime.Hub 与面向 daemon 的 daemonws.Hub，Redis Streams 负责多 API 节点之间的中继" style="min-width: 860px">
+    <!-- producers -->
+    <rect x="20" y="228" width="200" height="80" rx="10" fill="var(--surface-2)" stroke="var(--line-strong)"/>
+    <text x="36" y="256" font-size="12" font-weight="600" fill="var(--ink)">handler / service / worker</text>
+    <text x="36" y="275" font-size="10.5" fill="var(--muted)">写操作同步发布事件</text>
+    <text x="36" y="291" font-size="10.5" fill="var(--muted)">80+ 种事件类型</text>
+
+    <!-- bus -->
+    <rect x="300" y="240" width="300" height="56" rx="10" fill="var(--surface-2)" stroke="var(--line-strong)"/>
+    <text x="316" y="263" font-family="var(--font-mono)" font-size="12.5" font-weight="600" fill="var(--ink)">events.Bus</text>
+    <text x="316" y="282" font-size="10.5" fill="var(--muted)">进程内同步发布 · 类型监听器先于全局监听器</text>
+    <line x1="220" y1="268" x2="296" y2="268" stroke="var(--muted)" marker-end="url(#ah)"/>
+
+    <!-- realtime hub -->
+    <rect x="300" y="40" width="300" height="150" rx="10" fill="var(--accent-soft)" stroke="var(--accent)" stroke-width="1.4"/>
+    <text x="316" y="66" font-family="var(--font-mono)" font-size="12.5" font-weight="600" fill="var(--ink)">realtime.Hub（GET /ws）</text>
+    <g font-size="10.5" fill="var(--body-c)">
+      <text x="316" y="90">房间：workspace:{id} · user:{id} —— 连接即自动订阅</text>
+      <text x="316" y="108">task:{id} · chat:{id} —— 显式订阅 + 授权器校验</text>
+      <text x="316" y="126">读限 64 KiB · ping 54s / pong 60s · 慢客户端驱逐</text>
+      <text x="316" y="144">个人事件（inbox/邀请/会话）走 user 房间</text>
+      <text x="316" y="162">敏感字段出站前剥离（prev_description 等）</text>
+    </g>
+    <line x1="450" y1="240" x2="450" y2="194" stroke="var(--accent)" marker-end="url(#ahA)"/>
+
+    <!-- clients -->
+    <rect x="20" y="48" width="200" height="84" rx="10" fill="var(--surface)" stroke="var(--accent)"/>
+    <text x="36" y="76" font-size="12" font-weight="600" fill="var(--ink)">Web / Desktop / Mobile</text>
+    <text x="36" y="95" font-family="var(--font-mono)" font-size="10.5" fill="var(--muted)">GET /ws?workspace_slug=…</text>
+    <text x="36" y="113" font-size="10.5" fill="var(--muted)">Cookie 或首帧 auth 令牌</text>
+    <line x1="300" y1="100" x2="224" y2="100" stroke="var(--accent)" marker-end="url(#ahA)"/>
+    <text x="262" y="90" font-size="10.5" fill="var(--accent-ink)" text-anchor="middle">事件帧</text>
+
+    <!-- daemon hub -->
+    <rect x="300" y="352" width="300" height="118" rx="10" fill="var(--copper-soft)" stroke="var(--copper)" stroke-width="1.4"/>
+    <text x="316" y="378" font-family="var(--font-mono)" font-size="12.5" font-weight="600" fill="var(--ink)">daemonws.Hub（GET /api/daemon/ws）</text>
+    <g font-size="10.5" fill="var(--body-c)">
+      <text x="316" y="402">daemon:task_available / pending_work 唤醒提示</text>
+      <text x="316" y="420">rpc_request / rpc_response 通用 RPC（含 tasks.claim）</text>
+      <text x="316" y="438">读限 64 MiB（一次批量领取最多 32 个任务载荷）</text>
+      <text x="316" y="456">断连语义分级：unavailable 可降级 HTTP，uncertain 禁止重试</text>
+    </g>
+    <line x1="450" y1="296" x2="450" y2="348" stroke="var(--copper)" marker-end="url(#ahC)"/>
+    <text x="466" y="326" font-size="10.5" fill="var(--copper-ink)">任务唤醒</text>
+
+    <!-- daemon client -->
+    <rect x="20" y="368" width="200" height="84" rx="10" fill="var(--surface)" stroke="var(--copper)"/>
+    <text x="36" y="396" font-size="12" font-weight="600" fill="var(--ink)">multica daemon</text>
+    <text x="36" y="415" font-size="10.5" fill="var(--muted)">用户机器 · 多 runtime 复用一条连接</text>
+    <text x="36" y="433" font-size="10.5" fill="var(--muted)">WS 优先，HTTP 兜底</text>
+    <line x1="300" y1="410" x2="224" y2="410" stroke="var(--copper)" marker-end="url(#ahC)"/>
+
+    <!-- redis relay -->
+    <rect x="680" y="130" width="250" height="128" rx="10" fill="var(--surface-2)" stroke="var(--line-strong)"/>
+    <text x="696" y="158" font-family="var(--font-mono)" font-size="12" font-weight="600" fill="var(--ink)">Redis Streams 分片中继</text>
+    <g font-size="10.5" fill="var(--muted)">
+      <text x="696" y="182">REALTIME_RELAY_MODE=sharded</text>
+      <text x="696" y="200">双写广播：本地投递 + 发布上游</text>
+      <text x="696" y="218">每客户端 128 位 ULID 环去重</text>
+      <text x="696" y="236">daemon 唤醒走 daemon_runtime scope</text>
+    </g>
+    <line x1="600" y1="150" x2="676" y2="172" stroke="var(--muted)" marker-end="url(#ah)" marker-start="url(#ah)"/>
+
+    <rect x="680" y="330" width="250" height="90" rx="10" fill="none" stroke="var(--line-strong)" stroke-dasharray="6 5"/>
+    <text x="696" y="360" font-size="12" font-weight="600" fill="var(--muted)">其他 API 节点</text>
+    <text x="696" y="380" font-size="10.5" fill="var(--muted)">各自的 realtime.Hub / daemonws.Hub</text>
+    <text x="696" y="398" font-size="10.5" fill="var(--muted)">消费流后向本地房间投递</text>
+    <line x1="805" y1="258" x2="805" y2="326" stroke="var(--muted)" stroke-dasharray="5 4" marker-end="url(#ah)" marker-start="url(#ah)"/>
+  </svg>
+  </div>
+  <figcaption><b>图 2-3 · 实时扇出。</b>单节点时事件在进程内直达 Hub；水平扩容时经 Redis Streams 分片中继跨节点扇出，客户端侧靠 ULID 环去重。已发布的 TS 客户端只用 workspace + user 两个自动订阅房间，<code>task/chat</code> 显式订阅通道目前留给未来。</figcaption>
+</figure>
+
+<div class="tbl-wrap"><table class="tbl">
+  <thead><tr><th>事件域</th><th>代表事件（<code>pkg/protocol/events.go</code>）</th></tr></thead>
+  <tbody>
+    <tr><td>issue</td><td class="wrap"><code>issue:created/updated/deleted</code> · <code>issue_metadata:changed</code> · <code>issue_labels:changed</code> · <code>issue_status:changed</code></td></tr>
+    <tr><td>任务执行</td><td class="wrap"><code>task:queued/dispatch/running/progress/message/completed/failed/cancelled</code></td></tr>
+    <tr><td>协作</td><td class="wrap">comment · reaction · subscriber · activity · pin · project(+resource) · label · property</td></tr>
+    <tr><td>组织</td><td class="wrap">workspace · member · invitation · <code>inbox:*</code>（7 种，走 user 房间）</td></tr>
+    <tr><td>agent 生态</td><td class="wrap"><code>agent:status/created/archived</code> · skill · squad · autopilot（含 run_start/run_done）· chat（8 种）</td></tr>
+    <tr><td>机器侧</td><td class="wrap"><code>daemon:heartbeat/register/task_available/rpc_*</code> · runtime profile 变更</td></tr>
+    <tr><td>集成</td><td class="wrap">github installation / pull_request · vcs · lark / slack / dingtalk / wecom / telegram 安装事件</td></tr>
+  </tbody>
+</table></div>
+
+<h3 id="arch-daemon"><span class="sec">2.4</span>Daemon 与任务执行链路</h3>
+<p>这是 Multica 最有辨识度的一条链路：<strong>平台负责编排，执行发生在用户自己的机器上</strong>。daemon 内嵌在 <code>multica</code> CLI 里（<code>multica daemon start</code>），机器级批量轮询器先占本机执行槽，再跨该机所有 runtime 批量领取任务。</p>
+
+<figure class="fig">
+  <pre class="mermaid">
+sequenceDiagram
+  participant Trig as 触发源
+  participant Srv as Server · TaskService
+  participant Hub as daemonws.Hub
+  participant Dmn as multica daemon（用户机器）
+  participant CLI as Agent CLI 进程
+  Trig->>Srv: 指派 issue / @提及 / autopilot / chat / 渠道消息
+  Srv->>Srv: 准入判定（ReasonCode）→ 写入 agent_task_queue（queued）
+  Srv-->>Hub: 广播 task:queued（前端同步可见）
+  Hub-->>Dmn: daemon:task_available 唤醒
+  Dmn->>Dmn: 先占本机执行槽位
+  Dmn->>Srv: tasks.claim（WS 优先，HTTP 兜底）
+  Srv-->>Dmn: 批量任务载荷 + mat_ 任务令牌（dispatched）
+  Dmn->>Dmn: 准备 repo / execenv / MCP / 技能包
+  Dmn->>Srv: POST /tasks/{id}/start（running）
+  Dmn->>CLI: 启动 CLI，注入 MULTICA_TOKEN=mat_…
+  CLI-->>Dmn: 流式 JSON 事件
+  Dmn->>Srv: /messages · /progress 批量回传
+  Srv-->>Hub: task:message / task:progress → 前端实时渲染
+  CLI-->>Dmn: 进程退出
+  Dmn->>Srv: /complete 或 /fail，附 /usage 用量
+  Srv-->>Hub: task:completed / task:failed
+  </pre>
+  <figcaption><b>图 2-4 · 任务生命周期。</b>状态机：<span class="mono">queued → dispatched → running → completed / failed / cancelled</span>。断连恢复由服务端 runtime sweeper（过期滞留任务）与 daemon 重连时的 <code>recover-orphans</code> 双向兜底；claim 在 WS 上发出但连接中断（uncertain）时禁止换通道重试，防止双重领取。</figcaption>
+</figure>
+
+<p><strong>准入判定</strong>不是简单的入队：<code>internal/dispatch</code> 定义了一套 ReasonCode，把「为什么没跑」变成可观测的一等结果——</p>
+<div class="pills">
+  <span class="pill ok">queued</span>
+  <span class="pill">coalesced 合并进行中任务</span>
+  <span class="pill">deferred 延后</span>
+  <span class="pill bad">invocation_not_allowed 无调用权限</span>
+  <span class="pill bad">runtime_offline</span>
+  <span class="pill bad">attribution_blocked 无可归责人</span>
+  <span class="pill bad">already_active</span>
+  <span class="pill bad">self_trigger_suppressed 防自触发</span>
+</div>
+
+<p><strong>Runtime 分三层</strong>：① <code>pkg/agent.SupportedTypes</code> 白名单定义 24 个协议族（claude、codex、cursor、copilot、kimi、opencode、qwen、grok……），每族一个后端文件负责启动参数与流式输出解析；② 内建 runtime 目前只有 <code>omp</code>（Oh-My-Pi，讲 <code>pi</code> JSON 协议）；③ 工作区可定义自定义 runtime profile（<code>command_name</code> + <code>fixed_args</code>），但 <code>protocol_family</code> 必须落在白名单内（DB CHECK + 应用双重校验）。</p>
+
+<h3 id="arch-frontend"><span class="sec">2.5</span>前端架构与状态规则</h3>
+<p>前端最重要的架构决定是<strong>服务端状态与客户端状态的硬分界</strong>，写进 CLAUDE.md 成为 review 准绳：</p>
+
+<div class="tbl-wrap"><table class="tbl">
+  <thead><tr><th>归属</th><th>管什么</th><th>规则</th></tr></thead>
+  <tbody>
+    <tr><td><strong>TanStack Query</strong></td><td class="wrap">一切来自 API 的数据：issues、members、agents、inbox、workspaces…</td><td class="wrap">工作区级查询 key 必须以 <code>wsId</code> 开头；WS 事件只允许打补丁/失效 Query 缓存</td></tr>
+    <tr><td><strong>Zustand</strong></td><td class="wrap">筛选器、草稿、弹窗、标签页布局、导航历史</td><td class="wrap">共享 store 只能放在 <code>packages/core</code>；禁止把服务端载荷镜像进来；selector 必须返回稳定引用</td></tr>
+    <tr><td><strong>React Context</strong></td><td class="wrap">仅平台管道（导航适配、i18n 适配）</td><td class="wrap">不承载业务状态</td></tr>
+  </tbody>
+</table></div>
+
+<p>一次典型读写的完整路径：</p>
+<ol class="tight">
+  <li><strong>读</strong>：视图用 <code>issueKeys.listSorted(wsId, sort)</code> 建 key → <code>api.listIssues()</code> 自动盖上 <code>Authorization</code> / <code>X-Workspace-Slug</code> / <code>X-CSRF-Token</code> 头 → 响应过 <code>parseWithFallback</code> + zod schema——契约漂移时降级为空兜底 + 告警日志，而不是白屏。这是「已安装桌面端要能对上新版后端」的核心防线。</li>
+  <li><strong>写</strong>：<code>useUpdateIssue</code> 的 <code>onMutate</code> 同步补丁所有可确定缓存并快照；服务端 <code>loadIssueForUser</code> 解析路径参数、支持 <code>expected_revision</code> 乐观并发；成功后发布 <code>issue:updated</code>（带变更标记位）。</li>
+  <li><strong>回声</strong>：WS 帧到达 <code>useRealtimeSync</code> → <code>ws-updaters</code> 补丁确定投影、失效不确定投影；mutation 的 <code>onSettled</code> 再失效一轮；<code>onError</code> 用快照回滚。断线重连或切工作区时全量失效工作区级查询。</li>
+</ol>
+
+<div class="note"><span class="t">乐观更新的四个前置条件</span>结果可本地预测、用户停留原屏、失败罕见、回滚廉价——四者齐备才允许乐观（典型：状态/指派/开关补丁）。会导航或需确认的流程（创建/删除/退出）必须等服务端返回；聊天发送用「可见 pending + 失败重试」模式，不做无痕乐观。</div>
+
+<p><strong>平台适配的缝</strong>只有几条，全部显式：<code>NavigationAdapter</code>（web 包 next/navigation，desktop 写 tab store）、<code>StorageAdapter</code>（web/desktop 用 localStorage，mobile 用 Keychain）、<code>CoreProvider</code>（唯一构造 ApiClient/auth store/i18n/WSProvider 的地方）、<code>setCurrentWorkspace</code>（路由驱动的工作区镜像，用于请求头、持久化命名空间与重连）。桌面端是「单路由多标签」体系：标签是可序列化的 <code>TabSession</code>，<code>tab-coordinator</code> 是唯一写路由器的地方；工作区前的一次性流程（建工作区、接受邀请）不是路由，是 <code>WindowOverlay</code> 状态。</p>
+</section>
+
+<!-- @ARCH-DONE -->
+<!-- ================================================================ -->
+<section class="part" id="er">
+<div class="part-head">
+  <span class="no">PART 03</span>
+  <h2>数据模型</h2>
+  <p class="lede">PostgreSQL 17，sqlc 建模 106 张表（合计约 111 张活跃表 + <code>schema_migrations</code>）。最重要的一条设计决定：<strong>整库没有一个外键</strong>——关系、校验、级联清理全部由应用层显式完成。下面的 ER 图里所有连线都是虚线，提醒你它们是「应用层约定」而非数据库约束。</p>
+</div>
+
+<h3 id="er-conventions"><span class="sec">3.1</span>建模约定</h3>
+<div class="tbl-wrap"><table class="tbl">
+  <thead><tr><th>约定</th><th>做法</th><th>备注</th></tr></thead>
+  <tbody>
+    <tr><td><strong>无外键</strong></td><td class="wrap">禁止 <code>FOREIGN KEY</code> / 级联删除；依赖清理放进应用事务（如删成员时同一事务内下线 runtime、归档 agent、取消任务、删 token）</td><td class="wrap">迁移 lint 测试强制执行</td></tr>
+    <tr><td><strong>主键</strong></td><td class="wrap">统一 <code>UUID DEFAULT gen_random_uuid()</code></td><td class="wrap">少数例外：GitHub 待领安装以平台数字 ID（<code>BIGINT</code>）作 PK、渠道绑定令牌以 <code>token_hash</code> 作 PK、若干汇总表只有复合唯一索引</td></tr>
+    <tr><td><strong>租户边界</strong></td><td class="wrap">几乎每张表都带 <code>workspace_id</code>，所有查询按它过滤</td><td class="wrap">它同时是权限边界（§4.4）与索引前缀</td></tr>
+    <tr><td><strong>人读 ID</strong></td><td class="wrap">issue 编号 = <code>workspace.issue_prefix + '-' + issue.number</code>（如 <code>MUL-4302</code>）</td><td class="wrap">计数器是 <code>workspace.issue_counter</code> 行内自增，配 <code>UNIQUE(workspace_id, number)</code>，每个工作区从头计数</td></tr>
+    <tr><td><strong>排序</strong></td><td class="wrap"><code>position DOUBLE PRECISION</code> 分数排序（issue、pinned_item、issue_status、issue_property…）</td><td class="wrap">拖拽插入无需重排整表</td></tr>
+    <tr><td><strong>乐观并发</strong></td><td class="wrap"><code>revision BIGINT</code>（issue、comment）+ 请求携带 <code>expected_revision</code></td><td class="wrap">渠道会话绑定另有 <code>route_revision</code> / <code>context_revision</code></td></tr>
+    <tr><td><strong>“软删”</strong></td><td class="wrap">全库没有 <code>deleted_at</code>；用语义化字段：<code>archived_at</code>（agent、squad）、<code>status='archived'</code>（chat、autopilot）、<code>revoked</code>（PAT）、<code>is_active</code>（分享链接）…</td><td class="wrap">删除要么是真删（应用事务清理），要么是语义归档</td></tr>
+    <tr><td><strong>时间</strong></td><td class="wrap">一律 <code>TIMESTAMPTZ DEFAULT now()</code>；仅 issue/project 的起止日期与用量日表用 <code>DATE</code></td><td class="wrap">汇总按 UTC 物化，<code>user.timezone</code> 只影响渲染</td></tr>
+    <tr><td><strong>JSONB</strong></td><td class="wrap"><code>issue.metadata ≤ 8KB</code>、<code>issue.properties ≤ 16KB</code>（CHECK 限长 + GIN <code>jsonb_path_ops</code>）；配置类字段广泛使用 JSONB</td><td class="wrap"><code>properties</code> 的键是 <code>issue_property.id</code>，值类型由属性定义决定</td></tr>
+    <tr><td><strong>租约 / Outbox</strong></td><td class="wrap"><code>lease_token + lease_expires_at + next_attempt_at + attempt + dead_lettered_at</code> 模式反复出现</td><td class="wrap">webhook_delivery、seat_capacity_outbox、channel_media_pending_object、sys_cron_executions…</td></tr>
+    <tr><td><strong>迁移纪律</strong></td><td class="wrap">索引必须 <code>CREATE INDEX CONCURRENTLY</code> 且单文件单语句；新 CHECK 先 <code>NOT VALID</code> 再补 <code>VALIDATE</code>；条件跳过的迁移要求后续 DDL 幂等</td><td class="wrap">迁移执行器在事务外跑文件，因此 468 个 up 文件里有大量单条索引文件</td></tr>
+  </tbody>
+</table></div>
+
+<h3 id="er-domains"><span class="sec">3.2</span>分域 ER 图</h3>
+<p>一张 111 表的全景图没有可读性，下面按域拆成八张。连线上标注的是承载关系的列名；<code>||..o{</code> 一对多、<code>}o..o{</code> 多对多，全部为应用层维护。</p>
+
+<h4>① 身份与工作区</h4>
+<figure class="fig">
+  <pre class="mermaid">
+erDiagram
+  workspace ||..o{ member : "workspace_id"
+  user ||..o{ member : "user_id"
+  workspace ||..o{ workspace_invitation : "workspace_id"
+  user ||..o{ workspace_invitation : "invitee_email / invitee_user_id"
+  workspace ||..o{ workspace_share_link : "workspace_id"
+  user ||..o{ personal_access_token : "user_id"
+  workspace {
+    uuid id PK
+    text name
+    text slug UK "全局唯一，92 个保留字"
+    text issue_prefix "issue 编号前缀"
+    int issue_counter "行内自增计数器"
+    jsonb settings
+    jsonb repos
+    bool attribution_fail_closed "无归责人时拒绝 agent 运行"
+  }
+  user {
+    uuid id PK
+    text email UK "小写唯一，无密码列"
+    text name
+    text timezone "仅影响渲染"
+    timestamptz onboarded_at
+  }
+  member {
+    uuid id PK
+    uuid workspace_id
+    uuid user_id
+    text role "owner | admin | member"
+  }
+  workspace_invitation {
+    uuid id PK "UUID 本身即受邀凭证"
+    text invitee_email
+    text role "admin | member（不可邀 owner）"
+    text status "pending|accepted|declined|expired"
+    timestamptz expires_at "7 天"
+  }
+  workspace_share_link {
+    uuid id PK
+    text code UK "24 位 hex，一工作区一条活跃"
+    text role "member | admin"
+    int max_uses
+    int use_count "条件 UPDATE 原子递增"
+    bool is_active
+  }
+  personal_access_token {
+    uuid id PK
+    text token_hash UK "SHA-256"
+    text token_prefix "展示用前 12 位"
+    timestamptz expires_at "可空=永不过期"
+    bool revoked
+  }
+  verification_code {
+    uuid id PK
+    text email
+    text code "6 位数字，10 分钟"
+    int attempts "上限 5 次"
+    bool used
+  }
+  </pre>
+  <figcaption><b>图 3-1 · 身份域。</b><code>member</code> 是 user 与 workspace 的关联表并承载角色；一切认证凭证（验证码、PAT）都直接挂在 user 上，工作区不持有凭证。</figcaption>
+</figure>
+
+<h4>② 议题核心</h4>
+<figure class="fig">
+  <pre class="mermaid">
+erDiagram
+  workspace ||..o{ issue : "workspace_id"
+  issue ||..o{ issue : "parent_issue_id 子任务"
+  issue ||..o{ comment : "issue_id"
+  comment ||..o{ comment : "parent_id 回复"
+  issue ||..o{ issue_dependency : "issue_id → depends_on_issue_id"
+  workspace ||..o{ issue_status : "workspace_id"
+  issue }o..|| issue_status : "status → key（工作区内）"
+  workspace ||..o{ issue_property : "workspace_id"
+  workspace ||..o{ issue_label : "workspace_id"
+  issue }o..o{ issue_label : "issue_to_label"
+  issue {
+    uuid id PK
+    uuid workspace_id
+    int number "prefix-number 即人读 ID"
+    text title
+    text status "指向 issue_status.key"
+    text priority "urgent|high|medium|low|none"
+    text assignee_type "member | agent（多态）"
+    uuid assignee_id
+    text creator_type "member | agent"
+    uuid parent_issue_id
+    uuid project_id
+    text origin_type "autopilot|quick_create|*_chat|agent_create"
+    jsonb properties "键为 issue_property.id，≤16KB"
+    jsonb metadata "≤8KB"
+    float position "分数排序"
+    bigint revision "乐观并发"
+    timestamptz last_activity_at
+  }
+  comment {
+    uuid id PK
+    uuid issue_id
+    text author_type "member|agent|system|plugin"
+    uuid author_id
+    text content
+    uuid parent_id
+    uuid source_task_id "agent 评论回链任务"
+    uuid quick_action_id
+    timestamptz resolved_at
+    bigint revision
+  }
+  issue_status {
+    uuid id PK
+    text key "工作区内唯一"
+    text name
+    text category "归组用"
+    bool is_system "内建七态"
+    float position
+  }
+  issue_property {
+    uuid id PK
+    text name
+    text type "text|number|date|url|select|multi_select…"
+    jsonb config "select 选项"
+  }
+  issue_label {
+    uuid id PK
+    text name
+    text color
+    text resource_type "issue | agent | skill"
+  }
+  </pre>
+  <figcaption><b>图 3-2 · 议题核心。</b>三处关键设计：<code>assignee_type + assignee_id</code> 多态指派（人或 agent 用同一列）；issue 状态不是枚举而是每工作区的 <code>issue_status</code> 目录（内建 backlog / todo / in_progress / in_review / done / blocked / cancelled，可自定义）；自定义字段的值直接以 JSONB 存进 <code>issue.properties</code>，键为属性定义的 UUID。</figcaption>
+</figure>
+
+<h4>③ 协作外围（通知 · 订阅 · 附件 · 活动）</h4>
+<figure class="fig">
+  <pre class="mermaid">
+erDiagram
+  issue ||..o{ attachment : "issue_id（也可挂 comment/chat/task）"
+  issue ||..o{ issue_subscriber : "issue_id"
+  issue ||..o{ issue_reaction : "issue_id"
+  comment ||..o{ comment_reaction : "comment_id"
+  issue ||..o{ activity_log : "issue_id"
+  workspace ||..o{ inbox_item : "workspace_id"
+  user ||..o{ inbox_item : "recipient_id"
+  user ||..o{ pinned_item : "user_id"
+  user ||..o{ issue_view : "owner_id"
+  attachment {
+    uuid id PK
+    text uploader_type "member | agent"
+    uuid uploader_id
+    uuid issue_id "六选一挂载点"
+    uuid comment_id
+    uuid chat_session_id
+    uuid task_id
+    text url
+    bigint size_bytes
+  }
+  issue_subscriber {
+    uuid issue_id
+    text user_type "member | agent"
+    uuid user_id
+    text reason "creator|assignee|commenter|mentioned|manual|autopilot|delegated"
+    timestamptz unsubscribed_at
+  }
+  inbox_item {
+    uuid id PK
+    text recipient_type "member | agent"
+    uuid recipient_id
+    text type "通知类型"
+    text severity "action_required|attention|info"
+    text actor_type "member|agent|system"
+    bool read
+    bool archived
+  }
+  activity_log {
+    uuid id PK
+    uuid issue_id
+    text actor_type
+    uuid actor_id
+    text action
+    jsonb details "含 agent_env_revealed 审计"
+  }
+  pinned_item {
+    uuid id PK
+    text item_type "issue | project | view"
+    uuid item_id
+    float position
+  }
+  issue_view {
+    uuid id PK
+    uuid owner_id
+    text scope_type "workspace | my | project"
+    text visibility "private | workspace"
+    jsonb query "筛选条件"
+    jsonb display
+    int revision
+  }
+  </pre>
+  <figcaption><b>图 3-3 · 协作外围。</b>注意 agent 的一等公民身份贯穿到底：订阅者、收件箱收件人、附件上传者、活动 actor 全都是 <code>member | agent</code> 二元多态。附件用「六个可空外挂列」而非判别列，同一张表服务 issue / 评论 / 聊天 / 任务 / 来源上下文。</figcaption>
+</figure>
+
+<h4>④ 项目与小队</h4>
+<figure class="fig">
+  <pre class="mermaid">
+erDiagram
+  workspace ||..o{ project : "workspace_id"
+  project ||..o{ issue : "project_id"
+  project ||..o{ project_resource : "project_id"
+  workspace ||..o{ squad : "workspace_id"
+  squad ||..o{ squad_member : "squad_id"
+  agent ||..o| squad : "leader_id（小队长必须是 agent）"
+  project {
+    uuid id PK
+    text title
+    text status
+    text priority
+    text lead_type "member | agent（多态负责人）"
+    uuid lead_id
+    date start_date
+    date due_date
+  }
+  project_resource {
+    uuid id PK
+    text resource_type
+    jsonb resource_ref
+    int position
+  }
+  squad {
+    uuid id PK
+    text name
+    uuid leader_id "agent.id"
+    text instructions
+    timestamptz archived_at
+  }
+  squad_member {
+    uuid id PK
+    text member_type "agent | member"
+    uuid member_id
+    text role
+  }
+  </pre>
+  <figcaption><b>图 3-4 · 项目与小队。</b>小队是人机混编的编制单位：成员多态，但 <code>leader_id</code> 恒指向 agent——「谁来接活」由小队长 agent 判断（leader task）。项目负责人同样可以是 agent。</figcaption>
+</figure>
+
+<h4>⑤ Agent 定义与调用授权</h4>
+<figure class="fig">
+  <pre class="mermaid">
+erDiagram
+  workspace ||..o{ agent : "workspace_id"
+  user ||..o{ agent : "owner_id"
+  agent ||..o{ agent_invocation_target : "agent_id（permission_mode=public_to 时生效）"
+  agent }o..o{ skill : "agent_skill（enabled）"
+  skill ||..o{ skill_file : "skill_id"
+  agent }o..o{ workspace_mcp_server : "agent_mcp_server"
+  agent {
+    uuid id PK
+    uuid workspace_id
+    uuid owner_id "资源属主"
+    text name
+    text kind "user | system（内建 Mika）"
+    text permission_mode "private | public_to"
+    text status "idle|working|blocked|error|offline"
+    text runtime_mode "local | cloud"
+    uuid runtime_id "绑定的运行时"
+    text model
+    text instructions
+    jsonb mcp_config "出站广播时脱敏"
+    jsonb custom_env
+    text_arr composio_toolkit_allowlist
+    int max_concurrent_tasks
+    timestamptz archived_at
+  }
+  agent_invocation_target {
+    uuid id PK
+    uuid agent_id
+    text target_type "workspace | member | team(保留)"
+    uuid target_id
+  }
+  skill {
+    uuid id PK
+    uuid workspace_id
+    text name
+    text content "SKILL.md"
+    uuid created_by
+    uuid plugin_installation_id "插件安装的技能"
+  }
+  workspace_mcp_server {
+    uuid id PK
+    text name
+    jsonb config
+  }
+  </pre>
+  <figcaption><b>图 3-5 · Agent 定义。</b><code>permission_mode</code> 是调用授权的唯一来源：<code>private</code> 仅属主可触发（管理员也不能越权），<code>public_to</code> 按 <code>agent_invocation_target</code> 白名单 OR 匹配。技能与 MCP 服务器都是工作区级资产，通过关联表挂到 agent。</figcaption>
+</figure>
+
+<h4>⑥ 运行时与任务队列（执行域心脏）</h4>
+<figure class="fig">
+  <pre class="mermaid">
+erDiagram
+  workspace ||..o{ agent_runtime : "workspace_id"
+  runtime_profile ||..o{ agent_runtime : "profile_id（自定义运行时）"
+  agent ||..o{ agent_task_queue : "agent_id"
+  issue ||..o{ agent_task_queue : "issue_id"
+  agent_runtime ||..o{ agent_task_queue : "runtime_id"
+  agent_task_queue ||..o{ agent_task_queue : "parent/retry_of/rerun_of/delegated_from"
+  agent_task_queue ||..o{ task_message : "task_id"
+  agent_task_queue ||..o{ task_usage : "task_id"
+  agent_task_queue ||..o| task_token : "task_id（一任务一令牌）"
+  workspace ||..o{ daemon_token : "workspace_id"
+  agent_runtime {
+    uuid id PK
+    text daemon_id "机器指纹"
+    uuid owner_id "任务令牌以此人身份运行"
+    text provider "claude|codex|cursor… 24 族"
+    text status "online | offline"
+    text runtime_mode "local | cloud"
+    uuid profile_id
+    timestamptz last_seen_at
+  }
+  agent_task_queue {
+    uuid id PK
+    uuid agent_id
+    uuid issue_id
+    text status "queued→dispatched→running→terminal"
+    uuid runtime_id
+    uuid trigger_comment_id
+    uuid chat_session_id
+    uuid autopilot_run_id
+    uuid squad_id
+    uuid originator_user_id "链顶人类（授权判据）"
+    uuid accountable_user_id "归责人（审计判据）"
+    text originator_source "direct_human|delegation|rule_owner…"
+    text trigger_evidence_kind "comment|issue_assignment|autopilot_run…"
+    uuid trigger_evidence_ref_id
+    jsonb runtime_mcp_overlay "终态触发器清空"
+    text session_id "跨任务续会话"
+    text branch_name
+    int attempt
+    timestamptz fire_at "定时任务"
+  }
+  task_token {
+    uuid id PK
+    text token_hash UK "mat_ 的 SHA-256"
+    uuid task_id
+    uuid agent_id
+    uuid workspace_id
+    uuid user_id "runtime 属主"
+    timestamptz expires_at "24h"
+  }
+  task_message {
+    uuid id PK
+    uuid task_id
+    int seq
+    text type
+    text tool
+    jsonb input
+  }
+  task_usage {
+    uuid id PK
+    uuid task_id
+    text provider
+    text model
+    bigint input_tokens
+    bigint output_tokens
+    bigint cost_usd_ticks "1e-10 美元"
+  }
+  </pre>
+  <figcaption><b>图 3-6 · 执行域。</b><code>agent_task_queue</code> 是全库最重的表（70+ 列），同时承担队列、生命周期、会话延续与<strong>归因审计</strong>：<code>originator_user_id</code>（授权判据，A2A 链路取链顶人类）与 <code>accountable_user_id</code>（审计/成本归责）刻意分离；五个自引用列（parent / escalation / delegated_from / retry_of / rerun_of）完整保留任务谱系。</figcaption>
+</figure>
+
+<h4>⑦ Chat 与 Autopilot</h4>
+<figure class="fig">
+  <pre class="mermaid">
+erDiagram
+  workspace ||..o{ chat_session : "workspace_id"
+  agent ||..o{ chat_session : "agent_id"
+  chat_session ||..o{ chat_message : "chat_session_id"
+  chat_message ||..o| agent_task_queue : "task_id（一条助手消息一任务）"
+  workspace ||..o{ autopilot : "workspace_id"
+  autopilot ||..o{ autopilot_trigger : "autopilot_id"
+  autopilot ||..o{ autopilot_run : "autopilot_id"
+  autopilot ||..o{ autopilot_rule_version : "发布快照（归责）"
+  autopilot_run ||..o| agent_task_queue : "task_id"
+  webhook_delivery ||..o| autopilot_run : "webhook_delivery_id"
+  chat_session {
+    uuid id PK
+    uuid agent_id
+    uuid creator_id
+    text status "active | archived"
+    text session_id "运行时会话延续"
+    uuid runtime_id
+    uuid project_id
+  }
+  chat_message {
+    uuid id PK
+    text role "user | assistant"
+    text message_kind
+    uuid task_id
+    jsonb quick_actions
+  }
+  autopilot {
+    uuid id PK
+    text assignee_type "agent | squad"
+    uuid assignee_id
+    text execution_mode "create_issue | run_only"
+    text status "active | paused | archived"
+    uuid project_id
+  }
+  autopilot_trigger {
+    uuid id PK
+    text kind "schedule | webhook | api"
+    text cron_expression
+    text webhook_token
+    text provider
+    jsonb event_filters
+  }
+  autopilot_run {
+    uuid id PK
+    text source
+    text status "pending|issue_created|running|skipped|completed|failed"
+    uuid issue_id
+    uuid task_id
+    text reason_code
+  }
+  webhook_delivery {
+    uuid id PK
+    text provider
+    text signature_status "not_required|valid|invalid|missing"
+    bytea raw_body
+    uuid lease_token "outbox 租约重试"
+    timestamptz dead_lettered_at
+  }
+  </pre>
+  <figcaption><b>图 3-7 · Chat 与 Autopilot。</b>两者都汇入同一个 <code>agent_task_queue</code>：聊天里每条助手回复背后是一个任务；autopilot 触发（定时/webhook/API）先落 <code>autopilot_run</code>，再视 <code>execution_mode</code> 建 issue 或直接跑任务。<code>autopilot_rule_version</code> 是发布快照，为无人值守的运行提供「规则发布者」这一归责人。</figcaption>
+</figure>
+
+<h4>⑧ 渠道与插件（通用化模式）</h4>
+<figure class="fig">
+  <pre class="mermaid">
+erDiagram
+  workspace ||..o{ channel_installation : "workspace_id"
+  agent ||..o| channel_installation : "agent_id（渠道绑定的默认 agent）"
+  channel_installation ||..o{ channel_user_binding : "installation_id"
+  channel_installation ||..o{ channel_chat_session_binding : "installation_id"
+  channel_chat_session_binding ||..o| chat_session : "chat_session_id"
+  channel_installation ||..o{ channel_inbound_message_dedup : "去重"
+  channel_installation ||..o{ channel_outbound_message : "出站映射"
+  workspace ||..o{ plugin_installation : "workspace_id"
+  plugin_package ||..o{ plugin_package_version : "package_id"
+  plugin_package_version ||..o{ plugin_package_file : "version_id"
+  plugin_package_version ||..o| plugin_installation : "package_version_id"
+  plugin_installation ||..o{ plugin_secret : "installation_id"
+  plugin_installation ||..o{ plugin_storage : "installation_id"
+  plugin_installation ||..o{ plugin_invocation : "installation_id"
+  plugin_installation ||..o{ plugin_hook_schedule : "installation_id"
+  channel_installation {
+    uuid id PK
+    text channel_type "slack|dingtalk|wecom|telegram…"
+    jsonb config "凭证与平台 ID"
+    text status "active | revoked"
+    text ws_lease_token "单驱动租约"
+  }
+  channel_user_binding {
+    uuid id PK
+    uuid multica_user_id
+    text channel_user_id "平台侧身份映射"
+  }
+  plugin_installation {
+    uuid id PK
+    text plugin_key
+    jsonb manifest
+    jsonb granted_scopes
+    text token_hash "mpi_ 安装令牌"
+    bool enabled
+  }
+  plugin_storage {
+    uuid id PK
+    text scope_type "workspace | user"
+    uuid scope_id
+    text key
+  }
+  </pre>
+  <figcaption><b>图 3-8 · 渠道与插件。</b>Lark 先行实现了一套专用表（<code>lark_*</code> ×7），随后被抽象成 <code>channel_*</code> 通用模型（×11）覆盖 Slack / 钉钉 / 企微 / Telegram——同一模式：安装 → 用户绑定 → 会话绑定 → 进站去重/审计 → 出站映射。插件域是「包 → 版本 → 文件」的发布链加安装侧的密文、存储、调用日志与定时 hook。</figcaption>
+</figure>
+
+<h3 id="er-poly"><span class="sec">3.3</span>多态关系总表</h3>
+<p>没有外键的另一面是多态关系用得非常自由——「判别列 + ID 列」是全库最高频的建模手势，agent 借此在每个协作场景与人类同权出现：</p>
+<div class="tbl-wrap"><table class="tbl">
+  <thead><tr><th>表 · 判别列</th><th>可指向</th><th>语义</th></tr></thead>
+  <tbody>
+    <tr><td><code>issue.assignee_type</code></td><td><code>member | agent</code></td><td>核心多态：任务指派给人或 agent</td></tr>
+    <tr><td><code>issue.creator_type</code> / <code>project.lead_type</code></td><td><code>member | agent</code></td><td>创建者 / 项目负责人</td></tr>
+    <tr><td><code>comment.author_type</code></td><td><code>member | agent | system | plugin</code></td><td>四类评论作者，编辑权按 (type,id) 精确匹配</td></tr>
+    <tr><td><code>inbox_item.recipient_type</code> · <code>.actor_type</code></td><td><code>member | agent</code>（actor 另含 <code>system</code>）</td><td>通知的收件人与动作者都可是 agent</td></tr>
+    <tr><td><code>issue_subscriber.user_type</code> / reactions 的 <code>actor_type</code></td><td><code>member | agent</code></td><td>订阅与表情</td></tr>
+    <tr><td><code>attachment.uploader_type</code></td><td><code>member | agent</code></td><td>附件上传者；挂载点为六个可空列</td></tr>
+    <tr><td><code>squad_member.member_type</code></td><td><code>agent | member</code></td><td>人机混编小队</td></tr>
+    <tr><td><code>autopilot.assignee_type</code> / <code>quick_action.assignee_type</code></td><td><code>agent | squad</code></td><td>自动化的执行者是 agent 或小队（不能是人）</td></tr>
+    <tr><td><code>agent_invocation_target.target_type</code></td><td><code>workspace | member | team</code>(保留)</td><td>调用白名单的授权对象</td></tr>
+    <tr><td><code>pinned_item.item_type</code></td><td><code>issue | project | view</code></td><td>个人置顶</td></tr>
+    <tr><td><code>issue_label.resource_type</code></td><td><code>issue | agent | skill</code></td><td>一套标签服务三种资源，各有关联表</td></tr>
+    <tr><td><code>agent_task_queue.trigger_evidence_kind</code></td><td><code>comment | issue_assignment | autopilot_run | rule_version | rerun…</code></td><td>触发证据指针，free TEXT 便于扩展</td></tr>
+    <tr><td><code>plugin_storage.scope_type</code></td><td><code>workspace | user</code></td><td>插件 KV 的作用域</td></tr>
+  </tbody>
+</table></div>
+
+<h3 id="er-catalog"><span class="sec">3.4</span>全表清单（按域）</h3>
+<p>sqlc 建模的 106 张表按域归组如下（另有 <code>schema_migrations</code> 等少量无模型辅助表）。核心链条：<strong>workspace → issue → agent_task_queue</strong>，其余域都围绕这条主干生长。</p>
+<div class="tbl-wrap"><table class="tbl">
+  <thead><tr><th>域</th><th>表</th></tr></thead>
+  <tbody>
+    <tr><td>身份与工作区<br><span class="num">8</span></td><td class="wrap"><code>user</code> <code>workspace</code> <code>member</code> <code>workspace_invitation</code> <code>workspace_share_link</code> <code>personal_access_token</code> <code>verification_code</code> <code>notification_preference</code></td></tr>
+    <tr><td>议题与协作<br><span class="num">16</span></td><td class="wrap"><code>issue</code> <code>issue_dependency</code> <code>issue_status</code> <code>issue_property</code> <code>issue_label</code> <code>issue_to_label</code> <code>comment</code> <code>comment_reaction</code> <code>issue_reaction</code> <code>issue_subscriber</code> <code>attachment</code> <code>activity_log</code> <code>inbox_item</code> <code>pinned_item</code> <code>issue_view</code> <code>issue_view_preference</code></td></tr>
+    <tr><td>议题来源上下文<br><span class="num">2</span></td><td class="wrap"><code>issue_source_context</code> <code>issue_source_context_object_intent</code>（从聊天/任务「一键立项」时的快照与对象搬运意图）</td></tr>
+    <tr><td>项目与小队<br><span class="num">4</span></td><td class="wrap"><code>project</code> <code>project_resource</code> <code>squad</code> <code>squad_member</code></td></tr>
+    <tr><td>Agent 定义<br><span class="num">6</span></td><td class="wrap"><code>agent</code> <code>agent_invocation_target</code> <code>agent_mcp_server</code> <code>agent_skill</code> <code>agent_to_label</code> <code>agent_builder_draft</code></td></tr>
+    <tr><td>技能与 MCP<br><span class="num">4</span></td><td class="wrap"><code>skill</code> <code>skill_file</code> <code>skill_to_label</code> <code>workspace_mcp_server</code></td></tr>
+    <tr><td>运行时与任务<br><span class="num">8</span></td><td class="wrap"><code>agent_runtime</code> <code>runtime_profile</code> <code>agent_task_queue</code> <code>task_message</code> <code>task_token</code> <code>task_usage</code> <code>daemon_connection</code> <code>daemon_token</code></td></tr>
+    <tr><td>Chat<br><span class="num">4</span></td><td class="wrap"><code>chat_session</code> <code>chat_message</code> <code>chat_pinned_agent</code> <code>chat_draft_restore</code></td></tr>
+    <tr><td>Autopilot 与快捷指令<br><span class="num">10</span></td><td class="wrap"><code>autopilot</code> <code>autopilot_trigger</code> <code>autopilot_run</code> <code>autopilot_rule_version</code> <code>autopilot_subscriber</code> <code>autopilot_collaborator</code> <code>autopilot_quota_period</code> <code>autopilot_quota_reservation</code> <code>webhook_delivery</code> <code>quick_action</code></td></tr>
+    <tr><td>渠道（通用）<br><span class="num">11</span></td><td class="wrap"><code>channel_installation</code> <code>channel_user_binding</code> <code>channel_binding_token</code> <code>channel_chat_session_binding</code> <code>channel_chat_context_generation</code> <code>channel_inbound_audit</code> <code>channel_inbound_message_dedup</code> <code>channel_media_pending_object</code> <code>channel_outbound_card_message</code> <code>channel_outbound_message</code> <code>channel_task_delivery</code></td></tr>
+    <tr><td>Lark 专用（先行实现）<br><span class="num">7</span></td><td class="wrap"><code>lark_installation</code> <code>lark_user_binding</code> <code>lark_binding_token</code> <code>lark_chat_session_binding</code> <code>lark_inbound_audit</code> <code>lark_inbound_message_dedup</code> <code>lark_outbound_card_message</code></td></tr>
+    <tr><td>钉钉专用<br><span class="num">3</span></td><td class="wrap"><code>dingtalk_bot_identity</code> <code>dingtalk_group_presence</code> <code>dingtalk_group_route</code>（带镜像触发器）</td></tr>
+    <tr><td>GitHub 集成<br><span class="num">6</span></td><td class="wrap"><code>github_installation</code> <code>github_pending_installation</code> <code>github_pull_request</code> <code>github_pull_request_check_run</code> <code>github_pull_request_check_suite</code> <code>github_pending_check_suite</code></td></tr>
+    <tr><td>自托管 VCS<br><span class="num">3</span></td><td class="wrap"><code>vcs_connection</code> <code>vcs_pull_request</code> <code>vcs_commit_status</code>（GitLab 等，token 加密存储）</td></tr>
+    <tr><td>Issue–PR 关联<br><span class="num">2</span></td><td class="wrap"><code>issue_pull_request</code> <code>issue_vcs_pull_request</code>（linked_by 多态）</td></tr>
+    <tr><td>插件平台<br><span class="num">8</span></td><td class="wrap"><code>plugin_package</code> <code>plugin_package_version</code> <code>plugin_package_file</code> <code>plugin_installation</code> <code>plugin_secret</code> <code>plugin_storage</code> <code>plugin_invocation</code> <code>plugin_hook_schedule</code></td></tr>
+    <tr><td>Composio<br><span class="num">1</span></td><td class="wrap"><code>user_composio_connection</code>（用户级第三方应用连接）</td></tr>
+    <tr><td>用量与配额<br><span class="num">5</span></td><td class="wrap"><code>task_usage_hourly</code> <code>task_usage_hourly_dirty</code> <code>task_usage_hourly_rollup_state</code>（触发器喂 dirty、水位线增量汇总）<code>client_usage_daily</code> <code>seat_capacity_outbox</code></td></tr>
+    <tr><td>系统与运营<br><span class="num">3</span></td><td class="wrap"><code>sys_cron_executions</code>（DB cron 租约+审计）<code>feedback</code> <code>contact_sales_inquiry</code></td></tr>
+  </tbody>
+</table></div>
+
+<div class="note"><span class="t">读表小抄</span>判断一张表属于谁：看 <code>workspace_id</code>（租户资产）还是 <code>user_id</code>（个人资产，如 PAT、置顶、视图偏好、Composio 连接）；判断谁能动它：找 <code>owner_id / created_by</code>（资源属主，见 §4.5）；判断它是不是队列：找 <code>lease_token / next_attempt_at</code>（outbox 模式）。</div>
+</section>
+
+<!-- @ER-DONE -->
+<!-- ================================================================ -->
+<section class="part" id="auth">
+<div class="part-head">
+  <span class="no">PART 04</span>
+  <h2>认证与权限</h2>
+  <p class="lede">一句话概括：<strong>无密码的人类认证（JWT + Cookie），前缀分流的七类凭证，以「工作区成员」为地基、角色与资源属主逐层收窄的授权体系</strong>——而 agent 从头到尾没有自己的账号，它的身份是一枚随任务生灭的令牌。</p>
+</div>
+
+<h3 id="auth-login"><span class="sec">4.1</span>无密码登录</h3>
+<p>整个系统<strong>没有密码</strong>：<code>user</code> 表没有密码列，也就不存在密码哈希与找回流程。登录只有两条路，全部在公开路由组、按 IP 限流：</p>
+
+<figure class="fig">
+  <pre class="mermaid">
+sequenceDiagram
+  participant B as 浏览器
+  participant S as Server（handler/auth.go）
+  participant M as 邮件（Resend / SMTP）
+  B->>S: POST /auth/send-code {email}
+  S->>S: 注册闸门：ALLOWED_EMAILS → 域白名单 → ALLOW_SIGNUP（老用户全豁免）
+  S->>M: 6 位验证码（crypto/rand · 10 分钟有效 · 同邮箱 60s 冷却）
+  B->>S: POST /auth/verify-code {email, code}
+  S->>S: 常数时间比对 · 每码最多试 5 次 · 明文存 verification_code 表
+  S-->>B: JWT（HS256，默认 30 天）+ Set-Cookie
+  Note over B,S: multica_auth（HttpOnly·SameSite=Strict）+ multica_csrf（JS 可读）+ CloudFront 签名 Cookie
+  Note over B,S: Google OAuth：POST /auth/google 交换 code→userinfo，随后同样签发 JWT/Cookie
+  </pre>
+  <figcaption><b>图 4-1 · 登录时序。</b>「拥有邮箱里的验证码」本身就是邮箱验证，没有独立的验证环节。Google 是唯一的 OAuth <em>登录</em>方；GitHub/Slack/Lark 等 OAuth 只用于工作区集成，从不承载用户身份。开发后门 <code>MULTICA_DEV_VERIFICATION_CODE</code> 在 <code>APP_ENV=production</code> 下被硬禁用。</figcaption>
+</figure>
+
+<p>会话是<strong>无状态 JWT</strong>：HS256 签名（<code>JWT_SECRET</code>，生产环境弱密钥直接拒绝启动），claims 只有 <code>sub/email/name/exp/iat</code>，没有 sessions 表，因此没有「注销其他设备」，也没有刷新流程——过期即重新登录。<code>POST /auth/logout</code> 只清 Cookie，被复制走的 JWT 在到期前仍然有效；可吊销的凭证只有 PAT / daemon / task / plugin 令牌。</p>
+
+<h3 id="auth-tokens"><span class="sec">4.2</span>凭证家族</h3>
+<p>所有非 JWT 凭证统一形态：<code>前缀 + 40 位 hex（20 随机字节）</code>，服务端只存 <code>SHA-256</code> 哈希。前缀既是路由（中间件按它分流），也是标签（一眼看出凭证类别）：</p>
+<div class="tbl-wrap"><table class="tbl">
+  <thead><tr><th>凭证</th><th>持有者</th><th>存储 / 校验</th><th>有效期</th><th>用途与边界</th></tr></thead>
+  <tbody>
+    <tr><td><span class="tok human">JWT</span></td><td>人类</td><td class="wrap">自包含，不落库；Cookie <code>multica_auth</code> 或 <code>Bearer</code></td><td class="num">30 天</td><td class="wrap">浏览器与桌面会话；无服务端吊销</td></tr>
+    <tr><td><span class="tok human">mul_</span></td><td>人类（CLI/daemon/桌面）</td><td class="wrap"><code>personal_access_token</code>，Redis 缓存 10 分钟</td><td class="num">可永久</td><td class="wrap">个人访问令牌；CLI 登录默认 90 天并在剩 7 天内自动续期；桌面为 daemon 铸永久 PAT；可撤销</td></tr>
+    <tr><td><span class="tok machine">mat_</span></td><td>Agent（任务作用域）</td><td class="wrap"><code>task_token</code>，任务领取时铸造</td><td class="num">24 h</td><td class="wrap">agent 的全部身份：权限 = 运行时属主的成员资格 ∩ 令牌绑定的单个工作区（§4.6）</td></tr>
+    <tr><td><span class="tok machine">mdt_</span></td><td>Daemon</td><td class="wrap"><code>daemon_token</code></td><td class="num">24 h</td><td class="wrap">绑定工作区、无用户身份；目前仅在任务携带 Remote MCP 连接时铸造，日常 daemon 用 <code>mul_</code></td></tr>
+    <tr><td><span class="tok machine">mcn_</span></td><td>Cloud 节点</td><td class="wrap">远程调 Multica Cloud 验证（60s 缓存；Cloud 不可达返回 503 而非放行）</td><td class="num">Cloud 管理</td><td class="wrap">云托管 runtime 的机器凭证</td></tr>
+    <tr><td><span class="tok machine">mpi_</span></td><td>插件安装</td><td class="wrap"><code>plugin_installation.token_hash</code>，可轮换</td><td class="num">长期</td><td class="wrap">插件公开 API <code>/v1</code> 唯一入场券</td></tr>
+    <tr><td><span class="tok machine">mpc_</span></td><td>插件回调</td><td class="wrap">一次性；使用时<strong>复查</strong>被代表者的成员资格</td><td class="num">5 分钟</td><td class="wrap">代表某个人的单次回调，成员被移除立即失效</td></tr>
+  </tbody>
+</table></div>
+
+<h3 id="auth-middleware"><span class="sec">4.3</span>请求鉴权管线</h3>
+<p>主认证中间件 <code>middleware.Auth</code> 做的第一件事是 <code>r.Header.Del("X-Actor-Source")</code>——这个头<strong>只能由服务端盖章</strong>，客户端传入一律丢弃。随后取凭证（<code>Authorization</code> 头优先于 Cookie；Cookie 承载的写请求必须过 CSRF），按前缀分流：</p>
+<div class="tbl-wrap"><table class="tbl">
+  <thead><tr><th>前缀</th><th>查验</th><th>盖章到请求头</th></tr></thead>
+  <tbody>
+    <tr><td><span class="tok machine">mat_</span></td><td class="wrap"><code>task_token</code> 按哈希查、未过期</td><td class="wrap"><code>X-User-ID</code>（属主）· <code>X-Agent-ID</code> · <code>X-Task-ID</code> · <code>X-Workspace-ID</code> 全部<strong>覆写</strong>客户端值，再盖 <code>X-Actor-Source: task_token</code></td></tr>
+    <tr><td><span class="tok machine">mcn_</span></td><td class="wrap">HTTP 调 Cloud <code>/pat/verify</code>；本地必须有对应 user 行</td><td class="wrap"><code>X-User-ID</code> + <code>X-Actor-Source: cloud_pat</code></td></tr>
+    <tr><td><span class="tok human">mul_</span></td><td class="wrap">Redis 缓存 → <code>personal_access_token</code>（未撤销、未过期）</td><td class="wrap"><code>X-User-ID</code></td></tr>
+    <tr><td><span class="tok human">其他</span></td><td class="wrap">按 JWT 解析（签名算法钉死 HMAC，拒绝 alg 混淆）</td><td class="wrap"><code>X-User-ID</code> = <code>sub</code>，<code>X-User-Email</code></td></tr>
+  </tbody>
+</table></div>
+<p>身份在进程内的传递方式很朴素：handler 用 <code>r.Header.Get("X-User-ID")</code> 取用户；工作区成员行则放进 context（<code>MemberFromContext</code>）。鉴权缓存全在 Redis：PAT 10 分钟、成员资格 5 分钟、daemon 令牌与 Cloud PAT 各有缓存——官方声明的最坏撤销滞后为 <strong>10 分钟</strong>。</p>
+
+<h3 id="auth-roles"><span class="sec">4.4</span>工作区作用域与角色</h3>
+<p>工作区是权限地基。解析优先级：<code>mat_</code> 令牌绑定的工作区（无条件优先，其余标识一律忽略）→ URL 参数 → <code>?workspace_slug</code> / <code>X-Workspace-Slug</code>（web/desktop/mobile 走这条）→ <code>?workspace_id</code> / <code>X-Workspace-ID</code>（CLI/daemon 走这条）。成员校验失败返回的是 <strong>404 而非 403</strong>——非成员连「这个工作区存在」都探测不到；前端同样用一张 <code>NoAccessPage</code> 刻意不区分两者。</p>
+
+<figure class="fig">
+  <div class="scroll">
+  <svg viewBox="0 0 960 470" role="img" aria-label="五级鉴权梯度：公开路由、已认证、工作区成员、管理员、所有者，逐级收窄" style="min-width: 860px">
+    <!-- staircase floor -->
+    <path d="M 20 424 L 192 424 L 192 354 L 376 354 L 376 284 L 560 284 L 560 214 L 744 214 L 744 144 L 936 144" fill="none" stroke="var(--line-strong)" stroke-width="1.5"/>
+
+    <g>
+      <rect x="20" y="340" width="172" height="76" rx="9" fill="var(--surface-2)" stroke="var(--line-strong)"/>
+      <text x="34" y="364" font-size="12.5" font-weight="600" fill="var(--ink)">公开路由</text>
+      <text x="34" y="383" font-size="10.5" fill="var(--muted)">health · /auth/* · webhooks</text>
+      <text x="34" y="399" font-size="10.5" fill="var(--muted)">HMAC 签名能力 URL</text>
+    </g>
+    <g>
+      <rect x="204" y="270" width="172" height="76" rx="9" fill="var(--surface-2)" stroke="var(--line-strong)"/>
+      <text x="218" y="294" font-size="12.5" font-weight="600" fill="var(--ink)">已认证用户</text>
+      <text x="218" y="313" font-family="var(--font-mono)" font-size="10" fill="var(--accent-ink)">middleware.Auth</text>
+      <text x="218" y="329" font-size="10.5" fill="var(--muted)">/api/me · /api/tokens · 邀请</text>
+    </g>
+    <g>
+      <rect x="388" y="200" width="172" height="76" rx="9" fill="var(--accent-soft)" stroke="var(--accent)" stroke-width="1.5"/>
+      <text x="402" y="224" font-size="12.5" font-weight="600" fill="var(--ink)">工作区成员</text>
+      <text x="402" y="243" font-family="var(--font-mono)" font-size="10" fill="var(--accent-ink)">RequireWorkspaceMember</text>
+      <text x="402" y="259" font-size="10.5" fill="var(--muted)">issues · agents · chat · inbox…</text>
+    </g>
+    <g>
+      <rect x="572" y="130" width="172" height="76" rx="9" fill="var(--surface-2)" stroke="var(--line-strong)"/>
+      <text x="586" y="154" font-size="12.5" font-weight="600" fill="var(--ink)">owner + admin</text>
+      <text x="586" y="173" font-family="var(--font-mono)" font-size="10" fill="var(--accent-ink)">RequireWorkspaceRole</text>
+      <text x="586" y="189" font-size="10.5" fill="var(--muted)">成员/邀请 · 集成 · 插件 · profile</text>
+    </g>
+    <g>
+      <rect x="756" y="60" width="180" height="76" rx="9" fill="var(--surface-2)" stroke="var(--line-strong)"/>
+      <text x="770" y="84" font-size="12.5" font-weight="600" fill="var(--ink)">仅 owner</text>
+      <text x="770" y="103" font-size="10.5" fill="var(--muted)">删除工作区 · owner 角色变更</text>
+      <text x="770" y="119" font-size="10.5" fill="var(--muted)">「至少一名 owner」不变量</text>
+    </g>
+
+    <!-- side annotations -->
+    <rect x="20" y="48" width="336" height="118" rx="9" fill="none" stroke="var(--line)" stroke-dasharray="6 5"/>
+    <text x="36" y="74" font-size="11.5" font-weight="600" fill="var(--muted)">梯子之外的两类叠加检查</text>
+    <text x="36" y="97" font-size="10.5" fill="var(--body-c)">① 资源级：属主 / permission_mode（§4.5）</text>
+    <text x="36" y="117" font-size="10.5" fill="var(--body-c)">② RequireHumanActor：billing 等端点拒绝</text>
+    <text x="36" y="135" font-family="var(--font-mono)" font-size="10" fill="var(--copper-ink)">X-Actor-Source ∈ {task_token, cloud_pat}</text>
+    <text x="36" y="156" font-size="10.5" fill="var(--muted)">非成员访问返回 404（防工作区枚举）</text>
+  </svg>
+  </div>
+  <figcaption><b>图 4-2 · 鉴权梯度。</b>router.go 用中间件组合表达整个梯子；handler 内部对关键操作还有防御性复查（如删工作区再验一次 owner）。issue 域刻意<strong>没有任何角色门槛</strong>——成员即全权，协作摩擦最小化。</figcaption>
+</figure>
+
+<div class="tbl-wrap"><table class="tbl">
+  <thead><tr><th>能力</th><th>owner</th><th>admin</th><th>member</th></tr></thead>
+  <tbody>
+    <tr><td class="wrap">issues / 评论 / chat / inbox / 项目 / 小队 的创建与编辑</td><td>✓</td><td>✓</td><td>✓</td></tr>
+    <tr><td class="wrap">邀请成员（只能授 admin/member）· 改角色 · 移除成员</td><td>✓</td><td>✓</td><td>—</td></tr>
+    <tr><td class="wrap">工作区设置 · 集成（GitHub/VCS/渠道）· 插件 · MCP 库 · runtime profile · 分享链接 · issue 状态/属性/快捷指令管理</td><td>✓</td><td>✓</td><td>—</td></tr>
+    <tr><td class="wrap">删除工作区 · 提升/降级 owner · 移除 owner</td><td>✓</td><td>—</td><td>—</td></tr>
+    <tr><td class="wrap">「最后一名 owner」的降级 / 移除 / 退出</td><td colspan="3">一律 400 拒绝（不变量保护）</td></tr>
+  </tbody>
+</table></div>
+
+<p>入口除邀请外还有<strong>分享链接</strong>：24 位 hex 一次一条活跃，可限次数与时效，兑换用条件 UPDATE 原子递增杜绝超发。移除成员是一整个事务的级联：下线其 runtime、归档绑定 agent、取消在途任务、删订阅与 daemon 令牌、删成员行，最后立刻失效成员资格缓存。</p>
+
+<h3 id="auth-resources"><span class="sec">4.5</span>资源级权限</h3>
+<p>角色之上叠加「资源属主」层——多数写操作的判据是 <code>owner/admin ∥ 资源属主</code>，但 agent 的<strong>调用权</strong>是唯一一处连管理员都没有豁免的地方：</p>
+<div class="tbl-wrap"><table class="tbl">
+  <thead><tr><th>资源</th><th>规则</th></tr></thead>
+  <tbody>
+    <tr><td><strong>Agent 调用</strong>（触发运行）</td><td class="wrap">由 <code>agent.permission_mode</code> 决定：<code>private</code> 仅属主——<strong>无管理员豁免、无 agent 链路豁免</strong>；<code>public_to</code> 按白名单（workspace / member）。agent 调 agent 时以<strong>链顶人类发起者</strong>（<code>originator_user_id</code>）判权，防止借 agent 洗权限</td></tr>
+    <tr><td>Agent 管理（改配置/归档）</td><td class="wrap">owner/admin 或 <code>agent.owner_id</code></td></tr>
+    <tr><td>Agent 环境变量 / 密钥</td><td class="wrap"><strong>agent actor 一律 403</strong>；人类侧 owner/admin 或 agent 属主；每次明文披露写入 <code>activity_log</code>，审计写入失败则不返回明文（fail-closed）；<code>mcp_config</code> 在 WS 广播副本中无条件脱敏</td></tr>
+    <tr><td>评论编辑 / 删除</td><td class="wrap">作者（<code>author_type + author_id</code> 精确匹配，agent 只能改自己的评论）或 owner/admin</td></tr>
+    <tr><td>Skill / Runtime / 视图 / Autopilot / Squad</td><td class="wrap">创建者或属主，或 owner/admin；他人私有视图直接 404 不可见</td></tr>
+    <tr><td>计费与订阅、client-usage 上报</td><td class="wrap"><code>RequireHumanActor</code>：<code>X-Actor-Source ∈ {task_token, cloud_pat}</code> 一律 403——agent 拿不到钱包</td></tr>
+  </tbody>
+</table></div>
+<p>前端在 <code>packages/core/permissions/rules.ts</code> 以纯函数镜像同一套规则（返回 <code>Decision {allowed, reason}</code> 供 UI 提示），但 Go handler 才是权威判定。</p>
+
+<h3 id="auth-machine"><span class="sec">4.6</span>Daemon 与 Agent 身份</h3>
+<p><code>/api/daemon/*</code> 使用独立的 <code>DaemonAuth</code>：只收 <code>Authorization</code> 头（结构性排除 Cookie/CSRF 问题），支持 <code>mdt_ / mcn_ / mul_ / JWT</code> 四条路径。实践中 daemon 主要以属主的 <code>mul_</code> PAT 运行；runtime 访问经 <code>requireDaemonRuntimeAccess</code> 校验，且刻意用「404 = runtime 已不存在，daemon 应丢弃并重注册」作自愈信号（其余 DB 错误保持 500，防止抖动触发自清理）。</p>
+
+<p><strong>Agent 没有账号，身份是随任务生灭的 <span class="tok machine">mat_</span> 令牌</strong>——这是全系统最精彩的安全设计：</p>
+<ol class="tight">
+  <li><strong>铸造</strong>：daemon 领取任务时，服务端为每个任务铸 <code>mat_</code> 令牌，绑定 <code>task + agent + workspace + runtime 属主</code>，24 小时过期，与领取回执同事务落库。runtime 属主缺失时<strong>取消任务而不是派发</strong>——绝不产生无主凭证。历史上曾把属主的 PAT 注入 agent 进程，此设计（MUL-2600）正是为替换它。</li>
+  <li><strong>注入</strong>：daemon 把令牌以 <code>MULTICA_TOKEN</code> 环境变量交给 CLI 进程（另有 <code>MULTICA_WORKSPACE_ID / MULTICA_AGENT_ID / MULTICA_TASK_ID</code> 等）；daemon 侧校验注入值必须是 <code>mat_</code> 前缀，CLI 侧在任务上下文里拒绝回退到用户全局配置的 token，也拒绝 <code>login</code> 等人类命令。</li>
+  <li><strong>行权</strong>：请求进来后中间件覆写四个身份头并盖 <code>X-Actor-Source: task_token</code>；工作区解析无条件采用令牌绑定值；成员校验跑的是<strong>属主</strong>的资格——所以 agent 的能力恒等于「属主权限 ∩ 单一工作区 ∩ 24 小时」。</li>
+  <li><strong>署名</strong>：<code>resolveActor</code> 据此返回 <code>("agent", agent_id)</code>，评论落库为 <code>author_type='agent'</code>。旧路径若想声明 agent 身份，必须同时给出 <code>X-Agent-ID</code> 与归属该 agent 的有效 <code>X-Task-ID</code>——单凭 <code>X-Agent-ID</code> 永远不被信任，成员无法冒充 agent。</li>
+</ol>
+
+<p>CLI 的人类登录则是一段本地回环握手：</p>
+<figure class="fig">
+  <pre class="mermaid">
+sequenceDiagram
+  participant C as multica CLI
+  participant Br as 浏览器（已有会话）
+  participant S as Server
+  C->>C: 本地监听 127.0.0.1 随机端口 + 生成 state
+  C->>Br: 打开 /login?cli_callback=… 与 cli_state=…
+  Br->>Br: 校验回调地址：仅 http + localhost/私网段
+  Br->>S: POST /api/cli-token（凭 Cookie 会话）
+  S-->>Br: 新 JWT
+  Br->>C: 重定向 http://127.0.0.1:…/callback?token&state
+  C->>C: 核对 state
+  C->>S: POST /api/tokens（JWT 换 PAT，90 天）
+  S-->>C: mul_…（明文仅出现这一次）
+  C->>C: 存 profile 配置；余期 ≤7 天时自动续至 90 天（不轮换密钥）
+  </pre>
+  <figcaption><b>图 4-3 · CLI 登录。</b>桌面端类似但走 <code>multica://auth/callback</code> 深链把 JWT 交给主进程，主进程再为本机 daemon 铸一枚<strong>永不过期</strong>的 PAT（按 profile 缓存，401 时重铸）。</figcaption>
+</figure>
+
+<h3 id="auth-frontend"><span class="sec">4.7</span>前端凭证管线</h3>
+<div class="tbl-wrap"><table class="tbl">
+  <thead><tr><th></th><th>Web</th><th>Desktop</th><th>Mobile</th></tr></thead>
+  <tbody>
+    <tr><td>模式</td><td class="wrap"><strong>Cookie</strong>（<code>multica_auth</code> HttpOnly + <code>multica_csrf</code>）</td><td class="wrap">Token（Bearer）</td><td class="wrap">Token（Bearer）</td></tr>
+    <tr><td>存储</td><td class="wrap">浏览器 Cookie；旧 localStorage token 存量用户保持 token 模式直至下次重新登录</td><td class="wrap">Electron <code>localStorage["multica_token"]</code></td><td class="wrap"><code>expo-secure-store</code>（iOS Keychain），键名与桌面一致</td></tr>
+    <tr><td>随行头</td><td class="wrap"><code>credentials:"include"</code> + <code>X-CSRF-Token</code> + <code>X-Workspace-Slug</code></td><td class="wrap"><code>Authorization</code> + <code>X-Workspace-Slug</code></td><td class="wrap"><code>Authorization</code> + <code>X-Workspace-Slug</code>（明确无 CSRF）</td></tr>
+  </tbody>
+</table></div>
+<p>启动时序由 <code>AuthInitializer</code> 掌控：拉配置（指数退避）→ <code>getMe()</code>。<strong>只有真正的 401 才判死刑</strong>（清 token、登出、重置分析身份）；网络故障进入 <code>recovering</code> 状态按 1s→30s 退避重试并监听 <code>online</code> 事件——断网永远不会把人登出。API client 收到任意 401 时同步清空内存 token 并回调宿主清存储。WebSocket 的认证走 Cookie（升级前校验）或首帧 <code>{"type":"auth"}</code>（换取 <code>auth_ack</code>），只接受 JWT 与 <code>mul_</code>，<code>mat_/mcn_</code> 上不了 <code>/ws</code>。</p>
+
+<h3 id="auth-hardening"><span class="sec">4.8</span>攻击面加固</h3>
+<ul class="tight">
+  <li><strong>CSRF 三层</strong>：<code>SameSite=Strict</code> 为主防线；双提交 Cookie 的值是 <code>nonce.HMAC(nonce, 会话JWT)</code>——把 CSRF 令牌与会话绑定，子域写 Cookie 也伪造不了；Bearer 路径与插件 API 结构性免疫。</li>
+  <li><strong>限流</strong>（Redis 固定窗口 + Lua 原子）：send-code 5/分/IP、verify 20/分/IP、contact-sales 5/时、插件 API 120/分；邀请另有三重滑窗（发起人 10/10min · 工作区 50/24h · 收件人 6/24h，<strong>fail-closed</strong>）；<code>X-Forwarded-For</code> 仅在可信代理 CIDR 内采信。</li>
+  <li><strong>能力 URL 替代 Cookie</strong>：<code>SameSite=Strict</code> 会挡住 <code>&lt;img&gt;</code>/下载场景，于是附件下载、头像、插件面板都改用短时效 HMAC 签名 URL——凭证在链接里而不在会话里。</li>
+  <li><strong>启动守卫</strong>：生产环境下弱 <code>JWT_SECRET</code> 直接 <code>os.Exit(1)</code>；开发验证码后门在生产硬关闭；保留 slug 表解析失败则拒绝启动（92 个保留字防路由劫持）。</li>
+  <li><strong>删掉的攻击面</strong>：早期的 OpenAI 兼容透传端点 <code>/api/llm/*</code> 已整体移除——它曾允许任何登录用户白嫖部署方的模型密钥。</li>
+  <li><strong>WS 来源校验</strong>：同源放行、<code>X-Forwarded-Host</code> 仅信任可信代理、其余按显式 origin 白名单。</li>
+</ul>
+
+<div class="risk"><span class="t">值得留意的一处边角</span><code>middleware.Auth</code> 删除并重盖 <code>X-Actor-Source</code>，但不删客户端传入的 <code>X-User-ID</code>（认证路由会覆写，安全）；唯独公开路由 <code>GET /api/github/setup</code> 直接读取该头写入 GitHub 安装的 <code>connected_by_id</code>。它只用于「谁连接了」的展示归属、不参与任何授权判定，但属于可伪造的归属信息，重构时值得顺手收紧。</div>
+</section>
+
+<!-- @AUTH-DONE -->
+
+<footer class="foot">
+  <span>基于仓库 <span class="mono">multica-ai/multica</span> @ <span class="mono">dcc2d5825</span>（2026-08-28）源码整理</span>
+  <span>生成于 2026-09-02 · 图中文件路径均相对仓库根目录</span>
+</footer>
+
+</div>
+</main>
+</div>
+
+<script>
+  (function () {
+    try {
+      var links = Array.prototype.slice.call(document.querySelectorAll(".nav a[href^='#']"));
+      var map = {};
+      links.forEach(function (a) { map[a.getAttribute("href").slice(1)] = a; });
+      var targets = Object.keys(map).map(function (id) { return document.getElementById(id); }).filter(Boolean);
+      var actives = [];
+      function setActive(id) {
+        actives.forEach(function (a) { a.classList.remove("active"); });
+        actives = [];
+        var a = map[id];
+        if (!a) return;
+        a.classList.add("active");
+        actives.push(a);
+        var part = a.closest(".part");
+        if (part) {
+          var top = part.querySelector(":scope > a");
+          if (top && top !== a) { top.classList.add("active"); actives.push(top); }
+        }
+      }
+      if ("IntersectionObserver" in window) {
+        var visible = new Set();
+        var io = new IntersectionObserver(function (entries) {
+          entries.forEach(function (e) {
+            if (e.isIntersecting) visible.add(e.target.id); else visible.delete(e.target.id);
+          });
+          var best = null;
+          targets.forEach(function (t) { if (visible.has(t.id) && best === null) best = t.id; });
+          if (best) setActive(best);
+        }, { rootMargin: "-72px 0px -65% 0px" });
+        targets.forEach(function (t) { io.observe(t); });
+      }
+    } catch (e) { /* 目录高亮失败不影响阅读 */ }
+  })();
+</script>
+
+<!-- mermaid runtime: renders <pre class="mermaid"> blocks and re-themes on light/dark change -->
+<script src="https://cdn.jsdelivr.net/npm/mermaid@11.16.1/dist/mermaid.min.js"></script>
+<script>(function(){
+var CFG={"palettes":{"light":{"surface":"#FFFFFF","text":"#1C2823","line":"#66776D","border":"#B9C5BC","bg":"#F5F7F4"},"dark":{"surface":"#171F1B","text":"#E6ECE8","line":"#8CA095","border":"#3E4C44","bg":"#101613"}}};
+if(typeof mermaid==='undefined')return;
+var pres=Array.prototype.slice.call(document.querySelectorAll('pre.mermaid')).filter(function(p){if(p.hasAttribute('data-claude-mermaid-claimed'))return false;p.setAttribute('data-claude-mermaid-claimed','1');return true;});
+if(!pres.length)return;
+var mq=window.matchMedia?window.matchMedia('(prefers-color-scheme: dark)'):null;
+var root=document.documentElement;
+var items=pres.map(function(pre){
+var mount=document.createElement('div');mount.className='mermaid-diagram';
+return {pre:pre,mount:mount,src:pre.textContent||''};
+});
+var seq=0;
+var renderGen=0;
+var lastKey='';
+function pageBg(fallback){
+var els=[document.body,document.documentElement];
+for(var i=0;i<els.length;i++){
+var c=els[i]&&getComputedStyle(els[i]).backgroundColor;
+if(c&&c!=='transparent'&&c!=='rgba(0, 0, 0, 0)')return c;
+}
+return fallback;
+}
+function render(){
+var theme=root.getAttribute('data-theme');
+var dark=theme==='dark'||(!!(mq&&mq.matches)&&theme!=='light');
+var pal=dark?CFG.palettes.dark:CFG.palettes.light;
+var bg=pageBg(pal.bg);
+var key=(dark?'d':'l')+'|'+bg;
+if(key===lastKey)return;
+lastKey=key;
+var gen=++renderGen;
+var font=getComputedStyle(document.body).fontFamily||'sans-serif';
+var nat={useMaxWidth:false};
+mermaid.initialize({
+startOnLoad:false,securityLevel:'strict',theme:'base',
+flowchart:nat,sequence:nat,er:nat,state:nat,class:nat,pie:nat,
+gantt:nat,journey:nat,timeline:nat,gitGraph:nat,mindmap:nat,xyChart:nat,
+quadrantChart:nat,sankey:nat,c4:nat,requirement:nat,block:nat,
+packet:nat,kanban:nat,architecture:nat,radar:nat,
+themeVariables:{background:bg,mainBkg:pal.surface,primaryColor:pal.surface,
+primaryTextColor:pal.text,lineColor:pal.line,primaryBorderColor:pal.border,
+nodeBorder:pal.border,clusterBorder:pal.border,edgeLabelBackground:bg,
+clusterBkg:'rgba(127,127,127,0.07)',titleColor:pal.text,
+darkMode:dark,rowOdd:bg,rowEven:'rgba(127,127,127,0.07)',
+attributeBackgroundColorOdd:bg,attributeBackgroundColorEven:'rgba(127,127,127,0.07)',
+fontSize:'16px',fontFamily:font},
+themeCSS:'.node rect, .node circle, .node polygon, .node path, .cluster rect { stroke-width: 2px; }'
+});
+items.forEach(function(it){
+var id='claude-mermaid-'+seq++;
+mermaid.render(id,it.src).then(function(r){
+if(gen!==renderGen)return;
+var prev=it.pre.previousElementSibling;
+if(prev&&prev.className==='mermaid-diagram'&&prev!==it.mount)return;
+it.mount.innerHTML=r.svg;
+if(!it.mount.parentNode)it.pre.parentNode.insertBefore(it.mount,it.pre);
+it.pre.style.display='none';
+},function(){
+var scratch=document.getElementById(id);
+if(scratch)scratch.parentNode.removeChild(scratch);
+scratch=document.getElementById('d'+id);
+if(scratch)scratch.parentNode.removeChild(scratch);
+if(gen!==renderGen)return;
+if(it.mount.parentNode)it.mount.parentNode.removeChild(it.mount);
+it.pre.style.display='';
+});
+});
+}
+render();
+if(mq&&mq.addEventListener)mq.addEventListener('change',render);
+if(typeof MutationObserver!=='undefined')new MutationObserver(render).observe(root,{attributes:true,attributeFilter:['data-theme']});
+})();</script>
+</body>
+</html>
