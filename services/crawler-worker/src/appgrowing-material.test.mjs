@@ -393,10 +393,10 @@ test("builds AppGrowing GraphQL material-list variables from relative date range
     startDate: "2026-06-23",
     endDate: "2026-07-22",
     field: "all",
-    order: "impression_inc_2y_desc",
+    order: "_score_desc",
     page: 2,
     accurateSearch: 1,
-    appBrand: "brand-123",
+    keyword: "brand-123",
   });
 });
 
