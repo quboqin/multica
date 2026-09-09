@@ -4318,6 +4318,30 @@ SELECT EXISTS(
 		writeError(w, http.StatusUnprocessableEntity, "asset references do not belong to this creative order")
 		return
 	}
+	if input.Status == "completed" {
+		var contextRole string
+		if err := h.DB.QueryRow(r.Context(), `
+SELECT COALESCE((
+  SELECT diagnostic.metadata->>'prime_template_source_role'
+  FROM creative_order_diagnostic_asset diagnostic
+  JOIN creative_image_operation operation ON operation.id = $1
+  WHERE diagnostic.variant_id = operation.variant_id
+    AND diagnostic.revision = operation.revision
+    AND diagnostic.size_key = operation.size_key
+    AND diagnostic.label = 'Prime context'
+    AND diagnostic.attachment_id::text = operation.input_snapshot->'input_asset_attachments'->>'prime_context_sha256'
+  ORDER BY diagnostic.created_at DESC LIMIT 1
+), '')
+`, operationID).Scan(&contextRole); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to load image operation Prime context")
+			return
+		}
+		input.Metadata, err = bindCreativeGeneratedPrimeTemplate(json.RawMessage(inputSnapshot), input.SizeKey, input.Metadata, contextRole)
+		if err != nil {
+			writeError(w, http.StatusUnprocessableEntity, err.Error())
+			return
+		}
+	}
 	if err := h.validateCreativeGeneratedAssetAttachmentDimensions(r.Context(), workspaceID, attachmentID, input); err != nil {
 		writeError(w, http.StatusUnprocessableEntity, err.Error())
 		return

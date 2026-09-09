@@ -19,7 +19,7 @@ import (
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
-const creativeFactoryTemplateVersion = 32
+const creativeFactoryTemplateVersion = 33
 
 //go:embed creative_factory_defaults/resources.json
 var creativeFactoryDefaultResourcesJSON []byte
@@ -148,7 +148,7 @@ var creativeFactorySkillSpecs = []creativeFactorySkillSpec{
 	{Role: "reference_analysis", Name: "素材_技能_分析", Aliases: []string{"广告参考分析"}, Directory: "ad-creative-analysis", Description: "市场中立地读取真实图片，识别可变视觉区域、原图文字及坐标、主题、利益点、语义锚点、App UI 类型、屏幕边界和布局约束；App UI 只做通用检测，不选择品牌附件；只有明显的还款结构才锁定为 numeric，单独金额或核心利益点不得因为带数字就被卡死。", Capability: "reference_analysis", Version: 19},
 	{Role: "pre_adaptation", Name: "素材_技能_文案适配", Aliases: []string{"广告预适配"}, Directory: "ad-creative-pre-adaptation", Description: "按冻结资源完成可生产文案与数值适配；只有明显的还款结构才生成 repayment 选择和 numeric layout，单独金额、核心利益点或促销额度默认保留为可编辑文案，保留后续可手动改写空间；数值布局说明必须列出每个冻结展示值。", Capability: "pre_adaptation", Version: 26},
 	{Role: "generation_plan", Name: "素材_技能_方案", Aliases: []string{"广告生成方案"}, Directory: "ad-creative-plan", Description: "消费冻结分析、文案与市场快照，按订单冻结数量规划统一方形首轮候选及三尺寸 LayoutPlan；只有用户明确选择时才替换 App UI，非空核心利益点必须作为可见文字，独立质检按冻结套数原子晋级。", Capability: "generation_plan", Version: 44},
-	{Role: "image_edit", Name: "素材_技能_出图", Aliases: []string{"广告图像编辑"}, Directory: "ad-creative-production", Description: "按唯一模型提示词合同生成统一方形候选主视觉或 selected 缺失尺寸；三尺寸共享 DesignDNA、文案与血缘但从冻结附件和各自 LayoutPlan 独立生成，人物、产品或核心对象身份锚点必须保持一致，附件失败结构化分类，按冻结 Prime 模式仅在明确选择时替换 App UI，并把批准利益点渲染为可见文字。", Capability: "image_edit", Version: 118},
+	{Role: "image_edit", Name: "素材_技能_出图", Aliases: []string{"广告图像编辑"}, Directory: "ad-creative-production", Description: "按唯一模型提示词合同生成统一方形候选主视觉或 selected 缺失尺寸；三尺寸共享 DesignDNA、文案与血缘但从冻结附件和各自 LayoutPlan 独立生成，人物、产品或核心对象身份锚点必须保持一致，附件失败结构化分类，按冻结 Prime 模式仅在明确选择时替换 App UI，并把批准利益点渲染为可见文字。", Capability: "image_edit", Version: 119},
 	{Role: "prime_compose", Name: "素材_技能_贴片", Aliases: []string{"广告品牌组件合成"}, Directory: "ad-creative-prime-compose", Description: "调用后端唯一的 Prime 交接入口：默认确定性合成，或登记冻结的无二维码模型融入结果；校验 JSON，并由后端登记过程图、primed 资产和标准 QC/交付交接；不创建 Prime Agent 或 Prime task。", Capability: "prime_compose", Version: 6},
 	{Role: "direct_image_edit", Name: "素材_技能_改图", Aliases: []string{"广告图片直接修改"}, Directory: "ad-creative-direct-edit", Description: "将用户反馈编译为带输入角色、锁定/可编辑集合和 target masks 的多目标调整；布局微调保留原图主体占比和适度留白，不把模糊的空间要求放大为大面积空白；Prime 合成结果可由人工在完整交付版本间切换，原始改图过程图不可采用。", Capability: "direct_image_edit", Version: 34},
 	{Role: "quality_control", Name: "素材_技能_质检", Aliases: []string{"广告成图验收"}, Directory: "ad-creative-qc", Description: "按订单目标独立比较候选主尺寸并原子晋级，或对标准/精准改图的实际交付尺寸执行 Prime 与 DesignDNA 联合视觉终检；附件失败结构化分类，qc-finalize 瞬态失败由服务端持久化恢复。", Capability: "quality_control", Version: 46},

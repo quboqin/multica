@@ -27,5 +27,5 @@
      --directory <expansion-dir> --background <model-output.png> --output <expanded-generated.png>
    ```
 
-   保存脚本输出的像素 hash 证据和 `body_preserved=true`；该合成结果再走现有 canonical normalization，保留模型原图、复合图、canonical 图三份血缘。generated metadata 写原来的 `prime_template_source_role`，evidence 附 `background_expansion` 脚本结果；模型回执仍原样保留，不能将复合图冒充 provider 原始响应。
+   保存脚本输出的像素 hash 证据和 `body_preserved=true`；该合成结果再走现有 canonical normalization，保留模型原图、复合图、canonical 图三份血缘。用原模板的 guide JSON 登记本轮真实 Prime context，operation 指向该附件；服务端自动写入 generated metadata 的 `prime_template_source_role`。prompt contract 附 `background_expansion` 脚本结果，使 CLI 将它保存在 evidence；模型回执仍原样保留，不能将复合图冒充 provider 原始响应。
 6. 后端按相同官方模板贴片后，QC 仍逐项检查遮挡、可读性、内容完整、重复、接缝和风格。正文变小不可读、背景出现框感或仍失败时，进入 `action_required`，不得继续无限重绘或宣称已通过。

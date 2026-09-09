@@ -186,6 +186,7 @@ FOR UPDATE
 		return nil, errors.New("failed to freeze creative order attachments")
 	}
 	snapshot["attachment_snapshot"] = attachmentSnapshot
+	snapshot["prime_context_policy_version"] = json.RawMessage(`1`)
 	return json.Marshal(snapshot)
 }
 

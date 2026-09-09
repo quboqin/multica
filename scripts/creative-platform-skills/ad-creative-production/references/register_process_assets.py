@@ -45,6 +45,21 @@ def run_json(command: list[str]) -> dict[str, object]:
     return payload
 
 
+def process_metadata(size: str, label: str, path: Path) -> dict[str, object]:
+    metadata = {"process_stage": label, "source_filename": path.name}
+    guide_path = path.with_suffix(".json")
+    if label == "Prime context" and guide_path.is_file():
+        guide = json.loads(guide_path.read_text(encoding="utf-8"))
+        if not isinstance(guide, dict) or guide.get("size_key") != size:
+            raise ValueError("Prime context guide JSON must match the registered size")
+        role = guide.get("prime_template_source_role")
+        if not isinstance(role, str) or not role.strip():
+            raise ValueError("Prime context guide JSON requires prime_template_source_role")
+        metadata["prime_template_source_role"] = role
+        metadata["prime_context"] = guide
+    return metadata
+
+
 def main() -> int:
     args = parse_args()
     if args.revision < 1:
@@ -71,11 +86,11 @@ def main() -> int:
     with tempfile.TemporaryDirectory(prefix="multica-process-assets-") as temporary_directory:
         temporary = Path(temporary_directory)
         for size, label, path in images:
+            metadata = process_metadata(size, label, path)
             uploaded = run_json([*cli_prefix, "attachment", "upload", str(path), "--output", "json"])
             attachment_id = str(uploaded.get("id") or "").strip()
             if not attachment_id:
                 raise RuntimeError(f"attachment upload did not return an id for {path.name}")
-            metadata = {"process_stage": label, "source_filename": path.name}
             registration = {
                 "variant_id": args.variant_id,
                 "task_id": args.task_id.strip(),

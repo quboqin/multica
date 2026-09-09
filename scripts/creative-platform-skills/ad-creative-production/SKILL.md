@@ -163,7 +163,7 @@ Prime context 是当前尺寸的真实视觉输入，不是黑白遮罩。`deter
 
 ### Prime 承托质量
 
-新生成资产必须在 metadata.prime_template_source_role 原样写入 Prime context 使用的已批准 source_role；同时将 guide JSON 登记为过程图 metadata。后端会用同一张模板合成，禁止看到成图后悄悄换族。该角色必须来自冻结市场包当前尺寸，不能从文件名猜测。旧资产未记录该字段时才由 composer 自动评分选择。若 `template_selection.visual_adequacy.status=qc_risk`，仍应登记 Prime 成图并进入最终 visual QC；
+生成 Prime context 时必须传 `--template-source-role`，并把 guide JSON 保存为同目录同名 `.json`（例如 `prime-context-1080x1080.png` 对应 `prime-context-1080x1080.json`）。`register_process_assets.py` 会自动将该 JSON 和 `prime_template_source_role` 登记为过程图 metadata；operation 的 `input_asset_attachments.prime_context_sha256` 必须指向这张真实模型输入附件。服务端从该附件证据自动写入 generated metadata 并锁定最终贴片；不要手工覆盖 CLI 根据回执生成的资产 metadata。新单缺证据会拒绝登记，补齐同一参考图的 guide metadata 后用原模型回执重试 asset-put，不能重新出图。该角色必须来自冻结市场包当前尺寸，不能从文件名猜测。旧单未记录该字段时才由 composer 自动评分选择。若 `template_selection.visual_adequacy.status=qc_risk`，仍应登记 Prime 成图并进入最终 visual QC；
 `inadequacy_codes` 是需要放大核验的质量证据，不是重出图、换模板或阻断交付的理由。最终 QC 只以真实 Prime 成图中官方文字、条款与业务内容的实际可读性和遮挡为准。
 
 只有 composer 没有任何可评估模板、模板/证据合同错误或进程失败时才失败。失败完整 report 必须从

@@ -137,13 +137,17 @@ func imageFlowTaskHeaders(r *http.Request, task db.AgentTaskQueue) {
 	r.Header.Set("X-Task-ID", uuidToString(task.ID))
 }
 
-func imageFlowRegisterGenerated(t *testing.T, f creativeCandidateOrchestrationFixture, task db.AgentTaskQueue, variantID, size string, store *mockStorage) string {
+func imageFlowRegisterGenerated(t *testing.T, f creativeCandidateOrchestrationFixture, task db.AgentTaskQueue, variantID, size string, store *mockStorage, verifyPrimeContext ...bool) string {
 	t.Helper()
 	width, height, _ := creativeAssetSizeDimensions(size)
 	data := imageFlowPNG(t, width, height, false)
 	attachment := seedPreviewAttachment(t, store, "image25/"+uuid.NewString()+".png", size+".png", "image/png", data)
 	settings := imagemodel.Default()
 	inputSnapshot, _ := json.Marshal(map[string]any{imagemodel.SnapshotKey: settings, "target_size": size})
+	checkContext := len(verifyPrimeContext) > 0 && verifyPrimeContext[0]
+	if checkContext {
+		inputSnapshot, _ = json.Marshal(map[string]any{imagemodel.SnapshotKey: settings, "target_size": size, "input_asset_attachments": map[string]string{"prime_context_sha256": attachment}})
+	}
 	op := creativeImageOperationInput{VariantID: variantID, SizeKey: size, Revision: 1, OperationKind: "generation", IdempotencyKey: variantID + ":" + size, Status: "running", Model: settings.Model, InputSnapshot: inputSnapshot, Attempt: 1}
 	putOperation := func() creativeImageOperationResponse {
 		r := withURLParam(newRequest(http.MethodPut, "/", op), "id", f.OrderID)
@@ -173,6 +177,23 @@ func imageFlowRegisterGenerated(t *testing.T, f creativeCandidateOrchestrationFi
 	metadata, _ := json.Marshal(receipt)
 	evidence, _ := json.Marshal(map[string]any{"model_result": receipt, "request_id": requestID, "attempts": 1, "prompt_sha256": hash, "prompt_contract": map[string]string{"prompt_sha256": hash}, "normalization": map[string]any{"target_size": map[string]int{"width": width, "height": height}}})
 	asset := creativeOrderAssetInput{VariantID: variantID, OperationID: operation.ID, SizeKey: size, Revision: 1, Stage: "generated", Status: "completed", AttachmentID: attachment, Metadata: metadata, Evidence: evidence}
+	if checkContext {
+		// A guide for another attachment must not satisfy this operation's input.
+		wrongAttachment := seedPreviewAttachment(t, store, "image25/"+uuid.NewString()+".png", "other-context.png", "image/png", data)
+		if _, err := testPool.Exec(t.Context(), `INSERT INTO creative_order_diagnostic_asset(variant_id,attachment_id,size_key,revision,workflow,label,filename,metadata) VALUES($1,$2,$3,1,'creative_production','Prime context','guide.png',$4)`, variantID, wrongAttachment, size, fmt.Sprintf(`{"prime_template_source_role":"template_%s"}`, size)); err != nil {
+			t.Fatal(err)
+		}
+		r := withURLParam(newRequest(http.MethodPut, "/", asset), "id", f.OrderID)
+		imageFlowTaskHeaders(r, task)
+		w := httptest.NewRecorder()
+		testHandler.UpsertCreativeOrderAsset(w, r)
+		if w.Code != http.StatusUnprocessableEntity || !bytes.Contains(w.Body.Bytes(), []byte("Prime context template evidence is required")) {
+			t.Fatalf("missing actual context evidence=%d %s", w.Code, w.Body.String())
+		}
+		if _, err := testPool.Exec(t.Context(), `UPDATE creative_order_diagnostic_asset SET attachment_id=$2 WHERE variant_id=$1 AND label='Prime context'`, variantID, attachment); err != nil {
+			t.Fatal(err)
+		}
+	}
 	var result creativeOrderAssetResponse
 	for range 2 {
 		r := withURLParam(newRequest(http.MethodPut, "/", asset), "id", f.OrderID)
@@ -187,11 +208,48 @@ func imageFlowRegisterGenerated(t *testing.T, f creativeCandidateOrchestrationFi
 		}
 	}
 	for _, label := range creativeProductionProcessLabels {
+		if checkContext && label == "Prime context" {
+			continue
+		}
 		if _, err := testPool.Exec(t.Context(), `INSERT INTO creative_order_diagnostic_asset(variant_id,attachment_id,size_key,revision,workflow,label,filename) VALUES($1,$2,$3,1,'creative_production',$4,$5)`, variantID, attachment, size, label, label+".png"); err != nil {
 			t.Fatal(err)
 		}
 	}
 	return result.ID
+}
+
+func TestCreativePrimeContextEvidenceBindsActualOperationInput(t *testing.T) {
+	f := createCreativeCountFixture(t, 1)
+	store := &mockStorage{}
+	previous := testHandler.Storage
+	testHandler.Storage = store
+	t.Cleanup(func() { testHandler.Storage = previous })
+	t.Setenv("MULTICA_CREATIVE_PRIME_CACHE_DIR", t.TempDir())
+	snapshot := imageFlowMarketSnapshot(t, f, store)
+	if _, err := testPool.Exec(t.Context(), `UPDATE creative_order SET input_snapshot=$2::jsonb || '{"prime_context_policy_version":1}'::jsonb WHERE id=$1`, f.OrderID, snapshot); err != nil {
+		t.Fatal(err)
+	}
+	id := createCreativeCandidateOrchestrationVariant(t, f.ItemID, "C01", "candidate", nil, "running", "1080x1080", []string{"1080x1080"})
+	task := addCreativeCandidateOrchestrationProductionTask(t, f, id, "running", "candidate_primary")
+	var taskContext map[string]any
+	if err := json.Unmarshal(task.Context, &taskContext); err != nil {
+		t.Fatal(err)
+	}
+	taskContext["expected_sizes"] = []string{"1080x1080"}
+	task.Context, _ = json.Marshal(taskContext)
+	if _, err := testPool.Exec(t.Context(), `UPDATE agent_task_queue SET context=$2 WHERE id=$1`, task.ID, task.Context); err != nil {
+		t.Fatal(err)
+	}
+	assetID := imageFlowRegisterGenerated(t, f, task, id, "1080x1080", store, true)
+	var role string
+	if err := testPool.QueryRow(t.Context(), `SELECT metadata->>'prime_template_source_role' FROM creative_order_asset WHERE id=$1`, assetID).Scan(&role); err != nil || role != "template_1080x1080" {
+		t.Fatalf("bound role=%s %v", role, err)
+	}
+	imageFlowCompleteProduction(t, task)
+	imageFlowCompose(t, f, id)
+	if err := testPool.QueryRow(t.Context(), `SELECT metadata->'template'->>'source_role' FROM creative_order_asset WHERE variant_id=$1 AND stage='primed'`, id).Scan(&role); err != nil || role != "template_1080x1080" {
+		t.Fatalf("composed role=%s %v", role, err)
+	}
 }
 
 func imageFlowCompleteProduction(t *testing.T, task db.AgentTaskQueue) {
