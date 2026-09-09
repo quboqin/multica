@@ -174,7 +174,7 @@ func TestIntegrationTokensUnmarshalMapsLegacyPaihubToPaones(t *testing.T) {
 	}
 }
 
-func TestMaterializeIntegrationMcpConfigOverridesKnownEnvKeys(t *testing.T) {
+func TestMaterializeIntegrationMcpConfigDoesNotInferTokenFromTargetEnvName(t *testing.T) {
 	raw := json.RawMessage(`{
 		"mcpServers": {
 			"feishu": {
@@ -200,14 +200,75 @@ func TestMaterializeIntegrationMcpConfigOverridesKnownEnvKeys(t *testing.T) {
 	}
 	server := decoded["mcpServers"].(map[string]any)["feishu"].(map[string]any)
 	env := server["env"].(map[string]any)
-	if env["FEISHU_MCP_TOKEN"] != "user-feishu" {
-		t.Fatalf("FEISHU_MCP_TOKEN not overridden, got %#v", env["FEISHU_MCP_TOKEN"])
+	if env["FEISHU_MCP_TOKEN"] != "old-token" {
+		t.Fatalf("literal env value must not be replaced without a placeholder, got %#v", env["FEISHU_MCP_TOKEN"])
 	}
-	if env["NOTION_TOKEN"] != "user-notion" {
-		t.Fatalf("NOTION_TOKEN not overridden, got %#v", env["NOTION_TOKEN"])
+	if env["NOTION_TOKEN"] != "old-notion" {
+		t.Fatalf("literal custom env value must remain unchanged, got %#v", env["NOTION_TOKEN"])
 	}
 	if env["UNCHANGED"] != "keep" {
 		t.Fatalf("unrelated env key changed")
+	}
+}
+
+func TestMaterializeIntegrationMcpConfigResolvesPlaceholderFromRequestingUserToken(t *testing.T) {
+	raw := json.RawMessage(`{
+		"mcpServers": {
+			"user-scoped-service": {
+				"env": {
+					"SERVICE_TOKEN": "${RANDOM_CREDENTIAL_8472}"
+				}
+			}
+		}
+	}`)
+
+	out := materializeIntegrationMcpConfig(raw, IntegrationTokens{
+		Extra: map[string]string{
+			"random_credential_8472": "requesting-user-token",
+		},
+	})
+	var decoded map[string]any
+	if err := json.Unmarshal(out, &decoded); err != nil {
+		t.Fatalf("decode output: %v", err)
+	}
+	server := decoded["mcpServers"].(map[string]any)["user-scoped-service"].(map[string]any)
+	env := server["env"].(map[string]any)
+	if env["SERVICE_TOKEN"] != "requesting-user-token" {
+		t.Fatalf("placeholder did not resolve from requesting user's token: %#v", env["SERVICE_TOKEN"])
+	}
+}
+
+func TestMaterializeIntegrationMcpConfigDisablesMissingArbitraryPlaceholder(t *testing.T) {
+	raw := json.RawMessage(`{
+		"mcpServers": {
+			"user-scoped-service": {
+				"env": {"SERVICE_TOKEN": "${CUSTOM_NAME_NOT_CONFIGURED}"}
+			}
+		}
+	}`)
+
+	out := materializeIntegrationMcpConfig(raw, IntegrationTokens{})
+	var decoded map[string]any
+	if err := json.Unmarshal(out, &decoded); err != nil {
+		t.Fatalf("decode output: %v", err)
+	}
+	server := decoded["mcpServers"].(map[string]any)["user-scoped-service"].(map[string]any)
+	if server["enabled"] != false {
+		t.Fatalf("missing arbitrary user token must disable server: %#v", server["enabled"])
+	}
+	env := server["env"].(map[string]any)
+	if env["SERVICE_TOKEN"] != "" {
+		t.Fatalf("missing arbitrary placeholder must not reach process env: %#v", env["SERVICE_TOKEN"])
+	}
+}
+
+func TestIntegrationEnvOverridesPrefersExplicitFullKeyOverDerivedAlias(t *testing.T) {
+	env := integrationEnvOverrides(IntegrationTokens{Extra: map[string]string{
+		"team_service_token":                     "short-key-token",
+		"MULTICA_INTEGRATION_TEAM_SERVICE_TOKEN": "full-key-token",
+	}})
+	if env["MULTICA_INTEGRATION_TEAM_SERVICE_TOKEN"] != "full-key-token" {
+		t.Fatalf("explicit full key must win over derived alias: %#v", env["MULTICA_INTEGRATION_TEAM_SERVICE_TOKEN"])
 	}
 }
 
