@@ -24,7 +24,7 @@ func TestBuildPromptCreativeCandidateSelectionUsesTaskContext(t *testing.T) {
 		"authoritative workflow is `creative_candidate_selection`",
 		"root Issue may describe `creative_order`",
 		"candidate-select order-current item-current",
-		"exactly three ordered `selected_ids`",
+		"exactly N ordered `selected_ids`",
 	} {
 		if !strings.Contains(out, expected) {
 			t.Fatalf("creative candidate prompt missing %q:\n%s", expected, out)
@@ -32,6 +32,41 @@ func TestBuildPromptCreativeCandidateSelectionUsesTaskContext(t *testing.T) {
 	}
 	if strings.Contains(out, "Start by running `multica issue get") {
 		t.Fatalf("creative candidate prompt fell back to root issue workflow discovery:\n%s", out)
+	}
+}
+
+func TestBuildPromptCreativeCandidateSelectionUsesFrozenCount(t *testing.T) {
+	for _, target := range []int{1, 3, 6, 10} {
+		for _, withIDs := range []bool{true, false} {
+			context := map[string]any{
+				"type": "creative_domain_task", "workflow": "creative_candidate_selection",
+				"target_variant_count": target, "candidate_count": target + 2,
+			}
+			if withIDs {
+				context["creative_order_id"] = "order-current"
+				context["creative_order_item_id"] = "item-current"
+			}
+			raw, err := json.Marshal(context)
+			if err != nil {
+				t.Fatal(err)
+			}
+			out := BuildPrompt(Task{ID: "selection-current", Context: raw}, "codex")
+			for _, expected := range []string{
+				"input_snapshot.target_variant_count", "historical order omits this field",
+				"exactly N ordered `selected_ids`", "zero to two ordered `reserve_ids`",
+				"cross-check", "one corrected submission", "before any selection was saved",
+				"read back the order before deciding whether to submit again",
+			} {
+				if !strings.Contains(out, expected) {
+					t.Errorf("target=%d withIDs=%t: prompt missing %q", target, withIDs, expected)
+				}
+			}
+			for _, forbidden := range []string{"exactly three", "any ordered reserves", "CLI exactly once"} {
+				if strings.Contains(out, forbidden) {
+					t.Errorf("target=%d withIDs=%t: prompt contains obsolete instruction %q", target, withIDs, forbidden)
+				}
+			}
+		}
 	}
 }
 
