@@ -189,11 +189,11 @@ func TestCreativeFactoryImageEditingUsesOneAgentWithWorkflowSkills(t *testing.T)
 
 func TestCreativeFactoryCreativeContractTemplatesStayInSync(t *testing.T) {
 	wantVersions := map[string]int{
-		"generation_plan":     44,
-		"image_edit":          119,
+		"generation_plan":     45,
+		"image_edit":          120,
 		"prime_compose":       6,
 		"direct_image_edit":   35,
-		"quality_control":     46,
+		"quality_control":     47,
 		"creative_leadership": 56,
 	}
 	for _, spec := range creativeFactorySkillSpecs {
@@ -274,11 +274,11 @@ func TestCreativeFactoryCreativeContractTemplatesStayInSync(t *testing.T) {
 		t.Fatalf("read bootstrap script: %v", err)
 	}
 	for _, value := range []string{
-		"capability = 'generation_plan'; version = 44",
-		"capability = 'image_edit'; version = 119",
+		"capability = 'generation_plan'; version = 45",
+		"capability = 'image_edit'; version = 120",
 		"capability = 'prime_compose'; version = 6",
 		"capability = 'direct_image_edit'; version = 35",
-		"capability = 'quality_control'; version = 46",
+		"capability = 'quality_control'; version = 47",
 		"capability = 'creative_leadership'; version = 56",
 		"初始 direct_edit 由平台原子创建 revision 和 task，Leader 只恢复领域状态确认缺失的当前 revision task",
 		"creative_candidate_selection",

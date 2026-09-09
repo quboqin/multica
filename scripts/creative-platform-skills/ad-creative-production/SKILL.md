@@ -144,6 +144,8 @@ CLI 和附件血缘只属于模型调用外的工作流，不能发送给图像�
 平台不代码排字，不预留稍后排字的空白框。`deterministic` 的后续唯一确定性 overlay 是官方 Prime；`model_integrated` 则按冻结的 QR-free
 完整模板直接生成最终图，后端只登记证据，不会二次叠加。
 
+必须保留模型提示词合同 PRIME SUPPORT 中的固定 Logo 避让句：标题完整放在 Logo 下方，保留明显间距；空间不足先缩减装饰。旧 brief 的“上方标题”也按 Logo 下方业务区解释。调用前在 `validate_copy_snapshot.py` 加 `--require-logo-clearance`，缺少这条明确关系时先修正提示词再调用模型；已有成功回执不因此重新出图。
+
 三尺寸共享 DesignDNA、批准文案、业务结构和 `asset_family_id`，但每个尺寸从同一候选 source reference、当前尺寸 Prime context
 和自身 LayoutPlan 原生生成，不把方图 raster 当作不可替代输入。人物、产品或核心对象只要在 `subject_system` 中作为身份锚点出现，
 每个后续尺寸必须使用 selected 主视觉作为 Input 4，保持同一身份，不得替换为另一人物、产品或对象；Input 4 只锁身份、材质、色彩和

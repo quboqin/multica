@@ -41,6 +41,7 @@ Render every approved string and frozen repayment row exactly once: {approved_co
 
 PRIME SUPPORT
 {prime_input_label} is the current-size official Prime visual context. {prime_support_instruction}
+When an approved headline is present and the official logo is above the content, place the entire headline group below the official logo with a clear visible gap. If space is tight, reduce or reposition decorative elements first; never move business text into the logo area.
 
 ACCEPTANCE
 All approved copy and content groups are present and legible; the requested canvas is preserved; DesignDNA remains recognizable; every
@@ -54,6 +55,8 @@ The canvas locks are:
 - `1080x1080 locked 1:1 square`;
 - `1200x628 locked 1.91:1 landscape`;
 - `800x1000 locked 4:5 portrait, only 1.25 times as high as wide`.
+
+The logo-clearance sentence in PRIME SUPPORT is fixed template content, not an optional summary. It applies to the full headline and benefit group, including the top of every letter. In deterministic mode, omitting logo pixels from the generated base does not make that reserved space available. Resolve any LayoutPlan wording such as "upper headline" to the business area below the actual logo. Keep the background full-bleed; simplify, shrink or move decorative motifs before compressing the gap or the approved text. For visual-only copy, the conditional sentence must not cause a headline to be invented; for a template without an upper logo, preserve the actual component placement.
 
 ## Input roles
 
@@ -113,6 +116,6 @@ keep business content clear of the template areas. The backend will not add a se
 `prime_support.background_polarity=adaptive`, describe sufficient visual separation from Input 2 without inventing a fixed light or
 dark background. If a structured polarity is supplied, express that polarity once.
 
-Run `validate_copy_snapshot.py --require-prime-guard --require-redesign-guard --require-identity-guard --require-concise-prompt --explain` before the model call.
+Run `validate_copy_snapshot.py --require-prime-guard --require-logo-clearance --require-redesign-guard --require-identity-guard --require-concise-prompt --explain` before the model call.
 Repair only the reported rule. The validator checks approved financial values, this section contract, prompt length, and exclusion of
 workflow protocol from model-facing text.

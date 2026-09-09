@@ -12,10 +12,26 @@ from validate_copy_snapshot import (
     main,
     validate_concise_prompt,
     validate_identity_prompt_guard,
+    validate_logo_clearance_guard,
     validate_prime_prompt_guard,
     validate_snapshot,
     validate_redesign_prompt_guard,
 )
+
+
+def test_logo_clearance_rejects_the_previous_generic_upper_layout():
+    prompt = "Make the headline and benefit the upper focal point. Keep all business copy out of the top and bottom official Prime support bands. Reduce decoration before reducing information."
+    assert validate_logo_clearance_guard(prompt) == [
+        "logo_clearance:headline_below_logo", "logo_clearance:visible_logo_gap", "logo_clearance:decoration_first"]
+
+
+def test_fixed_prompt_template_preserves_conditional_logo_clearance():
+    contract = Path(__file__).with_name("model-prompt-contract.md").read_text()
+    prompt = contract.split("```text\n", 1)[1].split("```", 1)[0]
+    assert validate_logo_clearance_guard(prompt) == []
+    assert "When an approved headline is present" in prompt
+    assert "official logo is above the content" in prompt
+    assert validate_logo_clearance_guard(prompt.replace("clear visible gap", "small margin")) == ["logo_clearance:visible_logo_gap"]
 
 
 def test_selected_columns_do_not_reintroduce_audit_only_values():

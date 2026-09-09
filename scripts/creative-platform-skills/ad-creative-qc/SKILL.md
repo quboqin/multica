@@ -33,7 +33,9 @@ task source 必须是 `trigger_evidence_kind=creative_order_item_candidate_selec
 三尺寸可扩展性 15、Prime 融合 5。三尺寸可扩展性必须结合 brief 的 `layout_plans`，检查主体裁切容忍、横竖重排、表格密度、App UI 和
 Prime 承托风险；不能因为方图本身好看就默认可扩展。
 
-按总分排序并用分项证据处理同分，恰好选择 N 个不同 CreativeHypothesis，不能仅靠换色凑满数量。
+评分前先执行 Logo/正文遮挡门槛：逐张放大主图上方，检查 Logo 字形与标题、利益点的可见字形是否相交，并记录 `prime_obstruction_check` 的 passed/failed、附件 ID 和具体重叠对象。真实字形相交是晋级阻断项，不能只在 Prime 融合的 5 分里扣分，也不能被表格清晰度、视觉吸引力或总分抵消。单纯背景物体靠近、无字形相交的正常间距不冒充遮挡。
+
+先从遮挡检查 passed 的候选中按总分排序并用分项证据处理同分，恰好选择 N 个不同 CreativeHypothesis，不能仅靠换色凑满数量。若 passed 少于 N，不调用 `candidate-select`，输出 `action_required` 与 `candidate_primary_obstruction`，逐项列出待修复 variant/revision/主图附件和重叠对象，交由流程处理后重新验收；不能凑数选入失败图、减少用户目标套数或自行重画全部候选。候补中的遮挡证据必须保留，不能写成已通过。
 将 rank 1-N 的 Variant ID 按顺序写入 `selected_ids`，其余 0-2 个合格候选按 N+1、N+2 排入 `reserve_ids`。只有 N 个可用候选时提交空数组 `reserve_ids: []`。
 提交前检查两个数组的长度和 ID 去重。成功提交后不得重复排名；若接口明确因数量或 payload 校验失败且尚未保存选择，可以按冻结订单修正后在同一任务内再提交一次。
 超时、网络错误或其他无法确认是否保存的情况，必须先回读订单确认结果，不能盲目重放可能已经成功的写入。
