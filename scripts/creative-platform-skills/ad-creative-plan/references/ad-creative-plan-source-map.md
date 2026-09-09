@@ -21,3 +21,5 @@
 
 Copy selection and block filling are completed by pre-adaptation. This Skill's runtime source is only the order item's frozen schema-v3 `copy_snapshot`; mutable copy-library resources are intentionally excluded.
 | User-selected repayment columns alone define visible table fields, with currency frozen from the published market | `server/internal/handler/creative_copy_library_order.go`, `SKILL.md:自选还款列与 Prime 一致性` |
+
+| Initial LayoutPlans describe natural per-component tonal/texture support from frozen metadata; unknown colors remain adaptive until production | SKILL.md:Prime 的视觉意义, references/creative-intent-contract.md:LayoutPlan |

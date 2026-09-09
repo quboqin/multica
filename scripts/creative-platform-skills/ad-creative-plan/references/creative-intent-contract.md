@@ -89,6 +89,14 @@ delivery image.
 LayoutPlan describes semantic relationships. Exact protected geometry stays in the frozen `prime_layout_contract` and deterministic
 composer evidence; it is not copied into the model prompt.
 
+Plan Prime readability before the first generation. In the existing component-scoped support description, identify a natural scene
+surface behind each official component and describe its local tonal separation and low texture. Dark lettering needs lighter support;
+light lettering needs darker support; colored marks also need separation from similar hues. Keep highlights, foliage, object edges
+and light/dark transitions away from fine lettering. The upper logo and lower legal/store components may need different backgrounds.
+The planner uses frozen metadata only: when actual component colors are unknown, retain `adaptive` and defer their visual resolution
+to production rather than guessing colors or measured contrast. Acceptance covers both no obstruction and readable fine official
+lettering at final size. These are visual planning instructions, not additional required schema fields or exact-phrase validation.
+
 For copy-library inputs, decide content hierarchy before scene decoration. Explain how the selected text and repayment rows fit the
 square, landscape, and portrait compositions in natural language. Reduce decoration and adjust subject emphasis before crowding text.
 Do not add coordinates, percentage boxes, minimum font sizes, capacity thresholds, or programmatic typesetting. Do not omit approved

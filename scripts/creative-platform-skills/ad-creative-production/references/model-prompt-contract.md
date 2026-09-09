@@ -42,6 +42,7 @@ Render every approved string and frozen repayment row exactly once: {approved_co
 PRIME SUPPORT
 {prime_input_label} is the current-size official Prime visual context. {prime_support_instruction}
 When an approved headline is present and the official logo is above the content, place the entire headline group below the official logo with a clear visible gap. If space is tight, reduce or reposition decorative elements first; never move business text into the logo area.
+{component_background_support}
 
 ACCEPTANCE
 All approved copy and content groups are present and legible; the requested canvas is preserved; DesignDNA remains recognizable; every
@@ -115,6 +116,25 @@ logo, color, and approximate placement to remain faithful to that Prime input, p
 keep business content clear of the template areas. The backend will not add a second overlay in this mode. If
 `prime_support.background_polarity=adaptive`, describe sufficient visual separation from Input 2 without inventing a fixed light or
 dark background. If a structured polarity is supplied, express that polarity once.
+
+Resolve `{component_background_support}` from the current-size Prime image and LayoutPlan before the first generation. Describe
+the upper logo and lower fine text/store components separately: actual lettering color, the contrasting scene surface behind it,
+and distracting texture to remove. Dark lettering needs lighter support; light lettering needs darker support; colored marks also
+need separation from similar background hues and tones. When the components differ, resolve support locally. A transparent template
+or the viewer's display background is not evidence that the whole ad should be light or dark. Do not invent measured contrast.
+
+Use a compact visual instruction, adapted to the actual template, for example: "Behind the dark green upper logo, keep a pale,
+muted sky with no foliage. Behind the dark lower store lettering, use a softly lit, even tabletop with no glare or grain crossing
+the letters. Blend these quiet surfaces naturally into the scene; keep the smallest official lettering easy to distinguish at final
+size." This is an example for dark lettering, not a universal palette. For light lettering, use a darker quiet surface instead.
+Avoid highlights, object edges and light/dark transitions through fine lettering; place gradients outside each component and keep
+their support visually even. Preserve full-bleed scene continuity rather than adding a generic strip, sticker, outline, shadow or
+opaque box. Do not recolor or redraw official components to fix the background. In deterministic mode, generate only the supporting
+background and business content; the actual Prime pixels still come from the unchanged overlay.
+
+Keep this component-specific instruction concise (usually two sentences). Replace vague or duplicate Prime/background descriptions;
+trim decorative prose before approved copy if needed to stay within the existing prompt limit. Treat readability and no obstruction
+as separate acceptance goals. This guidance adds no numeric target or exact-phrase generation gate and does not replace final QC.
 
 Run `validate_copy_snapshot.py --require-prime-guard --require-redesign-guard --require-identity-guard --require-concise-prompt --explain` before the model call.
 Repair only the reported rule. The validator checks approved financial values, this section contract, prompt length, and exclusion of
