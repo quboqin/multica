@@ -24,19 +24,30 @@ func (h *Handler) createManualCreativeTaskRetry(ctx context.Context, tx pgx.Tx, 
 	if err != nil {
 		return db.AgentTaskQueue{}, err
 	}
-	var superseded bool
-	if err := tx.QueryRow(ctx, `SELECT EXISTS (
- SELECT 1 FROM agent_task_queue newer JOIN agent_task_queue parent ON parent.id=$1
+	var latestID pgtype.UUID
+	var latestStatus string
+	if err := tx.QueryRow(ctx, `
+ SELECT newer.id, newer.status FROM agent_task_queue newer JOIN agent_task_queue parent ON parent.id=$1
  WHERE newer.agent_id=parent.agent_id
  AND newer.trigger_evidence_kind IS NOT DISTINCT FROM parent.trigger_evidence_kind
  AND newer.trigger_evidence_ref_id IS NOT DISTINCT FROM parent.trigger_evidence_ref_id
  AND newer.context->>'item_key' IS NOT DISTINCT FROM parent.context->>'item_key'
- AND (newer.created_at,newer.id)>(parent.created_at,parent.id)
-)`, taskID).Scan(&superseded); err != nil {
+ AND (newer.created_at,newer.id)>=(parent.created_at,parent.id)
+ ORDER BY newer.created_at DESC,newer.id DESC LIMIT 1 FOR UPDATE OF newer
+`, taskID).Scan(&latestID, &latestStatus); err != nil {
 		return db.AgentTaskQueue{}, err
 	}
-	if superseded {
-		return db.AgentTaskQueue{}, pgx.ErrNoRows
+	if latestID != parent.ID {
+		if latestStatus != "cancelled" {
+			return db.AgentTaskQueue{}, pgx.ErrNoRows
+		}
+		// The UI reports the last failure even when its continuation was
+		// cancelled. A new human retry resumes from that cancelled descendant
+		// so image operations still belong to the same continuation chain.
+		parent, err = h.Queries.WithTx(tx).GetAgentTask(ctx, latestID)
+		if err != nil {
+			return db.AgentTaskQueue{}, err
+		}
 	}
 	child, err := h.Queries.WithTx(tx).CreateAgentTask(ctx, db.CreateAgentTaskParams{
 		AgentID: parent.AgentID, RuntimeID: parent.RuntimeID, IssueID: parent.IssueID,
