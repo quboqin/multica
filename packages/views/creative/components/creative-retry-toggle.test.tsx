@@ -9,7 +9,7 @@ const mocks = vi.hoisted(() => ({ get: vi.fn(), update: vi.fn(), error: vi.fn() 
 vi.mock("@multica/core/api", () => ({ api: { getCreativeRetrySettings: mocks.get, updateCreativeRetrySettings: mocks.update } }));
 vi.mock("@multica/core/hooks", () => ({ useWorkspaceId: () => "workspace-1" }));
 vi.mock("@multica/core/creative", async () => {
-  const queries = await import("../../../core/creative/queries");
+  const queries = await import("@multica/core/creative/queries");
   return { creativeKeys: queries.creativeKeys, creativeRetrySettingsOptions: queries.creativeRetrySettingsOptions };
 });
 vi.mock("../../i18n", () => ({ useT: () => ({ t: (selector: (value: typeof copy) => string) => selector(copy) }) }));

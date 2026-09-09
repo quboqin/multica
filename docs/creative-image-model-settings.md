@@ -43,7 +43,7 @@ change.
 
 ## Managed configuration
 
-Factory template version 30 includes production Skill 116 and direct-edit Skill
+Factory template version 31 includes production Skill 117 and direct-edit Skill
 34. Initialization and bootstrap update managed instructions and Skill content,
 while preserving existing agent text-model, thinking-level and concurrency
 settings. Newly created agents still use the platform's agent defaults.

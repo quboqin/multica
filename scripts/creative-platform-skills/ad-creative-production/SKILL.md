@@ -227,6 +227,7 @@ multica creative order get <order-id> --output json > current-order.json
 python3 <当前 Skill 目录>/references/prepare_image_operation.py \
   --order-json current-order.json --input-file <operation-draft.json> \
   --output-file <operation.json>
+multica image settings --input-file <operation.json> > image-settings.json
 ```
 
 首次登记的 input_snapshot 还应保存 `input_asset_attachments`：每个输入指纹字段对应其已上传的 attachment_id。Prime context 使用过程登记返回的附件，身份参考使用已选方图附件。续跑先下载这些原附件并核验指纹，不能只保存哈希后靠重新渲染猜原文件；既有操作缺少该映射时只能查找指纹完全一致的原过程附件，不能改写冻结快照。

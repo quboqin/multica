@@ -31,6 +31,15 @@ class PrepareOperationTest(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     prepare_operation(*self.fixture(status))
 
+    def test_retry_preserves_frozen_image_model_and_quality(self):
+        order, draft = self.fixture()
+        op = order["items"][0]["variants"][0]["image_operations"][0]
+        op["model"] = "gpt-image-2.5-sunburst"
+        op["input_snapshot"]["image_generation"] = {"model": op["model"], "quality": "xhigh"}
+        prepared = prepare_operation(order, draft)
+        self.assertEqual(prepared["model"], "gpt-image-2.5-sunburst")
+        self.assertEqual(prepared["input_snapshot"]["image_generation"]["quality"], "xhigh")
+
     def test_new_operation_always_starts_at_one(self):
         order, draft = self.fixture()
         order["items"][0]["variants"][0]["image_operations"] = []

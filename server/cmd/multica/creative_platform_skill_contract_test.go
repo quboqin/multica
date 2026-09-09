@@ -88,7 +88,7 @@ func TestCreativePlatformSkillsUseFrozenBusinessInputs(t *testing.T) {
 	for _, required := range []string{
 		"capability = 'reference_analysis'; version = 19",
 		"capability = 'generation_plan'; version = 43",
-		"capability = 'image_edit'; version = 116",
+		"capability = 'image_edit'; version = 117",
 		"capability = 'prime_compose'; version = 6",
 		"capability = 'direct_image_edit'; version = 34",
 		"capability = 'quality_control'; version = 45",
@@ -108,7 +108,7 @@ func TestCreativePlatformSkillsUseFrozenBusinessInputs(t *testing.T) {
 	for _, required := range []string{
 		`Capability: "reference_analysis", Version: 19`,
 		`Capability: "generation_plan", Version: 43`,
-		`Capability: "image_edit", Version: 116`,
+		`Capability: "image_edit", Version: 117`,
 		`Capability: "prime_compose", Version: 6`,
 		`Capability: "direct_image_edit", Version: 34`,
 		`Capability: "quality_control", Version: 45`,
