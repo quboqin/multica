@@ -4,9 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"log/slog"
+	"math"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -631,6 +634,679 @@ func (h *Handler) ListSquadMemberStatus(w http.ResponseWriter, r *http.Request) 
 	}
 
 	writeJSON(w, http.StatusOK, resp)
+}
+
+type squadWorkflowStageResponse struct {
+	ID          string   `json:"id"`
+	Name        *string  `json:"name"`
+	Description *string  `json:"description"`
+	Position    int32    `json:"position"`
+	Keywords    []string `json:"keywords"`
+}
+
+type squadWorkflowCanvasPoint struct {
+	X float64 `json:"x"`
+	Y float64 `json:"y"`
+}
+
+type squadWorkflowCanvasLayout struct {
+	Leader *squadWorkflowCanvasPoint           `json:"leader,omitempty"`
+	Stages map[string]squadWorkflowCanvasPoint `json:"stages"`
+	Agents map[string]squadWorkflowCanvasPoint `json:"agents"`
+}
+
+func validSquadWorkflowCanvasPoint(point squadWorkflowCanvasPoint) bool {
+	return !math.IsNaN(point.X) && !math.IsInf(point.X, 0) &&
+		!math.IsNaN(point.Y) && !math.IsInf(point.Y, 0) &&
+		point.X >= 0 && point.X <= 10000 && point.Y >= 0 && point.Y <= 10000
+}
+
+func (h *Handler) ensureSquadWorkflowStages(ctx context.Context, squadID pgtype.UUID) error {
+	_, err := h.DB.Exec(ctx, `
+		INSERT INTO squad_workflow_stage (squad_id, id, position, baseline_position)
+		SELECT $1, defaults.id, defaults.position, defaults.position
+		FROM (VALUES
+			('requirements', 0), ('knowledge', 1), ('research', 2),
+			('design', 3), ('implementation', 4), ('review', 5),
+			('test', 6), ('delivery', 7), ('support', 8)
+		) AS defaults(id, position)
+		WHERE NOT EXISTS (
+			SELECT 1 FROM squad_workflow_stage WHERE squad_id = $1
+		)
+		ON CONFLICT (squad_id, id) DO NOTHING
+	`, squadID)
+	return err
+}
+
+func (h *Handler) shouldGenerateLegacySquadWorkflow(ctx context.Context, squadID pgtype.UUID) (bool, error) {
+	var shouldGenerate bool
+	err := h.DB.QueryRow(ctx, `
+		SELECT
+			COALESCE((SELECT source = 'legacy_default' FROM squad_workflow_config WHERE squad_id = $1), true)
+			AND (SELECT count(*) FROM squad_workflow_assignment WHERE squad_id = $1) = 0
+			AND (SELECT count(*) FROM squad_workflow_stage WHERE squad_id = $1) = 9
+			AND NOT EXISTS (
+				SELECT 1
+				FROM squad_workflow_stage
+				WHERE squad_id = $1
+					AND (
+						id NOT IN ('requirements', 'knowledge', 'research', 'design', 'implementation', 'review', 'test', 'delivery', 'support')
+						OR name IS NOT NULL OR description IS NOT NULL OR position <> baseline_position
+					)
+			)
+	`, squadID).Scan(&shouldGenerate)
+	return shouldGenerate, err
+}
+
+func validateSquadWorkflowStageInput(name, description string) (string, string, string) {
+	name = strings.TrimSpace(name)
+	description = strings.TrimSpace(description)
+	if name == "" {
+		return "", "", "stage name is required"
+	}
+	if utf8.RuneCountInString(name) > 80 {
+		return "", "", "stage name must be 80 characters or fewer"
+	}
+	if utf8.RuneCountInString(description) > 500 {
+		return "", "", "stage description must be 500 characters or fewer"
+	}
+	return name, description, ""
+}
+
+// ListSquadWorkflowAssignments returns the editable stage definition and the
+// manual agent overrides. Agents without an override use deterministic role
+// inference in the UI.
+func (h *Handler) ListSquadWorkflowAssignments(w http.ResponseWriter, r *http.Request) {
+	squad, _, ok := h.loadSquadInWorkspace(w, r)
+	if !ok {
+		return
+	}
+	if err := h.ensureSquadWorkflowStages(r.Context(), squad.ID); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to initialize squad workflow")
+		return
+	}
+	shouldGenerate, err := h.shouldGenerateLegacySquadWorkflow(r.Context(), squad.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to inspect squad workflow")
+		return
+	}
+	if shouldGenerate {
+		if _, err := h.generateSquadWorkflow(r.Context(), squad, squad.CreatorID); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to generate squad workflow")
+			return
+		}
+	}
+
+	stageRows, err := h.DB.Query(r.Context(), `
+		SELECT id, name, description, position, keywords
+		FROM squad_workflow_stage
+		WHERE squad_id = $1
+		ORDER BY position, created_at, id
+	`, squad.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to load squad workflow stages")
+		return
+	}
+	stages := make([]squadWorkflowStageResponse, 0)
+	for stageRows.Next() {
+		var stage squadWorkflowStageResponse
+		var name, description pgtype.Text
+		if err := stageRows.Scan(&stage.ID, &name, &description, &stage.Position, &stage.Keywords); err != nil {
+			stageRows.Close()
+			writeError(w, http.StatusInternalServerError, "failed to load squad workflow stages")
+			return
+		}
+		stage.Name = textToPtr(name)
+		stage.Description = textToPtr(description)
+		stages = append(stages, stage)
+	}
+	if err := stageRows.Err(); err != nil {
+		stageRows.Close()
+		writeError(w, http.StatusInternalServerError, "failed to load squad workflow stages")
+		return
+	}
+	stageRows.Close()
+
+	rows, err := h.DB.Query(r.Context(), `
+		SELECT agent_id, stage_id, source
+		FROM squad_workflow_assignment
+		WHERE squad_id = $1
+	`, squad.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to load squad workflow assignments")
+		return
+	}
+	defer rows.Close()
+
+	assignments := make(map[string]string)
+	assignmentSources := make(map[string]string)
+	for rows.Next() {
+		var agentID pgtype.UUID
+		var stageID, source string
+		if err := rows.Scan(&agentID, &stageID, &source); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to load squad workflow assignments")
+			return
+		}
+		assignments[uuidToString(agentID)] = stageID
+		assignmentSources[uuidToString(agentID)] = source
+	}
+	if err := rows.Err(); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to load squad workflow assignments")
+		return
+	}
+
+	var isDefaultOrder bool
+	if err := h.DB.QueryRow(r.Context(), `
+		SELECT COALESCE(bool_and(position = baseline_position), true)
+		FROM squad_workflow_stage
+		WHERE squad_id = $1
+	`, squad.ID).Scan(&isDefaultOrder); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to inspect squad workflow order")
+		return
+	}
+
+	var generationSource, generatedProfile pgtype.Text
+	var canvasLayout json.RawMessage
+	if err := h.DB.QueryRow(r.Context(), `
+		SELECT source, profile, canvas_layout FROM squad_workflow_config WHERE squad_id = $1
+	`, squad.ID).Scan(&generationSource, &generatedProfile, &canvasLayout); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to load squad workflow profile")
+		return
+	}
+	if len(canvasLayout) == 0 {
+		canvasLayout = json.RawMessage(`{"stages":{},"agents":{}}`)
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"stages":             stages,
+		"assignments":        assignments,
+		"assignment_sources": assignmentSources,
+		"is_default_order":   isDefaultOrder,
+		"generation_source":  generationSource.String,
+		"generated_profile":  textToPtr(generatedProfile),
+		"canvas_layout":      canvasLayout,
+	})
+}
+
+func (h *Handler) SetSquadWorkflowCanvasLayout(w http.ResponseWriter, r *http.Request) {
+	workspaceID := workspaceIDFromURL(r, "workspaceId")
+	if _, ok := h.requireWorkspaceRole(w, r, workspaceID, "workspace not found", "owner", "admin"); !ok {
+		return
+	}
+	squad, _, ok := h.loadSquadInWorkspace(w, r)
+	if !ok {
+		return
+	}
+
+	r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	var layout squadWorkflowCanvasLayout
+	if err := decoder.Decode(&layout); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid canvas layout")
+		return
+	}
+	if layout.Stages == nil {
+		layout.Stages = make(map[string]squadWorkflowCanvasPoint)
+	}
+	if layout.Agents == nil {
+		layout.Agents = make(map[string]squadWorkflowCanvasPoint)
+	}
+	if len(layout.Stages) > 30 || len(layout.Agents) > 500 {
+		writeError(w, http.StatusBadRequest, "canvas layout contains too many nodes")
+		return
+	}
+	if layout.Leader != nil && !validSquadWorkflowCanvasPoint(*layout.Leader) {
+		writeError(w, http.StatusBadRequest, "canvas layout contains an invalid leader position")
+		return
+	}
+	for stageID, point := range layout.Stages {
+		if strings.TrimSpace(stageID) == "" || !validSquadWorkflowCanvasPoint(point) {
+			writeError(w, http.StatusBadRequest, "canvas layout contains an invalid stage position")
+			return
+		}
+	}
+	for agentID, point := range layout.Agents {
+		if strings.TrimSpace(agentID) == "" || !validSquadWorkflowCanvasPoint(point) {
+			writeError(w, http.StatusBadRequest, "canvas layout contains an invalid agent position")
+			return
+		}
+	}
+
+	payload, err := json.Marshal(layout)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid canvas layout")
+		return
+	}
+	if _, err := h.DB.Exec(r.Context(), `
+		INSERT INTO squad_workflow_config (squad_id, canvas_layout, updated_at)
+		VALUES ($1, $2::jsonb, now())
+		ON CONFLICT (squad_id) DO UPDATE SET
+			canvas_layout = EXCLUDED.canvas_layout,
+			updated_at = EXCLUDED.updated_at
+	`, squad.ID, string(payload)); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to save canvas layout")
+		return
+	}
+	h.publish(protocol.EventSquadUpdated, workspaceID, "member", requestUserID(r), map[string]any{
+		"squad_id": uuidToString(squad.ID),
+	})
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *Handler) GenerateSquadWorkflow(w http.ResponseWriter, r *http.Request) {
+	workspaceID := workspaceIDFromURL(r, "workspaceId")
+	member, ok := h.requireWorkspaceRole(w, r, workspaceID, "workspace not found", "owner", "admin")
+	if !ok {
+		return
+	}
+	squad, _, ok := h.loadSquadInWorkspace(w, r)
+	if !ok {
+		return
+	}
+	profile, err := h.generateSquadWorkflow(r.Context(), squad, member.UserID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to generate squad workflow")
+		return
+	}
+	h.publish(protocol.EventSquadUpdated, workspaceID, "member", requestUserID(r), map[string]any{
+		"squad_id": uuidToString(squad.ID),
+	})
+	writeJSON(w, http.StatusOK, map[string]string{"profile": profile})
+}
+
+func (h *Handler) SetSquadWorkflowAssignment(w http.ResponseWriter, r *http.Request) {
+	workspaceID := workspaceIDFromURL(r, "workspaceId")
+	member, ok := h.requireWorkspaceRole(w, r, workspaceID, "workspace not found", "owner", "admin")
+	if !ok {
+		return
+	}
+	squad, _, ok := h.loadSquadInWorkspace(w, r)
+	if !ok {
+		return
+	}
+	if err := h.ensureSquadWorkflowStages(r.Context(), squad.ID); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to initialize squad workflow")
+		return
+	}
+
+	agentID, ok := parseUUIDOrBadRequest(w, chi.URLParam(r, "agentId"), "agent id")
+	if !ok {
+		return
+	}
+	if agentID == squad.LeaderID {
+		writeError(w, http.StatusBadRequest, "squad leader is fixed at workflow intake")
+		return
+	}
+	isMember, err := h.Queries.IsSquadMember(r.Context(), db.IsSquadMemberParams{
+		SquadID: squad.ID, MemberType: "agent", MemberID: agentID,
+	})
+	if err != nil || !isMember {
+		writeError(w, http.StatusBadRequest, "agent must be a member of this squad")
+		return
+	}
+
+	var req struct {
+		StageID string `json:"stage_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	req.StageID = strings.TrimSpace(req.StageID)
+	var stageExists bool
+	if err := h.DB.QueryRow(r.Context(), `
+		SELECT EXISTS (
+			SELECT 1 FROM squad_workflow_stage WHERE squad_id = $1 AND id = $2
+		)
+	`, squad.ID, req.StageID).Scan(&stageExists); err != nil || !stageExists {
+		writeError(w, http.StatusBadRequest, "invalid workflow stage")
+		return
+	}
+
+	_, err = h.DB.Exec(r.Context(), `
+		INSERT INTO squad_workflow_assignment (squad_id, agent_id, stage_id, updated_by, source)
+		VALUES ($1, $2, $3, $4, 'manual')
+		ON CONFLICT (squad_id, agent_id) DO UPDATE SET
+			stage_id = EXCLUDED.stage_id,
+			updated_by = EXCLUDED.updated_by,
+			source = 'manual',
+			updated_at = now()
+	`, squad.ID, agentID, req.StageID, member.UserID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to update squad workflow assignment")
+		return
+	}
+
+	h.publish(protocol.EventSquadUpdated, workspaceID, "member", requestUserID(r), map[string]any{
+		"squad_id": uuidToString(squad.ID),
+	})
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *Handler) CreateSquadWorkflowStage(w http.ResponseWriter, r *http.Request) {
+	workspaceID := workspaceIDFromURL(r, "workspaceId")
+	member, ok := h.requireWorkspaceRole(w, r, workspaceID, "workspace not found", "owner", "admin")
+	if !ok {
+		return
+	}
+	squad, _, ok := h.loadSquadInWorkspace(w, r)
+	if !ok {
+		return
+	}
+	if err := h.ensureSquadWorkflowStages(r.Context(), squad.ID); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to initialize squad workflow")
+		return
+	}
+
+	var req struct {
+		Name        string `json:"name"`
+		Description string `json:"description"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	name, description, validationError := validateSquadWorkflowStageInput(req.Name, req.Description)
+	if validationError != "" {
+		writeError(w, http.StatusBadRequest, validationError)
+		return
+	}
+
+	var stageCount int
+	if err := h.DB.QueryRow(r.Context(), `SELECT count(*) FROM squad_workflow_stage WHERE squad_id = $1`, squad.ID).Scan(&stageCount); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to create workflow stage")
+		return
+	}
+	if stageCount >= 30 {
+		writeError(w, http.StatusConflict, "a workflow can contain at most 30 stages")
+		return
+	}
+
+	stage := squadWorkflowStageResponse{ID: "custom_" + randomID()}
+	var stageName, stageDescription pgtype.Text
+	err := h.DB.QueryRow(r.Context(), `
+		INSERT INTO squad_workflow_stage
+			(squad_id, id, name, description, position, baseline_position, updated_by)
+		VALUES (
+			$1, $2, $3, $4,
+			COALESCE((SELECT max(position) + 1 FROM squad_workflow_stage WHERE squad_id = $1), 0),
+			COALESCE((SELECT max(baseline_position) + 1 FROM squad_workflow_stage WHERE squad_id = $1), 0),
+			$5
+		)
+		RETURNING name, description, position, keywords
+	`, squad.ID, stage.ID, name, description, member.UserID).Scan(&stageName, &stageDescription, &stage.Position, &stage.Keywords)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to create workflow stage")
+		return
+	}
+	stage.Name = textToPtr(stageName)
+	stage.Description = textToPtr(stageDescription)
+	h.publish(protocol.EventSquadUpdated, workspaceID, "member", requestUserID(r), map[string]any{"squad_id": uuidToString(squad.ID)})
+	writeJSON(w, http.StatusCreated, stage)
+}
+
+func (h *Handler) UpdateSquadWorkflowStage(w http.ResponseWriter, r *http.Request) {
+	workspaceID := workspaceIDFromURL(r, "workspaceId")
+	member, ok := h.requireWorkspaceRole(w, r, workspaceID, "workspace not found", "owner", "admin")
+	if !ok {
+		return
+	}
+	squad, _, ok := h.loadSquadInWorkspace(w, r)
+	if !ok {
+		return
+	}
+	stageID := strings.TrimSpace(chi.URLParam(r, "stageId"))
+	var req struct {
+		Name        string `json:"name"`
+		Description string `json:"description"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	name, description, validationError := validateSquadWorkflowStageInput(req.Name, req.Description)
+	if validationError != "" {
+		writeError(w, http.StatusBadRequest, validationError)
+		return
+	}
+
+	stage := squadWorkflowStageResponse{ID: stageID}
+	var stageName, stageDescription pgtype.Text
+	err := h.DB.QueryRow(r.Context(), `
+		UPDATE squad_workflow_stage
+		SET name = $3, description = $4, updated_by = $5, updated_at = now()
+		WHERE squad_id = $1 AND id = $2
+		RETURNING name, description, position, keywords
+	`, squad.ID, stageID, name, description, member.UserID).Scan(&stageName, &stageDescription, &stage.Position, &stage.Keywords)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "workflow stage not found")
+		return
+	}
+	stage.Name = textToPtr(stageName)
+	stage.Description = textToPtr(stageDescription)
+	h.publish(protocol.EventSquadUpdated, workspaceID, "member", requestUserID(r), map[string]any{"squad_id": uuidToString(squad.ID)})
+	writeJSON(w, http.StatusOK, stage)
+}
+
+func (h *Handler) DeleteSquadWorkflowStage(w http.ResponseWriter, r *http.Request) {
+	workspaceID := workspaceIDFromURL(r, "workspaceId")
+	if _, ok := h.requireWorkspaceRole(w, r, workspaceID, "workspace not found", "owner", "admin"); !ok {
+		return
+	}
+	squad, _, ok := h.loadSquadInWorkspace(w, r)
+	if !ok {
+		return
+	}
+	stageID := strings.TrimSpace(chi.URLParam(r, "stageId"))
+	var stageCount int
+	if err := h.DB.QueryRow(r.Context(), `SELECT count(*) FROM squad_workflow_stage WHERE squad_id = $1`, squad.ID).Scan(&stageCount); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to delete workflow stage")
+		return
+	}
+	if stageCount <= 1 {
+		writeError(w, http.StatusConflict, "a workflow must contain at least one stage")
+		return
+	}
+
+	tx, err := h.TxStarter.Begin(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to delete workflow stage")
+		return
+	}
+	defer tx.Rollback(r.Context()) //nolint:errcheck
+	if _, err := tx.Exec(r.Context(), `DELETE FROM squad_workflow_assignment WHERE squad_id = $1 AND stage_id = $2`, squad.ID, stageID); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to delete workflow stage")
+		return
+	}
+	tag, err := tx.Exec(r.Context(), `DELETE FROM squad_workflow_stage WHERE squad_id = $1 AND id = $2`, squad.ID, stageID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to delete workflow stage")
+		return
+	}
+	if tag.RowsAffected() == 0 {
+		writeError(w, http.StatusNotFound, "workflow stage not found")
+		return
+	}
+	if _, err := tx.Exec(r.Context(), `
+		WITH current_ordered AS (
+			SELECT id, row_number() OVER (ORDER BY position, created_at, id) - 1 AS next_position
+			FROM squad_workflow_stage WHERE squad_id = $1
+		), baseline_ordered AS (
+			SELECT id, row_number() OVER (ORDER BY baseline_position, created_at, id) - 1 AS next_position
+			FROM squad_workflow_stage WHERE squad_id = $1
+		)
+		UPDATE squad_workflow_stage AS stage
+		SET position = current_ordered.next_position,
+			baseline_position = baseline_ordered.next_position,
+			updated_at = now()
+		FROM current_ordered, baseline_ordered
+		WHERE stage.squad_id = $1
+			AND stage.id = current_ordered.id
+			AND stage.id = baseline_ordered.id
+	`, squad.ID); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to delete workflow stage")
+		return
+	}
+	if err := tx.Commit(r.Context()); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to delete workflow stage")
+		return
+	}
+	h.publish(protocol.EventSquadUpdated, workspaceID, "member", requestUserID(r), map[string]any{"squad_id": uuidToString(squad.ID)})
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *Handler) ReorderSquadWorkflowStages(w http.ResponseWriter, r *http.Request) {
+	workspaceID := workspaceIDFromURL(r, "workspaceId")
+	member, ok := h.requireWorkspaceRole(w, r, workspaceID, "workspace not found", "owner", "admin")
+	if !ok {
+		return
+	}
+	squad, _, ok := h.loadSquadInWorkspace(w, r)
+	if !ok {
+		return
+	}
+	var req struct {
+		StageIDs []string `json:"stage_ids"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || len(req.StageIDs) == 0 {
+		writeError(w, http.StatusBadRequest, "stage_ids is required")
+		return
+	}
+	seen := make(map[string]struct{}, len(req.StageIDs))
+	for _, stageID := range req.StageIDs {
+		stageID = strings.TrimSpace(stageID)
+		if stageID == "" {
+			writeError(w, http.StatusBadRequest, "stage_ids contains an empty id")
+			return
+		}
+		if _, duplicate := seen[stageID]; duplicate {
+			writeError(w, http.StatusBadRequest, "stage_ids contains duplicates")
+			return
+		}
+		seen[stageID] = struct{}{}
+	}
+	var existingCount, matchedCount int
+	err := h.DB.QueryRow(r.Context(), `
+		SELECT
+			(SELECT count(*) FROM squad_workflow_stage WHERE squad_id = $1),
+			(SELECT count(*) FROM squad_workflow_stage WHERE squad_id = $1 AND id = ANY($2::text[]))
+	`, squad.ID, req.StageIDs).Scan(&existingCount, &matchedCount)
+	if err != nil || existingCount != len(req.StageIDs) || matchedCount != existingCount {
+		writeError(w, http.StatusBadRequest, "stage_ids must contain every workflow stage exactly once")
+		return
+	}
+	if _, err := h.DB.Exec(r.Context(), `
+		UPDATE squad_workflow_stage AS stage
+		SET position = requested.ordinality - 1, updated_by = $3, updated_at = now()
+		FROM unnest($2::text[]) WITH ORDINALITY AS requested(id, ordinality)
+		WHERE stage.squad_id = $1 AND stage.id = requested.id
+	`, squad.ID, req.StageIDs, member.UserID); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to reorder workflow stages")
+		return
+	}
+	h.publish(protocol.EventSquadUpdated, workspaceID, "member", requestUserID(r), map[string]any{"squad_id": uuidToString(squad.ID)})
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *Handler) ResetSquadWorkflowAssignments(w http.ResponseWriter, r *http.Request) {
+	workspaceID := workspaceIDFromURL(r, "workspaceId")
+	member, ok := h.requireWorkspaceRole(w, r, workspaceID, "workspace not found", "owner", "admin")
+	if !ok {
+		return
+	}
+	squad, _, ok := h.loadSquadInWorkspace(w, r)
+	if !ok {
+		return
+	}
+	if err := h.ensureSquadWorkflowStages(r.Context(), squad.ID); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to initialize squad workflow")
+		return
+	}
+
+	stageRows, err := h.DB.Query(r.Context(), `
+		SELECT id, keywords
+		FROM squad_workflow_stage
+		WHERE squad_id = $1
+		ORDER BY baseline_position, created_at, id
+	`, squad.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to load squad workflow")
+		return
+	}
+	stages := make([]squadWorkflowTemplateStage, 0)
+	for stageRows.Next() {
+		var stage squadWorkflowTemplateStage
+		if err := stageRows.Scan(&stage.id, &stage.keywords); err != nil {
+			stageRows.Close()
+			writeError(w, http.StatusInternalServerError, "failed to load squad workflow")
+			return
+		}
+		stages = append(stages, stage)
+	}
+	if err := stageRows.Err(); err != nil {
+		stageRows.Close()
+		writeError(w, http.StatusInternalServerError, "failed to load squad workflow")
+		return
+	}
+	stageRows.Close()
+
+	agents, err := h.loadSquadWorkflowAgents(r.Context(), squad.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to load squad agents")
+		return
+	}
+	workers := make([]squadWorkflowAgent, 0, len(agents))
+	for _, agent := range agents {
+		if !squad.LeaderID.Valid || agent.id != squad.LeaderID {
+			workers = append(workers, agent)
+		}
+	}
+
+	tx, err := h.TxStarter.Begin(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to reset squad workflow")
+		return
+	}
+	defer tx.Rollback(r.Context()) //nolint:errcheck
+	if _, err := tx.Exec(r.Context(), `DELETE FROM squad_workflow_assignment WHERE squad_id = $1`, squad.ID); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to reset squad workflow")
+		return
+	}
+	if _, err := tx.Exec(r.Context(), `
+		UPDATE squad_workflow_stage
+		SET position = baseline_position, updated_by = $2, updated_at = now()
+		WHERE squad_id = $1
+	`, squad.ID, member.UserID); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to reset squad workflow")
+		return
+	}
+	if _, err := tx.Exec(r.Context(), `
+		UPDATE squad_workflow_config
+		SET canvas_layout = '{"stages":{},"agents":{}}'::jsonb, updated_at = now()
+		WHERE squad_id = $1
+	`, squad.ID); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to reset squad workflow layout")
+		return
+	}
+	for _, agent := range workers {
+		stageIndex := chooseAgentWorkflowStage(agent, stages)
+		if _, err := tx.Exec(r.Context(), `
+			INSERT INTO squad_workflow_assignment (squad_id, agent_id, stage_id, updated_by, source)
+			VALUES ($1, $2, $3, $4, 'generated')
+		`, squad.ID, agent.id, stages[stageIndex].id, member.UserID); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to reset squad workflow")
+			return
+		}
+	}
+	if err := tx.Commit(r.Context()); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to reset squad workflow")
+		return
+	}
+	h.publish(protocol.EventSquadUpdated, workspaceID, "member", requestUserID(r), map[string]any{
+		"squad_id": uuidToString(squad.ID),
+	})
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (h *Handler) AddSquadMember(w http.ResponseWriter, r *http.Request) {

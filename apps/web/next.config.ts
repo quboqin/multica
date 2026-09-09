@@ -33,15 +33,17 @@ const skipDockerTypecheck = process.env.MULTICA_SKIP_NEXT_BUILD_TYPECHECK === "t
 // Parse hostnames from CORS_ALLOWED_ORIGINS so that Next.js dev server
 // allows cross-origin HMR / webpack requests (e.g. from Tailscale IPs).
 const allowedDevOrigins = process.env.CORS_ALLOWED_ORIGINS
-  ? process.env.CORS_ALLOWED_ORIGINS.split(",")
-      .map((origin) => {
+  ? Array.from(new Set(process.env.CORS_ALLOWED_ORIGINS.split(",")
+      .flatMap((origin) => {
+        const trimmed = origin.trim();
         try {
-          return new URL(origin.trim()).host;
+          const parsed = new URL(trimmed);
+          return [parsed.origin, parsed.host, parsed.hostname];
         } catch {
-          return origin.trim();
+          return [trimmed];
         }
       })
-      .filter(Boolean)
+      .filter(Boolean)))
   : undefined;
 
 const webWarmupEnabled = process.env.MULTICA_WEB_WARMUP?.toLowerCase() === "true";
