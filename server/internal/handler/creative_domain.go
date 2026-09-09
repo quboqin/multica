@@ -1487,6 +1487,18 @@ func (h *Handler) RetryCreativeOrderWorkflowFailure(w http.ResponseWriter, r *ht
 		return
 	}
 	defer tx.Rollback(r.Context())
+	var orderStatus string
+	if err := tx.QueryRow(r.Context(), `SELECT status FROM creative_order WHERE id=$1 AND workspace_id=$2 FOR UPDATE`, orderID, workspaceID).Scan(&orderStatus); errors.Is(err, pgx.ErrNoRows) {
+		writeError(w, http.StatusNotFound, "creative order not found")
+		return
+	} else if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to lock creative order")
+		return
+	}
+	if orderStatus == "cancelled" {
+		writeError(w, http.StatusConflict, "creative order is cancelled")
+		return
+	}
 	if diagnosticActor.TaskID.Valid {
 		if _, err := tx.Exec(r.Context(), `
 UPDATE agent_task_queue task
@@ -1578,7 +1590,7 @@ WHERE task.id = $1
   )
   AND task.status IN ('completed', 'failed')
   AND (
-    task.attempt < task.max_attempts
+    $4::boolean OR task.attempt < task.max_attempts
     OR (
       task.trigger_evidence_kind = 'creative_order_item_production'
       AND task.context->>'workflow' = 'creative_production'
@@ -1602,7 +1614,7 @@ WHERE task.id = $1
   )
   AND variant.status IN ('queued', 'running', 'partial', 'action_required', 'failed')
 RETURNING variant.id::text
-`, taskID, workspaceID, orderID).Scan(&variantID)
+`, taskID, workspaceID, orderID, !diagnosticActor.TaskID.Valid).Scan(&variantID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		writeError(w, http.StatusConflict, "workflow failure is no longer eligible for retry")
 		return
@@ -1612,7 +1624,9 @@ RETURNING variant.id::text
 		return
 	}
 	var child db.AgentTaskQueue
-	if taskStatus == "failed" {
+	if !diagnosticActor.TaskID.Valid {
+		child, err = h.createManualCreativeTaskRetry(r.Context(), tx, taskID, userID)
+	} else if taskStatus == "failed" {
 		child, err = h.Queries.WithTx(tx).CreateRetryTask(r.Context(), taskID)
 	} else {
 		child, err = h.Queries.WithTx(tx).CreateActionRequiredRetryTask(r.Context(), taskID)
@@ -1847,19 +1861,6 @@ WHERE id = $1
 		if updatedOperation.RowsAffected() != 1 {
 			return false, errors.New("unrecoverable direct edit operation changed during reconciliation")
 		}
-	}
-	updatedTask, err := tx.Exec(ctx, `
-UPDATE agent_task_queue
-SET max_attempts = attempt + 1
-WHERE id = $1
-  AND status = 'failed'
-  AND attempt >= max_attempts
-`, taskID)
-	if err != nil {
-		return false, err
-	}
-	if updatedTask.RowsAffected() != 1 {
-		return false, errors.New("direct edit retry budget changed during reconciliation")
 	}
 	return true, nil
 }

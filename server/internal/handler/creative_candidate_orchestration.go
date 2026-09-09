@@ -53,8 +53,9 @@ func freezeCreativeOrderPipelineVersion(raw json.RawMessage, version string) (js
 // creativeOrchestrationCause preserves the human attribution of the task that
 // caused an automatic handoff. RequestedBy is the fallback for an HTTP action.
 type creativeOrchestrationCause struct {
-	ParentTask  *db.AgentTaskQueue
-	RequestedBy pgtype.UUID
+	ParentTask           *db.AgentTaskQueue
+	RequestedBy          pgtype.UUID
+	ManualSelectionRetry bool
 }
 
 type creativeCandidatePrimary struct {
@@ -298,7 +299,7 @@ WHERE trigger_evidence_kind = $1
 `, creativeCandidateSelectionEvidenceKind, orderItemID, creativeCandidateSelectionItemKey).Scan(&terminalAttempts); err != nil {
 		return false, fmt.Errorf("count creative candidate selection attempts: %w", err)
 	}
-	if terminalAttempts >= creativeCandidateSelectionMaxAttempts {
+	if terminalAttempts >= creativeCandidateSelectionMaxAttempts && !cause.ManualSelectionRetry {
 		return false, nil
 	}
 

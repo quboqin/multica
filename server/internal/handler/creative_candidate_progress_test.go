@@ -138,6 +138,108 @@ func TestCreativeCandidateReadyRecoveryQueuesOnceAndRejectsCancelledOrForeignIte
 	candidateRecoveryForTest(t, f, http.StatusConflict)
 }
 
+func TestCreativeCandidateManualRecoveryAfterAutomaticBudget(t *testing.T) {
+	f := createCreativeCountFixture(t, 6)
+	seedSixSetCandidatePrimaries(t, f, 8)
+	for range creativeCandidateSelectionMaxAttempts {
+		if queued, err := testHandler.maybeQueueCreativeCandidateSelection(t.Context(), parseUUID(f.ItemID), creativeOrchestrationCause{}); err != nil || !queued {
+			t.Fatalf("seed automatic attempt: %v %v", queued, err)
+		}
+		if _, err := testPool.Exec(t.Context(), `UPDATE agent_task_queue SET status='failed',completed_at=now() WHERE trigger_evidence_kind=$1 AND trigger_evidence_ref_id=$2 AND status='queued'`, creativeCandidateSelectionEvidenceKind, f.ItemID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if queued, err := testHandler.maybeQueueCreativeCandidateSelection(t.Context(), parseUUID(f.ItemID), creativeOrchestrationCause{}); err != nil || queued {
+		t.Fatalf("automatic budget must remain exhausted: %v %v", queued, err)
+	}
+	first := candidateRecoveryForTest(t, f, http.StatusOK)
+	second := candidateRecoveryForTest(t, f, http.StatusOK)
+	if first.TaskID == "" || first.TaskID != second.TaskID {
+		t.Fatal("manual recovery did not deduplicate the active task")
+	}
+	var target, assets, terminal int
+	if err := testPool.QueryRow(t.Context(), `SELECT (context->>'target_variant_count')::int FROM agent_task_queue WHERE id=$1`, first.TaskID).Scan(&target); err != nil || target != 6 {
+		t.Fatalf("target changed: %d %v", target, err)
+	}
+	if err := testPool.QueryRow(t.Context(), `SELECT count(*) FROM creative_order_asset a JOIN creative_order_variant v ON v.id=a.variant_id WHERE v.order_item_id=$1`, f.ItemID).Scan(&assets); err != nil || assets != 16 {
+		t.Fatalf("primary assets changed: %d %v", assets, err)
+	}
+	if err := testPool.QueryRow(t.Context(), `SELECT count(*) FROM agent_task_queue WHERE trigger_evidence_kind=$1 AND trigger_evidence_ref_id=$2 AND status='failed'`, creativeCandidateSelectionEvidenceKind, f.ItemID).Scan(&terminal); err != nil || terminal != 3 {
+		t.Fatalf("history changed: %d %v", terminal, err)
+	}
+	if _, err := testPool.Exec(t.Context(), `UPDATE agent_task_queue SET status='failed',completed_at=now() WHERE id=$1`, first.TaskID); err != nil {
+		t.Fatal(err)
+	}
+	if queued, err := testHandler.maybeQueueCreativeCandidateSelection(t.Context(), parseUUID(f.ItemID), creativeOrchestrationCause{}); err != nil || queued {
+		t.Fatalf("manual retry reset automatic budget: %v %v", queued, err)
+	}
+	third := candidateRecoveryForTest(t, f, http.StatusOK)
+	if third.TaskID == "" || third.TaskID == first.TaskID {
+		t.Fatal("a new manual action must allow another attempt")
+	}
+}
+
+func TestCreativeCandidateManualPlanningHasIndependentBudget(t *testing.T) {
+	f := createCreativeCountFixture(t, 6)
+	seedSixSetCandidatePrimaries(t, f, 6)
+	parent := seedCandidatePlanTask(t, f, "failed")
+	if _, err := testPool.Exec(t.Context(), `UPDATE agent_task_queue SET attempt=12,max_attempts=12 WHERE id=$1`, parent.ID); err != nil {
+		t.Fatal(err)
+	}
+	first := candidateRecoveryForTest(t, f, http.StatusOK)
+	second := candidateRecoveryForTest(t, f, http.StatusOK)
+	if first.TaskID != second.TaskID {
+		t.Fatal("manual planning duplicated")
+	}
+	child, err := testHandler.Queries.GetAgentTask(t.Context(), parseUUID(first.TaskID))
+	if err != nil || child.Attempt != 13 || child.MaxAttempts != 14 || child.ParentTaskID != parent.ID || !child.ForceFreshSession {
+		t.Fatalf("fresh manual budget: %+v %v", child, err)
+	}
+	old, err := testHandler.Queries.GetAgentTask(t.Context(), parent.ID)
+	if err != nil || old.Attempt != 12 || old.MaxAttempts != 12 || old.Status != "failed" {
+		t.Fatalf("manual retry rewrote history: %+v %v", old, err)
+	}
+}
+
+func TestCreativeCandidateManualSourceRetryHasIndependentBudget(t *testing.T) {
+	f := createCreativeCountFixture(t, 6)
+	parent := seedCandidatePlanTask(t, f, "failed")
+	if _, err := testPool.Exec(t.Context(), `UPDATE agent_task_queue SET attempt=12,max_attempts=12 WHERE id=$1`, parent.ID); err != nil {
+		t.Fatal(err)
+	}
+	retry := func() taskFanoutResponse {
+		t.Helper()
+		w := httptest.NewRecorder()
+		r := withURLParam(newRequest(http.MethodPost, "/retry?trigger_evidence_kind=creative_order_item_plan&trigger_evidence_ref_id="+f.ItemID, nil), "agentId", uuidToString(parent.AgentID))
+		testHandler.RetryFailedAgentTasksBySource(w, r)
+		if w.Code != http.StatusCreated {
+			t.Fatalf("manual source retry: %d %s", w.Code, w.Body.String())
+		}
+		var response taskFanoutResponse
+		if err := json.NewDecoder(w.Body).Decode(&response); err != nil {
+			t.Fatal(err)
+		}
+		return response
+	}
+	first := retry()
+	if len(first.Tasks) != 1 {
+		t.Fatalf("manual source retry tasks: %+v", first.Tasks)
+	}
+	child, err := testHandler.Queries.GetAgentTask(t.Context(), parseUUID(first.Tasks[0].ID))
+	if err != nil || child.Attempt != 13 || child.MaxAttempts != 14 || child.RetryOfTaskID != parent.ID || child.RequestingUserID != parseUUID(testUserID) {
+		t.Fatalf("manual source retry budget and lineage: %+v %v", child, err)
+	}
+	if duplicate := retry(); len(duplicate.Tasks) != 0 {
+		t.Fatalf("stale parent retried twice: %+v", duplicate.Tasks)
+	}
+	if _, err := testPool.Exec(t.Context(), `UPDATE agent_task_queue SET status='failed',attempt=max_attempts WHERE id=$1`, child.ID); err != nil {
+		t.Fatal(err)
+	}
+	if next := retry(); len(next.Tasks) != 1 {
+		t.Fatalf("second manual retry blocked by prior budget: %+v", next.Tasks)
+	}
+}
+
 func TestCreativeCandidatePrimeConcurrentCompletionQueuesSelectionAtomically(t *testing.T) {
 	f := createCreativeCountFixture(t, 6)
 	ids := seedSixSetCandidatePrimaries(t, f, 8)

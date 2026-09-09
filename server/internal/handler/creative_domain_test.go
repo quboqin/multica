@@ -1835,10 +1835,18 @@ VALUES ($1, 1, 'text', 'initial diagnostic'),
 	if _, err := testPool.Exec(t.Context(), `UPDATE agent_task_queue SET attempt = 5, max_attempts = 5 WHERE id = $1`, taskID); err != nil {
 		t.Fatal(err)
 	}
-	if failure := getOrder().WorkflowFailures[0]; failure.Retryable {
-		t.Fatalf("fifth production action-required failure is retryable: %#v", failure)
+	if failure := getOrder().WorkflowFailures[0]; !failure.Retryable {
+		t.Fatalf("an exhausted automatic attempt must remain manually retryable: %#v", failure)
 	}
-	if _, err := testPool.Exec(t.Context(), `UPDATE agent_task_queue SET attempt = 1, max_attempts = 2 WHERE id = $1`, taskID); err != nil {
+	if _, err := testPool.Exec(t.Context(), `UPDATE creative_order SET status='cancelled' WHERE id=$1`, orderID); err != nil {
+		t.Fatal(err)
+	}
+	cancelled := httptest.NewRecorder()
+	testHandler.RetryCreativeOrderWorkflowFailure(cancelled, withURLParams(newRequest(http.MethodPost, "/retry", nil), "id", orderID, "taskId", taskID))
+	if cancelled.Code != http.StatusConflict {
+		t.Fatalf("cancelled order retry: %d %s", cancelled.Code, cancelled.Body.String())
+	}
+	if _, err := testPool.Exec(t.Context(), `UPDATE creative_order SET status='running' WHERE id=$1`, orderID); err != nil {
 		t.Fatal(err)
 	}
 	retry := httptest.NewRecorder()
@@ -1881,8 +1889,20 @@ FROM agent_task_queue WHERE id = $1
 	if err := json.Unmarshal(contextValue, &parentContext); err != nil {
 		t.Fatal(err)
 	}
-	if child.AgentID != agentID || child.Status != "queued" || child.Attempt != 2 || child.RetryOfTaskID != taskID || child.SessionID != "" || child.WorkDir != "" || !child.FreshSession {
+	if child.AgentID != agentID || child.Status != "queued" || child.Attempt != 6 || child.RetryOfTaskID != taskID || child.SessionID != "" || child.WorkDir != "" || !child.FreshSession {
 		t.Fatalf("recovery child lineage = %#v, want queued retry with clean execution state", child)
+	}
+	var parentLimit, childLimit int
+	if err := testPool.QueryRow(t.Context(), `SELECT parent.max_attempts, child.max_attempts FROM agent_task_queue parent JOIN agent_task_queue child ON child.retry_of_task_id=parent.id WHERE child.id=$1`, retried.TaskID).Scan(&parentLimit, &childLimit); err != nil {
+		t.Fatal(err)
+	}
+	if parentLimit != 5 || childLimit != 7 {
+		t.Fatalf("independent retry limits: parent=%d child=%d", parentLimit, childLimit)
+	}
+	duplicate := httptest.NewRecorder()
+	testHandler.RetryCreativeOrderWorkflowFailure(duplicate, withURLParams(newRequest(http.MethodPost, "/retry", nil), "id", orderID, "taskId", taskID))
+	if duplicate.Code != http.StatusConflict {
+		t.Fatalf("stale workflow retry: %d %s", duplicate.Code, duplicate.Body.String())
 	}
 	for _, key := range []string{"type", "workflow", "creative_order_id", "creative_order_item_id", "variant_id", "expected_sizes"} {
 		if fmt.Sprint(childContext[key]) != fmt.Sprint(parentContext[key]) {

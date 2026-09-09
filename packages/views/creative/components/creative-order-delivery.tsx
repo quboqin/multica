@@ -1481,7 +1481,7 @@ function qcStatusAllowsAdoption(status: string): boolean {
 
 export function creativeVariantCanRetryQC(variant: CreativeOrderVariant): boolean {
   if (!creativeVariantParticipatesInDelivery(variant)) return false;
-  if (variant.qc_recovery_available !== true || variant.qc_recovery_used === true || !["action_required", "failed"].includes(variant.status)) return false;
+  if (variant.qc_recovery_available !== true || !["action_required", "failed"].includes(variant.status)) return false;
   const revision = creativeVariantWorkingRevision(variant);
   const primedSizes = new Set(variant.assets
     .filter((asset) => asset.revision === revision && asset.stage === "primed" && asset.status === "completed" && asset.attachment_id)

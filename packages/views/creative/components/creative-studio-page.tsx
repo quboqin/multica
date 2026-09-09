@@ -653,7 +653,7 @@ function CreativeOrderDetail({ orderId, onBack, onBrowseOrders, backLabel }: { o
       if (action.kind === "qc") {
         await api.retryCreativeOrderVariantQC(orderId, variant.id);
       } else if (action.kind === "prime") {
-        await api.composeCreativeOrderPrime(orderId, variant.id, { async: true });
+        await api.composeCreativeOrderPrime(orderId, variant.id, { async: true, force: true });
       } else {
         await api.retryCreativeOrderWorkflowFailure(orderId, action.taskId);
       }

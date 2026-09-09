@@ -102,20 +102,16 @@ func (h *Handler) RecoverCreativeOrderCandidates(w http.ResponseWriter, r *http.
 			writeError(w, http.StatusConflict, "candidate planning task context does not match")
 			return
 		}
-		if p.PlanStatus == "failed" {
-			task, err = h.Queries.WithTx(tx).CreateRetryTask(r.Context(), parent.ID)
-		} else {
-			task, err = h.Queries.WithTx(tx).CreateActionRequiredRetryTask(r.Context(), parent.ID)
-		}
+		task, err = h.createManualCreativeTaskRetry(r.Context(), tx, parent.ID, userID)
 		if errors.Is(err, pgx.ErrNoRows) {
-			writeError(w, http.StatusConflict, "candidate planning retry budget exhausted")
+			writeError(w, http.StatusConflict, "candidate planning task has changed; refresh before continuing")
 			return
 		}
 		queued = true
 	case "selection_ready", "selection_incomplete":
-		queued, err = h.queueCreativeCandidateSelectionTx(r.Context(), tx, itemID, creativeOrchestrationCause{RequestedBy: userID}, nil, &task)
+		queued, err = h.queueCreativeCandidateSelectionTx(r.Context(), tx, itemID, creativeOrchestrationCause{RequestedBy: userID, ManualSelectionRetry: true}, nil, &task)
 		if err == nil && !queued {
-			writeError(w, http.StatusConflict, "candidate selection is not ready or its retry budget is exhausted")
+			writeError(w, http.StatusConflict, "candidate selection is not ready; refresh candidate progress before continuing")
 			return
 		}
 	case "selection_queued", "selecting":

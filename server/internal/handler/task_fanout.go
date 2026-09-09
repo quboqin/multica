@@ -1367,7 +1367,28 @@ WHERE agent_id = $2
 			return
 		}
 	}
-	retried, err := h.TaskService.RetryFailedDirectTasksByEvidenceTx(r.Context(), tx, agent.ID, kind, refID)
+	var retried []db.AgentTaskQueue
+	if diagnosticActor.TaskID.Valid {
+		retried, err = h.TaskService.RetryFailedDirectTasksByEvidenceTx(r.Context(), tx, agent.ID, kind, refID)
+	} else {
+		// A human starts a fresh retry budget; automatic and diagnostic retries
+		// continue to use the bounded service path above.
+		userID := parseUUID(requestUserID(r))
+		for _, prior := range priorTasks {
+			if prior.Status != "failed" {
+				continue
+			}
+			child, retryErr := h.createManualCreativeTaskRetry(r.Context(), tx, prior.ID, userID)
+			if errors.Is(retryErr, pgx.ErrNoRows) {
+				continue
+			}
+			if retryErr != nil {
+				err = retryErr
+				break
+			}
+			retried = append(retried, child)
+		}
+	}
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return

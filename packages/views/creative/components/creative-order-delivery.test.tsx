@@ -17,6 +17,7 @@ import {
   creativeVariantNeedsManualAction,
   creativeVariantPreviewAssets,
   creativeVariantQCDetails,
+  creativeVariantRetryAction,
   creativeVariantRiskAdoptionReadiness,
 } from "./creative-order-delivery";
 
@@ -862,10 +863,11 @@ describe("CreativeOrderDeliveryCandidates", () => {
     expect(creativeVariantRiskAdoptionReadiness(exhausted).allowed).toBe(true);
   });
 
-  it("does not expose QC recovery actions after automatic recovery was used", () => {
+  it("allows another manual QC run after an earlier recovery was used", () => {
     const exhausted = variant("v01");
     exhausted.status = "action_required";
     exhausted.qc_recovery_used = true;
+    exhausted.qc_recovery_available = true;
     exhausted.qc_reports = [
       qcReport({ id: "technical-r2", variant_id: exhausted.id, revision: 2, lane: "technical", status: "passed", findings: {}, updated_at: "2026-08-05T00:00:00Z" }),
       qcReport({ id: "visual-r2", variant_id: exhausted.id, revision: 2, lane: "visual", status: "failed", findings: {}, updated_at: "2026-08-05T00:00:00Z" }),
@@ -876,7 +878,12 @@ describe("CreativeOrderDeliveryCandidates", () => {
 
     expect(screen.getByText("检测记录")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "添加到成图库" })).toBeEnabled();
-    expect(screen.queryByRole("button", { name: "重新质检" })).not.toBeInTheDocument();
+    expect(creativeVariantRetryAction(exhausted)).toMatchObject({ kind: "qc" });
+    exhausted.status = "running";
+    expect(creativeVariantRetryAction(exhausted)).toBeNull();
+    exhausted.status = "action_required";
+    exhausted.qc_recovery_available = false;
+    expect(creativeVariantRetryAction(exhausted)).toBeNull();
   });
 
   it("keeps all three selected variants independently addable and records feedback per variant", async () => {
