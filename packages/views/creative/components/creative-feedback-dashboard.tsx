@@ -45,7 +45,7 @@ export function CreativeFeedbackDashboard() {
             <MetricRow label={t(($) => $.feedback.generationFailed)} value={workflow?.image_generation_failed ?? 0} />
             <MetricRow label={t(($) => $.feedback.generationInProgress)} value={workflow?.image_generation_in_progress ?? 0} />
             <MetricRow label={t(($) => $.feedback.assetReported)} value={workflow?.asset_reported ?? 0} />
-            <MetricRow label={t(($) => $.feedback.averageDuration)} value={formatCreativeDuration(workflow?.image_generation_duration_seconds)} />
+            <MetricRow label={t(($) => $.feedback.averageDuration)} value={(workflow?.image_generation_duration_package_count ?? 0) > 0 ? formatCreativeDuration(workflow?.image_generation_duration_seconds) : t(($) => $.feedback.durationPending)} description={t(($) => $.feedback.durationHelp)} />
           </dl>
           {(workflow?.image_generation_duration_package_count ?? 0) > 0 && <p className="mt-2 text-[11px] text-muted-foreground">{t(($) => $.feedback.basedOnPackages, { count: workflow?.image_generation_duration_package_count })}</p>}
         </div>
@@ -69,6 +69,6 @@ function feedbackReasonLabel(t: ReturnType<typeof useT<"creative">>["t"], code: 
   return labels[code] ?? code;
 }
 
-function MetricRow({ label, value }: { label: string; value: number | string }) {
-  return <div className="flex items-center justify-between gap-3 py-3"><dt className="text-muted-foreground">{label}</dt><dd className="font-medium tabular-nums">{value}</dd></div>;
+function MetricRow({ label, value, description }: { label: string; value: number | string; description?: string }) {
+  return <div className="flex items-center justify-between gap-3 py-3"><dt className="text-muted-foreground" title={description}>{label}</dt><dd className="font-medium tabular-nums">{value}</dd></div>;
 }

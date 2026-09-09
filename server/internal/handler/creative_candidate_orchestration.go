@@ -299,7 +299,8 @@ WHERE trigger_evidence_kind = $1
 `, creativeCandidateSelectionEvidenceKind, orderItemID, creativeCandidateSelectionItemKey).Scan(&terminalAttempts); err != nil {
 		return false, fmt.Errorf("count creative candidate selection attempts: %w", err)
 	}
-	if terminalAttempts >= creativeCandidateSelectionMaxAttempts && !cause.ManualSelectionRetry {
+	_, recovering := ctx.Value(creativeRecoveryDispatchContextKey{}).(creativeRecoveryTarget)
+	if terminalAttempts >= creativeCandidateSelectionMaxAttempts && !cause.ManualSelectionRetry && !recovering {
 		return false, nil
 	}
 
@@ -544,6 +545,9 @@ SELECT EXISTS (
 	}
 	if _, err := tx.Exec(ctx, `UPDATE creative_order SET updated_at = now() WHERE id = $1`, orderID); err != nil {
 		return false, fmt.Errorf("touch creative order candidate selection: %w", err)
+	}
+	if err := recordCreativeRecoveryDispatchTx(ctx, tx, task.ID); err != nil {
+		return false, err
 	}
 	*createdTask = task
 	return true, nil
@@ -866,6 +870,11 @@ SELECT EXISTS (
 		}
 		queued = append(queued, tasks...)
 		created = append(created, newlyCreated...)
+	}
+	if len(created) > 0 {
+		if err := recordCreativeRecoveryDispatchTx(ctx, tx, created[0].ID); err != nil {
+			return nil, err
+		}
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return nil, fmt.Errorf("commit selected creative production handoff: %w", err)

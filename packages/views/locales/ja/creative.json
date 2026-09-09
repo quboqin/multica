@@ -189,8 +189,10 @@
     "generating": "画像を生成中",
     "readyToAdopt": "ギャラリーに追加できる画像",
     "weeklyDelivery": "今週の納品",
-    "averageDuration": "パッケージ生成の平均時間",
-    "basedOnPackages": "{{count}} パッケージに基づく"
+    "averageDuration": "一式の平均生成時間",
+    "basedOnPackages": "{{count}} パッケージに基づく",
+    "durationPending": "集計待ち",
+    "durationHelp": "計測開始後、直近24時間に発注され、初回の原画像一式が揃った素材が対象です。待機と再試行を含み、処理中の素材は除きます。"
   },
   "stagingRepair": {
     "title": "修正下書きに対応が必要です",
@@ -340,7 +342,7 @@
     "generationFailed": "画像生成失敗",
     "generationInProgress": "生成中",
     "assetReported": "クリエイティブ問題のフィードバック",
-    "averageDuration": "パッケージ生成の平均時間",
+    "averageDuration": "一式の平均生成時間",
     "basedOnPackages": "{{count}} 件の完全な画像パッケージに基づく",
     "times": "{{count}} 回",
     "insights": {
@@ -378,7 +380,9 @@
       "false_positive": "QC の誤検知",
       "warning_accepted": "QC 警告を承認",
       "other": "その他"
-    }
+    },
+    "durationPending": "集計待ち",
+    "durationHelp": "計測開始後、直近24時間に発注され、初回の原画像一式が揃った素材が対象です。待機と再試行を含み、処理中の素材は除きます。"
   },
   "studio": {
     "title": "クリエイティブファクトリー",

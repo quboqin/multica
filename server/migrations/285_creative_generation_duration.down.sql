@@ -1,0 +1,6 @@
+DROP TRIGGER creative_generated_package_selection ON creative_order_variant;
+DROP TRIGGER creative_generated_package_asset ON creative_order_asset;
+DROP FUNCTION capture_creative_initial_generated_package();
+DROP FUNCTION record_creative_initial_generated_package(UUID);
+DROP TABLE creative_initial_generated_package;
+DROP TABLE creative_generation_measurement_epoch;

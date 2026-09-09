@@ -249,7 +249,7 @@ func (h *Handler) recordCreativeRecovery(ctx context.Context, t creativeRecovery
 
 func (h *Handler) expireCreativeRecoveryLeases(ctx context.Context) error {
 	_, err := h.DB.Exec(ctx, `WITH expired AS (
- UPDATE creative_recovery SET status=CASE WHEN attempt>=max_attempts THEN 'manual_required' ELSE 'pending' END,
+ UPDATE creative_recovery SET status=CASE WHEN dispatch_count>=max_attempts THEN 'manual_required' ELSE 'pending' END,
  lease_token=NULL,lease_expires_at=NULL,next_retry_at=now()+interval '1 minute',last_error='recovery lease expired',updated_at=now()
  WHERE status='running' AND lease_expires_at<=now() RETURNING id
  ) UPDATE creative_recovery_attempt a SET status='failed',error_message='recovery lease expired',completed_at=now()
@@ -343,7 +343,19 @@ func (h *Handler) creativeRecoveryDisposition(ctx context.Context, t creativeRec
 	if complete {
 		return "resolved", nil
 	}
-	if active || unknown {
+	if active {
+		return "waiting", nil
+	}
+	if unknown {
+		var stale bool
+		if err := h.DB.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM creative_image_operation
+WHERE variant_id=$1 AND revision=$2 AND status IN ('queued','running','unknown')
+AND updated_at<now()-interval '15 minutes')`, t.VariantID, t.Revision).Scan(&stale); err != nil {
+			return "", err
+		}
+		if stale {
+			return "manual_required", nil
+		}
 		return "waiting", nil
 	}
 	if t.Stage == "production" && candidateState == "candidate" {
@@ -411,6 +423,9 @@ func (h *Handler) processCreativeRecovery(ctx context.Context, t creativeRecover
 		return h.finishCreativeRecovery(ctx, t, "pending", pgtype.UUID{}, err)
 	}
 	if disposition != "pending" {
+		if disposition == "manual_required" && t.Stage == "production" {
+			return h.finishCreativeRecovery(ctx, t, disposition, pgtype.UUID{}, errors.New("image operation result is still unconfirmed after 15 minutes; reconcile its receipt before retrying"))
+		}
 		return h.finishCreativeRecovery(ctx, t, disposition, pgtype.UUID{}, nil)
 	}
 	workflow := "creative_production"
@@ -441,27 +456,14 @@ func (h *Handler) processCreativeRecovery(ctx context.Context, t creativeRecover
 	} else if !errors.Is(lookupErr, pgx.ErrNoRows) {
 		return h.finishCreativeRecovery(ctx, t, "pending", pgtype.UUID{}, lookupErr)
 	}
-	tx, err := h.TxStarter.Begin(ctx)
-	if err != nil {
+	var remaining bool
+	if err := h.DB.QueryRow(ctx, `SELECT dispatch_count<max_attempts FROM creative_recovery WHERE id=$1 AND status='running' AND lease_token=$2 AND lease_expires_at>now()`, t.ID, t.LeaseToken).Scan(&remaining); err != nil {
 		return err
 	}
-	defer tx.Rollback(ctx)
-	err = tx.QueryRow(ctx, `UPDATE creative_recovery SET attempt=attempt+1,source_task_id=$3 WHERE id=$1 AND status='running' AND lease_token=$2 AND lease_expires_at>now() AND attempt<max_attempts RETURNING attempt`, t.ID, t.LeaseToken, t.SourceTaskID).Scan(&t.Attempt)
-	if errors.Is(err, pgx.ErrNoRows) {
-		if err := tx.Rollback(ctx); err != nil {
-			return err
-		}
+	if !remaining {
 		return h.finishCreativeRecovery(ctx, t, "manual_required", pgtype.UUID{}, nil)
 	}
-	if err != nil {
-		return err
-	}
-	if _, err := tx.Exec(ctx, `INSERT INTO creative_recovery_attempt(recovery_id,attempt,lease_token,status,source_task_id,reason_code) VALUES($1,$2,$3,'running',$4,$5)`, t.ID, t.Attempt, t.LeaseToken, t.SourceTaskID, t.Reason); err != nil {
-		return err
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return err
-	}
+	ctx = context.WithValue(ctx, creativeRecoveryDispatchContextKey{}, t)
 	taskID, err := h.executeCreativeRecovery(ctx, t)
 	status := "waiting"
 	if err != nil {
@@ -494,10 +496,11 @@ func (h *Handler) finishCreativeRecovery(ctx context.Context, t creativeRecovery
 			return err
 		}
 	}
-	tag, err := tx.Exec(ctx, `UPDATE creative_recovery SET status=CASE WHEN $3='pending' AND attempt>=max_attempts THEN 'manual_required' ELSE $3 END,
+	tag, err := tx.Exec(ctx, `UPDATE creative_recovery SET status=CASE WHEN $3='pending' AND (dispatch_count>=max_attempts OR dispatch_failures+1>=3) THEN 'manual_required' ELSE $3 END,
+ dispatch_failures=CASE WHEN $3='pending' THEN dispatch_failures+1 ELSE dispatch_failures END,
  result_task_id=COALESCE($4,result_task_id),last_error=$5,lease_token=NULL,lease_expires_at=NULL,
  resolved_asset_id=COALESCE($6,resolved_asset_id),resolved_at=CASE WHEN $3 IN ('resolved','cancelled') THEN now() ELSE resolved_at END,
- next_retry_at=now()+make_interval(secs=>LEAST(900,30*(1<<attempt))),updated_at=now()
+ next_retry_at=now()+make_interval(secs=>LEAST(900,30*(1<<LEAST(dispatch_count+dispatch_failures,5)))),updated_at=now()
  WHERE id=$1 AND status='running' AND lease_token=$2 AND lease_expires_at>now()`, t.ID, t.LeaseToken, status, taskID, message, assetID)
 	if err != nil {
 		return err
@@ -646,14 +649,22 @@ func (h *Handler) retryCreativeRecoveryTask(ctx context.Context, t creativeRecov
 			return pgtype.UUID{}, errors.New("variant no longer permits automatic recovery")
 		}
 	}
-	var child db.AgentTaskQueue
-	if parent.Status == "failed" {
-		child, err = h.Queries.WithTx(tx).CreateRetryTask(ctx, parent.ID)
-	} else {
-		child, err = h.Queries.WithTx(tx).CreateActionRequiredRetryTask(ctx, parent.ID)
-	}
+	// The recovery owns a bounded dispatch budget. Preserve the parent's
+	// attribution and frozen inputs without reusing its exhausted queue limit.
+	child, err := h.Queries.WithTx(tx).CreateAgentTask(ctx, db.CreateAgentTaskParams{
+		AgentID: parent.AgentID, RuntimeID: parent.RuntimeID, IssueID: parent.IssueID,
+		Priority: parent.Priority, TriggerCommentID: parent.TriggerCommentID, TriggerSummary: parent.TriggerSummary,
+		ForceFreshSession: pgtype.Bool{Bool: true, Valid: true}, IsLeaderTask: pgtype.Bool{Bool: parent.IsLeaderTask, Valid: true},
+		RequestingUserID: parent.RequestingUserID, OriginatorUserID: parent.OriginatorUserID, AccountableUserID: parent.AccountableUserID,
+		OriginatorSource: parent.OriginatorSource, DelegatedFromTaskID: parent.DelegatedFromTaskID,
+		TriggerEvidenceKind: parent.TriggerEvidenceKind, TriggerEvidenceRefID: parent.TriggerEvidenceRefID,
+		Context: parent.Context, RuntimeMcpOverlay: parent.RuntimeMcpOverlay, RuntimeConnectedApps: parent.RuntimeConnectedApps,
+	})
 	if err != nil {
 		return pgtype.UUID{}, fmt.Errorf("recovery retry budget or eligibility: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `UPDATE agent_task_queue SET parent_task_id=$2,retry_of_task_id=$2,attempt=$3,max_attempts=$3+1 WHERE id=$1`, child.ID, parent.ID, parent.Attempt+1); err != nil {
+		return pgtype.UUID{}, err
 	}
 	if t.Stage == "production" {
 		normalized, err := normalizeCreativeProductionFanoutItem(ctx, tx, t.WorkspaceID, t.ItemID, service.DirectTaskFanoutItem{Context: child.Context})
@@ -666,6 +677,13 @@ func (h *Handler) retryCreativeRecoveryTask(ctx context.Context, t creativeRecov
 		if _, err := tx.Exec(ctx, `UPDATE creative_order_variant SET status='running',updated_at=now() WHERE id=$1 AND revision=$2`, t.VariantID, t.Revision); err != nil {
 			return pgtype.UUID{}, err
 		}
+	}
+	if err := recordCreativeRecoveryDispatchTx(ctx, tx, child.ID); err != nil {
+		return pgtype.UUID{}, err
+	}
+	child, err = h.Queries.WithTx(tx).GetAgentTask(ctx, child.ID)
+	if err != nil {
+		return pgtype.UUID{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return pgtype.UUID{}, err

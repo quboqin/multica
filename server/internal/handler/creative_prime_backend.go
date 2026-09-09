@@ -1390,6 +1390,11 @@ SELECT EXISTS(
 			return err
 		}
 	}
+	if len(created) > 0 {
+		if err := recordCreativeRecoveryDispatchTx(ctx, tx, created[0].ID); err != nil {
+			return err
+		}
+	}
 	if err := tx.Commit(ctx); err != nil {
 		return fmt.Errorf("save creative QC handoff: %w", err)
 	}

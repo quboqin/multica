@@ -216,6 +216,12 @@ ORDER BY created_at, id
 	if _, err := tx.Exec(ctx, `UPDATE creative_order SET updated_at = now() WHERE id = $1`, orderID); err != nil {
 		return false, fmt.Errorf("update recovered creative order: %w", err)
 	}
+	for _, task := range created {
+		if err := recordCreativeRecoveryDispatchTx(ctx, tx, task.ID); err != nil {
+			return false, err
+		}
+		break
+	}
 	if err := tx.Commit(ctx); err != nil {
 		return false, fmt.Errorf("commit pending creative QC finalization recovery: %w", err)
 	}

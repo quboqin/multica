@@ -48,8 +48,9 @@ export function CreativeWorkbench({
         <WorkbenchMetric testId="creative-workbench-deliveries" value={deliveredThisWeek.length} label={t(($) => $.workbench.weeklyDelivery)} />
         <WorkbenchMetric
           testId="creative-workbench-average-duration"
-          value={averageGenerationDuration}
+          value={generationDurationPackageCount > 0 ? averageGenerationDuration : t(($) => $.workbench.durationPending)}
           label={t(($) => $.workbench.averageDuration)}
+          description={t(($) => $.workbench.durationHelp)}
           hint={generationDurationPackageCount > 0 ? t(($) => $.workbench.basedOnPackages, { count: generationDurationPackageCount }) : undefined}
         />
       </section>
@@ -99,9 +100,9 @@ function isAttentionRequiredOrder(order: CreativeOrder): boolean {
   return status === "action_required" || status === "failed" || (order.workflow_failures?.length ?? 0) > 0;
 }
 
-function WorkbenchMetric({ testId, value, label, hint }: { testId: string; value: number | string; label: string; hint?: string }) {
+function WorkbenchMetric({ testId, value, label, hint, description }: { testId: string; value: number | string; label: string; hint?: string; description?: string }) {
   return (
-    <div className="min-w-0 px-5 py-4" data-testid={testId}>
+    <div className="min-w-0 px-5 py-4" data-testid={testId} title={description}>
       <span className="block text-2xl font-semibold tabular-nums">{value}</span>
       <span className="mt-0.5 block text-xs leading-4 text-muted-foreground">{label}</span>
       {hint && <span className="mt-0.5 block truncate text-[11px] leading-4 text-muted-foreground">{hint}</span>}
