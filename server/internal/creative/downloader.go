@@ -6,9 +6,7 @@ import (
 	"fmt"
 	"io"
 	"mime"
-	"net"
 	"net/http"
-	"net/netip"
 	"net/url"
 	"path/filepath"
 	"strings"
@@ -24,53 +22,31 @@ type Download struct {
 }
 
 type Downloader struct {
-	client            *http.Client
-	allowedHostClient *http.Client
-	maxBytes          int64
-	allowedHosts      []string
+	client   *http.Client
+	maxBytes int64
 }
 
-func NewDownloader(timeout time.Duration, maxBytes int64, allowedHosts []string) *Downloader {
+func NewDownloader(timeout time.Duration, maxBytes int64) *Downloader {
 	if timeout <= 0 {
 		timeout = 30 * time.Second
 	}
 	if maxBytes <= 0 {
 		maxBytes = defaultMaxDownloadBytes
 	}
-	normalizedHosts := make([]string, 0, len(allowedHosts))
-	for _, host := range allowedHosts {
-		if host = strings.ToLower(strings.TrimSpace(host)); host != "" {
-			normalizedHosts = append(normalizedHosts, host)
-		}
-	}
-	downloader := &Downloader{maxBytes: maxBytes, allowedHosts: normalizedHosts}
+	downloader := &Downloader{maxBytes: maxBytes}
 	transport := http.DefaultTransport.(*http.Transport).Clone()
-	transport.Proxy = nil
-	transport.DialContext = downloader.dialContext
-	downloader.client = downloader.newHTTPClient(timeout, transport, false)
-	allowedHostTransport := http.DefaultTransport.(*http.Transport).Clone()
-	allowedHostTransport.Proxy = http.ProxyFromEnvironment
-	downloader.allowedHostClient = downloader.newHTTPClient(timeout, allowedHostTransport, true)
-	return downloader
-}
-
-func (d *Downloader) newHTTPClient(timeout time.Duration, transport http.RoundTripper, requireAllowedHost bool) *http.Client {
-	return &http.Client{
+	transport.Proxy = http.ProxyFromEnvironment
+	downloader.client = &http.Client{
 		Timeout:   timeout,
 		Transport: transport,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			if len(via) >= 5 {
 				return errors.New("too many redirects")
 			}
-			if err := d.validateURL(req.URL); err != nil {
-				return err
-			}
-			if requireAllowedHost && !d.hostExplicitlyAllowed(req.URL.Hostname()) {
-				return fmt.Errorf("creative asset redirect host %q is not allowed", req.URL.Hostname())
-			}
-			return nil
+			return downloader.validateURL(req.URL)
 		},
 	}
+	return downloader
 }
 
 func (d *Downloader) Fetch(ctx context.Context, rawURL string) (Download, error) {
@@ -86,11 +62,7 @@ func (d *Downloader) Fetch(ctx context.Context, rawURL string) (Download, error)
 		return Download{}, err
 	}
 	req.Header.Set("User-Agent", "Multica-Creative-Archiver/1.0")
-	client := d.client
-	if d.hostExplicitlyAllowed(parsed.Hostname()) {
-		client = d.allowedHostClient
-	}
-	resp, err := client.Do(req)
+	resp, err := d.client.Do(req)
 	if err != nil {
 		return Download{}, fmt.Errorf("download creative asset: %w", err)
 	}
@@ -127,49 +99,6 @@ func (d *Downloader) validateURL(value *url.URL) error {
 		return errors.New("creative asset URL must not contain user info")
 	}
 	return nil
-}
-
-func (d *Downloader) dialContext(ctx context.Context, network, address string) (net.Conn, error) {
-	host, port, err := net.SplitHostPort(address)
-	if err != nil {
-		return nil, err
-	}
-	if d.hostExplicitlyAllowed(host) {
-		return (&net.Dialer{Timeout: 10 * time.Second}).DialContext(ctx, network, address)
-	}
-	addresses, err := net.DefaultResolver.LookupNetIP(ctx, "ip", host)
-	if err != nil {
-		return nil, err
-	}
-	for _, address := range addresses {
-		if !publicCreativeAddress(address) {
-			continue
-		}
-		return (&net.Dialer{Timeout: 10 * time.Second}).DialContext(ctx, network, net.JoinHostPort(address.String(), port))
-	}
-	return nil, fmt.Errorf("creative asset host %q did not resolve to a public address", host)
-}
-
-func (d *Downloader) hostExplicitlyAllowed(host string) bool {
-	host = strings.ToLower(strings.TrimSuffix(strings.TrimSpace(host), "."))
-	for _, allowed := range d.allowedHosts {
-		if strings.HasPrefix(allowed, "*.") {
-			if strings.HasSuffix(host, strings.TrimPrefix(allowed, "*")) {
-				return true
-			}
-			continue
-		}
-		if host == allowed {
-			return true
-		}
-	}
-	return false
-}
-
-func publicCreativeAddress(address netip.Addr) bool {
-	return address.IsValid() && !address.IsUnspecified() && !address.IsLoopback() &&
-		!address.IsPrivate() && !address.IsLinkLocalUnicast() && !address.IsLinkLocalMulticast() &&
-		!address.IsMulticast()
 }
 
 func extensionForAsset(rawPath, contentType string) string {

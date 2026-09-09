@@ -169,14 +169,9 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 		LarkLoginStateSecret:       strings.TrimSpace(os.Getenv("MULTICA_LARK_LOGIN_STATE_SECRET")),
 	}
 	h := handler.New(queries, pool, hub, bus, emailSvc, store, cfSigner, analyticsClient, signupConfig, daemonHub)
-	creativeArchiveAllowedHosts := splitAndTrim(os.Getenv("MULTICA_CREATIVE_ARCHIVE_ALLOWED_HOSTS"))
-	if len(creativeArchiveAllowedHosts) == 0 {
-		creativeArchiveAllowedHosts = []string{"creative-ag-global-esa.umcdn.cn"}
-	}
 	h.CreativeAssetDownloader = creative.NewDownloader(
 		envDuration("MULTICA_CREATIVE_ARCHIVE_TIMEOUT", 30*time.Second),
 		envPositiveInt64("MULTICA_CREATIVE_ARCHIVE_MAX_BYTES", 100<<20),
-		creativeArchiveAllowedHosts,
 	)
 	connectorRegistry, err := broker.RegistryWithJSON(os.Getenv("MULTICA_CREDENTIAL_CONNECTORS_JSON"))
 	if err != nil {

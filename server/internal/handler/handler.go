@@ -246,7 +246,7 @@ func New(queries *db.Queries, txStarter txStarter, hub *realtime.Hub, bus *event
 			Timeout: cfg.CloudRuntimeFleetTimeout,
 		}),
 		CredentialBroker:        broker.NewService(queries, broker.NewDisabledWorkerClient()),
-		CreativeAssetDownloader: creative.NewDownloader(30*time.Second, 100<<20, nil),
+		CreativeAssetDownloader: creative.NewDownloader(30*time.Second, 100<<20),
 		cfg:                     cfg,
 	}
 	taskSvc.TaskCancelledHook = handler.reconcileCreativeLifecycleForCancelledTask
