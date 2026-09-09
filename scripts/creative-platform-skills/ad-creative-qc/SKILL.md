@@ -10,6 +10,8 @@ allowed-tools: Bash(multica *), Bash(python *)
 空主标题、核心利益点、CTA 或还款计划不是缺失错误；纯视觉探索按 `visual_only=true` 验收原创视觉和 Prime。
 对任何自行补写的业务声明、数字、利率、还款模块或空槽文字记录真实问题。不得要求竞品图或 source analysis，也不得从最新文案库补文案。
 
+`brief.banned_elements` 中禁止模型自行生成 Logo、store badges、二维码等品牌组件的要求，仅约束模型生成的业务底图。当前冻结 Prime 模板本身已批准的 Logo、商店徽章、条款等不属于 `unapproved_element_present`，不能因底图禁用项而要求删除官方模板内容。遇到疑似禁用元素，先用当前尺寸的 `template_attachment_id` / `template_source_role` 或 `template_selection` 核对冻结模板来源，并在 observations 记录归属；官方组件的真实遮挡、重复、变形或不可读仍照常验收。无法确认来源时记录证据不足，不能仅凭“成图出现商店徽章”判定违规。
+
 先按 task context `workflow` 选择唯一分支：`creative_candidate_selection` 或 `creative_qc_visual`。不得在一次 task 中混跑。
 技术质检已下线，新流程只接受上述两个 workflow，不创建、不等待、不处理 technical lane；其他 workflow 直接按无效任务失败。
 

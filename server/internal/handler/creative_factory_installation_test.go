@@ -193,7 +193,7 @@ func TestCreativeFactoryCreativeContractTemplatesStayInSync(t *testing.T) {
 		"image_edit":          121,
 		"prime_compose":       6,
 		"direct_image_edit":   35,
-		"quality_control":     48,
+		"quality_control":     49,
 		"creative_leadership": 56,
 	}
 	for _, spec := range creativeFactorySkillSpecs {
