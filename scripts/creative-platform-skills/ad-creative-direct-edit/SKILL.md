@@ -45,7 +45,7 @@ Logo、二维码、商店徽章、官方条款、红色矩形、编号和评论�
 2. 有 annotation guide 时，`Input 2`：最终交付图的 annotation brief，只用于读取用户红框、编号、评论位置和固定贴片遮挡关系；不得复制红框、编号、
    引导线、Logo、二维码、商店徽章、官方条款或其他 Prime 组件到输出。
 3. `delivery_mode=publish` 时，额外传入当前尺寸的 `official Prime visual context`：它必须由冻结市场包中真实透明模板和
-   `prime_layout_contract` 渲染，半透明展示未来会覆盖的官方组件。没有 annotation guide 时它是 `Input 2`；有 annotation guide 时它是 `Input 3`。
+   `prime_layout_contract` 渲染，以模板原始透明度展示未来会覆盖的官方组件。没有 annotation guide 时它是 `Input 2`；有 annotation guide 时它是 `Input 3`。
    它只用于理解实际遮挡关系、组件明暗和需保持安静的背景，绝不可复制其中的任何 Prime 像素或文字到输出。
 4. 当正式投放同时调整标题组和表格组时，额外传入由同一真实 Prime 模板派生的 `official Prime reflow context`：它以无文字、无边框的轻微压暗层
    显示 `protected_content_envelope` 的标题/表格内侧明窗。没有 annotation guide 时它是 `Input 3`；有 annotation guide 时它是 `Input 4`。
@@ -63,11 +63,15 @@ Logo、二维码、商店徽章、官方条款、红色矩形、编号和评论�
 ```bash
 python3 <当前 Skill 目录>/../ad-creative-production/references/render_prime_guide.py \
   --layout-file <layout-contract.json> --size-key <size> --width <w> --height <h> \
-  --template-image <official-prime-template.png> \
+  --template-image <official-prime-template.png> --template-source-role <approved-source-role> \
   --output <workdir>/official-prime-visual-context-<size>.png \
   --content-envelope-output <workdir>/official-prime-reflow-context-<size>.png \
-  --evidence <workdir>/official-prime-context-<size>.json
+  --evidence <workdir>/official-prime-visual-context-<size>.json
 ```
+
+模板来源优先沿用同尺寸 source asset 的 `metadata.prime_template_source_role`，旧资产可读取对应 primed 的 `metadata.template.source_role`，并在冻结市场包中解析为实际附件。只有初次发布的外部底图没有历史模板时，才从冻结包选择当前尺寸的批准角色。不要因调整后背景变化而换模板。
+
+生成上下文后，必须通过 `../ad-creative-production/references/register_process_assets.py --order-id <order-id> --variant-id <variant-id> --revision <revision> --task-id <task-id> --workflow creative_direct_edit --image <size> 'Prime context' <workdir>/official-prime-visual-context-<size>.png` 登记这张真实输入图。脚本读取同名 JSON 并保存模板来源；operation 的 `input_snapshot.input_asset_attachments.prime_context_sha256` 写返回的该附件 ID。服务端据此锁定最终贴片；证据缺失时补登记并复用同一模型回执，不重新出图。预览模式没有 Prime 输入时不执行这一步。
 
 当同时处理标题组和表格组时，同一次 `multica image edit` 必须按 `source base`、可选 `annotation brief`、`official Prime visual context`、
 `official Prime reflow context` 的顺序传入上述 PNG；后两个永远只读。渲染命令必须传入 `--content-envelope-output <workdir>/official-prime-reflow-context-<size>.png`，

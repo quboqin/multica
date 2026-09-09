@@ -136,8 +136,8 @@ func TestCreativeFactoryImageEditingUsesOneAgentWithWorkflowSkills(t *testing.T)
 			break
 		}
 	}
-	if directEditSkill.Version != 34 {
-		t.Fatalf("direct-edit Skill version = %d, want 34", directEditSkill.Version)
+	if directEditSkill.Version != 35 {
+		t.Fatalf("direct-edit Skill version = %d, want 35", directEditSkill.Version)
 	}
 	for index := range creativeFactoryAgentSpecs {
 		spec := &creativeFactoryAgentSpecs[index]
@@ -192,7 +192,7 @@ func TestCreativeFactoryCreativeContractTemplatesStayInSync(t *testing.T) {
 		"generation_plan":     44,
 		"image_edit":          119,
 		"prime_compose":       6,
-		"direct_image_edit":   34,
+		"direct_image_edit":   35,
 		"quality_control":     46,
 		"creative_leadership": 56,
 	}
@@ -277,7 +277,7 @@ func TestCreativeFactoryCreativeContractTemplatesStayInSync(t *testing.T) {
 		"capability = 'generation_plan'; version = 44",
 		"capability = 'image_edit'; version = 119",
 		"capability = 'prime_compose'; version = 6",
-		"capability = 'direct_image_edit'; version = 34",
+		"capability = 'direct_image_edit'; version = 35",
 		"capability = 'quality_control'; version = 46",
 		"capability = 'creative_leadership'; version = 56",
 		"初始 direct_edit 由平台原子创建 revision 和 task，Leader 只恢复领域状态确认缺失的当前 revision task",
@@ -460,8 +460,8 @@ WHERE id = $1::uuid
 	if err := json.Unmarshal([]byte(configRaw), &config); err != nil {
 		t.Fatalf("decode refreshed skill config: %v", err)
 	}
-	if got := int(config["version"].(float64)); got != 34 {
-		t.Fatalf("direct-edit Skill version = %d, want 34", got)
+	if got := int(config["version"].(float64)); got != 35 {
+		t.Fatalf("direct-edit Skill version = %d, want 35", got)
 	}
 	if got := int(config["template_version"].(float64)); got != creativeFactoryTemplateVersion {
 		t.Fatalf("direct-edit template_version = %d, want %d", got, creativeFactoryTemplateVersion)
