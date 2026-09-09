@@ -37,12 +37,13 @@ import { AppLink } from "../../navigation";
 
 const CANVAS_MIN_WIDTH = 1280;
 const CANVAS_HEIGHT = 760;
+const CANVAS_HORIZONTAL_PADDING = 400;
 const CANVAS_VERTICAL_PADDING = 400;
 const LEADER_WIDTH = 224;
 const LEADER_HEIGHT = 86;
 const STAGE_WIDTH = 360;
 const STAGE_HEADER_HEIGHT = 76;
-const STAGE_MIN_HEIGHT = 280;
+const STAGE_MIN_HEIGHT = 220;
 const STAGE_GAP = 48;
 const AGENT_WIDTH = 260;
 const AGENT_HEIGHT = 72;
@@ -90,12 +91,67 @@ function clamp(value: number, minimum: number, maximum: number) {
   return Math.min(maximum, Math.max(minimum, value));
 }
 
-function stageHeight(stage: SquadWorkflowCanvasStage) {
+function defaultAgentPosition(index: number): SquadWorkflowCanvasPoint {
+  return {
+    x: AGENT_INSET,
+    y: AGENT_INSET + index * (AGENT_HEIGHT + AGENT_GAP),
+  };
+}
+
+function stageHeight(
+  stage: SquadWorkflowCanvasStage,
+  agentPositions: Record<string, SquadWorkflowCanvasPoint> = {},
+) {
+  const positionedContentHeight = stage.placements.reduce((maximum, placement, index) => {
+    const position = agentPositions[placement.member.member_id] ?? defaultAgentPosition(index);
+    return Math.max(maximum, position.y + AGENT_HEIGHT + AGENT_INSET);
+  }, 0);
   return Math.max(
     STAGE_MIN_HEIGHT,
     STAGE_HEADER_HEIGHT + AGENT_INSET * 2 + stage.placements.length * AGENT_HEIGHT +
       Math.max(0, stage.placements.length - 1) * AGENT_GAP,
+    STAGE_HEADER_HEIGHT + positionedContentHeight,
   );
+}
+
+function agentPositionsOverlap(
+  first: SquadWorkflowCanvasPoint,
+  second: SquadWorkflowCanvasPoint,
+) {
+  return first.x < second.x + AGENT_WIDTH + AGENT_GAP
+    && first.x + AGENT_WIDTH + AGENT_GAP > second.x
+    && first.y < second.y + AGENT_HEIGHT + AGENT_GAP
+    && first.y + AGENT_HEIGHT + AGENT_GAP > second.y;
+}
+
+function findAvailableAgentPosition(
+  desiredPosition: SquadWorkflowCanvasPoint,
+  occupiedPositions: SquadWorkflowCanvasPoint[],
+): SquadWorkflowCanvasPoint {
+  const x = clamp(desiredPosition.x, AGENT_INSET, STAGE_WIDTH - AGENT_WIDTH - AGENT_INSET);
+  const desiredY = Math.max(AGENT_INSET, desiredPosition.y);
+  const candidateYs = new Set<number>([desiredY, AGENT_INSET]);
+
+  occupiedPositions.forEach((position) => {
+    candidateYs.add(position.y + AGENT_HEIGHT + AGENT_GAP);
+    if (position.y - AGENT_HEIGHT - AGENT_GAP >= AGENT_INSET) {
+      candidateYs.add(position.y - AGENT_HEIGHT - AGENT_GAP);
+    }
+  });
+
+  const availableY = [...candidateYs]
+    .sort((left, right) => Math.abs(left - desiredY) - Math.abs(right - desiredY) || left - right)
+    .find((candidateY) => !occupiedPositions.some((position) =>
+      agentPositionsOverlap({ x, y: candidateY }, position),
+    ));
+
+  return {
+    x,
+    y: availableY ?? Math.max(
+      AGENT_INSET,
+      ...occupiedPositions.map((position) => position.y + AGENT_HEIGHT + AGENT_GAP),
+    ),
+  };
 }
 
 function statusLabel(status: SquadMemberStatusValue | null, t: any) {
@@ -296,7 +352,7 @@ function CanvasStageGroup({
   const dragTransform = draggable.transform
     ? `translate3d(${draggable.transform.x / zoom}px, ${draggable.transform.y / zoom}px, 0)`
     : undefined;
-  const height = stageHeight(stage);
+  const height = stageHeight(stage, agentPositions);
 
   return (
     <section
@@ -319,6 +375,7 @@ function CanvasStageGroup({
       }}
     >
       <header
+        data-canvas-stage-handle
         className={`flex h-[76px] items-center gap-2.5 rounded-t-md border-b bg-muted/45 px-3 ${canManage ? "cursor-grab touch-none active:cursor-grabbing" : ""}`}
         title={canManage ? t(($: any) => $.visual_tab.drag_handle) : undefined}
         {...draggable.listeners}
@@ -391,7 +448,10 @@ export function SquadWorkflowCanvas({
     CANVAS_MIN_WIDTH,
     340 + stages.length * STAGE_WIDTH + Math.max(0, stages.length - 1) * STAGE_GAP + 64,
   );
-  const maximumStageHeight = Math.max(STAGE_MIN_HEIGHT, ...stages.map(stageHeight));
+  const maximumStageHeight = Math.max(
+    STAGE_MIN_HEIGHT,
+    ...stages.map((stage) => stageHeight(stage, layout.agents)),
+  );
   const visibleCanvasHeight = viewportHeight > 0 ? viewportHeight / zoom : CANVAS_HEIGHT;
   const canvasHeight = Math.max(
     maximumStageHeight + CANVAS_VERTICAL_PADDING * 2,
@@ -411,10 +471,8 @@ export function SquadWorkflowCanvas({
         y: defaultStageY,
       };
       stage.placements.forEach((placement, placementIndex) => {
-        agentPositions[placement.member.member_id] = layout.agents?.[placement.member.member_id] ?? {
-          x: AGENT_INSET,
-          y: AGENT_INSET + placementIndex * (AGENT_HEIGHT + AGENT_GAP),
-        };
+        agentPositions[placement.member.member_id] = layout.agents?.[placement.member.member_id]
+          ?? defaultAgentPosition(placementIndex);
       });
     });
     return {
@@ -472,7 +530,7 @@ export function SquadWorkflowCanvas({
     );
     setZoom(Number(nextZoom.toFixed(2)));
     requestAnimationFrame(() => viewport.scrollTo({
-      left: 0,
+      left: CANVAS_HORIZONTAL_PADDING * nextZoom,
       top: CANVAS_VERTICAL_PADDING * nextZoom,
       behavior: "smooth",
     }));
@@ -499,12 +557,28 @@ export function SquadWorkflowCanvas({
       if (!initializedViewportRef.current) {
         initializedViewportRef.current = true;
         requestAnimationFrame(() => {
+          viewport.scrollLeft = CANVAS_HORIZONTAL_PADDING;
           viewport.scrollTop = CANVAS_VERTICAL_PADDING;
         });
       }
     });
     observer.observe(viewport);
     return () => observer.disconnect();
+  }, []);
+
+  useEffect(() => {
+    const viewport = viewportRef.current;
+    if (!viewport) return;
+    const handleWheel = (event: WheelEvent) => {
+      const horizontalDelta = event.shiftKey ? event.deltaY : event.deltaX;
+      const isHorizontalGesture = event.shiftKey || Math.abs(event.deltaX) >= Math.abs(event.deltaY);
+      if (!isHorizontalGesture || Math.abs(horizontalDelta) < 0.5) return;
+
+      event.preventDefault();
+      viewport.scrollLeft += horizontalDelta;
+    };
+    viewport.addEventListener("wheel", handleWheel, { passive: false });
+    return () => viewport.removeEventListener("wheel", handleWheel);
   }, []);
 
   const toggleFullscreen = async () => {
@@ -517,7 +591,10 @@ export function SquadWorkflowCanvas({
     requestAnimationFrame(() => {
       requestAnimationFrame(() => {
         const viewport = viewportRef.current;
-        if (viewport) viewport.scrollTop = CANVAS_VERTICAL_PADDING;
+        if (viewport) {
+          viewport.scrollLeft = CANVAS_HORIZONTAL_PADDING;
+          viewport.scrollTop = CANVAS_VERTICAL_PADDING;
+        }
       });
     });
   };
@@ -549,7 +626,7 @@ export function SquadWorkflowCanvas({
       if (!current || !stage) return;
       nextLayout.stages[stageID] = {
         x: clamp(current.x + deltaX, 24, canvasWidth - STAGE_WIDTH - 24),
-        y: clamp(current.y + deltaY, 24, canvasHeight - stageHeight(stage) - 24),
+        y: clamp(current.y + deltaY, 24, canvasHeight - stageHeight(stage, effectiveLayout.agents) - 24),
       };
       await onLayoutChange(nextLayout);
       return;
@@ -570,15 +647,14 @@ export function SquadWorkflowCanvas({
     const targetStagePosition = effectiveLayout.stages[targetStage.id]!;
     const globalX = sourceStagePosition.x + currentAgentPosition.x + deltaX;
     const globalY = sourceStagePosition.y + STAGE_HEADER_HEIGHT + currentAgentPosition.y + deltaY;
-    const targetHeight = stageHeight(targetStage);
-    nextLayout.agents[agentID] = {
-      x: clamp(globalX - targetStagePosition.x, 12, STAGE_WIDTH - AGENT_WIDTH - 12),
-      y: clamp(
-        globalY - targetStagePosition.y - STAGE_HEADER_HEIGHT,
-        12,
-        targetHeight - STAGE_HEADER_HEIGHT - AGENT_HEIGHT - 12,
-      ),
-    };
+    const occupiedPositions = targetStage.placements
+      .filter((placement) => placement.member.member_id !== agentID)
+      .map((placement, index) => effectiveLayout.agents[placement.member.member_id]
+        ?? defaultAgentPosition(index));
+    nextLayout.agents[agentID] = findAvailableAgentPosition({
+      x: globalX - targetStagePosition.x,
+      y: globalY - targetStagePosition.y - STAGE_HEADER_HEIGHT,
+    }, occupiedPositions);
     if (targetStage.id !== sourceStage.id) {
       const moved = await onMoveAgent(agentID, targetStage.id);
       if (!moved) return;
@@ -594,7 +670,13 @@ export function SquadWorkflowCanvas({
   };
 
   const handlePointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
-    if (event.button !== 0 || (event.target as HTMLElement).closest("[data-canvas-node], [data-canvas-control]")) return;
+    const target = event.target as HTMLElement;
+    if (
+      event.button !== 0
+      || target.closest(
+        "[data-canvas-agent], [data-canvas-leader], [data-canvas-stage-handle], [data-canvas-control]",
+      )
+    ) return;
     const viewport = viewportRef.current;
     if (!viewport) return;
     panState.current = {
@@ -655,10 +737,21 @@ export function SquadWorkflowCanvas({
           onPointerUp={stopPanning}
           onPointerCancel={stopPanning}
         >
-          <div className="relative" style={{ width: canvasWidth * zoom, height: canvasHeight * zoom }}>
+          <div
+            className="relative"
+            style={{
+              width: (canvasWidth + CANVAS_HORIZONTAL_PADDING * 2) * zoom,
+              height: canvasHeight * zoom,
+            }}
+          >
             <div
-              className="absolute left-0 top-0 origin-top-left"
-              style={{ width: canvasWidth, height: canvasHeight, transform: `scale(${zoom})` }}
+              className="absolute top-0 origin-top-left"
+              style={{
+                left: CANVAS_HORIZONTAL_PADDING * zoom,
+                width: canvasWidth,
+                height: canvasHeight,
+                transform: `scale(${zoom})`,
+              }}
             >
               <svg className="pointer-events-none absolute inset-0 size-full overflow-visible" aria-hidden="true">
                 <defs>
