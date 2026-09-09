@@ -125,6 +125,9 @@ import type {
   Squad,
   SquadMember,
   SquadMemberStatusListResponse,
+  SquadWorkflowAssignmentsResponse,
+  SquadWorkflowCanvasLayout,
+  SquadWorkflowStage,
   BillingBalance,
   BillingTransactionsPage,
   BillingBatchesPage,
@@ -2401,6 +2404,73 @@ export class ApiClient {
 
   async listSquadMembers(squadId: string): Promise<SquadMember[]> {
     return this.fetch(`/api/squads/${squadId}/members`);
+  }
+
+  async getSquadWorkflowAssignments(squadId: string): Promise<SquadWorkflowAssignmentsResponse> {
+    return this.fetch(`/api/squads/${squadId}/workflow-assignments`);
+  }
+
+  async setSquadWorkflowAssignment(
+    squadId: string,
+    agentId: string,
+    stageId: string,
+  ): Promise<void> {
+    await this.fetch(`/api/squads/${squadId}/workflow-assignments/${agentId}`, {
+      method: "PUT",
+      body: JSON.stringify({ stage_id: stageId }),
+    });
+  }
+
+  async setSquadWorkflowCanvasLayout(
+    squadId: string,
+    layout: SquadWorkflowCanvasLayout,
+  ): Promise<void> {
+    await this.fetch(`/api/squads/${squadId}/workflow-layout`, {
+      method: "PUT",
+      body: JSON.stringify(layout),
+    });
+  }
+
+  async resetSquadWorkflowAssignments(squadId: string): Promise<void> {
+    await this.fetch(`/api/squads/${squadId}/workflow-assignments`, { method: "DELETE" });
+  }
+
+  async createSquadWorkflowStage(
+    squadId: string,
+    data: { name: string; description: string },
+  ): Promise<SquadWorkflowStage> {
+    return this.fetch(`/api/squads/${squadId}/workflow-stages`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+  }
+
+  async generateSquadWorkflow(squadId: string): Promise<{ profile: string }> {
+    return this.fetch(`/api/squads/${squadId}/workflow-stages/generate`, {
+      method: "POST",
+    });
+  }
+
+  async updateSquadWorkflowStage(
+    squadId: string,
+    stageId: string,
+    data: { name: string; description: string },
+  ): Promise<SquadWorkflowStage> {
+    return this.fetch(`/api/squads/${squadId}/workflow-stages/${stageId}`, {
+      method: "PUT",
+      body: JSON.stringify(data),
+    });
+  }
+
+  async deleteSquadWorkflowStage(squadId: string, stageId: string): Promise<void> {
+    await this.fetch(`/api/squads/${squadId}/workflow-stages/${stageId}`, { method: "DELETE" });
+  }
+
+  async reorderSquadWorkflowStages(squadId: string, stageIds: string[]): Promise<void> {
+    await this.fetch(`/api/squads/${squadId}/workflow-stages/order`, {
+      method: "PUT",
+      body: JSON.stringify({ stage_ids: stageIds }),
+    });
   }
 
   async addSquadMember(squadId: string, data: { member_type: string; member_id: string; role?: string }): Promise<SquadMember> {
