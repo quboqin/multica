@@ -10,7 +10,7 @@ import (
 )
 
 // Resolve prefers the OS-reported executable path. Some launch environments
-// can omit that metadata, so it falls back to argv[0] using normal executable
+// can omit that metadata or retain a removed path after a binary update, so it falls back to argv[0] using normal executable
 // lookup semantics instead of treating a bare command name as relative to the
 // current directory.
 func Resolve() (string, error) {
@@ -20,7 +20,14 @@ func Resolve() (string, error) {
 func resolveWith(osExecutable func() (string, error), args []string) (string, error) {
 	exePath, err := osExecutable()
 	if err == nil {
-		return exePath, nil
+		var info os.FileInfo
+		info, err = os.Stat(exePath)
+		if err == nil && info.Mode().IsRegular() {
+			return exePath, nil
+		}
+		if err == nil {
+			err = fmt.Errorf("%s is not a regular file", exePath)
+		}
 	}
 	osExecutableErr := fmt.Errorf("os.Executable: %w", err)
 
