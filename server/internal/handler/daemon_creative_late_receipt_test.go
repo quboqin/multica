@@ -20,6 +20,8 @@ import (
 )
 
 type daemonCreativeLateReceiptFixture struct {
+	Model       string
+	Quality     string
 	OrderID     string
 	ItemID      string
 	VariantID   string
@@ -149,9 +151,13 @@ func daemonCreativeLateReceiptRequest(
 		attempt = 1
 	}
 	digest := sha256.Sum256(image)
+	model := fixture.Model
+	if model == "" {
+		model = "gpt-image-2"
+	}
 	receipt := map[string]any{
 		"operation_id": fixture.OperationID, "operation_attempt": attempt, "task_id": fixture.TaskID,
-		"model": "gpt-image-2", "size": fixture.Size, "request_id": providerRequestID,
+		"model": model, "size": fixture.Size, "request_id": providerRequestID,
 		"prompt_sha256": fixture.PromptHash, "output_sha256": hex.EncodeToString(digest[:]),
 		"bytes": len(image), "actual_width": fixture.Width, "actual_height": fixture.Height,
 		"provider_elapsed_seconds": 96.2,
@@ -159,6 +165,9 @@ func daemonCreativeLateReceiptRequest(
 			"completed": true, "path": "/task/workdir/late.png", "size": fixture.Size,
 			"width": fixture.Width, "height": fixture.Height,
 		},
+	}
+	if fixture.Quality != "" {
+		receipt["quality"] = fixture.Quality
 	}
 	receiptJSON, err := json.Marshal(receipt)
 	if err != nil {

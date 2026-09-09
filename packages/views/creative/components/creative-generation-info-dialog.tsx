@@ -45,6 +45,7 @@ export type CreativeGenerationInfo = {
   copyLines: GenerationCopyLine[];
   repaymentPlans: GenerationFact[];
   model: string;
+  quality: string;
   provider: string;
   marketRule: string;
   marketResource: string;
@@ -109,6 +110,7 @@ export function creativeGenerationInfo(
     ] satisfies GenerationCopyLine[]).filter((entry) => Boolean(entry.value)),
     repaymentPlans: parseRepaymentPlanSelections(snapshot.repayment_plan_selections ?? record(snapshot.pre_adaptation).repayment_plan_selections),
     model: firstString(promptSources, ["model", "model_name", "generation_model"]),
+    quality: firstString([generatedMetadata, record(generatedEvidence.model_result)], ["quality"]),
     provider: firstString(promptSources, ["provider", "image_provider", "generation_provider"]),
     marketRule: explicitRule || layoutSummary || (marketName ? labels.marketBound : ""),
     marketResource,
@@ -198,7 +200,7 @@ export function CreativeGenerationInfoDialog({
           </InfoSection>
           <InfoSection icon={<Layers3 aria-hidden="true" className="h-4 w-4" />} title={t(($) => $.generationInfo.generationAndMarket)}>
             <dl className="grid gap-x-5 gap-y-3 sm:grid-cols-2">
-              <InfoValue label={t(($) => $.generationInfo.generationModel)} value={[info.provider, info.model].filter(Boolean).join(" · ")} fallback={t(($) => $.generationInfo.notRecorded)} />
+              <InfoValue label={t(($) => $.generationInfo.generationModel)} value={[info.provider, info.model, info.quality].filter(Boolean).join(" · ")} fallback={t(($) => $.generationInfo.notRecorded)} />
               <InfoValue label={t(($) => $.primeMode.orderMode)} value={creativePrimeModeLabel(t, info.primeConfigured.mode)} fallback={t(($) => $.primeMode.unknown)} />
               <InfoValue label={t(($) => $.primeMode.actualMode)} value={creativePrimeModeLabel(t, info.primeActual.mode)} fallback={t(($) => $.primeMode.unknown)} />
               <InfoValue label={t(($) => $.primeMode.actualTemplate)} value={[creativePrimeFamilyLabel(t, info.primeActual.templateFamilyId), info.primeActual.templateRole].filter(Boolean).join(" · ")} fallback={t(($) => $.primeMode.unknown)} />

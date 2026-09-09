@@ -11,6 +11,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/multica-ai/multica/server/pkg/imagemodel"
 )
 
 func TestAnnotateDirectEditProviderReceiptRecovery(t *testing.T) {
@@ -127,6 +128,9 @@ FROM agent_task_queue WHERE id = $1
 	}
 	if err := json.Unmarshal([]byte(taskContext), &contextValue); err != nil {
 		t.Fatal(err)
+	}
+	if settings, err := imagemodel.FromSnapshot([]byte(taskContext)); err != nil || settings != imagemodel.Default() {
+		t.Fatalf("direct edit settings=%+v %v", settings, err)
 	}
 	if contextValue.Workflow != "creative_direct_edit" || contextValue.ItemKey != response.Variant.ID+":r2" ||
 		contextValue.VariantID != response.Variant.ID || contextValue.Revision != 2 || contextValue.SourceRevision != 1 ||

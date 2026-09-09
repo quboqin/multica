@@ -189,6 +189,12 @@ JSON string 逐字复制。不得用 `jq -r`、命令替换、shell 变量、`ec
 把 `image-operation-put` 的完整响应保存为文件，并从响应的 `id` 和对应 `attempts[].attempt` 读取本次坐标；不得只从本地
 `operation.json` 猜 attempt。所有真正调用 provider 的单尺寸命令必须同时传入这两个返回值：
 
+先保存当前订单 JSON，通过 `multica image settings --input-file <order.json>` 将解析结果保存到 `image-settings.json`。
+任务中的 `image_generation` 必须与它一致。新订单由平台冻结 Sunburst + xhigh；历史订单由 CLI 按原合同解析。
+已有 image operation 时改用该 operation JSON 解析设置，并复用原 model、quality 和调用回执；不得因默认模型升级替换它。
+首次登记时把解析结果原样写入 `input_snapshot.image_generation`，顶层 `model` 使用同一个值，实际调用显式传入这两个参数。
+模型不可用时记录失败并等待恢复，不自动换模型或降低质量。首轮方图和入选后的缺失尺寸沿用同一订单配置。
+
 首次 `operation.json` 的顶层只能使用服务端字段名，输入指纹和角色必须嵌套在 `input_snapshot`，不能写成顶层
 `input_asset_fingerprints`、`input_fingerprints`、`input_roles`、`target_size`，也不能把 `operation_kind` 缩写成 `kind`：
 
@@ -200,8 +206,9 @@ JSON string 逐字复制。不得用 `jq -r`、命令替换、shell 变量、`ec
   "operation_kind": "generation",
   "idempotency_key": "<variant-id>:r1:<canonical-size>:generation:v1",
   "status": "running",
-  "model": "gpt-image-2",
+  "model": "<image-settings.json 中的 model>",
   "input_snapshot": {
+    "image_generation": {"model": "<冻结 model>", "quality": "<冻结 quality>"},
     "input_asset_fingerprints": {
       "source_reference_sha256": "<sha256>",
       "prime_context_sha256": "<sha256>"
@@ -234,6 +241,8 @@ python3 <当前 Skill 目录>/references/validate_image_operation.py \
 `image-operation-put` 返回 409 时读取明确的服务端原因并回读订单，使用同一助手重新准备一次；不能把状态冲突解释成“最多 4/5 次”或“额度耗尽”。任务层重试预算、provider 单命令的 HTTP 重试次数与 operation 的历史序号是不同的计数。收到 400/401/403 的模型、账户或权限错误时停止重复请求并保留准确原因；503/429/网络故障只做有界退避恢复。
 
 ```bash
+image_model="$(jq -er '.model' <image-settings.json>)"
+image_quality="$(jq -er '.quality' <image-settings.json>)"
 operation_id="$(jq -er '.id' <image-operation-response.json>)"
 operation_attempt="$(jq -er '.attempts | last | .attempt' <image-operation-response.json>)"
 runner="<当前 Skill 目录>/references/run_image_edit_job.py"
@@ -242,7 +251,7 @@ python3 "$runner" start --state "$state_file" \
   --stdout-file "<workdir>/image-edit-<size>.stdout" \
   --stderr-file "<workdir>/image-edit-<size>.stderr" --timeout-seconds 1500 -- \
   multica image edit --input <input.png> --prompt-file <model-prompt.txt> \
-  --size <canonical-size> --quality high --output-file <model-output.png> \
+  --model "$image_model" --size <canonical-size> --quality "$image_quality" --output-file <model-output.png> \
   --result-file <workdir>/image-edit-result-<size>.json \
   --operation-id "$operation_id" --operation-attempt "$operation_attempt" --output json
 python3 "$runner" wait --state "$state_file" --max-wait-seconds 20 --heartbeat-seconds 5

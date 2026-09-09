@@ -12,6 +12,7 @@ import (
 
 	"github.com/multica-ai/multica/server/internal/attribution"
 	"github.com/multica-ai/multica/server/internal/service"
+	"github.com/multica-ai/multica/server/pkg/imagemodel"
 )
 
 // creativeDirectEditInput creates the domain shell for one independently
@@ -167,6 +168,7 @@ FOR UPDATE
 	}
 
 	snapshotValue := map[string]any{
+		imagemodel.SnapshotKey: imagemodel.Default(),
 		"mode":                 "direct_edit",
 		"pipeline_version":     creativePipelineDirectEditV1,
 		"candidate_id":         input.CandidateID,
@@ -319,7 +321,7 @@ RETURNING id::text, variant_id::text, asset_family_id::text, size_key, revision,
 	sourceAssets := []creativeOrderAdjustmentSourceAsset{{
 		SizeKey: input.TargetSize, AssetID: sourceAsset.ID, AttachmentID: uuidToString(sourceAttachmentID),
 	}}
-	taskContext, err := json.Marshal(map[string]any{
+	taskContext, err := imagemodel.MarshalTask(snapshot, map[string]any{
 		"type":                    "creative_domain_task",
 		"workflow":                "creative_direct_edit",
 		"scope":                   "size",

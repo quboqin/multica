@@ -23,6 +23,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/middleware"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
+	"github.com/multica-ai/multica/server/pkg/imagemodel"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
@@ -33,6 +34,7 @@ type daemonCreativeLateReceipt struct {
 	OperationAttempt int     `json:"operation_attempt"`
 	TaskID           string  `json:"task_id"`
 	Model            string  `json:"model"`
+	Quality          string  `json:"quality"`
 	Size             string  `json:"size"`
 	RequestID        string  `json:"request_id"`
 	PromptSHA256     string  `json:"prompt_sha256"`
@@ -51,6 +53,7 @@ type daemonCreativeLateReceipt struct {
 }
 
 type daemonCreativeLateReceiptBinding struct {
+	OperationInputSnapshot      json.RawMessage
 	OperationStatus             string
 	OperationModel              string
 	OperationPromptSHA256       string
@@ -135,7 +138,7 @@ func scanDaemonCreativeLateReceiptBinding(row rowScanner) (daemonCreativeLateRec
 	var binding daemonCreativeLateReceiptBinding
 	var taskContext string
 	err := row.Scan(
-		&binding.OperationStatus, &binding.OperationModel, &binding.OperationPromptSHA256,
+		&binding.OperationStatus, &binding.OperationModel, &binding.OperationInputSnapshot, &binding.OperationPromptSHA256,
 		&binding.OperationProviderRequestID, &binding.OperationResultReceipt,
 		&binding.OperationOutputAttachmentID, &binding.OperationOutputAssetID,
 		&binding.AttemptStatus, &binding.AttemptProviderRequestID, &binding.AttemptResultReceipt,
@@ -160,7 +163,7 @@ WITH RECURSIVE task_lineage AS (
   JOIN task_lineage child
     ON parent.id = child.parent_task_id OR parent.id = child.retry_of_task_id
 )
-SELECT operation.status, operation.model, operation.prompt_sha256,
+SELECT operation.status, operation.model, operation.input_snapshot, operation.prompt_sha256,
        operation.provider_request_id, operation.result_receipt::text,
        operation.output_attachment_id, operation.output_asset_id,
        attempt.status, attempt.provider_request_id, attempt.result_receipt::text,
@@ -186,6 +189,11 @@ WHERE operation.id = $1
 `
 
 func validateDaemonCreativeLateReceiptBinding(binding daemonCreativeLateReceiptBinding, receipt daemonCreativeLateReceipt, workspaceID pgtype.UUID) error {
+	if len(binding.OperationInputSnapshot) > 0 {
+		if err := imagemodel.MatchReceipt(binding.OperationInputSnapshot, receipt.Model, receipt.Quality); err != nil {
+			return err
+		}
+	}
 	if binding.WorkspaceID != workspaceID {
 		return errors.New("late image receipt does not belong to this workspace")
 	}

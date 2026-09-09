@@ -16,6 +16,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/multica-ai/multica/server/internal/cli"
+	"github.com/multica-ai/multica/server/pkg/imagemodel"
 )
 
 var imageEditBatchCmd = &cobra.Command{
@@ -77,6 +78,8 @@ type imageEditGeneratedAsset struct {
 }
 
 type imageEditBatchResult struct {
+	Quality                string                   `json:"quality"`
+	ProviderSize           string                   `json:"provider_size"`
 	ID                     string                   `json:"id"`
 	Status                 string                   `json:"status"`
 	Model                  string                   `json:"model"`
@@ -215,13 +218,11 @@ func loadImageEditBatchManifest(path string) (preparedImageEditBatch, error) {
 		if prompt == "" {
 			return preparedImageEditBatch{}, fmt.Errorf("job %q requires prompt or prompt_file", job.ID)
 		}
-		model := strings.TrimSpace(job.Model)
-		if model == "" {
-			model = "gpt-image-2"
+		settings, err := imagemodel.Resolve(job.Model, job.Quality)
+		if err != nil {
+			return preparedImageEditBatch{}, fmt.Errorf("job %q: %w", job.ID, err)
 		}
-		if model != "gpt-image-2" {
-			return preparedImageEditBatch{}, fmt.Errorf("job %q: only gpt-image-2 is supported", job.ID)
-		}
+		model, quality := settings.Model, settings.Quality
 		size := strings.TrimSpace(job.Size)
 		if size == "" {
 			size = "auto"
@@ -229,10 +230,6 @@ func loadImageEditBatchManifest(path string) (preparedImageEditBatch, error) {
 		providerSize, err := providerGPTImageSize(size)
 		if err != nil {
 			return preparedImageEditBatch{}, fmt.Errorf("job %q: %w", job.ID, err)
-		}
-		quality := strings.ToLower(strings.TrimSpace(job.Quality))
-		if quality != "" && !map[string]bool{"low": true, "medium": true, "high": true, "auto": true}[quality] {
-			return preparedImageEditBatch{}, fmt.Errorf("job %q: quality must be low, medium, high, or auto", job.ID)
 		}
 		maxAttempts := job.MaxAttempts
 		if maxAttempts == 0 {
@@ -341,7 +338,7 @@ func executeImageEditBatch(ctx context.Context, client *http.Client, endpoint, a
 			defer wait.Done()
 			defer close(done[job.ID])
 			result := imageEditBatchResult{
-				ID: job.ID, Model: job.Model, Size: job.Size,
+				ID: job.ID, Model: job.Model, Size: job.Size, Quality: job.Quality, ProviderSize: job.ProviderSize,
 				Prompt: job.Prompt, PromptSHA256: imagePromptSHA256(job.Prompt),
 			}
 			for _, dependency := range job.DependsOn {

@@ -26,6 +26,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/multica-ai/multica/server/internal/cli"
+	"github.com/multica-ai/multica/server/pkg/imagemodel"
 )
 
 var creativeCmd = &cobra.Command{
@@ -244,9 +245,9 @@ func init() {
 	imageEditCmd.Flags().String("prompt", "", "Edit prompt")
 	imageEditCmd.Flags().Bool("prompt-stdin", false, "Read the prompt from stdin")
 	imageEditCmd.Flags().String("prompt-file", "", "Read the prompt from a UTF-8 file")
-	imageEditCmd.Flags().String("model", "gpt-image-2", "GPT Image model")
+	imageEditCmd.Flags().String("model", imagemodel.Image2, "Image model: gpt-image-2, gpt-image-2.5-sunburst, or gpt-image-2.5-flare; platform tasks use frozen settings")
 	imageEditCmd.Flags().String("size", "auto", "Canvas size, e.g. 1088x1360 or auto")
-	imageEditCmd.Flags().String("quality", "", "Optional image quality: low, medium, high, or auto")
+	imageEditCmd.Flags().String("quality", "", "Image quality: low, medium, high, xhigh, max, or auto (default: xhigh for 2.5, high for 2)")
 	imageEditCmd.Flags().Int("max-attempts", 3, "Maximum attempts for transient image API failures (1-5)")
 	imageEditCmd.Flags().String("output-file", "", "Output PNG file")
 	imageEditCmd.Flags().String("result-file", "", "Optional JSON receipt written atomically after a successful image edit")
@@ -429,9 +430,6 @@ func runImageEdit(cmd *cobra.Command, _ []string) error {
 		return fmt.Errorf("--operation-id and a positive --operation-attempt must be provided together")
 	}
 	model, _ := cmd.Flags().GetString("model")
-	if strings.TrimSpace(model) != "gpt-image-2" {
-		return fmt.Errorf("only gpt-image-2 is supported by this direct image-edit capability")
-	}
 	size, _ := cmd.Flags().GetString("size")
 	size = strings.TrimSpace(size)
 	providerSize, err := providerGPTImageSize(size)
@@ -439,10 +437,11 @@ func runImageEdit(cmd *cobra.Command, _ []string) error {
 		return err
 	}
 	quality, _ := cmd.Flags().GetString("quality")
-	quality = strings.TrimSpace(strings.ToLower(quality))
-	if quality != "" && !map[string]bool{"low": true, "medium": true, "high": true, "auto": true}[quality] {
-		return fmt.Errorf("--quality must be low, medium, high, or auto")
+	settings, err := imagemodel.Resolve(model, quality)
+	if err != nil {
+		return err
 	}
+	model, quality = settings.Model, settings.Quality
 	apiKey := strings.TrimSpace(os.Getenv("OPENAI_API_KEY"))
 	if apiKey == "" {
 		return fmt.Errorf("OPENAI_API_KEY is required for image edit")

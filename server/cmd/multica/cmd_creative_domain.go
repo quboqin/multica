@@ -14,6 +14,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/multica-ai/multica/server/internal/cli"
+	"github.com/multica-ai/multica/server/pkg/imagemodel"
 )
 
 var creativeLibraryCmd = &cobra.Command{
@@ -805,6 +806,7 @@ func creativeOrderAssetPayload(cmd *cobra.Command) (json.RawMessage, error) {
 	}
 
 	var trace struct {
+		Quality           string  `json:"quality"`
 		Model             string  `json:"model"`
 		Prompt            string  `json:"prompt"`
 		PromptSHA256      string  `json:"prompt_sha256"`
@@ -818,7 +820,10 @@ func creativeOrderAssetPayload(cmd *cobra.Command) (json.RawMessage, error) {
 	if err := json.Unmarshal(modelResult, &trace); err != nil {
 		return nil, fmt.Errorf("decode model result: %w", err)
 	}
-	if strings.TrimSpace(trace.Model) != "gpt-image-2" || strings.TrimSpace(trace.Prompt) == "" || strings.TrimSpace(trace.RequestID) == "" || trace.Attempts < 1 || trace.ActualWidth < 1 || trace.ActualHeight < 1 || trace.ActualAspectRatio <= 0 {
+	if err := imagemodel.ValidateReceipt(trace.Model, trace.Quality); err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(trace.Prompt) == "" || strings.TrimSpace(trace.RequestID) == "" || trace.Attempts < 1 || trace.ActualWidth < 1 || trace.ActualHeight < 1 || trace.ActualAspectRatio <= 0 {
 		return nil, fmt.Errorf("model result is missing the completed generated asset trace")
 	}
 	if trace.PromptSHA256 != imagePromptSHA256(trace.Prompt) {
@@ -848,11 +853,17 @@ func creativeOrderAssetPayload(cmd *cobra.Command) (json.RawMessage, error) {
 		return nil, fmt.Errorf("normalization target_size %dx%d does not match asset size_key %s", normalized.TargetSize.Width, normalized.TargetSize.Height, sizeKey)
 	}
 
-	metadata, err := json.Marshal(map[string]any{
+	metadataFields := map[string]any{
 		"model": trace.Model, "prompt": trace.Prompt,
 		"actual_width": trace.ActualWidth, "actual_height": trace.ActualHeight,
 		"actual_aspect_ratio": trace.ActualAspectRatio,
-	})
+	}
+	// Replaying older Image 2 receipts must preserve immutable asset metadata.
+	// Their quality remains available in the unchanged model-result evidence.
+	if trace.Model != imagemodel.Image2 {
+		metadataFields["quality"] = trace.Quality
+	}
+	metadata, err := json.Marshal(metadataFields)
 	if err != nil {
 		return nil, err
 	}

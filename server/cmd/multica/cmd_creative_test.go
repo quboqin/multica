@@ -433,7 +433,7 @@ func TestCreativeOrderAssetPayloadAllowsOmittedCopyValidationEvidence(t *testing
 		"stage": "generated", "status": "completed", "attachment_id": "attachment-1",
 	})
 	modelResultFile := writeJSON("image-edit.raw.json", map[string]any{
-		"model": "gpt-image-2", "prompt": prompt, "prompt_sha256": promptSHA256,
+		"model": "gpt-image-2", "quality": "high", "prompt": prompt, "prompt_sha256": promptSHA256,
 		"request_id": "req-1", "attempts": 1, "actual_width": 1088, "actual_height": 1088,
 		"actual_aspect_ratio": 1.0,
 	})
@@ -467,6 +467,17 @@ func TestCreativeOrderAssetPayloadAllowsOmittedCopyValidationEvidence(t *testing
 	}
 	if err := json.Unmarshal(payload, &asset); err != nil {
 		t.Fatal(err)
+	}
+	var envelope map[string]json.RawMessage
+	if err := json.Unmarshal(payload, &envelope); err != nil {
+		t.Fatal(err)
+	}
+	var metadataFields map[string]any
+	if err := json.Unmarshal(envelope["metadata"], &metadataFields); err != nil {
+		t.Fatal(err)
+	}
+	if _, added := metadataFields["quality"]; added {
+		t.Fatal("Image 2 replay changed immutable metadata")
 	}
 	if _, exists := asset.Evidence["copy_validation"]; exists {
 		t.Fatalf("copy validation evidence should be omitted when no file is provided: %#v", asset.Evidence["copy_validation"])
@@ -625,7 +636,7 @@ func TestCreativeOrderAssetPayloadEmbedsJSONEvidenceWithoutLocalPath(t *testing.
 		"stage": "generated", "status": "completed", "attachment_id": "attachment-1",
 	})
 	modelResultFile := writeJSON("image-edit.raw.json", map[string]any{
-		"model": "gpt-image-2", "prompt": prompt, "prompt_sha256": promptSHA256,
+		"model": "gpt-image-2", "quality": "high", "prompt": prompt, "prompt_sha256": promptSHA256,
 		"request_id": "req-1", "attempts": 2, "actual_width": 1088, "actual_height": 1088,
 		"actual_aspect_ratio": 1.0, "provider_slot_limit": 3, "path": `C:\\workdir\\square-model.png`,
 		"generated_asset": map[string]any{"completed": true, "path": `C:\\workdir\\square-model.png`, "width": 1088, "height": 1088},
@@ -677,6 +688,9 @@ func TestCreativeOrderAssetPayloadEmbedsJSONEvidenceWithoutLocalPath(t *testing.
 	var modelResult map[string]any
 	if err := json.Unmarshal(asset.Evidence.ModelResult, &modelResult); err != nil {
 		t.Fatal(err)
+	}
+	if modelResult["quality"] != "high" {
+		t.Fatal("original image quality was lost from evidence")
 	}
 	if _, exists := modelResult["path"]; exists {
 		t.Fatalf("model result leaked local path: %#v", modelResult)

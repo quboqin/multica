@@ -15,6 +15,7 @@ import (
 	"github.com/multica-ai/multica/server/internal/attribution"
 	"github.com/multica-ai/multica/server/internal/service"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
+	"github.com/multica-ai/multica/server/pkg/imagemodel"
 )
 
 type creativeOrderAdjustmentInput struct {
@@ -539,7 +540,7 @@ RETURNING brief::text
 	}
 	feedback.ContextSnapshot, _ = json.Marshal(feedbackContext)
 
-	taskContext, err := json.Marshal(map[string]any{
+	taskContext, err := imagemodel.MarshalTask(frozenSnapshot, map[string]any{
 		"type":                           "creative_domain_task",
 		"workflow":                       "creative_direct_edit",
 		"scope":                          input.Scope,

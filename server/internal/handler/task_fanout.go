@@ -17,6 +17,7 @@ import (
 	"github.com/multica-ai/multica/server/internal/service"
 	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
+	"github.com/multica-ai/multica/server/pkg/imagemodel"
 )
 
 type taskFanoutRequest struct {
@@ -660,17 +661,18 @@ func normalizeCreativeProductionFanoutItem(ctx context.Context, q creativeTaskFa
 	var revision int
 	var canonicalOrderItemID, canonicalOrderID, canonicalIssueID string
 	var sourceKind, candidateID, sourceAnalysisID, copyLibraryID string
+	var imageSnapshot []byte
 	err = q.QueryRow(ctx, `
 SELECT variant.revision, item.id::text, order_row.id::text, COALESCE(order_row.issue_id::text, ''),
        item.source_kind, COALESCE(item.candidate_id::text, ''),
-       COALESCE(item.source_analysis_id::text, ''), COALESCE(item.copy_library_id::text, '')
+       COALESCE(item.source_analysis_id::text, ''), COALESCE(item.copy_library_id::text, ''), order_row.input_snapshot
 FROM creative_order_variant variant
 JOIN creative_order_item item ON item.id = variant.order_item_id
 JOIN creative_order order_row ON order_row.id = item.order_id
 WHERE variant.id = $1
   AND item.id = $2
   AND order_row.workspace_id = $3
-`, variantID, orderItemID, workspaceID).Scan(&revision, &canonicalOrderItemID, &canonicalOrderID, &canonicalIssueID, &sourceKind, &candidateID, &sourceAnalysisID, &copyLibraryID)
+`, variantID, orderItemID, workspaceID).Scan(&revision, &canonicalOrderItemID, &canonicalOrderID, &canonicalIssueID, &sourceKind, &candidateID, &sourceAnalysisID, &copyLibraryID, &imageSnapshot)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return item, errors.New("creative production task variant must belong to the trigger order item")
 	}
@@ -686,6 +688,11 @@ WHERE variant.id = $1
 	}
 	canonicalVariantID := uuidToString(variantID)
 	canonicalItemKey := fmt.Sprintf("%s:r%d", canonicalVariantID, revision)
+	imageSettings, settingsErr := imagemodel.FromSnapshot(imageSnapshot)
+	if settingsErr != nil {
+		return item, settingsErr
+	}
+	taskContext[imagemodel.SnapshotKey], _ = json.Marshal(imageSettings)
 	taskContext["variant_id"], _ = json.Marshal(canonicalVariantID)
 	taskContext["creative_order_id"], _ = json.Marshal(canonicalOrderID)
 	taskContext["creative_order_item_id"], _ = json.Marshal(canonicalOrderItemID)
@@ -773,17 +780,18 @@ func normalizeManualCreativeProductionFanoutItem(ctx context.Context, q creative
 	var revision int
 	var canonicalOrderItemID, canonicalOrderID, canonicalIssueID string
 	var sourceKind, candidateID, sourceAnalysisID, copyLibraryID string
+	var imageSnapshot []byte
 	err = q.QueryRow(ctx, `
 SELECT variant.revision, item.id::text, order_row.id::text, COALESCE(order_row.issue_id::text, ''),
        item.source_kind, COALESCE(item.candidate_id::text, ''),
-       COALESCE(item.source_analysis_id::text, ''), COALESCE(item.copy_library_id::text, '')
+       COALESCE(item.source_analysis_id::text, ''), COALESCE(item.copy_library_id::text, ''), order_row.input_snapshot
 FROM creative_order_variant variant
 JOIN creative_order_item item ON item.id = variant.order_item_id
 JOIN creative_order order_row ON order_row.id = item.order_id
 WHERE variant.id = $1
   AND order_row.id = $2
   AND order_row.workspace_id = $3
-`, variantID, orderID, workspaceID).Scan(&revision, &canonicalOrderItemID, &canonicalOrderID, &canonicalIssueID, &sourceKind, &candidateID, &sourceAnalysisID, &copyLibraryID)
+`, variantID, orderID, workspaceID).Scan(&revision, &canonicalOrderItemID, &canonicalOrderID, &canonicalIssueID, &sourceKind, &candidateID, &sourceAnalysisID, &copyLibraryID, &imageSnapshot)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return item, errors.New("manual creative production task variant must belong to the trigger order")
 	}
@@ -799,6 +807,11 @@ WHERE variant.id = $1
 	}
 	canonicalVariantID := uuidToString(variantID)
 	canonicalItemKey := fmt.Sprintf("%s:r%d", canonicalVariantID, revision)
+	imageSettings, settingsErr := imagemodel.FromSnapshot(imageSnapshot)
+	if settingsErr != nil {
+		return item, settingsErr
+	}
+	taskContext[imagemodel.SnapshotKey], _ = json.Marshal(imageSettings)
 	taskContext["variant_id"], _ = json.Marshal(canonicalVariantID)
 	taskContext["creative_order_id"], _ = json.Marshal(canonicalOrderID)
 	taskContext["creative_order_item_id"], _ = json.Marshal(canonicalOrderItemID)

@@ -14,6 +14,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
+	"github.com/multica-ai/multica/server/pkg/imagemodel"
 )
 
 var creativeImageOperationSHA256Pattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
@@ -658,6 +659,17 @@ FOR UPDATE
 			writeError(w, http.StatusConflict, "creative image operation idempotency coordinates are immutable")
 			return
 		}
+		if input.Status == "completed" {
+			var receipt imagemodel.Settings
+			if err := json.Unmarshal(input.ResultReceipt, &receipt); err != nil {
+				writeError(w, http.StatusConflict, "invalid image operation result receipt")
+				return
+			}
+			if err := imagemodel.MatchReceipt(json.RawMessage(existingInputSnapshot), receipt.Model, receipt.Quality); err != nil {
+				writeError(w, http.StatusConflict, err.Error())
+				return
+			}
+		}
 		inputSnapshotChanged := false
 		if string(input.InputSnapshot) != "{}" {
 			if err := tx.QueryRow(r.Context(), `SELECT $1::jsonb <> $2::jsonb`, input.InputSnapshot, existingInputSnapshot).Scan(&inputSnapshotChanged); err != nil {
@@ -808,6 +820,12 @@ WHERE operation_id = $1 AND attempt = $2
 		}
 		if input.Model == "" || string(input.InputSnapshot) == "{}" {
 			writeError(w, http.StatusBadRequest, "new creative image operation requires model and input_snapshot")
+			return
+		}
+		settings, settingsErr := imagemodel.FromSnapshot(json.RawMessage(inputSnapshot))
+		operationSettings, operationErr := imagemodel.FromSnapshot(input.InputSnapshot)
+		if settingsErr != nil || operationErr != nil || input.Model != settings.Model || operationSettings != settings {
+			writeError(w, http.StatusConflict, "image operation model and quality must match the frozen order settings")
 			return
 		}
 		if input.OperationKind == "visual_rework" {

@@ -28,6 +28,7 @@ import (
 	"github.com/multica-ai/multica/server/internal/service"
 	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
+	"github.com/multica-ai/multica/server/pkg/imagemodel"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
@@ -590,6 +591,11 @@ FROM creative_order WHERE id = $1`, parseUUID(existingID)))
 		}
 	}
 	input.InputSnapshot, err = freezeCreativeOrderPipelineVersion(input.InputSnapshot, creativePipelineCandidateV1)
+	if err != nil {
+		writeError(w, http.StatusUnprocessableEntity, err.Error())
+		return
+	}
+	input.InputSnapshot, err = imagemodel.Freeze(input.InputSnapshot)
 	if err != nil {
 		writeError(w, http.StatusUnprocessableEntity, err.Error())
 		return
@@ -4387,6 +4393,7 @@ FOR UPDATE OF variant
 	}
 	if operationID.Valid && input.Stage == "generated" && input.Status == "completed" {
 		var assetLineage struct {
+			Quality         string `json:"quality"`
 			Model           string `json:"model"`
 			PromptSHA256    string `json:"prompt_sha256"`
 			ProviderRequest string `json:"request_id"`
@@ -4396,8 +4403,9 @@ FOR UPDATE OF variant
 			return
 		}
 		var evidenceLineage struct {
-			PromptSHA256 string `json:"prompt_sha256"`
-			RequestID    string `json:"request_id"`
+			ModelResult  imagemodel.Settings `json:"model_result"`
+			PromptSHA256 string              `json:"prompt_sha256"`
+			RequestID    string              `json:"request_id"`
 		}
 		if err := json.Unmarshal(input.Evidence, &evidenceLineage); err != nil {
 			writeError(w, http.StatusUnprocessableEntity, "generated asset evidence lineage is invalid")
@@ -4405,6 +4413,9 @@ FOR UPDATE OF variant
 		}
 		assetLineage.PromptSHA256 = evidenceLineage.PromptSHA256
 		assetLineage.ProviderRequest = evidenceLineage.RequestID
+		if assetLineage.Quality == "" {
+			assetLineage.Quality = evidenceLineage.ModelResult.Quality
+		}
 
 		var operationStatus, operationModel, operationPromptSHA256, providerRequestID, resultReceipt string
 		var rawOutputAttachmentID, operationTaskID pgtype.UUID
@@ -4422,6 +4433,11 @@ FOR UPDATE
 				return
 			}
 			writeError(w, http.StatusInternalServerError, "failed to validate creative image operation")
+			return
+		}
+		var recordedSettings imagemodel.Settings
+		if json.Unmarshal([]byte(resultReceipt), &recordedSettings) != nil || (recordedSettings.Quality != "" && recordedSettings.Quality != assetLineage.Quality) {
+			writeError(w, http.StatusConflict, "generated asset quality does not match the image operation receipt")
 			return
 		}
 		if operationStatus != "completed" || strings.TrimSpace(providerRequestID) == "" || resultReceipt == "{}" || !rawOutputAttachmentID.Valid {
@@ -6083,7 +6099,7 @@ WHERE id = $1
 		return db.AgentTaskQueue{}, errors.New("failed to create creative visual rework revision")
 	}
 
-	context, err := json.Marshal(map[string]any{
+	context, err := imagemodel.MarshalTask(inputSnapshot, map[string]any{
 		"type":                   "creative_domain_task",
 		"workflow":               "creative_production",
 		"scope":                  "variant",
@@ -6384,7 +6400,7 @@ WHERE id = $1
 	if delivery.AnnotationGuideAttachmentID == "" {
 		annotations = []any(nil)
 	}
-	context, err := json.Marshal(map[string]any{
+	context, err := imagemodel.MarshalTask(inputSnapshot, map[string]any{
 		"type":                           "creative_domain_task",
 		"workflow":                       "creative_direct_edit",
 		"scope":                          scope,
@@ -6973,6 +6989,7 @@ func normalizeCreativeOrderDiagnosticAsset(input creativeOrderDiagnosticAssetInp
 
 func validateCompletedGeneratedAssetTrace(metadata, evidence json.RawMessage) error {
 	var metadataTrace struct {
+		Quality           string  `json:"quality"`
 		Prompt            string  `json:"prompt"`
 		Model             string  `json:"model"`
 		ActualWidth       int     `json:"actual_width"`
@@ -6985,8 +7002,8 @@ func validateCompletedGeneratedAssetTrace(metadata, evidence json.RawMessage) er
 	if strings.TrimSpace(metadataTrace.Prompt) == "" {
 		return errors.New("completed generated asset metadata.prompt is required")
 	}
-	if strings.TrimSpace(metadataTrace.Model) != "gpt-image-2" {
-		return errors.New("completed generated asset metadata.model must be gpt-image-2")
+	if err := imagemodel.ValidateReceipt(metadataTrace.Model, metadataTrace.Quality); err != nil {
+		return err
 	}
 	if metadataTrace.ActualWidth < 1 || metadataTrace.ActualHeight < 1 || metadataTrace.ActualAspectRatio <= 0 {
 		return errors.New("completed generated asset metadata actual canvas is required")
@@ -7013,6 +7030,7 @@ func validateCompletedGeneratedAssetTrace(metadata, evidence json.RawMessage) er
 		return errors.New("completed generated asset evidence.prompt_sha256 does not match metadata.prompt")
 	}
 	var modelResult struct {
+		Quality           string  `json:"quality"`
 		Model             string  `json:"model"`
 		Prompt            string  `json:"prompt"`
 		PromptSHA256      string  `json:"prompt_sha256"`
@@ -7032,7 +7050,10 @@ func validateCompletedGeneratedAssetTrace(metadata, evidence json.RawMessage) er
 	if _, exists := modelResultObject["path"]; exists {
 		return errors.New("completed generated asset evidence.model_result must not contain a local path")
 	}
-	if modelResult.Model != metadataTrace.Model || modelResult.Prompt != metadataTrace.Prompt || modelResult.PromptSHA256 != evidenceTrace.PromptSHA256 || modelResult.RequestID != evidenceTrace.RequestID || modelResult.Attempts != evidenceTrace.Attempts || modelResult.ActualWidth != metadataTrace.ActualWidth || modelResult.ActualHeight != metadataTrace.ActualHeight || modelResult.ActualAspectRatio != metadataTrace.ActualAspectRatio {
+	if err := imagemodel.ValidateReceipt(modelResult.Model, modelResult.Quality); err != nil {
+		return err
+	}
+	if (metadataTrace.Quality != "" && modelResult.Quality != metadataTrace.Quality) || modelResult.Model != metadataTrace.Model || modelResult.Prompt != metadataTrace.Prompt || modelResult.PromptSHA256 != evidenceTrace.PromptSHA256 || modelResult.RequestID != evidenceTrace.RequestID || modelResult.Attempts != evidenceTrace.Attempts || modelResult.ActualWidth != metadataTrace.ActualWidth || modelResult.ActualHeight != metadataTrace.ActualHeight || modelResult.ActualAspectRatio != metadataTrace.ActualAspectRatio {
 		return errors.New("completed generated asset model result does not match metadata and evidence")
 	}
 	var promptContract struct {

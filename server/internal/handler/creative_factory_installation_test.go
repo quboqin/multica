@@ -136,8 +136,8 @@ func TestCreativeFactoryImageEditingUsesOneAgentWithWorkflowSkills(t *testing.T)
 			break
 		}
 	}
-	if directEditSkill.Version != 33 {
-		t.Fatalf("direct-edit Skill version = %d, want 33", directEditSkill.Version)
+	if directEditSkill.Version != 34 {
+		t.Fatalf("direct-edit Skill version = %d, want 34", directEditSkill.Version)
 	}
 	for index := range creativeFactoryAgentSpecs {
 		spec := &creativeFactoryAgentSpecs[index]
@@ -192,7 +192,7 @@ func TestCreativeFactoryCreativeContractTemplatesStayInSync(t *testing.T) {
 		"generation_plan":     43,
 		"image_edit":          116,
 		"prime_compose":       6,
-		"direct_image_edit":   33,
+		"direct_image_edit":   34,
 		"quality_control":     45,
 		"creative_leadership": 56,
 	}
@@ -277,7 +277,7 @@ func TestCreativeFactoryCreativeContractTemplatesStayInSync(t *testing.T) {
 		"capability = 'generation_plan'; version = 43",
 		"capability = 'image_edit'; version = 116",
 		"capability = 'prime_compose'; version = 6",
-		"capability = 'direct_image_edit'; version = 33",
+		"capability = 'direct_image_edit'; version = 34",
 		"capability = 'quality_control'; version = 45",
 		"capability = 'creative_leadership'; version = 56",
 		"初始 direct_edit 由平台原子创建 revision 和 task，Leader 只恢复领域状态确认缺失的当前 revision task",
@@ -330,8 +330,8 @@ INSERT INTO agent (
   instructions, custom_env, custom_args, model, thinking_level
 ) VALUES (
   $1, '素材_出图', 'old image agent', 'cloud', '{}'::jsonb,
-  $2, 'workspace', 1, $3,
-  'stale image instructions', '{}'::jsonb, '[]'::jsonb, 'old-model', 'low'
+  $2, 'workspace', 50, $3,
+  'stale image instructions', '{}'::jsonb, '[]'::jsonb, 'gpt-6-astra', 'xhigh'
 )
 RETURNING id::text
 	`, testWorkspaceID, testRuntimeID, testUserID).Scan(&imageAgentID); err != nil {
@@ -460,8 +460,8 @@ WHERE id = $1::uuid
 	if err := json.Unmarshal([]byte(configRaw), &config); err != nil {
 		t.Fatalf("decode refreshed skill config: %v", err)
 	}
-	if got := int(config["version"].(float64)); got != 32 {
-		t.Fatalf("direct-edit Skill version = %d, want 32", got)
+	if got := int(config["version"].(float64)); got != 34 {
+		t.Fatalf("direct-edit Skill version = %d, want 34", got)
 	}
 	if got := int(config["template_version"].(float64)); got != creativeFactoryTemplateVersion {
 		t.Fatalf("direct-edit template_version = %d, want %d", got, creativeFactoryTemplateVersion)
@@ -482,6 +482,14 @@ WHERE id = $1::uuid
 	}
 
 	var poolInstructions, poolDescription, poolModel string
+	var primaryModel, primaryThinking string
+	var primaryConcurrency int
+	if err := testPool.QueryRow(ctx, `SELECT model,thinking_level,max_concurrent_tasks FROM agent WHERE id=$1`, imageAgentID).Scan(&primaryModel, &primaryThinking, &primaryConcurrency); err != nil {
+		t.Fatal(err)
+	}
+	if primaryModel != "gpt-6-astra" || primaryThinking != "xhigh" || primaryConcurrency != 50 {
+		t.Fatalf("custom primary settings overwritten: %s %s %d", primaryModel, primaryThinking, primaryConcurrency)
+	}
 	var poolMaxConcurrent int
 	if err := testPool.QueryRow(ctx, `
 SELECT instructions, description, model, max_concurrent_tasks
@@ -495,7 +503,7 @@ WHERE id = $1::uuid
 			t.Fatalf("image-edit pool Agent instructions missing refreshed contract %q", required)
 		}
 	}
-	if poolDescription != "按唯一提示词合同执行候选主视觉、selected 扩尺寸或用户标注精准改图；只编辑无品牌底图，由贴片 Skill 确定性合成。" {
+	if poolDescription != "按唯一提示词合同执行候选主视觉、selected 扩尺寸或用户标注精准改图；只用订单冻结附件，结构化记录下载失败，再由贴片 Skill 交接终检。" {
 		t.Fatalf("image-edit pool Agent description was not refreshed: %q", poolDescription)
 	}
 	if poolModel != "pool-model" || poolMaxConcurrent != 6 {

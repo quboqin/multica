@@ -14,6 +14,7 @@ import (
 	"github.com/multica-ai/multica/server/internal/attribution"
 	"github.com/multica-ai/multica/server/internal/service"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
+	"github.com/multica-ai/multica/server/pkg/imagemodel"
 )
 
 const (
@@ -859,7 +860,7 @@ SELECT EXISTS (
 		for key, sourceValue := range sourceFields {
 			contextFields[key] = sourceValue
 		}
-		contextValue, err := json.Marshal(contextFields)
+		contextValue, err := imagemodel.MarshalTask(value.InputSnapshot, contextFields)
 		if err != nil {
 			return queued, fmt.Errorf("encode selected creative production task: %w", err)
 		}

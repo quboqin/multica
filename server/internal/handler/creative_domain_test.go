@@ -4645,6 +4645,15 @@ func TestCreateCreativeOrderFreezesSquadAgentsByCapability(t *testing.T) {
 	if frozen.PipelineVersion != creativePipelineCandidateV1 {
 		t.Fatalf("pipeline version = %q, want %q", frozen.PipelineVersion, creativePipelineCandidateV1)
 	}
+	var imagePolicy struct {
+		Settings struct {
+			Model   string `json:"model"`
+			Quality string `json:"quality"`
+		} `json:"image_generation"`
+	}
+	if err := json.Unmarshal(order.InputSnapshot, &imagePolicy); err != nil || imagePolicy.Settings.Model != "gpt-image-2.5-sunburst" || imagePolicy.Settings.Quality != "xhigh" {
+		t.Fatalf("new order image settings=%s %v", order.InputSnapshot, err)
+	}
 	want := map[string]string{
 		"squad_id": fixture.SquadID, "leader_agent_id": fixture.LeaderAgentID, "planner_agent_id": fixture.PlannerAgentID,
 		"producer_agent_id": fixture.ProducerAgentID, "reviewer_agent_id": fixture.ReviewerAgentID,

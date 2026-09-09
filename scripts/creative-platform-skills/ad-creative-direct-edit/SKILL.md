@@ -114,15 +114,21 @@ CLI 或附件血缘。必须按以下优先级表达：只编辑 Input 1；annot
 即使先前识别错了，也要保留后续手动改写空间，不要把流程卡死在还款计划选择。只有 Input 2 明确出现还款表、
 分期卡、期限列、月供列或总还款结构时，才把它当成 repayment 结构处理，其他情况保留为可编辑文案。
 
+保存当前订单 JSON，执行 `multica image settings --input-file <order.json>` 并将结果保存到 `image-settings.json`。
+使用它的 `model` 和 `quality`；首次操作登记的顶层 `model` 和 `input_snapshot.image_generation` 必须来自同一结果。
+已有 image operation 时从该 operation JSON 解析设置，保留原模型与质量；模型失败不自动降级或替换。
+新订单由平台冻结 Sunburst + xhigh，历史订单和恢复任务沿用原合同。智能体的文字模型与思考深度不决定图片模型。
+
 只调用 `multica image edit`。先保存 `image-operation-put` 的完整响应，从响应的 `id` 和对应 `attempts[].attempt` 读取坐标；
 有 annotation guide 时保持 source 在前、guide 在后：
 
 ```bash
 multica image edit \
+  --model "$(jq -er '.model' <image-settings.json>)" \
   --input <source-base.png> \
   --input <annotation-brief.png> \
   --prompt "<局部编辑提示词>" \
-  --size <provider-size> --quality high --output-file <model-output.png> \
+  --size <provider-size> --quality "$(jq -er '.quality' <image-settings.json>)" --output-file <model-output.png> \
   --result-file image-edit-result-<size>.json \
   --operation-id "$(jq -er '.id' <image-operation-response.json>)" \
   --operation-attempt "$(jq -er '.attempts | last | .attempt' <image-operation-response.json>)" \

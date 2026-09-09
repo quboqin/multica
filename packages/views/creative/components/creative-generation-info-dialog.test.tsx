@@ -69,6 +69,13 @@ function fixture() {
 }
 
 describe("creative generation information", () => {
+  it("shows the recorded image quality without guessing from the current order", () => {
+    const { generated, delivered, variant, item } = fixture();
+    generated.metadata = { ...generated.metadata, model: "gpt-image-2.5-sunburst", quality: "xhigh" };
+    expect(creativeGenerationInfo(item, variant, delivered)).toMatchObject({ model: "gpt-image-2.5-sunburst", quality: "xhigh" });
+    delete generated.metadata.quality;
+    expect(creativeGenerationInfo(item, variant, delivered).quality).toBe("");
+  });
   it("shows actual model integration and the exact template independently of frozen configuration", () => {
     const { delivered, primed, variant, item } = fixture();
     variant.brief = { prime_composition: { mode: "deterministic" } };

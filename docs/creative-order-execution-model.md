@@ -121,8 +121,11 @@ bindings, create recovery records/cursors, and add the task evidence-history
 index. They do not delete or regenerate existing images. The index migration is
 separate so `CREATE INDEX CONCURRENTLY` can run outside a transaction.
 
-Managed workspace templates are version 28: planning 43, production 115,
-leadership 56, diagnosis 9. Existing user-managed Skills are not overwritten.
+Managed workspace templates are version 30: planning 43, production 116,
+direct edit 34, leadership 56, diagnosis 9. Managed Skill content follows the
+platform template; agent model, thinking-level and concurrency preferences are
+preserved. See [image model settings](creative-image-model-settings.md) for
+Sunburst/xhigh execution and the deployment dependency on gateway support.
 
 Acceptance should include a six-set copy order (eight planned candidates, six
 selected sets, eighteen final images), optional empty copy slots, dense copy,
