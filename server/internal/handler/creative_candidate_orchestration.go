@@ -299,6 +299,15 @@ WHERE trigger_evidence_kind = $1
 `, creativeCandidateSelectionEvidenceKind, orderItemID, creativeCandidateSelectionItemKey).Scan(&terminalAttempts); err != nil {
 		return false, fmt.Errorf("count creative candidate selection attempts: %w", err)
 	}
+	if terminalAttempts > 0 && !cause.ManualSelectionRetry {
+		enabled, err := creativeAutomaticRetryEnabled(ctx, tx, workspaceID)
+		if err != nil {
+			return false, err
+		}
+		if !enabled {
+			return false, nil
+		}
+	}
 	_, recovering := ctx.Value(creativeRecoveryDispatchContextKey{}).(creativeRecoveryTarget)
 	if terminalAttempts >= creativeCandidateSelectionMaxAttempts && !cause.ManualSelectionRetry && !recovering {
 		return false, nil
@@ -545,6 +554,11 @@ SELECT EXISTS (
 	}
 	if _, err := tx.Exec(ctx, `UPDATE creative_order SET updated_at = now() WHERE id = $1`, orderID); err != nil {
 		return false, fmt.Errorf("touch creative order candidate selection: %w", err)
+	}
+	if cause.ManualSelectionRetry {
+		if _, err := tx.Exec(ctx, "UPDATE agent_task_queue SET context=context||jsonb_build_object('manual_retry_task_id',id::text) WHERE id=$1", task.ID); err != nil {
+			return false, err
+		}
 	}
 	if err := recordCreativeRecoveryDispatchTx(ctx, tx, task.ID); err != nil {
 		return false, err

@@ -31,6 +31,7 @@ func (h *Handler) RecoverCreativeOrders(ctx context.Context, limit int) (int, er
 	rows, err := h.DB.Query(ctx, `UPDATE creative_order_recovery_scan s SET checked_at=now(),next_check_at=now()+interval '2 minutes'
  FROM (SELECT s.order_id FROM creative_order_recovery_scan s JOIN creative_order o ON o.id=s.order_id
  WHERE s.next_check_at<=now()
+ AND NOT EXISTS(SELECT 1 FROM creative_factory_settings cfg WHERE cfg.workspace_id=o.workspace_id AND NOT cfg.automatic_retry_enabled)
  AND EXISTS(SELECT 1 FROM workspace_capability c WHERE c.workspace_id=o.workspace_id AND c.capability_key='creative_factory' AND c.enabled)
  ORDER BY s.next_check_at,s.order_id
  LIMIT $1 FOR UPDATE OF s SKIP LOCKED) due WHERE s.order_id=due.order_id RETURNING s.order_id`, limit)
@@ -265,6 +266,7 @@ func (h *Handler) claimCreativeRecovery(ctx context.Context, orderIDs ...pgtype.
 	var t creativeRecoveryTarget
 	err := h.DB.QueryRow(ctx, `WITH due AS (
  SELECT id FROM creative_recovery WHERE status IN ('pending','waiting') AND next_retry_at<=now()
+ AND NOT EXISTS(SELECT 1 FROM creative_factory_settings cfg WHERE cfg.workspace_id=creative_recovery.workspace_id AND NOT cfg.automatic_retry_enabled)
  AND ($2::uuid IS NULL OR order_id=$2)
  ORDER BY next_retry_at,id LIMIT 1 FOR UPDATE SKIP LOCKED
  ) UPDATE creative_recovery r SET status='running',lease_token=$1,lease_expires_at=now()+interval '2 minutes',updated_at=now()
@@ -414,6 +416,12 @@ func (h *Handler) processCreativeRecovery(ctx context.Context, t creativeRecover
 	enabled, err := capability.Enabled(ctx, h.DB, uuidToString(t.WorkspaceID), capability.CreativeFactory)
 	if err != nil {
 		return err
+	}
+	if enabled {
+		enabled, err = creativeAutomaticRetryEnabled(ctx, h.DB, t.WorkspaceID)
+		if err != nil {
+			return err
+		}
 	}
 	if !enabled {
 		return h.finishCreativeRecovery(ctx, t, "waiting", pgtype.UUID{}, nil)

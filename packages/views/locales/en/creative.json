@@ -643,5 +643,11 @@
     "packaging": "Packaging",
     "downloadPackage": "Download delivery package",
     "archiveFailed": "Could not package the delivery archive"
+  },
+  "automaticRetry": {
+    "label": "Automatic retries",
+    "paused": "Paused",
+    "description": "Pause automatic recovery, task continuations, and queued retries in this workspace. Started tasks continue and manual actions remain available.",
+    "updateFailed": "Could not save automatic retry settings. Try again."
   }
 }

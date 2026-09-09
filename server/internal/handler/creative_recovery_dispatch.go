@@ -18,6 +18,18 @@ func recordCreativeRecoveryDispatchTx(ctx context.Context, tx pgx.Tx, taskID pgt
 	if !ok {
 		return nil
 	}
+	enabled, err := creativeAutomaticRetryEnabled(ctx, tx, t.WorkspaceID)
+	if err != nil {
+		return err
+	}
+	if !enabled {
+		return errors.New("creative automatic retry is paused")
+	}
+	if taskID.Valid {
+		if _, err := tx.Exec(ctx, `UPDATE agent_task_queue SET context=context||jsonb_build_object('automatic_recovery_task_id',id::text) WHERE id=$1`, taskID); err != nil {
+			return err
+		}
+	}
 	if taskID.Valid && t.Stage == "production" {
 		// Supply the original operation inputs to a fresh-session continuation;
 		// local file paths or prompts must not be reinvented for an existing key.
@@ -33,7 +45,7 @@ func recordCreativeRecoveryDispatchTx(ctx context.Context, tx pgx.Tx, taskID pgt
 		}
 	}
 	var attempt int
-	err := tx.QueryRow(ctx, `UPDATE creative_recovery
+	err = tx.QueryRow(ctx, `UPDATE creative_recovery
 SET attempt=attempt+1,dispatch_count=dispatch_count+1,dispatch_failures=0,
  result_task_id=$3,source_task_id=$4,updated_at=now()
 WHERE id=$1 AND status='running' AND lease_token=$2 AND lease_expires_at>now()

@@ -484,6 +484,12 @@ type CreativeDelivery struct {
 	UpdatedAt                 pgtype.Timestamptz `json:"updated_at"`
 }
 
+type CreativeFactorySetting struct {
+	WorkspaceID           pgtype.UUID        `json:"workspace_id"`
+	AutomaticRetryEnabled bool               `json:"automatic_retry_enabled"`
+	UpdatedAt             pgtype.Timestamptz `json:"updated_at"`
+}
+
 type CreativeFactoryInstallation struct {
 	WorkspaceID          pgtype.UUID        `json:"workspace_id"`
 	Status               string             `json:"status"`

@@ -5495,8 +5495,12 @@ WHERE variant_id = $1 AND revision = $2 AND attempt = $3 AND lane = 'visual'
 			writeError(w, http.StatusInternalServerError, "failed to check automatic creative QC recovery")
 			return
 		}
-		automaticRecovery := len(recoverableTaskIDs) > 0 ||
-			creativeQCFindingsNeedAutomaticRecovery(failureSummary["visual"])
+		retryEnabled, retryErr := creativeAutomaticRetryEnabled(r.Context(), tx, workspaceID)
+		if retryErr != nil {
+			writeError(w, http.StatusInternalServerError, "failed to load creative retry settings")
+			return
+		}
+		automaticRecovery := retryEnabled && (len(recoverableTaskIDs) > 0 || creativeQCFindingsNeedAutomaticRecovery(failureSummary["visual"]))
 		if automaticRecovery {
 			currentTaskID := uuidToString(task.ID)
 			seenTaskIDs := make(map[string]struct{}, len(recoverableTaskIDs)+1)
@@ -7546,6 +7550,16 @@ WHERE id = $1 AND revision = $2 AND status <> 'cancelled'
 		return nil
 	}
 
+	enabled, retryErr := creativeAutomaticRetryEnabled(ctx, tx, workspaceID)
+	if retryErr != nil {
+		return retryErr
+	}
+	if !enabled {
+		if _, err := tx.Exec(ctx, "UPDATE creative_order_variant SET status='action_required',updated_at=now() WHERE id=$1 AND revision=$2 AND status<>'cancelled'", variantUUID, taskContext.Revision); err != nil {
+			return err
+		}
+		return commitSettlement()
+	}
 	var normalized service.DirectTaskFanoutItem
 	if task.TriggerEvidenceKind.Valid && task.TriggerEvidenceKind.String == "creative_order_item_production" && task.TriggerEvidenceRefID.Valid {
 		normalized, err = normalizeCreativeProductionFanoutItem(ctx, tx, workspaceID, task.TriggerEvidenceRefID, service.DirectTaskFanoutItem{ItemKey: itemKey, Context: task.Context})

@@ -3155,10 +3155,10 @@ export class ApiClient {
     });
   }
 
-  async composeCreativeOrderPrime(orderId: string, variantId: string, options?: { async?: boolean }): Promise<CreativeOrderPrimeComposeResponse> {
+  async composeCreativeOrderPrime(orderId: string, variantId: string, options?: { async?: boolean; force?: boolean }): Promise<CreativeOrderPrimeComposeResponse> {
     const raw = await this.fetch<unknown>(`/api/creative/orders/${encodeURIComponent(orderId)}/prime-compose`, {
       method: "POST",
-      body: JSON.stringify({ variant_id: variantId, ...(options?.async ? { async: true } : {}) }),
+      body: JSON.stringify({ variant_id: variantId, ...(options?.async ? { async: true } : {}), ...(options?.force ? { force: true } : {}) }),
     });
     return parseWithFallback(raw, CreativeOrderPrimeComposeResponseSchema, {
       variant_id: "", composed: false, completed: false,
@@ -3212,6 +3212,14 @@ export class ApiClient {
 
   async deleteCreativeOrder(id: string): Promise<void> {
     await this.fetch(`/api/creative/orders/${encodeURIComponent(id)}`, { method: "DELETE" });
+  }
+
+  async getCreativeRetrySettings(signal?: AbortSignal): Promise<{ automatic_retry_enabled: boolean; can_manage: boolean }> {
+    return this.fetch("/api/creative/settings", { signal });
+  }
+
+  async updateCreativeRetrySettings(enabled: boolean): Promise<{ automatic_retry_enabled: boolean; can_manage: boolean }> {
+    return this.fetch("/api/creative/settings", { method: "PATCH", body: JSON.stringify({ automatic_retry_enabled: enabled }) });
   }
 
   async createCreativeOrder(data: CreateCreativeOrderRequest): Promise<CreativeOrder> {

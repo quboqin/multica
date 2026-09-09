@@ -643,5 +643,11 @@
     "packaging": "正在打包",
     "downloadPackage": "下载交付包",
     "archiveFailed": "无法打包下载交付包"
+  },
+  "automaticRetry": {
+    "label": "自动重试",
+    "paused": "已暂停",
+    "description": "关闭后暂停本工作区的自动恢复、任务续跑及已排队的自动重试。已开始的任务会继续，手动操作不受影响。",
+    "updateFailed": "自动重试设置保存失败，请重试。"
   }
 }
