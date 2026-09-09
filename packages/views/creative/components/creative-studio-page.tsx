@@ -1167,7 +1167,7 @@ function confirmedRepaymentPlans(value: unknown): { label: string; value: string
       totalInterest ? `总利息 ${totalInterest}` : "",
       totalRepayment ? `总还款 ${totalRepayment}` : "",
     ].filter(Boolean).join("；");
-    return label && facts ? [{ label, value: facts }] : [];
+    return label || facts ? [{ label: label || trimmedStringValue(selection.plan_key), value: facts || label }] : [];
   });
 }
 

@@ -15,3 +15,4 @@
 | Native QC tasks are distinct by evidence pair plus visual-lane revision `item_key` | `server/internal/service/task.go:EnqueueDirectTaskFanout`, `server/internal/service/task.go:directTaskItemKey` |
 
 Reconfirm these paths before changing the QC release contract.
+| QC checks only selected repayment columns and distinguishes actual overlap from template readability; background fallback still requires full visual QC | `SKILL.md:自选还款列与 Prime 一致性`, `server/internal/handler/creative_domain.go:creativeVisualModelReworkFindings` |

@@ -284,3 +284,9 @@ CLI 返回的 `tasks` 必须覆盖每个缺失候选；否则记录真实错误�
 
 fanout 成功后立即结束，不轮询。CLI 返回字段错误时修正同一 manifest；没有返回 created task 就不得声称
 已入队。写回或委派失败必须让当前 task 失败，并在 Variant/task 保留真实 error code/message，不创建 Issue。
+
+## 自选还款列与 Prime 一致性
+
+文案库订单存在 repayment_plan_columns 时，它就是唯一展示列集合与顺序。只消费 repayment_plan_selections.values 和对应 repayment_plan_labels；repayment_plan_entries 保留作审核，不得从中补齐未选金额、期限、总利息或总还款。已选列即使只有一列也合法；不强制本金、期限、月还同时展示。货币符号原样使用冻结市场展示值（如 MYR 的 RM），不得默认 Rp。
+
+为当前尺寸的选中列规划自然阅读顺序与分组；列少时不补空列，文案密集时优先减少装饰。生产阶段参考的官方模板 source_role 必须延续到最终贴片。

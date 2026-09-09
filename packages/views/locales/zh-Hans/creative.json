@@ -102,7 +102,10 @@
     "theme": "主题",
     "style": "风格",
     "preserve": "必要视觉元素",
-    "avoid": "避免"
+    "avoid": "避免",
+    "columns": "展示列",
+    "chooseColumns": "请选择至少一列还款信息",
+    "repaymentPreview": "成图中的还款信息"
   },
   "copyLibrary": {
     "noLibrary": "还没有文案库",
@@ -645,9 +648,11 @@
     "archiveFailed": "无法打包下载交付包"
   },
   "automaticRetry": {
-    "label": "自动重试",
+    "label": "故障自动重试",
     "paused": "已暂停",
-    "description": "关闭后暂停本工作区的自动恢复、任务续跑及已排队的自动重试。已开始的任务会继续，手动操作不受影响。",
-    "updateFailed": "自动重试设置保存失败，请重试。"
+    "description": "控制接口或执行失败后的自动恢复，不控制视觉质检返工。",
+    "updateFailed": "自动重试设置保存失败，请重试。",
+    "reworkLabel": "质检自动返工",
+    "reworkDescription": "质检发现视觉问题时自动修图，最多两次；关闭后等待人工处理。"
   }
 }

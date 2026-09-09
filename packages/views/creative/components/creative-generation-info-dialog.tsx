@@ -251,9 +251,9 @@ function parseRepaymentPlanSelections(value: unknown): GenerationFact[] {
     const principal = stringValue(values.principal);
     const tenor = stringValue(values.tenor);
     const monthlyInstallment = stringValue(values.monthly_installment);
-    return principal && tenor && monthlyInstallment
-      ? [{ label: `${principal} / ${tenor}`, value: monthlyInstallment }]
-      : [];
+    const otherValues = [monthlyInstallment, stringValue(values.total_interest), stringValue(values.total_repayment)].filter(Boolean);
+    const title = [principal, tenor].filter(Boolean).join(" / ");
+    return title || otherValues.length ? [{ label: title || stringValue(selection.plan_key), value: otherValues.join(" / ") || title }] : [];
   });
 }
 

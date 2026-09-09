@@ -117,3 +117,54 @@ func TestCreativeRetrySwitchAllowsInitialProduction(t *testing.T) {
 		t.Fatalf("initial production incorrectly paused: %v", err)
 	}
 }
+
+func TestCreativeVisualReworkPolicyIsIndependentAndKeepsLegacyPaused(t *testing.T) {
+	f := createCreativeCountFixture(t, 1)
+	v := createCreativeCandidateOrchestrationVariant(t, f.ItemID, "C01", "candidate", 1, "queued", "1080x1080", []string{"1080x1080"})
+	task := addCreativeCandidateOrchestrationProductionTask(t, f, v, "queued", "candidate_primary")
+	setCreativeRetryForTest(t, false)
+	for _, test := range []struct {
+		name          string
+		rework        string
+		visualEnabled bool
+		allowed       bool
+	}{
+		{"legacy remains paused", `{}`, true, false},
+		{"new visual rework runs", `{"policy_version":2}`, true, true},
+		{"visual switch pauses new rework", `{"policy_version":2}`, false, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if _, err := testPool.Exec(t.Context(), `UPDATE agent_task_queue SET context=context || jsonb_build_object('qc_visual_rework',$2::jsonb) WHERE id=$1`, task.ID, test.rework); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := testPool.Exec(t.Context(), `UPDATE creative_factory_settings SET visual_rework_enabled=$2 WHERE workspace_id=$1`, testWorkspaceID, test.visualEnabled); err != nil {
+				t.Fatal(err)
+			}
+			var allowed bool
+			if err := testPool.QueryRow(t.Context(), `SELECT creative_task_retry_allowed($1)`, task.ID).Scan(&allowed); err != nil {
+				t.Fatal(err)
+			}
+			if allowed != test.allowed {
+				t.Fatalf("claim allowed=%v, want %v", allowed, test.allowed)
+			}
+		})
+	}
+}
+
+func TestCreativeRetrySettingsPatchPreservesOtherSwitch(t *testing.T) {
+	setCreativeRetryForTest(t, false)
+	req := httptest.NewRequest(http.MethodPatch, "/api/creative/settings", strings.NewReader(`{"visual_rework_enabled":false}`))
+	req = req.WithContext(middleware.SetMemberContext(req.Context(), testWorkspaceID, db.Member{Role: "admin"}))
+	w := httptest.NewRecorder()
+	testHandler.UpdateCreativeRetrySettings(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("%d %s", w.Code, w.Body.String())
+	}
+	var retry, rework bool
+	if err := testPool.QueryRow(t.Context(), `SELECT automatic_retry_enabled,visual_rework_enabled FROM creative_factory_settings WHERE workspace_id=$1`, testWorkspaceID).Scan(&retry, &rework); err != nil {
+		t.Fatal(err)
+	}
+	if retry || rework {
+		t.Fatalf("unexpected settings: retry=%v rework=%v", retry, rework)
+	}
+}

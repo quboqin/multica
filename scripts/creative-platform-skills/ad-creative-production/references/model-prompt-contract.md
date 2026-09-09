@@ -83,7 +83,7 @@ For `source_kind=copy_library`, no candidate source is supplied. Input 1 is curr
 only the declared primary-image identity references. Number input labels by their actual order and use those same labels throughout
 TASK, INPUT ROLES, and PRIME SUPPORT. Do not synthesize a source image or copy competitor-structure instructions into this branch.
 Set the creation instruction to create an original visual identity from the selected copy. APPROVED COPY includes only selected strings
-and repayment rows; explicitly prohibit filling omitted slots. With `visual_only=true`, state that no business copy, claims, numbers,
+and the selected repayment columns in their frozen order; explicitly prohibit filling omitted slots or columns. The sole display source is repayment_plan_selections.values plus repayment_plan_labels filtered by repayment_plan_columns. Raw repayment_plan_entries are audit-only and cannot donate missing columns, numbers, or labels. Currency prefixes come from the frozen display values; never hardcode Rp for another market. With `visual_only=true`, state that no business copy, claims, numbers,
 repayment table, or CTA may be added. Official Prime content keeps its existing composition contract.
 
 Compile the copy-library LayoutPlan as natural-language reading order and content grouping. For dense copy, reduce decoration and
@@ -95,7 +95,9 @@ clear of the real Prime context while the background remains full-bleed; the pla
 
 For bounded visual rework, Input 1 is the failed same-size generated base in `deterministic` mode, or the failed same-size
 model-integrated image in `model_integrated` mode. Input 2 remains current-size Prime context. Keep the same DesignDNA, approved copy,
-and business facts and edit only the failed acceptance targets.
+and business facts and edit only the failed acceptance targets. For local reflow, describe one concrete overlap and where the complete module should move in relation to the visible template; preserve the rest. For contrast-only repair, edit only the quiet surrounding background according to the actual template color. Never change template family between this reference and final composition.
+
+Only the explicitly assigned background_expansion fallback uses references/background-expansion.md instead of the full-design TASK: extend the surrounding background without generating or editing text. It is not a default generation method. Masks guide the model; the protected body is restored deterministically after its response.
 
 ## Compilation
 

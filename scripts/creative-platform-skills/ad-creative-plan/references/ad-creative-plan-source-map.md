@@ -20,3 +20,4 @@
 | Variant briefs carry structured creative decisions only; the production Agent writes the final prompt per size and brief does not duplicate it, the repayment table, or source-audit prose | `scripts/creative-platform-skills/ad-creative-plan/SKILL.md:方案合同` |
 
 Copy selection and block filling are completed by pre-adaptation. This Skill's runtime source is only the order item's frozen schema-v3 `copy_snapshot`; mutable copy-library resources are intentionally excluded.
+| User-selected repayment columns alone define visible table fields, with currency frozen from the published market | `server/internal/handler/creative_copy_library_order.go`, `SKILL.md:自选还款列与 Prime 一致性` |

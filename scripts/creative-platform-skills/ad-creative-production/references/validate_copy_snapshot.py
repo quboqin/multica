@@ -12,7 +12,7 @@ from typing import Any
 
 
 CREATIVE_TYPES = {"num", "repayment_plan"}
-CURRENCY_PATTERN = re.compile(r"\b(?:Rp\.?|IDR)\s*(\d+(?:[.,]\d+)*)", re.IGNORECASE)
+CURRENCY_PATTERN = re.compile(r"\b(Rp\.?|IDR|RM|MYR|USD|SGD|THB|PHP|VND|EUR|GBP|AUD)\s*(\d+(?:[.,]\d+)*)", re.IGNORECASE)
 PERCENT_PATTERN = re.compile(r"\b(\d+(?:[.,]\d+)?)\s*%")
 TERM_PATTERN = re.compile(r"\b(\d+(?:\s*-\s*\d+)?)\s*(bulan|hari|tahun)\b", re.IGNORECASE)
 FINANCIAL_NUMBER_PATTERN = re.compile(
@@ -223,8 +223,10 @@ def digits(value: str) -> str:
 def financial_tokens(value: str) -> set[str]:
     tokens: set[str] = set()
     for match in CURRENCY_PATTERN.finditer(value):
-        normalized = digits(match.group(1))
-        tokens.update((f"currency:{normalized}", f"financial_number:{normalized}"))
+        normalized = digits(match.group(2))
+        code = match.group(1).upper().rstrip(".")
+        code = {"RP": "IDR", "RM": "MYR"}.get(code, code)
+        tokens.update((f"currency:{normalized}", f"financial_number:{normalized}", f"denomination:{code}:{normalized}"))
     for match in PERCENT_PATTERN.finditer(value):
         tokens.add(f"percent:{match.group(1).replace(',', '.')}")
     for match in TERM_PATTERN.finditer(value):
@@ -854,7 +856,7 @@ def approved_text(snapshot: dict[str, Any]) -> str:
         snapshot.get("cta"),
         snapshot.get("legal_text"),
     ]
-    for entry in snapshot.get("repayment_plan_entries") or []:
+    for entry in ([] if "repayment_plan_columns" in snapshot else snapshot.get("repayment_plan_entries") or []):
         if isinstance(entry, dict):
             values.extend(
                 entry.get(key)
@@ -877,7 +879,8 @@ def approved_text(snapshot: dict[str, Any]) -> str:
                 values.extend(calculation.get("inputs") or [])
     for selection in snapshot.get("repayment_plan_selections") or adaptation.get("repayment_plan_selections") or []:
         if isinstance(selection, dict):
-            values.extend(selection.get(key) for key in ("principal", "tenor_months"))
+            if "repayment_plan_columns" not in snapshot:
+                values.extend(selection.get(key) for key in ("principal", "tenor_months"))
             selection_values = selection.get("values")
             if isinstance(selection_values, dict):
                 values.extend(selection_values.values())

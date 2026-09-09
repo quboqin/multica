@@ -17,6 +17,8 @@ import { toast } from "sonner";
 import { useT } from "../../i18n";
 import { creativeSubmissionKey, EMPTY_VISUAL_DIRECTION, VisualDirectionEditor, visualDirectionSummary } from "./creative-material-library";
 
+const PLAN_COLUMNS = ["principal", "tenor", "monthly_installment", "total_interest", "total_repayment"] as const;
+
 const COPY_SLOTS: CreativeCopyFragmentRole[] = ["headline", "subheadline", "benefit", "supporting", "cta", "legal"];
 
 export function CopyLibraryOrderDialog({ library, onClose, onCreated }: { library: CreativeResource; onClose: () => void; onCreated: (orderId: string) => void }) {
@@ -36,6 +38,12 @@ export function CopyLibraryOrderDialog({ library, onClose, onCreated }: { librar
   const [targetVariantCount, setTargetVariantCount] = useState(DEFAULT_CREATIVE_VARIANT_COUNT);
   const [slots, setSlots] = useState<Partial<Record<CreativeCopyFragmentRole, string[]>>>({});
   const [plans, setPlans] = useState<string[]>([]);
+  const [planColumns, setPlanColumns] = useState<string[]>(["principal", "tenor", "monthly_installment"]);
+  const money = (value: number) => {
+    const currency = String(market?.published_config?.currency || "IDR").toUpperCase();
+    const digits = String(value).replace(/\B(?=(\d{3})+(?!\d))/g, currency === "IDR" ? "." : ",");
+    return currency === "IDR" ? "Rp" + digits : currency === "MYR" ? "RM" + digits : currency + " " + digits;
+  };
   const [direction, setDirection] = useState(EMPTY_VISUAL_DIRECTION);
   const [recipeId, setRecipeId] = useState("");
   const available = config.fragments.filter((fragment) => fragment.status === "approved" && fragment.creative_types.includes(creativeType) && fragment.text.trim());
@@ -49,7 +57,8 @@ export function CopyLibraryOrderDialog({ library, onClose, onCreated }: { librar
   const create = useMutation({
     mutationFn: async () => {
       if (!market || !squad || !files.data) throw new Error(t(($) => $.copyOrder.missingConfiguration));
-      const selection = { library_version: library.published_version, creative_type: creativeType, slots, repayment_plan_keys: plans, visual_only: visualOnly, visual_direction: direction };
+      if (plans.length && !planColumns.length) throw new Error(t(($) => $.copyOrder.chooseColumns));
+      const selection = { library_version: library.published_version, creative_type: creativeType, slots, repayment_plan_keys: plans, repayment_plan_columns: planColumns, visual_only: visualOnly, visual_direction: direction };
       const key = await creativeSubmissionKey({ source_kind: "copy_library", library: library.id, market: market.id, marketVersion: market.published_version, squad: squad.id, targetVariantCount, selection });
       if (recovery.current.key !== key) recovery.current = { key, issueId: "", orderId: "" };
       if (!recovery.current.issueId) {
@@ -100,7 +109,11 @@ export function CopyLibraryOrderDialog({ library, onClose, onCreated }: { librar
             })}</div>
           </details>)}</div>
           <div className="min-w-0 space-y-5"><section><h3 className="text-sm font-medium">{t(($) => $.copyOrder.selectedCopy)}</h3>{visualOnly ? <p className="mt-3 text-sm text-muted-foreground">{t(($) => $.copyOrder.visualOnly)}</p> : COPY_SLOTS.filter((role) => slots[role]?.length).map((role) => <div key={role} className="mt-3 border-l-2 pl-3"><p className="text-xs text-muted-foreground">{labels[role]}</p>{slots[role]?.map((id) => <p key={id} className="mt-1 whitespace-pre-wrap break-words text-sm">{available.find((fragment) => fragment.id === id)?.text}</p>)}</div>)}</section>
-            <section className="border-t pt-4"><h3 className="text-sm font-medium">{t(($) => $.copyOrder.repayment)} <span className="text-xs font-normal text-muted-foreground">{t(($) => $.copyOrder.optional)}</span></h3><div className="mt-3 max-h-52 space-y-3 overflow-y-auto">{config.repayment_plan.entries.filter((entry) => entry.status === "approved").map((entry) => <label key={entry.key} className="flex items-start gap-2 text-sm"><input type="checkbox" className="mt-1 h-4 w-4 shrink-0" checked={plans.includes(entry.key)} onChange={(event) => setPlans((current) => event.target.checked ? [...current, entry.key] : current.filter((key) => key !== entry.key))} /><span>{config.repayment_plan.labels.principal}: {entry.principal.toLocaleString()} · {config.repayment_plan.labels.tenor}: {entry.tenor_months}<span className="block text-xs text-muted-foreground">{config.repayment_plan.labels.monthly_installment}: {entry.monthly_installment.toLocaleString()} · {config.repayment_plan.labels.total_repayment}: {entry.total_repayment.toLocaleString()}</span></span></label>)}</div></section>
+            <section className="border-t pt-4"><h3 className="text-sm font-medium">{t(($) => $.copyOrder.repayment)} <span className="text-xs font-normal text-muted-foreground">{t(($) => $.copyOrder.optional)}</span></h3>
+              <fieldset className="mt-3"><legend className="text-xs text-muted-foreground">{t(($) => $.copyOrder.columns)}</legend><div className="mt-2 flex flex-wrap gap-3">{PLAN_COLUMNS.map((column) => <label key={column} className="flex items-center gap-2 text-xs"><input type="checkbox" checked={planColumns.includes(column)} onChange={(event) => setPlanColumns((current) => PLAN_COLUMNS.filter((key) => key === column ? event.target.checked : current.includes(key)))} />{config.repayment_plan.labels[column]}</label>)}</div></fieldset>
+              <div className="mt-3 max-h-52 space-y-3 overflow-y-auto">{config.repayment_plan.entries.filter((entry) => entry.status === "approved").map((entry) => <label key={entry.key} className="flex items-start gap-2 text-sm"><input type="checkbox" className="mt-1 h-4 w-4 shrink-0" checked={plans.includes(entry.key)} onChange={(event) => setPlans((current) => event.target.checked ? [...current, entry.key] : current.filter((key) => key !== entry.key))} /><span>{config.repayment_plan.labels.principal}: {money(entry.principal)} · {config.repayment_plan.labels.tenor}: {entry.tenor_months}<span className="block text-xs text-muted-foreground">{planColumns.filter((column) => column !== "principal" && column !== "tenor").map((column) => { const field = column as "monthly_installment" | "total_interest" | "total_repayment"; return config.repayment_plan.labels[field] + ": " + money(entry[field]); }).join(" · ")}</span></span></label>)}</div>
+              {plans.length > 0 && <div className="mt-3 overflow-x-auto"><p className="mb-2 text-xs text-muted-foreground">{t(($) => $.copyOrder.repaymentPreview)}</p><table className="w-full text-xs"><thead><tr>{PLAN_COLUMNS.filter((column) => planColumns.includes(column)).map((column) => <th key={column} className="p-1 text-left font-medium">{config.repayment_plan.labels[column]}</th>)}</tr></thead><tbody>{config.repayment_plan.entries.filter((entry) => plans.includes(entry.key)).map((entry) => <tr key={entry.key}>{PLAN_COLUMNS.filter((column) => planColumns.includes(column)).map((column) => <td key={column} className="p-1">{column === "tenor" ? entry.tenor_months : money(entry[column])}</td>)}</tr>)}</tbody></table>{!planColumns.length && <p role="alert" className="text-destructive">{t(($) => $.copyOrder.chooseColumns)}</p>}</div>}
+            </section>
           </div>
         </div>
         <div className="mt-5"><VisualDirectionEditor value={direction} onChange={setDirection} /></div>
@@ -108,7 +121,7 @@ export function CopyLibraryOrderDialog({ library, onClose, onCreated }: { librar
       <div className="flex flex-wrap items-center justify-between gap-3 border-t px-5 py-4">
         <p role={create.error ? "alert" : "status"} className="min-w-0 flex-1 break-words text-sm text-destructive">{create.error ? create.error.message : !market || !squad ? t(($) => $.copyOrder.missingConfiguration) : ""}</p>
         <Button variant="outline" disabled={create.isPending} onClick={onClose}>{t(($) => $.copyOrder.cancel)}</Button>
-        <Button disabled={create.isPending || !market || !squad || !files.data || files.isError} onClick={() => create.mutate()}>{create.isPending ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}{create.isPending ? t(($) => $.copyOrder.submitting) : visualOnly ? t(($) => $.copyOrder.startVisualOnly) : t(($) => $.copyOrder.submit)}</Button>
+        <Button disabled={create.isPending || !market || !squad || !files.data || files.isError || (plans.length > 0 && planColumns.length === 0)} onClick={() => create.mutate()}>{create.isPending ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}{create.isPending ? t(($) => $.copyOrder.submitting) : visualOnly ? t(($) => $.copyOrder.startVisualOnly) : t(($) => $.copyOrder.submit)}</Button>
       </div>
     </DialogContent>
   </Dialog>;

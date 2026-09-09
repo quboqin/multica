@@ -15,7 +15,7 @@ vi.mock("@multica/core/creative", async () => {
 vi.mock("../../i18n", () => ({ useT: () => ({ t: (selector: (value: typeof copy) => string) => selector(copy) }) }));
 vi.mock("sonner", () => ({ toast: { error: mocks.error } }));
 
-beforeEach(() => { vi.resetAllMocks(); mocks.get.mockResolvedValue({ automatic_retry_enabled: true, can_manage: true }); });
+beforeEach(() => { vi.resetAllMocks(); mocks.get.mockResolvedValue({ visual_rework_enabled: true, automatic_retry_enabled: true, can_manage: true }); });
 afterEach(cleanup);
 function mount() {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
@@ -23,9 +23,9 @@ function mount() {
 }
 
 it("saves a disabled switch and displays the paused state", async () => {
-  mocks.update.mockImplementation(async () => { mocks.get.mockResolvedValue({ automatic_retry_enabled: false, can_manage: true }); return { automatic_retry_enabled: false, can_manage: true }; });
+  mocks.update.mockImplementation(async () => { mocks.get.mockResolvedValue({ visual_rework_enabled: true, automatic_retry_enabled: false, can_manage: true }); return { visual_rework_enabled: true, automatic_retry_enabled: false, can_manage: true }; });
   mount();
-  const control = screen.getByRole("switch", { name: "自动重试" });
+  const control = screen.getByRole("switch", { name: "故障自动重试" });
   await waitFor(() => expect(control).toBeChecked());
   fireEvent.click(control);
   await waitFor(() => expect(mocks.update).toHaveBeenCalledWith(false));
@@ -36,17 +36,28 @@ it("saves a disabled switch and displays the paused state", async () => {
 it("restores the server value when saving fails", async () => {
   mocks.update.mockRejectedValue(new Error("failed"));
   mount();
-  const control = screen.getByRole("switch", { name: "自动重试" });
+  const control = screen.getByRole("switch", { name: "故障自动重试" });
   await waitFor(() => expect(control).toBeChecked());
   fireEvent.click(control);
   await waitFor(() => expect(mocks.error).toHaveBeenCalled());
   await waitFor(() => expect(control).toBeChecked());
 });
 
-it("does not allow members without management permission to toggle", async () => {
-  mocks.get.mockResolvedValue({ automatic_retry_enabled: true, can_manage: false });
+it("keeps visual rework enabled when infrastructure retries are off", async () => {
+  mocks.get.mockResolvedValue({ automatic_retry_enabled: false, visual_rework_enabled: true, can_manage: true });
+  mocks.update.mockResolvedValue({ automatic_retry_enabled: false, visual_rework_enabled: false, can_manage: true });
   mount();
-  const control = screen.getByRole("switch", { name: "自动重试" });
+  const rework = screen.getByRole("switch", { name: copy.automaticRetry.reworkLabel });
+  await waitFor(() => expect(rework).toBeChecked());
+  expect(screen.getByRole("switch", { name: copy.automaticRetry.label })).not.toBeChecked();
+  fireEvent.click(rework);
+  await waitFor(() => expect(mocks.update).toHaveBeenCalledWith(false, "visual_rework_enabled"));
+});
+
+it("does not allow members without management permission to toggle", async () => {
+  mocks.get.mockResolvedValue({ visual_rework_enabled: true, automatic_retry_enabled: true, can_manage: false });
+  mount();
+  const control = screen.getByRole("switch", { name: "故障自动重试" });
   await waitFor(() => expect(control).toBeChecked());
   expect(control).toHaveAttribute("aria-disabled", "true");
   fireEvent.click(control);

@@ -111,6 +111,27 @@ class FullTemplateComposeTest(unittest.TestCase):
         manifest_path.write_text(json.dumps(self.manifest(bodies, white, green)), encoding="utf-8")
         return compose_manifest(manifest_path)
 
+    def test_final_template_matches_model_context_even_when_contrast_prefers_another(self) -> None:
+        bodies = self.write_bodies((250, 250, 250, 255))
+        white = self.write_family("white", (255, 255, 255, 255))
+        green = self.write_family("green", (0, 100, 50, 255))
+        manifest = self.manifest(bodies, white, green)
+        for job in manifest["jobs"]:
+            job["prime_template_source_role"] = manifest["prime_template_set"]["families"][0]["templates"][job["size"]]["source_role"]
+        path = self.root / "pinned.json"
+        path.write_text(json.dumps(manifest))
+        result = compose_manifest(path)
+        self.assertEqual(result["succeeded"], 3)
+        for output in result["results"]:
+            selection = output["template_selection"]
+            self.assertEqual(selection["selected_family_id"], "white_full")
+            self.assertEqual(selection["selection_mode"], "frozen_prime_context")
+            self.assertEqual(selection["visual_adequacy"]["status"], "qc_risk")
+        manifest["jobs"][0]["prime_template_source_role"] = "unapproved-role"
+        path.write_text(json.dumps(manifest))
+        with self.assertRaises(ValueError):
+            compose_manifest(path)
+
     def test_dominant_bright_patch_reselects_an_approved_readable_family(self) -> None:
         bodies = self.write_bodies((15, 30, 50, 255))
         result = self.compose(

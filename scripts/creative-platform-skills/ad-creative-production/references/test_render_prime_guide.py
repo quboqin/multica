@@ -80,12 +80,12 @@ def test_render_prime_context_preserves_official_visual_cues_only_in_hard_region
     with Image.open(output_path) as image:
         assert image.mode == "RGBA"
         assert image.getpixel((1, 3))[:3] == (180, 20, 30)
-        assert image.getpixel((1, 3))[3] == 148
+        assert image.getpixel((1, 3))[3] == 255
         assert image.getpixel((1, 1))[3] == 0
     evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
     assert evidence["non_rendering_context"] is True
     assert evidence["render_style"] == "official_prime_visual_context"
-    assert evidence["template_alpha"] == 0.58
+    assert evidence["template_alpha"] == 1.0
 
 
 def test_render_prime_context_emits_conservative_reflow_guide(tmp_path: Path, monkeypatch) -> None:

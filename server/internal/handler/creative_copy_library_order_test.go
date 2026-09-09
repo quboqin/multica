@@ -20,7 +20,7 @@ func copyOrderTestLibrary() creativeResourceResponse {
 
 func TestCopyLibraryOrderFreezesOnlySelectedCopy(t *testing.T) {
 	selection := creativeCopyLibrarySelection{LibraryVersion: 2, CreativeType: "num", Slots: map[string][]string{"subheadline": {"headline-1"}}, RepaymentPlanKeys: []string{"plan"}}
-	raw, err := freezeCreativeCopyLibrarySelection(selection, copyOrderTestLibrary())
+	raw, err := freezeCreativeCopyLibrarySelection(selection, copyOrderTestLibrary(), json.RawMessage(`{"currency":"IDR"}`))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -38,7 +38,7 @@ func TestCopyLibraryOrderFreezesOnlySelectedCopy(t *testing.T) {
 
 func TestCopyLibraryOrderAllowsExplicitEmptySelection(t *testing.T) {
 	selection := creativeCopyLibrarySelection{LibraryVersion: 2, CreativeType: "repayment_plan", VisualOnly: true}
-	raw, err := freezeCreativeCopyLibrarySelection(selection, copyOrderTestLibrary())
+	raw, err := freezeCreativeCopyLibrarySelection(selection, copyOrderTestLibrary(), json.RawMessage(`{"currency":"IDR"}`))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -50,7 +50,7 @@ func TestCopyLibraryOrderAllowsExplicitEmptySelection(t *testing.T) {
 		t.Fatalf("empty selection was filled: %s", raw)
 	}
 	selection.VisualOnly = false
-	if _, err := freezeCreativeCopyLibrarySelection(selection, copyOrderTestLibrary()); err == nil {
+	if _, err := freezeCreativeCopyLibrarySelection(selection, copyOrderTestLibrary(), json.RawMessage(`{"currency":"IDR"}`)); err == nil {
 		t.Fatal("empty selection requires explicit visual-only intent")
 	}
 }
@@ -65,7 +65,7 @@ func TestCopyLibraryOrderRejectsStaleOrUnapprovedSelections(t *testing.T) {
 		"slot":      {LibraryVersion: 2, CreativeType: "num", VisualOnly: true, Slots: map[string][]string{"unrecognized": {}}},
 	} {
 		t.Run(name, func(t *testing.T) {
-			if _, err := freezeCreativeCopyLibrarySelection(selection, copyOrderTestLibrary()); err == nil {
+			if _, err := freezeCreativeCopyLibrarySelection(selection, copyOrderTestLibrary(), json.RawMessage(`{"currency":"IDR"}`)); err == nil {
 				t.Fatal("invalid selection was accepted")
 			}
 		})
@@ -180,5 +180,33 @@ FROM creative_order_item WHERE order_id = $1`, orderID)
 	}
 	if _, err := tx.Exec(t.Context(), string(down)); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestCopyLibrarySelectedColumnsUsePublishedMarketCurrency(t *testing.T) {
+	selection := creativeCopyLibrarySelection{LibraryVersion: 2, CreativeType: "repayment_plan", RepaymentPlanKeys: []string{"plan"}, RepaymentPlanColumns: []string{"principal", "tenor", "monthly_installment"}}
+	raw, err := freezeCreativeCopyLibrarySelection(selection, copyOrderTestLibrary(), json.RawMessage(`{"currency":"MYR","locale":"ms-MY"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var snapshot struct {
+		Columns []string `json:"repayment_plan_columns"`
+		Plans   []struct {
+			Values map[string]string `json:"values"`
+		} `json:"repayment_plan_selections"`
+		Entries []json.RawMessage `json:"repayment_plan_entries"`
+	}
+	if err := json.Unmarshal(raw, &snapshot); err != nil {
+		t.Fatal(err)
+	}
+	values := snapshot.Plans[0].Values
+	if len(values) != 3 || values["principal"] != "RM1,000" || values["monthly_installment"] != "RM350" || len(snapshot.Entries) != 1 {
+		t.Fatalf("invalid selected snapshot: %s", raw)
+	}
+	for _, columns := range [][]string{{}, {"unknown"}, {"principal", "principal"}} {
+		selection.RepaymentPlanColumns = columns
+		if _, err := freezeCreativeCopyLibrarySelection(selection, copyOrderTestLibrary(), json.RawMessage(`{"currency":"MYR"}`)); err == nil {
+			t.Fatalf("accepted invalid columns %v", columns)
+		}
 	}
 }

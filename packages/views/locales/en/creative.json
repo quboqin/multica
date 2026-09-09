@@ -102,7 +102,10 @@
     "theme": "Theme",
     "style": "Style",
     "preserve": "Required visual elements",
-    "avoid": "Avoid"
+    "avoid": "Avoid",
+    "columns": "Columns to display",
+    "chooseColumns": "Select at least one repayment column",
+    "repaymentPreview": "Repayment information in the image"
   },
   "copyLibrary": {
     "noLibrary": "No copy library yet",
@@ -645,9 +648,11 @@
     "archiveFailed": "Could not package the delivery archive"
   },
   "automaticRetry": {
-    "label": "Automatic retries",
+    "label": "Retry failed tasks",
     "paused": "Paused",
-    "description": "Pause automatic recovery, task continuations, and queued retries in this workspace. Started tasks continue and manual actions remain available.",
-    "updateFailed": "Could not save automatic retry settings. Try again."
+    "description": "Automatically recover interface or execution failures. Visual rework is controlled separately.",
+    "updateFailed": "Could not save automatic retry settings. Try again.",
+    "reworkLabel": "Automatic visual rework",
+    "reworkDescription": "Automatically repair visual defects after QC, up to two attempts. When disabled, wait for manual action."
   }
 }

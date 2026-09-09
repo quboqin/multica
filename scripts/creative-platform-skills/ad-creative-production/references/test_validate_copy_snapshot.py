@@ -18,6 +18,13 @@ from validate_copy_snapshot import (
 )
 
 
+def test_selected_columns_do_not_reintroduce_audit_only_values():
+    snapshot = {"repayment_plan_columns": ["total_interest"],
+                "repayment_plan_entries": [{"principal": 1000, "tenor_months": 3, "monthly_installment": 350, "total_interest": 50, "total_repayment": 1050}],
+                "repayment_plan_selections": [{"values": {"total_interest": "RM50"}}]}
+    assert approved_text(snapshot) == "RM50"
+
+
 def approved_snapshot() -> dict:
     return {
         "schema_version": 3,
@@ -46,7 +53,11 @@ def test_financial_tokens_normalize_ranges_and_keyword_amounts() -> None:
     assert financial_tokens("Rp80000000 / Rp.80.000.000 / IDR 80.000.000") == {
         "currency:80000000",
         "financial_number:80000000",
+        "denomination:IDR:80000000",
     }
+
+    assert financial_tokens("RM1,000") == financial_tokens("MYR 1,000")
+    assert "denomination:IDR:1000" in financial_tokens("Rp1.000") - financial_tokens("RM1,000")
 
 
 def test_validate_snapshot_rejects_legacy_or_incomplete_approved_copy() -> None:

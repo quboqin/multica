@@ -176,3 +176,9 @@ multica creative order qc-finalize <order-id> --output json
 `deterministic` 的完整模板按上传文件原样 alpha 叠加；`model_integrated` 只允许已验证的无二维码模板族，由实际目检而非 alpha 证据验收。
 二维码属于官方 Prime 模板资产，机器检查不再解码二维码，只记录跳过状态且不得因此阻断。QC 不直接改图。它只提交最终视觉结论；符合上述合同的自动返工由服务端创建生产任务。工具或写回失败只影响当前 lane，
 保留真实 error code/message，不影响兄弟 Variant，也不创建子 Issue。
+
+## 自选还款列与 Prime 一致性
+
+文案库订单存在 repayment_plan_columns 时，它就是唯一展示列集合与顺序。只消费 repayment_plan_selections.values 和对应 repayment_plan_labels；repayment_plan_entries 保留作审核，不得从中补齐未选金额、期限、总利息或总还款。已选列即使只有一列也合法；不强制本金、期限、月还同时展示。货币符号原样使用冻结市场展示值（如 MYR 的 RM），不得默认 Rp。
+
+分别检查实际贴片遮挡 actual_prime_obstruction 和官方文字不可读 official_prime_text_unreadable，不能把自动对比度风险直接说成标题被挡。同尺寸两种问题可以并存，分别描述真实位置与修复目标；背景扩展后还要验收正文可读性、边缘接缝、重复文字与三尺寸身份一致性。只能对当前 revision 的真实 Prime 成图判定通过。

@@ -3545,6 +3545,13 @@ func TestCreativeVisualModelReworkFindingsAcceptsOnlyFinalVisualDefects(t *testi
 	if err != nil || len(findings) != 2 {
 		t.Fatalf("valid visual findings = %#v, %v", findings, err)
 	}
+	combined, err := creativeVisualModelReworkFindings(json.RawMessage(`{"blocking_failures":[
+{"code":"actual_prime_obstruction","size_key":"1200x628","diagnosis":"1200x628：还款表格与底部 Prime 实际叠压；期望移动到 safe_content_frame 内的中部正文区域"},
+{"code":"official_prime_text_unreadable","size_key":"1200x628","diagnosis":"1200x628：底部 Prime 官方文字不可读；期望调整为连续低纹理的深色背景"}
+]}`), expectedSizes)
+	if err != nil || len(combined) != 1 || combined[0].Code != "actual_prime_obstruction" || !strings.Contains(combined[0].Diagnosis, "深色背景") {
+		t.Fatalf("same-size overlap and contrast must both be repaired: %#v %v", combined, err)
+	}
 	mixedFindings, err := creativeVisualModelReworkFindings(json.RawMessage(`{
   "blocking_failures": [
     {"code":"actual_prime_obstruction","size_key":"1200x628","diagnosis":"1200x628：还款表格下沿与底部 Prime 法务文字实际叠压；期望移动到 safe_content_frame 内 y<=566"},
@@ -3710,6 +3717,16 @@ func TestCreativeVisualModelReworkAttemptCountSupportsTwoAttempts(t *testing.T) 
 	if err != nil || attempts != creativeVisualModelReworkMaxAttempts {
 		t.Fatalf("empty completed visual rework consumed an attempt = %d, %v", attempts, err)
 	}
+	for i := 0; i < 2; i++ {
+		if _, err := tx.Exec(t.Context(), `INSERT INTO agent_task_queue(agent_id,runtime_id,status,trigger_evidence_kind,trigger_evidence_ref_id,context)
+VALUES($1,(SELECT runtime_id FROM agent WHERE id=$1),'queued','creative_order_item_production',$2,$3::jsonb)`, agentID, uuid.New(), fmt.Sprintf(`{"type":"creative_domain_task","workflow":"creative_production","variant_id":"%s","revision":4,"qc_visual_rework":{"policy_version":2}}`, uuidToString(variantID))); err != nil {
+			t.Fatal(err)
+		}
+	}
+	attempts, err = creativeVisualModelReworkAttemptCount(t.Context(), tx, variantID)
+	if err != nil || attempts != creativeVisualModelReworkMaxAttempts+1 {
+		t.Fatalf("infrastructure continuation spent an extra visual round: %d %v", attempts, err)
+	}
 }
 
 func TestQueueCreativeVisualModelReworkReusesOnlyPassingGeneratedSizes(t *testing.T) {
@@ -3811,6 +3828,50 @@ WHERE variant_id = $1 AND revision = 2 AND stage = 'generated'
 	attempts, err := creativeVisualModelReworkAttemptCount(t.Context(), tx, parseUUID(variantID))
 	if err != nil || attempts != 1 {
 		t.Fatalf("queued visual rework attempts = %d, %v", attempts, err)
+	}
+	if reworkTask.IssueID.Valid {
+		t.Fatal("variant rework must not occupy the root issue/agent pending slot")
+	}
+	var contract struct {
+		Rework struct {
+			Policy     int               `json:"policy_version"`
+			Strategies map[string]string `json:"size_strategies"`
+		} `json:"qc_visual_rework"`
+	}
+	if err := json.Unmarshal(reworkTask.Context, &contract); err != nil {
+		t.Fatal(err)
+	}
+	if contract.Rework.Policy != 2 || contract.Rework.Strategies["1200x628"] != "local_reflow" {
+		t.Fatalf("wrong first rework: %s", reworkTask.Context)
+	}
+	// Another variant shares the producer and root issue, but has its own pending work.
+	var secondVariant string
+	if err := tx.QueryRow(t.Context(), `INSERT INTO creative_order_variant(order_item_id,variant_key,revision,status) VALUES($1,'V02',1,'running') RETURNING id::text`, itemID).Scan(&secondVariant); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(t.Context(), `INSERT INTO creative_order_asset(variant_id,size_key,revision,stage,attachment_id,status) SELECT $2,size_key,1,stage,attachment_id,status FROM creative_order_asset WHERE variant_id=$1 AND revision=1`, variantID, secondVariant); err != nil {
+		t.Fatal(err)
+	}
+	findings := []creativeVisualModelReworkFinding{{Code: "actual_prime_obstruction", SizeKey: "1200x628", Diagnosis: "1200x628：标题与 Prime 冲突；期望移动到中间正文区域"}}
+	if _, err := testHandler.queueCreativeVisualModelRework(t.Context(), tx, parseUUID(testWorkspaceID), parseUUID(orderID), parseUUID(itemID), parseUUID(candidateID), parseUUID(secondVariant), parseUUID(issueID), inputSnapshot, 1, standardCreativeAssetSizes, parentTask, findings); err != nil {
+		t.Fatalf("second variant could not queue: %v", err)
+	}
+	// A completed local reflow that still overlaps moves to the bounded background fallback.
+	if _, err := tx.Exec(t.Context(), `UPDATE agent_task_queue SET status='completed' WHERE id=$1`, reworkTask.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(t.Context(), `INSERT INTO creative_order_asset(variant_id,size_key,revision,stage,attachment_id,status) SELECT variant_id,size_key,2,stage,attachment_id,status FROM creative_order_asset WHERE variant_id=$1 AND revision=1 AND size_key='1200x628'`, variantID); err != nil {
+		t.Fatal(err)
+	}
+	second, err := testHandler.queueCreativeVisualModelRework(t.Context(), tx, parseUUID(testWorkspaceID), parseUUID(orderID), parseUUID(itemID), parseUUID(candidateID), parseUUID(variantID), parseUUID(issueID), inputSnapshot, 2, standardCreativeAssetSizes, parentTask, findings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(second.Context, &contract); err != nil {
+		t.Fatal(err)
+	}
+	if contract.Rework.Strategies["1200x628"] != "background_expansion" {
+		t.Fatalf("wrong fallback: %s", second.Context)
 	}
 }
 

@@ -11,12 +11,13 @@ import (
 )
 
 type creativeCopyLibrarySelection struct {
-	LibraryVersion    int                 `json:"library_version"`
-	CreativeType      string              `json:"creative_type"`
-	Slots             map[string][]string `json:"slots"`
-	RepaymentPlanKeys []string            `json:"repayment_plan_keys"`
-	VisualOnly        bool                `json:"visual_only"`
-	VisualDirection   json.RawMessage     `json:"visual_direction"`
+	LibraryVersion       int                 `json:"library_version"`
+	CreativeType         string              `json:"creative_type"`
+	Slots                map[string][]string `json:"slots"`
+	RepaymentPlanColumns []string            `json:"repayment_plan_columns"`
+	RepaymentPlanKeys    []string            `json:"repayment_plan_keys"`
+	VisualOnly           bool                `json:"visual_only"`
+	VisualDirection      json.RawMessage     `json:"visual_direction"`
 }
 
 func freezeCreativeCopyLibraryOrder(ctx context.Context, q dbExecutor, workspaceID pgtype.UUID, input *creativeOrderInput) error {
@@ -66,7 +67,7 @@ func freezeCreativeCopyLibraryOrder(ctx context.Context, q dbExecutor, workspace
 		if err := json.Unmarshal(item.CopySnapshot, &selection); err != nil {
 			return errors.New("invalid copy library selection")
 		}
-		item.CopySnapshot, err = freezeCreativeCopyLibrarySelection(selection, library)
+		item.CopySnapshot, err = freezeCreativeCopyLibrarySelection(selection, library, market.Config)
 		if err != nil {
 			return err
 		}
@@ -74,7 +75,7 @@ func freezeCreativeCopyLibraryOrder(ctx context.Context, q dbExecutor, workspace
 	return nil
 }
 
-func freezeCreativeCopyLibrarySelection(selection creativeCopyLibrarySelection, library creativeResourceResponse) (json.RawMessage, error) {
+func freezeCreativeCopyLibrarySelection(selection creativeCopyLibrarySelection, library creativeResourceResponse, marketConfig json.RawMessage) (json.RawMessage, error) {
 	if selection.LibraryVersion != library.PublishedVersion || selection.LibraryVersion < 1 {
 		return nil, errors.New("copy library published version has changed; reload the selection")
 	}
@@ -151,15 +152,60 @@ func freezeCreativeCopyLibrarySelection(selection creativeCopyLibrarySelection, 
 		seenPlans[key] = true
 	}
 	visualOnly := len(fragments) == 0 && len(entries) == 0
-	planSelections := make([]creativePreAdaptationRepaymentPlanSelection, 0, len(entries))
+	columns := selection.RepaymentPlanColumns
+	if columns == nil {
+		columns = []string{"principal", "tenor", "monthly_installment", "total_interest", "total_repayment"}
+	}
+	allowed := map[string]bool{"principal": true, "tenor": true, "monthly_installment": true, "total_interest": true, "total_repayment": true}
+	seenColumns := map[string]bool{}
+	for _, col := range columns {
+		if !allowed[col] || seenColumns[col] {
+			return nil, fmt.Errorf("invalid repayment column %q", col)
+		}
+		seenColumns[col] = true
+	}
+	if len(entries) > 0 && len(columns) == 0 {
+		return nil, errors.New("select at least one repayment column")
+	}
+	var market struct {
+		Currency string `json:"currency"`
+		Locale   string `json:"locale"`
+	}
+	if err := json.Unmarshal(marketConfig, &market); err != nil {
+		return nil, errors.New("invalid published market currency")
+	}
+	currency := strings.ToUpper(strings.TrimSpace(market.Currency))
+	if len(entries) > 0 && currency == "" {
+		return nil, errors.New("published market currency is required for repayment plans")
+	}
+	formatMoney := func(value int64) string {
+		if currency == "IDR" {
+			return creativeFormatRupiah(value)
+		}
+		digits := fmt.Sprintf("%d", value)
+		for i := len(digits) - 3; i > 0; i -= 3 {
+			digits = digits[:i] + "," + digits[i:]
+		}
+		if currency == "MYR" {
+			return "RM" + digits
+		}
+		return currency + " " + digits
+	}
+	labelsJSON, _ := json.Marshal(config.RepaymentPlan.Labels)
+	var allLabels map[string]string
+	_ = json.Unmarshal(labelsJSON, &allLabels)
+	labels := map[string]string{}
+	for _, col := range columns {
+		labels[col] = allLabels[col]
+	}
+	planSelections := make([]map[string]any, 0, len(entries))
 	for _, entry := range entries {
-		planSelections = append(planSelections, creativePreAdaptationRepaymentPlanSelection{
-			ID: entry.ID, PlanKey: entry.Key, Principal: entry.Principal, TenorMonths: entry.TenorMonths,
-			Values: creativePreAdaptationRepaymentPlanValues{
-				Principal: creativeFormatRupiah(entry.Principal), Tenor: fmt.Sprintf("%d Bulan", entry.TenorMonths),
-				MonthlyInstallment: creativeFormatRupiah(entry.MonthlyInstallment), TotalInterest: creativeFormatRupiah(entry.TotalInterest), TotalRepayment: creativeFormatRupiah(entry.TotalRepayment),
-			},
-		})
+		allValues := map[string]string{"principal": formatMoney(entry.Principal), "tenor": fmt.Sprintf("%d Bulan", entry.TenorMonths), "monthly_installment": formatMoney(entry.MonthlyInstallment), "total_interest": formatMoney(entry.TotalInterest), "total_repayment": formatMoney(entry.TotalRepayment)}
+		values := map[string]string{}
+		for _, col := range columns {
+			values[col] = allValues[col]
+		}
+		planSelections = append(planSelections, map[string]any{"id": entry.ID, "plan_key": entry.Key, "values": values})
 	}
 	if visualOnly != selection.VisualOnly {
 		return nil, errors.New("confirm visual-only exploration when no copy or repayment plan is selected")
@@ -176,8 +222,8 @@ func freezeCreativeCopyLibrarySelection(selection creativeCopyLibrarySelection, 
 		"headline": textByRole["headline"], "subheadline": textByRole["subheadline"], "benefit": textByRole["benefit"],
 		"supporting": textByRole["supporting"], "cta": textByRole["cta"], "legal_text": textByRole["legal"],
 		"slots": selection.Slots, "fragments": fragments, "product_facts": []any{},
-		"repayment_plan_entries": entries, "repayment_plan_labels": config.RepaymentPlan.Labels, "repayment_plan_selections": planSelections,
+		"repayment_plan_entries": entries, "repayment_plan_labels": labels, "repayment_plan_columns": columns, "currency": currency, "repayment_plan_selections": planSelections,
 		"visual_only": visualOnly, "visual_direction": visualDirection,
-		"omitted_copy_policy": "Do not invent or fill unselected copy slots or repayment plans. Render only frozen selected copy and numeric values; official Prime remains unchanged.",
+		"omitted_copy_policy": "Do not invent or fill unselected copy slots or repayment plans. Render only frozen selected copy and repayment_plan_selections.values in repayment_plan_columns order. repayment_plan_entries are audit-only facts, not display instructions. Never add omitted columns, labels, or values. Official Prime remains unchanged.",
 	})
 }

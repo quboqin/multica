@@ -14,7 +14,7 @@ from PIL import Image
 
 
 PACKAGE_CONTRACT_VERSION = 6
-ENGINE_VERSION = 7
+ENGINE_VERSION = 8
 MAX_TEMPLATE_ASPECT_DEVIATION = 0.002
 SIZE_PATTERN = re.compile(r"^[1-9]\d*x[1-9]\d*$", re.IGNORECASE)
 MINIMUM_TEMPLATE_READABILITY_CONTRAST = 24.0
@@ -172,6 +172,9 @@ def validate_package_manifest(manifest: object) -> dict[str, Any]:
             raise ValueError(f"jobs[{index}].size is invalid")
         if not all(isinstance(job.get(key), str) and str(job[key]).strip() for key in ("id", "input", "output")):
             raise ValueError(f"jobs[{index}] identity and paths are required")
+        role = job.get("prime_template_source_role", "")
+        if role and (not isinstance(role, str) or not any(f["templates"][size]["source_role"] == role for f in families)):
+            raise ValueError(f"jobs[{index}].prime_template_source_role is not approved for {size}")
         seen_sizes.add(size)
     return {"sizes": expected_sizes, "families": families, "sources": sources, "jobs": jobs, "layout_contract": layout_contract}
 
@@ -507,6 +510,21 @@ def select_template_for_size(job: dict[str, Any], package: dict[str, Any], root:
         -float(item[2]["background_support"]["texture"]["maximum_local_p90"]),
         float(item[2]["average_band_contrast"]),
     )
+    pinned_role = job.get("prime_template_source_role", "")
+    if pinned_role:
+        pinned = [item for item in scored if item[0]["templates"][size]["source_role"] == pinned_role]
+        if not pinned:
+            raise ValueError(f"Prime context template {pinned_role} could not be evaluated")
+        selected, template, evidence = pinned[0]
+        adequate = evidence["visual_adequacy"]["adequate"]
+        return selected, template, evidence, {
+            "size": size, "selection_scope": "delivery_size", "selection_mode": "frozen_prime_context",
+            "selection_reason": "same_template_as_model_context", "selected_family_id": selected["id"],
+            "selected_family_label": selected["label"], "selected_source_role": pinned_role,
+            "visual_adequacy": {**evidence["visual_adequacy"], "status": "passed" if adequate else "qc_risk",
+                                "reselected_without_regenerating_base": False},
+            "candidates": [candidate_selection_evidence(family, size, e) for family, _, e in scored] + candidate_failures,
+        }
     contrast_selected = max(scored, key=rank) if scored else None
     visually_adequate = [item for item in scored if item[2]["visual_adequacy"]["adequate"]]
     candidates = [candidate_selection_evidence(family, size, evidence) for family, _, evidence in scored] + candidate_failures

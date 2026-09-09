@@ -87,11 +87,11 @@ func TestCreativePlatformSkillsUseFrozenBusinessInputs(t *testing.T) {
 	bootstrap := readCreativePlatformContractFile(t, filepath.Join(root, "scripts", "bootstrap-creative-platform-demo.ps1"))
 	for _, required := range []string{
 		"capability = 'reference_analysis'; version = 19",
-		"capability = 'generation_plan'; version = 43",
-		"capability = 'image_edit'; version = 117",
+		"capability = 'generation_plan'; version = 44",
+		"capability = 'image_edit'; version = 118",
 		"capability = 'prime_compose'; version = 6",
 		"capability = 'direct_image_edit'; version = 34",
-		"capability = 'quality_control'; version = 45",
+		"capability = 'quality_control'; version = 46",
 		"capability = 'crawl_diagnosis'; version = 9",
 		"capability = 'creative_leadership'; version = 56",
 		"初始 direct_edit 由平台原子创建 revision 和 task，Leader 只恢复领域状态确认缺失的当前 revision task",
@@ -107,11 +107,11 @@ func TestCreativePlatformSkillsUseFrozenBusinessInputs(t *testing.T) {
 	installation := readCreativePlatformContractFile(t, filepath.Join(root, "server", "internal", "handler", "creative_factory_installation.go"))
 	for _, required := range []string{
 		`Capability: "reference_analysis", Version: 19`,
-		`Capability: "generation_plan", Version: 43`,
-		`Capability: "image_edit", Version: 117`,
+		`Capability: "generation_plan", Version: 44`,
+		`Capability: "image_edit", Version: 118`,
 		`Capability: "prime_compose", Version: 6`,
 		`Capability: "direct_image_edit", Version: 34`,
-		`Capability: "quality_control", Version: 45`,
+		`Capability: "quality_control", Version: 46`,
 		`Capability: "crawl_diagnosis", Version: 9`,
 		`Capability: "creative_leadership", Version: 56`,
 		"初始 direct_edit 由平台原子创建 revision 和 task，Leader 只恢复领域状态确认缺失的当前 revision task",

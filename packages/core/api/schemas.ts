@@ -2071,3 +2071,5 @@ export const CreateBillingPortalSessionResponseSchema = z.object({
 export const EMPTY_CREATE_BILLING_PORTAL_SESSION_RESPONSE: CreateBillingPortalSessionResponse = {
   url: "",
 };
+
+export const CreativeRetrySettingsSchema = z.object({ automatic_retry_enabled: z.boolean().catch(false), visual_rework_enabled: z.boolean().catch(false), can_manage: z.boolean().catch(false) });

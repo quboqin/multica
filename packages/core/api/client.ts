@@ -210,6 +210,7 @@ import { createRequestId } from "../utils";
 import { getCurrentSlug } from "../platform/workspace-storage";
 import { parseWithFallback } from "./schema";
 import {
+  CreativeRetrySettingsSchema,
   AgentTemplateSchema,
   AgentTaskFanoutResponseSchema,
   AgentTemplateSummaryListSchema,
@@ -3214,12 +3215,14 @@ export class ApiClient {
     await this.fetch(`/api/creative/orders/${encodeURIComponent(id)}`, { method: "DELETE" });
   }
 
-  async getCreativeRetrySettings(signal?: AbortSignal): Promise<{ automatic_retry_enabled: boolean; can_manage: boolean }> {
-    return this.fetch("/api/creative/settings", { signal });
+  async getCreativeRetrySettings(signal?: AbortSignal): Promise<{ automatic_retry_enabled: boolean; visual_rework_enabled: boolean; can_manage: boolean }> {
+    const raw = await this.fetch<unknown>("/api/creative/settings", { signal });
+    return parseWithFallback(raw, CreativeRetrySettingsSchema, { automatic_retry_enabled: false, visual_rework_enabled: false, can_manage: false }, { endpoint: "GET /api/creative/settings" });
   }
 
-  async updateCreativeRetrySettings(enabled: boolean): Promise<{ automatic_retry_enabled: boolean; can_manage: boolean }> {
-    return this.fetch("/api/creative/settings", { method: "PATCH", body: JSON.stringify({ automatic_retry_enabled: enabled }) });
+  async updateCreativeRetrySettings(enabled: boolean, kind: "automatic_retry_enabled" | "visual_rework_enabled" = "automatic_retry_enabled") {
+    const raw = await this.fetch<unknown>("/api/creative/settings", { method: "PATCH", body: JSON.stringify({ [kind]: enabled }) });
+    return parseWithFallback(raw, CreativeRetrySettingsSchema, { automatic_retry_enabled: false, visual_rework_enabled: false, can_manage: false }, { endpoint: "PATCH /api/creative/settings" });
   }
 
   async createCreativeOrder(data: CreateCreativeOrderRequest): Promise<CreativeOrder> {

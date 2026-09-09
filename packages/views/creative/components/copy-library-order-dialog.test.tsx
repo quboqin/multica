@@ -29,12 +29,30 @@ beforeEach(() => {
 });
 afterEach(cleanup);
 
-function mount(onCreated = vi.fn()) {
+function mount(onCreated = vi.fn(), selectedLibrary = library) {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
-  return render(<QueryClientProvider client={queryClient}><CopyLibraryOrderDialog library={library} onClose={vi.fn()} onCreated={onCreated} /></QueryClientProvider>);
+  return render(<QueryClientProvider client={queryClient}><CopyLibraryOrderDialog library={selectedLibrary} onClose={vi.fn()} onCreated={onCreated} /></QueryClientProvider>);
 }
 
 describe("copy library order", () => {
+  it("previews and submits any selected column using the published market currency", async () => {
+    apiMock.listCreativeResources.mockResolvedValue({ resources: [{ id: "market", name: "Malaysia", kind: "market_pack", published_version: 1, published_config: { copy_library_id: library.id, currency: "MYR", locale: "ms-MY" } }] });
+    const selectedLibrary = { ...library, published_config: { ...library.published_config, repayment_plan: {
+      labels: { principal: "Principal", tenor: "Tenor", monthly_installment: "Monthly", total_interest: "Interest", total_repayment: "Total" },
+      entries: [{ id: "plan", key: "plan", principal: 1000, tenor_months: 3, monthly_installment: 350, total_interest: 50, total_repayment: 1050, source: "Approved", status: "approved" }],
+    } } } as unknown as CreativeResource;
+    mount(vi.fn(), selectedLibrary);
+    const columns = screen.getByRole("group", { name: copy.copyOrder.columns });
+    for (const name of ["Principal", "Tenor", "Monthly", "Interest"]) fireEvent.click(within(columns).getByRole("checkbox", { name }));
+    fireEvent.click(await screen.findByRole("checkbox", { name: /Principal: RM1,000/ }));
+    const table = screen.getByRole("table");
+    expect(within(table).getAllByRole("columnheader")).toHaveLength(1);
+    expect(within(table).getByText("Interest")).toBeInTheDocument();
+    expect(within(table).getByText("RM50")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Create images" }));
+    await waitFor(() => expect(apiMock.createCreativeOrder).toHaveBeenCalledOnce());
+    expect(apiMock.createCreativeOrder.mock.calls[0]?.[0].items[0].copy_snapshot).toMatchObject({ repayment_plan_keys: ["plan"], repayment_plan_columns: ["total_interest"] });
+  });
   it.each([1, 3, 10])("freezes %i sets and displays the corresponding image count", async (count) => {
     mount();
     const control = screen.getByRole("combobox", { name: "Number of sets" });

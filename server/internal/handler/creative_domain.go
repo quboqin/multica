@@ -2581,8 +2581,14 @@ func creativeVisualModelReworkFindings(findings json.RawMessage, expectedSizes [
 			blockedSizes[finding.SizeKey] = struct{}{}
 			continue
 		}
-		if _, duplicate := eligibleBySize[finding.SizeKey]; duplicate {
-			blockedSizes[finding.SizeKey] = struct{}{}
+		if previous, duplicate := eligibleBySize[finding.SizeKey]; duplicate {
+			if previous.Code == finding.Code {
+				blockedSizes[finding.SizeKey] = struct{}{}
+			} else {
+				previous.Code = "actual_prime_obstruction"
+				previous.Diagnosis += "；" + finding.Diagnosis
+				eligibleBySize[finding.SizeKey] = previous
+			}
 			continue
 		}
 		eligibleBySize[finding.SizeKey] = *finding
@@ -2594,7 +2600,7 @@ func creativeVisualModelReworkFindings(findings json.RawMessage, expectedSizes [
 			continue
 		}
 		selected, ok := eligibleBySize[finding.SizeKey]
-		if !ok || selected.Code != finding.Code || selected.Diagnosis != finding.Diagnosis {
+		if !ok {
 			continue
 		}
 		eligible = append(eligible, selected)
@@ -2925,7 +2931,8 @@ func mergeCreativeQCPrimeReinspectionConflicts(findings json.RawMessage, conflic
 func creativeVisualModelReworkAttemptCount(ctx context.Context, tx pgx.Tx, variantID pgtype.UUID) (int, error) {
 	var count int
 	err := tx.QueryRow(ctx, `
-SELECT count(*)
+SELECT count(DISTINCT CASE WHEN context->'qc_visual_rework'->>'policy_version' = '2'
+ THEN COALESCE(NULLIF(context->>'revision', ''), id::text) ELSE id::text END)
 FROM agent_task_queue
 WHERE trigger_evidence_kind = ANY(ARRAY['creative_order_item_production', 'creative_order_item_direct_edit']::text[])
   AND context->>'type' = 'creative_domain_task'
@@ -5489,7 +5496,7 @@ WHERE variant_id = $1 AND revision = $2 AND attempt = $3 AND lane = 'visual'
 		outcome = "action_required"
 	}
 	var visualReworkFindings []creativeVisualModelReworkFinding
-	deliverDespiteVisualReworkExhausted := false
+	visualReworkExhausted := false
 	if outcome == "action_required" && reportStatuses["visual"] == "failed" {
 		reworkAttempts, queuedErr := creativeVisualModelReworkAttemptCount(r.Context(), tx, variantID)
 		if queuedErr != nil {
@@ -5498,14 +5505,19 @@ WHERE variant_id = $1 AND revision = $2 AND attempt = $3 AND lane = 'visual'
 		}
 		eligibleFindings, findingErr := creativeVisualModelReworkFindings(failureSummary["visual"], qcSizes)
 		if findingErr == nil {
-			if reworkAttempts < creativeVisualModelReworkMaxAttempts {
+			reworkEnabled, settingsErr := creativeVisualReworkEnabled(r.Context(), tx, workspaceID)
+			if settingsErr != nil {
+				writeError(w, http.StatusInternalServerError, "failed to load creative rework settings")
+				return
+			}
+			if reworkAttempts < creativeVisualModelReworkMaxAttempts && reworkEnabled {
 				visualReworkFindings = eligibleFindings
-			} else {
-				deliverDespiteVisualReworkExhausted = true
+			} else if reworkAttempts >= creativeVisualModelReworkMaxAttempts {
+				visualReworkExhausted = true
 			}
 		}
 	}
-	if outcome == "action_required" && len(visualReworkFindings) == 0 && !deliverDespiteVisualReworkExhausted {
+	if outcome == "action_required" && len(visualReworkFindings) == 0 && !visualReworkExhausted {
 		recoverableTaskIDs, recoveryErr := creativeRecoverableQCTaskIDs(r.Context(), tx, orderID, variantID, input.Revision, input.Attempt)
 		if recoveryErr != nil {
 			writeError(w, http.StatusInternalServerError, "failed to check automatic creative QC recovery")
@@ -5605,7 +5617,7 @@ SELECT outcome FROM creative_order_variant_qc_resolution WHERE variant_id = $1 A
 			writeError(w, http.StatusInternalServerError, "failed to finalize creative QC")
 			return
 		}
-		if deliverDespiteVisualReworkExhausted && response.Outcome == "action_required" {
+		if visualReworkExhausted && response.Outcome == "action_required" {
 			if _, _, err := h.maybePromoteCreativeReserve(
 				r.Context(), variantID, creativeOrchestrationCause{ParentTask: &task, RequestedBy: userID},
 			); err != nil {
@@ -5687,7 +5699,7 @@ WHERE id = $1 AND revision = $2
 		response.ReworkTaskID = uuidToString(reworkTask.ID)
 		response.ReworkRevision = input.Revision + 1
 	} else {
-		if deliverDespiteVisualReworkExhausted {
+		if visualReworkExhausted {
 			exhaustedDetails, _ := json.Marshal(map[string]any{
 				"creative_order_id": uuidToString(orderID),
 				"variant_id":        uuidToString(variantID),
@@ -5746,7 +5758,7 @@ WHERE variant_id = $1 AND revision = $2 AND attempt = $4
 		writeError(w, http.StatusInternalServerError, "failed to finalize creative QC")
 		return
 	}
-	if deliverDespiteVisualReworkExhausted {
+	if visualReworkExhausted {
 		if _, _, err := h.maybePromoteCreativeReserve(
 			r.Context(), variantID, creativeOrchestrationCause{ParentTask: &task, RequestedBy: userID},
 		); err != nil {
@@ -6099,6 +6111,32 @@ WHERE id = $1
 		return db.AgentTaskQueue{}, errors.New("failed to create creative visual rework revision")
 	}
 
+	var compositionContract struct {
+		PrimeComposition struct {
+			Mode string `json:"mode"`
+		} `json:"prime_composition"`
+	}
+	_ = json.Unmarshal([]byte(variantBrief), &compositionContract)
+	strategies := make(map[string]string, len(findings))
+	for _, finding := range findings {
+		strategy := "local_reflow"
+		if finding.Code == "official_prime_text_unreadable" {
+			strategy = "prime_background_support"
+		} else if compositionContract.PrimeComposition.Mode != primeCompositionModeModelIntegrated {
+			var previouslyReflowed bool
+			if err := tx.QueryRow(ctx, `SELECT EXISTS(
+  SELECT 1 FROM agent_task_queue WHERE context->>'variant_id'=$1
+  AND context->'qc_visual_rework'->'size_strategies'->>$2 = 'local_reflow'
+  AND (context->>'revision')::integer <= $3
+)`, uuidToString(variantID), finding.SizeKey, sourceRevision).Scan(&previouslyReflowed); err != nil {
+				return db.AgentTaskQueue{}, err
+			}
+			if previouslyReflowed {
+				strategy = "background_expansion"
+			}
+		}
+		strategies[finding.SizeKey] = strategy
+	}
 	context, err := imagemodel.MarshalTask(inputSnapshot, map[string]any{
 		"type":                   "creative_domain_task",
 		"workflow":               "creative_production",
@@ -6117,10 +6155,12 @@ WHERE id = $1
 		"producer_runtime_id":    uuidToString(producer.RuntimeID),
 		"reviewer_agent_id":      uuidToString(reviewerID),
 		"qc_visual_rework": map[string]any{
+			"policy_version":  2,
 			"source_revision": sourceRevision,
 			"target_sizes":    targetSizes,
 			"failures":        findings,
-			"reflow_strategy": "image2_reflow",
+			"reflow_strategy": "targeted_rework_v2",
+			"size_strategies": strategies,
 		},
 	})
 	if err != nil {
@@ -6134,7 +6174,6 @@ WHERE id = $1
 	task, err := h.Queries.WithTx(tx).CreateAgentTask(ctx, db.CreateAgentTaskParams{
 		AgentID:              producer.ID,
 		RuntimeID:            producer.RuntimeID,
-		IssueID:              issueID,
 		Priority:             0,
 		ForceFreshSession:    pgtype.Bool{Bool: true, Valid: true},
 		RequestingUserID:     parentTask.RequestingUserID,
@@ -6147,7 +6186,7 @@ WHERE id = $1
 		Context:              context,
 	})
 	if err != nil {
-		return db.AgentTaskQueue{}, errors.New("failed to queue creative visual rework")
+		return db.AgentTaskQueue{}, fmt.Errorf("failed to queue creative visual rework: %w", err)
 	}
 	if _, err := tx.Exec(ctx, `
 INSERT INTO creative_order_diagnostic_asset (
@@ -6433,6 +6472,7 @@ WHERE id = $1
 		"annotation_guide_attachment_id": delivery.AnnotationGuideAttachmentID,
 		"annotation_guide_source":        "final_reference",
 		"qc_visual_rework": map[string]any{
+			"policy_version":  2,
 			"source_revision": sourceRevision,
 			"target_sizes":    targetSizes,
 			"failures":        findings,
@@ -6475,7 +6515,6 @@ WHERE id = $1
 	task, err := h.Queries.WithTx(tx).CreateAgentTask(ctx, db.CreateAgentTaskParams{
 		AgentID:              editor.ID,
 		RuntimeID:            editor.RuntimeID,
-		IssueID:              issueID,
 		Priority:             0,
 		ForceFreshSession:    pgtype.Bool{Bool: true, Valid: true},
 		RequestingUserID:     parentTask.RequestingUserID,

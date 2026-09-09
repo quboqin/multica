@@ -41,10 +41,11 @@ var creativeProductionProcessLabels = []string{
 var creativePrimeCompositionProcessLabels = []string{"Prime 合成成图"}
 
 type creativePrimeGeneratedAsset struct {
-	ID            pgtype.UUID
-	AssetFamilyID pgtype.UUID
-	SizeKey       string
-	AttachmentID  pgtype.UUID
+	ID                 pgtype.UUID
+	AssetFamilyID      pgtype.UUID
+	SizeKey            string
+	AttachmentID       pgtype.UUID
+	TemplateSourceRole string
 }
 
 type creativePrimeComposedAsset struct {
@@ -57,12 +58,16 @@ type creativePrimeComposedAsset struct {
 func creativePrimeGeneratedFingerprint(assets []creativePrimeGeneratedAsset) string {
 	coordinates := make([]string, 0, len(assets))
 	for _, asset := range assets {
-		coordinates = append(coordinates, strings.Join([]string{
+		parts := []string{
 			asset.SizeKey,
 			uuidToString(asset.ID),
 			uuidToString(asset.AssetFamilyID),
 			uuidToString(asset.AttachmentID),
-		}, "\x00"))
+		}
+		if asset.TemplateSourceRole != "" {
+			parts = append(parts, asset.TemplateSourceRole)
+		}
+		coordinates = append(coordinates, strings.Join(parts, "\x00"))
 	}
 	sort.Strings(coordinates)
 	sum := sha256.Sum256([]byte(strings.Join(coordinates, "\x01")))
@@ -425,10 +430,11 @@ WHERE id = $1 AND revision = $2
 			return false, fmt.Errorf("write generated %s base: %w", size, writeErr)
 		}
 		manifest["jobs"] = append(manifest["jobs"].([]map[string]string), map[string]string{
-			"id":     uuidToString(asset.ID),
-			"size":   size,
-			"input":  input,
-			"output": output,
+			"id":                         uuidToString(asset.ID),
+			"size":                       size,
+			"input":                      input,
+			"output":                     output,
+			"prime_template_source_role": asset.TemplateSourceRole,
 		})
 	}
 
@@ -909,7 +915,7 @@ type creativePrimeAssetQuerier interface {
 
 func loadCreativePrimeGeneratedAssetsWithQuerier(ctx context.Context, queryer creativePrimeAssetQuerier, variantID pgtype.UUID, revision int, expectedSizes []string) ([]creativePrimeGeneratedAsset, bool, error) {
 	rows, err := queryer.Query(ctx, `
-SELECT id, asset_family_id, size_key, attachment_id
+SELECT id, asset_family_id, size_key, attachment_id, COALESCE(metadata->>'prime_template_source_role', '')
 FROM creative_order_asset
 WHERE variant_id = $1 AND revision = $2 AND stage = 'generated' AND status = 'completed'
   AND attachment_id IS NOT NULL AND size_key = ANY($3::text[])
@@ -923,7 +929,7 @@ ORDER BY size_key
 	sizes := make(map[string]struct{}, len(expectedSizes))
 	for rows.Next() {
 		var asset creativePrimeGeneratedAsset
-		if err := rows.Scan(&asset.ID, &asset.AssetFamilyID, &asset.SizeKey, &asset.AttachmentID); err != nil {
+		if err := rows.Scan(&asset.ID, &asset.AssetFamilyID, &asset.SizeKey, &asset.AttachmentID, &asset.TemplateSourceRole); err != nil {
 			return nil, false, fmt.Errorf("read generated creative asset: %w", err)
 		}
 		assets = append(assets, asset)

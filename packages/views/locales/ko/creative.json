@@ -102,7 +102,10 @@
     "theme": "주제",
     "style": "스타일",
     "preserve": "필수 시각 요소",
-    "avoid": "제외 요소"
+    "avoid": "제외 요소",
+    "columns": "표시할 열",
+    "chooseColumns": "열을 하나 이상 선택하세요",
+    "repaymentPreview": "상환 계획 미리보기"
   },
   "copyLibrary": {
     "noLibrary": "카피 라이브러리가 아직 없습니다",
@@ -645,9 +648,11 @@
     "archiveFailed": "납품 아카이브를 패키징할 수 없습니다"
   },
   "automaticRetry": {
-    "label": "자동 재시도",
+    "label": "실패한 작업 자동 재시도",
     "paused": "일시 중지됨",
-    "description": "이 워크스페이스의 자동 복구, 작업 이어 실행 및 대기 중인 재시도를 일시 중지합니다. 시작된 작업은 계속 실행되며 수동 작업은 사용할 수 있습니다.",
-    "updateFailed": "자동 재시도 설정을 저장하지 못했습니다. 다시 시도하세요."
+    "description": "통신 및 실행 오류를 재시도합니다. 이미지 수정은 별도 설정입니다.",
+    "updateFailed": "자동 재시도 설정을 저장하지 못했습니다. 다시 시도하세요.",
+    "reworkLabel": "품질 검사 후 자동 수정",
+    "reworkDescription": "가림 또는 가독성 문제가 있는 이미지를 최대 2회 수정합니다."
   }
 }

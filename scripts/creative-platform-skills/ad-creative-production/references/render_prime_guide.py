@@ -25,6 +25,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--size-key")
     parser.add_argument("--template-image", help="Official Prime template preview for visual context")
     parser.add_argument("--content-envelope-output", help="Optional non-rendering dimmed-window guide for conservative title/table reflow")
+    parser.add_argument("--template-source-role", help="Exact approved source_role, persisted in generated asset metadata")
     parser.add_argument("--evidence")
     return parser.parse_args()
 
@@ -169,7 +170,7 @@ def render_prime_context(layout: dict[str, Any], width: int, height: int, templa
 
     # Keep the real component color/material cues, but limit the visual context
     # to the reserved Prime areas so the model does not copy the full template.
-    alpha = template.getchannel("A").point(lambda value: round(value * 0.58))
+    alpha = template.getchannel("A").point(lambda value: value)
     hard_mask = Image.new("L", (width, height), 0)
     mask_draw = ImageDraw.Draw(hard_mask)
     source_width, source_height = layout_canvas_size(layout, (width, height))
@@ -199,7 +200,7 @@ def render_prime_context(layout: dict[str, Any], width: int, height: int, templa
         "non_rendering_context": True,
         "render_style": "official_prime_visual_context",
         "template_image": template_path.name,
-        "template_alpha": 0.58,
+        "template_alpha": 1.0,
     }
     return image, evidence
 
@@ -261,6 +262,8 @@ def main() -> int:
         envelope_image.save(envelope_path, format="PNG")
         evidence["content_envelope"] = envelope_evidence["content_envelope"]
         evidence["content_envelope_render_style"] = envelope_evidence["render_style"]
+    if args.template_source_role:
+        evidence["prime_template_source_role"] = args.template_source_role
     if args.evidence:
         evidence_path = Path(args.evidence)
         evidence_path.parent.mkdir(parents=True, exist_ok=True)

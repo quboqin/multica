@@ -116,19 +116,19 @@ Input 3 只服务于手机屏幕内容替换：保留原画面中的手机机身
 把利益点藏进手机屏幕或以虚构 UI 代替。只有冻结利益点为空时才允许只使用图形表达，不得补写业务 claim。
 
 先读取当前 Variant brief 的 `prime_composition.mode`。缺失时按 `deterministic` 处理；不得按市场名称、历史任务或模板文件名猜测。
-`deterministic` 从订单 `input_snapshot.market_pack.files` 下载与当前尺寸匹配的官方模板，再生成低透明度的实际视觉上下文（只保留 Prime 保护区的组件内容）：
+`deterministic` 从订单 `input_snapshot.market_pack.files` 下载与当前尺寸匹配的官方模板，再生成原始透明度的实际视觉上下文（只保留 Prime 保护区的组件内容）：
 
 ```text
 python3 <当前 Skill 目录>/references/render_prime_guide.py \
   --layout-file <layout-contract.json> --size-key <canonical-size> --template-image <official-prime-template.png> \
   --width <model-width> --height <model-height> --output <prime-context-<size>.png> \
-  --evidence <prime-context-<size>.json>
+  --template-source-role <published-source-role> --evidence <prime-context-<size>.json>
 ```
 
 `prime-context` 的证据必须是 `render_style=official_prime_visual_context`；如果只能生成
 `transparent_neutral_outlines`，不能把它作为唯一模型输入，应停止当前尺寸并写 `action_required`。
 
-`model_integrated` 只能使用 brief 中 `prime_composition.template_sources[<size>]` 指向的完整官方模板作为 Input 2，不生成低透明度 guide，
+`model_integrated` 只能使用 brief 中 `prime_composition.template_sources[<size>]` 指向的完整官方模板作为 Input 2，不生成原始透明度 guide，
 不切换 family，也不从未选中的市场文件中挑模板。该模式只会由平台为已验证、无二维码的冻结模板族写入；若当前附件、family 或尺寸不一致，停止并写
 `action_required`。模型需要把 Input 2 的可见官方文字、Logo、色彩与大致位置融入当前尺寸成图，业务内容仍须避开这些区域；不得补画二维码、添加其他
 官方组件或要求后端二次贴片。
@@ -163,13 +163,24 @@ Prime context 是当前尺寸的真实视觉输入，不是黑白遮罩。`deter
 
 ### Prime 承托质量
 
-确定性 composer 选择已批准模板中承托评分最高的一个。若 `template_selection.visual_adequacy.status=qc_risk`，仍应登记 Prime 成图并进入最终 visual QC；
+新生成资产必须在 metadata.prime_template_source_role 原样写入 Prime context 使用的已批准 source_role；同时将 guide JSON 登记为过程图 metadata。后端会用同一张模板合成，禁止看到成图后悄悄换族。该角色必须来自冻结市场包当前尺寸，不能从文件名猜测。旧资产未记录该字段时才由 composer 自动评分选择。若 `template_selection.visual_adequacy.status=qc_risk`，仍应登记 Prime 成图并进入最终 visual QC；
 `inadequacy_codes` 是需要放大核验的质量证据，不是重出图、换模板或阻断交付的理由。最终 QC 只以真实 Prime 成图中官方文字、条款与业务内容的实际可读性和遮挡为准。
 
 只有 composer 没有任何可评估模板、模板/证据合同错误或进程失败时才失败。失败完整 report 必须从
 `brand_composition_error.compose_result_attachment_id` 下载，不能按错误文字猜。遗留订单若仍返回
 `prime_no_adequate_template_for_size`，仅在后端创建带 `qc_visual_rework.reflow_strategy=prime_background_support` 的下一 staging revision 后，
 才可做一次仅限失败尺寸的承托修复；当前新订单不得因为质量证据单独触发该重绘路径。
+
+## 有界质检返工
+
+平台分别控制故障自动重试和质检自动返工；关闭前者不阻止新建的视觉返工。只执行后端已创建的当前 revision 任务，不自行重试旧单。
+返工最多两轮，读取 qc_visual_rework.size_strategies 对每个失败尺寸指定的策略；无关尺寸复用，不能为了统一画面重生。
+
+- local_reflow：第一轮遮挡修复。输入失败尺寸的无品牌 generated 底图和同族 Prime context，要求只把被挡模块移入自然留白，保留字体风格、全部选中文案、金额和主体身份；必要时以与 Input 1 同尺寸的 alpha mask 限制模块及目标区域。不向模型堆坐标，不代码排字。
+- prime_background_support：仅对比度或纹理不足。保留正文布局，只调整官方组件周围背景的明暗和纹理；不能把对比度风险当成正文遮挡，也不能只靠换模板掩盖。
+- background_expansion：只有遮挡在上一轮返工后仍存在时才使用，且仅限 deterministic 无品牌底图。按 [背景扩展合同](references/background-expansion.md) 保留完整正文像素、让模型补外围背景，再交给原模板合成。不得用于首轮所有图、不得裁掉文字，也不得以脚本重新渲染文案。
+
+若 model_integrated 或直接改图任务不允许移动整块正文，继续执行其局部修改合同，不用背景扩展。所有返工仍需正常归一化、真实模型回执、Prime 合成和最终视觉验收；达到预算或正文缩小后不可读则 action_required。
 
 ## 调用和证据
 
