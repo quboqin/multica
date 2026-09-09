@@ -116,6 +116,8 @@ keep business content clear of the template areas. The backend will not add a se
 `prime_support.background_polarity=adaptive`, describe sufficient visual separation from Input 2 without inventing a fixed light or
 dark background. If a structured polarity is supplied, express that polarity once.
 
-Run `validate_copy_snapshot.py --require-prime-guard --require-logo-clearance --require-redesign-guard --require-identity-guard --require-concise-prompt --explain` before the model call.
+Run `validate_copy_snapshot.py --require-prime-guard --require-redesign-guard --require-identity-guard --require-concise-prompt --explain` before the model call.
 Repair only the reported rule. The validator checks approved financial values, this section contract, prompt length, and exclusion of
 workflow protocol from model-facing text.
+
+The Logo placement, spacing, and decoration priority are visual guidance. Equivalent natural wording is allowed; these three phrases are not generation validation gates.

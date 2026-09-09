@@ -49,6 +49,29 @@ func selectCreativeCountCandidates(t *testing.T, f creativeCandidateOrchestratio
 	}
 }
 
+func TestCreativeCandidateSelectionKeepsUnselectedReadyCandidateAsReserve(t *testing.T) {
+	f := createCreativeCountFixture(t, 1)
+	createCreativeCandidateOrchestrationVariant(t, f.ItemID, "C01", "rejected", nil, "action_required", "1080x1080", []string{"1080x1080"})
+	reserve := createCreativeCandidateOrchestrationVariant(t, f.ItemID, "C02", "candidate", nil, "completed", "1080x1080", []string{"1080x1080"})
+	selected := createCreativeCandidateOrchestrationVariant(t, f.ItemID, "C03", "candidate", nil, "completed", "1080x1080", []string{"1080x1080"})
+	for _, id := range []string{reserve, selected} {
+		addCreativeCandidateOrchestrationAsset(t, id, "1080x1080", "generated")
+		addCreativeCandidateOrchestrationAsset(t, id, "1080x1080", "primed")
+	}
+	// A reviewer can exclude C02 from selection, but cannot silently remove it
+	// from the platform's non-rejected ranking by omitting its reserve entry.
+	selectCreativeCountCandidates(t, f, []string{selected}, 1, http.StatusConflict)
+	selectCreativeCountCandidates(t, f, []string{selected, reserve}, 1, http.StatusOK)
+	var state string
+	var rank int
+	if err := testPool.QueryRow(t.Context(), `SELECT candidate_state,selection_rank FROM creative_order_variant WHERE id=$1`, reserve).Scan(&state, &rank); err != nil {
+		t.Fatal(err)
+	}
+	if state != "reserve" || rank != 2 {
+		t.Fatalf("unselected candidate state=%s rank=%d", state, rank)
+	}
+}
+
 func TestCreativeVariantCountsCandidateSelectionAndFanout(t *testing.T) {
 	for _, target := range []int{1, 3, 6, 10} {
 		t.Run(fmt.Sprint(target), func(t *testing.T) {

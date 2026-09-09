@@ -52,6 +52,28 @@ class PrepareOperationTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             prepare_operation(order, draft)
 
+    def test_new_operation_normalizes_context_attachment_field_without_mutating_draft(self):
+        order, draft = self.fixture()
+        order["items"][0]["variants"][0]["image_operations"] = []
+        draft["input_snapshot"] = {"input_asset_attachments": {"prime_context_attachment_id": "actual-context"}}
+        before = copy.deepcopy(draft)
+        prepared = prepare_operation(order, draft)
+        self.assertEqual(prepared["input_snapshot"]["input_asset_attachments"], {"prime_context_sha256": "actual-context"})
+        self.assertEqual(draft, before)
+
+    def test_new_operation_rejects_conflicting_context_attachments(self):
+        order, draft = self.fixture()
+        order["items"][0]["variants"][0]["image_operations"] = []
+        draft["input_snapshot"] = {"input_asset_attachments": {"prime_context_attachment_id": "other", "prime_context_sha256": "actual"}}
+        with self.assertRaisesRegex(ValueError, "different inputs"):
+            prepare_operation(order, draft)
+
+    def test_retry_keeps_original_attachment_alias_frozen(self):
+        order, draft = self.fixture()
+        order["items"][0]["variants"][0]["image_operations"][0]["input_snapshot"] = {"input_asset_attachments": {"prime_context_attachment_id": "original"}}
+        prepared = prepare_operation(order, draft)
+        self.assertEqual(prepared["input_snapshot"], {"input_asset_attachments": {"prime_context_attachment_id": "original"}})
+
 
 if __name__ == "__main__":
     unittest.main()

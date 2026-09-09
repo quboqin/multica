@@ -217,7 +217,6 @@ func TestCreativeProductionPromptContractDefinesInputRolesAndNativeReflow(t *tes
 		"entire headline group below the official logo",
 		"clear visible gap",
 		"reduce or reposition decorative elements first",
-		"--require-logo-clearance",
 		"ACCEPTANCE",
 		"For material orders, Input 1 is the downloaded candidate source",
 		"For `source_kind=copy_library`, no candidate source is supplied.",

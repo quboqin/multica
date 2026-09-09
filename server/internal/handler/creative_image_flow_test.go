@@ -137,16 +137,16 @@ func imageFlowTaskHeaders(r *http.Request, task db.AgentTaskQueue) {
 	r.Header.Set("X-Task-ID", uuidToString(task.ID))
 }
 
-func imageFlowRegisterGenerated(t *testing.T, f creativeCandidateOrchestrationFixture, task db.AgentTaskQueue, variantID, size string, store *mockStorage, verifyPrimeContext ...bool) string {
+func imageFlowRegisterGenerated(t *testing.T, f creativeCandidateOrchestrationFixture, task db.AgentTaskQueue, variantID, size string, store *mockStorage, contextKeys ...string) string {
 	t.Helper()
 	width, height, _ := creativeAssetSizeDimensions(size)
 	data := imageFlowPNG(t, width, height, false)
 	attachment := seedPreviewAttachment(t, store, "image25/"+uuid.NewString()+".png", size+".png", "image/png", data)
 	settings := imagemodel.Default()
 	inputSnapshot, _ := json.Marshal(map[string]any{imagemodel.SnapshotKey: settings, "target_size": size})
-	checkContext := len(verifyPrimeContext) > 0 && verifyPrimeContext[0]
+	checkContext := len(contextKeys) > 0
 	if checkContext {
-		inputSnapshot, _ = json.Marshal(map[string]any{imagemodel.SnapshotKey: settings, "target_size": size, "input_asset_attachments": map[string]string{"prime_context_sha256": attachment}})
+		inputSnapshot, _ = json.Marshal(map[string]any{imagemodel.SnapshotKey: settings, "target_size": size, "input_asset_attachments": map[string]string{contextKeys[0]: attachment}})
 	}
 	op := creativeImageOperationInput{VariantID: variantID, SizeKey: size, Revision: 1, OperationKind: "generation", IdempotencyKey: variantID + ":" + size, Status: "running", Model: settings.Model, InputSnapshot: inputSnapshot, Attempt: 1}
 	putOperation := func() creativeImageOperationResponse {
@@ -193,6 +193,23 @@ func imageFlowRegisterGenerated(t *testing.T, f creativeCandidateOrchestrationFi
 		if _, err := testPool.Exec(t.Context(), `UPDATE creative_order_diagnostic_asset SET attachment_id=$2 WHERE variant_id=$1 AND label='Prime context'`, variantID, attachment); err != nil {
 			t.Fatal(err)
 		}
+		otherKey := "prime_context_attachment_id"
+		if contextKeys[0] == otherKey {
+			otherKey = "prime_context_sha256"
+		}
+		if _, err := testPool.Exec(t.Context(), `UPDATE creative_image_operation SET input_snapshot=jsonb_set(input_snapshot, ARRAY['input_asset_attachments',$2], to_jsonb($3::text)) WHERE id=$1`, operation.ID, otherKey, wrongAttachment); err != nil {
+			t.Fatal(err)
+		}
+		w = httptest.NewRecorder()
+		r = withURLParam(newRequest(http.MethodPut, "/", asset), "id", f.OrderID)
+		imageFlowTaskHeaders(r, task)
+		testHandler.UpsertCreativeOrderAsset(w, r)
+		if w.Code != http.StatusUnprocessableEntity {
+			t.Fatalf("conflicting context attachments=%d %s", w.Code, w.Body.String())
+		}
+		if _, err := testPool.Exec(t.Context(), `UPDATE creative_image_operation SET input_snapshot=$2 WHERE id=$1`, operation.ID, inputSnapshot); err != nil {
+			t.Fatal(err)
+		}
 	}
 	var result creativeOrderAssetResponse
 	for range 2 {
@@ -219,6 +236,15 @@ func imageFlowRegisterGenerated(t *testing.T, f creativeCandidateOrchestrationFi
 }
 
 func TestCreativePrimeContextEvidenceBindsActualOperationInput(t *testing.T) {
+	testCreativePrimeContextEvidenceInput(t, "prime_context_sha256")
+}
+
+func TestCreativePrimeContextEvidenceAcceptsAttachmentIDField(t *testing.T) {
+	testCreativePrimeContextEvidenceInput(t, "prime_context_attachment_id")
+}
+
+func testCreativePrimeContextEvidenceInput(t *testing.T, contextKey string) {
+	t.Helper()
 	f := createCreativeCountFixture(t, 1)
 	store := &mockStorage{}
 	previous := testHandler.Storage
@@ -240,7 +266,7 @@ func TestCreativePrimeContextEvidenceBindsActualOperationInput(t *testing.T) {
 	if _, err := testPool.Exec(t.Context(), `UPDATE agent_task_queue SET context=$2 WHERE id=$1`, task.ID, task.Context); err != nil {
 		t.Fatal(err)
 	}
-	assetID := imageFlowRegisterGenerated(t, f, task, id, "1080x1080", store, true)
+	assetID := imageFlowRegisterGenerated(t, f, task, id, "1080x1080", store, contextKey)
 	var role string
 	if err := testPool.QueryRow(t.Context(), `SELECT metadata->>'prime_template_source_role' FROM creative_order_asset WHERE id=$1`, assetID).Scan(&role); err != nil || role != "template_1080x1080" {
 		t.Fatalf("bound role=%s %v", role, err)

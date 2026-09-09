@@ -12,26 +12,30 @@ from validate_copy_snapshot import (
     main,
     validate_concise_prompt,
     validate_identity_prompt_guard,
-    validate_logo_clearance_guard,
     validate_prime_prompt_guard,
     validate_snapshot,
     validate_redesign_prompt_guard,
 )
 
 
-def test_logo_clearance_rejects_the_previous_generic_upper_layout():
-    prompt = "Make the headline and benefit the upper focal point. Keep all business copy out of the top and bottom official Prime support bands. Reduce decoration before reducing information."
-    assert validate_logo_clearance_guard(prompt) == [
-        "logo_clearance:headline_below_logo", "logo_clearance:visible_logo_gap", "logo_clearance:decoration_first"]
+def test_logo_clearance_wording_is_advisory_even_with_legacy_flag(tmp_path, monkeypatch):
+    materials = tmp_path / "materials.json"
+    materials.write_text(json.dumps({"items": [{"candidate_id": "candidate-1", "copy_snapshot": approved_snapshot()}]}))
+    monkeypatch.setattr(sys, "argv", [
+        "validate_copy_snapshot.py", "--materials-json", str(materials),
+        "--candidate-id", "candidate-1", "--require-logo-clearance",
+        "--prompt-text", "Place the title underneath the brand with generous spacing; simplify decorative shapes.",
+    ])
+    assert main() == 0
 
 
 def test_fixed_prompt_template_preserves_conditional_logo_clearance():
     contract = Path(__file__).with_name("model-prompt-contract.md").read_text()
     prompt = contract.split("```text\n", 1)[1].split("```", 1)[0]
-    assert validate_logo_clearance_guard(prompt) == []
     assert "When an approved headline is present" in prompt
     assert "official logo is above the content" in prompt
-    assert validate_logo_clearance_guard(prompt.replace("clear visible gap", "small margin")) == ["logo_clearance:visible_logo_gap"]
+    assert "clear visible gap" in prompt
+    assert "reduce or reposition decorative elements first" in prompt
 
 
 def test_selected_columns_do_not_reintroduce_audit_only_values():

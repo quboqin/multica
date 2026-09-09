@@ -24,6 +24,13 @@ def prepare_operation(order, draft):
         raise ValueError("multiple operations match these coordinates; reconcile before invoking")
     if not matches:
         result = copy.deepcopy(draft)
+        attachments = result.get("input_snapshot", {}).get("input_asset_attachments", {})
+        alias = attachments.pop("prime_context_attachment_id", None)
+        if alias:
+            canonical = attachments.get("prime_context_sha256")
+            if canonical and canonical != alias:
+                raise ValueError("Prime context attachment fields refer to different inputs")
+            attachments["prime_context_sha256"] = alias
         result["attempt"] = 1
         result["status"] = "running"
         for key in ("prompt_sha256", "provider_request_id", "result_receipt", "output_attachment_id"):

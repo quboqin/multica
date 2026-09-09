@@ -29,3 +29,4 @@
 | New visual rework uses an independent switch and variant/revision task identity; legacy paused tasks keep their gate | server/internal/handler/creative_retry_settings.go, server/migrations/287_creative_visual_rework_policy.up.sql, server/internal/handler/creative_domain.go |
 | Same Prime reference and final source role; raw alpha preserved | references/render_prime_guide.py, server/internal/creative/primecompose/image_prime_compose.py |
 | Background-only second rework preserves existing body pixels without code typesetting | references/background-expansion.md, references/expand_background.py |
+| Logo layout wording is advisory; initial context attachment aliases normalize without rewriting existing operation snapshots | references/validate_copy_snapshot.py:main, references/prepare_image_operation.py:prepare_operation, server/internal/handler/creative_domain.go:UpsertCreativeOrderAsset |

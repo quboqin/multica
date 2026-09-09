@@ -4329,7 +4329,16 @@ SELECT COALESCE((
     AND diagnostic.revision = operation.revision
     AND diagnostic.size_key = operation.size_key
     AND diagnostic.label = 'Prime context'
-    AND diagnostic.attachment_id::text = operation.input_snapshot->'input_asset_attachments'->>'prime_context_sha256'
+    AND diagnostic.attachment_id::text = COALESCE(
+      NULLIF(operation.input_snapshot->'input_asset_attachments'->>'prime_context_sha256', ''),
+      NULLIF(operation.input_snapshot->'input_asset_attachments'->>'prime_context_attachment_id', '')
+    )
+    AND (
+      NULLIF(operation.input_snapshot->'input_asset_attachments'->>'prime_context_sha256', '') IS NULL
+      OR NULLIF(operation.input_snapshot->'input_asset_attachments'->>'prime_context_attachment_id', '') IS NULL
+      OR operation.input_snapshot->'input_asset_attachments'->>'prime_context_sha256'
+        = operation.input_snapshot->'input_asset_attachments'->>'prime_context_attachment_id'
+    )
   ORDER BY diagnostic.created_at DESC LIMIT 1
 ), '')
 `, operationID).Scan(&contextRole); err != nil {

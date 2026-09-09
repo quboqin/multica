@@ -16,3 +16,4 @@
 
 Reconfirm these paths before changing the QC release contract.
 | QC checks only selected repayment columns and distinguishes actual overlap from template readability; background fallback still requires full visual QC | `SKILL.md:自选还款列与 Prime 一致性`, `server/internal/handler/creative_domain.go:creativeVisualModelReworkFindings` |
+| Rank all platform non-rejected candidates atomically; visual-obstruction failures stay documented among reserves and cannot be selected | SKILL.md:候选主视觉晋级, server/internal/handler/creative_variant_lifecycle.go:SelectCreativeOrderItemCandidates |

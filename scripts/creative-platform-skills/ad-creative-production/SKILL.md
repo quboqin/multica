@@ -144,7 +144,7 @@ CLI 和附件血缘只属于模型调用外的工作流，不能发送给图像�
 平台不代码排字，不预留稍后排字的空白框。`deterministic` 的后续唯一确定性 overlay 是官方 Prime；`model_integrated` 则按冻结的 QR-free
 完整模板直接生成最终图，后端只登记证据，不会二次叠加。
 
-必须保留模型提示词合同 PRIME SUPPORT 中的固定 Logo 避让句：标题完整放在 Logo 下方，保留明显间距；空间不足先缩减装饰。旧 brief 的“上方标题”也按 Logo 下方业务区解释。调用前在 `validate_copy_snapshot.py` 加 `--require-logo-clearance`，缺少这条明确关系时先修正提示词再调用模型；已有成功回执不因此重新出图。
+在提示词中表达以下排版建议：标题完整放在 Logo 下方，保留明显间距；空间不足先缩减装饰。旧 brief 的“上方标题”也按 Logo 下方业务区解释。这是视觉指导，可按方案自然表述，不检查固定措辞，不因缺少这三段文字而阻止模型调用或要求重新出图。
 
 三尺寸共享 DesignDNA、批准文案、业务结构和 `asset_family_id`，但每个尺寸从同一候选 source reference、当前尺寸 Prime context
 和自身 LayoutPlan 原生生成，不把方图 raster 当作不可替代输入。人物、产品或核心对象只要在 `subject_system` 中作为身份锚点出现，
@@ -243,7 +243,7 @@ python3 <当前 Skill 目录>/references/prepare_image_operation.py \
 multica image settings --input-file <operation.json> > image-settings.json
 ```
 
-首次登记的 input_snapshot 还应保存 `input_asset_attachments`：每个输入指纹字段对应其已上传的 attachment_id。Prime context 使用过程登记返回的附件，身份参考使用已选方图附件。续跑先下载这些原附件并核验指纹，不能只保存哈希后靠重新渲染猜原文件；既有操作缺少该映射时只能查找指纹完全一致的原过程附件，不能改写冻结快照。
+首次登记的 input_snapshot 还应保存 `input_asset_attachments`：每个输入指纹字段对应其已上传的 attachment_id，例如 `{"prime_context_sha256":"<实际上下文附件 ID>"}`，此处的值是附件 ID，不是哈希。`prepare_image_operation.py` 会将首次请求里的等义字段 `prime_context_attachment_id` 规范为该名称；已有 operation 的冻结字段保持原样，后端支持两个字段名读取同一实际附件。Prime context 使用过程登记返回的附件，身份参考使用已选方图附件。续跑先下载这些原附件并核验指纹，不能只保存哈希后靠重新渲染猜原文件；既有操作缺少该映射时只能查找指纹完全一致的原过程附件，不能改写冻结快照。
 
 随后执行本地结构校验；失败时修正 JSON 后再登记，不能靠更换幂等键或猜别名重试：
 

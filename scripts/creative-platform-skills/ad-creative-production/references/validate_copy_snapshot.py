@@ -435,17 +435,6 @@ def prompt_mentions_bottom_group_clearance(prompt: str, y2: int, bottom_start: i
     return str(y2) in prompt or text_has_any(prompt, SAFE_CONTENT_FRAME_TERMS)
 
 
-def validate_logo_clearance_guard(prompt: str) -> list[str]:
-    """Require the fixed relative-layout rule in new production prompts."""
-    normalized = re.sub(r"\s+", " ", prompt.casefold())
-    checks = {
-        "headline_below_logo": "entire headline group below the official logo" in normalized,
-        "visible_logo_gap": "clear visible gap" in normalized,
-        "decoration_first": "reduce or reposition decorative elements first" in normalized,
-    }
-    return ["logo_clearance:" + key for key, present in checks.items() if not present]
-
-
 def validate_prime_prompt_guard(prompt: str, layouts: list[dict[str, Any]]) -> list[str]:
     """Return missing Prime-safe guard requirements for a final image prompt."""
 
@@ -707,9 +696,7 @@ def build_repair_guidance(
                 "requirement": rule,
                 "acceptable_terms": list(terms),
                 "message": "Prompt is missing a Prime-safety guard required before image generation.",
-                "fix": ("Copy the fixed logo-clearance sentence from model-prompt-contract.md PRIME SUPPORT, including the below-logo relation, visible gap and decoration-first priority."
-                        if rule.startswith("logo_clearance:") else
-                        "Add one concise natural-language sentence that satisfies this requirement without adding coordinates, JSON, or repeated audit text."),
+                "fix": "Add one concise natural-language sentence that satisfies this requirement without adding coordinates, JSON, or repeated audit text.",
             }
         )
     for rule in missing_redesign_guard:
@@ -933,7 +920,8 @@ def main() -> int:
     parser.add_argument("--prompt-text", action="append", default=[])
     parser.add_argument("--prime-layout-file")
     parser.add_argument("--require-prime-guard", action="store_true")
-    parser.add_argument("--require-logo-clearance", action="store_true")
+    # Accept the old CLI flag for in-flight tasks; layout wording is advisory.
+    parser.add_argument("--require-logo-clearance", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--require-redesign-guard", action="store_true")
     parser.add_argument("--require-identity-guard", action="store_true")
     parser.add_argument("--require-concise-prompt", action="store_true")
@@ -966,8 +954,6 @@ def main() -> int:
         observed = visible_prompt_financial_tokens(prompt)
         unapproved = sorted(observed - approved)
         missing_prime_guard = validate_prime_prompt_guard(prompt, layouts) if args.require_prime_guard else []
-        if args.require_logo_clearance:
-            missing_prime_guard.extend(validate_logo_clearance_guard(prompt))
         missing_redesign_guard = validate_redesign_prompt_guard(prompt, str(item.get("source_kind") or "material")) if args.require_redesign_guard else []
         missing_identity_guard = validate_identity_prompt_guard(prompt) if args.require_identity_guard else []
         prompt_debt = validate_concise_prompt(prompt) if args.require_concise_prompt else []
