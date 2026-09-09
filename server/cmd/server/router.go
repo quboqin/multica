@@ -761,6 +761,8 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 			// Creative Studio resources are workspace-scoped configuration.
 			r.Route("/api/creative", func(r chi.Router) {
 				r.Use(creativeCapability)
+				r.Get("/settings", h.GetCreativeRetrySettings)
+				r.With(handler.RequireHumanActor).Patch("/settings", h.UpdateCreativeRetrySettings)
 				r.Get("/materials", h.ListCreativeMaterialLibrary)
 				r.Get("/crawl-runs", h.ListCreativeCrawlRuns)
 				r.With(handler.RequireHumanActor).Post("/materials/import", h.ImportCreativeMaterialLibrary)

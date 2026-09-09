@@ -189,8 +189,10 @@
     "generating": "Images in production",
     "readyToAdopt": "Images ready for gallery",
     "weeklyDelivery": "This week's deliveries",
-    "averageDuration": "Average package generation time",
-    "basedOnPackages": "Based on {{count}} packages"
+    "averageDuration": "Average full-set generation time",
+    "basedOnPackages": "Based on {{count}} packages",
+    "durationPending": "Awaiting data",
+    "durationHelp": "New orders placed in the last 7 days since measurement began that have completed their first generated package. Includes queueing and retries; in-progress items are excluded."
   },
   "stagingRepair": {
     "title": "Staging draft needs attention",
@@ -340,7 +342,7 @@
     "generationFailed": "Generation failed",
     "generationInProgress": "Still generating",
     "assetReported": "Creative issue feedback",
-    "averageDuration": "Average package generation time",
+    "averageDuration": "Average full-set generation time",
     "basedOnPackages": "Based on {{count}} complete image packages",
     "times": "{{count}} times",
     "insights": {
@@ -378,7 +380,9 @@
       "false_positive": "QC false positive",
       "warning_accepted": "Accepted QC warning",
       "other": "Other"
-    }
+    },
+    "durationPending": "Awaiting data",
+    "durationHelp": "New orders placed in the last 7 days since measurement began that have completed their first generated package. Includes queueing and retries; in-progress items are excluded."
   },
   "studio": {
     "title": "Creative Factory",
@@ -639,5 +643,11 @@
     "packaging": "Packaging",
     "downloadPackage": "Download delivery package",
     "archiveFailed": "Could not package the delivery archive"
+  },
+  "automaticRetry": {
+    "label": "Automatic retries",
+    "paused": "Paused",
+    "description": "Pause automatic recovery, task continuations, and queued retries in this workspace. Started tasks continue and manual actions remain available.",
+    "updateFailed": "Could not save automatic retry settings. Try again."
   }
 }

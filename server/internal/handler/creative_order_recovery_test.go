@@ -81,7 +81,7 @@ func TestCreativeOrderRecoveryPreservesManualBlockAndRetryBudget(t *testing.T) {
 	}
 }
 
-func TestCreativeOrderRecoveryStopsAfterBudgetAndFencesExpiredLease(t *testing.T) {
+func TestCreativeOrderRecoveryStopsDispatchChecksWithoutSpendingBudget(t *testing.T) {
 	enableCreativeFactoryForTest(t)
 	f := createCreativeCountFixture(t, 1)
 	seedSixSetCandidatePrimaries(t, f, 3)
@@ -110,7 +110,7 @@ func TestCreativeOrderRecoveryStopsAfterBudgetAndFencesExpiredLease(t *testing.T
 	if err := testPool.QueryRow(t.Context(), `SELECT status,attempt FROM creative_recovery WHERE order_id=$1 AND stage='candidate_selection'`, f.OrderID).Scan(&status, &attempts); err != nil {
 		t.Fatal(err)
 	}
-	if status != "manual_required" || attempts != 3 {
+	if status != "manual_required" || attempts != 0 {
 		t.Fatalf("budget=%s %d", status, attempts)
 	}
 	if err := testHandler.finishCreativeRecovery(t.Context(), prior, "resolved", pgtype.UUID{}, nil); err == nil {
@@ -250,7 +250,7 @@ func TestCreativeOrderRecoveryFailureBackoffDoesNotBlockNextOrder(t *testing.T) 
 	if err := testPool.QueryRow(t.Context(), `SELECT status,attempt,next_retry_at>now() FROM creative_recovery WHERE order_id=$1 AND stage='candidate_selection'`, bad.OrderID).Scan(&status, &attempt, &later); err != nil {
 		t.Fatal(err)
 	}
-	if status != "pending" || attempt != 1 || !later {
+	if status != "pending" || attempt != 0 || !later {
 		t.Fatalf("backoff=%s %d %v", status, attempt, later)
 	}
 	var task pgtype.UUID

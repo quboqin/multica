@@ -725,41 +725,19 @@ LIMIT 6
 }
 
 const creativeInitialGeneratedPackageDurationSQL = `
-WITH first_generated_asset AS (
-  SELECT variant.order_item_id,
-         variant.id AS variant_id,
-         asset.size_key,
-         min(asset.created_at) AS generated_at
-  FROM creative_order_variant variant
-  JOIN creative_order_asset asset
-    ON asset.variant_id = variant.id
-   AND asset.stage = 'generated'
-   AND asset.status = 'completed'
-   AND asset.attachment_id IS NOT NULL
-   AND asset.size_key IN ('1080x1080', '1200x628', '800x1000')
-  JOIN creative_order_item scoped_item ON scoped_item.id=variant.order_item_id
-  JOIN creative_order scoped_order ON scoped_order.id=scoped_item.order_id AND scoped_order.workspace_id=$1
-  GROUP BY variant.order_item_id, variant.id, asset.size_key
+WITH measurement AS (
+ SELECT started_at FROM creative_generation_measurement_epoch
 ),
 generated_packages AS (
-  SELECT item.id,
-         order_row.created_at AS submitted_at,
-         max(first_asset.generated_at) AS generated_at
-  FROM creative_order order_row
-  JOIN creative_order_item item ON item.order_id = order_row.id
-  JOIN creative_order_variant variant ON variant.order_item_id = item.id
-  LEFT JOIN first_generated_asset first_asset
-    ON first_asset.variant_id = variant.id
-  WHERE order_row.workspace_id = $1
-    AND order_row.status <> 'cancelled'
-    AND order_row.trigger_evidence_kind <> 'creative_direct_edit'
-    AND variant.candidate_state = 'selected'
-  GROUP BY item.id, order_row.created_at, order_row.input_snapshot
-  HAVING count(DISTINCT variant.id) = COALESCE((order_row.input_snapshot->>'target_variant_count')::int, 3)
-     AND count(DISTINCT (variant.id, first_asset.size_key)) FILTER (WHERE first_asset.size_key IS NOT NULL) = 3 * COALESCE((order_row.input_snapshot->>'target_variant_count')::int, 3)
+ SELECT p.submitted_at,p.generated_at
+ FROM creative_initial_generated_package p
+ JOIN creative_order o ON o.id=p.order_id
+ CROSS JOIN measurement m
+ WHERE p.workspace_id=$1 AND o.status<>'cancelled'
+ AND p.submitted_at>=GREATEST(m.started_at,now()-interval '7 days')
+ AND p.submitted_at<=now() AND p.generated_at<=now()
 )
-SELECT ROUND(AVG(EXTRACT(EPOCH FROM (generated_at - submitted_at))))::bigint,
-       count(*)
+SELECT ROUND(AVG(EXTRACT(EPOCH FROM (generated_at-submitted_at))))::bigint,count(*)
 FROM generated_packages
 `
 

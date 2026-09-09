@@ -538,6 +538,7 @@ VALUES ($1, $2, 1, 'generated', $3, 'completed')
 }
 
 func TestCreativeFeedbackDashboardTracksGeneratedPackageDuration(t *testing.T) {
+	setCreativeMeasurementEpochForTest(t, "-1 day")
 	if testHandler == nil {
 		t.Skip("database not available")
 	}

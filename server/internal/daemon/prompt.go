@@ -77,12 +77,14 @@ func buildCreativeDomainTaskPrompt(task Task, context creativeDomainTaskPromptCo
 	b.WriteString("Do not infer the workflow from the root Issue, its metadata, title, comments, or prior conversation. A root Issue may describe `creative_order`; it is only the parent envelope and never overrides this task's workflow. Execute only the workflow named above.\n\n")
 
 	if context.Workflow == "creative_candidate_selection" {
-		b.WriteString("This is a candidate comparison task. Inspect only the candidates in this task context, then finish by calling the atomic candidate-selection API through the CLI exactly once. Do not report success before that call returns successfully.\n")
+		b.WriteString("This is a candidate comparison task. Inspect only the candidates in this task context, then commit the ranking through the atomic candidate-selection CLI. Read N from the order's frozen `input_snapshot.target_variant_count` (1-10); use N=3 only when a historical order omits this field. Use the task context's target_variant_count only as a cross-check, never to override the order snapshot.\n")
 		if context.CreativeOrderID != "" && context.CreativeOrderItemID != "" {
-			fmt.Fprintf(&b, "Use `multica creative order candidate-select %s %s` with exactly three ordered `selected_ids` and any ordered reserves. The server binds that call to the current MULTICA_TASK_ID and rejects a different workflow, order, or item.\n", context.CreativeOrderID, context.CreativeOrderItemID)
+			fmt.Fprintf(&b, "Use `multica creative order candidate-select %s %s`", context.CreativeOrderID, context.CreativeOrderItemID)
 		} else {
-			b.WriteString("Use `multica creative order candidate-select <creative_order_id> <creative_order_item_id>` with exactly three ordered `selected_ids` and any ordered reserves. The server binds that call to the current MULTICA_TASK_ID and rejects a different workflow, order, or item.\n")
+			b.WriteString("Use `multica creative order candidate-select <creative_order_id> <creative_order_item_id>`")
 		}
+		b.WriteString(" with exactly N ordered `selected_ids` and zero to two ordered `reserve_ids`. Check both array lengths and distinct candidate IDs before submitting. The server binds that call to the current MULTICA_TASK_ID and rejects a different workflow, order, or item.\n")
+		b.WriteString("After a successful submission, read back the saved ranking and queued production; do not submit another ranking or fan out production yourself. If an explicit count or payload validation error rejected the request before any selection was saved, fix the payload using the frozen order and allow one corrected submission in this task. For a timeout, transport error, or other uncertain outcome, read back the order before deciding whether to submit again; never blindly repeat a possibly successful write. Do not report success until the required selection is saved.\n")
 		b.WriteString("Do not use `multica issue get` to choose a workflow, and do not complete the task merely after writing a comparison.\n")
 		return b.String()
 	}

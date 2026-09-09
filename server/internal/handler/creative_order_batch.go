@@ -75,14 +75,7 @@ SELECT binding_order_id::text, id::text,
     ELSE COALESCE(error, '')
   END,
   COALESCE(completed_at, created_at)::text,
-  (
-    attempt < max_attempts
-    OR (
-      trigger_evidence_kind = 'creative_order_item_production'
-      AND context->>'workflow' = 'creative_production'
-      AND attempt < 5
-    )
-  )
+  true
 FROM ranked
 WHERE row_number = 1
 AND (

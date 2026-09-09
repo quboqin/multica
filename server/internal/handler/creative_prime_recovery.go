@@ -162,6 +162,10 @@ FOR UPDATE OF variant
 	if lockedActiveRevision == revision {
 		return revision, "completed", true, &creativePrimeImmutableRevisionError{message: "active creative revision is immutable; create a staging revision before recomposing Prime"}
 	}
+	var previousJobStatus string
+	if err := tx.QueryRow(ctx, `SELECT status FROM creative_prime_composition_job WHERE variant_id=$1 AND revision=$2`, variantID, revision).Scan(&previousJobStatus); err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return revision, "", true, err
+	}
 	var jobStatus string
 	if force {
 		jobStatus, err = resetCreativePrimeCompositionJob(ctx, tx, variantID, revision, expectedSizes, inputFingerprint)
@@ -173,6 +177,11 @@ FOR UPDATE OF variant
 	}
 	if err := syncCreativeVariantRevisionFromVariant(ctx, tx, variantID, revision, expectedSizes); err != nil {
 		return revision, "", true, fmt.Errorf("sync queued creative Prime revision: %w", err)
+	}
+	if jobStatus == "queued" && previousJobStatus != "queued" && previousJobStatus != "running" {
+		if err := recordCreativeRecoveryDispatchTx(ctx, tx, pgtype.UUID{}); err != nil {
+			return revision, "", true, err
+		}
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return revision, "", true, fmt.Errorf("commit creative Prime job enqueue: %w", err)

@@ -91,6 +91,11 @@ WHERE o.id=$1 AND o.workspace_id=$2 AND i.id=$3 FOR UPDATE OF o,i`, t.OrderID, t
 	if len(tasks) != 1 {
 		return pgtype.UUID{}, errors.New("planning dispatch returned no task")
 	}
+	if len(created) > 0 {
+		if err := recordCreativeRecoveryDispatchTx(ctx, tx, created[0].ID); err != nil {
+			return pgtype.UUID{}, err
+		}
+	}
 	if err := tx.Commit(ctx); err != nil {
 		return pgtype.UUID{}, err
 	}

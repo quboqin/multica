@@ -190,7 +190,7 @@ func TestCreativeFactoryImageEditingUsesOneAgentWithWorkflowSkills(t *testing.T)
 func TestCreativeFactoryCreativeContractTemplatesStayInSync(t *testing.T) {
 	wantVersions := map[string]int{
 		"generation_plan":     43,
-		"image_edit":          115,
+		"image_edit":          116,
 		"prime_compose":       6,
 		"direct_image_edit":   33,
 		"quality_control":     45,
@@ -275,7 +275,7 @@ func TestCreativeFactoryCreativeContractTemplatesStayInSync(t *testing.T) {
 	}
 	for _, value := range []string{
 		"capability = 'generation_plan'; version = 43",
-		"capability = 'image_edit'; version = 115",
+		"capability = 'image_edit'; version = 116",
 		"capability = 'prime_compose'; version = 6",
 		"capability = 'direct_image_edit'; version = 33",
 		"capability = 'quality_control'; version = 45",

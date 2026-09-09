@@ -743,7 +743,7 @@ WHERE operation_id = $1 AND attempt = $2
 			case input.Status == "running" && input.Attempt == latestAttempt+1:
 				disposition = "invoke"
 			default:
-				writeError(w, http.StatusConflict, "failed creative image operation requires the next attempt before invocation")
+				writeError(w, http.StatusConflict, fmt.Sprintf("creative image operation is failed at attempt %d; resume the same operation with status=running and attempt=%d, preserving its model, prompt and input_snapshot", latestAttempt, latestAttempt+1))
 				return
 			}
 		case "cancelled":

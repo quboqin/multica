@@ -392,6 +392,9 @@ func userMessage(err error, lang Language) string {
 	if errors.As(err, &httpErr) {
 		kind := httpErr.Kind()
 		if serverMsg := extractServerMessage(httpErr.Body); serverMsg != "" {
+			if kind == KindConflict && strings.HasPrefix(serverMsg, "creative ") {
+				return serverMsg
+			}
 			// Validation errors usually carry a useful server-provided message;
 			// surface it instead of the generic line.
 			if kind == KindValidation {

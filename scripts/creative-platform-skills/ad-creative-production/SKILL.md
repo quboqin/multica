@@ -213,12 +213,25 @@ JSON string 逐字复制。不得用 `jq -r`、命令替换、shell 变量、`ec
 }
 ```
 
-在每次首次登记前必须执行以下本地校验；失败时修正 JSON 后再登记，不能靠更换幂等键或猜别名重试：
+每次登记（含续跑）都先回读订单，然后使用以下助手生成最终请求。助手会按当前 revision、尺寸与 operation_kind 查找既有操作：首次使用 attempt=1；已明确 failed 的操作使用最大历史 attempt+1，并逐字复用原幂等键、model、prompt hash 和 input_snapshot。重试序号不得改回 1；服务端不会替客户端自动增加序号。completed 必须复用回执，running/unknown 必须等待或对账，不能再次调用模型。
+
+```bash
+multica creative order get <order-id> --output json > current-order.json
+python3 <当前 Skill 目录>/references/prepare_image_operation.py \
+  --order-json current-order.json --input-file <operation-draft.json> \
+  --output-file <operation.json>
+```
+
+首次登记的 input_snapshot 还应保存 `input_asset_attachments`：每个输入指纹字段对应其已上传的 attachment_id。Prime context 使用过程登记返回的附件，身份参考使用已选方图附件。续跑先下载这些原附件并核验指纹，不能只保存哈希后靠重新渲染猜原文件；既有操作缺少该映射时只能查找指纹完全一致的原过程附件，不能改写冻结快照。
+
+随后执行本地结构校验；失败时修正 JSON 后再登记，不能靠更换幂等键或猜别名重试：
 
 ```bash
 python3 <当前 Skill 目录>/references/validate_image_operation.py \
   --input-file <operation.json>
 ```
+
+`image-operation-put` 返回 409 时读取明确的服务端原因并回读订单，使用同一助手重新准备一次；不能把状态冲突解释成“最多 4/5 次”或“额度耗尽”。任务层重试预算、provider 单命令的 HTTP 重试次数与 operation 的历史序号是不同的计数。收到 400/401/403 的模型、账户或权限错误时停止重复请求并保留准确原因；503/429/网络故障只做有界退避恢复。
 
 ```bash
 operation_id="$(jq -er '.id' <image-operation-response.json>)"

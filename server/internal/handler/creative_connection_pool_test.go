@@ -176,7 +176,7 @@ func TestCreativeConnectionsRecoveryBudgetRaceReleasesTransaction(t *testing.T) 
 	if err != nil || !found || target.OrderID != parseUUID(f.OrderID) {
 		t.Fatalf("recovery claim=%v %v", found, err)
 	}
-	if _, err := pool.Exec(ctx, `UPDATE creative_recovery SET attempt=max_attempts WHERE id=$1`, target.ID); err != nil {
+	if _, err := pool.Exec(ctx, `UPDATE creative_recovery SET dispatch_count=max_attempts WHERE id=$1`, target.ID); err != nil {
 		t.Fatal(err)
 	}
 	if err := h.processCreativeRecovery(ctx, target); err != nil {

@@ -110,6 +110,7 @@ import { CREATIVE_DELIVERY_SIZES, CreativeOrderDeliveryCandidates, creativeGalle
 import { CreativeGenerationInfoDialog } from "./creative-generation-info-dialog";
 import { CreativeFeedbackDashboard } from "./creative-feedback-dashboard";
 import { creativeVariantRevisionExpectedSizes } from "./creative-staging-repair-workspace";
+import { CreativeRetryToggle } from "./creative-retry-toggle";
 import { CreativeWorkbench } from "./creative-workbench";
 import { MarketResourceFiles } from "./market-resource-files";
 import { CreativeOrderPrimeSummary, creativePrimeFamilyLabel, creativePrimeModeLabel } from "./creative-prime-mode";
@@ -275,6 +276,7 @@ function CreativeStudioContent() {
           <h1 className="text-sm font-medium">{t(($) => $.studio.title)}</h1>
           <span className="hidden text-xs text-muted-foreground md:inline">{t(($) => $.studio.subtitle)}</span>
         </div>
+        <CreativeRetryToggle />
       </PageHeader>
 
       <Tabs value={tab} onValueChange={changeTab} className="flex min-h-0 min-w-0 flex-1 flex-col">
@@ -653,7 +655,7 @@ function CreativeOrderDetail({ orderId, onBack, onBrowseOrders, backLabel }: { o
       if (action.kind === "qc") {
         await api.retryCreativeOrderVariantQC(orderId, variant.id);
       } else if (action.kind === "prime") {
-        await api.composeCreativeOrderPrime(orderId, variant.id, { async: true });
+        await api.composeCreativeOrderPrime(orderId, variant.id, { async: true, force: true });
       } else {
         await api.retryCreativeOrderWorkflowFailure(orderId, action.taskId);
       }

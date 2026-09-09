@@ -10,6 +10,9 @@ import type {
   CreativeOrderVariant,
 } from "@multica/core/types";
 import { CreativeWorkbench } from "./creative-workbench";
+import copy from "../../locales/zh-Hans/creative.json";
+
+vi.mock("../../i18n", () => ({ useT: () => ({ t: (selector: (value: typeof copy) => string, values: Record<string, string | number> = {}) => Object.entries(values).reduce((text, [key, value]) => text.replaceAll(`{{${key}}}`, String(value)), selector(copy)) }) }));
 
 afterEach(() => cleanup());
 
@@ -145,6 +148,14 @@ function order({
 }
 
 describe("CreativeWorkbench", () => {
+  it("waits for a measured package instead of showing a historical duration", () => {
+    render(<CreativeWorkbench averageGenerationDuration="40 分钟" generationDurationPackageCount={0} onOpenMaterialLibrary={vi.fn()} onOpenOrder={vi.fn()} />);
+    const metric = screen.getByTestId("creative-workbench-average-duration");
+    expect(metric).toHaveTextContent("待统计");
+    expect(metric).not.toHaveTextContent("40 分钟");
+    expect(metric).toHaveAttribute("title", expect.stringContaining("最近7天新下单"));
+  });
+
   it("shows only business-facing work that needs a decision", () => {
     const candidates = [
       candidate("candidate-new", "new", "Dana cepat"),

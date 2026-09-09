@@ -189,8 +189,10 @@
     "generating": "真实出图中",
     "readyToAdopt": "可入图库成图",
     "weeklyDelivery": "本周交付",
-    "averageDuration": "整套出图平均耗时",
-    "basedOnPackages": "基于 {{count}} 套"
+    "averageDuration": "平均整套出图耗时",
+    "basedOnPackages": "基于 {{count}} 套",
+    "durationPending": "待统计",
+    "durationHelp": "统计启用后，最近7天新下单且首次原图齐套的素材；包含排队和重试，进行中不计入。"
   },
   "stagingRepair": {
     "title": "修订草稿需要处理",
@@ -340,7 +342,7 @@
     "generationFailed": "出图失败",
     "generationInProgress": "仍在生成",
     "assetReported": "成图问题反馈",
-    "averageDuration": "整套出图平均耗时",
+    "averageDuration": "平均整套出图耗时",
     "basedOnPackages": "基于 {{count}} 套完整出图",
     "times": "{{count}} 次",
     "insights": {
@@ -378,7 +380,9 @@
       "false_positive": "QC 误报",
       "warning_accepted": "接受 QC 提示",
       "other": "其他"
-    }
+    },
+    "durationPending": "待统计",
+    "durationHelp": "统计启用后，最近7天新下单且首次原图齐套的素材；包含排队和重试，进行中不计入。"
   },
   "studio": {
     "title": "创意工厂",
@@ -639,5 +643,11 @@
     "packaging": "正在打包",
     "downloadPackage": "下载交付包",
     "archiveFailed": "无法打包下载交付包"
+  },
+  "automaticRetry": {
+    "label": "自动重试",
+    "paused": "已暂停",
+    "description": "关闭后暂停本工作区的自动恢复、任务续跑及已排队的自动重试。已开始的任务会继续，手动操作不受影响。",
+    "updateFailed": "自动重试设置保存失败，请重试。"
   }
 }

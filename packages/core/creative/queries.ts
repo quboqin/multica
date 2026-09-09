@@ -3,6 +3,7 @@ import { api } from "../api";
 import type { CreativeMaterialLibraryQuery, CreativeResourceKind } from "../types";
 
 export const creativeKeys = {
+  retrySettings: (wsId: string) => [...creativeKeys.all(wsId), "retry-settings"] as const,
   all: (wsId: string) => ["creative", wsId] as const,
   resources: (wsId: string, kind?: CreativeResourceKind) =>
     [...creativeKeys.all(wsId), "resources", kind ?? "all"] as const,
@@ -19,6 +20,12 @@ export const creativeKeys = {
   feedbackMetrics: (wsId: string) => [...creativeKeys.all(wsId), "feedback-metrics"] as const,
   feedbackDashboard: (wsId: string) => [...creativeKeys.all(wsId), "feedback-dashboard"] as const,
 };
+
+export const creativeRetrySettingsOptions = (wsId: string) => queryOptions({
+  queryKey: creativeKeys.retrySettings(wsId),
+  queryFn: ({ signal }) => api.getCreativeRetrySettings(signal),
+  enabled: !!wsId,
+});
 
 export const creativeMaterialLibraryOptions = (wsId: string, params?: CreativeMaterialLibraryQuery) =>
   queryOptions({

@@ -133,14 +133,7 @@ WITH latest AS (
     COALESCE(q.error, '') AS error,
     COALESCE(q.result->>'output', '') AS result_output,
     COALESCE(q.completed_at, q.created_at)::text AS failed_at,
-    (
-      q.attempt < q.max_attempts
-      OR (
-        q.trigger_evidence_kind = 'creative_order_item_production'
-        AND q.context->>'workflow' = 'creative_production'
-        AND q.attempt < 5
-      )
-    ) AS retryable
+    true AS retryable
   FROM agent_task_queue q
   JOIN creative_task_binding binding ON binding.task_id=q.id
   JOIN creative_order_variant variant ON variant.id=binding.variant_id AND variant.revision=binding.revision

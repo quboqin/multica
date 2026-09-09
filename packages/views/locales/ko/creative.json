@@ -189,8 +189,10 @@
     "generating": "이미지 생성 중",
     "readyToAdopt": "갤러리에 추가할 수 있는 이미지",
     "weeklyDelivery": "이번 주 납품",
-    "averageDuration": "패키지 생성 평균 시간",
-    "basedOnPackages": "{{count}}개 패키지 기준"
+    "averageDuration": "전체 세트 평균 생성 시간",
+    "basedOnPackages": "{{count}}개 패키지 기준",
+    "durationPending": "집계 대기",
+    "durationHelp": "측정 시작 이후 최근 7일 내 주문하여 최초 원본 이미지 세트가 완성된 소재를 집계합니다. 대기 및 재시도 시간을 포함하며 진행 중인 소재는 제외합니다。"
   },
   "stagingRepair": {
     "title": "수정 초안에 조치가 필요합니다",
@@ -340,7 +342,7 @@
     "generationFailed": "이미지 생성 실패",
     "generationInProgress": "생성 중",
     "assetReported": "크리에이티브 문제 피드백",
-    "averageDuration": "패키지 생성 평균 시간",
+    "averageDuration": "전체 세트 평균 생성 시간",
     "basedOnPackages": "완전한 이미지 패키지 {{count}}개 기준",
     "times": "{{count}}회",
     "insights": {
@@ -378,7 +380,9 @@
       "false_positive": "QC 오탐",
       "warning_accepted": "QC 경고 수락",
       "other": "기타"
-    }
+    },
+    "durationPending": "집계 대기",
+    "durationHelp": "측정 시작 이후 최근 7일 내 주문하여 최초 원본 이미지 세트가 완성된 소재를 집계합니다. 대기 및 재시도 시간을 포함하며 진행 중인 소재는 제외합니다。"
   },
   "studio": {
     "title": "크리에이티브 팩토리",
@@ -639,5 +643,11 @@
     "packaging": "패키징 중",
     "downloadPackage": "납품 패키지 다운로드",
     "archiveFailed": "납품 아카이브를 패키징할 수 없습니다"
+  },
+  "automaticRetry": {
+    "label": "자동 재시도",
+    "paused": "일시 중지됨",
+    "description": "이 워크스페이스의 자동 복구, 작업 이어 실행 및 대기 중인 재시도를 일시 중지합니다. 시작된 작업은 계속 실행되며 수동 작업은 사용할 수 있습니다.",
+    "updateFailed": "자동 재시도 설정을 저장하지 못했습니다. 다시 시도하세요."
   }
 }
