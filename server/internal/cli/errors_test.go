@@ -11,6 +11,14 @@ import (
 	"testing"
 )
 
+func TestCreativeConflictPreservesRecoveryInstruction(t *testing.T) {
+	withLang(t, "en_US.UTF-8")
+	err := &HTTPError{StatusCode: 409, Body: `{"error":"creative image operation is failed at attempt 5; resume with attempt=6"}`}
+	if got := FormatError(err, false); !strings.Contains(got, "attempt=6") {
+		t.Fatalf("recovery reason hidden: %s", got)
+	}
+}
+
 // timeoutErr is a net.Error whose Timeout() reports true, used to exercise the
 // net.Error timeout branch without a real socket.
 type timeoutErr struct{}

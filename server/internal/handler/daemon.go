@@ -2324,6 +2324,9 @@ func (h *Handler) CompleteTask(w http.ResponseWriter, r *http.Request) {
 		artifactError, validationErr = h.creativeCandidateSelectionCompletionError(r.Context(), existingTask, workspaceID)
 	}
 	if validationErr == nil && artifactError == "" {
+		artifactError, validationErr = h.creativeProductionCompletionError(r.Context(), existingTask, workspaceID)
+	}
+	if validationErr == nil && artifactError == "" {
 		artifactError, validationErr = h.creativeDirectEditCompletionError(r.Context(), existingTask, workspaceID)
 	}
 	if validationErr == nil && artifactError == "" {

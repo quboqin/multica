@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate a first image-operation-put payload before it reaches the API."""
+"""Validate an initial or resumed image-operation-put payload."""
 
 import argparse
 import json
@@ -44,9 +44,10 @@ def main() -> int:
         if misplaced:
             fail("fields belong under input_snapshot or use operation_kind: " + ", ".join(misplaced))
         if payload["status"] not in {"queued", "running"}:
-            fail("first operation status must be queued or running")
-        if payload["attempt"] != 1:
-            fail("first operation attempt must be 1")
+            fail("operation status must be queued or running")
+        attempt = payload["attempt"]
+        if isinstance(attempt, bool) or not isinstance(attempt, int) or attempt < 1:
+            fail("operation attempt must be a positive integer; use the latest failed attempt + 1 when resuming")
         snapshot = payload["input_snapshot"]
         if not isinstance(snapshot, dict):
             fail("input_snapshot must be a JSON object")

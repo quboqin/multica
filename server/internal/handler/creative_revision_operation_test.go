@@ -1169,7 +1169,7 @@ VALUES ($1, '1080x1080', 1, 'generation', $2, 'unknown')
 
 	reopenSameAttempt := base
 	w, _ = putOperation(reopenSameAttempt)
-	if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), "next attempt") {
+	if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), "attempt=2") {
 		t.Fatalf("failed attempt reopened = %d %s", w.Code, w.Body.String())
 	}
 	retry := base
