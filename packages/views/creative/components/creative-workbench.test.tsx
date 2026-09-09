@@ -153,7 +153,7 @@ describe("CreativeWorkbench", () => {
     const metric = screen.getByTestId("creative-workbench-average-duration");
     expect(metric).toHaveTextContent("待统计");
     expect(metric).not.toHaveTextContent("40 分钟");
-    expect(metric).toHaveAttribute("title", expect.stringContaining("最近24小时新下单"));
+    expect(metric).toHaveAttribute("title", expect.stringContaining("最近7天新下单"));
   });
 
   it("shows only business-facing work that needs a decision", () => {

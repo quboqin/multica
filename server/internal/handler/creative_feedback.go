@@ -734,7 +734,7 @@ generated_packages AS (
  JOIN creative_order o ON o.id=p.order_id
  CROSS JOIN measurement m
  WHERE p.workspace_id=$1 AND o.status<>'cancelled'
- AND p.submitted_at>=GREATEST(m.started_at,now()-interval '24 hours')
+ AND p.submitted_at>=GREATEST(m.started_at,now()-interval '7 days')
  AND p.submitted_at<=now() AND p.generated_at<=now()
 )
 SELECT ROUND(AVG(EXTRACT(EPOCH FROM (generated_at-submitted_at))))::bigint,count(*)

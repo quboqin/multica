@@ -192,7 +192,7 @@
     "averageDuration": "平均整套出图耗时",
     "basedOnPackages": "基于 {{count}} 套",
     "durationPending": "待统计",
-    "durationHelp": "统计启用后，最近24小时新下单且首次原图齐套的素材；包含排队和重试，进行中不计入。"
+    "durationHelp": "统计启用后，最近7天新下单且首次原图齐套的素材；包含排队和重试，进行中不计入。"
   },
   "stagingRepair": {
     "title": "修订草稿需要处理",
@@ -382,7 +382,7 @@
       "other": "其他"
     },
     "durationPending": "待统计",
-    "durationHelp": "统计启用后，最近24小时新下单且首次原图齐套的素材；包含排队和重试，进行中不计入。"
+    "durationHelp": "统计启用后，最近7天新下单且首次原图齐套的素材；包含排队和重试，进行中不计入。"
   },
   "studio": {
     "title": "创意工厂",

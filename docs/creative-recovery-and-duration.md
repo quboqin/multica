@@ -23,7 +23,7 @@ eligibility gates. An unconfirmed provider operation without an active task for
 The UI shows one average generation duration, using the existing API fields
 `image_generation_duration_seconds` and
 `image_generation_duration_package_count`. The sample is order items submitted after
-the measurement epoch and within the last 24 hours that have completed their
+the measurement epoch and within the last 7 days that have completed their
 first generated package. It excludes cancelled orders and direct edits.
 Duration runs from order submission to the first time all selected variants
 have all three generated sizes in their current revision. Queueing and retries
@@ -42,4 +42,4 @@ orders or a guarantee that generation will return to a previous speed.
 Validation covers exhausted source budgets, lost leases and atomic rollback,
 post-dispatch worker crashes, preserved operation inputs, legacy migration
 counts, concurrent final sizes, revision consistency, immutable first completion,
-the rolling 24-hour cohort, and the no-sample UI.
+the rolling 7-day cohort, and the no-sample UI.

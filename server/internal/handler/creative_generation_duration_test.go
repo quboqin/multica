@@ -9,13 +9,13 @@ import (
 )
 
 func TestCreativeGenerationDurationConcurrentCompletionAndRollingWindow(t *testing.T) {
-	setCreativeMeasurementEpochForTest(t, "-3 days")
+	setCreativeMeasurementEpochForTest(t, "-10 days")
 	_, before, err := testHandler.creativeInitialGeneratedPackageDuration(t.Context(), parseUUID(testWorkspaceID))
 	if err != nil {
 		t.Fatal(err)
 	}
 	old := createCreativeCountFixture(t, 2)
-	if _, err := testPool.Exec(t.Context(), `UPDATE creative_order SET created_at=now()-interval '25 hours' WHERE id=$1`, old.OrderID); err != nil {
+	if _, err := testPool.Exec(t.Context(), `UPDATE creative_order SET created_at=now()-interval '8 days' WHERE id=$1`, old.OrderID); err != nil {
 		t.Fatal(err)
 	}
 	oldVariant := createCreativeCandidateOrchestrationVariant(t, old.ItemID, "C01", "selected", 1, "running", "1080x1080", standardCreativeAssetSizes)
@@ -31,10 +31,10 @@ func TestCreativeGenerationDurationConcurrentCompletionAndRollingWindow(t *testi
 	}
 	_, afterOld, err := testHandler.creativeInitialGeneratedPackageDuration(t.Context(), parseUUID(testWorkspaceID))
 	if err != nil || afterOld != before {
-		t.Fatalf("old completion entered 24h cohort: %d -> %d %v", before, afterOld, err)
+		t.Fatalf("old completion entered 7-day cohort: %d -> %d %v", before, afterOld, err)
 	}
 	f := createCreativeCountFixture(t, 1)
-	if _, err := testPool.Exec(t.Context(), `UPDATE creative_order SET created_at=now()-interval '30 minutes' WHERE id=$1`, f.OrderID); err != nil {
+	if _, err := testPool.Exec(t.Context(), `UPDATE creative_order SET created_at=now()-interval '2 days' WHERE id=$1`, f.OrderID); err != nil {
 		t.Fatal(err)
 	}
 	variant := createCreativeCandidateOrchestrationVariant(t, f.ItemID, "C01", "selected", 1, "running", "1080x1080", standardCreativeAssetSizes)
