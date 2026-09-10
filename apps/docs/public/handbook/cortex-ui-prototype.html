@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Cortex UI 原型 v0.2 · 文档 / 多维表格 / 工作流 / 知识库</title>
+<title>Cortex UI 原型 v0.3 增量评审稿 · 文档 / 多维表格 / 工作流 / 知识库</title>
 <style>
 /* ============================================================
    Design Tokens
@@ -622,7 +622,13 @@ th.c-first{z-index:3!important;background:var(--surface-2)!important}
 }
 @media print{.chrome{position:static}.screen{display:block!important;page-break-after:always}}
 </style>
-</head>
+<style>
+.sync-note{padding:20px 24px;margin:24px 0;border:1px solid var(--accent,#27668a);border-radius:10px;background:var(--surface,#fff);color:var(--text,#252525);line-height:1.8}
+.sync-note a{color:var(--accent,#27668a)}
+.sync-table{overflow:auto;margin:20px 0}.sync-table table{width:100%;border-collapse:collapse;min-width:620px}.sync-table th,.sync-table td{padding:12px;text-align:left;vertical-align:top;border-bottom:1px solid var(--border,#d9d9d9);white-space:normal;overflow-wrap:anywhere;line-height:1.7}
+.sync-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:18px;margin:24px 0}.sync-card{padding:22px;border:1px solid var(--border,#d9d9d9);border-radius:12px;background:var(--surface,#fff);color:var(--text,#252525);line-height:1.8}.sync-card h3{margin:0 0 16px;font-size:18px}.sync-card p{margin:12px 0}.sync-card button{padding:8px 14px;border:1px solid #64748b;border-radius:6px;background:transparent;color:inherit;font:inherit}.sync-card button:focus-visible{outline:3px solid #4b91d3;outline-offset:3px}.sync-pill{display:inline-block;padding:2px 10px;border:1px solid #9ba9b7;border-radius:20px;margin:3px;font-size:12px}.sync-thread{margin:14px 0;padding:12px 16px;border-left:3px solid #658ca8;background:rgba(127,127,127,.06)}.sync-caption{font-size:13px;line-height:1.8}.sync-body{max-width:1100px;margin:auto;padding:20px}.sync-body code{overflow-wrap:anywhere}.sync-body h3{margin-top:28px}.sync-body p{line-height:1.8}
+@media(max-width:760px){.sync-grid{grid-template-columns:1fr}.sync-note{padding:16px}.sync-body{padding:12px}.shell{min-width:0;max-width:100%;overflow-x:clip}}
+</style></head>
 <body>
 
 <svg style="display:none" aria-hidden="true">
@@ -667,7 +673,7 @@ th.c-first{z-index:3!important;background:var(--surface-2)!important}
   <div class="chrome-in">
     <div class="chrome-top">
       <div class="brand"><span class="dot"></span>
-        <span>Cortex UI 原型 <small>v0.2 · MAGI-2 · 已并入七条源码复核修订 · 配套《Cortex 产品需求文档》与《Multica 架构手册》第 09 章</small></span>
+        <span>Cortex UI 原型 <small>v0.3 增量评审稿 · MAGI-2 · 已补 main 执行与权限修订 · 配套 PRD 第 14 章与架构手册第 10 章</small></span>
       </div>
       <div class="chrome-meta">
         <span id="tcount"></span>
@@ -678,12 +684,23 @@ th.c-first{z-index:3!important;background:var(--surface-2)!important}
   </div>
 </header>
 
-<main id="main">
+<main id="main"><section class="screen on" id="s-sync" role="tabpanel"><div class="screen-head"><h2>S10 · 新主线下的交互边界</h2><p>保留原九屏，在本屏补齐 main 对齐后的评审状态；以下示例数据均为虚构，不代表工作区真实用量或执行。</p></div><div class="sync-body" id="main-sync"><div class="sync-note"><strong>2026-09-10 · main 增量修订稿（未合并、未提交）</strong><br>
+原文源码基线仍为 <code>dcc2d5825</code>；本轮对照 <code>docs/cortex-prd-and-ui@a9c5aeb43</code> 与 <code>main@3dcfdaea4</code> 修订受影响条目，并新增增量章节。未复核的历史细节继续适用原基线，不能将整篇理解为已按 main 全量重审。<br>
+这份文件是架构评审交付副本，仓库及远端分支尚未修改。Mermaid 已内嵌，字体使用本机回退，可离线阅读。</div>
+<div class="sync-grid">
+<article class="sync-card"><h3>文档讨论 · 请求留在线程里</h3><span class="sync-pill">映射 S2 / AC-17</span><div class="sync-thread"><strong>架构讨论</strong><p>成员：请复核数据模型。</p><span class="sync-pill">架构智能体 · 运行中</span><p>结果与执行记录在本线程展示。</p></div><div class="sync-thread"><strong>发布讨论</strong><p>成员：请核对回退步骤。</p><span class="sync-pill">同一智能体 · 排队中</span><p>等待它完成本任务上的当前执行。</p></div><p>回复未获回应时由用户明确选择接手者；不显示“5 分钟后自动转给负责人”。</p></article>
+<article class="sync-card"><h3>共享视图 · 排序有边界</h3><span class="sync-pill">映射 S1 / S4 / S5</span><p><strong>新任务看板</strong></p><span class="sync-pill">按状态分组</span><span class="sync-pill">创建时间 · 从新到旧</span><span class="sync-pill">隐藏 cancelled</span><p id="sync-sort">按状态分组时，可选择手动排序。</p><button type="button" id="sync-group">切换为按负责人分组</button><p>旧视图保留用户已存偏好；筛选与显示设置分别维护。集合源的排序能力由数据契约确定，不机械复制 issue.position 规则。</p></article>
+<article class="sync-card"><h3>工作流 · 授权人与执行者分开</h3><span class="sync-pill">映射 S7 / AC-18 / AC-22</span><p>流程推进者：发布小队</p><p>定时触发创建者：成员甲<br>最近配置编辑者：成员乙</p><div class="sync-thread"><strong>等待人工评审</strong><p>取消本节点不会自动批准后续发布；推进者必须核对审批结果。</p></div><p>创建者已离开工作区时：<strong>无法运行，请有权限的成员处理触发配置。</strong></p><p>创建、修改、立即运行分别遵守平台判权；界面不展示他人 webhook 凭据。</p></article>
+<article class="sync-card"><h3>知识晋升 · 先确认来源完整</h3><span class="sync-pill">映射 S8 / AC-16 / AC-21</span><div class="sync-thread"><strong>候选：迁移回退说明</strong><p>来源：执行记录 → 工具输出<br>完整度：仅保留开头<br>用量：尚未上报</p></div><p id="sync-proof">需要打开完整来源核验。截断输出不能作为完整证据。</p><button type="button" id="sync-inspect">演示：完成来源核验</button><button type="button" id="sync-promote" disabled>入库（演示）</button><p>来源未知也保持可见；“未上报”与“真实为 0”必须区分。本屏按钮仅演示，不调用 API。</p></article>
+</div>
+<h3>与既有九屏配套的实施说明</h3><p>S2 的评论执行块复用 main 的线程展示；S7 的 runner 字段继续必填，并在激活后续阶段前检查业务审批结果；S8 的运行时兼容提示还需列出凭据、授权与连通性结果。界面中的 pending、blocked、部分成功应来自服务端结果，不由前端猜测。</p>
+<p>本次未改变 Q-U1 至 Q-U4 的未决状态。原型新增的对象仍为设计，不因沿用 main 的组件而成为已上线功能。完整机制、源码定位和迁移说明见配套架构手册 §10、PRD §14。</p>
+</div></section>
 
 <!-- ============================================================
      S1 · 信息架构与共享视图栏
      ============================================================ -->
-<section class="screen on" id="s-ia" role="tabpanel">
+<section class="screen" id="s-ia" role="tabpanel">
   <div class="screen-head">
     <h2>S1 · 信息架构：四个新对象接进现有侧栏，不新建导航体系</h2>
     <p>左侧栏保持 multica 现有的四段结构（个人 / 固定 / 工作区 / 配置，见 <code>packages/views/layout/app-sidebar.tsx</code>），
@@ -1640,7 +1657,7 @@ th.c-first{z-index:3!important;background:var(--surface-2)!important}
     <h2>S7 · Workflow：画的是模板，跑的是 issue 链</h2>
     <p>设计原则是 <b>模板 + 编译器，不新建执行引擎</b> <span class="fr">NG-5</span>。
       画布上的每个节点最终编译成一个带 <code>stage</code> 的子 issue，连线编译成 <code>issue_dependency</code>，
-      阶段推进完全交给已有的阶段屏障逻辑 <span class="fr">FR-052</span>。
+      阶段屏障只唤醒父任务推进者；下一批激活由 runner 执行 <span class="fr">FR-052</span>。
       因此画布的<b>列 = stage</b>，这不是布局选择，而是数据模型在界面上的直接投影。</p>
   </div>
 
@@ -1745,7 +1762,7 @@ th.c-first{z-index:3!important;background:var(--surface-2)!important}
 
           <div style="position:absolute;left:0;top:352px;width:810px;font-size:12px;color:var(--text-3);
                       border-top:1px dashed var(--border-2);padding-top:9px">
-            阶段屏障：阶段 <b>N</b> 的全部子 issue 进入终态后，才唤醒阶段 <b>N+1</b>。这一行为来自现有实现，模板不需要也不应该重新定义它。
+            阶段屏障：阶段 <b>N</b> 及更早阶段的带 stage 子任务全部终态后，唤醒父任务 runner，由它判断业务审批结果再激活阶段 <b>N+1</b>。这一行为来自现有实现，模板不需要也不应该重新定义它。
           </div>
         </div>
       </div></div>
@@ -2108,7 +2125,7 @@ th.c-first{z-index:3!important;background:var(--surface-2)!important}
   </table>
 
   <div class="note ok" style="margin-top:20px">
-    <h4>v0.1 → v0.2 的七条修订</h4>
+    <h4>v0.1 → v0.3 增量评审稿 的七条修订</h4>
     全部来自 2026-09-09 至 09-10 的源码回读，逐条已并入《Cortex 产品需求文档》第 06 章：
     <ul>
       <li><b>workflow 模板必须指定 runner</b>（S7）—— 服务端只唤醒不推进，缺了它流程会静默停住</li>
@@ -2137,6 +2154,7 @@ th.c-first{z-index:3!important;background:var(--surface-2)!important}
 <script>
 (function(){
   var SCREENS = [
+    ["s-sync", "S10", "main 增量评审"],
     ["s-ia",     "S1", "信息架构"],
     ["s-doc",    "S2", "文档 · 内嵌活视图"],
     ["s-insert", "S3", "插入活视图"],
@@ -2192,5 +2210,9 @@ th.c-first{z-index:3!important;background:var(--surface-2)!important}
   });
 })();
 </script>
-</body>
+<script>
+document.getElementById('sync-group').addEventListener('click',function(){var active=this.dataset.active!=='1';this.dataset.active=active?'1':'0';this.textContent=active?'切换为按状态分组':'切换为按负责人分组';document.getElementById('sync-sort').textContent=active?'按负责人分组：仅使用字段排序，手动排序不可用。':'按状态分组时，可选择手动排序。';});
+document.getElementById('sync-inspect').addEventListener('click',function(){document.getElementById('sync-proof').textContent='演示：已核对完整来源，仍需人工判断内容是否可晋升。';document.getElementById('sync-promote').disabled=false;});
+document.getElementById('sync-promote').addEventListener('click',function(){document.getElementById('sync-proof').textContent='演示：人工批准后进入入库队列，需等待投递结果。';this.disabled=true;});
+</script></body>
 </html>
