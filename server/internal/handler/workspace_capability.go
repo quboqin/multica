@@ -20,8 +20,9 @@ type workspaceCapabilityItem struct {
 }
 
 type workspaceCapabilitiesResponse struct {
-	Items     []workspaceCapabilityItem `json:"items"`
-	CanManage bool                      `json:"can_manage"`
+	Items                  []workspaceCapabilityItem `json:"items"`
+	CanManage              bool                      `json:"can_manage"`
+	CreativeFactorySquadID string                    `json:"creative_factory_squad_id,omitempty"`
 }
 
 func (h *Handler) ListWorkspaceCapabilities(w http.ResponseWriter, r *http.Request) {
@@ -65,10 +66,22 @@ WHERE workspace_id = $1::uuid
 		}
 		responseItems = append(responseItems, item)
 	}
+	var factorySquadID string
+	if err := h.DB.QueryRow(r.Context(), `
+SELECT COALESCE((
+  SELECT squad_id::text
+  FROM creative_factory_installation
+  WHERE workspace_id = $1::uuid AND status = 'ready'
+), '')
+`, workspaceID).Scan(&factorySquadID); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to load creative factory squad")
+		return
+	}
 	member, _ := middleware.MemberFromContext(r.Context())
 	writeJSON(w, http.StatusOK, workspaceCapabilitiesResponse{
-		Items:     responseItems,
-		CanManage: member.Role == "owner" || member.Role == "admin",
+		Items:                  responseItems,
+		CanManage:              member.Role == "owner" || member.Role == "admin",
+		CreativeFactorySquadID: factorySquadID,
 	})
 }
 

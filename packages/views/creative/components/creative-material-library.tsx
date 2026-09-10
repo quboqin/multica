@@ -11,6 +11,7 @@ import {
   creativeGalleryDeliverySelection,
   creativeOrderOptions,
   useCreativeGalleryMutation,
+  useCreativeSquad,
   creativeKeys,
   creativeMaterialLibraryOptions,
   creativeOrdersOptions,
@@ -26,7 +27,7 @@ import { CreativeGalleryConfirmationDialog } from "./creative-gallery-confirmati
 import { useWorkspaceId } from "@multica/core/hooks";
 import { useFileUpload } from "@multica/core/hooks/use-file-upload";
 import { resolvePublicFileUrl } from "@multica/core/workspace/avatar-url";
-import { agentListOptions, skillListOptions, squadListOptions, workspaceKeys } from "@multica/core/workspace/queries";
+import { agentListOptions, skillListOptions, workspaceKeys } from "@multica/core/workspace/queries";
 import { attachmentDownloadPath } from "@multica/core/types";
 import type { Agent, CreateCreativeFeedbackRequest, CreateCreativeOrderRequest, CreativeCopySnapshot, CreativeMaterialCandidate, CreativeMaterialCrawlRun, CreativeMaterialImportResult, CreativeMaterialLibraryQuery, CreativeOrder, CreativeOrderItem, CreativeOrderVariant, CreativeRepaymentPlanEntry, CreativeResource, CreativeResourceFile, CreativeSourceAnalysis, CreativeType, SkillSummary, Squad, SquadMember, CreativeVisualDirection } from "@multica/core/types";
 import { Badge } from "@multica/ui/components/ui/badge";
@@ -155,7 +156,7 @@ export function CreativeMaterialLibrary({
 } = {}) {
   const wsId = useWorkspaceId();
   const queryClient = useQueryClient();
-  const squads = useQuery(squadListOptions(wsId));
+  const { squads: availableSquads, selectedSquad, isLoading: squadsLoading } = useCreativeSquad(wsId);
   const [query, setQuery] = useState("");
   const [competitor, setCompetitor] = useState("");
   const [area, setArea] = useState("");
@@ -322,8 +323,6 @@ export function CreativeMaterialLibrary({
     () => [...(materialBatches.data?.crawl_runs ?? [])].sort(compareMaterialCrawlRuns),
     [materialBatches.data?.crawl_runs],
   );
-  const availableSquads = squads.data ?? [];
-  const selectedSquad = availableSquads.length === 1 ? availableSquads[0] : undefined;
   const activeCrawlRun = crawlRuns.find((run) => run.id === runId);
   const materialIndexById = useMemo(
     () => new Map([...(materialIndex.data?.candidates ?? []), ...displayedCandidates].map((candidate) => [candidate.id, candidate])),
@@ -390,7 +389,7 @@ export function CreativeMaterialLibrary({
         <CreativeImageEditPoolPanel
           squad={selectedSquad}
           squadCount={availableSquads.length}
-          loading={squads.isLoading}
+          loading={squadsLoading}
           className="mb-4"
         />
         <div className="grid min-w-0 gap-4 lg:grid-cols-[260px_minmax(0,1fr)]">
@@ -1586,7 +1585,7 @@ function CreativeOrderDraft({ candidates, analyses, deselecting, onDeselect, onC
   const wsId = useWorkspaceId();
   const queryClient = useQueryClient();
   const resources = useQuery(creativeResourcesOptions(wsId));
-  const squads = useQuery(squadListOptions(wsId));
+  const { squads: availableSquads, selectedSquad, isLoading: squadsLoading } = useCreativeSquad(wsId);
   const [drafts, setDrafts] = useState<Record<string, OrderItemDraft>>({});
   const [busy, setBusy] = useState(false);
   const [recoveryMessage, setRecoveryMessage] = useState("");
@@ -1603,8 +1602,6 @@ function CreativeOrderDraft({ candidates, analyses, deselecting, onDeselect, onC
     () => (marketFiles.data?.files ?? []).filter(isAppUIReferenceFile),
     [marketFiles.data?.files],
   );
-  const availableSquads = squads.data ?? [];
-  const selectedSquad = availableSquads.length === 1 ? availableSquads[0] : undefined;
   const squadMembers = useQuery({
     queryKey: ["workspaces", wsId, "squads", selectedSquad?.id ?? "", "members"],
     queryFn: () => api.listSquadMembers(selectedSquad!.id),
@@ -1941,7 +1938,7 @@ function CreativeOrderDraft({ candidates, analyses, deselecting, onDeselect, onC
       <div className="min-w-0"><h3 id="creative-order-draft-title" className="text-sm font-semibold">批量确认文案</h3><p className="mt-1 text-xs text-muted-foreground">确认画面文案后，会一次提交这批素材出图。</p></div>
       <div className="flex min-w-0 flex-wrap items-center justify-end gap-2"><Badge variant="outline" className="max-w-full truncate">{marketPack ? marketPack.name : "市场规则未配置"}</Badge>{selectedSquad && <Badge variant="outline" className="max-w-full truncate">{selectedSquad.name}</Badge>}<Badge variant="outline">可提交 {candidates.length - unconfiguredCandidates.length}/{candidates.length}</Badge><Badge>{candidates.length} 张素材</Badge><Button size="sm" variant="outline" onClick={onClose}><ArrowLeft className="h-4 w-4" />返回素材库</Button></div>
     </div>
-    <CreativeImageEditPoolPanel squad={selectedSquad} squadCount={availableSquads.length} loading={squads.isLoading} className="border-x-0 border-t-0" />
+    <CreativeImageEditPoolPanel squad={selectedSquad} squadCount={availableSquads.length} loading={squadsLoading} className="border-x-0 border-t-0" />
     <SelectedMaterialStrip candidates={candidates} activeCandidateId={activeCandidate?.id ?? ""} readinessByCandidateId={readinessByCandidateId} deselecting={deselecting} onSelect={setActiveCandidateId} onDeselect={onDeselect} />
     {activeCandidate && <article key={activeCandidate.id} className="min-w-0 space-y-4 p-4" data-testid="creative-order-active-editor" data-candidate-id={activeCandidate.id}>
       <div className="min-w-0 border-b border-l-2 border-emerald-600 pb-4 pl-3"><div className="flex flex-wrap items-center gap-2"><Sparkles className="h-4 w-4 text-emerald-700" /><p className="break-words text-sm font-medium">{activeAnalysis?.summary || "素材分析中"}</p><span className="font-mono text-[10px] text-muted-foreground">素材 ID {activeCandidate.id.slice(0, 8)}</span></div>{activeAnalysis && <AnalysisHighlights analysis={activeAnalysis} adaptation={activePreAdaptation} />}{activePreAdaptation ? <PreAdaptationSummary adaptation={activePreAdaptation} /> : activeReadiness === "analyzing" ? <p className="mt-2 text-xs text-amber-700">{MATERIAL_ANALYSIS_RUNNING_MESSAGE}</p> : <p className="mt-2 text-xs text-destructive">素材分析未完成，暂时不能提交出图。</p>}</div>
@@ -2075,15 +2072,13 @@ function DirectEditDialog({
   onCreated: (orderId: string) => void;
 }) {
   const wsId = useWorkspaceId();
-  const squads = useQuery(squadListOptions(wsId));
+  const { selectedSquad } = useCreativeSquad(wsId);
   const [instruction, setInstruction] = useState("");
   const [targetSize, setTargetSize] = useState<"1080x1080" | "1200x628" | "800x1000">("1080x1080");
   const [deliveryMode, setDeliveryMode] = useState<"preview" | "publish">("preview");
   const [recovery, setRecovery] = useState<SubmissionRecovery>(EMPTY_SUBMISSION_RECOVERY);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
-  const availableSquads = squads.data ?? [];
-  const selectedSquad = availableSquads.length === 1 ? availableSquads[0] : undefined;
   const publishMarketPackBlocked = deliveryMode === "publish" && !recovery.marketPackId && marketPackResolution.status !== "ready";
 
   useEffect(() => {

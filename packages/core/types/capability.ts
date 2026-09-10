@@ -7,6 +7,7 @@ export interface WorkspaceCapability {
 export interface WorkspaceCapabilitiesResponse {
   items: WorkspaceCapability[];
   can_manage: boolean;
+  creative_factory_squad_id?: string;
 }
 
 export interface CreativeFactoryInitializationRequest {

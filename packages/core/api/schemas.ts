@@ -353,6 +353,7 @@ export const WorkspaceCapabilitySchema = z.object({
 export const WorkspaceCapabilitiesSchema = z.object({
   items: z.array(WorkspaceCapabilitySchema).default([]),
   can_manage: BooleanWithDefaultSchema(false),
+  creative_factory_squad_id: OptionalStringSchema,
 }).loose();
 
 export const EMPTY_WORKSPACE_CAPABILITIES: WorkspaceCapabilitiesResponse = {
