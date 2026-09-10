@@ -475,6 +475,16 @@
         <li><a href="#ops-troubleshooting">按症状排查</a></li>
       </ol>
     </li>
+    <li class="part">
+      <a href="#primitives"><span class="no">09</span>协作原语的执行语义</a>
+      <ol class="sub">
+        <li><a href="#prim-mention">Mention 即调度</a></li>
+        <li><a href="#prim-squad">小队路由</a></li>
+        <li><a href="#prim-stage">阶段屏障</a></li>
+        <li><a href="#prim-claim">领取与能力协商</a></li>
+        <li><a href="#prim-concurrency">同一套并发范式</a></li>
+      </ol>
+    </li>
   </ol>
 </nav>
 
@@ -488,7 +498,7 @@
   <div class="meta-row">
     <span class="chip">commit <b>dcc2d5825</b></span>
     <span class="chip">源码基线 2026-08-28</span>
-    <span class="chip">手册更新 <b>2026-09-08</b></span>
+    <span class="chip">手册更新 <b>2026-09-10</b></span>
     <span class="chip">Go <b>1.26</b> · chi v5 · pgx/sqlc</span>
     <span class="chip">Next.js <b>16</b> · React <b>19</b></span>
     <span class="chip">PostgreSQL <b>17</b> + pgvector · Redis</span>
@@ -1939,9 +1949,94 @@ multica daemon logs --lines 100</code></pre>
 </section>
 
 
+<!-- ================================================================ -->
+<section class="part new-chapter" id="primitives">
+<div class="part-head">
+  <span class="no">PART 09</span>
+  <h2>协作原语的执行语义</h2>
+  <p class="lede">前八章回答「系统怎么跑」。这一章回答「工作怎么被派出去、怎么被排序」。四个原语——mention、小队、阶段、领取——在产品界面上看起来像交互行为，实际全部落在服务端逻辑与数据库约束里；把它们当成 UI 约定去理解，是设计新能力时最容易踩空的地方。</p>
+</div>
+
+<h3 id="prim-mention"><span class="sec">9.1</span>Mention 即调度</h3>
+<p>Mention 的书写形式是标准 Markdown 链接，只是协议头换成 <code>mention://</code>。服务端用一条正则把它们从正文里抓出来，这条正则的成员集合基本等于「可能产生副作用的集合」：</p>
+<div class="block"><pre class="mono">\[@?(.+?)\]\(mention://(member|agent|squad|issue|all)/([0-9a-fA-F-]+|all)\)</pre></div>
+<div class="tbl-wrap"><table class="tbl">
+  <thead><tr><th>类型</th><th>副作用</th><th>说明</th></tr></thead>
+  <tbody>
+    <tr><td><code>member</code></td><td>通知一个人</td><td>进对方收件箱</td></tr>
+    <tr><td><code>agent</code></td><td><strong>排一次 agent run</strong></td><td>真实计算调度，产生用量</td></tr>
+    <tr><td><code>squad</code></td><td>唤醒小队 leader</td><td>见 9.2，leader 再二次分派</td></tr>
+    <tr><td><code>all</code></td><td>广播</td><td>只抑制隐式路由回退，不吞掉显式点名的目标</td></tr>
+    <tr><td><code>issue</code></td><td>无调度</td><td>渲染为可跳转 chip</td></tr>
+    <tr><td><code>project</code></td><td>无调度</td><td><strong>不在服务端正则里</strong>，纯客户端渲染</td></tr>
+  </tbody>
+</table></div>
+<p>存储形态始终是那段 Markdown 文本，客户端渲染时才替换成带头像的 chip。这保证降级安全：在 CLI、纯文本环境和 agent 的上下文窗口里，chip 退化为普通链接，语义不丢。同一条原则在附件（<code>!file[名称](url)</code>）上重复出现——先定一个能往返的文本形式，再谈富交互。</p>
+<p>自我 mention 是<strong>有意允许</strong>的：一个 issue 里运行的 agent 可以显式把自己排到另一个 issue 上（典型场景是子 issue 完成后通知父 issue，而父 issue 的负责人正是同一个 agent）。跑飞由 <code>HasPendingTaskForIssueAndAgent</code> 去重与任务队列的 queued/dispatched 合并兜底。</p>
+<div class="risk"><span class="t">解析器不区分代码块里的示例与正文里的真链接</span><code>ParseMentions</code> 的实现是对<strong>原始 Markdown 全文</strong>跑一次正则，没有围栏代码块或行内代码的排除；调用点传入的也是原始 <code>content</code>。因此一段解释 mention 语法的文档，只要示例里写了真实 UUID，就会真的把被举例的 agent 拉起来跑一次——用 <code>all</code> 举例则是一次全工作区广播。影响有界（去重与合并兜底，代价是一次多余的 run，不会形成无限循环），但这个平台的文档、skill 与需求材料全都写在产品自身里面，触发条件并不罕见。修法是在匹配前剔除围栏与行内代码段，一个函数加若干测试，且必须在服务端做——客户端渲染成什么样不影响调度。<br><br>现有的两个规避手段：以 <code>/note</code> 开头的评论完全不触发任何 trigger（<code>isNoteComment</code>）；或者示例一律用占位符——正则的 id 段是 <code>[0-9a-fA-F-]+</code>，尖括号占位天然不匹配。</div>
+
+<h3 id="prim-squad"><span class="sec">9.2</span>小队路由</h3>
+<p>小队是「谁来做」的运行时抽象：把一件事派给一个可寻址的角色，具体由谁接手当场再定。<code>issue.assignee_type</code> 在建表时就扩展到了 <code>member | agent | squad</code> 三值。</p>
+<div class="tbl-wrap"><table class="tbl">
+  <thead><tr><th>约束</th><th>内容</th><th>后果</th></tr></thead>
+  <tbody>
+    <tr><td>leader 必须是 agent</td><td><code>squad.leader_id REFERENCES agent(id) ON DELETE RESTRICT</code></td><td>路由决策由一次 LLM 推理做出，不是配置表</td></tr>
+    <tr><td>成员可以是人</td><td><code>squad_member.member_type IN ('agent','member')</code></td><td>人类评审员可以待在小队里等 leader 点名</td></tr>
+    <tr><td>简报在领取时注入</td><td><code>agent_task_queue.squad_id</code> 定位小队，把 Operating Protocol 与 Roster 拼到 leader 的 instructions 上</td><td>刻意不反查「这个 agent 是哪个小队的 leader」——一个 agent 可以领导多个小队，反查有歧义</td></tr>
+  </tbody>
+</table></div>
+<p>Roster 逐行列出成员及其 <strong>skills</strong>，协议明确要求 leader 按 skills 匹配任务选人，并写死了两条硬规则：<strong>leader 只协调不干活</strong>，以及<strong>派完即结束回合</strong>。分派动作的形态是在同一个 issue 上发一条带 mention 链接的评论——<strong>不创建子 issue</strong>，因此也不会产生子任务完成的系统评论。</p>
+<div class="note"><span class="t">小队与阶段正交</span>小队回答「一个岗位有多个候选人时选谁」，阶段回答「一件事分几步、每步何时能开始」。前者是运行时的 LLM 判断、结果不可重复；后者是设计时的整数排序、结果确定。二者表达不了对方：小队无法表达顺序与前置条件，阶段无法表达「这个角色平时由谁轮值」。</div>
+
+<h3 id="prim-stage"><span class="sec">9.3</span>阶段屏障</h3>
+<p><code>issue.stage</code> 是一个从 1 起算的整数，<code>NULL</code> 表示不参与分组。它<strong>只在同一 <code>parent_issue_id</code> 下的兄弟之间</strong>有意义；写在顶层 issue 上完全无效。没有任何兄弟带 stage 的集合，被当作一个隐式阶段处理——所以未分阶段的子任务集只在最后一个完成时唤醒一次，而不是每完成一个就打扰父任务一次。</p>
+<p>屏障关闭的判定是：<strong>最低未完成阶段中的每一个子 issue 都进入终态</strong>。终态为 <code>done</code> 或 <code>cancelled</code>，且经 <code>issuestatus.Effective</code> 解析——自定义状态按它继承的 category 参与判定，所以一个自定义的「已作废」若挂在 <code>cancelled</code> 上，同样会推动屏障。</p>
+<div class="note"><span class="t">服务端只检测屏障并唤醒，不推进阶段</span>屏障关闭时，服务端在父 issue 上写一条系统评论（形如 <span class="mono">Stage 1: 2/2 done; Stage 2: 0/1 done (next)</span>）并唤醒父 issue 的负责人；<strong>它不会把下一阶段的子 issue 从 <code>backlog</code> 提升为 <code>todo</code></strong>。提升由被唤醒的负责人执行。源码对此有明确表述：服务端没有声明式的工作流模型，阶段是 agent 驱动的，且下游阶段常常是惰性创建的。<br><br>两条直接推论：其一，<strong>阶段不是执行闸门，<code>backlog</code> 才是</strong>——一个 <code>stage=4</code> 但状态为 <code>todo</code> 的子 issue 现在就会跑；其二，父 issue 必须挂一个 agent 或小队作为推进者，否则流程跑完第一阶段就停住，而且难以发现，因为每个子 issue 看上去都正常完成了。父 issue 的负责人是人类时，这条唤醒通知根本不发送。</div>
+
+<h3 id="prim-claim"><span class="sec">9.4</span>领取与能力协商</h3>
+<p>任务不是推给守护进程的，是守护进程抢来的：执行节点可能在 NAT 之后、可能随时离线，同一工作区还可能有多个运行时同时在线。领取动作是<strong>一条原子 UPDATE</strong>，把队列行从 <code>queued</code> 改为 <code>dispatched</code>，配合 <code>FOR UPDATE SKIP LOCKED</code>——两个守护进程同时来抢，一个拿到行锁，另一个跳过该行继续，不阻塞也不重复领。全部前置条件写在同一条语句里，因此校验与抢占之间没有检查-使用竞态。</p>
+<div class="tbl-wrap"><table class="tbl">
+  <thead><tr><th>前置条件</th><th>防的是什么</th></tr></thead>
+  <tbody>
+    <tr><td>状态为 <code>queued</code> 且 <code>runtime_id</code> 匹配</td><td>基本的「这活是给我的且还没被抢」</td></tr>
+    <tr><td>agent <strong>当前</strong>的 <code>runtime_id</code> 仍等于任务上记录的那个</td><td>agent 改绑运行时之后，旧任务不能在旧机器上执行——任务上持久化的运行时在改绑后不再是权威</td></tr>
+    <tr><td>运行时可见性检查</td><td>私有运行时只执行其属主的 agent；公开运行时可跨属主共享</td></tr>
+    <tr><td><code>status = 'online'</code> 且心跳在新鲜窗口内</td><td>不把任务派给已经失联但状态未及更新的运行时</td></tr>
+    <tr><td>同 issue + 同 agent 无进行中任务</td><td>按 (issue, agent) 串行：同一 agent 不在同一 issue 上并发执行，<strong>但不同 agent 可以在同一 issue 上并行</strong>。聊天任务按会话串行；快速创建任务按「任何一个快速创建形状的任务」串行</td></tr>
+  </tbody>
+</table></div>
+<p>领取的同时会写入准备租约 <code>prepare_lease_expires_at</code>。守护进程抢到之后仍需准备目录、下载 skill、启动执行环境；若它在这期间退出，租约到期后任务可被回收，不会永久停留在 <code>dispatched</code>。</p>
+<p><strong>能力协商</strong>严格说不是协商，而是<strong>单向声明加服务端裁剪</strong>：客户端在每个请求的 <code>X-Client-Capabilities</code> 头里带一串能力名，服务端据此构造对方接得住的响应形状。守护进程与桌面/移动客户端共用同一个头，且守护进程在 HTTP 请求与 WS 握手上带的是同一串值，两条通道拿到一致的裁剪结果。判定有两个时间尺度——每请求的 <code>requestHasClientCapability</code>，以及注册时持久化在运行时 metadata 里的 <code>runtimeHasCapability</code>——两者都<strong>失败即关闭</strong>：头缺失等同于旧版本，该能力一律视为不具备。</p>
+<div class="pills">
+  <span class="pill">rpc-v1 领取走 WS 还是 HTTP</span>
+  <span class="pill">skill-bundles-v1 skill 发引用还是发内容</span>
+  <span class="pill">coalesced-comments-v1 多条触发评论合并</span>
+  <span class="pill">execution-manifest-v1 执行清单格式</span>
+  <span class="pill">agent-skill-v1 / remote-mcp-v1 plugin 投递</span>
+  <span class="pill">local-worktree-v1 本地目录隔离</span>
+  <span class="pill">source_context_quick_create_v1 两段式提示</span>
+</div>
+<div class="risk"><span class="t">为什么是能力而不是版本号</span><code>local-worktree-v1</code> 的定义处写明了理由：判断错的后果不是缺一个字段，而是<strong>没有实现该模式的守护进程会跳过 <code>execution_mode</code>，直接在用户要求隔离的工作副本上原地执行</strong>——改动落在了用户没打算让它动的目录里。版本号在这件事上不可靠：git-describe 的开发构建被刻意豁免了版本下限以免阻塞本地构建，而这恰好放行过一个没有该实现的守护进程。能力声明没有这个问题：实现了的会声明，没实现的声明不出来。</div>
+
+<h3 id="prim-concurrency"><span class="sec">9.5</span>同一套并发范式</h3>
+<p>把 9.4 的任务领取与 webhook 投递层并排看，会发现同一组手法被复用了三次，值得作为新增后台流程的默认模板：</p>
+<div class="tbl-wrap"><table class="tbl">
+  <thead><tr><th>层次</th><th>机制</th><th>承担的职责</th></tr></thead>
+  <tbody>
+    <tr><td>排队与取活</td><td>Postgres 表 + <code>FOR UPDATE SKIP LOCKED</code></td><td>无消息中间件、无分布式锁、无 leader 选举</td></tr>
+    <tr><td>崩溃恢复</td><td>带过期时间的租约（<code>prepare_lease_expires_at</code> / <code>lease_expires_at</code>）</td><td>持有者消失后工作重新可见，不需要心跳或注册表</td></tr>
+    <tr><td>正确性</td><td>唯一约束</td><td>入站去重用 <code>(trigger_id, dedupe_key)</code> 部分唯一索引；下游去重用 <code>autopilot_run(webhook_delivery_id)</code> 唯一索引</td></tr>
+  </tbody>
+</table></div>
+<div class="note"><span class="t">租约是调度优化，不是 exactly-once 保证</span>源码对此的表述很直接：如果一次派发跑得比租约还久，另一个 worker 确实会同时开始处理同一行，此时兜底的是唯一索引而不是租约。把租约当作正确性保证的系统，最终都会在时钟漂移、GC 停顿或慢查询上翻车。<br><br>入站去重还有一处值得学的细节：<code>rejected</code> 与 <code>failed</code> 被刻意排除在唯一索引之外。GitHub 一类的提供方在重试时保持投递标识不变，若失败记录长期占用唯一键，运维修好配置之后该事件将<strong>永远无法重新进入</strong>——一次配置错误会变成永久黑洞。</div>
+<p class="source-map">源码入口（固定基线）：<a href="https://github.com/multica-ai/multica/blob/dcc2d5825/server/internal/util/mention.go">mention 解析</a> · <a href="https://github.com/multica-ai/multica/blob/dcc2d5825/server/internal/handler/comment.go">评论触发与显式 mention 路由</a> · <a href="https://github.com/multica-ai/multica/blob/dcc2d5825/server/internal/handler/squad_briefing.go">小队简报与花名册</a> · <a href="https://github.com/multica-ai/multica/blob/dcc2d5825/server/migrations/084_squad.up.sql">小队建表</a> · <a href="https://github.com/multica-ai/multica/blob/dcc2d5825/server/migrations/123_issue_stage.up.sql">阶段列定义</a> · <a href="https://github.com/multica-ai/multica/blob/dcc2d5825/server/internal/handler/issue_child_done.go">屏障判定与父任务唤醒</a> · <a href="https://github.com/multica-ai/multica/blob/dcc2d5825/server/internal/issuestatus/issuestatus.go">状态类目与行为继承</a> · <a href="https://github.com/multica-ai/multica/blob/dcc2d5825/server/pkg/db/queries/agent.sql">任务领取查询</a> · <a href="https://github.com/multica-ai/multica/blob/dcc2d5825/server/pkg/protocol/messages.go">能力常量</a> · <a href="https://github.com/multica-ai/multica/blob/dcc2d5825/server/internal/daemon/client.go">守护进程能力声明</a> · <a href="https://github.com/multica-ai/multica/blob/dcc2d5825/server/pkg/db/queries/webhook_delivery.sql">投递去重与租约</a>。</p>
+<p class="source-map">本章由需求侧在 MAGI-2 的讨论中逐条回读源码整理，覆盖前八章未展开的四个协作原语；与既有章节的重叠部分（守护进程链路见 <a href="#arch-daemon">2.4</a>，任务与运行时状态见 <a href="#recovery-states">6.1</a>）不再重复。</p>
+</section>
+
+
 <footer class="foot">
   <span>基于仓库 <span class="mono">multica-ai/multica</span> @ <span class="mono">dcc2d5825</span>（2026-08-28）源码整理</span>
-  <span>生成于 2026-09-02 · 补充与校订于 2026-09-08 · 文件路径相对仓库根目录</span>
+  <span>生成于 2026-09-02 · 补充与校订于 2026-09-08 · 第 09 章补充于 2026-09-10 · 文件路径相对仓库根目录</span>
 </footer>
 
 </div>
