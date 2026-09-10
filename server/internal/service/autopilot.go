@@ -47,6 +47,24 @@ type autopilotRuleConfigSummary struct {
 	ExecutionMode string `json:"execution_mode"`
 }
 
+type autopilotIssueMetadataEntry struct {
+	key   string
+	value []byte
+}
+
+func autopilotIssueMetadata(ap db.Autopilot, run db.AutopilotRun) []autopilotIssueMetadataEntry {
+	jsonString := func(value string) []byte {
+		encoded, _ := json.Marshal(value)
+		return encoded
+	}
+
+	return []autopilotIssueMetadataEntry{
+		{key: "autopilot_id", value: jsonString(util.UUIDToString(ap.ID))},
+		{key: "autopilot_run_id", value: jsonString(util.UUIDToString(run.ID))},
+		{key: "autopilot_source", value: jsonString(run.Source)},
+	}
+}
+
 func RecordAutopilotRuleVersion(ctx context.Context, q *db.Queries, ap db.Autopilot, publishedByType string, publishedByID pgtype.UUID) error {
 	summary, err := json.Marshal(autopilotRuleConfigSummary{
 		AssigneeType:  ap.AssigneeType,
@@ -230,6 +248,18 @@ func (s *AutopilotService) dispatchCreateIssue(ctx context.Context, ap db.Autopi
 	})
 	if err != nil {
 		return fmt.Errorf("create issue: %w", err)
+	}
+
+	for _, entry := range autopilotIssueMetadata(ap, *run) {
+		issue, err = qtx.SetIssueMetadataKey(ctx, db.SetIssueMetadataKeyParams{
+			Key:         entry.key,
+			Value:       entry.value,
+			ID:          issue.ID,
+			WorkspaceID: ap.WorkspaceID,
+		})
+		if err != nil {
+			return fmt.Errorf("set issue metadata %q: %w", entry.key, err)
+		}
 	}
 
 	if err := tx.Commit(ctx); err != nil {

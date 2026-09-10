@@ -81,6 +81,7 @@ func (m *mockStorage) KeyFromURL(rawURL string) string {
 		"https://cdn.example.com/",
 		"http://rustfs:9000/test-bucket/",
 		"https://s3.example.com/test-bucket/",
+		"https://assets-bucket.oss-ap-southeast-3.aliyuncs.com/",
 	} {
 		if strings.HasPrefix(rawURL, prefix) {
 			return strings.TrimPrefix(rawURL, prefix)
@@ -792,6 +793,43 @@ func TestDownloadAttachment_AutoInternalEndpointProxies(t *testing.T) {
 	}
 }
 
+func TestDownloadAttachment_ProxyStreamsStaleZeroSizeAndRepairsMetadata(t *testing.T) {
+	store := &mockStorage{}
+	origStorage := testHandler.Storage
+	origCfg := testHandler.cfg
+	origSigner := testHandler.CFSigner
+	testHandler.Storage = store
+	testHandler.cfg.AttachmentDownloadMode = "proxy"
+	testHandler.CFSigner = nil
+	t.Cleanup(func() {
+		testHandler.Storage = origStorage
+		testHandler.cfg = origCfg
+		testHandler.CFSigner = origSigner
+	})
+
+	key := "creative-materials/stale-size/source.jpeg"
+	body := []byte("stored image bytes")
+	store.put(key, body)
+	id := seedAttachmentURL(t, "https://assets-bucket.oss-ap-southeast-3.aliyuncs.com/"+key, "source.jpeg", "image/jpeg", 0)
+
+	req, w := newDownloadRequest(t, id, testWorkspaceID)
+	testHandler.DownloadAttachment(w, req)
+
+	if w.Code != http.StatusOK || !bytes.Equal(w.Body.Bytes(), body) {
+		t.Fatalf("stale-size proxy = %d body %q", w.Code, w.Body.Bytes())
+	}
+	if got := w.Header().Get("Content-Length"); got != "" {
+		t.Fatalf("Content-Length = %q, want omitted for stale metadata", got)
+	}
+	var sizeBytes int64
+	if err := testPool.QueryRow(t.Context(), `SELECT size_bytes FROM attachment WHERE id = $1`, id).Scan(&sizeBytes); err != nil {
+		t.Fatal(err)
+	}
+	if sizeBytes != int64(len(body)) {
+		t.Fatalf("reconciled size = %d, want %d", sizeBytes, len(body))
+	}
+}
+
 func TestDownloadAttachment_AutoPublicEndpointPresigns(t *testing.T) {
 	store := &mockStorage{}
 	origStorage := testHandler.Storage
@@ -870,6 +908,39 @@ func TestDownloadAttachment_ExplicitProxyStreamsPublicEndpoint(t *testing.T) {
 	}
 }
 
+func TestDownloadAttachment_AutoProxiesPrivateAlibabaOSSImage(t *testing.T) {
+	origStorage := testHandler.Storage
+	origMode := testHandler.cfg.AttachmentDownloadMode
+	store := &mockStorage{files: map[string][]byte{}}
+	testHandler.Storage = store
+	testHandler.cfg.AttachmentDownloadMode = "auto"
+	t.Cleanup(func() {
+		testHandler.Storage = origStorage
+		testHandler.cfg.AttachmentDownloadMode = origMode
+	})
+
+	key := "workspaces/ws/private-image.png"
+	body := []byte("\x89PNG\r\n\x1a\nprivate-oss-image")
+	store.put(key, body)
+	id := seedAttachmentURL(t, "https://assets-bucket.oss-ap-southeast-3.aliyuncs.com/"+key, "private-image.png", "image/png", int64(len(body)))
+
+	req, w := newDownloadRequest(t, id, testWorkspaceID)
+	testHandler.DownloadAttachment(w, req)
+
+	if w.Code != http.StatusOK || !bytes.Equal(w.Body.Bytes(), body) {
+		t.Fatalf("private OSS proxy = %d body %q", w.Code, w.Body.Bytes())
+	}
+	if got := w.Header().Get("Content-Type"); got != "image/png" {
+		t.Fatalf("Content-Type = %q, want image/png", got)
+	}
+	if got := w.Header().Get("Content-Disposition"); got != `inline; filename="private-image.png"` {
+		t.Fatalf("Content-Disposition = %q", got)
+	}
+	if len(store.presignCalls) != 0 {
+		t.Fatalf("private OSS proxy unexpectedly presigned %v", store.presignCalls)
+	}
+}
+
 func TestShouldProxyAttachmentURL(t *testing.T) {
 	cases := []struct {
 		raw  string
@@ -883,6 +954,7 @@ func TestShouldProxyAttachmentURL(t *testing.T) {
 		{"/uploads/workspaces/abc/file.txt", true},
 		{"https://s3.example.com/test-bucket/file.txt", false},
 		{"https://bucket.s3.us-east-1.amazonaws.com/file.txt", false},
+		{"https://assets-bucket.oss-ap-southeast-3.aliyuncs.com/file.txt", true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.raw, func(t *testing.T) {

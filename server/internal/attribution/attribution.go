@@ -339,6 +339,21 @@ func DirectHumanRun(userID pgtype.UUID, evidenceKind EvidenceKind, evidenceRefID
 	})
 }
 
+// DelegatedRun copies a parent task's human attribution onto work an agent
+// explicitly fanned out. The parent task id is retained as delegation lineage;
+// the evidence pair remains caller-owned and identifies the domain item source.
+func DelegatedRun(parentTaskID, parentOriginator, parentAccountable pgtype.UUID, evidenceKind EvidenceKind, evidenceRefID pgtype.UUID) Result {
+	r := Result{
+		UserID:              parentOriginator,
+		AccountableUserID:   parentAccountable,
+		Source:              SourceDelegation,
+		DelegatedFromTaskID: parentTaskID,
+		EvidenceKind:        evidenceKind,
+		EvidenceRefID:       evidenceRefID,
+	}
+	return finalizeAttribution(r)
+}
+
 // Unattributed builds an explicit "no human resolved" result for an enqueue path
 // that currently carries no accountable human — today only the autopilot run_only
 // dispatch, whose precise rule_owner attribution (accountable = the active rule

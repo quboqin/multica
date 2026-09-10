@@ -7,7 +7,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"mime/multipart"
 	"net/http"
+	"net/url"
 	"runtime"
 	"strings"
 	"time"
@@ -167,6 +169,12 @@ func (c *Client) StartTask(ctx context.Context, taskID string) error {
 	return c.postJSON(ctx, fmt.Sprintf("/api/daemon/tasks/%s/start", taskID), map[string]any{}, nil)
 }
 
+// ExtendTaskPrepareLease keeps a claimed task recoverable while the daemon is
+// still preparing its execution environment and has not called StartTask.
+func (c *Client) ExtendTaskPrepareLease(ctx context.Context, runtimeID, taskID string) error {
+	return c.postJSON(ctx, fmt.Sprintf("/api/daemon/runtimes/%s/tasks/%s/prepare-lease", runtimeID, taskID), map[string]any{}, nil)
+}
+
 // MarkTaskWaitingLocalDirectory parks a freshly-dispatched task in the
 // waiting_local_directory state on the server. The daemon calls this after
 // it has claimed a task whose project carries a local_directory resource
@@ -227,6 +235,78 @@ func (c *Client) ReportTaskUsage(ctx context.Context, taskID string, usage []Tas
 	return c.postJSON(ctx, fmt.Sprintf("/api/daemon/tasks/%s/usage", taskID), map[string]any{
 		"usage": usage,
 	}, nil)
+}
+
+// ReportCreativeImageLateSuccess uploads an atomic image-edit result through
+// the daemon credential. It remains valid after the task-scoped agent token is
+// revoked, while the server still binds every coordinate to the original
+// workspace, runtime, task, operation, attempt, provider request, and prompt.
+func (c *Client) ReportCreativeImageLateSuccess(
+	ctx context.Context,
+	runtimeID, taskID, operationID string,
+	attempt int,
+	receipt, image []byte,
+	filename string,
+) error {
+	path := fmt.Sprintf(
+		"/api/daemon/runtimes/%s/tasks/%s/creative-image-operations/%s/attempts/%d/late-success",
+		url.PathEscape(runtimeID), url.PathEscape(taskID), url.PathEscape(operationID), attempt,
+	)
+	var lastErr error
+	for retry := 0; ; retry++ {
+		if err := ctx.Err(); err != nil {
+			if lastErr != nil {
+				return lastErr
+			}
+			return err
+		}
+		err := c.postCreativeImageLateSuccess(ctx, path, receipt, image, filename)
+		if err == nil || !isTransientError(err) || retry >= len(defaultTerminalRetrySchedule) {
+			return err
+		}
+		lastErr = err
+		if err := retrySleep(ctx, defaultTerminalRetrySchedule[retry]); err != nil {
+			return lastErr
+		}
+	}
+}
+
+func (c *Client) postCreativeImageLateSuccess(ctx context.Context, path string, receipt, image []byte, filename string) error {
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	if err := writer.WriteField("receipt", string(receipt)); err != nil {
+		return err
+	}
+	part, err := writer.CreateFormFile("file", filename)
+	if err != nil {
+		return err
+	}
+	if _, err := part.Write(image); err != nil {
+		return err
+	}
+	if err := writer.Close(); err != nil {
+		return err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+path, &body)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	if c.token != "" {
+		req.Header.Set("Authorization", "Bearer "+c.token)
+	}
+	c.setIdentityHeaders(req)
+	resp, err := c.client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		data, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		return &requestError{Method: http.MethodPost, Path: path, StatusCode: resp.StatusCode, Body: strings.TrimSpace(string(data))}
+	}
+	_, _ = io.Copy(io.Discard, resp.Body)
+	return nil
 }
 
 func (c *Client) FailTask(ctx context.Context, taskID, errMsg, sessionID, workDir, failureReason string) error {
@@ -323,8 +403,9 @@ func (c *Client) ReportLocalSkillImportResult(ctx context.Context, runtimeID, re
 
 // WorkspaceInfo holds minimal workspace metadata returned by the API.
 type WorkspaceInfo struct {
-	ID   string `json:"id"`
-	Name string `json:"name"`
+	ID       string          `json:"id"`
+	Name     string          `json:"name"`
+	Settings json.RawMessage `json:"settings,omitempty"`
 }
 
 // RenewTokenResponse mirrors handler.RenewPATResponse — kept loose (string +
@@ -453,9 +534,37 @@ type WorkspaceReposResponse struct {
 	Settings     json.RawMessage `json:"settings,omitempty"`
 }
 
+// RuntimeProfile is a workspace-defined runtime command. ProtocolFamily
+// selects an existing agent adapter while CommandName is resolved locally by
+// the daemon that hosts the profile.
+type RuntimeProfile struct {
+	ID             string   `json:"id"`
+	WorkspaceID    string   `json:"workspace_id"`
+	DisplayName    string   `json:"display_name"`
+	ProtocolFamily string   `json:"protocol_family"`
+	CommandName    string   `json:"command_name"`
+	Description    *string  `json:"description"`
+	FixedArgs      []string `json:"fixed_args"`
+	Visibility     string   `json:"visibility"`
+	Enabled        bool     `json:"enabled"`
+}
+
+type RuntimeProfilesResponse struct {
+	WorkspaceID     string           `json:"workspace_id"`
+	RuntimeProfiles []RuntimeProfile `json:"runtime_profiles"`
+}
+
 func (c *Client) GetWorkspaceRepos(ctx context.Context, workspaceID string) (*WorkspaceReposResponse, error) {
 	var resp WorkspaceReposResponse
 	if err := c.getJSON(ctx, fmt.Sprintf("/api/daemon/workspaces/%s/repos", workspaceID), &resp); err != nil {
+		return nil, err
+	}
+	return &resp, nil
+}
+
+func (c *Client) GetRuntimeProfiles(ctx context.Context, workspaceID string) (*RuntimeProfilesResponse, error) {
+	var resp RuntimeProfilesResponse
+	if err := c.getJSON(ctx, fmt.Sprintf("/api/daemon/workspaces/%s/runtime-profiles", workspaceID), &resp); err != nil {
 		return nil, err
 	}
 	return &resp, nil

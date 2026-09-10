@@ -34,6 +34,7 @@ func init() {
 	crawlRunCmd.Flags().String("capability", "material_search", "Connector capability to run")
 	crawlRunCmd.Flags().String("params-json", "{}", "Crawl params as JSON")
 	crawlRunCmd.Flags().String("intent", "", "Natural-language crawl intent; merged into params as intent")
+	crawlRunCmd.Flags().String("analysis-agent-id", "", "Reference-analysis agent UUID to record on this Crawl Run")
 	crawlRunCmd.Flags().String("intent-file", "", "Read natural-language crawl intent from a file")
 	crawlRunCmd.Flags().Bool("intent-stdin", false, "Read natural-language crawl intent from stdin")
 	crawlRunCmd.Flags().String("output", "json", "Output format: json or table")
@@ -57,6 +58,11 @@ func runCrawlRun(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("--params-json must be valid JSON: %w", err)
 	}
+	analysisAgentID, _ := cmd.Flags().GetString("analysis-agent-id")
+	params, err = crawlParamsWithAnalysisAgent(params, analysisAgentID)
+	if err != nil {
+		return err
+	}
 	client, err := newAPIClient(cmd)
 	if err != nil {
 		return err
@@ -77,6 +83,8 @@ func runCrawlRun(cmd *cobra.Command, args []string) error {
 		Message           string          `json:"message"`
 		Raw               json.RawMessage `json:"raw,omitempty"`
 		CreativeMaterials any             `json:"creative_materials,omitempty"`
+		CrawlRunID        string          `json:"crawl_run_id,omitempty"`
+		AnalysisAgentID   string          `json:"analysis_agent_id,omitempty"`
 	}
 	if err := client.PostJSON(context.Background(), "/api/credential-crawl", map[string]any{
 		"profile_id":   profileID,
@@ -86,6 +94,9 @@ func runCrawlRun(cmd *cobra.Command, args []string) error {
 		"params":       params,
 	}, &resp); err != nil {
 		return err
+	}
+	if summary, ok := resp.CreativeMaterials.(map[string]any); ok {
+		resp.CrawlRunID = strVal(summary, "run_id")
 	}
 	output, _ := cmd.Flags().GetString("output")
 	if output == "json" {
@@ -100,7 +111,7 @@ func runCrawlRun(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-const crawlRunHTTPTimeout = 5 * time.Minute
+const crawlRunHTTPTimeout = 15 * time.Minute
 
 func resolveCrawlIntent(cmd *cobra.Command) (string, error) {
 	intent, _ := cmd.Flags().GetString("intent")
@@ -157,6 +168,26 @@ func crawlParamsWithIntent(paramsJSON string, intent string) (json.RawMessage, e
 	}
 	params["intent"] = strings.TrimSpace(intent)
 	merged, err := json.Marshal(params)
+	if err != nil {
+		return nil, err
+	}
+	return json.RawMessage(merged), nil
+}
+
+func crawlParamsWithAnalysisAgent(params json.RawMessage, analysisAgentID string) (json.RawMessage, error) {
+	analysisAgentID = strings.TrimSpace(analysisAgentID)
+	if analysisAgentID == "" {
+		return params, nil
+	}
+	var values map[string]any
+	if err := json.Unmarshal(params, &values); err != nil {
+		return nil, fmt.Errorf("crawl params must be a JSON object: %w", err)
+	}
+	if values == nil {
+		values = map[string]any{}
+	}
+	values["analysis_agent_id"] = analysisAgentID
+	merged, err := json.Marshal(values)
 	if err != nil {
 		return nil, err
 	}

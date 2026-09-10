@@ -173,6 +173,15 @@ func TestParseCodexDebugModels(t *testing.T) {
 	raw := []byte(`{
 		"models": [
 			{
+				"slug": "gpt-5.6-sol",
+				"default_reasoning_level": "low",
+				"supported_reasoning_levels": [
+					{"effort": "low", "description": "Fast"},
+					{"effort": "max", "description": "Maximum"},
+					{"effort": "ultra", "description": "Automatic delegation"}
+				]
+			},
+			{
 				"slug": "gpt-5.5",
 				"default_reasoning_level": "medium",
 				"supported_reasoning_levels": [
@@ -197,6 +206,19 @@ func TestParseCodexDebugModels(t *testing.T) {
 		]
 	}`)
 	got := parseCodexDebugModels(raw)
+	gpt56, ok := got["gpt-5.6-sol"]
+	if !ok || gpt56 == nil {
+		t.Fatalf("missing gpt-5.6-sol entry: %+v", got)
+	}
+	if gpt56.DefaultLevel != "low" {
+		t.Errorf("gpt-5.6-sol default: got %q, want low", gpt56.DefaultLevel)
+	}
+	if len(gpt56.SupportedLevels) != 3 {
+		t.Errorf("gpt-5.6-sol supported count: got %d, want 3", len(gpt56.SupportedLevels))
+	}
+	if gpt56.SupportedLevels[1].Label != "Max" || gpt56.SupportedLevels[2].Label != "Ultra" {
+		t.Errorf("gpt-5.6-sol labels: got %+v", gpt56.SupportedLevels)
+	}
 
 	gpt55, ok := got["gpt-5.5"]
 	if !ok || gpt55 == nil {
@@ -238,6 +260,61 @@ func TestParseCodexDebugModels_Malformed(t *testing.T) {
 	}
 }
 
+func TestAnnotateCodexThinkingUsesAstraCatalogAndAPIFallback(t *testing.T) {
+	resetThinkingCacheForTests()
+	defer resetThinkingCacheForTests()
+
+	models := []Model{{ID: "gpt-6-astra"}}
+	annotateCodexThinking(context.Background(), models, filepath.Join(t.TempDir(), "missing-codex"))
+	got := models[0].Thinking
+	if got == nil || got.DefaultLevel != "low" {
+		t.Fatalf("unexpected Astra fallback: %+v", got)
+	}
+	var efforts []string
+	for _, level := range got.SupportedLevels {
+		efforts = append(efforts, level.Value)
+	}
+	if !reflect.DeepEqual(efforts, []string{"low", "medium", "high", "xhigh", "max"}) {
+		t.Fatalf("unexpected fallback efforts: %v", efforts)
+	}
+	catalog := parseCodexDebugModels([]byte(`{"models":[{"slug":"gpt-6-astra","default_reasoning_level":"low","supported_reasoning_levels":[{"effort":"low"},{"effort":"ultra"}]}]}`))
+	if entry := catalog["gpt-6-astra"]; entry == nil || entry.SupportedLevels[1].Value != "ultra" {
+		t.Fatalf("runtime-specific efforts were lost: %+v", entry)
+	}
+}
+
+func TestAnnotateCodexThinkingUsesGPT56APIFallback(t *testing.T) {
+	resetThinkingCacheForTests()
+	defer resetThinkingCacheForTests()
+
+	models := codexStaticModels()
+	annotateCodexThinking(context.Background(), models, filepath.Join(t.TempDir(), "missing-codex"))
+
+	for _, modelID := range []string{"gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"} {
+		var found *Model
+		for i := range models {
+			if models[i].ID == modelID {
+				found = &models[i]
+				break
+			}
+		}
+		if found == nil || found.Thinking == nil {
+			t.Fatalf("%s missing API effort fallback: %+v", modelID, found)
+		}
+		if found.Thinking.DefaultLevel != "medium" {
+			t.Errorf("%s default effort = %q, want medium", modelID, found.Thinking.DefaultLevel)
+		}
+		got := make([]string, 0, len(found.Thinking.SupportedLevels))
+		for _, level := range found.Thinking.SupportedLevels {
+			got = append(got, level.Value)
+		}
+		want := []string{"none", "low", "medium", "high", "xhigh", "max"}
+		if !reflect.DeepEqual(got, want) {
+			t.Errorf("%s efforts = %v, want %v", modelID, got, want)
+		}
+	}
+}
+
 // ── IsKnownThinkingValue (server-side enum gate) ─────────────────────
 
 func TestIsKnownThinkingValue(t *testing.T) {
@@ -256,7 +333,8 @@ func TestIsKnownThinkingValue(t *testing.T) {
 		{"codex", "none", true},
 		{"codex", "minimal", true},
 		{"codex", "xhigh", true},
-		{"codex", "max", false}, // Claude-only token rejected for Codex
+		{"codex", "max", true},
+		{"codex", "ultra", true},
 		{"opencode", "", true},
 		{"opencode", "max", true},
 		{"opencode", "fast-mode", true},  // custom opencode.json variant names are valid

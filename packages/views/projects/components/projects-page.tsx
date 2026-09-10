@@ -16,6 +16,7 @@ import {
   Plus,
   Rows3,
   Search,
+  Tag,
   Trash2,
   X,
 } from "lucide-react";
@@ -68,6 +69,7 @@ import { useWorkspacePaths } from "@multica/core/paths";
 import { useAuthStore } from "@multica/core/auth";
 import { useActorName } from "@multica/core/workspace/hooks";
 import { memberListOptions } from "@multica/core/workspace/queries";
+import { labelListOptions } from "@multica/core/labels/queries";
 import { useModalStore } from "@multica/core/modals";
 import { AppLink } from "../../navigation";
 import { FavoriteItemAction } from "../../favorites/components/favorite-item-action";
@@ -133,7 +135,7 @@ import { PageHeader } from "../../layout/page-header";
 import { ProjectIcon } from "./project-icon";
 import { useT } from "../../i18n";
 import { matchesPinyin } from "../../editor/extensions/pinyin-match";
-import { useFormatRelativeDate, useProjectPriorityLabels, useProjectStatusLabels } from "./labels";
+import { useFormatRelativeDate, useProjectStatusLabels } from "./labels";
 import { ProjectStatusBadge, ProjectPriorityBadge } from "./project-badge";
 import { ProjectLeadPicker } from "./project-lead-picker";
 import { LabelChip } from "../../labels/label-chip";
@@ -916,7 +918,63 @@ function countActiveFilters(f: ProjectListFilters): number {
   if (f.statuses.length) c++;
   if (f.priorities.length) c++;
   if (f.leads.length) c++;
+  if (f.labels.length) c++;
   return c;
+}
+
+function ProjectLabelSubContent({
+  counts,
+  selected,
+  onToggle,
+}: {
+  counts: Map<string, number>;
+  selected: string[];
+  onToggle: (labelId: string) => void;
+}) {
+  const { t } = useT("projects");
+  const [search, setSearch] = useState("");
+  const wsId = useWorkspaceId();
+  const { data: labels = [] } = useQuery(labelListOptions(wsId, "project"));
+  const query = search.trim().toLowerCase();
+  const filtered = labels.filter((label) => label.name.toLowerCase().includes(query));
+
+  return (
+    <>
+      <div className="border-b border-foreground/5 px-2 py-1.5">
+        <input
+          type="text"
+          value={search}
+          onChange={(event) => setSearch(event.target.value)}
+          placeholder={t(($) => $.toolbar.label_search_placeholder)}
+          className="w-full bg-transparent text-sm outline-none placeholder:text-muted-foreground"
+          autoFocus
+        />
+      </div>
+      <div className="max-h-64 overflow-y-auto p-1">
+        {filtered.map((label) => {
+          const checked = selected.includes(label.id);
+          const count = counts.get(label.id) ?? 0;
+          return (
+            <DropdownMenuCheckboxItem
+              key={label.id}
+              checked={checked}
+              onCheckedChange={() => onToggle(label.id)}
+              className={FILTER_ITEM_CLASS}
+            >
+              <HoverCheck checked={checked} />
+              <LabelChip label={label} />
+              {count > 0 && <span className="ml-auto text-xs text-muted-foreground">{count}</span>}
+            </DropdownMenuCheckboxItem>
+          );
+        })}
+        {filtered.length === 0 && (
+          <div className="px-2 py-3 text-center text-sm text-muted-foreground">
+            {search ? t(($) => $.toolbar.label_no_results) : t(($) => $.toolbar.label_empty)}
+          </div>
+        )}
+      </div>
+    </>
+  );
 }
 
 // Batch toolbar — page-anchored (not viewport). Pin all selected (any
@@ -1789,6 +1847,16 @@ export function ProjectsPage() {
     return m;
   }, [projects]);
 
+  const labelCounts = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const project of projects) {
+      for (const label of project.labels ?? []) {
+        counts.set(label.id, (counts.get(label.id) ?? 0) + 1);
+      }
+    }
+    return counts;
+  }, [projects]);
+
   const visible = useMemo(() => {
     const q = search.trim().toLowerCase();
     const filtered = projects.filter((p) => {
@@ -1802,6 +1870,12 @@ export function ProjectsPage() {
       if (filters.leads.length) {
         const v = leadFilterValue(p);
         if (!v || !filters.leads.includes(v)) return false;
+      }
+      if (
+        filters.labels.length &&
+        !(p.labels ?? []).some((label) => filters.labels.includes(label.id))
+      ) {
+        return false;
       }
       return true;
     });
@@ -2064,6 +2138,22 @@ export function ProjectsPage() {
                           {countBadge(count)}
                         </DropdownMenuCheckboxItem>
                       ))}
+                    </DropdownMenuSubContent>
+                  </DropdownMenuSub>
+                  <DropdownMenuSub>
+                    <DropdownMenuSubTrigger>
+                      <Tag className="size-3.5" />
+                      <span className="flex-1">{t(($) => $.toolbar.section_label)}</span>
+                      {filters.labels.length > 0 && (
+                        <span className="text-xs font-medium text-primary">{filters.labels.length}</span>
+                      )}
+                    </DropdownMenuSubTrigger>
+                    <DropdownMenuSubContent className="w-auto min-w-52 p-0">
+                      <ProjectLabelSubContent
+                        counts={labelCounts}
+                        selected={filters.labels}
+                        onToggle={(labelId) => toggleFilter("labels", labelId)}
+                      />
                     </DropdownMenuSubContent>
                   </DropdownMenuSub>
                 </DropdownMenuContent>

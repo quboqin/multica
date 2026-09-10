@@ -28,22 +28,25 @@ const remoteApiUrl = resolveRemoteApiUrl(runtimeUrlEnv);
 const docsUrl = process.env.DOCS_URL || "http://localhost:4000";
 const remoteCrawlerWorkerUrl = (process.env.REMOTE_CRAWLER_WORKER_URL || "").replace(/\/$/, "");
 const remoteCreativeFilesUrl = (process.env.REMOTE_CREATIVE_FILES_URL || "").replace(/\/$/, "");
+const skipDockerTypecheck = process.env.MULTICA_SKIP_NEXT_BUILD_TYPECHECK === "true";
 
 // Parse hostnames from CORS_ALLOWED_ORIGINS so that Next.js dev server
 // allows cross-origin HMR / webpack requests (e.g. from Tailscale IPs).
 const allowedDevOrigins = process.env.CORS_ALLOWED_ORIGINS
-  ? process.env.CORS_ALLOWED_ORIGINS.split(",")
-      .map((origin) => {
+  ? Array.from(new Set(process.env.CORS_ALLOWED_ORIGINS.split(",")
+      .flatMap((origin) => {
+        const trimmed = origin.trim();
         try {
-          return new URL(origin.trim()).host;
+          const parsed = new URL(trimmed);
+          return [parsed.origin, parsed.host, parsed.hostname];
         } catch {
-          return origin.trim();
+          return [trimmed];
         }
       })
-      .filter(Boolean)
+      .filter(Boolean)))
   : undefined;
 
-const webWarmupEnabled = process.env.MULTICA_WEB_WARMUP?.toLowerCase() !== "false";
+const webWarmupEnabled = process.env.MULTICA_WEB_WARMUP?.toLowerCase() === "true";
 const warmPageMaxInactiveAge = positiveInteger(
   process.env.MULTICA_WEB_WARMUP_MAX_INACTIVE_MS,
   60 * 60 * 1000,
@@ -52,11 +55,30 @@ const warmPageBufferLength = positiveInteger(
   process.env.MULTICA_WEB_WARMUP_BUFFER_LENGTH,
   48,
 );
+const nextBuildCpus = positiveInteger(process.env.MULTICA_NEXT_BUILD_CPUS, 0);
+const nextStaticGenerationMaxConcurrency = positiveInteger(
+  process.env.MULTICA_NEXT_STATIC_GENERATION_MAX_CONCURRENCY,
+  0,
+);
+const dockerBuildConcurrency =
+  nextBuildCpus > 0 || nextStaticGenerationMaxConcurrency > 0
+    ? {
+        ...(nextBuildCpus > 0 ? { cpus: nextBuildCpus } : {}),
+        ...(nextStaticGenerationMaxConcurrency > 0
+          ? { staticGenerationMaxConcurrency: nextStaticGenerationMaxConcurrency }
+          : {}),
+      }
+    : {};
 
 const nextConfig: NextConfig = {
   ...(process.env.STANDALONE === "true" ? { output: "standalone" as const } : {}),
+  ...(skipDockerTypecheck ? { typescript: { ignoreBuildErrors: true } } : {}),
   outputFileTracingRoot: resolve(__dirname, "../.."),
   transpilePackages: ["@multica/core", "@multica/ui", "@multica/views"],
+  experimental: {
+    proxyClientMaxBodySize: "110mb",
+    ...dockerBuildConcurrency,
+  },
   ...(allowedDevOrigins && allowedDevOrigins.length > 0
     ? { allowedDevOrigins }
     : {}),

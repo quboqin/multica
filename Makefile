@@ -83,19 +83,6 @@ selfhost: ## Create .env if needed, then pull and start the official self-hosted
 		fi; \
 		echo "==> Generated BROKER_STATE_KEY for encrypted credential state"; \
 	fi
-	@if ! grep -Eq '^MULTICA_WORKSPACE_MCP_KEY=.+$$' .env; then \
-		MCP_KEY=$$(openssl rand -base64 32 | tr -d '\r\n'); \
-		if grep -Eq '^#?MULTICA_WORKSPACE_MCP_KEY=' .env; then \
-			if [ "$$(uname)" = "Darwin" ]; then \
-				sed -i '' -E "s#^#?MULTICA_WORKSPACE_MCP_KEY=.*#MULTICA_WORKSPACE_MCP_KEY=$$MCP_KEY#" .env; \
-			else \
-				sed -i -E "s#^#?MULTICA_WORKSPACE_MCP_KEY=.*#MULTICA_WORKSPACE_MCP_KEY=$$MCP_KEY#" .env; \
-			fi; \
-		else \
-			printf '\nMULTICA_WORKSPACE_MCP_KEY=%s\n' "$$MCP_KEY" >> .env; \
-		fi; \
-		echo "==> Generated MULTICA_WORKSPACE_MCP_KEY for encrypted MCP headers"; \
-	fi
 	@bash scripts/selfhost-deploy.sh --env-file .env
 
 selfhost-build: ## Build backend/web from the current checkout and start the self-hosted stack
@@ -127,19 +114,6 @@ selfhost-build: ## Build backend/web from the current checkout and start the sel
 			printf '\nBROKER_STATE_KEY=%s\n' "$$BROKER_KEY" >> .env; \
 		fi; \
 		echo "==> Generated BROKER_STATE_KEY for encrypted credential state"; \
-	fi
-	@if ! grep -Eq '^MULTICA_WORKSPACE_MCP_KEY=.+$$' .env; then \
-		MCP_KEY=$$(openssl rand -base64 32 | tr -d '\r\n'); \
-		if grep -Eq '^#?MULTICA_WORKSPACE_MCP_KEY=' .env; then \
-			if [ "$$(uname)" = "Darwin" ]; then \
-				sed -i '' -E "s#^#?MULTICA_WORKSPACE_MCP_KEY=.*#MULTICA_WORKSPACE_MCP_KEY=$$MCP_KEY#" .env; \
-			else \
-				sed -i -E "s#^#?MULTICA_WORKSPACE_MCP_KEY=.*#MULTICA_WORKSPACE_MCP_KEY=$$MCP_KEY#" .env; \
-			fi; \
-		else \
-			printf '\nMULTICA_WORKSPACE_MCP_KEY=%s\n' "$$MCP_KEY" >> .env; \
-		fi; \
-		echo "==> Generated MULTICA_WORKSPACE_MCP_KEY for encrypted MCP headers"; \
 	fi
 	@bash scripts/selfhost-deploy.sh --env-file .env --build
 
@@ -294,6 +268,7 @@ build: ## Build the server, CLI, and migrate binaries into server/bin
 	cd server && go build -ldflags "-X main.version=$(VERSION) -X main.commit=$(COMMIT)" -o bin/server ./cmd/server
 	cd server && go build -ldflags "-X main.version=$(VERSION) -X main.commit=$(COMMIT) -X main.date=$(DATE)" -o bin/multica ./cmd/multica
 	cd server && go build -o bin/migrate ./cmd/migrate
+	cd server && go build -o bin/migrate_attachments_to_oss ./cmd/migrate_attachments_to_oss
 
 test: ## Run Go tests after ensuring the target DB exists and migrations are applied
 	$(REQUIRE_ENV)

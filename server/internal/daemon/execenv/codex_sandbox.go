@@ -38,6 +38,9 @@ type codexSandboxPolicy struct {
 	// NetworkAccess controls `[sandbox_workspace_write] network_access`.
 	// Only meaningful when Mode is "workspace-write".
 	NetworkAccess bool
+	// WritableRoots are extra absolute paths writable by a workspace-write
+	// sandbox. The per-task HOME is added here on Linux.
+	WritableRoots []string
 	// Reason is a short human-readable label used in warn-level logs.
 	Reason string
 }
@@ -144,6 +147,15 @@ func renderMulticaManagedBlock(policy codexSandboxPolicy) string {
 	b.WriteString(fmt.Sprintf("sandbox_mode = %q\n", policy.Mode))
 	if policy.Mode == "workspace-write" {
 		b.WriteString(fmt.Sprintf("sandbox_workspace_write.network_access = %t\n", policy.NetworkAccess))
+		if len(policy.WritableRoots) > 0 {
+			roots := make([]string, 0, len(policy.WritableRoots))
+			for _, root := range policy.WritableRoots {
+				roots = append(roots, strconv.Quote(root))
+			}
+			b.WriteString("sandbox_workspace_write.writable_roots = [")
+			b.WriteString(strings.Join(roots, ", "))
+			b.WriteString("]\n")
+		}
 	}
 	b.WriteString(multicaManagedEndMarker)
 	b.WriteString("\n")

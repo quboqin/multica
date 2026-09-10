@@ -7,8 +7,9 @@
     "plans": "Plans",
     "projects": "プロジェクト",
     "autopilots": "オートパイロット",
+    "creative": "クリエイティブ",
     "agents": "エージェント",
-    "squads": "スクワッド",
+    "squads": "ワークフロー",
     "usage": "使用量",
     "my_usage": "自分の使用量",
     "user_usage": "使用量統計",
@@ -19,9 +20,12 @@
   },
   "help": {
     "trigger": "ヘルプ",
-    "docs": "ドキュメント",
-    "changelog": "変更ログ",
-    "feedback": "フィードバック"
+    "changelog": "変更ログ"
+  },
+  "release_announcement": {
+    "title": "Multica {{version}} の更新",
+    "view_changelog": "変更履歴を見る",
+    "later": "後で"
   },
   "workspace_loader": {
     "loading_workspace": "ワークスペースを読み込み中…",

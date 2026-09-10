@@ -15,7 +15,7 @@ import (
 // UI without hard-coding (and getting wrong) what's installed locally.
 //
 // MUL-2339: we deliberately do not flatten Claude's `low|medium|high|
-// xhigh|max` and Codex's `none|minimal|low|medium|high|xhigh` onto a
+// xhigh|max` and Codex's model-specific reasoning levels onto a
 // shared enum. OpenCode exposes provider-specific model variants through
 // `opencode run --variant`, and those names can be extended by local
 // opencode.json config. What users pick must round-trip exactly through
@@ -240,8 +240,8 @@ func projectClaudeLevels(superset []string, allow map[string]bool) []ThinkingLev
 // tokens the local binary actually accepts, which is the only thing we
 // need for validation.
 //
-// On older Codex versions / failures, the picker just disappears for
-// that model rather than offering a wrong list.
+// Known API models retain documented effort defaults when CLI discovery fails.
+// Other models omit the picker until their runtime exposes an effort catalog.
 
 // codexEffortLabel is the human display string for each Codex effort
 // value, matching Codex's own TUI (`Extra high`, `Minimal`, …) so
@@ -253,6 +253,17 @@ var codexEffortLabel = map[string]string{
 	"medium":  "Medium",
 	"high":    "High",
 	"xhigh":   "Extra high",
+	"max":     "Max",
+	"ultra":   "Ultra",
+}
+
+var codexGPT56APIEfforts = []ThinkingLevel{
+	{Value: "none", Label: "None"},
+	{Value: "low", Label: "Low"},
+	{Value: "medium", Label: "Medium"},
+	{Value: "high", Label: "High"},
+	{Value: "xhigh", Label: "Extra high"},
+	{Value: "max", Label: "Max"},
 }
 
 // codexDebugModelsResponse mirrors the JSON shape emitted by
@@ -269,16 +280,35 @@ type codexDebugModelsResponse struct {
 	} `json:"models"`
 }
 
-// annotateCodexThinking decorates each model entry with its reasoning
-// catalog. Models the CLI doesn't know about (older codex install,
-// brand-new ID we haven't shipped) get Thinking=nil — the UI hides
-// the picker for those rows rather than guessing.
+// CLI-discovered effort levels take precedence over documented API defaults.
 func annotateCodexThinking(ctx context.Context, models []Model, executablePath string) {
 	mapping := loadCodexThinkingByModel(ctx, executablePath)
 	for i := range models {
 		if t, ok := mapping[models[i].ID]; ok && t != nil {
 			models[i].Thinking = t
+			continue
 		}
+		if isGPT56APIModel(models[i].ID) {
+			models[i].Thinking = &ModelThinking{
+				SupportedLevels: append([]ThinkingLevel(nil), codexGPT56APIEfforts...),
+				DefaultLevel:    "medium",
+			}
+		}
+		if models[i].ID == "gpt-6-astra" {
+			models[i].Thinking = &ModelThinking{
+				SupportedLevels: append([]ThinkingLevel(nil), codexGPT56APIEfforts[1:]...),
+				DefaultLevel:    "low",
+			}
+		}
+	}
+}
+
+func isGPT56APIModel(modelID string) bool {
+	switch modelID {
+	case "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna":
+		return true
+	default:
+		return false
 	}
 }
 
@@ -603,6 +633,8 @@ var providerThinkingEnums = map[string]map[string]bool{
 		"medium":  true,
 		"high":    true,
 		"xhigh":   true,
+		"max":     true,
+		"ultra":   true,
 	},
 	"codebuddy": {
 		"low":    true,

@@ -42,7 +42,7 @@ type Model struct {
 
 // ModelThinking carries the per-model reasoning/effort catalog
 // surfaced by an agent runtime. Values are runtime-native — Codex
-// emits "none|minimal|low|medium|high|xhigh"; Claude emits
+// emits a model-specific subset of "none|minimal|low|medium|high|xhigh|max|ultra"; Claude emits
 // "low|medium|high|xhigh|max". The frontend renders SupportedLevels
 // as-is so what users see matches each CLI's own UI.
 type ModelThinking struct {
@@ -232,7 +232,11 @@ func claudeStaticModels() []Model {
 
 func codexStaticModels() []Model {
 	return []Model{
-		{ID: "gpt-5.5", Label: "GPT-5.5", Provider: "openai", Default: true},
+		{ID: "gpt-6-astra", Label: "GPT-6 Astra", Provider: "openai"},
+		{ID: "gpt-5.6-sol", Label: "GPT-5.6 Sol", Provider: "openai", Default: true},
+		{ID: "gpt-5.6-terra", Label: "GPT-5.6 Terra", Provider: "openai"},
+		{ID: "gpt-5.6-luna", Label: "GPT-5.6 Luna", Provider: "openai"},
+		{ID: "gpt-5.5", Label: "GPT-5.5", Provider: "openai"},
 		{ID: "gpt-5.5-mini", Label: "GPT-5.5 mini", Provider: "openai"},
 		{ID: "gpt-5.4", Label: "GPT-5.4", Provider: "openai"},
 		{ID: "gpt-5.4-mini", Label: "GPT-5.4 mini", Provider: "openai"},

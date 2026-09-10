@@ -3520,6 +3520,683 @@ func TestGetTaskGCCheck(t *testing.T) {
 	}
 }
 
+func TestDirectTaskDaemonLifecycleUsesAgentWorkspace(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+	ctx := context.Background()
+	var agentID, runtimeID string
+	if err := testPool.QueryRow(ctx, `
+SELECT a.id, a.runtime_id FROM agent a WHERE a.workspace_id = $1 LIMIT 1
+`, testWorkspaceID).Scan(&agentID, &runtimeID); err != nil {
+		t.Fatalf("setup: get agent: %v", err)
+	}
+	contextJSON, _ := json.Marshal(map[string]any{
+		"type": "creative_domain_task", "workflow": "test_direct_lifecycle", "item_key": "candidate-1:v1",
+	})
+	var taskID string
+	if err := testPool.QueryRow(ctx, `
+INSERT INTO agent_task_queue (agent_id, runtime_id, status, priority, context)
+VALUES ($1, $2, 'dispatched', 0, $3) RETURNING id
+`, agentID, runtimeID, contextJSON).Scan(&taskID); err != nil {
+		t.Fatalf("setup: create direct task: %v", err)
+	}
+	t.Cleanup(func() { _, _ = testPool.Exec(ctx, `DELETE FROM agent_task_queue WHERE id = $1`, taskID) })
+
+	w := httptest.NewRecorder()
+	req := newDaemonTokenRequest(http.MethodPost, "/api/daemon/tasks/"+taskID+"/start", nil, testWorkspaceID, "direct-daemon")
+	req = withURLParam(req, "taskId", taskID)
+	testHandler.StartTask(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("start direct task: %d %s", w.Code, w.Body.String())
+	}
+
+	w = httptest.NewRecorder()
+	req = newDaemonTokenRequest(http.MethodPost, "/api/daemon/tasks/"+taskID+"/progress", TaskProgressRequest{Summary: "analyzing", Step: 1, Total: 1}, testWorkspaceID, "direct-daemon")
+	req = withURLParam(req, "taskId", taskID)
+	testHandler.ReportTaskProgress(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("progress direct task: %d %s", w.Code, w.Body.String())
+	}
+
+	w = httptest.NewRecorder()
+	req = newDaemonTokenRequest(http.MethodPost, "/api/daemon/tasks/"+taskID+"/complete", TaskCompleteRequest{Output: "done"}, testWorkspaceID, "direct-daemon")
+	req = withURLParam(req, "taskId", taskID)
+	testHandler.CompleteTask(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("complete direct task: %d %s", w.Code, w.Body.String())
+	}
+	var status string
+	if err := testPool.QueryRow(ctx, `SELECT status FROM agent_task_queue WHERE id = $1`, taskID).Scan(&status); err != nil {
+		t.Fatal(err)
+	}
+	if status != "completed" {
+		t.Fatalf("direct task status = %q, want completed", status)
+	}
+}
+
+func TestCompleteCreativeDirectEditTaskRequiresPublishedArtifacts(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+	ctx := t.Context()
+	expectedSizes := []string{"1080x1080", "1200x628", "800x1000"}
+
+	var agentID, runtimeID string
+	if err := testPool.QueryRow(ctx, `
+SELECT a.id, a.runtime_id FROM agent a WHERE a.workspace_id = $1 LIMIT 1
+`, testWorkspaceID).Scan(&agentID, &runtimeID); err != nil {
+		t.Fatal(err)
+	}
+
+	createAttachment := func(t *testing.T, name string) string {
+		t.Helper()
+		var attachmentID string
+		if err := testPool.QueryRow(ctx, `
+INSERT INTO attachment (workspace_id, uploader_type, uploader_id, filename, url, content_type, size_bytes)
+VALUES ($1, 'agent', $2, $3, '/uploads/' || $3, 'image/png', 100)
+RETURNING id::text
+`, testWorkspaceID, agentID, name).Scan(&attachmentID); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _, _ = testPool.Exec(t.Context(), `DELETE FROM attachment WHERE id = $1`, attachmentID) })
+		return attachmentID
+	}
+
+	setup := func(t *testing.T, withGenerated, withPrimed, withDelivered bool) (string, string, string) {
+		t.Helper()
+		rootIssueID, candidateID := createCreativeFeedbackCandidate(t, "direct edit completion artifacts "+uuid.NewString())
+		adjustmentIssueID := createCreativeDeliveryTestIssue(t, "direct edit adjustment "+uuid.NewString(), rootIssueID)
+		var orderID, itemID, variantID, sourceAssetID string
+		if err := testPool.QueryRow(ctx, `
+INSERT INTO creative_order (workspace_id, status, input_snapshot, created_by)
+VALUES ($1, 'running', '{"expected_sizes":["1080x1080","1200x628","800x1000"]}'::jsonb, $2)
+RETURNING id::text
+`, testWorkspaceID, testUserID).Scan(&orderID); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _, _ = testPool.Exec(t.Context(), `DELETE FROM creative_order WHERE id = $1`, orderID) })
+		if err := testPool.QueryRow(ctx, `
+INSERT INTO creative_order_item (order_id, candidate_id, copy_snapshot)
+VALUES ($1, $2, '{}'::jsonb)
+RETURNING id::text
+`, orderID, candidateID).Scan(&itemID); err != nil {
+			t.Fatal(err)
+		}
+		if err := testPool.QueryRow(ctx, `
+INSERT INTO creative_order_variant (order_item_id, variant_key, revision, brief, status)
+VALUES ($1, 'V01', 2, '{"creative_direct_edit_delivery":{"final_visual_validation":true,"target_size":"1080x1080"}}'::jsonb, 'running')
+RETURNING id::text
+`, itemID).Scan(&variantID); err != nil {
+			t.Fatal(err)
+		}
+		sourceAttachmentID := createAttachment(t, "direct-edit-source-"+uuid.NewString()+".png")
+		if err := testPool.QueryRow(ctx, `
+INSERT INTO creative_order_asset (variant_id, size_key, revision, stage, attachment_id, status)
+VALUES ($1, '1080x1080', 1, 'generated', $2, 'completed')
+RETURNING id::text
+`, variantID, sourceAttachmentID).Scan(&sourceAssetID); err != nil {
+			t.Fatal(err)
+		}
+
+		insertAssets := func(stage string) {
+			t.Helper()
+			for _, size := range expectedSizes {
+				attachmentID := createAttachment(t, "direct-edit-"+stage+"-"+size+"-"+uuid.NewString()+".png")
+				if _, err := testPool.Exec(ctx, `
+INSERT INTO creative_order_asset (variant_id, size_key, revision, stage, attachment_id, derived_from_asset_id, status)
+VALUES ($1, $2, 2, $3, $4, $5, 'completed')
+`, variantID, size, stage, attachmentID, sourceAssetID); err != nil {
+					t.Fatal(err)
+				}
+			}
+		}
+		if withGenerated {
+			insertAssets("generated")
+		}
+		if withPrimed {
+			insertAssets("primed")
+		}
+		if withDelivered {
+			insertAssets("delivered")
+			processAttachmentID := createAttachment(t, "direct-edit-process-"+uuid.NewString()+".png")
+			if _, err := testPool.Exec(ctx, `
+INSERT INTO creative_order_diagnostic_asset (variant_id, task_id, attachment_id, size_key, revision, workflow, label, filename, metadata)
+VALUES ($1, NULL, $2, '1080x1080', 2, 'creative_production', '模型原图', 'direct-edit-model-1080x1080.png', '{}'::jsonb)
+`, variantID, processAttachmentID); err != nil {
+				t.Fatal(err)
+			}
+			reusedProcessAttachmentID := createAttachment(t, "direct-edit-reused-"+uuid.NewString()+".png")
+			if _, err := testPool.Exec(ctx, `
+INSERT INTO creative_order_diagnostic_asset (variant_id, task_id, attachment_id, size_key, revision, workflow, label, filename, metadata)
+VALUES ($1, NULL, $2, '1200x628', 2, 'creative_production', '规范化底图', 'reused-landscape.png', '{"order_adjustment":{"source_revision":1,"reused_for_adjustment":true}}'::jsonb)
+`, variantID, reusedProcessAttachmentID); err != nil {
+				t.Fatal(err)
+			}
+		}
+
+		contextJSON, _ := json.Marshal(map[string]any{
+			"type":                    "creative_domain_task",
+			"workflow":                "creative_direct_edit",
+			"creative_order_id":       orderID,
+			"creative_order_item_id":  itemID,
+			"issue_id":                adjustmentIssueID,
+			"variant_id":              variantID,
+			"revision":                2,
+			"expected_sizes":          expectedSizes,
+			"target_size":             "1080x1080",
+			"delivery_mode":           "publish",
+			"final_visual_validation": true,
+			"source_revision":         1,
+			"source_asset_id":         sourceAssetID,
+			"source_attachment_id":    sourceAttachmentID,
+			"user_request":            "把标题移出贴片遮挡区域",
+			"direct_edit": map[string]any{
+				"adjustment_issue_id": adjustmentIssueID,
+				"target_size":         "1080x1080",
+				"source_revision":     1,
+			},
+		})
+		var taskID string
+		if err := testPool.QueryRow(ctx, `
+INSERT INTO agent_task_queue (
+  agent_id, runtime_id, issue_id, status, priority, context, trigger_evidence_kind, trigger_evidence_ref_id, started_at
+)
+VALUES ($1, $2, $3, 'running', 0, $4::jsonb, 'creative_order_item_direct_edit', $5, now())
+RETURNING id::text
+`, agentID, runtimeID, adjustmentIssueID, contextJSON, itemID).Scan(&taskID); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _, _ = testPool.Exec(t.Context(), `DELETE FROM agent_task_queue WHERE id = $1`, taskID) })
+		return taskID, variantID, adjustmentIssueID
+	}
+
+	complete := func(t *testing.T, taskID string) {
+		t.Helper()
+		w := httptest.NewRecorder()
+		req := newDaemonTokenRequest(http.MethodPost, "/api/daemon/tasks/"+taskID+"/complete", TaskCompleteRequest{Output: "done"}, testWorkspaceID, "direct-daemon")
+		req = withURLParam(req, "taskId", taskID)
+		testHandler.CompleteTask(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("complete direct-edit task: %d %s", w.Code, w.Body.String())
+		}
+	}
+
+	t.Run("missing target generated", func(t *testing.T) {
+		taskID, variantID, _ := setup(t, false, false, false)
+		complete(t, taskID)
+		var status, failureReason, taskError, variantStatus, variantBrief string
+		if err := testPool.QueryRow(ctx, `
+SELECT status, COALESCE(failure_reason, ''), COALESCE(error, '')
+FROM agent_task_queue WHERE id = $1
+`, taskID).Scan(&status, &failureReason, &taskError); err != nil {
+			t.Fatal(err)
+		}
+		if err := testPool.QueryRow(ctx, `SELECT status, brief::text FROM creative_order_variant WHERE id = $1`, variantID).Scan(&variantStatus, &variantBrief); err != nil {
+			t.Fatal(err)
+		}
+		if status != "failed" || failureReason != "creative_output_missing" || !strings.Contains(taskError, "target generated asset") {
+			t.Fatalf("task terminal state = (%q, %q, %q), want failed creative_output_missing target generated error", status, failureReason, taskError)
+		}
+		if variantStatus != "action_required" || !strings.Contains(variantBrief, "creative_direct_edit_error") {
+			t.Fatalf("variant state = (%q, %s), want action_required with direct-edit blocker", variantStatus, variantBrief)
+		}
+	})
+
+	t.Run("in-flight target stays recoverable", func(t *testing.T) {
+		taskID, variantID, _ := setup(t, false, false, false)
+		if _, err := testPool.Exec(ctx, `
+INSERT INTO creative_order_variant_revision (variant_id, revision, brief, status, expected_sizes)
+SELECT id, revision, brief, status, $2::text[]
+FROM creative_order_variant
+WHERE id = $1
+ON CONFLICT (variant_id, revision) DO NOTHING
+`, variantID, expectedSizes); err != nil {
+			t.Fatal(err)
+		}
+		var operationID string
+		if err := testPool.QueryRow(ctx, `
+INSERT INTO creative_image_operation (
+  variant_id, size_key, revision, operation_kind, idempotency_key, status,
+  model, runtime_id, task_id, input_snapshot, started_at
+)
+VALUES (
+  $1, '1080x1080', 2, 'direct_edit', $2, 'running', 'gpt-image-2',
+  (SELECT runtime_id FROM agent_task_queue WHERE id = $3), $3,
+  '{"source":"direct-edit-completion-test"}'::jsonb, now()
+)
+RETURNING id::text
+`, variantID, "direct-edit-pending:"+taskID, taskID).Scan(&operationID); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := testPool.Exec(ctx, `
+INSERT INTO creative_image_operation_attempt (operation_id, attempt, status, runtime_id, task_id)
+SELECT $1, 1, 'running', runtime_id, id
+FROM agent_task_queue
+WHERE id = $2
+`, operationID, taskID); err != nil {
+			t.Fatal(err)
+		}
+
+		complete(t, taskID)
+
+		var status, failureReason, taskError, variantStatus, variantBrief, operationStatus, attemptStatus string
+		if err := testPool.QueryRow(ctx, `
+SELECT status, COALESCE(failure_reason, ''), COALESCE(error, '')
+FROM agent_task_queue WHERE id = $1
+`, taskID).Scan(&status, &failureReason, &taskError); err != nil {
+			t.Fatal(err)
+		}
+		if err := testPool.QueryRow(ctx, `SELECT status, brief::text FROM creative_order_variant WHERE id = $1`, variantID).Scan(&variantStatus, &variantBrief); err != nil {
+			t.Fatal(err)
+		}
+		if err := testPool.QueryRow(ctx, `
+SELECT operation.status, attempt.status
+FROM creative_image_operation operation
+JOIN creative_image_operation_attempt attempt ON attempt.operation_id = operation.id
+WHERE operation.id = $1
+`, operationID).Scan(&operationStatus, &attemptStatus); err != nil {
+			t.Fatal(err)
+		}
+		if status != "failed" || failureReason != creativeDirectEditOutputPendingFailureReason || !strings.Contains(taskError, "durable provider receipt") {
+			t.Fatalf("task terminal state = (%q, %q, %q), want failed recoverable direct-edit receipt state", status, failureReason, taskError)
+		}
+		if variantStatus != "running" || strings.Contains(variantBrief, "creative_direct_edit_error") {
+			t.Fatalf("variant state = (%q, %s), want running without direct-edit blocker", variantStatus, variantBrief)
+		}
+		if operationStatus != "unknown" || attemptStatus != "unknown" {
+			t.Fatalf("operation state = (%q, %q), want unknown pending late receipt", operationStatus, attemptStatus)
+		}
+	})
+
+	t.Run("missing primed and delivered", func(t *testing.T) {
+		taskID, variantID, _ := setup(t, true, false, false)
+		complete(t, taskID)
+		var status, failureReason, taskError, variantStatus string
+		if err := testPool.QueryRow(ctx, `
+SELECT status, COALESCE(failure_reason, ''), COALESCE(error, '')
+FROM agent_task_queue WHERE id = $1
+`, taskID).Scan(&status, &failureReason, &taskError); err != nil {
+			t.Fatal(err)
+		}
+		if err := testPool.QueryRow(ctx, `SELECT status FROM creative_order_variant WHERE id = $1`, variantID).Scan(&variantStatus); err != nil {
+			t.Fatal(err)
+		}
+		if status != "failed" || failureReason != "creative_output_missing" || !strings.Contains(taskError, "completed primed assets") {
+			t.Fatalf("task terminal state = (%q, %q, %q), want failed creative_output_missing primed error", status, failureReason, taskError)
+		}
+		if variantStatus != "action_required" {
+			t.Fatalf("variant status = %q, want action_required", variantStatus)
+		}
+	})
+
+	t.Run("complete published package", func(t *testing.T) {
+		taskID, variantID, adjustmentIssueID := setup(t, true, true, true)
+		complete(t, taskID)
+		var status string
+		if err := testPool.QueryRow(ctx, `SELECT status FROM agent_task_queue WHERE id = $1`, taskID).Scan(&status); err != nil {
+			t.Fatal(err)
+		}
+		if status != "completed" {
+			t.Fatalf("task status = %q, want completed", status)
+		}
+		var targetAttachmentID, untouchedAttachmentID string
+		if err := testPool.QueryRow(ctx, `
+SELECT
+  COALESCE(max(attachment_id::text) FILTER (WHERE size_key = '1080x1080'), ''),
+  COALESCE(max(attachment_id::text) FILTER (WHERE size_key = '1200x628'), '')
+FROM creative_order_asset
+WHERE variant_id = $1 AND revision = 2 AND stage = 'delivered'
+`, variantID).Scan(&targetAttachmentID, &untouchedAttachmentID); err != nil {
+			t.Fatal(err)
+		}
+		var content string
+		if err := testPool.QueryRow(ctx, `
+SELECT content
+FROM comment
+WHERE issue_id = $1
+  AND author_type = 'system'
+  AND type = 'system'
+  AND content LIKE '%multica:creative-direct-adjustment-delivery%'
+ORDER BY created_at DESC
+LIMIT 1
+`, adjustmentIssueID).Scan(&content); err != nil {
+			t.Fatal(err)
+		}
+		var processAttachmentID string
+		if err := testPool.QueryRow(ctx, `
+SELECT attachment_id::text
+FROM creative_order_diagnostic_asset
+WHERE variant_id = $1 AND revision = 2 AND size_key = '1080x1080' AND label = '模型原图'
+LIMIT 1
+`, variantID).Scan(&processAttachmentID); err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(content, "调整后的图片已生成") ||
+			!strings.Contains(content, "调整前原图") ||
+			!strings.Contains(content, "调整后结果") ||
+			!strings.Contains(content, "本次过程图片") ||
+			!strings.Contains(content, "北京时间") ||
+			!strings.Contains(content, attachmentDownloadPath(targetAttachmentID)) ||
+			!strings.Contains(content, attachmentDownloadPath(processAttachmentID)) {
+			t.Fatalf("delivery comment content = %q, want adjusted target image", content)
+		}
+		if strings.Contains(content, attachmentDownloadPath(untouchedAttachmentID)) {
+			t.Fatalf("delivery comment content = %q, should not include untouched size", content)
+		}
+		task, err := testHandler.Queries.GetAgentTask(ctx, parseUUID(taskID))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := testHandler.settleCreativeDirectEditTask(ctx, task); err != nil {
+			t.Fatal(err)
+		}
+		var commentCount int
+		if err := testPool.QueryRow(ctx, `
+SELECT count(*)
+FROM comment
+WHERE issue_id = $1
+  AND author_type = 'system'
+  AND type = 'system'
+  AND content LIKE '%multica:creative-direct-adjustment-delivery%'
+`, adjustmentIssueID).Scan(&commentCount); err != nil {
+			t.Fatal(err)
+		}
+		if commentCount != 1 {
+			t.Fatalf("delivery comment count = %d, want idempotent single comment", commentCount)
+		}
+	})
+}
+
+func TestCompleteReferenceAnalysisTaskRequiresCompletedArtifact(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+	ctx := t.Context()
+	issueID, candidateID := createCreativeFeedbackCandidate(t, "missing reference analysis output")
+	var runID string
+	if err := testPool.QueryRow(ctx, `
+INSERT INTO creative_material_crawl_run (workspace_id, issue_id, connector_id, status, created_by_type, created_by_id)
+VALUES ($1, $2, 'test', 'completed', 'member', $3) RETURNING id::text
+`, testWorkspaceID, issueID, testUserID).Scan(&runID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := testPool.Exec(ctx, `
+INSERT INTO creative_material_crawl_run_candidate (run_id, candidate_id, workspace_id, is_new_in_run, analysis_status)
+VALUES ($1, $2, $3, true, 'running')
+`, runID, candidateID, testWorkspaceID); err != nil {
+		t.Fatal(err)
+	}
+
+	var agentID, runtimeID string
+	if err := testPool.QueryRow(ctx, `
+SELECT a.id, a.runtime_id FROM agent a WHERE a.workspace_id = $1 LIMIT 1
+`, testWorkspaceID).Scan(&agentID, &runtimeID); err != nil {
+		t.Fatal(err)
+	}
+	contextJSON, _ := json.Marshal(map[string]any{
+		"type":             "creative_domain_task",
+		"workflow":         "creative_reference_analysis",
+		"item_key":         candidateID + ":v1",
+		"candidate_id":     candidateID,
+		"crawl_run_id":     runID,
+		"analysis_version": 1,
+	})
+	var taskID string
+	if err := testPool.QueryRow(ctx, `
+INSERT INTO agent_task_queue (
+  agent_id, runtime_id, status, priority, context, trigger_evidence_kind, trigger_evidence_ref_id, started_at
+)
+VALUES ($1, $2, 'running', 0, $3, 'creative_crawl_run_analysis', $4, now()) RETURNING id::text
+`, agentID, runtimeID, contextJSON, runID).Scan(&taskID); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _, _ = testPool.Exec(t.Context(), `DELETE FROM agent_task_queue WHERE id = $1`, taskID) })
+
+	w := httptest.NewRecorder()
+	req := newDaemonTokenRequest(http.MethodPost, "/api/daemon/tasks/"+taskID+"/complete", TaskCompleteRequest{Output: "done"}, testWorkspaceID, "direct-daemon")
+	req = withURLParam(req, "taskId", taskID)
+	testHandler.CompleteTask(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("complete reference analysis task: %d %s", w.Code, w.Body.String())
+	}
+	var status, failureReason, taskError string
+	if err := testPool.QueryRow(ctx, `
+SELECT status, COALESCE(failure_reason, ''), COALESCE(error, '')
+FROM agent_task_queue WHERE id = $1
+`, taskID).Scan(&status, &failureReason, &taskError); err != nil {
+		t.Fatal(err)
+	}
+	if status != "failed" || failureReason != "creative_output_missing" {
+		t.Fatalf("task terminal state = (%q, %q), want (failed, creative_output_missing)", status, failureReason)
+	}
+	if !strings.Contains(taskError, "completed source analysis") {
+		t.Fatalf("task error = %q, want missing artifact explanation", taskError)
+	}
+}
+
+func TestCompleteReferenceAnalysisTaskAcceptsMatchingArtifact(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+	ctx := t.Context()
+	issueID, candidateID := createCreativeFeedbackCandidate(t, "completed reference analysis output")
+	var runID string
+	if err := testPool.QueryRow(ctx, `
+INSERT INTO creative_material_crawl_run (workspace_id, issue_id, connector_id, status, created_by_type, created_by_id)
+VALUES ($1, $2, 'test', 'completed', 'member', $3) RETURNING id::text
+`, testWorkspaceID, issueID, testUserID).Scan(&runID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := testPool.Exec(ctx, `
+INSERT INTO creative_material_crawl_run_candidate (run_id, candidate_id, workspace_id, is_new_in_run, analysis_status)
+VALUES ($1, $2, $3, true, 'completed');
+INSERT INTO creative_source_analysis (
+  workspace_id, candidate_id, analysis_version, status, summary, result,
+  trigger_evidence_kind, trigger_evidence_ref_id, completed_at
+)
+VALUES ($3, $2, 1, 'completed', 'done', '{}'::jsonb, 'crawl_run', $1, now())
+`, runID, candidateID, testWorkspaceID); err != nil {
+		t.Fatal(err)
+	}
+
+	var agentID, runtimeID string
+	if err := testPool.QueryRow(ctx, `
+SELECT a.id, a.runtime_id FROM agent a WHERE a.workspace_id = $1 LIMIT 1
+`, testWorkspaceID).Scan(&agentID, &runtimeID); err != nil {
+		t.Fatal(err)
+	}
+	contextJSON, _ := json.Marshal(map[string]any{
+		"type":             "creative_domain_task",
+		"workflow":         "creative_reference_analysis",
+		"item_key":         candidateID + ":v1",
+		"candidate_id":     candidateID,
+		"crawl_run_id":     runID,
+		"analysis_version": 1,
+	})
+	var taskID string
+	if err := testPool.QueryRow(ctx, `
+INSERT INTO agent_task_queue (
+  agent_id, runtime_id, status, priority, context, trigger_evidence_kind, trigger_evidence_ref_id, started_at
+)
+VALUES ($1, $2, 'running', 0, $3, 'creative_crawl_run_analysis', $4, now()) RETURNING id::text
+`, agentID, runtimeID, contextJSON, runID).Scan(&taskID); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _, _ = testPool.Exec(t.Context(), `DELETE FROM agent_task_queue WHERE id = $1`, taskID) })
+
+	w := httptest.NewRecorder()
+	req := newDaemonTokenRequest(http.MethodPost, "/api/daemon/tasks/"+taskID+"/complete", TaskCompleteRequest{Output: "done"}, testWorkspaceID, "direct-daemon")
+	req = withURLParam(req, "taskId", taskID)
+	testHandler.CompleteTask(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("complete reference analysis task: %d %s", w.Code, w.Body.String())
+	}
+	var status string
+	if err := testPool.QueryRow(ctx, `SELECT status FROM agent_task_queue WHERE id = $1`, taskID).Scan(&status); err != nil {
+		t.Fatal(err)
+	}
+	if status != "completed" {
+		t.Fatalf("task status = %q, want completed", status)
+	}
+}
+
+func TestCompletePreAdaptationTaskMovesSecondMissingOutputToManualRequired(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+	ctx := t.Context()
+	_, candidateID := createCreativeFeedbackCandidate(t, "pre-adaptation manual handoff")
+	var analysisID string
+	if err := testPool.QueryRow(ctx, `
+INSERT INTO creative_source_analysis (
+  workspace_id, candidate_id, analysis_version, status, summary, result, trigger_evidence_kind, completed_at
+)
+VALUES ($1, $2, 1, 'completed', 'source analysis ready', '{"text_blocks":[]}'::jsonb, 'manual', now())
+RETURNING id::text
+`, testWorkspaceID, candidateID).Scan(&analysisID); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(t.Context(), `DELETE FROM creative_source_analysis WHERE id = $1`, analysisID)
+	})
+
+	var agentID, runtimeID string
+	if err := testPool.QueryRow(ctx, `
+SELECT a.id, a.runtime_id FROM agent a WHERE a.workspace_id = $1 LIMIT 1
+`, testWorkspaceID).Scan(&agentID, &runtimeID); err != nil {
+		t.Fatal(err)
+	}
+	marketPackID := "11111111-1111-1111-1111-111111111111"
+	copyLibraryID := "22222222-2222-2222-2222-222222222222"
+	contextJSON, _ := json.Marshal(map[string]any{
+		"type":                 "creative_domain_task",
+		"workflow":             "creative_pre_adaptation",
+		"source_analysis_id":   analysisID,
+		"candidate_id":         candidateID,
+		"market_pack_id":       marketPackID,
+		"market_pack_version":  2,
+		"copy_library_id":      copyLibraryID,
+		"copy_library_version": 3,
+	})
+	if _, err := testPool.Exec(ctx, `
+INSERT INTO agent_task_queue (
+  agent_id, runtime_id, status, priority, context, trigger_evidence_kind, trigger_evidence_ref_id,
+  failure_reason, error, completed_at
+)
+VALUES ($1, $2, 'failed', 0, $3, 'creative_source_analysis', $4, 'creative_output_missing', 'first failed output', now())
+`, agentID, runtimeID, contextJSON, analysisID); err != nil {
+		t.Fatal(err)
+	}
+	var taskID string
+	if err := testPool.QueryRow(ctx, `
+INSERT INTO agent_task_queue (
+  agent_id, runtime_id, status, priority, context, trigger_evidence_kind, trigger_evidence_ref_id, started_at
+)
+VALUES ($1, $2, 'running', 0, $3, 'creative_source_analysis', $4, now()) RETURNING id::text
+`, agentID, runtimeID, contextJSON, analysisID).Scan(&taskID); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(t.Context(), `DELETE FROM agent_task_queue WHERE trigger_evidence_ref_id = $1`, analysisID)
+	})
+
+	w := httptest.NewRecorder()
+	req := newDaemonTokenRequest(http.MethodPost, "/api/daemon/tasks/"+taskID+"/complete", TaskCompleteRequest{Output: "done"}, testWorkspaceID, "direct-daemon")
+	req = withURLParam(req, "taskId", taskID)
+	testHandler.CompleteTask(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("complete pre-adaptation task: %d %s", w.Code, w.Body.String())
+	}
+	var taskStatus string
+	if err := testPool.QueryRow(ctx, `SELECT status FROM agent_task_queue WHERE id = $1`, taskID).Scan(&taskStatus); err != nil {
+		t.Fatal(err)
+	}
+	if taskStatus != "completed" {
+		t.Fatalf("task status = %q, want completed", taskStatus)
+	}
+	var adaptationStatus, errorCode, savedMarketPack string
+	if err := testPool.QueryRow(ctx, `
+SELECT result->'adaptation'->>'status',
+       result->'adaptation'->>'error_code',
+       result->'adaptation'->'result'->>'market_pack_id'
+FROM creative_source_analysis WHERE id = $1
+`, analysisID).Scan(&adaptationStatus, &errorCode, &savedMarketPack); err != nil {
+		t.Fatal(err)
+	}
+	if adaptationStatus != "unavailable" || errorCode != "manual_confirmation_required" || savedMarketPack != marketPackID {
+		t.Fatalf("adaptation = (%q, %q, %q), want unavailable/manual_confirmation_required/%s", adaptationStatus, errorCode, savedMarketPack, marketPackID)
+	}
+}
+
+func TestFailPreAdaptationTaskQueuesAutomaticRecovery(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("database not available")
+	}
+	ctx := t.Context()
+	var agentID, runtimeID string
+	if err := testPool.QueryRow(ctx, `
+SELECT a.id, a.runtime_id FROM agent a WHERE a.workspace_id = $1 LIMIT 1
+`, testWorkspaceID).Scan(&agentID, &runtimeID); err != nil {
+		t.Fatal(err)
+	}
+	analysisID := uuid.NewString()
+	contextJSON, _ := json.Marshal(map[string]any{
+		"type":                 "creative_domain_task",
+		"workflow":             "creative_pre_adaptation",
+		"item_key":             analysisID + ":market:v1:copy:v1",
+		"source_analysis_id":   analysisID,
+		"candidate_id":         uuid.NewString(),
+		"market_pack_id":       "11111111-1111-1111-1111-111111111111",
+		"market_pack_version":  1,
+		"copy_library_id":      "22222222-2222-2222-2222-222222222222",
+		"copy_library_version": 1,
+	})
+	var taskID string
+	if err := testPool.QueryRow(ctx, `
+INSERT INTO agent_task_queue (
+  agent_id, runtime_id, status, priority, context, trigger_evidence_kind, trigger_evidence_ref_id,
+  attempt, max_attempts, started_at
+)
+VALUES ($1, $2, 'running', 0, $3, 'creative_source_analysis', $4, 1, 2, now())
+RETURNING id::text
+`, agentID, runtimeID, contextJSON, analysisID).Scan(&taskID); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(t.Context(), `DELETE FROM agent_task_queue WHERE trigger_evidence_ref_id = $1`, analysisID)
+	})
+
+	w := httptest.NewRecorder()
+	req := newDaemonTokenRequest(http.MethodPost, "/api/daemon/tasks/"+taskID+"/fail", TaskFailRequest{
+		Error:         "temporary pre-adaptation execution failure",
+		FailureReason: "agent_error.unknown",
+	}, testWorkspaceID, "direct-daemon")
+	req = withURLParam(req, "taskId", taskID)
+	testHandler.FailTask(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("fail pre-adaptation task: %d %s", w.Code, w.Body.String())
+	}
+
+	var taskStatus string
+	if err := testPool.QueryRow(ctx, `SELECT status FROM agent_task_queue WHERE id = $1`, taskID).Scan(&taskStatus); err != nil {
+		t.Fatal(err)
+	}
+	if taskStatus != "failed" {
+		t.Fatalf("parent task status = %q, want failed", taskStatus)
+	}
+	var recoveryCount int
+	if err := testPool.QueryRow(ctx, `
+SELECT COUNT(*) FROM agent_task_queue
+WHERE parent_task_id = $1 AND status = 'queued'
+`, taskID).Scan(&recoveryCount); err != nil {
+		t.Fatal(err)
+	}
+	if recoveryCount != 1 {
+		t.Fatalf("queued recovery count = %d, want 1", recoveryCount)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Membership Cache Integration Tests
 //

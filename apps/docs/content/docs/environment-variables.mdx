@@ -76,7 +76,19 @@ Full setup (including Google Cloud Console steps) is in [Sign-in and signup conf
 
 ## File storage configuration
 
-Multica stores user-uploaded attachments (images and files in comments). **S3 is preferred**; if S3 is not configured, it falls back to local disk.
+Multica stores every uploaded attachment through one backend, including images, videos, documents, and creative assets. Backend priority is **Alibaba Cloud OSS → S3 → local disk**.
+
+### Alibaba Cloud OSS
+
+| Variable | Default | Description |
+|---|---|---|
+| `OSS_BUCKET` | empty | Bucket name. Setting it enables OSS and gives OSS priority over S3 |
+| `OSS_REGION` | empty | Alibaba Cloud public cloud region ID used by Signature V4, for example `ap-southeast-3` |
+| `OSS_ENDPOINT` | empty | Optional regional service endpoint or custom endpoint. A host such as `oss-ap-southeast-3.aliyuncs.com` is normalized to HTTPS |
+| `OSS_ACCESS_KEY_ID` / `OSS_ACCESS_KEY_SECRET` | empty | RAM access credentials. Store these as deployment secrets, never in source control |
+| `OSS_PUBLIC_BASE_URL` | empty | Optional public bucket/CDN origin used for durable direct URLs. Leave empty for private buckets so authenticated downloads use OSS presigned URLs or the server proxy |
+
+The server uses the official `github.com/aliyun/alibabacloud-oss-go-sdk-v2` SDK. OSS Signature V4 requires `OSS_REGION`. When `OSS_BUCKET` is set but required region or credentials are missing, OSS is not initialized and startup logs a configuration error without logging credential values.
 
 ### S3 / S3-compatible storage
 
@@ -89,7 +101,7 @@ Multica stores user-uploaded attachments (images and files in comments). **S3 is
 | `ATTACHMENT_DOWNLOAD_MODE` | `auto` | Attachment download path: `auto`, `cloudfront`, `presign`, or `proxy`. In `auto`, CloudFront is preferred when fully configured; internal/private endpoint hosts use the server proxy; public S3-compatible endpoints use presigned GET URLs when supported |
 | `ATTACHMENT_DOWNLOAD_URL_TTL` | `30m` | TTL for CloudFront signed URLs and S3 presigned download URLs. Accepts Go duration strings |
 
-**When `S3_BUCKET` is unset**: the server logs `"S3_BUCKET not set, cloud upload disabled"` at startup, and all uploads fall back to local disk.
+**When both `OSS_BUCKET` and `S3_BUCKET` are unset**: all uploads fall back to local disk.
 
 **Stored object URLs** are constructed in this order of priority:
 
@@ -99,12 +111,31 @@ Multica stores user-uploaded attachments (images and files in comments). **S3 is
 
 API `download_url` values use `GET /api/attachments/{id}/download` unless CloudFront signing is configured. The endpoint redirects to CloudFront/S3 presigned URLs when safe, or streams through the server for private/internal endpoints such as `http://rustfs:9000`. For Docker/VPC-only object stores, set `ATTACHMENT_DOWNLOAD_MODE=proxy` if auto detection is not conservative enough for your network.
 
-### Local disk (when S3 is not configured)
+### Local disk (when neither OSS nor S3 is configured)
 
 | Variable | Default | Description |
 |---|---|---|
 | `LOCAL_UPLOAD_DIR` | `./data/uploads` | Local storage directory |
 | `LOCAL_UPLOAD_BASE_URL` | empty (returns relative paths) | Public base URL — leave unset and the frontend can't resolve a full URL for attachments |
+
+### Migrating existing local attachments to OSS
+
+The backend image includes a resumable migration command. It defaults to dry-run and retains local source files unless explicit verified cleanup is requested. It uploads and verifies each object before changing its database row, and uses a compare-and-swap URL update so concurrent changes are not overwritten.
+
+```bash
+# Inspect eligibility and missing source files. This does not write anything.
+docker compose -f docker-compose.selfhost.yml exec backend ./migrate_attachments_to_oss
+
+# Perform the migration while retaining the local recovery copy. Re-run the
+# same command after any failure; migrated rows are skipped.
+docker compose -f docker-compose.selfhost.yml exec backend ./migrate_attachments_to_oss --execute
+
+# Optional cleanup pass. Every object is read back from OSS and checked by
+# byte length and SHA-256 before its local file can be removed.
+docker compose -f docker-compose.selfhost.yml exec backend ./migrate_attachments_to_oss --execute --delete-local-after-verify
+```
+
+Use `--limit N` for a small first batch, `--batch-size N` to tune database paging, and `--verbose` for per-attachment status. Local deletion is gated by OSS readback verification and a successful compare-and-swap database update; a mismatch or concurrent URL change retains the source. Keep the local upload volume until the cleanup run reports no failures and application downloads have been checked.
 
 ### CloudFront (optional)
 

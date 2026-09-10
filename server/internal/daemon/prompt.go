@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -18,6 +19,9 @@ func BuildPrompt(task Task, provider string) string {
 	if task.ChatSessionID != "" {
 		return buildChatPrompt(task)
 	}
+	if creativeTask, ok := parseCreativeDomainTaskContext(task.Context); ok {
+		return buildCreativeDomainTaskPrompt(task, creativeTask)
+	}
 	if task.TriggerCommentID != "" {
 		return buildCommentPrompt(task, provider)
 	}
@@ -27,11 +31,75 @@ func BuildPrompt(task Task, provider string) string {
 	if task.QuickCreatePrompt != "" {
 		return buildQuickCreatePrompt(task)
 	}
+	if len(task.Context) > 0 && task.IssueID == "" {
+		return buildDirectTaskPrompt(task)
+	}
 	var b strings.Builder
 	b.WriteString("You are running as a local coding agent for a Multica workspace.\n\n")
 	fmt.Fprintf(&b, "Your assigned issue ID is: %s\n\n", task.IssueID)
 	fmt.Fprintf(&b, "Start by running `multica issue get %s --output json` to understand your task, then complete it.\n", task.IssueID)
 	fmt.Fprintf(&b, "For comment history, follow the rule in your runtime workflow file (assignment-triggered tasks treat the read as mandatory). `multica issue comment list %s --output json` returns all comments for the issue (server caps at 2000). On long-running issues use `--recent 20 --output json` to read the 20 most recently active threads, then page older threads via the stderr `Next thread cursor: ...` line and the matching `--before` / `--before-id` until you have enough history. `--since <RFC3339>` is still available for incremental polling and may combine with `--recent`.\n", task.IssueID)
+	return b.String()
+}
+
+func buildDirectTaskPrompt(task Task) string {
+	var b strings.Builder
+	b.WriteString("You are executing one direct task for a Multica workspace.\n\n")
+	b.WriteString("Read the structured task context in `.agent_context/issue_context.md` and execute only that item. There is no Issue to update unless the task context explicitly directs an API operation.\n")
+	return b.String()
+}
+
+type creativeDomainTaskPromptContext struct {
+	Type                string `json:"type"`
+	Workflow            string `json:"workflow"`
+	CreativeOrderID     string `json:"creative_order_id"`
+	CreativeOrderItemID string `json:"creative_order_item_id"`
+	VariantID           string `json:"variant_id"`
+	Revision            int    `json:"revision"`
+}
+
+func parseCreativeDomainTaskContext(raw json.RawMessage) (creativeDomainTaskPromptContext, bool) {
+	var context creativeDomainTaskPromptContext
+	if json.Unmarshal(raw, &context) != nil || context.Type != "creative_domain_task" || strings.TrimSpace(context.Workflow) == "" {
+		return creativeDomainTaskPromptContext{}, false
+	}
+	context.Workflow = strings.TrimSpace(context.Workflow)
+	context.CreativeOrderID = strings.TrimSpace(context.CreativeOrderID)
+	context.CreativeOrderItemID = strings.TrimSpace(context.CreativeOrderItemID)
+	context.VariantID = strings.TrimSpace(context.VariantID)
+	return context, true
+}
+
+func buildCreativeDomainTaskPrompt(task Task, context creativeDomainTaskPromptContext) string {
+	var b strings.Builder
+	b.WriteString("You are executing one task-scoped creative workflow for a Multica workspace.\n\n")
+	fmt.Fprintf(&b, "The current task identity is `MULTICA_TASK_ID=%s`. Its authoritative workflow is `%s`, from `.agent_context/issue_context.md` Task Context.\n\n", task.ID, context.Workflow)
+	b.WriteString("Do not infer the workflow from the root Issue, its metadata, title, comments, or prior conversation. A root Issue may describe `creative_order`; it is only the parent envelope and never overrides this task's workflow. Execute only the workflow named above.\n\n")
+
+	if context.Workflow == "creative_candidate_selection" {
+		b.WriteString("This is a candidate comparison task. Inspect only the candidates in this task context, then commit the ranking through the atomic candidate-selection CLI. Read N from the order's frozen `input_snapshot.target_variant_count` (1-10); use N=3 only when a historical order omits this field. Use the task context's target_variant_count only as a cross-check, never to override the order snapshot.\n")
+		if context.CreativeOrderID != "" && context.CreativeOrderItemID != "" {
+			fmt.Fprintf(&b, "Use `multica creative order candidate-select %s %s`", context.CreativeOrderID, context.CreativeOrderItemID)
+		} else {
+			b.WriteString("Use `multica creative order candidate-select <creative_order_id> <creative_order_item_id>`")
+		}
+		b.WriteString(" with exactly N ordered `selected_ids` and zero to two ordered `reserve_ids`. Check both array lengths and distinct candidate IDs before submitting. The server binds that call to the current MULTICA_TASK_ID and rejects a different workflow, order, or item.\n")
+		b.WriteString("After a successful submission, read back the saved ranking and queued production; do not submit another ranking or fan out production yourself. If an explicit count or payload validation error rejected the request before any selection was saved, fix the payload using the frozen order and allow one corrected submission in this task. For a timeout, transport error, or other uncertain outcome, read back the order before deciding whether to submit again; never blindly repeat a possibly successful write. Do not report success until the required selection is saved.\n")
+		b.WriteString("Do not use `multica issue get` to choose a workflow, and do not complete the task merely after writing a comparison.\n")
+		return b.String()
+	}
+
+	if context.Workflow == "creative_qc_visual" {
+		b.WriteString("This is one bound visual QC task. Start by reading the task-scoped target with `multica creative order qc-context <creative_order_id> --output json`. That command is the only authority for the Variant, revision, expected sizes, and Prime attachment IDs to inspect. Do not run `multica creative order get`, `multica issue get`, or comment history to choose a Cxx Variant, and never filter an order response to substitute a sibling Variant.\n\n")
+		if context.CreativeOrderID != "" {
+			fmt.Fprintf(&b, "Use `multica creative order qc-context %s --output json`; it must return task Variant `%s` at revision %d before downloading any asset. `qc-put` and `qc-finalize` re-check these coordinates locally and at the server. Do not report task success unless `qc-finalize` returns successfully.\n", context.CreativeOrderID, context.VariantID, context.Revision)
+		} else {
+			b.WriteString("Use `multica creative order qc-context <creative_order_id> --output json`; `qc-put` and `qc-finalize` re-check the returned coordinates locally and at the server. Do not report task success unless `qc-finalize` returns successfully.\n")
+		}
+		return b.String()
+	}
+
+	b.WriteString("Read `.agent_context/issue_context.md` and execute the bound Skill for this workflow. Do not use `multica issue get` to choose or replace the task workflow.\n")
 	return b.String()
 }
 

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   attachmentDownloadPath,
   attachmentIdFromDownloadURL,
+  attachmentSameOriginDownloadPath,
   contentReferencesAttachment,
 } from "./attachment-url";
 
@@ -63,6 +64,26 @@ describe("attachmentIdFromDownloadURL", () => {
 
   it("returns undefined for empty input", () => {
     expect(attachmentIdFromDownloadURL("")).toBeUndefined();
+  });
+});
+
+describe("attachmentSameOriginDownloadPath", () => {
+  it("builds a same-origin path from the attachment id instead of exposing object storage", () => {
+    expect(attachmentSameOriginDownloadPath(ID, [
+      "https://private-bucket.oss-ap-southeast-3.aliyuncs.com/workspaces/a.png",
+    ])).toBe(`/api/attachments/${ID}/download`);
+  });
+
+  it("canonicalizes an absolute durable attachment URL when an id is unavailable", () => {
+    expect(attachmentSameOriginDownloadPath(undefined, [
+      `https://api.example.test/api/attachments/${ID}/download`,
+    ])).toBe(`/api/attachments/${ID}/download`);
+  });
+
+  it("does not treat a raw private object URL as an authenticated attachment path", () => {
+    expect(attachmentSameOriginDownloadPath(undefined, [
+      "https://private-bucket.oss-ap-southeast-3.aliyuncs.com/workspaces/a.png",
+    ])).toBeUndefined();
   });
 });
 

@@ -45,6 +45,7 @@ server/multica
 # Test artifacts
 test-results/
 apps/web/test-results/
+playwright-report/
 
 # context (agent workspace)
 .context
@@ -52,6 +53,14 @@ apps/web/test-results/
 .multica/
 .cursor/
 .tmp/
+tmp/
+.gami/
+
+# Local helper/runtime artifacts
+**/__pycache__/
+*.pyc
+.pytest_cache/
+server/multica.exe
 
 # local settings
 .claude/

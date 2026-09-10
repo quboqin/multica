@@ -1,11 +1,13 @@
 import crypto from "node:crypto";
+import fs from "node:fs";
 import http from "node:http";
 import { Buffer } from "node:buffer";
 import { pathToFileURL } from "node:url";
 import { chromium } from "playwright";
 import pg from "pg";
-import { createBrowserCapacity } from "./browser-capacity.mjs";
+import { createBrowserCapacity, createBrowserLeaseRegistry } from "./browser-capacity.mjs";
 import {
+  DEFAULT_MATERIAL_SEARCH_LIMIT,
   normalizeAppGrowingMaterialSearchParams,
   normalizeMaterialRules,
 } from "./appgrowing-intent.mjs";
@@ -20,6 +22,7 @@ const databaseURL = process.env.DATABASE_URL || "";
 const keyVersion = process.env.BROKER_STATE_KEY_VERSION || "v1";
 const loginSessionTTLMS = Number(process.env.CRAWLER_WORKER_LOGIN_TTL_MS || 15 * 60 * 1000);
 const remoteBrowserUI = process.env.CRAWLER_WORKER_REMOTE_UI === "true";
+const browserProxyServer = String(process.env.CRAWLER_WORKER_BROWSER_PROXY || "").trim();
 const sessionViewport = {
   width: positiveIntegerEnv("CRAWLER_WORKER_VIEWPORT_WIDTH", 1440),
   height: positiveIntegerEnv("CRAWLER_WORKER_VIEWPORT_HEIGHT", 1000),
@@ -28,9 +31,21 @@ const streamFrameIntervalMS = Math.max(
   100,
   Math.min(1000, positiveIntegerEnv("CRAWLER_WORKER_STREAM_FRAME_MS", 180)),
 );
-const appGrowingMaterialSearchBudgetMS = positiveIntegerEnv("APPGROWING_MATERIAL_SEARCH_BUDGET_MS", 240_000);
+const appGrowingMaterialSearchBudgetMS = positiveIntegerEnv("APPGROWING_MATERIAL_SEARCH_BUDGET_MS", 8 * 60_000);
 const appGrowingGraphQLTimeoutMS = positiveIntegerEnv("APPGROWING_GRAPHQL_TIMEOUT_MS", 12_000);
 const appGrowingBrowserFallbackMinBudgetMS = positiveIntegerEnv("APPGROWING_BROWSER_FALLBACK_MIN_BUDGET_MS", 75_000);
+const appGrowingBrowserNoProgressLimit = positiveIntegerEnv("APPGROWING_BROWSER_NO_PROGRESS_LIMIT", 3);
+const credentialSessionStateTimeoutMS = positiveIntegerEnv("CRAWLER_WORKER_CREDENTIAL_STATE_TIMEOUT_MS", 30_000);
+const credentialSessionCallbackTimeoutMS = positiveIntegerEnv("CRAWLER_WORKER_CREDENTIAL_CALLBACK_TIMEOUT_MS", 30_000);
+
+function chromiumLaunchOptions(headless) {
+  return {
+    headless,
+    timeout: browserLaunchTimeoutMS,
+    args: ["--disable-blink-features=AutomationControlled"],
+    ...(browserProxyServer ? { proxy: { server: browserProxyServer } } : {}),
+  };
+}
 
 const builtInConnectors = {
   appgrowing: {
@@ -111,88 +126,107 @@ query searchApp(
 `;
 
 const APPGROWING_APP_MATERIAL_LIST_QUERY = `
-query appMaterialList(
+query materialList(
+  $materialIds: [String]
   $purpose: Int!
   $startDate: LocalDate
   $endDate: LocalDate
+  $isAllDate: Int
+  $category: [Int]
+  $resourceElement: [Int]
+  $appStyle: [Int]
+  $media: [Int]
+  $area: [String]
+  $format: [Int]
+  $platform: [Int]
+  $creativeType: [Int]
   $isNew: Int
+  $isNewAd: Int
+  $hasPpid: Int
+  $resolution: Int
   $field: String
+  $keyword: String
   $order: MaterialListSort!
   $page: Int
-  $accurateSearch: Int
+  $resourceId: String
+  $campaign: String
   $appBrand: String
+  $lines_digests: MixID
+  $isCreative: Int
+  $gender: [Int]
+  $ageRange: [String]
+  $appCashWay: [AppCashWay]
+  $materialRatio: [String]
+  $isW2a: Int
+  $excludeW2a: Int
+  $campaignTypeCombine: Int
+  $campaignType: [Int]
+  $platformCampaignType: [Int]
+  $language: [String]
+  $videoTime: Int
+  $minDuration: NumStr
+  $maxDuration: NumStr
+  $accurateSearch: Int
+  $blockIds: [String]
+  $blockAppIds: [String]
+  $isPre: Int
+  $asr: Int
+  $asrLanguage: String
+  $playletId: String
+  $brandType: BrandType
+  $searchDsl: [SearchDsl]
+  $isViolation: Int
+  $videoShotId: String
+  $topLimit: Int
+  $hasCooperate: Int
+  $cooperateId: NumID
+  $faceId: MixID
+  $marketingWord: String
+  $relMarketingWord: [String]
+  $singleArea: Int
+  $postpage: Int
+  $ppid: String
 ) {
   materialList(
-    purpose: $purpose
-    startDate: $startDate
-    endDate: $endDate
-    isNew: $isNew
-    field: $field
-    order: $order
-    page: $page
-    accurateSearch: $accurateSearch
-    appBrand: $appBrand
+    materialIds: $materialIds purpose: $purpose startDate: $startDate endDate: $endDate
+    isAllDate: $isAllDate category: $category resourceElement: $resourceElement appStyle: $appStyle
+    media: $media area: $area format: $format platform: $platform creativeType: $creativeType
+    isNew: $isNew isNewAd: $isNewAd hasPpid: $hasPpid resolution: $resolution field: $field
+    keyword: $keyword order: $order page: $page campaign: $campaign resourceId: $resourceId
+    appBrand: $appBrand lines_digests: $lines_digests isCreative: $isCreative gender: $gender
+    ageRange: $ageRange appCashWay: $appCashWay materialRatio: $materialRatio isW2a: $isW2a
+    excludeW2a: $excludeW2a campaignTypeCombine: $campaignTypeCombine campaignType: $campaignType
+    platformCampaignType: $platformCampaignType language: $language videoTime: $videoTime
+    minDuration: $minDuration maxDuration: $maxDuration accurateSearch: $accurateSearch
+    blockIds: $blockIds blockAppIds: $blockAppIds isPre: $isPre asr: $asr asrLanguage: $asrLanguage
+    playletId: $playletId brandType: $brandType searchDsl: $searchDsl isViolation: $isViolation
+    videoShotId: $videoShotId topLimit: $topLimit hasCooperate: $hasCooperate cooperateId: $cooperateId
+    faceId: $faceId marketingWord: $marketingWord relMarketingWord: $relMarketingWord
+    singleArea: $singleArea postpage: $postpage ppid: $ppid
   ) {
-    page
-    total
-    limit
+    page total limit
     data {
       material {
-        id
-        type
-        startDate
-        endDate
-        duration
-        cnt_ad_id
-        impression_inc_2y
-        area {
-          cc
-          name
-          icon
-        }
-        creative {
-          id
-          type
-          slogan
-          description
-          txtUrl
-          resource {
-            width
-            height
-            format
-            path
-            poster
-            duration
-            id
-          }
-        }
-        platform {
-          id
-          name
-        }
+        id type startDate endDate duration cnt_ad_id
+        media { id name icon description }
+        channel { id name icon }
+        area { cc name icon }
+        format { id name }
+        creative { id type slogan description resource { width height format path poster duration id } txtUrl }
+        platform { id name }
+        resourceElement { id parentId name }
+        similar_cnt impression_inc_2y violation
+        cooperate { id name icon page_type }
         campaign {
-          ... on App {
-            id
-            name
-          }
-          ... on AppBrand {
-            id
-            name
-          }
-          ... on Website {
-            id
-            name
-          }
-          ... on Playlet {
-            id
-            name
-          }
-          ... on Novel {
-            id
-            name
-          }
+          ... on App { id name icon type minis_type developer { id name area { cc name icon } } alias }
+          ... on AppBrand { id name icon types developer { id name area { cc name icon } } alias gp_app_url ios_app_url }
+          ... on Website { id type name icon }
+          ... on Playlet { id type name }
+          ... on Novel { id type name }
         }
+        asr gender
       }
+      highlight
     }
   }
 }
@@ -303,18 +337,42 @@ function positiveIntegerEnv(name, fallback) {
   return Number.isInteger(value) && value > 0 ? value : fallback;
 }
 
-const browserCapacity = createBrowserCapacity(
+const crawlerBrowserCapacity = createBrowserCapacity(
   positiveIntegerEnv("CRAWLER_WORKER_MAX_OPEN_BROWSERS", 1),
+);
+const loginBrowserCapacity = createBrowserCapacity(
+  positiveIntegerEnv("CRAWLER_WORKER_MAX_LOGIN_BROWSERS", 1),
+);
+const browserLaunchTimeoutMS = positiveIntegerEnv(
+  "CRAWLER_WORKER_BROWSER_LAUNCH_TIMEOUT_MS",
+  60_000,
 );
 const crawlerBrowserTimeoutMS = positiveIntegerEnv(
   "CRAWLER_WORKER_CRAWL_BROWSER_TIMEOUT_MS",
   15 * 60 * 1000,
 );
+const browserCloseTimeoutMS = positiveIntegerEnv("CRAWLER_WORKER_BROWSER_CLOSE_TIMEOUT_MS", 5_000);
+const crawlerBrowserLeases = createBrowserLeaseRegistry(crawlerBrowserCapacity, {
+  timeoutMS: crawlerBrowserTimeoutMS,
+  browserCloseTimeoutMS,
+});
+const streamScreenshotTimeoutMS = positiveIntegerEnv(
+  "CRAWLER_WORKER_STREAM_SCREENSHOT_TIMEOUT_MS",
+  15_000,
+);
 
-function acquireBrowserSlot() {
-  const release = browserCapacity.tryAcquire();
-  if (!release) {
+async function acquireCrawlerBrowserLease(metadata = {}) {
+  const lease = await crawlerBrowserLeases.acquire(metadata);
+  if (!lease) {
     throw userError("crawler worker is busy; wait for the active browser task to finish", 429);
+  }
+  return lease;
+}
+
+function acquireLoginBrowserSlot() {
+  const release = loginBrowserCapacity.tryAcquire();
+  if (!release) {
+    throw userError("credential login browser is busy; close the previous binding panel and try again", 429);
   }
   return release;
 }
@@ -420,6 +478,32 @@ function writeJSON(res, status, body) {
   res.end(JSON.stringify(body));
 }
 
+async function handleCrawlRequest(req, res) {
+  const body = await readJSON(req);
+  const abortController = new AbortController();
+  const abortCrawl = () => {
+    if (!res.writableEnded) {
+      abortController.abort();
+    }
+  };
+  req.on("aborted", abortCrawl);
+  res.on("close", abortCrawl);
+  try {
+    const result = await runCrawl(body, { signal: abortController.signal });
+    if (!res.writableEnded && !res.destroyed) {
+      writeJSON(res, 200, result);
+    }
+  } catch (err) {
+    if (abortController.signal.aborted && (res.writableEnded || res.destroyed)) {
+      return;
+    }
+    throw err;
+  } finally {
+    req.removeListener("aborted", abortCrawl);
+    res.removeListener("close", abortCrawl);
+  }
+}
+
 function userError(message, statusCode = 409) {
   const err = new Error(message);
   err.statusCode = statusCode;
@@ -466,8 +550,12 @@ function getSession(token) {
   if (!session) {
     return null;
   }
-  if (Date.now() > session.expiresAt) {
+  if (Date.now() > session.expiresAt && session.status !== "completed") {
+    if (deferSessionExpiryWhileCompleting(session)) {
+      return session;
+    }
     session.status = "expired";
+    session.error ||= "login session expired";
   }
   return session;
 }
@@ -486,6 +574,7 @@ function publicSession(session) {
     scroll: session.scrollState || null,
     auto_completing: Boolean(session.autoCompleting),
     auto_complete_reason: session.autoCompleteReason || "",
+    stream_error: session.status === "completed" ? "" : session.streamError || "",
     error: session.status === "completed" ? "" : session.error || "",
     expires_at: new Date(session.expiresAt).toISOString(),
   };
@@ -662,21 +751,38 @@ async function closeSessionBrowser(session) {
   session.context = null;
   session.page = null;
   session.releaseBrowserSlot = null;
-  if (browser) {
-    await browser.close().catch(() => {});
-  }
   releaseBrowserSlot?.();
+  await closeBrowserBestEffort(browser);
 }
 
 async function closeRemoteBrowser(session) {
+  if (session.autoCompleting) {
+    // Do not discard the state that the credential callback is about to persist.
+    session.closeAfterCompletion = true;
+    return publicSession(session);
+  }
   await closeSessionBrowser(session);
-  if (session.status !== "completed" && session.status !== "expired") {
+  if (!["completed", "expired", "superseded"].includes(session.status)) {
     session.status = "pending";
     session.error = "";
+    session.streamError = "";
     session.autoCompleting = false;
     session.autoCompleteReason = "";
   }
   return publicSession(session);
+}
+
+async function supersedeLoginSessions(profileID) {
+  const closing = [];
+  for (const session of activeSessions.values()) {
+    if (session.profileID !== profileID || session.status === "completed") {
+      continue;
+    }
+    session.status = "superseded";
+    session.error = "login session superseded by a newer binding";
+    closing.push(closeSessionBrowser(session));
+  }
+  await Promise.allSettled(closing);
 }
 
 async function expireSession(token) {
@@ -684,9 +790,21 @@ async function expireSession(token) {
   if (!session || session.status === "completed" || Date.now() < session.expiresAt) {
     return;
   }
+  if (deferSessionExpiryWhileCompleting(session)) {
+    return;
+  }
   session.status = "expired";
   session.error = "login session expired";
   await closeSessionBrowser(session);
+}
+
+function deferSessionExpiryWhileCompleting(session) {
+  if (!session.autoCompleting) {
+    return false;
+  }
+  // A completion that began before expiry owns the browser until it settles.
+  session.expireAfterCompletion = true;
+  return true;
 }
 
 function scheduleSessionExpiry(token, expiresAt) {
@@ -719,15 +837,15 @@ async function openControlledBrowser(session, token) {
   const headless = sessionBrowserHeadless(connector);
   session.status = "opening";
   session.error = "";
-  const releaseBrowserSlot = acquireBrowserSlot();
+  session.streamError = "";
+  let releaseBrowserSlot;
   let browser;
   try {
-    browser = await chromium.launch({
-      headless,
-      args: ["--disable-blink-features=AutomationControlled"],
-    });
+    releaseBrowserSlot = acquireLoginBrowserSlot();
+    browser = await chromium.launch(chromiumLaunchOptions(headless));
     const context = await browser.newContext({
       viewport: session.viewport || sessionViewport,
+      ...(connector.id === "appgrowing" ? { locale: "en" } : {}),
     });
     await context.addInitScript(() => {
       Object.defineProperty(navigator, "webdriver", {
@@ -737,9 +855,6 @@ async function openControlledBrowser(session, token) {
     const page = await context.newPage();
     attachAuthWatcher(page, connector, (authCheck) => {
       session.authCheck = authCheck;
-      if (authCheck.authenticated) {
-        scheduleAutoComplete(session, token, "auth_watcher");
-      }
     });
     session.browser = browser;
     session.context = context;
@@ -755,11 +870,28 @@ async function openControlledBrowser(session, token) {
       session.page = null;
       session.releaseBrowserSlot = null;
     }
-    await browser?.close().catch(() => {});
-    releaseBrowserSlot();
+    releaseBrowserSlot?.();
+    await closeBrowserBestEffort(browser);
     session.status = "error";
     session.error = error instanceof Error ? error.message : String(error);
     throw error;
+  }
+}
+
+async function closeBrowserBestEffort(browser) {
+  if (!browser?.close) {
+    return;
+  }
+  const closePromise = Promise.resolve()
+    .then(() => browser.close())
+    .catch(() => {});
+  let timeoutHandle;
+  const timeoutPromise = new Promise((resolve) => {
+    timeoutHandle = setTimeout(resolve, browserCloseTimeoutMS);
+  });
+  await Promise.race([closePromise, timeoutPromise]);
+  if (timeoutHandle) {
+    clearTimeout(timeoutHandle);
   }
 }
 
@@ -821,8 +953,9 @@ async function streamSession(session, req, res) {
         type: "jpeg",
         quality: 68,
         fullPage: false,
-        timeout: 8_000,
+        timeout: streamScreenshotTimeoutMS,
       });
+      session.streamError = "";
       if (closed) {
         break;
       }
@@ -835,7 +968,7 @@ async function streamSession(session, req, res) {
       if (session.status === "completed" || !session.page) {
         break;
       }
-      session.error = err instanceof Error ? err.message : String(err);
+      session.streamError = err instanceof Error ? err.message : String(err);
       await sleep(Math.max(streamFrameIntervalMS, 500));
     }
     await sleep(streamFrameIntervalMS);
@@ -970,7 +1103,39 @@ async function completeSession(session, token) {
       verification: session.verification || null,
     };
   }
+  if (session.completionPromise) {
+    return session.completionPromise;
+  }
   assertSessionNotExpired(session);
+  session.autoCompleting = true;
+  session.autoCompleteReason = "validating credential state";
+  const completion = completeSessionAttempt(session, token);
+  session.completionPromise = completion;
+  try {
+    return await completion;
+  } finally {
+    if (session.completionPromise === completion) {
+      session.completionPromise = null;
+      session.autoCompleting = false;
+      session.autoCompleteReason = "";
+      const expireAfterCompletion = Boolean(session.expireAfterCompletion && session.status !== "completed");
+      session.expireAfterCompletion = false;
+      const closeAfterCompletion = Boolean(session.closeAfterCompletion || expireAfterCompletion);
+      session.closeAfterCompletion = false;
+      if (expireAfterCompletion) {
+        session.status = "expired";
+        session.error = "login session expired";
+      }
+      if (closeAfterCompletion) {
+        await closeSessionBrowser(session);
+      }
+    }
+  }
+}
+
+async function completeSessionAttempt(session, token) {
+  session.error = "";
+  session.streamError = "";
   if (!session.context) {
     throw userError("open the controlled browser and finish login before completing");
   }
@@ -984,9 +1149,21 @@ async function completeSession(session, token) {
   if (!hasConnectorState(storageState, connector)) {
     throw userError("AppGrowing login state was not detected; finish login in the controlled browser before completing");
   }
-  const authCheck = await refreshSessionAuth(session, connector);
+  let authCheck = await refreshSessionAuth(session, connector);
+  const identityVerificationError = connectorAuthVerificationError(authCheck);
+  if (identityVerificationError) {
+    throw userError(`AppGrowing user verification failed: ${identityVerificationError}`);
+  }
   if (!authCheck.authenticated) {
     throw userError("AppGrowing authenticated user was not detected; finish login in the controlled browser before completing");
+  }
+  const businessProbe = await verifyAppGrowingBusinessAccess(session.page || session.context, connector, authCheck);
+  authCheck = businessProbe.authCheck;
+  if (businessProbe.needsReauth) {
+    throw userError("AppGrowing material access reports an expired login; finish login in the controlled browser before completing");
+  }
+  if (businessProbe.verificationError) {
+    throw userError(`AppGrowing material access verification failed: ${businessProbe.verificationError}`);
   }
   const verification = {
     current_url: currentURL,
@@ -1000,15 +1177,28 @@ async function completeSession(session, token) {
     storage_state: storageState,
     session_storage: sessionStorageState,
   });
-  const upstream = await fetch(`${apiURL}/api/credential-login-sessions/complete`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({
-      session_token: token,
-      ciphertext: sealed.toString("base64"),
-      key_version: keyVersion,
-    }),
-  });
+  const callbackController = new AbortController();
+  const callbackTimer = setTimeout(() => callbackController.abort(), credentialSessionCallbackTimeoutMS);
+  let upstream;
+  try {
+    upstream = await fetch(`${apiURL}/api/credential-login-sessions/complete`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        session_token: token,
+        ciphertext: sealed.toString("base64"),
+        key_version: keyVersion,
+      }),
+      signal: callbackController.signal,
+    });
+  } catch (err) {
+    if (callbackController.signal.aborted) {
+      throw userError("credential save callback timed out; retry save before this login session expires", 504);
+    }
+    throw err;
+  } finally {
+    clearTimeout(callbackTimer);
+  }
   const text = await upstream.text();
   if (!upstream.ok) {
     throw new Error(text || upstream.statusText);
@@ -1021,23 +1211,6 @@ async function completeSession(session, token) {
     ...JSON.parse(text),
     verification,
   };
-}
-
-function scheduleAutoComplete(session, token, reason) {
-  if (!token || session.status === "completed" || session.autoCompleting) {
-    return;
-  }
-  session.autoCompleting = true;
-  session.autoCompleteReason = reason;
-  setTimeout(async () => {
-    try {
-      await completeSession(session, token);
-    } catch (err) {
-      session.error = err instanceof Error ? err.message : String(err);
-    } finally {
-      session.autoCompleting = false;
-    }
-  }, 800);
 }
 
 function isLoginURL(url, connector) {
@@ -1073,9 +1246,18 @@ async function verifyConnectorAuth(context, connector) {
 
 async function browserStorageState(context) {
   try {
-    return await context.storageState({ indexedDB: true });
-  } catch {
-    return context.storageState();
+    return await withinCredentialStateTimeout(
+      context.storageState({ indexedDB: true }),
+      "credential browser state capture timed out",
+    );
+  } catch (err) {
+    if (err?.statusCode === 504) {
+      throw err;
+    }
+    return withinCredentialStateTimeout(
+      context.storageState(),
+      "credential browser state capture timed out",
+    );
   }
 }
 
@@ -1083,18 +1265,33 @@ async function captureSessionStorage(page) {
   if (!page) {
     return {};
   }
-  return page.evaluate(() => {
-    const entries = {};
-    for (let index = 0; index < sessionStorage.length; index += 1) {
-      const key = sessionStorage.key(index);
-      if (key) {
-        entries[key] = sessionStorage.getItem(key);
+  try {
+    return await withinCredentialStateTimeout(page.evaluate(() => {
+      const entries = {};
+      for (let index = 0; index < sessionStorage.length; index += 1) {
+        const key = sessionStorage.key(index);
+        if (key) {
+          entries[key] = sessionStorage.getItem(key);
+        }
       }
+      return {
+        [window.location.origin]: entries,
+      };
+    }), "credential session state capture timed out");
+  } catch (err) {
+    if (err?.statusCode === 504) {
+      throw err;
     }
-    return {
-      [window.location.origin]: entries,
-    };
-  }).catch(() => ({}));
+    return {};
+  }
+}
+
+function withinCredentialStateTimeout(promise, message) {
+  let timeoutHandle;
+  const timeout = new Promise((_, reject) => {
+    timeoutHandle = setTimeout(() => reject(userError(message, 504)), credentialSessionStateTimeoutMS);
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timeoutHandle));
 }
 
 async function restoreSessionStorage(context, sessionStorageState) {
@@ -1119,29 +1316,46 @@ async function verifyConnectorPageAuth(page, connector) {
   if (!check) {
     return { authenticated: true, method: "none" };
   }
-  const result = await page.evaluate(async ({ url, payload }) => {
-    const response = await fetch(url, {
-      method: "POST",
-      credentials: "include",
-      headers: {
-        "content-type": "application/json",
-      },
-      body: JSON.stringify(payload),
-    });
-    let body = null;
+  const result = await page.evaluate(async ({ url, payload, timeoutMS }) => {
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => controller.abort(), timeoutMS);
     try {
-      body = await response.json();
-    } catch {
-      body = null;
+      const response = await fetch(url, {
+        method: "POST",
+        credentials: "include",
+        headers: {
+          "content-type": "application/json",
+        },
+        body: JSON.stringify(payload),
+        signal: controller.signal,
+      });
+      let body = null;
+      try {
+        body = await response.json();
+      } catch {
+        body = null;
+      }
+      return {
+        status: response.status,
+        body,
+      };
+    } catch (err) {
+      return {
+        status: null,
+        body: null,
+        error: controller.signal.aborted ? "credential page auth probe timed out" : String(err),
+      };
+    } finally {
+      window.clearTimeout(timer);
     }
-    return {
-      status: response.status,
-      body,
-    };
   }, {
     url: check.url,
     payload: check.payload,
+    timeoutMS: credentialSessionStateTimeoutMS,
   });
+  if (result.error) {
+    return authCheckUnavailable(new Error(result.error), "page_fetch_graphql_userinfo");
+  }
   return authCheckFromBody(result.body, connector, result.status, "page_fetch_graphql_userinfo");
 }
 
@@ -1164,13 +1378,16 @@ function connectorGraphQLHeaders(connector, operationName = "") {
 function authCheckFromBody(body, connector, httpStatus, method) {
   const check = connector.authCheck;
   const userID = valueAtPath(body, check.userIDPath);
+  const upstreamError = connector.id === "appgrowing" ? appGrowingGraphQLErrorMessage(body) : "";
+  const userIDPresent = typeof userID === "string" ? userID.trim() !== "" : Boolean(userID);
   return {
-    authenticated: typeof userID === "string" ? userID.trim() !== "" : Boolean(userID),
+    authenticated: userIDPresent && !upstreamError,
     method,
     http_status: httpStatus,
-    user_id_present: typeof userID === "string" ? userID.trim() !== "" : Boolean(userID),
+    user_id_present: userIDPresent,
     team_present: Boolean(valueAtPath(body, ["data", "userinfo", "teamInfo"])),
     plan_present: Boolean(valueAtPath(body, ["data", "userinfo", "purchasePlanInfo"])),
+    upstream_error: upstreamError || undefined,
     observed_at: new Date().toISOString(),
   };
 }
@@ -1184,17 +1401,6 @@ function authCheckUnavailable(err, method) {
     team_present: false,
     plan_present: false,
     probe_error: err instanceof Error ? err.message : String(err),
-    observed_at: new Date().toISOString(),
-  };
-}
-
-function browserStateAuthFallback(authCheck, method) {
-  return {
-    ...authCheck,
-    authenticated: true,
-    method,
-    browser_state_present: true,
-    user_id_present: authCheck?.user_id_present === true,
     observed_at: new Date().toISOString(),
   };
 }
@@ -1267,17 +1473,33 @@ async function refreshSessionAuth(session, connector) {
     timeout: 60_000,
   }).catch(() => {});
   const pageAuthCheck = await waitForAuth;
-  if (pageAuthCheck) {
+  if (pageAuthCheck?.authenticated) {
     session.authCheck = pageAuthCheck;
     return pageAuthCheck;
   }
-  session.authCheck = await verifyConnectorPageAuth(session.page, connector).catch(async () =>
-    verifyConnectorAuth(session.context, connector),
-  );
-  if (!session.authCheck.authenticated && !isLoginURL(session.page.url(), connector)) {
-    session.authCheck = browserStateAuthFallback(session.authCheck, "browser_state_non_login_url");
+  const pageCheck = await verifyConnectorPageAuth(session.page, connector).catch(() => pageAuthCheck);
+  if (pageCheck?.authenticated) {
+    session.authCheck = pageCheck;
+    return pageCheck;
   }
+  const workerCheck = await verifyConnectorAuth(session.context, connector);
+  session.authCheck = workerCheck.authenticated ? workerCheck : (pageCheck || workerCheck);
   return session.authCheck;
+}
+
+function connectorAuthVerificationError(authCheck) {
+  if (authCheck?.probe_error) {
+    return String(authCheck.probe_error);
+  }
+  const upstreamError = String(authCheck?.upstream_error || "").trim();
+  if (upstreamError && !appGrowingAuthErrorNeedsReauth(upstreamError)) {
+    return upstreamError;
+  }
+  const status = Number(authCheck?.http_status);
+  if (Number.isFinite(status) && (status < 200 || status >= 300)) {
+    return `userinfo verification returned HTTP ${status}`;
+  }
+  return "";
 }
 
 function valueAtPath(value, path) {
@@ -1330,6 +1552,25 @@ function summarizeCredentialState(storageState, connector, sessionStorageState =
   };
 }
 
+function unavailableSessionHTML() {
+  return `<!doctype html>
+<meta charset="utf-8">
+<title>Multica Credential Broker</title>
+<style>
+html,body{height:100%}body{display:grid;place-items:center;margin:0;background:#151515;color:#f5f2ea;font:14px/1.5 ui-sans-serif,system-ui,-apple-system,Segoe UI,sans-serif}
+.message{max-width:520px;padding:20px;border:1px solid #393939;background:#202020}.message strong{display:block;margin-bottom:6px;font-size:16px}
+</style>
+<div class="message"><strong>Browser session ended</strong>Close this window. Start a new binding only if the credential was not saved.</div>`;
+}
+
+function unavailableSessionImage() {
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="720" viewBox="0 0 1280 720">
+<rect width="1280" height="720" fill="#202020"/>
+<text x="640" y="338" fill="#f5f2ea" font-family="Arial, sans-serif" font-size="30" font-weight="600" text-anchor="middle">Browser session ended</text>
+<text x="640" y="386" fill="#b9b9b9" font-family="Arial, sans-serif" font-size="20" text-anchor="middle">Close this window. Start a new binding only if the credential was not saved.</text>
+</svg>`;
+}
+
 function sessionHTML(token, session) {
   const statusURL = `/sessions/${encodeURIComponent(token)}/status`;
   const openURL = `/sessions/${encodeURIComponent(token)}/open`;
@@ -1356,6 +1597,9 @@ h1{font-size:15px;line-height:1.2;margin:0}
 .pill[data-tone="warn"]{background:#fff2cc;color:#6d4d00}
 .pill[data-tone="error"]{background:#fde7e7;color:#8a1f1f}
 .url{max-width:34vw;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#707070;font-size:12px}
+.errorline{max-width:34vw;color:#8a1f1f;font-size:12px;line-height:1.35}
+.retry{height:28px;border:1px solid #c9c9c9;border-radius:4px;padding:0 10px;background:#fff;color:#242424;font:600 12px ui-sans-serif,system-ui,-apple-system,Segoe UI,sans-serif;cursor:pointer;white-space:nowrap}
+.retry:hover{background:#f4f4f4}.retry:disabled{cursor:default;opacity:.55}
 .viewport{flex:1;min-height:0;overflow:hidden;padding:10px;background:#151515}
 .stage{position:relative;display:grid;place-items:center;height:100%;min-height:420px;background:#202020;border:1px solid #2d2d2d;overflow:hidden;outline:none}
 .stage:focus{box-shadow:0 0 0 2px #2d6cdf inset}
@@ -1376,6 +1620,8 @@ h1{font-size:15px;line-height:1.2;margin:0}
     <div class="meta">Profile ${escapeHTML(session.profileID)} expires ${escapeHTML(new Date(session.expiresAt).toLocaleString())}</div>
   </div>
   <div class="statusline">
+    <span id="errorLine" class="errorline" hidden></span>
+    <button id="retryButton" class="retry" type="button" hidden>Retry save</button>
     <span id="statusPill" class="pill">Starting</span>
     <span id="urlLine" class="url"></span>
   </div>
@@ -1398,6 +1644,8 @@ const stage = document.querySelector("#stage");
 const empty = document.querySelector("#empty");
 const statusPill = document.querySelector("#statusPill");
 const urlLine = document.querySelector("#urlLine");
+const errorLine = document.querySelector("#errorLine");
+const retryButton = document.querySelector("#retryButton");
 const scrollbar = document.querySelector("#scrollbar");
 const scrollThumb = document.querySelector("#scrollThumb");
 const urls = {
@@ -1433,6 +1681,7 @@ let pendingResize = null;
 let lastResize = { width: 0, height: 0 };
 let inputChain = Promise.resolve();
 let completionPosted = false;
+let sessionUnavailable = false;
 
 function closeRemoteBrowser() {
   if (completed) {
@@ -1445,7 +1694,9 @@ function closeRemoteBrowser() {
   fetch(urls.close, {method: "POST", keepalive: true}).catch(() => {});
 }
 
-window.addEventListener("pagehide", closeRemoteBrowser);
+if (window.self === window.top) {
+  window.addEventListener("pagehide", closeRemoteBrowser);
+}
 
 async function parseResponse(resp) {
   const text = await resp.text();
@@ -1472,6 +1723,11 @@ async function status() {
 
 function renderStatus(body) {
   const url = body.current_url || body.verification?.current_url || "";
+  const error = body.error || "";
+  errorLine.textContent = error;
+  errorLine.hidden = !error;
+  retryButton.hidden = !error;
+  retryButton.disabled = completeBusy;
   if (body.viewport) {
     lastViewport = body.viewport;
   }
@@ -1522,12 +1778,64 @@ function renderStatus(body) {
     error: body.error || null
   });
 
-  if (!completed && body.auth_check?.authenticated) {
+  if (!completed && !body.error && body.auth_check?.authenticated) {
     autoComplete("auth_detected", false);
     return;
   }
-  if (!completed && looksReadyForCompletion(url)) {
+  if (!completed && !body.error && looksReadyForCompletion(url)) {
     autoComplete("app_page_detected", false);
+  }
+}
+
+function stopRemoteSession(message, body = {}) {
+  sessionUnavailable = true;
+  streamStarted = false;
+  browserOpen = false;
+  completed = true;
+  if (polling) {
+    window.clearInterval(polling);
+    polling = 0;
+  }
+  shot.onerror = null;
+  shot.removeAttribute("src");
+  shot.hidden = true;
+  empty.hidden = false;
+  empty.textContent = message;
+  setStatus("Session ended", "error", "");
+  debug({ status: "session_unavailable", ...body });
+  window.parent?.postMessage({
+    type: "multica:credential-session-unavailable",
+    status: body.status || null,
+    error: body.error || message,
+  }, "*");
+}
+
+async function recoverStream() {
+  const resp = await fetch(urls.status).catch(() => null);
+  if (!resp) {
+    if (!completed && !sessionUnavailable) {
+      window.setTimeout(startStream, 1200);
+    }
+    return;
+  }
+  const body = await parseResponse(resp);
+  if (!resp.ok) {
+    stopRemoteSession(
+      "This browser session has ended. Close this window and start a new binding only if needed.",
+      { status: resp.status, error: body.error || body.raw || null },
+    );
+    return;
+  }
+  renderStatus(body);
+  if (body.error || body.status === "expired" || body.status === "superseded") {
+    stopRemoteSession(
+      body.error || "This browser session has ended. Close this window and start a new binding only if needed.",
+      body,
+    );
+    return;
+  }
+  if (!completed && !sessionUnavailable) {
+    window.setTimeout(startStream, 800);
   }
 }
 
@@ -1539,11 +1847,11 @@ function renderShot(body) {
     ...(body.status || {}),
     current_url: body.current_url,
   });
-  if (body.status?.auth_check?.authenticated) {
+  if (!body.status?.error && body.status?.auth_check?.authenticated) {
     autoComplete("auth_detected", false);
     return;
   }
-  if (looksReadyForCompletion(body.current_url)) {
+  if (!body.status?.error && looksReadyForCompletion(body.current_url)) {
     autoComplete("app_page_detected", false);
   }
 }
@@ -1561,10 +1869,10 @@ function startStream() {
   };
   shot.onerror = () => {
     streamStarted = false;
-    if (!completed) {
+    if (!completed && !sessionUnavailable) {
       empty.hidden = false;
       empty.textContent = "Reconnecting remote browser...";
-      window.setTimeout(startStream, 800);
+      recoverStream();
     }
   };
   shot.src = urls.stream + "?t=" + Date.now();
@@ -1741,6 +2049,12 @@ function startPolling() {
     const resp = await fetch(urls.status).catch(() => null);
     if (resp?.ok) {
       renderStatus(await parseResponse(resp));
+    } else if (resp) {
+      const body = await parseResponse(resp);
+      stopRemoteSession(
+        "This browser session has ended. Close this window and start a new binding only if needed.",
+        { status: resp.status, error: body.error || body.raw || null },
+      );
     }
   }, 1000);
 }
@@ -1754,7 +2068,12 @@ async function openBrowser() {
   empty.textContent = "Starting remote browser...";
   setStatus("Starting", "warn", "");
   try {
-    await show(await fetch(urls.open, {method: "POST"}));
+    const response = await fetch(urls.open, {method: "POST"});
+    const body = await show(response);
+    if (!response.ok) {
+      empty.textContent = body.error || "Unable to start the remote browser.";
+      return;
+    }
     startStream();
     startPolling();
     scheduleViewportResize(0);
@@ -1773,24 +2092,27 @@ async function autoComplete(reason, force) {
   }
   lastAutoCompleteAt = now;
   completeBusy = true;
+  errorLine.hidden = true;
+  retryButton.hidden = true;
   setStatus("Saving", "warn", urlLine.textContent);
   try {
     const resp = await fetch(urls.complete, {method: "POST"});
     const body = await parseResponse(resp);
     renderStatus(body);
     if (!resp.ok) {
-      if (!force) {
-        setStatus("Waiting for login", "warn", urlLine.textContent);
-        debug({ status: "waiting", auto_complete_attempt: reason, error: body.error || body.raw || null });
-      }
+      debug({ status: "action_needed", auto_complete_attempt: reason, error: body.error || body.raw || null });
       completeBusy = false;
+      retryButton.disabled = false;
       return;
     }
     completed = true;
   } finally {
     completeBusy = false;
+    retryButton.disabled = false;
   }
 }
+
+retryButton.addEventListener("click", () => autoComplete("manual_retry", true));
 
 async function sendInput(action, options = {}) {
   const next = inputChain
@@ -2034,9 +2356,17 @@ async function runAppGrowingMaterialSearch(page, context, connector, params = {}
   const priorityCompetitors = new Set(
     normalizeCompetitors(params.priority_competitors).map(normalizeCompetitorKey),
   );
-  const totalLimit = positiveIntegerParam(params.limit, 25, 1, 200);
-  const pageLimit = positiveIntegerParam(params.pages_per_competitor, 1, 1, 5);
-  const priorityPageLimit = positiveIntegerParam(params.priority_pages_per_competitor, Math.max(2, pageLimit), 1, 8);
+  const totalLimit = positiveIntegerParam(params.limit, DEFAULT_MATERIAL_SEARCH_LIMIT, 1, 200);
+  const pageLimit = positiveIntegerParam(params.pages_per_competitor, 3, 1, 5);
+  const priorityPageLimit = positiveIntegerParam(params.priority_pages_per_competitor, Math.max(5, pageLimit), 1, 8);
+  const novelOnly = params.novel_only === true;
+  const maxPageLimit = novelOnly
+    ? positiveIntegerParam(params.max_pages_per_competitor, Math.max(10, pageLimit), pageLimit, 30)
+    : pageLimit;
+  const maxPriorityPageLimit = novelOnly
+    ? positiveIntegerParam(params.max_priority_pages_per_competitor, Math.max(15, priorityPageLimit), priorityPageLimit, 30)
+    : priorityPageLimit;
+  const excludedDedupeKeys = new Set(normalizeSearchParamList(params.exclude_dedupe_keys));
   const captureTimeoutMS = positiveIntegerParam(params.capture_timeout_ms, 12_000, 3_000, 60_000);
   const graphQLTimeoutMS = positiveIntegerParam(params.graphql_timeout_ms, appGrowingGraphQLTimeoutMS, 3_000, 30_000);
   const searchBudgetMS = positiveIntegerParam(
@@ -2051,7 +2381,14 @@ async function runAppGrowingMaterialSearch(page, context, connector, params = {}
   const browserFallbackEnabled = shouldUseAppGrowingBrowserFallback(params, plannedPages);
   const adaptiveMode = params.adaptive_mode !== false && params.adaptive_material_search !== false;
   const adaptiveMemory = appGrowingAdaptiveStrategyMemory(params);
-  const rules = normalizeMaterialRules(params.selection_rules || params.rules);
+  const browserPreferredByMemory = params.browser_capture_fallback !== false
+    && (params.graphql_material_search !== true
+      || (adaptiveMode && appGrowingShouldUseAdaptiveBrowserFallback([], adaptiveMemory)));
+  const rules = normalizeMaterialRules(
+    Object.prototype.hasOwnProperty.call(params, "selection_rules")
+      ? params.selection_rules
+      : params.rules,
+  );
 
   const captured = [];
   const materials = [];
@@ -2059,6 +2396,7 @@ async function runAppGrowingMaterialSearch(page, context, connector, params = {}
   const learnedStrategies = [];
   const learnedStrategyKeys = new Set();
   let timeBudgetExhausted = false;
+  let graphQLSystemBusy = false;
   const markBudgetExhausted = (source, competitor = "", priority = false, pageNumber = null) => {
     timeBudgetExhausted = true;
     captured.push({
@@ -2073,18 +2411,31 @@ async function runAppGrowingMaterialSearch(page, context, connector, params = {}
     });
   };
 
-  if (params.graphql_material_search !== false) {
+  if (browserPreferredByMemory) {
+    appGrowingAddAutoAdjustment(
+      autoAdjustments,
+      params.graphql_material_search === true
+        ? "used the learned browser network path instead of the unstable AppGrowing GraphQL API"
+        : "used the verified browser network path as the default AppGrowing collection route",
+    );
+  }
+
+  if (params.graphql_material_search !== false && !browserPreferredByMemory) {
     const brandCache = new Map();
     graphqlSearch:
-    for (const competitor of competitors) {
-      const priority = priorityCompetitors.has(normalizeCompetitorKey(competitor));
-      const pages = priority ? priorityPageLimit : pageLimit;
-      for (let pageNumber = 1; pageNumber <= pages; pageNumber += 1) {
+    for (let pageNumber = 1; pageNumber <= maxPriorityPageLimit; pageNumber += 1) {
+      for (const competitor of competitors) {
+        const priority = priorityCompetitors.has(normalizeCompetitorKey(competitor));
+        const pages = priority ? maxPriorityPageLimit : maxPageLimit;
+        if (pageNumber > pages) {
+          continue;
+        }
         if (!appGrowingHasBudget(deadline, Math.min(5_000, graphQLTimeoutMS))) {
           markBudgetExhausted("graphql_api", competitor, priority, pageNumber);
           break graphqlSearch;
         }
         const capture = await captureAppGrowingMaterialPageViaGraphQL(context, connector, {
+          page,
           competitor,
           pageNumber,
           params,
@@ -2105,9 +2456,21 @@ async function runAppGrowingMaterialSearch(page, context, connector, params = {}
           graphQL_responses: capture.responses,
           total: capture.total,
           limit: capture.limit,
+          needs_reauth: capture.needsReauth === true,
           error: capture.error,
           materials_found: capture.materials.length,
         });
+        if (capture.needsReauth) {
+          break graphqlSearch;
+        }
+        if (appGrowingGraphQLSystemBusy(capture.error)) {
+          graphQLSystemBusy = true;
+          appGrowingAddAutoAdjustment(
+            autoAdjustments,
+            "stopped AppGrowing GraphQL pagination after its business API reported system busy; switching to browser network capture",
+          );
+          break graphqlSearch;
+        }
         if (capture.appBrandSource === "strategy_memory") {
           appGrowingAddAutoAdjustment(autoAdjustments, `used learned AppGrowing brand id for ${competitor}`);
         }
@@ -2122,66 +2485,86 @@ async function runAppGrowingMaterialSearch(page, context, connector, params = {}
           });
         }
       }
+      if (pageNumber >= Math.max(pageLimit, priorityPageLimit)
+        && appGrowingNovelTargetMet(materials, rules, totalLimit, excludedDedupeKeys)) {
+        break;
+      }
     }
   }
 
-  const adaptiveBrowserFallbackEnabled = adaptiveMode
+  const graphQLNeedsReauth = captured.some((capture) => capture.needs_reauth === true);
+  const browserFallbackCompetitors = graphQLNeedsReauth || appGrowingNovelTargetMet(materials, rules, totalLimit, excludedDedupeKeys)
+    ? []
+    : graphQLSystemBusy || browserPreferredByMemory
+      ? competitors
+    : appGrowingBrowserFallbackCompetitors(
+      competitors,
+      captured,
+      params,
+      adaptiveMemory,
+      browserFallbackEnabled,
+      adaptiveMode,
+    );
+  const adaptiveBrowserFallbackEnabled = browserPreferredByMemory || (adaptiveMode
     && !browserFallbackEnabled
-    && appGrowingShouldUseAdaptiveBrowserFallback(captured, adaptiveMemory);
-  if (adaptiveBrowserFallbackEnabled) {
-    appGrowingAddAutoAdjustment(autoAdjustments, "enabled browser fallback after AppGrowing API path failed or prior memory preferred it");
+    && browserFallbackCompetitors.length > 0);
+  if (adaptiveBrowserFallbackEnabled && !browserPreferredByMemory) {
+    appGrowingAddAutoAdjustment(
+      autoAdjustments,
+      `enabled browser fallback for ${browserFallbackCompetitors.join(", ")} after their AppGrowing API pages returned no material`,
+    );
   }
 
-  if (materials.length === 0 && (browserFallbackEnabled || adaptiveBrowserFallbackEnabled)) {
+  if (browserFallbackCompetitors.length > 0) {
     if (!appGrowingHasBudget(deadline, appGrowingBrowserFallbackMinBudgetMS)) {
       markBudgetExhausted("browser_network");
     } else {
       let browserCapturePage = page;
       let browserFallbackStopped = false;
+      let browserNoProgressCount = 0;
+      const browserNoProgressLimit = appGrowingBrowserNoProgressThreshold(browserFallbackCompetitors.length);
       browserFallback:
-      for (const competitor of competitors) {
-        if (browserFallbackStopped) {
-          break;
-        }
-        const priority = priorityCompetitors.has(normalizeCompetitorKey(competitor));
-        const pages = priority ? priorityPageLimit : pageLimit;
-        for (let pageNumber = 1; pageNumber <= pages; pageNumber += 1) {
+      for (let pageNumber = 1; pageNumber <= maxPriorityPageLimit; pageNumber += 1) {
+        for (const competitor of browserFallbackCompetitors) {
+          if (browserFallbackStopped) {
+            break browserFallback;
+          }
+          const priority = priorityCompetitors.has(normalizeCompetitorKey(competitor));
+          const pages = priority ? maxPriorityPageLimit : maxPageLimit;
+          if (pageNumber > pages) {
+            continue;
+          }
           if (!appGrowingHasBudget(deadline, appGrowingBrowserFallbackMinBudgetMS)) {
             markBudgetExhausted("browser_network", competitor, priority, pageNumber);
             break browserFallback;
           }
-          const capture = await captureAppGrowingMaterialPage(browserCapturePage, connector, {
-            competitor,
-            pageNumber,
-            params,
-            captureTimeoutMS,
-            pageTimeoutMS: appGrowingRequestTimeoutMS(deadline, 60_000),
-          });
-          captured.push({
-            competitor,
-            priority,
-            page: pageNumber,
-            source: "browser_network",
-            url: capture.url,
-            graphQL_operations: capture.operations,
-            graphQL_responses: capture.responses,
-            page_snapshot: capture.snapshot,
-            needs_reauth: capture.needsReauth,
-            error: capture.error,
-            page_crashed: capture.pageCrashed,
-            materials_found: capture.materials.length,
-          });
-          if (capture.materials.length > 0) {
-            appGrowingAddLearnedSourceStrategy(learnedStrategies, learnedStrategyKeys, competitor, "browser_network", capture.materials.length);
-          }
-          for (const material of capture.materials) {
-            materials.push({
-              ...material,
+          const materialCountBeforeCapture = materials.length;
+          const captureAttempts = [];
+          for (let attempt = 1; attempt <= 2; attempt += 1) {
+            const capture = await captureAppGrowingMaterialPage(browserCapturePage, connector, {
               competitor,
-              priority,
+              pageNumber,
+              params,
+              captureTimeoutMS,
+              pageTimeoutMS: appGrowingRequestTimeoutMS(deadline, 60_000),
             });
-          }
-          if (capture.pageCrashed) {
+            captureAttempts.push(capture);
+            captured.push(appGrowingBrowserCaptureRecord(competitor, priority, pageNumber, capture, attempt));
+            if (capture.materials.length > 0) {
+              appGrowingAddLearnedSourceStrategy(learnedStrategies, learnedStrategyKeys, competitor, "browser_network", capture.materials.length);
+            }
+            for (const material of capture.materials) {
+              materials.push({
+                ...material,
+                competitor,
+                priority,
+              });
+            }
+            if (!appGrowingBrowserCaptureShouldRetry(capture, { priority })
+              || attempt >= 2
+              || !appGrowingHasBudget(deadline, appGrowingBrowserFallbackMinBudgetMS)) {
+              break;
+            }
             const replacementPage = await recreateAppGrowingCapturePage(context, browserCapturePage)
               .catch(() => null);
             if (!replacementPage) {
@@ -2190,6 +2573,40 @@ async function runAppGrowingMaterialSearch(page, context, connector, params = {}
             }
             browserCapturePage = replacementPage;
           }
+          if (materials.length > materialCountBeforeCapture) {
+            browserNoProgressCount = 0;
+          } else {
+            browserNoProgressCount += 1;
+          }
+          const lastCapture = captureAttempts.at(-1);
+          if (lastCapture?.pageCrashed) {
+            const replacementPage = await recreateAppGrowingCapturePage(context, browserCapturePage)
+              .catch(() => null);
+            if (!replacementPage) {
+              browserFallbackStopped = true;
+              break;
+            }
+            browserCapturePage = replacementPage;
+          }
+          if (browserNoProgressCount >= browserNoProgressLimit) {
+            captured.push({
+              competitor,
+              priority,
+              page: pageNumber,
+              source: "browser_network",
+              skipped: true,
+              error: "appgrowing_browser_no_material_progress",
+              consecutive_no_progress: browserNoProgressCount,
+              materials_found: 0,
+            });
+            break browserFallback;
+          }
+        }
+        // Each competitor has been sampled for this page round. Stop as soon
+        // as the requested mix is satisfied instead of reading every planned
+        // page and holding the single browser unnecessarily.
+        if (appGrowingNovelTargetMet(materials, rules, totalLimit, excludedDedupeKeys)) {
+          break;
         }
       }
     }
@@ -2203,15 +2620,19 @@ async function runAppGrowingMaterialSearch(page, context, connector, params = {}
     });
   }
 
-  const strictSelection = selectAppGrowingMaterials(materials, rules, totalLimit, {
+  const imageMaterials = materials.filter(isAppGrowingImageMaterial);
+  const nonImageFilteredCount = materials.length - imageMaterials.length;
+  const strictSelection = selectAppGrowingMaterials(imageMaterials, rules, totalLimit, {
     fallbackToTopMaterials: false,
+    excludedKeys: excludedDedupeKeys,
   });
   let selection = strictSelection;
   let supplementCount = 0;
   const explicitTopFallback = params.fallback_to_top_materials === true;
   if (explicitTopFallback || (adaptiveMode && strictSelection.selected.length === 0 && strictSelection.unique.length > 0)) {
-    const fallbackSelection = selectAppGrowingMaterials(materials, rules, totalLimit, {
+    const fallbackSelection = selectAppGrowingMaterials(imageMaterials, rules, totalLimit, {
       fallbackToTopMaterials: true,
+      excludedKeys: excludedDedupeKeys,
     });
     if (fallbackSelection.selected.length > strictSelection.selected.length) {
       selection = fallbackSelection;
@@ -2224,11 +2645,33 @@ async function runAppGrowingMaterialSearch(page, context, connector, params = {}
   const strictMaterialKeys = new Set(strictSelection.selected.map(appGrowingMaterialIdentityKey));
   const selectedMaterials = selection.selected.map((material) => ({
     ...material,
+    dedupe_key: appGrowingMaterialDedupeKey(material),
     selection_match: strictMaterialKeys.has(appGrowingMaterialIdentityKey(material)) ? "strict" : "supplement",
   }));
+  const selectionSummary = appGrowingSelectionMixSummary(selectedMaterials, rules, totalLimit);
+  const competitorDiagnostics = appGrowingCompetitorDiagnostics(
+    competitors,
+    priorityCompetitors,
+    pageLimit,
+    priorityPageLimit,
+    captured,
+    selectedMaterials,
+  );
   const needsReauth = captured.some((capture) => capture.needs_reauth === true);
-  const blockingError = appGrowingMaterialSearchBlockingError(captured, materials);
+  const blockingError = appGrowingMaterialSearchBlockingError(captured, imageMaterials);
+  const diagnosis = appGrowingMaterialSearchDiagnosis({
+    captured,
+    selection,
+    needsReauth,
+    blockingError,
+    browserPreferredByMemory,
+    graphQLSystemBusy,
+    autoAdjustments,
+  });
   const budgetNote = timeBudgetExhausted ? "; stopped early because the material_search time budget was exhausted" : "";
+  const mixNote = selectionSummary.ratio_target_met
+    ? `actual mix new ${selectionSummary.actual.new_materials}, volume ${selectionSummary.actual.volume_materials}; target met`
+    : `actual mix new ${selectionSummary.actual.new_materials}, volume ${selectionSummary.actual.volume_materials}; target ${selectionSummary.target.new_materials}/${selectionSummary.target.volume_materials} not met`;
   return {
     status: needsReauth ? "need_reauth" : blockingError ? "failed" : "completed",
     downloaded: 0,
@@ -2237,7 +2680,8 @@ async function runAppGrowingMaterialSearch(page, context, connector, params = {}
       ? "AppGrowing reported that the account was logged out; re-authentication is required"
       : blockingError
         ? `AppGrowing material_search failed before reading material data: ${blockingError}`
-        : `selected ${selection.selected.length} AppGrowing materials from ${competitors.length} competitors; asset download storage is not configured${budgetNote}`,
+        : `selected ${selection.selected.length} new AppGrowing image materials from ${competitors.length} competitors after filtering ${selection.excludedCount} previously seen assets${nonImageFilteredCount > 0 ? ` and ${nonImageFilteredCount} non-image assets` : ""}; ${mixNote}; asset download storage is not configured${budgetNote}`,
+    selection_summary: selectionSummary,
     raw: {
       connector_id: connector.id,
       capability: "material_search",
@@ -2251,6 +2695,9 @@ async function runAppGrowingMaterialSearch(page, context, connector, params = {}
         total_limit: totalLimit,
         pages_per_competitor: pageLimit,
         priority_pages_per_competitor: priorityPageLimit,
+        max_pages_per_competitor: maxPageLimit,
+        max_priority_pages_per_competitor: maxPriorityPageLimit,
+        novel_only: novelOnly,
         planned_pages: plannedPages,
         graphql_timeout_ms: graphQLTimeoutMS,
         time_budget_ms: searchBudgetMS,
@@ -2260,20 +2707,28 @@ async function runAppGrowingMaterialSearch(page, context, connector, params = {}
         browser_capture_fallback: browserFallbackEnabled,
         adaptive_mode: adaptiveMode,
         adaptive_browser_fallback: adaptiveBrowserFallbackEnabled,
+        browser_fallback_competitors: browserFallbackCompetitors,
         adaptive_memory_scopes: Object.keys(adaptiveMemory.memories || {}).sort(),
         fallback_to_top_materials: params.fallback_to_top_materials === true,
+        asset_type: "image",
       },
       captured,
+      competitor_diagnostics: competitorDiagnostics,
+      diagnosis,
       auto_adjustments: autoAdjustments,
       learned_strategies: learnedStrategies,
+      selection_summary: selectionSummary,
       totals: {
         materials_seen: materials.length,
+        image_materials_seen: imageMaterials.length,
+        non_image_materials_filtered: nonImageFilteredCount,
         unique_materials: selection.unique.length,
         new_candidates: selection.newCandidates.length,
         volume_candidates: selection.volumeCandidates.length,
         strict_count: strictSelection.selected.length,
         supplement_count: supplementCount,
         selected: selection.selected.length,
+        historical_materials_filtered: selection.excludedCount,
         missing_duration_days: selection.unique.filter((item) => !Number.isFinite(Number(item.duration_days))).length,
         missing_impression_estimate: selection.unique.filter((item) => !Number.isFinite(Number(item.impression_estimate))).length,
       },
@@ -2289,10 +2744,6 @@ function appGrowingMaterialSearchBlockingError(captured, materials) {
   }
   const attempts = captured.filter((capture) => capture && !capture.skipped);
   if (attempts.length === 0) {
-    return "";
-  }
-  const successfulAttempts = attempts.filter((capture) => !capture.error);
-  if (successfulAttempts.length > 0) {
     return "";
   }
   const blockingErrors = attempts
@@ -2311,6 +2762,59 @@ function appGrowingMaterialSearchBlockingError(captured, materials) {
 
 function appGrowingMaterialSearchNonBlockingError(error) {
   return error === "app_brand_not_found" || error === "browser_fallback_disabled_for_bulk_material_search";
+}
+
+function appGrowingBrowserCaptureRecord(competitor, priority, pageNumber, capture, attempt = 1) {
+  return {
+    competitor,
+    priority,
+    page: pageNumber,
+    source: "browser_network",
+    attempt,
+    retry: attempt > 1 || undefined,
+    url: capture.url,
+    graphQL_operations: capture.operations,
+    graphQL_responses: capture.responses,
+    request_recipes: capture.request_recipes,
+    replay: capture.replay,
+    page_snapshot: capture.snapshot,
+    needs_reauth: capture.needsReauth,
+    error: capture.error,
+    page_crashed: capture.pageCrashed,
+    material_list_observed: capture.material_list_observed,
+    material_list_data_observed: capture.material_list_data_observed,
+    total: capture.total,
+    limit: capture.limit,
+    materials_found: capture.materials.length,
+  };
+}
+
+function appGrowingBrowserCaptureShouldRetry(capture, { priority = false } = {}) {
+  if (!capture || capture.needsReauth === true) {
+    return false;
+  }
+  if (Array.isArray(capture.materials) && capture.materials.length > 0) {
+    return false;
+  }
+  const error = String(capture.error || "");
+  if (capture.pageCrashed
+    || error === "appgrowing_browser_material_list_not_observed"
+    || error === "appgrowing_browser_material_list_not_readable"
+    || error === "appgrowing_browser_material_extract_empty") {
+    return true;
+  }
+  const total = Number(capture.total);
+  if (Number.isFinite(total) && total > 0) {
+    return true;
+  }
+  return priority;
+}
+
+function appGrowingBrowserNoProgressThreshold(competitorCount, configuredLimit = appGrowingBrowserNoProgressLimit) {
+  return Math.max(
+    positiveIntegerParam(configuredLimit, appGrowingBrowserNoProgressLimit, 1, 200),
+    positiveIntegerParam(competitorCount, 1, 1, 200),
+  );
 }
 
 function appGrowingAdaptiveStrategyMemory(params = {}) {
@@ -2358,6 +2862,207 @@ function appGrowingShouldUseAdaptiveBrowserFallback(captured, adaptiveMemory) {
   }
   const attempts = captured.filter((capture) => capture?.source === "graphql_api" && !capture.skipped);
   return attempts.length > 0 && attempts.every((capture) => String(capture.error || "").trim() !== "");
+}
+
+function appGrowingMaterialSearchDiagnosis({
+  captured,
+  selection,
+  needsReauth,
+  blockingError,
+  browserPreferredByMemory,
+  graphQLSystemBusy,
+  autoAdjustments,
+}) {
+  const browserSucceeded = captured.some((capture) => (
+    capture?.source === "browser_network"
+    && !capture?.error
+    && Number(capture?.materials_found) > 0
+  ));
+  const browserTotals = captured
+    .filter((capture) => capture?.source === "browser_network")
+    .flatMap((capture) => (capture?.graphQL_responses || []))
+    .filter((response) => (response?.operations || []).includes("materialList"))
+    .map((response) => Number(response?.total))
+    .filter(Number.isFinite);
+  const matchedTotal = browserTotals.length > 0 ? Math.max(...browserTotals) : null;
+  if (needsReauth) {
+    return {
+      state: "needs_user_action",
+      classification: "credential_reauthentication_required",
+      summary: "AppGrowing session requires login again before collection can continue.",
+      automated_actions: [],
+      requires_agent: false,
+      requires_user_action: true,
+      matched_total: matchedTotal,
+    };
+  }
+  if (graphQLSystemBusy && browserSucceeded) {
+    return {
+      state: "recovered",
+      classification: "graphql_direct_unavailable",
+      summary: "AppGrowing direct GraphQL reported system busy; browser network capture completed successfully.",
+      automated_actions: ["switched_to_browser_network", "recorded_browser_preference"],
+      requires_agent: false,
+      requires_user_action: false,
+      matched_total: matchedTotal,
+    };
+  }
+  if (browserPreferredByMemory && browserSucceeded) {
+    return {
+      state: "completed",
+      classification: "browser_network_primary",
+      summary: "Collection used the verified browser network path.",
+      automated_actions: ["used_browser_network_primary"],
+      requires_agent: false,
+      requires_user_action: false,
+      matched_total: matchedTotal,
+    };
+  }
+  if (blockingError) {
+    return {
+      state: "needs_agent_diagnosis",
+      classification: "unclassified_capture_failure",
+      summary: `Collection could not read material data: ${blockingError}`,
+      automated_actions: autoAdjustments,
+      requires_agent: true,
+      requires_user_action: false,
+      matched_total: matchedTotal,
+    };
+  }
+  return {
+    state: "completed",
+    classification: selection.selected.length === 0 ? "no_eligible_material" : "completed",
+    summary: selection.selected.length === 0
+      ? "Collection completed, but no material matched the current selection rules."
+      : "Collection completed.",
+    automated_actions: autoAdjustments,
+    requires_agent: false,
+    requires_user_action: false,
+    matched_total: matchedTotal,
+  };
+}
+
+function appGrowingCompetitorDiagnostics(
+  competitors,
+  priorityCompetitors,
+  pageLimit,
+  priorityPageLimit,
+  captured,
+  selectedMaterials = [],
+) {
+  return competitors.map((competitor) => {
+    const competitorKey = normalizeCompetitorKey(competitor);
+    const priority = priorityCompetitors.has(competitorKey);
+    const requestedPages = priority ? priorityPageLimit : pageLimit;
+    const attempts = captured.filter((capture) => (
+      normalizeCompetitorKey(capture.competitor) === competitorKey
+      && Number.isInteger(Number(capture.page))
+    ));
+    const pageResults = Array.from({ length: requestedPages }, (_, index) => {
+      const page = index + 1;
+      const pageAttempts = attempts.filter((capture) => Number(capture.page) === page);
+      const materialsFound = pageAttempts.reduce(
+        (total, capture) => total + Math.max(0, Number(capture.materials_found) || 0),
+        0,
+      );
+      const needsReauth = pageAttempts.some((capture) => capture.needs_reauth === true);
+      const budgetExhausted = pageAttempts.some((capture) => capture.error === "material_search_time_budget_exhausted");
+      const attempted = pageAttempts.some((capture) => capture.skipped !== true);
+      const succeeded = pageAttempts.some((capture) => capture.skipped !== true && !capture.error);
+      let status = "not_attempted";
+      if (needsReauth) {
+        status = "need_reauth";
+      } else if (materialsFound > 0) {
+        status = "found";
+      } else if (budgetExhausted) {
+        status = "budget_exhausted";
+      } else if (succeeded) {
+        status = "no_match";
+      } else if (attempted) {
+        status = "failed";
+      }
+      return {
+        page,
+        status,
+        materials_found: materialsFound,
+        attempts: pageAttempts.map((capture) => ({
+          source: capture.source,
+          materials_found: Math.max(0, Number(capture.materials_found) || 0),
+          error: capture.error || "",
+          needs_reauth: capture.needs_reauth === true,
+          skipped: capture.skipped === true,
+        })),
+      };
+    });
+    const materialsFound = pageResults.reduce((total, result) => total + result.materials_found, 0);
+    const errors = Array.from(new Set(
+      attempts.map((capture) => capture.error).filter(Boolean),
+    ));
+    const needsReauth = pageResults.some((result) => result.status === "need_reauth");
+    const budgetExhausted = pageResults.some((result) => result.status === "budget_exhausted");
+    const coverageComplete = pageResults.every((result) => result.status !== "not_attempted" && result.status !== "budget_exhausted");
+    let status = "no_match";
+    if (needsReauth) {
+      status = "need_reauth";
+    } else if (materialsFound > 0) {
+      status = coverageComplete ? "found" : "found_incomplete";
+    } else if (budgetExhausted) {
+      status = "budget_exhausted";
+    } else if (pageResults.some((result) => result.status === "failed")) {
+      status = "failed";
+    } else if (!coverageComplete) {
+      status = "not_attempted";
+    }
+    return {
+      competitor,
+      priority,
+      requested_pages: requestedPages,
+      coverage_complete: coverageComplete,
+      status,
+      materials_found: materialsFound,
+      selected: selectedMaterials.filter(
+        (material) => normalizeCompetitorKey(material.competitor) === competitorKey,
+      ).length,
+      browser_fallback_used: attempts.some((capture) => capture.source === "browser_network"),
+      errors,
+      pages: pageResults,
+    };
+  });
+}
+
+function appGrowingBrowserFallbackCompetitors(
+  competitors,
+  captured,
+  params = {},
+  adaptiveMemory = {},
+  browserFallbackEnabled = false,
+  adaptiveMode = true,
+) {
+  if (params.browser_capture_fallback === false) {
+    return [];
+  }
+  const memories = adaptiveMemory?.memories || {};
+  return competitors.filter((competitor) => {
+    const key = normalizeCompetitorKey(competitor);
+    const attempts = captured.filter((capture) =>
+      capture?.source === "graphql_api"
+      && normalizeCompetitorKey(capture.competitor) === key
+      && !capture.skipped,
+    );
+    if (attempts.some((capture) => Number(capture.materials_found) > 0)) {
+      return false;
+    }
+    if (browserFallbackEnabled) {
+      return true;
+    }
+    if (!adaptiveMode) {
+      return false;
+    }
+    if (memories[key]?.preferred_source === "browser_network") {
+      return true;
+    }
+    return attempts.length > 0;
+  });
 }
 
 function appGrowingAddAutoAdjustment(adjustments, message) {
@@ -2412,7 +3117,27 @@ function appGrowingAddLearnedSourceStrategy(out, seen, competitor, preferredSour
 }
 
 function appGrowingMaterialIdentityKey(material) {
-  return String(material?.resource_url || material?.preview_url || material?.poster_url || material?.material_id || material?.title || JSON.stringify(material || {}));
+  return appGrowingMaterialDedupeKey(material)
+    || String(material?.material_id || material?.title || JSON.stringify(material || {}));
+}
+
+function appGrowingMaterialDedupeKey(material) {
+  const raw = String(material?.resource_url || material?.preview_url || material?.poster_url || material?.landing_url || "").trim();
+  if (!raw) {
+    return "";
+  }
+  let identity = raw;
+  try {
+    const url = new URL(raw);
+    url.search = "";
+    url.hash = "";
+    url.protocol = url.protocol.toLowerCase();
+    url.hostname = url.hostname.toLowerCase();
+    identity = url.toString();
+  } catch {
+    // Keep non-URL resource identifiers stable as provided.
+  }
+  return `sha256:${crypto.createHash("sha256").update(identity).digest("hex")}`;
 }
 
 function appGrowingPlannedMaterialPages(competitors, priorityCompetitors, pageLimit, priorityPageLimit) {
@@ -2458,55 +3183,58 @@ function appGrowingRequestTimeoutMS(deadline, desiredTimeoutMS) {
 async function captureAppGrowingMaterialPageViaGraphQL(context, connector, options) {
   const responses = [];
   const operations = new Set();
-  const brand = await resolveAppGrowingBrand(context, connector, options, responses, operations);
-  if (!brand.id) {
-    return {
-      url: connector.graphQLURL,
-      operations: Array.from(operations).sort(),
-      responses,
-      appBrandID: "",
-      appBrandName: brand.name || "",
-      appBrandSource: brand.source || "",
-      total: null,
-      limit: null,
-      error: brand.error || "app_brand_not_found",
-      materials: [],
-    };
-  }
-
   let lastError = "";
   for (const order of appGrowingGraphQLMaterialOrders(options.params)) {
-    const variables = appGrowingAppMaterialListVariables(options.params, brand.id, options.pageNumber, new Date(), order);
+    const variables = appGrowingAppMaterialListVariables(options.params, options.competitor, options.pageNumber, new Date(), order);
     const result = await appGrowingGraphQLRequest(
-      context,
+      options.page || context,
       connector,
-      "appMaterialList",
+      "materialList",
       APPGROWING_APP_MATERIAL_LIST_QUERY,
       variables,
       options.graphQLTimeoutMS,
       options.deadline,
     ).catch((error) => ({ error: error instanceof Error ? error.message : String(error), status: null, body: null }));
-    operations.add("appMaterialList");
-    responses.push(appGrowingGraphQLResponseSummary("appMaterialList", result));
+    operations.add("materialList");
+    responses.push(appGrowingGraphQLResponseSummary("materialList", result));
     if (result.error) {
       lastError = result.error;
       continue;
     }
     const error = appGrowingGraphQLErrorMessage(result.body);
     if (error) {
+      if (appGrowingGraphQLNeedsReauth(result.body)) {
+        return {
+          url: connector.graphQLURL,
+          operations: Array.from(operations).sort(),
+          responses,
+          appBrandID: "",
+          appBrandName: options.competitor,
+          appBrandSource: "keyword",
+          total: null,
+          limit: null,
+          needsReauth: true,
+          error,
+          materials: [],
+        };
+      }
       lastError = error;
+      if (appGrowingGraphQLSystemBusy(error)) {
+        break;
+      }
       continue;
     }
-    const materials = extractAppGrowingMaterials(result.body);
+      const materials = extractAppGrowingMaterialListMaterials(result.body);
     return {
       url: connector.graphQLURL,
       operations: Array.from(operations).sort(),
       responses,
-      appBrandID: brand.id,
-      appBrandName: brand.name || "",
-      appBrandSource: brand.source || "",
+      appBrandID: "",
+      appBrandName: options.competitor,
+      appBrandSource: "keyword",
       total: parseNumericValue(valueAtPath(result.body, ["data", "materialList", "total"])),
       limit: parseNumericValue(valueAtPath(result.body, ["data", "materialList", "limit"])),
+      needsReauth: false,
       error: "",
       materials,
     };
@@ -2516,11 +3244,12 @@ async function captureAppGrowingMaterialPageViaGraphQL(context, connector, optio
     url: connector.graphQLURL,
     operations: Array.from(operations).sort(),
     responses,
-    appBrandID: brand.id,
-    appBrandName: brand.name || "",
-    appBrandSource: brand.source || "",
+    appBrandID: "",
+    appBrandName: options.competitor,
+    appBrandSource: "keyword",
     total: null,
     limit: null,
+    needsReauth: false,
     error: lastError || "app_material_list_failed",
     materials: [],
   };
@@ -2553,7 +3282,7 @@ async function resolveAppGrowingBrand(context, connector, options, responses, op
   for (const keyword of keywords) {
     const variables = appGrowingSearchAppVariables(keyword, options.params);
     const result = await appGrowingGraphQLRequest(
-      context,
+      options.page || context,
       connector,
       "searchApp",
       APPGROWING_SEARCH_APP_QUERY,
@@ -2569,6 +3298,17 @@ async function resolveAppGrowingBrand(context, connector, options, responses, op
     }
     const error = appGrowingGraphQLErrorMessage(result.body);
     if (error) {
+      if (appGrowingGraphQLNeedsReauth(result.body)) {
+        const expired = {
+          id: "",
+          name: competitor,
+          source: "searchApp",
+          needsReauth: true,
+          error,
+        };
+        options.brandCache?.set(key, expired);
+        return expired;
+      }
       lastError = error;
       continue;
     }
@@ -2590,17 +3330,47 @@ async function resolveAppGrowingBrand(context, connector, options, responses, op
   return brand;
 }
 
-function appGrowingGraphQLRequest(context, connector, operationName, query, variables, timeoutMS = appGrowingGraphQLTimeoutMS, deadline = NaN) {
-  if (!context?.request || !connector.graphQLURL) {
+function appGrowingGraphQLRequest(requestTarget, connector, operationName, query, variables, timeoutMS = appGrowingGraphQLTimeoutMS, deadline = NaN) {
+  if (!connector.graphQLURL) {
     throw new Error("AppGrowing GraphQL request context is unavailable");
   }
   const timeout = appGrowingRequestTimeoutMS(deadline, timeoutMS);
-  return context.request.post(connector.graphQLURL, {
-    data: {
-      operationName,
-      query,
-      variables,
-    },
+  const payload = { operationName, query, variables };
+  if (typeof requestTarget?.evaluate === "function") {
+    const headers = connectorGraphQLHeaders(connector, operationName);
+    delete headers.origin;
+    delete headers.referer;
+    delete headers["user-agent"];
+    return requestTarget.evaluate(async ({ url, data, requestHeaders, requestTimeoutMS }) => {
+      const controller = new AbortController();
+      const timer = window.setTimeout(() => controller.abort(), requestTimeoutMS);
+      try {
+        const response = await fetch(url, {
+          method: "POST",
+          credentials: "include",
+          headers: requestHeaders,
+          body: JSON.stringify(data),
+          signal: controller.signal,
+        });
+        return {
+          status: response.status,
+          text: await response.text(),
+        };
+      } finally {
+        window.clearTimeout(timer);
+      }
+    }, {
+      url: connector.graphQLURL,
+      data: payload,
+      requestHeaders: headers,
+      requestTimeoutMS: timeout,
+    }).then(({ status, text }) => appGrowingGraphQLResult(status, text));
+  }
+  if (!requestTarget?.request) {
+    throw new Error("AppGrowing GraphQL request context is unavailable");
+  }
+  return requestTarget.request.post(connector.graphQLURL, {
+    data: payload,
     headers: connectorGraphQLHeaders(connector, operationName),
     timeout,
   }).then(async (response) => {
@@ -2611,21 +3381,22 @@ function appGrowingGraphQLRequest(context, connector, operationName, query, vari
     } catch {
       text = "";
     }
-    let body = null;
-    try {
-      body = text ? JSON.parse(text) : null;
-    } catch {
-      body = null;
-    }
-    const result = {
-      status,
-      body,
-    };
-    if (status < 200 || status >= 300) {
-      result.error = appGrowingGraphQLHTTPErrorMessage(status, body, text);
-    }
-    return result;
+    return appGrowingGraphQLResult(status, text);
   });
+}
+
+function appGrowingGraphQLResult(status, text) {
+  let body = null;
+  try {
+    body = text ? JSON.parse(text) : null;
+  } catch {
+    body = null;
+  }
+  const result = { status, body };
+  if (status < 200 || status >= 300) {
+    result.error = appGrowingGraphQLHTTPErrorMessage(status, body, text);
+  }
+  return result;
 }
 
 function appGrowingGraphQLHTTPErrorMessage(status, body, text) {
@@ -2645,8 +3416,88 @@ function appGrowingGraphQLResponseSummary(operationName, result) {
   return {
     status: result.status ?? null,
     operations: [operationName],
+    needs_reauth: appGrowingGraphQLNeedsReauth(result.body) || undefined,
     error: result.error || appGrowingGraphQLErrorMessage(result.body) || undefined,
   };
+}
+
+function appGrowingGraphQLSystemBusy(error) {
+  return /(?:the )?system is busy|system busy/i.test(String(error || ""));
+}
+
+function appGrowingGraphQLNeedsReauth(body) {
+  const errors = Array.isArray(body?.errors) ? body.errors : [];
+  return errors.some((error) => {
+    const extensions = error?.extensions;
+    const code = String(extensions && typeof extensions === "object" ? extensions.c || extensions.code || "" : "").trim();
+    const message = String(extensions && typeof extensions === "object" ? extensions.m || error?.message || "" : error?.message || "").trim();
+    return code === "05:403004"
+      || code === "05:403005"
+      || appGrowingAuthErrorNeedsReauth(message);
+  });
+}
+
+function appGrowingAuthErrorNeedsReauth(value) {
+  return /05:40300[45]\b|login has expired|please log in again|(?:you are|account was|user was)?\s*logged out|already signed in on another device|session (?:has )?expired/i
+    .test(String(value || ""));
+}
+
+function appGrowingBusinessProbeResult(authCheck, result) {
+  const graphQLError = appGrowingGraphQLErrorMessage(result?.body);
+  const hasSearchData = result?.body?.data
+    && Object.prototype.hasOwnProperty.call(result.body.data, "searchAppBrand");
+  const responseError = result?.error
+    || graphQLError
+    || (!hasSearchData ? "searchApp verification returned no searchAppBrand data" : "");
+  const needsReauth = appGrowingGraphQLNeedsReauth(result?.body);
+  const businessAuthenticated = authCheck?.authenticated === true && !responseError;
+  const method = [authCheck?.method, "searchApp"].filter(Boolean).join("+");
+  const businessCheck = {
+    authenticated: businessAuthenticated,
+    operation: "searchApp",
+    http_status: result?.status ?? null,
+    needs_reauth: needsReauth,
+    upstream_error: responseError || undefined,
+    observed_at: new Date().toISOString(),
+  };
+  return {
+    authCheck: {
+      ...authCheck,
+      authenticated: businessAuthenticated,
+      method,
+      upstream_error: responseError || undefined,
+      business_check: businessCheck,
+    },
+    needsReauth,
+    verificationError: responseError && !needsReauth ? responseError : "",
+  };
+}
+
+async function verifyAppGrowingBusinessAccess(requestTarget, connector, authCheck) {
+  if (connector.id !== "appgrowing" || authCheck?.authenticated !== true) {
+    return {
+      authCheck,
+      needsReauth: false,
+      verificationError: "",
+    };
+  }
+  let result;
+  try {
+    result = await appGrowingGraphQLRequest(
+      requestTarget,
+      connector,
+      "searchApp",
+      APPGROWING_SEARCH_APP_QUERY,
+      appGrowingSearchAppVariables("Easycash", { purpose: 2 }),
+    );
+  } catch (err) {
+    result = {
+      status: null,
+      body: null,
+      error: err instanceof Error ? err.message : String(err),
+    };
+  }
+  return appGrowingBusinessProbeResult(authCheck, result);
 }
 
 function appGrowingGraphQLErrorMessage(body) {
@@ -2709,7 +3560,7 @@ function appGrowingSearchAppVariables(competitor, params) {
   return variables;
 }
 
-function appGrowingAppMaterialListVariables(params, appBrandID, pageNumber, now = new Date(), order = "") {
+function appGrowingAppMaterialListVariables(params, keyword, pageNumber, now = new Date(), order = "") {
   const window = appGrowingGraphQLDateWindow(params, now);
   const variables = {
     purpose: positiveIntegerParam(params.purpose, 2, 1, 20),
@@ -2719,7 +3570,7 @@ function appGrowingAppMaterialListVariables(params, appBrandID, pageNumber, now 
     order: order || appGrowingGraphQLMaterialOrders(params)[0],
     page: pageNumber,
     accurateSearch: positiveIntegerParam(params.accurateSearch ?? params.accurate_search, 1, 0, 1),
-    appBrand: appBrandID,
+    keyword,
   };
   const isNew = optionalIntegerParam(params.isNew ?? params.is_new, 0, 1);
   if (Number.isInteger(isNew)) {
@@ -2729,10 +3580,11 @@ function appGrowingAppMaterialListVariables(params, appBrandID, pageNumber, now 
 }
 
 function appGrowingGraphQLMaterialOrders(params = {}) {
-  const explicit = String(params.graphql_order || params.material_order || params.app_material_order || "").trim();
+  const explicit = String(params.graphql_order || params.material_order || params.app_material_order || params.order || "_score_desc").trim();
   const mapped = mapAppGrowingMaterialOrder(explicit);
   return uniqueNonEmptyValues([
-    mapped,
+    explicit === "_score_desc" ? explicit : mapped,
+    "_score_desc",
     "impression_inc_2y_desc",
     "max_dt_desc",
     "cnt_ad_id_desc",
@@ -2826,38 +3678,83 @@ async function captureAppGrowingMaterialPage(page, connector, options) {
   const captured = [];
   const operations = new Set();
   const responses = [];
+  const responseTasks = new Set();
+  const requestRecipes = [];
+  let materialListRequest = null;
+  let materialListObserved = false;
+  let materialListDataObserved = false;
+  let notifyMaterialListReady = null;
+  const materialListReadyPromise = new Promise((resolve) => {
+    notifyMaterialListReady = resolve;
+  });
   let captureError = "";
   let pageCrashed = false;
 
-  const onResponse = async (response) => {
-    if (!response.url().startsWith(connector.graphQLURL)) {
-      return;
-    }
-    let operationNames = [];
-    try {
-      const postData = response.request().postData() || "";
-      if (postData) {
-        operationNames = graphQLOperationNames(postData);
+  const onResponse = (response) => {
+    const task = (async () => {
+      if (!response.url().startsWith(connector.graphQLURL)) {
+        return;
       }
-    } catch {
-      operationNames = [];
-    }
-    for (const operationName of operationNames) {
-      operations.add(operationName);
-    }
-    responses.push({
-      status: response.status(),
-      operations: operationNames,
+      let operationNames = [];
+      try {
+        const postData = response.request().postData() || "";
+        if (postData) {
+          operationNames = graphQLOperationNames(postData);
+          if (options.params?.diagnostic_capture_request_recipe === true) {
+            requestRecipes.push(...appGrowingGraphQLRequestRecipes(
+              postData,
+              response.request().headers(),
+              options.params?.diagnostic_include_query_text === true,
+            ));
+          }
+          if (!materialListRequest && operationNames.includes("materialList")) {
+            materialListRequest = {
+              url: response.url(),
+              payload: postData,
+              headers: response.request().headers(),
+            };
+          }
+          if (operationNames.includes("materialList")) {
+            materialListObserved = true;
+          }
+        }
+      } catch {
+        operationNames = [];
+      }
+      for (const operationName of operationNames) {
+        operations.add(operationName);
+      }
+      const summary = {
+        status: response.status(),
+        operations: operationNames,
+      };
+      responses.push(summary);
+      try {
+        const body = await response.json();
+        summary.needs_reauth = appGrowingGraphQLNeedsReauth(body) || undefined;
+        summary.error = appGrowingGraphQLErrorMessage(body) || undefined;
+        const materialList = valueAtPath(body, ["data", "materialList"]);
+        if (materialList && typeof materialList === "object") {
+          materialListDataObserved = true;
+          summary.total = parseNumericValue(materialList.total);
+          summary.limit = parseNumericValue(materialList.limit);
+          notifyMaterialListReady?.();
+        }
+        const materials = operationNames.includes("materialList")
+          ? extractAppGrowingMaterialListMaterials(body)
+          : [];
+        if (materials.length > 0) {
+          captured.push(...materials);
+          notifyMaterialListReady?.();
+        }
+      } catch {
+        // Ignore non-JSON GraphQL responses and keep the crawl best-effort.
+      }
+    })().catch(() => {
+      // Response event handlers must not leak a rejected promise into Playwright.
     });
-    try {
-      const body = await response.json();
-      const materials = extractAppGrowingMaterials(body);
-      if (materials.length > 0) {
-        captured.push(...materials);
-      }
-    } catch {
-      // Ignore non-JSON GraphQL responses and keep the crawl best-effort.
-    }
+    responseTasks.add(task);
+    void task.finally(() => responseTasks.delete(task));
   };
 
   const routeHandler = appGrowingCrawlRouteHandler();
@@ -2868,19 +3765,42 @@ async function captureAppGrowingMaterialPage(page, connector, options) {
   try {
     await page.goto(url, { waitUntil: "domcontentloaded", timeout: positiveIntegerParam(options.pageTimeoutMS, 60_000, 1_000, 60_000) });
     await Promise.race([
-      page.waitForLoadState("networkidle", { timeout: options.captureTimeoutMS }).catch(() => null),
+      materialListReadyPromise,
       sleep(options.captureTimeoutMS),
     ]);
-    await stimulateAppGrowingMaterialList(page, options.captureTimeoutMS);
+    if (!materialListDataObserved) {
+      await stimulateAppGrowingMaterialList(page, options.captureTimeoutMS);
+      await Promise.race([
+        materialListReadyPromise,
+        sleep(options.captureTimeoutMS),
+      ]);
+    }
+    if (!materialListDataObserved) {
+      await page.reload({ waitUntil: "domcontentloaded", timeout: positiveIntegerParam(options.pageTimeoutMS, 60_000, 1_000, 60_000) });
+      await Promise.race([
+        materialListReadyPromise,
+        sleep(options.captureTimeoutMS),
+      ]);
+    }
+    if (!materialListObserved) {
+      captureError = "appgrowing_browser_material_list_not_observed";
+    } else if (!materialListDataObserved) {
+      captureError = "appgrowing_browser_material_list_not_readable";
+    }
   } catch (error) {
     captureError = errorMessage(error);
     pageCrashed = isBrowserPageCrashError(error);
   } finally {
+    await Promise.allSettled(Array.from(responseTasks));
     page.off("response", onResponse);
     if (routeHandler) {
       await page.unroute("**/*", routeHandler).catch(() => {});
     }
   }
+
+  const replay = options.params?.diagnostic_replay_browser_graphql === true && materialListRequest
+    ? await replayAppGrowingBrowserGraphQLRequest(page, materialListRequest)
+    : null;
 
   const snapshot = await appGrowingPageSnapshot(page).catch((error) => ({
     url: safePageURL(page),
@@ -2888,14 +3808,28 @@ async function captureAppGrowingMaterialPage(page, connector, options) {
     text: "",
     error: errorMessage(error),
   }));
+  const materialListResponse = responses.slice().reverse().find((response) => (
+    response.operations.includes("materialList")
+  ));
+  const total = parseNumericValue(materialListResponse?.total);
+  if (!captureError && Number.isFinite(total) && total > 0 && captured.length === 0) {
+    captureError = "appgrowing_browser_material_extract_empty";
+  }
   return {
     url,
     operations: Array.from(operations).sort(),
     responses,
+    request_recipes: requestRecipes,
+    replay,
     snapshot,
-    needsReauth: pageSnapshotHasAnonymousText(snapshot, connector),
+    needsReauth: pageSnapshotHasAnonymousText(snapshot, connector)
+      || responses.some((response) => response.needs_reauth === true),
     error: captureError,
     pageCrashed,
+    material_list_observed: materialListObserved,
+    material_list_data_observed: materialListDataObserved,
+    total,
+    limit: parseNumericValue(materialListResponse?.limit),
     materials: captured,
   };
 }
@@ -2917,6 +3851,17 @@ function shouldBlockAppGrowingCrawlResource(request) {
     return true;
   }
   const url = request.url?.() || "";
+  try {
+    const parsedURL = new URL(url);
+    if (
+      parsedURL.hostname === "appgrowing-global.youcloud.com"
+      && parsedURL.pathname.startsWith("/static/img/")
+    ) {
+      return true;
+    }
+  } catch {
+    // Keep the generic tracker check for malformed request URLs.
+  }
   return /(?:google-analytics|googletagmanager|doubleclick|hotjar|sentry|clarity|facebook|tiktok|analytics|collect|beacon)/i.test(url);
 }
 
@@ -3321,7 +4266,9 @@ function appGrowingResourceCandidates(item, creative) {
 }
 
 function selectAppGrowingMaterials(materials, rules, totalLimit, options = {}) {
-  const unique = uniqueMaterials(materials);
+  const allUnique = uniqueMaterials(materials);
+  const excludedKeys = options.excludedKeys instanceof Set ? options.excludedKeys : new Set();
+  const unique = allUnique.filter((material) => !excludedKeys.has(appGrowingMaterialDedupeKey(material)));
   const newCandidates = unique
     .filter((item) =>
       matchesUpperBound(item.duration_days, rules.new_materials, "duration_days")
@@ -3353,6 +4300,164 @@ function selectAppGrowingMaterials(materials, rules, totalLimit, options = {}) {
     newCandidates,
     volumeCandidates,
     selected,
+    excludedCount: allUnique.length - unique.length,
+  };
+}
+
+function extractAppGrowingMaterialListMaterials(body) {
+  const rows = valueAtPath(body, ["data", "materialList", "data"]);
+  if (!Array.isArray(rows)) {
+    return [];
+  }
+  const out = [];
+  const seen = new Set();
+  for (const row of rows) {
+    const material = normalizeAppGrowingMaterial(row?.material || row);
+    if (!material) {
+      continue;
+    }
+    const key = material.resource_url || material.material_id || JSON.stringify(material);
+    if (!seen.has(key)) {
+      seen.add(key);
+      out.push(material);
+    }
+  }
+  return out;
+}
+
+function appGrowingGraphQLRequestRecipes(postData, headers = {}, includeQueryText = false) {
+  let payload;
+  try {
+    payload = JSON.parse(postData);
+  } catch {
+    return [];
+  }
+  const entries = Array.isArray(payload) ? payload : [payload];
+  return entries.map((entry) => {
+    const query = String(entry?.query || "");
+    return {
+      operation: String(entry?.operationName || ""),
+      query_fingerprint: crypto.createHash("sha256").update(query).digest("hex").slice(0, 16),
+      query_text: includeQueryText ? query : undefined,
+      variables: appGrowingSanitizeDiagnosticValue(entry?.variables || {}),
+      header_names: Object.keys(headers || {}).map((key) => key.toLowerCase()).sort(),
+    };
+  });
+}
+
+function appGrowingSanitizeDiagnosticValue(value, depth = 0) {
+  if (depth >= 4) {
+    return "[truncated]";
+  }
+  if (typeof value === "string") {
+    return value.length > 160 ? `${value.slice(0, 157)}...` : value;
+  }
+  if (Array.isArray(value)) {
+    return value.slice(0, 20).map((item) => appGrowingSanitizeDiagnosticValue(item, depth + 1));
+  }
+  if (value && typeof value === "object") {
+    return Object.fromEntries(Object.entries(value).slice(0, 30).map(([key, item]) => [
+      key,
+      appGrowingSanitizeDiagnosticValue(item, depth + 1),
+    ]));
+  }
+  return value;
+}
+
+async function replayAppGrowingBrowserGraphQLRequest(page, request) {
+  try {
+    const result = await page.evaluate(async ({ url: requestURL, payload, originalHeaders }) => {
+      const acceptedHeaders = new Set([
+        "content-type",
+        "accept",
+        "accept-language",
+        "x-operation-name",
+        "apollographql-client-name",
+        "apollographql-client-version",
+      ]);
+      const headers = {};
+      for (const [key, value] of Object.entries(originalHeaders || {})) {
+        if (acceptedHeaders.has(key.toLowerCase())) {
+          headers[key] = value;
+        }
+      }
+      if (!headers["content-type"] && !headers["Content-Type"]) {
+        headers["content-type"] = "application/json";
+      }
+      const response = await fetch(requestURL, {
+        method: "POST",
+        credentials: "include",
+        headers,
+        body: payload,
+      });
+      return { status: response.status, text: await response.text() };
+    }, {
+      url: request.url,
+      payload: request.payload,
+      originalHeaders: request.headers,
+    });
+    const parsed = appGrowingGraphQLResult(result.status, result.text);
+    return {
+      status: parsed.status,
+      error: parsed.error || appGrowingGraphQLErrorMessage(parsed.body) || "",
+      materials_found: extractAppGrowingMaterials(parsed.body).length,
+    };
+  } catch (error) {
+    return { status: null, error: errorMessage(error), materials_found: 0 };
+  }
+}
+
+function appGrowingNovelTargetMet(materials, rules, totalLimit, excludedKeys) {
+  return selectAppGrowingMaterials(materials.filter(isAppGrowingImageMaterial), rules, totalLimit, {
+    fallbackToTopMaterials: false,
+    excludedKeys,
+  }).selected.length >= totalLimit;
+}
+
+function isAppGrowingImageMaterial(material) {
+  return material?.asset_type === "image";
+}
+
+function appGrowingSelectionMixSummary(selectedMaterials, rules, totalLimit) {
+  const numericLimit = Number(totalLimit);
+  const safeLimit = Math.max(0, Number.isFinite(numericLimit) ? Math.floor(numericLimit) : 0);
+  const newRatio = Number(rules?.new_materials?.ratio);
+  const targetNew = Math.min(
+    safeLimit,
+    Math.max(0, Math.round(safeLimit * (Number.isFinite(newRatio) ? newRatio : 0))),
+  );
+  const targetVolume = Math.max(0, safeLimit - targetNew);
+  const actualNew = selectedMaterials.filter((material) => material?.bucket === "new").length;
+  const actualVolume = selectedMaterials.filter((material) => material?.bucket === "volume").length;
+  const actualOther = Math.max(0, selectedMaterials.length - actualNew - actualVolume);
+  const selectedCount = selectedMaterials.length;
+  const ratio = (count) => selectedCount > 0 ? Number((count / selectedCount).toFixed(4)) : 0;
+
+  return {
+    target: {
+      new_materials: targetNew,
+      volume_materials: targetVolume,
+    },
+    actual: {
+      new_materials: actualNew,
+      volume_materials: actualVolume,
+      other_materials: actualOther,
+    },
+    actual_ratio: {
+      new_materials: ratio(actualNew),
+      volume_materials: ratio(actualVolume),
+      other_materials: ratio(actualOther),
+    },
+    shortfall: {
+      new_materials: Math.max(0, targetNew - actualNew),
+      volume_materials: Math.max(0, targetVolume - actualVolume),
+    },
+    selected: selectedCount,
+    requested_limit: safeLimit,
+    ratio_target_met: selectedCount === safeLimit
+      && actualOther === 0
+      && actualNew === targetNew
+      && actualVolume === targetVolume,
   };
 }
 
@@ -3410,7 +4515,9 @@ function uniqueMaterials(materials) {
   const seen = new Set();
   const out = [];
   for (const material of materials) {
-    const key = material.resource_url || material.material_id || `${material.competitor}:${material.title}:${material.duration_days}:${material.impression_estimate}`;
+    const key = appGrowingMaterialDedupeKey(material)
+      || material.material_id
+      || `${material.competitor}:${material.title}:${material.duration_days}:${material.impression_estimate}`;
     if (!key || seen.has(key)) {
       continue;
     }
@@ -3426,7 +4533,7 @@ function takeCandidates(candidates, limit, bucket, selected, selectedKeys) {
     if (remaining <= 0) {
       break;
     }
-    const key = candidate.resource_url || candidate.material_id;
+    const key = appGrowingMaterialDedupeKey(candidate) || candidate.material_id;
     if (key && selectedKeys.has(key)) {
       continue;
     }
@@ -3702,8 +4809,12 @@ function parseNumericValue(value) {
   return base * multiplier;
 }
 
-async function runCrawl(body) {
+async function runCrawl(body, options = {}) {
   assertSafeParams(body.params || {});
+  const signal = options.signal;
+  if (signal?.aborted) {
+    throw userError("crawler request was cancelled", 499);
+  }
   const connector = connectorForID(body.connector_id);
   const capability = String(body.capability || "profile_verify").trim();
   if (!connector.capabilities.includes(capability)) {
@@ -3720,18 +4831,32 @@ async function runCrawl(body) {
   }
   const credentialState = summarizeCredentialState(storageState, connector, sessionStorageState);
   let authCheck = { authenticated: false, method: "not_checked" };
-  const releaseBrowserSlot = acquireBrowserSlot();
+  const crawlerBrowserLease = await acquireCrawlerBrowserLease({
+    connectorID: connector.id,
+    capability,
+  });
   let browser;
-  let crawlerBrowserTimeout;
+  let abortHandler;
   try {
-    browser = await chromium.launch({
-      headless: crawlerHeadless(connector),
-      args: ["--disable-blink-features=AutomationControlled"],
+    if (signal) {
+      abortHandler = () => {
+        void crawlerBrowserLeases.retire(crawlerBrowserLease, "aborted");
+      };
+      signal.addEventListener("abort", abortHandler, { once: true });
+      if (signal.aborted) {
+        abortHandler();
+        throw userError("crawler request was cancelled", 499);
+      }
+    }
+    browser = await chromium.launch(chromiumLaunchOptions(crawlerHeadless(connector)));
+    crawlerBrowserLeases.attachBrowser(crawlerBrowserLease, browser);
+    if (signal?.aborted) {
+      throw userError("crawler request was cancelled", 499);
+    }
+    const context = await browser.newContext({
+      storageState,
+      ...(connector.id === "appgrowing" ? { locale: "en" } : {}),
     });
-    crawlerBrowserTimeout = setTimeout(() => {
-      void browser.close().catch(() => {});
-    }, crawlerBrowserTimeoutMS);
-    const context = await browser.newContext({ storageState });
     await restoreSessionStorage(context, sessionStorageState);
     const page = await context.newPage();
     attachAuthWatcher(page, connector, (latestAuthCheck) => {
@@ -3744,15 +4869,25 @@ async function runCrawl(body) {
     const title = await page.title().catch(() => "");
     const currentURL = page.url();
     if (!authCheck.authenticated) {
-      authCheck = await verifyConnectorPageAuth(page, connector).catch(async () =>
-        verifyConnectorAuth(context, connector),
-      );
+      const pageCheck = await verifyConnectorPageAuth(page, connector).catch(() => authCheck);
+      authCheck = pageCheck?.authenticated ? pageCheck : await verifyConnectorAuth(context, connector);
     }
     const loginDetected = isLoginURL(currentURL, connector);
-    if (!authCheck.authenticated && !loginDetected) {
-      authCheck = browserStateAuthFallback(authCheck, "browser_state_non_login_url");
+    const profileVerify = capability === "profile_verify";
+    const identityVerificationError = loginDetected ? "" : connectorAuthVerificationError(authCheck);
+    let businessProbe = {
+      authCheck,
+      needsReauth: false,
+      verificationError: identityVerificationError,
+    };
+    if (profileVerify && authCheck.authenticated && !loginDetected && !identityVerificationError) {
+      businessProbe = await verifyAppGrowingBusinessAccess(page, connector, authCheck);
+      authCheck = businessProbe.authCheck;
     }
-    const needsReauth = !authCheck.authenticated || loginDetected;
+    const needsReauth = loginDetected
+      || (!authCheck.authenticated && !businessProbe.verificationError)
+      || businessProbe.needsReauth;
+    const verificationFailed = Boolean(businessProbe.verificationError);
     const authProbe = {
       url: currentURL,
       title,
@@ -3760,7 +4895,7 @@ async function runCrawl(body) {
       login_detected: loginDetected,
       auth_check: authCheck,
     };
-    if (!needsReauth && capability === "material_search") {
+    if (!needsReauth && !verificationFailed && capability === "material_search") {
       if (connector.id !== "appgrowing") {
         throw userError(`connector ${connector.id} has no material_search executor`, 400);
       }
@@ -3779,20 +4914,21 @@ async function runCrawl(body) {
       };
     }
     let extracted = {};
-    if (!needsReauth && capability === "page_extract") {
+    if (!needsReauth && !verificationFailed && capability === "page_extract") {
       await runDeclarativePageSteps(page, body.params?.steps);
       extracted = await extractDeclarativePageData(page, body.params);
     }
     await context.close();
-    const profileVerify = capability === "profile_verify";
     return {
-      status: needsReauth ? "need_reauth" : "completed",
+      status: needsReauth ? "need_reauth" : verificationFailed ? "failed" : "completed",
       downloaded: 0,
       output_prefix: `local://credential-broker/${body.profile_id || "unknown"}`,
       message: needsReauth
-        ? "stored browser state reached a login page; re-authentication is required"
+        ? "stored browser state cannot access AppGrowing materials; re-authentication is required"
+        : verificationFailed
+          ? `AppGrowing credential verification failed: ${businessProbe.verificationError}`
         : profileVerify
-          ? `stored browser state verified for ${connector.id}`
+          ? `stored browser state and material access verified for ${connector.id}`
           : `page_extract completed for ${connector.id}`,
       raw: {
         connector_id: body.connector_id,
@@ -3803,9 +4939,10 @@ async function runCrawl(body) {
       },
     };
   } finally {
-    clearTimeout(crawlerBrowserTimeout);
-    await browser?.close().catch(() => {});
-    releaseBrowserSlot();
+    if (signal && abortHandler) {
+      signal.removeEventListener("abort", abortHandler);
+    }
+    await crawlerBrowserLeases.retire(crawlerBrowserLease);
   }
 }
 
@@ -3932,13 +5069,19 @@ const server = http.createServer(async (req, res) => {
     const url = new URL(req.url || "/", publicURL);
 
     if (req.method === "GET" && (url.pathname === "/healthz" || url.pathname === "/readyz")) {
-      writeJSON(res, 200, {
-        ok: true,
+      const playwrightReady = fs.existsSync(chromium.executablePath());
+      const isReadinessProbe = url.pathname === "/readyz";
+      writeJSON(res, isReadinessProbe && !playwrightReady ? 503 : 200, {
+        ok: !isReadinessProbe || playwrightReady,
         service: "crawler-worker",
-        playwright: true,
+        playwright: playwrightReady,
         remote_ui: remoteBrowserUI,
-        active_browsers: browserCapacity.active(),
-        max_open_browsers: browserCapacity.limit(),
+        active_browsers: crawlerBrowserCapacity.active() + loginBrowserCapacity.active(),
+        max_open_browsers: crawlerBrowserCapacity.limit() + loginBrowserCapacity.limit(),
+        active_crawl_browsers: crawlerBrowserCapacity.active(),
+        max_crawl_browsers: crawlerBrowserCapacity.limit(),
+        active_login_browsers: loginBrowserCapacity.active(),
+        max_login_browsers: loginBrowserCapacity.limit(),
       });
       return;
     }
@@ -3950,6 +5093,7 @@ const server = http.createServer(async (req, res) => {
         return;
       }
       const connector = connectorForID(body.connector_id);
+      await supersedeLoginSessions(body.profile_id);
       const expiresAt = Date.now() + loginSessionTTLMS;
       activeSessions.set(body.session_token, {
         profileID: body.profile_id,
@@ -3964,6 +5108,10 @@ const server = http.createServer(async (req, res) => {
         page: null,
         viewport: sessionViewport,
         error: "",
+        streamError: "",
+        autoCompleting: false,
+        closeAfterCompletion: false,
+        expireAfterCompletion: false,
       });
       scheduleSessionExpiry(body.session_token, expiresAt);
       writeJSON(res, 200, {
@@ -3977,6 +5125,22 @@ const server = http.createServer(async (req, res) => {
     if (sessionPath) {
       const session = getSession(sessionPath.token);
       if (!session) {
+        if (req.method === "GET" && sessionPath.action === "stream") {
+          res.writeHead(200, {
+            "content-type": "image/svg+xml; charset=utf-8",
+            "cache-control": "no-store",
+          });
+          res.end(unavailableSessionImage());
+          return;
+        }
+        if (req.method === "GET" && sessionPath.action === "") {
+          res.writeHead(410, {
+            "content-type": "text/html; charset=utf-8",
+            "cache-control": "no-store",
+          });
+          res.end(unavailableSessionHTML());
+          return;
+        }
         writeJSON(res, 404, { error: "login session not found in worker; start a new binding session" });
         return;
       }
@@ -4001,7 +5165,12 @@ const server = http.createServer(async (req, res) => {
         return;
       }
       if (req.method === "POST" && sessionPath.action === "complete") {
-        writeJSON(res, 200, await completeSession(session, sessionPath.token));
+        try {
+          writeJSON(res, 200, await completeSession(session, sessionPath.token));
+        } catch (err) {
+          session.error = err instanceof Error ? err.message : String(err);
+          throw err;
+        }
         return;
       }
       if (req.method === "GET" && sessionPath.action === "screenshot") {
@@ -4019,7 +5188,7 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (req.method === "POST" && url.pathname === "/crawl") {
-      writeJSON(res, 200, await runCrawl(await readJSON(req)));
+      await handleCrawlRequest(req, res);
       return;
     }
 
@@ -4032,21 +5201,37 @@ const server = http.createServer(async (req, res) => {
 export {
   appGrowingAppMaterialListVariables,
   appGrowingBrandFromStrategyMemory,
+  appGrowingBrowserFallbackCompetitors,
+  appGrowingCompetitorDiagnostics,
   appGrowingGraphQLDateWindow,
+  appGrowingBusinessProbeResult,
+  appGrowingGraphQLNeedsReauth,
   appGrowingGraphQLRequest,
+  appGrowingMaterialDedupeKey,
   appGrowingMaterialURL,
+  appGrowingBrowserNoProgressThreshold,
+  appGrowingBrowserCaptureShouldRetry,
+  appGrowingMaterialSearchBlockingError,
   appGrowingSearchAppVariables,
+  appGrowingSelectionMixSummary,
   appGrowingShouldUseAdaptiveBrowserFallback,
   captureAppGrowingMaterialPage,
+  authCheckFromBody,
+  closeRemoteBrowser,
   connectorGraphQLHeaders,
+  connectorAuthVerificationError,
   connectorForID,
   connectorTargetURL,
+  deferSessionExpiryWhileCompleting,
   extractAppGrowingMaterials,
   isBrowserPageCrashError,
+  isAppGrowingImageMaterial,
   normalizeDeclarativeConnector,
   normalizeAppGrowingMaterial,
+  selectAppGrowingMaterials,
   shouldBlockAppGrowingCrawlResource,
   shouldUseAppGrowingBrowserFallback,
+  verifyConnectorPageAuth,
 };
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
@@ -4054,6 +5239,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     console.log(`crawler-worker listening on ${publicURL}`);
     console.log(`completion callback target: ${apiURL}/api/credential-login-sessions/complete`);
     console.log(`remote browser UI: ${remoteBrowserUI ? "enabled" : "disabled"}`);
+    console.log(`browser proxy: ${browserProxyServer ? "configured" : "disabled"}`);
     if (databaseURL) {
       console.log("credential DB store enabled");
     } else {

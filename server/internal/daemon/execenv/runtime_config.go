@@ -388,9 +388,14 @@ func CleanupRuntimeConfig(workDir, provider string) error {
 // about the Multica runtime environment and available CLI tools.
 func buildMetaSkillContent(provider string, ctx TaskContextForEnv) string {
 	var b strings.Builder
+	isCreativeDomainTask := isCreativeDomainTaskContext(ctx.TaskContext)
 
 	b.WriteString("# Multica Agent Runtime\n\n")
-	b.WriteString("You are a coding agent in the Multica platform. Use the `multica` CLI to interact with the platform.\n\n")
+	if isCreativeDomainTask {
+		b.WriteString("You are an agent in the Multica platform. Use the `multica` CLI to interact with the platform.\n\n")
+	} else {
+		b.WriteString("You are a coding agent in the Multica platform. Use the `multica` CLI to interact with the platform.\n\n")
+	}
 
 	// Always emit agent identity so the agent knows who it is, even when
 	// dispatched via @mention on an issue assigned to a different agent.
@@ -501,6 +506,7 @@ func buildMetaSkillContent(provider string, ctx TaskContextForEnv) string {
 	b.WriteString("- `multica issue get <id> --output json` — Get full issue details.\n")
 	b.WriteString("- `multica issue comment list <issue-id> [--thread <comment-id> [--tail N] | --recent N] [--before <ts> --before-id <uuid>] [--since <RFC3339>] --output json` — List comments on an issue. Default returns the full flat timeline (server cap 2000). On busy issues prefer the thread-aware reads: `--thread <comment-id>` returns one conversation (root + every reply); `--thread <id> --tail N` caps replies to the N most recent (root is always included, even at `--tail 0`); `--recent N` returns the N most recently active threads. `--before` / `--before-id` walks older replies under `--thread --tail` (stderr label: `Next reply cursor`) or older threads under `--recent` (stderr label: `Next thread cursor`). `--since` is for incremental polling and may combine with `--thread` (with or without `--tail`) or `--recent`.\n")
 	b.WriteString("- `multica issue create --title \"...\" [--description \"...\" | --description-stdin | --description-file <path>] [--priority X] [--status X] [--assignee X | --assignee-id <uuid>] [--parent <issue-id>] [--project <project-id>] [--due-date <RFC3339>] [--attachment <path>]` — Create a new issue; `--attachment` may be repeated.\n")
+	b.WriteString("- `multica issue create-batch --input-file <manifest.json> --output json` — Create and assign several native Issues in one tool invocation. The manifest supports shared defaults plus per-Issue title, description, assignee, parent, project, metadata, and duplicate policy; every created Issue still follows the normal assignment trigger and audit path.\n")
 	b.WriteString("- `multica issue update <id> [--title X] [--description X | --description-stdin | --description-file <path>] [--priority X] [--status X] [--assignee X | --assignee-id <uuid>] [--parent <issue-id>] [--project <project-id>] [--due-date <RFC3339>]` — Update issue fields; use `--parent \"\"` to clear parent.\n")
 	b.WriteString("- `multica repo checkout <url> [--ref <branch-or-sha>]` — Check out a repository into the working directory (creates a git worktree with a dedicated branch; use `--ref` for review/QA on a specific branch, tag, or commit)\n")
 	b.WriteString("- `multica issue status <id> <status>` — Shortcut for `issue update --status` when you only need to flip status (todo, in_progress, in_review, done, blocked, backlog, cancelled)\n")
@@ -520,10 +526,22 @@ func buildMetaSkillContent(provider string, ctx TaskContextForEnv) string {
 	//     non-UTF-8 codepage (issues #2198 / #2236 / #2376) — which is why
 	//     Windows uses `--content-file`, not stdin.
 	// Because the corruption is shell-driven, the guardrail is provider-agnostic.
-	b.WriteString("- `multica issue comment add <issue-id> [--content \"...\" | --content-stdin | --content-file <path>] [--parent <comment-id>] [--attachment <path>]` — Post a comment. For agent-authored bodies, do NOT inline `--content` — the shell can rewrite backticks, `$()`, quotes, or newlines before the CLI sees them; use the platform-correct non-inline mode shown in ## Comment Formatting below. Run `multica issue comment add --help` for details.\n")
+	if isCreativeDomainTask {
+		b.WriteString("- `multica issue comment add <issue-id> [--content \"...\" | --content-stdin | --content-file <path>] [--parent <comment-id>] [--attachment <path>]` — Post a user-decision, genuine-blocker, or final-acceptance comment only when the domain contract calls for it.\n")
+	} else {
+		b.WriteString("- `multica issue comment add <issue-id> [--content \"...\" | --content-stdin | --content-file <path>] [--parent <comment-id>] [--attachment <path>]` — Post a comment. For agent-authored bodies, do NOT inline `--content` — the shell can rewrite backticks, `$()`, quotes, or newlines before the CLI sees them; use the platform-correct non-inline mode shown in ## Comment Formatting below. Run `multica issue comment add --help` for details.\n")
+	}
 	b.WriteString("- `multica issue metadata list <issue-id> [--output json]` — List every metadata key pinned to an issue. Empty `{}` is normal.\n")
 	b.WriteString("- `multica issue metadata set <issue-id> --key <k> --value <v> [--type string|number|bool]` — Pin (or overwrite) a single metadata key. The CLI auto-infers JSON primitives, so URLs and plain text are stored as strings — pass `--type number` or `--type bool` only when the semantic type matters.\n")
 	b.WriteString("- `multica issue metadata delete <issue-id> --key <k>` — Remove a metadata key.\n\n")
+	b.WriteString("### Image processing\n")
+	b.WriteString("- `multica image edit --input <reference-image> --prompt-file <prompt.txt> --size <canvas> --output-file <image.png> --output json` — Generate one model-edited raster image with the platform image provider. This is a shared image-edit capability, not a business workflow; the bound Skill defines its inputs, prompt, evidence, and delivery semantics.\n")
+	b.WriteString("- `multica image edit-batch --input-file <manifest.json> --output json` — Execute a generic dependency-aware image-edit DAG. Manifest jobs may use local path inputs or a prior job output through `{\"job\":\"<id>\"}`; independent ready jobs run concurrently, while the host-wide provider slot limiter bounds aggregate requests across agent processes.\n")
+	b.WriteString("- The image provider is configured in the daemon environment: `OPENAI_API_KEY`, `OPENAI_BASE_URL`, and when required `OPENAI_IMAGE_EDIT_PATH` / `OPENAI_IMAGE_FILE_FIELD`. If credentials, the selected reference, or an approved prompt are missing, report `needs_input`; do not substitute mock output, Pillow, SVG, Canvas, or HTML for a model-generated image. A model-generated visual body may only receive an approved brand frame through its dedicated deterministic post-processing stage. Do not print secrets.\n")
+	if !isCreativeDomainTask {
+		b.WriteString("- For a multi-stage media task, post every material decision and transformation as its own Issue comment with the relevant attachment: analysis, approved prompt and dimensions, model output, deterministic post-processing coordinates and verification, then final QC. Do not collapse these artifacts into a terminal summary or hide them in local logs.\n")
+	}
+	b.WriteString("\n")
 	b.WriteString("### Squad maintenance\n")
 	b.WriteString("- `multica squad member set-role <squad-id> --member-id <id> --member-type <agent|member> --role <role> [--output json]` — Change a squad member role in place; use this instead of remove+add when only the role changes.\n\n")
 
@@ -536,15 +554,17 @@ func buildMetaSkillContent(provider string, ctx TaskContextForEnv) string {
 	// `--content`. The platform split mirrors BuildCommentReplyInstructions:
 	// Windows → file (stdin pipes drop non-ASCII), Linux/macOS → quoted HEREDOC
 	// over stdin (the quoted delimiter blocks backtick / `$()` / `$VAR`).
-	b.WriteString("## Comment Formatting\n\n")
-	if runtimeGOOS == "windows" {
-		b.WriteString("On Windows, **always write the comment body to a UTF-8 file with your file-write tool first, then post it with `--content-file <path>`** — do NOT pipe via `--content-stdin`. PowerShell 5.1's `$OutputEncoding` defaults to ASCIIEncoding when piping to a native command, silently dropping non-ASCII characters as `?` before they reach `multica.exe`. Never use inline `--content` for agent-authored comments. ")
-		b.WriteString("Keep the same `--parent` value from the trigger comment when replying. ")
-		b.WriteString("Do not compress a multi-paragraph answer into one line and do not rely on `\\n` escapes.\n\n")
-	} else {
-		b.WriteString("For issue comments, always use `--content-stdin` with a HEREDOC, even for short single-line replies — use a quoted delimiter (`<<'COMMENT'`) so the shell does not expand backticks, `$()`, or `$VAR` inside the body. `--content-file <path>` works too. ")
-		b.WriteString("Never use inline `--content` for agent-authored comments: unescaped backticks, `$()`, `$VAR`, or quotes in the body are rewritten by the shell before the CLI receives them. Keep the same `--parent` value from the trigger comment when replying. ")
-		b.WriteString("Do not compress a multi-paragraph answer into one line and do not rely on `\\n` escapes.\n\n")
+	if !isCreativeDomainTask {
+		b.WriteString("## Comment Formatting\n\n")
+		if runtimeGOOS == "windows" {
+			b.WriteString("On Windows, **always write the comment body to a UTF-8 file with your file-write tool first, then post it with `--content-file <path>`** — do NOT pipe via `--content-stdin`. PowerShell 5.1's `$OutputEncoding` defaults to ASCIIEncoding when piping to a native command, silently dropping non-ASCII characters as `?` before they reach `multica.exe`. Never use inline `--content` for agent-authored comments. ")
+			b.WriteString("Keep the same `--parent` value from the trigger comment when replying. ")
+			b.WriteString("Do not compress a multi-paragraph answer into one line and do not rely on `\\n` escapes.\n\n")
+		} else {
+			b.WriteString("For issue comments, always use `--content-stdin` with a HEREDOC, even for short single-line replies — use a quoted delimiter (`<<'COMMENT'`) so the shell does not expand backticks, `$()`, or `$VAR` inside the body. `--content-file <path>` works too. ")
+			b.WriteString("Never use inline `--content` for agent-authored comments: unescaped backticks, `$()`, `$VAR`, or quotes in the body are rewritten by the shell before the CLI receives them. Keep the same `--parent` value from the trigger comment when replying. ")
+			b.WriteString("Do not compress a multi-paragraph answer into one line and do not rely on `\\n` escapes.\n\n")
+		}
 	}
 
 	// Inject available repositories section.
@@ -596,7 +616,7 @@ func buildMetaSkillContent(provider string, ctx TaskContextForEnv) string {
 	// issue (comment-triggered or assignment-triggered). Chat / quick-create /
 	// run-only autopilot don't carry an issue id and would just generate a
 	// failed `metadata list` call on every entry.
-	hasIssueContext := ctx.ChatSessionID == "" && ctx.QuickCreatePrompt == "" && ctx.AutopilotRunID == ""
+	hasIssueContext := !isCreativeDomainTask && ctx.ChatSessionID == "" && ctx.QuickCreatePrompt == "" && ctx.AutopilotRunID == ""
 	if hasIssueContext {
 		b.WriteString("## Issue Metadata\n\n")
 		b.WriteString("Each issue carries a small KV `metadata` bag — a high-signal scratchpad where agents pin the handful of facts that future runs on this same issue will look up over and over (the PR URL, the deploy URL, what we're blocked on). It is NOT a place to record every fact you discover — that's what comments and the description are for. Most runs write **zero** new keys; that's the expected case, not a failure.\n\n")
@@ -607,7 +627,7 @@ func buildMetaSkillContent(provider string, ctx TaskContextForEnv) string {
 		b.WriteString("- **Recommended keys** (reuse these names so queries stay consistent across the workspace; coin a new key only when none fits): `pr_url`, `pr_number`, `pipeline_status`, `deploy_url`, `external_issue_url`, `waiting_on`, `blocked_reason`, `decision`. Use snake_case ASCII. The list is short on purpose — most issues only need 1-2 of these pinned, not the full set.\n\n")
 	}
 
-	isAssignmentTriggered := ctx.ChatSessionID == "" && ctx.QuickCreatePrompt == "" && ctx.AutopilotRunID == "" && ctx.TriggerCommentID == ""
+	isAssignmentTriggered := !isCreativeDomainTask && ctx.ChatSessionID == "" && ctx.QuickCreatePrompt == "" && ctx.AutopilotRunID == "" && ctx.TriggerCommentID == ""
 	if isAssignmentTriggered {
 		b.WriteString("## Instruction Precedence\n\n")
 		b.WriteString("Agent Identity instructions have priority over the assignment workflow below. ")
@@ -668,6 +688,8 @@ func buildMetaSkillContent(provider string, ctx TaskContextForEnv) string {
 		}
 		b.WriteString("- Complete the autopilot instructions directly\n")
 		b.WriteString("- Do not run `multica issue get`, `multica issue comment add`, or `multica issue status` for this run unless the autopilot instructions explicitly tell you to create or update an issue\n\n")
+	} else if isCreativeDomainTask {
+		b.WriteString("**This is a structured creative-domain task.** Its task context and bound Skills are authoritative. Record execution evidence in domain objects and native task results; keep the Issue limited to user decisions, genuine blockers, and final acceptance.\n\n")
 	} else if ctx.TriggerCommentID != "" {
 		// Comment-triggered: focus on reading and replying
 		b.WriteString("**This task was triggered by a NEW comment.** Your primary job is to respond to THIS specific comment, even if you have handled similar requests before in this session.\n\n")
@@ -719,7 +741,7 @@ func buildMetaSkillContent(provider string, ctx TaskContextForEnv) string {
 	// `done`, and the agent has nothing to do or avoid on that path.
 	// Section is skipped for chat, quick-create, and run-only autopilot
 	// runs (no parent/child semantics there).
-	if ctx.IssueID != "" && ctx.ChatSessionID == "" && ctx.QuickCreatePrompt == "" && ctx.AutopilotRunID == "" {
+	if !isCreativeDomainTask && ctx.IssueID != "" && ctx.ChatSessionID == "" && ctx.QuickCreatePrompt == "" && ctx.AutopilotRunID == "" {
 		b.WriteString("## Sub-issue Creation\n\n")
 		b.WriteString("**Choosing `--status` when creating sub-issues.** `--status todo` = **start now** (the default — an agent assignee fires immediately). `--status backlog` = **wait** (assignee is set but no trigger fires; promote later with `multica issue status <child-id> todo`). Parallel children: all `--status todo`. Strict serial Step 1→2→3: only Step 1 is `todo`; Steps 2/3 are `--status backlog` from the start, promoted in turn.\n\n")
 	}
@@ -730,7 +752,9 @@ func buildMetaSkillContent(provider string, ctx TaskContextForEnv) string {
 		case "claude", "codebuddy":
 			// Claude/CodeBuddy discovers skills natively from .claude/skills/ — just list names.
 			b.WriteString("You have the following skills installed (discovered automatically):\n\n")
-		case "codex", "copilot", "opencode", "openclaw", "pi", "cursor", "kimi", "kiro", "antigravity":
+		case "codex":
+			b.WriteString("You have the following skills installed (discovered automatically). The `r0` skill root maps to the `skills` directory inside the active `CODEX_HOME`; expand that root before reading a listed file:\n\n")
+		case "copilot", "opencode", "openclaw", "pi", "cursor", "kimi", "kiro", "antigravity":
 			// Codex, Copilot, OpenCode, OpenClaw, Pi, Cursor, Kimi, Kiro, and
 			// Antigravity discover skills natively from their respective paths.
 			// For OpenClaw, the daemon also writes a per-task openclaw-config.json
@@ -753,7 +777,15 @@ func buildMetaSkillContent(provider string, ctx TaskContextForEnv) string {
 			// providers get this natively from frontmatter discovery; providers
 			// without native discovery (hermes/default) only ever see this
 			// list, so a bare name gives them no signal for on-demand loading.
-			if desc := strings.TrimSpace(skill.Description); desc != "" {
+			desc := strings.TrimSpace(skill.Description)
+			if provider == "codex" {
+				locator := "r0/" + sanitizeSkillName(skill.Name) + "/SKILL.md"
+				if desc != "" {
+					fmt.Fprintf(&b, "- **%s** — %s (file: %s)\n", skill.Name, desc, locator)
+				} else {
+					fmt.Fprintf(&b, "- **%s** (file: %s)\n", skill.Name, locator)
+				}
+			} else if desc != "" {
 				fmt.Fprintf(&b, "- **%s** — %s\n", skill.Name, desc)
 			} else {
 				fmt.Fprintf(&b, "- **%s**\n", skill.Name)
@@ -762,21 +794,23 @@ func buildMetaSkillContent(provider string, ctx TaskContextForEnv) string {
 		b.WriteString("\n")
 	}
 
-	b.WriteString("## Mentions\n\n")
-	b.WriteString("Mention links are **side-effecting actions**, not just formatting:\n\n")
-	b.WriteString("- `[MUL-123](mention://issue/<issue-id>)` — clickable link to an issue (safe, no side effect)\n")
-	b.WriteString("- `[@Name](mention://member/<user-id>)` — **sends a notification to a human**\n")
-	b.WriteString("- `[@Name](mention://agent/<agent-id>)` — **enqueues a new run for that agent**\n\n")
-	b.WriteString("### When NOT to use a mention link\n\n")
-	b.WriteString("- Referring to someone in prose (e.g. \"GPT-Boy is right\") — write the plain name, no link.\n")
-	b.WriteString("- **Replying to another agent that just spoke to you.** By default, do NOT put a `mention://agent/...` link anywhere in your reply. The platform already shows your comment to everyone on the issue; re-mentioning the other agent will make them run again, and if they reply with a mention back, you will be triggered again. That is a loop and it costs the user money.\n")
-	b.WriteString("- Thanking, acknowledging, wrapping up, or signing off. These are exactly the moments where an accidental `@mention` causes the other agent to reply \"you're welcome\" and restart the loop. If the work is done, **end with no mention at all**.\n\n")
-	b.WriteString("### When a mention IS appropriate\n\n")
-	b.WriteString("- Escalating to a human owner who is not yet involved.\n")
-	b.WriteString("- Delegating a concrete sub-task to another agent for the first time, with a clear request.\n")
-	b.WriteString("- The user explicitly asked you to loop someone in.\n\n")
-	b.WriteString("If you are unsure whether a mention is warranted, **don't mention**. Silence ends conversations; `@` restarts them.\n\n")
-	b.WriteString("If you need IDs for mention links, inspect the relevant CLI help path and request JSON output when available.\n\n")
+	if !isCreativeDomainTask {
+		b.WriteString("## Mentions\n\n")
+		b.WriteString("Mention links are **side-effecting actions**, not just formatting:\n\n")
+		b.WriteString("- `[MUL-123](mention://issue/<issue-id>)` — clickable link to an issue (safe, no side effect)\n")
+		b.WriteString("- `[@Name](mention://member/<user-id>)` — **sends a notification to a human**\n")
+		b.WriteString("- `[@Name](mention://agent/<agent-id>)` — **enqueues a new run for that agent**\n\n")
+		b.WriteString("### When NOT to use a mention link\n\n")
+		b.WriteString("- Referring to someone in prose (e.g. \"GPT-Boy is right\") — write the plain name, no link.\n")
+		b.WriteString("- **Replying to another agent that just spoke to you.** By default, do NOT put a `mention://agent/...` link anywhere in your reply. The platform already shows your comment to everyone on the issue; re-mentioning the other agent will make them run again, and if they reply with a mention back, you will be triggered again. That is a loop and it costs the user money.\n")
+		b.WriteString("- Thanking, acknowledging, wrapping up, or signing off. These are exactly the moments where an accidental `@mention` causes the other agent to reply \"you're welcome\" and restart the loop. If the work is done, **end with no mention at all**.\n\n")
+		b.WriteString("### When a mention IS appropriate\n\n")
+		b.WriteString("- Escalating to a human owner who is not yet involved.\n")
+		b.WriteString("- Delegating a concrete sub-task to another agent for the first time, with a clear request.\n")
+		b.WriteString("- The user explicitly asked you to loop someone in.\n\n")
+		b.WriteString("If you are unsure whether a mention is warranted, **don't mention**. Silence ends conversations; `@` restarts them.\n\n")
+		b.WriteString("If you need IDs for mention links, inspect the relevant CLI help path and request JSON output when available.\n\n")
+	}
 
 	b.WriteString("## Attachments\n\n")
 	b.WriteString("Issues and comments may include file attachments (images, documents, etc.).\n")
@@ -786,34 +820,45 @@ func buildMetaSkillContent(provider string, ctx TaskContextForEnv) string {
 	b.WriteString("All interactions with Multica platform resources — including issues, comments, attachments, images, files, and any other platform data — **must** go through the `multica` CLI. ")
 	b.WriteString("Do NOT use `curl`, `wget`, or any other HTTP client to access Multica URLs or APIs directly. ")
 	b.WriteString("Multica resource URLs require authenticated access that only the `multica` CLI can provide.\n\n")
-	b.WriteString("If you need to perform an operation that is not covered by any existing `multica` command, ")
-	b.WriteString("do NOT attempt to work around it. Instead, post a comment mentioning the workspace owner to request the missing functionality.\n\n")
+	if !isCreativeDomainTask {
+		b.WriteString("If you need to perform an operation that is not covered by any existing `multica` command, ")
+		b.WriteString("do NOT attempt to work around it. Instead, post a comment mentioning the workspace owner to request the missing functionality.\n\n")
+	}
 
-	b.WriteString("## Output\n\n")
-	switch {
-	case ctx.ChatSessionID != "":
-		b.WriteString("This is a chat task. Your final assistant response is delivered to the chat automatically.\n")
-		b.WriteString("Do NOT call `multica issue comment add` for ordinary chat replies. Only operate on issue comments when the user explicitly asks you to work on a specific issue.\n")
-	case ctx.AutopilotRunID != "":
-		b.WriteString("This is a run-only autopilot task, so there may be no issue comment to post. Your final assistant output is captured automatically as the autopilot run result. Keep it concise and state the outcome.\n")
-	case ctx.QuickCreatePrompt != "":
-		b.WriteString("This is a quick-create task. There is NO existing issue to comment on. Your final stdout is captured automatically and the platform writes the user's success/failure inbox notification based on whether `multica issue create` succeeded.\n\n")
-		b.WriteString("- Do NOT call `multica issue comment add` — the issue you just created has no conversation context for this run.\n")
-		b.WriteString("- Print exactly one final line: `Created <identifier-or-id>: <title>` after a successful `multica issue create`. Use the created issue's `identifier` from JSON output when available; otherwise use its `id`. Do not assume any workspace issue prefix such as `MUL-`; workspaces can use custom prefixes.\n")
-		b.WriteString("- On CLI failure, exit with the CLI error as the only output. The platform translates that into a `quick_create_failed` inbox item carrying the original prompt for the user.\n")
-	default:
-		if ctx.IsSquadLeader {
-			b.WriteString("⚠️ **Final results MUST be delivered via `multica issue comment add`** — unless your outcome is `no_action`. When you evaluate a trigger and decide no action is needed, calling `multica squad activity <issue-id> no_action --reason \"...\"` alone is sufficient; you MUST exit without posting any comment. DO NOT post a comment that announces no_action, acknowledges another agent, or says you are exiting silently — such comments are noise. For all other outcomes (`action`, `failed`), a comment is still mandatory.\n\n")
-		} else {
-			b.WriteString("⚠️ **Final results MUST be delivered via `multica issue comment add`.** The user does NOT see your terminal output, assistant chat text, or run logs — only comments on the issue. A task that finishes without a result comment is invisible to the user, even if the work itself was correct.\n\n")
+	if !isCreativeDomainTask {
+		b.WriteString("## Output\n\n")
+		switch {
+		case ctx.ChatSessionID != "":
+			b.WriteString("This is a chat task. Your final assistant response is delivered to the chat automatically.\n")
+			b.WriteString("Do NOT call `multica issue comment add` for ordinary chat replies. Only operate on issue comments when the user explicitly asks you to work on a specific issue.\n")
+		case ctx.AutopilotRunID != "":
+			b.WriteString("This is a run-only autopilot task, so there may be no issue comment to post. Your final assistant output is captured automatically as the autopilot run result. Keep it concise and state the outcome.\n")
+		case ctx.QuickCreatePrompt != "":
+			b.WriteString("This is a quick-create task. There is NO existing issue to comment on. Your final stdout is captured automatically and the platform writes the user's success/failure inbox notification based on whether `multica issue create` succeeded.\n\n")
+			b.WriteString("- Do NOT call `multica issue comment add` — the issue you just created has no conversation context for this run.\n")
+			b.WriteString("- Print exactly one final line: `Created <identifier-or-id>: <title>` after a successful `multica issue create`. Use the created issue's `identifier` from JSON output when available; otherwise use its `id`. Do not assume any workspace issue prefix such as `MUL-`; workspaces can use custom prefixes.\n")
+			b.WriteString("- On CLI failure, exit with the CLI error as the only output. The platform translates that into a `quick_create_failed` inbox item carrying the original prompt for the user.\n")
+		default:
+			if ctx.IsSquadLeader {
+				b.WriteString("⚠️ **Final results MUST be delivered via `multica issue comment add`** — unless your outcome is `no_action`. When you evaluate a trigger and decide no action is needed, calling `multica squad activity <issue-id> no_action --reason \"...\"` alone is sufficient; you MUST exit without posting any comment. DO NOT post a comment that announces no_action, acknowledges another agent, or says you are exiting silently — such comments are noise. For all other outcomes (`action`, `failed`), a comment is still mandatory.\n\n")
+			} else {
+				b.WriteString("⚠️ **Final results MUST be delivered via `multica issue comment add`.** The user does NOT see your terminal output, assistant chat text, or run logs — only comments on the issue. A task that finishes without a result comment is invisible to the user, even if the work itself was correct.\n\n")
+			}
+			b.WriteString("Keep comments concise and natural — state the outcome, not the process.\n")
+			b.WriteString("Good: \"Fixed the login redirect. PR: https://...\"\n")
+			b.WriteString("Bad: \"1. Read the issue 2. Found the bug in auth.go 3. Created branch 4. ...\"\n")
+			b.WriteString("When referencing an issue in a comment, use the issue mention format `[MUL-123](mention://issue/<issue-id>)` so it renders as a clickable link. (Issue mentions have no side effect; only member/agent mentions do — see the Mentions section above.)\n")
 		}
-		b.WriteString("Keep comments concise and natural — state the outcome, not the process.\n")
-		b.WriteString("Good: \"Fixed the login redirect. PR: https://...\"\n")
-		b.WriteString("Bad: \"1. Read the issue 2. Found the bug in auth.go 3. Created branch 4. ...\"\n")
-		b.WriteString("When referencing an issue in a comment, use the issue mention format `[MUL-123](mention://issue/<issue-id>)` so it renders as a clickable link. (Issue mentions have no side effect; only member/agent mentions do — see the Mentions section above.)\n")
 	}
 
 	return b.String()
+}
+
+func isCreativeDomainTaskContext(taskContext json.RawMessage) bool {
+	var envelope struct {
+		Type string `json:"type"`
+	}
+	return json.Unmarshal(taskContext, &envelope) == nil && envelope.Type == "creative_domain_task"
 }
 
 func writeIntegrationCredentialsBrief(b *strings.Builder, ctx TaskContextForEnv) {

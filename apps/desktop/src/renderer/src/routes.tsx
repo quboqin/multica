@@ -23,11 +23,13 @@ import { AutopilotsPage } from "@multica/views/autopilots/components";
 import { MyIssuesPage } from "@multica/views/my-issues";
 import { FavoritesPage } from "@multica/views/favorites";
 import { SkillsPage } from "@multica/views/skills";
+import { CreativeStudioPage } from "@multica/views/creative";
 import { DesktopRuntimesPage } from "./components/desktop-runtimes-page";
 import { DesktopAgentsPage } from "./components/desktop-agents-page";
 import { SquadsPage, SquadDetailPage as SquadDetailPageView } from "@multica/views/squads/components";
 import { InboxPage } from "@multica/views/inbox";
 import { SettingsPage } from "@multica/views/settings";
+import { ChangelogPage } from "@multica/views/changelog";
 import { useT } from "@multica/views/i18n";
 import { Download, Server } from "lucide-react";
 import { DaemonSettingsTab } from "./components/daemon-settings-tab";
@@ -186,6 +188,7 @@ export const appRoutes: RouteObject[] = [
             handle: { title: "Runtime" },
           },
           { path: "skills", element: <SkillsPage />, handle: { title: "Skills" } },
+          { path: "creative", element: <CreativeStudioPage />, handle: { title: "Creative Studio" } },
           {
             path: "skills/:id",
             element: <SkillDetailPage />,
@@ -202,7 +205,7 @@ export const appRoutes: RouteObject[] = [
             element: <MemberDetailPage />,
             handle: { title: "Member" },
           },
-          { path: "squads", element: <SquadsPage />, handle: { title: "Squads" } },
+          { path: "squads", element: <SquadsPage />, handle: { title: "Workflows" } },
           {
             path: "squads/:id",
             element: <SquadDetailPageView />,
@@ -233,6 +236,11 @@ export const appRoutes: RouteObject[] = [
             path: "settings",
             element: <DesktopSettingsRoute />,
             handle: { title: "Settings" },
+          },
+          {
+            path: "changelog",
+            element: <ChangelogPage />,
+            handle: { title: "Change log" },
           },
         ],
       },

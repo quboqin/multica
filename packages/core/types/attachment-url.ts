@@ -93,6 +93,29 @@ export function attachmentIdFromDownloadURL(rawURL: string): string | undefined 
 }
 
 /**
+ * Resolve an attachment reference to the authenticated same-origin download
+ * endpoint. Prefer the server-owned attachment id; fall back to recovering an
+ * id from a durable download URL returned by an older API response.
+ *
+ * Raw object-storage URLs are intentionally never returned here. Private S3 /
+ * OSS objects must be read through the attachment endpoint so workspace ACLs
+ * are enforced and browser previews do not depend on bucket public-read/CORS.
+ */
+export function attachmentSameOriginDownloadPath(
+  attachmentId: string | null | undefined,
+  sourceURLs: readonly (string | null | undefined)[] = [],
+): string | undefined {
+  if (attachmentId && UUID_RE.test(attachmentId)) {
+    return attachmentDownloadPath(attachmentId);
+  }
+  for (const sourceURL of sourceURLs) {
+    const id = attachmentIdFromDownloadURL(sourceURL ?? "");
+    if (id) return attachmentDownloadPath(id);
+  }
+  return undefined;
+}
+
+/**
  * True when `content` contains a markdown reference to `attachment` —
  * either the new stable `/api/attachments/<id>/download` shape OR the
  * legacy `att.url` storage path. Used by the comment composer and the

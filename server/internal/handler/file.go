@@ -36,6 +36,8 @@ const maxUploadSize = 100 << 20 // 100 MB
 
 const defaultAttachmentDownloadURLTTL = 30 * time.Minute
 
+var errAttachmentReferencedByActiveCreativeRevision = errors.New("attachment is referenced by an active creative revision")
+
 type attachmentDownloadMode string
 
 const (
@@ -691,6 +693,12 @@ func (h *Handler) resolveAttachmentDownloadMode(rawURL string) attachmentDownloa
 	if h.CFSigner != nil {
 		return attachmentDownloadModeCloudFront
 	}
+	// A storage backend without a configured public CDN/origin is private.
+	// Proxy it through Multica so native previews and fetch-based downloads do
+	// not depend on the bucket's CORS policy.
+	if h.Storage != nil && h.Storage.CdnDomain() == "" {
+		return attachmentDownloadModeProxy
+	}
 	if shouldProxyAttachmentURL(rawURL) {
 		return attachmentDownloadModeProxy
 	}
@@ -713,6 +721,11 @@ func shouldProxyAttachmentURL(rawURL string) bool {
 		return true
 	}
 	switch {
+	case strings.HasSuffix(host, ".aliyuncs.com"):
+		// Native Alibaba OSS object hosts may point at private buckets even
+		// when an operator configured their browser-visible base URL. Keep
+		// previews same-origin and let the server authenticate to OSS.
+		return true
 	case strings.HasSuffix(host, ".local"),
 		strings.HasSuffix(host, ".localdomain"),
 		strings.HasSuffix(host, ".internal"),
@@ -745,14 +758,25 @@ func (h *Handler) proxyAttachmentDownload(w http.ResponseWriter, r *http.Request
 	} else {
 		w.Header().Set("Content-Type", "application/octet-stream")
 	}
-	if att.SizeBytes >= 0 {
-		w.Header().Set("Content-Length", fmt.Sprintf("%d", att.SizeBytes))
-	}
+	// Attachment metadata can predate object storage or be backfilled without
+	// an authoritative byte count. Do not make it an HTTP framing contract:
+	// an incorrect Content-Length truncates an otherwise readable stream.
 	w.Header().Set("Content-Disposition", storage.ContentDisposition(att.ContentType, att.Filename))
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
-	if _, err := io.Copy(w, reader); err != nil {
+	written, err := io.Copy(w, reader)
+	if err != nil {
 		slog.Error("failed to stream attachment download", "id", uuidToString(att.ID), "error", err)
+		return
+	}
+	if written != att.SizeBytes {
+		if _, err := h.DB.Exec(r.Context(), `
+UPDATE attachment
+SET size_bytes = $2
+WHERE id = $1 AND size_bytes IS DISTINCT FROM $2
+`, att.ID, written); err != nil {
+			slog.Warn("failed to reconcile attachment size after download", "id", uuidToString(att.ID), "error", err)
+		}
 	}
 }
 
@@ -940,10 +964,15 @@ func (h *Handler) DeleteAttachment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.Queries.DeleteAttachment(r.Context(), db.DeleteAttachmentParams{
-		ID:          att.ID,
-		WorkspaceID: att.WorkspaceID,
-	}); err != nil {
+	if err := h.deleteAttachmentUnlessActiveCreativeReference(r.Context(), att.ID, att.WorkspaceID); err != nil {
+		if errors.Is(err, errAttachmentReferencedByActiveCreativeRevision) {
+			writeError(w, http.StatusConflict, "attachment is part of an active creative delivery")
+			return
+		}
+		if errors.Is(err, pgx.ErrNoRows) {
+			writeError(w, http.StatusNotFound, "attachment not found")
+			return
+		}
 		slog.Error("failed to delete attachment", "error", err)
 		writeError(w, http.StatusInternalServerError, "failed to delete attachment")
 		return
@@ -951,6 +980,64 @@ func (h *Handler) DeleteAttachment(w http.ResponseWriter, r *http.Request) {
 
 	h.deleteS3Object(r.Context(), att.Url)
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *Handler) deleteAttachmentUnlessActiveCreativeReference(ctx context.Context, attachmentID, workspaceID pgtype.UUID) error {
+	if h.TxStarter == nil {
+		return errors.New("attachment deletion transaction is unavailable")
+	}
+	tx, err := h.TxStarter.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	var lockedID pgtype.UUID
+	if err := tx.QueryRow(ctx, `
+SELECT id
+FROM attachment
+WHERE id = $1 AND workspace_id = $2
+FOR UPDATE
+`, attachmentID, workspaceID).Scan(&lockedID); err != nil {
+		return err
+	}
+
+	rows, err := tx.Query(ctx, `
+SELECT COALESCE(variant.active_revision, 0), asset.revision
+FROM creative_order_asset asset
+JOIN creative_order_variant variant ON variant.id = asset.variant_id
+WHERE asset.attachment_id = $1
+ORDER BY variant.id, asset.revision
+FOR UPDATE OF variant
+`, attachmentID)
+	if err != nil {
+		return err
+	}
+	for rows.Next() {
+		var activeRevision, assetRevision int
+		if err := rows.Scan(&activeRevision, &assetRevision); err != nil {
+			rows.Close()
+			return err
+		}
+		if activeRevision > 0 && assetRevision == activeRevision {
+			rows.Close()
+			return errAttachmentReferencedByActiveCreativeRevision
+		}
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	rows.Close()
+
+	tag, err := tx.Exec(ctx, `DELETE FROM attachment WHERE id = $1 AND workspace_id = $2`, attachmentID, workspaceID)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() != 1 {
+		return pgx.ErrNoRows
+	}
+	return tx.Commit(ctx)
 }
 
 // ---------------------------------------------------------------------------

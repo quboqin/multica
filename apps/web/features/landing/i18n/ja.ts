@@ -269,6 +269,17 @@ export function createJaDict(allowSignup: boolean): LandingDict {
       },
       entries: [
         {
+          version: "0.3.23",
+          date: "2026-08-16",
+          title: "ワークスペース単位のクリエイティブ機能と分かりやすい更新通知",
+          changes: [],
+          features: [
+            "Creative Studioをワークスペースごとに独立して有効化・無効化できます。",
+            "APIでも機能を検証するため、直接リンクやバックグラウンドのリクエストも同じ設定に従います。",
+            "ヘルプにはMulticaが管理する変更履歴だけを残し、新しいバージョンでは変更を一度知らせます。",
+          ],
+        },
+        {
           version: "0.3.22",
           date: "2026-06-15",
           title: "より速いリスト体験、使いやすい実行設定、安全な Issue 編集",

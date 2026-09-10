@@ -118,7 +118,8 @@ INSERT INTO agent_task_queue (
     agent_id, runtime_id, issue_id, status, priority, chat_session_id,
     initiator_user_id, requesting_user_id,
     originator_user_id, accountable_user_id, originator_source,
-    trigger_evidence_kind, trigger_evidence_ref_id
+    trigger_evidence_kind, trigger_evidence_ref_id,
+    runtime_mcp_overlay, runtime_connected_apps
 )
 SELECT
     $1, $2, NULL, 'queued', $3, $4,
@@ -127,7 +128,9 @@ SELECT
     sqlc.narg('accountable_user_id'),
     sqlc.narg('originator_source'),
     sqlc.narg('trigger_evidence_kind'),
-    sqlc.narg('trigger_evidence_ref_id')
+    sqlc.narg('trigger_evidence_ref_id'),
+    sqlc.narg('runtime_mcp_overlay'),
+    sqlc.narg('runtime_connected_apps')
 WHERE EXISTS (
     SELECT 1 FROM chat_session
     WHERE id = $4 AND is_active = TRUE
@@ -203,3 +206,33 @@ SELECT * FROM chat_message
 WHERE chat_session_id = $1 AND role = 'user'
 ORDER BY created_at DESC
 LIMIT 1;
+
+-- name: LockChatSessionsByArchivedRuntimeAgents :many
+SELECT cs.id FROM chat_session cs
+JOIN agent a ON a.id = cs.agent_id
+WHERE a.runtime_id = $1 AND a.archived_at IS NOT NULL
+ORDER BY cs.id
+FOR UPDATE OF cs;
+
+-- name: LockChatSessionsBySystemRuntimeAgents :many
+SELECT cs.id FROM chat_session cs
+JOIN agent a ON a.id = cs.agent_id
+WHERE a.runtime_id = $1 AND a.kind = 'system'
+ORDER BY cs.id
+FOR UPDATE OF cs;
+
+-- name: DeleteChatDraftRestoresByArchivedRuntimeAgents :exec
+DELETE FROM chat_draft_restore
+WHERE chat_session_id IN (
+    SELECT cs.id FROM chat_session cs
+    JOIN agent a ON a.id = cs.agent_id
+    WHERE a.runtime_id = $1 AND a.archived_at IS NOT NULL
+);
+
+-- name: DeleteChatDraftRestoresBySystemRuntimeAgents :exec
+DELETE FROM chat_draft_restore
+WHERE chat_session_id IN (
+    SELECT cs.id FROM chat_session cs
+    JOIN agent a ON a.id = cs.agent_id
+    WHERE a.runtime_id = $1 AND a.kind = 'system'
+);

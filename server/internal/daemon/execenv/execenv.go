@@ -24,10 +24,10 @@ type RepoContextForEnv struct {
 // fields the meta-skill template needs to render a human-readable summary
 // (URL for github_repo, generic label otherwise).
 type ProjectResourceForEnv struct {
-	ID           string          // server-assigned UUID
-	ResourceType string          // e.g. "github_repo"
-	ResourceRef  json.RawMessage // raw JSONB payload from the API
-	Label        string          // optional user-supplied label
+	ID           string          `json:"id"`              // server-assigned UUID
+	ResourceType string          `json:"resource_type"`   // e.g. "github_repo"
+	ResourceRef  json.RawMessage `json:"resource_ref"`    // raw JSONB payload from the API
+	Label        string          `json:"label,omitempty"` // optional user-supplied label
 }
 
 // PrepareParams holds all inputs needed to set up an execution environment.
@@ -57,12 +57,22 @@ type PrepareParams struct {
 	// substituted. Used by the local_directory project_resource flow
 	// (MUL-2663). When set, the envRoot/workdir directory is not created.
 	LocalWorkDir string
-	Task         TaskContextForEnv // context data for writing files
+	// HermesSourceHome is the shared Hermes home the per-task overlay is seeded
+	// from. Only used for the hermes provider; empty falls back to the platform default.
+	HermesSourceHome string
+	// HermesSourceMustExist fails the overlay build closed when an explicit
+	// Hermes profile could not be resolved.
+	HermesSourceMustExist bool
+	// HermesEnv is the sanitized effective child environment used to expand
+	// variables in Hermes external skill directories.
+	HermesEnv map[string]string
+	Task      TaskContextForEnv // context data for writing files
 }
 
 // TaskContextForEnv is the subset of task context used for writing context files.
 type TaskContextForEnv struct {
 	IssueID                 string
+	TaskContext             json.RawMessage
 	TriggerCommentID        string // comment that triggered this task (empty for on_assign)
 	TriggerThreadID         string // root comment ID for the triggering thread; falls back to TriggerCommentID when empty
 	NewCommentCount         int    // issue-wide comments since this agent's last run (excludes its own and the injected trigger)
@@ -149,6 +159,9 @@ type Environment struct {
 	LocalDirectory bool
 	// CodexHome is the path to the per-task CODEX_HOME directory (set only for codex provider).
 	CodexHome string
+	// TaskHome is a task-local writable HOME for Codex under the Linux
+	// workspace-write sandbox.
+	TaskHome string
 	// OpenclawConfigPath is the path to the per-task synthesized OpenClaw
 	// config (set only for openclaw provider). The daemon exports this as
 	// OPENCLAW_CONFIG_PATH on the openclaw subprocess so its native skill
@@ -167,6 +180,9 @@ type Environment struct {
 	// exports this as CURSOR_DATA_DIR so project-level MCP approvals are
 	// isolated from the user's persistent ~/.cursor/projects state.
 	CursorDataDir string
+	// HermesHome is the per-task HERMES_HOME overlay that makes bound skills
+	// discoverable without changing the user's real Hermes configuration.
+	HermesHome string
 
 	logger *slog.Logger // for cleanup logging
 }
@@ -243,9 +259,15 @@ func Prepare(params PrepareParams, logger *slog.Logger) (*Environment, error) {
 	// For Codex, set up a per-task CODEX_HOME seeded from ~/.codex/ with skills.
 	if params.Provider == "codex" {
 		codexHome := filepath.Join(envRoot, "codex-home")
+		taskHome, writableRoots, err := prepareCodexSandboxHome(envRoot, "", params.CodexVersion, logger)
+		if err != nil {
+			return nil, fmt.Errorf("execenv: prepare task home: %w", err)
+		}
+		env.TaskHome = taskHome
 		if err := prepareCodexHomeWithOpts(codexHome, CodexHomeOptions{
 			CodexVersion:      params.CodexVersion,
 			StateWarmCacheDir: CodexStateWarmCacheDir(params.WorkspacesRoot, params.WorkspaceID),
+			WritableRoots:     writableRoots,
 		}, logger); err != nil {
 			return nil, fmt.Errorf("execenv: prepare codex-home: %w", err)
 		}
@@ -253,6 +275,21 @@ func Prepare(params PrepareParams, logger *slog.Logger) (*Environment, error) {
 			return nil, fmt.Errorf("execenv: hydrate codex skills: %w", err)
 		}
 		env.CodexHome = codexHome
+	}
+
+	if params.Provider == "hermes" && len(params.Task.AgentSkills) > 0 {
+		hermesHome := filepath.Join(envRoot, "hermes-home")
+		if err := prepareHermesHome(
+			hermesHome,
+			params.HermesSourceHome,
+			params.HermesSourceMustExist,
+			params.Task.AgentSkills,
+			params.HermesEnv,
+			logger,
+		); err != nil {
+			return nil, fmt.Errorf("execenv: prepare hermes-home: %w", err)
+		}
+		env.HermesHome = hermesHome
 	}
 
 	// For Cursor, materialize managed MCP into project-local config and use
@@ -323,8 +360,11 @@ type ReuseParams struct {
 	// the returned Environment so downstream callers (notably the GC
 	// loop) keep the "never delete the user's directory" invariant on
 	// reuse paths.
-	LocalDirectory bool
-	Task           TaskContextForEnv // refreshed context files / skills
+	LocalDirectory        bool
+	HermesSourceHome      string
+	HermesSourceMustExist bool
+	HermesEnv             map[string]string
+	Task                  TaskContextForEnv // refreshed context files / skills
 }
 
 // Reuse wraps an existing workdir into an Environment and refreshes context files.
@@ -415,9 +455,15 @@ func Reuse(params ReuseParams, logger *slog.Logger) *Environment {
 	// refreshed in the current run's CODEX_HOME before the runtime starts.
 	if params.Provider == "codex" {
 		codexHome := filepath.Join(env.RootDir, "codex-home")
+		taskHome, writableRoots, err := prepareCodexSandboxHome(env.RootDir, "", params.CodexVersion, logger)
+		if err != nil {
+			logger.Warn("execenv: refresh task home failed", "error", err)
+		}
+		env.TaskHome = taskHome
 		if err := prepareCodexHomeWithOpts(codexHome, CodexHomeOptions{
 			CodexVersion:      params.CodexVersion,
 			StateWarmCacheDir: CodexStateWarmCacheDir(params.WorkspacesRoot, params.WorkspaceID),
+			WritableRoots:     writableRoots,
 		}, logger); err != nil {
 			logger.Warn("execenv: refresh codex-home failed", "error", err)
 		} else {
@@ -435,6 +481,29 @@ func Reuse(params ReuseParams, logger *slog.Logger) *Environment {
 						logger.Warn("execenv: refresh prior codex skills failed", "error", err)
 					}
 				}
+			}
+		}
+	}
+
+	if params.Provider == "hermes" && env.RootDir != "" {
+		hermesHome := filepath.Join(env.RootDir, "hermes-home")
+		if len(params.Task.AgentSkills) > 0 {
+			if err := prepareHermesHome(
+				hermesHome,
+				params.HermesSourceHome,
+				params.HermesSourceMustExist,
+				params.Task.AgentSkills,
+				params.HermesEnv,
+				logger,
+			); err != nil {
+				logger.Warn("execenv: refresh hermes-home failed; forcing fresh prepare", "error", err)
+				return nil
+			}
+			env.HermesHome = hermesHome
+		} else {
+			env.HermesHome = ""
+			if err := os.RemoveAll(hermesHome); err != nil {
+				logger.Warn("execenv: remove stale hermes-home failed", "error", err)
 			}
 		}
 	}

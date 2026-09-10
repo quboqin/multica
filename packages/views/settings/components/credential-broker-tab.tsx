@@ -5,11 +5,13 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import {
   ExternalLink,
+  Building2,
   KeyRound,
   MonitorUp,
   RefreshCw,
   ShieldCheck,
   Trash2,
+  UserPlus,
   X,
 } from "lucide-react";
 import { api } from "@multica/core/api";
@@ -69,7 +71,8 @@ export function CredentialBrokerTab() {
   const profiles = profilesQuery.data?.profiles ?? [];
   const activeProfiles = profiles.filter((profile) => profile.status === "active");
   const currentMember = members.find((member) => member.user_id === user?.id) ?? null;
-  const canManage = currentMember?.role === "owner" || currentMember?.role === "admin";
+  const canBootstrap = currentMember?.role === "owner" || currentMember?.role === "admin";
+  const hasConnectorProfile = profiles.some((profile) => profile.connector_id === selectedConnector?.id);
   const pendingProfileID = activeSession?.profile_id ?? "";
   const pendingProfile = pendingProfileID
     ? profiles.find((profile) => profile.id === pendingProfileID)
@@ -109,6 +112,30 @@ export function CredentialBrokerTab() {
     },
   });
 
+  const addProfileManager = useMutation({
+    mutationFn: ({ profileID, userID }: { profileID: string; userID: string }) =>
+      api.addCredentialProfileManager(profileID, { user_id: userID }),
+    onSuccess: async () => {
+      toast.success(t(($) => $.credential.toast_manager_added));
+      await qc.invalidateQueries({ queryKey: credentialKeys.profiles(wsId) });
+    },
+    onError: (error) => {
+      toast.error(error instanceof Error ? error.message : t(($) => $.credential.toast_manager_failed));
+    },
+  });
+
+  const removeProfileManager = useMutation({
+    mutationFn: ({ profileID, userID }: { profileID: string; userID: string }) =>
+      api.deleteCredentialProfileManager(profileID, userID),
+    onSuccess: async () => {
+      toast.success(t(($) => $.credential.toast_manager_removed));
+      await qc.invalidateQueries({ queryKey: credentialKeys.profiles(wsId) });
+    },
+    onError: (error) => {
+      toast.error(error instanceof Error ? error.message : t(($) => $.credential.toast_manager_failed));
+    },
+  });
+
   const verifyProfile = useMutation({
     mutationFn: (profileID: string) =>
       api.runCredentialCrawl({
@@ -121,8 +148,10 @@ export function CredentialBrokerTab() {
       const authCheck = readAuthCheck(result);
       if (result.status === "completed" && authCheck?.authenticated === true) {
         toast.success(t(($) => $.credential.toast_verified));
-      } else {
+      } else if (result.status === "need_reauth") {
         toast.error(t(($) => $.credential.toast_verify_needs_reauth));
+      } else {
+        toast.error(result.message || t(($) => $.credential.toast_verify_failed));
       }
       await qc.invalidateQueries({ queryKey: credentialKeys.profiles(wsId) });
     },
@@ -181,6 +210,15 @@ export function CredentialBrokerTab() {
   }, [activeSession, qc, t, wsId]);
 
   useEffect(() => {
+    if (!activeSession) {
+      return;
+    }
+    const handlePageHide = () => closeRemoteBrowser(activeSession);
+    window.addEventListener("pagehide", handlePageHide);
+    return () => window.removeEventListener("pagehide", handlePageHide);
+  }, [activeSession]);
+
+  useEffect(() => {
     if (!shouldAutoCloseCredentialSession(activeSession, pendingProfile)) {
       return;
     }
@@ -202,6 +240,9 @@ export function CredentialBrokerTab() {
                 <p className="text-sm text-muted-foreground">
                   {t(($) => $.credential.connection_description)}
                 </p>
+                <p className="text-xs text-muted-foreground">
+                  {t(($) => $.credential.manage_hint)}
+                </p>
               </div>
             </div>
             <Button
@@ -215,7 +256,7 @@ export function CredentialBrokerTab() {
             </Button>
           </div>
 
-          {canManage && <div className="grid gap-3 md:grid-cols-[minmax(180px,0.45fr)_minmax(0,1fr)_auto] md:items-end">
+          {canBootstrap && !hasConnectorProfile && <div className="grid gap-3 md:grid-cols-[minmax(180px,0.45fr)_minmax(0,1fr)_auto] md:items-end">
             <div className="space-y-2">
               <Label htmlFor="credential-connector">
                 {t(($) => $.credential.connector_label)}
@@ -256,8 +297,18 @@ export function CredentialBrokerTab() {
           </div>
           }
 
-          {!canManage && (
-            <p className="text-xs text-muted-foreground">{t(($) => $.credential.manage_hint)}</p>
+          {hasConnectorProfile && (
+            <div className="flex items-start gap-2 rounded-md border bg-muted/30 p-3 text-sm">
+              <Building2 className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
+              <div>
+                <p className="font-medium">{t(($) => $.credential.enterprise_shared_title)}</p>
+                <p className="text-xs text-muted-foreground">{t(($) => $.credential.enterprise_shared_description)}</p>
+              </div>
+            </div>
+          )}
+
+          {!canBootstrap && !hasConnectorProfile && (
+            <p className="text-xs text-muted-foreground">{t(($) => $.credential.bootstrap_hint)}</p>
           )}
 
           {!connectorsQuery.isLoading && connectors.length === 0 && (
@@ -305,7 +356,7 @@ export function CredentialBrokerTab() {
       <section className="space-y-3">
         <div className="flex items-center justify-between gap-3">
           <h3 className="text-sm font-semibold">{t(($) => $.credential.profiles_title)}</h3>
-          {latestActiveProfile && canManage && (
+          {latestActiveProfile && (
             <Button
               size="sm"
               variant="outline"
@@ -342,7 +393,12 @@ export function CredentialBrokerTab() {
                   verifying={verifyProfile.isPending && verifyingProfileID === profile.id}
                   binding={startBinding.isPending}
                   revoking={revokeProfile.isPending && revokeProfile.variables === profile.id}
-                  canManage={canManage}
+                  addingManager={addProfileManager.isPending && addProfileManager.variables?.profileID === profile.id}
+                  removingManager={removeProfileManager.isPending && removeProfileManager.variables?.profileID === profile.id}
+                  memberOptions={members.map((member) => ({
+                    id: member.user_id,
+                    name: member.name || member.email || member.user_id,
+                  }))}
                   onVerify={() => verifyProfile.mutate(profile.id)}
                   onRebind={() =>
                     startBinding.mutate({
@@ -351,6 +407,8 @@ export function CredentialBrokerTab() {
                       profileLabel: profile.label || profile.connector_id,
                     })}
                   onRevoke={() => revokeProfile.mutate(profile.id)}
+                  onAddManager={(userID) => addProfileManager.mutate({ profileID: profile.id, userID })}
+                  onRemoveManager={(userID) => removeProfileManager.mutate({ profileID: profile.id, userID })}
                 />
               ))}
             </CardContent>
@@ -425,7 +483,6 @@ export function CredentialBrokerTab() {
                     <Button
                       variant="ghost"
                       size="icon-sm"
-                      onClick={() => closeRemoteBrowser(activeSession)}
                     />
                   }
                 >
@@ -491,29 +548,44 @@ function ProfileRow({
   verifying,
   binding,
   revoking,
-  canManage,
+  addingManager,
+  removingManager,
+  memberOptions,
   onVerify,
   onRebind,
   onRevoke,
+  onAddManager,
+  onRemoveManager,
 }: {
   profile: CredentialProfile;
   verifying: boolean;
   binding: boolean;
   revoking: boolean;
-  canManage: boolean;
+  addingManager: boolean;
+  removingManager: boolean;
+  memberOptions: Array<{ id: string; name: string }>;
   onVerify: () => void;
   onRebind: () => void;
   onRevoke: () => void;
+  onAddManager: (userID: string) => void;
+  onRemoveManager: (userID: string) => void;
 }) {
   const { t } = useT("settings");
+  const [managerID, setManagerID] = useState("");
   const active = profile.status === "active";
   const needsReauth = profile.status === "need_reauth";
+  const managerIDs = new Set(profile.managers.map((manager) => manager.user_id));
+  const availableManagers = memberOptions.filter((member) => !managerIDs.has(member.id));
   return (
-    <div className="flex flex-wrap items-center justify-between gap-3 py-3 first:pt-0 last:pb-0">
-      <div className="min-w-0 space-y-1">
+    <div className="space-y-3 py-3 first:pt-0 last:pb-0">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="min-w-0 space-y-1">
         <div className="flex flex-wrap items-center gap-2">
           <p className="truncate text-sm font-medium">{profile.label || profile.connector_id}</p>
           <StatusBadge status={profile.status} />
+          {profile.scope === "deployment" && (
+            <Badge variant="outline">{t(($) => $.credential.enterprise_shared_badge)}</Badge>
+          )}
         </div>
         <p className="text-xs text-muted-foreground">
           {profile.connector_id} · {t(($) => $.credential.updated_at, {
@@ -525,11 +597,18 @@ function ProfileRow({
             })}`
             : ""}
         </p>
+        {profile.can_manage && (
+          <p className="text-xs text-muted-foreground">
+            {t(($) => $.credential.managed_by, {
+              names: profile.managers.map((manager) => manager.name || manager.email).join(", ") || "-",
+            })}
+          </p>
+        )}
       </div>
-      {canManage && <div className="flex items-center gap-2">
-        {needsReauth && (
+      <div className="flex items-center gap-2">
+        {profile.can_manage && (
           <Button
-            variant="default"
+            variant={needsReauth ? "default" : "outline"}
             size="sm"
             onClick={onRebind}
             disabled={binding}
@@ -547,17 +626,66 @@ function ProfileRow({
           <ShieldCheck className="h-4 w-4" />
           {verifying ? t(($) => $.credential.verifying) : t(($) => $.credential.verify)}
         </Button>
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={onRevoke}
-          disabled={revoking}
-        >
-          <Trash2 className="h-4 w-4" />
-          {revoking ? t(($) => $.credential.revoking) : t(($) => $.credential.revoke)}
-        </Button>
+        {profile.can_manage && (
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={onRevoke}
+            disabled={revoking}
+          >
+            <Trash2 className="h-4 w-4" />
+            {revoking ? t(($) => $.credential.revoking) : t(($) => $.credential.revoke)}
+          </Button>
+        )}
       </div>
-      }
+      </div>
+      {!profile.can_manage && (
+        <p className="text-xs text-muted-foreground">
+          {needsReauth
+            ? t(($) => $.credential.reauth_contact_manager)
+            : t(($) => $.credential.read_only_usage_hint)}
+        </p>
+      )}
+      {profile.can_manage && (
+        <div className="flex flex-wrap items-end gap-2 rounded-md border bg-muted/20 p-3">
+          <div className="min-w-52 flex-1 space-y-1">
+            <Label>{t(($) => $.credential.managers_title)}</Label>
+            <NativeSelect value={managerID} onChange={(event) => setManagerID(event.target.value)}>
+              <NativeSelectOption value="">{t(($) => $.credential.manager_select)}</NativeSelectOption>
+              {availableManagers.map((member) => (
+                <NativeSelectOption key={member.id} value={member.id}>{member.name}</NativeSelectOption>
+              ))}
+            </NativeSelect>
+          </div>
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={!managerID || addingManager}
+            onClick={() => {
+              onAddManager(managerID);
+              setManagerID("");
+            }}
+          >
+            <UserPlus className="h-4 w-4" />
+            {t(($) => $.credential.manager_add)}
+          </Button>
+          <div className="flex flex-wrap gap-1">
+            {profile.managers.map((manager) => (
+              <Button
+                key={manager.user_id}
+                size="sm"
+                variant="ghost"
+                disabled={removingManager || profile.managers.length <= 1}
+                onClick={() => onRemoveManager(manager.user_id)}
+                title={t(($) => $.credential.manager_remove)}
+              >
+                {manager.name || manager.email}
+                <X className="h-3.5 w-3.5" />
+              </Button>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

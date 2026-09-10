@@ -1,9 +1,22 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"image"
+	_ "image/png"
+	"io"
+	"math"
+	"mime"
+	"mime/multipart"
+	"net/http"
+	"net/textproto"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -13,248 +26,1006 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/multica-ai/multica/server/internal/cli"
+	"github.com/multica-ai/multica/server/pkg/imagemodel"
 )
 
 var creativeCmd = &cobra.Command{
 	Use:   "creative",
-	Short: "Work with creative material jobs",
+	Short: "Work with creative material candidates",
 }
 
-var creativeCreateJobCmd = &cobra.Command{
-	Use:   "create-job <issue-id>",
-	Short: "Create a creative job from selected issue materials",
+var imageCmd = &cobra.Command{
+	Use:   "image",
+	Short: "Process raster images with configured local capabilities",
+}
+
+var creativeMaterialsCmd = &cobra.Command{
+	Use:   "materials <issue-id>",
+	Short: "List creative materials attached to an issue",
 	Args:  exactArgs(1),
-	RunE:  runCreativeCreateJob,
+	RunE:  runCreativeMaterials,
 }
 
-var creativeGetJobCmd = &cobra.Command{
-	Use:   "get-job <issue-id> <job-id>",
-	Short: "Get and optionally wait for a creative job",
+var creativeMaterialCmd = &cobra.Command{
+	Use:   "material",
+	Short: "Work with one creative material candidate",
+}
+
+var creativeContextCmd = &cobra.Command{
+	Use:   "context",
+	Short: "Manage the fixed creative resource snapshot for an issue",
+}
+
+var creativeContextSetCmd = &cobra.Command{
+	Use:   "set <issue-id>",
+	Short: "Fix a published market pack and execution squad to an issue",
+	Args:  exactArgs(1),
+	RunE:  runCreativeContextSet,
+}
+
+var creativeDeliveryCmd = &cobra.Command{
+	Use:   "delivery",
+	Short: "Register final creative deliveries",
+}
+
+var creativeDeliveryRegisterCmd = &cobra.Command{
+	Use:   "register <issue-id>",
+	Short: "Register final attachments and their source mapping from a JSON manifest",
+	Args:  exactArgs(1),
+	RunE:  runCreativeDeliveryRegister,
+}
+
+var creativeMaterialDownloadCmd = &cobra.Command{
+	Use:   "download <issue-id> <candidate-id>",
+	Short: "Download a selected candidate from platform archive storage",
 	Args:  exactArgs(2),
-	RunE:  runCreativeGetJob,
+	RunE:  runCreativeMaterialDownload,
 }
 
-var creativeDownloadCmd = &cobra.Command{
-	Use:   "download <issue-id> <job-id>",
-	Short: "Download a completed creative job as a ZIP package",
+var creativeMaterialBriefCmd = &cobra.Command{
+	Use:   "brief <issue-id> <candidate-id>",
+	Short: "Save structured visual intent and benefit analysis for a selected candidate",
 	Args:  exactArgs(2),
-	RunE:  runCreativeDownload,
+	RunE:  runCreativeMaterialBrief,
 }
 
-type creativeJobCLI struct {
-	ID            string   `json:"id"`
-	Status        string   `json:"status"`
-	Stage         string   `json:"stage"`
-	Progress      int      `json:"progress"`
-	ExternalJobID string   `json:"external_job_id"`
-	ErrorMessage  string   `json:"error_message"`
-	CandidateIDs  []string `json:"candidate_ids"`
-	Variants      []any    `json:"variants"`
+var imageEditCmd = &cobra.Command{
+	Use:   "edit",
+	Short: "Edit reference images with the configured GPT Image API",
+	Args:  cobra.NoArgs,
+	RunE:  runImageEdit,
 }
+
+type openAIImageEditResponse struct {
+	Data []struct {
+		B64JSON string `json:"b64_json"`
+	} `json:"data"`
+}
+
+type imageEditHTTPError struct {
+	StatusCode int
+	RequestID  string
+	RetryAfter string
+	Body       string
+}
+
+const maxProviderImageAspectDeviation = 0.10
+const maxProviderImageAspectRetries = 2
+
+type imageOutputDimensions struct {
+	Width       int
+	Height      int
+	AspectRatio float64
+}
+
+type providerImageAspectDeviationError struct {
+	actualWidth      int
+	actualHeight     int
+	expectedWidth    int
+	expectedHeight   int
+	actualAspect     float64
+	expectedAspect   float64
+	aspectDeviation  float64
+	maximumDeviation float64
+}
+
+func (e *providerImageAspectDeviationError) Error() string {
+	return fmt.Sprintf(
+		"provider returned %dx%d (aspect %.5f) for requested %dx%d (aspect %.5f); aspect deviation %.2f%% exceeds %.2f%%",
+		e.actualWidth, e.actualHeight, e.actualAspect,
+		e.expectedWidth, e.expectedHeight, e.expectedAspect,
+		e.aspectDeviation*100, e.maximumDeviation*100,
+	)
+}
+
+func (e *imageEditHTTPError) Error() string {
+	if e.RetryAfter != "" {
+		return fmt.Sprintf("GPT Image edit failed with status %d (request_id=%s, retry_after=%s): %s", e.StatusCode, e.RequestID, e.RetryAfter, e.Body)
+	}
+	return fmt.Sprintf("GPT Image edit failed with status %d (request_id=%s): %s", e.StatusCode, e.RequestID, e.Body)
+}
+
+type imageEditTransportError struct {
+	err error
+}
+
+func (e *imageEditTransportError) Error() string {
+	return fmt.Sprintf("request GPT Image edit: %v", e.err)
+}
+func (e *imageEditTransportError) Unwrap() error { return e.err }
 
 type creativeMaterialsCLIResponse struct {
-	EditJobs []creativeJobCLI `json:"edit_jobs"`
+	Candidates  []creativeMaterialCandidateCLI `json:"candidates"`
+	CrawlRuns   []creativeMaterialCrawlRunCLI  `json:"crawl_runs"`
+	Items       []creativeIssueItemCLI         `json:"items"`
+	Deliveries  []creativeDeliveryCLI          `json:"deliveries"`
+	Adjustments []json.RawMessage              `json:"adjustments"`
+	Context     json.RawMessage                `json:"context"`
+}
+
+type creativeMaterialCrawlRunCLI struct {
+	ID            string `json:"id"`
+	IssueID       string `json:"issue_id"`
+	ConnectorID   string `json:"connector_id"`
+	QuerySummary  string `json:"query_summary"`
+	Status        string `json:"status"`
+	ImportedCount int    `json:"imported_count"`
+	ExistingCount int    `json:"existing_count"`
+	TotalCount    int    `json:"total_count"`
+	CreatedAt     string `json:"created_at"`
+}
+
+type creativeDeliveryCLI struct {
+	ID                        string `json:"id"`
+	IssueID                   string `json:"issue_id"`
+	CandidateID               string `json:"candidate_id"`
+	WorkIssueID               string `json:"work_issue_id"`
+	Variant                   int    `json:"variant"`
+	Size                      string `json:"size"`
+	Revision                  int    `json:"revision"`
+	BaseAttachmentID          string `json:"base_attachment_id"`
+	FinalAttachmentID         string `json:"final_attachment_id"`
+	PrimeEvidenceAttachmentID string `json:"prime_evidence_attachment_id"`
+	QCIssueID                 string `json:"qc_issue_id"`
+	CreatedAt                 string `json:"created_at"`
+	UpdatedAt                 string `json:"updated_at"`
+}
+
+type creativeIssueItemCLI struct {
+	CandidateID   string          `json:"candidate_id"`
+	CreativeBrief json.RawMessage `json:"creative_brief"`
+	WorkIssueID   string          `json:"work_issue_id"`
+	Revision      int             `json:"revision"`
+	Status        string          `json:"status"`
+}
+
+type creativeMaterialCandidateCLI struct {
+	ID                 string `json:"id"`
+	Competitor         string `json:"competitor"`
+	Title              string `json:"title"`
+	AssetType          string `json:"asset_type"`
+	PreviewURL         string `json:"preview_url"`
+	ResourceURL        string `json:"resource_url"`
+	PosterURL          string `json:"poster_url"`
+	OriginalURL        string `json:"original_url"`
+	ArchivedURL        string `json:"archived_url"`
+	ArchiveStatus      string `json:"archive_status"`
+	Status             string `json:"status"`
+	SourceAttachmentID string `json:"source_attachment_id"`
+	SourceIssueID      string `json:"source_issue_id"`
+	SourceRunID        string `json:"source_run_id"`
+	IsNewInRun         bool   `json:"is_new_in_run"`
 }
 
 func init() {
-	creativeCmd.AddCommand(creativeCreateJobCmd, creativeGetJobCmd, creativeDownloadCmd)
+	creativeCmd.AddCommand(creativeMaterialsCmd)
+	creativeCmd.AddCommand(creativeMaterialCmd)
+	creativeCmd.AddCommand(creativeContextCmd)
+	creativeCmd.AddCommand(creativeDeliveryCmd)
+	creativeContextCmd.AddCommand(creativeContextSetCmd)
+	creativeDeliveryCmd.AddCommand(creativeDeliveryRegisterCmd)
+	creativeMaterialCmd.AddCommand(creativeMaterialDownloadCmd)
+	creativeMaterialCmd.AddCommand(creativeMaterialBriefCmd)
+	imageCmd.AddCommand(imageEditCmd)
 
-	creativeCreateJobCmd.Flags().StringSlice("candidate-ids", nil, "Candidate IDs; defaults to all selected materials on the issue")
-	creativeCreateJobCmd.Flags().String("prompt", "", "Additional creative direction")
-	creativeCreateJobCmd.Flags().Bool("prompt-stdin", false, "Read the prompt from stdin")
-	creativeCreateJobCmd.Flags().String("prompt-file", "", "Read the prompt from a UTF-8 file")
-	creativeCreateJobCmd.Flags().String("rules-json", "", "Dynamic creative rules as a JSON object")
-	creativeCreateJobCmd.Flags().Int("variant-count", 0, "Number of variants (1-6; default 3)")
-	creativeCreateJobCmd.Flags().StringSlice("sizes", nil, "Output sizes, e.g. 1080x1080,800x1000")
-	creativeCreateJobCmd.Flags().String("market", "", "Creative market profile, e.g. idn-adakami")
-	creativeCreateJobCmd.Flags().String("strategy", "", "Creative strategy, e.g. instruct or resize")
-	creativeCreateJobCmd.Flags().String("output", "json", "Output format: json or table")
+	creativeMaterialsCmd.Flags().Bool("selected", false, "Only return materials selected by a person")
+	creativeMaterialsCmd.Flags().String("output", "json", "Output format: json or table")
+	creativeMaterialDownloadCmd.Flags().String("output-file", "", "Local file path for the archived candidate")
+	creativeMaterialDownloadCmd.Flags().String("output", "json", "Output format: json or table")
+	creativeMaterialBriefCmd.Flags().String("input-file", "", "UTF-8 JSON file containing the creative brief")
+	creativeMaterialBriefCmd.Flags().String("output", "json", "Output format: json or table")
+	creativeContextSetCmd.Flags().String("market-pack-id", "", "Published creative market pack UUID")
+	creativeContextSetCmd.Flags().String("squad-id", "", "Execution squad UUID")
+	creativeContextSetCmd.Flags().String("output", "json", "Output format: json")
+	creativeDeliveryRegisterCmd.Flags().String("input-file", "", "UTF-8 JSON manifest containing a deliveries array")
+	creativeDeliveryRegisterCmd.Flags().String("output", "json", "Output format: json")
 
-	creativeGetJobCmd.Flags().Bool("wait", false, "Wait until the job is completed or failed")
-	creativeGetJobCmd.Flags().Duration("timeout", 10*time.Minute, "Maximum wait time")
-	creativeGetJobCmd.Flags().Duration("interval", 2*time.Second, "Status refresh interval while waiting")
-	creativeGetJobCmd.Flags().String("output", "json", "Output format: json or table")
-
-	creativeDownloadCmd.Flags().StringP("output-dir", "o", ".", "Directory for the ZIP package")
+	imageEditCmd.Flags().StringSlice("input", nil, "Reference image files (1-16 files)")
+	imageEditCmd.Flags().String("mask", "", "Optional PNG mask with alpha channel")
+	imageEditCmd.Flags().String("prompt", "", "Edit prompt")
+	imageEditCmd.Flags().Bool("prompt-stdin", false, "Read the prompt from stdin")
+	imageEditCmd.Flags().String("prompt-file", "", "Read the prompt from a UTF-8 file")
+	imageEditCmd.Flags().String("model", imagemodel.Image2, "Image model: gpt-image-2, gpt-image-2.5-sunburst, or gpt-image-2.5-flare; platform tasks use frozen settings")
+	imageEditCmd.Flags().String("size", "auto", "Canvas size, e.g. 1088x1360 or auto")
+	imageEditCmd.Flags().String("quality", "", "Image quality: low, medium, high, xhigh, max, or auto (default: xhigh for 2.5, high for 2)")
+	imageEditCmd.Flags().Int("max-attempts", 3, "Maximum attempts for transient image API failures (1-5)")
+	imageEditCmd.Flags().String("output-file", "", "Output PNG file")
+	imageEditCmd.Flags().String("result-file", "", "Optional JSON receipt written atomically after a successful image edit")
+	imageEditCmd.Flags().String("operation-id", "", "Creative image operation UUID recorded in the atomic result receipt")
+	imageEditCmd.Flags().Int("operation-attempt", 0, "Creative image operation attempt recorded in the atomic result receipt")
+	imageEditCmd.Flags().String("output", "json", "Output format: json or table")
 }
 
-func runCreativeCreateJob(cmd *cobra.Command, args []string) error {
+func runCreativeContextSet(cmd *cobra.Command, args []string) error {
 	client, err := newAPIClient(cmd)
 	if err != nil {
 		return err
+	}
+	marketPackID, _ := cmd.Flags().GetString("market-pack-id")
+	squadID, _ := cmd.Flags().GetString("squad-id")
+	if strings.TrimSpace(marketPackID) == "" || strings.TrimSpace(squadID) == "" {
+		return fmt.Errorf("--market-pack-id and --squad-id are required")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), cli.AtLeastAPITimeout(60*time.Second))
+	defer cancel()
+	var result map[string]any
+	path := "/api/issues/" + url.PathEscape(args[0]) + "/creative-context"
+	body := map[string]string{"market_pack_id": marketPackID, "squad_id": squadID}
+	if err := client.PutJSON(ctx, path, body, &result); err != nil {
+		return err
+	}
+	return cli.PrintJSON(os.Stdout, result)
+}
+
+func runCreativeDeliveryRegister(cmd *cobra.Command, args []string) error {
+	client, err := newAPIClient(cmd)
+	if err != nil {
+		return err
+	}
+	inputFile, _ := cmd.Flags().GetString("input-file")
+	if strings.TrimSpace(inputFile) == "" {
+		return fmt.Errorf("--input-file is required")
+	}
+	payload, err := os.ReadFile(inputFile)
+	if err != nil {
+		return fmt.Errorf("read creative delivery manifest: %w", err)
+	}
+	var manifest struct {
+		Deliveries []json.RawMessage `json:"deliveries"`
+	}
+	if err := json.Unmarshal(payload, &manifest); err != nil {
+		return fmt.Errorf("decode creative delivery manifest: %w", err)
+	}
+	if len(manifest.Deliveries) == 0 || len(manifest.Deliveries) > 9 {
+		return fmt.Errorf("creative delivery manifest must contain between 1 and 9 deliveries")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), cli.AtLeastAPITimeout(60*time.Second))
+	defer cancel()
+	var result map[string]any
+	path := "/api/issues/" + url.PathEscape(args[0]) + "/creative-deliveries/register"
+	if err := client.PostJSON(ctx, path, json.RawMessage(payload), &result); err != nil {
+		return err
+	}
+	return cli.PrintJSON(os.Stdout, result)
+}
+
+func runCreativeMaterialBrief(cmd *cobra.Command, args []string) error {
+	client, err := newAPIClient(cmd)
+	if err != nil {
+		return err
+	}
+	inputFile, _ := cmd.Flags().GetString("input-file")
+	if strings.TrimSpace(inputFile) == "" {
+		return fmt.Errorf("--input-file is required")
+	}
+	payload, err := os.ReadFile(inputFile)
+	if err != nil {
+		return fmt.Errorf("read creative brief: %w", err)
+	}
+	var brief map[string]any
+	if err := json.Unmarshal(payload, &brief); err != nil {
+		return fmt.Errorf("decode creative brief JSON: %w", err)
+	}
+	if len(brief) == 0 {
+		return fmt.Errorf("creative brief JSON must be a non-empty object")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), cli.AtLeastAPITimeout(60*time.Second))
+	defer cancel()
+	var result creativeIssueItemCLI
+	path := "/api/issues/" + url.PathEscape(args[0]) + "/creative-materials/" + url.PathEscape(args[1]) + "/brief"
+	if err := client.PutJSON(ctx, path, brief, &result); err != nil {
+		return err
+	}
+	output, _ := cmd.Flags().GetString("output")
+	if output == "table" {
+		cli.PrintTable(os.Stdout, []string{"CANDIDATE", "REVISION", "STATUS"}, [][]string{{result.CandidateID, strconv.Itoa(result.Revision), result.Status}})
+		return nil
+	}
+	return cli.PrintJSON(os.Stdout, result)
+}
+
+func runCreativeMaterialDownload(cmd *cobra.Command, args []string) error {
+	client, err := newAPIClient(cmd)
+	if err != nil {
+		return err
+	}
+	outputFile, _ := cmd.Flags().GetString("output-file")
+	if strings.TrimSpace(outputFile) == "" {
+		return fmt.Errorf("--output-file is required")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), cli.AtLeastAPITimeout(2*time.Minute))
+	defer cancel()
+	var response creativeMaterialsCLIResponse
+	if err := client.GetJSON(ctx, "/api/issues/"+url.PathEscape(args[0])+"/creative-materials", &response); err != nil {
+		return err
+	}
+	var selected *creativeMaterialCandidateCLI
+	for index := range response.Candidates {
+		candidate := &response.Candidates[index]
+		if candidate.ID == args[1] {
+			selected = candidate
+			break
+		}
+	}
+	if selected == nil {
+		return fmt.Errorf("creative material candidate %s was not found on issue %s", args[1], args[0])
+	}
+	downloadURL, source := creativeLibraryDownloadSource(*selected)
+	if downloadURL == "" {
+		return fmt.Errorf("creative material candidate %s has no readable asset URL", args[1])
+	}
+	if source != "attachment" && (selected.ArchiveStatus != "completed" || strings.TrimSpace(selected.ArchivedURL) == "") {
+		return fmt.Errorf("creative material candidate %s is not available in platform archive storage", args[1])
+	}
+	data, source, err := downloadCreativeMaterialCandidate(ctx, client, *selected)
+	if err != nil {
+		return err
+	}
+	directory := filepath.Dir(outputFile)
+	if directory != "." {
+		if err := os.MkdirAll(directory, 0o755); err != nil {
+			return fmt.Errorf("create output directory: %w", err)
+		}
+	}
+	if err := os.WriteFile(outputFile, data, 0o644); err != nil {
+		return fmt.Errorf("write creative material: %w", err)
+	}
+	abs, err := filepath.Abs(outputFile)
+	if err != nil {
+		abs = outputFile
+	}
+	result := map[string]any{
+		"issue_id": args[0], "candidate_id": selected.ID, "archive_status": selected.ArchiveStatus,
+		"path": abs, "bytes": len(data), "source": source,
+	}
+	output, _ := cmd.Flags().GetString("output")
+	if output == "table" {
+		cli.PrintTable(os.Stdout, []string{"ISSUE", "CANDIDATE", "BYTES", "PATH"}, [][]string{{args[0], selected.ID, strconv.Itoa(len(data)), abs}})
+		return nil
+	}
+	return cli.PrintJSON(os.Stdout, result)
+}
+
+func runImageEdit(cmd *cobra.Command, _ []string) error {
+	inputs, _ := cmd.Flags().GetStringSlice("input")
+	inputs = uniqueCLIStrings(inputs)
+	if len(inputs) == 0 || len(inputs) > 16 {
+		return fmt.Errorf("--input requires between 1 and 16 reference images")
 	}
 	prompt, _, err := resolveTextFlag(cmd, "prompt")
 	if err != nil {
 		return err
 	}
-	rules, err := creativeRulesFromFlags(cmd)
+	if strings.TrimSpace(prompt) == "" {
+		return fmt.Errorf("--prompt, --prompt-file, or --prompt-stdin is required")
+	}
+	outputFile, _ := cmd.Flags().GetString("output-file")
+	if strings.TrimSpace(outputFile) == "" {
+		return fmt.Errorf("--output-file is required")
+	}
+	operationID, _ := cmd.Flags().GetString("operation-id")
+	operationID = strings.TrimSpace(operationID)
+	operationAttempt, _ := cmd.Flags().GetInt("operation-attempt")
+	if (operationID == "") != (operationAttempt == 0) || operationAttempt < 0 {
+		return fmt.Errorf("--operation-id and a positive --operation-attempt must be provided together")
+	}
+	model, _ := cmd.Flags().GetString("model")
+	size, _ := cmd.Flags().GetString("size")
+	size = strings.TrimSpace(size)
+	providerSize, err := providerGPTImageSize(size)
 	if err != nil {
 		return err
 	}
-	candidateIDs, _ := cmd.Flags().GetStringSlice("candidate-ids")
-	body := map[string]any{
-		"candidate_ids": uniqueCLIStrings(candidateIDs),
-		"prompt":        prompt,
+	quality, _ := cmd.Flags().GetString("quality")
+	settings, err := imagemodel.Resolve(model, quality)
+	if err != nil {
+		return err
 	}
-	if len(rules) > 0 {
-		body["rules"] = rules
+	model, quality = settings.Model, settings.Quality
+	apiKey := strings.TrimSpace(os.Getenv("OPENAI_API_KEY"))
+	if apiKey == "" {
+		return fmt.Errorf("OPENAI_API_KEY is required for image edit")
+	}
+	endpoint, err := openAIImageEditEndpoint(os.Getenv("OPENAI_BASE_URL"), os.Getenv("OPENAI_IMAGE_EDIT_PATH"))
+	if err != nil {
+		return err
+	}
+	imageField := strings.TrimSpace(os.Getenv("OPENAI_IMAGE_FILE_FIELD"))
+	if imageField == "" {
+		imageField = "image"
+	}
+	providerSlotLimit, err := configuredImageConcurrency()
+	if err != nil {
+		return err
+	}
+	mask, _ := cmd.Flags().GetString("mask")
+	maxAttempts, _ := cmd.Flags().GetInt("max-attempts")
+	if maxAttempts < 1 || maxAttempts > 5 {
+		return fmt.Errorf("--max-attempts must be between 1 and 5")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), cli.AtLeastAPITimeout(50*time.Minute))
+	defer cancel()
+	image, requestID, attempts, aspectRetries, dimensions, aspectFallback, timing, err := requestGPTImageEditWithValidAspect(ctx, http.DefaultClient, endpoint, apiKey, model, imageField, inputs, mask, prompt, providerSize, quality, maxAttempts, acquireGlobalImageSlot)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(outputFile), 0o755); err != nil && filepath.Dir(outputFile) != "." {
+		return fmt.Errorf("create output directory: %w", err)
+	}
+	if err := os.WriteFile(outputFile, image, 0o644); err != nil {
+		return fmt.Errorf("write image output: %w", err)
+	}
+	abs, err := filepath.Abs(outputFile)
+	if err != nil {
+		abs = outputFile
+	}
+	output, _ := cmd.Flags().GetString("output")
+	outputDigest := sha256.Sum256(image)
+	result := map[string]any{
+		"model": model, "input_count": len(inputs), "size": size, "provider_size": providerSize, "quality": quality,
+		"path": abs, "bytes": len(image), "request_id": requestID, "attempts": attempts, "aspect_retries": aspectRetries, "aspect_fallback": aspectFallback,
+		"actual_width": dimensions.Width, "actual_height": dimensions.Height, "actual_aspect_ratio": dimensions.AspectRatio,
+		"provider_slot_limit": providerSlotLimit, "prompt": prompt, "prompt_sha256": imagePromptSHA256(prompt), "output_sha256": fmt.Sprintf("%x", outputDigest),
+		"queue_wait_seconds": timing.QueueWait.Seconds(), "provider_elapsed_seconds": timing.ProviderElapsed.Seconds(), "timeout_stage": timing.TimeoutStage,
+		"provider_attempts": timing.ProviderAttempts,
+		"generated_asset": map[string]any{
+			"completed": true, "path": abs, "size": size, "width": dimensions.Width,
+			"height": dimensions.Height, "aspect_fallback": aspectFallback,
+		},
+	}
+	if operationID != "" {
+		result["operation_id"] = operationID
+		result["operation_attempt"] = operationAttempt
+		result["task_id"] = strings.TrimSpace(os.Getenv("MULTICA_TASK_ID"))
+	}
+	resultFile, _ := cmd.Flags().GetString("result-file")
+	if strings.TrimSpace(resultFile) != "" {
+		if err := writeImageEditResultFile(resultFile, result); err != nil {
+			return err
+		}
+	}
+	if output == "table" {
+		cli.PrintTable(os.Stdout, []string{"MODEL", "INPUTS", "SIZE", "QUALITY", "BYTES", "REQUEST ID", "PATH"}, [][]string{{model, strconv.Itoa(len(inputs)), size, quality, strconv.Itoa(len(image)), requestID, abs}})
+		return nil
+	}
+	return cli.PrintJSON(os.Stdout, result)
+}
+
+// writeImageEditResultFile publishes a complete successful result only after
+// the output image itself exists. A continuation can therefore distinguish an
+// unfinished provider call from a late tool event without starting another
+// image request for the same size.
+func writeImageEditResultFile(path string, result any) error {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return nil
+	}
+	payload, err := json.Marshal(result)
+	if err != nil {
+		return fmt.Errorf("encode image edit result: %w", err)
+	}
+	directory := filepath.Dir(path)
+	if directory != "." {
+		if err := os.MkdirAll(directory, 0o755); err != nil {
+			return fmt.Errorf("create image edit result directory: %w", err)
+		}
+	}
+	temporary, err := os.CreateTemp(directory, ".image-edit-result-*.json")
+	if err != nil {
+		return fmt.Errorf("create image edit result receipt: %w", err)
+	}
+	temporaryName := temporary.Name()
+	defer os.Remove(temporaryName)
+	if _, err := temporary.Write(payload); err != nil {
+		temporary.Close()
+		return fmt.Errorf("write image edit result receipt: %w", err)
+	}
+	if err := temporary.Close(); err != nil {
+		return fmt.Errorf("close image edit result receipt: %w", err)
+	}
+	if err := os.Rename(temporaryName, path); err != nil {
+		return fmt.Errorf("publish image edit result receipt: %w", err)
+	}
+	return nil
+}
+
+// providerGPTImageSize keeps the public delivery contract independent from the
+// provider's 16px canvas constraint. The normalized asset is still written at
+// the requested delivery size and the original request remains in the trace.
+func providerGPTImageSize(requested string) (string, error) {
+	requested = strings.TrimSpace(requested)
+	if err := validateGPTImageSize(requested); err == nil {
+		return requested, nil
+	} else {
+		canonical := strings.ToLower(requested)
+		switch canonical {
+		case "1080x1080":
+			return "1088x1088", nil
+		case "1200x628":
+			return "1200x624", nil
+		case "800x1000":
+			return "800x992", nil
+		default:
+			return "", err
+		}
+	}
+}
+
+func imagePromptSHA256(prompt string) string {
+	return fmt.Sprintf("%x", sha256.Sum256([]byte(prompt)))
+}
+
+func requestGPTImageEditWithRetry(ctx context.Context, client *http.Client, endpoint, apiKey, model, imageField string, inputs []string, mask, prompt, size, quality string, maxAttempts int) ([]byte, string, int, error) {
+	return requestGPTImageEditWithRetryUsingSlots(ctx, client, endpoint, apiKey, model, imageField, inputs, mask, prompt, size, quality, maxAttempts, nil)
+}
+
+func requestGPTImageEditWithRetryAndSlots(ctx context.Context, client *http.Client, endpoint, apiKey, model, imageField string, inputs []string, mask, prompt, size, quality string, maxAttempts int) ([]byte, string, int, error) {
+	return requestGPTImageEditWithRetryUsingSlots(ctx, client, endpoint, apiKey, model, imageField, inputs, mask, prompt, size, quality, maxAttempts, acquireGlobalImageSlot)
+}
+
+type imageSlotAcquirer func(context.Context, string, string) (func() error, error)
+
+type imageEditTiming struct {
+	QueueWait        time.Duration
+	ProviderElapsed  time.Duration
+	TimeoutStage     string
+	ProviderAttempts []imageEditProviderAttempt
+}
+
+// imageEditProviderAttempt records every HTTP/transport attempt inside one
+// logical image operation. The final request ID alone cannot prove whether an
+// earlier attempt hit a rate limit, timed out, or failed at transport level.
+type imageEditProviderAttempt struct {
+	Attempt      int    `json:"attempt"`
+	Status       string `json:"status"`
+	RequestID    string `json:"request_id,omitempty"`
+	HTTPStatus   int    `json:"http_status,omitempty"`
+	ErrorType    string `json:"error_type,omitempty"`
+	ErrorMessage string `json:"error_message,omitempty"`
+}
+
+func imageEditProviderAttemptFromResult(attempt int, requestID string, err error) imageEditProviderAttempt {
+	result := imageEditProviderAttempt{Attempt: attempt, RequestID: requestID}
+	if err == nil {
+		result.Status = "completed"
+		return result
+	}
+	result.Status = "failed"
+	result.ErrorMessage = err.Error()
+	var httpErr *imageEditHTTPError
+	if errors.As(err, &httpErr) {
+		result.HTTPStatus = httpErr.StatusCode
+		result.ErrorType = fmt.Sprintf("http_%d", httpErr.StatusCode)
+		return result
+	}
+	var transportErr *imageEditTransportError
+	if errors.As(err, &transportErr) {
+		result.ErrorType = "transport"
+		return result
+	}
+	result.ErrorType = "provider_response"
+	return result
+}
+
+func requestGPTImageEditWithRetryUsingSlots(ctx context.Context, client *http.Client, endpoint, apiKey, model, imageField string, inputs []string, mask, prompt, size, quality string, maxAttempts int, acquire imageSlotAcquirer) ([]byte, string, int, error) {
+	image, requestID, attempts, _, err := requestGPTImageEditWithRetryUsingSlotsTimed(ctx, client, endpoint, apiKey, model, imageField, inputs, mask, prompt, size, quality, maxAttempts, acquire)
+	return image, requestID, attempts, err
+}
+
+func requestGPTImageEditWithRetryUsingSlotsTimed(ctx context.Context, client *http.Client, endpoint, apiKey, model, imageField string, inputs []string, mask, prompt, size, quality string, maxAttempts int, acquire imageSlotAcquirer) ([]byte, string, int, imageEditTiming, error) {
+	var lastRequestID string
+	var lastErr error
+	var timing imageEditTiming
+	usedAttempts := 0
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		usedAttempts = attempt
+		var release func() error
+		if acquire != nil {
+			queuedAt := time.Now()
+			var err error
+			release, err = acquire(ctx, endpoint, apiKey)
+			timing.QueueWait += time.Since(queuedAt)
+			if err != nil {
+				if errors.Is(err, context.DeadlineExceeded) || errors.Is(ctx.Err(), context.DeadlineExceeded) {
+					timing.TimeoutStage = "queue"
+				}
+				return nil, lastRequestID, attempt, timing, fmt.Errorf("acquire image concurrency slot: %w", err)
+			}
+		}
+		providerCtx, cancelProvider := context.WithTimeout(context.WithoutCancel(ctx), cli.AtLeastAPITimeout(20*time.Minute))
+		providerStartedAt := time.Now()
+		image, requestID, err := requestGPTImageEdit(providerCtx, client, endpoint, apiKey, model, imageField, inputs, mask, prompt, size, quality)
+		timing.ProviderElapsed += time.Since(providerStartedAt)
+		timing.ProviderAttempts = append(timing.ProviderAttempts, imageEditProviderAttemptFromResult(len(timing.ProviderAttempts)+1, requestID, err))
+		if errors.Is(providerCtx.Err(), context.DeadlineExceeded) {
+			timing.TimeoutStage = "provider"
+		}
+		cancelProvider()
+		if release != nil {
+			if releaseErr := release(); err == nil && releaseErr != nil {
+				err = fmt.Errorf("release image concurrency slot: %w", releaseErr)
+			}
+		}
+		if err == nil {
+			return image, requestID, attempt, timing, nil
+		}
+		lastRequestID, lastErr = requestID, err
+		delay, retry := imageEditRetryDelay(err, attempt)
+		if !retry || attempt == maxAttempts {
+			break
+		}
+		timer := time.NewTimer(delay)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+				timing.TimeoutStage = "queue"
+			}
+			return nil, lastRequestID, attempt, timing, ctx.Err()
+		case <-timer.C:
+		}
+	}
+	return nil, lastRequestID, usedAttempts, timing, fmt.Errorf("GPT Image edit failed after %d attempt(s): %w", usedAttempts, lastErr)
+}
+
+func imageEditRetryDelay(err error, attempt int) (time.Duration, bool) {
+	var httpErr *imageEditHTTPError
+	if errors.As(err, &httpErr) {
+		if httpErr.StatusCode != http.StatusRequestTimeout && httpErr.StatusCode != http.StatusTooManyRequests && httpErr.StatusCode < 500 {
+			return 0, false
+		}
+		if seconds, parseErr := strconv.Atoi(strings.TrimSpace(httpErr.RetryAfter)); parseErr == nil && seconds >= 0 {
+			return minDuration(time.Duration(seconds)*time.Second, 30*time.Second), true
+		}
+		return minDuration(time.Duration(1<<maxInt(attempt-1, 0))*2*time.Second, 30*time.Second), true
+	}
+	var transportErr *imageEditTransportError
+	if errors.As(err, &transportErr) {
+		return minDuration(time.Duration(1<<maxInt(attempt-1, 0))*2*time.Second, 30*time.Second), true
+	}
+	return 0, false
+}
+
+func openAIImageEditEndpoint(rawBaseURL, rawPath string) (string, error) {
+	base := strings.TrimRight(strings.TrimSpace(rawBaseURL), "/")
+	if base == "" {
+		base = "https://api.openai.com/v1"
+	}
+	path := strings.TrimSpace(rawPath)
+	if path == "" {
+		path = "/images/edits"
+	}
+	path = "/" + strings.TrimLeft(path, "/")
+	parsed, err := url.Parse(base)
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		return "", fmt.Errorf("OPENAI_BASE_URL must be an absolute OpenAI-compatible URL")
+	}
+	return base + path, nil
+}
+
+func normalizedOpenAIImageBaseURL(raw string) (string, error) {
+	base := strings.TrimSpace(raw)
+	if base == "" {
+		base = "https://api.openai.com/v1"
+	}
+	return openAIImageEditEndpoint(base, "/images/edits")
+}
+
+func validateGPTImageSize(size string) error {
+	if strings.EqualFold(strings.TrimSpace(size), "auto") {
+		return nil
+	}
+	width, height, err := parseGPTImageSize(size)
+	if err != nil {
+		return err
+	}
+	if width <= 0 || height <= 0 || width > 3840 || height > 3840 || width%16 != 0 || height%16 != 0 || width*height < 655360 || width*height > 8294400 || maxInt(width, height) > 3*minInt(width, height) {
+		return fmt.Errorf("--size must use 16px multiples, 655360-8294400 pixels, maximum edge 3840px, and at most 3:1 ratio")
+	}
+	return nil
+}
+
+func parseGPTImageSize(size string) (int, int, error) {
+	size = strings.ToLower(strings.TrimSpace(size))
+	parts := strings.Split(size, "x")
+	if len(parts) != 2 {
+		return 0, 0, fmt.Errorf("--size must be auto or WIDTHxHEIGHT")
+	}
+	width, widthErr := strconv.Atoi(parts[0])
+	height, heightErr := strconv.Atoi(parts[1])
+	if widthErr != nil || heightErr != nil || width <= 0 || height <= 0 {
+		return 0, 0, fmt.Errorf("--size must be auto or WIDTHxHEIGHT")
+	}
+	return width, height, nil
+}
+
+func validateProviderImageOutput(data []byte, requestedSize string) (imageOutputDimensions, error) {
+	dimensions, err := decodeImageDimensions(data)
+	if err != nil {
+		return imageOutputDimensions{}, err
+	}
+	if strings.EqualFold(strings.TrimSpace(requestedSize), "auto") {
+		return dimensions, nil
+	}
+	expectedWidth, expectedHeight, err := parseGPTImageSize(requestedSize)
+	if err != nil {
+		return imageOutputDimensions{}, err
+	}
+	expectedAspectRatio := float64(expectedWidth) / float64(expectedHeight)
+	deviation := math.Abs(dimensions.AspectRatio/expectedAspectRatio - 1)
+	if deviation > maxProviderImageAspectDeviation {
+		return imageOutputDimensions{}, &providerImageAspectDeviationError{
+			actualWidth: dimensions.Width, actualHeight: dimensions.Height, expectedWidth: expectedWidth, expectedHeight: expectedHeight,
+			actualAspect: dimensions.AspectRatio, expectedAspect: expectedAspectRatio,
+			aspectDeviation: deviation, maximumDeviation: maxProviderImageAspectDeviation,
+		}
+	}
+	return dimensions, nil
+}
+
+func decodeImageDimensions(data []byte) (imageOutputDimensions, error) {
+	config, _, err := image.DecodeConfig(bytes.NewReader(data))
+	if err != nil || config.Width <= 0 || config.Height <= 0 {
+		return imageOutputDimensions{}, fmt.Errorf("provider returned an unreadable image: %w", err)
+	}
+	return imageOutputDimensions{
+		Width:       config.Width,
+		Height:      config.Height,
+		AspectRatio: float64(config.Width) / float64(config.Height),
+	}, nil
+}
+
+func requestGPTImageEditWithValidAspect(
+	ctx context.Context,
+	client *http.Client,
+	endpoint, apiKey, model, imageField string,
+	inputs []string,
+	mask, prompt, size, quality string,
+	maxAttempts int,
+	acquire imageSlotAcquirer,
+) ([]byte, string, int, int, imageOutputDimensions, bool, imageEditTiming, error) {
+	totalAttempts := 0
+	lastRequestID := ""
+	var totalTiming imageEditTiming
+	for aspectAttempt := 0; aspectAttempt <= maxProviderImageAspectRetries; aspectAttempt++ {
+		image, requestID, attempts, timing, err := requestGPTImageEditWithRetryUsingSlotsTimed(ctx, client, endpoint, apiKey, model, imageField, inputs, mask, prompt, size, quality, maxAttempts, acquire)
+		totalAttempts += attempts
+		totalTiming.QueueWait += timing.QueueWait
+		totalTiming.ProviderElapsed += timing.ProviderElapsed
+		for _, providerAttempt := range timing.ProviderAttempts {
+			providerAttempt.Attempt += len(totalTiming.ProviderAttempts)
+			totalTiming.ProviderAttempts = append(totalTiming.ProviderAttempts, providerAttempt)
+		}
+		if timing.TimeoutStage != "" {
+			totalTiming.TimeoutStage = timing.TimeoutStage
+		}
+		if requestID != "" {
+			lastRequestID = requestID
+		}
+		if err != nil {
+			return nil, lastRequestID, totalAttempts, aspectAttempt, imageOutputDimensions{}, false, totalTiming, err
+		}
+		dimensions, err := validateProviderImageOutput(image, size)
+		if err == nil {
+			return image, lastRequestID, totalAttempts, aspectAttempt, dimensions, false, totalTiming, nil
+		}
+		var aspectErr *providerImageAspectDeviationError
+		if !errors.As(err, &aspectErr) {
+			return nil, lastRequestID, totalAttempts, aspectAttempt, imageOutputDimensions{}, false, totalTiming, err
+		}
+		if aspectAttempt == maxProviderImageAspectRetries {
+			return nil, lastRequestID, totalAttempts, aspectAttempt, imageOutputDimensions{}, false, totalTiming, fmt.Errorf("GPT Image edit failed after %d aspect attempt(s): %w", aspectAttempt+1, err)
+		}
+	}
+	panic("unreachable image aspect retry state")
+}
+
+func requestGPTImageEdit(ctx context.Context, client *http.Client, endpoint, apiKey, model, imageField string, inputs []string, mask, prompt, size, quality string) ([]byte, string, error) {
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	fields := []struct{ key, value string }{{"model", model}, {"prompt", prompt}, {"size", size}, {"output_format", "png"}}
+	if quality != "" {
+		fields = append(fields, struct{ key, value string }{"quality", quality})
+	}
+	for _, field := range fields {
+		if err := writer.WriteField(field.key, field.value); err != nil {
+			return nil, "", err
+		}
+	}
+	for _, input := range inputs {
+		if err := addImageEditFile(writer, imageField, input); err != nil {
+			return nil, "", err
+		}
+	}
+	if strings.TrimSpace(mask) != "" {
+		if err := addImageEditFile(writer, "mask", mask); err != nil {
+			return nil, "", err
+		}
+	}
+	if err := writer.Close(); err != nil {
+		return nil, "", err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, &body)
+	if err != nil {
+		return nil, "", err
+	}
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, "", &imageEditTransportError{err: err}
+	}
+	defer resp.Body.Close()
+	payload, readErr := io.ReadAll(io.LimitReader(resp.Body, 32<<20))
+	if readErr != nil {
+		return nil, "", fmt.Errorf("read GPT Image response: %w", readErr)
+	}
+	requestID := resp.Header.Get("x-request-id")
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, requestID, &imageEditHTTPError{
+			StatusCode: resp.StatusCode,
+			RequestID:  requestID,
+			RetryAfter: resp.Header.Get("Retry-After"),
+			Body:       truncateCLIError(payload, 1000),
+		}
+	}
+	var response openAIImageEditResponse
+	if err := json.Unmarshal(payload, &response); err != nil {
+		return nil, requestID, fmt.Errorf("decode GPT Image response: %w", err)
+	}
+	if len(response.Data) == 0 || strings.TrimSpace(response.Data[0].B64JSON) == "" {
+		return nil, requestID, fmt.Errorf("GPT Image response did not include data[0].b64_json")
+	}
+	image, err := base64.StdEncoding.DecodeString(response.Data[0].B64JSON)
+	if err != nil {
+		return nil, requestID, fmt.Errorf("decode GPT Image output: %w", err)
+	}
+	return image, requestID, nil
+}
+
+func addImageEditFile(writer *multipart.Writer, field, path string) error {
+	file, err := os.Open(path)
+	if err != nil {
+		return fmt.Errorf("open %s: %w", path, err)
+	}
+	defer file.Close()
+	contentType := imageEditFileContentType(path)
+	part, err := writer.CreatePart(textproto.MIMEHeader{
+		"Content-Disposition": {mime.FormatMediaType("form-data", map[string]string{"name": field, "filename": filepath.Base(path)})},
+		"Content-Type":        {contentType},
+	})
+	if err != nil {
+		return err
+	}
+	if _, err := io.Copy(part, file); err != nil {
+		return fmt.Errorf("attach %s: %w", path, err)
+	}
+	return nil
+}
+
+func imageEditFileContentType(path string) string {
+	switch strings.ToLower(filepath.Ext(path)) {
+	case ".png":
+		return "image/png"
+	case ".jpg", ".jpeg":
+		return "image/jpeg"
+	case ".webp":
+		return "image/webp"
+	}
+	return "application/octet-stream"
+}
+
+func truncateCLIError(value []byte, limit int) string {
+	text := strings.TrimSpace(string(value))
+	if len(text) > limit {
+		return text[:limit] + "..."
+	}
+	return text
+}
+
+func minInt(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+func maxInt(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
+}
+
+func minDuration(a, b time.Duration) time.Duration {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+func runCreativeMaterials(cmd *cobra.Command, args []string) error {
+	client, err := newAPIClient(cmd)
+	if err != nil {
+		return err
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), cli.AtLeastAPITimeout(60*time.Second))
 	defer cancel()
 	var response creativeMaterialsCLIResponse
-	if err := client.PostJSON(ctx, "/api/issues/"+args[0]+"/creative-edit-jobs", body, &response); err != nil {
+	if err := client.GetJSON(ctx, "/api/issues/"+args[0]+"/creative-materials", &response); err != nil {
 		return err
 	}
-	if len(response.EditJobs) == 0 {
-		return fmt.Errorf("creative job response did not include a job")
-	}
-	return printCreativeJob(cmd, response.EditJobs[0])
-}
-
-func runCreativeGetJob(cmd *cobra.Command, args []string) error {
-	client, err := newAPIClient(cmd)
-	if err != nil {
-		return err
-	}
-	waitForCompletion, _ := cmd.Flags().GetBool("wait")
-	timeout, _ := cmd.Flags().GetDuration("timeout")
-	interval, _ := cmd.Flags().GetDuration("interval")
-	if timeout <= 0 || interval <= 0 {
-		return fmt.Errorf("--timeout and --interval must be greater than zero")
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	defer cancel()
-	for {
-		job, err := fetchCreativeJob(ctx, client, args[0], args[1])
-		if err != nil {
-			return err
+	onlySelected, _ := cmd.Flags().GetBool("selected")
+	if onlySelected {
+		filtered := make([]creativeMaterialCandidateCLI, 0, len(response.Candidates))
+		selectedIDs := map[string]struct{}{}
+		for _, candidate := range response.Candidates {
+			if candidate.Status == "selected" {
+				filtered = append(filtered, candidate)
+				selectedIDs[candidate.ID] = struct{}{}
+			}
 		}
-		if !waitForCompletion || job.Status == "completed" || job.Status == "failed" {
-			return printCreativeJob(cmd, job)
+		response.Candidates = filtered
+		filteredItems := make([]creativeIssueItemCLI, 0, len(response.Items))
+		for _, item := range response.Items {
+			if _, selected := selectedIDs[item.CandidateID]; selected {
+				filteredItems = append(filteredItems, item)
+			}
 		}
-		select {
-		case <-ctx.Done():
-			return fmt.Errorf("wait for creative job: %w", ctx.Err())
-		case <-time.After(interval):
+		response.Items = filteredItems
+		filteredDeliveries := make([]creativeDeliveryCLI, 0, len(response.Deliveries))
+		for _, delivery := range response.Deliveries {
+			if _, selected := selectedIDs[delivery.CandidateID]; selected {
+				filteredDeliveries = append(filteredDeliveries, delivery)
+			}
 		}
+		response.Deliveries = filteredDeliveries
 	}
-}
-
-func fetchCreativeJob(ctx context.Context, client *cli.APIClient, issueID, jobID string) (creativeJobCLI, error) {
-	var response creativeMaterialsCLIResponse
-	path := "/api/issues/" + issueID + "/creative-edit-jobs/" + jobID + "/sync"
-	if err := client.PostJSON(ctx, path, map[string]any{}, &response); err != nil {
-		return creativeJobCLI{}, err
-	}
-	for _, job := range response.EditJobs {
-		if job.ID == jobID {
-			return job, nil
-		}
-	}
-	return creativeJobCLI{}, fmt.Errorf("creative job %s was not returned", jobID)
-}
-
-func runCreativeDownload(cmd *cobra.Command, args []string) error {
-	client, err := newAPIClient(cmd)
-	if err != nil {
-		return err
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), cli.AtLeastAPITimeout(5*time.Minute))
-	defer cancel()
-	path := fmt.Sprintf("/api/issues/%s/creative-edit-jobs/%s/download", args[0], args[1])
-	data, err := client.DownloadFile(ctx, path)
-	if err != nil {
-		return err
-	}
-	outputDir, _ := cmd.Flags().GetString("output-dir")
-	filename := "creative-job-" + shortCLIIdentifier(args[1]) + ".zip"
-	destination := filepath.Join(outputDir, filename)
-	if err := os.MkdirAll(outputDir, 0o755); err != nil {
-		return err
-	}
-	if err := os.WriteFile(destination, data, 0o644); err != nil {
-		return err
-	}
-	abs, err := filepath.Abs(destination)
-	if err != nil {
-		abs = destination
-	}
-	return cli.PrintJSON(os.Stdout, map[string]any{
-		"job_id": args[1],
-		"path":   abs,
-		"size":   len(data),
-	})
-}
-
-func creativeRulesFromFlags(cmd *cobra.Command) (map[string]any, error) {
-	rules := map[string]any{}
-	raw, _ := cmd.Flags().GetString("rules-json")
-	if strings.TrimSpace(raw) != "" {
-		if err := json.Unmarshal([]byte(raw), &rules); err != nil {
-			return nil, fmt.Errorf("--rules-json must be a JSON object: %w", err)
-		}
-	}
-	variantCount, _ := cmd.Flags().GetInt("variant-count")
-	if variantCount != 0 {
-		rules["variant_count"] = variantCount
-	}
-	sizes, _ := cmd.Flags().GetStringSlice("sizes")
-	if len(sizes) > 0 {
-		parsed, err := parseCreativeSizes(sizes)
-		if err != nil {
-			return nil, err
-		}
-		rules["sizes"] = parsed
-	}
-	market, _ := cmd.Flags().GetString("market")
-	if strings.TrimSpace(market) != "" {
-		rules["market"] = strings.TrimSpace(market)
-	}
-	strategy, _ := cmd.Flags().GetString("strategy")
-	if strings.TrimSpace(strategy) != "" {
-		rules["strategy"] = strings.TrimSpace(strategy)
-	}
-	return rules, nil
-}
-
-func parseCreativeSizes(values []string) ([]map[string]any, error) {
-	out := make([]map[string]any, 0, len(values))
-	for _, value := range values {
-		value = strings.ToLower(strings.TrimSpace(value))
-		parts := strings.Split(value, "x")
-		if len(parts) != 2 {
-			return nil, fmt.Errorf("invalid creative size %q; expected WIDTHxHEIGHT", value)
-		}
-		width, err := strconv.Atoi(strings.TrimSpace(parts[0]))
-		if err != nil {
-			return nil, fmt.Errorf("invalid creative size %q", value)
-		}
-		height, err := strconv.Atoi(strings.TrimSpace(parts[1]))
-		if err != nil || width < 100 || height < 100 || width > 4096 || height > 4096 {
-			return nil, fmt.Errorf("invalid creative size %q", value)
-		}
-		out = append(out, map[string]any{
-			"width":  width,
-			"height": height,
-			"label":  fmt.Sprintf("%dx%d", width, height),
-		})
-	}
-	return out, nil
-}
-
-func printCreativeJob(cmd *cobra.Command, job creativeJobCLI) error {
 	output, _ := cmd.Flags().GetString("output")
 	if output == "json" {
-		return cli.PrintJSON(os.Stdout, job)
+		return cli.PrintJSON(os.Stdout, response)
 	}
-	cli.PrintTable(os.Stdout, []string{"ID", "STATUS", "STAGE", "PROGRESS", "EXTERNAL JOB"}, [][]string{{
-		job.ID,
-		job.Status,
-		job.Stage,
-		fmt.Sprintf("%d%%", job.Progress),
-		job.ExternalJobID,
-	}})
+	rows := make([][]string, 0, len(response.Candidates))
+	for _, candidate := range response.Candidates {
+		rows = append(rows, []string{
+			candidate.ID,
+			candidate.Status,
+			candidate.Competitor,
+			candidate.Title,
+			candidate.AssetType,
+			firstCreativeCandidateSource(candidate),
+		})
+	}
+	cli.PrintTable(os.Stdout, []string{"ID", "STATUS", "COMPETITOR", "TITLE", "TYPE", "SOURCE"}, rows)
 	return nil
+}
+
+func firstCreativeCandidateSource(candidate creativeMaterialCandidateCLI) string {
+	for _, value := range []string{candidate.ArchivedURL, candidate.PreviewURL, candidate.ResourceURL, candidate.PosterURL} {
+		if strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
 }
 
 func uniqueCLIStrings(values []string) []string {

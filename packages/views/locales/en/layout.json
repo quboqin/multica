@@ -7,8 +7,9 @@
     "plans": "Plans",
     "projects": "Projects",
     "autopilots": "Autopilot",
+    "creative": "Creative Studio",
     "agents": "Agents",
-    "squads": "Squads",
+    "squads": "Workflows",
     "usage": "Usage",
     "my_usage": "My Usage",
     "user_usage": "Usage Stats",
@@ -19,9 +20,12 @@
   },
   "help": {
     "trigger": "Help",
-    "docs": "Docs",
-    "changelog": "Change log",
-    "feedback": "Feedback"
+    "changelog": "Change log"
+  },
+  "release_announcement": {
+    "title": "Multica {{version}} is here",
+    "view_changelog": "View changelog",
+    "later": "Later"
   },
   "workspace_loader": {
     "loading_workspace": "Loading workspace…",

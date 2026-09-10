@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/analytics"
 	"github.com/multica-ai/multica/server/internal/auth"
@@ -183,7 +184,13 @@ type DaemonRegisterRequest struct {
 		Status           string `json:"status"`
 		Label            string `json:"label,omitempty"`
 		DeviceRuntimeURL string `json:"device_runtime_url,omitempty"`
+		ProfileID        string `json:"profile_id,omitempty"`
 	} `json:"runtimes"`
+	FailedProfiles []struct {
+		ProfileID   string `json:"profile_id"`
+		CommandName string `json:"command_name"`
+		Reason      string `json:"reason"`
+	} `json:"failed_profiles"`
 }
 
 type daemonWorkspaceReposResponse struct {
@@ -271,8 +278,8 @@ func (h *Handler) DaemonRegister(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "workspace_id is required")
 		return
 	}
-	if len(req.Runtimes) == 0 {
-		writeError(w, http.StatusBadRequest, "at least one runtime is required")
+	if len(req.Runtimes) == 0 && len(req.FailedProfiles) == 0 {
+		writeError(w, http.StatusBadRequest, "at least one runtime or failed profile is required")
 		return
 	}
 	wsUUID, ok := parseUUIDOrBadRequest(w, req.WorkspaceID, "workspace_id")
@@ -337,51 +344,63 @@ func (h *Handler) DaemonRegister(w http.ResponseWriter, r *http.Request) {
 			"device_runtime_url": strings.TrimRight(strings.TrimSpace(runtime.DeviceRuntimeURL), "/"),
 		})
 
-		row, err := h.Queries.UpsertAgentRuntime(r.Context(), db.UpsertAgentRuntimeParams{
-			WorkspaceID: wsUUID,
-			DaemonID:    strToText(req.DaemonID),
-			Name:        name,
-			RuntimeMode: "local",
-			Provider:    provider,
-			Status:      status,
-			DeviceInfo:  deviceInfo,
-			Metadata:    metadata,
-			OwnerID:     ownerID,
-		})
-		if err != nil {
-			obsmetrics.RecordEvent(h.Analytics, h.Metrics, analytics.RuntimeFailed(
-				uuidToString(ownerID),
-				req.WorkspaceID,
-				req.DaemonID,
-				provider,
-				"registration_failed",
-				"db_error",
-				true,
-			))
-			writeError(w, http.StatusInternalServerError, "failed to register runtime: "+err.Error())
-			return
-		}
-
-		registered := db.AgentRuntime{
-			ID:             row.ID,
-			WorkspaceID:    row.WorkspaceID,
-			DaemonID:       row.DaemonID,
-			Name:           row.Name,
-			RuntimeMode:    row.RuntimeMode,
-			Provider:       row.Provider,
-			Status:         row.Status,
-			DeviceInfo:     row.DeviceInfo,
-			Metadata:       row.Metadata,
-			LastSeenAt:     row.LastSeenAt,
-			CreatedAt:      row.CreatedAt,
-			UpdatedAt:      row.UpdatedAt,
-			OwnerID:        row.OwnerID,
-			LegacyDaemonID: row.LegacyDaemonID,
+		var registered db.AgentRuntime
+		var inserted bool
+		profileID := strings.TrimSpace(runtime.ProfileID)
+		if profileID != "" {
+			profileUUID, profileOK := parseUUIDOrBadRequest(w, profileID, "profile_id")
+			if !profileOK {
+				return
+			}
+			profile, err := h.Queries.GetRuntimeProfileForWorkspace(r.Context(), db.GetRuntimeProfileForWorkspaceParams{ID: profileUUID, WorkspaceID: wsUUID})
+			if err != nil {
+				writeError(w, http.StatusBadRequest, "unknown runtime profile: "+profileID)
+				return
+			}
+			if !profile.Enabled {
+				writeError(w, http.StatusConflict, "runtime profile is disabled: "+profileID)
+				return
+			}
+			provider = profile.ProtocolFamily
+			row, err := h.Queries.UpsertAgentRuntimeWithProfile(r.Context(), db.UpsertAgentRuntimeWithProfileParams{
+				WorkspaceID: wsUUID, DaemonID: strToText(req.DaemonID), Name: name, RuntimeMode: "local", Provider: provider,
+				Status: status, DeviceInfo: deviceInfo, Metadata: metadata, OwnerID: ownerID, ProfileID: profileUUID,
+			})
+			if err == nil {
+				inserted = row.Inserted
+				registered = db.AgentRuntime{ID: row.ID, WorkspaceID: row.WorkspaceID, DaemonID: row.DaemonID, Name: row.Name, RuntimeMode: row.RuntimeMode, Provider: row.Provider, Status: row.Status, DeviceInfo: row.DeviceInfo, Metadata: row.Metadata, LastSeenAt: row.LastSeenAt, CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt, OwnerID: row.OwnerID, LegacyDaemonID: row.LegacyDaemonID, Visibility: row.Visibility, ProfileID: row.ProfileID, CustomName: row.CustomName}
+			}
+			if err != nil {
+				writeError(w, http.StatusInternalServerError, "failed to register runtime: "+err.Error())
+				return
+			}
+		} else {
+			row, err := h.Queries.UpsertAgentRuntime(r.Context(), db.UpsertAgentRuntimeParams{
+				WorkspaceID: wsUUID, DaemonID: strToText(req.DaemonID), Name: name, RuntimeMode: "local", Provider: provider,
+				Status: status, DeviceInfo: deviceInfo, Metadata: metadata, OwnerID: ownerID,
+			})
+			if err == nil {
+				inserted = row.Inserted
+				registered = db.AgentRuntime{ID: row.ID, WorkspaceID: row.WorkspaceID, DaemonID: row.DaemonID, Name: row.Name, RuntimeMode: row.RuntimeMode, Provider: row.Provider, Status: row.Status, DeviceInfo: row.DeviceInfo, Metadata: row.Metadata, LastSeenAt: row.LastSeenAt, CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt, OwnerID: row.OwnerID, LegacyDaemonID: row.LegacyDaemonID, Visibility: row.Visibility, ProfileID: row.ProfileID, CustomName: row.CustomName}
+			}
+			if err != nil {
+				obsmetrics.RecordEvent(h.Analytics, h.Metrics, analytics.RuntimeFailed(
+					uuidToString(ownerID),
+					req.WorkspaceID,
+					req.DaemonID,
+					provider,
+					"registration_failed",
+					"db_error",
+					true,
+				))
+				writeError(w, http.StatusInternalServerError, "failed to register runtime: "+err.Error())
+				return
+			}
 		}
 
 		// Inserted is false for normal daemon reconnects/upserts, so
 		// runtime_ready is a first-ready-per-runtime-row signal.
-		if row.Inserted {
+		if inserted {
 			obsmetrics.RecordEvent(h.Analytics, h.Metrics, analytics.RuntimeRegistered(
 				uuidToString(ownerID),
 				req.WorkspaceID,
@@ -1092,6 +1111,10 @@ func (h *Handler) ClaimTaskByRuntime(w http.ResponseWriter, r *http.Request) {
 	}
 	runtimeWorkspaceID := uuidToString(runtime.WorkspaceID)
 	authMs = time.Since(start).Milliseconds()
+	// A deployment or transient API restart can leave a recoverable
+	// pre-adaptation result behind. Run the workspace-scoped repair scan while
+	// the daemon is already polling; order creation remains a user action.
+	h.recoverCreativeFactoryPreAdaptations(r.Context(), runtime.WorkspaceID)
 
 	claimStart := time.Now()
 	task, err := h.TaskService.ClaimTaskForRuntime(r.Context(), parseUUID(runtimeID))
@@ -1119,7 +1142,7 @@ func (h *Handler) ClaimTaskByRuntime(w http.ResponseWriter, r *http.Request) {
 		// Workspace-bound skills first, then platform built-in skills. Built-in
 		// names carry a "multica-" prefix so their on-disk slugs never collide
 		// with a user-authored workspace skill (see writeSkillFiles).
-		skills := h.TaskService.LoadAgentSkills(r.Context(), task.AgentID)
+		skills := h.TaskService.LoadAgentSkillsForTask(r.Context(), task.AgentID, task.IssueID, task.Context)
 		skills = append(skills, h.TaskService.BuiltinSkills()...)
 		var customEnv map[string]string
 		if agent.CustomEnv != nil {
@@ -1136,12 +1159,11 @@ func (h *Handler) ClaimTaskByRuntime(w http.ResponseWriter, r *http.Request) {
 		var mcpConfig json.RawMessage
 		if agent.McpConfig != nil {
 			mcpConfig = json.RawMessage(agent.McpConfig)
-			materialized, err := h.materializeAgentWorkspaceMCPRefs(r.Context(), runtimeWorkspaceID, mcpConfig, slog.Default())
-			if err != nil {
-				slog.Warn("failed to materialize workspace MCP references", "agent_id", uuidToString(agent.ID), "workspace_id", runtimeWorkspaceID, "error", err)
-			} else {
-				mcpConfig = materialized
-			}
+		}
+		if merged, err := mergeMCPOverlay(mcpConfig, json.RawMessage(task.RuntimeMcpOverlay)); err != nil {
+			slog.Warn("failed to merge task MCP overlay", "agent_id", uuidToString(agent.ID), "task_id", uuidToString(task.ID), "error", err)
+		} else {
+			mcpConfig = merged
 		}
 		// runtime_config is stored as JSONB and may legitimately be the
 		// empty object `{}` for agents that haven't opted into any
@@ -1227,7 +1249,7 @@ func (h *Handler) ClaimTaskByRuntime(w http.ResponseWriter, r *http.Request) {
 					ID:          issue.AssigneeID,
 					WorkspaceID: issue.WorkspaceID,
 				}); err == nil && uuidToString(squad.LeaderID) == resp.Agent.ID {
-					briefing := buildSquadLeaderBriefing(r.Context(), h.Queries, squad)
+					briefing := buildTaskAwareSquadLeaderBriefing(r.Context(), h.Queries, squad, task.Context)
 					if strings.TrimSpace(resp.Agent.Instructions) == "" {
 						resp.Agent.Instructions = briefing
 					} else {
@@ -1735,8 +1757,71 @@ func (h *Handler) ClaimTaskByRuntime(w http.ResponseWriter, r *http.Request) {
 	}
 	resp.AuthToken = tokenStr
 
+	prepareCreativeDomainTaskClaim(&resp)
+
 	slog.Info("task claimed by runtime", "task_id", uuidToString(task.ID), "runtime_id", runtimeID, "agent_id", uuidToString(task.AgentID), "prior_session", resp.PriorSessionID)
 	writeJSON(w, http.StatusOK, map[string]any{"task": resp})
+}
+
+// prepareCreativeDomainTaskClaim clears stale issue-session context and adds
+// an execution supplement for structured creative tasks. Legacy daemons need
+// an IssueID while preparing a working directory, so native no-Issue tasks
+// recover their audit envelope from verified task.context. The supplement
+// keeps task.context authoritative for workflow selection.
+func prepareCreativeDomainTaskClaim(resp *AgentTaskResponse) {
+	if resp == nil || !isCreativeDomainTaskContext(resp.Context) {
+		return
+	}
+	var taskContext creativeDomainTaskClaimContext
+	if json.Unmarshal(resp.Context, &taskContext) == nil && resp.IssueID == "" {
+		resp.IssueID = strings.TrimSpace(taskContext.IssueID)
+	}
+	resp.PriorSessionID = ""
+	resp.PriorWorkDir = ""
+	resp.TriggerCommentID = nil
+	resp.TriggerThreadID = ""
+	resp.TriggerCommentContent = ""
+	resp.TriggerSummary = nil
+	resp.TriggerAuthorType = ""
+	resp.TriggerAuthorName = ""
+	resp.NewCommentCount = 0
+	resp.NewCommentsSince = ""
+	if resp.Agent != nil {
+		resp.Agent.Instructions = strings.TrimSpace(resp.Agent.Instructions + "\n\n" + creativeDomainTaskClaimInstructions(resp.Context))
+	}
+}
+
+type creativeDomainTaskClaimContext struct {
+	Type                string `json:"type"`
+	Workflow            string `json:"workflow"`
+	CreativeOrderID     string `json:"creative_order_id"`
+	CreativeOrderItemID string `json:"creative_order_item_id"`
+	IssueID             string `json:"issue_id"`
+}
+
+func creativeDomainTaskClaimInstructions(raw json.RawMessage) string {
+	var taskContext creativeDomainTaskClaimContext
+	if json.Unmarshal(raw, &taskContext) != nil || taskContext.Type != "creative_domain_task" {
+		return ""
+	}
+
+	workflow := strings.TrimSpace(taskContext.Workflow)
+	var b strings.Builder
+	b.WriteString("## 当前创意任务的强制执行范围\n\n")
+	b.WriteString("本次任务的唯一流程依据是 `MULTICA_TASK_ID` 对应的 Task Context；当前 workflow 为 `")
+	b.WriteString(workflow)
+	b.WriteString("`。根工单仅用于审计和启动兼容，根工单的 metadata、标题、评论和历史会话都不能改变本次 workflow。\n\n")
+	b.WriteString("不得根据根工单推断流程；先读取 `.agent_context/issue_context.md` 的 Task Context，只执行其中绑定的流程。\n")
+
+	if workflow == creativeCandidateSelectionWorkflow {
+		b.WriteString("这是候选比较任务。完成比较后，必须且只能通过原子候选晋级接口提交结果；接口成功前不得报告完成。\n")
+		if orderID := strings.TrimSpace(taskContext.CreativeOrderID); orderID != "" && strings.TrimSpace(taskContext.CreativeOrderItemID) != "" {
+			fmt.Fprintf(&b, "使用 `multica creative order candidate-select %s %s`，提交恰好三条有序 selected_ids，以及其余有序 reserve_ids。\n", orderID, strings.TrimSpace(taskContext.CreativeOrderItemID))
+		} else {
+			b.WriteString("使用 `multica creative order candidate-select <creative_order_id> <creative_order_item_id>`，提交恰好三条有序 selected_ids，以及其余有序 reserve_ids。\n")
+		}
+	}
+	return strings.TrimSpace(b.String())
 }
 
 // trailingUserMessages returns the run of user messages after the last
@@ -1855,6 +1940,33 @@ func (h *Handler) ListPendingTasksByRuntime(w http.ResponseWriter, r *http.Reque
 // Task Lifecycle (called by daemon)
 // ---------------------------------------------------------------------------
 
+// ExtendTaskPrepareLease keeps a claimed task recoverable while the daemon is
+// still preparing its execution environment and has not called StartTask.
+func (h *Handler) ExtendTaskPrepareLease(w http.ResponseWriter, r *http.Request) {
+	runtimeID := chi.URLParam(r, "runtimeId")
+	taskID := chi.URLParam(r, "taskId")
+	runtime, ok := h.requireDaemonRuntimeAccess(w, r, runtimeID)
+	if !ok {
+		return
+	}
+	task, taskWorkspaceID, ok := h.requireDaemonTaskAccessWithWorkspace(w, r, taskID)
+	if !ok {
+		return
+	}
+	if taskWorkspaceID != uuidToString(runtime.WorkspaceID) || uuidToString(task.RuntimeID) != runtimeID {
+		writeError(w, http.StatusNotFound, "task not found")
+		return
+	}
+
+	updated, err := h.TaskService.ExtendTaskPrepareLease(r.Context(), parseUUID(taskID), parseUUID(runtimeID))
+	if err != nil {
+		slog.Warn("extend task prepare lease failed", "task_id", taskID, "runtime_id", runtimeID, "error", err)
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, h.hydratedTaskResponse(r.Context(), *updated, taskWorkspaceID))
+}
+
 // StartTask marks a dispatched task as running.
 func (h *Handler) StartTask(w http.ResponseWriter, r *http.Request) {
 	taskID := chi.URLParam(r, "taskId")
@@ -1932,17 +2044,10 @@ func (h *Handler) ReportTaskProgress(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Verify ownership and resolve workspace ID.
-	task, ok := h.requireDaemonTaskAccess(w, r, taskID)
+	// Verify ownership and retain the workspace for direct-task progress events.
+	_, workspaceID, ok := h.requireDaemonTaskAccessWithWorkspace(w, r, taskID)
 	if !ok {
 		return
-	}
-
-	workspaceID := ""
-	if task.IssueID.Valid {
-		if issue, err := h.Queries.GetIssue(r.Context(), task.IssueID); err == nil {
-			workspaceID = uuidToString(issue.WorkspaceID)
-		}
 	}
 
 	h.TaskService.ReportProgress(r.Context(), taskID, workspaceID, req.Summary, req.Step, req.Total)
@@ -1957,11 +2062,247 @@ type TaskCompleteRequest struct {
 	WorkDir   string `json:"work_dir"`   // working directory used during execution
 }
 
+type creativeReferenceAnalysisTaskContext struct {
+	Workflow        string `json:"workflow"`
+	CandidateID     string `json:"candidate_id"`
+	CrawlRunID      string `json:"crawl_run_id"`
+	AnalysisVersion int32  `json:"analysis_version"`
+}
+
+func (h *Handler) referenceAnalysisCompletionError(ctx context.Context, task db.AgentTaskQueue, workspaceID string) (string, error) {
+	if !task.TriggerEvidenceKind.Valid || task.TriggerEvidenceKind.String != "creative_crawl_run_analysis" {
+		return "", nil
+	}
+	if task.Status == "completed" || task.Status == "failed" || task.Status == "cancelled" {
+		return "", nil
+	}
+	var taskContext creativeReferenceAnalysisTaskContext
+	if err := json.Unmarshal(task.Context, &taskContext); err != nil || taskContext.Workflow != "creative_reference_analysis" {
+		return "reference analysis task completed with invalid task context", nil
+	}
+	candidateID, candidateErr := util.ParseUUID(strings.TrimSpace(taskContext.CandidateID))
+	crawlRunID, crawlRunErr := util.ParseUUID(strings.TrimSpace(taskContext.CrawlRunID))
+	resolvedWorkspaceID, workspaceErr := util.ParseUUID(strings.TrimSpace(workspaceID))
+	if candidateErr != nil || crawlRunErr != nil || workspaceErr != nil || taskContext.AnalysisVersion < 1 ||
+		!task.TriggerEvidenceRefID.Valid || task.TriggerEvidenceRefID != crawlRunID {
+		return "reference analysis task completed with invalid artifact coordinates", nil
+	}
+	var exists bool
+	if err := h.DB.QueryRow(ctx, `
+SELECT EXISTS(
+  SELECT 1
+  FROM creative_source_analysis analysis
+  JOIN creative_material_crawl_run_candidate relation
+    ON relation.run_id = analysis.trigger_evidence_ref_id
+   AND relation.candidate_id = analysis.candidate_id
+   AND relation.workspace_id = analysis.workspace_id
+  WHERE analysis.candidate_id = $1
+    AND analysis.analysis_version = $2
+    AND analysis.status = 'completed'
+    AND analysis.trigger_evidence_kind = 'crawl_run'
+    AND analysis.trigger_evidence_ref_id = $3
+    AND analysis.workspace_id = $4
+    AND relation.analysis_status = 'completed'
+)
+`, candidateID, taskContext.AnalysisVersion, crawlRunID, resolvedWorkspaceID).Scan(&exists); err != nil {
+		return "", err
+	}
+	if !exists {
+		return "reference analysis task completed without a matching completed source analysis", nil
+	}
+	return "", nil
+}
+
+func (h *Handler) preAdaptationCompletionError(ctx context.Context, task db.AgentTaskQueue, workspaceID string) (string, error) {
+	if !task.TriggerEvidenceKind.Valid || task.TriggerEvidenceKind.String != creativePreAdaptationEvidenceKind {
+		return "", nil
+	}
+	if task.Status == "completed" || task.Status == "failed" || task.Status == "cancelled" {
+		return "", nil
+	}
+	var taskContext creativePreAdaptationTaskContext
+	if err := json.Unmarshal(task.Context, &taskContext); err != nil || taskContext.Workflow != "creative_pre_adaptation" {
+		return "pre-adaptation task completed with invalid task context", nil
+	}
+	analysisID, analysisErr := util.ParseUUID(strings.TrimSpace(taskContext.SourceAnalysisID))
+	workspaceUUID, workspaceErr := util.ParseUUID(strings.TrimSpace(workspaceID))
+	if analysisErr != nil || workspaceErr != nil || !task.TriggerEvidenceRefID.Valid || task.TriggerEvidenceRefID != analysisID ||
+		taskContext.MarketPackVersion < 1 || taskContext.CopyLibraryVersion < 1 {
+		return "pre-adaptation task completed with invalid artifact coordinates", nil
+	}
+	var adaptationStatus, adaptationErrorCode string
+	var frozenResourcesMatch bool
+	err := h.DB.QueryRow(ctx, `
+SELECT COALESCE(result->'adaptation'->>'status', ''),
+       COALESCE(result->'adaptation'->>'error_code', ''),
+       COALESCE(
+  result->'adaptation'->>'status' IN ('completed', 'unavailable')
+  AND result->'adaptation'->'result'->>'market_pack_id' = $3
+  AND result->'adaptation'->'result'->>'market_pack_version' = $4
+  AND result->'adaptation'->'result'->>'copy_library_id' = $5
+  AND result->'adaptation'->'result'->>'copy_library_version' = $6,
+  false
+)
+FROM creative_source_analysis WHERE id = $1 AND workspace_id = $2
+	`, analysisID, workspaceUUID, taskContext.MarketPackID, strconv.Itoa(taskContext.MarketPackVersion), taskContext.CopyLibraryID, strconv.Itoa(taskContext.CopyLibraryVersion)).Scan(&adaptationStatus, &adaptationErrorCode, &frozenResourcesMatch)
+	if err != nil {
+		return "", err
+	}
+	if !creativePreAdaptationArtifactAccepted(adaptationStatus, adaptationErrorCode, frozenResourcesMatch) {
+		if adaptationStatus == "unavailable" {
+			noEditableCopy, copyErr := h.creativePreAdaptationHasNoEditableCopy(ctx, workspaceUUID, analysisID)
+			if copyErr != nil {
+				return "", copyErr
+			}
+			if noEditableCopy {
+				// A static/logo-only source is a truthful terminal result for
+				// pre-adaptation. It must not enter the retry loop or block its
+				// sibling candidate from continuing.
+				return "", nil
+			}
+		}
+		priorFailures, err := h.countCreativePreAdaptationOutputFailures(ctx, workspaceUUID, analysisID, taskContext)
+		if err != nil {
+			return "", err
+		}
+		if priorFailures >= 1 {
+			if repaired, repairErr := h.repairCreativePreAdaptationAutomatically(ctx, workspaceUUID, analysisID, taskContext); repairErr != nil {
+				slog.Warn("automatic pre-adaptation numeric repair failed", "source_analysis_id", uuidToString(analysisID), "error", repairErr)
+			} else if repaired {
+				return "", nil
+			}
+			if err := h.markCreativePreAdaptationManualRequired(ctx, workspaceUUID, analysisID, taskContext, "pre-adaptation task still did not produce a matching frozen adaptation result after one retry"); err != nil {
+				return "", err
+			}
+			return "", nil
+		}
+		return "pre-adaptation task completed without a matching frozen adaptation result", nil
+	}
+	return "", nil
+}
+
+func (h *Handler) creativeQCVisualCompletionError(ctx context.Context, task db.AgentTaskQueue, workspaceID string) (string, error) {
+	if !task.TriggerEvidenceKind.Valid || task.TriggerEvidenceKind.String != "creative_order_variant_qc" {
+		return "", nil
+	}
+	if task.Status == "completed" || task.Status == "failed" || task.Status == "cancelled" {
+		return "", nil
+	}
+	var taskContext creativeQCTaskContext
+	if json.Unmarshal(task.Context, &taskContext) != nil || taskContext.Type != "creative_domain_task" || taskContext.Workflow != "creative_qc_visual" {
+		return "creative visual QC task completed with invalid task context", nil
+	}
+	orderID, orderErr := util.ParseUUID(strings.TrimSpace(taskContext.CreativeOrderID))
+	variantID, variantErr := util.ParseUUID(strings.TrimSpace(taskContext.VariantID))
+	workspaceUUID, workspaceErr := util.ParseUUID(strings.TrimSpace(workspaceID))
+	attempt := creativeQCAttemptFromContext(task)
+	if orderErr != nil || variantErr != nil || workspaceErr != nil || taskContext.Revision < 1 || attempt < 1 ||
+		!task.TriggerEvidenceRefID.Valid || task.TriggerEvidenceRefID != parseUUID(variantID.String()) {
+		return "creative visual QC task completed with invalid artifact coordinates", nil
+	}
+	var finalized bool
+	err := h.DB.QueryRow(ctx, `
+SELECT EXISTS(
+  SELECT 1
+  FROM creative_order_variant_qc_resolution resolution
+  JOIN creative_order_variant variant ON variant.id = resolution.variant_id
+  JOIN creative_order_item item ON item.id = variant.order_item_id
+  JOIN creative_order order_row ON order_row.id = item.order_id
+  WHERE resolution.variant_id = $1
+    AND resolution.revision = $2
+    AND resolution.attempt = $3
+    AND order_row.id = $4
+    AND order_row.workspace_id = $5
+)
+`, parseUUID(variantID.String()), taskContext.Revision, attempt, parseUUID(orderID.String()), parseUUID(workspaceUUID.String())).Scan(&finalized)
+	if err != nil {
+		return "", err
+	}
+	if !finalized {
+		return "creative visual QC task completed without a finalized QC resolution", nil
+	}
+	return "", nil
+}
+
+func (h *Handler) creativePreAdaptationHasNoEditableCopy(ctx context.Context, workspaceID, analysisID pgtype.UUID) (bool, error) {
+	var textBlockCount int
+	err := h.DB.QueryRow(ctx, `
+SELECT COALESCE(jsonb_array_length(
+    CASE WHEN jsonb_typeof(result->'text_blocks') = 'array' THEN result->'text_blocks' ELSE '[]'::jsonb END
+), 0)
+FROM creative_source_analysis
+WHERE id = $1 AND workspace_id = $2
+`, analysisID, workspaceID).Scan(&textBlockCount)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, nil
+	}
+	return textBlockCount == 0, err
+}
+
+func (h *Handler) countCreativePreAdaptationOutputFailures(ctx context.Context, workspaceID, analysisID pgtype.UUID, taskContext creativePreAdaptationTaskContext) (int, error) {
+	var count int
+	err := h.DB.QueryRow(ctx, `
+SELECT COUNT(*)
+FROM agent_task_queue task
+JOIN agent ON agent.id = task.agent_id
+WHERE agent.workspace_id = $1
+  AND task.trigger_evidence_kind = $2
+  AND task.trigger_evidence_ref_id = $3
+  AND task.status = 'failed'
+  AND COALESCE(task.failure_reason, '') = 'creative_output_missing'
+  AND task.context->>'workflow' = 'creative_pre_adaptation'
+  AND task.context->>'source_analysis_id' = $4
+  AND task.context->>'market_pack_id' = $5
+  AND task.context->>'market_pack_version' = $6
+  AND task.context->>'copy_library_id' = $7
+  AND task.context->>'copy_library_version' = $8
+`, workspaceID, creativePreAdaptationEvidenceKind, analysisID, taskContext.SourceAnalysisID, taskContext.MarketPackID, strconv.Itoa(taskContext.MarketPackVersion), taskContext.CopyLibraryID, strconv.Itoa(taskContext.CopyLibraryVersion)).Scan(&count)
+	return count, err
+}
+
+func (h *Handler) markCreativePreAdaptationManualRequired(ctx context.Context, workspaceID, analysisID pgtype.UUID, taskContext creativePreAdaptationTaskContext, reason string) error {
+	const summary = "预适配已重试一次仍未通过，需人工确认文案与数值映射。"
+	if strings.TrimSpace(reason) == "" {
+		reason = summary
+	}
+	adaptation := map[string]any{
+		"status":        "unavailable",
+		"summary":       summary,
+		"error_code":    "manual_confirmation_required",
+		"error_message": reason,
+		"result": map[string]any{
+			"market_pack_id":            taskContext.MarketPackID,
+			"market_pack_version":       taskContext.MarketPackVersion,
+			"copy_library_id":           taskContext.CopyLibraryID,
+			"copy_library_version":      taskContext.CopyLibraryVersion,
+			"gaps":                      []string{summary},
+			"analysis_highlights":       []string{},
+			"text_replacements":         []any{},
+			"repayment_plan_selections": []any{},
+			"numeric_layouts":           []any{},
+		},
+	}
+	encoded, _ := json.Marshal(adaptation)
+	result, err := h.DB.Exec(ctx, `
+UPDATE creative_source_analysis
+SET result = jsonb_set(result, '{adaptation}', $3::jsonb, true)
+WHERE id = $1 AND workspace_id = $2
+`, analysisID, workspaceID, encoded)
+	if err != nil {
+		return err
+	}
+	if result.RowsAffected() == 0 {
+		return errors.New("pre-adaptation source analysis not found")
+	}
+	h.publishCreativeMaterialsUpdated(workspaceID, pgtype.UUID{}, "system", "")
+	return nil
+}
+
 func (h *Handler) CompleteTask(w http.ResponseWriter, r *http.Request) {
 	taskID := chi.URLParam(r, "taskId")
 
 	// Verify the caller owns this task's workspace.
-	_, workspaceID, ok := h.requireDaemonTaskAccessWithWorkspace(w, r, taskID)
+	existingTask, workspaceID, ok := h.requireDaemonTaskAccessWithWorkspace(w, r, taskID)
 	if !ok {
 		return
 	}
@@ -1972,6 +2313,72 @@ func (h *Handler) CompleteTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	artifactError, validationErr := h.referenceAnalysisCompletionError(r.Context(), existingTask, workspaceID)
+	if validationErr == nil && artifactError == "" {
+		artifactError, validationErr = h.preAdaptationCompletionError(r.Context(), existingTask, workspaceID)
+	}
+	if validationErr == nil && artifactError == "" {
+		artifactError, validationErr = h.creativePlanningCompletionError(r.Context(), existingTask, workspaceID)
+	}
+	if validationErr == nil && artifactError == "" {
+		artifactError, validationErr = h.creativeCandidateSelectionCompletionError(r.Context(), existingTask, workspaceID)
+	}
+	if validationErr == nil && artifactError == "" {
+		artifactError, validationErr = h.creativeProductionCompletionError(r.Context(), existingTask, workspaceID)
+	}
+	if validationErr == nil && artifactError == "" {
+		artifactError, validationErr = h.creativeDirectEditCompletionError(r.Context(), existingTask, workspaceID)
+	}
+	if validationErr == nil && artifactError == "" {
+		artifactError, validationErr = h.creativeQCVisualCompletionError(r.Context(), existingTask, workspaceID)
+	}
+	directEditOutputPending := false
+	if validationErr == nil && artifactError != "" {
+		directEditOutputPending, validationErr = h.creativeDirectEditTargetOperationPending(r.Context(), existingTask)
+	}
+	if validationErr != nil {
+		slog.Error("validate creative task output failed", "task_id", taskID, "error", validationErr)
+		writeError(w, http.StatusInternalServerError, "failed to validate task output")
+		return
+	} else if artifactError != "" {
+		failureReason := "creative_output_missing"
+		if directEditOutputPending {
+			artifactError = creativeDirectEditOutputPendingError
+			failureReason = creativeDirectEditOutputPendingFailureReason
+		}
+		task, failErr := h.TaskService.FailTask(r.Context(), existingTask.ID, artifactError, req.SessionID, req.WorkDir, failureReason)
+		if failErr != nil {
+			slog.Warn("fail creative task without output", "task_id", taskID, "error", failErr)
+			writeError(w, http.StatusBadRequest, failErr.Error())
+			return
+		}
+		if err := h.Queries.DeleteTaskTokensByTask(r.Context(), task.ID); err != nil {
+			slog.Warn("complete task without output: failed to revoke task tokens", "task_id", uuidToString(task.ID), "error", err)
+		}
+		if err := h.reconcileCreativeImageOperationsForTerminalTask(r.Context(), *task); err != nil {
+			slog.Error("reconcile image operations after rejected completion", "task_id", taskID, "error", err)
+		}
+		if strings.HasPrefix(artifactError, creativePreAdaptationOutputMismatchError) {
+			if recoveryTaskID, retryErr := h.retryCreativePreAdaptationOutput(r.Context(), *task); retryErr != nil {
+				slog.Warn("queue automatic pre-adaptation recovery failed", "task_id", uuidToString(task.ID), "error", retryErr)
+			} else if recoveryTaskID != "" {
+				h.publishCreativeMaterialsUpdated(parseUUID(workspaceID), pgtype.UUID{}, "system", "")
+				slog.Info("automatic pre-adaptation recovery queued", "task_id", uuidToString(task.ID), "recovery_task_id", recoveryTaskID)
+			}
+		}
+		if err := h.settleCreativeProductionVariantTask(r.Context(), *task); err != nil {
+			slog.Error("close incomplete creative production variant after rejected completion", "task_id", taskID, "error", err)
+		} else if err := h.reconcileCreativeCandidateOrchestrationForProductionTask(r.Context(), *task); err != nil {
+			slog.Error("reconcile creative candidates after rejected completion", "task_id", taskID, "error", err)
+		}
+		if err := h.settleCreativeDirectEditTask(r.Context(), *task); err != nil {
+			slog.Error("close incomplete creative direct edit after rejected completion", "task_id", taskID, "error", err)
+		}
+		slog.Warn("creative task failed closed", "task_id", taskID, "error", artifactError)
+		writeJSON(w, http.StatusOK, h.hydratedTaskResponse(r.Context(), *task, workspaceID))
+		return
+	}
+
 	result, _ := json.Marshal(req)
 	task, err := h.TaskService.CompleteTask(r.Context(), parseUUID(taskID), result, req.SessionID, req.WorkDir)
 	if err != nil {
@@ -1979,8 +2386,24 @@ func (h *Handler) CompleteTask(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	if err := h.reconcileCreativeImageOperationsForTerminalTask(r.Context(), *task); err != nil {
+		slog.Error("reconcile image operations after completion", "task_id", taskID, "error", err)
+	}
 
 	h.emitIssueExecutedOnFirstCompletion(r, task)
+	if err := h.enqueueCreativePreAdaptation(r.Context(), *task, workspaceID); err != nil {
+		// The source analysis is already durably completed. Keep that result
+		// truthful while exposing the handoff failure for the next recovery pass.
+		slog.Warn("automatic creative pre-adaptation handoff failed", "task_id", taskID, "error", err)
+	}
+	if err := h.settleCreativeProductionVariantTask(r.Context(), *task); err != nil {
+		slog.Error("close incomplete creative production variant after completion", "task_id", taskID, "error", err)
+	} else if err := h.reconcileCreativeCandidateOrchestrationForProductionTask(r.Context(), *task); err != nil {
+		slog.Error("reconcile creative candidates after completion", "task_id", taskID, "error", err)
+	}
+	if err := h.settleCreativeDirectEditTask(r.Context(), *task); err != nil {
+		slog.Error("close incomplete creative direct edit after completion", "task_id", taskID, "error", err)
+	}
 
 	// Best-effort revoke of any agent task token minted at claim time.
 	// The token would naturally expire at the 24h watermark and is also
@@ -2129,12 +2552,29 @@ func (h *Handler) FailTask(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	if err := h.reconcileCreativeImageOperationsForTerminalTask(r.Context(), *task); err != nil {
+		slog.Error("reconcile image operations after failure", "task_id", taskID, "error", err)
+	}
 
 	// Best-effort revoke of the mat_ task token minted at claim. Same
 	// rationale as CompleteTask — eager deletion shrinks the post-
 	// terminal window. The 24h expiry / cascade are the durable guards.
 	if err := h.Queries.DeleteTaskTokensByTask(r.Context(), task.ID); err != nil {
 		slog.Warn("fail task: failed to revoke task tokens", "task_id", uuidToString(task.ID), "error", err)
+	}
+	if recoveryTaskID, recoveryErr := h.recoverFailedCreativePreAdaptationTask(r.Context(), *task, workspaceID, req.Error); recoveryErr != nil {
+		slog.Warn("recover failed pre-adaptation task failed", "task_id", taskID, "error", recoveryErr)
+	} else if recoveryTaskID != "" {
+		h.publishCreativeMaterialsUpdated(parseUUID(workspaceID), pgtype.UUID{}, "system", "")
+		slog.Info("automatic pre-adaptation recovery queued", "task_id", taskID, "recovery_task_id", recoveryTaskID)
+	}
+	if err := h.settleCreativeProductionVariantTask(r.Context(), *task); err != nil {
+		slog.Error("close incomplete creative production variant after failure", "task_id", taskID, "error", err)
+	} else if err := h.reconcileCreativeCandidateOrchestrationForProductionTask(r.Context(), *task); err != nil {
+		slog.Error("reconcile creative candidates after failure", "task_id", taskID, "error", err)
+	}
+	if err := h.settleCreativeDirectEditTask(r.Context(), *task); err != nil {
+		slog.Error("close incomplete creative direct edit after failure", "task_id", taskID, "error", err)
 	}
 
 	slog.Info("task failed", "task_id", taskID, "agent_id", uuidToString(task.AgentID), "task_error", req.Error, "failure_reason", req.FailureReason)
@@ -2335,6 +2775,9 @@ func (h *Handler) CancelTask(w http.ResponseWriter, r *http.Request) {
 		slog.Warn("cancel task failed", "task_id", taskID, "error", err)
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
+	}
+	if err := h.reconcileCreativeImageOperationsForTerminalTask(r.Context(), *task); err != nil {
+		slog.Error("reconcile image operations after cancellation", "task_id", taskID, "error", err)
 	}
 
 	slog.Info("task cancelled by user", "task_id", taskID, "issue_id", uuidToString(task.IssueID))

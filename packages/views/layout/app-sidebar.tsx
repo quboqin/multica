@@ -36,6 +36,7 @@ import {
   X,
   Zap,
   Users,
+  Palette,
   Star,
   Folder,
 } from "lucide-react";
@@ -73,7 +74,13 @@ import {
 } from "@multica/ui/components/ui/dropdown-menu";
 import { useAuthStore } from "@multica/core/auth";
 import { useCurrentWorkspace, useWorkspacePaths, paths } from "@multica/core/paths";
-import { workspaceListOptions, myInvitationListOptions, workspaceKeys } from "@multica/core/workspace/queries";
+import {
+  workspaceListOptions,
+  myInvitationListOptions,
+  workspaceKeys,
+  workspaceCapabilityKeys,
+  workspaceCapabilitiesOptions,
+} from "@multica/core/workspace/queries";
 import { resolvePublicFileUrl } from "@multica/core/workspace/avatar-url";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { inboxKeys, deduplicateInboxItems } from "@multica/core/inbox/queries";
@@ -129,6 +136,7 @@ type NavKey =
   | "autopilots"
   | "agents"
   | "squads"
+  | "creative"
   | "usage"
   | "usageMe"
   | "usageUsers"
@@ -148,6 +156,7 @@ type NavLabelKey =
   | "autopilots"
   | "agents"
   | "squads"
+  | "creative"
   | "usage"
   | "my_usage"
   | "user_usage"
@@ -167,6 +176,7 @@ const workspaceNav: { key: NavKey; labelKey: NavLabelKey; icon: typeof Inbox }[]
   { key: "plans", labelKey: "plans", icon: Flag },
   { key: "kpi", labelKey: "kpi", icon: Gauge },
   { key: "autopilots", labelKey: "autopilots", icon: Zap },
+  { key: "creative", labelKey: "creative", icon: Palette },
   { key: "agents", labelKey: "agents", icon: Bot },
   { key: "squads", labelKey: "squads", icon: Users },
   { key: "usage", labelKey: "usage", icon: BarChart3 },
@@ -386,6 +396,16 @@ export function AppSidebar({ topSlot, searchSlot, headerClassName, headerStyle }
   const workspaceCreationDisabled = useConfigStore((s) => s.workspaceCreationDisabled);
 
   const wsId = workspace?.id;
+  const { data: workspaceCapabilities } = useQuery(
+    workspaceCapabilitiesOptions(wsId ?? ""),
+  );
+  const creativeFactoryKey = workspaceCapabilityKeys.creativeFactory;
+  const creativeFactoryEnabled = workspaceCapabilities?.items?.some(
+    (item) => item.key === creativeFactoryKey && item.enabled,
+  ) === true;
+  const visibleWorkspaceNav = workspaceNav.filter(
+    (item) => item.key !== "creative" || creativeFactoryEnabled,
+  );
   const [favoriteCategoryDialogOpen, setFavoriteCategoryDialogOpen] = useState(false);
   const [favoriteCategoriesOpen, setFavoriteCategoriesOpen] = useState(true);
   const { data: favoriteCategories = EMPTY_FAVORITE_CATEGORIES } = useQuery(
@@ -814,7 +834,7 @@ export function AppSidebar({ topSlot, searchSlot, headerClassName, headerStyle }
             <SidebarGroupLabel>{t(($) => $.sidebar.workspace_group)}</SidebarGroupLabel>
             <SidebarGroupContent>
               <SidebarMenu className="gap-0.5">
-                {workspaceNav.map((item) => {
+                {visibleWorkspaceNav.map((item) => {
                   const href = p[item.key]();
                   const isActive = isNavActive(pathname, href);
                   if (item.key === "usage") {

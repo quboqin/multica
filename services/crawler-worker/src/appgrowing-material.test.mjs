@@ -4,19 +4,104 @@ import assert from "node:assert/strict";
 import {
   appGrowingAppMaterialListVariables,
   appGrowingBrandFromStrategyMemory,
+  appGrowingBrowserFallbackCompetitors,
+  appGrowingCompetitorDiagnostics,
   appGrowingGraphQLDateWindow,
+  appGrowingBusinessProbeResult,
+  appGrowingGraphQLNeedsReauth,
   appGrowingGraphQLRequest,
+  appGrowingMaterialDedupeKey,
   appGrowingMaterialURL,
+  appGrowingBrowserCaptureShouldRetry,
+  appGrowingBrowserNoProgressThreshold,
+  appGrowingMaterialSearchBlockingError,
   appGrowingSearchAppVariables,
+  appGrowingSelectionMixSummary,
   appGrowingShouldUseAdaptiveBrowserFallback,
   captureAppGrowingMaterialPage,
+  authCheckFromBody,
   connectorForID,
   connectorGraphQLHeaders,
+  connectorAuthVerificationError,
   extractAppGrowingMaterials,
   isBrowserPageCrashError,
+  isAppGrowingImageMaterial,
+  selectAppGrowingMaterials,
   shouldBlockAppGrowingCrawlResource,
   shouldUseAppGrowingBrowserFallback,
 } from "./index.mjs";
+
+test("uses the asset path instead of temporary auth parameters for material identity", () => {
+  const first = appGrowingMaterialDedupeKey({
+    material_id: "material-1",
+    resource_url: "https://cdn.example.com/a.jpg?auth_key=first",
+  });
+  const second = appGrowingMaterialDedupeKey({
+    material_id: "material-1",
+    resource_url: "https://cdn.example.com/a.jpg?auth_key=second",
+  });
+  const sibling = appGrowingMaterialDedupeKey({
+    material_id: "material-1",
+    resource_url: "https://cdn.example.com/b.jpg?auth_key=first",
+  });
+
+  assert.equal(first, second);
+  assert.notEqual(first, sibling);
+});
+
+test("filters previously seen assets before filling the requested material limit", () => {
+  const rules = {
+    new_materials: { ratio: 0.4, duration_days_lt: 7, impression_gt: 1000 },
+    volume_materials: { ratio: 0.6, duration_days_gt: 30, impression_gte: 10_000_000 },
+  };
+  const materials = [
+    { resource_url: "https://cdn.example.com/seen.jpg", duration_days: 2, impression_estimate: 20_000 },
+    { resource_url: "https://cdn.example.com/new.jpg", duration_days: 3, impression_estimate: 30_000 },
+    { resource_url: "https://cdn.example.com/volume.jpg", duration_days: 90, impression_estimate: 20_000_000 },
+  ];
+  const excludedKeys = new Set([appGrowingMaterialDedupeKey(materials[0])]);
+
+  const selection = selectAppGrowingMaterials(materials, rules, 2, { excludedKeys });
+
+  assert.equal(selection.excludedCount, 1);
+  assert.deepEqual(selection.selected.map((item) => item.resource_url), [
+    "https://cdn.example.com/new.jpg",
+    "https://cdn.example.com/volume.jpg",
+  ]);
+});
+
+test("keeps only image assets in the AppGrowing image-collection path", () => {
+  assert.equal(isAppGrowingImageMaterial({ asset_type: "image" }), true);
+  assert.equal(isAppGrowingImageMaterial({ asset_type: "video" }), false);
+  assert.equal(isAppGrowingImageMaterial({ asset_type: "" }), false);
+});
+
+test("reports the actual selected material mix instead of the configured target", () => {
+  const selected = [
+    ...Array.from({ length: 20 }, () => ({ bucket: "new" })),
+    ...Array.from({ length: 5 }, () => ({ bucket: "volume" })),
+  ];
+
+  assert.deepEqual(
+    appGrowingSelectionMixSummary(
+      selected,
+      {
+        new_materials: { ratio: 0.4 },
+        volume_materials: { ratio: 0.6 },
+      },
+      25,
+    ),
+    {
+      target: { new_materials: 10, volume_materials: 15 },
+      actual: { new_materials: 20, volume_materials: 5, other_materials: 0 },
+      actual_ratio: { new_materials: 0.8, volume_materials: 0.2, other_materials: 0 },
+      shortfall: { new_materials: 0, volume_materials: 10 },
+      selected: 25,
+      requested_limit: 25,
+      ratio_target_met: false,
+    },
+  );
+});
 
 test("extracts AppGrowing material resources from nested GraphQL list rows", () => {
   const materials = extractAppGrowingMaterials({
@@ -157,7 +242,9 @@ test("blocks heavyweight AppGrowing fallback resources", () => {
 
   assert.equal(shouldBlockAppGrowingCrawlResource(request("image", "https://cdn.example.com/ad.jpg")), true);
   assert.equal(shouldBlockAppGrowingCrawlResource(request("media", "https://cdn.example.com/ad.mp4")), true);
+  assert.equal(shouldBlockAppGrowingCrawlResource(request("other", "https://appgrowing-global.youcloud.com/static/img/home-banner.png")), true);
   assert.equal(shouldBlockAppGrowingCrawlResource(request("script", "https://www.googletagmanager.com/gtm.js")), true);
+  assert.equal(shouldBlockAppGrowingCrawlResource(request("script", "https://appgrowing-global.youcloud.com/static/js/app.js")), false);
   assert.equal(shouldBlockAppGrowingCrawlResource(request("xhr", "https://api-appgrowing-global.youcloud.com/graphql")), false);
 });
 
@@ -222,6 +309,69 @@ test("captures AppGrowing browser page crashes as page-level errors", async () =
   assert.equal(capture.url.includes("page=2"), true);
 });
 
+test("waits for readable AppGrowing materialList bodies", async () => {
+  const handlers = new Map();
+  const materialListBody = {
+    data: {
+      materialList: {
+        total: 5,
+        limit: 50,
+        list: [],
+      },
+    },
+  };
+  const page = {
+    route: async () => null,
+    unroute: async () => null,
+    on: (event, handler) => {
+      handlers.set(event, handler);
+    },
+    off: (event, handler) => {
+      if (handlers.get(event) === handler) {
+        handlers.delete(event);
+      }
+    },
+    goto: async () => {
+      const handler = handlers.get("response");
+      handler?.({
+        url: () => "https://api-appgrowing-global.youcloud.com/graphql",
+        status: () => 200,
+        request: () => ({
+          postData: () => JSON.stringify({ operationName: "materialList", variables: { keyword: "Easycash" } }),
+          headers: () => ({}),
+        }),
+        json: async () => materialListBody,
+      });
+    },
+    reload: async () => null,
+    mouse: { wheel: async () => null },
+    keyboard: { press: async () => null },
+    locator: () => ({ innerText: async () => "" }),
+    title: async () => "AppGrowing",
+    url: () => "https://appgrowing-global.youcloud.com/leaflet?keyword=Easycash",
+  };
+
+  const capture = await captureAppGrowingMaterialPage(
+    page,
+    {
+      graphQLURL: "https://api-appgrowing-global.youcloud.com/graphql",
+      probeURL: "https://appgrowing-global.youcloud.com/leaflet",
+      anonymousTextPatterns: [],
+    },
+    {
+      competitor: "Easycash",
+      pageNumber: 1,
+      params: { date_range: "-29,0" },
+      captureTimeoutMS: 3000,
+    },
+  );
+
+  assert.equal(capture.material_list_observed, true);
+  assert.equal(capture.material_list_data_observed, true);
+  assert.equal(capture.total, 5);
+  assert.equal(capture.error, "appgrowing_browser_material_extract_empty");
+});
+
 
 test("builds AppGrowing GraphQL material-list variables from relative date ranges", () => {
   const now = new Date("2026-07-22T12:34:56Z");
@@ -243,10 +393,10 @@ test("builds AppGrowing GraphQL material-list variables from relative date range
     startDate: "2026-06-23",
     endDate: "2026-07-22",
     field: "all",
-    order: "impression_inc_2y_desc",
+    order: "_score_desc",
     page: 2,
     accurateSearch: 1,
-    appBrand: "brand-123",
+    keyword: "brand-123",
   });
 });
 
@@ -290,6 +440,35 @@ test("classifies AppGrowing GraphQL HTTP rejections as capture errors", async ()
   assert.match(result.error, /Language/);
 });
 
+test("runs AppGrowing GraphQL probes inside the authenticated browser page", async () => {
+  const connector = connectorForID("appgrowing");
+  const page = {
+    async evaluate(_callback, args) {
+      assert.equal(args.url, connector.graphQLURL);
+      assert.equal(args.data.operationName, "searchApp");
+      assert.equal(args.requestHeaders["accept-language"], "en");
+      assert.equal(args.requestHeaders.origin, undefined);
+      assert.equal(args.requestHeaders.referer, undefined);
+      assert.equal(args.requestHeaders["user-agent"], undefined);
+      return {
+        status: 200,
+        text: JSON.stringify({ data: { searchAppBrand: { data: [] } } }),
+      };
+    },
+  };
+
+  const result = await appGrowingGraphQLRequest(
+    page,
+    connector,
+    "searchApp",
+    "query searchApp { searchAppBrand { data } }",
+    { keyword: "Easycash" },
+  );
+
+  assert.equal(result.status, 200);
+  assert.deepEqual(result.body, { data: { searchAppBrand: { data: [] } } });
+});
+
 test("uses learned AppGrowing brand ids from adaptive strategy memory", () => {
   const brand = appGrowingBrandFromStrategyMemory({
     _adaptive_strategy_memory: {
@@ -323,6 +502,230 @@ test("enables adaptive browser fallback after GraphQL path failures", () => {
   assert.equal(appGrowingShouldUseAdaptiveBrowserFallback([], {
     memories: { easycash: { preferred_source: "browser_network" } },
   }), true);
+});
+
+test("treats AppGrowing application-level login expiry as unauthenticated", () => {
+  const connector = connectorForID("appgrowing");
+  const expired = {
+    errors: [{
+      message: "Login has expired",
+      extensions: { c: "05:403005", m: "Login has expired. Please log in again." },
+    }],
+  };
+
+  assert.equal(appGrowingGraphQLNeedsReauth(expired), true);
+  assert.equal(appGrowingGraphQLNeedsReauth({ data: { userinfo: { user_id: "user-1" } } }), false);
+  const authCheck = authCheckFromBody(expired, connector, 200, "test");
+  assert.match(authCheck.observed_at, /^\d{4}-\d{2}-\d{2}T/);
+  delete authCheck.observed_at;
+  assert.deepEqual(authCheck, {
+    authenticated: false,
+    method: "test",
+    http_status: 200,
+    user_id_present: false,
+    team_present: false,
+    plan_present: false,
+    upstream_error: "05:403005: Login has expired. Please log in again.",
+  });
+});
+
+test("requires both userinfo and searchApp access for AppGrowing verification", () => {
+  const baseAuth = {
+    authenticated: true,
+    method: "graphql_userinfo",
+    user_id_present: true,
+  };
+  const result = appGrowingBusinessProbeResult(baseAuth, {
+    status: 200,
+    body: { data: { searchAppBrand: { data: [] } } },
+  });
+
+  assert.equal(result.needsReauth, false);
+  assert.equal(result.verificationError, "");
+  assert.equal(result.authCheck.authenticated, true);
+  assert.equal(result.authCheck.method, "graphql_userinfo+searchApp");
+  assert.equal(result.authCheck.business_check.authenticated, true);
+});
+
+test("classifies searchApp login expiry as reauthentication instead of generic failure", () => {
+  const result = appGrowingBusinessProbeResult(
+    { authenticated: true, method: "graphql_userinfo", user_id_present: true },
+    {
+      status: 200,
+      body: {
+        errors: [{
+          message: "Login has expired",
+          extensions: { c: "05:403005", m: "Login has expired. Please log in again." },
+        }],
+      },
+    },
+  );
+
+  assert.equal(result.needsReauth, true);
+  assert.equal(result.verificationError, "");
+  assert.equal(result.authCheck.authenticated, false);
+  assert.match(result.authCheck.upstream_error, /05:403005/);
+});
+
+test("classifies AppGrowing single-device logout as reauthentication", () => {
+  const body = {
+    errors: [{
+      message: "You are logged out because the account is already signed in on another device.",
+      extensions: {
+        c: "05:403004",
+        m: "You are logged out because the account is already signed in on another device.",
+      },
+    }],
+  };
+
+  assert.equal(appGrowingGraphQLNeedsReauth(body), true);
+  assert.equal(connectorAuthVerificationError({
+    authenticated: false,
+    http_status: 200,
+    upstream_error: "05:403004: You are logged out because the account is already signed in on another device.",
+  }), "");
+});
+
+test("reports non-auth searchApp errors without guessing that login expired", () => {
+  const result = appGrowingBusinessProbeResult(
+    { authenticated: true, method: "graphql_userinfo", user_id_present: true },
+    {
+      status: 503,
+      body: null,
+      error: "appgrowing_graphql_http_503: upstream unavailable",
+    },
+  );
+
+  assert.equal(result.needsReauth, false);
+  assert.match(result.verificationError, /upstream unavailable/);
+  assert.equal(result.authCheck.authenticated, false);
+  assert.equal(result.authCheck.business_check.needs_reauth, false);
+});
+
+test("does not classify userinfo transport and upstream errors as expired login", () => {
+  assert.equal(connectorAuthVerificationError({
+    authenticated: false,
+    probe_error: "request timed out",
+  }), "request timed out");
+  assert.equal(connectorAuthVerificationError({
+    authenticated: false,
+    http_status: 503,
+  }), "userinfo verification returned HTTP 503");
+  assert.equal(connectorAuthVerificationError({
+    authenticated: false,
+    http_status: 200,
+    upstream_error: "05:403005: Login has expired. Please log in again.",
+  }), "");
+});
+
+test("falls back per competitor when only some GraphQL pages return material", () => {
+  const competitors = ["Easycash", "Kredit Pintar", "Adapundi"];
+  const captured = [
+    { source: "graphql_api", competitor: "Easycash", page: 1, materials_found: 12, error: "" },
+    { source: "graphql_api", competitor: "Kredit Pintar", page: 1, materials_found: 0, error: "appgrowing_graphql_http_406" },
+    { source: "graphql_api", competitor: "Kredit Pintar", page: 2, materials_found: 0, error: "appgrowing_graphql_http_406" },
+    { source: "graphql_api", competitor: "Adapundi", page: 1, materials_found: 0, error: "" },
+  ];
+
+  assert.deepEqual(appGrowingBrowserFallbackCompetitors(
+    competitors,
+    captured,
+    {},
+    { memories: {} },
+    false,
+    true,
+  ), ["Kredit Pintar", "Adapundi"]);
+  assert.deepEqual(appGrowingBrowserFallbackCompetitors(
+    competitors,
+    captured,
+    { browser_capture_fallback: false },
+    { memories: {} },
+    false,
+    true,
+  ), []);
+});
+
+test("tries every browser fallback competitor before no-progress stop", () => {
+  assert.equal(appGrowingBrowserNoProgressThreshold(7, 3), 7);
+  assert.equal(appGrowingBrowserNoProgressThreshold(2, 3), 3);
+});
+
+test("retries priority browser captures that return empty material data", () => {
+  assert.equal(appGrowingBrowserCaptureShouldRetry({
+    materials: [],
+    total: 16402,
+    error: "",
+  }, { priority: true }), true);
+  assert.equal(appGrowingBrowserCaptureShouldRetry({
+    materials: [],
+    total: null,
+    error: "",
+  }, { priority: true }), true);
+  assert.equal(appGrowingBrowserCaptureShouldRetry({
+    materials: [{ id: "material-1" }],
+    total: 16402,
+    error: "",
+  }, { priority: true }), false);
+});
+
+test("classifies mixed empty browser attempts with capture errors as blocking", () => {
+  const blocking = appGrowingMaterialSearchBlockingError([
+    { source: "browser_network", competitor: "Easycash", page: 1, materials_found: 0, error: "" },
+    { source: "browser_network", competitor: "Kredit Pintar", page: 1, materials_found: 0, error: "appgrowing_browser_material_list_not_observed" },
+    { source: "browser_network", competitor: "Adapundi", page: 1, materials_found: 0, error: "appgrowing_browser_material_list_not_observed" },
+  ], []);
+
+  assert.match(blocking, /appgrowing_browser_material_list_not_observed/);
+});
+
+test("reports multi-page coverage and per-competitor browser fallback", () => {
+  const diagnostics = appGrowingCompetitorDiagnostics(
+    ["Easycash", "Kredit Pintar"],
+    new Set(["easycash"]),
+    3,
+    5,
+    [
+      { source: "graphql_api", competitor: "Easycash", page: 1, materials_found: 3, error: "" },
+      { source: "graphql_api", competitor: "Easycash", page: 2, materials_found: 2, error: "" },
+      { source: "graphql_api", competitor: "Easycash", page: 3, materials_found: 0, error: "" },
+      { source: "graphql_api", competitor: "Easycash", page: 4, materials_found: 1, error: "" },
+      { source: "graphql_api", competitor: "Easycash", page: 5, materials_found: 0, error: "" },
+      { source: "graphql_api", competitor: "Kredit Pintar", page: 1, materials_found: 0, error: "appgrowing_graphql_http_406" },
+      { source: "browser_network", competitor: "Kredit Pintar", page: 1, materials_found: 4, error: "" },
+      { source: "browser_network", competitor: "Kredit Pintar", page: 2, materials_found: 0, error: "" },
+      { source: "browser_network", competitor: "Kredit Pintar", page: 3, materials_found: 0, error: "material_search_time_budget_exhausted", skipped: true },
+    ],
+    [
+      { competitor: "Easycash" },
+      { competitor: "Kredit Pintar" },
+      { competitor: "Kredit Pintar" },
+    ],
+  );
+
+  assert.deepEqual(diagnostics[0], {
+    competitor: "Easycash",
+    priority: true,
+    requested_pages: 5,
+    coverage_complete: true,
+    status: "found",
+    materials_found: 6,
+    selected: 1,
+    browser_fallback_used: false,
+    errors: [],
+    pages: [
+      { page: 1, status: "found", materials_found: 3, attempts: [{ source: "graphql_api", materials_found: 3, error: "", needs_reauth: false, skipped: false }] },
+      { page: 2, status: "found", materials_found: 2, attempts: [{ source: "graphql_api", materials_found: 2, error: "", needs_reauth: false, skipped: false }] },
+      { page: 3, status: "no_match", materials_found: 0, attempts: [{ source: "graphql_api", materials_found: 0, error: "", needs_reauth: false, skipped: false }] },
+      { page: 4, status: "found", materials_found: 1, attempts: [{ source: "graphql_api", materials_found: 1, error: "", needs_reauth: false, skipped: false }] },
+      { page: 5, status: "no_match", materials_found: 0, attempts: [{ source: "graphql_api", materials_found: 0, error: "", needs_reauth: false, skipped: false }] },
+    ],
+  });
+  assert.equal(diagnostics[1].requested_pages, 3);
+  assert.equal(diagnostics[1].coverage_complete, false);
+  assert.equal(diagnostics[1].status, "found_incomplete");
+  assert.equal(diagnostics[1].browser_fallback_used, true);
+  assert.equal(diagnostics[1].pages[2].status, "budget_exhausted");
+  assert.equal(diagnostics[1].selected, 2);
 });
 
 test("extracts AppGrowing materials from detailed appMaterialList GraphQL results", () => {

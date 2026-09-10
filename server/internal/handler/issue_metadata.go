@@ -28,7 +28,8 @@ import (
 // any whole-blob overwrite would race with concurrent agent writes (see the
 // design discussion on MUL-2017).
 const (
-	maxIssueMetadataKeys = 50
+	maxIssueMetadataKeys  = 50
+	maxIssueMetadataBytes = 8000
 )
 
 var issueMetadataKeyRE = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_.-]{0,63}$`)
@@ -70,6 +71,33 @@ func validateIssueMetadataValue(raw json.RawMessage) error {
 	default:
 		return errors.New("value must be a primitive: string, number, or bool")
 	}
+}
+
+func validateIssueMetadataInput(input map[string]json.RawMessage) ([]byte, error) {
+	if len(input) == 0 {
+		return nil, nil
+	}
+	if len(input) > maxIssueMetadataKeys {
+		return nil, fmt.Errorf("metadata cannot exceed %d keys", maxIssueMetadataKeys)
+	}
+	for key, value := range input {
+		if err := validateIssueMetadataKey(key); err != nil {
+			return nil, fmt.Errorf("metadata %w", err)
+		}
+		if err := validateIssueMetadataValue(value); err != nil {
+			return nil, fmt.Errorf("metadata %q: %w", key, err)
+		}
+	}
+	encoded, err := json.Marshal(input)
+	if err != nil {
+		return nil, errors.New("metadata is invalid")
+	}
+	// Keep a little headroom for PostgreSQL's JSONB representation. The DB
+	// constraint remains the final defense for unusual encodings.
+	if len(encoded) > maxIssueMetadataBytes {
+		return nil, errors.New("metadata exceeds the 8KB size limit")
+	}
+	return encoded, nil
 }
 
 // parseIssueMetadata decodes the JSONB bytes from db.Issue.Metadata into a

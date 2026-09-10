@@ -101,6 +101,13 @@ var issueGetCmd = &cobra.Command{
 	RunE:  runIssueGet,
 }
 
+var issueChildrenCmd = &cobra.Command{
+	Use:   "children <id>",
+	Short: "List direct child issues",
+	Args:  exactArgs(1),
+	RunE:  runIssueChildren,
+}
+
 var issuePullRequestsCmd = &cobra.Command{
 	Use:     "pull-requests <id>",
 	Aliases: []string{"prs"},
@@ -241,6 +248,7 @@ var validIssueStatuses = []string{
 func init() {
 	issueCmd.AddCommand(issueListCmd)
 	issueCmd.AddCommand(issueGetCmd)
+	issueCmd.AddCommand(issueChildrenCmd)
 	issueCmd.AddCommand(issuePullRequestsCmd)
 	issueCmd.AddCommand(issueCreateCmd)
 	issueCmd.AddCommand(issueUpdateCmd)
@@ -276,6 +284,11 @@ func init() {
 
 	// issue get
 	issueGetCmd.Flags().String("output", "json", "Output format: table or json")
+
+	// issue children
+	issueChildrenCmd.Flags().String("output", "table", "Output format: table or json")
+	issueChildrenCmd.Flags().Bool("full-id", false, "Show full UUIDs in table output")
+	issueChildrenCmd.Flags().Bool("compact", false, "Omit descriptions and attachments from JSON output")
 
 	// issue pull-requests
 	issuePullRequestsCmd.Flags().String("output", "table", "Output format: table or json")
@@ -534,6 +547,29 @@ func runIssuePullRequests(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
+func compactIssueChildrenResult(result map[string]any) map[string]any {
+	issuesRaw, _ := result["issues"].([]any)
+	issues := make([]map[string]any, 0, len(issuesRaw))
+	fields := []string{
+		"id", "identifier", "parent_issue_id", "title", "status", "priority",
+		"assignee_type", "assignee_id", "metadata", "created_at", "updated_at",
+	}
+	for _, raw := range issuesRaw {
+		issue, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		compact := make(map[string]any, len(fields))
+		for _, field := range fields {
+			if value, exists := issue[field]; exists {
+				compact[field] = value
+			}
+		}
+		issues = append(issues, compact)
+	}
+	return map[string]any{"issues": issues}
+}
+
 func normalizePullRequestList(raw []any) []map[string]any {
 	prs := make([]map[string]any, 0, len(raw))
 	for _, item := range raw {
@@ -614,6 +650,68 @@ func runIssueGet(cmd *cobra.Command, args []string) error {
 	}
 
 	return cli.PrintJSON(os.Stdout, issue)
+}
+
+func runIssueChildren(cmd *cobra.Command, args []string) error {
+	client, err := newAPIClient(cmd)
+	if err != nil {
+		return err
+	}
+
+	ctx, cancel := cli.APIContext(context.Background())
+	defer cancel()
+
+	issueRef, err := resolveIssueRef(ctx, client, args[0])
+	if err != nil {
+		return fmt.Errorf("resolve issue: %w", err)
+	}
+
+	var result map[string]any
+	path := "/api/issues/" + url.PathEscape(issueRef.ID) + "/children"
+	if err := client.GetJSON(ctx, path, &result); err != nil {
+		return fmt.Errorf("list child issues: %w", err)
+	}
+
+	output, _ := cmd.Flags().GetString("output")
+	if output == "json" {
+		compact, _ := cmd.Flags().GetBool("compact")
+		if compact {
+			result = compactIssueChildrenResult(result)
+		}
+		return cli.PrintJSON(os.Stdout, result)
+	}
+
+	issuesRaw, _ := result["issues"].([]any)
+	fullID, _ := cmd.Flags().GetBool("full-id")
+	headers := []string{"KEY", "TITLE", "STATUS", "PRIORITY"}
+	if fullID {
+		headers = []string{"KEY", "ID", "TITLE", "STATUS", "PRIORITY"}
+	}
+	rows := make([][]string, 0, len(issuesRaw))
+	for _, raw := range issuesRaw {
+		issue, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		row := []string{
+			issueDisplayKey(issue),
+			strVal(issue, "title"),
+			strVal(issue, "status"),
+			strVal(issue, "priority"),
+		}
+		if fullID {
+			row = []string{
+				issueDisplayKey(issue),
+				strVal(issue, "id"),
+				strVal(issue, "title"),
+				strVal(issue, "status"),
+				strVal(issue, "priority"),
+			}
+		}
+		rows = append(rows, row)
+	}
+	cli.PrintTable(os.Stdout, headers, rows)
+	return nil
 }
 
 // isHTTPURL reports whether path is an http:// or https:// URL.

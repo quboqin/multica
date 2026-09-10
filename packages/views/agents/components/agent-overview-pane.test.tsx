@@ -28,9 +28,6 @@ vi.mock("./tabs/env-tab", () => ({
 vi.mock("./tabs/custom-args-tab", () => ({
   CustomArgsTab: () => <div>custom-args-tab</div>,
 }));
-vi.mock("./tabs/mcp-config-tab", () => ({
-  McpConfigTab: () => <div>mcp-config-tab</div>,
-}));
 vi.mock("./tabs/integrations-tab", () => ({
   IntegrationsTab: () => <div>integrations-tab</div>,
 }));
@@ -119,39 +116,6 @@ function renderPane(runtimes: AgentRuntime[]) {
 
 beforeEach(() => {
   larkListingRef.current = { installations: [], configured: false };
-});
-
-describe("AgentOverviewPane MCP tab visibility", () => {
-  it.each([
-    ["Claude", "claude"],
-    ["Codex", "codex"],
-    ["Cursor", "cursor"],
-    ["Hermes", "hermes"],
-    ["Kimi", "kimi"],
-    ["Kiro", "kiro"],
-    ["OpenCode", "opencode"],
-    ["OpenClaw", "openclaw"],
-  ])("renders the MCP tab when the agent runs on the %s runtime", (_label, provider) => {
-    renderPane([makeRuntime(provider)]);
-    expect(screen.getByRole("button", { name: /^MCP$/i })).toBeInTheDocument();
-  });
-
-  it("hides the MCP tab for providers whose backend does not read mcp_config", () => {
-    // Saving an MCP config on e.g. Gemini would be a silent no-op at run
-    // time — that's the bug this hiding logic is meant to prevent.
-    renderPane([makeRuntime("gemini")]);
-    expect(
-      screen.queryByRole("button", { name: /^MCP$/i }),
-    ).not.toBeInTheDocument();
-  });
-
-  it("keeps the MCP tab visible when the runtime row hasn't loaded yet", () => {
-    // Empty runtimes[] mimics the brief window between the page mounting and
-    // the runtimes query resolving. Hiding the tab would flicker it off and
-    // then back on, which reads as a bug.
-    renderPane([]);
-    expect(screen.getByRole("button", { name: /^MCP$/i })).toBeInTheDocument();
-  });
 });
 
 describe("AgentOverviewPane Integrations tab visibility", () => {

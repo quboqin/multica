@@ -391,14 +391,23 @@ func userMessage(err error, lang Language) string {
 	var httpErr *HTTPError
 	if errors.As(err, &httpErr) {
 		kind := httpErr.Kind()
-		// Validation errors usually carry a useful server-provided message;
-		// surface it instead of the generic line.
-		if kind == KindValidation {
-			if serverMsg := extractServerMessage(httpErr.Body); serverMsg != "" {
+		if serverMsg := extractServerMessage(httpErr.Body); serverMsg != "" {
+			if kind == KindConflict && strings.HasPrefix(serverMsg, "creative ") {
+				return serverMsg
+			}
+			// Validation errors usually carry a useful server-provided message;
+			// surface it instead of the generic line.
+			if kind == KindValidation {
 				if lang == LangZH {
 					return "请求无效：" + serverMsg
 				}
 				return "Invalid request: " + serverMsg
+			}
+			// Worker capacity/cancellation messages are operationally important
+			// for agents. A generic 429/5xx line makes them look like an
+			// upstream API rate limit and can trigger duplicate crawl attempts.
+			if isCredentialWorkerMessage(serverMsg) {
+				return serverMsg
 			}
 		}
 		return messageFor(kind, lang)
@@ -430,6 +439,17 @@ func extractServerMessage(body string) string {
 		}
 	}
 	return ""
+}
+
+func isCredentialWorkerMessage(msg string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(msg))
+	if normalized == "" {
+		return false
+	}
+	return strings.Contains(normalized, "credential broker worker") ||
+		strings.Contains(normalized, "crawler worker") ||
+		strings.Contains(normalized, "worker_busy") ||
+		strings.Contains(normalized, "worker_unavailable")
 }
 
 // debugDetail renders the full original error chain plus any structured

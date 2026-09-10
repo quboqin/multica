@@ -10,6 +10,7 @@ import (
 	"strings"
 	"syscall"
 	"time"
+	_ "time/tzdata"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/multica-ai/multica/server/internal/analytics"
@@ -314,6 +315,7 @@ func main() {
 	heartbeatScheduler := handler.NewBatchedHeartbeatScheduler(queries, handler.DefaultHeartbeatBatchInterval)
 
 	r, h := NewRouterWithOptions(pool, hub, bus, analyticsClient, storeRedis, RouterOptions{
+		Version:            version,
 		HTTPMetrics:        httpMetrics,
 		BusinessMetrics:    businessMetrics,
 		DaemonHub:          daemonHub,
@@ -329,9 +331,10 @@ func main() {
 	// Start background workers.
 	sweepCtx, sweepCancel := context.WithCancel(context.Background())
 	autopilotCtx, autopilotCancel := context.WithCancel(context.Background())
-	taskSvc := service.NewTaskService(queries, pool, hub, bus, daemonWakeup)
-	taskSvc.Analytics = analyticsClient
-	taskSvc.Metrics = businessMetrics
+	// Reuse the HTTP handler's fully wired task service so runtime-offline and
+	// timeout sweepers execute the same creative terminal reconciliation hooks
+	// as daemon and user-facing task paths.
+	taskSvc := h.TaskService
 	autopilotSvc := service.NewAutopilotService(queries, pool, bus, taskSvc)
 	registerAutopilotListeners(bus, autopilotSvc)
 
@@ -349,8 +352,8 @@ func main() {
 	go heartbeatScheduler.Run(sweepCtx)
 	go runAutopilotScheduler(autopilotCtx, queries, autopilotSvc)
 	go runAutopilotFailureMonitor(autopilotCtx, queries, bus, envFailureMonitorConfig())
-	go runCreativeEditReconciler(sweepCtx, h)
 	go runCreativeMaterialArchiver(sweepCtx, h)
+	go runCreativePrimeRecovery(sweepCtx, h)
 	go runDBStatsLogger(sweepCtx, pool)
 
 	// Lark inbound supervisor: holds the §4.4 WS lease per installation
@@ -378,6 +381,13 @@ func main() {
 	// logging them on the tick that fails and retrying on the next
 	// cycle, so a temporary outage does not crash the server.
 	schedulerMgr := scheduler.NewManager(pool, scheduler.Options{})
+	if err := schedulerMgr.Register(creativeOrderRecoveryJob(h)); err != nil {
+		slog.Error("scheduler: failed to register creative order recovery", "error", err)
+		os.Exit(1)
+	}
+	if err := schedulerMgr.Register(creativeReferenceAnalysisRecoveryJob(h)); err != nil {
+		slog.Error("scheduler: failed to register creative reference analysis recovery", "error", err)
+	}
 	if err := schedulerMgr.Register(scheduler.TaskUsageHourlyJob(pool)); err != nil {
 		slog.Warn("scheduler: failed to register task_usage_hourly rollup job", "error", err)
 	} else {

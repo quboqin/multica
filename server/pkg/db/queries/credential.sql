@@ -1,34 +1,46 @@
 -- name: CreateCredentialProfile :one
 INSERT INTO credential_profile (
-    workspace_id, authorized_by_id, connector_id, label, status, expires_hint
+    workspace_id, authorized_by_id, connector_id, label, status, expires_hint, scope
 )
 VALUES (
-    $1, $2, $3, $4, $5, sqlc.narg('expires_hint')
+    $1, $2, $3, $4, $5, sqlc.narg('expires_hint'), $6
 )
 RETURNING *;
 
 -- name: ListCredentialProfilesForWorkspace :many
 SELECT * FROM credential_profile
-WHERE workspace_id = $1
+WHERE (workspace_id = $1 OR scope = 'deployment')
+  AND status <> 'revoked'
+ORDER BY updated_at DESC, created_at DESC;
+
+-- name: ListDeploymentCredentialProfiles :many
+SELECT * FROM credential_profile
+WHERE scope = 'deployment'
   AND status <> 'revoked'
 ORDER BY updated_at DESC, created_at DESC;
 
 -- name: GetCredentialProfileForWorkspace :one
 SELECT * FROM credential_profile
 WHERE id = $1
-  AND workspace_id = $2
+  AND (workspace_id = $2 OR scope = 'deployment')
   AND status <> 'revoked';
 
 -- name: GetCredentialProfileForWorkspaceByConnector :one
 SELECT * FROM credential_profile
-WHERE workspace_id = $1
-  AND connector_id = $2
+WHERE connector_id = $2
+  AND (workspace_id = $1 OR scope = 'deployment')
+  AND status <> 'revoked';
+
+-- name: GetDeploymentCredentialProfileByConnector :one
+SELECT * FROM credential_profile
+WHERE connector_id = $1
+  AND scope = 'deployment'
   AND status <> 'revoked';
 
 -- name: GetActiveCredentialProfileForWorkspaceByConnector :one
 SELECT * FROM credential_profile
-WHERE workspace_id = $1
-  AND connector_id = $2
+WHERE connector_id = $2
+  AND (workspace_id = $1 OR scope = 'deployment')
   AND status = 'active';
 
 -- name: UpdateCredentialProfileStatus :one
@@ -58,8 +70,53 @@ UPDATE credential_profile
 SET status = 'revoked',
     updated_at = now()
 WHERE id = $1
-  AND workspace_id = $2
+  AND (workspace_id = $2 OR scope = 'deployment')
 RETURNING *;
+
+-- name: IsCredentialProfileManager :one
+SELECT EXISTS (
+    SELECT 1
+    FROM credential_profile_manager
+    WHERE profile_id = $1 AND user_id = $2
+) AS can_manage;
+
+-- name: ListCredentialProfileManagers :many
+SELECT
+    manager.user_id,
+    app_user.name,
+    app_user.email,
+    manager.created_at
+FROM credential_profile_manager manager
+JOIN "user" app_user ON app_user.id = manager.user_id
+WHERE manager.profile_id = $1
+ORDER BY manager.created_at ASC, app_user.name ASC;
+
+-- name: AddCredentialProfileManager :exec
+INSERT INTO credential_profile_manager (profile_id, user_id, granted_by_id)
+VALUES ($1, $2, $3)
+ON CONFLICT (profile_id, user_id) DO NOTHING;
+
+-- name: RemoveCredentialProfileManager :execrows
+DELETE FROM credential_profile_manager AS target
+WHERE target.profile_id = $1
+  AND target.user_id = $2
+  -- Keep the final manager atomically. A separate count followed by DELETE
+  -- allows two concurrent requests to remove both managers.
+  AND 1 < (
+      SELECT count(*)
+      FROM credential_profile_manager AS manager
+      WHERE manager.profile_id = $1
+  );
+
+-- name: CountCredentialProfileManagers :one
+SELECT count(*)::int FROM credential_profile_manager
+WHERE profile_id = $1;
+
+-- name: CreateCredentialUsageAudit :exec
+INSERT INTO credential_usage_audit (
+    profile_id, workspace_id, requested_by_id, connector_id, capability, outcome
+)
+VALUES ($1, $2, sqlc.narg('requested_by_id'), $3, $4, $5);
 
 -- name: UpsertCredentialSecret :exec
 INSERT INTO credential_secret (profile_id, ciphertext, key_version, updated_at)

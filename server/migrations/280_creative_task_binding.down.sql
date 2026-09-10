@@ -1,0 +1,7 @@
+DROP TRIGGER creative_task_binding_sync ON agent_task_queue;
+DROP FUNCTION sync_creative_task_binding();
+DROP TABLE creative_task_size;
+DROP TABLE creative_task_binding;
+ALTER TABLE creative_order_variant DROP CONSTRAINT creative_order_variant_id_item_key;
+ALTER TABLE creative_order_item DROP CONSTRAINT creative_order_item_id_order_key;
+ALTER TABLE creative_order DROP CONSTRAINT creative_order_id_workspace_key;

@@ -22,10 +22,10 @@ function isMarkdown(path: string) {
 
 function FrontmatterCard({ data }: { data: SkillFrontmatter }) {
   return (
-    <div className="mb-4 rounded-lg border bg-muted/30 px-4 py-3">
+    <div className="mb-4 max-h-64 overflow-y-auto rounded-lg border bg-muted/30 px-4 py-3">
       <div className="grid gap-1.5">
         {Object.entries(data).map(([key, value]) => (
-          <div key={key} className="flex gap-2 text-xs">
+          <div key={key} className="flex items-start gap-2 text-xs">
             <span className="shrink-0 font-medium text-muted-foreground min-w-[80px]">
               {key}
             </span>
@@ -62,7 +62,7 @@ export function FileViewer({
   );
 
   return (
-    <div className="flex h-full flex-col">
+    <div className="flex h-full min-h-0 flex-col overflow-hidden">
       {/* File header */}
       <div className="flex h-10 items-center justify-between gap-3 border-b px-4">
         <span className="text-xs font-mono text-muted-foreground truncate">
@@ -98,7 +98,7 @@ export function FileViewer({
       </div>
 
       {/* File content */}
-      <div className="flex-1 min-h-0 overflow-y-auto">
+      <div className="min-h-0 flex-1 overflow-y-auto">
         {isMd && !editing ? (
           <div className="p-4 sm:p-6">
             {frontmatter && <FrontmatterCard data={frontmatter} />}

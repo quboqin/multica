@@ -92,6 +92,51 @@ test("parses explicit English and Chinese market and language filters", () => {
   assert.deepEqual(parsed.language, ["en", "ms", "id"]);
 });
 
+test("normalizes structured browser filters before material search", () => {
+  const normalized = normalizeAppGrowingMaterialSearchParams({
+    region: "印度尼西亚",
+    language: "印度尼西亚语",
+    devices: ["Android", "iOS"],
+    date_range: { type: "recent_days", days: 30 },
+    max_results: 25,
+    selection_rules: {
+      new_materials: { ratio: 0.4, duration_days_lt: 7, impression_gt: 1000 },
+      volume_materials: { ratio: 0.6, duration_days_gt: 30, impression_gte: 10_000_000 },
+    },
+  });
+
+  assert.equal(normalized.daterange, "-29,0");
+  assert.equal(normalized.limit, 25);
+  assert.deepEqual(normalized.area, ["ID"]);
+  assert.deepEqual(normalized.language, ["id"]);
+  assert.deepEqual(normalized.platform, [1, 2]);
+});
+
+test("normalizes collection target aliases and compact recent-day ranges", () => {
+  const normalized = normalizeAppGrowingMaterialSearchParams({
+    region: "印度尼西亚",
+    limit: null,
+    date_range: { days: 30 },
+    max_outputs: 5,
+  });
+
+  assert.equal(normalized.limit, 5);
+  assert.equal(normalized.daterange, "-29,0");
+});
+
+test("uses the AutoPilot selection defaults when a legacy task omits explicit rules", () => {
+  const normalized = normalizeAppGrowingMaterialSearchParams({
+    region: "印度尼西亚",
+    max_results: 25,
+  });
+
+  assert.deepEqual(normalized.selection_rules, {
+    new_materials: { ratio: 0.4, duration_days_lt: 7, impression_gt: 1_000 },
+    volume_materials: { ratio: 0.6, duration_days_gt: 30, impression_gte: 10_000_000 },
+  });
+  assert.equal(normalizeMaterialRules(undefined).new_materials.duration_days_lt, 7);
+});
+
 test("explicit params override parsed intent params", () => {
   const normalized = normalizeAppGrowingMaterialSearchParams({
     intent: "竞品：Easycash\n新素材：占比40%，投放天数<7天，曝光估算>1K\n跑量素材：占比60%，投放天数>30天，曝光估算>=10M\n输出最多25条",
@@ -107,6 +152,40 @@ test("explicit params override parsed intent params", () => {
   assert.equal(normalized.selection_rules.new_materials.impression_gt, 1000);
   assert.equal(normalized.selection_rules.volume_materials.impression_gt, 20_000_000);
   assert.equal(normalized.selection_rules.volume_materials.impression_gte, 10_000_000);
+});
+
+test("rejects incomplete explicit material selection rules with the missing fields", () => {
+  assert.throws(() => normalizeMaterialRules({
+    new_materials: {
+      ratio: 0.25,
+      duration_days_lt: 3,
+    },
+    volume_materials: {
+      impression_gte: 20_000_000,
+    },
+  }), /new_materials\.impression_gt\|impression_gte, volume_materials\.ratio, volume_materials\.duration_days_gt\|duration_days_gte/);
+});
+
+test("normalizes explicit selection rule aliases without introducing defaults", () => {
+  const rules = normalizeMaterialRules({
+    new_materials: {
+      ratio_pct: 40,
+      duration_max_days: 7,
+      estimated_impressions_gt: 1000,
+    },
+    volume_materials: {
+      share: 60,
+      duration_days: { min: 30 },
+      impression_threshold: { min: 10_000_000 },
+    },
+  });
+
+  assert.equal(rules.new_materials.ratio, 0.4);
+  assert.equal(rules.new_materials.duration_days_lt, 7);
+  assert.equal(rules.new_materials.impression_gt, 1000);
+  assert.equal(rules.volume_materials.ratio, 0.6);
+  assert.equal(rules.volume_materials.duration_days_gt, 30);
+  assert.equal(rules.volume_materials.impression_gte, 10_000_000);
 });
 
 test("normalizes inclusive threshold rules", () => {
@@ -127,4 +206,22 @@ test("normalizes inclusive threshold rules", () => {
   assert.equal(rules.new_materials.impression_gte, 1000);
   assert.equal(rules.volume_materials.duration_days_gte, 30);
   assert.equal(rules.volume_materials.impression_gte, 10_000_000);
+});
+
+test("normalizes explicit duration threshold aliases from collection agents", () => {
+  const rules = normalizeMaterialRules({
+    new_materials: {
+      ratio: 0.4,
+      duration_max_days_inclusive: 7,
+      impression_gt: 1000,
+    },
+    volume_materials: {
+      ratio: 0.6,
+      duration_min_days_exclusive: 30,
+      impression_gte: 10_000_000,
+    },
+  });
+
+  assert.equal(rules.new_materials.duration_days_lte, 7);
+  assert.equal(rules.volume_materials.duration_days_gt, 30);
 });

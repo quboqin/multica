@@ -148,6 +148,44 @@ make db-down          # Stop shared PostgreSQL
 make db-reset         # Drop + recreate current env's DB, then re-run migrations (local only; stop backend first)
 ```
 
+### Local UI acceptance with Chrome DevTools MCP
+
+When inspecting `http://localhost:3000` through Chrome DevTools MCP, use the
+`localhost` URL so the existing Multica auth cookies remain available. If the
+controlled browser shows a blank page or a full-screen loading spinner while
+the user's normal Chrome works, treat it as an MCP browser profile/cache issue,
+not as evidence that the app is down. First reload the selected page with
+DevTools `ignoreCache=true`; Next/Turbopack dev chunks can otherwise stay stuck
+behind stale `304` cache validation in the MCP Chrome profile.
+
+The local Codex MCP config should launch Chrome with a wide window and disable
+the Chrome HTTP cache for this purpose. Use Chrome's native `--window-size`
+argument rather than Chrome DevTools MCP's `--viewport` option; the latter
+calls a CDP method that is unavailable in the local Chrome 129 build.
+
+If Chrome DevTools MCP reports `Browser.setContentsSize` or repeatedly says the
+`chrome-profile` is already running, check for stale `chrome-devtools-mcp`
+processes using `C:\Users\zhangzhenyu\.cache\chrome-devtools-mcp\chrome-profile`.
+The normal project Playwright probe is not the cause unless it is explicitly
+launched with that same `userDataDir`; the crawler-worker Playwright fallback
+normally uses a temporary profile. If the persistent MCP profile still leaves
+Next/Turbopack chunks pending after the config is fixed, clear browser cache
+plus localhost CacheStorage and ServiceWorker data while preserving Cookies,
+Local Storage, and IndexedDB. Killing the broken MCP process closes the current
+Codex transport; restart or refresh Codex so the server is relaunched from the
+corrected config.
+
+```toml
+[mcp_servers.chrome-devtools]
+command = "npx"
+args = [
+  "chrome-devtools-mcp@latest",
+  "--chrome-arg=--window-size=1600,1000",
+  "--chrome-arg=--disable-http-cache",
+  "--redactNetworkHeaders=true",
+]
+```
+
 ### CI Requirements
 
 CI runs on Node 22 and Go 1.26.1 with a `pgvector/pgvector:pg17` PostgreSQL service. See `.github/workflows/ci.yml`.

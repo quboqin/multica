@@ -195,6 +195,68 @@ describe("useRealtimeSync — ws instance change", () => {
     }
   });
 
+  it("marks creative data stale for analysis, planning, production, selection and QC lifecycle events", () => {
+    const { ws, emit } = createObservableMockWs();
+    renderHook(() => useRealtimeSync(ws, stores), {
+      wrapper: createWrapper(qc),
+    });
+    invalidateSpy.mockClear();
+
+    const lifecycleEvents = [
+      "task:queued",
+      "task:dispatch",
+      "task:running",
+      "task:waiting_local_directory",
+      "task:completed",
+      "task:failed",
+      "task:cancelled",
+    ] as const;
+
+    act(() => {
+      for (const triggerEvidenceKind of ["creative_crawl_run_analysis", "creative_source_analysis", "creative_order_item_plan", "creative_order_item_production", "creative_order_item_candidate_selection", "creative_order_variant_qc", "creative_order_item_direct_edit"]) {
+        for (const type of lifecycleEvents) {
+          qc.setQueryData(["creative", "ws-1", "orders"], []);
+          emit({
+            type,
+            payload: {
+              task_id: `task-${triggerEvidenceKind}-${type}`,
+              agent_id: "agent-1",
+              issue_id: "",
+              runtime_id: "runtime-1",
+              status: type.slice("task:".length),
+              trigger_evidence_kind: triggerEvidenceKind,
+            },
+          });
+          expect(qc.getQueryState(["creative", "ws-1", "orders"])?.isInvalidated).toBe(true);
+        }
+      }
+    });
+
+  });
+
+  it("does not invalidate creative materials for unrelated task events", () => {
+    const { ws, emit } = createObservableMockWs();
+    renderHook(() => useRealtimeSync(ws, stores), {
+      wrapper: createWrapper(qc),
+    });
+    invalidateSpy.mockClear();
+
+    act(() => {
+      emit({
+        type: "task:failed",
+        payload: {
+          task_id: "task-qc",
+          agent_id: "agent-1",
+          issue_id: "issue-1",
+          status: "failed",
+          trigger_evidence_kind: "issue_assignment",
+        },
+      });
+    });
+
+    expect(invalidateSpy).not.toHaveBeenCalledWith({ queryKey: ["creative", "ws-1"] });
+  });
+
   it("invalidates favorites when a comment is deleted", () => {
     const { ws, emitEvent } = createObservableMockWs();
     renderHook(() => useRealtimeSync(ws, stores), {

@@ -12,28 +12,36 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/analytics"
 	"github.com/multica-ai/multica/server/internal/attribution"
 	"github.com/multica-ai/multica/server/internal/events"
+	"github.com/multica-ai/multica/server/internal/featureflags"
 	"github.com/multica-ai/multica/server/internal/mention"
 	obsmetrics "github.com/multica-ai/multica/server/internal/metrics"
 	"github.com/multica-ai/multica/server/internal/realtime"
+	"github.com/multica-ai/multica/server/internal/runtimeapps"
 	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
+	"github.com/multica-ai/multica/server/pkg/featureflag"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 	"github.com/multica-ai/multica/server/pkg/redact"
 	"github.com/multica-ai/multica/server/pkg/taskfailure"
 )
 
 type TaskService struct {
-	Queries   *db.Queries
-	TxStarter TxStarter
-	Hub       *realtime.Hub
-	Bus       *events.Bus
-	Analytics analytics.Client
-	Metrics   *obsmetrics.BusinessMetrics
-	Wakeup    TaskWakeupNotifier
+	Queries           *db.Queries
+	TxStarter         TxStarter
+	Hub               *realtime.Hub
+	Bus               *events.Bus
+	Analytics         analytics.Client
+	Metrics           *obsmetrics.BusinessMetrics
+	Wakeup            TaskWakeupNotifier
+	FeatureFlags      *featureflag.Service
+	Composio          ComposioOverlayBuilder
+	TaskCancelledHook func(context.Context, db.AgentTaskQueue) error
+	TaskFailedHook    func(context.Context, db.AgentTaskQueue) error
 	// EmptyClaim caches "this runtime has no queued task" so the daemon
 	// poll path can skip a Postgres scan on the steady-state empty case.
 	// Optional — a nil cache disables the fast path and every claim
@@ -44,6 +52,35 @@ type TaskService struct {
 	analyticsContextMu    sync.Mutex
 	analyticsContextCache map[string]analytics.TaskContext
 	analyticsContextOrder []string
+}
+
+type ComposioOverlayBuilder interface {
+	BuildTaskOverlay(ctx context.Context, originatorUserID pgtype.UUID, agent db.Agent) (runtimeapps.MCPOverlayResult, error)
+}
+
+type runtimeMCPOverlayData struct {
+	Overlay       json.RawMessage
+	ConnectedApps json.RawMessage
+}
+
+func (s *TaskService) buildRuntimeMCPOverlay(ctx context.Context, originatorUserID pgtype.UUID, agent db.Agent) runtimeMCPOverlayData {
+	if s == nil || s.Composio == nil || !featureflags.ComposioMCPAppsEnabled(ctx, s.FeatureFlags) {
+		return runtimeMCPOverlayData{}
+	}
+	result, err := s.Composio.BuildTaskOverlay(ctx, originatorUserID, agent)
+	if err != nil || len(result.MCPOverlay) == 0 {
+		if err != nil {
+			slog.Warn("build runtime MCP overlay failed", "agent_id", util.UUIDToString(agent.ID), "error", err)
+		}
+		return runtimeMCPOverlayData{}
+	}
+	data := runtimeMCPOverlayData{Overlay: result.MCPOverlay}
+	if len(result.ConnectedApps) > 0 {
+		if raw, err := json.Marshal(result.ConnectedApps); err == nil {
+			data.ConnectedApps = raw
+		}
+	}
+	return data
 }
 
 type TaskWakeupNotifier interface {
@@ -87,6 +124,7 @@ const (
 	// /tasks/claim (30s) plus /tasks/{id}/start (30s) plus scheduling slack, so
 	// an in-flight StartTask cannot be reclaimed and double-dispatched.
 	claimResponseRecoveryWindow = 90 * time.Second
+	prepareLeaseDuration        = 45 * time.Second
 )
 
 var ErrAttributionFailClosed = errors.New("attribution: no precise accountable human and enqueue refused (fail-closed policy, policy read failed, or no agent owner)")
@@ -285,6 +323,58 @@ func (s *TaskService) captureTaskCancelled(ctx context.Context, task db.AgentTas
 		slog.Warn("cancel task: failed to revoke task tokens",
 			"task_id", util.UUIDToString(task.ID), "error", err)
 	}
+	if err := s.reconcileCancelledCreativeImageOperations(ctx, task); err != nil {
+		slog.Warn("cancel task: failed to reconcile creative image operations",
+			"task_id", util.UUIDToString(task.ID), "error", err)
+	}
+	if s.TaskCancelledHook != nil {
+		if err := s.TaskCancelledHook(ctx, task); err != nil {
+			slog.Warn("cancel task: creative lifecycle reconciliation failed",
+				"task_id", util.UUIDToString(task.ID), "error", err)
+		}
+	}
+}
+
+func (s *TaskService) reconcileCancelledCreativeImageOperations(ctx context.Context, task db.AgentTaskQueue) error {
+	var taskContext struct {
+		Type     string `json:"type"`
+		Workflow string `json:"workflow"`
+	}
+	if json.Unmarshal(task.Context, &taskContext) != nil || taskContext.Type != "creative_domain_task" ||
+		(taskContext.Workflow != "creative_production" && taskContext.Workflow != "creative_direct_edit") || s.TxStarter == nil {
+		return nil
+	}
+	tx, err := s.TxStarter.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if _, err := tx.Exec(ctx, `
+WITH unsettled_attempt AS (
+  UPDATE creative_image_operation_attempt attempt
+  SET status = 'unknown', completed_at = NULL, updated_at = now()
+  FROM creative_image_operation operation
+  WHERE attempt.operation_id = operation.id
+    AND attempt.task_id = $1
+    AND attempt.status = 'running'
+    AND attempt.attempt = (
+      SELECT max(latest.attempt)
+      FROM creative_image_operation_attempt latest
+      WHERE latest.operation_id = operation.id
+    )
+    AND operation.status IN ('queued', 'running')
+    AND operation.output_attachment_id IS NULL
+    AND operation.output_asset_id IS NULL
+  RETURNING attempt.operation_id
+)
+UPDATE creative_image_operation operation
+SET status = 'unknown', completed_at = NULL, updated_at = now()
+WHERE operation.id IN (SELECT operation_id FROM unsettled_attempt)
+  AND operation.status IN ('queued', 'running')
+`, task.ID); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
 }
 
 func (s *TaskService) CaptureTaskUsage(ctx context.Context, task db.AgentTaskQueue, provider, model string, inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens int64) {
@@ -536,18 +626,338 @@ func (s *TaskService) EnqueueTaskForIssueByUser(ctx context.Context, issue db.Is
 	return s.enqueueIssueTask(ctx, issue, commentID, false, requestingUserID, requestingUserID, attribution.Result{})
 }
 
+// DirectTaskFanoutItem is one independently schedulable direct task. Context
+// remains domain-owned JSON; TaskService only adds the stable item_key needed
+// to deduplicate active attempts.
+type DirectTaskFanoutItem struct {
+	ItemKey string          `json:"item_key"`
+	Context json.RawMessage `json:"context"`
+}
+
+// DirectTaskFanout describes a set of native agent_task_queue rows. It has no
+// persisted batch identity: the evidence pair and each item key are the
+// caller-owned aggregation and idempotency handles.
+type DirectTaskFanout struct {
+	Agent db.Agent
+	// IssueID scopes domain tasks that require an issue trace. Direct tasks
+	// such as collection and analysis may leave it unset; creative planning,
+	// production and QC carry the frozen order issue through this field.
+	IssueID              pgtype.UUID
+	RequestingUserID     pgtype.UUID
+	Attribution          attribution.Result
+	TriggerEvidenceKind  string
+	TriggerEvidenceRefID pgtype.UUID
+	Items                []DirectTaskFanoutItem
+}
+
+func (s *TaskService) EnqueueDirectTaskFanout(ctx context.Context, fanout DirectTaskFanout) ([]db.AgentTaskQueue, error) {
+	tx, err := s.TxStarter.Begin(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("begin task fanout transaction: %w", err)
+	}
+	defer tx.Rollback(ctx)
+	tasks, created, err := s.EnqueueDirectTaskFanoutTx(ctx, tx, fanout)
+	if err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("commit task fanout transaction: %w", err)
+	}
+	s.NotifyDirectTaskFanoutEnqueued(ctx, created)
+	return tasks, nil
+}
+
+// EnqueueDirectTaskFanoutTx creates fanout rows inside a caller-owned
+// transaction. The caller must notify the returned created rows only after a
+// successful outer commit.
+func (s *TaskService) EnqueueDirectTaskFanoutTx(ctx context.Context, tx pgx.Tx, fanout DirectTaskFanout) ([]db.AgentTaskQueue, []db.AgentTaskQueue, error) {
+	if fanout.Agent.ArchivedAt.Valid {
+		return nil, nil, fmt.Errorf("agent is archived")
+	}
+	if strings.TrimSpace(fanout.TriggerEvidenceKind) == "" || !fanout.TriggerEvidenceRefID.Valid {
+		return nil, nil, fmt.Errorf("trigger evidence kind and ref id are required")
+	}
+	if len(fanout.Items) == 0 || len(fanout.Items) > 100 {
+		return nil, nil, fmt.Errorf("fanout must contain between 1 and 100 items")
+	}
+	overlay := s.buildRuntimeMCPOverlay(ctx, fanout.Attribution.UserID, fanout.Agent)
+
+	contexts := make([][]byte, len(fanout.Items))
+	seen := make(map[string]struct{}, len(fanout.Items))
+	for i, item := range fanout.Items {
+		key := strings.TrimSpace(item.ItemKey)
+		if key == "" || len(key) > 256 {
+			return nil, nil, fmt.Errorf("fanout item key must contain between 1 and 256 characters")
+		}
+		if _, exists := seen[key]; exists {
+			return nil, nil, fmt.Errorf("fanout has duplicate item key %q", key)
+		}
+		context, err := normalizeDirectTaskContext(item.Context, key)
+		if err != nil {
+			return nil, nil, fmt.Errorf("fanout item %q: %w", key, err)
+		}
+		contexts[i] = context
+		seen[key] = struct{}{}
+	}
+
+	qtx := s.Queries.WithTx(tx)
+	tasks := make([]db.AgentTaskQueue, 0, len(fanout.Items))
+	created := make([]db.AgentTaskQueue, 0, len(fanout.Items))
+	for i, item := range fanout.Items {
+		// PostgreSQL aborts the current transaction after a unique violation.
+		// Isolate each insert in a savepoint so an active-task conflict can be
+		// resolved to the existing row without poisoning the whole fanout.
+		itemTx, beginErr := tx.Begin(ctx)
+		if beginErr != nil {
+			return nil, nil, fmt.Errorf("begin direct task %q savepoint: %w", item.ItemKey, beginErr)
+		}
+		itemQueries := s.Queries.WithTx(itemTx)
+		task, err := itemQueries.CreateAgentTask(ctx, db.CreateAgentTaskParams{
+			AgentID:              fanout.Agent.ID,
+			RuntimeID:            fanout.Agent.RuntimeID,
+			IssueID:              fanout.IssueID,
+			Priority:             0,
+			RequestingUserID:     fanout.RequestingUserID,
+			OriginatorUserID:     fanout.Attribution.UserID,
+			AccountableUserID:    fanout.Attribution.AccountableUserID,
+			OriginatorSource:     pgtype.Text{String: fanout.Attribution.Source.String(), Valid: true},
+			DelegatedFromTaskID:  fanout.Attribution.DelegatedFromTaskID,
+			TriggerEvidenceKind:  pgtype.Text{String: fanout.TriggerEvidenceKind, Valid: true},
+			TriggerEvidenceRefID: fanout.TriggerEvidenceRefID,
+			RuntimeMcpOverlay:    overlay.Overlay,
+			RuntimeConnectedApps: overlay.ConnectedApps,
+			Context:              contexts[i],
+		})
+		if err != nil && isUniqueTaskFanoutViolation(err) {
+			if rollbackErr := itemTx.Rollback(ctx); rollbackErr != nil {
+				return nil, nil, fmt.Errorf("rollback duplicate direct task %q savepoint: %w", item.ItemKey, rollbackErr)
+			}
+			existing, listErr := qtx.ListAgentTasks(ctx, fanout.Agent.ID)
+			if listErr != nil {
+				return nil, nil, fmt.Errorf("find duplicate direct task %q: %w", item.ItemKey, listErr)
+			}
+			for _, candidate := range existing {
+				if directTaskMatches(candidate, fanout.TriggerEvidenceKind, fanout.TriggerEvidenceRefID, "active") && directTaskItemKey(candidate) == strings.TrimSpace(item.ItemKey) {
+					task = candidate
+					err = nil
+					break
+				}
+			}
+		} else if err == nil {
+			if commitErr := itemTx.Commit(ctx); commitErr != nil {
+				return nil, nil, fmt.Errorf("commit direct task %q savepoint: %w", item.ItemKey, commitErr)
+			}
+			created = append(created, task)
+		} else {
+			_ = itemTx.Rollback(ctx)
+		}
+		if err != nil {
+			return nil, nil, fmt.Errorf("enqueue direct task %q: %w", item.ItemKey, err)
+		}
+		tasks = append(tasks, task)
+	}
+	return tasks, created, nil
+}
+
+// NotifyDirectTaskFanoutEnqueued publishes rows created by
+// EnqueueDirectTaskFanoutTx after their caller-owned transaction commits.
+func (s *TaskService) NotifyDirectTaskFanoutEnqueued(ctx context.Context, created []db.AgentTaskQueue) {
+	for _, task := range created {
+		s.broadcastTaskEvent(ctx, protocol.EventTaskQueued, task)
+		s.NotifyTaskEnqueued(ctx, task)
+	}
+}
+
+func normalizeDirectTaskContext(raw json.RawMessage, itemKey string) ([]byte, error) {
+	var context map[string]json.RawMessage
+	if len(raw) == 0 || json.Unmarshal(raw, &context) != nil || context == nil {
+		return nil, fmt.Errorf("context must be a JSON object")
+	}
+	var taskType string
+	if rawType, ok := context["type"]; !ok || json.Unmarshal(rawType, &taskType) != nil || strings.TrimSpace(taskType) == "" {
+		return nil, fmt.Errorf("context.type is required")
+	}
+	if taskType == QuickCreateContextType {
+		return nil, fmt.Errorf("context.type quick_create is reserved")
+	}
+	if rawKey, ok := context["item_key"]; ok {
+		var supplied string
+		if json.Unmarshal(rawKey, &supplied) != nil || supplied != itemKey {
+			return nil, fmt.Errorf("context.item_key must match item_key")
+		}
+	} else {
+		encoded, _ := json.Marshal(itemKey)
+		context["item_key"] = encoded
+	}
+	return json.Marshal(context)
+}
+
+func isUniqueTaskFanoutViolation(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "23505" && pgErr.ConstraintName == "idx_one_active_direct_task_per_evidence_item"
+}
+
+func (s *TaskService) CancelDirectTasksByEvidence(ctx context.Context, agentID pgtype.UUID, evidenceKind string, evidenceRefID pgtype.UUID) ([]db.AgentTaskQueue, error) {
+	active, err := s.ListDirectTasksByEvidence(ctx, agentID, evidenceKind, evidenceRefID, "active")
+	if err != nil {
+		return nil, err
+	}
+	cancelled := make([]db.AgentTaskQueue, 0, len(active))
+	for _, task := range active {
+		cancelledTask, err := s.CancelTask(ctx, task.ID)
+		if err != nil {
+			return nil, err
+		}
+		cancelled = append(cancelled, *cancelledTask)
+	}
+	return cancelled, nil
+}
+
+func (s *TaskService) RetryFailedDirectTasksByEvidence(ctx context.Context, agentID pgtype.UUID, evidenceKind string, evidenceRefID pgtype.UUID) ([]db.AgentTaskQueue, error) {
+	tx, err := s.TxStarter.Begin(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("begin direct task retry: %w", err)
+	}
+	defer tx.Rollback(ctx)
+	retried, err := s.RetryFailedDirectTasksByEvidenceTx(ctx, tx, agentID, evidenceKind, evidenceRefID)
+	if err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("commit direct task retry: %w", err)
+	}
+	s.NotifyDirectTaskFanoutEnqueued(ctx, retried)
+	return retried, nil
+}
+
+// RetryFailedDirectTasksByEvidenceTx clones retryable failures in a
+// caller-owned transaction. The caller publishes the returned children after
+// commit.
+func (s *TaskService) RetryFailedDirectTasksByEvidenceTx(ctx context.Context, tx pgx.Tx, agentID pgtype.UUID, evidenceKind string, evidenceRefID pgtype.UUID) ([]db.AgentTaskQueue, error) {
+	qtx := s.Queries.WithTx(tx)
+	allTasks, err := qtx.ListAgentTasks(ctx, agentID)
+	if err != nil {
+		return nil, err
+	}
+	tasks := make([]db.AgentTaskQueue, 0, len(allTasks))
+	for _, task := range allTasks {
+		if directTaskMatches(task, evidenceKind, evidenceRefID, "") {
+			tasks = append(tasks, task)
+		}
+	}
+	failed := latestRetryableFailedDirectTasks(tasks)
+	retried := make([]db.AgentTaskQueue, 0, len(failed))
+	for _, task := range failed {
+		child, err := qtx.CreateRetryTask(ctx, task.ID)
+		if isUniqueTaskFanoutViolation(err) || errors.Is(err, pgx.ErrNoRows) {
+			continue
+		}
+		if err != nil {
+			return nil, fmt.Errorf("retry direct task %s: %w", util.UUIDToString(task.ID), err)
+		}
+		retried = append(retried, child)
+	}
+	return retried, nil
+}
+
+// latestRetryableFailedDirectTasks keeps one current state per item key. A
+// later queued, running, completed, or cancelled attempt recovers the older
+// failure; an exhausted failed attempt remains visible but cannot be cloned.
+func latestRetryableFailedDirectTasks(tasks []db.AgentTaskQueue) []db.AgentTaskQueue {
+	latest := make([]db.AgentTaskQueue, 0, len(tasks))
+	indexByItemKey := make(map[string]int, len(tasks))
+	for _, task := range tasks {
+		itemKey := directTaskItemKey(task)
+		if index, ok := indexByItemKey[itemKey]; ok {
+			if directTaskIsNewer(task, latest[index]) {
+				latest[index] = task
+			}
+			continue
+		}
+		indexByItemKey[itemKey] = len(latest)
+		latest = append(latest, task)
+	}
+
+	failed := make([]db.AgentTaskQueue, 0, len(latest))
+	for _, task := range latest {
+		if task.Status == "failed" && task.Attempt < task.MaxAttempts {
+			failed = append(failed, task)
+		}
+	}
+	return failed
+}
+
+func directTaskIsNewer(candidate, current db.AgentTaskQueue) bool {
+	if candidate.CreatedAt.Valid != current.CreatedAt.Valid {
+		return candidate.CreatedAt.Valid
+	}
+	if candidate.CreatedAt.Valid && !candidate.CreatedAt.Time.Equal(current.CreatedAt.Time) {
+		return candidate.CreatedAt.Time.After(current.CreatedAt.Time)
+	}
+	return util.UUIDToString(candidate.ID) > util.UUIDToString(current.ID)
+}
+
+// ListDirectTasksByEvidence finds native no-issue tasks for a domain-owned
+// evidence pair. It deliberately uses the established per-agent query so the
+// source filter does not create a second task-listing contract in sqlc.
+func (s *TaskService) ListDirectTasksByEvidence(ctx context.Context, agentID pgtype.UUID, evidenceKind string, evidenceRefID pgtype.UUID, status string) ([]db.AgentTaskQueue, error) {
+	tasks, err := s.Queries.ListAgentTasks(ctx, agentID)
+	if err != nil {
+		return nil, err
+	}
+	matched := make([]db.AgentTaskQueue, 0)
+	for _, task := range tasks {
+		if directTaskMatches(task, evidenceKind, evidenceRefID, status) {
+			matched = append(matched, task)
+		}
+	}
+	return matched, nil
+}
+
+func directTaskMatches(task db.AgentTaskQueue, evidenceKind string, evidenceRefID pgtype.UUID, status string) bool {
+	if task.IssueID.Valid || task.ChatSessionID.Valid || task.AutopilotRunID.Valid || !task.TriggerEvidenceKind.Valid || task.TriggerEvidenceKind.String != evidenceKind || !task.TriggerEvidenceRefID.Valid || task.TriggerEvidenceRefID != evidenceRefID {
+		return false
+	}
+	switch status {
+	case "active":
+		return task.Status == "queued" || task.Status == "dispatched" || task.Status == "running" || task.Status == "waiting_local_directory"
+	case "":
+		return true
+	default:
+		return task.Status == status
+	}
+}
+
+func directTaskItemKey(task db.AgentTaskQueue) string {
+	var context struct {
+		ItemKey string `json:"item_key"`
+	}
+	if json.Unmarshal(task.Context, &context) != nil {
+		return ""
+	}
+	return context.ItemKey
+}
+
 // enqueueIssueTask is the shared implementation behind EnqueueTaskForIssue
 // and the manual rerun path. forceFreshSession=true marks the task so the
 // daemon claim handler skips the (agent_id, issue_id) resume lookup — the
 // user already judged the prior output bad, a fresh agent session is the
 // expected behavior.
 func (s *TaskService) enqueueIssueTask(ctx context.Context, issue db.Issue, triggerCommentID pgtype.UUID, forceFreshSession bool, requestingUserID pgtype.UUID, actorUserID pgtype.UUID, attrOverride attribution.Result) (db.AgentTaskQueue, error) {
+	return s.enqueueIssueTaskWithContext(ctx, issue, triggerCommentID, forceFreshSession, requestingUserID, actorUserID, attrOverride, nil)
+}
+
+func (s *TaskService) enqueueIssueTaskWithContext(ctx context.Context, issue db.Issue, triggerCommentID pgtype.UUID, forceFreshSession bool, requestingUserID pgtype.UUID, actorUserID pgtype.UUID, attrOverride attribution.Result, taskContext []byte) (db.AgentTaskQueue, error) {
+	return s.enqueueIssueTaskWithContextUsingQueries(ctx, s.Queries, issue, triggerCommentID, forceFreshSession, requestingUserID, actorUserID, attrOverride, taskContext, true)
+}
+
+func (s *TaskService) enqueueIssueTaskWithContextUsingQueries(ctx context.Context, queries *db.Queries, issue db.Issue, triggerCommentID pgtype.UUID, forceFreshSession bool, requestingUserID pgtype.UUID, actorUserID pgtype.UUID, attrOverride attribution.Result, taskContext []byte, emitEvents bool) (db.AgentTaskQueue, error) {
 	if !issue.AssigneeID.Valid {
 		slog.Error("task enqueue failed", "issue_id", util.UUIDToString(issue.ID), "error", "issue has no assignee")
 		return db.AgentTaskQueue{}, fmt.Errorf("issue has no assignee")
 	}
 
-	agent, err := s.Queries.GetAgent(ctx, issue.AssigneeID)
+	agent, err := queries.GetAgent(ctx, issue.AssigneeID)
 	if err != nil {
 		slog.Error("task enqueue failed", "issue_id", util.UUIDToString(issue.ID), "error", err)
 		return db.AgentTaskQueue{}, fmt.Errorf("load agent: %w", err)
@@ -571,7 +981,8 @@ func (s *TaskService) enqueueIssueTask(ctx context.Context, issue db.Issue, trig
 		return db.AgentTaskQueue{}, err
 	}
 
-	task, err := s.Queries.CreateAgentTask(ctx, db.CreateAgentTaskParams{
+	overlay := s.buildRuntimeMCPOverlay(ctx, attr.UserID, agent)
+	task, err := queries.CreateAgentTask(ctx, db.CreateAgentTaskParams{
 		AgentID:              issue.AssigneeID,
 		RuntimeID:            agent.RuntimeID,
 		IssueID:              issue.ID,
@@ -588,6 +999,9 @@ func (s *TaskService) enqueueIssueTask(ctx context.Context, issue db.Issue, trig
 		RerunOfTaskID:        attr.RerunOfTaskID,
 		TriggerEvidenceKind:  evidenceText(attr.EvidenceKind),
 		TriggerEvidenceRefID: attr.EvidenceRefID,
+		RuntimeMcpOverlay:    overlay.Overlay,
+		RuntimeConnectedApps: overlay.ConnectedApps,
+		Context:              taskContext,
 	})
 	if err != nil {
 		slog.Error("task enqueue failed", "issue_id", util.UUIDToString(issue.ID), "error", err)
@@ -601,6 +1015,9 @@ func (s *TaskService) enqueueIssueTask(ctx context.Context, issue db.Issue, trig
 		"force_fresh_session", forceFreshSession,
 		"requesting_user_id", util.UUIDToString(requestingUserID),
 	)
+	if !emitEvents {
+		return task, nil
+	}
 	// Order matters: broadcast first, notify daemon second. notifyTaskAvailable
 	// kicks an in-process channel that the daemon picks up over HTTP and
 	// claims; the claim path then emits its own task:dispatch. Doing the
@@ -662,6 +1079,7 @@ func (s *TaskService) enqueueMentionTask(ctx context.Context, issue db.Issue, ag
 		return db.AgentTaskQueue{}, err
 	}
 
+	overlay := s.buildRuntimeMCPOverlay(ctx, attr.UserID, agent)
 	task, err := s.Queries.CreateAgentTask(ctx, db.CreateAgentTaskParams{
 		AgentID:              agentID,
 		RuntimeID:            agent.RuntimeID,
@@ -680,6 +1098,8 @@ func (s *TaskService) enqueueMentionTask(ctx context.Context, issue db.Issue, ag
 		RerunOfTaskID:        attr.RerunOfTaskID,
 		TriggerEvidenceKind:  evidenceText(attr.EvidenceKind),
 		TriggerEvidenceRefID: attr.EvidenceRefID,
+		RuntimeMcpOverlay:    overlay.Overlay,
+		RuntimeConnectedApps: overlay.ConnectedApps,
 	})
 	if err != nil {
 		slog.Error("mention task enqueue failed", "issue_id", util.UUIDToString(issue.ID), "agent_id", util.UUIDToString(agentID), "error", err)
@@ -794,6 +1214,7 @@ func (s *TaskService) EnqueueQuickCreateTask(ctx context.Context, workspaceID, r
 		return db.AgentTaskQueue{}, err
 	}
 
+	overlay := s.buildRuntimeMCPOverlay(ctx, attr.UserID, agent)
 	task, err := s.Queries.CreateQuickCreateTask(ctx, db.CreateQuickCreateTaskParams{
 		AgentID:              agentID,
 		RuntimeID:            agent.RuntimeID,
@@ -805,6 +1226,8 @@ func (s *TaskService) EnqueueQuickCreateTask(ctx context.Context, workspaceID, r
 		OriginatorSource:     attributionText(attr.Source),
 		TriggerEvidenceKind:  evidenceText(attr.EvidenceKind),
 		TriggerEvidenceRefID: attr.EvidenceRefID,
+		RuntimeMcpOverlay:    overlay.Overlay,
+		RuntimeConnectedApps: overlay.ConnectedApps,
 	})
 	if err != nil {
 		return db.AgentTaskQueue{}, fmt.Errorf("create quick-create task: %w", err)
@@ -885,6 +1308,7 @@ func (s *TaskService) EnqueueChatTask(ctx context.Context, chatSession db.ChatSe
 		return db.AgentTaskQueue{}, err
 	}
 
+	overlay := s.buildRuntimeMCPOverlay(ctx, attr.UserID, agent)
 	task, err := s.Queries.CreateChatTask(ctx, db.CreateChatTaskParams{
 		AgentID:              chatSession.AgentID,
 		RuntimeID:            agent.RuntimeID,
@@ -897,6 +1321,8 @@ func (s *TaskService) EnqueueChatTask(ctx context.Context, chatSession db.ChatSe
 		OriginatorSource:     attributionText(attr.Source),
 		TriggerEvidenceKind:  evidenceText(attr.EvidenceKind),
 		TriggerEvidenceRefID: attr.EvidenceRefID,
+		RuntimeMcpOverlay:    overlay.Overlay,
+		RuntimeConnectedApps: overlay.ConnectedApps,
 	})
 	if err != nil {
 		slog.Error("chat task enqueue failed", "chat_session_id", util.UUIDToString(chatSession.ID), "error", err)
@@ -1122,7 +1548,10 @@ func (s *TaskService) ClaimTask(ctx context.Context, agentID pgtype.UUID) (*db.A
 	}
 
 	t0 = time.Now()
-	task, err := s.Queries.ClaimAgentTask(ctx, agentID)
+	task, err := s.Queries.ClaimAgentTask(ctx, db.ClaimAgentTaskParams{
+		AgentID:          agentID,
+		PrepareLeaseSecs: prepareLeaseDuration.Seconds(),
+	})
 	claimAgentMs = time.Since(t0).Milliseconds()
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -1193,6 +1622,7 @@ func (s *TaskService) ClaimTaskForRuntime(ctx context.Context, runtimeID pgtype.
 	stale, err := s.Queries.ReclaimStaleDispatchedTaskForRuntime(ctx, db.ReclaimStaleDispatchedTaskForRuntimeParams{
 		RuntimeID:         runtimeID,
 		ClaimRecoverySecs: claimResponseRecoveryWindow.Seconds(),
+		PrepareLeaseSecs:  prepareLeaseDuration.Seconds(),
 	})
 	if err == nil {
 		outcome = "reclaimed_dispatched"
@@ -1310,6 +1740,20 @@ func (s *TaskService) StartTask(ctx context.Context, taskID pgtype.UUID) (*db.Ag
 	return &task, nil
 }
 
+// ExtendTaskPrepareLease refreshes the preparation lease while a daemon is
+// blocked in filesystem setup before StartTask.
+func (s *TaskService) ExtendTaskPrepareLease(ctx context.Context, taskID, runtimeID pgtype.UUID) (*db.AgentTaskQueue, error) {
+	task, err := s.Queries.ExtendAgentTaskPrepareLease(ctx, db.ExtendAgentTaskPrepareLeaseParams{
+		ID:        taskID,
+		RuntimeID: runtimeID,
+		LeaseSecs: prepareLeaseDuration.Seconds(),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("extend task prepare lease: %w", err)
+	}
+	return &task, nil
+}
+
 // MarkTaskWaitingLocalDirectory parks a dispatched task in the
 // waiting_local_directory state while the daemon waits for another in-flight
 // task to release the project_resource path lock. reason carries a short
@@ -1319,8 +1763,9 @@ func (s *TaskService) StartTask(ctx context.Context, taskID pgtype.UUID) (*db.Ag
 func (s *TaskService) MarkTaskWaitingLocalDirectory(ctx context.Context, taskID pgtype.UUID, reason string) (*db.AgentTaskQueue, error) {
 	reason = strings.TrimSpace(reason)
 	task, err := s.Queries.MarkAgentTaskWaitingLocalDirectory(ctx, db.MarkAgentTaskWaitingLocalDirectoryParams{
-		ID:         taskID,
-		WaitReason: pgtype.Text{String: reason, Valid: reason != ""},
+		ID:               taskID,
+		WaitReason:       pgtype.Text{String: reason, Valid: reason != ""},
+		PrepareLeaseSecs: prepareLeaseDuration.Seconds(),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("mark task waiting_local_directory: %w", err)
@@ -1896,6 +2341,12 @@ func (s *TaskService) HandleFailedTasks(ctx context.Context, tasks []db.AgentTas
 				retriedIssues[util.UUIDToString(t.IssueID)] = true
 			}
 		}
+		if s.TaskFailedHook != nil {
+			if err := s.TaskFailedHook(ctx, t); err != nil {
+				slog.Warn("handle failed tasks: creative lifecycle reconciliation failed",
+					"task_id", util.UUIDToString(t.ID), "error", err)
+			}
+		}
 
 		failureReason := "agent_error"
 		if t.FailureReason.Valid && t.FailureReason.String != "" {
@@ -2027,28 +2478,135 @@ func (s *TaskService) publishAgentStatus(agent db.Agent) {
 	})
 }
 
-// LoadAgentSkills loads an agent's skills with their files for task execution.
-func (s *TaskService) LoadAgentSkills(ctx context.Context, agentID pgtype.UUID) []AgentSkillData {
+// LoadAgentSkillsForTask loads the skills relevant to the claimed task and
+// adds an immutable, task-scoped reference skill for the creative context
+// pinned on this issue or an ancestor. Uploaded market assets remain platform
+// resources; agents receive their versioned URLs and per-image copy without
+// duplicating them into prompts.
+func (s *TaskService) LoadAgentSkillsForTask(ctx context.Context, agentID, issueID pgtype.UUID, taskContext []byte) []AgentSkillData {
 	skills, err := s.Queries.ListAgentSkills(ctx, agentID)
-	if err != nil || len(skills) == 0 {
+	result := make([]AgentSkillData, 0, len(skills))
+	allowedCapabilities := creativeTaskSkillCapabilities(taskContext)
+	if err == nil {
+		for _, sk := range skills {
+			if !creativeTaskSkillAllowed(sk, allowedCapabilities) {
+				continue
+			}
+			data := AgentSkillData{
+				ID:          util.UUIDToString(sk.ID),
+				Name:        sk.Name,
+				Description: sk.Description,
+				Content:     sk.Content,
+			}
+			files, _ := s.Queries.ListSkillFiles(ctx, sk.ID)
+			for _, f := range files {
+				data.Files = append(data.Files, AgentSkillFileData{Path: f.Path, Content: f.Content})
+			}
+			result = append(result, data)
+		}
+	}
+	if resourceContext, loadErr := s.Queries.GetCreativeTaskResourceContext(ctx, issueID); loadErr == nil {
+		resourceContext = compactCreativeTaskResourceContext(resourceContext)
+		var formatted any
+		if json.Unmarshal(resourceContext, &formatted) == nil {
+			resourceContext, _ = json.MarshalIndent(formatted, "", "  ")
+		}
+		result = append(result, AgentSkillData{
+			ID:          "creative-issue-resources",
+			Name:        "creative-issue-resources",
+			Description: "当前创意 Issue 固定的市场资源、素材槽位与逐图创意简报",
+			Content:     creativeIssueResourceSkillContent(),
+			Files:       []AgentSkillFileData{{Path: "references/issue-resources.json", Content: string(resourceContext)}},
+		})
+	}
+	return result
+}
+
+func creativeTaskSkillCapabilities(taskContext []byte) map[string]struct{} {
+	var context struct {
+		Type     string `json:"type"`
+		Workflow string `json:"workflow"`
+	}
+	if json.Unmarshal(taskContext, &context) != nil || context.Type != "creative_domain_task" {
 		return nil
 	}
 
-	result := make([]AgentSkillData, 0, len(skills))
-	for _, sk := range skills {
-		data := AgentSkillData{
-			ID:          util.UUIDToString(sk.ID),
-			Name:        sk.Name,
-			Description: sk.Description,
-			Content:     sk.Content,
-		}
-		files, _ := s.Queries.ListSkillFiles(ctx, sk.ID)
-		for _, f := range files {
-			data.Files = append(data.Files, AgentSkillFileData{Path: f.Path, Content: f.Content})
-		}
-		result = append(result, data)
+	capabilities := map[string][]string{
+		"creative_reference_analysis": {"reference_analysis"},
+		"creative_pre_adaptation":     {"pre_adaptation"},
+		"creative_plan":               {"generation_plan"},
+		"creative_production":         {"image_edit", "prime_compose"},
+		// Direct edits use the production Skill's normalization and Prime-context
+		// renderer from the same task-scoped Skill bundle.
+		"creative_direct_edit":         {"image_edit", "direct_image_edit", "prime_compose"},
+		"creative_candidate_selection": {"quality_control"},
+		"creative_qc_technical":        {"quality_control"},
+		"creative_qc_visual":           {"quality_control"},
+		"creative_crawl_diagnosis":     {"crawl_diagnosis"},
 	}
-	return result
+	roles, ok := capabilities[context.Workflow]
+	if !ok {
+		return nil
+	}
+	allowed := make(map[string]struct{}, len(roles))
+	for _, role := range roles {
+		allowed[role] = struct{}{}
+	}
+	return allowed
+}
+
+func creativeTaskSkillAllowed(skill db.Skill, allowedCapabilities map[string]struct{}) bool {
+	if len(allowedCapabilities) == 0 {
+		return true
+	}
+	var config struct {
+		Kind       string `json:"kind"`
+		Capability string `json:"capability"`
+	}
+	if json.Unmarshal(skill.Config, &config) != nil || config.Kind != "creative_role" {
+		return true
+	}
+	_, ok := allowedCapabilities[config.Capability]
+	return ok
+}
+
+func creativeIssueResourceSkillContent() string {
+	return "# 当前创意 Issue 资源\n\n" +
+		"执行前读取本 Skill 目录内的 `references/issue-resources.json`。先定位刚刚读取的 `creative-issue-resources/SKILL.md`，再以它所在目录为基准解析 `references/issue-resources.json`；该文件不在任务工作目录，禁止用工作目录相对路径判断它缺失。其中 `pinned_resources` 是父 Issue 固定的版本快照，`selected_item` 是当前创意图和简报；不得改用工作区其他版本。\n\n" +
+		"市场文件通过 `pinned_resources.market_pack.files` 按 role 获取。角色 Skill 决定如何使用这些资源；缺少必需槽位时向 Leader 报告，不得虚构或静默替代。"
+}
+
+// compactCreativeTaskResourceContext keeps the immutable resource snapshot but
+// removes duplicated Skill bodies from the squad directory. The assigned
+// agent's current Skill is already mounted separately, while Leader only needs
+// member roles and Skill metadata to delegate work.
+func compactCreativeTaskResourceContext(raw []byte) []byte {
+	var root map[string]any
+	if json.Unmarshal(raw, &root) != nil {
+		return raw
+	}
+	pinned, _ := root["pinned_resources"].(map[string]any)
+	squad, _ := pinned["squad"].(map[string]any)
+	compactActor := func(value any) {
+		actor, _ := value.(map[string]any)
+		skills, _ := actor["skills"].([]any)
+		for _, value := range skills {
+			skill, _ := value.(map[string]any)
+			delete(skill, "content")
+			delete(skill, "references")
+		}
+	}
+	compactActor(squad["leader"])
+	if members, ok := squad["members"].([]any); ok {
+		for _, member := range members {
+			compactActor(member)
+		}
+	}
+	compacted, err := json.Marshal(root)
+	if err != nil {
+		return raw
+	}
+	return compacted
 }
 
 // AgentSkillData represents a skill for task execution responses.
@@ -2123,10 +2681,11 @@ func (s *TaskService) notifyTaskAvailable(task db.AgentTaskQueue) {
 	// Use a background context: the cache bump / wakeup must outlive
 	// the request that created the task, otherwise an early client
 	// disconnect could leave the empty verdict in place and stall the
-	// just-queued task until the TTL expires. The cache itself bounds
-	// every Redis call with a short timeout so a wedged Redis cannot
-	// block enqueue.
-	s.EmptyClaim.Bump(context.Background(), runtimeKey)
+	// just-queued task until the TTL expires. The cache is optional in
+	// tests and lightweight local runtimes.
+	if s.EmptyClaim != nil {
+		s.EmptyClaim.Bump(context.Background(), runtimeKey)
+	}
 	if s.Wakeup == nil {
 		return
 	}
@@ -2141,16 +2700,8 @@ func (s *TaskService) broadcastTaskDispatch(ctx context.Context, task db.AgentTa
 	if payload == nil {
 		payload = map[string]any{}
 	}
-	payload["task_id"] = util.UUIDToString(task.ID)
+	addTaskEventRouting(payload, task)
 	payload["runtime_id"] = util.UUIDToString(task.RuntimeID)
-	payload["issue_id"] = util.UUIDToString(task.IssueID)
-	payload["agent_id"] = util.UUIDToString(task.AgentID)
-	// chat_session_id is the routing key the chat window uses to writethrough
-	// `chatKeys.pendingTask` to status="running" the moment the daemon claims
-	// the task. Without it the pill stays stuck at "Queued" until completion.
-	if task.ChatSessionID.Valid {
-		payload["chat_session_id"] = util.UUIDToString(task.ChatSessionID)
-	}
 
 	workspaceID := s.ResolveTaskWorkspaceID(ctx, task)
 	if workspaceID == "" {
@@ -2170,15 +2721,8 @@ func (s *TaskService) broadcastTaskEvent(ctx context.Context, eventType string, 
 	if workspaceID == "" {
 		return
 	}
-	payload := map[string]any{
-		"task_id":  util.UUIDToString(task.ID),
-		"agent_id": util.UUIDToString(task.AgentID),
-		"issue_id": util.UUIDToString(task.IssueID),
-		"status":   task.Status,
-	}
-	if task.ChatSessionID.Valid {
-		payload["chat_session_id"] = util.UUIDToString(task.ChatSessionID)
-	}
+	payload := map[string]any{"status": task.Status}
+	addTaskEventRouting(payload, task)
 	s.Bus.Publish(events.Event{
 		Type:        eventType,
 		WorkspaceID: workspaceID,
@@ -2188,9 +2732,25 @@ func (s *TaskService) broadcastTaskEvent(ctx context.Context, eventType string, 
 	})
 }
 
+func addTaskEventRouting(payload map[string]any, task db.AgentTaskQueue) {
+	payload["task_id"] = util.UUIDToString(task.ID)
+	payload["agent_id"] = util.UUIDToString(task.AgentID)
+	payload["issue_id"] = util.UUIDToString(task.IssueID)
+	// chat_session_id is the routing key the chat window uses to writethrough
+	// `chatKeys.pendingTask` to status="running" the moment the daemon claims
+	// the task. Without it the pill stays stuck at "Queued" until completion.
+	if task.ChatSessionID.Valid {
+		payload["chat_session_id"] = util.UUIDToString(task.ChatSessionID)
+	}
+	if task.TriggerEvidenceKind.Valid {
+		payload["trigger_evidence_kind"] = task.TriggerEvidenceKind.String
+	}
+}
+
 // ResolveTaskWorkspaceID determines the workspace ID for a task.
 // For issue tasks, it comes from the issue. For chat tasks, from the chat session.
-// For autopilot tasks, from the autopilot via its run.
+// For autopilot tasks, from the autopilot via its run. Direct tasks fall back
+// to the assigned agent's workspace, which is fixed when fanout is validated.
 // Returns "" when none of the links resolve — callers treat that as "not found".
 func (s *TaskService) ResolveTaskWorkspaceID(ctx context.Context, task db.AgentTaskQueue) string {
 	if task.IssueID.Valid {
@@ -2217,6 +2777,14 @@ func (s *TaskService) ResolveTaskWorkspaceID(ctx context.Context, task db.AgentT
 	// broadcasts, which is why quick-create tasks appeared stuck queued.
 	if qc, ok := s.parseQuickCreateContext(task); ok {
 		return qc.WorkspaceID
+	}
+	// Only truly direct tasks use the agent fallback. A task whose issue,
+	// chat, or autopilot link has gone missing must remain not-found so the
+	// daemon stops work tied to a deleted parent.
+	if !task.IssueID.Valid && !task.ChatSessionID.Valid && !task.AutopilotRunID.Valid {
+		if agent, err := s.Queries.GetAgent(ctx, task.AgentID); err == nil {
+			return util.UUIDToString(agent.WorkspaceID)
+		}
 	}
 	return ""
 }

@@ -1440,6 +1440,30 @@ func TestCodexExecuteTimesOutWhenTurnStopsAfterToolResult(t *testing.T) {
 	}
 }
 
+func TestCodexFirstTurnNoProgressTimeout(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		semantic time.Duration
+		want     time.Duration
+	}{
+		{name: "non-positive uses default", semantic: 0, want: 10 * time.Minute},
+		{name: "below cap matches semantic", semantic: 30 * time.Second, want: 30 * time.Second},
+		{name: "at cap matches semantic", semantic: 10 * time.Minute, want: 10 * time.Minute},
+		{name: "above cap uses default", semantic: 10*time.Minute + time.Second, want: 10 * time.Minute},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := codexFirstTurnNoProgressTimeout(tt.semantic); got != tt.want {
+				t.Fatalf("codexFirstTurnNoProgressTimeout(%s) = %s, want %s", tt.semantic, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestCodexExecuteFirstTurnNoProgressSurfacesDiagnostics(t *testing.T) {
 	t.Parallel()
 	if runtime.GOOS == "windows" {
@@ -1478,6 +1502,9 @@ func TestCodexExecuteFirstTurnNoProgressSurfacesDiagnostics(t *testing.T) {
 		if !strings.Contains(result.Error, want) {
 			t.Fatalf("expected error to contain %q, got %q", want, result.Error)
 		}
+	}
+	if strings.Contains(result.Error, CodexSemanticInactivityMarker) {
+		t.Fatalf("expected the shared semantic timer to preserve first-turn diagnostics, got %q", result.Error)
 	}
 }
 

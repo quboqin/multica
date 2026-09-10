@@ -2,12 +2,14 @@ package main
 
 import (
 	"fmt"
+	"log/slog"
 	"os"
 	"runtime"
 
 	"github.com/spf13/cobra"
 
 	"github.com/multica-ai/multica/server/internal/cli"
+	"github.com/multica-ai/multica/server/internal/daemon/execenv"
 )
 
 var (
@@ -57,6 +59,7 @@ func init() {
 	credsCmd.GroupID = groupCore
 	crawlCmd.GroupID = groupCore
 	creativeCmd.GroupID = groupCore
+	imageCmd.GroupID = groupCore
 	previewCmd.GroupID = groupCore
 	deviceCmd.GroupID = groupRuntime
 
@@ -75,6 +78,7 @@ func init() {
 	versionCmd.GroupID = groupAdditional
 
 	rootCmd.AddCommand(issueCmd)
+	rootCmd.AddCommand(taskCmd)
 	rootCmd.AddCommand(projectCmd)
 	rootCmd.AddCommand(planCmd)
 	rootCmd.AddCommand(kpiCmd)
@@ -88,6 +92,7 @@ func init() {
 	rootCmd.AddCommand(credsCmd)
 	rootCmd.AddCommand(crawlCmd)
 	rootCmd.AddCommand(creativeCmd)
+	rootCmd.AddCommand(imageCmd)
 	rootCmd.AddCommand(previewCmd)
 	rootCmd.AddCommand(deviceCmd)
 	rootCmd.AddCommand(daemonCmd)
@@ -105,6 +110,14 @@ func init() {
 }
 
 func main() {
+	if len(os.Args) == 2 && os.Args[1] == execenv.PreparationHelperArg {
+		logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
+		if err := execenv.RunPreparationHelper(os.Stdin, os.Stdout, logger); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
 	cli.CleanupStaleUpdateArtifacts()
 	if err := rootCmd.Execute(); err != nil {
 		if err != errSilent {

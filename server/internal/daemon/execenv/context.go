@@ -507,11 +507,19 @@ func renderIssueContext(provider string, ctx TaskContextForEnv) string {
 	if ctx.QuickCreatePrompt != "" {
 		return renderQuickCreateContext(ctx)
 	}
+	if isCreativeDomainTaskContext(ctx.TaskContext) {
+		return renderCreativeDomainTaskContext(ctx)
+	}
 
 	var b strings.Builder
 
 	b.WriteString("# Task Assignment\n\n")
 	fmt.Fprintf(&b, "**Issue ID:** %s\n\n", ctx.IssueID)
+	if len(ctx.TaskContext) > 0 {
+		b.WriteString("## Task Context\n\n```json\n")
+		b.Write(ctx.TaskContext)
+		b.WriteString("\n```\n\n")
+	}
 
 	if ctx.TriggerCommentID != "" {
 		b.WriteString("**Trigger:** Comment Reply\n")
@@ -530,6 +538,26 @@ func renderIssueContext(provider string, ctx TaskContextForEnv) string {
 			fmt.Fprintf(&b, "- **%s**\n", skill.Name)
 		}
 		b.WriteString("\n")
+	}
+
+	return b.String()
+}
+
+func renderCreativeDomainTaskContext(ctx TaskContextForEnv) string {
+	var b strings.Builder
+	b.WriteString("# Creative Domain Task\n\n")
+	b.WriteString("The JSON task context below is authoritative. Follow its contract and the bound Skills listed here.\n\n")
+	b.WriteString("## Task Context\n\n```json\n")
+	b.Write(ctx.TaskContext)
+	b.WriteString("\n```\n\n")
+
+	if len(ctx.AgentSkills) > 0 {
+		b.WriteString("## Bound Skills\n\n")
+		for _, skill := range ctx.AgentSkills {
+			if name := sanitizeNameForBriefMarkdown(skill.Name); name != "" {
+				fmt.Fprintf(&b, "- **%s**\n", name)
+			}
+		}
 	}
 
 	return b.String()

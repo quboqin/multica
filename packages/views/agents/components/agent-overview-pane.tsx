@@ -14,9 +14,9 @@ import {
 } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import type { Agent, AgentRuntime } from "@multica/core/types";
-import { providerSupportsMcpConfig } from "@multica/core/agents";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { larkInstallationsOptions } from "@multica/core/lark";
+import { providerSupportsMcpConfig } from "@multica/core/agents";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -32,9 +32,9 @@ import { InstructionsTab } from "./tabs/instructions-tab";
 import { SkillsTab } from "./tabs/skills-tab";
 import { EnvTab } from "./tabs/env-tab";
 import { CustomArgsTab } from "./tabs/custom-args-tab";
-import { McpConfigTab } from "./tabs/mcp-config-tab";
 import { IntegrationsTab } from "./tabs/integrations-tab";
 import { RuntimeConfigTab } from "./tabs/runtime-config-tab";
+import { McpConfigTab } from "./tabs/mcp-config-tab";
 import { ActorIssuesPanel } from "../../common/actor-issues-panel";
 import { useT } from "../../i18n";
 
@@ -142,11 +142,6 @@ export function AgentOverviewPane({
   });
   const larkConfigured = larkListing?.configured === true;
 
-  // The MCP tab is only shown when the agent's runtime backend actually
-  // consumes mcp_config — see providerSupportsMcpConfig. We default to
-  // showing it when the runtime row hasn't loaded yet so a slow fetch
-  // can't transiently flicker the tab off and then on.
-  //
   // The Integrations tab only appears once the deployment has Lark wired
   // (configured). Unlike MCP we default to HIDING while the listing loads:
   // deployments without Lark are the common case, so flashing the tab on
@@ -167,8 +162,7 @@ export function AgentOverviewPane({
     });
   }, [runtime, larkConfigured]);
 
-  // If the active tab disappears (e.g. user just switched the agent's
-  // runtime to one that doesn't read mcp_config), fall back to Activity
+  // If the active tab disappears, fall back to Activity
   // for this render so the pane is never empty. The user's stored
   // activeTab is left alone — switching back to a supporting runtime
   // brings their selection back.

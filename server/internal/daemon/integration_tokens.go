@@ -188,24 +188,35 @@ func integrationEnvOverrides(tokens IntegrationTokens) map[string]string {
 		"PAONES_TOKEN":                         paones,
 		"JINGWEI_TOKEN":                        jingwei,
 	}
+	normalizedExtra := make(map[string]string, len(tokens.Extra))
 	for key, value := range tokens.Extra {
 		envKey := integrationTokenEnvKey(key)
 		if envKey == "" {
 			continue
 		}
-		trimmedValue := strings.TrimSpace(value)
+		normalizedExtra[envKey] = strings.TrimSpace(value)
+	}
+	// Store exact user-defined keys first. Derived MULTICA_INTEGRATION_ aliases
+	// are added in a second pass so an explicitly configured full key always
+	// wins, independent of Go map iteration order.
+	for envKey, trimmedValue := range normalizedExtra {
 		if strings.TrimSpace(out[envKey]) == "" {
 			out[envKey] = trimmedValue
 		}
+	}
+	for envKey, trimmedValue := range normalizedExtra {
 		if !strings.HasPrefix(envKey, "MULTICA_INTEGRATION_") {
-			out["MULTICA_INTEGRATION_"+envKey] = trimmedValue
+			alias := "MULTICA_INTEGRATION_" + envKey
+			if _, explicitlyConfigured := normalizedExtra[alias]; !explicitlyConfigured {
+				out[alias] = trimmedValue
+			}
 		}
 	}
 	return out
 }
 
 var nonEnvKeyChars = regexp.MustCompile(`[^A-Z0-9]+`)
-var multicaIntegrationPlaceholder = regexp.MustCompile(`\$\{(MULTICA_INTEGRATION_[A-Z0-9_]+)\}`)
+var integrationPlaceholder = regexp.MustCompile(`\$\{([A-Za-z_][A-Za-z0-9_]*)\}`)
 
 func integrationTokenEnvKey(key string) string {
 	trimmed := strings.TrimSpace(key)
@@ -232,10 +243,7 @@ func materializeIntegrationMcpConfig(raw json.RawMessage, tokens IntegrationToke
 		return raw
 	}
 	overrides := integrationEnvOverrides(tokens)
-	changed := applyMcpServerEnvOverrides(root["mcpServers"], overrides)
-	if replaceMcpServerPlaceholders(root["mcpServers"], overrides) {
-		changed = true
-	}
+	changed := replaceMcpServerPlaceholders(root["mcpServers"], overrides)
 	if changed {
 		out, err := json.Marshal(root)
 		if err == nil {
@@ -243,35 +251,6 @@ func materializeIntegrationMcpConfig(raw json.RawMessage, tokens IntegrationToke
 		}
 	}
 	return raw
-}
-
-func applyMcpServerEnvOverrides(mcpServers any, overrides map[string]string) bool {
-	servers, ok := mcpServers.(map[string]any)
-	if !ok {
-		return false
-	}
-	changed := false
-	for _, rawServer := range servers {
-		server, ok := rawServer.(map[string]any)
-		if !ok {
-			continue
-		}
-		rawEnv, ok := server["env"]
-		if !ok {
-			continue
-		}
-		env, ok := rawEnv.(map[string]any)
-		if !ok {
-			continue
-		}
-		for key, value := range overrides {
-			if _, exists := env[key]; exists {
-				env[key] = value
-				changed = true
-			}
-		}
-	}
-	return changed
 }
 
 func replaceMcpServerPlaceholders(mcpServers any, overrides map[string]string) bool {
@@ -302,22 +281,15 @@ func replaceIntegrationPlaceholders(value any, overrides map[string]string) (any
 	case string:
 		out := v
 		missingCredential := false
-		out = multicaIntegrationPlaceholder.ReplaceAllStringFunc(out, func(match string) string {
+		out = integrationPlaceholder.ReplaceAllStringFunc(out, func(match string) string {
 			name := strings.TrimSuffix(strings.TrimPrefix(match, "${"), "}")
-			replacement, ok := overrides[name]
+			replacement, ok := overrides[integrationTokenEnvKey(name)]
 			if !ok || strings.TrimSpace(replacement) == "" {
 				missingCredential = true
 				return ""
 			}
 			return replacement
 		})
-		for key, replacement := range overrides {
-			placeholder := "${" + key + "}"
-			if strings.Contains(out, placeholder) && strings.TrimSpace(replacement) == "" {
-				missingCredential = true
-			}
-			out = strings.ReplaceAll(out, placeholder, replacement)
-		}
 		return out, out != v, missingCredential
 	case []any:
 		changed := false

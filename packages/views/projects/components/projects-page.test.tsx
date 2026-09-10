@@ -22,7 +22,7 @@ const mocks = vi.hoisted(() => ({
     sortField: "name",
     sortDirection: "asc",
     hiddenColumns: [] as string[],
-    filters: { statuses: [], priorities: [], leads: [] },
+    filters: { statuses: [], priorities: [], leads: [], labels: [] as string[] },
     setViewMode: vi.fn(),
     toggleSort: vi.fn(),
     setSortField: vi.fn(),
@@ -278,10 +278,37 @@ beforeEach(() => {
   mocks.projectViewState.sortField = "name";
   mocks.projectViewState.sortDirection = "asc";
   mocks.projectViewState.hiddenColumns = [];
-  mocks.projectViewState.filters = { statuses: [], priorities: [], leads: [] };
+  mocks.projectViewState.filters = { statuses: [], priorities: [], leads: [], labels: [] };
 });
 
 describe("ProjectsPage compact row navigation", () => {
+  it("filters the requirements table by selected label", () => {
+    const label = {
+      id: "label-launch",
+      workspace_id: "workspace-1",
+      name: "Launch",
+      color: "#2563eb",
+      resource_type: "project" as const,
+      created_at: "2026-06-01T00:00:00Z",
+      updated_at: "2026-06-01T00:00:00Z",
+    };
+    mocks.projects = [
+      { ...PROJECT, labels: [label] },
+      { ...PROJECT, id: "project-2", title: "Unrelated Plan", labels: [] },
+    ];
+    mocks.projectViewState.filters = {
+      statuses: [],
+      priorities: [],
+      leads: [],
+      labels: [label.id],
+    };
+
+    renderProjects();
+
+    expect(screen.getByText(PROJECT.title)).toBeInTheDocument();
+    expect(screen.queryByText("Unrelated Plan")).not.toBeInTheDocument();
+  });
+
   it("renders the project name as the title link", () => {
     renderProjects();
 

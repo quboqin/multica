@@ -53,14 +53,16 @@ import { StatusIcon, PriorityIcon, StatusPicker, PriorityPicker, StartDatePicker
 import { IssueActionsDropdown, useIssueActions } from "../actions";
 import { ProjectPicker } from "../../projects/components/project-picker";
 import { LocalDirectoryHint } from "../../projects/components/local-directory-hint";
-import { CommentCard } from "./comment-card";
+import { AttachmentList, CommentCard } from "./comment-card";
 import { CommentInput } from "./comment-input";
 import { ResolvedThreadBar } from "./resolved-thread-bar";
 import { collectThreadReplies, deriveThreadResolution } from "./thread-utils";
 import { IssueAgentHeaderChip } from "./issue-agent-header-chip";
 import { ExecutionLogSection } from "./execution-log-section";
 import { PullRequestList } from "./pull-request-list";
-import { CreativeMaterialPool } from "./creative-material-pool";
+import { CreativeOrderSummary } from "./creative-order-summary";
+import { CreativeMaterialMigrationNotice } from "./creative-material-migration-notice";
+import { getCreativeIssueSurface } from "./creative-issue-surface";
 import { PreviewSessionsSection } from "./preview-sessions-section";
 import { useGitHubSettings } from "@multica/core/github";
 import { useQuery } from "@tanstack/react-query";
@@ -89,6 +91,7 @@ import { cn } from "@multica/ui/lib/utils";
 import { ProgressRing } from "./progress-ring";
 import { matchesPinyin } from "../../editor/extensions/pinyin-match";
 import { useT } from "../../i18n";
+import { sortWorkflowChildren } from "../utils/workflow-order";
 import { useIssueDetailScrollRestore } from "../hooks/use-issue-detail-scroll-restore";
 
 function SubscriberPopoverContent({
@@ -271,9 +274,50 @@ function formatActivity(
           return t(($) => $.activity.squad_leader_evaluated);
       }
     }
+    case "creative_feedback_recorded": {
+      const comment = details.comment?.trim();
+      switch (`${details.subject_type}:${details.event_type}:${details.decision}`) {
+        case "candidate:decision:selected":
+          return t(($) => $.activity.creative_candidate_selected);
+        case "candidate:decision:rejected":
+          return comment
+            ? t(($) => $.activity.creative_candidate_rejected_comment, { comment })
+            : t(($) => $.activity.creative_candidate_rejected);
+        case "recommended_copy:decision:accepted":
+          return t(($) => $.activity.creative_copy_accepted);
+        case "recommended_copy:decision:replaced":
+        case "recommended_copy:replacement:replaced":
+          return comment
+            ? t(($) => $.activity.creative_copy_replaced_comment, { comment })
+            : t(($) => $.activity.creative_copy_replaced);
+        default:
+          return t(($) => $.activity.creative_feedback_recorded);
+      }
+    }
+    case "creative_feedback_undone":
+      return t(($) => $.activity.creative_feedback_undone);
+    case "creative_order_adjustment_queued":
+      return t(($) => $.activity.creative_order_adjustment_queued, {
+        size: creativeOrderSizeLabel(details.size_key),
+      });
+    case "creative_variant_adopted":
+      return details.variant_key
+        ? t(($) => $.activity.creative_variant_adopted_key, { variant: details.variant_key })
+        : t(($) => $.activity.creative_variant_adopted);
+    case "creative_variant_unadopted":
+      return t(($) => $.activity.creative_variant_unadopted);
+    case "creative_variant_revision_selected":
+      return t(($) => $.activity.creative_variant_revision_selected, { revision: details.selected_revision || "" });
     default:
       return entry.action ?? "";
   }
+}
+
+function creativeOrderSizeLabel(size: string | undefined): string {
+  if (size === "1080x1080") return "方形";
+  if (size === "1200x628") return "横版";
+  if (size === "800x1000") return "竖版";
+  return "当前尺寸";
 }
 
 
@@ -947,10 +991,15 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
     // Coalesce consecutive activities from the same actor + action.
     // - task_completed / task_failed: no time limit (these repeat across runs)
     // - all other actions: within a 2-minute window
-    // - squad_leader_evaluated: never coalesce; outcome/reason are audit data
+    // - decision-bearing activities: never coalesce; their details are audit data
     const COALESCE_MS = 2 * 60 * 1000;
     const NO_TIME_LIMIT_ACTIONS = new Set(["task_completed", "task_failed"]);
-    const NEVER_COALESCE_ACTIONS = new Set(["squad_leader_evaluated"]);
+    const NEVER_COALESCE_ACTIONS = new Set([
+      "squad_leader_evaluated",
+      "creative_feedback_recorded",
+      "creative_feedback_undone",
+      "creative_variant_adopted",
+    ]);
     const coalesced: TimelineEntry[] = [];
     for (const entry of topLevel) {
       if (entry.type === "activity") {
@@ -1069,6 +1118,8 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
     ...childIssuesOptions(wsId, id),
     enabled: !!issue,
   });
+  const creativeIssueSurface = issue ? getCreativeIssueSurface(issue) : null;
+  const orderedChildIssues = useMemo(() => sortWorkflowChildren(childIssues), [childIssues]);
   // Parent's children — used to render the "x/y" progress next to the
   // "Sub-issue of …" breadcrumb under the title.
   const { data: parentChildIssues = [] } = useQuery({
@@ -1089,7 +1140,7 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
     return clearSelection;
   }, [id, clearSelection]);
 
-  const childIssueIds = useMemo(() => childIssues.map((c) => c.id), [childIssues]);
+  const childIssueIds = useMemo(() => orderedChildIssues.map((c) => c.id), [orderedChildIssues]);
   const childSelectedCount = childIssueIds.filter((cid) =>
     selectedIds.has(cid),
   ).length;
@@ -1934,6 +1985,8 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
               attachments={descEditorAttachments}
             />
 
+            <AttachmentList attachments={issueAttachments} content={issue.description ?? undefined} className="mt-3" />
+
             <div className="flex items-center gap-1 mt-3">
               <ReactionBar
                 reactions={issueReactions}
@@ -1962,8 +2015,8 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
               </button>
             </div>
           )}
-          {childIssues.length > 0 && (() => {
-            const doneCount = childIssues.filter((c) => c.status === "done").length;
+          {orderedChildIssues.length > 0 && (() => {
+            const doneCount = orderedChildIssues.filter((c) => c.status === "done").length;
             return (
               <div className="mt-10 group/sub-issues">
                 {/* Header */}
@@ -1982,9 +2035,9 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
                     <span>{t(($) => $.detail.sub_issues_label)}</span>
                   </button>
                   <div className="inline-flex items-center gap-1.5 rounded-full bg-muted/60 px-2 py-0.5">
-                    <ProgressRing done={doneCount} total={childIssues.length} size={11} />
+                    <ProgressRing done={doneCount} total={orderedChildIssues.length} size={11} />
                     <span className="text-[11px] text-muted-foreground tabular-nums font-medium">
-                      {doneCount}/{childIssues.length}
+                      {doneCount}/{orderedChildIssues.length}
                     </span>
                   </div>
                   <input
@@ -2026,7 +2079,7 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
                 {/* List */}
                 {!subIssuesCollapsed && (
                   <div className="overflow-hidden rounded-lg border bg-card/30 divide-y divide-border/60">
-                    {childIssues.map((child) => (
+                    {orderedChildIssues.map((child) => (
                       <SubIssueRow key={child.id} child={child} />
                     ))}
                   </div>
@@ -2035,7 +2088,11 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
             );
           })()}
 
-          <CreativeMaterialPool issue={issue} />
+          {(() => {
+            if (creativeIssueSurface?.kind === "order") return <CreativeOrderSummary orderId={creativeIssueSurface.orderId} />;
+            if (creativeIssueSurface?.kind === "migration") return <CreativeMaterialMigrationNotice />;
+            return null;
+          })()}
 
           <div className="my-8 border-t" />
 
@@ -2043,7 +2100,7 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
           <div>
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-3">
-                <h2 className="text-base font-semibold">{t(($) => $.detail.activity_section)}</h2>
+                <div><h2 className="text-base font-semibold">{creativeIssueSurface?.kind === "order" ? "协作动态" : t(($) => $.detail.activity_section)}</h2>{creativeIssueSurface?.kind === "order" && <p className="mt-1 text-xs text-muted-foreground">在这里讨论需求、补充调整、确认异常处理；生成阶段和交付状态在上方协作工作台同步。</p>}</div>
               </div>
               <div className="flex items-center gap-2">
                 <button

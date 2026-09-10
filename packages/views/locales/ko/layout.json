@@ -7,8 +7,9 @@
     "plans": "Plans",
     "projects": "프로젝트",
     "autopilots": "오토파일럿",
+    "creative": "크리에이티브",
     "agents": "에이전트",
-    "squads": "스쿼드",
+    "squads": "워크플로",
     "usage": "사용량",
     "my_usage": "내 사용량",
     "user_usage": "사용량 통계",
@@ -19,9 +20,12 @@
   },
   "help": {
     "trigger": "도움말",
-    "docs": "문서",
-    "changelog": "변경 로그",
-    "feedback": "피드백"
+    "changelog": "변경 로그"
+  },
+  "release_announcement": {
+    "title": "Multica {{version}} 업데이트",
+    "view_changelog": "변경 로그 보기",
+    "later": "나중에"
   },
   "workspace_loader": {
     "loading_workspace": "워크스페이스 로딩 중...",

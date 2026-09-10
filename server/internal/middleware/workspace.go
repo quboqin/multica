@@ -6,6 +6,7 @@ import (
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/multica-ai/multica/server/internal/capability"
 	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
@@ -190,6 +191,36 @@ func RequireWorkspaceRoleFromURL(queries *db.Queries, param string, roles ...str
 		}
 		return id, nil
 	}, roles)
+}
+
+// RequireWorkspaceCapability fails closed when a workspace has not enabled a
+// registered capability. It runs after workspace membership middleware so the
+// workspace ID is taken from the server-resolved context, never from a client
+// supplied header.
+func RequireWorkspaceCapability(reader capability.Reader, key string) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if _, ok := capability.Lookup(key); !ok {
+				writeError(w, http.StatusInternalServerError, "workspace capability is not registered")
+				return
+			}
+			workspaceID := WorkspaceIDFromContext(r.Context())
+			if workspaceID == "" {
+				writeError(w, http.StatusBadRequest, "workspace context is required")
+				return
+			}
+			enabled, err := capability.Enabled(r.Context(), reader, workspaceID, key)
+			if err != nil {
+				writeError(w, http.StatusInternalServerError, "failed to load workspace capability")
+				return
+			}
+			if !enabled {
+				writeError(w, http.StatusForbidden, "workspace capability disabled")
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
 }
 
 func buildMiddleware(queries *db.Queries, resolve workspaceResolver, roles []string) func(http.Handler) http.Handler {

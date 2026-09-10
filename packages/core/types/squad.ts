@@ -1,5 +1,34 @@
 export type SquadMemberType = "agent" | "member";
 
+export interface SquadWorkflowStage {
+  id: string;
+  name: string | null;
+  description: string | null;
+  position: number;
+  keywords: string[];
+}
+
+export interface SquadWorkflowCanvasPoint {
+  x: number;
+  y: number;
+}
+
+export interface SquadWorkflowCanvasLayout {
+  leader?: SquadWorkflowCanvasPoint;
+  stages: Record<string, SquadWorkflowCanvasPoint>;
+  agents: Record<string, SquadWorkflowCanvasPoint>;
+}
+
+export interface SquadWorkflowAssignmentsResponse {
+  stages: SquadWorkflowStage[];
+  assignments: Record<string, string>;
+  assignment_sources: Record<string, "generated" | "manual">;
+  is_default_order: boolean;
+  generation_source: "legacy_default" | "domain_generated";
+  generated_profile: string | null;
+  canvas_layout: SquadWorkflowCanvasLayout;
+}
+
 export type SquadActivityOutcome = "action" | "no_action" | "failed";
 
 export interface SquadMemberPreview {

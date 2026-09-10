@@ -8,13 +8,12 @@ import (
 
 	"github.com/jackc/pgx/v5/pgtype"
 
-	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
 
 const crawlStrategyMemoryParamKey = "_adaptive_strategy_memory"
 const crawlStrategyMemoryGlobalScope = "__global__"
 
-func (h *Handler) materialSearchParamsWithStrategyMemory(ctx context.Context, issue db.Issue, connectorID, capability string, params json.RawMessage) json.RawMessage {
+func (h *Handler) materialSearchParamsWithStrategyMemory(ctx context.Context, workspaceID, projectID pgtype.UUID, connectorID, capability string, params json.RawMessage) json.RawMessage {
 	connectorID = normalizedCrawlConnectorID(connectorID)
 	capability = normalizedCrawlCapability(capability)
 	if connectorID != "appgrowing" || capability != "material_search" {
@@ -28,7 +27,7 @@ func (h *Handler) materialSearchParamsWithStrategyMemory(ctx context.Context, is
 	if len(competitors) == 0 {
 		return params
 	}
-	memories, err := h.loadCreativeMaterialCrawlStrategyMemories(ctx, issue.WorkspaceID, issue.ProjectID, connectorID, capability, competitors)
+	memories, err := h.loadCreativeMaterialCrawlStrategyMemories(ctx, workspaceID, projectID, connectorID, capability, competitors)
 	if err != nil || len(memories) == 0 {
 		return params
 	}
@@ -100,7 +99,7 @@ ORDER BY CASE WHEN project_id = $5 AND $5 <> '' THEN 1 ELSE 0 END ASC, updated_a
 	return out, nil
 }
 
-func (h *Handler) recordCreativeMaterialCrawlStrategyMemory(ctx context.Context, issue db.Issue, connectorID, capability string, raw json.RawMessage, runID string) error {
+func (h *Handler) recordCreativeMaterialCrawlStrategyMemory(ctx context.Context, workspaceID, projectID pgtype.UUID, connectorID, capability string, raw json.RawMessage, runID string) error {
 	if h.TxStarter == nil || strings.TrimSpace(string(raw)) == "" {
 		return nil
 	}
@@ -117,7 +116,7 @@ func (h *Handler) recordCreativeMaterialCrawlStrategyMemory(ctx context.Context,
 	if len(items) == 0 {
 		return nil
 	}
-	projectKey := crawlStrategyProjectKey(issue.ProjectID)
+	projectKey := crawlStrategyProjectKey(projectID)
 	tx, err := h.TxStarter.Begin(ctx)
 	if err != nil {
 		return err
@@ -154,7 +153,7 @@ DO UPDATE SET
   last_run_id = EXCLUDED.last_run_id,
   last_seen_at = now(),
   updated_at = now()
-`, issue.WorkspaceID, projectKey, connectorID, capability, scopeKey, string(rawMemory), strings.TrimSpace(runID))
+		`, workspaceID, projectKey, connectorID, capability, scopeKey, string(rawMemory), strings.TrimSpace(runID))
 		if err != nil {
 			return err
 		}

@@ -2,11 +2,17 @@ package handler
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
+
+const creativeDomainTaskProtocol = `## Creative Domain Task Protocol
+
+This is a structured creative-domain task. Its task context and bound Skills are authoritative. Record execution evidence in domain objects and native task results; keep the Issue limited to user decisions, genuine blockers, and final acceptance.`
 
 // squadOperatingProtocol is the hard-coded system-level briefing prepended to
 // every squad-leader claim. It explains the leader's coordinator role, the
@@ -116,6 +122,24 @@ func buildSquadLeaderBriefing(ctx context.Context, q *db.Queries, squad db.Squad
 	return sb.String()
 }
 
+// buildTaskAwareSquadLeaderBriefing keeps the generic squad coordinator
+// protocol out of structured creative-domain tasks. Those tasks already carry
+// an explicit domain contract and bound Skills, so mention-driven delegation
+// would duplicate orchestration and pollute the user-facing Issue.
+func buildTaskAwareSquadLeaderBriefing(ctx context.Context, q *db.Queries, squad db.Squad, taskContext []byte) string {
+	if isCreativeDomainTaskContext(taskContext) {
+		return creativeDomainTaskProtocol
+	}
+	return buildSquadLeaderBriefing(ctx, q, squad)
+}
+
+func isCreativeDomainTaskContext(taskContext []byte) bool {
+	var envelope struct {
+		Type string `json:"type"`
+	}
+	return json.Unmarshal(taskContext, &envelope) == nil && envelope.Type == "creative_domain_task"
+}
+
 // buildSquadRoster renders the "## Squad Roster" section: a leader self-row
 // plus one row per non-archived member, with literal mention markdown.
 func buildSquadRoster(ctx context.Context, q *db.Queries, squad db.Squad) string {
@@ -132,7 +156,9 @@ func buildSquadRoster(ctx context.Context, q *db.Queries, squad db.Squad) string
 	sb.WriteString(leaderName)
 	sb.WriteString(" — agent — `")
 	sb.WriteString(formatMention(leaderName, "agent", util.UUIDToString(squad.LeaderID)))
-	sb.WriteString("`\n")
+	sb.WriteString("`")
+	sb.WriteString(formatAgentSkillSummary(ctx, q, squad.LeaderID))
+	sb.WriteString("\n")
 
 	members, err := q.ListSquadMembers(ctx, squad.ID)
 	if err != nil {
@@ -178,7 +204,8 @@ func renderMemberRow(ctx context.Context, q *db.Queries, m db.SquadMember) strin
 		if ag.ArchivedAt.Valid {
 			return ""
 		}
-		return formatRosterRow(ag.Name, "agent", role, formatMention(ag.Name, "agent", id))
+		return formatRosterRow(ag.Name, "agent", role, formatMention(ag.Name, "agent", id)) +
+			formatAgentSkillSummary(ctx, q, m.MemberID) + "\n"
 	case "member":
 		user, err := q.GetUser(ctx, m.MemberID)
 		if err != nil {
@@ -187,7 +214,7 @@ func renderMemberRow(ctx context.Context, q *db.Queries, m db.SquadMember) strin
 		// Mention syntax for humans uses the user_id (matches the rest of
 		// the product — see util.MentionRe and frontend mention payloads).
 		userID := util.UUIDToString(m.MemberID)
-		return formatRosterRow(user.Name, "member (human)", role, formatMention(user.Name, "member", userID))
+		return formatRosterRow(user.Name, "member (human)", role, formatMention(user.Name, "member", userID)) + "\n"
 	default:
 		return ""
 	}
@@ -206,8 +233,24 @@ func formatRosterRow(name, kind, role, mention string) string {
 	}
 	sb.WriteString(" — `")
 	sb.WriteString(mention)
-	sb.WriteString("`\n")
+	sb.WriteString("`")
 	return sb.String()
+}
+
+func formatAgentSkillSummary(ctx context.Context, q *db.Queries, agentID pgtype.UUID) string {
+	skills, err := q.ListAgentSkillSummaries(ctx, agentID)
+	if err != nil || len(skills) == 0 {
+		return " — skills: none"
+	}
+	parts := make([]string, 0, len(skills))
+	for _, skill := range skills {
+		part := skill.Name
+		if description := strings.TrimSpace(skill.Description); description != "" {
+			part += " (" + description + ")"
+		}
+		parts = append(parts, part)
+	}
+	return " — skills: " + strings.Join(parts, "; ")
 }
 
 // formatMention emits a mention markdown string that round-trips through

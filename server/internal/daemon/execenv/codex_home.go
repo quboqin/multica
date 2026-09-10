@@ -48,6 +48,8 @@ type CodexHomeOptions struct {
 	// StateWarmCacheDir, when set, points at a workspace-scoped cache of
 	// Codex state SQLite files used to avoid per-task migration cold starts.
 	StateWarmCacheDir string
+	// WritableRoots are extra paths the workspace-write sandbox may modify.
+	WritableRoots []string
 	// GOOS overrides the target platform when deciding the sandbox policy.
 	// Empty means use runtime.GOOS. Primarily exists so tests can exercise
 	// both macOS and Linux paths deterministically.
@@ -130,6 +132,7 @@ func prepareCodexHomeWithOpts(codexHome string, opts CodexHomeOptions, logger *s
 	// need to fall back to danger-full-access because of openai/codex#10390;
 	// see codex_sandbox.go for the full rationale.
 	policy := codexSandboxPolicyFor(opts.GOOS, opts.CodexVersion)
+	policy.WritableRoots = opts.WritableRoots
 	if err := ensureCodexSandboxConfig(filepath.Join(codexHome, "config.toml"), policy, opts.CodexVersion, logger); err != nil {
 		logger.Warn("execenv: codex-home ensure sandbox config failed", "error", err)
 	}

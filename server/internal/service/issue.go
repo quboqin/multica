@@ -2,10 +2,12 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/analytics"
 	"github.com/multica-ai/multica/server/internal/events"
@@ -66,6 +68,7 @@ type IssueCreateParams struct {
 	OriginType     pgtype.Text
 	OriginID       pgtype.UUID
 	AttachmentIDs  []pgtype.UUID
+	Metadata       []byte
 	AllowDuplicate bool
 }
 
@@ -135,6 +138,7 @@ type IssueCreateResult struct {
 	Issue          db.Issue
 	Attachments    []db.Attachment
 	DuplicateIssue *db.Issue
+	Reused         bool
 }
 
 // Create runs the full issue-creation pipeline atomically end-to-end:
@@ -164,6 +168,31 @@ func (s *IssueService) Create(ctx context.Context, p IssueCreateParams, opts Iss
 	}
 	defer tx.Rollback(ctx)
 	qtx := s.Queries.WithTx(tx)
+
+	// Creative submissions deliberately persist their retry key in issue
+	// metadata. Locking the key before allocating an issue number makes a
+	// retry safe across browser reloads and concurrent double-clicks.
+	if key := creativeSubmissionKey(p.Metadata); key != "" {
+		if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, util.UUIDToString(p.WorkspaceID)+":"+key); err != nil {
+			return IssueCreateResult{}, fmt.Errorf("lock creative submission: %w", err)
+		}
+		var existingID pgtype.UUID
+		err := tx.QueryRow(ctx, `SELECT id FROM issue WHERE workspace_id = $1 AND metadata ->> 'creative_submission_key' = $2`, p.WorkspaceID, key).Scan(&existingID)
+		if err == nil {
+			existing, getErr := qtx.GetIssueInWorkspace(ctx, db.GetIssueInWorkspaceParams{ID: existingID, WorkspaceID: p.WorkspaceID})
+			if getErr != nil {
+				return IssueCreateResult{}, fmt.Errorf("load creative submission issue: %w", getErr)
+			}
+			if err := tx.Commit(ctx); err != nil {
+				return IssueCreateResult{}, fmt.Errorf("commit creative submission recovery: %w", err)
+			}
+			attachments, _ := s.Queries.ListAttachmentsByIssue(ctx, db.ListAttachmentsByIssueParams{IssueID: existing.ID, WorkspaceID: existing.WorkspaceID})
+			return IssueCreateResult{Issue: existing, Attachments: attachments, Reused: true}, nil
+		}
+		if !errors.Is(err, pgx.ErrNoRows) {
+			return IssueCreateResult{}, fmt.Errorf("find creative submission issue: %w", err)
+		}
+	}
 
 	// Resolve and validate parent / project before reading from the
 	// duplicate guard so a forged parent or project ID is rejected
@@ -266,6 +295,12 @@ func (s *IssueService) Create(ctx context.Context, p IssueCreateParams, opts Iss
 	if err != nil {
 		return IssueCreateResult{}, fmt.Errorf("create issue: %w", err)
 	}
+	if len(p.Metadata) > 0 {
+		if _, err := tx.Exec(ctx, `UPDATE issue SET metadata = $2::jsonb WHERE id = $1`, issue.ID, string(p.Metadata)); err != nil {
+			return IssueCreateResult{}, fmt.Errorf("set issue metadata: %w", err)
+		}
+		issue.Metadata = p.Metadata
+	}
 
 	if err := tx.Commit(ctx); err != nil {
 		return IssueCreateResult{}, fmt.Errorf("commit: %w", err)
@@ -283,6 +318,18 @@ func (s *IssueService) Create(ctx context.Context, p IssueCreateParams, opts Iss
 	s.maybeEnqueueOnAssign(ctx, issue, p.CreatorType, actorID, opts.RequestingUserID)
 
 	return IssueCreateResult{Issue: issue, Attachments: attachments}, nil
+}
+
+func creativeSubmissionKey(metadata []byte) string {
+	var values map[string]any
+	if len(metadata) == 0 || json.Unmarshal(metadata, &values) != nil {
+		return ""
+	}
+	key, _ := values["creative_submission_key"].(string)
+	if len(key) == 0 || len(key) > 200 {
+		return ""
+	}
+	return key
 }
 
 // linkAttachments links the given attachment IDs to the newly created

@@ -1,0 +1,1 @@
+DROP INDEX IF EXISTS idx_one_active_direct_task_per_evidence_item;

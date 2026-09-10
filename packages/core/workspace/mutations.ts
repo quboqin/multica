@@ -1,6 +1,7 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import type { Workspace } from "../types";
+import type { CreativeFactoryInitializationRequest, Workspace } from "../types";
 import { api } from "../api";
+import { autopilotKeys } from "../autopilots/queries";
 import { workspaceKeys } from "./queries";
 
 export function useCreateWorkspace() {
@@ -41,6 +42,21 @@ export function useDeleteWorkspace() {
     mutationFn: (workspaceId: string) => api.deleteWorkspace(workspaceId),
     onSettled: () => {
       qc.invalidateQueries({ queryKey: workspaceKeys.list() });
+    },
+  });
+}
+
+export function useUpdateWorkspaceCapability() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ workspaceId, key, enabled, creativeFactory }: { workspaceId: string; key: string; enabled: boolean; creativeFactory?: CreativeFactoryInitializationRequest }) =>
+      api.updateWorkspaceCapability(workspaceId, key, enabled, creativeFactory),
+    onSuccess: (_, { workspaceId }) => {
+      qc.invalidateQueries({ queryKey: workspaceKeys.capabilities(workspaceId) });
+      qc.invalidateQueries({ queryKey: workspaceKeys.agents(workspaceId) });
+      qc.invalidateQueries({ queryKey: workspaceKeys.skills(workspaceId) });
+      qc.invalidateQueries({ queryKey: workspaceKeys.squads(workspaceId) });
+      qc.invalidateQueries({ queryKey: autopilotKeys.all(workspaceId) });
     },
   });
 }

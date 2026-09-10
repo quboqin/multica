@@ -201,6 +201,43 @@ func TestSubscriberIssueCreated_SelfAssign(t *testing.T) {
 	}
 }
 
+func TestSubscriberIssueCreated_UnsupportedTargetsAreNotSubscribed(t *testing.T) {
+	queries := db.New(testPool)
+	bus := events.New()
+	registerSubscriberListeners(bus, queries)
+
+	issueID := createTestIssue(t, testWorkspaceID, testUserID)
+	t.Cleanup(func() { cleanupTestIssue(t, issueID) })
+
+	squadType := "squad"
+	squadID := "550e8400-e29b-41d4-a716-446655440000"
+	description := "Parent [ADC-1](mention://issue/550e8400-e29b-41d4-a716-446655440001)"
+	bus.Publish(events.Event{
+		Type:        protocol.EventIssueCreated,
+		WorkspaceID: testWorkspaceID,
+		ActorType:   "member",
+		ActorID:     testUserID,
+		Payload: map[string]any{
+			"issue": handler.IssueResponse{
+				ID:           issueID,
+				WorkspaceID:  testWorkspaceID,
+				Title:        "squad issue",
+				Status:       "todo",
+				Priority:     "medium",
+				CreatorType:  "member",
+				CreatorID:    testUserID,
+				AssigneeType: &squadType,
+				AssigneeID:   &squadID,
+				Description:  &description,
+			},
+		},
+	})
+
+	if count := subscriberCount(t, queries, issueID); count != 1 {
+		t.Fatalf("expected only the creator subscriber, got %d", count)
+	}
+}
+
 func TestSubscriberIssueUpdated_AssigneeChanged(t *testing.T) {
 	queries := db.New(testPool)
 	bus := events.New()

@@ -1,0 +1,1 @@
+DROP INDEX IF EXISTS creative_order_workspace_created_idx;

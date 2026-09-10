@@ -2,7 +2,26 @@ import { describe, expect, it } from "vitest";
 import {
   AppConfigSchema,
   CredentialCrawlResultSchema,
+  CreativeBriefSchema,
+  CreativeDirectEditResponseSchema,
+  CreativeFeedbackEventListResponseSchema,
+
+  CreativeFeedbackDashboardSchema,
+  CreativeFeedbackMetricsSchema,
+  CreativeOrderQCFinalizeResponseSchema,
+  CreativePreAdaptationRetryResponseSchema,
+  CreativeOrderWorkflowRetryResponseSchema,
+  QueueCreativeOrderAdjustmentResponseSchema,
+	CreativeOrderQCRetryResponseSchema,
+  CreativeOrderItemSchema,
+  CreativeOrderSchema,
+  CreateCreativeFeedbackResponseSchema,
+  CreativeIssueContextSchema,
+  CreativeMaterialLibrarySchema,
+  CreativeMaterialImportResultSchema,
   CreativeMaterialsResponseSchema,
+  CreativeResourceFileListSchema,
+  CreativeResourceListSchema,
   DashboardAgentRunTimeListSchema,
   DashboardUsageByAgentListSchema,
   DashboardUsageDailyListSchema,
@@ -10,7 +29,6 @@ import {
   DuplicateIssueErrorBodySchema,
   EMPTY_USER,
   ListCredentialProfilesResponseSchema,
-  ListWorkspaceMCPConnectionsResponseSchema,
   LoginResponseSchema,
   ListIssuesResponseSchema,
   PreviewSessionListResponseSchema,
@@ -99,6 +117,34 @@ describe("credential broker schemas", () => {
 
     expect(parsed.profiles[0]?.last_used_at).toBeUndefined();
     expect(parsed.profiles[0]?.status).toBe("active");
+    expect(parsed.profiles[0]?.scope).toBe("workspace");
+    expect(parsed.profiles[0]?.can_manage).toBe(false);
+    expect(parsed.profiles[0]?.managers).toEqual([]);
+  });
+
+  it("preserves deployment sharing and explicit manager permissions", () => {
+    const parsed = ListCredentialProfilesResponseSchema.parse({
+      profiles: [{
+        id: "profile-1",
+        connector_id: "appgrowing",
+        label: "Enterprise AppGrowing",
+        status: "active",
+        scope: "deployment",
+        can_manage: true,
+        managers: [{
+          user_id: "user-1",
+          name: "Owner",
+          email: "owner@example.test",
+          created_at: "2026-08-05T00:00:00Z",
+        }],
+        created_at: "2026-08-05T00:00:00Z",
+        updated_at: "2026-08-05T00:00:00Z",
+      }],
+    });
+
+    expect(parsed.profiles[0]?.scope).toBe("deployment");
+    expect(parsed.profiles[0]?.can_manage).toBe(true);
+    expect(parsed.profiles[0]?.managers[0]?.email).toBe("owner@example.test");
   });
 
   it("defaults crawl probe counters and preserves raw auth diagnostics", () => {
@@ -116,84 +162,264 @@ describe("credential broker schemas", () => {
 });
 
 describe("creative material schemas", () => {
-  it("defaults recovery and archive fields from an older backend", () => {
-    const parsed = CreativeMaterialsResponseSchema.parse({
-      enabled: true,
-      candidates: [{ id: "candidate-1" }],
-      edit_jobs: [{ id: "job-1" }],
-    });
-
-    expect(parsed.candidates[0]?.archived_url).toBe("");
-    expect(parsed.candidates[0]?.archive_status).toBe("pending");
-    expect(parsed.edit_jobs[0]?.poll_attempts).toBe(0);
-    expect(parsed.edit_jobs[0]?.mcp_connection_id).toBe("");
-    expect(parsed.edit_jobs[0]?.process_data).toEqual({});
-    expect(parsed.edit_jobs[0]?.variants).toEqual([]);
+  it("preserves workflow failures and defaults them for older creative orders", () => {
+    expect(CreativeOrderSchema.parse({ id: "order-1" }).workflow_failures).toEqual([]);
+    expect(CreativeOrderSchema.parse({
+      id: "order-1",
+      workflow_failures: [{
+        task_id: "task-1",
+        agent_id: "agent-1",
+        workflow: "creative_production",
+        scope: "order_item",
+        subject_id: "item-1",
+        item_key: "variant-a",
+        trigger_evidence_kind: "creative_order_item_production",
+        trigger_evidence_ref_id: "item-1",
+        failure_reason: "provider_rate_limited",
+        error: "429 Too Many Requests",
+        failed_at: "2026-08-04T12:00:00Z",
+        retryable: true,
+      }],
+    }).workflow_failures[0]).toEqual(expect.objectContaining({
+      task_id: "task-1",
+      workflow: "creative_production",
+      error: "429 Too Many Requests",
+      retryable: true,
+    }));
+    expect(CreativeOrderSchema.safeParse({ id: "order-1", workflow_failures: null }).success).toBe(false);
   });
 
-  it("defaults feedback history and contains malformed telemetry fields", () => {
-    const parsed = CreativeMaterialsResponseSchema.parse({
-      enabled: true,
-      edit_jobs: [{
-        id: "job-1",
-        variants: [{
-          id: "variant-1",
-          feedback: [{
-            id: "feedback-1",
-            decision: "accepted",
-            reason_codes: null,
-            process_snapshot: null,
-          }],
-        }, {
-          id: "variant-from-older-server",
+  it("parses a workflow recovery response defensively", () => {
+    expect(CreativeOrderWorkflowRetryResponseSchema.parse({})).toEqual({ task_id: "" });
+    expect(CreativeOrderWorkflowRetryResponseSchema.safeParse(null).success).toBe(false);
+    expect(QueueCreativeOrderAdjustmentResponseSchema.parse({})).toEqual({ task_id: "", revision: 1 });
+    expect(QueueCreativeOrderAdjustmentResponseSchema.safeParse(null).success).toBe(false);
+  });
+
+  it("parses a visual QC recovery response defensively", () => {
+    expect(CreativeOrderQCRetryResponseSchema.parse({})).toEqual({
+      variant_id: "", revision: 1, attempt: 1, technical_task_id: "", visual_task_id: "",
+    });
+    expect(CreativeOrderQCRetryResponseSchema.safeParse({ revision: "two" }).success).toBe(false);
+  });
+
+  it("fails closed for malformed unified feedback responses", () => {
+    expect(CreateCreativeFeedbackResponseSchema.safeParse({ id: "feedback-1", annotation: { x: "not-a-number" } }).success).toBe(false);
+  });
+
+  it("defaults a partial QC finalization response and rejects null bodies", () => {
+    expect(CreativeOrderQCFinalizeResponseSchema.parse({ outcome: "delivered" })).toEqual(expect.objectContaining({
+      created: false, finalized: false, outcome: "delivered", attempt: 1, delivered_asset_count: 0,
+    }));
+    expect(CreativeOrderQCFinalizeResponseSchema.safeParse(null).success).toBe(false);
+  });
+
+  it("defaults adoption fields for older order items and rejects malformed adoption state", () => {
+    expect(CreativeOrderItemSchema.parse({ id: "item-1" })).toEqual(expect.objectContaining({
+      id: "item-1", adopted_variant_id: "", adopted_at: "", adopted_by: "", variants: [],
+    }));
+    expect(CreativeOrderItemSchema.safeParse({ id: "item-1", adopted_variant_id: null }).success).toBe(false);
+  });
+
+  it("parses copy-library orders without a candidate and tolerates missing source fields", () => {
+    expect(CreativeOrderItemSchema.parse({ source_kind: "copy_library", copy_library_id: "library", candidate_id: null })).toMatchObject({ source_kind: "copy_library", copy_library_id: "library", candidate_id: "" });
+    expect(CreativeOrderItemSchema.parse({})).toMatchObject({ source_kind: "material", copy_library_id: "" });
+    expect(CreativeOrderItemSchema.safeParse({ source_kind: 42 }).success).toBe(false);
+  });
+
+  it("parses QC recovery and backend composition blockers", () => {
+    const legacy = CreativeOrderItemSchema.parse({ id: "item-1", variants: [{ id: "variant-1" }] });
+    expect(legacy.variants[0]).toMatchObject({ qc_recovery_used: false, qc_recovery_available: false });
+    expect(legacy.variants[0]?.active_revision).toBe(0);
+    expect(legacy.variants[0]?.staging_revision).toBe(0);
+    expect(legacy.variants[0]?.action_required).toBeUndefined();
+    const current = CreativeOrderItemSchema.parse({ id: "item-1", variants: [{ id: "variant-1", qc_recovery_used: true, qc_recovery_available: false, action_required: { task_id: "", workflow: "brand_components", detail: "模板尺寸不匹配", retryable: true } }] });
+    expect(current.variants[0]).toMatchObject({ qc_recovery_used: true, qc_recovery_available: false });
+    expect(current.variants[0]?.action_required).toMatchObject({ workflow: "brand_components", detail: "模板尺寸不匹配", retryable: true });
+    expect(CreativeOrderItemSchema.safeParse({ id: "item-1", variants: [{ id: "variant-1", qc_recovery_used: "yes" }] }).success).toBe(false);
+    expect(CreativeOrderItemSchema.safeParse({ id: "item-1", variants: [{ id: "variant-1", action_required: { retryable: "yes" } }] }).success).toBe(false);
+  });
+
+  it("accepts nullable provider diagnostics on image operation attempts", () => {
+    const parsed = CreativeOrderItemSchema.parse({
+      id: "item-1",
+      variants: [{
+        id: "variant-1",
+        image_operations: [{
+          id: "operation-1",
+          attempts: [{ id: "attempt-1", http_status: null, exit_code: null, duration_ms: null }],
         }],
       }],
     });
 
-    expect(parsed.edit_jobs[0]?.variants[0]?.feedback[0]?.reason_codes).toEqual([]);
-    expect(parsed.edit_jobs[0]?.variants[0]?.feedback[0]?.process_snapshot).toEqual({});
-    expect(parsed.edit_jobs[0]?.variants[1]?.feedback).toEqual([]);
+    expect(parsed.variants[0]?.image_operations?.[0]?.attempts[0]).toMatchObject({
+      http_status: null,
+      exit_code: null,
+      duration_ms: null,
+    });
+    expect(CreativeOrderItemSchema.safeParse({
+      id: "item-1",
+      variants: [{ id: "variant-1", image_operations: [{ id: "operation-1", attempts: [{ http_status: "timeout" }] }] }],
+    }).success).toBe(false);
   });
 
-  it("preserves valid process data and contains malformed process data", () => {
+  it("parses direct image edit responses defensively", () => {
+    expect(CreativeDirectEditResponseSchema.parse({ order: { id: "order-1" }, source_asset: null })).toEqual(expect.objectContaining({
+      order: expect.objectContaining({ id: "order-1" }),
+      item: expect.objectContaining({ id: "" }),
+      source_asset: expect.objectContaining({ id: "" }),
+      task_id: "",
+    }));
+    expect(CreativeDirectEditResponseSchema.safeParse(null).success).toBe(false);
+  });
+
+  it("keeps the pre-adaptation retry response renderable when fields are missing", () => {
+    expect(CreativePreAdaptationRetryResponseSchema.parse({})).toEqual({ task_id: "", status: "pending" });
+    expect(CreativePreAdaptationRetryResponseSchema.safeParse(null).success).toBe(false);
+  });
+
+  it("accepts the backend empty annotation object without inventing a point", () => {
+    const parsed = CreativeFeedbackEventListResponseSchema.parse({ events: [{ id: "feedback-1", annotation: {} }] });
+    expect(parsed.events[0]?.annotation).toBeUndefined();
+    expect(parsed.events[0]?.idempotency_key).toBe("");
+  });
+
+  it("defaults a missing feedback list but rejects a null list", () => {
+    expect(CreativeFeedbackEventListResponseSchema.parse({})).toEqual({ events: [] });
+    expect(CreativeFeedbackEventListResponseSchema.safeParse({ events: null }).success).toBe(false);
+  });
+
+  it("defaults missing creative feedback metrics and rejects invalid counts", () => {
+    expect(CreativeFeedbackMetricsSchema.parse({ candidate_selected: 3 })).toMatchObject({
+      candidate_selected: 3,
+      candidate_rejected: 0,
+      copy_accepted: 0,
+      qc_false_positive: 0,
+    });
+    expect(CreativeFeedbackMetricsSchema.safeParse({ candidate_selected: null }).success).toBe(false);
+  });
+
+  it("defaults an absent workflow dashboard and rejects a malformed workflow", () => {
+    expect(CreativeFeedbackDashboardSchema.parse({})).toMatchObject({
+      workflow: { first_delivery_count: 0, feedback_reasons: [] },
+    });
+    expect(CreativeFeedbackDashboardSchema.safeParse({ workflow: null }).success).toBe(false);
+  });
+  it("defaults structured App UI selections from an older creative brief", () => {
+    const parsed = CreativeBriefSchema.parse({ status: "draft", source: "ai" });
+
+    expect(parsed.app_ui_replacement_required).toBe(false);
+    expect(parsed.selected_app_ui_references).toEqual([]);
+    expect(parsed.user_direction).toBe("");
+  });
+
+  it("rejects malformed App UI selections so the API fallback remains usable", () => {
+    expect(CreativeBriefSchema.safeParse({
+      app_ui_replacement_required: true,
+      selected_app_ui_references: null,
+    }).success).toBe(false);
+  });
+
+  it("defaults recovery and archive fields from an older backend", () => {
     const parsed = CreativeMaterialsResponseSchema.parse({
       enabled: true,
-      edit_jobs: [
-        {
-          id: "valid",
-          process_data: {
-            schema_version: "1",
-            usage: { cost: "not_available" },
-          },
-        },
-        { id: "malformed", process_data: "unexpected" },
-      ],
+      candidates: [{ id: "candidate-1" }],
     });
 
-    expect(parsed.edit_jobs[0]?.process_data).toEqual({
-      schema_version: "1",
-      usage: { cost: "not_available" },
-    });
-    expect(parsed.edit_jobs[1]?.process_data).toEqual({});
+    expect(parsed.candidates[0]?.archived_url).toBe("");
+    expect(parsed.candidates[0]?.archive_status).toBe("pending");
+		expect(parsed.candidates[0]?.source_issue_id).toBe("");
+		expect(parsed.candidates[0]?.source_run_id).toBe("");
+		expect(parsed.candidates[0]?.is_new_in_run).toBe(false);
+		expect(parsed.deliveries).toEqual([]);
+		expect(parsed.adjustments).toEqual([]);
   });
-});
 
-describe("workspace MCP schemas", () => {
-  it("never requires secret values in a list response", () => {
-    const parsed = ListWorkspaceMCPConnectionsResponseSchema.parse({
-      connections: [{
-        id: "connection-1",
-        name: "Creative service",
-        server_url: "https://creative.example.com/mcp",
-        has_secret_headers: true,
-        secret_header_names: ["Authorization"],
+  it("keeps an unrun material library renderable and falls back on malformed Crawl Runs", () => {
+    expect(CreativeMaterialLibrarySchema.parse({ candidates: [] })).toEqual({ candidates: [], total_count: 0, next_offset: null, crawl_runs: [] });
+    expect(parseWithFallback(
+      { candidates: [], crawl_runs: null },
+      CreativeMaterialLibrarySchema,
+      { candidates: [], total_count: 0, next_offset: null, crawl_runs: [] },
+      { endpoint: "GET /api/creative/materials" },
+    )).toEqual({ candidates: [], total_count: 0, next_offset: null, crawl_runs: [] });
+  });
+
+  it("preserves structured deliveries and adjustment requests", () => {
+    const parsed = CreativeMaterialsResponseSchema.parse({
+      enabled: true,
+      deliveries: [{
+        variant: 2,
+        size: "1200x628",
+        revision: 3,
+        final_attachment_id: "final-1",
+      }],
+      adjustments: [{
+        variant: 2,
+        scope: "size",
+        size: "1200x628",
+        revision: 4,
+        target_attachment_ids: ["final-1"],
       }],
     });
-
-    expect(parsed.connections[0]?.secret_header_names).toEqual(["Authorization"]);
-    expect(parsed.connections[0]?.status).toBe("disabled");
-    expect(parsed.connections[0]).not.toHaveProperty("secret_headers");
+    expect(parsed.deliveries[0]?.final_attachment_id).toBe("final-1");
+    expect(parsed.adjustments[0]?.scope).toBe("size");
   });
+
+  it("keeps platform resources renderable when optional fields are absent", () => {
+    const resources = CreativeResourceListSchema.parse({
+      resources: [{ id: "pack-1", kind: "market_pack", name: "AdaKami Indonesia" }],
+    });
+    const files = CreativeResourceFileListSchema.parse({
+      files: [{ id: "file-1", resource_id: "pack-1", role: "prime_square" }],
+    });
+    const context = CreativeIssueContextSchema.parse({
+      issue_id: "issue-1",
+      market_pack_id: "pack-1",
+    });
+
+    expect(resources.resources[0]?.status).toBe("draft");
+    expect(resources.resources[0]?.config).toEqual({});
+    expect(resources.resources[0]?.published_config).toEqual({});
+    expect(files.files[0]?.content_type).toBe("application/octet-stream");
+    expect(files.files[0]?.metadata).toEqual({});
+    expect(context.snapshot).toEqual({});
+    expect(context.squad_id).toBe("");
+    expect(context).not.toHaveProperty("orchestration_skill_id");
+  });
+
+  it("keeps current and published creative resource configs separate", () => {
+    const resources = CreativeResourceListSchema.parse({
+      resources: [{
+        id: "copy-1", kind: "copy_library", name: "Copy", status: "draft", version: 3, published_version: 2,
+        config: { marker: "v3-draft" }, published_config: { marker: "v2-published" },
+      }],
+    });
+    expect(resources.resources[0]?.config).toEqual({ marker: "v3-draft" });
+    expect(resources.resources[0]?.published_config).toEqual({ marker: "v2-published" });
+  });
+
+  it("keeps a material import response usable when the id is omitted", () => {
+    expect(CreativeMaterialImportResultSchema.parse({})).toEqual({
+      id: "",
+      analysis: {
+        action: "",
+        status: "pending",
+        warning: "",
+        crawl_run_id: "",
+        analysis_agent_id: "",
+        task_id: "",
+      },
+    });
+    expect(CreativeMaterialImportResultSchema.parse({
+      id: "candidate-1",
+      analysis: { action: "queued", status: "pending", crawl_run_id: "run-1", task_id: "task-1" },
+    })).toMatchObject({
+      id: "candidate-1",
+      analysis: { action: "queued", status: "pending", crawl_run_id: "run-1", task_id: "task-1", warning: "" },
+    });
+  });
+
 });
 
 describe("PreviewSessionListResponseSchema", () => {

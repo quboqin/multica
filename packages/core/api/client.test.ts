@@ -1161,3 +1161,205 @@ describe("ApiClient", () => {
     });
   });
 });
+
+describe("creative material library endpoint", () => {
+  it("keeps the default route and sends material-library search and pagination parameters", async () => {
+    const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(
+      new Response(JSON.stringify({ candidates: [], crawl_runs: [] }), { status: 200, headers: { "Content-Type": "application/json" } }),
+    ));
+    vi.stubGlobal("fetch", fetchMock);
+    const client = new ApiClient("https://api.example.test");
+
+    await client.listCreativeMaterialLibrary();
+    await client.listCreativeMaterialLibrary({ runId: "crawl run/1", includeEmptyRuns: false });
+    await client.listCreativeMaterialLibrary({
+      limit: 60,
+      offset: 120,
+      query: "cash advance",
+      competitor: "Easycash",
+      area: "Indonesia",
+      language: "Indonesian",
+      media: "Meta",
+      assetType: "image",
+      view: "available",
+      sort: "impressions",
+    });
+
+    expect(fetchMock).toHaveBeenNthCalledWith(1, "https://api.example.test/api/creative/materials", expect.any(Object));
+    expect(fetchMock).toHaveBeenNthCalledWith(2, "https://api.example.test/api/creative/materials?run_id=crawl+run%2F1&include_empty_runs=false", expect.any(Object));
+    expect(fetchMock).toHaveBeenNthCalledWith(3, "https://api.example.test/api/creative/materials?limit=60&offset=120&query=cash+advance&competitor=Easycash&area=Indonesia&language=Indonesian&media=Meta&asset_type=image&view=available&sort=impressions", expect.any(Object));
+  });
+
+  it("falls back when a paginated material response has an invalid total", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({ candidates: [], total_count: "sixty", next_offset: "later", crawl_runs: [] }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    })));
+    const client = new ApiClient("https://api.example.test");
+
+    await expect(client.listCreativeMaterialLibrary({ limit: 60, offset: 0 })).resolves.toEqual({
+      candidates: [], total_count: 0, next_offset: null, crawl_runs: [],
+    });
+  });
+});
+
+describe("creative feedback endpoint", () => {
+  it("confirms a gallery version and degrades malformed confirmation responses", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ context_snapshot: null }), { status: 200, headers: { "Content-Type": "application/json" } }));
+    vi.stubGlobal("fetch", fetchMock);
+    const client = new ApiClient("https://api.example.test");
+    const input = { variant_id: "variant", revision: 1, idempotency_key: "gallery:variant", qc_risk_acknowledged: true, qc_risk_reason: "Reviewed" };
+    await expect(client.confirmCreativeGalleryDelivery(input)).resolves.toMatchObject({ id: "" });
+    expect(fetchMock).toHaveBeenCalledWith("https://api.example.test/api/creative-feedback-events/gallery", expect.objectContaining({ method: "POST", body: JSON.stringify(input) }));
+  });
+  it("posts the unified event contract and degrades malformed responses", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ event: { annotation: { x: "broken" } } }), { status: 200, headers: { "Content-Type": "application/json" } }));
+    vi.stubGlobal("fetch", fetchMock);
+    const client = new ApiClient("https://api.example.test");
+    const request = { idempotency_key: "submission-1:asset-1:report_issue:needs_revision", issue_id: "issue-1", subject_type: "asset" as const, subject_id: "asset-1", event_type: "report_issue", decision: "needs_revision" as const };
+    await expect(client.createCreativeFeedback(request)).resolves.toEqual(expect.objectContaining({ id: "", idempotency_key: "" }));
+    expect(fetchMock).toHaveBeenCalledWith("https://api.example.test/api/creative-feedback-events", expect.objectContaining({ method: "POST", body: JSON.stringify(request) }));
+  });
+
+  it("lists and undoes feedback through the append-only API", async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ events: [{ id: "feedback-1", annotation: {} }] }), { status: 200, headers: { "Content-Type": "application/json" } }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ id: "undo-1", event_type: "undo", undo_of_id: "feedback-1", annotation: {} }), { status: 201, headers: { "Content-Type": "application/json" } }));
+    vi.stubGlobal("fetch", fetchMock);
+    const client = new ApiClient("https://api.example.test");
+
+    await expect(client.listCreativeFeedback("candidate")).resolves.toEqual(expect.objectContaining({ events: [expect.objectContaining({ id: "feedback-1", annotation: undefined })] }));
+    await expect(client.undoCreativeFeedback("feedback-1")).resolves.toEqual(expect.objectContaining({ id: "undo-1", undo_of_id: "feedback-1" }));
+    expect(fetchMock).toHaveBeenNthCalledWith(1, "https://api.example.test/api/creative-feedback-events?subject_type=candidate", expect.any(Object));
+    expect(fetchMock).toHaveBeenNthCalledWith(2, "https://api.example.test/api/creative-feedback-events/feedback-1/undo", expect.objectContaining({ method: "POST" }));
+  });
+
+  it("loads aggregate creative feedback metrics and degrades malformed output", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ candidate_selected: 7, copy_replaced: null }), { status: 200, headers: { "Content-Type": "application/json" } }));
+    vi.stubGlobal("fetch", fetchMock);
+    const client = new ApiClient("https://api.example.test");
+
+    await expect(client.getCreativeFeedbackMetrics()).resolves.toEqual(expect.objectContaining({ candidate_selected: 0, copy_replaced: 0 }));
+    expect(fetchMock).toHaveBeenCalledWith("https://api.example.test/api/creative-feedback-events/metrics", expect.any(Object));
+  });
+
+  it("loads the feedback dashboard and degrades malformed nested output", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      workflow: { first_delivery_count: 3, first_delivery_total: null },
+    }), { status: 200, headers: { "Content-Type": "application/json" } }));
+    vi.stubGlobal("fetch", fetchMock);
+    const client = new ApiClient("https://api.example.test");
+
+    await expect(client.getCreativeFeedbackDashboard()).resolves.toEqual(expect.objectContaining({
+      workflow: expect.objectContaining({ first_delivery_count: 0, feedback_reasons: [] }),
+    }));
+    expect(fetchMock).toHaveBeenCalledWith("https://api.example.test/api/creative-feedback-events/dashboard", expect.any(Object));
+  });
+
+  it("finalizes QC through the atomic order endpoint and degrades malformed output", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ outcome: null }), { status: 200, headers: { "Content-Type": "application/json" } }));
+    vi.stubGlobal("fetch", fetchMock);
+    const client = new ApiClient("https://api.example.test");
+
+    await expect(client.finalizeCreativeOrderQC("order-1", "variant-1", 2)).resolves.toEqual(expect.objectContaining({ outcome: "pending", revision: 1 }));
+    expect(fetchMock).toHaveBeenCalledWith("https://api.example.test/api/creative/orders/order-1/qc-finalize", expect.objectContaining({
+      method: "POST", body: JSON.stringify({ variant_id: "variant-1", revision: 2 }),
+    }));
+  });
+
+  it("adopts one order item variant and fails closed on a malformed response", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ id: "item-1", adopted_variant_id: null }), { status: 200, headers: { "Content-Type": "application/json" } }));
+    vi.stubGlobal("fetch", fetchMock);
+    const client = new ApiClient("https://api.example.test");
+
+    await expect(client.adoptCreativeOrderVariant("order/1", "item 1", { variant_id: "variant-1" }))
+      .resolves.toEqual(expect.objectContaining({ id: "", adopted_variant_id: "", variants: [] }));
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://api.example.test/api/creative/orders/order%2F1/items/item%201/adoption",
+      expect.objectContaining({ method: "POST", body: JSON.stringify({ variant_id: "variant-1" }) }),
+    );
+  });
+
+  it("sends explicit QC risk acceptance through the existing adoption endpoint", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ id: "item-1", adopted_variant_id: "variant-1", variants: [] }), { status: 200, headers: { "Content-Type": "application/json" } }));
+    vi.stubGlobal("fetch", fetchMock);
+    const client = new ApiClient("https://api.example.test");
+    const request = { variant_id: "variant-1", qc_risk_acknowledged: true, qc_risk_reason: "Deadline accepted with known visual issue" };
+
+    await client.adoptCreativeOrderVariant("order-1", "item-1", request);
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://api.example.test/api/creative/orders/order-1/items/item-1/adoption",
+      expect.objectContaining({ method: "POST", body: JSON.stringify(request) }),
+    );
+  });
+
+  it("cancels an unfinished creative order and fails closed on a malformed response", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ id: "order-1", status: null }), { status: 200, headers: { "Content-Type": "application/json" } }));
+    vi.stubGlobal("fetch", fetchMock);
+    const client = new ApiClient("https://api.example.test");
+
+    await expect(client.cancelCreativeOrder("order/1"))
+      .resolves.toEqual(expect.objectContaining({ id: "", status: "cancelled", derived_status: "cancelled", items: [] }));
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://api.example.test/api/creative/orders/order%2F1/cancel",
+      expect.objectContaining({ method: "POST" }),
+    );
+  });
+
+  it("deletes a creative order and selects a completed historical revision", async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(null, { status: 204 }))
+      .mockResolvedValueOnce(new Response(null, { status: 204 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const client = new ApiClient("https://api.example.test");
+
+    await client.deleteCreativeOrder("order/1");
+    await client.selectCreativeOrderVariantRevision("order/1", "variant/1", 2);
+
+    expect(fetchMock).toHaveBeenNthCalledWith(1,
+      "https://api.example.test/api/creative/orders/order%2F1",
+      expect.objectContaining({ method: "DELETE" }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(2,
+      "https://api.example.test/api/creative/orders/order%2F1/variants/variant%2F1/revisions/2/select",
+      expect.objectContaining({ method: "POST" }),
+    );
+  });
+
+  it("unadopts a creative variant and fails closed on a malformed response", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ id: "item-1", adopted_variant_id: null }), { status: 200, headers: { "Content-Type": "application/json" } }));
+    vi.stubGlobal("fetch", fetchMock);
+    const client = new ApiClient("https://api.example.test");
+
+    await expect(client.unadoptCreativeOrderVariant("order/1", "item/1"))
+      .resolves.toEqual(expect.objectContaining({ id: "", adopted_variant_id: "", variants: [] }));
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://api.example.test/api/creative/orders/order%2F1/items/item%2F1/adoption",
+      expect.objectContaining({ method: "DELETE" }),
+    );
+  });
+
+  it("retries failed agent tasks using their exact source evidence", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ tasks: null }), { status: 201, headers: { "Content-Type": "application/json" } }));
+    vi.stubGlobal("fetch", fetchMock);
+    const client = new ApiClient("https://api.example.test");
+
+    await expect(client.retryFailedAgentTasksBySource("agent/1", "creative_order_variant_qc", "variant 1"))
+      .resolves.toEqual({ tasks: [] });
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://api.example.test/api/agents/agent%2F1/tasks/by-source/retry-failed?trigger_evidence_kind=creative_order_variant_qc&trigger_evidence_ref_id=variant+1",
+      expect.objectContaining({ method: "POST" }),
+    );
+  });
+
+  it("creates direct image edits through the atomic endpoint", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ order: { id: "order-1" }, item: {}, variant: {}, source_asset: {} }), { status: 201, headers: { "Content-Type": "application/json" } }));
+    vi.stubGlobal("fetch", fetchMock);
+    const client = new ApiClient("https://api.example.test");
+    const request = { issue_id: "issue-1", candidate_id: "candidate-1", user_request: "调整标题", target_size: "1080x1080" as const, delivery_mode: "preview" as const, squad_id: "squad-1" };
+
+    await expect(client.createCreativeDirectEdit(request)).resolves.toEqual(expect.objectContaining({ order: expect.objectContaining({ id: "order-1" }) }));
+    expect(fetchMock).toHaveBeenCalledWith("https://api.example.test/api/creative/direct-edits", expect.objectContaining({ method: "POST", body: JSON.stringify(request) }));
+  });
+});

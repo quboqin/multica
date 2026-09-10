@@ -12,6 +12,7 @@ import type {
   ListIssuesParams,
   ListGroupedIssuesParams,
   Agent,
+  AgentTaskFanoutResponse,
   CreateAgentRequest,
   AgentTemplate,
   AgentTemplateSummary,
@@ -24,6 +25,9 @@ import type {
   AgentActivityBucket,
   AgentRunCount,
   AgentRuntime,
+  RuntimeProfile,
+  CreateRuntimeProfileRequest,
+  UpdateRuntimeProfileRequest,
   InboxItem,
   IssueSubscriber,
   Comment,
@@ -32,6 +36,9 @@ import type {
   IssueReaction,
   Workspace,
   WorkspaceRepo,
+  CreativeFactoryInitializationRequest,
+  WorkspaceCapability,
+  WorkspaceCapabilitiesResponse,
   MemberWithUser,
   User,
   Skill,
@@ -122,9 +129,15 @@ import type {
   BeginLarkInstallResponse,
   LarkInstallStatusResponse,
   RedeemLarkBindingTokenResponse,
+  ComposioToolkit,
+  ComposioConnection,
+  ComposioConnectInitResponse,
   Squad,
   SquadMember,
   SquadMemberStatusListResponse,
+  SquadWorkflowAssignmentsResponse,
+  SquadWorkflowCanvasLayout,
+  SquadWorkflowStage,
   BillingBalance,
   BillingTransactionsPage,
   BillingBatchesPage,
@@ -134,22 +147,54 @@ import type {
   CreateBillingCheckoutSessionResponse,
   BillingCheckoutSessionStatus,
   CreateBillingPortalSessionResponse,
-  CreateCreativeEditFeedbackRequest,
-  CreateCreativeEditJobRequest,
   CreativeImportSummary,
+	CreativeAdjustmentRequest,
+	CreateCreativeAdjustmentRequest,
+	CreateCreativeFeedbackRequest,
+	CreateCreativeFeedbackResponse,
+	QueueCreativeOrderAdjustmentRequest,
+	QueueCreativeOrderAdjustmentResponse,
+	CreativeFeedbackEventListResponse,
+	CreativeFeedbackDashboard,
+	CreativeFeedbackMetrics,
+	CreativeOrderListResponse,
+	CreativeOrder,
+	CreativeOrderWorkflowRetryResponse,
+	CreativeOrderPrimeComposeResponse,
+	CreativeOrderQCRetryResponse,
+	CreativeOrderItem,
+	CreativeOrderQCFinalizeResponse,
+	AdoptCreativeOrderVariantRequest,
+	CreateCreativeOrderRequest,
+	CreateCreativeDirectEditRequest,
+	CreativeDirectEditResponse,
+	RegisterCreativeDeliveriesRequest,
+	RegisterCreativeDeliveriesResponse,
+  CreativeIssueContext,
+  CreativeIssueItem,
+  CreativeMaterialLibraryResponse,
+  CreativeMaterialLibraryQuery,
+  CreativeMaterialImportResult,
   CreativeMaterialsResponse,
+  CreativeResource,
+  CreativeResourceFile,
+  CreativeResourceFileListResponse,
+  CreativeResourceKind,
+  CreativeResourceListResponse,
+  CreateCreativeResourceRequest,
   CredentialCrawlResult,
+  CredentialProfile,
+  AddCredentialProfileManagerRequest,
   ImportCreativeMaterialsRequest,
+  ImportCreativeMaterialLibraryRequest,
   ListCredentialConnectorsResponse,
   ListCredentialProfilesResponse,
-  ListWorkspaceMCPConnectionsResponse,
   RunCredentialCrawlRequest,
   StartCredentialLoginSessionRequest,
   StartCredentialLoginSessionResponse,
+  PutCreativeIssueContextRequest,
+  UpdateCreativeResourceRequest,
   UpdateCreativeMaterialCandidateRequest,
-  SaveWorkspaceMCPConnectionRequest,
-  VerifyWorkspaceMCPConnectionResponse,
-  WorkspaceMCPConnection,
   CreatePreviewSessionRequest,
   PreviewSession,
   PreviewSessionListResponse,
@@ -165,7 +210,9 @@ import { createRequestId } from "../utils";
 import { getCurrentSlug } from "../platform/workspace-storage";
 import { parseWithFallback } from "./schema";
 import {
+  CreativeRetrySettingsSchema,
   AgentTemplateSchema,
+  AgentTaskFanoutResponseSchema,
   AgentTemplateSummaryListSchema,
   FavoriteCategoryListSchema,
   FavoriteCategoryResponseSchema,
@@ -188,8 +235,11 @@ import {
   DashboardUsageByUserDailyListSchema,
   DashboardUsageDailyListSchema,
   EMPTY_AGENT_TEMPLATE_DETAIL,
+  EMPTY_AGENT_TASK_FANOUT_RESPONSE,
   EMPTY_AGENT_TEMPLATE_SUMMARY_LIST,
   EMPTY_APP_CONFIG,
+  EMPTY_WORKSPACE_CAPABILITIES,
+  EMPTY_WORKSPACE_CAPABILITY,
   EMPTY_ATTACHMENT,
   EMPTY_FAVORITE,
   EMPTY_FAVORITE_CATEGORIES,
@@ -208,6 +258,8 @@ import {
   EMPTY_LIST_WEBHOOK_DELIVERIES_RESPONSE,
   EMPTY_WEBHOOK_DELIVERY,
   AppConfigSchema,
+  WorkspaceCapabilitiesSchema,
+  WorkspaceCapabilitySchema,
   type AppConfigResponse,
   GroupedIssuesResponseSchema,
   ListAutopilotsResponseSchema,
@@ -245,30 +297,68 @@ import {
   EMPTY_CHAT_MESSAGE_LIST,
   EMPTY_CHAT_MESSAGES_PAGE,
   EMPTY_CREATIVE_IMPORT_SUMMARY,
+  EMPTY_CREATIVE_ISSUE_CONTEXT,
+  EMPTY_CREATIVE_ISSUE_ITEM,
+  EMPTY_CREATIVE_MATERIAL_LIBRARY,
+  EMPTY_CREATIVE_MATERIAL_IMPORT_RESULT,
   EMPTY_CREATIVE_MATERIALS_RESPONSE,
+  EMPTY_CREATIVE_RESOURCE,
+  EMPTY_CREATIVE_RESOURCE_FILE,
+  EMPTY_CREATIVE_RESOURCE_FILE_LIST,
+  EMPTY_CREATIVE_RESOURCE_LIST,
   EMPTY_CREDENTIAL_CRAWL_RESULT,
   EMPTY_LIST_CREDENTIAL_CONNECTORS_RESPONSE,
   EMPTY_LIST_CREDENTIAL_PROFILES_RESPONSE,
-  EMPTY_LIST_WORKSPACE_MCP_CONNECTIONS_RESPONSE,
-  EMPTY_WORKSPACE_MCP_CONNECTION,
   EMPTY_START_CREDENTIAL_LOGIN_SESSION_RESPONSE,
-  EMPTY_VERIFY_WORKSPACE_MCP_CONNECTION_RESPONSE,
   EMPTY_LARK_LOGIN_RESPONSE,
   EMPTY_LARK_LOGIN_STATE_RESPONSE,
   EMPTY_LOGIN_RESPONSE,
   CreativeImportSummarySchema,
+  CreativeIssueContextSchema,
+  CreativeIssueItemSchema,
+	CreativeAdjustmentRequestSchema,
+	EMPTY_CREATIVE_ADJUSTMENT_REQUEST,
+	CreateCreativeFeedbackResponseSchema,
+	QueueCreativeOrderAdjustmentResponseSchema,
+	EMPTY_CREATIVE_FEEDBACK_RESPONSE,
+	CreativeFeedbackEventListResponseSchema,
+	EMPTY_CREATIVE_FEEDBACK_EVENT_LIST_RESPONSE,
+	CreativeFeedbackMetricsSchema,
+	EMPTY_CREATIVE_FEEDBACK_METRICS,
+	CreativeFeedbackDashboardSchema,
+	EMPTY_CREATIVE_FEEDBACK_DASHBOARD,
+	CreativeOrderListResponseSchema,
+	CreativeOrderSchema,
+	CreativeOrderWorkflowRetryResponseSchema,
+	CreativeOrderPrimeComposeResponseSchema,
+	CreativeOrderQCRetryResponseSchema,
+	CreativeOrderItemSchema,
+	EMPTY_CREATIVE_ORDER_ITEM,
+	CreativeOrderQCFinalizeResponseSchema,
+	CreativeDirectEditResponseSchema,
+	EMPTY_CREATIVE_DIRECT_EDIT_RESPONSE,
+	EMPTY_CREATIVE_ORDER_QC_FINALIZE_RESPONSE,
+	CreativeSourceAnalysisListResponseSchema,
+	EMPTY_CREATIVE_SOURCE_ANALYSIS_LIST_RESPONSE,
+	CreativePreAdaptationRetryResponseSchema,
+	EMPTY_CREATIVE_PRE_ADAPTATION_RETRY_RESPONSE,
+	EMPTY_CREATIVE_ORDER_LIST_RESPONSE,
+	RegisterCreativeDeliveriesResponseSchema,
+  CreativeMaterialLibrarySchema,
+  CreativeMaterialImportResultSchema,
   CreativeMaterialsResponseSchema,
+  CreativeResourceListSchema,
+  CreativeResourceFileListSchema,
+  CreativeResourceFileSchema,
+  CreativeResourceSchema,
   CredentialCrawlResultSchema,
   CredentialProfileSchema,
   ListCredentialConnectorsResponseSchema,
   ListCredentialProfilesResponseSchema,
-  ListWorkspaceMCPConnectionsResponseSchema,
   LarkLoginResponseSchema,
   LarkLoginStateResponseSchema,
   LoginResponseSchema,
   StartCredentialLoginSessionResponseSchema,
-  VerifyWorkspaceMCPConnectionResponseSchema,
-  WorkspaceMCPConnectionSchema,
   EMPTY_PREVIEW_SESSION,
   EMPTY_PREVIEW_SESSION_LIST_RESPONSE,
   PreviewSessionListResponseSchema,
@@ -326,6 +416,19 @@ export class ApiError extends Error {
     this.statusText = statusText;
     this.body = body;
   }
+}
+
+function unsupportedCreativeBriefExtensionField(
+  error: unknown,
+): string | null {
+  if (!(error instanceof ApiError) || error.status !== 400) return null;
+  return error.message.match(/unknown field "(user_direction|app_ui_replacement_required|selected_app_ui_references)"/)?.[1] ?? null;
+}
+
+function creativeBriefHasExtensionContent(brief: CreativeIssueItem["creative_brief"]): boolean {
+  return Boolean(brief.user_direction.trim())
+    || brief.app_ui_replacement_required
+    || brief.selected_app_ui_references.length > 0;
 }
 
 // Thrown by getAttachmentTextContent when the server refuses to inline a
@@ -430,23 +533,24 @@ export class ApiClient {
   // path, plain text for the attachment-preview proxy, etc.
   private async fetchRaw(
     path: string,
-    init?: RequestInit & { extraHeaders?: Record<string, string> },
+    init?: RequestInit & { extraHeaders?: Record<string, string>; suppressErrorLog?: boolean },
   ): Promise<Response> {
     const rid = createRequestId();
     const start = Date.now();
     const method = init?.method ?? "GET";
+    const { extraHeaders, suppressErrorLog, ...requestInit } = init ?? {};
 
     const headers: Record<string, string> = {
       "X-Request-ID": rid,
       ...this.authHeaders(),
-      ...(init?.extraHeaders ?? {}),
-      ...((init?.headers as Record<string, string>) ?? {}),
+      ...(extraHeaders ?? {}),
+      ...((requestInit.headers as Record<string, string>) ?? {}),
     };
 
     this.logger.info(`→ ${method} ${path}`, { rid });
 
     const res = await fetch(`${this.baseUrl}${path}`, {
-      ...init,
+      ...requestInit,
       headers,
       credentials: "include",
     });
@@ -454,8 +558,10 @@ export class ApiClient {
     if (!res.ok) {
       if (res.status === 401) this.handleUnauthorized();
       const { message, body } = await this.parseErrorBody(res, `API error: ${res.status} ${res.statusText}`);
-      const logLevel = res.status === 401 || res.status === 404 ? "warn" : "error";
-      this.logger[logLevel](`← ${res.status} ${path}`, { rid, duration: `${Date.now() - start}ms`, error: message });
+      if (!suppressErrorLog) {
+        const logLevel = res.status === 401 || res.status === 404 ? "warn" : "error";
+        this.logger[logLevel](`← ${res.status} ${path}`, { rid, duration: `${Date.now() - start}ms`, error: message });
+      }
       throw new ApiError(message, res.status, res.statusText, body);
     }
 
@@ -463,7 +569,7 @@ export class ApiClient {
     return res;
   }
 
-  private async fetch<T>(path: string, init?: RequestInit): Promise<T> {
+  private async fetch<T>(path: string, init?: RequestInit & { suppressErrorLog?: boolean }): Promise<T> {
     const res = await this.fetchRaw(path, {
       ...init,
       extraHeaders: { "Content-Type": "application/json" },
@@ -796,6 +902,17 @@ export class ApiClient {
     });
   }
 
+  async setIssueMetadataKey(
+    id: string,
+    key: string,
+    value: string | number | boolean,
+  ): Promise<{ metadata: Record<string, string | number | boolean> }> {
+    return this.fetch(`/api/issues/${id}/metadata/${encodeURIComponent(key)}`, {
+      method: "PUT",
+      body: JSON.stringify({ value }),
+    });
+  }
+
   async listChildIssues(id: string): Promise<{ issues: Issue[] }> {
     const raw = await this.fetch<unknown>(`/api/issues/${id}/children`);
     return parseWithFallback(raw, ChildIssuesResponseSchema, { issues: [] }, {
@@ -1089,6 +1206,44 @@ export class ApiClient {
     if (params?.workspace_id) search.set("workspace_id", params.workspace_id);
     if (params?.owner) search.set("owner", params.owner);
     return this.fetch(`/api/runtimes?${search}`);
+  }
+
+  async listRuntimeProfiles(workspaceId: string): Promise<RuntimeProfile[]> {
+    const res = await this.fetch<{ runtime_profiles?: RuntimeProfile[] }>(
+      `/api/workspaces/${workspaceId}/runtime-profiles`,
+    );
+    return res.runtime_profiles ?? [];
+  }
+
+  async getRuntimeProfile(workspaceId: string, profileId: string): Promise<RuntimeProfile> {
+    return this.fetch(`/api/workspaces/${workspaceId}/runtime-profiles/${profileId}`);
+  }
+
+  async createRuntimeProfile(
+    workspaceId: string,
+    body: CreateRuntimeProfileRequest,
+  ): Promise<RuntimeProfile> {
+    return this.fetch(`/api/workspaces/${workspaceId}/runtime-profiles`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    });
+  }
+
+  async updateRuntimeProfile(
+    workspaceId: string,
+    profileId: string,
+    patch: UpdateRuntimeProfileRequest,
+  ): Promise<RuntimeProfile> {
+    return this.fetch(`/api/workspaces/${workspaceId}/runtime-profiles/${profileId}`, {
+      method: "PATCH",
+      body: JSON.stringify(patch),
+    });
+  }
+
+  async deleteRuntimeProfile(workspaceId: string, profileId: string): Promise<void> {
+    await this.fetch(`/api/workspaces/${workspaceId}/runtime-profiles/${profileId}`, {
+      method: "DELETE",
+    });
   }
 
   async listCloudRuntimeNodes(
@@ -2403,6 +2558,73 @@ export class ApiClient {
     return this.fetch(`/api/squads/${squadId}/members`);
   }
 
+  async getSquadWorkflowAssignments(squadId: string): Promise<SquadWorkflowAssignmentsResponse> {
+    return this.fetch(`/api/squads/${squadId}/workflow-assignments`);
+  }
+
+  async setSquadWorkflowAssignment(
+    squadId: string,
+    agentId: string,
+    stageId: string,
+  ): Promise<void> {
+    await this.fetch(`/api/squads/${squadId}/workflow-assignments/${agentId}`, {
+      method: "PUT",
+      body: JSON.stringify({ stage_id: stageId }),
+    });
+  }
+
+  async setSquadWorkflowCanvasLayout(
+    squadId: string,
+    layout: SquadWorkflowCanvasLayout,
+  ): Promise<void> {
+    await this.fetch(`/api/squads/${squadId}/workflow-layout`, {
+      method: "PUT",
+      body: JSON.stringify(layout),
+    });
+  }
+
+  async resetSquadWorkflowAssignments(squadId: string): Promise<void> {
+    await this.fetch(`/api/squads/${squadId}/workflow-assignments`, { method: "DELETE" });
+  }
+
+  async createSquadWorkflowStage(
+    squadId: string,
+    data: { name: string; description: string },
+  ): Promise<SquadWorkflowStage> {
+    return this.fetch(`/api/squads/${squadId}/workflow-stages`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+  }
+
+  async generateSquadWorkflow(squadId: string): Promise<{ profile: string }> {
+    return this.fetch(`/api/squads/${squadId}/workflow-stages/generate`, {
+      method: "POST",
+    });
+  }
+
+  async updateSquadWorkflowStage(
+    squadId: string,
+    stageId: string,
+    data: { name: string; description: string },
+  ): Promise<SquadWorkflowStage> {
+    return this.fetch(`/api/squads/${squadId}/workflow-stages/${stageId}`, {
+      method: "PUT",
+      body: JSON.stringify(data),
+    });
+  }
+
+  async deleteSquadWorkflowStage(squadId: string, stageId: string): Promise<void> {
+    await this.fetch(`/api/squads/${squadId}/workflow-stages/${stageId}`, { method: "DELETE" });
+  }
+
+  async reorderSquadWorkflowStages(squadId: string, stageIds: string[]): Promise<void> {
+    await this.fetch(`/api/squads/${squadId}/workflow-stages/order`, {
+      method: "PUT",
+      body: JSON.stringify({ stage_ids: stageIds }),
+    });
+  }
+
   async addSquadMember(squadId: string, data: { member_type: string; member_id: string; role?: string }): Promise<SquadMember> {
     return this.fetch(`/api/squads/${squadId}/members`, { method: "POST", body: JSON.stringify(data) });
   }
@@ -2623,66 +2845,207 @@ export class ApiClient {
     );
   }
 
-  // Workspace-level MCP connections are consumed by persistent backend jobs.
-  async listWorkspaceMCPConnections(): Promise<ListWorkspaceMCPConnectionsResponse> {
-    const raw = await this.fetch<unknown>("/api/workspace-mcp-connections");
-    return parseWithFallback(
-      raw,
-      ListWorkspaceMCPConnectionsResponseSchema,
-      EMPTY_LIST_WORKSPACE_MCP_CONNECTIONS_RESPONSE,
-      { endpoint: "GET /api/workspace-mcp-connections" },
-    );
+  async getWorkspaceCapabilities(workspaceId: string): Promise<WorkspaceCapabilitiesResponse> {
+    const raw = await this.fetch<unknown>(`/api/workspaces/${workspaceId}/capabilities`);
+    return parseWithFallback(raw, WorkspaceCapabilitiesSchema, EMPTY_WORKSPACE_CAPABILITIES, {
+      endpoint: `GET /api/workspaces/${workspaceId}/capabilities`,
+    });
   }
 
-  async createWorkspaceMCPConnection(
-    data: SaveWorkspaceMCPConnectionRequest,
-  ): Promise<WorkspaceMCPConnection> {
-    const raw = await this.fetch<unknown>("/api/workspace-mcp-connections", {
+  async updateWorkspaceCapability(workspaceId: string, key: string, enabled: boolean, creativeFactory?: CreativeFactoryInitializationRequest): Promise<WorkspaceCapability> {
+    const raw = await this.fetch<unknown>(`/api/workspaces/${workspaceId}/capabilities/${encodeURIComponent(key)}`, {
+      method: "PATCH",
+      body: JSON.stringify({ enabled, ...(creativeFactory ? { creative_factory: creativeFactory } : {}) }),
+    });
+    return parseWithFallback(raw, WorkspaceCapabilitySchema, EMPTY_WORKSPACE_CAPABILITY, {
+      endpoint: `PATCH /api/workspaces/${workspaceId}/capabilities/${key}`,
+    });
+  }
+
+  async addCredentialProfileManager(
+    profileId: string,
+    data: AddCredentialProfileManagerRequest,
+  ): Promise<CredentialProfile> {
+    const raw = await this.fetch<unknown>(`/api/credential-profiles/${profileId}/managers`, {
       method: "POST",
       body: JSON.stringify(data),
     });
-    return parseWithFallback(raw, WorkspaceMCPConnectionSchema, EMPTY_WORKSPACE_MCP_CONNECTION, {
-      endpoint: "POST /api/workspace-mcp-connections",
+    return parseWithFallback(raw, CredentialProfileSchema, {
+      id: profileId,
+      connector_id: "",
+      label: "",
+      status: "pending",
+      scope: "workspace",
+      can_manage: false,
+      managers: [],
+      created_at: "",
+      updated_at: "",
+    }, {
+      endpoint: "POST /api/credential-profiles/:id/managers",
     });
   }
 
-  async updateWorkspaceMCPConnection(
-    connectionId: string,
-    data: SaveWorkspaceMCPConnectionRequest,
-  ): Promise<WorkspaceMCPConnection> {
-    const raw = await this.fetch<unknown>(`/api/workspace-mcp-connections/${connectionId}`, {
+  async deleteCredentialProfileManager(profileId: string, userId: string): Promise<void> {
+    await this.fetch<unknown>(
+      `/api/credential-profiles/${profileId}/managers/${userId}`,
+      { method: "DELETE" },
+    );
+  }
+
+  async retryFailedAgentTasksBySource(
+    agentId: string,
+    triggerEvidenceKind: string,
+    triggerEvidenceRefId: string,
+  ): Promise<AgentTaskFanoutResponse> {
+    const params = new URLSearchParams({
+      trigger_evidence_kind: triggerEvidenceKind,
+      trigger_evidence_ref_id: triggerEvidenceRefId,
+    });
+    const raw = await this.fetch<unknown>(
+      `/api/agents/${encodeURIComponent(agentId)}/tasks/by-source/retry-failed?${params.toString()}`,
+      { method: "POST" },
+    );
+    return parseWithFallback(raw, AgentTaskFanoutResponseSchema, EMPTY_AGENT_TASK_FANOUT_RESPONSE, {
+      endpoint: "POST /api/agents/{agentId}/tasks/by-source/retry-failed",
+    });
+  }
+
+  // Creative Studio resources
+  async listCreativeMaterialLibrary(params?: CreativeMaterialLibraryQuery, signal?: AbortSignal): Promise<CreativeMaterialLibraryResponse> {
+    const search = new URLSearchParams();
+    if (params?.runId) search.set("run_id", params.runId);
+    if (params?.includeEmptyRuns === false) search.set("include_empty_runs", "false");
+    if (params?.limit !== undefined) search.set("limit", String(params.limit));
+    if (params?.offset !== undefined) search.set("offset", String(params.offset));
+    if (params?.query) search.set("query", params.query);
+    if (params?.competitor) search.set("competitor", params.competitor);
+    if (params?.area) search.set("area", params.area);
+    if (params?.language) search.set("language", params.language);
+    if (params?.media) search.set("media", params.media);
+    if (params?.assetType) search.set("asset_type", params.assetType);
+    if (params?.view && params.view !== "all") search.set("view", params.view);
+    if (params?.sort && params.sort !== "recent") search.set("sort", params.sort);
+    const query = search.toString();
+    const raw = await this.fetch<unknown>(`/api/creative/materials${query ? `?${query}` : ""}`, { signal });
+    return parseWithFallback(raw, CreativeMaterialLibrarySchema, EMPTY_CREATIVE_MATERIAL_LIBRARY, {
+      endpoint: "GET /api/creative/materials",
+    });
+  }
+
+  async importCreativeMaterialLibrary(
+    data: ImportCreativeMaterialLibraryRequest,
+  ): Promise<CreativeMaterialImportResult> {
+    const raw = await this.fetch<unknown>("/api/creative/materials/import", {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+    return parseWithFallback(
+      raw,
+      CreativeMaterialImportResultSchema,
+      EMPTY_CREATIVE_MATERIAL_IMPORT_RESULT,
+      { endpoint: "POST /api/creative/materials/import" },
+    );
+  }
+
+  async retryCreativeMaterialReferenceAnalysis(id: string): Promise<CreativeMaterialImportResult> {
+    const raw = await this.fetch<unknown>(`/api/creative/materials/${encodeURIComponent(id)}/analysis/retry`, {
+      method: "POST",
+    });
+    return parseWithFallback(
+      raw,
+      CreativeMaterialImportResultSchema,
+      EMPTY_CREATIVE_MATERIAL_IMPORT_RESULT,
+      { endpoint: "POST /api/creative/materials/:id/analysis/retry" },
+    );
+  }
+
+  async retryCreativeMaterialArchives(candidateIds: string[] = []): Promise<{ scheduled_count: number }> {
+		return this.fetch<{ scheduled_count: number }>("/api/creative/materials/archive/retry", {
+			method: "POST",
+			body: JSON.stringify({ candidate_ids: candidateIds }),
+		});
+	}
+
+  async listCreativeResources(kind?: CreativeResourceKind, signal?: AbortSignal): Promise<CreativeResourceListResponse> {
+    const query = kind ? `?kind=${encodeURIComponent(kind)}` : "";
+    const raw = await this.fetch<unknown>(`/api/creative/resources${query}`, { signal });
+    return parseWithFallback(raw, CreativeResourceListSchema, EMPTY_CREATIVE_RESOURCE_LIST, {
+      endpoint: "GET /api/creative/resources",
+    });
+  }
+
+  async createCreativeResource(data: CreateCreativeResourceRequest): Promise<CreativeResource> {
+    const raw = await this.fetch<unknown>("/api/creative/resources", {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+    return parseWithFallback(raw, CreativeResourceSchema, EMPTY_CREATIVE_RESOURCE, {
+      endpoint: "POST /api/creative/resources",
+    });
+  }
+
+  async updateCreativeResource(id: string, data: UpdateCreativeResourceRequest): Promise<CreativeResource> {
+    const raw = await this.fetch<unknown>(`/api/creative/resources/${id}`, {
       method: "PUT",
       body: JSON.stringify(data),
     });
-    return parseWithFallback(raw, WorkspaceMCPConnectionSchema, EMPTY_WORKSPACE_MCP_CONNECTION, {
-      endpoint: "PUT /api/workspace-mcp-connections/:id",
+    return parseWithFallback(raw, CreativeResourceSchema, EMPTY_CREATIVE_RESOURCE, {
+      endpoint: "PUT /api/creative/resources/:id",
     });
   }
 
-  async disableWorkspaceMCPConnection(connectionId: string): Promise<void> {
-    await this.fetch(`/api/workspace-mcp-connections/${connectionId}`, {
-      method: "DELETE",
+  async publishCreativeResource(id: string): Promise<CreativeResource> {
+    const raw = await this.fetch<unknown>(`/api/creative/resources/${id}/publish`, { method: "POST" });
+    return parseWithFallback(raw, CreativeResourceSchema, EMPTY_CREATIVE_RESOURCE, {
+      endpoint: "POST /api/creative/resources/:id/publish",
     });
   }
 
-  async verifyWorkspaceMCPConnection(
-    connectionId: string,
-  ): Promise<VerifyWorkspaceMCPConnectionResponse> {
-    const raw = await this.fetch<unknown>(
-      `/api/workspace-mcp-connections/${connectionId}/verify`,
-      { method: "POST" },
-    );
-    return parseWithFallback(
-      raw,
-      VerifyWorkspaceMCPConnectionResponseSchema,
-      EMPTY_VERIFY_WORKSPACE_MCP_CONNECTION_RESPONSE,
-      { endpoint: "POST /api/workspace-mcp-connections/:id/verify" },
-    );
+  async archiveCreativeResource(id: string): Promise<void> {
+    await this.fetch<void>(`/api/creative/resources/${id}`, { method: "DELETE" });
   }
 
-  // Creative material workflow
-  async getCreativeMaterials(issueId: string): Promise<CreativeMaterialsResponse> {
-    const raw = await this.fetch<unknown>(`/api/issues/${issueId}/creative-materials`);
+  async listCreativeResourceFiles(id: string, signal?: AbortSignal): Promise<CreativeResourceFileListResponse> {
+    const raw = await this.fetch<unknown>(`/api/creative/resources/${id}/files`, { signal });
+    return parseWithFallback(raw, CreativeResourceFileListSchema, EMPTY_CREATIVE_RESOURCE_FILE_LIST, {
+      endpoint: "GET /api/creative/resources/:id/files",
+    });
+  }
+
+  async addCreativeResourceFile(
+    id: string,
+    data: { attachment_id: string; role: string; label?: string; metadata?: Record<string, unknown> },
+  ): Promise<CreativeResourceFile> {
+    const raw = await this.fetch<unknown>(`/api/creative/resources/${id}/files`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+    return parseWithFallback(raw, CreativeResourceFileSchema, EMPTY_CREATIVE_RESOURCE_FILE, {
+      endpoint: "POST /api/creative/resources/:id/files",
+    });
+  }
+
+  async removeCreativeResourceFile(id: string, fileId: string): Promise<void> {
+    await this.fetch<void>(`/api/creative/resources/${id}/files/${fileId}`, { method: "DELETE" });
+  }
+
+  async updateCreativeResourceFile(
+    id: string,
+    fileId: string,
+    data: { attachment_id?: string; role: string; label?: string; metadata?: Record<string, unknown> },
+  ): Promise<CreativeResourceFile> {
+    const raw = await this.fetch<unknown>(`/api/creative/resources/${id}/files/${fileId}`, {
+      method: "PUT",
+      body: JSON.stringify(data),
+    });
+    return parseWithFallback(raw, CreativeResourceFileSchema, EMPTY_CREATIVE_RESOURCE_FILE, {
+      endpoint: "PUT /api/creative/resources/:id/files/:fileId",
+    });
+  }
+
+  // Creative issue workflow
+  async getCreativeMaterials(issueId: string, signal?: AbortSignal): Promise<CreativeMaterialsResponse> {
+    const raw = await this.fetch<unknown>(`/api/issues/${issueId}/creative-materials`, { signal });
     return parseWithFallback(
       raw,
       CreativeMaterialsResponseSchema,
@@ -2727,76 +3090,301 @@ export class ApiClient {
     );
   }
 
-  async createCreativeEditJob(
-    issueId: string,
-    data: CreateCreativeEditJobRequest,
-  ): Promise<CreativeMaterialsResponse> {
-    const raw = await this.fetch<unknown>(`/api/issues/${issueId}/creative-edit-jobs`, {
+  async createCreativeFeedback(data: CreateCreativeFeedbackRequest): Promise<CreateCreativeFeedbackResponse> {
+    const raw = await this.fetch<unknown>("/api/creative-feedback-events", {
       method: "POST",
       body: JSON.stringify(data),
     });
-    return parseWithFallback(
-      raw,
-      CreativeMaterialsResponseSchema,
-      EMPTY_CREATIVE_MATERIALS_RESPONSE,
-      { endpoint: "POST /api/issues/:id/creative-edit-jobs" },
-    );
+    return parseWithFallback(raw, CreateCreativeFeedbackResponseSchema, EMPTY_CREATIVE_FEEDBACK_RESPONSE, {
+      endpoint: "POST /api/creative-feedback-events",
+    });
   }
 
-  async syncCreativeEditJob(
-    issueId: string,
-    jobId: string,
-  ): Promise<CreativeMaterialsResponse> {
-    const raw = await this.fetch<unknown>(`/api/issues/${issueId}/creative-edit-jobs/${jobId}/sync`, {
+  async listCreativeFeedback(subjectType?: string, subjectId?: string, signal?: AbortSignal): Promise<CreativeFeedbackEventListResponse> {
+    const params = new URLSearchParams();
+    if (subjectType) params.set("subject_type", subjectType);
+    if (subjectId) params.set("subject_id", subjectId);
+    const query = params.size > 0 ? `?${params.toString()}` : "";
+    const raw = await this.fetch<unknown>(`/api/creative-feedback-events${query}`, { signal });
+    return parseWithFallback(raw, CreativeFeedbackEventListResponseSchema, EMPTY_CREATIVE_FEEDBACK_EVENT_LIST_RESPONSE, {
+      endpoint: "GET /api/creative-feedback-events",
+    });
+  }
+
+  async getCreativeFeedbackMetrics(signal?: AbortSignal): Promise<CreativeFeedbackMetrics> {
+    const raw = await this.fetch<unknown>("/api/creative-feedback-events/metrics", { signal });
+    return parseWithFallback(raw, CreativeFeedbackMetricsSchema, EMPTY_CREATIVE_FEEDBACK_METRICS, {
+      endpoint: "GET /api/creative-feedback-events/metrics",
+    });
+  }
+
+  async getCreativeFeedbackDashboard(signal?: AbortSignal): Promise<CreativeFeedbackDashboard> {
+    const raw = await this.fetch<unknown>("/api/creative-feedback-events/dashboard", { signal });
+    return parseWithFallback(raw, CreativeFeedbackDashboardSchema, EMPTY_CREATIVE_FEEDBACK_DASHBOARD, {
+      endpoint: "GET /api/creative-feedback-events/dashboard",
+    });
+  }
+
+  async undoCreativeFeedback(id: string): Promise<CreateCreativeFeedbackResponse> {
+    const raw = await this.fetch<unknown>(`/api/creative-feedback-events/${id}/undo`, { method: "POST" });
+    return parseWithFallback(raw, CreateCreativeFeedbackResponseSchema, EMPTY_CREATIVE_FEEDBACK_RESPONSE, {
+      endpoint: "POST /api/creative-feedback-events/:id/undo",
+    });
+  }
+
+  async confirmCreativeGalleryDelivery(data: { variant_id: string; revision: number; idempotency_key: string; qc_risk_acknowledged: boolean; qc_risk_reason: string }): Promise<CreateCreativeFeedbackResponse> {
+    const raw = await this.fetch<unknown>("/api/creative-feedback-events/gallery", { method: "POST", body: JSON.stringify(data) });
+    return parseWithFallback(raw, CreateCreativeFeedbackResponseSchema, EMPTY_CREATIVE_FEEDBACK_RESPONSE, { endpoint: "POST /api/creative-feedback-events/gallery" });
+  }
+
+  async listCreativeOrders(signal?: AbortSignal): Promise<CreativeOrderListResponse> {
+    const raw = await this.fetch<unknown>("/api/creative/orders", { signal });
+    return parseWithFallback(raw, CreativeOrderListResponseSchema, EMPTY_CREATIVE_ORDER_LIST_RESPONSE, { endpoint: "GET /api/creative/orders" });
+  }
+
+  async getCreativeOrder(id: string, signal?: AbortSignal): Promise<CreativeOrder> {
+    const raw = await this.fetch<unknown>(`/api/creative/orders/${id}`, { signal });
+    return parseWithFallback(raw, CreativeOrderSchema, { id: "", workspace_id: "", issue_id: "", status: "draft", derived_status: "draft", delivery_status: "pending", production_status: "pending", input_snapshot: {}, trigger_evidence_kind: "", trigger_evidence_ref_id: "", created_by: "", created_at: "", updated_at: "", workflow_failures: [], items: [] }, { endpoint: "GET /api/creative/orders/:id" });
+  }
+
+  async retryCreativeOrderWorkflowFailure(orderId: string, taskId: string): Promise<CreativeOrderWorkflowRetryResponse> {
+    const raw = await this.fetch<unknown>(`/api/creative/orders/${encodeURIComponent(orderId)}/workflow-failures/${encodeURIComponent(taskId)}/retry`, {
       method: "POST",
     });
-    return parseWithFallback(
-      raw,
-      CreativeMaterialsResponseSchema,
-      EMPTY_CREATIVE_MATERIALS_RESPONSE,
-      { endpoint: "POST /api/issues/:id/creative-edit-jobs/:jobId/sync" },
-    );
+    return parseWithFallback(raw, CreativeOrderWorkflowRetryResponseSchema, { task_id: "" }, {
+      endpoint: "POST /api/creative/orders/:id/workflow-failures/:taskId/retry",
+    });
   }
 
-  async createCreativeEditFeedback(
+  async composeCreativeOrderPrime(orderId: string, variantId: string, options?: { async?: boolean; force?: boolean }): Promise<CreativeOrderPrimeComposeResponse> {
+    const raw = await this.fetch<unknown>(`/api/creative/orders/${encodeURIComponent(orderId)}/prime-compose`, {
+      method: "POST",
+      body: JSON.stringify({ variant_id: variantId, ...(options?.async ? { async: true } : {}), ...(options?.force ? { force: true } : {}) }),
+    });
+    return parseWithFallback(raw, CreativeOrderPrimeComposeResponseSchema, {
+      variant_id: "", composed: false, completed: false,
+    }, {
+      endpoint: "POST /api/creative/orders/:id/prime-compose",
+    });
+  }
+
+  async recoverCreativeOrderCandidates(orderId: string, itemId: string): Promise<CreativeOrderWorkflowRetryResponse> {
+    const raw = await this.fetch<unknown>(`/api/creative/orders/${encodeURIComponent(orderId)}/items/${encodeURIComponent(itemId)}/candidate-recovery`, { method: "POST" });
+    return parseWithFallback(raw, CreativeOrderWorkflowRetryResponseSchema, { task_id: "" }, { endpoint: "POST /api/creative/orders/:id/items/:itemId/candidate-recovery" });
+  }
+
+  async queueCreativeOrderAdjustment(orderId: string, data: QueueCreativeOrderAdjustmentRequest): Promise<QueueCreativeOrderAdjustmentResponse> {
+    const raw = await this.fetch<unknown>(`/api/creative/orders/${encodeURIComponent(orderId)}/adjustments`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+    return parseWithFallback(raw, QueueCreativeOrderAdjustmentResponseSchema, { task_id: "", revision: 1 }, {
+      endpoint: "POST /api/creative/orders/:id/adjustments",
+    });
+  }
+
+  async discardCreativeOrderVariantStaging(orderId: string, variantId: string): Promise<void> {
+    await this.fetch(`/api/creative/orders/${encodeURIComponent(orderId)}/variants/${encodeURIComponent(variantId)}/staging/discard`, {
+      method: "POST",
+    });
+  }
+
+  async adoptCreativeOrderProcessImage(orderId: string, variantId: string, assetId: string): Promise<void> {
+    await this.fetch(`/api/creative/orders/${encodeURIComponent(orderId)}/variants/${encodeURIComponent(variantId)}/process-images/${encodeURIComponent(assetId)}/adopt`, {
+      method: "POST",
+    });
+  }
+
+  async retryCreativeOrderVariantQC(orderId: string, variantId: string): Promise<CreativeOrderQCRetryResponse> {
+    const raw = await this.fetch<unknown>(`/api/creative/orders/${encodeURIComponent(orderId)}/variants/${encodeURIComponent(variantId)}/qc/retry`, {
+      method: "POST",
+    });
+    return parseWithFallback(raw, CreativeOrderQCRetryResponseSchema, {
+      variant_id: "", revision: 1, attempt: 1, technical_task_id: "", visual_task_id: "",
+    }, {
+      endpoint: "POST /api/creative/orders/:id/variants/:variantId/qc/retry",
+    });
+  }
+
+  async cancelCreativeOrder(id: string): Promise<CreativeOrder> {
+    const raw = await this.fetch<unknown>(`/api/creative/orders/${encodeURIComponent(id)}/cancel`, { method: "POST" });
+    return parseWithFallback(raw, CreativeOrderSchema, { id: "", workspace_id: "", issue_id: "", status: "cancelled", derived_status: "cancelled", delivery_status: "cancelled", production_status: "cancelled", input_snapshot: {}, trigger_evidence_kind: "", trigger_evidence_ref_id: "", created_by: "", created_at: "", updated_at: "", workflow_failures: [], items: [] }, { endpoint: "POST /api/creative/orders/:id/cancel" });
+  }
+
+  async deleteCreativeOrder(id: string): Promise<void> {
+    await this.fetch(`/api/creative/orders/${encodeURIComponent(id)}`, { method: "DELETE" });
+  }
+
+  async getCreativeRetrySettings(signal?: AbortSignal): Promise<{ automatic_retry_enabled: boolean; visual_rework_enabled: boolean; can_manage: boolean }> {
+    const raw = await this.fetch<unknown>("/api/creative/settings", { signal });
+    return parseWithFallback(raw, CreativeRetrySettingsSchema, { automatic_retry_enabled: false, visual_rework_enabled: false, can_manage: false }, { endpoint: "GET /api/creative/settings" });
+  }
+
+  async updateCreativeRetrySettings(enabled: boolean, kind: "automatic_retry_enabled" | "visual_rework_enabled" = "automatic_retry_enabled") {
+    const raw = await this.fetch<unknown>("/api/creative/settings", { method: "PATCH", body: JSON.stringify({ [kind]: enabled }) });
+    return parseWithFallback(raw, CreativeRetrySettingsSchema, { automatic_retry_enabled: false, visual_rework_enabled: false, can_manage: false }, { endpoint: "PATCH /api/creative/settings" });
+  }
+
+  async createCreativeOrder(data: CreateCreativeOrderRequest): Promise<CreativeOrder> {
+    const raw = await this.fetch<unknown>("/api/creative/orders", { method: "POST", body: JSON.stringify(data) });
+    return parseWithFallback(raw, CreativeOrderSchema, { id: "", workspace_id: "", issue_id: "", status: "draft", derived_status: "draft", delivery_status: "pending", production_status: "pending", input_snapshot: {}, trigger_evidence_kind: "", trigger_evidence_ref_id: "", created_by: "", created_at: "", updated_at: "", workflow_failures: [], items: [] }, { endpoint: "POST /api/creative/orders" });
+  }
+
+  async adoptCreativeOrderVariant(orderId: string, itemId: string, data: AdoptCreativeOrderVariantRequest): Promise<CreativeOrderItem> {
+    const raw = await this.fetch<unknown>(`/api/creative/orders/${encodeURIComponent(orderId)}/items/${encodeURIComponent(itemId)}/adoption`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+    return parseWithFallback(raw, CreativeOrderItemSchema, EMPTY_CREATIVE_ORDER_ITEM, {
+      endpoint: "POST /api/creative/orders/:orderId/items/:itemId/adoption",
+    });
+  }
+
+  async unadoptCreativeOrderVariant(orderId: string, itemId: string): Promise<CreativeOrderItem> {
+    const raw = await this.fetch<unknown>(`/api/creative/orders/${encodeURIComponent(orderId)}/items/${encodeURIComponent(itemId)}/adoption`, {
+      method: "DELETE",
+    });
+    return parseWithFallback(raw, CreativeOrderItemSchema, EMPTY_CREATIVE_ORDER_ITEM, {
+      endpoint: "DELETE /api/creative/orders/:orderId/items/:itemId/adoption",
+    });
+  }
+
+  async selectCreativeOrderVariantRevision(orderId: string, variantId: string, revision: number): Promise<void> {
+    await this.fetch(`/api/creative/orders/${encodeURIComponent(orderId)}/variants/${encodeURIComponent(variantId)}/revisions/${encodeURIComponent(String(revision))}/select`, {
+      method: "POST",
+    });
+  }
+
+  async createCreativeDirectEdit(data: CreateCreativeDirectEditRequest): Promise<CreativeDirectEditResponse> {
+    const raw = await this.fetch<unknown>("/api/creative/direct-edits", { method: "POST", body: JSON.stringify(data) });
+    return parseWithFallback(raw, CreativeDirectEditResponseSchema, EMPTY_CREATIVE_DIRECT_EDIT_RESPONSE, {
+      endpoint: "POST /api/creative/direct-edits",
+    });
+  }
+
+  async finalizeCreativeOrderQC(orderId: string, variantId: string, revision: number): Promise<CreativeOrderQCFinalizeResponse> {
+    const raw = await this.fetch<unknown>(`/api/creative/orders/${orderId}/qc-finalize`, {
+      method: "POST",
+      body: JSON.stringify({ variant_id: variantId, revision }),
+    });
+    return parseWithFallback(raw, CreativeOrderQCFinalizeResponseSchema, EMPTY_CREATIVE_ORDER_QC_FINALIZE_RESPONSE, {
+      endpoint: "POST /api/creative/orders/:id/qc-finalize",
+    });
+  }
+
+  async listCreativeSourceAnalyses(candidateId?: string, signal?: AbortSignal) {
+    const query = candidateId ? `?candidate_id=${encodeURIComponent(candidateId)}` : "";
+    const raw = await this.fetch<unknown>(`/api/creative/source-analyses${query}`, { signal });
+    return parseWithFallback(raw, CreativeSourceAnalysisListResponseSchema, EMPTY_CREATIVE_SOURCE_ANALYSIS_LIST_RESPONSE, { endpoint: "GET /api/creative/source-analyses" });
+  }
+
+  async retryCreativePreAdaptation(sourceAnalysisId: string, marketPackId: string): Promise<{ task_id: string; status: string }> {
+    const raw = await this.fetch<unknown>(`/api/creative/source-analyses/${encodeURIComponent(sourceAnalysisId)}/pre-adaptation/retry`, {
+      method: "POST",
+      body: JSON.stringify({ market_pack_id: marketPackId }),
+    });
+    return parseWithFallback(raw, CreativePreAdaptationRetryResponseSchema, EMPTY_CREATIVE_PRE_ADAPTATION_RETRY_RESPONSE, {
+      endpoint: "POST /api/creative/source-analyses/:id/pre-adaptation/retry",
+    });
+  }
+
+  async putCreativeIssueContext(
     issueId: string,
-    jobId: string,
-    variantId: string,
-    data: CreateCreativeEditFeedbackRequest,
-  ): Promise<CreativeMaterialsResponse> {
+    data: PutCreativeIssueContextRequest,
+  ): Promise<CreativeIssueContext> {
+    const raw = await this.fetch<unknown>(`/api/issues/${issueId}/creative-context`, {
+      method: "PUT",
+      body: JSON.stringify(data),
+    });
+    return parseWithFallback(raw, CreativeIssueContextSchema, EMPTY_CREATIVE_ISSUE_CONTEXT, {
+      endpoint: "PUT /api/issues/:id/creative-context",
+    });
+  }
+
+  async putCreativeItemBrief(issueId: string, candidateId: string, creativeBrief: CreativeIssueItem["creative_brief"]): Promise<CreativeIssueItem> {
+    const path = `/api/issues/${issueId}/creative-materials/${candidateId}/brief`;
+    const parseItem = (raw: unknown) => parseWithFallback(raw, CreativeIssueItemSchema, EMPTY_CREATIVE_ISSUE_ITEM, {
+      endpoint: "PUT /api/issues/:id/creative-materials/:candidateId/brief",
+    });
+    try {
+      return parseItem(await this.fetch<unknown>(path, {
+        method: "PUT",
+        body: JSON.stringify(creativeBrief),
+        suppressErrorLog: true,
+      }));
+    } catch (error) {
+      if (!unsupportedCreativeBriefExtensionField(error)) {
+        this.logger.error(`← brief save failed ${path}`, {
+          error: error instanceof Error ? error.message : String(error),
+        });
+        throw error;
+      }
+      if (creativeBriefHasExtensionContent(creativeBrief)) {
+        throw new Error("当前运行服务尚未支持保存补充创意想法或 App UI 引用；为避免丢失内容，本次未保存。请更新服务后重试。");
+      }
+      const {
+        user_direction: _userDirection,
+        app_ui_replacement_required: _appUIReplacementRequired,
+        selected_app_ui_references: _selectedAppUIReferences,
+        ...legacyBrief
+      } = creativeBrief;
+      return parseItem(await this.fetch<unknown>(path, {
+        method: "PUT",
+        body: JSON.stringify(legacyBrief),
+      }));
+    }
+  }
+
+  async putCreativeItemWorkIssue(issueId: string, candidateId: string, workIssueId: string): Promise<CreativeIssueItem> {
+    const raw = await this.fetch<unknown>(`/api/issues/${issueId}/creative-materials/${candidateId}/work-issue`, {
+      method: "PUT",
+      body: JSON.stringify({ work_issue_id: workIssueId }),
+    });
+    return parseWithFallback(raw, CreativeIssueItemSchema, EMPTY_CREATIVE_ISSUE_ITEM, {
+      endpoint: "PUT /api/issues/:id/creative-materials/:candidateId/work-issue",
+    });
+  }
+
+  async registerCreativeDeliveries(
+    issueId: string,
+    data: RegisterCreativeDeliveriesRequest,
+  ): Promise<RegisterCreativeDeliveriesResponse> {
+    const raw = await this.fetch<unknown>(`/api/issues/${issueId}/creative-deliveries/register`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+    return parseWithFallback(raw, RegisterCreativeDeliveriesResponseSchema, { deliveries: [] }, {
+      endpoint: "POST /api/issues/:id/creative-deliveries/register",
+    });
+  }
+
+  async createCreativeAdjustment(
+    issueId: string,
+    candidateId: string,
+    data: CreateCreativeAdjustmentRequest,
+  ): Promise<CreativeAdjustmentRequest> {
     const raw = await this.fetch<unknown>(
-      `/api/issues/${issueId}/creative-edit-jobs/${jobId}/variants/${variantId}/feedback`,
-      {
-        method: "POST",
-        body: JSON.stringify(data),
-      },
+      `/api/issues/${issueId}/creative-materials/${candidateId}/adjustments`,
+      { method: "POST", body: JSON.stringify(data) },
     );
-    return parseWithFallback(
-      raw,
-      CreativeMaterialsResponseSchema,
-      EMPTY_CREATIVE_MATERIALS_RESPONSE,
-      { endpoint: "POST /api/issues/:id/creative-edit-jobs/:jobId/variants/:variantId/feedback" },
-    );
+    return parseWithFallback(raw, CreativeAdjustmentRequestSchema, EMPTY_CREATIVE_ADJUSTMENT_REQUEST, {
+      endpoint: "POST /api/issues/:id/creative-materials/:candidateId/adjustments",
+    });
   }
 
-  async downloadCreativeEditJob(
+  async bindCreativeAdjustmentIssue(
     issueId: string,
-    jobId: string,
-    options?: { assetIds?: string[]; includeOriginal?: boolean },
-  ): Promise<{ blob: Blob; filename: string }> {
-    const params = new URLSearchParams();
-    for (const assetId of options?.assetIds ?? []) params.append("asset_id", assetId);
-    if (options?.includeOriginal === false) params.set("include_original", "false");
-    const suffix = params.size > 0 ? `?${params.toString()}` : "";
-    const response = await this.fetchRaw(
-      `/api/issues/${issueId}/creative-edit-jobs/${jobId}/download${suffix}`,
+    candidateId: string,
+    adjustmentId: string,
+    adjustmentIssueId: string,
+  ): Promise<CreativeAdjustmentRequest> {
+    const raw = await this.fetch<unknown>(
+      `/api/issues/${issueId}/creative-materials/${candidateId}/adjustments/${adjustmentId}/issue`,
+      { method: "PUT", body: JSON.stringify({ adjustment_issue_id: adjustmentIssueId }) },
     );
-    const disposition = response.headers.get("Content-Disposition") ?? "";
-    const filenameMatch = disposition.match(/filename="?([^";]+)"?/i);
-    return {
-      blob: await response.blob(),
-      filename: filenameMatch?.[1] ?? `creative-job-${jobId.slice(0, 8)}.zip`,
-    };
+    return parseWithFallback(raw, CreativeAdjustmentRequestSchema, EMPTY_CREATIVE_ADJUSTMENT_REQUEST, {
+      endpoint: "PUT /api/issues/:id/creative-materials/:candidateId/adjustments/:adjustmentId/issue",
+    });
   }
 
   // GitHub integration
@@ -2856,6 +3444,27 @@ export class ApiClient {
     return this.fetch(`/api/lark/binding/redeem`, {
       method: "POST",
       body: JSON.stringify({ token }),
+    });
+  }
+
+  async listComposioToolkits(): Promise<ComposioToolkit[]> {
+    return this.fetch(`/api/integrations/composio/toolkits`);
+  }
+
+  async listComposioConnections(): Promise<ComposioConnection[]> {
+    return this.fetch(`/api/integrations/composio/connections`);
+  }
+
+  async beginComposioConnect(toolkitSlug: string): Promise<ComposioConnectInitResponse> {
+    return this.fetch(`/api/integrations/composio/connect/init`, {
+      method: "POST",
+      body: JSON.stringify({ toolkit_slug: toolkitSlug }),
+    });
+  }
+
+  async deleteComposioConnection(connectionId: string): Promise<void> {
+    await this.fetch(`/api/integrations/composio/connections/${connectionId}`, {
+      method: "DELETE",
     });
   }
 }

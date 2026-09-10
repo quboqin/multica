@@ -268,6 +268,17 @@ export function createKoDict(allowSignup: boolean): LandingDict {
       },
       entries: [
         {
+          version: "0.3.23",
+          date: "2026-08-16",
+          title: "워크스페이스 크리에이티브 기능 제어와 더 명확한 업데이트",
+          changes: [],
+          features: [
+            "Creative Studio를 워크스페이스마다 독립적으로 켜거나 끌 수 있습니다.",
+            "API도 기능을 확인하므로 직접 링크와 백그라운드 요청도 같은 워크스페이스 설정을 따릅니다.",
+            "도움말에는 Multica가 직접 관리하는 변경 로그 하나만 남고, 새 버전은 변경 사항을 한 번 안내합니다.",
+          ],
+        },
+        {
           version: "0.3.22",
           date: "2026-06-15",
           title: "더 빠른 목록 경험, 쉬운 실행 설정, 안전한 Issue 편집",

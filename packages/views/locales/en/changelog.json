@@ -1,0 +1,79 @@
+{
+  "title": "Change log",
+  "subtitle": "New features and changes to how you work in Multica.",
+  "current_version": "Current platform version: {{version}}",
+  "releases": {
+    "v0_3_52": {
+      "version": "0.3.52",
+      "date": "2026-09-10",
+      "title": "Workflows and user credential fixes",
+      "summary": "View squad workflows and use correctly matched user integration credentials.",
+      "changes": [
+        "The Squads navigation tab is now named Workflows.",
+        "Squad details include a workflow view to inspect collaboration stages and handoffs, and adjust stages and agent assignments.",
+        "Fixed user integration credential matching so agents can use custom credentials saved by the user who initiated the task when calling integrated services."
+      ]
+    },
+    "v0_3_51": {
+      "version": "0.3.51",
+      "date": "2026-09-07",
+      "title": "Prime modes and creative details",
+      "summary": "Compare draft and published market settings with the processing used for a creative.",
+      "changes": [
+        "Use Save and publish in market rules and view draft and published Prime modes side by side.",
+        "Orders show their Prime mode at submission; creative details show the recorded processing mode and template used."
+      ]
+    },
+    "v0_3_50": {
+      "version": "0.3.50",
+      "date": "2026-09-07",
+      "title": "Choose creative set counts",
+      "summary": "Choose how many creative sets to produce, with three sizes in each set.",
+      "changes": [
+        "Copy-library orders support 1-10 sets, with three as the default. Ten sets deliver 30 images.",
+        "See the expected image count before submitting and the completed set count during production."
+      ]
+    },
+    "v0_3_49": {
+      "version": "0.3.49",
+      "date": "2026-09-07",
+      "title": "Copy-based creatives, gallery, and Astra",
+      "summary": "Create from your copy library, manage finished images, and select GPT-6 Astra for agents.",
+      "changes": [
+        "Create image orders from approved copy and repayment plans. All selections are optional; leave them empty for visual-only exploration.",
+        "Preview gallery images at full size, switch sizes, and undo removals. Gallery membership stays linked to the order.",
+        "Codex agents can use GPT-6 Astra with the thinking levels supported by their runtime."
+      ]
+    },
+    "v0_3_48": {
+      "version": "0.3.48",
+      "date": "2026-09-02",
+      "title": "Switch adjusted creative versions",
+      "summary": "Choose between the finished images before and after an adjustment.",
+      "changes": [
+        "Use the new creative after a precise adjustment, or switch back to the complete previous version without producing it again."
+      ]
+    },
+    "v0_3_47": {
+      "version": "0.3.47",
+      "date": "2026-08-27",
+      "title": "Creative candidates and three-size sets",
+      "summary": "Compare creative directions before producing square, landscape, and portrait images.",
+      "changes": [
+        "Competitor-material orders begin with four or five primary images. Independent review selects three sets for delivery and retains reserves.",
+        "Keep the subject and visual style consistent across each set, with a composition suited to each image size."
+      ]
+    },
+    "v0_3_23": {
+      "version": "0.3.23",
+      "date": "2026-08-16",
+      "title": "Creative Factory and agent settings",
+      "summary": "Enable Creative Factory per workspace to manage collection through image delivery.",
+      "changes": [
+        "Creative Factory connects material collection, analysis, copy confirmation, image generation, and delivery.",
+        "Choose GPT-5.6 Sol, Terra, or Luna for Codex agents and set the thinking level supported by each model.",
+        "Filter requirements by multiple labels, matching any selected label. Creative workflow child issues appear in production-stage order."
+      ]
+    }
+  }
+}

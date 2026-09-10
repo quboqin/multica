@@ -44,7 +44,7 @@ import {
 } from "../platform/system-notification";
 import type { Workspace } from "../types/workspace";
 import { chatKeys } from "../chat/queries";
-import { creativeKeys } from "../creative/queries";
+import { createCreativeRefreshQueue } from "../creative/realtime-refresh";
 import { favoriteKeys } from "../favorites/queries";
 import { useChatStore } from "../chat";
 import { resolvePostAuthDestination, useHasOnboarded } from "../paths";
@@ -58,7 +58,6 @@ import type {
   IssueDeletedPayload,
   IssueLabelsChangedPayload,
   IssueMetadataChangedPayload,
-  CreativeMaterialsUpdatedPayload,
   InboxNewPayload,
   InboxItem,
   NotificationPreferenceResponse,
@@ -88,6 +87,32 @@ import type {
   ChatMessagesPage,
   InvitationCreatedPayload,
 } from "../types";
+
+const creativeWorkflowTaskEvents = new Set([
+  "task:queued",
+  "task:dispatch",
+  "task:running",
+  "task:waiting_local_directory",
+  "task:completed",
+  "task:failed",
+  "task:cancelled",
+]);
+
+const creativeWorkflowEvidenceKinds = new Set([
+  "creative_crawl_run_analysis",
+  "creative_source_analysis",
+  "creative_order_item_plan",
+  "creative_order_item_production",
+  "creative_order_item_candidate_selection",
+  "creative_order_variant_qc",
+  "creative_order_item_direct_edit",
+]);
+
+export function isCreativeWorkflowTaskEvent(message: { type: string; payload: unknown }): boolean {
+  if (!creativeWorkflowTaskEvents.has(message.type)) return false;
+  if (!message.payload || typeof message.payload !== "object") return false;
+  return creativeWorkflowEvidenceKinds.has(String((message.payload as { trigger_evidence_kind?: unknown }).trigger_evidence_kind ?? ""));
+}
 
 const chatWsLogger = createLogger("chat.ws");
 
@@ -422,6 +447,8 @@ export function useRealtimeSync(
       // events without dedicated handlers.
       workspace: () => {
         qc.invalidateQueries({ queryKey: workspaceKeys.list() });
+        const wsId = getCurrentWsId();
+        if (wsId) qc.invalidateQueries({ queryKey: workspaceKeys.capabilities(wsId) });
       },
       skill: () => {
         const wsId = getCurrentWsId();
@@ -531,6 +558,7 @@ export function useRealtimeSync(
       },
     };
 
+    const creativeRefresh = createCreativeRefreshQueue(qc);
     const timers = new Map<string, ReturnType<typeof setTimeout>>();
     const debouncedRefresh = (prefix: string, fn: () => void) => {
       const existing = timers.get(prefix);
@@ -571,6 +599,10 @@ export function useRealtimeSync(
     ]);
 
     const unsubAny = ws.onAny((msg) => {
+      if (isCreativeWorkflowTaskEvent(msg)) {
+        const wsId = getCurrentWsId();
+        if (wsId) creativeRefresh.invalidate(wsId);
+      }
       if (specificEvents.has(msg.type)) return;
       const prefix = msg.type.split(":")[0] ?? "";
       const refresh = refreshMap[prefix];
@@ -595,10 +627,9 @@ export function useRealtimeSync(
     });
 
     const unsubCreativeMaterialsUpdated = ws.on("creative_materials:updated", (p) => {
-      const payload = p as CreativeMaterialsUpdatedPayload;
       const wsId = getCurrentWsId();
-      if (!wsId || !payload.issue_id) return;
-      qc.invalidateQueries({ queryKey: creativeKeys.issue(wsId, payload.issue_id) });
+      if (!wsId) return;
+      creativeRefresh.invalidate(wsId, p);
     });
 
     const unsubIssueCreated = ws.on("issue:created", (p) => {
@@ -1128,6 +1159,7 @@ export function useRealtimeSync(
       unsubChatSessionRead();
       unsubChatSessionDeleted();
       unsubChatSessionUpdated();
+      creativeRefresh.dispose();
       timers.forEach(clearTimeout);
       timers.clear();
     };

@@ -133,6 +133,31 @@ type Config struct {
 	OnCodexInitializedHome func(codexHome string)
 }
 
+var SupportedTypes = []string{
+	"antigravity",
+	"claude",
+	"codebuddy",
+	"codex",
+	"copilot",
+	"cursor",
+	"gemini",
+	"hermes",
+	"kimi",
+	"kiro",
+	"opencode",
+	"openclaw",
+	"pi",
+}
+
+func IsSupportedType(agentType string) bool {
+	for _, supportedType := range SupportedTypes {
+		if agentType == supportedType {
+			return true
+		}
+	}
+	return false
+}
+
 // New creates a Backend for the given agent type.
 // Supported types: "claude", "codebuddy", "codex", "copilot", "opencode", "openclaw", "hermes", "gemini", "pi", "cursor", "kimi", "kiro", "antigravity".
 func New(agentType string, cfg Config) (Backend, error) {
