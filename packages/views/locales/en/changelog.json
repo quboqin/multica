@@ -3,6 +3,17 @@
   "subtitle": "New features and changes to how you work in Multica.",
   "current_version": "Current platform version: {{version}}",
   "releases": {
+    "v0_3_52": {
+      "version": "0.3.52",
+      "date": "2026-09-10",
+      "title": "Workflows and user credential fixes",
+      "summary": "View squad workflows and use correctly matched user integration credentials.",
+      "changes": [
+        "The Squads navigation tab is now named Workflows.",
+        "Squad details include a workflow view to inspect collaboration stages and handoffs, and adjust stages and agent assignments.",
+        "Fixed user integration credential matching so agents can use custom credentials saved by the user who initiated the task when calling integrated services."
+      ]
+    },
     "v0_3_51": {
       "version": "0.3.51",
       "date": "2026-09-07",

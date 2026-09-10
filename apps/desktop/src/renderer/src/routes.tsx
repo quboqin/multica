@@ -205,7 +205,7 @@ export const appRoutes: RouteObject[] = [
             element: <MemberDetailPage />,
             handle: { title: "Member" },
           },
-          { path: "squads", element: <SquadsPage />, handle: { title: "Squads" } },
+          { path: "squads", element: <SquadsPage />, handle: { title: "Workflows" } },
           {
             path: "squads/:id",
             element: <SquadDetailPageView />,

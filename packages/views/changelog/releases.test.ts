@@ -20,9 +20,9 @@ const LOCALE_RESOURCES = [
 
 describe("platform release resources", () => {
   it("lists the current release first while preserving earlier releases", () => {
-    expect(PLATFORM_RELEASE_ID).toBe("v0_3_51");
-    expect(PLATFORM_VERSION).toBe("0.3.51");
-    expect(PLATFORM_RELEASE_IDS).toEqual(["v0_3_51", "v0_3_50", "v0_3_49", "v0_3_48", "v0_3_47", "v0_3_23"]);
+    expect(PLATFORM_RELEASE_ID).toBe("v0_3_52");
+    expect(PLATFORM_VERSION).toBe("0.3.52");
+    expect(PLATFORM_RELEASE_IDS).toEqual(["v0_3_52", "v0_3_51", "v0_3_50", "v0_3_49", "v0_3_48", "v0_3_47", "v0_3_23"]);
   });
 
   it("contains every release in every supported locale", () => {
