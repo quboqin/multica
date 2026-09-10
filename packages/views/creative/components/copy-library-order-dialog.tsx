@@ -4,10 +4,9 @@ import { useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ChevronDown, LoaderCircle, Sparkles } from "lucide-react";
 import { api } from "@multica/core/api";
-import { creativeKeys, creativeResourceFilesOptions, creativeResourcesOptions, parseCreativeCopyLibraryConfig } from "@multica/core/creative";
+import { creativeKeys, creativeResourceFilesOptions, creativeResourcesOptions, parseCreativeCopyLibraryConfig, useCreativeSquad } from "@multica/core/creative";
 import { DEFAULT_CREATIVE_VARIANT_COUNT, MAX_CREATIVE_VARIANT_COUNT } from "@multica/core/creative";
 import { useWorkspaceId } from "@multica/core/hooks";
-import { squadListOptions } from "@multica/core/workspace/queries";
 import type { CreativeCopyFragmentRole, CreativeResource, CreativeType } from "@multica/core/types";
 import { Button } from "@multica/ui/components/ui/button";
 import { Badge } from "@multica/ui/components/ui/badge";
@@ -26,13 +25,13 @@ export function CopyLibraryOrderDialog({ library, onClose, onCreated }: { librar
   const wsId = useWorkspaceId();
   const queryClient = useQueryClient();
   const resources = useQuery(creativeResourcesOptions(wsId));
-  const squads = useQuery(squadListOptions(wsId));
+  const { squads, selectedSquad: defaultSquad } = useCreativeSquad(wsId);
   const markets = (resources.data?.resources ?? []).filter((resource) => resource.kind === "market_pack" && resource.status !== "archived" && resource.published_version > 0 && resource.published_config?.copy_library_id === library.id);
   const [marketId, setMarketId] = useState("");
   const market = markets.find((resource) => resource.id === marketId) ?? (markets.length === 1 ? markets[0] : undefined);
   const files = useQuery(creativeResourceFilesOptions(wsId, market?.id ?? ""));
   const [squadId, setSquadId] = useState("");
-  const squad = squads.data?.find((entry) => entry.id === squadId) ?? (squads.data?.length === 1 ? squads.data[0] : undefined);
+  const squad = squadId ? squads.find((entry) => entry.id === squadId) : defaultSquad;
   const config = useMemo(() => parseCreativeCopyLibraryConfig(library.published_config ?? {}), [library.published_config]);
   const [creativeType, setCreativeType] = useState<CreativeType>("num");
   const [targetVariantCount, setTargetVariantCount] = useState(DEFAULT_CREATIVE_VARIANT_COUNT);
@@ -94,7 +93,7 @@ export function CopyLibraryOrderDialog({ library, onClose, onCreated }: { librar
       <div className="min-h-0 flex-1 overflow-y-auto" data-testid="copy-order-scroll"><fieldset disabled={create.isPending} className="min-w-0 p-5">
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
           <label className="grid gap-2 text-sm">{t(($) => $.copyOrder.market)}<NativeSelect value={market?.id ?? ""} onChange={(event) => setMarketId(event.target.value)}><NativeSelectOption value="">{t(($) => $.copyOrder.selectMarket)}</NativeSelectOption>{markets.map((entry) => <NativeSelectOption key={entry.id} value={entry.id}>{entry.name}</NativeSelectOption>)}</NativeSelect></label>
-          <label className="grid gap-2 text-sm">{t(($) => $.copyOrder.squad)}<NativeSelect value={squad?.id ?? ""} onChange={(event) => setSquadId(event.target.value)}><NativeSelectOption value="">{t(($) => $.copyOrder.selectSquad)}</NativeSelectOption>{squads.data?.map((entry) => <NativeSelectOption key={entry.id} value={entry.id}>{entry.name}</NativeSelectOption>)}</NativeSelect></label>
+          <label className="grid gap-2 text-sm">{t(($) => $.copyOrder.squad)}<NativeSelect value={squad?.id ?? ""} onChange={(event) => setSquadId(event.target.value)}><NativeSelectOption value="">{t(($) => $.copyOrder.selectSquad)}</NativeSelectOption>{squads.map((entry) => <NativeSelectOption key={entry.id} value={entry.id}>{entry.name}</NativeSelectOption>)}</NativeSelect></label>
           <label className="grid gap-2 text-sm">{t(($) => $.copyOrder.type)}<NativeSelect value={creativeType} onChange={(event) => { setCreativeType(event.target.value as CreativeType); setSlots({}); setRecipeId(""); }}><NativeSelectOption value="num">Num</NativeSelectOption><NativeSelectOption value="repayment_plan">Repayment Plan</NativeSelectOption></NativeSelect></label>
           <label className="grid gap-2 text-sm">{t(($) => $.copyOrder.variantCount)}<NativeSelect value={targetVariantCount} onChange={(event) => setTargetVariantCount(Number(event.target.value))}>{Array.from({ length: MAX_CREATIVE_VARIANT_COUNT }, (_, index) => index + 1).map((count) => <NativeSelectOption key={count} value={count}>{count}</NativeSelectOption>)}</NativeSelect></label>
         </div>

@@ -14,6 +14,7 @@ export {
   creativeResourcesOptions,
 } from "./queries";
 export { creativeGalleryEvents, creativeGalleryVariantIds, useCreativeGalleryMutation } from "./gallery";
+export { resolveCreativeSquad, useCreativeSquad } from "./squad";
 export { creativeGalleryDeliverySelection } from "./gallery";
 export type { CreativeGalleryDeliverySelection } from "./gallery";
 export { DEFAULT_CREATIVE_VARIANT_COUNT, MAX_CREATIVE_VARIANT_COUNT, creativeOrderTargetVariantCount } from "./variant-count";

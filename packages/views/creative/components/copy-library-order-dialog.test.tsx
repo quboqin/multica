@@ -6,7 +6,7 @@ import type { CreativeResource } from "@multica/core/types";
 import copy from "../../locales/en/creative.json";
 import { CopyLibraryOrderDialog } from "./copy-library-order-dialog";
 
-const apiMock = vi.hoisted(() => ({ listCreativeResources: vi.fn(), listSquads: vi.fn(), listCreativeResourceFiles: vi.fn(), createIssue: vi.fn(), createCreativeOrder: vi.fn(), setIssueMetadataKey: vi.fn(), updateIssue: vi.fn() }));
+const apiMock = vi.hoisted(() => ({ getWorkspaceCapabilities: vi.fn(), listCreativeResources: vi.fn(), listSquads: vi.fn(), listCreativeResourceFiles: vi.fn(), createIssue: vi.fn(), createCreativeOrder: vi.fn(), setIssueMetadataKey: vi.fn(), updateIssue: vi.fn() }));
 vi.mock("@multica/core/api", () => ({ api: apiMock }));
 vi.mock("@multica/core/hooks", () => ({ useWorkspaceId: () => "workspace" }));
 vi.mock("../../i18n", () => ({ useT: () => ({ t: (selector: (value: typeof copy) => string, values: Record<string, string | number> = {}) => Object.entries(values).reduce((text, [key, value]) => text.replaceAll(`{{${key}}}`, String(value)), selector(copy)) }) }));
@@ -19,6 +19,7 @@ const library = { id: "library", name: "Approved library", published_version: 2,
 
 beforeEach(() => {
   vi.resetAllMocks();
+  apiMock.getWorkspaceCapabilities.mockResolvedValue({ items: [], can_manage: false });
   apiMock.listCreativeResources.mockResolvedValue({ resources: [{ id: "market", name: "Market", kind: "market_pack", published_version: 1, published_config: { copy_library_id: library.id } }] });
   apiMock.listSquads.mockResolvedValue([{ id: "squad", name: "Team" }]);
   apiMock.listCreativeResourceFiles.mockResolvedValue({ files: [] });
@@ -35,6 +36,35 @@ function mount(onCreated = vi.fn(), selectedLibrary = library) {
 }
 
 describe("copy library order", () => {
+  it("defaults to the material squad and submits the selected squad consistently", async () => {
+    apiMock.listSquads.mockResolvedValue([{ id: "engineering", name: "研发" }, { id: "creative", name: "素材流程小队" }]);
+    mount();
+    const select = screen.getByRole("combobox", { name: copy.copyOrder.squad });
+    await waitFor(() => expect(select).toHaveValue("creative"));
+    const submit = screen.getByRole("button", { name: "Start visual exploration" });
+    await waitFor(() => expect(submit).toBeEnabled());
+    fireEvent.click(submit);
+    await waitFor(() => expect(apiMock.updateIssue).toHaveBeenCalledWith("issue", { assignee_type: "squad", assignee_id: "creative" }));
+    expect(apiMock.createCreativeOrder.mock.calls[0]?.[0].input_snapshot.squad_snapshot.squad_id).toBe("creative");
+  });
+
+  it("waits for the factory binding and preserves an explicit squad selection", async () => {
+    let resolveCapabilities!: (value: unknown) => void;
+    apiMock.getWorkspaceCapabilities.mockReturnValue(new Promise((resolve) => { resolveCapabilities = resolve; }));
+    apiMock.listSquads.mockResolvedValue([{ id: "engineering", name: "研发" }, { id: "creative", name: "素材流程小队" }, { id: "bound", name: "Design" }]);
+    mount();
+    const select = screen.getByRole("combobox", { name: copy.copyOrder.squad });
+    await screen.findByRole("option", { name: "Design" });
+    expect(select).toHaveValue("");
+    expect(screen.getByRole("button", { name: "Start visual exploration" })).toBeDisabled();
+    resolveCapabilities({ items: [], can_manage: false, creative_factory_squad_id: "bound" });
+    await waitFor(() => expect(select).toHaveValue("bound"));
+    fireEvent.change(select, { target: { value: "engineering" } });
+    fireEvent.click(screen.getByRole("button", { name: "Start visual exploration" }));
+    await waitFor(() => expect(apiMock.updateIssue).toHaveBeenCalledWith("issue", { assignee_type: "squad", assignee_id: "engineering" }));
+    expect(apiMock.createCreativeOrder.mock.calls[0]?.[0].input_snapshot.squad_snapshot.squad_id).toBe("engineering");
+  });
+
   it("previews and submits any selected column using the published market currency", async () => {
     apiMock.listCreativeResources.mockResolvedValue({ resources: [{ id: "market", name: "Malaysia", kind: "market_pack", published_version: 1, published_config: { copy_library_id: library.id, currency: "MYR", locale: "ms-MY" } }] });
     const selectedLibrary = { ...library, published_config: { ...library.published_config, repayment_plan: {

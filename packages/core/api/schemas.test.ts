@@ -39,8 +39,21 @@ import {
   SquadListSchema,
   SquadSchema,
   UserSchema,
+  WorkspaceCapabilitiesSchema,
 } from "./schemas";
 import { parseWithFallback } from "./schema";
+
+describe("WorkspaceCapabilitiesSchema", () => {
+  it("preserves the creative factory squad binding", () => {
+    expect(WorkspaceCapabilitiesSchema.parse({ items: [], can_manage: true, creative_factory_squad_id: "squad" }).creative_factory_squad_id).toBe("squad");
+  });
+
+  it.each([undefined, null, 42])("accepts an older or malformed optional squad binding: %s", (value) => {
+    const parsed = WorkspaceCapabilitiesSchema.parse({ items: [{ key: "creative_factory", enabled: true }], creative_factory_squad_id: value });
+    expect(parsed.creative_factory_squad_id).toBeUndefined();
+    expect(parsed.items[0]?.enabled).toBe(true);
+  });
+});
 
 const baseIssue = {
   id: "11111111-1111-1111-1111-111111111111",
