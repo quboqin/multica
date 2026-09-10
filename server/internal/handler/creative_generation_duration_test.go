@@ -129,6 +129,32 @@ FROM creative_initial_generated_package WHERE order_item_id=$1`, item).Scan(&gen
 	if elapsed < 1200 || elapsed > 1230 || !completeSnapshot {
 		t.Fatalf("wrong first package duration or evidence: %v %v", elapsed, completeSnapshot)
 	}
+	var frozen string
+	if err := testPool.QueryRow(t.Context(), `SELECT row_to_json(p)::text FROM creative_initial_generated_package p WHERE order_item_id=$1`, item).Scan(&frozen); err != nil {
+		t.Fatal(err)
+	}
+	durationBefore, countBefore, err := testHandler.creativeInitialGeneratedPackageDuration(t.Context(), parseUUID(testWorkspaceID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Metadata repairs replay the asset trigger without changing the first package.
+	if _, err := testPool.Exec(t.Context(), `UPDATE creative_order_asset SET metadata='{"repaired":true}',updated_at=now()+interval '1 hour' WHERE variant_id=$1`, variant); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := testPool.Exec(t.Context(), `UPDATE creative_order_variant SET revision=3 WHERE id=$1`, variant); err != nil {
+		t.Fatal(err)
+	}
+	for _, size := range standardCreativeAssetSizes {
+		asset(variant, size, 3)
+	}
+	var afterRework string
+	if err := testPool.QueryRow(t.Context(), `SELECT row_to_json(p)::text FROM creative_initial_generated_package p WHERE order_item_id=$1`, item).Scan(&afterRework); err != nil {
+		t.Fatal(err)
+	}
+	durationAfter, countAfter, err := testHandler.creativeInitialGeneratedPackageDuration(t.Context(), parseUUID(testWorkspaceID))
+	if err != nil || durationBefore == nil || durationAfter == nil || *durationBefore != *durationAfter || countBefore != countAfter || frozen != afterRework {
+		t.Fatalf("asset repair or rework changed first package or dashboard: %v", err)
+	}
 	if _, err := testPool.Exec(t.Context(), `UPDATE creative_order_variant SET candidate_state='rejected',revision=3 WHERE id=$1`, variant); err != nil {
 		t.Fatal(err)
 	}

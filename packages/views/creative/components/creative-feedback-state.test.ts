@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { CreateCreativeFeedbackResponse, CreativeOrder, CreativeOrderAsset, CreativeOrderItem, CreativeOrderVariant, CreativeSourceAnalysis } from "@multica/core/types";
+import type { CreateCreativeFeedbackResponse, CreativeOrder, CreativeOrderAsset, CreativeOrderItem, CreativeOrderVariant, CreativeSourceAnalysis, MemberWithUser } from "@multica/core/types";
 import {
   canCreateDirectEdit,
   candidateDecisionFeedbackInput,
@@ -25,10 +25,13 @@ import {
   creativeOrderAdjustmentSourceContext,
   creativeOrderAdjustmentIssueTitle,
   creativeOrderGenerationProgress,
+  creativeOrderCreatorName,
+  creativeOrderListSummary,
   creativeOrderSquadId,
   creativeStudioPath,
   selectCreativeReviewAssets,
 } from "./creative-studio-page";
+import creativeCopy from "../../locales/zh-Hans/creative.json";
 import { creativeAdjustmentCanRetry, creativeAdjustmentIsDiscarded, creativeAdjustmentProgress, creativeAdjustmentTarget, creativeAdjustmentTimeline, latestOrderAdjustmentFeedback, latestOrderAdjustmentFeedbackByVariant } from "../lib/creative-adjustment-progress";
 
 function readyVariant(id: string): CreativeOrderVariant {
@@ -483,7 +486,7 @@ describe("creative feedback state", () => {
     )).toEqual({ source_asset_id: "r2-delivered", source_revision: 2, source_revision_role: "active" });
   });
 
-  it("counts one primary image for candidates and all expected sizes only for selected variants", () => {
+  it("counts completed selected sets without counting candidate or reserve previews", () => {
     const makeVariant = (id: string, candidateState: "candidate" | "selected" | "reserve" | "rejected", primarySize: string) => ({
       id,
       revision: 1,
@@ -504,6 +507,7 @@ describe("creative feedback state", () => {
       })),
     } as unknown as CreativeOrderVariant);
     const order = {
+      input_snapshot: { target_variant_count: 1 },
       items: [{ variants: [
         makeVariant("selected", "selected", "1080x1080"),
         makeVariant("candidate", "candidate", "1200x628"),
@@ -512,7 +516,69 @@ describe("creative feedback state", () => {
       ] }],
     } as unknown as CreativeOrder;
 
-    expect(creativeOrderGenerationProgress(order)).toEqual({ ready: 6, expected: 6 });
+    expect(creativeOrderGenerationProgress(order)).toEqual({ ready: 1, expected: 1 });
+  });
+
+  it.each(["rejected", "reserve"] as const)("does not wait for an empty %s candidate after selection", (settledState) => {
+    const makeVariant = (id: string, state: string, completedSizes: string[]) => ({
+      id, revision: 1, candidate_state: state, primary_size: "1080x1080",
+      status: state === "selected" ? "completed" : "action_required",
+      assets: completedSizes.map((size) => ({
+        id: `${id}-${size}`, variant_id: id, size_key: size, revision: 1,
+        stage: "generated", status: "completed", attachment_id: `${id}-${size}`,
+      })),
+    } as unknown as CreativeOrderVariant);
+    const selected = ["C02", "C03", "C04"].map((id) => makeVariant(id, "selected", ["1080x1080", "1200x628", "800x1000"]));
+    const empty = makeVariant("C01", settledState, []);
+    const reserve = makeVariant("C05", "reserve", ["1080x1080"]);
+    const order = { items: [{ variants: [empty, ...selected, reserve] }] } as unknown as CreativeOrder;
+
+    expect(creativeOrderGenerationProgress(order)).toEqual({ ready: 3, expected: 3 });
+
+    // Missing selected sizes must still keep the package incomplete.
+    selected[0]!.assets.pop();
+    expect(creativeOrderGenerationProgress(order)).toEqual({ ready: 2, expected: 3 });
+
+    // Candidate comparison does not change the frozen package target.
+    empty.candidate_state = "candidate";
+    expect(creativeOrderGenerationProgress(order)).toEqual({ ready: 2, expected: 3 });
+  });
+
+  it("keeps the frozen set target before planning and across multiple source materials", () => {
+    const order = { input_snapshot: { target_variant_count: 6 }, items: [{ variants: [] }, { variants: [] }] } as unknown as CreativeOrder;
+    expect(creativeOrderGenerationProgress(order)).toEqual({ ready: 0, expected: 12 });
+  });
+
+  it("requires every size in the working revision without counting duplicate stages", () => {
+    const variant = readyVariant("selected");
+    const order = { input_snapshot: { target_variant_count: 1 }, items: [{ variants: [variant] }] } as unknown as CreativeOrder;
+    expect(creativeOrderGenerationProgress(order)).toEqual({ ready: 1, expected: 1 });
+    variant.revision = 3;
+    variant.staging_revision = 3;
+    variant.assets.push({ ...variant.assets[0]!, id: "new-square", revision: 3 });
+    expect(creativeOrderGenerationProgress(order)).toEqual({ ready: 0, expected: 1 });
+  });
+
+  it("shows a one-size direct edit as one set", () => {
+    const variant = readyVariant("direct");
+    variant.revisions = [{ revision: 2, expected_sizes: ["1080x1080"] }] as CreativeOrderVariant["revisions"];
+    variant.assets = variant.assets.filter((asset) => asset.size_key === "1080x1080");
+    const order = { trigger_evidence_kind: "creative_direct_edit", items: [{ variants: [variant] }] } as unknown as CreativeOrder;
+    expect(creativeOrderGenerationProgress(order)).toEqual({ ready: 1, expected: 1 });
+  });
+
+  it("shows the order creator by user ID and describes progress in sets", () => {
+    const members = [{ id: "membership-id", user_id: "creator-id", name: "张三", email: "creator@example.test" }] as MemberWithUser[];
+    const order = { created_by: "creator-id", created_at: "2026-09-10T09:00:00Z", updated_at: "2026-09-10T10:00:00Z", input_snapshot: { target_variant_count: 3 }, items: [{ variants: [readyVariant("s1"), readyVariant("s2"), readyVariant("s3")] }] } as unknown as CreativeOrder;
+    const creator = creativeOrderCreatorName(order, members, "未知用户");
+    expect(creator).toBe("张三");
+    expect(creativeOrderCreatorName({ created_by: "membership-id" }, members, "未知用户")).toBe("未知用户");
+    expect(creativeOrderCreatorName(order, [{ ...members[0]!, name: "" }], "未知用户")).toBe("creator@example.test");
+    const t = ((selector: (copy: typeof creativeCopy) => string, values: Record<string, string | number>) => Object.entries(values).reduce((text, [key, value]) => text.replaceAll(`{{${key}}}`, String(value)), selector(creativeCopy))) as Parameters<typeof creativeOrderListSummary>[2];
+    const summary = creativeOrderListSummary(order, creator, t);
+    expect(summary).toContain("3/3 套已出齐");
+    expect(summary).toContain("创建人 张三");
+    expect(summary).not.toContain("张成图");
   });
 
   it("shows review assets in the business variant order instead of UUID order", () => {

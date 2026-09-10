@@ -195,7 +195,7 @@
     "averageDuration": "Average full-set generation time",
     "basedOnPackages": "Based on {{count}} packages",
     "durationPending": "Awaiting data",
-    "durationHelp": "New orders placed in the last 7 days since measurement began that have completed their first generated package. Includes queueing and retries; in-progress items are excluded."
+    "durationHelp": "New orders placed in the last 7 days since measurement began that have completed their first generated package. Includes queueing and retries; in-progress items are excluded. The duration is fixed when the first package is complete; later edits, repairs, and rework do not change it."
   },
   "stagingRepair": {
     "title": "Staging draft needs attention",
@@ -385,7 +385,7 @@
       "other": "Other"
     },
     "durationPending": "Awaiting data",
-    "durationHelp": "New orders placed in the last 7 days since measurement began that have completed their first generated package. Includes queueing and retries; in-progress items are excluded."
+    "durationHelp": "New orders placed in the last 7 days since measurement began that have completed their first generated package. Includes queueing and retries; in-progress items are excluded. The duration is fixed when the first package is complete; later edits, repairs, and rework do not change it."
   },
   "studio": {
     "title": "Creative Factory",
@@ -421,7 +421,8 @@
       "record": "View record"
     },
     "orderList": {
-      "metadata": "{{items}} materials · {{ready}}/{{expected}} creative images · Started {{createdAt}} · Progress {{updatedAt}}"
+      "metadata": "{{items}} materials · {{ready}}/{{expected}} sets generated · Created by {{creator}} · Created {{createdAt}} · Updated {{updatedAt}}",
+      "unknownCreator": "Unknown user"
     },
     "sourceMaterialNumber": "Material {{index}}",
     "orderNumber": "Order {{id}}",
@@ -512,7 +513,7 @@
       "reviewWithFailures": "Review completed variants first; diagnostics only indicate background steps that are still incomplete.",
       "review": "Compare the available variants. Adopting one creates the delivery package.",
       "attention": "You do not need to retry the workflow manually. Review available images, annotate adjustments, or end the order.",
-      "generating": "{{ready}}/{{expected}} process images are ready. The page refreshes automatically."
+      "generating": "{{ready}}/{{expected}} sets have been generated. The page refreshes automatically."
     }
   },
   "collection": {

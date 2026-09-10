@@ -3,6 +3,17 @@
   "subtitle": "New features and changes to how you work in Multica.",
   "current_version": "Current platform version: {{version}}",
   "releases": {
+    "v0_3_53": {
+      "version": "0.3.53",
+      "date": "2026-09-10",
+      "title": "Order set progress and creator",
+      "summary": "Orders show complete selected sets and the person who created them.",
+      "changes": [
+        "Order lists and details show set progress, such as 3/3 sets generated. Candidate and reserve images do not count toward the order target.",
+        "Order lists and details show the creator.",
+        "Clarified that first-package duration remains fixed after completion; later edits, repairs, and rework are excluded."
+      ]
+    },
     "v0_3_52": {
       "version": "0.3.52",
       "date": "2026-09-10",

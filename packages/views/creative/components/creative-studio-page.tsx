@@ -42,12 +42,14 @@ import {
   hasCreativeResourceChanges,
   EMPTY_CREATIVE_RESOURCE_CHANGES,
   creativePrimeConfig,
+  creativeOrderTargetVariantCount,
 } from "@multica/core/creative";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { useWorkspacePaths } from "@multica/core/paths";
 import {
   workspaceCapabilitiesOptions,
   workspaceCapabilityKeys,
+  memberListOptions,
 } from "@multica/core/workspace/queries";
 import { attachmentDownloadPath } from "@multica/core/types";
 import { resolvePublicFileUrl } from "@multica/core/workspace/avatar-url";
@@ -66,6 +68,7 @@ import type {
   CreateCreativeFeedbackResponse,
   CreateIssueRequest,
   IssueMetadata,
+  MemberWithUser,
 } from "@multica/core/types";
 import { Badge } from "@multica/ui/components/ui/badge";
 import { Button } from "@multica/ui/components/ui/button";
@@ -344,6 +347,7 @@ function CreativeOrdersWorkspace({ selectedOrderId, onSelectOrder, onBack, backL
   const wsId = useWorkspaceId();
   const orders = useQuery({ ...creativeOrdersOptions(wsId), enabled: !!wsId && !selectedOrderId });
   const materials = useQuery({ ...creativeMaterialLibraryOptions(wsId), enabled: !!wsId && !selectedOrderId });
+  const members = useQuery({ ...memberListOptions(wsId), enabled: !!wsId && !selectedOrderId });
   const creativeOrders = orders.data?.orders ?? [];
   if (selectedOrderId) return <CreativeOrderDetail orderId={selectedOrderId} onBack={onBack} onBrowseOrders={() => onSelectOrder("")} backLabel={backLabel} />;
   const candidatesById = new Map((materials.data?.candidates ?? []).map((candidate) => [candidate.id, candidate]));
@@ -352,7 +356,8 @@ function CreativeOrdersWorkspace({ selectedOrderId, onSelectOrder, onBack, backL
     <div className="divide-y border-y">{creativeOrders.map((creativeOrder) => {
       const stage = creativeOrderStage(creativeOrder);
       const listState = creativeOrderListState(stage, t);
-      const summary = creativeOrderListSummary(creativeOrder, t);
+      const creator = creativeOrderCreatorName(creativeOrder, members.data ?? [], t(($) => $.studio.orderList.unknownCreator));
+      const summary = creativeOrderListSummary(creativeOrder, creator, t);
       const sources = creativeOrderSourceSummaries(creativeOrder, candidatesById, t);
       return <div key={creativeOrder.id} className="grid min-h-24 gap-3 bg-background px-4 py-3 transition-colors hover:bg-muted/20 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-center">
         <button type="button" className="grid min-w-0 grid-cols-[auto_minmax(0,1fr)] items-center gap-3 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" onClick={() => onSelectOrder(creativeOrder.id)}>
@@ -382,22 +387,31 @@ function creativeOrderListState(stage: CreativeOrderStage, t: ReturnType<typeof 
   return { label: t(($) => $.studio.orderStatus.review), action: t(($) => $.studio.orderAction.review), badgeVariant: "default" };
 }
 
-function creativeOrderListSummary(order: CreativeOrder, t: ReturnType<typeof useT<"creative">>["t"]): string {
+export function creativeOrderCreatorName(order: Pick<CreativeOrder, "created_by">, members: Pick<MemberWithUser, "user_id" | "name" | "email">[], fallback: string): string {
+  const member = members.find((member) => member.user_id === order.created_by);
+  return member?.name?.trim() || member?.email || fallback;
+}
+
+export function creativeOrderListSummary(order: CreativeOrder, creator: string, t: ReturnType<typeof useT<"creative">>["t"]): string {
   const progress = creativeOrderGenerationProgress(order);
   return t(($) => $.studio.orderList.metadata, {
     items: order.items.length,
     ready: progress.ready,
     expected: progress.expected,
+    creator,
     createdAt: formatCreativeDateTimeToMinute(order.created_at),
     updatedAt: formatCreativeDateTimeToMinute(order.updated_at),
   });
 }
 
 export function creativeOrderGenerationProgress(order: CreativeOrder): { ready: number; expected: number } {
-  return order.items.flatMap((item) => item.variants).reduce((total, variant) => {
+  const target = order.trigger_evidence_kind === "creative_direct_edit" ? 1 : creativeOrderTargetVariantCount(order.input_snapshot);
+  const ready = order.items.reduce((total, item) => total + item.variants.filter((variant) => {
+    if (variant.candidate_state && variant.candidate_state !== "selected") return false;
     const progress = creativeVariantGenerationProgress(variant);
-    return { ready: total.ready + progress.ready, expected: total.expected + progress.expected };
-  }, { ready: 0, expected: 0 });
+    return progress.expected > 0 && progress.ready === progress.expected;
+  }).length, 0);
+  return { ready, expected: target * order.items.length };
 }
 
 type CreativeOrderSourceSummary = {
@@ -449,6 +463,7 @@ function CreativeOrderDetail({ orderId, onBack, onBrowseOrders, backLabel }: { o
   const wsId = useWorkspaceId();
   const queryClient = useQueryClient();
   const order = useQuery(creativeOrderOptions(wsId, orderId));
+  const members = useQuery({ ...memberListOptions(wsId), enabled: !!wsId });
   const feedback = useQuery(creativeFeedbackOptions(wsId, "asset"));
   const variantFeedback = useQuery(creativeFeedbackOptions(wsId, "variant"));
   const galleryMutation = useCreativeGalleryMutation(wsId);
@@ -707,9 +722,10 @@ function CreativeOrderDetail({ orderId, onBack, onBrowseOrders, backLabel }: { o
   };
   return <div className="mx-auto max-w-[1440px] space-y-4">
     <div className="flex flex-wrap items-end justify-between gap-3 border-b pb-3">
-      <div><div className="flex items-center gap-1"><Button size="sm" variant="ghost" onClick={onBack}><ArrowLeft className="h-4 w-4" />{backLabel}</Button>{backLabel === t(($) => $.studio.returnToIssue) && <Button size="sm" variant="ghost" onClick={onBrowseOrders}>{t(($) => $.studio.allOrders)}</Button>}</div><h2 className="mt-2 text-base font-semibold">{t(($) => $.studio.order, { id: orderId.slice(0, 8) })}</h2><p className="mt-1 text-xs text-muted-foreground">{stage.detail} · {t(($) => $.studio.updatedAt, { time: formatCreativeDateTime(data?.updated_at || ""), zone: t(($) => $.generationInfo.beijingTime) })}</p></div>
+      <div><div className="flex items-center gap-1"><Button size="sm" variant="ghost" onClick={onBack}><ArrowLeft className="h-4 w-4" />{backLabel}</Button>{backLabel === t(($) => $.studio.returnToIssue) && <Button size="sm" variant="ghost" onClick={onBrowseOrders}>{t(($) => $.studio.allOrders)}</Button>}</div><h2 className="mt-2 text-base font-semibold">{t(($) => $.studio.order, { id: orderId.slice(0, 8) })}</h2><p className="mt-1 text-xs text-muted-foreground">{stage.detail}</p></div>
       <div className="flex flex-wrap items-center justify-end gap-2"><Badge variant={stage.key === "review" || stage.key === "attention" || stage.key === "delivered" ? "default" : "outline"}>{stage.label}</Badge>{!isDirectEdit && galleryVariantIds.size > 0 && <Badge variant="default">{galleryVariantIds.size} 个已入图库</Badge>}{data && !["delivered", "cancelled"].includes(stage.key) && <Button size="sm" variant="outline" onClick={() => setCancelOpen(true)}><CircleStop className="h-4 w-4" />{t(($) => $.studio.endOrder)}</Button>}{data && <Button size="sm" variant="outline" className="text-destructive hover:text-destructive" onClick={() => setDeleteOpen(true)}><Trash2 className="h-4 w-4" />{t(($) => $.studio.deleteOrder)}</Button>}</div>
     </div>
+    {data && <p className="text-xs text-muted-foreground">{creativeOrderListSummary(data, creativeOrderCreatorName(data, members.data ?? [], t(($) => $.studio.orderList.unknownCreator)), t)}</p>}
     {data && <CreativeOrderPrimeSummary order={data} />}
     {data && <CreativeOrderStatusPanel order={data} stage={stage} />}
     <CreativeOrderJourney stageKey={stage.key} />
@@ -952,14 +968,14 @@ function OrderStat({ label, value }: { label: string; value: string }) {
   </div>;
 }
 
-function creativeOrderRuntimeStats(order: CreativeOrder): { runningVariants: number; blockedVariants: number; previewAssets: number; expectedPreviewAssets: number } {
+function creativeOrderRuntimeStats(order: CreativeOrder): { runningVariants: number; blockedVariants: number; readyPackages: number; expectedPackages: number } {
   const variants = order.items.flatMap((item) => item.variants);
   const progress = creativeOrderGenerationProgress(order);
   return {
     runningVariants: variants.filter(creativeVariantIsInProgress).length,
     blockedVariants: variants.filter(creativeVariantNeedsManualAction).length,
-    previewAssets: progress.ready,
-    expectedPreviewAssets: progress.expected,
+    readyPackages: progress.ready,
+    expectedPackages: progress.expected,
   };
 }
 
@@ -970,7 +986,7 @@ function creativeOrderStatusTitle(stage: CreativeOrderStage, stats: ReturnType<t
   if (stage.key === "review") return t(($) => $.studio.statusTitle.review);
   if (stage.key === "attention") return t(($) => $.studio.statusTitle.attention);
   if (stage.key === "generating") return t(($) => $.studio.statusTitle.generating);
-  if (stats.expectedPreviewAssets > 0) return t(($) => $.studio.statusTitle.waiting);
+  if (stats.expectedPackages > 0) return t(($) => $.studio.statusTitle.waiting);
   return t(($) => $.studio.statusTitle.preparing);
 }
 
@@ -978,7 +994,7 @@ function creativeOrderStatusDetail(stage: CreativeOrderStage, stats: ReturnType<
   if (stage.key === "review" && hasFailures) return t(($) => $.studio.statusDetail.reviewWithFailures);
   if (stage.key === "review") return t(($) => $.studio.statusDetail.review);
   if (stage.key === "attention") return t(($) => $.studio.statusDetail.attention);
-  if (stage.key === "generating") return t(($) => $.studio.statusDetail.generating, { ready: stats.previewAssets, expected: Math.max(stats.expectedPreviewAssets, 1) });
+  if (stage.key === "generating") return t(($) => $.studio.statusDetail.generating, { ready: stats.readyPackages, expected: Math.max(stats.expectedPackages, 1) });
   return stage.detail;
 }
 
