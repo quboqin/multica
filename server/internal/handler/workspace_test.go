@@ -536,6 +536,9 @@ RETURNING id
 `, neighborSlug).Scan(&neighborWorkspaceID)
 	t.Cleanup(func() {
 		for _, workspaceID := range []string{targetWorkspaceID, neighborWorkspaceID} {
+			_, _ = testPool.Exec(context.Background(), `DELETE FROM record WHERE workspace_id = $1`, workspaceID)
+			_, _ = testPool.Exec(context.Background(), `DELETE FROM collection_field WHERE workspace_id = $1`, workspaceID)
+			_, _ = testPool.Exec(context.Background(), `DELETE FROM collection WHERE workspace_id = $1`, workspaceID)
 			_, _ = testPool.Exec(context.Background(), `DELETE FROM workspace WHERE id = $1`, workspaceID)
 			_, _ = testPool.Exec(context.Background(), `DELETE FROM task_usage_hourly_dirty WHERE workspace_id = $1`, workspaceID)
 			_, _ = testPool.Exec(context.Background(), `DELETE FROM runtime_profile WHERE workspace_id = $1`, workspaceID)
@@ -549,9 +552,10 @@ VALUES ($1, $2, 'owner')
 `, targetWorkspaceID, testUserID)
 
 	type tenantFixture struct {
-		workspaceID string
-		mediaKey    string
-		issueID     string
+		workspaceID  string
+		mediaKey     string
+		issueID      string
+		collectionID string
 	}
 	fixtures := []*tenantFixture{
 		{workspaceID: targetWorkspaceID, mediaKey: targetMediaKey},
@@ -591,17 +595,47 @@ INSERT INTO channel_media_pending_object (
 )
 VALUES ($1, $2, gen_random_uuid(), 's3://workspace-delete/tenant-isolation')
 `, fixture.mediaKey, fixture.workspaceID)
+		dbfx.QueryRow(t, `
+INSERT INTO collection (
+	workspace_id, name, created_by, create_request_id, create_fingerprint
+)
+VALUES ($1, 'Workspace delete tenant isolation', $2, gen_random_uuid(), repeat('c', 64))
+RETURNING id
+`, fixture.workspaceID, testUserID).Scan(&fixture.collectionID)
+		dbfx.Exec(t, `
+INSERT INTO collection_field (
+	workspace_id, collection_id, name, type, position
+)
+VALUES ($1, $2, 'Delete guard field', 'text', 0)
+`, fixture.workspaceID, fixture.collectionID)
+		dbfx.Exec(t, `
+INSERT INTO record (
+	workspace_id, collection_id, title, fields, created_by, updated_by,
+	create_request_id, create_fingerprint
+)
+VALUES ($1, $2, 'Workspace delete tenant isolation', '{}'::jsonb, $3, $3, gen_random_uuid(), repeat('d', 64))
+`, fixture.workspaceID, fixture.collectionID, testUserID)
 	}
 
 	request := newRequest(http.MethodDelete, "/api/workspaces/"+targetWorkspaceID, nil)
 	request = withURLParam(request, "id", targetWorkspaceID)
 	testutil.Call(t, testHandler.DeleteWorkspace, request).Want(http.StatusNoContent)
+	for _, table := range []string{"record", "collection_field", "collection"} {
+		var count int
+		dbfx.QueryRow(t, `SELECT COUNT(*) FROM `+table+` WHERE workspace_id = $1`, targetWorkspaceID).Scan(&count)
+		if count != 0 {
+			t.Fatalf("target %s rows = %d, want 0 after workspace delete", table, count)
+		}
+	}
 
 	for table, predicate := range map[string]string{
+		"collection":                   "workspace_id",
+		"collection_field":             "workspace_id",
 		"workspace":                    "id",
 		"issue":                        "workspace_id",
 		"comment":                      "workspace_id",
 		"inbox_item":                   "workspace_id",
+		"record":                       "workspace_id",
 		"runtime_profile":              "workspace_id",
 		"task_usage_hourly_dirty":      "workspace_id",
 		"channel_media_pending_object": "workspace_id",

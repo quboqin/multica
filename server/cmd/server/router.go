@@ -1861,6 +1861,23 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 			// Assignee frequency
 			r.Get("/api/assignee-frequency", h.GetAssigneeFrequency)
 
+			// Cortex collection/record slice. Every handler repeats the human
+			// actor and feature checks so direct test/internal calls fail closed.
+			r.Route("/api/collections", func(r chi.Router) {
+				r.Use(handler.RequireHumanActor)
+				r.Get("/", h.ListCollections)
+				r.Post("/", h.CreateCollection)
+				r.Route("/{collectionId}", func(r chi.Router) {
+					r.Get("/", h.GetCollection)
+					r.Post("/records/query", h.QueryCollectionRecords)
+					r.Post("/records", h.CreateCollectionRecord)
+					r.Route("/records/{recordId}", func(r chi.Router) {
+						r.Get("/", h.GetCollectionRecord)
+						r.Patch("/", h.UpdateCollectionRecord)
+					})
+				})
+			})
+
 			// Issues
 			r.Route("/api/issues", func(r chi.Router) {
 				r.Get("/limit-usage", h.GetIssueLimitUsage)

@@ -3,6 +3,7 @@ import { createMemoryRouter, Outlet, useMatches } from "react-router-dom";
 import type { RouteObject } from "react-router-dom";
 import { IssueDetailPage } from "./pages/issue-detail-page";
 import { ProjectDetailPage } from "./pages/project-detail-page";
+import { CollectionDetailPage } from "./pages/collection-detail-page";
 import { AutopilotDetailPage } from "./pages/autopilot-detail-page";
 import { SkillDetailPage } from "./pages/skill-detail-page";
 import { AgentDetailPage } from "./pages/agent-detail-page";
@@ -15,6 +16,7 @@ import {
 import { AttachmentPreviewRoute } from "./pages/attachment-preview-page";
 import { IssuesPage } from "@multica/views/issues/components";
 import { ProjectsPage } from "@multica/views/projects/components";
+import { CollectionsPage } from "@multica/views/collections";
 import { DashboardPage } from "@multica/views/dashboard";
 import { AutopilotsPage } from "@multica/views/autopilots/components";
 import { MyIssuesPage } from "@multica/views/my-issues";
@@ -141,6 +143,16 @@ export const appRoutes: RouteObject[] = [
             path: "projects",
             element: <ProjectsPage />,
             handle: { title: "Projects" },
+          },
+          {
+            path: "collections",
+            element: <CollectionsPage />,
+            handle: { title: "Collections" },
+          },
+          {
+            path: "collections/:id",
+            element: <CollectionDetailPage />,
+            handle: { title: "Collection" },
           },
           {
             path: "projects/:id",

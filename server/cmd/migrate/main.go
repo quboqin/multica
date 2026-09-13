@@ -303,6 +303,15 @@ var concurrentIndexCleanups = map[string]string{
 	"459_chat_message_assistant_task_index":                     "idx_chat_message_assistant_task",
 	"460_agent_task_queue_autopilot_run_created_at_index":       "idx_agent_task_queue_autopilot_run_created_at",
 	"465_agent_task_queue_chat_with_session_index":              "idx_agent_task_queue_chat_with_session_created_at",
+	"467_collection_id_index":                                   "collection_id_uidx",
+	"468_collection_field_id_index":                             "collection_field_id_uidx",
+	"469_record_id_index":                                       "record_id_uidx",
+	"470_collection_create_index":                               "collection_create_uidx",
+	"471_record_create_index":                                   "record_create_uidx",
+	"472_collection_field_name_index":                           "collection_field_name_uidx",
+	"473_collection_page_index":                                 "collection_page_idx",
+	"474_collection_field_page_index":                           "collection_field_page_idx",
+	"475_record_page_index":                                     "record_page_idx",
 }
 
 // concurrentDownIndexCleanups covers every migration whose down direction
@@ -347,7 +356,7 @@ var preMigrationHooks = func() map[string]preMigrationHook {
 }()
 
 var preRollbackHooks = func() map[string]preMigrationHook {
-	hooks := make(map[string]preMigrationHook, len(concurrentDownIndexCleanups)+len(sourceContextMigrationVersions)+1)
+	hooks := make(map[string]preMigrationHook, len(concurrentDownIndexCleanups)+len(sourceContextMigrationVersions)+len(collectionMigrationVersions)+1)
 	for version, index := range concurrentDownIndexCleanups {
 		hooks[version] = cleanupInvalidConcurrentIndexHook(index)
 	}
@@ -356,6 +365,12 @@ var preRollbackHooks = func() map[string]preMigrationHook {
 	// partially applied version fails before dropping its first live index.
 	for _, version := range sourceContextMigrationVersions {
 		hooks[version] = ensureSourceContextRollbackSafe
+	}
+	// Any T2 rollback step can weaken isolation or remove an index before the
+	// table-creation migration is reached. Refuse the entire chain at its first
+	// pending step whenever collection data exists.
+	for _, version := range collectionMigrationVersions {
+		hooks[version] = ensureCollectionRollbackSafe
 	}
 	hooks["430_channel_outbound_message_binding_index"] = refuseChannelChatRouteHistoryRollback
 	return hooks
@@ -370,6 +385,21 @@ var sourceContextMigrationVersions = []string{
 	"412_issue_source_context_object_intent_key_index",
 	"413_issue_source_context_object_intent_due_index",
 	"414_issue_source_context_object_intent_context_index",
+}
+
+var collectionMigrationVersions = []string{
+	"466_collections",
+	"467_collection_id_index",
+	"468_collection_field_id_index",
+	"469_record_id_index",
+	"470_collection_create_index",
+	"471_record_create_index",
+	"472_collection_field_name_index",
+	"473_collection_page_index",
+	"474_collection_field_page_index",
+	"475_record_page_index",
+	"476_collection_primary_keys",
+	"477_collection_rls",
 }
 
 type rowQuerier interface {
@@ -455,6 +485,21 @@ func ensureSourceContextRollbackSafe(ctx context.Context, pool *pgxpool.Pool) er
 	}
 	if dataExists {
 		return errors.New("cannot roll back issue source context while captured data or stored objects still exist; remove source-context captures and their stored objects through application cleanup, then retry")
+	}
+	return nil
+}
+
+func ensureCollectionRollbackSafe(ctx context.Context, pool *pgxpool.Pool) error {
+	var dataExists bool
+	if err := pool.QueryRow(ctx, `
+		SELECT EXISTS (SELECT 1 FROM collection)
+		    OR EXISTS (SELECT 1 FROM collection_field)
+		    OR EXISTS (SELECT 1 FROM record)
+	`).Scan(&dataExists); err != nil {
+		return fmt.Errorf("inspect collection rollback ownership: %w", err)
+	}
+	if dataExists {
+		return errors.New("cannot roll back collection migrations while collection data exists; disable the feature and retain the compatibility cleanup path")
 	}
 	return nil
 }

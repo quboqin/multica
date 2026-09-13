@@ -233,6 +233,25 @@ import type {
   CreateCloudRuntimeNodeRequest,
   ListCloudRuntimeNodesParams,
 } from "../runtimes/cloud-runtime";
+import type {
+  CollectionDetail,
+  CollectionPage,
+  CollectionRecord,
+  CollectionRecordPage,
+  CreateCollectionInput,
+  CreateCollectionRecordInput,
+  CreateCollectionRecordResult,
+  CreateCollectionResult,
+  UpdateCollectionRecordInput,
+} from "../types/collection";
+import {
+  CollectionDetailSchema,
+  CollectionPageSchema,
+  CollectionRecordPageSchema,
+  CollectionRecordResultSchema,
+  CreateCollectionRecordResultSchema,
+  CreateCollectionResultSchema,
+} from "../collections/schemas";
 import { type Logger, noopLogger } from "../logger";
 import { createRequestId, createSafeId } from "../utils";
 import { getCurrentSlug } from "../platform/workspace-storage";
@@ -2565,6 +2584,178 @@ export class ApiClient {
     return parseWithFallback<AppConfigResponse>(raw, AppConfigSchema, EMPTY_APP_CONFIG, {
       endpoint: "GET /api/config",
     });
+  }
+
+  async listCollections(
+    workspaceSlug: string,
+    page: { limit?: number; cursor?: string | null } = {},
+    signal?: AbortSignal,
+  ): Promise<CollectionPage> {
+    const search = new URLSearchParams();
+    if (page.limit !== undefined) search.set("limit", String(page.limit));
+    if (page.cursor) search.set("cursor", page.cursor);
+    const suffix = search.size > 0 ? `?${search.toString()}` : "";
+    const raw = await this.fetch<unknown>(`/api/collections${suffix}`, {
+      headers: workspaceHeader(workspaceSlug),
+      signal,
+    });
+    const parsed = parseWithFallback<CollectionPage | null>(
+      raw,
+      CollectionPageSchema,
+      null,
+      { endpoint: "GET /api/collections" },
+    );
+    if (!parsed) throw new Error("Invalid collection list response");
+    return parsed;
+  }
+
+  async createCollection(
+    input: CreateCollectionInput,
+    workspaceSlug: string,
+  ): Promise<CreateCollectionResult> {
+    const raw = await this.fetch<unknown>("/api/collections", {
+      method: "POST",
+      headers: workspaceHeader(workspaceSlug),
+      body: JSON.stringify({
+        client_request_id: input.clientRequestId,
+        name: input.name,
+        fields: input.fields,
+      }),
+    });
+    const parsed = parseWithFallback<CreateCollectionResult | null>(
+      raw,
+      CreateCollectionResultSchema,
+      null,
+      { endpoint: "POST /api/collections" },
+    );
+    if (!parsed?.collection.id) throw new Error("Invalid collection create response");
+    return parsed;
+  }
+
+  async getCollection(
+    collectionId: string,
+    workspaceSlug: string,
+    signal?: AbortSignal,
+  ): Promise<CollectionDetail> {
+    const raw = await this.fetch<unknown>(`/api/collections/${encodeURIComponent(collectionId)}`, {
+      headers: workspaceHeader(workspaceSlug),
+      signal,
+    });
+    const parsed = parseWithFallback<CollectionDetail | null>(raw, CollectionDetailSchema, null, {
+      endpoint: "GET /api/collections/{collectionId}",
+    });
+    if (!parsed || parsed.collection.id !== collectionId) {
+      throw new Error("Invalid collection detail response");
+    }
+    return parsed;
+  }
+
+  async queryCollectionRecords(
+    collectionId: string,
+    page: { limit?: number; cursor?: string | null },
+    workspaceSlug: string,
+    signal?: AbortSignal,
+  ): Promise<CollectionRecordPage> {
+    const raw = await this.fetch<unknown>(
+      `/api/collections/${encodeURIComponent(collectionId)}/records/query`,
+      {
+        method: "POST",
+        headers: workspaceHeader(workspaceSlug),
+        signal,
+        body: JSON.stringify({ page: { limit: page.limit, cursor: page.cursor ?? null } }),
+      },
+    );
+    const parsed = parseWithFallback<CollectionRecordPage | null>(
+      raw,
+      CollectionRecordPageSchema,
+      null,
+      { endpoint: "POST /api/collections/{collectionId}/records/query" },
+    );
+    if (!parsed || parsed.records.some((record) => record.collectionId !== collectionId)) {
+      throw new Error("Invalid collection records response");
+    }
+    return parsed;
+  }
+
+  async createCollectionRecord(
+    collectionId: string,
+    input: CreateCollectionRecordInput,
+    workspaceSlug: string,
+  ): Promise<CreateCollectionRecordResult> {
+    const raw = await this.fetch<unknown>(
+      `/api/collections/${encodeURIComponent(collectionId)}/records`,
+      {
+        method: "POST",
+        headers: workspaceHeader(workspaceSlug),
+        body: JSON.stringify({
+          client_request_id: input.clientRequestId,
+          title: input.title,
+          fields: input.fields,
+        }),
+      },
+    );
+    const parsed = parseWithFallback<CreateCollectionRecordResult | null>(
+      raw,
+      CreateCollectionRecordResultSchema,
+      null,
+      { endpoint: "POST /api/collections/{collectionId}/records" },
+    );
+    if (!parsed?.record.id || parsed.record.collectionId !== collectionId) {
+      throw new Error("Invalid collection record create response");
+    }
+    return parsed;
+  }
+
+  async getCollectionRecord(
+    collectionId: string,
+    recordId: string,
+    workspaceSlug: string,
+    signal?: AbortSignal,
+  ): Promise<CollectionRecord> {
+    const raw = await this.fetch<unknown>(
+      `/api/collections/${encodeURIComponent(collectionId)}/records/${encodeURIComponent(recordId)}`,
+      { headers: workspaceHeader(workspaceSlug), signal },
+    );
+    const parsed = parseWithFallback<CollectionRecord | null>(
+      raw,
+      CollectionRecordResultSchema,
+      null,
+      { endpoint: "GET /api/collections/{collectionId}/records/{recordId}" },
+    );
+    if (!parsed || parsed.id !== recordId || parsed.collectionId !== collectionId) {
+      throw new Error("Invalid collection record response");
+    }
+    return parsed;
+  }
+
+  async updateCollectionRecord(
+    collectionId: string,
+    recordId: string,
+    input: UpdateCollectionRecordInput,
+    workspaceSlug: string,
+  ): Promise<CollectionRecord> {
+    const change =
+      input.change.op === "set"
+        ? { field_id: input.change.fieldId, op: "set", value: input.change.value }
+        : { field_id: input.change.fieldId, op: "clear" };
+    const raw = await this.fetch<unknown>(
+      `/api/collections/${encodeURIComponent(collectionId)}/records/${encodeURIComponent(recordId)}`,
+      {
+        method: "PATCH",
+        headers: workspaceHeader(workspaceSlug),
+        body: JSON.stringify({ expected_revision: input.expectedRevision, change }),
+      },
+    );
+    const parsed = parseWithFallback<CollectionRecord | null>(
+      raw,
+      CollectionRecordResultSchema,
+      null,
+      { endpoint: "PATCH /api/collections/{collectionId}/records/{recordId}" },
+    );
+    if (!parsed || parsed.id !== recordId || parsed.collectionId !== collectionId) {
+      throw new Error("Invalid collection record update response");
+    }
+    return parsed;
   }
 
   // Workspaces

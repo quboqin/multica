@@ -44,6 +44,7 @@ export function DataViewCellEditor<Row>({
   onAccepted,
   saveLabel,
   clearLabel,
+  hideClearWhenUnavailable = false,
 }: {
   source: CellSource<Row>;
   field: DataSourceField<Row>;
@@ -51,6 +52,7 @@ export function DataViewCellEditor<Row>({
   onAccepted?: () => void | Promise<void>;
   saveLabel: string;
   clearLabel: string;
+  hideClearWhenUnavailable?: boolean;
 }) {
   const authoritative = field.value(row);
   const authoritativeEditorValueRef = useRef(editorValue(field, row));
@@ -192,16 +194,18 @@ export function DataViewCellEditor<Row>({
       <button type="submit" disabled={!canSet || pending}>
         {saveLabel}
       </button>
-      <button
-        type="button"
-        disabled={!canClear || pending}
-        onClick={() => {
-          setDraft("");
-          void commit({ op: "clear" });
-        }}
-      >
-        {clearLabel}
-      </button>
+      {!hideClearWhenUnavailable || canClear ? (
+        <button
+          type="button"
+          disabled={!canClear || pending}
+          onClick={() => {
+            setDraft("");
+            void commit({ op: "clear" });
+          }}
+        >
+          {clearLabel}
+        </button>
+      ) : null}
       {error && <span role="alert">{error}</span>}
     </form>
   );
