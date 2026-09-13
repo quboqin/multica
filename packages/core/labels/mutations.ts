@@ -238,6 +238,31 @@ export function useAttachLabelToIssue() {
   });
 }
 
+/** Variable issue-id counterpart used by shared table adapters. */
+export function useDetachLabelFromIssue() {
+  const qc = useQueryClient();
+  const wsId = useWorkspaceId();
+  return useMutation({
+    mutationFn: ({ issueId, labelId }: { issueId: string; labelId: string }) =>
+      api.detachLabel(issueId, labelId),
+    onSuccess: (data: IssueLabelsResponse, { issueId }) => {
+      if (data && Array.isArray(data.labels)) {
+        onIssueLabelsChanged(
+          qc,
+          wsId,
+          issueId,
+          data.labels,
+          data.issue_revision,
+        );
+      }
+    },
+    onSettled: (_data, _error, { issueId }) => {
+      qc.invalidateQueries({ queryKey: labelKeys.byIssue(wsId, issueId) });
+      invalidateIssueLabelDerivatives(qc, wsId);
+    },
+  });
+}
+
 export function useDetachLabel(issueId: string) {
   const qc = useQueryClient();
   const wsId = useWorkspaceId();

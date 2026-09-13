@@ -64,7 +64,13 @@ describe("createIssueTableDataSource", () => {
       }),
     );
     setApiInstance({ listIssueTableRows } as unknown as ApiClient);
-    const source = createIssueTableDataSource();
+    const source = createIssueTableDataSource({ workspaceId: "ws-1" });
+
+    expect(source.identity).toEqual({
+      workspaceId: "ws-1",
+      namespace: "issues",
+      sourceId: "tasks",
+    });
 
     const result = await source.read(
       {
@@ -134,7 +140,11 @@ describe("createIssueTableDataSource", () => {
       queryFingerprint: "groups-fingerprint",
     });
     await expect(
-      source.execute({ issue, updates: { title: "Renamed" } }),
+      source.execute({
+        row: { issue, direct_child_count: 0 },
+        fieldId: "title",
+        change: { op: "set", value: "Renamed" },
+      }),
     ).resolves.toEqual({ status: "accepted" });
     expect(execute).toHaveBeenCalledWith({
       issue,
@@ -147,14 +157,149 @@ describe("createIssueTableDataSource", () => {
 
     expect(source.capabilities.writable).toBe(false);
     const result = await source.execute({
-      issue: makeIssue(),
-      updates: { title: "Renamed" },
+      row: { issue: makeIssue(), direct_child_count: 0 },
+      fieldId: "title",
+      change: { op: "set", value: "Renamed" },
     });
 
     expect(result.status).toBe("failed");
     if (result.status === "failed") {
       expect(result.error.message).toBe("This issue data source is read-only");
     }
+  });
+
+  it("projects stable system and custom fields with separate set/clear gates", () => {
+    const issue = makeIssue();
+    issue.properties = { archived: "old", active: false };
+    const source = createIssueTableDataSource({
+      workspaceId: "ws-1",
+      fields: [
+        {
+          id: "archived",
+          workspace_id: "ws-1",
+          name: "Archived",
+          type: "text",
+          config: {},
+          archived: true,
+          position: 1,
+          created_at: "2026-01-01T00:00:00Z",
+          updated_at: "2026-01-01T00:00:00Z",
+        },
+        {
+          id: "active",
+          workspace_id: "ws-1",
+          name: "Active flag",
+          type: "checkbox",
+          config: {},
+          archived: false,
+          position: 2,
+          created_at: "2026-01-01T00:00:00Z",
+          updated_at: "2026-01-01T00:00:00Z",
+        },
+      ],
+      execute: async () => ({ status: "accepted" }),
+      setProperty: async () => {},
+      clearProperty: async () => {},
+    });
+    const archived = source.fields.find((field) => field.id === "property:archived")!;
+    const active = source.fields.find((field) => field.id === "property:active")!;
+    const identifier = source.fields.find((field) => field.id === "identifier")!;
+
+    const row = { issue, direct_child_count: 0 };
+    expect(archived.canSet(row)).toBe(false);
+    expect(archived.canClear(row)).toBe(true);
+    expect(active.value(row)).toBe(false);
+    expect(active.groupable).toBe(true);
+    expect(identifier.canSet(row)).toBe(false);
+    expect(identifier.canClear(row)).toBe(false);
+  });
+
+  it("routes property set and clear through per-request completion channels", async () => {
+    const issue = makeIssue();
+    issue.properties = { estimate: 3 };
+    const setProperty = vi.fn(async () => {});
+    const clearProperty = vi.fn(async () => {});
+    const source = createIssueTableDataSource({
+      workspaceId: "ws-1",
+      fields: [
+        {
+          id: "estimate",
+          workspace_id: "ws-1",
+          name: "Estimate",
+          type: "number",
+          config: {},
+          archived: false,
+          position: 1,
+          created_at: "2026-01-01T00:00:00Z",
+          updated_at: "2026-01-01T00:00:00Z",
+        },
+      ],
+      execute: vi.fn(async () => ({ status: "accepted" as const })),
+      setProperty,
+      clearProperty,
+    });
+
+    await expect(
+      source.execute({
+        row: { issue, direct_child_count: 0 },
+        fieldId: "property:estimate",
+        change: { op: "set", value: 0 },
+      }),
+    ).resolves.toEqual({ status: "accepted" });
+    await expect(
+      source.execute({
+        row: { issue, direct_child_count: 0 },
+        fieldId: "property:estimate",
+        change: { op: "clear" },
+      }),
+    ).resolves.toEqual({ status: "accepted" });
+    expect(setProperty).toHaveBeenCalledWith({
+      issueId: issue.id,
+      propertyId: "estimate",
+      value: 0,
+    });
+    expect(clearProperty).toHaveBeenCalledWith({
+      issueId: issue.id,
+      propertyId: "estimate",
+    });
+  });
+
+  it("rechecks read-only and clear-only field capabilities at execute time", async () => {
+    const issue = makeIssue();
+    issue.properties = { archived: "legacy" };
+    const clearProperty = vi.fn(async () => {});
+    const source = createIssueTableDataSource({
+      fields: [
+        {
+          id: "archived",
+          workspace_id: "ws-1",
+          name: "Archived",
+          type: "text",
+          config: {},
+          archived: true,
+          position: 1,
+          created_at: "2026-01-01T00:00:00Z",
+          updated_at: "2026-01-01T00:00:00Z",
+        },
+      ],
+      execute: vi.fn(async () => ({ status: "accepted" as const })),
+      clearProperty,
+    });
+
+    const denied = await source.execute({
+      row: { issue, direct_child_count: 0 },
+      fieldId: "property:archived",
+      change: { op: "set", value: "overwrite" },
+    });
+    expect(denied.status).toBe("failed");
+    await expect(
+      source.execute({
+        row: { issue, direct_child_count: 0 },
+        fieldId: "property:archived",
+        change: { op: "clear" },
+      }),
+    ).resolves.toEqual({ status: "accepted" });
+    expect(clearProperty).toHaveBeenCalledTimes(1);
   });
 
   it.each([
@@ -168,8 +313,9 @@ describe("createIssueTableDataSource", () => {
     const source = createIssueTableDataSource({ execute });
 
     const result = await source.execute({
-      issue: makeIssue(),
-      updates: { title: "Renamed" },
+      row: { issue: makeIssue(), direct_child_count: 0 },
+      fieldId: "title",
+      change: { op: "set", value: "Renamed" },
     });
 
     expect(result.status).toBe("failed");

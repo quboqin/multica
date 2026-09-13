@@ -1,5 +1,5 @@
 import type { DataSourceActionResult } from "@multica/core/data-source";
-import type { IssueTableCommand } from "@multica/core/issues/table-data-source";
+import type { IssueTableMutationCommand } from "@multica/core/issues/table-data-source";
 import type { IssueStatusCatalog } from "@multica/core/issue-statuses";
 import type { IssueTableRow } from "@multica/core/types";
 import type { IssueSurfaceActions } from "../surface/actions-context";
@@ -50,7 +50,7 @@ export function createIssueTableCommandExecutor({
   statusCatalog,
   openRunConfirm,
 }: CreateIssueTableCommandExecutorOptions):
-  | ((command: IssueTableCommand) => Promise<IssueTableActionResult>)
+  | ((command: IssueTableMutationCommand) => Promise<IssueTableActionResult>)
   | undefined {
   if (!actions) return undefined;
 

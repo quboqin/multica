@@ -133,15 +133,21 @@ export function CustomPropertyValueInput({
   onOpenChange: controlledOnOpenChange,
   trigger,
   triggerRender,
+  canSet = true,
+  canClear = true,
 }: {
   property: IssueProperty;
   value: IssuePropertyValue | undefined;
-  onChange: (value: IssuePropertyValue | undefined) => void;
+  onChange: (
+    value: IssuePropertyValue | undefined,
+  ) => boolean | void | Promise<boolean | void>;
   defaultOpen?: boolean;
   open?: boolean;
   onOpenChange?: (open: boolean) => void;
   trigger?: React.ReactNode;
   triggerRender?: React.ReactElement<Record<string, unknown>>;
+  canSet?: boolean;
+  canClear?: boolean;
 }) {
   const { t } = useT("issues");
   const [internalOpen, setInternalOpen] = useState(defaultOpen);
@@ -149,8 +155,10 @@ export function CustomPropertyValueInput({
   const setOpen = controlledOnOpenChange ?? setInternalOpen;
   const hasValue = value !== undefined;
 
-  const commit = (next: IssuePropertyValue) => onChange(next);
-  const clear = () => onChange(undefined);
+  const settle = async (result: boolean | void | Promise<boolean | void>) =>
+    (await result) !== false;
+  const commit = (next: IssuePropertyValue) => settle(onChange(next));
+  const clear = () => settle(onChange(undefined));
   const valueTrigger = trigger ?? (
     <CustomPropertyValueDisplay property={property} value={value} />
   );
@@ -168,16 +176,20 @@ export function CustomPropertyValueInput({
     <PickerItem
       emptyValue
       selected={!hasValue}
+      disabled={!canClear || !hasValue}
       onClick={() => {
-        clear();
-        setOpen(false);
+        void clear().then((accepted) => {
+          if (accepted) setOpen(false);
+        });
       }}
     >
       <span className="text-muted-foreground">{t(($) => $.pickers.custom_property.none)}</span>
     </PickerItem>
   );
 
-  const readOnly = isCustomPropertyReadOnly(property, value);
+  const readOnly = !canSet || isCustomPropertyReadOnly(property, value);
+
+  if (readOnly && (!canClear || !hasValue)) return <>{valueTrigger}</>;
 
   if (readOnly) {
     return (
@@ -215,9 +227,11 @@ export function CustomPropertyValueInput({
             <PickerItem
               key={option.id}
               selected={value === option.id}
+              disabled={!canSet}
               onClick={() => {
-                commit(option.id);
-                setOpen(false);
+                void commit(option.id).then((accepted) => {
+                  if (accepted) setOpen(false);
+                });
               }}
             >
               <span className="size-2.5 shrink-0 rounded-full" style={{ backgroundColor: option.color }} />
@@ -234,8 +248,8 @@ export function CustomPropertyValueInput({
         const next = selected.includes(optionId)
           ? selected.filter((id) => id !== optionId)
           : [...selected, optionId];
-        if (next.length === 0) clear();
-        else commit(next);
+        if (next.length === 0) return clear();
+        return commit(next);
       };
       return (
         <PropertyPicker
@@ -251,7 +265,12 @@ export function CustomPropertyValueInput({
             <PickerItem
               key={option.id}
               selected={selected.includes(option.id)}
-              onClick={() => toggle(option.id)}
+              disabled={
+                selected.includes(option.id)
+                  ? selected.length === 1 && !canClear
+                  : !canSet
+              }
+              onClick={() => void toggle(option.id)}
             >
               <span className="size-2.5 shrink-0 rounded-full" style={{ backgroundColor: option.color }} />
               <span className="truncate">{option.name}</span>
@@ -272,6 +291,7 @@ export function CustomPropertyValueInput({
           trigger={valueTrigger}
           triggerRender={triggerRender}
           emptyRow={emptyRow}
+          canSet={canSet}
         />
       );
     case "date": {
@@ -288,9 +308,11 @@ export function CustomPropertyValueInput({
             {/* Empty value above the calendar — same position as DateOnlyPicker. */}
             <button
               type="button"
+              disabled={!canClear || !hasValue}
               onClick={() => {
-                clear();
-                setOpen(false);
+                void clear().then((accepted) => {
+                  if (accepted) setOpen(false);
+                });
               }}
               className="flex w-full items-center gap-3 border-b px-3 py-2 text-left text-body transition-colors hover:bg-accent"
             >
@@ -302,10 +324,11 @@ export function CustomPropertyValueInput({
             <Calendar
               mode="single"
               selected={date}
+              disabled={!canSet}
               onSelect={(d: Date | undefined) => {
-                if (d) commit(toDateOnly(d));
-                else clear();
-                setOpen(false);
+                void (d ? commit(toDateOnly(d)) : clear()).then((accepted) => {
+                  if (accepted) setOpen(false);
+                });
               }}
             />
           </PopoverContent>
@@ -324,18 +347,22 @@ export function CustomPropertyValueInput({
           {emptyRow}
           <PickerItem
             selected={value === true}
+            disabled={!canSet}
             onClick={() => {
-              commit(true);
-              setOpen(false);
+              void commit(true).then((accepted) => {
+                if (accepted) setOpen(false);
+              });
             }}
           >
             {t(($) => $.pickers.custom_property.true_label)}
           </PickerItem>
           <PickerItem
             selected={value === false}
+            disabled={!canSet}
             onClick={() => {
-              commit(false);
-              setOpen(false);
+              void commit(false).then((accepted) => {
+                if (accepted) setOpen(false);
+              });
             }}
           >
             {t(($) => $.pickers.custom_property.false_label)}
@@ -354,6 +381,8 @@ export function CustomPropertyValueInput({
           emptyLabel={emptyLabel}
           trigger={valueTrigger}
           triggerRender={triggerRender}
+          canSet={canSet}
+          canClear={canClear && hasValue}
         />
       );
   }
@@ -370,16 +399,20 @@ function TextishPropertyEditor({
   emptyLabel,
   trigger,
   triggerRender,
+  canSet,
+  canClear,
 }: {
   property: IssueProperty;
   value: IssuePropertyValue | undefined;
   open: boolean;
   onOpenChange: (v: boolean) => void;
-  onCommit: (next: IssuePropertyValue) => void;
-  onClear: () => void;
+  onCommit: (next: IssuePropertyValue) => Promise<boolean>;
+  onClear: () => Promise<boolean>;
   emptyLabel: React.ReactNode;
   trigger?: React.ReactNode;
   triggerRender?: React.ReactElement<Record<string, unknown>>;
+  canSet: boolean;
+  canClear: boolean;
 }) {
   const { t } = useT("issues");
   const [draft, setDraft] = useState("");
@@ -395,21 +428,24 @@ function TextishPropertyEditor({
         ? t(($) => $.pickers.custom_property.number_placeholder)
         : t(($) => $.pickers.custom_property.value_placeholder);
 
-  const submit = () => {
+  const submit = async () => {
     const trimmed = draft.trim();
     if (!trimmed) {
-      if (value !== undefined) onClear();
-      onOpenChange(false);
+      if (value === undefined || (canClear && (await onClear()))) {
+        onOpenChange(false);
+      }
       return;
     }
+    if (!canSet) return;
+    let accepted: boolean;
     if (property.type === "number") {
       const parsed = Number(trimmed);
       if (Number.isNaN(parsed)) return;
-      onCommit(parsed);
+      accepted = await onCommit(parsed);
     } else {
-      onCommit(trimmed);
+      accepted = await onCommit(trimmed);
     }
-    onOpenChange(false);
+    if (accepted) onOpenChange(false);
   };
 
   return (
@@ -428,7 +464,7 @@ function TextishPropertyEditor({
         <form
           onSubmit={(event) => {
             event.preventDefault();
-            submit();
+            void submit();
           }}
           className="flex items-center gap-2"
         >

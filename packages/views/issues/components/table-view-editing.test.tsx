@@ -219,12 +219,14 @@ function Harness({
   childProgressMap,
   surfaceKey,
   onCreateIssue = () => {},
+  readOnly = false,
 }: {
   childProgressMap: Map<string, ChildProgress>;
   surfaceKey: string;
   onCreateIssue?: (defaults: IssueCreateDefaults) => void;
+  readOnly?: boolean;
 }) {
-  return (
+  const table = (
     <ViewStoreProvider store={getIssueSurfaceViewStore(surfaceKey)}>
       <IssueSurfaceSelectionProvider selection={selection}>
         <TableView
@@ -244,6 +246,11 @@ function Harness({
         />
       </IssueSurfaceSelectionProvider>
     </ViewStoreProvider>
+  );
+  return readOnly ? table : (
+    <IssueSurfaceActionsProvider actions={writableSurfaceActions}>
+      {table}
+    </IssueSurfaceActionsProvider>
   );
 }
 
@@ -445,6 +452,76 @@ describe("TableView cell editors under data refresh", () => {
       parent_issue_identifier: "MUL-a",
       project_id: "project-1",
     });
+  });
+
+  it("makes every row write entry read-only without an actions provider", async () => {
+    const onCreateIssue = vi.fn();
+    const setIssueProperty = vi.fn();
+    const unsetIssueProperty = vi.fn();
+    const issue = {
+      ...makeIssue("a", "Alpha task", "todo"),
+      properties: { "prop-1": "legacy" },
+    };
+    serverIssues = [issue];
+    setApiInstance({
+      listProperties: async () => ({
+        properties: [
+          {
+            id: "prop-1",
+            workspace_id: "ws-1",
+            name: "Notes",
+            type: "text",
+            config: {},
+            position: 1,
+            archived: false,
+            created_at: "2026-01-01T00:00:00Z",
+            updated_at: "2026-01-01T00:00:00Z",
+          },
+        ],
+      }),
+      listMembers: async () => [],
+      listAgents: async () => [],
+      listSquads: async () => [],
+      getAssigneeFrequency: async () => [],
+      listIssueStatuses: async () => ({ statuses: [] }),
+      listIssueTableRows: async () => ({
+        query_fingerprint: "test",
+        group_key: null,
+        parent_id: null,
+        total: 1,
+        rows: [{ issue, direct_child_count: 0 }],
+        branch_total: 1,
+        next_cursor: null,
+      }),
+      setIssueProperty,
+      unsetIssueProperty,
+    } as unknown as ApiClient);
+    const surfaceKey = `test-read-only-${Math.floor(Math.random() * 1e9)}`;
+    getIssueSurfaceViewStore(surfaceKey)
+      .getState()
+      .toggleTableColumn("property:prop-1");
+
+    renderWithI18n(
+      <QueryClientProvider client={queryClient}>
+        <Harness
+          readOnly
+          childProgressMap={new Map()}
+          surfaceKey={surfaceKey}
+          onCreateIssue={onCreateIssue}
+        />
+      </QueryClientProvider>,
+    );
+
+    const row = (await screen.findByText("MUL-a")).closest("tr")!;
+    expect(
+      within(row).queryByRole("button", { name: "Create sub-issue" }),
+    ).toBeNull();
+    expect(within(row).queryByRole("button", { name: "Rename" })).toBeNull();
+    expect(within(row).queryByRole("button", { name: /Todo/ })).toBeNull();
+    expect(within(row).getByText("legacy")).toBeInTheDocument();
+    expect(setIssueProperty).not.toHaveBeenCalled();
+    expect(unsetIssueProperty).not.toHaveBeenCalled();
+    expect(onCreateIssue).not.toHaveBeenCalled();
   });
 
   it("navigates in place on plain title and row clicks; modifiers open tabs", async () => {
