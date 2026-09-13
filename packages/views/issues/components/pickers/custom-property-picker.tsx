@@ -135,6 +135,7 @@ export function CustomPropertyValueInput({
   triggerRender,
   canSet = true,
   canClear = true,
+  editorSessionKey,
 }: {
   property: IssueProperty;
   value: IssuePropertyValue | undefined;
@@ -148,6 +149,8 @@ export function CustomPropertyValueInput({
   triggerRender?: React.ReactElement<Record<string, unknown>>;
   canSet?: boolean;
   canClear?: boolean;
+  /** Remounts stateful text editors when a controlled cell session changes. */
+  editorSessionKey?: string | number;
 }) {
   const { t } = useT("issues");
   const [internalOpen, setInternalOpen] = useState(defaultOpen);
@@ -372,6 +375,7 @@ export function CustomPropertyValueInput({
     default:
       return (
         <TextishPropertyEditor
+          key={editorSessionKey}
           property={property}
           value={value}
           open={open}

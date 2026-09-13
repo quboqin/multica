@@ -151,23 +151,49 @@ export function useSetIssueProperty() {
     },
     scope: { id: `issue-properties:${wsId}` },
     mutationKey: ["issue-properties", wsId],
-    onMutate: async ({ issueId, propertyId, value }) => {
+    onMutate: async ({
+      issueId,
+      propertyId,
+      value,
+      workspaceContext,
+    }) => {
+      if (workspaceContext) assertWorkspaceRequestContext(workspaceContext);
+      const mutationWsId = workspaceContext?.workspaceId ?? wsId;
       // A response snapshotted before this write must not land after the
       // optimistic patch and revert any denormalized issue projection.
-      await cancelIssuePropertyMutationQueries(qc, wsId, issueId);
-      const prev = readIssueProperties(qc, wsId, issueId);
-      patchIssueProperties(qc, wsId, issueId, { ...(prev ?? {}), [propertyId]: value });
-      return { prevValue: prev?.[propertyId], hadBag: prev !== undefined, issueId, propertyId };
+      await cancelIssuePropertyMutationQueries(qc, mutationWsId, issueId);
+      const prev = readIssueProperties(qc, mutationWsId, issueId);
+      patchIssueProperties(qc, mutationWsId, issueId, {
+        ...(prev ?? {}),
+        [propertyId]: value,
+      });
+      return {
+        prevValue: prev?.[propertyId],
+        hadBag: prev !== undefined,
+        issueId,
+        propertyId,
+        workspaceId: mutationWsId,
+      };
     },
     onError: (_err, _vars, ctx) => {
       if (!ctx) return;
-      rollbackSingleKey(qc, wsId, ctx);
+      rollbackSingleKey(qc, ctx.workspaceId, ctx);
     },
-    onSuccess: (data, { issueId }) => {
-      onIssuePropertiesChanged(qc, wsId, issueId, data.properties ?? {}, data.issue_revision);
+    onSuccess: (data, { issueId, workspaceContext }, ctx) => {
+      const mutationWsId =
+        ctx?.workspaceId ?? workspaceContext?.workspaceId ?? wsId;
+      onIssuePropertiesChanged(
+        qc,
+        mutationWsId,
+        issueId,
+        data.properties ?? {},
+        data.issue_revision,
+      );
     },
-    onSettled: (_data, _err, { issueId }) => {
-      settleIssuePropertyCaches(qc, wsId, issueId);
+    onSettled: (_data, _err, { issueId, workspaceContext }, ctx) => {
+      const mutationWsId =
+        ctx?.workspaceId ?? workspaceContext?.workspaceId ?? wsId;
+      settleIssuePropertyCaches(qc, mutationWsId, issueId);
     },
   });
 }
@@ -192,25 +218,43 @@ export function useUnsetIssueProperty() {
     },
     scope: { id: `issue-properties:${wsId}` },
     mutationKey: ["issue-properties", wsId],
-    onMutate: async ({ issueId, propertyId }) => {
-      await cancelIssuePropertyMutationQueries(qc, wsId, issueId);
-      const prev = readIssueProperties(qc, wsId, issueId);
+    onMutate: async ({ issueId, propertyId, workspaceContext }) => {
+      if (workspaceContext) assertWorkspaceRequestContext(workspaceContext);
+      const mutationWsId = workspaceContext?.workspaceId ?? wsId;
+      await cancelIssuePropertyMutationQueries(qc, mutationWsId, issueId);
+      const prev = readIssueProperties(qc, mutationWsId, issueId);
       if (prev) {
         const next = { ...prev };
         delete next[propertyId];
-        patchIssueProperties(qc, wsId, issueId, next);
+        patchIssueProperties(qc, mutationWsId, issueId, next);
       }
-      return { prevValue: prev?.[propertyId], hadBag: prev !== undefined, issueId, propertyId };
+      return {
+        prevValue: prev?.[propertyId],
+        hadBag: prev !== undefined,
+        issueId,
+        propertyId,
+        workspaceId: mutationWsId,
+      };
     },
     onError: (_err, _vars, ctx) => {
       if (!ctx) return;
-      rollbackSingleKey(qc, wsId, ctx);
+      rollbackSingleKey(qc, ctx.workspaceId, ctx);
     },
-    onSuccess: (data, { issueId }) => {
-      onIssuePropertiesChanged(qc, wsId, issueId, data.properties ?? {}, data.issue_revision);
+    onSuccess: (data, { issueId, workspaceContext }, ctx) => {
+      const mutationWsId =
+        ctx?.workspaceId ?? workspaceContext?.workspaceId ?? wsId;
+      onIssuePropertiesChanged(
+        qc,
+        mutationWsId,
+        issueId,
+        data.properties ?? {},
+        data.issue_revision,
+      );
     },
-    onSettled: (_data, _err, { issueId }) => {
-      settleIssuePropertyCaches(qc, wsId, issueId);
+    onSettled: (_data, _err, { issueId, workspaceContext }, ctx) => {
+      const mutationWsId =
+        ctx?.workspaceId ?? workspaceContext?.workspaceId ?? wsId;
+      settleIssuePropertyCaches(qc, mutationWsId, issueId);
     },
   });
 }

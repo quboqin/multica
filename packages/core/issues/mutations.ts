@@ -144,7 +144,9 @@ export function useUpdateIssue() {
         ? api.moveIssue(id, payload, workspaceContext.workspaceSlug)
         : api.moveIssue(id, payload);
     },
-    onMutate: ({ id, move_intent: _moveIntent, workspaceContext: _workspaceContext, ...data }) => {
+    onMutate: ({ id, move_intent: _moveIntent, workspaceContext, ...data }) => {
+      if (workspaceContext) assertWorkspaceRequestContext(workspaceContext);
+      const mutationWsId = workspaceContext?.workspaceId ?? wsId;
       // suppress_run is a write-time control field, not an Issue column.
       // description_base is merge metadata, while description itself
       // is resolved against that base on the server and therefore is not safe
@@ -163,23 +165,31 @@ export function useUpdateIssue() {
       // cache update happens in the same tick as mutate(). Awaiting would
       // yield to the event loop, letting @dnd-kit reset its visual state
       // before the optimistic update lands.
-      qc.cancelQueries({ queryKey: issueKeys.list(wsId) });
-      qc.cancelQueries({ queryKey: issueKeys.myAll(wsId) });
-      qc.cancelQueries({ queryKey: issueKeys.flatAll(wsId) });
-      qc.cancelQueries({ queryKey: issueKeys.tableAll(wsId) });
+      qc.cancelQueries({ queryKey: issueKeys.list(mutationWsId) });
+      qc.cancelQueries({ queryKey: issueKeys.myAll(mutationWsId) });
+      qc.cancelQueries({ queryKey: issueKeys.flatAll(mutationWsId) });
+      qc.cancelQueries({ queryKey: issueKeys.tableAll(mutationWsId) });
       if (patch.status !== undefined || patch.priority !== undefined) {
-        qc.cancelQueries({ queryKey: inboxKeys.all(wsId) });
+        qc.cancelQueries({ queryKey: inboxKeys.all(mutationWsId) });
       }
-      const prevDetail = qc.getQueryData<Issue>(issueKeys.detail(wsId, id));
+      const prevDetail = qc.getQueryData<Issue>(
+        issueKeys.detail(mutationWsId, id),
+      );
       // The coordinator owns the cross-cache rules: surgical patch/rebucket
       // where the card is loaded and still belongs, surgical REMOVE where the
       // change moves it off a filtered surface, stale-key bookkeeping where
       // the server result may have drifted (invalidated on settle, not here —
       // a mid-flight refetch would stomp the optimistic state).
-      const change = applyIssueChange(qc, wsId, id, patch as Partial<Issue>, {
-        changed: issueChangedDims(patch, prevDetail),
-        baseIssue: prevDetail,
-      });
+      const change = applyIssueChange(
+        qc,
+        mutationWsId,
+        id,
+        patch as Partial<Issue>,
+        {
+          changed: issueChangedDims(patch, prevDetail),
+          baseIssue: prevDetail,
+        },
+      );
 
       // Resolve parent_issue_id from the freshest source so we can keep the
       // parent's children cache in sync (used by the parent issue's
@@ -192,7 +202,7 @@ export function useUpdateIssue() {
         null;
       if (!parentId) {
         const childrenCaches = qc.getQueriesData<Issue[]>({
-          queryKey: [...issueKeys.all(wsId), "children"],
+          queryKey: [...issueKeys.all(mutationWsId), "children"],
         });
         for (const [key, data] of childrenCaches) {
           if (!data?.some((c) => c.id === id)) continue;
@@ -204,7 +214,9 @@ export function useUpdateIssue() {
         }
       }
       const prevChildren = parentId
-        ? qc.getQueryData<Issue[]>(issueKeys.children(wsId, parentId))
+        ? qc.getQueryData<Issue[]>(
+            issueKeys.children(mutationWsId, parentId),
+          )
         : undefined;
 
       if (parentId) {
@@ -218,22 +230,30 @@ export function useUpdateIssue() {
           Object.prototype.hasOwnProperty.call(patch, "parent_issue_id") &&
           patch.parent_issue_id !== parentId;
         qc.setQueryData<Issue[]>(
-          issueKeys.children(wsId, parentId),
+          issueKeys.children(mutationWsId, parentId),
           (old) =>
             detachedFromParent
               ? old?.filter((c) => c.id !== id)
               : old?.map((c) => (c.id === id ? { ...c, ...normalizeStatusPatch(patch) } : c)),
         );
       }
-      return { change, prevChildren, parentId, id };
+      return {
+        change,
+        prevChildren,
+        parentId,
+        id,
+        workspaceId: mutationWsId,
+      };
     },
     onError: (_err, vars, ctx) => {
+      const mutationWsId =
+        ctx?.workspaceId ?? vars.workspaceContext?.workspaceId ?? wsId;
       if (ctx) {
-        rollbackIssueChange(qc, wsId, ctx.id, ctx.change);
+        rollbackIssueChange(qc, mutationWsId, ctx.id, ctx.change);
       }
       if (ctx?.parentId && ctx.prevChildren !== undefined) {
         qc.setQueryData(
-          issueKeys.children(wsId, ctx.parentId),
+          issueKeys.children(mutationWsId, ctx.parentId),
           ctx.prevChildren,
         );
       }
@@ -242,13 +262,15 @@ export function useUpdateIssue() {
       // can therefore transiently put an older entity back into cache; refresh
       // every loaded owner projection after rollback. A revision conflict is
       // the common case, but transport/5xx failures have the same interleave.
-      qc.invalidateQueries({ queryKey: issueKeys.detail(wsId, vars.id) });
-      qc.invalidateQueries({ queryKey: issueKeys.list(wsId) });
-      qc.invalidateQueries({ queryKey: issueKeys.myAll(wsId) });
-      qc.invalidateQueries({ queryKey: issueKeys.flatAll(wsId) });
-      qc.invalidateQueries({ queryKey: issueKeys.tableAll(wsId) });
+      qc.invalidateQueries({ queryKey: issueKeys.detail(mutationWsId, vars.id) });
+      qc.invalidateQueries({ queryKey: issueKeys.list(mutationWsId) });
+      qc.invalidateQueries({ queryKey: issueKeys.myAll(mutationWsId) });
+      qc.invalidateQueries({ queryKey: issueKeys.flatAll(mutationWsId) });
+      qc.invalidateQueries({ queryKey: issueKeys.tableAll(mutationWsId) });
     },
-    onSuccess: (serverIssue, vars) => {
+    onSuccess: (serverIssue, vars, ctx) => {
+      const mutationWsId =
+        ctx?.workspaceId ?? vars.workspaceContext?.workspaceId ?? wsId;
       // Reconcile with the authoritative server entity by patching the one card
       // in place — NOT by invalidating + refetching the list. The list refetch
       // is what made a successful move flicker: the optimistic card was already
@@ -275,21 +297,27 @@ export function useUpdateIssue() {
       // property write resolves would otherwise overwrite the newer bag
       // (clean-room review F3 response-ordering race).
       const { properties: _staleBag, ...reconcilable } = serverIssue;
-      const reconcile = applyIssueChange(qc, wsId, serverIssue.id, reconcilable as typeof serverIssue, {
-        changed: issueChangedDims(intent, serverIssue),
-        baseIssue: serverIssue,
-        // The HTTP response can arrive after a newer WS event. Reconcile the
-        // committed snapshot only into projections that have not already
-        // advanced beyond it; otherwise an older successful response would
-        // undo a later remote write in cache.
-        acceptCurrent: (current) =>
-          current.revision === undefined ||
-          (serverIssue.revision !== undefined &&
-            serverIssue.revision > current.revision),
-      });
+      const reconcile = applyIssueChange(
+        qc,
+        mutationWsId,
+        serverIssue.id,
+        reconcilable as typeof serverIssue,
+        {
+          changed: issueChangedDims(intent, serverIssue),
+          baseIssue: serverIssue,
+          // The HTTP response can arrive after a newer WS event. Reconcile the
+          // committed snapshot only into projections that have not already
+          // advanced beyond it; otherwise an older successful response would
+          // undo a later remote write in cache.
+          acceptCurrent: (current) =>
+            current.revision === undefined ||
+            (serverIssue.revision !== undefined &&
+              serverIssue.revision > current.revision),
+        },
+      );
       reconcileIssueFullSnapshotRevision(
         qc,
-        wsId,
+        mutationWsId,
         serverIssue.id,
         serverIssue.revision,
       );
@@ -297,6 +325,8 @@ export function useUpdateIssue() {
       invalidateStaleListKeys(qc, reconcile.staleKeys);
     },
     onSettled: (_data, _err, vars, ctx) => {
+      const mutationWsId =
+        ctx?.workspaceId ?? vars.workspaceContext?.workspaceId ?? wsId;
       // The issue's own list + detail caches are reconciled surgically in
       // onSuccess / onError, so they are deliberately NOT invalidated here — a
       // full-list refetch on settle is what made drags flicker. Only aggregate
@@ -307,12 +337,12 @@ export function useUpdateIssue() {
       // "invalidate myAll on project move" safety net (MUL-3669 / #4548): the
       // old project's loaded list already had the card removed in onMutate,
       // and only genuinely undecidable lists refetch here.
-      invalidateIssueDerivatives(qc, wsId, {
+      invalidateIssueDerivatives(qc, mutationWsId, {
         statusOrProjectChanged:
           vars.status !== undefined ||
           Object.prototype.hasOwnProperty.call(vars, "project_id"),
       });
-      qc.invalidateQueries({ queryKey: issueKeys.tableAll(wsId) });
+      qc.invalidateQueries({ queryKey: issueKeys.tableAll(mutationWsId) });
       if (ctx) {
         invalidateStaleListKeys(qc, ctx.change.staleKeys);
       }
@@ -326,17 +356,17 @@ export function useUpdateIssue() {
       // Invalidate old parent's children cache
       if (ctx?.parentId) {
         qc.invalidateQueries({
-          queryKey: issueKeys.children(wsId, ctx.parentId),
+          queryKey: issueKeys.children(mutationWsId, ctx.parentId),
         });
-        qc.invalidateQueries({ queryKey: issueKeys.childProgress(wsId) });
+        qc.invalidateQueries({ queryKey: issueKeys.childProgress(mutationWsId) });
       }
       // Invalidate new parent's children cache when parent_issue_id changed
       const newParentId = vars.parent_issue_id;
       if (newParentId && newParentId !== ctx?.parentId) {
         qc.invalidateQueries({
-          queryKey: issueKeys.children(wsId, newParentId),
+          queryKey: issueKeys.children(mutationWsId, newParentId),
         });
-        qc.invalidateQueries({ queryKey: issueKeys.childProgress(wsId) });
+        qc.invalidateQueries({ queryKey: issueKeys.childProgress(mutationWsId) });
       }
       // Invalidate the batched-children cache only when the parent link
       // actually changed. The WS path (ws-updaters.ts) invalidates
@@ -345,7 +375,9 @@ export function useUpdateIssue() {
       // optimistically, so we only need to flush when the parent relation
       // itself moved.
       if (ctx?.parentId || newParentId) {
-        qc.invalidateQueries({ queryKey: issueKeys.childrenByParentsAll(wsId) });
+        qc.invalidateQueries({
+          queryKey: issueKeys.childrenByParentsAll(mutationWsId),
+        });
       }
     },
   });

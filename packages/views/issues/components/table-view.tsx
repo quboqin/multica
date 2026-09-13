@@ -4,6 +4,7 @@ import { useStatusLabel } from "../utils/status-label";
 import {
   useCallback,
   useEffect,
+  useId,
   useLayoutEffect,
   useMemo,
   useRef,
@@ -743,7 +744,7 @@ function LazyLabelCell({
   open: boolean;
   onOpenChange: (open: boolean) => void;
   writable: boolean;
-  onChange: (labelIds: string[]) => Promise<boolean>;
+  onChange: (labelIds: string[]) => Promise<void>;
 }) {
   const { t } = useT("issues");
   const labels = issue.labels ?? [];
@@ -753,9 +754,7 @@ function LazyLabelCell({
         <LabelPicker
           selectedIds={labels.map((label) => label.id)}
           onSelectedIdsChange={(labelIds) => {
-            void onChange(labelIds).then((accepted) => {
-              if (!accepted) onOpenChange(true);
-            });
+            void onChange(labelIds);
           }}
           open
           onOpenChange={(next) => {
@@ -911,11 +910,15 @@ type EditingCellSession = {
   sourceIdentity: string;
 };
 
-function closePendingTableRunConfirm(sourceIdentity: string) {
+function closePendingTableRunConfirm(
+  sourceIdentity: string,
+  ownerIdentity: string,
+) {
   const modal = useModalStore.getState();
   if (
     modal.modal === "issue-run-confirm" &&
-    modal.data?.sourceIdentity === sourceIdentity
+    modal.data?.sourceIdentity === sourceIdentity &&
+    modal.data?.ownerIdentity === ownerIdentity
   ) {
     modal.close(modal.modalInstanceId ?? undefined);
   }
@@ -1169,6 +1172,7 @@ function IssueTableBodyCell({
           onOpenChange={setEditorOpen}
           canSet={canSet}
           canClear={canClear}
+          editorSessionKey={editorSession?.instanceId}
           onChange={async (value) => {
             const result = await meta.updateField(
               sourceRow,
@@ -1177,7 +1181,10 @@ function IssueTableBodyCell({
                 ? { op: "clear" }
                 : { op: "set", value },
             );
-            if (result.status === "failed") toast.error(result.error.message);
+            if (result.status === "failed") {
+              toast.error(result.error.message);
+              if (editorSession) meta.restoreEditingCell(editorSession);
+            }
             return result.status === "accepted";
           }}
         />
@@ -1283,8 +1290,10 @@ function IssueTableBodyCell({
                 ? { op: "clear" }
                 : { op: "set", value: labelIds },
             );
-            if (result.status === "failed") toast.error(result.error.message);
-            return result.status === "accepted";
+            if (result.status === "failed") {
+              toast.error(result.error.message);
+              if (editorSession) meta.restoreEditingCell(editorSession);
+            }
           }}
         />
       );
@@ -1379,6 +1388,7 @@ export function TableView({
   const { t } = useT("issues");
   const wsId = useWorkspaceId();
   const workspaceSlug = getCurrentSlug();
+  const tableOwnerIdentity = useId();
   const resolveStatusLabel = useStatusLabel(wsId);
   const { entryOf } = useIssueStatuses(wsId);
   const openModal = useModalStore((s) => s.open);
@@ -1440,6 +1450,7 @@ export function TableView({
         statusCatalog: { entryOf },
         openRunConfirm: (data) => openModal("issue-run-confirm", data),
         sourceIdentity: issueSourceIdentity,
+        ownerIdentity: tableOwnerIdentity,
         workspaceContext,
         canSubmit,
       });
@@ -1497,6 +1508,7 @@ export function TableView({
       openModal,
       properties,
       setPropertyAsync,
+      tableOwnerIdentity,
       workspaceContext,
       workspaceSlug,
       wsId,
@@ -1788,22 +1800,27 @@ export function TableView({
     if (previousSourceIdentityRef.current === sourceIdentity) return;
     const previousSourceIdentity = previousSourceIdentityRef.current;
     previousSourceIdentityRef.current = sourceIdentity;
-    closePendingTableRunConfirm(previousSourceIdentity);
+    closePendingTableRunConfirm(previousSourceIdentity, tableOwnerIdentity);
     editorInstanceRef.current += 1;
     setEditingCellSession(null);
-  }, [sourceIdentity]);
+  }, [sourceIdentity, tableOwnerIdentity]);
   useEffect(() => {
     if (!dataSource.capabilities.writable && editingCellKey !== null) {
       editorInstanceRef.current += 1;
       setEditingCellSession(null);
     }
     if (!dataSource.capabilities.writable) {
-      closePendingTableRunConfirm(sourceIdentity);
+      closePendingTableRunConfirm(sourceIdentity, tableOwnerIdentity);
     }
-  }, [dataSource.capabilities.writable, editingCellKey, sourceIdentity]);
+  }, [
+    dataSource.capabilities.writable,
+    editingCellKey,
+    sourceIdentity,
+    tableOwnerIdentity,
+  ]);
   useEffect(
-    () => () => closePendingTableRunConfirm(sourceIdentity),
-    [sourceIdentity],
+    () => () => closePendingTableRunConfirm(sourceIdentity, tableOwnerIdentity),
+    [sourceIdentity, tableOwnerIdentity],
   );
   const collapsedGroupSet = useMemo(
     () => new Set(tableCollapsedGroups),

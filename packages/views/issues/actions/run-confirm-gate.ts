@@ -28,6 +28,7 @@ export type RunConfirmIntent =
 /** Optional completion channel used by data-source backed editors. */
 export type RunConfirmData = RunConfirmIntent & {
   sourceIdentity?: string;
+  ownerIdentity?: string;
   workspaceContext?: WorkspaceRequestContext;
   canSubmit?: () => boolean;
   canCancel?: () => boolean;

@@ -245,11 +245,14 @@ export function useAttachLabelToIssue() {
         ? api.attachLabel(issueId, labelId, workspaceContext.workspaceSlug)
         : api.attachLabel(issueId, labelId);
     },
-    onSettled: (_data, _err, { issueId }) => {
-      qc.invalidateQueries({ queryKey: labelKeys.byIssue(wsId, issueId) });
+    onSettled: (_data, _err, { issueId, workspaceContext }) => {
+      const mutationWsId = workspaceContext?.workspaceId ?? wsId;
+      qc.invalidateQueries({
+        queryKey: labelKeys.byIssue(mutationWsId, issueId),
+      });
       // Issues embed a denormalized labels snapshot, so refresh the issues
       // caches that hold it (list / board / detail) once the attach settles.
-      qc.invalidateQueries({ queryKey: issueKeys.all(wsId) });
+      qc.invalidateQueries({ queryKey: issueKeys.all(mutationWsId) });
     },
   });
 }
@@ -273,20 +276,27 @@ export function useDetachLabelFromIssue() {
         ? api.detachLabel(issueId, labelId, workspaceContext.workspaceSlug)
         : api.detachLabel(issueId, labelId);
     },
-    onSuccess: (data: IssueLabelsResponse, { issueId }) => {
+    onSuccess: (
+      data: IssueLabelsResponse,
+      { issueId, workspaceContext },
+    ) => {
+      const mutationWsId = workspaceContext?.workspaceId ?? wsId;
       if (data && Array.isArray(data.labels)) {
         onIssueLabelsChanged(
           qc,
-          wsId,
+          mutationWsId,
           issueId,
           data.labels,
           data.issue_revision,
         );
       }
     },
-    onSettled: (_data, _error, { issueId }) => {
-      qc.invalidateQueries({ queryKey: labelKeys.byIssue(wsId, issueId) });
-      invalidateIssueLabelDerivatives(qc, wsId);
+    onSettled: (_data, _error, { issueId, workspaceContext }) => {
+      const mutationWsId = workspaceContext?.workspaceId ?? wsId;
+      qc.invalidateQueries({
+        queryKey: labelKeys.byIssue(mutationWsId, issueId),
+      });
+      invalidateIssueLabelDerivatives(qc, mutationWsId);
     },
   });
 }

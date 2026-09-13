@@ -16,6 +16,7 @@ type CreateIssueTableCommandExecutorOptions = {
   statusCatalog: Pick<IssueStatusCatalog, "entryOf">;
   openRunConfirm: (data: RunConfirmData) => void;
   sourceIdentity?: string;
+  ownerIdentity?: string;
   workspaceContext?: WorkspaceRequestContext;
   canSubmit?: () => boolean;
 };
@@ -54,6 +55,7 @@ export function createIssueTableCommandExecutor({
   statusCatalog,
   openRunConfirm,
   sourceIdentity,
+  ownerIdentity,
   workspaceContext,
   canSubmit,
 }: CreateIssueTableCommandExecutorOptions):
@@ -75,6 +77,7 @@ export function createIssueTableCommandExecutor({
         openRunConfirm({
           ...intent,
           sourceIdentity,
+          ownerIdentity,
           workspaceContext,
           canSubmit,
           canCancel: () => phase === "awaiting-confirmation",

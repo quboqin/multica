@@ -63,6 +63,7 @@ interface RunConfirmModalData {
   assigneeName?: string;
   issueRevision?: number;
   canSubmit?: RunConfirmData["canSubmit"];
+  ownerIdentity?: RunConfirmData["ownerIdentity"];
   workspaceContext?: RunConfirmData["workspaceContext"];
   onSubmitting?: RunConfirmData["onSubmitting"];
   onAccepted?: RunConfirmData["onAccepted"];

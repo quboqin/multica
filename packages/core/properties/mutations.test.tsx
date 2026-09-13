@@ -13,7 +13,9 @@ import { issueKeys } from "../issues/queries";
 import { setCurrentWorkspace } from "../platform";
 import { useSetIssueProperty } from "./mutations";
 
-vi.mock("../hooks", () => ({ useWorkspaceId: () => "ws-1" }));
+const workspaceState = vi.hoisted(() => ({ id: "ws-1" }));
+
+vi.mock("../hooks", () => ({ useWorkspaceId: () => workspaceState.id }));
 
 const issue: Issue = {
   id: "issue-1",
@@ -57,6 +59,7 @@ function deferred<T>() {
 
 describe("useSetIssueProperty", () => {
   afterEach(() => {
+    workspaceState.id = "ws-1";
     setCurrentWorkspace(null, null);
     vi.restoreAllMocks();
   });
@@ -125,6 +128,52 @@ describe("useSetIssueProperty", () => {
       qc.getQueryData<Issue>(issueKeys.detail("ws-2", issue.id))?.properties
         .estimate,
     ).toBe(99);
+    qc.clear();
+  });
+
+  it("keeps a submitted write's cache callbacks in the captured workspace", async () => {
+    setCurrentWorkspace("alpha", "ws-1");
+    const qc = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    const unrelated = {
+      ...issue,
+      workspace_id: "ws-2",
+      properties: { estimate: 99 },
+    };
+    qc.setQueryData(issueKeys.detail("ws-1", issue.id), issue);
+    qc.setQueryData(issueKeys.detail("ws-2", issue.id), unrelated);
+    const response = deferred<IssuePropertiesResponse>();
+    const setIssueProperty = vi.fn(() => response.promise);
+    setApiInstance({ setIssueProperty } as unknown as ApiClient);
+    const hook = renderHook(() => useSetIssueProperty(), {
+      wrapper: wrapper(qc),
+    });
+    const completion = hook.result.current.mutateAsync({
+      issueId: issue.id,
+      propertyId: "estimate",
+      value: 2,
+      workspaceContext: {
+        workspaceId: "ws-1",
+        workspaceSlug: "alpha",
+      },
+    });
+    await waitFor(() => expect(setIssueProperty).toHaveBeenCalledTimes(1));
+
+    workspaceState.id = "ws-2";
+    setCurrentWorkspace("beta", "ws-2");
+    hook.rerender();
+    response.resolve({ properties: { estimate: 2 } });
+    await completion;
+
+    expect(
+      qc.getQueryData<Issue>(issueKeys.detail("ws-1", issue.id))?.properties
+        .estimate,
+    ).toBe(2);
+    expect(qc.getQueryData(issueKeys.detail("ws-2", issue.id))).toEqual(
+      unrelated,
+    );
+    hook.unmount();
     qc.clear();
   });
 

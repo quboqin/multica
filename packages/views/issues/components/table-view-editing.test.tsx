@@ -26,10 +26,12 @@ import type { ApiClient } from "@multica/core/api/client";
 import { issueKeys } from "@multica/core/issues/queries";
 import { ViewStoreProvider } from "@multica/core/issues/stores/view-store-context";
 import { getIssueSurfaceViewStore } from "@multica/core/issues/stores/surface-view-store";
+import { setCurrentWorkspace } from "@multica/core/platform";
 import type {
   Issue,
   IssueTableQuerySpec,
   IssueTableRowsResponse,
+  Label,
 } from "@multica/core/types";
 import { renderWithI18n } from "../../test/i18n";
 import {
@@ -42,8 +44,10 @@ import type { IssueCreateDefaults } from "../surface/types";
 import type { ChildProgress } from "./list-row";
 import { TableView, useReleaseEditingCellOnUnmount } from "./table-view";
 
+const workspaceState = vi.hoisted(() => ({ id: "ws-1" }));
+
 vi.mock("@multica/core/hooks", () => ({
-  useWorkspaceId: () => "ws-1",
+  useWorkspaceId: () => workspaceState.id,
 }));
 
 // jsdom has no layout, so the real row virtualizer sees a 0-height viewport
@@ -199,6 +203,26 @@ function deferred<T>() {
   return { promise, resolve, reject };
 }
 
+function pickerItem(name: string): HTMLElement {
+  const item = Array.from(
+    document.querySelectorAll<HTMLElement>("button[data-picker-item]"),
+  ).find((candidate) => candidate.textContent?.trim() === name);
+  if (!item) throw new Error(`No picker item named "${name}"`);
+  return item;
+}
+
+function makeLabel(id: string, name: string): Label {
+  return {
+    id,
+    workspace_id: "ws-1",
+    resource_type: "issue",
+    name,
+    color: "#3b82f6",
+    created_at: "2026-01-01T00:00:00Z",
+    updated_at: "2026-01-01T00:00:00Z",
+  };
+}
+
 const selection: IssueSurfaceSelection = {
   selectedIds: new Set<string>(),
   toggle: () => {},
@@ -350,9 +374,52 @@ describe("TableView cell editors under data refresh", () => {
     expect(updateIssueAsync).not.toHaveBeenCalled();
   });
 
+  it("does not let one table instance cancel another table's confirmation", async () => {
+    const user = userEvent.setup({ delay: null, pointerEventsCheck: 0 });
+    const surfaceKey = `test-confirm-owner-${Math.floor(Math.random() * 1e9)}`;
+    serverIssues = [
+      {
+        ...makeIssue("c", "Parked task", "backlog"),
+        assignee_type: "agent",
+        assignee_id: "agent-1",
+      },
+    ];
+    useModalStore.getState().close();
+    const tree = (showSecond: boolean) => (
+      <QueryClientProvider client={queryClient}>
+        <Harness
+          key="first"
+          childProgressMap={new Map()}
+          surfaceKey={`${surfaceKey}-first`}
+        />
+        {showSecond && (
+          <Harness
+            key="second"
+            childProgressMap={new Map()}
+            surfaceKey={`${surfaceKey}-second`}
+          />
+        )}
+      </QueryClientProvider>
+    );
+    const view = renderWithI18n(tree(true));
+
+    const firstRow = (await screen.findAllByText("MUL-c"))[0]!.closest("tr")!;
+    await user.click(within(firstRow).getByRole("button", { name: /Backlog/ }));
+    fireEvent.click(screen.getByRole("button", { name: /^Todo$/ }));
+    expect(useModalStore.getState().modal).toBe("issue-run-confirm");
+
+    view.rerender(tree(false));
+    expect(useModalStore.getState().modal).toBe("issue-run-confirm");
+
+    view.unmount();
+    expect(useModalStore.getState().modal).toBeNull();
+  });
+
   let queryClient: QueryClient;
 
   beforeEach(() => {
+    workspaceState.id = "ws-1";
+    setCurrentWorkspace(null, null);
     navigationMocks.push.mockReset();
     navigationMocks.openInNewTab.mockReset();
     navigationMocks.getShareableUrl.mockReset();
@@ -388,6 +455,8 @@ describe("TableView cell editors under data refresh", () => {
   });
 
   afterEach(() => {
+    workspaceState.id = "ws-1";
+    setCurrentWorkspace(null, null);
     cleanup();
     vi.unstubAllGlobals();
   });
@@ -701,6 +770,272 @@ describe("TableView cell editors under data refresh", () => {
       await writeA.promise.catch(() => undefined);
     });
     expect(screen.getByRole("button", { name: "Low" })).toBeInTheDocument();
+  });
+
+  it.each([
+    { nextSession: "different-cell" as const },
+    { nextSession: "same-cell" as const },
+    { nextSession: "new-source" as const },
+  ])(
+    "does not let an older label failure replace a $nextSession editor",
+    async ({ nextSession }) => {
+      const user = userEvent.setup({ delay: null, pointerEventsCheck: 0 });
+      const labelA = makeLabel("label-a", "Alpha label");
+      const labelB = makeLabel("label-b", "Beta label");
+      const writeA = deferred<{ labels: Label[]; issue_revision?: number }>();
+      const attachLabel = vi.fn(() => writeA.promise);
+      serverIssues = [
+        { ...makeIssue("a", "Alpha", "todo"), labels: [labelA] },
+        { ...makeIssue("b", "Beta", "todo"), labels: [labelB] },
+      ];
+      setApiInstance({
+        listProperties: async () => ({ properties: [] }),
+        listLabels: async () => ({ labels: [labelA, labelB], total: 2 }),
+        listMembers: async () => [],
+        listAgents: async () => [],
+        listSquads: async () => [],
+        getAssigneeFrequency: async () => [],
+        listIssueStatuses: async () => ({ statuses: [] }),
+        listIssueTableRows: async () => ({
+          query_fingerprint: "test",
+          group_key: null,
+          parent_id: null,
+          total: serverIssues.length,
+          rows: serverIssues.map((issue) => ({
+            issue,
+            direct_child_count: 0,
+          })),
+          branch_total: serverIssues.length,
+          next_cursor: null,
+        }),
+        attachLabel,
+      } as unknown as ApiClient);
+      setCurrentWorkspace("alpha", "ws-1");
+      const surfaceKey = `test-label-failure-${Math.floor(Math.random() * 1e9)}`;
+      const tree = () => (
+        <QueryClientProvider client={queryClient}>
+          <Harness childProgressMap={new Map()} surfaceKey={surfaceKey} />
+        </QueryClientProvider>
+      );
+      const view = renderWithI18n(tree());
+
+      const rowA = (await screen.findByText("MUL-a")).closest("tr")!;
+      await user.click(within(rowA).getByText("Alpha label"));
+      fireEvent.click(pickerItem("Beta label"));
+      await waitFor(() => expect(attachLabel).toHaveBeenCalledTimes(1));
+
+      let activeTrigger: HTMLButtonElement;
+      if (nextSession === "same-cell") {
+        const trigger = within(rowA)
+          .getByText("Alpha label")
+          .closest("button")!;
+        await user.click(trigger);
+        await user.click(
+          within(rowA).getByText("Alpha label").closest("button")!,
+        );
+        activeTrigger = within(rowA)
+          .getByText("Alpha label")
+          .closest("button")!;
+      } else {
+        if (nextSession === "new-source") {
+          workspaceState.id = "ws-2";
+          setCurrentWorkspace("beta", "ws-2");
+          serverIssues = [
+            {
+              ...makeIssue("b", "Beta", "todo"),
+              workspace_id: "ws-2",
+              labels: [labelB],
+            },
+          ];
+          view.rerender(tree());
+          await waitFor(() => expect(screen.queryByText("MUL-a")).toBeNull());
+        }
+        const rowB = screen.getByText("MUL-b").closest("tr")!;
+        const trigger = within(rowB)
+          .getByText("Beta label")
+          .closest("button")!;
+        await user.click(trigger);
+        activeTrigger = within(rowB)
+          .getByText("Beta label")
+          .closest("button")!;
+      }
+      expect(activeTrigger).toHaveAttribute("aria-expanded", "true");
+
+      act(() => {
+        writeA.reject(new Error("label A failed"));
+      });
+      await waitFor(() => expect(queryClient.isMutating()).toBe(0));
+      expect(activeTrigger).toHaveAttribute("aria-expanded", "true");
+    },
+  );
+
+  it("keeps a reopened text-property draft after an older success", async () => {
+    const firstWrite = deferred<{
+      properties: Record<string, string>;
+      issue_revision?: number;
+    }>();
+    const setIssueProperty = vi.fn(() => firstWrite.promise);
+    const property = {
+      id: "prop-1",
+      workspace_id: "ws-1",
+      name: "Notes",
+      type: "text" as const,
+      config: {},
+      position: 1,
+      archived: false,
+      created_at: "2026-01-01T00:00:00Z",
+      updated_at: "2026-01-01T00:00:00Z",
+    };
+    serverIssues = [
+      {
+        ...makeIssue("a", "Alpha", "todo"),
+        properties: { "prop-1": "Original" },
+      },
+      makeIssue("b", "Beta", "todo"),
+    ];
+    setApiInstance({
+      listProperties: async () => ({ properties: [property] }),
+      listMembers: async () => [],
+      listAgents: async () => [],
+      listSquads: async () => [],
+      getAssigneeFrequency: async () => [],
+      listIssueStatuses: async () => ({ statuses: [] }),
+      listIssueTableRows: async () => ({
+        query_fingerprint: "test",
+        group_key: null,
+        parent_id: null,
+        total: serverIssues.length,
+        rows: serverIssues.map((issue) => ({ issue, direct_child_count: 0 })),
+        branch_total: serverIssues.length,
+        next_cursor: null,
+      }),
+      setIssueProperty,
+    } as unknown as ApiClient);
+    const surfaceKey = `test-text-reopen-${Math.floor(Math.random() * 1e9)}`;
+    getIssueSurfaceViewStore(surfaceKey)
+      .getState()
+      .toggleTableColumn("property:prop-1");
+    renderWithI18n(
+      <QueryClientProvider client={queryClient}>
+        <Harness childProgressMap={new Map()} surfaceKey={surfaceKey} />
+      </QueryClientProvider>,
+    );
+
+    const rowA = (await screen.findByText("MUL-a")).closest("tr")!;
+    const rowB = screen.getByText("MUL-b").closest("tr")!;
+    fireEvent.click(within(rowA).getByText("Original"));
+    const firstInput = screen.getByPlaceholderText("Enter value…");
+    fireEvent.change(firstInput, { target: { value: "Draft A" } });
+    fireEvent.submit(firstInput.closest("form")!);
+    await waitFor(() => expect(setIssueProperty).toHaveBeenCalledTimes(1));
+
+    fireEvent.click(
+      within(rowB).getByRole("button", { name: "No priority" }),
+    );
+    fireEvent.click(within(rowA).getByText("Draft A"));
+    const secondInput = screen.getByPlaceholderText("Enter value…");
+    fireEvent.change(secondInput, { target: { value: "Draft B" } });
+
+    serverIssues = serverIssues.map((issue) =>
+      issue.id === "a"
+        ? { ...issue, properties: { "prop-1": "Draft A" } }
+        : issue,
+    );
+    act(() => {
+      firstWrite.resolve({ properties: { "prop-1": "Draft A" } });
+    });
+    await waitFor(() =>
+      expect(screen.getByPlaceholderText("Enter value…")).toHaveValue(
+        "Draft B",
+      ),
+    );
+  });
+
+  it("does not let an older text-property failure clear newer pending state", async () => {
+    const firstWrite = deferred<{ properties: Record<string, string> }>();
+    const secondWrite = deferred<{ properties: Record<string, string> }>();
+    const setIssueProperty = vi
+      .fn()
+      .mockImplementationOnce(() => firstWrite.promise)
+      .mockImplementationOnce(() => secondWrite.promise);
+    const property = {
+      id: "prop-1",
+      workspace_id: "ws-1",
+      name: "Notes",
+      type: "text" as const,
+      config: {},
+      position: 1,
+      archived: false,
+      created_at: "2026-01-01T00:00:00Z",
+      updated_at: "2026-01-01T00:00:00Z",
+    };
+    serverIssues = [
+      {
+        ...makeIssue("a", "Alpha", "todo"),
+        properties: { "prop-1": "Original" },
+      },
+      makeIssue("b", "Beta", "todo"),
+    ];
+    setApiInstance({
+      listProperties: async () => ({ properties: [property] }),
+      listMembers: async () => [],
+      listAgents: async () => [],
+      listSquads: async () => [],
+      getAssigneeFrequency: async () => [],
+      listIssueStatuses: async () => ({ statuses: [] }),
+      listIssueTableRows: async () => ({
+        query_fingerprint: "test",
+        group_key: null,
+        parent_id: null,
+        total: serverIssues.length,
+        rows: serverIssues.map((issue) => ({ issue, direct_child_count: 0 })),
+        branch_total: serverIssues.length,
+        next_cursor: null,
+      }),
+      setIssueProperty,
+    } as unknown as ApiClient);
+    const surfaceKey = `test-text-pending-${Math.floor(Math.random() * 1e9)}`;
+    getIssueSurfaceViewStore(surfaceKey)
+      .getState()
+      .toggleTableColumn("property:prop-1");
+    renderWithI18n(
+      <QueryClientProvider client={queryClient}>
+        <Harness childProgressMap={new Map()} surfaceKey={surfaceKey} />
+      </QueryClientProvider>,
+    );
+
+    const rowA = (await screen.findByText("MUL-a")).closest("tr")!;
+    const rowB = screen.getByText("MUL-b").closest("tr")!;
+    fireEvent.click(within(rowA).getByText("Original"));
+    const firstInput = screen.getByPlaceholderText("Enter value…");
+    fireEvent.change(firstInput, { target: { value: "Draft A" } });
+    fireEvent.submit(firstInput.closest("form")!);
+    await waitFor(() => expect(setIssueProperty).toHaveBeenCalledTimes(1));
+
+    fireEvent.click(
+      within(rowB).getByRole("button", { name: "No priority" }),
+    );
+    fireEvent.click(within(rowA).getByText("Draft A"));
+    const secondInput = screen.getByPlaceholderText("Enter value…");
+    fireEvent.change(secondInput, { target: { value: "Draft B" } });
+    fireEvent.submit(secondInput.closest("form")!);
+    expect(secondInput).toBeDisabled();
+
+    act(() => {
+      firstWrite.reject(new Error("old write failed"));
+    });
+    await waitFor(() => expect(setIssueProperty).toHaveBeenCalledTimes(2));
+    expect(screen.getByPlaceholderText("Enter value…")).toHaveValue("Draft B");
+    expect(screen.getByPlaceholderText("Enter value…")).toBeDisabled();
+
+    serverIssues = serverIssues.map((issue) =>
+      issue.id === "a"
+        ? { ...issue, properties: { "prop-1": "Draft B" } }
+        : issue,
+    );
+    act(() => {
+      secondWrite.resolve({ properties: { "prop-1": "Draft B" } });
+    });
   });
 
   it("does not let an old request affect the same cell after it is reopened", async () => {
