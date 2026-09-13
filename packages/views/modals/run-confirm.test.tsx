@@ -72,7 +72,18 @@ vi.mock("../i18n", () => ({
 
 // Keep the ui primitives as light DOM so the logic is what's under test.
 vi.mock("@multica/ui/components/ui/dialog", () => ({
-  Dialog: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+  Dialog: ({
+    children,
+    onOpenChange,
+  }: {
+    children: React.ReactNode;
+    onOpenChange?: (open: boolean) => void;
+  }) => (
+    <div>
+      <button type="button" aria-label="Dismiss dialog" onClick={() => onOpenChange?.(false)} />
+      {children}
+    </div>
+  ),
   // Keeps the real Popup's prop passthrough, which the send chord binds to.
   DialogContent: ({ children, ...props }: React.HTMLAttributes<HTMLDivElement>) => (
     <div data-testid="dialog-content" {...props}>{children}</div>
@@ -164,6 +175,51 @@ describe("RunConfirmModal", () => {
     await waitFor(() => expect(onClose).toHaveBeenCalled());
     expect(mockToast.success).not.toHaveBeenCalled();
     expect(mockToast.error).not.toHaveBeenCalled();
+  });
+
+  it("reports the confirmed write result and prevents duplicate submission", async () => {
+    let finishWrite: ((issue: { id: string }) => void) | undefined;
+    mockUpdate.mockReturnValue(
+      new Promise((resolve) => {
+        finishWrite = resolve;
+      }),
+    );
+    const onAccepted = vi.fn();
+    render(
+      <RunConfirmModal
+        onClose={vi.fn()}
+        data={{ ...single, onAccepted }}
+      />,
+    );
+
+    const button = confirmButton();
+    fireEvent.click(button);
+    fireEvent.click(button);
+    expect(mockUpdate).toHaveBeenCalledTimes(1);
+    expect(onAccepted).not.toHaveBeenCalled();
+
+    finishWrite?.({ id: "issue-1" });
+    await waitFor(() =>
+      expect(onAccepted).toHaveBeenCalledWith({ id: "issue-1" }),
+    );
+    expect(onAccepted).toHaveBeenCalledTimes(1);
+  });
+
+  it("reports cancellation without writing", () => {
+    const onCancelled = vi.fn();
+    const onClose = vi.fn();
+    render(
+      <RunConfirmModal
+        onClose={onClose}
+        data={{ ...single, onCancelled }}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss dialog" }));
+
+    expect(mockUpdate).not.toHaveBeenCalled();
+    expect(onCancelled).toHaveBeenCalledTimes(1);
+    expect(onClose).toHaveBeenCalledTimes(1);
   });
 
   it("'暂不开始' sends suppress_run alongside the assignee change", async () => {
@@ -297,10 +353,18 @@ describe("RunConfirmModal", () => {
 
   it("keeps the dialog open and surfaces the error when the write fails", async () => {
     const onClose = vi.fn();
-    mockUpdate.mockRejectedValue(new Error("boom"));
-    render(<RunConfirmModal onClose={onClose} data={single} />);
+    const onFailed = vi.fn();
+    const error = new Error("boom");
+    mockUpdate.mockRejectedValue(error);
+    render(
+      <RunConfirmModal
+        onClose={onClose}
+        data={{ ...single, onFailed }}
+      />,
+    );
     fireEvent.click(confirmButton());
     await waitFor(() => expect(mockToast.error).toHaveBeenCalledWith("boom"));
+    expect(onFailed).toHaveBeenCalledWith(error);
     expect(onClose).not.toHaveBeenCalled();
     expect(mockToast.success).not.toHaveBeenCalled();
   });

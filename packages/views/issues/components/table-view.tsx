@@ -121,7 +121,7 @@ import {
   useQueryClient,
   type UseQueryResult,
 } from "@tanstack/react-query";
-import { runConfirmIntent } from "../actions/run-confirm-gate";
+import { createIssueTableCommandExecutor } from "../actions/table-command-executor";
 import { ActorAvatar } from "../../common/actor-avatar";
 import { LabelChip } from "../../labels/label-chip";
 import { resolveClickIntent, useIntentNavigate } from "../../navigation";
@@ -941,7 +941,10 @@ type TableViewMeta = {
   setEditingCellKey: (key: string | null) => void;
   /** Takes the ISSUE, not its id: the run-confirm gate reads its status
    *  category and owner to decide whether the write needs confirming first. */
-  updateIssue: (issue: Issue, updates: Partial<UpdateIssueRequest>) => void;
+  updateIssue: (
+    issue: Issue,
+    updates: Partial<UpdateIssueRequest>,
+  ) => ReturnType<ReturnType<typeof createIssueTableDataSource>["execute"]>;
   openIssue: (issue: Issue, event?: React.MouseEvent) => void;
   createSubIssue: (issue: Issue) => void;
   toggleTableParentCollapsed: (issueId: string) => void;
@@ -1302,21 +1305,17 @@ export function TableView({
     isSuccess: propertyCatalogSettled,
   } = useQuery(propertyListOptions(wsId));
   const dataSource = useMemo(
-    () =>
-      createIssueTableDataSource({
+    () => {
+      const execute = createIssueTableCommandExecutor({
+        actions,
+        statusCatalog: { entryOf },
+        openRunConfirm: (data) => openModal("issue-run-confirm", data),
+      });
+      return createIssueTableDataSource({
         fields: properties,
-        execute: ({ issue, updates }) => {
-          // Issue status writes can start a run. Keep that domain-specific
-          // policy in the issue adapter instead of teaching the shared data
-          // view contract about assignees, status categories, or modals.
-          const intent = runConfirmIntent(issue, updates, { entryOf });
-          if (intent) {
-            openModal("issue-run-confirm", intent);
-            return;
-          }
-          actions?.updateIssue(issue.id, updates);
-        },
-      }),
+        execute,
+      });
+    },
     [actions, entryOf, openModal, properties],
   );
   const propertyById = useMemo(
@@ -2149,7 +2148,7 @@ export function TableView({
 
   const updateIssue = useCallback(
     (issue: Issue, updates: Partial<UpdateIssueRequest>) =>
-      void dataSource.execute({ issue, updates }),
+      dataSource.execute({ issue, updates }),
     [dataSource],
   );
 

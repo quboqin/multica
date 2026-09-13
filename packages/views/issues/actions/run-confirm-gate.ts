@@ -24,6 +24,13 @@ export type RunConfirmIntent =
       assigneeId: string;
     };
 
+/** Optional completion channel used by data-source backed editors. */
+export type RunConfirmData = RunConfirmIntent & {
+  onAccepted?: (issue?: Issue) => void;
+  onCancelled?: () => void;
+  onFailed?: (error: unknown) => void;
+};
+
 /**
  * The category a status KEY belongs to — or `null` when nothing can answer.
  *

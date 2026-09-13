@@ -99,7 +99,7 @@ describe("createIssueTableDataSource", () => {
     });
   });
 
-  it("translates groups and delegates writes to the issue adapter", async () => {
+  it("translates groups and returns the issue executor's final result", async () => {
     const issue = makeIssue();
     const listIssueTableGroups = vi.fn(
       async (_request: IssueTableGroupsRequest) => ({
@@ -115,7 +115,7 @@ describe("createIssueTableDataSource", () => {
         next_cursor: null,
       }),
     );
-    const execute = vi.fn();
+    const execute = vi.fn(async () => ({ status: "accepted" as const }));
     setApiInstance({ listIssueTableGroups } as unknown as ApiClient);
     const source = createIssueTableDataSource({ execute });
 
@@ -140,5 +140,39 @@ describe("createIssueTableDataSource", () => {
       issue,
       updates: { title: "Renamed" },
     });
+  });
+
+  it("is read-only without an executor and rejects writes explicitly", async () => {
+    const source = createIssueTableDataSource();
+
+    expect(source.capabilities.writable).toBe(false);
+    const result = await source.execute({
+      issue: makeIssue(),
+      updates: { title: "Renamed" },
+    });
+
+    expect(result.status).toBe("failed");
+    if (result.status === "failed") {
+      expect(result.error.message).toBe("This issue data source is read-only");
+    }
+  });
+
+  it.each([
+    ["synchronous throw", () => {
+      throw new Error("sync boom");
+    }, "sync boom"],
+    ["asynchronous rejection", async () => {
+      throw new Error("async boom");
+    }, "async boom"],
+  ])("converts an executor %s into a failed result", async (_label, execute, message) => {
+    const source = createIssueTableDataSource({ execute });
+
+    const result = await source.execute({
+      issue: makeIssue(),
+      updates: { title: "Renamed" },
+    });
+
+    expect(result.status).toBe("failed");
+    if (result.status === "failed") expect(result.error.message).toBe(message);
   });
 });

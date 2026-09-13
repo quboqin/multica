@@ -30,13 +30,35 @@ interface ModalStore {
   dismissIssueLimitRecovery: () => void;
 }
 
-export const useModalStore = create<ModalStore>((set) => ({
+function notifyRunConfirmCancelled(
+  modal: ModalType,
+  data: Record<string, unknown> | null,
+) {
+  if (modal !== "issue-run-confirm") return;
+  const onCancelled = data?.onCancelled;
+  if (typeof onCancelled !== "function") return;
+  try {
+    onCancelled();
+  } catch {
+    // A modal completion observer must never prevent the store from closing.
+  }
+}
+
+export const useModalStore = create<ModalStore>((set, get) => ({
   modal: null,
   data: null,
   issueLimitRecoveryWorkspaceId: null,
   issueLimitRecoveryReason: "issue_limit",
-  open: (modal, data = null) => set({ modal, data }),
-  close: () => set({ modal: null, data: null }),
+  open: (modal, data = null) => {
+    const previous = get();
+    set({ modal, data });
+    notifyRunConfirmCancelled(previous.modal, previous.data);
+  },
+  close: () => {
+    const previous = get();
+    set({ modal: null, data: null });
+    notifyRunConfirmCancelled(previous.modal, previous.data);
+  },
   showIssueLimitRecovery: (workspaceId, reason = "issue_limit") =>
     set({
       issueLimitRecoveryWorkspaceId: workspaceId,

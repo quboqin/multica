@@ -56,10 +56,13 @@ type CreateIssueTableDataSourceOptions = {
   execute?: (
     command: IssueTableCommand,
   ) =>
-    | void
     | DataSourceActionResult<IssueTableRow>
-    | Promise<void | DataSourceActionResult<IssueTableRow>>;
+    | Promise<DataSourceActionResult<IssueTableRow>>;
 };
+
+function executionError(error: unknown): Error {
+  return error instanceof Error ? error : new Error(String(error));
+}
 
 export function createIssueTableDataSource(
   options: CreateIssueTableDataSourceOptions = {},
@@ -111,8 +114,11 @@ export function createIssueTableDataSource(
           error: new Error("This issue data source is read-only"),
         };
       }
-      const result = await options.execute(command);
-      return result ?? { status: "accepted" };
+      try {
+        return await options.execute(command);
+      } catch (error) {
+        return { status: "failed", error: executionError(error) };
+      }
     },
   };
 }

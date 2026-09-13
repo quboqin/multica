@@ -32,6 +32,10 @@ import type {
   IssueTableRowsResponse,
 } from "@multica/core/types";
 import { renderWithI18n } from "../../test/i18n";
+import {
+  IssueSurfaceActionsProvider,
+  type IssueSurfaceActions,
+} from "../surface/actions-context";
 import { IssueSurfaceSelectionProvider } from "../surface/selection-context";
 import type { IssueSurfaceSelection } from "../surface/selection-context";
 import type { IssueCreateDefaults } from "../surface/types";
@@ -193,6 +197,15 @@ const selection: IssueSurfaceSelection = {
   clear: () => {},
 };
 
+const writableSurfaceActions: IssueSurfaceActions = {
+  isPending: false,
+  createIssue: () => {},
+  updateIssue: () => {},
+  moveIssue: () => {},
+  batchUpdate: async () => {},
+  batchDelete: async () => {},
+};
+
 const serverQuery: IssueTableQuerySpec = {
   scope: { kind: "workspace" },
   filters: {},
@@ -252,10 +265,12 @@ describe("TableView cell editors under data refresh", () => {
 
     renderWithI18n(
       <QueryClientProvider client={queryClient}>
-        <Harness
-          childProgressMap={new Map<string, ChildProgress>()}
-          surfaceKey={`test-surface-${Math.floor(Math.random() * 1e9)}`}
-        />
+        <IssueSurfaceActionsProvider actions={writableSurfaceActions}>
+          <Harness
+            childProgressMap={new Map<string, ChildProgress>()}
+            surfaceKey={`test-surface-${Math.floor(Math.random() * 1e9)}`}
+          />
+        </IssueSurfaceActionsProvider>
       </QueryClientProvider>,
     );
 
