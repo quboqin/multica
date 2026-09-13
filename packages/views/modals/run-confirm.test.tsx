@@ -1,12 +1,30 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { act, render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { buildIssueStatusCatalog } from "@multica/core/issue-statuses";
+import { useModalStore } from "@multica/core/modals";
+import type { Issue } from "@multica/core/types";
 import {
   configureShortcutPlatform,
   createShortcutChord,
   useShortcutStore,
 } from "@multica/core/shortcuts";
 import { RunConfirmModal } from "./run-confirm";
+import { ModalRegistry } from "./registry";
+import type { IssueSurfaceActions } from "../issues/surface/actions-context";
+import { createIssueTableCommandExecutor } from "../issues/actions/table-command-executor";
+
+vi.mock("./create-issue-dialog", () => ({ CreateIssueDialog: () => null }));
+vi.mock("./create-project", () => ({ CreateProjectModal: () => null }));
+vi.mock("./create-squad", () => ({ CreateSquadModal: () => null }));
+vi.mock("./feedback", () => ({ FeedbackModal: () => null }));
+vi.mock("./set-parent-issue", () => ({ SetParentIssueModal: () => null }));
+vi.mock("./add-child-issue", () => ({ AddChildIssueModal: () => null }));
+vi.mock("./delete-issue-confirm", () => ({
+  DeleteIssueConfirmModal: () => null,
+}));
+vi.mock("./issue-limit-upgrade-dialog", () => ({
+  IssueLimitUpgradeDialog: () => null,
+}));
 
 vi.mock("@multica/core/hooks", () => ({ useWorkspaceId: () => "ws-test" }));
 vi.mock("@multica/core/issue-statuses/hooks", () => ({
@@ -72,7 +90,18 @@ vi.mock("../i18n", () => ({
 
 // Keep the ui primitives as light DOM so the logic is what's under test.
 vi.mock("@multica/ui/components/ui/dialog", () => ({
-  Dialog: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+  Dialog: ({
+    children,
+    onOpenChange,
+  }: {
+    children: React.ReactNode;
+    onOpenChange?: (open: boolean) => void;
+  }) => (
+    <div>
+      <button type="button" aria-label="Dismiss dialog" onClick={() => onOpenChange?.(false)} />
+      {children}
+    </div>
+  ),
   // Keeps the real Popup's prop passthrough, which the send chord binds to.
   DialogContent: ({ children, ...props }: React.HTMLAttributes<HTMLDivElement>) => (
     <div data-testid="dialog-content" {...props}>{children}</div>
@@ -105,6 +134,7 @@ beforeEach(() => {
   // everywhere, not Ctrl+Enter on a Linux CI runner.
   configureShortcutPlatform("macos");
   useShortcutStore.setState({ overrides: {} });
+  useModalStore.setState({ modal: null, data: null, modalInstanceId: null });
 });
 
 afterEach(() => {
@@ -121,6 +151,52 @@ const single = {
   assigneeType: "agent" as const,
   assigneeId: "agent-1",
 };
+
+function tableIssue(id: string): Issue {
+  return {
+    id,
+    workspace_id: "ws-test",
+    number: id === "issue-a" ? 1 : 2,
+    identifier: id === "issue-a" ? "MUL-1" : "MUL-2",
+    title: id,
+    description: null,
+    status: "todo",
+    priority: "none",
+    assignee_type: null,
+    assignee_id: null,
+    creator_type: "member",
+    creator_id: "member-1",
+    parent_issue_id: null,
+    project_id: null,
+    position: 1,
+    stage: null,
+    start_date: null,
+    due_date: null,
+    labels: [],
+    metadata: {},
+    properties: {},
+    created_at: "2026-01-01T00:00:00Z",
+    updated_at: "2026-01-01T00:00:00Z",
+  };
+}
+
+function gatedExecutor() {
+  return createIssueTableCommandExecutor({
+    actions: {
+      updateIssueAsync: vi.fn(),
+    } as unknown as IssueSurfaceActions,
+    statusCatalog: { entryOf: () => undefined },
+    openRunConfirm: (data) =>
+      useModalStore.getState().open("issue-run-confirm", data),
+  })!;
+}
+
+function gatedCommand(id: string) {
+  return {
+    issue: tableIssue(id),
+    updates: { assignee_type: "agent" as const, assignee_id: "agent-1" },
+  };
+}
 
 // Promoting a parked issue out of backlog starts the run on its own, so it
 // confirms through this same dialog — one behaviour for built-in `todo` and
@@ -164,6 +240,150 @@ describe("RunConfirmModal", () => {
     await waitFor(() => expect(onClose).toHaveBeenCalled());
     expect(mockToast.success).not.toHaveBeenCalled();
     expect(mockToast.error).not.toHaveBeenCalled();
+  });
+
+  it("reports the confirmed write result and prevents duplicate submission", async () => {
+    let finishWrite: ((issue: { id: string }) => void) | undefined;
+    mockUpdate.mockReturnValue(
+      new Promise((resolve) => {
+        finishWrite = resolve;
+      }),
+    );
+    const onAccepted = vi.fn();
+    const onSubmitting = vi.fn();
+    render(
+      <RunConfirmModal
+        onClose={vi.fn()}
+        data={{ ...single, onAccepted, onSubmitting }}
+      />,
+    );
+
+    const button = confirmButton();
+    fireEvent.click(button);
+    fireEvent.click(button);
+    expect(mockUpdate).toHaveBeenCalledTimes(1);
+    expect(onSubmitting).toHaveBeenCalledTimes(1);
+    expect(onAccepted).not.toHaveBeenCalled();
+
+    finishWrite?.({ id: "issue-1" });
+    await waitFor(() =>
+      expect(onAccepted).toHaveBeenCalledWith({ id: "issue-1" }),
+    );
+    expect(onAccepted).toHaveBeenCalledTimes(1);
+  });
+
+  it("reports cancellation without writing", () => {
+    const onCancelled = vi.fn();
+    const onClose = vi.fn();
+    render(
+      <RunConfirmModal
+        onClose={onClose}
+        data={{ ...single, onCancelled }}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss dialog" }));
+
+    expect(mockUpdate).not.toHaveBeenCalled();
+    expect(onCancelled).toHaveBeenCalledTimes(1);
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps A pending after same-type B replaces its submitted modal, then accepts A without closing B", async () => {
+    let finishA: ((issue: { id: string }) => void) | undefined;
+    mockUpdate.mockReturnValueOnce(
+      new Promise((resolve) => {
+        finishA = resolve;
+      }),
+    );
+    const execute = gatedExecutor();
+    let aSettled = false;
+    const resultA = execute(gatedCommand("issue-a")).then((result) => {
+      aSettled = true;
+      return result;
+    });
+    render(<ModalRegistry />);
+    fireEvent.click(confirmButton());
+    expect(mockUpdate).toHaveBeenCalledTimes(1);
+
+    let resultB!: ReturnType<typeof execute>;
+    act(() => {
+      resultB = execute(gatedCommand("issue-b"));
+    });
+    await Promise.resolve();
+
+    expect(aSettled).toBe(false);
+    expect(confirmButton()).not.toBeDisabled();
+    expect(useModalStore.getState().data?.issueIds).toEqual(["issue-b"]);
+
+    await act(async () => {
+      finishA?.({ id: "issue-a" });
+      await expect(resultA).resolves.toEqual({ status: "accepted" });
+    });
+    expect(useModalStore.getState().data?.issueIds).toEqual(["issue-b"]);
+
+    act(() => useModalStore.getState().close());
+    await expect(resultB).resolves.toEqual({ status: "cancelled" });
+  });
+
+  it("returns A's submitted failure after B replaces it without closing B", async () => {
+    let failA: ((error: Error) => void) | undefined;
+    mockUpdate.mockReturnValueOnce(
+      new Promise((_resolve, reject) => {
+        failA = reject;
+      }),
+    );
+    const execute = gatedExecutor();
+    let aSettled = false;
+    const resultA = execute(gatedCommand("issue-a")).then((result) => {
+      aSettled = true;
+      return result;
+    });
+    render(<ModalRegistry />);
+    fireEvent.click(confirmButton());
+
+    let resultB!: ReturnType<typeof execute>;
+    act(() => {
+      resultB = execute(gatedCommand("issue-b"));
+    });
+    await Promise.resolve();
+    expect(aSettled).toBe(false);
+    expect(confirmButton()).not.toBeDisabled();
+
+    const error = new Error("A failed");
+    await act(async () => {
+      failA?.(error);
+      await expect(resultA).resolves.toEqual({ status: "failed", error });
+    });
+    expect(useModalStore.getState().data?.issueIds).toEqual(["issue-b"]);
+    expect(confirmButton()).not.toBeDisabled();
+
+    act(() => useModalStore.getState().close());
+    await expect(resultB).resolves.toEqual({ status: "cancelled" });
+  });
+
+  it("retries a terminal failure through a fresh confirmation session", async () => {
+    const error = new Error("first attempt failed");
+    mockUpdate
+      .mockRejectedValueOnce(error)
+      .mockResolvedValueOnce({ id: "issue-a" });
+    const execute = gatedExecutor();
+    const first = execute(gatedCommand("issue-a"));
+    render(<ModalRegistry />);
+
+    fireEvent.click(confirmButton());
+    await expect(first).resolves.toEqual({ status: "failed", error });
+    await waitFor(() => expect(useModalStore.getState().modal).toBeNull());
+
+    let retry!: ReturnType<typeof execute>;
+    act(() => {
+      retry = execute(gatedCommand("issue-a"));
+    });
+    fireEvent.click(confirmButton());
+
+    await expect(retry).resolves.toEqual({ status: "accepted" });
+    await waitFor(() => expect(useModalStore.getState().modal).toBeNull());
+    expect(mockUpdate).toHaveBeenCalledTimes(2);
   });
 
   it("'暂不开始' sends suppress_run alongside the assignee change", async () => {
@@ -295,13 +515,34 @@ describe("RunConfirmModal", () => {
     ).toBeInTheDocument();
   });
 
-  it("keeps the dialog open and surfaces the error when the write fails", async () => {
+  it("keeps a legacy dialog open so its write can be retried", async () => {
     const onClose = vi.fn();
-    mockUpdate.mockRejectedValue(new Error("boom"));
+    const error = new Error("boom");
+    mockUpdate.mockRejectedValue(error);
     render(<RunConfirmModal onClose={onClose} data={single} />);
     fireEvent.click(confirmButton());
     await waitFor(() => expect(mockToast.error).toHaveBeenCalledWith("boom"));
     expect(onClose).not.toHaveBeenCalled();
+    expect(confirmButton()).not.toBeDisabled();
     expect(mockToast.success).not.toHaveBeenCalled();
+  });
+
+  it("makes a data-source write failure terminal so retry gets a new session", async () => {
+    const onClose = vi.fn();
+    const onFailed = vi.fn();
+    const error = new Error("boom");
+    mockUpdate.mockRejectedValue(error);
+    render(
+      <RunConfirmModal
+        onClose={onClose}
+        data={{ ...single, onFailed }}
+      />,
+    );
+
+    fireEvent.click(confirmButton());
+
+    await waitFor(() => expect(onFailed).toHaveBeenCalledWith(error));
+    expect(onFailed).toHaveBeenCalledTimes(1);
+    expect(onClose).toHaveBeenCalledTimes(1);
   });
 });

@@ -19,6 +19,15 @@ export interface IssueSurfaceActions {
     updates: Partial<UpdateIssueRequest>,
     options?: IssueSurfaceMutationOptions,
   ) => void;
+  /**
+   * Per-request completion channel for callers that must observe the final
+   * server result. Unlike mutate callbacks, concurrent calls keep independent
+   * promises and continue settling after the surface unmounts.
+   */
+  updateIssueAsync: (
+    issueId: string,
+    updates: Partial<UpdateIssueRequest>,
+  ) => Promise<Issue>;
   moveIssue: (
     issueId: string,
     updates: Partial<UpdateIssueRequest>,

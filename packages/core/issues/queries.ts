@@ -19,6 +19,10 @@ import type {
   ListIssuesCache,
 } from "../types";
 import { ALL_STATUSES } from "./config";
+import {
+  issueTableDataSource,
+  type IssueTableDataSource,
+} from "./table-data-source";
 
 export function issueTasksOptions(issueId: string) {
   return queryOptions({
@@ -283,16 +287,23 @@ export function issueTableGroupsOptions(
   wsId: string,
   query: IssueTableQuerySpec,
   group: IssueTableGroupsRequest["group"],
+  dataSource: IssueTableDataSource = issueTableDataSource,
 ) {
   return infiniteQueryOptions({
     queryKey: issueKeys.tableGroups(wsId, query, group),
     initialPageParam: null as string | null,
-    queryFn: ({ pageParam }) =>
-      api.listIssueTableGroups({
-        query,
-        group,
-        page: { limit: 100, cursor: pageParam },
-    }),
+    queryFn: async ({ pageParam }) => {
+      const page = await dataSource.readGroups(query, group, {
+        limit: 100,
+        cursor: pageParam,
+      });
+      return {
+        query_fingerprint: page.queryFingerprint,
+        total: page.total,
+        groups: page.groups,
+        next_cursor: page.nextCursor,
+      };
+    },
     getNextPageParam: (lastPage) => lastPage.next_cursor ?? undefined,
     placeholderData: keepPreviousData,
     retry: false,
@@ -308,6 +319,7 @@ export function issueTableGroupsOptions(
 export function issueTableRowPageOptions(
   wsId: string,
   request: IssueTableRowsRequest,
+  dataSource: IssueTableDataSource = issueTableDataSource,
 ) {
   const cursor = request.page?.cursor ?? null;
   return queryOptions({
@@ -323,7 +335,19 @@ export function issueTableRowPageOptions(
       "page",
       cursor,
     ] as const,
-    queryFn: () => api.listIssueTableRows(request),
+    queryFn: async () => {
+      const { page = {}, ...query } = request;
+      const result = await dataSource.read(query, page);
+      return {
+        query_fingerprint: result.metadata.queryFingerprint,
+        group_key: result.metadata.groupKey,
+        parent_id: result.metadata.parentId,
+        total: result.total,
+        rows: result.rows,
+        branch_total: result.metadata.branchTotal,
+        next_cursor: result.nextCursor,
+      };
+    },
     placeholderData: keepPreviousData,
     retry: false,
     // Dynamic useQueries observers detach/reinstall as sibling branches enter
