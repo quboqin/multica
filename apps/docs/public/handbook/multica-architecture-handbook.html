@@ -702,7 +702,7 @@ Auth"]
 本机常用 mul_；云节点 mcn_"| DA["Go server：机器接口
 DaemonAuth"]
 </pre>
-<figcaption><b>图 2-1(b) · HTTP 访问路径与随行凭证。</b>实线是各端的常用业务路径；虚线是 Web 直连 API 的配置分支。所有箭头均表示客户端主动发起请求。框内两类 server 入口属于同一个 Go 服务。图中的“直连”指请求目标是 API 地址，部署上仍可经过负载均衡；协议在生产通常为 HTTPS，本地可为 HTTP。Web 的同源代理转发凭证，最终身份由 Go 校验。daemon 另有 PAT 续期等辅助请求，以 Bearer mul_ 调用业务组的 <code>/api/tokens/current/renew</code>。</figcaption>
+<figcaption><b>图 2-1(b) · HTTP 访问路径与随行凭证。</b>实线是各端的常用业务路径；虚线是 Web 直连 API 的配置分支。所有箭头均表示客户端主动发起请求。框内两类 server 入口属于同一个 Go 服务。图中的“直连”指请求目标是 API 地址，部署上仍可经过负载均衡；协议在生产通常为 HTTPS，本地可为 HTTP。Web 的同源代理转发凭证，最终身份由 Go 校验。本图只列 HTTP 路径；daemon 的心跳和任务领取优先走另图所示的 WS 控制连接，HTTP 提供回退。daemon 另有 PAT 续期等辅助请求，以 Bearer mul_ 调用业务组的 <code>/api/tokens/current/renew</code>。</figcaption>
 </figure>
 <p><strong>桌面界面访问任务、评论等 API，不需要经过本机 daemon。</strong>桌面主进程通过本地 IPC 接收登录信息、管理 daemon，并用用户 JWT 调 <code>POST /api/tokens</code> 为 daemon 获取另一枚 PAT（见图 2-2(b)）。CLI 的普通业务命令也直接请求 server；仓库 checkout 等本机功能可另行调用本地 daemon，不能把它们画成全部 CLI 请求的必经层。</p>
 <div class="tbl-wrap"><table class="tbl">
@@ -712,7 +712,7 @@ DaemonAuth"]
 <tr><td>桌面界面</td><td class="wrap">配置的 API 地址下 <code>/api/*</code></td><td class="wrap">登录 JWT 存于 renderer 的 <code>localStorage["multica_token"]</code>；HTTP 显式带 Bearer</td><td class="wrap">登录用户；<code>X-Workspace-Slug</code> + 成员校验</td></tr>
 <tr><td>移动 App</td><td class="wrap">配置的 API 地址下 <code>/api/*</code></td><td class="wrap">登录 JWT 存于 SecureStore；独立 API client 显式带 Bearer</td><td class="wrap">登录用户；<code>X-Workspace-Slug</code> + 成员校验</td></tr>
 <tr><td>人工 CLI</td><td class="wrap"><code>/api/*</code>；查询、评论、更新任务等</td><td class="wrap">浏览器登录换取 <code>mul_</code> PAT，保存到选定 profile；也支持导入 token；请求带 Bearer</td><td class="wrap">PAT 所属用户；通常用 <code>X-Workspace-ID</code> 选择工作区</td></tr>
-<tr><td>daemon</td><td class="wrap"><code>/api/daemon/register</code>、<code>heartbeat</code>、<code>tasks/claim</code>、task 进度与结果接口</td><td class="wrap">本机通常读 profile 中的 <code>mul_</code>；桌面管理的 daemon 使用主进程换取的 PAT；云节点可用 <code>mcn_</code></td><td class="wrap">PAT/JWT/mcn_ 路径得到用户身份，再由 handler 检查工作区及端点要求；mdt_ 路径用绑定的 workspace/daemon 上下文</td></tr>
+<tr><td>daemon</td><td class="wrap"><code>/api/daemon/register</code>、task 进度与结果接口；<code>heartbeat</code> / <code>tasks/claim</code> 是 WS 优先路径的 HTTP 回退</td><td class="wrap">本机通常读 profile 中的 <code>mul_</code>；桌面管理的 daemon 使用主进程换取的 PAT；云节点可用 <code>mcn_</code></td><td class="wrap">PAT/JWT/mcn_ 路径得到用户身份，再由 handler 检查工作区及端点要求；mdt_ 路径用绑定的 workspace/daemon 上下文</td></tr>
 <tr><td>任务内 CLI</td><td class="wrap">仍是业务 <code>/api/*</code>，例如发布评论</td><td class="wrap">server 领取时签发 <code>mat_</code>，daemon 注入 <code>MULTICA_TOKEN</code>；任务上下文禁止回退到全局用户 token</td><td class="wrap">署名为 agent；server 绑定 task/agent/workspace/runtime 属主，工作区不可由客户端换走</td></tr>
 </tbody></table></div>
 <p>Bearer 是 HTTP 的携带方式，JWT、PAT、<code>mat_</code> 是凭证种类；两者不是同一级概念。Web 的 Cookie 中也装着 JWT。Bearer 分支不做 Cookie-CSRF 校验，但仍要验证凭证和权限。旧版 Web 的 localStorage token 兼容路径可使用 Bearer；上表描述正常的新登录路径。独立 API origin 还需满足 CORS、Cookie 域及 SameSite 条件；跨 origin 不一定跨 site，不能只改 API 地址就假设 Cookie 一定能携带。</p>
@@ -794,7 +794,7 @@ sequenceDiagram
   participant D as daemon
   participant S as Go server
   participant G as 智能体进程中的 CLI
-  D->>S: POST /api/daemon/tasks/claim，Bearer mul_ 或 mcn_
+  D->>S: tasks.claim（已认证 WS 优先；HTTP 回退带 Bearer）
   S->>S: 校验机器访问权；绑定 task、agent、workspace、runtime 属主
   S-->>D: 领取回执 + mat_ 任务令牌
   D->>G: 启动子进程，注入 MULTICA_TOKEN=mat_（示意）
@@ -803,7 +803,7 @@ sequenceDiagram
   S-->>G: 评论保存，作者为 agent
   D->>S: POST /api/daemon/tasks/.../complete，仍用 daemon 凭证
 </pre>
-<figcaption><b>图 2-2(c) · 机器调度与智能体业务操作使用不同凭证。</b>daemon 领取和汇报执行结果；智能体通过任务内 CLI 发布业务评论。daemon 不把自己的个人 PAT 作为任务 token 注入；缺失或非 mat_ 的任务凭证会被拒绝。任务令牌有时效与撤销机制，权限还受属主成员资格、工作区及具体端点限制，不能简化成“属主全部权限”。只有需要 Remote MCP 的领取回执才额外携带 mdt_：它供 daemon 代理解析 MCP 凭证，不替换智能体的 mat_。</figcaption>
+<figcaption><b>图 2-2(c) · 机器调度与智能体业务操作使用不同凭证。</b>daemon 使用自己的凭证（本机通常为 mul_，云节点可为 mcn_）领取和汇报执行结果；领取优先使用已认证且声明支持 rpc-v1 的 WS 连接，回退时使用 HTTP Bearer。智能体通过任务内 CLI 发布业务评论。daemon 不把自己的个人 PAT 作为任务 token 注入；缺失或非 mat_ 的任务凭证会被拒绝。任务令牌有时效与撤销机制，权限还受属主成员资格、工作区及具体端点限制，不能简化成“属主全部权限”。只有需要 Remote MCP 的领取回执才额外携带 mdt_：它供 daemon 代理解析 MCP 凭证，不替换智能体的 mat_。</figcaption>
 </figure>
 
 <h4 id="arch-ws-auth">实时连接：两条 WebSocket 路径，三种握手方式</h4>
@@ -829,10 +829,19 @@ sequenceDiagram
   end
   D->>S: GET /api/daemon/ws，升级头带 Authorization: Bearer
   S->>S: DaemonAuth；验证所订阅 runtime 的访问权
-  S-->>D: 101，机器控制消息 / 任务唤醒
-  D->>S: 收到唤醒后，经 HTTP /api/daemon/tasks/claim 领取
+  S-->>D: 101，控制连接建立
+  D->>S: daemon:heartbeat
+  S-->>D: daemon:heartbeat_ack，声明支持的能力
+  S-->>D: daemon:task_available（唤醒领取循环）
+  alt 当前连接已确认支持 rpc-v1
+    D->>S: WS RPC tasks.claim
+    S-->>D: RPC 回包：领取结果与任务载荷
+  else 当前连接不支持 RPC 或不可用
+    D->>S: POST /api/daemon/tasks/claim，Bearer
+    S-->>D: HTTP 回包：领取结果与任务载荷
+  end
 </pre>
-<figcaption><b>图 2-2(d) · 界面事件流与机器控制流的认证时机。</b><code>/ws</code> 使用独立实时鉴权，浏览器 WebSocket API 不能像 fetch 那样设置自定义 Authorization，所以 token 模式改用首帧。Cookie 路径失败会在升级前返回 HTTP 错误；token 路径的 101 仅表示协议升级成功，收到 auth_ack 才完成认证。Go daemon 能设置升级请求头，进入的是另一条 <code>/api/daemon/ws</code>；它不走界面首帧认证。连接还受 Origin 检查，重连要重新验证；事件/唤醒本身不等于已完成持久化领取。</figcaption>
+<figcaption><b>图 2-2(d) · 界面事件流与机器控制流的认证时机。</b><code>/ws</code> 使用独立实时鉴权，浏览器 WebSocket API 不能像 fetch 那样设置自定义 Authorization，所以 token 模式改用首帧。Cookie 路径失败会在升级前返回 HTTP 错误；token 路径的 101 仅表示协议升级成功，收到 auth_ack 才完成认证。Go daemon 能设置升级请求头，进入的是另一条 <code>/api/daemon/ws</code>；它不走界面首帧认证。连接还受 Origin 检查，重连要重新验证；事件/唤醒本身不等于已完成持久化领取。daemon WS 同时承载心跳与 tasks.claim RPC，不只是唤醒；心跳确认过期时恢复 HTTP 心跳，领取也保留轮询兜底。WS 请求确定未发送或服务端返回错误时可回退 HTTP；若请求已发出但回包丢失，领取结果不确定，须等待安全窗口后再走 HTTP，避免立即重复领取（见 §6）。</figcaption>
 </figure>
 <details><summary>本节源码依据（路径与行号对应 924a6aaf6）</summary>
 <ul class="tight">
@@ -842,6 +851,7 @@ sequenceDiagram
 <li>CLI：<code>server/cmd/multica/cmd_auth.go:73</code>、<code>server/cmd/multica/cmd_auth.go:314</code>、<code>server/internal/cli/client.go:214</code>；桌面 PAT：<code>apps/desktop/src/main/daemon-manager.ts:601</code>；移动：<code>apps/mobile/data/auth-store.ts:65</code>、<code>apps/mobile/data/api.ts:248</code>。</li>
 <li>任务凭证注入：<code>server/internal/daemon/daemon.go:152</code>；Remote MCP 令牌：<code>server/internal/handler/daemon.go:1883</code>。</li>
 <li>界面 WS：<code>packages/core/api/ws-client.ts:87</code>、<code>server/internal/realtime/hub.go:776</code>；daemon WS：<code>server/internal/daemon/wakeup.go:100</code>、<code>server/internal/handler/daemon_ws.go:27</code>。</li>
+<li>daemon 领取传输选择与不确定结果的回退窗口：<code>server/internal/daemon/wsrpc.go:315</code>；WS 心跳：<code>server/internal/daemon/wakeup.go:278</code>。</li>
 </ul></details>
 
 
