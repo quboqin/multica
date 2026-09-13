@@ -1,6 +1,7 @@
 import { queryOptions } from "@tanstack/react-query";
 import { api } from "../api";
 import { dataSourceIdentityKey, type DataSourceIdentity } from "../data-source";
+import { assertClientWorkspaceAccessAllowed } from "../platform";
 
 export function collectionSourceIdentity(
   workspaceId: string,
@@ -11,6 +12,8 @@ export function collectionSourceIdentity(
 
 export const collectionKeys = {
   all: (workspaceId: string) => ["collections", workspaceId] as const,
+  sources: (workspaceId: string) =>
+    ["data-source", workspaceId, "collection"] as const,
   list: (
     workspaceId: string,
     page: { limit?: number; cursor?: string | null } = {},
@@ -42,7 +45,10 @@ export function collectionListOptions(
 ) {
   return queryOptions({
     queryKey: collectionKeys.list(workspaceId, page),
-    queryFn: ({ signal }) => api.listCollections(workspaceSlug, page, signal),
+    queryFn: ({ signal, client }) => {
+      assertClientWorkspaceAccessAllowed(client, workspaceId);
+      return api.listCollections(workspaceSlug, page, signal);
+    },
     staleTime: 30_000,
   });
 }
@@ -54,8 +60,10 @@ export function collectionDetailOptions(
 ) {
   return queryOptions({
     queryKey: collectionKeys.detail(workspaceId, collectionId),
-    queryFn: ({ signal }) =>
-      api.getCollection(collectionId, workspaceSlug, signal),
+    queryFn: ({ signal, client }) => {
+      assertClientWorkspaceAccessAllowed(client, workspaceId);
+      return api.getCollection(collectionId, workspaceSlug, signal);
+    },
     enabled: Boolean(workspaceId && workspaceSlug && collectionId),
     staleTime: 30_000,
     refetchInterval: 30_000,

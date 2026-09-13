@@ -12,6 +12,12 @@ import { chatKeys } from "../chat/queries";
 import { runtimeKeys } from "../runtimes/queries";
 import { workspaceWorkingAgentsKeys } from "../agents/queries";
 import { workspaceKeys } from "../workspace/queries";
+import { collectionKeys } from "../collections/queries";
+import {
+  captureClientWorkspaceAccessGeneration,
+  isClientWorkspaceAccessAllowed,
+  isClientWorkspaceAccessGenerationCurrent,
+} from "../platform/session-cleanup";
 import { issueStatusKeys } from "../issue-statuses/queries";
 import {
   markWorkspaceDeletePending,
@@ -464,5 +470,54 @@ describe("useRealtimeSync — workspace:deleted self-initiated suppression", () 
     dispatchWorkspaceDeleted(ws, "ws-2");
 
     expect(defaultStorage.getItem("multica_issue_draft:delete-me")).toBeNull();
+  });
+});
+
+describe("useRealtimeSync — self member revocation", () => {
+  it("synchronously fences access and removes collection cache before list refresh", () => {
+    const qc = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    const ws = createMockWs();
+    const accessGeneration = captureClientWorkspaceAccessGeneration(qc, "ws-1");
+    qc.setQueryData(workspaceKeys.list(), [{ id: "ws-1", slug: "test-ws" }]);
+    qc.setQueryData(
+      collectionKeys.record("ws-1", "collection-1", "record-1"),
+      { id: "record-1" },
+    );
+    // Keep the relocation refresh pending: the synchronous responder must not
+    // depend on this list becoming authoritative before it fences callbacks.
+    vi.spyOn(qc, "fetchQuery").mockReturnValue(new Promise(() => {}));
+
+    renderHook(() => useRealtimeSync(ws, createStores()), {
+      wrapper: createWrapper(qc),
+    });
+    const removed = vi
+      .mocked(ws.on)
+      .mock.calls.find(([event]) => event === "member:removed")?.[1];
+    expect(removed).toBeDefined();
+
+    (removed as (payload: unknown) => void)({
+      member_id: "member-1",
+      user_id: "u1",
+      workspace_id: "ws-1",
+    });
+
+    expect(qc.getQueryData(workspaceKeys.list())).toEqual([
+      { id: "ws-1", slug: "test-ws" },
+    ]);
+    expect(
+      qc.getQueryData(
+        collectionKeys.record("ws-1", "collection-1", "record-1"),
+      ),
+    ).toBeUndefined();
+    expect(isClientWorkspaceAccessAllowed(qc, "ws-1")).toBe(false);
+    expect(
+      isClientWorkspaceAccessGenerationCurrent(
+        qc,
+        "ws-1",
+        accessGeneration,
+      ),
+    ).toBe(false);
   });
 });

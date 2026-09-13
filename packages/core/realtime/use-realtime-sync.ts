@@ -9,6 +9,11 @@ import { createLogger } from "../logger";
 import { clearWorkspaceStorage } from "../platform/storage-cleanup";
 import { defaultStorage } from "../platform/storage";
 import { getCurrentWsId, getCurrentSlug } from "../platform/workspace-storage";
+import {
+  restoreClientWorkspaceAccess,
+  revokeClientWorkspaceAccess,
+} from "../platform/session-cleanup";
+import { collectionKeys } from "../collections/queries";
 import { issueKeys } from "../issues/queries";
 import { projectKeys } from "../projects/queries";
 import { pinKeys } from "../pins/queries";
@@ -1263,24 +1268,40 @@ export function useRealtimeSync(
     });
 
     const unsubMemberRemoved = ws.on("member:removed", (p) => {
-      const { user_id } = p as MemberRemovedPayload;
+      const { user_id, workspace_id } = p as MemberRemovedPayload;
       const myUserId = authStore.getState().user?.id;
       if (user_id === myUserId) {
-        const slug = getCurrentSlug();
-        const wsId = getCurrentWsId();
-        if (slug && wsId) {
+        // The workspace-list refetch below is intentionally asynchronous and
+        // can fail. Fence mutation callbacks and new writes synchronously at
+        // the authorization event boundary, then discard protected cache data
+        // so neither a late response nor an old list snapshot can revive it.
+        revokeClientWorkspaceAccess(qc, workspace_id);
+        void qc.cancelQueries({ queryKey: collectionKeys.all(workspace_id) });
+        void qc.cancelQueries({ queryKey: collectionKeys.sources(workspace_id) });
+        qc.removeQueries({ queryKey: collectionKeys.all(workspace_id) });
+        qc.removeQueries({ queryKey: collectionKeys.sources(workspace_id) });
+
+        const wsList =
+          qc.getQueryData<{ id: string; slug: string }[]>(workspaceKeys.list()) ?? [];
+        const slug =
+          wsList.find((workspace) => workspace.id === workspace_id)?.slug ??
+          (getCurrentWsId() === workspace_id ? getCurrentSlug() : null);
+        if (slug) {
           clearWorkspaceStorage(defaultStorage, slug);
+        }
+        if (getCurrentWsId() === workspace_id) {
           logger.warn("removed from workspace, switching");
           onToast?.("You were removed from this workspace", "info");
-          relocateAfterWorkspaceLoss(wsId);
+          relocateAfterWorkspaceLoss(workspace_id);
         }
       }
     });
 
     const unsubMemberAdded = ws.on("member:added", (p) => {
-      const { member, workspace_name } = p as MemberAddedPayload;
+      const { member, workspace_id, workspace_name } = p as MemberAddedPayload;
       const myUserId = authStore.getState().user?.id;
       if (member.user_id === myUserId) {
+        restoreClientWorkspaceAccess(qc, workspace_id);
         qc.invalidateQueries({ queryKey: workspaceKeys.list() });
         qc.invalidateQueries({ queryKey: workspaceKeys.myInvitations() });
         onToast?.(

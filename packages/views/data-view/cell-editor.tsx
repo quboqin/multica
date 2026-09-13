@@ -55,6 +55,9 @@ export function DataViewCellEditor<Row>({
   hideClearWhenUnavailable?: boolean;
 }) {
   const authoritative = field.value(row);
+  const latestRowRef = useRef(row);
+  latestRowRef.current = row;
+  const editBaselineRowRef = useRef(row);
   const authoritativeEditorValueRef = useRef(editorValue(field, row));
   authoritativeEditorValueRef.current = editorValue(field, row);
   const cellIdentity = JSON.stringify([
@@ -70,7 +73,10 @@ export function DataViewCellEditor<Row>({
   const canClear = source.capabilities.writable && field.canClear(row);
 
   useEffect(() => {
-    if (!dirty && !pending && error === null) setDraft(editorValue(field, row));
+    if (!dirty && !pending && error === null) {
+      editBaselineRowRef.current = row;
+      setDraft(editorValue(field, row));
+    }
   }, [authoritative, dirty, error, field, pending, row]);
 
   useEffect(() => {
@@ -78,15 +84,24 @@ export function DataViewCellEditor<Row>({
     setDirty(false);
     setError(null);
     setPending(false);
+    latestRowRef.current = row;
+    editBaselineRowRef.current = row;
     // DTO and field objects may be recreated by an unrelated cache refresh.
     // Only a stable source/row/field transition starts a new edit session.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cellIdentity]);
 
   const commit = async (change: DataSourceCellChange) => {
+    // Preserve the row/revision the user actually edited. After a failed
+    // attempt, a second explicit Save is the acknowledgement boundary that
+    // may adopt the latest refetched row and try again.
+    const commandRow =
+      error === null ? editBaselineRowRef.current : latestRowRef.current;
     const currentlyAllowed =
       source.capabilities.writable &&
-      (change.op === "clear" ? field.canClear(row) : field.canSet(row));
+      (change.op === "clear"
+        ? field.canClear(latestRowRef.current)
+        : field.canSet(latestRowRef.current));
     if (!currentlyAllowed) {
       setError("This field is read-only");
       return;
@@ -95,9 +110,14 @@ export function DataViewCellEditor<Row>({
     setDirty(true);
     setError(null);
     try {
-      const result = await source.execute({ row, fieldId: field.id, change });
+      const result = await source.execute({
+        row: commandRow,
+        fieldId: field.id,
+        change,
+      });
       if (result.status === "accepted") {
         await onAccepted?.();
+        editBaselineRowRef.current = result.row ?? latestRowRef.current;
         setDraft(
           result.row === undefined
             ? authoritativeEditorValueRef.current
@@ -105,7 +125,8 @@ export function DataViewCellEditor<Row>({
         );
         setDirty(false);
       } else if (result.status === "cancelled") {
-        setDraft(editorValue(field, row));
+        editBaselineRowRef.current = latestRowRef.current;
+        setDraft(editorValue(field, latestRowRef.current));
         setDirty(false);
       } else {
         setError(result.error.message);
@@ -187,6 +208,7 @@ export function DataViewCellEditor<Row>({
         value={draft}
         disabled={!canSet || pending}
         onChange={(event) => {
+          if (!dirty) editBaselineRowRef.current = row;
           setDraft(event.currentTarget.value);
           setDirty(true);
         }}

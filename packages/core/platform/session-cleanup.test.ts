@@ -14,8 +14,13 @@ import type { StorageAdapter, Workspace } from "../types";
 import { workspaceKeys } from "../workspace/queries";
 import {
   captureClientSessionGeneration,
+  captureClientWorkspaceAccessGeneration,
   clearClientSessionData,
   isClientSessionGenerationCurrent,
+  isClientWorkspaceAccessAllowed,
+  isClientWorkspaceAccessGenerationCurrent,
+  restoreClientWorkspaceAccess,
+  revokeClientWorkspaceAccess,
 } from "./session-cleanup";
 
 function makeStorage(
@@ -41,6 +46,35 @@ beforeEach(() => {
 });
 
 describe("clearClientSessionData", () => {
+  it("fences a revoked workspace until an explicit rejoin", () => {
+    const queryClient = new QueryClient();
+    const original = captureClientWorkspaceAccessGeneration(queryClient, "ws-1");
+
+    revokeClientWorkspaceAccess(queryClient, "ws-1");
+
+    expect(isClientWorkspaceAccessAllowed(queryClient, "ws-1")).toBe(false);
+    expect(
+      isClientWorkspaceAccessGenerationCurrent(queryClient, "ws-1", original),
+    ).toBe(false);
+    const revoked = captureClientWorkspaceAccessGeneration(queryClient, "ws-1");
+
+    restoreClientWorkspaceAccess(queryClient, "ws-1");
+
+    expect(isClientWorkspaceAccessAllowed(queryClient, "ws-1")).toBe(true);
+    expect(
+      isClientWorkspaceAccessGenerationCurrent(queryClient, "ws-1", revoked),
+    ).toBe(false);
+  });
+
+  it("does not carry a previous account's workspace revocation forward", () => {
+    const queryClient = new QueryClient();
+    revokeClientWorkspaceAccess(queryClient, "ws-1");
+
+    clearClientSessionData(queryClient, makeStorage());
+
+    expect(isClientWorkspaceAccessAllowed(queryClient, "ws-1")).toBe(true);
+  });
+
   it("invalidates the generation captured by outstanding cache work", () => {
     const queryClient = new QueryClient();
     const generation = captureClientSessionGeneration(queryClient);

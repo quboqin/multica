@@ -1,9 +1,12 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api";
 import {
+  assertClientWorkspaceAccessAllowed,
   assertWorkspaceRequestContext,
   captureClientSessionGeneration,
+  captureClientWorkspaceAccessGeneration,
   isClientSessionGenerationCurrent,
+  isClientWorkspaceAccessGenerationCurrent,
   type WorkspaceRequestContext,
 } from "../platform";
 import type {
@@ -16,7 +19,10 @@ import type {
 import { workspaceKeys } from "../workspace/queries";
 import { collectionKeys } from "./queries";
 
-type CollectionMutationContext = { sessionGeneration: number };
+type CollectionMutationContext = {
+  sessionGeneration: number;
+  workspaceAccessGeneration: number;
+};
 
 function canCoordinateCollectionCache(
   queryClient: ReturnType<typeof useQueryClient>,
@@ -25,7 +31,12 @@ function canCoordinateCollectionCache(
 ): boolean {
   if (
     !context ||
-    !isClientSessionGenerationCurrent(queryClient, context.sessionGeneration)
+    !isClientSessionGenerationCurrent(queryClient, context.sessionGeneration) ||
+    !isClientWorkspaceAccessGenerationCurrent(
+      queryClient,
+      workspaceContext.workspaceId,
+      context.workspaceAccessGeneration,
+    )
   ) {
     return false;
   }
@@ -41,14 +52,22 @@ function canCoordinateCollectionCache(
 
 function captureMutationContext(
   queryClient: ReturnType<typeof useQueryClient>,
+  workspaceId: string,
 ): CollectionMutationContext {
-  return { sessionGeneration: captureClientSessionGeneration(queryClient) };
+  return {
+    sessionGeneration: captureClientSessionGeneration(queryClient),
+    workspaceAccessGeneration: captureClientWorkspaceAccessGeneration(
+      queryClient,
+      workspaceId,
+    ),
+  };
 }
 
 export function useCreateCollection() {
   const queryClient = useQueryClient();
   return useMutation({
-    onMutate: () => captureMutationContext(queryClient),
+    onMutate: ({ workspaceContext }) =>
+      captureMutationContext(queryClient, workspaceContext.workspaceId),
     mutationFn: ({
       input,
       workspaceContext,
@@ -56,6 +75,10 @@ export function useCreateCollection() {
       input: CreateCollectionInput;
       workspaceContext: WorkspaceRequestContext;
     }) => {
+      assertClientWorkspaceAccessAllowed(
+        queryClient,
+        workspaceContext.workspaceId,
+      );
       assertWorkspaceRequestContext(workspaceContext);
       return api.createCollection(input, workspaceContext.workspaceSlug);
     },
@@ -72,7 +95,8 @@ export function useCreateCollection() {
 export function useCreateCollectionRecord() {
   const queryClient = useQueryClient();
   return useMutation({
-    onMutate: () => captureMutationContext(queryClient),
+    onMutate: ({ workspaceContext }) =>
+      captureMutationContext(queryClient, workspaceContext.workspaceId),
     mutationFn: ({
       collectionId,
       input,
@@ -82,6 +106,10 @@ export function useCreateCollectionRecord() {
       input: CreateCollectionRecordInput;
       workspaceContext: WorkspaceRequestContext;
     }) => {
+      assertClientWorkspaceAccessAllowed(
+        queryClient,
+        workspaceContext.workspaceId,
+      );
       assertWorkspaceRequestContext(workspaceContext);
       return api.createCollectionRecord(
         collectionId,
@@ -115,7 +143,8 @@ export function useCreateCollectionRecord() {
 export function useUpdateCollectionRecord() {
   const queryClient = useQueryClient();
   return useMutation({
-    onMutate: () => captureMutationContext(queryClient),
+    onMutate: ({ workspaceContext }) =>
+      captureMutationContext(queryClient, workspaceContext.workspaceId),
     mutationFn: ({
       collectionId,
       recordId,
@@ -127,6 +156,10 @@ export function useUpdateCollectionRecord() {
       input: UpdateCollectionRecordInput;
       workspaceContext: WorkspaceRequestContext;
     }) => {
+      assertClientWorkspaceAccessAllowed(
+        queryClient,
+        workspaceContext.workspaceId,
+      );
       assertWorkspaceRequestContext(workspaceContext);
       return api.updateCollectionRecord(
         collectionId,

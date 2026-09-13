@@ -6,7 +6,11 @@ import type { ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { setApiInstance } from "../api";
 import type { ApiClient } from "../api/client";
-import { clearClientSessionData, setCurrentWorkspace } from "../platform";
+import {
+  clearClientSessionData,
+  revokeClientWorkspaceAccess,
+  setCurrentWorkspace,
+} from "../platform";
 import type { CollectionRecord, Workspace } from "../types";
 import { workspaceKeys } from "../workspace/queries";
 import {
@@ -237,7 +241,10 @@ describe("useUpdateCollectionRecord", () => {
       workspaceContext: { workspaceId: "ws-1", workspaceSlug: "alpha" },
     });
     await waitFor(() => expect(hook.result.current.isPending).toBe(true));
-    queryClient.setQueryData(workspaceKeys.list(), []);
+    // The production realtime responder advances this generation before its
+    // asynchronous workspace-list refresh settles. Keep the stale membership
+    // row here to cover that exact window.
+    revokeClientWorkspaceAccess(queryClient, "ws-1");
     invalidate.mockClear();
 
     await act(async () => {
@@ -249,7 +256,7 @@ describe("useUpdateCollectionRecord", () => {
     queryClient.clear();
   });
 
-  it("does not repopulate a revoked workspace after authorization cache cleanup", async () => {
+  it("does not repopulate or issue new writes after realtime revocation", async () => {
     setCurrentWorkspace("alpha", "ws-1");
     const queryClient = makeQueryClient();
     queryClient.setQueryData(workspaceKeys.list(), [workspace("ws-1", "alpha")]);
@@ -259,9 +266,8 @@ describe("useUpdateCollectionRecord", () => {
     );
     const invalidate = vi.spyOn(queryClient, "invalidateQueries");
     const response = deferred<CollectionRecord>();
-    setApiInstance({
-      updateCollectionRecord: vi.fn(() => response.promise),
-    } as unknown as ApiClient);
+    const updateCollectionRecord = vi.fn(() => response.promise);
+    setApiInstance({ updateCollectionRecord } as unknown as ApiClient);
     const hook = renderHook(() => useUpdateCollectionRecord(), {
       wrapper: wrapper(queryClient),
     });
@@ -276,7 +282,7 @@ describe("useUpdateCollectionRecord", () => {
       workspaceContext: { workspaceId: "ws-1", workspaceSlug: "alpha" },
     });
     await waitFor(() => expect(hook.result.current.isPending).toBe(true));
-    queryClient.setQueryData(workspaceKeys.list(), []);
+    revokeClientWorkspaceAccess(queryClient, "ws-1");
     queryClient.removeQueries({
       queryKey: collectionKeys.record(
         "ws-1",
@@ -296,6 +302,22 @@ describe("useUpdateCollectionRecord", () => {
         collectionKeys.record("ws-1", "collection-1", "record-1"),
       ),
     ).toBeUndefined();
+    expect(invalidate).not.toHaveBeenCalled();
+
+    await act(async () => {
+      await expect(
+        hook.result.current.mutateAsync({
+          collectionId: "collection-1",
+          recordId: "record-1",
+          input: {
+            expectedRevision: 2,
+            change: { fieldId: "title", op: "set", value: "Rejected" },
+          },
+          workspaceContext: { workspaceId: "ws-1", workspaceSlug: "alpha" },
+        }),
+      ).rejects.toThrow("Workspace access was revoked");
+    });
+    expect(updateCollectionRecord).toHaveBeenCalledOnce();
     expect(invalidate).not.toHaveBeenCalled();
     hook.unmount();
     queryClient.clear();

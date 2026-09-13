@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { AlertCircle, Database, TableProperties } from "lucide-react";
 import { useWorkspaceId } from "@multica/core";
@@ -46,6 +46,13 @@ export function CollectionsPage() {
   const [name, setName] = useState("");
   const [error, setError] = useState<string | null>(null);
   const pendingRequest = useRef<{ intent: string; id: string } | null>(null);
+  const pageActive = useRef(false);
+  useEffect(() => {
+    pageActive.current = true;
+    return () => {
+      pageActive.current = false;
+    };
+  }, []);
 
   if (!enabled) {
     return (
@@ -82,6 +89,7 @@ export function CollectionsPage() {
       });
       if (
         pendingRequest.current !== operation ||
+        !pageActive.current ||
         getCurrentWsId() !== workspaceId ||
         getCurrentSlug() !== workspaceSlug
       ) {
@@ -92,6 +100,7 @@ export function CollectionsPage() {
     } catch (reason) {
       if (
         pendingRequest.current !== operation ||
+        !pageActive.current ||
         getCurrentWsId() !== workspaceId ||
         getCurrentSlug() !== workspaceSlug
       ) {

@@ -4,6 +4,7 @@ import {
   createContext,
   useCallback,
   useContext,
+  useEffect,
   useMemo,
   useRef,
   useState,
@@ -35,7 +36,11 @@ import type {
 import type { CollectionRecord } from "@multica/core/types";
 import { useFeatureEnabled } from "@multica/core/config";
 import { CORTEX_COLLECTIONS_FLAG } from "@multica/core/feature-flags";
-import { getCurrentSlug, getCurrentWsId } from "@multica/core/platform";
+import {
+  assertClientWorkspaceAccessAllowed,
+  getCurrentSlug,
+  getCurrentWsId,
+} from "@multica/core/platform";
 import { useRequiredWorkspaceSlug } from "@multica/core/paths";
 import { Button } from "@multica/ui/components/ui/button";
 import { Input } from "@multica/ui/components/ui/input";
@@ -65,7 +70,6 @@ type CollectionCellContextValue = {
   source: CollectionSource;
   saveLabel: string;
   clearLabel: string;
-  onAccepted: () => Promise<void>;
 };
 
 const CollectionCellContext = createContext<CollectionCellContextValue | null>(
@@ -88,7 +92,6 @@ function CollectionRecordCell({
       saveLabel={context.saveLabel}
       clearLabel={context.clearLabel}
       hideClearWhenUnavailable
-      onAccepted={context.onAccepted}
     />
   );
 }
@@ -116,13 +119,27 @@ export function CollectionDetailPage({ collectionId }: { collectionId: string })
   const pendingCreateRequest = useRef<{ intent: string; id: string } | null>(
     null,
   );
+  const pageActive = useRef(false);
+  useEffect(() => {
+    pageActive.current = true;
+    return () => {
+      pageActive.current = false;
+    };
+  }, []);
 
   const source = useMemo(() => {
     if (!detailQuery.data) return null;
     return createCollectionRecordDataSource({
       detail: detailQuery.data,
-      read: (page, signal) =>
-        api.queryCollectionRecords(collectionId, page, workspaceSlug, signal),
+      read: (page, signal) => {
+        assertClientWorkspaceAccessAllowed(queryClient, workspaceId);
+        return api.queryCollectionRecords(
+          collectionId,
+          page,
+          workspaceSlug,
+          signal,
+        );
+      },
       execute: detailQuery.data.capabilities.writable
         ? async ({ record, fieldId, change }) => {
             if (fieldId !== "title" || change.op !== "set") {
@@ -143,6 +160,7 @@ export function CollectionDetailPage({ collectionId }: { collectionId: string })
   }, [
     collectionId,
     detailQuery.data,
+    queryClient,
     updateRecordAsync,
     workspaceId,
     workspaceSlug,
@@ -215,6 +233,7 @@ export function CollectionDetailPage({ collectionId }: { collectionId: string })
       });
       if (
         pendingCreateRequest.current !== operation ||
+        !pageActive.current ||
         getCurrentWsId() !== workspaceId ||
         getCurrentSlug() !== workspaceSlug
       ) {
@@ -225,6 +244,7 @@ export function CollectionDetailPage({ collectionId }: { collectionId: string })
     } catch (reason) {
       if (
         pendingCreateRequest.current !== operation ||
+        !pageActive.current ||
         getCurrentWsId() !== workspaceId ||
         getCurrentSlug() !== workspaceSlug
       ) {
@@ -236,15 +256,6 @@ export function CollectionDetailPage({ collectionId }: { collectionId: string })
       });
     }
   };
-  const handleAccepted = useCallback(
-    async () => {
-      await queryClient.invalidateQueries({
-        queryKey: collectionKeys.rows(workspaceId, collectionId),
-      });
-    },
-    [collectionId, queryClient, workspaceId],
-  );
-
   if (!enabled) {
     return (
       <CollectionPageState
@@ -285,7 +296,6 @@ export function CollectionDetailPage({ collectionId }: { collectionId: string })
       submitRecord={submitRecord}
       columnSizing={columnSizing}
       setColumnSizing={setColumnSizing}
-      onAccepted={handleAccepted}
     />
   );
 }
@@ -301,7 +311,6 @@ function CollectionTableContent({
   submitRecord,
   columnSizing,
   setColumnSizing,
-  onAccepted,
 }: {
   source: CollectionSource;
   binding: DataViewQueryBinding<
@@ -318,7 +327,6 @@ function CollectionTableContent({
   submitRecord: (event: FormEvent) => void;
   columnSizing: ColumnSizingState;
   setColumnSizing: Dispatch<SetStateAction<ColumnSizingState>>;
-  onAccepted: () => Promise<void>;
 }) {
   const { t } = useT("collections");
   const dataView = useDataViewController({
@@ -352,9 +360,8 @@ function CollectionTableContent({
       source,
       saveLabel: t(($) => $.save),
       clearLabel: t(($) => $.clear),
-      onAccepted,
     }),
-    [onAccepted, source, t],
+    [source, t],
   );
   const structuralRow = useCallback(
     (row: { original: CollectionTableRow }) => {

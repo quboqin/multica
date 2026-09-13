@@ -342,4 +342,89 @@ describe("CollectionDetailPage", () => {
       "Unsaved draft",
     );
   });
+
+  it("submits the edited revision before rebasing an explicit conflict retry", async () => {
+    let serverRecord: CollectionRecord = {
+      id: "record-1",
+      workspaceId: "ws-1",
+      collectionId: "collection-1",
+      title: "Original",
+      fields: { "field-note": "Read only note" },
+      position: 0,
+      revision: 1,
+      createdAt: "2026-01-01T00:00:00Z",
+      updatedAt: "2026-01-01T00:00:00Z",
+    };
+    const queryCollectionRecords = vi.fn(async () => ({
+      records: [serverRecord],
+      total: 1,
+      nextCursor: null,
+    }));
+    const updateCollectionRecord = vi.fn(
+      async (
+        _collectionId: string,
+        _recordId: string,
+        input: { expectedRevision: number; change: { value: string } },
+      ) => {
+        if (input.expectedRevision === 1) {
+          throw new Error("revision conflict");
+        }
+        serverRecord = {
+          ...serverRecord,
+          title: input.change.value,
+          revision: 3,
+        };
+        return serverRecord;
+      },
+    );
+    setApiInstance({
+      getCollection: vi.fn(async () => detail),
+      queryCollectionRecords,
+      updateCollectionRecord,
+    } as unknown as ApiClient);
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    });
+    authorizeWorkspace(queryClient);
+    renderWithI18n(
+      <QueryClientProvider client={queryClient}>
+        <CollectionDetailPage collectionId="collection-1" />
+      </QueryClientProvider>,
+    );
+
+    fireEvent.change(await screen.findByRole("textbox", { name: "Title" }), {
+      target: { value: "My draft" },
+    });
+    serverRecord = { ...serverRecord, title: "Remote edit", revision: 2 };
+    await act(async () => {
+      await queryClient.invalidateQueries({
+        queryKey: collectionKeys.rows("ws-1", "collection-1"),
+      });
+    });
+    expect(screen.getByRole("textbox", { name: "Title" })).toHaveValue(
+      "My draft",
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(updateCollectionRecord).toHaveBeenCalledOnce());
+    expect(updateCollectionRecord.mock.calls[0]?.[2].expectedRevision).toBe(1);
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "revision conflict",
+    );
+    await waitFor(() =>
+      expect(queryCollectionRecords.mock.calls.length).toBeGreaterThanOrEqual(3),
+    );
+    expect(screen.getByRole("textbox", { name: "Title" })).toHaveValue(
+      "My draft",
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(updateCollectionRecord).toHaveBeenCalledTimes(2));
+    expect(updateCollectionRecord.mock.calls[1]?.[2].expectedRevision).toBe(2);
+    await waitFor(() =>
+      expect(screen.getByRole("textbox", { name: "Title" })).toHaveValue(
+        "My draft",
+      ),
+    );
+  });
 });

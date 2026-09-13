@@ -75,6 +75,62 @@ function textField(): DataSourceField<Row> {
 }
 
 describe("DataViewCellEditor", () => {
+  it("keeps the edited row as the first CAS baseline and rebases only after failure", async () => {
+    const execute = vi
+      .fn<(command: DataSourceCellCommand<Row>) => Promise<DataSourceActionResult<Row>>>()
+      .mockResolvedValueOnce({
+        status: "failed",
+        error: new Error("revision conflict"),
+      })
+      .mockImplementationOnce(async (command) => ({
+        status: "accepted",
+        row: {
+          ...command.row,
+          caption:
+            command.change.op === "set"
+              ? String(command.change.value)
+              : "",
+        },
+      }));
+    const view = render(
+      <DataViewCellEditor
+        source={source(execute)}
+        field={textField()}
+        row={row}
+        saveLabel="Save"
+        clearLabel="Clear"
+      />,
+    );
+    fireEvent.change(screen.getByLabelText("Caption"), {
+      target: { value: "My draft" },
+    });
+    view.rerender(
+      <DataViewCellEditor
+        source={source(execute)}
+        field={textField()}
+        row={{ ...row, caption: "Remote edit", amount: 2 }}
+        saveLabel="Save"
+        clearLabel="Clear"
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(execute).toHaveBeenCalledTimes(1));
+    expect(execute.mock.calls[0]?.[0].row).toEqual(row);
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "revision conflict",
+    );
+    expect(screen.getByLabelText("Caption")).toHaveValue("My draft");
+
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(execute).toHaveBeenCalledTimes(2));
+    expect(execute.mock.calls[1]?.[0].row).toEqual({
+      ...row,
+      caption: "Remote edit",
+      amount: 2,
+    });
+  });
+
   it("keeps a dirty pending/failed draft across equivalent DTO refreshes", async () => {
     const write = deferred<DataSourceActionResult<Row>>();
     const execute = vi.fn(() => write.promise);
