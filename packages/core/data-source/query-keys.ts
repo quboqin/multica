@@ -13,6 +13,15 @@ export function dataSourceIdentityKey(identity: DataSourceIdentity) {
   ] as const;
 }
 
+/**
+ * Collision-free scalar form for React keys, DOM diagnostics and local state.
+ * JSON tuple encoding preserves component boundaries (including empty strings)
+ * instead of relying on a delimiter that opaque source ids may contain.
+ */
+export function dataSourceIdentityString(identity: DataSourceIdentity) {
+  return JSON.stringify(dataSourceIdentityKey(identity));
+}
+
 export function dataSourceRowQueryKey<Query>(options: {
   identity: DataSourceIdentity;
   query: Query;

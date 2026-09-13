@@ -2068,11 +2068,13 @@ describe("ApiClient", () => {
 // the target workspace.
 describe("ApiClient explicit workspace targeting", () => {
   function stubOk(body: unknown) {
-    const fetchMock = vi.fn().mockResolvedValue(
-      new Response(JSON.stringify(body), {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      }),
+    const fetchMock = vi.fn().mockImplementation(() =>
+      Promise.resolve(
+        new Response(JSON.stringify(body), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      ),
     );
     vi.stubGlobal("fetch", fetchMock);
     return fetchMock;
@@ -2099,6 +2101,52 @@ describe("ApiClient explicit workspace targeting", () => {
       "proxima-centauri",
     );
     expect(slugHeaderOf(fetchMock)).toBe("proxima-centauri");
+  });
+
+  it("binds issue table reads and writes to the explicitly captured slug", async () => {
+    const fetchMock = stubOk({
+      query_fingerprint: "q",
+      group_key: null,
+      parent_id: null,
+      total: 0,
+      rows: [],
+      branch_total: 0,
+      next_cursor: null,
+    });
+    const client = new ApiClient("https://api.example.test");
+    await client.listIssueTableRows(
+      {
+        query: {
+          scope: { kind: "workspace" },
+          filters: {},
+          sort: { field: "position", direction: "asc" },
+        },
+        group: { kind: "none" },
+        group_key: null,
+        hierarchy: { enabled: false },
+        parent_id: null,
+        page: { limit: 50, cursor: null },
+      },
+      { workspaceSlug: "proxima-centauri" },
+    );
+    await client.updateIssue(
+      "issue-1",
+      { title: "Bound write" },
+      "proxima-centauri",
+    );
+    await client.setIssueProperty(
+      "issue-1",
+      "property-1",
+      "blue",
+      "proxima-centauri",
+    );
+
+    for (const call of fetchMock.mock.calls) {
+      const init = call[1] as RequestInit;
+      expect(
+        (init.headers as Record<string, string>)["X-Workspace-Slug"],
+      ).toBe("proxima-centauri");
+    }
   });
 
   it("omits the header when no slug is given, leaving the ambient one", async () => {

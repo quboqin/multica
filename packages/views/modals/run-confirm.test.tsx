@@ -289,6 +289,27 @@ describe("RunConfirmModal", () => {
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
+  it("refuses a stale confirmation when workspace or write access changed", () => {
+    const error = vi.fn();
+    const onClose = vi.fn();
+    render(
+      <RunConfirmModal
+        onClose={onClose}
+        data={{ ...single, canSubmit: () => false, onFailed: error }}
+      />,
+    );
+
+    fireEvent.click(confirmButton());
+
+    expect(mockUpdate).not.toHaveBeenCalled();
+    expect(error).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: "Workspace or write capability changed before submission",
+      }),
+    );
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
   it("keeps A pending after same-type B replaces its submitted modal, then accepts A without closing B", async () => {
     let finishA: ((issue: { id: string }) => void) | undefined;
     mockUpdate.mockReturnValueOnce(

@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef } from "react";
 import {
-  dataSourceIdentityKey,
+  dataSourceIdentityString,
   type DataSourceIdentity,
 } from "@multica/core/data-source";
 import { getDataViewSelectionRange } from "./table-model";
@@ -26,7 +26,7 @@ export function useDataViewSelection(options: {
     toggle,
     clear,
   } = options;
-  const identityKey = dataSourceIdentityKey(sourceIdentity).join(":");
+  const identityKey = dataSourceIdentityString(sourceIdentity);
   const previousIdentityRef = useRef(identityKey);
   const anchorRef = useRef<string | null>(null);
 

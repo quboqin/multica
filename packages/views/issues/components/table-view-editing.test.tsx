@@ -189,6 +189,16 @@ function makeIssue(id: string, title: string, status: Issue["status"]): Issue {
   };
 }
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (error: unknown) => void;
+  const promise = new Promise<T>((done, fail) => {
+    resolve = done;
+    reject = fail;
+  });
+  return { promise, resolve, reject };
+}
+
 const selection: IssueSurfaceSelection = {
   selectedIds: new Set<string>(),
   toggle: () => {},
@@ -220,11 +230,13 @@ function Harness({
   surfaceKey,
   onCreateIssue = () => {},
   readOnly = false,
+  surfaceActions = writableSurfaceActions,
 }: {
   childProgressMap: Map<string, ChildProgress>;
   surfaceKey: string;
   onCreateIssue?: (defaults: IssueCreateDefaults) => void;
   readOnly?: boolean;
+  surfaceActions?: IssueSurfaceActions;
 }) {
   const table = (
     <ViewStoreProvider store={getIssueSurfaceViewStore(surfaceKey)}>
@@ -248,7 +260,7 @@ function Harness({
     </ViewStoreProvider>
   );
   return readOnly ? table : (
-    <IssueSurfaceActionsProvider actions={writableSurfaceActions}>
+    <IssueSurfaceActionsProvider actions={surfaceActions}>
       {table}
     </IssueSurfaceActionsProvider>
   );
@@ -285,7 +297,7 @@ describe("TableView cell editors under data refresh", () => {
     await screen.findByText("MUL-c");
     const row = screen.getByText("MUL-c").closest("tr")!;
     await user.click(within(row).getByRole("button", { name: /Backlog/ }));
-    await user.click(screen.getByRole("button", { name: /^Todo$/ }));
+    fireEvent.click(screen.getByRole("button", { name: /^Todo$/ }));
 
     const { modal, data } = useModalStore.getState();
     expect(modal).toBe("issue-run-confirm");
@@ -296,6 +308,46 @@ describe("TableView cell editors under data refresh", () => {
       assigneeId: "agent-1",
     });
     useModalStore.getState().close();
+  });
+
+  it("cancels an unsubmitted table confirmation when write capability is revoked", async () => {
+    const user = userEvent.setup({ delay: null, pointerEventsCheck: 0 });
+    const updateIssueAsync = vi.fn(async () => makeIssue("c", "Updated", "todo"));
+    const surfaceKey = `test-confirm-revoke-${Math.floor(Math.random() * 1e9)}`;
+    serverIssues = [
+      {
+        ...makeIssue("c", "Parked task", "backlog"),
+        assignee_type: "agent",
+        assignee_id: "agent-1",
+      },
+    ];
+    const writable = (
+      <QueryClientProvider client={queryClient}>
+        <Harness
+          childProgressMap={new Map()}
+          surfaceKey={surfaceKey}
+          surfaceActions={{ ...writableSurfaceActions, updateIssueAsync }}
+        />
+      </QueryClientProvider>
+    );
+    const view = renderWithI18n(writable);
+
+    const row = (await screen.findByText("MUL-c")).closest("tr")!;
+    await user.click(within(row).getByRole("button", { name: /Backlog/ }));
+    fireEvent.click(screen.getByRole("button", { name: /^Todo$/ }));
+    expect(useModalStore.getState().modal).toBe("issue-run-confirm");
+
+    view.rerender(
+      <QueryClientProvider client={queryClient}>
+        <Harness
+          readOnly
+          childProgressMap={new Map()}
+          surfaceKey={surfaceKey}
+        />
+      </QueryClientProvider>,
+    );
+    await waitFor(() => expect(useModalStore.getState().modal).toBeNull());
+    expect(updateIssueAsync).not.toHaveBeenCalled();
   });
 
   let queryClient: QueryClient;
@@ -524,6 +576,166 @@ describe("TableView cell editors under data refresh", () => {
     expect(onCreateIssue).not.toHaveBeenCalled();
   });
 
+  it.each([
+    { targetIssueId: "b", caseName: "a different cell" },
+    { targetIssueId: "a", caseName: "the same cell reopened" },
+  ])("does not let an older property success close $caseName", async ({ targetIssueId }) => {
+    const writeA = deferred<{ properties: Record<string, string> }>();
+    const setIssueProperty = vi.fn(() => writeA.promise);
+    const property = {
+      id: "prop-1",
+      workspace_id: "ws-1",
+      name: "Color",
+      type: "select" as const,
+      config: {
+        options: [
+          { id: "red", name: "Red", color: "#f00" },
+          { id: "blue", name: "Blue", color: "#00f" },
+        ],
+      },
+      position: 1,
+      archived: false,
+      created_at: "2026-01-01T00:00:00Z",
+      updated_at: "2026-01-01T00:00:00Z",
+    };
+    serverIssues = [
+      { ...makeIssue("a", "Alpha", "todo"), properties: { "prop-1": "red" } },
+      { ...makeIssue("b", "Beta", "todo"), properties: { "prop-1": "red" } },
+    ];
+    setApiInstance({
+      listProperties: async () => ({ properties: [property] }),
+      listMembers: async () => [],
+      listAgents: async () => [],
+      listSquads: async () => [],
+      getAssigneeFrequency: async () => [],
+      listIssueStatuses: async () => ({ statuses: [] }),
+      listIssueTableRows: async () => ({
+        query_fingerprint: "test",
+        group_key: null,
+        parent_id: null,
+        total: serverIssues.length,
+        rows: serverIssues.map((issue) => ({ issue, direct_child_count: 0 })),
+        branch_total: serverIssues.length,
+        next_cursor: null,
+      }),
+      setIssueProperty,
+    } as unknown as ApiClient);
+    const surfaceKey = `test-editor-success-${Math.floor(Math.random() * 1e9)}`;
+    getIssueSurfaceViewStore(surfaceKey)
+      .getState()
+      .toggleTableColumn("property:prop-1");
+    renderWithI18n(
+      <QueryClientProvider client={queryClient}>
+        <Harness childProgressMap={new Map()} surfaceKey={surfaceKey} />
+      </QueryClientProvider>,
+    );
+
+    const rowA = (await screen.findByText("MUL-a")).closest("tr")!;
+    fireEvent.click(within(rowA).getByText("Red"));
+    fireEvent.click(screen.getByRole("button", { name: "Blue" }));
+    await waitFor(() => expect(setIssueProperty).toHaveBeenCalledTimes(1));
+    const targetRow = screen
+      .getByText(`MUL-${targetIssueId}`)
+      .closest("tr")!;
+    fireEvent.click(
+      within(targetRow).getByText(targetIssueId === "a" ? "Blue" : "Red"),
+    );
+    if (targetIssueId === "a") {
+      fireEvent.click(within(targetRow).getByText("Blue"));
+    }
+    expect(
+      screen
+        .getAllByRole("button", { name: "Blue" })
+        .some((button) => button.hasAttribute("data-picker-item")),
+    ).toBe(true);
+
+    act(() => {
+      writeA.resolve({ properties: { "prop-1": "blue" } });
+    });
+    await waitFor(() => {
+      expect(queryClient.isMutating()).toBe(0);
+      expect(
+        screen
+          .getAllByRole("button", { name: "Blue" })
+          .some((button) => button.hasAttribute("data-picker-item")),
+      ).toBe(true);
+    });
+  });
+
+  it("does not let an older system-field failure reopen over a newer editor", async () => {
+    const user = userEvent.setup({ delay: null, pointerEventsCheck: 0 });
+    const writeA = deferred<Issue>();
+    const updateIssueAsync = vi.fn(() => writeA.promise);
+    const surfaceActions: IssueSurfaceActions = {
+      ...writableSurfaceActions,
+      updateIssueAsync,
+    };
+    serverIssues = [
+      makeIssue("a", "Alpha", "todo"),
+      makeIssue("b", "Beta", "todo"),
+    ];
+    renderWithI18n(
+      <QueryClientProvider client={queryClient}>
+        <Harness
+          childProgressMap={new Map()}
+          surfaceKey={`test-editor-failure-${Math.floor(Math.random() * 1e9)}`}
+          surfaceActions={surfaceActions}
+        />
+      </QueryClientProvider>,
+    );
+
+    const rowA = (await screen.findByText("MUL-a")).closest("tr")!;
+    const rowB = screen.getByText("MUL-b").closest("tr")!;
+    await user.click(
+      within(rowA).getByRole("button", { name: "No priority" }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "High" }));
+    await waitFor(() => expect(updateIssueAsync).toHaveBeenCalledTimes(1));
+    await user.click(
+      within(rowB).getByRole("button", { name: "No priority" }),
+    );
+    expect(screen.getByRole("button", { name: "Low" })).toBeInTheDocument();
+
+    await act(async () => {
+      writeA.reject(new Error("A failed"));
+      await writeA.promise.catch(() => undefined);
+    });
+    expect(screen.getByRole("button", { name: "Low" })).toBeInTheDocument();
+  });
+
+  it("does not let an old request affect the same cell after it is reopened", async () => {
+    const user = userEvent.setup({ delay: null, pointerEventsCheck: 0 });
+    const write = deferred<Issue>();
+    const updateIssueAsync = vi.fn(() => write.promise);
+    serverIssues = [makeIssue("a", "Alpha", "todo")];
+    renderWithI18n(
+      <QueryClientProvider client={queryClient}>
+        <Harness
+          childProgressMap={new Map()}
+          surfaceKey={`test-editor-reopen-${Math.floor(Math.random() * 1e9)}`}
+          surfaceActions={{ ...writableSurfaceActions, updateIssueAsync }}
+        />
+      </QueryClientProvider>,
+    );
+
+    const row = (await screen.findByText("MUL-a")).closest("tr")!;
+    await user.click(
+      within(row).getByRole("button", { name: "No priority" }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "High" }));
+    await waitFor(() => expect(updateIssueAsync).toHaveBeenCalledTimes(1));
+    await user.click(
+      within(row).getByRole("button", { name: "No priority" }),
+    );
+    expect(screen.getByRole("button", { name: "Low" })).toBeInTheDocument();
+
+    await act(async () => {
+      write.reject(new Error("old request failed"));
+      await write.promise.catch(() => undefined);
+    });
+    expect(screen.getByRole("button", { name: "Low" })).toBeInTheDocument();
+  });
+
   it("navigates in place on plain title and row clicks; modifiers open tabs", async () => {
     const user = userEvent.setup({ delay: null, pointerEventsCheck: 0 });
     serverIssues = [makeIssue("a", "Alpha task", "todo")];
@@ -646,73 +858,93 @@ describe("TableView cell editors under data refresh", () => {
 describe("useReleaseEditingCellOnUnmount", () => {
   function Probe({
     cellKey,
-    editingCellKey,
-    setEditingCellKey,
+    editingCellSession,
+    closeEditingCell,
   }: {
     cellKey: string | null;
-    editingCellKey: string | null;
-    setEditingCellKey: (key: string | null) => void;
+    editingCellSession: {
+      cellKey: string;
+      instanceId: number;
+      sourceIdentity: string;
+    } | null;
+    closeEditingCell: (instanceId: number) => void;
   }) {
-    useReleaseEditingCellOnUnmount(cellKey, editingCellKey, setEditingCellKey);
+    useReleaseEditingCellOnUnmount(
+      cellKey,
+      editingCellSession,
+      closeEditingCell,
+    );
     return null;
   }
 
   afterEach(cleanup);
 
   it("clears the key when the cell that owns the open editor unmounts", () => {
-    const setEditingCellKey = vi.fn();
+    const closeEditingCell = vi.fn();
     const { unmount } = render(
       <Probe
         cellKey="issue-a:status"
-        editingCellKey="issue-a:status"
-        setEditingCellKey={setEditingCellKey}
+        editingCellSession={{
+          cellKey: "issue-a:status",
+          instanceId: 7,
+          sourceIdentity: "source-a",
+        }}
+        closeEditingCell={closeEditingCell}
       />,
     );
 
     unmount();
 
-    expect(setEditingCellKey).toHaveBeenCalledWith(null);
+    expect(closeEditingCell).toHaveBeenCalledWith(7);
   });
 
   it("leaves the key untouched when a different cell unmounts", () => {
-    const setEditingCellKey = vi.fn();
+    const closeEditingCell = vi.fn();
     const { unmount } = render(
       <Probe
         cellKey="issue-b:status"
-        editingCellKey="issue-a:status"
-        setEditingCellKey={setEditingCellKey}
+        editingCellSession={{
+          cellKey: "issue-a:status",
+          instanceId: 8,
+          sourceIdentity: "source-a",
+        }}
+        closeEditingCell={closeEditingCell}
       />,
     );
 
     unmount();
 
-    expect(setEditingCellKey).not.toHaveBeenCalled();
+    expect(closeEditingCell).not.toHaveBeenCalled();
   });
 
   it("does not fire on mount while the cell is not yet the active editor", () => {
-    const setEditingCellKey = vi.fn();
+    const closeEditingCell = vi.fn();
     // Mount not-owning, then the editor opens on THIS cell (rerender, no
     // remount), then it unmounts — the responder reads the latest key.
     const { rerender, unmount } = render(
       <Probe
         cellKey="issue-a:status"
-        editingCellKey={null}
-        setEditingCellKey={setEditingCellKey}
+        editingCellSession={null}
+        closeEditingCell={closeEditingCell}
       />,
     );
-    expect(setEditingCellKey).not.toHaveBeenCalled();
+    expect(closeEditingCell).not.toHaveBeenCalled();
 
     rerender(
       <Probe
         cellKey="issue-a:status"
-        editingCellKey="issue-a:status"
-        setEditingCellKey={setEditingCellKey}
+        editingCellSession={{
+          cellKey: "issue-a:status",
+          instanceId: 9,
+          sourceIdentity: "source-a",
+        }}
+        closeEditingCell={closeEditingCell}
       />,
     );
-    expect(setEditingCellKey).not.toHaveBeenCalled();
+    expect(closeEditingCell).not.toHaveBeenCalled();
 
     unmount();
-    expect(setEditingCellKey).toHaveBeenCalledTimes(1);
-    expect(setEditingCellKey).toHaveBeenCalledWith(null);
+    expect(closeEditingCell).toHaveBeenCalledTimes(1);
+    expect(closeEditingCell).toHaveBeenCalledWith(9);
   });
 });

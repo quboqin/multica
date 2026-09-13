@@ -2,6 +2,7 @@
 
 import { useMemo, useState } from "react";
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -63,6 +64,20 @@ type SampleQuery = {
   search: string;
   sort: { fieldId: "caption" | "amount"; direction: "asc" | "desc" };
 };
+
+const sampleLibraryKey = (workspaceId: string, sourceId: string) =>
+  JSON.stringify([workspaceId, sourceId]);
+
+function structuralActionLabel(key: string) {
+  if (key.includes("groups")) return "Load more groups";
+  if (!key.startsWith("activate:")) return "Load more rows";
+  const [groupKey] = JSON.parse(key.slice("activate:".length)) as [
+    string | null,
+    string | null,
+  ];
+  const label = groupKey?.replace(/^opaque:/, "") ?? "ungrouped";
+  return `Load rows for ${label}`;
+}
 type SampleReadQuery = {
   view: SampleQuery;
   groupBy: DataViewGroupBy;
@@ -148,7 +163,7 @@ class SampleLibrary {
   failNext = false;
 
   seed(workspaceId: string, sourceId: string, caption: string) {
-    this.rows.set(`${workspaceId}:${sourceId}`, [
+    this.rows.set(sampleLibraryKey(workspaceId, sourceId), [
       {
         key: "same-row",
         caption,
@@ -187,6 +202,14 @@ class SampleLibrary {
   }
 }
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
+}
+
 function filteredRows(rows: SampleRow[], query: SampleQuery) {
   const direction = query.sort.direction === "asc" ? 1 : -1;
   return rows
@@ -206,7 +229,7 @@ function createSampleSource(
   sourceId: string,
   writable = true,
 ): SampleSource {
-  const libraryKey = `${workspaceId}:${sourceId}`;
+  const libraryKey = sampleLibraryKey(workspaceId, sourceId);
   return {
     identity: { workspaceId, namespace: "sample", sourceId },
     key: sourceId,
@@ -507,11 +530,6 @@ function SampleTable({ source }: { source: SampleSource }) {
             };
           }
           if (value.kind === "load_more") {
-            const label = value.key.includes("groups")
-              ? "Load more groups"
-              : value.key.startsWith("activate:opaque:")
-                ? `Load rows for ${value.key.split(":")[2]}`
-                : "Load more rows";
             return {
               content: (
                 <button
@@ -519,7 +537,7 @@ function SampleTable({ source }: { source: SampleSource }) {
                   disabled={value.state === "loading"}
                   onClick={value.onLoad}
                 >
-                  {label}
+                  {structuralActionLabel(value.key)}
                 </button>
               ),
             };
@@ -563,9 +581,10 @@ describe("shared TableView with a non-Issue source", () => {
     await user.type(caption, "Updated caption");
     fireEvent.submit(caption.closest("form")!);
     await waitFor(() =>
-      expect(library.rows.get("ws-a:sample-a")?.[0]?.caption).toBe(
-        "Updated caption",
-      ),
+      expect(
+        library.rows.get(sampleLibraryKey("ws-a", "sample-a"))?.[0]
+          ?.caption,
+      ).toBe("Updated caption"),
     );
     await screen.findByDisplayValue("Updated caption");
 
@@ -573,24 +592,35 @@ describe("shared TableView with a non-Issue source", () => {
     fireEvent.change(amount, { target: { value: "1.5" } });
     fireEvent.submit(amount.closest("form")!);
     await waitFor(() =>
-      expect(library.rows.get("ws-a:sample-a")?.[0]?.amount).toBe(1.5),
+      expect(
+        library.rows.get(sampleLibraryKey("ws-a", "sample-a"))?.[0]
+          ?.amount,
+      ).toBe(1.5),
     );
     fireEvent.change(screen.getAllByLabelText("Bucket")[0]!, {
       target: { value: "beta" },
     });
     await waitFor(() =>
-      expect(library.rows.get("ws-a:sample-a")?.[0]?.bucket).toBe("beta"),
+      expect(
+        library.rows.get(sampleLibraryKey("ws-a", "sample-a"))?.[0]
+          ?.bucket,
+      ).toBe("beta"),
     );
     await user.click(screen.getAllByLabelText("Flag")[0]!);
     await waitFor(() => {
-      const row = library.rows.get("ws-a:sample-a")?.[0];
+      const row = library.rows.get(
+        sampleLibraryKey("ws-a", "sample-a"),
+      )?.[0];
       expect(row?.attributes.flag).toBe(true);
     });
     fireEvent.change(screen.getAllByLabelText("Bucket")[0]!, {
       target: { value: "" },
     });
     await waitFor(() =>
-      expect(library.rows.get("ws-a:sample-a")?.[0]?.bucket).toBeUndefined(),
+      expect(
+        library.rows.get(sampleLibraryKey("ws-a", "sample-a"))?.[0]
+          ?.bucket,
+      ).toBeUndefined(),
     );
 
     await user.click(screen.getByRole("button", { name: "Load more rows" }));
@@ -656,21 +686,36 @@ describe("shared TableView with a non-Issue source", () => {
   it("isolates equal row, field and query ids across sources, workspaces and remounts", async () => {
     const user = userEvent.setup();
     const library = new SampleLibrary();
-    library.seed("ws-a", "same", "Workspace A");
-    library.seed("ws-a", "other", "Source B");
+    // These two identities collided under the former `parts.join(":")` key.
+    library.seed("ws:sample", "same", "Workspace A");
+    library.seed("ws", "sample:same", "Source B");
     library.seed("ws-b", "same", "Workspace B");
-    const first = renderSample(createSampleSource(library, "ws-a", "same"));
+    const first = renderSample(
+      createSampleSource(library, "ws:sample", "same"),
+    );
     expect(await screen.findByDisplayValue("Workspace A")).toBeInTheDocument();
     await user.click(screen.getByLabelText("Select Workspace A"));
     expect(screen.getByLabelText("Selected count")).toHaveTextContent("1");
+    const caption = screen.getAllByLabelText("Caption")[0]!;
+    await user.clear(caption);
+    await user.type(caption, "Persisted A");
+    fireEvent.submit(caption.closest("form")!);
+    await waitFor(() =>
+      expect(
+        library.rows.get(sampleLibraryKey("ws:sample", "same"))?.[0]
+          ?.caption,
+      ).toBe("Persisted A"),
+    );
 
     first.rerender(
       <QueryClientProvider client={first.queryClient}>
-        <SampleTable source={createSampleSource(library, "ws-a", "other")} />
+        <SampleTable
+          source={createSampleSource(library, "ws", "sample:same")}
+        />
       </QueryClientProvider>,
     );
     expect(await screen.findByDisplayValue("Source B")).toBeInTheDocument();
-    expect(screen.queryByDisplayValue("Workspace A")).toBeNull();
+    expect(screen.queryByDisplayValue("Persisted A")).toBeNull();
     await waitFor(() =>
       expect(screen.getByLabelText("Selected count")).toHaveTextContent("0"),
     );
@@ -684,9 +729,51 @@ describe("shared TableView with a non-Issue source", () => {
 
     first.unmount();
     renderSample(
-      createSampleSource(library, "ws-a", "same"),
+      createSampleSource(library, "ws:sample", "same"),
       new QueryClient({ defaultOptions: { queries: { retry: false } } }),
     );
-    expect(await screen.findByDisplayValue("Workspace A")).toBeInTheDocument();
+    expect(await screen.findByDisplayValue("Persisted A")).toBeInTheDocument();
+  });
+
+  it("keeps a late write and its invalidation scoped to the source that started it", async () => {
+    const user = userEvent.setup();
+    const library = new SampleLibrary();
+    library.seed("ws-a", "source-a", "Source A");
+    library.seed("ws-a", "source-b", "Source B");
+    const sourceA = createSampleSource(library, "ws-a", "source-a");
+    const originalExecute = sourceA.execute;
+    const release = deferred<void>();
+    sourceA.execute = async (command) => {
+      await release.promise;
+      return originalExecute(command);
+    };
+    const rendered = renderSample(sourceA);
+    const caption = await screen.findByDisplayValue("Source A");
+    await user.clear(caption);
+    await user.type(caption, "Late A");
+    fireEvent.submit(caption.closest("form")!);
+
+    rendered.rerender(
+      <QueryClientProvider client={rendered.queryClient}>
+        <SampleTable
+          source={createSampleSource(library, "ws-a", "source-b")}
+        />
+      </QueryClientProvider>,
+    );
+    expect(await screen.findByDisplayValue("Source B")).toBeInTheDocument();
+    await act(async () => {
+      release.resolve();
+      await release.promise;
+    });
+    await waitFor(() =>
+      expect(
+        library.rows.get(sampleLibraryKey("ws-a", "source-a"))?.[0]
+          ?.caption,
+      ).toBe("Late A"),
+    );
+    expect(
+      library.rows.get(sampleLibraryKey("ws-a", "source-b"))?.[0]?.caption,
+    ).toBe("Source B");
+    expect(screen.getByDisplayValue("Source B")).toBeInTheDocument();
   });
 });

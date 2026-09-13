@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { CalendarDays, Check, ExternalLink } from "lucide-react";
 import { toast } from "sonner";
 import type { Issue, IssueProperty, IssuePropertyValue } from "@multica/core/types";
@@ -416,10 +416,20 @@ function TextishPropertyEditor({
 }) {
   const { t } = useT("issues");
   const [draft, setDraft] = useState("");
+  const [dirty, setDirty] = useState(false);
+  const [pending, setPending] = useState(false);
+  const wasOpenRef = useRef(false);
 
   useEffect(() => {
-    if (open) setDraft(value === undefined ? "" : String(value));
-  }, [open, value]);
+    if (open && !wasOpenRef.current) {
+      setDraft(value === undefined ? "" : String(value));
+      setDirty(false);
+      setPending(false);
+    } else if (open && !dirty && !pending) {
+      setDraft(value === undefined ? "" : String(value));
+    }
+    wasOpenRef.current = open;
+  }, [dirty, open, pending, value]);
 
   const placeholder =
     property.type === "url"
@@ -437,15 +447,23 @@ function TextishPropertyEditor({
       return;
     }
     if (!canSet) return;
-    let accepted: boolean;
-    if (property.type === "number") {
-      const parsed = Number(trimmed);
-      if (Number.isNaN(parsed)) return;
-      accepted = await onCommit(parsed);
-    } else {
-      accepted = await onCommit(trimmed);
+    setPending(true);
+    try {
+      let accepted: boolean;
+      if (property.type === "number") {
+        const parsed = Number(trimmed);
+        if (Number.isNaN(parsed)) return;
+        accepted = await onCommit(parsed);
+      } else {
+        accepted = await onCommit(trimmed);
+      }
+      if (accepted) {
+        setDirty(false);
+        onOpenChange(false);
+      }
+    } finally {
+      setPending(false);
     }
-    if (accepted) onOpenChange(false);
   };
 
   return (
@@ -474,7 +492,11 @@ function TextishPropertyEditor({
             step={property.type === "number" ? "any" : undefined}
             inputMode={property.type === "number" ? "decimal" : undefined}
             value={draft}
-            onChange={(event) => setDraft(event.target.value)}
+            disabled={!canSet || pending}
+            onChange={(event) => {
+              setDraft(event.target.value);
+              setDirty(true);
+            }}
             placeholder={placeholder}
             className="h-8"
           />

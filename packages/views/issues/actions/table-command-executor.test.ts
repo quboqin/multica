@@ -103,6 +103,24 @@ describe("createIssueTableCommandExecutor", () => {
     expect(result).toEqual({ status: "failed", error });
   });
 
+  it("rejects a direct write when its captured capability was revoked", async () => {
+    const updateIssueAsync = vi.fn(async () => makeIssue());
+    const execute = createIssueTableCommandExecutor({
+      actions: actions(updateIssueAsync),
+      statusCatalog,
+      openRunConfirm: vi.fn(),
+      canSubmit: () => false,
+    })!;
+
+    const result = await execute({
+      issue: makeIssue(),
+      updates: { title: "Renamed" },
+    });
+
+    expect(result.status).toBe("failed");
+    expect(updateIssueAsync).not.toHaveBeenCalled();
+  });
+
   it("does not accept or write a gated command before confirmation", async () => {
     let modalData: RunConfirmData | undefined;
     const updateIssueAsync = vi.fn(async () => makeIssue());
@@ -128,6 +146,37 @@ describe("createIssueTableCommandExecutor", () => {
     expect(settled).toBe(false);
     modalData?.onAccepted?.();
     await expect(result).resolves.toEqual({ status: "accepted" });
+  });
+
+  it("carries source, workspace and submission guards into confirmation", () => {
+    let modalData: RunConfirmData | undefined;
+    const workspaceContext = {
+      workspaceId: "ws-1",
+      workspaceSlug: "alpha",
+    };
+    const canSubmit = vi.fn(() => true);
+    const execute = createIssueTableCommandExecutor({
+      actions: actions(),
+      statusCatalog,
+      openRunConfirm: (data) => {
+        modalData = data;
+      },
+      sourceIdentity: "source-a",
+      workspaceContext,
+      canSubmit,
+    })!;
+
+    void execute({
+      issue: makeIssue(),
+      updates: { assignee_type: "agent", assignee_id: "agent-1" },
+    });
+
+    expect(modalData).toMatchObject({
+      sourceIdentity: "source-a",
+      workspaceContext,
+      canSubmit,
+    });
+    modalData?.onCancelled?.();
   });
 
   it("returns cancelled when the confirmation is dismissed", async () => {

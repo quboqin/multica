@@ -2,6 +2,10 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api";
 import { propertyKeys } from "./queries";
 import { useWorkspaceId } from "../hooks";
+import {
+  assertWorkspaceRequestContext,
+  type WorkspaceRequestContext,
+} from "../platform";
 import { issueKeys } from "../issues/queries";
 import {
   invalidatePropertyWindowQueries,
@@ -18,6 +22,19 @@ import type {
   IssuePropertyValues,
   ListIssuesCache,
 } from "../types";
+
+export type SetIssuePropertyInput = {
+  issueId: string;
+  propertyId: string;
+  value: IssuePropertyValue;
+  workspaceContext?: WorkspaceRequestContext;
+};
+
+export type UnsetIssuePropertyInput = {
+  issueId: string;
+  propertyId: string;
+  workspaceContext?: WorkspaceRequestContext;
+};
 
 export function useCreateProperty() {
   const qc = useQueryClient();
@@ -116,8 +133,22 @@ export function useSetIssueProperty() {
   const qc = useQueryClient();
   const wsId = useWorkspaceId();
   return useMutation({
-    mutationFn: ({ issueId, propertyId, value }: { issueId: string; propertyId: string; value: IssuePropertyValue }) =>
-      api.setIssueProperty(issueId, propertyId, value),
+    mutationFn: ({
+      issueId,
+      propertyId,
+      value,
+      workspaceContext,
+    }: SetIssuePropertyInput) => {
+      if (workspaceContext) assertWorkspaceRequestContext(workspaceContext);
+      return workspaceContext
+        ? api.setIssueProperty(
+            issueId,
+            propertyId,
+            value,
+            workspaceContext.workspaceSlug,
+          )
+        : api.setIssueProperty(issueId, propertyId, value);
+    },
     scope: { id: `issue-properties:${wsId}` },
     mutationKey: ["issue-properties", wsId],
     onMutate: async ({ issueId, propertyId, value }) => {
@@ -145,8 +176,20 @@ export function useUnsetIssueProperty() {
   const qc = useQueryClient();
   const wsId = useWorkspaceId();
   return useMutation({
-    mutationFn: ({ issueId, propertyId }: { issueId: string; propertyId: string }) =>
-      api.unsetIssueProperty(issueId, propertyId),
+    mutationFn: ({
+      issueId,
+      propertyId,
+      workspaceContext,
+    }: UnsetIssuePropertyInput) => {
+      if (workspaceContext) assertWorkspaceRequestContext(workspaceContext);
+      return workspaceContext
+        ? api.unsetIssueProperty(
+            issueId,
+            propertyId,
+            workspaceContext.workspaceSlug,
+          )
+        : api.unsetIssueProperty(issueId, propertyId);
+    },
     scope: { id: `issue-properties:${wsId}` },
     mutationKey: ["issue-properties", wsId],
     onMutate: async ({ issueId, propertyId }) => {

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   dataSourceGroupQueryKey,
+  dataSourceIdentityString,
   dataSourceRowQueryKey,
   dataSourceViewStateKey,
 } from "./query-keys";
@@ -67,5 +68,28 @@ describe("data-source identity keys", () => {
     expect(groups).not.toEqual(view);
     expect(view).not.toEqual(otherView);
     expect(view).not.toEqual(otherSourceView);
+  });
+
+  it("serializes opaque identity parts without delimiter collisions", () => {
+    expect(
+      dataSourceIdentityString({
+        workspaceId: "a:b",
+        namespace: "c",
+        sourceId: "",
+      }),
+    ).not.toBe(
+      dataSourceIdentityString({
+        workspaceId: "a",
+        namespace: "b:c",
+        sourceId: "",
+      }),
+    );
+    expect(
+      dataSourceIdentityString({
+        workspaceId: "",
+        namespace: "",
+        sourceId: ":root::",
+      }),
+    ).toBe('["data-source","","",":root::"]');
   });
 });

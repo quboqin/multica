@@ -980,9 +980,14 @@ export class ApiClient {
     });
   }
 
-  async listIssueTableGroups(params: IssueTableGroupsRequest): Promise<IssueTableGroupsResponse> {
+  async listIssueTableGroups(
+    params: IssueTableGroupsRequest,
+    request?: { workspaceSlug?: string; signal?: AbortSignal },
+  ): Promise<IssueTableGroupsResponse> {
     const raw = await this.fetch<unknown>("/api/issues/table/groups", {
       method: "POST",
+      headers: workspaceHeader(request?.workspaceSlug),
+      signal: request?.signal,
       body: JSON.stringify(params),
     });
     return parseWithFallback(
@@ -993,9 +998,14 @@ export class ApiClient {
     );
   }
 
-  async listIssueTableRows(params: IssueTableRowsRequest): Promise<IssueTableRowsResponse> {
+  async listIssueTableRows(
+    params: IssueTableRowsRequest,
+    request?: { workspaceSlug?: string; signal?: AbortSignal },
+  ): Promise<IssueTableRowsResponse> {
     const raw = await this.fetch<unknown>("/api/issues/table/rows", {
       method: "POST",
+      headers: workspaceHeader(request?.workspaceSlug),
+      signal: request?.signal,
       body: JSON.stringify(params),
     });
     return parseWithFallback(
@@ -1198,16 +1208,26 @@ export class ApiClient {
     });
   }
 
-  async updateIssue(id: string, data: UpdateIssueRequest): Promise<Issue> {
+  async updateIssue(
+    id: string,
+    data: UpdateIssueRequest,
+    workspaceSlug?: string,
+  ): Promise<Issue> {
     return this.fetch(`/api/issues/${id}`, {
       method: "PUT",
+      headers: workspaceHeader(workspaceSlug),
       body: JSON.stringify(data),
     });
   }
 
-  async moveIssue(id: string, data: MoveIssueRequest): Promise<Issue> {
+  async moveIssue(
+    id: string,
+    data: MoveIssueRequest,
+    workspaceSlug?: string,
+  ): Promise<Issue> {
     return this.fetch(`/api/issues/${id}/move`, {
       method: "POST",
+      headers: workspaceHeader(workspaceSlug),
       body: JSON.stringify(data),
     });
   }
@@ -3845,9 +3865,15 @@ export class ApiClient {
     });
   }
 
-  async setIssueProperty(issueId: string, propertyId: string, value: IssuePropertyValue): Promise<IssuePropertiesResponse> {
+  async setIssueProperty(
+    issueId: string,
+    propertyId: string,
+    value: IssuePropertyValue,
+    workspaceSlug?: string,
+  ): Promise<IssuePropertiesResponse> {
     const raw = await this.fetch<unknown>(`/api/issues/${issueId}/properties/${propertyId}`, {
       method: "PUT",
+      headers: workspaceHeader(workspaceSlug),
       body: JSON.stringify({ value }),
     });
     return parseWithFallback(raw, IssuePropertiesResponseSchema, EMPTY_ISSUE_PROPERTIES_RESPONSE, {
@@ -3855,9 +3881,14 @@ export class ApiClient {
     });
   }
 
-  async unsetIssueProperty(issueId: string, propertyId: string): Promise<IssuePropertiesResponse> {
+  async unsetIssueProperty(
+    issueId: string,
+    propertyId: string,
+    workspaceSlug?: string,
+  ): Promise<IssuePropertiesResponse> {
     const raw = await this.fetch<unknown>(`/api/issues/${issueId}/properties/${propertyId}`, {
       method: "DELETE",
+      headers: workspaceHeader(workspaceSlug),
     });
     return parseWithFallback(raw, IssuePropertiesResponseSchema, EMPTY_ISSUE_PROPERTIES_RESPONSE, {
       endpoint: "DELETE /api/issues/{id}/properties/{propertyId}",
@@ -3871,9 +3902,14 @@ export class ApiClient {
     });
   }
 
-  async attachLabel(issueId: string, labelId: string): Promise<IssueLabelsResponse> {
+  async attachLabel(
+    issueId: string,
+    labelId: string,
+    workspaceSlug?: string,
+  ): Promise<IssueLabelsResponse> {
     const raw = await this.fetch<unknown>(`/api/issues/${issueId}/labels`, {
       method: "POST",
+      headers: workspaceHeader(workspaceSlug),
       body: JSON.stringify({ label_id: labelId }),
     });
     return parseWithFallback(raw, ResourceLabelsResponseSchema, EMPTY_RESOURCE_LABELS_RESPONSE, {
@@ -3881,9 +3917,14 @@ export class ApiClient {
     });
   }
 
-  async detachLabel(issueId: string, labelId: string): Promise<IssueLabelsResponse> {
+  async detachLabel(
+    issueId: string,
+    labelId: string,
+    workspaceSlug?: string,
+  ): Promise<IssueLabelsResponse> {
     const raw = await this.fetch<unknown>(`/api/issues/${issueId}/labels/${labelId}`, {
       method: "DELETE",
+      headers: workspaceHeader(workspaceSlug),
     });
     return parseWithFallback(raw, ResourceLabelsResponseSchema, EMPTY_RESOURCE_LABELS_RESPONSE, {
       endpoint: "DELETE /api/issues/{id}/labels/{labelId}",

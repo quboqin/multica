@@ -25,6 +25,10 @@ import {
   pruneDeletedIssueFromParentChildrenCaches,
 } from "./delete-cache";
 import { useWorkspaceId } from "../hooks";
+import {
+  assertWorkspaceRequestContext,
+  type WorkspaceRequestContext,
+} from "../platform";
 import { useRecentContextStore } from "../chat/recent-context-store";
 import { useRecentIssuesStore } from "./stores";
 import type { InboxItem, Issue, IssueReaction } from "../types";
@@ -61,6 +65,7 @@ export type ToggleIssueReactionVars = {
 
 export type UpdateIssueMutationInput = {
   id: string;
+  workspaceContext?: WorkspaceRequestContext;
   /**
    * Present only for drag/drop. `position` remains in the optimistic patch,
    * while the request sent to the server contains relative anchors instead.
@@ -126,12 +131,20 @@ export function useUpdateIssue() {
   const qc = useQueryClient();
   const wsId = useWorkspaceId();
   return useMutation({
-    mutationFn: ({ id, move_intent: moveIntent, ...data }: UpdateIssueMutationInput) => {
-      if (!moveIntent) return api.updateIssue(id, data);
+    mutationFn: ({ id, move_intent: moveIntent, workspaceContext, ...data }: UpdateIssueMutationInput) => {
+      if (workspaceContext) assertWorkspaceRequestContext(workspaceContext);
+      if (!moveIntent) {
+        return workspaceContext
+          ? api.updateIssue(id, data, workspaceContext.workspaceSlug)
+          : api.updateIssue(id, data);
+      }
       const { position: _optimisticPosition, ...target } = data;
-      return api.moveIssue(id, { ...target, ...moveIntent });
+      const payload = { ...target, ...moveIntent };
+      return workspaceContext
+        ? api.moveIssue(id, payload, workspaceContext.workspaceSlug)
+        : api.moveIssue(id, payload);
     },
-    onMutate: ({ id, move_intent: _moveIntent, ...data }) => {
+    onMutate: ({ id, move_intent: _moveIntent, workspaceContext: _workspaceContext, ...data }) => {
       // suppress_run is a write-time control field, not an Issue column.
       // description_base is merge metadata, while description itself
       // is resolved against that base on the server and therefore is not safe
@@ -252,6 +265,7 @@ export function useUpdateIssue() {
         suppress_run: _suppressRun,
         description_base: _descriptionBase,
         move_intent: _moveIntent,
+        workspaceContext: _workspaceContext,
         id: _id,
         ...intent
       } = vars;

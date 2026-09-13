@@ -62,6 +62,8 @@ interface RunConfirmModalData {
   assigneeId?: string;
   assigneeName?: string;
   issueRevision?: number;
+  canSubmit?: RunConfirmData["canSubmit"];
+  workspaceContext?: RunConfirmData["workspaceContext"];
   onSubmitting?: RunConfirmData["onSubmitting"];
   onAccepted?: RunConfirmData["onAccepted"];
   onCancelled?: RunConfirmData["onCancelled"];
@@ -148,6 +150,20 @@ export function RunConfirmModal({
 
   const submit = async (suppressRun: boolean) => {
     if (issueIds.length === 0 || submittingRef.current) return;
+    let canSubmit = true;
+    try {
+      canSubmit = d.canSubmit?.() ?? true;
+    } catch {
+      canSubmit = false;
+    }
+    if (!canSubmit) {
+      const error = new Error(
+        "Workspace or write capability changed before submission",
+      );
+      reportResult(() => d.onFailed?.(error));
+      onClose();
+      return;
+    }
     submittingRef.current = true;
     try {
       d.onSubmitting?.();
@@ -165,6 +181,9 @@ export function RunConfirmModal({
         const issue = await updateIssue.mutateAsync({
           id: issueIds[0]!,
           ...payload,
+          ...(d.workspaceContext
+            ? { workspaceContext: d.workspaceContext }
+            : {}),
         });
         reportResult(() => d.onAccepted?.(issue));
       } else {

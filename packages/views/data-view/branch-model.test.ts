@@ -25,6 +25,17 @@ function state(): DataViewBranchState {
 }
 
 describe("rebaseDataViewBranchState", () => {
+  it("keeps null, empty, root and delimiter-bearing opaque ids distinct", () => {
+    const keys = [
+      dataViewBranchKey(null, null),
+      dataViewBranchKey(null, "root"),
+      dataViewBranchKey("", null),
+      dataViewBranchKey("a::b", "c"),
+      dataViewBranchKey("a", "b::c"),
+    ];
+    expect(new Set(keys)).toHaveProperty("size", keys.length);
+  });
+
   it("keeps branches but evicts tail cursors for a query-only change", () => {
     const next = rebaseDataViewBranchState(
       state(),
@@ -33,7 +44,9 @@ describe("rebaseDataViewBranchState", () => {
       true,
     );
 
-    expect(next.branches.get("g-1::root")?.cursors).toEqual([null]);
+    expect(next.branches.get(dataViewBranchKey("g-1", null))?.cursors).toEqual([
+      null,
+    ]);
   });
 
   it("does not carry branches across a source or structure identity", () => {
@@ -44,6 +57,8 @@ describe("rebaseDataViewBranchState", () => {
       false,
     );
 
-    expect([...next.branches.keys()]).toEqual(["ungrouped::root"]);
+    expect([...next.branches.keys()]).toEqual([
+      dataViewBranchKey(null, null),
+    ]);
   });
 });

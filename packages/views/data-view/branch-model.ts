@@ -16,7 +16,7 @@ export function dataViewBranchKey(
   groupKey: string | null,
   parentRowId: string | null,
 ) {
-  return `${groupKey ?? "ungrouped"}::${parentRowId ?? "root"}`;
+  return JSON.stringify([groupKey, parentRowId]);
 }
 
 export function sameDataViewPath(left: string[], right: string[]) {

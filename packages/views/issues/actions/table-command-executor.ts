@@ -2,6 +2,7 @@ import type { DataSourceActionResult } from "@multica/core/data-source";
 import type { IssueTableMutationCommand } from "@multica/core/issues/table-data-source";
 import type { IssueStatusCatalog } from "@multica/core/issue-statuses";
 import type { IssueTableRow } from "@multica/core/types";
+import type { WorkspaceRequestContext } from "@multica/core/platform";
 import type { IssueSurfaceActions } from "../surface/actions-context";
 import {
   runConfirmIntent,
@@ -14,6 +15,9 @@ type CreateIssueTableCommandExecutorOptions = {
   actions: IssueSurfaceActions | null;
   statusCatalog: Pick<IssueStatusCatalog, "entryOf">;
   openRunConfirm: (data: RunConfirmData) => void;
+  sourceIdentity?: string;
+  workspaceContext?: WorkspaceRequestContext;
+  canSubmit?: () => boolean;
 };
 
 function failed(error: unknown): IssueTableActionResult {
@@ -49,6 +53,9 @@ export function createIssueTableCommandExecutor({
   actions,
   statusCatalog,
   openRunConfirm,
+  sourceIdentity,
+  workspaceContext,
+  canSubmit,
 }: CreateIssueTableCommandExecutorOptions):
   | ((command: IssueTableMutationCommand) => Promise<IssueTableActionResult>)
   | undefined {
@@ -67,6 +74,9 @@ export function createIssueTableCommandExecutor({
         };
         openRunConfirm({
           ...intent,
+          sourceIdentity,
+          workspaceContext,
+          canSubmit,
           canCancel: () => phase === "awaiting-confirmation",
           onSubmitting: () => {
             if (!completion.isSettled()) phase = "submitting";
@@ -82,8 +92,13 @@ export function createIssueTableCommandExecutor({
       });
     }
 
+    if (canSubmit && !canSubmit()) {
+      return Promise.resolve(
+        failed("Workspace or write capability changed before submission"),
+      );
+    }
     return actions
-      .updateIssueAsync(command.issue.id, command.updates)
+      .updateIssueAsync(command.issue.id, command.updates, workspaceContext)
       .then(() => ({ status: "accepted" as const }))
       .catch(failed);
   };

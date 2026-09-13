@@ -10,6 +10,7 @@ import type {
   IssueTableRowsRequest,
 } from "../types";
 import { createIssueTableDataSource } from "./table-data-source";
+import { setCurrentWorkspace } from "../platform";
 
 const query = {
   scope: { kind: "workspace" as const },
@@ -46,10 +47,48 @@ function makeIssue(): Issue {
 }
 
 afterEach(() => {
+  setCurrentWorkspace(null, null);
   vi.restoreAllMocks();
 });
 
 describe("createIssueTableDataSource", () => {
+  it("targets its captured workspace and rejects stale reads before the API", async () => {
+    setCurrentWorkspace("alpha", "ws-1");
+    const listIssueTableRows = vi.fn(async () => ({
+      query_fingerprint: "rows-fingerprint",
+      group_key: null,
+      parent_id: null,
+      total: 0,
+      rows: [],
+      branch_total: 0,
+      next_cursor: null,
+    }));
+    setApiInstance({ listIssueTableRows } as unknown as ApiClient);
+    const source = createIssueTableDataSource({
+      workspaceId: "ws-1",
+      workspaceSlug: "alpha",
+    });
+    const request = {
+      query,
+      group: { kind: "none" as const },
+      group_key: null,
+      hierarchy: { enabled: false },
+      parent_id: null,
+    };
+
+    await source.read(request, { limit: 50, cursor: null });
+    expect(listIssueTableRows).toHaveBeenLastCalledWith(
+      { ...request, page: { limit: 50, cursor: null } },
+      { workspaceSlug: "alpha", signal: undefined },
+    );
+
+    setCurrentWorkspace("beta", "ws-2");
+    await expect(
+      source.read(request, { limit: 50, cursor: null }),
+    ).rejects.toThrow("Workspace or write capability changed before submission");
+    expect(listIssueTableRows).toHaveBeenCalledTimes(1);
+  });
+
   it("translates the issue row API into the shared page contract", async () => {
     const issue = makeIssue();
     const listIssueTableRows = vi.fn(

@@ -2,6 +2,10 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api";
 import { labelKeys } from "./queries";
 import { useWorkspaceId } from "../hooks";
+import {
+  assertWorkspaceRequestContext,
+  type WorkspaceRequestContext,
+} from "../platform";
 import { issueKeys } from "../issues/queries";
 import {
   invalidateIssueLabelDerivatives,
@@ -227,8 +231,20 @@ export function useAttachLabelToIssue() {
   const qc = useQueryClient();
   const wsId = useWorkspaceId();
   return useMutation({
-    mutationFn: ({ issueId, labelId }: { issueId: string; labelId: string }) =>
-      api.attachLabel(issueId, labelId),
+    mutationFn: ({
+      issueId,
+      labelId,
+      workspaceContext,
+    }: {
+      issueId: string;
+      labelId: string;
+      workspaceContext?: WorkspaceRequestContext;
+    }) => {
+      if (workspaceContext) assertWorkspaceRequestContext(workspaceContext);
+      return workspaceContext
+        ? api.attachLabel(issueId, labelId, workspaceContext.workspaceSlug)
+        : api.attachLabel(issueId, labelId);
+    },
     onSettled: (_data, _err, { issueId }) => {
       qc.invalidateQueries({ queryKey: labelKeys.byIssue(wsId, issueId) });
       // Issues embed a denormalized labels snapshot, so refresh the issues
@@ -243,8 +259,20 @@ export function useDetachLabelFromIssue() {
   const qc = useQueryClient();
   const wsId = useWorkspaceId();
   return useMutation({
-    mutationFn: ({ issueId, labelId }: { issueId: string; labelId: string }) =>
-      api.detachLabel(issueId, labelId),
+    mutationFn: ({
+      issueId,
+      labelId,
+      workspaceContext,
+    }: {
+      issueId: string;
+      labelId: string;
+      workspaceContext?: WorkspaceRequestContext;
+    }) => {
+      if (workspaceContext) assertWorkspaceRequestContext(workspaceContext);
+      return workspaceContext
+        ? api.detachLabel(issueId, labelId, workspaceContext.workspaceSlug)
+        : api.detachLabel(issueId, labelId);
+    },
     onSuccess: (data: IssueLabelsResponse, { issueId }) => {
       if (data && Array.isArray(data.labels)) {
         onIssueLabelsChanged(

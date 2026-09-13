@@ -10,6 +10,7 @@ import { setApiInstance } from "../api";
 import type { ApiClient } from "../api/client";
 import type { Issue, IssuePropertiesResponse } from "../types";
 import { issueKeys } from "../issues/queries";
+import { setCurrentWorkspace } from "../platform";
 import { useSetIssueProperty } from "./mutations";
 
 vi.mock("../hooks", () => ({ useWorkspaceId: () => "ws-1" }));
@@ -55,7 +56,77 @@ function deferred<T>() {
 }
 
 describe("useSetIssueProperty", () => {
-  afterEach(() => vi.restoreAllMocks());
+  afterEach(() => {
+    setCurrentWorkspace(null, null);
+    vi.restoreAllMocks();
+  });
+
+  it.each([
+    { change: "workspace switch", switchWorkspace: true },
+    { change: "capability revoke", switchWorkspace: false },
+  ])("rejects a queued write after $change", async ({ switchWorkspace }) => {
+    setCurrentWorkspace("alpha", "ws-1");
+    let writable = true;
+    const qc = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    qc.setQueryData(issueKeys.detail("ws-1", issue.id), issue);
+    qc.setQueryData(issueKeys.detail("ws-2", issue.id), {
+      ...issue,
+      workspace_id: "ws-2",
+      properties: { estimate: 99 },
+    });
+    const firstResponse = deferred<IssuePropertiesResponse>();
+    const setIssueProperty = vi
+      .fn()
+      .mockImplementationOnce(() => firstResponse.promise)
+      .mockResolvedValue({ properties: { estimate: 3 } });
+    setApiInstance({ setIssueProperty } as unknown as ApiClient);
+    const { result } = renderHook(() => useSetIssueProperty(), {
+      wrapper: wrapper(qc),
+    });
+    const workspaceContext = {
+      workspaceId: "ws-1",
+      workspaceSlug: "alpha",
+      isActive: () => writable,
+    };
+
+    const first = result.current.mutateAsync({
+      issueId: issue.id,
+      propertyId: "estimate",
+      value: 2,
+      workspaceContext,
+    });
+    await waitFor(() => expect(setIssueProperty).toHaveBeenCalledTimes(1));
+    const second = result.current
+      .mutateAsync({
+        issueId: issue.id,
+        propertyId: "estimate",
+        value: 3,
+        workspaceContext,
+      })
+      .catch((error: unknown) => error);
+
+    if (switchWorkspace) setCurrentWorkspace("beta", "ws-2");
+    else writable = false;
+    firstResponse.resolve({ properties: { estimate: 2 } });
+    await first;
+    expect(await second).toMatchObject({
+      message: "Workspace or write capability changed before submission",
+    });
+    expect(setIssueProperty).toHaveBeenCalledTimes(1);
+    expect(setIssueProperty).toHaveBeenCalledWith(
+      issue.id,
+      "estimate",
+      2,
+      "alpha",
+    );
+    expect(
+      qc.getQueryData<Issue>(issueKeys.detail("ws-2", issue.id))?.properties
+        .estimate,
+    ).toBe(99);
+    qc.clear();
+  });
 
   it("keeps an optimistic children-cache patch when an older fetch resolves late", async () => {
     const qc = new QueryClient({

@@ -32,7 +32,7 @@ import {
   TableRow,
 } from "@multica/ui/components/ui/table";
 import {
-  dataSourceIdentityKey,
+  dataSourceIdentityString,
   type DataSourceIdentity,
 } from "@multica/core/data-source";
 
@@ -80,7 +80,7 @@ export function TableView<DataRow>({
   writable,
   ...props
 }: DataViewTableProps<DataRow>) {
-  const instanceKey = dataSourceIdentityKey(sourceIdentity).join(":");
+  const instanceKey = dataSourceIdentityString(sourceIdentity);
   return (
     <TableViewInstance
       key={instanceKey}
@@ -148,7 +148,7 @@ function TableViewInstance<DataRow>({
   return (
     <div
       className="contents"
-      data-source-identity={dataSourceIdentityKey(sourceIdentity).join(":")}
+      data-source-identity={dataSourceIdentityString(sourceIdentity)}
       data-source-writable={writable ? "true" : "false"}
     >
       <DndContext

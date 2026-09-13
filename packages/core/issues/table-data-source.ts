@@ -17,6 +17,10 @@ import type {
   UpdateIssueRequest,
 } from "../types";
 import { hasUnknownActorRef } from "../types";
+import {
+  assertWorkspaceRequestContext,
+  type WorkspaceRequestContext,
+} from "../platform";
 
 export type IssueTableBranchQuery = Omit<IssueTableRowsRequest, "page">;
 
@@ -55,11 +59,14 @@ export interface IssueTableDataSource
     query: IssueTableQuerySpec,
     group: IssueTableGroupsRequest["group"],
     page: DataSourcePageRequest,
+    signal?: AbortSignal,
   ): Promise<IssueTableGroupPage>;
 }
 
 type CreateIssueTableDataSourceOptions = {
   workspaceId?: string;
+  workspaceSlug?: string;
+  isContextActive?: () => boolean;
   fields?: readonly IssueProperty[];
   execute?: (
     command: IssueTableMutationCommand,
@@ -277,6 +284,17 @@ export function createIssueTableDataSource(
   options: CreateIssueTableDataSourceOptions = {},
 ): IssueTableDataSource {
   const writable = options.execute !== undefined;
+  const workspaceContext: WorkspaceRequestContext | undefined =
+    options.workspaceId && options.workspaceSlug
+      ? {
+          workspaceId: options.workspaceId,
+          workspaceSlug: options.workspaceSlug,
+          isActive: options.isContextActive,
+        }
+      : undefined;
+  const assertActiveContext = () => {
+    if (workspaceContext) assertWorkspaceRequestContext(workspaceContext);
+  };
   const fields = createIssueTableFields(options.fields ?? [], writable).map(
     (field): IssueTableField => {
       if (field.id.startsWith("property:")) {
@@ -318,11 +336,17 @@ export function createIssueTableDataSource(
     read: async (
       query,
       page,
+      signal,
     ): Promise<DataSourcePage<IssueTableRow, IssueTablePageMetadata>> => {
-      const response = await api.listIssueTableRows({
-        ...query,
-        page,
-      });
+      assertActiveContext();
+      const request = { ...query, page };
+      const response =
+        options.workspaceSlug || signal
+          ? await api.listIssueTableRows(request, {
+              workspaceSlug: options.workspaceSlug,
+              signal,
+            })
+          : await api.listIssueTableRows(request);
       return {
         rows: response.rows,
         total: response.total,
@@ -335,8 +359,16 @@ export function createIssueTableDataSource(
         },
       };
     },
-    readGroups: async (query, group, page) => {
-      const response = await api.listIssueTableGroups({ query, group, page });
+    readGroups: async (query, group, page, signal) => {
+      assertActiveContext();
+      const request = { query, group, page };
+      const response =
+        options.workspaceSlug || signal
+          ? await api.listIssueTableGroups(request, {
+              workspaceSlug: options.workspaceSlug,
+              signal,
+            })
+          : await api.listIssueTableGroups(request);
       return {
         groups: response.groups,
         total: response.total,
@@ -345,15 +377,16 @@ export function createIssueTableDataSource(
       };
     },
     execute: async (command) => {
-      if (!options.execute) return failed("This issue data source is read-only");
-      const field = fields.find((candidate) => candidate.id === command.fieldId);
-      if (!field) return failed(`Unknown issue table field: ${command.fieldId}`);
-      const allowed =
-        command.change.op === "clear"
-          ? field.canClear(command.row)
-          : field.canSet(command.row);
-      if (!allowed) return failed("This issue table field is read-only");
       try {
+        assertActiveContext();
+        if (!options.execute) return failed("This issue data source is read-only");
+        const field = fields.find((candidate) => candidate.id === command.fieldId);
+        if (!field) return failed(`Unknown issue table field: ${command.fieldId}`);
+        const allowed =
+          command.change.op === "clear"
+            ? field.canClear(command.row)
+            : field.canSet(command.row);
+        if (!allowed) return failed("This issue table field is read-only");
         if (command.fieldId.startsWith("property:")) {
           const propertyId = command.fieldId.slice("property:".length);
           if (command.change.op === "clear") {

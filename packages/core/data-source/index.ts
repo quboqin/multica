@@ -19,6 +19,7 @@ export type {
 export {
   dataSourceGroupQueryKey,
   dataSourceIdentityKey,
+  dataSourceIdentityString,
   dataSourceRowQueryKey,
   dataSourceViewStateKey,
 } from "./query-keys";

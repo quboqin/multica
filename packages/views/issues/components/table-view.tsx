@@ -58,7 +58,15 @@ import {
 } from "@multica/core/issues/queries";
 import { createIssueTableDataSource } from "@multica/core/issues/table-data-source";
 import type { IssueTableField } from "@multica/core/issues/table-data-source";
-import type { DataSourceCellChange } from "@multica/core/data-source";
+import {
+  dataSourceIdentityString,
+  type DataSourceCellChange,
+} from "@multica/core/data-source";
+import {
+  assertWorkspaceRequestContext,
+  getCurrentSlug,
+  type WorkspaceRequestContext,
+} from "@multica/core/platform";
 import {
   TABLE_SYSTEM_COLUMNS,
   propertyIdFromViewKey,
@@ -550,7 +558,7 @@ export function InlineTitle({
    *  survives cell remounts and drives the structure freeze. */
   editing: boolean;
   onEditingChange: (editing: boolean) => void;
-  onUpdate: (updates: Partial<UpdateIssueRequest>) => void;
+  onUpdate: (updates: Partial<UpdateIssueRequest>) => Promise<boolean>;
   /** Navigate to the issue — clicking the title is the primary way IN. */
   onOpen: (event: React.MouseEvent) => void;
   onCreateSubIssue: () => void;
@@ -561,6 +569,8 @@ export function InlineTitle({
   writable?: boolean;
 }) {
   const [draft, setDraft] = useState(row.issue.title);
+  const [pending, setPending] = useState(false);
+  const submittingRef = useRef(false);
   const editingRef = useRef(editing);
   editingRef.current = editing;
   // True between the mousedown and the click of ONE gesture when that gesture
@@ -578,11 +588,22 @@ export function InlineTitle({
     if (!editingRef.current) setDraft(row.issue.title);
   }, [row.issue.title]);
 
-  const commit = () => {
+  const commit = async () => {
+    if (submittingRef.current) return;
     const title = draft.trim();
-    onEditingChange(false);
-    if (title && title !== row.issue.title) onUpdate({ title });
-    else setDraft(row.issue.title);
+    if (!title || title === row.issue.title) {
+      setDraft(row.issue.title);
+      onEditingChange(false);
+      return;
+    }
+    submittingRef.current = true;
+    setPending(true);
+    try {
+      if (await onUpdate({ title })) onEditingChange(false);
+    } finally {
+      submittingRef.current = false;
+      setPending(false);
+    }
   };
 
   return (
@@ -635,11 +656,12 @@ export function InlineTitle({
         <Input
           autoFocus
           value={draft}
+          disabled={pending}
           onChange={(event) => setDraft(event.target.value)}
-          onBlur={commit}
+          onBlur={() => void commit()}
           onKeyDown={(event) => {
-            if (event.key === "Enter") commit();
-            if (event.key === "Escape") {
+            if (event.key === "Enter") void commit();
+            if (event.key === "Escape" && !pending) {
               setDraft(row.issue.title);
               onEditingChange(false);
             }
@@ -859,8 +881,10 @@ type TableViewMeta = {
   /** `${row.key}:${column.id}` of the cell whose editor popup / rename input
    *  is open, or null. Owned by TableView so the open editor survives cell
    *  remounts and freezes the table structure while it is up. */
-  editingCellKey: string | null;
-  setEditingCellKey: (key: string | null) => void;
+  editingCellSession: EditingCellSession | null;
+  openEditingCell: (cellKey: string) => void;
+  closeEditingCell: (instanceId: number) => void;
+  restoreEditingCell: (session: EditingCellSession) => void;
   /** Takes the ISSUE, not its id: the run-confirm gate reads its status
    *  category and owner to decide whether the write needs confirming first. */
   updateField: (
@@ -880,6 +904,22 @@ type TableViewMeta = {
   onSort: (field: SortField, direction: "asc" | "desc") => void;
   toggleTableColumn: (key: TableColumnKey) => void;
 };
+
+type EditingCellSession = {
+  cellKey: string;
+  instanceId: number;
+  sourceIdentity: string;
+};
+
+function closePendingTableRunConfirm(sourceIdentity: string) {
+  const modal = useModalStore.getState();
+  if (
+    modal.modal === "issue-run-confirm" &&
+    modal.data?.sourceIdentity === sourceIdentity
+  ) {
+    modal.close(modal.modalInstanceId ?? undefined);
+  }
+}
 
 function getTableViewMeta(
   table: TanstackTable<IssueTableDisplayRow>,
@@ -908,17 +948,18 @@ function getTableViewMeta(
  */
 export function useReleaseEditingCellOnUnmount(
   cellKey: string | null,
-  editingCellKey: string | null,
-  setEditingCellKey: (key: string | null) => void,
+  editingCellSession: EditingCellSession | null,
+  closeEditingCell: (instanceId: number) => void,
 ) {
-  const editingCellKeyRef = useRef(editingCellKey);
-  editingCellKeyRef.current = editingCellKey;
-  const setEditingCellKeyRef = useRef(setEditingCellKey);
-  setEditingCellKeyRef.current = setEditingCellKey;
+  const editingCellSessionRef = useRef(editingCellSession);
+  editingCellSessionRef.current = editingCellSession;
+  const closeEditingCellRef = useRef(closeEditingCell);
+  closeEditingCellRef.current = closeEditingCell;
   useEffect(() => {
     return () => {
-      if (cellKey !== null && editingCellKeyRef.current === cellKey) {
-        setEditingCellKeyRef.current(null);
+      const session = editingCellSessionRef.current;
+      if (cellKey !== null && session?.cellKey === cellKey) {
+        closeEditingCellRef.current(session.instanceId);
       }
     };
   }, [cellKey]);
@@ -1024,11 +1065,13 @@ function IssueTableBodyCell({
   // Computed (and the unmount responder registered) before the early return so
   // the hook order is stable across issue/group rows.
   const cellKey =
-    row.original.kind === "issue" ? `${row.original.key}:${column.id}` : null;
+    row.original.kind === "issue"
+      ? JSON.stringify([row.original.key, column.id])
+      : null;
   useReleaseEditingCellOnUnmount(
     cellKey,
-    meta.editingCellKey,
-    meta.setEditingCellKey,
+    meta.editingCellSession,
+    meta.closeEditingCell,
   );
   // Placeholder rows go through the ordinary cell renderer so they inherit the
   // real column widths, pinning and borders — the grid is already correct
@@ -1044,13 +1087,21 @@ function IssueTableBodyCell({
     direct_child_count: issueRow.hasChildren ? 1 : 0,
   };
   const key = column.id as TableColumnKey;
-  const editorOpen = meta.editingCellKey === cellKey;
-  const setEditorOpen = (open: boolean) =>
-    meta.setEditingCellKey(open ? cellKey : null);
+  const editorSession =
+    meta.editingCellSession?.cellKey === cellKey
+      ? meta.editingCellSession
+      : null;
+  const editorOpen = editorSession !== null;
+  const setEditorOpen = (open: boolean) => {
+    if (open && cellKey !== null) meta.openEditingCell(cellKey);
+    else if (!open && editorSession) {
+      meta.closeEditingCell(editorSession.instanceId);
+    }
+  };
   const field = meta.fieldById.get(key);
   const canSet = field?.canSet(sourceRow) ?? false;
   const canClear = field?.canClear(sourceRow) ?? false;
-  const onUpdate = (updates: Partial<UpdateIssueRequest>) => {
+  const onUpdate = async (updates: Partial<UpdateIssueRequest>) => {
     let change: DataSourceCellChange | null = null;
     switch (key) {
       case "title":
@@ -1096,13 +1147,13 @@ function IssueTableBodyCell({
           : { op: "clear" };
         break;
     }
-    if (change) {
-      void meta.updateField(sourceRow, key, change).then((result) => {
-        if (result.status !== "failed") return;
-        toast.error(result.error.message);
-        meta.setEditingCellKey(cellKey);
-      });
+    if (!change) return false;
+    const result = await meta.updateField(sourceRow, key, change);
+    if (result.status === "failed") {
+      toast.error(result.error.message);
+      if (editorSession) meta.restoreEditingCell(editorSession);
     }
+    return result.status !== "failed";
   };
 
   const propertyId = propertyIdFromViewKey(key);
@@ -1327,6 +1378,7 @@ export function TableView({
 }: TableViewProps) {
   const { t } = useT("issues");
   const wsId = useWorkspaceId();
+  const workspaceSlug = getCurrentSlug();
   const resolveStatusLabel = useStatusLabel(wsId);
   const { entryOf } = useIssueStatuses(wsId);
   const openModal = useModalStore((s) => s.open);
@@ -1334,6 +1386,43 @@ export function TableView({
   const intentNavigate = useIntentNavigate();
   const paths = useWorkspacePaths();
   const actions = useIssueSurfaceActionsOptional();
+  const writeCapabilityRef = useRef(actions !== null);
+  writeCapabilityRef.current = actions !== null;
+  useEffect(
+    () => () => {
+      writeCapabilityRef.current = false;
+    },
+    [],
+  );
+  const workspaceContext = useMemo<WorkspaceRequestContext | undefined>(
+    () =>
+      workspaceSlug
+        ? {
+            workspaceId: wsId,
+            workspaceSlug,
+            isActive: () => writeCapabilityRef.current,
+          }
+        : undefined,
+    [workspaceSlug, wsId],
+  );
+  const issueSourceIdentity = useMemo(
+    () =>
+      dataSourceIdentityString({
+        workspaceId: wsId,
+        namespace: "issues",
+        sourceId: "tasks",
+      }),
+    [wsId],
+  );
+  const canSubmit = useCallback(() => {
+    if (!workspaceContext) return writeCapabilityRef.current;
+    try {
+      assertWorkspaceRequestContext(workspaceContext);
+      return true;
+    } catch {
+      return false;
+    }
+  }, [workspaceContext]);
   const { mutateAsync: setPropertyAsync } = useSetIssueProperty();
   const { mutateAsync: clearPropertyAsync } = useUnsetIssueProperty();
   const { mutateAsync: attachLabelAsync } = useAttachLabelToIssue();
@@ -1350,9 +1439,13 @@ export function TableView({
         actions,
         statusCatalog: { entryOf },
         openRunConfirm: (data) => openModal("issue-run-confirm", data),
+        sourceIdentity: issueSourceIdentity,
+        workspaceContext,
+        canSubmit,
       });
       return createIssueTableDataSource({
         workspaceId: wsId,
+        workspaceSlug: workspaceSlug ?? undefined,
         fields: properties,
         execute,
         setProperty: async ({ issueId, propertyId, value }) => {
@@ -1360,10 +1453,11 @@ export function TableView({
             issueId,
             propertyId,
             value: value as IssuePropertyValue,
+            workspaceContext,
           });
         },
         clearProperty: async ({ issueId, propertyId }) => {
-          await clearPropertyAsync({ issueId, propertyId });
+          await clearPropertyAsync({ issueId, propertyId, workspaceContext });
         },
         setLabels: async ({ issue, labelIds }) => {
           const previous = new Set((issue.labels ?? []).map((label) => label.id));
@@ -1372,13 +1466,21 @@ export function TableView({
             ...labelIds
               .filter((labelId) => !previous.has(labelId))
               .map((labelId) =>
-                attachLabelAsync({ issueId: issue.id, labelId }),
+                attachLabelAsync({
+                  issueId: issue.id,
+                  labelId,
+                  workspaceContext,
+                }),
               ),
             ...(issue.labels ?? [])
               .map((label) => label.id)
               .filter((labelId) => !next.has(labelId))
               .map((labelId) =>
-                detachLabelAsync({ issueId: issue.id, labelId }),
+                detachLabelAsync({
+                  issueId: issue.id,
+                  labelId,
+                  workspaceContext,
+                }),
               ),
           ]);
         },
@@ -1387,12 +1489,16 @@ export function TableView({
     [
       actions,
       attachLabelAsync,
+      canSubmit,
       clearPropertyAsync,
       detachLabelAsync,
       entryOf,
+      issueSourceIdentity,
       openModal,
       properties,
       setPropertyAsync,
+      workspaceContext,
+      workspaceSlug,
       wsId,
     ],
   );
@@ -1439,7 +1545,41 @@ export function TableView({
   const [exporting, setExporting] = useState<"all" | "selected" | null>(null);
   // The one cell whose editor (picker popup / rename input) is open — see
   // TableViewMeta.editingCellKey.
-  const [editingCellKey, setEditingCellKey] = useState<string | null>(null);
+  const sourceIdentity = useMemo(
+    () => dataSourceIdentityString(dataSource.identity),
+    [dataSource.identity],
+  );
+  const editorInstanceRef = useRef(0);
+  const sourceIdentityRef = useRef(sourceIdentity);
+  sourceIdentityRef.current = sourceIdentity;
+  const [editingCellSession, setEditingCellSession] =
+    useState<EditingCellSession | null>(null);
+  const editingCellKey = editingCellSession?.cellKey ?? null;
+  const openEditingCell = useCallback(
+    (cellKey: string) => {
+      const session: EditingCellSession = {
+        cellKey,
+        instanceId: ++editorInstanceRef.current,
+        sourceIdentity,
+      };
+      setEditingCellSession(session);
+    },
+    [sourceIdentity],
+  );
+  const closeEditingCell = useCallback((instanceId: number) => {
+    setEditingCellSession((current) =>
+      current?.instanceId === instanceId ? null : current,
+    );
+  }, []);
+  const restoreEditingCell = useCallback((session: EditingCellSession) => {
+    if (
+      editorInstanceRef.current !== session.instanceId ||
+      sourceIdentityRef.current !== session.sourceIdentity
+    ) {
+      return;
+    }
+    setEditingCellSession((current) => current ?? session);
+  }, []);
 
   const groupingPropertyId = propertyIdFromViewKey(tableGrouping);
   const effectiveTableGrouping =
@@ -1601,12 +1741,12 @@ export function TableView({
         }
         return issueKeys.tableGroups(wsId, query, group);
       },
-      readGroupPage: async ({ query, groupBy, page }) => {
+      readGroupPage: async ({ query, groupBy, page }, signal) => {
         const group = tableGroupSpec(groupBy.fieldId);
         if (group.kind === "none") {
           throw new Error(`Unsupported group field: ${groupBy.fieldId}`);
         }
-        const result = await dataSource.readGroups(query, group, page);
+        const result = await dataSource.readGroups(query, group, page, signal);
         return {
           query_fingerprint: result.queryFingerprint,
           total: result.total,
@@ -1643,21 +1783,28 @@ export function TableView({
     }),
     [dataSource, serverGroupLabel, wsId],
   );
-  const sourceIdentity = useMemo(
-    () => JSON.stringify(dataSource.identity),
-    [dataSource.identity],
-  );
   const previousSourceIdentityRef = useRef(sourceIdentity);
   useEffect(() => {
     if (previousSourceIdentityRef.current === sourceIdentity) return;
+    const previousSourceIdentity = previousSourceIdentityRef.current;
     previousSourceIdentityRef.current = sourceIdentity;
-    setEditingCellKey(null);
+    closePendingTableRunConfirm(previousSourceIdentity);
+    editorInstanceRef.current += 1;
+    setEditingCellSession(null);
   }, [sourceIdentity]);
   useEffect(() => {
     if (!dataSource.capabilities.writable && editingCellKey !== null) {
-      setEditingCellKey(null);
+      editorInstanceRef.current += 1;
+      setEditingCellSession(null);
     }
-  }, [dataSource.capabilities.writable, editingCellKey]);
+    if (!dataSource.capabilities.writable) {
+      closePendingTableRunConfirm(sourceIdentity);
+    }
+  }, [dataSource.capabilities.writable, editingCellKey, sourceIdentity]);
+  useEffect(
+    () => () => closePendingTableRunConfirm(sourceIdentity),
+    [sourceIdentity],
+  );
   const collapsedGroupSet = useMemo(
     () => new Set(tableCollapsedGroups),
     [tableCollapsedGroups],
@@ -1868,8 +2015,10 @@ export function TableView({
     properties,
     fieldById,
     visibleIssueIds,
-    editingCellKey,
-    setEditingCellKey,
+    editingCellSession,
+    openEditingCell,
+    closeEditingCell,
+    restoreEditingCell,
     updateField,
     writable: dataSource.capabilities.writable,
     openIssue,
