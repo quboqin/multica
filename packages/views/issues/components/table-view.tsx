@@ -80,6 +80,7 @@ import {
   issueTableGroupsOptions,
   issueTableRowPageOptions,
 } from "@multica/core/issues/queries";
+import { createIssueTableDataSource } from "@multica/core/issues/table-data-source";
 import {
   TABLE_SYSTEM_COLUMNS,
   propertyIdFromViewKey,
@@ -1300,6 +1301,24 @@ export function TableView({
     data: properties = [],
     isSuccess: propertyCatalogSettled,
   } = useQuery(propertyListOptions(wsId));
+  const dataSource = useMemo(
+    () =>
+      createIssueTableDataSource({
+        fields: properties,
+        execute: ({ issue, updates }) => {
+          // Issue status writes can start a run. Keep that domain-specific
+          // policy in the issue adapter instead of teaching the shared data
+          // view contract about assignees, status categories, or modals.
+          const intent = runConfirmIntent(issue, updates, { entryOf });
+          if (intent) {
+            openModal("issue-run-confirm", intent);
+            return;
+          }
+          actions?.updateIssue(issue.id, updates);
+        },
+      }),
+    [actions, entryOf, openModal, properties],
+  );
   const propertyById = useMemo(
     () => new Map(properties.map((property) => [property.id, property])),
     [properties],
@@ -1398,6 +1417,7 @@ export function TableView({
       wsId,
       serverQuery,
       serverGroupsRequestGroup,
+      dataSource,
     ),
     enabled: usesServerGrouping,
   });
@@ -1503,14 +1523,18 @@ export function TableView({
               )
             : undefined;
         return {
-          ...issueTableRowPageOptions(wsId, {
-            query: serverQuery,
-            group: serverGroupSpec,
-            group_key: branch.groupKey,
-            hierarchy: { enabled: tableHierarchy },
-            parent_id: branch.parentId,
-            page: { limit: 50, cursor },
-          }),
+          ...issueTableRowPageOptions(
+            wsId,
+            {
+              query: serverQuery,
+              group: serverGroupSpec,
+              group_key: branch.groupKey,
+              hierarchy: { enabled: tableHierarchy },
+              parent_id: branch.parentId,
+              page: { limit: 50, cursor },
+            },
+            dataSource,
+          ),
           // QueriesObserver replaces observers by query hash, so
           // keepPreviousData alone cannot bridge a changed table query inside
           // useQueries. Retain the last settled head per structural branch to
@@ -1534,6 +1558,7 @@ export function TableView({
     [
       collapsedGroupSet,
       collapsedParentSet,
+      dataSource,
       serverBranchPageTargets,
       serverGroupSpec,
       serverQuery,
@@ -2122,20 +2147,10 @@ export function TableView({
     [propertyById, t],
   );
 
-  // Inline row edits are single-issue writes like the picker in the issue
-  // detail or the right-click menu, so they route on the same gate: a status
-  // change that promotes an agent-owned issue out of the backlog category
-  // starts a run, and must confirm rather than fire from one click (MUL-6463).
   const updateIssue = useCallback(
-    (issue: Issue, updates: Partial<UpdateIssueRequest>) => {
-      const intent = runConfirmIntent(issue, updates, { entryOf });
-      if (intent) {
-        openModal("issue-run-confirm", intent);
-        return;
-      }
-      actions?.updateIssue(issue.id, updates);
-    },
-    [actions, entryOf, openModal],
+    (issue: Issue, updates: Partial<UpdateIssueRequest>) =>
+      void dataSource.execute({ issue, updates }),
+    [dataSource],
   );
 
   const openIssue = useCallback(
