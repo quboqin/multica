@@ -9,6 +9,31 @@ import {
   clearWorkspaceStorage,
 } from "./storage-cleanup";
 
+const clientSessionGenerations = new WeakMap<QueryClient, number>();
+
+/**
+ * Captures the identity of the authenticated browser session that owns an
+ * asynchronous cache operation. Workspace switches deliberately do not move
+ * this generation; logout/session expiry does.
+ */
+export function captureClientSessionGeneration(queryClient: QueryClient): number {
+  return clientSessionGenerations.get(queryClient) ?? 0;
+}
+
+export function isClientSessionGenerationCurrent(
+  queryClient: QueryClient,
+  generation: number,
+): boolean {
+  return captureClientSessionGeneration(queryClient) === generation;
+}
+
+function invalidateClientSessionGeneration(queryClient: QueryClient): void {
+  clientSessionGenerations.set(
+    queryClient,
+    captureClientSessionGeneration(queryClient) + 1,
+  );
+}
+
 /**
  * Erase everything the finished session left on this client: in-memory draft
  * stores, per-workspace persisted state, the desktop tab layout, the
@@ -29,6 +54,11 @@ export function clearClientSessionData(
   queryClient: QueryClient,
   storage: StorageAdapter = defaultStorage,
 ): void {
+  // Fence every async mutation callback before any cache entry is removed.
+  // A response owned by this session may still arrive after clear(); without
+  // this generation change it could repopulate data for the next account.
+  invalidateClientSessionGeneration(queryClient);
+
   // Reset draft stores' in-memory state FIRST, before removing persisted
   // keys. Each reset is a Zustand setState, and persist middleware writes the
   // new (empty) state straight back to storage under the still-active

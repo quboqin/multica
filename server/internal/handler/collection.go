@@ -644,8 +644,8 @@ func (h *Handler) UpdateCollectionRecord(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusBadRequest, "T2a only supports setting the title field")
 		return
 	}
-	var title string
-	if err := json.Unmarshal(request.Change.Value, &title); err != nil || len([]rune(title)) > collectiondomain.MaxTitleRunes {
+	title, err := collectiondomain.DecodeTitleValue(request.Change.Value)
+	if err != nil {
 		writeError(w, http.StatusBadRequest, "title must be text with at most 2048 characters")
 		return
 	}

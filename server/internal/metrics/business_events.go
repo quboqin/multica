@@ -64,6 +64,9 @@ type businessEventMetrics struct {
 	cloudRuntimeRequestDurationSecs *prometheus.HistogramVec
 	feedbackSubmitted               *prometheus.CounterVec
 	contactSalesSubmitted           *prometheus.CounterVec
+	collectionCreated               *prometheus.CounterVec
+	recordCreated                   *prometheus.CounterVec
+	recordUpdated                   *prometheus.CounterVec
 	chatOutputLocalPath             *prometheus.CounterVec
 }
 
@@ -208,6 +211,18 @@ func newBusinessEventMetrics() *businessEventMetrics {
 			Name: "multica_contact_sales_submitted_total",
 			Help: "Total contact-sales inquiries submitted.",
 		}, metricLabels("multica_contact_sales_submitted_total")),
+		collectionCreated: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "multica_collection_created_total",
+			Help: "Total collections committed successfully.",
+		}, metricLabels("multica_collection_created_total")),
+		recordCreated: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "multica_record_created_total",
+			Help: "Total collection records committed successfully.",
+		}, metricLabels("multica_record_created_total")),
+		recordUpdated: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "multica_record_updated_total",
+			Help: "Total collection record updates committed successfully.",
+		}, metricLabels("multica_record_updated_total")),
 		chatOutputLocalPath: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: "multica_chat_output_local_path_total",
 			Help: "Total agent chat replies that referenced a runtime-local path, by evidence kind. Observation only — the reply is still delivered.",
@@ -254,6 +269,9 @@ func (e *businessEventMetrics) collectors() []prometheus.Collector {
 		e.cloudRuntimeRequestDurationSecs,
 		e.feedbackSubmitted,
 		e.contactSalesSubmitted,
+		e.collectionCreated,
+		e.recordCreated,
+		e.recordUpdated,
 		e.chatOutputLocalPath,
 	}
 }
@@ -374,6 +392,12 @@ func (m *BusinessMetrics) IncForEvent(ev analytics.Event) {
 		).Inc()
 	case analytics.EventContactSalesSubmitted:
 		m.events.contactSalesSubmitted.WithLabelValues(NormalizeContactSalesSource(stringProp(ev.Properties, "form_source"))).Inc()
+	case analytics.EventCollectionCreated:
+		m.events.collectionCreated.WithLabelValues().Inc()
+	case analytics.EventRecordCreated:
+		m.events.recordCreated.WithLabelValues().Inc()
+	case analytics.EventRecordUpdated:
+		m.events.recordUpdated.WithLabelValues().Inc()
 	default:
 		// agent_task_* lifecycle telemetry is recorded straight to Prometheus
 		// via the typed BusinessMetrics.RecordTask* methods (they take

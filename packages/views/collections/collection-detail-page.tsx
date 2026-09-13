@@ -1,7 +1,9 @@
 "use client";
 
 import {
+  createContext,
   useCallback,
+  useContext,
   useMemo,
   useRef,
   useState,
@@ -10,7 +12,11 @@ import {
   type SetStateAction,
 } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import type { ColumnDef, ColumnSizingState } from "@tanstack/react-table";
+import type {
+  CellContext,
+  ColumnDef,
+  ColumnSizingState,
+} from "@tanstack/react-table";
 import { AlertCircle, Database, TableProperties } from "lucide-react";
 import { useWorkspaceId } from "@multica/core";
 import { api } from "@multica/core/api";
@@ -29,6 +35,7 @@ import type {
 import type { CollectionRecord } from "@multica/core/types";
 import { useFeatureEnabled } from "@multica/core/config";
 import { CORTEX_COLLECTIONS_FLAG } from "@multica/core/feature-flags";
+import { getCurrentSlug, getCurrentWsId } from "@multica/core/platform";
 import { useRequiredWorkspaceSlug } from "@multica/core/paths";
 import { Button } from "@multica/ui/components/ui/button";
 import { Input } from "@multica/ui/components/ui/input";
@@ -52,6 +59,39 @@ type DisplayRecord = {
 };
 type CollectionTableRow = DisplayRecord | DataViewStructuralRow;
 type RawPage = DataSourcePage<CollectionRecord>;
+type CollectionSource = ReturnType<typeof createCollectionRecordDataSource>;
+
+type CollectionCellContextValue = {
+  source: CollectionSource;
+  saveLabel: string;
+  clearLabel: string;
+  onAccepted: () => Promise<void>;
+};
+
+const CollectionCellContext = createContext<CollectionCellContextValue | null>(
+  null,
+);
+
+function CollectionRecordCell({
+  row,
+  column,
+}: CellContext<CollectionTableRow, unknown>) {
+  const context = useContext(CollectionCellContext);
+  if (!context || row.original.kind !== "record") return null;
+  const field = context.source.fields.find((candidate) => candidate.id === column.id);
+  if (!field) return null;
+  return (
+    <DataViewCellEditor
+      source={context.source}
+      field={field}
+      row={row.original.sourceRow}
+      saveLabel={context.saveLabel}
+      clearLabel={context.clearLabel}
+      hideClearWhenUnavailable
+      onAccepted={context.onAccepted}
+    />
+  );
+}
 
 function requestId() {
   return globalThis.crypto.randomUUID();
@@ -69,6 +109,7 @@ export function CollectionDetailPage({ collectionId }: { collectionId: string })
   });
   const createRecord = useCreateCollectionRecord();
   const updateRecord = useUpdateCollectionRecord();
+  const updateRecordAsync = updateRecord.mutateAsync;
   const [newTitle, setNewTitle] = useState("");
   const [createError, setCreateError] = useState<string | null>(null);
   const [columnSizing, setColumnSizing] = useState<ColumnSizingState>({});
@@ -87,7 +128,7 @@ export function CollectionDetailPage({ collectionId }: { collectionId: string })
             if (fieldId !== "title" || change.op !== "set") {
               throw new Error("This field is read-only");
             }
-            return updateRecord.mutateAsync({
+            return updateRecordAsync({
               collectionId,
               recordId: record.id,
               input: {
@@ -102,7 +143,7 @@ export function CollectionDetailPage({ collectionId }: { collectionId: string })
   }, [
     collectionId,
     detailQuery.data,
-    updateRecord,
+    updateRecordAsync,
     workspaceId,
     workspaceSlug,
   ]);
@@ -161,25 +202,48 @@ export function CollectionDetailPage({ collectionId }: { collectionId: string })
     if (pendingCreateRequest.current?.intent !== title) {
       pendingCreateRequest.current = { intent: title, id: requestId() };
     }
+    const operation = pendingCreateRequest.current;
     try {
       await createRecord.mutateAsync({
         collectionId,
         input: {
-          clientRequestId: pendingCreateRequest.current.id,
+          clientRequestId: operation.id,
           title,
           fields: {},
         },
         workspaceContext: { workspaceId, workspaceSlug },
       });
+      if (
+        pendingCreateRequest.current !== operation ||
+        getCurrentWsId() !== workspaceId ||
+        getCurrentSlug() !== workspaceSlug
+      ) {
+        return;
+      }
       pendingCreateRequest.current = null;
       setNewTitle("");
     } catch (reason) {
+      if (
+        pendingCreateRequest.current !== operation ||
+        getCurrentWsId() !== workspaceId ||
+        getCurrentSlug() !== workspaceSlug
+      ) {
+        return;
+      }
       setCreateError(reason instanceof Error ? reason.message : String(reason));
       await queryClient.invalidateQueries({
         queryKey: collectionKeys.rows(workspaceId, collectionId),
       });
     }
   };
+  const handleAccepted = useCallback(
+    async () => {
+      await queryClient.invalidateQueries({
+        queryKey: collectionKeys.rows(workspaceId, collectionId),
+      });
+    },
+    [collectionId, queryClient, workspaceId],
+  );
 
   if (!enabled) {
     return (
@@ -221,11 +285,7 @@ export function CollectionDetailPage({ collectionId }: { collectionId: string })
       submitRecord={submitRecord}
       columnSizing={columnSizing}
       setColumnSizing={setColumnSizing}
-      onAccepted={async () => {
-        await queryClient.invalidateQueries({
-          queryKey: collectionKeys.rows(workspaceId, collectionId),
-        });
-      }}
+      onAccepted={handleAccepted}
     />
   );
 }
@@ -243,7 +303,7 @@ function CollectionTableContent({
   setColumnSizing,
   onAccepted,
 }: {
-  source: ReturnType<typeof createCollectionRecordDataSource>;
+  source: CollectionSource;
   binding: DataViewQueryBinding<
     CollectionRecord,
     typeof collectionTableQuery,
@@ -283,20 +343,18 @@ function CollectionTableContent({
       fields.map((field) => ({
         id: field.id,
         header: field.label,
-        cell: ({ row }) =>
-          row.original.kind === "record" ? (
-            <DataViewCellEditor
-              source={source}
-              field={field}
-              row={row.original.sourceRow}
-              saveLabel={t(($) => $.save)}
-              clearLabel={t(($) => $.clear)}
-              hideClearWhenUnavailable
-              onAccepted={onAccepted}
-            />
-          ) : null,
+        cell: CollectionRecordCell,
       })),
-    [fields, onAccepted, source, t],
+    [fields],
+  );
+  const cellContext = useMemo<CollectionCellContextValue>(
+    () => ({
+      source,
+      saveLabel: t(($) => $.save),
+      clearLabel: t(($) => $.clear),
+      onAccepted,
+    }),
+    [onAccepted, source, t],
   );
   const structuralRow = useCallback(
     (row: { original: CollectionTableRow }) => {
@@ -331,7 +389,7 @@ function CollectionTableContent({
       <CollectionPageHeader
         icon={TableProperties}
         title={collectionName}
-        count={dataView.authoritativeRows.length}
+        count={dataView.authoritativeTotal}
         description={t(($) => $.records)}
         actions={
           source.capabilities.writable ? (
@@ -357,19 +415,21 @@ function CollectionTableContent({
         </p>
       ) : null}
       <div className="min-h-0 flex-1 overflow-auto p-6">
-        <TableView
-          sourceIdentity={source.identity}
-          writable={source.capabilities.writable}
-          rows={dataView.rows}
-          columns={columns}
-          rowId={(row) => row.key}
-          visibleColumnIds={fields.map((field) => field.id)}
-          columnSizing={columnSizing}
-          onColumnSizingChange={setColumnSizing}
-          onReorderColumn={() => {}}
-          emptyMessage={t(($) => $.empty)}
-          renderStructuralRow={structuralRow}
-        />
+        <CollectionCellContext.Provider value={cellContext}>
+          <TableView
+            sourceIdentity={source.identity}
+            writable={source.capabilities.writable}
+            rows={dataView.rows}
+            columns={columns}
+            rowId={(row) => row.key}
+            visibleColumnIds={fields.map((field) => field.id)}
+            columnSizing={columnSizing}
+            onColumnSizingChange={setColumnSizing}
+            onReorderColumn={() => {}}
+            emptyMessage={t(($) => $.empty)}
+            renderStructuralRow={structuralRow}
+          />
+        </CollectionCellContext.Provider>
       </div>
     </div>
   );

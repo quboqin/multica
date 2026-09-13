@@ -48,6 +48,49 @@ func TestNormalizeRecordPreservesFalsyValues(t *testing.T) {
 	}
 }
 
+func TestNormalizeRecordRejectsNullAndWrongJSONTypes(t *testing.T) {
+	definitions := []FieldDefinition{
+		{ID: "text", Type: "text"},
+		{ID: "count", Type: "number"},
+		{ID: "done", Type: "checkbox"},
+	}
+	for _, test := range []struct {
+		name  string
+		field string
+		value string
+	}{
+		{name: "text null", field: "text", value: `null`},
+		{name: "number null", field: "count", value: `null`},
+		{name: "checkbox null", field: "done", value: `null`},
+		{name: "text wrong type", field: "text", value: `42`},
+		{name: "number wrong type", field: "count", value: `"42"`},
+		{name: "checkbox wrong type", field: "done", value: `0`},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if _, err := NormalizeRecord("", map[string]json.RawMessage{
+				test.field: json.RawMessage(test.value),
+			}, definitions); err == nil {
+				t.Fatal("expected invalid JSON field value to be rejected")
+			}
+		})
+	}
+}
+
+func TestDecodeTitleValueDistinguishesNullFromEmptyText(t *testing.T) {
+	if _, err := DecodeTitleValue(json.RawMessage(`null`)); err == nil {
+		t.Fatal("JSON null was accepted as an empty title")
+	}
+	if _, err := DecodeTitleValue(nil); err == nil {
+		t.Fatal("missing title value was accepted")
+	}
+	if _, err := DecodeTitleValue(json.RawMessage(`false`)); err == nil {
+		t.Fatal("wrong title type was accepted")
+	}
+	if value, err := DecodeTitleValue(json.RawMessage(`""`)); err != nil || value != "" {
+		t.Fatalf("valid empty title = %q, %v", value, err)
+	}
+}
+
 func TestCursorIsBoundToSourceAndLimit(t *testing.T) {
 	encoded := EncodeCursor(PageCursor{Version: 1, WorkspaceID: "ws-a", CollectionID: "c-a", Query: "created_at_asc", Limit: 50, LastCreatedAt: "2026-01-01T00:00:00Z", LastID: "r-a"})
 	if _, err := DecodeCursor(encoded, "ws-a", "c-a", 50); err != nil {

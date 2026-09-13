@@ -490,8 +490,19 @@ func ensureSourceContextRollbackSafe(ctx context.Context, pool *pgxpool.Pool) er
 }
 
 func ensureCollectionRollbackSafe(ctx context.Context, pool *pgxpool.Pool) error {
+	tx, err := pool.BeginTx(ctx, pgx.TxOptions{AccessMode: pgx.ReadOnly})
+	if err != nil {
+		return fmt.Errorf("begin collection rollback inspection: %w", err)
+	}
+	defer tx.Rollback(ctx)
+	// This does not bypass RLS. PostgreSQL instead errors if a policy would
+	// hide any row, which makes a migration role without global visibility
+	// fail closed rather than mistake protected data for an empty database.
+	if _, err := tx.Exec(ctx, `SET LOCAL row_security = off`); err != nil {
+		return fmt.Errorf("disable filtered collection rollback inspection: %w", err)
+	}
 	var dataExists bool
-	if err := pool.QueryRow(ctx, `
+	if err := tx.QueryRow(ctx, `
 		SELECT EXISTS (SELECT 1 FROM collection)
 		    OR EXISTS (SELECT 1 FROM collection_field)
 		    OR EXISTS (SELECT 1 FROM record)

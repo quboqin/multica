@@ -8,8 +8,26 @@ import (
 	"testing"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/multica-ai/multica/server/internal/analytics"
 	"github.com/multica-ai/multica/server/internal/featureflags"
+	obsmetrics "github.com/multica-ai/multica/server/internal/metrics"
 )
+
+type collectionCaptureSpy struct{ names []string }
+
+func (s *collectionCaptureSpy) Capture(event analytics.Event) {
+	s.names = append(s.names, event.Name)
+}
+func (s *collectionCaptureSpy) Close() {}
+
+func collectionMetricValue(t *testing.T, metrics *obsmetrics.BusinessMetrics, name string) float64 {
+	t.Helper()
+	family := obsmetrics.GatherForTest(t, metrics)[name]
+	if family == nil || len(family.GetMetric()) != 1 {
+		t.Fatalf("metric %s missing or has unexpected labels", name)
+	}
+	return family.GetMetric()[0].GetCounter().GetValue()
+}
 
 type createCollectionTestResponse struct {
 	Collection CollectionResponse        `json:"collection"`
@@ -77,6 +95,13 @@ func TestCollectionT2a_CreateReplayRecordCASAndIsolation(t *testing.T) {
 	}
 	withFeatureFlag(t, testHandler, featureflags.CortexCollections, true)
 	cleanupTestCollections(t)
+	previousMetrics, previousAnalytics := testHandler.Metrics, testHandler.Analytics
+	metrics := obsmetrics.NewBusinessMetrics()
+	analyticsSpy := &collectionCaptureSpy{}
+	testHandler.Metrics, testHandler.Analytics = metrics, analyticsSpy
+	t.Cleanup(func() {
+		testHandler.Metrics, testHandler.Analytics = previousMetrics, previousAnalytics
+	})
 
 	var issuesBefore, tasksBefore, inboxBefore int
 	if err := testPool.QueryRow(context.Background(), `SELECT COUNT(*) FROM issue WHERE workspace_id = $1`, testWorkspaceID).Scan(&issuesBefore); err != nil {
@@ -110,11 +135,25 @@ func TestCollectionT2a_CreateReplayRecordCASAndIsolation(t *testing.T) {
 	if !replayed.Replayed || replayed.Collection.ID != collection.Collection.ID {
 		t.Fatalf("unexpected replay: %+v", replayed)
 	}
+	if got := collectionMetricValue(t, metrics, "multica_collection_created_total"); got != 1 {
+		t.Fatalf("collection metric after success and replay = %v, want 1", got)
+	}
 
 	fields := map[string]any{
 		collection.Fields[0].ID: "",
 		collection.Fields[1].ID: 0,
 		collection.Fields[2].ID: false,
+	}
+	invalidRecord := httptest.NewRecorder()
+	testHandler.CreateCollectionRecord(invalidRecord, collectionRequest(http.MethodPost, "/api/collections/records", map[string]any{
+		"client_request_id": "22222222-2222-4222-8222-222222222222",
+		"title":             "First",
+		"fields": map[string]any{
+			collection.Fields[0].ID: nil,
+		},
+	}, map[string]string{"collectionId": collection.Collection.ID}))
+	if invalidRecord.Code != http.StatusBadRequest {
+		t.Fatalf("null record field: got %d: %s", invalidRecord.Code, invalidRecord.Body.String())
 	}
 	createRecord := httptest.NewRecorder()
 	testHandler.CreateCollectionRecord(createRecord, collectionRequest(http.MethodPost, "/api/collections/records", map[string]any{
@@ -136,11 +175,31 @@ func TestCollectionT2a_CreateReplayRecordCASAndIsolation(t *testing.T) {
 	if stored[collection.Fields[0].ID] != "" || stored[collection.Fields[1].ID] != float64(0) || stored[collection.Fields[2].ID] != false {
 		t.Fatalf("falsy values changed: %#v", stored)
 	}
+	if got := collectionMetricValue(t, metrics, "multica_record_created_total"); got != 1 {
+		t.Fatalf("record metric after rollback and success = %v, want 1", got)
+	}
+
+	for name, change := range map[string]map[string]any{
+		"missing":    {"field_id": "title", "op": "set"},
+		"null":       {"field_id": "title", "op": "set", "value": nil},
+		"wrong type": {"field_id": "title", "op": "set", "value": false},
+	} {
+		t.Run("reject title "+name, func(t *testing.T) {
+			invalid := httptest.NewRecorder()
+			testHandler.UpdateCollectionRecord(invalid, collectionRequest(http.MethodPatch, "/api/collections/records/record", map[string]any{
+				"expected_revision": int64(1),
+				"change":            change,
+			}, map[string]string{"collectionId": collection.Collection.ID, "recordId": created.Record.ID}))
+			if invalid.Code != http.StatusBadRequest {
+				t.Fatalf("invalid title: got %d: %s", invalid.Code, invalid.Body.String())
+			}
+		})
+	}
 
 	update := httptest.NewRecorder()
 	testHandler.UpdateCollectionRecord(update, collectionRequest(http.MethodPatch, "/api/collections/records/record", map[string]any{
 		"expected_revision": int64(1),
-		"change":            map[string]any{"field_id": "title", "op": "set", "value": "Changed"},
+		"change":            map[string]any{"field_id": "title", "op": "set", "value": ""},
 	}, map[string]string{"collectionId": collection.Collection.ID, "recordId": created.Record.ID}))
 	if update.Code != http.StatusOK {
 		t.Fatalf("update record: got %d: %s", update.Code, update.Body.String())
@@ -152,6 +211,12 @@ func TestCollectionT2a_CreateReplayRecordCASAndIsolation(t *testing.T) {
 	}, map[string]string{"collectionId": collection.Collection.ID, "recordId": created.Record.ID}))
 	if conflict.Code != http.StatusConflict {
 		t.Fatalf("stale update: got %d: %s", conflict.Code, conflict.Body.String())
+	}
+	if got := collectionMetricValue(t, metrics, "multica_record_updated_total"); got != 1 {
+		t.Fatalf("update metric after invalid requests, success, and conflict = %v, want 1", got)
+	}
+	if len(analyticsSpy.names) != 0 {
+		t.Fatalf("metrics-only collection events reached external analytics: %v", analyticsSpy.names)
 	}
 
 	otherWorkspace := dbfx.Workspace(t, "Collection Other Workspace", "collection-other")

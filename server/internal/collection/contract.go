@@ -120,7 +120,29 @@ func NormalizeRecord(title string, values map[string]json.RawMessage, definition
 	return spec, nil
 }
 
+func DecodeTitleValue(raw json.RawMessage) (string, error) {
+	if isJSONNull(raw) {
+		return "", errors.New("title must be text")
+	}
+	var value string
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return "", errors.New("title must be text")
+	}
+	if utf8.RuneCountInString(value) > MaxTitleRunes {
+		return "", fmt.Errorf("title must not exceed %d characters", MaxTitleRunes)
+	}
+	return value, nil
+}
+
+func isJSONNull(raw json.RawMessage) bool {
+	trimmed := strings.TrimSpace(string(raw))
+	return trimmed == "" || trimmed == "null"
+}
+
 func normalizeValue(fieldType string, raw json.RawMessage) (any, error) {
+	if isJSONNull(raw) {
+		return nil, errors.New("value must not be null")
+	}
 	switch fieldType {
 	case "text":
 		var value string

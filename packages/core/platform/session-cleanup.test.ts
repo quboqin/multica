@@ -12,7 +12,11 @@ import {
 } from "../drafts/cleanup-registry";
 import type { StorageAdapter, Workspace } from "../types";
 import { workspaceKeys } from "../workspace/queries";
-import { clearClientSessionData } from "./session-cleanup";
+import {
+  captureClientSessionGeneration,
+  clearClientSessionData,
+  isClientSessionGenerationCurrent,
+} from "./session-cleanup";
 
 function makeStorage(
   initial: Record<string, string> = {},
@@ -37,6 +41,17 @@ beforeEach(() => {
 });
 
 describe("clearClientSessionData", () => {
+  it("invalidates the generation captured by outstanding cache work", () => {
+    const queryClient = new QueryClient();
+    const generation = captureClientSessionGeneration(queryClient);
+
+    clearClientSessionData(queryClient, makeStorage());
+
+    expect(isClientSessionGenerationCurrent(queryClient, generation)).toBe(
+      false,
+    );
+  });
+
   // The scenario this exists for: user A's session dies, the login form the
   // expiry lands on is used by B, and A and B share a workspace — so the
   // stale-tab validator that runs after login finds nothing to prune and

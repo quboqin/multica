@@ -10,6 +10,7 @@ import {
 } from "@multica/core/collections";
 import { useFeatureEnabled } from "@multica/core/config";
 import { CORTEX_COLLECTIONS_FLAG } from "@multica/core/feature-flags";
+import { getCurrentSlug, getCurrentWsId } from "@multica/core/platform";
 import {
   useRequiredWorkspaceSlug,
   useWorkspacePaths,
@@ -65,11 +66,12 @@ export function CollectionsPage() {
     if (pendingRequest.current?.intent !== intent) {
       pendingRequest.current = { intent, id: requestId() };
     }
+    const operation = pendingRequest.current;
     try {
       const result = await createCollection.mutateAsync({
         workspaceContext: { workspaceId, workspaceSlug },
         input: {
-          clientRequestId: pendingRequest.current.id,
+          clientRequestId: operation.id,
           name: trimmed,
           fields: [
             { name: t(($) => $.default_note), type: "text" },
@@ -78,9 +80,23 @@ export function CollectionsPage() {
           ],
         },
       });
+      if (
+        pendingRequest.current !== operation ||
+        getCurrentWsId() !== workspaceId ||
+        getCurrentSlug() !== workspaceSlug
+      ) {
+        return;
+      }
       pendingRequest.current = null;
       push(paths.collectionDetail(result.collection.id));
     } catch (reason) {
+      if (
+        pendingRequest.current !== operation ||
+        getCurrentWsId() !== workspaceId ||
+        getCurrentSlug() !== workspaceSlug
+      ) {
+        return;
+      }
       setError(reason instanceof Error ? reason.message : String(reason));
       await collections.refetch();
     }
