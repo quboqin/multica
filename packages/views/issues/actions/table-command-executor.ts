@@ -25,12 +25,18 @@ function failed(error: unknown): IssueTableActionResult {
 
 function once(
   resolve: (result: IssueTableActionResult) => void,
-): (result: IssueTableActionResult) => void {
+): {
+  settle: (result: IssueTableActionResult) => void;
+  isSettled: () => boolean;
+} {
   let settled = false;
-  return (result) => {
-    if (settled) return;
-    settled = true;
-    resolve(result);
+  return {
+    settle: (result) => {
+      if (settled) return;
+      settled = true;
+      resolve(result);
+    },
+    isSettled: () => settled,
   };
 }
 
@@ -52,26 +58,33 @@ export function createIssueTableCommandExecutor({
     const intent = runConfirmIntent(command.issue, command.updates, statusCatalog);
     if (intent) {
       return new Promise((resolve) => {
-        const settle = once(resolve);
+        const completion = once(resolve);
+        let phase: "awaiting-confirmation" | "submitting" | "settled" =
+          "awaiting-confirmation";
+        const settle = (result: IssueTableActionResult) => {
+          phase = "settled";
+          completion.settle(result);
+        };
         openRunConfirm({
           ...intent,
+          canCancel: () => phase === "awaiting-confirmation",
+          onSubmitting: () => {
+            if (!completion.isSettled()) phase = "submitting";
+          },
           onAccepted: () => settle({ status: "accepted" }),
-          onCancelled: () => settle({ status: "cancelled" }),
+          onCancelled: () => {
+            if (phase === "awaiting-confirmation") {
+              settle({ status: "cancelled" });
+            }
+          },
           onFailed: (error) => settle(failed(error)),
         });
       });
     }
 
-    return new Promise((resolve) => {
-      const settle = once(resolve);
-      try {
-        actions.updateIssue(command.issue.id, command.updates, {
-          onSuccess: () => settle({ status: "accepted" }),
-          onError: (error) => settle(failed(error)),
-        });
-      } catch (error) {
-        settle(failed(error));
-      }
-    });
+    return actions
+      .updateIssueAsync(command.issue.id, command.updates)
+      .then(() => ({ status: "accepted" as const }))
+      .catch(failed);
   };
 }

@@ -15,6 +15,7 @@ import { IssueLimitUpgradeDialog } from "./issue-limit-upgrade-dialog";
 export function ModalRegistry() {
   const modal = useModalStore((s) => s.modal);
   const data = useModalStore((s) => s.data);
+  const modalInstanceId = useModalStore((s) => s.modalInstanceId);
   const close = useModalStore((s) => s.close);
 
   let activeModal: ReactNode = null;
@@ -58,7 +59,13 @@ export function ModalRegistry() {
       activeModal = <DeleteIssueConfirmModal onClose={close} data={data} />;
       break;
     case "issue-run-confirm":
-      activeModal = <RunConfirmModal onClose={close} data={data} />;
+      activeModal = (
+        <RunConfirmModal
+          key={modalInstanceId}
+          onClose={() => close(modalInstanceId ?? undefined)}
+          data={data}
+        />
+      );
       break;
   }
 

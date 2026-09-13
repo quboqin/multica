@@ -26,6 +26,8 @@ export type RunConfirmIntent =
 
 /** Optional completion channel used by data-source backed editors. */
 export type RunConfirmData = RunConfirmIntent & {
+  canCancel?: () => boolean;
+  onSubmitting?: () => void;
   onAccepted?: (issue?: Issue) => void;
   onCancelled?: () => void;
   onFailed?: (error: unknown) => void;

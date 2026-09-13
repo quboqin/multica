@@ -36,9 +36,11 @@ function makeIssue(overrides: Partial<Issue> = {}): Issue {
 }
 
 function actions(
-  updateIssue: IssueSurfaceActions["updateIssue"],
+  updateIssueAsync: IssueSurfaceActions["updateIssueAsync"] = vi.fn(
+    async () => makeIssue(),
+  ),
 ): IssueSurfaceActions {
-  return { updateIssue } as IssueSurfaceActions;
+  return { updateIssueAsync } as IssueSurfaceActions;
 }
 
 const statusCatalog = { entryOf: () => undefined };
@@ -55,12 +57,14 @@ describe("createIssueTableCommandExecutor", () => {
   });
 
   it("waits for a direct mutation's success before accepting", async () => {
-    let mutationOptions: Parameters<IssueSurfaceActions["updateIssue"]>[2];
-    const updateIssue = vi.fn((_id, _updates, options) => {
-      mutationOptions = options;
+    let finishWrite: ((issue: Issue) => void) | undefined;
+    const updateIssueAsync = vi.fn(() => {
+      return new Promise<Issue>((resolve) => {
+        finishWrite = resolve;
+      });
     });
     const execute = createIssueTableCommandExecutor({
-      actions: actions(updateIssue),
+      actions: actions(updateIssueAsync),
       statusCatalog,
       openRunConfirm: vi.fn(),
     })!;
@@ -76,15 +80,17 @@ describe("createIssueTableCommandExecutor", () => {
     await Promise.resolve();
 
     expect(settled).toBe(false);
-    expect(updateIssue).toHaveBeenCalledTimes(1);
-    mutationOptions?.onSuccess?.(makeIssue({ title: "Renamed" }));
+    expect(updateIssueAsync).toHaveBeenCalledTimes(1);
+    finishWrite?.(makeIssue({ title: "Renamed" }));
     await expect(result).resolves.toEqual({ status: "accepted" });
   });
 
   it("returns failed when a direct mutation reports an error", async () => {
     const error = new Error("write failed");
     const execute = createIssueTableCommandExecutor({
-      actions: actions((_id, _updates, options) => options?.onError?.(error)),
+      actions: actions(async () => {
+        throw error;
+      }),
       statusCatalog,
       openRunConfirm: vi.fn(),
     })!;
@@ -99,9 +105,9 @@ describe("createIssueTableCommandExecutor", () => {
 
   it("does not accept or write a gated command before confirmation", async () => {
     let modalData: RunConfirmData | undefined;
-    const updateIssue = vi.fn();
+    const updateIssueAsync = vi.fn(async () => makeIssue());
     const execute = createIssueTableCommandExecutor({
-      actions: actions(updateIssue),
+      actions: actions(updateIssueAsync),
       statusCatalog,
       openRunConfirm: (data) => {
         modalData = data;
@@ -118,7 +124,7 @@ describe("createIssueTableCommandExecutor", () => {
     });
     await Promise.resolve();
 
-    expect(updateIssue).not.toHaveBeenCalled();
+    expect(updateIssueAsync).not.toHaveBeenCalled();
     expect(settled).toBe(false);
     modalData?.onAccepted?.();
     await expect(result).resolves.toEqual({ status: "accepted" });
@@ -141,6 +147,35 @@ describe("createIssueTableCommandExecutor", () => {
     modalData?.onCancelled?.();
 
     await expect(result).resolves.toEqual({ status: "cancelled" });
+  });
+
+  it("ignores cancellation after submission and waits for the mutation", async () => {
+    let modalData: RunConfirmData | undefined;
+    const execute = createIssueTableCommandExecutor({
+      actions: actions(),
+      statusCatalog,
+      openRunConfirm: (data) => {
+        modalData = data;
+      },
+    })!;
+    let settled = false;
+
+    const result = execute({
+      issue: makeIssue(),
+      updates: { assignee_type: "agent", assignee_id: "agent-1" },
+    }).then((value) => {
+      settled = true;
+      return value;
+    });
+    expect(modalData?.canCancel?.()).toBe(true);
+    modalData?.onSubmitting?.();
+    expect(modalData?.canCancel?.()).toBe(false);
+    modalData?.onCancelled?.();
+    await Promise.resolve();
+
+    expect(settled).toBe(false);
+    modalData?.onAccepted?.();
+    await expect(result).resolves.toEqual({ status: "accepted" });
   });
 
   it("returns failed when the confirmed mutation fails", async () => {

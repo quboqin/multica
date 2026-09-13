@@ -19,10 +19,11 @@ export type IssueLimitRecoveryReason = "issue_limit" | "autopilot_quota";
 interface ModalStore {
   modal: ModalType;
   data: Record<string, unknown> | null;
+  modalInstanceId: number | null;
   issueLimitRecoveryWorkspaceId: string | null;
   issueLimitRecoveryReason: IssueLimitRecoveryReason;
   open: (modal: NonNullable<ModalType>, data?: Record<string, unknown> | null) => void;
-  close: () => void;
+  close: (expectedInstanceId?: number) => void;
   showIssueLimitRecovery: (
     workspaceId: string,
     reason?: IssueLimitRecoveryReason,
@@ -30,11 +31,22 @@ interface ModalStore {
   dismissIssueLimitRecovery: () => void;
 }
 
+let nextModalInstanceId = 1;
+
 function notifyRunConfirmCancelled(
   modal: ModalType,
   data: Record<string, unknown> | null,
 ) {
   if (modal !== "issue-run-confirm") return;
+  const canCancel = data?.canCancel;
+  if (typeof canCancel === "function") {
+    try {
+      if (!canCancel()) return;
+    } catch {
+      // A broken lifecycle observer must not emit a false cancellation.
+      return;
+    }
+  }
   const onCancelled = data?.onCancelled;
   if (typeof onCancelled !== "function") return;
   try {
@@ -47,16 +59,23 @@ function notifyRunConfirmCancelled(
 export const useModalStore = create<ModalStore>((set, get) => ({
   modal: null,
   data: null,
+  modalInstanceId: null,
   issueLimitRecoveryWorkspaceId: null,
   issueLimitRecoveryReason: "issue_limit",
   open: (modal, data = null) => {
     const previous = get();
-    set({ modal, data });
+    set({ modal, data, modalInstanceId: nextModalInstanceId++ });
     notifyRunConfirmCancelled(previous.modal, previous.data);
   },
-  close: () => {
+  close: (expectedInstanceId) => {
     const previous = get();
-    set({ modal: null, data: null });
+    if (
+      expectedInstanceId !== undefined &&
+      previous.modalInstanceId !== expectedInstanceId
+    ) {
+      return;
+    }
+    set({ modal: null, data: null, modalInstanceId: null });
     notifyRunConfirmCancelled(previous.modal, previous.data);
   },
   showIssueLimitRecovery: (workspaceId, reason = "issue_limit") =>

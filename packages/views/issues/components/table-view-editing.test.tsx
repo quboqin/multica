@@ -201,6 +201,7 @@ const writableSurfaceActions: IssueSurfaceActions = {
   isPending: false,
   createIssue: () => {},
   updateIssue: () => {},
+  updateIssueAsync: async () => makeIssue("updated", "Updated", "todo"),
   moveIssue: () => {},
   batchUpdate: async () => {},
   batchDelete: async () => {},

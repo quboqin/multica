@@ -62,6 +62,7 @@ interface RunConfirmModalData {
   assigneeId?: string;
   assigneeName?: string;
   issueRevision?: number;
+  onSubmitting?: RunConfirmData["onSubmitting"];
   onAccepted?: RunConfirmData["onAccepted"];
   onCancelled?: RunConfirmData["onCancelled"];
   onFailed?: RunConfirmData["onFailed"];
@@ -148,6 +149,11 @@ export function RunConfirmModal({
   const submit = async (suppressRun: boolean) => {
     if (issueIds.length === 0 || submittingRef.current) return;
     submittingRef.current = true;
+    try {
+      d.onSubmitting?.();
+    } catch {
+      // Lifecycle observers must not prevent the confirmed mutation.
+    }
     setPendingAction(suppressRun ? "suppress" : "go");
     const payload = applyTo(suppressRun ? { suppress_run: true } : {});
     try {
@@ -175,6 +181,13 @@ export function RunConfirmModal({
             ? err.message
             : t(($) => $.run_confirm.toast_failed),
       );
+      if (d.onFailed) {
+        // Data-source backed confirms define failure as a terminal result. A
+        // retry starts a fresh confirmation session and therefore a new
+        // Promise instead of changing the result of an already-failed one.
+        onClose();
+        return;
+      }
       submittingRef.current = false;
       setPendingAction(null);
     }
