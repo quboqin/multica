@@ -670,7 +670,7 @@
     <line x1="867" y1="480" x2="867" y2="516" stroke="var(--muted)" marker-end="url(#ah)"/>
   </svg>
   </div>
-  <figcaption><b>图 2-1 · Monorepo 拓扑。</b>web/desktop 复用 views→core+ui 整条链；mobile 是刻意独立的 app，只以 <code>import type</code> 共享 core 的类型与纯函数。<code>cmd/multica</code> 同一二进制既是 CLI 又内含 daemon，经 Homebrew 分发到用户机器；Desktop 主进程也会捆绑并代管一份。</figcaption>
+  <figcaption><b>图 2-1(a) · Monorepo 代码拓扑。</b>web/desktop 复用 views→core+ui 整条链；mobile 是刻意独立的 app，只以 <code>import type</code> 共享 core 的类型与纯函数。<code>cmd/multica</code> 同一二进制既是 CLI 又内含 daemon，经 Homebrew 分发到用户机器；Desktop 主进程也会捆绑并代管一份。</figcaption>
 </figure>
 
 <p>包边界是硬约束（违反即 review 打回）：</p>
@@ -684,89 +684,166 @@
   </tbody>
 </table></div>
 
-<h3 id="arch-backend"><span class="sec">2.2</span>后端分层与请求管线</h3>
-<p>后端是单体服务，但分层非常规整：chi 路由集中在 <code>server/cmd/server/router.go</code>（约 2400 行，路由即文档），进入四类路由组之一后走 handler → service → sqlc 生成代码。写操作在 handler/service 里同步发布进程内事件（<code>events.Bus</code>），实时推送由此派生（见 §2.3）。</p>
 
-<figure class="fig">
-  <div class="scroll">
-  <svg viewBox="0 0 960 520" role="img" aria-label="一次 HTTP 请求经过八个全局中间件，进入四类路由组之一，再流经 handler、service、sqlc 到 PostgreSQL" style="min-width: 860px">
-    <!-- client -->
-    <rect x="20" y="170" width="130" height="88" rx="10" fill="var(--surface-2)" stroke="var(--line-strong)"/>
-    <text x="36" y="200" font-size="12" font-weight="600" fill="var(--ink)">客户端</text>
-    <text x="36" y="219" font-size="10.5" fill="var(--muted)">Web / Desktop</text>
-    <text x="36" y="235" font-size="10.5" fill="var(--muted)">Mobile / CLI / daemon</text>
-    <line x1="150" y1="214" x2="206" y2="214" stroke="var(--muted)" marker-end="url(#ah)"/>
-
-    <!-- middleware chain -->
-    <rect x="210" y="48" width="210" height="332" rx="10" fill="var(--surface-2)" stroke="var(--line-strong)"/>
-    <text x="226" y="76" font-size="12" font-weight="600" fill="var(--ink)">全局中间件（顺序执行）</text>
-    <g font-family="var(--font-mono)" font-size="11" fill="var(--body-c)">
-      <text x="226" y="106">1 RequestID</text>
-      <text x="226" y="139">2 ClientMetadata</text>
-      <text x="226" y="172">3 RequestLogger</text>
-      <text x="226" y="205">4 Prometheus 指标</text>
-      <text x="226" y="238">5 Recoverer</text>
-      <text x="226" y="271">6 PluginSurface 边界</text>
-      <text x="226" y="304">7 CSP 头</text>
-      <text x="226" y="337">8 CORS（凭证白名单）</text>
-    </g>
-
-    <!-- route groups -->
-    <g>
-      <rect x="480" y="48" width="230" height="64" rx="8" fill="var(--surface)" stroke="var(--line-strong)"/>
-      <text x="494" y="73" font-size="12" font-weight="600" fill="var(--ink)">公开路由</text>
-      <text x="494" y="92" font-size="10.5" fill="var(--muted)">health · /auth/* · webhooks · 能力 URL</text>
-
-      <rect x="480" y="132" width="230" height="64" rx="8" fill="var(--copper-soft)" stroke="var(--copper)"/>
-      <text x="494" y="157" font-family="var(--font-mono)" font-size="12" font-weight="600" fill="var(--ink)">/api/daemon/*</text>
-      <text x="494" y="176" font-size="10.5" fill="var(--muted)">DaemonAuth：仅 Bearer，无 Cookie</text>
-
-      <rect x="480" y="216" width="230" height="64" rx="8" fill="var(--copper-soft)" stroke="var(--copper)"/>
-      <text x="494" y="241" font-family="var(--font-mono)" font-size="12" font-weight="600" fill="var(--ink)">/v1（插件公开 API）</text>
-      <text x="494" y="260" font-size="10.5" fill="var(--muted)">PluginBearerOnly：仅 mpi_/mpc_</text>
-
-      <rect x="480" y="300" width="230" height="64" rx="8" fill="var(--accent-soft)" stroke="var(--accent)" stroke-width="1.4"/>
-      <text x="494" y="325" font-family="var(--font-mono)" font-size="12" font-weight="600" fill="var(--ink)">/api/*（主认证组）</text>
-      <text x="494" y="344" font-size="10.5" fill="var(--muted)">Auth + CSRF + Workspace 中间件</text>
-    </g>
-
-    <!-- fan-out from middleware -->
-    <line x1="420" y1="180" x2="476" y2="80" stroke="var(--muted)" marker-end="url(#ah)"/>
-    <line x1="420" y1="205" x2="476" y2="164" stroke="var(--muted)" marker-end="url(#ah)"/>
-    <line x1="420" y1="230" x2="476" y2="248" stroke="var(--muted)" marker-end="url(#ah)"/>
-    <line x1="420" y1="255" x2="476" y2="332" stroke="var(--muted)" marker-end="url(#ah)"/>
-
-    <!-- trunk into handler -->
-    <path d="M 710 80 L 736 80" fill="none" stroke="var(--line-strong)"/>
-    <path d="M 710 164 L 736 164" fill="none" stroke="var(--line-strong)"/>
-    <path d="M 710 248 L 736 248" fill="none" stroke="var(--line-strong)"/>
-    <path d="M 710 332 L 736 332" fill="none" stroke="var(--line-strong)"/>
-    <path d="M 736 80 L 736 404 L 290 404 L 290 432" fill="none" stroke="var(--muted)" marker-end="url(#ah)"/>
-
-    <!-- bottom chain -->
-    <rect x="210" y="436" width="160" height="56" rx="8" fill="var(--surface-2)" stroke="var(--line-strong)"/>
-    <text x="224" y="459" font-family="var(--font-mono)" font-size="12" font-weight="600" fill="var(--ink)">internal/handler</text>
-    <text x="224" y="478" font-size="10.5" fill="var(--muted)">HTTP 编解码 · 鉴权细则</text>
-
-    <rect x="410" y="436" width="160" height="56" rx="8" fill="var(--surface-2)" stroke="var(--line-strong)"/>
-    <text x="424" y="459" font-family="var(--font-mono)" font-size="12" font-weight="600" fill="var(--ink)">internal/service</text>
-    <text x="424" y="478" font-size="10.5" fill="var(--muted)">业务规则 · 事件发布</text>
-
-    <rect x="610" y="436" width="140" height="56" rx="8" fill="var(--surface-2)" stroke="var(--line-strong)"/>
-    <text x="624" y="459" font-family="var(--font-mono)" font-size="12" font-weight="600" fill="var(--ink)">pkg/db（sqlc）</text>
-    <text x="624" y="478" font-size="10.5" fill="var(--muted)">类型安全查询</text>
-
-    <rect x="790" y="436" width="150" height="56" rx="8" fill="var(--surface-2)" stroke="var(--line-strong)"/>
-    <text x="804" y="459" font-family="var(--font-mono)" font-size="12" font-weight="600" fill="var(--ink)">PostgreSQL</text>
-    <text x="804" y="478" font-size="10.5" fill="var(--muted)">全部按 workspace_id 过滤</text>
-
-    <line x1="370" y1="464" x2="406" y2="464" stroke="var(--muted)" marker-end="url(#ah)"/>
-    <line x1="570" y1="464" x2="606" y2="464" stroke="var(--muted)" marker-end="url(#ah)"/>
-    <line x1="750" y1="464" x2="786" y2="464" stroke="var(--muted)" marker-end="url(#ah)"/>
-  </svg>
-  </div>
-  <figcaption><b>图 2-2 · 请求管线。</b>四类路由组的差别全在鉴权方式（详见 §04）：daemon 组与插件组只收 Bearer、结构性排除 Cookie；主认证组叠加 CSRF 与工作区成员校验。写路径的 handler/service 会同步向 <code>events.Bus</code> 发布事件，进入图 2-3 的实时扇出。</figcaption>
+<h4 id="arch-access-paths">从客户端到 server：实际 HTTP 访问路径</h4>
+<p><strong>图 2-1(a) 回答代码怎样复用；图 2-1(b) 回答请求从哪个进程发出、走到哪个 server 入口。</strong>这里把 App 分成 Electron 桌面端和移动端，并把桌面界面、桌面主进程、本机 daemon 分开。下文依据 <code>docs/architecture-handbook@924a6aaf6</code> 的源码，业务基线为 <code>dcc2d5825</code>；不代表所有已部署客户端都已升级到该版本。</p>
+<figure class="fig" id="fig-access-http">
+<pre class="mermaid">
+flowchart LR
+  W["Web 浏览器"] -->|"同源 HTTP：Cookie；写操作加 CSRF"| P["Next.js / 反向代理"]
+  P -->|"转发 /api/*；保留凭证"| A["Go server：业务 /api/*
+Auth"]
+  W -.->|"配置独立 API 地址时直连；仍用 Cookie"| A
+  E["桌面 App 界面"] -->|"HTTP /api/*：Bearer JWT"| A
+  M["移动 App"] -->|"HTTP /api/*：Bearer JWT"| A
+  C["人工 multica CLI"] -->|"HTTP /api/*：Bearer mul_ PAT"| A
+  G["智能体进程中的 multica CLI"] -->|"HTTP /api/*：Bearer mat_"| A
+  D["本机 / 云端 daemon"] -->|"HTTP /api/daemon/*：Bearer
+本机常用 mul_；云节点 mcn_"| DA["Go server：机器接口
+DaemonAuth"]
+</pre>
+<figcaption><b>图 2-1(b) · HTTP 访问路径与随行凭证。</b>实线是各端的常用业务路径；虚线是 Web 直连 API 的配置分支。所有箭头均表示客户端主动发起请求。框内两类 server 入口属于同一个 Go 服务。图中的“直连”指请求目标是 API 地址，部署上仍可经过负载均衡；协议在生产通常为 HTTPS，本地可为 HTTP。Web 的同源代理转发凭证，最终身份由 Go 校验。daemon 另有 PAT 续期等辅助请求，以 Bearer mul_ 调用业务组的 <code>/api/tokens/current/renew</code>。</figcaption>
 </figure>
+<p><strong>桌面界面访问任务、评论等 API，不需要经过本机 daemon。</strong>桌面主进程通过本地 IPC 接收登录信息、管理 daemon，并用用户 JWT 调 <code>POST /api/tokens</code> 为 daemon 获取另一枚 PAT（见图 2-2(b)）。CLI 的普通业务命令也直接请求 server；仓库 checkout 等本机功能可另行调用本地 daemon，不能把它们画成全部 CLI 请求的必经层。</p>
+<div class="tbl-wrap"><table class="tbl">
+<thead><tr><th>调用方</th><th>HTTP 入口 / 用途</th><th>凭证从哪里来、放哪里</th><th>身份与工作区</th></tr></thead>
+<tbody>
+<tr><td>Web</td><td class="wrap"><code>/api/*</code>；默认同源，也可配置独立 API origin</td><td class="wrap">登录设置 <code>multica_auth</code> HttpOnly Cookie（内含 JWT）；前端读 <code>multica_csrf</code>，写请求加 <code>X-CSRF-Token</code></td><td class="wrap">登录用户；一般以 <code>X-Workspace-Slug</code> 选择工作区，再验成员资格</td></tr>
+<tr><td>桌面界面</td><td class="wrap">配置的 API 地址下 <code>/api/*</code></td><td class="wrap">登录 JWT 存于 renderer 的 <code>localStorage["multica_token"]</code>；HTTP 显式带 Bearer</td><td class="wrap">登录用户；<code>X-Workspace-Slug</code> + 成员校验</td></tr>
+<tr><td>移动 App</td><td class="wrap">配置的 API 地址下 <code>/api/*</code></td><td class="wrap">登录 JWT 存于 SecureStore；独立 API client 显式带 Bearer</td><td class="wrap">登录用户；<code>X-Workspace-Slug</code> + 成员校验</td></tr>
+<tr><td>人工 CLI</td><td class="wrap"><code>/api/*</code>；查询、评论、更新任务等</td><td class="wrap">浏览器登录换取 <code>mul_</code> PAT，保存到选定 profile；也支持导入 token；请求带 Bearer</td><td class="wrap">PAT 所属用户；通常用 <code>X-Workspace-ID</code> 选择工作区</td></tr>
+<tr><td>daemon</td><td class="wrap"><code>/api/daemon/register</code>、<code>heartbeat</code>、<code>tasks/claim</code>、task 进度与结果接口</td><td class="wrap">本机通常读 profile 中的 <code>mul_</code>；桌面管理的 daemon 使用主进程换取的 PAT；云节点可用 <code>mcn_</code></td><td class="wrap">PAT/JWT/mcn_ 路径得到用户身份，再由 handler 检查工作区及端点要求；mdt_ 路径用绑定的 workspace/daemon 上下文</td></tr>
+<tr><td>任务内 CLI</td><td class="wrap">仍是业务 <code>/api/*</code>，例如发布评论</td><td class="wrap">server 领取时签发 <code>mat_</code>，daemon 注入 <code>MULTICA_TOKEN</code>；任务上下文禁止回退到全局用户 token</td><td class="wrap">署名为 agent；server 绑定 task/agent/workspace/runtime 属主，工作区不可由客户端换走</td></tr>
+</tbody></table></div>
+<p>Bearer 是 HTTP 的携带方式，JWT、PAT、<code>mat_</code> 是凭证种类；两者不是同一级概念。Web 的 Cookie 中也装着 JWT。Bearer 分支不做 Cookie-CSRF 校验，但仍要验证凭证和权限。旧版 Web 的 localStorage token 兼容路径可使用 Bearer；上表描述正常的新登录路径。独立 API origin 还需满足 CORS、Cookie 域及 SameSite 条件；跨 origin 不一定跨 site，不能只改 API 地址就假设 Cookie 一定能携带。</p>
+
+<h3 id="arch-backend"><span class="sec">2.2</span>后端分层与请求管线</h3>
+<p>后端是单体服务，但分层非常规整：chi 路由集中在 <code>server/cmd/server/router.go</code>（约 2400 行，路由即文档），HTTP 业务路由通常走 handler → service → sqlc 生成代码；实时入口另有 Hub 处理链。入口与认证方式如下图分开列出。写操作在 handler/service 里同步发布进程内事件（<code>events.Bus</code>），实时推送由此派生（见 §2.3）。</p>
+
+
+<figure class="fig" id="fig-auth-routing">
+<pre class="mermaid">
+flowchart TB
+  R["请求到达 Go server"] -->|"按 URL 匹配；全局中间件先运行"| Q{"访问哪类入口？"}
+  Q -->|"业务 /api/*；插件宿主 bridge"| A["Auth：Bearer 优先，其次 Cookie
+Cookie 写请求还要 CSRF"]
+  Q -->|"/api/daemon/*，含 /ws"| D["DaemonAuth：仅 Bearer
+mdt_ / mcn_ / mul_ / JWT"]
+  Q -->|"插件公开 /v1/*"| P["PluginBearerOnly + 插件鉴权
+仅 mpi_ / mpc_；拒绝 Cookie"]
+  Q -->|"/ws"| W["realtime 专用握手
+Cookie 或首帧 token"]
+  Q -->|"/auth/*、webhook、签名资源"| O["各端点自行校验
+验证码 / OAuth / 签名 / 能力令牌"]
+  A -->|"JWT / mul_ / mat_ / mcn_ 验证成功"| Z["对应入口的授权检查
+工作区、角色、资源或 scope"]
+  D -->|"凭证通过；handler 校验目标资源"| Z
+  P -->|"安装、调用身份与 scope 通过"| Z
+  W -->|"JWT / mul_；工作区成员"| Z
+  Z -->|"允许操作 / 订阅"| H["handler / service 或实时 Hub"]
+  O -->|"按端点处理；health 等可匿名"| H
+</pre>
+<figcaption><b>图 2-2 · server 按入口选择认证与授权规则。</b>普通业务 <code>Auth</code> 不能代替 daemon、插件和实时连接的专用规则。图中汇总的“授权检查”不是所有入口共用的一个中间件：用户级接口可不要求工作区，工作区业务路由叠加成员/角色校验，daemon 在 handler 校验目标 workspace/runtime/task，插件检查安装 scope，实时入口检查成员和订阅资源。任何一步失败均在执行操作前返回错误或关闭连接。写路径仍由 handler/service 发布事件到 <code>events.Bus</code>，供 §2.3 扇出。</figcaption>
+</figure>
+<div class="tbl-wrap"><table class="tbl">
+<thead><tr><th>server 入口</th><th>接受什么</th><th>关键边界</th></tr></thead>
+<tbody>
+<tr><td>业务 <code>/api/*</code></td><td class="wrap">Bearer：JWT、mul_、mat_、mcn_；正常 Cookie 会话使用 JWT</td><td class="wrap">Authorization 优先；Cookie 写请求缺失/错误 CSRF 返回 403。认证成功不等于有工作区或资源权限</td></tr>
+<tr><td><code>/api/daemon/*</code></td><td class="wrap">Bearer：mdt_、mcn_、mul_、JWT</td><td class="wrap">只看 Authorization；不接受 Cookie，也不接受 mat_。mdt_ 是支持的机器凭证分支，不能据此推断所有 daemon 默认都用它</td></tr>
+<tr><td><code>/ws</code></td><td class="wrap">Cookie，或升级后的首帧 JWT/mul_</td><td class="wrap">不走业务 Auth；不读取 HTTP Bearer 作这一入口的 token 认证，不把 token 放 URL；mat_/mdt_/mcn_ 不适用</td></tr>
+<tr><td><code>/v1/*</code></td><td class="wrap">Bearer：mpi_ 安装令牌 / mpc_ 调用令牌</td><td class="wrap">用户 JWT/PAT/Cookie 不能代替插件凭证。面板通过宿主 MessagePort → <code>/api/plugin-bridge/v1</code> 使用用户会话</td></tr>
+<tr><td>其他直接入口</td><td class="wrap">登录验证码/OAuth；webhook 提供方签名或端点令牌；下载/头像/面板的签名能力 URL</td><td class="wrap">“不走 Auth”不等于“无需验证”。不同 webhook 的验证方式不同，不能画成统一的用户会话入口</td></tr>
+</tbody></table></div>
+<p><code>X-Workspace-ID</code> / <code>X-Workspace-Slug</code> 是资源选择信息，不是认证凭证。<code>mat_</code> 验证后由 server 覆写身份头并固定工作区；<code>mcn_</code> 交给 Cloud 验证并关联本地用户，未配置验证器则拒绝，Cloud 不可达返回 503。不能把发起人的名称、客户端类型或自行填写的身份头当作权限来源。</p>
+
+<h4 id="arch-login-handoff">登录之后：用户会话怎样变成 CLI / daemon 凭证</h4>
+<figure class="fig" id="fig-login-handoff">
+<pre class="mermaid">
+sequenceDiagram
+  participant B as 浏览器登录页
+  participant S as Go server
+  participant C as 人工 CLI
+  participant E as 桌面 App
+  participant D as 本机 daemon
+  B->>S: 邮箱验证码 / Google 登录
+  S-->>B: JWT + Set-Cookie 会话及 CSRF
+  alt 人工 CLI 登录
+    C->>B: 打开登录页，带 loopback callback + state
+    B->>S: POST /api/cli-token，Cookie + CSRF
+    S-->>B: JWT
+    B->>C: 回到 127.0.0.1 callback，携带 JWT + state
+    C->>C: 校验 state
+    C->>S: POST /api/tokens，Bearer JWT，90 天
+    S-->>C: mul_ PAT，CLI 保存到 profile
+  else 桌面登录并启用本机 runtime
+    B->>E: multica://auth/callback 深链交付 JWT
+    E->>E: 界面保存会话；通过 IPC 同步给主进程
+    E->>S: 首次或需重建时 POST /api/tokens，Bearer JWT
+    S-->>E: daemon 使用的 mul_ PAT
+    E->>D: 保存专用 profile，启动 / 必要时重启
+  end
+</pre>
+<figcaption><b>图 2-2(b) · 登录交接与凭证分离。</b>浏览器负责用户登录；CLI 随机 loopback 端口只接收这次登录回调，不是业务 server。桌面框内的主进程负责凭证换取和 daemon 生命周期，界面继续使用自己的 JWT。桌面同一 profile/同一用户的 PAT 可复用，创建请求未设置到期日，当前实现为可撤销的无固定到期 PAT。CLI 自动登录取得的 PAT 默认 90 天，可续期。邮箱验证码也可直接在桌面/移动登录界面完成；图中选择浏览器交接链路展示 CLI 与桌面的差异。</figcaption>
+</figure>
+<p>用户 JWT 默认 30 天，可由 <code>AUTH_TOKEN_TTL</code> 配置；移动端直接保管登录返回的 JWT，不创建本机 daemon PAT。凭证过期或被撤销需重登/重铸，网络错误与 5xx 不应被解释成“凭证已失效”。本节只描述已有实现，不引入新的认证协议。</p>
+
+<h4 id="arch-task-credential">同一台机器上的 daemon 与智能体为什么不是同一身份</h4>
+<figure class="fig" id="fig-task-credential">
+<pre class="mermaid">
+sequenceDiagram
+  participant D as daemon
+  participant S as Go server
+  participant G as 智能体进程中的 CLI
+  D->>S: POST /api/daemon/tasks/claim，Bearer mul_ 或 mcn_
+  S->>S: 校验机器访问权；绑定 task、agent、workspace、runtime 属主
+  S-->>D: 领取回执 + mat_ 任务令牌
+  D->>G: 启动子进程，注入 MULTICA_TOKEN=mat_（示意）
+  G->>S: POST /api/issues/.../comments，Bearer mat_
+  S->>S: 校验 task_token，覆写身份与工作区；执行成员及资源检查
+  S-->>G: 评论保存，作者为 agent
+  D->>S: POST /api/daemon/tasks/.../complete，仍用 daemon 凭证
+</pre>
+<figcaption><b>图 2-2(c) · 机器调度与智能体业务操作使用不同凭证。</b>daemon 领取和汇报执行结果；智能体通过任务内 CLI 发布业务评论。daemon 不把自己的个人 PAT 作为任务 token 注入；缺失或非 mat_ 的任务凭证会被拒绝。任务令牌有时效与撤销机制，权限还受属主成员资格、工作区及具体端点限制，不能简化成“属主全部权限”。只有需要 Remote MCP 的领取回执才额外携带 mdt_：它供 daemon 代理解析 MCP 凭证，不替换智能体的 mat_。</figcaption>
+</figure>
+
+<h4 id="arch-ws-auth">实时连接：两条 WebSocket 路径，三种握手方式</h4>
+<figure class="fig" id="fig-ws-auth">
+<pre class="mermaid">
+sequenceDiagram
+  participant U as Web / 桌面 / 移动界面
+  participant S as Go server
+  participant D as daemon
+  alt Web Cookie 模式：GET /ws
+    U->>S: HTTP Upgrade + Cookie + workspace_slug
+    S->>S: 升级前验证 JWT/PAT 与工作区成员
+    S-->>U: 101 升级成功，开始事件推送
+  else 桌面 / 移动 / 旧 Web token 模式：GET /ws
+    U->>S: HTTP Upgrade + workspace_slug；URL 不含 token
+    S-->>U: 101（尚未完成身份认证）
+    U->>S: 首帧 auth，payload.token = JWT / mul_
+    alt 凭证及成员资格有效
+      S-->>U: auth_ack，随后推送事件
+    else 凭证无效 / 非成员 / 首帧超时
+      S-->>U: auth_error 并关闭连接
+    end
+  end
+  D->>S: GET /api/daemon/ws，升级头带 Authorization: Bearer
+  S->>S: DaemonAuth；验证所订阅 runtime 的访问权
+  S-->>D: 101，机器控制消息 / 任务唤醒
+  D->>S: 收到唤醒后，经 HTTP /api/daemon/tasks/claim 领取
+</pre>
+<figcaption><b>图 2-2(d) · 界面事件流与机器控制流的认证时机。</b><code>/ws</code> 使用独立实时鉴权，浏览器 WebSocket API 不能像 fetch 那样设置自定义 Authorization，所以 token 模式改用首帧。Cookie 路径失败会在升级前返回 HTTP 错误；token 路径的 101 仅表示协议升级成功，收到 auth_ack 才完成认证。Go daemon 能设置升级请求头，进入的是另一条 <code>/api/daemon/ws</code>；它不走界面首帧认证。连接还受 Origin 检查，重连要重新验证；事件/唤醒本身不等于已完成持久化领取。</figcaption>
+</figure>
+<details><summary>本节源码依据（路径与行号对应 924a6aaf6）</summary>
+<ul class="tight">
+<li>路由边界：<code>server/cmd/server/router.go:1279</code>、<code>server/cmd/server/router.go:1375</code>、<code>server/cmd/server/router.go:1433</code>、<code>server/cmd/server/router.go:1448</code>。</li>
+<li>认证 / CSRF：<code>server/internal/middleware/auth.go:51</code>、<code>server/internal/middleware/daemon_auth.go:79</code>、<code>server/internal/auth/cookie.go:221</code>；daemon 资源校验：<code>server/internal/handler/daemon.go:47</code>。</li>
+<li>Web 转发及兼容模式：<code>apps/web/config/runtime-urls.ts:98</code>、<code>apps/web/config/runtime-urls.ts:110</code>、<code>apps/web/proxy.ts:55</code>、<code>apps/web/components/web-providers.tsx:60</code>；HTTP 请求头：<code>packages/core/api/client.ts:690</code>。</li>
+<li>CLI：<code>server/cmd/multica/cmd_auth.go:73</code>、<code>server/cmd/multica/cmd_auth.go:314</code>、<code>server/internal/cli/client.go:214</code>；桌面 PAT：<code>apps/desktop/src/main/daemon-manager.ts:601</code>；移动：<code>apps/mobile/data/auth-store.ts:65</code>、<code>apps/mobile/data/api.ts:248</code>。</li>
+<li>任务凭证注入：<code>server/internal/daemon/daemon.go:152</code>；Remote MCP 令牌：<code>server/internal/handler/daemon.go:1883</code>。</li>
+<li>界面 WS：<code>packages/core/api/ws-client.ts:87</code>、<code>server/internal/realtime/hub.go:776</code>；daemon WS：<code>server/internal/daemon/wakeup.go:100</code>、<code>server/internal/handler/daemon_ws.go:27</code>。</li>
+</ul></details>
+
 
 <p>值得记住的三个后端事实：</p>
 <ul class="tight">
@@ -1553,17 +1630,17 @@ sequenceDiagram
 <p>会话是<strong>无状态 JWT</strong>：HS256 签名（<code>JWT_SECRET</code>，生产环境弱密钥直接拒绝启动），claims 只有 <code>sub/email/name/exp/iat</code>，没有 sessions 表，因此没有「注销其他设备」，也没有刷新流程——过期即重新登录。<code>POST /auth/logout</code> 只清 Cookie，被复制走的 JWT 在到期前仍然有效；可吊销的凭证只有 PAT / daemon / task / plugin 令牌。</p>
 
 <h3 id="auth-tokens"><span class="sec">4.2</span>凭证家族</h3>
-<p>所有非 JWT 凭证统一形态：<code>前缀 + 40 位 hex（20 随机字节）</code>，服务端只存 <code>SHA-256</code> 哈希。前缀既是路由（中间件按它分流），也是标签（一眼看出凭证类别）：</p>
+<p>凭证前缀用于区分类别和选择验证器，不能仅凭前缀推断可访问的接口。编码和存储因凭证而异：插件令牌使用 URL-safe Base64；mpc_ 的哈希及 grant 保存在进程内存，mcn_ 由 Cloud 验证。各端携带方式及入口差异见 <a href="#arch-access-paths">图 2-1(b)</a> 与 <a href="#arch-backend">图 2-2</a>。</p>
 <div class="tbl-wrap"><table class="tbl">
   <thead><tr><th>凭证</th><th>持有者</th><th>存储 / 校验</th><th>有效期</th><th>用途与边界</th></tr></thead>
   <tbody>
-    <tr><td><span class="tok human">JWT</span></td><td>人类</td><td class="wrap">自包含，不落库；Cookie <code>multica_auth</code> 或 <code>Bearer</code></td><td class="num">30 天</td><td class="wrap">浏览器与桌面会话；无服务端吊销</td></tr>
+    <tr><td><span class="tok human">JWT</span></td><td>人类</td><td class="wrap">自包含，不落库；Cookie <code>multica_auth</code> 或 <code>Bearer</code></td><td class="num">默认 30 天，可配置</td><td class="wrap">浏览器与桌面会话；无服务端吊销</td></tr>
     <tr><td><span class="tok human">mul_</span></td><td>人类（CLI/daemon/桌面）</td><td class="wrap"><code>personal_access_token</code>，Redis 缓存 10 分钟</td><td class="num">可永久</td><td class="wrap">个人访问令牌；CLI 登录默认 90 天并在剩 7 天内自动续期；桌面为 daemon 铸永久 PAT；可撤销</td></tr>
-    <tr><td><span class="tok machine">mat_</span></td><td>Agent（任务作用域）</td><td class="wrap"><code>task_token</code>，任务领取时铸造</td><td class="num">24 h</td><td class="wrap">agent 的全部身份：权限 = 运行时属主的成员资格 ∩ 令牌绑定的单个工作区（§4.6）</td></tr>
+    <tr><td><span class="tok machine">mat_</span></td><td>Agent（任务作用域）</td><td class="wrap"><code>task_token</code>，任务领取时铸造</td><td class="num">24 h</td><td class="wrap">绑定 agent/task/workspace/运行时属主；检查属主成员资格、资源权限及机器身份限制（§4.6）</td></tr>
     <tr><td><span class="tok machine">mdt_</span></td><td>Daemon</td><td class="wrap"><code>daemon_token</code></td><td class="num">24 h</td><td class="wrap">绑定工作区、无用户身份；目前仅在任务携带 Remote MCP 连接时铸造，日常 daemon 用 <code>mul_</code></td></tr>
     <tr><td><span class="tok machine">mcn_</span></td><td>Cloud 节点</td><td class="wrap">远程调 Multica Cloud 验证（60s 缓存；Cloud 不可达返回 503 而非放行）</td><td class="num">Cloud 管理</td><td class="wrap">云托管 runtime 的机器凭证</td></tr>
-    <tr><td><span class="tok machine">mpi_</span></td><td>插件安装</td><td class="wrap"><code>plugin_installation.token_hash</code>，可轮换</td><td class="num">长期</td><td class="wrap">插件公开 API <code>/v1</code> 唯一入场券</td></tr>
-    <tr><td><span class="tok machine">mpc_</span></td><td>插件回调</td><td class="wrap">一次性；使用时<strong>复查</strong>被代表者的成员资格</td><td class="num">5 分钟</td><td class="wrap">代表某个人的单次回调，成员被移除立即失效</td></tr>
+    <tr><td><span class="tok machine">mpi_</span></td><td>插件安装</td><td class="wrap"><code>plugin_installation.token_hash</code>，可轮换</td><td class="num">长期</td><td class="wrap">插件公开 API <code>/v1</code> 的长期安装凭证；也接受受限的 mpc_</td></tr>
+    <tr><td><span class="tok machine">mpc_</span></td><td>插件回调</td><td class="wrap">进程内 grant；一次 hook 调用期间可多次请求；使用时复查被代表者的成员资格</td><td class="num">5 分钟</td><td class="wrap">绑定调用上下文与 scope；调用结束撤销，或到期失效；重启/跨副本可能提前失效</td></tr>
   </tbody>
 </table></div>
 
@@ -1667,11 +1744,11 @@ sequenceDiagram
 <ol class="tight">
   <li><strong>铸造</strong>：daemon 领取任务时，服务端为每个任务铸 <code>mat_</code> 令牌，绑定 <code>task + agent + workspace + runtime 属主</code>，24 小时过期，与领取回执同事务落库。runtime 属主缺失时<strong>取消任务而不是派发</strong>——绝不产生无主凭证。历史上曾把属主的 PAT 注入 agent 进程，此设计（MUL-2600）正是为替换它。</li>
   <li><strong>注入</strong>：daemon 把令牌以 <code>MULTICA_TOKEN</code> 环境变量交给 CLI 进程（另有 <code>MULTICA_WORKSPACE_ID / MULTICA_AGENT_ID / MULTICA_TASK_ID</code> 等）；daemon 侧校验注入值必须是 <code>mat_</code> 前缀，CLI 侧在任务上下文里拒绝回退到用户全局配置的 token，也拒绝 <code>login</code> 等人类命令。</li>
-  <li><strong>行权</strong>：请求进来后中间件覆写四个身份头并盖 <code>X-Actor-Source: task_token</code>；工作区解析无条件采用令牌绑定值；成员校验跑的是<strong>属主</strong>的资格——所以 agent 的能力恒等于「属主权限 ∩ 单一工作区 ∩ 24 小时」。</li>
+  <li><strong>行权</strong>：请求进来后中间件覆写四个身份头并盖 <code>X-Actor-Source: task_token</code>；工作区解析无条件采用令牌绑定值；成员校验跑的是<strong>属主</strong>的资格——属主成员资格只是其中一层约束；还要满足令牌有效性、绑定工作区、资源权限与端点对 agent 的限制。</li>
   <li><strong>署名</strong>：<code>resolveActor</code> 据此返回 <code>("agent", agent_id)</code>，评论落库为 <code>author_type='agent'</code>。旧路径若想声明 agent 身份，必须同时给出 <code>X-Agent-ID</code> 与归属该 agent 的有效 <code>X-Task-ID</code>——单凭 <code>X-Agent-ID</code> 永远不被信任，成员无法冒充 agent。</li>
 </ol>
 
-<p>CLI 的人类登录则是一段本地回环握手：</p>
+<p>CLI 的人类登录则是一段本地回环握手；与桌面主进程及 daemon 的凭证交接对比见 <a href="#arch-login-handoff">图 2-2(b)</a>：</p>
 <figure class="fig">
   <pre class="mermaid">
 sequenceDiagram
@@ -1681,7 +1758,7 @@ sequenceDiagram
   C->>C: 本地监听 127.0.0.1 随机端口 + 生成 state
   C->>Br: 打开 /login?cli_callback=… 与 cli_state=…
   Br->>Br: 校验回调地址：仅 http + localhost/私网段
-  Br->>S: POST /api/cli-token（凭 Cookie 会话）
+  Br->>S: POST /api/cli-token（Cookie + CSRF）
   S-->>Br: 新 JWT
   Br->>C: 重定向 http://127.0.0.1:…/callback?token&state
   C->>C: 核对 state
@@ -1693,6 +1770,7 @@ sequenceDiagram
 </figure>
 
 <h3 id="auth-frontend"><span class="sec">4.7</span>前端凭证管线</h3>
+<p>HTTP 路径见 <a href="#arch-access-paths">图 2-1(b)</a>；注意 HTTP Bearer 与 WebSocket 首帧 token 是不同携带方式，完整握手及失败路径见 <a href="#arch-ws-auth">图 2-2(d)</a>。</p>
 <div class="tbl-wrap"><table class="tbl">
   <thead><tr><th></th><th>Web</th><th>Desktop</th><th>Mobile</th></tr></thead>
   <tbody>
@@ -1941,7 +2019,7 @@ multica daemon logs --lines 100</code></pre>
 
 <footer class="foot">
   <span>基于仓库 <span class="mono">multica-ai/multica</span> @ <span class="mono">dcc2d5825</span>（2026-08-28）源码整理</span>
-  <span>生成于 2026-09-02 · 补充与校订于 2026-09-08 · 文件路径相对仓库根目录</span>
+  <span>生成于 2026-09-02 · 补充与校订于 2026-09-08 · 访问路径与认证图补充于 2026-09-13 · 文件路径相对仓库根目录</span>
 </footer>
 
 </div>
