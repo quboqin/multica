@@ -85,6 +85,7 @@ const {
   mockCommentExpandAll,
   mockResolvedCollapseAll,
   mockResolvedExpandAll,
+  mockCollectionsEnabled,
 } = vi.hoisted(() => ({
   mockPush: vi.fn(),
   mockSearchIssues: vi.fn(),
@@ -129,6 +130,11 @@ const {
   mockCommentExpandAll: vi.fn(),
   mockResolvedCollapseAll: vi.fn(),
   mockResolvedExpandAll: vi.fn(),
+  mockCollectionsEnabled: { current: true },
+}));
+
+vi.mock("@multica/core/config", () => ({
+  useFeatureEnabled: () => mockCollectionsEnabled.current,
 }));
 
 vi.mock("@multica/core/api", () => ({
@@ -326,6 +332,7 @@ describe("SearchCommand", () => {
     mockCommentExpandAll.mockReset();
     mockResolvedCollapseAll.mockReset();
     mockResolvedExpandAll.mockReset();
+    mockCollectionsEnabled.current = true;
 
     // cmdk calls scrollIntoView on the first selected item, which jsdom doesn't implement
     Element.prototype.scrollIntoView = vi.fn();
@@ -402,6 +409,24 @@ describe("SearchCommand", () => {
         ),
       ).toBeInTheDocument();
     }
+  });
+
+  it("hides the collections page while its feature flag is disabled", async () => {
+    mockCollectionsEnabled.current = false;
+    const user = userEvent.setup();
+    renderSearch();
+
+    await user.type(
+      screen.getByPlaceholderText("Type a command or search..."),
+      enLayout.nav.collections,
+    );
+
+    expect(
+      screen.queryByText(
+        (_, el) =>
+          el?.textContent === enLayout.nav.collections && el?.tagName === "SPAN",
+      ),
+    ).not.toBeInTheDocument();
   });
 
   it("does not surface a page on an incidental substring of a hidden keyword", async () => {
