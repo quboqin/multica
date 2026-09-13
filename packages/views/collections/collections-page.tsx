@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState, type FormEvent } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { AlertCircle, Database, TableProperties } from "lucide-react";
 import { useWorkspaceId } from "@multica/core";
 import {
@@ -10,7 +10,14 @@ import {
 } from "@multica/core/collections";
 import { useFeatureEnabled } from "@multica/core/config";
 import { CORTEX_COLLECTIONS_FLAG } from "@multica/core/feature-flags";
-import { getCurrentSlug, getCurrentWsId } from "@multica/core/platform";
+import {
+  captureClientSessionGeneration,
+  captureClientWorkspaceAccessGeneration,
+  getCurrentSlug,
+  getCurrentWsId,
+  isClientSessionGenerationCurrent,
+  isClientWorkspaceAccessGenerationCurrent,
+} from "@multica/core/platform";
 import {
   useRequiredWorkspaceSlug,
   useWorkspacePaths,
@@ -29,6 +36,13 @@ function requestId() {
   return globalThis.crypto.randomUUID();
 }
 
+type PendingCollectionCreate = {
+  intent: string;
+  id: string;
+  sessionGeneration: number;
+  workspaceAccessGeneration: number;
+};
+
 export function CollectionsPage() {
   const { t } = useT("collections");
   const enabled = useFeatureEnabled(CORTEX_COLLECTIONS_FLAG, false);
@@ -36,6 +50,7 @@ export function CollectionsPage() {
   const workspaceSlug = useRequiredWorkspaceSlug();
   const paths = useWorkspacePaths();
   const { push } = useNavigation();
+  const queryClient = useQueryClient();
   const { role } = useCurrentMember(workspaceId);
   const canCreate = role === "owner" || role === "admin";
   const collections = useQuery({
@@ -45,7 +60,7 @@ export function CollectionsPage() {
   const createCollection = useCreateCollection();
   const [name, setName] = useState("");
   const [error, setError] = useState<string | null>(null);
-  const pendingRequest = useRef<{ intent: string; id: string } | null>(null);
+  const pendingRequest = useRef<PendingCollectionCreate | null>(null);
   const pageActive = useRef(false);
   useEffect(() => {
     pageActive.current = true;
@@ -70,10 +85,33 @@ export function CollectionsPage() {
     if (!trimmed || createCollection.isPending) return;
     setError(null);
     const intent = JSON.stringify([trimmed, t(($) => $.default_note), t(($) => $.default_quantity), t(($) => $.default_checked)]);
-    if (pendingRequest.current?.intent !== intent) {
-      pendingRequest.current = { intent, id: requestId() };
-    }
-    const operation = pendingRequest.current;
+    const operation: PendingCollectionCreate = {
+      intent,
+      id:
+        pendingRequest.current?.intent === intent
+          ? pendingRequest.current.id
+          : requestId(),
+      sessionGeneration: captureClientSessionGeneration(queryClient),
+      workspaceAccessGeneration: captureClientWorkspaceAccessGeneration(
+        queryClient,
+        workspaceId,
+      ),
+    };
+    pendingRequest.current = operation;
+    const ownsCompletion = () =>
+      pendingRequest.current === operation &&
+      pageActive.current &&
+      getCurrentWsId() === workspaceId &&
+      getCurrentSlug() === workspaceSlug &&
+      isClientSessionGenerationCurrent(
+        queryClient,
+        operation.sessionGeneration,
+      ) &&
+      isClientWorkspaceAccessGenerationCurrent(
+        queryClient,
+        workspaceId,
+        operation.workspaceAccessGeneration,
+      );
     try {
       const result = await createCollection.mutateAsync({
         workspaceContext: { workspaceId, workspaceSlug },
@@ -87,25 +125,11 @@ export function CollectionsPage() {
           ],
         },
       });
-      if (
-        pendingRequest.current !== operation ||
-        !pageActive.current ||
-        getCurrentWsId() !== workspaceId ||
-        getCurrentSlug() !== workspaceSlug
-      ) {
-        return;
-      }
+      if (!ownsCompletion()) return;
       pendingRequest.current = null;
       push(paths.collectionDetail(result.collection.id));
     } catch (reason) {
-      if (
-        pendingRequest.current !== operation ||
-        !pageActive.current ||
-        getCurrentWsId() !== workspaceId ||
-        getCurrentSlug() !== workspaceSlug
-      ) {
-        return;
-      }
+      if (!ownsCompletion()) return;
       setError(reason instanceof Error ? reason.message : String(reason));
       await collections.refetch();
     }

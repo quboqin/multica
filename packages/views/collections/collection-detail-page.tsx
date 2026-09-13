@@ -38,8 +38,12 @@ import { useFeatureEnabled } from "@multica/core/config";
 import { CORTEX_COLLECTIONS_FLAG } from "@multica/core/feature-flags";
 import {
   assertClientWorkspaceAccessAllowed,
+  captureClientSessionGeneration,
+  captureClientWorkspaceAccessGeneration,
   getCurrentSlug,
   getCurrentWsId,
+  isClientSessionGenerationCurrent,
+  isClientWorkspaceAccessGenerationCurrent,
 } from "@multica/core/platform";
 import { useRequiredWorkspaceSlug } from "@multica/core/paths";
 import { Button } from "@multica/ui/components/ui/button";
@@ -100,10 +104,33 @@ function requestId() {
   return globalThis.crypto.randomUUID();
 }
 
+type PendingRecordCreate = {
+  intent: string;
+  id: string;
+  sessionGeneration: number;
+  workspaceAccessGeneration: number;
+};
+
 export function CollectionDetailPage({ collectionId }: { collectionId: string }) {
+  const workspaceId = useWorkspaceId();
+  return (
+    <CollectionDetailPageSource
+      key={JSON.stringify([workspaceId, collectionId])}
+      workspaceId={workspaceId}
+      collectionId={collectionId}
+    />
+  );
+}
+
+function CollectionDetailPageSource({
+  workspaceId,
+  collectionId,
+}: {
+  workspaceId: string;
+  collectionId: string;
+}) {
   const { t } = useT("collections");
   const enabled = useFeatureEnabled(CORTEX_COLLECTIONS_FLAG, false);
-  const workspaceId = useWorkspaceId();
   const workspaceSlug = useRequiredWorkspaceSlug();
   const queryClient = useQueryClient();
   const detailQuery = useQuery({
@@ -116,9 +143,7 @@ export function CollectionDetailPage({ collectionId }: { collectionId: string })
   const [newTitle, setNewTitle] = useState("");
   const [createError, setCreateError] = useState<string | null>(null);
   const [columnSizing, setColumnSizing] = useState<ColumnSizingState>({});
-  const pendingCreateRequest = useRef<{ intent: string; id: string } | null>(
-    null,
-  );
+  const pendingCreateRequest = useRef<PendingRecordCreate | null>(null);
   const pageActive = useRef(false);
   useEffect(() => {
     pageActive.current = true;
@@ -217,10 +242,33 @@ export function CollectionDetailPage({ collectionId }: { collectionId: string })
     const title = newTitle.trim();
     if (!title || createRecord.isPending) return;
     setCreateError(null);
-    if (pendingCreateRequest.current?.intent !== title) {
-      pendingCreateRequest.current = { intent: title, id: requestId() };
-    }
-    const operation = pendingCreateRequest.current;
+    const operation: PendingRecordCreate = {
+      intent: title,
+      id:
+        pendingCreateRequest.current?.intent === title
+          ? pendingCreateRequest.current.id
+          : requestId(),
+      sessionGeneration: captureClientSessionGeneration(queryClient),
+      workspaceAccessGeneration: captureClientWorkspaceAccessGeneration(
+        queryClient,
+        workspaceId,
+      ),
+    };
+    pendingCreateRequest.current = operation;
+    const ownsCompletion = () =>
+      pendingCreateRequest.current === operation &&
+      pageActive.current &&
+      getCurrentWsId() === workspaceId &&
+      getCurrentSlug() === workspaceSlug &&
+      isClientSessionGenerationCurrent(
+        queryClient,
+        operation.sessionGeneration,
+      ) &&
+      isClientWorkspaceAccessGenerationCurrent(
+        queryClient,
+        workspaceId,
+        operation.workspaceAccessGeneration,
+      );
     try {
       await createRecord.mutateAsync({
         collectionId,
@@ -231,25 +279,11 @@ export function CollectionDetailPage({ collectionId }: { collectionId: string })
         },
         workspaceContext: { workspaceId, workspaceSlug },
       });
-      if (
-        pendingCreateRequest.current !== operation ||
-        !pageActive.current ||
-        getCurrentWsId() !== workspaceId ||
-        getCurrentSlug() !== workspaceSlug
-      ) {
-        return;
-      }
+      if (!ownsCompletion()) return;
       pendingCreateRequest.current = null;
       setNewTitle("");
     } catch (reason) {
-      if (
-        pendingCreateRequest.current !== operation ||
-        !pageActive.current ||
-        getCurrentWsId() !== workspaceId ||
-        getCurrentSlug() !== workspaceSlug
-      ) {
-        return;
-      }
+      if (!ownsCompletion()) return;
       setCreateError(reason instanceof Error ? reason.message : String(reason));
       await queryClient.invalidateQueries({
         queryKey: collectionKeys.rows(workspaceId, collectionId),

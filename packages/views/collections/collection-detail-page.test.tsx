@@ -12,10 +12,17 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setApiInstance } from "@multica/core/api";
 import type { ApiClient } from "@multica/core/api/client";
 import { collectionKeys } from "@multica/core/collections";
-import { setCurrentWorkspace } from "@multica/core/platform";
+import {
+  isClientWorkspaceAccessAllowed,
+  setCurrentWorkspace,
+} from "@multica/core/platform";
 import type { CollectionDetail, CollectionRecord } from "@multica/core/types";
 import { renderWithI18n } from "../test/i18n";
 import { CollectionDetailPage } from "./collection-detail-page";
+import {
+  CollectionRealtimeHarness,
+  createCollectionTestWs,
+} from "./realtime-test-harness";
 
 vi.mock("@multica/core", async () => ({
   ...(await vi.importActual<typeof import("@multica/core")>("@multica/core")),
@@ -85,6 +92,35 @@ function authorizeWorkspace(queryClient: QueryClient) {
   queryClient.setQueryData(["workspaces", "list"], [
     { id: "ws-1", slug: "alpha" },
   ]);
+}
+
+function detailFor(collectionId: string, name: string): CollectionDetail {
+  return {
+    ...detail,
+    collection: {
+      ...detail.collection,
+      id: collectionId,
+      name,
+    },
+    fields: detail.fields.map((field) => ({
+      ...field,
+      collectionId,
+    })),
+  };
+}
+
+function createdRecord(collectionId: string): CollectionRecord {
+  return {
+    id: `record-${collectionId}`,
+    workspaceId: "ws-1",
+    collectionId,
+    title: "Created",
+    fields: {},
+    position: 0,
+    revision: 1,
+    createdAt: "2026-01-01T00:00:00Z",
+    updatedAt: "2026-01-01T00:00:00Z",
+  };
 }
 
 function deferred<T>() {
@@ -426,5 +462,216 @@ describe("CollectionDetailPage", () => {
         "My draft",
       ),
     );
+  });
+
+  it.each(["success", "failure"] as const)(
+    "fences late record create %s after the production revocation event",
+    async (outcome) => {
+      const response = deferred<{
+        record: CollectionRecord;
+        replayed: boolean;
+      }>();
+      const createCollectionRecord = vi.fn(() => response.promise);
+      const queryCollectionRecords = vi.fn(async () => ({
+        records: [],
+        total: 0,
+        nextCursor: null,
+      }));
+      setApiInstance({
+        getCollection: vi.fn(async () => detail),
+        queryCollectionRecords,
+        createCollectionRecord,
+      } as unknown as ApiClient);
+      const queryClient = new QueryClient({
+        defaultOptions: {
+          queries: { retry: false },
+          mutations: { retry: false },
+        },
+      });
+      authorizeWorkspace(queryClient);
+      const invalidate = vi.spyOn(queryClient, "invalidateQueries");
+      const realtime = createCollectionTestWs();
+      renderWithI18n(
+        <QueryClientProvider client={queryClient}>
+          <CollectionRealtimeHarness ws={realtime.ws} />
+          <CollectionDetailPage collectionId="collection-1" />
+        </QueryClientProvider>,
+      );
+
+      const input = await screen.findByRole("textbox", {
+        name: "Record title",
+      });
+      fireEvent.change(input, { target: { value: "Private record" } });
+      fireEvent.click(screen.getByRole("button", { name: "Add record" }));
+      await waitFor(() => expect(createCollectionRecord).toHaveBeenCalledOnce());
+      const readsBeforeRevoke = queryCollectionRecords.mock.calls.length;
+      vi.spyOn(queryClient, "fetchQuery").mockReturnValue(new Promise(() => {}));
+      invalidate.mockClear();
+
+      act(() => {
+        realtime.emit("member:removed", {
+          member_id: "member-1",
+          user_id: "u1",
+          workspace_id: "ws-1",
+        });
+      });
+      expect(isClientWorkspaceAccessAllowed(queryClient, "ws-1")).toBe(false);
+
+      await act(async () => {
+        if (outcome === "success") {
+          response.resolve({
+            record: createdRecord("collection-1"),
+            replayed: false,
+          });
+        } else {
+          response.reject(new Error("late failure"));
+        }
+        await response.promise.catch(() => undefined);
+        await Promise.resolve();
+      });
+
+      await waitFor(() =>
+        expect(
+          screen.getByText("Workspace access was revoked"),
+        ).toBeInTheDocument(),
+      );
+      expect(screen.queryByText("late failure")).not.toBeInTheDocument();
+      expect(queryCollectionRecords).toHaveBeenCalledTimes(readsBeforeRevoke);
+      expect(invalidate).not.toHaveBeenCalled();
+      expect(createCollectionRecord).toHaveBeenCalledOnce();
+    },
+  );
+
+  it.each(["success", "failure"] as const)(
+    "does not carry an old collection create %s into a new source instance",
+    async (outcome) => {
+      const response = deferred<{
+        record: CollectionRecord;
+        replayed: boolean;
+      }>();
+      const createCollectionRecord = vi.fn(() => response.promise);
+      setApiInstance({
+        getCollection: vi.fn(async (collectionId: string) =>
+          collectionId === "collection-a"
+            ? detailFor("collection-a", "Alpha")
+            : detailFor("collection-b", "Beta"),
+        ),
+        queryCollectionRecords: vi.fn(async () => ({
+          records: [],
+          total: 0,
+          nextCursor: null,
+        })),
+        createCollectionRecord,
+      } as unknown as ApiClient);
+      const queryClient = new QueryClient({
+        defaultOptions: {
+          queries: { retry: false },
+          mutations: { retry: false },
+        },
+      });
+      authorizeWorkspace(queryClient);
+      const view = renderWithI18n(
+        <QueryClientProvider client={queryClient}>
+          <CollectionDetailPage collectionId="collection-a" />
+        </QueryClientProvider>,
+      );
+
+      fireEvent.change(
+        await screen.findByRole("textbox", { name: "Record title" }),
+        { target: { value: "Alpha draft" } },
+      );
+      fireEvent.click(screen.getByRole("button", { name: "Add record" }));
+      await waitFor(() => expect(createCollectionRecord).toHaveBeenCalledOnce());
+
+      view.rerender(
+        <QueryClientProvider client={queryClient}>
+          <CollectionDetailPage collectionId="collection-b" />
+        </QueryClientProvider>,
+      );
+      expect(await screen.findByText("Beta")).toBeInTheDocument();
+      const betaInput = screen.getByRole("textbox", { name: "Record title" });
+      expect(betaInput).toHaveValue("");
+      expect(betaInput).toBeEnabled();
+
+      await act(async () => {
+        if (outcome === "success") {
+          response.resolve({
+            record: createdRecord("collection-a"),
+            replayed: false,
+          });
+        } else {
+          response.reject(new Error("Alpha failed"));
+        }
+        await response.promise.catch(() => undefined);
+        await Promise.resolve();
+      });
+
+      expect(betaInput).toHaveValue("");
+      expect(betaInput).toBeEnabled();
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    },
+  );
+
+  it("keeps a fresh A draft when an older A request finishes after A to B to A", async () => {
+    const response = deferred<{
+      record: CollectionRecord;
+      replayed: boolean;
+    }>();
+    const createCollectionRecord = vi.fn(() => response.promise);
+    setApiInstance({
+      getCollection: vi.fn(async (collectionId: string) =>
+        detailFor(
+          collectionId,
+          collectionId === "collection-a" ? "Alpha" : "Beta",
+        ),
+      ),
+      queryCollectionRecords: vi.fn(async () => ({
+        records: [],
+        total: 0,
+        nextCursor: null,
+      })),
+      createCollectionRecord,
+    } as unknown as ApiClient);
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    });
+    authorizeWorkspace(queryClient);
+    const view = renderWithI18n(
+      <QueryClientProvider client={queryClient}>
+        <CollectionDetailPage collectionId="collection-a" />
+      </QueryClientProvider>,
+    );
+
+    fireEvent.change(
+      await screen.findByRole("textbox", { name: "Record title" }),
+      { target: { value: "Old Alpha draft" } },
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Add record" }));
+    await waitFor(() => expect(createCollectionRecord).toHaveBeenCalledOnce());
+
+    view.rerender(
+      <QueryClientProvider client={queryClient}>
+        <CollectionDetailPage collectionId="collection-b" />
+      </QueryClientProvider>,
+    );
+    expect(await screen.findByText("Beta")).toBeInTheDocument();
+    view.rerender(
+      <QueryClientProvider client={queryClient}>
+        <CollectionDetailPage collectionId="collection-a" />
+      </QueryClientProvider>,
+    );
+    expect(await screen.findByText("Alpha")).toBeInTheDocument();
+    const freshInput = screen.getByRole("textbox", { name: "Record title" });
+    fireEvent.change(freshInput, { target: { value: "Fresh Alpha draft" } });
+
+    await act(async () => {
+      response.reject(new Error("Old Alpha failed"));
+      await response.promise.catch(() => undefined);
+      await Promise.resolve();
+    });
+
+    expect(freshInput).toHaveValue("Fresh Alpha draft");
+    expect(freshInput).toBeEnabled();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 });
