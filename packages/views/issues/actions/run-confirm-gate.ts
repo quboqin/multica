@@ -1,6 +1,7 @@
 import type { Issue, IssueStatusCategory, UpdateIssueRequest } from "@multica/core/types";
 import { issueStatusCategory } from "@multica/core/issues";
 import { isIssueStatusCategory, type IssueStatusCatalog } from "@multica/core/issue-statuses";
+import type { WorkspaceRequestContext } from "@multica/core/platform";
 
 /** The issue fields the gate reads. */
 export type GateIssue = Pick<
@@ -26,6 +27,10 @@ export type RunConfirmIntent =
 
 /** Optional completion channel used by data-source backed editors. */
 export type RunConfirmData = RunConfirmIntent & {
+  sourceIdentity?: string;
+  ownerIdentity?: string;
+  workspaceContext?: WorkspaceRequestContext;
+  canSubmit?: () => boolean;
   canCancel?: () => boolean;
   onSubmitting?: () => void;
   onAccepted?: (issue?: Issue) => void;

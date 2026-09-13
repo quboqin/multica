@@ -2,6 +2,7 @@
 
 import { createContext, useContext, type ReactNode } from "react";
 import type { Issue, UpdateIssueRequest } from "@multica/core/types";
+import type { WorkspaceRequestContext } from "@multica/core/platform";
 import type { IssueCreateDefaults } from "./types";
 
 export type IssueSurfaceMutationOptions = {
@@ -27,6 +28,7 @@ export interface IssueSurfaceActions {
   updateIssueAsync: (
     issueId: string,
     updates: Partial<UpdateIssueRequest>,
+    workspaceContext?: WorkspaceRequestContext,
   ) => Promise<Issue>;
   moveIssue: (
     issueId: string,

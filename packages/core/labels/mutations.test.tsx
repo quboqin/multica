@@ -9,16 +9,23 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { setApiInstance } from "../api";
 import type { ApiClient } from "../api/client";
 import { issueKeys } from "../issues/queries";
+import { setCurrentWorkspace } from "../platform";
 import type {
   Issue,
   IssueLabelsResponse,
   Label,
   ListLabelsResponse,
 } from "../types";
-import { useAttachLabel, useDetachLabel } from "./mutations";
+import {
+  useAttachLabel,
+  useDetachLabel,
+  useDetachLabelFromIssue,
+} from "./mutations";
 import { labelKeys } from "./queries";
 
-vi.mock("../hooks", () => ({ useWorkspaceId: () => "ws-1" }));
+const workspaceState = vi.hoisted(() => ({ id: "ws-1" }));
+
+vi.mock("../hooks", () => ({ useWorkspaceId: () => workspaceState.id }));
 
 const labelA: Label = {
   id: "label-a",
@@ -91,7 +98,55 @@ function startStaleChildrenFetch(qc: QueryClient, labels: Label[]) {
 }
 
 describe("issue label mutations", () => {
-  afterEach(() => vi.restoreAllMocks());
+  afterEach(() => {
+    workspaceState.id = "ws-1";
+    setCurrentWorkspace(null, null);
+    vi.restoreAllMocks();
+  });
+
+  it("keeps a variable label write's cache callbacks in the captured workspace", async () => {
+    setCurrentWorkspace("alpha", "ws-1");
+    const qc = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    const unrelated = {
+      ...issue,
+      workspace_id: "ws-2",
+      labels: [labelB],
+    };
+    qc.setQueryData(issueKeys.detail("ws-1", issue.id), issue);
+    qc.setQueryData(issueKeys.detail("ws-2", issue.id), unrelated);
+    const response = deferred<IssueLabelsResponse>();
+    const detachLabel = vi.fn(() => response.promise);
+    setApiInstance({ detachLabel } as unknown as ApiClient);
+    const hook = renderHook(() => useDetachLabelFromIssue(), {
+      wrapper: wrapper(qc),
+    });
+    const completion = hook.result.current.mutateAsync({
+      issueId: issue.id,
+      labelId: labelA.id,
+      workspaceContext: {
+        workspaceId: "ws-1",
+        workspaceSlug: "alpha",
+      },
+    });
+    await waitFor(() => expect(detachLabel).toHaveBeenCalledTimes(1));
+
+    workspaceState.id = "ws-2";
+    setCurrentWorkspace("beta", "ws-2");
+    hook.rerender();
+    response.resolve({ labels: [], issue_revision: 2 });
+    await completion;
+
+    expect(
+      qc.getQueryData<Issue>(issueKeys.detail("ws-1", issue.id))?.labels,
+    ).toEqual([]);
+    expect(qc.getQueryData(issueKeys.detail("ws-2", issue.id))).toEqual(
+      unrelated,
+    );
+    hook.unmount();
+    qc.clear();
+  });
 
   it("prevents an older children fetch from overwriting an optimistic attach", async () => {
     const qc = new QueryClient({

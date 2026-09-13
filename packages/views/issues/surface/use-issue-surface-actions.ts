@@ -86,9 +86,18 @@ export function useIssueSurfaceActions({
   );
 
   const updateIssueAsync = useCallback(
-    async (issueId: string, updates: Partial<UpdateIssueRequest>) => {
+    async (
+      issueId: string,
+      updates: Partial<UpdateIssueRequest>,
+      workspaceContext?: Parameters<
+        IssueSurfaceActions["updateIssueAsync"]
+      >[2],
+    ) => {
       try {
-        return await updateIssueMutation.mutateAsync({ id: issueId, ...updates });
+        const input = { id: issueId, ...updates };
+        return await updateIssueMutation.mutateAsync(
+          workspaceContext ? { ...input, workspaceContext } : input,
+        );
       } catch (err) {
         showUpdateError(err);
         throw err;

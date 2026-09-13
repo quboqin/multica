@@ -1,7 +1,7 @@
 /**
  * @vitest-environment jsdom
  */
-import { fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { useState } from "react";
@@ -65,8 +65,16 @@ function makeRow(title: string): Extract<
   };
 }
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
+}
+
 const baseProps = {
-  onUpdate: vi.fn(),
+  onUpdate: vi.fn(async () => true),
   onOpen: vi.fn(),
   onCreateSubIssue: vi.fn(),
   onToggleParent: vi.fn(),
@@ -85,7 +93,7 @@ function Harness({
 }: {
   title: string;
   onOpen?: () => void;
-  onUpdate?: (updates: unknown) => void;
+  onUpdate?: (updates: unknown) => Promise<boolean>;
   onEditingChange?: (editing: boolean) => void;
   onCreateSubIssue?: () => void;
 }) {
@@ -125,8 +133,8 @@ describe("InlineTitle", () => {
     expect(rowClick).not.toHaveBeenCalled();
   });
 
-  it("enters edit mode from the rename affordance and commits on Enter", () => {
-    const onUpdate = vi.fn();
+  it("enters edit mode from the rename affordance and commits on Enter", async () => {
+    const onUpdate = vi.fn(async () => true);
     render(<Harness title="Original" onUpdate={onUpdate} />);
 
     fireEvent.click(screen.getByRole("button", { name: "Rename issue" }));
@@ -135,7 +143,26 @@ describe("InlineTitle", () => {
     fireEvent.keyDown(input, { key: "Enter" });
 
     expect(onUpdate).toHaveBeenCalledWith({ title: "Renamed" });
-    expect(screen.queryByRole("textbox")).toBeNull();
+    await waitFor(() => expect(screen.queryByRole("textbox")).toBeNull());
+  });
+
+  it("waits for the final result and keeps a failed title draft", async () => {
+    const write = deferred<boolean>();
+    const onUpdate = vi.fn(() => write.promise);
+    render(<Harness title="Original" onUpdate={onUpdate} />);
+    fireEvent.click(screen.getByRole("button", { name: "Rename issue" }));
+    const input = screen.getByRole("textbox");
+    fireEvent.change(input, { target: { value: "Draft title" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    expect(input).toBeDisabled();
+    expect(screen.getByRole("textbox")).toHaveValue("Draft title");
+    await act(async () => {
+      write.resolve(false);
+      await write.promise;
+    });
+    expect(screen.getByRole("textbox")).not.toBeDisabled();
+    expect(screen.getByRole("textbox")).toHaveValue("Draft title");
   });
 
   it("opens sub-issue creation without also navigating into the issue", () => {
@@ -157,7 +184,7 @@ describe("InlineTitle", () => {
 
   it("commits on click-away without also navigating into the issue", async () => {
     const user = userEvent.setup({ delay: null });
-    const onUpdate = vi.fn();
+    const onUpdate = vi.fn(async () => true);
     const rowClick = vi.fn();
     render(
       // The row's onClick is the navigation handler. Committing a rename by
@@ -177,7 +204,7 @@ describe("InlineTitle", () => {
     await user.click(screen.getByText("MUL-1"));
 
     expect(onUpdate).toHaveBeenCalledWith({ title: "Renamed" });
-    expect(screen.queryByRole("textbox")).toBeNull();
+    await waitFor(() => expect(screen.queryByRole("textbox")).toBeNull());
     expect(rowClick).not.toHaveBeenCalled();
   });
 

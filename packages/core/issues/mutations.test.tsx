@@ -23,6 +23,7 @@ import {
 } from "./queries";
 import { onIssueUpdated, onIssueAuxiliaryRevision } from "./ws-updaters";
 import { inboxKeys } from "../inbox/queries";
+import { setCurrentWorkspace } from "../platform";
 import type {
   InboxItem,
   Issue,
@@ -30,8 +31,10 @@ import type {
   TimelineEntry,
 } from "../types";
 
+const workspaceState = vi.hoisted(() => ({ id: "ws-1" }));
+
 vi.mock("../hooks", () => ({
-  useWorkspaceId: () => "ws-1",
+  useWorkspaceId: () => workspaceState.id,
 }));
 
 const WS_ID = "ws-1";
@@ -95,6 +98,16 @@ function createWrapper(qc: QueryClient) {
   return function Wrapper({ children }: { children: ReactNode }) {
     return <QueryClientProvider client={qc}>{children}</QueryClientProvider>;
   };
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (error: unknown) => void;
+  const promise = new Promise<T>((done, fail) => {
+    resolve = done;
+    reject = fail;
+  });
+  return { promise, resolve, reject };
 }
 
 describe("useCreateCommentSubIssue", () => {
@@ -176,6 +189,8 @@ describe("useUpdateIssue — optimistic move keeps every bucketed board in sync"
   }
 
   beforeEach(() => {
+    workspaceState.id = WS_ID;
+    setCurrentWorkspace(null, null);
     qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     updateIssue = vi.fn();
     moveIssue = vi.fn();
@@ -190,6 +205,8 @@ describe("useUpdateIssue — optimistic move keeps every bucketed board in sync"
   });
 
   afterEach(() => {
+    workspaceState.id = WS_ID;
+    setCurrentWorkspace(null, null);
     qc.clear();
     vi.restoreAllMocks();
   });
@@ -277,6 +294,75 @@ describe("useUpdateIssue — optimistic move keeps every bucketed board in sync"
       revision: 3,
     });
   });
+
+  it.each(["success", "failure"] as const)(
+    "keeps a submitted request's full cache lifecycle in its original workspace on %s",
+    async (outcome) => {
+      const originalWorkspaceId = "ws-a";
+      const nextWorkspaceId = "ws-b";
+      const original = makeIssue(1, {
+        workspace_id: originalWorkspaceId,
+        title: "Original A",
+        revision: 1,
+      });
+      const unrelated = makeIssue(1, {
+        workspace_id: nextWorkspaceId,
+        title: "Unrelated B",
+        revision: 20,
+      });
+      const originalKey = issueKeys.detail(originalWorkspaceId, original.id);
+      const unrelatedKey = issueKeys.detail(nextWorkspaceId, unrelated.id);
+      qc.setQueryData(originalKey, original);
+      qc.setQueryData(unrelatedKey, unrelated);
+      workspaceState.id = originalWorkspaceId;
+      setCurrentWorkspace("alpha", originalWorkspaceId);
+      const request = deferred<Issue>();
+      updateIssue.mockReturnValue(request.promise);
+      const hook = renderHook(() => useUpdateIssue(), {
+        wrapper: createWrapper(qc),
+      });
+      let completion!: Promise<Issue>;
+      act(() => {
+        completion = hook.result.current.mutateAsync({
+          id: original.id,
+          title: "Optimistic A",
+          workspaceContext: {
+            workspaceId: originalWorkspaceId,
+            workspaceSlug: "alpha",
+          },
+        });
+      });
+      const settled = completion.catch((error: unknown) => error);
+
+      await waitFor(() =>
+        expect(updateIssue).toHaveBeenCalledWith(
+          original.id,
+          { title: "Optimistic A" },
+          "alpha",
+        ),
+      );
+      expect(qc.getQueryData<Issue>(originalKey)?.title).toBe("Optimistic A");
+      expect(qc.getQueryData<Issue>(unrelatedKey)?.title).toBe("Unrelated B");
+
+      workspaceState.id = nextWorkspaceId;
+      setCurrentWorkspace("beta", nextWorkspaceId);
+      hook.rerender();
+      await act(async () => {
+        if (outcome === "success") {
+          request.resolve({ ...original, title: "Committed A", revision: 2 });
+        } else {
+          request.reject(new Error("write failed"));
+        }
+        await settled;
+      });
+
+      expect(qc.getQueryData<Issue>(originalKey)?.title).toBe(
+        outcome === "success" ? "Committed A" : "Original A",
+      );
+      expect(qc.getQueryData<Issue>(unrelatedKey)).toEqual(unrelated);
+      hook.unmount();
+    },
+  );
 
   it("keeps a full response admissible after a newer revision-only response", async () => {
     let resolve!: (issue: Issue) => void;
