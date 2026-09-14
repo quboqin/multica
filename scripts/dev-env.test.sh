@@ -188,7 +188,9 @@ assert_web_start_case() {
   local case_name=$1 expected_status=$2 expected_listener=$3 expected_log=$4
   local state_dir="$tmp_dir/start-$case_name"
   local signals="$state_dir/signals" events="$state_dir/events" output="$state_dir/output"
+  local started_epoch ended_epoch elapsed launcher_pid
   mkdir -p "$state_dir/logs"
+  started_epoch="$(date +%s)"
   (
     # Only OS queries, process signals, and clock sleeps are replaced.
     # start_web, ownership, registration, diagnostics, and stop_component stay
@@ -215,9 +217,22 @@ assert_web_start_case() {
     elif [ "$case_name" = listener-replaced ]; then
       printf '420\n' > "$(listener_pid_file web)"
     fi
+    if [ "$case_name" = log-write-failure ]; then
+      mktemp() {
+        local created
+        created="$(command mktemp "$@")" || return
+        case "${1:-}" in
+          "$LOG_DIR/web-ownership."*) chmod 400 "$created" ;;
+        esac
+        printf '%s\n' "$created"
+      }
+    fi
 
     curl() {
       CURL_CALLS=$((CURL_CALLS + 1))
+      if [ "$case_name" = log-create-failure ] && [ "$CURL_CALLS" -gt 1 ]; then
+        chmod 500 "$LOG_DIR"
+      fi
       if [ "$case_name" = recorded-pid ] || [ "$CURL_CALLS" -gt 1 ]; then
         return 0
       fi
@@ -232,8 +247,9 @@ assert_web_start_case() {
     }
     process_group_id() {
       case "$TEST_CASE:$1" in
-        legal-nested:420) cat "$(pid_file web)" ;;
+        legal-nested:420) printf '310\n' ;;
         recorded-pid:420) printf '999\n' ;;
+        foreign-negative-pgid:999) printf -- '-999\n' ;;
         *) printf '999\n' ;;
       esac
     }
@@ -242,6 +258,7 @@ assert_web_start_case() {
         legal-nested:420) printf '310\n' ;;
         legal-nested:310) cat "$(pid_file web)" ;;
         legal-nested:*) printf '1\n' ;;
+        parent-timeout:999) printf '1\n' ;;
         recorded-pid:420) printf '1\n' ;;
         *) printf '1\n' ;;
       esac
@@ -257,7 +274,12 @@ assert_web_start_case() {
             printf '\n'
           fi
           ;;
-        *" -o ppid= "*) process_parent_id "$pid" ;;
+        *" -o ppid= "*)
+          if [ "$case_name" = parent-timeout ] && [ "$pid" = 999 ]; then
+            while :; do :; done
+          fi
+          process_parent_id "$pid"
+          ;;
         *" -o pgid= "*) process_group_id "$pid" ;;
         *" -o sess="*|*" -o sid="*) printf '1\n' ;;
         *" -o lstart="*) printf 'Mon Jan 1 00:00:00 2026\n' ;;
@@ -284,7 +306,9 @@ assert_web_start_case() {
               i=0
               while [ "$i" -lt 6000 ]; do printf x; i=$((i + 1)); done
               printf '\n'
-              printf 'warning Authorization: Bearer TOPSECRET\n' >&2
+              i=0
+              while [ "$i" -lt 6000 ]; do printf s >&2; i=$((i + 1)); done
+              printf ' warning Authorization: Bearer TOPSECRET\n' >&2
               ;;
             *)
               printf '%s\n' "$TEST_LISTENER"
@@ -323,7 +347,7 @@ assert_web_start_case() {
     sleep() { :; }
     case "$case_name" in
       legal-nested|recorded-pid) TEST_LISTENER=420 ;;
-      multi-listener|timeout) TEST_LISTENER=999 ;;
+      multi-listener|timeout|parent-timeout|foreign-negative-pgid|log-create-failure|log-write-failure) TEST_LISTENER=999 ;;
       query-failure|no-listener) TEST_LISTENER= ;;
       *) TEST_LISTENER=999 ;;
     esac
@@ -339,6 +363,9 @@ assert_web_start_case() {
   )
   local status
   status="$(sed -n 's/^status=//p' "$state_dir/result")"
+  chmod u+rwx "$state_dir/logs"
+  ended_epoch="$(date +%s)"
+  elapsed=$((ended_epoch - started_epoch))
   [ "$status" = "$expected_status" ] \
     || fail "$case_name start_web exit=$status, want $expected_status"
   if [ "$expected_status" = 0 ]; then
@@ -358,6 +385,19 @@ assert_web_start_case() {
     fi
     [ ! -f "$state_dir/web.listener.pid" ] \
       || fail "$case_name retained a listener registration after stop"
+    launcher_pid="$(cat "$state_dir/web.pid" 2>/dev/null || true)"
+    if [ "$case_name" = log-create-failure ] || [ "$case_name" = log-write-failure ]; then
+      set -- "$state_dir/logs"/web-ownership.*
+      if [ "$case_name" = log-create-failure ]; then
+        [ "$#" -eq 1 ] && [ ! -e "$1" ] \
+          || fail "$case_name unexpectedly created a diagnostic log"
+      else
+        [ "$#" -eq 1 ] && [ -f "$1" ] \
+          || fail "$case_name did not retain the failed diagnostic log"
+      fi
+      require_contains "$signals" "signal=-TERM target=-$launcher_pid"
+      return 0
+    fi
     set -- "$state_dir/logs"/web-ownership.*
     [ "$#" -eq 1 ] || fail "$case_name did not retain exactly one independent diagnostic log"
     launcher_pid="$(sed -n 's/^launcher.recorded_pid=//p' "$1")"
@@ -371,8 +411,18 @@ assert_web_start_case() {
     if grep -Fq $'\033' "$1"; then
       fail "$case_name retained a control character in diagnostic output"
     fi
-    if [ "$case_name" = long-output ] && ! awk 'length($0) > 600 {exit 1}' "$1"; then
-      fail "$case_name wrote an unbounded diagnostic value"
+    if [ "$case_name" = long-output ]; then
+      require_contains "$1" "query.port.listeners.truncated=1"
+      require_contains "$1" "query.port.listeners.stderr_truncated=1"
+      require_contains "$1" "query.port.listeners.capture_bytes=6005"
+      require_contains "$1" "query.port.listeners.capture_limit=4096"
+      require_contains "$1" "port.listener.byte_truncated=1"
+      require_contains "$1" "port.listener.count_truncated=0"
+      require_contains "$1" "port.listener.count=1"
+      require_contains "$1" "port.listener.total=unknown"
+      if grep -Fq 'port.listener.2.pid=' "$1"; then
+        fail "$case_name parsed a partial PID as an additional listener"
+      fi
     fi
     require_contains "$1" "event=ownership_check_failed"
     diag_line="$(grep -n '^diagnostic-query$' "$events" | cut -d: -f1 | head -1 || true)"
@@ -385,15 +435,76 @@ assert_web_start_case() {
         || fail "$case_name stop signal was not ordered after diagnostics"
       require_contains "$signals" "signal=-TERM target=-$launcher_pid"
     fi
+    if [ "$case_name" = parent-timeout ]; then
+      [ "$elapsed" -le 5 ] || fail "$case_name blocked for ${elapsed}s beyond the diagnostic budget"
+      require_contains "$1" "query.parent.listener.999.error=timeout"
+    fi
     if [ -s "$signals" ]; then
-      for external_pid in 999 420 888; do
-        if grep -Fq "target=$external_pid" "$signals"; then
-          fail "$case_name sent a signal to listener $external_pid"
-        fi
-      done
+      while IFS= read -r signal_line; do
+        signal_target="${signal_line#*target=}"
+        case "$signal_target" in
+          "-$launcher_pid") ;;
+          999|420|888|-999|"-"*) fail "$case_name signalled an external target: ${signal_line}" ;;
+        esac
+      done < "$signals"
     fi
   fi
 }
+
+assert_pid_parser_boundaries() (
+  # shellcheck disable=SC1090
+  source "$root_dir/scripts/dev-env.sh"
+  local raw="" i
+
+  raw=$'101\n101\nbad-pid\n202\n'
+  diagnostic_parse_pid_list "$raw" >/dev/null
+  [ "$DIAGNOSTIC_PID_LIST" = $'101\n202' ] \
+    || fail "PID parser did not deduplicate or skip invalid lines"
+  [ "$DIAGNOSTIC_PID_COUNT" -eq 2 ] \
+    || fail "PID parser count = $DIAGNOSTIC_PID_COUNT, want 2"
+  [ "$DIAGNOSTIC_PID_INVALID_COUNT" -eq 1 ] \
+    || fail "PID parser invalid count = $DIAGNOSTIC_PID_INVALID_COUNT, want 1"
+  [ "$DIAGNOSTIC_PID_INPUT_INCOMPLETE" -eq 0 ] \
+    || fail "complete PID input was marked incomplete"
+
+  raw=$'303\n404'
+  diagnostic_parse_pid_list "$raw" >/dev/null
+  [ "$DIAGNOSTIC_PID_LIST" = 303 ] \
+    || fail "PID parser retained an unterminated PID fragment"
+  [ "$DIAGNOSTIC_PID_INPUT_INCOMPLETE" -eq 1 ] \
+    || fail "unterminated PID input was not marked incomplete"
+
+  raw=""
+  i=1
+  while [ "$i" -le 65 ]; do
+    raw="$raw$i"$'\n'
+    i=$((i + 1))
+  done
+  diagnostic_parse_pid_list "$raw" >/dev/null
+  [ "$DIAGNOSTIC_PID_COUNT" -eq 64 ] \
+    || fail "PID parser count = $DIAGNOSTIC_PID_COUNT, want bounded 64"
+  [ "$DIAGNOSTIC_PID_INPUT_TRUNCATED" -eq 1 ] \
+    || fail "PID parser did not mark the 65th unique PID as truncated"
+  case "$DIAGNOSTIC_PID_LIST" in
+    *$'\n65'*) fail "PID parser emitted a PID beyond the display bound" ;;
+  esac
+)
+
+assert_diagnostic_logs_are_unique() (
+  # shellcheck disable=SC1090
+  source "$root_dir/scripts/dev-env.sh"
+  STATE_DIR="$tmp_dir/repeated-diagnostics"
+  LOG_DIR="$STATE_DIR/logs"
+  mkdir -p "$LOG_DIR"
+  lsof() { printf '999\n'; }
+  diagnose_web_ownership_failure first 13000 >/dev/null
+  diagnose_web_ownership_failure second 13000 >/dev/null
+  set -- "$LOG_DIR"/web-ownership.*
+  [ "$#" -eq 2 ] || fail "repeated diagnostics overwrote a log: found $#"
+  for log in "$@"; do
+    require_contains "$log" "event=ownership_check_failed"
+  done
+)
 
 # ---------------------------------------------------------------------------
 # An empty registry is a normal state, not an error.
@@ -506,13 +617,16 @@ assert_listener_ownership nested owned 100 420 310
 assert_listener_ownership recorded owned 100 200 200 200
 assert_listener_ownership external external 100 999 999
 assert_nested_listener_is_recorded
+assert_pid_parser_boundaries
 
 # The added diagnostics are exercised through real start_web, ownership,
 # registration, and stop decisions. Only query/signal primitives are mocked.
 assert_web_start_case legal-nested 0 420 'listener.recorded_pid=unknown'
 assert_web_start_case recorded-pid 0 420 'listener.recorded_pid=420'
 assert_web_start_case foreign-listener 1 "" 'listener.replaced=0'
+assert_web_start_case foreign-negative-pgid 1 "" 'listener.replaced=0'
 assert_web_start_case parent-disconnected 1 "" 'parent_chain.listener=999->1'
+assert_web_start_case parent-timeout 1 "" 'parent_chain.listener=999->?'
 assert_web_start_case launcher-exited 1 "" 'process.launcher.live=0'
 assert_web_start_case listener-replaced 1 "" 'listener.replaced=1'
 assert_web_start_case multi-listener 1 "" 'port.listener.2.pid=888'
@@ -520,6 +634,9 @@ assert_web_start_case long-output 1 "" 'port.listener.count=1'
 assert_web_start_case query-failure 1 "" 'query.port.listeners.error=command_failed'
 assert_web_start_case timeout 1 "" 'query.port.listeners.error=timeout'
 assert_web_start_case no-listener 1 "" 'port.listeners=none'
+assert_web_start_case log-create-failure 1 "" ''
+assert_web_start_case log-write-failure 1 "" ''
+assert_diagnostic_logs_are_unique
 
 # Stopping first records an owned nested listener before killing the launcher's
 # process group. An unrelated port occupant never receives a signal.

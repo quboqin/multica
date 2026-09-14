@@ -498,6 +498,18 @@ DIAGNOSTIC_MAX_OUTPUT_BYTES=4096
 DIAGNOSTIC_MAX_VALUE_CHARS=512
 DIAGNOSTIC_MAX_PID_COUNT=64
 DIAGNOSTIC_QUERY_TIMEOUT_SECONDS=2
+DIAGNOSTIC_TOTAL_TIMEOUT_SECONDS=2
+DIAGNOSTIC_DEADLINE_EPOCH=0
+DIAGNOSTIC_CAPTURE_CHUNK_BYTES=512
+DIAGNOSTIC_LAST_STDOUT_TRUNCATED=0
+DIAGNOSTIC_LAST_STDERR_TRUNCATED=0
+DIAGNOSTIC_LAST_STDOUT_BYTES=0
+DIAGNOSTIC_LAST_STDERR_BYTES=0
+DIAGNOSTIC_PID_LIST=""
+DIAGNOSTIC_PID_COUNT=0
+DIAGNOSTIC_PID_INPUT_INCOMPLETE=0
+DIAGNOSTIC_PID_INPUT_TRUNCATED=0
+DIAGNOSTIC_PID_INVALID_COUNT=0
 
 diagnostic_safe_text() {
   # Diagnostic values are fixed fields, never command lines or environments.
@@ -523,50 +535,126 @@ diagnostic_error_class() {
   esac
 }
 
+diagnostic_capture_stream() {
+  local LC_ALL=C
+  local output=$1 metadata=$2 limit=$3 chunk status bytes=0 stored=0 truncated=0 take
+  : > "$output"
+  while :; do
+    chunk=""
+    if IFS= read -r -N "$DIAGNOSTIC_CAPTURE_CHUNK_BYTES" chunk; then
+      status=0
+    else
+      status=$?
+    fi
+    if [ -n "$chunk" ]; then
+      bytes=$((bytes + ${#chunk}))
+      if [ "$stored" -lt "$limit" ]; then
+        take=${#chunk}
+        [ "$((stored + take))" -le "$limit" ] || take=$((limit - stored))
+        [ "$take" -le 0 ] || printf '%s' "${chunk:0:take}" >> "$output"
+        stored=$((stored + take))
+      fi
+      [ "$bytes" -le "$limit" ] || truncated=1
+    fi
+    [ "$status" -eq 0 ] || break
+  done
+  printf 'bytes=%s\ntruncated=%s\n' "$bytes" "$truncated" > "$metadata"
+}
+
 diagnostic_parse_pid_list() {
-  local raw=$1 line pid_count=0 seen="" output=""
+  local raw=$1 line seen="" output="" complete_raw=""
+  DIAGNOSTIC_PID_LIST=""
+  DIAGNOSTIC_PID_COUNT=0
+  DIAGNOSTIC_PID_INPUT_INCOMPLETE=0
+  DIAGNOSTIC_PID_INPUT_TRUNCATED=0
+  DIAGNOSTIC_PID_INVALID_COUNT=0
+
+  case "$raw" in
+    *$'\n') complete_raw="${raw%$'\n'}" ;;
+    *$'\n'*)
+      DIAGNOSTIC_PID_INPUT_INCOMPLETE=1
+      complete_raw="${raw%$'\n'*}"
+      ;;
+    *)
+      [ -z "$raw" ] || DIAGNOSTIC_PID_INPUT_INCOMPLETE=1
+      ;;
+  esac
+
   while IFS= read -r line; do
+    line="${line#"${line%%[![:space:]]*}"}"
+    line="${line%"${line##*[![:space:]]}"}"
     case "$line" in
-      ""|*[!0-9]*) continue ;;
+      "") continue ;;
+      *[!0-9]*) DIAGNOSTIC_PID_INVALID_COUNT=$((DIAGNOSTIC_PID_INVALID_COUNT + 1)); continue ;;
     esac
     [ "$line" != 0 ] || continue
     case " $seen " in
       *" $line "*) continue ;;
     esac
+    if [ "$DIAGNOSTIC_PID_COUNT" -ge "$DIAGNOSTIC_MAX_PID_COUNT" ]; then
+      DIAGNOSTIC_PID_INPUT_TRUNCATED=1
+      break
+    fi
     seen="$seen $line"
-    pid_count=$((pid_count + 1))
-    [ "$pid_count" -le "$DIAGNOSTIC_MAX_PID_COUNT" ] || break
-    if [ -n "$output" ]; then output="$output\n$line"; else output=$line; fi
+    DIAGNOSTIC_PID_COUNT=$((DIAGNOSTIC_PID_COUNT + 1))
+    if [ -n "$output" ]; then output="$output"$'\n'"$line"; else output=$line; fi
   done <<EOF
-$raw
+$complete_raw
 EOF
-  printf '%b' "$output"
+
+  DIAGNOSTIC_PID_LIST="$output"
+  printf '%b' "$DIAGNOSTIC_PID_LIST"
 }
 
 diagnostic_query() {
-  local log=$1 key=$2 stdout_file stderr_file query_pid status timed_out=0
-  local stdout stderr_present deadline
+  local log=$1 key=$2 capture_dir stdout_file stderr_file stdout_meta stderr_meta
+  local stdout_capture_pid stderr_capture_pid query_pid status timed_out=0
+  local stdout stderr_present deadline now
   shift 2
 
   DIAGNOSTIC_LAST_STDOUT=""
   DIAGNOSTIC_LAST_STATUS=125
   DIAGNOSTIC_LAST_STDERR_PRESENT=0
   DIAGNOSTIC_LAST_TIMED_OUT=0
+  DIAGNOSTIC_LAST_STDOUT_TRUNCATED=0
+  DIAGNOSTIC_LAST_STDERR_TRUNCATED=0
+  DIAGNOSTIC_LAST_STDOUT_BYTES=0
+  DIAGNOSTIC_LAST_STDERR_BYTES=0
 
-  stdout_file="$(mktemp "$LOG_DIR/.web-diagnostic.stdout.XXXXXX" 2>/dev/null || true)"
-  stderr_file="$(mktemp "$LOG_DIR/.web-diagnostic.stderr.XXXXXX" 2>/dev/null || true)"
-  if [ -z "$stdout_file" ] || [ -z "$stderr_file" ]; then
-    [ -n "$stdout_file" ] && rm -f "$stdout_file"
-    [ -n "$stderr_file" ] && rm -f "$stderr_file"
+  now="$(now_epoch)"
+  if [ "$DIAGNOSTIC_DEADLINE_EPOCH" -gt 0 ] && [ "$now" -ge "$DIAGNOSTIC_DEADLINE_EPOCH" ]; then
+    DIAGNOSTIC_LAST_STATUS=124
+    DIAGNOSTIC_LAST_TIMED_OUT=1
+    printf 'query.%s.status=124\nquery.%s.error=timeout\n' "$key" "$key" >> "$log"
+    return 0
+  fi
+
+  capture_dir="$(mktemp -d "$LOG_DIR/.web-diagnostic.XXXXXX" 2>/dev/null || true)"
+  if [ -z "$capture_dir" ] || ! mkfifo "$capture_dir/stdout" "$capture_dir/stderr" 2>/dev/null; then
+    [ -n "$capture_dir" ] && rm -rf "$capture_dir"
     printf 'query.%s.status=125\nquery.%s.error=temporary_storage_unavailable\n' \
       "$key" "$key" >> "$log"
     return 0
   fi
+  stdout_file="$capture_dir/stdout.data"
+  stderr_file="$capture_dir/stderr.data"
+  stdout_meta="$capture_dir/stdout.meta"
+  stderr_meta="$capture_dir/stderr.meta"
+
+  diagnostic_capture_stream "$stdout_file" "$stdout_meta" "$DIAGNOSTIC_MAX_OUTPUT_BYTES" \
+    < "$capture_dir/stdout" &
+  stdout_capture_pid=$!
+  diagnostic_capture_stream "$stderr_file" "$stderr_meta" "$DIAGNOSTIC_MAX_OUTPUT_BYTES" \
+    < "$capture_dir/stderr" &
+  stderr_capture_pid=$!
 
   set +e
-  "$@" >"$stdout_file" 2>"$stderr_file" &
+  "$@" >"$capture_dir/stdout" 2>"$capture_dir/stderr" &
   query_pid=$!
-  deadline=$(( $(now_epoch) + DIAGNOSTIC_QUERY_TIMEOUT_SECONDS ))
+  deadline=$(( now + DIAGNOSTIC_QUERY_TIMEOUT_SECONDS ))
+  if [ "$DIAGNOSTIC_DEADLINE_EPOCH" -gt 0 ] && [ "$DIAGNOSTIC_DEADLINE_EPOCH" -lt "$deadline" ]; then
+    deadline=$DIAGNOSTIC_DEADLINE_EPOCH
+  fi
   while kill -0 "$query_pid" 2>/dev/null; do
     if [ "$(now_epoch)" -ge "$deadline" ]; then
       timed_out=1
@@ -586,14 +674,28 @@ diagnostic_query() {
   fi
   set -e
 
-  stdout="$(head -c "$DIAGNOSTIC_MAX_OUTPUT_BYTES" "$stdout_file" 2>/dev/null || true)"
+  wait "$stdout_capture_pid" 2>/dev/null || true
+  wait "$stderr_capture_pid" 2>/dev/null || true
+  stdout="$(cat "$stdout_file" 2>/dev/null; printf '\037')"
+  stdout="${stdout%$'\037'}"
   if [ -s "$stderr_file" ]; then stderr_present=1; else stderr_present=0; fi
+  DIAGNOSTIC_LAST_STDOUT_BYTES="$(sed -n 's/^bytes=//p' "$stdout_meta" 2>/dev/null || printf 0)"
+  DIAGNOSTIC_LAST_STDERR_BYTES="$(sed -n 's/^bytes=//p' "$stderr_meta" 2>/dev/null || printf 0)"
+  DIAGNOSTIC_LAST_STDOUT_TRUNCATED="$(sed -n 's/^truncated=//p' "$stdout_meta" 2>/dev/null || printf 0)"
+  DIAGNOSTIC_LAST_STDERR_TRUNCATED="$(sed -n 's/^truncated=//p' "$stderr_meta" 2>/dev/null || printf 0)"
   DIAGNOSTIC_LAST_STDOUT="$stdout"
   DIAGNOSTIC_LAST_STATUS=$status
   DIAGNOSTIC_LAST_STDERR_PRESENT=$stderr_present
   DIAGNOSTIC_LAST_TIMED_OUT=$timed_out
   printf 'query.%s.status=%s\n' "$key" "$status" >> "$log"
+  printf 'query.%s.capture_bytes=%s\nquery.%s.capture_limit=%s\n' \
+    "$key" "$DIAGNOSTIC_LAST_STDOUT_BYTES" "$key" "$DIAGNOSTIC_MAX_OUTPUT_BYTES" >> "$log"
+  printf 'query.%s.stderr_bytes=%s\n' "$key" "$DIAGNOSTIC_LAST_STDERR_BYTES" >> "$log"
   [ "$stderr_present" -eq 0 ] || printf 'query.%s.stderr=present\n' "$key" >> "$log"
+  [ "$DIAGNOSTIC_LAST_STDOUT_TRUNCATED" -eq 0 ] \
+    || printf 'query.%s.truncated=1\n' "$key" >> "$log"
+  [ "$DIAGNOSTIC_LAST_STDERR_TRUNCATED" -eq 0 ] \
+    || printf 'query.%s.stderr_truncated=1\n' "$key" >> "$log"
   if [ "$status" -eq 0 ]; then
     if [ "$key" != port.listeners ] && [ -n "$stdout" ]; then
       printf 'query.%s.value=%s\n' "$key" "$(diagnostic_safe_text "$stdout")" >> "$log"
@@ -601,8 +703,20 @@ diagnostic_query() {
   else
     printf 'query.%s.error=%s\n' "$key" "$(diagnostic_error_class "$status" "$timed_out")" >> "$log"
   fi
-  rm -f "$stdout_file" "$stderr_file"
+  rm -rf "$capture_dir"
   return 0
+}
+
+diagnostic_parent_id() {
+  local log=$1 role=$2 pid=$3
+  diagnostic_query "$log" "parent.$role.$pid" ps -p "$pid" -o ppid=
+  [ "$DIAGNOSTIC_LAST_STATUS" -eq 0 ] || return 1
+  [ "$DIAGNOSTIC_LAST_STDOUT_TRUNCATED" -eq 0 ] || return 1
+  diagnostic_parse_pid_list "$DIAGNOSTIC_LAST_STDOUT" >/dev/null
+  [ "$DIAGNOSTIC_PID_COUNT" -eq 1 ] \
+    && [ "$DIAGNOSTIC_PID_INPUT_INCOMPLETE" -eq 0 ] \
+    && [ "$DIAGNOSTIC_PID_INPUT_TRUNCATED" -eq 0 ] \
+    && printf '%s' "$DIAGNOSTIC_PID_LIST"
 }
 
 diagnostic_log_process() {
@@ -639,7 +753,7 @@ diagnostic_log_process() {
   parent="$pid"
   depth=0
   while [ "$depth" -lt 64 ] && [ "$parent" != 1 ]; do
-    parent_output="$(process_parent_id "$parent" || true)"
+    parent_output="$(diagnostic_parent_id "$log" "$role" "$parent" || true)"
     if [ -z "$parent_output" ]; then
       chain="$chain->?"
       printf 'query.parent_chain.%s.status=1\n' "$role" >> "$log"
@@ -682,7 +796,9 @@ diagnostic_log_resources() {
 
 diagnose_web_ownership_failure() {
   local reason=$1 port=$2 log launcher recorded listener_pids listener listener_index
+  local listener_byte_truncated=0 listener_count_truncated=0
   WEB_OWNERSHIP_DIAGNOSTIC_SEQ=$((WEB_OWNERSHIP_DIAGNOSTIC_SEQ + 1))
+  DIAGNOSTIC_DEADLINE_EPOCH=$(( $(now_epoch) + DIAGNOSTIC_TOTAL_TIMEOUT_SECONDS ))
   if ! log="$(mktemp "$LOG_DIR/web-ownership.XXXXXX" 2>/dev/null)"; then
     log="$LOG_DIR/web-ownership-$(now_epoch)-$$-$WEB_OWNERSHIP_DIAGNOSTIC_SEQ.log"
     if ! (umask 077; set -C; : > "$log") 2>/dev/null; then
@@ -703,10 +819,22 @@ diagnose_web_ownership_failure() {
 
   diagnostic_query "$log" port.listeners lsof -nP -iTCP:"$port" -sTCP:LISTEN -t
   if [ "$DIAGNOSTIC_LAST_STATUS" -eq 0 ]; then
-    listener_pids="$(diagnostic_parse_pid_list "$DIAGNOSTIC_LAST_STDOUT")"
+    listener_byte_truncated="$DIAGNOSTIC_LAST_STDOUT_TRUNCATED"
+    diagnostic_parse_pid_list "$DIAGNOSTIC_LAST_STDOUT" >/dev/null
+    listener_pids="$DIAGNOSTIC_PID_LIST"
+    listener_count_truncated="$DIAGNOSTIC_PID_INPUT_TRUNCATED"
+    [ "$DIAGNOSTIC_LAST_STDOUT_TRUNCATED" -eq 0 ] \
+      || DIAGNOSTIC_PID_INPUT_TRUNCATED=1
   else
     listener_pids=""
   fi
+  printf 'port.listener.byte_truncated=%s\n' "$listener_byte_truncated" >> "$log"
+  printf 'port.listener.count_truncated=%s\n' "$listener_count_truncated" >> "$log"
+  printf 'port.listener.input_complete=%s\n' \
+    "$([ "$DIAGNOSTIC_PID_INPUT_INCOMPLETE" -eq 0 ] && printf 1 || printf 0)" >> "$log"
+  printf 'port.listener.input_truncated=%s\n' \
+    "$([ "$DIAGNOSTIC_PID_INPUT_TRUNCATED" -eq 0 ] && printf 0 || printf 1)" >> "$log"
+  printf 'port.listener.invalid_lines=%s\n' "$DIAGNOSTIC_PID_INVALID_COUNT" >> "$log"
   listener="$(printf '%s\n' "$listener_pids" | sed -n '1p')"
   printf 'port.requested=%s\n' "$port" >> "$log"
   listener_index=0
@@ -721,6 +849,12 @@ EOF
     printf 'port.listener.count=%s\n' "$listener_index" >> "$log"
   else
     printf 'port.listeners=none\nport.listener.count=0\n' >> "$log"
+  fi
+  if [ "$DIAGNOSTIC_PID_INPUT_TRUNCATED" -eq 0 ] \
+    && [ "$DIAGNOSTIC_PID_INPUT_INCOMPLETE" -eq 0 ]; then
+    printf 'port.listener.total=%s\n' "$listener_index" >> "$log"
+  else
+    printf 'port.listener.total=unknown\n' >> "$log"
   fi
   listener="$(printf '%s\n' "$listener_pids" | sed -n '1p')"
   if [ -n "$recorded" ] && [ -n "$listener" ] && [ "$recorded" != "$listener" ]; then
