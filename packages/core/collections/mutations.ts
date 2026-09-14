@@ -184,18 +184,32 @@ export function useUpdateCollectionRecord() {
     onSettled: (
       _record,
       _error,
-      { collectionId, workspaceContext },
+      { collectionId, recordId, workspaceContext },
       context,
     ) => {
       if (!canCoordinateCollectionCache(queryClient, workspaceContext, context)) {
         return;
       }
-      void queryClient.invalidateQueries({
-        queryKey: collectionKeys.rows(
-          workspaceContext.workspaceId,
-          collectionId,
-        ),
-      });
+      // Keep the paginated source and the active editor's authoritative record
+      // in one completion boundary. In particular, a tail row may no longer be
+      // present in the refreshed first page after a CAS conflict; awaiting the
+      // focused record refetch lets the user's explicit retry adopt the latest
+      // revision instead of looping on its frozen snapshot.
+      return Promise.all([
+        queryClient.invalidateQueries({
+          queryKey: collectionKeys.rows(
+            workspaceContext.workspaceId,
+            collectionId,
+          ),
+        }),
+        queryClient.invalidateQueries({
+          queryKey: collectionKeys.record(
+            workspaceContext.workspaceId,
+            collectionId,
+            recordId,
+          ),
+        }),
+      ]);
     },
   });
 }

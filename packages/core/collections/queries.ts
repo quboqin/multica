@@ -69,6 +69,28 @@ export function collectionDetailOptions(
   });
 }
 
+export function collectionRecordOptions(
+  workspaceId: string,
+  workspaceSlug: string,
+  collectionId: string,
+  recordId: string,
+) {
+  return queryOptions({
+    queryKey: collectionKeys.record(workspaceId, collectionId, recordId),
+    queryFn: ({ signal, client }) => {
+      assertClientWorkspaceAccessAllowed(client, workspaceId);
+      return api.getCollectionRecord(
+        collectionId,
+        recordId,
+        workspaceSlug,
+        signal,
+      );
+    },
+    enabled: Boolean(workspaceId && workspaceSlug && collectionId && recordId),
+    staleTime: 30_000,
+  });
+}
+
 export const collectionTableQuery = {
   version: 1,
   sort: "created_at_asc",

@@ -6,6 +6,7 @@ import {
   fireEvent,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -589,36 +590,28 @@ describe("CollectionDetailPage", () => {
     );
   });
 
-  it("freezes a dirty record from the tail page across source refresh and failure", async () => {
-    const pagedDetail: CollectionDetail = {
-      ...detail,
-      capabilities: { ...detail.capabilities, maxPageSize: 1 },
-    };
-    const first = createdRecord("collection-1");
-    const second: CollectionRecord = {
+  it("keeps dirty, pending, and failed edits through a directory refresh failure", async () => {
+    const serverRecord: CollectionRecord = {
       ...createdRecord("collection-1"),
-      id: "record-201",
-      title: "Tail record",
-      fields: { "field-note": "original second" },
-      position: 200,
+      id: "record-1",
+      title: "Original",
+      fields: { "field-note": "original note" },
     };
-    const queryCollectionRecords = vi.fn(
-      async (
-        _collectionId: string,
-        page: { cursor?: string | null },
-      ) => ({
-        records: page.cursor === "tail" ? [second] : [first],
-        total: 201,
-        nextCursor: page.cursor === "tail" ? null : "tail",
-      }),
-    );
-    const updateCollectionRecord = vi.fn(
-      async (_collectionId: string, _recordId: string, _input: unknown) => {
-        throw new Error("revision conflict");
-      },
-    );
+    let directoryOffline = false;
+    const getCollection = vi.fn(async () => {
+      if (directoryOffline) throw new Error("directory offline");
+      return detail;
+    });
+    const queryCollectionRecords = vi.fn(async () => ({
+      records: [serverRecord],
+      total: 1,
+      nextCursor: null,
+    }));
+    const response = deferred<CollectionRecord>();
+    const updateCollectionRecord = vi.fn(() => response.promise);
     setApiInstance({
-      getCollection: vi.fn(async () => pagedDetail),
+      getCollection,
+      getCollectionRecord: vi.fn(async () => serverRecord),
       queryCollectionRecords,
       updateCollectionRecord,
     } as unknown as ApiClient);
@@ -632,14 +625,155 @@ describe("CollectionDetailPage", () => {
       </QueryClientProvider>,
     );
 
-    fireEvent.click(await screen.findByRole("button", { name: "Load more" }));
+    const note = await screen.findByRole("textbox", { name: "Note" });
+    fireEvent.change(note, { target: { value: "draft through outage" } });
+
+    const failDirectoryRefresh = async () => {
+      directoryOffline = true;
+      await act(async () => {
+        await queryClient.invalidateQueries({
+          queryKey: collectionKeys.detail("ws-1", "collection-1"),
+        });
+      });
+      const error = await screen.findByText("directory offline");
+      expect(error.closest('[role="alert"]')).not.toBeNull();
+      expect(screen.getByRole("textbox", { name: "Note" })).toHaveValue(
+        "draft through outage",
+      );
+    };
+    const recoverDirectory = async () => {
+      directoryOffline = false;
+      const error = screen.getByText("directory offline");
+      fireEvent.click(
+        within(error.closest('[role="alert"]') as HTMLElement).getByRole(
+          "button",
+          { name: "Retry" },
+        ),
+      );
+      await waitFor(() =>
+        expect(screen.queryByText("directory offline")).not.toBeInTheDocument(),
+      );
+      expect(screen.getByRole("textbox", { name: "Note" })).toHaveValue(
+        "draft through outage",
+      );
+    };
+
+    await failDirectoryRefresh();
+    await recoverDirectory();
+
+    fireEvent.submit(screen.getByRole("textbox", { name: "Note" }).closest("form")!);
+    await waitFor(() => expect(updateCollectionRecord).toHaveBeenCalledOnce());
+    expect(screen.getByRole("textbox", { name: "Note" })).toBeDisabled();
+    await failDirectoryRefresh();
+    expect(screen.getByRole("textbox", { name: "Note" })).toBeDisabled();
+    await recoverDirectory();
+
+    await act(async () => {
+      response.reject(new Error("revision conflict"));
+      await response.promise.catch(() => undefined);
+    });
+    expect(await screen.findByText("revision conflict")).toBeInTheDocument();
+    expect(screen.getByRole("textbox", { name: "Note" })).toHaveValue(
+      "draft through outage",
+    );
+
+    await failDirectoryRefresh();
+    expect(screen.getByText("revision conflict")).toBeInTheDocument();
+    await recoverDirectory();
+    expect(screen.getByText("revision conflict")).toBeInTheDocument();
+  });
+
+  it("rebases an actual 200 plus 1 tail edit after a conflict before retrying", async () => {
+    const firstPage = Array.from({ length: 200 }, (_, index) => ({
+      ...createdRecord("collection-1"),
+      id: `record-${index + 1}`,
+      title: `Record ${index + 1}`,
+      fields: { "field-note": `note ${index + 1}` },
+      position: index,
+    }));
+    let tail: CollectionRecord = {
+      ...createdRecord("collection-1"),
+      id: "record-201",
+      title: "Tail record",
+      fields: { "field-note": "original tail" },
+      position: 200,
+    };
+    const queryCollectionRecords = vi.fn(
+      async (
+        _collectionId: string,
+        page: { cursor?: string | null },
+      ) => ({
+        records: page.cursor === "tail" ? [tail] : firstPage,
+        total: 201,
+        nextCursor: page.cursor === "tail" ? null : "tail",
+      }),
+    );
+    const updateCollectionRecord = vi.fn(
+      async (
+        _collectionId: string,
+        recordId: string,
+        input: {
+          expectedRevision: number;
+          change: { fieldId: string; op: "set"; value: string };
+        },
+      ) => {
+        expect(recordId).toBe("record-201");
+        if (input.expectedRevision !== tail.revision) {
+          throw new Error("revision conflict");
+        }
+        tail = {
+          ...tail,
+          fields: { ...tail.fields, [input.change.fieldId]: input.change.value },
+          revision: tail.revision + 1,
+        };
+        return tail;
+      },
+    );
+    const getCollectionRecord = vi.fn(async () => tail);
+    setApiInstance({
+      getCollection: vi.fn(async () => detail),
+      getCollectionRecord,
+      queryCollectionRecords,
+      updateCollectionRecord,
+    } as unknown as ApiClient);
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    });
+    authorizeWorkspace(queryClient);
+    renderWithI18n(
+      <QueryClientProvider client={queryClient}>
+        <CollectionDetailPage collectionId="collection-1" />
+      </QueryClientProvider>,
+    );
+
+    const loadMore = await screen.findByRole("button", { name: "Load more" });
     await waitFor(() =>
-      expect(screen.getAllByRole("textbox", { name: "Note" })).toHaveLength(2),
+      expect(
+        queryClient.isFetching({
+          queryKey: collectionKeys.rows("ws-1", "collection-1"),
+        }),
+      ).toBe(0),
+    );
+    fireEvent.click(loadMore);
+    await waitFor(() =>
+      expect(queryCollectionRecords).toHaveBeenCalledTimes(2),
+    );
+    expect(queryCollectionRecords.mock.calls[1]?.[1]).toMatchObject({
+      cursor: "tail",
+    });
+    await waitFor(() =>
+      expect(screen.getAllByRole("textbox", { name: "Note" })).toHaveLength(201),
     );
     const notes = screen.getAllByRole("textbox", { name: "Note" });
-    fireEvent.change(notes[1]!, {
-      target: { value: "unsaved second page" },
+    fireEvent.change(notes[200]!, {
+      target: { value: "saved tail draft" },
     });
+
+    tail = {
+      ...tail,
+      fields: { "field-note": "remote tail" },
+      revision: 2,
+    };
 
     const readsBeforeRefresh = queryCollectionRecords.mock.calls.length;
     window.dispatchEvent(new Event("focus"));
@@ -648,23 +782,36 @@ describe("CollectionDetailPage", () => {
         readsBeforeRefresh,
       ),
     );
-    expect(screen.getAllByRole("textbox", { name: "Note" })[1]).toHaveValue(
-      "unsaved second page",
+    expect(screen.getAllByRole("textbox", { name: "Note" })[200]).toHaveValue(
+      "saved tail draft",
     );
 
-    const tailEditor = screen.getAllByRole("textbox", { name: "Note" })[1]!;
+    const tailEditor = screen.getAllByRole("textbox", { name: "Note" })[200]!;
     fireEvent.submit(tailEditor.closest("form")!);
     expect(await screen.findByRole("alert")).toHaveTextContent(
       "revision conflict",
     );
-    expect(screen.getAllByRole("textbox", { name: "Note" })[1]).toHaveValue(
-      "unsaved second page",
+    expect(screen.getAllByRole("textbox", { name: "Note" })[200]).toHaveValue(
+      "saved tail draft",
     );
     expect(updateCollectionRecord).toHaveBeenCalledOnce();
     expect(updateCollectionRecord.mock.calls[0]?.[2]).toMatchObject({
-      expectedRevision: second.revision,
+      expectedRevision: 1,
     });
-  });
+    await waitFor(() => expect(getCollectionRecord).toHaveBeenCalledOnce());
+
+    fireEvent.submit(
+      screen
+        .getAllByRole("textbox", { name: "Note" })[200]!
+        .closest("form")!,
+    );
+    await waitFor(() => expect(updateCollectionRecord).toHaveBeenCalledTimes(2));
+    expect(updateCollectionRecord.mock.calls[1]?.[2]).toMatchObject({
+      expectedRevision: 2,
+    });
+    await waitFor(() => expect(tail.revision).toBe(3));
+    expect(tail.fields["field-note"]).toBe("saved tail draft");
+  }, 60_000);
 
   it("submits the edited revision before rebasing an explicit conflict retry", async () => {
     let serverRecord: CollectionRecord = {

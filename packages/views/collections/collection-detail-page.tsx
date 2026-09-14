@@ -24,6 +24,7 @@ import { api } from "@multica/core/api";
 import {
   collectionDetailOptions,
   collectionKeys,
+  collectionRecordOptions,
   collectionTableQuery,
   createCollectionRecordDataSource,
   useCreateCollectionRecord,
@@ -161,6 +162,29 @@ function CollectionDetailPageSource({
   const [newTitle, setNewTitle] = useState("");
   const [createError, setCreateError] = useState<string | null>(null);
   const [columnSizing, setColumnSizing] = useState<ColumnSizingState>({});
+  const [editorStates, setEditorStates] = useState(
+    () => new Map<string, DataViewCellEditorState<CollectionRecord>>(),
+  );
+  const [authoritativeRecords, setAuthoritativeRecords] = useState(
+    () => new Map<string, CollectionRecord>(),
+  );
+  const onEditorStateChange = useCallback(
+    (
+      key: string,
+      state: DataViewCellEditorState<CollectionRecord> | null,
+    ) => {
+      setEditorStates((current) => {
+        const existing = current.get(key);
+        if (state === null && existing === undefined) return current;
+        if (state === existing) return current;
+        const next = new Map(current);
+        if (state === null) next.delete(key);
+        else next.set(key, state);
+        return next;
+      });
+    },
+    [],
+  );
   const pendingCreateRequest = useRef<PendingRecordCreate | null>(null);
   const pageActive = useRef(false);
   useEffect(() => {
@@ -169,6 +193,20 @@ function CollectionDetailPageSource({
       pageActive.current = false;
     };
   }, []);
+
+  useEffect(() => {
+    // A background directory failure retains detailQuery.data and therefore
+    // preserves edits. Explicit feature/access loss removes that protected
+    // data, so no draft survives the authorization boundary.
+    if (!enabled || !detailQuery.data) {
+      setEditorStates((current) =>
+        current.size === 0 ? current : new Map(),
+      );
+      setAuthoritativeRecords((current) =>
+        current.size === 0 ? current : new Map(),
+      );
+    }
+  }, [detailQuery.data, enabled]);
 
   const source = useMemo(() => {
     if (!detailQuery.data) return null;
@@ -185,24 +223,69 @@ function CollectionDetailPageSource({
       },
       execute: detailQuery.data.capabilities.writable
         ? async ({ record, fieldId, change }) => {
+            const sessionGeneration = captureClientSessionGeneration(queryClient);
+            const workspaceAccessGeneration =
+              captureClientWorkspaceAccessGeneration(queryClient, workspaceId);
             const wireFieldId = fieldId.startsWith("field:")
               ? fieldId.slice("field:".length)
               : fieldId;
             if (wireFieldId === "title" && change.op !== "set") {
               throw new Error("This field is read-only");
             }
-            return updateRecordAsync({
-              collectionId,
-              recordId: record.id,
-              input: {
-                expectedRevision: record.revision,
-                change:
-                  change.op === "clear"
-                    ? { fieldId: wireFieldId, op: "clear" }
-                    : { fieldId: wireFieldId, op: "set", value: change.value },
-              },
-              workspaceContext: { workspaceId, workspaceSlug },
-            });
+            try {
+              return await updateRecordAsync({
+                collectionId,
+                recordId: record.id,
+                input: {
+                  expectedRevision: record.revision,
+                  change:
+                    change.op === "clear"
+                      ? { fieldId: wireFieldId, op: "clear" }
+                      : { fieldId: wireFieldId, op: "set", value: change.value },
+                },
+                workspaceContext: { workspaceId, workspaceSlug },
+              });
+            } catch (reason) {
+              try {
+                const authoritative = await queryClient.fetchQuery({
+                  ...collectionRecordOptions(
+                    workspaceId,
+                    workspaceSlug,
+                    collectionId,
+                    record.id,
+                  ),
+                  staleTime: 0,
+                });
+                if (
+                  pageActive.current &&
+                  getCurrentWsId() === workspaceId &&
+                  getCurrentSlug() === workspaceSlug &&
+                  isClientSessionGenerationCurrent(
+                    queryClient,
+                    sessionGeneration,
+                  ) &&
+                  isClientWorkspaceAccessGenerationCurrent(
+                    queryClient,
+                    workspaceId,
+                    workspaceAccessGeneration,
+                  )
+                ) {
+                  setAuthoritativeRecords((current) => {
+                    const existing = current.get(authoritative.id);
+                    if (existing && existing.revision >= authoritative.revision) {
+                      return current;
+                    }
+                    const next = new Map(current);
+                    next.set(authoritative.id, authoritative);
+                    return next;
+                  });
+                }
+              } catch {
+                // Preserve the original write failure. A failed authoritative
+                // read cannot safely replace the frozen editing baseline.
+              }
+              throw reason;
+            }
           }
         : undefined,
     });
@@ -330,7 +413,7 @@ function CollectionDetailPageSource({
       />
     );
   }
-  if (detailQuery.isError) {
+  if (detailQuery.isError && !detailQuery.data) {
     return (
       <CollectionPageState
         icon={AlertCircle}
@@ -361,6 +444,11 @@ function CollectionDetailPageSource({
       submitRecord={submitRecord}
       columnSizing={columnSizing}
       setColumnSizing={setColumnSizing}
+      editorStates={editorStates}
+      onEditorStateChange={onEditorStateChange}
+      authoritativeRecords={authoritativeRecords}
+      detailError={detailQuery.isError ? detailQuery.error : null}
+      retryDetail={() => void detailQuery.refetch()}
     />
   );
 }
@@ -376,6 +464,11 @@ function CollectionTableContent({
   submitRecord,
   columnSizing,
   setColumnSizing,
+  editorStates,
+  onEditorStateChange,
+  authoritativeRecords,
+  detailError,
+  retryDetail,
 }: {
   source: CollectionSource;
   binding: DataViewQueryBinding<
@@ -392,28 +485,19 @@ function CollectionTableContent({
   submitRecord: (event: FormEvent) => void;
   columnSizing: ColumnSizingState;
   setColumnSizing: Dispatch<SetStateAction<ColumnSizingState>>;
+  editorStates: ReadonlyMap<
+    string,
+    DataViewCellEditorState<CollectionRecord>
+  >;
+  onEditorStateChange: (
+    key: string,
+    state: DataViewCellEditorState<CollectionRecord> | null,
+  ) => void;
+  authoritativeRecords: ReadonlyMap<string, CollectionRecord>;
+  detailError: Error | null;
+  retryDetail: () => void;
 }) {
   const { t } = useT("collections");
-  const [editorStates, setEditorStates] = useState(
-    () => new Map<string, DataViewCellEditorState<CollectionRecord>>(),
-  );
-  const onEditorStateChange = useCallback(
-    (
-      key: string,
-      state: DataViewCellEditorState<CollectionRecord> | null,
-    ) => {
-      setEditorStates((current) => {
-        const existing = current.get(key);
-        if (state === null && existing === undefined) return current;
-        if (state === existing) return current;
-        const next = new Map(current);
-        if (state === null) next.delete(key);
-        else next.set(key, state);
-        return next;
-      });
-    },
-    [],
-  );
   const dataView = useDataViewController({
     binding,
     query: collectionTableQuery,
@@ -464,10 +548,23 @@ function CollectionTableContent({
       return snapshot.map((row) => {
         if (row.kind !== "record") return row;
         const live = liveByKey.get(row.key);
-        return live?.kind === "record" ? live : row;
+        const authoritative = authoritativeRecords.get(row.key);
+        const liveRecord = live?.kind === "record" ? live.sourceRow : null;
+        const newest = [row.sourceRow, liveRecord, authoritative].reduce<
+          CollectionRecord
+        >(
+          (current, candidate) =>
+            candidate && candidate.revision > current.revision
+              ? candidate
+              : current,
+          row.sourceRow,
+        );
+        return newest === row.sourceRow
+          ? row
+          : { kind: "record" as const, key: row.key, sourceRow: newest };
       });
     },
-    [],
+    [authoritativeRecords],
   );
   const structuralRow = useCallback(
     (row: { original: CollectionTableRow }) => {
@@ -526,6 +623,17 @@ function CollectionTableContent({
         <p role="alert" className="px-6 py-2 text-sm text-destructive">
           {createError}
         </p>
+      ) : null}
+      {detailError ? (
+        <div
+          role="alert"
+          className="flex items-center justify-between gap-3 px-6 py-2 text-sm text-destructive"
+        >
+          <span>{detailError.message}</span>
+          <Button type="button" variant="outline" size="sm" onClick={retryDetail}>
+            {t(($) => $.retry)}
+          </Button>
+        </div>
       ) : null}
       <div className="min-h-0 flex-1 overflow-auto p-6">
         <CollectionCellContext.Provider value={cellContext}>
