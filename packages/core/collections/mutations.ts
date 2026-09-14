@@ -17,17 +17,23 @@ import type {
   Workspace,
 } from "../types";
 import { workspaceKeys } from "../workspace/queries";
-import { collectionKeys } from "./queries";
+import {
+  captureClientCollectionSourceGeneration,
+  collectionKeys,
+  isClientCollectionSourceGenerationCurrent,
+} from "./queries";
 
 type CollectionMutationContext = {
   sessionGeneration: number;
   workspaceAccessGeneration: number;
+  collectionSourceGeneration?: number;
 };
 
 function canCoordinateCollectionCache(
   queryClient: ReturnType<typeof useQueryClient>,
   workspaceContext: WorkspaceRequestContext,
   context: CollectionMutationContext | undefined,
+  collectionId?: string,
 ): boolean {
   if (
     !context ||
@@ -37,6 +43,18 @@ function canCoordinateCollectionCache(
       workspaceContext.workspaceId,
       context.workspaceAccessGeneration,
     )
+  ) {
+    return false;
+  }
+  if (
+    collectionId &&
+    (context.collectionSourceGeneration === undefined ||
+      !isClientCollectionSourceGenerationCurrent(
+        queryClient,
+        workspaceContext.workspaceId,
+        collectionId,
+        context.collectionSourceGeneration,
+      ))
   ) {
     return false;
   }
@@ -53,6 +71,7 @@ function canCoordinateCollectionCache(
 function captureMutationContext(
   queryClient: ReturnType<typeof useQueryClient>,
   workspaceId: string,
+  collectionId?: string,
 ): CollectionMutationContext {
   return {
     sessionGeneration: captureClientSessionGeneration(queryClient),
@@ -60,6 +79,13 @@ function captureMutationContext(
       queryClient,
       workspaceId,
     ),
+    collectionSourceGeneration: collectionId
+      ? captureClientCollectionSourceGeneration(
+          queryClient,
+          workspaceId,
+          collectionId,
+        )
+      : undefined,
   };
 }
 
@@ -95,8 +121,12 @@ export function useCreateCollection() {
 export function useCreateCollectionRecord() {
   const queryClient = useQueryClient();
   return useMutation({
-    onMutate: ({ workspaceContext }) =>
-      captureMutationContext(queryClient, workspaceContext.workspaceId),
+    onMutate: ({ collectionId, workspaceContext }) =>
+      captureMutationContext(
+        queryClient,
+        workspaceContext.workspaceId,
+        collectionId,
+      ),
     mutationFn: ({
       collectionId,
       input,
@@ -118,7 +148,14 @@ export function useCreateCollectionRecord() {
       );
     },
     onSuccess: ({ record }, { collectionId, workspaceContext }, context) => {
-      if (!canCoordinateCollectionCache(queryClient, workspaceContext, context)) {
+      if (
+        !canCoordinateCollectionCache(
+          queryClient,
+          workspaceContext,
+          context,
+          collectionId,
+        )
+      ) {
         return;
       }
       queryClient.setQueryData(
@@ -143,8 +180,12 @@ export function useCreateCollectionRecord() {
 export function useUpdateCollectionRecord() {
   const queryClient = useQueryClient();
   return useMutation({
-    onMutate: ({ workspaceContext }) =>
-      captureMutationContext(queryClient, workspaceContext.workspaceId),
+    onMutate: ({ collectionId, workspaceContext }) =>
+      captureMutationContext(
+        queryClient,
+        workspaceContext.workspaceId,
+        collectionId,
+      ),
     mutationFn: ({
       collectionId,
       recordId,
@@ -169,7 +210,14 @@ export function useUpdateCollectionRecord() {
       );
     },
     onSuccess: (record, { collectionId, workspaceContext }, context) => {
-      if (!canCoordinateCollectionCache(queryClient, workspaceContext, context)) {
+      if (
+        !canCoordinateCollectionCache(
+          queryClient,
+          workspaceContext,
+          context,
+          collectionId,
+        )
+      ) {
         return;
       }
       const detailKey = collectionKeys.record(
@@ -187,7 +235,14 @@ export function useUpdateCollectionRecord() {
       { collectionId, recordId, workspaceContext },
       context,
     ) => {
-      if (!canCoordinateCollectionCache(queryClient, workspaceContext, context)) {
+      if (
+        !canCoordinateCollectionCache(
+          queryClient,
+          workspaceContext,
+          context,
+          collectionId,
+        )
+      ) {
         return;
       }
       // Keep the paginated source and the active editor's authoritative record

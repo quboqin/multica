@@ -20,13 +20,15 @@ import type {
 } from "@tanstack/react-table";
 import { AlertCircle, Database, TableProperties } from "lucide-react";
 import { useWorkspaceId } from "@multica/core";
-import { api } from "@multica/core/api";
+import { api, ApiError } from "@multica/core/api";
 import {
+  advanceClientCollectionSourceGeneration,
+  captureClientCollectionSourceGeneration,
   collectionDetailOptions,
   collectionKeys,
-  collectionRecordOptions,
   collectionTableQuery,
   createCollectionRecordDataSource,
+  isClientCollectionSourceGenerationCurrent,
   useCreateCollectionRecord,
   useUpdateCollectionRecord,
 } from "@multica/core/collections";
@@ -73,6 +75,13 @@ type DisplayRecord = {
 type CollectionTableRow = DisplayRecord | DataViewStructuralRow;
 type RawPage = DataSourcePage<CollectionRecord>;
 type CollectionSource = ReturnType<typeof createCollectionRecordDataSource>;
+
+function collectionSourceAccessError(reason: unknown): ApiError | null {
+  return reason instanceof ApiError &&
+    (reason.status === 403 || reason.status === 404)
+    ? reason
+    : null;
+}
 
 type CollectionCellContextValue = {
   source: CollectionSource;
@@ -152,10 +161,19 @@ function CollectionDetailPageSource({
   const enabled = useFeatureEnabled(CORTEX_COLLECTIONS_FLAG, false);
   const workspaceSlug = useRequiredWorkspaceSlug();
   const queryClient = useQueryClient();
+  const [sourceAccessError, setSourceAccessError] = useState<ApiError | null>(
+    null,
+  );
   const detailQuery = useQuery({
     ...collectionDetailOptions(workspaceId, workspaceSlug, collectionId),
-    enabled,
+    enabled: enabled && sourceAccessError === null,
   });
+  const detectedSourceAccessError = collectionSourceAccessError(
+    detailQuery.error,
+  );
+  const effectiveSourceAccessError =
+    sourceAccessError ?? detectedSourceAccessError;
+  const usableDetail = effectiveSourceAccessError ? undefined : detailQuery.data;
   const createRecord = useCreateCollectionRecord();
   const updateRecord = useUpdateCollectionRecord();
   const updateRecordAsync = updateRecord.mutateAsync;
@@ -186,11 +204,15 @@ function CollectionDetailPageSource({
     [],
   );
   const pendingCreateRequest = useRef<PendingRecordCreate | null>(null);
+  const recoveryRequests = useRef(new Set<AbortController>());
   const pageActive = useRef(false);
   useEffect(() => {
+    const requests = recoveryRequests.current;
     pageActive.current = true;
     return () => {
       pageActive.current = false;
+      for (const controller of requests) controller.abort();
+      requests.clear();
     };
   }, []);
 
@@ -198,7 +220,7 @@ function CollectionDetailPageSource({
     // A background directory failure retains detailQuery.data and therefore
     // preserves edits. Explicit feature/access loss removes that protected
     // data, so no draft survives the authorization boundary.
-    if (!enabled || !detailQuery.data) {
+    if (!enabled || !usableDetail) {
       setEditorStates((current) =>
         current.size === 0 ? current : new Map(),
       );
@@ -206,26 +228,77 @@ function CollectionDetailPageSource({
         current.size === 0 ? current : new Map(),
       );
     }
-  }, [detailQuery.data, enabled]);
+  }, [enabled, usableDetail]);
+
+  useEffect(() => {
+    if (!detectedSourceAccessError) return;
+    setSourceAccessError((current) => current ?? detectedSourceAccessError);
+    pendingCreateRequest.current = null;
+    setNewTitle("");
+    setCreateError(null);
+    for (const controller of recoveryRequests.current) controller.abort();
+    recoveryRequests.current.clear();
+    advanceClientCollectionSourceGeneration(
+      queryClient,
+      workspaceId,
+      collectionId,
+    );
+    const queryKey = collectionKeys.source(workspaceId, collectionId);
+    void queryClient.cancelQueries({ queryKey });
+    queryClient.removeQueries({ queryKey });
+  }, [collectionId, detectedSourceAccessError, queryClient, workspaceId]);
 
   const source = useMemo(() => {
-    if (!detailQuery.data) return null;
+    if (!usableDetail) return null;
+    const collectionSourceGeneration =
+      captureClientCollectionSourceGeneration(
+        queryClient,
+        workspaceId,
+        collectionId,
+      );
     return createCollectionRecordDataSource({
-      detail: detailQuery.data,
-      read: (page, signal) => {
+      detail: usableDetail,
+      read: async (page, signal) => {
         assertClientWorkspaceAccessAllowed(queryClient, workspaceId);
-        return api.queryCollectionRecords(
+        if (
+          !isClientCollectionSourceGenerationCurrent(
+            queryClient,
+            workspaceId,
+            collectionId,
+            collectionSourceGeneration,
+          )
+        ) {
+          throw new Error("Collection access expired");
+        }
+        const result = await api.queryCollectionRecords(
           collectionId,
           page,
           workspaceSlug,
           signal,
         );
+        if (
+          !isClientCollectionSourceGenerationCurrent(
+            queryClient,
+            workspaceId,
+            collectionId,
+            collectionSourceGeneration,
+          )
+        ) {
+          throw new Error("Collection access expired");
+        }
+        return result;
       },
-      execute: detailQuery.data.capabilities.writable
+      execute: usableDetail.capabilities.writable
         ? async ({ record, fieldId, change }) => {
             const sessionGeneration = captureClientSessionGeneration(queryClient);
             const workspaceAccessGeneration =
               captureClientWorkspaceAccessGeneration(queryClient, workspaceId);
+            const collectionSourceGeneration =
+              captureClientCollectionSourceGeneration(
+                queryClient,
+                workspaceId,
+                collectionId,
+              );
             const wireFieldId = fieldId.startsWith("field:")
               ? fieldId.slice("field:".length)
               : fieldId;
@@ -246,30 +319,47 @@ function CollectionDetailPageSource({
                 workspaceContext: { workspaceId, workspaceSlug },
               });
             } catch (reason) {
+              const ownsRecovery = () =>
+                pageActive.current &&
+                getCurrentWsId() === workspaceId &&
+                getCurrentSlug() === workspaceSlug &&
+                isClientSessionGenerationCurrent(
+                  queryClient,
+                  sessionGeneration,
+                ) &&
+                isClientWorkspaceAccessGenerationCurrent(
+                  queryClient,
+                  workspaceId,
+                  workspaceAccessGeneration,
+                ) &&
+                isClientCollectionSourceGenerationCurrent(
+                  queryClient,
+                  workspaceId,
+                  collectionId,
+                  collectionSourceGeneration,
+                );
+              if (!ownsRecovery()) throw reason;
+              const recovery = new AbortController();
+              recoveryRequests.current.add(recovery);
               try {
-                const authoritative = await queryClient.fetchQuery({
-                  ...collectionRecordOptions(
-                    workspaceId,
-                    workspaceSlug,
-                    collectionId,
-                    record.id,
-                  ),
-                  staleTime: 0,
-                });
-                if (
-                  pageActive.current &&
-                  getCurrentWsId() === workspaceId &&
-                  getCurrentSlug() === workspaceSlug &&
-                  isClientSessionGenerationCurrent(
-                    queryClient,
-                    sessionGeneration,
-                  ) &&
-                  isClientWorkspaceAccessGenerationCurrent(
-                    queryClient,
-                    workspaceId,
-                    workspaceAccessGeneration,
-                  )
-                ) {
+                const authoritative = await api.getCollectionRecord(
+                  collectionId,
+                  record.id,
+                  workspaceSlug,
+                  recovery.signal,
+                );
+                if (!recovery.signal.aborted && ownsRecovery()) {
+                  queryClient.setQueryData<CollectionRecord>(
+                    collectionKeys.record(
+                      workspaceId,
+                      collectionId,
+                      authoritative.id,
+                    ),
+                    (current) =>
+                      !current || authoritative.revision >= current.revision
+                        ? authoritative
+                        : current,
+                  );
                   setAuthoritativeRecords((current) => {
                     const existing = current.get(authoritative.id);
                     if (existing && existing.revision >= authoritative.revision) {
@@ -283,6 +373,8 @@ function CollectionDetailPageSource({
               } catch {
                 // Preserve the original write failure. A failed authoritative
                 // read cannot safely replace the frozen editing baseline.
+              } finally {
+                recoveryRequests.current.delete(recovery);
               }
               throw reason;
             }
@@ -291,8 +383,8 @@ function CollectionDetailPageSource({
     });
   }, [
     collectionId,
-    detailQuery.data,
     queryClient,
+    usableDetail,
     updateRecordAsync,
     workspaceId,
     workspaceSlug,
@@ -410,6 +502,21 @@ function CollectionDetailPageSource({
         icon={Database}
         title={t(($) => $.not_available)}
         description={t(($) => $.not_available_description)}
+      />
+    );
+  }
+  if (effectiveSourceAccessError) {
+    return (
+      <CollectionPageState
+        icon={AlertCircle}
+        title={effectiveSourceAccessError.message}
+        tone="destructive"
+        role="alert"
+        actions={
+          <Button type="button" onClick={() => setSourceAccessError(null)}>
+            {t(($) => $.retry)}
+          </Button>
+        }
       />
     );
   }

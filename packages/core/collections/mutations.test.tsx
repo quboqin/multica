@@ -17,7 +17,10 @@ import {
   useCreateCollectionRecord,
   useUpdateCollectionRecord,
 } from "./mutations";
-import { collectionKeys } from "./queries";
+import {
+  advanceClientCollectionSourceGeneration,
+  collectionKeys,
+} from "./queries";
 
 function wrapper(queryClient: QueryClient) {
   return function Wrapper({ children }: { children: ReactNode }) {
@@ -123,6 +126,54 @@ describe("useUpdateCollectionRecord", () => {
         collectionKeys.record("ws-2", "collection-1", "record-1"),
       ),
     ).toEqual(foreign);
+    hook.unmount();
+    queryClient.clear();
+  });
+
+  it("does not coordinate a late result after its collection source is fenced", async () => {
+    setCurrentWorkspace("alpha", "ws-1");
+    const queryClient = makeQueryClient();
+    queryClient.setQueryData(workspaceKeys.list(), [workspace("ws-1", "alpha")]);
+    const invalidate = vi.spyOn(queryClient, "invalidateQueries");
+    const response = deferred<CollectionRecord>();
+    const updateCollectionRecord = vi.fn(() => response.promise);
+    setApiInstance({ updateCollectionRecord } as unknown as ApiClient);
+    const hook = renderHook(() => useUpdateCollectionRecord(), {
+      wrapper: wrapper(queryClient),
+    });
+
+    const completion = hook.result.current.mutateAsync({
+      collectionId: "collection-1",
+      recordId: "record-1",
+      input: {
+        expectedRevision: 1,
+        change: { fieldId: "title", op: "set", value: "Late" },
+      },
+      workspaceContext: { workspaceId: "ws-1", workspaceSlug: "alpha" },
+    });
+    await waitFor(() => expect(updateCollectionRecord).toHaveBeenCalledOnce());
+
+    advanceClientCollectionSourceGeneration(
+      queryClient,
+      "ws-1",
+      "collection-1",
+    );
+    queryClient.removeQueries({
+      queryKey: collectionKeys.source("ws-1", "collection-1"),
+    });
+    invalidate.mockClear();
+
+    await act(async () => {
+      response.resolve({ ...oldRecord, title: "Late", revision: 2 });
+      await completion;
+    });
+
+    expect(
+      queryClient.getQueryData(
+        collectionKeys.record("ws-1", "collection-1", "record-1"),
+      ),
+    ).toBeUndefined();
+    expect(invalidate).not.toHaveBeenCalled();
     hook.unmount();
     queryClient.clear();
   });

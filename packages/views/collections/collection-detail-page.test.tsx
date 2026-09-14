@@ -10,11 +10,12 @@ import {
 } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { setApiInstance } from "@multica/core/api";
+import { ApiError, setApiInstance } from "@multica/core/api";
 import type { ApiClient } from "@multica/core/api/client";
 import { collectionKeys } from "@multica/core/collections";
 import {
   isClientWorkspaceAccessAllowed,
+  restoreClientWorkspaceAccess,
   revokeClientWorkspaceAccess,
   setCurrentWorkspace,
 } from "@multica/core/platform";
@@ -681,6 +682,224 @@ describe("CollectionDetailPage", () => {
     expect(screen.getByText("revision conflict")).toBeInTheDocument();
     await recoverDirectory();
     expect(screen.getByText("revision conflict")).toBeInTheDocument();
+  });
+
+  it.each([
+    ["dirty", 403],
+    ["pending", 404],
+    ["failed", 403],
+  ] as const)(
+    "clears a %s editor and the source cache after an explicit %i directory denial",
+    async (stage, status) => {
+      const serverRecord: CollectionRecord = {
+        ...createdRecord("collection-1"),
+        id: "record-1",
+        fields: { "field-note": "original note" },
+      };
+      let denied = false;
+      const response = deferred<CollectionRecord>();
+      const getCollectionRecord = vi.fn(async () => serverRecord);
+      const updateCollectionRecord = vi.fn(() => response.promise);
+      setApiInstance({
+        getCollection: vi.fn(async () => {
+          if (denied) {
+            throw new ApiError(
+              "collection unavailable",
+              status,
+              status === 403 ? "Forbidden" : "Not Found",
+            );
+          }
+          return detail;
+        }),
+        getCollectionRecord,
+        queryCollectionRecords: vi.fn(async () => ({
+          records: [serverRecord],
+          total: 1,
+          nextCursor: null,
+        })),
+        updateCollectionRecord,
+      } as unknown as ApiClient);
+      const queryClient = new QueryClient({
+        defaultOptions: {
+          queries: { retry: false },
+          mutations: { retry: false },
+        },
+      });
+      authorizeWorkspace(queryClient);
+      renderWithI18n(
+        <QueryClientProvider client={queryClient}>
+          <CollectionDetailPage collectionId="collection-1" />
+        </QueryClientProvider>,
+      );
+
+      const note = await screen.findByRole("textbox", { name: "Note" });
+      fireEvent.change(note, { target: { value: `${stage} protected draft` } });
+      if (stage !== "dirty") {
+        fireEvent.submit(note.closest("form")!);
+        await waitFor(() => expect(updateCollectionRecord).toHaveBeenCalledOnce());
+      }
+      if (stage === "failed") {
+        await act(async () => {
+          response.reject(new Error("revision conflict"));
+          await response.promise.catch(() => undefined);
+        });
+        expect(await screen.findByText("revision conflict")).toBeInTheDocument();
+        expect(getCollectionRecord).toHaveBeenCalledOnce();
+      }
+
+      denied = true;
+      await act(async () => {
+        await queryClient.invalidateQueries({
+          queryKey: collectionKeys.detail("ws-1", "collection-1"),
+        });
+      });
+
+      expect(await screen.findByText("collection unavailable")).toBeInTheDocument();
+      expect(screen.queryByRole("textbox", { name: "Note" })).toBeNull();
+      await waitFor(() =>
+        expect(
+          queryClient.getQueriesData({
+            queryKey: collectionKeys.source("ws-1", "collection-1"),
+          }).every(([, value]) => value === undefined),
+        ).toBe(true),
+      );
+
+      if (stage === "pending") {
+        const cacheWrite = vi.spyOn(queryClient, "setQueryData");
+        const invalidate = vi.spyOn(queryClient, "invalidateQueries");
+        await act(async () => {
+          response.resolve({ ...serverRecord, revision: 2 });
+          await response.promise;
+          await Promise.resolve();
+        });
+        expect(cacheWrite).not.toHaveBeenCalled();
+        expect(invalidate).not.toHaveBeenCalled();
+        expect(getCollectionRecord).not.toHaveBeenCalled();
+      }
+    },
+  );
+
+  it("does not start an authoritative read for a failed write from an old access generation", async () => {
+    const serverRecord: CollectionRecord = {
+      ...createdRecord("collection-1"),
+      id: "record-1",
+      fields: { "field-note": "original note" },
+    };
+    const response = deferred<CollectionRecord>();
+    const getCollectionRecord = vi.fn(async () => ({
+      ...serverRecord,
+      revision: 7,
+    }));
+    const updateCollectionRecord = vi.fn(() => response.promise);
+    setApiInstance({
+      getCollection: vi.fn(async () => detail),
+      getCollectionRecord,
+      queryCollectionRecords: vi.fn(async () => ({
+        records: [serverRecord],
+        total: 1,
+        nextCursor: null,
+      })),
+      updateCollectionRecord,
+    } as unknown as ApiClient);
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    });
+    authorizeWorkspace(queryClient);
+    renderWithI18n(
+      <QueryClientProvider client={queryClient}>
+        <CollectionDetailPage collectionId="collection-1" />
+      </QueryClientProvider>,
+    );
+
+    const note = await screen.findByRole("textbox", { name: "Note" });
+    fireEvent.change(note, { target: { value: "old generation draft" } });
+    fireEvent.submit(note.closest("form")!);
+    await waitFor(() => expect(updateCollectionRecord).toHaveBeenCalledOnce());
+
+    revokeClientWorkspaceAccess(queryClient, "ws-1");
+    queryClient.removeQueries({
+      queryKey: collectionKeys.source("ws-1", "collection-1"),
+    });
+    restoreClientWorkspaceAccess(queryClient, "ws-1");
+    authorizeWorkspace(queryClient);
+
+    await act(async () => {
+      response.reject(new Error("late failure"));
+      await response.promise.catch(() => undefined);
+      await Promise.resolve();
+    });
+
+    expect(getCollectionRecord).not.toHaveBeenCalled();
+    expect(
+      queryClient.getQueryData(
+        collectionKeys.record("ws-1", "collection-1", "record-1"),
+      ),
+    ).toBeUndefined();
+  });
+
+  it("aborts an in-flight authoritative read when its page unmounts", async () => {
+    const serverRecord: CollectionRecord = {
+      ...createdRecord("collection-1"),
+      id: "record-1",
+      fields: { "field-note": "original note" },
+    };
+    const updateResponse = deferred<CollectionRecord>();
+    const recoveryResponse = deferred<CollectionRecord>();
+    const getCollectionRecord = vi.fn(
+      (
+        _collectionId: string,
+        _recordId: string,
+        _workspaceSlug: string,
+        _signal?: AbortSignal,
+      ) => recoveryResponse.promise,
+    );
+    const updateCollectionRecord = vi.fn(() => updateResponse.promise);
+    setApiInstance({
+      getCollection: vi.fn(async () => detail),
+      getCollectionRecord,
+      queryCollectionRecords: vi.fn(async () => ({
+        records: [serverRecord],
+        total: 1,
+        nextCursor: null,
+      })),
+      updateCollectionRecord,
+    } as unknown as ApiClient);
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    });
+    authorizeWorkspace(queryClient);
+    const view = renderWithI18n(
+      <QueryClientProvider client={queryClient}>
+        <CollectionDetailPage collectionId="collection-1" />
+      </QueryClientProvider>,
+    );
+
+    const note = await screen.findByRole("textbox", { name: "Note" });
+    fireEvent.change(note, { target: { value: "draft before unmount" } });
+    fireEvent.submit(note.closest("form")!);
+    await waitFor(() => expect(updateCollectionRecord).toHaveBeenCalledOnce());
+
+    await act(async () => {
+      updateResponse.reject(new Error("write failed"));
+      await updateResponse.promise.catch(() => undefined);
+    });
+    await waitFor(() => expect(getCollectionRecord).toHaveBeenCalledOnce());
+    const recoverySignal = getCollectionRecord.mock.calls[0]?.[3];
+    expect(recoverySignal?.aborted).toBe(false);
+
+    view.unmount();
+    expect(recoverySignal?.aborted).toBe(true);
+    await act(async () => {
+      recoveryResponse.resolve({ ...serverRecord, revision: 7 });
+      await recoveryResponse.promise;
+      await Promise.resolve();
+    });
+
+    expect(
+      queryClient.getQueryData(
+        collectionKeys.record("ws-1", "collection-1", "record-1"),
+      ),
+    ).toBeUndefined();
   });
 
   it("rebases an actual 200 plus 1 tail edit after a conflict before retrying", async () => {

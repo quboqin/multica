@@ -1,7 +1,68 @@
-import { queryOptions } from "@tanstack/react-query";
+import { queryOptions, type QueryClient } from "@tanstack/react-query";
 import { api } from "../api";
 import { dataSourceIdentityKey, type DataSourceIdentity } from "../data-source";
 import { assertClientWorkspaceAccessAllowed } from "../platform";
+
+const clientCollectionSourceGenerations = new WeakMap<
+  QueryClient,
+  Map<string, number>
+>();
+
+function collectionSourceGenerationKey(
+  workspaceId: string,
+  collectionId: string,
+): string {
+  return JSON.stringify([workspaceId, collectionId]);
+}
+
+export function captureClientCollectionSourceGeneration(
+  queryClient: QueryClient,
+  workspaceId: string,
+  collectionId: string,
+): number {
+  return (
+    clientCollectionSourceGenerations
+      .get(queryClient)
+      ?.get(collectionSourceGenerationKey(workspaceId, collectionId)) ?? 0
+  );
+}
+
+export function isClientCollectionSourceGenerationCurrent(
+  queryClient: QueryClient,
+  workspaceId: string,
+  collectionId: string,
+  generation: number,
+): boolean {
+  return (
+    captureClientCollectionSourceGeneration(
+      queryClient,
+      workspaceId,
+      collectionId,
+    ) === generation
+  );
+}
+
+/** Fence in-flight work after this collection becomes explicitly inaccessible. */
+export function advanceClientCollectionSourceGeneration(
+  queryClient: QueryClient,
+  workspaceId: string,
+  collectionId: string,
+): void {
+  let generations = clientCollectionSourceGenerations.get(queryClient);
+  if (!generations) {
+    generations = new Map();
+    clientCollectionSourceGenerations.set(queryClient, generations);
+  }
+  const key = collectionSourceGenerationKey(workspaceId, collectionId);
+  generations.set(
+    key,
+    captureClientCollectionSourceGeneration(
+      queryClient,
+      workspaceId,
+      collectionId,
+    ) + 1,
+  );
+}
 
 export function collectionSourceIdentity(
   workspaceId: string,
