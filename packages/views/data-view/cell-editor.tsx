@@ -100,7 +100,10 @@ export function DataViewCellEditor<Row>({
   row: Row;
   onAccepted?: () => void | Promise<void>;
   persistedState?: DataViewCellEditorState<Row>;
-  onStateChange?: (state: DataViewCellEditorState<Row> | null) => void;
+  onStateChange?: (
+    state: DataViewCellEditorState<Row> | null,
+    operationId: number,
+  ) => void;
   saveLabel: string;
   clearLabel: string;
   retryLabel?: string;
@@ -133,7 +136,10 @@ export function DataViewCellEditor<Row>({
     stateRef.current = next;
     setEditorState(next);
     if (publish) {
-      onStateChangeRef.current?.(isActiveEditorState(next) ? next : null);
+      onStateChangeRef.current?.(
+        isActiveEditorState(next) ? next : null,
+        next.operationId,
+      );
     }
   };
   const updateEditorState = (

@@ -779,6 +779,134 @@ describe("CollectionDetailPage", () => {
     },
   );
 
+  it("does not restore an old pending draft when a 403 write failure arrives after source recovery", async () => {
+    const serverRecord: CollectionRecord = {
+      ...createdRecord("collection-1"),
+      id: "record-1",
+      fields: { "field-note": "original note" },
+    };
+    let denied = false;
+    const response = deferred<CollectionRecord>();
+    const getCollectionRecord = vi.fn(async () => serverRecord);
+    const updateCollectionRecord = vi.fn(() => response.promise);
+    setApiInstance({
+      getCollection: vi.fn(async () => {
+        if (denied) {
+          throw new ApiError("collection unavailable", 403, "Forbidden");
+        }
+        return detail;
+      }),
+      getCollectionRecord,
+      queryCollectionRecords: vi.fn(async () => ({
+        records: [serverRecord],
+        total: 1,
+        nextCursor: null,
+      })),
+      updateCollectionRecord,
+    } as unknown as ApiClient);
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    });
+    authorizeWorkspace(queryClient);
+    renderWithI18n(
+      <QueryClientProvider client={queryClient}>
+        <CollectionDetailPage collectionId="collection-1" />
+      </QueryClientProvider>,
+    );
+
+    const note = await screen.findByRole("textbox", { name: "Note" });
+    fireEvent.change(note, { target: { value: "protected pending draft" } });
+    fireEvent.submit(note.closest("form")!);
+    await waitFor(() => expect(updateCollectionRecord).toHaveBeenCalledOnce());
+
+    denied = true;
+    await act(async () => {
+      await queryClient.invalidateQueries({
+        queryKey: collectionKeys.detail("ws-1", "collection-1"),
+      });
+    });
+    expect(await screen.findByText("collection unavailable")).toBeInTheDocument();
+
+    await act(async () => {
+      response.reject(new Error("old write failed"));
+      await response.promise.catch(() => undefined);
+      await Promise.resolve();
+    });
+    denied = false;
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+
+    expect(await screen.findByRole("textbox", { name: "Note" })).toHaveValue(
+      "original note",
+    );
+    expect(screen.queryByText("old write failed")).not.toBeInTheDocument();
+    expect(getCollectionRecord).not.toHaveBeenCalled();
+  });
+
+  it("does not clear a new authorized draft when a pre-404 write succeeds late", async () => {
+    const serverRecord: CollectionRecord = {
+      ...createdRecord("collection-1"),
+      id: "record-1",
+      fields: { "field-note": "original note" },
+    };
+    let denied = false;
+    const response = deferred<CollectionRecord>();
+    const getCollectionRecord = vi.fn(async () => serverRecord);
+    const updateCollectionRecord = vi.fn(() => response.promise);
+    setApiInstance({
+      getCollection: vi.fn(async () => {
+        if (denied) {
+          throw new ApiError("collection unavailable", 404, "Not Found");
+        }
+        return detail;
+      }),
+      getCollectionRecord,
+      queryCollectionRecords: vi.fn(async () => ({
+        records: [serverRecord],
+        total: 1,
+        nextCursor: null,
+      })),
+      updateCollectionRecord,
+    } as unknown as ApiClient);
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    });
+    authorizeWorkspace(queryClient);
+    renderWithI18n(
+      <QueryClientProvider client={queryClient}>
+        <CollectionDetailPage collectionId="collection-1" />
+      </QueryClientProvider>,
+    );
+
+    const oldNote = await screen.findByRole("textbox", { name: "Note" });
+    fireEvent.change(oldNote, { target: { value: "old pending draft" } });
+    fireEvent.submit(oldNote.closest("form")!);
+    await waitFor(() => expect(updateCollectionRecord).toHaveBeenCalledOnce());
+
+    denied = true;
+    await act(async () => {
+      await queryClient.invalidateQueries({
+        queryKey: collectionKeys.detail("ws-1", "collection-1"),
+      });
+    });
+    expect(await screen.findByText("collection unavailable")).toBeInTheDocument();
+
+    denied = false;
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    const newNote = await screen.findByRole("textbox", { name: "Note" });
+    fireEvent.change(newNote, { target: { value: "new authorized draft" } });
+
+    await act(async () => {
+      response.resolve({ ...serverRecord, revision: 2 });
+      await response.promise;
+      await Promise.resolve();
+    });
+
+    expect(screen.getByRole("textbox", { name: "Note" })).toHaveValue(
+      "new authorized draft",
+    );
+    expect(getCollectionRecord).not.toHaveBeenCalled();
+  });
+
   it("does not start an authoritative read for a failed write from an old access generation", async () => {
     const serverRecord: CollectionRecord = {
       ...createdRecord("collection-1"),

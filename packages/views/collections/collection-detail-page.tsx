@@ -85,13 +85,16 @@ function collectionSourceAccessError(reason: unknown): ApiError | null {
 
 type CollectionCellContextValue = {
   source: CollectionSource;
+  sourceGeneration: number;
   saveLabel: string;
   clearLabel: string;
   retryLabel: string;
   editorStates: ReadonlyMap<string, DataViewCellEditorState<CollectionRecord>>;
   onEditorStateChange: (
     key: string,
+    sourceGeneration: number,
     state: DataViewCellEditorState<CollectionRecord> | null,
+    operationId: number,
   ) => void;
 };
 
@@ -119,7 +122,14 @@ function CollectionRecordCell({
       field={field}
       row={sourceRow}
       persistedState={context.editorStates.get(editorKey)}
-      onStateChange={(state) => context.onEditorStateChange(editorKey, state)}
+      onStateChange={(state, operationId) =>
+        context.onEditorStateChange(
+          editorKey,
+          context.sourceGeneration,
+          state,
+          operationId,
+        )
+      }
       saveLabel={context.saveLabel}
       clearLabel={context.clearLabel}
       retryLabel={context.retryLabel}
@@ -174,6 +184,13 @@ function CollectionDetailPageSource({
   const effectiveSourceAccessError =
     sourceAccessError ?? detectedSourceAccessError;
   const usableDetail = effectiveSourceAccessError ? undefined : detailQuery.data;
+  const sourceGeneration = captureClientCollectionSourceGeneration(
+    queryClient,
+    workspaceId,
+    collectionId,
+  );
+  const activeEditorGeneration = useRef<number | null>(null);
+  activeEditorGeneration.current = usableDetail ? sourceGeneration : null;
   const createRecord = useCreateCollectionRecord();
   const updateRecord = useUpdateCollectionRecord();
   const updateRecordAsync = updateRecord.mutateAsync;
@@ -189,11 +206,41 @@ function CollectionDetailPageSource({
   const onEditorStateChange = useCallback(
     (
       key: string,
+      publisherGeneration: number,
       state: DataViewCellEditorState<CollectionRecord> | null,
+      operationId: number,
     ) => {
+      if (
+        activeEditorGeneration.current !== publisherGeneration ||
+        !isClientCollectionSourceGenerationCurrent(
+          queryClient,
+          workspaceId,
+          collectionId,
+          publisherGeneration,
+        )
+      ) {
+        return;
+      }
       setEditorStates((current) => {
+        if (
+          activeEditorGeneration.current !== publisherGeneration ||
+          !isClientCollectionSourceGenerationCurrent(
+            queryClient,
+            workspaceId,
+            collectionId,
+            publisherGeneration,
+          )
+        ) {
+          return current;
+        }
         const existing = current.get(key);
         if (state === null && existing === undefined) return current;
+        if (state === null && existing?.operationId !== operationId) {
+          return current;
+        }
+        if (state && existing && existing.operationId > operationId) {
+          return current;
+        }
         if (state === existing) return current;
         const next = new Map(current);
         if (state === null) next.delete(key);
@@ -201,7 +248,7 @@ function CollectionDetailPageSource({
         return next;
       });
     },
-    [],
+    [collectionId, queryClient, workspaceId],
   );
   const pendingCreateRequest = useRef<PendingRecordCreate | null>(null);
   const recoveryRequests = useRef(new Set<AbortController>());
@@ -542,6 +589,7 @@ function CollectionDetailPageSource({
   return (
     <CollectionTableContent
       source={source}
+      sourceGeneration={sourceGeneration}
       binding={binding}
       collectionName={detailQuery.data.collection.name}
       newTitle={newTitle}
@@ -562,6 +610,7 @@ function CollectionDetailPageSource({
 
 function CollectionTableContent({
   source,
+  sourceGeneration,
   binding,
   collectionName,
   newTitle,
@@ -578,6 +627,7 @@ function CollectionTableContent({
   retryDetail,
 }: {
   source: CollectionSource;
+  sourceGeneration: number;
   binding: DataViewQueryBinding<
     CollectionRecord,
     typeof collectionTableQuery,
@@ -598,7 +648,9 @@ function CollectionTableContent({
   >;
   onEditorStateChange: (
     key: string,
+    sourceGeneration: number,
     state: DataViewCellEditorState<CollectionRecord> | null,
+    operationId: number,
   ) => void;
   authoritativeRecords: ReadonlyMap<string, CollectionRecord>;
   detailError: Error | null;
@@ -634,13 +686,14 @@ function CollectionTableContent({
   const cellContext = useMemo<CollectionCellContextValue>(
     () => ({
       source,
+      sourceGeneration,
       saveLabel: t(($) => $.save),
       clearLabel: t(($) => $.clear),
       retryLabel: t(($) => $.retry),
       editorStates,
       onEditorStateChange,
     }),
-    [editorStates, onEditorStateChange, source, t],
+    [editorStates, onEditorStateChange, source, sourceGeneration, t],
   );
   const editingKey = useMemo(
     () =>
