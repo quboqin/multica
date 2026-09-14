@@ -47,4 +47,4 @@ collection/record 成功计数的 metrics-only 规则、必填资源/字段/revi
 
 上线风险提示
 
-当前只能交付测试规格与静态校验结果。T3 应继续暂停；需在与提交 SHA `b1c761a99b5b6edf89be9adcea34bcdad9500e5e` 匹配的 Web/API/PG 环境中安装 Chromium、准备测试账号与数据库后，重新执行完整 E2E，并补做上述未覆盖项。当前运行分配分支 `agent/momo/magi-11` 与远端 `feature/cortex-g1-collections` 已确认同指该 SHA。
+当前只能交付测试规格与静态校验结果。T3 应继续暂停；需在与本轮修正代码提交 `d4e8df26c` 匹配的 Web/API/PG 环境中安装 Chromium、准备测试账号与数据库后，重新执行完整 E2E，并补做上述未覆盖项。最终完整交付 SHA 及 `agent/momo/magi-11`、远端 `feature/cortex-g1-collections` 的一致性以推送后的 issue 交付回报为准。
