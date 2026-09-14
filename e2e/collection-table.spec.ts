@@ -214,6 +214,18 @@ async function rowByTitle(page: Page, title: string): Promise<Locator> {
   throw new Error(`Could not resolve rendered collection row ${title}`);
 }
 
+async function reloadCollectionRow(
+  page: Page,
+  collectionName: string,
+  recordTitle: string,
+): Promise<Locator> {
+  await page.reload({ waitUntil: "domcontentloaded" });
+  await expect(
+    page.getByRole("heading", { name: collectionName, exact: true }),
+  ).toBeVisible();
+  return rowByTitle(page, recordTitle);
+}
+
 async function patchResponse(
   page: Page,
   target: PatchTarget,
@@ -380,7 +392,7 @@ test.describe("T2 collection shared TableView", () => {
     page.on("request", requestListener);
     const recordTitle = `E2E Record ${Date.now()}`;
     const createdRecord = await addRecordInBrowser(page, recordTitle);
-    const row = await rowByTitle(page, recordTitle);
+    let row = await rowByTitle(page, recordTitle);
     const noteField = createdCollection.fields.find((field) => field.name === "Note");
     const quantityField = createdCollection.fields.find(
       (field) => field.name === "Quantity",
@@ -417,12 +429,18 @@ test.describe("T2 collection shared TableView", () => {
       createdRecord.record.id,
     );
     assertOwnField(authoritative, noteField.id, "browser text");
+    row = await reloadCollectionRow(page, collectionName, recordTitle);
+    await expect(row.getByRole("textbox", { name: "Note" })).toHaveValue(
+      "browser text",
+    );
     await clearTextOrNumber(page, row, noteClearTarget, "Note");
     authoritative = await api.getCollectionRecord(
       createdCollection.collection.id,
       createdRecord.record.id,
     );
     assertClearedField(authoritative, noteField.id);
+    row = await reloadCollectionRow(page, collectionName, recordTitle);
+    await expect(row.getByRole("textbox", { name: "Note" })).toHaveValue("");
 
     // An empty string is a legal set, distinct from clear/delete.
     await saveTextOrNumber(page, row, noteTarget, "Note", "");
@@ -431,12 +449,16 @@ test.describe("T2 collection shared TableView", () => {
       createdRecord.record.id,
     );
     assertOwnField(authoritative, noteField.id, "");
+    row = await reloadCollectionRow(page, collectionName, recordTitle);
+    await expect(row.getByRole("textbox", { name: "Note" })).toHaveValue("");
     await clearTextOrNumber(page, row, noteClearTarget, "Note");
     authoritative = await api.getCollectionRecord(
       createdCollection.collection.id,
       createdRecord.record.id,
     );
     assertClearedField(authoritative, noteField.id);
+    row = await reloadCollectionRow(page, collectionName, recordTitle);
+    await expect(row.getByRole("textbox", { name: "Note" })).toHaveValue("");
 
     await saveTextOrNumber(
       page,
@@ -451,6 +473,10 @@ test.describe("T2 collection shared TableView", () => {
       createdRecord.record.id,
     );
     assertOwnField(authoritative, quantityField.id, 7);
+    row = await reloadCollectionRow(page, collectionName, recordTitle);
+    await expect(row.getByRole("spinbutton", { name: "Quantity" })).toHaveValue(
+      "7",
+    );
     await clearTextOrNumber(
       page,
       row,
@@ -463,6 +489,10 @@ test.describe("T2 collection shared TableView", () => {
       createdRecord.record.id,
     );
     assertClearedField(authoritative, quantityField.id);
+    row = await reloadCollectionRow(page, collectionName, recordTitle);
+    await expect(row.getByRole("spinbutton", { name: "Quantity" })).toHaveValue(
+      "",
+    );
 
     await saveTextOrNumber(
       page,
@@ -504,6 +534,10 @@ test.describe("T2 collection shared TableView", () => {
       createdRecord.record.id,
     );
     assertOwnField(authoritative, quantityField.id, 0);
+    row = await reloadCollectionRow(page, collectionName, recordTitle);
+    await expect(row.getByRole("spinbutton", { name: "Quantity" })).toHaveValue(
+      "0",
+    );
     await clearTextOrNumber(
       page,
       row,
@@ -516,6 +550,10 @@ test.describe("T2 collection shared TableView", () => {
       createdRecord.record.id,
     );
     assertClearedField(authoritative, quantityField.id);
+    row = await reloadCollectionRow(page, collectionName, recordTitle);
+    await expect(row.getByRole("spinbutton", { name: "Quantity" })).toHaveValue(
+      "",
+    );
 
     const checked = row.getByRole("checkbox", { name: "Checked" });
     await patchResponse(page, checkedTarget, () => checked.check(), 200);
@@ -525,7 +563,12 @@ test.describe("T2 collection shared TableView", () => {
       createdRecord.record.id,
     );
     assertOwnField(authoritative, checkedField.id, true);
-    const checkboxCell = checked.locator("xpath=..").locator("xpath=..");
+    row = await reloadCollectionRow(page, collectionName, recordTitle);
+    await expect(row.getByRole("checkbox", { name: "Checked" })).toBeChecked();
+    const checkedAfterReload = row.getByRole("checkbox", { name: "Checked" });
+    const checkboxCell = checkedAfterReload
+      .locator("xpath=..")
+      .locator("xpath=..");
     await patchResponse(page, checkedClearTarget, () =>
       checkboxCell.getByRole("button", { name: "Clear", exact: true }).click(),
     200);
@@ -535,6 +578,8 @@ test.describe("T2 collection shared TableView", () => {
       createdRecord.record.id,
     );
     assertClearedField(authoritative, checkedField.id);
+    row = await reloadCollectionRow(page, collectionName, recordTitle);
+    await expect(row.getByRole("checkbox", { name: "Checked" })).not.toBeChecked();
 
     // A false set must remain a present JSON field; it is not equivalent to
     // clear. Exercise that wire value through the real authenticated API.
@@ -563,14 +608,10 @@ test.describe("T2 collection shared TableView", () => {
     );
     assertClearedField(authoritative, checkedField.id);
 
-    // Refresh is its own phase: it may issue dashboard GETs, but must not
-    // invoke any task write/run-confirm endpoint.
-    page.off("request", requestListener);
-    await page.reload({ waitUntil: "domcontentloaded" });
-    await expect(
-      page.getByRole("heading", { name: collectionName, exact: true }),
-    ).toBeVisible();
-    const refreshedRow = await rowByTitle(page, recordTitle);
+    // Refresh is observed by the same listener as the mutations above. It may
+    // issue dashboard GETs, but must not invoke any task write/run-confirm
+    // endpoint.
+    const refreshedRow = await reloadCollectionRow(page, collectionName, recordTitle);
     await expect(refreshedRow.getByRole("textbox", { name: "Note" })).toHaveValue("");
     await expect(
       refreshedRow.getByRole("spinbutton", { name: "Quantity" }),
@@ -582,6 +623,7 @@ test.describe("T2 collection shared TableView", () => {
     expect(taskSideEffectRequests).toEqual([]);
     expect(createdRecord.record.collection_id).toBe(createdCollection.collection.id);
     expect(await api.readCollectionSideEffectCounts()).toEqual(before);
+    page.off("request", requestListener);
 
     // The second collection has a separate source identity and must not expose
     // the first collection's record or field value.
@@ -696,6 +738,14 @@ test.describe("T2 collection shared TableView", () => {
       fieldId: noteField.id,
       op: "set" as const,
     };
+    const tailPatchRequests: CollectionPatchBody[] = [];
+    const tailPatchListener = (request: Request) => {
+      if (isCollectionRecordPatch(request, noteTarget)) {
+        const body = requestBody(request);
+        if (body) tailPatchRequests.push(body);
+      }
+    };
+    page.on("request", tailPatchListener);
     const recoveryResponsePromise = page.waitForResponse(
       (response) =>
         response.status() === 200 &&
@@ -710,6 +760,12 @@ test.describe("T2 collection shared TableView", () => {
       409,
     );
     expect(firstSave.request?.expected_revision).toBe(tail.revision);
+    expect(firstSave.request?.change).toEqual({
+      field_id: noteField.id,
+      op: "set",
+      value: "browser stale value",
+    });
+    expect(tailPatchRequests).toHaveLength(1);
     const recoveryResponse = await recoveryResponsePromise;
     const recoveryRecord = (await recoveryResponse.json()) as {
       record: TestCollectionRecord;
@@ -720,15 +776,46 @@ test.describe("T2 collection shared TableView", () => {
     await expect(
       conflictedRow.getByRole("textbox", { name: "Note" }),
     ).toHaveValue("browser stale value");
-    await expect(conflictedRow.getByRole("button", { name: "Save", exact: true })).toBeVisible();
+    const conflictedNoteInput = conflictedRow.getByRole("textbox", { name: "Note" });
+    const conflictedNoteForm = conflictedNoteInput.locator("xpath=ancestor::form");
+    await expect(
+      conflictedNoteForm.getByRole("button", { name: "Save", exact: true }),
+    ).toHaveCount(1);
+    await expect(
+      conflictedNoteForm.getByRole("button", { name: "Save", exact: true }),
+    ).toBeVisible();
+    const conflictBody = (await firstSave.response.json()) as {
+      code?: string;
+      resource_type?: string;
+      resource_id?: string;
+      expected_revision?: number;
+      actual_revision?: number;
+    };
+    expect(conflictBody).toMatchObject({
+      code: "revision_conflict",
+      resource_type: "record",
+      resource_id: tail.id,
+      expected_revision: tail.revision,
+      actual_revision: tail.revision + 1,
+    });
 
     const secondSave = await patchResponse(
       page,
       noteTarget,
-      () => conflictedRow.getByRole("button", { name: "Save", exact: true }).click(),
+      () =>
+        conflictedNoteForm
+          .getByRole("button", { name: "Save", exact: true })
+          .click(),
       200,
     );
     expect(secondSave.request?.expected_revision).toBe(tail.revision + 1);
+    expect(secondSave.request?.change).toEqual({
+      field_id: noteField.id,
+      op: "set",
+      value: "browser stale value",
+    });
+    expect(tailPatchRequests).toHaveLength(2);
+    page.off("request", tailPatchListener);
     await expect(
       (await rowByTitle(page, tail.title)).getByRole("textbox", { name: "Note" }),
     ).toHaveValue("browser stale value");

@@ -440,22 +440,41 @@ export class TestApiClient {
     if (count < 0 || !Number.isInteger(count)) {
       throw new Error(`Invalid collection record count: ${count}`);
     }
+    if (concurrency < 1 || !Number.isInteger(concurrency)) {
+      throw new Error(`Invalid collection record concurrency: ${concurrency}`);
+    }
     if (count === 0) return [];
     const results = new Array<TestCollectionRecord>(count);
     let nextIndex = 0;
+    let failed = false;
+    let firstError: unknown;
     const worker = async () => {
       while (true) {
+        if (failed) return;
         const index = nextIndex++;
         if (index >= count) return;
-        results[index] = await this.createCollectionRecord(
-          collectionId,
-          `${titlePrefix} ${index.toString().padStart(4, "0")}`,
-        );
+        try {
+          results[index] = await this.createCollectionRecord(
+            collectionId,
+            `${titlePrefix} ${index.toString().padStart(4, "0")}`,
+          );
+        } catch (error) {
+          // Stop assigning new records after the first failure, but let every
+          // already-started request settle before the helper rejects. The
+          // caller's afterEach cleanup must run only after no worker can write
+          // another record.
+          if (!failed) {
+            failed = true;
+            firstError = error;
+          }
+          return;
+        }
       }
     };
     await Promise.all(
       Array.from({ length: Math.min(concurrency, count) }, () => worker()),
     );
+    if (failed) throw firstError;
     return results;
   }
 
