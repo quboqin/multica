@@ -485,6 +485,154 @@ process_parent_id() {
   ps -p "$1" -o ppid= 2>/dev/null | tr -d ' ' || true
 }
 
+# Keep ownership failures diagnosable without weakening the ownership contract.
+# Every call creates a new file and records only process identity, listener
+# PIDs, parent links, and coarse resource counters. In particular, never log
+# command lines or the environment: both may contain credentials.
+DIAGNOSTIC_LAST_OUTPUT=""
+DIAGNOSTIC_LAST_STATUS=0
+WEB_OWNERSHIP_DIAGNOSTIC_SEQ=0
+
+diagnostic_compact() {
+  printf '%s' "$1" \
+    | tr '\r\n\t' '   ' \
+    | sed 's/[[:space:]][[:space:]]*/ /g' \
+    | cut -c1-512
+}
+
+diagnostic_query() {
+  local log=$1 key=$2 output status
+  shift 2
+  set +e
+  output="$("$@" 2>&1)"
+  status=$?
+  set -e
+  output="$(diagnostic_compact "$output")"
+  DIAGNOSTIC_LAST_OUTPUT="$output"
+  DIAGNOSTIC_LAST_STATUS=$status
+  printf 'query.%s.status=%s\n' "$key" "$status" >> "$log"
+  if [ "$status" -eq 0 ]; then
+    [ -n "$output" ] && printf 'query.%s.value=%s\n' "$key" "$output" >> "$log"
+  elif [ -n "$output" ]; then
+    printf 'query.%s.error=%s\n' "$key" "$output" >> "$log"
+  fi
+  return 0
+}
+
+diagnostic_log_process() {
+  local log=$1 role=$2 pid=$3 parent chain depth parent_output
+  [ -n "$pid" ] || {
+    printf 'process.%s.present=0\n' "$role" >> "$log"
+    return 0
+  }
+  printf 'process.%s.present=1\nprocess.%s.pid=%s\n' "$role" "$role" "$pid" >> "$log"
+  set +e
+  kill -0 "$pid" 2>/dev/null
+  local live_status=$?
+  set -e
+  printf 'process.%s.live=%s\n' "$role" "$([ "$live_status" -eq 0 ] && printf 1 || printf 0)" >> "$log"
+  diagnostic_query "$log" "$role.ps" ps -p "$pid" -o pid= -o ppid= -o pgid= -o rss= -o comm=
+  diagnostic_query "$log" "$role.session" ps -p "$pid" -o sess=
+  if [ "$DIAGNOSTIC_LAST_STATUS" -ne 0 ]; then
+    diagnostic_query "$log" "$role.session_fallback" ps -p "$pid" -o sid=
+  fi
+  diagnostic_query "$log" "$role.start" ps -p "$pid" -o lstart=
+
+  if [ -e "/proc/$pid/cwd" ]; then
+    diagnostic_query "$log" "$role.cwd" readlink -e "/proc/$pid/cwd"
+    diagnostic_query "$log" "$role.exe" readlink -e "/proc/$pid/exe"
+  elif command -v lsof >/dev/null 2>&1; then
+    diagnostic_query "$log" "$role.cwd" lsof -nP -a -p "$pid" -d cwd -Fn
+    diagnostic_query "$log" "$role.exe" lsof -nP -a -p "$pid" -d txt -Fn
+  else
+    printf 'query.%s.cwd.status=127\nquery.%s.cwd.error=lsof unavailable\n' "$role" "$role" >> "$log"
+    printf 'query.%s.exe.status=127\nquery.%s.exe.error=lsof unavailable\n' "$role" "$role" >> "$log"
+  fi
+
+  chain="$pid"
+  parent="$pid"
+  depth=0
+  while [ "$depth" -lt 64 ] && [ "$parent" != 1 ]; do
+    parent_output="$(process_parent_id "$parent" || true)"
+    if [ -z "$parent_output" ]; then
+      chain="$chain->?"
+      printf 'query.parent_chain.%s.status=1\n' "$role" >> "$log"
+      break
+    fi
+    chain="$chain->$parent_output"
+    parent="$parent_output"
+    depth=$((depth + 1))
+  done
+  printf 'parent_chain.%s=%s\n' "$role" "$chain" >> "$log"
+}
+
+diagnostic_log_resources() {
+  local log=$1
+  if [ -r /proc/meminfo ]; then
+    diagnostic_query "$log" resource.memory awk '/^(MemAvailable|SwapFree|SwapTotal):/ {print $1"="$2" "$3}' /proc/meminfo
+  elif command -v vm_stat >/dev/null 2>&1; then
+    diagnostic_query "$log" resource.memory vm_stat
+  else
+    printf 'query.resource.memory.status=127\nquery.resource.memory.error=unavailable\n' >> "$log"
+  fi
+  if [ -r /sys/fs/cgroup/memory.events ]; then
+    diagnostic_query "$log" resource.oom awk '/^oom_kill / {print $0}' /sys/fs/cgroup/memory.events
+  elif [ -r /sys/fs/cgroup/memory/memory.oom_control ]; then
+    diagnostic_query "$log" resource.oom awk '/^oom_kill / {print $0}' /sys/fs/cgroup/memory/memory.oom_control
+  else
+    printf 'query.resource.oom.status=127\nquery.resource.oom.error=unavailable\n' >> "$log"
+  fi
+  if command -v sysctl >/dev/null 2>&1; then
+    diagnostic_query "$log" resource.swap sysctl -n vm.swapusage
+  else
+    printf 'query.resource.swap.status=127\nquery.resource.swap.error=unavailable\n' >> "$log"
+  fi
+  if command -v memory_pressure >/dev/null 2>&1; then
+    diagnostic_query "$log" resource.pressure memory_pressure -Q
+  else
+    printf 'query.resource.pressure.status=127\nquery.resource.pressure.error=unavailable\n' >> "$log"
+  fi
+}
+
+diagnose_web_ownership_failure() {
+  local reason=$1 port=$2 log launcher recorded listener_pids listener
+  WEB_OWNERSHIP_DIAGNOSTIC_SEQ=$((WEB_OWNERSHIP_DIAGNOSTIC_SEQ + 1))
+  if ! log="$(mktemp "$LOG_DIR/web-ownership.XXXXXX" 2>/dev/null)"; then
+    log="$LOG_DIR/web-ownership-$(now_epoch)-$$-$WEB_OWNERSHIP_DIAGNOSTIC_SEQ.log"
+    : > "$log"
+  fi
+  {
+    printf 'schema=web-ownership-diagnostic.v1\n'
+    printf 'event=ownership_check_failed\nreason=%s\ncomponent=web\nport=%s\n' "$reason" "$port"
+    printf 'time=%s\n' "$(now_iso)"
+    printf 'environment=%s\n' "${NAME:-unknown}"
+    printf 'source_sha=%s\n' "$(git -C "${DIR:-$REPO_ROOT}" rev-parse HEAD 2>/dev/null || printf unknown)"
+  } >> "$log"
+
+  launcher="$(cat "$(pid_file web)" 2>/dev/null || true)"
+  recorded="$(cat "$(listener_pid_file web)" 2>/dev/null || true)"
+  printf 'launcher.recorded_pid=%s\nlistener.recorded_pid=%s\n' "${launcher:-unknown}" "${recorded:-unknown}" >> "$log"
+
+  diagnostic_query "$log" port.listeners lsof -nP -iTCP:"$port" -sTCP:LISTEN -t
+  if [ "$DIAGNOSTIC_LAST_STATUS" -eq 0 ]; then
+    listener_pids="$DIAGNOSTIC_LAST_OUTPUT"
+  else
+    listener_pids=""
+  fi
+  listener="$(printf '%s\n' "$listener_pids" | awk '{print $1}')"
+  printf 'port.requested=%s\nport.listeners=%s\n' "$port" "${listener_pids:-none}" >> "$log"
+  if [ -n "$recorded" ] && [ -n "$listener" ] && [ "$recorded" != "$listener" ]; then
+    printf 'listener.replaced=1\n' >> "$log"
+  else
+    printf 'listener.replaced=0\n' >> "$log"
+  fi
+
+  diagnostic_log_process "$log" launcher "$launcher"
+  diagnostic_log_process "$log" listener "$listener"
+  diagnostic_log_resources "$log"
+  printf '%s\n' "$log"
+}
+
 # Package runners may put a descendant in a nested process group (for example,
 # Turbo does this before Next binds its port). Follow PPIDs so ownership still
 # comes from the launcher tree instead of accepting a weaker command/user match.
@@ -615,6 +763,7 @@ start_web() {
     if curl -sf --max-time 15 "http://localhost:${FRONTEND_PORT}" >/dev/null 2>&1; then
       listener="$(record_component_listener web "$FRONTEND_PORT" || true)"
       if [ -z "$listener" ]; then
+        diagnose_web_ownership_failure listener_not_owned "$FRONTEND_PORT" >/dev/null || true
         stop_component web
         die "Web on :$FRONTEND_PORT is not descended from the process this environment launched."
       fi
