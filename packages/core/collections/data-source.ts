@@ -30,6 +30,29 @@ function fieldKind(type: string): DataSourceField<CollectionRecord>["kind"] {
   }
 }
 
+function isValidFieldChange(
+  field: DataSourceField<CollectionRecord>,
+  change: CollectionTableCommand["change"],
+): boolean {
+  if (change.op === "clear") {
+    return (
+      field.kind === "text" ||
+      field.kind === "number" ||
+      field.kind === "checkbox"
+    );
+  }
+  switch (field.kind) {
+    case "text":
+      return typeof change.value === "string";
+    case "number":
+      return typeof change.value === "number" && Number.isFinite(change.value);
+    case "checkbox":
+      return typeof change.value === "boolean";
+    default:
+      return false;
+  }
+}
+
 export function createCollectionRecordDataSource(options: {
   detail: CollectionDetail;
   read: (
@@ -64,9 +87,8 @@ export function createCollectionRecordDataSource(options: {
         value: (record) => record.fields[field.id],
         sortable: false,
         groupable: false,
-        // T2a exposes the initial directory but keeps custom values read-only.
-        canSet: () => false,
-        canClear: () => false,
+        canSet: () => writable && fieldKind(field.type) !== "readonly",
+        canClear: () => writable && fieldKind(field.type) !== "readonly",
       }),
     ),
   ];
@@ -94,7 +116,14 @@ export function createCollectionRecordDataSource(options: {
         metadata: {},
       })),
     execute: async ({ row, fieldId, change }) => {
-      if (!writable || !options.execute || fieldId !== "title" || change.op !== "set" || typeof change.value !== "string") {
+      const field = fields.find((candidate) => candidate.id === fieldId);
+      if (
+        !writable ||
+        !options.execute ||
+        !field ||
+        !isValidFieldChange(field, change) ||
+        (fieldId === "title" && change.op !== "set")
+      ) {
         return { status: "failed", error: new Error("This field is read-only") };
       }
       try {

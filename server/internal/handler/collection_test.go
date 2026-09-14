@@ -9,8 +9,10 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/multica-ai/multica/server/internal/analytics"
+	"github.com/multica-ai/multica/server/internal/events"
 	"github.com/multica-ai/multica/server/internal/featureflags"
 	obsmetrics "github.com/multica-ai/multica/server/internal/metrics"
+	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
 type collectionCaptureSpy struct{ names []string }
@@ -95,12 +97,15 @@ func TestCollectionT2a_CreateReplayRecordCASAndIsolation(t *testing.T) {
 	}
 	withFeatureFlag(t, testHandler, featureflags.CortexCollections, true)
 	cleanupTestCollections(t)
-	previousMetrics, previousAnalytics := testHandler.Metrics, testHandler.Analytics
+	previousMetrics, previousAnalytics, previousBus := testHandler.Metrics, testHandler.Analytics, testHandler.Bus
 	metrics := obsmetrics.NewBusinessMetrics()
 	analyticsSpy := &collectionCaptureSpy{}
-	testHandler.Metrics, testHandler.Analytics = metrics, analyticsSpy
+	eventBus := events.New()
+	published := make([]events.Event, 0)
+	eventBus.SubscribeAll(func(event events.Event) { published = append(published, event) })
+	testHandler.Metrics, testHandler.Analytics, testHandler.Bus = metrics, analyticsSpy, eventBus
 	t.Cleanup(func() {
-		testHandler.Metrics, testHandler.Analytics = previousMetrics, previousAnalytics
+		testHandler.Metrics, testHandler.Analytics, testHandler.Bus = previousMetrics, previousAnalytics, previousBus
 	})
 
 	var issuesBefore, tasksBefore, inboxBefore int
@@ -138,6 +143,7 @@ func TestCollectionT2a_CreateReplayRecordCASAndIsolation(t *testing.T) {
 	if got := collectionMetricValue(t, metrics, "multica_collection_created_total"); got != 1 {
 		t.Fatalf("collection metric after success and replay = %v, want 1", got)
 	}
+	otherCollection := createCollectionForTest(t, "66666666-6666-4666-8666-666666666666")
 
 	fields := map[string]any{
 		collection.Fields[0].ID: "",
@@ -212,11 +218,124 @@ func TestCollectionT2a_CreateReplayRecordCASAndIsolation(t *testing.T) {
 	if conflict.Code != http.StatusConflict {
 		t.Fatalf("stale update: got %d: %s", conflict.Code, conflict.Body.String())
 	}
-	if got := collectionMetricValue(t, metrics, "multica_record_updated_total"); got != 1 {
-		t.Fatalf("update metric after invalid requests, success, and conflict = %v, want 1", got)
+
+	for name, change := range map[string]map[string]any{
+		"null":        {"field_id": collection.Fields[0].ID, "op": "set", "value": nil},
+		"wrong type":  {"field_id": collection.Fields[1].ID, "op": "set", "value": "0"},
+		"clear value": {"field_id": collection.Fields[2].ID, "op": "clear", "value": nil},
+		"unknown":     {"field_id": "99999999-9999-4999-8999-999999999999", "op": "set", "value": "x"},
+		"cross collection": {
+			"field_id": otherCollection.Fields[0].ID,
+			"op":       "set",
+			"value":    "x",
+		},
+	} {
+		t.Run("reject custom field "+name, func(t *testing.T) {
+			invalid := httptest.NewRecorder()
+			testHandler.UpdateCollectionRecord(invalid, collectionRequest(http.MethodPatch, "/api/collections/records/record", map[string]any{
+				"expected_revision": int64(2),
+				"change":            change,
+			}, map[string]string{"collectionId": collection.Collection.ID, "recordId": created.Record.ID}))
+			if invalid.Code != http.StatusBadRequest {
+				t.Fatalf("invalid custom field: got %d: %s", invalid.Code, invalid.Body.String())
+			}
+		})
+	}
+
+	revision := int64(2)
+	for _, change := range []map[string]any{
+		{"field_id": collection.Fields[0].ID, "op": "set", "value": ""},
+		{"field_id": collection.Fields[1].ID, "op": "set", "value": 0},
+		{"field_id": collection.Fields[2].ID, "op": "set", "value": false},
+		{"field_id": collection.Fields[0].ID, "op": "clear"},
+		{"field_id": collection.Fields[1].ID, "op": "clear"},
+		{"field_id": collection.Fields[2].ID, "op": "clear"},
+	} {
+		custom := httptest.NewRecorder()
+		testHandler.UpdateCollectionRecord(custom, collectionRequest(http.MethodPatch, "/api/collections/records/record", map[string]any{
+			"expected_revision": revision,
+			"change":            change,
+		}, map[string]string{"collectionId": collection.Collection.ID, "recordId": created.Record.ID}))
+		if custom.Code != http.StatusOK {
+			t.Fatalf("custom field update: got %d: %s", custom.Code, custom.Body.String())
+		}
+		var response struct {
+			Record CollectionRecordResponse `json:"record"`
+		}
+		if err := json.NewDecoder(custom.Body).Decode(&response); err != nil {
+			t.Fatal(err)
+		}
+		revision++
+		if response.Record.Revision != revision {
+			t.Fatalf("custom field revision = %d, want %d", response.Record.Revision, revision)
+		}
+		created.Record = response.Record
+	}
+	stored = nil
+	if err := json.Unmarshal(created.Record.Fields, &stored); err != nil {
+		t.Fatal(err)
+	}
+	if len(stored) != 0 {
+		t.Fatalf("custom set/clear result mismatch: %#v", stored)
+	}
+	staleCustom := httptest.NewRecorder()
+	testHandler.UpdateCollectionRecord(staleCustom, collectionRequest(http.MethodPatch, "/api/collections/records/record", map[string]any{
+		"expected_revision": revision - 1,
+		"change":            map[string]any{"field_id": collection.Fields[1].ID, "op": "set", "value": 99},
+	}, map[string]string{"collectionId": collection.Collection.ID, "recordId": created.Record.ID}))
+	if staleCustom.Code != http.StatusConflict {
+		t.Fatalf("stale custom update: got %d: %s", staleCustom.Code, staleCustom.Body.String())
+	}
+	reloaded := httptest.NewRecorder()
+	testHandler.GetCollectionRecord(reloaded, collectionRequest(http.MethodGet, "/api/collections/records/record", nil, map[string]string{"collectionId": collection.Collection.ID, "recordId": created.Record.ID}))
+	if reloaded.Code != http.StatusOK {
+		t.Fatalf("reload custom fields: got %d: %s", reloaded.Code, reloaded.Body.String())
+	}
+	var reloadedResponse struct {
+		Record CollectionRecordResponse `json:"record"`
+	}
+	if err := json.NewDecoder(reloaded.Body).Decode(&reloadedResponse); err != nil {
+		t.Fatal(err)
+	}
+	if reloadedResponse.Record.Revision != revision || string(reloadedResponse.Record.Fields) != string(created.Record.Fields) {
+		t.Fatalf("reloaded record mismatch: got %+v want revision=%d fields=%s", reloadedResponse.Record, revision, created.Record.Fields)
+	}
+	if got := collectionMetricValue(t, metrics, "multica_record_updated_total"); got != 7 {
+		t.Fatalf("update metric after invalid requests, successes, and conflict = %v, want 7", got)
 	}
 	if len(analyticsSpy.names) != 0 {
 		t.Fatalf("metrics-only collection events reached external analytics: %v", analyticsSpy.names)
+	}
+	eventCounts := map[string]int{}
+	for _, event := range published {
+		eventCounts[event.Type]++
+		if event.WorkspaceID != testWorkspaceID {
+			t.Fatalf("event routed to workspace %q", event.WorkspaceID)
+		}
+		if event.Type == protocol.EventRecordUpdated {
+			payload, ok := event.Payload.(map[string]any)
+			if !ok || len(payload) != 3 || payload["collection_id"] != collection.Collection.ID || payload["record_id"] != created.Record.ID || payload["revision"] == nil {
+				t.Fatalf("record event leaked or omitted payload fields: %#v", event.Payload)
+			}
+		}
+	}
+	if eventCounts[protocol.EventCollectionCreated] != 2 || eventCounts[protocol.EventRecordCreated] != 1 || eventCounts[protocol.EventRecordUpdated] != 7 {
+		t.Fatalf("unexpected collection event counts: %#v", eventCounts)
+	}
+	var auditCount int
+	var auditLeakedValue bool
+	if err := testPool.QueryRow(context.Background(), `
+		SELECT COUNT(*), COALESCE(bool_or(details ? 'value'), false)
+		FROM activity_log
+		WHERE workspace_id = $1
+		  AND action = 'record_updated'
+		  AND details->>'collection_id' = $2
+		  AND details->>'record_id' = $3
+	`, testWorkspaceID, collection.Collection.ID, created.Record.ID).Scan(&auditCount, &auditLeakedValue); err != nil {
+		t.Fatal(err)
+	}
+	if auditCount != 7 || auditLeakedValue {
+		t.Fatalf("record update audit count/value leakage = %d/%v", auditCount, auditLeakedValue)
 	}
 
 	otherWorkspace := dbfx.Workspace(t, "Collection Other Workspace", "collection-other")

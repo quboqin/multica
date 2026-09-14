@@ -66,8 +66,6 @@ export function collectionDetailOptions(
     },
     enabled: Boolean(workspaceId && workspaceSlug && collectionId),
     staleTime: 30_000,
-    refetchInterval: 30_000,
-    refetchIntervalInBackground: false,
   });
 }
 

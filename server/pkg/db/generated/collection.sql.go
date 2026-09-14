@@ -686,6 +686,55 @@ func (q *Queries) SetCollectionWorkspaceContext(ctx context.Context, setConfig s
 	return err
 }
 
+const updateRecordFieldsCAS = `-- name: UpdateRecordFieldsCAS :one
+UPDATE record
+SET fields = $5, updated_by = $4, revision = revision + 1, updated_at = now()
+WHERE id = $1
+  AND workspace_id = $2
+  AND collection_id = $3
+  AND deleted_at IS NULL
+  AND revision = $6
+RETURNING id, workspace_id, collection_id, title, fields, position, revision, created_by, updated_by, create_request_id, create_fingerprint, deleted_at, created_at, updated_at
+`
+
+type UpdateRecordFieldsCASParams struct {
+	ID           pgtype.UUID `json:"id"`
+	WorkspaceID  pgtype.UUID `json:"workspace_id"`
+	CollectionID pgtype.UUID `json:"collection_id"`
+	UpdatedBy    pgtype.UUID `json:"updated_by"`
+	Fields       []byte      `json:"fields"`
+	Revision     int64       `json:"revision"`
+}
+
+func (q *Queries) UpdateRecordFieldsCAS(ctx context.Context, arg UpdateRecordFieldsCASParams) (Record, error) {
+	row := q.db.QueryRow(ctx, updateRecordFieldsCAS,
+		arg.ID,
+		arg.WorkspaceID,
+		arg.CollectionID,
+		arg.UpdatedBy,
+		arg.Fields,
+		arg.Revision,
+	)
+	var i Record
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.CollectionID,
+		&i.Title,
+		&i.Fields,
+		&i.Position,
+		&i.Revision,
+		&i.CreatedBy,
+		&i.UpdatedBy,
+		&i.CreateRequestID,
+		&i.CreateFingerprint,
+		&i.DeletedAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const updateRecordTitleCAS = `-- name: UpdateRecordTitleCAS :one
 UPDATE record
 SET title = $5, updated_by = $4, revision = revision + 1, updated_at = now()

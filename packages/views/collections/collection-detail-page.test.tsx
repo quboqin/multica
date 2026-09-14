@@ -14,6 +14,7 @@ import type { ApiClient } from "@multica/core/api/client";
 import { collectionKeys } from "@multica/core/collections";
 import {
   isClientWorkspaceAccessAllowed,
+  revokeClientWorkspaceAccess,
   setCurrentWorkspace,
 } from "@multica/core/platform";
 import type { CollectionDetail, CollectionRecord } from "@multica/core/types";
@@ -78,6 +79,24 @@ const detail: CollectionDetail = {
       position: 0,
       revision: 1,
     },
+    {
+      id: "field-amount",
+      workspaceId: "ws-1",
+      collectionId: "collection-1",
+      name: "Amount",
+      type: "number",
+      position: 1,
+      revision: 1,
+    },
+    {
+      id: "field-done",
+      workspaceId: "ws-1",
+      collectionId: "collection-1",
+      name: "Done",
+      type: "checkbox",
+      position: 2,
+      revision: 1,
+    },
   ],
   capabilities: {
     layouts: ["table"],
@@ -137,6 +156,10 @@ describe("CollectionDetailPage", () => {
   beforeEach(() => setCurrentWorkspace("alpha", "ws-1"));
   afterEach(() => {
     cleanup();
+    Object.defineProperty(document, "visibilityState", {
+      configurable: true,
+      value: "visible",
+    });
     setCurrentWorkspace(null, null);
     vi.restoreAllMocks();
   });
@@ -181,11 +204,13 @@ describe("CollectionDetailPage", () => {
 
     const title = await screen.findByRole("textbox", { name: "Title" });
     expect(title).toHaveValue("Original");
-    expect(screen.getByText("Read only note")).toBeInTheDocument();
+    expect(screen.getByRole("textbox", { name: "Note" })).toHaveValue(
+      "Read only note",
+    );
     expect(document.querySelector("[data-source-identity]")).not.toBeNull();
 
     fireEvent.change(title, { target: { value: "Changed" } });
-    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    fireEvent.click(title.closest("form")!.querySelector('button[type="submit"]')!);
 
     await waitFor(() => expect(updateCollectionRecord).toHaveBeenCalledOnce());
     expect(updateCollectionRecord).toHaveBeenCalledWith(
@@ -208,6 +233,178 @@ describe("CollectionDetailPage", () => {
       "alpha",
       expect.any(AbortSignal),
     );
+  });
+
+  it("persists and reloads text, number, checkbox, and clear changes", async () => {
+    let serverRecord: CollectionRecord = {
+      id: "record-1",
+      workspaceId: "ws-1",
+      collectionId: "collection-1",
+      title: "Original",
+      fields: {
+        "field-note": "note",
+        "field-amount": 7,
+        "field-done": true,
+      },
+      position: 0,
+      revision: 1,
+      createdAt: "2026-01-01T00:00:00Z",
+      updatedAt: "2026-01-01T00:00:00Z",
+    };
+    const queryCollectionRecords = vi.fn(async () => ({
+      records: [serverRecord],
+      total: 1,
+      nextCursor: null,
+    }));
+    const updateCollectionRecord = vi.fn(
+      async (
+        _collectionId: string,
+        _recordId: string,
+        input: {
+          expectedRevision: number;
+          change:
+            | { fieldId: string; op: "set"; value: unknown }
+            | { fieldId: string; op: "clear" };
+        },
+      ) => {
+        expect(input.expectedRevision).toBe(serverRecord.revision);
+        const fields = { ...serverRecord.fields };
+        if (input.change.op === "clear") delete fields[input.change.fieldId];
+        else fields[input.change.fieldId] = input.change.value;
+        serverRecord = {
+          ...serverRecord,
+          fields,
+          revision: serverRecord.revision + 1,
+        };
+        return serverRecord;
+      },
+    );
+    setApiInstance({
+      getCollection: vi.fn(async () => detail),
+      queryCollectionRecords,
+      updateCollectionRecord,
+    } as unknown as ApiClient);
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    });
+    authorizeWorkspace(queryClient);
+    const view = renderWithI18n(
+      <QueryClientProvider client={queryClient}>
+        <CollectionDetailPage collectionId="collection-1" />
+      </QueryClientProvider>,
+    );
+
+    const submitField = async (name: string, value: string, revision: number) => {
+      const input = await screen.findByRole("textbox", { name });
+      fireEvent.change(input, { target: { value } });
+      fireEvent.click(input.closest("form")!.querySelector('button[type="submit"]')!);
+      await waitFor(() => expect(serverRecord.revision).toBe(revision));
+      await waitFor(() => expect(queryCollectionRecords.mock.calls.length).toBeGreaterThanOrEqual(revision));
+    };
+
+    await submitField("Note", "", 2);
+    const amount = screen.getByRole("spinbutton", { name: "Amount" });
+    fireEvent.change(amount, { target: { value: "0" } });
+    fireEvent.click(amount.closest("form")!.querySelector('button[type="submit"]')!);
+    await waitFor(() => expect(serverRecord.revision).toBe(3));
+    await waitFor(() => expect(queryCollectionRecords.mock.calls.length).toBeGreaterThanOrEqual(3));
+    await waitFor(() => expect(screen.getByRole("checkbox", { name: "Done" })).toBeEnabled());
+    fireEvent.click(screen.getByRole("checkbox", { name: "Done" }));
+    await waitFor(() => expect(serverRecord.revision).toBe(4));
+    await waitFor(() => expect(queryCollectionRecords.mock.calls.length).toBeGreaterThanOrEqual(4));
+
+    const note = screen.getByRole("textbox", { name: "Note" });
+    fireEvent.click(note.closest("form")!.querySelector('button[type="button"]')!);
+    await waitFor(() => expect(serverRecord.revision).toBe(5));
+    await waitFor(() =>
+      expect(queryCollectionRecords.mock.calls.length).toBeGreaterThanOrEqual(5),
+    );
+    const currentAmount = screen.getByRole("spinbutton", { name: "Amount" });
+    fireEvent.click(
+      currentAmount.closest("form")!.querySelector('button[type="button"]')!,
+    );
+    await waitFor(() => expect(serverRecord.revision).toBe(6));
+    await waitFor(() =>
+      expect(queryCollectionRecords.mock.calls.length).toBeGreaterThanOrEqual(6),
+    );
+    const done = screen.getByRole("checkbox", { name: "Done" });
+    fireEvent.click(done.closest("div")!.querySelector("button")!);
+    await waitFor(() => expect(serverRecord.revision).toBe(7));
+    expect(serverRecord.fields).toEqual({});
+    expect(updateCollectionRecord.mock.calls.map((call) => call[2])).toEqual([
+      { expectedRevision: 1, change: { fieldId: "field-note", op: "set", value: "" } },
+      { expectedRevision: 2, change: { fieldId: "field-amount", op: "set", value: 0 } },
+      { expectedRevision: 3, change: { fieldId: "field-done", op: "set", value: false } },
+      { expectedRevision: 4, change: { fieldId: "field-note", op: "clear" } },
+      { expectedRevision: 5, change: { fieldId: "field-amount", op: "clear" } },
+      { expectedRevision: 6, change: { fieldId: "field-done", op: "clear" } },
+    ]);
+
+    view.unmount();
+    const remountClient = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    });
+    authorizeWorkspace(remountClient);
+    renderWithI18n(
+      <QueryClientProvider client={remountClient}>
+        <CollectionDetailPage collectionId="collection-1" />
+      </QueryClientProvider>,
+    );
+    expect(await screen.findByRole("spinbutton", { name: "Amount" })).toHaveValue(null);
+    expect(screen.getByRole("checkbox", { name: "Done" })).not.toBeChecked();
+    expect(screen.getByRole("textbox", { name: "Note" })).toHaveValue("");
+  });
+
+  it("polls every 30 seconds only while visible and refreshes on visibility recovery", async () => {
+    const serverRecord = createdRecord("collection-1");
+    setApiInstance({
+      getCollection: vi.fn(async () => detail),
+      queryCollectionRecords: vi.fn(async () => ({
+        records: [serverRecord],
+        total: 1,
+        nextCursor: null,
+      })),
+    } as unknown as ApiClient);
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    });
+    authorizeWorkspace(queryClient);
+    const intervalSpy = vi.spyOn(window, "setInterval");
+    const invalidateSpy = vi.spyOn(queryClient, "invalidateQueries");
+
+    renderWithI18n(
+      <QueryClientProvider client={queryClient}>
+        <CollectionDetailPage collectionId="collection-1" />
+      </QueryClientProvider>,
+    );
+    await screen.findByRole("textbox", { name: "Title" });
+    expect(intervalSpy).toHaveBeenCalledWith(expect.any(Function), 30_000);
+
+    invalidateSpy.mockClear();
+    Object.defineProperty(document, "visibilityState", {
+      configurable: true,
+      value: "hidden",
+    });
+    window.dispatchEvent(new Event("focus"));
+    expect(invalidateSpy).not.toHaveBeenCalledWith({
+      queryKey: collectionKeys.source("ws-1", "collection-1"),
+    });
+
+    Object.defineProperty(document, "visibilityState", {
+      configurable: true,
+      value: "visible",
+    });
+    document.dispatchEvent(new Event("visibilitychange"));
+    expect(invalidateSpy).toHaveBeenCalledWith({
+      queryKey: collectionKeys.source("ws-1", "collection-1"),
+    });
+
+    invalidateSpy.mockClear();
+    revokeClientWorkspaceAccess(queryClient, "ws-1");
+    window.dispatchEvent(new Event("focus"));
+    expect(invalidateSpy).not.toHaveBeenCalledWith({
+      queryKey: collectionKeys.source("ws-1", "collection-1"),
+    });
   });
 
   it("keeps the title draft when the final CAS result fails", async () => {
@@ -246,7 +443,7 @@ describe("CollectionDetailPage", () => {
 
     const title = await screen.findByRole("textbox", { name: "Title" });
     fireEvent.change(title, { target: { value: "My draft" } });
-    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    fireEvent.click(title.closest("form")!.querySelector('button[type="submit"]')!);
     await waitFor(() => expect(updateCollectionRecord).toHaveBeenCalledOnce());
     fireEvent.change(screen.getByRole("textbox", { name: "Record title" }), {
       target: { value: "Parent redraw during conflict" },
@@ -441,7 +638,12 @@ describe("CollectionDetailPage", () => {
       "My draft",
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    fireEvent.click(
+      screen
+        .getByRole("textbox", { name: "Title" })
+        .closest("form")!
+        .querySelector('button[type="submit"]')!,
+    );
     await waitFor(() => expect(updateCollectionRecord).toHaveBeenCalledOnce());
     expect(updateCollectionRecord.mock.calls[0]?.[2].expectedRevision).toBe(1);
     expect(await screen.findByRole("alert")).toHaveTextContent(
@@ -454,7 +656,12 @@ describe("CollectionDetailPage", () => {
       "My draft",
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    fireEvent.click(
+      screen
+        .getByRole("textbox", { name: "Title" })
+        .closest("form")!
+        .querySelector('button[type="submit"]')!,
+    );
     await waitFor(() => expect(updateCollectionRecord).toHaveBeenCalledTimes(2));
     expect(updateCollectionRecord.mock.calls[1]?.[2].expectedRevision).toBe(2);
     await waitFor(() =>

@@ -140,6 +140,16 @@ WHERE id = $1
   AND revision = $6
 RETURNING *;
 
+-- name: UpdateRecordFieldsCAS :one
+UPDATE record
+SET fields = $5, updated_by = $4, revision = revision + 1, updated_at = now()
+WHERE id = $1
+  AND workspace_id = $2
+  AND collection_id = $3
+  AND deleted_at IS NULL
+  AND revision = $6
+RETURNING *;
+
 -- name: DeleteWorkspaceRecords :exec
 DELETE FROM record WHERE workspace_id = $1;
 

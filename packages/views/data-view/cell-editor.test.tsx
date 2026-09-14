@@ -251,7 +251,7 @@ describe("DataViewCellEditor", () => {
       sortable: false,
       groupable: false,
       canSet: () => true,
-      canClear: () => false,
+      canClear: () => true,
     };
     view.rerender(
       <DataViewCellEditor
@@ -268,5 +268,8 @@ describe("DataViewCellEditor", () => {
       op: "set",
       value: false,
     });
+    fireEvent.click(screen.getByRole("button", { name: "Clear" }));
+    await waitFor(() => expect(execute).toHaveBeenCalledTimes(3));
+    expect(execute.mock.calls[2]?.[0].change).toEqual({ op: "clear" });
   });
 });

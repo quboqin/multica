@@ -167,7 +167,10 @@ function CollectionDetailPageSource({
       },
       execute: detailQuery.data.capabilities.writable
         ? async ({ record, fieldId, change }) => {
-            if (fieldId !== "title" || change.op !== "set") {
+            const wireFieldId = fieldId.startsWith("field:")
+              ? fieldId.slice("field:".length)
+              : fieldId;
+            if (wireFieldId === "title" && change.op !== "set") {
               throw new Error("This field is read-only");
             }
             return updateRecordAsync({
@@ -175,7 +178,10 @@ function CollectionDetailPageSource({
               recordId: record.id,
               input: {
                 expectedRevision: record.revision,
-                change: { fieldId: "title", op: "set", value: String(change.value) },
+                change:
+                  change.op === "clear"
+                    ? { fieldId: wireFieldId, op: "clear" }
+                    : { fieldId: wireFieldId, op: "set", value: change.value },
               },
               workspaceContext: { workspaceId, workspaceSlug },
             });
@@ -236,6 +242,43 @@ function CollectionDetailPageSource({
       mapGroupPage: (page) => page,
     };
   }, [collectionId, source, workspaceId]);
+
+  useEffect(() => {
+    if (!enabled || !source || typeof window === "undefined") return;
+    const workspaceAccessGeneration = captureClientWorkspaceAccessGeneration(
+      queryClient,
+      workspaceId,
+    );
+    const refreshVisibleSource = () => {
+      if (
+        getCurrentWsId() !== workspaceId ||
+        getCurrentSlug() !== workspaceSlug ||
+        !isClientWorkspaceAccessGenerationCurrent(
+          queryClient,
+          workspaceId,
+          workspaceAccessGeneration,
+        ) ||
+        (typeof document !== "undefined" &&
+          document.visibilityState !== "visible")
+      ) {
+        return;
+      }
+      void queryClient.invalidateQueries({
+        queryKey: collectionKeys.source(workspaceId, collectionId),
+      });
+    };
+    const handleVisibility = () => {
+      if (document.visibilityState === "visible") refreshVisibleSource();
+    };
+    const interval = window.setInterval(refreshVisibleSource, 30_000);
+    window.addEventListener("focus", refreshVisibleSource);
+    document.addEventListener("visibilitychange", handleVisibility);
+    return () => {
+      window.clearInterval(interval);
+      window.removeEventListener("focus", refreshVisibleSource);
+      document.removeEventListener("visibilitychange", handleVisibility);
+    };
+  }, [collectionId, enabled, queryClient, source, workspaceId, workspaceSlug]);
 
   const submitRecord = async (event: FormEvent) => {
     event.preventDefault();

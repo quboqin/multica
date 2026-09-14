@@ -91,6 +91,57 @@ func TestDecodeTitleValueDistinguishesNullFromEmptyText(t *testing.T) {
 	}
 }
 
+func TestApplyRecordFieldChangePreservesFalsySetAndClear(t *testing.T) {
+	definitions := []FieldDefinition{
+		{ID: "text", Type: "text"},
+		{ID: "count", Type: "number"},
+		{ID: "done", Type: "checkbox"},
+	}
+	fields := []byte(`{"text":"old","count":7,"done":true}`)
+	for _, change := range []struct {
+		fieldID string
+		op      string
+		value   json.RawMessage
+	}{
+		{fieldID: "text", op: "set", value: json.RawMessage(`""`)},
+		{fieldID: "count", op: "set", value: json.RawMessage(`0`)},
+		{fieldID: "done", op: "set", value: json.RawMessage(`false`)},
+		{fieldID: "text", op: "clear"},
+	} {
+		var err error
+		fields, err = ApplyRecordFieldChange(fields, change.fieldID, change.op, change.value, definitions)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	var values map[string]any
+	if err := json.Unmarshal(fields, &values); err != nil {
+		t.Fatal(err)
+	}
+	if _, exists := values["text"]; exists || values["count"] != float64(0) || values["done"] != false {
+		t.Fatalf("unexpected fields after mutations: %#v", values)
+	}
+}
+
+func TestApplyRecordFieldChangeRejectsInvalidOperations(t *testing.T) {
+	definitions := []FieldDefinition{{ID: "text", Type: "text"}}
+	for _, change := range []struct {
+		fieldID string
+		op      string
+		value   json.RawMessage
+	}{
+		{fieldID: "missing", op: "set", value: json.RawMessage(`"value"`)},
+		{fieldID: "text", op: "set", value: json.RawMessage(`null`)},
+		{fieldID: "text", op: "set", value: json.RawMessage(`1`)},
+		{fieldID: "text", op: "clear", value: json.RawMessage(`null`)},
+		{fieldID: "text", op: "replace", value: json.RawMessage(`"value"`)},
+	} {
+		if _, err := ApplyRecordFieldChange([]byte(`{"text":"old"}`), change.fieldID, change.op, change.value, definitions); err == nil {
+			t.Fatalf("expected rejection for %#v", change)
+		}
+	}
+}
+
 func TestCursorIsBoundToSourceAndLimit(t *testing.T) {
 	encoded := EncodeCursor(PageCursor{Version: 1, WorkspaceID: "ws-a", CollectionID: "c-a", Query: "created_at_asc", Limit: 50, LastCreatedAt: "2026-01-01T00:00:00Z", LastID: "r-a"})
 	if _, err := DecodeCursor(encoded, "ws-a", "c-a", 50); err != nil {

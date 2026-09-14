@@ -126,8 +126,8 @@ describe("useRealtimeSync — ws instance change", () => {
     // (16 workspace-scoped [incl. property definitions] + 6 per-issue
     // prefixes + the workspace working-agents projection + 5 per-chat
     // prefixes + 1 workspaceKeys.list() + 1 cross-workspace inbox unread
-    // summary = 31 calls)
-    expect(invalidateSpy).toHaveBeenCalledTimes(31);
+    // summary + collection list/source recovery = 33 calls)
+    expect(invalidateSpy).toHaveBeenCalledTimes(33);
   });
 
   it("does not re-invalidate when rerendered with the same ws instance", () => {
@@ -164,6 +164,60 @@ describe("useRealtimeSync — ws instance change", () => {
     // A catalog edit made while this client was disconnected is otherwise
     // invisible for the query's whole 5-minute staleTime.
     expect(calls).toContainEqual(issueStatusKeys.all("ws-1"));
+    expect(calls).toContainEqual(collectionKeys.all("ws-1"));
+    expect(calls).toContainEqual(collectionKeys.sources("ws-1"));
+  });
+
+  it("invalidates only the affected collection caches for collection events", () => {
+    const ws = createMockWs();
+    renderHook(() => useRealtimeSync(ws, stores), {
+      wrapper: createWrapper(qc),
+    });
+    const handlers = new Map(
+      vi
+        .mocked(ws.on)
+        .mock.calls.map(([event, handler]) => [
+          event,
+          handler as (payload: unknown) => void,
+        ]),
+    );
+
+    invalidateSpy.mockClear();
+    handlers.get("collection:created")?.({
+      collection_id: "collection-1",
+      revision: 1,
+    });
+    expect(invalidateSpy).toHaveBeenCalledTimes(1);
+    expect(invalidateSpy).toHaveBeenCalledWith({
+      queryKey: collectionKeys.all("ws-1"),
+    });
+
+    invalidateSpy.mockClear();
+    handlers.get("record:updated")?.({
+      collection_id: "collection-1",
+      record_id: "record-1",
+      revision: 2,
+    });
+    expect(invalidateSpy).toHaveBeenCalledTimes(2);
+    expect(invalidateSpy).toHaveBeenCalledWith({
+      queryKey: collectionKeys.rows("ws-1", "collection-1"),
+    });
+    expect(invalidateSpy).toHaveBeenCalledWith({
+      queryKey: collectionKeys.record("ws-1", "collection-1", "record-1"),
+    });
+
+    invalidateSpy.mockClear();
+    handlers.get("record:created")?.({
+      collection_id: "collection-2",
+      record_id: "record-2",
+      revision: 1,
+    });
+    expect(invalidateSpy).toHaveBeenCalledWith({
+      queryKey: collectionKeys.rows("ws-1", "collection-2"),
+    });
+    expect(invalidateSpy).not.toHaveBeenCalledWith({
+      queryKey: collectionKeys.rows("ws-1", "collection-1"),
+    });
   });
 
   it("invalidates agent projections when a daemon changes liveness", () => {

@@ -2,14 +2,17 @@
 
 import { describe, expect, it, vi } from "vitest";
 import type { CollectionDetail, CollectionRecord } from "../types";
-import { createCollectionRecordDataSource } from "./data-source";
+import {
+  createCollectionRecordDataSource,
+  type CollectionRecordExecutor,
+} from "./data-source";
 
 const record: CollectionRecord = {
   id: "record-1",
   workspaceId: "ws-1",
   collectionId: "collection-1",
   title: "Original",
-  fields: { "field-1": "note" },
+  fields: { "field-1": "note", "field-2": 3, "field-3": false },
   position: 0,
   revision: 1,
   createdAt: "2026-01-01T00:00:00Z",
@@ -34,6 +37,24 @@ const detail: CollectionDetail = {
       name: "Note",
       type: "text",
       position: 0,
+      revision: 1,
+    },
+    {
+      id: "field-2",
+      workspaceId: "ws-1",
+      collectionId: "collection-1",
+      name: "Amount",
+      type: "number",
+      position: 1,
+      revision: 1,
+    },
+    {
+      id: "field-3",
+      workspaceId: "ws-1",
+      collectionId: "collection-1",
+      name: "Done",
+      type: "checkbox",
+      position: 2,
       revision: 1,
     },
   ],
@@ -81,22 +102,55 @@ describe("createCollectionRecordDataSource", () => {
     expect(execute).toHaveBeenCalledOnce();
   });
 
-  it("keeps T2a custom fields and missing-executor sources read-only", async () => {
+  it("maps custom field values and delegates typed set and clear commands", async () => {
+    const execute = vi.fn(async (input: Parameters<CollectionRecordExecutor>[0]) => ({
+      ...input.record,
+      revision: input.record.revision + 1,
+    }));
+    const source = createCollectionRecordDataSource({
+      detail,
+      read: async () => ({ records: [], total: 0, nextCursor: null }),
+      execute,
+    });
+    expect(source.fields.map((field) => [field.id, field.kind, field.value(record)])).toEqual([
+      ["title", "text", "Original"],
+      ["field:field-1", "text", "note"],
+      ["field:field-2", "number", 3],
+      ["field:field-3", "checkbox", false],
+    ]);
+    for (const command of [
+      { fieldId: "field:field-1", change: { op: "set" as const, value: "" } },
+      { fieldId: "field:field-2", change: { op: "set" as const, value: 0 } },
+      { fieldId: "field:field-3", change: { op: "set" as const, value: false } },
+      { fieldId: "field:field-1", change: { op: "clear" as const } },
+    ]) {
+      await expect(source.execute({ row: record, ...command })).resolves.toMatchObject({
+        status: "accepted",
+      });
+    }
+    expect(execute).toHaveBeenCalledTimes(4);
+    expect(source.fields[1]?.canSet(record)).toBe(true);
+    expect(source.fields[1]?.canClear(record)).toBe(true);
+  });
+
+  it("rejects invalid custom values and keeps missing-executor sources read-only", async () => {
     const execute = vi.fn();
     const source = createCollectionRecordDataSource({
       detail,
       read: async () => ({ records: [], total: 0, nextCursor: null }),
       execute,
     });
-    const customField = source.fields.find((field) => field.id === "field:field-1");
-    expect(customField?.canSet(record)).toBe(false);
-    await expect(
-      source.execute({
-        row: record,
-        fieldId: "field:field-1",
-        change: { op: "set", value: "changed" },
-      }),
-    ).resolves.toMatchObject({ status: "failed" });
+    for (const command of [
+      { fieldId: "field:field-1", change: { op: "set" as const, value: 42 } },
+      { fieldId: "field:field-2", change: { op: "set" as const, value: Number.NaN } },
+      { fieldId: "field:field-3", change: { op: "set" as const, value: "false" } },
+      { fieldId: "title", change: { op: "clear" as const } },
+      { fieldId: "field:unknown", change: { op: "clear" as const } },
+    ]) {
+      await expect(source.execute({ row: record, ...command })).resolves.toMatchObject({
+        status: "failed",
+      });
+    }
     expect(execute).not.toHaveBeenCalled();
 
     const readonly = createCollectionRecordDataSource({

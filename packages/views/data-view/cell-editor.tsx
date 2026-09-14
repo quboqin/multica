@@ -144,19 +144,33 @@ export function DataViewCellEditor<Row>({
 
   if (field.kind === "checkbox") {
     return (
-      <label>
-        <input
-          aria-label={field.label}
-          type="checkbox"
-          checked={draft === "true"}
-          disabled={!canSet || pending}
-          onChange={(event) => {
-            setDraft(event.currentTarget.checked ? "true" : "false");
-            void commit({ op: "set", value: event.currentTarget.checked });
-          }}
-        />
+      <div>
+        <label>
+          <input
+            aria-label={field.label}
+            type="checkbox"
+            checked={draft === "true"}
+            disabled={!canSet || pending}
+            onChange={(event) => {
+              setDraft(event.currentTarget.checked ? "true" : "false");
+              void commit({ op: "set", value: event.currentTarget.checked });
+            }}
+          />
+        </label>
+        {!hideClearWhenUnavailable || canClear ? (
+          <button
+            type="button"
+            disabled={!canClear || pending}
+            onClick={() => {
+              setDraft("false");
+              void commit({ op: "clear" });
+            }}
+          >
+            {clearLabel}
+          </button>
+        ) : null}
         {error && <span role="alert">{error}</span>}
-      </label>
+      </div>
     );
   }
 

@@ -134,6 +134,54 @@ func DecodeTitleValue(raw json.RawMessage) (string, error) {
 	return value, nil
 }
 
+// ApplyRecordFieldChange validates a single custom-field mutation against the
+// collection schema and returns the complete normalized fields document.
+// A clear removes the key; falsy set values remain distinct from clear.
+func ApplyRecordFieldChange(current []byte, fieldID, op string, raw json.RawMessage, definitions []FieldDefinition) ([]byte, error) {
+	fieldType := ""
+	for _, field := range definitions {
+		if field.ID == fieldID {
+			fieldType = field.Type
+			break
+		}
+	}
+	if fieldType == "" {
+		return nil, fmt.Errorf("unknown field %s", fieldID)
+	}
+	values := make(map[string]any)
+	if len(current) > 0 {
+		if err := json.Unmarshal(current, &values); err != nil {
+			return nil, fmt.Errorf("decode fields: %w", err)
+		}
+	}
+	if values == nil {
+		values = make(map[string]any)
+	}
+	switch op {
+	case "set":
+		value, err := normalizeValue(fieldType, raw)
+		if err != nil {
+			return nil, fmt.Errorf("field %s: %w", fieldID, err)
+		}
+		values[fieldID] = value
+	case "clear":
+		if len(raw) != 0 {
+			return nil, errors.New("clear must not include value")
+		}
+		delete(values, fieldID)
+	default:
+		return nil, errors.New("op must be set or clear")
+	}
+	encoded, err := json.Marshal(values)
+	if err != nil {
+		return nil, fmt.Errorf("encode fields: %w", err)
+	}
+	if len(encoded) > MaxFieldsBytes {
+		return nil, ErrFieldsTooLarge
+	}
+	return encoded, nil
+}
+
 func isJSONNull(raw json.RawMessage) bool {
 	trimmed := strings.TrimSpace(string(raw))
 	return trimmed == "" || trimmed == "null"

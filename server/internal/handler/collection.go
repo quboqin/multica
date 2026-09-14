@@ -21,6 +21,7 @@ import (
 	obsmetrics "github.com/multica-ai/multica/server/internal/metrics"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/dbid"
+	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
 const collectionBodyMaxBytes = 128 * 1024
@@ -377,6 +378,10 @@ func (h *Handler) CreateCollection(w http.ResponseWriter, r *http.Request) {
 	}
 	if !replayed {
 		obsmetrics.RecordEvent(h.Analytics, h.Metrics, analytics.CollectionCreated(uuidToString(ctx.user), uuidToString(ctx.workspace), uuidToString(created.ID)))
+		h.publish(protocol.EventCollectionCreated, uuidToString(ctx.workspace), "member", uuidToString(ctx.user), map[string]any{
+			"collection_id": uuidToString(created.ID),
+			"revision":      created.Revision,
+		})
 	}
 	status := http.StatusCreated
 	if replayed {
@@ -571,6 +576,11 @@ func (h *Handler) CreateCollectionRecord(w http.ResponseWriter, r *http.Request)
 	}
 	if !replayed {
 		obsmetrics.RecordEvent(h.Analytics, h.Metrics, analytics.RecordCreated(uuidToString(ctx.user), uuidToString(ctx.workspace), uuidToString(collectionID), uuidToString(created.ID)))
+		h.publish(protocol.EventRecordCreated, uuidToString(ctx.workspace), "member", uuidToString(ctx.user), map[string]any{
+			"collection_id": uuidToString(collectionID),
+			"record_id":     uuidToString(created.ID),
+			"revision":      created.Revision,
+		})
 	}
 	status := http.StatusCreated
 	if replayed {
@@ -640,23 +650,55 @@ func (h *Handler) UpdateCollectionRecord(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusBadRequest, "expected_revision must be positive")
 		return
 	}
-	if request.Change.FieldID != "title" || request.Change.Op != "set" || len(request.Change.Value) == 0 {
-		writeError(w, http.StatusBadRequest, "T2a only supports setting the title field")
-		return
-	}
-	title, err := collectiondomain.DecodeTitleValue(request.Change.Value)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "title must be text with at most 2048 characters")
-		return
-	}
 	if _, err := ctx.queries.LockCollectionInWorkspace(r.Context(), db.LockCollectionInWorkspaceParams{ID: collectionID, WorkspaceID: ctx.workspace}); err != nil {
 		writeError(w, http.StatusNotFound, "collection not found")
 		return
 	}
-	updated, err := ctx.queries.UpdateRecordTitleCAS(r.Context(), db.UpdateRecordTitleCASParams{
-		ID: recordID, WorkspaceID: ctx.workspace, CollectionID: collectionID, UpdatedBy: ctx.user,
-		Title: title, Revision: request.ExpectedRevision,
-	})
+	var updated db.Record
+	var err error
+	if request.Change.FieldID == "title" {
+		if request.Change.Op != "set" || len(request.Change.Value) == 0 {
+			writeError(w, http.StatusBadRequest, "title only supports set")
+			return
+		}
+		title, decodeErr := collectiondomain.DecodeTitleValue(request.Change.Value)
+		if decodeErr != nil {
+			writeError(w, http.StatusBadRequest, "title must be text with at most 2048 characters")
+			return
+		}
+		updated, err = ctx.queries.UpdateRecordTitleCAS(r.Context(), db.UpdateRecordTitleCASParams{
+			ID: recordID, WorkspaceID: ctx.workspace, CollectionID: collectionID, UpdatedBy: ctx.user,
+			Title: title, Revision: request.ExpectedRevision,
+		})
+	} else {
+		current, currentErr := ctx.queries.GetRecordInCollection(r.Context(), db.GetRecordInCollectionParams{ID: recordID, WorkspaceID: ctx.workspace, CollectionID: collectionID})
+		if errors.Is(currentErr, pgx.ErrNoRows) {
+			writeError(w, http.StatusNotFound, "record not found")
+			return
+		}
+		if currentErr != nil {
+			writeError(w, http.StatusInternalServerError, "failed to load record")
+			return
+		}
+		fields, fieldsErr := ctx.queries.ListCollectionFields(r.Context(), db.ListCollectionFieldsParams{WorkspaceID: ctx.workspace, CollectionID: collectionID})
+		if fieldsErr != nil {
+			writeError(w, http.StatusInternalServerError, "failed to load collection fields")
+			return
+		}
+		encoded, applyErr := collectiondomain.ApplyRecordFieldChange(current.Fields, request.Change.FieldID, request.Change.Op, request.Change.Value, collectionDefinitions(fields))
+		if applyErr != nil {
+			if errors.Is(applyErr, collectiondomain.ErrFieldsTooLarge) {
+				writeErrorCode(w, http.StatusRequestEntityTooLarge, "fields_too_large", applyErr.Error())
+			} else {
+				writeError(w, http.StatusBadRequest, applyErr.Error())
+			}
+			return
+		}
+		updated, err = ctx.queries.UpdateRecordFieldsCAS(r.Context(), db.UpdateRecordFieldsCASParams{
+			ID: recordID, WorkspaceID: ctx.workspace, CollectionID: collectionID, UpdatedBy: ctx.user,
+			Fields: encoded, Revision: request.ExpectedRevision,
+		})
+	}
 	if errors.Is(err, pgx.ErrNoRows) {
 		current, currentErr := ctx.queries.GetRecordInCollection(r.Context(), db.GetRecordInCollectionParams{ID: recordID, WorkspaceID: ctx.workspace, CollectionID: collectionID})
 		if errors.Is(currentErr, pgx.ErrNoRows) {
@@ -674,7 +716,7 @@ func (h *Handler) UpdateCollectionRecord(w http.ResponseWriter, r *http.Request)
 		writeCollectionDatabaseError(w, err, "failed to update record")
 		return
 	}
-	details, _ := json.Marshal(map[string]any{"collection_id": uuidToString(collectionID), "record_id": uuidToString(recordID), "field_id": "title", "from_revision": request.ExpectedRevision, "to_revision": updated.Revision})
+	details, _ := json.Marshal(map[string]any{"collection_id": uuidToString(collectionID), "record_id": uuidToString(recordID), "field_id": request.Change.FieldID, "from_revision": request.ExpectedRevision, "to_revision": updated.Revision})
 	if _, err := ctx.queries.CreateActivity(r.Context(), db.CreateActivityParams{WorkspaceID: ctx.workspace, ActorType: pgtype.Text{String: "member", Valid: true}, ActorID: ctx.user, Action: "record_updated", Details: details, ID: dbid.NewV7()}); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to audit record update")
 		return
@@ -684,6 +726,11 @@ func (h *Handler) UpdateCollectionRecord(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	obsmetrics.RecordEvent(h.Analytics, h.Metrics, analytics.RecordUpdated(uuidToString(ctx.user), uuidToString(ctx.workspace), uuidToString(collectionID), uuidToString(recordID)))
+	h.publish(protocol.EventRecordUpdated, uuidToString(ctx.workspace), "member", uuidToString(ctx.user), map[string]any{
+		"collection_id": uuidToString(collectionID),
+		"record_id":     uuidToString(recordID),
+		"revision":      updated.Revision,
+	})
 	writeJSON(w, http.StatusOK, map[string]any{"record": collectionRecordToResponse(updated)})
 }
 
