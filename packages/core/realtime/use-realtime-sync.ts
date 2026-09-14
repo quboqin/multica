@@ -1339,10 +1339,13 @@ export function useRealtimeSync(
     });
 
     const unsubMemberAdded = ws.on("member:added", (p) => {
-      const { member, workspace_id, workspace_name } = p as MemberAddedPayload;
+      const { member, workspace_name } = p as MemberAddedPayload;
       const myUserId = authStore.getState().user?.id;
       if (member.user_id === myUserId) {
-        restoreClientWorkspaceAccess(qc, workspace_id);
+        // The server's event payload carries the workspace identity on the
+        // member object. Reading a top-level workspace_id leaves the revoked
+        // marker installed after a user is invited back into the workspace.
+        restoreClientWorkspaceAccess(qc, member.workspace_id);
         qc.invalidateQueries({ queryKey: workspaceKeys.list() });
         qc.invalidateQueries({ queryKey: workspaceKeys.myInvitations() });
         onToast?.(

@@ -270,7 +270,6 @@ export interface MemberUpdatedPayload {
 
 export interface MemberAddedPayload {
   member: MemberWithUser;
-  workspace_id: string;
   workspace_name?: string;
 }
 

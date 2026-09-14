@@ -574,4 +574,50 @@ describe("useRealtimeSync — self member revocation", () => {
       ),
     ).toBe(false);
   });
+
+  it("restores access from the nested workspace id when the current user is re-added", () => {
+    const qc = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    const ws = createMockWs();
+    vi.spyOn(qc, "fetchQuery").mockReturnValue(new Promise(() => {}));
+
+    renderHook(() => useRealtimeSync(ws, createStores()), {
+      wrapper: createWrapper(qc),
+    });
+    const handlers = new Map(
+      vi.mocked(ws.on).mock.calls.map(([event, handler]) => [event, handler]),
+    );
+    const removed = handlers.get("member:removed");
+    const added = handlers.get("member:added");
+    expect(removed).toBeDefined();
+    expect(added).toBeDefined();
+
+    (removed as (payload: unknown) => void)({
+      member_id: "member-1",
+      user_id: "u1",
+      workspace_id: "ws-1",
+    });
+    const revokedGeneration = captureClientWorkspaceAccessGeneration(qc, "ws-1");
+    expect(isClientWorkspaceAccessAllowed(qc, "ws-1")).toBe(false);
+
+    (added as (payload: unknown) => void)({
+      member: {
+        id: "member-2",
+        workspace_id: "ws-1",
+        user_id: "u1",
+        role: "member",
+        created_at: "2026-09-14T00:00:00Z",
+        name: "Current User",
+        email: "current@example.com",
+        avatar_url: null,
+      },
+      workspace_name: "Test workspace",
+    });
+
+    expect(isClientWorkspaceAccessAllowed(qc, "ws-1")).toBe(true);
+    expect(
+      isClientWorkspaceAccessGenerationCurrent(qc, "ws-1", revokedGeneration),
+    ).toBe(false);
+  });
 });
