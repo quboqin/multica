@@ -176,6 +176,20 @@ assert_stop_handles_listener() {
     }
 
     stop_component web > "$out" 2>&1 || fail "$case_name stop failed"
+    if [ "$case_name" = nested ]; then
+      [ "$STOP_COMPONENT_LAST_LAUNCHER" = 100 ] \
+        || fail "$case_name did not retain the non-empty launcher before signaling"
+      while IFS= read -r signal_line; do
+        signal_target="${signal_line#*target=}"
+        case "$signal_target" in
+          -100|420) ;;
+          *) fail "$case_name signalled outside its exact allowlist: ${signal_line}" ;;
+        esac
+      done < "$signals"
+    else
+      [ -z "$STOP_COMPONENT_LAST_LAUNCHER" ] \
+        || fail "$case_name unexpectedly retained a launcher"
+    fi
     if [ -n "$expected_target" ]; then
       require_contains "$signals" "target=$expected_target"
     elif [ -s "$signals" ]; then
@@ -250,7 +264,7 @@ assert_web_start_case() {
         legal-nested:420) printf '310\n' ;;
         recorded-pid:420) printf '999\n' ;;
         foreign-negative-pgid:999) printf -- '-999\n' ;;
-        *) printf '999\n' ;;
+        *) command ps -p "$1" -o pgid= 2>/dev/null | tr -d ' ' ;;
       esac
     }
     process_parent_id() {
@@ -259,6 +273,7 @@ assert_web_start_case() {
         legal-nested:310) cat "$(pid_file web)" ;;
         legal-nested:*) printf '1\n' ;;
         parent-timeout:999) printf '1\n' ;;
+        parent-failure:999) return 7 ;;
         recorded-pid:420) printf '1\n' ;;
         *) printf '1\n' ;;
       esac
@@ -277,6 +292,9 @@ assert_web_start_case() {
         *" -o ppid= "*)
           if [ "$case_name" = parent-timeout ] && [ "$pid" = 999 ]; then
             while :; do :; done
+          fi
+          if [ "$case_name" = parent-failure ] && [ "$pid" = 999 ]; then
+            return 7
           fi
           process_parent_id "$pid"
           ;;
@@ -323,6 +341,13 @@ assert_web_start_case() {
     }
     kill() {
       local signal=$1 target=$2
+      if [ "${DIAGNOSTIC_CLEANUP_ACTIVE:-0}" -eq 1 ]; then
+        case "$target" in
+          -*) command kill "$signal" "$target" 2>/dev/null || true ;;
+          *) command kill "$signal" "$target" 2>/dev/null || true ;;
+        esac
+        return 0
+      fi
       if [ "$signal" = -0 ]; then
         case "$TEST_CASE:$target" in
           launcher-exited:*) return 1 ;;
@@ -347,22 +372,26 @@ assert_web_start_case() {
     sleep() { :; }
     case "$case_name" in
       legal-nested|recorded-pid) TEST_LISTENER=420 ;;
-      multi-listener|timeout|parent-timeout|foreign-negative-pgid|log-create-failure|log-write-failure) TEST_LISTENER=999 ;;
+      multi-listener|timeout|parent-timeout|parent-failure|foreign-negative-pgid|log-create-failure|log-write-failure) TEST_LISTENER=999 ;;
+      foreign-positive) TEST_LISTENER=777 ;;
+      foreign-negative) TEST_LISTENER=-777 ;;
       query-failure|no-listener) TEST_LISTENER= ;;
       *) TEST_LISTENER=999 ;;
     esac
     status=0
-    ( start_web >"$output" 2>&1 ) || status=$?
+    start_web >"$output" 2>&1 || status=$?
     if [ "$status" -eq 0 ]; then
       [ ! -s "$signals" ] || {
         echo "start_web sent a signal before the assertion" >&2
         exit 1
       }
     fi
-    printf 'status=%s\n' "$status" > "$state_dir/result"
+    printf 'status=%s\nlauncher=%s\n' "$status" \
+      "${STOP_COMPONENT_LAST_LAUNCHER:-}" > "$state_dir/result"
   )
   local status
   status="$(sed -n 's/^status=//p' "$state_dir/result")"
+  launcher_pid="$(sed -n 's/^launcher=//p' "$state_dir/result")"
   chmod u+rwx "$state_dir/logs"
   ended_epoch="$(date +%s)"
   elapsed=$((ended_epoch - started_epoch))
@@ -385,7 +414,6 @@ assert_web_start_case() {
     fi
     [ ! -f "$state_dir/web.listener.pid" ] \
       || fail "$case_name retained a listener registration after stop"
-    launcher_pid="$(cat "$state_dir/web.pid" 2>/dev/null || true)"
     if [ "$case_name" = log-create-failure ] || [ "$case_name" = log-write-failure ]; then
       set -- "$state_dir/logs"/web-ownership.*
       if [ "$case_name" = log-create-failure ]; then
@@ -400,7 +428,6 @@ assert_web_start_case() {
     fi
     set -- "$state_dir/logs"/web-ownership.*
     [ "$#" -eq 1 ] || fail "$case_name did not retain exactly one independent diagnostic log"
-    launcher_pid="$(sed -n 's/^launcher.recorded_pid=//p' "$1")"
     require_contains "$1" "$expected_log"
     if [ "$case_name" != timeout ] && [ "$case_name" != no-listener ]; then
       require_contains "$1" "query.port.listeners.stderr=present"
@@ -424,6 +451,20 @@ assert_web_start_case() {
         fail "$case_name parsed a partial PID as an additional listener"
       fi
     fi
+    case "$case_name" in
+      query-failure|timeout|parent-failure|foreign-negative)
+        require_contains "$1" "port.listener.status=unknown"
+        require_contains "$1" "port.listeners=unknown"
+        require_contains "$1" "port.listener.count=unknown"
+        require_contains "$1" "port.listener.total=unknown"
+        ! grep -Fq 'port.listener.1.pid=' "$1" \
+          || fail "$case_name exposed an untrusted listener PID"
+        ;;
+      no-listener)
+        require_contains "$1" "port.listener.status=known"
+        require_contains "$1" "port.listener.total=0"
+        ;;
+    esac
     require_contains "$1" "event=ownership_check_failed"
     diag_line="$(grep -n '^diagnostic-query$' "$events" | cut -d: -f1 | head -1 || true)"
     stop_line="$(grep -n '^signal=-TERM target=-' "$events" | cut -d: -f1 | head -1 || true)"
@@ -438,6 +479,10 @@ assert_web_start_case() {
     if [ "$case_name" = parent-timeout ]; then
       [ "$elapsed" -le 5 ] || fail "$case_name blocked for ${elapsed}s beyond the diagnostic budget"
       require_contains "$1" "query.parent.listener.999.error=timeout"
+    fi
+    if [ "$case_name" = parent-failure ]; then
+      require_contains "$1" "query.parent.listener.999.error=query_failed"
+      require_contains "$1" "parent_chain.listener=999->?"
     fi
     if [ -s "$signals" ]; then
       while IFS= read -r signal_line; do
@@ -504,6 +549,169 @@ assert_diagnostic_logs_are_unique() (
   for log in "$@"; do
     require_contains "$log" "event=ownership_check_failed"
   done
+)
+
+assert_diagnostic_enum_resets_between_calls() (
+  # shellcheck disable=SC1090
+  source "$root_dir/scripts/dev-env.sh"
+  STATE_DIR="$tmp_dir/enum-reset"
+  LOG_DIR="$STATE_DIR/logs"
+  mkdir -p "$LOG_DIR"
+  ENUM_MODE=success
+  lsof() {
+    case "$ENUM_MODE:$*" in
+      success:*"-iTCP:13000"*) printf '111\n222\n' ;;
+      failure:*"-iTCP:13000"*) return 7 ;;
+      *) return 1 ;;
+    esac
+  }
+
+  diagnose_web_ownership_failure first 13000 >/dev/null
+  ENUM_MODE=failure
+  diagnose_web_ownership_failure second 13000 >/dev/null
+  set -- "$LOG_DIR"/web-ownership.*
+  [ "$#" -eq 2 ] || fail "consecutive diagnostics did not retain two logs"
+  require_contains "$1" "port.listener.status=known"
+  require_contains "$1" "port.listener.total=2"
+  require_contains "$2" "query.port.listeners.error=command_failed"
+  require_contains "$2" "port.listener.status=unknown"
+  require_contains "$2" "port.listeners=unknown"
+  require_contains "$2" "port.listener.count=unknown"
+  require_contains "$2" "port.listener.total=unknown"
+  ! grep -Fq 'port.listener.1.pid=' "$2" \
+    || fail "failed enumeration reused a PID from the prior call"
+)
+
+assert_capture_failure_reports_unknown() (
+  # shellcheck disable=SC1090
+  source "$root_dir/scripts/dev-env.sh"
+  STATE_DIR="$tmp_dir/capture-failure"
+  LOG_DIR="$STATE_DIR/logs"
+  mkdir -p "$LOG_DIR"
+  # Consume the FIFO normally, then fail the collector after writing its
+  # bounded output. This exercises the same state path as a collector I/O
+  # failure without changing filesystem permissions for the rest of the suite.
+  diagnostic_capture_stream() {
+    local output=$1 metadata=$2
+    cat > "$output"
+    printf 'bytes=4\ntruncated=0\n' > "$metadata"
+    return 7
+  }
+  lsof() {
+    case " $* " in
+      *" -iTCP:13000 "*) printf '333\n' ;;
+      *) return 1 ;;
+    esac
+  }
+  diagnose_web_ownership_failure capture-failure 13000 >/dev/null
+  set -- "$LOG_DIR"/web-ownership.*
+  [ "$#" -eq 1 ] || fail "collector failure did not retain one log"
+  require_contains "$1" "query.port.listeners.error=capture_failed"
+  require_contains "$1" "port.listener.status=unknown"
+  require_contains "$1" "port.listeners=unknown"
+  require_contains "$1" "port.listener.total=unknown"
+  ! grep -Fq 'port.listener.1.pid=' "$1" \
+    || fail "collector failure exposed a listener PID"
+)
+
+assert_diagnostic_budget_cleans_pipe_holder() (
+  # shellcheck disable=SC1090
+  source "$root_dir/scripts/dev-env.sh"
+  STATE_DIR="$tmp_dir/pipe-holder"
+  LOG_DIR="$STATE_DIR/logs"
+  mkdir -p "$LOG_DIR"
+  DIAGNOSTIC_TOTAL_TIMEOUT_SECONDS=1
+  DIAGNOSTIC_QUERY_TIMEOUT_SECONDS=1
+  holder_script="$STATE_DIR/hold-pipe.sh"
+  cat > "$holder_script" <<'EOF'
+#!/usr/bin/env bash
+sleep 30 &
+printf '%s\n' "$!" > "$PIPE_HOLDER_PID_FILE"
+exit 0
+EOF
+  chmod +x "$holder_script"
+  PIPE_HOLDER_PID_FILE="$STATE_DIR/holder.pid"
+  export PIPE_HOLDER_PID_FILE
+  cleanup_pipe_holder() {
+    if [ -s "$PIPE_HOLDER_PID_FILE" ]; then
+      holder_pid="$(cat "$PIPE_HOLDER_PID_FILE")"
+      kill "$holder_pid" 2>/dev/null || true
+    fi
+  }
+  trap cleanup_pipe_holder EXIT
+  lsof() {
+    case " $* " in
+      *" -iTCP:13000 "*)
+        "$holder_script"
+        printf '999\n888\n'
+        ;;
+      *) return 1 ;;
+    esac
+  }
+  started_epoch="$(date +%s)"
+  diagnose_web_ownership_failure pipe-holder 13000 >/dev/null
+  elapsed=$(( $(date +%s) - started_epoch ))
+  [ "$elapsed" -le 3 ] \
+    || fail "pipe-holder diagnostic exceeded shared budget: ${elapsed}s"
+  [ -s "$PIPE_HOLDER_PID_FILE" ] || fail "pipe-holder fixture did not start"
+  holder_pid="$(cat "$PIPE_HOLDER_PID_FILE")"
+  if kill -0 "$holder_pid" 2>/dev/null; then
+    kill -KILL "$holder_pid" 2>/dev/null || true
+    fail "pipe-holder descendant survived diagnostic cleanup"
+  fi
+  jobs -pr | grep -q . && fail "diagnostic left a background collector/query job"
+  set -- "$LOG_DIR"/web-ownership.*
+  [ "$#" -eq 1 ] || fail "pipe-holder diagnostic did not retain one log"
+  require_contains "$1" "port.listener.total=unknown"
+  require_contains "$1" "query.listener.ps.error=timeout"
+)
+
+assert_real_nested_ppid_chain() (
+  # shellcheck disable=SC1090
+  source "$root_dir/scripts/dev-env.sh"
+  state="$tmp_dir/real-ppid"
+  mkdir -p "$state"
+  cleanup_real_nested() {
+    for pid_file in "$state/listener" "$state/middle"; do
+      if [ -s "$pid_file" ]; then
+        pid="$(cat "$pid_file")"
+        kill "$pid" 2>/dev/null || true
+      fi
+    done
+    if [ -n "${launcher:-}" ]; then
+      kill "$launcher" 2>/dev/null || true
+    fi
+  }
+  trap cleanup_real_nested EXIT
+  (
+    set -m
+    (
+      sleep 30 &
+      printf '%s\n' "$!" > "$state/listener"
+      wait "$!"
+    ) &
+    printf '%s\n' "$!" > "$state/middle"
+    wait "$!"
+  ) &
+  launcher=$!
+  i=0
+  while [ ! -s "$state/listener" ] && [ "$i" -lt 20 ]; do
+    sleep 0.05
+    i=$((i + 1))
+  done
+  [ -s "$state/listener" ] || fail "real nested PPID fixture did not start"
+  listener="$(cat "$state/listener")"
+  middle="$(cat "$state/middle")"
+  [ "$(process_parent_id "$listener")" = "$middle" ] \
+    || fail "listener did not have the real intermediate PPID"
+  [ "$(process_parent_id "$middle")" = "$launcher" ] \
+    || fail "intermediate process did not have the real launcher PPID"
+  [ "$(process_group_id "$listener")" != "$(process_group_id "$launcher")" ] \
+    || fail "real nested fixture did not use a distinct process group"
+  process_is_descendant_of "$listener" "$launcher" \
+    || fail "real nested listener was not found below its launcher"
+  kill "$listener" "$middle" "$launcher" 2>/dev/null || true
+  wait "$launcher" 2>/dev/null || true
 )
 
 # ---------------------------------------------------------------------------
@@ -618,6 +826,7 @@ assert_listener_ownership recorded owned 100 200 200 200
 assert_listener_ownership external external 100 999 999
 assert_nested_listener_is_recorded
 assert_pid_parser_boundaries
+assert_real_nested_ppid_chain
 
 # The added diagnostics are exercised through real start_web, ownership,
 # registration, and stop decisions. Only query/signal primitives are mocked.
@@ -627,6 +836,7 @@ assert_web_start_case foreign-listener 1 "" 'listener.replaced=0'
 assert_web_start_case foreign-negative-pgid 1 "" 'listener.replaced=0'
 assert_web_start_case parent-disconnected 1 "" 'parent_chain.listener=999->1'
 assert_web_start_case parent-timeout 1 "" 'parent_chain.listener=999->?'
+assert_web_start_case parent-failure 1 "" 'parent_chain.listener=999->?'
 assert_web_start_case launcher-exited 1 "" 'process.launcher.live=0'
 assert_web_start_case listener-replaced 1 "" 'listener.replaced=1'
 assert_web_start_case multi-listener 1 "" 'port.listener.2.pid=888'
@@ -634,14 +844,21 @@ assert_web_start_case long-output 1 "" 'port.listener.count=1'
 assert_web_start_case query-failure 1 "" 'query.port.listeners.error=command_failed'
 assert_web_start_case timeout 1 "" 'query.port.listeners.error=timeout'
 assert_web_start_case no-listener 1 "" 'port.listeners=none'
+assert_web_start_case foreign-positive 1 "" 'port.listener.1.pid=777'
+assert_web_start_case foreign-negative 1 "" 'port.listener.status=unknown'
 assert_web_start_case log-create-failure 1 "" ''
 assert_web_start_case log-write-failure 1 "" ''
 assert_diagnostic_logs_are_unique
+assert_diagnostic_enum_resets_between_calls
+assert_capture_failure_reports_unknown
+assert_diagnostic_budget_cleans_pipe_holder
 
 # Stopping first records an owned nested listener before killing the launcher's
 # process group. An unrelated port occupant never receives a signal.
 assert_stop_handles_listener nested 420 310 200 "" 420
 assert_stop_handles_listener external 999 999 1 888
+assert_stop_handles_listener external-positive 777 777 1 888
+assert_stop_handles_listener external-negative 777 777 1 -777
 
 # ---------------------------------------------------------------------------
 # Unknown names and components fail loudly instead of doing something else.
