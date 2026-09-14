@@ -426,6 +426,39 @@ export class TestApiClient {
     return body.record;
   }
 
+  /**
+   * Create a large record set through the real collection API. Keep the
+   * requests bounded rather than issuing an unbounded Promise.all so a bulk
+   * side-effect assertion does not become a connection-flood test.
+   */
+  async createCollectionRecords(
+    collectionId: string,
+    titlePrefix: string,
+    count: number,
+    concurrency = 20,
+  ): Promise<TestCollectionRecord[]> {
+    if (count < 0 || !Number.isInteger(count)) {
+      throw new Error(`Invalid collection record count: ${count}`);
+    }
+    if (count === 0) return [];
+    const results = new Array<TestCollectionRecord>(count);
+    let nextIndex = 0;
+    const worker = async () => {
+      while (true) {
+        const index = nextIndex++;
+        if (index >= count) return;
+        results[index] = await this.createCollectionRecord(
+          collectionId,
+          `${titlePrefix} ${index.toString().padStart(4, "0")}`,
+        );
+      }
+    };
+    await Promise.all(
+      Array.from({ length: Math.min(concurrency, count) }, () => worker()),
+    );
+    return results;
+  }
+
   async updateCollectionRecord(
     collectionId: string,
     recordId: string,
