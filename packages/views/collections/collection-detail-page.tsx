@@ -51,7 +51,9 @@ import { Input } from "@multica/ui/components/ui/input";
 import {
   DataViewCellEditor,
   TableView,
+  dataViewCellEditorIdentity,
   useDataViewController,
+  type DataViewCellEditorState,
   type DataViewQueryBinding,
   type DataViewStructuralRow,
 } from "../data-view";
@@ -60,6 +62,7 @@ import {
   CollectionPageHeader,
   CollectionPageState,
 } from "../layout/collection-page";
+import { useVisibleCollectionRefresh } from "./use-visible-collection-refresh";
 
 type DisplayRecord = {
   kind: "record";
@@ -74,6 +77,12 @@ type CollectionCellContextValue = {
   source: CollectionSource;
   saveLabel: string;
   clearLabel: string;
+  retryLabel: string;
+  editorStates: ReadonlyMap<string, DataViewCellEditorState<CollectionRecord>>;
+  onEditorStateChange: (
+    key: string,
+    state: DataViewCellEditorState<CollectionRecord> | null,
+  ) => void;
 };
 
 const CollectionCellContext = createContext<CollectionCellContextValue | null>(
@@ -88,13 +97,22 @@ function CollectionRecordCell({
   if (!context || row.original.kind !== "record") return null;
   const field = context.source.fields.find((candidate) => candidate.id === column.id);
   if (!field) return null;
+  const sourceRow = row.original.sourceRow;
+  const editorKey = dataViewCellEditorIdentity(
+    context.source,
+    field.id,
+    sourceRow,
+  );
   return (
     <DataViewCellEditor
       source={context.source}
       field={field}
-      row={row.original.sourceRow}
+      row={sourceRow}
+      persistedState={context.editorStates.get(editorKey)}
+      onStateChange={(state) => context.onEditorStateChange(editorKey, state)}
       saveLabel={context.saveLabel}
       clearLabel={context.clearLabel}
+      retryLabel={context.retryLabel}
       hideClearWhenUnavailable
     />
   );
@@ -243,42 +261,12 @@ function CollectionDetailPageSource({
     };
   }, [collectionId, source, workspaceId]);
 
-  useEffect(() => {
-    if (!enabled || !source || typeof window === "undefined") return;
-    const workspaceAccessGeneration = captureClientWorkspaceAccessGeneration(
-      queryClient,
-      workspaceId,
-    );
-    const refreshVisibleSource = () => {
-      if (
-        getCurrentWsId() !== workspaceId ||
-        getCurrentSlug() !== workspaceSlug ||
-        !isClientWorkspaceAccessGenerationCurrent(
-          queryClient,
-          workspaceId,
-          workspaceAccessGeneration,
-        ) ||
-        (typeof document !== "undefined" &&
-          document.visibilityState !== "visible")
-      ) {
-        return;
-      }
-      void queryClient.invalidateQueries({
-        queryKey: collectionKeys.source(workspaceId, collectionId),
-      });
-    };
-    const handleVisibility = () => {
-      if (document.visibilityState === "visible") refreshVisibleSource();
-    };
-    const interval = window.setInterval(refreshVisibleSource, 30_000);
-    window.addEventListener("focus", refreshVisibleSource);
-    document.addEventListener("visibilitychange", handleVisibility);
-    return () => {
-      window.clearInterval(interval);
-      window.removeEventListener("focus", refreshVisibleSource);
-      document.removeEventListener("visibilitychange", handleVisibility);
-    };
-  }, [collectionId, enabled, queryClient, source, workspaceId, workspaceSlug]);
+  useVisibleCollectionRefresh({
+    enabled: enabled && source !== null,
+    workspaceId,
+    workspaceSlug,
+    queryKey: collectionKeys.source(workspaceId, collectionId),
+  });
 
   const submitRecord = async (event: FormEvent) => {
     event.preventDefault();
@@ -406,6 +394,26 @@ function CollectionTableContent({
   setColumnSizing: Dispatch<SetStateAction<ColumnSizingState>>;
 }) {
   const { t } = useT("collections");
+  const [editorStates, setEditorStates] = useState(
+    () => new Map<string, DataViewCellEditorState<CollectionRecord>>(),
+  );
+  const onEditorStateChange = useCallback(
+    (
+      key: string,
+      state: DataViewCellEditorState<CollectionRecord> | null,
+    ) => {
+      setEditorStates((current) => {
+        const existing = current.get(key);
+        if (state === null && existing === undefined) return current;
+        if (state === existing) return current;
+        const next = new Map(current);
+        if (state === null) next.delete(key);
+        else next.set(key, state);
+        return next;
+      });
+    },
+    [],
+  );
   const dataView = useDataViewController({
     binding,
     query: collectionTableQuery,
@@ -437,8 +445,29 @@ function CollectionTableContent({
       source,
       saveLabel: t(($) => $.save),
       clearLabel: t(($) => $.clear),
+      retryLabel: t(($) => $.retry),
+      editorStates,
+      onEditorStateChange,
     }),
-    [source, t],
+    [editorStates, onEditorStateChange, source, t],
+  );
+  const editingKey = useMemo(
+    () =>
+      editorStates.size === 0
+        ? null
+        : JSON.stringify([...editorStates.keys()].sort()),
+    [editorStates],
+  );
+  const refreshFrozenRows = useCallback(
+    (snapshot: CollectionTableRow[], liveRows: CollectionTableRow[]) => {
+      const liveByKey = new Map(liveRows.map((row) => [row.key, row]));
+      return snapshot.map((row) => {
+        if (row.kind !== "record") return row;
+        const live = liveByKey.get(row.key);
+        return live?.kind === "record" ? live : row;
+      });
+    },
+    [],
   );
   const structuralRow = useCallback(
     (row: { original: CollectionTableRow }) => {
@@ -510,6 +539,8 @@ function CollectionTableContent({
             columnSizing={columnSizing}
             onColumnSizingChange={setColumnSizing}
             onReorderColumn={() => {}}
+            editingKey={editingKey}
+            refreshFrozenRows={refreshFrozenRows}
             emptyMessage={t(($) => $.empty)}
             renderStructuralRow={structuralRow}
           />

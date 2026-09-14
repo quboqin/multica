@@ -1,5 +1,6 @@
 /** @vitest-environment jsdom */
 
+import type { PropsWithChildren } from "react";
 import { act, cleanup, fireEvent, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -47,6 +48,7 @@ vi.mock("@multica/core/permissions", () => ({
 
 vi.mock("../navigation", async () => ({
   ...(await vi.importActual<typeof import("../navigation")>("../navigation")),
+  AppLink: ({ children }: PropsWithChildren) => <>{children}</>,
   useNavigation: () => ({ push: mockPush }),
 }));
 
@@ -78,8 +80,52 @@ describe("CollectionsPage", () => {
 
   afterEach(() => {
     cleanup();
+    vi.useRealTimers();
     setCurrentWorkspace(null, null);
     vi.restoreAllMocks();
+  });
+
+  it("recovers a missed collection event on the visible 30-second poll", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    let items = [
+      {
+        id: "collection-1",
+        workspaceId: "ws-1",
+        name: "First collection",
+        revision: 1,
+        createdAt: "2026-01-01T00:00:00Z",
+        updatedAt: "2026-01-01T00:00:00Z",
+      },
+    ];
+    const listCollections = vi.fn(async () => ({
+      collections: items,
+      total: items.length,
+      nextCursor: null,
+    }));
+    setApiInstance({ listCollections } as unknown as ApiClient);
+    const queryClient = makeQueryClient();
+    renderWithI18n(
+      <QueryClientProvider client={queryClient}>
+        <CollectionsPage />
+      </QueryClientProvider>,
+    );
+
+    expect(await screen.findByText("First collection")).toBeInTheDocument();
+    expect(listCollections).toHaveBeenCalledOnce();
+    items = [
+      ...items,
+      {
+        ...items[0]!,
+        id: "collection-2",
+        name: "Missed collection",
+      },
+    ];
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(30_000);
+    });
+    expect(await screen.findByText("Missed collection")).toBeInTheDocument();
+    expect(listCollections).toHaveBeenCalledTimes(2);
   });
 
   it("does not navigate when a create finishes after the page unmounts", async () => {

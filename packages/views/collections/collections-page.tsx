@@ -5,6 +5,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { AlertCircle, Database, TableProperties } from "lucide-react";
 import { useWorkspaceId } from "@multica/core";
 import {
+  collectionKeys,
   collectionListOptions,
   useCreateCollection,
 } from "@multica/core/collections";
@@ -31,6 +32,7 @@ import {
   CollectionPageHeader,
   CollectionPageState,
 } from "../layout/collection-page";
+import { useVisibleCollectionRefresh } from "./use-visible-collection-refresh";
 
 function requestId() {
   return globalThis.crypto.randomUUID();
@@ -56,6 +58,12 @@ export function CollectionsPage() {
   const collections = useQuery({
     ...collectionListOptions(workspaceId, workspaceSlug, { limit: 200 }),
     enabled,
+  });
+  useVisibleCollectionRefresh({
+    enabled,
+    workspaceId,
+    workspaceSlug,
+    queryKey: collectionKeys.all(workspaceId),
   });
   const createCollection = useCreateCollection();
   const [name, setName] = useState("");

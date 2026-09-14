@@ -357,13 +357,14 @@ describe("CollectionDetailPage", () => {
 
   it("polls every 30 seconds only while visible and refreshes on visibility recovery", async () => {
     const serverRecord = createdRecord("collection-1");
+    const queryCollectionRecords = vi.fn(async () => ({
+      records: [serverRecord],
+      total: 1,
+      nextCursor: null,
+    }));
     setApiInstance({
       getCollection: vi.fn(async () => detail),
-      queryCollectionRecords: vi.fn(async () => ({
-        records: [serverRecord],
-        total: 1,
-        nextCursor: null,
-      })),
+      queryCollectionRecords,
     } as unknown as ApiClient);
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
@@ -379,6 +380,18 @@ describe("CollectionDetailPage", () => {
     );
     await screen.findByRole("textbox", { name: "Title" });
     expect(intervalSpy).toHaveBeenCalledWith(expect.any(Function), 30_000);
+    const poll = intervalSpy.mock.calls.find((call) => call[1] === 30_000)?.[0];
+    expect(typeof poll).toBe("function");
+    const readsBeforePoll = queryCollectionRecords.mock.calls.length;
+    await act(async () => {
+      (poll as () => void)();
+      await Promise.resolve();
+    });
+    await waitFor(() =>
+      expect(queryCollectionRecords.mock.calls.length).toBeGreaterThan(
+        readsBeforePoll,
+      ),
+    );
 
     invalidateSpy.mockClear();
     Object.defineProperty(document, "visibilityState", {
@@ -574,6 +587,83 @@ describe("CollectionDetailPage", () => {
     expect(screen.getAllByRole("textbox", { name: "Title" })[1]).toHaveValue(
       "Unsaved draft",
     );
+  });
+
+  it("freezes a dirty record from the tail page across source refresh and failure", async () => {
+    const pagedDetail: CollectionDetail = {
+      ...detail,
+      capabilities: { ...detail.capabilities, maxPageSize: 1 },
+    };
+    const first = createdRecord("collection-1");
+    const second: CollectionRecord = {
+      ...createdRecord("collection-1"),
+      id: "record-201",
+      title: "Tail record",
+      fields: { "field-note": "original second" },
+      position: 200,
+    };
+    const queryCollectionRecords = vi.fn(
+      async (
+        _collectionId: string,
+        page: { cursor?: string | null },
+      ) => ({
+        records: page.cursor === "tail" ? [second] : [first],
+        total: 201,
+        nextCursor: page.cursor === "tail" ? null : "tail",
+      }),
+    );
+    const updateCollectionRecord = vi.fn(
+      async (_collectionId: string, _recordId: string, _input: unknown) => {
+        throw new Error("revision conflict");
+      },
+    );
+    setApiInstance({
+      getCollection: vi.fn(async () => pagedDetail),
+      queryCollectionRecords,
+      updateCollectionRecord,
+    } as unknown as ApiClient);
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    });
+    authorizeWorkspace(queryClient);
+    renderWithI18n(
+      <QueryClientProvider client={queryClient}>
+        <CollectionDetailPage collectionId="collection-1" />
+      </QueryClientProvider>,
+    );
+
+    fireEvent.click(await screen.findByRole("button", { name: "Load more" }));
+    await waitFor(() =>
+      expect(screen.getAllByRole("textbox", { name: "Note" })).toHaveLength(2),
+    );
+    const notes = screen.getAllByRole("textbox", { name: "Note" });
+    fireEvent.change(notes[1]!, {
+      target: { value: "unsaved second page" },
+    });
+
+    const readsBeforeRefresh = queryCollectionRecords.mock.calls.length;
+    window.dispatchEvent(new Event("focus"));
+    await waitFor(() =>
+      expect(queryCollectionRecords.mock.calls.length).toBeGreaterThan(
+        readsBeforeRefresh,
+      ),
+    );
+    expect(screen.getAllByRole("textbox", { name: "Note" })[1]).toHaveValue(
+      "unsaved second page",
+    );
+
+    const tailEditor = screen.getAllByRole("textbox", { name: "Note" })[1]!;
+    fireEvent.submit(tailEditor.closest("form")!);
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "revision conflict",
+    );
+    expect(screen.getAllByRole("textbox", { name: "Note" })[1]).toHaveValue(
+      "unsaved second page",
+    );
+    expect(updateCollectionRecord).toHaveBeenCalledOnce();
+    expect(updateCollectionRecord.mock.calls[0]?.[2]).toMatchObject({
+      expectedRevision: second.revision,
+    });
   });
 
   it("submits the edited revision before rebasing an explicit conflict retry", async () => {
