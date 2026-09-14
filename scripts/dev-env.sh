@@ -489,33 +489,119 @@ process_parent_id() {
 # Every call creates a new file and records only process identity, listener
 # PIDs, parent links, and coarse resource counters. In particular, never log
 # command lines or the environment: both may contain credentials.
-DIAGNOSTIC_LAST_OUTPUT=""
+DIAGNOSTIC_LAST_STDOUT=""
 DIAGNOSTIC_LAST_STATUS=0
+DIAGNOSTIC_LAST_STDERR_PRESENT=0
+DIAGNOSTIC_LAST_TIMED_OUT=0
 WEB_OWNERSHIP_DIAGNOSTIC_SEQ=0
+DIAGNOSTIC_MAX_OUTPUT_BYTES=4096
+DIAGNOSTIC_MAX_VALUE_CHARS=512
+DIAGNOSTIC_MAX_PID_COUNT=64
+DIAGNOSTIC_QUERY_TIMEOUT_SECONDS=2
 
-diagnostic_compact() {
+diagnostic_safe_text() {
+  # Diagnostic values are fixed fields, never command lines or environments.
+  # Strip controls and redact common credential-shaped values before a bounded
+  # value is written to a human-readable log.
   printf '%s' "$1" \
+    | LC_ALL=C tr -d '\000-\010\013-\037\177' \
     | tr '\r\n\t' '   ' \
     | sed 's/[[:space:]][[:space:]]*/ /g' \
-    | cut -c1-512
+    | sed -E \
+        -e 's/(Authorization:[[:space:]]*(Bearer|Basic)[[:space:]]+)[^[:space:]]+/\1[REDACTED]/g' \
+        -e 's/((MULTICA_TOKEN|MULTICA_SERVER_URL|token|TOKEN|password|PASSWORD|secret|SECRET|api[_-]?key|API[_-]?KEY)[[:space:]]*[=:][[:space:]]*)[^[:space:]]+/\1[REDACTED]/g' \
+    | cut -c1-"$DIAGNOSTIC_MAX_VALUE_CHARS"
+}
+
+diagnostic_error_class() {
+  local status=$1 timed_out=$2
+  [ "$timed_out" -eq 1 ] && { printf 'timeout'; return; }
+  case "$status" in
+    126|127) printf 'unavailable' ;;
+    1|2) printf 'query_failed' ;;
+    *) printf 'command_failed' ;;
+  esac
+}
+
+diagnostic_parse_pid_list() {
+  local raw=$1 line pid_count=0 seen="" output=""
+  while IFS= read -r line; do
+    case "$line" in
+      ""|*[!0-9]*) continue ;;
+    esac
+    [ "$line" != 0 ] || continue
+    case " $seen " in
+      *" $line "*) continue ;;
+    esac
+    seen="$seen $line"
+    pid_count=$((pid_count + 1))
+    [ "$pid_count" -le "$DIAGNOSTIC_MAX_PID_COUNT" ] || break
+    if [ -n "$output" ]; then output="$output\n$line"; else output=$line; fi
+  done <<EOF
+$raw
+EOF
+  printf '%b' "$output"
 }
 
 diagnostic_query() {
-  local log=$1 key=$2 output status
+  local log=$1 key=$2 stdout_file stderr_file query_pid status timed_out=0
+  local stdout stderr_present deadline
   shift 2
-  set +e
-  output="$("$@" 2>&1)"
-  status=$?
-  set -e
-  output="$(diagnostic_compact "$output")"
-  DIAGNOSTIC_LAST_OUTPUT="$output"
-  DIAGNOSTIC_LAST_STATUS=$status
-  printf 'query.%s.status=%s\n' "$key" "$status" >> "$log"
-  if [ "$status" -eq 0 ]; then
-    [ -n "$output" ] && printf 'query.%s.value=%s\n' "$key" "$output" >> "$log"
-  elif [ -n "$output" ]; then
-    printf 'query.%s.error=%s\n' "$key" "$output" >> "$log"
+
+  DIAGNOSTIC_LAST_STDOUT=""
+  DIAGNOSTIC_LAST_STATUS=125
+  DIAGNOSTIC_LAST_STDERR_PRESENT=0
+  DIAGNOSTIC_LAST_TIMED_OUT=0
+
+  stdout_file="$(mktemp "$LOG_DIR/.web-diagnostic.stdout.XXXXXX" 2>/dev/null || true)"
+  stderr_file="$(mktemp "$LOG_DIR/.web-diagnostic.stderr.XXXXXX" 2>/dev/null || true)"
+  if [ -z "$stdout_file" ] || [ -z "$stderr_file" ]; then
+    [ -n "$stdout_file" ] && rm -f "$stdout_file"
+    [ -n "$stderr_file" ] && rm -f "$stderr_file"
+    printf 'query.%s.status=125\nquery.%s.error=temporary_storage_unavailable\n' \
+      "$key" "$key" >> "$log"
+    return 0
   fi
+
+  set +e
+  "$@" >"$stdout_file" 2>"$stderr_file" &
+  query_pid=$!
+  deadline=$(( $(now_epoch) + DIAGNOSTIC_QUERY_TIMEOUT_SECONDS ))
+  while kill -0 "$query_pid" 2>/dev/null; do
+    if [ "$(now_epoch)" -ge "$deadline" ]; then
+      timed_out=1
+      kill -TERM "$query_pid" 2>/dev/null || true
+      sleep 0.1
+      kill -KILL "$query_pid" 2>/dev/null || true
+      break
+    fi
+    sleep 0.05
+  done
+  if [ "$timed_out" -eq 1 ]; then
+    wait "$query_pid" 2>/dev/null || true
+    status=124
+  else
+    wait "$query_pid"
+    status=$?
+  fi
+  set -e
+
+  stdout="$(head -c "$DIAGNOSTIC_MAX_OUTPUT_BYTES" "$stdout_file" 2>/dev/null || true)"
+  if [ -s "$stderr_file" ]; then stderr_present=1; else stderr_present=0; fi
+  DIAGNOSTIC_LAST_STDOUT="$stdout"
+  DIAGNOSTIC_LAST_STATUS=$status
+  DIAGNOSTIC_LAST_STDERR_PRESENT=$stderr_present
+  DIAGNOSTIC_LAST_TIMED_OUT=$timed_out
+  printf 'query.%s.status=%s\n' "$key" "$status" >> "$log"
+  [ "$stderr_present" -eq 0 ] || printf 'query.%s.stderr=present\n' "$key" >> "$log"
+  if [ "$status" -eq 0 ]; then
+    if [ "$key" != port.listeners ] && [ -n "$stdout" ]; then
+      printf 'query.%s.value=%s\n' "$key" "$(diagnostic_safe_text "$stdout")" >> "$log"
+    fi
+  else
+    printf 'query.%s.error=%s\n' "$key" "$(diagnostic_error_class "$status" "$timed_out")" >> "$log"
+  fi
+  rm -f "$stdout_file" "$stderr_file"
   return 0
 }
 
@@ -595,11 +681,13 @@ diagnostic_log_resources() {
 }
 
 diagnose_web_ownership_failure() {
-  local reason=$1 port=$2 log launcher recorded listener_pids listener
+  local reason=$1 port=$2 log launcher recorded listener_pids listener listener_index
   WEB_OWNERSHIP_DIAGNOSTIC_SEQ=$((WEB_OWNERSHIP_DIAGNOSTIC_SEQ + 1))
   if ! log="$(mktemp "$LOG_DIR/web-ownership.XXXXXX" 2>/dev/null)"; then
     log="$LOG_DIR/web-ownership-$(now_epoch)-$$-$WEB_OWNERSHIP_DIAGNOSTIC_SEQ.log"
-    : > "$log"
+    if ! (umask 077; set -C; : > "$log") 2>/dev/null; then
+      return 0
+    fi
   fi
   {
     printf 'schema=web-ownership-diagnostic.v1\n'
@@ -615,12 +703,26 @@ diagnose_web_ownership_failure() {
 
   diagnostic_query "$log" port.listeners lsof -nP -iTCP:"$port" -sTCP:LISTEN -t
   if [ "$DIAGNOSTIC_LAST_STATUS" -eq 0 ]; then
-    listener_pids="$DIAGNOSTIC_LAST_OUTPUT"
+    listener_pids="$(diagnostic_parse_pid_list "$DIAGNOSTIC_LAST_STDOUT")"
   else
     listener_pids=""
   fi
-  listener="$(printf '%s\n' "$listener_pids" | awk '{print $1}')"
-  printf 'port.requested=%s\nport.listeners=%s\n' "$port" "${listener_pids:-none}" >> "$log"
+  listener="$(printf '%s\n' "$listener_pids" | sed -n '1p')"
+  printf 'port.requested=%s\n' "$port" >> "$log"
+  listener_index=0
+  if [ -n "$listener_pids" ]; then
+    while IFS= read -r listener; do
+      [ -n "$listener" ] || continue
+      listener_index=$((listener_index + 1))
+      printf 'port.listener.%s.pid=%s\n' "$listener_index" "$listener" >> "$log"
+    done <<EOF
+$listener_pids
+EOF
+    printf 'port.listener.count=%s\n' "$listener_index" >> "$log"
+  else
+    printf 'port.listeners=none\nport.listener.count=0\n' >> "$log"
+  fi
+  listener="$(printf '%s\n' "$listener_pids" | sed -n '1p')"
   if [ -n "$recorded" ] && [ -n "$listener" ] && [ "$recorded" != "$listener" ]; then
     printf 'listener.replaced=1\n' >> "$log"
   else
@@ -628,7 +730,18 @@ diagnose_web_ownership_failure() {
   fi
 
   diagnostic_log_process "$log" launcher "$launcher"
-  diagnostic_log_process "$log" listener "$listener"
+  listener_index=0
+  while IFS= read -r listener; do
+    [ -n "$listener" ] || continue
+    listener_index=$((listener_index + 1))
+    if [ "$listener_index" -eq 1 ]; then
+      diagnostic_log_process "$log" listener "$listener"
+    else
+      diagnostic_log_process "$log" "listener_$listener_index" "$listener"
+    fi
+  done <<EOF
+$listener_pids
+EOF
   diagnostic_log_resources "$log"
   printf '%s\n' "$log"
 }
