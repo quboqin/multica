@@ -436,6 +436,9 @@ component_pid() {
   [ -f "$file" ] || return 1
   local pid
   pid="$(cat "$file")"
+  case "$pid" in
+    ""|0|*[!0-9]*) return 1 ;;
+  esac
   kill -0 "$pid" 2>/dev/null || return 1
   printf '%s' "$pid"
 }
@@ -485,6 +488,506 @@ process_parent_id() {
   ps -p "$1" -o ppid= 2>/dev/null | tr -d ' ' || true
 }
 
+# Keep ownership failures diagnosable without weakening the ownership contract.
+# Every call creates a new file and records only process identity, listener
+# PIDs, parent links, and coarse resource counters. In particular, never log
+# command lines or the environment: both may contain credentials.
+DIAGNOSTIC_LAST_STDOUT=""
+DIAGNOSTIC_LAST_STATUS=0
+DIAGNOSTIC_LAST_STDERR_PRESENT=0
+DIAGNOSTIC_LAST_TIMED_OUT=0
+WEB_OWNERSHIP_DIAGNOSTIC_SEQ=0
+DIAGNOSTIC_MAX_OUTPUT_BYTES=4096
+DIAGNOSTIC_MAX_VALUE_CHARS=512
+DIAGNOSTIC_MAX_PID_COUNT=64
+DIAGNOSTIC_QUERY_TIMEOUT_SECONDS=2
+DIAGNOSTIC_TOTAL_TIMEOUT_SECONDS=2
+DIAGNOSTIC_DEADLINE_EPOCH=0
+DIAGNOSTIC_CAPTURE_CHUNK_BYTES=512
+DIAGNOSTIC_LAST_STDOUT_TRUNCATED=0
+DIAGNOSTIC_LAST_STDERR_TRUNCATED=0
+DIAGNOSTIC_LAST_STDOUT_BYTES=0
+DIAGNOSTIC_LAST_STDERR_BYTES=0
+DIAGNOSTIC_LAST_CAPTURE_FAILED=0
+DIAGNOSTIC_LAST_CAPTURE_TIMED_OUT=0
+DIAGNOSTIC_PID_LIST=""
+DIAGNOSTIC_PID_COUNT=0
+DIAGNOSTIC_PID_INPUT_INCOMPLETE=0
+DIAGNOSTIC_PID_INPUT_TRUNCATED=0
+DIAGNOSTIC_PID_INVALID_COUNT=0
+DIAGNOSTIC_PID_ENUM_STATUS=unknown
+DIAGNOSTIC_CLEANUP_ACTIVE=0
+
+positive_pid() {
+  case "$1" in
+    ""|0|*[!0-9]*) return 1 ;;
+    *) return 0 ;;
+  esac
+}
+
+diagnostic_safe_text() {
+  # Diagnostic values are fixed fields, never command lines or environments.
+  # Strip controls and redact common credential-shaped values before a bounded
+  # value is written to a human-readable log.
+  printf '%s' "$1" \
+    | LC_ALL=C tr -d '\000-\010\013-\037\177' \
+    | tr '\r\n\t' '   ' \
+    | sed 's/[[:space:]][[:space:]]*/ /g' \
+    | sed -E \
+        -e 's/(Authorization:[[:space:]]*(Bearer|Basic)[[:space:]]+)[^[:space:]]+/\1[REDACTED]/g' \
+        -e 's/((MULTICA_TOKEN|MULTICA_SERVER_URL|token|TOKEN|password|PASSWORD|secret|SECRET|api[_-]?key|API[_-]?KEY)[[:space:]]*[=:][[:space:]]*)[^[:space:]]+/\1[REDACTED]/g' \
+    | cut -c1-"$DIAGNOSTIC_MAX_VALUE_CHARS"
+}
+
+diagnostic_error_class() {
+  local status=$1 timed_out=$2
+  [ "$timed_out" -eq 1 ] && { printf 'timeout'; return; }
+  case "$status" in
+    126|127) printf 'unavailable' ;;
+    1|2) printf 'query_failed' ;;
+    *) printf 'command_failed' ;;
+  esac
+}
+
+diagnostic_capture_stream() {
+  local LC_ALL=C
+  local output=$1 metadata=$2 limit=$3 chunk status bytes=0 stored=0 truncated=0 take
+  : > "$output"
+  while :; do
+    chunk=""
+    # The fixed-size read mode was added after the Bash 3.2 shipped by macOS.
+    # `read -n` plus an empty delimiter is available there, preserves newlines,
+    # and still bounds every read.
+    if IFS= read -r -d '' -n "$DIAGNOSTIC_CAPTURE_CHUNK_BYTES" chunk; then
+      status=0
+    else
+      status=$?
+    fi
+    if [ -n "$chunk" ]; then
+      bytes=$((bytes + ${#chunk}))
+      if [ "$stored" -lt "$limit" ]; then
+        take=${#chunk}
+        [ "$((stored + take))" -le "$limit" ] || take=$((limit - stored))
+        [ "$take" -le 0 ] || printf '%s' "${chunk:0:take}" >> "$output"
+        stored=$((stored + take))
+      fi
+      [ "$bytes" -le "$limit" ] || truncated=1
+    fi
+    [ "$status" -eq 0 ] || break
+  done
+  printf 'bytes=%s\ntruncated=%s\n' "$bytes" "$truncated" > "$metadata"
+}
+
+diagnostic_reset_pid_enum() {
+  DIAGNOSTIC_PID_LIST=""
+  DIAGNOSTIC_PID_COUNT=0
+  DIAGNOSTIC_PID_INPUT_INCOMPLETE=0
+  DIAGNOSTIC_PID_INPUT_TRUNCATED=0
+  DIAGNOSTIC_PID_INVALID_COUNT=0
+  DIAGNOSTIC_PID_ENUM_STATUS=unknown
+}
+
+diagnostic_parse_pid_list() {
+  local raw=$1 line seen="" output="" complete_raw=""
+  diagnostic_reset_pid_enum
+
+  case "$raw" in
+    *$'\n') complete_raw="${raw%$'\n'}" ;;
+    *$'\n'*)
+      DIAGNOSTIC_PID_INPUT_INCOMPLETE=1
+      complete_raw="${raw%$'\n'*}"
+      ;;
+    *)
+      [ -z "$raw" ] || DIAGNOSTIC_PID_INPUT_INCOMPLETE=1
+      ;;
+  esac
+
+  while IFS= read -r line; do
+    line="${line#"${line%%[![:space:]]*}"}"
+    line="${line%"${line##*[![:space:]]}"}"
+    case "$line" in
+      "") continue ;;
+      *[!0-9]*) DIAGNOSTIC_PID_INVALID_COUNT=$((DIAGNOSTIC_PID_INVALID_COUNT + 1)); continue ;;
+    esac
+    [ "$line" != 0 ] || continue
+    case " $seen " in
+      *" $line "*) continue ;;
+    esac
+    if [ "$DIAGNOSTIC_PID_COUNT" -ge "$DIAGNOSTIC_MAX_PID_COUNT" ]; then
+      DIAGNOSTIC_PID_INPUT_TRUNCATED=1
+      break
+    fi
+    seen="$seen $line"
+    DIAGNOSTIC_PID_COUNT=$((DIAGNOSTIC_PID_COUNT + 1))
+    if [ -n "$output" ]; then output="$output"$'\n'"$line"; else output=$line; fi
+  done <<EOF
+$complete_raw
+EOF
+
+  DIAGNOSTIC_PID_LIST="$output"
+  printf '%b' "$DIAGNOSTIC_PID_LIST"
+}
+
+diagnostic_query() {
+  local log=$1 key=$2 capture_dir stdout_file stderr_file stdout_meta stderr_meta
+  local stdout_capture_pid stderr_capture_pid query_pid status timed_out=0
+  local stdout stderr_present deadline now query_pgid capture_pid
+  local capture_status capture_timed_out=0
+  shift 2
+
+  DIAGNOSTIC_LAST_STDOUT=""
+  DIAGNOSTIC_LAST_STATUS=125
+  DIAGNOSTIC_LAST_STDERR_PRESENT=0
+  DIAGNOSTIC_LAST_TIMED_OUT=0
+  DIAGNOSTIC_LAST_STDOUT_TRUNCATED=0
+  DIAGNOSTIC_LAST_STDERR_TRUNCATED=0
+  DIAGNOSTIC_LAST_STDOUT_BYTES=0
+  DIAGNOSTIC_LAST_STDERR_BYTES=0
+  DIAGNOSTIC_LAST_CAPTURE_FAILED=0
+  DIAGNOSTIC_LAST_CAPTURE_TIMED_OUT=0
+
+  now="$(now_epoch)"
+  if [ "$DIAGNOSTIC_DEADLINE_EPOCH" -gt 0 ] && [ "$now" -ge "$DIAGNOSTIC_DEADLINE_EPOCH" ]; then
+    DIAGNOSTIC_LAST_STATUS=124
+    DIAGNOSTIC_LAST_TIMED_OUT=1
+    printf 'query.%s.status=124\nquery.%s.error=timeout\n' "$key" "$key" >> "$log"
+    return 0
+  fi
+
+  capture_dir="$(mktemp -d "$LOG_DIR/.web-diagnostic.XXXXXX" 2>/dev/null || true)"
+  if [ -z "$capture_dir" ] || ! mkfifo "$capture_dir/stdout" "$capture_dir/stderr" 2>/dev/null; then
+    [ -n "$capture_dir" ] && rm -rf "$capture_dir"
+    printf 'query.%s.status=125\nquery.%s.error=temporary_storage_unavailable\n' \
+      "$key" "$key" >> "$log"
+    return 0
+  fi
+  stdout_file="$capture_dir/stdout.data"
+  stderr_file="$capture_dir/stderr.data"
+  stdout_meta="$capture_dir/stdout.meta"
+  stderr_meta="$capture_dir/stderr.meta"
+
+  diagnostic_capture_stream "$stdout_file" "$stdout_meta" "$DIAGNOSTIC_MAX_OUTPUT_BYTES" \
+    < "$capture_dir/stdout" &
+  stdout_capture_pid=$!
+  diagnostic_capture_stream "$stderr_file" "$stderr_meta" "$DIAGNOSTIC_MAX_OUTPUT_BYTES" \
+    < "$capture_dir/stderr" &
+  stderr_capture_pid=$!
+
+  set +e
+  # Monitor mode gives the diagnostic command its own process group. That
+  # group is disposable and lets cleanup reach a descendant that still holds
+  # one of the FIFOs open after the command itself has exited.
+  set -m
+  "$@" >"$capture_dir/stdout" 2>"$capture_dir/stderr" &
+  query_pid=$!
+  query_pgid="$(process_group_id "$query_pid" || true)"
+  positive_pid "$query_pgid" || query_pgid="$query_pid"
+  set +m
+  deadline=$(( now + DIAGNOSTIC_QUERY_TIMEOUT_SECONDS ))
+  if [ "$DIAGNOSTIC_DEADLINE_EPOCH" -gt 0 ] && [ "$DIAGNOSTIC_DEADLINE_EPOCH" -lt "$deadline" ]; then
+    deadline=$DIAGNOSTIC_DEADLINE_EPOCH
+  fi
+  while kill -0 "$query_pid" 2>/dev/null; do
+    if [ "$(now_epoch)" -ge "$deadline" ]; then
+      timed_out=1
+      DIAGNOSTIC_CLEANUP_ACTIVE=1
+      diagnostic_signal_query_process TERM "$query_pid" "$query_pgid"
+      sleep 0.1
+      diagnostic_signal_query_process KILL "$query_pid" "$query_pgid"
+      DIAGNOSTIC_CLEANUP_ACTIVE=0
+      break
+    fi
+    sleep 0.05
+  done
+  if [ "$timed_out" -eq 1 ]; then
+    wait "$query_pid" 2>/dev/null || true
+    status=124
+  else
+    wait "$query_pid"
+    status=$?
+  fi
+  set -e
+
+  # A command can exit while a descendant still owns a diagnostic FIFO. Never
+  # wait on that descendant past the same deadline used for the query itself.
+  # On timeout, terminate both collectors and the isolated query process group
+  # before reaping, so the caller can always reach the ownership stop path.
+  for capture_pid in "$stdout_capture_pid" "$stderr_capture_pid"; do
+    while kill -0 "$capture_pid" 2>/dev/null; do
+      if [ "$(now_epoch)" -ge "$deadline" ]; then
+        capture_timed_out=1
+        break
+      fi
+      sleep 0.05
+    done
+    [ "$capture_timed_out" -eq 0 ] || break
+  done
+  if [ "$capture_timed_out" -eq 1 ]; then
+    DIAGNOSTIC_CLEANUP_ACTIVE=1
+    diagnostic_signal_process TERM "$stdout_capture_pid"
+    diagnostic_signal_process TERM "$stderr_capture_pid"
+    diagnostic_signal_query_process TERM "$query_pid" "$query_pgid"
+    sleep 0.1
+    diagnostic_signal_process KILL "$stdout_capture_pid"
+    diagnostic_signal_process KILL "$stderr_capture_pid"
+    diagnostic_signal_query_process KILL "$query_pid" "$query_pgid"
+    DIAGNOSTIC_CLEANUP_ACTIVE=0
+  fi
+  set +e
+  wait "$stdout_capture_pid" 2>/dev/null
+  capture_status=$?
+  [ "$capture_status" -eq 0 ] || DIAGNOSTIC_LAST_CAPTURE_FAILED=1
+  wait "$stderr_capture_pid" 2>/dev/null
+  capture_status=$?
+  [ "$capture_status" -eq 0 ] || DIAGNOSTIC_LAST_CAPTURE_FAILED=1
+  set -e
+  [ "$capture_timed_out" -eq 0 ] || DIAGNOSTIC_LAST_CAPTURE_TIMED_OUT=1
+  stdout="$(cat "$stdout_file" 2>/dev/null; printf '\037')"
+  stdout="${stdout%$'\037'}"
+  if [ -s "$stderr_file" ]; then stderr_present=1; else stderr_present=0; fi
+  DIAGNOSTIC_LAST_STDOUT_BYTES="$(sed -n 's/^bytes=//p' "$stdout_meta" 2>/dev/null || printf 0)"
+  DIAGNOSTIC_LAST_STDERR_BYTES="$(sed -n 's/^bytes=//p' "$stderr_meta" 2>/dev/null || printf 0)"
+  DIAGNOSTIC_LAST_STDOUT_TRUNCATED="$(sed -n 's/^truncated=//p' "$stdout_meta" 2>/dev/null || printf 0)"
+  DIAGNOSTIC_LAST_STDERR_TRUNCATED="$(sed -n 's/^truncated=//p' "$stderr_meta" 2>/dev/null || printf 0)"
+  DIAGNOSTIC_LAST_STDOUT="$stdout"
+  DIAGNOSTIC_LAST_STATUS=$status
+  DIAGNOSTIC_LAST_STDERR_PRESENT=$stderr_present
+  DIAGNOSTIC_LAST_TIMED_OUT=$timed_out
+  printf 'query.%s.status=%s\n' "$key" "$status" >> "$log"
+  printf 'query.%s.capture_bytes=%s\nquery.%s.capture_limit=%s\n' \
+    "$key" "$DIAGNOSTIC_LAST_STDOUT_BYTES" "$key" "$DIAGNOSTIC_MAX_OUTPUT_BYTES" >> "$log"
+  printf 'query.%s.stderr_bytes=%s\n' "$key" "$DIAGNOSTIC_LAST_STDERR_BYTES" >> "$log"
+  [ "$stderr_present" -eq 0 ] || printf 'query.%s.stderr=present\n' "$key" >> "$log"
+  [ "$DIAGNOSTIC_LAST_STDOUT_TRUNCATED" -eq 0 ] \
+    || printf 'query.%s.truncated=1\n' "$key" >> "$log"
+  [ "$DIAGNOSTIC_LAST_STDERR_TRUNCATED" -eq 0 ] \
+    || printf 'query.%s.stderr_truncated=1\n' "$key" >> "$log"
+  if [ "$status" -eq 0 ]; then
+    if [ "$key" != port.listeners ] && [ -n "$stdout" ]; then
+      printf 'query.%s.value=%s\n' "$key" "$(diagnostic_safe_text "$stdout")" >> "$log"
+    fi
+  else
+    printf 'query.%s.error=%s\n' "$key" "$(diagnostic_error_class "$status" "$timed_out")" >> "$log"
+  fi
+  if [ "$DIAGNOSTIC_LAST_CAPTURE_FAILED" -ne 0 ]; then
+    printf 'query.%s.error=%s\n' "$key" \
+      "$([ "$DIAGNOSTIC_LAST_CAPTURE_TIMED_OUT" -eq 1 ] && printf capture_timeout || printf capture_failed)" >> "$log"
+  fi
+  rm -rf "$capture_dir"
+  return 0
+}
+
+diagnostic_signal_process() {
+  local signal=$1 pid=$2
+  positive_pid "$pid" || return 0
+  kill "-$signal" "$pid" 2>/dev/null || true
+}
+
+diagnostic_signal_group() {
+  local signal=$1 pgid=$2 shell_pgid
+  positive_pid "$pgid" || return 0
+  [ "$pgid" -gt 1 ] || return 0
+  shell_pgid="$(command ps -p "$$" -o pgid= 2>/dev/null | tr -d ' ' || true)"
+  [ "$pgid" != "$shell_pgid" ] || return 0
+  kill "-$signal" "-$pgid" 2>/dev/null || true
+}
+
+diagnostic_signal_query_process() {
+  local signal=$1 pid=$2 pgid=$3
+  diagnostic_signal_group "$signal" "$pgid"
+  diagnostic_signal_process "$signal" "$pid"
+}
+
+diagnostic_parent_id() {
+  local log=$1 role=$2 pid=$3
+  diagnostic_query "$log" "parent.$role.$pid" ps -p "$pid" -o ppid=
+  [ "$DIAGNOSTIC_LAST_STATUS" -eq 0 ] || return 1
+  [ "$DIAGNOSTIC_LAST_CAPTURE_FAILED" -eq 0 ] || return 1
+  [ "$DIAGNOSTIC_LAST_STDOUT_TRUNCATED" -eq 0 ] || return 1
+  diagnostic_parse_pid_list "$DIAGNOSTIC_LAST_STDOUT" >/dev/null
+  [ "$DIAGNOSTIC_PID_COUNT" -eq 1 ] \
+    && [ "$DIAGNOSTIC_PID_INPUT_INCOMPLETE" -eq 0 ] \
+    && [ "$DIAGNOSTIC_PID_INPUT_TRUNCATED" -eq 0 ] \
+    && printf '%s' "$DIAGNOSTIC_PID_LIST"
+}
+
+diagnostic_log_process() {
+  local log=$1 role=$2 pid=$3 parent chain depth parent_output
+  [ -n "$pid" ] || {
+    printf 'process.%s.present=0\n' "$role" >> "$log"
+    return 0
+  }
+  printf 'process.%s.present=1\nprocess.%s.pid=%s\n' "$role" "$role" "$pid" >> "$log"
+  set +e
+  kill -0 "$pid" 2>/dev/null
+  local live_status=$?
+  set -e
+  printf 'process.%s.live=%s\n' "$role" "$([ "$live_status" -eq 0 ] && printf 1 || printf 0)" >> "$log"
+  diagnostic_query "$log" "$role.ps" ps -p "$pid" -o pid= -o ppid= -o pgid= -o rss= -o comm=
+  diagnostic_query "$log" "$role.session" ps -p "$pid" -o sess=
+  if [ "$DIAGNOSTIC_LAST_STATUS" -ne 0 ]; then
+    diagnostic_query "$log" "$role.session_fallback" ps -p "$pid" -o sid=
+  fi
+  diagnostic_query "$log" "$role.start" ps -p "$pid" -o lstart=
+
+  if [ -e "/proc/$pid/cwd" ]; then
+    diagnostic_query "$log" "$role.cwd" readlink -e "/proc/$pid/cwd"
+    diagnostic_query "$log" "$role.exe" readlink -e "/proc/$pid/exe"
+  elif command -v lsof >/dev/null 2>&1; then
+    diagnostic_query "$log" "$role.cwd" lsof -nP -a -p "$pid" -d cwd -Fn
+    diagnostic_query "$log" "$role.exe" lsof -nP -a -p "$pid" -d txt -Fn
+  else
+    printf 'query.%s.cwd.status=127\nquery.%s.cwd.error=lsof unavailable\n' "$role" "$role" >> "$log"
+    printf 'query.%s.exe.status=127\nquery.%s.exe.error=lsof unavailable\n' "$role" "$role" >> "$log"
+  fi
+
+  chain="$pid"
+  parent="$pid"
+  depth=0
+  while [ "$depth" -lt 64 ] && [ "$parent" != 1 ]; do
+    parent_output="$(diagnostic_parent_id "$log" "$role" "$parent" || true)"
+    if [ -z "$parent_output" ]; then
+      chain="$chain->?"
+      printf 'query.parent_chain.%s.status=1\n' "$role" >> "$log"
+      break
+    fi
+    chain="$chain->$parent_output"
+    parent="$parent_output"
+    depth=$((depth + 1))
+  done
+  printf 'parent_chain.%s=%s\n' "$role" "$chain" >> "$log"
+}
+
+diagnostic_log_resources() {
+  local log=$1
+  if [ -r /proc/meminfo ]; then
+    diagnostic_query "$log" resource.memory awk '/^(MemAvailable|SwapFree|SwapTotal):/ {print $1"="$2" "$3}' /proc/meminfo
+  elif command -v vm_stat >/dev/null 2>&1; then
+    diagnostic_query "$log" resource.memory vm_stat
+  else
+    printf 'query.resource.memory.status=127\nquery.resource.memory.error=unavailable\n' >> "$log"
+  fi
+  if [ -r /sys/fs/cgroup/memory.events ]; then
+    diagnostic_query "$log" resource.oom awk '/^oom_kill / {print $0}' /sys/fs/cgroup/memory.events
+  elif [ -r /sys/fs/cgroup/memory/memory.oom_control ]; then
+    diagnostic_query "$log" resource.oom awk '/^oom_kill / {print $0}' /sys/fs/cgroup/memory/memory.oom_control
+  else
+    printf 'query.resource.oom.status=127\nquery.resource.oom.error=unavailable\n' >> "$log"
+  fi
+  if command -v sysctl >/dev/null 2>&1; then
+    diagnostic_query "$log" resource.swap sysctl -n vm.swapusage
+  else
+    printf 'query.resource.swap.status=127\nquery.resource.swap.error=unavailable\n' >> "$log"
+  fi
+  if command -v memory_pressure >/dev/null 2>&1; then
+    diagnostic_query "$log" resource.pressure memory_pressure -Q
+  else
+    printf 'query.resource.pressure.status=127\nquery.resource.pressure.error=unavailable\n' >> "$log"
+  fi
+}
+
+diagnose_web_ownership_failure() {
+  local reason=$1 port=$2 log launcher recorded listener_pids listener listener_index
+  local listener_byte_truncated=0 listener_count_truncated=0
+  local listener_input_incomplete=1 listener_input_truncated=0 listener_invalid_count=0
+  local listener_enum_status=unknown listener_query_ok=0
+  WEB_OWNERSHIP_DIAGNOSTIC_SEQ=$((WEB_OWNERSHIP_DIAGNOSTIC_SEQ + 1))
+  diagnostic_reset_pid_enum
+  DIAGNOSTIC_DEADLINE_EPOCH=$(( $(now_epoch) + DIAGNOSTIC_TOTAL_TIMEOUT_SECONDS ))
+  if ! log="$(mktemp "$LOG_DIR/web-ownership.XXXXXX" 2>/dev/null)"; then
+    log="$LOG_DIR/web-ownership-$(now_epoch)-$$-$WEB_OWNERSHIP_DIAGNOSTIC_SEQ.log"
+    if ! (umask 077; set -C; : > "$log") 2>/dev/null; then
+      return 0
+    fi
+  fi
+  {
+    printf 'schema=web-ownership-diagnostic.v1\n'
+    printf 'event=ownership_check_failed\nreason=%s\ncomponent=web\nport=%s\n' "$reason" "$port"
+    printf 'time=%s\n' "$(now_iso)"
+    printf 'environment=%s\n' "${NAME:-unknown}"
+    printf 'source_sha=%s\n' "$(git -C "${DIR:-$REPO_ROOT}" rev-parse HEAD 2>/dev/null || printf unknown)"
+  } >> "$log"
+
+  launcher="$(cat "$(pid_file web)" 2>/dev/null || true)"
+  recorded="$(cat "$(listener_pid_file web)" 2>/dev/null || true)"
+  printf 'launcher.recorded_pid=%s\nlistener.recorded_pid=%s\n' "${launcher:-unknown}" "${recorded:-unknown}" >> "$log"
+
+  diagnostic_query "$log" port.listeners lsof -nP -iTCP:"$port" -sTCP:LISTEN -t
+  if [ "$DIAGNOSTIC_LAST_STATUS" -eq 0 ] \
+    && [ "$DIAGNOSTIC_LAST_CAPTURE_FAILED" -eq 0 ] \
+    && [ "$DIAGNOSTIC_LAST_STDOUT_TRUNCATED" -eq 0 ]; then
+    listener_byte_truncated="$DIAGNOSTIC_LAST_STDOUT_TRUNCATED"
+    diagnostic_parse_pid_list "$DIAGNOSTIC_LAST_STDOUT" >/dev/null
+    listener_pids="$DIAGNOSTIC_PID_LIST"
+    listener_count_truncated="$DIAGNOSTIC_PID_INPUT_TRUNCATED"
+    listener_input_incomplete="$DIAGNOSTIC_PID_INPUT_INCOMPLETE"
+    listener_invalid_count="$DIAGNOSTIC_PID_INVALID_COUNT"
+    listener_input_truncated="$DIAGNOSTIC_PID_INPUT_TRUNCATED"
+    if [ "$listener_input_incomplete" -eq 0 ] \
+      && [ "$listener_input_truncated" -eq 0 ] \
+      && [ "$listener_invalid_count" -eq 0 ]; then
+      listener_enum_status=known
+      listener_query_ok=1
+    fi
+  else
+    listener_pids=""
+  fi
+  printf 'port.listener.byte_truncated=%s\n' "$listener_byte_truncated" >> "$log"
+  printf 'port.listener.count_truncated=%s\n' "$listener_count_truncated" >> "$log"
+  printf 'port.listener.input_complete=%s\n' \
+    "$([ "$listener_input_incomplete" -eq 0 ] && printf 1 || printf 0)" >> "$log"
+  printf 'port.listener.input_truncated=%s\n' \
+    "$([ "$listener_input_truncated" -eq 0 ] && printf 0 || printf 1)" >> "$log"
+  printf 'port.listener.invalid_lines=%s\n' "$listener_invalid_count" >> "$log"
+  printf 'port.listener.status=%s\n' "$listener_enum_status" >> "$log"
+  listener="$(printf '%s\n' "$listener_pids" | sed -n '1p')"
+  printf 'port.requested=%s\n' "$port" >> "$log"
+  listener_index=0
+  if [ -n "$listener_pids" ]; then
+    while IFS= read -r listener; do
+      [ -n "$listener" ] || continue
+      listener_index=$((listener_index + 1))
+      printf 'port.listener.%s.pid=%s\n' "$listener_index" "$listener" >> "$log"
+    done <<EOF
+$listener_pids
+EOF
+    printf 'port.listener.count=%s\n' "$listener_index" >> "$log"
+  else
+    if [ "$listener_query_ok" -eq 1 ]; then
+      printf 'port.listeners=none\nport.listener.count=0\n' >> "$log"
+    else
+      printf 'port.listeners=unknown\nport.listener.count=unknown\n' >> "$log"
+    fi
+  fi
+  if [ "$listener_enum_status" = known ]; then
+    printf 'port.listener.total=%s\n' "$listener_index" >> "$log"
+  else
+    printf 'port.listener.total=unknown\n' >> "$log"
+  fi
+  listener="$(printf '%s\n' "$listener_pids" | sed -n '1p')"
+  if [ -n "$recorded" ] && [ -n "$listener" ] && [ "$recorded" != "$listener" ]; then
+    printf 'listener.replaced=1\n' >> "$log"
+  else
+    printf 'listener.replaced=0\n' >> "$log"
+  fi
+
+  diagnostic_log_process "$log" launcher "$launcher"
+  listener_index=0
+  while IFS= read -r listener; do
+    [ -n "$listener" ] || continue
+    listener_index=$((listener_index + 1))
+    if [ "$listener_index" -eq 1 ]; then
+      diagnostic_log_process "$log" listener "$listener"
+    else
+      diagnostic_log_process "$log" "listener_$listener_index" "$listener"
+    fi
+  done <<EOF
+$listener_pids
+EOF
+  diagnostic_log_resources "$log"
+  printf '%s\n' "$log"
+}
+
 # Package runners may put a descendant in a nested process group (for example,
 # Turbo does this before Next binds its port). Follow PPIDs so ownership still
 # comes from the launcher tree instead of accepting a weaker command/user match.
@@ -504,10 +1007,12 @@ process_is_descendant_of() {
 
 listener_pid_belongs_to_component() {
   local component=$1 listener=$2 launcher recorded
+  positive_pid "$listener" || return 1
   launcher="$(component_pid "$component" || true)"
   [ -n "$launcher" ] && [ -n "$listener" ] || return 1
   recorded="$(cat "$(listener_pid_file "$component")" 2>/dev/null || true)"
-  [ -n "$recorded" ] && [ "$listener" = "$recorded" ] && return 0
+  positive_pid "$recorded" \
+    && [ "$listener" = "$recorded" ] && return 0
   [ "$(process_group_id "$listener")" = "$launcher" ] && return 0
   process_is_descendant_of "$listener" "$launcher"
 }
@@ -615,6 +1120,7 @@ start_web() {
     if curl -sf --max-time 15 "http://localhost:${FRONTEND_PORT}" >/dev/null 2>&1; then
       listener="$(record_component_listener web "$FRONTEND_PORT" || true)"
       if [ -z "$listener" ]; then
+        diagnose_web_ownership_failure listener_not_owned "$FRONTEND_PORT" >/dev/null || true
         stop_component web
         die "Web on :$FRONTEND_PORT is not descended from the process this environment launched."
       fi
@@ -820,8 +1326,24 @@ desktop_env_matches() {
     && grep -Fqx "VITE_WS_URL=ws://localhost:${BACKEND_PORT}/ws" "$DESKTOP_ENV_FILE"
 }
 
+STOP_COMPONENT_LAST_LAUNCHER=""
+STOP_COMPONENT_ALLOWED_TARGETS=""
+
+stop_component_signal() {
+  local signal=$1 target=$2
+  case " $STOP_COMPONENT_ALLOWED_TARGETS " in
+    *" $target "*) kill "-$signal" "$target" 2>/dev/null ;;
+    *)
+      warn "refused signal $signal to unallowlisted target $target"
+      return 1
+      ;;
+  esac
+}
+
 stop_component() {
   local name=$1 pid launcher="" status state recorded_listener="" port="" listener=""
+  STOP_COMPONENT_LAST_LAUNCHER=""
+  STOP_COMPONENT_ALLOWED_TARGETS=""
   case "$name" in
     daemon)
       if [ -x "$MULTICA_BIN" ]; then
@@ -856,9 +1378,17 @@ stop_component() {
     desktop) port="$DESKTOP_RENDERER_PORT" ;;
   esac
   recorded_listener="$(cat "$(listener_pid_file "$name")" 2>/dev/null || true)"
+  positive_pid "$recorded_listener" || recorded_listener=""
+  [ -n "$recorded_listener" ] \
+    && STOP_COMPONENT_ALLOWED_TARGETS="$recorded_listener"
   pid="$(component_pid "$name" || true)"
+  positive_pid "$pid" || pid=""
   if [ -n "$pid" ]; then
     launcher="$pid"
+    STOP_COMPONENT_LAST_LAUNCHER="$launcher"
+    STOP_COMPONENT_ALLOWED_TARGETS="-$launcher $launcher"
+    [ -n "$recorded_listener" ] \
+      && STOP_COMPONENT_ALLOWED_TARGETS="$STOP_COMPONENT_ALLOWED_TARGETS $recorded_listener"
     # Capture an older environment's listener before killing the launcher. A
     # nested process group may survive that signal and then lose its PPID chain
     # when the launcher exits, so it must be proven and recorded first.
@@ -866,15 +1396,24 @@ stop_component() {
       listener="$(port_listener_pid "$port")"
       if [ -n "$listener" ] && listener_pid_belongs_to_component "$name" "$listener"; then
         recorded_listener="$listener"
+        positive_pid "$recorded_listener" \
+          || recorded_listener=""
+        if [ -n "$recorded_listener" ]; then
+          STOP_COMPONENT_ALLOWED_TARGETS="$STOP_COMPONENT_ALLOWED_TARGETS $recorded_listener"
+        fi
         printf '%s\n' "$listener" > "$(listener_pid_file "$name")"
       fi
     fi
     # Negative pid targets the process group, so make → go run → server all go
     # down together instead of leaving the real listener orphaned.
-    kill -TERM -"$pid" 2>/dev/null || kill -TERM "$pid" 2>/dev/null || true
+    stop_component_signal TERM "-$pid" \
+      || stop_component_signal TERM "$pid" \
+      || true
     sleep 1
     if kill -0 "$pid" 2>/dev/null; then
-      kill -KILL -"$pid" 2>/dev/null || kill -KILL "$pid" 2>/dev/null || true
+      stop_component_signal KILL "-$pid" \
+        || stop_component_signal KILL "$pid" \
+        || true
       sleep 1
     fi
     if kill -0 "$pid" 2>/dev/null; then
@@ -889,17 +1428,18 @@ stop_component() {
   fi
 
   # A process group kill can miss a nested listener that has reparented away
-  # from its launcher. Only kill the listener captured above or one still in
-  # the launcher's direct process group; never infer ownership from the port.
+  # from its launcher. Only kill the listener captured before the launcher
+  # signal or an already-recorded positive listener PID; never infer ownership
+  # from the port or a newly observed process group.
   if [ -n "$port" ]; then
     listener="$(port_listener_pid "$port")"
+    positive_pid "$listener" || listener=""
     if [ -n "$listener" ]; then
-      if { [ -n "$recorded_listener" ] && [ "$listener" = "$recorded_listener" ]; } \
-        || { [ -n "$launcher" ] && [ "$(process_group_id "$listener")" = "$launcher" ]; }; then
-        kill -TERM "$listener" 2>/dev/null || true
+      if [ -n "$recorded_listener" ] && [ "$listener" = "$recorded_listener" ]; then
+        stop_component_signal TERM "$listener" || true
         sleep 1
         if kill -0 "$listener" 2>/dev/null; then
-          kill -KILL "$listener" 2>/dev/null || true
+          stop_component_signal KILL "$listener" || true
           sleep 1
         fi
         if kill -0 "$listener" 2>/dev/null; then

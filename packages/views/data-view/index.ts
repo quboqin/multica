@@ -10,7 +10,11 @@ export {
   sameDataViewPath,
 } from "./branch-model";
 export type { DataViewBranch, DataViewBranchState } from "./branch-model";
-export { DataViewCellEditor } from "./cell-editor";
+export {
+  DataViewCellEditor,
+  dataViewCellEditorIdentity,
+} from "./cell-editor";
+export type { DataViewCellEditorState } from "./cell-editor";
 export { useDataViewController } from "./controller";
 export type { DataViewControllerResult } from "./controller";
 export { useDataViewSelection } from "./selection";

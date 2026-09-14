@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useRef } from "react";
+import { useCallback, useMemo, useRef } from "react";
 import {
   DndContext,
   KeyboardSensor,
@@ -114,10 +114,13 @@ function TableViewInstance<DataRow>({
   if (editingKey === null) frozenRowsRef.current = null;
   else if (frozenRowsRef.current === null) frozenRowsRef.current = rows;
   const frozenRows = frozenRowsRef.current;
-  const displayRows =
-    frozenRows && frozenRows !== rows
-      ? (refreshFrozenRows?.(frozenRows, rows) ?? frozenRows)
-      : rows;
+  const displayRows = useMemo(
+    () =>
+      frozenRows && frozenRows !== rows
+        ? (refreshFrozenRows?.(frozenRows, rows) ?? frozenRows)
+        : rows,
+    [frozenRows, refreshFrozenRows, rows],
+  );
   const table = useReactTable({
     data: displayRows,
     columns,

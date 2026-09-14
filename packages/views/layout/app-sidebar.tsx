@@ -72,7 +72,8 @@ import { chatSessionsOptions } from "@multica/core/chat/queries";
 import { countUnreadChatMessages } from "@multica/core/chat/unread";
 import { useChatStore } from "@multica/core/chat";
 import { api, ApiError } from "@multica/core/api";
-import { useConfigStore } from "@multica/core/config";
+import { useConfigStore, useFeatureEnabled } from "@multica/core/config";
+import { CORTEX_COLLECTIONS_FLAG } from "@multica/core/feature-flags";
 import { pinListOptions } from "@multica/core/pins/queries";
 import { useDeletePin, useReorderPins } from "@multica/core/pins/mutations";
 import { issueDetailOptions } from "@multica/core/issues/queries";
@@ -116,6 +117,7 @@ type NavKey =
   | "chat"
   | "myIssues"
   | "issues"
+  | "collections"
   | "projects"
   | "autopilots"
   | "agents"
@@ -132,6 +134,7 @@ type NavLabelKey =
   | "chat"
   | "my_issues"
   | "issues"
+  | "collections"
   | "projects"
   | "autopilots"
   | "agents"
@@ -152,6 +155,7 @@ const personalNav: { key: NavKey; labelKey: NavLabelKey }[] = [
 
 const workNav: { key: NavKey; labelKey: NavLabelKey }[] = [
   { key: "issues", labelKey: "issues" },
+  { key: "collections", labelKey: "collections" },
   { key: "projects", labelKey: "projects" },
   { key: "autopilots", labelKey: "autopilots" },
 ];
@@ -440,6 +444,7 @@ export function AppSidebar({ topSlot, searchSlot, headerClassName, headerStyle }
   const { data: workspaces = EMPTY_WORKSPACES } = useQuery(workspaceListOptions());
   const { data: myInvitations = EMPTY_INVITATIONS } = useQuery(myInvitationListOptions());
   const workspaceCreationDisabled = useConfigStore((s) => s.workspaceCreationDisabled);
+  const collectionsEnabled = useFeatureEnabled(CORTEX_COLLECTIONS_FLAG, false);
 
   // On a phone the sidebar is a Sheet covering the page, so navigating out of
   // it has to dismiss it — otherwise the destination renders underneath and the
@@ -853,7 +858,7 @@ export function AppSidebar({ topSlot, searchSlot, headerClassName, headerStyle }
             <SidebarGroupLabel>{t(($) => $.sidebar.work_group)}</SidebarGroupLabel>
             <SidebarGroupContent>
               <SidebarMenu className="gap-0.5">
-                {workNav.map((item) => {
+                {workNav.filter((item) => item.key !== "collections" || collectionsEnabled).map((item) => {
                   const href = p[item.key]();
                   const Icon = routeIconForPath(href);
                   const isActive = !isActivePinnedRoute && isNavActive(pathname, href);

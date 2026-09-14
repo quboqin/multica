@@ -14,7 +14,17 @@ export {
   type WorkspaceRequestContext,
 } from "./workspace-storage";
 export { clearWorkspaceStorage } from "./storage-cleanup";
-export { clearClientSessionData } from "./session-cleanup";
+export {
+  assertClientWorkspaceAccessAllowed,
+  captureClientSessionGeneration,
+  captureClientWorkspaceAccessGeneration,
+  clearClientSessionData,
+  isClientSessionGenerationCurrent,
+  isClientWorkspaceAccessAllowed,
+  isClientWorkspaceAccessGenerationCurrent,
+  restoreClientWorkspaceAccess,
+  revokeClientWorkspaceAccess,
+} from "./session-cleanup";
 export {
   registerSystemNotificationClickHandler,
   isWebNotificationSupported,

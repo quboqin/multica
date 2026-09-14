@@ -46,6 +46,8 @@ export type DataViewControllerResult<Row, DisplayRow extends { key: string }> = 
   rows: Array<DisplayRow | DataViewStructuralRow>;
   /** Settled rows only; query-transition placeholder rows are excluded. */
   authoritativeRows: Row[];
+  /** Authoritative total for the ungrouped root branch. */
+  authoritativeTotal: number;
   groupError: unknown;
 };
 
@@ -444,10 +446,13 @@ export function useDataViewController<
     }
     return [...byId.values()];
   }, [branchData, rowId]);
+  const authoritativeTotal =
+    branchData[dataViewBranchKey(null, null)]?.total ?? authoritativeRows.length;
 
   return {
     rows: displayRows,
     authoritativeRows,
+    authoritativeTotal,
     groupError: groupQuery.error,
   };
 }

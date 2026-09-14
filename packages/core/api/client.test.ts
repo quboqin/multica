@@ -2149,6 +2149,62 @@ describe("ApiClient explicit workspace targeting", () => {
     }
   });
 
+  it("binds collection reads and CAS writes to the captured slug", async () => {
+    const wireRecord = {
+      id: "record-1",
+      workspace_id: "ws-1",
+      collection_id: "collection-1",
+      title: "Changed",
+      fields: {},
+      position: 0,
+      revision: 2,
+      created_at: "2026-01-01T00:00:00Z",
+      updated_at: "2026-01-01T00:01:00Z",
+    };
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({ records: [wireRecord], total: 1, next_cursor: null }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ record: wireRecord }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+    const client = new ApiClient("https://api.example.test");
+
+    await client.queryCollectionRecords(
+      "collection-1",
+      { limit: 200, cursor: null },
+      "proxima-centauri",
+    );
+    await client.updateCollectionRecord(
+      "collection-1",
+      "record-1",
+      {
+        expectedRevision: 1,
+        change: { fieldId: "title", op: "set", value: "Changed" },
+      },
+      "proxima-centauri",
+    );
+
+    for (const call of fetchMock.mock.calls) {
+      const init = call[1] as RequestInit;
+      expect(
+        (init.headers as Record<string, string>)["X-Workspace-Slug"],
+      ).toBe("proxima-centauri");
+    }
+    expect(JSON.parse(String(fetchMock.mock.calls[1]?.[1]?.body))).toEqual({
+      expected_revision: 1,
+      change: { field_id: "title", op: "set", value: "Changed" },
+    });
+  });
+
   it("omits the header when no slug is given, leaving the ambient one", async () => {
     const fetchMock = stubOk([]);
     await new ApiClient("https://api.example.test").listRuntimes({
