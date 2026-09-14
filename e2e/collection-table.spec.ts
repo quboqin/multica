@@ -784,6 +784,11 @@ test.describe("T2 collection shared TableView", () => {
     await expect(
       conflictedNoteForm.getByRole("button", { name: "Save", exact: true }),
     ).toBeVisible();
+    // The 409 recovery GET and the UI settling must not submit the draft on
+    // their own. The only PATCH observed before the user's explicit retry is
+    // the failed first Save.
+    await settlePage(page);
+    expect(tailPatchRequests).toHaveLength(1);
     const conflictBody = (await firstSave.response.json()) as {
       code?: string;
       resource_type?: string;
@@ -814,17 +819,27 @@ test.describe("T2 collection shared TableView", () => {
       op: "set",
       value: "browser stale value",
     });
-    expect(tailPatchRequests).toHaveLength(2);
-    page.off("request", tailPatchListener);
-    await expect(
-      (await rowByTitle(page, tail.title)).getByRole("textbox", { name: "Note" }),
-    ).toHaveValue("browser stale value");
+    const finalTailRow = await rowByTitle(page, tail.title);
+    await expect(finalTailRow.getByRole("textbox", { name: "Note" })).toHaveValue(
+      "browser stale value",
+    );
+    await settlePage(page);
     const authoritative = await api.getCollectionRecord(
       collection.collection.id,
       tail.id,
     );
+    // After the explicit retry, the stable final state is exactly two PATCHes
+    // with the frozen revision followed by the recovered revision. Keep the
+    // listener alive until this final UI/API check has completed so a delayed
+    // automatic retry cannot escape the assertion window.
+    expect(tailPatchRequests).toHaveLength(2);
+    expect(tailPatchRequests.map((request) => request.expected_revision)).toEqual([
+      tail.revision,
+      tail.revision + 1,
+    ]);
     expect(authoritative.revision).toBe(tail.revision + 2);
     assertOwnField(authoritative, noteField.id, "browser stale value");
+    page.off("request", tailPatchListener);
   });
 
   test("enforces member collection permissions while retaining member record access", async ({
