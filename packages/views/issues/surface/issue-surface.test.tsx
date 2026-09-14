@@ -399,6 +399,10 @@ describe("IssueSurface — table pagination ownership", () => {
           }),
         }),
       }),
+      expect.objectContaining({
+        signal: expect.anything(),
+        workspaceSlug: undefined,
+      }),
     );
     expect(listIssues).not.toHaveBeenCalled();
   });
@@ -494,6 +498,10 @@ describe("IssueSurface — table pagination ownership", () => {
     await screen.findByText("Second cursor row");
     expect(listIssueTableRows).toHaveBeenCalledWith(
       expect.objectContaining({ page: { limit: 50, cursor: "cursor-2" } }),
+      expect.objectContaining({
+        signal: expect.anything(),
+        workspaceSlug: undefined,
+      }),
     );
     expect(screen.getByText("First cursor row")).toBeInTheDocument();
   });

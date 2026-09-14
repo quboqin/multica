@@ -13,6 +13,32 @@ const _slugSubscribers = new Set<(slug: string | null) => void>();
 let _pendingNotify = false;
 let _pendingRehydrate = false;
 
+/** Context captured by a workspace-scoped operation before it can be queued. */
+export type WorkspaceRequestContext = {
+  workspaceId: string;
+  workspaceSlug: string;
+  /** Dynamic capability check evaluated at the actual request boundary. */
+  isActive?: () => boolean;
+};
+
+export function assertWorkspaceRequestContext(
+  context: WorkspaceRequestContext,
+) {
+  let active = true;
+  try {
+    active = context.isActive?.() ?? true;
+  } catch {
+    active = false;
+  }
+  if (
+    !active ||
+    getCurrentWsId() !== context.workspaceId ||
+    getCurrentSlug() !== context.workspaceSlug
+  ) {
+    throw new Error("Workspace or write capability changed before submission");
+  }
+}
+
 /**
  * Update the current workspace identity. This is the single source of truth
  * for "which workspace is active"; everything downstream (WS connection,

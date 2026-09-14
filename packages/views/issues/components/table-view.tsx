@@ -4,31 +4,15 @@ import { useStatusLabel } from "../utils/status-label";
 import {
   useCallback,
   useEffect,
+  useId,
   useLayoutEffect,
   useMemo,
   useRef,
   useState,
 } from "react";
+import { useDndContext } from "@dnd-kit/core";
+import { useSortable } from "@dnd-kit/sortable";
 import {
-  DndContext,
-  KeyboardSensor,
-  PointerSensor,
-  closestCenter,
-  useDndContext,
-  useSensor,
-  useSensors,
-  type DragEndEvent,
-} from "@dnd-kit/core";
-import { restrictToHorizontalAxis } from "@dnd-kit/modifiers";
-import {
-  SortableContext,
-  horizontalListSortingStrategy,
-  sortableKeyboardCoordinates,
-  useSortable,
-} from "@dnd-kit/sortable";
-import {
-  getCoreRowModel,
-  useReactTable,
   type CellContext,
   type ColumnDef,
   type ColumnSizingState,
@@ -52,7 +36,6 @@ import {
   X,
 } from "lucide-react";
 import { toast } from "sonner";
-import { DataTable } from "@multica/ui/components/ui/data-table";
 import { Button } from "@multica/ui/components/ui/button";
 import { Input } from "@multica/ui/components/ui/input";
 import {
@@ -65,10 +48,6 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@multica/ui/components/ui/dropdown-menu";
-import {
-  TableCell,
-  TableRow,
-} from "@multica/ui/components/ui/table";
 import { Skeleton } from "@multica/ui/components/ui/skeleton";
 import { cn } from "@multica/ui/lib/utils";
 import { ApiError } from "@multica/core/api";
@@ -77,9 +56,18 @@ import { useIssueStatuses } from "@multica/core/issue-statuses/hooks";
 import { useModalStore } from "@multica/core/modals";
 import {
   issueKeys,
-  issueTableGroupsOptions,
-  issueTableRowPageOptions,
 } from "@multica/core/issues/queries";
+import { createIssueTableDataSource } from "@multica/core/issues/table-data-source";
+import type { IssueTableField } from "@multica/core/issues/table-data-source";
+import {
+  dataSourceIdentityString,
+  type DataSourceCellChange,
+} from "@multica/core/data-source";
+import {
+  assertWorkspaceRequestContext,
+  getCurrentSlug,
+  type WorkspaceRequestContext,
+} from "@multica/core/platform";
 import {
   TABLE_SYSTEM_COLUMNS,
   propertyIdFromViewKey,
@@ -88,8 +76,16 @@ import {
   type TableSystemColumnKey,
 } from "@multica/core/issues/stores/view-store";
 import { useViewStore } from "@multica/core/issues/stores/view-store-context";
-import { propertyListOptions } from "@multica/core/properties";
+import {
+  propertyListOptions,
+  useSetIssueProperty,
+  useUnsetIssueProperty,
+} from "@multica/core/properties";
 import { projectListOptions } from "@multica/core/projects/queries";
+import {
+  useAttachLabelToIssue,
+  useDetachLabelFromIssue,
+} from "@multica/core/labels";
 import { useWorkspacePaths } from "@multica/core/paths";
 import { buildActorNameResolver, useActorName } from "@multica/core/workspace/hooks";
 import {
@@ -102,9 +98,11 @@ import type {
   IssueProperty,
   IssuePropertyValue,
   IssueTableGroupDescriptor,
+  IssueTableGroupsResponse,
   IssueTableGroupSpec,
   IssueTableQuerySpec,
   IssueTableRowsResponse,
+  IssueTableRow,
   Project,
   UpdateIssueRequest,
 } from "@multica/core/types";
@@ -114,13 +112,10 @@ import {
   isActorPropertyType,
 } from "@multica/core/types";
 import {
-  useInfiniteQuery,
-  useQueries,
   useQuery,
   useQueryClient,
-  type UseQueryResult,
 } from "@tanstack/react-query";
-import { runConfirmIntent } from "../actions/run-confirm-gate";
+import { createIssueTableCommandExecutor } from "../actions/table-command-executor";
 import { ActorAvatar } from "../../common/actor-avatar";
 import { LabelChip } from "../../labels/label-chip";
 import { resolveClickIntent, useIntentNavigate } from "../../navigation";
@@ -138,10 +133,9 @@ import {
   StartDatePicker,
   StatusPicker,
 } from "./pickers";
-import { CustomPropertyValueEditor } from "./pickers/custom-property-picker";
+import { CustomPropertyValueInput } from "./pickers/custom-property-picker";
 import {
   buildIssueTableCsv,
-  getIssueTableSelectionRange,
   IssueTableExportIntegrityError,
   refreshFrozenTableRows,
   type IssueTableDisplayRow,
@@ -149,6 +143,12 @@ import {
 import type { ChildProgress } from "./list-row";
 import { ListLoadMoreFooter } from "./list-load-more-footer";
 import { IssueAgentActivityIndicator } from "./issue-agent-activity-indicator";
+import {
+  TableView as SharedTableView,
+  useDataViewController,
+  useDataViewSelection,
+  type DataViewQueryBinding,
+} from "../../data-view";
 
 // Enough placeholder rows to cover a typical viewport; the virtualizer only
 // mounts what fits, so overshooting costs nothing.
@@ -174,91 +174,10 @@ type TableViewProps = {
   }>;
 };
 
-type ServerBranch = {
-  key: string;
-  groupKey: string | null;
-  parentId: string | null;
-  ancestorIds: string[];
-  cursors: Array<string | null>;
-};
-
-type ServerBranchState = {
-  identity: string;
-  structureIdentity: string;
-  branches: Map<string, ServerBranch>;
-};
-
-type ServerBranchPageTarget = {
-  branch: ServerBranch;
-  cursor: string | null;
-};
-
-type ServerBranchData = {
-  rows: IssueTableRowsResponse["rows"];
-  total: number;
-  nextCursor: string | null;
-  headUpdatedAt: number;
-  headFetching: boolean;
-  loading: boolean;
-  error: boolean;
-  placeholder: boolean;
-};
-
 type LoadedIssueState = {
   membershipIdentity: string;
   issues: Map<string, Issue>;
 };
-
-function serverBranchKey(groupKey: string | null, parentId: string | null) {
-  return `${groupKey ?? "ungrouped"}::${parentId ?? "root"}`;
-}
-
-function sameStringArray(left: string[], right: string[]) {
-  return (
-    left.length === right.length &&
-    left.every((value, index) => value === right[index])
-  );
-}
-
-/** Rebase the branch graph synchronously when a query changes.
- *
- * Filters/search/sort keep the same group/hierarchy structure, so preserving
- * branch identities while resetting every cursor to the head lets React Query
- * show the previous rows during the new request. A real structure change
- * (group kind or hierarchy) discards incompatible group/parent identities. */
-function rebaseServerBranchState(
-  previous: ServerBranchState,
-  identity: string,
-  structureIdentity: string,
-  usesServerGrouping: boolean,
-): ServerBranchState {
-  if (previous.identity === identity) return previous;
-
-  const branches =
-    previous.structureIdentity === structureIdentity
-      ? new Map(
-          [...previous.branches].map(([key, branch]) => [
-            key,
-            { ...branch, cursors: [null] },
-          ]),
-        )
-      : new Map<string, ServerBranch>();
-
-  if (!usesServerGrouping) {
-    const key = serverBranchKey(null, null);
-    if (!branches.has(key)) {
-      branches.set(key, {
-        key,
-        groupKey: null,
-        parentId: null,
-        ancestorIds: [],
-        cursors: [null],
-      });
-    }
-  }
-
-  return { identity, structureIdentity, branches };
-}
 
 function tableGroupSpec(grouping: string): IssueTableGroupSpec {
   if (grouping === "status") return { kind: "status" };
@@ -633,13 +552,14 @@ export function InlineTitle({
   toggleLabel,
   renameLabel,
   createSubIssueLabel,
+  writable = true,
 }: {
   row: Extract<IssueTableDisplayRow, { kind: "issue" }>;
   /** Rename state is owned by the table (one editor at a time) so it also
    *  survives cell remounts and drives the structure freeze. */
   editing: boolean;
   onEditingChange: (editing: boolean) => void;
-  onUpdate: (updates: Partial<UpdateIssueRequest>) => void;
+  onUpdate: (updates: Partial<UpdateIssueRequest>) => Promise<boolean>;
   /** Navigate to the issue — clicking the title is the primary way IN. */
   onOpen: (event: React.MouseEvent) => void;
   onCreateSubIssue: () => void;
@@ -647,8 +567,11 @@ export function InlineTitle({
   toggleLabel: string;
   renameLabel: string;
   createSubIssueLabel: string;
+  writable?: boolean;
 }) {
   const [draft, setDraft] = useState(row.issue.title);
+  const [pending, setPending] = useState(false);
+  const submittingRef = useRef(false);
   const editingRef = useRef(editing);
   editingRef.current = editing;
   // True between the mousedown and the click of ONE gesture when that gesture
@@ -666,11 +589,22 @@ export function InlineTitle({
     if (!editingRef.current) setDraft(row.issue.title);
   }, [row.issue.title]);
 
-  const commit = () => {
+  const commit = async () => {
+    if (submittingRef.current) return;
     const title = draft.trim();
-    onEditingChange(false);
-    if (title && title !== row.issue.title) onUpdate({ title });
-    else setDraft(row.issue.title);
+    if (!title || title === row.issue.title) {
+      setDraft(row.issue.title);
+      onEditingChange(false);
+      return;
+    }
+    submittingRef.current = true;
+    setPending(true);
+    try {
+      if (await onUpdate({ title })) onEditingChange(false);
+    } finally {
+      submittingRef.current = false;
+      setPending(false);
+    }
   };
 
   return (
@@ -719,15 +653,16 @@ export function InlineTitle({
         {row.issue.identifier}
       </span>
       <IssueAgentActivityIndicator issueId={row.issue.id} />
-      {editing ? (
+      {editing && writable ? (
         <Input
           autoFocus
           value={draft}
+          disabled={pending}
           onChange={(event) => setDraft(event.target.value)}
-          onBlur={commit}
+          onBlur={() => void commit()}
           onKeyDown={(event) => {
-            if (event.key === "Enter") commit();
-            if (event.key === "Escape") {
+            if (event.key === "Enter") void commit();
+            if (event.key === "Escape" && !pending) {
               setDraft(row.issue.title);
               onEditingChange(false);
             }
@@ -763,33 +698,35 @@ export function InlineTitle({
             * pointer while it is somewhere else entirely. The fade still
             * follows the row's hover colour, since that is what the cell is
             * painted with when they appear. */}
-          <span className="pointer-events-none absolute inset-y-0 right-0 flex items-center gap-0.5 bg-gradient-to-l from-background from-70% to-transparent pr-1 pl-8 opacity-0 transition-opacity group-hover:from-[color-mix(in_oklab,var(--muted)_50%,var(--background))] group-hover/title:pointer-events-auto group-hover/title:opacity-100 focus-within:pointer-events-auto focus-within:opacity-100">
-            <button
-              type="button"
-              aria-label={createSubIssueLabel}
-              className="rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
-              onClick={(event) => {
-                event.stopPropagation();
-                onCreateSubIssue();
-              }}
-              onAuxClick={stopRowNavigation}
-            >
-              <Plus className="size-3" />
-            </button>
-            <button
-              type="button"
-              aria-label={renameLabel}
-              className="rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
-              onClick={(event) => {
-                event.stopPropagation();
-                setDraft(row.issue.title);
-                onEditingChange(true);
-              }}
-              onAuxClick={stopRowNavigation}
-            >
-              <Pencil className="size-3" />
-            </button>
-          </span>
+          {writable && (
+            <span className="pointer-events-none absolute inset-y-0 right-0 flex items-center gap-0.5 bg-gradient-to-l from-background from-70% to-transparent pr-1 pl-8 opacity-0 transition-opacity group-hover:from-[color-mix(in_oklab,var(--muted)_50%,var(--background))] group-hover/title:pointer-events-auto group-hover/title:opacity-100 focus-within:pointer-events-auto focus-within:opacity-100">
+              <button
+                type="button"
+                aria-label={createSubIssueLabel}
+                className="rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  onCreateSubIssue();
+                }}
+                onAuxClick={stopRowNavigation}
+              >
+                <Plus className="size-3" />
+              </button>
+              <button
+                type="button"
+                aria-label={renameLabel}
+                className="rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  setDraft(row.issue.title);
+                  onEditingChange(true);
+                }}
+                onAuxClick={stopRowNavigation}
+              >
+                <Pencil className="size-3" />
+              </button>
+            </span>
+          )}
         </>
       )}
     </div>
@@ -800,18 +737,25 @@ function LazyLabelCell({
   issue,
   open,
   onOpenChange,
+  writable,
+  onChange,
 }: {
   issue: Issue;
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  writable: boolean;
+  onChange: (labelIds: string[]) => Promise<void>;
 }) {
   const { t } = useT("issues");
   const labels = issue.labels ?? [];
-  if (open) {
+  if (open && writable) {
     return (
       <div onClick={stopRowNavigation} onAuxClick={stopRowNavigation}>
         <LabelPicker
-          issueId={issue.id}
+          selectedIds={labels.map((label) => label.id)}
+          onSelectedIdsChange={(labelIds) => {
+            void onChange(labelIds);
+          }}
           open
           onOpenChange={(next) => {
             if (!next) onOpenChange(false);
@@ -819,6 +763,19 @@ function LazyLabelCell({
           triggerRender={<button type="button" className="flex max-w-full gap-1" />}
         />
       </div>
+    );
+  }
+  if (!writable) {
+    return labels.length > 0 ? (
+      <span className="flex max-w-full items-center gap-1 overflow-hidden">
+        {labels.slice(0, 2).map((label) => (
+          <LabelChip key={label.id} label={label} />
+        ))}
+      </span>
+    ) : (
+      <span className="text-muted-foreground">
+        {t(($) => $.table.empty_value)}
+      </span>
     );
   }
   return (
@@ -847,45 +804,31 @@ function LazyLabelCell({
   );
 }
 
-// Extends the <tr> props so the virtualizer's measuring ref and data-index,
-// which DataTable clones onto whatever renderRow returns, reach the element
-// instead of being absorbed here. A group header is shorter than a data row,
-// so it is exactly the kind of row the measurement exists for.
-type IssueTableGroupRowProps = React.ComponentProps<"tr"> & {
+type IssueTableGroupContentProps = {
   group: Extract<IssueTableDisplayRow, { kind: "group" }>;
-  colSpan: number;
   onToggle: () => void;
 };
 
-export function IssueTableGroupRow({
+export function IssueTableGroupContent({
   group,
-  colSpan,
   onToggle,
-  ...rowProps
-}: IssueTableGroupRowProps) {
+}: IssueTableGroupContentProps) {
   return (
-    <TableRow
-      {...rowProps}
-      className="bg-muted/40 hover:bg-muted/60"
+    <button
+      type="button"
+      className="sticky left-4 flex w-fit items-center gap-2 text-caption font-medium"
       onClick={onToggle}
     >
-      <TableCell colSpan={colSpan} className="h-9 px-4 py-1.5">
-        <button
-          type="button"
-          className="sticky left-4 flex w-fit items-center gap-2 text-caption font-medium"
-        >
-          {group.collapsed ? (
-            <ChevronRight className="size-3.5" />
-          ) : (
-            <ChevronDown className="size-3.5" />
-          )}
-          {group.label}
-          <span className="font-normal tabular-nums text-muted-foreground">
-            {group.count}
-          </span>
-        </button>
-      </TableCell>
-    </TableRow>
+      {group.collapsed ? (
+        <ChevronRight className="size-3.5" />
+      ) : (
+        <ChevronDown className="size-3.5" />
+      )}
+      {group.label}
+      <span className="font-normal tabular-nums text-muted-foreground">
+        {group.count}
+      </span>
+    </button>
   );
 }
 
@@ -932,15 +875,23 @@ type TableViewMeta = {
   childProgressMap: Map<string, ChildProgress>;
   propertyById: Map<string, IssueProperty>;
   properties: IssueProperty[];
+  fieldById: Map<string, IssueTableField>;
   visibleIssueIds: string[];
   /** `${row.key}:${column.id}` of the cell whose editor popup / rename input
    *  is open, or null. Owned by TableView so the open editor survives cell
    *  remounts and freezes the table structure while it is up. */
-  editingCellKey: string | null;
-  setEditingCellKey: (key: string | null) => void;
+  editingCellSession: EditingCellSession | null;
+  openEditingCell: (cellKey: string) => void;
+  closeEditingCell: (instanceId: number) => void;
+  restoreEditingCell: (session: EditingCellSession) => void;
   /** Takes the ISSUE, not its id: the run-confirm gate reads its status
    *  category and owner to decide whether the write needs confirming first. */
-  updateIssue: (issue: Issue, updates: Partial<UpdateIssueRequest>) => void;
+  updateField: (
+    row: IssueTableRow,
+    fieldId: string,
+    change: DataSourceCellChange,
+  ) => ReturnType<ReturnType<typeof createIssueTableDataSource>["execute"]>;
+  writable: boolean;
   openIssue: (issue: Issue, event?: React.MouseEvent) => void;
   createSubIssue: (issue: Issue) => void;
   toggleTableParentCollapsed: (issueId: string) => void;
@@ -952,6 +903,26 @@ type TableViewMeta = {
   onSort: (field: SortField, direction: "asc" | "desc") => void;
   toggleTableColumn: (key: TableColumnKey) => void;
 };
+
+type EditingCellSession = {
+  cellKey: string;
+  instanceId: number;
+  sourceIdentity: string;
+};
+
+function closePendingTableRunConfirm(
+  sourceIdentity: string,
+  ownerIdentity: string,
+) {
+  const modal = useModalStore.getState();
+  if (
+    modal.modal === "issue-run-confirm" &&
+    modal.data?.sourceIdentity === sourceIdentity &&
+    modal.data?.ownerIdentity === ownerIdentity
+  ) {
+    modal.close(modal.modalInstanceId ?? undefined);
+  }
+}
 
 function getTableViewMeta(
   table: TanstackTable<IssueTableDisplayRow>,
@@ -980,17 +951,18 @@ function getTableViewMeta(
  */
 export function useReleaseEditingCellOnUnmount(
   cellKey: string | null,
-  editingCellKey: string | null,
-  setEditingCellKey: (key: string | null) => void,
+  editingCellSession: EditingCellSession | null,
+  closeEditingCell: (instanceId: number) => void,
 ) {
-  const editingCellKeyRef = useRef(editingCellKey);
-  editingCellKeyRef.current = editingCellKey;
-  const setEditingCellKeyRef = useRef(setEditingCellKey);
-  setEditingCellKeyRef.current = setEditingCellKey;
+  const editingCellSessionRef = useRef(editingCellSession);
+  editingCellSessionRef.current = editingCellSession;
+  const closeEditingCellRef = useRef(closeEditingCell);
+  closeEditingCellRef.current = closeEditingCell;
   useEffect(() => {
     return () => {
-      if (cellKey !== null && editingCellKeyRef.current === cellKey) {
-        setEditingCellKeyRef.current(null);
+      const session = editingCellSessionRef.current;
+      if (cellKey !== null && session?.cellKey === cellKey) {
+        closeEditingCellRef.current(session.instanceId);
       }
     };
   }, [cellKey]);
@@ -1092,14 +1064,17 @@ function IssueTableBodyCell({
 }: CellContext<IssueTableDisplayRow, unknown>) {
   const meta = getTableViewMeta(table);
   const { t, i18n } = useT("issues");
+  const statusLabel = useStatusLabel(useWorkspaceId());
   // Computed (and the unmount responder registered) before the early return so
   // the hook order is stable across issue/group rows.
   const cellKey =
-    row.original.kind === "issue" ? `${row.original.key}:${column.id}` : null;
+    row.original.kind === "issue"
+      ? JSON.stringify([row.original.key, column.id])
+      : null;
   useReleaseEditingCellOnUnmount(
     cellKey,
-    meta.editingCellKey,
-    meta.setEditingCellKey,
+    meta.editingCellSession,
+    meta.closeEditingCell,
   );
   // Placeholder rows go through the ordinary cell renderer so they inherit the
   // real column widths, pinning and borders — the grid is already correct
@@ -1110,12 +1085,79 @@ function IssueTableBodyCell({
   if (row.original.kind !== "issue") return null;
   const issueRow = row.original;
   const issue = issueRow.issue;
+  const sourceRow = issueRow.sourceRow ?? {
+    issue,
+    direct_child_count: issueRow.hasChildren ? 1 : 0,
+  };
   const key = column.id as TableColumnKey;
-  const editorOpen = meta.editingCellKey === cellKey;
-  const setEditorOpen = (open: boolean) =>
-    meta.setEditingCellKey(open ? cellKey : null);
-  const onUpdate = (updates: Partial<UpdateIssueRequest>) =>
-    meta.updateIssue(issue, updates);
+  const editorSession =
+    meta.editingCellSession?.cellKey === cellKey
+      ? meta.editingCellSession
+      : null;
+  const editorOpen = editorSession !== null;
+  const setEditorOpen = (open: boolean) => {
+    if (open && cellKey !== null) meta.openEditingCell(cellKey);
+    else if (!open && editorSession) {
+      meta.closeEditingCell(editorSession.instanceId);
+    }
+  };
+  const field = meta.fieldById.get(key);
+  const canSet = field?.canSet(sourceRow) ?? false;
+  const canClear = field?.canClear(sourceRow) ?? false;
+  const onUpdate = async (updates: Partial<UpdateIssueRequest>) => {
+    let change: DataSourceCellChange | null = null;
+    switch (key) {
+      case "title":
+        if (updates.title !== undefined) {
+          change = { op: "set", value: updates.title };
+        }
+        break;
+      case "status":
+        if (updates.status !== undefined) {
+          change = { op: "set", value: updates.status };
+        }
+        break;
+      case "priority":
+        if (updates.priority !== undefined) {
+          change = { op: "set", value: updates.priority };
+        }
+        break;
+      case "assignee":
+        change =
+          updates.assignee_type && updates.assignee_id
+            ? {
+                op: "set",
+                value: {
+                  type: updates.assignee_type,
+                  id: updates.assignee_id,
+                },
+              }
+            : { op: "clear" };
+        break;
+      case "project":
+        change = updates.project_id
+          ? { op: "set", value: updates.project_id }
+          : { op: "clear" };
+        break;
+      case "start_date":
+        change = updates.start_date
+          ? { op: "set", value: updates.start_date }
+          : { op: "clear" };
+        break;
+      case "due_date":
+        change = updates.due_date
+          ? { op: "set", value: updates.due_date }
+          : { op: "clear" };
+        break;
+    }
+    if (!change) return false;
+    const result = await meta.updateField(sourceRow, key, change);
+    if (result.status === "failed") {
+      toast.error(result.error.message);
+      if (editorSession) meta.restoreEditingCell(editorSession);
+    }
+    return result.status !== "failed";
+  };
 
   const propertyId = propertyIdFromViewKey(key);
   if (propertyId) {
@@ -1123,13 +1165,56 @@ function IssueTableBodyCell({
     if (!property) return null;
     return (
       <div onClick={stopRowNavigation} onAuxClick={stopRowNavigation}>
-        <CustomPropertyValueEditor
-          issue={issue}
+        <CustomPropertyValueInput
           property={property}
+          value={issue.properties[property.id]}
           open={editorOpen}
           onOpenChange={setEditorOpen}
+          canSet={canSet}
+          canClear={canClear}
+          editorSessionKey={editorSession?.instanceId}
+          onChange={async (value) => {
+            const result = await meta.updateField(
+              sourceRow,
+              key,
+              value === undefined
+                ? { op: "clear" }
+                : { op: "set", value },
+            );
+            if (result.status === "failed") {
+              toast.error(result.error.message);
+              if (editorSession) meta.restoreEditingCell(editorSession);
+            }
+            return result.status === "accepted";
+          }}
         />
       </div>
+    );
+  }
+  if (
+    !meta.writable &&
+    [
+      "status",
+      "priority",
+      "assignee",
+      "project",
+      "start_date",
+      "due_date",
+    ].includes(key)
+  ) {
+    let value: React.ReactNode = field?.value(sourceRow) as React.ReactNode;
+    if (key === "status") value = statusLabel(issue.status);
+    else if (key === "priority") value = t(($) => $.priority[issue.priority]);
+    else if (key === "assignee") {
+      value =
+        issue.assignee_type && issue.assignee_id
+          ? meta.getActorName(issue.assignee_type, issue.assignee_id)
+          : t(($) => $.table.unassigned);
+    }
+    return (
+      <span className="text-muted-foreground">
+        {value == null || value === "" ? t(($) => $.table.empty_value) : value}
+      </span>
     );
   }
   switch (key) {
@@ -1146,6 +1231,7 @@ function IssueTableBodyCell({
           toggleLabel={t(($) => $.table.toggle_sub_issues)}
           renameLabel={t(($) => $.table.rename_title)}
           createSubIssueLabel={t(($) => $.actions.create_sub_issue)}
+          writable={canSet}
         />
       );
     case "identifier":
@@ -1195,6 +1281,20 @@ function IssueTableBodyCell({
           issue={issue}
           open={editorOpen}
           onOpenChange={setEditorOpen}
+          writable={canSet || canClear}
+          onChange={async (labelIds) => {
+            const result = await meta.updateField(
+              sourceRow,
+              key,
+              labelIds.length === 0
+                ? { op: "clear" }
+                : { op: "set", value: labelIds },
+            );
+            if (result.status === "failed") {
+              toast.error(result.error.message);
+              if (editorSession) meta.restoreEditingCell(editorSession);
+            }
+          }}
         />
       );
     case "project":
@@ -1287,6 +1387,8 @@ export function TableView({
 }: TableViewProps) {
   const { t } = useT("issues");
   const wsId = useWorkspaceId();
+  const workspaceSlug = getCurrentSlug();
+  const tableOwnerIdentity = useId();
   const resolveStatusLabel = useStatusLabel(wsId);
   const { entryOf } = useIssueStatuses(wsId);
   const openModal = useModalStore((s) => s.open);
@@ -1294,12 +1396,128 @@ export function TableView({
   const intentNavigate = useIntentNavigate();
   const paths = useWorkspacePaths();
   const actions = useIssueSurfaceActionsOptional();
+  const writeCapabilityRef = useRef(actions !== null);
+  writeCapabilityRef.current = actions !== null;
+  useEffect(
+    () => () => {
+      writeCapabilityRef.current = false;
+    },
+    [],
+  );
+  const workspaceContext = useMemo<WorkspaceRequestContext | undefined>(
+    () =>
+      workspaceSlug
+        ? {
+            workspaceId: wsId,
+            workspaceSlug,
+            isActive: () => writeCapabilityRef.current,
+          }
+        : undefined,
+    [workspaceSlug, wsId],
+  );
+  const issueSourceIdentity = useMemo(
+    () =>
+      dataSourceIdentityString({
+        workspaceId: wsId,
+        namespace: "issues",
+        sourceId: "tasks",
+      }),
+    [wsId],
+  );
+  const canSubmit = useCallback(() => {
+    if (!workspaceContext) return writeCapabilityRef.current;
+    try {
+      assertWorkspaceRequestContext(workspaceContext);
+      return true;
+    } catch {
+      return false;
+    }
+  }, [workspaceContext]);
+  const { mutateAsync: setPropertyAsync } = useSetIssueProperty();
+  const { mutateAsync: clearPropertyAsync } = useUnsetIssueProperty();
+  const { mutateAsync: attachLabelAsync } = useAttachLabelToIssue();
+  const { mutateAsync: detachLabelAsync } = useDetachLabelFromIssue();
   const selection = useIssueSurfaceSelection();
   const { getActorName } = useActorName();
   const {
     data: properties = [],
     isSuccess: propertyCatalogSettled,
   } = useQuery(propertyListOptions(wsId));
+  const dataSource = useMemo(
+    () => {
+      const execute = createIssueTableCommandExecutor({
+        actions,
+        statusCatalog: { entryOf },
+        openRunConfirm: (data) => openModal("issue-run-confirm", data),
+        sourceIdentity: issueSourceIdentity,
+        ownerIdentity: tableOwnerIdentity,
+        workspaceContext,
+        canSubmit,
+      });
+      return createIssueTableDataSource({
+        workspaceId: wsId,
+        workspaceSlug: workspaceSlug ?? undefined,
+        fields: properties,
+        execute,
+        setProperty: async ({ issueId, propertyId, value }) => {
+          await setPropertyAsync({
+            issueId,
+            propertyId,
+            value: value as IssuePropertyValue,
+            workspaceContext,
+          });
+        },
+        clearProperty: async ({ issueId, propertyId }) => {
+          await clearPropertyAsync({ issueId, propertyId, workspaceContext });
+        },
+        setLabels: async ({ issue, labelIds }) => {
+          const previous = new Set((issue.labels ?? []).map((label) => label.id));
+          const next = new Set(labelIds);
+          await Promise.all([
+            ...labelIds
+              .filter((labelId) => !previous.has(labelId))
+              .map((labelId) =>
+                attachLabelAsync({
+                  issueId: issue.id,
+                  labelId,
+                  workspaceContext,
+                }),
+              ),
+            ...(issue.labels ?? [])
+              .map((label) => label.id)
+              .filter((labelId) => !next.has(labelId))
+              .map((labelId) =>
+                detachLabelAsync({
+                  issueId: issue.id,
+                  labelId,
+                  workspaceContext,
+                }),
+              ),
+          ]);
+        },
+      });
+    },
+    [
+      actions,
+      attachLabelAsync,
+      canSubmit,
+      clearPropertyAsync,
+      detachLabelAsync,
+      entryOf,
+      issueSourceIdentity,
+      openModal,
+      properties,
+      setPropertyAsync,
+      tableOwnerIdentity,
+      workspaceContext,
+      workspaceSlug,
+      wsId,
+    ],
+  );
+  const fieldById = useMemo(
+    () => new Map(dataSource.fields.map((field) => [field.id, field])),
+    [dataSource.fields],
+  );
   const propertyById = useMemo(
     () => new Map(properties.map((property) => [property.id, property])),
     [properties],
@@ -1337,10 +1555,43 @@ export function TableView({
   const sortDirection = useViewStore((state) => state.sortDirection);
   const setSortDirection = useViewStore((state) => state.setSortDirection);
   const [exporting, setExporting] = useState<"all" | "selected" | null>(null);
-  const selectionAnchorRef = useRef<string | null>(null);
   // The one cell whose editor (picker popup / rename input) is open — see
   // TableViewMeta.editingCellKey.
-  const [editingCellKey, setEditingCellKey] = useState<string | null>(null);
+  const sourceIdentity = useMemo(
+    () => dataSourceIdentityString(dataSource.identity),
+    [dataSource.identity],
+  );
+  const editorInstanceRef = useRef(0);
+  const sourceIdentityRef = useRef(sourceIdentity);
+  sourceIdentityRef.current = sourceIdentity;
+  const [editingCellSession, setEditingCellSession] =
+    useState<EditingCellSession | null>(null);
+  const editingCellKey = editingCellSession?.cellKey ?? null;
+  const openEditingCell = useCallback(
+    (cellKey: string) => {
+      const session: EditingCellSession = {
+        cellKey,
+        instanceId: ++editorInstanceRef.current,
+        sourceIdentity,
+      };
+      setEditingCellSession(session);
+    },
+    [sourceIdentity],
+  );
+  const closeEditingCell = useCallback((instanceId: number) => {
+    setEditingCellSession((current) =>
+      current?.instanceId === instanceId ? null : current,
+    );
+  }, []);
+  const restoreEditingCell = useCallback((session: EditingCellSession) => {
+    if (
+      editorInstanceRef.current !== session.instanceId ||
+      sourceIdentityRef.current !== session.sourceIdentity
+    ) {
+      return;
+    }
+    setEditingCellSession((current) => current ?? session);
+  }, []);
 
   const groupingPropertyId = propertyIdFromViewKey(tableGrouping);
   const effectiveTableGrouping =
@@ -1389,400 +1640,10 @@ export function TableView({
       ),
     [groupProjectsQuery.data],
   );
-  const serverGroupsRequestGroup =
-    serverGroupSpec.kind === "none"
-      ? ({ kind: "status" } as const)
-      : serverGroupSpec;
-  const serverGroupsQuery = useInfiniteQuery({
-    ...issueTableGroupsOptions(
-      wsId,
-      serverQuery,
-      serverGroupsRequestGroup,
-    ),
-    enabled: usesServerGrouping,
-  });
-  const {
-    data: serverGroupsData,
-    isPending: serverGroupsPending,
-    isError: serverGroupsError,
-    hasNextPage: hasNextServerGroupPage,
-    isFetchingNextPage: fetchingNextServerGroupPage,
-    refetch: refetchServerGroups,
-    fetchNextPage: fetchNextServerGroupPage,
-  } = serverGroupsQuery;
-  useEffect(() => {
-    const body =
-      serverGroupsQuery.error instanceof ApiError &&
-      serverGroupsQuery.error.body &&
-      typeof serverGroupsQuery.error.body === "object"
-        ? (serverGroupsQuery.error.body as { error?: unknown })
-        : null;
-    if (
-      serverGroupsQuery.error instanceof ApiError &&
-      serverGroupsQuery.error.status === 422 &&
-      body?.error === "unsupported_group"
-    ) {
-      setTableGrouping("none");
-      toast.info(t(($) => $.table.group_property_unavailable));
-    }
-  }, [serverGroupsQuery.error, setTableGrouping, t]);
-  const serverGroups = useMemo(
-    () => serverGroupsData?.pages.flatMap((page) => page.groups) ?? [],
-    [serverGroupsData?.pages],
-  );
-  const serverIdentity = useMemo(
-    () => JSON.stringify([serverQuery, serverGroupSpec, tableHierarchy]),
-    [serverGroupSpec, serverQuery, tableHierarchy],
-  );
-  const serverStructureIdentity = useMemo(
-    () => JSON.stringify([serverGroupSpec, tableHierarchy]),
-    [serverGroupSpec, tableHierarchy],
-  );
-  const collapsedGroupSet = useMemo(
-    () => new Set(tableCollapsedGroups),
-    [tableCollapsedGroups],
-  );
-  const collapsedParentSet = useMemo(
-    () => new Set(tableCollapsedParents),
-    [tableCollapsedParents],
-  );
-  const [serverBranchState, setServerBranchState] =
-    useState<ServerBranchState>({
-      identity: "",
-      structureIdentity: "",
-      branches: new Map(),
-    });
-
-  const rebasedServerBranchState = useMemo(
-    () =>
-      rebaseServerBranchState(
-        serverBranchState,
-        serverIdentity,
-        serverStructureIdentity,
-        usesServerGrouping,
-      ),
-    [
-      serverBranchState,
-      serverIdentity,
-      serverStructureIdentity,
-      usesServerGrouping,
-    ],
-  );
-
-  // Commit the synchronous rebase after render. Consumers use the derived
-  // state above immediately, so a filter/search/sort transition never has an
-  // empty frame while this effect catches state up.
-  useEffect(() => {
-    if (rebasedServerBranchState !== serverBranchState) {
-      setServerBranchState(rebasedServerBranchState);
-    }
-  }, [rebasedServerBranchState, serverBranchState]);
-
-  const activeServerBranches = rebasedServerBranchState.branches;
-  const serverBranchPlaceholderRef = useRef(
-    new Map<string, IssueTableRowsResponse>(),
-  );
-  const serverBranchPageTargets = useMemo<ServerBranchPageTarget[]>(
-    () =>
-      [...activeServerBranches.values()].flatMap((branch) =>
-        branch.cursors.map((cursor) => ({ branch, cursor })),
-      ),
-    [activeServerBranches],
-  );
-  // useQueries compares and installs the supplied query list in an effect.
-  // Keeping this array stable prevents a settled branch from being installed
-  // again on every render (which can otherwise create a render loop once the
-  // virtualized table starts measuring rows).
-  const serverBranchQueries = useMemo(
-    () =>
-      serverBranchPageTargets.map(({ branch, cursor }) => {
-        const placeholder =
-          cursor === null
-            ? serverBranchPlaceholderRef.current.get(
-                `${serverStructureIdentity}:${branch.key}`,
-              )
-            : undefined;
-        return {
-          ...issueTableRowPageOptions(wsId, {
-            query: serverQuery,
-            group: serverGroupSpec,
-            group_key: branch.groupKey,
-            hierarchy: { enabled: tableHierarchy },
-            parent_id: branch.parentId,
-            page: { limit: 50, cursor },
-          }),
-          // QueriesObserver replaces observers by query hash, so
-          // keepPreviousData alone cannot bridge a changed table query inside
-          // useQueries. Retain the last settled head per structural branch to
-          // keep the previous table painted while the new query is pending.
-          //
-          // Passed as a VALUE, not a closure. QueryObserver reuses the previous
-          // placeholder result only while `options.placeholderData` compares
-          // equal BY REFERENCE to the previous render's, so `() => placeholder`
-          // — a fresh arrow on every rebuild of this array — forced the
-          // placeholder to be recomputed and the result re-derived on every
-          // render. The value comes from a ref Map and is already stable, and
-          // the closure ignored both of the arguments the function form
-          // receives, so the two forms are equivalent (MUL-5477).
-          ...(placeholder ? { placeholderData: placeholder } : {}),
-          enabled:
-            (branch.groupKey === null ||
-              !collapsedGroupSet.has(branch.groupKey)) &&
-            !branch.ancestorIds.some((id) => collapsedParentSet.has(id)),
-        };
-      }),
-    [
-      collapsedGroupSet,
-      collapsedParentSet,
-      serverBranchPageTargets,
-      serverGroupSpec,
-      serverQuery,
-      serverStructureIdentity,
-      tableHierarchy,
-      wsId,
-    ],
-  );
-  const combineServerBranchQueries = useCallback(
-    (results: Array<UseQueryResult<IssueTableRowsResponse, Error>>) => {
-      const byBranch: Record<string, ServerBranchData> = {};
-      for (let index = 0; index < serverBranchPageTargets.length; index += 1) {
-        const target = serverBranchPageTargets[index];
-        const result = results[index];
-        if (!target || !result) continue;
-        const current = byBranch[target.branch.key] ?? {
-          rows: [],
-          total: 0,
-          nextCursor: null,
-          headUpdatedAt: 0,
-          headFetching: false,
-          loading: false,
-          error: false,
-          placeholder: false,
-        };
-        const page = result.data;
-        if (page) {
-          current.rows.push(...page.rows);
-          if (target.cursor === null) current.total = page.total;
-          current.nextCursor = page.next_cursor;
-        }
-        if (target.cursor === null) {
-          current.headUpdatedAt = result.dataUpdatedAt;
-          current.headFetching = result.isFetching;
-        }
-        current.loading ||= result.isPending || result.isFetching;
-        current.error ||= result.isError;
-        current.placeholder ||= result.isPlaceholderData;
-        byBranch[target.branch.key] = current;
-      }
-      return byBranch;
-    },
-    [serverBranchPageTargets],
-  );
-  // `combine` is structurally shared by React Query. It must return only plain
-  // objects/arrays: Map instances and freshly-created retry closures cannot be
-  // shared, and make useQueries publish a different snapshot on every render.
-  const serverBranchData = useQueries({
-    queries: serverBranchQueries,
-    combine: combineServerBranchQueries,
-  });
-
-  useEffect(() => {
-    const next = new Map<string, IssueTableRowsResponse>();
-    for (const branch of activeServerBranches.values()) {
-      const key = `${serverStructureIdentity}:${branch.key}`;
-      const data = serverBranchData[branch.key];
-      if (!data || data.placeholder || data.loading || data.error) {
-        const previous = serverBranchPlaceholderRef.current.get(key);
-        if (previous) next.set(key, previous);
-        continue;
-      }
-      next.set(key, {
-        query_fingerprint: "__table_placeholder__",
-        group_key: branch.groupKey,
-        parent_id: branch.parentId,
-        total: data.total,
-        rows: data.rows,
-        branch_total: data.rows.length,
-        next_cursor: null,
-      });
-    }
-    // Bound placeholders to the active structural graph. Sort/filter/search
-    // transitions reuse these entries; old group/property configurations do
-    // not accumulate for the lifetime of the Table component.
-    serverBranchPlaceholderRef.current = next;
-  }, [
-    activeServerBranches,
-    serverBranchData,
-    serverStructureIdentity,
-  ]);
-
-  // Re-derive ancestry from the current row graph after realtime re-parenting.
-  // Branch keys are parent ids, so an existing branch can move under a new
-  // collapsed ancestor without being re-activated by the viewport sentinel.
-  useEffect(() => {
-    const desiredAncestors = new Map<string, string[]>();
-    const visited = new Set<string>();
-    const visit = (
-      groupKey: string | null,
-      parentId: string | null,
-      ancestors: string[],
-    ) => {
-      const key = serverBranchKey(groupKey, parentId);
-      if (visited.has(key)) return;
-      visited.add(key);
-      desiredAncestors.set(key, ancestors);
-      for (const row of serverBranchData[key]?.rows ?? []) {
-        if (row.direct_child_count > 0) {
-          visit(groupKey, row.issue.id, [...ancestors, row.issue.id]);
-        }
-      }
-    };
-
-    if (usesServerGrouping) {
-      for (const group of serverGroups) visit(group.key, null, []);
-    } else {
-      visit(null, null, []);
-    }
-
-    setServerBranchState((previous) => {
-      if (previous.identity !== serverIdentity) return previous;
-      let branches: Map<string, ServerBranch> | null = null;
-      for (const [key, ancestors] of desiredAncestors) {
-        const branch = previous.branches.get(key);
-        if (!branch || sameStringArray(branch.ancestorIds, ancestors)) continue;
-        branches ??= new Map(previous.branches);
-        branches.set(key, { ...branch, ancestorIds: ancestors });
-      }
-      return branches ? { ...previous, branches } : previous;
-    });
-  }, [serverBranchData, serverGroups, serverIdentity, usesServerGrouping]);
-
-  const activateServerBranch = useCallback(
-    (
-      groupKey: string | null,
-      parentId: string | null,
-      ancestorIds: string[],
-    ) => {
-      setServerBranchState((previous) => {
-        if (previous.identity !== serverIdentity) return previous;
-        const key = serverBranchKey(groupKey, parentId);
-        const existing = previous.branches.get(key);
-        if (existing && sameStringArray(existing.ancestorIds, ancestorIds)) {
-          return previous;
-        }
-        const branches = new Map(previous.branches);
-        branches.set(
-          key,
-          existing
-            ? { ...existing, ancestorIds }
-            : {
-                key,
-                groupKey,
-                parentId,
-                ancestorIds,
-                cursors: [null],
-              },
-        );
-        return { ...previous, branches };
-      });
-    },
-    [serverIdentity],
-  );
-
-  // A broad Table invalidation refetches every active page. As soon as the
-  // head starts refreshing, every later cursor is obsolete; discard them
-  // before their concurrent responses can create a duplicate or missing row.
-  // The revision check is a second line of defence for clients that restore a
-  // refreshed head directly into the cache without exposing a fetching frame.
-  const branchHeadRevisionRef = useRef<Record<string, number>>({});
-  useEffect(() => {
-    const previousRevisions = branchHeadRevisionRef.current;
-    const nextRevisions: Record<string, number> = {};
-    const branchesToTrim = new Set<string>();
-    for (const [key, branch] of activeServerBranches) {
-      const revision = serverBranchData[key]?.headUpdatedAt ?? 0;
-      if (revision === 0) continue;
-      nextRevisions[key] = revision;
-      const seen = previousRevisions[key];
-      if (
-        branch.cursors.length > 1 &&
-        (serverBranchData[key]?.headFetching ||
-          (seen !== undefined && seen !== revision))
-      ) {
-        branchesToTrim.add(key);
-      }
-    }
-    // Keep only the current query's active branches. This bounds the revision
-    // bookkeeping across long sessions with many filter/search identities.
-    branchHeadRevisionRef.current = nextRevisions;
-    if (branchesToTrim.size === 0) return;
-
-    setServerBranchState((previous) => {
-      if (previous.identity !== serverIdentity) return previous;
-      let branches: Map<string, ServerBranch> | null = null;
-      for (const [key, branch] of previous.branches) {
-        if (branchesToTrim.has(key)) {
-          branches ??= new Map(previous.branches);
-          branches.set(key, { ...branch, cursors: [null] });
-        }
-      }
-      return branches ? { ...previous, branches } : previous;
-    });
-  }, [activeServerBranches, serverBranchData, serverIdentity]);
-
-  const loadNextServerBranchPage = useCallback(
-    (branchKey: string, cursor: string) => {
-      setServerBranchState((previous) => {
-        if (previous.identity !== serverIdentity) return previous;
-        const branch = previous.branches.get(branchKey);
-        if (!branch || branch.cursors.includes(cursor)) return previous;
-        const branches = new Map(previous.branches);
-        branches.set(branchKey, {
-          ...branch,
-          cursors: [...branch.cursors, cursor],
-        });
-        return { ...previous, branches };
-      });
-    },
-    [serverIdentity],
-  );
-
-  const retryServerBranch = useCallback(
-    (branchKey: string) => {
-      const branch = activeServerBranches.get(branchKey);
-      if (!branch) return;
-      void queryClient.refetchQueries({
-        queryKey: issueKeys.tableRows(
-          wsId,
-          serverQuery,
-          serverGroupSpec,
-          branch.groupKey,
-          tableHierarchy,
-          branch.parentId,
-        ),
-        exact: false,
-        type: "active",
-      });
-    },
-    [
-      activeServerBranches,
-      queryClient,
-      serverGroupSpec,
-      serverQuery,
-      tableHierarchy,
-      wsId,
-    ],
-  );
-
   const serverGroupLabel = useCallback(
     (descriptor: IssueTableGroupDescriptor) => {
       const value = descriptor.value;
       if (value.kind === "status") {
-        // A group is one status KEY, so it shows that status's own name — a
-        // custom status must not read as its category. `resolveStatusLabel`
-        // falls back to the raw key, which is also what keeps a status
-        // introduced by a NEWER backend usable on an installed client instead
-        // of collapsing to the schema fallback or an empty label. (MUL-6243)
         return resolveStatusLabel(value.status);
       }
       if (value.kind === "assignee") {
@@ -1792,8 +1653,6 @@ export function TableView({
       }
       if (value.kind === "project") {
         if (!value.project_id) return t(($) => $.swimlane.no_project);
-        // A project the query cannot resolve (deleted, or not visible to this
-        // member) reads as unavailable — never as its raw id.
         return (
           groupProjectMap.get(value.project_id)?.title ??
           t(($) => $.table.value_unavailable)
@@ -1820,190 +1679,232 @@ export function TableView({
           ?.name ?? String(value.value ?? "")
       );
     },
-    [getActorName, groupProjectMap, propertyById, t],
+    [getActorName, groupProjectMap, propertyById, resolveStatusLabel, t],
   );
-
-  const serverDisplayRows = useMemo<IssueTableDisplayRow[]>(() => {
-    const result: IssueTableDisplayRow[] = [];
-    const seenIssueIds = new Set<string>();
-    const appendBranch = (
-      groupKey: string | null,
-      parentId: string | null,
-      depth: number,
-      ancestorIds: string[],
-    ) => {
-      const key = serverBranchKey(groupKey, parentId);
-      const data = serverBranchData[key];
-      if (!data) {
-        const registered = activeServerBranches.has(key);
-        result.push({
-          kind: "load_more",
-          key: `${registered ? "loading" : "activate"}:${key}`,
-          state: registered ? "loading" : "has_more",
-          total: 0,
-          onLoad: registered
-            ? undefined
-            : () => activateServerBranch(groupKey, parentId, ancestorIds),
-        });
-        return;
-      }
-      if (data.rows.length === 0 && data.loading) {
-        result.push({
-          kind: "load_more",
-          key: `loading:${key}`,
-          state: "loading",
-          total: 0,
-        });
-      }
-      for (const row of data.rows) {
-        // A realtime move can briefly leave the same entity in old and new
-        // branch caches. Render the first authoritative position only; duplicate
-        // ids otherwise create duplicate React keys and duplicate selection.
-        if (seenIssueIds.has(row.issue.id)) continue;
-        seenIssueIds.add(row.issue.id);
-        const collapsed = collapsedParentSet.has(row.issue.id);
-        result.push({
-          kind: "issue",
-          key: row.issue.id,
-          issue: row.issue,
-          depth,
-          hasChildren: tableHierarchy && row.direct_child_count > 0,
-          collapsed,
-        });
-        if (tableHierarchy && row.direct_child_count > 0 && !collapsed) {
-          appendBranch(groupKey, row.issue.id, depth + 1, [
-            ...ancestorIds,
-            row.issue.id,
-          ]);
+  const issueTableBinding = useMemo<
+    DataViewQueryBinding<
+      IssueTableRow,
+      IssueTableQuerySpec,
+      IssueTableRowsResponse,
+      IssueTableGroupsResponse
+    >
+  >(
+    () => ({
+      identity: dataSource.identity,
+      rowPageKey: ({ query, groupBy, branch, hierarchy, page }) => {
+        const group = tableGroupSpec(groupBy?.fieldId ?? "none");
+        return [
+          ...issueKeys.tableRows(
+            wsId,
+            query,
+            group,
+            branch.groupKey,
+            hierarchy,
+            branch.parentRowId,
+          ),
+          "page",
+          page.cursor ?? null,
+        ] as const;
+      },
+      rowBranchKey: ({ query, groupBy, branch, hierarchy }) =>
+        issueKeys.tableRows(
+          wsId,
+          query,
+          tableGroupSpec(groupBy?.fieldId ?? "none"),
+          branch.groupKey,
+          hierarchy,
+          branch.parentRowId,
+        ),
+      readRowPage: async (
+        { query, groupBy, branch, hierarchy, page },
+        signal,
+      ) => {
+        const result = await dataSource.read(
+          {
+            query,
+            group: tableGroupSpec(groupBy?.fieldId ?? "none"),
+            group_key: branch.groupKey,
+            hierarchy: { enabled: hierarchy },
+            parent_id: branch.parentRowId,
+          },
+          page,
+          signal,
+        );
+        return {
+          query_fingerprint: result.metadata.queryFingerprint,
+          group_key: result.metadata.groupKey,
+          parent_id: result.metadata.parentId,
+          total: result.total,
+          rows: result.rows,
+          branch_total: result.metadata.branchTotal,
+          next_cursor: result.nextCursor,
+        };
+      },
+      mapRowPage: (page) => ({
+        rows: page.rows,
+        total: page.total,
+        branchTotal: page.branch_total,
+        nextCursor: page.next_cursor,
+      }),
+      groupPagesKey: ({ query, groupBy }) => {
+        const group = tableGroupSpec(groupBy.fieldId);
+        if (group.kind === "none") {
+          return [...issueKeys.tableAll(wsId), "groups", "disabled"];
         }
-      }
-      if (data.error) {
-        result.push({
-          kind: "load_more",
-          key: `retry:${key}`,
-          state: "error",
-          total: data.total,
-          onLoad: () => retryServerBranch(key),
-        });
-      } else if (data.nextCursor) {
-        const nextCursor = data.nextCursor;
-        result.push({
-          kind: "load_more",
-          key: `more:${key}:${nextCursor}`,
-          state: data.loading ? "loading" : "has_more",
-          total: data.total,
-          onLoad: () => loadNextServerBranchPage(key, nextCursor),
-        });
-      } else if (data.rows.length > 0) {
-        // Reaching the end is only worth marking on a branch that paginated;
-        // the footer applies that rule, so the row is pushed unconditionally
-        // and carries the total for it to judge by.
-        result.push({
-          kind: "load_more",
-          key: `end:${key}`,
-          state: "end",
-          total: data.total,
-        });
-      }
-    };
-
-    if (usesServerGrouping) {
-      for (const descriptor of serverGroups) {
-        const collapsed = collapsedGroupSet.has(descriptor.key);
-        result.push({
-          kind: "group",
-          key: descriptor.key,
-          label: serverGroupLabel(descriptor),
-          count: descriptor.count,
-          collapsed,
-        });
-        if (!collapsed) appendBranch(descriptor.key, null, 0, []);
-      }
-    } else {
-      appendBranch(null, null, 0, []);
+        return issueKeys.tableGroups(wsId, query, group);
+      },
+      readGroupPage: async ({ query, groupBy, page }, signal) => {
+        const group = tableGroupSpec(groupBy.fieldId);
+        if (group.kind === "none") {
+          throw new Error(`Unsupported group field: ${groupBy.fieldId}`);
+        }
+        const result = await dataSource.readGroups(query, group, page, signal);
+        return {
+          query_fingerprint: result.queryFingerprint,
+          total: result.total,
+          groups: result.groups,
+          next_cursor: result.nextCursor,
+        };
+      },
+      mapGroupPage: (page) => ({
+        groups: page.groups.map((descriptor) => {
+          const value = descriptor.value;
+          const valueState =
+            value.kind === "parent" || value.kind === "property"
+              ? value.value_state
+              : value.kind === "assignee"
+                ? value.actor
+                  ? "value"
+                  : "unset"
+                : value.kind === "project"
+                  ? value.project_id
+                    ? "value"
+                    : "unset"
+                  : "value";
+          return {
+            key: descriptor.key,
+            label: serverGroupLabel(descriptor),
+            count: descriptor.count,
+            valueState,
+            value: descriptor.value,
+          };
+        }),
+        total: page.total,
+        nextCursor: page.next_cursor,
+      }),
+    }),
+    [dataSource, serverGroupLabel, wsId],
+  );
+  const previousSourceIdentityRef = useRef(sourceIdentity);
+  useEffect(() => {
+    if (previousSourceIdentityRef.current === sourceIdentity) return;
+    const previousSourceIdentity = previousSourceIdentityRef.current;
+    previousSourceIdentityRef.current = sourceIdentity;
+    closePendingTableRunConfirm(previousSourceIdentity, tableOwnerIdentity);
+    editorInstanceRef.current += 1;
+    setEditingCellSession(null);
+  }, [sourceIdentity, tableOwnerIdentity]);
+  useEffect(() => {
+    if (!dataSource.capabilities.writable && editingCellKey !== null) {
+      editorInstanceRef.current += 1;
+      setEditingCellSession(null);
     }
-    if (
-      usesServerGrouping &&
-      serverGroups.length === 0 &&
-      serverGroupsPending
-    ) {
-      result.push({
-        kind: "load_more",
-        key: "loading:groups",
-        state: "loading",
-        total: 0,
-      });
-    } else if (usesServerGrouping && serverGroupsError) {
-      result.push({
-        kind: "load_more",
-        key: "retry:groups",
-        state: "error",
-        total: 0,
-        onLoad: () => void refetchServerGroups(),
-      });
-    } else if (usesServerGrouping && hasNextServerGroupPage) {
-      result.push({
-        kind: "load_more",
-        key: "more:groups",
-        state: fetchingNextServerGroupPage ? "loading" : "has_more",
-        total: 0,
-        onLoad: () => void fetchNextServerGroupPage(),
-      });
+    if (!dataSource.capabilities.writable) {
+      closePendingTableRunConfirm(sourceIdentity, tableOwnerIdentity);
     }
-
-    // Nothing has landed yet and something is still in flight: show the grid
-    // filled with placeholders instead of one "Loading…" line, which reads as
-    // an empty table more than a loading one.
-    const isColdLoad =
-      !result.some((row) => row.kind === "issue") &&
-      result.some((row) => row.kind === "load_more" && row.state === "loading");
-    if (isColdLoad) {
-      return Array.from({ length: SKELETON_ROW_COUNT }, (_, index) => ({
-        kind: "skeleton" as const,
-        key: `skeleton:${index}`,
-      }));
-    }
-
-    return result;
   }, [
-    collapsedGroupSet,
-    collapsedParentSet,
-    activeServerBranches,
-    activateServerBranch,
-    loadNextServerBranchPage,
-    retryServerBranch,
-    serverBranchData,
-    serverGroupLabel,
-    serverGroups,
-    serverGroupsPending,
-    serverGroupsError,
-    hasNextServerGroupPage,
-    fetchingNextServerGroupPage,
-    refetchServerGroups,
-    fetchNextServerGroupPage,
-    tableHierarchy,
-    usesServerGrouping,
+    dataSource.capabilities.writable,
+    editingCellKey,
+    sourceIdentity,
+    tableOwnerIdentity,
   ]);
-
+  useEffect(
+    () => () => closePendingTableRunConfirm(sourceIdentity, tableOwnerIdentity),
+    [sourceIdentity, tableOwnerIdentity],
+  );
+  const collapsedGroupSet = useMemo(
+    () => new Set(tableCollapsedGroups),
+    [tableCollapsedGroups],
+  );
+  const collapsedParentSet = useMemo(
+    () => new Set(tableCollapsedParents),
+    [tableCollapsedParents],
+  );
+  const groupBy = useMemo(
+    () =>
+      usesServerGrouping ? { fieldId: effectiveTableGrouping } : null,
+    [effectiveTableGrouping, usesServerGrouping],
+  );
+  const projectIssueRow = useCallback(
+    ({
+      row,
+      depth,
+      hasChildren,
+      collapsed,
+    }: {
+      row: IssueTableRow;
+      depth: number;
+      hasChildren: boolean;
+      collapsed: boolean;
+    }) => ({
+      kind: "issue" as const,
+      key: row.issue.id,
+      issue: row.issue,
+      sourceRow: row,
+      depth,
+      hasChildren,
+      collapsed,
+    }),
+    [],
+  );
+  const dataView = useDataViewController({
+    binding: issueTableBinding,
+    query: serverQuery,
+    groupBy,
+    hierarchy: tableHierarchy,
+    collapsedGroupKeys: collapsedGroupSet,
+    collapsedRowIds: collapsedParentSet,
+    rowId: dataSource.rowId,
+    directChildCount: (row) => row.direct_child_count,
+    projectRow: projectIssueRow,
+    skeletonCount: SKELETON_ROW_COUNT,
+  });
+  useEffect(() => {
+    const body =
+      dataView.groupError instanceof ApiError &&
+      dataView.groupError.body &&
+      typeof dataView.groupError.body === "object"
+        ? (dataView.groupError.body as { error?: unknown })
+        : null;
+    if (
+      dataView.groupError instanceof ApiError &&
+      dataView.groupError.status === 422 &&
+      body?.error === "unsupported_group"
+    ) {
+      setTableGrouping("none");
+      toast.info(t(($) => $.table.group_property_unavailable));
+    }
+  }, [dataView.groupError, setTableGrouping, t]);
+  const serverDisplayRows: IssueTableDisplayRow[] = dataView.rows;
   const tableMembershipIdentity = useMemo(
     () =>
       JSON.stringify([
+        dataSource.identity,
         serverQuery.scope,
         serverQuery.filters,
         serverQuery.search ?? "",
       ]),
-    [serverQuery.filters, serverQuery.scope, serverQuery.search],
+    [
+      dataSource.identity,
+      serverQuery.filters,
+      serverQuery.scope,
+      serverQuery.search,
+    ],
   );
-  const authoritativeLoadedIssues = useMemo(() => {
-    const byId = new Map<string, Issue>();
-    for (const branch of Object.values(serverBranchData)) {
-      // Previous-data placeholders keep the old table painted during a query
-      // transition, but they are not members of the new filter/search window.
-      if (branch.placeholder) continue;
-      for (const row of branch.rows) byId.set(row.issue.id, row.issue);
-    }
-    return [...byId.values()];
-  }, [serverBranchData]);
+  const authoritativeLoadedIssues = useMemo(
+    () => dataView.authoritativeRows.map((row) => row.issue),
+    [dataView.authoritativeRows],
+  );
   const [loadedIssueState, setLoadedIssueState] = useState<LoadedIssueState>({
     membershipIdentity: tableMembershipIdentity,
     issues: new Map(),
@@ -2047,38 +1948,16 @@ export function TableView({
     [activePropertyIds, tableColumns],
   );
 
-  // While a cell editor popup / rename input is open, hold the row structure
-  // still: server branch pagination and realtime refetches can rebuild or
-  // reorder the row list, moving the anchor row out of the virtualized render
-  // window and closing the popup the user just opened (MUL-5108). The snapshot
-  // freezes ORDER only; issue objects inside the rows keep tracking live
-  // server-query data so the open editor reflects optimistic updates. Live
-  // structure snaps back the moment the editor closes. Ref writes happen
-  // during render on purpose: the snapshot must be captured from the same
-  // render that flips `editing` on, and both branches are idempotent under
-  // StrictMode double-render.
-  const frozenRowsRef = useRef<IssueTableDisplayRow[] | null>(null);
-  if (editingCellKey === null) frozenRowsRef.current = null;
-  else if (frozenRowsRef.current === null)
-    frozenRowsRef.current = serverDisplayRows;
-  const frozenRows = frozenRowsRef.current;
   const issueById = useMemo(
     () => new Map(authoritativeLoadedIssues.map((issue) => [issue.id, issue])),
     [authoritativeLoadedIssues],
   );
-  const displayRows = useMemo(
-    () =>
-      frozenRows && frozenRows !== serverDisplayRows
-        ? refreshFrozenTableRows(frozenRows, issueById)
-        : serverDisplayRows,
-    [frozenRows, issueById, serverDisplayRows],
-  );
   const visibleIssueIds = useMemo(
     () =>
-      displayRows
+      serverDisplayRows
         .filter((row): row is Extract<IssueTableDisplayRow, { kind: "issue" }> => row.kind === "issue")
         .map((row) => row.issue.id),
-    [displayRows],
+    [serverDisplayRows],
   );
   useEffect(() => {
     onLoadedIssuesChange(loadedIssues);
@@ -2087,31 +1966,15 @@ export function TableView({
     () => loadedIssues.filter((issue) => selection.selectedIds.has(issue.id)),
     [loadedIssues, selection.selectedIds],
   );
-  const handleIssueSelection = useCallback(
-    (issueId: string, shiftKey: boolean) => {
-      const range = shiftKey
-        ? getIssueTableSelectionRange(
-            visibleIssueIds,
-            selectionAnchorRef.current,
-            issueId,
-          )
-        : null;
-
-      if (range) {
-        if (selection.selectedIds.has(issueId)) selection.deselect(range);
-        else selection.select(range);
-        return;
-      }
-
-      selection.toggle(issueId);
-      selectionAnchorRef.current = issueId;
-    },
-    [selection, visibleIssueIds],
-  );
-
-  useEffect(() => {
-    if (selection.selectedIds.size === 0) selectionAnchorRef.current = null;
-  }, [selection.selectedIds]);
+  const handleIssueSelection = useDataViewSelection({
+    sourceIdentity: dataSource.identity,
+    rowIds: visibleIssueIds,
+    selectedIds: selection.selectedIds,
+    select: selection.select,
+    deselect: selection.deselect,
+    toggle: selection.toggle,
+    clear: selection.clear,
+  });
 
   const columnLabel = useCallback(
     (key: TableColumnKey) => {
@@ -2122,20 +1985,10 @@ export function TableView({
     [propertyById, t],
   );
 
-  // Inline row edits are single-issue writes like the picker in the issue
-  // detail or the right-click menu, so they route on the same gate: a status
-  // change that promotes an agent-owned issue out of the backlog category
-  // starts a run, and must confirm rather than fire from one click (MUL-6463).
-  const updateIssue = useCallback(
-    (issue: Issue, updates: Partial<UpdateIssueRequest>) => {
-      const intent = runConfirmIntent(issue, updates, { entryOf });
-      if (intent) {
-        openModal("issue-run-confirm", intent);
-        return;
-      }
-      actions?.updateIssue(issue.id, updates);
-    },
-    [actions, entryOf, openModal],
+  const updateField = useCallback(
+    (row: IssueTableRow, fieldId: string, change: DataSourceCellChange) =>
+      dataSource.execute({ row, fieldId, change }),
+    [dataSource],
   );
 
   const openIssue = useCallback(
@@ -2177,10 +2030,14 @@ export function TableView({
     childProgressMap,
     propertyById,
     properties,
+    fieldById,
     visibleIssueIds,
-    editingCellKey,
-    setEditingCellKey,
-    updateIssue,
+    editingCellSession,
+    openEditingCell,
+    closeEditingCell,
+    restoreEditingCell,
+    updateField,
+    writable: dataSource.capabilities.writable,
     openIssue,
     createSubIssue,
     toggleTableParentCollapsed,
@@ -2249,28 +2106,9 @@ export function TableView({
     [columnSizing, setTableColumnWidth, visibleColumnConfigs],
   );
 
-  const table = useReactTable({
-    data: displayRows,
-    columns,
-    getRowId: (row) => row.key,
-    getCoreRowModel: getCoreRowModel(),
-    state: {
-      columnSizing,
-      columnPinning: { left: [SELECT_COLUMN_ID, "title"], right: [] },
-    },
-    meta: viewMeta as TableMeta<IssueTableDisplayRow>,
-    onColumnSizingChange: handleColumnSizingChange,
-    columnResizeMode: "onChange",
-  });
-
-  const sensors = useSensors(
-    useSensor(PointerSensor, { activationConstraint: { distance: 4 } }),
-    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
-  );
-  const handleDragEnd = useCallback(
-    ({ active, over }: DragEndEvent) => {
-      if (!over || active.id === over.id) return;
-      reorderTableColumn(active.id as TableColumnKey, over.id as TableColumnKey);
+  const handleColumnReorder = useCallback(
+    (activeId: string, overId: string) => {
+      reorderTableColumn(activeId as TableColumnKey, overId as TableColumnKey);
     },
     [reorderTableColumn],
   );
@@ -2446,83 +2284,68 @@ export function TableView({
           </DropdownMenuContent>
         </DropdownMenu>
       </div>
-      <DndContext
-        sensors={sensors}
-        collisionDetection={closestCenter}
-        // Columns only ever swap sideways, so the header should not follow the
-        // pointer up out of its own strip — same constraint the desktop tab bar
-        // puts on tab reordering.
-        modifiers={[restrictToHorizontalAxis]}
-        // Modifiers constrain the drag's movement but not its auto-scrolling,
-        // which reads raw pointer coordinates: drifting a few pixels vertically
-        // while dragging a header sent the rows scrolling underneath it. Zero
-        // on y removes an axis the gesture cannot act on. On x it stays, since
-        // a table wider than its viewport needs it to reach a distant slot, but
-        // the default 0.2 arms it a fifth of the way in from either edge, which
-        // is most of a wide header.
-        autoScroll={{ threshold: { x: 0.05, y: 0 } }}
-        onDragEnd={handleDragEnd}
-      >
-        <SortableContext
-          items={visibleColumnConfigs.map((column) => column.key)}
-          strategy={horizontalListSortingStrategy}
-        >
-          <DataTable
-            table={table}
-            virtualizeRows
-            emptyMessage={t(($) => $.table.empty)}
-            onRowClick={(row, event) => {
-              if (row.original.kind === "issue") {
-                openIssue(row.original.issue, event);
-              }
-            }}
-            renderRow={(row) => {
-              if (row.original.kind === "group") {
-                return (
-                  <IssueTableGroupRow
-                    group={row.original}
-                    colSpan={table.getVisibleLeafColumns().length}
-                    onToggle={() => toggleTableGroupCollapsed(row.original.key)}
+      <SharedTableView
+        sourceIdentity={dataSource.identity}
+        writable={dataSource.capabilities.writable}
+        rows={serverDisplayRows}
+        columns={columns}
+        rowId={(row) => row.key}
+        visibleColumnIds={visibleColumnConfigs.map((column) => column.key)}
+        columnSizing={columnSizing}
+        onColumnSizingChange={handleColumnSizingChange}
+        onReorderColumn={handleColumnReorder}
+        columnPinning={{ left: [SELECT_COLUMN_ID, "title"], right: [] }}
+        meta={viewMeta as TableMeta<IssueTableDisplayRow>}
+        editingKey={editingCellKey}
+        refreshFrozenRows={(snapshot) =>
+          refreshFrozenTableRows(snapshot, issueById)
+        }
+        emptyMessage={t(($) => $.table.empty)}
+        onRowClick={(row, event) => {
+          if (row.original.kind === "issue") {
+            openIssue(row.original.issue, event);
+          }
+        }}
+        renderStructuralRow={(row) => {
+          if (row.original.kind === "group") {
+            const group = row.original;
+            return {
+              rowClassName: "bg-muted/40 hover:bg-muted/60",
+              cellClassName: "h-9 px-4 py-1.5",
+              content: (
+                <IssueTableGroupContent
+                  group={group}
+                  onToggle={() => toggleTableGroupCollapsed(group.key)}
+                />
+              ),
+            };
+          }
+          if (row.original.kind === "load_more") {
+            const loadMoreRow = row.original;
+            return {
+              rowClassName: "hover:bg-transparent",
+              cellClassName: "p-0",
+              content: (
+                <div className="sticky left-0 w-full">
+                  <ListLoadMoreFooter
+                    hasMore={
+                      loadMoreRow.state === "loading" ||
+                      loadMoreRow.state === "has_more"
+                    }
+                    isLoading={loadMoreRow.state === "loading"}
+                    total={loadMoreRow.total}
+                    onLoadMore={() => loadMoreRow.onLoad?.()}
+                    isError={loadMoreRow.state === "error"}
+                    onRetry={loadMoreRow.onLoad}
                   />
-                );
-              }
-              if (row.original.kind === "load_more") {
-                const loadMoreRow = row.original;
-                return (
-                  <TableRow className="hover:bg-transparent">
-                    <TableCell
-                      colSpan={table.getVisibleLeafColumns().length}
-                      className="p-0"
-                    >
-                      {/* The same footer Board / List / Swimlane end their
-                        * columns with. Hand-rolling it here had left the table
-                        * as the one surface where a failed page read as muted
-                        * body text rather than an error, and where reaching the
-                        * end of a paginated branch said nothing at all. The row
-                        * only supplies the cell it lives in. */}
-                      <div className="sticky left-0 w-full">
-                        <ListLoadMoreFooter
-                          hasMore={
-                            loadMoreRow.state === "loading" ||
-                            loadMoreRow.state === "has_more"
-                          }
-                          isLoading={loadMoreRow.state === "loading"}
-                          total={loadMoreRow.total}
-                          onLoadMore={() => loadMoreRow.onLoad?.()}
-                          isError={loadMoreRow.state === "error"}
-                          onRetry={loadMoreRow.onLoad}
-                        />
-                      </div>
-                    </TableCell>
-                  </TableRow>
-                );
-              }
-              return null;
-            }}
-            className="min-h-0 flex-1"
-          />
-        </SortableContext>
-      </DndContext>
+                </div>
+              ),
+            };
+          }
+          return null;
+        }}
+        className="min-h-0 flex-1"
+      />
     </div>
   );
 }

@@ -1,0 +1,1 @@
+DROP INDEX CONCURRENTLY IF EXISTS record_create_uidx;

@@ -88,6 +88,14 @@ func TestEveryConcurrentUpBuildHasCleanup(t *testing.T) {
 	assertEveryConcurrentBuildHasCleanup(t, "up", concurrentIndexCleanups)
 }
 
+func TestEveryCollectionRollbackStepHasDataGuard(t *testing.T) {
+	for _, version := range collectionMigrationVersions {
+		if preRollbackHooks[version] == nil {
+			t.Errorf("%s: missing collection data rollback guard", version)
+		}
+	}
+}
+
 // pg_bigm is optional, so every rollback that names its operator class in a
 // concurrent build must be gated. Otherwise a pg_bigm-less self-hosted database
 // can fail during startup merely because an operator class is unavailable.

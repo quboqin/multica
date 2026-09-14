@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, type ReactNode } from "react";
+import { useRef, useState, type ReactNode } from "react";
 import { toast } from "sonner";
 import {
   Dialog,
@@ -21,6 +21,7 @@ import { useShortcut, shortcutMatchesEvent, isPlainShortcut } from "@multica/cor
 import { isImeComposing } from "@multica/core/utils";
 import { ShortcutKeycaps } from "../common/shortcut-keycaps";
 import { useStatusLabel } from "../issues/utils/status-label";
+import type { RunConfirmData } from "../issues/actions/run-confirm-gate";
 import { useT } from "../i18n";
 
 // i18next inlines {{name}} / {{status}} into the sentence, but their position
@@ -53,20 +54,21 @@ function boldFenced(text: string): ReactNode {
   );
 }
 
-interface RunConfirmData {
+interface RunConfirmModalData {
   issueIds?: string[];
-  // The two issue writes that hand work to an agent, and the only two that
-  // confirm. `assign` gives the issue an agent/squad owner; `promote` moves an
-  // already-owned issue out of the backlog category, which starts the run on
-  // its own (RunSourceStatus). Batch status changes still apply directly
-  // (MUL-4155) — `promote` is the single-issue picker path only (MUL-6463).
   mode?: "assign" | "promote";
-  /** promote only: the status KEY the issue is moving to. */
   status?: IssueStatus;
   assigneeType?: IssueAssigneeType;
   assigneeId?: string;
   assigneeName?: string;
   issueRevision?: number;
+  canSubmit?: RunConfirmData["canSubmit"];
+  ownerIdentity?: RunConfirmData["ownerIdentity"];
+  workspaceContext?: RunConfirmData["workspaceContext"];
+  onSubmitting?: RunConfirmData["onSubmitting"];
+  onAccepted?: RunConfirmData["onAccepted"];
+  onCancelled?: RunConfirmData["onCancelled"];
+  onFailed?: RunConfirmData["onFailed"];
 }
 
 /**
@@ -98,12 +100,14 @@ export function RunConfirmModal({
   const { t: tIssues } = useT("issues");
   const { getActorName } = useActorName();
   const sendShortcut = useShortcut("send");
-  const d = (data ?? {}) as RunConfirmData;
+  const d = (data ?? {}) as RunConfirmModalData;
   const issueIds = d.issueIds ?? [];
 
   // Which footer action is in flight, so only the clicked button shows a
   // spinner (the write is not instant — the disabled-only state read as frozen).
   const [pendingAction, setPendingAction] = useState<"go" | "suppress" | null>(null);
+  const submittingRef = useRef(false);
+  const resultReportedRef = useRef(false);
   const submitting = pendingAction !== null;
 
   const updateIssue = useUpdateIssue();
@@ -135,8 +139,38 @@ export function RunConfirmModal({
     d.assigneeName ??
     getActorName(d.assigneeType === "squad" ? "squad" : "agent", d.assigneeId ?? "");
 
+  const reportResult = (callback: (() => void) | undefined) => {
+    if (resultReportedRef.current) return;
+    resultReportedRef.current = true;
+    try {
+      callback?.();
+    } catch {
+      // Completion observers must not change the confirmed mutation's UI.
+    }
+  };
+
   const submit = async (suppressRun: boolean) => {
-    if (issueIds.length === 0 || submitting) return;
+    if (issueIds.length === 0 || submittingRef.current) return;
+    let canSubmit = true;
+    try {
+      canSubmit = d.canSubmit?.() ?? true;
+    } catch {
+      canSubmit = false;
+    }
+    if (!canSubmit) {
+      const error = new Error(
+        "Workspace or write capability changed before submission",
+      );
+      reportResult(() => d.onFailed?.(error));
+      onClose();
+      return;
+    }
+    submittingRef.current = true;
+    try {
+      d.onSubmitting?.();
+    } catch {
+      // Lifecycle observers must not prevent the confirmed mutation.
+    }
     setPendingAction(suppressRun ? "suppress" : "go");
     const payload = applyTo(suppressRun ? { suppress_run: true } : {});
     try {
@@ -145,15 +179,21 @@ export function RunConfirmModal({
       // no result toast to add here. Whether a run started is the server's
       // existing decision at write time, not something this dialog reports.
       if (issueIds.length === 1) {
-        await updateIssue.mutateAsync({
+        const issue = await updateIssue.mutateAsync({
           id: issueIds[0]!,
           ...payload,
+          ...(d.workspaceContext
+            ? { workspaceContext: d.workspaceContext }
+            : {}),
         });
+        reportResult(() => d.onAccepted?.(issue));
       } else {
         await batchUpdate.mutateAsync({ ids: issueIds, updates: payload });
+        reportResult(() => d.onAccepted?.());
       }
       onClose();
     } catch (err) {
+      reportResult(() => d.onFailed?.(err));
       toast.error(
         errorCode(err) === "revision_conflict"
           ? tIssues(($) => $.revision.conflict)
@@ -161,7 +201,23 @@ export function RunConfirmModal({
             ? err.message
             : t(($) => $.run_confirm.toast_failed),
       );
+      if (d.onFailed) {
+        // Data-source backed confirms define failure as a terminal result. A
+        // retry starts a fresh confirmation session and therefore a new
+        // Promise instead of changing the result of an already-failed one.
+        onClose();
+        return;
+      }
+      submittingRef.current = false;
       setPendingAction(null);
+    }
+  };
+
+  const cancel = () => {
+    try {
+      reportResult(() => d.onCancelled?.());
+    } finally {
+      onClose();
     }
   };
 
@@ -212,7 +268,7 @@ export function RunConfirmModal({
   );
 
   return (
-    <Dialog open onOpenChange={(v) => { if (!v && !submitting) onClose(); }}>
+    <Dialog open onOpenChange={(v) => { if (!v && !submitting) cancel(); }}>
       <DialogContent onKeyDown={onDialogKeyDown}>
         <DialogHeader>
           <DialogTitle>

@@ -13,6 +13,7 @@ import { docsAlternates } from "@/lib/site";
 import { i18n, type Lang } from "@/lib/i18n";
 import { DocsLocaleProvider, LocaleLink } from "@/components/locale-link";
 import { VideoEmbed } from "@/components/video-embed";
+import { Mermaid } from "@/components/mermaid";
 import { docsSlugStaticParams } from "@/lib/static-params";
 
 function asLang(lang: string): Lang {
@@ -45,6 +46,7 @@ export default async function Page(props: {
               img: (props) => <ImageZoom {...props} />,
               a: LocaleLink,
               VideoEmbed,
+              Mermaid,
             }}
           />
         </DocsLocaleProvider>

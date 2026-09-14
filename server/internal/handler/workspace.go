@@ -1121,6 +1121,13 @@ func (h *Handler) DeleteWorkspace(w http.ResponseWriter, r *http.Request) {
 		failWorkspaceDelete(w, r, workspaceID, "lock workspace", err)
 		return
 	}
+	// Collection tables force tenant RLS. Bind the deletion transaction after
+	// taking the workspace lock so cleanup remains available while the feature
+	// flag is disabled and cannot race a new collection write.
+	if err := qtx.SetCollectionWorkspaceContext(r.Context(), workspaceID); err != nil {
+		failWorkspaceDelete(w, r, workspaceID, "bind collection workspace", err)
+		return
+	}
 	// Take a best-effort snapshot for post-commit daemon invalidation. Runtime
 	// registration does not participate in the workspace delete lock protocol,
 	// so PR1 retains the heartbeat lookup as the correctness fallback for a
@@ -1166,6 +1173,18 @@ func (h *Handler) DeleteWorkspace(w http.ResponseWriter, r *http.Request) {
 		{
 			name: "prepare relationship graph",
 			run:  func() error { return qtx.PrepareWorkspaceDeletionLinks(ctx, requester.WorkspaceID) },
+		},
+		{
+			name: "delete collection records",
+			run:  func() error { return qtx.DeleteWorkspaceRecords(ctx, requester.WorkspaceID) },
+		},
+		{
+			name: "delete collection fields",
+			run:  func() error { return qtx.DeleteWorkspaceCollectionFields(ctx, requester.WorkspaceID) },
+		},
+		{
+			name: "delete collections",
+			run:  func() error { return qtx.DeleteWorkspaceCollections(ctx, requester.WorkspaceID) },
 		},
 		{
 			// These FK-free intents deliberately survive the transaction so the

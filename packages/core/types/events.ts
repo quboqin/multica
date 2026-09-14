@@ -10,6 +10,9 @@ import type { Label } from "./label";
 
 // WebSocket event types (matching Go server protocol/events.go)
 export type WSEventType =
+  | "collection:created"
+  | "record:created"
+  | "record:updated"
   | "issue:created"
   | "issue:updated"
   | "issue_attachments:changed"
@@ -101,6 +104,17 @@ export interface WSMessage<T = unknown> {
 
 export interface IssueCreatedPayload {
   issue: Issue;
+}
+
+export interface CollectionCreatedPayload {
+  collection_id: string;
+  revision: number;
+}
+
+export interface CollectionRecordChangedPayload {
+  collection_id: string;
+  record_id: string;
+  revision: number;
 }
 
 export interface IssueUpdatedPayload {
@@ -256,7 +270,6 @@ export interface MemberUpdatedPayload {
 
 export interface MemberAddedPayload {
   member: MemberWithUser;
-  workspace_id: string;
   workspace_name?: string;
 }
 
@@ -563,6 +576,9 @@ export interface ChatSessionCreatedPayload {
  * forgets the payload shape — that's the whole point.
  */
 export interface WSEventPayloadMap {
+  "collection:created": CollectionCreatedPayload;
+  "record:created": CollectionRecordChangedPayload;
+  "record:updated": CollectionRecordChangedPayload;
   "issue:created": IssueCreatedPayload;
   "issue:updated": IssueUpdatedPayload;
   "issue:deleted": IssueDeletedPayload;

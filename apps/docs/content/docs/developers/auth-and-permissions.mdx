@@ -1,0 +1,157 @@
+---
+title: Authentication and permissions
+description: Passwordless login, the prefix-routed token family, the request authentication pipeline, workspace roles, resource-level rules, and how an agent gets a task-scoped identity.
+---
+
+import { Callout } from "fumadocs-ui/components/callout";
+
+In one sentence: **passwordless human authentication (JWT + cookie), seven credential kinds routed by prefix, and an authorization ladder built on workspace membership that narrows through roles and resource ownership.** Agents never have an account of their own. An agent's identity is a token that is born and dies with a task.
+
+This page describes the implementation. For the operator-facing view see [Security model](/security-model) and [Auth tokens](/auth-tokens); for the product view of roles see [Members and roles](/members-roles).
+
+## Passwordless login
+
+The system has **no passwords**: the `user` table has no password column, so there is no hash and no reset flow. There are exactly two login paths, both in the public route group and rate-limited per IP:
+
+<Mermaid chart={`
+sequenceDiagram
+  participant B as Browser
+  participant S as Server (handler/auth.go)
+  participant M as Email (Resend / SMTP)
+  B->>S: POST /auth/send-code {email}
+  S->>S: signup gate: ALLOWED_EMAILS → domain allowlist → ALLOW_SIGNUP (existing users exempt)
+  S->>M: 6-digit code (crypto/rand · valid 10 min · 60 s cooldown per email)
+  B->>S: POST /auth/verify-code {email, code}
+  S->>S: constant-time compare · max 5 attempts per code · stored in verification_code
+  S-->>B: JWT (HS256, 30 days by default) + Set-Cookie
+  Note over B,S: multica_auth (HttpOnly · SameSite=Strict) + multica_csrf (readable by JS) + CloudFront signed cookies
+  Note over B,S: Google OAuth: POST /auth/google exchanges code → userinfo, then issues the same JWT / cookies
+`} />
+
+Possessing the code in the inbox is the email verification; there is no separate verification step. Google is the only OAuth *login* provider. GitHub, Slack, Lark, and the other OAuth flows exist for workspace integrations and never carry user identity. The development backdoor `MULTICA_DEV_VERIFICATION_CODE` is hard-disabled when `APP_ENV=production`.
+
+Sessions are **stateless JWTs**: HS256-signed with `JWT_SECRET` (a weak secret refuses to start in production), with only `sub / email / name / exp / iat` claims and no sessions table. Consequently there is no "sign out other devices" and no refresh flow; an expired token means logging in again. `POST /auth/logout` only clears cookies, and a copied JWT stays valid until it expires. The revocable credentials are the PAT, daemon, task, and plugin tokens.
+
+## The credential family
+
+Every non-JWT credential has the same shape: `prefix + 40 hex chars (20 random bytes)`, and the server stores only the SHA-256 hash. The prefix is both a route (the middleware branches on it) and a label (you can tell the credential class at a glance).
+
+| Credential | Holder | Storage / verification | Lifetime | Purpose and boundary |
+| --- | --- | --- | --- | --- |
+| JWT | Human | Self-contained, not stored; `multica_auth` cookie or `Bearer` | 30 days | Browser and desktop sessions; no server-side revocation |
+| `mul_` | Human (CLI / daemon / desktop) | `personal_access_token`, cached in Redis for 10 min | Can be permanent | Personal access token; CLI login defaults to 90 days and auto-renews within the last 7; desktop mints a permanent PAT for the daemon; revocable |
+| `mat_` | Agent (task-scoped) | `task_token`, minted when a task is claimed | 24 h | The agent's entire identity: permissions = runtime owner's membership ∩ the single workspace bound to the token |
+| `mdt_` | Daemon | `daemon_token` | 24 h | Bound to a workspace, no user identity; currently minted only when a task carries remote MCP connections, day-to-day daemons use `mul_` |
+| `mcn_` | Cloud node | Verified remotely against Multica Cloud (60 s cache; an unreachable Cloud returns 503, never a pass) | Managed by Cloud | Machine credential for cloud-hosted runtimes |
+| `mpi_` | Plugin installation | `plugin_installation.token_hash`, rotatable | Long-lived | The only ticket into the `/v1` plugin public API |
+| `mpc_` | Plugin callback | Single-use; on use, the represented user's membership is **re-checked** | 5 min | One callback on behalf of a person; invalid the moment the member is removed |
+
+## The request authentication pipeline
+
+The first thing the main middleware `middleware.Auth` does is `r.Header.Del("X-Actor-Source")`. That header **may only be stamped by the server**; any client-supplied value is discarded. It then takes the credential (the `Authorization` header wins over the cookie; cookie-carried writes must pass CSRF) and branches on the prefix:
+
+| Prefix | Check | Stamped onto request headers |
+| --- | --- | --- |
+| `mat_` | `task_token` looked up by hash, not expired | `X-User-ID` (owner) · `X-Agent-ID` · `X-Task-ID` · `X-Workspace-ID` all **overwrite** client values, then `X-Actor-Source: task_token` |
+| `mcn_` | HTTP call to Cloud `/pat/verify`; a matching local `user` row is required | `X-User-ID` + `X-Actor-Source: cloud_pat` |
+| `mul_` | Redis cache → `personal_access_token` (not revoked, not expired) | `X-User-ID` |
+| anything else | Parsed as a JWT (algorithm pinned to HMAC, rejecting alg confusion) | `X-User-ID` = `sub`, `X-User-Email` |
+
+Identity travels through the process plainly: handlers read the user with `r.Header.Get("X-User-ID")`, while the workspace member row goes into the context (`MemberFromContext`). All authorization caches live in Redis: PATs for 10 minutes, membership for 5, with separate caches for daemon tokens and Cloud PATs. The documented worst-case revocation lag is **10 minutes**.
+
+## Workspace scope and roles
+
+The workspace is the foundation of every permission. Resolution priority: the workspace bound to a `mat_` token (unconditional, every other identifier is ignored) → the URL parameter → `?workspace_slug` / `X-Workspace-Slug` (web, desktop, mobile) → `?workspace_id` / `X-Workspace-ID` (CLI, daemon). A failed membership check returns **404, not 403**: a non-member cannot even probe whether the workspace exists, and the frontend deliberately shows one `NoAccessPage` for both cases.
+
+<Mermaid chart={`
+flowchart LR
+  pub["Public routes<br/>health · /auth/* · webhooks<br/>HMAC-signed capability URLs"]
+  authn["Authenticated user<br/>middleware.Auth<br/>/api/me · /api/tokens · invitations"]
+  member["Workspace member<br/>RequireWorkspaceMember<br/>issues · agents · chat · inbox …"]
+  admin["owner + admin<br/>RequireWorkspaceRole<br/>members / invites · integrations · plugins · profiles"]
+  owner["owner only<br/>delete workspace · owner role changes<br/>'at least one owner' invariant"]
+  pub --> authn --> member --> admin --> owner
+`} />
+
+Two checks sit outside the ladder and stack on top of it: resource-level rules (owner / `permission_mode`, see below) and `RequireHumanActor`, which rejects billing and similar endpoints when `X-Actor-Source` is `task_token` or `cloud_pat`. The router expresses the whole ladder through middleware composition, and handlers defensively re-check critical operations (deleting a workspace verifies owner again). The issue domain deliberately has **no role gate at all**: a member has full rights, keeping collaboration friction minimal.
+
+| Capability | owner | admin | member |
+| --- | --- | --- | --- |
+| Create and edit issues, comments, chat, inbox, projects, squads | ✓ | ✓ | ✓ |
+| Invite members (only as admin / member), change roles, remove members | ✓ | ✓ | — |
+| Workspace settings, integrations (GitHub / VCS / channels), plugins, MCP library, runtime profiles, share links, issue status / property / quick-action management | ✓ | ✓ | — |
+| Delete workspace, promote or demote owners, remove an owner | ✓ | — | — |
+| Demote, remove, or let the **last owner** leave | Always rejected with 400 (invariant protection) | | |
+
+Besides invitations, the other entry is the **share link**: a 24-hex-char code, one active per workspace, with optional use limits and expiry, redeemed through an atomic conditional `UPDATE` so it can never be over-issued. Removing a member is one transactional cascade: take their runtimes offline, archive their agents, cancel in-flight tasks, delete subscriptions and daemon tokens, delete the member row, then invalidate the membership cache immediately.
+
+## Resource-level permissions
+
+A "resource owner" layer sits above roles. Most writes are allowed for `owner/admin ∥ resource owner`, but an agent's **invocation** right is the one place where even admins have no exemption:
+
+| Resource | Rule |
+| --- | --- |
+| **Agent invocation** (triggering a run) | Decided by `agent.permission_mode`: `private` means the owner only, **with no admin exemption and no agent-chain exemption**; `public_to` matches the allowlist (workspace / member). When an agent triggers another agent, the check uses the **top-of-chain human originator** (`originator_user_id`), so permissions cannot be laundered through an agent |
+| Agent management (config, archive) | owner / admin or `agent.owner_id` |
+| Agent environment variables and secrets | **Agent actors always get 403.** On the human side, owner / admin or the agent's owner. Every plaintext reveal is written to `activity_log`, and if the audit write fails the plaintext is not returned (fail-closed). `mcp_config` is unconditionally redacted in WS broadcast copies |
+| Comment edit / delete | The author (exact `author_type + author_id` match, so an agent can only edit its own comments) or owner / admin |
+| Skill / runtime / view / autopilot / squad | Creator or owner, or owner / admin; another user's private view returns 404 |
+| Billing, subscriptions, client-usage reporting | `RequireHumanActor`: `X-Actor-Source ∈ {task_token, cloud_pat}` is always 403, so an agent never reaches the wallet |
+
+The frontend mirrors the same rules as pure functions in `packages/core/permissions/rules.ts`, returning `Decision {allowed, reason}` for UI hints, but the Go handler is the authority.
+
+## Daemon and agent identity
+
+`/api/daemon/*` uses a separate `DaemonAuth`: it accepts only the `Authorization` header (structurally excluding cookie and CSRF concerns) and supports the `mdt_ / mcn_ / mul_ / JWT` paths. In practice the daemon runs on its owner's `mul_` PAT. Runtime access goes through `requireDaemonRuntimeAccess`, which deliberately uses "404 = this runtime no longer exists, drop it and re-register" as a self-healing signal, while other database errors stay 500 so that transient failures never trigger self-cleanup.
+
+**An agent has no account. Its identity is a `mat_` token that lives and dies with a task.** This is the system's most important security design:
+
+1. **Minting.** When the daemon claims a task, the server mints a `mat_` token per task, bound to `task + agent + workspace + runtime owner`, expiring after 24 hours and committed in the same transaction as the claim receipt. If the runtime owner is missing, the task is **cancelled rather than dispatched**: an ownerless credential is never created. Historically the owner's PAT was injected into the agent process; this design replaced it.
+2. **Injection.** The daemon hands the token to the CLI process as the `MULTICA_TOKEN` environment variable (alongside `MULTICA_WORKSPACE_ID / MULTICA_AGENT_ID / MULTICA_TASK_ID`). The daemon verifies the injected value has the `mat_` prefix, and inside a task context the CLI refuses to fall back to the user's global token and refuses human commands such as `login`.
+3. **Exercising.** On each request, the middleware overwrites the four identity headers and stamps `X-Actor-Source: task_token`. Workspace resolution unconditionally uses the token-bound workspace, and the membership check runs against the **owner**. So an agent's capability is always "owner's permissions ∩ one workspace ∩ 24 hours".
+4. **Attribution.** `resolveActor` returns `("agent", agent_id)`, and comments are stored with `author_type='agent'`. The legacy path for claiming agent identity requires both `X-Agent-ID` and a valid `X-Task-ID` belonging to that agent. `X-Agent-ID` alone is never trusted, so a member cannot impersonate an agent.
+
+A human's CLI login is a local loopback handshake:
+
+<Mermaid chart={`
+sequenceDiagram
+  participant C as multica CLI
+  participant Br as Browser (existing session)
+  participant S as Server
+  C->>C: listen on 127.0.0.1 random port + generate state
+  C->>Br: open /login?cli_callback=… and cli_state=…
+  Br->>Br: validate callback: http only, localhost / private ranges only
+  Br->>S: POST /api/cli-token (cookie session)
+  S-->>Br: fresh JWT
+  Br->>C: redirect to http://127.0.0.1:…/callback with token + state
+  C->>C: verify state
+  C->>S: POST /api/tokens (exchange JWT for a 90-day PAT)
+  S-->>C: mul_… (plaintext shown exactly once)
+  C->>C: save to profile, auto-extend to 90 days when ≤ 7 remain (no key rotation)
+`} />
+
+Desktop is similar but uses the `multica://auth/callback` deep link to hand the JWT to the main process, which then mints a **never-expiring** PAT for the local daemon (cached per profile, re-minted on 401).
+
+## Frontend credential pipeline
+
+| | Web | Desktop | Mobile |
+| --- | --- | --- | --- |
+| Mode | **Cookie** (`multica_auth` HttpOnly + `multica_csrf`) | Token (Bearer) | Token (Bearer) |
+| Storage | Browser cookies; users with a legacy localStorage token stay in token mode until they next log in | Electron `localStorage["multica_token"]` | `expo-secure-store` (iOS Keychain), same key name as desktop |
+| Headers | `credentials: "include"` + `X-CSRF-Token` + `X-Workspace-Slug` | `Authorization` + `X-Workspace-Slug` | `Authorization` + `X-Workspace-Slug` (explicitly no CSRF) |
+
+Startup is driven by `AuthInitializer`: fetch config with exponential backoff, then `getMe()`. **Only a real 401 is fatal** (clear the token, log out, reset the analytics identity). Network failures enter a `recovering` state that retries with 1 s → 30 s backoff and listens for the `online` event, so losing connectivity never logs anyone out. On any 401 the API client synchronously clears the in-memory token and asks the host to clear storage. WebSocket authentication uses the cookie (validated before the upgrade) or a first frame of `{"type":"auth"}` answered by `auth_ack`. Only JWTs and `mul_` tokens are accepted there; `mat_` and `mcn_` cannot open `/ws`.
+
+## Attack-surface hardening
+
+- **CSRF in three layers.** `SameSite=Strict` is the primary defence. The double-submit cookie value is `nonce.HMAC(nonce, session JWT)`, which binds the CSRF token to the session so a cookie written from a subdomain cannot forge it. Bearer paths and the plugin API are structurally immune.
+- **Rate limiting** (Redis fixed window with atomic Lua): send-code 5/min/IP, verify 20/min/IP, contact-sales 5/hour, plugin API 120/min. Invitations add three sliding windows (inviter 10 per 10 min, workspace 50 per 24 h, recipient 6 per 24 h, **fail-closed**). `X-Forwarded-For` is trusted only from the trusted proxy CIDRs.
+- **Capability URLs instead of cookies.** `SameSite=Strict` blocks image and download scenarios, so attachment downloads, avatars, and plugin panels use short-lived HMAC-signed URLs: the credential is in the link, not the session.
+- **Startup guards.** A weak `JWT_SECRET` in production exits immediately; the development verification-code backdoor is hard-off in production; a reserved-slug table that fails to parse refuses to start (reserved words prevent route hijacking).
+- **Removed attack surface.** The early OpenAI-compatible passthrough endpoints under `/api/llm/*` were removed entirely; they had let any signed-in user consume the deployment's model keys.
+- **WebSocket origin checks.** Same-origin is allowed, `X-Forwarded-Host` is trusted only behind trusted proxies, and everything else must match the explicit origin allowlist.
+
+## Next steps
+
+- [Architecture internals](/developers/architecture-internals) — where these middleware groups sit in the request pipeline.
+- [Data model](/developers/data-model) — the `task_token`, `personal_access_token`, and `agent_task_queue` tables that back this page.

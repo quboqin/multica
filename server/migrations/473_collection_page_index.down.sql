@@ -1,0 +1,1 @@
+DROP INDEX CONCURRENTLY IF EXISTS collection_page_idx;

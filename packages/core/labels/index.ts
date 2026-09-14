@@ -6,6 +6,7 @@ export {
   useAttachLabel,
   useAttachLabelToIssue,
   useDetachLabel,
+  useDetachLabelFromIssue,
   useAttachResourceLabel,
   useDetachResourceLabel,
 } from "./mutations";

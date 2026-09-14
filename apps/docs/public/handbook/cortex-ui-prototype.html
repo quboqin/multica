@@ -1,0 +1,2218 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="auto">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Cortex UI 原型 v0.3 增量评审稿 · 文档 / 多维表格 / 工作流 / 知识库</title>
+<style>
+/* ============================================================
+   Design Tokens
+   ============================================================ */
+/* ------------------------------------------------------------
+   1. 颜色 —— 逐值取自 multica@HEAD `packages/ui/styles/tokens.css`
+      （--app-shell / --page-canvas / --surface / --surface-hover /
+        --surface-selected / --surface-border / --border / --foreground /
+        --muted-foreground / --faint-foreground / --brand / --success /
+        --warning / --info / --destructive / --radius）
+      原型未发明新的基色。
+   2. 下方 `--*-soft` / `--*-tint` 是本原型新增的「柔和色阶」——
+      现有 token 只有实心语义色，没有 tint 面。多维表格的 select 选项、
+      kind 徽章、状态 chip 全部需要「浅底 + 可读前景」这一对，
+      建议补进 tokens.css，见 S9。
+   ------------------------------------------------------------ */
+:root{
+  /* —— 平台既有 token（原样） —— */
+  --app-shell:oklch(0.964435 0.001327 286.375);
+  --page-canvas:oklch(0.988087 0 0);
+  --surface:oklch(1 0 0);
+  --surface-hover:oklch(0.967 0.001 286.375);
+  --surface-selected:oklch(0.95 0.002 286.375);
+  --surface-border:oklch(0.92 0.004 286.32);
+  --border:oklch(0.945 0.003 286.32);
+  --foreground:oklch(0.141 0.005 285.823);
+  --muted-foreground:oklch(0.505 0.016 285.938);
+  --faint-foreground:oklch(0.606 0.016 285.938);
+  --brand:oklch(0.55 0.16 255);
+  --success:oklch(0.55 0.16 145);
+  --warning:oklch(0.75 0.16 85);
+  --info:oklch(0.55 0.18 250);
+  --destructive:oklch(0.577 0.245 27.325);
+  --radius:0.625rem;
+  --surface-shadow:0 1px 2px rgb(15 23 42 / .04), 0 1px 1px rgb(15 23 42 / .03);
+  --menu-shadow:0 8px 24px rgb(15 23 42 / .08), 0 2px 6px rgb(15 23 42 / .05);
+  --floating-shadow:0 16px 40px rgb(15 23 42 / .14), 0 3px 10px rgb(15 23 42 / .08);
+
+  /* —— 原型新增：柔和色阶（待并入 tokens.css） —— */
+  --brand-soft:oklch(0.96 0.028 255);
+  --brand-strong:oklch(0.47 0.17 255);
+  --success-text:oklch(0.50 0.15 145);  --success-soft:oklch(0.955 0.035 145);
+  --warning-text:oklch(0.55 0.13 75);   --warning-soft:oklch(0.96 0.045 85);
+  --info-text:oklch(0.52 0.17 250);     --info-soft:oklch(0.955 0.033 250);
+  --danger-text:oklch(0.55 0.20 27);    --danger-soft:oklch(0.955 0.030 27);
+  --purple-text:oklch(0.52 0.19 300);   --purple-soft:oklch(0.955 0.030 300);
+  --cyan-text:oklch(0.52 0.11 200);     --cyan-soft:oklch(0.955 0.030 200);
+  --neutral-soft:oklch(0.955 0.002 286);
+
+  /* —— 派生别名（只为原型 CSS 书写方便，不引入新色） —— */
+  --bg:var(--page-canvas); --bg-app:var(--app-shell);
+  --surface-2:var(--surface-hover); --surface-3:var(--surface-selected);
+  --border-2:var(--surface-border);
+  --text:var(--foreground); --text-2:var(--muted-foreground); --text-3:var(--faint-foreground);
+  --accent:var(--brand); --accent-2:var(--brand-strong); --accent-soft:var(--brand-soft);
+  --green:var(--success-text); --green-soft:var(--success-soft);
+  --amber:var(--warning-text); --amber-soft:var(--warning-soft);
+  --red:var(--danger-text);    --red-soft:var(--danger-soft);
+  --blue:var(--info-text);     --blue-soft:var(--info-soft);
+  --purple:var(--purple-text);
+  --cyan:var(--cyan-text);
+  --gray-soft:var(--neutral-soft);
+  --sh-1:var(--surface-shadow); --sh-2:var(--menu-shadow); --sh-3:var(--floating-shadow);
+  --r-sm:calc(var(--radius) * .6); --r:calc(var(--radius) * .8);
+  --r-lg:var(--radius); --r-xl:calc(var(--radius) * 1.4);
+  --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,"Liberation Mono",monospace;
+  --sans:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei","Noto Sans CJK SC",system-ui,sans-serif;
+}
+/* dark：同样逐值取自 tokens.css 的 `.dark` 块 */
+@media (prefers-color-scheme: dark){
+  :root[data-theme="auto"]{
+    --app-shell:oklch(0.155 0.005 285.823);
+    --page-canvas:oklch(0.18 0.005 285.823);
+    --surface:oklch(0.21 0.006 285.885);
+    --surface-hover:oklch(0.274 0.006 286.033);
+    --surface-selected:oklch(0.3 0.006 286.033);
+    --surface-border:oklch(1 0 0 / 10%);
+    --border:oklch(1 0 0 / 6%);
+    --foreground:oklch(0.985 0 0);
+    --muted-foreground:oklch(0.705 0.015 286.067);
+    --faint-foreground:oklch(0.60 0.015 286.067);
+    --brand:oklch(0.65 0.16 255);
+    --success:oklch(0.65 0.15 145);
+    --warning:oklch(0.70 0.16 85);
+    --info:oklch(0.65 0.18 250);
+    --destructive:oklch(0.704 0.191 22.216);
+    --surface-shadow:0 1px 2px rgb(0 0 0 / .2), 0 1px 1px rgb(0 0 0 / .16);
+    --menu-shadow:0 10px 28px rgb(0 0 0 / .3), 0 2px 8px rgb(0 0 0 / .18);
+    --floating-shadow:0 20px 48px rgb(0 0 0 / .46), 0 4px 12px rgb(0 0 0 / .28);
+    --brand-soft:oklch(0.29 0.06 255); --brand-strong:oklch(0.74 0.15 255);
+    --success-text:oklch(0.72 0.14 145); --success-soft:oklch(0.27 0.05 145);
+    --warning-text:oklch(0.76 0.14 85);  --warning-soft:oklch(0.28 0.05 85);
+    --info-text:oklch(0.72 0.15 250);    --info-soft:oklch(0.28 0.05 250);
+    --danger-text:oklch(0.72 0.17 27);   --danger-soft:oklch(0.28 0.06 27);
+    --purple-text:oklch(0.74 0.15 300);  --purple-soft:oklch(0.28 0.05 300);
+    --cyan-text:oklch(0.74 0.10 200);    --cyan-soft:oklch(0.27 0.04 200);
+    --neutral-soft:oklch(0.28 0.004 286);
+    color-scheme:dark;
+  }
+}
+:root[data-theme="dark"]{
+  --app-shell:oklch(0.155 0.005 285.823);
+  --page-canvas:oklch(0.18 0.005 285.823);
+  --surface:oklch(0.21 0.006 285.885);
+  --surface-hover:oklch(0.274 0.006 286.033);
+  --surface-selected:oklch(0.3 0.006 286.033);
+  --surface-border:oklch(1 0 0 / 10%);
+  --border:oklch(1 0 0 / 6%);
+  --foreground:oklch(0.985 0 0);
+  --muted-foreground:oklch(0.705 0.015 286.067);
+  --faint-foreground:oklch(0.60 0.015 286.067);
+  --brand:oklch(0.65 0.16 255);
+  --success:oklch(0.65 0.15 145);
+  --warning:oklch(0.70 0.16 85);
+  --info:oklch(0.65 0.18 250);
+  --destructive:oklch(0.704 0.191 22.216);
+  --surface-shadow:0 1px 2px rgb(0 0 0 / .2), 0 1px 1px rgb(0 0 0 / .16);
+  --menu-shadow:0 10px 28px rgb(0 0 0 / .3), 0 2px 8px rgb(0 0 0 / .18);
+  --floating-shadow:0 20px 48px rgb(0 0 0 / .46), 0 4px 12px rgb(0 0 0 / .28);
+  --brand-soft:oklch(0.29 0.06 255); --brand-strong:oklch(0.74 0.15 255);
+  --success-text:oklch(0.72 0.14 145); --success-soft:oklch(0.27 0.05 145);
+  --warning-text:oklch(0.76 0.14 85);  --warning-soft:oklch(0.28 0.05 85);
+  --info-text:oklch(0.72 0.15 250);    --info-soft:oklch(0.28 0.05 250);
+  --danger-text:oklch(0.72 0.17 27);   --danger-soft:oklch(0.28 0.06 27);
+  --purple-text:oklch(0.74 0.15 300);  --purple-soft:oklch(0.28 0.05 300);
+  --cyan-text:oklch(0.74 0.10 200);    --cyan-soft:oklch(0.27 0.04 200);
+  --neutral-soft:oklch(0.28 0.004 286);
+  color-scheme:dark;
+}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0}
+body{
+  font-family:var(--sans);
+  background:var(--bg-app); color:var(--text);
+  font-size:16px; line-height:1.6;
+  -webkit-font-smoothing:antialiased;
+}
+svg.i{width:16px;height:16px;flex:none;stroke:currentColor;fill:none;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
+svg.i.sm{width:14px;height:14px}
+svg.i.lg{width:20px;height:20px}
+
+/* ============================================================
+   Prototype chrome
+   ============================================================ */
+.chrome{
+  position:sticky; top:0; z-index:80;
+  background:color-mix(in srgb, var(--bg) 86%, transparent);
+  backdrop-filter:saturate(1.6) blur(14px);
+  border-bottom:1px solid var(--border);
+}
+.chrome-in{max-width:1520px;margin:0 auto;padding:12px 24px}
+.chrome-top{display:flex;align-items:center;gap:14px;flex-wrap:wrap}
+.brand{display:flex;align-items:center;gap:10px;font-weight:650;letter-spacing:-.01em}
+.brand .dot{width:22px;height:22px;border-radius:7px;background:linear-gradient(140deg,var(--accent),var(--cyan));box-shadow:var(--sh-1)}
+.brand small{display:block;font-weight:450;font-size:12px;color:var(--text-3);line-height:1.2}
+.chrome-meta{margin-left:auto;display:flex;align-items:center;gap:8px;font-size:13px;color:var(--text-3)}
+.tbtn{
+  font:inherit;font-size:13px;cursor:pointer;border:1px solid var(--border);
+  background:var(--surface);color:var(--text-2);border-radius:99px;padding:5px 12px;
+}
+.tbtn:hover{border-color:var(--border-2);color:var(--text)}
+.tabs{display:flex;gap:6px;overflow-x:auto;padding:12px 0 2px;scrollbar-width:thin}
+.tab{
+  font:inherit;font-size:13px;white-space:nowrap;cursor:pointer;
+  border:1px solid var(--border);background:var(--surface);color:var(--text-2);
+  border-radius:99px;padding:6px 14px;display:flex;align-items:center;gap:7px;
+}
+.tab .n{font-family:var(--mono);font-size:11px;color:var(--text-3)}
+.tab:hover{border-color:var(--border-2);color:var(--text)}
+.tab[aria-selected="true"]{background:var(--accent);border-color:var(--accent);color:#fff;box-shadow:var(--sh-1)}
+.tab[aria-selected="true"] .n{color:rgba(255,255,255,.75)}
+
+/* ============================================================
+   Screen scaffolding
+   ============================================================ */
+main{max-width:1520px;margin:0 auto;padding:26px 24px 90px}
+.screen{display:none;animation:fade .22s ease}
+.screen.on{display:block}
+@keyframes fade{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
+.screen-head{margin:0 0 18px}
+.screen-head h2{font-size:22px;margin:0 0 6px;letter-spacing:-.02em}
+.screen-head p{margin:0;color:var(--text-2);font-size:15px;max-width:78ch}
+.fr{display:inline-flex;align-items:center;font-family:var(--mono);font-size:11px;
+  background:var(--accent-soft);color:var(--accent);border-radius:5px;padding:1px 6px;margin:0 2px;
+  border:1px solid color-mix(in srgb,var(--accent) 22%,transparent);white-space:nowrap}
+
+/* app frame */
+.frame{
+  background:var(--bg);border:1px solid var(--border);border-radius:var(--r-lg);
+  overflow:hidden;box-shadow:var(--sh-2);
+}
+.app{display:grid;grid-template-columns:250px minmax(0,1fr);min-height:660px;position:relative}
+.app.r{grid-template-columns:250px minmax(0,1fr) 320px}
+.app.narrow-side{grid-template-columns:230px minmax(0,1fr)}
+
+/* ---- sidebar ---- */
+.side{background:var(--bg-app);border-right:1px solid var(--border);display:flex;flex-direction:column;font-size:13px}
+.side-top{padding:10px 10px 6px}
+.ws{display:flex;align-items:center;gap:9px;padding:6px 8px;border-radius:var(--r-sm);cursor:pointer}
+.ws:hover{background:var(--surface-2)}
+.ws .av{width:22px;height:22px;border-radius:6px;background:linear-gradient(140deg,var(--accent),var(--cyan));
+  color:#fff;font-size:12px;font-weight:700;display:grid;place-items:center;flex:none}
+.ws b{font-weight:600;font-size:13px}
+.ws .chev{margin-left:auto;color:var(--text-3)}
+.search{
+  margin:8px 10px 4px;display:flex;align-items:center;gap:8px;padding:6px 9px;
+  background:var(--surface);border:1px solid var(--border);border-radius:var(--r-sm);color:var(--text-3);font-size:13px;
+}
+.search kbd{margin-left:auto;font-family:var(--mono);font-size:11px;border:1px solid var(--border);
+  border-radius:4px;padding:0 4px;color:var(--text-3)}
+.side-scroll{flex:1;overflow:auto;padding:8px 10px 16px}
+.sgroup{margin:12px 0 4px;padding:0 8px;font-size:11px;letter-spacing:.06em;text-transform:uppercase;
+  color:var(--text-3);font-weight:600;display:flex;align-items:center;gap:6px}
+.sgroup .add{margin-left:auto;opacity:.65;cursor:pointer}
+.nav{display:flex;flex-direction:column;gap:1px}
+.nl{display:flex;align-items:center;gap:9px;padding:5.5px 8px;border-radius:var(--r-sm);
+  color:var(--text-2);cursor:pointer;position:relative}
+.nl:hover{background:var(--surface-2);color:var(--text)}
+.nl.act{background:var(--surface-3);color:var(--text);font-weight:550}
+.nl .cnt{margin-left:auto;font-size:11px;color:var(--text-3);font-family:var(--mono)}
+.nl .pill{margin-left:auto;font-size:10px;background:var(--accent);color:#fff;border-radius:99px;padding:0 6px;font-weight:600}
+.nl.sub{padding-left:30px;font-size:13px}
+.nl.sub2{padding-left:46px;font-size:13px}
+.nl.new::after{content:"NEW";font-family:var(--mono);font-size:9px;letter-spacing:.04em;
+  background:var(--cyan-soft);color:var(--cyan);border-radius:4px;padding:1px 4px;margin-left:auto}
+.twist{width:14px;height:14px;display:grid;place-items:center;color:var(--text-3);flex:none;margin-left:-4px}
+
+/* ---- main column ---- */
+.mainc{display:flex;flex-direction:column;min-width:0;background:var(--bg)}
+.topbar{display:flex;align-items:center;gap:10px;padding:11px 16px;border-bottom:1px solid var(--border);min-height:48px}
+.crumb{display:flex;align-items:center;gap:7px;font-size:13px;color:var(--text-3);min-width:0}
+.crumb b{color:var(--text);font-weight:600}
+.crumb span.sep{opacity:.5}
+.topbar .sp{margin-left:auto;display:flex;align-items:center;gap:8px}
+.btn{font:inherit;font-size:13px;border-radius:var(--r-sm);padding:5px 11px;cursor:pointer;
+  border:1px solid var(--border);background:var(--surface);color:var(--text-2);display:inline-flex;align-items:center;gap:6px}
+.btn:hover{border-color:var(--border-2);color:var(--text)}
+.btn.pri{background:var(--accent);border-color:var(--accent);color:#fff}
+.btn.pri:hover{background:var(--accent-2);border-color:var(--accent-2)}
+.btn.ghost{border-color:transparent;background:transparent}
+.btn.ghost:hover{background:var(--surface-2)}
+.icb{width:28px;height:28px;display:grid;place-items:center;border-radius:var(--r-sm);color:var(--text-3);cursor:pointer;border:none;background:transparent}
+.icb:hover{background:var(--surface-2);color:var(--text)}
+
+/* ---- the shared View Bar (核心组件) ---- */
+.viewbar{display:flex;align-items:center;gap:6px;padding:8px 16px;border-bottom:1px solid var(--border);
+  flex-wrap:wrap;background:var(--bg)}
+.vtabs{display:flex;align-items:center;gap:2px;padding-right:8px;margin-right:2px;border-right:1px solid var(--border)}
+.vtab{font-size:13px;padding:4px 9px;border-radius:var(--r-sm);color:var(--text-2);cursor:pointer;
+  display:flex;align-items:center;gap:6px;border:1px solid transparent;background:transparent;font-family:inherit}
+.vtab:hover{background:var(--surface-2);color:var(--text)}
+.vtab.act{background:var(--surface-3);color:var(--text);font-weight:550}
+.layouts{display:flex;gap:1px;background:var(--surface-2);border-radius:var(--r-sm);padding:2px}
+.lay{width:28px;height:24px;display:grid;place-items:center;border-radius:5px;color:var(--text-3);cursor:pointer;
+  border:none;background:transparent;position:relative}
+.lay:hover{color:var(--text)}
+.lay.act{background:var(--surface);color:var(--accent);box-shadow:var(--sh-1)}
+.lay.isnew::after{content:"";position:absolute;top:2px;right:3px;width:5px;height:5px;border-radius:99px;background:var(--cyan)}
+.chip{font-size:12px;color:var(--text-2);border:1px dashed var(--border-2);border-radius:99px;
+  padding:3px 10px;display:inline-flex;align-items:center;gap:6px;cursor:pointer;background:transparent}
+.chip:hover{border-style:solid;color:var(--text)}
+.chip.set{border-style:solid;background:var(--surface-2);color:var(--text)}
+.chip b{font-weight:600}
+.viewbar .sp{margin-left:auto;display:flex;align-items:center;gap:6px}
+.srcbadge{font-family:var(--mono);font-size:11px;color:var(--text-3);border:1px solid var(--border);
+  border-radius:5px;padding:1px 6px;background:var(--surface-2)}
+
+/* ---- content ---- */
+.content{flex:1;overflow:auto;min-height:0}
+.pad{padding:16px}
+
+/* status / badge system */
+.sdot{width:12px;height:12px;border-radius:99px;border:2px solid currentColor;flex:none;position:relative}
+.sdot.done{background:currentColor;border-color:currentColor}
+.sdot.prog::after{content:"";position:absolute;inset:1.5px;border-radius:99px;background:currentColor;clip-path:polygon(50% 50%,50% 0,100% 0,100% 100%,50% 100%)}
+.sdot.rev::after{content:"";position:absolute;inset:2.5px;border-radius:99px;background:currentColor}
+.c-todo{color:var(--text-3)} .c-prog{color:var(--amber)} .c-rev{color:var(--accent)}
+.c-done{color:var(--green)} .c-block{color:var(--red)} .c-back{color:var(--text-3)}
+.badge{font-size:11px;border-radius:5px;padding:1.5px 7px;font-weight:600;display:inline-flex;align-items:center;gap:4px;white-space:nowrap}
+.b-task{background:var(--blue-soft);color:var(--blue)}
+.b-doc{background:var(--purple-soft);color:var(--purple)}
+.b-know{background:var(--cyan-soft);color:var(--cyan)}
+.b-flow{background:var(--amber-soft);color:var(--amber)}
+.b-rec{background:var(--gray-soft);color:var(--text-2)}
+.b-p0{background:var(--red-soft);color:var(--red)}
+.b-p1{background:var(--amber-soft);color:var(--amber)}
+.b-p2{background:var(--gray-soft);color:var(--text-3)}
+.b-green{background:var(--green-soft);color:var(--green)}
+.b-accent{background:var(--accent-soft);color:var(--accent)}
+.b-gray{background:var(--gray-soft);color:var(--text-2)}
+.av{width:20px;height:20px;border-radius:99px;display:grid;place-items:center;font-size:10px;font-weight:700;color:#fff;flex:none}
+.av.bot{border-radius:6px}
+.av.s{width:17px;height:17px;font-size:9px}
+.a1{background:#5b5bd6}.a2{background:#12909e}.a3{background:#c97a16}.a4{background:#2f9e68}.a5{background:#d24545}.a6{background:#8155d0}
+
+/* issue list */
+.lgroup{display:flex;align-items:center;gap:8px;padding:7px 14px;background:var(--surface-2);
+  border-top:1px solid var(--border);border-bottom:1px solid var(--border);font-size:12px;font-weight:600;color:var(--text-2)}
+.lgroup .cnt{color:var(--text-3);font-family:var(--mono);font-weight:400;font-size:11px}
+.lgroup .add{margin-left:auto;color:var(--text-3);cursor:pointer}
+.row{display:flex;align-items:center;gap:10px;padding:8px 14px;border-bottom:1px solid var(--border);font-size:13px;cursor:pointer}
+.row:hover{background:var(--surface-2)}
+.row .id{font-family:var(--mono);font-size:11px;color:var(--text-3);width:64px;flex:none}
+.row .tt{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.row .meta{display:flex;align-items:center;gap:8px;flex:none;color:var(--text-3);font-size:12px}
+
+/* generic cards / notes */
+.note{
+  margin-top:14px;border:1px solid var(--border);border-left:3px solid var(--accent);
+  background:var(--surface);border-radius:var(--r);padding:13px 16px;font-size:15px;color:var(--text-2);
+}
+.note h4{margin:0 0 6px;font-size:14px;color:var(--text);font-weight:650;display:flex;align-items:center;gap:8px}
+.note ul{margin:6px 0 0;padding-left:20px}
+.note li{margin:4px 0}
+.note.warn{border-left-color:var(--amber)}
+.note.stop{border-left-color:var(--red)}
+.note.ok{border-left-color:var(--green)}
+.grid2{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:14px;margin-top:14px}
+
+/* tables (spec tables outside the app) */
+table.spec{width:100%;border-collapse:collapse;font-size:14px;margin-top:12px;background:var(--surface);
+  border:1px solid var(--border);border-radius:var(--r);overflow:hidden}
+table.spec th,table.spec td{border-bottom:1px solid var(--border);padding:9px 12px;text-align:left;vertical-align:top}
+table.spec th{background:var(--surface-2);font-size:12px;color:var(--text-2);font-weight:600;white-space:nowrap}
+table.spec tr:last-child td{border-bottom:none}
+code{font-family:var(--mono);font-size:.86em;background:var(--surface-2);border:1px solid var(--border);
+  border-radius:5px;padding:1px 5px}
+
+/* ============================================================
+   Screen 2 — Doc editor
+   ============================================================ */
+.doc{max-width:760px;margin:0 auto;padding:26px 28px 70px}
+.doc-status{display:flex;align-items:center;gap:8px;margin-bottom:12px;font-size:12px;color:var(--text-3)}
+.doc h1{font-size:31px;line-height:1.3;margin:0 0 6px;letter-spacing:-.02em}
+.doc .sub{color:var(--text-3);font-size:13px;margin-bottom:22px;display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.doc p{font-size:15px;line-height:1.75;color:var(--text);margin:0 0 14px}
+.doc h2{font-size:19px;margin:26px 0 10px;letter-spacing:-.01em}
+.doc h3{font-size:16px;margin:20px 0 8px}
+.doc ul{padding-left:22px;font-size:15px;line-height:1.75}
+.doc .cursor{display:inline-block;width:1.5px;height:1.1em;background:var(--accent);vertical-align:text-bottom;animation:blink 1.1s step-end infinite}
+@keyframes blink{50%{opacity:0}}
+.mention{background:var(--accent-soft);color:var(--accent);border-radius:5px;padding:0 5px;font-size:.95em;
+  border:1px solid color-mix(in srgb,var(--accent) 20%,transparent);cursor:pointer;white-space:nowrap}
+.mention.rec{background:var(--gray-soft);color:var(--text-2);border-color:var(--border-2)}
+
+/* embedded live view block */
+.embed{border:1px solid var(--border);border-radius:var(--r);background:var(--surface);
+  margin:18px 0;overflow:hidden;box-shadow:var(--sh-1);position:relative}
+.embed.focus{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
+.embed-head{display:flex;align-items:center;gap:8px;padding:8px 11px;border-bottom:1px solid var(--border);
+  background:var(--surface-2);font-size:12px}
+.embed-head .ttl{font-weight:600;display:flex;align-items:center;gap:7px}
+.embed-head .live{display:inline-flex;align-items:center;gap:5px;color:var(--green);font-size:11px;font-weight:600}
+.embed-head .live i{width:6px;height:6px;border-radius:99px;background:var(--green);display:block;
+  box-shadow:0 0 0 0 color-mix(in srgb,var(--green) 60%,transparent);animation:pulse 2s infinite}
+@keyframes pulse{70%{box-shadow:0 0 0 6px transparent}100%{box-shadow:0 0 0 0 transparent}}
+.embed-head .sp{margin-left:auto;display:flex;align-items:center;gap:6px;color:var(--text-3)}
+.embed-body{padding:11px}
+.embed-foot{padding:6px 11px;border-top:1px solid var(--border);background:var(--surface-2);
+  font-family:var(--mono);font-size:11px;color:var(--text-3);display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.embed.dead{border-style:dashed;background:var(--surface-2)}
+.embed.dead .embed-body{color:var(--text-3);font-size:13px;display:flex;align-items:center;gap:9px;padding:16px}
+
+/* mini kanban inside embed */
+.mini-board{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:9px}
+.mini-col{background:var(--surface-2);border-radius:var(--r-sm);padding:7px;min-height:120px}
+.mini-col h5{margin:0 0 7px;font-size:11px;color:var(--text-2);font-weight:600;display:flex;align-items:center;gap:6px}
+.mini-col h5 .cnt{margin-left:auto;font-family:var(--mono);font-size:10px;color:var(--text-3)}
+.mini-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--r-sm);
+  padding:7px 8px;font-size:12px;margin-bottom:6px;box-shadow:var(--sh-1);cursor:grab}
+.mini-card:hover{border-color:var(--border-2)}
+.mini-card .mt{display:flex;align-items:center;gap:6px;margin-top:6px;color:var(--text-3);font-size:11px}
+.mini-card.drag{transform:rotate(1.5deg) translateY(-2px);box-shadow:var(--sh-2);border-color:var(--accent)}
+
+/* right panel */
+.right{border-left:1px solid var(--border);background:var(--bg-app);display:flex;flex-direction:column;min-width:0}
+.right-tabs{display:flex;gap:2px;padding:9px 12px;border-bottom:1px solid var(--border)}
+.rtab{font:inherit;font-size:12px;padding:4px 9px;border-radius:var(--r-sm);border:none;background:transparent;
+  color:var(--text-3);cursor:pointer}
+.rtab.act{background:var(--surface-3);color:var(--text);font-weight:600}
+.right-body{flex:1;overflow:auto;padding:12px}
+.outline a{display:block;font-size:13px;color:var(--text-2);text-decoration:none;padding:4px 8px;border-radius:var(--r-sm);
+  border-left:2px solid transparent}
+.outline a:hover{background:var(--surface-2);color:var(--text)}
+.outline a.act{border-left-color:var(--accent);color:var(--text);background:var(--surface-2)}
+.outline a.l2{padding-left:20px;font-size:12px}
+.rsec{font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--text-3);font-weight:600;margin:14px 0 7px}
+.rcard{background:var(--surface);border:1px solid var(--border);border-radius:var(--r-sm);padding:9px 11px;
+  font-size:13px;margin-bottom:7px;cursor:pointer}
+.rcard:hover{border-color:var(--border-2)}
+.rcard .m{color:var(--text-3);font-size:11px;margin-top:3px;display:flex;align-items:center;gap:6px}
+
+/* slash menu */
+.slash{position:absolute;z-index:30;width:290px;background:var(--surface);border:1px solid var(--border-2);
+  border-radius:var(--r);box-shadow:var(--sh-3);overflow:hidden;font-size:13px}
+.slash .sh{padding:7px 11px;font-size:11px;color:var(--text-3);border-bottom:1px solid var(--border);
+  text-transform:uppercase;letter-spacing:.06em;font-weight:600}
+.slash .si{display:flex;align-items:center;gap:10px;padding:7px 11px;cursor:pointer}
+.slash .si:hover,.slash .si.act{background:var(--accent-soft)}
+.slash .si .ic{width:26px;height:26px;border-radius:var(--r-sm);background:var(--surface-2);display:grid;place-items:center;
+  color:var(--text-2);flex:none;border:1px solid var(--border)}
+.slash .si.act .ic{background:var(--accent);color:#fff;border-color:var(--accent)}
+.slash .si b{font-weight:550;display:block;font-size:13px}
+.slash .si small{color:var(--text-3);font-size:11px}
+.slash .si .kb{margin-left:auto;font-family:var(--mono);font-size:10px;color:var(--text-3)}
+
+/* modal */
+.scrim{position:absolute;inset:0;background:rgba(10,10,16,.42);backdrop-filter:blur(1.5px);z-index:40;display:grid;place-items:center}
+.modal{width:min(720px,92%);background:var(--surface);border:1px solid var(--border-2);border-radius:var(--r-lg);
+  box-shadow:var(--sh-3);overflow:hidden}
+.modal-h{padding:13px 16px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:9px}
+.modal-h b{font-size:15px}
+.modal-h .sp{margin-left:auto}
+.modal-b{display:grid;grid-template-columns:210px minmax(0,1fr);min-height:290px}
+.modal-l{border-right:1px solid var(--border);padding:9px;background:var(--bg-app);overflow:auto}
+.modal-r{padding:13px 15px;overflow:auto}
+.mi{display:flex;align-items:center;gap:9px;padding:6px 9px;border-radius:var(--r-sm);font-size:13px;color:var(--text-2);cursor:pointer}
+.mi:hover{background:var(--surface-2)}
+.mi.act{background:var(--surface-3);color:var(--text);font-weight:550}
+.mi .cnt{margin-left:auto;font-family:var(--mono);font-size:11px;color:var(--text-3)}
+.opt{display:flex;gap:11px;align-items:flex-start;border:1px solid var(--border);border-radius:var(--r);
+  padding:11px 13px;margin-bottom:9px;cursor:pointer;font-size:13px}
+.opt.act{border-color:var(--accent);background:var(--accent-soft)}
+.opt.dis{opacity:.5}
+.opt .radio{width:15px;height:15px;border-radius:99px;border:2px solid var(--border-2);margin-top:2px;flex:none;position:relative}
+.opt.act .radio{border-color:var(--accent)}
+.opt.act .radio::after{content:"";position:absolute;inset:2.5px;border-radius:99px;background:var(--accent)}
+.opt b{display:block;font-weight:600;margin-bottom:2px}
+.opt small{color:var(--text-3);font-size:12px;line-height:1.55;display:block}
+.modal-f{padding:11px 16px;border-top:1px solid var(--border);display:flex;align-items:center;gap:9px;background:var(--surface-2)}
+.modal-f .sp{margin-left:auto;display:flex;gap:8px}
+.mono-str{font-family:var(--mono);font-size:11px;color:var(--text-2);background:var(--bg-app);
+  border:1px solid var(--border);border-radius:var(--r-sm);padding:6px 9px;word-break:break-all}
+
+/* ============================================================
+   Data table (collection)
+   ============================================================ */
+.tblwrap{overflow:auto}
+table.dt{border-collapse:separate;border-spacing:0;font-size:13px;min-width:1000px;width:100%}
+table.dt th{position:sticky;top:0;z-index:2;background:var(--surface-2);border-bottom:1px solid var(--border);
+  border-right:1px solid var(--border);padding:0;text-align:left;font-weight:600;color:var(--text-2);font-size:12px;white-space:nowrap}
+table.dt th .thin{display:flex;align-items:center;gap:6px;padding:7px 10px;cursor:pointer}
+table.dt th .thin:hover{background:var(--surface-3)}
+table.dt th.hl .thin{background:var(--accent-soft);color:var(--accent)}
+table.dt td{border-bottom:1px solid var(--border);border-right:1px solid var(--border);padding:6px 10px;
+  white-space:nowrap;color:var(--text)}
+table.dt tr:hover td{background:var(--surface-2)}
+table.dt tr.sel td{background:var(--accent-soft)}
+table.dt .c-first{position:sticky;left:0;z-index:1;background:var(--bg)}
+table.dt tr:hover .c-first{background:var(--surface-2)}
+table.dt tr.sel .c-first{background:var(--accent-soft)}
+th.c-first{z-index:3!important;background:var(--surface-2)!important}
+.ftype{color:var(--text-3);display:inline-flex}
+.cellchip{font-size:11px;border-radius:5px;padding:1.5px 8px;display:inline-flex;align-items:center;gap:5px}
+.rel{font-size:11px;border-radius:5px;padding:1.5px 7px;background:var(--blue-soft);color:var(--blue);
+  display:inline-flex;align-items:center;gap:4px;border:1px solid color-mix(in srgb,var(--blue) 20%,transparent)}
+.rel.coll{background:var(--gray-soft);color:var(--text-2);border-color:var(--border-2)}
+.cb{width:14px;height:14px;border-radius:4px;border:1.5px solid var(--border-2);display:inline-grid;place-items:center;color:transparent}
+.cb.on{background:var(--accent);border-color:var(--accent);color:#fff}
+.addrow{display:flex;align-items:center;gap:8px;padding:8px 12px;color:var(--text-3);font-size:13px;cursor:pointer;
+  border-bottom:1px solid var(--border)}
+.addrow:hover{background:var(--surface-2);color:var(--text-2)}
+.tblfoot{display:flex;align-items:center;gap:12px;padding:8px 14px;font-size:12px;color:var(--text-3);
+  border-top:1px solid var(--border);background:var(--surface-2);flex-wrap:wrap}
+.tblfoot .sp{margin-left:auto;display:flex;align-items:center;gap:10px}
+
+/* field menu popover */
+.pop{position:absolute;z-index:35;width:250px;background:var(--surface);border:1px solid var(--border-2);
+  border-radius:var(--r);box-shadow:var(--sh-3);overflow:hidden;font-size:13px}
+.pop .ph{padding:9px 11px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:8px}
+.pop .ph input{font:inherit;font-size:13px;border:none;background:transparent;color:var(--text);width:100%;outline:none}
+.pop .pi{display:flex;align-items:center;gap:9px;padding:6.5px 11px;cursor:pointer;color:var(--text-2)}
+.pop .pi:hover{background:var(--surface-2);color:var(--text)}
+.pop .pi.dang:hover{background:var(--red-soft);color:var(--red)}
+.pop .pi .r{margin-left:auto;font-size:11px;color:var(--text-3);font-family:var(--mono)}
+.pop .sep{height:1px;background:var(--border);margin:4px 0}
+.pop .quota{padding:8px 11px;font-size:11px;color:var(--text-3);background:var(--surface-2);border-top:1px solid var(--border)}
+.bar{display:block;height:4px;border-radius:99px;background:var(--surface-3);overflow:hidden;margin-top:5px}
+.bar i{display:block;height:100%;background:var(--accent);border-radius:99px}
+
+/* board */
+.board{display:flex;gap:12px;padding:14px;overflow-x:auto;min-height:100%;align-items:flex-start}
+.bcol{width:274px;flex:none;background:var(--bg-app);border:1px solid var(--border);border-radius:var(--r);padding:9px}
+.bcol h4{margin:0 0 9px;font-size:12px;display:flex;align-items:center;gap:7px;color:var(--text-2);font-weight:600}
+.bcol h4 .cnt{font-family:var(--mono);font-size:11px;color:var(--text-3)}
+.bcol h4 .add{margin-left:auto;color:var(--text-3);cursor:pointer}
+.bcard{background:var(--surface);border:1px solid var(--border);border-radius:var(--r-sm);padding:10px;
+  margin-bottom:8px;box-shadow:var(--sh-1);cursor:grab}
+.bcard:hover{border-color:var(--border-2)}
+.bcard .t{font-size:13px;line-height:1.45;margin-bottom:8px}
+.bcard .f{display:flex;align-items:center;gap:6px;flex-wrap:wrap;font-size:11px;color:var(--text-3)}
+.ghost-slot{border:1.5px dashed var(--accent);border-radius:var(--r-sm);height:56px;margin-bottom:8px;
+  background:var(--accent-soft)}
+
+/* calendar / gallery previews */
+.cal{display:grid;grid-template-columns:repeat(7,1fr);gap:1px;background:var(--border);border:1px solid var(--border);
+  border-radius:var(--r-sm);overflow:hidden}
+.cal .hd{background:var(--surface-2);font-size:11px;color:var(--text-3);text-align:center;padding:5px;font-weight:600}
+.cal .cell{background:var(--surface);min-height:58px;padding:4px 5px;font-size:11px;color:var(--text-3)}
+.cal .cell.out{background:var(--bg-app);color:var(--text-3);opacity:.5}
+.cal .ev{font-size:11px;border-radius:4px;padding:1px 5px;margin-top:3px;color:#fff;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.gal{display:grid;grid-template-columns:repeat(auto-fill,minmax(128px,1fr));gap:9px}
+.gcard{border:1px solid var(--border);border-radius:var(--r-sm);overflow:hidden;background:var(--surface);box-shadow:var(--sh-1)}
+.gcover{height:64px;background:linear-gradient(135deg,var(--accent),var(--cyan))}
+.gcover.b{background:linear-gradient(135deg,var(--amber),var(--red))}
+.gcover.c{background:linear-gradient(135deg,var(--green),var(--cyan))}
+.gcover.d{background:linear-gradient(135deg,var(--purple),var(--accent))}
+.gcard .gb{padding:7px 9px;font-size:12px}
+.gcard .gb .m{color:var(--text-3);font-size:11px;margin-top:4px}
+
+/* slide-over */
+.slide{position:absolute;top:0;right:0;bottom:0;width:min(440px,86%);background:var(--surface);
+  border-left:1px solid var(--border-2);box-shadow:var(--sh-3);z-index:45;display:flex;flex-direction:column}
+.slide-h{padding:12px 15px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:9px}
+.slide-b{flex:1;overflow:auto;padding:15px}
+.fld{display:grid;grid-template-columns:118px minmax(0,1fr);gap:10px;align-items:center;padding:6px 0;font-size:13px}
+.fld .k{color:var(--text-3);font-size:12px;display:flex;align-items:center;gap:6px}
+.fld .v{color:var(--text)}
+.fld .v input,.fld .v .fake{font:inherit;font-size:13px;width:100%;border:1px solid transparent;background:transparent;
+  color:var(--text);padding:3px 6px;border-radius:var(--r-sm);display:block}
+.fld .v .fake:hover,.fld .v input:hover{border-color:var(--border);background:var(--bg-app)}
+.divider{height:1px;background:var(--border);margin:14px 0}
+
+/* ============================================================
+   Workflow canvas
+   ============================================================ */
+.canvas{position:relative;padding:20px;overflow:auto;background:
+  radial-gradient(circle at 1px 1px, var(--border) 1px, transparent 0) 0 0/18px 18px;min-height:520px}
+.wf{position:relative;width:810px;height:452px}
+.wf svg.wires{position:absolute;inset:0;width:810px;height:452px;overflow:visible}
+.wf svg.wires path{fill:none;stroke:var(--border-2);stroke-width:1.8}
+.wf svg.wires path.hot{stroke:var(--accent);stroke-dasharray:5 4;animation:dash 1.1s linear infinite}
+@keyframes dash{to{stroke-dashoffset:-18}}
+.stage-hdr{position:absolute;top:0;font-size:11px;letter-spacing:.05em;text-transform:uppercase;color:var(--text-3);
+  font-weight:650;display:flex;align-items:center;gap:6px}
+.stage-band{position:absolute;top:22px;bottom:0;border-left:1px dashed var(--border-2)}
+.node{position:absolute;width:156px;background:var(--surface);border:1px solid var(--border-2);border-radius:var(--r);
+  box-shadow:var(--sh-1);padding:9px 11px;cursor:grab;font-size:12px}
+.node:hover{border-color:var(--accent)}
+.node.sel{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
+.node .nh{display:flex;align-items:center;gap:7px;margin-bottom:7px}
+.node .nh b{font-size:13px;font-weight:600;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.node .nm{display:flex;align-items:center;gap:6px;color:var(--text-3);font-size:11px;flex-wrap:wrap}
+.node .port{position:absolute;top:50%;width:9px;height:9px;border-radius:99px;background:var(--surface);
+  border:1.8px solid var(--border-2);transform:translateY(-50%)}
+.node .port.l{left:-5px}.node .port.r{right:-5px}
+.node:hover .port{border-color:var(--accent)}
+.node.trig{width:112px;background:var(--accent-soft);border-color:var(--accent);border-style:dashed}
+
+/* swimlane run-state */
+.lanes{display:flex;flex-direction:column;gap:1px;background:var(--border);border:1px solid var(--border);
+  border-radius:var(--r-sm);overflow:hidden}
+.lane{display:grid;grid-template-columns:106px minmax(0,1fr);background:var(--surface)}
+.lane .lname{padding:9px 11px;font-size:12px;color:var(--text-2);border-right:1px solid var(--border);
+  background:var(--surface-2);display:flex;align-items:center;gap:7px;font-weight:600}
+.lane .lbody{padding:8px 10px;display:flex;gap:7px;align-items:center;flex-wrap:wrap}
+.lchip{font-size:11px;border:1px solid var(--border);border-radius:99px;padding:2px 9px;display:inline-flex;
+  align-items:center;gap:6px;background:var(--bg-app)}
+.lchip.done{background:var(--green-soft);color:var(--green);border-color:transparent}
+.lchip.prog{background:var(--amber-soft);color:var(--amber);border-color:transparent}
+.lchip.rev{background:var(--accent-soft);color:var(--accent);border-color:transparent}
+.barrier{font-size:11px;color:var(--text-3);border-left:2px dashed var(--border-2);padding-left:9px;margin-left:3px}
+
+/* knowledge review */
+.kwrap{display:grid;grid-template-columns:minmax(0,1fr) 330px;gap:0;min-height:0}
+.klist{padding:15px;overflow:auto;border-right:1px solid var(--border)}
+.kcard{border:1px solid var(--border);border-radius:var(--r);background:var(--surface);margin-bottom:12px;overflow:hidden}
+.kcard-h{display:flex;align-items:center;gap:8px;padding:9px 12px;border-bottom:1px solid var(--border);background:var(--surface-2);font-size:12px}
+.kcard-h .sp{margin-left:auto;display:flex;gap:6px;align-items:center}
+.kcard-b{padding:12px 14px;font-size:13px;line-height:1.7}
+.kcard-b .del{background:var(--red-soft);color:var(--red);text-decoration:line-through;border-radius:4px;padding:0 3px}
+.kcard-b .ins{background:var(--green-soft);color:var(--green);border-radius:4px;padding:0 3px}
+.kcard-f{padding:8px 12px;border-top:1px solid var(--border);display:flex;gap:7px;align-items:center;flex-wrap:wrap;
+  font-size:11px;color:var(--text-3)}
+.conf{display:flex;align-items:center;gap:6px;font-size:11px;color:var(--text-3)}
+.conf .b{display:inline-block;vertical-align:middle;width:56px;height:4px;border-radius:99px;background:var(--surface-3);overflow:hidden}
+.conf .b i{display:block;height:100%;background:var(--green)}
+.conf .b i.mid{background:var(--amber)}
+.kside{padding:15px;overflow:auto;background:var(--bg-app)}
+.statusstrip{display:flex;align-items:center;gap:10px;padding:8px 15px;border-bottom:1px solid var(--border);
+  background:var(--green-soft);font-size:12px;color:var(--green);flex-wrap:wrap}
+.statusstrip.degraded{background:var(--amber-soft);color:var(--amber)}
+.statusstrip .sp{margin-left:auto;display:flex;gap:10px;align-items:center;font-family:var(--mono);font-size:11px}
+.toggle{width:34px;height:19px;border-radius:99px;background:var(--surface-3);position:relative;cursor:pointer;flex:none}
+.toggle i{position:absolute;top:2px;left:2px;width:15px;height:15px;border-radius:99px;background:var(--surface);
+  box-shadow:var(--sh-1);transition:.18s}
+.toggle.on{background:var(--accent)}
+.toggle.on i{left:17px}
+.sel-box{border:1px solid var(--border);border-radius:var(--r-sm);padding:7px 10px;background:var(--surface);
+  display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer}
+.sel-box:hover{border-color:var(--border-2)}
+.sel-box .sp{margin-left:auto;color:var(--text-3)}
+.cmt{display:flex;gap:9px;margin-bottom:11px}
+.cmt .cb2{flex:1;min-width:0;background:var(--surface);border:1px solid var(--border);border-radius:var(--r-sm);padding:8px 10px;font-size:13px}
+.cmt .cb2 .h{font-size:11px;color:var(--text-3);margin-bottom:4px;display:flex;align-items:center;gap:6px}
+
+/* tokens screen */
+.swatches{display:grid;grid-template-columns:repeat(auto-fill,minmax(146px,1fr));gap:10px;margin-top:12px}
+.sw{border:1px solid var(--border);border-radius:var(--r);overflow:hidden;background:var(--surface)}
+.sw .c{height:52px}
+.sw .l{padding:7px 9px;font-size:12px}
+.sw .l code{font-size:11px;background:transparent;border:none;padding:0;color:var(--text-3);display:block;margin-top:2px}
+
+/* responsive */
+@media (max-width:1180px){
+  .app.r{grid-template-columns:250px minmax(0,1fr)}
+  .app.r .right{display:none}
+}
+@media (max-width:860px){
+  .app,.app.r,.app.narrow-side{grid-template-columns:minmax(0,1fr)}
+  .side{display:none}
+  main{padding:18px 14px 60px}
+  .chrome-in{padding:10px 14px}
+  .kwrap{grid-template-columns:minmax(0,1fr)}
+  .kside{border-top:1px solid var(--border)}
+}
+@media print{.chrome{position:static}.screen{display:block!important;page-break-after:always}}
+</style>
+<style>
+.sync-note{padding:20px 24px;margin:24px 0;border:1px solid var(--accent,#27668a);border-radius:10px;background:var(--surface,#fff);color:var(--text,#252525);line-height:1.8}
+.sync-note a{color:var(--accent,#27668a)}
+.sync-table{overflow:auto;margin:20px 0}.sync-table table{width:100%;border-collapse:collapse;min-width:620px}.sync-table th,.sync-table td{padding:12px;text-align:left;vertical-align:top;border-bottom:1px solid var(--border,#d9d9d9);white-space:normal;overflow-wrap:anywhere;line-height:1.7}
+.sync-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:18px;margin:24px 0}.sync-card{padding:22px;border:1px solid var(--border,#d9d9d9);border-radius:12px;background:var(--surface,#fff);color:var(--text,#252525);line-height:1.8}.sync-card h3{margin:0 0 16px;font-size:18px}.sync-card p{margin:12px 0}.sync-card button{padding:8px 14px;border:1px solid #64748b;border-radius:6px;background:transparent;color:inherit;font:inherit}.sync-card button:focus-visible{outline:3px solid #4b91d3;outline-offset:3px}.sync-pill{display:inline-block;padding:2px 10px;border:1px solid #9ba9b7;border-radius:20px;margin:3px;font-size:12px}.sync-thread{margin:14px 0;padding:12px 16px;border-left:3px solid #658ca8;background:rgba(127,127,127,.06)}.sync-caption{font-size:13px;line-height:1.8}.sync-body{max-width:1100px;margin:auto;padding:20px}.sync-body code{overflow-wrap:anywhere}.sync-body h3{margin-top:28px}.sync-body p{line-height:1.8}
+@media(max-width:760px){.sync-grid{grid-template-columns:1fr}.sync-note{padding:16px}.sync-body{padding:12px}.shell{min-width:0;max-width:100%;overflow-x:clip}}
+</style></head>
+<body>
+
+<svg style="display:none" aria-hidden="true">
+  <symbol id="i-inbox" viewBox="0 0 24 24"><path d="M4 13h4l2 3h4l2-3h4M4 13 6 5h12l2 8v6H4z"/></symbol>
+  <symbol id="i-user" viewBox="0 0 24 24"><circle cx="12" cy="8" r="3.4"/><path d="M5 20c0-3.6 3.1-5.5 7-5.5s7 1.9 7 5.5"/></symbol>
+  <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><path d="M12 7.5V12l3 2"/></symbol>
+  <symbol id="i-issue" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="2.6" fill="currentColor" stroke="none"/></symbol>
+  <symbol id="i-doc" viewBox="0 0 24 24"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5M8.5 13h7M8.5 16.5h4.5"/></symbol>
+  <symbol id="i-table" viewBox="0 0 24 24"><rect x="4" y="4.5" width="16" height="15" rx="2"/><path d="M4 9.5h16M4 14.5h16M10 9.5v10"/></symbol>
+  <symbol id="i-flow" viewBox="0 0 24 24"><rect x="3" y="4" width="6" height="5" rx="1.4"/><rect x="15" y="4" width="6" height="5" rx="1.4"/><rect x="9" y="15" width="6" height="5" rx="1.4"/><path d="M6 9v3.5h12V9M12 12.5V15"/></symbol>
+  <symbol id="i-brain" viewBox="0 0 24 24"><path d="M12 5.5a3 3 0 0 0-5.7 1.3A2.8 2.8 0 0 0 4.6 12a2.9 2.9 0 0 0 1.8 4.6A3 3 0 0 0 12 18.5zM12 5.5a3 3 0 0 1 5.7 1.3A2.8 2.8 0 0 1 19.4 12a2.9 2.9 0 0 1-1.8 4.6A3 3 0 0 1 12 18.5z"/><path d="M12 5.5v13"/></symbol>
+  <symbol id="i-bot" viewBox="0 0 24 24"><rect x="4" y="7.5" width="16" height="11" rx="3"/><path d="M12 4v3.5M8.5 12.5v1.5M15.5 12.5v1.5"/></symbol>
+  <symbol id="i-gear" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19 12a7 7 0 0 0-.1-1.2l2-1.5-2-3.4-2.3 1a7 7 0 0 0-2-1.2L14.2 3H9.8l-.4 2.7a7 7 0 0 0-2 1.2l-2.3-1-2 3.4 2 1.5A7 7 0 0 0 5 12a7 7 0 0 0 .1 1.2l-2 1.5 2 3.4 2.3-1a7 7 0 0 0 2 1.2l.4 2.7h4.4l.4-2.7a7 7 0 0 0 2-1.2l2.3 1 2-3.4-2-1.5A7 7 0 0 0 19 12z"/></symbol>
+  <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5"/><path d="m16 16 4 4"/></symbol>
+  <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+  <symbol id="i-filter" viewBox="0 0 24 24"><path d="M4 6h16l-6.2 7.2V19l-3.6-2v-3.8z"/></symbol>
+  <symbol id="i-group" viewBox="0 0 24 24"><path d="M4 6h16M4 12h10M4 18h6"/></symbol>
+  <symbol id="i-sort" viewBox="0 0 24 24"><path d="M7 5v14m0 0-3-3m3 3 3-3M17 19V5m0 0-3 3m3-3 3 3"/></symbol>
+  <symbol id="i-eye" viewBox="0 0 24 24"><path d="M2.5 12S6 6 12 6s9.5 6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6z"/><circle cx="12" cy="12" r="2.6"/></symbol>
+  <symbol id="i-chevr" viewBox="0 0 24 24"><path d="m9.5 5.5 6.5 6.5-6.5 6.5"/></symbol>
+  <symbol id="i-chevd" viewBox="0 0 24 24"><path d="m5.5 9.5 6.5 6.5 6.5-6.5"/></symbol>
+  <symbol id="i-board" viewBox="0 0 24 24"><rect x="3.5" y="4.5" width="5" height="15" rx="1.4"/><rect x="10" y="4.5" width="5" height="10" rx="1.4"/><rect x="16.5" y="4.5" width="4" height="13" rx="1.4"/></symbol>
+  <symbol id="i-list" viewBox="0 0 24 24"><path d="M5 7h14M5 12h14M5 17h14"/></symbol>
+  <symbol id="i-gantt" viewBox="0 0 24 24"><rect x="4" y="5.5" width="8" height="3.4" rx="1.2"/><rect x="8" y="10.3" width="9" height="3.4" rx="1.2"/><rect x="12" y="15.1" width="8" height="3.4" rx="1.2"/></symbol>
+  <symbol id="i-lane" viewBox="0 0 24 24"><rect x="3.5" y="4.5" width="17" height="6" rx="1.6"/><rect x="3.5" y="13.5" width="17" height="6" rx="1.6"/><path d="M9.5 4.5v6M9.5 13.5v6"/></symbol>
+  <symbol id="i-cal" viewBox="0 0 24 24"><rect x="4" y="5.5" width="16" height="14" rx="2"/><path d="M4 10h16M8.5 3.5v4M15.5 3.5v4"/></symbol>
+  <symbol id="i-gal" viewBox="0 0 24 24"><rect x="4" y="4.5" width="7" height="7" rx="1.4"/><rect x="13" y="4.5" width="7" height="7" rx="1.4"/><rect x="4" y="13" width="7" height="7" rx="1.4"/><rect x="13" y="13" width="7" height="7" rx="1.4"/></symbol>
+  <symbol id="i-link" viewBox="0 0 24 24"><path d="M10.5 13.5a4 4 0 0 0 5.7 0l2.4-2.4a4 4 0 0 0-5.7-5.7l-1.3 1.3"/><path d="M13.5 10.5a4 4 0 0 0-5.7 0l-2.4 2.4a4 4 0 0 0 5.7 5.7l1.3-1.3"/></symbol>
+  <symbol id="i-more" viewBox="0 0 24 24"><circle cx="6" cy="12" r="1.3" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1.3" fill="currentColor" stroke="none"/><circle cx="18" cy="12" r="1.3" fill="currentColor" stroke="none"/></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24"><path d="m5 12.5 4.5 4.5L19 7"/></symbol>
+  <symbol id="i-x" viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></symbol>
+  <symbol id="i-text" viewBox="0 0 24 24"><path d="M6 6h12M9 6v12M6 18h6"/></symbol>
+  <symbol id="i-hash" viewBox="0 0 24 24"><path d="M9 4 7.5 20M16.5 4 15 20M4.5 9h15M4 15h15"/></symbol>
+  <symbol id="i-tag" viewBox="0 0 24 24"><path d="M4 11V5a1 1 0 0 1 1-1h6l8.5 8.5a1.5 1.5 0 0 1 0 2.1l-5.9 5.9a1.5 1.5 0 0 1-2.1 0z"/><circle cx="8" cy="8" r="1.2"/></symbol>
+  <symbol id="i-run" viewBox="0 0 24 24"><path d="m8 5.5 10 6.5-10 6.5z"/></symbol>
+  <symbol id="i-warn" viewBox="0 0 24 24"><path d="M12 4.5 21 19H3z"/><path d="M12 10v4M12 16.6v.1"/></symbol>
+  <symbol id="i-back" viewBox="0 0 24 24"><path d="M20 12H4m0 0 5-5m-5 5 5 5"/></symbol>
+  <symbol id="i-arch" viewBox="0 0 24 24"><rect x="3.5" y="4.5" width="17" height="4" rx="1.2"/><path d="M5.5 8.5v9a2 2 0 0 0 2 2h9a2 2 0 0 0 2-2v-9M10 12.5h4"/></symbol>
+</svg>
+
+<header class="chrome">
+  <div class="chrome-in">
+    <div class="chrome-top">
+      <div class="brand"><span class="dot"></span>
+        <span>Cortex UI 原型 <small>v0.3 增量评审稿 · MAGI-2 · 已补 main 执行与权限修订 · 配套 PRD 第 14 章与架构手册第 10 章</small></span>
+      </div>
+      <div class="chrome-meta">
+        <span id="tcount"></span>
+        <button class="tbtn" id="themeBtn">主题：跟随系统</button>
+      </div>
+    </div>
+    <div class="tabs" role="tablist" id="tabs"></div>
+  </div>
+</header>
+
+<main id="main"><section class="screen on" id="s-sync" role="tabpanel"><div class="screen-head"><h2>S10 · 新主线下的交互边界</h2><p>保留原九屏，在本屏补齐 main 对齐后的评审状态；以下示例数据均为虚构，不代表工作区真实用量或执行。</p></div><div class="sync-body" id="main-sync"><div class="sync-note"><strong>2026-09-10 · main 增量修订稿（未合并、未提交）</strong><br>
+原文源码基线仍为 <code>dcc2d5825</code>；本轮对照 <code>docs/cortex-prd-and-ui@a9c5aeb43</code> 与 <code>main@3dcfdaea4</code> 修订受影响条目，并新增增量章节。未复核的历史细节继续适用原基线，不能将整篇理解为已按 main 全量重审。<br>
+这份文件是架构评审交付副本，仓库及远端分支尚未修改。Mermaid 已内嵌，字体使用本机回退，可离线阅读。</div>
+<div class="sync-grid">
+<article class="sync-card"><h3>文档讨论 · 请求留在线程里</h3><span class="sync-pill">映射 S2 / AC-17</span><div class="sync-thread"><strong>架构讨论</strong><p>成员：请复核数据模型。</p><span class="sync-pill">架构智能体 · 运行中</span><p>结果与执行记录在本线程展示。</p></div><div class="sync-thread"><strong>发布讨论</strong><p>成员：请核对回退步骤。</p><span class="sync-pill">同一智能体 · 排队中</span><p>等待它完成本任务上的当前执行。</p></div><p>回复未获回应时由用户明确选择接手者；不显示“5 分钟后自动转给负责人”。</p></article>
+<article class="sync-card"><h3>共享视图 · 排序有边界</h3><span class="sync-pill">映射 S1 / S4 / S5</span><p><strong>新任务看板</strong></p><span class="sync-pill">按状态分组</span><span class="sync-pill">创建时间 · 从新到旧</span><span class="sync-pill">隐藏 cancelled</span><p id="sync-sort">按状态分组时，可选择手动排序。</p><button type="button" id="sync-group">切换为按负责人分组</button><p>旧视图保留用户已存偏好；筛选与显示设置分别维护。集合源的排序能力由数据契约确定，不机械复制 issue.position 规则。</p></article>
+<article class="sync-card"><h3>工作流 · 授权人与执行者分开</h3><span class="sync-pill">映射 S7 / AC-18 / AC-22</span><p>流程推进者：发布小队</p><p>定时触发创建者：成员甲<br>最近配置编辑者：成员乙</p><div class="sync-thread"><strong>等待人工评审</strong><p>取消本节点不会自动批准后续发布；推进者必须核对审批结果。</p></div><p>创建者已离开工作区时：<strong>无法运行，请有权限的成员处理触发配置。</strong></p><p>创建、修改、立即运行分别遵守平台判权；界面不展示他人 webhook 凭据。</p></article>
+<article class="sync-card"><h3>知识晋升 · 先确认来源完整</h3><span class="sync-pill">映射 S8 / AC-16 / AC-21</span><div class="sync-thread"><strong>候选：迁移回退说明</strong><p>来源：执行记录 → 工具输出<br>完整度：仅保留开头<br>用量：尚未上报</p></div><p id="sync-proof">需要打开完整来源核验。截断输出不能作为完整证据。</p><button type="button" id="sync-inspect">演示：完成来源核验</button><button type="button" id="sync-promote" disabled>入库（演示）</button><p>来源未知也保持可见；“未上报”与“真实为 0”必须区分。本屏按钮仅演示，不调用 API。</p></article>
+</div>
+<h3>与既有九屏配套的实施说明</h3><p>S2 的评论执行块复用 main 的线程展示；S7 的 runner 字段继续必填，并在激活后续阶段前检查业务审批结果；S8 的运行时兼容提示还需列出凭据、授权与连通性结果。界面中的 pending、blocked、部分成功应来自服务端结果，不由前端猜测。</p>
+<p>本次未改变 Q-U1 至 Q-U4 的未决状态。原型新增的对象仍为设计，不因沿用 main 的组件而成为已上线功能。完整机制、源码定位和迁移说明见配套架构手册 §10、PRD §14。</p>
+</div></section>
+
+<!-- ============================================================
+     S1 · 信息架构与共享视图栏
+     ============================================================ -->
+<section class="screen" id="s-ia" role="tabpanel">
+  <div class="screen-head">
+    <h2>S1 · 信息架构：四个新对象接进现有侧栏，不新建导航体系</h2>
+    <p>左侧栏保持 multica 现有的四段结构（个人 / 固定 / 工作区 / 配置，见 <code>packages/views/layout/app-sidebar.tsx</code>），
+      新增的 <b>文档</b>、<b>表格</b>、<b>工作流</b>、<b>知识库</b> 只是插入既有分组的新条目。
+      中间是本次设计的核心组件 <b>共享视图栏</b> —— issue 与 collection 用同一个组件、同一套过滤/分组/排序，这是 <span class="fr">FR-002</span> 的可视验收物。</p>
+  </div>
+
+  <div class="frame"><div class="app">
+    <!-- sidebar -->
+    <aside class="side">
+      <div class="side-top">
+        <div class="ws"><span class="av">C</span><b>Cortex</b><svg class="i sm chev"><use href="#i-chevd"/></svg></div>
+        <div class="search"><svg class="i sm"><use href="#i-search"/></svg>搜索<kbd>⌘K</kbd></div>
+      </div>
+      <div class="side-scroll">
+        <nav class="nav">
+          <div class="nl"><svg class="i"><use href="#i-inbox"/></svg>收件箱<span class="pill">3</span></div>
+          <div class="nl"><svg class="i"><use href="#i-bot"/></svg>对话</div>
+          <div class="nl"><svg class="i"><use href="#i-user"/></svg>我的工作项</div>
+        </nav>
+
+        <div class="sgroup">固定 <span class="add"><svg class="i sm"><use href="#i-plus"/></svg></span></div>
+        <nav class="nav">
+          <div class="nl"><svg class="i" style="color:var(--purple)"><use href="#i-doc"/></svg>Cortex 产品规格</div>
+          <div class="nl"><svg class="i" style="color:var(--cyan)"><use href="#i-table"/></svg>需求池 · 看板</div>
+          <div class="nl"><svg class="i"><use href="#i-issue"/></svg>MAGI-2</div>
+        </nav>
+
+        <div class="sgroup">工作区</div>
+        <nav class="nav">
+          <div class="nl act"><svg class="i"><use href="#i-issue"/></svg>工作项<span class="cnt">128</span></div>
+          <div class="nl"><svg class="i"><use href="#i-board"/></svg>项目<span class="cnt">4</span></div>
+          <div class="nl new"><svg class="i"><use href="#i-doc"/></svg>文档</div>
+          <div class="nl new"><svg class="i"><use href="#i-table"/></svg>表格</div>
+          <div class="nl"><svg class="i"><use href="#i-run"/></svg>自动驾驶</div>
+          <div class="nl new"><svg class="i"><use href="#i-flow"/></svg>工作流</div>
+          <div class="nl"><svg class="i"><use href="#i-bot"/></svg>智能体<span class="cnt">6</span></div>
+          <div class="nl"><svg class="i"><use href="#i-user"/></svg>小队</div>
+          <div class="nl"><svg class="i"><use href="#i-gantt"/></svg>用量</div>
+        </nav>
+
+        <div class="sgroup">配置</div>
+        <nav class="nav">
+          <div class="nl"><svg class="i"><use href="#i-gear"/></svg>运行时</div>
+          <div class="nl"><svg class="i"><use href="#i-arch"/></svg>技能</div>
+          <div class="nl new"><svg class="i"><use href="#i-brain"/></svg>知识库</div>
+          <div class="nl"><svg class="i"><use href="#i-gear"/></svg>设置</div>
+        </nav>
+      </div>
+    </aside>
+
+    <!-- main -->
+    <div class="mainc">
+      <div class="topbar">
+        <div class="crumb"><b>工作项</b><span class="sep">/</span><span>全部</span></div>
+        <div class="sp">
+          <button class="btn"><svg class="i sm"><use href="#i-eye"/></svg>保存为视图</button>
+          <button class="btn pri"><svg class="i sm"><use href="#i-plus"/></svg>新建<svg class="i sm"><use href="#i-chevd"/></svg></button>
+        </div>
+      </div>
+
+      <!-- ★ 共享视图栏 -->
+      <div class="viewbar">
+        <div class="vtabs">
+          <button class="vtab act">全部</button>
+          <button class="vtab">本周</button>
+          <button class="vtab">路线图</button>
+          <button class="vtab" style="color:var(--text-3)"><svg class="i sm"><use href="#i-plus"/></svg></button>
+        </div>
+        <div class="layouts" title="issue 与 collection 共用同一组布局">
+          <button class="lay" title="列表"><svg class="i sm"><use href="#i-list"/></svg></button>
+          <button class="lay act" title="看板"><svg class="i sm"><use href="#i-board"/></svg></button>
+          <button class="lay" title="表格"><svg class="i sm"><use href="#i-table"/></svg></button>
+          <button class="lay" title="甘特"><svg class="i sm"><use href="#i-gantt"/></svg></button>
+          <button class="lay" title="泳道"><svg class="i sm"><use href="#i-lane"/></svg></button>
+          <button class="lay isnew" title="日历（新增 FR-004）"><svg class="i sm"><use href="#i-cal"/></svg></button>
+          <button class="lay isnew" title="画廊（新增 FR-005）"><svg class="i sm"><use href="#i-gal"/></svg></button>
+        </div>
+        <button class="chip set"><svg class="i sm"><use href="#i-filter"/></svg>类型 <b>全部</b></button>
+        <button class="chip"><svg class="i sm"><use href="#i-group"/></svg>分组 <b>状态</b></button>
+        <button class="chip"><svg class="i sm"><use href="#i-sort"/></svg>排序</button>
+        <button class="chip"><svg class="i sm"><use href="#i-eye"/></svg>显示</button>
+        <div class="sp"><span class="srcbadge">DataSource: issue</span></div>
+      </div>
+
+      <div class="content">
+        <div class="lgroup"><span class="sdot prog c-prog"></span>进行中 <span class="cnt">3</span><span class="add"><svg class="i sm"><use href="#i-plus"/></svg></span></div>
+        <div class="row"><span class="id">MAGI-2</span><span class="badge b-task">工作项</span><span class="tt">调研 Multica 方案，构建轻量级的 Notion / 飞书替代方案</span><span class="meta"><span class="badge b-p0">P0</span><span class="av bot a1">yi</span></span></div>
+        <div class="row"><span class="id">MAGI-31</span><span class="badge b-doc">文档</span><span class="tt">Cortex 产品规格 · 集合层数据模型</span><span class="meta"><span class="badge b-accent">评审中</span><span class="av a2">QQ</span></span></div>
+        <div class="row"><span class="id">MAGI-44</span><span class="badge b-flow">流程实例</span><span class="tt">需求评审流 · 2026-09-01 运行</span><span class="meta"><span class="badge b-gray">阶段 2/4</span><span class="av bot a3">bu</span></span></div>
+
+        <div class="lgroup"><span class="sdot rev c-rev"></span>评审中 <span class="cnt">2</span><span class="add"><svg class="i sm"><use href="#i-plus"/></svg></span></div>
+        <div class="row"><span class="id">MAGI-118</span><span class="badge b-know">知识候选</span><span class="tt">从 12 次 agent run 提炼的 5 条候选知识</span><span class="meta"><span class="badge b-p1">P1</span><span class="av bot a6">me</span></span></div>
+        <div class="row"><span class="id">MAGI-52</span><span class="badge b-doc">文档</span><span class="tt">OpenViking PoC 验收报告</span><span class="meta"><span class="badge b-p0">P0</span><span class="av a4">LZ</span></span></div>
+
+        <div class="lgroup"><span class="sdot c-todo"></span>待办 <span class="cnt">2</span><span class="add"><svg class="i sm"><use href="#i-plus"/></svg></span></div>
+        <div class="row"><span class="id">MAGI-60</span><span class="badge b-task">工作项</span><span class="tt">calendar 布局：按 date 字段排布，拖拽改期回写</span><span class="meta"><span class="badge b-p0">P0</span><span class="av a5">WM</span></span></div>
+        <div class="row"><span class="id">MAGI-61</span><span class="badge b-task">工作项</span><span class="tt">gallery 布局：封面字段与展示字段可配</span><span class="meta"><span class="badge b-p0">P0</span><span class="av a5">WM</span></span></div>
+      </div>
+    </div>
+  </div></div>
+
+  <div class="grid2">
+    <div class="note">
+      <h4>为什么不给新对象建新的顶层导航</h4>
+      侧栏现有四段结构承载了 12 个条目。文档 / 表格 / 工作流 / 知识库若各自新建一个顶层域，侧栏会变成八个域、用户每次都要先想「这东西住在哪」。
+      本设计的取舍是：<b>新对象只是既有分组里的新条目</b>，跨对象的入口统一走搜索（⌘K）与「固定」。
+      「固定」区在现有实现里已支持钉住视图、issue、项目（<code>app-sidebar.tsx</code> 的 pin 逻辑），扩展成可钉文档与表格是零结构改动。
+    </div>
+    <div class="note ok">
+      <h4>共享视图栏是 <span class="fr">FR-002</span> 的验收面</h4>
+      右上角的 <span class="srcbadge">DataSource: issue</span> 在原型里是显式可见的，正式版应移除。它在这里的作用是让评审者一眼确认：
+      <b>切到 S4 的表格页时，视图栏是同一个组件，只有 DataSource 换成了 collection。</b>
+      如果两处的过滤/分组交互出现任何差异，就说明抽象没做干净。
+      <ul>
+        <li>既有布局 5 种（<code>ViewMode = board | list | table | gantt | swimlane</code>，源自 <code>packages/core/issues/stores/view-store.ts</code>）保持原样</li>
+        <li>新增 2 种：日历 <span class="fr">FR-004</span>、画廊 <span class="fr">FR-005</span>，用蓝点标记</li>
+      </ul>
+    </div>
+    <div class="note warn">
+      <h4>列表里多出来的一列：kind 徽章 <span class="fr">FR-011</span></h4>
+      引入 <code>issue.kind</code> 后，同一个列表里会同时出现工作项 / 文档 / 知识候选 / 流程实例。
+      设计上必须让它们可区分但不喧宾夺主 —— 用 11px 徽章而不是图标或颜色底纹，
+      并在视图栏第一个过滤 chip 固定为「类型」，默认值 <b>全部</b>。
+      <br><br><b>需要你确认的产品判断：</b>默认值应该是「全部」还是「仅工作项」？
+      我倾向 <b>全部</b>（否则文档永远不会被偶遇），但这会改变所有老用户的默认列表内容。
+    </div>
+    <div class="note stop">
+      <h4>刻意没有出现在这个列表里的东西：record</h4>
+      表格的行（record）不进 issue 列表、不进收件箱、不占用 <code>MAGI-</code> 编号序列 —— 这是 <span class="fr">D-1</span> 决策的直接后果，也是 <span class="fr">FR-024</span> 的验收标准之一。
+      建 1000 行 record 后，这一页应当没有任何变化。
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================
+     S2 · 文档：页面树 + 内嵌活视图
+     ============================================================ -->
+<section class="screen" id="s-doc" role="tabpanel">
+  <div class="screen-head">
+    <h2>S2 · 文档：正文里嵌一个活着的看板</h2>
+    <p>文档是 <code>kind=doc</code> 的 issue <span class="fr">FR-011</span>，因此天然带评论、mention、附件、agent 可寻址性与全文检索。
+      正文编辑器 <b>零改动复用</b> 现有 TipTap 实现 <span class="fr">FR-014</span>。
+      本屏唯一的新组件是正文中央那个 <b>内嵌活视图块</b> <span class="fr">FR-032</span> —— 它是本产品对 Notion / 飞书的核心差异点。</p>
+  </div>
+
+  <div class="frame"><div class="app r">
+    <aside class="side">
+      <div class="side-top">
+        <div class="ws"><span class="av">C</span><b>Cortex</b><svg class="i sm chev"><use href="#i-chevd"/></svg></div>
+        <div class="search"><svg class="i sm"><use href="#i-search"/></svg>搜索<kbd>⌘K</kbd></div>
+      </div>
+      <div class="side-scroll">
+        <div class="sgroup">文档 <span class="add"><svg class="i sm"><use href="#i-plus"/></svg></span></div>
+        <nav class="nav">
+          <div class="nl"><span class="twist"><svg class="i sm"><use href="#i-chevd"/></svg></span><svg class="i sm"><use href="#i-doc"/></svg>产品</div>
+          <div class="nl sub act"><span class="twist"><svg class="i sm"><use href="#i-chevd"/></svg></span>Cortex 产品规格</div>
+          <div class="nl sub2">集合层数据模型</div>
+          <div class="nl sub2">引用与嵌入</div>
+          <div class="nl sub2">知识库接入</div>
+          <div class="nl sub"><span class="twist"><svg class="i sm"><use href="#i-chevr"/></svg></span>竞品分析</div>
+          <div class="nl"><span class="twist"><svg class="i sm"><use href="#i-chevr"/></svg></span><svg class="i sm"><use href="#i-doc"/></svg>工程</div>
+          <div class="nl"><span class="twist"><svg class="i sm"><use href="#i-chevr"/></svg></span><svg class="i sm"><use href="#i-doc"/></svg>会议纪要</div>
+        </nav>
+        <div class="sgroup">表格</div>
+        <nav class="nav">
+          <div class="nl"><svg class="i sm"><use href="#i-table"/></svg>需求池<span class="cnt">1284</span></div>
+          <div class="nl"><svg class="i sm"><use href="#i-table"/></svg>客户名单<span class="cnt">96</span></div>
+          <div class="nl"><svg class="i sm"><use href="#i-table"/></svg>设备台账<span class="cnt">412</span></div>
+        </nav>
+      </div>
+    </aside>
+
+    <div class="mainc">
+      <div class="topbar">
+        <div class="crumb"><span>文档</span><span class="sep">/</span><span>产品</span><span class="sep">/</span><b>Cortex 产品规格</b></div>
+        <div class="sp">
+          <span class="badge b-accent">评审中</span>
+          <button class="btn"><svg class="i sm"><use href="#i-clock"/></svg>版本</button>
+          <button class="btn"><svg class="i sm"><use href="#i-user"/></svg>分享</button>
+          <button class="icb"><svg class="i"><use href="#i-more"/></svg></button>
+        </div>
+      </div>
+      <div class="content">
+        <article class="doc">
+          <div class="doc-status">
+            <span class="sdot rev c-rev"></span> 评审中 · reviewing
+            <span style="opacity:.4">·</span> 挂载 category <code>in_review</code>
+            <span style="opacity:.4">·</span> <span class="badge b-doc">kind=doc</span>
+          </div>
+          <h1>Cortex 产品规格</h1>
+          <div class="sub">
+            <span class="av a2">QQ</span> quboqin · 2 分钟前编辑
+            <span style="opacity:.4">·</span> 3 位关注者
+            <span style="opacity:.4">·</span> <span style="color:var(--accent)">2 处引用</span>
+          </div>
+
+          <p>本文定义 Cortex 一期的对象模型与交付边界。三项已锁定的决策见
+            <span class="mention">MAGI-2</span>：行是独立 record、OpenViking 作为默认自托管后端、rollup / formula 推二期。</p>
+
+          <h2>当前需求池</h2>
+          <p>下面这个看板不是截图，也不是快照 —— 它是
+            <span class="mention rec"><svg class="i sm" style="vertical-align:-2px"><use href="#i-table"/></svg> 需求池</span>
+            这张表的一个已保存视图，在本文里叠加了「仅本季度」的本地过滤。拖动卡片会直接写回该表。</p>
+
+          <div class="embed focus">
+            <div class="embed-head">
+              <span class="ttl"><svg class="i sm"><use href="#i-table"/></svg>需求池 · 按状态看板</span>
+              <span class="live"><i></i>实时</span>
+              <span class="sp">
+                <button class="chip set" style="font-size:11px;padding:2px 8px">本地过滤 <b>本季度</b></button>
+                <button class="icb" style="width:24px;height:24px"><svg class="i sm"><use href="#i-more"/></svg></button>
+              </span>
+            </div>
+            <div class="embed-body">
+              <div class="mini-board">
+                <div class="mini-col">
+                  <h5><span class="sdot c-todo" style="width:9px;height:9px"></span>待评估<span class="cnt">2</span></h5>
+                  <div class="mini-card">日历布局按周期分桶<div class="mt"><span class="badge b-p1">P1</span><span class="av s a5">WM</span></div></div>
+                  <div class="mini-card">表单视图收集外部提交<div class="mt"><span class="badge b-p1">P1</span><span class="av s a4">LZ</span></div></div>
+                </div>
+                <div class="mini-col">
+                  <h5><span class="sdot prog c-prog" style="width:9px;height:9px"></span>已排期<span class="cnt">2</span></h5>
+                  <div class="mini-card drag">内嵌活视图块<div class="mt"><span class="badge b-p0">P0</span><span class="av s a1">QQ</span></div></div>
+                  <div class="ghost-slot"></div>
+                  <div class="mini-card">relation 桥接到 issue<div class="mt"><span class="badge b-p0">P0</span><span class="av s a2">bu</span></div></div>
+                </div>
+                <div class="mini-col">
+                  <h5><span class="sdot done c-done" style="width:9px;height:9px"></span>已上线<span class="cnt">1</span></h5>
+                  <div class="mini-card">自定义状态目录<div class="mt"><span class="badge b-p0">P0</span><span class="av s a3">bu</span></div></div>
+                </div>
+              </div>
+            </div>
+            <div class="embed-foot">
+              <span>Markdown 落盘：</span>
+              <code style="background:transparent;border:none;padding:0">!view[需求池 · 按状态看板](mention://collection-view/9f3c…d21)</code>
+            </div>
+          </div>
+
+          <p>上面这块拖动的卡片会即时写回 record，同一个视图也被引用在
+            <span class="mention">MAGI-44 需求评审流</span> 的实例说明里，两处过滤条件不同、数据同源<span class="cursor"></span></p>
+
+          <h2>引用失效时的降级</h2>
+          <p>如果被引用的视图被删除或当前用户无权访问，块降级为占位，<b>文档本身照常渲染</b> <span class="fr">FR-035</span>：</p>
+
+          <div class="embed dead">
+            <div class="embed-head"><span class="ttl" style="color:var(--text-3)"><svg class="i sm"><use href="#i-link"/></svg>视图已失效</span></div>
+            <div class="embed-body">
+              <svg class="i lg" style="color:var(--amber)"><use href="#i-warn"/></svg>
+              <div>此内嵌视图指向的对象已被删除或你没有访问权限。
+                <div style="font-size:12px;color:var(--text-3);margin-top:3px">
+                  <code style="background:transparent;border:none;padding:0">mention://collection-view/deleted-id</code> ·
+                  <span style="color:var(--accent);cursor:pointer">替换为其他视图</span> ·
+                  <span style="color:var(--accent);cursor:pointer">移除此块</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </article>
+      </div>
+    </div>
+
+    <aside class="right">
+      <div class="right-tabs">
+        <button class="rtab act">大纲</button>
+        <button class="rtab">反向引用 <span style="color:var(--accent)">2</span></button>
+        <button class="rtab">版本</button>
+        <button class="rtab">评论 <span style="color:var(--text-3)">4</span></button>
+      </div>
+      <div class="right-body">
+        <div class="outline">
+          <a href="#" class="act">当前需求池</a>
+          <a href="#" class="l2">内嵌视图配置</a>
+          <a href="#">引用失效时的降级</a>
+          <a href="#">集合层数据模型</a>
+          <a href="#" class="l2">collection_field</a>
+          <a href="#" class="l2">record_link</a>
+        </div>
+
+        <div class="rsec">本文引用了谁</div>
+        <div class="rcard"><svg class="i sm" style="vertical-align:-2px;color:var(--cyan)"><use href="#i-table"/></svg> 需求池 · 按状态看板
+          <div class="m">活视图 · 本地过滤：本季度</div></div>
+        <div class="rcard"><svg class="i sm" style="vertical-align:-2px"><use href="#i-issue"/></svg> MAGI-44 需求评审流
+          <div class="m">行内 mention</div></div>
+
+        <div class="rsec">谁引用了本文</div>
+        <div class="rcard"><svg class="i sm" style="vertical-align:-2px;color:var(--purple)"><use href="#i-doc"/></svg> 2026 Q3 规划
+          <div class="m">2 处行内引用</div></div>
+        <div class="rcard"><svg class="i sm" style="vertical-align:-2px;color:var(--cyan)"><use href="#i-brain"/></svg> 知识库语料
+          <div class="m">published 时自动入库 · <span class="fr" style="margin:0">FR-045</span></div></div>
+      </div>
+    </aside>
+  </div></div>
+
+  <div class="grid2">
+    <div class="note">
+      <h4>为什么内嵌块要显式露出 Markdown 串</h4>
+      平台以 Markdown 作为存储与交换格式，编辑器已有 <code>!file[名称](url)</code> 这一自定义语法先例
+      （<code>packages/views/editor/extensions/file-card.tsx</code>，带双向 roundtrip 测试）。
+      <code>collection-view</code> 块沿用同一前缀风格 <span class="fr">FR-033</span>，
+      在原型里把序列化结果印在块底部，是为了让评审者确认：<b>这块东西经过 Markdown 往返不会丢</b>，
+      在 CLI、agent 上下文、纯文本客户端里降级为一个普通链接而不是乱码。正式版这一行应默认隐藏。
+    </div>
+    <div class="note ok">
+      <h4>「实时」这个词在这里只指数据，不指协同</h4>
+      绿点表示嵌入的是 <b>linked view</b>（视图 ID + 本地覆盖），源表变了这里就变 <span class="fr">FR-034</span>。
+      它<b>不</b>表示多人实时协同编辑 —— 一期明确不做 <span class="fr">NG-2</span> / <span class="fr">A-1</span>。
+      这两件事在界面上极易被用户混淆，所以正文区不使用任何「其他人的光标」类视觉语言，
+      冲突处理走段落级软锁提示 <span class="fr">FR-017</span> 与版本历史 <span class="fr">FR-018</span>。
+    </div>
+    <div class="note stop">
+      <h4>本轮新增：内嵌块的写回必须复用既有的运行确认</h4>
+      改 record 只是改数据；<b>改 issue 会触发平台行为</b>。在这个块里把一张 issue 卡片拖到「进行中」，
+      可能唤醒一个 agent、关闭一个 stage barrier、往别人收件箱里塞一条。
+      <br><br>好消息是平台已经解过一次这道题：表格视图里把 agent 负责的 issue 从 <code>backlog</code> 改成 <code>todo</code> 时，
+      不直接应用，而是弹一个运行确认框。<b>内嵌块必须复用这个机制，而不是另写一套写回</b> —— 见 <span class="fr">FR-032</span>、验收 <span class="fr">AC-14</span>。
+      <br><br>另加一条一次性提示：<b>首次在内嵌块里编辑时</b>提示「这条修改会写回源表『需求池』，另有 2 篇文档正在引用它」，之后不再出现。
+      Notion 老用户知道 database view 是活的，新用户第一反应一定是「我只是在这篇文档里改改」。
+    </div>
+    <div class="note warn">
+      <h4>右栏第二个 tab 是这次设计里最容易被砍、但最不该砍的东西</h4>
+      「反向引用」把 <span class="fr">FR-036</span> 从一个删除确认弹窗提升成常驻面板。
+      理由：一旦表格可以被 N 篇文档以不同过滤条件嵌入，<b>「这张表还有谁在用」就成了删除、改字段、改选项之前的必查项</b>。
+      Notion 在这件事上做得很差（引用关系不可见），是可以直接拿来做差异化的点。
+    </div>
+    <div class="note">
+      <h4>本轮修订：status 与 assignee 都不隐藏，「kind-aware」= 换措辞而非藏字段</h4>
+      <code>draft / reviewing / published</code> 分别挂到 <code>todo / in_review / done</code> 三个内置 category <span class="fr">FR-016</span>。
+      代价是文档头部会出现一个状态 chip —— 看起来像「文档为什么有工单状态」。
+      设计上的处理是：<b>状态 chip 放在标题上方的元信息行，而不是像 issue 那样放在右侧属性面板的第一项</b>，
+      并且用文档自己的词（草稿 / 评审中 / 已发布），不出现 todo / done 这类工单词汇。
+      <br><br><b>负责人同样不隐藏</b>，但理由完全不同：知识库语料最大的敌人是腐坏——一篇两年没人管的文档被 agent 检索到当成事实用。
+      <b>文档的 assignee = 这条语料的责任人</b>，没有它，autopilot 无从定期唤醒复核。
+      <br><br>一个必须有意选择的后果：<code>draft</code> 挂在 <code>todo</code> category 上，而只有 <code>backlog</code> 不触发 agent。
+      所以「新建一篇草稿并把负责人设为某个 agent」会<b>立刻拉起一次 run</b>。这确立了「把文档指派给 agent = 让它去写」的语义，
+      界面上需要在选择 agent 负责人时明说。
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================
+     S3 · 插入活视图：/view 斜杠命令 + 数据源选择器
+     ============================================================ -->
+<section class="screen" id="s-insert" role="tabpanel">
+  <div class="screen-head">
+    <h2>S3 · 插入路径：<code>/view</code> 走现有斜杠命令，不新建入口</h2>
+    <p>编辑器已有斜杠命令扩展（<code>packages/views/editor/extensions/slash-command-extension.ts</code>），
+      插入活视图只是往这个列表里加一项。左图是命令面板，右图是选中后弹出的数据源选择器 —— 
+      <b>这一步是产品分叉点：默认给「活视图」还是「静态快照」。</b></p>
+  </div>
+
+  <div class="frame"><div class="app narrow-side" style="min-height:600px">
+    <aside class="side">
+      <div class="side-top">
+        <div class="ws"><span class="av">C</span><b>Cortex</b><svg class="i sm chev"><use href="#i-chevd"/></svg></div>
+      </div>
+      <div class="side-scroll">
+        <div class="sgroup">文档</div>
+        <nav class="nav">
+          <div class="nl act"><svg class="i sm"><use href="#i-doc"/></svg>2026 Q3 规划</div>
+          <div class="nl"><svg class="i sm"><use href="#i-doc"/></svg>Cortex 产品规格</div>
+        </nav>
+      </div>
+    </aside>
+
+    <div class="mainc" style="position:relative">
+      <div class="topbar">
+        <div class="crumb"><span>文档</span><span class="sep">/</span><b>2026 Q3 规划</b></div>
+        <div class="sp"><span class="badge b-gray">草稿</span><button class="btn">分享</button></div>
+      </div>
+      <div class="content">
+        <article class="doc" style="padding-top:22px">
+          <h1>2026 Q3 规划</h1>
+          <p>本季度三条主线：集合层落地、内嵌活视图、OpenViking PoC 门禁。下面把需求池按负责人拆开看：</p>
+          <p style="color:var(--text-3)">/view<span class="cursor"></span></p>
+          <div style="height:150px"></div>
+        </article>
+
+        <!-- slash menu -->
+        <div class="slash" style="left:60px;top:206px">
+          <div class="sh">插入 · 匹配 “view”</div>
+          <div class="si act">
+            <span class="ic"><svg class="i sm"><use href="#i-table"/></svg></span>
+            <span><b>内嵌活视图</b><small>嵌入一张表的已保存视图，数据保持实时</small></span>
+            <span class="kb">↵</span>
+          </div>
+          <div class="si">
+            <span class="ic"><svg class="i sm"><use href="#i-board"/></svg></span>
+            <span><b>内嵌看板</b><small>快捷方式：直接嵌入某表的看板布局</small></span>
+          </div>
+          <div class="si">
+            <span class="ic"><svg class="i sm"><use href="#i-cal"/></svg></span>
+            <span><b>内嵌日历</b><small>按日期字段排布</small></span>
+          </div>
+          <div class="si">
+            <span class="ic"><svg class="i sm"><use href="#i-plus"/></svg></span>
+            <span><b>新建表并嵌入</b><small>就地建一张空表，字段稍后配</small></span>
+          </div>
+          <div class="sh" style="border-top:1px solid var(--border);border-bottom:none">既有命令（未改动）</div>
+          <div class="si" style="opacity:.6">
+            <span class="ic"><svg class="i sm"><use href="#i-hash"/></svg></span>
+            <span><b>Mermaid 图 / 公式 / 代码块 / 表格 …</b><small>现有斜杠命令列表原样保留</small></span>
+          </div>
+        </div>
+      </div>
+
+      <!-- modal -->
+      <div class="scrim">
+        <div class="modal">
+          <div class="modal-h">
+            <svg class="i"><use href="#i-table"/></svg><b>选择要嵌入的视图</b>
+            <span class="sp"><button class="icb"><svg class="i"><use href="#i-x"/></svg></button></span>
+          </div>
+          <div class="modal-b">
+            <div class="modal-l">
+              <div class="search" style="margin:0 0 8px"><svg class="i sm"><use href="#i-search"/></svg>搜索表…</div>
+              <div class="mi act"><svg class="i sm"><use href="#i-table"/></svg>需求池<span class="cnt">1284</span></div>
+              <div class="mi"><svg class="i sm"><use href="#i-table"/></svg>客户名单<span class="cnt">96</span></div>
+              <div class="mi"><svg class="i sm"><use href="#i-table"/></svg>设备台账<span class="cnt">412</span></div>
+              <div class="mi"><svg class="i sm"><use href="#i-issue"/></svg>工作项（内置集合）<span class="cnt">128</span></div>
+            </div>
+            <div class="modal-r">
+              <div style="font-size:12px;color:var(--text-3);text-transform:uppercase;letter-spacing:.06em;font-weight:600;margin-bottom:8px">需求池的已保存视图</div>
+              <div class="opt act">
+                <span class="radio"></span>
+                <span><b><svg class="i sm" style="vertical-align:-2px"><use href="#i-board"/></svg> 按状态看板</b>
+                <small>分组：状态 · 过滤：未归档 · 可见性：工作区 · 4 人使用中</small></span>
+              </div>
+              <div class="opt">
+                <span class="radio"></span>
+                <span><b><svg class="i sm" style="vertical-align:-2px"><use href="#i-table"/></svg> 全部需求（表格）</b>
+                <small>12 列 · 无过滤 · 可见性：工作区</small></span>
+              </div>
+              <div class="opt">
+                <span class="radio"></span>
+                <span><b><svg class="i sm" style="vertical-align:-2px"><use href="#i-cal"/></svg> 目标日期日历</b>
+                <small>日期字段：目标日期 · 可见性：仅自己</small></span>
+              </div>
+
+              <div class="divider"></div>
+              <div style="font-size:12px;color:var(--text-3);text-transform:uppercase;letter-spacing:.06em;font-weight:600;margin-bottom:8px">嵌入方式</div>
+              <div class="opt act">
+                <span class="radio"></span>
+                <span><b>活视图链接<span class="badge b-green" style="margin-left:6px">推荐</span></b>
+                <small>嵌入的是视图 ID + 本文的本地过滤覆盖。源表数据变化时本文同步更新；同一视图可在多篇文档中带不同过滤出现。</small></span>
+              </div>
+              <div class="opt dis">
+                <span class="radio"></span>
+                <span><b>静态快照</b>
+                <small>把当前行复制成一张死表。一期不提供 —— 见右下方设计说明。</small></span>
+              </div>
+
+              <div class="mono-str" style="margin-top:12px">!view[需求池 · 按状态看板](mention://collection-view/9f3cd21e-…)</div>
+            </div>
+          </div>
+          <div class="modal-f">
+            <label style="display:flex;align-items:center;gap:8px;font-size:13px;color:var(--text-2)">
+              <span class="toggle on"><i></i></span>插入后就地加一层本地过滤
+            </label>
+            <span class="sp">
+              <button class="btn">取消</button>
+              <button class="btn pri">插入</button>
+            </span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div></div>
+
+  <div class="grid2">
+    <div class="note stop">
+      <h4>「静态快照」被刻意做成禁用态，而不是不出现</h4>
+      用户会找它 —— 从 Notion / 飞书迁移过来的人第一反应就是「我只想贴一份当时的数据」。
+      如果直接不给，他们会去截图；给了，则每一份快照都会立刻过期，成为文档里的假事实。
+      设计上的处理是：<b>把选项显示为禁用，并在旁边给出替代路径</b>（活视图 + 本地过滤锁定某个时间字段）。
+      <br><br><b>这是一条需要你拍板的产品取舍，不是纯 UI 问题。</b>我的建议是一期不做快照。
+    </div>
+    <div class="note">
+      <h4>「新建表并嵌入」是这一屏里最重要的一条</h4>
+      它把建表的入口从「先去表格页建好、配好字段、再回文档引用」压缩成一步。
+      Notion 的核心增长路径正是这条 —— 用户在写东西的过程中顺手建了数据库。
+      对我们来说它还有额外价值：<b>新表默认落在当前 project 下</b>，避免 workspace 级表格野蛮生长。
+    </div>
+    <div class="note ok">
+      <h4>「工作项（内置集合）」出现在数据源列表里</h4>
+      这一条不是凑数：它是共享引擎层在用户面前的第一次显形 —— 
+      issue 只是一个内置集合，所以它当然也能被嵌进文档 <span class="fr">FR-002</span>。
+      「在周报里嵌一个本周 issue 看板」是这套架构几乎免费得到的能力，而且是日常最高频的用法。
+    </div>
+    <div class="note warn">
+      <h4>权限在这一步就要处理，不能推到渲染时</h4>
+      选择器只列出当前用户可见的表与视图（含 private 视图仅自己可见）。
+      但文档会被分享给更多人 —— 所以插入时需要提示：<b>「本文的 3 位协作者中有 1 人无权访问该表，他们看到的将是占位块」</b>。
+      一期若不做记录级权限 <span class="fr">A-2</span>，这个提示只需按表级可见性计算，成本很低，但能避免最尴尬的一类事故。
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================
+     S4 · 多维表格 table 视图 + 字段配置
+     ============================================================ -->
+<section class="screen" id="s-table" role="tabpanel">
+  <div class="screen-head">
+    <h2>S4 · 多维表格：同一个视图栏，DataSource 换成 collection</h2>
+    <p>把这一屏顶部的视图栏和 S1 并排看 —— 它们是同一个组件。差异只有右上角的 <span class="srcbadge">DataSource: collection</span>。
+      字段目录是 <b>每表独立</b> 的 <span class="fr">FR-022</span>，这是与现状最关键的一处分道：
+      现有 <code>issue_property</code> 是 workspace 全局、上限 20 条（<code>server/migrations/191_issue_properties.up.sql</code> 明确写了这个上限），一张业务表就能吃光全局配额。</p>
+  </div>
+
+  <div class="frame"><div class="app" style="min-height:600px">
+    <aside class="side">
+      <div class="side-top">
+        <div class="ws"><span class="av">C</span><b>Cortex</b><svg class="i sm chev"><use href="#i-chevd"/></svg></div>
+        <div class="search"><svg class="i sm"><use href="#i-search"/></svg>搜索<kbd>⌘K</kbd></div>
+      </div>
+      <div class="side-scroll">
+        <div class="sgroup">表格 <span class="add"><svg class="i sm"><use href="#i-plus"/></svg></span></div>
+        <nav class="nav">
+          <div class="nl act"><svg class="i sm"><use href="#i-table"/></svg>需求池<span class="cnt">1284</span></div>
+          <div class="nl"><svg class="i sm"><use href="#i-table"/></svg>客户名单<span class="cnt">96</span></div>
+          <div class="nl"><svg class="i sm"><use href="#i-table"/></svg>设备台账<span class="cnt">412</span></div>
+          <div class="nl" style="color:var(--text-3)"><svg class="i sm"><use href="#i-arch"/></svg>已归档<span class="cnt">2</span></div>
+        </nav>
+        <div class="sgroup">工作区</div>
+        <nav class="nav">
+          <div class="nl"><svg class="i sm"><use href="#i-issue"/></svg>工作项</div>
+          <div class="nl"><svg class="i sm"><use href="#i-doc"/></svg>文档</div>
+        </nav>
+      </div>
+    </aside>
+
+    <div class="mainc" style="position:relative">
+      <div class="topbar">
+        <div class="crumb"><span>表格</span><span class="sep">/</span><b>需求池</b><span class="badge b-gray">project: Cortex</span></div>
+        <div class="sp">
+          <button class="btn"><svg class="i sm"><use href="#i-link"/></svg>复制引用</button>
+          <button class="btn"><svg class="i sm"><use href="#i-plus"/></svg>导入 CSV</button>
+          <button class="btn pri"><svg class="i sm"><use href="#i-plus"/></svg>新建行</button>
+        </div>
+      </div>
+
+      <div class="viewbar">
+        <div class="vtabs">
+          <button class="vtab act">全部需求</button>
+          <button class="vtab">本季度</button>
+          <button class="vtab">按负责人</button>
+          <button class="vtab" style="color:var(--text-3)"><svg class="i sm"><use href="#i-plus"/></svg></button>
+        </div>
+        <div class="layouts">
+          <button class="lay"><svg class="i sm"><use href="#i-list"/></svg></button>
+          <button class="lay"><svg class="i sm"><use href="#i-board"/></svg></button>
+          <button class="lay act"><svg class="i sm"><use href="#i-table"/></svg></button>
+          <button class="lay"><svg class="i sm"><use href="#i-gantt"/></svg></button>
+          <button class="lay"><svg class="i sm"><use href="#i-lane"/></svg></button>
+          <button class="lay isnew"><svg class="i sm"><use href="#i-cal"/></svg></button>
+          <button class="lay isnew"><svg class="i sm"><use href="#i-gal"/></svg></button>
+        </div>
+        <button class="chip"><svg class="i sm"><use href="#i-filter"/></svg>过滤</button>
+        <button class="chip"><svg class="i sm"><use href="#i-group"/></svg>分组</button>
+        <button class="chip set"><svg class="i sm"><use href="#i-sort"/></svg>排序 <b>优先级</b></button>
+        <button class="chip"><svg class="i sm"><use href="#i-eye"/></svg>显示 <b>12/14</b></button>
+        <div class="sp"><span class="srcbadge">DataSource: collection · 需求池</span></div>
+      </div>
+
+      <div class="content">
+        <div class="tblwrap">
+          <table class="dt">
+            <thead><tr>
+              <th class="c-first" style="width:250px"><div class="thin"><svg class="i sm ftype"><use href="#i-text"/></svg>名称</div></th>
+              <th class="hl" style="width:120px"><div class="thin"><svg class="i sm ftype"><use href="#i-tag"/></svg>状态<svg class="i sm" style="margin-left:auto"><use href="#i-chevd"/></svg></div></th>
+              <th style="width:96px"><div class="thin"><svg class="i sm ftype"><use href="#i-tag"/></svg>优先级</div></th>
+              <th style="width:120px"><div class="thin"><svg class="i sm ftype"><use href="#i-user"/></svg>负责人</div></th>
+              <th style="width:118px"><div class="thin"><svg class="i sm ftype"><use href="#i-cal"/></svg>目标日期</div></th>
+              <th style="width:180px"><div class="thin"><svg class="i sm ftype" style="color:var(--info-text)"><use href="#i-link"/></svg>关联工作项</div></th>
+              <th style="width:130px"><div class="thin"><svg class="i sm ftype" style="color:var(--info-text)"><use href="#i-link"/></svg>提出客户</div></th>
+              <th style="width:80px"><div class="thin"><svg class="i sm ftype"><use href="#i-check"/></svg>已上线</div></th>
+              <th style="width:44px"><div class="thin" style="color:var(--text-3)"><svg class="i sm"><use href="#i-plus"/></svg></div></th>
+            </tr></thead>
+            <tbody>
+              <tr class="sel">
+                <td class="c-first">内嵌活视图块</td>
+                <td><span class="cellchip" style="background:var(--warning-soft);color:var(--warning-text)">已排期</span></td>
+                <td><span class="badge b-p0">P0</span></td>
+                <td><span class="av s a1">QQ</span></td>
+                <td>2026-09-30</td>
+                <td><span class="rel"><svg class="i sm"><use href="#i-issue"/></svg>MAGI-31</span> <span class="rel"><svg class="i sm"><use href="#i-issue"/></svg>MAGI-60</span></td>
+                <td><span class="rel coll">明远科技</span></td>
+                <td><span class="cb"><svg class="i sm"><use href="#i-check"/></svg></span></td><td></td>
+              </tr>
+              <tr>
+                <td class="c-first">relation 桥接到 issue</td>
+                <td><span class="cellchip" style="background:var(--warning-soft);color:var(--warning-text)">已排期</span></td>
+                <td><span class="badge b-p0">P0</span></td>
+                <td><span class="av s a4">LZ</span></td>
+                <td>2026-10-15</td>
+                <td><span class="rel"><svg class="i sm"><use href="#i-issue"/></svg>MAGI-33</span></td>
+                <td><span class="rel coll">明远科技</span></td>
+                <td><span class="cb"></span></td><td></td>
+              </tr>
+              <tr>
+                <td class="c-first">自定义状态目录</td>
+                <td><span class="cellchip" style="background:var(--success-soft);color:var(--success-text)">已上线</span></td>
+                <td><span class="badge b-p0">P0</span></td>
+                <td><span class="av s a3">bu</span></td>
+                <td>2026-08-12</td>
+                <td><span class="rel"><svg class="i sm"><use href="#i-issue"/></svg>MAGI-08</span></td>
+                <td><span class="rel coll">内部</span></td>
+                <td><span class="cb on"><svg class="i sm"><use href="#i-check"/></svg></span></td><td></td>
+              </tr>
+              <tr>
+                <td class="c-first">日历布局按周期分桶</td>
+                <td><span class="cellchip" style="background:var(--neutral-soft);color:var(--muted-foreground)">待评估</span></td>
+                <td><span class="badge b-p1">P1</span></td>
+                <td><span class="av s a5">WM</span></td>
+                <td style="color:var(--text-3)">—</td>
+                <td style="color:var(--text-3)">—</td>
+                <td><span class="rel coll">和光医疗</span></td>
+                <td><span class="cb"></span></td><td></td>
+              </tr>
+              <tr>
+                <td class="c-first">表单视图收集外部提交</td>
+                <td><span class="cellchip" style="background:var(--neutral-soft);color:var(--muted-foreground)">待评估</span></td>
+                <td><span class="badge b-p1">P1</span></td>
+                <td><span class="av s a4">LZ</span></td>
+                <td style="color:var(--text-3)">—</td>
+                <td style="color:var(--text-3)">—</td>
+                <td><span class="rel coll">和光医疗</span></td>
+                <td><span class="cb"></span></td><td></td>
+              </tr>
+              <tr>
+                <td class="c-first">rollup / formula 字段</td>
+                <td><span class="cellchip" style="background:var(--neutral-soft);color:var(--muted-foreground)">二期</span></td>
+                <td><span class="badge b-p2">P2</span></td>
+                <td style="color:var(--text-3)">—</td>
+                <td style="color:var(--text-3)">—</td>
+                <td style="color:var(--text-3)">—</td>
+                <td><span class="rel coll">内部</span></td>
+                <td><span class="cb"></span></td><td></td>
+              </tr>
+              <tr>
+                <td class="c-first">记录级权限</td>
+                <td><span class="cellchip" style="background:var(--neutral-soft);color:var(--muted-foreground)">二期</span></td>
+                <td><span class="badge b-p2">P2</span></td>
+                <td style="color:var(--text-3)">—</td>
+                <td style="color:var(--text-3)">—</td>
+                <td><span class="rel" style="opacity:.55;text-decoration:line-through"><svg class="i sm"><use href="#i-issue"/></svg>已删除</span></td>
+                <td><span class="rel coll">星阑</span></td>
+                <td><span class="cb"></span></td><td></td>
+              </tr>
+            </tbody>
+          </table>
+          <div class="addrow"><svg class="i sm"><use href="#i-plus"/></svg>新建行</div>
+        </div>
+        <div class="tblfoot">
+          <span>1,284 行</span><span>·</span><span>已加载 200 行（分页）</span><span>·</span>
+          <span>字段 14 / 50</span>
+          <span class="sp">
+            <span style="color:var(--text-3)">回收站 <b style="color:var(--text-2)">6</b>（保留 30 天）</span>
+            <span class="srcbadge">P95 首屏 &lt; 1.5s · NFR-001</span>
+          </span>
+        </div>
+      </div>
+
+      <!-- field menu -->
+      <div class="pop" style="left:262px;top:150px">
+        <div class="ph"><svg class="i sm"><use href="#i-tag"/></svg><input value="状态" readonly></div>
+        <div class="pi"><svg class="i sm"><use href="#i-tag"/></svg>字段类型<span class="r">单选</span></div>
+        <div class="pi"><svg class="i sm"><use href="#i-more"/></svg>编辑选项<span class="r">4 项</span></div>
+        <div class="sep"></div>
+        <div class="pi"><svg class="i sm"><use href="#i-sort"/></svg>升序 / 降序</div>
+        <div class="pi"><svg class="i sm"><use href="#i-group"/></svg>按此字段分组</div>
+        <div class="pi"><svg class="i sm"><use href="#i-filter"/></svg>按此字段过滤</div>
+        <div class="sep"></div>
+        <div class="pi"><svg class="i sm"><use href="#i-eye"/></svg>在本视图隐藏</div>
+        <div class="pi dang"><svg class="i sm"><use href="#i-arch"/></svg>归档字段<span class="r">不删数据</span></div>
+        <div class="quota">
+          本表字段 14 / 50 · 不占用 workspace 的 issue 属性配额（20）
+          <span class="bar"><i style="width:28%"></i></span>
+        </div>
+      </div>
+    </div>
+  </div></div>
+
+  <div class="grid2">
+    <div class="note ok">
+      <h4>字段菜单底部那行配额说明是有意加的</h4>
+      现有实现里，字段目录是 workspace 全局、活跃定义上限 20（<code>191_issue_properties.up.sql</code> 的注释与 handler 校验）。
+      用户完全不知道这个上限的存在，直到某天建不出新字段。
+      新的 collection 字段目录每表独立、建议上限 50 <span class="fr">FR-022</span> —— 
+      <b>把两个配额同时印在菜单里，是让用户一眼理解「表格的字段不会挤占工单的字段」</b>，这正是方案 C 分层的用户可感收益。
+    </div>
+    <div class="note">
+      <h4>两种 relation 在视觉上必须可区分</h4>
+      「关联工作项」指向 issue（<code>record_link.to_type='issue'</code>），用蓝色带 issue 图标的 chip；
+      「提出客户」指向另一张表，用中性灰 chip <span class="fr">FR-028</span>。
+      理由：指向 issue 的关联会把用户带出数据世界、进入有状态与负责人的工作世界，这是一次上下文切换，值得一个独立的视觉信号。
+      最后一行故意留了一个失效关联（<code>已删除</code> 删除线）—— 关联边保留但标记失效，不静默消失。
+    </div>
+    <div class="note stop">
+      <h4>本轮修正：这一列只能放人，不能放 agent</h4>
+      「负责人」是 <code>actor</code> 类型字段，而现状 <code>actorPropertyKinds</code> 只有 <code>member</code> —— <b>actor 字段今天填不了 agent，也填不了小队</b>。
+      v0.1 的这一屏画错了（有一行放了 agent 头像），已改为成员。
+      <br><br>但 <code>member:</code> 这个前缀是<b>刻意留的扩展点</b>，加宽不需要迁移、也不需要新增字段类型。
+      而 record 没有 assignee 语义（<span class="fr">D-1</span>），actor 属性是它唯一能表达「谁负责」的手段。
+      <b>建议 collection 侧开到 <code>member / agent / squad</code></b> —— 见 <span class="fr">Q-U3</span>，需要你拍板。
+    </div>
+    <div class="note warn">
+      <h4>「归档字段」不是「删除字段」</h4>
+      沿用平台既有策略（定义只归档、不物理删除，历史值保持可解析）。
+      菜单里把这一项标红但写明「不删数据」，避免用户为了「彻底删掉」去反复找别的入口。
+      字段类型变更同理：只允许安全方向转换，不安全的转换要求新建字段 + 迁移。
+    </div>
+    <div class="note stop">
+      <h4>底部那行 <code>回收站 6（保留 30 天）</code> 是 record 与 issue 的一处关键差异</h4>
+      issue 走的是状态流转（cancelled 仍在系统里）；record 走的是软删除 + 回收站 <span class="fr">FR-024</span>。
+      表格用户的心智模型是 Excel，删行就该进回收站；工单用户的心智模型是工作流，取消不等于删除。
+      <b>两种模型不能互相污染，所以两者的删除入口、文案、恢复路径必须显式不同。</b>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================
+     S5 · 布局切换：看板 / 日历 / 画廊
+     ============================================================ -->
+<section class="screen" id="s-layouts" role="tabpanel">
+  <div class="screen-head">
+    <h2>S5 · 同一份数据的四种布局，其中两种是新增</h2>
+    <p>看板 / 表格 / 甘特 / 泳道复用现有实现，日历 <span class="fr">FR-004</span> 与画廊 <span class="fr">FR-005</span> 是本期新增，
+      且必须 <b>issue 与 collection 双源验收</b> —— 只在其中一边能跑就说明没接在共享引擎上。</p>
+  </div>
+
+  <div class="frame"><div class="app narrow-side" style="min-height:560px">
+    <aside class="side">
+      <div class="side-top"><div class="ws"><span class="av">C</span><b>Cortex</b><svg class="i sm chev"><use href="#i-chevd"/></svg></div></div>
+      <div class="side-scroll">
+        <div class="sgroup">表格</div>
+        <nav class="nav">
+          <div class="nl act"><svg class="i sm"><use href="#i-table"/></svg>需求池</div>
+          <div class="nl"><svg class="i sm"><use href="#i-table"/></svg>客户名单</div>
+          <div class="nl"><svg class="i sm"><use href="#i-table"/></svg>设备台账</div>
+        </nav>
+      </div>
+    </aside>
+    <div class="mainc">
+      <div class="topbar">
+        <div class="crumb"><span>表格</span><span class="sep">/</span><b>需求池</b></div>
+        <div class="sp"><button class="btn pri"><svg class="i sm"><use href="#i-plus"/></svg>新建行</button></div>
+      </div>
+      <div class="viewbar">
+        <div class="vtabs"><button class="vtab">全部需求</button><button class="vtab act">本季度</button><button class="vtab">按负责人</button></div>
+        <div class="layouts">
+          <button class="lay"><svg class="i sm"><use href="#i-list"/></svg></button>
+          <button class="lay act"><svg class="i sm"><use href="#i-board"/></svg></button>
+          <button class="lay"><svg class="i sm"><use href="#i-table"/></svg></button>
+          <button class="lay"><svg class="i sm"><use href="#i-gantt"/></svg></button>
+          <button class="lay"><svg class="i sm"><use href="#i-lane"/></svg></button>
+          <button class="lay isnew"><svg class="i sm"><use href="#i-cal"/></svg></button>
+          <button class="lay isnew"><svg class="i sm"><use href="#i-gal"/></svg></button>
+        </div>
+        <button class="chip set"><svg class="i sm"><use href="#i-group"/></svg>分组 <b>状态</b></button>
+        <button class="chip set"><svg class="i sm"><use href="#i-filter"/></svg>本季度</button>
+        <div class="sp"><span class="srcbadge">DataSource: collection · 需求池</span></div>
+      </div>
+      <div class="content">
+        <div class="board">
+          <div class="bcol">
+            <h4><span class="sdot c-todo"></span>待评估<span class="cnt">2</span><span class="add"><svg class="i sm"><use href="#i-plus"/></svg></span></h4>
+            <div class="bcard"><div class="t">日历布局按周期分桶</div><div class="f"><span class="badge b-p1">P1</span><span class="av s a5">WM</span><span class="rel coll">和光医疗</span></div></div>
+            <div class="bcard"><div class="t">表单视图收集外部提交</div><div class="f"><span class="badge b-p1">P1</span><span class="av s a4">LZ</span></div></div>
+          </div>
+          <div class="bcol">
+            <h4><span class="sdot prog c-prog"></span>已排期<span class="cnt">2</span><span class="add"><svg class="i sm"><use href="#i-plus"/></svg></span></h4>
+            <div class="bcard"><div class="t">内嵌活视图块</div><div class="f"><span class="badge b-p0">P0</span><span class="av s a1">QQ</span><span class="rel"><svg class="i sm"><use href="#i-issue"/></svg>MAGI-31</span></div></div>
+            <div class="bcard"><div class="t">relation 桥接到 issue</div><div class="f"><span class="badge b-p0">P0</span><span class="av s a2">bu</span></div></div>
+          </div>
+          <div class="bcol">
+            <h4><span class="sdot done c-done"></span>已上线<span class="cnt">1</span><span class="add"><svg class="i sm"><use href="#i-plus"/></svg></span></h4>
+            <div class="bcard"><div class="t">自定义状态目录</div><div class="f"><span class="badge b-p0">P0</span><span class="av s a3">bu</span></div></div>
+          </div>
+          <div class="bcol" style="opacity:.62;border-style:dashed">
+            <h4><span class="sdot c-todo"></span>二期<span class="cnt">2</span></h4>
+            <div class="bcard"><div class="t">rollup / formula 字段</div><div class="f"><span class="badge b-p2">P2</span></div></div>
+            <div class="bcard"><div class="t">记录级权限</div><div class="f"><span class="badge b-p2">P2</span></div></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div></div>
+
+  <div class="grid2" style="margin-top:18px">
+    <div class="frame" style="box-shadow:var(--sh-1)">
+      <div style="padding:9px 13px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:8px;font-size:13px;font-weight:600">
+        <svg class="i sm" style="color:var(--cyan)"><use href="#i-cal"/></svg>日历布局 <span class="badge b-accent" style="margin-left:auto">FR-004 新增</span>
+      </div>
+      <div style="padding:11px">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:9px;font-size:12px;color:var(--text-2)">
+          <button class="chip set" style="font-size:11px;padding:2px 8px">日期字段 <b>目标日期</b></button>
+          <button class="chip" style="font-size:11px;padding:2px 8px">月</button>
+          <span style="margin-left:auto;color:var(--text-3)">2026 年 9 月</span>
+        </div>
+        <div class="cal">
+          <div class="hd">一</div><div class="hd">二</div><div class="hd">三</div><div class="hd">四</div><div class="hd">五</div><div class="hd">六</div><div class="hd">日</div>
+          <div class="cell out">31</div><div class="cell">1</div><div class="cell">2</div><div class="cell">3</div>
+          <div class="cell">4<div class="ev" style="background:var(--warning-text)">日历布局</div></div><div class="cell">5</div><div class="cell">6</div>
+          <div class="cell">7</div><div class="cell">8</div><div class="cell">9</div>
+          <div class="cell">10<div class="ev" style="background:var(--info-text)">表单视图</div></div><div class="cell">11</div><div class="cell">12</div><div class="cell">13</div>
+          <div class="cell">14</div><div class="cell">15</div><div class="cell">16</div><div class="cell">17</div><div class="cell">18</div><div class="cell">19</div><div class="cell">20</div>
+          <div class="cell">21</div><div class="cell">22</div><div class="cell">23</div><div class="cell">24</div><div class="cell">25</div><div class="cell">26</div><div class="cell">27</div>
+          <div class="cell">28</div><div class="cell">29</div>
+          <div class="cell" style="outline:1.5px dashed var(--brand);outline-offset:-2px">30<div class="ev" style="background:var(--brand)">内嵌活视图块</div></div>
+          <div class="cell out">1</div><div class="cell out">2</div><div class="cell out">3</div><div class="cell out">4</div>
+        </div>
+        <div style="font-size:12px;color:var(--text-3);margin-top:8px">拖动事件到另一天 → 直接回写该 date 字段（issue 与 record 行为一致）</div>
+      </div>
+    </div>
+
+    <div class="frame" style="box-shadow:var(--sh-1)">
+      <div style="padding:9px 13px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:8px;font-size:13px;font-weight:600">
+        <svg class="i sm" style="color:var(--cyan)"><use href="#i-gal"/></svg>画廊布局 <span class="badge b-accent" style="margin-left:auto">FR-005 新增</span>
+      </div>
+      <div style="padding:11px">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:9px;font-size:12px;color:var(--text-2)">
+          <button class="chip set" style="font-size:11px;padding:2px 8px">封面字段 <b>图片</b></button>
+          <button class="chip set" style="font-size:11px;padding:2px 8px">展示 <b>3 个字段</b></button>
+        </div>
+        <div class="gal">
+          <div class="gcard"><div class="gcover"></div><div class="gb">明远科技<div class="m">企业版 · 32 席</div></div></div>
+          <div class="gcard"><div class="gcover b"></div><div class="gb">和光医疗<div class="m">试用中 · 8 席</div></div></div>
+          <div class="gcard"><div class="gcover c"></div><div class="gb">星阑数据<div class="m">企业版 · 120 席</div></div></div>
+          <div class="gcard"><div class="gcover d"></div><div class="gb">南屿文化<div class="m">试用中 · 5 席</div></div></div>
+        </div>
+        <div style="font-size:12px;color:var(--text-3);margin-top:8px">「客户名单 / 素材库 / 人员名录」类表的主要形态；封面字段可空，退化为纯文字卡片</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="grid2">
+    <div class="note warn">
+      <h4>看板最右侧那一列是灰的、虚线的 —— 这是刻意的</h4>
+      被过滤条件排除、但分组维度上仍然存在的列，应当以「折叠占位」形式保留，而不是消失。
+      现状（以及 Notion）常见的做法是直接不显示，结果是用户拖卡片时找不到目标列，误以为功能坏了。
+    </div>
+    <div class="note">
+      <h4>日历与画廊的验收必须写成双源</h4>
+      <span class="fr">FR-004</span> / <span class="fr">FR-005</span> 的「怎么算做完」都要求 issue 与 collection 两边同时可用。
+      这不是加严要求，而是唯一能验证 <span class="fr">FR-002</span>（DataSource 抽象）真的落地的手段 —— 
+      <b>如果只在 collection 上做了日历，那说明它是新写的组件，不是接在共享引擎上的。</b>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================
+     S6 · 行详情侧滑：D-1 的边界在界面上长什么样
+     ============================================================ -->
+<section class="screen" id="s-record" role="tabpanel">
+  <div class="screen-head">
+    <h2>S6 · 行详情：把 <span class="fr">D-1</span> 的代价明确画出来</h2>
+    <p>「行是独立 record，不是 issue」意味着 <b>行没有评论区、没有负责人语义、没有编号、agent 无法直接寻址它</b>。
+      这些缺失在界面上必须是<b>被解释过的</b>，否则用户只会当成缺陷去提 bug。
+      本屏的设计答案是：把缺失的能力换成一条明确的升级路径 —— relation 到 issue。</p>
+  </div>
+
+  <div class="frame"><div class="app narrow-side" style="min-height:800px;position:relative">
+    <aside class="side">
+      <div class="side-top"><div class="ws"><span class="av">C</span><b>Cortex</b><svg class="i sm chev"><use href="#i-chevd"/></svg></div></div>
+      <div class="side-scroll">
+        <div class="sgroup">表格</div>
+        <nav class="nav"><div class="nl act"><svg class="i sm"><use href="#i-table"/></svg>需求池</div><div class="nl"><svg class="i sm"><use href="#i-table"/></svg>客户名单</div></nav>
+      </div>
+    </aside>
+    <div class="mainc" style="filter:saturate(.5) opacity(.68)">
+      <div class="topbar"><div class="crumb"><span>表格</span><span class="sep">/</span><b>需求池</b></div></div>
+      <div class="viewbar">
+        <div class="vtabs"><button class="vtab act">全部需求</button></div>
+        <div class="layouts"><button class="lay act"><svg class="i sm"><use href="#i-table"/></svg></button></div>
+        <button class="chip">过滤</button><button class="chip">分组</button>
+      </div>
+      <div class="content"><div class="tblwrap"><table class="dt">
+        <thead><tr><th class="c-first" style="width:250px"><div class="thin">名称</div></th><th style="width:120px"><div class="thin">状态</div></th><th style="width:96px"><div class="thin">优先级</div></th><th style="width:130px"><div class="thin">负责人</div></th><th><div class="thin">关联工作项</div></th></tr></thead>
+        <tbody>
+          <tr class="sel"><td class="c-first">内嵌活视图块</td><td><span class="cellchip" style="background:var(--warning-soft);color:var(--warning-text)">已排期</span></td><td><span class="badge b-p0">P0</span></td><td><span class="av s a1">QQ</span></td><td><span class="rel">MAGI-31</span></td></tr>
+          <tr><td class="c-first">relation 桥接到 issue</td><td><span class="cellchip" style="background:var(--warning-soft);color:var(--warning-text)">已排期</span></td><td><span class="badge b-p0">P0</span></td><td><span class="av s a2">bu</span></td><td><span class="rel">MAGI-33</span></td></tr>
+          <tr><td class="c-first">自定义状态目录</td><td><span class="cellchip" style="background:var(--success-soft);color:var(--success-text)">已上线</span></td><td><span class="badge b-p0">P0</span></td><td><span class="av s a3">bu</span></td><td><span class="rel">MAGI-08</span></td></tr>
+        </tbody>
+      </table></div></div>
+    </div>
+
+    <aside class="slide">
+      <div class="slide-h">
+        <span class="badge b-rec">record</span>
+        <b style="font-size:15px;flex:1">内嵌活视图块</b>
+        <button class="icb"><svg class="i"><use href="#i-more"/></svg></button>
+        <button class="icb"><svg class="i"><use href="#i-x"/></svg></button>
+      </div>
+      <div class="slide-b">
+        <div class="fld"><span class="k"><svg class="i sm"><use href="#i-tag"/></svg>状态</span><span class="v"><span class="cellchip" style="background:var(--warning-soft);color:var(--warning-text)">已排期</span></span></div>
+        <div class="fld"><span class="k"><svg class="i sm"><use href="#i-tag"/></svg>优先级</span><span class="v"><span class="badge b-p0">P0</span></span></div>
+        <div class="fld"><span class="k"><svg class="i sm"><use href="#i-user"/></svg>负责人</span><span class="v"><span class="fake"><span class="av s a1">QQ</span> quboqin</span></span></div>
+        <div class="fld"><span class="k"><svg class="i sm"><use href="#i-cal"/></svg>目标日期</span><span class="v"><span class="fake">2026-09-30</span></span></div>
+        <div class="fld"><span class="k"><svg class="i sm"><use href="#i-hash"/></svg>预估人日</span><span class="v"><span class="fake">12</span></span></div>
+        <div class="fld"><span class="k"><svg class="i sm"><use href="#i-check"/></svg>已上线</span><span class="v"><span class="cb"></span></span></div>
+        <div class="fld" style="align-items:flex-start"><span class="k" style="padding-top:5px"><svg class="i sm"><use href="#i-text"/></svg>描述</span>
+          <span class="v"><span class="fake" style="line-height:1.6;color:var(--text-2)">在文档中嵌入某表的已保存视图，行内可编辑，数据保持实时。</span></span></div>
+
+        <div class="divider"></div>
+
+        <div style="font-size:12px;color:var(--text-3);text-transform:uppercase;letter-spacing:.06em;font-weight:600;margin-bottom:9px">
+          关联工作项 <span style="text-transform:none;letter-spacing:0;font-weight:400">· relation → issue</span>
+        </div>
+        <div class="rcard" style="background:var(--bg-app)">
+          <div style="display:flex;align-items:center;gap:8px"><span class="sdot prog c-prog"></span><b style="font-weight:550">MAGI-31</b> Cortex 产品规格 · 集合层数据模型</div>
+          <div class="m"><span class="av s a2">QQ</span>进行中 · 3 条评论</div>
+        </div>
+        <div class="rcard" style="background:var(--bg-app)">
+          <div style="display:flex;align-items:center;gap:8px"><span class="sdot c-todo"></span><b style="font-weight:550">MAGI-60</b> calendar 布局</div>
+          <div class="m"><span class="av s a5">WM</span>待办</div>
+        </div>
+        <button class="btn" style="width:100%;justify-content:center;margin-top:4px"><svg class="i sm"><use href="#i-link"/></svg>关联已有工作项</button>
+
+        <div class="note stop" style="margin-top:16px;font-size:13px">
+          <h4 style="font-size:13px"><svg class="i sm"><use href="#i-warn"/></svg>这一行没有评论区</h4>
+          record 是纯数据，不承载讨论、不进收件箱、agent 不能直接被 <span class="mention">@</span> 到某一行。
+          需要讨论、要指派、要 agent 接手的行，请
+          <b style="color:var(--accent);cursor:pointer">转为工作项 →</b>
+          （新建一个 issue 并自动建立 relation，原行保留）。
+        </div>
+      </div>
+    </aside>
+  </div></div>
+
+  <div class="grid2">
+    <div class="note stop">
+      <h4>那块红色说明是产品设计，不是占位文案</h4>
+      <span class="fr">Q-4</span> 已经写明：一旦给 record 加评论，它就在滑回 issue，方案 C 的分界会失守。
+      但用户一定会找评论区 —— 所以界面必须在他们找的位置给出解释 <b>和一个真正可用的替代路径</b>，
+      而不是让那块区域空着。「转为工作项」按钮是这条边界唯一的正式出口。
+      <br><br><b>这是本次界面设计里我最有把握的一个判断，也是最容易在实现时被悄悄推翻的一个。</b>
+    </div>
+    <div class="note">
+      <h4>「负责人」字段在这里是 actor 类型字段，不是 issue 的 assignee</h4>
+      它们长得一模一样（都是头像 + 名字），但语义完全不同：record 的负责人只是一个值，
+      不会触发通知、不会进「我的工作项」、不会启动 agent run。
+      <b>视觉上刻意不做区分，语义上必须在文档中写清</b> —— 若在界面上强行区分（比如加个不同图标），
+      只会让用户觉得这个字段坏了。
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================
+     S7 · Workflow 可视化编辑器
+     ============================================================ -->
+<section class="screen" id="s-flow" role="tabpanel">
+  <div class="screen-head">
+    <h2>S7 · Workflow：画的是模板，跑的是 issue 链</h2>
+    <p>设计原则是 <b>模板 + 编译器，不新建执行引擎</b> <span class="fr">NG-5</span>。
+      画布上的每个节点最终编译成一个带 <code>stage</code> 的子 issue，连线编译成 <code>issue_dependency</code>，
+      阶段屏障只唤醒父任务推进者；下一批激活由 runner 执行 <span class="fr">FR-052</span>。
+      因此画布的<b>列 = stage</b>，这不是布局选择，而是数据模型在界面上的直接投影。</p>
+  </div>
+
+  <div class="frame"><div class="app r" style="min-height:640px;grid-template-columns:230px minmax(0,1fr) 300px">
+    <aside class="side">
+      <div class="side-top"><div class="ws"><span class="av">C</span><b>Cortex</b><svg class="i sm chev"><use href="#i-chevd"/></svg></div></div>
+      <div class="side-scroll">
+        <div class="sgroup">工作流 <span class="add"><svg class="i sm"><use href="#i-plus"/></svg></span></div>
+        <nav class="nav">
+          <div class="nl act"><svg class="i sm"><use href="#i-flow"/></svg>需求评审流<span class="cnt">v3</span></div>
+          <div class="nl"><svg class="i sm"><use href="#i-flow"/></svg>发版检查流<span class="cnt">v1</span></div>
+          <div class="nl"><svg class="i sm"><use href="#i-flow"/></svg>知识晋升流<span class="cnt">v2</span></div>
+        </nav>
+        <div class="sgroup">运行中的实例</div>
+        <nav class="nav">
+          <div class="nl"><svg class="i sm" style="color:var(--warning-text)"><use href="#i-run"/></svg>MAGI-44<span class="cnt">2/4</span></div>
+          <div class="nl"><svg class="i sm" style="color:var(--success-text)"><use href="#i-check"/></svg>MAGI-39<span class="cnt">4/4</span></div>
+        </nav>
+      </div>
+    </aside>
+
+    <div class="mainc">
+      <div class="topbar">
+        <div class="crumb"><span>工作流</span><span class="sep">/</span><b>需求评审流</b><span class="badge b-gray">v3 · 草稿</span></div>
+        <div class="sp">
+          <button class="btn"><svg class="i sm"><use href="#i-clock"/></svg>版本</button>
+          <button class="btn"><svg class="i sm"><use href="#i-back"/></svg>从已有 issue 链反向生成</button>
+          <button class="btn pri"><svg class="i sm"><use href="#i-run"/></svg>运行一次</button>
+        </div>
+      </div>
+      <div class="viewbar">
+        <button class="chip set"><svg class="i sm"><use href="#i-run"/></svg>触发 <b>手动 + Autopilot（每周一 09:00）</b></button>
+        <button class="chip"><svg class="i sm"><use href="#i-link"/></svg>Webhook</button>
+        <div class="sp"><span class="srcbadge">编译目标：1 父 issue + 5 子 issue + 4 条依赖边</span></div>
+      </div>
+
+      <div class="content"><div class="canvas">
+        <div class="wf">
+          <svg class="wires" viewBox="0 0 810 452">
+            <path d="M112,221 C121,221 121,225 130,225"/>
+            <path d="M286,225 C295,225 295,135 304,135"/>
+            <path d="M286,225 C295,225 295,305 304,305"/>
+            <path d="M460,135 C469,135 469,225 478,225"/>
+            <path d="M460,305 C469,305 469,225 478,225"/>
+            <path class="hot" d="M634,225 L652,225"/>
+          </svg>
+
+          <div class="stage-hdr" style="left:130px">阶段 1</div>
+          <div class="stage-hdr" style="left:304px">阶段 2 <span style="text-transform:none;letter-spacing:0;font-weight:400;color:var(--text-3)">· 并行</span></div>
+          <div class="stage-hdr" style="left:478px">阶段 3</div>
+          <div class="stage-hdr" style="left:652px">阶段 4</div>
+          <div class="stage-band" style="left:122px"></div>
+          <div class="stage-band" style="left:296px"></div>
+          <div class="stage-band" style="left:470px"></div>
+          <div class="stage-band" style="left:644px"></div>
+
+          <div class="node trig" style="left:0;top:196px">
+            <div class="nh"><svg class="i sm"><use href="#i-run"/></svg><b>触发</b></div>
+            <div class="nm">手动 · Autopilot(cron)</div>
+            <span class="port r"></span>
+          </div>
+
+          <div class="node" style="left:130px;top:186px">
+            <span class="port l"></span>
+            <div class="nh"><span class="av bot a1">yi</span><b>需求澄清</b></div>
+            <div class="nm"><span class="badge b-gray">skill: 需求澄清</span></div>
+            <div class="nm" style="margin-top:5px">进入状态 <code style="font-size:10px">in_progress</code></div>
+            <span class="port r"></span>
+          </div>
+
+          <div class="node" style="left:304px;top:96px">
+            <span class="port l"></span>
+            <div class="nh"><span class="av bot a2">bu</span><b>架构方案</b></div>
+            <div class="nm"><span class="badge b-gray">skill: 方案评估</span></div>
+            <div class="nm" style="margin-top:5px">验收 3 条</div>
+            <span class="port r"></span>
+          </div>
+
+          <div class="node" style="left:304px;top:266px">
+            <span class="port l"></span>
+            <div class="nh"><span class="av bot a1">yi</span><b>竞品复核</b></div>
+            <div class="nm"><span class="badge b-gray">skill: 竞品分析</span></div>
+            <div class="nm" style="margin-top:5px">验收 2 条</div>
+            <span class="port r"></span>
+          </div>
+
+          <div class="node sel" style="left:478px;top:186px">
+            <span class="port l"></span>
+            <div class="nh"><span class="av a2">QQ</span><b>人工评审</b></div>
+            <div class="nm"><span class="badge b-accent">执行者：成员</span></div>
+            <div class="nm" style="margin-top:5px">进入状态 <code style="font-size:10px">in_review</code> · 带表单</div>
+            <span class="port r"></span>
+          </div>
+
+          <div class="node" style="left:652px;top:186px">
+            <span class="port l"></span>
+            <div class="nh"><svg class="i sm"><use href="#i-user"/></svg><b>实施</b></div>
+            <div class="nm"><span class="badge b-gray">执行者：工程小队</span></div>
+            <div class="nm" style="margin-top:5px">进入状态 <code style="font-size:10px">todo</code></div>
+            <span class="port r"></span>
+          </div>
+
+          <div style="position:absolute;left:0;top:352px;width:810px;font-size:12px;color:var(--text-3);
+                      border-top:1px dashed var(--border-2);padding-top:9px">
+            阶段屏障：阶段 <b>N</b> 及更早阶段的带 stage 子任务全部终态后，唤醒父任务 runner，由它判断业务审批结果再激活阶段 <b>N+1</b>。这一行为来自现有实现，模板不需要也不应该重新定义它。
+          </div>
+        </div>
+      </div></div>
+    </div>
+
+    <aside class="right">
+      <div class="right-tabs">
+        <button class="rtab act">节点属性</button>
+        <button class="rtab">模板设置 <span style="color:var(--red)">•</span></button>
+      </div>
+      <div class="right-body">
+        <div class="rsec">节点</div>
+        <div class="fld"><span class="k">key</span><span class="v"><code>human_review</code></span></div>
+        <div class="fld"><span class="k">标题</span><span class="v"><span class="fake">人工评审</span></span></div>
+        <div class="fld"><span class="k">阶段 stage</span><span class="v"><span class="fake">3</span></span></div>
+        <div class="fld"><span class="k">执行者</span><span class="v"><span class="fake"><span class="av s a2">QQ</span> 成员 · quboqin</span></span></div>
+        <div class="fld"><span class="k">skill</span><span class="v" style="color:var(--text-3)">—（人工节点）</span></div>
+        <div class="fld"><span class="k">进入状态</span><span class="v"><span class="cellchip" style="background:var(--brand-soft);color:var(--brand)">in_review</span></span></div>
+
+        <div class="rsec">验收标准</div>
+        <div class="rcard"><span class="cb on"><svg class="i sm"><use href="#i-check"/></svg></span> 架构方案与竞品复核结论无冲突</div>
+        <div class="rcard"><span class="cb on"><svg class="i sm"><use href="#i-check"/></svg></span> 已明确 Non-Goals</div>
+        <div class="rcard" style="color:var(--text-3)"><svg class="i sm"><use href="#i-plus"/></svg> 添加一条</div>
+
+        <div class="rsec">表单 form_schema</div>
+        <div class="rcard">
+          <div style="font-family:var(--mono);font-size:11px;color:var(--text-2);line-height:1.6">
+            decision: select[通过|打回|搁置]<br>
+            comment: text（打回时必填）
+          </div>
+        </div>
+
+        <div class="rsec">模板 runner <span style="color:var(--red);text-transform:none;letter-spacing:0">· 必填</span></div>
+        <div class="sel-box" style="margin-bottom:6px"><svg class="i sm"><use href="#i-user"/></svg>流程管家（小队）<span class="sp"><svg class="i sm"><use href="#i-chevd"/></svg></span></div>
+        <div style="font-size:12px;color:var(--text-3);line-height:1.6;margin-bottom:14px">
+          编译时写进父 issue 的 assignee。屏障关闭时服务端<b>只唤醒它，不会自动提升下一阶段</b> —— 缺了它，流程跑完第一阶段就停住。
+        </div>
+
+        <div class="rsec">运行态</div>
+        <div class="lanes">
+          <div class="lane"><div class="lname">阶段 1</div><div class="lbody"><span class="lchip done"><svg class="i sm"><use href="#i-check"/></svg>需求澄清</span></div></div>
+          <div class="lane"><div class="lname">阶段 2</div><div class="lbody"><span class="lchip done"><svg class="i sm"><use href="#i-check"/></svg>架构方案</span><span class="lchip prog">竞品复核</span></div></div>
+          <div class="lane"><div class="lname">阶段 3</div><div class="lbody"><span class="lchip" style="opacity:.55">人工评审</span><span class="barrier">屏障未开</span></div></div>
+          <div class="lane"><div class="lname">阶段 4</div><div class="lbody"><span class="lchip" style="opacity:.55">实施</span></div></div>
+        </div>
+      </div>
+    </aside>
+  </div></div>
+
+  <div class="grid2">
+    <div class="note ok">
+      <h4>「运行一次」按钮旁边那行编译说明必须常驻</h4>
+      <span class="srcbadge">编译目标：1 父 issue + 5 子 issue + 4 条依赖边</span> 
+      让用户在点下去之前就知道会发生什么。工作流工具最大的信任问题是「我不知道点了会生成什么」，
+      而我们的实现恰好有一个非常好讲的答案：<b>它只是帮你建了一串 issue，你随时可以手工接管。</b>
+      这句话本身就是相对 n8n / 飞书审批流的差异化，值得放在界面上，不要藏在文档里。
+    </div>
+    <div class="note">
+      <h4>右下角的运行态泳道直接复用现有 swimlane 组件</h4>
+      <span class="fr">FR-054</span>：流程进度不需要新的可视化 —— 泳道天然表达阶段，看板天然表达状态。
+      「屏障未开」是唯一新增的语义标记，对应 <code>stageBarrierClosed</code>。
+    </div>
+    <div class="note stop">
+      <h4>本轮新增：模板必须指定 runner，不允许为空</h4>
+      阶段屏障的真实语义比看上去弱：服务端<b>只检测到屏障关闭、唤醒父 issue 的负责人</b>，
+      它<b>不会</b>把下一阶段的子 issue 从 <code>backlog</code> 提成 <code>todo</code>；而且父负责人是<b>人类</b>时，这条唤醒通知根本不发送。
+      <br><br>所以「运行一次」编译出的父 issue 必须挂一个 agent 或小队当推进者。
+      这不是可选项 —— 缺了它，流程跑完第一阶段就停住，<b>而且极难排查，因为每个子 issue 看上去都正常完成了</b>。
+      见 <span class="fr">FR-052</span>、验收 <span class="fr">AC-11</span>。
+    </div>
+    <div class="note warn">
+      <h4>画布上没有条件分支的连线样式，这是有意的</h4>
+      条件分支与循环是二期 <span class="fr">FR-055</span>。如果一期就在画布上画出带条件的边，用户会立刻去用，
+      然后发现求值不生效。<b>能力没做，界面就不要暗示它存在。</b>
+      一期的表达力边界是：阶段屏障 + 依赖边 + 自定义状态 —— 足够覆盖绝大多数审批流与评审流。
+    </div>
+    <div class="note">
+      <h4>「从已有 issue 链反向生成」是冷启动的关键入口</h4>
+      没人愿意对着空画布画流程。而工作区里已经跑过的 issue 链就是现成的流程实例，
+      把它反向抽成模板 <span class="fr">FR-053</span>，用户的第一个模板成本接近零。
+      这条路径也顺带解决了「模板市场」<span class="fr">FR-056</span> 在一期缺位的问题。
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================
+     S8 · 知识晋升评审
+     ============================================================ -->
+<section class="screen" id="s-know" role="tabpanel">
+  <div class="screen-head">
+    <h2>S8 · 知识晋升：审核界面就是一个 issue 详情页</h2>
+    <p>候选知识是 <code>kind=knowledge</code> 的 issue，处在 <code>in_review</code>，人工审核动作就是评论 <span class="fr">FR-046</span>。
+      所以这一屏 <b>不是新页面类型</b>，而是 issue 详情页在 <code>kind=knowledge</code> 时的一套专用渲染。
+      左边是候选条目及其改写 diff，右边是审核动作与目标后端。</p>
+  </div>
+
+  <div class="frame"><div class="app narrow-side" style="min-height:640px">
+    <aside class="side">
+      <div class="side-top"><div class="ws"><span class="av">C</span><b>Cortex</b><svg class="i sm chev"><use href="#i-chevd"/></svg></div></div>
+      <div class="side-scroll">
+        <div class="sgroup">知识库</div>
+        <nav class="nav">
+          <div class="nl act"><svg class="i sm"><use href="#i-brain"/></svg>待晋升<span class="pill">5</span></div>
+          <div class="nl"><svg class="i sm"><use href="#i-check"/></svg>已入库<span class="cnt">1204</span></div>
+          <div class="nl"><svg class="i sm"><use href="#i-arch"/></svg>语料来源</div>
+          <div class="nl"><svg class="i sm"><use href="#i-gear"/></svg>后端与适配器</div>
+        </nav>
+        <div class="sgroup">语料</div>
+        <nav class="nav">
+          <div class="nl"><svg class="i sm"><use href="#i-doc"/></svg>已发布文档<span class="cnt">86</span></div>
+          <div class="nl"><svg class="i sm"><use href="#i-table"/></svg>表格快照<span class="cnt">3</span></div>
+          <div class="nl"><svg class="i sm"><use href="#i-bot"/></svg>agent run<span class="cnt">1.2k</span></div>
+        </nav>
+      </div>
+    </aside>
+
+    <div class="mainc">
+      <div class="topbar">
+        <div class="crumb"><span class="id" style="font-family:var(--mono);font-size:12px;color:var(--text-3)">MAGI-118</span>
+          <span class="badge b-know">知识候选</span><b>从 12 次 agent run 提炼的 5 条候选知识</b></div>
+        <div class="sp"><span class="badge b-accent">评审中</span><button class="icb"><svg class="i"><use href="#i-more"/></svg></button></div>
+      </div>
+
+      <div class="statusstrip">
+        <svg class="i sm"><use href="#i-check"/></svg>知识后端：OpenViking（自托管）· 已连接
+        <span class="sp"><span>语料 1,204</span><span>最近同步 2 分钟前</span><span>P95 480ms</span></span>
+      </div>
+      <div class="statusstrip degraded">
+        <svg class="i sm"><use href="#i-warn"/></svg>运行时能力：4 个 runtime 在线，<b>其中 1 个不支持 <code>remote-mcp-v1</code></b> —— 该机器上的 agent 拿不到知识库工具
+        <span class="sp"><span style="cursor:pointer;text-decoration:underline">查看详情</span></span>
+      </div>
+
+      <div class="content"><div class="kwrap">
+        <div class="klist">
+          <div class="kcard">
+            <div class="kcard-h">
+              <span class="badge b-know">条目 1</span><b>collection_field 的字段上限是每表 50，不占用 workspace 的 20 个 issue 属性配额</b>
+              <span class="sp"><span class="conf">置信度 <span class="b"><i style="width:88%"></i></span> 0.88</span></span>
+            </div>
+            <div class="kcard-b">
+              字段目录分两层：<span class="del">workspace 全局 20 个</span><span class="ins">issue 属性 workspace 全局 20 个，collection 字段每表独立 50 个</span>。
+              二者互不挤占 —— 这是方案 C 相对「行 = issue」的核心收益之一。
+            </div>
+            <div class="kcard-f">
+              <svg class="i sm"><use href="#i-link"/></svg>来源：MAGI-2 评论 · bubu 架构师 run #4471
+              <span style="margin-left:auto;display:flex;gap:6px">
+                <button class="btn" style="font-size:12px;padding:3px 9px"><svg class="i sm"><use href="#i-x"/></svg>丢弃</button>
+                <button class="btn" style="font-size:12px;padding:3px 9px">改写</button>
+                <button class="btn pri" style="font-size:12px;padding:3px 9px"><svg class="i sm"><use href="#i-check"/></svg>入库</button>
+              </span>
+            </div>
+          </div>
+
+          <div class="kcard">
+            <div class="kcard-h">
+              <span class="badge b-know">条目 2</span><b>内嵌视图存的是视图 ID + 本地覆盖，不是数据快照</b>
+              <span class="sp"><span class="conf">置信度 <span class="b"><i style="width:94%"></i></span> 0.94</span></span>
+            </div>
+            <div class="kcard-b">
+              <code>issue_view</code> 本就把 <code>query</code>（共享身份）与 <code>display</code>（本地覆盖）分开，
+              内嵌活视图直接继承这个语义，因此同一视图能在多篇文档里带不同过滤出现而互不影响。
+            </div>
+            <div class="kcard-f">
+              <svg class="i sm"><use href="#i-link"/></svg>来源：文档《Cortex 产品规格》· published 自动入库
+              <span class="badge b-accent" style="margin-left:6px">建议提炼为 skill</span>
+              <span style="margin-left:auto;display:flex;gap:6px">
+                <button class="btn" style="font-size:12px;padding:3px 9px"><svg class="i sm"><use href="#i-x"/></svg>丢弃</button>
+                <button class="btn" style="font-size:12px;padding:3px 9px">改写</button>
+                <button class="btn pri" style="font-size:12px;padding:3px 9px"><svg class="i sm"><use href="#i-check"/></svg>入库</button>
+              </span>
+            </div>
+          </div>
+
+          <div class="kcard" style="border-color:var(--warning-text)">
+            <div class="kcard-h" style="background:var(--warning-soft)">
+              <span class="badge b-p1">需人工判断</span><b>OpenViking 开源版不提供多租户上下文隔离</b>
+              <span class="sp"><span class="conf">置信度 <span class="b"><i class="mid" style="width:52%"></i></span> 0.52</span></span>
+            </div>
+            <div class="kcard-b">
+              提炼自 PoC 讨论。<b>低置信度 + 与 <span class="fr">G-5</span>「全栈自托管」直接冲突</b>，
+              不建议自动入库 —— 一旦入库，后续所有 agent 都会把它当作既定事实来推理。
+            </div>
+            <div class="kcard-f">
+              <svg class="i sm"><use href="#i-warn"/></svg>与已入库条目 #877 存在潜在冲突
+              <span style="margin-left:auto;display:flex;gap:6px">
+                <button class="btn" style="font-size:12px;padding:3px 9px"><svg class="i sm"><use href="#i-x"/></svg>丢弃</button>
+                <button class="btn" style="font-size:12px;padding:3px 9px;border-color:var(--warning-text);color:var(--warning-text)">升级为 issue 去核实</button>
+              </span>
+            </div>
+          </div>
+        </div>
+
+        <div class="kside">
+          <div class="rsec">批量动作</div>
+          <button class="btn pri" style="width:100%;justify-content:center;margin-bottom:7px"><svg class="i sm"><use href="#i-check"/></svg>批准全部（2 条）并置 done</button>
+          <button class="btn" style="width:100%;justify-content:center;margin-bottom:12px">全部打回</button>
+
+          <div class="rsec">写入目标</div>
+          <div class="sel-box" style="margin-bottom:7px"><svg class="i sm"><use href="#i-brain"/></svg>OpenViking（自托管）<span class="sp"><svg class="i sm"><use href="#i-chevd"/></svg></span></div>
+          <div style="font-size:12px;color:var(--text-3);line-height:1.6;margin-bottom:12px">
+            通过 <code>tool.remote-mcp.v1</code> plugin 接入，不改核心 <span class="fr">FR-042</span>。
+            可切换为 Mem0 兼容后端 <span class="fr">FR-043</span> 或 pgvector 兜底 <span class="fr">FR-044</span>。
+          </div>
+
+          <div class="rsec">附加动作</div>
+          <label style="display:flex;align-items:center;gap:9px;font-size:13px;margin-bottom:9px">
+            <span class="toggle on"><i></i></span>同时提炼为 skill
+          </label>
+          <div style="font-size:12px;color:var(--text-3);line-height:1.6;margin-bottom:12px">
+            skill 注册表是唯一事实源 <span class="fr">FR-047</span>；知识库只保留可检索副本，避免双写漂移。
+          </div>
+
+          <div class="rsec">评审记录（= 评论）</div>
+          <div class="cmt">
+            <span class="av a2">QQ</span>
+            <div class="cb2"><div class="h">quboqin · 12 分钟前</div>条目 3 的结论我要自己去核一遍官方仓库，先别入库。</div>
+          </div>
+          <div class="cmt">
+            <span class="av bot a6">me</span>
+            <div class="cb2"><div class="h">提炼 agent · 20 分钟前</div>已按 <code>knowledge.upsert</code> 契约生成 5 条候选，2 条与既有条目重复已自动合并。</div>
+          </div>
+          <div class="cb2" style="color:var(--text-3);font-size:13px">写下评审意见…</div>
+        </div>
+      </div></div>
+    </div>
+  </div></div>
+
+  <div class="grid2">
+    <div class="note ok">
+      <h4>顶部那条绿色状态带在后端不可用时会变成黄色，且必须留在原位</h4>
+      <span class="fr">7.5</span> 规定：知识库后端不可用时 <code>knowledge.search</code> 快速失败并降级到平台自带全文搜索，<b>不阻塞 agent 运行</b>。
+      界面上的对应表达是：状态带原地变黄、写明「已降级为全文检索」，而不是弹一个错误对话框。
+      弹窗会让用户以为整个系统坏了；状态带只是告诉他检索质量下降了。
+    </div>
+    <div class="note stop">
+      <h4>第三条候选是我特意放进原型的</h4>
+      它低置信度、与既有条目冲突、而且结论一旦入库会污染后续所有 agent 的推理。
+      <b>它的动作按钮没有「入库」，只有「丢弃」和「升级为 issue 去核实」。</b>
+      记忆晋升最大的风险不是漏掉知识，而是把没验证的推断固化成事实 —— 
+      界面必须让高风险条目走不通「一键入库」这条路。
+    </div>
+    <div class="note stop">
+      <h4>本轮新增：第二条状态带是为了让一类静默故障可见</h4>
+      <code>remote-mcp-v1</code> 是「remote-MCP 类 plugin 能否投递到某台 daemon」的开关，判定<b>失败即关闭</b>。
+      用户机器上的 daemon 版本过旧、不声明该能力时，知识库工具<b>不会被投递，而且是静默的</b> ——
+      agent 不报错，它只是手里没有那几个工具，然后照常回答，答案里没有任何知识库内容。
+      <br><br>排查这种故障非常痛苦，因为每一层看起来都正常：plugin 装好了、后端连通了、agent 也跑了。
+      所以把它做成一条常驻状态带，而不是留在日志里。见 <span class="fr">FR-048</span>、验收 <span class="fr">AC-P8</span>。
+    </div>
+    <div class="note warn">
+      <h4>置信度条是提炼 agent 给的，不是真值</h4>
+      正式版应在旁边给出它的计算口径（来源数量 / 是否被多次独立提及 / 是否与既有条目冲突），
+      否则用户会把它当成系统对内容正确性的背书。
+      这一条在 PRD 里还没有对应需求 —— <b>建议补一条 FR：候选条目必须携带可解释的来源链，界面上一键可展开。</b>
+    </div>
+    <div class="note">
+      <h4>「语料来源」在侧栏里是一个独立入口</h4>
+      <span class="fr">FR-045</span> 让已发布文档与表格快照自动成为语料。用户必须能回答「知识库里到底有什么、从哪来的」，
+      否则自托管带来的信任优势会被「黑箱」感抵消 —— 这正是 Notion AI 当前最被诟病的一点。
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================
+     S9 · 设计规范与组件清单
+     ============================================================ -->
+<section class="screen" id="s-token" role="tabpanel">
+  <div class="screen-head">
+    <h2>S9 · 规范对齐：原型没有发明新的颜色与字号</h2>
+    <p>本原型的全部基色与圆角逐值取自 <code>packages/ui/styles/tokens.css</code>，
+      字号全部落在该文件定义的十级类型阶梯上（该文件明确写了「禁止半像素字号」这条规则，原型已遵守）。
+      唯一的新增是下方标注为「原型新增」的柔和色阶 —— 这是现有 token 系统的一处真实缺口。</p>
+  </div>
+
+  <h3 style="font-size:18px;margin:22px 0 0">平台既有 token（原样使用）</h3>
+  <div class="swatches">
+    <div class="sw"><div class="c" style="background:var(--brand)"></div><div class="l">brand<code>oklch(0.55 0.16 255)</code></div></div>
+    <div class="sw"><div class="c" style="background:var(--success)"></div><div class="l">success<code>oklch(0.55 0.16 145)</code></div></div>
+    <div class="sw"><div class="c" style="background:var(--warning)"></div><div class="l">warning<code>oklch(0.75 0.16 85)</code></div></div>
+    <div class="sw"><div class="c" style="background:var(--info)"></div><div class="l">info<code>oklch(0.55 0.18 250)</code></div></div>
+    <div class="sw"><div class="c" style="background:var(--destructive)"></div><div class="l">destructive<code>oklch(0.577 0.245 27.3)</code></div></div>
+    <div class="sw"><div class="c" style="background:var(--app-shell)"></div><div class="l">app-shell<code>侧栏 / 外框</code></div></div>
+    <div class="sw"><div class="c" style="background:var(--page-canvas)"></div><div class="l">page-canvas<code>列表 / 看板底</code></div></div>
+    <div class="sw"><div class="c" style="background:var(--surface);box-shadow:inset 0 0 0 1px var(--border)"></div><div class="l">surface<code>卡片 / 内容块</code></div></div>
+    <div class="sw"><div class="c" style="background:var(--surface-hover)"></div><div class="l">surface-hover<code>行 hover</code></div></div>
+    <div class="sw"><div class="c" style="background:var(--surface-selected)"></div><div class="l">surface-selected<code>选中 / 激活</code></div></div>
+    <div class="sw"><div class="c" style="background:var(--muted-foreground)"></div><div class="l">muted-foreground<code>次级文字</code></div></div>
+    <div class="sw"><div class="c" style="background:var(--faint-foreground)"></div><div class="l">faint-foreground<code>非文字标记</code></div></div>
+  </div>
+
+  <h3 style="font-size:18px;margin:26px 0 0">原型新增：柔和色阶（建议并入 tokens.css）</h3>
+  <div class="note warn" style="margin-top:10px">
+    <h4>这是我在核对 token 时发现的一处真实缺口</h4>
+    现有 token 只有实心语义色（<code>--success / --warning / --info / --destructive</code>），
+    <b>没有「浅底 + 可读前景」这一对</b>。而多维表格的 select 选项、kind 徽章、状态 chip、优先级标签
+    在新界面里会大量出现，全都需要这一对。
+    <br><br>如果不补进 token 系统，实现时必然各处用 <code>/10</code> <code>/20</code> 这类 alpha 值临时拼 —— 
+    <code>tokens.css</code> 里已经记录过一次同类事故：152 处 <code>text-muted-foreground/30..80</code> 的 alpha 用法，
+    在浅色面上对比度落在 1.5:1–3.8:1，连非文字的 3:1 底线都不过。
+    <b>建议在 P1 开工前先补这 6 组 tint token，成本很低，之后再收拾很贵。</b>
+    <br><br>下方每组的前景色都按浅底可读性单独定了亮度，未使用 alpha。
+  </div>
+  <div class="swatches">
+    <div class="sw"><div class="c" style="background:var(--brand-soft);display:grid;place-items:center;color:var(--brand);font-weight:600;font-size:13px">评审中</div><div class="l">brand-soft / brand<code>状态 · 引用 · 活视图</code></div></div>
+    <div class="sw"><div class="c" style="background:var(--success-soft);display:grid;place-items:center;color:var(--success-text);font-weight:600;font-size:13px">已上线</div><div class="l">success-soft / success-text<code>完成 · 健康</code></div></div>
+    <div class="sw"><div class="c" style="background:var(--warning-soft);display:grid;place-items:center;color:var(--warning-text);font-weight:600;font-size:13px">已排期</div><div class="l">warning-soft / warning-text<code>进行中 · 降级</code></div></div>
+    <div class="sw"><div class="c" style="background:var(--info-soft);display:grid;place-items:center;color:var(--info-text);font-weight:600;font-size:13px">MAGI-31</div><div class="l">info-soft / info-text<code>relation → issue</code></div></div>
+    <div class="sw"><div class="c" style="background:var(--purple-soft);display:grid;place-items:center;color:var(--purple-text);font-weight:600;font-size:13px">文档</div><div class="l">purple-soft / purple-text<code>kind=doc</code></div></div>
+    <div class="sw"><div class="c" style="background:var(--cyan-soft);display:grid;place-items:center;color:var(--cyan-text);font-weight:600;font-size:13px">知识候选</div><div class="l">cyan-soft / cyan-text<code>kind=knowledge</code></div></div>
+    <div class="sw"><div class="c" style="background:var(--danger-soft);display:grid;place-items:center;color:var(--danger-text);font-weight:600;font-size:13px">P0</div><div class="l">danger-soft / danger-text<code>阻塞 · 最高优先级</code></div></div>
+    <div class="sw"><div class="c" style="background:var(--neutral-soft);display:grid;place-items:center;color:var(--muted-foreground);font-weight:600;font-size:13px">待评估</div><div class="l">neutral-soft<code>无状态 · 默认选项</code></div></div>
+  </div>
+
+  <h3 style="font-size:18px;margin:26px 0 0">类型阶梯（原样遵守，无新增字号）</h3>
+  <table class="spec">
+    <thead><tr><th>token</th><th>px</th><th>在本原型中的用途</th></tr></thead>
+    <tbody>
+      <tr><td><code>--text-micro</code></td><td>11</td><td>kind 徽章、优先级、计数、Markdown 落盘串、DataSource 标记</td></tr>
+      <tr><td><code>--text-caption</code></td><td>12</td><td>元信息行、字段配额说明、表脚统计、设计注释的次级行</td></tr>
+      <tr><td><code>--text-label</code></td><td>13</td><td>表头、视图栏 chip、侧栏导航、行详情字段值 —— 界面主力字号</td></tr>
+      <tr><td><code>--text-body</code></td><td>14</td><td>按钮、评论正文、模态框正文</td></tr>
+      <tr><td><code>--text-body-lg</code></td><td>15</td><td>文档正文（行高 1.75，列宽 ≤ 760px）、设计说明卡片</td></tr>
+      <tr><td><code>--text-title-sm / title</code></td><td>16 / 18</td><td>右栏分区标题、原型分节标题</td></tr>
+      <tr><td><code>--text-title-lg / display-sm</code></td><td>20 / 24</td><td>侧滑面板标题、屏幕标题</td></tr>
+      <tr><td><code>--text-display</code></td><td>36</td><td>未使用（本原型无 hero 数字）；文档 H1 用 31px 属编辑器排版，不走 UI 阶梯</td></tr>
+    </tbody>
+  </table>
+
+  <h3 style="font-size:18px;margin:26px 0 0">组件清单：复用 / 扩展 / 新建</h3>
+  <table class="spec">
+    <thead><tr><th>组件</th><th>处置</th><th>依据</th><th>需求</th></tr></thead>
+    <tbody>
+      <tr><td>侧栏四段导航（个人 / 固定 / 工作区 / 配置）</td><td><span class="badge b-green">复用</span></td><td>只新增 4 个条目；「固定」区扩展为可钉文档与表格</td><td>—</td></tr>
+      <tr><td>TipTap 编辑器全部能力</td><td><span class="badge b-green">复用</span></td><td>斜杠命令、Mermaid、公式、附件卡片、mention（含拼音匹配）均已具备</td><td><span class="fr">FR-014</span></td></tr>
+      <tr><td>视图栏 + 5 种布局</td><td><span class="badge b-p1">扩展</span></td><td>数据源从 issue store 抽为 <code>DataSource</code> 接口</td><td><span class="fr">FR-002</span></td></tr>
+      <tr><td>日历 / 画廊布局</td><td><span class="badge b-accent">新建</span></td><td>必须双源验收（issue + collection）</td><td><span class="fr">FR-004</span> <span class="fr">FR-005</span></td></tr>
+      <tr><td>字段系统（9 类 + relation）</td><td><span class="badge b-p1">扩展</span></td><td>类型定义 / 校验 / 值袋读写抽为共用实现，新增 relation</td><td><span class="fr">FR-001</span> <span class="fr">FR-023</span></td></tr>
+      <tr><td>文档页面树</td><td><span class="badge b-accent">新建</span></td><td>复用 <code>parent_issue_id</code>，界面为新增</td><td><span class="fr">FR-012</span> <span class="fr">FR-013</span></td></tr>
+      <tr><td><code>collection-view</code> 内嵌块</td><td><span class="badge b-accent">新建</span></td><td>编辑器已有同类 NodeView 先例（file-card / mermaid / html-block-preview），扩展点现成</td><td><span class="fr">FR-032</span></td></tr>
+      <tr><td>数据源选择器模态</td><td><span class="badge b-accent">新建</span></td><td>含「活视图 vs 快照」的产品分叉</td><td><span class="fr">FR-034</span></td></tr>
+      <tr><td>行详情侧滑</td><td><span class="badge b-accent">新建</span></td><td>刻意不含评论区；含「转为工作项」出口</td><td><span class="fr">FR-02A</span> <span class="fr">Q-4</span></td></tr>
+      <tr><td>反向引用面板</td><td><span class="badge b-accent">新建</span></td><td>建议从删除确认提升为常驻面板</td><td><span class="fr">FR-036</span></td></tr>
+      <tr><td>Workflow 画布 + 属性面板</td><td><span class="badge b-accent">新建</span></td><td>列 = stage；无条件分支样式（二期）</td><td><span class="fr">FR-053</span></td></tr>
+      <tr><td>运行态泳道</td><td><span class="badge b-green">复用</span></td><td>现有 swimlane，仅新增「屏障未开」标记</td><td><span class="fr">FR-054</span></td></tr>
+      <tr><td>知识候选评审页</td><td><span class="badge b-p1">扩展</span></td><td>issue 详情页在 <code>kind=knowledge</code> 下的专用渲染，非新页面类型</td><td><span class="fr">FR-046</span></td></tr>
+      <tr><td>柔和色阶 tint token</td><td><span class="badge b-accent">新建</span></td><td>现有 token 缺口，见上方说明</td><td>建议补 FR</td></tr>
+    </tbody>
+  </table>
+
+  <h3 style="font-size:18px;margin:26px 0 0">中文排版与可读性规则</h3>
+  <table class="spec">
+    <thead><tr><th>规则</th><th>做法</th></tr></thead>
+    <tbody>
+      <tr><td>中英文混排</td><td>中文与拉丁字母、数字之间留一个空格（本原型全文遵守）；标点用全角</td></tr>
+      <tr><td>正文列宽</td><td>文档编辑区最大 760px，行高 1.75</td></tr>
+      <tr><td>字体链</td><td>沿用平台 <code>--font-sans</code>：Inter → PingFang SC / 微软雅黑 → Noto Sans CJK。中文必须排在韩文之前，否则中文用户会拿到韩文汉字字形</td></tr>
+      <tr><td>深浅色</td><td><code>prefers-color-scheme</code> 自动跟随，右上角可手动覆盖；两套色值均取自 tokens.css 的 <code>:root</code> 与 <code>.dark</code></td></tr>
+      <tr><td>状态语言</td><td>文档说草稿 / 评审中 / 已发布，不说 todo / done —— 同一 category，不同措辞</td></tr>
+    </tbody>
+  </table>
+
+  <div class="note ok" style="margin-top:20px">
+    <h4>v0.1 → v0.3 增量评审稿 的七条修订</h4>
+    全部来自 2026-09-09 至 09-10 的源码回读，逐条已并入《Cortex 产品需求文档》第 06 章：
+    <ul>
+      <li><b>workflow 模板必须指定 runner</b>（S7）—— 服务端只唤醒不推进，缺了它流程会静默停住</li>
+      <li><b>内嵌块写回复用 <code>issue-run-confirm</code></b>（S2）—— 改 issue 有副作用，平台已有确认机制可复用</li>
+      <li><b>内嵌块首次编辑给一次性提示</b>（S2）—— 说清「改的是源表，另有 N 篇文档在引用」</li>
+      <li><b>actor 字段今天只能填人</b>（S4）—— v0.1 画错了，已修正；是否给 collection 开到 agent / squad 待拍板</li>
+      <li><b>知识库设置页显示 daemon 能力覆盖</b>（S8）—— 让一类静默故障可见</li>
+      <li><b>语料入库新增 <code>knowledge_ingest</code> 投递层</b> —— 照搬 webhook 的幂等 + 租约 + 可重放模式</li>
+      <li><b>文档的 status 与 assignee 都不隐藏</b>（S2）—— 「kind-aware」从「藏字段」改为「换措辞」</li>
+    </ul>
+    另有一条设计系统缺口仍未补：<b>tint 色阶</b>（见本屏上方）。建议 P1 开工前先补，成本极低。
+  </div>
+
+  <div class="note stop" style="margin-top:20px">
+    <h4>这份原型没有回答的三个问题</h4>
+    <ul>
+      <li><b>移动端。</b>本原型只做了桌面 Web（含窄屏折叠），移动端的表格与画布如何降级尚未设计。平台有 <code>apps/mobile</code>，一期是否要跟上需要你定。</li>
+      <li><b>权限的界面表达。</b>一期不做记录级 / 字段级权限 <span class="fr">A-2</span>，因此原型里没有任何权限控件。若定位是可售卖多租户，这一屏要重画。</li>
+      <li><b>空状态与首次使用。</b>四个新对象各需要一套空状态和引导，本轮未做 —— 这是决定新功能能否被用起来的关键一环，建议单独排一轮。</li>
+    </ul>
+  </div>
+</section>
+
+</main>
+
+<script>
+(function(){
+  var SCREENS = [
+    ["s-sync", "S10", "main 增量评审"],
+    ["s-ia",     "S1", "信息架构"],
+    ["s-doc",    "S2", "文档 · 内嵌活视图"],
+    ["s-insert", "S3", "插入活视图"],
+    ["s-table",  "S4", "多维表格"],
+    ["s-layouts","S5", "布局：看板 / 日历 / 画廊"],
+    ["s-record", "S6", "行详情"],
+    ["s-flow",   "S7", "Workflow 编辑器"],
+    ["s-know",   "S8", "知识晋升评审"],
+    ["s-token",  "S9", "设计规范"]
+  ];
+  var tabs = document.getElementById("tabs");
+  SCREENS.forEach(function(s, i){
+    var b = document.createElement("button");
+    b.className = "tab"; b.type = "button"; b.setAttribute("role","tab");
+    b.setAttribute("aria-selected", i === 0 ? "true" : "false");
+    b.dataset.target = s[0];
+    b.innerHTML = '<span class="n">' + s[1] + '</span>' + s[2];
+    b.addEventListener("click", function(){ show(s[0]); });
+    tabs.appendChild(b);
+  });
+  document.getElementById("tcount").textContent = SCREENS.length + " 屏";
+
+  function show(id){
+    document.querySelectorAll(".screen").forEach(function(el){ el.classList.toggle("on", el.id === id); });
+    document.querySelectorAll(".tab").forEach(function(el){ el.setAttribute("aria-selected", el.dataset.target === id ? "true" : "false"); });
+    if (location.hash.slice(1) !== id) history.replaceState(null, "", "#" + id);
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+  if (location.hash && document.getElementById(location.hash.slice(1))) show(location.hash.slice(1));
+  // 深链：同文档内只改 hash 时不会重新执行脚本，需要显式监听
+  window.addEventListener("hashchange", function(){
+    var id = location.hash.slice(1);
+    if (document.getElementById(id)) show(id);
+  });
+
+  // ←/→ 切屏
+  document.addEventListener("keydown", function(e){
+    if (e.metaKey || e.ctrlKey || e.altKey) return;
+    if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+    var cur = SCREENS.findIndex(function(s){ return document.getElementById(s[0]).classList.contains("on"); });
+    if (cur < 0) return;
+    var next = e.key === "ArrowRight" ? Math.min(cur + 1, SCREENS.length - 1) : Math.max(cur - 1, 0);
+    show(SCREENS[next][0]);
+  });
+
+  // 主题：跟随系统 → 浅色 → 深色
+  var MODES = [["auto","跟随系统"],["light","浅色"],["dark","深色"]];
+  var mi = 0, btn = document.getElementById("themeBtn");
+  btn.addEventListener("click", function(){
+    mi = (mi + 1) % MODES.length;
+    document.documentElement.setAttribute("data-theme", MODES[mi][0]);
+    btn.textContent = "主题：" + MODES[mi][1];
+  });
+})();
+</script>
+<script>
+document.getElementById('sync-group').addEventListener('click',function(){var active=this.dataset.active!=='1';this.dataset.active=active?'1':'0';this.textContent=active?'切换为按状态分组':'切换为按负责人分组';document.getElementById('sync-sort').textContent=active?'按负责人分组：仅使用字段排序，手动排序不可用。':'按状态分组时，可选择手动排序。';});
+document.getElementById('sync-inspect').addEventListener('click',function(){document.getElementById('sync-proof').textContent='演示：已核对完整来源，仍需人工判断内容是否可晋升。';document.getElementById('sync-promote').disabled=false;});
+document.getElementById('sync-promote').addEventListener('click',function(){document.getElementById('sync-proof').textContent='演示：人工批准后进入入库队列，需等待投递结果。';this.disabled=true;});
+</script></body>
+</html>

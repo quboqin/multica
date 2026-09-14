@@ -2,6 +2,7 @@
 
 import { createContext, useContext, type ReactNode } from "react";
 import type { Issue, UpdateIssueRequest } from "@multica/core/types";
+import type { WorkspaceRequestContext } from "@multica/core/platform";
 import type { IssueCreateDefaults } from "./types";
 
 export type IssueSurfaceMutationOptions = {
@@ -19,6 +20,16 @@ export interface IssueSurfaceActions {
     updates: Partial<UpdateIssueRequest>,
     options?: IssueSurfaceMutationOptions,
   ) => void;
+  /**
+   * Per-request completion channel for callers that must observe the final
+   * server result. Unlike mutate callbacks, concurrent calls keep independent
+   * promises and continue settling after the surface unmounts.
+   */
+  updateIssueAsync: (
+    issueId: string,
+    updates: Partial<UpdateIssueRequest>,
+    workspaceContext?: WorkspaceRequestContext,
+  ) => Promise<Issue>;
   moveIssue: (
     issueId: string,
     updates: Partial<UpdateIssueRequest>,
