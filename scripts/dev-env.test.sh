@@ -454,9 +454,9 @@ assert_web_start_case() {
           *:100|*:420|*:888|*:999) return 0 ;;
         esac
         if [ -f "$(pid_file web)" ] \
-          && [ "$target" = "$(cat "$(pid_file web)")" ] \
-          && [ "$LAUNCHER_STOPPED" -eq 0 ]; then
-          return 0
+          && [ "$target" = "$(cat "$(pid_file web)")" ]; then
+          if [ "$LAUNCHER_STOPPED" -eq 0 ]; then return 0; fi
+          return 1
         fi
         command kill -0 "$target" 2>/dev/null
         return $?
