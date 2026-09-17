@@ -6,6 +6,7 @@ import type {
 import type {
   Issue,
   IssuePropertyValue,
+  IssueTableRow,
 } from "@multica/core/types";
 import {
   getDataViewSelectionRange,
@@ -34,6 +35,7 @@ export type IssueTableDisplayRow =
       kind: "issue";
       key: string;
       issue: Issue;
+      sourceRow?: IssueTableRow;
       depth: number;
       hasChildren: boolean;
       collapsed: boolean;
@@ -83,7 +85,13 @@ export function refreshFrozenTableRows(
     rowId: (row) => (row.kind === "issue" ? row.issue.id : null),
     replaceRow: (row, issue) =>
       row.kind === "issue" && row.issue !== issue
-        ? { ...row, issue }
+        ? {
+            ...row,
+            issue,
+            ...(row.sourceRow
+              ? { sourceRow: { ...row.sourceRow, issue } }
+              : {}),
+          }
         : row,
   });
 }

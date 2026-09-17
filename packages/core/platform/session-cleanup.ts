@@ -9,6 +9,113 @@ import {
   clearWorkspaceStorage,
 } from "./storage-cleanup";
 
+const clientSessionGenerations = new WeakMap<QueryClient, number>();
+type WorkspaceAccessState = { generation: number; revoked: boolean };
+const clientWorkspaceAccess = new WeakMap<
+  QueryClient,
+  Map<string, WorkspaceAccessState>
+>();
+
+function workspaceAccessState(
+  queryClient: QueryClient,
+  workspaceId: string,
+): WorkspaceAccessState {
+  return (
+    clientWorkspaceAccess.get(queryClient)?.get(workspaceId) ?? {
+      generation: 0,
+      revoked: false,
+    }
+  );
+}
+
+export function captureClientWorkspaceAccessGeneration(
+  queryClient: QueryClient,
+  workspaceId: string,
+): number {
+  return workspaceAccessState(queryClient, workspaceId).generation;
+}
+
+export function isClientWorkspaceAccessGenerationCurrent(
+  queryClient: QueryClient,
+  workspaceId: string,
+  generation: number,
+): boolean {
+  const state = workspaceAccessState(queryClient, workspaceId);
+  return !state.revoked && state.generation === generation;
+}
+
+export function isClientWorkspaceAccessAllowed(
+  queryClient: QueryClient,
+  workspaceId: string,
+): boolean {
+  return !workspaceAccessState(queryClient, workspaceId).revoked;
+}
+
+export function assertClientWorkspaceAccessAllowed(
+  queryClient: QueryClient,
+  workspaceId: string,
+): void {
+  if (!isClientWorkspaceAccessAllowed(queryClient, workspaceId)) {
+    throw new Error("Workspace access was revoked");
+  }
+}
+
+function setClientWorkspaceAccess(
+  queryClient: QueryClient,
+  workspaceId: string,
+  revoked: boolean,
+): void {
+  let byWorkspace = clientWorkspaceAccess.get(queryClient);
+  if (!byWorkspace) {
+    byWorkspace = new Map();
+    clientWorkspaceAccess.set(queryClient, byWorkspace);
+  }
+  const current = workspaceAccessState(queryClient, workspaceId);
+  byWorkspace.set(workspaceId, {
+    generation: current.generation + 1,
+    revoked,
+  });
+}
+
+/** Fence in-flight work immediately when the realtime membership event lands. */
+export function revokeClientWorkspaceAccess(
+  queryClient: QueryClient,
+  workspaceId: string,
+): void {
+  setClientWorkspaceAccess(queryClient, workspaceId, true);
+}
+
+/** A later self member:added event starts a fresh authorization generation. */
+export function restoreClientWorkspaceAccess(
+  queryClient: QueryClient,
+  workspaceId: string,
+): void {
+  setClientWorkspaceAccess(queryClient, workspaceId, false);
+}
+
+/**
+ * Captures the identity of the authenticated browser session that owns an
+ * asynchronous cache operation. Workspace switches deliberately do not move
+ * this generation; logout/session expiry does.
+ */
+export function captureClientSessionGeneration(queryClient: QueryClient): number {
+  return clientSessionGenerations.get(queryClient) ?? 0;
+}
+
+export function isClientSessionGenerationCurrent(
+  queryClient: QueryClient,
+  generation: number,
+): boolean {
+  return captureClientSessionGeneration(queryClient) === generation;
+}
+
+function invalidateClientSessionGeneration(queryClient: QueryClient): void {
+  clientSessionGenerations.set(
+    queryClient,
+    captureClientSessionGeneration(queryClient) + 1,
+  );
+}
+
 /**
  * Erase everything the finished session left on this client: in-memory draft
  * stores, per-workspace persisted state, the desktop tab layout, the
@@ -29,6 +136,15 @@ export function clearClientSessionData(
   queryClient: QueryClient,
   storage: StorageAdapter = defaultStorage,
 ): void {
+  // Fence every async mutation callback before any cache entry is removed.
+  // A response owned by this session may still arrive after clear(); without
+  // this generation change it could repopulate data for the next account.
+  invalidateClientSessionGeneration(queryClient);
+  // A different account may legitimately belong to a workspace revoked from
+  // the previous account. Session generation already fences the old work, so
+  // the new session starts with no inherited per-workspace deny markers.
+  clientWorkspaceAccess.delete(queryClient);
+
   // Reset draft stores' in-memory state FIRST, before removing persisted
   // keys. Each reset is a Zustand setState, and persist middleware writes the
   // new (empty) state straight back to storage under the still-active

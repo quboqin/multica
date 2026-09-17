@@ -9,6 +9,11 @@ import { createLogger } from "../logger";
 import { clearWorkspaceStorage } from "../platform/storage-cleanup";
 import { defaultStorage } from "../platform/storage";
 import { getCurrentWsId, getCurrentSlug } from "../platform/workspace-storage";
+import {
+  restoreClientWorkspaceAccess,
+  revokeClientWorkspaceAccess,
+} from "../platform/session-cleanup";
+import { collectionKeys } from "../collections/queries";
 import { issueKeys } from "../issues/queries";
 import { projectKeys } from "../projects/queries";
 import { pinKeys } from "../pins/queries";
@@ -659,6 +664,8 @@ function invalidateWorkspaceScopedQueries(qc: QueryClient): void {
     qc.invalidateQueries({ queryKey: chatKeys.all(wsId) });
     qc.invalidateQueries({ queryKey: labelKeys.all(wsId) });
     qc.invalidateQueries({ queryKey: propertyKeys.all(wsId) });
+    qc.invalidateQueries({ queryKey: collectionKeys.all(wsId) });
+    qc.invalidateQueries({ queryKey: collectionKeys.sources(wsId) });
     // A catalog edit missed while disconnected would otherwise sit behind the
     // 5-minute staleTime — long enough to offer a status the server already
     // archived, or to keep painting its old name.
@@ -748,6 +755,7 @@ export function useRealtimeSync(
   // Main sync: onAny -> refreshMap with debounce
   useEffect(() => {
     if (!ws) return;
+    const subscribedWorkspaceId = getCurrentWsId();
 
     const refreshMap: Record<string, () => void> = {
       inbox: () => {
@@ -959,6 +967,7 @@ export function useRealtimeSync(
     // Event types handled by specific handlers below -- skip generic refresh
     const specificEvents = new Set([
       "workspace:updated",
+      "collection:created", "record:created", "record:updated",
       "issue:updated", "issue:created", "issue:deleted", "issue_attachments:changed", "issue_labels:changed", "issue_metadata:changed", "issue_properties:changed", "property:created", "property:updated", "inbox:new",
       "comment:created", "comment:updated", "comment:deleted",
       "comment:resolved", "comment:unresolved",
@@ -1027,6 +1036,43 @@ export function useRealtimeSync(
         onInboxIssueDeleted(qc, wsId, issue_id);
       }
     });
+
+    const unsubCollectionCreated = ws.on("collection:created", () => {
+      if (!subscribedWorkspaceId || getCurrentWsId() !== subscribedWorkspaceId) {
+        return;
+      }
+      void qc.invalidateQueries({
+        queryKey: collectionKeys.all(subscribedWorkspaceId),
+      });
+    });
+
+    const invalidateCollectionRecord = (payload: unknown) => {
+      const { collection_id, record_id } = payload as {
+        collection_id?: string;
+        record_id?: string;
+      };
+      if (
+        !subscribedWorkspaceId ||
+        getCurrentWsId() !== subscribedWorkspaceId ||
+        !collection_id
+      ) {
+        return;
+      }
+      void qc.invalidateQueries({
+        queryKey: collectionKeys.rows(subscribedWorkspaceId, collection_id),
+      });
+      if (record_id) {
+        void qc.invalidateQueries({
+          queryKey: collectionKeys.record(
+            subscribedWorkspaceId,
+            collection_id,
+            record_id,
+          ),
+        });
+      }
+    };
+    const unsubRecordCreated = ws.on("record:created", invalidateCollectionRecord);
+    const unsubRecordUpdated = ws.on("record:updated", invalidateCollectionRecord);
 
     const unsubIssueLabelsChanged = ws.on("issue_labels:changed", (p) => {
       const { issue_id, labels, issue_revision } = p as IssueLabelsChangedPayload;
@@ -1263,16 +1309,31 @@ export function useRealtimeSync(
     });
 
     const unsubMemberRemoved = ws.on("member:removed", (p) => {
-      const { user_id } = p as MemberRemovedPayload;
+      const { user_id, workspace_id } = p as MemberRemovedPayload;
       const myUserId = authStore.getState().user?.id;
       if (user_id === myUserId) {
-        const slug = getCurrentSlug();
-        const wsId = getCurrentWsId();
-        if (slug && wsId) {
+        // The workspace-list refetch below is intentionally asynchronous and
+        // can fail. Fence mutation callbacks and new writes synchronously at
+        // the authorization event boundary, then discard protected cache data
+        // so neither a late response nor an old list snapshot can revive it.
+        revokeClientWorkspaceAccess(qc, workspace_id);
+        void qc.cancelQueries({ queryKey: collectionKeys.all(workspace_id) });
+        void qc.cancelQueries({ queryKey: collectionKeys.sources(workspace_id) });
+        qc.removeQueries({ queryKey: collectionKeys.all(workspace_id) });
+        qc.removeQueries({ queryKey: collectionKeys.sources(workspace_id) });
+
+        const wsList =
+          qc.getQueryData<{ id: string; slug: string }[]>(workspaceKeys.list()) ?? [];
+        const slug =
+          wsList.find((workspace) => workspace.id === workspace_id)?.slug ??
+          (getCurrentWsId() === workspace_id ? getCurrentSlug() : null);
+        if (slug) {
           clearWorkspaceStorage(defaultStorage, slug);
+        }
+        if (getCurrentWsId() === workspace_id) {
           logger.warn("removed from workspace, switching");
           onToast?.("You were removed from this workspace", "info");
-          relocateAfterWorkspaceLoss(wsId);
+          relocateAfterWorkspaceLoss(workspace_id);
         }
       }
     });
@@ -1281,6 +1342,10 @@ export function useRealtimeSync(
       const { member, workspace_name } = p as MemberAddedPayload;
       const myUserId = authStore.getState().user?.id;
       if (member.user_id === myUserId) {
+        // The server's event payload carries the workspace identity on the
+        // member object. Reading a top-level workspace_id leaves the revoked
+        // marker installed after a user is invited back into the workspace.
+        restoreClientWorkspaceAccess(qc, member.workspace_id);
         qc.invalidateQueries({ queryKey: workspaceKeys.list() });
         qc.invalidateQueries({ queryKey: workspaceKeys.myInvitations() });
         onToast?.(
@@ -1697,6 +1762,9 @@ export function useRealtimeSync(
       unsubIssueUpdated();
       unsubIssueCreated();
       unsubIssueDeleted();
+      unsubCollectionCreated();
+      unsubRecordCreated();
+      unsubRecordUpdated();
       unsubIssueAttachmentsChanged();
       unsubIssueLabelsChanged();
       unsubIssueMetadataChanged();

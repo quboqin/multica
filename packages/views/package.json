@@ -10,6 +10,7 @@
   },
   "exports": {
     "./data-view": "./data-view/index.ts",
+    "./collections": "./collections/index.ts",
     "./navigation": "./navigation/index.ts",
     "./common/actor-avatar": "./common/actor-avatar.tsx",
     "./editor": "./editor/index.ts",

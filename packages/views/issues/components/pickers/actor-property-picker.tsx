@@ -60,15 +60,19 @@ export function ActorPropertyPicker({
   trigger,
   triggerRender,
   emptyRow,
+  canSet,
 }: {
   property: IssueProperty;
   value: IssuePropertyValue | undefined;
-  onChange: (value: IssuePropertyValue | undefined) => void;
+  onChange: (
+    value: IssuePropertyValue | undefined,
+  ) => boolean | void | Promise<boolean | void>;
   open: boolean;
   onOpenChange: (open: boolean) => void;
   trigger: React.ReactNode;
   triggerRender?: React.ReactElement<Record<string, unknown>>;
   emptyRow: React.ReactNode;
+  canSet: boolean;
 }) {
   const { t } = useT("issues");
   const [filter, setFilter] = useState("");
@@ -87,14 +91,13 @@ export function ActorPropertyPicker({
   const matches = (name: string) => name.toLowerCase().includes(query) || matchesPinyin(name, query);
   const filteredMembers = members.filter((m) => matches(m.name));
 
-  const commit = (kind: "member", id: string) => {
+  const commit = async (kind: "member", id: string) => {
     const key = formatActorRef(kind, id);
     if (!multiple) {
-      onChange(key);
-      onOpenChange(false);
+      if ((await onChange(key)) !== false) onOpenChange(false);
       return;
     }
-    onChange(toggleActorRefValue(selectedRaw, key));
+    await onChange(toggleActorRefValue(selectedRaw, key));
   };
 
   const rowsEmpty = filteredMembers.length === 0;
@@ -125,8 +128,8 @@ export function ActorPropertyPicker({
               <PickerItem
                 key={m.user_id}
                 selected={isSelected}
-                disabled={atCapacity && !isSelected}
-                onClick={() => commit("member", m.user_id)}
+                disabled={!canSet || (atCapacity && !isSelected)}
+                onClick={() => void commit("member", m.user_id)}
               >
                 <ActorAvatar actorType="member" actorId={m.user_id} size="sm" />
                 <span className="truncate">{m.name}</span>
