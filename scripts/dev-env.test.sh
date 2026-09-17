@@ -454,9 +454,9 @@ assert_web_start_case() {
           *:100|*:420|*:888|*:999) return 0 ;;
         esac
         if [ -f "$(pid_file web)" ] \
-          && [ "$target" = "$(cat "$(pid_file web)")" ] \
-          && [ "$LAUNCHER_STOPPED" -eq 0 ]; then
-          return 0
+          && [ "$target" = "$(cat "$(pid_file web)")" ]; then
+          if [ "$LAUNCHER_STOPPED" -eq 0 ]; then return 0; fi
+          return 1
         fi
         command kill -0 "$target" 2>/dev/null
         return $?
@@ -770,8 +770,11 @@ assert_diagnostic_budget_cleans_pipe_holder() (
   STATE_DIR="$tmp_dir/pipe-holder"
   LOG_DIR="$STATE_DIR/logs"
   mkdir -p "$LOG_DIR"
-  DIAGNOSTIC_TOTAL_TIMEOUT_SECONDS=1
-  DIAGNOSTIC_QUERY_TIMEOUT_SECONDS=1
+  # Integer epoch deadlines can lose almost one second at startup. Give the
+  # fixture at least one full second to start, while keeping the 3-second
+  # assertion below tighter than the legacy 4-second synchronous PGID lookup.
+  DIAGNOSTIC_TOTAL_TIMEOUT_SECONDS=2
+  DIAGNOSTIC_QUERY_TIMEOUT_SECONDS=2
   holder_script="$STATE_DIR/hold-pipe.sh"
   cat > "$holder_script" <<'EOF'
 #!/usr/bin/env bash

@@ -744,12 +744,13 @@ diagnostic_query() {
     wait "$query_pid"
     status=$?
   fi
-  set -e
-
   # A command can exit while a descendant still owns a diagnostic FIFO. Never
   # wait on that descendant past the same deadline used for the query itself.
   # On timeout, terminate both collectors and the isolated query process group
   # before reaping, so the caller can always reach the ownership stop path.
+  # Keep errexit disabled through these liveness probes: Bash 3.2 can otherwise
+  # exit the function when a collector's `kill -0` reports that it already
+  # finished, instead of treating that result as the end of the while loop.
   for capture_pid in "$stdout_capture_pid" "$stderr_capture_pid"; do
     while kill -0 "$capture_pid" 2>/dev/null; do
       if [ "$(now_epoch)" -ge "$deadline" ]; then
@@ -771,7 +772,6 @@ diagnostic_query() {
     diagnostic_signal_query_process KILL "$query_pid" "$query_pgid"
     DIAGNOSTIC_CLEANUP_ACTIVE=0
   fi
-  set +e
   wait "$stdout_capture_pid" 2>/dev/null
   capture_status=$?
   [ "$capture_status" -eq 0 ] || DIAGNOSTIC_LAST_CAPTURE_FAILED=1
