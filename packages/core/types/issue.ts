@@ -158,6 +158,7 @@ export interface IssueSourceContext {
 }
 
 export interface Issue {
+  kind?: string;
   id: string;
   workspace_id: string;
   number: number;

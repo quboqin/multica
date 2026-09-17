@@ -29,6 +29,7 @@ const (
 	EventContactSalesSubmitted         = "contact_sales_submitted"
 	EventSquadCreated                  = "squad_created"
 	EventAutopilotCreated              = "autopilot_created"
+	EventDocCreated                    = "doc_created"
 	EventCollectionCreated             = "collection_created"
 	EventRecordCreated                 = "record_created"
 	EventRecordUpdated                 = "record_updated"
@@ -74,6 +75,7 @@ var metricsOnlyEvents = map[string]struct{}{
 	EventContactSalesSubmitted:         {},
 	EventSquadCreated:                  {},
 	EventAutopilotCreated:              {},
+	EventDocCreated:                    {},
 	EventCollectionCreated:             {},
 	EventRecordCreated:                 {},
 	EventRecordUpdated:                 {},

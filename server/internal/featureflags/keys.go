@@ -27,6 +27,7 @@ const (
 	// off by default until the new-table RLS and rollback drills pass in the
 	// target environment.
 	CortexCollections = "cortex_collections"
+	CortexDocs        = "cortex_docs"
 	// agentBuilderCompat is no longer a release flag. Keep publishing the key
 	// as enabled so installed desktop clients that still gate the AI creation
 	// entry on this config decision receive the permanently enabled behavior.
@@ -49,6 +50,7 @@ var frontendPublicFlags = []string{
 	ComposioMCPApps,
 	PluginsV1,
 	CortexCollections,
+	CortexDocs,
 }
 
 func BillingWorkspaceSubscriptionsEnabled(ctx context.Context, flags *featureflag.Service) bool {

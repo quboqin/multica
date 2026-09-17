@@ -902,5 +902,22 @@
     "surface_loading": "Loading {{name}}…",
     "surface_unavailable": "{{name}} could not load its interface. The installed version may not include it.",
     "surface_navigated": "{{name}} tried to replace its panel with a page loaded from elsewhere. It has been stopped and disconnected — tell your workspace admin."
+  },
+  "documents": {
+    "retry": "Retry loading",
+    "title": "Documents",
+    "new": "New document",
+    "save": "Save document",
+    "cancel": "Cancel",
+    "name": "Title",
+    "body": "Document body",
+    "empty": "No documents yet",
+    "open": "Open document",
+    "reload": "Discard draft and reload",
+    "more": "Load more",
+    "saved": "Saved",
+    "loading": "Loading…",
+    "unavailable": "Documents are not available in this environment.",
+    "invalid": "Invalid document response."
   }
 }

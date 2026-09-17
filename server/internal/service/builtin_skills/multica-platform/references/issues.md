@@ -403,3 +403,29 @@ multica issue create --title "Step 1" --parent <issue-id> --assignee <agent> --s
 multica issue create --title "Step 2" --parent <issue-id> --assignee <agent> --stage 2 --status backlog
 multica issue create --title "Step 3" --parent <issue-id> --assignee <agent> --stage 3 --status backlog
 ```
+
+## Documents (Cortex M2)
+
+With `FF_CORTEX_DOCS=true`, the issue API accepts `kind=doc` at creation.
+Omitting `kind` still creates a task. Kind cannot be changed after creation.
+Documents are workspace roots; parent, project and stage are not supported in this slice.
+They never enqueue agent runs, including assignment, mention and squad dispatch.
+
+Document title/body writes require a positive `expected_revision` on the individual
+issue update endpoint; missing conditions return 400 and stale revisions return 409.
+Batch updates containing documents are rejected. Keep the draft on failure; reload
+and explicitly reconcile before retrying. The body limit is 1 MiB of UTF-8 text.
+Task queries default to task; document table queries explicitly send `query.kind=doc`.
+The Web and Desktop entry is `/{workspaceSlug}/docs`; sidebar navigation is deferred.
+
+## Documents and the feature gate
+
+Issues with `kind=doc` are documents and never enter task scheduling. Creation
+accepts a 2 MiB JSON envelope (also for tasks); document creation/update accepts
+at most 1 MiB of decoded description, returning 413 when exceeded. Document
+content updates require `expected_revision`; stale revisions return 409.
+
+Turning off `cortex_docs` stops document writes and document Table queries;
+authorized GET/HEAD detail reads and `GET /api/issues?kind=doc` still work.
+This switch is not a content-hiding control. Keep a kind-aware backend after
+turning it off; an older binary can misinterpret documents as tasks.

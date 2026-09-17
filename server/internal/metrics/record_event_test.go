@@ -60,6 +60,11 @@ func TestCollectionEventsIncrementRegisteredMetricsWithoutPostHog(t *testing.T) 
 		event  analytics.Event
 	}{
 		{
+			name:   "document created",
+			metric: "multica_doc_created_total",
+			event:  analytics.Event{Name: analytics.EventDocCreated},
+		},
+		{
 			name:   "collection created",
 			metric: "multica_collection_created_total",
 			event:  analytics.CollectionCreated("user-1", "ws-1", "collection-1"),

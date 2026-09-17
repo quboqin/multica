@@ -17,7 +17,9 @@ describe("shared data-view dependency boundary", () => {
 
     for (const name of productionFiles) {
       const source = readFileSync(`${DATA_VIEW_DIR}/${name}`, "utf8");
-      expect(source, name).not.toMatch(/@multica\/core\/issues|\.\.\/issues/);
+      expect(source, name).not.toMatch(
+        /@multica\/core\/(?:issues|documents|collections)|\.\.\/(?:issues|documents|collections)/,
+      );
       expect(source, name).not.toMatch(
         /Issue(?:Table|Query|Store)|run-confirm/,
       );

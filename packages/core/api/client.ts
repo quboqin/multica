@@ -1093,10 +1093,10 @@ export class ApiClient {
    * an ApiError 404, so `issueIdentifierOptions` propagates it instead of
    * caching it as "no such issue".
    */
-  async getIssue(id: string, options?: { signal?: AbortSignal }): Promise<Issue> {
+  async getIssue(id: string, options?: { signal?: AbortSignal; workspaceSlug?: string }): Promise<Issue> {
     const raw = await this.fetch<unknown>(
       `/api/issues/${encodeURIComponent(id)}`,
-      options?.signal ? { signal: options.signal } : undefined,
+      options ? { signal: options.signal, headers: workspaceHeader(options.workspaceSlug) } : undefined,
     );
     const issue = parseWithFallback<Issue | null>(raw, IssueSchema, null, {
       endpoint: "GET /api/issues/:id",
@@ -1127,6 +1127,29 @@ export class ApiClient {
     });
     if (!issue) {
       throw new Error();
+    }
+    return issue;
+  }
+
+  async createDocument(title: string, description: string, workspaceSlug: string): Promise<Issue> {
+    const raw = await this.fetch<unknown>("/api/issues", {
+      method: "POST", headers: workspaceHeader(workspaceSlug),
+      body: JSON.stringify({ kind: "doc", title, description }),
+    });
+    const issue = parseWithFallback<Issue | null>(raw, CreateIssueResponseSchema, null, { endpoint: "POST /api/issues" });
+    if (!issue || issue.kind !== "doc" || !issue.id || !issue.revision || issue.revision < 1) {
+      throw new Error("Document creation returned an invalid response; reload before trying again");
+    }
+    return issue;
+  }
+
+  async updateDocument(id: string, data: { title: string; description: string; expected_revision: number }, workspaceSlug: string): Promise<Issue> {
+    const raw = await this.fetch<unknown>(`/api/issues/${encodeURIComponent(id)}`, {
+      method: "PUT", headers: workspaceHeader(workspaceSlug), body: JSON.stringify(data),
+    });
+    const issue = parseWithFallback<Issue | null>(raw, IssueSchema, null, { endpoint: "PUT /api/issues/:id" });
+    if (!issue || issue.kind !== "doc" || issue.id !== id || !issue.revision || issue.revision < data.expected_revision) {
+      throw new Error("Document save returned an invalid response");
     }
     return issue;
   }

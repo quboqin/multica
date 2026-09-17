@@ -60,6 +60,7 @@ func NewIssueService(q *db.Queries, tx TxStarter, bus *events.Bus, ac analytics.
 // to IssueService.Create. The handler owns the parsing step that turns its
 // request payload into this struct; the service stays transport-agnostic.
 type IssueCreateParams struct {
+	Kind          string
 	WorkspaceID   pgtype.UUID
 	Title         string
 	Description   pgtype.Text
@@ -212,6 +213,12 @@ type IssueCreateResult struct {
 // Caller-owned validation is limited to transport-shaped checks: title
 // required, RFC3339 date format, assignee pair sanity.
 func (s *IssueService) Create(ctx context.Context, p IssueCreateParams, opts IssueCreateOpts) (IssueCreateResult, error) {
+	if p.Kind == "" {
+		p.Kind = "task"
+	}
+	if p.Kind != "task" && p.Kind != "doc" {
+		return IssueCreateResult{}, fmt.Errorf("invalid issue kind")
+	}
 	issueCountPolicy := ResolveIssueCountPolicy(ctx, s.Entitlements, p.WorkspaceID)
 	tx, err := s.TxStarter.Begin(ctx)
 	if err != nil {
@@ -278,7 +285,7 @@ func (s *IssueService) Create(ctx context.Context, p IssueCreateParams, opts Iss
 			ID:          p.ParentIssueID,
 			WorkspaceID: p.WorkspaceID,
 		})
-		if err != nil || !parent.ID.Valid {
+		if err != nil || !parent.ID.Valid || parent.Kind == "doc" {
 			return IssueCreateResult{}, ErrParentIssueNotFound
 		}
 		// Back-fill project from parent when the caller did not pin
@@ -306,7 +313,7 @@ func (s *IssueService) Create(ctx context.Context, p IssueCreateParams, opts Iss
 		return IssueCreateResult{}, err
 	}
 
-	duplicate, found, err := issueguard.LockAndFindActiveDuplicate(ctx, qtx, p.WorkspaceID, projectID, p.ParentIssueID, p.Title, p.AllowDuplicate)
+	duplicate, found, err := issueguard.LockAndFindActiveDuplicate(ctx, qtx, p.WorkspaceID, projectID, p.ParentIssueID, p.Title, p.AllowDuplicate, p.Kind)
 	if err != nil {
 		return IssueCreateResult{}, fmt.Errorf("duplicate guard: %w", err)
 	}
@@ -340,6 +347,7 @@ func (s *IssueService) Create(ctx context.Context, p IssueCreateParams, opts Iss
 		issue, err = qtx.CreateIssueWithOrigin(ctx, db.CreateIssueWithOriginParams{
 			ID:            dbid.NewV7(),
 			WorkspaceID:   p.WorkspaceID,
+			Kind:          pgtype.Text{String: p.Kind, Valid: true},
 			Title:         p.Title,
 			Description:   p.Description,
 			Status:        p.Status,
@@ -362,6 +370,7 @@ func (s *IssueService) Create(ctx context.Context, p IssueCreateParams, opts Iss
 		issue, err = qtx.CreateIssue(ctx, db.CreateIssueParams{
 			ID:            dbid.NewV7(),
 			WorkspaceID:   p.WorkspaceID,
+			Kind:          pgtype.Text{String: p.Kind, Valid: true},
 			Title:         p.Title,
 			Description:   p.Description,
 			Status:        p.Status,
@@ -600,8 +609,13 @@ func (s *IssueService) publishIssueCreated(issue db.Issue, attachments []db.Atta
 		// full IssueResponse must pass BroadcastPayload.
 		payload = map[string]any{"issue_id": util.UUIDToString(issue.ID)}
 	}
+	eventType := protocol.EventIssueCreated
+	if issue.Kind == "doc" {
+		eventType = "doc:created"
+		payload = map[string]any{"issue_id": util.UUIDToString(issue.ID), "kind": "doc", "revision": issue.Revision}
+	}
 	s.Bus.Publish(events.Event{
-		Type:        protocol.EventIssueCreated,
+		Type:        eventType,
 		WorkspaceID: util.UUIDToString(issue.WorkspaceID),
 		ActorType:   creatorType,
 		ActorID:     actorID,
@@ -677,7 +691,7 @@ func (s *IssueService) publishIssueAttachmentsChanged(issue db.Issue, actorID pg
 }
 
 func (s *IssueService) captureCreatedAnalytics(issue db.Issue, creatorType, actorID string, opts IssueCreateOpts) {
-	if s.Analytics == nil {
+	if s.Analytics == nil && s.Metrics == nil {
 		return
 	}
 	source, taskID, autopilotRunID := classifyOrigin(issue, opts)
@@ -685,7 +699,7 @@ func (s *IssueService) captureCreatedAnalytics(issue db.Issue, creatorType, acto
 	if creatorType == "agent" {
 		analyticsActorID = "agent:" + actorID
 	}
-	obsmetrics.RecordEvent(s.Analytics, s.Metrics, analytics.IssueCreated(
+	event := analytics.IssueCreated(
 		analyticsActorID,
 		util.UUIDToString(issue.WorkspaceID),
 		util.UUIDToString(issue.ID),
@@ -694,7 +708,11 @@ func (s *IssueService) captureCreatedAnalytics(issue db.Issue, creatorType, acto
 		autopilotRunID,
 		source,
 		opts.Platform,
-	))
+	)
+	if issue.Kind == "doc" {
+		event.Name = analytics.EventDocCreated
+	}
+	obsmetrics.RecordEvent(s.Analytics, s.Metrics, event)
 }
 
 // classifyOrigin maps the issue's origin_type / origin_id columns into the
@@ -775,6 +793,9 @@ func (s *IssueService) maybeEnqueueOnAssign(ctx context.Context, issue db.Issue,
 // Mirrors handler.shouldEnqueueAgentTask; kept here to make the service
 // self-contained, since both code paths must move together.
 func (s *IssueService) shouldEnqueueAgentTaskWithQueries(ctx context.Context, q *db.Queries, issue db.Issue) bool {
+	if issue.Kind == "doc" {
+		return false
+	}
 	// Resolved through q, not s.Queries: this runs inside the create
 	// transaction and must see the same snapshot as the rest of it. (MUL-6243)
 	if issuestatus.Effective(ctx, q, issue.WorkspaceID, issue.Status) == "backlog" {
@@ -810,6 +831,9 @@ func agentAssigneeVerdict(ctx context.Context, lookup RuntimeLookup, issue db.Is
 }
 
 func (s *IssueService) shouldEnqueueSquadLeaderOnAssign(ctx context.Context, issue db.Issue) bool {
+	if issue.Kind == "doc" {
+		return false
+	}
 	if issuestatus.Effective(ctx, s.Queries, issue.WorkspaceID, issue.Status) == "backlog" {
 		return false
 	}

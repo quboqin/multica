@@ -25,6 +25,7 @@ import (
 	"github.com/multica-ai/multica/server/internal/dbreader"
 	"github.com/multica-ai/multica/server/internal/entitlement"
 	"github.com/multica-ai/multica/server/internal/events"
+	"github.com/multica-ai/multica/server/internal/featureflags"
 	"github.com/multica-ai/multica/server/internal/integrations/channel/engine"
 	composio "github.com/multica-ai/multica/server/internal/integrations/composio"
 	"github.com/multica-ai/multica/server/internal/integrations/dingtalk"
@@ -722,6 +723,14 @@ func (h *Handler) channelDeliversFiles(channelType string) bool {
 
 // publish sends a domain event through the event bus.
 func (h *Handler) publish(eventType, workspaceID, actorType, actorID string, payload any) {
+	if data, ok := payload.(map[string]any); ok {
+		if issue, ok := data["issue"].(IssueResponse); ok && issue.Kind == "doc" && strings.HasPrefix(eventType, "issue:") {
+			eventType = "doc:" + strings.TrimPrefix(eventType, "issue:")
+			payload = map[string]any{"issue_id": issue.ID, "kind": "doc", "revision": issue.Revision}
+		} else if data["kind"] == "doc" && strings.HasPrefix(eventType, "issue:") {
+			eventType = "doc:" + strings.TrimPrefix(eventType, "issue:")
+		}
+	}
 	h.Bus.Publish(events.Event{
 		Type:        eventType,
 		WorkspaceID: workspaceID,
@@ -1034,7 +1043,7 @@ func (h *Handler) loadIssueForUser(w http.ResponseWriter, r *http.Request, issue
 	// silently returns false for non-identifier strings, falling through to
 	// the UUID path below.
 	if issue, ok := h.resolveIssueByIdentifier(r.Context(), issueID, workspaceID); ok {
-		return issue, true
+		return h.allowDocumentRequest(w, r, issue)
 	}
 
 	issueUUID, err := util.ParseUUID(issueID)
@@ -1056,6 +1065,23 @@ func (h *Handler) loadIssueForUser(w http.ResponseWriter, r *http.Request, issue
 	if err != nil {
 		writeError(w, http.StatusNotFound, "issue not found")
 		return db.Issue{}, false
+	}
+	return h.allowDocumentRequest(w, r, issue)
+}
+
+// allowDocumentRequest applies the document feature gate to every resource-loaded write.
+func (h *Handler) allowDocumentRequest(w http.ResponseWriter, r *http.Request, issue db.Issue) (db.Issue, bool) {
+	if issue.Kind == "doc" && r.Method != http.MethodGet && r.Method != http.MethodHead {
+		if !h.FeatureFlags.IsEnabled(r.Context(), featureflags.CortexDocs, false) {
+			writeError(w, http.StatusNotFound, "documents are not enabled")
+			return db.Issue{}, false
+		}
+		for _, action := range []string{"/move", "/run", "/rerun", "/duplicate"} {
+			if strings.HasSuffix(r.URL.Path, action) {
+				writeError(w, http.StatusBadRequest, "this action is not supported for documents")
+				return db.Issue{}, false
+			}
+		}
 	}
 	return issue, true
 }

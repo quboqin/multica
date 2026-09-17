@@ -1194,6 +1194,7 @@ export const CommentSubIssueTaskResponseSchema = z.object({
 }).loose();
 
 export const IssueSchema = z.object({
+  kind: z.string().default("task"),
   id: z.string(),
   workspace_id: z.string(),
   number: z.number(),
