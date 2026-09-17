@@ -98,6 +98,7 @@ var businessMetricLabels = map[string][]string{
 	"multica_cloudruntime_request_duration_seconds":    {labelOp},
 	"multica_feedback_submitted_total":                 {labelKind, labelPlatform},
 	"multica_contact_sales_submitted_total":            {labelSource},
+	"multica_doc_created_total":                        {},
 	"multica_collection_created_total":                 {},
 	"multica_record_created_total":                     {},
 	"multica_record_updated_total":                     {},

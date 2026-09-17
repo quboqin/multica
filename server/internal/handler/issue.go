@@ -21,6 +21,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/multica-ai/multica/server/internal/channelmedia"
 	"github.com/multica-ai/multica/server/internal/dispatch"
+	"github.com/multica-ai/multica/server/internal/featureflags"
 	"github.com/multica-ai/multica/server/internal/issueguard"
 	"github.com/multica-ai/multica/server/internal/issuestatus"
 	"github.com/multica-ai/multica/server/internal/logger"
@@ -35,6 +36,7 @@ import (
 
 // IssueResponse is the JSON response for an issue.
 type IssueResponse struct {
+	Kind        string  `json:"kind"`
 	ID          string  `json:"id"`
 	WorkspaceID string  `json:"workspace_id"`
 	Number      int32   `json:"number"`
@@ -321,6 +323,7 @@ func issueToResponse(i db.Issue, issuePrefix string) IssueResponse {
 		statusCategory = i.Status
 	}
 	return IssueResponse{
+		Kind:           i.Kind,
 		ID:             uuidToString(i.ID),
 		WorkspaceID:    uuidToString(i.WorkspaceID),
 		Number:         i.Number,
@@ -358,6 +361,7 @@ func issueListRowToResponse(i db.ListIssuesRow, issuePrefix string) IssueRespons
 	}
 	identifier := issuePrefix + "-" + strconv.Itoa(int(i.Number))
 	return IssueResponse{
+		Kind:           i.Kind,
 		ID:             uuidToString(i.ID),
 		WorkspaceID:    uuidToString(i.WorkspaceID),
 		Number:         i.Number,
@@ -449,6 +453,7 @@ func openIssueRowToResponse(i db.ListOpenIssuesRow, issuePrefix string) IssueRes
 		CreatedAt:      timestampToString(i.CreatedAt),
 		UpdatedAt:      timestampToString(i.UpdatedAt),
 		Revision:       i.Revision,
+		Kind:           i.Kind,
 		LastActivityAt: timestampToNanoPtr(i.LastActivityAt),
 		Metadata:       parseIssueMetadata(i.Metadata),
 		Properties:     parseIssueProperties(i.Properties),
@@ -719,7 +724,7 @@ func buildSearchQuery(phrase string, terms []string, queryNum int, hasNum bool, 
 		)
 	}
 
-	issueWhere := "i.workspace_id = " + wsParam
+	issueWhere := "i.workspace_id = " + wsParam + " AND i.kind = 'task'"
 	if terminalStatusesParam != "" {
 		issueWhere += fmt.Sprintf(" AND NOT (i.status = ANY(%s::text[]))", terminalStatusesParam)
 	}
@@ -1112,6 +1117,15 @@ func (h *Handler) QueryIssues(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) ListIssues(w http.ResponseWriter, r *http.Request) {
+	kind := r.URL.Query().Get("kind")
+	if kind == "" {
+		kind = "task"
+	}
+	if kind != "task" && kind != "doc" {
+		writeError(w, http.StatusBadRequest, "kind must be task or doc")
+		return
+	}
+
 	ctx := r.Context()
 
 	workspaceID := h.resolveWorkspaceID(r)
@@ -1209,6 +1223,7 @@ func (h *Handler) ListIssues(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		issues, err := h.Queries.ListOpenIssues(ctx, db.ListOpenIssuesParams{
+			Kind:               pgtype.Text{String: kind, Valid: true},
 			WorkspaceID:        wsUUID,
 			TerminalStatusKeys: terminalStatusKeys,
 			Priority:           priorityFilter,
@@ -1368,7 +1383,7 @@ func (h *Handler) ListIssues(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Build dynamic SQL — same approach as ListGroupedIssues.
-	where := []string{"i.workspace_id = $1"}
+	where := []string{"i.workspace_id = $1", "i.kind = '" + kind + "'"}
 	args := []any{wsUUID}
 	addArg := func(v any) string {
 		args = append(args, v)
@@ -1575,7 +1590,7 @@ func (h *Handler) ListIssues(w http.ResponseWriter, r *http.Request) {
 	query := fmt.Sprintf(`SELECT i.id, i.workspace_id, i.title, i.description, i.status, i.priority,
        i.assignee_type, i.assignee_id, i.creator_type, i.creator_id,
        i.parent_issue_id, i.position, i.start_date, i.due_date, i.created_at, i.updated_at, i.last_activity_at, i.number, i.project_id, i.metadata, i.stage, i.properties,
-	   i.revision
+	   i.revision, i.kind
 FROM issue i
 WHERE %s
 ORDER BY %s
@@ -1616,6 +1631,7 @@ LIMIT %s OFFSET %s`, whereSql, orderBy, limitRef, offsetRef)
 			&row.Stage,
 			&row.Properties,
 			&row.Revision,
+			&row.Kind,
 		); err != nil {
 			slog.Warn("ListIssues scan failed", "error", err)
 			writeError(w, http.StatusInternalServerError, "failed to list issues")
@@ -1856,7 +1872,7 @@ func (h *Handler) ListGroupedIssues(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	where := []string{"i.workspace_id = $1"}
+	where := []string{"i.workspace_id = $1", "i.kind = 'task'"}
 	args := []any{wsUUID}
 	addArg := func(v any) string {
 		args = append(args, v)
@@ -2845,6 +2861,7 @@ func readRuntimeCLIVersion(metadata []byte) string {
 }
 
 type CreateIssueRequest struct {
+	Kind          string   `json:"kind"`
 	Title         string   `json:"title"`
 	Description   *string  `json:"description"`
 	Status        string   `json:"status"`
@@ -2880,6 +2897,23 @@ func (h *Handler) CreateIssue(w http.ResponseWriter, r *http.Request) {
 	var req CreateIssueRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	if req.Kind != "" && req.Kind != "task" && req.Kind != "doc" {
+		writeError(w, http.StatusBadRequest, "kind must be task or doc")
+		return
+	}
+	if req.Kind == "doc" && !h.FeatureFlags.IsEnabled(r.Context(), featureflags.CortexDocs, false) {
+		writeError(w, http.StatusNotFound, "documents are not enabled")
+		return
+	}
+	if req.Kind == "doc" && req.Description != nil && len(*req.Description) > 1024*1024 {
+		writeError(w, http.StatusRequestEntityTooLarge, "document body exceeds 1 MiB")
+		return
+	}
+	if req.Kind == "doc" && (req.ParentIssueID != nil || req.ProjectID != nil || req.Stage != nil) {
+		writeError(w, http.StatusBadRequest, "documents must be workspace roots")
 		return
 	}
 
@@ -3092,6 +3126,7 @@ func (h *Handler) CreateIssue(w http.ResponseWriter, r *http.Request) {
 	}
 
 	res, err := h.IssueService.Create(r.Context(), service.IssueCreateParams{
+		Kind:           req.Kind,
 		WorkspaceID:    wsUUID,
 		Title:          req.Title,
 		Description:    ptrToText(req.Description),
@@ -3172,7 +3207,11 @@ func (h *Handler) CreateIssue(w http.ResponseWriter, r *http.Request) {
 	}
 
 	issue := res.Issue
-	slog.Info("issue created", append(logger.RequestAttrs(r), "issue_id", uuidToString(issue.ID), "title", issue.Title, "status", issue.Status, "workspace_id", workspaceID)...)
+	if issue.Kind == "doc" {
+		slog.Info("document created", append(logger.RequestAttrs(r), "issue_id", uuidToString(issue.ID), "kind", issue.Kind, "revision", issue.Revision)...)
+	} else {
+		slog.Info("issue created", append(logger.RequestAttrs(r), "issue_id", uuidToString(issue.ID), "title", issue.Title, "status", issue.Status, "workspace_id", workspaceID)...)
+	}
 
 	resp := issueToResponse(issue, prefix)
 	fillCreated(&resp)
@@ -3303,6 +3342,7 @@ func refreshUntouchedNullableIssueParams(params *db.UpdateIssueParams, current d
 }
 
 var errIssueFieldConflict = errors.New("issue text field conflict")
+var errDocumentBodyTooLarge = errors.New("document body exceeds 1 MiB")
 
 func (h *Handler) updateIssueAtomically(ctx context.Context, workspaceID pgtype.UUID, params db.UpdateIssueParams, rawFields map[string]json.RawMessage, titleBase, descriptionBase *string, attachmentIDs []pgtype.UUID, statusKey string) (db.Issue, db.Issue, bool, error) {
 	if h.TxStarter == nil {
@@ -3374,6 +3414,9 @@ func (h *Handler) updateIssueAtomically(ctx context.Context, workspaceID pgtype.
 			Valid:  true,
 		}
 	}
+	if current.Kind == "doc" && params.Description.Valid && len(params.Description.String) > 1024*1024 {
+		return db.Issue{}, current, false, errDocumentBodyTooLarge
+	}
 	refreshUntouchedNullableIssueParams(&params, current, rawFields)
 
 	issue, err := qtx.UpdateIssue(ctx, params)
@@ -3434,6 +3477,32 @@ func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
 	// Track which fields were explicitly present in JSON (even if null)
 	var rawFields map[string]json.RawMessage
 	json.Unmarshal(bodyBytes, &rawFields)
+	if _, changingKind := rawFields["kind"]; changingKind {
+		writeError(w, http.StatusBadRequest, "kind is immutable")
+		return
+	}
+	if prevIssue.Kind == "doc" {
+		if req.Title != nil && strings.TrimSpace(*req.Title) == "" {
+			writeError(w, http.StatusBadRequest, "document title is required")
+			return
+		}
+		if !h.FeatureFlags.IsEnabled(r.Context(), featureflags.CortexDocs, false) {
+			writeError(w, http.StatusNotFound, "documents are not enabled")
+			return
+		}
+		if len(bodyBytes) > 2*1024*1024 || (req.Description != nil && len(*req.Description) > 1024*1024) {
+			writeError(w, http.StatusRequestEntityTooLarge, "document body exceeds limit")
+			return
+		}
+		if (req.Title != nil || req.Description != nil) && req.ExpectedRevision == nil {
+			writeError(w, http.StatusBadRequest, "document writes require expected_revision")
+			return
+		}
+		if req.ParentIssueID != nil || req.ProjectID != nil || req.Stage != nil {
+			writeError(w, http.StatusBadRequest, "documents must be workspace roots")
+			return
+		}
+	}
 
 	// Pre-fill nullable fields (bare sqlc.narg) with current values
 	params := db.UpdateIssueParams{
@@ -3543,10 +3612,10 @@ func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			// Validate parent exists in the same workspace.
-			if _, err := h.Queries.GetIssueInWorkspace(r.Context(), db.GetIssueInWorkspaceParams{
+			if parent, err := h.Queries.GetIssueInWorkspace(r.Context(), db.GetIssueInWorkspaceParams{
 				ID:          newParentID,
 				WorkspaceID: prevIssue.WorkspaceID,
-			}); err != nil {
+			}); err != nil || parent.Kind == "doc" {
 				writeError(w, http.StatusBadRequest, "parent issue not found in this workspace")
 				return
 			}
@@ -3646,6 +3715,10 @@ func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
 	}
 	if err != nil {
 		if writeIssueStatusRaceError(w, err) {
+			return
+		}
+		if errors.Is(err, errDocumentBodyTooLarge) {
+			writeError(w, http.StatusRequestEntityTooLarge, err.Error())
 			return
 		}
 		if errors.Is(err, errIssueFieldConflict) {
@@ -3989,7 +4062,7 @@ func (h *Handler) DeleteIssue(w http.ResponseWriter, r *http.Request) {
 	// identifier-style payload ("MUL-123") would leave stale entries on
 	// other clients after an identifier-path delete.
 	resolvedID := uuidToString(issue.ID)
-	h.publish(protocol.EventIssueDeleted, uuidToString(issue.WorkspaceID), actorType, actorID, map[string]any{"issue_id": resolvedID})
+	h.publish(protocol.EventIssueDeleted, uuidToString(issue.WorkspaceID), actorType, actorID, map[string]any{"issue_id": resolvedID, "kind": issue.Kind})
 	h.publishDetachedChildren(r.Context(), deleteResult.DetachedChildren, actorType, actorID)
 	slog.Info("issue deleted", append(logger.RequestAttrs(r), "issue_id", resolvedID, "workspace_id", uuidToString(issue.WorkspaceID))...)
 	w.WriteHeader(http.StatusNoContent)
@@ -4206,6 +4279,18 @@ func (h *Handler) BatchUpdateIssues(w http.ResponseWriter, r *http.Request) {
 		batchProjectID = projectUUID
 	}
 
+	for _, id := range req.IssueIDs {
+		parsed, err := util.ParseUUID(id)
+		if err != nil {
+			continue
+		}
+		issue, err := h.Queries.GetIssueInWorkspace(r.Context(), db.GetIssueInWorkspaceParams{ID: parsed, WorkspaceID: wsUUID})
+		if err == nil && issue.Kind == "doc" {
+			writeError(w, http.StatusBadRequest, "documents require individual conditional updates")
+			return
+		}
+	}
+
 	updated := 0
 	// One Resolver for the whole batch — a per-issue filler would query the
 	// catalog once per custom-status row. (MUL-6243)
@@ -4305,10 +4390,10 @@ func (h *Handler) BatchUpdateIssues(w http.ResponseWriter, r *http.Request) {
 					continue
 				}
 				// Validate parent exists in the same workspace.
-				if _, err := h.Queries.GetIssueInWorkspace(r.Context(), db.GetIssueInWorkspaceParams{
+				if parent, err := h.Queries.GetIssueInWorkspace(r.Context(), db.GetIssueInWorkspaceParams{
 					ID:          newParentID,
 					WorkspaceID: prevIssue.WorkspaceID,
-				}); err != nil {
+				}); err != nil || parent.Kind == "doc" {
 					continue
 				}
 				// Cycle detection: walk up from the new parent to ensure we don't reach this issue.

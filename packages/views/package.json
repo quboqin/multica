@@ -9,6 +9,7 @@
     "test": "vitest run"
   },
   "exports": {
+    "./documents": "./documents/index.ts",
     "./data-view": "./data-view/index.ts",
     "./collections": "./collections/index.ts",
     "./navigation": "./navigation/index.ts",

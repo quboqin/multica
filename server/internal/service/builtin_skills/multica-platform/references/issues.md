@@ -403,3 +403,17 @@ multica issue create --title "Step 1" --parent <issue-id> --assignee <agent> --s
 multica issue create --title "Step 2" --parent <issue-id> --assignee <agent> --stage 2 --status backlog
 multica issue create --title "Step 3" --parent <issue-id> --assignee <agent> --stage 3 --status backlog
 ```
+
+## Documents (Cortex M2)
+
+With `FF_CORTEX_DOCS=true`, the issue API accepts `kind=doc` at creation.
+Omitting `kind` still creates a task. Kind cannot be changed after creation.
+Documents are workspace roots; parent, project and stage are not supported in this slice.
+They never enqueue agent runs, including assignment, mention and squad dispatch.
+
+Document title/body writes require a positive `expected_revision` on the individual
+issue update endpoint; missing conditions return 400 and stale revisions return 409.
+Batch updates containing documents are rejected. Keep the draft on failure; reload
+and explicitly reconcile before retrying. The body limit is 1 MiB of UTF-8 text.
+Task queries default to task; document table queries explicitly send `query.kind=doc`.
+The Web and Desktop entry is `/{workspaceSlug}/docs`; sidebar navigation is deferred.

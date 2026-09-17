@@ -1,0 +1,1 @@
+DROP INDEX CONCURRENTLY IF EXISTS issue_doc_page_idx;

@@ -64,6 +64,7 @@ type businessEventMetrics struct {
 	cloudRuntimeRequestDurationSecs *prometheus.HistogramVec
 	feedbackSubmitted               *prometheus.CounterVec
 	contactSalesSubmitted           *prometheus.CounterVec
+	docCreated                      *prometheus.CounterVec
 	collectionCreated               *prometheus.CounterVec
 	recordCreated                   *prometheus.CounterVec
 	recordUpdated                   *prometheus.CounterVec
@@ -211,6 +212,7 @@ func newBusinessEventMetrics() *businessEventMetrics {
 			Name: "multica_contact_sales_submitted_total",
 			Help: "Total contact-sales inquiries submitted.",
 		}, metricLabels("multica_contact_sales_submitted_total")),
+		docCreated: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "multica_doc_created_total", Help: "Total documents committed successfully."}, metricLabels("multica_doc_created_total")),
 		collectionCreated: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: "multica_collection_created_total",
 			Help: "Total collections committed successfully.",
@@ -269,6 +271,7 @@ func (e *businessEventMetrics) collectors() []prometheus.Collector {
 		e.cloudRuntimeRequestDurationSecs,
 		e.feedbackSubmitted,
 		e.contactSalesSubmitted,
+		e.docCreated,
 		e.collectionCreated,
 		e.recordCreated,
 		e.recordUpdated,
@@ -392,6 +395,8 @@ func (m *BusinessMetrics) IncForEvent(ev analytics.Event) {
 		).Inc()
 	case analytics.EventContactSalesSubmitted:
 		m.events.contactSalesSubmitted.WithLabelValues(NormalizeContactSalesSource(stringProp(ev.Properties, "form_source"))).Inc()
+	case analytics.EventDocCreated:
+		m.events.docCreated.WithLabelValues().Inc()
 	case analytics.EventCollectionCreated:
 		m.events.collectionCreated.WithLabelValues().Inc()
 	case analytics.EventRecordCreated:

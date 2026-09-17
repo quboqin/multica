@@ -50,12 +50,17 @@ func LockAndFindActiveDuplicate(
 	parentIssueID pgtype.UUID,
 	title string,
 	allowDuplicate bool,
+	kinds ...string,
 ) (db.Issue, bool, error) {
+	kind := "task"
+	if len(kinds) > 0 && kinds[0] != "" {
+		kind = kinds[0]
+	}
 	normalizedTitle := NormalizeTitle(title)
 	if normalizedTitle == "" {
 		return db.Issue{}, false, nil
 	}
-	if err := q.LockIssueDuplicateKey(ctx, lockKey(workspaceID, projectID, parentIssueID, normalizedTitle)); err != nil {
+	if err := q.LockIssueDuplicateKey(ctx, lockKey(workspaceID, projectID, parentIssueID, normalizedTitle)+"|"+kind); err != nil {
 		return db.Issue{}, false, err
 	}
 	if allowDuplicate {
@@ -71,6 +76,7 @@ func LockAndFindActiveDuplicate(
 
 	duplicate, err := q.FindActiveDuplicateIssue(ctx, db.FindActiveDuplicateIssueParams{
 		WorkspaceID:        workspaceID,
+		Kind:               pgtype.Text{String: kind, Valid: true},
 		TerminalStatusKeys: terminalStatusKeys,
 		ProjectID:          projectID,
 		ParentIssueID:      parentIssueID,
