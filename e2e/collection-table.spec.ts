@@ -164,7 +164,10 @@ async function openCollectionDetail(
   ).toBeVisible();
   for (const field of ["Title", "Note", "Quantity", "Checked"]) {
     await expect(
-      page.getByRole("columnheader", { name: field, exact: true }),
+      // Resize controls contribute to the header's accessible name.
+      page.getByRole("columnheader").filter({
+        hasText: new RegExp(`^${field}$`),
+      }),
     ).toBeVisible();
   }
 }
