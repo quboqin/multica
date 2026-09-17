@@ -10,7 +10,16 @@ test("document creation, title/body save and refresh use the shared table", asyn
   try {
     const title = `Document ${Date.now()}`;
     const task = await api.createIssue(`Task ${Date.now()}`);
+    const configResponse = page.waitForResponse(
+      (response) => new URL(response.url()).pathname === "/api/config",
+    );
     const slug = await loginAsDefault(page);
+    const config = await configResponse;
+    expect(config.status()).toBe(200);
+    expect(
+      (await config.json()).feature_flags?.cortex_docs,
+      "The browser's backend must enable FF_CORTEX_DOCS=true. Run pnpm test:e2e:documents; check local env overrides if this fails.",
+    ).toBe(true);
     await page.goto(`/${slug}/docs`);
     await page
       .getByRole("button", { name: "New document", exact: true })
