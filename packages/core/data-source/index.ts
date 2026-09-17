@@ -1,3 +1,4 @@
+export { canChangeDataSourceField } from "./fields";
 export type {
   DataSource,
   DataSourceActionResult,

@@ -52,6 +52,7 @@ import { useRequiredWorkspaceSlug } from "@multica/core/paths";
 import { Button } from "@multica/ui/components/ui/button";
 import { Input } from "@multica/ui/components/ui/input";
 import {
+  createDataViewFieldColumn,
   DataViewCellEditor,
   TableView,
   dataViewCellEditorIdentity,
@@ -676,10 +677,10 @@ function CollectionTableContent({
   const fields = source.fields;
   const columns = useMemo<ColumnDef<CollectionTableRow>[]>(
     () =>
-      fields.map((field) => ({
-        id: field.id,
-        header: field.label,
-        cell: CollectionRecordCell,
+      fields.map((field) => createDataViewFieldColumn<CollectionTableRow, CollectionRecord>({
+        field,
+        sourceRow: (row) => row.kind === "record" ? row.sourceRow : null,
+        presentation: { cell: CollectionRecordCell },
       })),
     [fields],
   );

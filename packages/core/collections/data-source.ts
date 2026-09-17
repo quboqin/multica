@@ -1,3 +1,4 @@
+import { canChangeDataSourceField } from "../data-source";
 import type {
   DataSource,
   DataSourceCellCommand,
@@ -73,6 +74,7 @@ export function createCollectionRecordDataSource(options: {
     kind: "text",
     value: (record) => record.title,
     sortable: false,
+    filterable: false,
     groupable: false,
     canSet: () => writable,
     canClear: () => false,
@@ -86,6 +88,7 @@ export function createCollectionRecordDataSource(options: {
         kind: fieldKind(field.type),
         value: (record) => record.fields[field.id],
         sortable: false,
+        filterable: false,
         groupable: false,
         canSet: () => writable && fieldKind(field.type) !== "readonly",
         canClear: () => writable && fieldKind(field.type) !== "readonly",
@@ -121,8 +124,8 @@ export function createCollectionRecordDataSource(options: {
         !writable ||
         !options.execute ||
         !field ||
-        !isValidFieldChange(field, change) ||
-        (fieldId === "title" && change.op !== "set")
+        !canChangeDataSourceField(writable, field, row, change) ||
+        !isValidFieldChange(field, change)
       ) {
         return { status: "failed", error: new Error("This field is read-only") };
       }

@@ -1,3 +1,4 @@
+import { canChangeDataSourceField } from "../data-source";
 import { api } from "../api";
 import type {
   DataSource,
@@ -16,7 +17,7 @@ import type {
   IssueTableRowsRequest,
   UpdateIssueRequest,
 } from "../types";
-import { hasUnknownActorRef } from "../types";
+import { hasUnknownActorRef, isFilterablePropertyType } from "../types";
 import {
   assertWorkspaceRequestContext,
   type WorkspaceRequestContext,
@@ -118,6 +119,16 @@ const SORTABLE_SYSTEM_FIELDS = new Set([
   "created_at",
   "updated_at",
 ]);
+const FILTERABLE_SYSTEM_FIELDS = new Set([
+  "status",
+  "priority",
+  "assignee",
+  "labels",
+  "project",
+  "creator",
+  "created_at",
+  "updated_at",
+]);
 const GROUPABLE_SYSTEM_FIELDS = new Set([
   "status",
   "assignee",
@@ -188,6 +199,7 @@ export function createIssueTableFields(
       kind: SYSTEM_FIELD_KINDS[id] ?? "readonly",
       value,
       sortable: SORTABLE_SYSTEM_FIELDS.has(id),
+      filterable: FILTERABLE_SYSTEM_FIELDS.has(id),
       groupable: GROUPABLE_SYSTEM_FIELDS.has(id),
       canSet: () => writable && WRITABLE_SYSTEM_FIELDS.has(id),
       canClear: (row) => {
@@ -212,6 +224,7 @@ export function createIssueTableFields(
         "actor",
         "multi_actor",
       ].includes(property.type),
+      filterable: isFilterablePropertyType(property.type),
       groupable: ["select", "checkbox"].includes(property.type),
       canSet: (row) =>
         writable &&
@@ -382,10 +395,9 @@ export function createIssueTableDataSource(
         if (!options.execute) return failed("This issue data source is read-only");
         const field = fields.find((candidate) => candidate.id === command.fieldId);
         if (!field) return failed(`Unknown issue table field: ${command.fieldId}`);
-        const allowed =
-          command.change.op === "clear"
-            ? field.canClear(command.row)
-            : field.canSet(command.row);
+        const allowed = canChangeDataSourceField(
+          writable, field, command.row, command.change,
+        );
         if (!allowed) return failed("This issue table field is read-only");
         if (command.fieldId.startsWith("property:")) {
           const propertyId = command.fieldId.slice("property:".length);
