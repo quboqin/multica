@@ -826,6 +826,12 @@ test.describe("T2 collection shared TableView", () => {
       op: "set",
       value: "browser stale value",
     });
+    // A successful Save releases the frozen editor rows. The shared controller
+    // trims tail cursors when the first page refreshes, so load the tail again
+    // before checking its persisted value in the UI.
+    await settlePage(page);
+    await scrollTableToBottom(page);
+    await loadMore.click();
     const finalTailRow = await rowByTitle(page, tail.title);
     await expect(finalTailRow.getByRole("textbox", { name: "Note" })).toHaveValue(
       "browser stale value",
