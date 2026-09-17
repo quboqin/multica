@@ -417,3 +417,15 @@ Batch updates containing documents are rejected. Keep the draft on failure; relo
 and explicitly reconcile before retrying. The body limit is 1 MiB of UTF-8 text.
 Task queries default to task; document table queries explicitly send `query.kind=doc`.
 The Web and Desktop entry is `/{workspaceSlug}/docs`; sidebar navigation is deferred.
+
+## Documents and the feature gate
+
+Issues with `kind=doc` are documents and never enter task scheduling. Creation
+accepts a 2 MiB JSON envelope (also for tasks); document creation/update accepts
+at most 1 MiB of decoded description, returning 413 when exceeded. Document
+content updates require `expected_revision`; stale revisions return 409.
+
+Turning off `cortex_docs` stops document writes and document Table queries;
+authorized GET/HEAD detail reads and `GET /api/issues?kind=doc` still work.
+This switch is not a content-hiding control. Keep a kind-aware backend after
+turning it off; an older binary can misinterpret documents as tasks.

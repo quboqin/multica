@@ -2893,9 +2893,31 @@ func duplicateIssueMessage(issue IssueResponse) string {
 	return issueguard.DuplicateMessage(issue.Identifier, issue.Title, issue.Status)
 }
 
+// Bound the JSON envelope before decoding, including unknown fields and whitespace.
+// Creation shares this limit across kinds because kind is supplied in the body.
+const maxIssueWriteBytes = 2 * 1024 * 1024
+
+func readIssueWriteBody(w http.ResponseWriter, r *http.Request) ([]byte, bool) {
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxIssueWriteBytes))
+	if err != nil {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			writeError(w, http.StatusRequestEntityTooLarge, "issue request body exceeds 2 MiB")
+		} else {
+			writeError(w, http.StatusBadRequest, "failed to read request body")
+		}
+		return nil, false
+	}
+	return body, true
+}
+
 func (h *Handler) CreateIssue(w http.ResponseWriter, r *http.Request) {
+	body, ok := readIssueWriteBody(w, r)
+	if !ok {
+		return
+	}
 	var req CreateIssueRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := json.Unmarshal(body, &req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
@@ -3462,10 +3484,19 @@ func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
 	workspaceID := uuidToString(prevIssue.WorkspaceID)
 
 	// Read body as raw bytes so we can detect which fields were explicitly sent.
-	bodyBytes, err := io.ReadAll(r.Body)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "failed to read request body")
-		return
+	var bodyBytes []byte
+	var err error
+	if prevIssue.Kind == "doc" {
+		bodyBytes, ok = readIssueWriteBody(w, r)
+		if !ok {
+			return
+		}
+	} else {
+		bodyBytes, err = io.ReadAll(r.Body)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "failed to read request body")
+			return
+		}
 	}
 
 	var req UpdateIssueRequest
@@ -3490,7 +3521,7 @@ func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusNotFound, "documents are not enabled")
 			return
 		}
-		if len(bodyBytes) > 2*1024*1024 || (req.Description != nil && len(*req.Description) > 1024*1024) {
+		if req.Description != nil && len(*req.Description) > 1024*1024 {
 			writeError(w, http.StatusRequestEntityTooLarge, "document body exceeds limit")
 			return
 		}

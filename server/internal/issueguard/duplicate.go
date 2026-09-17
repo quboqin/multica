@@ -60,7 +60,12 @@ func LockAndFindActiveDuplicate(
 	if normalizedTitle == "" {
 		return db.Issue{}, false, nil
 	}
-	if err := q.LockIssueDuplicateKey(ctx, lockKey(workspaceID, projectID, parentIssueID, normalizedTitle)+"|"+kind); err != nil {
+	// Task writers must share the advisory lock with pre-kind backends during rollout.
+	key := lockKey(workspaceID, projectID, parentIssueID, normalizedTitle)
+	if kind != "task" {
+		key += "|" + kind
+	}
+	if err := q.LockIssueDuplicateKey(ctx, key); err != nil {
 		return db.Issue{}, false, err
 	}
 	if allowDuplicate {
