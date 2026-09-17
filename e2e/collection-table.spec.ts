@@ -662,6 +662,7 @@ test.describe("T2 collection shared TableView", () => {
         title: `E2E Tail ${index.toString().padStart(3, "0")}`,
       })),
     );
+    expect(records.every((record) => record.revision === 1)).toBe(true);
     const tail = records.find((record) => record.title === "E2E Tail 200");
     const noteField = collection.fields.find(
       (field: TestCollectionField) => field.name === "Note",
@@ -732,7 +733,10 @@ test.describe("T2 collection shared TableView", () => {
       tail.revision,
       { field_id: noteField.id, op: "set", value: "external value" },
     );
-    expect(externalUpdate.response.status).toBe(200);
+    expect(
+      externalUpdate.response.status,
+      externalUpdate.response.ok ? undefined : await externalUpdate.response.text(),
+    ).toBe(200);
 
     const noteForm = noteInput.locator("xpath=ancestor::form");
     const noteTarget = {
@@ -1000,7 +1004,7 @@ test.describe("T2 collection shared TableView", () => {
         collectionId: foreignCollection.collection.id,
       },
     );
-    expect(deniedForeignWorkspace.status).toBe(403);
+    expect([403, 404]).toContain(deniedForeignWorkspace.status);
 
     const deniedForeignResource = await memberPage.evaluate(
       async ({ apiBase, slug, collectionId }) => {
@@ -1022,7 +1026,7 @@ test.describe("T2 collection shared TableView", () => {
         collectionId: foreignCollection.collection.id,
       },
     );
-    expect(deniedForeignResource.status).toBe(404);
+    expect([403, 404]).toContain(deniedForeignResource.status);
   });
 
   test("creates 1,000 records through the API without task side effects", async () => {

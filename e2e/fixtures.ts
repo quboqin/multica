@@ -570,7 +570,10 @@ export class TestApiClient {
             now() + ((fixture.ordinal - 1) * interval '1 microsecond'),
             now() + ((fixture.ordinal - 1) * interval '1 microsecond')
           FROM jsonb_array_elements($4::jsonb) WITH ORDINALITY AS fixture(value, ordinal)
-          RETURNING id, workspace_id, collection_id, title, fields, position, revision
+          -- Seeded revisions are always 1. Cast bigint so pg returns a number,
+          -- matching the API contract instead of serializing a string in PATCH.
+          RETURNING id, workspace_id, collection_id, title, fields, position,
+                    revision::integer AS revision
         `,
         [this.workspaceId, collectionId, creatorId, JSON.stringify(records)],
       );
