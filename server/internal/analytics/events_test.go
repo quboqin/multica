@@ -47,3 +47,21 @@ func TestOnboardingSourceSubmittedSetOnlyWhenAnswered(t *testing.T) {
 		t.Fatalf("declined: acquisition_source property = %#v, want empty []string", declined.Properties["acquisition_source"])
 	}
 }
+
+func TestCollectionEventsAreMetricsOnlyAndOmitContent(t *testing.T) {
+	events := []Event{
+		CollectionCreated("user-1", "workspace-1", "collection-1"),
+		RecordCreated("user-1", "workspace-1", "collection-1", "record-1"),
+		RecordUpdated("user-1", "workspace-1", "collection-1", "record-1"),
+	}
+	for _, event := range events {
+		if !IsMetricsOnly(event.Name) {
+			t.Fatalf("%s must remain metrics-only", event.Name)
+		}
+		for _, forbidden := range []string{"title", "name", "fields", "value"} {
+			if _, ok := event.Properties[forbidden]; ok {
+				t.Fatalf("%s leaked %s: %#v", event.Name, forbidden, event.Properties)
+			}
+		}
+	}
+}

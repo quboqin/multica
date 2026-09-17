@@ -169,6 +169,21 @@ export type {
 } from "./chat";
 export type { StorageAdapter } from "./storage";
 export type {
+  Collection,
+  CollectionCapabilities,
+  CollectionDetail,
+  CollectionField,
+  CollectionFieldType,
+  CollectionPage,
+  CollectionRecord,
+  CollectionRecordPage,
+  CreateCollectionInput,
+  CreateCollectionRecordInput,
+  CreateCollectionRecordResult,
+  CreateCollectionResult,
+  UpdateCollectionRecordInput,
+} from "./collection";
+export type {
   Project,
   ProjectStatus,
   ProjectPriority,

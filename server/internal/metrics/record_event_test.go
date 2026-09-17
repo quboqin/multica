@@ -50,3 +50,41 @@ func TestRecordEventSkipsPostHogForMetricsOnly(t *testing.T) {
 		t.Fatalf("a non-metrics-only event should ship to PostHog exactly once: %v", spy.names)
 	}
 }
+
+func TestCollectionEventsIncrementRegisteredMetricsWithoutPostHog(t *testing.T) {
+	spy := &captureSpy{}
+	m := metrics.NewBusinessMetrics()
+	tests := []struct {
+		name   string
+		metric string
+		event  analytics.Event
+	}{
+		{
+			name:   "collection created",
+			metric: "multica_collection_created_total",
+			event:  analytics.CollectionCreated("user-1", "ws-1", "collection-1"),
+		},
+		{
+			name:   "record created",
+			metric: "multica_record_created_total",
+			event:  analytics.RecordCreated("user-1", "ws-1", "collection-1", "record-1"),
+		},
+		{
+			name:   "record updated",
+			metric: "multica_record_updated_total",
+			event:  analytics.RecordUpdated("user-1", "ws-1", "collection-1", "record-1"),
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			metrics.RecordEvent(spy, m, test.event)
+			family := metrics.GatherForTest(t, m)[test.metric]
+			if family == nil || len(family.GetMetric()) != 1 || family.GetMetric()[0].GetCounter().GetValue() != 1 {
+				t.Fatalf("%s was not registered and incremented exactly once: %#v", test.metric, family)
+			}
+		})
+	}
+	if len(spy.names) != 0 {
+		t.Fatalf("metrics-only collection events reached PostHog: %v", spy.names)
+	}
+}

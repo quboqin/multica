@@ -168,6 +168,9 @@ func TestBusinessMetricsRegistryExposesAllFamilies(t *testing.T) {
 	exerciseEvent(m, analytics.EventAutopilotRunFailed, map[string]any{"cadence": "manual", "trigger_kind": "manual"})
 	exerciseEvent(m, analytics.EventFeedbackSubmitted, map[string]any{"kind": "general", "platform": "web"})
 	exerciseEvent(m, analytics.EventContactSalesSubmitted, map[string]any{"form_source": "page"})
+	exerciseEvent(m, analytics.EventCollectionCreated, nil)
+	exerciseEvent(m, analytics.EventRecordCreated, nil)
+	exerciseEvent(m, analytics.EventRecordUpdated, nil)
 
 	// Direct Record* helpers (no PostHog event source).
 	m.RecordAutopilotRunSkipped("manual", "throttled")
