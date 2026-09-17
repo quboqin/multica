@@ -302,7 +302,10 @@ assert_web_start_case() {
     FRONTEND_PORT=13000
     ENV_FILE=.env.test
     case "$case_name" in
-      parent-disconnected|parent-timeout|parent-failure) DIAGNOSTIC_TOTAL_TIMEOUT_SECONDS=5 ;;
+      # Timing cases keep the production budget; content assertions need room
+      # for all diagnostic queries even when the test host is under load.
+      pgid-budget|timeout) ;;
+      *) DIAGNOSTIC_TOTAL_TIMEOUT_SECONDS=5 ;;
     esac
     TEST_CASE=$case_name
     TEST_LISTENER=
@@ -454,9 +457,9 @@ assert_web_start_case() {
           *:100|*:420|*:888|*:999) return 0 ;;
         esac
         if [ -f "$(pid_file web)" ] \
-          && [ "$target" = "$(cat "$(pid_file web)")" ] \
-          && [ "$LAUNCHER_STOPPED" -eq 0 ]; then
-          return 0
+          && [ "$target" = "$(cat "$(pid_file web)")" ]; then
+          if [ "$LAUNCHER_STOPPED" -eq 0 ]; then return 0; fi
+          return 1
         fi
         command kill -0 "$target" 2>/dev/null
         return $?
@@ -770,8 +773,11 @@ assert_diagnostic_budget_cleans_pipe_holder() (
   STATE_DIR="$tmp_dir/pipe-holder"
   LOG_DIR="$STATE_DIR/logs"
   mkdir -p "$LOG_DIR"
-  DIAGNOSTIC_TOTAL_TIMEOUT_SECONDS=1
-  DIAGNOSTIC_QUERY_TIMEOUT_SECONDS=1
+  # Integer epoch deadlines can lose almost one second at startup. Give the
+  # fixture at least four full seconds to start under load. The 6-second
+  # wall-time limit stays below the 8-second synchronous PGID regression stub.
+  DIAGNOSTIC_TOTAL_TIMEOUT_SECONDS=5
+  DIAGNOSTIC_QUERY_TIMEOUT_SECONDS=5
   holder_script="$STATE_DIR/hold-pipe.sh"
   cat > "$holder_script" <<'EOF'
 #!/usr/bin/env bash
@@ -785,7 +791,7 @@ EOF
   # A legacy synchronous PGID lookup happened before the query deadline was
   # established. If diagnostics regress to calling it, this exceeds the shared
   # budget and the elapsed-time assertion below fails.
-  process_group_id() { sleep 4; printf '999'; }
+  process_group_id() { sleep 8; printf '999'; }
   cleanup_pipe_holder() {
     if [ -s "$PIPE_HOLDER_PID_FILE" ]; then
       holder_pid="$(cat "$PIPE_HOLDER_PID_FILE")"
@@ -805,7 +811,7 @@ EOF
   started_epoch="$(date +%s)"
   diagnose_web_ownership_failure pipe-holder 13000 >/dev/null
   elapsed=$(( $(date +%s) - started_epoch ))
-  [ "$elapsed" -le 3 ] \
+  [ "$elapsed" -le 6 ] \
     || fail "pipe-holder diagnostic exceeded shared budget: ${elapsed}s"
   [ -s "$PIPE_HOLDER_PID_FILE" ] || fail "pipe-holder fixture did not start"
   holder_pid="$(cat "$PIPE_HOLDER_PID_FILE")"
