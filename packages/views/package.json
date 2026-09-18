@@ -9,6 +9,7 @@
     "test": "vitest run"
   },
   "exports": {
+    "./data-view": "./data-view/index.ts",
     "./navigation": "./navigation/index.ts",
     "./common/actor-avatar": "./common/actor-avatar.tsx",
     "./editor": "./editor/index.ts",
@@ -55,7 +56,9 @@
     "./attachments": "./attachments/index.ts",
     "./locales": "./locales/index.ts",
     "./locales/*": "./locales/*",
-    "./issues/visuals": "./issues/components/visuals.ts"
+    "./issues/visuals": "./issues/components/visuals.ts",
+    "./documents": "./documents/index.ts",
+    "./collections": "./collections/index.ts"
   },
   "dependencies": {
     "@base-ui/react": "^1.3.0",

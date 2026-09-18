@@ -544,6 +544,31 @@ type ClientUsageDaily struct {
 	UpdatedAt       pgtype.Timestamptz `json:"updated_at"`
 }
 
+type Collection struct {
+	ID          pgtype.UUID        `json:"id"`
+	WorkspaceID pgtype.UUID        `json:"workspace_id"`
+	ProjectID   pgtype.UUID        `json:"project_id"`
+	Name        string             `json:"name"`
+	Description string             `json:"description"`
+	Icon        string             `json:"icon"`
+	CreatedBy   pgtype.UUID        `json:"created_by"`
+	Revision    int64              `json:"revision"`
+	ArchivedAt  pgtype.Timestamptz `json:"archived_at"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
+}
+
+type CollectionField struct {
+	ID           pgtype.UUID        `json:"id"`
+	WorkspaceID  pgtype.UUID        `json:"workspace_id"`
+	CollectionID pgtype.UUID        `json:"collection_id"`
+	Name         string             `json:"name"`
+	Type         string             `json:"type"`
+	Config       []byte             `json:"config"`
+	Position     float64            `json:"position"`
+	ArchivedAt   pgtype.Timestamptz `json:"archived_at"`
+}
+
 type Comment struct {
 	ID                pgtype.UUID        `json:"id"`
 	IssueID           pgtype.UUID        `json:"issue_id"`
@@ -646,6 +671,17 @@ type DingtalkGroupRoute struct {
 	Revision          int64              `json:"revision"`
 	DiscoveredAt      pgtype.Timestamptz `json:"discovered_at"`
 	UpdatedAt         pgtype.Timestamptz `json:"updated_at"`
+}
+
+type DocumentPublication struct {
+	IssueID          pgtype.UUID        `json:"issue_id"`
+	WorkspaceID      pgtype.UUID        `json:"workspace_id"`
+	DocumentRevision int64              `json:"document_revision"`
+	ActorID          pgtype.UUID        `json:"actor_id"`
+	Action           string             `json:"action"`
+	Body             string             `json:"body"`
+	CreatedAt        pgtype.Timestamptz `json:"created_at"`
+	IngestionState   string             `json:"ingestion_state"`
 }
 
 type Feedback struct {
@@ -804,6 +840,8 @@ type Issue struct {
 	Revision           int64              `json:"revision"`
 	LastActivityAt     pgtype.Timestamptz `json:"last_activity_at"`
 	TriageState        pgtype.Text        `json:"triage_state"`
+	Kind               string             `json:"kind"`
+	DocumentRevision   int64              `json:"document_revision"`
 }
 
 type IssueDependency struct {
@@ -942,6 +980,7 @@ type IssueView struct {
 	Revision          int32              `json:"revision"`
 	CreatedAt         pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt         pgtype.Timestamptz `json:"updated_at"`
+	CollectionID      pgtype.UUID        `json:"collection_id"`
 }
 
 type IssueViewPreference struct {
@@ -1238,6 +1277,19 @@ type QuickAction struct {
 	CreatedByID   pgtype.UUID        `json:"created_by_id"`
 	CreatedAt     pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt     pgtype.Timestamptz `json:"updated_at"`
+}
+
+type Record struct {
+	ID           pgtype.UUID        `json:"id"`
+	WorkspaceID  pgtype.UUID        `json:"workspace_id"`
+	CollectionID pgtype.UUID        `json:"collection_id"`
+	Title        string             `json:"title"`
+	Fields       []byte             `json:"fields"`
+	Revision     int64              `json:"revision"`
+	Position     float64            `json:"position"`
+	DeletedAt    pgtype.Timestamptz `json:"deleted_at"`
+	CreatedAt    pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt    pgtype.Timestamptz `json:"updated_at"`
 }
 
 type RuntimeProfile struct {

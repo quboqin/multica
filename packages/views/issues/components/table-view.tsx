@@ -1,34 +1,25 @@
 "use client";
 
+import {
+  DataViewTable,
+  DataViewColumnHeader,
+  useFrozenRows,
+  useReleaseEditingCellOnUnmount,
+} from "../../data-view";
+import { createIssueTableFields } from "@multica/core/issues/table-fields";
+import type {
+  DataSourceCapabilities,
+  DataSourceField,
+} from "@multica/core/data-source";
 import { useStatusLabel } from "../utils/status-label";
 import {
   useCallback,
   useEffect,
-  useLayoutEffect,
   useMemo,
   useRef,
   useState,
 } from "react";
 import {
-  DndContext,
-  KeyboardSensor,
-  PointerSensor,
-  closestCenter,
-  useDndContext,
-  useSensor,
-  useSensors,
-  type DragEndEvent,
-} from "@dnd-kit/core";
-import { restrictToHorizontalAxis } from "@dnd-kit/modifiers";
-import {
-  SortableContext,
-  horizontalListSortingStrategy,
-  sortableKeyboardCoordinates,
-  useSortable,
-} from "@dnd-kit/sortable";
-import {
-  getCoreRowModel,
-  useReactTable,
   type CellContext,
   type ColumnDef,
   type ColumnSizingState,
@@ -38,13 +29,9 @@ import {
   type TableMeta,
 } from "@tanstack/react-table";
 import {
-  ArrowDown,
-  ArrowUp,
   ChevronDown,
   ChevronRight,
   Download,
-  EyeOff,
-  GripVertical,
   Loader2,
   Pencil,
   Plus,
@@ -52,7 +39,6 @@ import {
   X,
 } from "lucide-react";
 import { toast } from "sonner";
-import { DataTable } from "@multica/ui/components/ui/data-table";
 import { Button } from "@multica/ui/components/ui/button";
 import { Input } from "@multica/ui/components/ui/input";
 import {
@@ -70,7 +56,6 @@ import {
   TableRow,
 } from "@multica/ui/components/ui/table";
 import { Skeleton } from "@multica/ui/components/ui/skeleton";
-import { cn } from "@multica/ui/lib/utils";
 import { ApiError } from "@multica/core/api";
 import { useWorkspaceId } from "@multica/core/hooks";
 import { useIssueStatuses } from "@multica/core/issue-statuses/hooks";
@@ -85,7 +70,6 @@ import {
   propertyIdFromViewKey,
   type SortField,
   type TableColumnKey,
-  type TableSystemColumnKey,
 } from "@multica/core/issues/stores/view-store";
 import { useViewStore } from "@multica/core/issues/stores/view-store-context";
 import { propertyListOptions } from "@multica/core/properties";
@@ -153,6 +137,12 @@ import { IssueAgentActivityIndicator } from "./issue-agent-activity-indicator";
 // Enough placeholder rows to cover a typical viewport; the virtualizer only
 // mounts what fits, so overshooting costs nothing.
 const SKELETON_ROW_COUNT = 12;
+
+const ISSUE_TABLE_CAPABILITIES: DataSourceCapabilities = {
+  layouts: ["table"],
+  editing: "adapter",
+  sideEffects: "adapter", sorting: "adapter",
+};
 
 const SELECT_COLUMN_ID = "__select";
 const ADD_COLUMN_ID = "__add";
@@ -284,15 +274,6 @@ type ColumnLabelKey =
   | "child_progress"
   | "creator";
 
-const SORTABLE_COLUMNS: Partial<Record<TableSystemColumnKey, SortField>> = {
-  title: "title",
-  status: "status",
-  priority: "priority",
-  start_date: "start_date",
-  due_date: "due_date",
-  created_at: "created_at",
-  updated_at: "updated_at",
-};
 
 function stopRowNavigation(event: React.SyntheticEvent) {
   event.stopPropagation();
@@ -352,139 +333,6 @@ function IssueCheckbox({
       onChange={() => undefined}
       className="size-3.5 cursor-pointer accent-primary"
     />
-  );
-}
-
-function SortableColumnHeader({
-  columnKey,
-  label,
-  sortField,
-  sortBy,
-  sortDirection,
-  onSort,
-  onHide,
-  ascendingLabel,
-  descendingLabel,
-  hideLabel,
-  reorderLabel,
-}: {
-  columnKey: TableColumnKey;
-  label: string;
-  sortField?: SortField;
-  sortBy: SortField;
-  sortDirection: "asc" | "desc";
-  onSort: (field: SortField, direction: "asc" | "desc") => void;
-  onHide?: () => void;
-  ascendingLabel: string;
-  descendingLabel: string;
-  hideLabel: string;
-  reorderLabel: string;
-}) {
-  const sortable = columnKey !== "title";
-  const { attributes, listeners, setNodeRef, transform, transition, isDragging } =
-    useSortable({ id: columnKey, disabled: !sortable });
-  const active = sortField === sortBy;
-  // Any column in flight, not only this one: the neighbours shift to open a
-  // gap, and each is clipped by its own cell just the same.
-  const isReordering = useDndContext().active != null;
-  const nodeRef = useRef<HTMLDivElement | null>(null);
-
-  // The cell clips its own content, which is what made a dragged column look
-  // like it vanished rather than travelled. The clip only earns its keep at
-  // rest, capping a label wider than its column, so it is lifted for the length
-  // of a reorder and the column in hand is raised over its neighbours.
-  //
-  // Only overflow and stacking are touched. Transforming the <th> itself would
-  // carry the header's full height along, but `transform` on a table cell is a
-  // corner of the spec browsers take liberties with — Chromium lifts the cell
-  // out of the table's box model and its geometry stops matching the row. The
-  // wrapper below is padded out to the cell's size instead.
-  useLayoutEffect(() => {
-    const cell = nodeRef.current?.closest("th");
-    if (!cell || !isReordering) return;
-    cell.style.overflow = "visible";
-    if (isDragging) cell.style.zIndex = "20";
-    return () => {
-      cell.style.removeProperty("overflow");
-      cell.style.removeProperty("z-index");
-    };
-  }, [isDragging, isReordering]);
-
-  return (
-    <div
-      ref={(node) => {
-        nodeRef.current = node;
-        setNodeRef(node);
-      }}
-      // Horizontal travel only. dnd-kit's layout animation also hands back
-      // scaleX/scaleY — old rect over new rect — to tween an item into the
-      // shape of the slot it landed in. Between two tabs of equal width that
-      // ratio is 1 and never shows; between two columns it is not, so a 174px
-      // column swapping with a 96px one gets stretched to 1.8x on the way.
-      // Reordering columns changes no column's width, so there is nothing for
-      // a shape tween to say here. The move and the settle stay animated
-      // through `transition`.
-      style={{
-        transform: transform ? `translate3d(${transform.x}px, 0, 0)` : undefined,
-        transition,
-      }}
-      // The wrapper spans the cell's own box — the negative margins undo the
-      // <th>'s padding and put it back inside — so it renders exactly as at
-      // rest while being what travels: a header-sized block rather than the
-      // line of text in it. Height is derived rather than fixed at h-8: the
-      // strip is taller than the cell's nominal height once row borders are in.
-      className={cn(
-        "group/header -mx-4 -my-2 flex h-[calc(100%+1rem)] min-w-0 items-center px-4",
-        isDragging && "opacity-60",
-      )}
-    >
-      {sortable && (
-        <button
-          type="button"
-          aria-label={reorderLabel}
-          className={cn(
-            "-ml-2 mr-0.5 rounded-xs p-0.5 text-muted-foreground opacity-0 hover:bg-accent hover:text-muted-foreground group-hover/header:opacity-100 focus-visible:opacity-100",
-            isDragging ? "cursor-grabbing opacity-100" : "cursor-grab",
-          )}
-          {...attributes}
-          {...listeners}
-        >
-          <GripVertical className="size-3" />
-        </button>
-      )}
-      <DropdownMenu>
-        <DropdownMenuTrigger className="flex min-w-0 items-center gap-1 rounded-xs px-1.5 py-1 hover:bg-accent">
-          <span className="truncate">{label}</span>
-          {active &&
-            (sortDirection === "asc" ? (
-              <ArrowUp className="size-3 shrink-0" />
-            ) : (
-              <ArrowDown className="size-3 shrink-0" />
-            ))}
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align="start" className="w-40">
-          {sortField && (
-            <>
-              <DropdownMenuItem onClick={() => onSort(sortField, "asc")}>
-                <ArrowUp />
-                {ascendingLabel}
-              </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => onSort(sortField, "desc")}>
-                <ArrowDown />
-                {descendingLabel}
-              </DropdownMenuItem>
-            </>
-          )}
-          {sortField && onHide && <DropdownMenuSeparator />}
-          {onHide && (
-            <DropdownMenuItem onClick={onHide}>
-              <EyeOff />
-              {hideLabel}
-            </DropdownMenuItem>
-          )}
-        </DropdownMenuContent>
-      </DropdownMenu>
-    </div>
   );
 }
 
@@ -931,6 +779,7 @@ function propertyDisplayValue(
 type TableViewMeta = {
   childProgressMap: Map<string, ChildProgress>;
   propertyById: Map<string, IssueProperty>;
+  fieldById: Map<string, DataSourceField<Issue, TableColumnKey>>;
   properties: IssueProperty[];
   visibleIssueIds: string[];
   /** `${row.key}:${column.id}` of the cell whose editor popup / rename input
@@ -959,42 +808,6 @@ function getTableViewMeta(
   return table.options.meta as unknown as TableViewMeta;
 }
 
-/**
- * Release the hoisted editing key when the cell that owns it unmounts.
- *
- * Row virtualization (see data-table.tsx) unmounts a cell as its row scrolls
- * out of the rendered window. Base UI does NOT call onOpenChange(false) on
- * unmount, so without this the open picker's key — and the frozen row
- * structure keyed off it — would persist after the anchor row leaves the
- * viewport: the table would stay frozen, and scrolling the row back would
- * silently reopen the picker and discard any in-progress rename draft
- * (MUL-5108 review R1#3). Clearing the key iff this unmounting cell still owns
- * it thaws the structure and closes the editor.
- *
- * Live values are read through refs so the empty-dep cleanup always sees the
- * current key/setter. At initial mount a cell is never yet the active editor
- * (the editor is opened by a later interaction, which does not remount the
- * cell), so this never fires spuriously — including under StrictMode's
- * mount → unmount → mount probe, whose first cleanup sees `editingCellKey`
- * still unequal to this cell's key.
- */
-export function useReleaseEditingCellOnUnmount(
-  cellKey: string | null,
-  editingCellKey: string | null,
-  setEditingCellKey: (key: string | null) => void,
-) {
-  const editingCellKeyRef = useRef(editingCellKey);
-  editingCellKeyRef.current = editingCellKey;
-  const setEditingCellKeyRef = useRef(setEditingCellKey);
-  setEditingCellKeyRef.current = setEditingCellKey;
-  useEffect(() => {
-    return () => {
-      if (cellKey !== null && editingCellKeyRef.current === cellKey) {
-        setEditingCellKeyRef.current(null);
-      }
-    };
-  }, [cellKey]);
-}
 
 function IssueTableSelectHeader({
   table,
@@ -1059,20 +872,14 @@ function IssueTableHeaderCell({
   const meta = getTableViewMeta(table);
   const { t } = useT("issues");
   const key = column.id as TableColumnKey;
-  const propertyId = propertyIdFromViewKey(key);
-  const property = propertyId ? meta.propertyById.get(propertyId) : undefined;
-  const staticSort = propertyId
-    ? property &&
-      !["multi_select", "checkbox", "actor", "multi_actor"].includes(property.type)
-      ? (`property:${propertyId}` as SortField)
-      : undefined
-    : SORTABLE_COLUMNS[key as TableSystemColumnKey];
-  const label = meta.columnLabel(key);
+  const field = meta.fieldById.get(key);
+  const label = field?.label ?? meta.columnLabel(key);
   return (
-    <SortableColumnHeader
+    <DataViewColumnHeader
       columnKey={key}
+      reorderable={key !== "title"}
       label={label}
-      sortField={staticSort}
+      sortField={field?.sortKey as SortField | undefined}
       sortBy={meta.sortBy}
       sortDirection={meta.sortDirection}
       onSort={meta.onSort}
@@ -1820,7 +1627,7 @@ export function TableView({
           ?.name ?? String(value.value ?? "")
       );
     },
-    [getActorName, groupProjectMap, propertyById, t],
+    [getActorName, groupProjectMap, propertyById, resolveStatusLabel, t],
   );
 
   const serverDisplayRows = useMemo<IssueTableDisplayRow[]>(() => {
@@ -2047,31 +1854,28 @@ export function TableView({
     [activePropertyIds, tableColumns],
   );
 
-  // While a cell editor popup / rename input is open, hold the row structure
-  // still: server branch pagination and realtime refetches can rebuild or
-  // reorder the row list, moving the anchor row out of the virtualized render
-  // window and closing the popup the user just opened (MUL-5108). The snapshot
-  // freezes ORDER only; issue objects inside the rows keep tracking live
-  // server-query data so the open editor reflects optimistic updates. Live
-  // structure snaps back the moment the editor closes. Ref writes happen
-  // during render on purpose: the snapshot must be captured from the same
-  // render that flips `editing` on, and both branches are idempotent under
-  // StrictMode double-render.
-  const frozenRowsRef = useRef<IssueTableDisplayRow[] | null>(null);
-  if (editingCellKey === null) frozenRowsRef.current = null;
-  else if (frozenRowsRef.current === null)
-    frozenRowsRef.current = serverDisplayRows;
-  const frozenRows = frozenRowsRef.current;
+  const sourceIdentity = useMemo(
+    () => ({
+      workspaceId: wsId,
+      namespace: "issues",
+      sourceId: JSON.stringify(serverQuery.scope),
+    }),
+    [wsId, serverQuery.scope],
+  );
   const issueById = useMemo(
     () => new Map(authoritativeLoadedIssues.map((issue) => [issue.id, issue])),
     [authoritativeLoadedIssues],
   );
-  const displayRows = useMemo(
-    () =>
-      frozenRows && frozenRows !== serverDisplayRows
-        ? refreshFrozenTableRows(frozenRows, issueById)
-        : serverDisplayRows,
-    [frozenRows, issueById, serverDisplayRows],
+  const refreshRows = useCallback(
+    (snapshot: IssueTableDisplayRow[]) =>
+      refreshFrozenTableRows(snapshot, issueById),
+    [issueById],
+  );
+  const displayRows = useFrozenRows(
+    sourceIdentity,
+    serverDisplayRows,
+    editingCellKey,
+    refreshRows,
   );
   const visibleIssueIds = useMemo(
     () =>
@@ -2120,6 +1924,17 @@ export function TableView({
       return t(($) => $.table.columns[key as ColumnLabelKey]);
     },
     [propertyById, t],
+  );
+
+  const fieldById = useMemo(
+    () => new Map(
+      createIssueTableFields(
+        visibleColumnConfigs.map((column) => column.key),
+        properties,
+        columnLabel,
+      ).map((field) => [field.id, field]),
+    ),
+    [visibleColumnConfigs, properties, columnLabel],
   );
 
   // Inline row edits are single-issue writes like the picker in the issue
@@ -2176,6 +1991,7 @@ export function TableView({
   const viewMeta: TableViewMeta = {
     childProgressMap,
     propertyById,
+    fieldById,
     properties,
     visibleIssueIds,
     editingCellKey,
@@ -2247,32 +2063,6 @@ export function TableView({
       }
     },
     [columnSizing, setTableColumnWidth, visibleColumnConfigs],
-  );
-
-  const table = useReactTable({
-    data: displayRows,
-    columns,
-    getRowId: (row) => row.key,
-    getCoreRowModel: getCoreRowModel(),
-    state: {
-      columnSizing,
-      columnPinning: { left: [SELECT_COLUMN_ID, "title"], right: [] },
-    },
-    meta: viewMeta as TableMeta<IssueTableDisplayRow>,
-    onColumnSizingChange: handleColumnSizingChange,
-    columnResizeMode: "onChange",
-  });
-
-  const sensors = useSensors(
-    useSensor(PointerSensor, { activationConstraint: { distance: 4 } }),
-    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
-  );
-  const handleDragEnd = useCallback(
-    ({ active, over }: DragEndEvent) => {
-      if (!over || active.id === over.id) return;
-      reorderTableColumn(active.id as TableColumnKey, over.id as TableColumnKey);
-    },
-    [reorderTableColumn],
   );
 
   const handleExport = async (mode: "all" | "selected") => {
@@ -2446,83 +2236,68 @@ export function TableView({
           </DropdownMenuContent>
         </DropdownMenu>
       </div>
-      <DndContext
-        sensors={sensors}
-        collisionDetection={closestCenter}
-        // Columns only ever swap sideways, so the header should not follow the
-        // pointer up out of its own strip — same constraint the desktop tab bar
-        // puts on tab reordering.
-        modifiers={[restrictToHorizontalAxis]}
-        // Modifiers constrain the drag's movement but not its auto-scrolling,
-        // which reads raw pointer coordinates: drifting a few pixels vertically
-        // while dragging a header sent the rows scrolling underneath it. Zero
-        // on y removes an axis the gesture cannot act on. On x it stays, since
-        // a table wider than its viewport needs it to reach a distant slot, but
-        // the default 0.2 arms it a fifth of the way in from either edge, which
-        // is most of a wide header.
-        autoScroll={{ threshold: { x: 0.05, y: 0 } }}
-        onDragEnd={handleDragEnd}
-      >
-        <SortableContext
-          items={visibleColumnConfigs.map((column) => column.key)}
-          strategy={horizontalListSortingStrategy}
-        >
-          <DataTable
-            table={table}
-            virtualizeRows
-            emptyMessage={t(($) => $.table.empty)}
-            onRowClick={(row, event) => {
-              if (row.original.kind === "issue") {
-                openIssue(row.original.issue, event);
-              }
-            }}
-            renderRow={(row) => {
-              if (row.original.kind === "group") {
-                return (
-                  <IssueTableGroupRow
-                    group={row.original}
-                    colSpan={table.getVisibleLeafColumns().length}
-                    onToggle={() => toggleTableGroupCollapsed(row.original.key)}
-                  />
-                );
-              }
-              if (row.original.kind === "load_more") {
-                const loadMoreRow = row.original;
-                return (
-                  <TableRow className="hover:bg-transparent">
-                    <TableCell
-                      colSpan={table.getVisibleLeafColumns().length}
-                      className="p-0"
-                    >
-                      {/* The same footer Board / List / Swimlane end their
-                        * columns with. Hand-rolling it here had left the table
-                        * as the one surface where a failed page read as muted
-                        * body text rather than an error, and where reaching the
-                        * end of a paginated branch said nothing at all. The row
-                        * only supplies the cell it lives in. */}
-                      <div className="sticky left-0 w-full">
-                        <ListLoadMoreFooter
-                          hasMore={
-                            loadMoreRow.state === "loading" ||
-                            loadMoreRow.state === "has_more"
-                          }
-                          isLoading={loadMoreRow.state === "loading"}
-                          total={loadMoreRow.total}
-                          onLoadMore={() => loadMoreRow.onLoad?.()}
-                          isError={loadMoreRow.state === "error"}
-                          onRetry={loadMoreRow.onLoad}
-                        />
-                      </div>
-                    </TableCell>
-                  </TableRow>
-                );
-              }
-              return null;
-            }}
-            className="min-h-0 flex-1"
-          />
-        </SortableContext>
-      </DndContext>
+      <DataViewTable
+        sourceIdentity={sourceIdentity}
+        capabilities={ISSUE_TABLE_CAPABILITIES}
+        rows={displayRows}
+        rowId={(row) => row.key}
+        columns={columns}
+        visibleColumnIds={visibleColumnConfigs.map((column) => column.key)}
+        columnSizing={columnSizing}
+        onColumnSizingChange={handleColumnSizingChange}
+        onReorderColumn={(active, over) =>
+          reorderTableColumn(active as TableColumnKey, over as TableColumnKey)
+        }
+        columnPinning={{ left: [SELECT_COLUMN_ID, "title"], right: [] }}
+        meta={viewMeta as TableMeta<IssueTableDisplayRow>}
+        emptyMessage={t(($) => $.table.empty)}
+        onRowClick={(row, event) => {
+          if (row.original.kind === "issue") {
+            openIssue(row.original.issue, event);
+          }
+        }}
+        renderRow={(row, columnCount) => {
+          if (row.original.kind === "group") {
+            return (
+              <IssueTableGroupRow
+                group={row.original}
+                colSpan={columnCount}
+                onToggle={() => toggleTableGroupCollapsed(row.original.key)}
+              />
+            );
+          }
+          if (row.original.kind === "load_more") {
+            const loadMoreRow = row.original;
+            return (
+              <TableRow className="hover:bg-transparent">
+                <TableCell colSpan={columnCount} className="p-0">
+                  {/* The same footer Board / List / Swimlane end their
+                    * columns with. Hand-rolling it here had left the table
+                    * as the one surface where a failed page read as muted
+                    * body text rather than an error, and where reaching the
+                    * end of a paginated branch said nothing at all. The row
+                    * only supplies the cell it lives in. */}
+                  <div className="sticky left-0 w-full">
+                    <ListLoadMoreFooter
+                      hasMore={
+                        loadMoreRow.state === "loading" ||
+                        loadMoreRow.state === "has_more"
+                      }
+                      isLoading={loadMoreRow.state === "loading"}
+                      total={loadMoreRow.total}
+                      onLoadMore={() => loadMoreRow.onLoad?.()}
+                      isError={loadMoreRow.state === "error"}
+                      onRetry={loadMoreRow.onLoad}
+                    />
+                  </div>
+                </TableCell>
+              </TableRow>
+            );
+          }
+          return null;
+        }}
+        className="min-h-0 flex-1"
+      />
     </div>
   );
 }

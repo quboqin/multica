@@ -1882,6 +1882,22 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 			// Assignee frequency
 			r.Get("/api/assignee-frequency", h.GetAssigneeFrequency)
 
+			r.Route("/api/collections", func(r chi.Router) {
+				r.Get("/", h.ListCollections)
+				r.Post("/", h.CreateCollection)
+				r.Route("/{collectionID}", func(r chi.Router) {
+					r.Get("/", h.GetCollection)
+					r.Post("/fields", h.CreateCollectionField)
+					r.Get("/records", h.ListCollectionRecords)
+					r.Post("/records", h.CreateCollectionRecord)
+					r.Put("/records/{recordID}", h.UpdateCollectionRecord)
+					r.Put("/records/{recordID}/fields/{fieldID}", h.SetCollectionRecordField)
+				})
+			})
+			// Documents share issue authorization and comments, but have explicit lifecycle commands.
+			r.Get("/api/documents", h.ListDocuments)
+			r.Post("/api/documents/{id}/move", h.MoveDocument)
+			r.Post("/api/documents/{id}/transition", h.TransitionDocument)
 			// Issues
 			r.Route("/api/issues", func(r chi.Router) {
 				r.Get("/limit-usage", h.GetIssueLimitUsage)

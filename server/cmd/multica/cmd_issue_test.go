@@ -3192,6 +3192,7 @@ func TestRunIssueUpdateRejectsInvalidPriorityBeforeRequest(t *testing.T) {
 
 func newIssueUpdateTestCmd() *cobra.Command {
 	cmd := &cobra.Command{Use: "update"}
+	cmd.Flags().Int64("expected-document-revision", 0, "")
 	cmd.Flags().String("title", "", "")
 	cmd.Flags().String("description", "", "")
 	cmd.Flags().Bool("description-stdin", false, "")
@@ -5081,6 +5082,46 @@ func TestRunIssueCommentDeleteKeepsReplies(t *testing.T) {
 			}
 			if want := []string{"/api/comments/" + commentID + "/keep-replies"}; !slices.Equal(paths, want) {
 				t.Fatalf("requests = %v, want only %v", paths, want)
+			}
+		})
+	}
+}
+
+func TestRunIssueUpdateUsesExplicitDocumentVersion(t *testing.T) {
+	for _, version := range []string{"7", ""} {
+		t.Run("version="+version, func(t *testing.T) {
+			var body map[string]any
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch r.Method {
+				case http.MethodGet:
+					json.NewEncoder(w).Encode(map[string]any{"id": "document-1", "identifier": "DOC-1", "kind": "doc", "document_revision": 99})
+				case http.MethodPut:
+					if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+						t.Error(err)
+					}
+					json.NewEncoder(w).Encode(map[string]any{"id": "document-1", "identifier": "DOC-1", "kind": "doc"})
+				default:
+					t.Errorf("unexpected method %s", r.Method)
+				}
+			}))
+			defer srv.Close()
+			t.Setenv("MULTICA_SERVER_URL", srv.URL)
+			t.Setenv("MULTICA_WORKSPACE_ID", "ws-1")
+			t.Setenv("MULTICA_TOKEN", "test-token")
+			cmd := newIssueUpdateTestCmd()
+			_ = cmd.Flags().Set("description", "Local draft")
+			if version != "" {
+				_ = cmd.Flags().Set("expected-document-revision", version)
+			}
+			if err := runIssueUpdate(cmd, []string{"DOC-1"}); err != nil {
+				t.Fatal(err)
+			}
+			if version == "" {
+				if _, exists := body["expected_document_revision"]; exists {
+					t.Fatal("CLI must not silently adopt the latest server body version")
+				}
+			} else if body["expected_document_revision"] != float64(7) {
+				t.Fatalf("explicit version lost: %#v", body)
 			}
 		})
 	}

@@ -9,7 +9,8 @@
     "projects": "Projects",
     "issues": "Issues",
     "cancelled": "Cancelled",
-    "recent": "Recent"
+    "recent": "Recent",
+    "documents": "Documents"
   },
   "commands": {
     "current_theme_aria": "Current theme",
@@ -33,5 +34,6 @@
   },
   "trigger": {
     "label": "Search..."
-  }
+  },
+  "documents_only": "Documents only"
 }

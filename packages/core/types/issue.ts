@@ -160,6 +160,8 @@ export interface IssueSourceContext {
 }
 
 export interface Issue {
+  kind?: "task" | "doc" | "knowledge" | "workflow_run" | (string & {});
+  document_revision?: number;
   id: string;
   workspace_id: string;
   number: number;

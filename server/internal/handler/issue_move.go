@@ -38,6 +38,10 @@ func (h *Handler) MoveIssue(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if current.Kind == "doc" {
+		writeError(w, 400, "use the document move command")
+		return
+	}
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "failed to read request body")

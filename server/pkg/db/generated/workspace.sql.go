@@ -133,6 +133,18 @@ cleared_binding_tokens AS (
 cleared_installations AS (
     DELETE FROM channel_installation WHERE workspace_id = $1
 ),
+cleared_document_publications AS (
+    DELETE FROM document_publication WHERE workspace_id = $1
+),
+cleared_collection_records AS (
+    DELETE FROM record WHERE workspace_id = $1
+),
+cleared_collection_fields AS (
+    DELETE FROM collection_field WHERE workspace_id = $1
+),
+cleared_collections AS (
+    DELETE FROM collection WHERE workspace_id = $1
+),
 cleared_issue_properties AS (
     DELETE FROM issue_property WHERE workspace_id = $1
 ),

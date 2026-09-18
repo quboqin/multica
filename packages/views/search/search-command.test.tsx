@@ -215,6 +215,9 @@ vi.mock("@multica/core/paths", async (importOriginal) => ({
     chat: () => "/ws-test/chat",
     myIssues: () => "/ws-test/my-issues",
     issues: () => "/ws-test/issues",
+    documents: () => "/ws-test/documents",
+    collections: () => "/ws-test/collections",
+    documentDetail: (id: string) => `/ws-test/documents/${id}`,
     projects: () => "/ws-test/projects",
     autopilots: () => "/ws-test/autopilots",
     agents: () => "/ws-test/agents",
@@ -1029,6 +1032,19 @@ describe("SearchCommand", () => {
       updated_at: "2026-01-01T00:00:00Z",
       match_source: "title",
       ...over,
+    });
+
+    it("groups document hits and filters the API to documents only", async () => {
+      const user = userEvent.setup();
+      mockSearchIssues.mockResolvedValue({ issues: [fixtureIssue({id:"document-hit",kind:"doc",title:"Alpha document",status:"draft"})] });
+      renderSearch();
+      await user.type(screen.getByPlaceholderText("Type a command or search..."), "alpha");
+      await screen.findByText("Documents", {selector:"[cmdk-group-heading]"});
+      await user.click(screen.getByRole("checkbox", {name:"Documents only"}));
+      await waitFor(() => expect(mockSearchIssues).toHaveBeenLastCalledWith(expect.objectContaining({q:"alpha",kind:"doc"})));
+      await waitFor(() => expect(document.querySelector('[data-value="doc:document-hit"]')).toHaveAttribute("aria-disabled", "false"));
+      await user.click(document.querySelector('[data-value="doc:document-hit"]')!);
+      expect(mockPush).toHaveBeenCalledWith("/ws-test/documents/document-hit");
     });
 
     const fixtureProject = (

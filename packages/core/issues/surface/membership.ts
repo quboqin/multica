@@ -87,6 +87,7 @@ export function issueMatchesListFilter(
   scope: string | undefined,
   filter: MyIssuesFilter,
 ): IssueMembership {
+  if (issue.kind && issue.kind !== "task") return false;
   // my:all — union across relations; the involved leg needs the server's
   // agent-ownership graph, so membership is never decidable client-side.
   if (scope === "all") return "unknown";

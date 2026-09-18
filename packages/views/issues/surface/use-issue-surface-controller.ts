@@ -320,7 +320,7 @@ export function useIssueSurfaceController({
       ? "status"
       : grouping;
   const usesGantt = effectiveViewMode === "gantt" && !!projectId;
-  const usesTable = effectiveViewMode === "table";
+  const usesTable = ["table","calendar","gallery"].includes(effectiveViewMode);
   const activeSearch = usesTable ? tableSearch : search;
   const debouncedActiveSearch = useDebouncedTableSearch(activeSearch);
   const usesServerStatusSurface =

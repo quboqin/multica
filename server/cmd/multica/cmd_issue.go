@@ -434,6 +434,7 @@ var validIssueSortColumns = []string{
 // it is split into assignee_type/assignee_id — so that name is rejected
 // rather than silently ignored.
 var validIssueFields = []string{
+	"kind", "document_revision",
 	"id", "workspace_id", "number", "identifier", "title", "description",
 	"status", "status_category", "status_name", "priority", "assignee_type",
 	"assignee_id", "creator_type", "creator_id", "parent_issue_id",
@@ -551,6 +552,7 @@ func init() {
 	issueChildrenCmd.Flags().Bool("full-id", false, "Show full UUIDs in table output")
 
 	// issue create
+	issueCreateCmd.Flags().String("kind", "task", "Object kind: task, doc, knowledge, or workflow_run")
 	issueCreateCmd.Flags().String("title", "", "Issue title (required)")
 	issueCreateCmd.Flags().String("description", "", "Issue description (decodes \\n, \\r, \\t, \\\\; pipe via --description-stdin to preserve literal backslashes)")
 	issueCreateCmd.Flags().Bool("description-stdin", false, "Read issue description from stdin (preserves multi-line content verbatim)")
@@ -571,6 +573,7 @@ func init() {
 	issueCreateCmd.Flags().StringSlice("attachment-id", nil, "Existing attachment UUID(s) to bind to the created issue (can be specified multiple times)")
 
 	// issue update
+	issueUpdateCmd.Flags().Int64("expected-document-revision", 0, "Document version you read before editing; required for document body writes. A conflict preserves the server body; read, compare, and retry explicitly.")
 	issueUpdateCmd.Flags().String("title", "", "New title")
 	issueUpdateCmd.Flags().String("description", "", "New description (decodes \\n, \\r, \\t, \\\\; pipe via --description-stdin to preserve literal backslashes)")
 	issueUpdateCmd.Flags().Bool("description-stdin", false, "Read new description from stdin (preserves multi-line content verbatim)")
@@ -1331,6 +1334,10 @@ func runIssueCreate(cmd *cobra.Command, _ []string) error {
 	defer cancel()
 
 	body := map[string]any{"title": title}
+	if cmd.Flags().Changed("kind") {
+		kind, _ := cmd.Flags().GetString("kind")
+		body["kind"] = kind
+	}
 	desc, hasDesc, err := resolveTextFlag(cmd, "description")
 	if err != nil {
 		return err
@@ -1506,6 +1513,13 @@ func runIssueUpdate(cmd *cobra.Command, args []string) error {
 	}
 
 	body := map[string]any{}
+	if cmd.Flags().Changed("expected-document-revision") {
+		revision, _ := cmd.Flags().GetInt64("expected-document-revision")
+		if revision < 1 {
+			return fmt.Errorf("--expected-document-revision must be positive")
+		}
+		body["expected_document_revision"] = revision
+	}
 	if cmd.Flags().Changed("title") {
 		v, _ := cmd.Flags().GetString("title")
 		body["title"] = v

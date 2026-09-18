@@ -36,7 +36,10 @@ import {
   useRecentIssuesStore,
   useResolvedExpandStore,
 } from "@multica/core/issues/stores";
-import { issueDetailOptions, issueTimelineOptions } from "@multica/core/issues/queries";
+import {
+  issueDetailOptions,
+  issueTimelineOptions,
+} from "@multica/core/issues/queries";
 import { useWorkspaceId } from "@multica/core";
 import { useIssueStatuses } from "@multica/core/issue-statuses/hooks";
 import { useWorkspacePaths, WORKSPACE_PAGES } from "@multica/core/paths";
@@ -46,7 +49,10 @@ import { createShortcutChord } from "@multica/core/shortcuts";
 import { memberListOptions } from "@multica/core/workspace/queries";
 import { resolvePublicFileUrl } from "@multica/core/workspace/avatar-url";
 import { StatusIcon } from "../issues/components";
-import { resolvedThreadRootIds, rootCommentIds } from "../issues/components/thread-utils";
+import {
+  resolvedThreadRootIds,
+  rootCommentIds,
+} from "../issues/components/thread-utils";
 import { ProjectIcon } from "../projects/components/project-icon";
 import { useProjectStatusLabels } from "../projects/components/labels";
 import { routeIconForPath } from "../layout/route-icon-components";
@@ -90,12 +96,23 @@ import { useSearchStore } from "./search-store";
 // total Record so adding a workspace page is a compile error until its
 // keywords are filled in.
 const PAGE_KEYWORDS: Record<WorkspacePageKey, string[]> = {
+  documents: ["documents", "docs", "文档"],
+  collections: ["collections", "tables", "集合"],
   inbox: ["inbox", "notifications", "收件箱", "通知"],
   chat: ["chat", "messages", "conversation", "聊天", "消息", "对话"],
   myIssues: ["my", "issues", "assigned", "mine", "我的", "任务"],
   issues: ["issues", "tasks", "bugs", "任务"],
   projects: ["projects", "kanban", "项目"],
-  autopilots: ["autopilot", "autopilots", "automation", "schedule", "cron", "webhook", "自动化", "定时"],
+  autopilots: [
+    "autopilot",
+    "autopilots",
+    "automation",
+    "schedule",
+    "cron",
+    "webhook",
+    "自动化",
+    "定时",
+  ],
   agents: ["agents", "bots", "ai", "智能体"],
   squads: ["squads", "teams", "小队", "团队"],
   usage: ["usage", "analytics", "stats", "metrics", "统计", "分析", "用量"],
@@ -234,7 +251,7 @@ function IssueResultRow({
   return (
     <CommandPrimitive.Item
       key={issue.id}
-      value={issue.id}
+      value={issue.kind === "doc" ? `doc:${issue.id}` : issue.id}
       disabled={disabled}
       onSelect={onSelect}
       className="flex cursor-default select-none flex-col gap-1 rounded-lg px-3 py-2.5 text-body outline-none data-[disabled=true]:pointer-events-none data-[disabled=true]:opacity-50 data-selected:bg-accent"
@@ -364,15 +381,17 @@ export function SearchCommand() {
   // detail requests on every cold app load for a surface the user may never
   // open.
   const recentDetailQueries = useQueries({
-    queries: open ? recentItems.map((item) => issueDetailOptions(wsId, item.id)) : [],
+    queries: open
+      ? recentItems.map((item) => issueDetailOptions(wsId, item.id))
+      : [],
   });
   const recentIssues = useMemo(
-    () =>
-      recentDetailQueries.flatMap((q) => (q.data ? [q.data] : [])),
+    () => recentDetailQueries.flatMap((q) => (q.data ? [q.data] : [])),
     [recentDetailQueries],
   );
 
   const [query, setQuery] = useState("");
+  const [documentsOnly, setDocumentsOnly] = useState(false);
   const [results, setResults] = useState<SearchResults>(NO_RESULTS);
   const [isLoading, setIsLoading] = useState(false);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -451,7 +470,10 @@ export function SearchCommand() {
           keywords: ["copy", "id", "identifier", identifier.toLowerCase()],
           onSelect: () => {
             void copyText(identifier).then((ok) => {
-              if (ok) toast.success(t(($) => $.toast.copied_identifier, { identifier }));
+              if (ok)
+                toast.success(
+                  t(($) => $.toast.copied_identifier, { identifier }),
+                );
             });
             setOpen(false);
           },
@@ -536,7 +558,17 @@ export function SearchCommand() {
     );
 
     return items;
-  }, [currentIssue, currentIssueId, getShareableUrl, pathname, queryClient, setOpen, setTheme, theme, t]);
+  }, [
+    currentIssue,
+    currentIssueId,
+    getShareableUrl,
+    pathname,
+    queryClient,
+    setOpen,
+    setTheme,
+    theme,
+    t,
+  ]);
 
   const filteredCommands = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -619,62 +651,68 @@ export function SearchCommand() {
     }
   }, [open]);
 
-  const search = useCallback((q: string) => {
-    if (debounceRef.current) clearTimeout(debounceRef.current);
-    if (abortRef.current) abortRef.current.abort();
+  const search = useCallback(
+    (q: string) => {
+      if (debounceRef.current) clearTimeout(debounceRef.current);
+      if (abortRef.current) abortRef.current.abort();
 
-    if (!q.trim()) {
-      setResults(NO_RESULTS);
-      setIsLoading(false);
-      return;
-    }
-
-    setIsLoading(true);
-    debounceRef.current = setTimeout(async () => {
-      const controller = new AbortController();
-      abortRef.current = controller;
-      try {
-        const [issueRes, projectRes] = await Promise.all([
-          api.searchIssues({
-            q: q.trim(),
-            limit: 20,
-            include_closed: true,
-            signal: controller.signal,
-          }),
-          api.searchProjects({
-            q: q.trim(),
-            limit: 10,
-            include_closed: true,
-            signal: controller.signal,
-          }),
-        ]);
-        if (!controller.signal.aborted) {
-          setResults({
-            query: q.trim(),
-            issues: issueRes.issues,
-            projects: projectRes.projects,
-          });
-          setIsLoading(false);
-        }
-      } catch {
-        if (!controller.signal.aborted) {
-          // Drop the previous query's rows rather than leaving them on screen
-          // permanently greyed out: the request that would have replaced them
-          // is never coming. The list falls through to the empty state.
-          setResults({ query: q.trim(), issues: [], projects: [] });
-          setIsLoading(false);
-        }
+      if (!q.trim()) {
+        setResults(NO_RESULTS);
+        setIsLoading(false);
+        return;
       }
-    }, 300);
-  }, []);
 
-  const handleValueChange = useCallback(
-    (value: string) => {
-      setQuery(value);
-      search(value);
+      setIsLoading(true);
+      debounceRef.current = setTimeout(async () => {
+        const controller = new AbortController();
+        abortRef.current = controller;
+        try {
+          const [issueRes, projectRes] = await Promise.all([
+            api.searchIssues({
+              q: q.trim(),
+              kind: documentsOnly ? "doc" : undefined,
+              limit: 20,
+              include_closed: true,
+              signal: controller.signal,
+            }),
+            documentsOnly
+              ? Promise.resolve({ projects: [] })
+              : api.searchProjects({
+                  q: q.trim(),
+                  limit: 10,
+                  include_closed: true,
+                  signal: controller.signal,
+                }),
+          ]);
+          if (!controller.signal.aborted) {
+            setResults({
+              query: q.trim(),
+              issues: issueRes.issues,
+              projects: projectRes.projects,
+            });
+            setIsLoading(false);
+          }
+        } catch {
+          if (!controller.signal.aborted) {
+            // Drop the previous query's rows rather than leaving them on screen
+            // permanently greyed out: the request that would have replaced them
+            // is never coming. The list falls through to the empty state.
+            setResults({ query: q.trim(), issues: [], projects: [] });
+            setIsLoading(false);
+          }
+        }
+      }, 300);
     },
-    [search],
+    [documentsOnly],
   );
+
+  useEffect(() => {
+    search(query);
+  }, [query, search]);
+
+  const handleValueChange = useCallback((value: string) => {
+    setQuery(value);
+  }, []);
 
   const handleSelect = useCallback(
     (value: string) => {
@@ -682,7 +720,9 @@ export function SearchCommand() {
       const href = value.startsWith("project:")
         ? // value is "project:<id>" — slice off the 8-char prefix to extract the id.
           p.projectDetail(value.slice(8))
-        : p.issueDetail(value);
+        : value.startsWith("doc:")
+          ? p.documentDetail(value.slice(4))
+          : p.issueDetail(value);
       intentNavigate(href, consumeIntent());
     },
     [intentNavigate, consumeIntent, setOpen, p],
@@ -713,9 +753,7 @@ export function SearchCommand() {
       >
         <DialogHeader className="sr-only">
           <DialogTitle>{t(($) => $.title)}</DialogTitle>
-          <DialogDescription>
-            {t(($) => $.description)}
-          </DialogDescription>
+          <DialogDescription>{t(($) => $.description)}</DialogDescription>
         </DialogHeader>
         <CommandPrimitive
           shouldFilter={false}
@@ -755,6 +793,15 @@ export function SearchCommand() {
             />
           </div>
 
+          <label className="px-4 pt-3 text-caption">
+            <input
+              type="checkbox"
+              checked={documentsOnly}
+              onChange={(event) => setDocumentsOnly(event.target.checked)}
+            />{" "}
+            {t(($) => $.documents_only)}
+          </label>
+
           {/* Results list */}
           <CommandPrimitive.List className="max-h-[min(400px,50vh)] overflow-y-auto overflow-x-hidden">
             {/* Pages section — only shown when query matches */}
@@ -766,17 +813,17 @@ export function SearchCommand() {
                 {filteredPages.map((page) => {
                   const PageIcon = routeIconForPath(p[page.key]());
                   return (
-                  <CommandPrimitive.Item
-                    key={page.key}
-                    value={`page:${page.key}`}
-                    onSelect={() => handlePageSelect(page.key)}
-                    className="flex cursor-default select-none items-center gap-2.5 rounded-lg px-3 py-2.5 text-body outline-none data-[disabled=true]:pointer-events-none data-[disabled=true]:opacity-50 data-selected:bg-accent"
-                  >
-                    <PageIcon className="size-4 shrink-0 text-muted-foreground" />
-                    <span className="truncate">
-                      <HighlightText text={page.label} query={query} />
-                    </span>
-                  </CommandPrimitive.Item>
+                    <CommandPrimitive.Item
+                      key={page.key}
+                      value={`page:${page.key}`}
+                      onSelect={() => handlePageSelect(page.key)}
+                      className="flex cursor-default select-none items-center gap-2.5 rounded-lg px-3 py-2.5 text-body outline-none data-[disabled=true]:pointer-events-none data-[disabled=true]:opacity-50 data-selected:bg-accent"
+                    >
+                      <PageIcon className="size-4 shrink-0 text-muted-foreground" />
+                      <span className="truncate">
+                        <HighlightText text={page.label} query={query} />
+                      </span>
+                    </CommandPrimitive.Item>
                   );
                 })}
               </CommandPrimitive.Group>
@@ -889,20 +936,44 @@ export function SearchCommand() {
               </CommandPrimitive.Group>
             )}
 
-            {partitionedResults.liveIssues.length > 0 && (
+            {partitionedResults.liveIssues.some(
+              (issue) => issue.kind === "doc",
+            ) && (
+              <CommandPrimitive.Group
+                heading={t(($) => $.groups.documents)}
+                className={GROUP_CLASS}
+              >
+                {partitionedResults.liveIssues
+                  .filter((issue) => issue.kind === "doc")
+                  .map((issue) => (
+                    <IssueResultRow
+                      key={issue.id}
+                      issue={issue}
+                      query={results.query}
+                      disabled={resultsAreStale}
+                      onSelect={() => handleSelect(`doc:${issue.id}`)}
+                    />
+                  ))}
+              </CommandPrimitive.Group>
+            )}
+            {partitionedResults.liveIssues.some(
+              (issue) => issue.kind !== "doc",
+            ) && (
               <CommandPrimitive.Group
                 heading={t(($) => $.groups.issues)}
                 className={GROUP_CLASS}
               >
-                {partitionedResults.liveIssues.map((issue) => (
-                  <IssueResultRow
-                    key={issue.id}
-                    issue={issue}
-                    query={results.query}
-                    disabled={resultsAreStale}
-                    onSelect={handleSelect}
-                  />
-                ))}
+                {partitionedResults.liveIssues
+                  .filter((issue) => issue.kind !== "doc")
+                  .map((issue) => (
+                    <IssueResultRow
+                      key={issue.id}
+                      issue={issue}
+                      query={results.query}
+                      disabled={resultsAreStale}
+                      onSelect={handleSelect}
+                    />
+                  ))}
               </CommandPrimitive.Group>
             )}
 
@@ -959,7 +1030,9 @@ export function SearchCommand() {
                     <span className="text-caption text-muted-foreground shrink-0">
                       {item.identifier}
                     </span>
-                    <span className="min-w-0 flex-1 truncate">{item.title}</span>
+                    <span className="min-w-0 flex-1 truncate">
+                      {item.title}
+                    </span>
                     <IssueAssigneeAvatar
                       assigneeType={item.assignee_type}
                       assigneeId={item.assignee_id}

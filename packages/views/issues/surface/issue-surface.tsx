@@ -28,6 +28,7 @@ import {
   type IssueScope,
 } from "@multica/core/issues/surface/scope";
 import type { Issue } from "@multica/core/types";
+import { IssueVisualView } from "../components/issue-visual-view";
 import { BoardView } from "../components/board-view";
 import { BatchActionToolbar } from "../components/batch-action-toolbar";
 import { GanttView } from "../components/gantt-view";
@@ -318,6 +319,7 @@ function IssueSurfaceContent({
           )
         ) : (
           <div className={cn("flex flex-col flex-1 min-h-0", contentClassName)}>
+            {(controller.viewMode === "calendar" || controller.viewMode === "gallery") && <IssueVisualView mode={controller.viewMode} query={controller.tableQuerySpec}/>}
             {controller.viewMode === "board" && (
               <BoardView
                 issues={issues}

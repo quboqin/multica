@@ -51,6 +51,7 @@ export class TestApiClient {
   private workspaceId: string | null = null;
   private email: string | null = null;
   private createdIssueIds: string[] = [];
+  private createdCollectionIds: string[] = [];
   private seededIssueIds: string[] = [];
 
   async login(email: string, name: string) {
@@ -194,6 +195,17 @@ export class TestApiClient {
     return issue;
   }
 
+  async createCollection(name:string) {
+    const response=await this.authedFetch("/api/collections",{method:"POST",body:JSON.stringify({name})});
+    if(!response.ok)throw new Error(`Create collection failed: ${response.status} ${await response.text()}`);
+    const collection=await response.json();this.createdCollectionIds.push(collection.id);return collection;
+  }
+
+  async cortexRequest(path:string,method="GET",body?:unknown) {
+    const response=await this.authedFetch(path,{method,body:body===undefined?undefined:JSON.stringify(body)});
+    return {status:response.status,body:response.status===204?null:await response.json()};
+  }
+
   /**
    * Insert a large, deterministic issue fixture in one transaction.
    *
@@ -318,6 +330,17 @@ export class TestApiClient {
 
   /** Clean up all issues created during this test. */
   async cleanup() {
+    if(this.createdCollectionIds.length>0&&this.workspaceId){
+      const client=new pg.Client(DATABASE_URL);await client.connect();
+      try {await client.query("BEGIN");
+        for(const table of ["record","collection_field"]){await client.query(`DELETE FROM ${table} WHERE workspace_id=$1 AND collection_id=ANY($2::uuid[])`,[this.workspaceId,this.createdCollectionIds]);}
+        await client.query("DELETE FROM issue_view WHERE workspace_id=$1 AND collection_id=ANY($2::uuid[])",[this.workspaceId,this.createdCollectionIds]);
+        await client.query("DELETE FROM collection WHERE workspace_id=$1 AND id=ANY($2::uuid[])",[this.workspaceId,this.createdCollectionIds]);
+        await client.query("COMMIT");
+      } finally {await client.end();}
+      this.createdCollectionIds=[];
+    }
+
     if (this.seededIssueIds.length > 0 && this.workspaceId) {
       const client = new pg.Client(DATABASE_URL);
       await client.connect();

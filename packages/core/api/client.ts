@@ -1,3 +1,4 @@
+import { CollectionSchema, CollectionDetailSchema, CollectionPageSchema, CollectionRecordSchema, CollectionFieldSchema, type CollectionQuery } from "../collections";
 import type { InboxFilters } from "../inbox/filter-store";
 import type { ArchivedInboxPage, ArchivedInboxFacets } from "../types/inbox";
 import { configStore } from "../config";
@@ -1137,8 +1138,9 @@ export class ApiClient {
     });
   }
 
-  async listIssueTableGroups(params: IssueTableGroupsRequest): Promise<IssueTableGroupsResponse> {
+  async listIssueTableGroups(params: IssueTableGroupsRequest, options?: {workspaceId: string; signal?: AbortSignal}): Promise<IssueTableGroupsResponse> {
     const raw = await this.fetch<unknown>("/api/issues/table/groups", {
+      signal: options?.signal, headers: options ? {"X-Workspace-ID":options.workspaceId} : undefined,
       method: "POST",
       body: JSON.stringify(params),
     });
@@ -1150,8 +1152,9 @@ export class ApiClient {
     );
   }
 
-  async listIssueTableRows(params: IssueTableRowsRequest): Promise<IssueTableRowsResponse> {
+  async listIssueTableRows(params: IssueTableRowsRequest, options?: {workspaceId: string; signal?: AbortSignal}): Promise<IssueTableRowsResponse> {
     const raw = await this.fetch<unknown>("/api/issues/table/rows", {
+      signal: options?.signal, headers: options ? {"X-Workspace-ID":options.workspaceId} : undefined,
       method: "POST",
       body: JSON.stringify(params),
     });
@@ -1176,8 +1179,9 @@ export class ApiClient {
     );
   }
 
-  async searchIssues(params: { q: string; limit?: number; offset?: number; include_closed?: boolean; signal?: AbortSignal }): Promise<SearchIssuesResponse> {
+  async searchIssues(params: { kind?: string; q: string; limit?: number; offset?: number; include_closed?: boolean; signal?: AbortSignal }): Promise<SearchIssuesResponse> {
     const search = new URLSearchParams({ q: params.q });
+    if ("kind" in params && typeof params.kind === "string") search.set("kind",params.kind);
     if (params.limit !== undefined) search.set("limit", String(params.limit));
     if (params.offset !== undefined) search.set("offset", String(params.offset));
     if (params.include_closed) search.set("include_closed", "true");
@@ -1221,10 +1225,10 @@ export class ApiClient {
    * an ApiError 404, so `issueIdentifierOptions` propagates it instead of
    * caching it as "no such issue".
    */
-  async getIssue(id: string, options?: { signal?: AbortSignal }): Promise<Issue> {
+  async getIssue(id: string, options?: { signal?: AbortSignal; workspaceId?: string }): Promise<Issue> {
     const raw = await this.fetch<unknown>(
       `/api/issues/${encodeURIComponent(id)}`,
-      options?.signal ? { signal: options.signal } : undefined,
+      { signal: options?.signal, headers: options?.workspaceId ? {"X-Workspace-ID":options.workspaceId} : undefined },
     );
     const issue = parseWithFallback<Issue | null>(raw, IssueSchema, null, {
       endpoint: "GET /api/issues/:id",
@@ -1356,10 +1360,226 @@ export class ApiClient {
   }
 
   async updateIssue(id: string, data: UpdateIssueRequest): Promise<Issue> {
-    return this.fetch(`/api/issues/${id}`, {
+    const raw = await this.fetch<unknown>(`/api/issues/${id}`, {
       method: "PUT",
       body: JSON.stringify(data),
     });
+    const issue = parseWithFallback<Issue | null>(raw, IssueSchema, null, {
+      endpoint: "PUT /api/issues/:id",
+    });
+    if (!issue) throw new Error("Invalid issue response");
+    return issue;
+  }
+
+  async listCollections(options?: {
+    workspaceId: string;
+    signal?: AbortSignal;
+  }) {
+    return parseWithFallback(
+      await this.fetch<unknown>("/api/collections", {
+        signal: options?.signal,
+        headers: options
+          ? { "X-Workspace-ID": options.workspaceId }
+          : undefined,
+      }),
+      CollectionSchema.array(),
+      [] as import("../collections").Collection[],
+      { endpoint: "GET /api/collections" },
+    );
+  }
+  async createCollection(name: string, projectId?: string) {
+    const raw = await this.fetch<unknown>("/api/collections", {
+      method: "POST",
+      body: JSON.stringify({ name, project_id: projectId }),
+    });
+    const result = parseWithFallback(
+      raw,
+      CollectionSchema,
+      null as import("../collections").Collection | null,
+      { endpoint: "POST /api/collections" },
+    );
+    if (!result) throw new Error("Invalid collection response");
+    return result;
+  }
+  async getCollection(
+    id: string,
+    options?: { workspaceId: string; signal?: AbortSignal },
+  ) {
+    const result = parseWithFallback(
+      await this.fetch<unknown>(`/api/collections/${id}`, {
+        signal: options?.signal,
+        headers: options
+          ? { "X-Workspace-ID": options.workspaceId }
+          : undefined,
+      }),
+      CollectionDetailSchema,
+      null as import("zod").infer<typeof CollectionDetailSchema> | null,
+      { endpoint: "GET /api/collections/:id" },
+    );
+    if (!result) throw new Error("Invalid collection response");
+    return result;
+  }
+  async createCollectionField(
+    id: string,
+    field: {
+      name: string;
+      type: string;
+      config?: { options: { name: string; color: string }[] };
+    },
+  ) {
+    const raw = await this.fetch<unknown>(`/api/collections/${id}/fields`, {
+      method: "POST",
+      body: JSON.stringify(field),
+    });
+    const result = parseWithFallback(
+      raw,
+      CollectionFieldSchema,
+      null as import("../collections").CollectionField | null,
+      { endpoint: "POST /api/collections/:id/fields" },
+    );
+    if (!result) throw new Error("Invalid field response");
+    return result;
+  }
+  async listCollectionRecords(
+    id: string,
+    query: CollectionQuery,
+    cursor: string | null,
+    signal?: AbortSignal,
+    workspaceId?: string,
+  ) {
+    const params = new URLSearchParams({ limit: "50" });
+    if (cursor) params.set("cursor", cursor);
+    if (query.search) params.set("search", query.search);
+    if (query.record_id) params.set("record_id", query.record_id);
+    for (const key of ["date_field", "date_start", "date_end"] as const) {
+      if (query[key]) params.set(key, query[key]);
+    }
+    if (query.properties)
+      params.set("properties", JSON.stringify(query.properties));
+    if (query.group_by) params.set("group_by", query.group_by);
+    if (query.group_key !== undefined) params.set("group_key", query.group_key);
+    const raw = await this.fetch<unknown>(
+      `/api/collections/${id}/records?${params}`,
+      {
+        signal,
+        headers: workspaceId ? { "X-Workspace-ID": workspaceId } : undefined,
+      },
+    );
+    const result = parseWithFallback(
+      raw,
+      CollectionPageSchema,
+      null as import("zod").infer<typeof CollectionPageSchema> | null,
+      { endpoint: "GET /api/collections/:id/records" },
+    );
+    if (!result) throw new Error("Invalid records response");
+    return result;
+  }
+  async createCollectionRecord(id: string, title: string) {
+    return this.collectionRecordCommand(id, "", { title }, "POST");
+  }
+  async updateCollectionRecord(
+    id: string,
+    recordId: string,
+    title: string,
+    base: string,
+  ) {
+    return this.collectionRecordCommand(
+      id,
+      `/${recordId}`,
+      { title, title_base: base },
+      "PUT",
+    );
+  }
+  async setCollectionRecordField(
+    id: string,
+    recordId: string,
+    fieldId: string,
+    value: unknown,
+    expected: unknown,
+  ) {
+    return this.collectionRecordCommand(
+      id,
+      `/${recordId}/fields/${fieldId}`,
+      { value, expected_value: expected ?? null },
+      "PUT",
+    );
+  }
+  private async collectionRecordCommand(
+    id: string,
+    suffix: string,
+    body: unknown,
+    method: "POST" | "PUT",
+  ) {
+    const raw = await this.fetch<unknown>(
+      `/api/collections/${id}/records${suffix}`,
+      { method, body: JSON.stringify(body) },
+    );
+    const result = parseWithFallback(
+      raw,
+      CollectionRecordSchema,
+      null as import("../collections").CollectionRecord | null,
+      { endpoint: "collection record write" },
+    );
+    if (!result) throw new Error("Invalid record response");
+    return result;
+  }
+
+  async listDocuments(
+    projectId?: string,
+    options?: { workspaceId: string; signal?: AbortSignal },
+  ): Promise<Issue[]> {
+    const raw = await this.fetch<unknown>(
+      `/api/documents${projectId ? `?project_id=${encodeURIComponent(projectId)}` : ""}`,
+      {
+        signal: options?.signal,
+        headers: options
+          ? { "X-Workspace-ID": options.workspaceId }
+          : undefined,
+      },
+    );
+    return parseWithFallback<Issue[]>(raw, IssueSchema.array(), [], {
+      endpoint: "GET /api/documents",
+    });
+  }
+
+  async moveDocument(
+    id: string,
+    parentId: string | null,
+    position: number,
+    beforeId?: string,
+  ): Promise<Issue> {
+    return this.documentCommand(id, "move", {
+      parent_issue_id: parentId,
+      position,
+      before_id: beforeId,
+    });
+  }
+
+  async transitionDocument(
+    id: string,
+    action: "review" | "publish" | "draft",
+    revision: number,
+  ): Promise<Issue> {
+    return this.documentCommand(id, "transition", {
+      action,
+      expected_document_revision: revision,
+    });
+  }
+
+  private async documentCommand(
+    id: string,
+    command: "move" | "transition",
+    body: unknown,
+  ): Promise<Issue> {
+    const raw = await this.fetch<unknown>(`/api/documents/${id}/${command}`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    });
+    const issue = parseWithFallback<Issue | null>(raw, IssueSchema, null, {
+      endpoint: `POST /api/documents/:id/${command}`,
+    });
+    if (!issue) throw new Error("Invalid document response");
+    return issue;
   }
 
   async moveIssue(id: string, data: MoveIssueRequest): Promise<Issue> {
@@ -4150,11 +4370,13 @@ export class ApiClient {
   // desktop builds survive backend drift; a malformed list degrades to []
   // (selector shows only built-ins) rather than blanking the page.
   async listIssueViews(params: {
+    collection_id?: string|null;
     scope_type: string;
     scope_id?: string | null;
   }): Promise<IssueView[]> {
     const qs = new URLSearchParams({ scope_type: params.scope_type });
     if (params.scope_id) qs.set("scope_id", params.scope_id);
+    if (params.collection_id) qs.set("collection_id",params.collection_id);
     const raw = await this.fetch<unknown>(`/api/issue-views?${qs.toString()}`);
     return parseWithFallback(raw, IssueViewListSchema, [], {
       endpoint: "GET /api/issue-views",

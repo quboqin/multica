@@ -35,13 +35,15 @@ import (
 
 // IssueResponse is the JSON response for an issue.
 type IssueResponse struct {
-	ID          string  `json:"id"`
-	WorkspaceID string  `json:"workspace_id"`
-	Number      int32   `json:"number"`
-	Identifier  string  `json:"identifier"`
-	Title       string  `json:"title"`
-	Description *string `json:"description"`
-	Status      string  `json:"status"`
+	Kind             string  `json:"kind"`
+	DocumentRevision int64   `json:"document_revision"`
+	ID               string  `json:"id"`
+	WorkspaceID      string  `json:"workspace_id"`
+	Number           int32   `json:"number"`
+	Identifier       string  `json:"identifier"`
+	Title            string  `json:"title"`
+	Description      *string `json:"description"`
+	Status           string  `json:"status"`
 	// StatusCategory encodes lifecycle using the legacy seven-value wire enum. It is
 	// omitted when an endpoint cannot resolve a custom status, so consumers must
 	// fall back to their catalog rather than treat a blank as "no category".
@@ -354,6 +356,7 @@ func issueToResponse(i db.Issue, issuePrefix string) IssueResponse {
 		CreatedAt:      timestampToString(i.CreatedAt),
 		UpdatedAt:      timestampToString(i.UpdatedAt),
 		Revision:       i.Revision,
+		Kind:           i.Kind, DocumentRevision: i.DocumentRevision,
 		LastActivityAt: timestampToNanoPtr(i.LastActivityAt),
 		Metadata:       parseIssueMetadata(i.Metadata),
 		Properties:     parseIssueProperties(i.Properties),
@@ -391,6 +394,7 @@ func issueListRowToResponse(i db.ListIssuesRow, issuePrefix string) IssueRespons
 		CreatedAt:      timestampToString(i.CreatedAt),
 		UpdatedAt:      timestampToString(i.UpdatedAt),
 		Revision:       i.Revision,
+		Kind:           i.Kind, DocumentRevision: i.DocumentRevision,
 		LastActivityAt: timestampToNanoPtr(i.LastActivityAt),
 		Metadata:       parseIssueMetadata(i.Metadata),
 		Properties:     parseIssueProperties(i.Properties),
@@ -460,6 +464,7 @@ func openIssueRowToResponse(i db.ListOpenIssuesRow, issuePrefix string) IssueRes
 		CreatedAt:      timestampToString(i.CreatedAt),
 		UpdatedAt:      timestampToString(i.UpdatedAt),
 		Revision:       i.Revision,
+		Kind:           i.Kind, DocumentRevision: i.DocumentRevision,
 		LastActivityAt: timestampToNanoPtr(i.LastActivityAt),
 		Metadata:       parseIssueMetadata(i.Metadata),
 		Properties:     parseIssueProperties(i.Properties),
@@ -945,7 +950,7 @@ func buildSearchQuery(phrase string, terms []string, queryNum int, hasNum bool, 
 		i.assignee_type, i.assignee_id, i.creator_type, i.creator_id,
 		i.parent_issue_id, i.acceptance_criteria, i.context_refs, i.position,
 		i.start_date, i.due_date, i.created_at, i.updated_at, i.last_activity_at, i.number, i.project_id,
-		i.revision,
+		i.revision, i.kind, i.document_revision,
 		pc.match_source,
 		COALESCE(c.content, '') AS matched_comment_content
 	FROM page_candidates pc
@@ -1009,6 +1014,15 @@ func (h *Handler) SearchIssues(w http.ResponseWriter, r *http.Request) {
 	}
 
 	sqlQuery, args := buildSearchQuery(q, terms, queryNum, hasNum, includeClosed, terminalStatusKeys)
+	kind := r.URL.Query().Get("kind")
+	if kind != "" {
+		if !contains([]string{"task", "doc", "knowledge", "workflow_run"}, kind) {
+			writeError(w, 400, "invalid kind")
+			return
+		}
+		// Filter before ranking and pagination, never after LIMIT.
+		sqlQuery = strings.Replace(sqlQuery, "i.workspace_id = $4", "i.workspace_id = $4 AND i.kind = '"+kind+"'", 1)
+	}
 	// Fill placeholder args: $4 = workspace_id, last two = limit, offset
 	args[3] = wsUUID
 	args[len(args)-2] = limit
@@ -1040,7 +1054,7 @@ func (h *Handler) SearchIssues(w http.ResponseWriter, r *http.Request) {
 				&sr.issue.LastActivityAt,
 				&sr.issue.Number,
 				&sr.issue.ProjectID,
-				&sr.issue.Revision,
+				&sr.issue.Revision, &sr.issue.Kind, &sr.issue.DocumentRevision,
 				&sr.matchSource,
 				&sr.matchedCommentContent,
 			); err != nil {
@@ -1379,7 +1393,7 @@ func (h *Handler) ListIssues(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Build dynamic SQL — same approach as ListGroupedIssues.
-	where := []string{"i.workspace_id = $1"}
+	where := []string{"i.workspace_id = $1", "i.kind = 'task'"}
 	args := []any{wsUUID}
 	addArg := func(v any) string {
 		args = append(args, v)
@@ -1510,7 +1524,7 @@ func (h *Handler) ListIssues(w http.ResponseWriter, r *http.Request) {
 		where = append(where, fmt.Sprintf("i.metadata @> %s::jsonb", addArg(string(metadataFilter))))
 	}
 	if propertiesFilter != nil {
-		where = append(where, propertiesFilterPredicate(propertiesFilter, addArg))
+		where = append(where, propertiesFilterPredicate(propertiesFilter, addArg, "i.properties"))
 	}
 	where = appendIssueDateFilter(where, addArg, dateFilter)
 	if involvesUserFilter.Valid {
@@ -1588,7 +1602,7 @@ func (h *Handler) ListIssues(w http.ResponseWriter, r *http.Request) {
 	query := fmt.Sprintf(`SELECT i.id, i.workspace_id, i.title, i.description, i.status, i.priority,
        i.assignee_type, i.assignee_id, i.creator_type, i.creator_id,
        i.parent_issue_id, i.position, i.start_date, i.due_date, i.created_at, i.updated_at, i.last_activity_at, i.number, i.project_id, i.metadata, i.stage, i.properties,
-	   i.revision
+	   i.revision, i.kind, i.document_revision
 FROM issue i
 WHERE %s
 ORDER BY %s
@@ -1628,7 +1642,7 @@ LIMIT %s OFFSET %s`, whereSql, orderBy, limitRef, offsetRef)
 			&row.Metadata,
 			&row.Stage,
 			&row.Properties,
-			&row.Revision,
+			&row.Revision, &row.Kind, &row.DocumentRevision,
 		); err != nil {
 			slog.Warn("ListIssues scan failed", "error", err)
 			writeError(w, http.StatusInternalServerError, "failed to list issues")
@@ -1869,7 +1883,7 @@ func (h *Handler) ListGroupedIssues(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	where := []string{"i.workspace_id = $1"}
+	where := []string{"i.workspace_id = $1", "i.kind = 'task'"}
 	args := []any{wsUUID}
 	addArg := func(v any) string {
 		args = append(args, v)
@@ -1958,7 +1972,7 @@ func (h *Handler) ListGroupedIssues(w http.ResponseWriter, r *http.Request) {
 	if filter, ok := parsePropertiesFilterParam(w, r.URL.Query().Get("properties")); !ok {
 		return
 	} else if filter != nil {
-		where = append(where, propertiesFilterPredicate(filter, addArg))
+		where = append(where, propertiesFilterPredicate(filter, addArg, "i.properties"))
 	}
 	// Mirror the involves_user_id 4-branch UNION from sqlc's ListIssues /
 	// ListOpenIssues / CountIssues. ListGroupedIssues is a hand-written dynamic
@@ -2187,7 +2201,7 @@ WITH ranked AS (
 		i.id, i.workspace_id, i.title, i.description, i.status, i.priority,
 		i.assignee_type, i.assignee_id, i.creator_type, i.creator_id,
 		i.parent_issue_id, i.position, i.start_date, i.due_date, i.created_at, i.updated_at, i.last_activity_at,
-		i.number, i.project_id, i.metadata, i.stage, i.properties, i.revision,
+		i.number, i.project_id, i.metadata, i.stage, i.properties, i.revision, i.kind, i.document_revision,
 		COUNT(*) OVER (PARTITION BY i.assignee_type, i.assignee_id) AS group_total,
 		ROW_NUMBER() OVER (
 			PARTITION BY i.assignee_type, i.assignee_id
@@ -2200,7 +2214,7 @@ SELECT
 	id, workspace_id, title, description, status, priority,
 	assignee_type, assignee_id, creator_type, creator_id,
 	parent_issue_id, position, start_date, due_date, created_at, updated_at, last_activity_at,
-	number, project_id, metadata, stage, properties, revision, group_total
+	number, project_id, metadata, stage, properties, revision, kind, document_revision, group_total
 FROM ranked
 WHERE rn > %s AND rn <= %s + %s
 ORDER BY
@@ -2248,7 +2262,7 @@ ORDER BY
 			&row.Metadata,
 			&row.Stage,
 			&row.Properties,
-			&row.Revision,
+			&row.Revision, &row.Kind, &row.DocumentRevision,
 			&row.GroupTotal,
 		); err != nil {
 			slog.Warn("ListGroupedIssues scan failed", "error", err)
@@ -2858,6 +2872,7 @@ func readRuntimeCLIVersion(metadata []byte) string {
 }
 
 type CreateIssueRequest struct {
+	Kind          string   `json:"kind"`
 	Title         string   `json:"title"`
 	Description   *string  `json:"description"`
 	Status        string   `json:"status"`
@@ -2913,6 +2928,24 @@ func (h *Handler) CreateIssue(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if req.Kind == "" {
+		req.Kind = "task"
+	}
+	if !contains([]string{"task", "doc", "knowledge", "workflow_run"}, req.Kind) {
+		writeError(w, 400, "invalid kind")
+		return
+	}
+	if req.Kind == "doc" {
+		if req.Status != "" && req.Status != "draft" {
+			writeError(w, 400, "documents must start as draft")
+			return
+		}
+		req.Status = "draft"
+		if err := h.Queries.SeedDocumentStatuses(r.Context(), wsUUID); err != nil {
+			writeError(w, 500, "failed to initialize document statuses")
+			return
+		}
+	}
 	status := req.Status
 	if status == "" {
 		status = "todo"
@@ -3105,6 +3138,7 @@ func (h *Handler) CreateIssue(w http.ResponseWriter, r *http.Request) {
 	}
 
 	res, err := h.IssueService.Create(r.Context(), service.IssueCreateParams{
+		Kind:           req.Kind,
 		WorkspaceID:    wsUUID,
 		Title:          req.Title,
 		Description:    ptrToText(req.Description),
@@ -3199,8 +3233,9 @@ func (h *Handler) CreateIssue(w http.ResponseWriter, r *http.Request) {
 }
 
 type UpdateIssueRequest struct {
-	ExpectedRevision *int64  `json:"expected_revision,omitempty"`
-	Title            *string `json:"title"`
+	ExpectedDocumentRevision *int64  `json:"expected_document_revision,omitempty"`
+	ExpectedRevision         *int64  `json:"expected_revision,omitempty"`
+	Title                    *string `json:"title"`
 	// TitleBase is the title adopted by the editor before producing Title. It
 	// protects title edits without coupling them to unrelated issue mutations.
 	TitleBase   *string `json:"title_base,omitempty"`
@@ -3317,7 +3352,7 @@ func refreshUntouchedNullableIssueParams(params *db.UpdateIssueParams, current d
 
 var errIssueFieldConflict = errors.New("issue text field conflict")
 
-func (h *Handler) updateIssueAtomically(ctx context.Context, workspaceID pgtype.UUID, params db.UpdateIssueParams, rawFields map[string]json.RawMessage, titleBase, descriptionBase *string, attachmentIDs []pgtype.UUID, statusKey string) (db.Issue, db.Issue, bool, error) {
+func (h *Handler) updateIssueAtomically(ctx context.Context, workspaceID pgtype.UUID, params db.UpdateIssueParams, rawFields map[string]json.RawMessage, titleBase, descriptionBase *string, attachmentIDs []pgtype.UUID, statusKey string, documentRevision *int64) (db.Issue, db.Issue, bool, error) {
 	if h.TxStarter == nil {
 		return db.Issue{}, db.Issue{}, false, errors.New("atomic issue update requires transaction starter")
 	}
@@ -3331,6 +3366,9 @@ func (h *Handler) updateIssueAtomically(ctx context.Context, workspaceID pgtype.
 	// This path opens its own transaction, so it carries the archive-race guard
 	// itself rather than going through runWithIssueStatusGuard. The catalog lock
 	// must precede both attachment and issue row locks everywhere. (MUL-6243)
+	if documentRevision != nil {
+		statusKey = "draft"
+	}
 	if err := assertIssueStatusStillActive(ctx, qtx, workspaceID, statusKey); err != nil {
 		return db.Issue{}, db.Issue{}, false, err
 	}
@@ -3350,6 +3388,24 @@ func (h *Handler) updateIssueAtomically(ctx context.Context, workspaceID pgtype.
 		return db.Issue{}, db.Issue{}, false, fmt.Errorf("lock issue for update: %w", err)
 	}
 
+	if current.Kind == "doc" && params.Description.Valid {
+		if documentRevision == nil || *documentRevision != current.DocumentRevision {
+			return db.Issue{}, current, false, errDocumentConflict
+		}
+		if err := qtx.AuthorizeDocumentWrite(ctx, uuidToString(current.ID)+":"+strconv.FormatInt(current.DocumentRevision, 10)); err != nil {
+			return db.Issue{}, current, false, err
+		}
+		if params.Description.String != current.Description.String && current.Status != "draft" {
+			if err := qtx.AuthorizeDocumentTransition(ctx, uuidToString(current.ID)); err != nil {
+				return db.Issue{}, current, false, err
+			}
+			params.Status = pgtype.Text{String: "draft", Valid: true}
+			if err := qtx.CancelDocumentIngestion(ctx, db.CancelDocumentIngestionParams{WorkspaceID: current.WorkspaceID, IssueID: current.ID}); err != nil {
+				return db.Issue{}, current, false, err
+			}
+		}
+
+	}
 	if params.Title.Valid && titleBase != nil && current.Title != *titleBase && current.Title != params.Title.String {
 		return db.Issue{}, current, false, errIssueFieldConflict
 	}
@@ -3448,6 +3504,18 @@ func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
 	var rawFields map[string]json.RawMessage
 	json.Unmarshal(bodyBytes, &rawFields)
 
+	if prevIssue.Kind == "doc" {
+		if _, touched := rawFields["description"]; touched && (req.Description == nil || req.ExpectedDocumentRevision == nil) {
+			writeDocumentConflict(w, prevIssue, "document_version_required")
+			return
+		}
+		for _, field := range []string{"status", "parent_issue_id", "position", "project_id"} {
+			if _, touched := rawFields[field]; touched {
+				writeError(w, 400, "use document transition or move for "+field)
+				return
+			}
+		}
+	}
 	if prevIssue.TriageState.Valid {
 		if field := triageLockedField(rawFields); field != "" {
 			writeIssueInTriage(w, field)
@@ -3652,7 +3720,7 @@ func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
 	if req.Description != nil || req.TitleBase != nil || req.DescriptionBase != nil || len(attachmentIDs) > 0 {
 		var lockedPrev db.Issue
 		issue, lockedPrev, attachmentsChanged, err = h.updateIssueAtomically(
-			r.Context(), prevIssue.WorkspaceID, params, rawFields, req.TitleBase, req.DescriptionBase, attachmentIDs, statusKeyForGuard,
+			r.Context(), prevIssue.WorkspaceID, params, rawFields, req.TitleBase, req.DescriptionBase, attachmentIDs, statusKeyForGuard, req.ExpectedDocumentRevision,
 		)
 		if lockedPrev.ID.Valid {
 			prevIssue = lockedPrev
@@ -3666,6 +3734,10 @@ func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
 	}
 	if err != nil {
 		if writeIssueStatusRaceError(w, err) {
+			return
+		}
+		if errors.Is(err, errDocumentConflict) {
+			writeDocumentConflict(w, prevIssue, "document_conflict")
 			return
 		}
 		if errors.Is(err, errIssueFieldConflict) {
@@ -3775,7 +3847,7 @@ func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
 	// (MUL-2538 — replaces the agent-prompt rule that caused self-mention
 	// loops in PR #2918). The helper guards on transition + parent state and
 	// fails best-effort.
-	if statusChanged {
+	if statusChanged && issue.Kind != "doc" {
 		h.notifyParentOfChildDone(r.Context(), prevIssue, issue)
 	}
 
@@ -4042,6 +4114,15 @@ func (h *Handler) deleteIssuesAndCollectAttachmentURLs(ctx context.Context, issu
 	defer tx.Rollback(ctx)
 	qtx := h.Queries.WithTx(tx)
 
+	lockedTrees := map[pgtype.UUID]bool{}
+	for _, issue := range issues {
+		if issue.Kind == "doc" && !lockedTrees[issue.WorkspaceID] {
+			if err := qtx.LockDocumentTree(ctx, uuidToString(issue.WorkspaceID)); err != nil {
+				return issueDeleteResult{}, err
+			}
+			lockedTrees[issue.WorkspaceID] = true
+		}
+	}
 	result := issueDeleteResult{}
 	for _, issue := range issues {
 		if _, err := qtx.LockIssueForDelete(ctx, db.LockIssueForDeleteParams{
@@ -4097,6 +4178,9 @@ func (h *Handler) deleteIssuesAndCollectAttachmentURLs(ctx context.Context, issu
 			}
 		} else if !errors.Is(contextErr, pgx.ErrNoRows) {
 			return issueDeleteResult{}, fmt.Errorf("load issue source context for delete: %w", contextErr)
+		}
+		if err := qtx.DeleteDocumentPublications(ctx, db.DeleteDocumentPublicationsParams{WorkspaceID: issue.WorkspaceID, IssueID: issue.ID}); err != nil {
+			return issueDeleteResult{}, err
 		}
 		if err := qtx.DeleteIssue(ctx, db.DeleteIssueParams{ID: issue.ID, WorkspaceID: issue.WorkspaceID}); err != nil {
 			return issueDeleteResult{}, fmt.Errorf("delete issue: %w", err)
@@ -4231,6 +4315,23 @@ func (h *Handler) BatchUpdateIssues(w http.ResponseWriter, r *http.Request) {
 		batchProjectID = projectUUID
 	}
 
+	// Document bodies and structure require their dedicated atomic commands.
+	for _, id := range req.IssueIDs {
+		uid, err := util.ParseUUID(id)
+		if err != nil {
+			continue
+		}
+		item, err := h.Queries.GetIssueInWorkspace(r.Context(), db.GetIssueInWorkspaceParams{ID: uid, WorkspaceID: wsUUID})
+		if err != nil || item.Kind != "doc" {
+			continue
+		}
+		for _, field := range []string{"description", "status", "parent_issue_id", "position", "project_id"} {
+			if _, present := rawUpdates[field]; present {
+				writeError(w, 400, "use versioned document save, move, or transition commands for documents")
+				return
+			}
+		}
+	}
 	updated := 0
 	// One Resolver for the whole batch — a per-issue filler would query the
 	// catalog once per custom-status row. (MUL-6243)
@@ -4397,7 +4498,7 @@ func (h *Handler) BatchUpdateIssues(w http.ResponseWriter, r *http.Request) {
 			// legacy single-update clients that omit description_base.
 			var lockedPrev db.Issue
 			issue, lockedPrev, _, err = h.updateIssueAtomically(
-				r.Context(), prevIssue.WorkspaceID, params, rawUpdates, nil, nil, nil, batchStatusKey,
+				r.Context(), prevIssue.WorkspaceID, params, rawUpdates, nil, nil, nil, batchStatusKey, nil,
 			)
 			if err == nil {
 				prevIssue = lockedPrev

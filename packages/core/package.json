@@ -10,6 +10,8 @@
   },
   "exports": {
     ".": "./index.ts",
+    "./data-source": "./data-source/index.ts",
+    "./issues/table-fields": "./issues/table-fields.ts",
     "./markdown": "./markdown/index.ts",
     "./types": "./types/index.ts",
     "./types/*": "./types/*.ts",
@@ -160,7 +162,9 @@
     "./skills/frontmatter": "./skills/frontmatter.ts",
     "./skills/pack-archive": "./skills/pack-archive.ts",
     "./skills/stores": "./skills/stores/index.ts",
-    "./autopilots/stores": "./autopilots/stores/index.ts"
+    "./autopilots/stores": "./autopilots/stores/index.ts",
+    "./documents": "./documents/index.ts",
+    "./collections": "./collections/index.ts"
   },
   "dependencies": {
     "@formatjs/intl-localematcher": "catalog:",

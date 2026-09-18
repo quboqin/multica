@@ -727,7 +727,7 @@ func TestParsePropertiesFilterNoValueUnit(t *testing.T) {
 	if parsed, isMarker := parseNoPropertyValuePattern(groups[0][0]); !isMarker || parsed != defID {
 		t.Fatalf("expected no-value marker for %s, got %q isMarker=%v", defID, parsed, isMarker)
 	}
-	sql := propertiesFilterPredicate(groups, addArg)
+	sql := propertiesFilterPredicate(groups, addArg, "i.properties")
 	if !strings.Contains(sql, "NOT (i.properties ? $1)") {
 		t.Fatalf("no-value predicate wrong: %s", sql)
 	}
@@ -747,7 +747,7 @@ func TestParsePropertiesFilterNoValueUnit(t *testing.T) {
 		t.Fatalf("mixed parse failed: %s", w.Body.String())
 	}
 	args = nil
-	sql = propertiesFilterPredicate(groups, addArg)
+	sql = propertiesFilterPredicate(groups, addArg, "i.properties")
 	if !strings.Contains(sql, "@> $1") || !strings.Contains(sql, "NOT (i.properties ? ") {
 		t.Fatalf("mixed predicate wrong: %s", sql)
 	}
@@ -1400,7 +1400,7 @@ func TestParsePropertiesFilterOperatorUnit(t *testing.T) {
 		t.Fatalf("contains value not LIKE-escaped: %q", pattern.Value)
 	}
 	args = nil
-	sql := propertiesFilterPredicate(groups, addArg)
+	sql := propertiesFilterPredicate(groups, addArg, "i.properties")
 	if !strings.Contains(sql, "jsonb_typeof") || !strings.Contains(sql, "= 'string'") ||
 		!strings.Contains(sql, "ILIKE") || strings.Contains(sql, "@>") {
 		t.Fatalf("contains predicate wrong: %s", sql)
@@ -1412,7 +1412,7 @@ func TestParsePropertiesFilterOperatorUnit(t *testing.T) {
 		t.Fatalf("gte parse failed: %s", w.Body.String())
 	}
 	args = nil
-	sql = propertiesFilterPredicate(groups, addArg)
+	sql = propertiesFilterPredicate(groups, addArg, "i.properties")
 	if !strings.Contains(sql, "CASE WHEN") || !strings.Contains(sql, "::numeric END >= $") ||
 		!strings.Contains(sql, "::numeric)") {
 		t.Fatalf("gte predicate wrong: %s", sql)
@@ -1442,7 +1442,7 @@ func TestParsePropertiesFilterOperatorUnit(t *testing.T) {
 		t.Fatalf("before parse failed: %s", w.Body.String())
 	}
 	args = nil
-	sql = propertiesFilterPredicate(groups, addArg)
+	sql = propertiesFilterPredicate(groups, addArg, "i.properties")
 	if !strings.Contains(sql, "= 'string' AND") || !strings.Contains(sql, "< $") {
 		t.Fatalf("before predicate wrong: %s", sql)
 	}
@@ -1703,7 +1703,7 @@ func TestPropertyContainsPrefilterCompilationUnit(t *testing.T) {
 			args = append(args, v)
 			return fmt.Sprintf("$%d", len(args))
 		}
-		return pattern, groups[0][0], propertiesFilterPredicate(groups, addArg)
+		return pattern, groups[0][0], propertiesFilterPredicate(groups, addArg, "i.properties")
 	}
 
 	for _, tc := range []struct {

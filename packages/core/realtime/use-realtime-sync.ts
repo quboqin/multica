@@ -1,5 +1,7 @@
 "use client";
 
+import { refreshDataSource } from "../data-source";
+
 import { useEffect, useRef } from "react";
 import { useQueryClient, type InfiniteData, type QueryClient } from "@tanstack/react-query";
 import type { WSClient } from "../api/ws-client";
@@ -641,7 +643,10 @@ export async function handleInboxNew(
 function invalidateWorkspaceScopedQueries(qc: QueryClient): void {
   const wsId = getCurrentWsId();
   if (wsId) {
-    qc.invalidateQueries({ queryKey: issueKeys.all(wsId) });
+    void refreshDataSource(qc, issueKeys.all(wsId));
+    for (const prefix of ["documents", "collections"]) {
+      void refreshDataSource(qc, [prefix, wsId]);
+    }
     // Through the inbox's own entry point, not a plain invalidate: a reconnect
     // can land during the list's first load, and a plain invalidate would be
     // answered by the request already on the wire (see refreshInboxQuery).
@@ -996,6 +1001,10 @@ export function useRealtimeSync(
     ]);
 
     const unsubAny = ws.onAny((msg) => {
+      if (msg.type.startsWith("issue:") || msg.type.startsWith("issue_properties:")) {
+        const wsId = getCurrentWsId();
+        if (wsId) void refreshDataSource(qc, issueKeys.tableAll(wsId));
+      }
       if (specificEvents.has(msg.type)) return;
       const prefix = msg.type.split(":")[0] ?? "";
       const refresh = refreshMap[prefix];
@@ -1007,12 +1016,23 @@ export function useRealtimeSync(
     // Filtering by actor_id would block other tabs of the same user.
     // Instead, both mutations and WS handlers use dedup checks to be idempotent.
 
+    const refreshCollections = () => {
+      const wsId = getCurrentWsId();
+      if (wsId) void refreshDataSource(qc, ["collections", wsId]);
+    };
+    const refreshDocuments = () => {
+      const wsId = getCurrentWsId();
+      if (wsId) void refreshDataSource(qc, ["documents", wsId]);
+    };
+    const unsubRecordUpdated=ws.on("record:updated",refreshCollections);
+    const unsubCollectionUpdated=ws.on("collection:updated",refreshCollections);
     const unsubIssueUpdated = ws.on("issue:updated", (p) => {
       const payload = p as IssueUpdatedPayload;
       const { issue } = payload;
       if (!issue?.id) return;
       const wsId = getCurrentWsId();
       if (wsId) {
+        refreshDocuments();
         onIssueUpdated(qc, wsId, issue, {
           assigneeChanged: payload.assignee_changed,
           statusChanged: payload.status_changed,
@@ -1028,7 +1048,10 @@ export function useRealtimeSync(
       const { issue } = p as IssueCreatedPayload;
       if (!issue) return;
       const wsId = getCurrentWsId();
-      if (wsId) onIssueCreated(qc, wsId, issue);
+      if (wsId) {
+        onIssueCreated(qc, wsId, issue);
+        refreshDocuments();
+      }
     });
 
     const unsubIssueDeleted = ws.on("issue:deleted", (p) => {
@@ -1037,6 +1060,7 @@ export function useRealtimeSync(
       const wsId = getCurrentWsId();
       if (wsId) {
         onIssueDeleted(qc, wsId, issue_id);
+        refreshDocuments();
         void onInboxIssueDeleted(qc, wsId, issue_id);
       }
     });
@@ -1728,6 +1752,8 @@ export function useRealtimeSync(
     return () => {
       unsubAny();
       unsubIssueUpdated();
+      unsubRecordUpdated();
+      unsubCollectionUpdated();
       unsubIssueCreated();
       unsubIssueDeleted();
       unsubIssueAttachmentsChanged();

@@ -7,7 +7,6 @@ import (
 	"log/slog"
 	"math"
 	"net/http"
-	"net/url"
 	"sort"
 	"strconv"
 	"strings"
@@ -19,6 +18,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/multica-ai/multica/server/internal/fields"
 	"github.com/multica-ai/multica/server/internal/logger"
 	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
@@ -87,15 +87,8 @@ var reservedPropertyNames = map[string]struct{}{
 // Types
 // ---------------------------------------------------------------------------
 
-type PropertyOption struct {
-	ID    string `json:"id"`
-	Name  string `json:"name"`
-	Color string `json:"color"`
-}
-
-type PropertyConfig struct {
-	Options []PropertyOption `json:"options,omitempty"`
-}
+type PropertyOption = fields.PropertyOption
+type PropertyConfig = fields.PropertyConfig
 
 type PropertyResponse struct {
 	ID          string         `json:"id"`
@@ -243,48 +236,7 @@ func propertyTypeHasOptions(t string) bool {
 // option renames never touch issue rows). Non-select types must not carry
 // options and are stored as {}.
 func validatePropertyConfig(propType string, cfg *PropertyConfig) ([]byte, error) {
-	if !propertyTypeHasOptions(propType) {
-		if cfg != nil && len(cfg.Options) > 0 {
-			return nil, fmt.Errorf("type %q does not accept options", propType)
-		}
-		return []byte(`{}`), nil
-	}
-	if cfg == nil || len(cfg.Options) == 0 {
-		return nil, errors.New("select properties require at least one option")
-	}
-	if len(cfg.Options) > maxPropertySelectOptions {
-		return nil, fmt.Errorf("a property cannot have more than %d options", maxPropertySelectOptions)
-	}
-	seenIDs := make(map[string]struct{}, len(cfg.Options))
-	seenNames := make(map[string]struct{}, len(cfg.Options))
-	out := PropertyConfig{Options: make([]PropertyOption, 0, len(cfg.Options))}
-	for _, opt := range cfg.Options {
-		name, err := validateLabelName(opt.Name)
-		if err != nil {
-			return nil, fmt.Errorf("option %w", err)
-		}
-		lower := strings.ToLower(name)
-		if _, dup := seenNames[lower]; dup {
-			return nil, fmt.Errorf("duplicate option name %q", name)
-		}
-		seenNames[lower] = struct{}{}
-		color, err := normalizeColor(opt.Color)
-		if err != nil {
-			return nil, fmt.Errorf("option %q: %w", name, err)
-		}
-		id := strings.TrimSpace(opt.ID)
-		if id == "" {
-			id = uuid.NewString()
-		} else if _, err := uuid.Parse(id); err != nil {
-			return nil, fmt.Errorf("option %q: id must be a UUID", name)
-		}
-		if _, dup := seenIDs[id]; dup {
-			return nil, fmt.Errorf("duplicate option id %q", id)
-		}
-		seenIDs[id] = struct{}{}
-		out.Options = append(out.Options, PropertyOption{ID: id, Name: name, Color: color})
-	}
-	return json.Marshal(out)
+	return fields.ValidateConfig(propType, cfg, validateLabelName, normalizeColor)
 }
 
 func propertyOptionIDs(cfg PropertyConfig) map[string]int {
@@ -322,12 +274,7 @@ func selectOptionsHint(cfg PropertyConfig) string {
 var actorPropertyKinds = []string{"member"}
 
 // actorRef is a parsed "<kind>:<uuid>" property value.
-type actorRef struct {
-	Kind string
-	ID   string
-}
-
-func (a actorRef) String() string { return a.Kind + ":" + a.ID }
+type actorRef = fields.ActorRef
 
 func propertyTypeIsActor(t string) bool {
 	return t == "actor" || t == "multi_actor"
@@ -340,64 +287,8 @@ func actorKindsHint() string {
 // parseActorRef splits a stored actor value. Members are referenced by
 // user_id — the same id the assignee pair uses — so "who is this" resolves
 // identically everywhere in the product.
-func parseActorRef(s string) (actorRef, error) {
-	kind, id, found := strings.Cut(s, ":")
-	if !found {
-		return actorRef{}, fmt.Errorf("value must look like \"<kind>:<uuid>\" where kind is one of: %s", actorKindsHint())
-	}
-	valid := false
-	for _, k := range actorPropertyKinds {
-		if kind == k {
-			valid = true
-			break
-		}
-	}
-	if !valid {
-		return actorRef{}, fmt.Errorf("unknown actor kind %q; valid kinds: %s", kind, actorKindsHint())
-	}
-	parsed, err := uuid.Parse(id)
-	if err != nil {
-		return actorRef{}, fmt.Errorf("actor id in %q must be a UUID", s)
-	}
-	// Store the canonical lowercase-hyphenated form. uuid.Parse also accepts
-	// uppercase, braces and the urn: prefix; every consumer downstream (the
-	// member directory lookup in the client, the "= me" filter, @> containment)
-	// compares reference strings exactly, so an unnormalized id would store
-	// fine and then render as Unknown and never match a filter.
-	return actorRef{Kind: kind, ID: parsed.String()}, nil
-}
-
-// parseActorRefList validates a multi_actor array: every element must parse,
-// duplicates are dropped, and the caller's order is preserved. Unlike
-// multi_select there is no config order to canonicalize against, and sorting
-// by id would make the avatar row reshuffle on every edit. @> containment is
-// order-insensitive, so filtering is unaffected either way.
-func parseActorRefList(items []any) ([]actorRef, error) {
-	if len(items) == 0 {
-		return nil, errors.New("value must be a non-empty array of actor references")
-	}
-	if len(items) > maxPropertyActorValues {
-		return nil, fmt.Errorf("value cannot list more than %d actors", maxPropertyActorValues)
-	}
-	seen := make(map[string]struct{}, len(items))
-	refs := make([]actorRef, 0, len(items))
-	for _, item := range items {
-		s, ok := item.(string)
-		if !ok {
-			return nil, errors.New("value must be an array of actor reference strings")
-		}
-		ref, err := parseActorRef(s)
-		if err != nil {
-			return nil, err
-		}
-		if _, dup := seen[ref.String()]; dup {
-			continue
-		}
-		seen[ref.String()] = struct{}{}
-		refs = append(refs, ref)
-	}
-	return refs, nil
-}
+func parseActorRef(s string) (actorRef, error)          { return fields.ParseActorRef(s) }
+func parseActorRefList(items []any) ([]actorRef, error) { return fields.ParseActorRefList(items) }
 
 // actorRefsInValue re-reads the canonical stored JSON for an actor property.
 // SetIssueProperty uses it to resolve references against the workspace after
@@ -458,126 +349,7 @@ func (h *Handler) resolveActorRefs(r *http.Request, workspaceID string, refs []a
 // and returns the canonical JSON to store. Error strings enumerate the legal
 // values where possible — agents consume these directly to self-correct.
 func validatePropertyValue(def db.IssueProperty, raw json.RawMessage) ([]byte, error) {
-	if len(raw) == 0 {
-		return nil, errors.New("value is required")
-	}
-	var v any
-	if err := json.Unmarshal(raw, &v); err != nil {
-		return nil, fmt.Errorf("value must be valid JSON: %w", err)
-	}
-	if v == nil {
-		return nil, errors.New("value cannot be null (use DELETE to unset a property)")
-	}
-
-	cfg := parsePropertyConfig(def.Config)
-	switch def.Type {
-	case "text":
-		s, ok := v.(string)
-		if !ok {
-			return nil, errors.New("value must be a string")
-		}
-		if strings.TrimSpace(s) == "" {
-			return nil, errors.New("value cannot be empty (use DELETE to unset a property)")
-		}
-		if utf8.RuneCountInString(s) > maxPropertyTextValueLen {
-			return nil, fmt.Errorf("value must be %d characters or fewer", maxPropertyTextValueLen)
-		}
-		return json.Marshal(sanitizeNullBytes(s))
-	case "url":
-		s, ok := v.(string)
-		if !ok {
-			return nil, errors.New("value must be a URL string")
-		}
-		s = strings.TrimSpace(s)
-		if len(s) > maxPropertyURLValueLen {
-			return nil, fmt.Errorf("value must be %d characters or fewer", maxPropertyURLValueLen)
-		}
-		u, err := url.Parse(s)
-		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
-			return nil, errors.New("value must be an http(s) URL")
-		}
-		return json.Marshal(s)
-	case "number":
-		if _, ok := v.(float64); !ok {
-			return nil, errors.New("value must be a number")
-		}
-		return json.Marshal(v)
-	case "checkbox":
-		if _, ok := v.(bool); !ok {
-			return nil, errors.New("value must be true or false")
-		}
-		return json.Marshal(v)
-	case "date":
-		s, ok := v.(string)
-		if !ok {
-			return nil, errors.New("value must be a date string in YYYY-MM-DD format")
-		}
-		if _, err := time.Parse("2006-01-02", s); err != nil {
-			return nil, errors.New("value must be a date string in YYYY-MM-DD format")
-		}
-		return json.Marshal(s)
-	case "select":
-		s, ok := v.(string)
-		if !ok {
-			return nil, fmt.Errorf("value must be one of the option ids: %s", selectOptionsHint(cfg))
-		}
-		if _, exists := propertyOptionIDs(cfg)[s]; !exists {
-			return nil, fmt.Errorf("value must be one of the option ids: %s", selectOptionsHint(cfg))
-		}
-		return json.Marshal(s)
-	case "multi_select":
-		items, ok := v.([]any)
-		if !ok || len(items) == 0 {
-			return nil, fmt.Errorf("value must be a non-empty array of option ids: %s", selectOptionsHint(cfg))
-		}
-		order := propertyOptionIDs(cfg)
-		seen := make(map[string]struct{}, len(items))
-		ids := make([]string, 0, len(items))
-		for _, item := range items {
-			s, ok := item.(string)
-			if !ok {
-				return nil, fmt.Errorf("value must be a non-empty array of option ids: %s", selectOptionsHint(cfg))
-			}
-			if _, exists := order[s]; !exists {
-				return nil, fmt.Errorf("unknown option id %q; valid option ids: %s", s, selectOptionsHint(cfg))
-			}
-			if _, dup := seen[s]; dup {
-				continue
-			}
-			seen[s] = struct{}{}
-			ids = append(ids, s)
-		}
-		// Canonicalize to config order so equal selections serialize equally
-		// (stable @> containment filtering and change detection).
-		sort.SliceStable(ids, func(a, b int) bool { return order[ids[a]] < order[ids[b]] })
-		return json.Marshal(ids)
-	case "actor":
-		s, ok := v.(string)
-		if !ok {
-			return nil, fmt.Errorf("value must be an actor reference string like \"member:<uuid>\" (kinds: %s)", actorKindsHint())
-		}
-		ref, err := parseActorRef(s)
-		if err != nil {
-			return nil, err
-		}
-		return json.Marshal(ref.String())
-	case "multi_actor":
-		items, ok := v.([]any)
-		if !ok {
-			return nil, fmt.Errorf("value must be an array of actor reference strings like \"member:<uuid>\" (kinds: %s)", actorKindsHint())
-		}
-		refs, err := parseActorRefList(items)
-		if err != nil {
-			return nil, err
-		}
-		out := make([]string, len(refs))
-		for i, ref := range refs {
-			out[i] = ref.String()
-		}
-		return json.Marshal(out)
-	default:
-		return nil, fmt.Errorf("unsupported property type %q", def.Type)
-	}
+	return fields.ValidateValue(fields.Definition{Type: def.Type, Config: def.Config}, raw)
 }
 
 // removedOptionIDs returns option ids present in the stored config but
@@ -1359,14 +1131,15 @@ func parseOperatorPattern(alt json.RawMessage) (propertyOperatorPattern, bool) {
 // operatorPatternPredicate renders one operator alternative as SQL. Ops were
 // validated at parse time, so the re-parses below cannot fail for compiled
 // input; a malformed pattern degrades to FALSE rather than matching.
-func operatorPatternPredicate(pattern propertyOperatorPattern, addArg func(any) string) string {
+func operatorPatternPredicate(pattern propertyOperatorPattern, addArg func(any) string, column string) (predicate string) {
+	defer func() { predicate = strings.ReplaceAll(predicate, "FIELD_VALUES", column) }()
 	defArg := addArg(pattern.Def)
 	switch pattern.Op {
 	case "contains":
 		// Value is ILIKE-escaped at parse time. Restrict substring matching to
 		// stored strings: ->> also serializes numbers, booleans, and arrays, while
 		// the client matcher intentionally treats contains as a text/url operator.
-		match := fmt.Sprintf("(jsonb_typeof(i.properties -> %s) = 'string' AND (i.properties ->> %s) ILIKE '%%' || %s || '%%')",
+		match := fmt.Sprintf("(jsonb_typeof(FIELD_VALUES -> %s) = 'string' AND (FIELD_VALUES ->> %s) ILIKE '%%' || %s || '%%')",
 			defArg, defArg, addArg(pattern.Value))
 		if pattern.Prefilter == "" {
 			return match
@@ -1381,7 +1154,7 @@ func operatorPatternPredicate(pattern propertyOperatorPattern, addArg func(any) 
 		// LOWER(...) LIKE LOWER(...) rather than a second ILIKE: pg_bigm 1.2 has
 		// no ILIKE index scan (migration 036), and lowering both sides in SQL is
 		// exactly how ILIKE folds case, so the two cannot disagree.
-		return fmt.Sprintf("(LOWER(i.properties::text) LIKE LOWER('%%' || %s || '%%') AND %s)",
+		return fmt.Sprintf("(LOWER(FIELD_VALUES::text) LIKE LOWER('%%' || %s || '%%') AND %s)",
 			addArg(pattern.Prefilter), match)
 	case "gt", "gte", "lt", "lte":
 		// Bind the canonical decimal as numeric on every serving path. CASE makes
@@ -1392,10 +1165,10 @@ func operatorPatternPredicate(pattern propertyOperatorPattern, addArg func(any) 
 			return "FALSE"
 		}
 		canonical := strconv.FormatFloat(num, 'f', -1, 64)
-		return fmt.Sprintf("(CASE WHEN jsonb_typeof(i.properties -> %s) = 'number' THEN (i.properties ->> %s)::numeric END %s %s::numeric)",
+		return fmt.Sprintf("(CASE WHEN jsonb_typeof(FIELD_VALUES -> %s) = 'number' THEN (FIELD_VALUES ->> %s)::numeric END %s %s::numeric)",
 			defArg, defArg, propertyFilterOps[pattern.Op], addArg(canonical))
 	case "before", "after":
-		return fmt.Sprintf("(jsonb_typeof(i.properties -> %s) = 'string' AND i.properties ->> %s %s %s)",
+		return fmt.Sprintf("(jsonb_typeof(FIELD_VALUES -> %s) = 'string' AND FIELD_VALUES ->> %s %s %s)",
 			defArg, defArg, propertyFilterOps[pattern.Op], addArg(pattern.Value))
 	default:
 		return "FALSE"
@@ -1415,20 +1188,20 @@ func operatorPatternPredicate(pattern propertyOperatorPattern, addArg func(any) 
 // scalar ranges fundamentally cannot use a containment index, and only
 // `contains` gets an indexable prefilter in front of it (see
 // operatorPatternPredicate).
-func propertiesFilterPredicate(groups [][]json.RawMessage, addArg func(any) string) string {
+func propertiesFilterPredicate(groups [][]json.RawMessage, addArg func(any) string, column string) string {
 	groupSQL := make([]string, 0, len(groups))
 	for _, alternatives := range groups {
 		ors := make([]string, 0, len(alternatives))
 		for _, alt := range alternatives {
 			if defID, ok := parseNoPropertyValuePattern(alt); ok {
-				ors = append(ors, fmt.Sprintf("NOT (i.properties ? %s)", addArg(defID)))
+				ors = append(ors, fmt.Sprintf("NOT (%s ? %s)", column, addArg(defID)))
 				continue
 			}
 			if pattern, ok := parseOperatorPattern(alt); ok {
-				ors = append(ors, operatorPatternPredicate(pattern, addArg))
+				ors = append(ors, operatorPatternPredicate(pattern, addArg, column))
 				continue
 			}
-			ors = append(ors, fmt.Sprintf("i.properties @> %s::jsonb", addArg(string(alt))))
+			ors = append(ors, fmt.Sprintf("%s @> %s::jsonb", column, addArg(string(alt))))
 		}
 		groupSQL = append(groupSQL, "("+strings.Join(ors, " OR ")+")")
 	}

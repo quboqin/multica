@@ -7490,13 +7490,15 @@ func IssueToMapResolved(ctx context.Context, q issuestatus.Querier, issue db.Iss
 
 func IssueToMap(issue db.Issue, issuePrefix string) map[string]any {
 	return map[string]any{
-		"id":           util.UUIDToString(issue.ID),
-		"workspace_id": util.UUIDToString(issue.WorkspaceID),
-		"number":       issue.Number,
-		"identifier":   IssueIdentifier(issuePrefix, issue.Number),
-		"title":        issue.Title,
-		"description":  util.TextToPtr(issue.Description),
-		"status":       issue.Status,
+		"id":                util.UUIDToString(issue.ID),
+		"kind":              issue.Kind,
+		"document_revision": issue.DocumentRevision,
+		"workspace_id":      util.UUIDToString(issue.WorkspaceID),
+		"number":            issue.Number,
+		"identifier":        IssueIdentifier(issuePrefix, issue.Number),
+		"title":             issue.Title,
+		"description":       util.TextToPtr(issue.Description),
+		"status":            issue.Status,
 		// Mirrors handler.IssueResponse.StatusCategory. Built-ins map to a
 		// public lifecycle category without a catalog lookup; custom statuses
 		// are filled by IssueToMapResolved. (MUL-6243)

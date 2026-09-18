@@ -5,6 +5,7 @@ import type { Project } from "./project";
 
 // Issue API
 export interface CreateIssueRequest {
+  kind?: "task" | "doc" | "knowledge" | "workflow_run";
   title: string;
   description?: string;
   status?: IssueStatus;
@@ -48,6 +49,7 @@ export type CreateCommentSubIssueRequest =
   | CreateCommentSubIssueAgentRequest;
 
 export interface UpdateIssueRequest {
+  expected_document_revision?: number;
   /** Legacy aggregate compare-and-swap token. New text editors use field
    * baselines so unrelated issue activity does not reject their edits. */
   expected_revision?: number;
@@ -286,6 +288,7 @@ export type IssueTableScope =
   | { kind: "my"; relation: "assigned" | "created" | "involved" | "any" };
 
 export interface IssueTableFilters {
+  calendar?: {field: "start_date"|"due_date"|`property:${string}`; start:string; end:string};
   statuses?: IssueStatus[];
   priorities?: IssuePriority[];
   assignees?: IssueActorRef[];

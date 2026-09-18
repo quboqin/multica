@@ -11,6 +11,8 @@ import type { Label } from "./label";
 // WebSocket event types (matching Go server protocol/events.go)
 export type WSEventType =
   | "issue:created"
+  | "record:updated"
+  | "collection:updated"
   | "issue:updated"
   | "issue_attachments:changed"
   | "issue:deleted"

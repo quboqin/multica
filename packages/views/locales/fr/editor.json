@@ -86,7 +86,8 @@
     "no_skills_configured": "Aucun skill configuré",
     "no_results": "Aucun skill correspondant",
     "commands": {
-      "note": "Ajouter une note — ne déclenchera aucun agent"
+      "note": "Ajouter une note — ne déclenchera aucun agent",
+      "view": "Intégrer une vue enregistrée"
     }
   },
   "code_block": {

@@ -538,6 +538,7 @@ export const EMPTY_RESOURCE_LABELS_RESPONSE: ResourceLabelsResponse = {
 // `visibility` stay lenient strings; downstream code uses explicit `===`
 // comparisons and default branches per the API-compat rules.
 export const IssueViewSchema = z.object({
+  collection_id: z.string().nullable().catch(null).default(null),
   id: z.string(),
   workspace_id: z.string().default(""),
   owner_id: z.string().default(""),
@@ -578,6 +579,7 @@ export const EMPTY_ISSUE_VIEW_PREFERENCE: IssueViewPreference = {
 };
 
 export interface CreateIssueViewRequest {
+  collection_id?: string | null;
   name: string;
   scope_type: "workspace" | "my" | "project";
   scope_id?: string | null;
@@ -1245,6 +1247,8 @@ export const CommentSubIssueTaskResponseSchema = z.object({
 }).loose();
 
 export const IssueSchema = z.object({
+  kind: z.string().catch("task").default("task"),
+  document_revision: z.number().int().positive().default(1),
   id: z.string(),
   workspace_id: z.string(),
   number: z.number(),

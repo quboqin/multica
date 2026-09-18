@@ -81,14 +81,15 @@ type issueTableDateFilterRequest struct {
 }
 
 type issueTableFiltersRequest struct {
-	Statuses          []string             `json:"statuses,omitempty"`
-	Priorities        []string             `json:"priorities,omitempty"`
-	Assignees         []issueTableActorRef `json:"assignees,omitempty"`
-	IncludeNoAssignee bool                 `json:"include_no_assignee,omitempty"`
-	Creators          []issueTableActorRef `json:"creators,omitempty"`
-	ProjectIDs        []string             `json:"project_ids,omitempty"`
-	IncludeNoProject  bool                 `json:"include_no_project,omitempty"`
-	LabelIDs          []string             `json:"label_ids,omitempty"`
+	Calendar          *issueTableDateFilterRequest `json:"calendar,omitempty"`
+	Statuses          []string                     `json:"statuses,omitempty"`
+	Priorities        []string                     `json:"priorities,omitempty"`
+	Assignees         []issueTableActorRef         `json:"assignees,omitempty"`
+	IncludeNoAssignee bool                         `json:"include_no_assignee,omitempty"`
+	Creators          []issueTableActorRef         `json:"creators,omitempty"`
+	ProjectIDs        []string                     `json:"project_ids,omitempty"`
+	IncludeNoProject  bool                         `json:"include_no_project,omitempty"`
+	LabelIDs          []string                     `json:"label_ids,omitempty"`
 	// Members are raw JSON so operator objects ({op, value}) and plain
 	// strings both survive the round-trip into parsePropertiesFilterParam.
 	Properties       map[string][]json.RawMessage `json:"properties,omitempty"`
@@ -436,7 +437,7 @@ func (h *Handler) compileIssueTableQuery(w http.ResponseWriter, r *http.Request,
 		return issueTableSQL{}, false
 	}
 
-	where := []string{"i.workspace_id = $1"}
+	where := []string{"i.workspace_id = $1", "i.kind = 'task'"}
 	args := []any{workspaceUUID}
 	addArg := func(value any) string {
 		args = append(args, value)
@@ -620,10 +621,39 @@ func (h *Handler) compileIssueTableQuery(w http.ResponseWriter, r *http.Request,
 			return issueTableSQL{}, false
 		}
 		if len(compiled) > 0 {
-			where = append(where, propertiesFilterPredicate(compiled, addArg))
+			where = append(where, propertiesFilterPredicate(compiled, addArg, "i.properties"))
 		}
 	}
 
+	if spec.Filters.Calendar != nil {
+		filter := spec.Filters.Calendar
+		start, startErr := time.Parse("2006-01-02", filter.Start)
+		end, endErr := time.Parse("2006-01-02", filter.End)
+		if startErr != nil || endErr != nil || start.After(end) {
+			writeError(w, 400, "invalid calendar range")
+			return issueTableSQL{}, false
+		}
+		column := ""
+		switch filter.Field {
+		case "due_date", "start_date":
+			column = "i." + filter.Field
+		default:
+			raw := strings.TrimPrefix(filter.Field, "property:")
+			id, err := util.ParseUUID(raw)
+			if err != nil {
+				writeError(w, 400, "invalid calendar field")
+				return issueTableSQL{}, false
+			}
+			var fieldType string
+			err = h.DB.QueryRow(r.Context(), "SELECT type FROM issue_property WHERE id=$1 AND workspace_id=$2 AND archived_at IS NULL", id, workspaceID).Scan(&fieldType)
+			if err != nil || fieldType != "date" {
+				writeError(w, 400, "calendar field must be a date")
+				return issueTableSQL{}, false
+			}
+			column = "i.properties->>" + addArg(raw)
+		}
+		where = append(where, fmt.Sprintf("(%s >= %s AND %s <= %s)", column, addArg(filter.Start), column, addArg(filter.End)))
+	}
 	if spec.Filters.Date != nil {
 		column := ""
 		switch spec.Filters.Date.Field {

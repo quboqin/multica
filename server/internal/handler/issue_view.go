@@ -57,6 +57,7 @@ func validateIssueViewVariant(scopeType string, variant *string) (pgtype.Text, b
 }
 
 type IssueViewResponse struct {
+	CollectionID      *string         `json:"collection_id"`
 	ID                string          `json:"id"`
 	WorkspaceID       string          `json:"workspace_id"`
 	OwnerID           string          `json:"owner_id"`
@@ -76,6 +77,7 @@ type IssueViewResponse struct {
 func issueViewToResponse(v db.IssueView) IssueViewResponse {
 	return IssueViewResponse{
 		ID:                uuidToString(v.ID),
+		CollectionID:      uuidToPtr(v.CollectionID),
 		WorkspaceID:       uuidToString(v.WorkspaceID),
 		OwnerID:           uuidToString(v.OwnerID),
 		Name:              v.Name,
@@ -110,6 +112,7 @@ func isJSONObject(raw json.RawMessage) bool {
 }
 
 type CreateIssueViewRequest struct {
+	CollectionID      *string         `json:"collection_id"`
 	Name              string          `json:"name"`
 	ScopeType         string          `json:"scope_type"`
 	ScopeID           *string         `json:"scope_id"`
@@ -208,8 +211,21 @@ func (h *Handler) CreateIssueView(w http.ResponseWriter, r *http.Request) {
 		req.Visibility = "private"
 	}
 
+	var collectionID pgtype.UUID
+	if req.CollectionID != nil {
+		collectionID, ok = parseUUIDOrBadRequest(w, *req.CollectionID, "collection_id")
+		if !ok {
+			return
+		}
+		collection, err := h.Queries.GetCollection(r.Context(), db.GetCollectionParams{WorkspaceID: wsUUID, ID: collectionID})
+		if err != nil || req.ScopeType == "my" || collection.ProjectID != scopeID {
+			writeError(w, 400, "collection does not belong to this view scope")
+			return
+		}
+	}
 	view, err := h.Queries.CreateIssueView(r.Context(), db.CreateIssueViewParams{
 		WorkspaceID:       wsUUID,
+		CollectionID:      collectionID,
 		OwnerID:           parseUUID(userID),
 		Name:              req.Name,
 		ScopeType:         req.ScopeType,
@@ -251,11 +267,19 @@ func (h *Handler) ListIssueViews(w http.ResponseWriter, r *http.Request) {
 		scopeID = id
 	}
 
+	var collectionID pgtype.UUID
+	if raw := r.URL.Query().Get("collection_id"); raw != "" {
+		collectionID, ok = parseUUIDOrBadRequest(w, raw, "collection_id")
+		if !ok {
+			return
+		}
+	}
 	views, err := h.Queries.ListIssueViewsForUser(r.Context(), db.ListIssueViewsForUserParams{
-		WorkspaceID: wsUUID,
-		ScopeType:   scopeType,
-		OwnerID:     parseUUID(userID),
-		ScopeID:     scopeID,
+		WorkspaceID:  wsUUID,
+		ScopeType:    scopeType,
+		CollectionID: collectionID,
+		OwnerID:      parseUUID(userID),
+		ScopeID:      scopeID,
 	})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list views")

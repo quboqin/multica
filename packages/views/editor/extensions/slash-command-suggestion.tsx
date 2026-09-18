@@ -31,7 +31,7 @@ import { isTriggerArmedAt } from "./suggestion-trigger-arming";
 const MAX_ITEMS = 20;
 
 /** Known built-in command ids — the keys under editor `slash_command.commands`. */
-export type BuiltinCommandKey = "note";
+export type BuiltinCommandKey = "note" | "view";
 
 export interface SlashCommandItem {
   id: string;
@@ -284,6 +284,7 @@ export function createSlashCommandSuggestion(qc: QueryClient): Omit<
  * `noteCommentPrefix` in server/internal/handler/comment.go.
  */
 export const BUILTIN_COMMANDS: SlashCommandItem[] = [
+  { id: "view", label: "view", descriptionKey: "view" },
   { id: "note", label: "note", descriptionKey: "note" },
 ];
 
@@ -403,6 +404,8 @@ export function createBuiltinCommandSuggestion(
           });
         return;
       }
+
+      if(props.id === "view") { editor.chain().focus().insertContentAt(range,{type:"savedViewEmbed",attrs:{viewId:""}}).run(); return; }
 
       // Insert the plain-text prefix (e.g. "/note ") rather than a rich node,
       // so a menu selection and a hand-typed command are byte-identical and the

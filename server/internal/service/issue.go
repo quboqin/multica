@@ -59,6 +59,7 @@ func NewIssueService(q *db.Queries, tx TxStarter, bus *events.Bus, ac analytics.
 // to IssueService.Create. The handler owns the parsing step that turns its
 // request payload into this struct; the service stays transport-agnostic.
 type IssueCreateParams struct {
+	Kind          string
 	WorkspaceID   pgtype.UUID
 	Title         string
 	Description   pgtype.Text
@@ -211,6 +212,16 @@ type IssueCreateResult struct {
 // Caller-owned validation is limited to transport-shaped checks: title
 // required, RFC3339 date format, assignee pair sanity.
 func (s *IssueService) Create(ctx context.Context, p IssueCreateParams, opts IssueCreateOpts) (IssueCreateResult, error) {
+	if p.Kind == "" {
+		p.Kind = "task"
+	}
+	if p.Kind != "task" && p.Kind != "doc" && p.Kind != "knowledge" && p.Kind != "workflow_run" {
+		return IssueCreateResult{}, fmt.Errorf("invalid issue kind")
+	}
+	if p.Kind == "doc" && p.Status != "draft" {
+		return IssueCreateResult{}, fmt.Errorf("documents must be created as draft")
+	}
+
 	issueCountPolicy := ResolveIssueCountPolicy(ctx, s.Entitlements, p.WorkspaceID)
 	tx, err := s.TxStarter.Begin(ctx)
 	if err != nil {
@@ -218,6 +229,18 @@ func (s *IssueService) Create(ctx context.Context, p IssueCreateParams, opts Iss
 	}
 	defer tx.Rollback(ctx)
 	qtx := s.Queries.WithTx(tx)
+	if p.Kind == "doc" {
+		if err := qtx.LockDocumentTree(ctx, util.UUIDToString(p.WorkspaceID)); err != nil {
+			return IssueCreateResult{}, err
+		}
+		if err := qtx.SeedDocumentStatuses(ctx, p.WorkspaceID); err != nil {
+			return IssueCreateResult{}, err
+		}
+		entry, err := qtx.GetIssueStatusEntryByKey(ctx, db.GetIssueStatusEntryByKeyParams{WorkspaceID: p.WorkspaceID, Key: "draft"})
+		if err != nil || entry.Category != "unstarted" || entry.ArchivedAt.Valid {
+			return IssueCreateResult{}, fmt.Errorf("document draft status must be active with the unstarted lifecycle category")
+		}
+	}
 
 	if p.SourceContext != nil {
 		if _, err := qtx.LockIssueForDescriptionUpdate(ctx, db.LockIssueForDescriptionUpdateParams{
@@ -277,7 +300,7 @@ func (s *IssueService) Create(ctx context.Context, p IssueCreateParams, opts Iss
 			ID:          p.ParentIssueID,
 			WorkspaceID: p.WorkspaceID,
 		})
-		if err != nil || !parent.ID.Valid {
+		if err != nil || !parent.ID.Valid || (parent.Kind == "doc") != (p.Kind == "doc") {
 			return IssueCreateResult{}, ErrParentIssueNotFound
 		}
 		// Back-fill project from parent when the caller did not pin
@@ -339,6 +362,7 @@ func (s *IssueService) Create(ctx context.Context, p IssueCreateParams, opts Iss
 		issue, err = qtx.CreateIssueWithOrigin(ctx, db.CreateIssueWithOriginParams{
 			ID:            dbid.NewV7(),
 			WorkspaceID:   p.WorkspaceID,
+			Kind:          pgtype.Text{String: p.Kind, Valid: true},
 			Title:         p.Title,
 			Description:   p.Description,
 			Status:        p.Status,
@@ -361,6 +385,7 @@ func (s *IssueService) Create(ctx context.Context, p IssueCreateParams, opts Iss
 		issue, err = qtx.CreateIssue(ctx, db.CreateIssueParams{
 			ID:            dbid.NewV7(),
 			WorkspaceID:   p.WorkspaceID,
+			Kind:          pgtype.Text{String: p.Kind, Valid: true},
 			Title:         p.Title,
 			Description:   p.Description,
 			Status:        p.Status,
@@ -724,6 +749,9 @@ func classifyOrigin(issue db.Issue, opts IssueCreateOpts) (source, taskID, autop
 }
 
 func (s *IssueService) maybeEnqueueOnAssign(ctx context.Context, issue db.Issue, creatorType, actorID string, agentRunFireAt time.Time) pgtype.UUID {
+	if issue.Kind != "" && issue.Kind != "task" {
+		return pgtype.UUID{}
+	}
 	if !issue.AssigneeType.Valid || !issue.AssigneeID.Valid {
 		return pgtype.UUID{}
 	}
@@ -776,6 +804,9 @@ func (s *IssueService) maybeEnqueueOnAssign(ctx context.Context, issue db.Issue,
 // Mirrors handler.shouldEnqueueAgentTask; kept here to make the service
 // self-contained, since both code paths must move together.
 func (s *IssueService) shouldEnqueueAgentTaskWithQueries(ctx context.Context, q *db.Queries, issue db.Issue) bool {
+	if issue.Kind != "" && issue.Kind != "task" {
+		return false
+	}
 	// Resolved through q, not s.Queries: this runs inside the create
 	// transaction and must see the same snapshot as the rest of it. (MUL-6243)
 	// That snapshot is also the only place a just-created Triage issue is
@@ -813,6 +844,9 @@ func agentAssigneeVerdict(ctx context.Context, lookup RuntimeLookup, issue db.Is
 }
 
 func (s *IssueService) shouldEnqueueSquadLeaderOnAssign(ctx context.Context, issue db.Issue) bool {
+	if issue.Kind != "" && issue.Kind != "task" {
+		return false
+	}
 	if issue.TriageState.Valid || issuestatus.Effective(ctx, s.Queries, issue.WorkspaceID, issue.Status) == "backlog" {
 		return false
 	}

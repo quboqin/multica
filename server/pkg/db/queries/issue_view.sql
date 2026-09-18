@@ -1,9 +1,9 @@
 -- name: CreateIssueView :one
 INSERT INTO issue_view (
     workspace_id, owner_id, name, scope_type, scope_id, scope_variant,
-    visibility, definition_version, query, display
+    visibility, definition_version, query, display, collection_id
 )
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, sqlc.narg(collection_id))
 RETURNING *;
 
 -- name: ListIssueViewsForUser :many
@@ -12,6 +12,7 @@ RETURNING *;
 -- workspace and my scopes, so compare NULL-safely.
 SELECT * FROM issue_view
 WHERE workspace_id = $1
+  AND collection_id IS NOT DISTINCT FROM sqlc.narg(collection_id)::uuid
   AND scope_type = $2
   AND scope_id IS NOT DISTINCT FROM sqlc.narg('scope_id')::uuid
   AND (owner_id = $3 OR visibility = 'workspace')

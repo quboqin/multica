@@ -1,6 +1,7 @@
 import {
   infiniteQueryOptions,
   keepPreviousData,
+  replaceEqualDeep,
   queryOptions,
   type QueryClient,
 } from "@tanstack/react-query";
@@ -284,12 +285,12 @@ export function issueTableGroupsOptions(
   return infiniteQueryOptions({
     queryKey: issueKeys.tableGroups(wsId, query, group),
     initialPageParam: null as string | null,
-    queryFn: ({ pageParam }) =>
+    queryFn: ({ pageParam, signal }) =>
       api.listIssueTableGroups({
         query,
         group,
         page: { limit: 100, cursor: pageParam },
-    }),
+    }, {workspaceId: wsId, signal}),
     getNextPageParam: (lastPage) => lastPage.next_cursor ?? undefined,
     placeholderData: keepPreviousData,
     retry: false,
@@ -320,7 +321,7 @@ export function issueTableRowPageOptions(
       "page",
       cursor,
     ] as const,
-    queryFn: () => api.listIssueTableRows(request),
+    queryFn: ({signal}) => api.listIssueTableRows(request, {workspaceId:wsId, signal}),
     placeholderData: keepPreviousData,
     retry: false,
     // Dynamic useQueries observers detach/reinstall as sibling branches enter
@@ -433,7 +434,14 @@ export function projectGanttIssuesOptions(
 export function issueDetailOptions(wsId: string, id: string) {
   return queryOptions({
     queryKey: issueKeys.detail(wsId, id),
-    queryFn: () => api.getIssue(id),
+    queryFn: ({signal}) => api.getIssue(id, {workspaceId:wsId, signal}),
+    structuralSharing: (previous, incoming) => {
+      const old = previous as Issue | undefined;
+      const next = incoming as Issue;
+      // A late HTTP snapshot cannot roll back a newer WebSocket/full-write snapshot.
+      if (old?.id === next.id && old?.revision !== undefined && next.revision !== undefined && old.revision > next.revision) return old;
+      return replaceEqualDeep(previous, incoming);
+    },
   });
 }
 

@@ -38,6 +38,7 @@ import { Button } from "@multica/ui/components/ui/button";
 import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from "@multica/ui/components/ui/resizable";
 import { Sheet, SheetContent } from "@multica/ui/components/ui/sheet";
 import { useIsMobile } from "@multica/ui/hooks/use-mobile";
+import { DocumentBodyEditor } from "../../documents/document-body-editor";
 import { ContentEditor, type ContentEditorRef, TitleEditor, type TitleEditorRef, useFileDropZone, FileDropOverlay, useLazyEditor, useEditorUpload, ImageSequenceProvider } from "../../editor";
 import { collectImageSequence, type ImageSequenceBlock } from "@multica/core/attachments/image-sequence";
 import { FileUploadButton } from "@multica/ui/components/common/file-upload-button";
@@ -2315,7 +2316,7 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
         {propertiesOpen && <div className="grid grid-cols-[auto_1fr] gap-x-2 gap-y-0.5 pl-2">
           {/* Core props — always rendered. */}
           <PropRow label={t(($) => $.detail.prop_status)}>
-            <StatusPicker status={issue.status} onUpdate={handleUpdateField} align="start" />
+            {issue.kind === "doc" ? <span>{issue.status_name || issue.status}</span> : <StatusPicker status={issue.status} onUpdate={handleUpdateField} align="start" />}
           </PropRow>
           <PropRow label={t(($) => $.detail.prop_assignee)}>
             <AssigneePicker assigneeType={issue.assignee_type} assigneeId={issue.assignee_id} onUpdate={handleUpdateField} align="start" />
@@ -2330,7 +2331,7 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
           {/* Optional props — rendered only when set on the issue OR added
               via "+ Add property" in this session. Row order follows the
               order of `OPTIONAL_PROP_KEYS`. */}
-          {visibleOptionalProps.has("priority") && (
+          {issue.kind !== "doc" && visibleOptionalProps.has("priority") && (
             <PropRow label={t(($) => $.detail.prop_priority)}>
               <PriorityPicker
                 priority={issue.priority}
@@ -2775,7 +2776,7 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
           segments={breadcrumbSegments}
           leaf={
             <AppLink
-              href={paths.issueDetail(issue.id)}
+              href={issue.kind === "doc" ? paths.documentDetail(issue.id) : paths.issueDetail(issue.id)}
               className="flex min-w-0 transition-opacity hover:opacity-80"
             >
               <span className="truncate font-medium text-foreground">
@@ -2789,7 +2790,7 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
                 it never overlaps the title (which truncates to make room).
                 It self-hides when no agent is active. */}
             <IssueAgentHeaderChip issueId={id} />
-            {onDone && !issueBehavesAsAny(issue, ["done", "closed"]) && (
+            {issue.kind !== "doc" && onDone && !issueBehavesAsAny(issue, ["done", "closed"]) && (
               <Tooltip>
                 <TooltipTrigger
                   render={
@@ -3058,7 +3059,12 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
           >
             {descriptionAnnotations.popup}
             <div data-comment-content={descriptionSourceId}>
-              <ContentEditor
+              {issue.kind === "doc" ? <DocumentBodyEditor
+                key={id} issue={issue}
+                attachmentIds={(markdown)=>descPendingAttachmentsRef.current.filter(a=>contentReferencesAttachment(markdown,a)).map(a=>a.id)}
+                onUploadFile={handleDescriptionUpload} debounceMs={1500} flushPendingOnUnmount
+                currentIssueId={id} attachments={descEditorAttachments}
+              /> : (              <ContentEditor
                 ref={descEditorRef}
                 key={id}
                 value={issue.description ?? ""}
@@ -3099,7 +3105,8 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
                 currentIssueId={id}
                 selectionAction={descriptionSelectionAction}
                 attachments={descEditorAttachments}
-              />
+              />)}
+
             </div>
 
             <div className="flex items-center gap-1 mt-3">
@@ -3119,7 +3126,7 @@ export function IssueDetail({ issueId, onDelete, onDone, defaultSidebarOpen = tr
           </div>
 
           {/* Sub-issues — Linear-style */}
-          {childIssues.length === 0 && (
+          {issue.kind !== "doc" && childIssues.length === 0 && (
             <div className="mt-6">
               <button
                 type="button"

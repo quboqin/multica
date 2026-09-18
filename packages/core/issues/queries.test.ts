@@ -17,6 +17,7 @@ import {
   childrenByParentsOptions,
   childIssuesOptions,
   issueIdentifierOptions,
+  issueDetailOptions,
   issueKeys,
   issueTableRowPageOptions,
   projectGanttIssuesOptions,
@@ -573,5 +574,23 @@ describe("issueIdentifierOptions", () => {
       "identifier",
       "MUL-7",
     ]);
+  });
+});
+
+describe("issueDetailOptions version ordering", () => {
+  it("retains a newer document event when an older HTTP read finishes later", async () => {
+    const qc = new QueryClient({defaultOptions:{queries:{retry:false}}});
+    let resolve!: (issue:Issue)=>void;
+    const getIssue = vi.fn(() => new Promise<Issue>(done => {resolve=done;}));
+    setApiInstance({getIssue} as unknown as ApiClient);
+    const options = issueDetailOptions(WS_ID,"issue-1");
+    const pending=qc.fetchQuery(options);
+    const fresh=makeIssue(1,{kind:"doc",revision:8,document_revision:3,description:"New body"});
+    qc.setQueryData(options.queryKey,fresh);
+    resolve(makeIssue(1,{kind:"doc",revision:7,document_revision:2,description:"Old body"}));
+    await pending;
+    expect(qc.getQueryData(options.queryKey)).toEqual(fresh);
+    expect(getIssue).toHaveBeenCalledWith("issue-1",expect.objectContaining({workspaceId:WS_ID,signal:expect.any(AbortSignal)}));
+    qc.clear();
   });
 });
