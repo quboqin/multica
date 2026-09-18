@@ -51,6 +51,19 @@ export function useIssueSurfaceActions({
   const batchUpdateMutation = useBatchUpdateIssues();
   const batchDeleteMutation = useBatchDeleteIssues();
 
+  const showUpdateError = useCallback(
+    (err: unknown, fallback?: string) => {
+      toast.error(
+        errorCode(err) === "revision_conflict"
+          ? tIssues(($) => $.revision.conflict)
+          : err instanceof Error && err.message
+            ? err.message
+            : (fallback ?? t(($) => $.detail.toast_move_issue_failed)),
+      );
+    },
+    [t, tIssues],
+  );
+
   const updateIssue = useCallback(
     (
       issueId: string,
@@ -62,21 +75,35 @@ export function useIssueSurfaceActions({
         {
           onSuccess: (issue) => options?.onSuccess?.(issue),
           onError: (err) => {
-            toast.error(
-              errorCode(err) === "revision_conflict"
-                ? tIssues(($) => $.revision.conflict)
-                : err instanceof Error && err.message
-                ? err.message
-                : (options?.errorMessage ??
-                    t(($) => $.detail.toast_move_issue_failed)),
-            );
+            showUpdateError(err, options?.errorMessage);
             options?.onError?.(err);
           },
           onSettled: () => options?.onSettled?.(),
         },
       );
     },
-    [t, tIssues, updateIssueMutation],
+    [showUpdateError, updateIssueMutation],
+  );
+
+  const updateIssueAsync = useCallback(
+    async (
+      issueId: string,
+      updates: Partial<UpdateIssueRequest>,
+      workspaceContext?: Parameters<
+        IssueSurfaceActions["updateIssueAsync"]
+      >[2],
+    ) => {
+      try {
+        const input = { id: issueId, ...updates };
+        return await updateIssueMutation.mutateAsync(
+          workspaceContext ? { ...input, workspaceContext } : input,
+        );
+      } catch (err) {
+        showUpdateError(err);
+        throw err;
+      }
+    },
+    [showUpdateError, updateIssueMutation],
   );
 
   const moveIssue = useCallback(
@@ -93,20 +120,12 @@ export function useIssueSurfaceActions({
           move_intent: { before_id, after_id },
         },
         {
-          onError: (err) => {
-            toast.error(
-              errorCode(err) === "revision_conflict"
-                ? tIssues(($) => $.revision.conflict)
-                : err instanceof Error && err.message
-                ? err.message
-                : t(($) => $.detail.toast_move_issue_failed),
-            );
-          },
+          onError: (err) => showUpdateError(err),
           onSettled,
         },
       );
     },
-    [t, tIssues, updateIssueMutation],
+    [showUpdateError, updateIssueMutation],
   );
 
   const openCreateIssue = useCallback(
@@ -126,6 +145,7 @@ export function useIssueSurfaceActions({
         batchDeleteMutation.isPending,
       createIssue: openCreateIssue,
       updateIssue,
+      updateIssueAsync,
       moveIssue: (issueId, updates, options) =>
         updateIssue(issueId, updates, {
           errorMessage: t(($) => $.detail.toast_move_issue_failed),
@@ -144,6 +164,7 @@ export function useIssueSurfaceActions({
       openCreateIssue,
       t,
       updateIssue,
+      updateIssueAsync,
       updateIssueMutation.isPending,
     ],
   );

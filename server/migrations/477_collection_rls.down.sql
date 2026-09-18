@@ -1,0 +1,9 @@
+DROP POLICY IF EXISTS record_workspace_policy ON record;
+ALTER TABLE record NO FORCE ROW LEVEL SECURITY;
+ALTER TABLE record DISABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS collection_field_workspace_policy ON collection_field;
+ALTER TABLE collection_field NO FORCE ROW LEVEL SECURITY;
+ALTER TABLE collection_field DISABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS collection_workspace_policy ON collection;
+ALTER TABLE collection NO FORCE ROW LEVEL SECURITY;
+ALTER TABLE collection DISABLE ROW LEVEL SECURITY;

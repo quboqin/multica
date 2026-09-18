@@ -3,9 +3,28 @@ export type { CoreProviderProps, ClientIdentity } from "./types";
 export { AuthInitializer } from "./auth-initializer";
 export { defaultStorage } from "./storage";
 export { createPersistStorage } from "./persist-storage";
-export { createWorkspaceAwareStorage, setCurrentWorkspace, getCurrentSlug, getCurrentWsId, subscribeToCurrentSlug, registerForWorkspaceRehydration } from "./workspace-storage";
+export {
+  assertWorkspaceRequestContext,
+  createWorkspaceAwareStorage,
+  setCurrentWorkspace,
+  getCurrentSlug,
+  getCurrentWsId,
+  subscribeToCurrentSlug,
+  registerForWorkspaceRehydration,
+  type WorkspaceRequestContext,
+} from "./workspace-storage";
 export { clearWorkspaceStorage } from "./storage-cleanup";
-export { clearClientSessionData } from "./session-cleanup";
+export {
+  assertClientWorkspaceAccessAllowed,
+  captureClientSessionGeneration,
+  captureClientWorkspaceAccessGeneration,
+  clearClientSessionData,
+  isClientSessionGenerationCurrent,
+  isClientWorkspaceAccessAllowed,
+  isClientWorkspaceAccessGenerationCurrent,
+  restoreClientWorkspaceAccess,
+  revokeClientWorkspaceAccess,
+} from "./session-cleanup";
 export {
   registerSystemNotificationClickHandler,
   isWebNotificationSupported,

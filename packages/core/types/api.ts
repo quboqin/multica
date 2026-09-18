@@ -5,6 +5,7 @@ import type { Project } from "./project";
 
 // Issue API
 export interface CreateIssueRequest {
+  kind?: "task" | "doc";
   title: string;
   description?: string;
   status?: IssueStatus;
@@ -323,6 +324,7 @@ export type IssueTableSortField =
   | `property:${string}`;
 
 export interface IssueTableQuerySpec {
+  kind?: "task" | "doc";
   scope: IssueTableScope;
   filters: IssueTableFilters;
   search?: string;

@@ -20,6 +20,8 @@ export { ChainProvider } from "./chain-provider";
 export {
   BILLING_WORKSPACE_SUBSCRIPTIONS_FLAG,
   COMPOSIO_MCP_APPS_FLAG,
+  CORTEX_COLLECTIONS_FLAG,
+  CORTEX_DOCS_FLAG,
   PLUGINS_V1_FLAG,
 } from "./keys";
 export {

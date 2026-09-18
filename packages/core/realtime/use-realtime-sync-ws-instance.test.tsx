@@ -12,6 +12,12 @@ import { chatKeys } from "../chat/queries";
 import { runtimeKeys } from "../runtimes/queries";
 import { workspaceWorkingAgentsKeys } from "../agents/queries";
 import { workspaceKeys } from "../workspace/queries";
+import { collectionKeys } from "../collections/queries";
+import {
+  captureClientWorkspaceAccessGeneration,
+  isClientWorkspaceAccessAllowed,
+  isClientWorkspaceAccessGenerationCurrent,
+} from "../platform/session-cleanup";
 import { issueStatusKeys } from "../issue-statuses/queries";
 import {
   markWorkspaceDeletePending,
@@ -120,8 +126,8 @@ describe("useRealtimeSync — ws instance change", () => {
     // (16 workspace-scoped [incl. property definitions] + 6 per-issue
     // prefixes + the workspace working-agents projection + 5 per-chat
     // prefixes + 1 workspaceKeys.list() + 1 cross-workspace inbox unread
-    // summary = 31 calls)
-    expect(invalidateSpy).toHaveBeenCalledTimes(31);
+    // summary + collection list/source recovery = 33 calls)
+    expect(invalidateSpy).toHaveBeenCalledTimes(33);
   });
 
   it("does not re-invalidate when rerendered with the same ws instance", () => {
@@ -158,6 +164,60 @@ describe("useRealtimeSync — ws instance change", () => {
     // A catalog edit made while this client was disconnected is otherwise
     // invisible for the query's whole 5-minute staleTime.
     expect(calls).toContainEqual(issueStatusKeys.all("ws-1"));
+    expect(calls).toContainEqual(collectionKeys.all("ws-1"));
+    expect(calls).toContainEqual(collectionKeys.sources("ws-1"));
+  });
+
+  it("invalidates only the affected collection caches for collection events", () => {
+    const ws = createMockWs();
+    renderHook(() => useRealtimeSync(ws, stores), {
+      wrapper: createWrapper(qc),
+    });
+    const handlers = new Map(
+      vi
+        .mocked(ws.on)
+        .mock.calls.map(([event, handler]) => [
+          event,
+          handler as (payload: unknown) => void,
+        ]),
+    );
+
+    invalidateSpy.mockClear();
+    handlers.get("collection:created")?.({
+      collection_id: "collection-1",
+      revision: 1,
+    });
+    expect(invalidateSpy).toHaveBeenCalledTimes(1);
+    expect(invalidateSpy).toHaveBeenCalledWith({
+      queryKey: collectionKeys.all("ws-1"),
+    });
+
+    invalidateSpy.mockClear();
+    handlers.get("record:updated")?.({
+      collection_id: "collection-1",
+      record_id: "record-1",
+      revision: 2,
+    });
+    expect(invalidateSpy).toHaveBeenCalledTimes(2);
+    expect(invalidateSpy).toHaveBeenCalledWith({
+      queryKey: collectionKeys.rows("ws-1", "collection-1"),
+    });
+    expect(invalidateSpy).toHaveBeenCalledWith({
+      queryKey: collectionKeys.record("ws-1", "collection-1", "record-1"),
+    });
+
+    invalidateSpy.mockClear();
+    handlers.get("record:created")?.({
+      collection_id: "collection-2",
+      record_id: "record-2",
+      revision: 1,
+    });
+    expect(invalidateSpy).toHaveBeenCalledWith({
+      queryKey: collectionKeys.rows("ws-1", "collection-2"),
+    });
+    expect(invalidateSpy).not.toHaveBeenCalledWith({
+      queryKey: collectionKeys.rows("ws-1", "collection-1"),
+    });
   });
 
   it("invalidates agent projections when a daemon changes liveness", () => {
@@ -464,5 +524,100 @@ describe("useRealtimeSync — workspace:deleted self-initiated suppression", () 
     dispatchWorkspaceDeleted(ws, "ws-2");
 
     expect(defaultStorage.getItem("multica_issue_draft:delete-me")).toBeNull();
+  });
+});
+
+describe("useRealtimeSync — self member revocation", () => {
+  it("synchronously fences access and removes collection cache before list refresh", () => {
+    const qc = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    const ws = createMockWs();
+    const accessGeneration = captureClientWorkspaceAccessGeneration(qc, "ws-1");
+    qc.setQueryData(workspaceKeys.list(), [{ id: "ws-1", slug: "test-ws" }]);
+    qc.setQueryData(
+      collectionKeys.record("ws-1", "collection-1", "record-1"),
+      { id: "record-1" },
+    );
+    // Keep the relocation refresh pending: the synchronous responder must not
+    // depend on this list becoming authoritative before it fences callbacks.
+    vi.spyOn(qc, "fetchQuery").mockReturnValue(new Promise(() => {}));
+
+    renderHook(() => useRealtimeSync(ws, createStores()), {
+      wrapper: createWrapper(qc),
+    });
+    const removed = vi
+      .mocked(ws.on)
+      .mock.calls.find(([event]) => event === "member:removed")?.[1];
+    expect(removed).toBeDefined();
+
+    (removed as (payload: unknown) => void)({
+      member_id: "member-1",
+      user_id: "u1",
+      workspace_id: "ws-1",
+    });
+
+    expect(qc.getQueryData(workspaceKeys.list())).toEqual([
+      { id: "ws-1", slug: "test-ws" },
+    ]);
+    expect(
+      qc.getQueryData(
+        collectionKeys.record("ws-1", "collection-1", "record-1"),
+      ),
+    ).toBeUndefined();
+    expect(isClientWorkspaceAccessAllowed(qc, "ws-1")).toBe(false);
+    expect(
+      isClientWorkspaceAccessGenerationCurrent(
+        qc,
+        "ws-1",
+        accessGeneration,
+      ),
+    ).toBe(false);
+  });
+
+  it("restores access from the nested workspace id when the current user is re-added", () => {
+    const qc = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    const ws = createMockWs();
+    vi.spyOn(qc, "fetchQuery").mockReturnValue(new Promise(() => {}));
+
+    renderHook(() => useRealtimeSync(ws, createStores()), {
+      wrapper: createWrapper(qc),
+    });
+    const handlers = new Map(
+      vi.mocked(ws.on).mock.calls.map(([event, handler]) => [event, handler]),
+    );
+    const removed = handlers.get("member:removed");
+    const added = handlers.get("member:added");
+    expect(removed).toBeDefined();
+    expect(added).toBeDefined();
+
+    (removed as (payload: unknown) => void)({
+      member_id: "member-1",
+      user_id: "u1",
+      workspace_id: "ws-1",
+    });
+    const revokedGeneration = captureClientWorkspaceAccessGeneration(qc, "ws-1");
+    expect(isClientWorkspaceAccessAllowed(qc, "ws-1")).toBe(false);
+
+    (added as (payload: unknown) => void)({
+      member: {
+        id: "member-2",
+        workspace_id: "ws-1",
+        user_id: "u1",
+        role: "member",
+        created_at: "2026-09-14T00:00:00Z",
+        name: "Current User",
+        email: "current@example.com",
+        avatar_url: null,
+      },
+      workspace_name: "Test workspace",
+    });
+
+    expect(isClientWorkspaceAccessAllowed(qc, "ws-1")).toBe(true);
+    expect(
+      isClientWorkspaceAccessGenerationCurrent(qc, "ws-1", revokedGeneration),
+    ).toBe(false);
   });
 });

@@ -38,6 +38,8 @@ import {
 } from "@multica/core/issues/stores";
 import { issueDetailOptions, issueTimelineOptions } from "@multica/core/issues/queries";
 import { useWorkspaceId } from "@multica/core";
+import { useFeatureEnabled } from "@multica/core/config";
+import { CORTEX_COLLECTIONS_FLAG } from "@multica/core/feature-flags";
 import { useWorkspacePaths, WORKSPACE_PAGES } from "@multica/core/paths";
 import type { WorkspacePageKey, WorkspacePaths } from "@multica/core/paths";
 import { useModalStore } from "@multica/core/modals";
@@ -93,6 +95,7 @@ const PAGE_KEYWORDS: Record<WorkspacePageKey, string[]> = {
   chat: ["chat", "messages", "conversation", "聊天", "消息", "对话"],
   myIssues: ["my", "issues", "assigned", "mine", "我的", "任务"],
   issues: ["issues", "tasks", "bugs", "任务"],
+  collections: ["collections", "records", "tables", "集合", "记录", "表格"],
   projects: ["projects", "kanban", "项目"],
   autopilots: ["autopilot", "autopilots", "automation", "schedule", "cron", "webhook", "自动化", "定时"],
   agents: ["agents", "bots", "ai", "智能体"],
@@ -313,14 +316,17 @@ export function SearchCommand() {
   // copy under `search.pages`: one translated string per page, so the palette
   // can never disagree with the sidebar about what a page is called.
   const { t: tNav } = useT("layout");
+  const collectionsEnabled = useFeatureEnabled(CORTEX_COLLECTIONS_FLAG, false);
   const navPages = useMemo<NavPage[]>(
     () =>
-      NAV_PAGE_KEYS.map((key) => ({
+      NAV_PAGE_KEYS.filter(
+        (key) => key !== "collections" || collectionsEnabled,
+      ).map((key) => ({
         key,
         label: tNav(($) => $.nav[WORKSPACE_PAGES[key].navKey]),
         keywords: PAGE_KEYWORDS[key],
       })),
-    [tNav],
+    [collectionsEnabled, tNav],
   );
   const { pathname, getShareableUrl } = useNavigation();
   const intentNavigate = useIntentNavigate();

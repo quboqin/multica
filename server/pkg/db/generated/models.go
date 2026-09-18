@@ -540,6 +540,32 @@ type ClientUsageDaily struct {
 	UpdatedAt       pgtype.Timestamptz `json:"updated_at"`
 }
 
+type Collection struct {
+	ID                pgtype.UUID        `json:"id"`
+	WorkspaceID       pgtype.UUID        `json:"workspace_id"`
+	Name              string             `json:"name"`
+	Revision          int64              `json:"revision"`
+	CreatedBy         pgtype.UUID        `json:"created_by"`
+	CreateRequestID   pgtype.UUID        `json:"create_request_id"`
+	CreateFingerprint string             `json:"create_fingerprint"`
+	ArchivedAt        pgtype.Timestamptz `json:"archived_at"`
+	CreatedAt         pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt         pgtype.Timestamptz `json:"updated_at"`
+}
+
+type CollectionField struct {
+	ID           pgtype.UUID        `json:"id"`
+	WorkspaceID  pgtype.UUID        `json:"workspace_id"`
+	CollectionID pgtype.UUID        `json:"collection_id"`
+	Name         string             `json:"name"`
+	Type         string             `json:"type"`
+	Position     int32              `json:"position"`
+	Revision     int64              `json:"revision"`
+	ArchivedAt   pgtype.Timestamptz `json:"archived_at"`
+	CreatedAt    pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt    pgtype.Timestamptz `json:"updated_at"`
+}
+
 type Comment struct {
 	ID                pgtype.UUID        `json:"id"`
 	IssueID           pgtype.UUID        `json:"issue_id"`
@@ -787,6 +813,7 @@ type Issue struct {
 	Properties         []byte             `json:"properties"`
 	Revision           int64              `json:"revision"`
 	LastActivityAt     pgtype.Timestamptz `json:"last_activity_at"`
+	Kind               string             `json:"kind"`
 }
 
 type IssueDependency struct {
@@ -1200,6 +1227,23 @@ type QuickAction struct {
 	CreatedByID   pgtype.UUID        `json:"created_by_id"`
 	CreatedAt     pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt     pgtype.Timestamptz `json:"updated_at"`
+}
+
+type Record struct {
+	ID                pgtype.UUID        `json:"id"`
+	WorkspaceID       pgtype.UUID        `json:"workspace_id"`
+	CollectionID      pgtype.UUID        `json:"collection_id"`
+	Title             string             `json:"title"`
+	Fields            []byte             `json:"fields"`
+	Position          float64            `json:"position"`
+	Revision          int64              `json:"revision"`
+	CreatedBy         pgtype.UUID        `json:"created_by"`
+	UpdatedBy         pgtype.UUID        `json:"updated_by"`
+	CreateRequestID   pgtype.UUID        `json:"create_request_id"`
+	CreateFingerprint string             `json:"create_fingerprint"`
+	DeletedAt         pgtype.Timestamptz `json:"deleted_at"`
+	CreatedAt         pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt         pgtype.Timestamptz `json:"updated_at"`
 }
 
 type RuntimeProfile struct {

@@ -6,7 +6,12 @@ import type {
 import type {
   Issue,
   IssuePropertyValue,
+  IssueTableRow,
 } from "@multica/core/types";
+import {
+  getDataViewSelectionRange,
+  refreshFrozenDataViewRows,
+} from "../../data-view/table-model";
 
 /** Export must fail closed when paged Table responses cannot prove that the
  * complete query window was collected. The UI translates this marker instead
@@ -30,6 +35,7 @@ export type IssueTableDisplayRow =
       kind: "issue";
       key: string;
       issue: Issue;
+      sourceRow?: IssueTableRow;
       depth: number;
       hasChildren: boolean;
       collapsed: boolean;
@@ -58,14 +64,7 @@ export function getIssueTableSelectionRange(
   anchorId: string | null,
   targetId: string,
 ): string[] | null {
-  if (!anchorId) return null;
-  const anchorIndex = issueIds.indexOf(anchorId);
-  const targetIndex = issueIds.indexOf(targetId);
-  if (anchorIndex === -1 || targetIndex === -1) return null;
-
-  const start = Math.min(anchorIndex, targetIndex);
-  const end = Math.max(anchorIndex, targetIndex);
-  return issueIds.slice(start, end + 1);
+  return getDataViewSelectionRange(issueIds, anchorId, targetId);
 }
 
 /**
@@ -82,10 +81,18 @@ export function refreshFrozenTableRows(
   snapshot: IssueTableDisplayRow[],
   issueById: ReadonlyMap<string, Issue>,
 ): IssueTableDisplayRow[] {
-  return snapshot.map((row) => {
-    if (row.kind !== "issue") return row;
-    const live = issueById.get(row.issue.id);
-    return live && live !== row.issue ? { ...row, issue: live } : row;
+  return refreshFrozenDataViewRows(snapshot, issueById, {
+    rowId: (row) => (row.kind === "issue" ? row.issue.id : null),
+    replaceRow: (row, issue) =>
+      row.kind === "issue" && row.issue !== issue
+        ? {
+            ...row,
+            issue,
+            ...(row.sourceRow
+              ? { sourceRow: { ...row.sourceRow, issue } }
+              : {}),
+          }
+        : row,
   });
 }
 function columnValue(

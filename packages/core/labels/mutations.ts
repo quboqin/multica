@@ -2,6 +2,10 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api";
 import { labelKeys } from "./queries";
 import { useWorkspaceId } from "../hooks";
+import {
+  assertWorkspaceRequestContext,
+  type WorkspaceRequestContext,
+} from "../platform";
 import { issueKeys } from "../issues/queries";
 import {
   invalidateIssueLabelDerivatives,
@@ -227,13 +231,72 @@ export function useAttachLabelToIssue() {
   const qc = useQueryClient();
   const wsId = useWorkspaceId();
   return useMutation({
-    mutationFn: ({ issueId, labelId }: { issueId: string; labelId: string }) =>
-      api.attachLabel(issueId, labelId),
-    onSettled: (_data, _err, { issueId }) => {
-      qc.invalidateQueries({ queryKey: labelKeys.byIssue(wsId, issueId) });
+    mutationFn: ({
+      issueId,
+      labelId,
+      workspaceContext,
+    }: {
+      issueId: string;
+      labelId: string;
+      workspaceContext?: WorkspaceRequestContext;
+    }) => {
+      if (workspaceContext) assertWorkspaceRequestContext(workspaceContext);
+      return workspaceContext
+        ? api.attachLabel(issueId, labelId, workspaceContext.workspaceSlug)
+        : api.attachLabel(issueId, labelId);
+    },
+    onSettled: (_data, _err, { issueId, workspaceContext }) => {
+      const mutationWsId = workspaceContext?.workspaceId ?? wsId;
+      qc.invalidateQueries({
+        queryKey: labelKeys.byIssue(mutationWsId, issueId),
+      });
       // Issues embed a denormalized labels snapshot, so refresh the issues
       // caches that hold it (list / board / detail) once the attach settles.
-      qc.invalidateQueries({ queryKey: issueKeys.all(wsId) });
+      qc.invalidateQueries({ queryKey: issueKeys.all(mutationWsId) });
+    },
+  });
+}
+
+/** Variable issue-id counterpart used by shared table adapters. */
+export function useDetachLabelFromIssue() {
+  const qc = useQueryClient();
+  const wsId = useWorkspaceId();
+  return useMutation({
+    mutationFn: ({
+      issueId,
+      labelId,
+      workspaceContext,
+    }: {
+      issueId: string;
+      labelId: string;
+      workspaceContext?: WorkspaceRequestContext;
+    }) => {
+      if (workspaceContext) assertWorkspaceRequestContext(workspaceContext);
+      return workspaceContext
+        ? api.detachLabel(issueId, labelId, workspaceContext.workspaceSlug)
+        : api.detachLabel(issueId, labelId);
+    },
+    onSuccess: (
+      data: IssueLabelsResponse,
+      { issueId, workspaceContext },
+    ) => {
+      const mutationWsId = workspaceContext?.workspaceId ?? wsId;
+      if (data && Array.isArray(data.labels)) {
+        onIssueLabelsChanged(
+          qc,
+          mutationWsId,
+          issueId,
+          data.labels,
+          data.issue_revision,
+        );
+      }
+    },
+    onSettled: (_data, _error, { issueId, workspaceContext }) => {
+      const mutationWsId = workspaceContext?.workspaceId ?? wsId;
+      qc.invalidateQueries({
+        queryKey: labelKeys.byIssue(mutationWsId, issueId),
+      });
+      invalidateIssueLabelDerivatives(qc, mutationWsId);
     },
   });
 }

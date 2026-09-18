@@ -109,6 +109,7 @@ const actions: IssueSurfaceActions = {
   isPending: false,
   createIssue: vi.fn(),
   updateIssue: vi.fn(),
+  updateIssueAsync: vi.fn(),
   moveIssue: vi.fn(),
   batchUpdate: vi.fn().mockResolvedValue(undefined),
   batchDelete: vi.fn().mockResolvedValue(undefined),

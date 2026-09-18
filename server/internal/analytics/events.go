@@ -29,6 +29,10 @@ const (
 	EventContactSalesSubmitted         = "contact_sales_submitted"
 	EventSquadCreated                  = "squad_created"
 	EventAutopilotCreated              = "autopilot_created"
+	EventDocCreated                    = "doc_created"
+	EventCollectionCreated             = "collection_created"
+	EventRecordCreated                 = "record_created"
+	EventRecordUpdated                 = "record_updated"
 )
 
 const EventSchemaVersion = 2
@@ -71,6 +75,10 @@ var metricsOnlyEvents = map[string]struct{}{
 	EventContactSalesSubmitted:         {},
 	EventSquadCreated:                  {},
 	EventAutopilotCreated:              {},
+	EventDocCreated:                    {},
+	EventCollectionCreated:             {},
+	EventRecordCreated:                 {},
+	EventRecordUpdated:                 {},
 	// High-volume runtime / autopilot execution-lifecycle telemetry — always
 	// Prometheus-only (Grafana already carries the equivalent counters).
 	EventRuntimeRegistered:     {},
@@ -335,6 +343,31 @@ func IssueCreated(actorID, workspaceID, issueID, agentID, taskID, autopilotRunID
 			Source:         source,
 		}),
 	}
+}
+
+func CollectionCreated(actorID, workspaceID, collectionID string) Event {
+	return collectionEvent(EventCollectionCreated, actorID, workspaceID, collectionID, "")
+}
+
+func RecordCreated(actorID, workspaceID, collectionID, recordID string) Event {
+	return collectionEvent(EventRecordCreated, actorID, workspaceID, collectionID, recordID)
+}
+
+func RecordUpdated(actorID, workspaceID, collectionID, recordID string) Event {
+	return collectionEvent(EventRecordUpdated, actorID, workspaceID, collectionID, recordID)
+}
+
+func collectionEvent(name, actorID, workspaceID, collectionID, recordID string) Event {
+	properties := map[string]any{
+		"user_id":       actorID,
+		"workspace_id":  workspaceID,
+		"collection_id": collectionID,
+		"source":        SourceManual,
+	}
+	if recordID != "" {
+		properties["record_id"] = recordID
+	}
+	return Event{Name: name, DistinctID: actorID, WorkspaceID: workspaceID, Properties: properties}
 }
 
 func ChatMessageSent(userID, workspaceID, chatSessionID, taskID, agentID, runtimeMode, provider, platform string) Event {

@@ -872,5 +872,22 @@
     "surface_loading": "正在加载 {{name}}…",
     "surface_unavailable": "{{name}} 的界面无法加载，已安装的版本可能不包含它。",
     "surface_navigated": "{{name}} 试图把面板替换成从别处加载的页面。已经拦下并断开连接，建议告知工作区管理员。"
+  },
+  "documents": {
+    "retry": "重试加载",
+    "title": "文档",
+    "new": "新建文档",
+    "save": "保存文档",
+    "cancel": "取消",
+    "name": "标题",
+    "body": "文档正文",
+    "empty": "暂无文档",
+    "open": "打开文档",
+    "reload": "放弃草稿并重新加载",
+    "more": "加载更多",
+    "saved": "已保存",
+    "loading": "加载中…",
+    "unavailable": "当前环境尚未启用文档。",
+    "invalid": "文档响应无效。"
   }
 }

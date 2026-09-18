@@ -17,6 +17,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/multica-ai/multica/server/internal/featureflags"
 	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 )
@@ -81,21 +82,21 @@ type issueTableDateFilterRequest struct {
 }
 
 type issueTableFiltersRequest struct {
-	Statuses          []string                     `json:"statuses,omitempty"`
-	Priorities        []string                     `json:"priorities,omitempty"`
-	Assignees         []issueTableActorRef         `json:"assignees,omitempty"`
-	IncludeNoAssignee bool                         `json:"include_no_assignee,omitempty"`
-	Creators          []issueTableActorRef         `json:"creators,omitempty"`
-	ProjectIDs        []string                     `json:"project_ids,omitempty"`
-	IncludeNoProject  bool                         `json:"include_no_project,omitempty"`
-	LabelIDs          []string                     `json:"label_ids,omitempty"`
+	Statuses          []string             `json:"statuses,omitempty"`
+	Priorities        []string             `json:"priorities,omitempty"`
+	Assignees         []issueTableActorRef `json:"assignees,omitempty"`
+	IncludeNoAssignee bool                 `json:"include_no_assignee,omitempty"`
+	Creators          []issueTableActorRef `json:"creators,omitempty"`
+	ProjectIDs        []string             `json:"project_ids,omitempty"`
+	IncludeNoProject  bool                 `json:"include_no_project,omitempty"`
+	LabelIDs          []string             `json:"label_ids,omitempty"`
 	// Members are raw JSON so operator objects ({op, value}) and plain
 	// strings both survive the round-trip into parsePropertiesFilterParam.
-	Properties        map[string][]json.RawMessage `json:"properties,omitempty"`
-	Date              *issueTableDateFilterRequest `json:"date,omitempty"`
-	WorkingOnly       bool                         `json:"working_only,omitempty"`
-	WorkingIssueIDs   []string                     `json:"working_issue_ids,omitempty"`
-	IncludeSubIssues  *bool                        `json:"include_sub_issues,omitempty"`
+	Properties       map[string][]json.RawMessage `json:"properties,omitempty"`
+	Date             *issueTableDateFilterRequest `json:"date,omitempty"`
+	WorkingOnly      bool                         `json:"working_only,omitempty"`
+	WorkingIssueIDs  []string                     `json:"working_issue_ids,omitempty"`
+	IncludeSubIssues *bool                        `json:"include_sub_issues,omitempty"`
 }
 
 type issueTableSortRequest struct {
@@ -104,6 +105,7 @@ type issueTableSortRequest struct {
 }
 
 type issueTableQuerySpec struct {
+	Kind    string                   `json:"kind,omitempty"`
 	Scope   issueTableScope          `json:"scope"`
 	Filters issueTableFiltersRequest `json:"filters"`
 	Search  string                   `json:"search,omitempty"`
@@ -251,6 +253,9 @@ func canonicalIssueTableFingerprint(workspaceID string, spec issueTableQuerySpec
 	explicitEmptyWorkingIssues :=
 		spec.Filters.WorkingIssueIDs != nil && len(spec.Filters.WorkingIssueIDs) == 0
 	normalized := spec
+	if normalized.Kind == "task" {
+		normalized.Kind = ""
+	}
 	normalized.Search = strings.TrimSpace(normalized.Search)
 	normalized.Scope.AssigneeTypes = sortedUniqueStrings(normalized.Scope.AssigneeTypes)
 	normalized.Filters.Statuses = sortedUniqueStrings(normalized.Filters.Statuses)
@@ -434,7 +439,19 @@ func (h *Handler) compileIssueTableQuery(w http.ResponseWriter, r *http.Request,
 		return issueTableSQL{}, false
 	}
 
-	where := []string{"i.workspace_id = $1"}
+	if spec.Kind == "doc" && !h.FeatureFlags.IsEnabled(r.Context(), featureflags.CortexDocs, false) {
+		writeError(w, http.StatusNotFound, "documents are not enabled")
+		return issueTableSQL{}, false
+	}
+	kind := spec.Kind
+	if kind == "" {
+		kind = "task"
+	}
+	if kind != "task" && kind != "doc" {
+		writeError(w, http.StatusBadRequest, "kind must be task or doc")
+		return issueTableSQL{}, false
+	}
+	where := []string{"i.workspace_id = $1", "i.kind = '" + kind + "'"}
 	args := []any{workspaceUUID}
 	addArg := func(value any) string {
 		args = append(args, value)
