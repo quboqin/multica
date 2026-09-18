@@ -1,3 +1,4 @@
+export { createDataViewFieldColumn } from "./field-column";
 export {
   getDataViewSelectionRange,
   refreshFrozenDataViewRows,

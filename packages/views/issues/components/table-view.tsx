@@ -73,7 +73,6 @@ import {
   propertyIdFromViewKey,
   type SortField,
   type TableColumnKey,
-  type TableSystemColumnKey,
 } from "@multica/core/issues/stores/view-store";
 import { useViewStore } from "@multica/core/issues/stores/view-store-context";
 import {
@@ -144,6 +143,7 @@ import type { ChildProgress } from "./list-row";
 import { ListLoadMoreFooter } from "./list-load-more-footer";
 import { IssueAgentActivityIndicator } from "./issue-agent-activity-indicator";
 import {
+  createDataViewFieldColumn,
   TableView as SharedTableView,
   useDataViewController,
   useDataViewSelection,
@@ -202,16 +202,6 @@ type ColumnLabelKey =
   | "updated_at"
   | "child_progress"
   | "creator";
-
-const SORTABLE_COLUMNS: Partial<Record<TableSystemColumnKey, SortField>> = {
-  title: "title",
-  status: "status",
-  priority: "priority",
-  start_date: "start_date",
-  due_date: "due_date",
-  created_at: "created_at",
-  updated_at: "updated_at",
-};
 
 function stopRowNavigation(event: React.SyntheticEvent) {
   event.stopPropagation();
@@ -1031,14 +1021,9 @@ function IssueTableHeaderCell({
   const meta = getTableViewMeta(table);
   const { t } = useT("issues");
   const key = column.id as TableColumnKey;
-  const propertyId = propertyIdFromViewKey(key);
-  const property = propertyId ? meta.propertyById.get(propertyId) : undefined;
-  const staticSort = propertyId
-    ? property &&
-      !["multi_select", "checkbox", "actor", "multi_actor"].includes(property.type)
-      ? (`property:${propertyId}` as SortField)
-      : undefined
-    : SORTABLE_COLUMNS[key as TableSystemColumnKey];
+  const staticSort = meta.fieldById.get(key)?.sortable
+    ? (key as SortField)
+    : undefined;
   const label = meta.columnLabel(key);
   return (
     <SortableColumnHeader
@@ -1167,7 +1152,7 @@ function IssueTableBodyCell({
       <div onClick={stopRowNavigation} onAuxClick={stopRowNavigation}>
         <CustomPropertyValueInput
           property={property}
-          value={issue.properties[property.id]}
+          value={field?.value(sourceRow) as Issue["properties"][string]}
           open={editorOpen}
           onOpenChange={setEditorOpen}
           canSet={canSet}
@@ -1529,11 +1514,11 @@ export function TableView({
   const groupablePropertyIds = useMemo(
     () =>
       new Set(
-        properties
-          .filter((property) => ["select", "checkbox"].includes(property.type))
-          .map((property) => property.id),
+        dataSource.fields
+          .filter((field) => field.groupable && field.id.startsWith("property:"))
+          .map((field) => field.id.slice("property:".length)),
       ),
-    [properties],
+    [dataSource.fields],
   );
   const tableColumns = useViewStore((state) => state.tableColumns);
   const toggleTableColumn = useViewStore((state) => state.toggleTableColumn);
@@ -2062,15 +2047,22 @@ export function TableView({
         cell: IssueTableSelectCell,
       },
       ...visibleColumnConfigs.map((config): ColumnDef<IssueTableDisplayRow> => {
-        const definition: ColumnDef<IssueTableDisplayRow> = {
-          id: config.key,
-          minSize: config.key === "title" ? 260 : 96,
-          maxSize: 640,
-          enableResizing: true,
-          header: IssueTableHeaderCell,
-          cell: IssueTableBodyCell,
-        };
-        if (config.width !== undefined) definition.size = config.width;
+        const field = fieldById.get(config.key);
+        if (!field) throw new Error(`Unknown table field: ${config.key}`);
+        const definition = createDataViewFieldColumn<IssueTableDisplayRow, IssueTableRow>({
+          field,
+          sourceRow: (row) => row.kind === "issue"
+            ? row.sourceRow ?? { issue: row.issue, direct_child_count: row.hasChildren ? 1 : 0 }
+            : null,
+          presentation: {
+            minSize: config.key === "title" ? 260 : 96,
+            maxSize: 640,
+            enableResizing: true,
+            header: IssueTableHeaderCell,
+            cell: IssueTableBodyCell,
+            ...(config.width !== undefined ? { size: config.width } : {}),
+          },
+        });
         return definition;
       }),
       {
@@ -2083,7 +2075,7 @@ export function TableView({
         cell: IssueTableEmptyCell,
       },
     ],
-    [visibleColumnConfigs],
+    [fieldById, visibleColumnConfigs],
   );
 
   const columnSizing = useMemo<ColumnSizingState>(

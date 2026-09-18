@@ -24,6 +24,7 @@ import { Button } from "@multica/ui/components/ui/button";
 import { Input } from "@multica/ui/components/ui/input";
 import { ContentEditor, type ContentEditorRef } from "../editor";
 import {
+  createDataViewFieldColumn,
   TableView,
   useDataViewController,
   type DataViewQueryBinding,
@@ -119,28 +120,24 @@ function DocumentSource({
     };
   }, [client, workspaceId]);
   const columns = useMemo<ColumnDef<TableRow>[]>(
-    () => [
-      {
-        id: "title",
-        header: t(($) => $.documents.name),
-        cell: ({ row }) =>
-          row.original.kind === "document" ? (
-            <Button
-              variant="ghost"
-              onClick={() =>
-                setEditing(
-                  row.original.kind === "document"
-                    ? row.original.issue.id
-                    : null,
-                )
-              }
-            >
-              {row.original.issue.title}
-            </Button>
-          ) : null,
-      },
-    ],
-    [t],
+    () => source.fields.filter((field) => field.id === "title").map((field) =>
+      createDataViewFieldColumn<TableRow, Issue>({
+        field,
+        sourceRow: (row) => row.kind === "document" ? row.issue : null,
+        presentation: {
+          header: t(($) => $.documents.name),
+          cell: ({ row, getValue }) => {
+            const value = row.original;
+            return value.kind === "document" ? (
+              <Button variant="ghost" onClick={() => setEditing(value.issue.id)}>
+                {String(getValue() ?? "")}
+              </Button>
+            ) : null;
+          },
+        },
+      }),
+    ),
+    [source.fields, t],
   );
   return (
     <main className="flex min-h-0 flex-1 flex-col gap-4 p-6">

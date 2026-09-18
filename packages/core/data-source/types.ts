@@ -47,6 +47,8 @@ export interface DataSourceField<Row, Value = unknown> {
   kind: DataSourceFieldKind;
   value(row: Row): Value | undefined;
   sortable: boolean;
+  /** Whether the adapter query supports filtering this field. */
+  filterable: boolean;
   groupable: boolean;
   canSet(row: Row): boolean;
   canClear(row: Row): boolean;

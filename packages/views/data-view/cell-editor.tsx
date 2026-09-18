@@ -7,7 +7,7 @@ import type {
   DataSourceCellCommand,
   DataSourceField,
 } from "@multica/core/data-source";
-import { dataSourceIdentityString } from "@multica/core/data-source";
+import { canChangeDataSourceField, dataSourceIdentityString } from "@multica/core/data-source";
 
 type CellSource<Row> = Pick<
   DataSource<
@@ -201,10 +201,7 @@ export function DataViewCellEditor<Row>({
     const commandRow =
       previous.error === null ? previous.baselineRow : latestRowRef.current;
     const currentlyAllowed =
-      source.capabilities.writable &&
-      (change.op === "clear"
-        ? field.canClear(latestRowRef.current)
-        : field.canSet(latestRowRef.current));
+      canChangeDataSourceField(source.capabilities.writable, field, latestRowRef.current, change);
     if (!currentlyAllowed) {
       updateEditorState((current) => ({
         ...current,
